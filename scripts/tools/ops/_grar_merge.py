@@ -101,6 +101,28 @@ def level_contains(level: str, other: str) -> bool:
     return other == level or other.startswith(level + "/")
 
 
+def domain_policy_levels(parsed: dict) -> list[tuple[str, dict]]:
+    """Every level's ``domain_policies``, in the order they are judged.
+
+    #2326 (d): the root's first (``ROOT_LEVEL``), then each subdirectory
+    level's in name order. ``load_tenant_tree`` judges them one level at a
+    time over the tenants each reaches (``policy_reaches``), and
+    ``explain_route --trace`` walks the same list, so the two cannot disagree
+    about which policies a tenant meets.
+    """
+    levels = [(ROOT_LEVEL, parsed.get("domain_policies") or {})]
+    levels.extend(sorted((parsed.get("domain_policies_by_dir") or {}).items()))
+    return levels
+
+
+def policy_reaches(level: str, tenant: str, tenant_dirs: dict[str, str]) -> bool:
+    """True when a domain policy declared at directory *level* applies to
+    *tenant* (#2326 (d)): a root policy reaches every tenant, a subtree
+    policy only the tenants whose file sits in its subtree. A tenant no file
+    places (absent from *tenant_dirs*) counts as a root tenant."""
+    return level_contains(level, tenant_dirs.get(tenant, ROOT_LEVEL))
+
+
 def resolve_routing_defaults(parsed: dict, level: str,
                              root_defaults: object = None) -> dict:
     """`_routing_defaults` as a tenant in directory *level* sees it.

@@ -48,8 +48,9 @@ from _grar_merge import (  # noqa: E402
     ROOT_LEVEL,
     _substitute_tenant,
     chain_levels,
-    level_contains,
+    domain_policy_levels,
     merge_routing_with_defaults,
+    policy_reaches,
     resolve_routing_defaults,
     visible_routing_profiles,
 )
@@ -1140,6 +1141,14 @@ def load_tenant_configs(
     return load_tenant_tree(config_dir, strict_policies=strict_policies).as_tuple()
 
 
+def policy_level_source(parsed: dict, level: str) -> str:
+    """The policy file(s) a subtree *level*'s ``domain_policies`` came from,
+    as ``check_policy_scope`` names them (#2326 (d))."""
+    origin = parsed.get("domain_policy_origin", {})
+    files = sorted({origin[(lv, n)] for (lv, n) in origin if lv == level})
+    return " / ".join(files) or f"{level}/"
+
+
 def load_tenant_tree(
     config_dir: str,
     *,
@@ -1188,23 +1197,26 @@ def load_tenant_tree(
     # #2245: `_routing_defaults.routes` — dropped at parse, same blocking line.
     schema_warnings.extend(parsed.get("routing_defaults_errors", []))
 
-    # v2.1.0 ADR-007: Validate domain policies against resolved routing
-    if parsed["domain_policies"]:
-        schema_warnings.extend(
-            check_domain_policies(routing_configs, parsed["domain_policies"],
-                                  strict=strict_policies))
+    # v2.1.0 ADR-007: Validate domain policies against resolved routing.
     # #2326 (d): a policy file below the root applies to the tenants of its
     # own subtree only, judged ADDITIVELY with the root's and every other
     # level's — each level is its own check_domain_policies call over the
     # tenants it reaches, so a tenant meets every policy above it and a
     # subtree can only tighten. An entry naming a tenant outside the subtree
     # is its own finding (ERROR under --strict, WARN otherwise).
+    # `domain_policy_levels` / `policy_reaches` are shared with
+    # `explain_route --trace` (#2435), so the trace applies the same set.
     tree_problems = list(parsed.get("routing_tree_problems", []))
     origin = parsed.get("domain_policy_origin", {})
-    for level, policies in sorted(parsed.get("domain_policies_by_dir",
-                                             {}).items()):
-        files = sorted({origin[(lv, n)] for (lv, n) in origin if lv == level})
-        source = " / ".join(files) or f"{level}/"
+    for level, policies in domain_policy_levels(parsed):
+        reachable = {t: rc for t, rc in routing_configs.items()
+                     if policy_reaches(level, t, tenant_dirs)}
+        if level == ROOT_LEVEL:
+            # The root reaches every tenant: no scope finding to make.
+            schema_warnings.extend(check_domain_policies(
+                reachable, policies, strict=strict_policies))
+            continue
+        source = policy_level_source(parsed, level)
         msgs, rows = check_policy_scope(level, policies, tenant_dirs,
                                         source=source, strict=strict_policies)
         schema_warnings.extend(msgs)
@@ -1214,8 +1226,6 @@ def load_tenant_tree(
                 f"domain_policies.{domain}.tenants",
                 f"domain policy '{domain}' names tenant '{tenant}' outside "
                 f"{level}/"))
-        reachable = {t: rc for t, rc in routing_configs.items()
-                     if level_contains(level, tenant_dirs.get(t, ROOT_LEVEL))}
         schema_warnings.extend(
             check_domain_policies(reachable, policies, strict=strict_policies))
 

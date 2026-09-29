@@ -238,6 +238,8 @@ modules:
       build_receiver_config: "Heavy state-machine over RECEIVER_TYPES; covered by test_generate_alertmanager_routes.py integration"
       chain_levels: "#2326 path-prefix split of a POSIX directory level; example-covered by test_generate_routes_nested_tree.py (root / one / two levels) and the hier-* trees of routing_policy_parity_matrix.json, which pin it against Go's ChainLevels"
       level_contains: "#2326 subtree membership (root contains all; prefix + '/' so `team` does not contain `team-b`); example-covered by test_generate_routes_nested_tree.py"
+      domain_policy_levels: "#2435 list assembly (root's domain_policies first, then domain_policies_by_dir in name order) shared by load_tenant_tree and explain_route --trace; example-covered by test_explain_route_trace.py::TestSubtreePolicyScopeNoAmtool and the nested-tree policy tests"
+      policy_reaches: "#2435 one-line composition of level_contains with the tenant's directory (unplaced tenant = root); example-covered by test_explain_route_trace.py::TestSubtreePolicyScopeNoAmtool (in-scope / out-of-scope rows)"
       resolve_routing_defaults: "#2326 shallow per-key merge along the chain; example-covered by test_generate_routes_nested_tree.py (deeper wins, receiver replaced whole) and the hier-a parity trees"
       visible_routing_profiles: "#2326 union of the profiles on the chain; example-covered by test_generate_routes_nested_tree.py and the hier-c parity trees"
 
