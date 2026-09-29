@@ -252,7 +252,7 @@ class TestParsing:
         """#1235 / #1237. Qualify on the class Vector assigns to non-JSON gateway
         output (which request-derived content cannot reach — it parses as JSON
         into another class) AND on the Envoy container `app`, excluding the
-        mtail / logrotate sidecars that share the pod and its label."""
+        audit-metrics / logrotate sidecars that share the pod and its label."""
         q = rec.build_rejected_query(lookback_s=600, settle_s=60)
         assert f'log_type:"{rec.LOG_TYPE_GATEWAY_OP}"' in q
         assert f'app:"{rec.GATEWAY_APP}"' in q

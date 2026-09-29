@@ -201,34 +201,33 @@ def _h(key: str) -> str:
 #     docker manifest inspect <ref>
 # A ref that 404s here is a broken pipeline in someone else's repo.
 
-# Chosen for what it CONTAINS, not only for how it can be pinned. Measured
-# (`docker run --entrypoint sh`, on 1.34.9): a shell, `kubectl`, and
-# `kustomize`. Re-measured on the 1.34.12 bump (#1401) from the image's own
-# package inventory (`trivy image --list-all-pkgs`, no daemon): busybox + bash,
-# `usr/bin/kubectl` built from k8s.io/kubernetes v1.34.12, and
-# `usr/bin/kustomize`. ⚠️ A newer kubectl MINOR does not buy CVE headroom here:
-# 1.35.9 / 1.36.5 / 1.37.1 scanned the same fixable count as 1.34.12. The
-# residue sits mostly in side tools the image bundles (krew, kustomize,
-# kubeconform, eksctl, helm plugins) — kubectl itself carries only its Go
-# 1.26.5 stdlib findings, which the next upstream patch rebuild clears.
-# All three are load-bearing — the apply stage is a GitLab `script:`
-# block, which the runner executes through a shell inside this image, and the
-# first line of that block invokes standalone `kustomize`.
+# Chosen for what it CONTAINS, not only for how it can be pinned. The apply
+# stage is a GitLab `script:` block, which the runner executes through a shell
+# inside this image, so it needs a shell and `kubectl` — and nothing else:
+# the overlay is built with `kubectl kustomize` (kubectl embeds kustomize;
+# 1.37.1 ships kustomize v5.8.1, which takes the same `--load-restrictor`
+# flag), not with a standalone `kustomize` binary.
+# `alpine/kubectl` is that and only that (busybox + kubectl). It replaced
+# `alpine/k8s`, same publisher, whose fixable HIGH/CRITICAL findings (32 on
+# 1.34.12) sat almost entirely in the side tools it bundles — Python, krew,
+# eksctl, kubeconform — none of which this job runs. Measured with trivy
+# (`--severity CRITICAL,HIGH --ignore-unfixed`, linux/amd64) at the swap:
+# alpine/k8s:1.34.12 32, alpine/kubectl:1.36.4 9, alpine/kubectl:1.37.1 0.
 # ⛔ Two images were rejected on measurement, not on preference:
 #   * `bitnami/kubectl` is no longer pinnable at all — Broadcom moved the
 #     versioned catalog behind a subscription and deleted the free version tags
-#     on 2025-09-29, leaving only `latest` (their docs call it dev-only). It
-#     also ships no `kustomize`, so this job never actually worked.
+#     on 2025-09-29, leaving only `latest` (their docs call it dev-only).
 #   * `registry.k8s.io/kubectl` is the Kubernetes project's own image and has
 #     no `latest` tag, which is attractive — but it is distroless-static: NO
 #     shell at all, so a GitLab `script:` block cannot run in it under any
 #     entrypoint override. Pinnability is worthless if the job cannot start.
-# `alpine/k8s` also publishes no `latest` tag (verified 404), so the
-# floating-reference argument survives the swap. Same publisher as
-# GITLAB_HELM_IMAGE below — one trust decision, not two.
-# ⚠️ kubectl supports ±1 minor of skew from the cluster — override
-# DA_KUBECTL_IMAGE if the customer's control plane sits further back.
-GITLAB_KUBECTL_IMAGE = 'alpine/k8s:1.34.12'
+# Same publisher as GITLAB_HELM_IMAGE below — one trust decision, not two.
+# ⚠️ Version skew: kubectl is supported within ±1 minor of the API server, so
+# this default covers clusters 1.36–1.38. `alpine/kubectl`'s 1.34 line stopped
+# at 1.34.2, so staying on an older minor would mean an unpatched image. A
+# customer whose control plane sits further back overrides DA_KUBECTL_IMAGE
+# (e.g. alpine/kubectl:1.36.4 covers 1.35–1.37).
+GITLAB_KUBECTL_IMAGE = 'alpine/kubectl:1.37.1'
 
 # ⛔ Held on the Helm 3 line ON PURPOSE — pinned by
 # `test_helm_image_stays_on_the_helm_3_line`, because a comment alone did not
@@ -1841,8 +1840,9 @@ def _build_gitlab_apply_stage(
       script:
         # --load-restrictor: conf.d files are symlinked into kustomize/base/,
         # and the default restrictor refuses a symlink whose target sits
-        # outside that directory.
-        - kustomize build --load-restrictor LoadRestrictionsNone "{kustomize_overlay}" > /tmp/manifests.yaml
+        # outside that directory. `kubectl kustomize`, not `kustomize build`:
+        # the apply image (GITLAB_KUBECTL_IMAGE) ships kubectl only.
+        - kubectl kustomize --load-restrictor LoadRestrictionsNone "{kustomize_overlay}" > /tmp/manifests.yaml
         - kubectl apply --dry-run=server -f /tmp/manifests.yaml
         - kubectl apply -f /tmp/manifests.yaml
         - kubectl rollout restart deployment/prometheus -n $MONITORING_NS

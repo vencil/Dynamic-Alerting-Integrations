@@ -143,10 +143,22 @@ additionalSinks:
     type: splunk_hec_logs
     inputs: [demux, federation_evidence]  # BOTH — see the warning below
     endpoint: https://splunk.example.com:8088
-    default_token: ${SPLUNK_TOKEN}   # provide via envFrom secret
+    default_token: ${SPLUNK_TOKEN}   # provide via extraEnv / extraEnvFrom (see below)
     _buffer_when_full: drop_newest   # see below — never `block` for fan-out
     _buffer_max_events: 10000
+extraEnv:
+  - name: SPLUNK_TOKEN
+    valueFrom: {secretKeyRef: {name: splunk-hec, key: token}}
 ```
+
+**How `${SPLUNK_TOKEN}` gets expanded.** Vector (0.57.0, the pinned release) does **not** expand environment variables in config files by default — `${VAR}` stays literal, with no error, so the sink would authenticate with the string `${SPLUNK_TOKEN}`. The chart therefore sets `VECTOR_DANGEROUSLY_ALLOW_ENV_VAR_INTERPOLATION=true` on the `vector` container (rationale in `templates/daemonset.yaml`). What "dangerously" means, and what follows for you:
+
+- A referenced variable that is not provided **fails the config load** — the pod does not start. Wire the Secret before adding the sink.
+- Substitution is textual and happens before YAML/VRL parsing. A value containing `"` can break out of the string it lands in, and a value containing a newline is rejected: credential values must contain neither. (A `$` inside a *value* is not re-expanded.)
+- Bare `$NAME` in any `additionalSinks` string is substituted too; write a literal dollar as `$$`.
+- `extraEnvFrom` makes **every** key of that Secret a substitutable name. Prefer `extraEnv` + `secretKeyRef` for just the keys you reference.
+
+The chart's own rendered Vector config contains no `$` (pinned by `tests/shared/test_helm_chart_log_aggregation.py`). So the only interpolation sites are the ones you write here. `${…}` in comments of *your values file* is harmless, because Helm drops those comments before Vector sees the config.
 
 ### Back-pressure isolation (the #539 §2 hard rule)
 

@@ -191,7 +191,7 @@ VictoriaLogs (AccountID, ProjectID)：強制隔離
 
 #### Layer 2 — API Gateway（per-token / per-tenant 限流）
 
-**完全複用** ADR-020 既有三層 local_ratelimit（per-IP / per-token / per-tenant，key on `x-fed-token-id` / `x-tenant-id`）。新增 metric **`tenant_log_query_requests_total{account_id, project_id, status}`**（mtail sidecar tail access log，與 ADR-020 `tenant_federation_requests_total` 對稱）。
+**完全複用** ADR-020 既有三層 local_ratelimit（per-IP / per-token / per-tenant，key on `x-fed-token-id` / `x-tenant-id`）。新增 metric **`tenant_log_query_requests_total{account_id, project_id, status}`**（gateway 的 audit-metrics sidecar tail access log——原為 mtail，#1278 D1 起為 Vector——與 ADR-020 `tenant_federation_requests_total` 對稱）。
 
 > **⚠️ 非對稱限流缺口（multi-replica）**：`local_ratelimit` 是 **per-pod**；gateway HPA（#539 觀察 2–8 replica）下，單 token 實際放行量 ≈ 設定值 × replica 數。惡意租戶平行 dump 歷史 log 時可能 N× 擊穿。**Layer 1 backstop**：VictoriaLogs `-search.maxConcurrentRequests` 限制**實際並發執行**——無論 gateway 幾個 replica 都封住真正的 CPU blast（緩解，非根治）。Phase 1 先記錄 + 觀察 429 率 / storage 負載，持續觸發再評估 Redis-backed global rate limit（見 Future Work 7）。
 

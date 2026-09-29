@@ -45,7 +45,13 @@ type: application
 #         0.5.1: no digest knob, so only a tag change rolls the pods. PATCH.
 #         ⚠️ REQUIRES ACTION: rebuild audit-sidecar/Dockerfile and push it as
 #         3.0.8-3 BEFORE upgrading, or mtail/logrotate hit ImagePullBackOff.
-version: 0.5.2
+# 0.6.0 — #1278 D1: the metrics sidecar is upstream Vector (timberio/vector, same
+#         image as helm/vector) running files/audit-metrics.vector.yaml instead of
+#         mtail. Same metric names/labels/buckets; mtail's `prog` label is gone.
+#         VALUES: `auditLog.mtail` -> `auditLog.metrics` (adds image + dataSizeLimit;
+#         memory limit 64Mi -> 128Mi). auditLog.image (logrotate only now) tag
+#         3.0.8-3 -> alpine3.23.6-1 — rebuild and push before upgrading.
+version: 0.6.0
 # appVersion: pinned Envoy release
 appVersion: "v1.38.0"
 # kubeVersion: the deployment uses the native preStop.sleep lifecycle

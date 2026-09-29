@@ -3,7 +3,7 @@
 The driver runs on the host; the stack is the docker-compose harness
 brought up by scripts/ops/federation_e2e_run.sh. Service URLs come from
 the compose-published ports (overridable via E2E_GATEWAY_PORT /
-E2E_MTAIL_PORT, matching docker-compose.yml)."""
+E2E_AUDIT_METRICS_PORT, matching docker-compose.yml)."""
 import os
 import time
 
@@ -15,7 +15,7 @@ from helpers import load_signing, query, result_series, sign_token
 # 127.0.0.1, not localhost: the compose stack publishes the ports on
 # IPv4; `localhost` can resolve to IPv6 ::1 first and miss the binding.
 GATEWAY_URL = "http://127.0.0.1:" + os.environ.get("E2E_GATEWAY_PORT", "18080")
-MTAIL_URL = "http://127.0.0.1:" + os.environ.get("E2E_MTAIL_PORT", "13903")
+AUDIT_METRICS_URL = "http://127.0.0.1:" + os.environ.get("E2E_AUDIT_METRICS_PORT", "13903")
 
 
 @pytest.fixture(scope="session")
@@ -24,8 +24,8 @@ def gateway_url():
 
 
 @pytest.fixture(scope="session")
-def mtail_url():
-    return MTAIL_URL
+def audit_metrics_url():
+    return AUDIT_METRICS_URL
 
 
 @pytest.fixture(scope="session")

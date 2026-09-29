@@ -4,8 +4,8 @@
 # scripts/tools/lint/check_log_egress_policy.py:
 #   1. Vector sink endpoints must target an allowlisted host.
 #   2. Vector-reserved env vars (VECTOR_*) may only be set via downward-API
-#      fieldRef — never a literal value or other valueFrom (override =
-#      pipeline hijack).
+#      fieldRef, or as the chart's own pinned literal (exact value) — never
+#      another literal value or other valueFrom (override = pipeline hijack).
 #   3. Sensitive-named env (*TOKEN* / *KEY* / *SECRET* / ...) must use
 #      valueFrom, never a literal `value:` (literal = hardcoded secret /
 #      attacker-substitutable credential).
@@ -40,6 +40,10 @@ import future.keywords.in
 # ── Configurable data (override via `opa eval -d data.json`) ────────────
 default allowed_host_globs := ["*.svc", "*.svc.cluster.local", "localhost", "127.0.0.1"]
 reserved_env_globs := ["VECTOR_*"]
+
+# Reserved vars the chart itself sets as a literal, exempt only on an exact
+# name AND value match (mirrors CHART_PINNED_RESERVED_ENV in the Python gate).
+chart_pinned_reserved_env := {"VECTOR_DANGEROUSLY_ALLOW_ENV_VAR_INTERPOLATION": "true"}
 sensitive_env_globs := ["*TOKEN*", "*KEY*", "*SECRET*", "*PASSWORD*", "*CREDENTIAL*"]
 
 # ── Reusable helpers (the Gatekeeper-migration seam) ────────────────────
@@ -65,6 +69,12 @@ is_sensitive_env(name) if {
 # fieldRef (the only legitimate form for a reserved var).
 env_via_field_ref(env) if {
     env.valueFrom.fieldRef
+}
+
+# env_is_chart_pinned(env) — the chart's own pinned literal, exact value only.
+env_is_chart_pinned(env) if {
+    not env.valueFrom
+    env.value == chart_pinned_reserved_env[env.name]
 }
 
 # env_is_literal(env) — true if a literal `value:` is set.
@@ -97,6 +107,7 @@ violations[v] {
     env := pod_envs(obj)[_]
     is_reserved_env(env.name)
     not env_via_field_ref(env)
+    not env_is_chart_pinned(env)
     v := {
         "msg": sprintf("env %q overrides a Vector-reserved var via non-fieldRef source", [env.name]),
         "severity": "error",

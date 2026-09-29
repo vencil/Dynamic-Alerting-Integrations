@@ -391,7 +391,8 @@ func TestParseDoc_GeneratorRepeatedKeyRefusesTheFile(t *testing.T) {
 		"repeat elsewhere":   "unrelated:\n  &k a : 1\n  *k : 2\nrouting_profiles:\n  p1: {receiver: {type: webhook}}\n",
 		"two merge keys":     "x: &x {a: 1}\ny: &y {b: 1}\nz:\n  <<: *x\n  <<: *y\n",
 	} {
-		if _, err := parseDoc([]byte(src)); err == nil || !strings.Contains(err.Error(), "already defined") {
+		policy := strings.HasPrefix(src, "domain_policies:") // read as a _domain_policy.yaml
+		if _, err := parseDoc([]byte(src), policy); err == nil || !strings.Contains(err.Error(), "already defined") {
 			t.Errorf("%s: err = %v, want the repeated key named", name, err)
 		}
 	}
@@ -400,7 +401,7 @@ func TestParseDoc_GeneratorRepeatedKeyRefusesTheFile(t *testing.T) {
 		t.Errorf("PyYAMLRoutingByTenant = %v, want nil (no PyYAML reading: Unmatched downstream)", got)
 	}
 	// A merge key overridden by an explicit key is no repeat.
-	if _, err := parseDoc([]byte("x: &x {a: 1}\nz:\n  <<: *x\n  a: 2\n")); err != nil {
+	if _, err := parseDoc([]byte("x: &x {a: 1}\nz:\n  <<: *x\n  a: 2\n"), false); err != nil {
 		t.Errorf("merge override: %v", err)
 	}
 }

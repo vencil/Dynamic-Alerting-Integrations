@@ -653,7 +653,7 @@ bash scripts/session-guards/git_check_lock.sh --clean
 | `make fuse-locks` | 列出 `.git/*.lock` 殘留、每個 lock 的 age / holder process / FUSE phantom 狀態 | `make fuse-locks` |
 | `make fuse-commit MSG=_msg.txt FILES="a b"` | 前項 `fuse_plumbing_commit.py --auto` 的 Make 封裝 | `make fuse-commit MSG=_msg.txt FILES="scripts/ops/x.sh docs/y.md"` |
 | `scripts/hooks/commit-msg` | Conventional Commits **本地驗證**（不依賴 PyYAML，手解 `.commitlintrc.yaml` 的 `type-enum` / `scope-enum`）。⚠️ `--no-verify` 會連它一起跳過，所以 Windows 側的 `commit-file` 不靠這支 hook，而是由 `commit_helper.py` 在 commit 前自己跑同一個驗證器（#1914） | `git commit -F _msg.txt`（hook 自動觸發；session-init hook 會 auto-install）|
-| `scripts/tools/dx/pr_preflight.py` | pre-push marker 寫 `.git/.preflight-ok.<SHA>`。**狀態感知在守衛側**（不在本工具）：`require_preflight_pass.sh` 走 `gh pr list --head <branch> --state open`——OPEN PR 才擋、WIP 放行，而 `gh` 缺席或查詢失敗 ⇒ **一律要 marker**（dev container 內沒有 `gh`，那是常態不是例外）。⛔ 不是 `gh pr view`，理由見 [`dev-rules.md`](dev-rules.md) #12 | `make pr-preflight`（pre-push hook 自動 consume marker）|
+| `scripts/tools/dx/pr_preflight.py` | pre-push marker 寫 `.git/.preflight-ok.<SHA>`。**狀態感知在守衛側**（不在本工具）：`require_preflight_pass.sh` 走 `gh pr list --head <branch> --state open`——OPEN PR 才擋、WIP 放行，而 `gh` 缺席或查詢失敗 ⇒ **一律要 marker**（dev container 內沒有 `gh`，那是常態不是例外）。⛔ 不是 `gh pr view`，理由見 [`dev-rules.md`](dev-rules.md) #12 | 容器：`make pr-preflight`。Windows host（沒有 make）：`py scripts/tools/dx/pr_preflight.py --skip-hooks`——完整版的 `pre-commit run --all-files` 在 Windows host 會撞 1800 秒逾時。pre-push hook 自動 consume marker |
 
 **什麼時候用哪一條**（決策助記）：
 
@@ -677,6 +677,7 @@ git commit 失敗，錯誤訊息是 ...
        判 PR 狀態（⛔ 不是 `gh pr view`）；OPEN 才擋，WIP 直接放行 → 適合快速 push 觸發
        CI smoke。⚠️ `gh` 不在 PATH 或查詢失敗時反而**一律要 marker**，所以容器裡看到
        "marker missing" 是預期的，先跑 `make pr-preflight-quick`
+       （Windows host 沒有 make：`py scripts/tools/dx/pr_preflight.py --skip-hooks`）
 ```
 
 > **為什麼 plumbing 路徑可以繞 phantom lock**：git porcelain (`git commit`) 一定會 acquire `.git/index.lock`；plumbing 直接操作 object database + refs — `hash-object` 寫 blob 到 `.git/objects/`（新檔，無 lock 爭用），`write-tree` / `commit-tree` 寫 tree & commit 物件（同理），最後只 `echo <sha> > .git/refs/heads/<branch>`（單檔 atomic write）。完全不觸發 `.git/index.lock`。
@@ -943,6 +944,8 @@ bash scripts/ops/run_hooks_sandbox.sh scripts/ops/run_hooks_sandbox.sh docs/inte
 make win-commit MSG=_msg.txt FILES="scripts/ops/run_hooks_sandbox.sh docs/internal/windows-mcp-playbook.md"
 ```
 
+⚠️ **只有 WSL 會真的執行 [2/3]、[3/3]**：recipe 以看得到 `/mnt/c/Windows/System32/cmd.exe` 判斷，看不到時只印出三行 `win_git_escape.bat` 指令讓你貼到 Windows cmd，不會 commit。Windows host 預設沒有 make，直接用 `win_git_escape.bat` 的 `add` / `commit-file` / `push`。原本給 Git Bash 的 `Windows_NT` 分支已移除（[#2248](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/2248)）：MSYS 把 `cmd.exe /c` 的 `/c` 當路徑轉換，bat 沒跑卻印出 `✅ Done`。
+
 **執行順序（三階段，每階段失敗即 abort；log 實際印的 label 就是 `[1/3]` / `[2/3]` / `[3/3]`）**：
 
 1. **[1/3] Sandbox hook gate** — 呼叫 `run_hooks_sandbox.sh $(FILES)`，失敗就停；緊急繞道：`SKIP_HOOKS=1`
@@ -992,7 +995,10 @@ Q1. 輸出前綴是哪一支？
     ├─ [protect_main_push] → 你在推 main/master。這不是 drift，是規則：
     │      開 branch + PR。⛔ 沒有旗標，也不要拆 hook。
     ├─ [require_preflight_pass] → marker 綁 commit SHA，commit 之後要重跑：
-    │      make pr-preflight（剛證過 hooks 綠時可用 make pr-preflight-quick）。
+    │      容器：make pr-preflight（剛證過 hooks 綠時可用 make pr-preflight-quick）。
+    │      Windows host 沒有 make：py scripts/tools/dx/pr_preflight.py --skip-hooks
+    │      （完整版的 pre-commit run --all-files 在 Windows host 會撞 1800 秒逾時）。
+    │      橫幅本身也會依當下 PATH 印出跑得起來的那一行。
     │      ⛔ 站在別的 commit 上跑 preflight 寫的是「那一顆」的 marker，
     │         這次 push 仍然被擋。
     └─ [pre-push-mkdocs] → 走 Q2。
