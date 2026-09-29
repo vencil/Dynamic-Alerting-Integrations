@@ -159,7 +159,7 @@ def _repo_with_removal(root: pathlib.Path, carriers) -> pathlib.Path:
 def _run_cli(cwd: pathlib.Path, prom: str, *extra: str):
     return subprocess.run(
         [sys.executable, str(TOOL), "--git-diff", "--prometheus", prom, *extra],
-        cwd=str(cwd), capture_output=True, text=True, timeout=120)
+        cwd=str(cwd), capture_output=True, text=True, encoding="utf-8", errors="replace", timeout=120)
 
 
 def _analyzed(stdout: str):
@@ -578,7 +578,7 @@ def test_both_change_sources_drop_an_unusable_name_the_same_way(
     from_dirs = subprocess.run(
         [sys.executable, str(TOOL), "--config-dir", str(cur),
          "--baseline", str(base), "--prometheus", prom_url],
-        capture_output=True, text=True, timeout=120)
+        capture_output=True, text=True, encoding="utf-8", errors="replace", timeout=120)
 
     for label, result in (("--git-diff", from_git), ("--config-dir", from_dirs)):
         assert result.returncode == 0, f"[{label}] rc={result.returncode} {result.stderr!r}"

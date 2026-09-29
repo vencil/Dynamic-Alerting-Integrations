@@ -59,7 +59,7 @@ def _init_git(repo: Path) -> str:
                    check=True, env=env)
     sha = subprocess.run(  # subprocess-timeout: ignore
         ["git", "-C", str(repo), "rev-parse", "HEAD"],
-        check=True, capture_output=True, text=True, env=env,
+        check=True, capture_output=True, text=True, encoding="utf-8", errors="replace", env=env,
     ).stdout.strip()
     return sha
 
@@ -120,7 +120,7 @@ class TestPrepushWiring:
     def _precommit_install(tmp_path, *args):
         return subprocess.run(  # subprocess-timeout: ignore
             [sys.executable, "-X", "utf8", "-m", "pre_commit", "install", *args],
-            cwd=tmp_path, capture_output=True, text=True,
+            cwd=tmp_path, capture_output=True, text=True, encoding="utf-8", errors="replace",
         ).returncode
 
     @staticmethod
@@ -406,7 +406,7 @@ class TestMarkerPython:
         assert subprocess.run(  # subprocess-timeout: ignore
             ["git", "-C", str(tmp_path), "worktree", "add", "-q", "--detach",
              str(wt), "HEAD"],
-            capture_output=True, text=True,
+            capture_output=True, text=True, encoding="utf-8", errors="replace",
         ).returncode == 0
 
         mod = _load()
@@ -414,7 +414,7 @@ class TestMarkerPython:
         p = mod.marker_path(wt, "deadbeef")
         private = subprocess.run(  # subprocess-timeout: ignore
             ["git", "-C", str(wt), "rev-parse", "--absolute-git-dir"],
-            capture_output=True, text=True,
+            capture_output=True, text=True, encoding="utf-8", errors="replace",
         ).stdout.strip()
 
         assert "worktrees" not in str(p), (
@@ -457,7 +457,7 @@ class TestFailPathClearRadius:
         assert subprocess.run(  # subprocess-timeout: ignore
             ["git", "-C", str(tmp_path), "worktree", "add", "-q", "--detach",
              str(wt), "HEAD"],
-            capture_output=True, text=True,
+            capture_output=True, text=True, encoding="utf-8", errors="replace",
         ).returncode == 0
         shared = tmp_path / ".git"
         # Two markers standing in for other commits — in this repo, other
@@ -583,7 +583,7 @@ class TestGateScript:
             env.update(env_extra)
         return subprocess.run(  # subprocess-timeout: ignore
             ["bash", str(_SH_SCRIPT)],
-            cwd=repo, input=stdin, capture_output=True, text=True, env=env,
+            cwd=repo, input=stdin, capture_output=True, text=True, encoding="utf-8", errors="replace", env=env,
         )
 
     def test_bypass_env_always_allows(self, tmp_path):

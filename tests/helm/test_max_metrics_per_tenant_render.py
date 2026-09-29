@@ -35,7 +35,7 @@ def repo_root() -> Path:
 def _render(repo_root: Path, *args: str):
     return subprocess.run(
         ["helm", "template", "t", str(repo_root / _CHART), *args],
-        capture_output=True, text=True, timeout=60,
+        capture_output=True, text=True, encoding="utf-8", errors="replace", timeout=60,
     )
 
 

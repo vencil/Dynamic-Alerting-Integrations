@@ -119,7 +119,7 @@ def _helm_template(repo_root: Path, *set_args: str):
     cmd = ["helm", "template", "t", str(repo_root / _CHART)]
     for kv in set_args:
         cmd += ["--set", kv]
-    return subprocess.run(cmd, capture_output=True, text=True, timeout=60)
+    return subprocess.run(cmd, capture_output=True, text=True, encoding="utf-8", errors="replace", timeout=60)
 
 
 def _docs(stdout: str) -> list[dict]:
@@ -199,7 +199,7 @@ def test_render_tier1_with_relay_token_aborts(repo_root: Path):
         "-f", str(repo_root / _CHART / "values-tier1.yaml"),
         "--set", "portal.relayToken.enabled=true",
     ]
-    res = subprocess.run(cmd, capture_output=True, text=True, timeout=60)
+    res = subprocess.run(cmd, capture_output=True, text=True, encoding="utf-8", errors="replace", timeout=60)
     assert res.returncode != 0, "tier1 + relayToken must abort the render"
     assert "relayToken" in res.stderr, (
         f"render failure must name relayToken: {res.stderr}"

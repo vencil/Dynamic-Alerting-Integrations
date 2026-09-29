@@ -165,3 +165,10 @@ scripts/tools/lint/mkdocs-anchor-debt.txt
 # invalid JSON (check_confd_schema rc 2), and its content is asserted by
 # tests/ops/test_routing_profile_routes.py::TestSchemaConsolidation.
 docs/schemas/routing-profiles.schema.json
+
+# #1374: subprocess-encoding ledger, written by `check_open_encoding.py
+# --write-subprocess-baseline`, never by sed. It only shrinks by design, and the
+# last fix PR emptied its `files` map (4554 → 281 bytes). Damage is caught
+# independently: a truncated file is invalid JSON or drops rows, and the
+# open-encoding-audit hook then fails on the missing ledger or the unlisted sites.
+docs/internal/subprocess-encoding-baseline.json

@@ -193,7 +193,7 @@ def run(tmp_path: Path, ref_text: str, main_text: str,
          "--main", str(tmp_path / "main.txt"),
          "--reference-tag", "exporter/v2.9.0",
          "--out", str(tmp_path / "out.json"), *extra],
-        capture_output=True, text=True, timeout=60)
+        capture_output=True, text=True, encoding="utf-8", errors="replace", timeout=60)
 
 
 def test_happy_path_writes_the_expected_payload(tmp_path: Path):
@@ -355,7 +355,7 @@ def test_missing_input_file_is_a_caller_error(tmp_path: Path):
          "--main", str(tmp_path / "main.txt"),
          "--reference-tag", "exporter/v2.9.0",
          "--out", str(tmp_path / "out.json")],
-        capture_output=True, text=True, timeout=60)
+        capture_output=True, text=True, encoding="utf-8", errors="replace", timeout=60)
     assert r.returncode == 2
     assert "not a file" in r.stderr
 

@@ -337,7 +337,7 @@ def test_a_failing_git_ls_files_is_an_error(tmp_path: Path, monkeypatch) -> None
 # ── CLI contract ────────────────────────────────────────────────────────────
 def _run(*args: str) -> subprocess.CompletedProcess:
     return subprocess.run([sys.executable, "-X", "utf8", str(_SCRIPT), *args],
-                          capture_output=True, text=True, timeout=180)
+                          capture_output=True, text=True, encoding="utf-8", errors="replace", timeout=180)
 
 
 def test_help_exits_zero() -> None:

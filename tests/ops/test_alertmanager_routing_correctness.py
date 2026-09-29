@@ -121,7 +121,7 @@ def _amtool_routes_test(etc_dir, labels: dict, expected_receivers: str):
         "--config.file=/etc/alertmanager/alertmanager.yml",
         f"--verify.receivers={expected_receivers}",
     ] + [f"{k}={v}" for k, v in sorted(labels.items())]
-    return subprocess.run(argv, capture_output=True, text=True, timeout=300)
+    return subprocess.run(argv, capture_output=True, text=True, encoding="utf-8", errors="replace", timeout=300)
 
 
 def _assert_routed(etc_dir, labels: dict, expected_receivers: str):
