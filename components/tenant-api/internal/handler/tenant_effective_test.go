@@ -15,6 +15,13 @@ package handler
 // Byte-for-byte parity with describe_tenant.py is covered at a lower layer by
 // the exporter's config_golden_parity_test.go — we rely on the shared
 // pkg/config/hierarchy.go implementation to stay in lockstep.
+//
+// ⛔ ROOT _defaults.yaml values are NUMBERS here (#2387). The exporter decodes
+// the root `defaults:` block as numbers and drops the WHOLE file on any other
+// value — a quoted "80" included (parse_failed; /metrics serves none of it).
+// These tests used to write quoted strings there, so /effective was asserted
+// over a root file /metrics never serves. Tenant values and subtree
+// `_defaults.yaml` values stay quoted strings: the exporter accepts those.
 
 import (
 	"bytes"
@@ -40,7 +47,7 @@ func TestGetTenantEffective_Success_Flat(t *testing.T) {
 	t.Parallel()
 	dir := t.TempDir()
 	writeFile(t, filepath.Join(dir, "_defaults.yaml"),
-		"defaults:\n  mysql_connections: \"80\"\n  mysql_threads_running: \"90\"\n")
+		"defaults:\n  mysql_connections: 80\n  mysql_threads_running: 90\n")
 	writeFile(t, filepath.Join(dir, "db-a.yaml"),
 		"tenants:\n  db-a:\n    mysql_connections: \"70\"\n")
 
@@ -78,8 +85,8 @@ func TestGetTenantEffective_Success_Flat(t *testing.T) {
 	if got := ec.EffectiveConfig["mysql_connections"]; got != "70" {
 		t.Errorf("mysql_connections = %v, want \"70\"", got)
 	}
-	if got := ec.EffectiveConfig["mysql_threads_running"]; got != "90" {
-		t.Errorf("mysql_threads_running = %v, want \"90\"", got)
+	if got := ec.EffectiveConfig["mysql_threads_running"]; got != float64(90) {
+		t.Errorf("mysql_threads_running = %v (%T), want 90", got, got)
 	}
 }
 
@@ -88,7 +95,7 @@ func TestGetTenantEffective_Success_Hierarchy(t *testing.T) {
 	dir := t.TempDir()
 	// L0 root defaults
 	writeFile(t, filepath.Join(dir, "_defaults.yaml"),
-		"defaults:\n  mysql_connections: \"80\"\n  mysql_threads_running: \"90\"\n  mysql_slow_queries: \"100\"\n")
+		"defaults:\n  mysql_connections: 80\n  mysql_threads_running: 90\n  mysql_slow_queries: 100\n")
 	// L1 team-level defaults
 	writeFile(t, filepath.Join(dir, "team-a", "_defaults.yaml"),
 		"defaults:\n  mysql_threads_running: \"85\"\n") // L1 overrides L0 for mysql_threads_running
@@ -131,8 +138,8 @@ func TestGetTenantEffective_Success_Hierarchy(t *testing.T) {
 	if got := ec.EffectiveConfig["mysql_threads_running"]; got != "85" {
 		t.Errorf("mysql_threads_running = %v, want \"85\" (L1 override of L0)", got)
 	}
-	if got := ec.EffectiveConfig["mysql_slow_queries"]; got != "100" {
-		t.Errorf("mysql_slow_queries = %v, want \"100\" (L0 inherited)", got)
+	if got := ec.EffectiveConfig["mysql_slow_queries"]; got != float64(100) {
+		t.Errorf("mysql_slow_queries = %v (%T), want 100 (L0 inherited)", got, got)
 	}
 }
 
@@ -140,7 +147,7 @@ func TestGetTenantEffective_NotFound(t *testing.T) {
 	t.Parallel()
 	dir := t.TempDir()
 	writeFile(t, filepath.Join(dir, "_defaults.yaml"),
-		"defaults:\n  mysql_connections: \"80\"\n")
+		"defaults:\n  mysql_connections: 80\n")
 	writeFile(t, filepath.Join(dir, "db-a.yaml"),
 		"tenants:\n  db-a:\n    mysql_connections: \"70\"\n")
 
@@ -196,7 +203,7 @@ func TestGetTenantEffective_HashStable(t *testing.T) {
 	// Alertmanager would see spurious reload events on every scrape.
 	dir := t.TempDir()
 	writeFile(t, filepath.Join(dir, "_defaults.yaml"),
-		"defaults:\n  mysql_connections: \"80\"\n")
+		"defaults:\n  mysql_connections: 80\n")
 	writeFile(t, filepath.Join(dir, "db-a.yaml"),
 		"tenants:\n  db-a:\n    mysql_connections: \"70\"\n")
 
@@ -231,7 +238,7 @@ func TestGetTenantEffective_HashChangesOnContentEdit(t *testing.T) {
 	t.Parallel()
 	dir := t.TempDir()
 	writeFile(t, filepath.Join(dir, "_defaults.yaml"),
-		"defaults:\n  mysql_connections: \"80\"\n")
+		"defaults:\n  mysql_connections: 80\n")
 	writeFile(t, filepath.Join(dir, "db-a.yaml"),
 		"tenants:\n  db-a:\n    mysql_connections: \"70\"\n")
 
@@ -273,7 +280,7 @@ func TestGetTenantEffective_HashChangesOnContentEdit(t *testing.T) {
 // firing?", so its answer has to be the one the exporter is acting on. YAML
 // null on a THRESHOLD key does not opt out: collector.go →
 // ResolveAtWithStats decodes it as an empty ScheduledValue.Default, warns,
-// and falls back to the platform default. So the inherited "80" must still
+// and falls back to the platform default. So the inherited 80 must still
 // be reported here.
 //
 // This test previously asserted the opposite (named
@@ -287,7 +294,7 @@ func TestGetTenantEffective_NullOnThresholdKeepsInherited(t *testing.T) {
 	t.Parallel()
 	dir := t.TempDir()
 	writeFile(t, filepath.Join(dir, "_defaults.yaml"),
-		"defaults:\n  mysql_connections: \"80\"\n  mysql_threads_running: \"90\"\n")
+		"defaults:\n  mysql_connections: 80\n  mysql_threads_running: 90\n")
 	writeFile(t, filepath.Join(dir, "db-a.yaml"),
 		"tenants:\n  db-a:\n    mysql_connections: ~\n") // YAML null
 
@@ -305,22 +312,27 @@ func TestGetTenantEffective_NullOnThresholdKeepsInherited(t *testing.T) {
 		t.Fatalf("unmarshal: %v", err)
 	}
 
-	if got := ec.EffectiveConfig["mysql_connections"]; got != "80" {
-		t.Errorf("mysql_connections = %v, want \"80\" — /effective must report what the exporter emits", got)
+	if got := ec.EffectiveConfig["mysql_connections"]; got != float64(80) {
+		t.Errorf("mysql_connections = %v (%T), want 80 — /effective must report what the exporter emits", got, got)
 	}
-	if got := ec.EffectiveConfig["mysql_threads_running"]; got != "90" {
-		t.Errorf("mysql_threads_running = %v, want \"90\" (unaffected)", got)
+	if got := ec.EffectiveConfig["mysql_threads_running"]; got != float64(90) {
+		t.Errorf("mysql_threads_running = %v (%T), want 90 (unaffected)", got, got)
 	}
 }
 
 // TestGetTenantEffective_MetadataSkipped verifies that _metadata in defaults
 // is NEVER inherited — describe_tenant.py trap #4.
+//
+// `_metadata` sits in an L1 `_defaults.yaml`, not the root one: a map in the
+// ROOT `defaults:` block makes the exporter drop that whole file (#2387).
 func TestGetTenantEffective_MetadataSkipped(t *testing.T) {
 	t.Parallel()
 	dir := t.TempDir()
 	writeFile(t, filepath.Join(dir, "_defaults.yaml"),
-		"defaults:\n  _metadata:\n    owner: platform\n  mysql_threads_running: \"90\"\n")
-	writeFile(t, filepath.Join(dir, "db-a.yaml"),
+		"defaults:\n  mysql_threads_running: 90\n")
+	writeFile(t, filepath.Join(dir, "team-a", "_defaults.yaml"),
+		"defaults:\n  _metadata:\n    owner: platform\n")
+	writeFile(t, filepath.Join(dir, "team-a", "db-a.yaml"),
 		"tenants:\n  db-a:\n    mysql_threads_running: \"85\"\n")
 
 	h := GetTenantEffective(&Deps{ConfigDir: dir})
@@ -337,6 +349,10 @@ func TestGetTenantEffective_MetadataSkipped(t *testing.T) {
 		t.Fatalf("unmarshal: %v", err)
 	}
 
+	// Non-vacuity: the carrier holding `_metadata` is in the chain.
+	if want := []string{"_defaults.yaml", "team-a/_defaults.yaml"}; !reflect.DeepEqual(ec.DefaultsChain, want) {
+		t.Fatalf("DefaultsChain = %v, want %v", ec.DefaultsChain, want)
+	}
 	if _, present := ec.EffectiveConfig["_metadata"]; present {
 		t.Errorf("_metadata should not be inherited; got %v", ec.EffectiveConfig["_metadata"])
 	}

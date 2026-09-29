@@ -436,11 +436,11 @@ def test_deprecate_rule_keeps_a_profile_reference_bound(tmp_path, da_guard):
     they happened to meet). The exporter reads both as the text `010`.
 
     #2220: both are now written back as written (`010:`, `_profile: 010`,
-    plain) where the write used to quote them. The oracle moved with that:
-    `describe_tenant` reads `_profile` with PyYAML typing (plain `010` → 8,
-    #2297), so it cannot tell a bound plain reference from a broken one. The
-    raw-text reader and the exporter's served value (`container_cpu` from
-    profile `010`, 55 — the default is 80) can, and pin the same binding."""
+    plain) where the write used to quote them. The oracle moved with that,
+    to the raw-text reader and the exporter's served value (`container_cpu`
+    from profile `010`, 55 — the default is 80): `describe_tenant` then read
+    `_profile` with PyYAML typing (plain `010` → 8, fixed by #2297 and
+    pinned in test_profile_ref_as_text.py)."""
     d = _tree(tmp_path, {
         "_defaults.yaml": ("defaults:\n  mysql_connections: 70\n"
                            "  container_cpu: 80\n"
@@ -775,9 +775,9 @@ def test_patch_config_keeps_a_profile_reference_bound(tmp_path, da_guard):
     the rewrite still wrote `_profile: 8` — the binding silently broken at
     rc 0 (#2237 step 0). Same shape as the deprecate_rule test above,
     including its #2220 change of oracle: `_profile: 010` is written back
-    plain, which `describe_tenant` types to 8 (#2297); the raw-text reader
-    and da-guard's served `container_cpu` (55 from profile `010`, not the
-    default 80) pin the binding instead."""
+    plain; the raw-text reader and da-guard's served `container_cpu` (55
+    from profile `010`, not the default 80) pin the binding. (The Python
+    readers' own agreement with that value: test_profile_ref_as_text.py.)"""
     defaults = ("defaults:\n  connections: 100\n  container_cpu: 80\n"
                 'profiles:\n  010:\n    container_cpu: "55"\n')
     cm = {"data": {"_defaults.yaml": defaults,
