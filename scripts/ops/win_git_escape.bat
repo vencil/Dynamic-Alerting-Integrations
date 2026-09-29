@@ -155,15 +155,17 @@ REM --- with a `!` is refused outright.
 setlocal DisableDelayedExpansion
 set "CWD_TOP="
 for /f "delims=" %%t in ('"%GIT_CMD%" rev-parse --show-toplevel 2^>nul') do set "CWD_TOP=%%t"
+REM --- Echo before endlocal: after it delayed expansion is back on and would
+REM --- strip the `!` from the message below.
 if not defined CWD_TOP (
     "%GIT_CMD%" rev-parse --show-toplevel 2>&1
-    endlocal
     echo FAILED: the current directory is not in a git work tree
+    endlocal
     goto :done_err
 )
 if not "%CWD_TOP:!=%"=="%CWD_TOP%" (
-    endlocal
     echo FAILED: the current directory's tree path contains "!", which this script cannot work with
+    endlocal
     goto :done_err
 )
 endlocal & set "CWD_TOP=%CWD_TOP%"

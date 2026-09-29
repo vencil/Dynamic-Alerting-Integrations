@@ -1175,8 +1175,9 @@ def test_a_bang_in_either_path_fails_closed(tmp_path, bat_in) -> None:
     out = proc.stdout.decode("utf-8", "replace")
     assert proc.returncode != 0, out
     assert [n for n in trees if _git_out(trees[n], "tag", "--list")] == [], f"a tag landed:\n{out}"
-    if bat_in == "w!x!":
-        assert 'contains "!"' in out, f"refused without saying why:\n{out}"
+    # Both sides say why, `!` included: an `echo` that runs after `endlocal`
+    # is back under delayed expansion and prints `contains ""` (#2275 review).
+    assert 'contains "!"' in out, f"refused without saying why:\n{out}"
 
 
 def _plant_locks(trees: dict[str, pathlib.Path], layout: str) -> list[pathlib.Path]:
