@@ -32,6 +32,7 @@ package handler
 // sites.
 
 import (
+	"bytes"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -216,16 +217,33 @@ func (e ErrorResponse) MarshalJSON() ([]byte, error) {
 
 // writeJSON writes v as a JSON response with the given status code, centralizing
 // the Content-Type + WriteHeader + Encode boilerplate that every success handler
-// (and the error envelope below) repeated. The Encode error is intentionally
-// ignored: the status line and headers are already committed by the time Encode
-// can fail mid-stream, so there's nothing actionable to do — matching the prior
-// per-handler `_ =` discards. Callers that previously relied on the implicit 200
-// (Content-Type + Encode, no WriteHeader) pass http.StatusOK explicitly, which is
-// behaviorally identical (the first Encode write would have sent 200 anyway).
+// (and the error envelope below) repeated. Callers that previously relied on the
+// implicit 200 (Content-Type + Encode, no WriteHeader) pass http.StatusOK
+// explicitly, which is behaviorally identical.
+//
+// v is encoded into a buffer BEFORE the status line is committed. Encoding
+// straight into w used to commit the status first, so a value encoding/json
+// refuses (a NaN / ±Inf float — a YAML `.inf` in a tenant file reaches
+// /effective's effective_config) produced `200` with an empty body: a success a
+// client cannot parse, and nothing in the logs. Now such a value is a 500 error
+// envelope naming the encode error. The bytes of every value that encodes are
+// unchanged (same Encoder, same trailing newline).
 func writeJSON(w http.ResponseWriter, status int, v any) {
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(v); err != nil {
+		slog.Error("response encode failed", "status", status, "error", err)
+		buf.Reset()
+		// Only the two string fields are set, so this encode cannot fail;
+		// the discard keeps writeJSON free of recursion.
+		_ = json.NewEncoder(&buf).Encode(ErrorResponse{
+			Error: "response encode failed: " + err.Error(),
+			Code:  CodeInternal,
+		})
+		status = http.StatusInternalServerError
+	}
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(status)
-	_ = json.NewEncoder(w).Encode(v)
+	_, _ = w.Write(buf.Bytes())
 }
 
 // WriteErrorEnvelope is the canonical error response writer. All
