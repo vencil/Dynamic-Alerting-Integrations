@@ -719,7 +719,18 @@ def _default_value_error(value: Any) -> str:
         return ""
     if isinstance(value, bool):
         return "must be a number, not a boolean"
-    if isinstance(value, (int, float)):
+    if isinstance(value, int):
+        # An int (`!!int "…"`) is dumped as its decimal digits, which
+        # yaml.v3 reads through ParseFloat when it passes 64 bits: refused
+        # once it rounds past float64 max (Go-measured: (2^54-1)*2^970 and
+        # up, either sign). `float()` rounds the same way and raises there;
+        # it also needs no `str()`, which is capped at 4300 digits.
+        try:
+            float(value)
+        except OverflowError:
+            return "must be a number within float64 range"
+        return ""
+    if isinstance(value, float):
         return ""
     if not isinstance(value, str):
         return "must be a number"

@@ -501,6 +501,16 @@ class TestRenderCrFile:
 
 _T1 = "  tenants:\n    t1: {mysql_connections: '70'}\n"
 
+# An explicitly tagged, quoted int (`!!int "…"`) is a Python int, dumped as
+# its decimal digits; past 64 bits yaml.v3 reads those through ParseFloat.
+# The float64 edge: (2^54-1)*2^970 is the halfway point above float64 max,
+# rounded to even — i.e. up, to +Inf, which ParseFloat refuses (Go-measured).
+_F64_EDGE = (2**54 - 1) * 2**970
+
+
+def _tagged_int(n):
+    return '  defaults: {cpu: !!int "%d"}\n' % n
+
 #: (id, spec body below `_T1`) the exporter REFUSES once rendered.
 _REFUSED = [
     ("defaults-true", "  defaults: {cpu: true}\n"),
@@ -539,6 +549,10 @@ _REFUSED = [
     ("defaults-quoted-dotted-I", "  defaults: {cpu: \"73İ\"}\n"),
     ("defaults-kelvin-sign", "  defaults: {cpu: 1K}\n"),
     ("defaults-fullwidth-digit", "  defaults: {cpu: １}\n"),
+    ("defaults-tagged-int-401-digits", _tagged_int(10**400)),
+    ("defaults-tagged-int-negative-401-digits", _tagged_int(-10**400)),
+    ("defaults-tagged-int-f64-edge", _tagged_int(_F64_EDGE)),
+    ("defaults-tagged-int-negative-f64-edge", _tagged_int(-_F64_EDGE)),
     ("sf-reasons-omap", "  stateFilters: {x: {reasons: !!omap [a: 1]}}\n"),
     ("sf-reasons-pairs", "  stateFilters: {x: {reasons: !!pairs [a: 1]}}\n"),
     ("sf-int", "  stateFilters: {x: 1}\n"),
@@ -581,6 +595,12 @@ _READ = [
     # which takes a sign there.
     ("defaults-binary-signed-digits", "  defaults: {cpu: 0b-1}\n"),
     ("defaults-octal-signed-digits", "  defaults: {cpu: 0o+7}\n"),
+    ("defaults-tagged-int", _tagged_int(80)),
+    ("defaults-tagged-int-20-digits", _tagged_int(2**64)),
+    ("defaults-tagged-int-301-digits", _tagged_int(10**300)),
+    ("defaults-tagged-int-below-f64-edge", _tagged_int(_F64_EDGE - 1)),
+    ("defaults-tagged-int-negative-below-f64-edge",
+     _tagged_int(-(_F64_EDGE - 1))),
     ("sf-null", "  stateFilters: {x: null}\n"),
     ("sf-empty", "  stateFilters: {x: {}}\n"),
     ("sf-set", "  stateFilters: {x: !!set {reasons}}\n"),
