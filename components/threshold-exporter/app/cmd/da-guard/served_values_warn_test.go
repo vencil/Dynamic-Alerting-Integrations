@@ -74,7 +74,11 @@ func servedValuesWarnCounts(t *testing.T, files map[string]string) (map[string]i
 func TestServedValues_EachResolverWarnOnce(t *testing.T) {
 	t.Parallel()
 	const maintenanceWarn = `invalid expires "nope" in _state_maintenance for tenant=a8`
+	// a9's value is not YAML at all: the other maintenance WARN, same two
+	// resolvers, same once-per-scrape rule (#2426).
+	const maintenanceParseWarn = `failed to parse structured _state_maintenance for tenant=a9`
 	tenants := map[string]string{
+		"a9.yaml": "tenants:\n  a9:\n    _state_maintenance: \"expires: [\"\n",
 		"a1.yaml": "tenants:\n  a1:\n    _silent_mode: \"bogus\"\n",
 		"a3.yaml": "tenants:\n  a3:\n    _severity_dedup: \"bogus\"\n",
 		"b2.yaml": "tenants:\n  b2:\n    _metadata: [1, 2]\n",
@@ -85,7 +89,7 @@ func TestServedValues_EachResolverWarnOnce(t *testing.T) {
 	for _, tc := range []struct {
 		name     string
 		defaults string
-		// maintenanceWant is how many times the a8 WARN is printed.
+		// maintenanceWant is how many times each of the a8 and a9 WARNs is printed.
 		maintenanceWant int
 	}{
 		// No maintenance filter: ResolveStateFiltersAt never reaches a8, so
@@ -122,8 +126,10 @@ func TestServedValues_EachResolverWarnOnce(t *testing.T) {
 					t.Errorf("WARN containing %q printed %d times, want 1; stderr:\n%s", want, n, stderr)
 				}
 			}
-			if n := countContaining(count, maintenanceWarn); n != tc.maintenanceWant {
-				t.Errorf("WARN containing %q printed %d times, want %d; stderr:\n%s", maintenanceWarn, n, tc.maintenanceWant, stderr)
+			for _, want := range []string{maintenanceWarn, maintenanceParseWarn} {
+				if n := countContaining(count, want); n != tc.maintenanceWant {
+					t.Errorf("WARN containing %q printed %d times, want %d; stderr:\n%s", want, n, tc.maintenanceWant, stderr)
+				}
 			}
 			// Nothing else printed more than once.
 			for line, n := range count {
