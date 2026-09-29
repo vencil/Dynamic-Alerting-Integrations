@@ -1,6 +1,10 @@
 #!/usr/bin/env python3
 """da_assembler.py 的 pytest 風格測試 — CRD → YAML 組合器。"""
 
+import io
+import os
+import shutil
+import subprocess
 import tempfile
 from pathlib import Path
 from unittest import mock
@@ -486,6 +490,188 @@ class TestRenderCrFile:
         assert render_cr_file(cr_path, out_dir) == 0
         text = (out_dir / "ok.yaml").read_text(encoding="utf-8")
         assert text.split("\n", 2)[2] == body
+
+
+# ── #2395 round 2: shapes below the blocks, judged against the exporter ──
+#
+# Each row is a CR `spec:` body and whether the exporter reads the file
+# `render_cr_to_yaml` makes of it. The `oracle` test below re-measures every
+# row with `da-guard served-values` (rc 3 = the exporter refused the file);
+# the other tests pin the tool's rc for the same rows.
+
+_T1 = "  tenants:\n    t1: {mysql_connections: '70'}\n"
+
+#: (id, spec body below `_T1`) the exporter REFUSES once rendered.
+_REFUSED = [
+    ("defaults-true", "  defaults: {cpu: true}\n"),
+    ("defaults-yes", "  defaults: {cpu: yes}\n"),
+    ("defaults-word", "  defaults: {cpu: foo}\n"),
+    ("defaults-quoted-number", "  defaults: {cpu: \"80\"}\n"),
+    ("defaults-single-quoted", "  defaults: {cpu: '80'}\n"),
+    ("defaults-quoted-empty", "  defaults: {cpu: ''}\n"),
+    ("defaults-str-tag", "  defaults: {cpu: !!str 80}\n"),
+    ("defaults-sexagesimal", "  defaults: {cpu: 1:30}\n"),
+    ("defaults-date", "  defaults: {cpu: 2024-01-01}\n"),
+    ("defaults-list", "  defaults: {cpu: [1]}\n"),
+    ("defaults-map", "  defaults: {cpu: {a: 1}}\n"),
+    ("sf-int", "  stateFilters: {x: 1}\n"),
+    ("sf-word", "  stateFilters: {x: foo}\n"),
+    ("sf-empty-list", "  stateFilters: {x: []}\n"),
+    ("sf-list", "  stateFilters: {x: [a]}\n"),
+    ("sf-reasons-scalar", "  stateFilters: {x: {reasons: A}}\n"),
+    ("sf-reasons-nested-list", "  stateFilters: {x: {reasons: [[a]]}}\n"),
+    ("sf-reasons-map-item", "  stateFilters: {x: {reasons: [{a: 1}]}}\n"),
+    ("sf-severity-list", "  stateFilters: {x: {severity: [a]}}\n"),
+    ("sf-severity-map", "  stateFilters: {x: {severity: {a: 1}}}\n"),
+    ("sf-default-state-list", "  stateFilters: {x: {default_state: [a]}}\n"),
+]
+
+#: (id, spec body below `_T1`) the exporter READS once rendered.
+_READ = [
+    ("defaults-int", "  defaults: {cpu: 80}\n"),
+    ("defaults-float", "  defaults: {cpu: 80.5}\n"),
+    ("defaults-negative", "  defaults: {cpu: -5}\n"),
+    ("defaults-leading-dot", "  defaults: {cpu: .5}\n"),
+    ("defaults-exponent", "  defaults: {cpu: 1e3}\n"),
+    ("defaults-quoted-exponent", "  defaults: {cpu: \"1e3\"}\n"),
+    ("defaults-underscore", "  defaults: {cpu: 1_000}\n"),
+    ("defaults-hex", "  defaults: {cpu: 0x10}\n"),
+    ("defaults-signed-hex", "  defaults: {cpu: +0x10}\n"),
+    ("defaults-octal-0o", "  defaults: {cpu: 0o17}\n"),
+    ("defaults-binary", "  defaults: {cpu: 0b101}\n"),
+    ("defaults-leading-zero", "  defaults: {cpu: 010}\n"),
+    ("defaults-leading-zero-8", "  defaults: {cpu: 08}\n"),
+    ("defaults-inf", "  defaults: {cpu: .inf}\n"),
+    ("defaults-nan", "  defaults: {cpu: .nan}\n"),
+    ("defaults-null", "  defaults: {cpu: null}\n"),
+    ("defaults-float-tag", "  defaults: {cpu: !!float 80}\n"),
+    ("sf-null", "  stateFilters: {x: null}\n"),
+    ("sf-empty", "  stateFilters: {x: {}}\n"),
+    ("sf-set", "  stateFilters: {x: !!set {reasons}}\n"),
+    ("sf-reasons", "  stateFilters: {x: {reasons: [A]}}\n"),
+    ("sf-reasons-scalars", "  stateFilters: {x: {reasons: [1, true, null]}}\n"),
+    ("sf-reasons-null", "  stateFilters: {x: {reasons: null}}\n"),
+    ("sf-severity-int", "  stateFilters: {x: {severity: 1}}\n"),
+    ("sf-severity-bool", "  stateFilters: {x: {severity: true}}\n"),
+    ("sf-default-state-int", "  stateFilters: {x: {default_state: 1}}\n"),
+    ("sf-unknown-key", "  stateFilters: {x: {other: [a, {b: 1}]}}\n"),
+    ("tenant-set", "    t2: !!set {cpu}\n"),
+]
+
+_CR_HEAD = "kind: ThresholdConfig\nmetadata: {name: ok}\nspec:\n"
+
+
+def _write_cr(tmp_path, body):
+    cr_path = tmp_path / "cr.yaml"
+    cr_path.write_text(_CR_HEAD + _T1 + body, encoding="utf-8")
+    out_dir = tmp_path / "out"
+    out_dir.mkdir()
+    return cr_path, out_dir
+
+
+@pytest.fixture(scope="module")
+def da_guard(tmp_path_factory):
+    """da-guard built from this checkout, or None when `go` is missing (the
+    oracle test then skips; VIBE_REQUIRE_GO=1 fails instead)."""
+    if shutil.which("go") is None:
+        assert os.environ.get("VIBE_REQUIRE_GO") != "1", \
+            "VIBE_REQUIRE_GO=1 but `go` is not on PATH"
+        return None
+    out = tmp_path_factory.mktemp("da-guard") / "da-guard"
+    env = {**os.environ}
+    env.setdefault("GOTOOLCHAIN", "auto")
+    repo = Path(__file__).resolve().parents[2]
+    subprocess.run(["go", "build", "-buildvcs=false", "-o", str(out),
+                    "./cmd/da-guard"],
+                   cwd=repo / "components" / "threshold-exporter" / "app",
+                   env=env, check=True, timeout=600)
+    return str(out)
+
+
+class TestRenderCrExporterShapes:
+    """#2395 第 2 輪：區塊以下、依 exporter 型別宣告深度的形狀。"""
+
+    @pytest.mark.parametrize("block, key", [
+        pytest.param("  tenants: ---\n", "tenants", id="tenants-doc-marker"),
+        pytest.param("  defaults: ---\n", "defaults", id="defaults-doc-marker"),
+        pytest.param("  stateFilters: ---\n", "stateFilters",
+                     id="stateFilters-doc-marker"),
+        pytest.param("  defaults: --- 0\n", "defaults", id="doc-marker-0"),
+        pytest.param("  defaults: --- []\n", "defaults", id="doc-marker-list"),
+        pytest.param("  defaults: --- no\n", "defaults", id="doc-marker-no"),
+    ])
+    def test_a_str_scalar_block_is_not_read_as_a_document(
+            self, block, key, tmp_path, caplog):
+        """F1：`---` 開頭的純量是字串（truthy 非 mapping），不是空文件。
+
+        先前用 `yaml.safe_load(原文)` 判 falsy，把 `---` 讀成 None、
+        `--- 0` 讀成 0，於是當空區塊丟掉、rc 0；`tenants: ---` 寫出 `{}`，
+        租戶全部消失。會讓本測試轉紅的改動：把 `_FALSY_ABLE_TAGS` 的判斷
+        換回對原文做 `yaml.safe_load`。
+        """
+        cr_path = tmp_path / "cr.yaml"
+        tenants = "" if key == "tenants" else _T1
+        cr_path.write_text(_CR_HEAD + tenants + block, encoding="utf-8")
+        out_dir = tmp_path / "out"
+        out_dir.mkdir()
+        assert render_cr_file(cr_path, out_dir) == EXIT_CALLER_ERROR
+        assert f"spec.{key} must be a mapping" in caplog.text
+        assert list(out_dir.iterdir()) == []
+
+    @pytest.mark.parametrize("body", [pytest.param(b, id=i)
+                                      for i, b in _REFUSED])
+    def test_a_value_the_exporter_refuses_is_caller_error(
+            self, body, tmp_path, caplog):
+        """F2：exporter 會因值型別整份拒收的 defaults／stateFilters → rc 2。
+
+        `defaults` 是 `map[string]float64`、`state_filters` 是
+        `map[string]StateFilter`（pkg/config/types.go）。會讓本測試轉紅的
+        改動：拿掉 `_default_value_error` 或 `_state_filter_error` 的呼叫。
+        """
+        cr_path, out_dir = _write_cr(tmp_path, body)
+        assert render_cr_file(cr_path, out_dir) == EXIT_CALLER_ERROR
+        assert "the exporter skips the whole rendered file" in caplog.text
+        assert list(out_dir.iterdir()) == []
+
+    @pytest.mark.parametrize("body", [pytest.param(b, id=i)
+                                      for i, b in _READ])
+    def test_a_value_the_exporter_reads_still_renders(self, body, tmp_path):
+        """F2／F3 對照組：exporter 讀得了的形狀維持 rc 0 並寫出檔案。
+
+        含 F3 的 `t2: !!set {cpu}`：Python 讀成 set，yaml.v3 讀成
+        mapping，exporter 照收。會讓本測試轉紅的改動：把數字判斷收緊成
+        PyYAML 的型別（`1e3`、`0o17`、`08` 會被誤擋），或租戶層不收 set。
+        """
+        cr_path, out_dir = _write_cr(tmp_path, body)
+        assert render_cr_file(cr_path, out_dir) == 0
+        assert (out_dir / "ok.yaml").exists()
+
+    @pytest.mark.parametrize("body, refused", [
+        *[pytest.param(b, True, id=i) for i, b in _REFUSED],
+        *[pytest.param(b, False, id=i) for i, b in _READ],
+    ])
+    def test_the_rows_match_the_exporter(
+            self, body, refused, tmp_path, da_guard):
+        """上面兩張表的分類本身，以 exporter 的解碼器重量。
+
+        把 CR 以 render_cr_to_yaml（不經 --render-cr 的檢查）寫成檔，
+        餵 `da-guard served-values`：拒收的列必須 rc 3，讀得了的列必須
+        rc 0。表錯了（例如把 exporter 讀得了的形狀列進拒收）這裡會紅。
+        """
+        if da_guard is None:
+            pytest.skip("go not on PATH (set VIBE_REQUIRE_GO=1 to fail)")
+        import da_assembler
+        from _lib_yaml_keys import load_for_rewrite
+        cr = da_assembler._keys_as_plain_text(load_for_rewrite(
+            io.StringIO(_CR_HEAD + _T1 + body)))
+        conf = tmp_path / "conf"
+        conf.mkdir()
+        (conf / "ok.yaml").write_text(
+            da_assembler.render_cr_to_yaml(cr), encoding="utf-8")
+        r = subprocess.run([da_guard, "served-values", "--config-dir",
+                            str(conf)], capture_output=True, text=True,
+                           encoding="utf-8", timeout=120)
+        assert r.returncode == (3 if refused else 0), r.stdout + r.stderr
 
 
 class TestSignalHandler:

@@ -23,6 +23,7 @@ import argparse
 import hashlib
 import logging
 import os
+import re
 import signal
 import stat
 import sys
@@ -503,8 +504,10 @@ def render_cr_file(
 
     # #2395: `reconcile_one(cli=True)` re-raises whatever stopped the
     # render. OutputWriteError goes on to `main`'s decorator (#1789, rc 2
-    # naming --config-dir); anything else is one line and rc 2 here — rc 0
-    # is only for a run that got as far as the write.
+    # naming --config-dir); anything else is one line and rc 2 here. rc 0
+    # only when the file was written (or, under --dry-run, would be) and
+    # nothing raised. ⚠️ A failure BEFORE the write leaves no file; one after
+    # it (e.g. in the log line that follows) is rc 2 with the file on disk.
     try:
         reconcile_one(cr, config_dir, dry_run=dry_run, cli=True)
     except OutputWriteError:
@@ -528,24 +531,116 @@ def _spec_block_shape_error(spec: dict) -> str:
     false``, ``[]``) — dropped as an empty block, which #2331 pins (tests/
     ops/test_tenant_id_as_text.py). A TENANT value gets no such pass: it is
     written, not dropped, and the exporter refuses ``t2: 0`` too.
+    A ``!!set`` is a mapping to the exporter (every value null), so it passes
+    wherever a mapping is WRITTEN (a tenant, a state filter); a block that is
+    a set is still refused, because ``render_cr_to_yaml`` would drop it.
+
+    Below the blocks, only as deep as the exporter's types go
+    (``pkg/config/types.go``): ``defaults`` is ``map[string]float64``
+    (:func:`_default_value_error`) and ``state_filters`` is
+    ``map[string]StateFilter`` (:func:`_state_filter_error`). Tenant values
+    below the tenant (``ScheduledValue``) are not checked.
     Only ``--render-cr`` asks this; the controller path is unchanged.
     """
     for key in ("tenants", "defaults", "stateFilters"):
         block = spec.get(key)
         if block is None or isinstance(block, dict):
             continue
+        # A plain scalar's text, as YAML types it — NOT re-parsed as a
+        # document: `yaml.safe_load("---")` is None, and `--- 0`, `--- no`
+        # would read as falsy too, dropping a block the CR wrote. Only a
+        # null / bool / int / float can be falsy; any other tag is text.
         if isinstance(block, RawPlain):
-            try:
-                block = yaml.safe_load(block)
-            except yaml.YAMLError:
-                pass  # not a typed falsy scalar: judged as the text below
+            block = (yaml.safe_load(block)
+                     if _plain_tag(block) in _FALSY_ABLE_TAGS else str(block))
         if block:
             return f"spec.{key} must be a mapping"
     tenants = spec.get("tenants")
     for tenant, values in (tenants if isinstance(tenants, dict) else {}).items():
-        if values is not None and not isinstance(values, dict):
+        if values is not None and not isinstance(values, (dict, set)):
             return (f"spec.tenants.{tenant} must be a mapping; the exporter "
                     f"skips the whole rendered file otherwise")
+    defaults = spec.get("defaults")
+    for metric, value in (defaults if isinstance(defaults, dict) else {}).items():
+        why = _default_value_error(value)
+        if why:
+            return (f"spec.defaults.{metric} {why}; the exporter skips the "
+                    f"whole rendered file otherwise")
+    filters = spec.get("stateFilters")
+    for name, sf in (filters if isinstance(filters, dict) else {}).items():
+        why = _state_filter_error(sf)
+        if why:
+            return (f"spec.stateFilters.{name}{why}; the exporter skips the "
+                    f"whole rendered file otherwise")
+    return ""
+
+
+_FALSY_ABLE_TAGS = frozenset("tag:yaml.org,2002:" + t
+                             for t in ("null", "bool", "int", "float"))
+
+#: A SUPERSET of the plain scalars gopkg.in/yaml.v3 (the exporter's reader)
+#: decodes into a float64, underscores removed first as it does: its named
+#: floats, and sign + digits / `.` / exponent or a 0x / 0o / 0b prefix.
+#: ⚠️ Deliberately not yaml.v3's own resolution (Go's ParseInt / ParseFloat
+#: and its float regex): a text this lets through may still be refused
+#: (`0o8`, `0b102`, `1e400`; oracle-measured) — those still render rc 0. Everything it
+#: refuses, yaml.v3 refuses too: `1:30`, `true`/`yes`, `foo`, `2024-01-01`.
+_V3_NUMBER_SUPERSET = re.compile(
+    r"[-+]?\.(?:inf|Inf|INF)|\.(?:nan|NaN|NAN)"
+    r"|[-+]?(?:0[xXoObB][0-9a-fA-F]+"
+    r"|(?=\.?[0-9])[0-9]*\.?[0-9]*(?:[eE][-+]?[0-9]+)?)")
+
+
+def _default_value_error(value: Any) -> str:
+    """Why *value* is not a ``defaults`` value the exporter decodes, or ``""``.
+
+    The exporter reads ``defaults`` as ``map[string]float64``. Oracle
+    (``da-guard served-values``, rc 3 = file refused): null and numbers are
+    read; a bool, a date, a sequence / mapping, and ANY quoted scalar —
+    ``"80"`` included — make it refuse the whole file.
+    """
+    if value is None:
+        return ""
+    if isinstance(value, bool):
+        return "must be a number, not a boolean"
+    if isinstance(value, (int, float)):
+        return ""
+    if not isinstance(value, str):
+        return "must be a number"
+    # A RawPlain is dumped back plain, as written. Any other str is dumped
+    # plain only where PyYAML would not retype it; otherwise it is QUOTED,
+    # and yaml.v3 does not decode a quoted scalar into a number.
+    if (not isinstance(value, RawPlain)
+            and _plain_tag(value) != "tag:yaml.org,2002:str"):
+        return "must be a number, not a quoted string"
+    if not _V3_NUMBER_SUPERSET.fullmatch(value.replace("_", "")):
+        return f"must be a number, not {value!r}"
+    return ""
+
+
+def _state_filter_error(sf: Any) -> str:
+    """Why *sf* is not a ``StateFilter`` the exporter decodes, or ``""``.
+
+    ``StateFilter`` is ``{reasons: []string, severity: string,
+    default_state: string}``, other keys ignored. Oracle-measured: a
+    non-mapping filter, a non-sequence ``reasons`` or one holding a
+    sequence / mapping, and a sequence / mapping ``severity`` /
+    ``default_state`` are refused. Any scalar (null included) is a string.
+    The returned text follows the filter's name.
+    """
+    if sf is None or isinstance(sf, set):
+        return ""
+    if not isinstance(sf, dict):
+        return " must be a mapping"
+    reasons = sf.get("reasons")
+    if reasons is not None:
+        if not isinstance(reasons, list):
+            return ".reasons must be a list"
+        if any(isinstance(r, (list, dict, set)) for r in reasons):
+            return ".reasons must be a list of strings"
+    for key in ("severity", "default_state"):
+        if isinstance(sf.get(key), (list, dict, set)):
+            return f".{key} must be a string"
     return ""
 
 
