@@ -223,8 +223,9 @@ func (e ErrorResponse) MarshalJSON() ([]byte, error) {
 //
 // v is encoded into a buffer BEFORE the status line is committed. Encoding
 // straight into w used to commit the status first, so a value encoding/json
-// refuses (a NaN / ±Inf float — a YAML `.inf` in a tenant file reaches
-// /effective's effective_config) produced `200` with an empty body: a success a
+// refuses (a NaN / ±Inf float — a YAML `.inf` in a tenant file once reached
+// /effective this way; that handler now sends it as text via
+// config.NonFiniteAsText) produced `200` with an empty body: a success a
 // client cannot parse, and nothing in the logs. Now such a value is a 500 error
 // envelope naming the encode error. The bytes of every value that encodes are
 // unchanged (same Encoder, same trailing newline).

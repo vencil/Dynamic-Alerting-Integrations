@@ -47,6 +47,7 @@ package main
 // critical because merged_hash is computed over the raw bytes.
 
 import (
+	"bytes"
 	"encoding/json"
 	"errors"
 	"io"
@@ -106,11 +107,23 @@ func simulateHandler() http.HandlerFunc {
 			return
 		}
 
+		// A YAML `.inf` / `.nan` leaves a non-finite float in the tree, which
+		// JSON cannot carry: send it as the text Python's json.dumps writes.
+		// merged_hash was computed from the original tree, so it is unchanged.
+		resp.Config = config.NonFiniteAsText(resp.Config)
+
+		// Encode before committing the status line: encoding straight into
+		// w sent 200 first, so a value encoding/json refuses shipped as 200
+		// with an empty body.
+		var buf bytes.Buffer
+		if err := json.NewEncoder(&buf).Encode(resp); err != nil {
+			writeSimulateError(w, http.StatusInternalServerError, "response encode failed: "+err.Error())
+			return
+		}
 		w.Header().Set("Content-Type", "application/json")
-		// Encoder errors here are nearly always client disconnects after
-		// we've already written the status line — there's no useful
-		// recovery path and nothing to surface to the caller.
-		_ = json.NewEncoder(w).Encode(resp)
+		// A write error here is nearly always a client disconnect —
+		// nothing to surface to the caller.
+		_, _ = w.Write(buf.Bytes())
 	}
 }
 
