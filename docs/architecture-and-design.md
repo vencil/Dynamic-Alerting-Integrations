@@ -38,7 +38,7 @@ lang: zh
 | [高可用性 (HA)](design/high-availability.md) | 2 副本策略、PDB、滾動更新、SLA 99.9%+ | Platform / SRE |
 | [Runtime Canary 設計](design/runtime-canary.md) | 自訂告警編譯管線端到端活性、dead-man's-switch、壞租戶隔離兩層說明（ADR-025 設計就緒） | Platform / SRE |
 | [Recipe would-fire 預覽設計](design/recipe-would-fire-preview.md) | 在同一 modal 看 recipe 會不會 fire；compiler+promtool inverted-assert、facade host、合成輸入（#657 P1 設計就緒） | Platform / Domain Expert / SRE |
-| [未來擴展路線](design/roadmap-future.md) | v2.9.0 已交付 + v2.10.0+ 長期探索 | Platform / 決策者 |
+| [未來擴展路線](design/roadmap-future.md) | v2.9.0 已交付 + v3.0.0+ 長期探索 | Platform / 決策者 <!-- since: v3.0.0 --> |
 | *專題* | | |
 | [性能基準](benchmarks.md) | 規模 / 速度 / 容量 / 穩定的實測數字 | Platform / SRE / 決策者 |
 | [告警設計入門](alerting-design-fundamentals.md) · [SLO 與錯誤預算](alerting-slo-error-budget.md) · [告警動作與冪等](alerting-best-practices.md) | 告警最佳實務系列：症狀導向設計、SLO/burn-rate 門檻、冪等光譜、動作層護欄、「準則 × 平台 enforce」對照 | SRE / Domain Expert / 租戶 |

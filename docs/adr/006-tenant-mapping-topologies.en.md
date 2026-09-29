@@ -13,7 +13,7 @@ lang: en
 ## Status
 
 ✅ **Accepted** (v2.1.0) — Toolchain completed, 1:N end-to-end integration pending production validation
-📎 **Addendum** (v2.10.0) — Tenant-attribution policy for infrastructure metrics (disk/PVC/node), see §Addendum below
+📎 **Addendum** (v3.0.0) — Tenant-attribution policy for infrastructure metrics (disk/PVC/node), see §Addendum below
 
 ## Background
 
@@ -157,7 +157,7 @@ groups:
 - End-to-end validation in real multi-schema Oracle environments (pending production feedback)
 - Schema validation (`_instance_mapping.yaml` JSON Schema) deferred to next cycle
 
-## Addendum: Tenant Attribution for Infrastructure Metrics (v2.10.0)
+## Addendum: Tenant Attribution for Infrastructure Metrics (v3.0.0)
 
 **Decision: disk, PVC, and node metrics support 1:1 tenant attribution only (one namespace = one tenant).**
 

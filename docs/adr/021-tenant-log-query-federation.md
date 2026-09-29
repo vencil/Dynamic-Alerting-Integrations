@@ -28,7 +28,7 @@ updated_at: 2026-05-24
 
 | 階段 | 內容 | 定位 |
 |---|---|---|
-| **Phase 1 — (b) 平台營運 log** | tenant 查「平台**關於該租戶**」的營運 log（federation audit、告警 eval 等）。資料部分**已存在**（[#539](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/539) audit stream 已帶 `tenant_id`）。`ProjectID=0` | **v2.10.0 實作開發**（milestone 待建立）|
+| **Phase 1 — (b) 平台營運 log** | tenant 查「平台**關於該租戶**」的營運 log（federation audit、告警 eval 等）。資料部分**已存在**（[#539](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/539) audit stream 已帶 `tenant_id`）。`ProjectID=0` | **v3.0.0 實作開發**（milestone 待建立）|
 | **Phase 2 — (a) 租戶應用 log** | tenant 查自己 workload 的應用 log。需「另外的設計」ingestion epic 把 log 集中送進平台。`ProjectID=1` | **Defer-with-trigger**（Future Work，見文末）|
 
 > **EN mirror**：依平台語言政策（中文為主 SSOT、不執行 ZH→EN 遷移），本 ADR 不另製 `.en.md`（同 ADR-019 / ADR-020）。
@@ -66,7 +66,7 @@ updated_at: 2026-05-24
 
 - **只 own 授權平面**；ingestion 蓋章解耦為「另外的設計」，以契約約束。
 - **隔離原語 = VictoriaLogs 原生 `(AccountID, ProjectID)`**，由既有 federation-gateway 注入 header 強制；**非** prom-label-proxy、**非**自寫 LogsQL injector、**非** vmauth。
-- **(b) 先行（v2.10.0）→ (a) defer-with-trigger**；以統一 AccountID 原語讓兩者共用同一授權平面。
+- **(b) 先行（v3.0.0）→ (a) defer-with-trigger**；以統一 AccountID 原語讓兩者共用同一授權平面。
 - **ProjectID 分流 (a)/(b)**；**AccountID 單調配發、永不回收**。
 - **Fork B = ingest-time 敏感欄位 drop**（read-time strip 留 Future Work）。
 - **Admission validator = 結構性探測 + 告警**（不自動熔斷）。
@@ -210,7 +210,7 @@ VictoriaLogs 原生 `(AccountID, ProjectID)` 即隔離核心。
 
 ## 實作計畫
 
-### Phase 1 — (b) 平台營運 log（v2.10.0）
+### Phase 1 — (b) 平台營運 log（v3.0.0）
 
 | # | 內容 |
 |---|---|

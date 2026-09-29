@@ -26,7 +26,7 @@ lang: zh
 | Playwright E2E | [§Playwright E2E](#playwright-e2e-測試portal-smoke-tests) |
 | Go 並發 flake 修法 | [§v2.6.x Go 並發測試 flake](#v26x-lessons-learned--go-並發測試-flake2026-04-11) |
 | 程式碼品質規範 | [§程式碼品質規範](#程式碼品質規範) |
-| 守衛程式碼跑 mutation | [§v2.10.0 Mutation harness + 宣稱紀律](#v2100-lessons-learned-mutation-harness-and-claim-discipline-2026-08-09-pr-1370) |
+| 守衛程式碼跑 mutation | [§v3.0.0 Mutation harness + 宣稱紀律](#v300-lessons-learned-mutation-harness-and-claim-discipline-2026-08-09-pr-1370) |
 
 ## 測試前置準備
 
@@ -1476,7 +1476,7 @@ esbuild 的 dep graph 強制 import-target 在 importer 之前 evaluate；這是
 
 本節 6 個規則適用於所有 `tools/portal/src/interactive/tools/` 下的 JSX 工具 + `tools/portal/build.mjs` esbuild config + `tests/e2e/*.spec.ts` + `.github/workflows/playwright.yml`。新工具 onboarding 流程必走 §1 的 grep 檢查 + §3 的 workers=N 漸進驗證 + §5 的 a11y critical=0 gate。
 
-## v2.10.0 Lessons Learned: Mutation harness and claim discipline (2026-08-09, PR #1370)
+## v3.0.0 Lessons Learned: Mutation harness and claim discipline (2026-08-09, PR #1370)
 
 > **範圍**：這節講的是「守衛程式碼（lint / gate / contract test）自己有沒有被測到」。
 > §v2.8.0 第 6 條的 intentional-break dogfood 驗的是**一支測試抓不抓得到一個回歸**；

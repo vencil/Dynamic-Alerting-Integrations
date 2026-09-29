@@ -198,7 +198,7 @@ required_labels:
 max_range_duration: 1h     # Prohibit excessively long range vectors (e.g., [7d])
 max_evaluation_interval: 60s  # Custom Rule Group interval cap
 
-# Per-file exemptions for platform-COMPILED packs (v2.10.0) — the deny-list
+# Per-file exemptions for platform-COMPILED packs (v3.0.0) — the deny-list
 # governs tenant hand-written raw PromQL; compiler-emitted packs (e.g. the
 # Custom Alerts forecast recipe's predict_linear, whose cost mitigations are
 # baked in at compile time) get an audited exemption via file_overrides

@@ -34,6 +34,8 @@ def _tree(tmp_path: Path, files: dict[str, str], version: str = "2.9.0") -> Path
     (root / "components/da-tools/app").mkdir(parents=True)
     (root / "components/da-tools/app/VERSION").write_text(
         version + "\n", encoding="utf-8")
+    (root / "CHANGELOG.md").write_text(
+        "## [Unreleased]\n\n## [v2.9.0] — t\n", encoding="utf-8")
     for rel, text in files.items():
         p = root / rel
         p.parent.mkdir(parents=True, exist_ok=True)
@@ -206,3 +208,172 @@ def test_every_real_marker_expires_when_the_version_moves() -> None:
     findings = gate.scan(_REPO_ROOT, bumped)
     assert {f["kind"] for f in findings} == {"stale"}, findings
     assert len(findings) == markers
+
+
+# ── since markers（本輪決策 R2）─────────────────────────────────────────────
+#
+# "v2.10.0 起…" statements name the release a behaviour ships in. They are true
+# only if that version is actually released — v3.0.0 was cut instead of
+# v2.10.0, and nothing tied those lines to a version. The released set is the
+# CHANGELOG's `## [vX.Y.Z]` headings: the release wrap-up adds the new one
+# before `make pre-tag`, so at tag time the version being cut is in it.
+
+SINCE = "<!-- since: v3.0.0 -->"
+CHANGELOG = "## [Unreleased]\n\n## [v2.9.0] — t\n\n## [v2.8.1] — t\n\n## [v2.8.0] — t\n"
+
+
+def _since(root: Path, pre_tag: bool = False, changelog: str = CHANGELOG):
+    (root / "CHANGELOG.md").write_text(changelog, encoding="utf-8")
+    released = gate.read_released_versions(root)
+    assert released is not None
+    return [(f["file"], f["line"], f["kind"])
+            for f in gate.scan_since(root, released, pre_tag=pre_tag)]
+
+
+def test_released_versions_are_the_changelog_headings(tmp_path) -> None:
+    root = _tree(tmp_path, {})
+    (root / "CHANGELOG.md").write_text(
+        CHANGELOG + "## [2.7.0] — no v, not a heading bump_docs writes\n",
+        encoding="utf-8")
+    assert gate.read_released_versions(root) == {(2, 9, 0), (2, 8, 1), (2, 8, 0)}
+
+
+@pytest.mark.parametrize("text", [None, "", "## [Unreleased]\n"])
+def test_no_changelog_headings_is_not_an_empty_released_set(tmp_path, text) -> None:
+    root = _tree(tmp_path, {})
+    if text is None:
+        (root / "CHANGELOG.md").unlink()
+    else:
+        (root / "CHANGELOG.md").write_text(text, encoding="utf-8")
+    assert gate.read_released_versions(root) is None
+
+
+def test_an_unreleased_since_marker_is_clean_during_development(tmp_path) -> None:
+    root = _tree(tmp_path, {"docs/a.md": f"From v3.0.0 this exits 2. {SINCE}\n"})
+    assert _since(root) == []
+
+
+def test_an_unreleased_since_marker_fails_the_pre_tag_gate(tmp_path) -> None:
+    root = _tree(tmp_path, {"docs/a.md": f"From v3.0.0 this exits 2. {SINCE}\n"})
+    assert _since(root, pre_tag=True) == [("docs/a.md", 1, "since-unreleased")]
+
+
+def test_the_release_heading_clears_the_pre_tag_gate(tmp_path) -> None:
+    root = _tree(tmp_path, {"docs/a.md": f"From v3.0.0 this exits 2. {SINCE}\n"})
+    assert _since(root, pre_tag=True,
+                  changelog="## [v3.0.0] — t\n\n" + CHANGELOG) == []
+
+
+def test_a_skipped_version_is_never_released(tmp_path) -> None:
+    """The case this exists for: docs said v2.10.0, the release was v3.0.0."""
+    root = _tree(tmp_path, {
+        "docs/a.md": "From v2.10.0 this exits 2. <!-- since: v2.10.0 -->\n"})
+    released = "## [v3.0.0] — t\n\n" + CHANGELOG
+    assert _since(root, changelog=released) == [
+        ("docs/a.md", 1, "since-never-released")]
+    assert _since(root, pre_tag=True, changelog=released) == [
+        ("docs/a.md", 1, "since-never-released")]
+
+
+@pytest.mark.parametrize("body", ["latest", "", "3.0", "vNEXT"])
+def test_an_unparseable_since_marker_is_malformed(tmp_path, body) -> None:
+    root = _tree(tmp_path, {"docs/a.md": f"x <!-- since: {body} -->\n"})
+    assert _since(root) == [("docs/a.md", 1, "since-malformed")]
+
+
+@pytest.mark.parametrize("line", [
+    "⚠️ **v3.0.0 起這一格的失敗模式改了**",
+    "它的 `-o` 自 v3.0.0 起把寫入失敗攔成結束碼 2",
+    "--validate 在 v3.0.0 之前會印 OK",
+    "（v3.0.0 前只印 WARN、結束碼 0）",
+    "⚠️ **上列是 v3.0.0 的契約**",
+    "**From v3.0.0 the pair is refused outright**",
+    "before v3.0.0 the shape exits 0",
+    "The failure mode changed in v3.0.0.",
+    "blocking since v3.0.0",
+    "**This row is the v3.0.0 contract**",
+    "retired in v3.0.0",
+    "v2.9.0 delivered + v3.0.0+ exploration",
+])
+def test_since_phrasing_about_an_unreleased_version_needs_a_marker(tmp_path, line) -> None:
+    root = _tree(tmp_path, {"docs/a.md": line + "\n"})
+    assert _since(root) == [("docs/a.md", 1, "since-unmarked")]
+    root2 = _tree(tmp_path / "m", {"docs/a.md": f"{line} {SINCE}\n"})
+    assert _since(root2) == []
+
+
+@pytest.mark.parametrize("line", [
+    "v2.8.0 起 conf.d 支援階層式目錄",          # released: history, not a promise
+    "Since v2.9.0 the image ships amtool.",
+    "`v3.0.0 起` 是這類句型的寫法",             # quoted, not said
+    "image: prom/prometheus:v2.55.0",           # a third-party version, no phrasing
+    "對 v3.0.0 / v4.0.0 等 major bump 用同 skeleton",
+])
+def test_other_version_mentions_are_not_since_statements(tmp_path, line) -> None:
+    root = _tree(tmp_path, {"docs/a.md": line + "\n"})
+    assert _since(root) == []
+
+
+def test_a_since_marker_anywhere_in_the_paragraph_covers_it(tmp_path) -> None:
+    root = _tree(tmp_path, {
+        "docs/a.md": f"From v3.0.0 the pair is refused.\nexit 2. {SINCE}\n\n"
+                     "Before v3.0.0 it exited 0.\n"})
+    assert _since(root) == [("docs/a.md", 4, "since-unmarked")]
+
+
+def test_an_image_caveat_marker_is_not_a_since_marker(tmp_path) -> None:
+    root = _tree(tmp_path, {"docs/a.md": f"From v3.0.0 this exits 2. {MARK}\n"})
+    assert _since(root) == [("docs/a.md", 1, "since-unmarked")]
+
+
+def test_main_exits_2_without_changelog_headings(tmp_path, monkeypatch, capsys) -> None:
+    root = _tree(tmp_path, {"docs/a.md": "x\n"})
+    (root / "CHANGELOG.md").unlink()
+    monkeypatch.setattr(gate, "REPO_ROOT", root)
+    monkeypatch.setattr(sys, "argv", ["check_image_caveats.py"])
+    assert gate.main() == 2
+    assert "CHANGELOG" in capsys.readouterr().err
+
+
+def test_main_pre_tag_flag_turns_an_unreleased_marker_red(tmp_path, monkeypatch) -> None:
+    root = _tree(tmp_path, {"docs/a.md": f"From v3.0.0 this exits 2. {SINCE}\n"})
+    (root / "CHANGELOG.md").write_text(CHANGELOG, encoding="utf-8")
+    monkeypatch.setattr(gate, "REPO_ROOT", root)
+    monkeypatch.setattr(sys, "argv", ["check_image_caveats.py"])
+    assert gate.main() == 0
+    monkeypatch.setattr(sys, "argv", ["check_image_caveats.py", "--pre-tag"])
+    assert gate.main() == 1
+
+
+def _real_since_markers() -> list[tuple[str, tuple[int, int, int]]]:
+    out = []
+    for p in gate.iter_markdown(_REPO_ROOT):
+        for line in p.read_text(encoding="utf-8").splitlines():
+            for m in gate.SINCE_MARKER_RE.finditer(gate._CODE_SPAN_RE.sub("", line)):
+                vm = gate._MARKER_VERSION_RE.match(m.group("body").strip())
+                assert vm, (p, line)
+                out.append((p.as_posix(), tuple(int(g) for g in vm.groups())))
+    return out
+
+
+def test_every_real_since_marker_is_held_by_the_pre_tag_gate() -> None:
+    """Positive control on the real tree, derived rather than written down.
+
+    Every since marker names a version that is either released (clean) or not
+    yet (red under --pre-tag until the wrap-up adds its CHANGELOG heading).
+    And if the release were cut under a DIFFERENT number — the v2.10.0 → v3.0.0
+    case — every unreleased marker turns never-released, in both modes.
+    """
+    released = gate.read_released_versions(_REPO_ROOT)
+    assert released is not None
+    markers = _real_since_markers()
+    assert markers, "no since markers in the tree; this control measures nothing"
+    pending = [v for _, v in markers if v not in released]
+    findings = gate.scan_since(_REPO_ROOT, released, pre_tag=True)
+    assert {f["kind"] for f in findings} <= {"since-unreleased"}, findings
+    assert len(findings) == len(pending)
+    if pending:
+        skipped_to = (max(pending)[0] + 1, 0, 0)
+        cut = gate.scan_since(_REPO_ROOT, released | {skipped_to}, pre_tag=False)
+        assert {f["kind"] for f in cut} == {"since-never-released"}, cut
+        assert len(cut) == len(pending)

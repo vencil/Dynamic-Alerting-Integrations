@@ -19,7 +19,7 @@ lang: en
 
 Both shipped in v2.9.0. Trackers: [#423](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/423) (version-aware), [#741](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/741) (custom alerts); per-PR history is in the CHANGELOG.
 
-📎 **Addendum** (v2.10.0) — Disk and PVC alerts (capacity evaluated per PVC + CSI driver required + two guards), see §Addendum below; epic [#692](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/692).
+📎 **Addendum** (v3.0.0) — Disk and PVC alerts (capacity evaluated per PVC + CSI driver required + two guards), see §Addendum below; epic [#692](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/692).
 
 > This ADR does **not** replace or modify [config-driven.md §2.6 Scheduled Thresholds](../design/config-driven.md) — they coexist as distinct mechanisms; the boundary is in the last section.
 
@@ -235,7 +235,7 @@ The core judgment is **reuse-over-build**: 90% of the target capability already 
 
 The two are orthogonal: §2.6 handles periodic windows, this ADR handles one-time version alignment.
 
-## Addendum: Disk and PVC Alerts (v2.10.0)
+## Addendum: Disk and PVC Alerts (v3.0.0)
 
 Lets tenants alert on disk capacity and throughput — the "the disk is filling up" need that comes up most often during database-customer migrations ([#692](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/692)). It reuses the existing recipes (forecast / ratio / threshold / rate) with no new recipe kind, but a few things differ from an ordinary recipe.
 

@@ -467,7 +467,7 @@ tools:
 |---|---|---|---|---|
 | 64 | `docs/internal/v*-planning.md` | v2.7.0 | recurring（每 minor 一次） | 跨 2 minor 未匹配 → 檢討 |
 | 65 | `docs/internal/v*-planning-archive.md` | v2.8.0 Phase .a Session #18 | recurring（planning-archive 搭配 planning.md） | 跨 2 minor 未匹配 → 檢討 |
-| 66 | `docs/internal/v*-tech-debt-decomposition.md` | v2.8.0 Session #06c | recurring（技術債密集版） | v3.0.0 前若僅 v2.8.0 唯一匹配 → 考慮轉 single-file |
+| 66 | `docs/internal/v*-tech-debt-decomposition.md` | v2.8.0 Session #06c | recurring（技術債密集版） | v3.0.0 前若僅 v2.8.0 唯一匹配 → 考慮轉 single-file <!-- since: v3.0.0 --> |
 | 67 | `docs/internal/v*-day*-*.md` | v2.6.x Cowork day notes | recurring（密集開發版） | 跨 2 minor 未匹配 → 檢討 |
 | 68 | `docs/internal/*-plan-draft.md` | v2.5.x | recurring（草案期暫存） | 跨 2 minor 未匹配 → 檢討 |
 | 69 | `docs/internal/known-regressions.md` | v2.7.0 | single-instance | 該檔永久消失 → 移除 pattern |

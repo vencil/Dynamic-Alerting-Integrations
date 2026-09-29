@@ -183,7 +183,7 @@ PATH 上有 `amtool` 時會自動用它驗證 ConfigMap 裡的 `alertmanager.yml
 
 不提供 `--base-config` 時使用內建預設值。需要自訂 `global`（如 SMTP 設定）、default receiver、或 inhibit_rules 基礎規則時，建議維護一份 `base-alertmanager.yaml` 作為輸入。詳見 [BYO Alertmanager 整合指南 Step 5](byo-alertmanager-integration.md#step-5-merge-into-alertmanager-configmap)。
 
-⚠️ **v2.10.0 起這一格的失敗模式改了（BREAKING，[#1616](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/1616) / [#1617](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/1617)）**：上面範例裡的 `--base-config` 與 `-o` 都是相對路徑，在 CI 的 workdir 打錯或目錄不存在時——
+⚠️ **v3.0.0 起這一格的失敗模式改了（BREAKING，[#1616](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/1616) / [#1617](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/1617)）**：上面範例裡的 `--base-config` 與 `-o` 都是相對路徑，在 CI 的 workdir 打錯或目錄不存在時—— <!-- since: v3.0.0 -->
 
 - **舊行為**：`--base-config` 路徑錯 ⇒ 結束碼 **0**，而產出的 ConfigMap 內容與「完全沒提供 `--base-config`」**逐位元組相同**。你的 `global:`（SMTP smarthost、Slack webhook）被換成平台內建的佔位值，然後被 `kubectl apply` / ArgoCD sync 進叢集——**告警送不出去，而流水線是綠的**。
 - **新行為**：結束碼 **2** 並指名是哪一個旗標。`-o` 的父目錄不存在或不可寫同樣是結束碼 2（舊行為是未攔的 Python traceback + 結束碼 1，而 1 在本工具的語意是「你的設定有違規」）。

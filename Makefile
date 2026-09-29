@@ -650,6 +650,9 @@ version-check: ## 檢查版號一致性 + 計數一致性 (CI lint 用；DRIFT/D
 	@python3 ./scripts/tools/dx/bump_docs.py --sync-counts --check
 
 .PHONY: pre-tag
+# 本輪決策 R2：pre-tag 時 since 標記的版號必須已是 CHANGELOG 的 ## [vX.Y.Z]
+# 標題（收尾第一步就加上要打的那一版）。target-specific 變數會傳給前置 target。
+pre-tag: IMAGE_CAVEATS_ARGS := --pre-tag
 pre-tag: version-check lint-docs lint-image-caveats playbook-freshness-ll changelog-fragments-consumed draft-advisory-check benchmark-report-warn docker-build-all trivy-scan-all ## ⛔ Pre-tag 品質閘門（所有檢查必須通過才能打 tag；benchmark-report + trivy informational）
 	@echo ""
 	@echo "============================================================"
@@ -916,8 +919,8 @@ lint-docs: ## 一站式文件 lint（versions + drift + tool consistency，支�
 		$(ARGS)
 
 .PHONY: lint-image-caveats
-lint-image-caveats: ## 「已發布映像還是舊行為」註記的到期閘門：標記 <!-- image-caveat: vX.Y.Z --> 舊於 da-tools VERSION 即失敗（pre-tag 會跑）
-	@python3 ./scripts/tools/lint/check_image_caveats.py
+lint-image-caveats: ## 「已發布映像還是舊行為」註記的到期閘門＋since 標記：image-caveat 舊於 da-tools VERSION、或 since 版號沒發過即失敗（pre-tag 會跑，並帶 --pre-tag）
+	@python3 ./scripts/tools/lint/check_image_caveats.py $(IMAGE_CAVEATS_ARGS)
 
 .PHONY: lint-egress
 lint-egress: ## #566 T4 — log-aggregation 圖表 egress allowlist + env-override gate（需 helm；ARGS="--values prod.yaml --allow-host siem.example.com"）

@@ -19,7 +19,7 @@ updated_at: 2026-05-13
 
 ✅ **Accepted** (v2.3.0) — 平台同時支援 ConfigMap 路徑和 Operator CRD 路徑，由偵測邏輯自動判斷
 📎 **Addendum** (v2.6.0) — 新增架構邊界宣言，見下方 §Addendum: 架構邊界宣言
-📎 **Addendum** (v2.10.0) — da-assembler direct-render 退役 + Operator 路徑定案，見下方 §Addendum (v2.10.0)
+📎 **Addendum** (v3.0.0) — da-assembler direct-render 退役 + Operator 路徑定案，見下方 §Addendum (v3.0.0)
 
 ## 背景
 
@@ -194,7 +194,7 @@ graph LR
 2. **是否需要 exporter 連線 K8s API？** → 如果是，違反邊界，應由外部工具處理
 3. **是否只是「讀取 → 轉換 → 輸出」？** → 如果是，屬於工具鏈範疇，可以進行
 
-## Addendum (v2.10.0)：da-assembler direct-render 退役 + Operator 路徑定案
+## Addendum (v3.0.0)：da-assembler direct-render 退役 + Operator 路徑定案
 
 把本 epic（[#692](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/692)）原本設想的「監聽 CRD、即時編譯規則的 operator」拆開後，它的三個職責各自找到了更好的歸宿：**編譯邏輯留在 CI**（純建置期、不增加任何執行期元件）；**寫入交給 tenant-api 既有的單一寫入平面**（[ADR-023](023-write-plane-single-writer-invariant.md)）；**上線前的回放驗證變成 PR 留言裡的回測**。剩下的只有「把 CRD 翻成一個寫入請求」這層皮，而它的需求還沒出現。據此對上方 §演進狀態 的 da-assembler-controller 探索項做三點定案：
 
@@ -212,7 +212,7 @@ graph LR
 - **v2.6.0**（已完成）：架構邊界宣言（見上方 §Addendum）、`operator-generate --kustomize` 多叢集部署、`drift_detect.py --mode operator` 跨叢集 CRD 漂移偵測
 
 **殘留**：
-- ~~**da-assembler-controller**（長期探索）：外部 Operator watch `ThresholdConfig` CRD → 渲染 `conf.d/`~~ → **v2.10.0 取消**（見下方 §Addendum (v2.10.0)）：direct-render hard-deprecate、CRD dormant、未來 CR-native 介面改 tenant-api 內嵌 watch mode
+- ~~**da-assembler-controller**（長期探索）：外部 Operator watch `ThresholdConfig` CRD → 渲染 `conf.d/`~~ → **v3.0.0 取消**（見下方 §Addendum (v3.0.0)）：direct-render hard-deprecate、CRD dormant、未來 CR-native 介面改 tenant-api 內嵌 watch mode
 - **Helm Chart kube-prometheus-stack values 範例**：提供常見 Operator 部署的 values.yaml 參考
 - **ArgoCD ApplicationSet 整合**：多叢集 Federation 場景的 CRD 部署自動化
 
