@@ -193,9 +193,13 @@ func batchTenantsPRMode(d *Deps, rw http.ResponseWriter, r *http.Request, req Ba
 	// order. WritePRBatch merges them all onto one base in that order, so a
 	// routing check must see them stacked (batchRoutingViolations).
 	included := map[string][]map[string]string{}
-	// advisories: the non-blocking #2325 domain-policy notes of the ops
-	// taken into the PR, returned with the batch-level warnings.
-	var advisories []string
+	// advisoriesByTenant: the non-blocking #2325 domain-policy notes of each
+	// tenant's LAST op taken into the PR. An earlier op of the same tenant is
+	// judged on an intermediate routing the later ops are stacked over, so its
+	// notes are replaced, not kept (#2440 review). advisoryTenants holds the
+	// order the tenants were first taken in; advisories below flattens them.
+	advisoriesByTenant := map[string][]string{}
+	var advisoryTenants []string
 	for _, op := range req.Operations {
 		if err := ValidateTenantID(op.TenantID); err != nil {
 			batchResults = append(batchResults, BatchResult{TenantID: op.TenantID, Status: "error", Message: err.Error()})
@@ -222,7 +226,10 @@ func batchTenantsPRMode(d *Deps, rw http.ResponseWriter, r *http.Request, req Ba
 				continue
 			}
 			// #2325: batch-level, like the notices (each names its tenant).
-			advisories = append(advisories, adv...)
+			if _, seen := advisoriesByTenant[op.TenantID]; !seen {
+				advisoryTenants = append(advisoryTenants, op.TenantID)
+			}
+			advisoriesByTenant[op.TenantID] = adv
 		}
 		// #1097: carry a merge closure, not pre-built content, so the
 		// authoritative partial merge runs under the writer lock against
@@ -237,6 +244,11 @@ func batchTenantsPRMode(d *Deps, rw http.ResponseWriter, r *http.Request, req Ba
 		})
 		batchResults = append(batchResults, BatchResult{TenantID: op.TenantID, Status: "included"})
 		included[op.TenantID] = append(included[op.TenantID], op.Patch)
+	}
+
+	var advisories []string
+	for _, t := range advisoryTenants {
+		advisories = append(advisories, advisoriesByTenant[t]...)
 	}
 
 	if len(batchOps) == 0 {

@@ -224,3 +224,46 @@ func TestPutTenant_TaggedNullEscalationOutsidePolicyFile_StillRefused(t *testing
 		}
 	}
 }
+
+// PR-mode batch with several included ops for one tenant (#2440 review): an
+// earlier op is judged on an intermediate routing that WritePRBatch stacks
+// the later ops over, so only the LAST included op's advisories describe
+// what the PR writes. t-leak's first op (esc-leak) leaks, its second (esc-ok,
+// critical straight to pagerduty) does not: no t-leak advisory is returned.
+// t-a and t-b keep theirs, in the order the tenants first appear among the
+// included ops (t-a before t-b, though t-a's leaking op comes after t-b's).
+func TestBatchTenants_EscalationAdvisory_PRModeLastOpPerTenant(t *testing.T) {
+	tree := escalationTree()
+	tree["_domain_policy.yaml"] = "domain_policies:\n  escalation:\n    tenants: [t-leak, t-miss, t-a, t-b]\n" +
+		"    constraints:\n      require_critical_escalation: true\n"
+	tree["_routing_profiles.yaml"] += "  esc-ok:\n    receiver: {type: pagerduty, service_key: k}\n"
+	tree["t-a.yaml"] = "tenants:\n  t-a:\n    cpu_usage_percent: '85'\n"
+	tree["t-b.yaml"] = "tenants:\n  t-b:\n    cpu_usage_percent: '85'\n"
+	configDir := seedGitTree(t, tree)
+	d := &Deps{Writer: newTestWriter(configDir), ConfigDir: configDir, RBAC: adminRBAC(t),
+		Policy: policy.NewManager(configDir), WriteMode: WriteModePR, PRClient: escalationPRClient(),
+		PRTracker: &mockPlatformTracker{}}
+	resp := runBatch(t, configDir, d, `[
+		{"tenant_id":"t-leak","patch":{"_routing_profile":"esc-leak"}},
+		{"tenant_id":"t-a","patch":{"_routing_profile":"esc-ok"}},
+		{"tenant_id":"t-b","patch":{"_routing_profile":"esc-leak"}},
+		{"tenant_id":"t-a","patch":{"_routing_profile":"esc-leak"}},
+		{"tenant_id":"t-leak","patch":{"_routing_profile":"esc-ok"}}]`)
+	if resp.Status != "pending_review" {
+		t.Fatalf("status = %q, want pending_review: %+v", resp.Status, resp)
+	}
+	for _, r := range resp.Results {
+		if r.Status != "included" {
+			t.Fatalf("result %+v, want every op included", r)
+		}
+	}
+	var got []string
+	for _, w := range resp.Warnings {
+		if strings.HasPrefix(w, "tenant=") {
+			got = append(got, strings.SplitN(w, ":", 2)[0])
+		}
+	}
+	if want := []string{"tenant=t-a", "tenant=t-b"}; strings.Join(got, ",") != strings.Join(want, ",") {
+		t.Errorf("advisory tenants = %v, want %v; warnings: %v", got, want, resp.Warnings)
+	}
+}
