@@ -1,6 +1,7 @@
 #!/usr/bin/env bash
-# require_preflight_pass.sh — pre-push gate: verify `make pr-preflight`
-# ran against the commits being PUSHED before allowing the push.
+# require_preflight_pass.sh — pre-push gate: verify pr-preflight
+# (scripts/tools/dx/pr_preflight.py, which `make pr-preflight` runs) ran
+# against the commits being PUSHED before allowing the push.
 #
 # Purpose:
 #   Prevent pushing pre-preflight commits that CI will likely reject. The
@@ -235,6 +236,26 @@ marker="$git_dir/$MARKER_PREFIX.$_missing_sha"
 # the shell you push from — a relative refspec (`git push origin HEAD~1:x`) is
 # re-read from wherever that shell stands.
 # ⛔ A `status` that fails is not "clean": unknown must not pick the tree.
+# The instruction must run where it is pasted (#1920). `make pr-preflight` is
+# only `python3 scripts/tools/dx/pr_preflight.py`, and neither make (Git Bash
+# on a Windows host) nor a working python3 (there, a Store stub that exits
+# non-zero) can be assumed: ask the PATH this hook inherited which interpreter
+# actually starts.
+_preflight_cmd=""
+for _py in python3 python; do
+    # -S: no site, so no .pth hooks — under a test run's coverage one hung here
+    # (cwd with a newline). Not -I: it would also ignore a broken PYTHONHOME,
+    # and the printed command, run without it, would then fail.
+    if "$_py" -S -c '' >/dev/null 2>&1; then
+        _preflight_cmd="$_py scripts/tools/dx/pr_preflight.py"
+        break
+    fi
+done
+_py_note=""
+if [ -z "$_preflight_cmd" ]; then
+    _preflight_cmd="python3 scripts/tools/dx/pr_preflight.py"
+    _py_note="║  (neither python3 nor python starts from this PATH — install one first)"
+fi
 _here=""
 if [ "$_missing_sha" = "$head_sha" ] \
     && _dirty="$(git --no-optional-locks status --porcelain --untracked-files=no 2>/dev/null)" \
@@ -243,7 +264,7 @@ if [ "$_missing_sha" = "$head_sha" ] \
 fi
 if [ -n "$_here" ]; then
     printf -v _here_q '%q' "$_here"
-    _checkout_hint="    (cd ${_here_q} && make pr-preflight)"
+    _checkout_hint="    (cd ${_here_q} && ${_preflight_cmd})"
 else
     # ⛔ `&&` before the trap: a failed `add` (path already there) must not
     # remove what is there. `$$` keeps two pushes' paths apart.
@@ -260,7 +281,7 @@ else
     printf -v _tmp_wt_q '%q' "${_tmp_root}/preflight-${_missing_sha:0:12}-$$"
     # Quoted twice: the shell you paste into reads it once, the trap once more.
     printf -v _remove_q '%q' "git -C ${_common_q} worktree remove --force ${_tmp_wt_q}"
-    _checkout_hint="    (git -C ${_common_q} worktree add --detach ${_tmp_wt_q} ${_missing_sha} && trap ${_remove_q} EXIT && (cd ${_tmp_wt_q} && make pr-preflight))"
+    _checkout_hint="    (git -C ${_common_q} worktree add --detach ${_tmp_wt_q} ${_missing_sha} && trap ${_remove_q} EXIT && (cd ${_tmp_wt_q} && ${_preflight_cmd}))"
 fi
 
 # No marker — block with actionable instructions.
@@ -282,12 +303,9 @@ cat >&2 <<EOF
 ║  different commit, running preflight where you stand writes
 ║  the marker for THAT commit and this push stays blocked.
 ║                                                              ║
-║  Run this before pushing:                                    ║
-${_checkout_hint}
-║  No \`make\` (Windows host)? Put this where the make call is:
-║      python scripts/tools/dx/pr_preflight.py
-║  (Linux / container: python3. On Windows, python3 is the
-║  Store stub.)
+║  Run this in bash (on Windows: Git Bash) before pushing:
+${_checkout_hint}${_py_note:+
+${_py_note}}
 ║                                                              ║
 ║  Emergency bypass (use sparingly):                           ║
 ║      GIT_PREFLIGHT_BYPASS=1 git push ...                     ║

@@ -607,7 +607,7 @@ class TestGateScript:
         )
         assert r.returncode == 1
         assert "Push blocked" in r.stderr
-        assert "make pr-preflight" in r.stderr
+        assert "scripts/tools/dx/pr_preflight.py" in r.stderr
 
     def test_marker_present_allows(self, tmp_path):
         sha = _init_git(tmp_path)
