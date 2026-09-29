@@ -10,8 +10,11 @@ package config
 // save-then-restore; test-map.md).
 
 import (
+	"fmt"
 	"os"
 	"path/filepath"
+	"reflect"
+	"sort"
 	"strings"
 	"testing"
 )
@@ -35,6 +38,11 @@ var resolveLogTree = map[string]string{
 		"    \"m4_x{}\": \"7\"\n" +
 		"    m9_x:\n      default: \"zz\"\n      overrides:\n        - window: \"baddecl\"\n          value: \"5\"\n" +
 		"    _custom_alerts: \"not a list\"\n",
+	// A second tenant for the one-spec rejection: a `_custom_alerts` that is
+	// not a list returns before any spec is looked at, so tx cannot carry
+	// both. ty is also over the cap (four defaults), hence its cut line.
+	"ty.yaml": "tenants:\n  ty:\n" +
+		"    _custom_alerts:\n      - name: badspec\n        recipe: nosuch_recipe\n",
 }
 
 // resolveLogLines is one line per shape resolveLogTree trips, as /metrics
@@ -53,46 +61,62 @@ var resolveLogLines = []string{
 	`WARN: invalid time window format "baddecl"`,
 	`WARN: invalid declared threshold "zz" for tenant=tx key=m9_x, skipping`,
 	`ERROR: tenant=tx: custom alert "<block>" rejected`,
+	`ERROR: tenant=ty produced `,
+	`ERROR: tenant=ty: custom alert "badspec" rejected`,
 }
 
 func TestTenantMergeResolveWritesNoLog(t *testing.T) {
 	dir := t.TempDir()
 	writeMergeTree(t, dir, resolveLogTree)
-	body, err := os.ReadFile(filepath.Join(dir, "tx.yaml"))
-	if err != nil {
-		t.Fatal(err)
-	}
 	buf := captureGlobalLog(t)
-	// Two GETs' worth: the merge the handler builds, then every resolve entry.
-	for i := 0; i < 2; i++ {
-		m := MergeTenantWithRootDefaults(dir, "tx", body)
-		rows := m.ResolveAt(platformMergeNow)
-		_, stats := m.ResolveAtWithStats(platformMergeNow)
-		keyed, _, err := m.ResolveAtWithKeys(platformMergeNow)
+	for _, id := range []string{"tx", "ty"} {
+		body, err := os.ReadFile(filepath.Join(dir, id+".yaml"))
 		if err != nil {
 			t.Fatal(err)
 		}
-		nowRows := m.Resolve() // wall-clock variant; the cut does not depend on the time
-		// Precondition: the cut ran on this merge (the root cap reached it).
-		if len(rows) != 2 || len(keyed) != 2 || len(nowRows) != 2 || stats.PerTenantOverLimit["tx"] == 0 {
-			t.Fatalf("precondition: rows=%d keyed=%d over=%d, want the cut to 2 rows",
-				len(rows), len(keyed), stats.PerTenantOverLimit["tx"])
+		// Two GETs' worth: the merge the handler builds, then every resolve entry.
+		for i := 0; i < 2; i++ {
+			m := MergeTenantWithRootDefaults(dir, id, body)
+			rows := m.ResolveAt(platformMergeNow)
+			_, stats := m.ResolveAtWithStats(platformMergeNow)
+			keyed, _, err := m.ResolveAtWithKeys(platformMergeNow)
+			if err != nil {
+				t.Fatal(err)
+			}
+			// Resolve() reads the wall clock, so it is checked for writing no
+			// log (and for the cut, which does not depend on the time) only —
+			// its rows are not compared with a fixed-time resolve.
+			nowRows := m.Resolve()
+			// Precondition: the cut ran on this merge (the root cap reached it).
+			if len(rows) != 2 || len(keyed) != 2 || len(nowRows) != 2 || stats.PerTenantOverLimit[id] == 0 {
+				t.Fatalf("%s precondition: rows=%d keyed=%d nowRows=%d over=%d, want the cut to 2 rows",
+					id, len(rows), len(keyed), len(nowRows), stats.PerTenantOverLimit[id])
+			}
+			if buf.Len() != 0 {
+				t.Fatalf("%s GET %d: TenantMerge resolve wrote to the global log:\n%s", id, i+1, buf.String())
+			}
+			// The same answer the embedded (logging) resolve gives at the same
+			// instant: rows compared whole, in a canonical order (the resolver's
+			// order within a segment follows map iteration).
+			loudRows, loudStats := m.ThresholdConfig.ResolveAtWithStats(platformMergeNow)
+			if !reflect.DeepEqual(sortedRows(rows), sortedRows(loudRows)) {
+				t.Fatalf("%s: quiet rows differ from the embedded resolve's:\n%+v\nvs\n%+v", id, rows, loudRows)
+			}
+			if !reflect.DeepEqual(stats, loudStats) {
+				t.Fatalf("%s: quiet stats differ from the embedded resolve's: %+v vs %+v", id, stats, loudStats)
+			}
+			if buf.Len() == 0 {
+				t.Fatalf("%s precondition: the embedded resolve wrote nothing, so this tree trips no log line", id)
+			}
+			buf.Reset()
 		}
-		if buf.Len() != 0 {
-			t.Fatalf("GET %d: TenantMerge resolve wrote to the global log:\n%s", i+1, buf.String())
-		}
-		// The same answer the embedded (logging) resolve gives.
-		loudRows, loudStats := m.ThresholdConfig.ResolveAtWithStats(platformMergeNow)
-		if len(loudRows) != len(rows) || loudStats.PerTenantOverLimit["tx"] != stats.PerTenantOverLimit["tx"] ||
-			loudStats.PerTenantCustomAlertErrors["tx"] != stats.PerTenantCustomAlertErrors["tx"] {
-			t.Fatalf("quiet resolve differs from the embedded one: rows %d vs %d, stats %+v vs %+v",
-				len(rows), len(loudRows), stats, loudStats)
-		}
-		if buf.Len() == 0 {
-			t.Fatal("precondition: the embedded resolve wrote nothing, so this tree trips no log line")
-		}
-		buf.Reset()
 	}
+}
+
+func sortedRows(rows []ResolvedThreshold) []ResolvedThreshold {
+	out := append([]ResolvedThreshold(nil), rows...)
+	sort.Slice(out, func(i, j int) bool { return fmt.Sprintf("%+v", out[i]) < fmt.Sprintf("%+v", out[j]) })
+	return out
 }
 
 func TestExporterResolveStillLogsEveryLine(t *testing.T) {
