@@ -104,7 +104,7 @@ spec:
     spec:
       containers:
         - name: collector
-          image: ghcr.io/vencil/da-tools:v2.9.0
+          image: ghcr.io/vencil/da-tools:v3.0.0
           command:
             - python3
             - -c

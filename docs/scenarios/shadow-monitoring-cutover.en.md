@@ -31,7 +31,7 @@ Before deciding to migrate, use `da-tools alert-quality` to quantify your existi
 ```bash
 # Scan all tenants, analyze past 30 days
 docker run --rm --network host \
-  ghcr.io/vencil/da-tools:v2.9.0 alert-quality \
+  ghcr.io/vencil/da-tools:v3.0.0 alert-quality \
   --prometheus http://localhost:9090 \
   --period 30d
 
@@ -206,10 +206,6 @@ python3 scripts/tools/ops/migrate_rule.py /path/to/old_rules/alerts.yaml \
 #   - migration-report.txt, triage-report.csv (conversion reports)
 # There is no "only these tenants" option; to keep a tenant from getting this alert, set
 # the key to "disable" in that tenant's file.
-# ⚠️ The migrate in the v2.9.0 image does not have these fixes yet (its threshold selector
-#    does not match the labels the exporter emits, its recording rule reads a prefixed
-#    metric name, and it produces no defaults-snippet.yaml); review its output by hand
-#    before deploying.
 
 # 2.2 Deploy the new rules (shadow state): merge both rule files into Prometheus's rule
 #     ConfigMap (environment-specific: ConfigMap or Helm)
@@ -222,7 +218,6 @@ kubectl patch configmap alertmanager-config -n monitoring \
 kubectl rollout restart deployment prometheus -n monitoring
 kubectl rollout restart deployment alertmanager -n monitoring
 ```
-<!-- image-caveat: v2.9.0 — the "migrate in the v2.9.0 image" comment in the block above -->
 
 ### Phase 3: Validation (Days 1–14)
 

@@ -144,8 +144,7 @@ tenants:
 > `_domain_policy.yaml` allowed in subdirectories and scoped to their subtree; the same
 > tenant id declared in more than one file is a blocking error. Full semantics:
 > [ADR-017 "Amendment 2026-09-28"](../adr/017-defaults-yaml-inheritance-dual-hash.en.md).
-> ⚠️ `_routing*` written **inside** a `defaults:` block is still read by nothing. The
-> v2.9.0 image's routing plane reads the top level only <!-- image-caveat: v2.9.0 -->
+> ⚠️ `_routing*` written **inside** a `defaults:` block is still read by nothing.
 >
 > ✅ **`validate_config.py` was made recursive in
 > [PR #1343](https://github.com/vencil/Dynamic-Alerting-Integrations/pull/1343)** (conf.d family ticket

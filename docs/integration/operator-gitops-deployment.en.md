@@ -109,7 +109,7 @@ jobs:
             -v ${{ github.workspace }}/conf.d:/conf.d:ro \
             -v ${{ github.workspace }}/rule-packs:/rule-packs:ro \
             -v ${{ github.workspace }}/prometheus-operator-crds:/output \
-            ghcr.io/vencil/da-tools:v2.9.0 \
+            ghcr.io/vencil/da-tools:v3.0.0 \
             operator-generate --gitops --output-dir /output
       - name: Commit & Push
         run: |

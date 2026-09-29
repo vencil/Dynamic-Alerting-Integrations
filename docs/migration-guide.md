@@ -83,7 +83,7 @@ flowchart TD
 
 ```bash
 # 路徑 A：Docker pull from ghcr.io（最簡單）
-docker pull ghcr.io/vencil/da-tools:v2.9.0
+docker pull ghcr.io/vencil/da-tools:v3.0.0
 
 # 路徑 B：下載靜態 binary 到 PATH
 curl -fsSLo da-guard.tar.gz https://github.com/vencil/Dynamic-Alerting-Integrations/releases/download/tools/v2.9.0/da-guard-linux-amd64.tar.gz

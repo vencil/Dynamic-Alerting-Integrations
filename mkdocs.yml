@@ -271,7 +271,7 @@ extra:
   # bump_docs.py updates this field automatically
   platform_version: "2.9.0"
   exporter_version: "2.9.0"
-  tools_version: "2.9.0"
+  tools_version: "3.0.0"
 
   # Version info
   version:

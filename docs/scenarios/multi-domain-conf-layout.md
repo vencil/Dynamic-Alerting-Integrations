@@ -140,7 +140,7 @@ tenants:
 > `_routing_profiles.yaml` 與 `_domain_policy.yaml` 可放在子目錄、只作用於所在子樹；同一個
 > 租戶 id 在多個檔案宣告是阻擋錯誤。完整語意見
 > [ADR-017「Amendment 2026-09-28」](../adr/017-defaults-yaml-inheritance-dual-hash.md)。
-> ⚠️ 寫在 `defaults:` 區塊**裡**的 `_routing*` 仍不會被讀。v2.9.0 映像的路由面只讀頂層 <!-- image-caveat: v2.9.0 -->
+> ⚠️ 寫在 `defaults:` 區塊**裡**的 `_routing*` 仍不會被讀。
 >
 > ✅ **`validate_config.py` 已於 [PR #1343](https://github.com/vencil/Dynamic-Alerting-Integrations/pull/1343)
 > 改為遞迴**（conf.d 家族票 [#1911](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/1911)）——它先前對階層目錄回報 `PASS / exit 0` 卻掃到 **0 個租戶**（不是擋下來，

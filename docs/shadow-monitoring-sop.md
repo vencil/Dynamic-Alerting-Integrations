@@ -83,7 +83,7 @@ kubectl port-forward svc/prometheus 9090:9090 -n monitoring &
 
 docker run --rm --network=host \
   -v $(pwd)/migration_output:/data:ro \
-  ghcr.io/vencil/da-tools:v2.9.0 \
+  ghcr.io/vencil/da-tools:v3.0.0 \
   validate --mapping /data/prefix-mapping.yaml \
   --prometheus http://localhost:9090 \
   --watch --interval 300 --rounds 4032
@@ -111,7 +111,7 @@ spec:
     spec:
       containers:
         - name: validator
-          image: ghcr.io/vencil/da-tools:v2.9.0
+          image: ghcr.io/vencil/da-tools:v3.0.0
           env:
             - name: PROMETHEUS_URL
               value: http://prometheus.monitoring.svc.cluster.local:9090
@@ -185,7 +185,7 @@ kubectl logs job/shadow-monitor -n monitoring --tail=50
 
 ```bash
 # 單筆 query 比對
-docker run --rm --network=host ghcr.io/vencil/da-tools:v2.9.0 \
+docker run --rm --network=host ghcr.io/vencil/da-tools:v3.0.0 \
   validate --old "<old_query>" --new "<new_query>" \
   --prometheus http://localhost:9090
 
@@ -270,12 +270,11 @@ v1.10.0 提供 `da-tools cutover`，單一指令自動完成以下全部步驟�
 docker run --rm --network=host \
   -v $(pwd)/validation_output:/data:ro \
   -e PROMETHEUS_URL=http://localhost:9090 \
-  ghcr.io/vencil/da-tools:v2.9.0 \
+  ghcr.io/vencil/da-tools:v3.0.0 \
   cutover --readiness-json /data/cutover-readiness.json \
     --tenant db-a --dry-run
 
-# 預期輸出（列出會執行的 kubectl 命令，不做任何變更；v2.9.0 映像印在
-# stdout，之後的版本改印在 stderr）：
+# 預期輸出（列出會執行的 kubectl 命令，不做任何變更；印在 stderr）：
 # ▸ Stop Shadow Monitor Job...
 #   [dry-run] kubectl delete job shadow-monitor -n monitoring --ignore-not-found=true
 #   ✓ (dry-run)
@@ -299,7 +298,7 @@ docker run --rm --network=host \
 docker run --rm --network=host \
   -v $(pwd)/validation_output:/data:ro \
   -e PROMETHEUS_URL=http://localhost:9090 \
-  ghcr.io/vencil/da-tools:v2.9.0 \
+  ghcr.io/vencil/da-tools:v3.0.0 \
   cutover --readiness-json /data/cutover-readiness.json --tenant db-a
 
 # Step 3: 批次切換多個 tenant（逐一執行）
@@ -307,11 +306,10 @@ for tenant in db-a db-b db-c; do
   docker run --rm --network=host \
     -v $(pwd)/validation_output:/data:ro \
     -e PROMETHEUS_URL=http://localhost:9090 \
-    ghcr.io/vencil/da-tools:v2.9.0 \
+    ghcr.io/vencil/da-tools:v3.0.0 \
     cutover --readiness-json /data/cutover-readiness.json --tenant "$tenant"
 done
 ```
-<!-- image-caveat: v2.9.0 — 上方區塊裡「v2.9.0 映像印在 stdout」那段註解 -->
 
 **`--force` 的使用時機：**
 
@@ -341,11 +339,11 @@ kubectl delete job shadow-monitor -n monitoring
 # 4. 移除 Alertmanager 的 shadow 攔截 route
 
 # 5. 驗證切換後 alert 正常觸發
-docker run --rm --network=host ghcr.io/vencil/da-tools:v2.9.0 \
+docker run --rm --network=host ghcr.io/vencil/da-tools:v3.0.0 \
   check-alert MariaDBHighConnections db-a
 
 # 6. 租戶健康總檢
-docker run --rm --network=host ghcr.io/vencil/da-tools:v2.9.0 diagnose db-a
+docker run --rm --network=host ghcr.io/vencil/da-tools:v3.0.0 diagnose db-a
 ```
 
 ### 7.2 回退（如有問題）
@@ -359,7 +357,7 @@ kubectl apply -f old-recording-rules.yaml
 # 3. 重啟 Shadow Monitor
 docker run --rm --network=host \
   -v $(pwd)/migration_output:/data:ro \
-  ghcr.io/vencil/da-tools:v2.9.0 \
+  ghcr.io/vencil/da-tools:v3.0.0 \
   validate --mapping /data/prefix-mapping.yaml \
   --prometheus http://localhost:9090 \
   --watch --interval 300 --rounds 4032
@@ -374,7 +372,7 @@ rm -rf validation_output/
 
 # 批次下架不再需要的 custom_ prefix 規則
 docker run --rm --user $(id -u):$(id -g) \
-  -v $(pwd)/conf.d:/data/conf.d ghcr.io/vencil/da-tools:v2.9.0 \
+  -v $(pwd)/conf.d:/data/conf.d ghcr.io/vencil/da-tools:v3.0.0 \
   deprecate custom_mysql_connections custom_mysql_replication_lag \
   --config-dir /data/conf.d --execute
 ```

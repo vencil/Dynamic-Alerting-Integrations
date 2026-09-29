@@ -83,7 +83,7 @@ Install the toolkit before starting. Three delivery paths (Docker / static binar
 
 ```bash
 # Path A: Docker pull from ghcr.io (simplest)
-docker pull ghcr.io/vencil/da-tools:v2.9.0
+docker pull ghcr.io/vencil/da-tools:v3.0.0
 
 # Path B: Download a static binary to PATH
 curl -fsSLo da-guard.tar.gz https://github.com/vencil/Dynamic-Alerting-Integrations/releases/download/tools/v2.9.0/da-guard-linux-amd64.tar.gz

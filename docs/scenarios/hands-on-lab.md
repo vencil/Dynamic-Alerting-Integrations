@@ -14,8 +14,6 @@ lang: zh
 >
 > 相關文件：[GitOps CI/CD 整合指南](gitops-ci-integration.md) · [Tenant 生命週期](tenant-lifecycle.md) · [CLI 參考](../cli-reference.md)
 
-> ⚠️ **版本**：本頁的預期輸出是用 main 上的 da-tools 實測的，比目前的 `ghcr.io/vencil/da-tools:latest`（v2.9.0）新。下一個版本發布前用 `:latest` 照做，會看到四處不同：練習 3 只有 5 項檢查（沒有 `yaml_quoting`、`tenant_uniqueness`、`root_defaults`），`routes` 底下也沒有 `amtool check-config` 那一行；練習 4 沒有 `Config files:`、`NOTICE` 與 `amtool check-config` 這幾行；`schema`（以及練習 4 的開頭）另有 7 條 `unknown key … not in defaults`（`jvm_memory`、`kafka_broker_count`、`mysql_threads_running`、`oracle_sessions_active`、`oracle_sessions_active_critical`、`redis_memory_used_bytes`、`redis_memory_used_bytes_critical`）；練習 8 的 `--strict` 在 v2.9.0 不存在，加上去會以結束碼 2 失敗（不加時 domain policy 的 WARN 照樣出現）。 <!-- image-caveat: v2.9.0 -->
-
 > 💡 **想先 1 分鐘看產品跑起來、而不是動手敲 CLI？** → [try-local](https://github.com/vencil/Dynamic-Alerting-Integrations/blob/main/try-local/README.md)（推薦首站：瀏覽器看 da-portal UI + 真實告警紅燈，不需 K8s；`⏱️ <1 min · 🟢 只需 Docker`）。**本實驗**聚焦**動手跑 da-tools CLI 工作流**（配置 / 路由 / blast radius；`⏱️ 30–45 min · 🟡 中度 (CLI)`）—— 兩者互補、深度不同，不是擇一。
 
 ## 實驗概覽

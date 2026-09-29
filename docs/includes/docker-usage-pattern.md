@@ -4,7 +4,7 @@
 > ```bash
 > docker run --rm --network=host --user "$(id -u):$(id -g)" \
 >   -v "$(pwd):/workspace" -w /workspace \
->   ghcr.io/vencil/da-tools:v2.9.0 <command> [flags]
+>   ghcr.io/vencil/da-tools:v3.0.0 <command> [flags]
 > ```
 > ⛔ **`--user` 不是可選的**：映像以 `USER nonroot`（UID 10001）執行，而你掛進去的
 > 目錄屬於你自己（通常 UID 1000）⇒ 任何**會寫檔**的子命令（`init` / `scaffold` /
@@ -20,9 +20,6 @@
 > 改成 `--config-dir /etc/config`——沿用相對路徑會得到
 > `ERROR: config-dir not found: conf.d/`（exit 2）。而 `-o` 會寫出檔案的指令也需要
 > 那個目錄在容器外真的存在。
-> ⚠️ 上面釘的 `v2.9.0` 是撰文時的 GA 版。文件中凡把某個修正描述成「下一版映像起」 <!-- image-caveat: v2.9.0 -->
-> 或指名一個晚於它的版本（例如「自 v3.0.0 起」），都要把這個 tag 換掉才拿得到
-> （`latest` 目前指向同一顆映像）。
 > ⛔ **其餘範例一律省略上面那段前綴，只寫 `da-tools <command>`。** 那個形式照抄進
 > 終端機會得到 `bash: da-tools: command not found`（rc 127）——`da-tools` 不是可以裝
 > 進 `$PATH` 的執行檔，沒有任何 `install` 步驟會讓它出現。要讓那些範例真的能照抄，
@@ -35,7 +32,7 @@
 >   docker run --rm -i "${tty[@]}" --network=host \
 >     --user "$(id -u):$(id -g)" \
 >     -v "$(pwd):/workspace" -w /workspace \
->     ghcr.io/vencil/da-tools:v2.9.0 "$@"
+>     ghcr.io/vencil/da-tools:v3.0.0 "$@"
 > }
 > ```
 > ⛔ **函式名含連字號只有 bash 吃**：`/bin/sh`（dash）實測回

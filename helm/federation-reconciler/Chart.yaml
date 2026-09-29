@@ -22,7 +22,7 @@ version: 0.3.0
 # Full rationale + exit condition: values.yaml `image:` block. Bumped in
 # lockstep with values.yaml image.tag by `bump_docs.py --tools` (both are
 # registered rules there, so a release cannot move one and leave the other).
-appVersion: "v2.9.0"
+appVersion: "v3.0.0"
 keywords:
   - dynamic-alerting
   - federation

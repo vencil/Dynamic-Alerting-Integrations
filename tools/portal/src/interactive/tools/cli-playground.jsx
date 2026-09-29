@@ -298,7 +298,7 @@ export default function CLIPlayground() {
                   {isDocker && (
                     <>
                       <div>
-                        <span className="font-medium text-slate-900">{t('映像:', 'Image:')}</span> ghcr.io/vencil/da-tools:v2.9.0
+                        <span className="font-medium text-slate-900">{t('映像:', 'Image:')}</span> ghcr.io/vencil/da-tools:v3.0.0
                       </div>
                       <div>
                         <span className="font-medium text-slate-900">{t('網路:', 'Network:')}</span> {network.label}

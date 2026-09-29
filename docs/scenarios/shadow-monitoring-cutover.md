@@ -31,7 +31,7 @@ lang: zh
 ```bash
 # 掃描全部 tenant，分析過去 30 天
 docker run --rm --network host \
-  ghcr.io/vencil/da-tools:v2.9.0 alert-quality \
+  ghcr.io/vencil/da-tools:v3.0.0 alert-quality \
   --prometheus http://localhost:9090 \
   --period 30d
 
@@ -198,8 +198,6 @@ python3 scripts/tools/ops/migrate_rule.py /path/to/old_rules/alerts.yaml \
 #   - prefix-mapping.yaml（階段 3 validate_migration 的比對組）
 #   - migration-report.txt、triage-report.csv（轉換報告）
 # 工具沒有「只轉某些租戶」的選項；某個租戶不要這條告警，在該租戶檔把 key 設成 "disable"。
-# ⚠️ v2.9.0 映像的 migrate 還沒有這些修正（閾值 selector 對不上 exporter 發射的 label、
-#    recording rule 讀加了前綴的指標名、沒有 defaults-snippet.yaml），用它時部署前請人工核對。
 
 # 2.2 部署新規則（shadow 狀態）：把兩份規則檔合併進 Prometheus 的規則 ConfigMap
 #     （具體操作依環境：ConfigMap 或 Helm）
@@ -212,7 +210,6 @@ kubectl patch configmap alertmanager-config -n monitoring \
 kubectl rollout restart deployment prometheus -n monitoring
 kubectl rollout restart deployment alertmanager -n monitoring
 ```
-<!-- image-caveat: v2.9.0 — 上方區塊裡「v2.9.0 映像的 migrate」那段註解 -->
 
 ### 階段 3：驗證（Day 1–14）
 

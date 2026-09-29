@@ -1,4 +1,4 @@
-# da-tools (v2.9.0)
+# da-tools (v3.0.0)
 
 <!-- 標題版號 = 最後 released tag（目前 v2.8.0）；下一版 in-flight feature 在內文以 inline 版號標記。
      Release wrap 切六線 tag 時，本標題 + VERSION 檔 + 下方版號表跟著批次同步 bump。 -->
@@ -351,7 +351,7 @@ docker run --rm -v $(pwd)/conf.d:/data/conf.d:ro ghcr.io/vencil/da-tools \
 
 > Binary 解析順序（每個 dispatcher 都遵循）：`--<name>-binary <path>` → `$<NAME>_BINARY` env → `$PATH`。Image 內第三層永遠命中 `/usr/local/bin/`。
 
-另外內含 `/usr/local/bin/amtool`（上游 Alertmanager 的 CLI，不是本 repo 編的）：取自 `k8s/03-monitoring/deployment-alertmanager.yaml` 釘住的同一個 Alertmanager image（tag 與 digest 皆同），讓 `generate-routes` 在 image 裡預設就經 Alertmanager 自己的 parser 驗證（#2294）；上游 Apache-2.0 LICENSE／NOTICE 在 `/usr/share/doc/amtool/`。⚠️ v2.9.0 映像不內含 `amtool` <!-- image-caveat: v2.9.0 -->
+另外內含 `/usr/local/bin/amtool`（上游 Alertmanager 的 CLI，不是本 repo 編的）：取自 `k8s/03-monitoring/deployment-alertmanager.yaml` 釘住的同一個 Alertmanager image（tag 與 digest 皆同），讓 `generate-routes` 在 image 裡預設就經 Alertmanager 自己的 parser 驗證（#2294）；上游 Apache-2.0 LICENSE／NOTICE 在 `/usr/share/doc/amtool/`。
 
 ### 6.3 Exit Codes
 
@@ -388,7 +388,7 @@ DA_LANG=en docker run --rm ghcr.io/vencil/da-tools migrate --help
 |------|------|---------|------|
 | 平台文件 | v2.9.0 | `v2.9.0` | 整體釋出版本 |
 | threshold-exporter | v2.9.0 | `exporter/v2.9.0` | Go binary（含 da-guard / da-batchpr / da-parser） |
-| **da-tools** | **v2.9.0** | **`tools/v2.9.0`** | 本 image（50 個 Python CLI + 3 個 bundled Go binary） |
+| **da-tools** | **v3.0.0** | **`tools/v3.0.0`** | 本 image（50 個 Python CLI + 3 個 bundled Go binary） |
 | da-portal | v2.9.0 | `portal/v2.9.0` | Interactive Tools Hub image |
 | tenant-api | v2.9.22 | `tenant-api/v2.9.22` | Go HTTP API |
 
@@ -409,7 +409,7 @@ cd components/da-tools/app
 ./build.sh
 
 # Build 指定版號（同步寫進 image label + VERSION 檔內容）
-./build.sh 2.9.0
+./build.sh 3.0.0
 
 # Assemble-only mode（CI 用，給 Buildx 接 multi-arch build）
 ./build.sh --assemble-only
@@ -440,7 +440,7 @@ spec:
     spec:
       containers:
         - name: da-tools
-          image: ghcr.io/vencil/da-tools:v2.9.0
+          image: ghcr.io/vencil/da-tools:v3.0.0
           env:
             - name: PROMETHEUS_URL
               value: "http://prometheus.monitoring.svc.cluster.local:9090"

@@ -50,16 +50,16 @@ Migration Toolkit 把這條 pipeline 打包成可離線跑、可在 air-gapped �
 
 ```bash
 # 拉最新 stable（版號會由 bump_docs.py 在 release 時同步至最新 tag）
-docker pull ghcr.io/vencil/da-tools:v2.9.0
+docker pull ghcr.io/vencil/da-tools:v3.0.0
 
 # 跑單次命令
-docker run --rm ghcr.io/vencil/da-tools:v2.9.0 --help
-docker run --rm ghcr.io/vencil/da-tools:v2.9.0 guard --help
+docker run --rm ghcr.io/vencil/da-tools:v3.0.0 --help
+docker run --rm ghcr.io/vencil/da-tools:v3.0.0 guard --help
 
 # 掛 conf.d 進去跑 guard
 docker run --rm \
     -v "$(pwd)/conf.d:/conf.d:ro" \
-    ghcr.io/vencil/da-tools:v2.9.0 \
+    ghcr.io/vencil/da-tools:v3.0.0 \
     guard defaults-impact --config-dir /conf.d --required-fields cpu,memory
 ```
 
@@ -179,10 +179,10 @@ sha256sum --check da-tools-image.tar.gz.sha256
 
 # 4. 在 air-gapped 環境裡 import 進本地 docker
 gunzip -c da-tools-image.tar.gz | docker load
-# 印出: Loaded image: ghcr.io/vencil/da-tools:v2.9.0
+# 印出: Loaded image: ghcr.io/vencil/da-tools:v3.0.0
 
 # 5. 重新 tag 到內網 registry（選用）
-docker tag ghcr.io/vencil/da-tools:v2.9.0 internal-registry.corp/da-tools:v2.9.0
+docker tag ghcr.io/vencil/da-tools:v3.0.0 internal-registry.corp/da-tools:v2.9.0
 docker push internal-registry.corp/da-tools:v2.9.0
 ```
 

@@ -235,7 +235,7 @@ python3 scripts/tools/ops/generate_alertmanager_routes.py \
   -o deploy/alertmanager-configmap.yaml
 ```
 
-When `amtool` is on PATH, the `alertmanager.yml` inside the ConfigMap is validated with it automatically; a rejected config exits 1 and `-o` is not written. Without `amtool` a NOTICE says it was not validated (#2219). The da-tools image bundles `amtool` (from the same image as the deployed Alertmanager; #2294), so inside the image this validation runs by default. ⚠️ The v2.9.0 image does not bundle `amtool` <!-- image-caveat: v2.9.0 -->
+When `amtool` is on PATH, the `alertmanager.yml` inside the ConfigMap is validated with it automatically; a rejected config exits 1 and `-o` is not written. Without `amtool` a NOTICE says it was not validated (#2219). The da-tools image bundles `amtool` (from the same image as the deployed Alertmanager; #2294), so inside the image this validation runs by default.
 
 The resulting YAML can be directly `kubectl apply` or auto-synced by ArgoCD/Flux. Use together with Method A (threshold-config) to achieve complete GitOps closure for threshold-exporter and Alertmanager configuration.
 

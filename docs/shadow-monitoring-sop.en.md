@@ -83,7 +83,7 @@ kubectl port-forward svc/prometheus 9090:9090 -n monitoring &
 
 docker run --rm --network=host \
   -v $(pwd)/migration_output:/data:ro \
-  ghcr.io/vencil/da-tools:v2.9.0 \
+  ghcr.io/vencil/da-tools:v3.0.0 \
   validate --mapping /data/prefix-mapping.yaml \
   --prometheus http://localhost:9090 \
   --watch --interval 300 --rounds 4032
@@ -111,7 +111,7 @@ spec:
     spec:
       containers:
         - name: validator
-          image: ghcr.io/vencil/da-tools:v2.9.0
+          image: ghcr.io/vencil/da-tools:v3.0.0
           env:
             - name: PROMETHEUS_URL
               value: http://prometheus.monitoring.svc.cluster.local:9090
@@ -185,7 +185,7 @@ kubectl logs job/shadow-monitor -n monitoring --tail=50
 
 ```bash
 # Single query comparison
-docker run --rm --network=host ghcr.io/vencil/da-tools:v2.9.0 \
+docker run --rm --network=host ghcr.io/vencil/da-tools:v3.0.0 \
   validate --old "<old_query>" --new "<new_query>" \
   --prometheus http://localhost:9090
 
@@ -270,12 +270,12 @@ v1.10.0 provides `da-tools cutover`, which automatically completes all steps in 
 docker run --rm --network=host \
   -v $(pwd)/validation_output:/data:ro \
   -e PROMETHEUS_URL=http://localhost:9090 \
-  ghcr.io/vencil/da-tools:v2.9.0 \
+  ghcr.io/vencil/da-tools:v3.0.0 \
   cutover --readiness-json /data/cutover-readiness.json \
     --tenant db-a --dry-run
 
 # Expected output (lists the kubectl commands it would run, changes nothing;
-# the v2.9.0 image prints this on stdout, later versions on stderr):
+# printed on stderr):
 # ▸ Stop Shadow Monitor Job...
 #   [dry-run] kubectl delete job shadow-monitor -n monitoring --ignore-not-found=true
 #   ✓ (dry-run)
@@ -299,7 +299,7 @@ docker run --rm --network=host \
 docker run --rm --network=host \
   -v $(pwd)/validation_output:/data:ro \
   -e PROMETHEUS_URL=http://localhost:9090 \
-  ghcr.io/vencil/da-tools:v2.9.0 \
+  ghcr.io/vencil/da-tools:v3.0.0 \
   cutover --readiness-json /data/cutover-readiness.json --tenant db-a
 
 # Step 3: Batch cutover multiple tenants (execute sequentially)
@@ -307,11 +307,10 @@ for tenant in db-a db-b db-c; do
   docker run --rm --network=host \
     -v $(pwd)/validation_output:/data:ro \
     -e PROMETHEUS_URL=http://localhost:9090 \
-    ghcr.io/vencil/da-tools:v2.9.0 \
+    ghcr.io/vencil/da-tools:v3.0.0 \
     cutover --readiness-json /data/cutover-readiness.json --tenant "$tenant"
 done
 ```
-<!-- image-caveat: v2.9.0 — the "v2.9.0 image prints this on stdout" comment in the block above -->
 
 **When to Use `--force`:**
 
@@ -341,11 +340,11 @@ kubectl delete job shadow-monitor -n monitoring
 # 4. Remove shadow interception route from Alertmanager
 
 # 5. Verify alerts fire normally after cutover
-docker run --rm --network=host ghcr.io/vencil/da-tools:v2.9.0 \
+docker run --rm --network=host ghcr.io/vencil/da-tools:v3.0.0 \
   check-alert MariaDBHighConnections db-a
 
 # 6. Full tenant health check
-docker run --rm --network=host ghcr.io/vencil/da-tools:v2.9.0 diagnose db-a
+docker run --rm --network=host ghcr.io/vencil/da-tools:v3.0.0 diagnose db-a
 ```
 
 ### 7.2 Rollback (If Issues Occur)
@@ -359,7 +358,7 @@ kubectl apply -f old-recording-rules.yaml
 # 3. Restart Shadow Monitor
 docker run --rm --network=host \
   -v $(pwd)/migration_output:/data:ro \
-  ghcr.io/vencil/da-tools:v2.9.0 \
+  ghcr.io/vencil/da-tools:v3.0.0 \
   validate --mapping /data/prefix-mapping.yaml \
   --prometheus http://localhost:9090 \
   --watch --interval 300 --rounds 4032
@@ -374,7 +373,7 @@ rm -rf validation_output/
 
 # Batch deprecate custom_ prefix rules no longer needed
 docker run --rm --user $(id -u):$(id -g) \
-  -v $(pwd)/conf.d:/data/conf.d ghcr.io/vencil/da-tools:v2.9.0 \
+  -v $(pwd)/conf.d:/data/conf.d ghcr.io/vencil/da-tools:v3.0.0 \
   deprecate custom_mysql_connections custom_mysql_replication_lag \
   --config-dir /data/conf.d --execute
 ```

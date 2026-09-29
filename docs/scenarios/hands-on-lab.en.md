@@ -14,8 +14,6 @@ lang: en
 >
 > Related: [GitOps CI/CD Guide](gitops-ci-integration.en.md) · [Tenant Lifecycle](tenant-lifecycle.en.md) · [CLI Reference](../cli-reference.md)
 
-> ⚠️ **Version**: the expected outputs on this page were measured with da-tools from main, which is newer than the current `ghcr.io/vencil/da-tools:latest` (v2.9.0). Until the next release, following along with `:latest` shows four differences: Exercise 3 has only 5 checks (no `yaml_quoting`, `tenant_uniqueness` or `root_defaults`), and `routes` has no `amtool check-config` line; Exercise 4 prints no `Config files:`, `NOTICE` or `amtool check-config` lines; `schema` (and the start of Exercise 4) shows 7 extra `unknown key … not in defaults` lines (`jvm_memory`, `kafka_broker_count`, `mysql_threads_running`, `oracle_sessions_active`, `oracle_sessions_active_critical`, `redis_memory_used_bytes`, `redis_memory_used_bytes_critical`); and `--strict` in Exercise 8 does not exist in v2.9.0, so adding it fails with exit code 2 (without it, the domain policy WARN still appears). <!-- image-caveat: v2.9.0 -->
-
 > 💡 **Want to see the product running in ~1 minute instead of typing CLI commands?** → [try-local](https://github.com/vencil/Dynamic-Alerting-Integrations/blob/main/try-local/README.md) (recommended first stop: da-portal UI in the browser + a real firing alert, no K8s; `⏱️ <1 min · 🟢 Docker only`). **This lab** focuses on the hands-on **da-tools CLI workflow** (config / routing / blast radius; `⏱️ 30–45 min · 🟡 Medium (CLI)`) — complementary, different depth, not either/or.
 
 ## Lab Overview

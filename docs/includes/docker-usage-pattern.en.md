@@ -4,7 +4,7 @@
 > ```bash
 > docker run --rm --network=host --user "$(id -u):$(id -g)" \
 >   -v "$(pwd):/workspace" -w /workspace \
->   ghcr.io/vencil/da-tools:v2.9.0 <command> [flags]
+>   ghcr.io/vencil/da-tools:v3.0.0 <command> [flags]
 > ```
 > ⛔ **`--user` is not optional.** The image runs as `USER nonroot` (UID 10001)
 > while the directory you mount is your own checkout (typically UID 1000), so
@@ -25,10 +25,6 @@
 > also pass `--config-dir /etc/config`, because keeping the relative path yields
 > `ERROR: config-dir not found: conf.d/` (exit 2). Commands that write with `-o`
 > also need that directory to exist outside the container.
-> ⚠️ The `v2.9.0` pinned above was the GA release when this was written. Any fix <!-- image-caveat: v2.9.0 -->
-> these docs describe as arriving "from the next image onward" — or as of a
-> named later version, e.g. "from v3.0.0" — requires changing that tag
-> (`latest` currently resolves to the same image).
 > ⛔ **Every other example omits the prefix above and writes only
 > `da-tools <command>`.** Copying that form straight into a terminal gets you
 > `bash: da-tools: command not found` (rc 127) — `da-tools` is not an executable
@@ -43,7 +39,7 @@
 >   docker run --rm -i "${tty[@]}" --network=host \
 >     --user "$(id -u):$(id -g)" \
 >     -v "$(pwd):/workspace" -w /workspace \
->     ghcr.io/vencil/da-tools:v2.9.0 "$@"
+>     ghcr.io/vencil/da-tools:v3.0.0 "$@"
 > }
 > ```
 > ⛔ **A hyphen in a function name is a bash extension**: `/bin/sh` (dash)

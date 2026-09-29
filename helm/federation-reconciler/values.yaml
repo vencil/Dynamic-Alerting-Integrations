@@ -29,7 +29,7 @@
 # and Chart.yaml `appVersion` together, so the two cannot drift apart.
 image:
   repository: ghcr.io/vencil/da-tools
-  tag: "v2.9.0"
+  tag: "v3.0.0"
   # Optional digest pin (supply-chain; #566 T5 / #902 convention). Empty = tag only.
   # ⛔ Digest AUTHORITATIVE when set: `--set image.tag=…` alone won't upgrade.
   digest: ""

@@ -197,7 +197,7 @@ Best for: Formal GitOps workflow. The generated ConfigMap YAML is in complete `k
 
 > **Note**: `--apply` and `--output-configmap` are mutually exclusive and cannot be used simultaneously.
 
-When `amtool` is on PATH, both modes first validate the `alertmanager.yml` they are about to write / apply with it; if Alertmanager rejects it the exit code is 1 and nothing is written or applied. Without `amtool` a NOTICE says the config was not validated by Alertmanager. `--validate` does this too, but on the **built-in default base** rather than yours (#2260), so validating your own base still takes `--output-configmap --base-config`; the fragment output is not validated this way. A failed reload under `--apply` is exit code 2 (#2219). ⚠️ In the v2.9.0 image `--validate` does not go through `amtool` <!-- image-caveat: v2.9.0 -->
+When `amtool` is on PATH, both modes first validate the `alertmanager.yml` they are about to write / apply with it; if Alertmanager rejects it the exit code is 1 and nothing is written or applied. Without `amtool` a NOTICE says the config was not validated by Alertmanager. `--validate` does this too, but on the **built-in default base** rather than yours (#2260), so validating your own base still takes `--output-configmap --base-config`; the fragment output is not validated this way. A failed reload under `--apply` is exit code 2 (#2219).
 
 ### Step 6: Reload Alertmanager
 
