@@ -2,6 +2,7 @@ package routingpolicy
 
 import (
 	"fmt"
+	"path"
 	"sort"
 	"strings"
 
@@ -77,9 +78,13 @@ func UnreadRouting(configDir string, defaults []config.DefaultsFile, skip func(r
 }
 
 // topMap decodes one document's top level; nil when it is not a mapping or
-// does not decode.
-func topMap(data []byte) map[string]any {
-	top, err := parseDoc(data, false)
+// does not decode. A `_domain_policy.yaml` / `.yml` is decoded as a policy
+// document, as loadRoot / LoadTree decode it (#2325): its `!!null x` is read
+// like the generator reads it instead of failing the file, and a value
+// PyYAML refuses (`!!null {}`) fails it — the generator drops that file, so
+// none of it is reported as unread.
+func topMap(name string, data []byte) map[string]any {
+	top, err := parseDoc(data, contains(policyFileNames, path.Base(name)))
 	if err != nil || top == nil {
 		return nil
 	}
@@ -92,7 +97,7 @@ func topMap(data []byte) map[string]any {
 }
 
 func unreadInDefaults(name string, data []byte) []Problem {
-	doc := topMap(data)
+	doc := topMap(name, data)
 	if doc == nil {
 		return nil
 	}
@@ -122,7 +127,7 @@ func unreadInDefaults(name string, data []byte) []Problem {
 }
 
 func unreadInProfiles(name string, data []byte) []Problem {
-	doc := topMap(data)
+	doc := topMap(name, data)
 	profiles, ok := asStringMap(doc["profiles"])
 	if !ok {
 		return nil
