@@ -52,9 +52,12 @@ const (
 type overlayMatrix struct {
 	Comment []string `json:"_comment"`
 	Trees   []struct {
-		Name   string            `json:"name"`
-		Files  map[string]string `json:"files"`
-		Expect map[string]struct {
+		Name string `json:"name"`
+		// MetricKey is the threshold the metric / tenant_api columns read
+		// (#2368 alias rows); empty = overlayMetricKey.
+		MetricKey string            `json:"metric_key"`
+		Files     map[string]string `json:"files"`
+		Expect    map[string]struct {
 			Metric        *float64       `json:"metric"`
 			TenantAPI     *float64       `json:"tenant_api"` // #2208: the tenant-api merge core (GET / write gate)
 			Dedup         *string        `json:"dedup"`      // Python routing plane
@@ -126,16 +129,29 @@ func newOverlayManager(t *testing.T, dir string) (*ConfigManager, *bytes.Buffer)
 // resolved warning-severity row the collector emits, or ok=false when the
 // tenant has none.
 func servedValue(m *ConfigManager, tenant string) (float64, bool) {
+	return servedValueFor(m, tenant, overlayMetricKey)
+}
+
+// servedValueFor is servedValue for any threshold key (#2368 alias rows).
+func servedValueFor(m *ConfigManager, tenant, key string) (float64, bool) {
 	cfg := m.GetConfig()
 	if cfg == nil {
 		return 0, false
 	}
 	for _, r := range cfg.Resolve() {
-		if r.Tenant == tenant && r.Component+"_"+r.Metric == overlayMetricKey && r.Severity == "warning" {
+		if r.Tenant == tenant && r.Component+"_"+r.Metric == key && r.Severity == "warning" {
 			return r.Value, true
 		}
 	}
 	return 0, false
+}
+
+// metricKeyOf is the threshold a matrix tree's metric columns read.
+func metricKeyOf(key string) string {
+	if key == "" {
+		return overlayMetricKey
+	}
+	return key
 }
 
 // exporterDedup is the exporter's resolved _severity_dedup for a tenant:
@@ -189,14 +205,29 @@ func showOpt(s *string) string {
 
 func assertServed(t *testing.T, m *ConfigManager, where, tenant string, want *float64) {
 	t.Helper()
-	got, ok := servedValue(m, tenant)
-	switch {
-	case want == nil && ok:
-		t.Errorf("%s: %s is served with %s=%v, want the tenant ABSENT from /metrics", where, tenant, overlayMetricKey, got)
-	case want != nil && !ok:
-		t.Errorf("%s: %s serves no %s, want %v", where, tenant, overlayMetricKey, *want)
-	case want != nil && got != *want:
-		t.Errorf("%s: %s serves %s=%v, want %v", where, tenant, overlayMetricKey, got, *want)
+	assertServedKey(t, m, where, tenant, overlayMetricKey, want)
+}
+
+// assertServedKey is assertServed for any threshold key. For a key that is
+// the target of a #1231 alias it also checks the legacy twin series
+// (`metric="cpu"` for mysql_threads_running): the transition-window
+// dual-emit must carry the same value, or a stale twin passes unseen.
+func assertServedKey(t *testing.T, m *ConfigManager, where, tenant, key string, want *float64) {
+	t.Helper()
+	keys := []string{key}
+	if legacy, ok := config.LegacySpellingFor(key); ok {
+		keys = append(keys, legacy)
+	}
+	for _, k := range keys {
+		got, ok := servedValueFor(m, tenant, k)
+		switch {
+		case want == nil && ok:
+			t.Errorf("%s: %s is served with %s=%v, want the tenant ABSENT from /metrics", where, tenant, k, got)
+		case want != nil && !ok:
+			t.Errorf("%s: %s serves no %s, want %v", where, tenant, k, *want)
+		case want != nil && got != *want:
+			t.Errorf("%s: %s serves %s=%v, want %v", where, tenant, k, got, *want)
+		}
 	}
 }
 
@@ -210,7 +241,8 @@ func TestPlatformTenantOverlayMatrix(t *testing.T) {
 			writeOverlayTree(t, dir, tree.Files)
 			mgr, _ := newOverlayManager(t, dir)
 			for tenant, want := range tree.Expect {
-				assertServed(t, mgr, tree.Name, tenant, want.Metric)
+				key := metricKeyOf(tree.MetricKey)
+				assertServedKey(t, mgr, tree.Name, tenant, key, want.Metric)
 				// ⛔ Not the metric alone: every per-tenant value the
 				// exporter resolves goes through the same merge, and a
 				// table that checks one threshold would stay green if a
@@ -226,10 +258,10 @@ func TestPlatformTenantOverlayMatrix(t *testing.T) {
 				// against the /metrics columns of the same row, so a row
 				// cannot pin a walker answer that disagrees with /metrics.
 				assertWalkerRow(t, dir, tree.Name, tenant, want.Walker)
-				assertWalkerAgreesWithMetrics(t, tree.Name, tenant, want.Walker, want.Metric, want.SilentMode, want.ExporterDedup)
+				assertWalkerAgreesWithMetrics(t, tree.Name, tenant, key, want.Walker, want.Metric, want.SilentMode, want.ExporterDedup)
 				assertWalkerCriticalRowsServed(t, mgr, tree.Name, tenant, want.Walker)
 				// #2208: the tenant-api merge core, and why it may differ.
-				assertTenantAPIRow(t, dir, tree.Name, tenant, want.TenantAPI)
+				assertTenantAPIRow(t, dir, tree.Name, tenant, key, want.TenantAPI)
 				assertTenantAPIAgreesWithMetrics(t, tree.Name, tenant, want.TenantAPI, want.Metric, want.Walker)
 			}
 			// No tenant the table does not name is served — otherwise an
@@ -245,14 +277,14 @@ func TestPlatformTenantOverlayMatrix(t *testing.T) {
 
 // tenantAPIServed is what the tenant-api merge core — the one behind GET
 // /api/v1/tenants/{id}, POST …/validate and the write gate — resolves for
-// (tenant, overlayMetricKey) when handed the tenant's declaring file.
+// (tenant, key) when handed the tenant's declaring file.
 // reached=false when tenant-api never gets that far: the tenant is declared
 // by no file, or by one below the root (tenant-api serves top-level files).
 //
 // ⚠️ Not the whole GET: which top-level file GET opens is confd's
 // filename-addressed lookup in the tenant-api module, which this module
 // cannot import. The column pins the merge given the declaring file's bytes.
-func tenantAPIServed(t *testing.T, dir, tenant string) (value float64, served, reached bool) {
+func tenantAPIServed(t *testing.T, dir, tenant, key string) (value float64, served, reached bool) {
 	t.Helper()
 	scan, err := config.ScanDirTree(dir, nil, nil, log.New(io.Discard, "", 0))
 	if err != nil {
@@ -268,7 +300,7 @@ func tenantAPIServed(t *testing.T, dir, tenant string) (value float64, served, r
 	}
 	merged := config.MergeTenantWithRootDefaults(dir, tenant, body)
 	for _, r := range merged.ResolveAt(time.Now()) {
-		if r.Tenant == tenant && r.Component+"_"+r.Metric == overlayMetricKey && r.Severity == "warning" && len(r.CustomLabels) == 0 {
+		if r.Tenant == tenant && r.Component+"_"+r.Metric == key && r.Severity == "warning" && len(r.CustomLabels) == 0 {
 			return r.Value, true, true
 		}
 	}
@@ -277,16 +309,16 @@ func tenantAPIServed(t *testing.T, dir, tenant string) (value float64, served, r
 
 // assertTenantAPIRow checks the tenant-api merge core against the
 // tenant_api column: null ⇔ not reached.
-func assertTenantAPIRow(t *testing.T, dir, tree, tenant string, want *float64) {
+func assertTenantAPIRow(t *testing.T, dir, tree, tenant, key string, want *float64) {
 	t.Helper()
-	got, served, reached := tenantAPIServed(t, dir, tenant)
+	got, served, reached := tenantAPIServed(t, dir, tenant, key)
 	switch {
 	case want == nil && reached:
-		t.Errorf("%s: tenant-api merge core reaches %s (%s=%v, served=%v), want not reached", tree, tenant, overlayMetricKey, got, served)
+		t.Errorf("%s: tenant-api merge core reaches %s (%s=%v, served=%v), want not reached", tree, tenant, key, got, served)
 	case want != nil && !served:
-		t.Errorf("%s: tenant-api merge core serves no %s for %s (reached=%v), want %v", tree, overlayMetricKey, tenant, reached, *want)
+		t.Errorf("%s: tenant-api merge core serves no %s for %s (reached=%v), want %v", tree, key, tenant, reached, *want)
 	case want != nil && got != *want:
-		t.Errorf("%s: tenant-api merge core serves %s=%v for %s, want %v", tree, overlayMetricKey, got, tenant, *want)
+		t.Errorf("%s: tenant-api merge core serves %s=%v for %s, want %v", tree, key, got, tenant, *want)
 	}
 }
 
@@ -384,7 +416,13 @@ func assertWalkerCriticalRowsServed(t *testing.T, m *ConfigManager, tree, tenant
 // column's mysql_connections / _silent_mode / _severity_dedup are the values
 // the /metrics columns say the exporter resolves (absent `_severity_dedup` =
 // "enable", absent `_silent_mode` = "").
-func assertWalkerAgreesWithMetrics(t *testing.T, tree, tenant string, w *overlayWalker, metric *float64, silent, dedup *string) {
+//
+// For an alias target key (#2368 rows) the walker's effective config keeps
+// each layer's own spelling, so the tenant layer's legacy spelling sits
+// beside the chain's canonical one; the legacy spelling is read first. That
+// is sound only because no row sets a legacy spelling in the defaults chain
+// — the matrix comment says so.
+func assertWalkerAgreesWithMetrics(t *testing.T, tree, tenant, key string, w *overlayWalker, metric *float64, silent, dedup *string) {
 	t.Helper()
 	if (w == nil) != (metric == nil) {
 		t.Errorf("%s: %s walker present=%v but metric present=%v", tree, tenant, w != nil, metric != nil)
@@ -393,9 +431,15 @@ func assertWalkerAgreesWithMetrics(t *testing.T, tree, tenant string, w *overlay
 	if w == nil {
 		return
 	}
-	v, err := strconv.ParseFloat(fmt.Sprint(w.EffectiveConfig[overlayMetricKey]), 64)
+	wk := key
+	if legacy, ok := config.LegacySpellingFor(key); ok {
+		if _, set := w.EffectiveConfig[legacy]; set {
+			wk = legacy
+		}
+	}
+	v, err := strconv.ParseFloat(fmt.Sprint(w.EffectiveConfig[wk]), 64)
 	if err != nil || v != *metric {
-		t.Errorf("%s: %s walker %s=%v, metric column %v", tree, tenant, overlayMetricKey, w.EffectiveConfig[overlayMetricKey], *metric)
+		t.Errorf("%s: %s walker %s=%v, metric column %v", tree, tenant, wk, w.EffectiveConfig[wk], *metric)
 	}
 	sm, _ := w.EffectiveConfig["_silent_mode"].(string)
 	if silent == nil || sm != *silent {

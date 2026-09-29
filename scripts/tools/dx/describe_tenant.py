@@ -55,7 +55,11 @@ from _lib_io import strict_load_all_exporter_keys, strict_load_exporter_keys  # 
 # repo-layout path is `ops/`; the image is flat (build.sh ships both).
 # Appended, not prepended, so no `ops/` module can shadow one already found.
 sys.path.append(os.path.join(str(_THIS_DIR), "..", "ops"))
-from _grar_validate import DEPRECATED_KEY_ALIASES, _canonical_tenant_key  # noqa: E402
+from _grar_validate import (  # noqa: E402
+    _canonical_tenant_key,
+    _legacy_tenant_key,
+    overlay_across_spellings,
+)
 
 try:
     import yaml
@@ -221,20 +225,22 @@ def _overlay_tenant(tenant_raw: Any, blocks: "list[tuple[str, dict]]",
         return tenant_raw, []
     combined: dict = {}
     owner: dict = {}
+    # Per THRESHOLD, not per spelling (#2368): a later layer writing either
+    # #1231 spelling drops the other spelling an earlier layer wrote.
     for i, (_fname, block) in enumerate(blocks):
-        for k, v in block.items():
-            combined[k] = v
+        _overlay_across_spellings(combined, block)
+        for k in block:
             owner[k] = i
-    for k, v in tenant_raw.items():
-        combined[k] = v
-        owner.pop(k, None)
-    by_file: dict[int, list[str]] = {}
+    _overlay_across_spellings(combined, tenant_raw)
+    owner = {k: i for k, i in owner.items() if k not in tenant_raw and k in combined}
+    by_file: dict[int, set[str]] = {}
     for k, i in owner.items():
         if k == "_metadata":
             continue
         if combined[k] is None and not (k.startswith("_") and k in (chain or {})):
             continue
-        by_file.setdefault(i, []).append(k)
+        # Attribution names the CANONICAL spelling (#2368), once.
+        by_file.setdefault(i, set()).add(_canonical_tenant_key(k)[0] if isinstance(k, str) else k)
     sources = [{"file": blocks[i][0], "keys": sorted(by_file[i])}
                for i in range(len(blocks)) if i in by_file]
     return combined, sources
@@ -282,22 +288,10 @@ def _tenant_body(tconfig: Any) -> Any:
 # `walker` column pins both against /metrics.
 # ---------------------------------------------------------------------------
 
-_LEGACY_BY_CANONICAL = {canon: legacy for legacy, canon in DEPRECATED_KEY_ALIASES.items()}
-
-
-def _legacy_spelling(key: str) -> "str | None":
-    """Go `legacySpellingFor`: the deprecated spelling of a canonical key
-    (exact, `_critical`-suffixed, dimensional), or None."""
-    if key in _LEGACY_BY_CANONICAL:
-        return _LEGACY_BY_CANONICAL[key]
-    if key.endswith("_critical"):
-        base = key.removesuffix("_critical")
-        if base in _LEGACY_BY_CANONICAL:
-            return _LEGACY_BY_CANONICAL[base] + "_critical"
-    brace = key.find("{")
-    if brace > 0 and key[:brace] in _LEGACY_BY_CANONICAL:
-        return _LEGACY_BY_CANONICAL[key[:brace]] + key[brace:]
-    return None
+# Go `legacySpellingFor` / `overlayAcrossSpellings` (#2368): one Python copy,
+# in `_grar_validate` beside `_canonical_tenant_key`, shared with diagnose.
+_legacy_spelling = _legacy_tenant_key
+_overlay_across_spellings = overlay_across_spellings
 
 
 def _has_alias_equivalent(own: dict, key: str) -> bool:

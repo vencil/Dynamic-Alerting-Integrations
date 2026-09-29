@@ -734,9 +734,10 @@ func mergePartialInto(merged *ThresholdConfig, partial ThresholdConfig) {
 		if merged.Tenants[tenant] == nil {
 			merged.Tenants[tenant] = make(map[string]ScheduledValue, len(overrides))
 		}
-		for k, v := range overrides {
-			merged.Tenants[tenant][k] = v
-		}
+		// Per THRESHOLD, not per spelling (#2368): a later file writing
+		// `mysql_cpu` drops an earlier file's `mysql_threads_running`, or
+		// the canonical-wins dedup at resolve served the earlier one.
+		overlayAcrossSpellings(merged.Tenants[tenant], overrides)
 	}
 }
 
