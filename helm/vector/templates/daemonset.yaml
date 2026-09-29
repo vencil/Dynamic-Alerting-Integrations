@@ -121,6 +121,28 @@ spec:
             - "/etc/vector/vector.yaml"
             {{- end }}
           env:
+            # ⛔ Deliberately ON: the documented way to hand a SIEM credential to an
+            # `additionalSinks` entry is `${VAR}` fed by extraEnv / extraEnvFrom,
+            # and Vector (0.57.0, measured) leaves `${VAR}` LITERAL unless this is
+            # set — no error, the sink just ships the string `${SPLUNK_TOKEN}` as
+            # its token, and an unset var is not reported either.
+            #
+            # What "dangerously" is about: the substitution is TEXTUAL, on the raw
+            # config before YAML/VRL parsing. So (1) a value containing a quote can
+            # inject fields into VRL; (2) bare `$NAME` is substituted too, including
+            # inside VRL string literals and YAML comments; (3) with extraEnvFrom,
+            # every key of that Secret becomes a substitutable name. Newlines in a
+            # value are rejected, and a referenced-but-unset var now fails the load
+            # (rc 78) instead of shipping a literal — the failure mode we want.
+            #
+            # The chart keeps its side of this: the config it renders by default
+            # contains no `$` at all (pinned by
+            # tests/shared/test_helm_chart_log_aggregation.py), so the only
+            # interpolation sites are the ones an operator writes into
+            # additionalSinks. Credential values must not contain `"`; a literal
+            # dollar in an additionalSinks string is written `$$`.
+            - name: VECTOR_DANGEROUSLY_ALLOW_ENV_VAR_INTERPOLATION
+              value: "true"
             # Vector enriches with k8s metadata via the API server using
             # the in-pod ServiceAccount token. VECTOR_SELF_NODE_NAME
             # scopes kubernetes_logs to "this node's pods only" —

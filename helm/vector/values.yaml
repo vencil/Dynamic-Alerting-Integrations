@@ -164,7 +164,7 @@ additionalSinks: []
   #   type: splunk_hec_logs
   #   inputs: [demux, federation_evidence]  # VRL-tagged streams, both of them
   #   endpoint: https://splunk.example.com:8088
-  #   default_token: ${SPLUNK_TOKEN}   # via envFrom secret
+  #   default_token: ${SPLUNK_TOKEN}   # via extraEnv/extraEnvFrom — see `extraEnv` below
   #   _buffer_when_full: drop_newest
   #   _buffer_max_events: 10000
   #
@@ -592,7 +592,23 @@ resources:
 
 # Extra environment variables for the Vector container — primarily for
 # wiring SIEM credentials into `additionalSinks` entries that reference
-# them as `${VAR}` (Vector expands env vars at config load time).
+# them as `${VAR}`.
+#
+# ⛔ Vector (0.57.0) expands `${VAR}` ONLY because the chart sets
+# VECTOR_DANGEROUSLY_ALLOW_ENV_VAR_INTERPOLATION=true on the vector
+# container (rationale: templates/daemonset.yaml). What that means for
+# what you put here and in additionalSinks:
+#   - a `${VAR}` that is not provided FAILS the config load (the pod does
+#     not start) — it is not left blank or literal;
+#   - substitution is textual, before YAML/VRL parsing: a value containing
+#     `"` can break out of the string it lands in (measured: it injects VRL
+#     fields), and a value containing a newline is rejected — so credential
+#     values must not contain `"` or newlines (a `$` inside a value is NOT
+#     re-expanded);
+#   - bare `$NAME` in an additionalSinks string is substituted too — write
+#     a literal dollar as `$$`;
+#   - with extraEnvFrom every key of the Secret becomes a substitutable
+#     name; prefer extraEnv + secretKeyRef to expose only the keys you use.
 # Examples:
 #   extraEnvFrom:
 #     - secretRef: {name: siem-credentials}    # all keys become env vars
