@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""commit_helper.py — UTF-8 safety layer for win_git_escape.bat commit / commit-file.
+"""commit_helper.py — UTF-8 safety layer for win_git_escape.bat commit-file.
 
 Motivation:
   PR #42 discovered that even commit-file can corrupt CJK / em-dash / etc.
@@ -12,12 +12,12 @@ Motivation:
   subprocess passes bytes directly without any codepage translation.
 
 Modes:
-  check-ascii <msg>   — exit 0 if MSG is ASCII-only, 1 with hint otherwise.
-                        Used before `git commit -m "..."` to reject messages
-                        that cmd.exe would corrupt.
   commit-file <path>  — read UTF-8 file, validate it with the same check the
                         commit-msg hook runs, then pipe bytes to
                         `git commit -F -`. Preserves non-ASCII reliably.
+
+  (There is no `check-ascii` any more: it guarded the .bat's `commit "msg"`,
+  which #2249 removed — commit-file covers every message.)
 
 commit-msg gate (#1914):
   The commit itself runs with --no-verify (windows-mcp-playbook trap #36:
@@ -76,28 +76,6 @@ def check_commit_msg(data: bytes) -> int:
         os.unlink(tmp)
 
 
-def check_ascii(msg: str) -> int:
-    non_ascii = [c for c in msg if ord(c) > 127]
-    if not non_ascii:
-        return 0
-    uniq = sorted(set(non_ascii))
-    sample = "".join(uniq[:10])
-    print(
-        (
-            f"ERROR: commit message contains {len(non_ascii)} non-ASCII "
-            f"char(s). Sample: {sample!r}\n"
-            "\n"
-            "Windows cmd corrupts UTF-8 in -m arguments regardless of chcp.\n"
-            "Use commit-file instead (reads msg.txt as UTF-8 reliably):\n"
-            "\n"
-            "    (write your message to _msg.txt as UTF-8, no BOM)\n"
-            "    scripts\\ops\\win_git_escape.bat commit-file _msg.txt\n"
-        ),
-        file=sys.stderr,
-    )
-    return 1
-
-
 def commit_file(path_str: str) -> int:
     p = Path(path_str)
     if not p.exists():
@@ -137,12 +115,6 @@ def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description=__doc__.split("\n\n")[0])
     sub = parser.add_subparsers(dest="mode", required=True)
 
-    p_check = sub.add_parser(
-        "check-ascii",
-        help="Exit 0 if msg is ASCII-only; exit 1 with hint otherwise.",
-    )
-    p_check.add_argument("msg")
-
     p_commit = sub.add_parser(
         "commit-file",
         help="Pipe UTF-8 file contents to `git commit -F -`.",
@@ -150,8 +122,6 @@ def main(argv: list[str] | None = None) -> int:
     p_commit.add_argument("path")
 
     args = parser.parse_args(argv)
-    if args.mode == "check-ascii":
-        return check_ascii(args.msg)
     if args.mode == "commit-file":
         return commit_file(args.path)
     parser.error(f"unknown mode: {args.mode}")
