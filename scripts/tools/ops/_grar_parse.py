@@ -258,6 +258,19 @@ def _parse_platform_config(data: dict, fname: str, result: dict) -> None:
     if "_routing_defaults" in data:
         if is_defaults_file:
             rd = data["_routing_defaults"]
+            # #2412: a value that is neither a mapping nor null (a list, a
+            # string, a number, a boolean) is named and contributes nothing —
+            # the subdirectory reader's verdict (`_parse_nested_config`) and
+            # Go's `routingDefaultsFromNode` (Defaults nil, no Problem). It
+            # is still stored, as None: a later root file that carries the
+            # key replaces an earlier one WHOLE, whatever its value. Before,
+            # the value reached `resolve_routing_defaults`' `dict(root)` and
+            # the generator died with a traceback at rc 1. Null stays silent.
+            if rd is not None and not isinstance(rd, dict):
+                print(f"  WARN: _routing_defaults in {_f} must be a mapping, "
+                      f"got {type(rd).__name__} — this level contributes "
+                      "nothing", file=sys.stderr)
+                rd = None
             # #2245: ADR-007 `routes` belong to a routing profile or the
             # tenant, never to the platform-wide defaults (every tenant would
             # inherit the escalation). Dropped HERE, before any merge, so
