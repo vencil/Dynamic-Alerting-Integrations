@@ -17,6 +17,8 @@ import (
 
 	"github.com/vencil/threshold-exporter/pkg/config"
 	"gopkg.in/yaml.v3"
+
+	"github.com/vencil/threshold-exporter/pkg/receiverspec"
 )
 
 type parityTarget struct {
@@ -314,6 +316,8 @@ func checkTenantAPIModel(t *testing.T, files map[string]string, tenantID string,
 	put := "ok"
 	if verdict(block) {
 		put = "403"
+	} else if writesBadReceiver(block) {
+		put = "400"
 	}
 	if put != want.Put {
 		t.Errorf("tenant_api.put model = %s, table says %s", put, want.Put)
@@ -337,6 +341,31 @@ func checkTenantAPIModel(t *testing.T, files map[string]string, tenantID string,
 	if got != want.Batch.Verdict {
 		t.Errorf("tenant_api.batch model = %s, table says %s", got, want.Batch.Verdict)
 	}
+}
+
+// writesBadReceiver models tenant-api's #2295 PUT check: a receiver the
+// tenant block itself writes in `_routing` (main, overrides[i], routes[i];
+// absent or null is not written) that pkg/receiverspec reports.
+func writesBadReceiver(block map[string]any) bool {
+	routing, ok := block["_routing"].(map[string]any)
+	if !ok {
+		return false
+	}
+	holders := []map[string]any{routing}
+	for _, list := range []string{"overrides", "routes"} {
+		entries, _ := routing[list].([]any)
+		for _, e := range entries {
+			if m, ok := e.(map[string]any); ok {
+				holders = append(holders, m)
+			}
+		}
+	}
+	for _, h := range holders {
+		if recv := h["receiver"]; recv != nil && len(receiverspec.Check(recv)) > 0 {
+			return true
+		}
+	}
+	return false
 }
 
 func itoa(i int) string {

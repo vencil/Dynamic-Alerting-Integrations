@@ -93,6 +93,10 @@ from _grar_parse import (  # noqa: E402, F401
     load_tenant_tree,
 )
 
+# Used here, not re-exported: which #2326 routing-tree findings refuse the
+# tree (`tree_refusal`, the same filter as `TenantTree.routing_tree_errors`).
+from _grar_parse import BLOCKING_TREE_KINDS  # noqa: E402
+
 # ── Re-exports from _grar_routes ───────────────────────────────────
 from _grar_routes import (  # noqa: E402, F401
     _build_enforced_routes,
@@ -461,17 +465,65 @@ def _refuse_unreadable_tenant_files(tree: TenantTree) -> None:
     if skipped:
         line += " (" + ", ".join(safe_label(f) for f, _ in skipped) + ")"
     print(line)
-    if not tree.tenant_file_errors:
+    refusal = unreadable_tenant_files_refusal(tree.files_read,
+                                              tree.tenant_file_errors)
+    if not refusal:
         return
-    n = len(tree.tenant_file_errors)
-    print(f"FAIL: {n} config file(s) could not be read — refusing to treat "
-          f"the remaining {tree.files_read} as the whole tree:", file=sys.stderr)
-    for fname, reason in tree.tenant_file_errors:
-        print(f"  {safe_label(fname)}: {safe_label(reason)}", file=sys.stderr)
-    print("  ⛔ Every tenant in a skipped file is ABSENT from this run, so no "
-          "verdict over the rest is a verdict over your conf.d. Repair the "
-          "file (or remove it from conf.d) and re-run.", file=sys.stderr)
+    for msg in refusal:
+        print(msg, file=sys.stderr)
     sys.exit(EXIT_VIOLATION)
+
+
+def unreadable_tenant_files_refusal(
+        files_read: int, tenant_file_errors: list[tuple[str, str]]) -> list[str]:
+    """The stderr lines of the #1460 refusal; [] = not refused.
+
+    The judgment `_refuse_unreadable_tenant_files` acts on, as data, so
+    explain-route's trace (#2293) refuses the same trees with the same words.
+    """
+    if not tenant_file_errors:
+        return []
+    return [
+        f"FAIL: {len(tenant_file_errors)} config file(s) could not be read — "
+        f"refusing to treat the remaining {files_read} as the whole tree:",
+        *(f"  {safe_label(fname)}: {safe_label(reason)}"
+          for fname, reason in tenant_file_errors),
+        "  ⛔ Every tenant in a skipped file is ABSENT from this run, so no "
+        "verdict over the rest is a verdict over your conf.d. Repair the "
+        "file (or remove it from conf.d) and re-run.",
+    ]
+
+
+def _refuse_duplicate_tenants(tree: TenantTree) -> None:
+    """#2315: one tenant id in two tenant files — refused in EVERY mode.
+
+    Runs next to `_refuse_unreadable_tenant_files` and for the same reason:
+    the exporter rejects the WHOLE tree in this state, so no route set
+    generated from it describes anything that will run, and a ConfigMap
+    written or applied from it is the worst outcome. Before this the reader
+    merged the two blocks and exited 0 in every mode (render, --validate,
+    --output-configmap, with or without --strict).
+    """
+    refusal = duplicate_tenants_refusal(tree.duplicate_tenants)
+    if not refusal:
+        return
+    for msg in refusal:
+        print(msg, file=sys.stderr)
+    sys.exit(EXIT_VIOLATION)
+
+
+def duplicate_tenants_refusal(duplicates: dict[str, list[str]]) -> list[str]:
+    """The stderr lines of the #2315 refusal; [] = not refused.
+
+    The judgment `_refuse_duplicate_tenants` acts on, as data (see
+    `unreadable_tenant_files_refusal`).
+    """
+    dups = duplicate_tenant_errors(duplicates)
+    if not dups:
+        return []
+    return [f"FAIL: {len(dups)} tenant(s) declared in more than one file — "
+            "nothing was written or applied:",
+            *(safe_label(e) for e in dups)]
 
 
 def _refuse_routing_tree_errors(tree: TenantTree) -> None:
@@ -491,33 +543,53 @@ def _refuse_routing_tree_errors(tree: TenantTree) -> None:
     (the same statement as "the directory you pointed me at is not usable as
     input"), not per-tenant findings a --strict switch escalates.
     """
-    errors = tree.routing_tree_errors
-    if not errors:
+    refusal = routing_tree_errors_refusal(tree.routing_tree_errors)
+    if not refusal:
         return
-    print(f"ERROR: {len(errors)} routing-tree error(s) — nothing was "
-          f"generated, written or applied (ADR-017 amendment 2026-09-28):",
-          file=sys.stderr)
-    for _kind, _fname, _field, msg in errors:
-        print(f"  {safe_label(msg)}", file=sys.stderr)
+    for msg in refusal:
+        print(msg, file=sys.stderr)
     sys.exit(EXIT_CALLER_ERROR)
-def _refuse_duplicate_tenants(tree: TenantTree) -> None:
-    """#2315: one tenant id in two tenant files — refused in EVERY mode.
 
-    Runs next to `_refuse_unreadable_tenant_files` and for the same reason:
-    the exporter rejects the WHOLE tree in this state, so no route set
-    generated from it describes anything that will run, and a ConfigMap
-    written or applied from it is the worst outcome. Before this the reader
-    merged the two blocks and exited 0 in every mode (render, --validate,
-    --output-configmap, with or without --strict).
+
+def routing_tree_errors_refusal(
+        errors: list[tuple[str, str, str, str]]) -> list[str]:
+    """The stderr lines of the #2326 refusal; [] = not refused.
+
+    *errors* are the BLOCKING routing-tree findings
+    (`TenantTree.routing_tree_errors`). The judgment
+    `_refuse_routing_tree_errors` acts on, as data (see
+    `unreadable_tenant_files_refusal`).
     """
-    dups = duplicate_tenant_errors(tree.duplicate_tenants)
-    if not dups:
-        return
-    print(f"FAIL: {len(dups)} tenant(s) declared in more than one file — "
-          "nothing was written or applied:", file=sys.stderr)
-    for e in dups:
-        print(safe_label(e), file=sys.stderr)
-    sys.exit(EXIT_VIOLATION)
+    if not errors:
+        return []
+    return [f"ERROR: {len(errors)} routing-tree error(s) — nothing was "
+            f"generated, written or applied (ADR-017 amendment 2026-09-28):",
+            *(f"  {safe_label(msg)}" for _kind, _fname, _field, msg in errors)]
+
+
+def tree_refusal(files_read: int, tenant_file_errors: list[tuple[str, str]],
+                 duplicates: dict[str, list[str]],
+                 routing_tree_problems: list[tuple[str, str, str, str]]
+                 ) -> tuple[int, list[str]]:
+    """What `main()` refuses a scanned tree for: ``(rc, stderr lines)``.
+
+    ``(EXIT_OK, [])`` = not refused. The order is `main()`'s — unreadable
+    tenant file (#1460, rc 1), duplicate tenant (#2315, rc 1), routing-tree
+    error (#2326, rc 2) — and `main()` exits on the first refusal, so only
+    that one's lines and rc. *routing_tree_problems* is every routing-tree
+    finding; only the blocking kinds refuse, the same filter as
+    `TenantTree.routing_tree_errors`.
+    """
+    blocking = [p for p in routing_tree_problems
+                if p[0] in BLOCKING_TREE_KINDS]
+    for rc, lines in (
+            (EXIT_VIOLATION, unreadable_tenant_files_refusal(
+                files_read, tenant_file_errors)),
+            (EXIT_VIOLATION, duplicate_tenants_refusal(duplicates)),
+            (EXIT_CALLER_ERROR, routing_tree_errors_refusal(blocking))):
+        if lines:
+            return rc, lines
+    return EXIT_OK, []
 
 
 def _print_config_summary(routing_configs: dict, dedup_configs: dict, enforced_routing: dict | None) -> None:

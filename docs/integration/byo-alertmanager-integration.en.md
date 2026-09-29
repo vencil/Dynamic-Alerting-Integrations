@@ -300,6 +300,16 @@ The format rules are defined by `receiverHttpUrl` / `receiverSmtpHostPort` in [`
 
 All types support `send_resolved: true` (default false) to control if resolved alerts are sent.
 
+Optional values are checked too ([#2295](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/2295)): only the values Alertmanager refuses, which make the whole reload fail, as amtool 0.34.1 judges them.
+
+- `send_resolved` and email `require_tls` take `true` / `false`, an empty value (not given), and the YAML 1.1 boolean words `yes` / `no` / `on` / `off` (lowercase, capitalised or all caps); the route generator writes them as booleans. `maybe`, `1` and `""` are rejected.
+- webhook `http_config`: an empty value counts as not given; otherwise it must be a mapping. At most one of `basic_auth`, `oauth2`, `authorization`, `bearer_token`, `bearer_token_file` may be set: empty values and `bearer_token: ""` count as unset, `basic_auth: {}` as set. `bearer_token` / `bearer_token_file` / `proxy_url` / `no_proxy` must be strings (quote a value YAML would read as a boolean, number or date).
+- `http_config.proxy_url`: must be a string; da-guard and tenant-api reject only values Go's `net/url` cannot parse (such as `::x`, a host with a space, `%zz`, a bad port), and the route generator leaves that to its `--validate` amtool gate. `proxy_from_environment: true` cannot be combined with a non-empty `proxy_url` or with `no_proxy`; `no_proxy` needs `proxy_url`; `proxy_connect_header` needs a non-empty `proxy_url` or `proxy_from_environment`.
+
+The shapes deliberately stricter than Alertmanager are the rows marked `strict` in the shared table [`receiver_presence_cases.json`](https://github.com/vencil/Dynamic-Alerting-Integrations/blob/main/components/threshold-exporter/app/pkg/receiverspec/testdata/receiver_presence_cases.json).
+
+`generate_alertmanager_routes` (also without amtool on PATH, except whether `proxy_url` parses), da-guard, and tenant-api's `PUT /api/v1/tenants/{id}` and `POST /api/v1/tenants/{id}/validate` apply the same rules. tenant-api answers PUT with 400 `INVALID_BODY` and validate with `valid: false`, judging only the receivers the body writes.
+
 ### Message Templates (Go Template)
 
 Slack, Teams, and Email `title` / `text` / `html` fields support Alertmanager Go template syntax. Slack example:

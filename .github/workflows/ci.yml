@@ -1323,6 +1323,10 @@ jobs:
       # rollback against it. Gated on `go` (shutil.which); this job sets Go up
       # below, so a missing binary is a failure, not a skip.
       VIBE_REQUIRE_GO: "1"
+      # #2293: `explain_route --trace` takes its verdict from amtool, so the
+      # tests of that verdict need it; this job installs it below. Absent means
+      # the install step regressed — tests/conftest.py `amtool_required` fails.
+      VIBE_REQUIRE_AMTOOL: "1"
       # #2005: tests/_encoding_gate.py fails a test when product code
       # (scripts/, components/) opens a text file without encoding=. It reads
       # sys.flags.warn_default_encoding, which only this variable can turn on
@@ -1486,6 +1490,26 @@ jobs:
           sudo install -m0755 /tmp/actionlint /usr/local/bin/actionlint
           actionlint --version
           command -v actionlint
+
+      # amtool for the explain_route --trace tests (#2293). No pin of its own:
+      # copied out of the Alertmanager image the deployment manifest runs, the
+      # way docs-ci.yaml / validate.yaml derive it (config-reloader not matched).
+      - name: Install amtool
+        run: |
+          set -euo pipefail
+          AM_IMAGE=$(grep -m1 -oE "prom/alertmanager:[^[:space:]\"']+" \
+            k8s/03-monitoring/deployment-alertmanager.yaml || true)
+          if [ -z "$AM_IMAGE" ]; then
+            echo "ERROR: no prom/alertmanager image found in deployment-alertmanager.yaml" >&2
+            exit 1
+          fi
+          echo "amtool image (from deployment manifest): $AM_IMAGE"
+          AM_CID=$(docker create "$AM_IMAGE")
+          docker cp "$AM_CID:/bin/amtool" /tmp/amtool
+          docker rm "$AM_CID" >/dev/null
+          sudo install -m0755 /tmp/amtool /usr/local/bin/amtool
+          amtool --version
+          command -v amtool
 
       # Reference engine for the editor-glob parity test (#1815). Pinned to
       # the picomatch that yaml-language-server 1.24.0 carries in
@@ -1720,6 +1744,10 @@ jobs:
       # rollback against it. Gated on `go` (shutil.which); this job sets Go up
       # below, so a missing binary is a failure, not a skip.
       VIBE_REQUIRE_GO: "1"
+      # #2293: `explain_route --trace` takes its verdict from amtool, so the
+      # tests of that verdict need it; this job installs it below. Absent means
+      # the install step regressed — tests/conftest.py `amtool_required` fails.
+      VIBE_REQUIRE_AMTOOL: "1"
     steps:
       - name: Checkout code
         uses: actions/checkout@v6
@@ -1875,6 +1903,26 @@ jobs:
           sudo install -m0755 /tmp/actionlint /usr/local/bin/actionlint
           actionlint --version
           command -v actionlint
+
+      # amtool for the explain_route --trace tests (#2293). No pin of its own:
+      # copied out of the Alertmanager image the deployment manifest runs, the
+      # way docs-ci.yaml / validate.yaml derive it (config-reloader not matched).
+      - name: Install amtool
+        run: |
+          set -euo pipefail
+          AM_IMAGE=$(grep -m1 -oE "prom/alertmanager:[^[:space:]\"']+" \
+            k8s/03-monitoring/deployment-alertmanager.yaml || true)
+          if [ -z "$AM_IMAGE" ]; then
+            echo "ERROR: no prom/alertmanager image found in deployment-alertmanager.yaml" >&2
+            exit 1
+          fi
+          echo "amtool image (from deployment manifest): $AM_IMAGE"
+          AM_CID=$(docker create "$AM_IMAGE")
+          docker cp "$AM_CID:/bin/amtool" /tmp/amtool
+          docker rm "$AM_CID" >/dev/null
+          sudo install -m0755 /tmp/amtool /usr/local/bin/amtool
+          amtool --version
+          command -v amtool
 
       # Reference engine for the editor-glob parity test (#1815). Pinned to
       # the picomatch that yaml-language-server 1.24.0 carries in

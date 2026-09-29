@@ -147,7 +147,7 @@ class TestExplainTenantRouting:
         assert final["group_wait"] == "30s"
         assert final["receiver"]["type"] == "webhook"
 
-    def test_enforced_routing_applied(self, config_dir):
+    def test_enforced_routing_is_its_own_layer(self, config_dir):
         _write(config_dir, "_defaults.yaml", {
             "defaults": {"cpu": "80"},
             "_routing_defaults": {"group_wait": "30s"},
@@ -163,8 +163,11 @@ class TestExplainTenantRouting:
         result = explain_tenant_routing(parsed, "db-a")
         layer4 = result["layers"][3]
         assert layer4["config"]["receiver"]["type"] == "webhook"
-        # Final should have enforced receiver
-        assert result["final"]["receiver"]["url"] == "https://noc.example.com"
+        # G2 (#2293): the enforced route is rendered BESIDE the tenant's
+        # (continue: true), so it never replaces the tenant's own config —
+        # it shows as Layer 4 only.
+        assert "receiver" not in result["final"]
+        assert result["final"]["group_wait"] == "10s"
 
     def test_empty_config(self, config_dir):
         _write(config_dir, "db-a.yaml", {

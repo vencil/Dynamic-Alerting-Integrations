@@ -7,7 +7,8 @@
  * Read from docs/schemas/tenant-config.schema.json, the hub of this contract:
  * the Python route generator's RECEIVER_TYPES (scripts/tools/_lib_constants.py)
  * is pinned to it by tests/shared/test_receiver_spec_parity.py, and the Go
- * guard's receiverTypeSpecs by TestReceiverTypeSpecs_MatchSchema. Each copy is
+ * copy (pkg/receiverspec, used by da-guard and tenant-api) by
+ * TestSpecs_MatchSchema. Each copy is
  * compared as data against the schema's JSON, so none is regex-parsed out of
  * another language's source. The read shape is RECEIVER_SPECS below. Any
  * other presence keyword on a receiver definition throws (fail loud, never

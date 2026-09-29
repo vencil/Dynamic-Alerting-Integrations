@@ -23,7 +23,9 @@
     "An allowed_receiver_types list with entries but no string among them allows no receiver type",
     "(Python restricts on the non-empty set); a non-string forbidden entry matches nothing.",
     "tenant_api.put: '403' = PUT of the tenant's own file (files[<tenant>.yaml]) verbatim is refused",
-    "with POLICY_VIOLATION, 'ok' = allowed. tenant-api reads only _domain_policy.yaml (not .yml),",
+    "with POLICY_VIOLATION; '400' = refused with INVALID_BODY because a receiver the body itself",
+    "writes breaks the receiver contract (pkg/receiverspec, #2295; checked after the policy, so a",
+    "forbidden type stays '403'); 'ok' = allowed. tenant-api reads only _domain_policy.yaml (not .yml),",
     "and a PUT body carries no platform-file overlay. tenant_api.batch: null, or one patch applied",
     "to the tenant's block on disk: verdict 'policy_violation' when the op is refused for domain",
     "policy, 'ok' otherwise; a patch that touches neither _routing_profile nor _routing is never",
@@ -110,7 +112,7 @@
           "rejected_routes": [],
           "unknown_profile": null,
           "tenant_api": {
-            "put": "ok",
+            "put": "400",
             "batch": null
           },
           "python_differs": null,
@@ -180,7 +182,7 @@
           "rejected_routes": [],
           "unknown_profile": null,
           "tenant_api": {
-            "put": "ok",
+            "put": "400",
             "batch": null
           },
           "python_differs": null,

@@ -22,6 +22,9 @@ sys.path.insert(0, os.path.join(_THIS_DIR, '..'))  # Repo subdir layout
 from _lib_python import (  # noqa: E402
     validate_and_clamp,
     receiver_exactly_one_problem,
+    receiver_optional_problem,
+    receiver_bool_fields,
+    coerce_yaml_bool,
     receiver_required_problem,
     RECEIVER_TYPES,
 )
@@ -192,6 +195,13 @@ def build_receiver_config(receiver_obj: dict, tenant: str) -> tuple[dict | None,
     if problem:
         warnings.append(f"  WARN: {tenant}: receiver type '{rtype}' {problem}, skipping")
         return None, warnings
+    # #2295: optional values Alertmanager cannot load (non-boolean
+    # send_resolved / require_tls, a malformed http_config) — without this the
+    # receiver is written out and only amtool, when it is on PATH, stops it.
+    problem = receiver_optional_problem(rtype, receiver_obj)
+    if problem:
+        warnings.append(f"  WARN: {tenant}: receiver type '{rtype}' {problem}, skipping")
+        return None, warnings
 
     # Build AM config — include required + present optional fields
     am_entry = {}
@@ -206,6 +216,20 @@ def build_receiver_config(receiver_obj: dict, tenant: str) -> tuple[dict | None,
     # emit AM config: a raw YAML sequence trips Alertmanager's parser with
     # `cannot unmarshal !!seq into string` at config load (amtool check-config),
     # a failure the dict-only Python validation never surfaces.
+    # #2295: a YAML 1.1 boolean word that reached us as a string (quoted, or
+    # from JSON) is written as the boolean it means: Alertmanager's yaml.v2
+    # refuses a quoted 'yes' for a bool field. receiver_optional_problem has
+    # already refused every other non-boolean.
+    for field in receiver_bool_fields(rtype):
+        if field in am_entry:
+            am_entry[field] = coerce_yaml_bool(am_entry[field])
+    http_config = am_entry.get("http_config")
+    if isinstance(http_config, dict) and "proxy_from_environment" in http_config:
+        am_entry["http_config"] = {
+            **http_config,
+            "proxy_from_environment": coerce_yaml_bool(http_config["proxy_from_environment"]),
+        }
+
     if rtype == "email" and isinstance(am_entry.get("to"), list):
         am_entry["to"] = ", ".join(str(addr) for addr in am_entry["to"])
 

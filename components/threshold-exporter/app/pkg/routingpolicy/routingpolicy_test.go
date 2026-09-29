@@ -347,3 +347,61 @@ func TestLoadRoot_ProblemsAndSkip(t *testing.T) {
 		t.Errorf("with skip: problems = %+v", probs)
 	}
 }
+
+// TestWithPyYAMLReceivers_NonStringKeysAndFailClosed (#2295 review): the
+// PyYAML side is read by its string key `receiver` even when another key is
+// not a string (map[any]any), and a receiver whose PyYAML reading is not
+// found is Unmatched — never the yaml.v3 value it had.
+func TestWithPyYAMLReceivers_NonStringKeysAndFailClosed(t *testing.T) {
+	v3 := map[string]any{"true": "x", "receiver": "v3", "overrides": []any{map[string]any{"1": "y", "receiver": "v3"}}}
+	cases := []struct {
+		name        string
+		py          any
+		main, over0 any
+	}{
+		{"non-string keys on the PyYAML side", map[any]any{true: "x", "receiver": "py",
+			"overrides": []any{map[any]any{1: "y", "receiver": "py"}}}, "py", "py"},
+		{"no PyYAML reading", nil, Unmatched, Unmatched},
+		{"PyYAML routing not a mapping", "no", Unmatched, Unmatched},
+		{"list of another length", map[string]any{"receiver": "py", "overrides": []any{}}, "py", Unmatched},
+		{"list not a list", map[string]any{"receiver": "py", "overrides": "no"}, "py", Unmatched},
+		{"entry not a mapping", map[string]any{"receiver": "py", "overrides": []any{"no"}}, "py", Unmatched},
+		{"receiver key missing", map[string]any{"overrides": []any{map[string]any{}}}, Unmatched, Unmatched},
+	}
+	for _, tc := range cases {
+		got, _ := WithPyYAMLReceivers(v3, tc.py).(map[string]any)
+		over0 := got["overrides"].([]any)[0].(map[string]any)["receiver"]
+		if !reflect.DeepEqual(got["receiver"], tc.main) || !reflect.DeepEqual(over0, tc.over0) {
+			t.Errorf("%s: receiver %#v, overrides[0].receiver %#v; want %#v, %#v", tc.name, got["receiver"], over0, tc.main, tc.over0)
+		}
+	}
+	if v3["receiver"] != "v3" || v3["overrides"].([]any)[0].(map[string]any)["receiver"] != "v3" {
+		t.Error("WithPyYAMLReceivers modified its routing argument")
+	}
+}
+
+// TestParseDoc_GeneratorRepeatedKeyRefusesTheFile (#2295): a key the route
+// generator counts as written twice and yaml.v3 does not (an alias key beside
+// its anchor, two `<<`) fails the whole document, as a plain repeat does — no
+// block of it is read, whatever mapping the repeat is in.
+func TestParseDoc_GeneratorRepeatedKeyRefusesTheFile(t *testing.T) {
+	for name, src := range map[string]string{
+		"policy alias key":   "domain_policies:\n  d1:\n    &c constraints :\n      forbidden_receiver_types: [webhook]\n    *c : {}\n",
+		"profiles alias key": "routing_profiles:\n  &p p1 :\n    receiver: {type: webhook}\n  *p : {}\n",
+		"repeat elsewhere":   "unrelated:\n  &k a : 1\n  *k : 2\nrouting_profiles:\n  p1: {receiver: {type: webhook}}\n",
+		"two merge keys":     "x: &x {a: 1}\ny: &y {b: 1}\nz:\n  <<: *x\n  <<: *y\n",
+	} {
+		policy := strings.HasPrefix(src, "domain_policies:") // read as a _domain_policy.yaml
+		if _, err := parseDoc([]byte(src), policy); err == nil || !strings.Contains(err.Error(), "already defined") {
+			t.Errorf("%s: err = %v, want the repeated key named", name, err)
+		}
+	}
+	tenant := "tenants:\n  &a t1 :\n    _routing: {receiver: {type: webhook}}\n  *a :\n    _routing: {receiver: {type: email}}\n"
+	if got := PyYAMLRoutingByTenant([]byte(tenant)); got != nil {
+		t.Errorf("PyYAMLRoutingByTenant = %v, want nil (no PyYAML reading: Unmatched downstream)", got)
+	}
+	// A merge key overridden by an explicit key is no repeat.
+	if _, err := parseDoc([]byte("x: &x {a: 1}\nz:\n  <<: *x\n  a: 2\n"), false); err != nil {
+		t.Errorf("merge override: %v", err)
+	}
+}

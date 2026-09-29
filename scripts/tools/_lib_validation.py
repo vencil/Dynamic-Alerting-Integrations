@@ -17,6 +17,8 @@ from _lib_constants import (
     _DURATION_MULTIPLIERS,
     _DURATION_RE,
     GUARDRAILS,
+    HTTP_CONFIG_AUTH_FIELDS,
+    HTTP_CONFIG_AUTH_MAPPINGS,
     PLATFORM_DEFAULTS,
     RECEIVER_TYPES,
 )
@@ -135,13 +137,13 @@ def receiver_field_state(receiver: dict[str, Any], field: str) -> str:
     """State of an exactly-one group field, by the schema's type rule (#2137).
 
     Cases:
-    components/threshold-exporter/app/internal/guard/testdata/receiver_presence_cases.json
+    components/threshold-exporter/app/pkg/receiverspec/testdata/receiver_presence_cases.json
     ``FIELD_NOT_STRING`` is an error,
     stricter than Alertmanager on purpose: it renders ``0`` as ``"0"`` but
     fails to load ``[]`` (``cannot unmarshal !!seq``), so no "counts as given"
     rule for non-strings is right for all of them.
 
-    Same rule as the Go guard (internal/guard/routing.go exactlyOneFinding).
+    Same rule as the Go copy (pkg/receiverspec exactlyOneProblem).
     """
     value = receiver.get(field)
     if value is None or value == "":
@@ -232,7 +234,8 @@ def _receiver_field_schemas() -> dict[str, dict[str, dict[str, Any]]]:
         defs = json.load(f)["definitions"]
 
     def resolve(prop: dict[str, Any]) -> dict[str, Any]:
-        out = {"type": prop.get("type"), "pattern": prop.get("pattern")}
+        out = {"type": prop.get("type"), "pattern": prop.get("pattern"),
+               "ref": prop.get("$ref")}
         for sub in prop.get("allOf", []):
             ref = sub["$ref"]
             if not ref.startswith("#/definitions/"):
@@ -247,8 +250,177 @@ def _receiver_field_schemas() -> dict[str, dict[str, dict[str, Any]]]:
         d = defs[branch["$ref"][len("#/definitions/"):]]
         table[d["properties"]["type"]["const"]] = {
             f: resolve(p) for f, p in d["properties"].items() if f != "type"}
+    global _YAML_BOOL_LITERALS
+    _YAML_BOOL_LITERALS = {
+        lit: lit.lower() in ("true", "yes", "on")
+        for lit in defs["yamlBool"]["anyOf"][1]["enum"]}
     _RECEIVER_FIELD_SCHEMAS = table
     return table
+
+
+_YAML_BOOL_REF = "#/definitions/yamlBool"
+_HTTP_CONFIG_REF = "#/definitions/httpConfigOrNull"
+_YAML_BOOL_LITERALS: dict[str, bool] = {}
+
+
+def yaml_bool_literals() -> dict[str, bool]:
+    """``{literal: value}`` of the YAML 1.1 boolean words (#2295).
+
+    Read from tenant-config.schema.json ``definitions.yamlBool`` (the one
+    authored list; the Go copy is pkg/receiverspec YAML11BoolLiterals). PyYAML
+    already reads these plain words as booleans; the strings reach here only
+    when quoted, or from JSON, and Go's yaml.v3 reads yes / no / on / off as
+    strings, so both sides take them and the generator writes a boolean.
+    ``y`` / ``n`` are not in it: a documented deliberate refusal.
+    """
+    _receiver_field_schemas()
+    return _YAML_BOOL_LITERALS
+
+
+def _is_yaml_bool(value: Any) -> bool:
+    if value is None or isinstance(value, bool):
+        return True
+    return isinstance(value, str) and value in yaml_bool_literals()
+
+
+def _yaml_bool_true(value: Any) -> bool:
+    if isinstance(value, bool):
+        return value
+    return isinstance(value, str) and yaml_bool_literals().get(value, False)
+
+
+def receiver_bool_fields(rtype: str) -> list[str]:
+    """The optional fields of ``rtype`` the schema types as a YAML boolean."""
+    return [f for f, prop in _receiver_field_schemas().get(rtype, {}).items()
+            if prop.get("ref") == _YAML_BOOL_REF]
+
+
+def coerce_yaml_bool(value: Any) -> Any:
+    """A YAML 1.1 boolean word as the boolean it means; anything else as is."""
+    if isinstance(value, str) and value in yaml_bool_literals():
+        return yaml_bool_literals()[value]
+    return value
+
+
+def _type_name(value: Any) -> str:
+    """YAML-ish name of a decoded value's type, for messages."""
+    if value is None:
+        return "null"
+    if isinstance(value, str):
+        return f"string {value!r}"
+    if isinstance(value, bool):
+        return "boolean"
+    if isinstance(value, (int, float)):
+        return "number"
+    if isinstance(value, list):
+        return "list"
+    if isinstance(value, dict):
+        return "mapping"
+    return type(value).__name__
+
+
+def _http_config_problem(value: Any) -> Optional[str]:
+    """First problem of an ``http_config`` value, or ``None`` (#2295).
+
+    Alertmanager's own rule (prometheus/common HTTPClientConfig / ProxyConfig
+    as amtool 0.34.1 loads them), stricter only where the shared case table
+    says ``strict``; the Go copy is pkg/receiverspec checkHTTPConfig:
+
+    - null is unset; otherwise a mapping;
+    - ``HTTP_CONFIG_AUTH_MAPPINGS`` keys: null is unset, else a mapping (set
+      even when empty); the other ``HTTP_CONFIG_AUTH_FIELDS``: null and ``""``
+      are unset, else a string (a number or date is refused: PyYAML has
+      already rewritten its text, '0123' → 83); at most one set;
+    - ``proxy_url`` / ``no_proxy``: null and ``""`` are unset; else a string
+      (strict for the same reason). Whether a proxy_url
+      parses as a URL is NOT checked here: that is Go's net/url.Parse, and the
+      generator's ``--validate`` hands the rendered config to amtool, which
+      runs it (the Go copy checks it itself, ProxyURLProblem);
+    - ``proxy_from_environment`` is a YAML boolean; true together with a
+      non-empty proxy_url or a no_proxy is refused; no_proxy needs a
+      proxy_url key; proxy_connect_header needs a non-empty proxy_url or
+      proxy_from_environment.
+    """
+    if value is None:
+        return None
+    if not isinstance(value, dict):
+        return f"field 'http_config' must be a mapping, got {_type_name(value)}"
+    set_keys = []
+    for key in HTTP_CONFIG_AUTH_FIELDS:
+        item = value.get(key)
+        if item is None:
+            continue
+        if key in HTTP_CONFIG_AUTH_MAPPINGS:
+            if not isinstance(item, dict):
+                return (f"field 'http_config.{key}' must be a mapping, "
+                        f"got {_type_name(item)}")
+            set_keys.append(key)
+        elif not isinstance(item, str):
+            return (f"field 'http_config.{key}' must be a string, "
+                    f"got {_type_name(item)}")
+        elif item != "":
+            set_keys.append(key)
+    if len(set_keys) > 1:
+        return (f"http_config sets {', '.join(set_keys)}; Alertmanager accepts at "
+                f"most one of {', '.join(HTTP_CONFIG_AUTH_FIELDS)}")
+    proxy = value.get("proxy_url")
+    proxy_key = proxy is not None
+    if proxy is not None and not isinstance(proxy, str):
+        return f"field 'http_config.proxy_url' must be a string, got {_type_name(proxy)}"
+    proxy_text = proxy is not None and proxy != ""
+    from_env = False
+    if "proxy_from_environment" in value:
+        pfe = value["proxy_from_environment"]
+        if not _is_yaml_bool(pfe):
+            return (f"field 'http_config.proxy_from_environment' must be true or "
+                    f"false, got {_type_name(pfe)}")
+        from_env = _yaml_bool_true(pfe)
+    no_proxy_value = value.get("no_proxy")
+    if no_proxy_value is not None and not isinstance(no_proxy_value, str):
+        return f"field 'http_config.no_proxy' must be a string, got {_type_name(no_proxy_value)}"
+    no_proxy = no_proxy_value is not None and no_proxy_value != ""
+    header = value.get("proxy_connect_header")
+    if header is not None and not isinstance(header, dict):
+        return (f"field 'http_config.proxy_connect_header' must be a mapping, "
+                f"got {_type_name(header)}")
+    if header and not from_env and not proxy_text:
+        return "http_config: proxy_connect_header needs a non-empty proxy_url or proxy_from_environment: true"
+    if from_env and proxy_text:
+        return "http_config: proxy_url must not be set together with proxy_from_environment: true"
+    if from_env and no_proxy:
+        return "http_config: no_proxy must not be set together with proxy_from_environment: true"
+    if no_proxy and not proxy_key:
+        return "http_config: no_proxy needs a proxy_url"
+    return None
+
+
+def receiver_optional_problem(rtype: str, receiver: dict[str, Any]) -> Optional[str]:
+    """Check the optional values Alertmanager cannot load (#2295).
+
+    Read from tenant-config.schema.json like the required-field formats:
+
+    - every property of the type referencing ``yamlBool`` (``send_resolved``,
+      email ``require_tls``) must be a YAML boolean: true / false, null
+      (unset) or a ``yaml_bool_literals()`` word — ``send_resolved: maybe``
+      makes Alertmanager refuse the whole config;
+    - the property referencing ``httpConfigOrNull`` (webhook ``http_config``)
+      follows ``_http_config_problem``.
+
+    Returns the first problem (callers prefix tenant / receiver context), or
+    ``None``. Same rule as the Go copy (pkg/receiverspec Check); cases in
+    components/threshold-exporter/app/pkg/receiverspec/testdata/receiver_presence_cases.json.
+    """
+    fields = _receiver_field_schemas().get(rtype, {})
+    for field in receiver_bool_fields(rtype):
+        if field in receiver and not _is_yaml_bool(receiver[field]):
+            return (f"field '{field}' must be true or false, "
+                    f"got {_type_name(receiver[field])}")
+    for field, prop in fields.items():
+        if prop.get("ref") == _HTTP_CONFIG_REF and field in receiver:
+            problem = _http_config_problem(receiver[field])
+            if problem:
+                return problem
+    return None
 
 
 def receiver_required_problem(rtype: str, receiver: dict[str, Any], field: str) -> Optional[str]:
@@ -267,9 +439,9 @@ def receiver_required_problem(rtype: str, receiver: dict[str, Any], field: str) 
       string (the schema alone rejects that form).
 
     Returns the problem (callers prefix tenant / receiver context), or
-    ``None``. Same rule as the Go guard (internal/guard/routing.go
-    requiredFieldFinding); cases in
-    components/threshold-exporter/app/internal/guard/testdata/receiver_presence_cases.json.
+    ``None``. Same rule as the Go copy (pkg/receiverspec
+    requiredProblem); cases in
+    components/threshold-exporter/app/pkg/receiverspec/testdata/receiver_presence_cases.json.
     """
     state = receiver_field_state(receiver, field)
     if state == FIELD_UNSET:

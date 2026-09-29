@@ -306,6 +306,10 @@ def run_policy_gate_smoke(base_url: str) -> bool:
         f"        type: {POLICY_ALLOWED_RECEIVER}\n"
         "        to: oncall@example.com\n"
         "        smarthost: smtp.example.invalid:587\n"
+        # #2295: PUT refuses a receiver Alertmanager cannot load (email
+        # without `from`) with 400 INVALID_BODY, so the control must be a
+        # complete one or it answers 400 instead of the policy verdict.
+        "        from: alerts@example.com\n"
     ))
     if status != 200:
         print(f"[contract] FAIL policy smoke: control PUT (allowed receiver) expected 200, "

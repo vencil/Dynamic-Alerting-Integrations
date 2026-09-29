@@ -172,6 +172,13 @@ func TestTenantAPI_RoutingPolicyParityMatrix(t *testing.T) {
 					if !os.IsNotExist(statErr) {
 						t.Errorf("refused PUT wrote %s (err=%v)", own, statErr)
 					}
+				case "400": // #2295: a receiver the body writes breaks the contract
+					if code != http.StatusBadRequest || !strings.Contains(resp, CodeInvalidBody) {
+						t.Fatalf("status = %d, table says 400 INVALID_BODY; body: %s", code, resp)
+					}
+					if !os.IsNotExist(statErr) {
+						t.Errorf("refused PUT wrote %s (err=%v)", own, statErr)
+					}
 				case "ok":
 					if code != http.StatusOK {
 						t.Fatalf("status = %d, table says ok; body: %s", code, resp)

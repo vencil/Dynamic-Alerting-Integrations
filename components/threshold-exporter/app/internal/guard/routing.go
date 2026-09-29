@@ -32,10 +32,13 @@ package guard
 //
 //   2. Missing or unloadable required receiver fields (error)
 //      A required value of the wrong type or format (#2180) is an
-//      error too: Alertmanager would reject the whole config.
-//      Contract per type: receiverTypeSpecs, pinned to the hub
-//      docs/schemas/tenant-config.schema.json (see its comment). Same
-//      checks for receivers embedded in overrides.
+//      error too: Alertmanager would reject the whole config. So are
+//      optional values Alertmanager cannot load (#2295): a non-boolean
+//      send_resolved / require_tls, and a malformed http_config (more
+//      than one auth method, a bad proxy_url). Contract per type:
+//      pkg/receiverspec (shared with tenant-api and pkg/config), pinned
+//      to the hub docs/schemas/tenant-config.schema.json. Same checks
+//      for receivers embedded in overrides and routes.
 //
 //   3. Override matcher contract (error)
 //      The route generator
@@ -95,72 +98,12 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
-	"regexp"
-	"slices"
 	"sort"
 	"strings"
 
+	"github.com/vencil/threshold-exporter/pkg/receiverspec"
 	"github.com/vencil/threshold-exporter/pkg/routingpolicy"
 )
-
-// receiverTypeSpec is the field-presence contract of one receiver
-// type, in the same two concepts every copy of it uses:
-//
-//   - Required:     every field must be set.
-//   - ExactlyOneOf: for each group, exactly one field must be set
-//     (both set and none set are errors).
-//
-// The same contract is declared in docs/schemas/tenant-config.schema.json
-// (`required` + a `oneOf` whose branches each require one field) and in
-// scripts/tools/_lib_constants.py::RECEIVER_TYPES (`required` +
-// `exactly_one_of`). The schema is the hub: TestReceiverTypeSpecs_MatchSchema
-// parses it and fails on any difference with this map, and
-// tests/shared/test_receiver_spec_parity.py pins the Python copy to the
-// same schema — so no copy is read out of another language's source text.
-//
-// Required fields also carry the schema's value shape (#2180), because
-// Alertmanager rejects the whole config over one bad value:
-//
-//   - Patterns:    required string fields whose schema property has a
-//     `pattern` (the URL / smarthost formats), copied verbatim.
-//   - StringLists: required fields the schema types as an array of
-//     non-empty strings (email `to`).
-//
-// TestReceiverTypeSpecs_MatchSchema pins both to the schema as well. Other
-// optional fields and value shapes stay with the schema and
-// config_resolve.go.
-type receiverTypeSpec struct {
-	Required     []string
-	ExactlyOneOf [][]string
-	Patterns     map[string]string
-	StringLists  []string
-}
-
-// Copies of the two `pattern`s in tenant-config.schema.json
-// (definitions.receiverHttpUrl / receiverSmtpHostPort), which hold the
-// only authored copy and the reasoning; the Go binary cannot read the
-// schema at run time. TestReceiverTypeSpecs_MatchSchema fails on any
-// difference.
-const (
-	receiverHTTPURLPattern      = `^[Hh][Tt][Tt][Pp][Ss]?://(([A-Za-z0-9._~!$&'()*+,;=:-]|%[0-9A-Fa-f]{2})+@)?(([A-Za-z0-9._~!$&'()*+,;=<>"-]|[^\x00-\x7f]|%(25|[89A-Fa-f][0-9A-Fa-f]))+|\[[0-9A-Fa-f:.]+\])(:[0-9]*)?(/([^\x00-\x20\x7f%?#]|%[0-9A-Fa-f]{2})*)?(\?[^\x00-\x20\x7f#]*)?(#([^\x00-\x20\x7f%]|%[0-9A-Fa-f]{2})*)?$`
-	receiverSMTPHostPortPattern = `^([^\x00-\x20\x7f:/?#@\[\]\\]+|\[[0-9A-Fa-f:.]+\]):[0-9]+$`
-)
-
-var receiverTypeSpecs = map[string]receiverTypeSpec{
-	"webhook": {Required: []string{"url"}, Patterns: map[string]string{"url": receiverHTTPURLPattern}},
-	"email": {
-		Required:    []string{"to", "smarthost", "from"},
-		Patterns:    map[string]string{"smarthost": receiverSMTPHostPortPattern},
-		StringLists: []string{"to"},
-	},
-	"slack":      {Required: []string{"api_url"}, Patterns: map[string]string{"api_url": receiverHTTPURLPattern}},
-	"teams":      {Required: []string{"webhook_url"}, Patterns: map[string]string{"webhook_url": receiverHTTPURLPattern}},
-	"rocketchat": {Required: []string{"url"}, Patterns: map[string]string{"url": receiverHTTPURLPattern}},
-	// Alertmanager accepts both keys at once but then uses the Events
-	// API v1 (service_key) and silently ignores routing_key
-	// (notify/pagerduty/pagerduty.go), so both-set is rejected too.
-	"pagerduty": {ExactlyOneOf: [][]string{{"service_key", "routing_key"}}},
-}
 
 // matcherKeys is the EXACT set of override-block keys the routing
 // pipeline treats as a matcher: alertname and metric_group only.
@@ -381,7 +324,7 @@ func checkOneTenantRouting(tenantID string, routing map[string]any) []Finding {
 	// Checks 1 + 2 against the main receiver. nil main receiver is
 	// handled here (not earlier) so the finding still references
 	// the right `receiver` field path.
-	out = append(out, checkReceiverShape(tenantID, "receiver", mainReceiver)...)
+	out = append(out, checkReceiverShape(tenantID, "receiver", routing["receiver"])...)
 
 	// ADR-007 label-match `routes` (#2280): checked whether or not the
 	// tenant has overrides — they used to sit behind an "no overrides,
@@ -468,8 +411,8 @@ func checkOneTenantRouting(tenantID string, routing map[string]any) []Finding {
 		}
 
 		// Checks 1 + 2 against the override's receiver.
+		out = append(out, checkReceiverShape(tenantID, fieldPath+".receiver", ov["receiver"])...)
 		ovReceiver, _ := ov["receiver"].(map[string]any)
-		out = append(out, checkReceiverShape(tenantID, fieldPath+".receiver", ovReceiver)...)
 
 		// Check 5: redundant override receiver vs main.
 		if mainSig != "" && receiverSignature(ovReceiver) == mainSig {
@@ -525,206 +468,47 @@ func checkRoutes(tenantID string, routing map[string]any) []Finding {
 			continue
 		}
 		m, _ := entry.(map[string]any)
-		recv, _ := m["receiver"].(map[string]any)
-		out = append(out, checkReceiverShape(tenantID, fieldPath+".receiver", recv)...)
+		out = append(out, checkReceiverShape(tenantID, fieldPath+".receiver", m["receiver"])...)
 	}
 	return out
 }
 
-// checkReceiverShape applies checks 1 + 2 to one receiver dict. A
-// nil/missing receiver is its own error; a bad type is one error;
-// missing required fields are one error each.
-func checkReceiverShape(tenantID, fieldPath string, receiver map[string]any) []Finding {
-	if receiver == nil {
-		return []Finding{{
-			Severity: SeverityError,
-			Kind:     FindingMissingReceiverField,
-			TenantID: tenantID,
-			Field:    fieldPath,
-			Message: fmt.Sprintf(
-				"tenant %q: %s is missing or not an object; routing requires a receiver dict with `type`",
-				tenantID, fieldPath),
-		}}
-	}
-
-	rtype, _ := receiver["type"].(string)
-	if rtype == "" {
-		return []Finding{{
-			Severity: SeverityError,
-			Kind:     FindingMissingReceiverField,
-			TenantID: tenantID,
-			Field:    fieldPath + ".type",
-			Message: fmt.Sprintf(
-				"tenant %q: %s.type is missing or empty; receivers must declare a type",
-				tenantID, fieldPath),
-		}}
-	}
-
-	spec, known := receiverTypeSpecs[rtype]
-	if !known {
-		return []Finding{{
-			Severity: SeverityError,
-			Kind:     FindingUnknownReceiverType,
-			TenantID: tenantID,
-			Field:    fieldPath + ".type",
-			Message: fmt.Sprintf(
-				"tenant %q: %s.type=%q is not a supported receiver type (supported: %s)",
-				tenantID, fieldPath, rtype, supportedTypeList()),
-		}}
-	}
-
-	var out []Finding
-	for _, field := range spec.Required {
-		if f, bad := requiredFieldFinding(tenantID, fieldPath, rtype, spec, receiver, field); bad {
-			out = append(out, f)
+// checkReceiverShape applies checks 1 + 2 to one receiver dict: the
+// receiver contract in pkg/receiverspec (#2295; shared with tenant-api and
+// pkg/config), rendered as findings. A nil/missing receiver, a missing or
+// unknown type are one finding each; every other problem (missing,
+// malformed or conflicting fields, optional boolean values, http_config)
+// is one finding per field. The receiver is handed over as decoded: a
+// mapping with a key PyYAML reads as a non-string (`1:`) is map[any]any,
+// which receiverspec.Check takes as the mapping it is (#2295).
+func checkReceiverShape(tenantID, fieldPath string, receiver any) []Finding {
+	problems := receiverspec.Check(receiver)
+	out := make([]Finding, 0, len(problems))
+	for _, p := range problems {
+		field := fieldPath
+		if p.Field != "" {
+			field = fieldPath + "." + p.Field
 		}
-	}
-	for _, group := range spec.ExactlyOneOf {
-		if f, bad := exactlyOneFinding(tenantID, fieldPath, rtype, receiver, group); bad {
-			out = append(out, f)
-		}
+		out = append(out, Finding{
+			Severity: SeverityError,
+			Kind:     receiverFindingKind[p.Kind],
+			TenantID: tenantID,
+			Field:    field,
+			Message:  fmt.Sprintf("tenant %q: %s: %s", tenantID, fieldPath, p.Message),
+		})
 	}
 	return out
 }
 
-// receiverFieldRegexps holds the compiled spec.Patterns, keyed by the
-// pattern text (MustCompile: a bad copy fails at init, and the parity
-// test pins the copies to the schema).
-var receiverFieldRegexps = func() map[string]*regexp.Regexp {
-	out := map[string]*regexp.Regexp{}
-	for _, spec := range receiverTypeSpecs {
-		for _, p := range spec.Patterns {
-			if _, ok := out[p]; !ok {
-				out[p] = regexp.MustCompile(p)
-			}
-		}
-	}
-	return out
-}()
-
-// requiredFieldFinding checks one Required field by the schema's type
-// (#2180), the same rule as _lib_validation.receiver_required_problem on
-// the Python side; cases in testdata/receiver_presence_cases.json.
-//
-//   - nil (absent, or a YAML key with no value) or "" is missing, as in
-//     Alertmanager, whose config decodes both to the zero value.
-//   - A string must match the field's Patterns entry, if any.
-//   - A StringLists field given as a list needs at least one item, each a
-//     non-empty string: the pipeline joins it into Alertmanager's `to`
-//     string, where [""] reads as no address. A plain string is still
-//     taken — Alertmanager's own `to` is a string.
-//   - Any other type is an error. For some (email from: 0) that is
-//     stricter than Alertmanager, which renders them as text; for most
-//     (a list, or url: 0) Alertmanager rejects the config.
-func requiredFieldFinding(tenantID, fieldPath, rtype string, spec receiverTypeSpec, receiver map[string]any, field string) (Finding, bool) {
-	missing := func(format string, args ...any) (Finding, bool) {
-		return Finding{
-			Severity: SeverityError,
-			Kind:     FindingMissingReceiverField,
-			TenantID: tenantID,
-			Field:    fieldPath + "." + field,
-			Message:  fmt.Sprintf("tenant %q: receiver type %q ", tenantID, rtype) + fmt.Sprintf(format, args...),
-		}, true
-	}
-	invalid := func(format string, args ...any) (Finding, bool) {
-		return Finding{
-			Severity: SeverityError,
-			Kind:     FindingInvalidReceiverField,
-			TenantID: tenantID,
-			Field:    fieldPath + "." + field,
-			Message: fmt.Sprintf("tenant %q: receiver type %q field %q ", tenantID, rtype, field) +
-				fmt.Sprintf(format, args...),
-		}, true
-	}
-	switch v := receiver[field].(type) {
-	case nil:
-		return missing("requires field %q", field)
-	case string:
-		if v == "" {
-			return missing("field %q is present but empty string", field)
-		}
-		if p, ok := spec.Patterns[field]; ok && !receiverFieldRegexps[p].MatchString(v) {
-			return invalid("value %q is not in the format tenant-config.schema.json requires", v)
-		}
-		return Finding{}, false
-	case []any:
-		if !slices.Contains(spec.StringLists, field) {
-			return invalid("must be a string, got %T", v)
-		}
-		if len(v) == 0 {
-			return missing("field %q is present but an empty list", field)
-		}
-		for i, item := range v {
-			if s, ok := item.(string); !ok || s == "" {
-				return invalid("item %d must be a non-empty string, got %#v", i, item)
-			}
-		}
-		return Finding{}, false
-	default:
-		return invalid("must be a string, got %T", v)
-	}
-}
-
-// exactlyOneFinding checks one ExactlyOneOf group, by the schema's type
-// rule (tenant-config.schema.json: `type: ["string", "null"]`), the same
-// rule as _lib_validation.receiver_field_state on the Python side; cases
-// in testdata/receiver_presence_cases.json. A non-string value is an
-// error — stricter than Alertmanager on purpose: it renders 0 as "0" but
-// fails to load a list, so no "counts as given" rule fits all of them.
-// "Exactly one" is judged only once every field's type is valid.
-func exactlyOneFinding(tenantID, fieldPath, rtype string, receiver map[string]any, group []string) (Finding, bool) {
-	var set []string
-	for _, field := range group {
-		switch v := receiver[field].(type) {
-		case nil:
-		case string:
-			if v != "" {
-				set = append(set, field)
-			}
-		default:
-			return Finding{
-				Severity: SeverityError,
-				Kind:     FindingInvalidReceiverField,
-				TenantID: tenantID,
-				Field:    fieldPath + "." + field,
-				Message: fmt.Sprintf(
-					"tenant %q: receiver type %q field %q must be a string, got %T",
-					tenantID, rtype, field, v),
-			}, true
-		}
-	}
-	if len(set) == 1 {
-		return Finding{}, false
-	}
-	quoted := make([]string, len(group))
-	for i, field := range group {
-		quoted[i] = fmt.Sprintf("%q", field)
-	}
-	names := strings.Join(quoted, ", ")
-	if len(set) == 0 {
-		return Finding{
-			Severity: SeverityError,
-			Kind:     FindingMissingReceiverField,
-			TenantID: tenantID,
-			Field:    fieldPath + "." + group[0],
-			Message: fmt.Sprintf(
-				"tenant %q: receiver type %q requires exactly one of %s; none is set",
-				tenantID, rtype, names),
-		}, true
-	}
-	msg := fmt.Sprintf(
-		"tenant %q: receiver type %q requires exactly one of %s; %d are set",
-		tenantID, rtype, names, len(set))
-	if rtype == "pagerduty" {
-		msg += " (Alertmanager would use the Events API v1 via service_key and silently ignore routing_key)"
-	}
-	return Finding{
-		Severity: SeverityError,
-		Kind:     FindingConflictingReceiverField,
-		TenantID: tenantID,
-		Field:    fieldPath + "." + set[len(set)-1],
-		Message:  msg,
-	}, true
+// receiverFindingKind maps receiverspec problem kinds onto the da-guard
+// finding kinds, which are the JSON contract and predate the package.
+var receiverFindingKind = map[receiverspec.Kind]FindingKind{
+	receiverspec.KindNotObject:   FindingMissingReceiverField,
+	receiverspec.KindMissingType: FindingMissingReceiverField,
+	receiverspec.KindMissing:     FindingMissingReceiverField,
+	receiverspec.KindUnknownType: FindingUnknownReceiverType,
+	receiverspec.KindInvalid:     FindingInvalidReceiverField,
+	receiverspec.KindConflicting: FindingConflictingReceiverField,
 }
 
 // matcherValuePresent reports whether an override matcher value
@@ -809,22 +593,4 @@ func receiverSignature(receiver map[string]any) string {
 	}
 	sum := sha256.Sum256(b)
 	return hex.EncodeToString(sum[:])
-}
-
-// supportedTypeList returns the receiver types in alphabetical
-// order, suitable for embedding in a finding Message.
-func supportedTypeList() string {
-	keys := make([]string, 0, len(receiverTypeSpecs))
-	for k := range receiverTypeSpecs {
-		keys = append(keys, k)
-	}
-	sort.Strings(keys)
-	out := ""
-	for i, k := range keys {
-		if i > 0 {
-			out += ", "
-		}
-		out += k
-	}
-	return out
 }

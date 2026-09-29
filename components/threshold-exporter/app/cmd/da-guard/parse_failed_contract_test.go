@@ -5,8 +5,9 @@ package main
 //
 // The contract (docs/cli-reference.md §guard): da-guard exits 3 and names
 // exactly the files the exporter's own load drops — config.LoadDir's
-// parseFailed — plus the files da-guard itself cannot decode, restricted to
-// the files that bear on --scope. Both halves are derived here independently
+// parseFailed — plus the files da-guard itself cannot decode, plus the files
+// it reads that the route generator refuses for a repeated key (#2295),
+// restricted to the files that bear on --scope. Both halves are derived here independently
 // of da-guard's output (LoadDir; the untyped yaml decode its chain merge
 // uses), so a guard that starts judging "broken" on its own (another decode,
 // a missed path, a flag that skips a read) turns it red instead of drifting.
@@ -22,6 +23,8 @@ import (
 
 	"github.com/vencil/threshold-exporter/internal/testutil"
 	"github.com/vencil/threshold-exporter/pkg/config"
+	"github.com/vencil/threshold-exporter/pkg/pyyamlcompat"
+	"github.com/vencil/threshold-exporter/pkg/routingpolicy"
 	"gopkg.in/yaml.v3"
 )
 
@@ -83,6 +86,16 @@ func contractCases() map[string]map[string]string {
 		// empty) but da-guard's untyped decode rejects the repeated key (#2179).
 		"U1_tenant_dupkey_unknown_field":        base(map[string]string{"tenant-a.yaml": tenantA + "extra: {k: 1, k: 2}\n"}),
 		"U2_root_defaults_dupkey_unknown_field": base(map[string]string{"_defaults.yaml": goodDefaults + "extra: {k: 1, k: 2}\n"}),
+
+		// yaml.v3 keeps these (an alias key beside its anchor is not a repeat
+		// to it); the route generator refuses each file whole (#2295).
+		"G1_tenant_alias_dupkey":           base(map[string]string{"db/tenant-b.yaml": "tenants:\n  tenant-b:\n    &m mem : \"60\"\n    *m : \"61\"\n"}),
+		"G2_root_defaults_alias_dupkey":    base(map[string]string{"_defaults.yaml": "defaults:\n  &c cpu : 70\n  *c : 75\n  mem: 80\n"}),
+		"G3_nested_defaults_alias_dupkey":  base(map[string]string{"db/_defaults.yaml": "defaults:\n  &m mem : 90\n  *m : 91\n"}),
+		"G4_platform_alias_dupkey":         base(map[string]string{"_platform.yaml": "tenants:\n  tenant-a:\n    &m mem : \"44\"\n    *m : \"45\"\n"}),
+		"G5_platform_merge_key_twice":      base(map[string]string{"_platform.yaml": "a: &x {mem: \"44\"}\nb: &y {cpu: \"45\"}\ntenants:\n  tenant-a:\n    <<: *x\n    <<: *y\n"}),
+		"G6_domain_policy_alias_dupkey":    base(map[string]string{"_domain_policy.yaml": "domain_policies:\n  &d d1 :\n    tenants: [tenant-a]\n  *d :\n    tenants: [tenant-a]\n"}),
+		"G7_tenant_merge_override_control": base(map[string]string{"tenant-a.yaml": "base: &b\n  cpu: \"70\"\ntenants:\n  tenant-a:\n    <<: *b\n    cpu: \"80\"\n"}),
 	}
 }
 
@@ -119,6 +132,38 @@ func guardUndecodable(tree map[string]string, scopeRel string) []string {
 		}
 		var doc any
 		if err := yaml.Unmarshal([]byte(body), &doc); err != nil {
+			out = append(out, rel)
+		}
+	}
+	return out
+}
+
+// generatorRefused is the third half (#2295): the files da-guard reads for
+// the scope that the route generator refuses whole for a repeated mapping
+// key — pyyamlcompat.FindDuplicateKeyIn, which its oracle table pins to the
+// generator's StrictLoader. Read for the scope: each tenant file under it
+// (every one in these trees declares a tenant), every `_defaults.yaml`
+// bearing on it, and the root's other platform files except the
+// `_domain_policy` / `_routing_profiles` files (routingpolicy names those as
+// a Problem, never exit 3).
+func generatorRefused(tree map[string]string, scopeRel string) []string {
+	var out []string
+	for rel, body := range tree {
+		ext := strings.ToLower(path.Ext(rel))
+		if strings.HasSuffix(rel, "/") || (ext != ".yaml" && ext != ".yml") {
+			continue
+		}
+		base := path.Base(rel)
+		read := false
+		switch {
+		case !strings.HasPrefix(base, "_"):
+			read = scopeRel == "" || strings.HasPrefix(rel, scopeRel+"/")
+		case base == "_defaults.yaml":
+			read = bearsOnScope(rel, scopeRel)
+		case path.Dir(rel) == ".":
+			read = !routingpolicy.ReportsUnusable(base)
+		}
+		if read && pyyamlcompat.FindDuplicateKeyIn([]byte(body)) != nil {
 			out = append(out, rel)
 		}
 	}
@@ -165,6 +210,9 @@ func TestExitThree_NamesExactlyTheFilesTheExporterDrops(t *testing.T) {
 					expected[k] = true
 				}
 				for _, k := range guardUndecodable(tree, scopeRel) {
+					expected[k] = true
+				}
+				for _, k := range generatorRefused(tree, scopeRel) {
 					expected[k] = true
 				}
 				want := []string{}
