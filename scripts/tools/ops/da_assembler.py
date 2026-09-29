@@ -529,8 +529,8 @@ def _spec_block_shape_error(spec: dict) -> str:
     declares each of these ``type: object``.
     Left alone: null (a null tenant is read by the exporter as empty), and a
     BLOCK whose value YAML types as falsy (``defaults: 0``, ``tenants:
-    false``, ``[]``) — dropped as an empty block, which #2331 pins (tests/
-    ops/test_tenant_id_as_text.py). A TENANT value gets no such pass: it is
+    false``, ``[]``) — dropped as an empty block, which #2331 pins
+    (tests/ops/test_tenant_id_as_text.py). A TENANT value gets no such pass: it is
     written, not dropped, and the exporter refuses ``t2: 0`` too.
     A ``!!set`` is a mapping to the exporter (every value null), so it passes
     wherever a mapping is WRITTEN (a tenant, a state filter); a block that is
