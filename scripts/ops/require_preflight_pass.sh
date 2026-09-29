@@ -243,7 +243,9 @@ marker="$git_dir/$MARKER_PREFIX.$_missing_sha"
 # actually starts.
 _preflight_cmd=""
 for _py in python3 python; do
-    if "$_py" -c '' >/dev/null 2>&1; then
+    # -I -S: only "does it start" is asked, so no site, no .pth hooks and no
+    # PYTHON* env — a coverage hook inherited from a test run hung here.
+    if "$_py" -I -S -c '' >/dev/null 2>&1; then
         _preflight_cmd="$_py scripts/tools/dx/pr_preflight.py"
         break
     fi
