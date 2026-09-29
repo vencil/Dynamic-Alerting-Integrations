@@ -126,14 +126,14 @@ func (m *TenantMerge) ResolveAt(now time.Time) []ResolvedThreshold {
 // ResolveAtWithStats is ThresholdConfig.ResolveAtWithStats without the
 // resolver's log lines — see TenantMerge.
 func (m *TenantMerge) ResolveAtWithStats(now time.Time) ([]ResolvedThreshold, ResolveStats) {
-	return m.ThresholdConfig.resolveAtWithStats(now, nil, nil)
+	return m.resolveAtWithStats(now, nil, nil)
 }
 
 // ResolveAtWithKeys is ThresholdConfig.ResolveAtWithKeys without the
 // resolver's log lines — see TenantMerge.
 func (m *TenantMerge) ResolveAtWithKeys(now time.Time) ([]KeyedThreshold, ResolveStats, error) {
 	var keyed []KeyedThreshold
-	rows, stats := m.ThresholdConfig.resolveAtWithStats(now, &keyed, nil)
+	rows, stats := m.resolveAtWithStats(now, &keyed, nil)
 	if err := checkKeyed(rows, keyed); err != nil {
 		return nil, stats, err
 	}
