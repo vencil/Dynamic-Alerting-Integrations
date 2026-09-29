@@ -710,7 +710,9 @@ class TestRenderCrExporterShapes:
         assert r.returncode == (3 if refused else 0), r.stdout + r.stderr
 
     def test_the_integer_parse_stops_at_the_first_overflow(self):
-        """F2（第 4 輪）：整數累加一超過 2^64 就返回，不掃到字串尾端。
+        """整數累加一超過 2^64 就返回，不掃到字串尾端（這支是確定性的守衛；
+        它綁在 `for c in s` 逐字元迭代的實作形狀上，改成索引或 bytes 迭代時
+        `seen` 會變 0，要一起改這支）。
 
         先前累加 bignum 到結尾才比較，極長數字是二次方時間（30 萬位端到端
         約 17.7 s）。2^64 有 20 位，20 個 9 已經溢位，所以只該讀 20 個字元。
@@ -731,14 +733,17 @@ class TestRenderCrExporterShapes:
         assert Counting.seen == 20
 
     def test_a_very_long_number_is_refused_promptly(self, tmp_path, caplog):
-        """F2 端到端：30 萬位的整數 rc 2（超出 uint64，exporter 拒收），
-        且在寬鬆的時間上限內完成（修前約 17.7 s，修後約 0.5 s）。"""
+        """端到端：30 萬位的整數 rc 2（超出 uint64，exporter 拒收）。
+
+        計時上限刻意寬鬆（修前約 17.7 s，修後約 0.1–2 s，視 coverage 與 CPU
+        搶佔而定）：它只擋「又退回二次方時間」這種量級的回歸；確定性的守衛是
+        上一支 `test_the_integer_parse_stops_at_the_first_overflow`。"""
         import time
         cr_path, out_dir = _write_cr(
             tmp_path, "  defaults: {cpu: " + "9" * 300_000 + "}\n")
         start = time.monotonic()
         assert render_cr_file(cr_path, out_dir) == EXIT_CALLER_ERROR
-        assert time.monotonic() - start < 5
+        assert time.monotonic() - start < 12
         assert list(out_dir.iterdir()) == []
 
 
