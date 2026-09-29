@@ -36,7 +36,9 @@ func runGit(t *testing.T, dir string, args ...string) {
 func TestApplyPatch_MergeErrorNamesTenant(t *testing.T) {
 	t.Parallel()
 	// On-disk file unparseable → the merge fails and must NOT fall back to an
-	// overwrite; the per-tenant message carries the merge failure.
+	// overwrite. Since #2373 (review F1) the merge refuses it as a file
+	// threshold-exporter rejects: code TENANT_CONFIG_NOT_LOADABLE, config_error in
+	// the message.
 	configDir := setupConfigDir(t, map[string]string{
 		"db-a.yaml": "{{not yaml",
 	})
@@ -48,8 +50,8 @@ func TestApplyPatch_MergeErrorNamesTenant(t *testing.T) {
 	if res.Status != "error" {
 		t.Fatalf("status = %q, want error for an unparseable on-disk file", res.Status)
 	}
-	if !strings.Contains(res.Message, "merge tenant config for db-a") {
-		t.Errorf("message = %q, want the merge failure naming the tenant", res.Message)
+	if res.TenantID != "db-a" || res.Code != "TENANT_CONFIG_NOT_LOADABLE" || !strings.Contains(res.Message, "config_error: malformed_yaml") {
+		t.Errorf("result = %+v, want tenant db-a, code TENANT_CONFIG_NOT_LOADABLE, message naming config_error: malformed_yaml", res)
 	}
 	// The corrupt file must be untouched (no overwrite fallback).
 	got, err := os.ReadFile(filepath.Join(configDir, "db-a.yaml"))
@@ -178,9 +180,11 @@ func TestMergePatchYAML_StructuralErrorBranches(t *testing.T) {
 		existing string
 		wantErr  string
 	}{
-		{"root is a sequence, not a mapping", "- a\n- b\n", "root is not a mapping"},
+		// #2373 (review F1): a shape threshold-exporter cannot load is refused
+		// by checkPartialWriteBase before the structural checks below it.
+		{"root is a sequence, not a mapping", "- a\n- b\n", "config_error: invalid_config"},
 		{"no tenants mapping", "defaults:\n  mysql_threads_running: 80\n", "no `tenants:` mapping"},
-		{"tenants is a scalar", "tenants: oops\n", "no `tenants:` mapping"},
+		{"tenants is a scalar", "tenants: oops\n", "config_error: invalid_config"},
 	}
 	for _, tc := range errCases {
 		tc := tc

@@ -143,7 +143,7 @@ def _setup_audit_rules_drift(mod, mp, root, target):
 
 CALLERS: dict[str, Caller] = {
     "audit_rules_drift": Caller(
-        "audit_rules_drift", "scripts/ops/audit_rules_drift.py:477", "--out",
+        "audit_rules_drift", "scripts/ops/audit_rules_drift.py:490", "--out",
         _setup_audit_rules_drift),
     "rule_pack_stats_fragment": Caller(
         "generate_rule_pack_stats", "scripts/tools/dx/generate_rule_pack_stats.py:448",

@@ -238,26 +238,26 @@
   },
   {
     "defaults_chain": [
-      "routing-null/_defaults.yaml"
+      "reserved-nested-null/_defaults.yaml"
     ],
     "effective_config": {
-      "_routing": {
-        "group_by": [
-          "alertname"
-        ],
-        "group_wait": "30s",
-        "receiver": {
+      "_x": {
+        "added": {
           "type": "webhook",
           "url": "https://hooks.example.com/alerts"
-        }
+        },
+        "inherited_list": [
+          "alertname"
+        ],
+        "inherited_str": "30s"
       }
     },
     "fixture_dir": "mixed-mode",
-    "merged_hash": "583df9210d3ac3de",
-    "scenario": "routing-null",
-    "source_file": "routing-null/tenants.yaml",
-    "source_hash": "5ec5e65107a1daf0",
-    "tenant_id": "tenant-route"
+    "merged_hash": "7f30b0042d53e9d4",
+    "scenario": "reserved-nested-null",
+    "source_file": "reserved-nested-null/tenants.yaml",
+    "source_hash": "45e36c5a758a9a94",
+    "tenant_id": "tenant-nested"
   },
   {
     "defaults_chain": [
@@ -273,6 +273,56 @@
     "source_file": "reserved-null/child/tenants.yaml",
     "source_hash": "8a3e644e7b760369",
     "tenant_id": "tenant-reserved"
+  },
+  {
+    "defaults_chain": [
+      "_defaults.yaml",
+      "db/_defaults.yaml",
+      "db/mariadb/_defaults.yaml"
+    ],
+    "effective_config": {
+      "container_memory": 90,
+      "mysql_connections": "60",
+      "redis_connected_clients": 5000
+    },
+    "fixture_dir": "served-chain",
+    "merged_hash": "f1d0fe26e610c6c4",
+    "scenario": "served-chain",
+    "source_file": "db/mariadb/tenants.yaml",
+    "source_hash": "b43803fe0ebbcf63",
+    "tenant_id": "tenant-served-chain"
+  },
+  {
+    "defaults_chain": [
+      "_defaults.yaml"
+    ],
+    "effective_config": {
+      "container_memory": 85,
+      "mysql_connections": 80,
+      "redis_connected_clients": 5000
+    },
+    "fixture_dir": "served-chain",
+    "merged_hash": "1676af8e97c690e0",
+    "scenario": "served-root",
+    "source_file": "tenants.yaml",
+    "source_hash": "853389b0336836a8",
+    "tenant_id": "tenant-served-root"
+  },
+  {
+    "defaults_chain": [
+      "_defaults.yaml",
+      "db/_defaults.yaml"
+    ],
+    "effective_config": {
+      "container_memory": 90,
+      "mysql_connections": "disable"
+    },
+    "fixture_dir": "served-disable",
+    "merged_hash": "a69783f13ddd7a22",
+    "scenario": "served-disable",
+    "source_file": "db/tenants.yaml",
+    "source_hash": "6535ce02046e4a4b",
+    "tenant_id": "tenant-served-disable"
   },
   {
     "defaults_chain": [

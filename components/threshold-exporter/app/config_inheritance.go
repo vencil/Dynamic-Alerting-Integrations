@@ -42,11 +42,6 @@ func extractDefaultsBlock(doc any) map[string]any {
 	return config.ExtractDefaultsBlock(doc)
 }
 
-// extractTenantRaw returns `doc.tenants[tenantID]`, or an error.
-func extractTenantRaw(doc any, tenantID string) (map[string]any, error) {
-	return config.ExtractTenantRaw(doc, tenantID)
-}
-
 // canonicalJSON: sort_keys + no-space + no-HTML-escape +
 // no-trailing-newline. Parity-pinned by golden fixtures.
 func canonicalJSON(data any) ([]byte, error) {

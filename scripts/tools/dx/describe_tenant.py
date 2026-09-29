@@ -607,6 +607,12 @@ class _GoKeyLoader(StrictExporterKeyLoader):
         nodes = {kn.value: kn for kn, _ in node.value if isinstance(kn, yaml.ScalarNode)}
         for key_node in nodes.values():
             _reject_surrogates(key_node.value, key_node)
+        # A `raw_text_scalars` value skipped construct_scalar (#2297): the
+        # same surrogate refusal, or it would reach the hash as text.
+        for key_node, value_node in node.value:
+            if (isinstance(key_node, yaml.ScalarNode) and isinstance(value_node, yaml.ScalarNode)
+                    and key_node.value in self.raw_text_scalars):
+                _reject_surrogates(value_node.value, value_node)
         return {(_GoKey(k, _go_key_spelling(self, nodes[k])) if k in nodes else k): v
                 for k, v in mapping.items()}
 
@@ -670,6 +676,22 @@ def _iter_confd_yaml(entries, suffixes):
     return sorted(p for p in entries if has_yaml_extension(p.name, suffixes))
 
 
+# #2297: a `_profile:` value names a profile by its source text, as the
+# exporter reads it (the #2216 precedent: `deprecate_rule._read_yaml`).
+_PROFILE_AS_TEXT = ("_profile",)
+
+
+class _GoKeyProfileTextLoader(_GoKeyLoader):
+    """`_GoKeyLoader` with a `_profile:` VALUE read as its source text
+    (#2297), for the tenant files and the `--what-if` file — the reads
+    #2297 changed. `ExporterKeyLoader.construct_mapping` takes that value
+    before any constructor runs, so neither the timestamp nor the `!!binary`
+    rendering (#2371) reaches it: `_profile: 2026-12-31` names profile
+    "2026-12-31", as the exporter's `ScheduledValue` keeps `value.Value`."""
+
+    raw_text_scalars = frozenset(_PROFILE_AS_TEXT)
+
+
 def _load_first_document(path: Path) -> Any:
     """The FIRST YAML document of `path`, as the exporter's walker reads a
     config file (yaml.v3 `Unmarshal` decodes one document).
@@ -686,21 +708,26 @@ def _load_first_document(path: Path) -> Any:
     Strict (#2123): a key written twice in one mapping raises — by the
     exporter's identity, so `123:` and `"123":` are that duplicate.
     Same pure-Python parser as before.
+
+    A `_profile:` VALUE is its source text too (#2297): the exporter binds
+    `_profile: 010` to profile `010`, where PyYAML's 8 bound none.
     """
     if not yaml:
         raise RuntimeError("PyYAML is required for describe-tenant. Install: pip install pyyaml")
     with open(path, "r", encoding="utf-8") as f:
         # #2123 strict + #2114 exporter keys, composed in `_lib_io`; each key
-        # also carries the exporter's spelling (#2371).
-        return next(strict_safe_load_all(f, loader=_GoKeyLoader), None)
+        # also carries the exporter's spelling (#2371), and `_profile:` is
+        # source text (#2297).
+        return next(strict_safe_load_all(f, loader=_GoKeyProfileTextLoader), None)
 
 
 def _load_platform_doc(path: Path) -> Any:
     """`path` as ONE document with source-text keys (#2114) — `_load_yaml`'s
     read (single document, strict, pure parser) for the `--what-if` file's
-    `tenants:` block, so its ids match the tenant files'."""
+    `tenants:` block, so its ids match the tenant files' — and its
+    `_profile:` values (#2297)."""
     with open(path, "r", encoding="utf-8") as f:
-        return strict_safe_load(f, loader=_GoKeyLoader) or {}
+        return strict_safe_load(f, loader=_GoKeyProfileTextLoader) or {}
 
 
 def _overlay_tenant(tenant_raw: Any, blocks: "list[tuple[str, dict]]",

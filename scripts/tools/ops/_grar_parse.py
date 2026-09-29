@@ -31,11 +31,13 @@ from _lib_io import safe_label  # noqa: E402  (#1538 output-layer escaping)
 from _lib_io import strict_load_exporter_keys  # noqa: E402
 from _lib_confd import (  # noqa: E402
     declared_tenant_ids,
+    duplicate_declarations,
     is_defaults_name,
     iter_config_files,
     overlay_platform_tenants,
     readable_carriers,
     select_defaults_carrier,
+    tenant_declarations,
     unusable_config_paths,
     unusable_reason,
     warn_multi_carrier,
@@ -415,6 +417,8 @@ def _parse_config_files(config_dir: str) -> dict:
         "files_read": 0,
         "files_skipped": [],
         "tenant_file_errors": [],
+        # #2315: {tenant_id: [file, ...]} for every id two tenant files declare.
+        "duplicate_tenants": {},
     }
 
     if not os.path.isdir(config_dir):
@@ -659,6 +663,11 @@ def _parse_config_files(config_dir: str) -> dict:
                 continue
             tenant_entries.append((fname, tenant, overrides))
 
+    # #2315: validate-config's `tenant_uniqueness` scan, called — not
+    # re-derived — so the two tools agree on every duplicate. It walks the
+    # whole tree, as the exporter does, although this reader routes the root.
+    result["duplicate_tenants"] = duplicate_declarations(
+        tenant_declarations(config_dir)[0])
     _apply_tenant_entries(config_dir, tenant_entries, result)
     return result
 
@@ -767,6 +776,9 @@ class TenantTree:
     files_read: int = 0
     files_skipped: list[tuple[str, str]] = field(default_factory=list)
     tenant_file_errors: list[tuple[str, str]] = field(default_factory=list)
+    # #2315: {tenant_id: [file, ...]} — ids two tenant files declare
+    # (`_lib_confd.tenant_declarations`, validate-config's own scan).
+    duplicate_tenants: dict[str, list[str]] = field(default_factory=dict)
 
     def as_tuple(self) -> tuple[dict[str, dict], dict[str, str], list[str],
                                 dict | None, dict[str, dict]]:
@@ -879,4 +891,5 @@ def load_tenant_tree(
         parsed["enforced_routing"], parsed["metadata_configs"],
         files_read=parsed.get("files_read", 0),
         files_skipped=list(parsed.get("files_skipped", [])),
-        tenant_file_errors=list(parsed.get("tenant_file_errors", [])))
+        tenant_file_errors=list(parsed.get("tenant_file_errors", [])),
+        duplicate_tenants=dict(parsed.get("duplicate_tenants", {})))

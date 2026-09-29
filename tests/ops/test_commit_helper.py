@@ -85,7 +85,8 @@ class TestCommitFile:
         msg_text = "feat: 起手式 automation — v2.8.0"
         msg_file.write_text(msg_text, encoding="utf-8")
 
-        with patch.object(mod.subprocess, "run") as mock_run:
+        with patch.object(mod, "check_commit_msg", return_value=0), \
+                patch.object(mod.subprocess, "run") as mock_run:
             mock_run.return_value = subprocess.CompletedProcess(
                 args=[], returncode=0, stdout=b"", stderr=b""
             )
@@ -106,11 +107,14 @@ class TestCommitFile:
         msg_file = tmp_path / "msg.txt"
         msg_file.write_bytes(b"\xef\xbb\xbffeat: BOM test")
 
-        with patch.object(mod.subprocess, "run") as mock_run:
+        with patch.object(mod, "check_commit_msg", return_value=0) as gate, \
+                patch.object(mod.subprocess, "run") as mock_run:
             mock_run.return_value = subprocess.CompletedProcess(
                 args=[], returncode=0, stdout=b"", stderr=b""
             )
             mod.commit_file(str(msg_file))
+
+        gate.assert_called_once_with(b"feat: BOM test")  # validated without BOM
 
         call_kwargs = mock_run.call_args.kwargs
         assert call_kwargs["input"] == b"feat: BOM test"  # no BOM
@@ -120,11 +124,65 @@ class TestCommitFile:
         msg_file = tmp_path / "m.txt"
         msg_file.write_text("ok", encoding="utf-8")
 
-        with patch.object(mod.subprocess, "run", side_effect=FileNotFoundError):
+        with patch.object(mod, "check_commit_msg", return_value=0), \
+                patch.object(mod.subprocess, "run", side_effect=FileNotFoundError):
             rc = mod.commit_file(str(msg_file))
 
         assert rc == 127
         assert "git not found" in capsys.readouterr().err
+
+
+class TestCommitMsgGate:
+    """#1914: EXTRA_GIT_ARGS carries --no-verify, which also skips the
+    commit-msg hook, so commit-file must run the hook's validator itself.
+    These run the REAL validator (pr_preflight.py); only `git commit` is
+    intercepted."""
+
+    @staticmethod
+    def _run(mod, tmp_path, text):
+        msg_file = tmp_path / "msg.txt"
+        msg_file.write_bytes(text.encode("utf-8"))
+        real_run = subprocess.run
+        git_calls = []
+
+        def fake_run(cmd, *a, **kw):
+            if cmd[:2] == ["git", "commit"]:
+                git_calls.append(cmd)
+                return subprocess.CompletedProcess(args=cmd, returncode=0)
+            return real_run(cmd, *a, **kw)
+
+        with patch.object(mod.subprocess, "run", side_effect=fake_run):
+            rc = mod.commit_file(str(msg_file))
+        return rc, git_calls
+
+    def test_invalid_header_blocks_commit(self, tmp_path, capsys):
+        mod = _load()
+        rc, git_calls = self._run(mod, tmp_path, "not a conventional header\n")
+        assert rc == 1
+        assert git_calls == []  # git commit never ran
+        assert "nothing was committed" in capsys.readouterr().err
+
+    def test_overlong_body_line_blocks_commit(self, tmp_path):
+        mod = _load()
+        rc, git_calls = self._run(
+            mod, tmp_path, "docs: ok header\n\n" + "x" * 101 + "\n"
+        )
+        assert rc == 1
+        assert git_calls == []
+
+    def test_valid_message_commits(self, tmp_path):
+        mod = _load()
+        rc, git_calls = self._run(mod, tmp_path, "docs: 起手式 — valid header\n")
+        assert rc == 0
+        assert len(git_calls) == 1
+
+    def test_missing_validator_warns_and_commits(self, tmp_path, capsys):
+        mod = _load()
+        with patch.object(mod, "PREFLIGHT", tmp_path / "absent.py"):
+            rc, git_calls = self._run(mod, tmp_path, "whatever\n")
+        assert rc == 0
+        assert len(git_calls) == 1
+        assert "NOT validated" in capsys.readouterr().err
 
 
 class TestCLI:

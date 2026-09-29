@@ -132,8 +132,10 @@ tenants:
                                   # platform defaults are map[string]float64
     # pg_replication_lag_seconds: inherited from L0 = 30
     # pg_locks_count: inherited from L1 = 100
-    # _routing_defaults.group_wait: inherited by the four-layer routing engine = 60s
-    #   ⛔ but NOT part of the effective config below — see the scope note that follows
+    # _routing_defaults.group_wait: inherited by the routing layer chain = 60s
+    #   ⚠️ only once the 2026-09-28 amendment is implemented: today the route
+    #   generator does not see a tenant in a subdirectory at all (ADR-016)
+    #   ⛔ and NOT part of the effective config below — see the scope note that follows
 ```
 
 **Effective config computation**:
@@ -172,8 +174,9 @@ implementation).
    take effect".**
    ⛔ **The test is "does anything read it at the top level" — not the prefix, and not a list of
    names.** The only platform-level top-level consumers found today are **three named keys**:
-   `_routing_defaults` and `_routing_enforced` (`_grar_parse.py` reads top level only, and only
-   recognises those two **literal names** — the `^_routing` prefix is **not** sufficient to
+   `_routing_defaults` and `_routing_enforced` (`_grar_parse.py` reads top level only — the top
+   level of the YAML document, not of the directory tree; for directory levels see "Amendment
+   2026-09-28" below — and only recognises those two **literal names** — the `^_routing` prefix is **not** sufficient to
    infer: `_routing` and `_routing_profile` were measured to have no top-level consumer), plus
    `_custom_alerts` (`custom_alerts/loader.py` reads top level only). ⚠️ Every other
    `_`-prefixed key is actually consumed under the **`tenants:` block** of `_defaults.yaml`;
@@ -182,7 +185,7 @@ implementation).
    byte-identical, zero WARN from the exporter, schema lint returns `OK`). ⛔ Those six are a
    **measurement, not a roster**, and so are the three named keys: when any new `_`-prefixed key
    appears, apply the test above rather than reasoning backwards from these names.
-   ⚠️ That **`tenants:` block** means "the platform's default for an **existing** tenant" ([#1982](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/1982)): for the same key the tenant file wins, key by key, whatever the file names (tenant file versus platform file only; among several platform files the later in file-name order still wins); a tenant no tenant file declares is stripped with a WARN (a platform file cannot create a tenant); the `tenants:` block of a platform file in a subdirectory is read by no plane (the exporter WARNs); `/effective`, da-guard, `describe_tenant` and `merged_hash` apply this layer too and name the supplying platform files and keys in `platform_overlay`, while `/simulate` does not (its request carries no platform files; [#2019](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/2019)).
+   ⚠️ That **`tenants:` block** means "the platform's default for an **existing** tenant" ([#1982](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/1982)): for the same key the tenant file wins, key by key, whatever the file names (tenant file versus platform file only; among several platform files the later in file-name order still wins); a tenant no tenant file declares is stripped with a WARN (a platform file cannot create a tenant); the `tenants:` block of a platform file in a subdirectory is read by no plane (the exporter WARNs; the route generator is to WARN the same way once it reads the tree, and the amendment of 2026-09-28 below leaves this block out of scope); `/effective`, da-guard, `describe_tenant` and `merged_hash` apply this layer too and name the supplying platform files and keys in `platform_overlay`, while `/simulate` does not (its request carries no platform files; [#2019](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/2019)).
 
 2. ⛔ **Do not indent sibling keys INTO `defaults:` to "make them visible".**
 
@@ -202,7 +205,7 @@ implementation).
 
    | Key you indented | What its dedicated consumer does |
    |:--|:--|
-   | `_routing_defaults`, `_routing_enforced` (and any `^_routing`-prefixed key) | routing: `_grar_parse.py` reads **top level only** (`if "_routing_defaults" in data`), so indenting silently disables it. Measured for `_routing_defaults`: a tenant with no `_routing` of its own **loses its entire route AND receiver** (`Found 2 tenant(s) with routing config: db-a, db-b` → `Found 1 ...: db-b`, with **RC=0, zero errors, zero warnings**). Measured for `_routing_enforced`: the platform-enforced NOC route **and** the `platform-enforced` receiver disappear wholesale, equally without signal |
+   | `_routing_defaults`, `_routing_enforced` (and any `^_routing`-prefixed key) | routing: `_grar_parse.py` reads **top level only** (`if "_routing_defaults" in data`; the document's top level, not the directory tree's — for directory levels see "Amendment 2026-09-28" below), so indenting silently disables it. Measured for `_routing_defaults`: a tenant with no `_routing` of its own **loses its entire route AND receiver** (`Found 2 tenant(s) with routing config: db-a, db-b` → `Found 1 ...: db-b`, with **RC=0, zero errors, zero warnings**). Measured for `_routing_enforced`: the platform-enforced NOC route **and** the `platform-enforced` receiver disappear wholesale, equally without signal |
    | `_custom_alerts` | custom-alert compilation: `custom_alerts/loader.py` reads only the **top level**, so after indenting it sees **zero entries and zero errors**. ⛔ But `compile_custom_alerts.py --check` (present in both `ci.yml` and pre-commit) **does block** — it is a drift check (its docstring reads `1  drift detected (--check)`), exits 1 and lists the vanished rules one by one. The genuinely silent path is **re-running the compile right after indenting**: the gate turns green and the loss survives only in the pack's diff. ⛔ All three readers pick the carrier the same way (the loader, the exporter and `describe_tenant`; any casing and `.yml` since #1588, exactly one per directory since #1674): when a directory holds both `_defaults.yaml` and `_defaults.**yml**`, the `_custom_alerts` in the `.yml` is read by **none** of them, only WARNed about — writing the list into the unselected spelling likewise sees zero |
    | most keys (diagnostic surface) | `effective`: **silently accepted** as a nested key, so blast-radius goes from "no changes" to a report (measured: Tier B for `max_metrics_per_tenant` / `_routing_defaults`, Tier A for `_custom_alerts`). ⚠️ **The diagnostic surface rewards this action while it takes a tenant's alerting away**. ⛔ **But this is not a guarantee**: `_metadata` is skipped unconditionally by `deep_merge` (`if k == "_metadata": continue` in `describe_tenant.py`), so after indenting it `effective` is **byte-identical** and blast-radius prints "No effective tenant config changes detected" verbatim — while the exporter side has already dropped the whole file. **Silence on the diagnostic surface is not evidence that nothing happened.** |
 
@@ -234,7 +237,7 @@ implementation).
    | `_custom_alerts` | the output of `compile_custom_alerts.py --check` (⚠️ see the warning below) |
    | `_routing_defaults` / `_routing_enforced` | `generate_alertmanager_routes.py --config-dir conf.d/ --dry-run`, and **diff the full before/after output** |
 
-   ⚠️ The **`tenants:` block** holding `_silent_mode` in the table above means "the platform's default for an **existing** tenant" ([#1982](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/1982)): for the same key the tenant file wins, key by key, whatever the file names (tenant file versus platform file only; among several platform files the later in file-name order still wins); a tenant no tenant file declares is stripped with a WARN (a platform file cannot create a tenant); the `tenants:` block of a platform file in a subdirectory is read by no plane (the exporter WARNs); `/effective`, da-guard, `describe_tenant` and `merged_hash` apply this layer too and name the supplying platform files and keys in `platform_overlay`, while `/simulate` does not (its request carries no platform files; [#2019](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/2019)).
+   ⚠️ The **`tenants:` block** holding `_silent_mode` in the table above means "the platform's default for an **existing** tenant" ([#1982](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/1982)): for the same key the tenant file wins, key by key, whatever the file names (tenant file versus platform file only; among several platform files the later in file-name order still wins); a tenant no tenant file declares is stripped with a WARN (a platform file cannot create a tenant); the `tenants:` block of a platform file in a subdirectory is read by no plane (the exporter WARNs; the route generator is to WARN the same way once it reads the tree, and the amendment of 2026-09-28 below leaves this block out of scope); `/effective`, da-guard, `describe_tenant` and `merged_hash` apply this layer too and name the supplying platform files and keys in `platform_overlay`, while `/simulate` does not (its request carries no platform files; [#2019](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/2019)).
 
    ⚠️ **`compile_custom_alerts.py`'s output path does not follow `--config-dir`**
    (`out_path = repo / OUT_REL`, anchored on the repository). This used to continue "so
@@ -481,6 +484,83 @@ Implementation notes:
 - `m.hierarchy.parsedDefaults` and `m.hierarchy.hashes` (folded into the `hierarchyState` sub-struct as of v2.8.0), atomic-swapped together, caching the normalized parsed dict (`map[string]any`) of every `_defaults.yaml`. ~1 MB at 1000 tenants.
 - `populateHierarchyState` eager-parses every defaults file at cold start; `diffAndReload` only re-parses files whose hash actually moved, reusing the prior parse otherwise.
 - See `components/threshold-exporter/app/config_defaults_diff.go` and Issue #61 RFC.
+
+### Amendment 2026-09-28 (#2326): routing-plane layer chain across directory levels
+
+**Status: decided, not implemented.** Owner decision, option **P2** of
+[#2326](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/2326); the
+implementation (Python route generator and Go `pkg/routingpolicy` in the same PR, with
+the parity matrix extended to a hierarchical tree) lands in a follow-up PR. ⛔ Until it
+merges, the routing plane reads the conf.d **root only** (ADR-016 §Support boundary), and
+nothing below describes current behaviour.
+
+The routing plane gets its own chain along the same directories as the threshold chain.
+It stays **outside** `effective` / `merged_hash` — alternative D below still stands.
+
+**Carriers.** At each subdirectory level, the carrier is the one the threshold chain
+reads: `_defaults.yaml` / `_defaults.yml`, one per directory, chosen the same way (#1674).
+At the root the existing rule stays: `_routing_defaults` / `_routing_enforced` are read
+from any root `_`-prefixed file. The key sits where it sits at the root today, at the top
+level of the document (item 2 above still applies to indenting it into `defaults:`).
+Walker: Python `_lib_confd.list_config_tree()`; Go `config.ScanDirTree` +
+`CollectDefaultsChain` (hidden directories pruned, directory symlinks reported, a
+directory holding only a README contributes nothing).
+
+**(a) `_routing_defaults` across levels: shallow merge per top-level key.** The deeper
+level wins. An explicit `null` follows the existing "Null values" rules above, with no new
+rule: on the four fields (`group_by` / `group_wait` / `group_interval` / `repeat_interval`)
+`null` opts out of inheritance and the rendered route omits the field; `receiver` and
+`overrides` are **excluded** — writing them as `null` in a subdirectory level's
+`_routing_defaults` is a **blocking error** (rc 2), because otherwise every tenant in that
+subtree without its own receiver would lose its route and alerts would silently fall to the
+catch-all. Then the routing profile, then the tenant's own `_routing` (order unchanged):
+
+```
+rd(t)       = L0._routing_defaults ⊕ L1._routing_defaults ⊕ … ⊕ Ln._routing_defaults
+resolved(t) = rd(t) ⊕ profiles[t._routing_profile] ⊕ t._routing
+
+  a ⊕ b: for each top-level key k of b —
+           a[k] = b[k]   (the whole value, no recursion into it; a null is stored
+                          too, and omitted or refused downstream per the field rules)
+```
+
+Same shape as the existing profile/tenant merge (`merge_routing_with_defaults` in
+`_grar_merge.py`, `routingpolicy.Resolve` in Go). Deep merge is rejected for the reason in
+alternative D, 3: it cannot express the semantics, and on `receiver` it would mix fields
+of different receiver types (a subtree switching `type` from `slack` to `pagerduty` would
+keep the parent's `api_url`).
+
+**(b) `_routing_enforced`: root only.** A copy in any subdirectory file is a **blocking
+error** (route generator rc 2). Deferred: additive, subtree-scoped enforced routes.
+Trigger: a customer or team explicitly needs a NOC route scoped to one subtree.
+
+**(c) Routing profiles.** `_routing_profiles.yaml` / `.yml` may sit in a subdirectory; its
+profiles are visible to the tenants in that subtree. A tenant resolves
+`_routing_profile: X` against the profiles defined at its own level or an ancestor's. A
+profile name is **unique across the whole tree**: the same name defined in two files is an
+error — including `_routing_profiles.yaml` and `.yml` both at the root (today the later file
+silently overrides; this is a behaviour change).
+
+**(d) Domain policies.** `_domain_policy.yaml` / `.yml` may sit in a subdirectory and
+applies only within its subtree. A subtree policy whose `tenants:` names a tenant outside
+that subtree is an **error** (ERROR under `--strict`, WARN otherwise), with a message
+distinct from "tenant not found anywhere". Policies at different levels are judged
+**additively**: a tenant must satisfy every policy that applies to it, so a subtree can
+only tighten.
+
+**(e) Duplicate tenant id.** The same tenant id declared in more than one file is a
+**blocking error** in the routing plane too (rc 2), aligning with Go
+`DuplicateTenantError` and `validate_config.check_tenant_uniqueness`.
+
+**(f) Out of scope.** The `tenants:` block of a platform (`_`) file in a subdirectory stays
+unread by every plane (item 1 above); the route generator WARNs about it the way the
+exporter does.
+
+**Replaces the #2326 step-1 stopgap.** The stopgap failed the generator with rc 2 whenever a
+subdirectory held a config file. Once the tree is read, that is no longer an error; the
+blocking conditions become: `_routing_enforced` in a subdirectory file → rc 2; a duplicate
+tenant id → rc 2; `receiver` or `overrides` written as `null` in a subdirectory level's
+`_routing_defaults` → rc 2 (see (a)); the (c) and (d) errors as stated above.
 
 ## Alternatives Considered
 

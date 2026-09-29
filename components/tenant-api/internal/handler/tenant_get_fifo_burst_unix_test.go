@@ -79,8 +79,19 @@ func TestGetTenant_ConcurrentGETsShareOneStuckRootRead(t *testing.T) {
 				t.Errorf("%d concurrent GETs left %d stuck root reads, want at most 1", n, s)
 			}
 			// Tolerance for runtime/test goroutines; one stuck read is expected.
+			//
+			// Poll, don't sample once (#2367): wg.Done runs in a defer, so when
+			// Wait returns the GET goroutines (and the waiter) may still be
+			// exiting, and NumGoroutine is process-wide. A single read right
+			// after the burst once saw all 20+ of them. The poll runs BEFORE
+			// unblock(): the stuck read is still stuck, so a leaked read cannot
+			// drain during the wait and still fails here after the deadline.
+			goroutineDeadline := time.Now().Add(2 * time.Second)
+			for runtime.NumGoroutine()-before > 3 && time.Now().Before(goroutineDeadline) {
+				time.Sleep(10 * time.Millisecond)
+			}
 			if extra := runtime.NumGoroutine() - before; extra > 3 {
-				t.Errorf("%d goroutines outlive the burst (want the one stuck read, give or take)", extra)
+				t.Errorf("%d goroutines outlive the burst after 2s (want the one stuck read, give or take)", extra)
 			}
 
 			unblock()

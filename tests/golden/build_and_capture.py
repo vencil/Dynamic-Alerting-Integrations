@@ -6,9 +6,9 @@ capture expected source_hash + merged_hash, emit golden.json.
 The scenarios exercise the deep_merge / inheritance rules listed in
 test_merge_parity.py's module docstring so the Go port can verify
 byte-for-byte parity. They do NOT cover every ADR-017 clause. #1550's
-reserved-key null deletion, `_routing` null and canonical-JSON escaping rows
+reserved-key null deletion, nested-null and canonical-JSON escaping rows
 are scenarios 11-13 below, and #2371's YAML date / `!!binary` values and
-non-string mapping keys are 14-16; #1550's chain-discovery gap is closed on the Go side
+non-string mapping keys are 17-19; #1550's chain-discovery gap is closed on the Go side
 (config_golden_parity_test.go TestGoldenParity_ResolveEffective). What stays
 open is listed in test_merge_parity.py's "Known gaps".
 
@@ -407,42 +407,51 @@ def s_canonical_json_escaping():
 """)
 
 
-# Scenario 12: `_routing` group_* null (ADR-017 §Merge 語意). ⛔ What this
-# pins is the MERGE plane, and there the four routing fields are NOT special:
-# deep_merge deletes on null only when the key itself is `_`-prefixed
-# (ADR-017: 判準是「是否 `_` 前綴」，不是「是否路由欄位」), and `group_*` sit
-# one level under `_routing`. So:
-#   group_by / group_wait     inherited from `defaults:`, nulled here
+# Scenario 12: a NESTED null under an inherited reserved key (ADR-017 §Merge
+# 語意). deep_merge deletes on null only when the key itself is `_`-prefixed
+# (ADR-017: 判準是「是否 `_` 前綴」); the sub-keys here sit one level under
+# the reserved key and are not `_`-prefixed. So:
+#   inherited_list / inherited_str   inherited from `defaults:`, nulled here
 #                             -> the inherited value is RETAINED
-#   group_interval / repeat_interval  not inherited, nulled here
+#   never_set_a / never_set_b        not inherited, nulled here
 #                             -> ABSENT from effective_config: the null is a
-#                                no-op, not copied through, because `_routing`
+#                                no-op, not copied through, because `_x`
 #                                itself was inherited and so is merged key by
 #                                key rather than replaced
-# The ADR's "null 退出繼承 / 產出的 route 省略該欄位" is carried out by the
-# route generator (_grar_merge.py, a falsy check over `_routing_defaults` +
-# the tenant file's own `_routing`), which reads neither describe_tenant's
-# merge nor pkg/config's; the golden oracle does not cover that plane. This
-# row makes both merge implementations agree on the representation that
-# da-guard reads (`EffectiveConfig["_routing"]`), and turns red if either
-# side starts treating a nested routing null as a deletion.
-def s_routing_null():
-    d = reset("mixed-mode") / "routing-null"
+#   added                     tenant-only sub-mapping -> present
+# The row turns red if either merge implementation (describe_tenant /
+# pkg/config) starts treating a nested null as a deletion, or copies it
+# through as a JSON null.
+#
+# ⛔ The key is a deliberately meaningless `_x`, not `_routing` (#2417). This
+# row used `_routing` until #2362 (#2291) made da-guard reject `_routing`
+# inside a `defaults:` block (`routing_in_unread_location`: the route
+# generator never reads routing from there), which made a whole-tree da-guard
+# run over this fixture exit 1. The same change moved da-guard's routing
+# reads off `EffectiveConfig["_routing"]` onto the layers the generator reads
+# (layers.TenantBlock + routingpolicy.Resolve), so `_routing` bought nothing
+# here that any reserved key does not. `_x` was picked because no code path special-cases
+# it: both merges carry it through like any `_` key, and da-guard reports
+# nothing for it. What ADR-017 says a `_routing` null does to the generated
+# route is the route generator's plane (_grar_merge.py), which neither merge
+# runs and this oracle does not cover.
+def s_reserved_nested_null():
+    d = reset("mixed-mode") / "reserved-nested-null"
     write(d / "_defaults.yaml", """defaults:
-  _routing:
-    group_by: ["alertname"]
-    group_wait: "30s"
+  _x:
+    inherited_list: ["alertname"]
+    inherited_str: "30s"
 """)
     write(d / "tenants.yaml", """tenants:
-  tenant-route:
-    _routing:
-      receiver:
+  tenant-nested:
+    _x:
+      added:
         type: "webhook"
         url: "https://hooks.example.com/alerts"
-      group_by: ~
-      group_wait: ~
-      group_interval: ~
-      repeat_interval: ~
+      inherited_list: ~
+      inherited_str: ~
+      never_set_a: ~
+      never_set_b: ~
 """)
 
 
@@ -467,7 +476,90 @@ def s_reserved_null_delete():
 """)
 
 
-# Scenarios 14-15 (#2371): values PyYAML types as `date` / `datetime` /
+# -------------------------------------------------------------------------
+# Scenarios 14-16 (#2387): trees the exporter SERVES.
+#
+# ⛔ Five of the trees above (l0-only, full-l0-l3, array-replace,
+# opt-out-null, metadata-skipped) carry a ROOT `_defaults.yaml` the exporter
+# drops whole: a root `defaults:` value that is not a number (a nested
+# `threshold:` map, `_metadata`, an array) fails to decode, the file lands in
+# parse_failed and /metrics serves none of it (#1957). They stay, because the
+# deep-merge core they pin (nested maps, array replace, null on a nested
+# non-reserved key, `_metadata` not inherited) cannot be written in a root
+# shape the exporter accepts — but parity on them proves only that the two
+# readers agree with each other, not that they describe what is served. They
+# are listed, with that reason, in tests/golden/not_served.json, and
+# components/threshold-exporter/app/cmd/da-guard/golden_served_test.go runs
+# `da-guard served-values` over every fixture tree: a tree must exit 0 unless
+# it is listed, and a listed tree must exit 3 (so the list cannot go stale).
+#
+# These two trees are the served counterpart for what CAN be written in the
+# accepted shape: numeric root defaults (the shipped platform shape), subtree
+# `_defaults.yaml` overriding them, quoted-string tenant values. Two new conf.d
+# roots, pinned in check_threshold_reachability's `_DEFAULTS_CONFD_ROOTS`;
+# their 8 `defaults:` keys raised the artifact-key floor by 8 (the #1674 /
+# #1550 remedy).
+#
+# ⚠️ "Served" is da-guard's rc 0 — nothing in the tree is dropped. It is NOT
+# "every golden value equals what /metrics serves", and two shapes that pass
+# rc 0 are kept out of these trees on purpose because /metrics disagrees with
+# both merge readers on them (measured with `da-guard served-values`, #2296):
+#   * null on a threshold key a subtree `_defaults.yaml` overrides: the
+#     readers resolve the L1 value, /metrics falls back to the ROOT default;
+#   * a key that only a subtree `_defaults.yaml` declares: the readers merge
+#     it in, /metrics serves no row for it.
+# A row pinning either would record the readers' answer as if it were the
+# served one.
+# -------------------------------------------------------------------------
+
+# Scenario 14 + 15: L0 -> L1 -> L2 chain, and a root-level sibling tenant.
+#   tenant-served-chain  mysql_connections        tenant "60" beats L1's 70
+#                        container_memory         L2's 90 beats L0's 85
+#                        redis_connected_clients  L0's 5000, through 2 levels
+#   tenant-served-root   chain is the root file only: L0's 80 / 85 / 5000,
+#                        so neither subtree carrier leaks into a sibling
+def s_served_chain():
+    d = reset("served-chain")
+    write(d / "_defaults.yaml", """defaults:
+  mysql_connections: 80
+  container_memory: 85
+  redis_connected_clients: 5000
+""")
+    write(d / "db" / "_defaults.yaml", """defaults:
+  mysql_connections: 70
+""")
+    write(d / "db" / "mariadb" / "_defaults.yaml", """defaults:
+  container_memory: 90
+""")
+    write(d / "db" / "mariadb" / "tenants.yaml", """tenants:
+  tenant-served-chain:
+    mysql_connections: "60"
+""")
+    write(d / "tenants.yaml", """tenants:
+  tenant-served-root: {}
+""")
+
+
+# Scenario 16: "disable" through a subtree chain. The tenant turns off a key
+# it inherits from L0, while L1 overrides the other one:
+#   mysql_connections   tenant "disable" beats L0's 80 (the sanctioned opt-out)
+#   container_memory    L1's 90 beats L0's 85
+def s_served_disable():
+    d = reset("served-disable")
+    write(d / "_defaults.yaml", """defaults:
+  mysql_connections: 80
+  container_memory: 85
+""")
+    write(d / "db" / "_defaults.yaml", """defaults:
+  container_memory: 90
+""")
+    write(d / "db" / "tenants.yaml", """tenants:
+  tenant-served-disable:
+    mysql_connections: "disable"
+""")
+
+
+# Scenarios 17-18 (#2371): values PyYAML types as `date` / `datetime` /
 # `bytes`. describe_tenant ended with a TypeError on every one of them, so no
 # row could hold them; yaml.v3 reads a timestamp into time.Time and a
 # `!!binary` into a string of its raw bytes, and pkg/config's canonical JSON
@@ -476,7 +568,7 @@ def s_reserved_null_delete():
 # Python side CANNOT align (describe_tenant.py's #2371 block) are left out on
 # purpose — they are strict xfails in tests/dx/test_describe_tenant.py.
 #
-# Scenario 14: an unquoted date inherited from `_defaults.yaml` (Go:
+# Scenario 17: an unquoted date inherited from `_defaults.yaml` (Go:
 # "2026-12-31T00:00:00Z") beside a tenant datetime with a fraction and an
 # offset (RFC 3339, fraction's trailing zero dropped, offset kept).
 def s_yaml_date():
@@ -496,7 +588,7 @@ def s_yaml_date():
 """)
 
 
-# Scenario 15: `!!binary` values: the payload's UTF-8 text (ASCII and CJK).
+# Scenario 18: `!!binary` values: the payload's UTF-8 text (ASCII and CJK).
 # ⛔ An INVALID UTF-8 byte cannot be a golden row: golden.json stores
 # effective_config as JSON text, which cannot hold that byte, so the Go
 # EffectiveConfig / ResolveEffective legs would compare the exporter's
@@ -517,7 +609,7 @@ def s_yaml_binary():
 """)
 
 
-# Scenario 16: non-string mapping KEYS below the tenant id (#2371). yaml.v3
+# Scenario 19: non-string mapping KEYS below the tenant id (#2371). yaml.v3
 # decodes such a mapping into map[any]any and pkg/config spells each key with
 # `%v`: a date key is "2026-12-31 00:00:00 +0000 UTC" (time.Time.String()),
 # `0x1F` is "31", `1.0` is "1", `True` is "true"; a quoted `"010"` stays text.
@@ -558,8 +650,11 @@ SCENARIOS = [
     ("carrier-selection-pair", "tenant-pair", s_carrier_selection),  # 2 tenants, 1 tree
     ("carrier-selection-sub", "tenant-sub", None),
     ("canonical-json-escaping", "tenant-escape", s_canonical_json_escaping),
-    ("routing-null", "tenant-route", s_routing_null),
+    ("reserved-nested-null", "tenant-nested", s_reserved_nested_null),
     ("reserved-null-delete", "tenant-reserved", s_reserved_null_delete),
+    ("served-chain", "tenant-served-chain", s_served_chain),  # 2 tenants, 1 tree
+    ("served-root", "tenant-served-root", None),
+    ("served-disable", "tenant-served-disable", s_served_disable),
     ("yaml-date", "tenant-date", s_yaml_date),
     ("yaml-binary", "tenant-binary", s_yaml_binary),
     ("yaml-keys", "tenant-keys", s_yaml_keys),
@@ -610,8 +705,11 @@ def main() -> int:
         "carrier-selection-pair": "mixed-mode",
         "carrier-selection-sub": "mixed-mode",
         "canonical-json-escaping": "mixed-mode",
-        "routing-null": "mixed-mode",
+        "reserved-nested-null": "mixed-mode",
         "reserved-null-delete": "mixed-mode",
+        "served-chain": "served-chain",
+        "served-root": "served-chain",
+        "served-disable": "served-disable",
         "yaml-date": "mixed-mode",
         "yaml-binary": "mixed-mode",
         "yaml-keys": "mixed-mode",

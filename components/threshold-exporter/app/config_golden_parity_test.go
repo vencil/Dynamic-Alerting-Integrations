@@ -33,12 +33,17 @@ package main
 //   canonical-json-escaping — a tenant string with < > & and CJK: the
 //                       no-HTML-escape and non-ASCII clauses of the canonical
 //                       JSON move merged_hash (#1550)
-//   routing-null      — null on `_routing.group_*`; at the merge plane those
-//                       are non-reserved sub-keys, so an inherited value is
-//                       retained and an uninherited null dropped (#1550)
+//   reserved-nested-null — null on non-reserved sub-keys of an inherited
+//                       reserved key (`_x.*`): an inherited value is retained
+//                       and an uninherited null dropped (#1550; was
+//                       `_routing` until #2417)
 //   reserved-null-delete — a `_` key inherited from L0 and nulled in an L1
 //                       _defaults.yaml is deleted; a sibling `_` key survives
 //                       (#1550)
+//   served-chain      — numeric L0 -> L1 -> L2 chain in the shipped shape, plus
+//                       a root-level sibling tenant (served-root) (#2387)
+//   served-disable    — "disable" on an L0 key while L1 overrides another
+//                       (#2387)
 //   yaml-date         — an unquoted date inherited from _defaults.yaml and a
 //                       tenant datetime with fraction + offset: yaml.v3's
 //                       time.Time as encoding/json writes it (#2371)
@@ -49,6 +54,26 @@ package main
 //                       is time.Time.String()); a date key in both files is
 //                       one key, so the bodies merge (#2371)
 //
+// ⚠️ Five trees (l0-only, full-l0-l3, array-replace, opt-out-null,
+// metadata-skipped) have a ROOT _defaults.yaml the exporter drops whole, so
+// /metrics serves none of it: parity there proves the readers agree with each
+// other, not that they describe served values. They are kept as merge-core
+// corpus and listed in tests/golden/not_served.json;
+// cmd/da-guard/golden_served_test.go holds that list to the trees (#2387).
+//
+// ⛔ That list names only trees the exporter drops a file of WHOLE. A tree off
+// it exits da-guard rc 0, which does NOT make every golden row here a value
+// /metrics serves. Rows in rc-0 trees that /metrics does not carry (measured
+// with `da-guard served-values`, #2387):
+//   flat, mixed-mode-flat, mixed-mode-hier — the tenant file's nested
+//       `threshold:` map (and flat's `alert_group`): /metrics serves no row for
+//       a nested map, it reports it as unserved; mixed-mode-hier's inherited
+//       `threshold.memory: 60` does not reach it at all.
+//   carrier-selection-pair / -sub — `cpu_pct` is declared only in a subtree
+//       _defaults.yaml, and /metrics emits no row for a subtree-only key
+//       (#1976).
+// On those rows parity still proves only reader-vs-reader agreement.
+//
 // Chain discovery: MergedHash / EffectiveConfig read the defaults chain out of
 // golden.json on purpose (they isolate the merge core). The chain itself is
 // derived from the tree, and compared with Python's, by ScannerChainOrder (the
@@ -58,7 +83,7 @@ package main
 // Known gaps (a mutation there leaves this oracle green):
 //   - ADR-017's `_routing` null opt-out is enforced by the Python route
 //     generator (_grar_merge.py), which neither merge implementation runs;
-//     routing-null pins how the merge plane represents those nulls only.
+//     no golden row exercises `_routing` (#2417).
 //   - EffectiveConfig compares Go canonicalJSON with Go canonicalJSON, so it
 //     is blind to a Go-side escaping change; MergedHash / ResolveEffective
 //     catch that.

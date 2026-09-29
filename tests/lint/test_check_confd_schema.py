@@ -586,3 +586,27 @@ class TestUnresolvableCrossFileRef:
         plat = {"$id": "https://example.invalid/p.json",
                 "properties": {"m": {"$ref": "http://json-schema.org/draft-07/schema#"}}}
         checked_schema_registry(schema, plat)  # must not raise
+
+
+class TestHiddenEntries:
+    """#2360: the exporter's walker skips `.`-prefixed files and directories,
+    so nothing under them is this gate's business — not even broken YAML."""
+
+    def test_broken_yaml_under_hidden_dir_is_not_read(self, confd):
+        _write(confd, "acme.yaml", 'tenants:\n  acme:\n    cpu_usage: "80"\n')
+        os.mkdir(os.path.join(confd, ".snap"))
+        _write(confd, os.path.join(".snap", "x.yaml"), "a: [1, 2\n")
+        _write(confd, ".ghost.yaml", "a: [1, 2\n")
+        result = _run(confd)
+        assert result.returncode == EXIT_OK, result.stdout + result.stderr
+        assert "OK: 1 tenant conf.d file(s)" in result.stdout
+
+    def test_control_broken_yaml_in_visible_subdir_is_still_read(self, confd):
+        """Sensitivity control: the same file under a VISIBLE directory must
+        still be an exit-2 parse error, or the test above proves nothing."""
+        _write(confd, "acme.yaml", 'tenants:\n  acme:\n    cpu_usage: "80"\n')
+        os.mkdir(os.path.join(confd, "snap"))
+        _write(confd, os.path.join("snap", "x.yaml"), "a: [1, 2\n")
+        result = _run(confd)
+        assert result.returncode == EXIT_CALLER_ERROR, result.stdout + result.stderr
+        assert "snap/x.yaml" in result.stderr + result.stdout

@@ -29,8 +29,6 @@ import (
 	"reflect"
 	"strings"
 
-	"gopkg.in/yaml.v3"
-
 	"github.com/vencil/threshold-exporter/pkg/config"
 )
 
@@ -402,11 +400,9 @@ func classifyDefaultsNoOpEffect(
 	if len(allChanged) == 0 && len(overlayKeys) == 0 && len(profileKeys) == 0 {
 		return "cosmetic"
 	}
-	var doc any
-	if err := yaml.Unmarshal(tenantBytes, &doc); err != nil {
-		return "cosmetic"
-	}
-	overrides, err := extractTenantRaw(normalizeYAMLToJSON(doc), tid)
+	// ParseTenantDoc keys `tenants:` as the flat plane does, so tid ("010")
+	// finds a bare `010:` key (#2118); the generic decode re-spelled it "8".
+	overrides, err := config.ParseTenantDoc(tenantBytes).TenantRaw(tid)
 	if err != nil {
 		return "cosmetic"
 	}
