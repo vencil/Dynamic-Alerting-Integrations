@@ -139,6 +139,14 @@ tenants:
 > 產出「No tenants found」零路由。因此在階層布局下，`_routing_defaults:` 與租戶本體的
 > `_routing:` **不會被任何元件消費**——本文其餘的路由範例請在平面目錄下使用。
 >
+> 🗓️ **已決定改為階層，實作在後續 PR**（[#2326](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/2326)，
+> 2026-09-28）：路由面將跟閾值面走同一套目錄階層——各層 `_defaults.yaml` 的
+> `_routing_defaults` 逐鍵淺合併（深層勝，`null` 沿用 ADR-017 既有的逐欄位規則）；`_routing_enforced`
+> 只認根目錄；`_routing_profiles.yaml` 與 `_domain_policy.yaml` 可放在子目錄、只作用於
+> 所在子樹；同一個租戶 id 在多個檔案宣告是阻擋錯誤。完整語意見
+> [ADR-017「Amendment 2026-09-28」](../adr/017-defaults-yaml-inheritance-dual-hash.md)。
+> ⛔ 在實作 PR 合併之前，上一段描述的仍是實際行為。
+>
 > ✅ **`validate_config.py` 已於 [PR #1343](https://github.com/vencil/Dynamic-Alerting-Integrations/pull/1343)
 > 改為遞迴**（conf.d 家族票 [#1911](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/1911)）——它先前對階層目錄回報 `PASS / exit 0` 卻掃到 **0 個租戶**（不是擋下來，
 > 是對從未讀過的目錄報綠燈）。其餘仍是平面的工具**不再靜默**：偵測到子目錄裡有設定檔時
@@ -345,11 +353,12 @@ python scripts/tools/dx/describe_tenant.py --all --format json --output audit.js
 3. **陣列合併**：只支援替代，不支援追加。若需追加新 receiver，須完整列出舊的
 4. **環境變數逃逸**：`_defaults.yaml` 中的 env 變數僅在該檔案有效，tenant 檔案內不可引用
 
-### 🛡️ 已自動化的檢查
+### 🛡️ 能接上的檢查（要自己接，不是預設就有）
 
-- Pre-commit hook：禁止 `_defaults.yaml` 含有 hardcoded tenant id
-- 配置驗證：檢測重複 receiver、未定義的 rule group 參考
-- Git hook：對 `conf.d/` 的修改自動執行 `da-tools validate-config` + `describe_tenant.py` 檢查
+這個目錄布局本身不帶任何自動檢查。能擋錯的是 `da-tools validate-config`，要接到你自己的 CI 或 pre-commit：
+
+- 它實際驗什麼、哪些只給 WARN 不擋：見 [GitOps CI 整合 §2.2](gitops-ci-integration.md#22-stage-1-validate)
+- 每次改 `conf.d/` 就在本機跑：見 [§4 Pre-commit Hooks](gitops-ci-integration.md#4-shift-leftpre-commit-hooks)
 
 ## 相關資源
 

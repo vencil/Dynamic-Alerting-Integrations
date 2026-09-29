@@ -271,31 +271,34 @@ func joinPath(path, name string) string {
 
 // servedValues reads every tenant of cfg at `at`.
 func servedValues(cfg *config.ThresholdConfig, at time.Time) (map[string]servedTenantValues, error) {
+	ownedBy, droppedBy, res, err := keyedRows(cfg, at)
+	if err != nil {
+		return nil, err
+	}
+
+	// The reserved keys are read from what the collector's scrape resolved
+	// (Hooks.Observe), not by calling those resolvers a second time: a second
+	// call would print each of their WARN lines twice (#2374).
 	metadata := map[string]config.ResolvedMetadata{}
-	for _, m := range cfg.ResolveMetadata() {
+	for _, m := range res.Metadata {
 		metadata[m.Tenant] = m
 	}
 	dedup := map[string]string{}
-	for _, d := range cfg.ResolveSeverityDedup() {
+	for _, d := range res.SeverityDedup {
 		dedup[d.Tenant] = d.Mode
 	}
+	// The collector does not read _routing, so its resolver runs only here.
 	routing := map[string]config.RoutingConfig{}
 	for _, r := range cfg.ResolveRouting() {
 		routing[r.Tenant] = r
 	}
-	ops := cfg.OperationalStatesAt(at)
-	byTenant := ops.ByTenant(cfg)
+	byTenant := res.Ops.ByTenant(cfg)
 	stateOn := map[string]map[string]bool{}
-	for _, sf := range ops.StateFilters {
+	for _, sf := range res.Ops.StateFilters {
 		if stateOn[sf.Tenant] == nil {
 			stateOn[sf.Tenant] = map[string]bool{}
 		}
 		stateOn[sf.Tenant][sf.FilterName] = true
-	}
-
-	ownedBy, droppedBy, err := keyedRows(cfg, at)
-	if err != nil {
-		return nil, err
 	}
 
 	out := make(map[string]servedTenantValues, len(cfg.Tenants))
@@ -396,14 +399,19 @@ func servedValues(cfg *config.ThresholdConfig, at time.Time) (map[string]servedT
 // are resolved with ResolveAtWithKeys (the collector's Resolve hook), so each
 // row the collector reports on carries its key.
 //
+// It also returns the reserved-key readings that scrape resolved
+// (Hooks.Observe), for servedValues to read instead of resolving them again.
+//
 // Not registered: the Go runtime collector the exporter adds — it reads no
 // config, so no tree can make it fail. The config metrics are a fresh set,
 // registered so a name the collector emits that collides with one of them
 // fails here as it would on /metrics; the collector writes nothing to them.
 func keyedRows(cfg *config.ThresholdConfig, at time.Time) (
-	served map[string]map[string][]config.ResolvedThreshold, dropped map[string]map[string][]string, err error,
+	served map[string]map[string][]config.ResolvedThreshold, dropped map[string]map[string][]string,
+	reserved scrape.Reserved, err error,
 ) {
 	var keyed []config.KeyedThreshold
+	observed := 0
 	var keyErr error
 	var results []emitResult
 	metrics := scrape.NewConfigMetrics()
@@ -422,19 +430,26 @@ func keyedRows(cfg *config.ThresholdConfig, at time.Time) (
 		Report: func(i int, m prometheus.Metric, err error) {
 			results[i] = emitResult{reported: true, metric: m, err: err}
 		},
+		Observe: func(r scrape.Reserved) {
+			reserved = r
+			observed++
+		},
 	})
 	reg := prometheus.NewRegistry()
 	scrape.Register(reg, collector, metrics)
 	_, gerr := reg.Gather()
 	if keyErr != nil {
-		return nil, nil, keyErr
+		return nil, nil, scrape.Reserved{}, keyErr
 	}
 	if gerr != nil {
-		return nil, nil, fmt.Errorf("the exporter's /metrics cannot be gathered for this tree, so its scrape fails "+
+		return nil, nil, scrape.Reserved{}, fmt.Errorf("the exporter's /metrics cannot be gathered for this tree, so its scrape fails "+
 			"as a whole (HTTP 500) and nothing is served%s: %v", sameSeriesKeys(keyed, results), gerr)
 	}
+	if observed != 1 {
+		return nil, nil, scrape.Reserved{}, fmt.Errorf("internal: the collector reported its reserved-key readings %d times, want 1", observed)
+	}
 	if len(results) != len(keyed) {
-		return nil, nil, fmt.Errorf("internal: the collector resolved %d rows, %d have a verdict", len(keyed), len(results))
+		return nil, nil, scrape.Reserved{}, fmt.Errorf("internal: the collector resolved %d rows, %d have a verdict", len(keyed), len(results))
 	}
 
 	served = map[string]map[string][]config.ResolvedThreshold{}
@@ -442,7 +457,7 @@ func keyedRows(cfg *config.ThresholdConfig, at time.Time) (
 	for i, k := range keyed {
 		switch r := results[i]; {
 		case !r.reported:
-			return nil, nil, fmt.Errorf("internal: the collector gave no verdict on row %d (key %q)", i, k.Key)
+			return nil, nil, scrape.Reserved{}, fmt.Errorf("internal: the collector gave no verdict on row %d (key %q)", i, k.Key)
 		case r.err != nil:
 			if dropped[k.Tenant] == nil {
 				dropped[k.Tenant] = map[string][]string{}
@@ -455,7 +470,7 @@ func keyedRows(cfg *config.ThresholdConfig, at time.Time) (
 			served[k.Tenant][k.Key] = append(served[k.Tenant][k.Key], k.ResolvedThreshold)
 		}
 	}
-	return served, dropped, nil
+	return served, dropped, reserved, nil
 }
 
 // staticSource serves one loaded config to the collector. ConfigInfo is the

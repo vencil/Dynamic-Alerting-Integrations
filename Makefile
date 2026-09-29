@@ -277,8 +277,9 @@ win-commit: ## Windows 逃生門：sandbox hook-gate → Windows stage/commit/pu
 	@# --- [1/3] Sandbox hook gate -----------------------------------------
 	@# The Windows-side COMMIT uses --no-verify internally (trap #36: pre-commit
 	@# hooks hardcode Linux python path). We close that gap HERE by running
-	@# pre-commit in the Cowork VM against the FILES list, which has no FUSE
-	@# staleness and a complete Python+pyyaml env. SKIP_HOOKS=1 bypasses for
+	@# pre-commit in the Cowork VM against the FILES list, which has a
+	@# complete Python+pyyaml env (its files still come through the FUSE
+	@# mount — see run_hooks_sandbox.sh). SKIP_HOOKS=1 bypasses for
 	@# emergencies (e.g. runner crash); use sparingly.
 	@# ⛔ [3/3] push is NOT in that picture any more (#1487): it dropped
 	@# --no-verify, so git runs the pre-push hook on the Windows side. Two of

@@ -290,6 +290,12 @@ func reportResourceMetrics(b *testing.B) {
 //   BenchmarkIncrementalLoad_1000_OneFileChanged    BenchmarkDiffAndReload_Hierarchical_1000_OneTenantChanged
 //   BenchmarkScanDirTree_1000_Cold                  BenchmarkScanDirTree_Hierarchical_{1000,2000,5000}_Cold
 //
+// ⚠️ The NoChange row pairs the SCENARIO, not the mtime mode: flat
+// ..._NoChange / ..._OneFileChanged are pinned to Reread (#2344), the
+// hierarchical ..._NoChange to Warm (#2048). Mode-matched pairs are flat
+// ..._NoChange ↔ ..._1000_NoChange_Reread and flat ..._NoChange_MtimeGuard ↔
+// ..._1000_NoChange_Warm.
+//
 // Plus the new B-8 blast-radius bench (see below).
 //
 // 2000 / 5000 variants added so we can verify scaling characteristics

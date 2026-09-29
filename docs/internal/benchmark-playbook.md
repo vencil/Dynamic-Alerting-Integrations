@@ -313,6 +313,14 @@ residue 完整清單留在 artifact 供稽核，但**不整份貼進 step summar
 
 ℹ️ 另有一個只匹配「這支 workflow 自己」的 `pull_request` 觸發做 **self-test**（`bench-gate-pr.yaml` 同一 pattern）——因為 `workflow_dispatch` 的 workflow 必須先在 default branch 上才跑得動，沒有 self-test 的話第一次執行就會是正式判讀那一次。self-test 的參數刻意調到最小（1 支 bench／2 輪／100ms／不量 `M/W`），summary 會掛一條橫幅講明**那些比值不是量測結果**。
 
+### 只改 benchmark 測試碼的 PR：當下量一次（[#1471](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/1471) 候選 (a)）
+
+上一節是**回溯**：階梯出現之後才用 overlay 去拆。`bench-gate-pr.yaml` 與 `bench-attrib-main.yaml` 都排除 `*_test.go`，所以只改 fixture 的 PR 原本沒人量。而「產品碼沒動、只有測試碼變」這個情境**本身就是 `W/R`**，`.github/workflows/bench-workload-record.yaml` 就在那一刻用既有的 `bench_gate_compare.sh`（merge-base vs PR head，參數同 `bench-gate-pr`）量它。
+
+- **觸發**：`pull_request.paths` 是 `workload_closure` 的字面投影，兩邊一致由 `tests/ops/test_bench_workload_record_trigger.py` 釘住。
+- **量不量由 `Classify diff` 現場判斷**：diff 裡有任何會觸發 `bench-gate-pr` 的檔（照它自己的 `paths` 求值）⇒ 跳過，那支 PR 由 `bench-gate-pr` 量；沒有閉包成員 ⇒ 跳過；其餘 ⇒ 量。跳過原因寫進 step summary 與 artifact。
+- ⛔ **只記錄、不判定**：不留言、不貼 label、不開票，數字再差 job 也不紅；只有量測腳本本身出錯（編譯失敗、benchstat 形狀漂移）才紅。這裡的 `+N%` 是工作定義的效果，不是退化。
+
 ### Nightly sustained-trend watchdog
 
 `bench-record.yaml` 的第二個 job `trend-watch`（nightly baseline 上傳後跑）用 `analyze_bench_history.py --trend-watch` 比對最近 N 晚，**只在「持續多晚」退化時自動開 `perf-trend` issue**（`--assignee` 預設 repo owner = email 通知;若 owner 是 GitHub **Org** 無法 assign,自動 fallback 成**不指派**、仍照常開 issue,靠 `perf-trend` label 訂閱通知),perf 回到 baseline 時**自動關閉**（closed loop）：
@@ -1010,6 +1018,8 @@ cat /tmp/b1_out/bench.out.txt
 ```
 
 ⚠️ `BenchmarkDiffAndReload_Hierarchical_{1000,2000,5000}_NoChange` 已固定在 Warm 模式（[#2048](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/2048)）：載入前把共用 fixture 的 mtime 回溯到 `TreeScanMtimeGuard` 之外，所以單獨跑或窄 regex 下不再因執行順序與 `-benchtime` 在「全檔重讀」與「mtime fast-path」兩個模式間翻轉（改前 1000 單獨 1s 量到 42943 allocs/op，改後恆為約 33333）。PR gate 與 nightly 的完整 regex 下它本來就落在 Warm，數字不會出現斷層。冷路徑改看 `..._1000_NoChange_Reread`。
+
+⚠️ **同名不同模式**：平面的 `BenchmarkIncrementalLoad_1000_NoChange` 與 `..._OneFileChanged` 固定在 **Reread** 模式（[#2344](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/2344)），和上面固定在 Warm 的階層 `..._NoChange` 相反：載入前把 fixture mtime 推到一小時後，`TreeScanMtimeGuard` 永遠不放行 fast-path，每個 tick 全檔重讀。改前兩者每次都從 `b.TempDir()` 新建 fixture，迴圈越過 2s 後才轉進 fast-path，所以 `-benchtime 3s` 量到的是兩個模式的混合（NoChange 單獨跑 1s 為 16107 allocs/op、3s 為約 10.2k–10.7k）。平面的 Warm 模式由 `..._NoChange_MtimeGuard` 量。⛔ **nightly 會出現一次階梯，那是工作定義改變、不是退化**：PR gate（`bench_gate_compare.sh`，1s）改前就落在 Reread，沒有斷層；但 nightly（`bench-record.yaml` 與 `make benchmark-report`，3s）改前量到的是混合值，main 側從 #2344 起跳到 Reread，而參考版本側仍是混合值，這兩支的配對比值會一次性上升（當夜 `workload_drift` 會列出 `config_bench_test.go`，見 ADR-032 §工作定義漂移）。
 
 ---
 

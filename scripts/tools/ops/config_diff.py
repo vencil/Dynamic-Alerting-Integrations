@@ -15,6 +15,7 @@ Usage:
   python3 scripts/tools/ops/config_diff.py --old-dir conf.d.bak --new-dir conf.d/ --format markdown
 """
 import argparse
+import io
 import json
 import os
 import sys
@@ -34,6 +35,9 @@ from _lib_python import (  # noqa: E402
     VALID_RESERVED_KEYS,
 )
 from _lib_io import load_yaml_file_strict  # noqa: E402  (#2231 duplicate key = YAML error)
+from _lib_io import (  # noqa: E402  (#2297 `_profile` as source text)
+    YamlFileError, load_yaml_file_strict_exporter_keys, strict_load_exporter_keys,
+)
 from _lib_exitcodes import EXIT_OK, EXIT_VIOLATION, EXIT_CALLER_ERROR  # noqa: E402
 from _threshold_alerts import alerts_for_key  # noqa: E402
 
@@ -76,8 +80,44 @@ def load_profiles_from_dir(dir_path):
     # Strict (#2231): the exporter drops a _profiles.yaml holding a key
     # twice, so a diff of whichever value PyYAML kept last is a diff of a
     # file nobody applies — refuse it like bad syntax (main() -> rc 2).
-    raw = load_yaml_file_strict(profiles_path, default={})
+    # #2297: profile names are the keys' source text, as the exporter keys
+    # them (`010:` is "010"), so they join `load_tenant_profile_refs`.
+    raw = load_yaml_file_strict_exporter_keys(profiles_path, default={})
     return raw.get("profiles", {}) if isinstance(raw, dict) else {}
+
+
+def _load_tenant_configs_profile_text(dir_path):
+    """``_lib_python.load_tenant_configs``, except every `_profile:` value is
+    its source TEXT, as the exporter reads it (#2297): `_profile: 010` names
+    profile "010", where PyYAML's 8 named none — and `010` -> `8` diffed as
+    no change.
+
+    ⚠️ A copy of that loader's walk (same ``iter_yaml_files`` listing, same
+    strict read with source-text keys, same wrapper / flat split), not a
+    flag on it: ``_lib_io``'s loaders are being reworked under #2115, and
+    their other callers must not change here. Only the two readers of
+    `_profile` below use it; tests/ops/test_profile_ref_as_text.py pins
+    that it lists the same tenants as the shared loader.
+    """
+    configs = {}
+    for fname, fpath in iter_yaml_files(dir_path):
+        try:
+            stream = io.StringIO(Path(fpath).read_bytes().decode("utf-8"))
+            stream.name = str(fpath)
+            raw = strict_load_exporter_keys(stream, raw_text_scalars=("_profile",))
+        except (UnicodeDecodeError, yaml.YAMLError) as exc:
+            raise YamlFileError(str(fpath), exc) from exc
+        if raw is None:
+            raw = {}
+        if not isinstance(raw, dict):
+            continue
+        if "tenants" in raw and isinstance(raw.get("tenants"), dict):
+            for t_name, t_data in raw["tenants"].items():
+                if isinstance(t_data, dict):
+                    configs[t_name] = t_data
+        else:
+            configs[fname.rsplit(".", 1)[0]] = raw
+    return configs
 
 
 def load_tenant_profile_refs(dir_path):
@@ -86,11 +126,14 @@ def load_tenant_profile_refs(dir_path):
     Returns {profile_name: [tenant1, tenant2, ...]}.
     """
     refs = {}
-    raw_configs = _load_tenant_configs_raw(dir_path)
+    raw_configs = _load_tenant_configs_profile_text(dir_path)
     for t_name, t_data in raw_configs.items():
         profile = t_data.get("_profile")
-        if profile and isinstance(profile, str):
-            refs.setdefault(profile, []).append(t_name)
+        # Stripped, as the exporter's `profileNameOf` (TrimSpace) and the
+        # other readers (describe_tenant / diagnose / validate_config) name
+        # it (#2297): `'010 '` and a block scalar `|` 010 bind profile 010.
+        if isinstance(profile, str) and profile.strip():
+            refs.setdefault(profile.strip(), []).append(t_name)
     return refs
 
 
@@ -323,7 +366,8 @@ def load_settings_from_dir(dir_path):
     """
     if not Path(dir_path).is_dir():
         return {}
-    raw_configs = _load_tenant_configs_raw(dir_path)
+    # #2297: `_profile` as its source text — `010` -> `8` is a switch.
+    raw_configs = _load_tenant_configs_profile_text(dir_path)
     return {
         tenant: {
             key: value for key, value in (cfg or {}).items()

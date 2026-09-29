@@ -1,0 +1,3 @@
+defaults:
+  mysql_connections: 80
+  container_memory: 85

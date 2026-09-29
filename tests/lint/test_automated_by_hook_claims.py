@@ -5,8 +5,10 @@ WHY: checklist 會在某一步旁邊標 `[已自動化於 hook: X]`，讀者看�
 裡根本沒有這個 hook——它其實由 `make lint-docs` 執行。標籤錯了，讀者就會漏跑。
 
 WHAT IS CHECKED: 全 repo 的 Markdown 裡，每個 `已自動化於 hook: a, b + c` 標籤列出的
-名稱，都要在 `.pre-commit-config.yaml` 的 hook id 裡找得到。不檢查那支 hook 是否真的
-涵蓋了該步驟所說的內容——那需要讀懂散文，不是字串比對能回答的。
+名稱，都要在 `.pre-commit-config.yaml` 的 hook id 裡找得到；每個
+`已自動化於 test: x, y 等` 標籤列出的名稱，都要是 `tests/**/x.py` 這樣一支真的測試檔
+（#2423）。不檢查那支 hook／測試是否真的涵蓋了該步驟所說的內容——那需要讀懂散文，
+不是字串比對能回答的。
 """
 from __future__ import annotations
 
@@ -18,7 +20,9 @@ import yaml
 from _tree import REPO_ROOT, repo_files
 
 _CLAIM = re.compile(r"已自動化於 hook[:：]\s*([^\]`\n]+)")
+_TEST_CLAIM = re.compile(r"已自動化於 test[:：]\s*([^\]`\n]+)")
 _SPLIT = re.compile(r"\s*[,，、+/]\s*")
+_TRAILING_ETC = re.compile(r"\s*等$")
 
 
 def _hook_ids() -> set[str]:
@@ -26,15 +30,19 @@ def _hook_ids() -> set[str]:
     return {hook["id"] for repo in cfg["repos"] for hook in repo["hooks"]}
 
 
-def _claims() -> list[tuple[Path, int, str]]:
+def _claims(pattern: re.Pattern[str] = _CLAIM) -> list[tuple[Path, int, str]]:
     found = []
     for path in repo_files(".md"):
         for lineno, line in enumerate(path.read_text(encoding="utf-8").splitlines(), 1):
-            for m in _CLAIM.finditer(line):
-                for name in _SPLIT.split(m.group(1).strip()):
+            for m in pattern.finditer(line):
+                for name in _SPLIT.split(_TRAILING_ETC.sub("", m.group(1).strip())):
                     if name:
                         found.append((path, lineno, name))
     return found
+
+
+def _test_modules() -> set[str]:
+    return {p.stem for p in repo_files(".py") if p.relative_to(REPO_ROOT).parts[0] == "tests"}
 
 
 def test_scan_finds_claims():
@@ -52,4 +60,23 @@ def test_every_claimed_hook_exists():
     assert not missing, (
         "these '已自動化於 hook' labels name no hook id in .pre-commit-config.yaml "
         "(fix the label, or say which make target runs it instead):\n  " + "\n  ".join(missing)
+    )
+
+
+def test_scan_finds_test_claims():
+    # Non-vacuity, same reason as above.
+    assert len(_claims(_TEST_CLAIM)) >= 3
+
+
+def test_every_claimed_test_exists():
+    modules = _test_modules()
+    missing = [
+        f"{p.relative_to(REPO_ROOT).as_posix()}:{n}: {name}"
+        for p, n, name in _claims(_TEST_CLAIM)
+        if name not in modules
+    ]
+    assert not missing, (
+        "these '已自動化於 test' labels name no tests/**/<name>.py file "
+        "(fix the label to the test that covers it, or drop the 🛡️ claim):\n  "
+        + "\n  ".join(missing)
     )

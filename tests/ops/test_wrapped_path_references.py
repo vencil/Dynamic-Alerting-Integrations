@@ -861,14 +861,16 @@ def _implicit_concat_references(text: str, path: str = "<synthetic>") -> list[tu
     # (`_implicit_concat_offenders`) and why the control drives THAT rather than
     # this function: a control that only proves this raises says nothing about
     # whether anybody still listens.
-    # ⚠️ No per-file isolation: ONE unparseable tracked `.py` aborts the whole
-    # scan, so a real offender sitting behind the abort is never reported (both
-    # measured; the numbers live in the commit that introduced this). A
-    # deliberately broken fixture is still a legal input with no route back to
-    # green -- that half is the open policy question in #1632.
-    # ⚠️ A deliberately broken fixture is still a legal input with no route back
-    # to green — that half is the open policy question in #1632. A BOM-prefixed
-    # file is NOT: see the strip below, that was this guard being wrong.
+    # ⛔ THIS FUNCTION STILL RAISES; the per-file isolation (#1632) lives in
+    # that one caller, which turns the exception into an `UNPARSEABLE` entry
+    # for THIS file and goes on to the next. It used to abort the whole scan,
+    # so a real offender sorted after the bad file was never reported. Raising
+    # here and isolating there keeps this a pure per-file question and keeps
+    # the "report, never skip" decision at a single site the control drives.
+    # ⚠️ A deliberately broken fixture is still red, by decision rather than
+    # by accident — see `_implicit_concat_offenders` for why. A BOM-prefixed
+    # file is NOT unparseable: see the strip below, that was this guard being
+    # wrong.
     # ⛔ `filename=` ALONE does not put the path in front of the reader, and the
     # axis is the PLATFORM, not the interpreter: `SyntaxError.__str__` trims the
     # filename at the platform separator (`\` on Windows, `/` on POSIX), so the
@@ -884,7 +886,8 @@ def _implicit_concat_references(text: str, path: str = "<synthetic>") -> list[tu
     # than by constructing a new exception, because a fresh `SyntaxError(str)`
     # drops `filename`, `lineno`, `offset` and `text` to None — the structured
     # diagnostics this whole paragraph exists to protect.
-    # ⚠️ Re-raising is not swallowing — the ban above is on `continue`.
+    # ⚠️ Re-raising is not swallowing — the ban above is on `continue`, and the
+    # caller that catches this records it rather than dropping it.
     # ⛔ ONE leading BOM is stripped first: `ast.parse` over a decoded `str` is
     # stricter than Python itself, which compiles from BYTES and whose tokeniser
     # drops one U+FEFF. A file that RUNS was being reported as unparseable.
@@ -909,11 +912,10 @@ def _implicit_concat_references(text: str, path: str = "<synthetic>") -> list[tu
     try:
         tree = ast.parse(text.removeprefix("\ufeff"), filename=path)
     except SyntaxError as exc:
-        # ⚠️ The ticket pointer is the only guidance a contributor gets
-        # here. Blind review measured what its absence costs: a legitimately
-        # unparseable `.py` (a fixture for a linter's error path) turns this
-        # scan into a bare traceback, and every cheap way back to green disarms
-        # something. #1632 is where that policy question lives.
+        # ⚠️ The path prefix and the ticket pointer are what the caller's
+        # `UNPARSEABLE` entry is built from, so this message is what the
+        # contributor reads. It says the file does not PARSE — not that it
+        # hides a path, which nobody has checked. #1632 holds the policy.
         exc.msg = f"{path}: {exc.msg} (this file must parse for the #1394 scan; see #1632)"
         raise
     lines = text.split("\n")
@@ -986,12 +988,91 @@ def _implicit_concat_offenders(files: list[tuple[str, str]]) -> dict[str, list[s
     can wrap in `except SyntaxError: continue` — and the control at the time
     asserted only that the CHECK raises, so it stayed green through exactly that
     edit. Production and control now call the same name.
+
+    ⛔ PER-FILE ISOLATION (#1632). A file that does not parse is reported as
+    ITS OWN entry — one hit, starting `UNPARSEABLE: <path>: <diagnosis>` — and
+    the scan goes on to the next file. It used to raise out of here, so ONE bad
+    `.py` aborted the whole corpus and a real split sorted after it was never
+    reported: the reader saw a traceback about one file and nothing about the
+    defect it hid.
+
+    ⛔ AND IT IS STILL RED, by decision (#1632, owner ruling 2026-09-28): when
+    that ruling was made no hook and no CI job in this repo ran a Python syntax
+    check — no ruff, flake8 or py_compile — so this scan's fail-closed parse was
+    in practice the only one. Skipping the file would have turned "this file is
+    not Python" into silence. Only the BLAST RADIUS shrank, from the whole scan
+    to the one file.
+
+    ⚠️ The two kinds of entry share this dict on purpose. The caller asserts on
+    the dict as a whole, so no call site can forget one class — silencing the
+    unparseable half takes an explicit filter, not an omission. What the reader
+    needs from each is different (fix a syntax error vs reflow a literal), and
+    `_implicit_concat_message` is what keeps them apart.
     """
     found: dict[str, list[str]] = {}
     for path, text in files:
-        for line, token in _implicit_concat_references(text, path):
-            found.setdefault(path, []).append(f"line {line} -> {token}")
+        try:
+            hits = _implicit_concat_references(text, path)
+        except SyntaxError as exc:
+            # `exc.msg` already starts with the path (see the mutation in
+            # `_implicit_concat_references`), independent of platform.
+            found[path] = [f"{_UNPARSEABLE}{exc.msg} [line {exc.lineno}]"]
+        else:
+            for line, token in hits:
+                found.setdefault(path, []).append(f"line {line} -> {token}")
     return found
+
+
+# Marks an `_implicit_concat_offenders` entry for a file that did not parse.
+_UNPARSEABLE = "UNPARSEABLE: "
+
+
+def _implicit_concat_message(offenders: dict[str, list[str]]) -> str:
+    """The failure message for `_implicit_concat_offenders`, one section per class.
+
+    ⛔ Pure, so the control can check that an unparseable file is filed under
+    "does not parse" and never under "hides a path". The two are handled in
+    opposite ways, and a contributor told their broken file "splits a path"
+    goes looking for a literal that is not there.
+    """
+    unparseable = {p: v for p, v in offenders.items()
+                   if any(h.startswith(_UNPARSEABLE) for h in v)}
+    splits = {p: v for p, v in offenders.items() if p not in unparseable}
+    sections = []
+    if splits:
+        sections.append(
+            "a path is broken apart in the SOURCE — implicit concatenation, a "
+            "backslash continuation, or an escape — while the runtime string is "
+            "whole. `git grep` on the path does not return this site, so a rename "
+            "sweep reports the tree clean (#1394).\n"
+            "⚠️ FIRST DECIDE WHICH ONE YOU HAVE, because this check cannot. If the "
+            "thing named below is NOT a reference to one of our files — a fixture "
+            "holding somebody else's config, a string that merely happens to read "
+            "like a path — then there is nothing to fix and the report is wrong. "
+            "That is a defect in THIS CHECK, not in your change: there is no "
+            "per-line exemption here either, so raise it against the check.\n"
+            "⛔ If it IS a reference: put the whole path in ONE literal. The runtime "
+            "string does not change, only where the source breaks. Do NOT split the "
+            "literals with a comma — that changes what the code means and leaves "
+            "the reference just as invisible.\n"
+            + "\n".join(f"  {p}:\n    " + "\n    ".join(v)
+                        for p, v in sorted(splits.items())))
+    if unparseable:
+        sections.append(
+            "UNPARSEABLE — the tracked `.py` file(s) below are not valid Python, "
+            "so this scan could not read them at all (#1632). This is NOT a report "
+            "of a hidden path: nothing inside these files was checked. The other "
+            "files were still scanned, and anything they hide is listed "
+            "separately.\n"
+            "⛔ Fix the syntax. This stays red on purpose: when #1632 was decided, "
+            "this scan's parse was the only Python syntax check run over every "
+            "tracked file, so going green by skipping the file silences that too. "
+            "A file that is MEANT to be unparseable — a fixture for a linter's "
+            "error path — cannot be a tracked `.py` here; write it at test time "
+            "(under `tmp_path`) instead.\n"
+            + "\n".join(f"  {p}:\n    " + "\n    ".join(v)
+                        for p, v in sorted(unparseable.items())))
+    return "\n\n".join(sections)
 
 
 # ⛔ THE TRIPWIRES BELOW ARE PURE FUNCTIONS, and that shape is the whole point.
@@ -1793,19 +1874,23 @@ def test_no_reference_is_split_across_implicit_concatenation() -> None:
         token predicate narrowed to `.py`   defect silenced   -> non-`.py` case
         skip constants inside an f-string   defect silenced   -> f-string case
         `ast.walk` -> `tree.body`           all verdicts gone -> plain case
-        swallow SyntaxError inside the scan  file leaves silently -> corpus case
-        drop the path from the message       reader loses the file -> fail-closed case
+        swallow SyntaxError inside the scan  file leaves silently -> isolation case
+        abort on the first bad file (#1632)  later splits unseen  -> isolation case
+        file the bad file under "splits"     wrong fix sought     -> isolation case
+        drop the path from the message       reader loses the file -> isolation case
         drop entries from the corpus         nothing to find      -> twins case
         narrow the corpus at the use site    nothing to find      -> NOTHING; see
                                                                     the disclosure
                                                                     above the scan
 
-    ⛔ WHAT IS STILL NOT GUARDED, measured rather than implied. Wrapping the
-    call to the scan BELOW in `except SyntaxError: continue` passes: the
-    `pytest.raises` case proves the function raises, which says nothing about
-    whether this line still listens. The refactor to one call site moved that
-    hole out a level, it did not close it — the same shape
-    `test_tracked_is_never_narrowed_at_a_use_site` names for its own subject.
+    ⛔ WHAT IS STILL NOT GUARDED. Since #1632 the call BELOW no longer raises
+    — an unparseable file comes back as an `UNPARSEABLE` entry in the same
+    dict — so the old hole (wrap the call in `except SyntaxError: continue`)
+    has nothing left to catch. Its successor is filtering those entries out of
+    `offenders` before the assert: nothing here would notice. That now takes a
+    deliberate edit rather than a one-line wrap, but it is the same shape
+    `test_tracked_is_never_narrowed_at_a_use_site` names for its own subject,
+    moved out a level rather than closed.
     ⚠️ Which assertion fires was read from the failing LINE NUMBER. The first
     attempt matched the assertion's own source text in the traceback, which
     `--tb=long` prints, and would have agreed with any outcome.
@@ -1941,56 +2026,75 @@ def test_no_reference_is_split_across_implicit_concatenation() -> None:
         "would arm this check over every list of paths in the repo: "
         + repr(_implicit_concat_references(listed)))
 
-    # ⛔ FAIL-CLOSED, driven through the SAME function production uses. Asserting
-    # only that the check raises left the caller free to swallow it: blind review
-    # wrapped the call sites in `except SyntaxError: continue` and the whole
-    # module stayed green while an unparseable file left the scan silently.
-    # ⚠️ THE PREFIX IS PINNED, not mere containment, and that is what makes this
-    # case portable. `SyntaxError.__str__` trims the filename at the PLATFORM
-    # separator, so `"zfake/broken.py" in str(...)` passed on a Windows host and
-    # failed on the Linux runner — the verdict depended on where it ran, not on
-    # the code. ⛔ Not on the interpreter VERSION: 3.13 and 3.14 were measured on
-    # one machine and render identically. Requiring the message to START with
-    # the path pins the mutation that puts it there, on every platform.
-    # ⛔ THE TWO ASSERTIONS AFTER IT ARE NOT DECORATION. Blind review weakened
-    # the first version of this fix one layer at a time and each of the four
-    # weakenings below left the module green; three are pinned now, and the
-    # measured mapping is one-to-one rather than the tidy story it first read as:
-    #
-    #   cut the message to the bare path      -> caught by the FIRST assertion
-    #   drop `filename=` from `ast.parse`     -> caught by the structured fields
-    #   replace the diagnosis, keep the prefix-> caught by the LAST assertion
-    #   rebuild the exception from the tuple  -> NOT caught (see below)
-    #
-    # ⚠️ That last one is a disclosure, not a claim, and the reason is narrower
-    # than an earlier version of this comment said. Nothing in this file asserts
-    # on `__cause__` or `__context__` (measured, zero assertions). But rebuilding
-    # the exception inside an `except` block does NOT lose the chain: implicit
-    # chaining still sets `__context__` to the original, so the traceback still
-    # prints it. What such an edit loses is nothing measurable here — which is
-    # exactly why it is unpinned and why saying "it drops the chain" was wrong.
+    # ⛔ FAIL-CLOSED WITH PER-FILE ISOLATION (#1632), driven through the SAME
+    # function production uses. Asserting only that the check raises left the
+    # caller free to swallow it: blind review wrapped the call sites in
+    # `except SyntaxError: continue` and the whole module stayed green while an
+    # unparseable file left the scan silently. Since #1632 the caller catches
+    # on purpose — so what is pinned is that it REPORTS the file, keeps going,
+    # and files it under the right heading.
+    broken = "def (\n"
+
+    # The raising site first: its structured fields are what the entry below is
+    # built from. ⚠️ `filename` and `lineno` only. `offset` and `text` are NOT
+    # pinned — nulling them was measured to leave this module green — so they
+    # are not claimed here either; naming a field the assertion does not check
+    # is how a message becomes a promise nothing keeps.
     with pytest.raises(SyntaxError) as parse_failure:
-        _implicit_concat_offenders([("zfake/broken.py", "def (\n")])
+        _implicit_concat_references(broken, "zfake/broken.py")
     failure = parse_failure.value
-    assert str(failure).startswith("zfake/broken.py: "), (
-        "the error must name the file, and name it the same way on every "
-        "platform. Without that the report is a bare `line 1` over hundreds of "
-        "files, and the cheapest way back to green is to stop parsing rather "
-        "than to fix the file: "
-        + str(failure))
-    # ⚠️ `filename` and `lineno` only. `offset` and `text` are NOT pinned —
-    # nulling them was measured to leave this module green — so they are not
-    # claimed here either; naming a field the assertion does not check is how a
-    # message becomes a promise nothing keeps.
     assert failure.filename == "zfake/broken.py" and failure.lineno == 1, (
         "filename and lineno must survive. Building a NEW SyntaxError from a "
         "bare string drops them, and they are what an editor and a traceback "
         "read: "
         + repr((failure.filename, failure.lineno)))
-    assert "invalid syntax" in str(failure), (
-        "the prefix must not replace the diagnosis — a message that names the "
-        "file but not what is wrong with it sends the reader back to square "
-        "one: " + str(failure))
+
+    # ⛔ THE ISOLATION CASE. A bad file sorted BEFORE a real split: both must
+    # come back, each as its own class. Every weakening in this test's
+    # docstring table marked "isolation case" turns this red —
+    #
+    #   let the SyntaxError propagate (pre-#1632) -> this call ERRORS
+    #   `except SyntaxError: continue`            -> the broken key is missing
+    #   stop after the bad file (`break`)         -> the split key is missing
+    #   cut the entry to the bare path            -> "invalid syntax" missing
+    #   drop the line number                      -> "[line 1]" missing
+    #   file it under the split heading           -> message check below
+    #
+    # ⚠️ THE PREFIX IS PINNED, not mere containment, and that is what makes this
+    # portable. `SyntaxError.__str__` trims the filename at the PLATFORM
+    # separator, so `"zfake/broken.py" in str(...)` once passed on a Windows host
+    # and failed on the Linux runner. The entry is built from `exc.msg`, which
+    # the mutation in `_implicit_concat_references` prefixes with the whole path
+    # on every platform; requiring the entry to START with it pins that.
+    first, second = "tests/ops/zfake_a_broken.py", "tests/ops/zfake_b_split.py"
+    isolated = _implicit_concat_offenders([(first, broken), (second, plain)])
+    assert sorted(isolated) == [first, second], (
+        "one unparseable file must neither abort the scan nor vanish from it: "
+        "both the broken file and the split sorted after it must be reported "
+        "(#1632): " + repr(isolated))
+    assert isolated[second] == [f"line 2 -> {subject}"], isolated
+    [entry] = isolated[first]
+    assert entry.startswith(f"UNPARSEABLE: {first}: "), (
+        "the entry must say the file does not PARSE, and name it the same way "
+        "on every platform: " + entry)
+    assert "invalid syntax" in entry and "[line 1]" in entry, (
+        "the entry must carry the diagnosis and the line — a message that "
+        "names the file but not what is wrong with it sends the reader back to "
+        "square one: " + entry)
+
+    # ⛔ AND IT MUST READ AS "DOES NOT PARSE", NEVER AS "HIDES A PATH". The two
+    # need opposite fixes; a broken file filed under the split guidance sends
+    # its author looking for a literal that is not there.
+    message = _implicit_concat_message(isolated)
+    split_part, _, unparseable_part = message.partition("UNPARSEABLE — ")
+    assert first in unparseable_part and first not in split_part, (
+        "the unparseable file must be listed under the unparseable heading "
+        "only:\n" + message)
+    assert second in split_part and second not in unparseable_part, (
+        "the split must be listed under the split heading only:\n" + message)
+    assert "UNPARSEABLE" not in _implicit_concat_message(
+        {second: isolated[second]}), (
+        "a scan with no unparseable file must not print that section")
 
     # ⛔ MUST SCAN EVERY FILE IT IS GIVEN. Truncating the corpus — `files[:1]`,
     # an `islice` — is invisible to any count of FINDINGS, because that count
@@ -2023,8 +2127,9 @@ def test_no_reference_is_split_across_implicit_concatenation() -> None:
     #
     # ⛔ AND THE PAIR ACTIVELY MISLED. Adding a legitimately unparseable `.py`
     # (a fixture for a linter's error path — a BOM'd file no longer qualifies;
-    # see the strip in `_implicit_concat_references`) makes the scan below raise.
-    # The honest fix is to exclude that one file; the
+    # see the strip in `_implicit_concat_references`) made the scan below raise
+    # at the time (since #1632 it is an `UNPARSEABLE` entry instead, still red).
+    # The honest fix then looked like excluding that one file; the
     # equality's message said "⛔ Do not narrow this comparison ... widen the
     # corpus back", which is not a route back to green — so the next move it left
     # was to write the filter INSIDE the call expression, where neither guard can
@@ -2040,20 +2145,7 @@ def test_no_reference_is_split_across_implicit_concatenation() -> None:
     # the call expression itself, is silent. `_unread_drift` still reports a
     # tracked file that was never read, which covers the accidental half.
     offenders = _implicit_concat_offenders(files)
-    assert not offenders, (
-        "a path is broken apart in the SOURCE — implicit concatenation, a "
-        "backslash continuation, or an escape — while the runtime string is "
-        "whole. `git grep` on the path does not return this site, so a rename "
-        "sweep reports the tree clean (#1394).\n"
-        "⚠️ FIRST DECIDE WHICH ONE YOU HAVE, because this check cannot. If the "
-        "thing named below is NOT a reference to one of our files — a fixture "
-        "holding somebody else's config, a string that merely happens to read "
-        "like a path — then there is nothing to fix and the report is wrong. "
-        "That is a defect in THIS CHECK, not in your change: there is no "
-        "per-line exemption here either, so raise it against the check.\n"
-        "⛔ If it IS a reference: put the whole path in ONE literal. The runtime "
-        "string does not change, only where the source breaks. Do NOT split the "
-        "literals with a comma — that changes what the code means and leaves "
-        "the reference just as invisible.\n"
-        + "\n".join(f"  {p}:\n    " + "\n    ".join(v)
-                    for p, v in sorted(offenders.items())))
+    # ⛔ ONE assert over BOTH classes — splits and unparseable files (#1632). The
+    # message keeps them apart; the verdict does not, so neither can go green
+    # by being left out of it.
+    assert not offenders, _implicit_concat_message(offenders)

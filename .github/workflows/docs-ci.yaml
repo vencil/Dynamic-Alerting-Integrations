@@ -99,6 +99,8 @@ jobs:
               - "scripts/tools/lint/**/*.sh"
               # i4-runbook-smoke-test verifies its tool downloads with it.
               - "scripts/ops/_verify_download.sh"
+              # i4-runbook-smoke-test takes amtool from the image this pins (#2294).
+              - "k8s/03-monitoring/deployment-alertmanager.yaml"
               # ⛔ Inputs reached INDIRECTLY — through a script a gated job
               # merely invokes. That is exactly the class the coverage guard in
               # tests/ops/test_ci_path_filter_coverage.py documents it
@@ -522,21 +524,30 @@ jobs:
         # tests/ops/test_docs_ci_promtool_major.py. Each download is checked
         # against a pinned SHA-256 (upstream sha256sums.txt / yq `checksums`);
         # bump version and digest together.
+        # amtool has NO pin of its own (#2294): it is copied out of the
+        # Alertmanager image the deployment manifest runs — the same ref, tag
+        # and digest, the da-tools image bundles — so a Renovate bump of the
+        # manifest moves this check with it. Derived the way validate.yaml's
+        # amtool step derives it (config-reloader sidecar not matched).
         run: |
           set -euo pipefail
-          AMTOOL_VERSION=0.33.1
-          AMTOOL_SHA256=93d802cba6a8d27239d747ce117df7648d326ab67394e32247540b030e9842ba
+          AM_IMAGE=$(grep -m1 -oE "prom/alertmanager:[^[:space:]\"']+" \
+            k8s/03-monitoring/deployment-alertmanager.yaml || true)
+          if [ -z "$AM_IMAGE" ]; then
+            echo "ERROR: no prom/alertmanager image found in deployment-alertmanager.yaml" >&2
+            exit 1
+          fi
+          echo "amtool image (from deployment manifest): $AM_IMAGE"
           PROMTOOL_VERSION=3.15.0
           PROMTOOL_SHA256=2a542df32eac02ee17b9d844fb2aa1de00dafa5476579ba8a3ba862e9d572ea0
           YQ_VERSION=4.53.6
           YQ_SHA256=c5f056448f973ae7d39b5401949648a78f2dc1947d6a8eb65be60d5c504b9385
 
           DL=$(mktemp -d)
-          curl -fsSL -o "$DL/amtool.tar.gz" \
-            "https://github.com/prometheus/alertmanager/releases/download/v${AMTOOL_VERSION}/alertmanager-${AMTOOL_VERSION}.linux-amd64.tar.gz"
-          bash scripts/ops/_verify_download.sh "$DL/amtool.tar.gz" "$AMTOOL_SHA256"
-          tar xzf "$DL/amtool.tar.gz" -C "$DL"
-          sudo install -m 0755 "$DL/alertmanager-${AMTOOL_VERSION}.linux-amd64/amtool" /usr/local/bin/
+          AM_CID=$(docker create "$AM_IMAGE")
+          docker cp "$AM_CID:/bin/amtool" "$DL/amtool"
+          docker rm "$AM_CID" >/dev/null
+          sudo install -m 0755 "$DL/amtool" /usr/local/bin/
 
           curl -fsSL -o "$DL/prom.tar.gz" \
             "https://github.com/prometheus/prometheus/releases/download/v${PROMTOOL_VERSION}/prometheus-${PROMTOOL_VERSION}.linux-amd64.tar.gz"

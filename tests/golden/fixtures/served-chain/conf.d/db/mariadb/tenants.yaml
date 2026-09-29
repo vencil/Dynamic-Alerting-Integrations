@@ -1,0 +1,3 @@
+tenants:
+  tenant-served-chain:
+    mysql_connections: "60"

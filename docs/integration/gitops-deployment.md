@@ -177,7 +177,7 @@ python3 scripts/tools/ops/generate_alertmanager_routes.py \
   -o deploy/alertmanager-configmap.yaml
 ```
 
-PATH 上有 `amtool` 時會自動用它驗證 ConfigMap 裡的 `alertmanager.yml`，被拒收就結束碼 1 且不寫出 `-o`；沒有 `amtool` 會印 NOTICE 說明未經驗證（#2219）。
+PATH 上有 `amtool` 時會自動用它驗證 ConfigMap 裡的 `alertmanager.yml`，被拒收就結束碼 1 且不寫出 `-o`；沒有 `amtool` 會印 NOTICE 說明未經驗證（#2219）。da-tools 映像內含 `amtool`（與部署的 Alertmanager 同一個 image；#2294），在映像裡跑預設就會驗證。⚠️ v2.9.0 映像不內含 `amtool` <!-- image-caveat: v2.9.0 -->
 
 產出的 YAML 可直接 `kubectl apply` 或由 ArgoCD/Flux 自動 sync。與方式 A（threshold-config）搭配使用，實現 threshold-exporter 和 Alertmanager 配置的完整 GitOps 閉環。
 

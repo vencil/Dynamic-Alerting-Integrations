@@ -284,6 +284,10 @@ cat >&2 <<EOF
 ║                                                              ║
 ║  Run this before pushing:                                    ║
 ${_checkout_hint}
+║  No \`make\` (Windows host)? Put this where the make call is:
+║      python scripts/tools/dx/pr_preflight.py
+║  (Linux / container: python3. On Windows, python3 is the
+║  Store stub.)
 ║                                                              ║
 ║  Emergency bypass (use sparingly):                           ║
 ║      GIT_PREFLIGHT_BYPASS=1 git push ...                     ║

@@ -90,11 +90,19 @@ def _dot_dirs(rel: str) -> list[int]:
     return [i for i, part in enumerate(rel.split("/")[:-1]) if part.startswith(".")]
 
 
-# The declared difference from CI, per engine: paths CI validates (its
-# os.walk enters every directory) that the editor binds to NO schema.
-DECLARED_UNBOUND = {
-    "bash": lambda rel: any(i > 0 for i in _dot_dirs(rel)),
-    "default": lambda rel: bool(_dot_dirs(rel)),
+# The declared difference from CI, per engine. CI prunes every `.`-prefixed
+# directory like the exporter's walker (#2360), and the `default` engine's
+# `**` never enters one either, so those two agree on every path. The `bash`
+# engine enters a dot-dir that is the FIRST directory under conf.d, so there
+# the editor binds a schema to a file CI (and the exporter) never reads —
+# the same schema CI binds to that path with the leading dot-dir removed.
+def _bash_overbound(rel: str) -> bool:
+    return _dot_dirs(rel) == [0]
+
+
+DECLARED_OVERBOUND = {
+    "bash": _bash_overbound,
+    "default": lambda rel: False,
 }
 
 
@@ -331,22 +339,29 @@ def test_editor_globs_bind_exactly_what_ci_validates(schemas, ci, mode):
     for rel in _MUST_PLATFORM:
         assert editor[rel] == "P", f"[{mode}] must-fire control not bound: {rel} -> {editor[rel]}"
 
-    declared = DECLARED_UNBOUND[mode]
+    # CI never validates anything under a dot-dir (#2360).
+    assert all(ci[rel] == "-" for rel in CORPUS if _dot_dirs(rel))
+
+    declared = DECLARED_OVERBOUND[mode]
     # Every path is compared: outside the declared set the editor must equal
-    # CI, inside it the editor must bind NOTHING (and CI must bind something
-    # there, or the declaration is vacuous).
-    expected = {rel: ("-" if declared(rel) else ci[rel]) for rel in CORPUS}
+    # CI; inside it the editor must bind what CI binds for the same path
+    # without its leading dot-dir (and that must be a schema, or the
+    # declaration is vacuous).
+    expected = {rel: (ci[rel.split("/", 1)[1]] if declared(rel) else ci[rel])
+                for rel in CORPUS}
     drift = {rel: (editor[rel], ci[rel]) for rel in CORPUS if editor[rel] != expected[rel]}
     assert not drift, (
         f"[{mode}] devcontainer.json yaml.schemas vs check_confd_schema.py "
         "(rel: (editor, ci)); T=tenant schema, P=platform-defaults schema:\n"
         + "\n".join(f"  {r}: {v}" for r, v in sorted(drift.items())))
-    assert any(declared(rel) and ci[rel] != "-" for rel in CORPUS)
+    if mode == "bash":
+        assert any(declared(rel) and expected[rel] != "-" for rel in CORPUS)
 
 
 def test_bash_mode_enters_a_first_level_dot_dir(schemas, ci):
     """Pins the half of the dot-dir story that differs between engines."""
-    assert editor_classes(schemas, "bash")[".hid/db-a.yaml"] == ci[".hid/db-a.yaml"] == "T"
+    assert editor_classes(schemas, "bash")[".hid/db-a.yaml"] == "T"
+    assert ci[".hid/db-a.yaml"] == "-"  # #2360: CI skips it, like the exporter
     assert editor_classes(schemas, "default")[".hid/db-a.yaml"] == "-"
 
 

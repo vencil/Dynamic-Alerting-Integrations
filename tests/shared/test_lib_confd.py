@@ -18,6 +18,8 @@ from _lib_confd import (  # noqa: E402
     nested_yaml_warning,
     printable_name,
     reset_warned_for_test,
+    TenantCarriers,
+    tenant_carriers,
     unusable_config_entries,
     unusable_config_paths,
     unusable_reason,
@@ -187,6 +189,41 @@ def test_hidden_entries_are_skipped_like_the_exporter(tmp_path: pathlib.Path):
     assert got == ["real/tenant-b.yaml", "tenant-a.yaml"]
     # ...and the guard must not advertise files nobody would have read anyway.
     assert [p.name for p in nested_yaml_files(root)] == ["tenant-b.yaml"]
+
+
+@pytest.mark.parametrize("validate", [None, str.isalnum],
+                         ids=["no-validate", "validate"])
+def test_tenant_carriers_skips_hidden_names_silently(
+        tmp_path: pathlib.Path, validate) -> None:
+    """#2067: `.ghost.yaml` is neither a tenant NOR an invalid name.
+
+    The exporter's walker never reads a `.`-prefixed entry. Before the fix
+    `validate=None` returned tenant `.ghost`, and a `validate` that rejects
+    the stem put it in `invalid` — which the operator readers turn into a
+    warning about a file nothing reads. Both arms, so neither lane can hide
+    in the other.
+
+    ⛔ Control in the same tree: a visible carrier the SAME `validate`
+    rejects (`bad_name`) must still land in `invalid`, or "hidden is not in
+    `invalid`" would be satisfied by a scan that never fills `invalid`.
+    """
+    root = tmp_path / "conf.d"
+    (root / ".snap").mkdir(parents=True)
+    (root / "real.yaml").write_text("tenants:\n  real: {}\n", encoding="utf-8")
+    (root / "bad_name.yaml").write_text("tenants: {}\n", encoding="utf-8")
+    (root / ".ghost.yaml").write_text("tenants:\n  ghost: {}\n", encoding="utf-8")
+    (root / ".ghost.yml").write_text("tenants:\n  ghost: {}\n", encoding="utf-8")
+    (root / ".dirlike.yaml").mkdir()
+    (root / ".snap" / "t.yaml").write_text("tenants: {}\n", encoding="utf-8")
+
+    got = tenant_carriers(root, validate=validate)
+
+    everything = got.tenants + got.invalid + [p.name for p in got.unusable]
+    assert not [n for n in everything if n.startswith(".")], got
+    if validate is None:
+        assert got == TenantCarriers(["bad_name", "real"], [], []), got
+    else:
+        assert got == TenantCarriers(["real"], ["bad_name"], []), got
 
 
 def test_order_is_lexicographic_not_depth_first(tmp_path: pathlib.Path):

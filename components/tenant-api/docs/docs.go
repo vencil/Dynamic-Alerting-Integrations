@@ -668,7 +668,7 @@ const docTemplate = `{
         },
         "/api/v1/groups/{id}/batch": {
             "post": {
-                "description": "Apply a patch to all tenants in a group.",
+                "description": "Apply a patch to all tenants in a group.\nA member whose config file cannot be loaded as a tenant config (config_error malformed_yaml | invalid_config)\nis not patched: its result carries status error and code TENANT_CONFIG_NOT_LOADABLE; repair the tenant file itself first.",
                 "consumes": [
                     "application/json"
                 ],
@@ -794,7 +794,7 @@ const docTemplate = `{
         },
         "/api/v1/tenants": {
             "get": {
-                "description": "Returns tenants visible to the authenticated user, filtered by RBAC.\nconfig_derived is derived from config at request time (「依設定推算」), not observed from Alertmanager.\nA tenant whose config file is not usable is returned as a degraded row carrying only ` + "`" + `id` + "`" + ` and ` + "`" + `config_error` + "`" + `\n(unreadable | not_regular_file | malformed_yaml | invalid_config — parses as YAML at the syntax level but cannot be\nloaded as a tenant config: wrong shape, or errors only a typed decode detects, such as duplicate keys).\nIts environment/domain are unknown, so the\nrow is visible only to callers whose matching RBAC rule does not restrict environments or domains.",
+                "description": "Returns tenants visible to the authenticated user, filtered by RBAC.\nconfig_derived is derived from config at request time (「依設定推算」), not observed from Alertmanager.\nA tenant whose config file is not usable is returned as a degraded row carrying only ` + "`" + `id` + "`" + ` and ` + "`" + `config_error` + "`" + `\n(unreadable | not_regular_file | malformed_yaml | invalid_config — parses as YAML at the syntax level but cannot be\nloaded as a tenant config: wrong shape, errors only a typed decode detects, such as duplicate keys, or a declared\ntenant id that is not valid UTF-8 — threshold-exporter skips such a file whole).\nIts environment/domain are unknown, so the\nrow is visible only to callers whose matching RBAC rule does not restrict environments or domains.",
                 "produces": [
                     "application/json"
                 ],
@@ -823,7 +823,7 @@ const docTemplate = `{
         },
         "/api/v1/tenants/batch": {
             "post": {
-                "description": "Apply patch operations to multiple tenants in one call.",
+                "description": "Apply patch operations to multiple tenants in one call.\nDirect mode: an operation whose tenant config file cannot be loaded as a tenant config (config_error malformed_yaml | invalid_config)\nis not applied: its result carries status error and code TENANT_CONFIG_NOT_LOADABLE; repair the tenant file itself first.",
                 "consumes": [
                     "application/json"
                 ],
@@ -872,7 +872,7 @@ const docTemplate = `{
                         }
                     },
                     "409": {
-                        "description": "PR write-back mode: a tenant in the batch is already declared by another conf.d file (code TENANT_DECLARED_ELSEWHERE; nothing written). Direct mode reports this per op in results[].code instead.",
+                        "description": "PR write-back mode: a tenant in the batch is already declared by another conf.d file (code TENANT_DECLARED_ELSEWHERE), or its config file cannot be loaded as a tenant config (code TENANT_CONFIG_NOT_LOADABLE, with tenant_id and config_error; repair the tenant file itself first); nothing written. Direct mode reports these per op in results[].code instead.",
                         "schema": {
                             "$ref": "#/definitions/ErrorResponse"
                         }
@@ -994,7 +994,7 @@ const docTemplate = `{
         },
         "/api/v1/tenants/{id}": {
             "get": {
-                "description": "Returns the raw YAML and resolved thresholds for a single tenant.",
+                "description": "Returns the raw YAML and resolved thresholds for a single tenant.\nWhen the tenant's file cannot be loaded as a tenant config, the answer is still 200 with raw_yaml and\nsource_hash, plus ` + "`" + `config_error` + "`" + ` (malformed_yaml | invalid_config, as on the list row); threshold-exporter\nskips such a file, so resolved_thresholds, custom_alerts and the validation fields are absent (not empty:\nthe file's content is not vouched for). Partial writes refuse such a file (409 TENANT_CONFIG_NOT_LOADABLE) until the\ntenant file itself is repaired; a whole-file PUT can replace one whose only problem is a non-UTF-8 tenant id, while a\nYAML syntax error, a non-mapping tenants: or duplicate keys currently has to be fixed in git.",
                 "produces": [
                     "application/json"
                 ],
@@ -1181,7 +1181,7 @@ const docTemplate = `{
         },
         "/api/v1/tenants/{id}/custom-alerts": {
             "put": {
-                "description": "Merges the supplied recipe array into the tenant's\n` + "`" + `_custom_alerts` + "`" + ` (comment-preserving AST edit), validates\n(S5 Go validator), and commits. Optimistic concurrency via\nbase_hash (409 on drift). Empty array deletes the key.",
+                "description": "Merges the supplied recipe array into the tenant's\n` + "`" + `_custom_alerts` + "`" + ` (comment-preserving AST edit), validates\n(S5 Go validator), and commits. Optimistic concurrency via\nbase_hash (409 on drift). Empty array deletes the key.\n409 TENANT_CONFIG_NOT_LOADABLE (with tenant_id, config_error) when the tenant's file cannot be loaded as a\ntenant config (malformed_yaml | invalid_config, as on GET): repair the tenant file itself first. A whole-file\nPUT can replace one whose only problem is a non-UTF-8 tenant id; a YAML syntax error, a non-mapping tenants:\nor duplicate keys currently has to be fixed in git.",
                 "consumes": [
                     "application/json"
                 ],
@@ -2407,7 +2407,7 @@ const docTemplate = `{
             "type": "object",
             "properties": {
                 "code": {
-                    "description": "Code is a machine-readable error code for a FAILED op, set only for the\nfailure classes a client is expected to branch on: TENANT_DECLARED_ELSEWHERE\n(the per-op form of the 409 that PUT and the PR-mode batch return) and\nINTERNAL_ERROR (the conf.d walk behind that check could not run; nothing\nwritten). Empty for every other failure and for a successful op.",
+                    "description": "Code is a machine-readable error code for a FAILED op, set only for the\nfailure classes a client is expected to branch on: TENANT_DECLARED_ELSEWHERE\n(the per-op form of the 409 that PUT and the PR-mode batch return),\nTENANT_CONFIG_NOT_LOADABLE (the tenant file cannot be loaded as a tenant\nconfig, #2373; nothing written) and INTERNAL_ERROR (the conf.d walk behind that check could not run; nothing\nwritten). Empty for every other failure and for a successful op.",
                     "type": "string"
                 },
                 "message": {
@@ -2966,6 +2966,14 @@ const docTemplate = `{
         "internal_handler.TenantDetail": {
             "type": "object",
             "properties": {
+                "config_error": {
+                    "description": "ConfigError is set when the tenant's file cannot be loaded as a tenant\nconfig (#2373) — the same reason GET /api/v1/tenants reports on the\ntenant's row: malformed_yaml (not parseable as YAML) or invalid_config\n(parses as YAML but cannot be loaded as a tenant config — wrong shape,\nerrors only a typed decode detects, or a declared tenant id that is not\nvalid UTF-8). threshold-exporter skips such a file whole, so nothing is\nderived from it: raw_yaml and source_hash are returned (so the file can\nbe opened and fixed), and resolved_thresholds, custom_alerts,\nvalidation_warnings and validation_notices are ABSENT — not empty,\nwhich would read as \"none\". Partial writes (PUT .../custom-alerts, the\nbatch patches) refuse such a file (TENANT_CONFIG_NOT_LOADABLE) until\nthe tenant file itself is repaired. Absent on a usable file.",
+                    "type": "string",
+                    "enum": [
+                        "malformed_yaml",
+                        "invalid_config"
+                    ]
+                },
                 "custom_alerts": {
                     "description": "CustomAlerts is the tenant's ` + "`" + `_custom_alerts` + "`" + ` recipes as structured\nJSON (ADR-024 §S6b-2). The portal recipe modal reads this directly so\nthe client never parses YAML — the backend owns the round-trip on both\nread and write. Empty slice when the tenant has none.",
                     "type": "array",
@@ -3017,7 +3025,7 @@ const docTemplate = `{
                     ]
                 },
                 "config_error": {
-                    "description": "ConfigError is set on a DEGRADED row (#1680): the tenant's conf.d file\nexists but is not usable, so every other field except ID is empty —\nits metadata is UNKNOWN, not unlabeled. Absent on a healthy row.\nValues: unreadable (stat/read failed, e.g. a dangling symlink or a\npermission error), not_regular_file (e.g. a symlink to a directory),\nmalformed_yaml (not parseable as YAML), invalid_config (parses as YAML\nat the syntax level but cannot be loaded as a tenant config — wrong\nshape, or errors the YAML library only detects on a typed decode, such\nas duplicate keys). The first three come from confd.FileProblem;\ninvalid_config is decided by this handler.",
+                    "description": "ConfigError is set on a DEGRADED row (#1680): the tenant's conf.d file\nexists but is not usable, so every other field except ID is empty —\nits metadata is UNKNOWN, not unlabeled. Absent on a healthy row.\nValues: unreadable (stat/read failed, e.g. a dangling symlink or a\npermission error), not_regular_file (e.g. a symlink to a directory),\nmalformed_yaml (not parseable as YAML), invalid_config (parses as YAML\nat the syntax level but cannot be loaded as a tenant config — wrong\nshape, errors the YAML library only detects on a typed decode, such\nas duplicate keys, or a declared tenant id that is not valid UTF-8,\nwhich threshold-exporter rejects the whole file for). The first three\ncome from confd.FileProblem; invalid_config is decided by this handler.",
                     "type": "string",
                     "enum": [
                         "unreadable",

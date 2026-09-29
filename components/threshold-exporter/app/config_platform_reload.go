@@ -17,8 +17,6 @@ import (
 	"slices"
 	"sort"
 
-	"gopkg.in/yaml.v3"
-
 	"github.com/vencil/threshold-exporter/pkg/config"
 )
 
@@ -124,11 +122,9 @@ func profileDeltaFor(tid, srcPath string, prior reloadPriorState, scan reloadSca
 	if err != nil {
 		return nil, nil
 	}
-	var doc any
-	if yaml.Unmarshal(b, &doc) != nil {
-		return nil, nil
-	}
-	raw, err := extractTenantRaw(normalizeYAMLToJSON(doc), tid)
+	// Through ParseTenantDoc, not a generic decode: tid is the flat plane's
+	// tenant id, so a bare `010:` key must be looked up as "010" (#2118).
+	raw, err := config.ParseTenantDoc(b).TenantRaw(tid)
 	if err != nil {
 		return nil, nil
 	}

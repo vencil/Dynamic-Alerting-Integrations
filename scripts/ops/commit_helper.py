@@ -15,8 +15,16 @@ Modes:
   check-ascii <msg>   — exit 0 if MSG is ASCII-only, 1 with hint otherwise.
                         Used before `git commit -m "..."` to reject messages
                         that cmd.exe would corrupt.
-  commit-file <path>  — read UTF-8 file, pipe bytes to `git commit -F -`.
-                        Preserves non-ASCII reliably.
+  commit-file <path>  — read UTF-8 file, validate it with the same check the
+                        commit-msg hook runs, then pipe bytes to
+                        `git commit -F -`. Preserves non-ASCII reliably.
+
+commit-msg gate (#1914):
+  The commit itself runs with --no-verify (windows-mcp-playbook trap #36:
+  pre-commit's generated hook hardcodes a Linux python path), and that flag
+  skips commit-msg too. So commit-file runs the commit-msg validator itself
+  (`pr_preflight.py --check-commit-msg`, via sys.executable — the interpreter
+  the .bat already proved works) and refuses to commit when it fails.
 
 Called from scripts/ops/win_git_escape.bat. Standalone usage is supported
 for testing but not the primary entry point.
@@ -25,12 +33,47 @@ for testing but not the primary entry point.
 from __future__ import annotations
 
 import argparse
+import os
 import subprocess
 import sys
+import tempfile
 from pathlib import Path
 
 
 EXTRA_GIT_ARGS = ["--no-verify"]
+
+PREFLIGHT = Path(__file__).resolve().parents[2] / "scripts" / "tools" / "dx" / "pr_preflight.py"
+
+
+def check_commit_msg(data: bytes) -> int:
+    """Run the commit-msg hook's validator on DATA; return its exit code.
+
+    Mirrors scripts/hooks/commit-msg: a missing validator does not block
+    (but says so, instead of passing silently).
+    """
+    if not PREFLIGHT.exists():
+        print(
+            f"WARN: {PREFLIGHT} not found; commit message NOT validated locally "
+            "(CI commitlint still checks it).",
+            file=sys.stderr,
+        )
+        return 0
+    fd, tmp = tempfile.mkstemp(prefix="commit_msg_", suffix=".txt")
+    try:
+        with os.fdopen(fd, "wb") as fh:
+            fh.write(data)
+        try:
+            result = subprocess.run(
+                [sys.executable, str(PREFLIGHT), "--check-commit-msg", tmp],
+                check=False,
+                timeout=120,
+            )
+        except subprocess.TimeoutExpired:
+            print("ERROR: commit-msg validation timed out", file=sys.stderr)
+            return 1
+        return result.returncode
+    finally:
+        os.unlink(tmp)
 
 
 def check_ascii(msg: str) -> int:
@@ -69,6 +112,14 @@ def commit_file(path_str: str) -> int:
     except UnicodeDecodeError as exc:
         print(f"ERROR: {p} is not valid UTF-8: {exc}", file=sys.stderr)
         return 1
+    rc = check_commit_msg(data)
+    if rc != 0:
+        print(
+            "ERROR: commit message failed the commit-msg check above; "
+            "nothing was committed.",
+            file=sys.stderr,
+        )
+        return rc
     try:
         result = subprocess.run(
             ["git", "commit", *EXTRA_GIT_ARGS, "-F", "-"],

@@ -229,24 +229,37 @@ domain_policies:
 ### Profile 引用解析
 
 ```python
-# generate_alertmanager_routes.py 的擴展邏輯（虛擬碼）
-def resolve_tenant_routing(tenant_cfg, profiles, defaults, enforced):
+# generate_alertmanager_routes.py 的邏輯（虛擬碼）
+def shallow_merge(base, layer):
+    # 逐頂層鍵：整個值取代，不往裡面合併
+    # （routes / overrides / receiver 都一樣）
+    merged = dict(base)
+    for k, v in layer.items():
+        merged[k] = v
+    return merged
+
+def resolve_tenant_routing(tenant_cfg, profiles, defaults):
     base = copy(defaults)
 
     # 若引用了 profile，先合併 profile
     if '_routing_profile' in tenant_cfg:
         profile = profiles[tenant_cfg['_routing_profile']]
-        base = deep_merge(base, profile)
+        base = shallow_merge(base, profile)
 
     # 再合併租戶級覆寫
     if '_routing' in tenant_cfg:
-        base = deep_merge(base, tenant_cfg['_routing'])
-
-    # 最後套用 enforced（不可覆蓋）
-    base = deep_merge(base, enforced)
+        base = shallow_merge(base, tenant_cfg['_routing'])
 
     return base
+
+# _routing_enforced 不併進租戶的 routing：它另外產成帶 `continue: true` 的
+# route，排在租戶 route 之前（_grar_routes.py 的 _build_enforced_routes），
+# 租戶因此無法覆蓋它。
 ```
+
+⚠️ 2026-09-28 更正（#2326）：這段虛擬碼原本三步都寫 `deep_merge`，還把 `_routing_enforced`
+併進結果。程式碼一直是淺合併（`_grar_merge.py` 的 `merge_routing_with_defaults`、Go 的
+`routingpolicy.Resolve`），與第一層底下「合併語意」那段寫的一致；enforced 路由也一直是分開產出。
 
 ### Policy 驗證邏輯
 
@@ -269,6 +282,26 @@ def check_domain_policies(resolved_routing, tenant_id, policies):
 
     return violations
 ```
+
+### Amendment 2026-09-28 (#2326)：profile 與 policy 的目錄範圍
+
+**狀態：已決定，尚未實作**（[#2326](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/2326)
+的選項 P2；實作在後續 PR）。⛔ 合併之前，`_routing_profiles.yaml` 與 `_domain_policy.yaml`
+只從 conf.d **根目錄**讀取，放在子目錄的不會被讀。
+
+在階層式 conf.d（[ADR-016](016-conf-d-directory-hierarchy-mixed-mode.md)）下：
+
+- **Routing profiles**：`_routing_profiles.yaml` / `.yml` 可以放在子目錄，其中的 profile
+  對該子樹裡的租戶可見。租戶解析 `_routing_profile: X` 時，找的是自己這一層或祖先層定義的
+  profile。profile 名稱在**整棵樹唯一**：同一個名稱定義在兩個檔案即為錯誤（根目錄同時有 `.yaml`
+  與 `.yml` 且撞名也算；今天是後者靜默覆蓋，這是行為變更）。
+- **Domain policies**：`_domain_policy.yaml` / `.yml` 可以放在子目錄，只作用於所在子樹。
+  子樹 policy 的 `tenants:` 點名子樹外的租戶是**錯誤**（`--strict` 下 ERROR，否則 WARN），
+  訊息與「到處都找不到這個租戶」分開。不同層級的 policy **疊加判定**：租戶必須滿足每一條
+  適用於它的 policy，所以子樹只能收緊。
+- **合併順序不變**：`_routing_defaults` → profile → tenant `_routing`，每一步都是頂層逐鍵
+  淺合併。`_routing_defaults` 本身改由各目錄層組成的鏈提供，`_routing_enforced` 維持只認
+  根目錄；兩者的規格見 [ADR-017「Amendment 2026-09-28」](017-defaults-yaml-inheritance-dual-hash.md)。
 
 ## v2.1.0 Implementation Summary
 
@@ -293,6 +326,7 @@ def check_domain_policies(resolved_routing, tenant_id, policies):
 - **#2245**：profile 與 tenant 的 `routes` 開始產出子路由（先前產生器靜默丟棄）；domain policy 與 `--policy` 網域檢查涵蓋這些 receiver；`explain_route` 改列實際產出的子路由；`check_confd_schema` 開始以 schema 檢查 `_routing_profiles.yaml`，`validate-config` 開始對它做 YAML 引號檢查
 - **#2244**：`require_critical_escalation` 開始由 `check_domain_policies()` 執行（先前只有 lint 認得這個鍵），判準見上方「第二層」
 - **#2280**：da-guard 與 tenant-api 改判**解析後**的 routing（`_routing_defaults` → profile → tenant `_routing`，與產生器同一套合併，共用 `pkg/routingpolicy`，以跨語言 parity 矩陣對齊）；主 receiver、`overrides`、`routes` 的 receiver type 都依 domain policy 判，`forbidden_receiver_types` 與 `allowed_receiver_types` 分開判、可同時觸發；da-guard 另檢查 `routes` 條目形狀與 `_routing_defaults.routes`；tenant-api batch 只在 patch 碰到 `_routing_profile` / `_routing` 時判 routing
+- **#2326**（2026-09-28 已決定，尚未實作）：profile 與 domain policy 以所在子樹為範圍、profile 名稱全樹唯一、policy 疊加判定——見上方「Amendment 2026-09-28」
 
 **殘留**：
 - Profile 繼承鏈（profile extends another profile）— 排入 v2.7.0+ 候選

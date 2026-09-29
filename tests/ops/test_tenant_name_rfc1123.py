@@ -120,16 +120,21 @@ def test_accept_face_is_not_vacuous():
 
 # ── discover level: the gate's rejections must be NAMED on stderr ─────────────
 
-# `.hidden` is an RFC 1123 reject too (leading dot) and IS named on stderr
-# by both readers; it is in the list so a change that starts folding
-# dot-prefixed stems away silently (instead of naming them) fails here.
-_INVALID_STEMS = ("DB-A", "db_a", "db-a-", ".hidden")
+_INVALID_STEMS = ("DB-A", "db_a", "db-a-")
+
+# ⛔ `.hidden` is NOT a name reject any more (#2066 option 1, #2067): the
+# exporter's walker never reads a dot-prefixed file, so `tenant_carriers`
+# skips it SILENTLY before the name gate runs — naming it would report the
+# loss of a tenant that was never served. It stays in the seed so a change
+# that starts handing dot-prefixed stems to the gate again (and so naming
+# them) fails here, in the opposite direction from before.
+_HIDDEN_STEMS = (".hidden",)
 
 
 def _seed_confd(root: Path) -> Path:
-    """conf.d with one valid carrier and four RFC 1123 rejects (one dot-prefixed)."""
+    """conf.d with one valid carrier, three RFC 1123 rejects and one hidden file."""
     root.mkdir(parents=True, exist_ok=True)
-    for stem in ("ok-a",) + _INVALID_STEMS:
+    for stem in ("ok-a",) + _INVALID_STEMS + _HIDDEN_STEMS:
         (root / f"{stem}.yaml").write_text(
             f"tenants:\n  {stem}:\n    pg_connections: 90\n", encoding="utf-8")
     return root
@@ -162,6 +167,10 @@ def test_discover_drops_and_names_every_rfc1123_reject(
         assert len(named) == 1, (
             f"{stem!r} must be named exactly once as an RFC 1123 reject; "
             f"stderr was {err!r}")
+    for stem in _HIDDEN_STEMS:
+        assert f"'{stem}'" not in err, (
+            f"{stem!r} is a hidden file the exporter never reads; it must be "
+            f"skipped silently, not named (#2066): stderr was {err!r}")
     assert "'ok-a'" not in err, err
 
 
