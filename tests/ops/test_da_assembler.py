@@ -533,6 +533,12 @@ _REFUSED = [
     ("defaults-underscore-dot", "  defaults: {cpu: _.5}\n"),
     ("defaults-dot-underscore", "  defaults: {cpu: ._5}\n"),
     ("defaults-dot-trailing-underscore", "  defaults: {cpu: .5_}\n"),
+    # A non-ASCII letter whose lower() is two chars (U+0130); Go reads bytes.
+    ("defaults-dotted-I", "  defaults: {cpu: 1İ}\n"),
+    ("defaults-hex-dotted-I", "  defaults: {cpu: 0xİ}\n"),
+    ("defaults-quoted-dotted-I", "  defaults: {cpu: \"73İ\"}\n"),
+    ("defaults-kelvin-sign", "  defaults: {cpu: 1K}\n"),
+    ("defaults-fullwidth-digit", "  defaults: {cpu: １}\n"),
     ("sf-reasons-omap", "  stateFilters: {x: {reasons: !!omap [a: 1]}}\n"),
     ("sf-reasons-pairs", "  stateFilters: {x: {reasons: !!pairs [a: 1]}}\n"),
     ("sf-int", "  stateFilters: {x: 1}\n"),
@@ -702,6 +708,38 @@ class TestRenderCrExporterShapes:
                             str(conf)], capture_output=True, text=True,
                            encoding="utf-8", timeout=120)
         assert r.returncode == (3 if refused else 0), r.stdout + r.stderr
+
+    def test_the_integer_parse_stops_at_the_first_overflow(self):
+        """F2（第 4 輪）：整數累加一超過 2^64 就返回，不掃到字串尾端。
+
+        先前累加 bignum 到結尾才比較，極長數字是二次方時間（30 萬位端到端
+        約 17.7 s）。2^64 有 20 位，20 個 9 已經溢位，所以只該讀 20 個字元。
+        會讓本測試轉紅的改動：拿掉 `_go_parse_uint` 迴圈內的 cutoff 檢查。
+        """
+        import da_assembler
+
+        class Counting(str):
+            seen = 0
+
+            def __iter__(self):
+                for c in str.__iter__(self):
+                    Counting.seen += 1
+                    yield c
+
+        text = Counting("9" * 1000)
+        assert da_assembler._go_parse_uint(text, 10) is None
+        assert Counting.seen == 20
+
+    def test_a_very_long_number_is_refused_promptly(self, tmp_path, caplog):
+        """F2 端到端：30 萬位的整數 rc 2（超出 uint64，exporter 拒收），
+        且在寬鬆的時間上限內完成（修前約 17.7 s，修後約 0.5 s）。"""
+        import time
+        cr_path, out_dir = _write_cr(
+            tmp_path, "  defaults: {cpu: " + "9" * 300_000 + "}\n")
+        start = time.monotonic()
+        assert render_cr_file(cr_path, out_dir) == EXIT_CALLER_ERROR
+        assert time.monotonic() - start < 5
+        assert list(out_dir.iterdir()) == []
 
 
 class TestSignalHandler:

@@ -586,6 +586,9 @@ _FALSY_ABLE_TAGS = frozenset("tag:yaml.org,2002:" + t
 # int / float. What follows is that function's number path, step for step,
 # with the Go strconv calls it makes (internal/strconv/atoi.go, atof.go).
 # `test_the_rows_match_the_exporter` re-measures it against da-guard.
+# ⚠️ Not claimed for a mantissa thousands of digits long: Go's ParseFloat
+# reads those differently from Python's `float()` (`1` + 5000 `0` +
+# `e-1000` is 1e-201 in Go, inf here), so such a value may be refused.
 
 _V3_NAMED_FLOATS = frozenset(
     p + w for w in (".inf", ".Inf", ".INF") for p in ("", "+", "-")
@@ -593,6 +596,10 @@ _V3_NAMED_FLOATS = frozenset(
 # resolve.go `yamlStyleFloat`.
 _V3_STYLE_FLOAT = re.compile(
     r"[-+]?(\.[0-9]+|[0-9]+(\.[0-9]*)?)([eE][-+]?[0-9]+)?")
+# Go strconv's digit value of an ASCII byte; anything else is not a digit.
+_GO_DIGIT_VALUE = {c: int(c, 36) for c in
+                   "0123456789abcdefghijklmnopqrstuvwxyz"
+                   "ABCDEFGHIJKLMNOPQRSTUVWXYZ"}
 # What Go's ParseFloat accepts from a text starting with `.` (no sign, no
 # 0x prefix, not inf/nan), once `_go_underscore_ok` has passed it.
 _GO_DOT_FLOAT = re.compile(r"\.[0-9]+([eE][-+]?[0-9]+)?")
@@ -604,10 +611,10 @@ def _go_underscore_ok(s: str) -> bool:
     if s[:1] in ("+", "-"):
         s = s[1:]
     saw, i, hexa = "^", 0, False
-    if len(s) >= 2 and s[0] == "0" and s[1].lower() in "box":
-        saw, i, hexa = "0", 2, s[1].lower() == "x"
+    if len(s) >= 2 and s[0] == "0" and s[1] in "bBoOxX":
+        saw, i, hexa = "0", 2, s[1] in "xX"
     for c in s[i:]:
-        if "0" <= c <= "9" or hexa and "a" <= c.lower() <= "f":
+        if "0" <= c <= "9" or hexa and c in "abcdefABCDEF":
             saw = "0"
         elif c == "_":
             if saw != "0":
@@ -628,19 +635,25 @@ def _go_parse_uint(s: str, base: int):
     if base == 0:
         base = 10
         if s[0] == "0":
-            prefix = {"b": 2, "o": 8, "x": 16}.get(s[1:2].lower())
+            prefix = {"b": 2, "B": 2, "o": 8, "O": 8,
+                      "x": 16, "X": 16}.get(s[1:2])
             if len(s) >= 3 and prefix:
                 base, s = prefix, s[2:]
             else:
                 base, s = 8, s[1:]
     n = 0
     for c in s:
-        d = (ord(c) - 48 if "0" <= c <= "9"
-             else ord(c.lower()) - 87 if "a" <= c.lower() <= "z" else 99)
+        # Go reads BYTES: only ASCII 0-9 / a-z / A-Z are digits. ⛔ No
+        # `c.lower()` on the raw char — `"İ".lower()` is two chars.
+        d = _GO_DIGIT_VALUE.get(c, 99)
         if d >= base:
             return None
         n = n * base + d
-    return n if n < 1 << 64 else None
+        # Go's cutoff: stop at the first overflow (ErrRange) instead of
+        # carrying a bignum to the end of a very long text.
+        if n >= 1 << 64:
+            return None
+    return n
 
 
 def _go_parse_int(s: str, base: int):
@@ -655,7 +668,9 @@ def _go_parse_int(s: str, base: int):
 def _go_parse_float_ok(s: str) -> bool:
     """Go ``strconv.ParseFloat(s, 64)`` succeeds, for the two shapes
     resolve() hands it: a `.`-led text, or one `_V3_STYLE_FLOAT` matched.
-    Overflow (±Inf) is an error; underflow is not."""
+    Overflow (±Inf) is an error; underflow is not. Judged by Python's
+    `float()`, which matches Go except on a mantissa thousands of digits
+    long (see the section comment)."""
     try:
         return not math.isinf(float(s.replace("_", "")))
     except ValueError:
