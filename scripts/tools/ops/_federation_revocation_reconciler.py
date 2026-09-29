@@ -136,7 +136,7 @@ LOG_TYPE_EVIDENCE = "federation_evidence"
 #   * GATEWAY_APP          — helm/federation-gateway/templates/deployment.yaml,
 #                           the Envoy container `name:`. `.app` in Vector is the
 #                           k8s container_name.
-# `app` narrows gateway_operational — which ALSO carries the mtail / logrotate
+# `app` narrows gateway_operational — which ALSO carries the audit-metrics / logrotate
 # sidecars' non-JSON stderr (same pod, same label) — to the Envoy container
 # whose Lua actually emits these warnings.
 LOG_TYPE_GATEWAY_OP = "gateway_operational"
@@ -386,7 +386,7 @@ def build_failopen_query(lookback_s: int, settle_s: int) -> str:
     The gateway Lua logs ``federation: revoked-set reload failed`` to Envoy
     stderr; Vector classes non-JSON gateway output as ``gateway_operational``.
     Source-qualified on ``log_type`` + ``app`` (#1237, was a bare ``_msg``
-    phrase): the class alone still spans the mtail / logrotate sidecars' stderr
+    phrase): the class alone still spans the audit-metrics / logrotate sidecars' stderr
     (same pod, same label), so ``app`` narrows it to the Envoy container. A
     tenant cannot forge this VIA THE REQUEST PATH — request-derived content is
     JSON and parses into another class (federation_audit), never
@@ -397,8 +397,8 @@ def build_failopen_query(lookback_s: int, settle_s: int) -> str:
     container still lands in this class (gateway_operational has no pod_owner
     check — the demux spoof guard only covers federation_audit). That is the
     same producer-identity gap as the evidence branch, closed only by producer
-    binding at ingest, not a query-side field (tracked separately). mtail (audit
-    access-log only) cannot see this warning, so the reconciler counts it here.
+    binding at ingest, not a query-side field (tracked separately). The
+    audit-metrics sidecar (audit access-log only) cannot see this warning, so the reconciler counts it here.
 
     ⚠️ Until #1294 that sentence UNDERSTATED the exposure: ``app`` is written
     from ``.kubernetes.container_name`` AFTER demux deep-merges the producer's
@@ -503,7 +503,7 @@ def build_rejected_query(lookback_s: int, settle_s: int) -> str:
     gateway output that is NOT parseable audit JSON — which is where a Lua
     ``logWarn`` lands, and which request-derived content cannot reach because it
     parses as JSON into another class. ``app`` narrows the class to the Envoy
-    container, excluding the mtail / logrotate sidecars that share the pod and
+    container, excluding the audit-metrics / logrotate sidecars that share the pod and
     its label — but see build_failopen_query: ``app`` is noise-exclusion, NOT
     producer authentication, and this class shares the evidence branch's
     pod-label-only forging boundary.

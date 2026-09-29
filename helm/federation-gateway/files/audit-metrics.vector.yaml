@@ -1,0 +1,153 @@
+# federation-gateway audit metrics (ADR-020 IV-2f; ADR-021 PR-4).
+#
+# Tails the gateway's audit-log mirror (Envoy access-log sink 2, JSON lines —
+# files/envoy.yaml `json_format: &audit_json`) and exposes three metrics on
+# /metrics for the monitoring-components Prometheus job:
+#
+#   tenant_federation_requests_total{tenant,status}
+#   tenant_log_query_requests_total{account_id,project_id,status}
+#   tenant_log_query_duration_ms{account_id,project_id}   (histogram)
+#
+# This replaced an mtail program (#1278 D1): mtail's upstream is dormant and its
+# pinned grpc carried 4 fixable HIGH/CRITICAL findings. Metric names, label names
+# and bucket bounds are unchanged; mtail's automatic `prog` label is gone (no
+# rule or dashboard read it). Behaviour is pinned by
+# tests/shared/test_federation_audit_metrics.py, which runs THIS file under the
+# same Vector version the chart deploys.
+#
+# Deployment-specific values come from the environment, so the chart, the
+# federation-e2e compose stack and the test all load this one file unmodified.
+# ⛔ Vector 0.5x interpolates env vars ONLY with
+# VECTOR_DANGEROUSLY_ALLOW_ENV_VAR_INTERPOLATION=true (every loader of this file
+# sets it; the sidecar's env carries nothing but the three names below, so there
+# is no secret to leak). It scans COMMENTS too: a dollar-brace in a comment is a
+# required variable, and Vector refuses to start without it — so none appears in
+# prose here.
+#   AUDIT_LOG_PATH       the sink-2 file (auditLog.path)
+#   AUDIT_METRICS_PORT   the /metrics port (auditLog.metrics.port)
+#   AUDIT_METRICS_DATA   Vector's checkpoint dir (an emptyDir in the chart)
+
+data_dir: "${AUDIT_METRICS_DATA}"
+
+sources:
+  audit:
+    type: file
+    include: ["${AUDIT_LOG_PATH}"]
+    # The mirror is an emptyDir that starts empty with the pod, and the
+    # checkpoint dir survives a container restart, so reading from the start
+    # neither misses the first lines nor double-counts after a restart.
+    read_from: beginning
+    # Rotation is rename + Envoy /reopen_logs (templates/configmap-logrotate.yaml).
+    # Envoy keeps writing to the renamed file until the reopen lands; Vector keeps
+    # its handle on the renamed file and reads those late lines too (measured:
+    # 50 before, 30 late, 20 after the reopen -> 100 counted).
+    # ⚠️ Files are identified by a checksum of their first line (Vector's
+    # default). Two files whose first lines are byte-identical would be taken for
+    # one; every audit line starts with a millisecond `ts` and carries a
+    # `token_id`, so that does not happen with real Envoy output.
+
+transforms:
+  # One pass over each line: decide which of the three metrics it feeds and
+  # with which labels. A line that is not a JSON object, or has no usable status,
+  # feeds nothing — the same lines the mtail patterns never matched.
+  parse:
+    type: remap
+    inputs: [audit]
+    source: |
+      p, err = parse_json(.message)
+      if err != null || !is_object(p) { abort }
+      code, cerr = to_int(p.status)
+      bucket = null
+      if cerr == null {
+        if code >= 200 && code < 300 { bucket = "ok" }
+        else if code == 0 || code == 499 { bucket = "client_aborted" }
+        else if code == 429 { bucket = "rate_limited" }
+        else if code == 401 || code == 403 { bucket = "auth_failed" }
+        else if code >= 400 && code < 500 { bucket = "bad_request" }
+        else if code >= 500 { bucket = "backend_error" }
+      }
+      . = {}
+      # tenant_id is required and must be a JSON string. Envoy writes `null` when
+      # the JWT carried no tenant (a forged/expired token rejected before the
+      # claim is read); those requests have no tenant to bucket (ADR-020
+      # "Metric 邊界").
+      if is_string(p.tenant_id) && bucket != null {
+        .fed_tenant = p.tenant_id
+        .fed_status = bucket
+      }
+      # account_id: the verified numeric VictoriaLogs partition (ADR-021).
+      # Empty / null in the other federation modes — only digits count.
+      acct = to_string(p.account_id) ?? ""
+      if match(acct, r'^\d+$') {
+        if bucket != null {
+          .lq_account = acct
+          .lq_status = bucket
+        }
+        d, derr = to_int(p.duration_ms)
+        if derr == null && d >= 0 {
+          .lq_account_d = acct
+          .lq_duration = d
+        }
+      }
+
+  # log_to_metric DROPS the whole event (and logs an error) when any one of its
+  # metrics' fields is missing, so each metric gets its own route.
+  split:
+    type: route
+    inputs: [parse]
+    # A line feeding no metric is simply dropped (no `_unmatched` output).
+    reroute_unmatched: false
+    route:
+      fed: exists(.fed_status)
+      lq: exists(.lq_status)
+      lqd: exists(.lq_duration)
+
+  m_fed:
+    type: log_to_metric
+    inputs: [split.fed]
+    metrics:
+      - type: counter
+        field: fed_status
+        name: tenant_federation_requests_total
+        tags:
+          tenant: "{{ fed_tenant }}"
+          status: "{{ fed_status }}"
+
+  m_lq:
+    type: log_to_metric
+    inputs: [split.lq]
+    metrics:
+      - type: counter
+        field: lq_status
+        name: tenant_log_query_requests_total
+        tags:
+          account_id: "{{ lq_account }}"
+          # Reserved for per-project partitioning; always "0" today (ADR-021).
+          project_id: "0"
+          status: "{{ lq_status }}"
+
+  m_lqd:
+    type: log_to_metric
+    inputs: [split.lqd]
+    metrics:
+      - type: histogram
+        field: lq_duration
+        name: tenant_log_query_duration_ms
+        tags:
+          account_id: "{{ lq_account_d }}"
+          project_id: "0"
+
+sinks:
+  prom:
+    type: prometheus_exporter
+    inputs: [m_fed, m_lq, m_lqd]
+    address: "0.0.0.0:${AUDIT_METRICS_PORT}"
+    # Prometheus stamps scrape time itself, as it did for mtail.
+    suppress_timestamp: true
+    # ⛔ Vector EXPIRES a series not seen within flush_period_secs (default 60s).
+    # A counter that vanishes and returns at 1 after an idle minute reads as a
+    # reset on every quiet tenant, so keep series for the pod's lifetime, like
+    # mtail did.
+    flush_period_secs: 31536000
+    # Milliseconds — the same bounds the mtail histogram declared.
+    buckets: [5, 10, 25, 50, 100, 250, 500, 1000, 2500, 5000, 10000, 15000, 25000]

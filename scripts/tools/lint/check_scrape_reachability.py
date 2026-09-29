@@ -295,7 +295,7 @@ KNOWN_UNKNOWN_SOURCE: dict[str, str] = {
 #
 # ⚠️ The sharpest known consequence of a wrong assumption here:
 # `tenant_log_query_requests_total` is `by account_id, project_id, status`
-# (helm/federation-gateway/files/federation-audit.mtail:93) — NO `tenant`
+# (helm/federation-gateway/files/audit-metrics.vector.yaml, `m_lq`) — NO `tenant`
 # label. Install federation-gateway on an EDGE cluster and the alert reading it
 # goes blind on central AND cannot be federated back, because the
 # `match[]={tenant!=""}` selector skips it. Its sibling

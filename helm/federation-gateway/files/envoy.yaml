@@ -76,7 +76,7 @@ static_resources:
                 #    store wires this end-to-end (#539 Phase 1); install
                 #    helm/vector + helm/victorialogs to query history
                 #    past pod recycling.
-                #  • emptyDir file — tailed by the mtail sidecar to derive
+                #  • emptyDir file — tailed by the audit-metrics sidecar to derive
                 #    tenant_federation_requests_total. Ephemeral by design:
                 #    a metrics feed, not the system of record.
                 access_log:
@@ -92,7 +92,7 @@ static_resources:
                           # victorialogs mode (ADR-021): the verified numeric
                           # tenant partition. Empty in prom-label-proxy /
                           # vm-cluster modes (those tokens carry no account_id
-                          # claim) — present so the PR-4 mtail sidecar can
+                          # claim) — present so the audit-metrics sidecar can
                           # derive tenant_log_query_requests_total per-tenant.
                           account_id: "%DYNAMIC_METADATA(envoy.filters.http.jwt_authn:fed_payload:account_id)%"
                           method: "%REQ(:METHOD)%"

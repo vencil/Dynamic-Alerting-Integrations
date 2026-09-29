@@ -69,7 +69,8 @@ existing `|| true` guards are scoped to other workflows
 and a trailing `exit 0` on any step whose exit code is load-bearing). It is banned in the
 gate scripts here (see `_EXIT_SWALLOW`) and deliberately not on the legs,
 because `python-tests-run` has a live and legitimate `|| true` on its "Install
-mtail" step and the narrowing that would separate the two is the one the
+amtool" step (a grep guard followed by an explicit empty-value check; the
+"Install mtail" step that also carried one retired in #1278 D1) and the narrowing that would separate the two is the one the
 sibling module documents two failed attempts at. Candidate ticket, not a
 silent omission.
 
@@ -1388,7 +1389,8 @@ _IDENT = re.compile(r"[A-Za-z_]\w*")
 _COMMAND_SUB = re.compile(r"\$\((?!\()|`")
 # ⛔ The shell spellings of `continue-on-error`. Enforced on the GATE SCRIPT
 # only, and the narrowness is deliberate rather than lazy: `python-tests-run`
-# has a live, legitimate `|| true` on its "Install mtail" step, so the same
+# has a live, legitimate `|| true` on its "Install amtool" step (grep guard +
+# explicit empty check; the mtail one retired in #1278 D1), so the same
 # rule applied across the decision path would red an existing best-effort
 # install. Narrowing it to "steps that run tests" is the axis the sibling
 # module documents two failed attempts at — `pytest tests/` resolves to no

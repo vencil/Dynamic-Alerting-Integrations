@@ -290,7 +290,7 @@ evidenceChannel:
   #     this — it gates how soon a FRESH heartbeat becomes visible, not how long
   #     an old one lingers, so it must not be added to the tail.
   #   - gateway:  a mismatch is SILENT. FederationAuditPipelineSilent watches
-  #     the mtail sidecar's own counters, which is a different path entirely
+  #     the audit-metrics sidecar's own counters, which is a different path entirely
   #     and stays green while the Vector side carries nothing.
   # Set either to "" to disable that branch's binding (label-only matching,
   # the pre-#1288 behaviour).

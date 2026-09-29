@@ -56,7 +56,7 @@ unit tests (`internal/handler/federation_test.go`).
 fixture-exporter ─scrape─> prometheus <─upstream─ federation-proxy <─ federation-gateway
                                                                           │ audit log
                                                                           ▼
-                                                                        mtail
+                                                            audit-metrics (Vector)
 ```
 
 The pytest **driver runs on the host** (not a compose service) and

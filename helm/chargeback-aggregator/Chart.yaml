@@ -9,8 +9,9 @@ type: application
 # 0.2.0 — #566 batch C: CSV sha256 sidecar + append-only manifest.jsonl (T2-4 tamper-evident); extraEnv/extraEnvFrom (Q5 platform convention)
 # 0.2.1 — #902 L2 slice-2: pin the python base image by digest (image.digest)
 # 0.2.2 — CSV report opened with explicit encoding="utf-8" (no longer follows the container locale)
-version: 0.2.2
-# appVersion: pinned python image
+# 0.2.3 — #1243: image python:3.14-slim → gcr.io/distroless/python3-debian13:nonroot (no pip, no shell)
+version: 0.2.3
+# appVersion: Python version inside the pinned image
 appVersion: "3.13"
 keywords:
   - dynamic-alerting

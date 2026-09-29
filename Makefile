@@ -742,9 +742,8 @@ draft-advisory-check: ## ⛔ 擋住「有未發布 draft advisory 就打 tag」�
 # INSIDE Helm charts and are never published, so release.yaml never builds them
 # at all (#1337). Their other build paths differ — vector-projection-gate is
 # built ONLY here, by component-docker-build.yaml and by the nightly scan, while
-# federation-audit-sidecar is additionally built on every CI run by the
-# federation-e2e job's compose stack. audit-sidecar compiles mtail from source
-# (~25 s, needs the Go module proxy); pre-tag already reaches the network for
+# (Until #1278 D1 federation-audit-sidecar also compiled mtail and was rebuilt
+# by the federation-e2e compose stack; it is Alpine + logrotate now.) pre-tag already reaches the network for
 # recipe-preview's promtool tarball and tenant-api's `go mod download`, so this
 # is not a new class of failure — just a slower step.
 # Needs docker (buildx) + trivy on PATH — run on the maintainer machine /
