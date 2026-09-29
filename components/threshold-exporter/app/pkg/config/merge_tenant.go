@@ -70,8 +70,8 @@ func CheckTenantRootKeys(yamlContent []byte) []string {
 // key the tenant cannot fix in its own file. Every caller goes through the
 // TenantMerge one.
 //
-// ⛔ SO ARE THE RESOLVE ENTRY POINTS (#2397). TenantMerge.ResolveAt /
-// ResolveAtWithStats / ResolveAtWithKeys return exactly the embedded
+// ⛔ SO ARE THE THRESHOLD RESOLVE ENTRY POINTS (#2397). TenantMerge.Resolve /
+// ResolveAt / ResolveAtWithStats / ResolveAtWithKeys return exactly the embedded
 // methods' rows and stats, but write none of the resolver's ERROR/WARN lines
 // (cardinality truncation, unknown / invalid values, dangling `_critical`,
 // bad dimensional keys, bad time windows, rejected custom alerts) to the
@@ -81,6 +81,14 @@ func CheckTenantRootKeys(yamlContent []byte) []string {
 // Errors / notices (a dangling `_critical`, for one), but not all (a
 // non-numeric base value is not flagged there). /metrics resolves a
 // ThresholdConfig, not a TenantMerge, and keeps logging every line.
+//
+// ⚠️ ONLY those four. The other promoted resolvers — ResolveStateFilters(At),
+// ResolveSilentModes(At), OperationalStatesAt, ResolveMaintenanceExpiries(At),
+// ResolveThresholdExpiries(At), ResolveSeverityDedup, ResolveMetadata,
+// ResolveRouting, ApplyProfiles — are NOT shadowed and still write the
+// exporter's WARNs when called on a TenantMerge. No tenant-api caller calls
+// them on one today (GET uses ResolveAt and ValidateTenantKeys); a caller
+// that starts to, per request, needs the same treatment first.
 type TenantMerge struct {
 	ThresholdConfig
 
@@ -96,6 +104,13 @@ type TenantMerge struct {
 	// notice. profileFileOrder is those files in merge order.
 	profileFiles     map[string]map[string]string
 	profileFileOrder []string
+}
+
+// Resolve is ThresholdConfig.Resolve without the resolver's log lines — see
+// TenantMerge. Shadowed too: the promoted one calls ResolveAt on the embedded
+// *ThresholdConfig, which would bypass the shadow below.
+func (m *TenantMerge) Resolve() []ResolvedThreshold {
+	return m.ResolveAt(time.Now())
 }
 
 // ResolveAt is ThresholdConfig.ResolveAt without the resolver's log lines —

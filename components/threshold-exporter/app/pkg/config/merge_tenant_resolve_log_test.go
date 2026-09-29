@@ -18,18 +18,22 @@ import (
 
 // resolveLogTree trips the cardinality cut (root max_metrics_per_tenant 2,
 // below the tenant's row count) and every WARN shape the threshold resolve
-// writes, all in one tenant.
+// writes, all in one tenant. Every phase that reads a scheduled value (base,
+// `_critical`, dimensional, declared) gets its own malformed window, named
+// after the phase, so each phase's window WARN is its own line.
 var resolveLogTree = map[string]string{
 	"_defaults.yaml": "max_metrics_per_tenant: 2\n" +
 		"defaults:\n  m1_x: 1\n  m2_x: 1\n  m3_x: 1\n  m4_x: 1\n" +
 		"optional_overrides: [m9_x]\n",
 	"tx.yaml": "tenants:\n  tx:\n" +
 		"    m1_x: \"bogus\"\n" +
-		"    m2_x_critical: \"zz\"\n" +
+		"    m2_x:\n      default: \"2\"\n      overrides:\n        - window: \"25:00-26:00\"\n          value: \"5\"\n" +
+		"    m2_x_critical:\n      default: \"zz\"\n      overrides:\n        - window: \"badcrit\"\n          value: \"5\"\n" +
 		"    nosuch_critical: \"5\"\n" +
-		"    m3_x:\n      default: \"3\"\n      overrides:\n        - window: \"bad\"\n          value: \"5\"\n" +
-		"    \"m4_x{q=\\\"a\\\"}\": \"zz\"\n" +
-		"    m9_x: \"zz\"\n" +
+		"    m3_x:\n      default: \"3\"\n      overrides:\n        - window: \"badbase\"\n          value: \"5\"\n" +
+		"    \"m4_x{q=\\\"a\\\"}\":\n      default: \"zz\"\n      overrides:\n        - window: \"baddim\"\n          value: \"5\"\n" +
+		"    \"m4_x{}\": \"7\"\n" +
+		"    m9_x:\n      default: \"zz\"\n      overrides:\n        - window: \"baddecl\"\n          value: \"5\"\n" +
 		"    _custom_alerts: \"not a list\"\n",
 }
 
@@ -38,10 +42,15 @@ var resolveLogTree = map[string]string{
 var resolveLogLines = []string{
 	`ERROR: tenant=tx produced `, // cardinality cut
 	`WARN: unknown value "bogus" for tenant=tx metric=m1_x, using default`,
+	`WARN: invalid time window "25:00-26:00": start=`, // range error, base phase
+	`WARN: invalid time window format "badbase"`,
+	`WARN: invalid time window format "badcrit"`,
 	`WARN: invalid critical threshold "zz" for tenant=tx key=m2_x_critical`,
 	`WARN: _critical key "nosuch_critical" has no matching default "nosuch", skipping`,
-	`WARN: invalid time window format "bad"`,
+	`WARN: invalid time window format "baddim"`,
 	`WARN: invalid dimensional threshold "zz" for tenant=tx key=m4_x{q="a"}, skipping`,
+	`WARN: failed to parse dimensional key "m4_x{}" for tenant=tx, skipping`,
+	`WARN: invalid time window format "baddecl"`,
 	`WARN: invalid declared threshold "zz" for tenant=tx key=m9_x, skipping`,
 	`ERROR: tenant=tx: custom alert "<block>" rejected`,
 }
@@ -63,8 +72,9 @@ func TestTenantMergeResolveWritesNoLog(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
+		nowRows := m.Resolve() // wall-clock variant; the cut does not depend on the time
 		// Precondition: the cut ran on this merge (the root cap reached it).
-		if len(rows) != 2 || len(keyed) != 2 || stats.PerTenantOverLimit["tx"] == 0 {
+		if len(rows) != 2 || len(keyed) != 2 || len(nowRows) != 2 || stats.PerTenantOverLimit["tx"] == 0 {
 			t.Fatalf("precondition: rows=%d keyed=%d over=%d, want the cut to 2 rows",
 				len(rows), len(keyed), stats.PerTenantOverLimit["tx"])
 		}
