@@ -22,6 +22,7 @@ Prerequisites:
 import argparse
 import hashlib
 import logging
+import math
 import os
 import re
 import signal
@@ -578,17 +579,117 @@ def _spec_block_shape_error(spec: dict) -> str:
 _FALSY_ABLE_TAGS = frozenset("tag:yaml.org,2002:" + t
                              for t in ("null", "bool", "int", "float"))
 
-#: A SUPERSET of the plain scalars gopkg.in/yaml.v3 (the exporter's reader)
-#: decodes into a float64, underscores removed first as it does: its named
-#: floats, and sign + digits / `.` / exponent or a 0x / 0o / 0b prefix.
-#: ⚠️ Deliberately not yaml.v3's own resolution (Go's ParseInt / ParseFloat
-#: and its float regex): a text this lets through may still be refused
-#: (`0o8`, `0b102`, `1e400`; oracle-measured) — those still render rc 0. Everything it
-#: refuses, yaml.v3 refuses too: `1:30`, `true`/`yes`, `foo`, `2024-01-01`.
-_V3_NUMBER_SUPERSET = re.compile(
-    r"[-+]?\.(?:inf|Inf|INF)|\.(?:nan|NaN|NAN)"
-    r"|[-+]?(?:0[xXoObB][0-9a-fA-F]+"
-    r"|(?=\.?[0-9])[0-9]*\.?[0-9]*(?:[eE][-+]?[0-9]+)?)")
+# ── yaml.v3's plain-scalar → number resolution (#2395) ──────────────
+#
+# The exporter decodes `defaults` with gopkg.in/yaml.v3 (v3.0.1): a plain
+# scalar lands in a float64 only if `resolve()` (resolve.go) types it
+# int / float. What follows is that function's number path, step for step,
+# with the Go strconv calls it makes (internal/strconv/atoi.go, atof.go).
+# `test_the_rows_match_the_exporter` re-measures it against da-guard.
+
+_V3_NAMED_FLOATS = frozenset(
+    p + w for w in (".inf", ".Inf", ".INF") for p in ("", "+", "-")
+) | frozenset((".nan", ".NaN", ".NAN"))
+# resolve.go `yamlStyleFloat`.
+_V3_STYLE_FLOAT = re.compile(
+    r"[-+]?(\.[0-9]+|[0-9]+(\.[0-9]*)?)([eE][-+]?[0-9]+)?")
+# What Go's ParseFloat accepts from a text starting with `.` (no sign, no
+# 0x prefix, not inf/nan), once `_go_underscore_ok` has passed it.
+_GO_DOT_FLOAT = re.compile(r"\.[0-9]+([eE][-+]?[0-9]+)?")
+
+
+def _go_underscore_ok(s: str) -> bool:
+    """Go ``strconv.underscoreOK``: each ``_`` sits between digits (or
+    between a base prefix and a digit)."""
+    if s[:1] in ("+", "-"):
+        s = s[1:]
+    saw, i, hexa = "^", 0, False
+    if len(s) >= 2 and s[0] == "0" and s[1].lower() in "box":
+        saw, i, hexa = "0", 2, s[1].lower() == "x"
+    for c in s[i:]:
+        if "0" <= c <= "9" or hexa and "a" <= c.lower() <= "f":
+            saw = "0"
+        elif c == "_":
+            if saw != "0":
+                return False
+            saw = "_"
+        elif saw == "_":
+            return False
+        else:
+            saw = "!"
+    return saw != "_"
+
+
+def _go_parse_uint(s: str, base: int):
+    """Go ``strconv.ParseUint(s, base, 64)`` on a text without ``_``:
+    the value, or None on any error."""
+    if not s:
+        return None
+    if base == 0:
+        base = 10
+        if s[0] == "0":
+            prefix = {"b": 2, "o": 8, "x": 16}.get(s[1:2].lower())
+            if len(s) >= 3 and prefix:
+                base, s = prefix, s[2:]
+            else:
+                base, s = 8, s[1:]
+    n = 0
+    for c in s:
+        d = (ord(c) - 48 if "0" <= c <= "9"
+             else ord(c.lower()) - 87 if "a" <= c.lower() <= "z" else 99)
+        if d >= base:
+            return None
+        n = n * base + d
+    return n if n < 1 << 64 else None
+
+
+def _go_parse_int(s: str, base: int):
+    """Go ``strconv.ParseInt(s, base, 64)``: the value, or None."""
+    neg = s[:1] == "-"
+    un = _go_parse_uint(s[1:] if s[:1] in ("+", "-") else s, base)
+    if un is None or un > (1 << 63 if neg else (1 << 63) - 1):
+        return None
+    return -un if neg else un
+
+
+def _go_parse_float_ok(s: str) -> bool:
+    """Go ``strconv.ParseFloat(s, 64)`` succeeds, for the two shapes
+    resolve() hands it: a `.`-led text, or one `_V3_STYLE_FLOAT` matched.
+    Overflow (±Inf) is an error; underflow is not."""
+    try:
+        return not math.isinf(float(s.replace("_", "")))
+    except ValueError:
+        return False
+
+
+def _v3_reads_as_number(text: str) -> bool:
+    """yaml.v3 resolves the PLAIN scalar *text* to an int or a float."""
+    if text in _V3_NAMED_FLOATS:
+        return True
+    head = text[:1]
+    if head == ".":
+        # `strconv.ParseFloat(in)` on the text as written, `_` included.
+        return (_go_underscore_ok(text)
+                and bool(_GO_DOT_FLOAT.fullmatch(text.replace("_", "")))
+                and _go_parse_float_ok(text))
+    if not head or head not in "+-0123456789":
+        return False  # hint 'M' (only the named table) or none: a string
+    plain = text.replace("_", "")
+    if (_go_parse_int(plain, 0) is not None
+            or _go_parse_uint(plain, 0) is not None):
+        return True
+    if _V3_STYLE_FLOAT.fullmatch(plain) and _go_parse_float_ok(plain):
+        return True
+    # Fallbacks after the float: an explicit base, where Go's ParseInt
+    # takes a sign after the prefix (`0b-1`).
+    for prefix, base in (("0b", 2), ("0o", 8)):
+        if plain.startswith(prefix):
+            rest = plain[2:]
+            return (_go_parse_int(rest, base) is not None
+                    or _go_parse_uint(rest, base) is not None)
+        if plain.startswith("-" + prefix):
+            return _go_parse_int("-" + plain[3:], base) is not None
+    return False
 
 
 def _default_value_error(value: Any) -> str:
@@ -613,7 +714,7 @@ def _default_value_error(value: Any) -> str:
     if (not isinstance(value, RawPlain)
             and _plain_tag(value) != "tag:yaml.org,2002:str"):
         return "must be a number, not a quoted string"
-    if not _V3_NUMBER_SUPERSET.fullmatch(value.replace("_", "")):
+    if not _v3_reads_as_number(value):
         return f"must be a number, not {value!r}"
     return ""
 
@@ -636,7 +737,9 @@ def _state_filter_error(sf: Any) -> str:
     if reasons is not None:
         if not isinstance(reasons, list):
             return ".reasons must be a list"
-        if any(isinstance(r, (list, dict, set)) for r in reasons):
+        # `tuple`: an item of `!!omap` / `!!pairs`, a one-key mapping to
+        # the exporter.
+        if any(isinstance(r, (list, tuple, dict, set)) for r in reasons):
             return ".reasons must be a list of strings"
     for key in ("severity", "default_state"):
         if isinstance(sf.get(key), (list, dict, set)):
