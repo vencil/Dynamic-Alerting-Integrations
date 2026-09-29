@@ -46,6 +46,15 @@ type PutTenantResponse struct {
 // v2.5.0 Phase C: Domain policy enforcement — writes that violate the
 // tenant's domain policy return 403 with details.
 //
+// #2295: the receivers the body writes in `_routing` are checked against the
+// receiver contract (pkg/receiverspec, gitops.ReceiverPreflight — the check
+// POST /{id}/validate runs too), so a receiver Alertmanager could not load is
+// a 400 INVALID_BODY with violations, in both write modes. It runs after the
+// policy gate: a receiver type the tenant's domain may not use stays a 403
+// whatever its fields. It is this handler's, not the Writer's, so writes that
+// change only another part of the file (custom alerts, batch) are not refused
+// over a receiver already on disk.
+//
 // v2.6.0 Phase C: PR-based write-back (ADR-011) — when writeMode is PR,
 // creates a feature branch and PR/MR instead of direct commit.
 // Supports both GitHub PRs and GitLab MRs via platform.Client interface.
@@ -60,7 +69,7 @@ type PutTenantResponse struct {
 // @Param       X-DA-Write-Source header string false "Attribute the PR to a non-UI write source. Allowlisted: threshold-governance (#656). Omit for tenant-manager UI."
 // @Param       X-DA-Base-Hash header string false "Optimistic concurrency: the source_hash GET /tenants/{id} returned for the file this body was derived from. 409 if the file changed since. 16 lowercase hex chars; a malformed value is a 400, never ignored. Direct write-back mode only (501 in PR mode)."
 // @Success     200   {object} PutTenantResponse
-// @Failure     400   {object} ErrorResponse
+// @Failure     400   {object} ErrorResponse "Bad request. A receiver the body writes in _routing (receiver, overrides[].receiver, routes[].receiver) that Alertmanager could not load or the route generator would skip is code INVALID_BODY with one violations[] entry per problem (#2295; nothing written)"
 // @Failure     403   {object} ErrorResponse
 // @Failure     409   {object} ErrorResponse "Conflict: base hash mismatch, pending PR, ambiguous tenant file, or the tenant is already declared by another conf.d file (code TENANT_DECLARED_ELSEWHERE; nothing written)"
 // @Failure     500   {object} ErrorResponse
@@ -124,6 +133,12 @@ func PutTenant(d *Deps) http.HandlerFunc {
 				writePolicyViolation(rw, r, violations)
 				return
 			}
+		}
+
+		// #2295: the receivers the body writes, after the policy gate above.
+		if err := gitops.ReceiverPreflight(tenantID, string(body)); err != nil {
+			writeReceiverShapeError(rw, r, err)
+			return
 		}
 
 		// v2.6.0: PR-based write-back mode (ADR-011) — supports GitHub + GitLab
@@ -445,3 +460,19 @@ func flattenMapDepth(prefix string, m map[string]interface{}, out map[string]str
 }
 
 // writePolicyViolation lives in errors.go (PR-9/11 unification).
+
+// writeReceiverShapeError answers gitops.ReceiverPreflight's refusal of the
+// body's receivers (#2295) with the canonical 400 INVALID_BODY + violations, and
+// reports whether err was one.
+func writeReceiverShapeError(rw http.ResponseWriter, r *http.Request, err error) bool {
+	var rse *gitops.ReceiverShapeError
+	if !errors.As(err, &rse) {
+		return false
+	}
+	violations := make([]Violation, len(rse.Violations))
+	for i, v := range rse.Violations {
+		violations[i] = Violation{Field: v.Field, Reason: v.Reason}
+	}
+	WriteValidationErrors(rw, r, violations)
+	return true
+}

@@ -44,6 +44,8 @@ linters:
             - "**/internal/parser/**"
             - "**/internal/guard/**"
             - "**/pkg/routingpolicy/**"
+            - "**/pkg/receiverspec/**"
+            - "**/pkg/pyyamlcompat/**"
           deny:
             - pkg: net/http
               desc: pure logic packages (CLI-reusable) must not import net/http

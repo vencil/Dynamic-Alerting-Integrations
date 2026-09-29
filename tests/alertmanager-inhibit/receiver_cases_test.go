@@ -2,9 +2,10 @@ package aminhibit
 
 // Alertmanager's verdict on the shared receiver case table (#2180).
 //
-// components/threshold-exporter/app/internal/guard/testdata/receiver_presence_cases.json
-// is read by the Go guard (TestReceiverPresenceCases) and by pytest
-// (tests/shared/test_receiver_spec_parity.py), which both assert each
+// components/threshold-exporter/app/pkg/receiverspec/testdata/receiver_presence_cases.json
+// is read by pkg/receiverspec (TestPresenceCases), the Go guard
+// (TestReceiverPresenceCases) and pytest
+// (tests/shared/test_receiver_spec_parity.py), which all assert each
 // row's `valid` — the verdict the schema, the Python route generator and
 // the guard must agree on. Its `am` column records what Alertmanager
 // itself does with the receiver the pipeline would hand it. This file is
@@ -65,12 +66,23 @@ func pythonStr(t *testing.T, v any) string {
 	return ""
 }
 
+// yaml11Bools are the YAML 1.1 boolean words the pipeline writes out as
+// booleans (#2295) — a copy of tenant-config.schema.json
+// definitions.yamlBool, the authority.
+var yaml11Bools = map[string]bool{
+	"true": true, "True": true, "TRUE": true, "false": false, "False": false, "FALSE": false,
+	"yes": true, "Yes": true, "YES": true, "no": false, "No": false, "NO": false,
+	"on": true, "On": true, "ON": true, "off": false, "Off": false, "OFF": false,
+}
+
 // amReceiverBody is the receiver as the pipeline hands it to
 // Alertmanager. The authority is
 // scripts/tools/ops/_grar_merge.py build_receiver_config: drop `type`,
-// and join a list-valued email `to` with ", " (via Python str() per
-// item). Table rows carry no rocketchat metadata fields, so every other
-// field is forwarded as is.
+// join a list-valued email `to` with ", " (via Python str() per item), and
+// write a YAML 1.1 boolean word given as a string in send_resolved /
+// require_tls / http_config.proxy_from_environment as the boolean (#2295).
+// Table rows carry no rocketchat metadata fields, so every other field is
+// forwarded as is.
 func amReceiverBody(t *testing.T, receiver map[string]any) (string, map[string]any) {
 	t.Helper()
 	rtype, _ := receiver["type"].(string)
@@ -91,17 +103,69 @@ func amReceiverBody(t *testing.T, receiver map[string]any) (string, map[string]a
 		}
 		body["to"] = strings.Join(parts, ", ")
 	}
+	for _, f := range []string{"send_resolved", "require_tls"} {
+		if v, ok := body[f].(string); ok {
+			if b, word := yaml11Bools[v]; word {
+				body[f] = b
+			}
+		}
+	}
+	if hc, ok := body["http_config"].(map[string]any); ok {
+		if v, ok := hc["proxy_from_environment"].(string); ok {
+			if b, word := yaml11Bools[v]; word {
+				copied := map[string]any{}
+				for k, x := range hc {
+					copied[k] = x
+				}
+				copied["proxy_from_environment"] = b
+				body["http_config"] = copied
+			}
+		}
+	}
 	return key, body
 }
 
+// rawYAMLConfig embeds a `yaml` row's text (#2295) into an Alertmanager
+// config as written — only the `type:` line is dropped — so Alertmanager's
+// own YAML reader (yaml.v2, YAML 1.1) decides what `yes` or `y` means.
+func rawYAMLConfig(t *testing.T, text string) []byte {
+	t.Helper()
+	var head struct {
+		Type string `yaml:"type"`
+	}
+	if err := yaml.Unmarshal([]byte(text), &head); err != nil {
+		t.Fatalf("yaml row: %v", err)
+	}
+	key, ok := receiverAMKey[head.Type]
+	if !ok {
+		t.Fatalf("yaml row type %q has no Alertmanager key", head.Type)
+	}
+	var b strings.Builder
+	b.WriteString("route:\n  receiver: r\nreceivers:\n- name: r\n  " + key + ":\n")
+	first := true
+	for _, line := range strings.Split(strings.TrimRight(text, "\n"), "\n") {
+		if strings.HasPrefix(line, "type:") {
+			continue
+		}
+		if first {
+			b.WriteString("  - " + line + "\n")
+			first = false
+			continue
+		}
+		b.WriteString("    " + line + "\n")
+	}
+	return []byte(b.String())
+}
+
 func TestReceiverCaseTable_AlertmanagerVerdict(t *testing.T) {
-	data, err := os.ReadFile(repoRoot("components/threshold-exporter/app/internal/guard/testdata/receiver_presence_cases.json"))
+	data, err := os.ReadFile(repoRoot("components/threshold-exporter/app/pkg/receiverspec/testdata/receiver_presence_cases.json"))
 	if err != nil {
 		t.Fatalf("read case table: %v", err)
 	}
 	var cases []struct {
 		Name     string         `json:"name"`
 		Receiver map[string]any `json:"receiver"`
+		YAML     string         `json:"yaml"`
 		Valid    *bool          `json:"valid"`
 		AM       string         `json:"am"`
 	}
@@ -124,14 +188,19 @@ func TestReceiverCaseTable_AlertmanagerVerdict(t *testing.T) {
 			default:
 				t.Fatalf(`am must be "accept", "reject" or "n/a", got %q`, tc.AM)
 			}
-			key, body := amReceiverBody(t, tc.Receiver)
-			doc := map[string]any{
-				"route":     map[string]any{"receiver": "r"},
-				"receivers": []any{map[string]any{"name": "r", key: []any{body}}},
-			}
-			raw, err := yaml.Marshal(doc)
-			if err != nil {
-				t.Fatalf("marshal: %v", err)
+			var raw []byte
+			if tc.YAML != "" {
+				raw = rawYAMLConfig(t, tc.YAML)
+			} else {
+				key, body := amReceiverBody(t, tc.Receiver)
+				doc := map[string]any{
+					"route":     map[string]any{"receiver": "r"},
+					"receivers": []any{map[string]any{"name": "r", key: []any{body}}},
+				}
+				var err error
+				if raw, err = yaml.Marshal(doc); err != nil {
+					t.Fatalf("marshal: %v", err)
+				}
 			}
 			_, loadErr := config.Load(string(raw))
 			loaded++

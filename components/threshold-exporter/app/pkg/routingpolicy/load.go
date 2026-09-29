@@ -7,6 +7,7 @@ import (
 	"strings"
 
 	"github.com/vencil/threshold-exporter/pkg/config"
+	"github.com/vencil/threshold-exporter/pkg/pyyamlcompat"
 	"gopkg.in/yaml.v3"
 )
 
@@ -86,12 +87,23 @@ var (
 	profileFileNames = []string{"_routing_profiles.yaml", "_routing_profiles.yml"}
 )
 
+// ReportsUnusable reports whether LoadRoot names a root file of this name
+// that it cannot parse as a Problem (domain_policy_unusable /
+// routing_profiles_unusable) — a duplicate key included — rather than
+// leaving it to the exporter's parse-failure list.
+func ReportsUnusable(name string) bool {
+	return contains(policyFileNames, name) || contains(profileFileNames, name)
+}
+
 // errUnusable marks a block that decodes but has the wrong shape.
 var errUnusable = errors.New("unusable")
 
 // parseDoc decodes one YAML document into its top-level node. A nil node with
 // a nil error is an empty document. The full decode is run as well so that a
-// duplicate key fails here as it fails in every other reader of the file.
+// duplicate key fails here as it fails in every other reader of the file —
+// and so does a key only the route generator counts as written twice (an
+// alias key beside its anchor, two `<<`): its StrictLoader refuses the whole
+// file (#2295, pyyamlcompat.FindDuplicateKey), so nothing in it is read.
 func parseDoc(data []byte) (*yaml.Node, error) {
 	var doc yaml.Node
 	if err := yaml.Unmarshal(data, &doc); err != nil {
@@ -104,6 +116,9 @@ func parseDoc(data []byte) (*yaml.Node, error) {
 	var probe any
 	if err := top.Decode(&probe); err != nil {
 		return nil, err
+	}
+	if d := pyyamlcompat.FindDuplicateKeyIn(data); d != nil {
+		return nil, d
 	}
 	if probe == nil {
 		return nil, nil
@@ -120,7 +135,7 @@ func lookup(m *yaml.Node, key string) *yaml.Node {
 		return nil
 	}
 	for i := 0; i+1 < len(m.Content); i += 2 {
-		if m.Content[i].Value == key {
+		if deref(m.Content[i]).Value == key { // an alias key: its anchor's text
 			return deref(m.Content[i+1])
 		}
 	}
@@ -177,7 +192,7 @@ func routingDefaultsFromNode(top *yaml.Node) (defaults map[string]any, present, 
 	if err := n.Decode(&v); err != nil {
 		return nil, true, false, err
 	}
-	m, ok := asStringMap(v)
+	m, ok := asStringMap(withPyYAMLReceiversFrom(v, n))
 	if !ok {
 		return nil, true, false, nil
 	}
@@ -209,10 +224,11 @@ func profilesFromNode(top *yaml.Node) (map[string]map[string]any, bool, error) {
 	out := make(map[string]map[string]any, len(n.Content)/2)
 	for i := 0; i+1 < len(n.Content); i += 2 {
 		var v any
-		if err := deref(n.Content[i+1]).Decode(&v); err != nil {
+		body := deref(n.Content[i+1])
+		if err := body.Decode(&v); err != nil {
 			return nil, true, err
 		}
-		m, _ := asStringMap(v) // not a mapping: known name, empty body
+		m, _ := asStringMap(withPyYAMLReceiversFrom(v, body)) // not a mapping: known name, empty body
 		out[n.Content[i].Value] = m
 	}
 	return out, true, nil
@@ -470,9 +486,14 @@ func overlayFrom(top *yaml.Node, layers *Layers) {
 		if e.value == nil || e.value.Decode(&decoded) != nil {
 			continue
 		}
-		body, ok := asStringMap(decoded)
+		// Keys made strings as for a tenant file (the exporter's merge), so
+		// a `1:` in the body or `_routing` does not drop it unjudged.
+		body, ok := asStringMap(config.NormalizeYAMLToJSON(decoded))
 		if !ok {
 			continue
+		}
+		if r, has := body["_routing"]; has {
+			body["_routing"] = withPyYAMLReceiversFrom(r, routingNode(e.value))
 		}
 		tid := e.key
 		for _, k := range routingBlockKeys {
@@ -528,7 +549,7 @@ func mappingEntries(m *yaml.Node) []mapEntry {
 			}
 			continue
 		}
-		own = append(own, mapEntry{key: k.Value, value: v})
+		own = append(own, mapEntry{key: deref(k).Value, value: v}) // an alias key: its anchor's text, as a decode reads it
 	}
 	written := map[string]bool{}
 	for _, e := range own {

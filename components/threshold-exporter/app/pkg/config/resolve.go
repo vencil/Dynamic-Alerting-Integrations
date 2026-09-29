@@ -10,6 +10,8 @@ import (
 	"time"
 
 	"gopkg.in/yaml.v3"
+
+	"github.com/vencil/threshold-exporter/pkg/receiverspec"
 )
 
 // --- ADR-024 Version-Aware Threshold: dimensional `version` label guard ---
@@ -1785,7 +1787,7 @@ func (c *ThresholdConfig) ResolveRouting() []RoutingConfig {
 				}
 			}
 		}
-		if rtype, ok := rc.ReceiverConfig["type"].(string); ok && validReceiverTypes[rtype] {
+		if rtype, ok := rc.ReceiverConfig["type"].(string); ok && receiverspec.Known(rtype) { // #2295: the one Go receiver contract
 			rc.ReceiverType = rtype
 		} else {
 			log.Printf("WARN: _routing for tenant=%s: invalid or missing receiver 'type', skipping", tenant)

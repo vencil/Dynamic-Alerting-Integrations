@@ -136,6 +136,8 @@ on:
       # root's platform files through RootPlatformFiles. A PR changing only
       # them changes every guard verdict on routing.
       - "components/threshold-exporter/app/pkg/routingpolicy/**"
+      # #2295: the receiver contract the routing checks judge every receiver by.
+      - "components/threshold-exporter/app/pkg/receiverspec/**"
       - "components/threshold-exporter/app/pkg/config/root_platform_files.go"
       - ".github/workflows/guard-defaults-impact.yml"
   workflow_dispatch:

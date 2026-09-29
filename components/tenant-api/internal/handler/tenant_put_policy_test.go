@@ -223,8 +223,10 @@ func TestPutTenant_NestedRoutingPolicyCompliant_Commits(t *testing.T) {
 	// through and the write must actually commit (the twin proving the 403
 	// above is the policy match, not a broken write path). Routed through the
 	// RBAC middleware so the request carries a verified identity — the direct
-	// commit path needs a non-empty author email for `git commit`.
-	body := bytes.NewBufferString("tenants:\n  " + tenant + ":\n    _routing:\n      receiver:\n        type: email\n")
+	// commit path needs a non-empty author email for `git commit`. The
+	// receiver is complete: an incomplete one is a 400 since #2295.
+	body := bytes.NewBufferString("tenants:\n  " + tenant + ":\n    _routing:\n      receiver:\n        type: email\n" +
+		"        to: [dba@example.com]\n        smarthost: smtp.example.com:587\n        from: alerts@example.com\n")
 	req := newRequestWithChiParam("PUT", "/api/v1/tenants/"+tenant, "id", tenant, body)
 	policyTestIdentity(req)
 	w := httptest.NewRecorder()
