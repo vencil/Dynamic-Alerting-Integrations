@@ -46,8 +46,11 @@ func TestMaintenanceExpiriesAfterStateFilters_SameWarnsOnceSameValues(t *testing
 		// `expires:` with no space after the colon — a block value on the
 		// next line. Keeps a reader whose entry test narrowed to
 		// "expires: " from agreeing with the other on every shape above.
-		"block seq expires":    "target: all\nexpires:\n  - 1\n",
-		"block scalar expires": "target: all\nexpires:\n  nope\n",
+		"block seq expires":         "target: all\nexpires:\n  - 1\n",
+		"plain scalar on next line": "target: all\nexpires:\n  nope\n",
+		// Neither reader matches "expires:" case-insensitively; keeps one
+		// that starts to from agreeing with the other.
+		"upper EXPIRES": "target: all\nEXPIRES: [\n",
 	}
 	filters := map[string]map[string]StateFilter{
 		"none":                    nil,
@@ -78,8 +81,12 @@ func TestMaintenanceExpiriesAfterStateFilters_SameWarnsOnceSameValues(t *testing
 				Defaults:     map[string]float64{"mysql_connections": 80},
 				StateFilters: sf,
 				Tenants: map[string]map[string]ScheduledValue{
+					// Two tenants carry the shape, so a reader that warns
+					// for only one of them disagrees with the other; t3
+					// keeps the "no override" tenant in every cell.
 					"t1": {"_state_maintenance": {Default: value}},
-					"t2": {},
+					"t2": {"_state_maintenance": {Default: value}},
+					"t3": {},
 				},
 			}
 
