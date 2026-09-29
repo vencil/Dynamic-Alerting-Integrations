@@ -11,7 +11,7 @@ package config
 //
 //   - the same distinct WARN lines (the fix only drops repeats),
 //   - each of them once in the new reading,
-//   - the same returned values.
+//   - the same maintenance expiries returned.
 //
 // The resolvers log through the process-global `log`, which has no seam, so
 // this test captures it with captureGlobalLog (idempotent reset) and is NOT
@@ -43,6 +43,11 @@ func TestMaintenanceExpiriesAfterStateFilters_SameWarnsOnceSameValues(t *testing
 		"flow map":             "{target: all, expires: nope}",
 		"flow map, future":     "{target: all, expires: \"2099-01-01T00:00:00Z\"}",
 		"disable with expires": "disable\nexpires: nope",
+		// `expires:` with no space after the colon — a block value on the
+		// next line. Keeps a reader whose entry test narrowed to
+		// "expires: " from agreeing with the other on every shape above.
+		"block seq expires":    "target: all\nexpires:\n  - 1\n",
+		"block scalar expires": "target: all\nexpires:\n  nope\n",
 	}
 	filters := map[string]map[string]StateFilter{
 		"none":                    nil,
@@ -60,14 +65,6 @@ func TestMaintenanceExpiriesAfterStateFilters_SameWarnsOnceSameValues(t *testing
 			}
 		}
 		return out
-	}
-	sortFilters := func(s []ResolvedStateFilter) {
-		sort.Slice(s, func(i, j int) bool {
-			if s[i].Tenant != s[j].Tenant {
-				return s[i].Tenant < s[j].Tenant
-			}
-			return s[i].FilterName < s[j].FilterName
-		})
 	}
 	sortExpiries := func(s []ResolvedMaintenanceExpiry) {
 		sort.Slice(s, func(i, j int) bool { return s[i].Tenant < s[j].Tenant })
@@ -87,12 +84,14 @@ func TestMaintenanceExpiriesAfterStateFilters_SameWarnsOnceSameValues(t *testing
 			}
 
 			buf.Reset()
-			oldOps := cfg.OperationalStatesAt(now)
+			// OperationalStatesAt is called for its WARNs: both readings call
+			// it identically, so its return value is not compared.
+			cfg.OperationalStatesAt(now)
 			oldExp := cfg.ResolveMaintenanceExpiriesAt(now)
 			oldWarns := warnCounts(buf.String())
 
 			buf.Reset()
-			newOps := cfg.OperationalStatesAt(now)
+			cfg.OperationalStatesAt(now)
 			newExp := cfg.ResolveMaintenanceExpiriesAfterStateFiltersAt(now)
 			newWarns := warnCounts(buf.String())
 
@@ -109,11 +108,6 @@ func TestMaintenanceExpiriesAfterStateFilters_SameWarnsOnceSameValues(t *testing
 				if n != 1 {
 					t.Errorf("%s: printed %d times in the new reading, want 1: %s", name, n, line)
 				}
-			}
-			sortFilters(oldOps.StateFilters)
-			sortFilters(newOps.StateFilters)
-			if !reflect.DeepEqual(oldOps.StateFilters, newOps.StateFilters) {
-				t.Errorf("%s: state filters differ\n old: %+v\n new: %+v", name, oldOps.StateFilters, newOps.StateFilters)
 			}
 			sortExpiries(oldExp)
 			sortExpiries(newExp)
