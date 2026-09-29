@@ -294,9 +294,12 @@ additionalSinks:
     # chain-of-custody 承載者，漏掉它等於這條 fan-out 白做。
     inputs: [demux, federation_evidence]
     endpoint: https://splunk.example.com:8088
-    default_token: \${SPLUNK_TOKEN}  # via envFrom secret
+    default_token: \${SPLUNK_TOKEN}  # 由下方 extraEnv 提供
     _buffer_when_full: drop_newest   # 鐵則：不可設 block
     _buffer_max_events: 10000
+extraEnv:
+  - name: SPLUNK_TOKEN
+    valueFrom: {secretKeyRef: {name: splunk-hec, key: token}}
 EOF
 ```
 
@@ -331,6 +334,7 @@ kubectl get pod -n vector -l app.kubernetes.io/name=vector  # Running
 | `_buffer_when_full: drop_newest`（預設） | SIEM 慢/掛時，新事件對該 sink **被丟**，但 VictoriaLogs **絕不**被 back-pressure（#539 §2）。chart 自動 inject 這個 buffer block 除非 entry 自己有 `buffer:` |
 | **絕對不要** `_buffer_when_full: block` 在 fan-out sink | block 會 back-pressure 上游，VictoriaLogs 也卡。**只有**當 SIEM 是 system of record（compliance-only mode、VictoriaLogs disabled）才合理 |
 | `inputs: [demux, federation_evidence]` 不要寫 `[kubernetes_logs]`，也不要只寫 `[demux]` | demux 是 VRL-tagged stream（有 `log_type`/`tenant_id`），raw 是 Envoy 原始行 —— compliance 通常要前者。⛔ 但 chart 有**兩條** VRL-tagged stream：`federation_evidence`（ADR-028 / #1234）走獨立 pre-demux 分支，載的是 federation token 撤銷的 audit trail。只寫 `[demux]` 的 SIEM **整條撤銷 chain-of-custody 都收不到**，而 SIEM 正是 ADR-028 指定的 tamper-evident 承載者 |
+| `${VAR}` 引用的變數一定要接好（`extraEnv` / `extraEnvFrom`） | Vector 0.57.0 預設**不**展開設定檔裡的環境變數：`${VAR}` 會原樣當成 token 送出、不報錯。chart 在 vector container 設了 `VECTOR_DANGEROUSLY_ALLOW_ENV_VAR_INTERPOLATION=true` 才會展開（理由見 `helm/vector/templates/daemonset.yaml`）。代價：引用了卻沒提供的變數會讓設定載入失敗、pod 起不來；替換是解析前的文字替換，值含 `"` 會跳出所在字串、含換行會被拒；字串裡的裸 `$NAME` 也會被換，字面 `$` 要寫 `$$`。細節見 [`helm/vector/README.md`](https://github.com/vencil/Dynamic-Alerting-Integrations/blob/main/helm/vector/README.md) |
 | 不要叫 `name: victorialogs` | 跟內建 primary sink 撞名 → helm lint 抓得到（duplicate YAML key），fail-loud |
 
 ### 7.3 「Compliance 的責任落在哪」
