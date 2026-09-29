@@ -7,12 +7,15 @@
 #
 # 用法：
 #   bash scripts/session-guards/git_check_lock.sh             # 診斷
-#   bash scripts/session-guards/git_check_lock.sh --clean     # 診斷 + 清理 stale locks + 修 HEAD
+#   bash scripts/session-guards/git_check_lock.sh --clean     # 診斷 + 修 HEAD（lock 只列、不刪）
 #   bash scripts/session-guards/git_check_lock.sh --check-head   # 只驗 HEAD (exit 2 if corrupt)
 #
 # 設計原則：
-#   - 不盲目刪除 — 先檢查 lock 年齡和是否有活躍 git 程序
-#   - 只清理 >30 秒且無活躍 git process 的 lock
+#   - lock 一律只列、不刪（#2328）：崩潰的 git 留下的鎖與執行中的 git 持有的
+#     鎖長得一樣，而「有沒有活躍 git」量不準（Git Bash 沒有 pgrep）。
+#     與 #1919 對 win_git_escape.bat 的裁定一致。
+#   - lock 的位置問 git（--git-common-dir），不寫死 `<tree>/.git`：linked
+#     worktree 的 `.git` 是檔案。
 #   - 自身程序 + parent 不計入「活躍 git」（Makefile 呼叫時防誤判）
 #   - HEAD NUL-fill 自動偵測；`--clean` 模式下 auto-repair；嚴重時提示 Windows 側修法
 #
@@ -140,8 +143,18 @@ if [ "$CLEAN_MODE" = "--check-head" ]; then
     fi
 fi
 
-# 搜尋所有 lock 檔案
-mapfile -t LOCK_FILES < <(find "$REPO_ROOT/.git" -name "*.lock" 2>/dev/null)
+# 搜尋所有 lock 檔案。位置問 git，不是 `$REPO_ROOT/.git`（#2328）：linked
+# worktree 的 `.git` 是檔案，舊寫法在那裡一把鎖都找不到卻回報「一切正常」。
+# refs、packed-refs 與每棵樹自己的 index（linked tree 的在 worktrees/<name>/）
+# 都在 common git dir 底下。git 認不出 repo 時才退回舊位置。
+LOCK_ROOT="$(git rev-parse --path-format=absolute --git-common-dir 2>/dev/null || true)"
+if [ -z "$LOCK_ROOT" ] && [ -d "$REPO_ROOT/.git" ]; then
+    LOCK_ROOT="$REPO_ROOT/.git"
+fi
+LOCK_FILES=()
+if [ -n "$LOCK_ROOT" ]; then
+    mapfile -t LOCK_FILES < <(find "$LOCK_ROOT" -name "*.lock" 2>/dev/null)
+fi
 
 # HEAD 同場診斷（在 lock 之前先看 — 若 HEAD 壞了，很多 git 操作會 fail 得更早）
 HEAD_SANE=true
@@ -174,6 +187,7 @@ echo ""
 
 NOW=$(date +%s)
 HAS_STALE=false
+STALE_FILES=()
 
 for f in "${LOCK_FILES[@]}"; do
     # 取得 lock 年齡
@@ -188,6 +202,7 @@ for f in "${LOCK_FILES[@]}"; do
     if [ "$AGE" -gt 30 ]; then
         echo "  🔴 $REL_PATH (${AGE}s ago — 可能是殘留)"
         HAS_STALE=true
+        STALE_FILES+=("$f")
     else
         echo "  🟡 $REL_PATH (${AGE}s ago — 可能有程序正在使用)"
     fi
@@ -246,63 +261,41 @@ filter_to_this_repo() {
     done
 }
 
-ACTIVE_LINES=$(
-    pgrep -af "git" 2>/dev/null \
-        | grep -v "git_check_lock" \
-        | grep -v "pgrep" \
-        | awk -v selfre="$SELF_PIDS" '$1 !~ selfre' \
-        | filter_to_this_repo \
-        | head -5 \
-        || true
-)
-if [ -n "$ACTIVE_LINES" ]; then
-    echo "$ACTIVE_LINES"
-    echo ""
-    echo "⚠️  有活躍的 git 程序。建議等待完成或手動終止後再清理。"
-    HAS_ACTIVE_GIT=true
+# 只是參考資訊：本腳本不刪鎖，這一段不決定任何動作。沒有 pgrep（Git Bash）
+# 時明說量不到，不印「(無)」——舊版正是把「量不到」讀成「沒有」，刪掉了
+# 被持有的鎖（#2328）。
+if ! command -v pgrep >/dev/null 2>&1; then
+    echo "(無法判斷：這個環境沒有 pgrep)"
 else
-    echo "(無)"
-    HAS_ACTIVE_GIT=false
+    ACTIVE_LINES=$(
+        pgrep -af "git" 2>/dev/null \
+            | grep -v "git_check_lock" \
+            | grep -v "pgrep" \
+            | awk -v selfre="$SELF_PIDS" '$1 !~ selfre' \
+            | filter_to_this_repo \
+            | head -5 \
+            || true
+    )
+    if [ -n "$ACTIVE_LINES" ]; then
+        echo "$ACTIVE_LINES"
+        echo ""
+        echo "⚠️  有活躍的 git 程序：上面的 lock 很可能正被它持有。"
+    else
+        echo "(無)"
+    fi
 fi
 
 echo ""
 
-# 清理邏輯
-if [ "$CLEAN_MODE" = "--clean" ] && [ "$HAS_STALE" = true ] && [ "$HAS_ACTIVE_GIT" = false ]; then
-    echo "--- 清理 stale locks ---"
-    CLEANED=0
-    FAILED=0
-    for f in "${LOCK_FILES[@]}"; do
-        if MTIME=$(stat -c %Y "$f" 2>/dev/null); then
-            AGE=$(( NOW - MTIME ))
-        else
-            AGE=0
-        fi
-
-        if [ "$AGE" -gt 30 ]; then
-            if rm -f "$f" 2>/dev/null; then
-                echo "  ✅ 已刪除: ${f#"$REPO_ROOT"/}"
-                CLEANED=$((CLEANED + 1))
-            else
-                REL="${f#"$REPO_ROOT"/}"
-                REL_WIN="${REL//\//\\}"
-                echo "  ❌ 無法刪除: $REL (FUSE phantom lock)"
-                echo "     ▸ Option A (sandbox plumbing): use \`make fuse-commit\` which"
-                echo "       bypasses the lock entirely via git commit-tree."
-                echo "     ▸ Option B (Windows MCP): run the following to force-remove:"
-                echo "       Remove-Item \"\$env:REPO_WIN_PATH\\$REL_WIN\" -Force"
-                echo "       (\$env:REPO_WIN_PATH is the Windows repo path, e.g. C:\\Users\\<username>\\vibe-k8s-lab)"
-                FAILED=$((FAILED + 1))
-            fi
-        fi
+# 殘留嫌疑的 lock：只列、不刪（#2328）。
+if [ "$HAS_STALE" = true ]; then
+    echo "--- 殘留嫌疑的 lock（本腳本不會刪除）---"
+    echo "確認沒有 git 程序在使用後，再逐一手動刪除："
+    for f in "${STALE_FILES[@]}"; do
+        echo "   rm -f '$f'"
     done
-    echo ""
-    echo "結果：清理 $CLEANED 個，失敗 $FAILED 個"
-elif [ "$CLEAN_MODE" = "--clean" ] && [ "$HAS_ACTIVE_GIT" = true ]; then
-    echo "⛔ 有活躍 git 程序，跳過清理。請先終止相關程序。"
-elif [ "$CLEAN_MODE" != "--clean" ] && [ "$HAS_STALE" = true ]; then
-    echo "💡 若確認是殘留，可執行："
-    echo "   bash scripts/session-guards/git_check_lock.sh --clean"
+    echo "刪不掉（FUSE phantom lock）時：make fuse-commit 繞過 lock，"
+    echo "或在 Windows 側 Remove-Item -Force 該路徑。"
 fi
 
 # HEAD 最終狀態回報

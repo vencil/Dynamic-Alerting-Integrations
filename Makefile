@@ -205,11 +205,11 @@ inspect-tenant: ## AI Agent: 檢查 Tenant 健康 (使用: make inspect-tenant T
 	@python3 ./scripts/tools/ops/diagnose.py $(TENANT)
 
 .PHONY: git-lock
-git-lock: ## 診斷 .git lock 殘留 (加 ARGS="--clean" 安全清理)
+git-lock: ## 診斷 .git lock 殘留（只列、不刪；加 ARGS="--clean" 另修壞掉的 HEAD）
 	@bash scripts/session-guards/git_check_lock.sh $(ARGS)
 
 .PHONY: git-preflight
-git-preflight: ## Git 操作前自動降噪（關閉 VS Code Git + 清理 stale lock）
+git-preflight: ## Git 操作前自動降噪（關閉 VS Code Git + 列出 stale lock、修 HEAD）
 	@python3 scripts/session-guards/vscode_git_toggle.py off 2>/dev/null || true
 	@bash scripts/session-guards/git_check_lock.sh --clean 2>/dev/null || true
 
@@ -473,7 +473,7 @@ fuse-reset: ## FUSE cache 重建 (Level 1+3) — 遇到 phantom lock / 檔案殘
 	@echo "[Level 3a] 關 VS Code Git 背景掃描"
 	@python3 scripts/session-guards/vscode_git_toggle.py off 2>/dev/null || true
 	@echo ""
-	@echo "[Level 3b] 清 stale .git/*.lock"
+	@echo "[Level 3b] 列出 stale .git/*.lock（不刪）、修 HEAD"
 	@bash scripts/session-guards/git_check_lock.sh --clean 2>/dev/null || true
 	@echo ""
 	@echo "[Level 3c] Kill 殘留 port-forward"
