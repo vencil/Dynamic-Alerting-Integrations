@@ -83,13 +83,14 @@ type tenantDetailNotLoadable struct {
 // @Description skips such a file, so resolved_thresholds, custom_alerts and the validation fields are absent (not empty:
 // @Description the file's content is not vouched for). Partial writes refuse such a file (409 TENANT_CONFIG_NOT_LOADABLE) until the
 // @Description tenant file itself is repaired. A whole-file PUT can replace it: it is not refused merely because the current
-// @Description file is broken. When tenant-api cannot parse the current file, its end-of-life recipe usage counts as none, so a
-// @Description body with an end-of-life recipe is refused; a file it can parse is compared by its actual usage. ("Cannot parse"
-// @Description means a YAML syntax error, a duplicate key or a wrongly shaped tenants: and the like; a file that is
-// @Description invalid_config only because it declares a non-UTF-8 tenant id still parses.) A broken file shared with other tenants may not keep their sections
-// @Description through that PUT: when tenant-api cannot parse the current file, other tenants' sections in the body count as
-// @Description added and are refused, and a body with only the tenant's own section overwrites them; to keep them, fix the
-// @Description file in git.
+// @Description file is broken. When tenant-api cannot read the current file, its end-of-life recipe usage counts as none, so a
+// @Description body with an end-of-life recipe is refused; a file it can read is compared by its actual usage. A broken file
+// @Description shared with other tenants may not keep their sections through that PUT: when tenant-api cannot read the current
+// @Description file, other tenants' sections in the body count as added and are refused, and a body with only the tenant's own
+// @Description section overwrites them; to keep them, fix the file in git. The two checks each read the current file their own
+// @Description way (the end-of-life check reads only the tenants: block; the shared-file check reads the whole file), and each
+// @Description applies the handling above only when it cannot read the file; which broken files fall on which side is not
+// @Description guaranteed, so fix the file in git when needed.
 // @Tags        tenants
 // @Produce     json
 // @Param       id   path     string true "Tenant ID"
