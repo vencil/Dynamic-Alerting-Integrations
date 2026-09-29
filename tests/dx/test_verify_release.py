@@ -53,7 +53,7 @@ def run_script(args, env=None, cwd=None):
     return subprocess.run(  # subprocess-timeout: ignore
         ["bash", str(SCRIPT), *args],
         capture_output=True,
-        text=True,
+        text=True, encoding="utf-8", errors="replace",
         env=full_env,
         cwd=str(cwd) if cwd else None,
         check=False,
@@ -277,7 +277,7 @@ def test_sha256_match_passes_to_cosign(tmp_path, fake_cosign_dir):
     # Compute the actual sha256 of foo.tar.gz's bytes and write
     # SHA256SUMS with the matching hash.
     actual = subprocess.check_output(  # subprocess-timeout: ignore
-        ["sha256sum", str(dl / "foo.tar.gz")], text=True
+        ["sha256sum", str(dl / "foo.tar.gz")], text=True, encoding="utf-8", errors="replace"
     ).split()[0]
     (dl / "SHA256SUMS").write_text(f"{actual}  foo.tar.gz\n")
     env = {"PATH": f"{fake_cosign_dir}:{os.environ.get('PATH', '')}"}

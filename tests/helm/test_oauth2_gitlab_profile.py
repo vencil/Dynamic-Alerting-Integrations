@@ -63,7 +63,7 @@ def _render(repo_root: Path, chart: str, *set_args: str) -> subprocess.Completed
     cmd = ["helm", "template", "t", str(repo_root / _CHARTS[chart])]
     for kv in set_args:
         cmd += ["--set", kv]
-    return subprocess.run(cmd, capture_output=True, text=True, timeout=60)
+    return subprocess.run(cmd, capture_output=True, text=True, encoding="utf-8", errors="replace", timeout=60)
 
 
 @_needs_helm

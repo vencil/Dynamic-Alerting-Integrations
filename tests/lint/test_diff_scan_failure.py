@@ -251,7 +251,7 @@ def test_type_change_into_violation_is_seen(name, in_repo, monkeypatch, capsys):
     _git(in_repo, "rm", "-q", "--cached", rel)
     _stage(in_repo, rel, data)
     status = subprocess.run(["git", "diff", "--name-status", "HEAD"], cwd=str(in_repo),
-                            check=True, capture_output=True, text=True, timeout=30).stdout
+                            check=True, capture_output=True, text=True, encoding="utf-8", errors="replace", timeout=30).stdout
     assert status == f"T\t{rel}\n", status
     rc, out, err = _run(monkeypatch, capsys, module, ["--diff-base", "HEAD", *extra])
     assert rc == 1, f"{name}: rc={rc}\nstdout={out}\nstderr={err}"
@@ -455,7 +455,7 @@ def _behind_main(repo: Path, monkeypatch) -> str:
     _stage(repo, "_stale.bat", b"@echo off\r\ngit commit\r\n")
     _git(repo, "commit", "-q", "-m", "fork point carries a stray script")
     fork = subprocess.run(["git", "rev-parse", "HEAD"], cwd=str(repo), check=True,
-                          capture_output=True, text=True, timeout=30).stdout.strip()
+                          capture_output=True, text=True, encoding="utf-8", errors="replace", timeout=30).stdout.strip()
     _git(repo, "rm", "-q", "_stale.bat")
     _git(repo, "commit", "-q", "-m", "main removes it")
     _git(repo, "update-ref", "refs/remotes/origin/main", "HEAD")
@@ -485,7 +485,7 @@ def test_a_branch_behind_main_still_answers_for_its_own_change(in_repo, monkeypa
 
 def test_no_merge_base_is_a_caller_error_not_a_two_way_diff(in_repo, monkeypatch, capsys):
     first_root = subprocess.run(["git", "rev-parse", "HEAD"], cwd=str(in_repo), check=True,
-                                capture_output=True, text=True, timeout=30).stdout.strip()
+                                capture_output=True, text=True, encoding="utf-8", errors="replace", timeout=30).stdout.strip()
     _git(in_repo, "checkout", "-q", "--orphan", "other")
     _git(in_repo, "rm", "-q", "-r", "-f", ".")
     _stage(in_repo, "x.txt", b"x\n")

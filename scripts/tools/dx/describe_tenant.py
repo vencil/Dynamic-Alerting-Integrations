@@ -14,10 +14,15 @@ with override semantics (ADR-017). Array fields are replaced, not concatenated.
 Output: JSON or YAML of the effective (merged) config.
 """
 import argparse
+import codecs
 import copy
+import datetime
+import decimal
 import hashlib
 import json
+import math
 import os
+import re
 import sys
 from pathlib import Path
 from typing import Any
@@ -46,10 +51,11 @@ from _lib_exitcodes import EXIT_CALLER_ERROR, EXIT_VIOLATION  # noqa: E402
 from _lib_io import exit_on_output_write_error, output_write  # noqa: E402  (#1789)
 # #2123: conf.d YAML is read strictly — a key written twice in one mapping
 # raises (the exporter's yaml.v3 rejects that file) instead of last-wins.
-from _lib_io import strict_safe_load  # noqa: E402
+from _lib_io import strict_safe_load, strict_safe_load_all  # noqa: E402
 # #2114: tenant ids as the exporter keys them (raw text), on the same strict
-# reading — `_lib_io` composes the two loaders.
-from _lib_io import strict_load_all_exporter_keys, strict_load_exporter_keys  # noqa: E402
+# reading — `_lib_io` composes the two loaders. #2371: this tool reads every
+# conf.d file through a subclass of it, `_GoKeyLoader`.
+from _lib_io import StrictExporterKeyLoader  # noqa: E402
 # #2117: the #1231 alias boundary (deprecated key spelling → canonical), for
 # profile expansion's "does the tenant already set this key" check. The
 # repo-layout path is `ops/`; the image is flat (build.sh ships both).
@@ -121,11 +127,14 @@ def deep_merge(base: dict, override: dict) -> dict:
 # ---------------------------------------------------------------------------
 
 def _load_yaml(path: Path) -> dict:
-    """Load a YAML file, returning its parsed dict."""
+    """Load a YAML file (a `_defaults.yaml`, or the `--what-if` file),
+    returning its parsed dict. Keys are source text carrying the exporter's
+    spelling (`_GoKeyLoader`, #2371) — the tenant files' key identity, so a
+    key merges across the two exactly when its text matches."""
     with open(path, "r", encoding="utf-8") as f:
         content = f.read()
     if yaml:
-        return strict_safe_load(content) or {}
+        return strict_safe_load(content, loader=_GoKeyLoader) or {}
     # Minimal fallback — only works for simple flat YAML
     raise RuntimeError(f"PyYAML is required for describe-tenant. Install: pip install pyyaml")
 
@@ -139,10 +148,518 @@ def _file_hash(path: Path) -> str:
     return h.hexdigest()[:16]
 
 
+# ---------------------------------------------------------------------------
+# JSON for the values PyYAML types but JSON does not (#2371)
+# ---------------------------------------------------------------------------
+#
+# An unquoted `2026-12-31` is a `date` to PyYAML and a `!!binary` value is
+# `bytes`; `json.dumps` raised TypeError on both, so one such value anywhere
+# in the tree ended every mode — `--all` included — with a traceback, while
+# the exporter served the same tree. The oracle for what they should become
+# is Go: yaml.v3 reads a timestamp into time.Time and a `!!binary` into a
+# string of its raw bytes, and pkg/config's canonical JSON (encoding/json)
+# writes them as below. merged_hash must match the exporter's byte for byte,
+# so this is the exporter's rendering, not a nicer one.
+#
+#   timestamp  -> decided at READ time, not here: `_GoKeyLoader` applies
+#                 yaml.v3's four layouts to the source text and yields the
+#                 text encoding/json writes for that time.Time (RFC 3339,
+#                 nanoseconds, "Z" for UTC) — or the source text itself where
+#                 yaml.v3 reads no time. PyYAML's own timestamp rules differ
+#                 both ways (a naive `T` value, a space before the zone, a
+#                 9-digit fraction, `2026-1-2`, `2026-12-31 23:59:59`), so
+#                 its datetime objects cannot be rendered into Go's answer.
+#   date / datetime objects from any other reader -> as time.Time JSON:
+#                 "YYYY-MM-DDT00:00:00Z", or RFC 3339 with the offset
+#   bytes      -> UTF-8 decoded; each byte that is not part of a valid
+#                 sequence becomes encoding/json's six-character escape
+#                 (backslash, then `ufffd`) in the JSON text, NOT a raw U+FFFD
+#
+# ⛔ Timestamp values the reader still cannot align (strict xfails in
+# tests/dx/test_describe_tenant.py, TestYamlTypedScalarParity):
+#   - an explicit `!!timestamp` yaml.v3 cannot parse, on a text PyYAML
+#     would have tagged `!!timestamp` anyway (`!!timestamp
+#     2026-12-31T10:20:30`, `!!timestamp 2026-13-01`): yaml.v3 refuses the
+#     FILE; here the tag is invisible and it is the text. (`!!timestamp foo`
+#     and other visibly explicit ones ARE refused — `_construct_timestamp`.)
+#   - an explicit `!!str` on a text PyYAML itself reads as a string but
+#     yaml.v3 as a time (`!!str 2026-1-2`): indistinguishable from the plain
+#     scalar once composed, so it is rendered as the time.
+#   - a tab between date and time: PyYAML's scanner refuses the file
+#     (`found character '\t'`), yaml.v3 keeps the text. A parser difference
+#     (#2123), not a typing one.
+#   - a zone offset of 24h or more (`+24:00`, `-23:60`): yaml.v3 parses it,
+#     but Go's CanonicalJSON fails once the value lands in a tenant's
+#     effective config (no merged_hash); here it is rendered as a time.
+#   - an explicit `!!timestamp` that is not a time on a KEY or tenant ID
+#     (`!!timestamp foo: 1`): yaml.v3 refuses the file; here the key is
+#     its text. The refusal above covers VALUES only.
+#
+# Mapping KEYS are a separate path (json's `default` is never called for a
+# key): see `_GoKey` below.
+_GO_INVALID_UTF8 = "\udfff"
+"""Stand-in for one invalid byte while `json.dumps` runs; `_json_text`
+turns it into encoding/json's `\\ufffd` escape afterwards. A lone surrogate
+because no str this tool reads can carry one: `_GoKeyLoader` refuses the
+`"\\udfff"` escape PyYAML would accept (`_reject_surrogates`). Belt and
+braces, `_json_text` still replaces only when every occurrence is one it
+inserted."""
+
+
+def _go_invalid_utf8_handler(exc: UnicodeError):
+    # Resume ONE byte later, as Go's utf8 decoding does: b"\xe4\xb8" (a
+    # truncated 3-byte sequence) is two replacements there, one under
+    # Python's built-in "replace" handler.
+    return _GO_INVALID_UTF8, exc.start + 1
+
+
+codecs.register_error("describe_tenant.go_invalid_utf8", _go_invalid_utf8_handler)
+
+
+def _go_time_text(value: "datetime.datetime") -> str:
+    """`value` as encoding/json writes a time.Time (RFC 3339 with nanosecond
+    precision): trailing zeros of the fraction dropped, `Z` for UTC."""
+    text = (f"{value.year:04d}-{value.month:02d}-{value.day:02d}"
+            f"T{value.hour:02d}:{value.minute:02d}:{value.second:02d}")
+    if value.microsecond:
+        text += f".{value.microsecond:06d}".rstrip("0")
+    offset = value.utcoffset()
+    if offset is None:
+        return text
+    if not offset:
+        return text + "Z"
+    minutes = int(offset.total_seconds()) // 60
+    sign = "+" if minutes >= 0 else "-"
+    return text + f"{sign}{abs(minutes) // 60:02d}:{abs(minutes) % 60:02d}"
+
+
+def _go_json_default(value: Any) -> Any:
+    """`json.dumps(default=...)` for the YAML scalars JSON has no type for,
+    rendered as the exporter's canonical JSON renders them (see above)."""
+    if isinstance(value, datetime.datetime):
+        return _go_time_text(value)
+    if isinstance(value, datetime.date):
+        return f"{value.isoformat()}T00:00:00Z"
+    if isinstance(value, (bytes, bytearray)):
+        return bytes(value).decode("utf-8", errors="describe_tenant.go_invalid_utf8")
+    raise TypeError(f"Object of type {type(value).__name__} is not JSON serializable")
+
+
+def _json_text(data: Any, **kwargs: Any) -> str:
+    """`json.dumps(data, ensure_ascii=False, **kwargs)` through
+    `_go_json_default` — the one JSON writer for the hash and the output."""
+    inserted = 0
+
+    def default(value: Any) -> Any:
+        nonlocal inserted
+        rendered = _go_json_default(value)
+        if isinstance(value, (bytes, bytearray)):
+            inserted += rendered.count(_GO_INVALID_UTF8)
+        return rendered
+
+    text = json.dumps(data, ensure_ascii=False, default=default, **kwargs)
+    if inserted and text.count(_GO_INVALID_UTF8) == inserted:
+        text = text.replace(_GO_INVALID_UTF8, "\\ufffd")
+    return text
+
+
+def _canonical_json(data: Any) -> str:
+    """The canonical JSON merged_hash is computed over — pkg/config's
+    CanonicalJSON: sorted keys, no spaces, no HTML or non-ASCII escaping."""
+    return _json_text(_go_keys(data), sort_keys=True, separators=(",", ":"))
+
+
 def _canonical_hash(data: dict) -> str:
     """SHA-256 of canonical JSON representation."""
-    canonical = json.dumps(data, sort_keys=True, ensure_ascii=False, separators=(",", ":"))
-    return hashlib.sha256(canonical.encode("utf-8")).hexdigest()[:16]
+    return hashlib.sha256(_canonical_json(data).encode("utf-8")).hexdigest()[:16]
+
+
+# ---------------------------------------------------------------------------
+# Mapping keys as the exporter spells them (#2371)
+# ---------------------------------------------------------------------------
+#
+# Below a tenant id, yaml.v3 decodes a mapping into `map[any]any` as soon as
+# one key is not a string, and pkg/config then spells every key with
+# `fmt.Sprintf("%v", k)`: an unquoted `2026-12-31:` is
+# "2026-12-31 00:00:00 +0000 UTC" (time.Time.String()), `010:` is "8",
+# `1.0:` is "1", `True:` is "true". merged_hash is computed over those
+# spellings. This tool reads keys as their source TEXT (#2114 — tenant ids
+# must stay text, and so the merge's key identity is text on both the tenant
+# and the `_defaults.yaml` side), so `_GoKeyLoader` hands out keys that ARE
+# that text but also carry the exporter's spelling, and `_go_keys` swaps it
+# in wherever a structure leaves the tool (hash and output alike). A key
+# written in a `_defaults.yaml` was a PyYAML-typed object before; a `date`
+# there ended every mode with "keys must be str…".
+#
+# ⛔ What this does NOT align (tests/dx/test_describe_tenant.py
+# TestYamlMappingKeyParity pins each as a strict xfail):
+#   - a null key (`~:`, `null:`): yaml.v3 keeps it as "<nil>"; the #2114
+#     key reader drops it, as the exporter does for a tenant id.
+#   - two spellings of one Go key (`010:` in the defaults, `8:` in the
+#     tenant file): one key to Go, so their values merge; two keys here, and
+#     the later one wins where they meet in `_go_keys`.
+#   - a `+00:00` offset: time.Parse puts it in time.Local when Local's
+#     offset is zero, so its String() depends on the exporter's TZ. Rendered
+#     for a UTC Local ("+0000 UTC"), what the shipped image runs with.
+#   - an explicit tag PyYAML resolves the same way implicitly (`!!str 1e3`):
+#     indistinguishable from the plain scalar once composed.
+
+
+class _GoKey(str):
+    """A mapping key: its source text (identity, hashing, equality — so the
+    merge and every lookup behave exactly as the #2114 text keys do), plus
+    `go`, the spelling pkg/config gives it."""
+
+    __slots__ = ("go",)
+
+    def __new__(cls, text: str, go: str):
+        self = super().__new__(cls, text)
+        self.go = go
+        return self
+
+    def __reduce__(self):  # deepcopy (deep_merge) keeps the spelling
+        return (_GoKey, (str.__str__(self), self.go))
+
+
+_GO_INT_DIGITS = {16: re.compile(r"[0-9a-fA-F]+"), 10: re.compile(r"[0-9]+"),
+                  8: re.compile(r"[0-7]+"), 2: re.compile(r"[01]+")}
+# yaml.v3 resolve.go `yamlStyleFloat`.
+_GO_YAML_FLOAT = re.compile(r"^[-+]?(\.[0-9]+|[0-9]+(\.[0-9]*)?)([eE][-+]?[0-9]+)?$")
+# yaml.v3 `allowedTimestampFormats`, as time.Parse reads them: 1-2 digit
+# month / day / hour / minute / second, any number of fraction digits, a run
+# of spaces where the layout has one.
+# ⛔ Used with `fullmatch` only, and `[0-9]` not `\d`: `$` would accept a
+# trailing "\n" (a `|` block scalar's `2026-12-31\n`, which yaml.v3 keeps as
+# text) and `\d` would accept non-ASCII digits time.Parse does not.
+_GO_TS_ZONED = re.compile(
+    r"([0-9]{4})-([0-9]{1,2})-([0-9]{1,2})[Tt]([0-9]{1,2}):([0-9]{1,2}):([0-9]{1,2})"
+    r"(?:[.,]([0-9]+))?(Z|[+-][0-9]{2}:[0-9]{2})")
+_GO_TS_SPACE = re.compile(
+    r"([0-9]{4})-([0-9]{1,2})-([0-9]{1,2}) +([0-9]{1,2}):([0-9]{1,2}):([0-9]{1,2})"
+    r"(?:[.,]([0-9]+))?")
+_GO_TS_DATE = re.compile(r"([0-9]{4})-([0-9]{1,2})-([0-9]{1,2})")
+# time.Parse's own zone bounds (`Z07:00`): an hour above 24 or a minute
+# above 60 is a parse error, so yaml.v3 keeps the text; within them the
+# offset is hours*60 + minutes, so `+08:60` IS +09:00.
+_GO_ZONE_MAX_HOUR, _GO_ZONE_MAX_MINUTE = 24, 60
+
+
+def _go_parse_int(text: str) -> "int | None":
+    """strconv.ParseInt(text, 0, 64) — then ParseUint for an unsigned text —
+    as yaml.v3 tries them, underscores already removed."""
+    sign, body = "", text
+    if body[:1] in "+-":
+        sign, body = body[0], body[1:]
+    base = 10
+    if len(body) > 1 and body[0] == "0":
+        prefix = body[1].lower()
+        base, body = {"x": (16, body[2:]), "o": (8, body[2:]),
+                      "b": (2, body[2:])}.get(prefix, (8, body[1:]))
+    if not body or not _GO_INT_DIGITS[base].fullmatch(body):
+        return None
+    value = int(body, base) * (-1 if sign == "-" else 1)
+    if -(1 << 63) <= value < (1 << 63):
+        return value
+    if not sign and value < (1 << 64):  # ParseUint takes no sign at all
+        return value
+    return None
+
+
+def _go_underscore_ok(text: str) -> bool:
+    """strconv's underscoreOK: an `_` only between digits (or between a base
+    prefix and a digit)."""
+    if text[:1] in ("+", "-"):
+        text = text[1:]
+    saw, start, hexa = "^", 0, False
+    if len(text) >= 2 and text[0] == "0" and text[1].lower() in "box":
+        saw, start, hexa = "0", 2, text[1].lower() == "x"
+    for ch in text[start:]:
+        if "0" <= ch <= "9" or (hexa and ch.lower() in "abcdef"):
+            saw = "0"
+        elif ch == "_":
+            if saw != "0":
+                return False
+            saw = "_"
+        elif saw == "_":
+            return False
+        else:
+            saw = "!"
+    return saw != "_"
+
+
+def _go_float_v(value: float) -> str:
+    """fmt's `%v` of a float64: strconv 'g' at the shortest precision, which
+    switches to an exponent below 1e-4 and from 1e+06 up (`%e` with at least
+    two exponent digits)."""
+    if value != value:
+        return "NaN"
+    if value in (float("inf"), float("-inf")):
+        return "+Inf" if value > 0 else "-Inf"
+    if value == 0:
+        return "-0" if math.copysign(1.0, value) < 0 else "0"
+    sign = "-" if value < 0 else ""
+    # repr() is the shortest round-trip digit string, as strconv's is.
+    parts = decimal.Decimal(repr(abs(value))).normalize().as_tuple()
+    digs = "".join(str(d) for d in parts.digits)
+    exp10 = len(digs) - 1 + parts.exponent
+    if exp10 < -4 or exp10 >= 6:
+        body = digs[0] + ("." + digs[1:] if len(digs) > 1 else "")
+        return f"{sign}{body}e{'-' if exp10 < 0 else '+'}{abs(exp10):02d}"
+    point = exp10 + 1  # digits before the decimal point
+    if point <= 0:
+        return f"{sign}0.{'0' * -point}{digs}"
+    if point >= len(digs):
+        return f"{sign}{digs}{'0' * (point - len(digs))}"
+    return f"{sign}{digs[:point]}.{digs[point:]}"
+
+
+def _go_parse_timestamp(text: str) -> "tuple | None":
+    """yaml.v3's parseTimestamp: `(y, mo, d, h, mi, s, frac, zone)` for a
+    text one of its four layouts accepts, else None — including a field
+    time.Parse refuses as out of range (month 13, Feb 30, hour 24, a zone
+    hour above 24 or minute above 60), which leaves the scalar a plain
+    string there. `frac` is at most 9 digits with trailing zeros dropped;
+    `zone` is "Z" for a zero offset (time.Local is UTC in the shipped image)
+    or the offset re-spelled "±HH:MM" — `+08:60` is "+09:00", as Go
+    computes it; HH may be 24 or more (see `_GO_ZONE_MAX_HOUR`)."""
+    m = _GO_TS_ZONED.fullmatch(text) or _GO_TS_SPACE.fullmatch(text)
+    if m:
+        fields = [int(g) for g in m.groups()[:6]]
+        frac = (m.group(7) or "")[:9].rstrip("0")
+        zone = m.group(8) if m.re is _GO_TS_ZONED else "Z"
+    else:
+        m = _GO_TS_DATE.fullmatch(text)
+        if not m:
+            return None
+        fields, frac, zone = [int(g) for g in m.groups()] + [0, 0, 0], "", "Z"
+    if not _go_valid_clock(*fields):
+        return None
+    if zone != "Z":
+        hours, minutes = int(zone[1:3]), int(zone[4:6])
+        if hours > _GO_ZONE_MAX_HOUR or minutes > _GO_ZONE_MAX_MINUTE:
+            return None
+        total = hours * 60 + minutes
+        zone = "Z" if not total else f"{zone[0]}{total // 60:02d}:{total % 60:02d}"
+    return (*fields, frac, zone)
+
+
+def _go_valid_clock(year, month, day, hour, minute, second) -> bool:
+    """time.Parse's range checks, on the proleptic Gregorian calendar Go
+    uses — year 0 included (a leap year), which `datetime` cannot hold."""
+    if not 1 <= month <= 12 or hour > 23 or minute > 59 or second > 59:
+        return False
+    leap = year % 4 == 0 and (year % 100 != 0 or year % 400 == 0)
+    days = (31, 29 if leap else 28, 31, 30, 31, 30, 31, 31, 30, 31, 30, 31)[month - 1]
+    return 1 <= day <= days
+
+
+def _go_time_string(year, month, day, hour=0, minute=0, second=0,
+                    frac: str = "", zone: str = "Z") -> str:
+    """time.Time.String() — how `%v` spells a time.Time map key."""
+    text = f"{year:04d}-{month:02d}-{day:02d} {hour:02d}:{minute:02d}:{second:02d}"
+    frac = frac[:9].rstrip("0")
+    if frac:
+        text += "." + frac
+    if zone in ("Z", "+00:00", "-00:00"):
+        return text + " +0000 UTC"
+    offset = zone.replace(":", "")
+    return f"{text} {offset} {offset}"
+
+
+def _go_time_json(year, month, day, hour, minute, second, frac, zone) -> str:
+    """time.Time.MarshalJSON's text (RFC 3339, nanosecond precision) — how
+    pkg/config's canonical JSON writes a time.Time VALUE."""
+    text = f"{year:04d}-{month:02d}-{day:02d}T{hour:02d}:{minute:02d}:{second:02d}"
+    return text + (f".{frac}" if frac else "") + zone
+
+
+def _go_timestamp_key(text: str) -> "str | None":
+    parsed = _go_parse_timestamp(text)
+    return _go_time_string(*parsed) if parsed else None
+
+
+def _go_plain_key(text: str, timestamps: bool = True) -> str:
+    """yaml.v3's resolution of an untagged plain scalar, spelled with `%v`."""
+    if text in ("", "~", "null", "Null", "NULL"):
+        return "<nil>"
+    if text in ("true", "True", "TRUE"):
+        return "true"
+    if text in ("false", "False", "FALSE"):
+        return "false"
+    if text in (".inf", ".Inf", ".INF", "+.inf", "+.Inf", "+.INF"):
+        return "+Inf"
+    if text in ("-.inf", "-.Inf", "-.INF"):
+        return "-Inf"
+    if text in (".nan", ".NaN", ".NAN"):
+        return "NaN"
+    if text[0] not in "0123456789+-.":
+        return text
+    if timestamps and text[0].isdigit():
+        stamp = _go_timestamp_key(text)
+        if stamp is not None:
+            return stamp
+    plain = text.replace("_", "")
+    if text[0] == ".":
+        # yaml.v3's `.` hint: strconv.ParseFloat on the text AS WRITTEN —
+        # underscores are not stripped first, so they must pass Go's
+        # underscoreOK (between digits only): `.5_0` is 0.5, `._5`, `.5_`,
+        # `.5__0` and `.5e_1` stay strings.
+        if not (_go_underscore_ok(text) and _GO_YAML_FLOAT.match(plain)):
+            return text
+    else:
+        number = _go_parse_int(plain)
+        if number is not None:
+            return str(number)
+    if _GO_YAML_FLOAT.match(plain) and not math.isinf(float(plain)):
+        # ParseFloat's range error (`1e400`) leaves the text a string.
+        return _go_float_v(float(plain))
+    return text
+
+
+_YAML_STR_TAG = "tag:yaml.org,2002:str"
+_YAML_TIMESTAMP_TAG = "tag:yaml.org,2002:timestamp"
+
+
+def _go_key_spelling(loader: Any, node: Any) -> str:
+    """How pkg/config spells the key `node` (a scalar key node)."""
+    text = node.value
+    if node.style is not None:  # quoted / block scalar: always a string
+        return text
+    if node.tag == _YAML_TIMESTAMP_TAG:
+        # `!!timestamp` (explicit or implicit) — yaml.v3 honours the tag.
+        return _go_timestamp_key(text) or text
+    implicit = loader.resolve(yaml.ScalarNode, text, (True, False))
+    if node.tag != implicit:
+        # An explicit tag PyYAML would not have inferred: `!!str 010`.
+        return text if node.tag == _YAML_STR_TAG else _go_plain_key(text)
+    return _go_plain_key(text)
+
+
+_SURROGATE = re.compile("[\ud800-\udfff]")
+
+
+def _reject_surrogates(text: Any, node: Any) -> Any:
+    """A `"\\udfff"` escape (a lone or paired UTF-16 surrogate) is a str
+    PyYAML builds and yaml.v3 refuses ("found invalid Unicode character
+    escape code") — the exporter does not load that file, and here it ended
+    the hash in a UnicodeEncodeError traceback. Refused the same way, it
+    takes this tool's existing "does not parse" path (#2371)."""
+    if isinstance(text, str) and _SURROGATE.search(text):
+        raise yaml.constructor.ConstructorError(
+            None, None, "found invalid Unicode character escape code (a UTF-16 surrogate)",
+            node.start_mark)
+    return text
+
+
+class _GoKeyLoader(StrictExporterKeyLoader):
+    """The #2114 / #2123 reader (text keys, strict), with every scalar key a
+    `_GoKey` carrying the exporter's spelling, and every timestamp VALUE
+    decided by yaml.v3's rules instead of PyYAML's (`_construct_timestamp`)."""
+
+    def construct_scalar(self, node):  # noqa: D102 — see _reject_surrogates
+        return _reject_surrogates(super().construct_scalar(node), node)
+
+    def _construct_timestamp(self, node):
+        """A scalar PyYAML tags `!!timestamp`. yaml.v3 decides on its own
+        four layouts, which are not PyYAML's: where it reads a time, the
+        value is the text pkg/config's canonical JSON writes for that
+        time.Time (so `2026-12-31 23:59:59` is "2026-12-31T23:59:59Z", a
+        9-digit fraction keeps all 9); where it does not (`…T10:20:30` with
+        no zone, a tab or a space before the zone, `+08`, month 13 — the last
+        of which PyYAML raised ValueError on and dropped the whole file), the
+        value is the source text, as yaml.v3 keeps it.
+
+        An EXPLICIT `!!timestamp` VALUE yaml.v3 cannot parse (`!!timestamp
+        foo`, an empty one, a quoted or block one) is refused, taking the
+        file down this tool's existing "does not parse" path, as yaml.v3
+        refuses the file. Explicit is knowable only where PyYAML would not
+        have inferred the tag from the plain text; `!!timestamp 2026-13-01`
+        looks implicit and stays text (a known divergence).
+
+        ⛔ A zone offset of 24h or more (`+24:00`) is rendered like any other
+        time. time.Parse accepts it; only time.Time.MarshalJSON refuses it,
+        and only once the value is IN a tenant's effective config — another
+        tenant in the same file, a root-level sibling key, or an overridden
+        default does not stop the exporter. Refusing the file here was wider
+        than that (a known divergence where the value does reach it)."""
+        text = self.construct_scalar(node)
+        parsed = _go_parse_timestamp(text)
+        if parsed is None:
+            explicit = (node.style is not None or self.resolve(
+                yaml.ScalarNode, text, (True, False)) != _YAML_TIMESTAMP_TAG)
+            if explicit:
+                raise yaml.constructor.ConstructorError(
+                    None, None, f"cannot decode {text!r} as a !!timestamp", node.start_mark)
+            return text
+        return _go_time_json(*parsed)
+
+    def _construct_str(self, node):
+        """A scalar PyYAML reads as a string that yaml.v3 reads as a time —
+        `2026-1-2`, `…T10:20:30,5Z`, two spaces before the time. Only for a
+        plain scalar PyYAML would itself have tagged `!!str`: a quoted one
+        stays text in both."""
+        text = self.construct_scalar(node)
+        if (isinstance(node, yaml.ScalarNode) and node.style is None
+                and self.resolve(yaml.ScalarNode, text, (True, False)) == _YAML_STR_TAG):
+            parsed = _go_parse_timestamp(text)
+            if parsed:
+                return _go_time_json(*parsed)
+        return text
+
+    def construct_mapping(self, node, deep=False):  # noqa: D102 — see class
+        mapping = super().construct_mapping(node, deep=deep)
+        nodes = {kn.value: kn for kn, _ in node.value if isinstance(kn, yaml.ScalarNode)}
+        for key_node in nodes.values():
+            _reject_surrogates(key_node.value, key_node)
+        # A `raw_text_scalars` value skipped construct_scalar (#2297): the
+        # same surrogate refusal, or it would reach the hash as text.
+        for key_node, value_node in node.value:
+            if (isinstance(key_node, yaml.ScalarNode) and isinstance(value_node, yaml.ScalarNode)
+                    and key_node.value in self.raw_text_scalars):
+                _reject_surrogates(value_node.value, value_node)
+        return {(_GoKey(k, _go_key_spelling(self, nodes[k])) if k in nodes else k): v
+                for k, v in mapping.items()}
+
+
+_GoKeyLoader.add_constructor(_YAML_TIMESTAMP_TAG, _GoKeyLoader._construct_timestamp)
+_GoKeyLoader.add_constructor(_YAML_STR_TAG, _GoKeyLoader._construct_str)
+
+
+def _go_typed_key(key: Any) -> Any:
+    """A key some other reader typed (not a `_GoKey`), spelled as `%v` would."""
+    if isinstance(key, bool):
+        return "true" if key else "false"
+    if key is None:
+        return "<nil>"
+    if isinstance(key, int):
+        return str(key)
+    if isinstance(key, float):
+        return _go_float_v(key)
+    if isinstance(key, datetime.datetime):
+        offset = key.utcoffset()
+        zone = "Z"
+        if offset:
+            minutes = int(offset.total_seconds()) // 60
+            zone = f"{'+' if minutes >= 0 else '-'}{abs(minutes) // 60:02d}:{abs(minutes) % 60:02d}"
+        return _go_time_string(key.year, key.month, key.day, key.hour, key.minute,
+                               key.second, f"{key.microsecond:06d}", zone)
+    if isinstance(key, datetime.date):
+        return _go_time_string(key.year, key.month, key.day)
+    return key
+
+
+def _go_keys(data: Any) -> Any:
+    """`data` with every mapping key in the exporter's spelling and every
+    `_GoKey` (also one used as a value, e.g. an attribution's key list)
+    back to a plain `str` — the one shape that leaves this tool."""
+    if isinstance(data, dict):
+        return {(k.go if isinstance(k, _GoKey) else _go_typed_key(k)): _go_keys(v)
+                for k, v in data.items()}
+    if isinstance(data, list):
+        return [_go_keys(v) for v in data]
+    if isinstance(data, _GoKey):
+        return str.__str__(data)
+    return data
 
 
 def _iter_confd_yaml(entries, suffixes):
@@ -168,6 +685,18 @@ def _iter_confd_yaml(entries, suffixes):
 _PROFILE_AS_TEXT = ("_profile",)
 
 
+class _GoKeyProfileTextLoader(_GoKeyLoader):
+    """`_GoKeyLoader` with a `_profile:` VALUE read as its source text
+    (#2297), for the tenant files, the root platform files (their
+    `tenants:` and `profiles:` blocks, read by `_load_first_document`) and
+    the `--what-if` file — the reads #2297 changed. `ExporterKeyLoader.construct_mapping` takes that value
+    before any constructor runs, so neither the timestamp nor the `!!binary`
+    rendering (#2371) reaches it: `_profile: 2026-12-31` names profile
+    "2026-12-31", as the exporter's `ScheduledValue` keeps `value.Value`."""
+
+    raw_text_scalars = frozenset(_PROFILE_AS_TEXT)
+
+
 def _load_first_document(path: Path) -> Any:
     """The FIRST YAML document of `path`, as the exporter's walker reads a
     config file (yaml.v3 `Unmarshal` decodes one document).
@@ -191,8 +720,10 @@ def _load_first_document(path: Path) -> Any:
     if not yaml:
         raise RuntimeError("PyYAML is required for describe-tenant. Install: pip install pyyaml")
     with open(path, "r", encoding="utf-8") as f:
-        # #2123 strict + #2114 exporter keys, composed in `_lib_io`.
-        return next(strict_load_all_exporter_keys(f, raw_text_scalars=_PROFILE_AS_TEXT), None)
+        # #2123 strict + #2114 exporter keys, composed in `_lib_io`; each key
+        # also carries the exporter's spelling (#2371), and `_profile:` is
+        # source text (#2297).
+        return next(strict_safe_load_all(f, loader=_GoKeyProfileTextLoader), None)
 
 
 def _load_platform_doc(path: Path) -> Any:
@@ -201,7 +732,7 @@ def _load_platform_doc(path: Path) -> Any:
     `tenants:` block, so its ids match the tenant files' — and its
     `_profile:` values (#2297)."""
     with open(path, "r", encoding="utf-8") as f:
-        return strict_load_exporter_keys(f, raw_text_scalars=_PROFILE_AS_TEXT) or {}
+        return strict_safe_load(f, loader=_GoKeyProfileTextLoader) or {}
 
 
 def _overlay_tenant(tenant_raw: Any, blocks: "list[tuple[str, dict]]",
@@ -1052,13 +1583,16 @@ def main() -> None:
     print(f"📂 Scanned {conf_d}: {len(scanner.tenants)} tenants, {len(scanner.defaults_data)} defaults files", file=sys.stderr)
 
     def _output(data: Any) -> str:
+        # #2371: keys in the exporter's spelling, and no `_GoKey` left for
+        # yaml.dump to tag as a Python object.
+        data = _go_keys(data)
         if args.format == "yaml":
             if yaml:
                 return yaml.dump(data, default_flow_style=False, allow_unicode=True, sort_keys=False)
             print("⚠️  PyYAML not installed — falling back to JSON output "
                   "(pip install pyyaml)", file=sys.stderr)
-            return json.dumps(data, indent=2, ensure_ascii=False)
-        return json.dumps(data, indent=2, ensure_ascii=False)
+            return _json_text(data, indent=2)
+        return _json_text(data, indent=2)
 
     # #2049: THE checkpoint for "this tenant is declared by more than one
     # carrier". Every mode that names a tenant (default, --show-sources,
@@ -1086,7 +1620,11 @@ def main() -> None:
                 duplicated += 1
                 continue
             info = scanner.source_info(tid)
-            result[tid] = info
+            # ⛔ A plain str, not the `_GoKey`: this key is a TENANT ID, which
+            # the exporter keys by source text (#2114) — `_go_keys` must not
+            # respell it, or tenants `010` and `8` both become "8" and one
+            # silently overwrites the other (#2371 review F1).
+            result[str.__str__(tid)] = info
         out = _output(result)
         if args.output:
             with output_write(args.output, flag="-o/--output"):

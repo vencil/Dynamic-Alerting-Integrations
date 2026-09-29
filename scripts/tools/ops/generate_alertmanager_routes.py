@@ -93,6 +93,10 @@ from _grar_parse import (  # noqa: E402, F401
     load_tenant_tree,
 )
 
+# Used here, not re-exported: which #2326 routing-tree findings refuse the
+# tree (`tree_refusal`, the same filter as `TenantTree.routing_tree_errors`).
+from _grar_parse import BLOCKING_TREE_KINDS  # noqa: E402
+
 # ── Re-exports from _grar_routes ───────────────────────────────────
 from _grar_routes import (  # noqa: E402, F401
     _build_enforced_routes,
@@ -522,14 +526,70 @@ def duplicate_tenants_refusal(duplicates: dict[str, list[str]]) -> list[str]:
             *(safe_label(e) for e in dups)]
 
 
-def tree_refusal(files_read: int, tenant_file_errors: list[tuple[str, str]],
-                 duplicates: dict[str, list[str]]) -> list[str]:
-    """What `main()` refuses a scanned tree for, in its order; [] = neither.
+def _refuse_routing_tree_errors(tree: TenantTree) -> None:
+    """#2326: refuse a conf.d tree the routing plane cannot route as one.
 
-    `main()` exits on the first refusal, so only that one's lines.
+    ADR-017 "Amendment 2026-09-28" makes the routing plane hierarchical and
+    names what blocks it: `_routing_enforced` below the root, `receiver` /
+    `overrides` written as null in a subdirectory level's `_routing_defaults`,
+    one routing-profile name defined in two files. (One tenant id declared in
+    two files is `_refuse_duplicate_tenants`, #2315 — rc 1, and it runs
+    first.) Runs in EVERY mode, right after the file accounting and before
+    anything is rendered, written, validated or applied — its output is the
+    Alertmanager config a customer deploys, and each of these would ship a
+    route tree that silently routes some tenant's alerts somewhere else.
+
+    EXIT_CALLER_ERROR, per the ADR: these are refusals of the tree's SHAPE
+    (the same statement as "the directory you pointed me at is not usable as
+    input"), not per-tenant findings a --strict switch escalates.
     """
-    return (unreadable_tenant_files_refusal(files_read, tenant_file_errors)
-            or duplicate_tenants_refusal(duplicates))
+    refusal = routing_tree_errors_refusal(tree.routing_tree_errors)
+    if not refusal:
+        return
+    for msg in refusal:
+        print(msg, file=sys.stderr)
+    sys.exit(EXIT_CALLER_ERROR)
+
+
+def routing_tree_errors_refusal(
+        errors: list[tuple[str, str, str, str]]) -> list[str]:
+    """The stderr lines of the #2326 refusal; [] = not refused.
+
+    *errors* are the BLOCKING routing-tree findings
+    (`TenantTree.routing_tree_errors`). The judgment
+    `_refuse_routing_tree_errors` acts on, as data (see
+    `unreadable_tenant_files_refusal`).
+    """
+    if not errors:
+        return []
+    return [f"ERROR: {len(errors)} routing-tree error(s) — nothing was "
+            f"generated, written or applied (ADR-017 amendment 2026-09-28):",
+            *(f"  {safe_label(msg)}" for _kind, _fname, _field, msg in errors)]
+
+
+def tree_refusal(files_read: int, tenant_file_errors: list[tuple[str, str]],
+                 duplicates: dict[str, list[str]],
+                 routing_tree_problems: list[tuple[str, str, str, str]]
+                 ) -> tuple[int, list[str]]:
+    """What `main()` refuses a scanned tree for: ``(rc, stderr lines)``.
+
+    ``(EXIT_OK, [])`` = not refused. The order is `main()`'s — unreadable
+    tenant file (#1460, rc 1), duplicate tenant (#2315, rc 1), routing-tree
+    error (#2326, rc 2) — and `main()` exits on the first refusal, so only
+    that one's lines and rc. *routing_tree_problems* is every routing-tree
+    finding; only the blocking kinds refuse, the same filter as
+    `TenantTree.routing_tree_errors`.
+    """
+    blocking = [p for p in routing_tree_problems
+                if p[0] in BLOCKING_TREE_KINDS]
+    for rc, lines in (
+            (EXIT_VIOLATION, unreadable_tenant_files_refusal(
+                files_read, tenant_file_errors)),
+            (EXIT_VIOLATION, duplicate_tenants_refusal(duplicates)),
+            (EXIT_CALLER_ERROR, routing_tree_errors_refusal(blocking))):
+        if lines:
+            return rc, lines
+    return EXIT_OK, []
 
 
 def _print_config_summary(routing_configs: dict, dedup_configs: dict, enforced_routing: dict | None) -> None:
@@ -868,6 +928,7 @@ def main() -> None:
         tree.as_tuple()
     _refuse_unreadable_tenant_files(tree)
     _refuse_duplicate_tenants(tree)
+    _refuse_routing_tree_errors(tree)
 
     has_routing = bool(routing_configs)
     has_dedup = bool(dedup_configs)

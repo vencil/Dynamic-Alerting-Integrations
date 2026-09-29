@@ -51,6 +51,17 @@ from generate_alertmanager_routes import (  # noqa: E402
     tree_refusal,
 )
 from _grar_render import _run_binary, assemble_configmap  # noqa: E402
+from _grar_validate import (  # noqa: E402
+    ROUTING_TREE_ERROR_PREFIX,
+    duplicate_tenant_errors,
+)
+from _grar_parse import BLOCKING_TREE_KINDS  # noqa: E402
+# #2326: the layer chain across conf.d directory levels — the generator's own.
+from _grar_merge import (  # noqa: E402
+    ROOT_LEVEL,
+    resolve_routing_defaults,
+    visible_routing_profiles,
+)
 from _lib_python import detect_cli_lang, format_json_report  # noqa: E402
 from _lib_io import safe_label  # noqa: E402  (#1538 output-layer escaping)
 from _lib_exitcodes import EXIT_OK, EXIT_CALLER_ERROR  # noqa: E402
@@ -117,18 +128,25 @@ def explain_tenant_routing(
     Each layer is {name, source, config}.
     """
     layers: list[dict] = []
+    # #2326: a tenant below the conf.d root inherits `_routing_defaults` from
+    # every directory level on its way down and sees the profiles of those
+    # levels — the generator's own resolution (_grar_merge).
+    level = parsed.get("tenant_dirs", {}).get(tenant, ROOT_LEVEL)
 
     # Layer 1: routing defaults
-    routing_defaults = parsed.get("routing_defaults", {})
+    routing_defaults = resolve_routing_defaults(parsed, level)
     layers.append({
         "name": "Layer 1: _routing_defaults",
-        "source": "_defaults.yaml / _routing_defaults key",
+        "source": ("_defaults.yaml / _routing_defaults key"
+                   if level == ROOT_LEVEL else
+                   f"_routing_defaults of the conf.d root, then each "
+                   f"_defaults.yaml down to {level}/"),
         "config": dict(routing_defaults) if routing_defaults else {},
     })
 
     # Layer 2: routing profile
     profile_refs = parsed.get("tenant_profile_refs", {})
-    profiles = parsed.get("routing_profiles", {})
+    profiles = visible_routing_profiles(parsed, level)
     profile_ref = profile_refs.get(tenant)
     profile_cfg = {}
     if profile_ref and profile_ref in profiles:
@@ -831,13 +849,16 @@ def trace_alert_routing(
     root, receivers, conf_types = {}, {}, {}
     assembled = False
     # The generator refuses these trees before building anything (unreadable
-    # tenant file #1460, duplicate tenant #2315): same judgment, same words.
-    refusal = tree_refusal(parsed.get("files_read", 0),
-                           parsed.get("tenant_file_errors") or [],
-                           parsed.get("duplicate_tenants") or {})
+    # tenant file #1460, duplicate tenant #2315, routing-tree error #2326):
+    # same judgment, same words, same order.
+    refusal_rc, refusal = tree_refusal(
+        parsed.get("files_read", 0),
+        parsed.get("tenant_file_errors") or [],
+        parsed.get("duplicate_tenants") or {},
+        parsed.get("routing_tree_problems") or [])
     if refusal:
         _warn("the generator refuses this config "
-              "(generate_alertmanager_routes.py exits 1):")
+              f"(generate_alertmanager_routes.py exits {refusal_rc}):")
         for msg in refusal:
             _warn(msg)
     else:
@@ -1153,6 +1174,24 @@ def main(argv: list[str] | None = None) -> int:
         return EXIT_CALLER_ERROR
 
     parsed = _parse_config_files(args.config_dir)
+    # #2326: a tree the generator refuses outright (rc 2) is still explained
+    # here — this is a diagnostic — but never without saying so first.
+    # ⛔ Not under --trace: the trace asks the generator itself
+    # (`tree_refusal`) and prints the refusal it would print, verbatim, with
+    # the verdict set to unknown (#2293). Warning here too would say the same
+    # refusal twice, in two different spellings.
+    if not args.trace:
+        for kind, _f, _fld, msg in parsed.get("routing_tree_problems", []):
+            if kind in BLOCKING_TREE_KINDS:
+                print(f"  {ROUTING_TREE_ERROR_PREFIX} {safe_label(msg)} — "
+                      f"generate-routes refuses this tree", file=sys.stderr)
+        # #2315 owns the duplicate-tenant refusal (rc 1, not a routing-tree
+        # kind), so it is named from its own record — the same lines the
+        # generator prints.
+        for line in duplicate_tenant_errors(
+                parsed.get("duplicate_tenants", {})):
+            print(f"{safe_label(line)} — generate-routes refuses this tree",
+                  file=sys.stderr)
 
     # --trace mode: simulate alert routing path
     if args.trace:

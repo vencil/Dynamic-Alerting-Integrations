@@ -263,7 +263,7 @@ def _tracked_files() -> tuple[str, ...]:
             # subprocess raise WinError 6 on some Windows pytest runners, and
             # the clause below then misreports it as "not a git checkout".
             stdin=subprocess.DEVNULL,
-            text=True, check=True, timeout=120).stdout
+            text=True, encoding="utf-8", errors="surrogateescape", check=True, timeout=120).stdout
     except (OSError, subprocess.SubprocessError) as exc:
         raise AssertionError(
             "`git ls-files -z` failed, so the tracked-file set that decides "
@@ -323,7 +323,7 @@ def test_tracked_set_matches_an_independent_git_listing() -> None:
     """
     out = subprocess.run(
         ["git", "ls-files", "-z"], cwd=ROOT, capture_output=True,
-        stdin=subprocess.DEVNULL, text=True, check=True, timeout=120).stdout
+        stdin=subprocess.DEVNULL, text=True, encoding="utf-8", errors="surrogateescape", check=True, timeout=120).stdout
     expected = {p for p in out.split("\0") if p}
     actual = set(_tracked_files())
     assert actual == expected, (

@@ -64,7 +64,7 @@ def test_route_generation_emits_the_ids_as_written(tmp_path):
     p = subprocess.run(
         [sys.executable, str(TOOLS / "ops" / "generate_alertmanager_routes.py"),
          "--config-dir", str(d), "--dry-run"],
-        capture_output=True, text=True, timeout=60)
+        capture_output=True, text=True, encoding="utf-8", errors="replace", timeout=60)
     assert p.returncode == 0, p.stderr[-2000:]
     for tid in ("010", "0x1F", "yes"):
         assert f'tenant="{tid}"' in p.stdout, (tid, p.stdout)
@@ -170,7 +170,7 @@ def test_describe_tenant_overlays_the_platform_block_for_text_ids(tmp_path):
     script = str(TOOLS / "dx" / "describe_tenant.py")
     for tid, want in (("010", "60"), ("yes", "61")):
         p = subprocess.run([sys.executable, script, tid, "--conf-d", str(d)],
-                           capture_output=True, text=True, timeout=30)
+                           capture_output=True, text=True, encoding="utf-8", errors="replace", timeout=30)
         assert p.returncode == 0, (tid, p.stderr)
         out = json.loads(p.stdout)
         assert out["effective_config"]["mysql_connections"] == want, (tid, out)

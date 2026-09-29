@@ -273,7 +273,7 @@ class TestMainIntegration:
         result = subprocess.run(
             [sys.executable, str(_SCRIPT_PATH), str(spec)],
             capture_output=True,
-            text=True,
+            text=True, encoding="utf-8", errors="replace",
             timeout=30,
         )
         assert result.returncode == 0
@@ -286,7 +286,7 @@ class TestMainIntegration:
         result = subprocess.run(
             [sys.executable, str(_SCRIPT_PATH), "--ci", str(spec)],
             capture_output=True,
-            text=True,
+            text=True, encoding="utf-8", errors="replace",
             timeout=30,
         )
         assert result.returncode == 1
@@ -300,7 +300,7 @@ class TestMainIntegration:
         result = subprocess.run(
             [sys.executable, str(_SCRIPT_PATH), str(spec)],
             capture_output=True,
-            text=True,
+            text=True, encoding="utf-8", errors="replace",
             timeout=30,
         )
         # Warn-only mode (no --ci) — even with findings, exit 0.

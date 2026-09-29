@@ -145,6 +145,19 @@ const (
 	FindingRoutingInUnreadLocation FindingKind = "routing_in_unread_location"
 )
 
+// Routing-tree findings (#2326, ADR-017 / ADR-007 "Amendment 2026-09-28"):
+// the routing plane reads the whole conf.d, and these tree shapes are what
+// the route generator refuses (exit 2, every mode) or — the out-of-scope
+// policy entry — does not enforce. All errors, TenantID "", Field
+// `<file>:<key path>`; the kind names equal routingpolicy's Problem kinds.
+const (
+	FindingRoutingEnforcedBelowRoot     FindingKind = "routing_enforced_below_root"
+	FindingRoutingDefaultsNullBelowRoot FindingKind = "routing_defaults_null_below_root"
+	FindingRoutingProfileDuplicate      FindingKind = "routing_profile_duplicate"
+	FindingDuplicateTenant              FindingKind = "duplicate_tenant"
+	FindingDomainPolicyOutOfScope       FindingKind = "domain_policy_out_of_scope"
+)
+
 // Cardinality findings (PR-3; see cardinality.go).
 const (
 	FindingCardinalityExceeded FindingKind = "cardinality_exceeded"

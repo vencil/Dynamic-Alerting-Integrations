@@ -942,3 +942,106 @@ class TestGeneratorRefusedTree:
         captured = capsys.readouterr()
         assert f"Receiver: {_REFUSED}" in captured.out
         assert "WARN: the generator refuses this config" in captured.err
+
+
+# ---------------------------------------------------------------------------
+# #2326 × #2293: the hierarchical conf.d through the trace
+# ---------------------------------------------------------------------------
+_EMAIL_RD = {"receiver": _EMAIL, "group_wait": "30s"}
+_SLACK_RD = {"receiver": _SLACK}
+
+
+def _nested_tree(tmp_path, team_defaults):
+    """Root tenant `roota` + `team/nestedb` with *team_defaults* as the
+    `team/_defaults.yaml` body (the root routes by email)."""
+    d = tmp_path / "conf.d"
+    (d / "team").mkdir(parents=True)
+    (d / "_defaults.yaml").write_text(yaml.safe_dump(
+        {"defaults": {"mysql_connections": 80},
+         "_routing_defaults": _EMAIL_RD}), encoding="utf-8")
+    (d / "roota.yaml").write_text(yaml.safe_dump(
+        {"tenants": {"roota": {"mysql_connections": "70"}}}), encoding="utf-8")
+    (d / "team" / "_defaults.yaml").write_text(yaml.safe_dump(team_defaults),
+                                               encoding="utf-8")
+    (d / "team" / "nestedb.yaml").write_text(yaml.safe_dump(
+        {"tenants": {"nestedb": {"mysql_connections": "70"}}}), encoding="utf-8")
+    return d
+
+
+@needs_amtool
+class TestSubdirectoryTenantTrace:
+    """A tenant below the conf.d root gets a route since #2326; the trace
+    finds it in the generator's full ConfigMap, and Alertmanager's verdict on
+    that ConfigMap is the trace's."""
+
+    @pytest.mark.parametrize("tenant, rtype", [("nestedb", "slack"),
+                                               ("roota", "email")])
+    def test_same_receivers_as_amtool(self, capsys, tmp_path, tenant, rtype):
+        conf = _nested_tree(tmp_path, {"_routing_defaults": _SLACK_RD})
+        cm = tmp_path / "cm.yaml"
+        r = subprocess.run(
+            [sys.executable, _GAR, "--config-dir", str(conf),
+             "--output-configmap", "-o", str(cm)],
+            capture_output=True, text=True, encoding="utf-8", timeout=300)
+        assert r.returncode == 0, r.stdout + r.stderr
+        am_yml = tmp_path / "alertmanager.yml"
+        am_yml.write_text(yaml.safe_load(cm.read_text(encoding="utf-8"))
+                          ["data"]["alertmanager.yml"], encoding="utf-8")
+        rc = er.main(["--config-dir", str(conf), "--tenant", tenant,
+                      "--trace", "--json"])
+        captured = capsys.readouterr()
+        assert rc == 0, captured.err
+        [trace] = json.loads(captured.out)
+        am = subprocess.run(
+            [shutil.which("amtool"), "config", "routes", "test",
+             f"--config.file={am_yml}"]
+            + [f"{k}={_am_quote(v)}" for k, v in trace["labels"].items()],
+            capture_output=True, text=True, encoding="utf-8", timeout=300)
+        assert am.returncode == 0, am.stdout + am.stderr
+        assert am.stdout.strip().split(",") == _delivered(trace) \
+            == [f"tenant-{tenant}"]
+        # `team/_defaults.yaml` replaces the root's receiver for its subtree
+        # only (ADR-017 amendment 2026-09-28: deeper wins, per top-level key).
+        assert trace["steps"][1]["receiver_type"] == rtype
+        assert trace["timing"]["group_wait"] == "30s"
+
+
+class TestRoutingTreeRefusedTrace:
+    """`_routing_enforced` below the root: the generator refuses the tree
+    (#2326, rc 2) before building anything, so the trace shows its words,
+    unknown, rc 0 — and says it once (no second spelling from main())."""
+
+    _ENFORCED_BELOW = {"_routing_enforced": {"enabled": True,
+                                             "receiver": _HOOK_NOC}}
+
+    def test_trace_shows_generator_refusal(self, capsys, tmp_path):
+        conf = _nested_tree(tmp_path, self._ENFORCED_BELOW)
+        gen = subprocess.run(
+            [sys.executable, _GEN, "--config-dir", str(conf),
+             "--output-configmap", "--dry-run"],
+            capture_output=True, text=True, encoding="utf-8", timeout=60,
+            env=dict(os.environ, DA_LANG="en", PYTHONUTF8="1"))
+        assert gen.returncode == 2, gen.stderr
+        assert "Written to" not in gen.stdout
+        refusal = [ln for ln in gen.stderr.splitlines()
+                   if ln.startswith("ERROR:") or ln.startswith("  ")]
+        assert refusal and "routing-tree error(s)" in refusal[0]
+        rc = er.main(["--config-dir", str(conf), "--tenant", "nestedb",
+                      "--trace", "--json"])
+        captured = capsys.readouterr()
+        assert rc == 0, captured.err
+        [trace] = json.loads(captured.out)
+        assert trace["final_receiver"] == _REFUSED
+        assert trace["steps"][1]["matched_routes"] == []
+        assert trace["steps"][3]["inhibit_rules_yaml"] is None
+        assert ("WARN: the generator refuses this config "
+                "(generate_alertmanager_routes.py exits 2):") in captured.err
+        assert all(f"WARN: {ln}" in captured.err for ln in refusal)
+        assert "generate-routes refuses this tree" not in captured.err
+
+    def test_non_trace_still_warns(self, capsys, tmp_path):
+        conf = _nested_tree(tmp_path, self._ENFORCED_BELOW)
+        assert er.main(["--config-dir", str(conf), "--tenant", "nestedb",
+                        "--json"]) == 0
+        err = capsys.readouterr().err
+        assert "generate-routes refuses this tree" in err

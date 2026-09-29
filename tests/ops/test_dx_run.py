@@ -214,7 +214,7 @@ class TestCLI:
     def test_help(self):
         result = subprocess.run(
             [sys.executable, str(_SCRIPT), "--help"],
-            capture_output=True, text=True, timeout=10,
+            capture_output=True, text=True, encoding="utf-8", errors="replace", timeout=10,
         )
         assert result.returncode == 0
         assert "--status" in result.stdout
@@ -224,7 +224,7 @@ class TestCLI:
         """Smoke test: --status must parse even without docker."""
         result = subprocess.run(
             [sys.executable, str(_SCRIPT), "--status"],
-            capture_output=True, text=True, timeout=15,
+            capture_output=True, text=True, encoding="utf-8", errors="replace", timeout=15,
         )
         # Returns 1 (no docker) or a real status code. Must not crash.
         assert result.returncode in (0, 1, 2, 3)
@@ -285,7 +285,7 @@ class TestDepDoctor:
         src = mod._doctor_probe_src(["pytest", "definitely-not-installed-xyz"])
         r = subprocess.run(
             [sys.executable, "-c", src],
-            capture_output=True, text=True, timeout=60,
+            capture_output=True, text=True, encoding="utf-8", errors="replace", timeout=60,
         )
         assert r.returncode == 1
         assert "MISSING=definitely-not-installed-xyz" in r.stdout
@@ -295,7 +295,7 @@ class TestDepDoctor:
         src = mod._doctor_probe_src(["pytest"])
         r = subprocess.run(
             [sys.executable, "-c", src],
-            capture_output=True, text=True, timeout=60,
+            capture_output=True, text=True, encoding="utf-8", errors="replace", timeout=60,
         )
         assert r.returncode == 0
         assert r.stdout.strip() == "MISSING="

@@ -426,7 +426,7 @@ def test_translator_agrees_with_real_picomatch(schemas):
     payload = json.dumps([{"T": schemas[TENANT_SCHEMA_KEY],
                            "P": schemas[PLATFORM_SCHEMA_KEY]}, uris])
     proc = subprocess.run([node, "-e", script, str(pm_dir)], input=payload,
-                          capture_output=True, text=True, check=True, timeout=60)
+                          capture_output=True, text=True, encoding="utf-8", errors="replace", check=True, timeout=60)
     real = json.loads(proc.stdout)
     for mode in MODES:
         model = [_classify(schemas, u, mode) for u in uris]

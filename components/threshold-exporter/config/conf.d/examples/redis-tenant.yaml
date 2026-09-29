@@ -9,6 +9,10 @@
 # 維度 severity 語法: "value:severity" (如 "1000:critical")
 tenants:
   redis-prod:
+    # 路由：引用本目錄 _routing_profiles.yaml 的 profile（#2326：子目錄的 profile
+    # 對本子樹的租戶可見；本子樹 _domain_policy.yaml 的 finance 政策據此驗證）
+    _routing_profile: domain-finance-tier1
+
     # --- 基本閾值 (全域) ---
     redis_memory_used_bytes: "8589934592"                  # 8GB warning
     redis_memory_used_bytes_critical: "10737418240"        # 10GB critical

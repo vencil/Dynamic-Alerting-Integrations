@@ -76,7 +76,7 @@ def _compile(progdir: Path) -> subprocess.CompletedProcess:
     return subprocess.run(
         ["mtail", "--compile_only", "--logtostderr", "--progs", str(progdir)],
         capture_output=True,
-        text=True,
+        text=True, encoding="utf-8", errors="replace",
         timeout=30,
     )
 
@@ -312,7 +312,7 @@ def test_mtail_commit_pin_matches_the_release_binary(repo_root: Path) -> None:
     pinned_version = _one(r"^ARG MTAIL_VERSION=(\S+)", df, "Dockerfile MTAIL_VERSION")
 
     res = subprocess.run(
-        ["mtail", "--version"], capture_output=True, text=True, timeout=60,
+        ["mtail", "--version"], capture_output=True, text=True, encoding="utf-8", errors="replace", timeout=60,
     )
     # Report a broken binary AS a broken binary. Without this the regex below
     # fails with "found 0 matches", which points the reader at the pattern

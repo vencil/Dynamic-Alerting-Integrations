@@ -163,7 +163,7 @@ def _hook_ids() -> set[str]:
 
 def _git(root: Path, *args: str) -> str:
     return subprocess.run(["git", *args], cwd=root, check=True, capture_output=True,
-                          text=True, timeout=120).stdout
+                          text=True, encoding="utf-8", errors="replace", timeout=120).stdout
 
 
 @pytest.fixture(scope="module")
@@ -171,7 +171,7 @@ def scratch_repo(tmp_path_factory) -> Path:
     """A git repo whose single commit is a copy of the tracked working tree."""
     root = tmp_path_factory.mktemp("gate-liveness")
     listed = subprocess.run(["git", "ls-files", "-z"], cwd=REPO_ROOT, check=True,
-                            capture_output=True, text=True, timeout=120).stdout.split("\0")
+                            capture_output=True, text=True, encoding="utf-8", errors="surrogateescape", timeout=120).stdout.split("\0")
     for rel in filter(None, listed):
         src = REPO_ROOT / rel
         if src.is_file():
@@ -196,7 +196,7 @@ def _pre_commit(root: Path, hook_id: str, *extra: str) -> subprocess.CompletedPr
     env["LINT_DIFF_BASE"] = "HEAD"
     return subprocess.run(
         [sys.executable, "-X", "utf8", "-m", "pre_commit", "run", hook_id, "--color=never", *extra],
-        cwd=root, capture_output=True, text=True, timeout=600, env=env)
+        cwd=root, capture_output=True, text=True, encoding="utf-8", errors="replace", timeout=600, env=env)
 
 
 def _assert_measured(proc: subprocess.CompletedProcess, hook_id: str) -> str:

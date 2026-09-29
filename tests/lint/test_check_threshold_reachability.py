@@ -3829,9 +3829,9 @@ def test_the_artifact_key_floor_backstops_a_vanished_group(monkeypatch):
     reached, which is the precise defect `_trip_artifact_key_floor`'s comment
     records having had to fix once already. The replacement is the largest
     group still IN the denominator that is not shipped: `full-l0-l3`, 13 keys
-    of the counted 76, taking the total to 63 against a floor of 64.
+    of the counted 83, taking the total to 70 against a floor of 71.
 
-    ⚠️ That leaves ONE key of margin, on purpose and not by luck — 64 is the
+    ⚠️ That leaves ONE key of margin, on purpose and not by luck — 71 is the
     lowest floor at which dropping the biggest counted non-shipped group still
     speaks, and the bracket test's message is what tells you to raise it if the
     margin ever goes negative. `_VANISHED_GROUP` is shared with
@@ -4315,7 +4315,7 @@ def test_the_scan_is_tracked_scope_not_a_filesystem_walk():
     assert tracked, "empty scan — the floor should have caught this first"
     listed = subprocess.run(
         ["git", "-C", str(gate.PROJECT_ROOT), "ls-files"],
-        capture_output=True, text=True, check=True, timeout=60).stdout.split()
+        capture_output=True, text=True, encoding="utf-8", errors="replace", check=True, timeout=60).stdout.split()
     assert tracked <= set(listed), sorted(tracked - set(listed))
     assert not [r for r in tracked if r.startswith(".claude/")], sorted(tracked)
 

@@ -38,7 +38,7 @@ def _run(file: Path, expected: str) -> subprocess.CompletedProcess:
     # on both Git Bash and Linux CI.
     return subprocess.run(
         ["bash", _HELPER.as_posix(), file.as_posix(), expected],
-        capture_output=True, text=True, timeout=30,
+        capture_output=True, text=True, encoding="utf-8", errors="replace", timeout=30,
     )
 
 

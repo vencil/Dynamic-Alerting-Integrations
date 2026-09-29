@@ -1,0 +1,5 @@
+defaults:
+  _x:
+    2026-12-31:
+      from_defaults: 1
+    0x1F: "hex"

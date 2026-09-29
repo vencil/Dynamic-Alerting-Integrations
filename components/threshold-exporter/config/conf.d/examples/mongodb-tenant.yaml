@@ -6,6 +6,10 @@
 # ⚠️ 列在 optional_overrides: 的宣告 key 沒有值可繼承 ⇒ 省略＝沒有值＝靜默，只有兩態（#1321）
 tenants:
   mongo-prod:
+    # 路由：引用本目錄 _routing_profiles.yaml 的 profile（#2326：子目錄的 profile
+    # 對本子樹的租戶可見；本子樹 _domain_policy.yaml 的 finance 政策據此驗證）
+    _routing_profile: domain-finance-tier1
+
     # --- 基本閾值 (全域) ---
     mongodb_connections_current: "500"
     mongodb_connections_current_critical: "800"

@@ -32,50 +32,72 @@ from _lib_io import safe_label  # noqa: E402  (#1538 output-layer escaping)
 from _lib_exitcodes import EXIT_OK, EXIT_VIOLATION, EXIT_CALLER_ERROR  # noqa: E402
 from _lib_confd import (  # noqa: E402
     declared_tenant_ids,
-    has_yaml_extension,
-    is_hidden_name,
+    is_reserved_name,
+    list_config_tree,
     overlay_platform_tenants,
     unselected_carriers,
-    warn_nested,
+    unusable_reason,
 )
+sys.path.insert(0, os.path.join(_THIS_DIR, '..', 'ops'))
+# #2326: the directory-scope rules of the route generator, not a copy of them.
+from _grar_merge import ROOT_LEVEL, chain_levels, level_contains  # noqa: E402
 
 _LANG = detect_cli_lang()
 
+_PROFILE_FILES = ("_routing_profiles.yaml", "_routing_profiles.yml")
+_POLICY_FILES = ("_domain_policy.yaml", "_domain_policy.yml")
+
 
 def _collect_data(config_dir: str) -> dict:
-    """Scan config-dir and collect profiles, policies, tenant IDs, and refs."""
+    """Scan config-dir and collect profiles, policies, tenant IDs, and refs.
+
+    #2326: the WHOLE tree, as the route generator reads it since the
+    hierarchical routing plane (ADR-007 / ADR-017 "Amendment 2026-09-28"):
+    profiles and policies may sit in a subdirectory and are scoped to it, a
+    tenant may live at any depth. File names are relative to the root (a root
+    file keeps its bare name).
+    """
     profiles: dict = {}
     policies: dict = {}
     tenant_ids: set[str] = set()
     profile_refs: dict[str, str] = {}  # tenant → profile name
+    profiles_by_dir: dict[str, dict] = {}
+    profile_origin: dict = {}
+    profile_duplicates: list[tuple[str, str, str]] = []
+    subtree_policies: dict[str, dict] = {}   # level → {domain: policy}
+    subtree_policy_origin: dict = {}         # (level, domain) → file
 
-    # #1911: flat by design here — but a hierarchical conf.d must not
-    # look like an empty one. Name the files this scan cannot see.
-    warn_nested(config_dir, tool="check_routing_profiles")
-
-    # #1679: the extension test is the shared, case-insensitive predicate.
-    # The hand-written `endswith(".yaml")` made `Upper.YAML` invisible here
-    # while the exporter and validate_config both read it — measured: a
-    # tenant in that file with a dangling `_routing_profile` passed this
-    # pre-commit gate with rc=0, and rc=1 once the file was spelled
-    # `upper.yaml`. Only the extension axis changes: the `_`-prefixed
-    # control files matched by exact name below are what this tool exists
-    # to READ, so `config_stem`'s reserved-prefix filtering does not apply.
-    files = sorted(
-        f for f in os.listdir(config_dir)
-        if has_yaml_extension(f) and not is_hidden_name(f)
-    )
+    root = Path(config_dir)
+    # #1679: the extension test is the shared, case-insensitive predicate —
+    # the walker's own (`list_config_tree`: hidden entries skipped, the
+    # extension folded). The `_`-prefixed control files matched by exact name
+    # below are what this tool exists to READ.
+    listing = list_config_tree(root)
+    files = [p.relative_to(root).as_posix() for p in listing.files]
 
     unreadable: list[str] = []
     unreadable_files: list[str] = []
+    # #1469 shape: a config-named entry that is not a readable file (a
+    # directory, a dangling link, a directory symlink the walk does not
+    # follow) is one "cannot read" finding, as the flat listing made it.
+    for bad in listing.unusable:
+        rel = bad.relative_to(root).as_posix() if bad != root else "."
+        unreadable.append(f"{rel}: {unusable_reason(bad)}")
+        unreadable_files.append(rel)
     entries: list[tuple[str, object, dict]] = []
     # The unselected carrier spelling is read by no plane (#1674); its
     # `tenants:` block used to reach tenant_ids / profile_refs here.
-    skip = unselected_carriers(Path(config_dir, f) for f in files)
+    by_dir: dict[Path, list[Path]] = {}
+    for p in listing.files:
+        by_dir.setdefault(p.parent, []).append(p)
+    skip = {(d / n).relative_to(root).as_posix()
+            for d, ps in by_dir.items() for n in unselected_carriers(ps)}
     for fname in files:
         if fname in skip:
             continue
         path = os.path.join(config_dir, fname)
+        base = os.path.basename(fname)
+        level = Path(fname).parent.as_posix()
         # #1654 blind review: a lint isolates per file — one unreadable
         # file is one ERROR finding, the other files are still checked
         # (#1008 convention), not an abort that hides their findings.
@@ -96,27 +118,47 @@ def _collect_data(config_dir: str) -> dict:
         if not data or not isinstance(data, dict):
             continue
 
-        # Routing profiles
-        if fname in ("_routing_profiles.yaml", "_routing_profiles.yml"):
+        # Routing profiles — #2326 (c): one name, one file, across the tree.
+        if base in _PROFILE_FILES:
             rp = data.get("routing_profiles", {})
             if isinstance(rp, dict):
-                profiles.update(rp)
+                for name, cfg in rp.items():
+                    if name in profile_origin:
+                        profile_duplicates.append(
+                            (name, profile_origin[name], fname))
+                        continue
+                    profile_origin[name] = fname
+                    profiles[name] = cfg
+                    profiles_by_dir.setdefault(level, {})[name] = cfg
 
-        # Domain policies
-        if fname in ("_domain_policy.yaml", "_domain_policy.yml"):
+        # Domain policies — #2326 (d): below the root, scoped to the subtree.
+        if base in _POLICY_FILES:
             dp = data.get("domain_policies", {})
             if isinstance(dp, dict):
-                policies.update(dp)
+                if level == ROOT_LEVEL:
+                    policies.update(dp)
+                else:
+                    subtree_policies.setdefault(level, {}).update(dp)
+                    for name in dp:
+                        subtree_policy_origin[(level, name)] = fname
 
         # Tenant IDs + profile refs — collected here, resolved after the
         # loop (#1982): platform file first, tenant file wins, whatever
-        # either is called; a platform file cannot create a tenant.
+        # either is called; a platform file cannot create a tenant. The
+        # `tenants:` block of a platform file BELOW the root is read by no
+        # plane (ADR-017 item 1), so it is not collected either.
+        if level != ROOT_LEVEL and is_reserved_name(base):
+            continue
         tenants_block = data.get("tenants", {})
         if isinstance(tenants_block, dict):
             for tenant, overrides in tenants_block.items():
                 entries.append((fname, tenant,
                                 overrides if isinstance(overrides, dict) else {}))
 
+    tenant_dirs: dict = {}
+    for fname, tenant, _o in entries:
+        if not is_reserved_name(os.path.basename(fname)):
+            tenant_dirs.setdefault(tenant, Path(fname).parent.as_posix())
     merged, platform_orphans = overlay_platform_tenants(
         entries, lambda: declared_tenant_ids(config_dir))
     for tenant, overrides in merged.items():
@@ -133,7 +175,26 @@ def _collect_data(config_dir: str) -> dict:
         "profile_refs": profile_refs,
         "unreadable": unreadable,
         "unreadable_files": unreadable_files,
+        # #2326: directory scope of profiles / policies / tenants.
+        "profiles_by_dir": profiles_by_dir,
+        "profile_origin": profile_origin,
+        "profile_duplicates": profile_duplicates,
+        "subtree_policies": subtree_policies,
+        "subtree_policy_origin": subtree_policy_origin,
+        "tenant_dirs": tenant_dirs,
     }
+
+
+def _visible_profiles(data: dict, tenant: str) -> dict:
+    """The profiles *tenant* can reference: root, its level, and between."""
+    by_dir = data.get("profiles_by_dir")
+    if by_dir is None:   # a hand-built data dict (tests): the flat view
+        return data["profiles"]
+    level = data.get("tenant_dirs", {}).get(tenant, ROOT_LEVEL)
+    out: dict = {}
+    for d in [ROOT_LEVEL, *chain_levels(level)]:
+        out.update(by_dir.get(d, {}))
+    return out
 
 
 def validate(data: dict, *, strict: bool = False) -> list[str]:
@@ -156,8 +217,9 @@ def validate(data: dict, *, strict: bool = False) -> list[str]:
     profile_refs = data["profile_refs"]
     unreadable_files = list(data.get("unreadable_files", []))
     profiles_unreadable = [f for f in unreadable_files
-                           if f in ("_routing_profiles.yaml", "_routing_profiles.yml")]
-    tenants_unreadable = [f for f in unreadable_files if not f.startswith("_")]
+                           if os.path.basename(f) in _PROFILE_FILES]
+    tenants_unreadable = [f for f in unreadable_files
+                          if not os.path.basename(f).startswith("_")]
     if profiles_unreadable:
         messages.append("INFO: profile checks skipped: "
                         f"{', '.join(profiles_unreadable)} unreadable")
@@ -175,31 +237,64 @@ def validate(data: dict, *, strict: bool = False) -> list[str]:
 
     # Check 1: Profile references point to existing profiles
     # (needs the profile set — skipped when _routing_profiles.yaml is unreadable)
+    # #2326 (c): a profile name defined in two files is an error whatever
+    # --strict says — the route generator refuses the tree (rc 2).
+    for pname, first, second in data.get("profile_duplicates", []):
+        messages.append(
+            f"ERROR: routing_profile '{pname}' is defined in both {first} "
+            f"and {second} — a profile name must be unique across the whole "
+            f"conf.d tree")
+    origin = data.get("profile_origin", {})
     if not profiles_unreadable:
         for tenant, ref in sorted(profile_refs.items()):
-            if ref not in profiles:
+            if ref not in _visible_profiles(data, tenant):
+                where = origin.get(ref)
+                extra = (f" (a profile of that name is defined in {where}, "
+                         f"which is not on this tenant's directory chain)"
+                         if where else "")
                 messages.append(
                     f"{severity}: tenant '{tenant}': _routing_profile "
-                    f"references unknown profile '{ref}'")
+                    f"references unknown profile '{ref}'{extra}")
+
+    # The root's policies, then each subtree's (#2326 (d)): same checks, and
+    # a subtree policy may only name tenants of its own subtree.
+    groups: list[tuple[str, str, dict]] = [(ROOT_LEVEL, "", policies)]
+    sub_origin = data.get("subtree_policy_origin", {})
+    for level, pols in sorted(data.get("subtree_policies", {}).items()):
+        groups.append((level, f" ({level}/)", pols))
+    tenant_dirs = data.get("tenant_dirs", {})
 
     # Check 2: Domain policy tenant lists reference existing tenants
     # (the tenant-existence half needs every tenant file readable)
-    for policy_name, policy in sorted(policies.items()):
-        if not isinstance(policy, dict):
-            messages.append(f"WARN: domain_policy '{policy_name}': not a dict")
-            continue
-        tenants = policy.get("tenants", [])
-        if not isinstance(tenants, list):
-            messages.append(
-                f"WARN: domain_policy '{policy_name}': 'tenants' must be a list")
-            continue
-        if tenants_unreadable:
-            continue
-        for t in tenants:
-            if t not in tenant_ids:
+    for level, where, pols in groups:
+        for policy_name, policy in sorted(pols.items()):
+            if not isinstance(policy, dict):
                 messages.append(
-                    f"{severity}: domain_policy '{policy_name}': "
-                    f"tenant '{t}' not found in config-dir")
+                    f"WARN: domain_policy '{policy_name}'{where}: not a dict")
+                continue
+            tenants = policy.get("tenants", [])
+            if not isinstance(tenants, list):
+                messages.append(
+                    f"WARN: domain_policy '{policy_name}'{where}: 'tenants' "
+                    f"must be a list")
+                continue
+            if tenants_unreadable:
+                continue
+            for t in tenants:
+                if t not in tenant_ids:
+                    messages.append(
+                        f"{severity}: domain_policy '{policy_name}'{where}: "
+                        f"tenant '{t}' not found in config-dir")
+                elif not level_contains(level, tenant_dirs.get(t, ROOT_LEVEL)):
+                    home = tenant_dirs.get(t, ROOT_LEVEL)
+                    messages.append(
+                        f"{severity}: domain_policy '{policy_name}' in "
+                        f"{sub_origin.get((level, policy_name), level + '/')}: "
+                        f"tenant '{t}' lives outside this policy's subtree "
+                        f"{level}/ (in "
+                        f"{'the conf.d root' if home == ROOT_LEVEL else home + '/'}"
+                        f") — a policy below the root applies only to its own "
+                        f"subtree, so this entry is not enforced")
 
     # Check 3: Domain policy constraints are well-formed
     valid_constraint_keys = {
@@ -207,19 +302,21 @@ def validate(data: dict, *, strict: bool = False) -> list[str]:
         "enforce_group_by", "max_repeat_interval", "min_group_wait",
         "require_critical_escalation",
     }
-    for policy_name, policy in sorted(policies.items()):
-        if not isinstance(policy, dict):
-            continue
-        constraints = policy.get("constraints", {})
-        if not isinstance(constraints, dict):
-            messages.append(
-                f"WARN: domain_policy '{policy_name}': 'constraints' must be a dict")
-            continue
-        for key in constraints:
-            if key not in valid_constraint_keys:
+    for _level, where, pols in groups:
+        for policy_name, policy in sorted(pols.items()):
+            if not isinstance(policy, dict):
+                continue
+            constraints = policy.get("constraints", {})
+            if not isinstance(constraints, dict):
                 messages.append(
-                    f"WARN: domain_policy '{policy_name}': "
-                    f"unknown constraint '{key}'")
+                    f"WARN: domain_policy '{policy_name}'{where}: "
+                    f"'constraints' must be a dict")
+                continue
+            for key in constraints:
+                if key not in valid_constraint_keys:
+                    messages.append(
+                        f"WARN: domain_policy '{policy_name}'{where}: "
+                        f"unknown constraint '{key}'")
 
     # Check 4: Orphan profiles (defined but never referenced) — info only
     # (needs both sides readable: the profile set AND every tenant's ref)
