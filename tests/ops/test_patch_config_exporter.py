@@ -148,7 +148,7 @@ class Cluster:
         return subprocess.run(
             [sys.executable, str(TOOL), *argv, "--poll-interval", "0.2",
              "--reload-timeout", "30"],
-            env=self.env, capture_output=True, text=True, timeout=120)
+            env=self.env, capture_output=True, text=True, encoding="utf-8", errors="replace", timeout=120)
 
     def user_series(self):
         return sorted(ln for ln in _get(self.port, "metrics").splitlines()

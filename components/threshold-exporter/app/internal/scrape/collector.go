@@ -39,6 +39,15 @@ type Collector struct {
 	now     func() time.Time
 	resolve func(cfg *config.ThresholdConfig, now time.Time) ([]config.ResolvedThreshold, config.ResolveStats)
 	report  func(i int, m prometheus.Metric, err error)
+	observe func(Reserved)
+}
+
+// Reserved is what one scrape resolved for the reserved keys the collector
+// serves: the very slices its series were built from.
+type Reserved struct {
+	Metadata      []config.ResolvedMetadata
+	SeverityDedup []config.ResolvedSeverityDedup
+	Ops           config.OperationalStates
 }
 
 // NewCollector is the exporter's collector over src.
@@ -46,8 +55,8 @@ func NewCollector(src Source) *Collector {
 	return &Collector{src: src}
 }
 
-// Hooks are the three seams a reader outside the exporter sets. All three
-// nil is the exporter's collector.
+// Hooks are the seams a reader outside the exporter sets. All nil is the
+// exporter's collector.
 type Hooks struct {
 	// Now replaces time.Now() as the scrape instant.
 	Now func() time.Time
@@ -56,11 +65,16 @@ type Hooks struct {
 	Resolve func(cfg *config.ThresholdConfig, now time.Time) ([]config.ResolvedThreshold, config.ResolveStats)
 	// Report is thresholdmetric.Emit's report for the user_threshold rows.
 	Report func(i int, m prometheus.Metric, err error)
+	// Observe receives, once per scrape, the reserved-key readings the scrape
+	// emitted from. A reader that needs them takes these instead of calling
+	// the resolvers again, which would log each resolver WARN a second
+	// time (#2374).
+	Observe func(Reserved)
 }
 
 // NewCollectorWithHooks is NewCollector with the Hooks set.
 func NewCollectorWithHooks(src Source, h Hooks) *Collector {
-	return &Collector{src: src, now: h.Now, resolve: h.Resolve, report: h.Report}
+	return &Collector{src: src, now: h.Now, resolve: h.Resolve, report: h.Report, observe: h.Observe}
 }
 
 // Describe sends no descriptors — opts into unchecked collector mode.
@@ -111,7 +125,8 @@ func (c *Collector) Collect(ch chan<- prometheus.Metric) {
 	c.collectSilentModes(ch, ops)
 	c.collectMaintenanceExpiries(ch, cfg, now)
 	c.collectThresholdExpiries(ch, cfg, now)
-	c.collectSeverityDedup(ch, cfg)
+	dedup := cfg.ResolveSeverityDedup()
+	c.collectSeverityDedup(ch, dedup)
 	c.collectConfigInfo(ch)
 
 	// ResolveMetadata is a pure per-scrape snapshot (walks + yaml.Unmarshals
@@ -120,6 +135,10 @@ func (c *Collector) Collect(ch chan<- prometheus.Metric) {
 	metadata := cfg.ResolveMetadata()
 	c.collectMetadata(ch, metadata)
 	c.collectTenantExpectedExporter(ch, metadata)
+
+	if c.observe != nil {
+		c.observe(Reserved{Metadata: metadata, SeverityDedup: dedup, Ops: ops})
+	}
 }
 
 // tenantMetricsOverLimitDesc describes da_tenant_metrics_over_limit (#652).
@@ -377,14 +396,14 @@ func (c *Collector) collectThresholdExpiries(ch chan<- prometheus.Metric, cfg *c
 }
 
 // collectSeverityDedup emits user_severity_dedup flags (v1.2.0+).
-func (c *Collector) collectSeverityDedup(ch chan<- prometheus.Metric, cfg *config.ThresholdConfig) {
+func (c *Collector) collectSeverityDedup(ch chan<- prometheus.Metric, dedup []config.ResolvedSeverityDedup) {
 	dedupDesc := prometheus.NewDesc(
 		"user_severity_dedup",
 		"Severity dedup flag (1=enabled). Warning notifications suppressed when critical fires for same metric_group. v1.2.0+",
 		[]string{"tenant", "mode"},
 		nil,
 	)
-	for _, sd := range cfg.ResolveSeverityDedup() {
+	for _, sd := range dedup {
 		m, err := prometheus.NewConstMetric(dedupDesc, prometheus.GaugeValue, 1.0, sd.Tenant, sd.Mode)
 		if err != nil {
 			log.Printf("WARN: failed to create user_severity_dedup metric for tenant=%s: %v", sd.Tenant, err)

@@ -56,7 +56,7 @@ def test_promtool_golden(golden, compiled_pack):
     dest.write_text(golden.read_text(encoding="utf-8"), encoding="utf-8")
     result = subprocess.run(
         [_PROMTOOL, "test", "rules", golden.name],
-        cwd=compiled_pack, capture_output=True, text=True, timeout=120,
+        cwd=compiled_pack, capture_output=True, text=True, encoding="utf-8", errors="replace", timeout=120,
     )
     assert result.returncode == 0, (
         f"promtool failed for {golden.name}:\n{result.stdout}\n{result.stderr}"
@@ -86,5 +86,5 @@ def test_adversarial_selector_value_compiles_to_valid_promql(tmp_path, compiled_
     out = tmp_path / "rule-pack-custom-alerts.yaml"
     out.write_text(rendered, encoding="utf-8")
     r = subprocess.run([_PROMTOOL, "check", "rules", str(out)],
-                       capture_output=True, text=True, timeout=60)
+                       capture_output=True, text=True, encoding="utf-8", errors="replace", timeout=60)
     assert r.returncode == 0, f"promtool rejected escaped selector:\n{r.stdout}\n{r.stderr}"

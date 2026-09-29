@@ -7,7 +7,8 @@ The scenarios exercise the deep_merge / inheritance rules listed in
 test_merge_parity.py's module docstring so the Go port can verify
 byte-for-byte parity. They do NOT cover every ADR-017 clause. #1550's
 reserved-key null deletion, nested-null and canonical-JSON escaping rows
-are scenarios 11-13 below; its chain-discovery gap is closed on the Go side
+are scenarios 11-13 below, and #2371's YAML date / `!!binary` values and
+non-string mapping keys are 17-19; #1550's chain-discovery gap is closed on the Go side
 (config_golden_parity_test.go TestGoldenParity_ResolveEffective). What stays
 open is listed in test_merge_parity.py's "Known gaps".
 
@@ -475,6 +476,165 @@ def s_reserved_null_delete():
 """)
 
 
+# -------------------------------------------------------------------------
+# Scenarios 14-16 (#2387): trees the exporter SERVES.
+#
+# ⛔ Five of the trees above (l0-only, full-l0-l3, array-replace,
+# opt-out-null, metadata-skipped) carry a ROOT `_defaults.yaml` the exporter
+# drops whole: a root `defaults:` value that is not a number (a nested
+# `threshold:` map, `_metadata`, an array) fails to decode, the file lands in
+# parse_failed and /metrics serves none of it (#1957). They stay, because the
+# deep-merge core they pin (nested maps, array replace, null on a nested
+# non-reserved key, `_metadata` not inherited) cannot be written in a root
+# shape the exporter accepts — but parity on them proves only that the two
+# readers agree with each other, not that they describe what is served. They
+# are listed, with that reason, in tests/golden/not_served.json, and
+# components/threshold-exporter/app/cmd/da-guard/golden_served_test.go runs
+# `da-guard served-values` over every fixture tree: a tree must exit 0 unless
+# it is listed, and a listed tree must exit 3 (so the list cannot go stale).
+#
+# These two trees are the served counterpart for what CAN be written in the
+# accepted shape: numeric root defaults (the shipped platform shape), subtree
+# `_defaults.yaml` overriding them, quoted-string tenant values. Two new conf.d
+# roots, pinned in check_threshold_reachability's `_DEFAULTS_CONFD_ROOTS`;
+# their 8 `defaults:` keys raised the artifact-key floor by 8 (the #1674 /
+# #1550 remedy).
+#
+# ⚠️ "Served" is da-guard's rc 0 — nothing in the tree is dropped. It is NOT
+# "every golden value equals what /metrics serves", and two shapes that pass
+# rc 0 are kept out of these trees on purpose because /metrics disagrees with
+# both merge readers on them (measured with `da-guard served-values`, #2296):
+#   * null on a threshold key a subtree `_defaults.yaml` overrides: the
+#     readers resolve the L1 value, /metrics falls back to the ROOT default;
+#   * a key that only a subtree `_defaults.yaml` declares: the readers merge
+#     it in, /metrics serves no row for it.
+# A row pinning either would record the readers' answer as if it were the
+# served one.
+# -------------------------------------------------------------------------
+
+# Scenario 14 + 15: L0 -> L1 -> L2 chain, and a root-level sibling tenant.
+#   tenant-served-chain  mysql_connections        tenant "60" beats L1's 70
+#                        container_memory         L2's 90 beats L0's 85
+#                        redis_connected_clients  L0's 5000, through 2 levels
+#   tenant-served-root   chain is the root file only: L0's 80 / 85 / 5000,
+#                        so neither subtree carrier leaks into a sibling
+def s_served_chain():
+    d = reset("served-chain")
+    write(d / "_defaults.yaml", """defaults:
+  mysql_connections: 80
+  container_memory: 85
+  redis_connected_clients: 5000
+""")
+    write(d / "db" / "_defaults.yaml", """defaults:
+  mysql_connections: 70
+""")
+    write(d / "db" / "mariadb" / "_defaults.yaml", """defaults:
+  container_memory: 90
+""")
+    write(d / "db" / "mariadb" / "tenants.yaml", """tenants:
+  tenant-served-chain:
+    mysql_connections: "60"
+""")
+    write(d / "tenants.yaml", """tenants:
+  tenant-served-root: {}
+""")
+
+
+# Scenario 16: "disable" through a subtree chain. The tenant turns off a key
+# it inherits from L0, while L1 overrides the other one:
+#   mysql_connections   tenant "disable" beats L0's 80 (the sanctioned opt-out)
+#   container_memory    L1's 90 beats L0's 85
+def s_served_disable():
+    d = reset("served-disable")
+    write(d / "_defaults.yaml", """defaults:
+  mysql_connections: 80
+  container_memory: 85
+""")
+    write(d / "db" / "_defaults.yaml", """defaults:
+  container_memory: 90
+""")
+    write(d / "db" / "tenants.yaml", """tenants:
+  tenant-served-disable:
+    mysql_connections: "disable"
+""")
+
+
+# Scenarios 17-18 (#2371): values PyYAML types as `date` / `datetime` /
+# `bytes`. describe_tenant ended with a TypeError on every one of them, so no
+# row could hold them; yaml.v3 reads a timestamp into time.Time and a
+# `!!binary` into a string of its raw bytes, and pkg/config's canonical JSON
+# renders those. These rows pin that rendering on both sides. Mixed-mode
+# subtrees again, for the carrier-selection reason above. The shapes the
+# Python side CANNOT align (describe_tenant.py's #2371 block) are left out on
+# purpose — they are strict xfails in tests/dx/test_describe_tenant.py.
+#
+# Scenario 17: an unquoted date inherited from `_defaults.yaml` (Go:
+# "2026-12-31T00:00:00Z") beside a tenant datetime with a fraction and an
+# offset (RFC 3339, fraction's trailing zero dropped, offset kept).
+def s_yaml_date():
+    d = reset("mixed-mode") / "yaml-date"
+    write(d / "_defaults.yaml", """defaults:
+  _silent_mode:
+    target: "warning"
+    expires: 2026-12-31
+""")
+    write(d / "tenants.yaml", """tenants:
+  tenant-date:
+    _state_maintenance:
+      target: "all"
+      expires: 2026-12-31T23:59:59.50+08:00
+    _silent_mode:
+      reason: "inherits an unquoted date"
+""")
+
+
+# Scenario 18: `!!binary` values: the payload's UTF-8 text (ASCII and CJK).
+# ⛔ An INVALID UTF-8 byte cannot be a golden row: golden.json stores
+# effective_config as JSON text, which cannot hold that byte, so the Go
+# EffectiveConfig / ResolveEffective legs would compare the exporter's
+# six-character escape (backslash, `ufffd`) with a real U+FFFD and go red
+# on a correct pair. That
+# shape's Go rendering is pinned in tests/dx/test_describe_tenant.py.
+def s_yaml_binary():
+    d = reset("mixed-mode") / "yaml-binary"
+    write(d / "tenants.yaml", """tenants:
+  tenant-binary:
+    _routing:
+      receiver:
+        type: "webhook"
+        url: !!binary aHR0cHM6Ly9ob29rcy5leGFtcGxlLmNvbS9hbGVydHM=
+    _silent_mode:
+      target: "warning"
+      reason: !!binary 5Lit5paH
+""")
+
+
+# Scenario 19: non-string mapping KEYS below the tenant id (#2371). yaml.v3
+# decodes such a mapping into map[any]any and pkg/config spells each key with
+# `%v`: a date key is "2026-12-31 00:00:00 +0000 UTC" (time.Time.String()),
+# `0x1F` is "31", `1.0` is "1", `True` is "true"; a quoted `"010"` stays text.
+# The date key is written in BOTH files: one key to Go, so the two bodies
+# deep-merge — describe_tenant must merge them too, not emit two keys.
+def s_yaml_keys():
+    d = reset("mixed-mode") / "yaml-keys"
+    write(d / "_defaults.yaml", """defaults:
+  _x:
+    2026-12-31:
+      from_defaults: 1
+    0x1F: "hex"
+""")
+    write(d / "tenants.yaml", """tenants:
+  tenant-keys:
+    _x:
+      2026-12-31:
+        from_tenant: 2
+      2026-12-31T10:20:30.5+08:00: "zoned"
+      1.0: "float"
+      True: "bool"
+      "010": "quoted"
+""")
+
+
 SCENARIOS = [
     ("flat", "tenant-a", s_flat),
     ("l0-only", "tenant-b", s_l0_only),
@@ -492,6 +652,12 @@ SCENARIOS = [
     ("canonical-json-escaping", "tenant-escape", s_canonical_json_escaping),
     ("reserved-nested-null", "tenant-nested", s_reserved_nested_null),
     ("reserved-null-delete", "tenant-reserved", s_reserved_null_delete),
+    ("served-chain", "tenant-served-chain", s_served_chain),  # 2 tenants, 1 tree
+    ("served-root", "tenant-served-root", None),
+    ("served-disable", "tenant-served-disable", s_served_disable),
+    ("yaml-date", "tenant-date", s_yaml_date),
+    ("yaml-binary", "tenant-binary", s_yaml_binary),
+    ("yaml-keys", "tenant-keys", s_yaml_keys),
 ]
 
 
@@ -541,6 +707,12 @@ def main() -> int:
         "canonical-json-escaping": "mixed-mode",
         "reserved-nested-null": "mixed-mode",
         "reserved-null-delete": "mixed-mode",
+        "served-chain": "served-chain",
+        "served-root": "served-chain",
+        "served-disable": "served-disable",
+        "yaml-date": "mixed-mode",
+        "yaml-binary": "mixed-mode",
+        "yaml-keys": "mixed-mode",
     }
     for scenario, tenant_id, builder in SCENARIOS:
         if builder is not None and builder not in builders_seen:

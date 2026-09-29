@@ -552,11 +552,14 @@ func buildPolicies(nodes map[string]*yaml.Node, origin map[string]string) ([]Pol
 }
 
 // LoadRoot reads the routing layers and the domain policies from the conf.d
-// ROOT only, as the Python reader does (it is flat). The root's platform
-// files (`_`-prefixed; of the defaults carriers only the one the exporter
-// selects) come from the exporter's own walker, config.RootPlatformFiles, and
-// are read in name order; a later file replaces `_routing_defaults` whole and
-// overrides a same-named profile or domain.
+// ROOT only — the root half of LoadTree, which the route generator and
+// da-guard read since #2326; tenant-api, whose tenants all live at the root,
+// reads this half alone. The root's platform files (`_`-prefixed; of the
+// defaults carriers only the one the exporter selects) come from the
+// exporter's own walker, config.RootPlatformFiles, and are read in name
+// order; a later file replaces `_routing_defaults` whole and overrides a
+// same-named domain. A profile name defined by two files is
+// ProblemRoutingProfileDuplicate; the first definition is kept (#2326).
 //
 //   - `_routing_defaults`: any of those files.
 //   - `routing_profiles`: `_routing_profiles.yaml` / `.yml` only.
@@ -567,13 +570,26 @@ func buildPolicies(nodes map[string]*yaml.Node, origin map[string]string) ([]Pol
 // reports as failed, so they are named once, not twice. LoadRoot never adds
 // to that list: what it cannot use comes back as Problems.
 func LoadRoot(configDir string, skip func(rel string) bool) (Layers, []Policy, []Problem) {
+	layers, pols, probs, _ := loadRoot(configDir, skip)
+	return layers, pols, probs
+}
+
+// loadRoot is LoadRoot plus, per routing-profile name, the root file that
+// defined it (LoadTree continues the uniqueness check below the root).
+//
+// #2326 (ADR-007 amendment 2026-09-28 (c)): a profile name is unique across
+// the tree, so a second root file defining it (`_routing_profiles.yml` beside
+// `.yaml`) is ProblemRoutingProfileDuplicate and the FIRST definition, in name
+// order, is kept — before, the later file silently replaced it.
+func loadRoot(configDir string, skip func(rel string) bool) (Layers, []Policy, []Problem, map[string]string) {
 	var layers Layers
 	var probs []Problem
+	profileOrigin := map[string]string{}
 
 	files, err := config.RootPlatformFiles(configDir)
 	if err != nil {
 		return layers, nil, []Problem{{Kind: ProblemDomainPolicyUnusable,
-			Message: fmt.Sprintf("conf.d root could not be read, so no domain policy was read: %v", err)}}
+			Message: fmt.Sprintf("conf.d root could not be read, so no domain policy was read: %v", err)}}, profileOrigin
 	}
 
 	policyNodes := map[string]*yaml.Node{}
@@ -620,8 +636,13 @@ func LoadRoot(configDir string, skip func(rel string) bool) (Layers, []Policy, [
 				if layers.Profiles == nil {
 					layers.Profiles = map[string]map[string]any{}
 				}
-				for k, v := range p {
-					layers.Profiles[k] = v
+				for _, k := range sortedKeys(p) {
+					if first, dup := profileOrigin[k]; dup {
+						probs = append(probs, duplicateProfile(k, first, f.Name))
+						continue
+					}
+					profileOrigin[k] = f.Name
+					layers.Profiles[k] = p[k]
 				}
 			}
 		}
@@ -640,7 +661,7 @@ func LoadRoot(configDir string, skip func(rel string) bool) (Layers, []Policy, [
 	}
 	pols, pprobs := buildPolicies(policyNodes, policyOrigin)
 	probs = append(probs, pprobs...)
-	return layers, pols, probs
+	return layers, pols, probs, profileOrigin
 }
 
 // overlayFrom records the `_routing` / `_routing_profile` keys of one root

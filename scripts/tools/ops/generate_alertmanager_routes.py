@@ -474,6 +474,32 @@ def _refuse_unreadable_tenant_files(tree: TenantTree) -> None:
     sys.exit(EXIT_VIOLATION)
 
 
+def _refuse_routing_tree_errors(tree: TenantTree) -> None:
+    """#2326: refuse a conf.d tree the routing plane cannot route as one.
+
+    ADR-017 "Amendment 2026-09-28" makes the routing plane hierarchical and
+    names what blocks it: `_routing_enforced` below the root, `receiver` /
+    `overrides` written as null in a subdirectory level's `_routing_defaults`,
+    one routing-profile name defined in two files. (One tenant id declared in
+    two files is `_refuse_duplicate_tenants`, #2315 — rc 1, and it runs
+    first.) Runs in EVERY mode, right after the file accounting and before
+    anything is rendered, written, validated or applied — its output is the
+    Alertmanager config a customer deploys, and each of these would ship a
+    route tree that silently routes some tenant's alerts somewhere else.
+
+    EXIT_CALLER_ERROR, per the ADR: these are refusals of the tree's SHAPE
+    (the same statement as "the directory you pointed me at is not usable as
+    input"), not per-tenant findings a --strict switch escalates.
+    """
+    errors = tree.routing_tree_errors
+    if not errors:
+        return
+    print(f"ERROR: {len(errors)} routing-tree error(s) — nothing was "
+          f"generated, written or applied (ADR-017 amendment 2026-09-28):",
+          file=sys.stderr)
+    for _kind, _fname, _field, msg in errors:
+        print(f"  {safe_label(msg)}", file=sys.stderr)
+    sys.exit(EXIT_CALLER_ERROR)
 def _refuse_duplicate_tenants(tree: TenantTree) -> None:
     """#2315: one tenant id in two tenant files — refused in EVERY mode.
 
@@ -830,6 +856,7 @@ def main() -> None:
         tree.as_tuple()
     _refuse_unreadable_tenant_files(tree)
     _refuse_duplicate_tenants(tree)
+    _refuse_routing_tree_errors(tree)
 
     has_routing = bool(routing_configs)
     has_dedup = bool(dedup_configs)

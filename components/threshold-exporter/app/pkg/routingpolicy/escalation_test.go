@@ -272,3 +272,59 @@ func TestParseDomainPolicies_CollectionEscalationFailsClosed(t *testing.T) {
 		}
 	}
 }
+
+// A subtree `_domain_policy.yaml` (#2326) is a policy document like the
+// root one: LoadTree gives its `require_critical_escalation` the same
+// `!!null` reading (#2325) — a tagged scalar is None (constraint off, the
+// rest of the policy enforced), a tagged collection refuses the whole file —
+// at the root and below it alike.
+func TestLoadTree_TaggedNullEscalation_SubtreePolicyAsRoot(t *testing.T) {
+	t.Parallel()
+	for _, dir := range []string{"", "team/"} {
+		for v, refused := range map[string]bool{"!!null x": false, `!!null ""`: false, "!!null {}": true, "!!null [1]": true} {
+			root := writeRoot(t, map[string]string{
+				"_defaults.yaml":   "defaults:\n  cpu: 70\n",
+				dir + "t-pol.yaml": "tenants:\n  t-pol:\n    cpu: 80\n",
+				dir + "_domain_policy.yaml": "domain_policies:\n  d:\n    tenants: [t-pol]\n    constraints:\n" +
+					"      require_critical_escalation: " + v + "\n      forbidden_receiver_types: [slack]\n",
+			})
+			_, pols, probs := LoadTree(root, nil)
+			where := dir + "_domain_policy.yaml " + v
+			if refused {
+				if len(pols) != 0 || len(probs) != 1 || probs[0].Kind != ProblemDomainPolicyUnusable ||
+					probs[0].File != dir+"_domain_policy.yaml" {
+					t.Errorf("%s: policies %+v, problems %+v; want the file refused as domain_policy_unusable", where, pols, probs)
+				}
+				continue
+			}
+			if len(probs) != 0 || len(pols) != 1 || pols[0].RequireCriticalEscalation ||
+				!reflect.DeepEqual(pols[0].ForbiddenReceiverTypes, []string{"slack"}) ||
+				pols[0].Scope != strings.TrimSuffix(dir, "/") {
+				t.Errorf("%s: policies %+v, problems %+v; want escalation off, forbid [slack], scope %q",
+					where, pols, probs, strings.TrimSuffix(dir, "/"))
+			}
+		}
+	}
+}
+
+// The `!!null` reading is the policy file's only (#2325): a defaults carrier
+// with a `require_critical_escalation: !!null {}` key elsewhere in it is read
+// as before — its `_routing_defaults` still applies — below the root as at it.
+func TestLoadTree_TaggedNullOutsidePolicyFile_SubtreeAsRoot(t *testing.T) {
+	t.Parallel()
+	for _, dir := range []string{"", "team/"} {
+		root := writeRoot(t, map[string]string{
+			"_defaults.yaml": "defaults:\n  cpu: 70\n",
+			dir + "_defaults.yaml": "defaults:\n  cpu: 70\n_routing_defaults:\n" +
+				"  receiver: {type: webhook, url: 'https://example.invalid/hook'}\n" +
+				"meta: {require_critical_escalation: !!null {}}\n",
+			dir + "t-x.yaml": "tenants:\n  t-x:\n    cpu: 80\n",
+		})
+		tree, _, probs := LoadTree(root, nil)
+		layers := tree.LayersFor(tree.TenantLevel("t-x"))
+		if len(probs) != 0 || layers.Defaults["receiver"] == nil {
+			t.Errorf("%s_defaults.yaml: defaults %+v, problems %+v; want its _routing_defaults.receiver read",
+				dir, layers.Defaults, probs)
+		}
+	}
+}

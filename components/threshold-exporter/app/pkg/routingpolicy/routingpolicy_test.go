@@ -247,16 +247,27 @@ func TestLoadRoot_Layers(t *testing.T) {
 	})
 	layers, pols, probs := LoadRoot(dir, nil)
 	// The stripped routes are named even though a later file replaces the
-	// whole block (the Python reader records the WARN per file too).
-	if len(probs) != 1 || probs[0].Kind != ProblemRoutingDefaultsRoutes || probs[0].File != "_defaults.yaml" ||
-		probs[0].Field != "_routing_defaults.routes" {
+	// whole block (the Python reader records the WARN per file too). #2326:
+	// profile "b" in both root spellings is a duplicate name, named on the
+	// later file.
+	wantProbs := [][3]string{
+		{ProblemRoutingDefaultsRoutes, "_defaults.yaml", "_routing_defaults.routes"},
+		{ProblemRoutingProfileDuplicate, "_routing_profiles.yml", "routing_profiles.b"},
+	}
+	var gotProbs [][3]string
+	for _, p := range probs {
+		gotProbs = append(gotProbs, [3]string{p.Kind, p.File, p.Field})
+	}
+	if !reflect.DeepEqual(gotProbs, wantProbs) {
 		t.Fatalf("problems: %+v", probs)
 	}
 	if !reflect.DeepEqual(layers.Defaults, map[string]any{"group_wait": "5s"}) {
 		t.Errorf("defaults = %#v", layers.Defaults)
 	}
-	if got := ReceiverType(layers.Profiles["b"]["receiver"]); got != "teams" {
-		t.Errorf("profile b = %q, want the later file's teams", got)
+	// #2326 (ADR-007 amendment (c)): the first definition is kept — before,
+	// the later file silently replaced it.
+	if got := ReceiverType(layers.Profiles["b"]["receiver"]); got != "email" {
+		t.Errorf("profile b = %q, want the first file's email", got)
 	}
 	if _, known := layers.Profiles["c"]; !known || layers.Profiles["c"] != nil {
 		t.Errorf("profile c must be known and empty: %#v", layers.Profiles["c"])

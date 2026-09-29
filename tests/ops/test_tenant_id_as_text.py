@@ -64,7 +64,7 @@ def test_route_generation_emits_the_ids_as_written(tmp_path):
     p = subprocess.run(
         [sys.executable, str(TOOLS / "ops" / "generate_alertmanager_routes.py"),
          "--config-dir", str(d), "--dry-run"],
-        capture_output=True, text=True, timeout=60)
+        capture_output=True, text=True, encoding="utf-8", errors="replace", timeout=60)
     assert p.returncode == 0, p.stderr[-2000:]
     for tid in ("010", "0x1F", "yes"):
         assert f'tenant="{tid}"' in p.stdout, (tid, p.stdout)
@@ -170,7 +170,7 @@ def test_describe_tenant_overlays_the_platform_block_for_text_ids(tmp_path):
     script = str(TOOLS / "dx" / "describe_tenant.py")
     for tid, want in (("010", "60"), ("yes", "61")):
         p = subprocess.run([sys.executable, script, tid, "--conf-d", str(d)],
-                           capture_output=True, text=True, timeout=30)
+                           capture_output=True, text=True, encoding="utf-8", errors="replace", timeout=30)
         assert p.returncode == 0, (tid, p.stderr)
         out = json.loads(p.stdout)
         assert out["effective_config"]["mysql_connections"] == want, (tid, out)
@@ -436,11 +436,11 @@ def test_deprecate_rule_keeps_a_profile_reference_bound(tmp_path, da_guard):
     they happened to meet). The exporter reads both as the text `010`.
 
     #2220: both are now written back as written (`010:`, `_profile: 010`,
-    plain) where the write used to quote them. The oracle moved with that:
-    `describe_tenant` reads `_profile` with PyYAML typing (plain `010` → 8,
-    #2297), so it cannot tell a bound plain reference from a broken one. The
-    raw-text reader and the exporter's served value (`container_cpu` from
-    profile `010`, 55 — the default is 80) can, and pin the same binding."""
+    plain) where the write used to quote them. The oracle moved with that,
+    to the raw-text reader and the exporter's served value (`container_cpu`
+    from profile `010`, 55 — the default is 80): `describe_tenant` then read
+    `_profile` with PyYAML typing (plain `010` → 8, fixed by #2297 and
+    pinned in test_profile_ref_as_text.py)."""
     d = _tree(tmp_path, {
         "_defaults.yaml": ("defaults:\n  mysql_connections: 70\n"
                            "  container_cpu: 80\n"
@@ -578,18 +578,30 @@ def test_da_assembler_serves_what_the_cr_says(tmp_path, da_guard, q):
 
 
 @pytest.mark.parametrize("name,want", [
-    ("010", "010"), ("0x1F", "0x1F"), ("yes", "yes"),
+    ("010", None), ("0x1F", None), ("yes", None),
     ('"010"', "010"), ('"0x1F"', "0x1F"), ('"yes"', "yes"), ("abc", "abc"),
-], ids=["010", "0x1F", "yes", "q010", "q0x1F", "qyes", "abc"])
+    ("2026-01-02", "2026-01-02"),
+    ("2026-01-02T03:04:05Z", "2026-01-02T03:04:05Z"),
+], ids=["010", "0x1F", "yes", "q010", "q0x1F", "qyes", "abc", "date",
+        "datetime"])
 def test_da_assembler_names_the_file_as_the_cr_does(tmp_path, name, want):
     """Before: `name: 010` → `8.yaml`, `0x1F` → `31.yaml`, `yes` →
-    `True.yaml`; the header named the same wrong CR."""
+    `True.yaml`; the header named the same wrong CR.
+
+    #2371: an unquoted name YAML 1.1 (PyYAML) types as a number / bool is
+    refused (rc 2, nothing written: `want` None); a quoted one, and an
+    unquoted date / datetime, names the file as written."""
     cr = tmp_path / "cr.yaml"
     cr.write_text(_cr(name, '    "010":\n      mysql_connections: "70"\n'),
                   encoding="utf-8")
     out = tmp_path / "out"
     out.mkdir()
-    assert da_assembler.render_cr_file(cr, out) == 0
+    rc = da_assembler.render_cr_file(cr, out)
+    if want is None:
+        assert rc == 2
+        assert list(out.iterdir()) == []
+        return
+    assert rc == 0
     assert sorted(p.name for p in out.iterdir()) == [f"{want}.yaml"]
     header = (out / f"{want}.yaml").read_text(encoding="utf-8").split("\n")[0]
     assert header.endswith(f"ThresholdConfig ns/{want}"), header
@@ -763,9 +775,9 @@ def test_patch_config_keeps_a_profile_reference_bound(tmp_path, da_guard):
     the rewrite still wrote `_profile: 8` — the binding silently broken at
     rc 0 (#2237 step 0). Same shape as the deprecate_rule test above,
     including its #2220 change of oracle: `_profile: 010` is written back
-    plain, which `describe_tenant` types to 8 (#2297); the raw-text reader
-    and da-guard's served `container_cpu` (55 from profile `010`, not the
-    default 80) pin the binding instead."""
+    plain; the raw-text reader and da-guard's served `container_cpu` (55
+    from profile `010`, not the default 80) pin the binding. (The Python
+    readers' own agreement with that value: test_profile_ref_as_text.py.)"""
     defaults = ("defaults:\n  connections: 100\n  container_cpu: 80\n"
                 'profiles:\n  010:\n    container_cpu: "55"\n')
     cm = {"data": {"_defaults.yaml": defaults,

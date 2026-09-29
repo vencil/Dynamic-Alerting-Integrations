@@ -408,7 +408,7 @@ def _run(step: Step, script: str, cwd: Path, env: dict[str, str],
 
 def _git(cwd: Path, *args: str) -> None:
     subprocess.run(["git", *args], cwd=cwd, check=True,
-                   capture_output=True, text=True, timeout=120)
+                   capture_output=True, text=True, encoding="utf-8", errors="replace", timeout=120)
 
 
 _TEMPLATE_ROOT: Path | None = None

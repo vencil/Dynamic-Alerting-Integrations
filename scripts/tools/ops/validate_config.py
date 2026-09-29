@@ -40,9 +40,10 @@ Checks:
                     key there — the route generator reads routing only from
                     top-level `_routing_defaults` (#2291)
 
-Hierarchical trees: several rows (today schema, routes, policy and
-policy_dsl) get their tenants from a reader that is FLAT — it reads only the
-top level of --config-dir — while threshold-exporter reads the whole tree.
+Hierarchical trees: a row may get its input from a reader that is FLAT — it
+reads only the top level of --config-dir — while threshold-exporter reads the
+whole tree (today policy_dsl's root-carrier lookup; schema, routes and policy
+read the whole tree since #2326, the routing plane's hierarchy).
 When such a row runs on a tree that has config files in subdirectories, it
 does not report PASS: a PASS becomes WARN, and every status gains a detail
 line naming how many files that reader skipped and which (the first few;
@@ -177,8 +178,12 @@ from _lib_python import (  # noqa: E402
 from _lib_io import (  # noqa: E402
     load_yaml_file_strict, strict_safe_load,
 )
-# #1577 / #2114: the exporter-key loader is driven from
-# `_lib_confd.tenant_declarations` since #2315, not from this module.
+# #1577 / #2114: tenant declarations are scanned by
+# `_lib_confd.tenant_declarations` since #2315. `check_profiles` still reads
+# `_profile` refs and `_profiles.yaml` through the exporter-key loader itself
+# (#2297: the ref kept as source text).
+from _lib_io import strict_load_exporter_keys  # noqa: E402
+from _lib_io import YamlFileError, load_yaml_file_strict_exporter_keys  # noqa: E402  (#2297)
 
 # ============================================================
 # Check results
@@ -935,6 +940,27 @@ def _is_reserved_key(key: str) -> bool:
     return False
 
 
+def _load_tenant_file_profile_text(path: str) -> object:
+    """A tenant file for the `_profile` check (#2297): ``load_yaml_file_strict``'s
+    contract ({} for a missing / empty file, :class:`YamlFileError` for bad
+    syntax, a duplicate key or non-UTF-8), with the exporter's reading —
+    mapping keys and every `_profile:` value are their source TEXT, so
+    `_profile: 010` names profile "010" (PyYAML's 8 was skipped as a non-str
+    and a reference to no profile passed).
+
+    Local rather than a flag on ``_lib_io``'s path loaders: those are being
+    reworked under #2115, and the other callers must not change here."""
+    if not (path and Path(path).is_file()):
+        return {}
+    try:
+        stream = io.StringIO(Path(path).read_bytes().decode("utf-8"))
+        stream.name = str(path)
+        data = strict_load_exporter_keys(stream, raw_text_scalars=("_profile",))
+    except (UnicodeDecodeError, yaml.YAMLError) as exc:
+        raise YamlFileError(str(path), exc) from exc
+    return {} if data is None else data
+
+
 def check_profiles(config_dir: str) -> dict[str, object]:
     """Validate tenant _profile references and profile structure.
 
@@ -956,7 +982,9 @@ def check_profiles(config_dir: str) -> dict[str, object]:
     """
     cfg = Path(config_dir)
     profiles_path = str(cfg / "_profiles.yaml")
-    profiles_raw = load_yaml_file_strict(profiles_path, default={})
+    # #2297: profile names are the keys' source text, as the exporter keys
+    # them — `010:` is "010", the name a tenant's `_profile: 010` reads as.
+    profiles_raw = load_yaml_file_strict_exporter_keys(profiles_path, default={})
     profiles = profiles_raw.get("profiles", {}) if isinstance(profiles_raw, dict) else {}
 
     warnings = []
@@ -992,7 +1020,7 @@ def check_profiles(config_dir: str) -> dict[str, object]:
         if fname.startswith("_") or fname.startswith("."):
             continue
         fpath = str(fpath_p)
-        raw = load_yaml_file_strict(fpath, default={})
+        raw = _load_tenant_file_profile_text(fpath)
         if not isinstance(raw, dict):
             continue
 
@@ -1007,6 +1035,8 @@ def check_profiles(config_dir: str) -> dict[str, object]:
             if not isinstance(t_data, dict):
                 continue
             tenant_count += 1
+            # A str whenever written as a scalar (#2297): a plain `123` is
+            # the name "123" and is checked, not skipped as an int.
             profile = t_data.get("_profile")
             if not profile or not isinstance(profile, str):
                 continue
@@ -1818,7 +1848,8 @@ def _flag_flat_reads(row: dict[str, object], flat_reads: list[FlatRead],
                      config_dir: str | None) -> dict[str, object]:
     """Stop a row whose verdict came from a FLAT reader passing as complete.
 
-    #1652 / #1911: `schema`, `routes`, `policy` and `policy_dsl` get their
+    #1652 / #1911 (until #2326 made the routing rows read the tree, only
+    `policy_dsl`'s lookup is left): `schema`, `routes`, `policy` and `policy_dsl` got their
     tenants from readers that read only the top level of the tree, while the
     exporter reads it recursively. On a tree whose tenants live in `prod/`
     those rows reported ``[PASS] routes  0 routes, 0 receivers`` and

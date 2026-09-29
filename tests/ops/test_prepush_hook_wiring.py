@@ -130,7 +130,7 @@ def _git(repo: Path, *args: str, **kw) -> subprocess.CompletedProcess:
     env.setdefault("GIT_COMMITTER_NAME", "t")
     env.setdefault("GIT_COMMITTER_EMAIL", "t@e")
     return subprocess.run(  # subprocess-timeout: ignore
-        ["git", *args], cwd=repo, capture_output=True, text=True, env=env, **kw
+        ["git", *args], cwd=repo, capture_output=True, text=True, encoding="utf-8", errors="replace", env=env, **kw
     )
 
 
@@ -187,7 +187,7 @@ def _install_precommit(work: Path) -> None:
     r = subprocess.run(  # subprocess-timeout: ignore
         [sys.executable, "-X", "utf8", "-m", "pre_commit", "install",
          "--hook-type", "pre-push"],
-        cwd=work, capture_output=True, text=True,
+        cwd=work, capture_output=True, text=True, encoding="utf-8", errors="replace",
     )
     assert r.returncode == 0, f"pre-commit install failed: {r.stdout}{r.stderr}"
     assert (work / ".git" / "hooks" / "pre-push").exists()
@@ -709,7 +709,7 @@ def test_guard_refuses_when_no_channel_carries_a_refspec(
     r = subprocess.run(  # subprocess-timeout: ignore
         [sys.executable, "-X", "utf8", "-m", "pre_commit", "run",
          "--all-files", "--hook-stage", "pre-push"],
-        cwd=work, capture_output=True, text=True,
+        cwd=work, capture_output=True, text=True, encoding="utf-8", errors="replace",
     )
     out = r.stdout + r.stderr
     assert r.returncode != 0, f"guard passed while blind:\n{out}"
@@ -867,7 +867,7 @@ def test_only_the_dispatcher_exports_the_caller_flag() -> None:
     before the environment. This only keeps the repo from being the source.
     """
     tracked = subprocess.run(  # subprocess-timeout: ignore
-        ["git", "ls-files"], cwd=_REPO_ROOT, capture_output=True, text=True,
+        ["git", "ls-files"], cwd=_REPO_ROOT, capture_output=True, text=True, encoding="utf-8", errors="replace",
     ).stdout.split()
     # ⛔ Must-respond control. A scan whose population is empty asserts nothing,
     # and `git ls-files` has returned zero rows in this repo before (in a
@@ -1008,7 +1008,7 @@ def test_stdin_wins_over_a_stray_precommit_environment(
     stdin = f"HEAD 1111111111111111111111111111111111111111 {piped_branch} 0\n"
     r = subprocess.run(  # subprocess-timeout: ignore
         [_BASH, "scripts/ops/protect_main_push.sh"],
-        cwd=work, input=stdin, capture_output=True, text=True,
+        cwd=work, input=stdin, capture_output=True, text=True, encoding="utf-8", errors="replace",
         env={**os.environ, "PRE_COMMIT": "1",
              "PRE_COMMIT_REMOTE_BRANCH": "refs/heads/main",
              "PRE_COMMIT_TO_REF": "2" * 40},
@@ -1498,7 +1498,7 @@ def test_the_resolved_bash_forwards_the_environment() -> None:
     """
     r = subprocess.run(  # subprocess-timeout: ignore
         [_BASH, "-c", 'printf "%s" "${PREPUSH_PROBE:-<unset>}"'],
-        capture_output=True, text=True,
+        capture_output=True, text=True, encoding="utf-8", errors="replace",
         env={**os.environ, "PREPUSH_PROBE": "carried"},
     )
     assert r.stdout.strip() == "carried", (

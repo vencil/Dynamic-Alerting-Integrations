@@ -16,6 +16,7 @@ import (
 	"path/filepath"
 	"runtime"
 	"sort"
+	"strings"
 	"testing"
 )
 
@@ -49,8 +50,9 @@ func loadRoutingPolicyMatrix(t *testing.T) []daGuardParityTree {
 		t.Fatalf("read matrix: %v", err)
 	}
 	var m struct {
-		Comment []string            `json:"_comment"`
-		Trees   []daGuardParityTree `json:"trees"`
+		Comment       []string            `json:"_comment"`
+		BlockingKinds json.RawMessage     `json:"blocking_kinds"`
+		Trees         []daGuardParityTree `json:"trees"`
 	}
 	dec := json.NewDecoder(bytes.NewReader(raw))
 	dec.DisallowUnknownFields()
@@ -70,19 +72,28 @@ type jsonFinding struct {
 	Field    string `json:"field"`
 }
 
+// writeParityTree writes files (root-relative slash paths, any depth —
+// #2326) under a fresh conf.d and returns it.
+func writeParityTree(t *testing.T, files map[string]string) string {
+	t.Helper()
+	dir := filepath.Join(t.TempDir(), "conf.d")
+	for rel, content := range files {
+		p := filepath.Join(dir, filepath.FromSlash(rel))
+		if err := os.MkdirAll(filepath.Dir(p), 0o755); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(p, []byte(content), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	return dir
+}
+
 // runTreeJSON writes files under a fresh conf.d and returns the exit code and
 // the report's findings.
 func runTreeJSON(t *testing.T, files map[string]string) (int, []jsonFinding, []string) {
 	t.Helper()
-	dir := filepath.Join(t.TempDir(), "conf.d")
-	if err := os.MkdirAll(dir, 0o755); err != nil {
-		t.Fatal(err)
-	}
-	for rel, content := range files {
-		if err := os.WriteFile(filepath.Join(dir, rel), []byte(content), 0o644); err != nil {
-			t.Fatal(err)
-		}
-	}
+	dir := writeParityTree(t, files)
 	code, stdout, stderr := runOnce(t, "--config-dir", dir, "--format", "json")
 	var doc struct {
 		ParseFailed []string `json:"parse_failed"`
@@ -114,6 +125,22 @@ func TestDaGuard_RoutingPolicyParityMatrix(t *testing.T) {
 			t.Parallel()
 			if len(tree.Expect) == 0 {
 				t.Fatal("tree expects nothing")
+			}
+			// #2326 (e): a duplicate tenant id is rejected by the exporter's
+			// own resolution before any check runs — exit 2 naming it, not a
+			// finding. The table's duplicate_tenant row is that refusal here.
+			for _, row := range tree.Platform {
+				if row[0] != "duplicate_tenant" {
+					continue
+				}
+				code, _, stderr := runOnce(t, "--config-dir", writeParityTree(t, tree.Files), "--format", "json")
+				tid := strings.TrimPrefix(row[2], "tenants.")
+				if code != exitCallerErr || !strings.Contains(stderr, "duplicate tenant ID") ||
+					!strings.Contains(stderr, tid) || !strings.Contains(stderr, filepath.FromSlash(row[1])) {
+					t.Errorf("duplicate tenant: exit %d, stderr %q; want exit %d naming %s in %s",
+						code, stderr, exitCallerErr, tid, row[1])
+				}
+				return
 			}
 			code, findings, parseFailed := runTreeJSON(t, tree.Files)
 			if code == exitCallerErr || code == exitParseFailed || len(parseFailed) > 0 {

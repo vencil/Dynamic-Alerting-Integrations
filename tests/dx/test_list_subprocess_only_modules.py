@@ -27,7 +27,7 @@ def _run(repo: Path, *extra: str) -> subprocess.CompletedProcess:
     return subprocess.run(
         [sys.executable, str(_TOOL), "--repo", str(repo), *extra],
         capture_output=True,
-        text=True,
+        text=True, encoding="utf-8", errors="replace",
         timeout=300,
     )
 

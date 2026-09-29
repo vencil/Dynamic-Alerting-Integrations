@@ -539,3 +539,48 @@ class TestCLI:
         # WARN only (not strict) → exit 0
         assert result.returncode == 0
         assert 'unknown-ref' in result.stderr
+
+
+# ===========================================================================
+# #2326: the lint walks the whole tree — shapes only a tree can have
+# ===========================================================================
+
+class TestTreeShapes:
+    """Paths the hierarchical walk added that no flat-tree test reaches."""
+
+    def test_profile_name_in_two_files_is_an_error_whatever_strict_says(self, config_dir):
+        """(c): one name, one file, across the tree — the route generator
+        refuses such a tree (rc 2), so the lint must not call it clean."""
+        _write(config_dir, '_routing_profiles.yaml',
+               {'routing_profiles': {'shared': {'receiver': {'type': 'slack'}}}})
+        os.makedirs(os.path.join(config_dir, 'team'))
+        _write(os.path.join(config_dir, 'team'), '_routing_profiles.yaml',
+               {'routing_profiles': {'shared': {'receiver': {'type': 'webhook'}}}})
+        data = _collect_data(config_dir)
+        assert data["profile_duplicates"] == [
+            ('shared', '_routing_profiles.yaml', 'team/_routing_profiles.yaml')]
+        for strict in (False, True):
+            msgs = validate(data, strict=strict)
+            dup = [m for m in msgs if "'shared'" in m and "defined in both" in m]
+            assert len(dup) == 1 and dup[0].startswith("ERROR"), msgs
+
+    def test_config_named_directory_below_the_root_is_one_unreadable_finding(self, config_dir):
+        """#1469 shape one level down: a directory named like a config file
+        is reported once as unreadable, not silently skipped."""
+        os.makedirs(os.path.join(config_dir, 'team', 'beta.yaml'))
+        _write(config_dir, 'alpha.yaml', {'tenants': {'alpha': {}}})
+        data = _collect_data(config_dir)
+        assert data["unreadable_files"] == ['team/beta.yaml'], data["unreadable_files"]
+        assert len(data["unreadable"]) == 1 and data["unreadable"][0].startswith(
+            'team/beta.yaml: '), data["unreadable"]
+
+    def test_hand_built_data_without_tree_levels_uses_the_flat_profile_view(self):
+        """`validate` on a dict with no `profiles_by_dir` (built by hand, not
+        by `_collect_data`) resolves references against `profiles` as a
+        whole, as before the tree walk."""
+        data = {
+            'profiles': {'p1': {}}, 'policies': {}, 'tenant_ids': {'alpha'},
+            'profile_refs': {'alpha': 'p1'},
+        }
+        msgs = validate(data, strict=True)
+        assert not any("unknown profile" in m for m in msgs), msgs

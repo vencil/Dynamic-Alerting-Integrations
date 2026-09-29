@@ -38,6 +38,11 @@ from _lib_python import (  # noqa: E402
     VALID_RESERVED_KEYS,
     VALID_RESERVED_PREFIXES,
 )
+from _grar_merge import (  # noqa: E402  (#2326 directory scope)
+    ROOT_LEVEL,
+    level_contains,
+    visible_routing_profiles,
+)
 
 
 def _extract_host(value: str | None) -> str | None:
@@ -1002,14 +1007,76 @@ def _validate_profile_refs(parsed: dict) -> list[str]:
     Returns list of warning messages.
     """
     warnings: list[str] = []
-    profiles = parsed.get("routing_profiles", {})
     refs = parsed.get("tenant_profile_refs", {})
+    tenant_dirs = parsed.get("tenant_dirs", {})
+    origin = parsed.get("routing_profile_origin", {})
     for tenant, profile_name in sorted(refs.items()):
-        if profile_name not in profiles:
+        # #2326: a profile is visible from its own directory level down, so
+        # "unknown" is judged against what THIS tenant's chain can see.
+        visible = visible_routing_profiles(
+            parsed, tenant_dirs.get(tenant, ROOT_LEVEL))
+        if profile_name not in visible:
+            where = origin.get(profile_name)
+            extra = (f" (a profile of that name is defined in {where}, which "
+                     f"is not on this tenant's directory chain — a profile is "
+                     f"visible only to tenants at its own level or below)"
+                     if where else "")
             warnings.append(
                 f"  WARN: {tenant}: _routing_profile references unknown "
-                f"profile '{profile_name}'")
+                f"profile '{profile_name}'{extra}")
     return warnings
+
+
+def check_policy_scope(
+    scope: str,
+    domain_policies: dict,
+    tenant_dirs: dict[str, str],
+    *,
+    source: str,
+    strict: bool = False,
+) -> tuple[list[str], list[tuple[str, str]]]:
+    """#2326 (d): a subtree policy may name only tenants of its subtree.
+
+    *scope* is the directory the policy file sits in (never the root: a
+    root policy covers every tenant). A `tenants:` entry declared in a tenant
+    file OUTSIDE that subtree is a finding — ERROR under ``--strict``, WARN
+    otherwise — worded apart from "tenant not found": the tenant exists, the
+    policy simply cannot reach it, so the entry is not enforced. A tenant no
+    file declares is left to the lint that reports unknown tenants
+    (``check_routing_profiles``), as for a root policy.
+
+    Returns ``(messages, [(domain, tenant), ...])``.
+    """
+    messages: list[str] = []
+    rows: list[tuple[str, str]] = []
+    # Same two spellings as check_domain_policies' (the --strict consumers
+    # select on POLICY_ERROR_PREFIX).
+    severity = (POLICY_ERROR_PREFIX if strict else "WARN:").rstrip(":")
+    for name, policy in sorted(domain_policies.items()):
+        if not isinstance(policy, dict):
+            continue
+        tenants = policy.get("tenants", [])
+        if not isinstance(tenants, list):
+            continue
+        for t in tenants:
+            if not isinstance(t, str):
+                continue  # not a tenant id; check_domain_policies names it
+            where = tenant_dirs.get(t)
+            if where is None or level_contains(scope, where):
+                continue
+            rows.append((name, t))
+            msg = (f"  {severity}: domain_policy '{name}' in {source} names "
+                   f"tenant '{t}', which lives outside this policy's subtree "
+                   f"{scope}/ (its file is in "
+                   f"{'the conf.d root' if where == ROOT_LEVEL else where + '/'})"
+                   f" — a policy below the conf.d root applies only to the "
+                   f"tenants in its own subtree, so this entry is NOT enforced")
+            if strict:
+                msg += (f" — fix: move the entry to a _domain_policy.yaml at "
+                        f"or above the tenant's directory, or drop '{t}' from "
+                        f"this policy")
+            messages.append(msg)
+    return messages, rows
 
 
 # ── ADR-007 --strict: blocking-error prefix (single source of truth) ──
@@ -1036,6 +1103,21 @@ def is_receiver_name_collision(line: str) -> bool:
     return line.lstrip().startswith(RECEIVER_NAME_COLLISION_PREFIX)
 
 
+# ── #2326: a conf.d tree the routing plane refuses (blocking in EVERY mode) ─
+# ADR-017 "Amendment 2026-09-28": `_routing_enforced` below the root, a
+# `receiver` / `overrides` written as null in a subdirectory level's
+# `_routing_defaults`, one routing-profile name defined in two files. (One
+# tenant id declared in two files is `DUPLICATE_TENANT_PREFIX` below, #2315 —
+# not a warning-stream line.) The generator exits EXIT_CALLER_ERROR
+# before anything is rendered; validate-config's schema row FAILs on it
+# (``blocking_generation_errors``). Not `POLICY_ERROR_PREFIX` — none of these
+# is a domain-policy finding, and none waits for --strict.
+ROUTING_TREE_ERROR_PREFIX = "ERROR (routing tree):"
+
+
+def is_routing_tree_error(line: str) -> bool:
+    """True for a #2326 routing-tree line in the warning stream."""
+    return line.lstrip().startswith(ROUTING_TREE_ERROR_PREFIX)
 # ── #2315: one tenant id declared by two tenant files (blocking in EVERY mode) ──
 # The exporter's walker refuses such a tree WHOLE (`*DuplicateTenantError`,
 # pkg/config/tree_scan.go), and so does da-guard. This reader used to merge
@@ -1076,10 +1158,12 @@ def blocking_generation_errors(warnings: list[str]) -> list[str]:
     ``schema`` / ``routes`` rows. #2164 was two spellings of this predicate
     drifting apart (validate-config showed a WARN row at exit 0 while
     ``--validate`` failed); a new blocking category added to one copy only
-    reopens exactly that. Two categories today:
+    reopens exactly that. Three categories today:
 
     * ``WARN … skipping`` — a config entry was dropped as unusable;
-    * a duplicate generated receiver name (#2279).
+    * a duplicate generated receiver name (#2279);
+    * a conf.d tree the routing plane refuses (#2326,
+      ``ROUTING_TREE_ERROR_PREFIX``).
 
     ADR-007 ``--strict`` policy errors are NOT in here: they are blocking only
     under ``--strict`` and each caller already selects them by
@@ -1087,7 +1171,8 @@ def blocking_generation_errors(warnings: list[str]) -> list[str]:
     """
     return [w for w in warnings
             if ("WARN" in w and "skipping" in w)
-            or is_receiver_name_collision(w)]
+            or is_receiver_name_collision(w)
+            or is_routing_tree_error(w)]
 
 
 def receiver_name_collisions(labelled: list[tuple[str, str]]) -> list[str]:
@@ -1132,6 +1217,61 @@ DEPRECATED_KEY_ALIASES = {
     # never host CPU% — the poisoned name is being retired.
     "mysql_cpu": "mysql_threads_running",
 }
+
+_LEGACY_BY_CANONICAL = {canon: legacy for legacy, canon in DEPRECATED_KEY_ALIASES.items()}
+
+
+def _legacy_tenant_key(key: str) -> "str | None":
+    """Go `legacySpellingFor`: the deprecated spelling of a canonical key
+    (exact, `_critical`-suffixed, dimensional), or None."""
+    if key in _LEGACY_BY_CANONICAL:
+        return _LEGACY_BY_CANONICAL[key]
+    if key.endswith("_critical"):
+        base = key.removesuffix("_critical")
+        if base in _LEGACY_BY_CANONICAL:
+            return _LEGACY_BY_CANONICAL[base] + "_critical"
+    brace = key.find("{")
+    if brace > 0 and key[:brace] in _LEGACY_BY_CANONICAL:
+        return _LEGACY_BY_CANONICAL[key[:brace]] + key[brace:]
+    return None
+
+
+def _other_tenant_key_spellings(key: object) -> "list[str]":
+    """Go `otherSpellings`: every spelling of `key`'s threshold but `key`.
+    Empty for a key no alias touches — every routing / reserved key."""
+    if not isinstance(key, str):
+        return []  # a non-text YAML key names no aliased threshold
+    canon, _ = _canonical_tenant_key(key)
+    out = [canon] if canon != key else []
+    legacy = _legacy_tenant_key(canon)
+    if legacy is not None and legacy != key:
+        out.append(legacy)
+    return out
+
+
+def drop_shadowed_spellings(m: dict) -> dict:
+    """Go `dropShadowedSpellings` / resolve's canonical-wins dedup inside
+    ONE layer: a deprecated spelling whose canonical spelling the same map
+    also sets is dropped (a lone deprecated spelling is kept, not renamed).
+    Returns `m` itself when nothing is dropped."""
+    drop = [k for k in m if isinstance(k, str)
+            and _canonical_tenant_key(k)[1] and _canonical_tenant_key(k)[0] in m]
+    if not drop:
+        return m
+    return {k: v for k, v in m.items() if k not in drop}
+
+
+def overlay_across_spellings(dst: dict, src: dict) -> None:
+    """Go `overlayAcrossSpellings` (#2368): `src` over `dst` per THRESHOLD,
+    not per spelling — a key `src` writes also drops from `dst` every other
+    spelling of it that `src` does not write itself. For a key no alias
+    touches (every routing and reserved key) this is exactly
+    ``dst.update(src)``."""
+    for k, v in src.items():
+        for s in _other_tenant_key_spellings(k):
+            if s not in src:
+                dst.pop(s, None)
+        dst[k] = v
 
 # Prometheus/Go-style duration grammar for domain-policy checks: one or
 # more <number><unit> tokens (multi-unit "1h30m", fractional "1.5h") or
@@ -1663,6 +1803,19 @@ def check_domain_policies(
                 min_sec = _parse_policy_duration(min_group_wait)
 
         for tenant in tenants:
+            # #2326 review F4: a `tenants:` entry that is not a scalar id (a
+            # mapping, a list) is unhashable and crashed the run here with a
+            # TypeError. It names no tenant, so it enforces nothing — strict
+            # says so (fail loud), lenient skips it, as for the other
+            # malformed shapes above.
+            if not isinstance(tenant, str):
+                if strict:
+                    messages.append(_fmt(
+                        f"domain_policy '{policy_name}': 'tenants' entry "
+                        f"must be a tenant id, got {type(tenant).__name__} "
+                        f"— the entry cannot be enforced",
+                        "list each tenant id as a plain YAML scalar"))
+                continue
             if tenant not in routing_configs:
                 continue
             # #2243: a sub-route that renders its own AM receiver

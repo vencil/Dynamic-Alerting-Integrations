@@ -41,7 +41,7 @@ def _render(chart_dir: Path, *, sets: dict[str, str] | None = None,
         cmd += ["--set", f"{k}={v}"]
     if values_file is not None:
         cmd += ["-f", str(values_file)]
-    out = subprocess.run(cmd, capture_output=True, text=True, check=True, timeout=30)
+    out = subprocess.run(cmd, capture_output=True, text=True, encoding="utf-8", errors="replace", check=True, timeout=30)
     return [d for d in yaml.safe_load_all(out.stdout) if d]
 
 
@@ -50,7 +50,7 @@ def _render_failing(chart_dir: Path, sets: dict[str, str]) -> subprocess.Complet
     cmd = ["helm", "template", "test-release", str(chart_dir), "-n", "monitoring"]
     for k, v in sets.items():
         cmd += ["--set", f"{k}={v}"]
-    return subprocess.run(cmd, capture_output=True, text=True, check=False, timeout=30)
+    return subprocess.run(cmd, capture_output=True, text=True, encoding="utf-8", errors="replace", check=False, timeout=30)
 
 
 # ──────────────────────────────────────────────────────────────────────────────
@@ -522,7 +522,7 @@ class TestChargebackAggregator:
 def _egress_lint(repo_root: Path, extra_args: list[str]) -> subprocess.CompletedProcess:
     """Run the egress gate; return CompletedProcess (caller asserts rc/stdout)."""
     cmd = ["python3", str(repo_root / "scripts/tools/lint/check_log_egress_policy.py")] + extra_args
-    return subprocess.run(cmd, capture_output=True, text=True, check=False, timeout=60, cwd=repo_root)
+    return subprocess.run(cmd, capture_output=True, text=True, encoding="utf-8", errors="replace", check=False, timeout=60, cwd=repo_root)
 
 
 class TestLogEgressPolicy:

@@ -228,6 +228,163 @@ class TestRenderCrFile:
             rc = render_cr_file(cr_path, Path(d))
             assert rc == EXIT_CALLER_ERROR
 
+    _K = "kind: ThresholdConfig\n"
+    _T = "spec:\n  tenants:\n    t1: {}\n"
+    _NOT_TC = "is not a ThresholdConfig resource"
+    _BAD_NAME = "metadata.name must be a non-empty string"
+    _BAD_SPEC = "spec must be a mapping"
+
+    @pytest.mark.parametrize("text, message", [
+        pytest.param("- kind: ThresholdConfig\n", _NOT_TC,
+                     id="non-empty-list"),
+        pytest.param("just-a-string\n", _NOT_TC, id="scalar"),
+        pytest.param("42\n", _NOT_TC, id="int"),
+        pytest.param("null\n", _NOT_TC, id="null-document"),
+        pytest.param("[]\n", _NOT_TC, id="empty-list"),
+        pytest.param("kind: Foo\n", _NOT_TC, id="wrong-kind-control"),
+        pytest.param(_K + _T, _BAD_NAME, id="metadata-missing"),
+        pytest.param(_K + "metadata: [x]\n" + _T, _BAD_NAME,
+                     id="metadata-list"),
+        pytest.param(_K + "metadata: null\n" + _T, _BAD_NAME,
+                     id="metadata-null"),
+        pytest.param(_K + "metadata: {namespace: n}\n" + _T, _BAD_NAME,
+                     id="name-missing"),
+        pytest.param(_K + 'metadata: {name: ""}\n' + _T, _BAD_NAME,
+                     id="name-empty"),
+        pytest.param(_K + "metadata: {name: [a]}\n" + _T, _BAD_NAME,
+                     id="name-list"),
+        pytest.param(_K + "metadata: {name: null}\n" + _T, _BAD_NAME,
+                     id="name-null"),
+        pytest.param(_K + "metadata: {name: ~}\n" + _T, _BAD_NAME,
+                     id="name-tilde"),
+        pytest.param(_K + "metadata: {name: ok}\nspec: [x]\n", _BAD_SPEC,
+                     id="spec-list"),
+        pytest.param(_K + "metadata: {name: ok}\nspec: hello\n", _BAD_SPEC,
+                     id="spec-scalar"),
+        pytest.param(_K + "metadata: {name: ok}\nspec: null\n", _BAD_SPEC,
+                     id="spec-null"),
+    ])
+    def test_malformed_cr_is_caller_error(
+            self, text, message, tmp_path, caplog):
+        """#2371 (b)：形狀不對的 CR 一律 rc 2、一行訊息、不寫任何檔案。
+
+        先前頂層 list／純量在 `cr.get("kind")` 丟 AttributeError；缺
+        metadata／name 在 reconcile_one 的 try 外丟 KeyError／TypeError，
+        兩者都是 traceback rc 1。name 為空或不是字串時會寫出 `.yaml`、
+        `42.yaml` 這類檔名。spec 不是 mapping 則被 reconcile_one 的
+        except 吞掉，rc 0 卻什麼都沒寫。
+        """
+        cr_path = tmp_path / "cr.yaml"
+        cr_path.write_text(text, encoding="utf-8")
+        out_dir = tmp_path / "out"
+        out_dir.mkdir()
+        rc = render_cr_file(cr_path, out_dir)
+        assert rc == EXIT_CALLER_ERROR
+        assert message in caplog.text
+        assert list(out_dir.iterdir()) == []
+
+    # Unquoted names YAML 1.1 (PyYAML resolver, measured) types as int /
+    # float / bool are a caller error. This is CLOSE TO, not the same as,
+    # what Kubernetes sees after YAML→JSON (sigs.k8s.io/yaml, go-yaml v2).
+    # Known differences, deliberately NOT asserted (the #2371 contract is
+    # "YAML 1.1 as PyYAML reads it", not "as Kubernetes reads it"):
+    #   `0o17`  PyYAML str (1.1 has no 0o)       go-yaml int
+    #   `1e3`   PyYAML str (1.1 float needs `.`) go-yaml float
+    #   `08`    PyYAML str (not valid octal)     go-yaml differs
+    #   `y`/`n` PyYAML str                       go-yaml v2 bool
+    #   `1:30`  PyYAML int (sexagesimal)         go-yaml string
+    # Shapes let through here cannot be created in a cluster anyway (not a
+    # DNS-1123 name), and the name format itself is not checked.
+    @pytest.mark.parametrize("name, kind", [
+        pytest.param("42", "int", id="name-int"),
+        pytest.param("8", "int", id="name-int-8"),
+        pytest.param("010", "int", id="name-int-octal"),
+        pytest.param("0x1F", "int", id="name-int-hex"),
+        pytest.param("1:30", "int", id="name-int-sexagesimal"),
+        pytest.param("-5", "int", id="name-int-negative"),
+        pytest.param("1.5", "float", id="name-float"),
+        pytest.param(".inf", "float", id="name-float-inf"),
+        pytest.param("true", "bool", id="name-bool-true"),
+        pytest.param("yes", "bool", id="name-bool-yes"),
+        pytest.param("off", "bool", id="name-bool-off"),
+    ])
+    def test_non_string_name_is_caller_error(
+            self, name, kind, tmp_path, caplog):
+        """#2371：未加引號、YAML 會解成數字／布林的 name 一律 rc 2。
+
+        以 YAML 1.1（PyYAML）的隱式型別判定，與 Kubernetes 經 YAML→JSON
+        後的型別大致相同但不完全一致（見上方註解）。訊息要指名型別，並說明
+        加引號只讓它變成字串，名稱格式（DNS-1123）本工具不檢查。
+        """
+        cr_path = tmp_path / "cr.yaml"
+        cr_path.write_text(
+            self._K + f"metadata: {{name: {name}}}\n" + self._T,
+            encoding="utf-8")
+        out_dir = tmp_path / "out"
+        out_dir.mkdir()
+        assert render_cr_file(cr_path, out_dir) == EXIT_CALLER_ERROR
+        assert "metadata.name must be a string" in caplog.text
+        assert f"read as {kind}" in caplog.text
+        assert "Quoting makes it a string" in caplog.text
+        assert "DNS-1123" in caplog.text
+        assert list(out_dir.iterdir()) == []
+
+    @pytest.mark.parametrize("spec", [
+        pytest.param("", id="spec-missing"),
+        pytest.param("spec: {}\n", id="spec-empty"),
+    ])
+    def test_absent_or_empty_spec_still_renders(self, spec, tmp_path):
+        """#2371：缺 spec 維持既有行為，等同 `spec: {}`，只寫 header。
+
+        只有「spec 存在但不是 mapping」算 caller error。缺 spec 與空 spec
+        先前都是 rc 0 並寫出檔案，本次刻意不改。
+        """
+        cr_path = tmp_path / "cr.yaml"
+        cr_path.write_text(self._K + "metadata: {name: ok}\n" + spec,
+                           encoding="utf-8")
+        out_dir = tmp_path / "out"
+        out_dir.mkdir()
+        assert render_cr_file(cr_path, out_dir) == 0
+        assert (out_dir / "ok.yaml").exists()
+
+    @pytest.mark.parametrize("name, want", [
+        pytest.param("2024-01-01", "2024-01-01", id="date"),
+        # PyYAML's date resolver needs two-digit month/day: this one stays str.
+        pytest.param("2024-1-1", "2024-1-1", id="date-short-is-str"),
+        pytest.param('"2024-01-01"', "2024-01-01", id="quoted-date"),
+        pytest.param("2024-01-01T10:20:30Z", "2024-01-01T10:20:30Z",
+                     id="name-datetime"),
+        pytest.param("2024-01-01 10:20:30", "2024-01-01 10:20:30",
+                     id="name-datetime-space"),
+        pytest.param('"010"', "010", id="quoted-int"),
+        pytest.param("'0x1F'", "0x1F", id="quoted-hex"),
+        pytest.param('"1.5"', "1.5", id="quoted-float"),
+        pytest.param('"yes"', "yes", id="quoted-bool"),
+        pytest.param('"null"', "null", id="quoted-null"),
+        pytest.param("!!str 010", "010", id="tagged-str-int"),
+        # Only a PLAIN scalar is RawPlain: an explicit tag still builds a
+        # `date` object. Rendered `2024-01-01.yaml` before #2371 (rc 0).
+        pytest.param('!!timestamp "2024-01-01"', "2024-01-01",
+                     id="tagged-timestamp-date"),
+    ])
+    def test_string_name_renders_as_written(self, name, want, tmp_path):
+        """#2371：字串 name 照原文收，檔名與檔頭用原文。
+
+        未加引號的日期／日期時間照原文收；加了引號（或 `!!str`）的任何值
+        同理。明示 `!!timestamp` 的日期是 `date` 物件，轉 isoformat 後照收。
+        """
+        cr_path = tmp_path / "cr.yaml"
+        cr_path.write_text(
+            self._K + f"metadata: {{name: {name}}}\n" + self._T,
+            encoding="utf-8")
+        out_dir = tmp_path / "out"
+        out_dir.mkdir()
+        assert render_cr_file(cr_path, out_dir) == 0
+        assert [p.name for p in out_dir.iterdir()] == [f"{want}.yaml"]
+        header = (out_dir / f"{want}.yaml").read_text(
+            encoding="utf-8").split("\n")[0]
+        assert header.endswith(f"/{want}"), header
+
 
 class TestSignalHandler:
     """_signal_handler() 測試。"""

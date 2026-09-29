@@ -261,14 +261,14 @@ _BASH = shutil.which("bash")
 
 @pytest.mark.skipif(_BASH is None, reason="bash not on PATH — ground truth not measured")
 def test_ground_truth_long_flag_read_is_unreachable():
-    p = subprocess.run([_BASH, "-c", _STRICT_LONG], capture_output=True, text=True, timeout=30)
+    p = subprocess.run([_BASH, "-c", _STRICT_LONG], capture_output=True, text=True, encoding="utf-8", errors="replace", timeout=30)
     assert p.returncode != 0 and "reached" not in p.stdout
 
 
 @pytest.mark.skipif(_BASH is None, reason="bash not on PATH — ground truth not measured")
 def test_ground_truth_set_dashdash_keeps_errexit():
     p = subprocess.run([_BASH, "-c", "set -e; set -- +e; [[ -o errexit ]] && echo on"],
-                       capture_output=True, text=True, timeout=30)
+                       capture_output=True, text=True, encoding="utf-8", errors="replace", timeout=30)
     assert p.stdout.strip() == "on"
 
 
@@ -276,7 +276,7 @@ def test_ground_truth_set_dashdash_keeps_errexit():
 def test_ground_truth_split_cluster_arms_both():
     p = subprocess.run([_BASH, "-c", "set -eu\\\no pipefail\n"
                         "[[ -o errexit && -o pipefail ]] && echo both"],
-                       capture_output=True, text=True, timeout=30)
+                       capture_output=True, text=True, encoding="utf-8", errors="replace", timeout=30)
     assert p.stdout.strip() == "both"
 
 
@@ -287,7 +287,7 @@ def test_ground_truth_split_cluster_arms_both():
 ])
 def test_ground_truth_subshell_set_does_not_relax(relax, relaxed):
     script = f"set -euo pipefail\n{relax}\nwait\nfalse | cat\necho reached\n"
-    p = subprocess.run([_BASH, "-c", script], capture_output=True, text=True, timeout=30)
+    p = subprocess.run([_BASH, "-c", script], capture_output=True, text=True, encoding="utf-8", errors="replace", timeout=30)
     assert ("reached" in p.stdout) is relaxed
     assert lint._relaxes(relax) is relaxed
 
@@ -295,7 +295,7 @@ def test_ground_truth_subshell_set_does_not_relax(relax, relaxed):
 @pytest.mark.skipif(_BASH is None, reason="bash not on PATH — ground truth not measured")
 def test_ground_truth_async_read_is_reachable():
     p = subprocess.run([_BASH, "-c", _ASYNC.replace("{EXEMPT}", "")],
-                       capture_output=True, text=True, timeout=30)
+                       capture_output=True, text=True, encoding="utf-8", errors="replace", timeout=30)
     assert p.returncode == 0 and "reached" in p.stdout
 
 

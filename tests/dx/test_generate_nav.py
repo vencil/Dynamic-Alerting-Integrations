@@ -41,7 +41,7 @@ EXIT_CALLER_ERROR = 2
 def _run(repo: Path, *args: str) -> subprocess.CompletedProcess:
     return subprocess.run(
         [sys.executable, str(TOOL), "--repo-root", str(repo), *args],
-        capture_output=True, text=True, timeout=60,
+        capture_output=True, text=True, encoding="utf-8", errors="replace", timeout=60,
     )
 
 
@@ -94,7 +94,7 @@ def test_a_retired_flag_is_rejected_not_silently_ignored(flag):
     """
     proc = subprocess.run(
         [sys.executable, str(TOOL), "--repo-root", ".", flag],
-        capture_output=True, text=True, timeout=60,
+        capture_output=True, text=True, encoding="utf-8", errors="replace", timeout=60,
     )
     assert proc.returncode == EXIT_CALLER_ERROR, (
         f"{flag} 應被 argparse 拒絕（rc {EXIT_CALLER_ERROR}），實得 rc={proc.returncode}。"

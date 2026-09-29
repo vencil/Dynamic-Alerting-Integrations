@@ -1935,7 +1935,7 @@ def _tracked_markdown() -> list[str]:
     """
     out = subprocess.run(
         ["git", "ls-files", "-z", "*.md"],
-        cwd=_REPO_ROOT, capture_output=True, text=True, check=False,
+        cwd=_REPO_ROOT, capture_output=True, text=True, encoding="utf-8", errors="surrogateescape", check=False,
         stdin=subprocess.DEVNULL, timeout=120,
     )
     pages = [p for p in out.stdout.split("\0") if p]

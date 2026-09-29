@@ -24,8 +24,8 @@
     "walker (and that walker agrees with those three); Python dedup/group_wait and walker.",
     "A tenant file whose FIRST document does not parse declares nothing on either",
     "side (Go: walker parse failure; Python: declared_tenant_ids skips it).",
-    "The routing plane is flat by design, so a tenant declared only in a",
-    "subdirectory has dedup null while it still EXISTS for platform-file purposes.",
+    "#2326: the routing plane reads the whole tree (ADR-017 amendment 2026-09-28), so a tenant",
+    "declared only in a subdirectory has its dedup there too; a nested platform file still adds none.",
     "Measured on main 19dc4c76 before the fix: c1 rows served tx on /metrics;",
     "c3 TX.yaml / 0tx.yaml served 60 (tx.yaml 70); c2-c5 tx.yaml gave dedup",
     "enable (TX.yaml / 0tx.yaml disable).",
@@ -56,7 +56,18 @@
     "tenant_api is a threshold column only: on platform-metadata-is-never-inherited-or-listed",
     "its 60 is mysql_connections. The core does NOT inherit the platform entry's _metadata",
     "(the walker rule), while /metrics' ResolveMetadata does - a deliberate divergence",
-    "pinned by pkg/config TestMergeTenantPlatformLayerMatchesMetrics, not by this table."
+    "pinned by pkg/config TestMergeTenantPlatformLayerMatchesMetrics, not by this table.",
+    "#2368 a-rows (#1231 alias spellings): a tree may name metric_key (default",
+    "mysql_connections), the threshold its metric / tenant_api columns read; for",
+    "mysql_threads_running Go also requires the legacy twin (metric=\"cpu\") to carry",
+    "the same value. The tenant file wins per THRESHOLD, not per spelling: a tenant",
+    "mysql_cpu beats a platform mysql_threads_running and vice versa, and",
+    "platform_overlay names the canonical spelling. The walker effective_config keeps",
+    "each layer's own spelling (not canonicalized), so Go reads the legacy spelling",
+    "first when checking it against /metrics - sound only because no a-row sets a",
+    "legacy spelling in the defaults chain. Measured on main f806e092 before the fix:",
+    "a1 served 70 on /metrics and the tenant-api core, walker attributed",
+    "mysql_threads_running to _defaults.yaml."
   ],
   "trees": [
     {
@@ -369,7 +380,7 @@
         "tx": {
           "metric": 70,
           "tenant_api": null,
-          "dedup": null,
+          "dedup": "enable",
           "group_wait": null,
           "exporter_dedup": "enable",
           "silent_mode": "",
@@ -936,7 +947,7 @@
         "tx": {
           "metric": 60,
           "tenant_api": null,
-          "dedup": null,
+          "dedup": "enable",
           "group_wait": null,
           "exporter_dedup": "enable",
           "silent_mode": "",
@@ -1132,7 +1143,7 @@
         "tx": {
           "metric": 80,
           "tenant_api": null,
-          "dedup": null,
+          "dedup": "enable",
           "group_wait": null,
           "exporter_dedup": "enable",
           "silent_mode": "",
@@ -1167,6 +1178,141 @@
               "mysql_connections": 60
             },
             "platform_overlay": null,
+            "profile_overlay": null
+          }
+        }
+      }
+    },
+    {
+      "name": "a1-alias-tenant-legacy-beats-platform-canonical",
+      "metric_key": "mysql_threads_running",
+      "files": {
+        "_defaults.yaml": "defaults:\n  mysql_threads_running: 30\ntenants:\n  tx:\n    mysql_threads_running: 70\n",
+        "tx.yaml": "tenants:\n  tx:\n    mysql_cpu: \"90\"\n"
+      },
+      "expect": {
+        "tx": {
+          "metric": 90,
+          "tenant_api": 90,
+          "dedup": "enable",
+          "group_wait": null,
+          "exporter_dedup": "enable",
+          "silent_mode": "",
+          "walker": {
+            "effective_config": {
+              "mysql_cpu": "90",
+              "mysql_threads_running": 30
+            },
+            "platform_overlay": null,
+            "profile_overlay": null
+          }
+        }
+      }
+    },
+    {
+      "name": "a2-alias-tenant-canonical-beats-platform-legacy",
+      "metric_key": "mysql_threads_running",
+      "files": {
+        "_defaults.yaml": "defaults:\n  mysql_threads_running: 30\ntenants:\n  tx:\n    mysql_cpu: 70\n",
+        "tx.yaml": "tenants:\n  tx:\n    mysql_threads_running: \"90\"\n"
+      },
+      "expect": {
+        "tx": {
+          "metric": 90,
+          "tenant_api": 90,
+          "dedup": "enable",
+          "group_wait": null,
+          "exporter_dedup": "enable",
+          "silent_mode": "",
+          "walker": {
+            "effective_config": {
+              "mysql_threads_running": "90"
+            },
+            "platform_overlay": null,
+            "profile_overlay": null
+          }
+        }
+      }
+    },
+    {
+      "name": "a3-alias-control-same-spelling-both-files",
+      "metric_key": "mysql_threads_running",
+      "files": {
+        "_defaults.yaml": "defaults:\n  mysql_threads_running: 30\ntenants:\n  tx:\n    mysql_threads_running: 70\n",
+        "tx.yaml": "tenants:\n  tx:\n    mysql_threads_running: \"90\"\n"
+      },
+      "expect": {
+        "tx": {
+          "metric": 90,
+          "tenant_api": 90,
+          "dedup": "enable",
+          "group_wait": null,
+          "exporter_dedup": "enable",
+          "silent_mode": "",
+          "walker": {
+            "effective_config": {
+              "mysql_threads_running": "90"
+            },
+            "platform_overlay": null,
+            "profile_overlay": null
+          }
+        }
+      }
+    },
+    {
+      "name": "a4-alias-control-tenant-legacy-no-platform-entry",
+      "metric_key": "mysql_threads_running",
+      "files": {
+        "_defaults.yaml": "defaults:\n  mysql_threads_running: 30\n",
+        "tx.yaml": "tenants:\n  tx:\n    mysql_cpu: \"90\"\n"
+      },
+      "expect": {
+        "tx": {
+          "metric": 90,
+          "tenant_api": 90,
+          "dedup": "enable",
+          "group_wait": null,
+          "exporter_dedup": "enable",
+          "silent_mode": "",
+          "walker": {
+            "effective_config": {
+              "mysql_cpu": "90",
+              "mysql_threads_running": 30
+            },
+            "platform_overlay": null,
+            "profile_overlay": null
+          }
+        }
+      }
+    },
+    {
+      "name": "a5-alias-platform-legacy-only-attributed-canonical",
+      "metric_key": "mysql_threads_running",
+      "files": {
+        "_defaults.yaml": "defaults:\n  mysql_threads_running: 30\ntenants:\n  tx:\n    mysql_cpu: 70\n",
+        "tx.yaml": "tenants:\n  tx: {}\n"
+      },
+      "expect": {
+        "tx": {
+          "metric": 70,
+          "tenant_api": 70,
+          "dedup": "enable",
+          "group_wait": null,
+          "exporter_dedup": "enable",
+          "silent_mode": "",
+          "walker": {
+            "effective_config": {
+              "mysql_cpu": 70,
+              "mysql_threads_running": 30
+            },
+            "platform_overlay": [
+              {
+                "file": "_defaults.yaml",
+                "keys": [
+                  "mysql_threads_running"
+                ]
+              }
+            ],
             "profile_overlay": null
           }
         }

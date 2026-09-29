@@ -37,6 +37,9 @@ MATRIX = json.loads((Path(__file__).parent / "platform_tenant_overlay_matrix.jso
 # read as absent turns a row into one that tests nothing while staying green.
 TOP_KEYS = {"_comment", "trees"}
 TREE_KEYS = {"name", "files", "expect"}
+# #2368: the alias rows name the threshold their Go `metric` / `tenant_api`
+# columns read; optional, and only ever a key this half does not assert.
+OPTIONAL_TREE_KEYS = {"metric_key"}
 # `metric` / `tenant_api` / `exporter_dedup` / `silent_mode` are the Go
 # half's columns (`tenant_api` is the tenant-api merge core, #2208); this half
 # asserts `dedup` / `group_wait` / `walker` and only pins the key set of the
@@ -53,12 +56,18 @@ def test_matrix_is_not_vacuous() -> None:
     for fname in ("tx.yaml", "TX.yaml", "0tx.yaml"):
         assert f"c2-c5-platform-only-keys-tenant-file-{fname}" in names
         assert f"c3-same-key-both-files-tenant-file-{fname}" in names
+    # #2368: both cross-spelling directions and their same-spelling control.
+    for row in ("a1-alias-tenant-legacy-beats-platform-canonical",
+                "a2-alias-tenant-canonical-beats-platform-legacy",
+                "a3-alias-control-same-spelling-both-files"):
+        assert row in names, row
 
 
 def test_matrix_keys_are_exactly_the_known_ones() -> None:
     assert set(MATRIX) == TOP_KEYS, set(MATRIX) ^ TOP_KEYS
     for tree in MATRIX["trees"]:
-        assert set(tree) == TREE_KEYS, (tree.get("name"), set(tree) ^ TREE_KEYS)
+        assert TREE_KEYS <= set(tree) <= TREE_KEYS | OPTIONAL_TREE_KEYS, (
+            tree.get("name"), set(tree) ^ TREE_KEYS)
         for tenant, want in tree["expect"].items():
             assert set(want) == EXPECT_KEYS, (tree["name"], tenant, set(want) ^ EXPECT_KEYS)
             walker = want["walker"]

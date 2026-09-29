@@ -29,6 +29,11 @@ type Policy struct {
 	// boolean, is reported as a Problem, and leaves it off too (the Python
 	// check enforces only `is True`).
 	RequireCriticalEscalation bool
+	// Scope is the directory level (root-relative, slash-separated) of the
+	// `_domain_policy.yaml` below the conf.d root this policy came from
+	// (#2326); "" for a root policy. LoadTree has already dropped the
+	// `tenants:` entries outside that subtree, so Tenants is what applies.
+	Scope string
 }
 
 // Violation is one receiver type a domain policy rejects.

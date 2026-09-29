@@ -17,10 +17,13 @@ What this half measures, per tree written to a tmp dir:
 * `escalation` (#2325) — the `require_critical_escalation` lines
   `check_domain_policies` (strict) put in `schema_warnings` (the non-compliance
   ERROR, one WARN per leaking destination, in render order), for the domains
-  the generator's own reader (`_parse_config_files`) says require it;
-* `platform` — the generator's blocking `_routing_defaults.routes` WARN and
-  its strict non-boolean `require_critical_escalation` line (#2325,
-  `domain_policy_unusable`, kind and field only: the line names no file); the
+  the generator's own reader (`_parse_config_files`) says require it (root
+  policies only: no row carries the constraint in a subtree policy yet, and
+  `_escalation` asserts on any line from a domain not listed here);
+* `platform` — the generator's blocking `_routing_defaults.routes` WARN, its
+  strict non-boolean `require_critical_escalation` line (#2325,
+  `domain_policy_unusable`, kind and field only: the line names no file) and
+  (#2326) its routing-tree findings, `TenantTree.routing_tree_problems`; the
   Go-only `routing_in_unread_location` rows (#2291) are left out here, their
   `targets` column pins that the generator renders nothing from those bytes.
 
@@ -40,7 +43,7 @@ import pytest
 REPO_ROOT = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(REPO_ROOT / "scripts" / "tools"))
 sys.path.insert(0, str(REPO_ROOT / "scripts" / "tools" / "ops"))
-from _grar_parse import _parse_config_files, load_tenant_tree  # noqa: E402
+from _grar_parse import BLOCKING_TREE_KINDS, _parse_config_files, load_tenant_tree  # noqa: E402
 from _grar_validate import list_tenant_subroutes, route_entry_matchers  # noqa: E402
 
 MATRIX = json.loads((Path(__file__).parent / "routing_policy_parity_matrix.json")
@@ -48,10 +51,14 @@ MATRIX = json.loads((Path(__file__).parent / "routing_policy_parity_matrix.json"
 
 # Exact key sets: a misspelt key read as absent would turn a row into one
 # that tests nothing while staying green.
-TOP_KEYS = {"_comment", "trees"}
+TOP_KEYS = {"_comment", "blocking_kinds", "trees"}
 TREE_KEYS = {"name", "files", "platform", "expect"}
 PLATFORM_KINDS = {"routing_defaults_routes_ignored", "routing_in_unread_location",
-                  "domain_policy_unusable"}
+                  "domain_policy_unusable",
+                  # #2326: the hierarchical routing plane's tree findings.
+                  "routing_enforced_below_root", "routing_defaults_null_below_root",
+                  "routing_profile_duplicate", "duplicate_tenant",
+                  "domain_policy_out_of_scope"}
 # #2291: routing where the generator never reads it. The Go side reports it;
 # the generator says nothing (it does not read those bytes), so this half
 # leaves the kind out of its platform comparison — the tree's `targets`
@@ -92,6 +99,21 @@ _ESC_LEAK = re.compile(
     r"WARN: domain_policy '(?P<domain>[^']*)', tenant '(?P<tenant>[^']*)'"
     r"(?: (?P<ref>(?:override|routes)\[\d+\]) \(.*?\): receiver type '[^']*' catches alerts"
     r"|: severity=critical alerts that no sub-route catches go to the main receiver)")
+
+
+def _python_reports(row: list[str]) -> bool:
+    """A Go-only kind row the generator reports too (#2326 review F3): a top-level
+    `_routing_defaults` in a `_` non-carrier file below the root. No other row
+    of that kind has this bare field (the others name a key path inside a
+    defaults block or a profile)."""
+    return row[0] == "routing_in_unread_location" and row[2] == "_routing_defaults"
+
+
+def test_blocking_kinds_are_the_generators() -> None:
+    """#2326 review F5: the table's blocking kinds ARE the generator's; Go
+    asserts `routingpolicy.IsBlocking` against the same list."""
+    assert set(MATRIX["blocking_kinds"]) == set(BLOCKING_TREE_KINDS)
+    assert set(MATRIX["blocking_kinds"]) <= PLATFORM_KINDS
 
 
 def test_matrix_is_not_vacuous() -> None:
@@ -247,10 +269,15 @@ def test_python_reader_matches_the_table(tree, tmp_path: Path) -> None:
         assert esc == want["escalation"], (where, esc)
 
     # Platform-file findings: the table's rows, and no other.
-    got_platform = sorted(["routing_defaults_routes_ignored", m["file"], "_routing_defaults.routes"]
-                          for m in map(_DEFAULTS_ROUTES.search, got.schema_warnings) if m)
+    got_platform = sorted(
+        [["routing_defaults_routes_ignored", m["file"], "_routing_defaults.routes"]
+         for m in map(_DEFAULTS_ROUTES.search, got.schema_warnings) if m]
+        # #2326: the tree findings travel as data on the tree, not as text.
+        + [[kind, fname, fld] for kind, fname, fld, _msg in got.routing_tree_problems])
+    # domain_policy_unusable (#2325) is compared on kind and field below.
     want_platform = sorted(r for r in tree["platform"]
-                           if r[0] not in GO_ONLY_PLATFORM_KINDS and r[0] != "domain_policy_unusable")
+                           if (r[0] not in GO_ONLY_PLATFORM_KINDS or _python_reports(r))
+                           and r[0] != "domain_policy_unusable")
     assert got_platform == want_platform, (tree["name"], got_platform)
     got_unusable = sorted(
         f"domain_policies.{m['domain']}.constraints.require_critical_escalation"

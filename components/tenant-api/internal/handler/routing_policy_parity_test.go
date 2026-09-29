@@ -68,8 +68,9 @@ func loadTenantAPIParityMatrix(t *testing.T) []tenantAPIParityTree {
 		t.Fatalf("read matrix: %v", err)
 	}
 	var m struct {
-		Comment []string              `json:"_comment"`
-		Trees   []tenantAPIParityTree `json:"trees"`
+		Comment       []string              `json:"_comment"`
+		BlockingKinds json.RawMessage       `json:"blocking_kinds"`
+		Trees         []tenantAPIParityTree `json:"trees"`
 	}
 	dec := json.NewDecoder(bytes.NewReader(raw))
 	dec.DisallowUnknownFields()

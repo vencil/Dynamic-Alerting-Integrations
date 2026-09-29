@@ -86,8 +86,8 @@ def _render(repo_root: Path, pattern: str | None) -> subprocess.CompletedProcess
         cmd += ["-f", "-"]
         return subprocess.run(
             cmd, input=yaml.safe_dump({"revokedSet": {"tokenIdPattern": pattern}}),
-            capture_output=True, text=True, timeout=60)
-    return subprocess.run(cmd, capture_output=True, text=True, timeout=60)
+            capture_output=True, text=True, encoding="utf-8", errors="replace", timeout=60)
+    return subprocess.run(cmd, capture_output=True, text=True, encoding="utf-8", errors="replace", timeout=60)
 
 
 @_needs_helm
