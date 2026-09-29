@@ -355,13 +355,15 @@ func (c *Collector) collectSilentModes(ch chan<- prometheus.Metric, ops config.O
 // The exporter (c.now nil) resolves at the wall clock, as it always has; a
 // reader that set Hooks.Now resolves at the scrape's `now` (that hook's
 // instant), like every other family.
+//
+// Collect has already resolved the state filters (OperationalStatesAt), which
+// log the _state_maintenance parse WARNs when the maintenance filter is
+// declared, so this reading must not log them a second time (#2426).
 func (c *Collector) collectMaintenanceExpiries(ch chan<- prometheus.Metric, cfg *config.ThresholdConfig, now time.Time) {
-	var expiries []config.ResolvedMaintenanceExpiry
 	if c.now == nil {
-		expiries = cfg.ResolveMaintenanceExpiries()
-	} else {
-		expiries = cfg.ResolveMaintenanceExpiriesAt(now)
+		now = time.Now()
 	}
+	expiries := cfg.ResolveMaintenanceExpiriesAfterStateFiltersAt(now)
 	for _, me := range expiries {
 		if !me.Expired {
 			continue // Still active, no event needed

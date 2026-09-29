@@ -7,12 +7,12 @@ package main
 // process's stderr; the child process below is how this test reads that
 // stderr without swapping the global logger.
 //
-// ⚠️ Not covered by the #2374 fix: the _state_maintenance expires WARN. When
-// the tree declares `state_filters.maintenance`, ONE collector scrape prints
-// it twice — ResolveStateFiltersAt and ResolveMaintenanceExpiriesAt each log
-// maintenanceExpiresIgnoredWarn — so the exporter prints it twice per scrape
-// as well. That is the collector's own double log, not served-values
-// resolving twice; it is a known follow-up, pinned below as it is today.
+// The _state_maintenance expires WARN was not covered by the #2374 fix: when
+// the tree declares `state_filters.maintenance`, ONE collector scrape printed
+// it twice — ResolveStateFiltersAt and ResolveMaintenanceExpiriesAt each
+// logged maintenanceExpiresIgnoredWarn — the collector's own double log, not
+// served-values resolving twice. #2426 fixed it in the collector, so it is
+// counted below with both trees.
 
 import (
 	"os"
@@ -93,13 +93,12 @@ func TestServedValues_EachResolverWarnOnce(t *testing.T) {
 		// This row therefore checks nothing about the fix for a8; it is here
 		// so the other six lines are counted over a tree that has it.
 		{"no maintenance filter", "defaults:\n  container_cpu: 80\n", 1},
-		// ⚠️ Known follow-up, NOT the desired state: with the filter declared
-		// (as the repo's own conf.d/_defaults.yaml does), both collector
-		// resolvers log the same WARN in one scrape, so it prints twice (three
-		// times before #2374). Pinned so a change to it is seen; when the
-		// follow-up lands, this becomes 1.
+		// With the filter declared (as the repo's own conf.d/_defaults.yaml
+		// does), both collector resolvers parse the same value in one scrape;
+		// only the first logs it (#2426: printed twice before, three times
+		// before #2374).
 		{"maintenance filter declared", "defaults:\n  container_cpu: 80\n" +
-			"state_filters:\n  maintenance:\n    reasons: []\n    severity: \"info\"\n    default_state: \"disable\"\n", 2},
+			"state_filters:\n  maintenance:\n    reasons: []\n    severity: \"info\"\n    default_state: \"disable\"\n", 1},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()
@@ -128,7 +127,7 @@ func TestServedValues_EachResolverWarnOnce(t *testing.T) {
 			}
 			// Nothing else printed more than once.
 			for line, n := range count {
-				if n != 1 && !strings.Contains(line, maintenanceWarn) {
+				if n != 1 {
 					t.Errorf("printed %d times, want 1: %s", n, line)
 				}
 			}
