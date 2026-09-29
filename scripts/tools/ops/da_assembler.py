@@ -534,9 +534,9 @@ def render_cr_file(
         return EXIT_CALLER_ERROR
     written = _null_tagged_non_null(root)
     if written is not None:
-        log.error("%s: a value tagged !!null is written as %r; Kubernetes "
-                  "refuses the document (only an empty value or ~ / null "
-                  "is null)", cr_path, written)
+        log.error("%s: a scalar tagged !!null is written as %r; only an "
+                  "empty scalar or ~ / null / Null / NULL means null, and "
+                  "Kubernetes refuses the document", cr_path, written)
         return EXIT_CALLER_ERROR
 
     # #2371: shape checks `reconcile_one` does not make. Its

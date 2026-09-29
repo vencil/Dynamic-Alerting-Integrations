@@ -496,16 +496,17 @@ class TestRenderCrNameFormat:
             tmp_path, f"  name: ok\n  namespace: !!null {written}\n")
         assert rc == EXIT_CALLER_ERROR
         assert new_files == []
-        assert "tagged !!null" in caplog.text
+        assert "a scalar tagged !!null is written as" in caplog.text
 
     _SPEC = "spec:\n  tenants:\n    t1: {}\n"
 
-    def _render_text(self, tmp_path, text):
-        """整份 CR 文字 → (rc, 輸出位元組或 None)。"""
+    def _render_text(self, tmp_path, text, spec=None):
+        """整份 CR 文字 → (rc, 輸出位元組或 None)。*spec* 預設 `_SPEC`。"""
         tmp_path.mkdir(parents=True, exist_ok=True)
         cr_path = tmp_path / "cr.yaml"
-        cr_path.write_text("kind: ThresholdConfig\n" + text + self._SPEC,
-                           encoding="utf-8")
+        cr_path.write_text(
+            "kind: ThresholdConfig\n" + text
+            + (self._SPEC if spec is None else spec), encoding="utf-8")
         out_dir = tmp_path / "out"
         out_dir.mkdir()
         rc = render_cr_file(cr_path, out_dir)
@@ -544,15 +545,27 @@ class TestRenderCrNameFormat:
         assert rc == 0
         assert got == want
 
-    @pytest.mark.parametrize("text", [
+    @pytest.mark.parametrize("text, spec", [
         pytest.param("metadata:\n  name: ok\n  namespace: !!null team\n"
-                     "  namespace: null\n", id="duplicate-key"),
+                     "  namespace: null\n", None, id="duplicate-key"),
         pytest.param("metadata:\n  name: ok\n  namespace: !!null team\n"
-                     "metadata:\n  name: ok\n", id="earlier-metadata-block"),
-        pytest.param("metadata: {name: ok}\nextra: !!null team\n",
+                     "metadata:\n  name: ok\n", None,
+                     id="earlier-metadata-block"),
+        pytest.param("metadata: {name: ok}\nextra: !!null team\n", None,
                      id="elsewhere-in-document"),
+        # Key position / sequence item: each covers one branch of the
+        # graph walk (mapping keys, sequence items).
+        pytest.param("metadata: {name: ok}\n",
+                     "spec:\n  tenants: {!!null team: {}}\n",
+                     id="mapping-key"),
+        pytest.param("metadata: {name: ok}\n",
+                     "spec:\n  tenants:\n    t1: [!!null team]\n",
+                     id="sequence-item"),
+        pytest.param("metadata: {name: ok}\n",
+                     "spec:\n  tenants: {!!null team}\n",
+                     id="flow-lone-key"),
     ])
-    def test_tagged_null_anywhere_is_caller_error(self, text, tmp_path,
+    def test_tagged_null_anywhere_is_caller_error(self, text, spec, tmp_path,
                                                    caplog):
         """go-yaml 對文件任何位置的 `!!null <值>` 都整份拒收。
 
@@ -560,10 +573,11 @@ class TestRenderCrNameFormat:
         最後生效的 namespace 會放行。會讓本組轉紅的改動：只檢查 namespace
         節點、不走整份 compose 圖。
         """
-        rc, got = self._render_text(tmp_path, text)
+        rc, got = self._render_text(tmp_path, text, spec)
         assert rc == EXIT_CALLER_ERROR
         assert got is None
-        assert "tagged !!null" in caplog.text
+        assert "a scalar tagged !!null is written as 'team'" in caplog.text
+        assert "~ / null / Null / NULL" in caplog.text
 
     @pytest.mark.parametrize("text", [
         pytest.param("metadata: {name: ok\n", id="syntax"),
