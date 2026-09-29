@@ -457,6 +457,8 @@ bash smoke.sh   # 需 curl + jq
 
 > **候選 tag 不清理（刻意）**：GHCR 的「版本」就是 digest，tag 只是掛在版本上的標籤；成功的 release 裡候選 tag 與正式 tag 掛在**同一個版本**上，刪「候選那個版本」等於刪掉剛發布的映像，而 GHCR API 沒有「只拿掉一個 tag」的操作。所以成功路徑上候選 tag 只是同一 digest 的無害別名。失敗路徑留下一個只有候選 tag 的孤兒版本：不是 `latest`、不被任何 chart 或文件引用、tag 名不是 semver（Renovate／semver 排序工具不會挑到它）。要清就另開 job 用 `actions/delete-package-versions`（需要 repo 對該 package 有 Admin 角色），只刪**沒有 `v*` tag** 的 `candidate-*` 版本——這是後續選項，目前不做。
 >
+> **何時重新評估（owner 拍板，2026-09-29）**：出現下列任一情況就開票做清理（建議形狀是獨立的排程 workflow，把刪除權限與發版 job 隔開）：① 第一次有 release 被 Trivy gate 擋下而留下孤兒版本；② 任一 package 的孤兒 `candidate-*` 版本累積到 3 個。量法（公開 package 可匿名）：對 `https://ghcr.io/v2/vencil/<image>/tags/list` 數 `candidate-` 開頭的 tag，扣掉與某個 `v*` tag 同 digest 的那些。⚠️ 過濾條件必須是「該版本**沒有任何** `v*` tag」，不能只看「帶 candidate tag」：GHCR 的版本就是 digest，可重現 build 會讓後來成功的 release 落在同一個 digest，只看 candidate tag 會把已發布的映像一起刪掉。孤兒映像在公開 package 裡任何人都拉得到，而它正是因為含可修 HIGH/CRITICAL 才被擋——這是選擇先不做時接受的殘留。
+>
 > **重打 tag**：掃描擋下時沒有任何正式產物，patch 後刪掉 git tag、在新 commit 上重打同名 tag 即可；舊 run 的候選 tag 不會被新 run 覆寫（`run_id` 不同）。
 
 v2.9.0 首次真實五線 release 連續觸發下列三類：
