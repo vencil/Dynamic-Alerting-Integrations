@@ -47,7 +47,9 @@ EXPECTED_DEPNAMES = {
     "prometheuscommunity/prom-label-proxy",
     "timberio/vector",
     "victoriametrics/victoria-logs",
-    "python",
+    # chargeback-aggregator; was `python` (3.14-slim) until #1243 moved it off
+    # pip-carrying images. The `python` depName rules still govern Dockerfile FROMs.
+    "gcr.io/distroless/python3-debian13",
     "mariadb",
     "prom/mysqld-exporter",
     "grafana/grafana",
@@ -66,6 +68,21 @@ EXPECTED_DEPNAMES = {
     # test_busybox_is_matched_in_both_consumer_charts is the one that proves it.
     "busybox",
 }
+
+# #2442: pins Renovate owns that are NOT deployed images — test infrastructure
+# only. Kept out of EXPECTED_DEPNAMES on purpose: that set is also the scan-matrix
+# SSOT (test_scan_matrix_and_deploy_refs_share_depnames), and a forge-e2e image is
+# neither deployed nor scanned. Each one gets its own customManager and group.
+FORGE_E2E_DEPNAMES = {"gitlab/gitlab-ce"}
+
+# #1337 ①: images ONLY the try-local demo stack pulls. They are in the scan
+# matrix (so the matrix manager extracts them) but in no deploy file, so they
+# sit outside the matrix == deploy depName invariant. Renovate bumps only their
+# matrix row; the compose file stays tag-only with no updater, and
+# test_every_trylocal_image_is_in_the_scan_matrix goes red on that Renovate PR
+# until try-local is moved to the same tag — the accepted cost of A′.
+TRY_LOCAL_ONLY_DEPNAMES = {"prom/pushgateway", "curlimages/curl"}
+FORGE_E2E_SCRIPT = "scripts/ops/forge_e2e_run.sh"
 
 
 # #1354 option B: the built-in managers the owner approved, on top of custom.regex.
@@ -127,6 +144,17 @@ def _matrix_manager(cfg: dict) -> dict:
                 if "nightly-image-scan" in "".join(_manager_file_patterns(m)))
 
 
+def _forge_manager(cfg: dict) -> dict:
+    return next(m for m in cfg["customManagers"]
+                if "forge_e2e_run" in "".join(_manager_file_patterns(m)))
+
+
+def _deploy_managers(cfg: dict) -> list[dict]:
+    """The customManagers that own DEPLOYED refs (helm + k8s + da-tools COPY)."""
+    skip = (_matrix_manager(cfg), _forge_manager(cfg))
+    return [m for m in cfg["customManagers"] if not any(m is x for x in skip)]
+
+
 def test_renovate_json_is_strict_json_and_well_formed():
     cfg = _load_config()
     # #1354: exactly these managers. docker-compose stays OFF (the tests/** compose
@@ -135,7 +163,7 @@ def test_renovate_json_is_strict_json_and_well_formed():
     # SSOT and lang-dep bumps are #902 L3 Category C, deliberately out).
     assert sorted(cfg["enabledManagers"]) == sorted(ENABLED_MANAGERS)
     assert cfg.get("pinDigests") is True
-    assert len(cfg["customManagers"]) == 3
+    assert len(cfg["customManagers"]) == 4
     assert cfg.get("packageRules"), "expected grouping + major-approval rules"
 
 
@@ -158,9 +186,10 @@ def test_coverage_is_complete_and_exact():
     match would mean Renovate touches an unintended ref)."""
     cfg = _load_config()
     seen = {d["depName"] for mgr in cfg["customManagers"] for d in _extract(mgr)}
-    assert seen == EXPECTED_DEPNAMES, (
-        f"\n  missing (pinned but Renovate won't bump): {sorted(EXPECTED_DEPNAMES - seen)}"
-        f"\n  unexpected (Renovate would touch):       {sorted(seen - EXPECTED_DEPNAMES)}"
+    expected = EXPECTED_DEPNAMES | FORGE_E2E_DEPNAMES | TRY_LOCAL_ONLY_DEPNAMES
+    assert seen == expected, (
+        f"\n  missing (pinned but Renovate won't bump): {sorted(expected - seen)}"
+        f"\n  unexpected (Renovate would touch):       {sorted(seen - expected)}"
     )
 
 
@@ -171,9 +200,10 @@ def test_scan_matrix_and_deploy_refs_share_depnames():
     cfg = _load_config()
     matrix_mgr = _matrix_manager(cfg)
     matrix_names = {d["depName"] for d in _extract(matrix_mgr)}
-    deploy_names = {d["depName"] for m in cfg["customManagers"] if m is not matrix_mgr
-                    for d in _extract(m)}
-    assert matrix_names == EXPECTED_DEPNAMES, f"matrix missing: {sorted(EXPECTED_DEPNAMES - matrix_names)}"
+    deploy_names = {d["depName"] for m in _deploy_managers(cfg) for d in _extract(m)}
+    assert matrix_names == EXPECTED_DEPNAMES | TRY_LOCAL_ONLY_DEPNAMES, (
+        f"matrix missing: {sorted((EXPECTED_DEPNAMES | TRY_LOCAL_ONLY_DEPNAMES) - matrix_names)}; "
+        f"unexpected: {sorted(matrix_names - EXPECTED_DEPNAMES - TRY_LOCAL_ONLY_DEPNAMES)}")
     assert deploy_names == EXPECTED_DEPNAMES, f"deploy missing: {sorted(EXPECTED_DEPNAMES - deploy_names)}"
 
 
@@ -211,6 +241,53 @@ def test_alertmanager_is_matched_in_manifest_and_da_tools_dockerfile():
         "components/da-tools/app/Dockerfile",
     }, f"prom/alertmanager is not matched in both files, only: {sorted(d['file'] for d in hits)}"
     assert len({(d["currentValue"], d["currentDigest"]) for d in hits}) == 1, hits
+
+
+def test_forge_e2e_gitlab_pin_is_owned_by_its_own_manager():
+    """#2442: the forge-e2e GitLab CE pin (a shell default, which no built-in
+    manager parses) is matched exactly once, in the script CI actually runs, and
+    by no other manager. Asserted per FILE for the same reason as busybox."""
+    cfg = _load_config()
+    forge = _forge_manager(cfg)
+    hits = _extract(forge)
+    assert [(d["file"], d["depName"]) for d in hits] == [(FORGE_E2E_SCRIPT, "gitlab/gitlab-ce")], hits
+    others = [d for m in cfg["customManagers"] if m is not forge for d in _extract(m)
+              if d["depName"] in FORGE_E2E_DEPNAMES]
+    assert not others, f"another manager also owns the forge-e2e pin: {others}"
+
+
+def test_forge_e2e_gitlab_versioning_parses_the_real_tag():
+    """GitLab tags are `X.Y.Z-ce.N`. Under `docker` versioning the `-ce.N` part is
+    a compatibility suffix, so a regex versioning is used instead — and a regex
+    that does not match the CURRENT tag makes Renovate skip the dep silently.
+    Parse the tag the script really carries, and reject a floating one."""
+    cfg = _load_config()
+    forge = _forge_manager(cfg)
+    template = forge.get("versioningTemplate", "")
+    assert template.startswith("regex:"), template
+    rx = _py_regex(template[len("regex:"):])
+    (dep,) = _extract(forge)
+    m = rx.match(dep["currentValue"])
+    assert m and {"major", "minor", "patch"} <= set(k for k, v in m.groupdict().items() if v), (
+        f"versioning regex does not parse the pinned tag {dep['currentValue']!r}: {template}")
+    assert not rx.match("latest") and not rx.match("nightly"), "versioning regex accepts a floating tag"
+
+
+def test_forge_e2e_gitlab_has_its_own_group_and_gated_majors():
+    """Test infrastructure must not ride the third-party DEPLOY group PR, and a
+    GitLab major (config/upgrade-path changes) waits for the Dashboard."""
+    cfg = _load_config()
+    image_group = _resolve(cfg, manager="custom.regex", dep="grafana/grafana",
+                           datasource="docker", update="minor").get("groupName")
+    for update in ("patch", "minor", "digest"):
+        got = _resolve(cfg, manager="custom.regex", dep="gitlab/gitlab-ce",
+                       datasource="docker", update=update)
+        assert got["enabled"] is True, got
+        assert got.get("groupName") and got["groupName"] != image_group, (update, got)
+        assert not got.get("dependencyDashboardApproval"), (update, got)
+    major = _resolve(cfg, manager="custom.regex", dep="gitlab/gitlab-ce",
+                     datasource="docker", update="major")
+    assert major.get("dependencyDashboardApproval") is True, major
 
 
 def test_renovate_config_validator_if_available():
@@ -336,7 +413,9 @@ def test_ci_bound_pins_are_not_renovates(manager, dep, datasource, dep_type, upd
 
 
 @pytest.mark.parametrize("manager,dep,datasource,dep_type", [
-    ("github-actions", "aquasecurity/trivy-action", "github-tags", "action"),
+    # GitHub-owned: stays on tags. Third-party actions are the exception —
+    # test_third_party_actions_are_sha_pinned_and_renovate_keeps_them_so.
+    ("github-actions", "actions/checkout", "github-tags", "action"),
     ("dockerfile", "alpine", "docker", "final"),
     ("devcontainer", "ghcr.io/devcontainers/features/go", "docker", "feature"),
 ])
@@ -352,6 +431,57 @@ def test_each_builtin_manager_is_one_group_without_digest_pinning(manager, dep, 
         f"{manager}/{dep} inherits the global pinDigests=true: Renovate would open a "
         f"pin PR rewriting every ref to a digest/SHA (deliberately out of #1354).")
     assert not got.get("dependencyDashboardApproval"), f"{manager}/{dep} minor is gated"
+
+
+_WORKFLOW_GLOBS = (".github/workflows/*.yml", ".github/workflows/*.yaml",
+                   ".github/actions/**/*.yml", ".github/actions/**/*.yaml")
+_USES_LINE = re.compile(r"^\s*-?\s*uses:\s*(?P<ref>[^\s#]+)(?P<rest>.*)$", re.M)
+_GITHUB_OWNED = ("actions", "github")
+
+
+def _third_party_uses() -> list[tuple[str, str, str]]:
+    """(file, `owner/repo[/path]@ref`, trailing text) for every non-GitHub-owned
+    `uses:`. Raw text on purpose: the `# vX.Y.Z` comment is what Renovate reads
+    back as currentValue, and a YAML parse would throw it away."""
+    out = []
+    for pattern in _WORKFLOW_GLOBS:
+        for f in sorted(REPO.glob(pattern)):
+            for m in _USES_LINE.finditer(f.read_text(encoding="utf-8")):
+                ref = m.group("ref")
+                if ref.startswith(("./", "docker://")) or ref.split("/")[0] in _GITHUB_OWNED:
+                    continue
+                out.append((f.relative_to(REPO).as_posix(), ref, m.group("rest")))
+    return out
+
+
+def test_third_party_actions_are_sha_pinned_and_renovate_keeps_them_so():
+    """A tag can be re-pointed upstream; a commit SHA cannot. Every third-party
+    action is `@<40-hex>  # vX.Y.Z` (the comment is Renovate's currentValue),
+    and the set Renovate pins is DERIVED from the workflows — so adding a new
+    third-party action on a tag, or dropping one from the rule, both go red."""
+    uses = _third_party_uses()
+    assert len(uses) >= 20, f"anti-vacuity: expected the release/nightly actions, got {len(uses)}"
+    bad = [(f, r) for f, r, rest in uses
+           if not re.fullmatch(r"[^@]+@[0-9a-f]{40}", r)
+           or not re.fullmatch(r"\s+#\s+v\d+\.\d+\.\d+\s*", rest)]
+    assert not bad, f"third-party actions not pinned as `@<sha> # vX.Y.Z`: {bad}"
+    repos = {"/".join(r.split("@")[0].split("/")[:2]) for _, r, _ in uses}
+    cfg = _load_config()
+    for repo in sorted(repos):
+        got = _resolve(cfg, manager="github-actions", dep=repo, datasource="github-tags",
+                       dep_type="action", update="patch")
+        assert got["pinDigests"] is True, f"{repo} is SHA-pinned but Renovate would not keep it pinned"
+    pinned_rule = {d for r in cfg["packageRules"] if r.get("pinDigests") is True
+                   and r.get("matchManagers") == ["github-actions"] for d in r.get("matchDepNames", [])}
+    assert pinned_rule == repos, (
+        f"renovate.json pin list != third-party actions in use:\n"
+        f"  unused in workflows: {sorted(pinned_rule - repos)}\n  missing from rule: {sorted(repos - pinned_rule)}")
+
+
+def test_github_owned_actions_stay_on_tags():
+    got = _resolve(_load_config(), manager="github-actions", dep="actions/checkout",
+                   datasource="github-tags", dep_type="action", update="patch")
+    assert got["pinDigests"] is False, got
 
 
 def test_builtin_manager_groups_are_distinct_and_not_the_image_group():

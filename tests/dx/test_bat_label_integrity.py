@@ -801,7 +801,6 @@ _SUBCOMMANDS = {
         lambda w: (w / "b.txt").write_text("b\n", encoding="utf-8"),
         lambda w: _git_out(w, "diff", "--cached", "--name-only") == "b.txt",
     ),
-    "commit": (("commit", "test: second"), _stage_b, lambda w: _git_out(w, "rev-list", "--count", "HEAD") == "2"),
     "commit-file": (
         ("commit-file", "msg.txt"),
         lambda w: (_stage_b(w), (w / "msg.txt").write_text("test: from a file\n", encoding="utf-8")),
@@ -1056,7 +1055,7 @@ def _state(trees: dict[str, pathlib.Path]) -> tuple[str, ...]:
 @pytest.mark.skipif(os.name != "nt", reason="Windows-only escape hatch")
 @pytest.mark.parametrize(
     "argv",
-    [("status",), ("add", "a.txt"), ("commit", "test: x"), ("commit-file", "a.txt"),
+    [("status",), ("add", "a.txt"), ("commit-file", "a.txt"),
      ("tag", "t-x"), ("branch", "feat/x"), ("push",), ("preflight",)],
     ids=lambda a: a[0],
 )
@@ -1286,3 +1285,294 @@ def test_an_unknown_subcommand_is_reported_as_failure(tmp_path) -> None:
     (tmp_path / "scripts" / "ops").mkdir(parents=True)
     shutil.copy2(REPO_ROOT / "scripts" / "ops" / "win_git_escape.bat", tmp_path / "scripts" / "ops")
     assert _bat(tmp_path, tmp_path, "raw", "git", "status").returncode != 0
+
+
+# ---------------------------------------------------------------------------
+# #2249 — delayed expansion was on for the whole script.
+#
+# It rewrote every `!` (and, on a line holding one, every `^`) in whatever a
+# line expanded: `add a!b.txt` staged `ab.txt`, `commit "a! b"` committed
+# `a b`, and fix-hooks' PowerShell command lost the `#!` it matches on. `add`
+# also rebuilt its list without quotes, so `sp ace.txt` became two pathspecs.
+# `commit` is gone (commit-file covers every message); fix-hooks now asks git
+# where the hooks are and fails when there is nothing to fix.
+# ---------------------------------------------------------------------------
+
+
+def _bat_quoted(tree: pathlib.Path, tmp_path: pathlib.Path, *argv: str) -> subprocess.CompletedProcess:
+    """Run the wrapper with every argument quoted, the way a caller types it.
+
+    A list would go through list2cmdline, which quotes only whitespace: `a&b.txt`
+    would reach cmd bare and split the command before the wrapper sees it.
+    """
+    env = {k: v for k, v in os.environ.items() if not k.upper().startswith("GIT_")}
+    env.update(TEMP=str(tmp_path), TMP=str(tmp_path))
+    bat = tree / "scripts" / "ops" / "win_git_escape.bat"
+    line = " ".join(f'"{a}"' for a in (str(bat), *argv))
+    return subprocess.run(f'cmd /s /c "{line}"', cwd=tree, capture_output=True, timeout=120, env=env)
+
+
+# name -> the names a split or a rewrite would stage instead; all exist, so a
+# wrong pathspec stages a decoy instead of failing with "did not match".
+_ADD_NAMES = {
+    "sp ace.txt": ("sp", "ace.txt"),
+    "a!b.txt": ("ab.txt", "a"),
+    "a^b.txt": ("ab.txt",),
+    "a&b.txt": ("a", "b.txt"),
+    "50%off.txt": ("50off.txt", "50"),
+}
+
+
+@pytest.mark.skipif(os.name != "nt", reason="Windows-only escape hatch")
+@pytest.mark.parametrize("name", sorted(_ADD_NAMES))
+def test_add_stages_exactly_the_named_path(tmp_path, name) -> None:
+    work, _bare = _wrapper_repo(tmp_path, "feat/escape-hatch")
+    for path in (name, *_ADD_NAMES[name]):
+        (work / path).write_text(f"{path}\n", encoding="utf-8")
+    proc = _bat_quoted(work, tmp_path, "add", name)
+    out = proc.stdout.decode("utf-8", "replace")
+    assert proc.returncode == 0, f"`add {name}` failed:\n{out}"
+    staged = _git_out(work, "-c", "core.quotepath=false", "diff", "--cached", "--name-only")
+    assert staged.splitlines() == [name], f"`add {name}` staged {staged!r}:\n{out}"
+
+
+@pytest.mark.skipif(os.name != "nt", reason="Windows-only escape hatch")
+def test_add_keeps_several_paths_apart(tmp_path) -> None:
+    """Must-ring for the list itself: two names, one with a space, both staged."""
+    work, _bare = _wrapper_repo(tmp_path, "feat/escape-hatch")
+    for path in ("sp ace.txt", "sp", "ace.txt", "b.txt"):
+        (work / path).write_text(f"{path}\n", encoding="utf-8")
+    proc = _bat_quoted(work, tmp_path, "add", "sp ace.txt", "b.txt")
+    out = proc.stdout.decode("utf-8", "replace")
+    assert proc.returncode == 0, out
+    staged = _git_out(work, "-c", "core.quotepath=false", "diff", "--cached", "--name-only")
+    assert sorted(staged.splitlines()) == ["b.txt", "sp ace.txt"], f"staged {staged!r}:\n{out}"
+
+
+def test_there_is_no_commit_subcommand() -> None:
+    """Static half, so Linux CI sees it: `commit "msg"` is not dispatched."""
+    bat = REPO_ROOT / "scripts" / "ops" / "win_git_escape.bat"
+    dispatched = _dispatched(bat)
+    assert "commit-file" in dispatched, "control: the dispatch scan no longer matches"
+    assert "commit" not in dispatched
+
+
+@pytest.mark.skipif(os.name != "nt", reason="Windows-only escape hatch")
+def test_commit_with_a_message_argument_commits_nothing(tmp_path) -> None:
+    work, _bare = _wrapper_repo(tmp_path, "feat/escape-hatch", ops_files=("win_git_escape.bat", "commit_helper.py"))
+    _stage_b(work)
+    proc = _bat_quoted(work, tmp_path, "commit", "test: handle error! now")
+    out = proc.stdout.decode("utf-8", "replace")
+    assert proc.returncode != 0, f"`commit` still reports success:\n{out}"
+    assert _git_out(work, "rev-list", "--count", "HEAD") == "1", f"`commit` still commits:\n{out}"
+
+
+@pytest.mark.skipif(os.name != "nt", reason="Windows-only escape hatch")
+def test_commit_file_keeps_every_special_character(tmp_path) -> None:
+    """Must-not-ring control: the route that replaces `commit` keeps `!`, `%`, `&`, `^`."""
+    work, _bare = _wrapper_repo(tmp_path, "feat/escape-hatch", ops_files=("win_git_escape.bat", "commit_helper.py"))
+    _stage_b(work)
+    subject = "test: a! b %PATH% & c^d"
+    (work / "msg.txt").write_text(subject + "\n", encoding="utf-8")
+    proc = _bat_quoted(work, tmp_path, "commit-file", "msg.txt")
+    out = proc.stdout.decode("utf-8", "replace")
+    assert proc.returncode == 0, out
+    assert _git_out(work, "log", "-1", "--format=%s") == subject, out
+
+
+_BROKEN_HOOK = b"#!/bin/sh\r\n#!/usr/bin/env bash\r\nARGS=(hook-impl)\r\n"
+_FIXED_HOOK = b"#!/usr/bin/env bash\nARGS=(hook-impl)\n"
+
+
+def _unpinned_trees(tmp_path: pathlib.Path) -> dict[str, pathlib.Path]:
+    """Main + linked tree with git's default hooks directory (the fixture pins one)."""
+    trees = _main_and_worktree(tmp_path)
+    _git(trees["main"], "config", "--unset", "core.hooksPath")
+    return trees
+
+
+@pytest.mark.skipif(os.name != "nt", reason="Windows-only escape hatch")
+@pytest.mark.parametrize("layout", ["main", "linked"])
+def test_fix_hooks_repairs_the_hook_git_runs(tmp_path, layout) -> None:
+    """In a linked tree `<tree>\\.git` is a file; the hooks live in the common dir."""
+    trees = _unpinned_trees(tmp_path)
+    hook = _git_path(trees[layout], "hooks") / "pre-commit"
+    hook.write_bytes(_BROKEN_HOOK)
+    proc = _bat(trees[layout], tmp_path, "fix-hooks")
+    out = proc.stdout.decode("utf-8", "replace")
+    assert proc.returncode == 0, out
+    assert hook.read_bytes() == _FIXED_HOOK, f"hook not repaired:\n{out}"
+
+
+@pytest.mark.skipif(os.name != "nt", reason="Windows-only escape hatch")
+@pytest.mark.parametrize("layout", ["main", "linked"])
+def test_fix_hooks_with_no_hook_to_fix_fails(tmp_path, layout) -> None:
+    trees = _unpinned_trees(tmp_path)
+    proc = _bat(trees[layout], tmp_path, "fix-hooks")
+    out = proc.stdout.decode("utf-8", "replace")
+    assert proc.returncode != 0, f"fixed nothing and reported success:\n{out}"
+    assert "FAILED" in out, out
+
+
+# ---------------------------------------------------------------------------
+# #2236 — the gh wrappers reported every gh failure as success.
+#
+# win_gh.bat ended every subcommand in `goto :done` (`exit /b 0`), and the
+# .ps1 passed an rc out only for pr-preflight, whose `python` could be the
+# Store stub. Both now return gh's own rc unchanged, 8 ("checks still
+# running") included. The fake gh below is a real .exe: a .bat called without
+# `call` never returns to the wrapper, so it could not test the wrapper's rc.
+# ---------------------------------------------------------------------------
+
+_FAKE_GH_CS = r"""
+using System;
+using System.IO;
+class FakeGh {
+    static int Main(string[] args) {
+        string log = Environment.GetEnvironmentVariable("FAKE_GH_LOG");
+        if (!String.IsNullOrEmpty(log)) File.AppendAllText(log, String.Join("|", args) + "\n");
+        Console.WriteLine("fake gh: " + String.Join(" ", args));
+        string rc = Environment.GetEnvironmentVariable("FAKE_GH_RC");
+        return String.IsNullOrEmpty(rc) ? 0 : Int32.Parse(rc);
+    }
+}
+"""
+
+# The one line that would pick the installed gh over the fake on PATH. Swapped
+# only in the fixture's copy of the wrapper; the shipped file has no seam.
+_REAL_GH_LINE = r'if exist "C:\Program Files\GitHub CLI\gh.exe" ('
+
+
+@pytest.fixture(scope="module")
+def fake_gh_dir(tmp_path_factory) -> pathlib.Path:
+    if os.name != "nt":
+        pytest.skip("Windows-only escape hatches")
+    d = tmp_path_factory.mktemp("fake-gh")
+    (d / "FakeGh.cs").write_text(_FAKE_GH_CS, encoding="ascii")
+    ps = (
+        "Add-Type -TypeDefinition ([IO.File]::ReadAllText($env:FAKE_GH_SRC)) "
+        "-OutputAssembly $env:FAKE_GH_EXE -OutputType ConsoleApplication"
+    )
+    env = {**os.environ, "FAKE_GH_SRC": str(d / "FakeGh.cs"), "FAKE_GH_EXE": str(d / "gh.exe")}
+    proc = subprocess.run(["powershell", "-NoProfile", "-Command", ps],
+                          capture_output=True, timeout=120, env=env)
+    assert (d / "gh.exe").exists(), proc.stderr.decode("utf-8", "replace")
+    return d
+
+
+def _gh_tree(tmp_path: pathlib.Path, wrapper: str) -> pathlib.Path:
+    tree = tmp_path / "tree"
+    subprocess.run(["git", "init", "-q", str(tree)], check=True, capture_output=True, timeout=60)
+    (tree / "scripts" / "ops").mkdir(parents=True)
+    src = (REPO_ROOT / "scripts" / "ops" / wrapper).read_bytes()
+    if wrapper == "win_gh.bat":
+        needle = _REAL_GH_LINE.encode("ascii")
+        assert src.count(needle) == 1, "the installed-gh line moved; the fake would be bypassed"
+        src = src.replace(needle, b'if exist "%~dp0no-such-gh.exe" (')
+    (tree / "scripts" / "ops" / wrapper).write_bytes(src)
+    return tree
+
+
+def _run_gh_wrapper(tmp_path, fake_gh_dir, wrapper: str, argv: tuple[str, ...], gh_rc: int):
+    tree = _gh_tree(tmp_path, wrapper)
+    log = tmp_path / "gh-argv.txt"
+    env = {k: v for k, v in os.environ.items() if not k.upper().startswith("GIT_")}
+    env.update(PATH=f"{fake_gh_dir}{os.pathsep}{os.environ['PATH']}",
+               FAKE_GH_RC=str(gh_rc), FAKE_GH_LOG=str(log), TEMP=str(tmp_path), TMP=str(tmp_path))
+    target = tree / "scripts" / "ops" / wrapper
+    if wrapper.endswith(".bat"):
+        line = " ".join(f'"{a}"' for a in (str(target), *argv))
+        cmd = f'cmd /s /c "{line}"'
+    else:
+        cmd = ["powershell", "-NoProfile", "-ExecutionPolicy", "Bypass", "-File", str(target), *argv]
+    proc = subprocess.run(cmd, cwd=tree, capture_output=True, timeout=120, env=env)
+    calls = log.read_text(encoding="utf-8").splitlines() if log.exists() else []
+    return proc, calls
+
+
+_GH_BAT_CALLS = [
+    ("pr-checks",), ("pr-checks", "12"), ("pr-view",), ("pr-view", "12"),
+    ("pr-create", "--title", "t"), ("run-view", "1"), ("run-log", "1"), ("raw", "api", "x"),
+]
+_GH_PS1_CALLS = [
+    ("auth-check",), ("pr-list",), ("pr-view", "12"), ("pr-merge", "12"), ("ci-status",),
+    ("pr-create", "-Title", "t"), ("release-create", "-Tag", "v0"),
+]
+
+
+@pytest.mark.skipif(os.name != "nt", reason="Windows-only escape hatches")
+@pytest.mark.parametrize("gh_rc", [0, 1, 8])
+@pytest.mark.parametrize(
+    "wrapper,argv",
+    [("win_gh.bat", a) for a in _GH_BAT_CALLS] + [("win_git_escape.ps1", a) for a in _GH_PS1_CALLS],
+    ids=lambda v: v if isinstance(v, str) else "-".join(v),
+)
+def test_gh_wrappers_return_ghs_own_rc(tmp_path, fake_gh_dir, wrapper, argv, gh_rc) -> None:
+    """rc 0 is the must-ring control: `exit /b 1` everywhere would pass 1 and 8."""
+    proc, calls = _run_gh_wrapper(tmp_path, fake_gh_dir, wrapper, argv, gh_rc)
+    out = (proc.stdout + proc.stderr).decode("utf-8", "replace")
+    assert calls, f"`{wrapper} {' '.join(argv)}` never reached the fake gh:\n{out}"
+    assert proc.returncode == gh_rc, f"gh returned {gh_rc}, the wrapper {proc.returncode}:\n{out}"
+
+
+@pytest.mark.skipif(os.name != "nt", reason="Windows-only escape hatch")
+@pytest.mark.parametrize("sub", ["raw", "pr-create"])
+def test_win_gh_forwards_special_characters_verbatim(tmp_path, fake_gh_dir, sub) -> None:
+    """Delayed expansion turned `a!b` into `ab` and dropped `^` (#2249 shape)."""
+    args = ("--title", "fix: a! b ^c & d 50%")
+    proc, calls = _run_gh_wrapper(tmp_path, fake_gh_dir, "win_gh.bat", (sub, *args), 0)
+    out = (proc.stdout + proc.stderr).decode("utf-8", "replace")
+    expected = ("pr|create|" if sub == "pr-create" else "") + "|".join(args)
+    assert calls == [expected], f"gh saw {calls}:\n{out}"
+
+
+@pytest.mark.skipif(os.name != "nt", reason="Windows-only escape hatch")
+def test_ps1_pr_preflight_does_not_trust_a_python_that_runs_nothing(tmp_path) -> None:
+    """The .ps1 twin of the .bat check above: a `python` stub first on PATH."""
+    stub_dir = tmp_path / "stub-bin"
+    stub_dir.mkdir()
+    (stub_dir / "python.bat").write_text("@exit /b 0\r\n", encoding="ascii")
+    env = {**os.environ, "PATH": f"{stub_dir}{os.pathsep}{os.environ['PATH']}"}
+    assert _wrapper_rc(tmp_path, "win_git_escape.ps1", tool_rc=1, env=env) != 0, (
+        "win_git_escape.ps1 pr-preflight ran the `python` on PATH"
+    )
+
+
+# ---------------------------------------------------------------------------
+# #2248 — `make win-commit` on Git Bash printed Done with nothing committed.
+#
+# Its Windows_NT branch ran `cmd.exe /c ...`; MSYS rewrote `/c` as a path,
+# cmd.exe started interactive, read EOF and returned 0. A Windows host has no
+# make by default, so the branch was removed: only WSL (which sees
+# /mnt/c/.../cmd.exe) runs the batch, everything else prints the commands.
+# Static on purpose, so Linux CI sees it.
+# ---------------------------------------------------------------------------
+
+
+def _make_recipe(target: str) -> list[str]:
+    """The recipe lines of `target`, `@#` comment lines dropped."""
+    lines = (REPO_ROOT / "Makefile").read_text(encoding="utf-8").splitlines()
+    start = next(i for i, ln in enumerate(lines) if ln.startswith(f"{target}:"))
+    recipe = []
+    for ln in lines[start + 1:]:
+        if not ln.startswith("\t"):
+            break
+        if not ln.lstrip("\t").startswith("@#"):
+            recipe.append(ln)
+    return recipe
+
+
+def test_win_commit_has_no_windows_nt_branch() -> None:
+    recipe = _make_recipe("win-commit")
+    assert any("[2/3]" in ln for ln in recipe), "control: the recipe extraction no longer matches"
+    assert not [ln for ln in recipe if "Windows_NT" in ln], (
+        "win-commit runs cmd.exe from Git Bash again; MSYS turns `/c` into a path (#2248)"
+    )
+
+
+def test_win_commit_still_runs_the_batch_from_wsl() -> None:
+    """Must-ring control: deleting the whole [2/3] block would pass the check above."""
+    body = "\n".join(_make_recipe("win-commit"))
+    assert "/mnt/c/Windows/System32/cmd.exe" in body
+    assert "win_git_escape.bat commit-file" in body
+    assert "win_git_escape.bat push" in body

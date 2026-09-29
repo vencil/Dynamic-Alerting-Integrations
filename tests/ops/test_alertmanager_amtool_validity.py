@@ -194,7 +194,7 @@ def _skip_or_fail_closed(msg: str):
     但在設了 ``VIBE_REQUIRE_DOCKER=1`` 的 CI job（理應有 docker + 能拉
     registry），同一種缺席代表防線被靜默繳械（runner 換 image / daemon 壞 /
     registry 持續 timeout）→ FAIL 而非 skip，對齊 ci.yml python-tests 的
-    ``VIBE_REQUIRE_MTAIL`` fail-closed 前例。"""
+    ``VIBE_REQUIRE_VECTOR`` fail-closed 前例。"""
     if os.environ.get("VIBE_REQUIRE_DOCKER") == "1":
         pytest.fail(
             f"VIBE_REQUIRE_DOCKER=1 but {msg} — this CI job is supposed to "

@@ -228,7 +228,7 @@ def amtool_required():
     No ``amtool`` on PATH → skip, EXCEPT under ``VIBE_REQUIRE_AMTOOL=1`` (the
     CI Python Tests jobs, which install it): there a missing binary means the
     install step regressed, so the test FAILS instead of turning into a quiet
-    skip — same fail-closed pattern as ``VIBE_REQUIRE_MTAIL``. Use it as
+    skip — same fail-closed pattern as ``VIBE_REQUIRE_VECTOR``. Use it as
     ``pytest.mark.usefixtures("amtool_required")``.
     """
     if shutil.which("amtool") is None:

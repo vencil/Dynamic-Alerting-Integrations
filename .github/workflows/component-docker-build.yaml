@@ -13,17 +13,13 @@ name: Component Docker Build (PR smoke)
 #
 # ⚠️ Two of them ship inside Helm charts and are never published, so the
 # tag-time release build does NOT cover them at all (#1337). Their remaining
-# build coverage is NOT symmetric, so do not write it as one sentence:
-#   * vector-projection-gate — this workflow, the nightly scan and
-#     `make docker-build-all` are the only things that build it anywhere.
-#   * federation-audit-sidecar — additionally built on every CI run by the
-#     `federation-e2e` job (ci.yml), whose compose stack builds it from source
-#     (tests/federation-e2e/docker-compose.yml) and then scrapes its metrics.
+# build coverage: this workflow, the nightly scan and `make docker-build-all`
+# are the only things that build either of them anywhere. (Until #1278 D1 the
+# federation-e2e compose stack also built federation-audit-sidecar, for its
+# mtail; the metrics sidecar is now upstream Vector and the image is
+# logrotate-only, which the e2e stack does not run.)
 #
-# Cost: ~30-60 s per component, only on PRs touching the paths below. The
-# exception is federation-audit-sidecar, which since #1337 compiles mtail from
-# source (~25 s locally with a warm module cache; a cold runner also pays the
-# clone + module download).
+# Cost: ~30-60 s per component, only on PRs touching the paths below.
 # No registry push (forked PRs work — `load: true` is local-daemon only).
 #
 # Trivy CVE scan: **informational at PR time (exit-code 0)**, NOT blocking.
@@ -78,10 +74,9 @@ jobs:
   build:
     name: build ${{ matrix.name }}
     runs-on: ubuntu-24.04
-    # Since #1337 one leg clones github.com/google/mtail and downloads a Go
-    # module graph. `git fetch -q` has no timeout of its own, and with
-    # `fail-fast: false` a hung fetch would otherwise burn GitHub's 360-minute
-    # default. Same value the nightly scan already uses for the same builds.
+    # An explicit cap: with `fail-fast: false` a hung pull or apk fetch would
+    # otherwise burn GitHub's 360-minute default. Same value the nightly scan
+    # already uses for the same builds.
     timeout-minutes: 25
     strategy:
       fail-fast: false  # build all components so one break doesn't mask another
@@ -134,7 +129,7 @@ jobs:
       - uses: actions/checkout@v6
 
       - name: Set up Docker Buildx
-        uses: docker/setup-buildx-action@v3
+        uses: docker/setup-buildx-action@8d2750c68a42422c14e847fe6c8ac0403b4cbd6f # v3.12.0
 
       # da-portal Dockerfile COPYs docs/assets/vendor/ (offline-mode assets that
       # release.yaml populates via vendor_download.sh). For a build SMOKE test we
@@ -165,7 +160,7 @@ jobs:
 
       # Hard gate: build must succeed. Catches #472/#473-class dormant breaks.
       - name: Build image (load, no push)
-        uses: docker/build-push-action@v6
+        uses: docker/build-push-action@10e90e3645eae34f1e60eeb005ba3a3d33f178e8 # v6.19.2
         with:
           context: ${{ matrix.context }}
           file: ${{ matrix.dockerfile }}
@@ -203,7 +198,7 @@ jobs:
       # Informational (exit-code 0, see header). Same severity/ignore-unfixed
       # contract as release.yaml so PR-time output matches release-time output.
       - name: Trivy CVE scan (informational)
-        uses: aquasecurity/trivy-action@v0.36.0
+        uses: aquasecurity/trivy-action@ed142fd0673e97e23eac54620cfb913e5ce36c25 # v0.36.0
         with:
           # Trivy binary pinned (the action's own default moves with every
           # action bump). Same version as Makefile TRIVY_VERSION and

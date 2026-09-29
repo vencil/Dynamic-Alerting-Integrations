@@ -14,7 +14,7 @@ import time
 
 from helpers import (RENDERED, assert_eventually, expect_positive,
                      expect_status, fresh_rsa_pem, gateway_request,
-                     mtail_counter, query, reconciler_read,
+                     audit_counter, query, reconciler_read,
                      result_series, sign_token, tenants_in, write_revoked)
 
 
@@ -130,7 +130,7 @@ def test_s4_revocation_propagation(gateway_url, signer):
         revoked_file.write_text("")
 
 
-def test_s5_sybil_rate_limit(gateway_url, mtail_url, signer):
+def test_s5_sybil_rate_limit(gateway_url, audit_metrics_url, signer):
     """S5 — Sybil: one tenant round-robins multiple tokens to try to
     multiply its quota. The per-token limiter is generous; the per-tenant
     limiter (rendered 30/min) is the ceiling, so 40 requests yield 429s.
@@ -144,11 +144,11 @@ def test_s5_sybil_rate_limit(gateway_url, mtail_url, signer):
     assert 429 in statuses, f"per-tenant limiter never tripped: {statuses}"
     assert 200 in statuses, f"no request got through: {statuses}"
 
-    # The audit pipeline records the throttled requests (mtail buckets
-    # HTTP 429 -> rate_limited). Async — allow the log->mtail lag.
+    # The audit pipeline records the throttled requests (the audit-metrics
+    # sidecar buckets HTTP 429 -> rate_limited). Async — allow the pipeline lag.
     assert_eventually(
         lambda: expect_positive(
-            mtail_counter(mtail_url, "tenant_federation_requests_total",
+            audit_counter(audit_metrics_url, "tenant_federation_requests_total",
                           tenant="s5-sybil", status="rate_limited"),
             "rate_limited count"),
         timeout=20.0, desc="audit metric records rate_limited")
@@ -167,7 +167,7 @@ def test_s6_oversized_payload(gateway_url, signer):
     assert resp.status_code == 413, (resp.status_code, resp.text[:200])
 
 
-def test_s7_storage_cap(gateway_url, mtail_url, signer):
+def test_s7_storage_cap(gateway_url, audit_metrics_url, signer):
     """S7 — a query touching every series (16 for db-a) exceeds the
     deliberately-low --query.max-samples (12) and the storage backend
     rejects it with 422; the audit metric records it as `bad_request`."""
@@ -175,10 +175,10 @@ def test_s7_storage_cap(gateway_url, mtail_url, signer):
     resp = query(gateway_url, token, '{__name__=~".+"}')
     assert resp.status_code == 422, (resp.status_code, resp.text[:200])
 
-    # mtail buckets HTTP 422 -> bad_request. Async — allow the pipeline lag.
+    # The audit-metrics sidecar buckets HTTP 422 -> bad_request. Async — allow the pipeline lag.
     assert_eventually(
         lambda: expect_positive(
-            mtail_counter(mtail_url, "tenant_federation_requests_total",
+            audit_counter(audit_metrics_url, "tenant_federation_requests_total",
                           tenant="db-a", status="bad_request"),
             "bad_request count"),
         timeout=20.0, desc="audit metric records bad_request")

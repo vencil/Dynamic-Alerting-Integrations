@@ -11,7 +11,7 @@ the image it already pulled while the nightly scan reports the new one.
 That happened in #1278: the runtime base moved alpine 3.23.5 -> 3.23.6 (the
 libcrypto3 fix) with the tag still at 0.1.0. The federation audit sidecar has
 had the same guard since #1337
-(``tests/shared/test_federation_audit_mtail.py``); this is its twin.
+(``tests/shared/test_federation_audit_metrics.py``); this is its twin.
 
 ⛔ Unlike the sidecar, this image COPYs scripts from the build context, so the
 Dockerfile alone does not describe the build. The digest covers the

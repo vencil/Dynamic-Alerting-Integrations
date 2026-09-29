@@ -275,7 +275,7 @@ def test_ci_install_matches_the_pre_commit_rev() -> None:
 
 
 def test_ci_install_pins_a_sha256() -> None:
-    """The install must be checksum-verified, like the Vector / mtail siblings."""
+    """The install must be checksum-verified, like the Vector sibling."""
     ci = _CI_YML.read_text(encoding="utf-8")
     # _one() already proves there is exactly one 64-hex ACTIONLINT_SHA256.
     _same(r"^\s*ACTIONLINT_SHA256=([0-9a-f]{64})", ci, "ci.yml ACTIONLINT_SHA256")
@@ -296,7 +296,7 @@ def test_ci_install_pins_a_sha256() -> None:
 
 def test_download_cache_key_carries_the_pinned_version() -> None:
     """A stale cache key exact-hits the old entry and the new tarball never gets
-    cached (ci.yml says so in its own comment about the Vector/mtail pins)."""
+    cached (ci.yml says so in its own comment about the Vector pin)."""
     ci = _CI_YML.read_text(encoding="utf-8")
     key = _same(r"^\s*key:\s*(\$\{\{ runner\.os \}\}-vibe-dl-pytests-\S+)", ci,
                "ci.yml python-tests download-cache key")

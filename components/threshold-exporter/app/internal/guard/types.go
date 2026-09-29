@@ -125,6 +125,16 @@ const (
 	// FindingDomainPolicyViolation: a receiver type an ADR-007 domain
 	// policy forbids, or leaves out of its allowed list.
 	FindingDomainPolicyViolation FindingKind = "domain_policy_violation"
+	// FindingCriticalEscalationMissing (error; #2325): a domain policy sets
+	// `require_critical_escalation: true` and severity=critical alerts reach
+	// no pagerduty receiver — the main receiver is not one, and no rendered
+	// `routes` entry matching `severity: critical` sends to one.
+	FindingCriticalEscalationMissing FindingKind = "critical_escalation_missing"
+	// FindingCriticalEscalationLeak (warn; #2325): the tenant escalates, but
+	// this non-pagerduty destination (Field `<ref>.receiver.type`) still
+	// receives some severity=critical alerts before any pagerduty receiver
+	// does. Never blocks, as in the route generator.
+	FindingCriticalEscalationLeak FindingKind = "critical_escalation_leak"
 	// FindingUnknownRoutingProfile (warn): `_routing_profile` names a
 	// profile no `_routing_profiles.yaml` defines; nothing is merged.
 	FindingUnknownRoutingProfile FindingKind = "unknown_routing_profile"

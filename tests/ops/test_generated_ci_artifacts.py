@@ -290,7 +290,7 @@ INSTALLS the binary says so via ``VIBE_REQUIRE_ACTIONLINT`` /
 install step must not silently turn this whole file into a green no-op.
 The fourth of those covers ``git``/``bash``/``tar``, which are what the
 execution-based tests need; ``ubuntu-latest`` ships them, so an absence is a
-regressed runner image rather than an optional check. Same fail-closed pattern as ``VIBE_REQUIRE_MTAIL`` / ``_VECTOR``
+regressed runner image rather than an optional check. Same fail-closed pattern as ``VIBE_REQUIRE_VECTOR``
 / ``_HELM`` / ``_DOCKER`` in ``.github/workflows/ci.yml`` (see
 ``tests/helm/test_federation_store_namespace_guard.py`` for the test-side
 precedent).
@@ -4166,7 +4166,8 @@ _EXPECTED_GH_APPLY: dict[str, list[str]] = {
 
 _EXPECTED_GL_APPLY: dict[str, list[str]] = {
     "kustomize": [
-        'kustomize build --load-restrictor LoadRestrictionsNone "kustomize/overlays/prod" > /tmp/manifests.yaml',
+        # `kubectl kustomize`: the GitLab apply image ships kubectl only.
+        'kubectl kustomize --load-restrictor LoadRestrictionsNone "kustomize/overlays/prod" > /tmp/manifests.yaml',
         "kubectl apply --dry-run=server -f /tmp/manifests.yaml",
         "kubectl apply -f /tmp/manifests.yaml",
         "kubectl rollout restart deployment/prometheus -n $MONITORING_NS",
@@ -7797,6 +7798,25 @@ def test_no_portal_prose_offers_a_deploy_mode_the_cli_does_not(tmp_path) -> None
 
 _PLATFORM_WORKFLOW_DIR = _REPO_ROOT / ".github" / "workflows"
 
+# Third-party actions in this repository's own workflows are pinned to a commit
+# SHA with the version as a trailing comment (`owner/repo@<sha> # v2.9.4`;
+# renovate.json, test_renovate_config). The YAML parse drops the comment, so for
+# a SHA ref the version is read back from the same raw line. ⛔ A SHA with no
+# version comment fails loudly: its major is unknowable offline, and skipping it
+# would silently drop that action from every comparison below.
+_SHA_REF = re.compile(r"@[0-9a-f]{40}$")
+
+
+def _sha_pin_versions(text: str) -> dict[str, str]:
+    """`owner/repo@<sha>` -> `vX.Y.Z` from the `# vX.Y.Z` comment on its line."""
+    return {
+        m.group(1): m.group(2)
+        for m in re.finditer(
+            r"^\s*-?\s*uses:\s*([^\s#]+@[0-9a-f]{40})\s+#\s*(v?\d+(?:\.\d+)*)\s*$",
+            text, re.MULTILINE,
+        )
+    }
+
 
 def _action_major(ref: str) -> tuple[str, str] | None:
     """``actions/checkout@v6`` -> ``("actions/checkout", "6")``.
@@ -7854,9 +7874,18 @@ def _platform_action_majors() -> dict[str, frozenset[str]]:
         f"broke, and every comparison built on it would pass over nothing"
     )
     for path in files:
-        loaded = yaml.safe_load(path.read_text(encoding="utf-8"))
+        text = path.read_text(encoding="utf-8")
+        loaded = yaml.safe_load(text)
         assert isinstance(loaded, dict), f"{path.name} did not parse as a mapping"
+        sha_versions = _sha_pin_versions(text)
         for ref in _uses_refs(loaded):
+            if _SHA_REF.search(ref.strip()):
+                version = sha_versions.get(ref.strip())
+                assert version, (
+                    f"{path.name}: `{ref}` is SHA-pinned without a `# vX.Y.Z` "
+                    f"comment — its major cannot be read, so it would drop out "
+                    f"of the delivered-pin comparison")
+                ref = f"{ref.split('@', 1)[0]}@{version}"
             parsed = _action_major(ref)
             if parsed is None:
                 continue
