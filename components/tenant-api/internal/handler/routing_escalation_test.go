@@ -11,6 +11,7 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"slices"
 	"strings"
 	"testing"
 
@@ -38,16 +39,20 @@ func escalationTree() map[string]string {
 	}
 }
 
-// escalationAdvisory is the leak advisory esc-leak yields for t-leak.
-const escalationAdvisory = "tenant=t-leak: domain policy 'escalation': routes[0] (team=app)"
+// leakAdvisory is the full leak advisory esc-leak yields for tenant, word
+// for word. Every test here compares the whole warnings list against it
+// (count and order included): a contains check cannot see a duplicate.
+func leakAdvisory(tenant string) string {
+	return "tenant=" + tenant + ": domain policy 'escalation': routes[0] (team=app) receiver type 'slack'" +
+		" catches alerts with severity=critical, team=app before any receiver of type pagerduty does, so they never reach one"
+}
 
-func hasAdvisory(warnings []string) bool {
-	for _, w := range warnings {
-		if strings.HasPrefix(w, escalationAdvisory) {
-			return true
-		}
+// wantWarnings fails unless got is exactly want, in order.
+func wantWarnings(t *testing.T, got []string, want ...string) {
+	t.Helper()
+	if !slices.Equal(got, want) {
+		t.Errorf("warnings (%d) =\n  %q\nwant (%d)\n  %q", len(got), got, len(want), want)
 	}
-	return false
 }
 
 func escalationPRClient() *mockPlatformClient {
@@ -67,9 +72,10 @@ func TestBatchTenants_EscalationAdvisory_Direct(t *testing.T) {
 		Policy: policy.NewManager(configDir), WriteMode: WriteModeDirect}
 	resp := runBatch(t, configDir, d, `[{"tenant_id":"t-leak","patch":{"_routing_profile":"esc-leak"}}]`)
 	r := resultsByTenant(resp)["t-leak"]
-	if r.Status != "ok" || !hasAdvisory(r.Warnings) {
-		t.Errorf("t-leak = %+v, want ok with the %q advisory", r, escalationAdvisory)
+	if r.Status != "ok" {
+		t.Errorf("t-leak = %+v, want ok", r)
 	}
+	wantWarnings(t, r.Warnings, leakAdvisory("t-leak"))
 }
 
 // PR-mode batch (batchTenantsPRMode): a non-compliant op is refused and left
@@ -94,9 +100,7 @@ func TestBatchTenants_Escalation_PRMode(t *testing.T) {
 	if r := got["t-leak"]; r.Status != "included" {
 		t.Errorf("t-leak = %+v, want included in the PR", r)
 	}
-	if !hasAdvisory(resp.Warnings) {
-		t.Errorf("batch warnings %v, want the %q advisory", resp.Warnings, escalationAdvisory)
-	}
+	wantWarnings(t, resp.Warnings, leakAdvisory("t-leak"))
 }
 
 // PR-mode PUT (putTenantPRMode): the leak advisory is in the pending_review
@@ -119,9 +123,10 @@ func TestPutTenant_EscalationAdvisory_PRMode(t *testing.T) {
 	if err := json.Unmarshal(w.Body.Bytes(), &resp); err != nil {
 		t.Fatalf("unmarshal: %v", err)
 	}
-	if resp.Status != "pending_review" || !hasAdvisory(resp.Warnings) {
-		t.Errorf("response = %+v, want pending_review with the %q advisory", resp, escalationAdvisory)
+	if resp.Status != "pending_review" {
+		t.Errorf("response = %+v, want pending_review", resp)
 	}
+	wantWarnings(t, resp.Warnings, leakAdvisory("t-leak"))
 }
 
 // ErrNoChanges success paths (PR-mode PUT `no_changes`, PR-mode batch
@@ -152,9 +157,10 @@ func TestPutTenant_EscalationAdvisory_PRModeNoChanges(t *testing.T) {
 	if err := json.Unmarshal(w.Body.Bytes(), &resp); err != nil {
 		t.Fatalf("unmarshal: %v", err)
 	}
-	if resp.Status != "no_changes" || !hasAdvisory(resp.Warnings) {
-		t.Errorf("response = %+v, want no_changes with the %q advisory", resp, escalationAdvisory)
+	if resp.Status != "no_changes" {
+		t.Errorf("response = %+v, want no_changes", resp)
 	}
+	wantWarnings(t, resp.Warnings, leakAdvisory("t-leak"))
 }
 
 func TestBatchTenants_EscalationAdvisory_PRModeNoChanges(t *testing.T) {
@@ -163,9 +169,10 @@ func TestBatchTenants_EscalationAdvisory_PRModeNoChanges(t *testing.T) {
 		Policy: policy.NewManager(configDir), WriteMode: WriteModePR, PRClient: escalationPRClient(),
 		PRTracker: &mockPlatformTracker{}}
 	resp := runBatch(t, configDir, d, `[{"tenant_id":"t-leak","patch":{"_routing_profile":"esc-leak"}}]`)
-	if resp.Status != "completed" || !hasAdvisory(resp.Warnings) {
-		t.Errorf("response = %+v, want completed with the %q advisory", resp, escalationAdvisory)
+	if resp.Status != "completed" {
+		t.Errorf("status = %q, want completed: %+v", resp.Status, resp)
 	}
+	wantWarnings(t, resp.Warnings, leakAdvisory("t-leak"))
 }
 
 // A `!!null x` require_critical_escalation (#2325) is None to PyYAML: the
@@ -257,15 +264,7 @@ func TestBatchTenants_EscalationAdvisory_PRModeLastOpPerTenant(t *testing.T) {
 			t.Fatalf("result %+v, want every op included", r)
 		}
 	}
-	var got []string
-	for _, w := range resp.Warnings {
-		if strings.HasPrefix(w, "tenant=") {
-			got = append(got, strings.SplitN(w, ":", 2)[0])
-		}
-	}
-	if want := []string{"tenant=t-a", "tenant=t-b"}; strings.Join(got, ",") != strings.Join(want, ",") {
-		t.Errorf("advisory tenants = %v, want %v; warnings: %v", got, want, resp.Warnings)
-	}
+	wantWarnings(t, resp.Warnings, leakAdvisory("t-a"), leakAdvisory("t-b"))
 }
 
 // A later op of the same tenant that does not touch routing leaves the
@@ -282,7 +281,66 @@ func TestBatchTenants_EscalationAdvisory_PRModeNonRoutingOpKeepsAdvisory(t *test
 	if resp.Status != "pending_review" {
 		t.Fatalf("status = %q, want pending_review: %+v", resp.Status, resp)
 	}
-	if !hasAdvisory(resp.Warnings) {
-		t.Errorf("warnings = %v, want the %q advisory kept", resp.Warnings, escalationAdvisory)
+	wantWarnings(t, resp.Warnings, leakAdvisory("t-leak"))
+}
+
+// PR-mode batch, several ops per tenant (#2440 review): each tenant's
+// advisories appear once, whatever the mix of routing and non-routing ops,
+// in the order of the tenants' first routing op taken into the PR. A
+// non-routing op before a routing one must not register the tenant (it did,
+// and each such op listed the tenant's advisories once more). A refused op
+// is left out and changes nothing; a later routing op replaces an earlier
+// one's advisories, down to none.
+func TestBatchTenants_EscalationAdvisory_PRModeOncePerTenant(t *testing.T) {
+	const (
+		leak    = `{"tenant_id":"t-leak","patch":{"_routing_profile":"esc-leak"}}`
+		miss    = `{"tenant_id":"t-leak","patch":{"_routing_profile":"esc-miss"}}`
+		thr     = `{"tenant_id":"t-leak","patch":{"cpu_usage_percent":"90"}}`
+		thr2    = `{"tenant_id":"t-leak","patch":{"cpu_usage_percent":"91"}}`
+		thrNoop = `{"tenant_id":"t-leak","patch":{"cpu_usage_percent":"85"}}`
+		other   = `{"tenant_id":"t-other","patch":{"_routing_profile":"esc-leak"}}`
+	)
+	ops := func(o ...string) string { return "[" + strings.Join(o, ",") + "]" }
+	for _, c := range []struct {
+		name       string
+		leakOnDisk bool
+		ops        string
+		status     string
+		want       []string
+	}{
+		{"A leak then threshold", false, ops(leak, thr), "pending_review", []string{leakAdvisory("t-leak")}},
+		{"B leak then refused", false, ops(leak, miss), "pending_review", []string{leakAdvisory("t-leak")}},
+		{"C refused then leak", false, ops(miss, leak), "pending_review", []string{leakAdvisory("t-leak")}},
+		{"D2 no changes twice", true, ops(leak, leak), "completed", []string{leakAdvisory("t-leak")}},
+		{"H threshold only, leak on disk", true, ops(thr), "pending_review", nil},
+		{"I threshold then leak", false, ops(thr, leak), "pending_review", []string{leakAdvisory("t-leak")}},
+		{"J thr, thr, leak", false, ops(thr, thr2, leak), "pending_review", []string{leakAdvisory("t-leak")}},
+		{"K leak, thr, routing off", false,
+			ops(leak, thr, `{"tenant_id":"t-leak","patch":{"_routing":"false"}}`), "pending_review", nil},
+		{"L leak then empty profile", false,
+			ops(leak, `{"tenant_id":"t-leak","patch":{"_routing_profile":""}}`), "pending_review", nil},
+		{"M interleaved with another tenant", false, ops(thr, other, leak), "pending_review",
+			[]string{leakAdvisory("t-other"), leakAdvisory("t-leak")}},
+		{"O no-op threshold then no-op leak", true, ops(thrNoop, leak), "pending_review", []string{leakAdvisory("t-leak")}},
+		{"P leak twice", false, ops(leak, leak), "pending_review", []string{leakAdvisory("t-leak")}},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			tree := escalationTree()
+			if c.leakOnDisk {
+				tree = escalationTreeLeakOnDisk()
+			}
+			tree["_domain_policy.yaml"] = "domain_policies:\n  escalation:\n    tenants: [t-leak, t-miss, t-other]\n" +
+				"    constraints:\n      require_critical_escalation: true\n"
+			tree["t-other.yaml"] = "tenants:\n  t-other:\n    cpu_usage_percent: '85'\n"
+			configDir := seedGitTree(t, tree)
+			d := &Deps{Writer: newTestWriter(configDir), ConfigDir: configDir, RBAC: adminRBAC(t),
+				Policy: policy.NewManager(configDir), WriteMode: WriteModePR, PRClient: escalationPRClient(),
+				PRTracker: &mockPlatformTracker{}}
+			resp := runBatch(t, configDir, d, c.ops)
+			if resp.Status != c.status {
+				t.Errorf("status = %q, want %q: %+v", resp.Status, c.status, resp)
+			}
+			wantWarnings(t, resp.Warnings, c.want...)
+		})
 	}
 }

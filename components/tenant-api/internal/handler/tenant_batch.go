@@ -198,8 +198,11 @@ func batchTenantsPRMode(d *Deps, rw http.ResponseWriter, r *http.Request, req Ba
 	// tenant is judged on an intermediate routing the later ops are stacked
 	// over, so its notes are replaced, not kept (#2440 review). An op that
 	// does not touch routing is not judged (batchRoutingViolations) and leaves
-	// the routing as is, so it replaces nothing. advisoryTenants holds the
-	// order the tenants were first taken in; advisories below flattens them.
+	// the routing as is, so it replaces nothing and registers nothing. A key
+	// in the map means the tenant is registered (even with nil advisories, so
+	// a later op can clear an earlier one's). advisoryTenants holds the order
+	// of each tenant's FIRST routing op taken into the PR, each tenant once;
+	// advisories below flattens them.
 	advisoriesByTenant := map[string][]string{}
 	var advisoryTenants []string
 	for _, op := range req.Operations {
@@ -228,10 +231,10 @@ func batchTenantsPRMode(d *Deps, rw http.ResponseWriter, r *http.Request, req Ba
 				continue
 			}
 			// #2325: batch-level, like the notices (each names its tenant).
-			if _, seen := advisoriesByTenant[op.TenantID]; !seen {
-				advisoryTenants = append(advisoryTenants, op.TenantID)
-			}
 			if touchesRouting(op.Patch) {
+				if _, seen := advisoriesByTenant[op.TenantID]; !seen {
+					advisoryTenants = append(advisoryTenants, op.TenantID)
+				}
 				advisoriesByTenant[op.TenantID] = adv
 			}
 		}
