@@ -20,6 +20,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/vencil/tenant-api/internal/gitops"
 	"github.com/vencil/tenant-api/internal/rbac"
 	cfg "github.com/vencil/threshold-exporter/pkg/config"
 )
@@ -138,6 +139,15 @@ func TestPutTenant_ReceiverShape(t *testing.T) {
 			[]string{"tenants.rs-t._routing.overrides[0].receiver.http_config.bearer_token"}},
 		{"override quoted on beside a 1: key", webhookOK + "      overrides:\n      - alertname: X\n        1: y\n" +
 			"        receiver: {type: webhook, url: https://hook.example.com/b, http_config: {bearer_token: \"on\"}}\n", nil},
+		// #2295 review: a key PyYAML reads as a non-string on the receiver
+		// itself or in proxy_connect_header leaves it a mapping (the route
+		// generator and Alertmanager take both); in http_config itself
+		// Alertmanager refuses the unknown key, so that stays refused.
+		{"receiver with a 1: key", webhookOK + "        1: x\n", nil},
+		{"proxy_connect_header with an on: key", webhookOK + "        http_config:\n" +
+			"          proxy_url: http://p.example.com:3128\n          proxy_connect_header:\n            on: [x]\n", nil},
+		{"http_config with a 1: key", webhookOK + "        http_config:\n          1: x\n          bearer_token: t\n",
+			[]string{"tenants.rs-t._routing.receiver.http_config"}},
 		{"every receiver of the body, one violation each", "      receiver:\n        type: bogus\n" +
 			"      overrides:\n      - alertname: X\n        receiver: {type: webhook}\n" +
 			"      routes:\n      - match: {severity: critical}\n        receiver: {type: pagerduty, service_key: a, routing_key: b}\n",
@@ -183,6 +193,34 @@ func TestPutTenant_ReceiverShape(t *testing.T) {
 				}
 			})
 		}
+	}
+}
+
+// TestPutTenant_OversizeBodyIsTheSizeGates (#2295 review): a body over the
+// #1722 per-document cap is answered by that gate — the Writer's 400 naming
+// TA_MAX_TENANT_DOC_BYTES, nothing written, as before the receiver check
+// existed — and the receiver check does not parse it first (the parse is the
+// cost the gate bounds). The body's receiver is one the check refuses, so a
+// check that parsed before the gate would answer with its violation instead.
+func TestPutTenant_OversizeBodyIsTheSizeGates(t *testing.T) {
+	const bad = "tenants:\n  rs-t:\n    _routing:\n      receiver:\n        type: bogus\n"
+	var b strings.Builder
+	b.WriteString(bad)
+	for int64(b.Len()) <= gitops.MaxTenantDocBytes() {
+		b.WriteString("#" + strings.Repeat("x", 62) + "\n")
+	}
+	for _, pr := range []bool{false, true} {
+		code, resp, written := putReceiverDoc(t, b.String(), pr)
+		if code != http.StatusBadRequest || written != "" ||
+			!strings.Contains(resp, "TA_MAX_TENANT_DOC_BYTES") || strings.Contains(resp, "receiver") {
+			t.Errorf("pr=%v: status %d, written %q; want 400 from the size gate, no receiver violation, no write; body: %.300s",
+				pr, code, written, resp)
+		}
+	}
+	// Control: under the cap the same receiver is refused by the check.
+	if code, resp, _ := putReceiverDoc(t, bad, false); code != http.StatusBadRequest ||
+		!strings.Contains(resp, "tenants.rs-t._routing.receiver.type") {
+		t.Fatalf("control: status %d, want the receiver violation; body: %s", code, resp)
 	}
 }
 

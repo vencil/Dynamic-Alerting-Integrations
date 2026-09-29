@@ -58,8 +58,8 @@ func (e *ReceiverShapeError) lines() []string {
 }
 
 // ReceiverPreflight judges the receivers a PUT /tenants/{id} body writes. A
-// body the Writer's own pre-flight would refuse (bad YAML, a missing tenant
-// section) passes here, so the Writer answers it as before.
+// body the Writer's own pre-flight would refuse (over the size cap, bad YAML,
+// a missing tenant section) passes here, so the Writer answers it as before.
 func ReceiverPreflight(tenantID, yamlContent string) error {
 	if v := receiverViolations(tenantID, yamlContent); len(v) > 0 {
 		return &ReceiverShapeError{Violations: v}
@@ -94,6 +94,12 @@ func dryRunPreflight(tenantID, yamlContent string) []string {
 // checks that own them. Known limitation: nothing else in the tenant block
 // (other sections that end up in Alertmanager's config) is judged here.
 func receiverViolations(tenantID, yamlContent string) []ReceiverViolation {
+	// #1722's pre-parse size gate, first: an oversize body is the Writer's
+	// to refuse (validateShape answers it with a length compare), and the
+	// parses below are the cost that gate bounds — so it is not parsed here.
+	if len(CheckTenantDocSize(yamlContent)) > 0 {
+		return nil
+	}
 	var doc struct {
 		Tenants map[string]map[string]any `yaml:"tenants"`
 	}

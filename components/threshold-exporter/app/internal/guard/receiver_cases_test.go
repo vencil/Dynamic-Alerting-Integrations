@@ -59,3 +59,30 @@ func TestReceiverPresenceCases(t *testing.T) {
 		})
 	}
 }
+
+// TestReceiverNonStringKey (#2295): a receiver with a key PyYAML reads as a
+// non-string (`1:`) is decoded as map[any]any. The route generator and
+// Alertmanager take it, so the guard hands it to receiverspec.Check as
+// decoded — main, override and routes receiver — instead of reading it as
+// "not an object". The contract rows are in pkg/receiverspec
+// (TestCheck_NonStringKeys).
+func TestReceiverNonStringKey(t *testing.T) {
+	var n yaml.Node
+	if err := yaml.Unmarshal([]byte("type: webhook\nurl: https://h.example/a\n1: x\n"), &n); err != nil {
+		t.Fatal(err)
+	}
+	recv := pyyamlcompat.Decode(&n)
+	if _, isAnyMap := recv.(map[any]any); !isAnyMap {
+		t.Fatalf("fixture decoded as %T, want map[any]any", recv)
+	}
+	routing := map[string]any{
+		"receiver":  recv,
+		"overrides": []any{map[string]any{"alertname": "X", "receiver": recv}},
+		"routes":    []any{map[string]any{"match": map[string]any{"team": "a"}, "receiver": recv}},
+	}
+	for _, f := range runWithRouting(t, "t1", routing) {
+		if f.Severity == SeverityError {
+			t.Errorf("error finding %s: %s", f.Field, f.Message)
+		}
+	}
+}

@@ -264,7 +264,7 @@ func checkOneTenantRouting(tenantID string, routing map[string]any) []Finding {
 	// Checks 1 + 2 against the main receiver. nil main receiver is
 	// handled here (not earlier) so the finding still references
 	// the right `receiver` field path.
-	out = append(out, checkReceiverShape(tenantID, "receiver", mainReceiver)...)
+	out = append(out, checkReceiverShape(tenantID, "receiver", routing["receiver"])...)
 
 	// ADR-007 label-match `routes` (#2280): checked whether or not the
 	// tenant has overrides — they used to sit behind an "no overrides,
@@ -351,8 +351,8 @@ func checkOneTenantRouting(tenantID string, routing map[string]any) []Finding {
 		}
 
 		// Checks 1 + 2 against the override's receiver.
+		out = append(out, checkReceiverShape(tenantID, fieldPath+".receiver", ov["receiver"])...)
 		ovReceiver, _ := ov["receiver"].(map[string]any)
-		out = append(out, checkReceiverShape(tenantID, fieldPath+".receiver", ovReceiver)...)
 
 		// Check 5: redundant override receiver vs main.
 		if mainSig != "" && receiverSignature(ovReceiver) == mainSig {
@@ -408,8 +408,7 @@ func checkRoutes(tenantID string, routing map[string]any) []Finding {
 			continue
 		}
 		m, _ := entry.(map[string]any)
-		recv, _ := m["receiver"].(map[string]any)
-		out = append(out, checkReceiverShape(tenantID, fieldPath+".receiver", recv)...)
+		out = append(out, checkReceiverShape(tenantID, fieldPath+".receiver", m["receiver"])...)
 	}
 	return out
 }
@@ -419,13 +418,11 @@ func checkRoutes(tenantID string, routing map[string]any) []Finding {
 // pkg/config), rendered as findings. A nil/missing receiver, a missing or
 // unknown type are one finding each; every other problem (missing,
 // malformed or conflicting fields, optional boolean values, http_config)
-// is one finding per field.
-func checkReceiverShape(tenantID, fieldPath string, receiver map[string]any) []Finding {
-	var recv any
-	if receiver != nil {
-		recv = receiver
-	}
-	problems := receiverspec.Check(recv)
+// is one finding per field. The receiver is handed over as decoded: a
+// mapping with a key PyYAML reads as a non-string (`1:`) is map[any]any,
+// which receiverspec.Check takes as the mapping it is (#2295).
+func checkReceiverShape(tenantID, fieldPath string, receiver any) []Finding {
+	problems := receiverspec.Check(receiver)
 	out := make([]Finding, 0, len(problems))
 	for _, p := range problems {
 		field := fieldPath

@@ -167,7 +167,7 @@ type Problem struct {
 // (not a mapping, no type, unknown type) yields exactly one problem, since
 // the field checks need a type to be meaningful.
 func Check(receiver any) []Problem {
-	m, ok := receiver.(map[string]any)
+	m, ok := asMapping(receiver)
 	if !ok || m == nil {
 		return []Problem{{Kind: KindNotObject, Message: "receiver is missing or not an object; routing requires a receiver dict with `type`"}}
 	}
@@ -410,6 +410,8 @@ func checkHTTPConfig(rtype string, v any) []Problem {
 	case nil:
 	case map[string]any:
 		connectHeader = len(x) > 0
+	case map[any]any: // a header PyYAML reads as a non-string (`1:`, `on:`): still a mapping (asMapping)
+		connectHeader = len(x) > 0
 	default:
 		invalid("http_config.proxy_connect_header", "a mapping", x)
 	}
@@ -429,6 +431,32 @@ func checkHTTPConfig(rtype string, v any) []Problem {
 		conflict("http_config.no_proxy", "no_proxy needs a proxy_url")
 	}
 	return out
+}
+
+// asMapping reads v as a mapping where a non-string key does not change what
+// the mapping is (#2295): the receiver itself and http_config's
+// proxy_connect_header. pkg/pyyamlcompat hands a mapping over as
+// map[any]any when PyYAML reads one of its keys as a non-string (`1:`,
+// `on:`); the route generator and Alertmanager take such a receiver or header
+// mapping, so the key is not a problem here, and the known fields are looked
+// up by their string keys (the non-string ones are left out of the copy).
+// ⛔ Not for http_config itself: there Alertmanager refuses an unknown key
+// (`1: x` → "field 1 not found"), so checkHTTPConfig keeps refusing a
+// map[any]any.
+func asMapping(v any) (map[string]any, bool) {
+	switch x := v.(type) {
+	case map[string]any:
+		return x, true
+	case map[any]any:
+		out := make(map[string]any, len(x))
+		for k, val := range x {
+			if s, ok := k.(string); ok {
+				out[s] = val
+			}
+		}
+		return out, true
+	}
+	return nil, false
 }
 
 // YAML11BoolLiterals are the plain scalars YAML 1.1 — PyYAML, the Python route
