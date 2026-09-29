@@ -1,0 +1,9 @@
+tenants:
+  tenant-binary:
+    _routing:
+      receiver:
+        type: "webhook"
+        url: !!binary aHR0cHM6Ly9ob29rcy5leGFtcGxlLmNvbS9hbGVydHM=
+    _silent_mode:
+      target: "warning"
+      reason: !!binary 5Lit5paH

@@ -1,0 +1,4 @@
+defaults:
+  _silent_mode:
+    target: "warning"
+    expires: 2026-12-31

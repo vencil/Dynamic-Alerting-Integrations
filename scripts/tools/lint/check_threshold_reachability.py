@@ -551,14 +551,14 @@ _DEFAULTS_ARTIFACT_READ_FLOOR = 10
 # above, one level down.
 #
 # Measured today — generators 93 (chart 8 / scaffold 42 / init 42 / onboard 1),
-# artifacts 76 COUNTED (exporter conf.d 19 / try-local 4 / recipes 0 / golden
-# fixtures 53) plus 13 read but NOT counted by the key floor (e2e-bench, see
-# `_ARTIFACT_KEYS_FLOOR_EXCLUDED_ROOTS`) — 89 scanned in all. Each floor sits
+# artifacts 83 COUNTED (exporter conf.d 19 / try-local 4 / recipes 0 / golden
+# fixtures 60) plus 13 read but NOT counted by the key floor (e2e-bench, see
+# `_ARTIFACT_KEYS_FLOOR_EXCLUDED_ROOTS`) — 96 scanned in all. Each floor sits
 # below its class's value; what it would read if a whole group stopped yielding:
 #
 #   generators   chart 85 / scaffold 51 / init 51 / onboard 92
-#   artifacts    exporter 57 / golden 23 / try-local 72 / recipes 76 /
-#                e2e-bench 76 (unchanged — it was never in the total)
+#   artifacts    exporter 64 / golden 23 / try-local 79 / recipes 83 /
+#                e2e-bench 83 (unchanged — it was never in the total)
 #
 # (issue 1196: init stopped rendering its own 51-key copy — 36 of whose keys no
 #  alert read — and now renders scaffold's 42, so the generator total went
@@ -608,8 +608,8 @@ _DEFAULTS_ARTIFACT_READ_FLOOR = 10
 #     at exactly zero — so what this floor uniquely watches is a producer that
 #     SHRANK without emptying ("init dropped 30 of its 42 keys"), which nothing
 #     else sees.
-#   * artifact floor 64 does NOT catch try-local (72) or the recipes roots (76,
-#     they carry no keys) — and cannot catch e2e-bench (76) at all, its keys
+#   * artifact floor 71 does NOT catch try-local (79) or the recipes roots (83,
+#     they carry no keys) — and cannot catch e2e-bench (83) at all, its keys
 #     being outside the denominator. 3 of its 5 rows. The first two are covered
 #     by `_SHIPPED_CONFD_ROOTS`; e2e-bench is covered by the fifth floor.
 # The two mechanisms are complements, not belt-and-braces; neither covers the
@@ -681,6 +681,10 @@ _DEFAULTS_ARTIFACT_READ_FLOOR = 10
 #      keys, total 68 -> 76, past the +6. Same remedy again: the floor went
 #      56 -> 64, the full-l0-l3 probe reads 63 against it, and both figures
 #      here stay at +6 / 12.)
+#     (#2371 added the `yaml-date/` and `yaml-keys/` mixed-mode subtrees, +7
+#      artifact keys, total 76 -> 83. Same remedy again: the floor went
+#      64 -> 71, the full-l0-l3 probe reads 70 against it, and both figures
+#      here stay at +6 / 12.)
 #     (Was "+9" for artifacts, off by one against the 70-key corpus of the
 #      time: 70 total − 19 in the biggest root = 51, and 51 + 9 = 60 is not
 #      strictly below the floor of 60.)
@@ -695,7 +699,7 @@ _DEFAULTS_ARTIFACT_READ_FLOOR = 10
 # slacks are not comparable and must never be subtracted from one another: UP is
 # measured against "biggest group gone", DOWN against the floor.
 _DEFAULTS_GENERATOR_KEYS_FLOOR = 80
-_DEFAULTS_ARTIFACT_KEYS_FLOOR = 64
+_DEFAULTS_ARTIFACT_KEYS_FLOOR = 71
 
 # ── the artifact floor's DENOMINATOR, and why it is smaller than the scan ────
 #
@@ -798,7 +802,7 @@ _SHIPPED_CONFD_ROOTS: dict[str, tuple[int, int, str]] = {
 #
 # The four floors above leave a measured gap: with the shipped roots covered by
 # the table above and the rest covered only by a GLOBAL key floor with 12 keys
-# of DOWNWARD slack (today's COUNTED artifact total 76 − the floor of 64: how
+# of DOWNWARD slack (today's COUNTED artifact total 83 − the floor of 71: how
 # many keys may disappear before that floor speaks), a whole fixture tree can
 # stop yielding in silence. ⛔ Not the +6 in that floor's own HEADROOM note —
 # that one is UPWARD, measured against "biggest root gone", and asks for a
@@ -806,7 +810,7 @@ _SHIPPED_CONFD_ROOTS: dict[str, tuple[int, int, str]] = {
 #
 # ⛔ COUNTED, and for the two e2e-bench roots the gap above is not a gap but a
 # TOTAL blind spot: `_ARTIFACT_KEYS_FLOOR_EXCLUDED_ROOTS` (#1544) takes them out
-# of that 76, so no amount of erosion under them will ever reach the key floor.
+# of that 83, so no amount of erosion under them will ever reach the key floor.
 # This floor is the only one that speaks for them, which is why the exclusion
 # was written as a change to the key floor's denominator and NOT as a change to
 # the scan — a scan-level exclusion removes them from this floor too.
