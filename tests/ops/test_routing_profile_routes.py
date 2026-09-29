@@ -234,7 +234,7 @@ class TestMergeSemantics:
         routes, _, _ = generate_routes(tree.routing_configs)
         assert "routes" not in routes[0]
         r = subprocess.run([sys.executable, str(_GAR), "--config-dir", str(d),
-                            "--validate"], capture_output=True, text=True, timeout=300)
+                            "--validate"], capture_output=True, text=True, encoding="utf-8", errors="replace", timeout=300)
         assert r.returncode == 1, r.stdout + r.stderr
 
 
@@ -297,13 +297,13 @@ class TestDomainPolicyCoversRoutes:
             "constraints": {"forbidden_receiver_types": ["pagerduty"]}}}})
         strict = subprocess.run(
             [sys.executable, str(_GAR), "--config-dir", str(d), "--validate",
-             "--strict"], capture_output=True, text=True, timeout=300)
+             "--strict"], capture_output=True, text=True, encoding="utf-8", errors="replace", timeout=300)
         assert strict.returncode == 1, strict.stdout + strict.stderr
         assert (f"tenant '{_T}' routes[0] (severity=critical): receiver type "
                 "'pagerduty' is forbidden") in strict.stderr
         lenient = subprocess.run(
             [sys.executable, str(_GAR), "--config-dir", str(d), "--validate"],
-            capture_output=True, text=True, timeout=300)
+            capture_output=True, text=True, encoding="utf-8", errors="replace", timeout=300)
         assert lenient.returncode == 0, lenient.stdout + lenient.stderr
 
 
@@ -403,7 +403,7 @@ class TestConfdLintCoversProfiles:
         r = subprocess.run(
             [sys.executable, str(REPO / "scripts" / "tools" / "lint"
                                  / "check_confd_schema.py"), "--config-dir", str(d)],
-            capture_output=True, text=True, timeout=300)
+            capture_output=True, text=True, encoding="utf-8", errors="replace", timeout=300)
         assert r.returncode == 1, r.stdout + r.stderr
         assert ("_routing_profiles.yaml:6: /routing_profiles/team-x/receiver/"
                 "channel: unquoted 'yes'") in r.stderr
@@ -497,14 +497,14 @@ class TestAmtoolAcceptance:
         r = subprocess.run(
             [sys.executable, str(_GAR), "--config-dir", str(d),
              "--output-configmap", "-o", str(out)],
-            capture_output=True, text=True, timeout=300)
+            capture_output=True, text=True, encoding="utf-8", errors="replace", timeout=300)
         assert r.returncode == 0, r.stdout + r.stderr
         am_yml = tmp_path / "alertmanager.yml"
         am_yml.write_text(
             yaml.safe_load(out.read_text(encoding="utf-8"))["data"]["alertmanager.yml"],
             encoding="utf-8")
         chk = subprocess.run([_AMTOOL, "check-config", str(am_yml)],
-                             capture_output=True, text=True, timeout=300)
+                             capture_output=True, text=True, encoding="utf-8", errors="replace", timeout=300)
         assert chk.returncode == 0, chk.stdout + chk.stderr
         for labels, expected in [
             ({"tenant": _T, "severity": "critical"}, f"tenant-{_T}-route-0"),
@@ -516,7 +516,7 @@ class TestAmtoolAcceptance:
                 [_AMTOOL, "config", "routes", "test",
                  f"--config.file={am_yml}", f"--verify.receivers={expected}"]
                 + [f"{k}={v}" for k, v in sorted(labels.items())],
-                capture_output=True, text=True, timeout=300)
+                capture_output=True, text=True, encoding="utf-8", errors="replace", timeout=300)
             assert t.returncode == 0, (labels, t.stdout + t.stderr)
 
     @pytest.mark.parametrize("label, expected", [
@@ -533,7 +533,7 @@ class TestAmtoolAcceptance:
         r = subprocess.run(
             [sys.executable, str(_GAR), "--config-dir", str(d),
              "--output-configmap", "-o", str(out)],
-            capture_output=True, text=True, timeout=300)
+            capture_output=True, text=True, encoding="utf-8", errors="replace", timeout=300)
         assert r.returncode == 0, r.stdout + r.stderr
         am_yml = tmp_path / "alertmanager.yml"
         am_yml.write_text(
@@ -543,7 +543,7 @@ class TestAmtoolAcceptance:
             [sys.executable, str(_EXPLAIN), "--config-dir", str(d),
              "--tenant", _T, "--trace", "--alertname", "X",
              "--label", label, "--json"],
-            capture_output=True, text=True, timeout=300)
+            capture_output=True, text=True, encoding="utf-8", errors="replace", timeout=300)
         assert tr.returncode == 0, tr.stdout + tr.stderr
         [trace] = json.loads(tr.stdout)
         assert f"{expected} " in trace["final_receiver"]
@@ -551,5 +551,5 @@ class TestAmtoolAcceptance:
             [_AMTOOL, "config", "routes", "test", f"--config.file={am_yml}",
              f"--verify.receivers={expected}"]
             + [f"{k}={v}" for k, v in sorted(trace["labels"].items())],
-            capture_output=True, text=True, timeout=300)
+            capture_output=True, text=True, encoding="utf-8", errors="replace", timeout=300)
         assert am.returncode == 0, (trace["labels"], am.stdout + am.stderr)

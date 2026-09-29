@@ -145,7 +145,7 @@ def _measure_child(tmp_path: Path, env_extra: dict) -> set:
     env.update({k: (config.serialize() if v is True else v)
                 for k, v in env_extra.items()})
     proc = subprocess.run([sys.executable, str(target)],
-                          capture_output=True, text=True, timeout=120, env=env)
+                          capture_output=True, text=True, encoding="utf-8", errors="replace", timeout=120, env=env)
     assert proc.returncode == 0, proc.stderr
 
     contexts: set = set()

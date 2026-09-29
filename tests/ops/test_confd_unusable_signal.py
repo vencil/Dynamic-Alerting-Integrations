@@ -100,12 +100,15 @@ def test_routing_parser_still_names_the_unusable_entry(confd_with_dir_named_yaml
     assert "is a directory, not a config file" in stderr
 
 
-def test_routing_parser_stays_flat(tmp_path: pathlib.Path):
-    """⛔ `recursive=False` is load-bearing, not incidental.
+def test_routing_parser_reads_the_tree(tmp_path: pathlib.Path):
+    """#2326: the routing parser reads the WHOLE tree, like the exporter.
 
-    generate-routes emits routes for the tenants this reader returns.
-    Recursing would silently widen that set — a behaviour change, which
-    #1469 explicitly is not.
+    Until #2326 this pinned the opposite — `recursive=False` was
+    load-bearing, and a tenant in `team-a/` got no route at rc 0 while
+    threshold-exporter served its thresholds. ADR-016/017 "Amendment
+    2026-09-28" made the routing plane hierarchical; this pins that a nested
+    tenant is read, where it lives is recorded (it decides which routing
+    layers reach it), and the old "read FLAT … SKIPPED" warning is gone.
     """
     root = tmp_path / "conf.d"
     (root / "team-a").mkdir(parents=True)
@@ -116,10 +119,10 @@ def test_routing_parser_stays_flat(tmp_path: pathlib.Path):
     err = io.StringIO()
     with contextlib.redirect_stderr(err):
         parsed = _parse_config_files(str(root))
-    assert parsed["all_tenants"] == ["acme"], (
-        "the flat routing parser started reading subdirectories")
-    # …and it says so, which is the #1911 contract this must not break.
-    assert "team-a/deep.yaml" in err.getvalue()
+    assert sorted(parsed["all_tenants"]) == ["acme", "deep"], (
+        "the routing parser stopped reading subdirectories")
+    assert parsed["tenant_dirs"] == {"acme": ".", "deep": "team-a"}
+    assert "FLAT" not in err.getvalue() and "SKIPPED" not in err.getvalue()
 
 
 def test_flat_reader_ordering_is_unchanged(tmp_path: pathlib.Path):
@@ -507,14 +510,13 @@ def test_diagnose_gives_one_answer_for_a_defaults_file_that_is_a_directory(
     assert res["skipped_unusable_files"] == ["_defaults.yaml"]
 
 
-def test_routing_parsers_unusable_pass_stays_flat(tmp_path: pathlib.Path):
-    """The pass must not out-scope the reader it annotates.
+def test_routing_parsers_unusable_pass_covers_the_tree(tmp_path: pathlib.Path):
+    """The pass covers exactly the population the reader reads.
 
-    `_parse_config_files` is flat BY DESIGN (ADR-016 nesting is reported by
-    `warn_nested`), so its unusable pass has to be flat too. If it recursed
-    it would start naming paths for which this tool generates nothing,
-    drowning `warn_nested` — the signal that exists for exactly that — in
-    findings the reader is not responsible for.
+    #2326: the reader walks the tree, so its unusable pass does too — a
+    DIRECTORY named `team-a/beta.yaml` is named, and booked as a file this
+    run could not read (the #1460 refusal), instead of vanishing. Before
+    #2326 both were flat and this pinned that it stayed silent.
     """
     root = tmp_path / "conf.d"
     (root / "team-a").mkdir(parents=True)
@@ -522,8 +524,11 @@ def test_routing_parsers_unusable_pass_stays_flat(tmp_path: pathlib.Path):
     (root / "acme.yaml").write_text(
         "tenants:\n  acme:\n    mysql_threads_running: 90\n", encoding="utf-8")
 
-    stderr = _grar_population_and_stderr(root)
-    assert "beta.yaml" not in stderr
+    err = io.StringIO()
+    with contextlib.redirect_stderr(err):
+        parsed = _parse_config_files(str(root))
+    assert "team-a/beta.yaml" in err.getvalue()
+    assert [f for f, _ in parsed["tenant_file_errors"]] == ["team-a/beta.yaml"]
 
 
 def test_a_policy_file_that_is_a_directory_blocks_strict(tmp_path: pathlib.Path):
@@ -651,14 +656,16 @@ def test_an_unreadable_conf_d_root_blocks_the_routing_reader(
     (root / "acme.yaml").write_text(
         "tenants:\n  acme:\n    mysql_threads_running: 90\n", encoding="utf-8")
 
-    real_iterdir = pathlib.Path.iterdir
+    # #2326: the reader walks the tree (`list_config_tree` → `os.walk` →
+    # `os.scandir`), so the root is made unlistable where the walk lists it.
+    real_scandir = os.scandir
 
-    def deny(self):
-        if os.fspath(self) == os.fspath(root):
-            raise PermissionError(13, "Permission denied", str(self))
-        return real_iterdir(self)
+    def deny(path="."):
+        if os.fspath(path) == os.fspath(root):
+            raise PermissionError(13, "Permission denied", os.fspath(path))
+        return real_scandir(path)
 
-    monkeypatch.setattr(pathlib.Path, "iterdir", deny)
+    monkeypatch.setattr(os, "scandir", deny)
 
     err = io.StringIO()
     with contextlib.redirect_stderr(err), pytest.raises(SystemExit) as exc:

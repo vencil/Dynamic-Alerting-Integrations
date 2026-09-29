@@ -45,7 +45,7 @@ assert len(_PY_FILES) >= 40, (
 def _tracked_py():
     out = subprocess.run(
         ["git", "ls-files", "-z", "*.py"], cwd=REPO_ROOT, capture_output=True,
-        text=True, stdin=subprocess.DEVNULL, check=True, timeout=120).stdout
+        text=True, encoding="utf-8", errors="surrogateescape", stdin=subprocess.DEVNULL, check=True, timeout=120).stdout
     return sorted(os.path.join(REPO_ROOT, p) for p in out.split("\0") if p)
 
 

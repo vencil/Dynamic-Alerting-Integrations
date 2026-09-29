@@ -570,7 +570,7 @@ def _tracked() -> tuple[str, ...]:
         # (tests/ops/test_ci_path_filter_coverage.py `_split_tracked`) fixed
         # this and documented the half-fix trap; this copy was left behind in
         # the same change and blind review caught the asymmetry.
-        ["git", "ls-files", "-z"], cwd=ROOT, capture_output=True, text=True,
+        ["git", "ls-files", "-z"], cwd=ROOT, capture_output=True, text=True, encoding="utf-8", errors="surrogateescape",
         # An inherited invalid stdin handle makes subprocess raise WinError 6
         # on some Windows pytest runners; see the same note in
         # tests/ops/test_ci_path_filter_coverage.py's `_tracked_files`.
@@ -1738,7 +1738,7 @@ def test_tracked_set_matches_an_independent_git_listing() -> None:
     """
     out = subprocess.run(
         ["git", "ls-files", "-z"], cwd=ROOT, capture_output=True,
-        stdin=subprocess.DEVNULL, text=True, check=True, timeout=120).stdout
+        stdin=subprocess.DEVNULL, text=True, encoding="utf-8", errors="surrogateescape", check=True, timeout=120).stdout
     expected = {p for p in out.split("\0") if p}
     actual = set(_tracked())
     assert actual == expected, (

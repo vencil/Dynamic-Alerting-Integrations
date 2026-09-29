@@ -81,7 +81,7 @@ def kustomize() -> str:
         if _require():
             pytest.fail(msg + " (KUSTOMIZE_REQUIRE=1)")
         pytest.skip(msg)
-    out = subprocess.run([exe, "version"], capture_output=True, text=True,
+    out = subprocess.run([exe, "version"], capture_output=True, text=True, encoding="utf-8", errors="replace",
                          timeout=TIMEOUT_S).stdout.strip()
     if out.lstrip("v") != KUSTOMIZE_PIN:
         msg = f"kustomize reports {out!r}, pin is v{KUSTOMIZE_PIN}"

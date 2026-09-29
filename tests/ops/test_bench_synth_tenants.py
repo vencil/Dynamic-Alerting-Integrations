@@ -137,7 +137,7 @@ def cluster(tmp_path):
             env = dict(os.environ,
                        PATH=f"{bin_dir}{os.pathsep}{os.environ['PATH']}")
             return subprocess.run([sys.executable, str(SCRIPT), *args],
-                                  capture_output=True, text=True, env=env,
+                                  capture_output=True, text=True, encoding="utf-8", errors="replace", env=env,
                                   timeout=60)
     return Cluster()
 
@@ -256,7 +256,7 @@ def test_benchmark_sh_rejects_tenants_that_are_not_a_plain_positive_number(
     shim.chmod(0o755)
     env = dict(os.environ, PATH=f"{bin_dir}{os.pathsep}{os.environ['PATH']}")
     r = subprocess.run(["bash", str(REPO / "scripts" / "benchmark.sh"),
-                        "--tenants", n], capture_output=True, text=True,
+                        "--tenants", n], capture_output=True, text=True, encoding="utf-8", errors="replace",
                        env=env, timeout=60)
     assert r.returncode == 1
     assert "--tenants must be" in r.stderr

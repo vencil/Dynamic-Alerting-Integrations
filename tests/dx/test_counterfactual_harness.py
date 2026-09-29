@@ -43,7 +43,7 @@ def run_harness(tool: Path | None = None):
     args = [sys.executable, "-B", str(HARNESS)]
     if tool is not None:
         args += ["--tool", str(tool)]
-    p = subprocess.run(args, capture_output=True, text=True, timeout=120)
+    p = subprocess.run(args, capture_output=True, text=True, encoding="utf-8", errors="replace", timeout=120)
     return p.returncode, p.stdout + p.stderr
 
 

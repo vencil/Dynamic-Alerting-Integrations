@@ -70,7 +70,7 @@ def _render(repo_root: Path, sets: dict[str, str]) -> subprocess.CompletedProces
     cmd = ["helm", "template", "t", str(repo_root / _CHART)]
     for k, v in sets.items():
         cmd += ["--set", f"{k}={v}"]
-    return subprocess.run(cmd, capture_output=True, text=True, timeout=60)
+    return subprocess.run(cmd, capture_output=True, text=True, encoding="utf-8", errors="replace", timeout=60)
 
 
 def _envoy_config(stdout: str) -> dict:

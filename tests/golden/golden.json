@@ -323,5 +323,72 @@
     "source_file": "db/tenants.yaml",
     "source_hash": "6535ce02046e4a4b",
     "tenant_id": "tenant-served-disable"
+  },
+  {
+    "defaults_chain": [
+      "yaml-date/_defaults.yaml"
+    ],
+    "effective_config": {
+      "_silent_mode": {
+        "expires": "2026-12-31T00:00:00Z",
+        "reason": "inherits an unquoted date",
+        "target": "warning"
+      },
+      "_state_maintenance": {
+        "expires": "2026-12-31T23:59:59.5+08:00",
+        "target": "all"
+      }
+    },
+    "fixture_dir": "mixed-mode",
+    "merged_hash": "36aacbc5f829c26c",
+    "scenario": "yaml-date",
+    "source_file": "yaml-date/tenants.yaml",
+    "source_hash": "a623de914a9c6a34",
+    "tenant_id": "tenant-date"
+  },
+  {
+    "defaults_chain": [],
+    "effective_config": {
+      "_routing": {
+        "receiver": {
+          "type": "webhook",
+          "url": "https://hooks.example.com/alerts"
+        }
+      },
+      "_silent_mode": {
+        "reason": "\u4e2d\u6587",
+        "target": "warning"
+      }
+    },
+    "fixture_dir": "mixed-mode",
+    "merged_hash": "955ff9d9f97759d3",
+    "scenario": "yaml-binary",
+    "source_file": "yaml-binary/tenants.yaml",
+    "source_hash": "a1f71016aed84237",
+    "tenant_id": "tenant-binary"
+  },
+  {
+    "defaults_chain": [
+      "yaml-keys/_defaults.yaml"
+    ],
+    "effective_config": {
+      "_x": {
+        "010": "quoted",
+        "1": "float",
+        "2026-12-31 00:00:00 +0000 UTC": {
+          "from_defaults": 1,
+          "from_tenant": 2
+        },
+        "2026-12-31 10:20:30.5 +0800 +0800": "zoned",
+        "31": "hex",
+        "true": "bool"
+      }
+    },
+    "fixture_dir": "mixed-mode",
+    "merged_hash": "95100ab947c92d8d",
+    "scenario": "yaml-keys",
+    "source_file": "yaml-keys/tenants.yaml",
+    "source_hash": "82c34cb35bb62008",
+    "tenant_id": "tenant-keys"
   }
 ]

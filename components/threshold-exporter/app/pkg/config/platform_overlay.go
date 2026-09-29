@@ -64,6 +64,10 @@ type PlatformBlock struct {
 // root platform file and the top-level keys whose value in the effective
 // config it supplied (the tenant file does not write them and no later
 // platform file overwrote them). Field names match describe_tenant.py.
+//
+// Keys are CANONICAL spellings (#2368): a platform entry written as
+// `mysql_cpu` is attributed as `mysql_threads_running`, the key /metrics
+// serves — while EffectiveConfig keeps the spelling the file used.
 type PlatformOverlaySource struct {
 	File string   `json:"file"`
 	Keys []string `json:"keys"`
@@ -173,16 +177,26 @@ func overlayTenant(tenantRaw map[string]any, overlay []PlatformBlock, chain map[
 	}
 	combined := make(map[string]any, len(tenantRaw)+len(overlay[0].Block))
 	owner := make(map[string]int)
+	// Per THRESHOLD, not per spelling (#2368) — the flat plane's
+	// mergePartialInto rule: a later layer writing either spelling drops
+	// the other spelling an earlier layer wrote.
 	for i, pb := range overlay {
-		for k, v := range pb.Block {
-			combined[k] = v
+		overlayAcrossSpellings(combined, pb.Block)
+		for k := range pb.Block {
 			owner[k] = i
 		}
 	}
-	for k, v := range tenantRaw {
-		combined[k] = v
-		delete(owner, k)
+	overlayAcrossSpellings(combined, tenantRaw)
+	for k := range owner {
+		if _, tenantWrites := tenantRaw[k]; tenantWrites {
+			delete(owner, k)
+		} else if _, kept := combined[k]; !kept {
+			delete(owner, k) // another spelling in a later layer replaced it
+		}
 	}
+	// Attribution names the CANONICAL spelling (#2368 owner ruling E9) —
+	// the key /metrics serves — once, even when one block writes both.
+	seen := make([]map[string]struct{}, len(overlay))
 	byFile := make([][]string, len(overlay))
 	for k, i := range owner {
 		if k == "_metadata" {
@@ -193,7 +207,15 @@ func overlayTenant(tenantRaw map[string]any, overlay []PlatformBlock, chain map[
 				continue
 			}
 		}
-		byFile[i] = append(byFile[i], k)
+		canon, _ := canonicalKeyFor(k)
+		if seen[i] == nil {
+			seen[i] = make(map[string]struct{})
+		}
+		if _, dup := seen[i][canon]; dup {
+			continue
+		}
+		seen[i][canon] = struct{}{}
+		byFile[i] = append(byFile[i], canon)
 	}
 	var sources []PlatformOverlaySource
 	for i, keys := range byFile {
@@ -227,16 +249,35 @@ func overlayTenant(tenantRaw map[string]any, overlay []PlatformBlock, chain map[
 func platformInherited(overlay []PlatformBlock, tenantRaw map[string]any) map[string]any {
 	var out map[string]any
 	for _, pb := range overlay {
-		for k, v := range pb.Block {
-			if out == nil {
-				out = make(map[string]any)
-			}
-			out[k] = v
+		if out == nil && len(pb.Block) > 0 {
+			out = make(map[string]any)
 		}
+		overlayAcrossSpellings(out, pb.Block) // overlayTenant's layering (#2368)
 	}
+	var buf [2]string
 	for k := range out {
+		// The tenant's mapping replaces the platform value under ANY
+		// spelling of the threshold (#2368), as it does in overlayTenant.
+		//
+		// ⚠️ Not observable today, measured: with this cross-spelling half
+		// reverted to `tenantRaw[k]`, da-guard's findings are identical on
+		// every tree tried (chain legacy / platform canonical / tenant
+		// legacy mapping, and the mirror). The guard compares a tenant's
+		// leaves only with MergedDefaults under the SAME spelling, and
+		// under that spelling MergedDefaults holds a chain scalar either
+		// way. Kept because it is the #2191 rule stated per threshold —
+		// a leaf dropped from the tenant's mapping falls back to the chain
+		// (/metrics: the mapping still wins over the platform) — and a
+		// consumer reading MergedDefaults per threshold would need it.
 		if _, tenantMap := tenantRaw[k].(map[string]any); tenantMap {
 			delete(out, k)
+			continue
+		}
+		for _, s := range otherSpellings(k, &buf) {
+			if _, tenantMap := tenantRaw[s].(map[string]any); tenantMap {
+				delete(out, k)
+				break
+			}
 		}
 	}
 	if len(out) == 0 {

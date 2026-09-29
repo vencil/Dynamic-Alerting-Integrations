@@ -74,7 +74,7 @@ def _rendered_grace(*overrides: str) -> str:
     cmd = ["helm", "template", "fr", str(_CHART)]
     for o in overrides:
         cmd += ["--set", o]
-    out = subprocess.run(cmd, capture_output=True, text=True, check=True, timeout=60)
+    out = subprocess.run(cmd, capture_output=True, text=True, encoding="utf-8", errors="replace", check=True, timeout=60)
     for doc in yaml.safe_load_all(out.stdout):
         if not doc or doc.get("kind") != "Deployment":
             continue

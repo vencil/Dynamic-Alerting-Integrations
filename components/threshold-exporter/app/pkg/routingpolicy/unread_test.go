@@ -122,10 +122,14 @@ func TestUnreadRouting(t *testing.T) {
 			"_defaults.yaml": "cpu: 1\n_routing: {receiver: {type: slack}}\n_routing_profile: p\n" +
 				"_routing_defaults: {receiver: {type: slack}}\n_routing_enforced: {enabled: false}\n",
 		}, "", []string{"_defaults.yaml:_routing", "_defaults.yaml:_routing_profile"}},
-		{"unwrapped-nested-carrier-reads-nothing", map[string]string{
-			"_defaults.yaml":      "defaults: {cpu: 1}\n",
-			"team/_defaults.yaml": "_routing_defaults: {receiver: {type: slack}}\n_routing: {}\n",
-		}, "", []string{"team/_defaults.yaml:_routing", "team/_defaults.yaml:_routing_defaults"}},
+		// #2326: a nested carrier's top-level `_routing_defaults` joins the
+		// routing layer chain, and its `_routing_enforced` is LoadTree's
+		// blocking finding — neither is "unread". `_routing` still is.
+		{"unwrapped-nested-carrier-reads-routing-defaults", map[string]string{
+			"_defaults.yaml": "defaults: {cpu: 1}\n",
+			"team/_defaults.yaml": "_routing_defaults: {receiver: {type: slack}}\n_routing: {}\n" +
+				"_routing_enforced: {enabled: true}\n",
+		}, "", []string{"team/_defaults.yaml:_routing"}},
 		{"profiles-in-any-root-platform-file", map[string]string{
 			"_profiles.yaml":         "profiles:\n  b: {_routing: {}}\n  a: {cpu: 1, _routing_profile: x}\n",
 			"_platform.yaml":         "profiles:\n  c: {_routing: {}}\n",

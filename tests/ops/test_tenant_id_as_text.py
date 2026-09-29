@@ -64,7 +64,7 @@ def test_route_generation_emits_the_ids_as_written(tmp_path):
     p = subprocess.run(
         [sys.executable, str(TOOLS / "ops" / "generate_alertmanager_routes.py"),
          "--config-dir", str(d), "--dry-run"],
-        capture_output=True, text=True, timeout=60)
+        capture_output=True, text=True, encoding="utf-8", errors="replace", timeout=60)
     assert p.returncode == 0, p.stderr[-2000:]
     for tid in ("010", "0x1F", "yes"):
         assert f'tenant="{tid}"' in p.stdout, (tid, p.stdout)
@@ -170,7 +170,7 @@ def test_describe_tenant_overlays_the_platform_block_for_text_ids(tmp_path):
     script = str(TOOLS / "dx" / "describe_tenant.py")
     for tid, want in (("010", "60"), ("yes", "61")):
         p = subprocess.run([sys.executable, script, tid, "--conf-d", str(d)],
-                           capture_output=True, text=True, timeout=30)
+                           capture_output=True, text=True, encoding="utf-8", errors="replace", timeout=30)
         assert p.returncode == 0, (tid, p.stderr)
         out = json.loads(p.stdout)
         assert out["effective_config"]["mysql_connections"] == want, (tid, out)
@@ -578,18 +578,30 @@ def test_da_assembler_serves_what_the_cr_says(tmp_path, da_guard, q):
 
 
 @pytest.mark.parametrize("name,want", [
-    ("010", "010"), ("0x1F", "0x1F"), ("yes", "yes"),
+    ("010", None), ("0x1F", None), ("yes", None),
     ('"010"', "010"), ('"0x1F"', "0x1F"), ('"yes"', "yes"), ("abc", "abc"),
-], ids=["010", "0x1F", "yes", "q010", "q0x1F", "qyes", "abc"])
+    ("2026-01-02", "2026-01-02"),
+    ("2026-01-02T03:04:05Z", "2026-01-02T03:04:05Z"),
+], ids=["010", "0x1F", "yes", "q010", "q0x1F", "qyes", "abc", "date",
+        "datetime"])
 def test_da_assembler_names_the_file_as_the_cr_does(tmp_path, name, want):
     """Before: `name: 010` → `8.yaml`, `0x1F` → `31.yaml`, `yes` →
-    `True.yaml`; the header named the same wrong CR."""
+    `True.yaml`; the header named the same wrong CR.
+
+    #2371: an unquoted name YAML 1.1 (PyYAML) types as a number / bool is
+    refused (rc 2, nothing written: `want` None); a quoted one, and an
+    unquoted date / datetime, names the file as written."""
     cr = tmp_path / "cr.yaml"
     cr.write_text(_cr(name, '    "010":\n      mysql_connections: "70"\n'),
                   encoding="utf-8")
     out = tmp_path / "out"
     out.mkdir()
-    assert da_assembler.render_cr_file(cr, out) == 0
+    rc = da_assembler.render_cr_file(cr, out)
+    if want is None:
+        assert rc == 2
+        assert list(out.iterdir()) == []
+        return
+    assert rc == 0
     assert sorted(p.name for p in out.iterdir()) == [f"{want}.yaml"]
     header = (out / f"{want}.yaml").read_text(encoding="utf-8").split("\n")[0]
     assert header.endswith(f"ThresholdConfig ns/{want}"), header

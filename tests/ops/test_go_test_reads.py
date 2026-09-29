@@ -96,7 +96,7 @@ def _run(repo: Path, logs: Path, job: str = "zleg") -> subprocess.CompletedProce
     return subprocess.run(
         [sys.executable, str(SCRIPT), "--job", job, "--logs", str(logs),
          "--workflow", str(repo / "wf.yml"), "--root", str(repo)],
-        capture_output=True, text=True, timeout=60)
+        capture_output=True, text=True, encoding="utf-8", errors="replace", timeout=60)
 
 
 def test_covered_direct_reads_pass_and_probes_and_walks_do_not_count(tmp_path: Path) -> None:

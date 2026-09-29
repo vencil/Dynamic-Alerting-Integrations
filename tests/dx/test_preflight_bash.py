@@ -33,7 +33,7 @@ def _run_with_payload(payload: dict) -> tuple[int, str]:
         [sys.executable, str(_SCRIPT)],
         input=json.dumps(payload),
         capture_output=True,
-        text=True,
+        text=True, encoding="utf-8", errors="replace",
         timeout=10,
     )
     return proc.returncode, proc.stderr
@@ -161,7 +161,7 @@ class TestNeverBlocksOnHookFailure:
             [sys.executable, str(_SCRIPT)],
             input="not json {{{",
             capture_output=True,
-            text=True,
+            text=True, encoding="utf-8", errors="replace",
             timeout=10,
         )
         assert proc.returncode == 0
@@ -172,7 +172,7 @@ class TestNeverBlocksOnHookFailure:
             [sys.executable, str(_SCRIPT)],
             input="",
             capture_output=True,
-            text=True,
+            text=True, encoding="utf-8", errors="replace",
             timeout=10,
         )
         assert proc.returncode == 0

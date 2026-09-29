@@ -814,14 +814,17 @@ def _confd_with_broken_yaml(tmp: Path) -> str:
 def _confd_with_nested_tenant(tmp: Path) -> str:
     """Seed conf.d with one tenant file moved into a subdirectory.
 
-    The flat readers (schema / routes) skip it, which is what puts
-    `skipped_nested_files` on their rows. The file is picked, not named, so
-    no tenant id is spelled here.
+    Plus a nested `_defaults.yaml`: since #2326 the routing rows (schema /
+    routes) read the tree, so the flat reader left to put
+    `skipped_nested_files` on a row is `policy_dsl`'s root-carrier lookup,
+    and what it skips is a nested defaults carrier. The file is picked, not
+    named, so no tenant id is spelled here.
     """
     d = _confd_copy(tmp, "confd_nested")
     tenant = sorted(p for p in d.glob("*.yaml") if not p.name.startswith("_"))[0]
     (d / "sub").mkdir()
     tenant.rename(d / "sub" / tenant.name)
+    _write(d / "sub" / "_defaults.yaml", "defaults: {}\n")
     return str(d)
 
 

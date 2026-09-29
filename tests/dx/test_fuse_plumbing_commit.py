@@ -97,7 +97,7 @@ def test_plumbing_commit_happy_path(tmp_path: Path, monkeypatch) -> None:
     log = subprocess.run(  # subprocess-timeout: ignore
         ["git", "-C", str(repo), "log", "--oneline", "-2"],
         capture_output=True,
-        text=True,
+        text=True, encoding="utf-8", errors="replace",
         check=True,
     )
     assert sha[:7] in log.stdout
@@ -106,7 +106,7 @@ def test_plumbing_commit_happy_path(tmp_path: Path, monkeypatch) -> None:
     show = subprocess.run(  # subprocess-timeout: ignore
         ["git", "-C", str(repo), "show", f"{sha}:new.txt"],
         capture_output=True,
-        text=True,
+        text=True, encoding="utf-8", errors="replace",
         check=True,
     )
     assert show.stdout == "hello\n"
@@ -131,7 +131,7 @@ def test_plumbing_commit_preserves_exec_bit(tmp_path: Path, monkeypatch) -> None
     ls = subprocess.run(  # subprocess-timeout: ignore
         ["git", "-C", str(repo), "ls-tree", sha, "runme.sh"],
         capture_output=True,
-        text=True,
+        text=True, encoding="utf-8", errors="replace",
         check=True,
     )
     assert ls.stdout.startswith("100755")
@@ -143,7 +143,7 @@ def test_cli_show_locks_exit_0_when_clean(tmp_path: Path, monkeypatch) -> None:
     proc = subprocess.run(  # subprocess-timeout: ignore
         [sys.executable, str(_SCRIPT), "--show-locks"],
         capture_output=True,
-        text=True,
+        text=True, encoding="utf-8", errors="replace",
     )
     assert proc.returncode == 0
     assert "(no phantom locks)" in proc.stdout
@@ -156,7 +156,7 @@ def test_cli_show_locks_lists_locks(tmp_path: Path, monkeypatch) -> None:
     proc = subprocess.run(  # subprocess-timeout: ignore
         [sys.executable, str(_SCRIPT), "--show-locks"],
         capture_output=True,
-        text=True,
+        text=True, encoding="utf-8", errors="replace",
     )
     assert proc.returncode == 0
     assert "index.lock" in proc.stdout
@@ -169,7 +169,7 @@ def test_cli_requires_message_for_commit(tmp_path: Path, monkeypatch) -> None:
     proc = subprocess.run(  # subprocess-timeout: ignore
         [sys.executable, str(_SCRIPT), "a.txt"],
         capture_output=True,
-        text=True,
+        text=True, encoding="utf-8", errors="replace",
     )
     assert proc.returncode != 0
     assert "message required" in proc.stderr
@@ -199,7 +199,7 @@ def test_cli_auto_uses_plumbing_when_lock_present(
             "a.txt",
         ],
         capture_output=True,
-        text=True,
+        text=True, encoding="utf-8", errors="replace",
     )
     # Should succeed via plumbing even though lock exists
     assert proc.returncode == 0, f"stderr={proc.stderr}  stdout={proc.stdout}"
@@ -224,7 +224,7 @@ def test_cli_rejects_message_conflict(tmp_path: Path, monkeypatch) -> None:
             "seed.txt",
         ],
         capture_output=True,
-        text=True,
+        text=True, encoding="utf-8", errors="replace",
     )
     assert proc.returncode != 0
     assert "not allowed with" in proc.stderr or "argument" in proc.stderr

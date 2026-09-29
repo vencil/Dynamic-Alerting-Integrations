@@ -785,7 +785,7 @@ def test_ops_bat_files_sees_the_real_wrappers() -> None:
 
 def _git_out(work: pathlib.Path, *args: str) -> str:
     return subprocess.run(
-        ["git", *args], cwd=work, check=True, capture_output=True, text=True, timeout=60
+        ["git", *args], cwd=work, check=True, capture_output=True, text=True, encoding="utf-8", errors="replace", timeout=60
     ).stdout.strip()
 
 

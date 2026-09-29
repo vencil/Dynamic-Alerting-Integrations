@@ -1913,7 +1913,7 @@ class TestKustomizeBaseEnumeratesConfd:
             for name, target in links.items():
                 os.symlink(target, os.path.join(conf, name))
             run = subprocess.run(['bash', '-c', cmd], cwd=base,
-                                 capture_output=True, text=True, timeout=30)
+                                 capture_output=True, text=True, encoding="utf-8", errors="replace", timeout=30)
             assert run.returncode == 0, run.stderr
             assert set(os.listdir(base)) == expected
             # …and it is the very set `files:` is built from.
@@ -1947,7 +1947,7 @@ class TestKustomizeBaseEnumeratesConfd:
                 os.symlink(os.path.join('..', '..', 'conf.d', name),
                            os.path.join(base, name))
             run = subprocess.run(['bash', '-c', cmd], cwd=base,
-                                 capture_output=True, text=True, timeout=30)
+                                 capture_output=True, text=True, encoding="utf-8", errors="replace", timeout=30)
             assert run.returncode == 0, run.stderr
             for name in ('a.yaml', 'b.yml'):
                 dst = os.path.join(base, name)
@@ -1976,7 +1976,7 @@ class TestKustomizeBaseEnumeratesConfd:
             with open(os.path.join(conf, 'a.yaml'), 'w', encoding='utf-8') as fh:
                 fh.write('tenants: {}\n')
             run = subprocess.run(['bash', '-c', cmd], cwd=base,
-                                 capture_output=True, text=True, timeout=30)
+                                 capture_output=True, text=True, encoding="utf-8", errors="replace", timeout=30)
             assert run.returncode != 0, (run.stdout, run.stderr)
 
     # ── blind-review round (#1791): names from the customer's tree ──
@@ -2066,7 +2066,7 @@ class TestKustomizeBaseEnumeratesConfd:
                                               'ops', 'init_project.py'),
                  '--non-interactive', '--tenants', 't-one', '--rule-packs',
                  'mariadb', '-o', tmp, '--force'],
-                capture_output=True, text=True, timeout=180)
+                capture_output=True, text=True, encoding="utf-8", errors="replace", timeout=180)
             assert run.returncode == 0, run.stderr
             assert "'a=b.yaml' cannot be a ConfigMap key" in run.stderr
             assert 'a=b.yaml' not in _kust_files(tmp)
@@ -6000,7 +6000,7 @@ class TestTheRetiredDeployMethodStaysRetired:
              '--ci', 'github', '--deploy', self._RETIRED,
              '--tenants', 'db-a', '--rule-packs', 'mariadb',
              '--non-interactive', '-o', tempfile.mkdtemp()],
-            capture_output=True, text=True, timeout=120)
+            capture_output=True, text=True, encoding="utf-8", errors="replace", timeout=120)
         assert proc.returncode == 2, (proc.returncode, proc.stdout, proc.stderr)
         combined = proc.stdout + proc.stderr
         assert 'invalid choice' in combined and self._RETIRED in combined, combined
@@ -6020,7 +6020,7 @@ class TestTheRetiredDeployMethodStaysRetired:
                  '--ci', 'github', '--deploy', self._RETIRED,
                  '--tenants', 'db-a', '--rule-packs', 'mariadb',
                  '--non-interactive', '-o', tmpdir],
-                capture_output=True, text=True, timeout=120)
+                capture_output=True, text=True, encoding="utf-8", errors="replace", timeout=120)
             assert proc.returncode == 2, proc.stderr
             leftovers = sorted(p.name for p in Path(tmpdir).iterdir())
             assert leftovers == [], leftovers

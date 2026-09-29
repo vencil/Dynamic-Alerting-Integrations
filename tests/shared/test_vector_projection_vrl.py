@@ -104,7 +104,7 @@ def _render(chart_dir: Path, *, sets: dict[str, str] | None = None) -> list[dict
     cmd = ["helm", "template", "test-release", str(chart_dir), "-n", "monitoring"]
     for k, v in (sets or {}).items():
         cmd += ["--set", f"{k}={v}"]
-    out = subprocess.run(cmd, capture_output=True, text=True, check=True, timeout=30)
+    out = subprocess.run(cmd, capture_output=True, text=True, encoding="utf-8", errors="replace", check=True, timeout=30)
     return [d for d in yaml.safe_load_all(out.stdout) if d]
 
 
@@ -137,7 +137,7 @@ def _render_result(chart_dir: Path, *, sets: dict[str, str] | None = None,
         cmd += ["--set", f"{k}={v}"]
     for k, v in (string_sets or {}).items():
         cmd += ["--set-string", f"{k}={v}"]
-    return subprocess.run(cmd, capture_output=True, text=True, timeout=30)
+    return subprocess.run(cmd, capture_output=True, text=True, encoding="utf-8", errors="replace", timeout=30)
 
 
 def _dur_to_seconds(d: str) -> int:
@@ -735,7 +735,7 @@ class TestFederationEvidenceChannel:
             r = subprocess.run(
                 ["helm", "template", "t", str(repo_root / "helm/vector"),
                  "-n", "monitoring", "-f", str(vf)],
-                capture_output=True, text=True, timeout=30)
+                capture_output=True, text=True, encoding="utf-8", errors="replace", timeout=30)
         assert r.returncode != 0, "an empty evidence allowlist must fail render"
         assert "evidenceChannel.events must list at least one" in r.stderr
 
@@ -1035,7 +1035,7 @@ class TestVectorValidateAndTest:
             p = Path(d) / "vector.yaml"
             p.write_text(yaml.safe_dump(cfg, sort_keys=False), encoding="utf-8")
             r = subprocess.run(["vector", "validate", "--no-environment", str(p)],
-                               capture_output=True, text=True, timeout=60)
+                               capture_output=True, text=True, encoding="utf-8", errors="replace", timeout=60)
             assert r.returncode == 0, f"vector validate failed:\n{r.stdout}\n{r.stderr}"
 
     @_needs_vector
@@ -1045,7 +1045,7 @@ class TestVectorValidateAndTest:
         with tempfile.TemporaryDirectory() as d:
             p = _render_vector_config_to_tmp(repo_root, Path(d))
             r = subprocess.run(["vector", "validate", "--no-environment", str(p)],
-                               capture_output=True, text=True, timeout=60)
+                               capture_output=True, text=True, encoding="utf-8", errors="replace", timeout=60)
             assert r.returncode == 0, f"vector validate failed:\n{r.stdout}\n{r.stderr}"
 
     @_needs_vector
@@ -1069,7 +1069,7 @@ class TestVectorValidateAndTest:
                 cm["data"]["30-tenant-routing.yaml"], encoding="utf-8")
             r = subprocess.run(
                 ["vector", "validate", "--no-environment", "--config-dir", str(confdir)],
-                capture_output=True, text=True, timeout=60)
+                capture_output=True, text=True, encoding="utf-8", errors="replace", timeout=60)
             assert r.returncode == 0, f"vector validate --config-dir failed:\n{r.stdout}\n{r.stderr}"
 
     @_needs_vector
@@ -1083,5 +1083,5 @@ class TestVectorValidateAndTest:
         with tempfile.TemporaryDirectory() as d:
             cfg_path = _render_vector_config_to_tmp(repo_root, Path(d))
             r = subprocess.run(["vector", "test", str(cfg_path), str(tests_file)],
-                               capture_output=True, text=True, timeout=120)
+                               capture_output=True, text=True, encoding="utf-8", errors="replace", timeout=120)
             assert r.returncode == 0, f"vector test failed:\n{r.stdout}\n{r.stderr}"

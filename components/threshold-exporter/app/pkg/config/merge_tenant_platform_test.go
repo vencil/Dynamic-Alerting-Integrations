@@ -301,13 +301,17 @@ func TestRootPlatformScanSelectsWhatTheFullScanSelects(t *testing.T) {
 	}
 }
 
-// TestMergeTenantLegacyKeyShadowedByPlatformCanonical: the tenant writes the
+// TestMergeTenantLegacyKeyBeatsPlatformCanonical: the tenant writes the
 // LEGACY spelling (mysql_cpu), a platform file the CANONICAL one
-// (mysql_threads_running). Resolve's canonical-wins dedup serves the
-// platform's value on both /metrics and GET — displayed consistently, and not
-// changed here — so the tenant's own value is silently ignored. The tenant
-// must hear that, and must NOT be told "the old name still resolves".
-func TestMergeTenantLegacyKeyShadowedByPlatformCanonical(t *testing.T) {
+// (mysql_threads_running). The tenant wins key by key across spellings
+// (#2368) on /metrics and GET alike, so the tenant hears the ordinary rename
+// notice — "the old name still resolves" is now true — and nothing claims
+// the key is not applied.
+//
+// ⚠️ Until #2368 this test pinned the opposite: the platform's 11 was served
+// (canonical-wins dedup over a merge that kept both spellings) and the notice
+// said the tenant's key was not applied (#2208's aliasShadow, removed).
+func TestMergeTenantLegacyKeyBeatsPlatformCanonical(t *testing.T) {
 	t.Parallel()
 	files := map[string]string{
 		"_defaults.yaml": "defaults:\n  mysql_threads_running: 70\n",
@@ -327,24 +331,24 @@ func TestMergeTenantLegacyKeyShadowedByPlatformCanonical(t *testing.T) {
 	}
 
 	rows, oracleRows, kv := run(t, "tenants:\n  tx:\n    mysql_cpu: \"22\"\n")
-	if strings.Join(rows, "\n") != strings.Join(oracleRows, "\n") || !containsRow(rows, "mysql_threads_running{}=11/warning") {
-		t.Fatalf("display changed: GET %v, /metrics %v (both must serve the platform's 11)", rows, oracleRows)
+	if strings.Join(rows, "\n") != strings.Join(oracleRows, "\n") ||
+		!containsRow(rows, "mysql_threads_running{}=22/warning") || !containsRow(rows, "mysql_cpu{}=22/warning") {
+		t.Fatalf("GET %v, /metrics %v: both must serve the tenant's 22 (canonical row and legacy twin)", rows, oracleRows)
 	}
 	if len(kv.Errors) != 0 {
-		t.Errorf("errors %q: the shadowed legacy key must not block the write", kv.Errors)
+		t.Errorf("errors %q: the legacy key must not block the write", kv.Errors)
 	}
-	var shadow []string
+	var rename []string
 	for _, n := range kv.Notices {
-		if strings.Contains(n, "still resolves") {
-			t.Errorf("misleading notice for a key whose value is not applied: %q", n)
+		if strings.Contains(n, "not applied") || strings.Contains(n, "_p.yaml") {
+			t.Errorf("notice describes the platform value winning, which it no longer does: %q", n)
 		}
-		if strings.Contains(n, `"mysql_cpu"`) && strings.Contains(n, "platform file _p.yaml") &&
-			strings.Contains(n, `"mysql_threads_running"`) && strings.Contains(n, "tenant=tx") {
-			shadow = append(shadow, n)
+		if strings.Contains(n, "tenant=tx") && strings.Contains(n, `"mysql_cpu"`) && strings.Contains(n, "still resolves") {
+			rename = append(rename, n)
 		}
 	}
-	if len(shadow) != 1 {
-		t.Errorf("want exactly one tenant notice naming mysql_cpu, _p.yaml and mysql_threads_running; notices %q", kv.Notices)
+	if len(rename) != 1 {
+		t.Errorf("want exactly one rename notice for mysql_cpu; notices %q", kv.Notices)
 	}
 
 	// Control: the tenant writes the canonical name — its value wins, and

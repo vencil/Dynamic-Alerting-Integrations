@@ -69,7 +69,7 @@ def test_check_mode_passes_with_default_dir():
     """
     result = subprocess.run(
         [sys.executable, str(GENERATOR), "--check"],
-        capture_output=True, text=True, cwd=str(REPO_ROOT), timeout=60,
+        capture_output=True, text=True, encoding="utf-8", errors="replace", cwd=str(REPO_ROOT), timeout=60,
     )
     assert result.returncode == 0, (
         f"--check exited {result.returncode}\n"
@@ -104,7 +104,7 @@ def packs(tmp_path):
 def _run(packs_dir: Path, *args: str) -> subprocess.CompletedProcess:
     return subprocess.run(
         [sys.executable, str(GENERATOR), "--rule-packs-dir", str(packs_dir), *args],
-        capture_output=True, text=True, timeout=60,
+        capture_output=True, text=True, encoding="utf-8", errors="replace", timeout=60,
     )
 
 

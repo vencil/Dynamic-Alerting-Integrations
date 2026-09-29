@@ -7,7 +7,8 @@ The scenarios exercise the deep_merge / inheritance rules listed in
 test_merge_parity.py's module docstring so the Go port can verify
 byte-for-byte parity. They do NOT cover every ADR-017 clause. #1550's
 reserved-key null deletion, nested-null and canonical-JSON escaping rows
-are scenarios 11-13 below; its chain-discovery gap is closed on the Go side
+are scenarios 11-13 below, and #2371's YAML date / `!!binary` values and
+non-string mapping keys are 17-19; #1550's chain-discovery gap is closed on the Go side
 (config_golden_parity_test.go TestGoldenParity_ResolveEffective). What stays
 open is listed in test_merge_parity.py's "Known gaps".
 
@@ -558,6 +559,82 @@ def s_served_disable():
 """)
 
 
+# Scenarios 17-18 (#2371): values PyYAML types as `date` / `datetime` /
+# `bytes`. describe_tenant ended with a TypeError on every one of them, so no
+# row could hold them; yaml.v3 reads a timestamp into time.Time and a
+# `!!binary` into a string of its raw bytes, and pkg/config's canonical JSON
+# renders those. These rows pin that rendering on both sides. Mixed-mode
+# subtrees again, for the carrier-selection reason above. The shapes the
+# Python side CANNOT align (describe_tenant.py's #2371 block) are left out on
+# purpose — they are strict xfails in tests/dx/test_describe_tenant.py.
+#
+# Scenario 17: an unquoted date inherited from `_defaults.yaml` (Go:
+# "2026-12-31T00:00:00Z") beside a tenant datetime with a fraction and an
+# offset (RFC 3339, fraction's trailing zero dropped, offset kept).
+def s_yaml_date():
+    d = reset("mixed-mode") / "yaml-date"
+    write(d / "_defaults.yaml", """defaults:
+  _silent_mode:
+    target: "warning"
+    expires: 2026-12-31
+""")
+    write(d / "tenants.yaml", """tenants:
+  tenant-date:
+    _state_maintenance:
+      target: "all"
+      expires: 2026-12-31T23:59:59.50+08:00
+    _silent_mode:
+      reason: "inherits an unquoted date"
+""")
+
+
+# Scenario 18: `!!binary` values: the payload's UTF-8 text (ASCII and CJK).
+# ⛔ An INVALID UTF-8 byte cannot be a golden row: golden.json stores
+# effective_config as JSON text, which cannot hold that byte, so the Go
+# EffectiveConfig / ResolveEffective legs would compare the exporter's
+# six-character escape (backslash, `ufffd`) with a real U+FFFD and go red
+# on a correct pair. That
+# shape's Go rendering is pinned in tests/dx/test_describe_tenant.py.
+def s_yaml_binary():
+    d = reset("mixed-mode") / "yaml-binary"
+    write(d / "tenants.yaml", """tenants:
+  tenant-binary:
+    _routing:
+      receiver:
+        type: "webhook"
+        url: !!binary aHR0cHM6Ly9ob29rcy5leGFtcGxlLmNvbS9hbGVydHM=
+    _silent_mode:
+      target: "warning"
+      reason: !!binary 5Lit5paH
+""")
+
+
+# Scenario 19: non-string mapping KEYS below the tenant id (#2371). yaml.v3
+# decodes such a mapping into map[any]any and pkg/config spells each key with
+# `%v`: a date key is "2026-12-31 00:00:00 +0000 UTC" (time.Time.String()),
+# `0x1F` is "31", `1.0` is "1", `True` is "true"; a quoted `"010"` stays text.
+# The date key is written in BOTH files: one key to Go, so the two bodies
+# deep-merge — describe_tenant must merge them too, not emit two keys.
+def s_yaml_keys():
+    d = reset("mixed-mode") / "yaml-keys"
+    write(d / "_defaults.yaml", """defaults:
+  _x:
+    2026-12-31:
+      from_defaults: 1
+    0x1F: "hex"
+""")
+    write(d / "tenants.yaml", """tenants:
+  tenant-keys:
+    _x:
+      2026-12-31:
+        from_tenant: 2
+      2026-12-31T10:20:30.5+08:00: "zoned"
+      1.0: "float"
+      True: "bool"
+      "010": "quoted"
+""")
+
+
 SCENARIOS = [
     ("flat", "tenant-a", s_flat),
     ("l0-only", "tenant-b", s_l0_only),
@@ -578,6 +655,9 @@ SCENARIOS = [
     ("served-chain", "tenant-served-chain", s_served_chain),  # 2 tenants, 1 tree
     ("served-root", "tenant-served-root", None),
     ("served-disable", "tenant-served-disable", s_served_disable),
+    ("yaml-date", "tenant-date", s_yaml_date),
+    ("yaml-binary", "tenant-binary", s_yaml_binary),
+    ("yaml-keys", "tenant-keys", s_yaml_keys),
 ]
 
 
@@ -630,6 +710,9 @@ def main() -> int:
         "served-chain": "served-chain",
         "served-root": "served-chain",
         "served-disable": "served-disable",
+        "yaml-date": "mixed-mode",
+        "yaml-binary": "mixed-mode",
+        "yaml-keys": "mixed-mode",
     }
     for scenario, tenant_id, builder in SCENARIOS:
         if builder is not None and builder not in builders_seen:

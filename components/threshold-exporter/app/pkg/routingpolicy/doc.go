@@ -9,8 +9,13 @@
 //     merge, then `{{tenant}}` replaced in every string value. The fourth
 //     layer, `_routing_enforced` (NOC), takes no part in policy checks and is
 //     not modelled here;
-//   - the platform files that feed it (_grar_parse._parse_platform_config):
-//     only the conf.d ROOT is read, as the Python reader is flat;
+//   - the platform files that feed it (_grar_parse._parse_platform_config
+//     and, below the root, _parse_nested_config): LoadTree reads the whole
+//     tree (#2326, ADR-017 amendment 2026-09-28) — `_routing_defaults` along
+//     the tenant's directory chain, profiles and domain policies scoped to
+//     the subtree they sit in (Tree.LayersFor, Policy.Scope) — and reports
+//     the tree shapes the generator refuses (IsBlocking); LoadRoot is its
+//     root half;
 //   - the tenant layer (#2291, Layers.TenantBlock): the tenant file's
 //     `_routing` / `_routing_profile` over the root platform files'
 //     `tenants.<id>` entries (_lib_confd.overlay_platform_tenants) — never
@@ -32,7 +37,8 @@
 // Consumers: cmd/da-guard (through internal/guard) and tenant-api, which
 // cannot import internal/guard. Besides the standard library, yaml.v3 and
 // pkg/pyyamlcompat (receivers as the generator's PyYAML reads them, #2295) it
-// imports only pkg/config — for the root walker (config.RootPlatformFiles:
-// the one directory lister, #1911) and config.IsDisabled — and never
+// imports only pkg/config — for the walker (config.RootPlatformFiles and
+// config.ScanDirTree: the one directory lister, #1911) and
+// config.IsDisabled — and never
 // net/http (import_direction_test.go, depguard).
 package routingpolicy

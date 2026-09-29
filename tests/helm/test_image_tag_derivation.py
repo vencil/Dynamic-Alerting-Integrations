@@ -71,7 +71,7 @@ def _render(chart_dir: Path, values_file: Path | None = None) -> list[dict]:
     cmd = ["helm", "template", "t", str(chart_dir), "-n", "monitoring"]
     if values_file is not None:
         cmd += ["-f", str(values_file)]
-    out = subprocess.run(cmd, capture_output=True, text=True, check=True, timeout=30)
+    out = subprocess.run(cmd, capture_output=True, text=True, encoding="utf-8", errors="replace", check=True, timeout=30)
     return [d for d in yaml.safe_load_all(out.stdout) if d]
 
 

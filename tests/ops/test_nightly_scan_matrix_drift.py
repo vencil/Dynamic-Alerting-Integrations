@@ -133,7 +133,7 @@ def test_thirdparty_matrix_equals_deployed_refs() -> None:
 
     proc = subprocess.run(
         [sys.executable, str(EXTRACTOR), "--root", str(ROOT), "--list"],
-        capture_output=True, text=True, timeout=60,
+        capture_output=True, text=True, encoding="utf-8", errors="replace", timeout=60,
     )
     assert proc.returncode == 0, proc.stderr
     deployed = {line.strip() for line in proc.stdout.splitlines() if line.strip()}
@@ -606,7 +606,7 @@ def _delivered_refs_via_cli() -> set[str]:
     proc = subprocess.run(
         [sys.executable, str(EXTRACTOR), "--root", str(ROOT), "--list",
          "--scope", "delivered"],
-        capture_output=True, text=True, timeout=60,
+        capture_output=True, text=True, encoding="utf-8", errors="replace", timeout=60,
     )
     assert proc.returncode == 0, proc.stderr
     return {line.strip() for line in proc.stdout.splitlines() if line.strip()}

@@ -146,7 +146,7 @@ def test_dashboard_promql_goldens(tmp_path):
     result = subprocess.run(
         [_PROMTOOL, "test", "rules", str(test_file)],
         capture_output=True,
-        text=True,
+        text=True, encoding="utf-8", errors="replace",
         timeout=120,
     )
     assert result.returncode == 0, (

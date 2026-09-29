@@ -741,7 +741,7 @@ class TestSameResultAsInPlace:
         mounted: list[Path] = []
 
         def mount(*args: str, at: Path) -> bool:
-            p = subprocess.run(["mount", *args], capture_output=True, text=True, timeout=30)
+            p = subprocess.run(["mount", *args], capture_output=True, text=True, encoding="utf-8", errors="replace", timeout=30)
             if p.returncode == 0 and at not in mounted:
                 mounted.append(at)
             return p.returncode == 0

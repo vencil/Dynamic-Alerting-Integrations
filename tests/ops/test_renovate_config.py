@@ -220,7 +220,7 @@ def test_renovate_config_validator_if_available():
     if not validator:
         pytest.skip("renovate-config-validator not installed (node/renovate absent)")
     res = subprocess.run([validator, str(RENOVATE_JSON)],
-                         capture_output=True, text=True, timeout=180)
+                         capture_output=True, text=True, encoding="utf-8", errors="replace", timeout=180)
     assert res.returncode == 0, f"renovate-config-validator failed:\n{res.stdout}\n{res.stderr}"
 
 

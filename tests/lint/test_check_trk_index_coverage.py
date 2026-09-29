@@ -34,7 +34,7 @@ def _run(repo: Path, *extra: str) -> subprocess.CompletedProcess:
     return subprocess.run(
         [sys.executable, str(_CHECKER), "--repo", str(repo), *extra],
         capture_output=True,
-        text=True,
+        text=True, encoding="utf-8", errors="replace",
         timeout=180,
     )
 
@@ -152,7 +152,7 @@ def test_titles_surface_without_token_is_rc2(tmp_path: Path, monkeypatch) -> Non
            if k not in ("GH_TOKEN", "GITHUB_TOKEN")}
     proc = subprocess.run(
         [sys.executable, str(_CHECKER), "--repo", str(repo), "--surface", "titles"],
-        capture_output=True, text=True, env=env, timeout=120,
+        capture_output=True, text=True, encoding="utf-8", errors="replace", env=env, timeout=120,
     )
     assert proc.returncode == 2, proc.stdout
     assert "量不到" in proc.stderr
@@ -300,7 +300,7 @@ def test_single_title_mode_needs_no_token(tmp_path: Path, title: str, expect_rc:
     proc = subprocess.run(
         [sys.executable, str(_CHECKER), "--repo", str(repo), "--surface", "titles", "--ci",
          "--title", title, "--title-ref", "#9999"],
-        capture_output=True, text=True, env=env, timeout=120,
+        capture_output=True, text=True, encoding="utf-8", errors="replace", env=env, timeout=120,
     )
     assert proc.returncode == expect_rc, proc.stdout + proc.stderr
 

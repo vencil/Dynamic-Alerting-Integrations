@@ -27,7 +27,7 @@ def _write(p: Path, text: str) -> None:
 def _list_refs(root: Path) -> set[str]:
     proc = subprocess.run(
         [sys.executable, str(SCRIPT), "--root", str(root), "--list"],
-        capture_output=True, text=True, timeout=60,
+        capture_output=True, text=True, encoding="utf-8", errors="replace", timeout=60,
     )
     assert proc.returncode == 0, proc.stderr
     return {line.strip() for line in proc.stdout.splitlines() if line.strip()}

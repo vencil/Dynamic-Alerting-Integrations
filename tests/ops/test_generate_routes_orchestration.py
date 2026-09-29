@@ -2492,7 +2492,7 @@ def _git_tracked_paths() -> frozenset:
     try:
         out = subprocess.run(
             ["git", "-C", _REPO_ROOT, "ls-files", "-z"],
-            capture_output=True, text=True, timeout=60, check=True).stdout
+            capture_output=True, text=True, encoding="utf-8", errors="surrogateescape", timeout=60, check=True).stdout
     except FileNotFoundError:
         # git is not installed at all — the source-tarball case this tolerates.
         return frozenset()
@@ -4416,7 +4416,7 @@ class TestScannerAnchorsAreFailClosed:
                 print("SILENT")
         """)
         out = subprocess.run([sys.executable, "-O", "-c", script],
-                             capture_output=True, text=True, timeout=120)
+                             capture_output=True, text=True, encoding="utf-8", errors="replace", timeout=120)
         assert out.stdout.strip() == "RAISED", (
             "under `python -O` the pack-uniqueness check did not fire — it is "
             f"an `assert` and the optimizer removed it. stdout={out.stdout!r} "
