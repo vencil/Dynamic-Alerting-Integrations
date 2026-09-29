@@ -28,8 +28,7 @@ REM  Dogfooded pattern (PR #44 C5 close-loop). The naive `& this.bat` call
 REM  hangs the MCP because the transport inherits the child console handle.
 REM
 REM    $bat  = "<tree>\scripts\ops\win_gh.bat"   # acts on <tree>
-REM    $t    = "$env:TEMP\vibe-gh-out.txt"
-REM    Remove-Item $t -ErrorAction SilentlyContinue
+REM    $t    = Join-Path $env:TEMP ("vibe-gh-out-" + [guid]::NewGuid() + ".txt")
 REM    $args = '/s /c "' + '"' + $bat + '" pr-checks > "' + $t + '" 2>&1"'
 REM    $psi = New-Object Diagnostics.ProcessStartInfo
 REM    $psi.FileName         = "cmd.exe"
@@ -37,8 +36,15 @@ REM    $psi.Arguments        = $args
 REM    $psi.UseShellExecute  = $false
 REM    $psi.CreateNoWindow   = $true     # CRITICAL -- without it MCP hangs
 REM    $p = [Diagnostics.Process]::Start($psi)
-REM    [void]$p.WaitForExit(30000)
+REM    if (-not $p.WaitForExit(30000)) {
+REM        taskkill /T /F /PID $p.Id | Out-Null   # timed out: stop gh too
+REM        [void]$p.WaitForExit()
+REM    }
 REM    Get-Content $t -Raw
+REM    Remove-Item $t
+REM
+REM  One file per call (the GUID): a fixed name is shared by every call
+REM  running at the same time, which then read each other's output (#2275).
 REM
 REM  CreateNoWindow = $true + cmd.exe /s /c + WaitForExit(ms) are the three
 REM  non-optional pieces. See win_git_escape.bat header + windows-mcp-

@@ -188,8 +188,7 @@ if ($bytes | Where-Object { $_ -ge 0x80 }) { Write-Error "Non-ASCII byte present
 
 ```powershell
 $bat  = "<tree>\scripts\ops\win_gh.bat"   # 操作的是 <tree> 這棵樹（腳本所在的樹），不是 cwd
-$t    = "$env:TEMP\vibe-gh-out.txt"
-Remove-Item $t -ErrorAction SilentlyContinue
+$t    = Join-Path $env:TEMP ("vibe-gh-out-" + [guid]::NewGuid() + ".txt")   # 每次呼叫一個檔：固定檔名會被同時執行的呼叫互相覆寫（#2275）
 
 # /s /c 的兩個旗標缺一不可：
 #   /c  告訴 cmd.exe 執行後就退出
@@ -202,8 +201,13 @@ $psi.Arguments        = $args
 $psi.UseShellExecute  = $false
 $psi.CreateNoWindow   = $true     # CRITICAL — 不加這行 MCP 還是會 inherit console handle 然後 hang
 $p = [Diagnostics.Process]::Start($psi)
-[void]$p.WaitForExit(30000)       # 給一個毫秒為單位的硬 timeout，避免萬一 hang
+if (-not $p.WaitForExit(30000)) {  # 給一個毫秒為單位的硬 timeout，避免萬一 hang
+    # 逾時時子行程還在寫 $t：先結束整棵行程樹（含 cmd 底下的 gh／git），再讀、再刪
+    taskkill /T /F /PID $p.Id | Out-Null
+    [void]$p.WaitForExit()
+}
 Get-Content $t -Raw
+Remove-Item $t
 ```
 
 **為什麼三個要素都不能省：**
