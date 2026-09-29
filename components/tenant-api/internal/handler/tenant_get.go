@@ -83,14 +83,15 @@ type tenantDetailNotLoadable struct {
 // @Description skips such a file, so resolved_thresholds, custom_alerts and the validation fields are absent (not empty:
 // @Description the file's content is not vouched for). Partial writes refuse such a file (409 TENANT_CONFIG_NOT_LOADABLE) until the
 // @Description tenant file itself is repaired. A whole-file PUT can replace it: it is not refused merely because the current
-// @Description file is broken. When tenant-api cannot read the current file, its end-of-life recipe usage counts as none, so a
-// @Description body with an end-of-life recipe is refused; a file it can read is compared by its actual usage. A broken file
-// @Description shared with other tenants may not keep their sections through that PUT: when tenant-api cannot read the current
-// @Description file, other tenants' sections in the body count as added and are refused, and a body with only the tenant's own
-// @Description section overwrites them; to keep them, fix the file in git. The two checks each read the current file their own
-// @Description way (the end-of-life check reads only the tenants: block; the shared-file check reads the whole file), and each
-// @Description applies the handling above only when it cannot read the file; which broken files fall on which side is not
-// @Description guaranteed, so fix the file in git when needed.
+// @Description file is broken. When tenant-api cannot parse the current file, its end-of-life recipe usage counts as none, so a
+// @Description body with an end-of-life recipe is refused; a file it can parse is compared by its actual usage, and a file that
+// @Description exists but cannot be read at all (permissions, I/O, a directory) refuses the write. A broken file shared with
+// @Description other tenants may not keep their sections through that PUT: when tenant-api cannot parse the current file, other
+// @Description tenants' sections in the body count as added and are refused, and a body with only the tenant's own section
+// @Description overwrites them; to keep them, fix the file in git. The two checks each parse the current file their own way
+// @Description (the end-of-life check decodes only the tenants: block, though the whole file must still be valid YAML; the
+// @Description shared-file check decodes the whole file as a tenant config), and each applies the handling above only when it
+// @Description cannot parse the file; which broken files fall on which side is not guaranteed, so fix the file in git when needed.
 // @Tags        tenants
 // @Produce     json
 // @Param       id   path     string true "Tenant ID"
