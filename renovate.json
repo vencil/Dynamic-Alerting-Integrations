@@ -115,6 +115,24 @@
       "pinDigests": false
     },
     {
+      "description": "Third-party (non-GitHub-owned) actions are pinned to a full commit SHA with a '# vX.Y.Z' comment: a tag can be re-pointed upstream (tj-actions/changed-files, 2025), and these run in jobs holding packages:write / id-token:write (release.yaml), RENOVATE_TOKEN or Docker Hub credentials. pinDigests on for exactly these so Renovate moves SHA and comment together. actions/* and github/* stay on tags. The list is bound to the workflows by tests/ops/test_renovate_config.py — a new third-party action must be added here and pinned in the same PR.",
+      "matchManagers": ["github-actions"],
+      "matchDepNames": [
+        "anchore/sbom-action",
+        "aquasecurity/trivy-action",
+        "azure/setup-helm",
+        "docker/build-push-action",
+        "docker/login-action",
+        "docker/setup-buildx-action",
+        "docker/setup-qemu-action",
+        "dorny/paths-filter",
+        "marocchino/sticky-pull-request-comment",
+        "renovatebot/github-action",
+        "sigstore/cosign-installer"
+      ],
+      "pinDigests": true
+    },
+    {
       "description": "#1354 — majors from the built-in managers (a new action major, a new feature major, a new base-image major) wait for a Dependency Dashboard tick, same policy as the #902 images.",
       "matchManagers": ["github-actions", "dockerfile", "devcontainer"],
       "matchUpdateTypes": ["major"],

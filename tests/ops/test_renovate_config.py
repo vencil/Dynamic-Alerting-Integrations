@@ -413,7 +413,9 @@ def test_ci_bound_pins_are_not_renovates(manager, dep, datasource, dep_type, upd
 
 
 @pytest.mark.parametrize("manager,dep,datasource,dep_type", [
-    ("github-actions", "aquasecurity/trivy-action", "github-tags", "action"),
+    # GitHub-owned: stays on tags. Third-party actions are the exception —
+    # test_third_party_actions_are_sha_pinned_and_renovate_keeps_them_so.
+    ("github-actions", "actions/checkout", "github-tags", "action"),
     ("dockerfile", "alpine", "docker", "final"),
     ("devcontainer", "ghcr.io/devcontainers/features/go", "docker", "feature"),
 ])
@@ -429,6 +431,57 @@ def test_each_builtin_manager_is_one_group_without_digest_pinning(manager, dep, 
         f"{manager}/{dep} inherits the global pinDigests=true: Renovate would open a "
         f"pin PR rewriting every ref to a digest/SHA (deliberately out of #1354).")
     assert not got.get("dependencyDashboardApproval"), f"{manager}/{dep} minor is gated"
+
+
+_WORKFLOW_GLOBS = (".github/workflows/*.yml", ".github/workflows/*.yaml",
+                   ".github/actions/**/*.yml", ".github/actions/**/*.yaml")
+_USES_LINE = re.compile(r"^\s*-?\s*uses:\s*(?P<ref>[^\s#]+)(?P<rest>.*)$", re.M)
+_GITHUB_OWNED = ("actions", "github")
+
+
+def _third_party_uses() -> list[tuple[str, str, str]]:
+    """(file, `owner/repo[/path]@ref`, trailing text) for every non-GitHub-owned
+    `uses:`. Raw text on purpose: the `# vX.Y.Z` comment is what Renovate reads
+    back as currentValue, and a YAML parse would throw it away."""
+    out = []
+    for pattern in _WORKFLOW_GLOBS:
+        for f in sorted(REPO.glob(pattern)):
+            for m in _USES_LINE.finditer(f.read_text(encoding="utf-8")):
+                ref = m.group("ref")
+                if ref.startswith(("./", "docker://")) or ref.split("/")[0] in _GITHUB_OWNED:
+                    continue
+                out.append((f.relative_to(REPO).as_posix(), ref, m.group("rest")))
+    return out
+
+
+def test_third_party_actions_are_sha_pinned_and_renovate_keeps_them_so():
+    """A tag can be re-pointed upstream; a commit SHA cannot. Every third-party
+    action is `@<40-hex>  # vX.Y.Z` (the comment is Renovate's currentValue),
+    and the set Renovate pins is DERIVED from the workflows — so adding a new
+    third-party action on a tag, or dropping one from the rule, both go red."""
+    uses = _third_party_uses()
+    assert len(uses) >= 20, f"anti-vacuity: expected the release/nightly actions, got {len(uses)}"
+    bad = [(f, r) for f, r, rest in uses
+           if not re.fullmatch(r"[^@]+@[0-9a-f]{40}", r)
+           or not re.fullmatch(r"\s+#\s+v\d+\.\d+\.\d+\s*", rest)]
+    assert not bad, f"third-party actions not pinned as `@<sha> # vX.Y.Z`: {bad}"
+    repos = {"/".join(r.split("@")[0].split("/")[:2]) for _, r, _ in uses}
+    cfg = _load_config()
+    for repo in sorted(repos):
+        got = _resolve(cfg, manager="github-actions", dep=repo, datasource="github-tags",
+                       dep_type="action", update="patch")
+        assert got["pinDigests"] is True, f"{repo} is SHA-pinned but Renovate would not keep it pinned"
+    pinned_rule = {d for r in cfg["packageRules"] if r.get("pinDigests") is True
+                   and r.get("matchManagers") == ["github-actions"] for d in r.get("matchDepNames", [])}
+    assert pinned_rule == repos, (
+        f"renovate.json pin list != third-party actions in use:\n"
+        f"  unused in workflows: {sorted(pinned_rule - repos)}\n  missing from rule: {sorted(repos - pinned_rule)}")
+
+
+def test_github_owned_actions_stay_on_tags():
+    got = _resolve(_load_config(), manager="github-actions", dep="actions/checkout",
+                   datasource="github-tags", dep_type="action", update="patch")
+    assert got["pinDigests"] is False, got
 
 
 def test_builtin_manager_groups_are_distinct_and_not_the_image_group():

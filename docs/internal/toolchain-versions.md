@@ -38,6 +38,8 @@ Renovate（repo 根目錄 `renovate.json`，由 `.github/workflows/renovate.yaml
 
 ⚠️ **這三個內建 manager 不做 digest／SHA pin**：全域 `pinDigests: true` 是給 #902 映像用的，對它們以 packageRule 關掉——否則第一次執行就會開一支把每個 `uses:` 改成 commit SHA、每個 `FROM` 加 `@sha256` 的 pin PR。要不要走 action SHA pin 是另一個決定，不是開 manager 的副作用。
 
+⛔ **例外：第三方 action 一律 pin 到 commit SHA**（owner 拍板）。非 `actions/*`、`github/*` 的 action 寫成 `owner/repo@<40 位 SHA> # vX.Y.Z`，`renovate.json` 只對這份清單打開 `pinDigests`，由 Renovate 同時更新 SHA 與版本註解。理由：tag 可以被上游改指（tj-actions/changed-files，2025），而這些 action 跑在拿得到 `packages: write`／`id-token: write`（release.yaml）、`RENOVATE_TOKEN` 或 Docker Hub 帳密的 job 裡。清單與 workflow 的綁定由 `tests/ops/test_renovate_config.py` 的 `test_third_party_actions_are_sha_pinned_and_renovate_keeps_them_so` 守——新增第三方 action 時要同一個 PR 加進清單並 pin SHA。
+
 ## 對照表
 
 | 工具 | SSOT | 消費端（升版時一起改） | 守衛 |

@@ -125,7 +125,7 @@ jobs:
       # isn't allowed in `if`, so gate on the mirrored env var (#902 / #907 review).
       - name: Docker Hub login (no-op without creds)
         if: ${{ env.DOCKERHUB_USERNAME != '' }}
-        uses: docker/login-action@v3
+        uses: docker/login-action@c94ce9fb468520275223c153574b00df6fe4bcc9 # v3.7.0
         with:
           username: ${{ secrets.DOCKERHUB_USERNAME }}
           password: ${{ secrets.DOCKERHUB_TOKEN }}
@@ -133,7 +133,7 @@ jobs:
       - uses: actions/checkout@v6
 
       - name: Set up Docker Buildx
-        uses: docker/setup-buildx-action@v3
+        uses: docker/setup-buildx-action@8d2750c68a42422c14e847fe6c8ac0403b4cbd6f # v3.12.0
 
       # Same stubs as component-docker-build.yaml: da-portal needs the vendor dir
       # (CDN fallback at runtime), da-tools stubs its pre-built Go binaries
@@ -158,7 +158,7 @@ jobs:
       # the last build. A build failure fails THIS matrix job (a real main-health
       # signal; the report job notes the missing image and won't claim "all clean").
       - name: Build image (load, no push)
-        uses: docker/build-push-action@v6
+        uses: docker/build-push-action@10e90e3645eae34f1e60eeb005ba3a3d33f178e8 # v6.19.2
         with:
           context: ${{ matrix.context }}
           file: ${{ matrix.dockerfile }}
@@ -171,7 +171,7 @@ jobs:
       # = only actionable/fixable) but exit-code 0 — we CAPTURE findings here and let
       # the report job decide on alerting. JSON output for machine aggregation.
       - name: Trivy scan (JSON)
-        uses: aquasecurity/trivy-action@v0.36.0
+        uses: aquasecurity/trivy-action@ed142fd0673e97e23eac54620cfb913e5ce36c25 # v0.36.0
         with:
           # Trivy binary pinned (the action's own default moves with every
           # action bump). Same version as Makefile TRIVY_VERSION and
@@ -298,7 +298,7 @@ jobs:
       # Authenticated Docker Hub pulls (rate-limit headroom); guarded no-op without creds.
       - name: Docker Hub login (no-op without creds)
         if: ${{ env.DOCKERHUB_USERNAME != '' }}
-        uses: docker/login-action@v3
+        uses: docker/login-action@c94ce9fb468520275223c153574b00df6fe4bcc9 # v3.7.0
         with:
           username: ${{ secrets.DOCKERHUB_USERNAME }}
           password: ${{ secrets.DOCKERHUB_TOKEN }}
@@ -309,7 +309,7 @@ jobs:
       # as the scan job (CRITICAL,HIGH + ignore-unfixed, exit-code 0 — capture,
       # don't gate; the report job decides on alerting).
       - name: Trivy scan (JSON)
-        uses: aquasecurity/trivy-action@v0.36.0
+        uses: aquasecurity/trivy-action@ed142fd0673e97e23eac54620cfb913e5ce36c25 # v0.36.0
         with:
           # Trivy binary pinned (the action's own default moves with every
           # action bump). Same version as Makefile TRIVY_VERSION and
@@ -433,7 +433,7 @@ jobs:
       # creds. Two of the refs are Docker Hub (alpine/k8s, alpine/helm).
       - name: Docker Hub login (no-op without creds)
         if: ${{ env.DOCKERHUB_USERNAME != '' }}
-        uses: docker/login-action@v3
+        uses: docker/login-action@c94ce9fb468520275223c153574b00df6fe4bcc9 # v3.7.0
         with:
           username: ${{ secrets.DOCKERHUB_USERNAME }}
           password: ${{ secrets.DOCKERHUB_TOKEN }}
@@ -445,7 +445,7 @@ jobs:
       # exists is recipe-preview's bundled promtool, which has nothing to do with
       # these.
       - name: Trivy scan (JSON)
-        uses: aquasecurity/trivy-action@v0.36.0
+        uses: aquasecurity/trivy-action@ed142fd0673e97e23eac54620cfb913e5ce36c25 # v0.36.0
         with:
           # Trivy binary pinned (the action's own default moves with every
           # action bump). Same version as Makefile TRIVY_VERSION and
