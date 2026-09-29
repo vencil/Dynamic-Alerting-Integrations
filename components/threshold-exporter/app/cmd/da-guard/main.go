@@ -170,16 +170,10 @@ func parseFlags(args []string, errOut io.Writer) (*flags, error) {
 // (usage errors, exception messages); the report itself goes to
 // either stdout (if --output empty) or the named file.
 func run(args []string, stdout, errOut io.Writer) int {
-	// Subcommands are dispatched before the log redirect below: served-values
-	// leaves the process's `log` on stderr (see runServedValues).
+	// run() never touches the process-global `log` (see main, #2444).
 	if len(args) > 0 && args[0] == servedValuesCmd {
 		return runServedValues(args[1:], stdout, errOut)
 	}
-
-	// Force log output to errOut so the report stream stays clean
-	// when --output is empty (i.e. report goes to stdout).
-	log.SetOutput(errOut)
-	log.SetFlags(0)
 
 	f, err := parseFlags(args, errOut)
 	if errors.Is(err, flag.ErrHelp) {
@@ -744,5 +738,15 @@ func reportParseFailed(errOut io.Writer, files []string) {
 }
 
 func main() {
-	os.Exit(run(os.Args[1:], os.Stdout, os.Stderr))
+	args := os.Args[1:]
+	// The report path prints dependency WARNs (pkg/config, the collector —
+	// they log through the process-global `log`) without timestamps.
+	// ⛔ Set here, once, and never in run(): run() pointing the global logger
+	// at its errOut made every t.Parallel test calling run() hand its buffer
+	// to every other test's resolver, and -race failed whichever pair
+	// overlapped (#2444). The global keeps the binary's own stderr.
+	if len(args) == 0 || args[0] != servedValuesCmd {
+		log.SetFlags(0)
+	}
+	os.Exit(run(args, os.Stdout, os.Stderr))
 }
