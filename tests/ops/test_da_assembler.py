@@ -295,26 +295,35 @@ class TestRenderCrFile:
     #   `1:30`  PyYAML int (sexagesimal)         go-yaml string
     # Shapes let through here cannot be created in a cluster anyway (not a
     # DNS-1123 name), and the name format itself is not checked.
-    @pytest.mark.parametrize("name, kind", [
-        pytest.param("42", "int", id="name-int"),
-        pytest.param("8", "int", id="name-int-8"),
-        pytest.param("010", "int", id="name-int-octal"),
-        pytest.param("0x1F", "int", id="name-int-hex"),
-        pytest.param("1:30", "int", id="name-int-sexagesimal"),
-        pytest.param("-5", "int", id="name-int-negative"),
-        pytest.param("1.5", "float", id="name-float"),
-        pytest.param(".inf", "float", id="name-float-inf"),
-        pytest.param("true", "bool", id="name-bool-true"),
-        pytest.param("yes", "bool", id="name-bool-yes"),
-        pytest.param("off", "bool", id="name-bool-off"),
+    # `stale`: the file an earlier version (before #2399/#2400) rendered
+    # this name to — measured against that version, #2430. None where it
+    # is the name as written: quoting then overwrites the same file.
+    @pytest.mark.parametrize("name, kind, stale", [
+        pytest.param("42", "int", None, id="name-int"),
+        pytest.param("8", "int", None, id="name-int-8"),
+        pytest.param("010", "int", "8.yaml", id="name-int-octal"),
+        pytest.param("0x1F", "int", "31.yaml", id="name-int-hex"),
+        pytest.param("1:30", "int", "90.yaml", id="name-int-sexagesimal"),
+        pytest.param("-5", "int", None, id="name-int-negative"),
+        pytest.param("1.5", "float", None, id="name-float"),
+        pytest.param("1.50", "float", "1.5.yaml", id="name-float-trailing-0"),
+        pytest.param(".inf", "float", "inf.yaml", id="name-float-inf"),
+        pytest.param("true", "bool", "True.yaml", id="name-bool-true"),
+        pytest.param("yes", "bool", "True.yaml", id="name-bool-yes"),
+        pytest.param("off", "bool", "False.yaml", id="name-bool-off"),
     ])
     def test_non_string_name_is_caller_error(
-            self, name, kind, tmp_path, caplog):
+            self, name, kind, stale, tmp_path, caplog):
         """#2371：未加引號、YAML 會解成數字／布林的 name 一律 rc 2。
 
         以 YAML 1.1（PyYAML）的隱式型別判定，與 Kubernetes 經 YAML→JSON
         後的型別大致相同但不完全一致（見上方註解）。訊息要指名型別，並說明
         加引號只讓它變成字串，名稱格式（DNS-1123）本工具不檢查。
+
+        #2430：舊版（#2399／#2400 之前）把這個 name 寫成型別化後的拼法
+        （`010` → `8.yaml`）。加引號重 render 後新檔是 `010.yaml`，舊檔
+        若還在持久輸出目錄裡，同一租戶就有兩份。訊息要指名那個舊檔；拼法
+        相同（`42`）時加引號會覆寫同一個檔，不該提。本工具不刪檔。
         """
         cr_path = tmp_path / "cr.yaml"
         cr_path.write_text(
@@ -327,6 +336,11 @@ class TestRenderCrFile:
         assert f"read as {kind}" in caplog.text
         assert "Quoting makes it a string" in caplog.text
         assert "DNS-1123" in caplog.text
+        if stale is None:
+            assert "earlier version" not in caplog.text
+        else:
+            assert (f"it wrote {stale} there: delete it" in caplog.text), \
+                caplog.text
         assert list(out_dir.iterdir()) == []
 
     @pytest.mark.parametrize("spec", [

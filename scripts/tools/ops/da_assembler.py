@@ -483,11 +483,23 @@ def render_cr_file(
     # where this differs from Kubernetes). Null was refused above.
     tag = _plain_tag(name) if isinstance(name, RawPlain) else None
     if tag in _NON_STRING_NAME_TAGS:
+        # #2430: before #2399/#2400 this name was rendered under its typed
+        # spelling (`010` -> `8.yaml`, `yes` -> `True.yaml`); once quoted it
+        # renders as `010.yaml`, and a stale typed-spelling file left in a
+        # persistent --config-dir declares the tenant a second time. The
+        # message names that file; deleting it is left to the operator.
+        # Same spelling (`42`): quoting overwrites it, nothing is left.
+        old_name = str(yaml.safe_load(name))
+        stale = ("" if old_name == name else
+                 ". If an earlier version of this tool rendered this CR "
+                 f"into this --config-dir, it wrote {old_name}.yaml there: "
+                 "delete it, or it and the quoted name's file both "
+                 "declare the tenant")
         log.error("%s: metadata.name must be a string, but unquoted %s is "
                   "read as %s (YAML 1.1). Quoting makes it a string; it "
                   "must still be a valid Kubernetes object name (DNS-1123), "
-                  "which this tool does not check", cr_path, name,
-                  tag.rsplit(":", 1)[-1])
+                  "which this tool does not check%s", cr_path, name,
+                  tag.rsplit(":", 1)[-1], stale)
         return EXIT_CALLER_ERROR
     if "spec" in cr and not isinstance(cr["spec"], dict):
         log.error("%s: spec must be a mapping", cr_path)
