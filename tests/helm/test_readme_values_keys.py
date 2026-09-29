@@ -188,6 +188,17 @@ def _as_yaml(token: str):
         return token
 
 
+def _same(a, b) -> bool:
+    """Equality that does not let a bool stand in for a number (Python has True == 1)."""
+    if isinstance(a, bool) or isinstance(b, bool):
+        return type(a) is type(b) and a == b
+    if isinstance(a, dict) and isinstance(b, dict):
+        return a.keys() == b.keys() and all(_same(a[k], b[k]) for k in a)
+    if isinstance(a, list) and isinstance(b, list):
+        return len(a) == len(b) and all(_same(x, y) for x, y in zip(a, b))
+    return a == b
+
+
 def _default_cases():
     for readme in sorted(_REPO.glob("helm/*/README.md")):
         values_file = readme.parent / "values.yaml"
@@ -216,9 +227,21 @@ def _compare(values: dict, key_cell: str, default_cell: str):
             continue  # test_every_listed_key_exists_in_values reports this
         _, actual = _lookup(values, key)
         compared += 1
-        if _as_yaml(dflt) != actual:
+        if not _same(_as_yaml(dflt), actual):
             bad.append(f"{key}: README says {dflt!r}, values.yaml has {actual!r}")
     return compared, bad
+
+
+@pytest.mark.parametrize("values, default_cell", [
+    ({"enabled": 1}, "`true`"),
+    ({"enabled": 0}, "`false`"),
+    ({"enabled": True}, "`1`"),
+    ({"enabled": [0]}, "`[false]`"),
+    ({"enabled": {"a": 1}}, "`{a: true}`"),
+])
+def test_a_bool_default_never_matches_a_number(values, default_cell):
+    _, bad = _compare(values, "`enabled`", default_cell)
+    assert bad, f"{default_cell} was accepted as equal to {values['enabled']!r}"
 
 
 def test_the_default_scan_compares_every_chart():
