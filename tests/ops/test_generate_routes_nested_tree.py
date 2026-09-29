@@ -322,6 +322,22 @@ def test_subtree_policy_naming_an_outside_tenant(tmp_path, strict, prefix, rc):
     assert "t-nowhere" not in res.stderr
 
 
+def test_policy_scope_skips_shapes_check_domain_policies_owns():
+    """A policy that is not a mapping, a `tenants:` that is not a list and an
+    entry that is not a string are `check_domain_policies`' findings; the
+    scope check steps over them and still judges the well-formed entries."""
+    from _grar_validate import check_policy_scope
+    msgs, rows = check_policy_scope(
+        "team",
+        {"a-scalar": "oops",
+         "b-map-tenants": {"tenants": {"t-root": 1}},
+         "c-mixed": {"tenants": [{"t-root": 1}, "t-root", "t-team"]}},
+        {"t-root": ".", "t-team": "team"},
+        source="team/_domain_policy.yaml")
+    assert rows == [("c-mixed", "t-root")]
+    assert len(msgs) == 1 and msgs[0].lstrip().startswith("WARN:"), msgs
+
+
 # ── (e) one tenant id, two files ────────────────────────────────────────
 
 
