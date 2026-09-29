@@ -127,16 +127,39 @@ func TestRun_RoutingSource(t *testing.T) {
 			want:     []string{"error routing_in_unread_location  team-a/_defaults.yaml:defaults._routing_profile"},
 		},
 		{
-			// Nested carriers are never read by the (flat) generator, so
-			// even `_routing_defaults` there is unread.
-			name: "routing-defaults-in-an-unwrapped-nested-carrier-is-named",
+			// #2326: the generator reads a nested carrier's top-level
+			// `_routing_defaults` (the routing layer chain), so it is not
+			// "unread" — it is the tenant's routing, and judged as such.
+			name: "routing-defaults-in-a-nested-carrier-is-judged",
+			files: map[string]string{
+				"_defaults.yaml":        rsDefaults,
+				"team-a/_defaults.yaml": "_routing_defaults:" + rsBadRoute,
+				"team-a/tx.yaml":        rsTenant,
+			},
+			wantCode: exitFindings,
+			want:     []string{"error unknown_receiver_type tx receiver.type"},
+		},
+		{
+			name: "routing-defaults-in-a-nested-carrier-routes-the-tenant",
 			files: map[string]string{
 				"_defaults.yaml":        rsDefaults,
 				"team-a/_defaults.yaml": "_routing_defaults:" + rsOKRoute,
 				"team-a/tx.yaml":        rsTenant,
 			},
+			args:     []string{"--required-fields", "_routing.receiver"},
+			wantCode: exitOK,
+			want:     []string{},
+		},
+		{
+			// #2326 (b): `_routing_enforced` below the root is refused.
+			name: "routing-enforced-below-the-root-is-an-error",
+			files: map[string]string{
+				"_defaults.yaml":        rsDefaults,
+				"team-a/_defaults.yaml": "_routing_enforced:\n  enabled: true\n",
+				"team-a/tx.yaml":        rsTenant,
+			},
 			wantCode: exitFindings,
-			want:     []string{"error routing_in_unread_location  team-a/_defaults.yaml:_routing_defaults"},
+			want:     []string{"error routing_enforced_below_root  team-a/_defaults.yaml:_routing_enforced"},
 		},
 		{
 			// --scope: a sibling directory's defaults do not bear on it.

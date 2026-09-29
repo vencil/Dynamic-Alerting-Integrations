@@ -22,6 +22,8 @@ const ProblemRoutingInUnreadLocation = "routing_in_unread_location"
 // at the top level of a conf.d ROOT platform file (_grar_parse.
 // _parse_platform_config). An unwrapped root `_defaults.yaml` carrying them
 // is therefore read correctly, whatever else the exporter does with them.
+// Below the root (#2326) the carrier's `_routing_defaults` is read as well,
+// and its `_routing_enforced` is refused (LoadTree).
 var rootTopLevelRoutingKeys = map[string]bool{
 	"_routing_defaults": true,
 	"_routing_enforced": true,
@@ -39,8 +41,11 @@ func isRoutingKey(k string) bool {
 //     exporter's decode, so da-guard skips it as parse_failed, exit 3);
 //  2. at the top level of a defaults carrier with no `defaults:` mapping —
 //     the exporter then takes the whole document as the defaults block —
-//     except `_routing_defaults` / `_routing_enforced` in the ROOT carrier,
-//     which the generator reads there;
+//     except `_routing_defaults` / `_routing_enforced`: the generator reads
+//     both at the top level of the ROOT carrier, and since #2326
+//     `_routing_defaults` at the top level of a NESTED carrier too (the
+//     routing layer chain), while `_routing_enforced` there is LoadTree's
+//     blocking ProblemRoutingEnforcedBelowRoot;
 //  3. inside a profile of a root platform file's `profiles:` block (the
 //     threshold `_profile` mechanism; routing profiles are
 //     `_routing_profiles.yaml`'s `routing_profiles:`).
@@ -56,7 +61,7 @@ func UnreadRouting(configDir string, defaults []config.DefaultsFile, skip func(r
 		if skip != nil && skip(f.Name) {
 			continue
 		}
-		out = append(out, unreadInDefaults(f.Name, f.Data, !strings.Contains(f.Name, "/"))...)
+		out = append(out, unreadInDefaults(f.Name, f.Data)...)
 	}
 	files, err := config.RootPlatformFiles(configDir)
 	if err != nil {
@@ -86,7 +91,7 @@ func topMap(data []byte) map[string]any {
 	return m
 }
 
-func unreadInDefaults(name string, data []byte, atRoot bool) []Problem {
+func unreadInDefaults(name string, data []byte) []Problem {
 	doc := topMap(data)
 	if doc == nil {
 		return nil
@@ -103,7 +108,11 @@ func unreadInDefaults(name string, data []byte, atRoot bool) []Problem {
 	}
 	var out []Problem
 	for _, k := range sortedRoutingKeys(doc) {
-		if atRoot && rootTopLevelRoutingKeys[k] {
+		// #2326: `_routing_defaults` at the top level of a NESTED carrier is
+		// read too now (the routing layer chain), and `_routing_enforced`
+		// there is LoadTree's blocking ProblemRoutingEnforcedBelowRoot — not
+		// "unread" either way, and named once.
+		if rootTopLevelRoutingKeys[k] {
 			continue
 		}
 		out = append(out, unreadProblem(name, k, k,
@@ -158,8 +167,10 @@ func unreadProblem(file, field, key, why string) Problem {
 			"or the tenant's own file (one tenant)"
 	case key == "_routing_profile":
 		fix = "set `_routing_profile` in the tenant's own file (or its root platform `tenants:` entry)"
+	case key == "_routing_enforced":
+		fix = "move `_routing_enforced` to the top level of a conf.d ROOT platform file (not under `defaults:`, not below the root)"
 	case rootTopLevelRoutingKeys[key]:
-		fix = fmt.Sprintf("move `%s` to the top level of a conf.d ROOT platform file (not under `defaults:`, not below the root)", key)
+		fix = fmt.Sprintf("move `%s` to the top level of this defaults file (not under `defaults:`)", key)
 	default:
 		fix = "the route generator reads no such key here; move the routing to `_routing_defaults`, " +
 			"`_routing_profiles.yaml`, or the tenant's own `_routing`"

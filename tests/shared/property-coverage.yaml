@@ -228,6 +228,10 @@ modules:
       - _apply_timing_params
     excluded:
       build_receiver_config: "Heavy state-machine over RECEIVER_TYPES; covered by test_generate_alertmanager_routes.py integration"
+      chain_levels: "#2326 path-prefix split of a POSIX directory level; example-covered by test_generate_routes_nested_tree.py (root / one / two levels) and the hier-* trees of routing_policy_parity_matrix.json, which pin it against Go's ChainLevels"
+      level_contains: "#2326 subtree membership (root contains all; prefix + '/' so `team` does not contain `team-b`); example-covered by test_generate_routes_nested_tree.py"
+      resolve_routing_defaults: "#2326 shallow per-key merge along the chain; example-covered by test_generate_routes_nested_tree.py (deeper wins, receiver replaced whole) and the hier-a parity trees"
+      visible_routing_profiles: "#2326 union of the profiles on the chain; example-covered by test_generate_routes_nested_tree.py and the hier-c parity trees"
 
   scripts/tools/ops/_grar_validate.py:
     covered:
@@ -269,6 +273,8 @@ modules:
       assert_equal_labels_gated: "Raises-wrapper over find_ungated_equal_label_inhibits; covered by TestEqualLabelGatedInvariant + the strict-raise/warn enforce test"
       _canonical_tenant_key: "#1231 alias canonicalizer, exact-match mirror of Go canonicalKeyFor; example-covered by test_generate_alertmanager_routes.py::TestDeprecatedKeyAliases (exact/_critical/dimensional/prefix-typo-reject) + pinned to the registry SSOT by test_check_threshold_registry.py::test_python_alias_mirror_pinned_to_registry"
       _canonicalize_alias_keys: "#1231 alias pre-pass (canonical view + NOTICE lines); covered by TestDeprecatedKeyAliases (old/new defaults, both-spellings dedup, notice wording pins) via validate_tenant_keys"
+      is_routing_tree_error: "#2326 one-line prefix test on ROUTING_TREE_ERROR_PREFIX; example-pinned by test_generate_routes_nested_tree.py (validate-config schema row FAIL)"
+      check_policy_scope: "#2326 (d) subtree-policy entries outside the subtree; example-covered by test_generate_routes_nested_tree.py (strict ERROR / WARN / unknown tenant left alone) and the hier-d parity tree"
       is_receiver_name_collision: "#2279 one-line prefix test on RECEIVER_NAME_COLLISION_PREFIX; example-pinned by test_grar_receiver_name_collision.py (generate_routes line + not-a-policy-error cases)"
       blocking_generation_errors: "#2279 two-category filter (WARN…skipping | duplicate receiver name) shared by --validate and validate-config; example-covered by test_grar_receiver_name_collision.py (CLI rc 1, validate-config FAIL, shared-caller pin) + the existing #2164 skipped-entry tests"
       receiver_name_collisions: "#2279 group-by-name over (name, source) pairs; example-covered by test_grar_receiver_name_collision.py (routes- and overrides-type collisions name both sources, no-collision control)"

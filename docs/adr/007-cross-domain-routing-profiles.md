@@ -285,9 +285,11 @@ def check_domain_policies(resolved_routing, tenant_id, policies):
 
 ### Amendment 2026-09-28 (#2326)：profile 與 policy 的目錄範圍
 
-**狀態：已決定，尚未實作**（[#2326](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/2326)
-的選項 P2；實作在後續 PR）。⛔ 合併之前，`_routing_profiles.yaml` 與 `_domain_policy.yaml`
-只從 conf.d **根目錄**讀取，放在子目錄的不會被讀。
+**狀態：已實作**（[#2326](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/2326)
+的選項 P2）：路由生成器、`check_routing_profiles` 與 da-guard（`pkg/routingpolicy.LoadTree`）
+在每一層都讀 `_routing_profiles.yaml` 與 `_domain_policy.yaml`。profile 名稱重複定義與其他
+阻擋性的樹形錯誤一起被拒收（生成器 rc 2；保留根目錄優先、依名稱順序先出現的定義，點名後者）。
+⚠️ tenant-api 只服務根目錄的租戶檔，寫入時的 policy 檢查仍只讀根目錄的 `_domain_policy.yaml`。
 
 在階層式 conf.d（[ADR-016](016-conf-d-directory-hierarchy-mixed-mode.md)）下：
 
@@ -326,7 +328,7 @@ def check_domain_policies(resolved_routing, tenant_id, policies):
 - **#2245**：profile 與 tenant 的 `routes` 開始產出子路由（先前產生器靜默丟棄）；domain policy 與 `--policy` 網域檢查涵蓋這些 receiver；`explain_route` 改列實際產出的子路由；`check_confd_schema` 開始以 schema 檢查 `_routing_profiles.yaml`，`validate-config` 開始對它做 YAML 引號檢查
 - **#2244**：`require_critical_escalation` 開始由 `check_domain_policies()` 執行（先前只有 lint 認得這個鍵），判準見上方「第二層」
 - **#2280**：da-guard 與 tenant-api 改判**解析後**的 routing（`_routing_defaults` → profile → tenant `_routing`，與產生器同一套合併，共用 `pkg/routingpolicy`，以跨語言 parity 矩陣對齊）；主 receiver、`overrides`、`routes` 的 receiver type 都依 domain policy 判，`forbidden_receiver_types` 與 `allowed_receiver_types` 分開判、可同時觸發；da-guard 另檢查 `routes` 條目形狀與 `_routing_defaults.routes`；tenant-api batch 只在 patch 碰到 `_routing_profile` / `_routing` 時判 routing
-- **#2326**（2026-09-28 已決定，尚未實作）：profile 與 domain policy 以所在子樹為範圍、profile 名稱全樹唯一、policy 疊加判定——見上方「Amendment 2026-09-28」
+- **#2326**（2026-09-28 已決定並實作）：profile 與 domain policy 以所在子樹為範圍、profile 名稱全樹唯一、policy 疊加判定——見上方「Amendment 2026-09-28」
 
 **殘留**：
 - Profile 繼承鏈（profile extends another profile）— 排入 v2.7.0+ 候選

@@ -134,25 +134,18 @@ tenants:
     # container_memory not specified — inherits 85 from Level 2
 ```
 
-> ⛔ **The hierarchical layout holds for the threshold plane only.** The inheritance
-> above is implemented by threshold-exporter and is measured to work; the **routing
-> toolchain reads flat directories only** and sees no tenant inside any subdirectory.
-> Measured on identical content: flat `conf.d/tenant-a.yaml` produces routes, while
-> hierarchical `conf.d/finance/us-east/prod/tenant-a.yaml` produces "No tenants found"
-> and zero routes. So under a hierarchical layout, `_routing_defaults:` and a tenant's
-> own `_routing:` are **consumed by nothing** — use the remaining routing examples in
-> this document against a flat directory.
->
-> 🗓️ **Hierarchical routing is decided; the implementation lands in a follow-up PR**
-> ([#2326](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/2326), 2026-09-28):
-> the routing plane will follow the same directory hierarchy as the threshold plane —
-> `_routing_defaults` from each level's `_defaults.yaml` merged shallowly per top-level key
-> (deeper level wins; `null` follows ADR-017's existing per-field rules); `_routing_enforced` at the root
-> only; `_routing_profiles.yaml` and `_domain_policy.yaml` allowed in subdirectories and
-> scoped to their subtree; the same tenant id declared in more than one file is a blocking
-> error. Full semantics:
+> ✅ **The routing plane follows the same directory hierarchy**
+> ([#2326](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/2326)):
+> `generate-routes` and da-guard read the whole tree, so a tenant at any depth gets a
+> route. `_routing_defaults` at the **top level** of each level's `_defaults.yaml` merges
+> shallowly per top-level key (deeper level wins; `null` follows ADR-017's existing
+> per-field rules, and a subdirectory writing `receiver` / `overrides` as `null` is a
+> blocking error); `_routing_enforced` at the root only; `_routing_profiles.yaml` and
+> `_domain_policy.yaml` allowed in subdirectories and scoped to their subtree; the same
+> tenant id declared in more than one file is a blocking error. Full semantics:
 > [ADR-017 "Amendment 2026-09-28"](../adr/017-defaults-yaml-inheritance-dual-hash.en.md).
-> ⛔ Until that PR merges, the previous paragraph is the actual behaviour.
+> ⚠️ `_routing*` written **inside** a `defaults:` block is still read by nothing. The
+> v2.9.0 image's routing plane reads the top level only <!-- image-caveat: v2.9.0 -->
 >
 > ✅ **`validate_config.py` was made recursive in
 > [PR #1343](https://github.com/vencil/Dynamic-Alerting-Integrations/pull/1343)** (conf.d family ticket
