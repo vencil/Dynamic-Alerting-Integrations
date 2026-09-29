@@ -36,7 +36,10 @@ REM    $psi.Arguments        = $args
 REM    $psi.UseShellExecute  = $false
 REM    $psi.CreateNoWindow   = $true     # CRITICAL -- without it MCP hangs
 REM    $p = [Diagnostics.Process]::Start($psi)
-REM    [void]$p.WaitForExit(30000)
+REM    if (-not $p.WaitForExit(30000)) {
+REM        taskkill /T /F /PID $p.Id | Out-Null   # timed out: stop gh too
+REM        [void]$p.WaitForExit()
+REM    }
 REM    Get-Content $t -Raw
 REM    Remove-Item $t
 REM

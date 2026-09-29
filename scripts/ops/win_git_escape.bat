@@ -22,7 +22,10 @@ REM    $psi.UseShellExecute  = $false
 REM    $psi.CreateNoWindow   = $true     # CRITICAL -- breaks console inherit
 REM    $psi.WorkingDirectory = "<tree>"   # must be inside the tree $bat is in
 REM    $p = [Diagnostics.Process]::Start($psi)
-REM    [void]$p.WaitForExit(30000)       # WaitForExit(ms) breaks hangs
+REM    if (-not $p.WaitForExit(30000)) {  # WaitForExit(ms) breaks hangs
+REM        taskkill /T /F /PID $p.Id | Out-Null   # timed out: stop git too
+REM        [void]$p.WaitForExit()
+REM    }
 REM    Get-Content $t -Raw
 REM    Remove-Item $t
 REM

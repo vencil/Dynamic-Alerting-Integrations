@@ -201,7 +201,11 @@ $psi.Arguments        = $args
 $psi.UseShellExecute  = $false
 $psi.CreateNoWindow   = $true     # CRITICAL — 不加這行 MCP 還是會 inherit console handle 然後 hang
 $p = [Diagnostics.Process]::Start($psi)
-[void]$p.WaitForExit(30000)       # 給一個毫秒為單位的硬 timeout，避免萬一 hang
+if (-not $p.WaitForExit(30000)) {  # 給一個毫秒為單位的硬 timeout，避免萬一 hang
+    # 逾時時子行程還在寫 $t：先結束整棵行程樹（含 cmd 底下的 gh／git），再讀、再刪
+    taskkill /T /F /PID $p.Id | Out-Null
+    [void]$p.WaitForExit()
+}
 Get-Content $t -Raw
 Remove-Item $t
 ```
