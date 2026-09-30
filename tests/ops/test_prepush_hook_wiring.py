@@ -1941,9 +1941,15 @@ bash -c 'sleep 2; mkdir -p "$1" && : > "$1/index.html"' _ "$PWD/site" 2>&1 | tee
 
 
 @pytest.mark.skipif(os.name == "nt", reason="needs POSIX signals to the guard alone")
-def test_a_sigterm_to_the_guard_alone_leaves_nothing_behind(tmp_path: Path) -> None:
+@pytest.mark.parametrize("second", [None, "TERM-guard", "INT-group"],
+                         ids=["once", "then-SIGTERM-again", "then-Ctrl-C"])
+def test_a_sigterm_to_the_guard_alone_during_the_build_leaves_nothing_behind(
+    tmp_path: Path, second: str | None,
+) -> None:
     """#2211 — a SIGTERM to the guard's bash, not its group, must not let the
-    build outlive the clean-up and write site/ back into .git, unregistered."""
+    build outlive the clean-up and write site/ back into .git, unregistered.
+    The guard then waits for the build; a second signal while it waits (an
+    impatient Ctrl-C) must not cut the clean-up short."""
     work, record, sha_a, sha_b = _docs_repo(tmp_path, check=_LATE_WRITER)
     bindir = tmp_path / "fakebin"
     bindir.mkdir()
@@ -1956,7 +1962,7 @@ def test_a_sigterm_to_the_guard_alone_leaves_nothing_behind(tmp_path: Path) -> N
     proc = subprocess.Popen(  # subprocess-timeout: ignore
         [_BASH, "scripts/ops/pre_push_mkdocs_strict.sh", "origin", "/dev/null"], cwd=work, env=env,
         stdin=subprocess.PIPE, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
-        start_new_session=True,
+        start_new_session=True, preexec_fn=lambda: signal.signal(signal.SIGINT, signal.SIG_DFL),
     )
     try:
         proc.stdin.write(f"refs/heads/topic {sha_b} refs/heads/topic {sha_a}\n".encode())
@@ -1968,6 +1974,12 @@ def test_a_sigterm_to_the_guard_alone_leaves_nothing_behind(tmp_path: Path) -> N
         # Must-fire half: the tree is there while the build runs.
         assert list((work / ".git").glob("mkdocs-strict-*")), "no temporary tree during the build"
         os.kill(proc.pid, signal.SIGTERM)
+        if second:
+            time.sleep(0.5)
+            if second == "TERM-guard":
+                os.kill(proc.pid, signal.SIGTERM)
+            else:
+                os.killpg(proc.pid, signal.SIGINT)
         proc.wait(timeout=20)
         time.sleep(3)  # longer than the build has left: a survivor would have written by now
     finally:

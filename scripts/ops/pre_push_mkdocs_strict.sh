@@ -183,11 +183,13 @@ fi
 # ⛔ Wait for a running build before removing its tree: a signal to this bash
 # alone does not reach mkdocs (a grandchild), which would write site/ back
 # into .git, unregistered (#2211). Killing the build's pid does not reach it
-# either.
+# either. Signals are ignored while it waits: an impatient second Ctrl-C would
+# otherwise end the trap before the tree is removed.
 # ⚠️ Relies on bash running an EXIT trap on a signal; dash does not always.
 _live_wt=""
 _build_pid=""
-trap '[ -z "$_build_pid" ] || wait "$_build_pid" 2>/dev/null
+trap 'trap "" INT TERM HUP
+[ -z "$_build_pid" ] || wait "$_build_pid" 2>/dev/null
 git worktree remove --force "$_live_wt" >/dev/null 2>&1 || rm -rf "$_live_wt"' EXIT
 _build_one() {
     local _sha="$1" _wt _rc
@@ -218,6 +220,8 @@ To push anyway (the docs build then runs only in CI):
 WORKTREE_FAILED
         return 1
     fi
+    # ⛔ A subshell, not a bare command: bash starts a bare `cmd &` with SIGINT
+    # ignored, and Ctrl-C would then wait out the whole build.
     ( cd "$_wt" && bash scripts/tools/lint/mkdocs_strict_check.sh ) &
     _build_pid=$!
     wait "$_build_pid"
