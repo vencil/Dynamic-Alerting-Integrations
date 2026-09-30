@@ -16,11 +16,19 @@ var ErrNotRegularFile = errors.New("confd: not a regular file")
 
 // openRegular opens path the way ReadTenantFile does — without blocking, then
 // fstat on the opened fd — and returns the fd only when it is a regular file.
-// An open error is returned unchanged, so os.ErrNotExist still reads as "the
-// file is gone" to callers that map it to 404.
+//
+// Some special files fail already at open (a unix socket answers ENXIO), so
+// an open error is classified too: when path still stats as something other
+// than a regular file, the answer is ErrNotRegularFile. Any other open error
+// is returned unchanged, so os.ErrNotExist still reads as "the file is gone"
+// to callers that map it to 404, and a permission error on a regular file
+// stays a permission error.
 func openRegular(path string) (*os.File, error) {
 	f, err := openNoBlock(path)
 	if err != nil {
+		if fi, serr := os.Stat(path); serr == nil && !fi.Mode().IsRegular() {
+			return nil, fmt.Errorf("%w: %s", ErrNotRegularFile, filepath.Base(path))
+		}
 		return nil, err
 	}
 	fi, err := f.Stat()
