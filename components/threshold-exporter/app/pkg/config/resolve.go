@@ -1028,6 +1028,31 @@ func (c *ThresholdConfig) ResolveMaintenanceExpiries() []ResolvedMaintenanceExpi
 
 // ResolveMaintenanceExpiriesAt is the time-parameterized version for testability.
 func (c *ThresholdConfig) ResolveMaintenanceExpiriesAt(now time.Time) []ResolvedMaintenanceExpiry {
+	return c.resolveMaintenanceExpiriesAt(now, true)
+}
+
+// ResolveMaintenanceExpiriesAfterStateFiltersAt is ResolveMaintenanceExpiriesAt
+// for a caller that has already run ResolveStateFiltersAt over the same config
+// in the same pass — the collector's scrape, through OperationalStatesAt.
+//
+// When the config declares `state_filters.maintenance`, ResolveStateFiltersAt
+// has already parsed every tenant's structured _state_maintenance and logged
+// its parse / invalid-expires WARN, so this reading stays quiet about them;
+// otherwise ResolveStateFiltersAt never reached those values and this reading
+// is the one that logs. Either way one scrape prints each such WARN once
+// (#2426). The returned entries are identical to ResolveMaintenanceExpiriesAt's.
+func (c *ThresholdConfig) ResolveMaintenanceExpiriesAfterStateFiltersAt(now time.Time) []ResolvedMaintenanceExpiry {
+	_, stateFiltersWarned := c.StateFilters[maintenanceFilterName]
+	return c.resolveMaintenanceExpiriesAt(now, !stateFiltersWarned)
+}
+
+// resolveMaintenanceExpiriesAt resolves the expiries; warn=false skips the
+// WARNs for values ResolveStateFiltersAt has already logged. The two readers
+// parse the same values: ResolveStateFiltersAt parses a tenant's
+// _state_maintenance exactly when the maintenance filter is declared and the
+// value contains "expires:" (no such value is one isDisabled accepts), which is
+// the set this function parses.
+func (c *ThresholdConfig) resolveMaintenanceExpiriesAt(now time.Time, warn bool) []ResolvedMaintenanceExpiry {
 	var result []ResolvedMaintenanceExpiry
 
 	for tenant, overrides := range c.Tenants {
@@ -1045,7 +1070,9 @@ func (c *ThresholdConfig) ResolveMaintenanceExpiriesAt(now time.Time) []Resolved
 
 		parsed := maintenanceModeStructured{}
 		if err := yaml.Unmarshal([]byte(val), &parsed); err != nil {
-			log.Printf("WARN: failed to parse structured _state_maintenance for tenant=%s: %v", tenant, err)
+			if warn {
+				log.Printf("WARN: failed to parse structured _state_maintenance for tenant=%s: %v", tenant, err)
+			}
 			continue
 		}
 
@@ -1057,7 +1084,9 @@ func (c *ThresholdConfig) ResolveMaintenanceExpiriesAt(now time.Time) []Resolved
 		if err != nil {
 			// #2000: the setting is ignored as a whole (ResolveStateFiltersAt
 			// drops it too), so there is no window to report as expired.
-			log.Printf("%s", maintenanceExpiresIgnoredWarn(tenant, parsed.Expires, err))
+			if warn {
+				log.Printf("%s", maintenanceExpiresIgnoredWarn(tenant, parsed.Expires, err))
+			}
 			continue
 		}
 
