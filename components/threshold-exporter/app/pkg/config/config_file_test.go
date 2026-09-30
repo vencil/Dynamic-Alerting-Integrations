@@ -5,10 +5,14 @@ package config
 //
 // Two claims, over one variant corpus:
 //
-//  1. ParseConfigFile is byte-for-byte a plain yaml.Unmarshal into
-//     ThresholdConfig — the flat plane's historical decode — for accept/reject
-//     AND for the decoded content. The oracle is written out here rather than
-//     calling ParseConfigFile twice, so the SSOT cannot drift from it quietly.
+//  1. ParseConfigFile is a plain yaml.Unmarshal into ThresholdConfig — the
+//     flat plane's historical decode — for accept/reject AND for the decoded
+//     content, with ONE listed exception (#2418): a `defaults:` spelling that
+//     the file does not write (null, ±Inf, NaN) beside another spelling of
+//     the same threshold that it does write is dropped. The oracle is written
+//     out here rather than calling ParseConfigFile twice, so the SSOT cannot
+//     drift from it quietly; the exception is the explicit per-row key list
+//     nullShadowDrops, not a call into the code under test.
 //  2. The walker (ScanDirTree) judges each file by that decode: ParseFailed
 //     iff the oracle errors, TenantIDs == the sorted keys of the oracle's
 //     Tenants, and TreeScan.Partials holds exactly the oracle's value.
@@ -20,6 +24,8 @@ package config
 
 import (
 	"errors"
+	"io"
+	"log"
 	"os"
 	"path/filepath"
 	"reflect"
@@ -68,6 +74,21 @@ var configFileCorpus = map[string]string{
 	"duplicate tenant key":                "tenants:\n  tx:\n    cpu: \"80\"\n  tx:\n    cpu: \"90\"\n",
 	"duplicate metric key":                "tenants:\n  tx:\n    cpu: \"80\"\n    cpu: \"90\"\n",
 	"integer tenant key":                  "tenants:\n  123:\n    cpu: \"80\"\n",
+	// #2418: the one exception to "plain decode" (nullShadowDrops).
+	"defaults canonical null beside legacy value": "defaults:\n  mysql_threads_running: null\n  " + legacyThreadsRunning + ": 30\ntenants:\n  tx: {}\n",
+	"defaults canonical .inf beside legacy value": "defaults:\n  mysql_threads_running: .inf\n  " + legacyThreadsRunning + ": 30\ntenants:\n  tx: {}\n",
+	// Not the exception: neither spelling is written, so both decode as-is.
+	"defaults both spellings null": "defaults:\n  mysql_threads_running: null\n  " + legacyThreadsRunning + ": null\ntenants:\n  tx: {}\n",
+}
+
+// legacyThreadsRunning is the retired spelling of mysql_threads_running.
+const legacyThreadsRunning = "mysql_cpu"
+
+// nullShadowDrops is the ONE place the oracle departs from yaml.Unmarshal
+// (#2418): per corpus row, the `defaults:` keys ParseConfigFile drops.
+var nullShadowDrops = map[string][]string{
+	"defaults canonical null beside legacy value": {"mysql_threads_running"},
+	"defaults canonical .inf beside legacy value": {"mysql_threads_running"},
 }
 
 // lighterDecodeWouldAccept is the set of rows the walker's PRE-#1957 decode
@@ -94,11 +115,39 @@ var lighterDecodeWouldAccept = []string{
 	"tenant body is a scalar",
 }
 
-// oracleDecode is the flat plane's historical decode, spelled out.
-func oracleDecode(data []byte) (ThresholdConfig, error) {
+// oracleDecode is the flat plane's historical decode, spelled out, plus the
+// listed #2418 drops for corpus row name.
+func oracleDecode(name string, data []byte) (ThresholdConfig, error) {
 	var cfg ThresholdConfig
 	err := yaml.Unmarshal(data, &cfg)
+	if err == nil {
+		for _, k := range nullShadowDrops[name] {
+			delete(cfg.Defaults, k)
+		}
+	}
 	return cfg, err
+}
+
+// TestConfigFileCorpus_ExceptionRowsDifferFromThePlainDecode keeps the
+// exception honest: every nullShadowDrops row names a key the plain decode
+// DOES produce, so the list cannot hide a row where nothing is dropped.
+func TestConfigFileCorpus_ExceptionRowsDifferFromThePlainDecode(t *testing.T) {
+	t.Parallel()
+	for name, keys := range nullShadowDrops {
+		body, ok := configFileCorpus[name]
+		if !ok {
+			t.Fatalf("nullShadowDrops row %q is not in the corpus", name)
+		}
+		var plain ThresholdConfig
+		if err := yaml.Unmarshal([]byte(body), &plain); err != nil {
+			t.Fatalf("%s: %v", name, err)
+		}
+		for _, k := range keys {
+			if _, in := plain.Defaults[k]; !in {
+				t.Errorf("%s: the plain decode has no %q to drop", name, k)
+			}
+		}
+	}
 }
 
 func TestParseConfigFile_IsThePlainDecode(t *testing.T) {
@@ -106,7 +155,7 @@ func TestParseConfigFile_IsThePlainDecode(t *testing.T) {
 	for name, body := range configFileCorpus {
 		t.Run(name, func(t *testing.T) {
 			t.Parallel()
-			want, wantErr := oracleDecode([]byte(body))
+			want, wantErr := oracleDecode(name, []byte(body))
 			got, gotErr := ParseConfigFile([]byte(body))
 			if (gotErr == nil) != (wantErr == nil) {
 				t.Fatalf("accept/reject differs: ParseConfigFile err=%v, yaml.Unmarshal err=%v", gotErr, wantErr)
@@ -169,7 +218,7 @@ func TestScanDirTree_JudgesEachFileByTheOneDecode(t *testing.T) {
 			if f == nil {
 				t.Fatalf("x.yaml not kept by the walk")
 			}
-			want, wantErr := oracleDecode([]byte(body))
+			want, wantErr := oracleDecode(name, []byte(body))
 
 			if f.ParseFailed != (wantErr != nil) {
 				t.Fatalf("walker ParseFailed=%v, but the one decode says err=%v", f.ParseFailed, wantErr)
@@ -221,7 +270,7 @@ func TestConfigFileCorpus_KeepsTheRowsThatTellTheDecodesApart(t *testing.T) {
 			Tenants map[string]yaml.Node `yaml:"tenants"`
 		}
 		lightOK := yaml.Unmarshal([]byte(body), &light) == nil
-		_, fullErr := oracleDecode([]byte(body))
+		_, fullErr := oracleDecode(name, []byte(body))
 		if lightOK && fullErr != nil {
 			got = append(got, name)
 		}
@@ -284,6 +333,10 @@ func TestParseConfigFile_NullDoesNotShadowTheOtherSpelling(t *testing.T) {
 		{"canonical null, legacy value", C + ": null\n  " + L + ": 30", map[string]float64{L: 30}},
 		{"legacy null, canonical value", L + ": ~\n  " + C + ": 30", map[string]float64{C: 30}},
 		{"critical: canonical null, legacy value", C + "_critical: null\n  " + L + "_critical: 30", map[string]float64{L + "_critical": 30}},
+		// A non-finite number is no threshold either (levelWritesSpelling).
+		{"canonical .inf, legacy value", C + ": .inf\n  " + L + ": 30", map[string]float64{L: 30}},
+		{"canonical -.inf, legacy value", C + ": -.inf\n  " + L + ": 30", map[string]float64{L: 30}},
+		{"canonical .nan, legacy value", C + ": .nan\n  " + L + ": 30", map[string]float64{L: 30}},
 		// Unchanged shapes: plain yaml.Unmarshal.
 		{"both null", C + ": null\n  " + L + ": null", map[string]float64{C: 0, L: 0}},
 		{"canonical null alone", C + ": null", map[string]float64{C: 0}},
@@ -297,6 +350,39 @@ func TestParseConfigFile_NullDoesNotShadowTheOtherSpelling(t *testing.T) {
 		}
 		if !reflect.DeepEqual(got.Defaults, tc.want) {
 			t.Errorf("%s: Defaults = %v, want %v", tc.name, got.Defaults, tc.want)
+		}
+	}
+}
+
+// TestLoadDir_RootNonThresholdSpellingBesideAValueServesTheValue pins #2418
+// on /metrics (LoadDir + Resolve) for every root spelling that writes
+// nothing: null, ±Inf and NaN in the canonical spelling beside the retired
+// spelling at 30 serve the 30.
+func TestLoadDir_RootNonThresholdSpellingBesideAValueServesTheValue(t *testing.T) {
+	t.Parallel()
+	for _, canonVal := range []string{"null", ".inf", "-.inf", ".nan"} {
+		root := t.TempDir()
+		files := map[string]string{
+			"_defaults.yaml": "defaults:\n  mysql_threads_running: " + canonVal + "\n  " + legacyThreadsRunning + ": 30\n",
+			"tx.yaml":        "tenants:\n  tx:\n    redis_x: \"1\"\n",
+		}
+		for n, body := range files {
+			if err := os.WriteFile(filepath.Join(root, n), []byte(body), 0o600); err != nil {
+				t.Fatal(err)
+			}
+		}
+		cfg, _, err := LoadDir(root, log.New(io.Discard, "", 0))
+		if err != nil {
+			t.Fatalf("%s: LoadDir: %v", canonVal, err)
+		}
+		var got []float64
+		for _, r := range cfg.Resolve() {
+			if r.Tenant == "tx" && r.Component == "mysql" && r.Metric == "threads_running" && r.Severity == "warning" {
+				got = append(got, r.Value)
+			}
+		}
+		if len(got) != 1 || got[0] != 30 {
+			t.Errorf("canonical %s beside the retired spelling at 30: served %v, want [30]", canonVal, got)
 		}
 	}
 }

@@ -61,8 +61,9 @@ func ParseConfigFile(data []byte) (ThresholdConfig, error) {
 }
 
 // dropNullShadowingSpellings removes from a decoded `defaults:` map every
-// spelling of a threshold that the file writes as null while it writes
-// another spelling of the same threshold (#2418).
+// spelling of a threshold that the file does not write (null, ±Inf, NaN —
+// levelWritesSpelling) while it writes another spelling of the same
+// threshold (#2418).
 //
 // ⛔ WHY. `Defaults` is map[string]float64, so a null decodes to a PRESENT 0.
 // With the canonical spelling written as null beside the retired spelling
@@ -77,9 +78,19 @@ func ParseConfigFile(data []byte) (ThresholdConfig, error) {
 // the subtree overlay (applySubtreeDefaults) and the walker's fold
 // (noteSpellingWriters) already share: the root level answers it the same
 // way, so the canonical-wins dedup inside one file is among the spellings
-// that file WRITES. Nothing else changes: a null with no written twin still
-// decodes to 0 exactly as before (a separate question, not this one's), and
-// a file writing both spellings with values is untouched (canonical wins).
+// that file WRITES.
+//
+// What this changes, all of it:
+//   - a null beside the other spelling's value: served that value, not 0;
+//   - `.inf` / `-.inf` / `.nan` beside the other spelling's value: served
+//     that value, not ±Inf / NaN (a non-finite number is not threshold-
+//     shaped, so it writes nothing either);
+//   - every caller of this decode gets it — the conf.d root carrier AND
+//     file mode's single config file (loadFile → ParseTenantFile).
+//
+// What stays: a spelling that writes nothing with NO written twin decodes
+// as before (null → 0, a separate question, not this one's), and a file
+// writing both spellings with values is untouched (canonical wins).
 //
 // Fast path: the raw re-decode happens only when the map holds two
 // spellings of one threshold — never for a file without aliased keys.

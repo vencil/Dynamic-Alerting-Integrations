@@ -654,8 +654,19 @@ def resolve_inheritance_chain(tenant: str, config_dir: str) -> dict[str, object]
         return {k: v for k, v in drop_shadowed_spellings(m).items()
                 if not metrics_treats_as_unset(v)}
 
+    # #2418: inside the defaults layer, canonical-wins is among the spellings
+    # the layer WRITES (Go `levelWritesSpelling`, applied at the root decode
+    # by `dropNullShadowingSpellings`): a spelling /metrics treats as unset
+    # beside another spelling written with a value is dropped first, so that
+    # value is served. With no written twin the key stays, as before.
+    def _written_twin(k: str) -> bool:
+        return metrics_treats_as_unset(default_only[k]) and any(
+            s in default_only and not metrics_treats_as_unset(default_only[s])
+            for s in _other_tenant_key_spellings(k))
+
     resolved = {}
-    overlay_across_spellings(resolved, drop_shadowed_spellings(default_only))
+    overlay_across_spellings(resolved, drop_shadowed_spellings(
+        {k: v for k, v in default_only.items() if not _written_twin(k)}))
     if profile_keys:
         # Profile fills in only where tenant hasn't overridden
         overlay_across_spellings(resolved, _set_only({
