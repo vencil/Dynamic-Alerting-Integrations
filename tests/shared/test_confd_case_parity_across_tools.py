@@ -265,9 +265,11 @@ def _observed(tool: pathlib.Path, flag: str,
 # ── running one tool ──────────────────────────────────────────────────
 # #2480: the `kubectl` every tool sees. ⛔ Not whatever the host has.
 #
-# Some tools in the population (`operator_check`, `diagnose`) shell out to
-# `kubectl` with their own timeout, and map "binary missing" / "timed out"
-# to a caller-error rc (2) but a prompt refusal to a finding (rc 0). With
+# `operator_check` shells out to `kubectl` with its own timeout, and maps
+# "binary missing" / "timed out" to a caller-error rc (2) but a prompt
+# refusal to rc 0. (`diagnose` also calls kubectl, but with the arguments
+# this harness passes it — `--show-inheritance` — it exits before any
+# kubectl call, so the stub changes nothing for it.) With
 # the host's PATH inherited, the three runs of one tool could each take a
 # different branch: a CI runner has kubectl and no cluster, so a call either
 # fails at once or hangs past the tool's timeout, and which one it is varies
@@ -278,10 +280,14 @@ def _observed(tool: pathlib.Path, flag: str,
 # same tool always skipped, so the gate's answer depended on the machine.
 #
 # A stub that refuses immediately, first on PATH, makes every run take the
-# same branch on every host — and keeps the sweep off a real cluster a
-# developer happens to have configured. It stands in for "kubectl present,
-# no cluster reachable", which is the only state this file can promise
-# everywhere; nothing here is asking about cluster behaviour.
+# same branch on every POSIX host — and keeps the sweep off a real cluster
+# a developer happens to have configured. It stands in for "kubectl present,
+# no cluster reachable", which is the only state this file can promise;
+# nothing here is asking about cluster behaviour.
+# ⚠️ NOT GUARDED on Windows: the stub has no extension, and CreateProcess
+# appends `.exe` when it searches PATH, so a host `kubectl.exe` still wins
+# there and the regression test below is skipped. No CI job runs this file
+# on Windows; this was read from the lookup rule, not measured.
 _KUBECTL_STUB = (
     "#!/bin/sh\n"
     "echo 'kubectl stub (test_confd_case_parity_across_tools): "
