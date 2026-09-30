@@ -14,7 +14,7 @@
 #   This hook closes the gap by running mkdocs strict at pre-push time
 #   when docs changed.
 #
-# Triggers (pre-push only) — read from the PUSHED REFSPEC since #1690. ⛔ The
+# Triggers (pre-push only) — read from the PUSHED REFSPEC (#1690). ⛔ The
 #   trigger set is `DOC_RE` below and nowhere else: a second spelling of it in
 #   prose drifts.
 #
@@ -35,12 +35,12 @@
 #   MKDOCS_STRICT_BYPASS=1 git push  (skips this hook entirely)
 #
 # Configuration:
-#   ⛔ NOT a pre-commit hook, and there is no `mkdocs-strict-pre-push` id any
-#   more (#1689). It is run by scripts/ops/prepush_dispatch.sh; install with
+#   ⛔ NOT a pre-commit hook (#1689). It is run by
+#   scripts/ops/prepush_dispatch.sh; install with
 #       bash scripts/ops/install_prepush_hook.sh
 #   ⛔ Do not put a `stages: [pre-push]` entry back in .pre-commit-config.yaml.
-#   A hook that pre-commit runs is handed exactly ONE refspec, so the two
-#   siblings on that dispatcher went blind that way.
+#   A hook that pre-commit runs is handed at most ONE refspec, so a push of
+#   several refs would be judged on one of them.
 
 set -uo pipefail
 
@@ -166,10 +166,9 @@ fi
 # ⛔ `git worktree add`, NOT `git archive | tar -x`. A worktree checkout obeys
 # core.symlinks, so this repo's mode-120000 aliases (docs/CHANGELOG.md, …)
 # materialise exactly as they do in the contributor's checkout and in CI.
-# `git archive` resolves them into full copies, so on a Windows checkout —
-# where they are path stubs — the built site gains duplicated documents under
-# docs/. That is the platform dependence these aliases exist to remove,
-# reintroduced by the build step.
+# `tar -x` does not read core.symlinks, so on a Windows checkout — where they
+# are path stubs — the extracted tree matches neither: the platform dependence
+# these aliases exist to remove, reintroduced by the build step.
 # ⛔ The clean-up is an EXIT trap, not INT/TERM alone and not code after the
 # build: a clean-up after the build never runs on Ctrl-C or SIGTERM (#2169),
 # and a failed `add` that left its tree behind leaves through a plain
@@ -179,12 +178,16 @@ fi
 # into .git, unregistered (#2211). Killing the build's pid does not reach it
 # either. Signals are ignored while it waits: an impatient second Ctrl-C would
 # otherwise end the trap before the tree is removed.
+# ⛔ Keep the `rm -rf` fallback: while `git worktree add` is still checking
+# out, git has locked the tree ("initializing") and `remove --force` refuses.
+# Removing the directory makes that `add` fail and clean up after itself;
+# without it, a signal to this bash alone leaves a full registered checkout.
 # ⚠️ Relies on bash running an EXIT trap on a signal; dash does not always.
 _live_wt=""
 _build_pid=""
 trap 'trap "" INT TERM HUP
 [ -z "$_build_pid" ] || wait "$_build_pid" 2>/dev/null
-git worktree remove --force "$_live_wt" >/dev/null 2>&1' EXIT
+git worktree remove --force "$_live_wt" >/dev/null 2>&1 || rm -rf "$_live_wt"' EXIT
 _build_one() {
     local _sha="$1" _wt _rc
     _wt="$(git rev-parse --git-path "mkdocs-strict-$$-${_sha:0:8}")"
@@ -228,7 +231,7 @@ WORKTREE_FAILED
 if command -v mkdocs >/dev/null 2>&1; then
     echo "[pre-push-mkdocs] Using native mkdocs ($(mkdocs --version 2>&1 | head -1))"
     # ⛔ Every non-zero lands here — broken links, a failed checkout, an aborted
-    # build — so name the commit, give no advice, and stop (#2210).
+    # build — so this line names the commit, gives no advice, and stops (#2210).
     for _sha in "${_build_shas[@]}"; do
         echo "[pre-push-mkdocs] validating pushed commit ${_sha:0:8}"
         if ! _build_one "$_sha"; then
