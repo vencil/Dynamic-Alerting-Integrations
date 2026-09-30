@@ -25,6 +25,18 @@ spec:
     spec:
       serviceAccountName: {{ include "federation-reconciler.name" . }}
       automountServiceAccountToken: false
+      {{- with .Values.nodeSelector }}
+      nodeSelector:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.tolerations }}
+      tolerations:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.affinity }}
+      affinity:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
       securityContext:
         # No runAsUser pin: the da-tools image already runs as its non-root
         # `nonroot` user (uid 10001); pinning a different uid (e.g. 65532) would

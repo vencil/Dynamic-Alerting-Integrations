@@ -142,9 +142,10 @@ describe('every emitted key is read by the target chart (structural, all configs
     ]) {
       expect(isConsumed('threshold-exporter', fictional), fictional).toBe(false);
     }
-    // Declared in da-portal's values.yaml yet read by no template (the
-    // ServiceAccount is created unconditionally under a fixed name): the
-    // resolver must not treat "present in values.yaml" as "consumed".
+    // Read by no template: the ServiceAccount is created unconditionally under
+    // a fixed name. da-portal's values.yaml declared this key until #2532
+    // removed it (tests/helm/test_values_keys_are_read.py now fails on any
+    // declared-but-unread key), so it stays here as the negative control.
     expect(isConsumed('da-portal', 'serviceAccount.create')).toBe(false);
     // #2027 gave both charts an Ingress template; ingress.* is now read.
     expect(isConsumed('da-portal', 'ingress.enabled')).toBe(true);
