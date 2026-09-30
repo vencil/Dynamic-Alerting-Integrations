@@ -14,11 +14,10 @@
 #   This hook closes the gap by running mkdocs strict at pre-push time
 #   when docs changed.
 #
-# Triggers (pre-push only) — read from the PUSHED REFSPEC since #1690. ⛔ The
-#   trigger set is `DOC_RE` below and nowhere else: a second spelling of it in
-#   prose drifts, and it already had (it omitted docs/**/*.html, which this
-#   repo tracks). ⚠️ The `jsx` branch matches nothing today — every tracked
-#   .jsx is under tools/ — so it is insurance, not evidence.
+# Triggers (pre-push only) — read from the PUSHED REFSPEC (#1690). ⛔ Which
+#   paths count as docs is `DOC_RE` below and nowhere else: a second spelling
+#   of it in prose drifts. A ref whose base cannot be determined is built
+#   regardless; tags and deletions never are.
 #
 # Tiered execution:
 #   Tier 1 — Native `mkdocs` on PATH: run directly
@@ -37,12 +36,12 @@
 #   MKDOCS_STRICT_BYPASS=1 git push  (skips this hook entirely)
 #
 # Configuration:
-#   ⛔ NOT a pre-commit hook, and there is no `mkdocs-strict-pre-push` id any
-#   more (#1689). It is run by scripts/ops/prepush_dispatch.sh; install with
+#   ⛔ NOT a pre-commit hook (#1689). It is run by
+#   scripts/ops/prepush_dispatch.sh; install with
 #       bash scripts/ops/install_prepush_hook.sh
 #   ⛔ Do not put a `stages: [pre-push]` entry back in .pre-commit-config.yaml.
-#   A hook that pre-commit runs is handed exactly ONE refspec, so the two
-#   siblings on that dispatcher went blind that way.
+#   A hook that pre-commit runs is handed at most ONE refspec, so a push of
+#   several refs would be judged on one of them.
 
 set -uo pipefail
 
@@ -117,8 +116,7 @@ while read -r remote_ref local_sha remote_sha; do
 
     # ⛔ Diff from the MERGE BASE, never `git diff A B` — that is two-way, so a
     # branch merely BEHIND the base reports the base's own files as changed by
-    # this push. Measured: a code-only commit on a branch one doc-commit behind
-    # main reported docs/index.md. With no merge base at all (orphan branch)
+    # this push. With no merge base at all (orphan branch)
     # this is the unknown case, which must build.
     _mb=""
     [ -n "$_base" ] && _mb=$(git merge-base "$_base" "$local_sha" 2>/dev/null || true)
@@ -126,11 +124,10 @@ while read -r remote_ref local_sha remote_sha; do
     # ⛔ No --diff-filter: every change status counts, deletions included.
     # Deleting a doc is precisely what breaks mkdocs strict (dangling nav
     # entries, cross-refs to the gone file), and an enumerated list silently
-    # drops whatever it forgets — ACMRD forgot T, so a doc turned into a
-    # symlink pushed with no build at all (#2195).
-    # ⛔ -z: without it git C-quotes a non-ASCII path ("docs/\346…"), the
-    # leading quote defeats DOC_RE, and a new doc with such a name pushed
-    # with no build (#2195). A newline inside a file name still splits.
+    # drops whatever it forgets (#2195).
+    # ⛔ -z: without it git C-quotes a non-ASCII path ("docs/\346…") and the
+    # leading quote defeats DOC_RE (#2195). A newline inside a file name
+    # still splits.
     # ⛔ A failed diff is the unknown case, never "no doc changes" (#2195).
     # It reaches the else branch only through `set -o pipefail` above;
     # without it the pipeline's status is tr's, and the failure is lost.
@@ -143,7 +140,6 @@ while read -r remote_ref local_sha remote_sha; do
     else
         # ⛔ Fail-safe, not fail-open: with no base, or a diff that failed, we
         # cannot tell, so we build.
-        # The opposite default is how this guard was quietly useless before.
         # ⛔ Reported separately: filing it under "doc changes detected" tells a
         # contributor pushing pure code that they changed docs.
         _unknown_base="${_unknown_base}${remote_ref}"$'\n'
@@ -169,43 +165,42 @@ fi
 
 # --- Build the PUSHED tree, not the working tree (#1690) ---------------------
 # ⛔ `git worktree add`, NOT `git archive | tar -x`. A worktree checkout obeys
-# core.symlinks, so this repo's three mode-120000 aliases
-# (docs/CHANGELOG.md, docs/README-root.{md,en.md}) materialise exactly as they
-# do in the contributor's checkout and in CI. `git archive` resolves them into
-# full copies, so on a Windows checkout — where they are path stubs — the built
-# site gains three duplicated documents under docs/. That is the platform
-# dependence these aliases exist to remove, reintroduced by the build step.
-# ⛔ ONE top-level EXIT trap for the tree being built, not a trap inside
-# _build_one: the loop is sequential, so at most one tree is alive, and a trap
-# set per call would replace the previous one. A clean-up written after the
-# build alone never runs on Ctrl-C or SIGTERM, leaving the tree in .git and
-# registered in `git worktree list` (#2169).
-# ⛔ Wait for a running build before removing its tree: a signal to this bash
-# alone does not reach mkdocs (a grandchild), which would write site/ back
-# into .git, unregistered (#2211). Killing the build's pid does not reach it
-# either. Signals are ignored while it waits: an impatient second Ctrl-C would
-# otherwise end the trap before the tree is removed.
-# ⚠️ Relies on bash running an EXIT trap on a signal; dash does not always.
+# core.symlinks, so this repo's mode-120000 aliases (docs/CHANGELOG.md, …)
+# materialise exactly as they do in the contributor's checkout and in CI.
+# `tar -x` does not read core.symlinks, so on a Windows checkout — where they
+# are path stubs — the extracted tree matches neither: the platform dependence
+# these aliases exist to remove, reintroduced by the build step.
+# ⛔ The clean-up is an EXIT trap, not INT/TERM alone: a clean-up that runs
+# only after the build is skipped on Ctrl-C or SIGTERM (#2169), and a failed
+# `add` that left its tree behind leaves through a plain `exit 1`.
+# ⛔ `add` and the build run in the background, and the trap waits for the
+# running one before removing the tree: a signal to this bash alone reaches
+# neither. An `add` still checking out holds the tree locked, so `remove`
+# refuses and the `add` finishes afterwards, registered; mkdocs (a grandchild)
+# writes site/ back into .git, unregistered (#2211). Killing their pids does
+# not reach mkdocs. Signals are ignored while it waits: an impatient second
+# Ctrl-C would otherwise end the trap before the tree is removed.
 _live_wt=""
-_build_pid=""
+_bg_pid=""
 trap 'trap "" INT TERM HUP
-[ -z "$_build_pid" ] || wait "$_build_pid" 2>/dev/null
-git worktree remove --force "$_live_wt" >/dev/null 2>&1 || rm -rf "$_live_wt"' EXIT
+wait "$_bg_pid" 2>/dev/null
+git worktree remove --force "$_live_wt" >/dev/null 2>&1' EXIT
 _build_one() {
     local _sha="$1" _wt _rc
     _wt="$(git rev-parse --git-path "mkdocs-strict-$$-${_sha:0:8}")"
-    rm -rf "$_wt"
     # Set BEFORE `add`: a failed add can still leave the tree (a failing
     # post-checkout hook), and the path is this process's own.
     _live_wt="$_wt"
     # ⛔ git's own stderr is the diagnosis; no guessed causes (#2210).
-    if ! git worktree add --detach --quiet "$_wt" "$_sha"; then
+    # A bare `&` is enough here, unlike the build below: git sets its own
+    # SIGINT handler, so Ctrl-C still stops the checkout.
+    git worktree add --detach --quiet "$_wt" "$_sha" &
+    _bg_pid=$!
+    if ! wait "$_bg_pid"; then
         # ⛔ FAIL CLOSED. The obvious fallback — build the working tree instead —
-        # is EXACTLY the #1690 defect this guard exists to remove, and it is
-        # worse as a fallback than as the original bug: it returns the wrong
-        # tree's exit status as the verdict, so a clean working tree turns a
-        # broken pushed commit green. Refusing is the only answer that cannot
-        # lie.
+        # is EXACTLY the #1690 defect this guard exists to remove: it returns
+        # the wrong tree's exit status as the verdict, so a clean working tree
+        # turns a broken pushed commit green.
         cat >&2 <<WORKTREE_FAILED
 
 [pre-push-mkdocs] ⛔ could not check out $_sha to validate it.
@@ -223,10 +218,10 @@ WORKTREE_FAILED
     # ⛔ A subshell, not a bare command: bash starts a bare `cmd &` with SIGINT
     # ignored, and Ctrl-C would then wait out the whole build.
     ( cd "$_wt" && bash scripts/tools/lint/mkdocs_strict_check.sh ) &
-    _build_pid=$!
-    wait "$_build_pid"
+    _bg_pid=$!
+    wait "$_bg_pid"
     _rc=$?
-    git worktree remove --force "$_wt" >/dev/null 2>&1 || rm -rf "$_wt"
+    git worktree remove --force "$_wt" >/dev/null 2>&1
     return "$_rc"
 }
 
@@ -235,7 +230,7 @@ WORKTREE_FAILED
 if command -v mkdocs >/dev/null 2>&1; then
     echo "[pre-push-mkdocs] Using native mkdocs ($(mkdocs --version 2>&1 | head -1))"
     # ⛔ Every non-zero lands here — broken links, a failed checkout, an aborted
-    # build — so name the commit, give no advice, and stop (#2210).
+    # build — so this line names the commit, gives no advice, and stops (#2210).
     for _sha in "${_build_shas[@]}"; do
         echo "[pre-push-mkdocs] validating pushed commit ${_sha:0:8}"
         if ! _build_one "$_sha"; then

@@ -207,11 +207,15 @@ UNUSABLE_CAVEAT = ("\u26a0\ufe0f {n} file(s) could not be read and were skipped 
 READ_ERRORS_FIRST = ("-> Fix the read errors above FIRST — this check's "
                      "findings may be artefacts of the files it could not "
                      "read.")
+# #2431: under --strict the same ERROR prefix also carries a routing matcher
+# value that is not a string, so the advice names both kinds.
 POLICY_ONLY_SCHEMA_HINT = (
-    "The findings above are ADR-007 domain-policy errors, not tenant key "
-    "problems — no unknown key was reported in this run. \u26d4 Ignore the "
-    "generic advice about removing keys: fix the domain policy file the "
-    "error names, then re-run.")
+    "The findings above are --strict errors (ADR-007 domain-policy errors, "
+    "or a routing matcher value that is not a string), not tenant key "
+    "problems: no unknown key was reported in this run. \u26d4 Ignore the "
+    "generic advice about removing keys: fix what each error names (the "
+    "domain policy file, or quote the matcher value in YAML, e.g. "
+    "team: \"yes\"), then re-run.")
 SKIPPED_ENTRY_SCHEMA_HINT = (
     "A line above ends in 'skipping': that setting was dropped as unusable, "
     "not merely flagged. Fix the value it names — e.g. "

@@ -31,3 +31,21 @@ reviews:
   pre_merge_checks:
     docstrings:
       mode: "off"
+  # 目的（其三）：文件的行為宣稱要對得上程式。文件線第十一輪查出的 20 件錯裡，約 13 件是
+  #  寫下時就沒量過，多半帶「唯一／每個／一律／完全」這類絕對語氣（#2522、#2527）。
+  #  三個 path 共用同一段指示（YAML anchor），改一處即可。
+  #  ⚠ CodeRabbit 讀的是 base branch 的本檔：改這裡的 PR 自己吃不到新指示，合併後才生效。
+  path_instructions:
+    - path: "docs/**/*.md"
+      instructions: &docs_claims |
+        這是給人讀的文件。請優先查「句子說的事是否為真」，文字風格其次：
+        1. 行為宣稱（結束碼、HTTP 狀態碼、「會擋／會拒／會失敗」、預設值、旗標）要對得上
+           程式或設定；對不上時指出程式位置。改文件還是改程式由作者決定，不要只建議改字。
+        2. 「唯一／每個／一律／所有／完全／never／always」等絕對語氣要有依據；找得到反例就列出。
+        3. 中英兩份（foo.md 與 foo.en.md）的宣稱要一致；只改了其中一份時提醒另一份。
+        4. 引用 ADR、issue、其他文件的說法，要與被引用處的原文一致。
+        5. ADR 裡「被拒絕的替代方案」與當時的理由是歷史紀錄，不要要求改成現況。
+    - path: "components/*/README.md"
+      instructions: *docs_claims
+    - path: "helm/*/README.md"
+      instructions: *docs_claims

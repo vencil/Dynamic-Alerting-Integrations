@@ -156,3 +156,30 @@ func TestRoutingGuardrails_PlatformProblemsAndUnknownProfile(t *testing.T) {
 		t.Errorf("summary = %+v", r.Summary)
 	}
 }
+
+// TestRoutingValueNotString (#2431): each matcher value of the resolved
+// routing that is not a string (routingpolicy.ValuesNotString over the
+// PyYAML readings cmd/da-guard hands over) is one error finding, Field the
+// value's path; a string value is not reported.
+func TestRoutingValueNotString(t *testing.T) {
+	t.Parallel()
+	routing := map[string]any{
+		"receiver": map[string]any{"type": "pagerduty", "service_key": "k"},
+		"overrides": []any{map[string]any{"alertname": true,
+			"receiver": map[string]any{"type": "webhook", "url": "https://h.example/x"}}},
+		"routes": []any{map[string]any{"match": map[string]any{"team": 90, "zone": "eu"},
+			"receiver": map[string]any{"type": "webhook", "url": "https://h.example/y"}}},
+	}
+	var got []string
+	for _, f := range checkRoutingGuardrails(CheckInput{RoutingByTenant: map[string]map[string]any{"t1": routing}}) {
+		if f.Kind == FindingRoutingValueNotString {
+			if f.Severity != SeverityError || !strings.Contains(f.Message, "quote it in YAML") {
+				t.Errorf("finding = %+v", f)
+			}
+			got = append(got, f.Field)
+		}
+	}
+	if want := []string{"overrides[0].alertname", "routes[0].match.team"}; !reflect.DeepEqual(got, want) {
+		t.Errorf("routing_value_not_string fields = %v, want %v", got, want)
+	}
+}
