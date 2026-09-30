@@ -21,6 +21,9 @@ import pytest
 
 _REPO = Path(__file__).resolve().parents[2]
 _HELPER = _REPO / "scripts" / "ops" / "_verify_download.sh"
+# Resolved on PATH, not passed bare (#2560, same as #2328): on Windows
+# CreateProcess searches System32 before PATH, so a bare "bash" is WSL's.
+_BASH = shutil.which("bash") or "bash"
 
 # The helper is a POSIX shell script (bash + coreutils). It is exercised for real
 # on Linux CI. Skip on a Windows host: Python's subprocess resolves `bash` to the
@@ -37,7 +40,7 @@ def _run(file: Path, expected: str) -> subprocess.CompletedProcess:
     # `C:\...` (strips them as escapes); the forward-slash `C:/...` form is safe
     # on both Git Bash and Linux CI.
     return subprocess.run(
-        ["bash", _HELPER.as_posix(), file.as_posix(), expected],
+        [_BASH, _HELPER.as_posix(), file.as_posix(), expected],
         capture_output=True, text=True, encoding="utf-8", errors="replace", timeout=30,
     )
 

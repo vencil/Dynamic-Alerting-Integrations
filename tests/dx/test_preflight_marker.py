@@ -25,6 +25,9 @@ from _preflight_checks import stub_checks
 _REPO_ROOT = Path(__file__).resolve().parents[2]
 _PY_SCRIPT = _REPO_ROOT / "scripts" / "tools" / "dx" / "pr_preflight.py"
 _SH_SCRIPT = _REPO_ROOT / "scripts" / "ops" / "require_preflight_pass.sh"
+# Resolved on PATH, not passed bare (#2560, same as #2328): on Windows
+# CreateProcess searches System32 before PATH, so a bare "bash" is WSL's.
+_BASH = shutil.which("bash") or "bash"
 
 # TestGateScript invokes the require_preflight_pass.sh bash script as a
 # subprocess. Git Bash on Windows mangles `C:\path\file` argument
@@ -582,7 +585,7 @@ class TestGateScript:
         if env_extra:
             env.update(env_extra)
         return subprocess.run(  # subprocess-timeout: ignore
-            ["bash", str(_SH_SCRIPT)],
+            [_BASH, str(_SH_SCRIPT)],
             cwd=repo, input=stdin, capture_output=True, text=True, encoding="utf-8", errors="replace", env=env,
         )
 

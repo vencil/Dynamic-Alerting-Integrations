@@ -350,6 +350,9 @@ from test_init_project import CI_DEPLOY_COMBINATIONS  # noqa: E402
 _ACTIONLINT = shutil.which("actionlint")
 _CHECK_JSONSCHEMA = shutil.which("check-jsonschema")
 _NODE = shutil.which("node")
+# Resolved on PATH, not passed bare (#2560, same as #2328): on Windows
+# CreateProcess searches System32 before PATH, so a bare "bash" is WSL's.
+_BASH = shutil.which("bash") or "bash"
 
 _needs_actionlint = pytest.mark.skipif(
     _ACTIONLINT is None, reason="actionlint not on PATH")
@@ -5497,7 +5500,7 @@ def _run_generated_step(step: dict, wf_env: dict, job_env: dict, work: Path,
     # `bash -e` and a RELATIVE script name: that is the default shell Actions
     # uses for `run:` (note: no pipefail), and an absolute Windows path gets
     # mangled by this bash.
-    return subprocess.run(["bash", "-e", "_step.sh"], cwd=work,
+    return subprocess.run([_BASH, "-e", "_step.sh"], cwd=work,
                           capture_output=True, encoding="utf-8",
                           errors="replace", timeout=120)
 
@@ -8366,7 +8369,7 @@ def test_the_fallback_report_is_executed_not_just_pinned(
     script.write_text(str(step["run"]), encoding="utf-8")
     routes, snapshot, diff = outcomes
     proc = subprocess.run(
-        ["bash", "-e", str(script)], cwd=work, capture_output=True, text=True,
+        [_BASH, "-e", str(script)], cwd=work, capture_output=True, text=True,
         encoding="utf-8", timeout=60,
         env={**os.environ, "ROUTES_OUTCOME": routes,
              "SNAPSHOT_OUTCOME": snapshot, "DIFF_OUTCOME": diff},

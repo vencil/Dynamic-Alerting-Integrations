@@ -46,6 +46,9 @@ pytestmark = pytest.mark.skipif(
 
 _REPO_ROOT = Path(__file__).resolve().parents[2]
 _SH_SCRIPT = _REPO_ROOT / "scripts" / "ops" / "require_preflight_pass.sh"
+# Resolved on PATH, not passed bare (#2560, same as #2328): on Windows
+# CreateProcess searches System32 before PATH, so a bare "bash" is WSL's.
+_BASH = shutil.which("bash") or "bash"
 ZERO_SHA = "0" * 40
 
 
@@ -111,7 +114,7 @@ def _run_gate(repo: Path, stdin: str, *,
     if env_extra:
         env.update(env_extra)
     return subprocess.run(  # subprocess-timeout: ignore
-        ["bash", str(_SH_SCRIPT)],
+        [_BASH, str(_SH_SCRIPT)],
         cwd=repo, input=stdin, capture_output=True, text=True, encoding="utf-8", errors="replace", env=env,
     )
 
@@ -665,7 +668,7 @@ def _paste_the_hint(stderr: str, cwd: Path, preflight: str,
     script = (lines[0].replace(cmd, preflight)
               + '; r=$?; printf "\\0after\\0%s" "$(pwd -P)"; exit $r')
     return subprocess.run(  # subprocess-timeout: ignore
-        ["bash", "-c", script], cwd=cwd, capture_output=True, text=True, encoding="utf-8", errors="replace",
+        [_BASH, "-c", script], cwd=cwd, capture_output=True, text=True, encoding="utf-8", errors="replace",
     )
 
 
@@ -855,7 +858,7 @@ def test_an_interrupted_preflight_still_removes_the_throwaway(tmp_path: Path, si
     # terminal's Ctrl-C does. SIGINT back to default: a shell that starts with
     # it ignored (pytest run as a background job) cannot trap it, and this cell
     # would time out for a reason that says nothing about the line.
-    proc = subprocess.Popen(["bash", "-c", line], cwd=tmp_path, start_new_session=True,  # subprocess-timeout: ignore
+    proc = subprocess.Popen([_BASH, "-c", line], cwd=tmp_path, start_new_session=True,  # subprocess-timeout: ignore
                             preexec_fn=lambda: signal.signal(signal.SIGINT, signal.SIG_DFL),
                             stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, encoding="utf-8", errors="replace")
     try:
@@ -975,7 +978,7 @@ def test_git_missing_refuses_instead_of_allowing_silently(tmp_path: Path):
     gh.chmod(0o755)
 
     r = subprocess.run(  # subprocess-timeout: ignore
-        ["bash", str(_SH_SCRIPT)],
+        [_BASH, str(_SH_SCRIPT)],
         cwd=tmp_path, input=_refspec("feat/x", sha), capture_output=True,
         text=True, encoding="utf-8", errors="replace", env={"PATH": str(nogit), "GIT_PREFLIGHT_STRICT": "1"},
     )

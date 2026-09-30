@@ -20,6 +20,7 @@ PATH that records its arguments and returns the desired exit code.
 from __future__ import annotations
 
 import os
+import shutil
 import subprocess
 import sys
 import textwrap
@@ -43,6 +44,9 @@ pytestmark = pytest.mark.skipif(
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
 SCRIPT = REPO_ROOT / "scripts" / "tools" / "dx" / "verify_release.sh"
+# Resolved on PATH, not passed bare (#2560, same as #2328): on Windows
+# CreateProcess searches System32 before PATH, so a bare "bash" is WSL's.
+_BASH = shutil.which("bash") or "bash"
 
 
 def run_script(args, env=None, cwd=None):
@@ -51,7 +55,7 @@ def run_script(args, env=None, cwd=None):
     if env:
         full_env.update(env)
     return subprocess.run(  # subprocess-timeout: ignore
-        ["bash", str(SCRIPT), *args],
+        [_BASH, str(SCRIPT), *args],
         capture_output=True,
         text=True, encoding="utf-8", errors="replace",
         env=full_env,
