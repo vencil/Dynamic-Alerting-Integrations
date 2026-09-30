@@ -58,7 +58,7 @@ lang: zh
 Alertmanager **沒有「inhibition 免疫」原語**；`severity: none` 只是讓 Watchdog 不落入既有 severity-targeted 抑制，**不是萬用免疫**。真正的保證來自兩道把關：
 
 - **抑制端（機械強制，平台已內建）**：任何 `inhibit_rules` 的 `target_matchers` **不得** match `alertname="Watchdog"`（含反向匹配，如 `severity!="critical"` 也會命中 `severity: none` 的 Watchdog）。此不變式由平台的 `generate_alertmanager_routes.py` 在兩條輸出路徑（GitOps 組裝 / `--apply` 合併）對 base + generated 的**完整合併集** **fail-closed 驗證**，違反即拒絕產出。
-  > ⚠️ **不要**新增「`source = Watchdog` → 抑制其他告警」這類規則：Watchdog 永遠 firing 且無 `equal:`，那會永久壓掉**所有**非 Watchdog 告警（ADR-025 已明確否決）。
+  > ⚠️ **不要**新增「`source = Watchdog` → 抑制其他告警」這類規則：Watchdog 永遠 firing 且無 `equal:`，那會永久壓掉**所有**非 Watchdog 告警。⚠️ 上面那道機械檢查只看 `target_matchers` 會不會命中 Watchdog，所以 target 寫成 `alertname!="Watchdog"` 或 `severity="critical"` 的這種規則**擋不到**，只能靠 review。
 - **靜音端（無法機械強制 → 靠紀律）**：
   - ⛔ **嚴禁**對 `alertname="Watchdog"` 下 Silence。
   - ⛔ 重大故障時若要下**全域萬用靜音**（`.*` / `alertname=~".*"` 壓告警海嘯），**必須顯式排除** Watchdog（多加一條 matcher `alertname!="Watchdog"`）。否則外部 DMS 會在你最需要它時誤報「平台死亡」，引發次生混亂。
