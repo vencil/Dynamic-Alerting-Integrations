@@ -153,3 +153,43 @@ func TestGuard_SubtreeDefaultsAcrossAliasSpellings(t *testing.T) {
 	}
 	t.Logf("cells=%d missed-hint=%d (logged, not failed)", cells, missed)
 }
+
+// TestGuard_SubtreeNonThresholdSpellingIsNoWrite pins the walker half of
+// levelWritesSpelling (#2414 round 3): a level carrying one spelling as a
+// value that is not a threshold (`abc`) beside the other spelling's value
+// writes only the latter — on /metrics the overlay skips `abc` and the level's
+// other spelling displaces the shallower one. So a tenant writing that
+// same value under that spelling IS redundant, and the guard must say so.
+//
+// ⛔ The product test above cannot see this: it fails only on wrong advice,
+// and counting the non-threshold value as a write here costs a hint, not a
+// wrong one. Measured with the walker's old predicate (nil only): the hint
+// went missing and nothing else changed.
+func TestGuard_SubtreeNonThresholdSpellingIsNoWrite(t *testing.T) {
+	t.Parallel()
+	C, L := aliasCanon, aliasLegacy
+	for _, sub := range []string{"", C + ": 40\n", L + ": 40\n"} {
+		for _, pair := range [][2]string{{C, L}, {L, C}} {
+			junk, kept := pair[0], pair[1]
+			name := fmt.Sprintf("sub=%q/deep=%s:abc,%s:50", sub, junk, kept)
+			files := map[string]string{
+				"_defaults.yaml":          "defaults:\n  pg_connections: 100\n  " + C + ": 30\n",
+				"sub/deep/_defaults.yaml": "defaults:\n  " + junk + ": abc\n  " + kept + ": 50\n",
+			}
+			if sub != "" {
+				files["sub/_defaults.yaml"] = "defaults:\n  " + sub
+			}
+			dir := t.TempDir()
+			testutil.WriteTree(t, dir, files)
+			head := "tenants:\n  tx:\n    pg_connections: 100\n"
+			without := subtreeAliasServed(t, dir, head)
+			with := subtreeAliasServed(t, dir, head+"    "+kept+": 50\n")
+			if with != "50" || without != "50" {
+				t.Fatalf("%s: precondition — /metrics with=%s without=%s, want 50 both", name, with, without)
+			}
+			if !aliasRedundant(t, dir)[kept] {
+				t.Errorf("%s: %s at 50 is redundant (deleting it keeps /metrics at 50) but was not reported", name, kept)
+			}
+		}
+	}
+}
