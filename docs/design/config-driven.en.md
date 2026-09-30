@@ -863,7 +863,7 @@ Before writing, the API compares the current HEAD against its snapshot: if `conf
 
 **Shared Validation Logic:**
 
-tenant-api directly imports `"github.com/vencil/threshold-exporter/pkg/config"`, reusing `ValidateTenantKeys()`, `ResolveAt()`, `ParseConfig()` and other core validation functions. Configurations rejected by the API are identical to those rejected by `da-tools validate-config`, eliminating the historical Go↔Python dual-maintenance schema problem.
+tenant-api directly imports `"github.com/vencil/threshold-exporter/pkg/config"`, reusing `ValidateTenantKeys()`, `ResolveAt()`, `ParseConfigFile()` and other core validation functions, so key validation shares its source with the exporter. What the API and `da-tools validate-config` (Python) reject is **not** the same set, though: the API has write-only refusals (for example, adding another tenant's section to a tenant file), and `validate-config` has its own routing and policy checks.
 
 **Portal Graceful Degradation:**
 
