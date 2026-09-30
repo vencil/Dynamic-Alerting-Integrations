@@ -49,6 +49,9 @@ _needs_posix_bash = pytest.mark.skipif(
 
 _REPO_ROOT = Path(__file__).resolve().parents[2]
 _SCRIPT = _REPO_ROOT / "scripts" / "ops" / "recover_index.sh"
+# Resolved on PATH, not passed bare (#2560, same as #2328): on Windows
+# CreateProcess searches System32 before PATH, so a bare "bash" is WSL's.
+_BASH = shutil.which("bash") or "bash"
 
 
 def _init_tmp_repo(tmp_path: Path) -> Path:
@@ -81,7 +84,7 @@ def test_check_clean_exits_0(tmp_path: Path, monkeypatch) -> None:
     repo = _init_tmp_repo(tmp_path)
     monkeypatch.chdir(repo)
     proc = subprocess.run(  # subprocess-timeout: ignore
-        ["bash", str(_SCRIPT), "--check"],
+        [_BASH, str(_SCRIPT), "--check"],
         capture_output=True,
         text=True, encoding="utf-8", errors="replace",
     )
@@ -98,7 +101,7 @@ def test_check_corrupt_exits_2(tmp_path: Path, monkeypatch) -> None:
     (repo / ".git" / "index").write_bytes(b"DIRC\x00\x00\x00\x99garbage")
 
     proc = subprocess.run(  # subprocess-timeout: ignore
-        ["bash", str(_SCRIPT), "--check"],
+        [_BASH, str(_SCRIPT), "--check"],
         capture_output=True,
         text=True, encoding="utf-8", errors="replace",
     )
@@ -125,7 +128,7 @@ def test_rebuild_recovers_corrupt_index(tmp_path: Path, monkeypatch) -> None:
 
     # Run recovery
     proc = subprocess.run(  # subprocess-timeout: ignore
-        ["bash", str(_SCRIPT)],
+        [_BASH, str(_SCRIPT)],
         capture_output=True,
         text=True, encoding="utf-8", errors="replace",
     )
@@ -182,7 +185,7 @@ def test_check_does_not_touch_the_index(tmp_path: Path, monkeypatch) -> None:
     index_before = (repo / ".git" / "index").read_bytes()
 
     proc = subprocess.run(  # subprocess-timeout: ignore
-        ["bash", str(_SCRIPT), "--check"], capture_output=True, text=True, encoding="utf-8", errors="replace",
+        [_BASH, str(_SCRIPT), "--check"], capture_output=True, text=True, encoding="utf-8", errors="replace",
     )
     assert proc.returncode == 2, f"stdout={proc.stdout} stderr={proc.stderr}"
 
@@ -215,7 +218,7 @@ def test_unknown_argument_never_reaches_the_repair_path(tmp_path: Path, monkeypa
     for arg in ("--help", "-check", "check", "--CHECK", "--check=1", ""):
         (repo / ".git" / "index").write_bytes(corrupt)
         proc = subprocess.run(  # subprocess-timeout: ignore
-            ["bash", str(_SCRIPT), arg], capture_output=True, text=True, encoding="utf-8", errors="replace",
+            [_BASH, str(_SCRIPT), arg], capture_output=True, text=True, encoding="utf-8", errors="replace",
         )
         assert (repo / ".git" / "index").read_bytes() == corrupt, (
             f"{arg!r} rewrote .git/index. Only an explicit repair request may do "
@@ -232,11 +235,11 @@ def test_unknown_argument_never_reaches_the_repair_path(tmp_path: Path, monkeypa
     # The two RECOGNISED spellings still work: no-arg repairs, --check does not.
     (repo / ".git" / "index").write_bytes(corrupt)
     assert subprocess.run(  # subprocess-timeout: ignore
-        ["bash", str(_SCRIPT), "--check"], capture_output=True, text=True, encoding="utf-8", errors="replace",
+        [_BASH, str(_SCRIPT), "--check"], capture_output=True, text=True, encoding="utf-8", errors="replace",
     ).returncode == 2
     assert (repo / ".git" / "index").read_bytes() == corrupt
     assert subprocess.run(  # subprocess-timeout: ignore
-        ["bash", str(_SCRIPT)], capture_output=True, text=True, encoding="utf-8", errors="replace",
+        [_BASH, str(_SCRIPT)], capture_output=True, text=True, encoding="utf-8", errors="replace",
     ).returncode == 0
     assert (repo / ".git" / "index").read_bytes() != corrupt, (
         "guard over-tightened: the default no-argument invocation must still repair"
@@ -417,7 +420,7 @@ def test_help_prints_the_whole_contract_and_nothing_else(tmp_path: Path, monkeyp
     repo = _init_tmp_repo(tmp_path)
     monkeypatch.chdir(repo)
     proc = subprocess.run(  # subprocess-timeout: ignore
-        ["bash", str(_SCRIPT), "--help"], capture_output=True, text=True, encoding="utf-8", errors="replace",
+        [_BASH, str(_SCRIPT), "--help"], capture_output=True, text=True, encoding="utf-8", errors="replace",
     )
     assert proc.returncode == 0, proc.stderr
     out = proc.stdout
@@ -459,7 +462,7 @@ def test_rebuild_on_clean_is_noop(tmp_path: Path, monkeypatch) -> None:
     repo = _init_tmp_repo(tmp_path)
     monkeypatch.chdir(repo)
     proc = subprocess.run(  # subprocess-timeout: ignore
-        ["bash", str(_SCRIPT)],
+        [_BASH, str(_SCRIPT)],
         capture_output=True,
         text=True, encoding="utf-8", errors="replace",
     )

@@ -17,6 +17,7 @@ from __future__ import annotations
 
 import os
 import re
+import shutil
 import subprocess
 import sys
 from pathlib import Path
@@ -29,6 +30,9 @@ from _shard import parse_shard_spec, shard_of  # noqa: E402
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
 CI_YML = REPO_ROOT / ".github" / "workflows" / "ci.yml"
+# Resolved on PATH, not passed bare (#2560, same as #2328): on Windows
+# CreateProcess searches System32 before PATH, so a bare "bash" is WSL's.
+_BASH = shutil.which("bash")
 
 # Every ci.yml job that runs pytest with --shard. A job that starts passing
 # --shard without being listed here is caught by
@@ -168,6 +172,7 @@ def _combine_script() -> str:
     return runs[0]
 
 
+@pytest.mark.skipif(_BASH is None, reason="needs bash on PATH")
 @pytest.mark.parametrize("present", [0, 2])
 def test_the_combine_step_warns_instead_of_failing_on_missing_shards(tmp_path, present):
     """A superseded run is cancelled by the concurrency group; its cancelled
@@ -178,7 +183,7 @@ def test_the_combine_step_warns_instead_of_failing_on_missing_shards(tmp_path, p
         d = tmp_path / "coverage-shards" / f"coverage-data-py3.13-shard{k}"
         d.mkdir(parents=True)
         (d / ".coverage").write_bytes(b"")
-    proc = subprocess.run(["bash", "-c", _combine_script()], cwd=tmp_path,
+    proc = subprocess.run([_BASH, "-c", _combine_script()], cwd=tmp_path,
                           capture_output=True, text=True, encoding="utf-8", errors="replace", timeout=60)
     assert proc.returncode == 0, proc.stdout + proc.stderr
     assert f"found {present}" in proc.stdout, proc.stdout
