@@ -37,8 +37,9 @@ var labelNameRE = regexp.MustCompile(`^[a-zA-Z_][a-zA-Z0-9_]*$`)
 // entry renders (its receiver is judged elsewhere).
 //
 // ⚠️ The YAML reader decides what a "string" is. yaml.v3 reads `yes` as the
-// string "yes", PyYAML as True — so `match: {x: yes}` renders here and is
-// skipped by the Python generator (a documented row of the parity matrix).
+// string "yes", PyYAML as True: callers hand in the match values as PyYAML
+// reads them (WithPyYAMLRouting, #2431), so `match: {x: yes}` is skipped here
+// as by the Python generator (the parity matrix's routing-values-yaml11).
 func RouteEntryProblem(entry any) (reason string, bad bool) {
 	var keys []string
 	var get func(string) any

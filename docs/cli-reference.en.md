@@ -1754,6 +1754,7 @@ da-tools generate-routes --config-dir <path> [options]
 | `--base-config <FILE>` | Custom Alertmanager base config. **Only `--output-configmap` reads it**; supplying it in any other mode is a caller error (exit 2), not a silent no-op | built-in default (**only when the flag is omitted**; a supplied value that is unreadable / not valid YAML / not a mapping exits 2 rather than falling back) |
 | `--dry-run` | Show preview without writing. **Not read by `--validate` / `--apply`** (exit 2) | false |
 | `--validate` | Validate only, don't output. Any tenant file in conf.d that cannot be parsed → exit 1, with or without `--strict` (#1460). Once every other check passes, it also assembles the complete config on the **built-in default base** and hands it to `amtool` (see "Alertmanager validation" below; #2260) | false |
+| `--strict` | Report these as ERROR with exit code 1 (CI runs `--strict`): domain-policy (ADR-007) violations (WARN without it); a `routes[i].match` value or `overrides[i].alertname` / `metric_group` left unquoted that PyYAML reads as a non-string (`yes`, `1:30`, `~`, ...; #2431; fix: quote it. Without it a routes entry is skipped with a WARN and an override is rendered via `str()`, e.g. `alertname="True"`); on the `--apply` / `--output-configmap` merge, an inhibit rule whose `equal:` label is not presence-gated (#1132, WARN without it) | false |
 | `--apply` | Apply directly to Kubernetes (requires kubectl) | false |
 | `--namespace <NS>` | Namespace of the ConfigMap. **Read only by `--apply` / `--output-configmap`**; exit 2 in any other mode | `monitoring` |
 | `--configmap <NAME>` | ConfigMap name. **Read only by `--apply` / `--output-configmap`**; exit 2 in any other mode | `alertmanager-config` |
@@ -2005,7 +2006,7 @@ da-tools validate-config --config-dir <path> [options]
 | `--policy-dsl <FILE>` | Path to a standalone Policy-as-Code DSL file (top-level `policies:` key). ⚠️ A supplied value that cannot be used exits 2 (same five shapes as `--policy`); before the fix its output was byte-identical to passing no flag at all (#1556) | (only `_policies` in `_defaults.yaml`) |
 | `--version-check` | Also run the version consistency check | false |
 | `--json` | Output results as JSON (for CI consumption) | false |
-| `--strict` | Escalate domain-policy (ADR-007) violations from WARN to FAIL (matches CI `generate-routes --strict`) | false |
+| `--strict` | Escalate domain-policy (ADR-007) violations from WARN to FAIL (matches CI `generate-routes --strict`); in addition, a matcher value left unquoted that PyYAML reads as a non-string (`routes[i].match` values, `overrides[i].alertname` / `metric_group`; #2431) makes the `schema` row FAIL | false |
 
 **Checks Performed**
 
@@ -2528,6 +2529,7 @@ The routing checks look at each tenant's **resolved** routing, merged from the s
 | Finding kind | Severity | Trigger |
 |---|---|---|
 | `invalid_route_entry` | error | `routes` is not a list, or an entry the generator skips (not a mapping, an unsupported key such as `continue` / `match_re`, a missing or empty `match`, an invalid label, a value that is not a non-empty string); Field is `routes` or `routes[i]` |
+| `routing_value_not_string` | error | a `routes[i].match` value or `overrides[i].alertname` / `metric_group` left unquoted that the route generator's PyYAML reads as a non-string (`yes` / `on` a boolean, `1:30` the integer 90, `2001-12-15` a date, `~` null, `!!int 5`); Field is `routes[i].match.<label>` or `overrides[i].alertname` / `metric_group`. Same judgement as the `generate-routes --strict` ERROR (#2431). Fix: quote it, e.g. `team: "yes"` |
 | `domain_policy_violation` | error | the main receiver / `overrides[i]` / `routes[i]` type breaks a domain policy; the message names the domain, the constraint and the layer the value came from |
 | `critical_escalation_missing` | error | a domain policy sets `require_critical_escalation: true`, yet severity=critical alerts reach no pagerduty receiver: the main receiver is not pagerduty, and no rendered `routes` entry whose match has `severity: critical` sends to one ([#2325](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/2325)); Field is `receiver.type`, one finding per requiring domain. A non-boolean value is reported as `domain_policy_unusable` instead (Field `<file>:domain_policies.<domain>.constraints.require_critical_escalation`) |
 | `critical_escalation_leak` | warn | the tenant escalates, but this non-pagerduty destination (`overrides[i]` / `routes[i]`, the main receiver last) still receives some severity=critical alerts before any pagerduty receiver does; the message names the label set it catches. Same judgement as the generator's `--validate` WARN (not listed when an earlier sub-route's match is a subset of it, or when its match names another tenant or a non-critical severity); Field is `<ref>.receiver.type`. Never blocks |

@@ -122,6 +122,12 @@ const (
 	// not render — `routes` not a list, or an entry that is not a mapping,
 	// carries an unsupported key, or has a missing / malformed `match`.
 	FindingInvalidRouteEntry FindingKind = "invalid_route_entry"
+	// FindingRoutingValueNotString (error; #2431): a matcher value of the
+	// resolved routing — `routes[i].match.<label>` or `overrides[i].
+	// alertname` / `metric_group` (Field) — that the route generator's
+	// PyYAML does not read as a string (`yes`, `1:30`, `2001-12-15`, `~`, a
+	// `!!int` tag). The generator refuses it under --strict; quote it.
+	FindingRoutingValueNotString FindingKind = "routing_value_not_string"
 	// FindingDomainPolicyViolation: a receiver type an ADR-007 domain
 	// policy forbids, or leaves out of its allowed list.
 	FindingDomainPolicyViolation FindingKind = "domain_policy_violation"

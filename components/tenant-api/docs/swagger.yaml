@@ -1815,9 +1815,11 @@ paths:
           description: Bad request. A receiver the body writes in _routing (receiver,
             overrides[].receiver, routes[].receiver) that Alertmanager could not load
             or the route generator would skip is code INVALID_BODY with one violations[]
-            entry per problem (#2295; nothing written). Also 400 when the current
-            tenant file cannot be parsed and the caller lacks write permission on
-            all tenants (#2405; nothing written)
+            entry per problem (#2295; nothing written); so is a routes[].match value
+            or overrides[].alertname / metric_group the body writes that the route
+            generator does not read as a string, e.g. unquoted yes, 1:30 or ~ (#2431;
+            quote it). Also 400 when the current tenant file cannot be parsed and
+            the caller lacks write permission on all tenants (#2405; nothing written)
           schema:
             $ref: '#/definitions/ErrorResponse'
         "403":

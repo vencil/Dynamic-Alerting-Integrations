@@ -2004,6 +2004,34 @@ class TestTheSchemaRowDoesNotAdviseDeletingKeysItNeverReported:
             f"remove some\n{out}")
         assert vc.POLICY_ONLY_SCHEMA_HINT in out, out
 
+    def test_an_unquoted_matcher_value_gets_quote_advice(self, tmp_path,
+                                                         capsys, cli_argv):
+        """#2431: `--strict` also fails the row on a matcher value PyYAML
+        does not read as a string; the advice must say to quote it, not to
+        fix a domain policy (there is none here) or to delete keys."""
+        d = tmp_path / "conf.d"
+        d.mkdir()
+        (d / "_defaults.yaml").write_text(
+            "defaults:\n  mysql_threads_running: 80\n", encoding="utf-8")
+        (d / "demo-a.yaml").write_text(
+            "tenants:\n  demo-a:\n    mysql_threads_running: 90\n"
+            "    _routing:\n      receiver:\n        type: webhook\n"
+            "        url: https://hooks.example.com/a\n"
+            "      overrides:\n      - alertname: yes\n"
+            "        receiver:\n          type: webhook\n"
+            "          url: https://hooks.example.com/b\n",
+            encoding="utf-8")
+        cli_argv("validate_config", "--config-dir", str(d), "--strict")
+        with pytest.raises(SystemExit) as exc:
+            vc.main()
+        out = capsys.readouterr().out
+        assert exc.value.code == 1, out
+        assert "[FAIL] schema" in out, out
+        assert "overrides[0].alertname must be a string, got bool True" in out, out
+        assert vc.POLICY_ONLY_SCHEMA_HINT in out, out
+        assert "quote the matcher value in YAML" in vc.POLICY_ONLY_SCHEMA_HINT
+        assert _generic_schema_hint() not in out, out
+
     def test_an_unknown_key_still_gets_key_advice(self, tmp_path, capsys,
                                                   cli_argv):
         """Must-still-fire control: when the row DOES report keys, the
