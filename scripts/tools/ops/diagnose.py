@@ -49,7 +49,8 @@ from _lib_io import safe_label  # noqa: E402  (#1538 output-layer escaping)
 # #2231: STRICT — a file holding a key twice is one the exporter drops whole,
 # so every conf.d read here takes the same skip + WARN path as bad syntax
 # instead of resolving whichever value PyYAML kept last.
-from _lib_io import strict_load_exporter_keys, strict_safe_load  # noqa: E402  (#2114, #2231)
+from _lib_io import strict_safe_load  # noqa: E402  (#2114, #2231)
+from _lib_io import StrictExporterKeyLoader, StrictSafeLoader  # noqa: E402  (#1522)
 from _lib_confd import (  # noqa: E402
     declared_tenant_ids,
     iter_config_files,
@@ -171,6 +172,39 @@ query_prometheus = query_prometheus_instant
 _PROFILE_AS_TEXT = ("_profile",)
 
 
+# #1522: `!!set` is read as the exporter reads it. yaml.v3 decodes a
+# `!!set`-tagged node by its KIND, so `gold: !!set {mysql_slow_queries: 55}`
+# is the mapping `{mysql_slow_queries: 55}` on /metrics (and `!!set {a}` is
+# `{a: null}`); PyYAML's own `!!set` constructor builds a Python `set` and
+# DROPS the values. These diagnose-only loaders build the tag as a mapping,
+# values kept. The strict duplicate-key check still runs first — it walks the
+# composed node tree, where a `!!set` is a mapping node like any other. Kept
+# out of `_lib_io` on purpose: every other reader keeps the shared loaders.
+_YAML_SET_TAG = "tag:yaml.org,2002:set"
+
+
+class _DiagnoseSafeLoader(StrictSafeLoader):
+    """`strict_safe_load`'s loader, with `!!set` read as a mapping."""
+
+
+class _DiagnoseExporterKeyLoader(StrictExporterKeyLoader):
+    """`strict_load_exporter_keys`' loader, with `!!set` read as a mapping."""
+
+
+class _DiagnoseTenantFileLoader(_DiagnoseExporterKeyLoader):
+    """The same, reading `_profile:` as source text (#2297)."""
+
+    raw_text_scalars = frozenset(_PROFILE_AS_TEXT)
+
+
+for _loader in (_DiagnoseSafeLoader, _DiagnoseExporterKeyLoader):
+    # SafeConstructor.construct_yaml_map calls `self.construct_mapping`, so
+    # the exporter-key loaders keep their raw-text keys inside a `!!set`.
+    _loader.add_constructor(_YAML_SET_TAG,
+                            yaml.constructor.SafeConstructor.construct_yaml_map)
+del _loader
+
+
 # #2421: Go `strconv.ParseFloat(s, 64)`'s accepted grammar. Python's
 # `float()` is NOT that grammar — it takes `+nan` and returns inf for
 # `1e400`, both of which Go refuses (syntax error / ErrRange), and it
@@ -279,49 +313,29 @@ def _file_shape_error(raw: dict) -> str | None:
     test_a_null_value_is_not_a_wrong_type). Some of these shapes used to end
     the run with a traceback; the rest were read as if valid.
 
-    ⛔ `!!set` cuts both ways, because PyYAML builds a Python `set` while the
-    exporter sees the YAML node — a mapping whose values are all null:
-      * in a MAPPING position (`defaults:`, `profiles:`, a profile body) it
-        loads, so it is not an error here (`_as_mapping` reads it);
-      * as an `optional_overrides` ENTRY it is a mapping where a string is
-        wanted, so the file fails like `[{a: 1}]` does.
+    `!!set` needs no case here: the diagnose loaders (`_DiagnoseSafeLoader`
+    and friends) already build it as the mapping the exporter sees, so in a
+    mapping position it passes and as an `optional_overrides` entry it is a
+    dict and fails the file, both as on /metrics.
     """
-    shapes = (("defaults", (dict, set), "a mapping"),
+    shapes = (("defaults", dict, "a mapping"),
               ("optional_overrides", list, "a list"),
-              ("profiles", (dict, set), "a mapping"))
+              ("profiles", dict, "a mapping"))
     for key, want, noun in shapes:
         v = raw.get(key)
         if v is not None and not isinstance(v, want):
             return f"'{key}' must be {noun}, got {type(v).__name__}"
     # Each entry decodes as a string: a scalar of any kind (int, null,
-    # bool) loads, a mapping (`!!set` included) or a sequence fails the file.
+    # bool) loads, a mapping or a sequence fails the file.
     for item in raw.get("optional_overrides") or []:
-        if isinstance(item, (dict, list, set)):
+        if isinstance(item, (dict, list)):
             return (f"'optional_overrides' entries must be scalars, got "
                     f"{type(item).__name__}")
-    for name, body in (_as_mapping(raw.get("profiles")) or {}).items():
-        if body is not None and not isinstance(body, (dict, set)):
+    for name, body in (raw.get("profiles") or {}).items():
+        if body is not None and not isinstance(body, dict):
             return (f"'profiles.{name}' must be a mapping, got "
                     f"{type(body).__name__}")
     return None
-
-
-def _as_mapping(value):
-    """A `!!set` in a mapping position, read as the exporter reads it: every
-    member a key whose value is null (#1522). Anything else is returned as
-    is. Sorted, because a set has no order of its own.
-
-    ⚠️ A null value then shows as None, the same as `key: ~` written out.
-    /metrics serves a null DEFAULT as 0 and emits a row only for keys the
-    defaults hold — neither is modelled by this reader (measured against
-    LoadDir: `defaults: !!set {mysql_connections}` serves no
-    mysql_slow_queries row even when a profile sets it). A null PROFILE
-    value is unset (`metrics_treats_as_unset`) and falls back, as on
-    /metrics.
-    """
-    if isinstance(value, set):
-        return {k: None for k in sorted(value, key=str)}
-    return value
 
 
 def _tenant_block(tenant, entries: list, base: Path) -> dict:
@@ -517,7 +531,7 @@ def resolve_inheritance_chain(tenant: str, config_dir: str) -> dict[str, object]
     declared = []
     try:
         with open(defaults_path, encoding="utf-8") as f:
-            raw = strict_safe_load(f) or {}
+            raw = strict_safe_load(f, loader=_DiagnoseSafeLoader) or {}
         if isinstance(raw, dict):
             shape_error = _file_shape_error(raw)
             if shape_error:
@@ -526,7 +540,7 @@ def resolve_inheritance_chain(tenant: str, config_dir: str) -> dict[str, object]
                 # `tenants:` block for the same reason).
                 _skip(defaults_path.name, shape_error)
             else:
-                defaults_raw = _as_mapping(raw.get("defaults")) or {}
+                defaults_raw = raw.get("defaults") or {}
                 listed = raw.get("optional_overrides") or []
                 declared = [k for k in listed if isinstance(k, str)]
     except FileNotFoundError:
@@ -554,8 +568,8 @@ def resolve_inheritance_chain(tenant: str, config_dir: str) -> dict[str, object]
                 # file used to be the int 123 and never matched "123".
                 # #2297: `_profile: 010` is profile "010" (PyYAML's 8 named
                 # none) — `_PROFILE_AS_TEXT`.
-                raw = strict_load_exporter_keys(
-                    f, raw_text_scalars=_PROFILE_AS_TEXT) or {}
+                raw = strict_safe_load(
+                    f, loader=_DiagnoseTenantFileLoader) or {}
         except (OSError, yaml.YAMLError) as e:
             _skip_read_failure(fname, e)
             continue
@@ -588,7 +602,7 @@ def resolve_inheritance_chain(tenant: str, config_dir: str) -> dict[str, object]
             with open(profiles_path, encoding="utf-8") as f:
                 # #2297: profile names as source text, as the exporter keys
                 # them — `010:` is "010", the name `_profile: 010` reads as.
-                raw = strict_load_exporter_keys(f)
+                raw = strict_safe_load(f, loader=_DiagnoseExporterKeyLoader)
             # ⛔ NOT `or {}`. That coerces every FALSY document — `[]`, `0`,
             # `false` — into an empty mapping, so a `_profiles.yaml` whose
             # whole body is `[]` loses the profile layer with zero signal:
@@ -615,9 +629,8 @@ def resolve_inheritance_chain(tenant: str, config_dir: str) -> dict[str, object]
                 if shape_error:
                     _skip(profiles_path.name, shape_error)
                 else:
-                    all_profiles = _as_mapping(raw.get("profiles")) or {}
-                    profile_keys = _as_mapping(
-                        all_profiles.get(profile_name)) or {}
+                    all_profiles = raw.get("profiles") or {}
+                    profile_keys = all_profiles.get(profile_name) or {}
         except FileNotFoundError:
             # No `_profiles.yaml` at all: the tenant references a profile
             # this directory does not define. Still a read the chain is
@@ -638,7 +651,11 @@ def resolve_inheritance_chain(tenant: str, config_dir: str) -> dict[str, object]
     chain = []
 
     # Layer 1: defaults
-    default_only = {k: v for k, v in defaults_raw.items() if not k.startswith("_")}
+    # `str(k)`: `defaults: {1: 5}` has an int key (this file is read with
+    # constructed keys); the exporter serves it as `default_1` rather than
+    # stopping, so it must not end the run here either (#1522).
+    default_only = {k: v for k, v in defaults_raw.items()
+                    if not str(k).startswith("_")}
     if default_only:
         chain.append({"layer": "defaults", "source": defaults_source,
                        "keys": default_only})
