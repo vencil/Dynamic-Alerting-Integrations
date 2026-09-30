@@ -854,7 +854,7 @@ tenant-api 不使用任何資料庫。所有寫入操作（PUT / PATCH / DELETE�
 
 **共用驗證邏輯：**
 
-tenant-api 直接 import `"github.com/vencil/threshold-exporter/pkg/config"`，重用 `ValidateTenantKeys()`、`ResolveAt()`、`ParseConfig()` 等核心驗證函式。被 API 拒絕的配置與被 `da-tools validate-config` 拒絕的完全一致，消除了歷史上 Go↔Python 雙重維護 schema 的問題。
+tenant-api 直接 import `"github.com/vencil/threshold-exporter/pkg/config"`，重用 `ValidateTenantKeys()`、`ResolveAt()`、`ParseConfigFile()` 等核心驗證函式，所以鍵驗證與 exporter 同源。但 API 與 `da-tools validate-config`（Python）拒收的集合**並不相同**：API 另有寫入專屬的拒絕條件（例如在租戶檔裡新增別的租戶區塊），`validate-config` 另有路由與 policy 檢查。
 
 **Portal 優雅降級：**
 
