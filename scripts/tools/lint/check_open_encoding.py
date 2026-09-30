@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""check_open_encoding.py — flag open() and subprocess text-mode calls without encoding=.
+"""check_open_encoding.py — text-I/O hygiene: encoding= on open()/subprocess, newline= on text writes.
 
 Why this exists
 ---------------
@@ -77,18 +77,64 @@ Known blind spot of a per-file count (the same one ESLint's bulk suppressions
 have, eslint#21226): fixing one site and adding another in the same file
 keeps the count and passes.
 
+Third rule: line endings on text writes (#1366)
+-----------------------------------------------
+Every call that WRITES text must state its line-ending policy with a
+string-literal ``newline=``. Without it Python's text layer turns each
+``\\n`` into the platform separator, so the same generator emits LF on
+Linux/CI and CRLF on a Windows host. The conversion is compiled into
+CPython on Windows (``#ifdef MS_WINDOWS``), not looked up in ``os.linesep``
+at run time, so no behavioural test on a Linux runner can see the bug —
+this static rule is the only cross-platform gate.
+
+The rule is derived from the operation, not from a list of names: any call
+that hands back a writable TEXT handle, or writes text directly, must state
+``newline=``:
+
+- ``write_text(...)`` and ``TextIOWrapper(...)`` — always text;
+- ``open`` / ``Path.open`` / ``io.open`` / ``gzip.open`` / ``os.fdopen`` /
+  ``NamedTemporaryFile`` / ``TemporaryFile`` / ``SpooledTemporaryFile`` when
+  the mode is text and writes (``w`` / ``a`` / ``x`` / ``+``); binary and
+  read-only modes are skipped. A mode that is not a literal fails closed,
+  but only when ``encoding=`` proves the call is a text stream;
+- ``atomic_write_text`` pins LF itself and is flagged only for an explicit
+  ``newline=None``.
+
+The value is the author's choice (``"\\n"``, ``""`` for the csv module,
+``"\\r\\n"``), but it must be a string literal: ``newline=None`` or a
+variable / ``os.linesep`` is flagged, since those can still be CRLF.
+``<module>.open()`` of os / tarfile / zipfile / shelve / dbm / sqlite3 /
+webbrowser / socket is not a text-file handle and is skipped.
+
+Per-line ignore: ``# line-ending: ignore`` on the call's FIRST line — only
+for a call that has no literal to give (a helper passing its own
+``newline`` parameter through). It silences this rule only; the encoding
+marker silences the encoding rules only.
+
+Scope: this rule scans the ``--line-ending-root`` trees (repeatable). The
+hook names shipped and production Python (``scripts``, ``components``,
+``helm``) and leaves ``tests/`` out on purpose: tests write tmp fixtures that
+nothing downstream consumes. Without ``--line-ending-root`` the rule scans
+the positional paths, or ``scripts`` / ``components`` / ``helm`` when none
+are given.
+
+One report per call: when a builtin ``open()`` misses both ``encoding=``
+and ``newline=``, it is printed once, naming both keywords. It still counts
+towards each rule's total, since each rule has its own severity switch.
+
 Severity model
 --------------
 - **default mode / --ci**: report violations, exit 0 (warn-only).
 - **--strict-open-encoding**: open() violations exit 1; subprocess sites
   exit 1 when a file's count differs from its ledger row, or the ledger is
   missing or malformed.
+- **--strict-line-ending**: line-ending violations exit 1.
 
-The pre-commit hook passes ``--strict-open-encoding`` plus explicit scan
-roots, so it blocks only under the roots it names; which roots those are
-lives in ``.pre-commit-config.yaml`` and nowhere else (#1984). A scan root
-that does not exist exits 2: a typo or a renamed directory would otherwise
-scan zero files and exit 0, indistinguishable from a clean tree.
+The pre-commit hook passes both strict flags plus explicit scan roots, so it
+blocks only under the roots it names; which roots those are lives in
+``.pre-commit-config.yaml`` and nowhere else (#1984). A scan root that does
+not exist exits 2: a typo or a renamed directory would otherwise scan zero
+files and exit 0, indistinguishable from a clean tree.
 
 Usage
 -----
@@ -97,11 +143,12 @@ Usage
     # Local audit
     python3 scripts/tools/lint/check_open_encoding.py
 
-    # Specific paths
+    # Specific paths (both rule families)
     python3 scripts/tools/lint/check_open_encoding.py path/to/file.py ...
 
     # Hard gate over explicit roots (what the pre-commit hook does)
-    python3 scripts/tools/lint/check_open_encoding.py --ci --strict-open-encoding scripts
+    python3 scripts/tools/lint/check_open_encoding.py --ci --strict-open-encoding \\
+        --strict-line-ending --line-ending-root scripts --line-ending-root helm scripts
 
     # Lower the subprocess ledger after fixing sites (never raises a count)
     python3 scripts/tools/lint/check_open_encoding.py --write-subprocess-baseline scripts components/da-tools tests
@@ -110,8 +157,8 @@ Exit codes
 ----------
 ::
 
-    0 — no violations, OR violations without --strict-open-encoding
-    1 — violations found AND --strict-open-encoding
+    0 — no violations, OR violations whose rule is not in strict mode
+    1 — violations found under --strict-open-encoding / --strict-line-ending
     2 — a given scan path does not exist
 """
 from __future__ import annotations
@@ -120,7 +167,9 @@ import argparse
 import ast
 import json
 import os
+import re
 import sys
+from dataclasses import dataclass, field
 from pathlib import Path
 
 # Pull `try_utf8_stdout` from the shared compat lib at scripts/tools/.
@@ -142,6 +191,68 @@ DEFAULT_PATHS = [
 ]
 
 IGNORE_MARKER = "open-encoding: ignore"
+
+# ── line-ending rule (#1366) ─────────────────────────────────────────────
+# Default roots of the line-ending rule when neither --line-ending-root nor
+# positional paths are given. The hook names its own roots.
+LINE_ENDING_DEFAULT_PATHS = [
+    REPO_ROOT / "scripts",
+    REPO_ROOT / "components",
+    REPO_ROOT / "helm",
+]
+
+LINE_ENDING_IGNORE_MARKER = "line-ending: ignore"
+
+# ⛔ This table lists WRAPPERS only, not the syntactic shapes of opening a
+# file. The first version of the rule was "the names open / write_text" — an
+# enumeration, not a derivation: Path.open("w") / os.fdopen(fd, "w") /
+# NamedTemporaryFile("w") / io.open / gzip.open(..., "wt") all walked past it
+# (20 of 22 shapes missed, 6 real unpinned sites in the tree at the time).
+# Now the rule first asks "does this call hand back a writable TEXT handle?"
+# and names only decide what the default mode is.
+#
+# atomic_write_text pins LF itself (default newline="\n"), so callers need not
+# pass it; but an explicit newline=None asks for the platform default back
+# (generate_tool_map.py was bitten exactly that way), so that shape is flagged.
+LF_PINNING_WRAPPERS = frozenset({"atomic_write_text"})
+
+# Calls that hand back a file handle -> their mode when none is given.
+# "b" in the mode is binary (no newline translation).
+HANDLE_FACTORIES = {
+    "open": "r",          # builtin open / Path.open / io.open / gzip.open / codecs.open
+    "fdopen": "r",        # os.fdopen
+    "NamedTemporaryFile": "w+b",
+    "TemporaryFile": "w+b",
+    "SpooledTemporaryFile": "w+b",
+}
+
+# Constructors that produce a text handle and take NO mode: always in scope.
+# io.TextIOWrapper(buf, encoding=...) defaults to newline=None — the very bug
+# this rule exists for.
+TEXT_WRAPPER_FACTORIES = frozenset({"TextIOWrapper"})
+
+# `.open()` is borrowed by many unrelated APIs. On these modules it is NOT a
+# text-file handle (int fd / binary stream / DB handle / not a file at all);
+# they do not even accept newline=, so flagging them would give advice that
+# raises TypeError if followed.
+NON_TEXT_OPEN_MODULES = frozenset({
+    "os",          # os.open -> int fd
+    "tarfile", "zipfile", "shelve", "dbm", "sqlite3",
+    "webbrowser",  # not a file at all
+    "socket",
+})
+
+# Modules whose open() takes (file, mode) like the builtin. Where the mode can
+# sit decides the first positional index scanned for it:
+#   open(file, mode) / io.open(file, mode) / os.fdopen(fd, mode) -> 1
+#   Path.open(mode) / NamedTemporaryFile(mode)                   -> 0
+# ⛔ The offset is load-bearing: scanning from 0 would read open("r", "w")
+# (a file literally named "r") as mode "r", i.e. read-only, and pass it — a
+# fail-open hole in a rule that is fail-closed everywhere else.
+_MODULE_STYLE_OPEN = frozenset({"io", "gzip", "codecs", "bz2", "lzma", "fileinput"})
+
+_MODE_RE = re.compile(r"^[rwxa]\+?[btU]*\+?$")
+_UNRESOLVED_MODE = object()
 
 SUBPROCESS_BASELINE = REPO_ROOT / "docs" / "internal" / "subprocess-encoding-baseline.json"
 SUBPROCESS_TICKET = "#1374"
@@ -191,52 +302,229 @@ def _line_has_ignore(source_lines: list[str], lineno: int) -> bool:
     return False
 
 
-def scan_file(path: Path) -> list[tuple[int, str]]:
-    """Return list of (lineno, snippet) for each violation."""
+def _open_encoding_violation(call: ast.Call) -> bool:
+    """True if this is a builtin open() in text mode without encoding=."""
+    return (_is_open_call(call) and not _has_binary_mode(call)
+            and not _has_encoding_kwarg(call))
+
+
+# ── line-ending rule helpers (#1366) ─────────────────────────────────────
+
+def _get_kwarg(call: ast.Call, name: str) -> ast.keyword | None:
+    for kw in call.keywords:
+        if kw.arg == name:
+            return kw
+    return None
+
+
+def _mode_arg_start(call: ast.Call, name: str) -> int:
+    """First positional index that could hold a mode string."""
+    if name == "fdopen":
+        return 1
+    if name == "open":
+        fn = call.func
+        if isinstance(fn, ast.Name):
+            return 1  # builtin open(file, mode)
+        if isinstance(fn, ast.Attribute) and isinstance(fn.value, ast.Name) \
+                and fn.value.id in _MODULE_STYLE_OPEN:
+            return 1  # io.open(file, mode) etc.
+        return 0      # Path.open(mode)
+    return 0          # tempfile factories take mode first
+
+
+def _mode_of(call: ast.Call, default: str, name: str):
+    """Resolve the file mode of a handle-producing call.
+
+    Returns the mode string, or ``_UNRESOLVED_MODE`` when a mode is supplied
+    but is not a static literal (e.g. ``open(p, mode_var)``).
+
+    ⛔ "a mode is given but unreadable" and "no mode is given" must be
+    DIFFERENT return values. The earliest version returned None for both and
+    passed them, so ``open(p, mode_var)`` went through silently. Now the first
+    fails closed and only the second takes the default.
+    """
+    kw = _get_kwarg(call, "mode")
+    if kw is not None:
+        if isinstance(kw.value, ast.Constant) and isinstance(kw.value.value, str):
+            return kw.value.value
+        return _UNRESOLVED_MODE
+
+    saw_non_literal = False
+    for arg in call.args[_mode_arg_start(call, name):]:
+        if isinstance(arg, ast.Constant) and isinstance(arg.value, str):
+            if _MODE_RE.match(arg.value):
+                return arg.value
+        elif not isinstance(arg, ast.Constant):
+            saw_non_literal = True
+    if saw_non_literal:
+        return _UNRESOLVED_MODE
+    return default
+
+
+def _newline_verdict(kw: ast.keyword | None) -> str | None:
+    """Classify a ``newline=`` keyword. None if acceptable, else a reason.
+
+    ⛔ Passing newline= is not the same as pinning the line ending.
+    ``newline=os.linesep`` writes the original bug back while looking
+    compliant (measured: it produces CRLF) — and it is exactly what someone
+    fixing this bug is most likely to write. So only a string LITERAL passes;
+    any expression (a variable, os.linesep, an attribute) must become a
+    literal or carry the ignore marker.
+    """
+    if kw is None:
+        return "no newline= (platform default -> CRLF on Windows)"
+    if isinstance(kw.value, ast.Constant):
+        if kw.value.value is None:
+            return "newline=None (explicit platform default)"
+        if isinstance(kw.value.value, str):
+            return None  # "\n" / "" / anything the author literally chose
+    return (
+        f"newline={ast.unparse(kw.value)} is not a string literal — "
+        f"os.linesep / a variable can still be CRLF"
+    )
+
+
+def _line_ending_verdict(call: ast.Call) -> str | None:
+    """Why this call breaks the line-ending rule, or None."""
+    fn = call.func
+    if isinstance(fn, ast.Attribute):
+        name = fn.attr
+    elif isinstance(fn, ast.Name):
+        name = fn.id
+    else:
+        return None
+
+    # <module>.open() whose open() is not a text-file handle. ⚠️ Scoped to the
+    # name `open` on purpose: os.open is excluded but os.fdopen is a genuine
+    # text-handle factory and must stay in scope (an earlier version excluded
+    # the whole `os` module and silently lost os.fdopen).
+    if name == "open" and isinstance(fn, ast.Attribute) \
+            and isinstance(fn.value, ast.Name) \
+            and fn.value.id in NON_TEXT_OPEN_MODULES:
+        return None
+
+    newline_kw = _get_kwarg(call, "newline")
+
+    if name == "write_text" or name in TEXT_WRAPPER_FACTORIES:
+        # Path.write_text: always text, always writing. TextIOWrapper: a text
+        # handle by construction, no mode argument at all.
+        verdict = _newline_verdict(newline_kw)
+        return f"{name}(): {verdict}" if verdict else None
+
+    if name in HANDLE_FACTORIES:
+        mode = _mode_of(call, HANDLE_FACTORIES[name], name)
+        if mode is _UNRESOLVED_MODE:
+            # ⛔ Fail closed ONLY with positive evidence of a text stream — an
+            # encoding= kwarg. Without it a dynamic-mode text open cannot be
+            # told from os.open(p, flags, 0o600) or a binary API, and guessing
+            # flags calls that have no newline= parameter to pin.
+            if _get_kwarg(call, "encoding") is None:
+                return None
+            return (f"{name}(): mode is not a literal, so it cannot be proven "
+                    f"read-only or binary — pin newline= or mark ignore")
+        if "b" in mode or not any(c in mode for c in "wax+"):
+            return None  # binary, or read-only text: nothing is translated
+        verdict = _newline_verdict(newline_kw)
+        return f"{name}(..., {mode!r}): {verdict}" if verdict else None
+
+    if name in LF_PINNING_WRAPPERS:
+        # The helper pins LF internally; only an explicit opt-out is a problem.
+        if newline_kw is not None and isinstance(newline_kw.value, ast.Constant) \
+                and newline_kw.value.value is None:
+            return (f"{name}(newline=None) — opts back out of the helper's "
+                    f'newline="\\n" default')
+    return None
+
+
+# ── one parse, one walk, every rule ──────────────────────────────────────
+
+@dataclass
+class FileScan:
+    """Everything one file contributes. Rows carry (lineno, col) so a call
+    flagged by two rules can be reported once."""
+    open_encoding: list[tuple[int, int, str]] = field(default_factory=list)
+    line_ending: list[tuple[int, int, str, str]] = field(default_factory=list)
+    subprocess: list[tuple[int, str, str]] = field(default_factory=list)
+
+
+def _snippet(source_lines: list[str], lineno: int) -> str:
+    if 1 <= lineno <= len(source_lines):
+        return source_lines[lineno - 1].strip()[:120]
+    return ""
+
+
+def scan_source(path: Path, *, encoding: bool = True,
+                line_ending: bool = True) -> FileScan:
+    """Parse *path* once and apply the selected rule families in one AST walk.
+
+    A file that is not UTF-8 or does not parse contributes nothing: the
+    offending file should not turn the gate into a traceback about the gate.
+    """
+    result = FileScan()
     try:
         source = path.read_text(encoding="utf-8")
-    except (OSError, UnicodeDecodeError):
-        return []
-    try:
         tree = ast.parse(source, filename=str(path))
-    except SyntaxError:
-        return []
-
+    except (OSError, UnicodeDecodeError, SyntaxError):
+        return result
     source_lines = source.splitlines()
-    violations: list[tuple[int, str]] = []
 
-    for node in ast.walk(tree):
-        if not isinstance(node, ast.Call):
-            continue
-        if not _is_open_call(node):
-            continue
-        if _has_binary_mode(node):
-            continue
-        if _has_encoding_kwarg(node):
-            continue
-        if _line_has_ignore(source_lines, node.lineno):
-            continue
-        snippet = source_lines[node.lineno - 1].strip()[:120] \
-            if 1 <= node.lineno <= len(source_lines) else ""
-        violations.append((node.lineno, snippet))
-
-    return violations
-
-
-def _subprocess_bindings(tree: ast.AST) -> tuple[set[str], dict[str, str]]:
-    """Names that reach the subprocess module / its calls in this file."""
-    modules = {"subprocess"}
-    funcs: dict[str, str] = {}
+    sp_modules = {"subprocess"}
+    sp_funcs: dict[str, str] = {}
+    calls: list[ast.Call] = []
     for node in ast.walk(tree):
         if isinstance(node, ast.Import):
             for alias in node.names:
                 if alias.name == "subprocess":
-                    modules.add(alias.asname or "subprocess")
-        elif isinstance(node, ast.ImportFrom) and node.module == "subprocess" and not node.level:
-            for alias in node.names:
-                if alias.name in _SP_FUNCS | _SP_LOCALE_ONLY:
-                    funcs[alias.asname or alias.name] = alias.name
-    return modules, funcs
+                    sp_modules.add(alias.asname or "subprocess")
+            continue
+        if isinstance(node, ast.ImportFrom):
+            if node.module == "subprocess" and not node.level:
+                for alias in node.names:
+                    if alias.name in _SP_FUNCS | _SP_LOCALE_ONLY:
+                        sp_funcs[alias.asname or alias.name] = alias.name
+            continue
+        if not isinstance(node, ast.Call):
+            continue
+        if encoding:
+            calls.append(node)  # subprocess bindings are only complete after the walk
+            if _open_encoding_violation(node) \
+                    and not _line_has_ignore(source_lines, node.lineno):
+                result.open_encoding.append(
+                    (node.lineno, node.col_offset, _snippet(source_lines, node.lineno)))
+        if line_ending:
+            reason = _line_ending_verdict(node)
+            if reason is not None and not (
+                    1 <= node.lineno <= len(source_lines)
+                    and LINE_ENDING_IGNORE_MARKER in source_lines[node.lineno - 1]):
+                result.line_ending.append(
+                    (node.lineno, node.col_offset, reason,
+                     _snippet(source_lines, node.lineno)))
+
+    for node in calls:
+        func = _subprocess_func(node, sp_modules, sp_funcs)
+        if func is None:
+            continue
+        reason = _subprocess_verdict(node, func)
+        if reason is None or _span_has_ignore(source_lines, node):
+            continue
+        result.subprocess.append((node.lineno, reason, _snippet(source_lines, node.lineno)))
+
+    result.open_encoding.sort()
+    result.line_ending.sort()
+    result.subprocess.sort()
+    return result
+
+
+def scan_file(path: Path) -> list[tuple[int, str]]:
+    """(lineno, snippet) for each builtin open() missing encoding=."""
+    return [(ln, snip) for ln, _col, snip
+            in scan_source(path, line_ending=False).open_encoding]
+
+
+def scan_line_endings(path: Path) -> list[tuple[int, str]]:
+    """(lineno, reason) for each text write that does not pin newline=."""
+    return [(ln, reason) for ln, _col, reason, _snip
+            in scan_source(path, encoding=False).line_ending]
 
 
 def _subprocess_func(call: ast.Call, modules: set[str], funcs: dict[str, str]) -> str | None:
@@ -283,27 +571,7 @@ def _span_has_ignore(source_lines: list[str], call: ast.Call) -> bool:
 
 def scan_subprocess(path: Path) -> list[tuple[int, str, str]]:
     """Return (lineno, reason, snippet) for each subprocess call flagged."""
-    try:
-        source = path.read_text(encoding="utf-8")
-        tree = ast.parse(source, filename=str(path))
-    except (OSError, UnicodeDecodeError, SyntaxError):
-        return []
-    source_lines = source.splitlines()
-    modules, funcs = _subprocess_bindings(tree)
-    found: list[tuple[int, str, str]] = []
-    for node in ast.walk(tree):
-        if not isinstance(node, ast.Call):
-            continue
-        func = _subprocess_func(node, modules, funcs)
-        if func is None:
-            continue
-        reason = _subprocess_verdict(node, func)
-        if reason is None or _span_has_ignore(source_lines, node):
-            continue
-        snippet = source_lines[node.lineno - 1].strip()[:120] \
-            if 1 <= node.lineno <= len(source_lines) else ""
-        found.append((node.lineno, reason, snippet))
-    return sorted(found)
+    return scan_source(path, line_ending=False).subprocess
 
 
 def ledger_key(path: Path) -> str:
@@ -415,10 +683,26 @@ def collect_files(paths: list[Path]) -> list[Path]:
     return out
 
 
+_LINE_ENDING_FIX = (
+    'Fix: pass newline="\\n" (repo standard — .gitattributes pins '
+    "`* text=auto eol=lf`). Any explicit string literal is accepted — the "
+    "rule requires a stated policy, not LF specifically:\n"
+    '  - csv via the csv module      -> newline=""\n'
+    '  - must be CRLF on every host  -> newline="\\r\\n" (.bat/.cmd/.ps1 are '
+    "the only paths .gitattributes marks eol=crlf; do NOT reach for the "
+    "ignore marker, which restores the platform default and so is LF on "
+    "Linux)\n"
+    "Only if the call genuinely has no literal to give (a helper passing its "
+    "own newline parameter through), append "
+    f"`# {LINE_ENDING_IGNORE_MARKER}` on the call's first line."
+)
+
+
 def main() -> int:
     try_utf8_stdout()
     parser = argparse.ArgumentParser(
-        description="Flag open() text-mode calls without explicit encoding=.",
+        description="Text-I/O hygiene: flag open() / subprocess text mode without "
+                    "encoding=, and text writes without a literal newline=.",
     )
     parser.add_argument(
         "paths", nargs="*", type=Path,
@@ -427,12 +711,23 @@ def main() -> int:
     )
     parser.add_argument(
         "--ci", action="store_true",
-        help="CI mode: print violations, exit 0 (warn-only) unless "
-             "--strict-open-encoding is also given.",
+        help="CI mode: print violations, exit 0 (warn-only) unless a "
+             "--strict-* flag is also given.",
     )
     parser.add_argument(
         "--strict-open-encoding", action="store_true",
-        help="Treat violations as errors (exit 1). Default: warn-only.",
+        help="Treat encoding violations as errors (exit 1). Default: warn-only.",
+    )
+    parser.add_argument(
+        "--strict-line-ending", action="store_true",
+        help="Treat line-ending (newline=) violations as errors (exit 1). "
+             "Default: warn-only.",
+    )
+    parser.add_argument(
+        "--line-ending-root", action="append", type=Path, default=None,
+        metavar="PATH",
+        help="Scan root of the line-ending rule (repeatable). Default: the "
+             "positional paths, or scripts, components and helm when none are given.",
     )
     parser.add_argument(
         "--subprocess-baseline", type=Path, default=SUBPROCESS_BASELINE,
@@ -448,24 +743,36 @@ def main() -> int:
     args = parser.parse_args()
 
     paths = [Path(p) for p in (args.paths or DEFAULT_PATHS)]
-    missing = [p for p in paths if not p.exists()]
+    le_paths = [Path(p) for p in (
+        args.line_ending_root or args.paths or LINE_ENDING_DEFAULT_PATHS)]
+    missing = [p for p in dict.fromkeys(paths + le_paths) if not p.exists()]
     if missing:
         for p in missing:
             print(f"ERROR: scan path does not exist: {p}", file=sys.stderr)
         return EXIT_CALLER_ERROR
-    files = collect_files(paths)
 
-    total_violations = 0
-    by_file: dict[Path, list[tuple[int, str]]] = {}
+    # Each rule family keeps its own roots; a file under both is parsed once.
+    enc_files = {f.resolve(): f for f in collect_files(paths)}
+    le_files = ({} if args.write_subprocess_baseline
+                else {f.resolve(): f for f in collect_files(le_paths)})
+    all_files = sorted({**le_files, **enc_files}.items())
+
+    enc_total = 0
+    le_total = 0
+    # rel -> (lineno, col) -> [encoding flagged?, line-ending reason, snippet]
+    report: dict[str, dict[tuple[int, int], list]] = {}
     sp_by_file: dict[str, list[tuple[int, str, str]]] = {}
-    for f in files:
-        v = scan_file(f)
-        if v:
-            by_file[f] = v
-            total_violations += len(v)
-        sp = scan_subprocess(f)
-        if sp:
-            sp_by_file[ledger_key(f)] = sp
+    for key, f in all_files:
+        scan = scan_source(f, encoding=key in enc_files, line_ending=key in le_files)
+        rel = os.path.relpath(f, REPO_ROOT)
+        for lineno, col, snippet in scan.open_encoding:
+            report.setdefault(rel, {}).setdefault((lineno, col), [False, None, snippet])[0] = True
+            enc_total += 1
+        for lineno, col, reason, snippet in scan.line_ending:
+            report.setdefault(rel, {}).setdefault((lineno, col), [False, None, snippet])[1] = reason
+            le_total += 1
+        if scan.subprocess:
+            sp_by_file[ledger_key(f)] = scan.subprocess
     sp_counts = {k: len(v) for k, v in sp_by_file.items()}
 
     if args.write_subprocess_baseline:
@@ -481,15 +788,22 @@ def main() -> int:
               f"{sum(sp_counts.values())} flagged subprocess call(s) in {len(sp_counts)} files.")
         return EXIT_VIOLATION if refused else EXIT_OK
 
-    # Sort for deterministic output
-    for f in sorted(by_file):
-        rel = os.path.relpath(f, REPO_ROOT)
-        for lineno, snippet in by_file[f]:
-            print(f"{rel}:{lineno}: open() missing encoding= — {snippet}")
+    # One line per call: a builtin open() missing both keywords names both.
+    both = 0
+    for rel in sorted(report):
+        for (lineno, _col), (enc, le_reason, snippet) in sorted(report[rel].items()):
+            if enc and le_reason:
+                both += 1
+                print(f"{rel}:{lineno}: open() missing encoding= and {le_reason} — {snippet}")
+            elif enc:
+                print(f"{rel}:{lineno}: open() missing encoding= — {snippet}")
+            else:
+                print(f"{rel}:{lineno}: line-ending {le_reason} — {snippet}")
 
-    if total_violations:
+    if enc_total:
         print(
-            f"\nTotal: {total_violations} violations in {len(by_file)} files.",
+            f"\nTotal: {enc_total} encoding violations in "
+            f"{sum(1 for r in report.values() if any(v[0] for v in r.values()))} files.",
             file=sys.stderr,
         )
         print(
@@ -497,6 +811,14 @@ def main() -> int:
             f"`# {IGNORE_MARKER}` if intentional.",
             file=sys.stderr,
         )
+    if le_total:
+        print(
+            f"\nTotal: {le_total} line-ending violations in "
+            f"{sum(1 for r in report.values() if any(v[1] for v in r.values()))} files"
+            + (f" ({both} also missing encoding=, reported once)." if both else "."),
+            file=sys.stderr,
+        )
+        print(_LINE_ENDING_FIX, file=sys.stderr)
 
     sp_errors: list[str] = []
     if args.strict_open_encoding:
@@ -520,10 +842,13 @@ def main() -> int:
             file=sys.stderr,
         )
 
-    if args.strict_open_encoding and (total_violations or sp_errors):
+    if args.strict_open_encoding and (enc_total or sp_errors):
         return EXIT_VIOLATION
-    if not total_violations and not sp_counts and not args.ci:
-        print("OK: no open() or subprocess calls missing encoding= found.")
+    if args.strict_line_ending and le_total:
+        return EXIT_VIOLATION
+    if not enc_total and not le_total and not sp_counts and not args.ci:
+        print("OK: no open() / subprocess call missing encoding= and no text "
+              "write missing newline= found.")
     return EXIT_OK
 
 

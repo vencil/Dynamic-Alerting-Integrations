@@ -77,7 +77,7 @@ lang: zh
 | **JSX / portal** | `design-token-usage` `axe-lite-static` `jsx-i18n-check` `jsx-babel-check` `undefined-tokens-check` `jsx-loader-compat-check` `dist-source-consistency-check` `skip-a11y-justification-check` `aria-references-check` `playwright-lint` `playwright-rtl-drift-check` `tool-consistency-check` `cli-coverage-check` `build-completeness-check` | #9 i18n、TRK-237/239 | token 合規、a11y、ESM、dist↔source |
 | **平台資料 / routing** | `platform-data-check` `routing-profiles-check` `metric-dictionary-check` | 四層路由、Cardinality | Rule Pack ↔ metric 交叉驗證 |
 | **測試治理** | `flaky-registry-check` `property-coverage-check` `verify-diff-check` | TRK-010、property-pilot、#1185 PR2 | flaky registry schema、coverage drift、source→test 映射（原 ⚙️ CI-only，#1185 PR2 升為 hook） |
-| **Python 安全 / 可攜** | `subprocess-timeout-audit`（FATAL）`open-encoding-audit`（FATAL；掃描範圍以該 hook 的 `entry` 為準；subprocess 文字模式走只減不增的 `subprocess-encoding-baseline.json` 帳本，#1374） | S#74、PR-2.5 | timeout kwarg、encoding kwarg |
+| **Python 安全 / 可攜** | `subprocess-timeout-audit`（FATAL）`open-encoding-audit`（FATAL；掃描範圍以該 hook 的 `entry` 為準；subprocess 文字模式走只減不增的 `subprocess-encoding-baseline.json` 帳本，#1374；寫文字的呼叫須傳字串字面值 `newline=`，範圍是 `--line-ending-root` 列的 `scripts`／`components`／`helm`、刻意不含 `tests/`，#1366） | S#74、PR-2.5、[dev-rules #11](dev-rules.md) | timeout kwarg、encoding kwarg、newline kwarg |
 | **Shell 正確性** | `shellcheck`（`--norc --include=SC2006,SC1071,SC1072,SC1073,SC1008`） | lint-policy hybrid | 反引號命令替換；額外的 SC10xx 與 `--norc` 是 fail-closed 用（ShellCheck 沉默＝零輸出 exit 0） |
 | **可達性** | `makefile-targets-check` | — | DX tools ↔ Makefile/pre-commit 可達 |
 
@@ -111,9 +111,8 @@ lang: zh
 | **OpenAPI spec drift** | `make api-docs` | tenant-api swag 標註 ↔ spec | 改 handler 標註、**或標註可達的任何 struct**（`internal/rbac`、`internal/platform`、`internal/federation/fedpolicy` 的型別也在 spec 的 definitions 裡）後；CI 上紅在 `go-tests-tenant-api` 的「Verify OpenAPI spec is up-to-date」步驟，看起來像 Go 測試失敗 |
 | **契約測試**（schemathesis） | `make contract-test` | tenant-api 全 method fuzz | 改 tenant-api API 後 |
 | **執行期 encoding 閘門**（`tests/_encoding_gate.py`，[#2005](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/2005)） | `PYTHONWARNDEFAULTENCODING=1 pytest tests/`（沒設這個變數時閘門不作用，結尾會印 `encoding gate: INACTIVE`） | `scripts/`、`components/` 的程式在測試中讀寫文字檔沒帶 `encoding=`，含 `Path.open`／`read_text`／`write_text`；只看得到測試實際走到的路徑，`subprocess(text=True)` 與在子行程裡跑的程式不在內 | 改任何讀寫檔的 Python 後 |
-| **行尾政策**（`tests/dx/test_line_ending_policy.py`，[dev-rules #11b](dev-rules.md)） | `pytest tests/dx/test_line_ending_policy.py` | 寫文字的呼叫必須明確傳字串字面值 `newline=` | 改任何寫檔的 Python 後 |
 
-行尾這條與 §3 的 `open-encoding-audit` 是姊妹規則但在不同執行點；若頻繁跳閘，判準同 `verify_diff` 的先例（本地成本低、可用 `files:` 限縮 ⇒ 升為 hook，#1185）。
+行尾政策（`newline=`）原本列在這一節：它曾只是 `tests/dx/test_line_ending_policy.py` 的 pytest，忘了 `newline=` 要 push 後才從 CI 得知。#1366 已把它併進 §3 的 `open-encoding-audit`，commit 當下擋；判準同 `verify_diff` 的先例（本地成本低、可用 `files:` 限縮 ⇒ 升為 hook，#1185）。⚠️ CI 的 Lint job 逐名跑 hook，而 `open-encoding-audit` 不在那份名單裡，所以這條規則在 CI 上仍靠 `test_line_ending_policy.py::TestHookScope` 的全樹掃描（用 hook 的掃描器與範圍，不是第二份判定器）。
 
 ---
 
