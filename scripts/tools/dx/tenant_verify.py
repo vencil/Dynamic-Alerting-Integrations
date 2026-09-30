@@ -17,8 +17,9 @@ Usage:
 Exit codes:
     0  — verification passed (tenant exists; if --expect-merged-hash given,
          it matched)
-    1  — usage / IO error, or a `_defaults.yaml` in the chain that does
-         not parse (named on stderr)
+    1  — usage / IO error, or a selected `_defaults.yaml` anywhere in the
+         tree that does not parse or has an unsupported shape (named on
+         stderr)
     2  — verification failed (--expect-merged-hash mismatch, tenant not
          found, or tenant declared in more than one file); with --all,
          any tenant declared in more than one file
@@ -234,9 +235,10 @@ def main() -> int:
     try:
         scanner = describe_mod.ConfDScanner(conf_d)
     except describe_mod.DefaultsParseError as exc:
-        # #2459: a selected `_defaults.yaml` that does not parse (or has a
-        # shape the defaults chain cannot use) leaves no merged_hash to
-        # report for any tenant below it. Named on stderr as an input error
+        # #2459: a selected `_defaults.yaml` anywhere in the tree that does
+        # not parse (DefaultsParseError) or has an unsupported shape
+        # (DefaultsShapeError, its subclass) stops the scan, so no
+        # merged_hash is reported for any tenant. Named on stderr as an input error
         # (exit 1), not a traceback — and not exit 2, which the rollback
         # checklist reads as "hash mismatch".
         print(f"error: {exc}", file=sys.stderr)

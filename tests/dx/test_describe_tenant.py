@@ -1843,6 +1843,10 @@ class TestUnparseableDefaults:
         assert "Traceback" not in res.stderr, res.stderr
         assert res.returncode == EXIT_CALLER_ERROR, (res.returncode, res.stderr)
         assert str(what_if.resolve()) in res.stderr, res.stderr
+        # #2459: a shape refusal is not reported as a parse failure.
+        if shape in self.UNSUPPORTED:
+            assert "has an unsupported shape" in res.stderr, res.stderr
+            assert "Failed to parse" not in res.stderr, res.stderr
 
     # must-trigger controls: the paths around the fix are unchanged.
     def test_control_parseable_defaults_still_describe(self, tmp_path):
