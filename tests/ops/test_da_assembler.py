@@ -1152,12 +1152,14 @@ NULL_KEY_REFUSED = [
     ("replaced-by-null-too", "x: {k: {~: 1}, k: {~: 2}}\nmetadata: {name: ok}\n",
      None),
 ]
-#: ⛔ Deliberate fail-closed over-refusal (#2476): the null key sits in a
-#: value a later duplicate key (or a `<<` merge, in go-yaml's order)
-#: replaces, so Kubernetes decodes it away and ACCEPTS these. The tool
-#: refuses them anyway: telling them apart means reproducing go-yaml's
-#: duplicate-key / merge order and key typing, which was tried and does
-#: not converge. If this list ever renders rc 0, that emulation is back.
+#: ⛔ Deliberate fail-closed over-refusal (#2476): Kubernetes ACCEPTS
+#: these, the tool refuses them. Two kinds: the null key sits in a value a
+#: later duplicate key (or a `<<` merge, in go-yaml's order) replaces, so
+#: go-yaml decodes it away; or the key has the non-specific `!` tag, which
+#: PyYAML reads as null and go-yaml as a string. Telling them apart means
+#: reproducing go-yaml's duplicate-key / merge order and key typing, which
+#: was tried and does not converge. If this list ever renders rc 0, that
+#: emulation is back.
 NULL_KEY_OVER_REFUSED = [
     ("replaced-duplicate", "metadata: {name: ok}\n",
      "spec:\n  tenants: {null: {}}\n  tenants: {t1: {}}\n"),
@@ -1173,6 +1175,8 @@ NULL_KEY_OVER_REFUSED = [
     ("octal-spelling", "x: {010: {~: 1}, 8: 2}\nmetadata: {name: ok}\n", None),
     ("v2-bool-spellings", "x: {y: {~: 1}, yes: 2}\nmetadata: {name: ok}\n",
      None),
+    # K8s accepts (go-yaml reads `! ~` as the string "~"); refused on purpose.
+    ("non-specific-tag", "x: {! ~: 1}\nmetadata: {name: ok}\n", None),
 ]
 #: Keys and values that only LOOK null: Kubernetes accepts them and so
 #: does the tool.
@@ -1496,18 +1500,22 @@ class TestRenderCrNameFormat:
     @pytest.mark.parametrize("text, spec", [
         pytest.param(text, spec, id=case_id)
         for case_id, text, spec in NULL_KEY_OVER_REFUSED])
-    def test_null_key_in_a_replaced_value_is_refused_fail_closed(
+    def test_null_key_kubernetes_accepts_is_refused_fail_closed(
             self, text, spec, tmp_path, caplog):
-        """#2476：null key 在被後面同名鍵蓋掉的值裡——K8s 接受，本工具
-        刻意 fail-closed 拒收（見 `NULL_KEY_OVER_REFUSED` 的註解）。
+        """#2476：K8s 接受、本工具刻意 fail-closed 拒收的 null key 形狀
+        （被後面同名鍵蓋掉的值、非特定標籤 `!`；見 `NULL_KEY_OVER_REFUSED`
+        的註解）。
 
-        訊息要說明是本工具不模擬覆寫順序，不是「K8s 一定拒收」。會讓本組
-        轉紅的改動：null key 改成模擬 go-yaml 的重複鍵／merge 覆寫。
+        訊息要點名這兩類、說明是本工具不重現那些規則，不是「K8s 一定拒收」。
+        會讓本組轉紅的改動：null key 改成模擬 go-yaml 的重複鍵／merge 覆寫或
+        鍵的型別判定。
         """
         rc, got = self._render_text(tmp_path, text, spec)
         assert rc == EXIT_CALLER_ERROR
         assert got is None
-        assert "does not reproduce how duplicate keys" in caplog.text
+        assert "later duplicate key replaces" in caplog.text
+        assert "non-specific ! tag" in caplog.text
+        assert "does not reproduce those rules" in caplog.text
 
     @pytest.mark.parametrize("text, spec", [
         pytest.param(text, spec, id=case_id)

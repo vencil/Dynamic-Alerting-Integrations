@@ -472,11 +472,14 @@ def _has_null_key(root: Any) -> bool:
     decoded form has a null map key (``unsupported map key of type:
     <nil>``) — ``null:``, ``~:``, an empty ``? `` key, one reached through
     an alias or a ``<<`` merge. Fail-closed: the WHOLE composed graph is
-    walked (:func:`_walk_nodes`), including a value a later duplicate key
-    replaces, which Kubernetes decodes away and then accepts. Telling those
-    apart means reproducing go-yaml's duplicate-key and merge order and its
-    key typing, which this tool does not do. A QUOTED ``"null":`` (or
-    ``!!str null``) is a string key and is accepted.
+    walked (:func:`_walk_nodes`) as PyYAML types it, so two rare spellings
+    Kubernetes accepts are refused too: a null key inside a value a later
+    duplicate key replaces (go-yaml decodes it away), and a key with the
+    non-specific ``!`` tag (``! ~:``, ``! null:``, ``! :`` — PyYAML reads
+    null, go-yaml a string). Telling them apart means reproducing go-yaml's
+    duplicate-key / merge order and key typing, which this tool does not
+    do. A QUOTED ``"null":`` (or ``!!str null``) is a string key and is
+    accepted.
     """
     return any(isinstance(node, yaml.MappingNode)
                and any(isinstance(key, yaml.ScalarNode)
@@ -658,11 +661,13 @@ def render_cr_file(
         return EXIT_CALLER_ERROR
     if _has_null_key(root):
         log.error("%s: the document has a mapping with a null key (null, "
-                  "~ or an empty key), counting one inside a value a later "
-                  "duplicate key replaces. Kubernetes usually refuses such a "
-                  "document; this tool does not reproduce how duplicate keys "
-                  "override each other, so it always refuses it. If the "
-                  "string is meant, quote it (\"null\")", cr_path)
+                  "~ or an empty key), as this tool's YAML reader sees it. "
+                  "Kubernetes usually refuses such a document; in a few rare "
+                  "spellings (a key inside a value a later duplicate key "
+                  "replaces, or a key with the non-specific ! tag) "
+                  "Kubernetes reads it differently and accepts it, but this "
+                  "tool does not reproduce those rules and always refuses. "
+                  "If the string is meant, quote it (\"null\")", cr_path)
         return EXIT_CALLER_ERROR
 
     # #2371: shape checks `reconcile_one` does not make. Its
