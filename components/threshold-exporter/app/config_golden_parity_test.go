@@ -53,6 +53,11 @@ package main
 //   yaml-keys         — non-string mapping keys spelled with `%v` (a date key
 //                       is time.Time.String()); a date key in both files is
 //                       one key, so the bodies merge (#2371)
+//   yaml-numbers      — int / float values typed by yaml.v3's rules, not
+//                       YAML 1.1's (`1e3` a number, `12:30:45` a string), and
+//                       floats as encoding/json writes them (`1.0` is `1`);
+//                       per-shape table: pkg/config/
+//                       yaml_number_value_parity_test.go (#2415)
 //
 // ⚠️ Five trees (l0-only, full-l0-l3, array-replace, opt-out-null,
 // metadata-skipped) have a ROOT _defaults.yaml the exporter drops whole, so

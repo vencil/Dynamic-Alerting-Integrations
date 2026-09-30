@@ -265,18 +265,58 @@ def _json_text(data: Any, **kwargs: Any) -> str:
     """`json.dumps(data, ensure_ascii=False, **kwargs)` through
     `_go_json_default` — the one JSON writer for the hash and the output."""
     inserted = 0
+    floats: "list[str]" = []
 
     def default(value: Any) -> Any:
         nonlocal inserted
+        if isinstance(value, _GoFloatSlot):
+            return f"{_GO_FLOAT_MARK}{value.index}{_GO_FLOAT_MARK}"
         rendered = _go_json_default(value)
         if isinstance(value, (bytes, bytearray)):
             inserted += rendered.count(_GO_INVALID_UTF8)
         return rendered
 
-    text = json.dumps(data, ensure_ascii=False, default=default, **kwargs)
+    text = json.dumps(_slot_floats(data, floats), ensure_ascii=False, default=default, **kwargs)
+    if floats:
+        text, found = _GO_FLOAT_SLOT.subn(lambda m: floats[int(m.group(1))], text)
+        if found != len(floats):  # pragma: no cover - a mark only this function writes
+            raise ValueError(f"float placeholders: wrote {len(floats)}, found {found}")
     if inserted and text.count(_GO_INVALID_UTF8) == inserted:
         text = text.replace(_GO_INVALID_UTF8, "\\ufffd")
     return text
+
+
+# #2415: `json.dumps` writes a float with repr() (`1.0`, `1e+20`, `1.5e-05`)
+# and a float subclass cannot change that, so each finite float VALUE goes
+# through `default` as a slot and its encoding/json text (`_go_float_json`)
+# replaces the quoted mark afterwards. The mark is a lone surrogate, which no
+# str this tool reads can hold (`_reject_surrogates`). NaN / ±Inf stay
+# floats: json.dumps' bare NaN / Infinity / -Infinity is exactly what
+# pkg/config's canonical JSON writes for them.
+_GO_FLOAT_MARK = "\udffe"
+_GO_FLOAT_SLOT = re.compile(f'"{_GO_FLOAT_MARK}([0-9]+){_GO_FLOAT_MARK}"')
+
+
+class _GoFloatSlot:
+    __slots__ = ("index",)
+
+    def __init__(self, index: int):
+        self.index = index
+
+
+def _slot_floats(data: Any, floats: "list[str]") -> Any:
+    """`data` with every finite float value (not key) a `_GoFloatSlot`
+    whose text is appended to `floats`."""
+    if isinstance(data, float):
+        if not math.isfinite(data):
+            return data
+        floats.append(_go_float_json(data))
+        return _GoFloatSlot(len(floats) - 1)
+    if isinstance(data, dict):
+        return {k: _slot_floats(v, floats) for k, v in data.items()}
+    if isinstance(data, (list, tuple)):
+        return [_slot_floats(v, floats) for v in data]
+    return data
 
 
 def _canonical_json(data: Any) -> str:
@@ -413,20 +453,53 @@ def _go_float_v(value: float) -> str:
         return "+Inf" if value > 0 else "-Inf"
     if value == 0:
         return "-0" if math.copysign(1.0, value) < 0 else "0"
-    sign = "-" if value < 0 else ""
-    # repr() is the shortest round-trip digit string, as strconv's is.
+    sign, digs, exp10 = _go_float_digits(value)
+    if exp10 < -4 or exp10 >= 6:
+        return sign + _go_float_e(digs, exp10)
+    return sign + _go_float_f(digs, exp10)
+
+
+def _go_float_json(value: float) -> str:
+    """encoding/json's text for a finite float64 (#2415) — what pkg/config's
+    canonical JSON writes for a float VALUE, and not `%v`: strconv 'f' at the
+    shortest precision, 'e' only below 1e-6 or from 1e21 up, and a one-digit
+    negative exponent without its leading zero (`1e-7`, not `1e-07`). So
+    `1.0` is `1`, `1e20` is `100000000000000000000` and `1.5e-5` is
+    `0.000015`, where `json.dumps` writes `1.0`, `1e+20` and `1.5e-05`."""
+    if value == 0:
+        return "-0" if math.copysign(1.0, value) < 0 else "0"
+    sign, digs, exp10 = _go_float_digits(value)
+    if abs(value) < 1e-6 or abs(value) >= 1e21:
+        text = _go_float_e(digs, exp10)
+        if -10 < exp10 < 0:  # encoding/json's "clean up e-09 to e-9"
+            text = text[:-2] + text[-1]
+        return sign + text
+    return sign + _go_float_f(digs, exp10)
+
+
+def _go_float_digits(value: float) -> "tuple[str, str, int]":
+    """(sign, shortest round-trip digits, decimal exponent of the first
+    digit) of a finite, non-zero float — strconv's shortest digits, which
+    repr() also produces."""
     parts = decimal.Decimal(repr(abs(value))).normalize().as_tuple()
     digs = "".join(str(d) for d in parts.digits)
-    exp10 = len(digs) - 1 + parts.exponent
-    if exp10 < -4 or exp10 >= 6:
-        body = digs[0] + ("." + digs[1:] if len(digs) > 1 else "")
-        return f"{sign}{body}e{'-' if exp10 < 0 else '+'}{abs(exp10):02d}"
+    return ("-" if value < 0 else ""), digs, len(digs) - 1 + parts.exponent
+
+
+def _go_float_e(digs: str, exp10: int) -> str:
+    """strconv's 'e' format of `digs` (at least two exponent digits)."""
+    body = digs[0] + ("." + digs[1:] if len(digs) > 1 else "")
+    return f"{body}e{'-' if exp10 < 0 else '+'}{abs(exp10):02d}"
+
+
+def _go_float_f(digs: str, exp10: int) -> str:
+    """strconv's 'f' format of `digs` (no exponent, no trailing zeros)."""
     point = exp10 + 1  # digits before the decimal point
     if point <= 0:
-        return f"{sign}0.{'0' * -point}{digs}"
+        return f"0.{'0' * -point}{digs}"
     if point >= len(digs):
-        return f"{sign}{digs}{'0' * (point - len(digs))}"
-    return f"{sign}{digs[:point]}.{digs[point:]}"
+        return f"{digs}{'0' * (point - len(digs))}"
+    return f"{digs[:point]}.{digs[point:]}"
 
 
 def _go_parse_timestamp(text: str) -> "tuple | None":
@@ -514,6 +587,18 @@ def _go_plain_key(text: str, timestamps: bool = True) -> str:
         stamp = _go_timestamp_key(text)
         if stamp is not None:
             return stamp
+    number = _go_plain_number(text)
+    if number is None:
+        return text
+    return str(number) if isinstance(number, int) else _go_float_v(number)
+
+
+def _go_plain_number(text: str) -> "int | float | None":
+    """yaml.v3's number resolution of an untagged plain scalar that starts
+    with a digit, `+`, `-` or `.` and is not a timestamp: an int (ParseInt,
+    then ParseUint, base prefixes `0x` / `0o` / `0b` / a leading `0`, any
+    case, underscores dropped), else a finite float (`yamlStyleFloat`, then
+    ParseFloat), else None — the text stays a string."""
     plain = text.replace("_", "")
     if text[0] == ".":
         # yaml.v3's `.` hint: strconv.ParseFloat on the text AS WRITTEN —
@@ -521,19 +606,41 @@ def _go_plain_key(text: str, timestamps: bool = True) -> str:
         # underscoreOK (between digits only): `.5_0` is 0.5, `._5`, `.5_`,
         # `.5__0` and `.5e_1` stay strings.
         if not (_go_underscore_ok(text) and _GO_YAML_FLOAT.match(plain)):
-            return text
+            return None
     else:
         number = _go_parse_int(plain)
         if number is not None:
-            return str(number)
+            return number
     if _GO_YAML_FLOAT.match(plain) and not math.isinf(float(plain)):
         # ParseFloat's range error (`1e400`) leaves the text a string.
-        return _go_float_v(float(plain))
+        return float(plain)
+    return None
+
+
+_GO_NONFINITE = {**dict.fromkeys((".inf", ".Inf", ".INF", "+.inf", "+.Inf", "+.INF"), math.inf),
+                 **dict.fromkeys(("-.inf", "-.Inf", "-.INF"), -math.inf),
+                 **dict.fromkeys((".nan", ".NaN", ".NAN"), math.nan)}
+
+
+def _go_plain_value(text: str) -> "int | float | str":
+    """yaml.v3's int / float resolution of an untagged plain scalar VALUE
+    (#2415): the number it decodes, or the text itself where it decodes a
+    string. Only for a text PyYAML types `!!int` / `!!float` / `!!str` —
+    null, bool and timestamp are decided elsewhere (`yes` / `on` stay
+    PyYAML's bools on purpose: #2164)."""
+    if text in _GO_NONFINITE:
+        return _GO_NONFINITE[text]
+    if text[:1] and text[0] in "0123456789+-.":
+        number = _go_plain_number(text)
+        if number is not None:
+            return number
     return text
 
 
 _YAML_STR_TAG = "tag:yaml.org,2002:str"
 _YAML_TIMESTAMP_TAG = "tag:yaml.org,2002:timestamp"
+_YAML_INT_TAG = "tag:yaml.org,2002:int"
+_YAML_FLOAT_TAG = "tag:yaml.org,2002:float"
 
 
 def _go_key_spelling(loader: Any, node: Any) -> str:
@@ -574,6 +681,16 @@ class _GoKeyLoader(StrictExporterKeyLoader):
 
     def construct_scalar(self, node):  # noqa: D102 — see _reject_surrogates
         return _reject_surrogates(super().construct_scalar(node), node)
+
+    def compose_scalar_node(self, anchor):
+        """Remember whether the scalar carried a tag of its own (#2415): the
+        composed node's tag is the same for `!!str 1e3` and a plain `1e3`,
+        and yaml.v3 keeps the first a string. Read by the number path only
+        (`_construct_str`, `_construct_number`)."""
+        tag = self.peek_event().tag
+        node = super().compose_scalar_node(anchor)
+        node.go_explicit_tag = tag not in (None, "!")
+        return node
 
     def _construct_timestamp(self, node):
         """A scalar PyYAML tags `!!timestamp`. yaml.v3 decides on its own
@@ -620,7 +737,25 @@ class _GoKeyLoader(StrictExporterKeyLoader):
             parsed = _go_parse_timestamp(text)
             if parsed:
                 return _go_time_json(*parsed)
+            # #2415: a number to yaml.v3 only — `1e3`, `0o17`, `+.5`, `08`;
+            # `!!str 1e3` stays the text there.
+            if not getattr(node, "go_explicit_tag", False):
+                return _go_plain_value(text)
         return text
+
+    def _construct_number(self, node):
+        """A plain scalar PyYAML types `!!int` / `!!float` by YAML 1.1's
+        rules, decided by yaml.v3's instead (#2415): `1:30` / `12:30:45`
+        (sexagesimal) and `0x10000000000000000` (past uint64) stay the text,
+        `1e400` too; `0b_`, which PyYAML raised ValueError on (dropping the
+        whole file), is the text as well. An explicit `!!int` / `!!float`
+        (`!!float 1`, `!!int 017`) keeps PyYAML's constructor."""
+        if (isinstance(node, yaml.ScalarNode) and node.style is None
+                and not getattr(node, "go_explicit_tag", False)):
+            return _go_plain_value(self.construct_scalar(node))
+        if node.tag == _YAML_INT_TAG:
+            return self.construct_yaml_int(node)
+        return self.construct_yaml_float(node)
 
     def construct_mapping(self, node, deep=False):  # noqa: D102 — see class
         mapping = super().construct_mapping(node, deep=deep)
@@ -639,6 +774,8 @@ class _GoKeyLoader(StrictExporterKeyLoader):
 
 _GoKeyLoader.add_constructor(_YAML_TIMESTAMP_TAG, _GoKeyLoader._construct_timestamp)
 _GoKeyLoader.add_constructor(_YAML_STR_TAG, _GoKeyLoader._construct_str)
+_GoKeyLoader.add_constructor(_YAML_INT_TAG, _GoKeyLoader._construct_number)
+_GoKeyLoader.add_constructor(_YAML_FLOAT_TAG, _GoKeyLoader._construct_number)
 
 
 def _go_typed_key(key: Any) -> Any:

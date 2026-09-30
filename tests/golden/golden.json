@@ -390,5 +390,31 @@
     "source_file": "yaml-keys/tenants.yaml",
     "source_hash": "82c34cb35bb62008",
     "tenant_id": "tenant-keys"
+  },
+  {
+    "defaults_chain": [],
+    "effective_config": {
+      "_x": {
+        "exponent": 1000,
+        "list": [
+          0.5,
+          8,
+          31,
+          1000,
+          "0o17"
+        ],
+        "octal_1_2": 15,
+        "sexagesimal": "12:30:45",
+        "sexagesimal_underscore": "1_2:30",
+        "small": 1.5e-05,
+        "whole_float": 1
+      }
+    },
+    "fixture_dir": "mixed-mode",
+    "merged_hash": "585c9a9ffb37cbcc",
+    "scenario": "yaml-numbers",
+    "source_file": "yaml-numbers/tenants.yaml",
+    "source_hash": "2b64f7b0c6332503",
+    "tenant_id": "tenant-numbers"
   }
 ]

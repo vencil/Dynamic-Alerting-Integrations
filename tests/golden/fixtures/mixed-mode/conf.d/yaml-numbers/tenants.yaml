@@ -1,0 +1,10 @@
+tenants:
+  tenant-numbers:
+    _x:
+      whole_float: 1.0
+      octal_1_2: 0o17
+      exponent: 1e3
+      sexagesimal: 12:30:45
+      sexagesimal_underscore: 1_2:30
+      small: 1.5e-5
+      list: [+.5, 08, 0x1F, 1_000, "0o17"]

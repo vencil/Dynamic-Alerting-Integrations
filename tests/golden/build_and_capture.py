@@ -8,7 +8,8 @@ test_merge_parity.py's module docstring so the Go port can verify
 byte-for-byte parity. They do NOT cover every ADR-017 clause. #1550's
 reserved-key null deletion, nested-null and canonical-JSON escaping rows
 are scenarios 11-13 below, and #2371's YAML date / `!!binary` values and
-non-string mapping keys are 17-19; #1550's chain-discovery gap is closed on the Go side
+non-string mapping keys are 17-19, and #2415's int / float values
+are 20; #1550's chain-discovery gap is closed on the Go side
 (config_golden_parity_test.go TestGoldenParity_ResolveEffective). What stays
 open is listed in test_merge_parity.py's "Known gaps".
 
@@ -635,6 +636,30 @@ def s_yaml_keys():
 """)
 
 
+# Scenario 20 (#2415): int / float VALUES yaml.v3 types by YAML 1.2's core
+# schema, where PyYAML's YAML 1.1 typing differs — `1e3` / `0o17` / `+.5` /
+# `08` are numbers to yaml.v3 only, `12:30:45` / `1_2:30` (sexagesimal) are
+# strings there — and floats as encoding/json writes them (`1.0` is `1`,
+# `1.5e-5` is `0.000015`). Tenant file only: a `_defaults.yaml` here would
+# add artifact keys that make this subtree's root the biggest counted group
+# of check_threshold_reachability's key floor. The full per-shape table, in
+# the tenant file AND in `_defaults.yaml`, every row measured with pkg/config,
+# is tests/shared/yaml_number_value_matrix.json.
+def s_yaml_numbers():
+    d = reset("mixed-mode") / "yaml-numbers"
+    write(d / "tenants.yaml", """tenants:
+  tenant-numbers:
+    _x:
+      whole_float: 1.0
+      octal_1_2: 0o17
+      exponent: 1e3
+      sexagesimal: 12:30:45
+      sexagesimal_underscore: 1_2:30
+      small: 1.5e-5
+      list: [+.5, 08, 0x1F, 1_000, "0o17"]
+""")
+
+
 SCENARIOS = [
     ("flat", "tenant-a", s_flat),
     ("l0-only", "tenant-b", s_l0_only),
@@ -658,6 +683,7 @@ SCENARIOS = [
     ("yaml-date", "tenant-date", s_yaml_date),
     ("yaml-binary", "tenant-binary", s_yaml_binary),
     ("yaml-keys", "tenant-keys", s_yaml_keys),
+    ("yaml-numbers", "tenant-numbers", s_yaml_numbers),
 ]
 
 
@@ -713,6 +739,7 @@ def main() -> int:
         "yaml-date": "mixed-mode",
         "yaml-binary": "mixed-mode",
         "yaml-keys": "mixed-mode",
+        "yaml-numbers": "mixed-mode",
     }
     for scenario, tenant_id, builder in SCENARIOS:
         if builder is not None and builder not in builders_seen:
