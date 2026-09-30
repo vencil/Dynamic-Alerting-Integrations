@@ -313,18 +313,28 @@ func profileFill[V, O any](canonProfile map[string]V, own map[string]O, canonDec
 // profileFor returns the canonical view of the profile `own` elects, or nil
 // when it elects none or an unknown one.
 func (pp *PlatformProfiles) profileFor(own map[string]any) (string, map[string]profileEntry) {
-	if pp == nil || len(pp.byName) == 0 {
-		return "", nil
-	}
-	name := profileNameOf(own["_profile"])
+	name := pp.bound(own)
 	if name == "" {
 		return "", nil
 	}
-	profile, ok := pp.byName[name]
-	if !ok {
-		return "", nil
+	return name, canonicalView(pp.byName[name])
+}
+
+// bound is the name of the profile `own` elects when this set defines it —
+// the profile profileFor expands; "" for none (EffectiveConfig.BoundProfile,
+// #2564). No allocation: it runs on every tenant merge.
+func (pp *PlatformProfiles) bound(own map[string]any) string {
+	if pp == nil || len(pp.byName) == 0 {
+		return ""
 	}
-	return name, canonicalView(profile)
+	name := profileNameOf(own["_profile"])
+	if name == "" {
+		return ""
+	}
+	if _, ok := pp.byName[name]; !ok {
+		return ""
+	}
+	return name
 }
 
 // expand returns `own` (the tenant block with the platform overlay applied)

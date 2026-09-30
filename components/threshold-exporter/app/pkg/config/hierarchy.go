@@ -116,6 +116,22 @@ type EffectiveConfig struct {
 	// _defaults.yaml may inherit different merged defaults; see
 	// guard.CheckInput.NewDefaultsByTenant). Not serialized — guard-only.
 	MergedDefaults map[string]any `json:"-"`
+
+	// BoundProfile is the profile the tenant is bound to: the `_profile`
+	// its own layer (the tenant file, else the root platform files'
+	// `tenants:` entry) elects, when the root platform files define that
+	// profile — the one the merge expands (PlatformProfiles.profileFor).
+	// "" for none: no `_profile`, or a name no profile carries. Bound even
+	// when the profile fills in nothing (ProfileOverlay is then omitted).
+	// Populated by every resolve. Not serialized, so tenant-api's
+	// /effective body is unchanged; `da-guard effective` prints it (#2564).
+	BoundProfile string `json:"-"`
+
+	// KeySources names, per top-level key of EffectiveConfig, the layer and
+	// the file its value came from (key_sources.go). Populated only by
+	// EffectiveTree (#2564) — nil from ResolveEffective and ScopeEffective,
+	// which do not pay for it. Not serialized, like BoundProfile.
+	KeySources map[string]KeySource `json:"-"`
 }
 
 // ResolveEffective locates the tenant file that defines `tenantID` in ONE
@@ -190,6 +206,14 @@ type effectiveResolver struct {
 	// tenant-file parse. On this value (one call's resolver), not a
 	// package global, so a parallel test observes only its own resolver.
 	onTenantParse func(absPath string)
+
+	// withSources makes resolve fill EffectiveConfig.KeySources (#2564).
+	// Off for ResolveEffective / ScopeEffective: the attribution re-reads
+	// every chain level's parsed block, a cost only EffectiveTree pays.
+	withSources bool
+	// chainBlocks is each chain file's defaults block parsed once per
+	// resolver (keyed by absolute path), for the attribution only.
+	chainBlocks map[string]map[string]any
 }
 
 // newEffectiveResolver reads the chain rule off the scan — the SAME
@@ -318,7 +342,7 @@ func (r *effectiveResolver) resolve(tenantID string) (*EffectiveConfig, error) {
 		relChain[i] = r.rel(p)
 	}
 
-	return &EffectiveConfig{
+	ec := &EffectiveConfig{
 		TenantID:           tenantID,
 		SourceFile:         r.rel(tenantFile),
 		SourceHash:         fmt.Sprintf("%x", sourceSum)[:16],
@@ -329,7 +353,37 @@ func (r *effectiveResolver) resolve(tenantID string) (*EffectiveConfig, error) {
 		EffectiveConfig:    parts.merged,
 		TenantOverridesRaw: parts.tenantRaw,
 		MergedDefaults:     parts.mergedDefaults,
-	}, nil
+		BoundProfile:       parts.profile,
+	}
+	if r.withSources {
+		blocks := make([]map[string]any, len(chain))
+		for i, p := range chain {
+			blocks[i] = r.chainBlock(p, defaultsYAML[i])
+		}
+		ks, err := keySources(parts.merged, parts.tenantRaw, ec.SourceFile, relChain, blocks,
+			overlay, parts.platformSources, parts.profileSources)
+		if err != nil {
+			return nil, err
+		}
+		ec.KeySources = ks
+	}
+	return ec, nil
+}
+
+// chainBlock is absPath's defaults block as the merge parsed it
+// (ParseChainDefaults — the parse foldDefaults folds), once per resolver.
+// The merge has already succeeded over these bytes, so a parse error cannot
+// reach here; a block that is not a mapping is nil, as the merge skips it.
+func (r *effectiveResolver) chainBlock(absPath string, b []byte) map[string]any {
+	if blk, ok := r.chainBlocks[absPath]; ok {
+		return blk
+	}
+	if r.chainBlocks == nil {
+		r.chainBlocks = make(map[string]map[string]any)
+	}
+	blk := ParseChainDefaults(b).block
+	r.chainBlocks[absPath] = blk
+	return blk
 }
 
 // ============================================================
@@ -355,6 +409,7 @@ type effectiveParts struct {
 	merged, mergedDefaults, tenantRaw map[string]any
 	platformSources                   []PlatformOverlaySource
 	profileSources                    []ProfileOverlaySource
+	profile                           string // EffectiveConfig.BoundProfile
 }
 
 // computeEffectiveConfigBytesDetailed extends the legacy helper with
@@ -854,6 +909,7 @@ func mergeTenantOver(merged map[string]any, tenantDoc *TenantDoc, tenantID strin
 			tenantRaw:       tenantRaw,
 			platformSources: platformSources,
 			profileSources:  profileSources,
+			profile:         profiles.bound(own),
 		},
 		own: own,
 	}, nil
