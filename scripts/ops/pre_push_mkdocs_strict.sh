@@ -14,9 +14,10 @@
 #   This hook closes the gap by running mkdocs strict at pre-push time
 #   when docs changed.
 #
-# Triggers (pre-push only) — read from the PUSHED REFSPEC (#1690). ⛔ The
-#   trigger set is `DOC_RE` below and nowhere else: a second spelling of it in
-#   prose drifts.
+# Triggers (pre-push only) — read from the PUSHED REFSPEC (#1690). ⛔ Which
+#   paths count as docs is `DOC_RE` below and nowhere else: a second spelling
+#   of it in prose drifts. A ref whose base cannot be determined is built
+#   regardless; tags and deletions never are.
 #
 # Tiered execution:
 #   Tier 1 — Native `mkdocs` on PATH: run directly
@@ -169,25 +170,21 @@ fi
 # `tar -x` does not read core.symlinks, so on a Windows checkout — where they
 # are path stubs — the extracted tree matches neither: the platform dependence
 # these aliases exist to remove, reintroduced by the build step.
-# ⛔ The clean-up is an EXIT trap, not INT/TERM alone and not code after the
-# build: a clean-up after the build never runs on Ctrl-C or SIGTERM (#2169),
-# and a failed `add` that left its tree behind leaves through a plain
-# `exit 1`, which only EXIT catches.
-# ⛔ Wait for a running build before removing its tree: a signal to this bash
-# alone does not reach mkdocs (a grandchild), which would write site/ back
-# into .git, unregistered (#2211). Killing the build's pid does not reach it
-# either. Signals are ignored while it waits: an impatient second Ctrl-C would
-# otherwise end the trap before the tree is removed.
-# ⛔ Keep the `rm -rf` fallback: while `git worktree add` is still checking
-# out, git has locked the tree ("initializing") and `remove --force` refuses.
-# Removing the directory makes that `add` fail and clean up after itself;
-# without it, a signal to this bash alone leaves a full registered checkout.
-# ⚠️ Relies on bash running an EXIT trap on a signal; dash does not always.
+# ⛔ The clean-up is an EXIT trap, not INT/TERM alone: a clean-up that runs
+# only after the build is skipped on Ctrl-C or SIGTERM (#2169), and a failed
+# `add` that left its tree behind leaves through a plain `exit 1`.
+# ⛔ `add` and the build run in the background, and the trap waits for the
+# running one before removing the tree: a signal to this bash alone reaches
+# neither. An `add` still checking out holds the tree locked, so `remove`
+# refuses and the `add` finishes afterwards, registered; mkdocs (a grandchild)
+# writes site/ back into .git, unregistered (#2211). Killing their pids does
+# not reach mkdocs. Signals are ignored while it waits: an impatient second
+# Ctrl-C would otherwise end the trap before the tree is removed.
 _live_wt=""
-_build_pid=""
+_bg_pid=""
 trap 'trap "" INT TERM HUP
-wait "$_build_pid" 2>/dev/null
-git worktree remove --force "$_live_wt" >/dev/null 2>&1 || rm -rf "$_live_wt"' EXIT
+wait "$_bg_pid" 2>/dev/null
+git worktree remove --force "$_live_wt" >/dev/null 2>&1' EXIT
 _build_one() {
     local _sha="$1" _wt _rc
     _wt="$(git rev-parse --git-path "mkdocs-strict-$$-${_sha:0:8}")"
@@ -195,13 +192,13 @@ _build_one() {
     # post-checkout hook), and the path is this process's own.
     _live_wt="$_wt"
     # ⛔ git's own stderr is the diagnosis; no guessed causes (#2210).
-    if ! git worktree add --detach --quiet "$_wt" "$_sha"; then
+    git worktree add --detach --quiet "$_wt" "$_sha" &
+    _bg_pid=$!
+    if ! wait "$_bg_pid"; then
         # ⛔ FAIL CLOSED. The obvious fallback — build the working tree instead —
-        # is EXACTLY the #1690 defect this guard exists to remove, and it is
-        # worse as a fallback than as the original bug: it returns the wrong
-        # tree's exit status as the verdict, so a clean working tree turns a
-        # broken pushed commit green. Refusing is the only answer that cannot
-        # lie.
+        # is EXACTLY the #1690 defect this guard exists to remove: it returns
+        # the wrong tree's exit status as the verdict, so a clean working tree
+        # turns a broken pushed commit green.
         cat >&2 <<WORKTREE_FAILED
 
 [pre-push-mkdocs] ⛔ could not check out $_sha to validate it.
@@ -219,8 +216,8 @@ WORKTREE_FAILED
     # ⛔ A subshell, not a bare command: bash starts a bare `cmd &` with SIGINT
     # ignored, and Ctrl-C would then wait out the whole build.
     ( cd "$_wt" && bash scripts/tools/lint/mkdocs_strict_check.sh ) &
-    _build_pid=$!
-    wait "$_build_pid"
+    _bg_pid=$!
+    wait "$_bg_pid"
     _rc=$?
     git worktree remove --force "$_wt" >/dev/null 2>&1
     return "$_rc"

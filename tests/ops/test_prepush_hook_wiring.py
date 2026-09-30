@@ -1970,9 +1970,10 @@ def test_a_sigterm_to_the_guard_alone_during_the_build_leaves_nothing_behind(
 def test_a_sigterm_to_the_guard_alone_during_the_checkout_leaves_nothing_behind(
     tmp_path: Path,
 ) -> None:
-    """While `git worktree add` is still checking out, git has the tree locked
-    and `remove --force` refuses. A SIGTERM to the guard's bash alone then
-    left the `add` to finish on its own: a full checkout, still registered."""
+    """While `git worktree add` is still checking out, git holds the tree
+    locked and `remove --force` refuses; the `add` then finishes on its own, a
+    full checkout still registered. On a SIGTERM to the guard's bash alone the
+    clean-up must wait for the `add` first."""
     work, record, sha_a, _sha_b = _docs_repo(tmp_path)
     # A slow checkout: the pushed commit routes its doc through a smudge filter.
     assert _git(work, "checkout", "-q", "topic").returncode == 0
@@ -2006,7 +2007,8 @@ def test_a_sigterm_to_the_guard_alone_during_the_checkout_leaves_nothing_behind(
             assert proc.poll() is None and time.monotonic() < deadline, "the checkout never started"
             time.sleep(0.05)
         # Must-fire half: the tree is registered and locked while `add` runs.
-        assert "locked initializing" in _git(work, "worktree", "list", "--porcelain").stdout
+        # Only the key: the lock reason is a translated string.
+        assert re.search(r"^locked\b", _git(work, "worktree", "list", "--porcelain").stdout, re.M)
         os.kill(proc.pid, signal.SIGTERM)
         proc.wait(timeout=20)
         time.sleep(5)  # longer than the checkout has left: an orphaned `add` would be done
