@@ -97,7 +97,7 @@ helm install tenant-api ./helm/tenant-api/ -n tenant-api --create-namespace
 ```
 
 需要：
-- **身分**：chart 預設帶 oauth2-proxy sidecar（`oauth2Proxy.enabled=true`，provider github），須先建好 `oauth2-proxy-secrets`（見 chart 的 `secret-oauth2proxy.yaml` 模板）。production 由 oauth2-proxy 注入 `X-Forwarded-Email`；本機 dev 才用 `--dev-bypass-auth`（[ADR-022](../adr/022-dev-auth-bypass-four-layer-containment.md)，**不在 published image**）。缺正確 RBAC 時 `/api/v1/me` 回 403（正常 deny）。
+- **身分**：chart 預設帶 oauth2-proxy sidecar（`oauth2Proxy.enabled=true`，provider github），須先建好 `oauth2-proxy-secrets`（見 chart 的 `secret-oauth2proxy.yaml` 模板）。production 由 oauth2-proxy 注入 `X-Forwarded-Email`；本機 dev 才用 `--dev-bypass-auth`（[ADR-022](../adr/022-dev-auth-bypass-four-layer-containment.md)，**不在 published image**）。缺 `X-Forwarded-Email` 時 `/api/v1/me` 回 401；有 `_rbac.yaml` 時，規則裡沒有 `tenants: ["*"]` 讀權限的人回 403——只有單租戶或前綴授權也一樣（[#2520](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/2520)）。
 - **conf.d 來源**：`gitRepoUrl` 指向放 conf.d 的 git repo（init container clone）；留空則 conf.d 為空、`_rbac.yaml` 由 configmap 掛 `/etc/rbac`。
 - **寫回**：PR/MR 模式（`--write-mode pr-github` / `pr-gitlab`，[ADR-011](../adr/011-pr-based-write-back.md)）；single-writer 約束需 `replicaCount=1`。
 
@@ -491,7 +491,7 @@ A: 新 Rule Pack 需在 `rule-packs/` 目錄新增 YAML 檔案，並在 Promethe
 A: 在 `_defaults.yaml` 中設定 `_routing_enforced`。通知會發送給 NOC 的 channel 和各 tenant 的 receiver，獨立進行。
 
 **Q: Webhook allowlist 為何拒絕我的 domain？**
-A: 檢查你的 webhook URL 是否符合 `--policy` 所指政策檔裡 `allowed_domains:` 的 fnmatch 模式。`*` 會跨過點號，所以 `*.example.com` 也匹配 `webhook.internal.example.com`；它唯一不匹配的是 `example.com` 本身，要放行得另列一條 `example.com`。
+A: 檢查你的 webhook URL 是否符合 `--policy` 所指政策檔裡 `allowed_domains:` 的 fnmatch 模式。`*` 會跨過點號，所以 `*.example.com` 也匹配 `webhook.internal.example.com`；但它不匹配 `example.com` 本身（要放行得另列一條），也不匹配結尾帶點的 `a.example.com.`。不符的 receiver 會印 WARN 並被略過，只有 `--validate` 會以 rc 1 結束。
 
 **Q: 如何驗證新 tenant 的配置不會造成 alert noise？**
 A: 先用 `validate_config.py` 檢查語法和 schema，再用 `config_diff.py` 看 blast radius，最後在 shadow monitoring 環境中測試（參考 shadow-monitoring-sop.md）。

@@ -113,8 +113,10 @@ v2.7.0 的 RBAC 透過 `rbacMgr.Middleware(perm, tenantIDFn)` 在路由層做 `P
 |---|---|---|
 | `PUT /api/v1/groups/{id}` | 任何 `PermWrite` user 可編輯任意 group 的 `members` | 必須對**每個** member tenant 有 `PermWrite`；缺者列入 403 訊息 |
 | `DELETE /api/v1/groups/{id}` | 任何 `PermWrite` user 可刪除任意 group | 必須對 group 既有**每個** member 有 `PermWrite`（防 DoS）|
-| `GET /api/v1/tasks/{id}` | 回傳完整 `Results[]`（含所有 task 觸及租戶）| 過濾 `Results[]` 為 caller 可讀的子集；零可讀子集回 403 |
+| `GET /api/v1/tasks/{id}` | 回傳完整 `Results[]`（含所有 task 觸及租戶）| 過濾 `Results[]` 為 caller 可讀的子集；已有結果但一筆都不可讀時回 403（還沒有結果的 task 照回 200）|
 | `GET /api/v1/prs` | 回傳所有 pending PR/MR | bulk 模式：自動過濾不可讀租戶；`?tenant=<id>` 模式：不可讀回**空列表**（不 403，避免 existence oracle）|
+
+⚠️ 這張表描述的是 handler 層。這四個端點在路由層還有一道閘門：先要求對 `*` 有對應權限，也就是規則裡要有 `tenants: ["*"]`（可帶 org／metadata 範圍）。只有單租戶或前綴授權（如 `["db-a-*"]`）的呼叫者一律 403 `insufficient permissions for tenant *`，到不了上面的過濾。這個 403 不帶租戶 id，所以不構成 existence oracle。是否刻意見 [#2520](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/2520)。
 
 ### 3.2 為什麼 `?tenant=<id>` 不直接回 403
 
