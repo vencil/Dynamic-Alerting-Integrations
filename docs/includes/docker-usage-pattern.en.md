@@ -10,7 +10,7 @@
 > while the directory you mount is your own checkout (typically UID 1000), so
 > any subcommand that WRITES (`init` / `scaffold` / `migrate` …) fails at the
 > first write with a bare Python traceback (`PermissionError`) rather than a
-> readable error. ⚠️ **`generate-routes` is the exception**: from v2.10.0 its
+> readable error. ⚠️ **`generate-routes` is the exception**: from v3.0.0 its <!-- since: v3.0.0 -->
 > `-o` catches the write failure and reports exit 2 with a line naming the flag
 > ([#1617](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/1617));
 > the rest of that class is
@@ -27,7 +27,7 @@
 > also need that directory to exist outside the container.
 > ⚠️ The `v2.9.0` pinned above was the GA release when this was written. Any fix <!-- image-caveat: v2.9.0 -->
 > these docs describe as arriving "from the next image onward" — or as of a
-> named later version, e.g. "from v2.10.0" — requires changing that tag
+> named later version, e.g. "from v3.0.0" — requires changing that tag
 > (`latest` currently resolves to the same image).
 > ⛔ **Every other example omits the prefix above and writes only
 > `da-tools <command>`.** Copying that form straight into a terminal gets you

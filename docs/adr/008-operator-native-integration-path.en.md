@@ -14,7 +14,7 @@ lang: en
 
 ✅ **Accepted** (v2.3.0) — Platform supports both ConfigMap and Operator CRD paths; detection logic auto-selects
 📎 **Addendum** (v2.6.0) — Architecture boundary declaration added, see §Addendum: Architecture Boundary Declaration
-📎 **Addendum** (v2.10.0) — da-assembler direct-render retired + Operator path decision, see §Addendum (v2.10.0)
+📎 **Addendum** (v3.0.0) — da-assembler direct-render retired + Operator path decision, see §Addendum (v3.0.0)
 
 ## Context
 
@@ -189,7 +189,7 @@ Any new Operator-related tool or feature must pass these three questions:
 2. **Does it require the exporter to connect to the K8s API?** → If yes, boundary violation — delegate to external tools
 3. **Is it purely "read → transform → output"?** → If yes, falls within toolchain scope — proceed
 
-## Addendum (v2.10.0): da-assembler direct-render retired + Operator path decision
+## Addendum (v3.0.0): da-assembler direct-render retired + Operator path decision
 
 When the [#692](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/692) epic took the originally-imagined "operator that watches a CRD and compiles rules on the fly" and pulled it apart, its three jobs each found a better home: **the compile logic stays in CI** (pure build-time, no new runtime component); **the write goes through tenant-api's existing single-writer plane** ([ADR-023](023-write-plane-single-writer-invariant.md)); **the pre-deploy replay check becomes a backtest posted as a PR comment**. All that's left is the thin skin that translates a CRD into one write request — and there is no demand for it yet. So the da-assembler-controller exploration item in §Evolution Status above gets three decisions:
 
@@ -207,7 +207,7 @@ In one sentence: multi-tenant, HA-correct, version-aware alert compilation happe
 - **v2.6.0** (completed): Architecture boundary declaration (see §Addendum above), `operator-generate --kustomize` multi-cluster deployment, `drift_detect.py --mode operator` cross-cluster CRD drift detection
 
 **Remaining**:
-- ~~**da-assembler-controller** (long-term exploration): external Operator watches `ThresholdConfig` CRD → renders `conf.d/`~~ → **retired in v2.10.0** (see §Addendum (v2.10.0)): direct-render hard-deprecated, CRD dormant, a future CR-native interface becomes an embedded tenant-api watch mode
+- ~~**da-assembler-controller** (long-term exploration): external Operator watches `ThresholdConfig` CRD → renders `conf.d/`~~ → **retired in v3.0.0** (see §Addendum (v3.0.0)): direct-render hard-deprecated, CRD dormant, a future CR-native interface becomes an embedded tenant-api watch mode <!-- since: v3.0.0 -->
 - **Helm Chart kube-prometheus-stack values examples**: provide values.yaml reference for common Operator deployments
 - **ArgoCD ApplicationSet integration**: multi-cluster Federation CRD deployment automation
 

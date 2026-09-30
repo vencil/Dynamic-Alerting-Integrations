@@ -18,7 +18,7 @@ updated_at: 2026-05-13
 ## 狀態
 
 ✅ **Accepted** (v2.1.0) — 工具鏈已完成，1:N 端到端整合待生產驗證
-📎 **Addendum** (v2.10.0) — 基礎設施指標（disk/PVC/node）的租戶歸屬政策，見下方 §Addendum
+📎 **Addendum** (v3.0.0) — 基礎設施指標（disk/PVC/node）的租戶歸屬政策，見下方 §Addendum
 
 ## 背景
 
@@ -162,7 +162,7 @@ groups:
 - 在實際多 schema Oracle 環境驗證端到端流程（待生產環境回饋）
 - Schema validation（`_instance_mapping.yaml` JSON Schema）排入後續
 
-## Addendum：基礎設施指標的租戶歸屬 (v2.10.0)
+## Addendum：基礎設施指標的租戶歸屬 (v3.0.0)
 
 **決策：磁碟、PVC、節點這類基礎設施指標，只支援 1:1 的租戶歸屬（一個 namespace = 一個租戶）。**
 

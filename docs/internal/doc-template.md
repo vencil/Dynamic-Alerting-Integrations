@@ -298,6 +298,8 @@ frontmatter 是否存在，由 CI 的 `add_frontmatter.py --check`（`.github/wo
 
 **「已發布的映像還是舊行為」要加標記**：文件隨 merge 發布，da-tools 映像要等下一個 `tools/v*` tag。描述新行為時若要提醒讀者「vX.Y.Z 映像還是舊行為」，同一段（表格則同一列）要加 `<!-- image-caveat: vX.Y.Z -->`，`vX.Y.Z` 寫該註記所指的那顆映像（例如 `v2.9.0`）；code fence 裡的註記，把標記放在收尾 fence 的下一行（中間不留空行）。`image-caveat-check`（`scripts/tools/lint/check_image_caveats.py`，也在 `make pre-tag`）在 `components/da-tools/app/VERSION` 超過標記版號時失敗，發版時就得把註記拿掉或改寫成歷史敘述。它也會擋「用了 `vX.Y.Z 映像`／`the image you have` 這類句型卻沒有標記」的段落；換別的措辭它看不到，所以標記才是契約。釘版的映像參照（`ghcr.io/vencil/da-tools:vX.Y.Z`）不用標：發版時 `bump_docs.py --tools` 會改寫，`bump_docs.py --check` 擋漏網。
 
+**「vX.Y.Z 起行為改了」要加 since 標記**：寫 `v3.0.0 起…`、`v3.0.0 前…`、`上列是 v3.0.0 的契約`、`from / before / changed in v3.0.0` 這類指向**還沒發布**版號的敘述，同一段（表格則同一列）加 `<!-- since: vX.Y.Z -->`。同一支 lint 拿它比對根目錄 `CHANGELOG.md` 的 `## [vX.Y.Z]` 標題：版號低於最新一版卻不是標題（被跳過，例如文件寫 v2.10.0、實際發 v3.0.0）就失敗；`make pre-tag` 帶 `--pre-tag`，要打的版本還沒有標題也失敗——收尾第一步加上新版標題後，寫對的標記自然通過。指向未發布版號、用了上列句型卻沒有標記的段落也會擋；已發布版號的「vX.Y.Z 起」是歷史，不用標。⚠️ 已發布集合只看 main 的 CHANGELOG：從 main 以外發的熱修（例如 v2.9.1）不在裡面，不要拿它當 since 版號。
+
 ---
 
 ## 6. 模板快速複製

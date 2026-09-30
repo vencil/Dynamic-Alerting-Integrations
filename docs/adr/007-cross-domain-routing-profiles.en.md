@@ -150,7 +150,7 @@ A three-layer model that surfaced during design discussion (Contact Profile → 
 
 ✅ Routing configuration duplication dramatically reduced; N tenants sharing a profile maintain only one copy
 ✅ Team routing changes become atomic operations (modify profile → all referencing tenants automatically updated)
-✅ Domain policies provide machine-verifiable compliance constraints; CI automatically blocks violations via `--validate --strict` (blocking since v2.10.0)
+✅ Domain policies provide machine-verifiable compliance constraints; CI automatically blocks violations via `--validate --strict` (blocking since v3.0.0) <!-- since: v3.0.0 -->
 ✅ Fully backward compatible with existing tenants; both profiles and policies are opt-in
 ✅ No conflict with `_routing_enforced` (NOC override) mechanism
 
@@ -329,7 +329,7 @@ In a hierarchical conf.d ([ADR-016](016-conf-d-directory-hierarchy-mixed-mode.en
 - **v2.3.0** (completed): OPA integration — `da-tools opa-evaluate` supports Rego-defined domain policies (routing-compliance, threshold-bounds, naming-convention example policies)
 - **v2.5.0** (completed): receiver-type constraints moved forward to API-time enforcement (tenant-api 403 responses); timing (`max_repeat_interval` / `min_group_wait`) and `enforce_group_by` constraints remain validated at assembly time
 - **v2.6.0** (completed): `generate_alertmanager_routes.py` refactored (21 helpers extracted), `_build_receiver_config()` converted to strategy pattern
-- **v2.10.0** (in development): `--strict` wired into the CLI and CI — assembly-time domain-policy violations escalate from WARN to ERROR and become blocking (`--validate --strict` exits 1; violation messages include actual value vs domain limit + a fix hint)
+- **v3.0.0** (in development): `--strict` wired into the CLI and CI — assembly-time domain-policy violations escalate from WARN to ERROR and become blocking (`--validate --strict` exits 1; violation messages include actual value vs domain limit + a fix hint)
 - **#2245**: profile and tenant `routes` now render sub-routes (the generator used to drop them silently); domain policies and the `--policy` domain check cover those receivers; `explain_route` lists the sub-routes actually rendered; `check_confd_schema` now validates `_routing_profiles.yaml` against its schema, and `validate-config` now runs its YAML quoting check on it
 - **#2244**: `require_critical_escalation` is now enforced by `check_domain_policies()` (only the lint recognised the key before); the criterion is described under "Layer 2" above
 - **#2280**: da-guard and tenant-api judge the **resolved** routing (`_routing_defaults` → profile → tenant `_routing`, the generator's own merge, shared through `pkg/routingpolicy` and pinned by a cross-language parity matrix); the receiver types of the main route, `overrides` and `routes` are all judged against domain policies, with `forbidden_receiver_types` and `allowed_receiver_types` as separate tests that can both fire; da-guard also checks `routes` entry shapes and `_routing_defaults.routes`; a tenant-api batch op is judged on routing only when its patch touches `_routing_profile` / `_routing`

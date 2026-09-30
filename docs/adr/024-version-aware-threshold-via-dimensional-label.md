@@ -25,7 +25,7 @@ updated_at: 2026-07-24
 
 兩者均已隨 v2.9.0 落地。Tracker：[#423](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/423)（version-aware）、[#741](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/741)（custom alerts）；逐 PR 紀錄見 CHANGELOG。
 
-📎 **Addendum** (v2.10.0) — 磁碟與 PVC 告警（容量逐顆 PVC 評估 + 需 CSI driver + 兩道防線），見下方 §Addendum；epic [#692](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/692)。
+📎 **Addendum** (v3.0.0) — 磁碟與 PVC 告警（容量逐顆 PVC 評估 + 需 CSI driver + 兩道防線），見下方 §Addendum；epic [#692](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/692)。
 
 > 本 ADR **不取代、不修改** [config-driven.md §2.6 排程式閾值](../design/config-driven.md)——兩者是並存的不同機制，界線見末節。
 
@@ -241,7 +241,7 @@ count by(recipe_id)(count by(recipe_id, tenant)(user_threshold{component="custom
 
 兩者正交：§2.6 處理週期性時段，本 ADR 處理一次性的版本對齊。
 
-## Addendum：磁碟與 PVC 告警 (v2.10.0)
+## Addendum：磁碟與 PVC 告警 (v3.0.0)
 
 讓租戶對磁碟的容量與吞吐設告警，回應資料庫客戶遷移時最常見的「磁碟快滿了」需求（[#692](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/692)）。沿用既有的 recipe（forecast / ratio / threshold / rate），不新增種類，但有幾件事和一般 recipe 不同。
 

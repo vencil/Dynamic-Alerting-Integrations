@@ -227,7 +227,7 @@ required_labels:
 max_range_duration: 1h     # 禁止 [7d] 等超長 range vector
 max_evaluation_interval: 60s  # Custom Rule group interval 上限
 
-# 平台 COMPILED pack 的逐檔豁免（v2.10.0）——deny-list 治理對象是租戶手寫
+# 平台 COMPILED pack 的逐檔豁免（v3.0.0）——deny-list 治理對象是租戶手寫
 # raw PromQL；compiler 產出的 pack（如 Custom Alerts forecast recipe 的
 # predict_linear，成本緩解在編譯期內建）由 file_overrides 取得列管豁免
 file_overrides:

@@ -663,6 +663,11 @@ pre-tag: version-check lint-docs lint-image-caveats playbook-freshness-ll change
 	@echo "  Safe to create tags."
 	@echo "============================================================"
 
+# 本輪決策 R2：pre-tag 時 since 標記的版號必須已是 CHANGELOG 的 ## [vX.Y.Z]
+# 標題（收尾第一步就加上要打的那一版）。target-specific 變數會傳給前置 target；
+# 放在規則之後，`pre-tag:` 開頭的第一行才仍是依賴清單（test_bump_docs 讀它）。
+pre-tag: IMAGE_CAVEATS_ARGS := --pre-tag
+
 # --- #2102: every changelog.d/ fragment must be assembled before tagging ---
 # The release wrap-up turns changelog.d/ into ## [vX.Y.Z] and deletes the
 # fragments. One left on the tagged commit either missed these notes or gets
@@ -919,8 +924,8 @@ lint-docs: ## 一站式文件 lint（versions + drift + tool consistency，支�
 		$(ARGS)
 
 .PHONY: lint-image-caveats
-lint-image-caveats: ## 「已發布映像還是舊行為」註記的到期閘門：標記 <!-- image-caveat: vX.Y.Z --> 舊於 da-tools VERSION 即失敗（pre-tag 會跑）
-	@python3 ./scripts/tools/lint/check_image_caveats.py
+lint-image-caveats: ## 「已發布映像還是舊行為」註記的到期閘門＋since 標記：image-caveat 舊於 da-tools VERSION、或 since 版號沒發過即失敗（pre-tag 會跑，並帶 --pre-tag）
+	@python3 ./scripts/tools/lint/check_image_caveats.py $(IMAGE_CAVEATS_ARGS)
 
 .PHONY: lint-egress
 lint-egress: ## #566 T4 — log-aggregation 圖表 egress allowlist + env-override gate（需 helm；ARGS="--values prod.yaml --allow-host siem.example.com"）

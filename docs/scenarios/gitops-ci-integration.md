@@ -35,9 +35,9 @@ lang: zh
 > [Migration Toolkit 安裝指南](../migration-toolkit-installation.md)。
 
 ⚠️ **有一件事不是掛載造成的，換掛法也不會好**：§2.3 那類 `generate-routes ... -o .output/xxx.yaml
---validate` 在 v2.10.0 之前**會印 `OK: all configs valid` 並 exit 0，而 `-o` 指定的檔案不會出現**——
+--validate` 在 v3.0.0 之前**會印 `OK: all configs valid` 並 exit 0，而 `-o` 指定的檔案不會出現**——
 `--validate` 在用到 `-o` 之前就結束了（[#1423](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/1423)）。
-**v2.10.0 起這個組合直接被拒絕：結束碼 2 加一行點名 `-o` 與 `--validate` 的訊息**
+**v3.0.0 起這個組合直接被拒絕：結束碼 2 加一行點名 `-o` 與 `--validate` 的訊息** <!-- since: v3.0.0 -->
 （[#1650](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/1650)）。拿掉 `--validate`
 之後，`.output/` 目錄不存在同樣是結束碼 2 加一行指名 `-o` 的訊息，在那之前是未攔的
 `FileNotFoundError` traceback 加結束碼 1

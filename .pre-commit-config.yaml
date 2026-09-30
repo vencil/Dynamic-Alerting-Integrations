@@ -592,7 +592,8 @@ repos:
         pass_filenames: false
         # Full scan, not diff-only: the finding this exists for is created by
         # a VERSION bump, not by an edit to the doc that carries the caveat.
-        files: ^(README.*\.md|docs/.*\.md|components/.*\.md|components/da-tools/app/VERSION)$
+        # CHANGELOG.md: the since-marker half reads its ## [vX.Y.Z] headings.
+        files: ^(README.*\.md|CHANGELOG\.md|docs/.*\.md|components/.*\.md|components/da-tools/app/VERSION)$
 
       - id: commit-scope-doc-drift
         name: Commit scope drift (commit-convention.md vs .commitlintrc.yaml)

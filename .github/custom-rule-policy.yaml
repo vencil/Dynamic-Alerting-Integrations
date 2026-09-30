@@ -19,7 +19,7 @@ required_labels:
 max_range_duration: 1h     # 禁止超長 range vector (如 [7d])
 max_evaluation_interval: 60s  # Custom Rule Group interval 上限
 
-# Per-file policy overrides — 平台 COMPILED pack 豁免（v2.10.0）
+# Per-file policy overrides — 平台 COMPILED pack 豁免（v3.0.0）
 # deny-list 的治理對象是「租戶手寫 raw PromQL」；平台 compiler 產出的 pack
 # （recipe 經審查、成本緩解在編譯期內建）不適用部分 deny 理由。
 # 安全護欄（四層）：

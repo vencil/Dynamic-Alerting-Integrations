@@ -35,11 +35,11 @@ This guide explains how to integrate the Dynamic Alerting platform into your exi
 > [Migration Toolkit installation guide](../migration-toolkit-installation.en.md).
 
 ⚠️ **A problem the mount does not explain, and changing the mount
-does not fix**: before v2.10.0 the §2.3 shape `generate-routes ... -o
+does not fix**: before v3.0.0 the §2.3 shape `generate-routes ... -o <!-- since: v3.0.0 -->
 .output/xxx.yaml --validate` **printed `OK: all configs valid` and exited 0
 while the file named by `-o` never appeared** — `--validate` finishes before
 `-o` is used ([#1423](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/1423)).
-**From v2.10.0 the pair is refused outright: exit 2 with a line naming `-o`
+**From v3.0.0 the pair is refused outright: exit 2 with a line naming `-o`
 and `--validate`** ([#1650](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/1650)).
 With `--validate` dropped, a missing `.output/` is likewise exit 2 with a line
 naming `-o`, where it used to be an uncaught `FileNotFoundError` traceback at
