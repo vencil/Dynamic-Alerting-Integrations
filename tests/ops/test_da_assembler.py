@@ -1503,7 +1503,7 @@ class TestRenderCrNameFormat:
     def test_null_key_kubernetes_accepts_is_refused_fail_closed(
             self, text, spec, tmp_path, caplog):
         """#2476：K8s 接受、本工具刻意 fail-closed 拒收的 null key 形狀
-        （被後面同名鍵蓋掉的值、非特定標籤 `!`；見 `NULL_KEY_OVER_REFUSED`
+        （重複鍵與 `<<` merge 解開後被其他鍵取代的值、非特定標籤 `!`；見 `NULL_KEY_OVER_REFUSED`
         的註解）。
 
         訊息要點名這兩類、說明是本工具不重現那些規則，不是「K8s 一定拒收」。
