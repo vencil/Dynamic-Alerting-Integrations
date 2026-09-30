@@ -11,6 +11,7 @@ Every expected value below was measured against the exporter the same way;
 """
 from __future__ import annotations
 
+import datetime
 import sys
 from pathlib import Path
 
@@ -20,6 +21,7 @@ REPO_ROOT = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(REPO_ROOT / "scripts" / "tools"))
 sys.path.insert(0, str(REPO_ROOT / "scripts" / "tools" / "ops"))
 import diagnose  # noqa: E402
+from _grar_validate import DEPRECATED_KEY_ALIASES  # noqa: E402
 
 K = "mysql_connections"
 DEFAULTS = f"defaults:\n  {K}: 10\n"
@@ -29,6 +31,7 @@ PROFILE_LAYER = [
     ("null", 10), ("~", 10), ("''", 10), ("'  '", 10), ("abc", 10),
     ("'7O:critical'", 10), ("true", 10), ("yes", 10), (".inf", 10),
     ("1.0e+400", 10), ("'+nan'", 10), ("'1e400'", 10),
+    ("2001-12-14", 10), ("2001-12-14T01:02:03Z", 10), ("[5]", 10),
     # controls: real values stay
     ("5", 5), ("'10'", "10"), ("'70:critical'", "70:critical"),
     ("disable", "disable"), ("1e3", "1e3"),
@@ -38,6 +41,7 @@ PROFILE_LAYER = [
 TENANT_LAYER = [
     ("null", 10), ("''", 10), ('""', 10), ("'  '", 10), ("abc", 10),
     ("'7O:critical'", 10), ("true", 10), (".inf", 10), ("'1e400'", 10),
+    ("2001-12-14", 10), ("2001-12-14T01:02:03Z", 10), ("[5]", 10),
     ("5", 5), ("'70:critical'", "70:critical"), ("disable", "disable"),
 ]
 
@@ -66,6 +70,20 @@ def test_tenant_layer_value_resolves_as_on_metrics(text, want, tmp_path) -> None
         "tx.yaml": f"tenants:\n  tx:\n    _profile: p\n    {K}: {text}\n",
     })
     assert got.get(K) == want, got
+
+
+def test_profile_dedups_spellings_before_dropping_unset(tmp_path) -> None:
+    """The profile writes the canonical spelling unset and the legacy one
+    with a value: canonical wins inside the layer, then falls back to the
+    defaults (Go measured: 10), so the legacy 50 is never served. Dropping
+    unset values BEFORE the dedup would let the 50 through."""
+    legacy, canon = next(iter(DEPRECATED_KEY_ALIASES.items()))
+    got = _resolved(tmp_path, {
+        "_defaults.yaml": f"defaults:\n  {canon}: 10\n",
+        "_profiles.yaml": f"profiles:\n  p:\n    {canon}: ''\n    {legacy}: '50'\n",
+        "tx.yaml": "tenants:\n  tx:\n    _profile: p\n",
+    })
+    assert {k: v for k, v in got.items() if k in (canon, legacy)} == {canon: 10}, got
 
 
 def test_chain_still_shows_what_the_file_says(tmp_path) -> None:
@@ -100,7 +118,8 @@ def test_parse_float_mirror_agrees_with_go(text, ok) -> None:
 @pytest.mark.parametrize("value,unset", [
     (None, True), ("", True), ("  ", True), ("abc", True), ("7O:critical", True),
     ("disable:critical", True), (True, True), (float("inf"), True),
-    (float("nan"), True),
+    (float("nan"), True), (datetime.date(2001, 12, 14), True),
+    (datetime.datetime(2001, 12, 14, 1, 2, 3), True), ([5], True), ([], True),
     ("10", False), (" 70 : critical ", False), ("Disabled", False),
     (" off ", False), ("0x1p3", False), (5, False), (5.5, False),
     # a loaded False is `false`/`off` (disable) or `no` (unset): not guessed.

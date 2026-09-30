@@ -25,6 +25,7 @@ Returns JSON: {"status": "healthy"|"error", "tenant", ...}
 from __future__ import annotations
 
 import argparse
+import datetime
 import json
 import math
 import os
@@ -237,18 +238,24 @@ def metrics_treats_as_unset(value: object) -> bool:
       * True — only `true` / `yes` / `on` load as True, and none of those
         texts parse;
       * a non-finite float — PyYAML makes one only from `.inf` / `.nan` or
-        an overflowing literal, all of which Go refuses.
+        an overflowing literal, all of which Go refuses;
+      * a date / datetime — a timestamp text never parses as a float;
+      * a list — a sequence is never a threshold value.
 
     ⛔ Anything else counts as a value, including False: `false` / `off`
     DISABLE on /metrics while `no` is unset, and the loaded False cannot
-    tell them apart. Ints are the same case (`0x10` is unset on /metrics,
-    `16` is not). Guessing there would trade a visible raw value for a
-    wrong answer.
+    tell them apart. Ints are the same case (`0x10`, `017`, `12:30` do not
+    read on /metrics as the int PyYAML hands us). Guessing there would
+    trade a visible raw value for a wrong answer. A mapping is a scheduled
+    value whose answer depends on the time of day: also left alone.
 
     Reserved (`_`-prefixed) keys are not thresholds; callers apply this to
     threshold keys only.
     """
     if value is None or value is True:
+        return True
+    # datetime.datetime is a subclass of datetime.date.
+    if isinstance(value, (datetime.date, list)):
         return True
     if isinstance(value, float):
         return not math.isfinite(value)
