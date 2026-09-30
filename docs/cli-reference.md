@@ -477,7 +477,7 @@ da-tools validate --mapping migration_output/prefix-mapping.yaml --watch --auto-
 |------|------|
 | `0` | 全部比對組一致；`--watch --auto-detect-convergence` 時為已收斂 |
 | `1` | 有 mismatch 或單邊查不到值（`old_missing`／`new_missing`）；`--watch --auto-detect-convergence` 時為跑滿 `--rounds` 仍未收斂 |
-| `2` | 呼叫端錯誤：參數錯誤、mapping 裡沒有任何比對組、Prometheus 連線或查詢失敗（已收斂時不看），或 `-o/--output-dir`／`--convergence-output` 指到的輸出路徑寫不進去（#1641） |
+| `2` | 呼叫端錯誤：參數錯誤、mapping 裡沒有任何比對組、Prometheus 連線或查詢失敗（`--watch` 只看最後一輪；已收斂時不看），或 `-o/--output-dir`／`--convergence-output` 指到的輸出路徑寫不進去（#1641） |
 
 ⚠️ v2.9.0 映像還沒有這套結束碼：除了參數錯誤回 `2`，其餘一律回 `0`，連不上 Prometheus 時也照樣印「🎉 可以安全切換」。用 v2.9.0 時不要拿結束碼當閘門，要讀摘要裡的 mismatch／missing 計數。 <!-- image-caveat: v2.9.0 -->
 
@@ -536,7 +536,7 @@ da-tools cutover --readiness-json cutover-readiness.json --tenant db-a --force
 |------|------|
 | `0` | 切換成功 |
 | `1` | readiness 顯示未就緒（沒帶 `--force`），或某個切換步驟失敗 |
-| `2` | 呼叫端錯誤：缺必填參數、readiness JSON 讀不到或缺欄位、Prometheus 連不到、找不到 `kubectl` |
+| `2` | 呼叫端錯誤：缺必填參數、readiness JSON 不存在、不是合法 JSON 或缺欄位、Prometheus 連不到、找不到 `kubectl` |
 
 ---
 
@@ -585,7 +585,7 @@ da-tools blind-spot --config-dir ./conf.d --json-output
 | 代碼 | 說明 |
 |------|------|
 | `0` | 成功（無論是否有盲區） |
-| `1` | Prometheus 連線失敗 |
+| `1` | 只有未捕捉例外（traceback）會回 1。Prometheus 連不上只印 WARN，照常以 0 結束 |
 | `2` | 呼叫端錯誤：`--config-dir` 底下有檔案讀不到（內容不是 UTF-8 或不是合法 YAML；訊息指名哪一檔，#1654） |
 
 ---
@@ -636,7 +636,7 @@ da-tools maintenance-scheduler --config-dir ./conf.d --alertmanager http://alert
 |------|------|
 | `0` | 成功（已建立、已存在或不需要 silence） |
 | `1` | 至少一個 silence 建立失敗 |
-| `2` | 呼叫端錯誤：`--config-dir` 不存在、缺少 `croniter`，或底下有檔案讀不到（內容不是 UTF-8 或不是合法 YAML；訊息指名哪一檔，#1654） |
+| `2` | 呼叫端錯誤：`--config-dir` 不存在、有 recurring 排程卻沒裝 `croniter`，或底下有檔案讀不到（內容不是 UTF-8 或不是合法 YAML；訊息指名哪一檔，#1654） |
 
 ---
 
@@ -694,7 +694,7 @@ da-tools backtest --config-dir ./conf.d-new --baseline ./conf.d-old --lookback 7
 |------|------|
 | `0` | 成功 |
 | `1` | 至少一項門檻變更被評為 HIGH 風險（合併前先審閱）；Prometheus 連不上、git 跑不了都不是 1，見下列 |
-| `2` | 呼叫端錯誤：`--lookback` 供了但不可用（不符合 `<數字><d\|h\|m>`，#1625）；`--git-diff` 供了但 git 跑不了（沒裝 git、不在 git work tree 內、沒有 HEAD~1）——⛔ 不要改用 `--config-dir` 轉綠，那比的是兩棵樹、不是你的 PR；`-o/--output`／`--markdown-output` 指到的輸出路徑寫不進去（#1641）；`--lookback` 供了但不可用（不符合 `<數字><d\|h\|m>`，#1625）；`--git-diff` 供了但 git 跑不了（沒裝 git、不在 git work tree 內、沒有 HEAD~1）——⛔ 不要改用 `--config-dir` 轉綠，那比的是兩棵樹、不是你的 PR；conf.d 檔案內容讀不到（不是 UTF-8 或不是合法 YAML；訊息指名哪一檔，#1654） |
+| `2` | 呼叫端錯誤：`--lookback` 供了但不可用（不符合 `<數字><d\|h\|m>`，#1625）；`--git-diff` 供了但 git 跑不了（沒裝 git、不在 git work tree 內、沒有 HEAD~1）——⛔ 不要改用 `--config-dir` 轉綠，那比的是兩棵樹、不是你的 PR；`-o/--output`／`--markdown-output` 指到的輸出路徑寫不進去（#1641）；conf.d 檔案內容讀不到（不是 UTF-8 或不是合法 YAML；訊息指名哪一檔，#1654） |
 
 ---
 
@@ -750,7 +750,7 @@ da-tools shadow-verify all --mapping mapping.yaml --report-csv report.csv --json
 |------|------|
 | `0` | 所有檢查通過 |
 | `1` | 一項或多項檢查失敗 |
-| `2` | 呼叫端錯誤：`preflight`（含 `all`）的 Prometheus 連不上或查詢失敗（該項檢查同樣列為 FAIL，但結束碼是 2 不是 1）、`--report-csv` 讀取時 I/O 錯誤，或 argparse 拒絕的參數。⚠️ `--report-csv` 指到不存在的檔**不是** 2——CSV 分析直接略過。⚠️ 單獨執行 `runtime` 時 Prometheus 連不上**不是** 2 也不是 1：兩項查詢失敗時不產生任何檢查項，結果是 `Overall: PASS`、結束碼 0 |
+| `2` | 呼叫端錯誤：`preflight`（含 `all`）的 Prometheus 連不上或查詢失敗（該項檢查同樣列為 FAIL，但結束碼是 2 不是 1）、`runtime`（含 `all`）讀 `--report-csv` 時 I/O 錯誤（單獨跑 `convergence` 會略過這個錯誤），或 argparse 拒絕的參數。⚠️ `--report-csv` 指到不存在的檔**不是** 2——CSV 分析直接略過。⚠️ 單獨執行 `runtime` 時 Prometheus 連不上**不是** 2 也不是 1：兩項查詢失敗時不產生任何檢查項，結果是 `Overall: PASS`、結束碼 0 |
 
 ---
 
@@ -1263,7 +1263,7 @@ da-tools state-reconcile [options]
 |------|------|
 | `0` | state 目錄一致（或已成功套用變更） |
 | `1` | 有 unresolvable schema drift（含 state 檔讀不到或缺 `schema_version`）；或 `--ci` 搭配 `--dry-run` 偵測到需改動 |
-| `2` | 呼叫端錯誤：argparse 拒絕的參數（未知旗標等）。⚠️ `--state-dir` 不存在**不是** 2——印警告後視為空目錄（重建 0 筆的 manifest、rc 0；`--ci --dry-run` 下因需重建而 1） |
+| `2` | 呼叫端錯誤：argparse 拒絕的參數（未知旗標等）。⚠️ `--state-dir` 不存在**不是** 2——視為空目錄（文字模式印警告，`--json` 只在報告標 `state_dir_missing: true`；重建 0 筆的 manifest、rc 0；`--ci --dry-run` 下因需重建而 1） |
 
 **為什麼是 single declarative command 而非 micro-commands**
 
@@ -1750,7 +1750,7 @@ da-tools generate-routes --config-dir <path> [options]
 
 每個模式 stdout 都先印一行 `Config files: N read, M skipped (<檔名>)`（#1460）——N / M 來自結構化紀錄，不是 stderr 的 WARN 行；M > 0 且被跳過的是租戶檔時，這次執行不會再往下產出任何結果。
 
-**階層式 conf.d（[#2326](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/2326)）**：讀整棵樹（與 exporter 同一套走訪規則：隱藏目錄略過、只有 README 的目錄不貢獻任何東西），任何深度的租戶都產生 route。語意見 [ADR-017 修訂 2026-09-28](adr/017-defaults-yaml-inheritance-dual-hash.md)：`_routing_defaults` 先取根目錄任一 `_` 檔，再依序取租戶路徑上每一層子目錄 defaults 載體（`_defaults.yaml`／`.yml`）頂層的 `_routing_defaults`，逐頂層鍵淺合併、深層勝出；`_routing_profiles.yaml` 與 `_domain_policy.yaml` 可放子目錄，只作用於該子樹，各層 policy 疊加判定。以下情況**所有模式**回 2、什麼都不產出不寫入：子目錄任一檔有 `_routing_enforced`；子目錄層 `_routing_defaults` 的 `receiver` 或 `overrides` 寫成 null；同一個 routing profile 名稱定義在兩個檔（含根目錄 `.yaml` 與 `.yml` 並存）；同一個租戶 id 由兩個租戶檔宣告。子樹 policy 的 `tenants:` 點名子樹外的租戶：`--strict` 下為 ERROR（回 1）、否則 WARN，該條目不生效。子目錄平台檔的 `tenants:` 區塊照舊無人讀，只印 WARN。子目錄裡不是 defaults 載體的 `_` 檔帶 `_routing_defaults` 不會被讀，`--validate` 回 1 並點名該檔；子目錄沒被選中的載體拼法（`_defaults.yml` 與 `_defaults.yaml` 並存）只要有 `_routing_enforced` 也照樣回 2；租戶區塊為 null（`t:` 沒有內容）同樣算一次宣告。⚠️ v2.9.0 映像只讀頂層，子目錄的租戶沒有 route、結束碼 0 <!-- image-caveat: v2.9.0 -->
+**階層式 conf.d（[#2326](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/2326)）**：讀整棵樹（與 exporter 同一套走訪規則：隱藏目錄略過、只有 README 的目錄不貢獻任何東西），任何深度的租戶都產生 route。語意見 [ADR-017 修訂 2026-09-28](adr/017-defaults-yaml-inheritance-dual-hash.md)：`_routing_defaults` 先取根目錄任一 `_` 檔，再依序取租戶路徑上每一層子目錄 defaults 載體（`_defaults.yaml`／`.yml`）頂層的 `_routing_defaults`，逐頂層鍵淺合併、深層勝出；`_routing_profiles.yaml` 與 `_domain_policy.yaml` 可放子目錄，只作用於該子樹，各層 policy 疊加判定。以下情況**所有模式**回 2、什麼都不產出不寫入：子目錄任一檔有 `_routing_enforced`；子目錄層 `_routing_defaults` 的 `receiver` 或 `overrides` 寫成 null；同一個 routing profile 名稱定義在兩個檔（含根目錄 `.yaml` 與 `.yml` 並存）。同一個租戶 id 由兩個租戶檔宣告則是所有模式回 1（`FAIL: N tenant(s) declared in more than one file`）。子樹 policy 的 `tenants:` 點名子樹外的租戶：`--strict` 下為 ERROR（回 1）、否則 WARN，該條目不生效。子目錄平台檔的 `tenants:` 區塊照舊無人讀，只印 WARN。子目錄裡不是 defaults 載體的 `_` 檔帶 `_routing_defaults` 不會被讀，`--validate` 回 1 並點名該檔；子目錄沒被選中的載體拼法（`_defaults.yml` 與 `_defaults.yaml` 並存）只要有 `_routing_enforced` 也照樣回 2；租戶區塊為 null（`t:` 沒有內容）同樣算一次宣告。⚠️ v2.9.0 映像只讀頂層，子目錄的租戶沒有 route、結束碼 0 <!-- image-caveat: v2.9.0 -->
 
 **Fragment 模式** (`--output-configmap` 未指定)：
 YAML 片段，包含 route、receivers、inhibit_rules。
@@ -1776,8 +1776,8 @@ da-tools generate-routes --config-dir ./conf.d --apply --yes
 | 代碼 | 說明 |
 |------|------|
 | `0` | 成功 |
-| `1` | 配置驗證失敗；**或 conf.d 裡有解析不了／讀不了的租戶檔**（壞 YAML、非 UTF-8、頂層不是 mapping、目錄型 `x.yaml`）——所有模式一律拒絕，不分 `--strict`，stdout 點名檔案（#1460）；**或 PATH 上的 `amtool` 拒收 `--output-configmap` / `--apply` 要寫出／套用的設定**——不寫檔、不 apply（#2219）；**或拒收 `--validate` 以內建 base 組出的設定**（#2260）；**或兩個來源產生同名 receiver**（所有模式，不分 `--strict`）、`--output-configmap` 的 base 有和產生的 receiver 同名的 receiver（#2279）；**或組裝時違反平台不變式**（例如 base 的 inhibit 規則會讓租戶靜音平台告警）——印 `FAIL:`，不再噴 traceback（#2260） |
-| `2` | 呼叫端錯誤：**工具因為「怎麼被呼叫的」或「環境」而做不了事**，不是你的設定有違規。今天到得了這一格的有（非窮舉）：`--policy` / `--base-config` 供了但不可用（不是檔案、讀不到、不是合法 YAML、頂層不是 mapping）、`--base-config` 用在 `--output-configmap` 以外的模式、**`-o` / `--dry-run` / `--namespace` / `--configmap` / `--yes` 用在不讀它們的模式**（訊息會點名旗標與模式並給一個 argparse 接受的改法；#1650）、`-o` 的輸出路徑寫不進去、`--apply` 在讀不到 stdin 的環境下沒帶 `--yes`、以及 kubectl／叢集操作失敗（#1556、#1616、#1617）；`amtool` 在 PATH 上但無法執行、逾時或自身出錯（沒有給出拒收判定）、`--apply` 之後 Alertmanager `/-/reload` 失敗（v2.10.0 前只印 WARN、結束碼 0；#2219）；conf.d 樹的形狀被路由面拒收（上方「階層式 conf.d」列的四種情況，訊息開頭 `ERROR: N routing-tree error(s)`；#2326）。⚠️ **上列是 v2.10.0 的契約**；本頁上方釘的 `v2.9.0` 映像對其中多數回 0 或 1 <!-- image-caveat: v2.9.0 --> |
+| `1` | 配置驗證失敗；**或 conf.d 裡有解析不了／讀不了的租戶檔**（壞 YAML、非 UTF-8、頂層不是 mapping、目錄型 `x.yaml`）——所有模式一律拒絕，不分 `--strict`，stdout 點名檔案（#1460）；**或 PATH 上的 `amtool` 拒收 `--output-configmap` / `--apply` 要寫出／套用的設定**——不寫檔、不 apply（#2219）；**或拒收 `--validate` 以內建 base 組出的設定**（#2260）；**或兩個來源產生同名 receiver**（所有模式，不分 `--strict`）、`--output-configmap` 的 base 有和產生的 receiver 同名的 receiver（#2279）；**或組裝時違反平台不變式**（例如 base 的 inhibit 規則會讓租戶靜音平台告警）——`--output-configmap`／`--validate` 印 `FAIL:`（#2260），`--apply` 時叢集上的設定違反不變式目前仍以 traceback 結束；**或同一個租戶 id 由兩個租戶檔宣告**（所有模式，見上方「階層式 conf.d」） |
+| `2` | 呼叫端錯誤：**工具因為「怎麼被呼叫的」或「環境」而做不了事**，不是你的設定有違規。今天到得了這一格的有（非窮舉）：`--policy` / `--base-config` 供了但不可用（不是檔案、讀不到、不是合法 YAML、頂層不是 mapping）、`--base-config` 用在 `--output-configmap` 以外的模式、**`-o` / `--dry-run` / `--namespace` / `--configmap` / `--yes` 用在不讀它們的模式**（訊息會點名旗標與模式並給一個 argparse 接受的改法；#1650）、`-o` 的輸出路徑寫不進去、`--apply` 在讀不到 stdin 的環境下沒帶 `--yes`、以及 kubectl／叢集操作失敗（#1556、#1616、#1617）；`amtool` 在 PATH 上但無法執行、逾時或自身出錯（沒有給出拒收判定）、`--apply` 之後 Alertmanager `/-/reload` 失敗（v2.10.0 前只印 WARN、結束碼 0；#2219）；conf.d 樹的形狀被路由面拒收（上方「階層式 conf.d」列回 2 的三種情況，訊息開頭 `ERROR: N routing-tree error(s)`；#2326）。⚠️ **上列是 v2.10.0 的契約**；本頁上方釘的 `v2.9.0` 映像對其中多數回 0 或 1 <!-- image-caveat: v2.9.0 --> |
 
 ---
 
@@ -1834,7 +1834,7 @@ python3 scripts/tools/ops/patch_config.py --json db-a mysql_connections 100 | jq
 |------|------|
 | `0` | 成功（已在每個 exporter pod 驗收）；含 `default` 與位元組相同的 no-op |
 | `1` | 寫後驗收失敗（非目標租戶的 series 變了、目標租戶變動超出上限、新的 parse failure 等）；已回滾 |
-| `2` | 呼叫端錯誤，**什麼都沒寫**：`kubectl` 無法執行或非零結束（例如不在 PATH、叢集連不上、ConfigMap 不存在、無權限）、上述任一種拒絕、讀取後 ConfigMap 已被別人改動（`reason: configmap_changed`，重跑即可）、argparse 拒絕的參數、寫入前發生的未預期例外 |
+| `2` | 呼叫端錯誤，**什麼都沒寫**：讀 ConfigMap 或送出 patch 時 `kubectl` 無法執行或非零結束（例如不在 PATH、叢集連不上、ConfigMap 不存在、無權限；列 pod 失敗屬 `4`）、上述任一種拒絕、讀取後 ConfigMap 已被別人改動（`reason: configmap_changed`，重跑即可）、argparse 拒絕的參數、寫入前發生的未預期例外 |
 | `3` | `--reload-timeout` 到期時仍有 pod 沒在服務本次寫入的位元組（回報的 `config_hash` 不符；舊 exporter：沒 reload）；已回滾 |
 | `4` | 連不到 exporter（沒有符合 selector 的 pod、pods/proxy 失敗、回應形狀不對）：寫入前發生則什麼都沒寫，寫入後發生則已回滾 |
 | `5` | 回滾本身失敗：ConfigMap 可能仍是新位元組，需人工處理 |
@@ -1896,7 +1896,7 @@ da-tools scaffold --non-interactive --tenant db-c --db mariadb,redis
 | 代碼 | 說明 |
 |------|------|
 | `0` | 成功 |
-| `1` | 只有未捕捉的例外（stderr 有 traceback）；「輸入無效」是 2 不是 1 | <!-- datools-cmd-ignore: 只有 traceback 回 1，沒有出口可追 -->
+| `1` | 只有未捕捉的例外（stderr 有 traceback）。多數輸入錯誤是 2，但 `--from-onboard` 的 JSON 壞掉或形狀不對目前也會 traceback 回 1 | <!-- datools-cmd-ignore: 只有 traceback 回 1，沒有出口可追 -->
 | `2` | 呼叫端錯誤：參數錯誤、不支援的 `--db` 類型、`--non-interactive` 缺 `--tenant` 或 `--db`，或 `-o/--output-dir` 指到的輸出路徑寫不進去（#1641） |
 
 ---
@@ -1959,7 +1959,7 @@ da-tools migrate ./my-rules.yml -o migration_output/
 | 代碼 | 說明 |
 |------|------|
 | `0` | 成功 |
-| `1` | 只有未捕捉例外（traceback）會回 1；輸入檔無效是 2 | <!-- datools-cmd-ignore: 只有 traceback 回 1，沒有出口可追 -->
+| `1` | 只有未捕捉例外（traceback）會回 1。輸入檔不存在或 YAML 語法錯是 2，但空檔、頂層不是 mapping、不是 UTF-8 目前會 traceback 回 1 | <!-- datools-cmd-ignore: 只有 traceback 回 1，沒有出口可追 -->
 | `2` | 呼叫端錯誤：參數錯誤、輸入檔讀不到或不是合法 YAML，或 `-o/--output-dir` 指到的輸出路徑寫不進去（#1641） |
 
 ---
@@ -3019,8 +3019,8 @@ da-tools discover-mappings --endpoint http://mariadb-exporter:9104/metrics --jso
 | 代碼 | 說明 |
 |------|------|
 | `0` | 成功發現 partition label 並產生映射草稿 |
-| `1` | 無法連線或未發現合適的 partition label |
-| `2` | 呼叫端錯誤：參數錯誤，或 `-o/--output` 指到的輸出路徑寫不進去（#1641） |
+| `1` | `--prometheus` 連不上（查詢失敗會被當成沒有標籤），或未發現合適的 partition label |
+| `2` | 呼叫端錯誤：參數錯誤、`--endpoint` 連不上或 URL 不合法，或 `-o/--output` 指到的輸出路徑寫不進去（#1641） |
 
 ---
 
