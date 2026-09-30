@@ -34,22 +34,43 @@ Fail-closed: a template whose `if/with/range/define … end` does not balance,
 or that hands the whole `.Values` somewhere, fails the scan instead of being
 skipped — either would silently widen what counts as read.
 
+Overlay values files are held to the same rule: a key misspelled in
+`values-tier1.yaml` is as silent a no-op as one in `values.yaml`. Every
+`values*.yaml` under `helm/` is scanned against the chart it overrides:
+
+  * inside a chart directory (next to `Chart.yaml`) -> that chart;
+  * anywhere else -> the chart named for it in `_REPO_OVERLAYS`.
+
+An overlay with no owner fails instead of being skipped, and so does an
+`_REPO_OVERLAYS` entry naming a file or chart that does not exist.
+
 A key that is legitimately declared but not read by a template goes in
 `_UNREAD_ALLOWED` with a reason. An entry whose key is now read, or no longer
 declared, fails as stale.
 """
 from __future__ import annotations
 
+import functools
 import re
 from pathlib import Path
 
 import pytest
 import yaml
 
+from _tree import repo_files
+
 _REPO = Path(__file__).resolve().parent.parent.parent
 
-# (chart, dotted key) -> why values.yaml declares it although no template reads it.
+# (values file relative to the repo, dotted key) -> why that file declares the
+# key although no template of its chart reads it.
 _UNREAD_ALLOWED: dict[tuple[str, str], str] = {}
+
+# Overlay values files outside a chart directory -> the chart they are passed to.
+_REPO_OVERLAYS: dict[str, str] = {
+    # scripts/setup.sh: `helm upgrade --install ... helm/mariadb-instance -f helm/values-${inst}.yaml`.
+    "helm/values-db-a.yaml": "mariadb-instance",
+    "helm/values-db-b.yaml": "mariadb-instance",
+}
 
 _ACTION = re.compile(r"\{\{-?(.*?)-?\}\}", re.S)
 _STRING = re.compile(r'"(?:[^"\\]|\\.)*"|`[^`]*`')
@@ -174,21 +195,67 @@ def _chart_sources(chart: Path) -> list[Path]:
     return files + sorted(set(pulled))
 
 
-def chart_report(chart: Path) -> tuple[list[tuple], list[str], set]:
-    """Return (all leaves, unread dotted keys, subtree reads) for one chart."""
-    values = yaml.safe_load((chart / "values.yaml").read_text(encoding="utf-8")) or {}
+@functools.lru_cache(maxsize=None)
+def _chart_reads(chart: Path) -> tuple[frozenset, frozenset]:
     reads: set = set()
     guards: set = set()
     for src in _chart_sources(chart):
         r, g = scan(src.read_text(encoding="utf-8"), str(src.relative_to(_REPO)))
         reads |= r
         guards |= g
+    return frozenset(reads), frozenset(guards)
+
+
+def chart_report(chart: Path, values_file: Path | None = None) -> tuple[list[tuple], list[str], set]:
+    """Return (all leaves, unread dotted keys, subtree reads) for one values file of a chart."""
+    values_file = values_file or chart / "values.yaml"
+    values = yaml.safe_load(values_file.read_text(encoding="utf-8")) or {}
+    reads, guards = _chart_reads(chart)
     leaves = list(_leaves(values))
     unread = [".".join(leaf) for leaf in leaves if not _is_read(leaf, reads, guards)]
     return leaves, unread, reads | guards
 
 
+def _rel(path: Path) -> str:
+    return path.relative_to(_REPO).as_posix()
+
+
 _CHARTS = sorted(p.parent for p in (_REPO / "helm").glob("*/Chart.yaml") if (p.parent / "values.yaml").exists())
+
+
+def _values_files() -> list[Path]:
+    return sorted(
+        p for p in repo_files(".yaml", ".yml")
+        if _rel(p).startswith("helm/") and p.name.startswith("values")
+    )
+
+
+def overlay_owners() -> tuple[dict[str, Path], list[str]]:
+    """Return ({overlay path: chart dir}, problems) for every non-default values file under helm/."""
+    by_name = {c.name: c for c in _CHARTS}
+    owners: dict[str, Path] = {}
+    problems: list[str] = []
+    for path in _values_files():
+        rel = _rel(path)
+        if (path.parent / "Chart.yaml").is_file():
+            if path.name != "values.yaml":
+                owners[rel] = path.parent
+        elif rel in _REPO_OVERLAYS:
+            chart = by_name.get(_REPO_OVERLAYS[rel])
+            if chart is None:
+                problems.append(f"{rel}: _REPO_OVERLAYS names chart {_REPO_OVERLAYS[rel]!r}, which does not exist")
+            else:
+                owners[rel] = chart
+        else:
+            problems.append(
+                f"{rel}: not in a chart directory and not in _REPO_OVERLAYS — which chart is it passed to?")
+    for rel in _REPO_OVERLAYS:
+        if not (_REPO / rel).is_file():
+            problems.append(f"_REPO_OVERLAYS entry {rel}: no such file")
+    return owners, problems
+
+
+_OVERLAYS, _OVERLAY_PROBLEMS = overlay_owners()
 
 
 # ── resolver controls ────────────────────────────────────────────────────────
@@ -249,28 +316,49 @@ def test_the_scan_covers_every_chart():
         assert refs, f"{chart.name}: no .Values reference resolved in any template"
 
 
-@pytest.mark.parametrize("chart", _CHARTS, ids=lambda c: c.name)
-def test_every_declared_key_is_read(chart):
-    _, unread, _ = chart_report(chart)
-    unexpected = [k for k in unread if (chart.name, k) not in _UNREAD_ALLOWED]
+def test_every_overlay_has_an_owning_chart():
+    assert not _OVERLAY_PROBLEMS, _OVERLAY_PROBLEMS
+
+
+def test_the_scan_covers_the_overlays():
+    # Vacuity: the overlays this repo ships today. A discovery that stops
+    # seeing them must fail here, not quietly shrink the parametrize below.
+    known = {
+        "helm/da-portal/values-tier1.yaml", "helm/da-portal/values-tier2.yaml",
+        "helm/tenant-api/values-scope-enforce.yaml", "helm/vector/values-projection.yaml",
+        "helm/values-db-a.yaml", "helm/values-db-b.yaml",
+    }
+    assert known <= set(_OVERLAYS), sorted(known - set(_OVERLAYS))
+    for rel, chart in _OVERLAYS.items():
+        leaves, _, _ = chart_report(chart, _REPO / rel)
+        assert leaves, f"{rel}: no leaves"
+
+
+_VALUES_FILES = [(_rel(c / "values.yaml"), c) for c in _CHARTS] + sorted(_OVERLAYS.items())
+
+
+@pytest.mark.parametrize("rel,chart", _VALUES_FILES, ids=[rel for rel, _ in _VALUES_FILES])
+def test_every_declared_key_is_read(rel, chart):
+    _, unread, _ = chart_report(chart, _REPO / rel)
+    unexpected = [k for k in unread if (rel, k) not in _UNREAD_ALLOWED]
     assert not unexpected, (
-        f"helm/{chart.name}/values.yaml declares {unexpected} but no template reads them — "
+        f"{rel} declares {unexpected} but no template of helm/{chart.name} reads them — "
         "overriding them is a silent no-op. Read them in a template, delete them, or list "
         "them in _UNREAD_ALLOWED with the reason."
     )
 
 
 def test_exemptions_are_not_stale():
-    by_name = {c.name: c for c in _CHARTS}
+    owners = dict(_VALUES_FILES)
     stale = []
-    for (name, key), _reason in _UNREAD_ALLOWED.items():
-        chart = by_name.get(name)
+    for (rel, key), _reason in _UNREAD_ALLOWED.items():
+        chart = owners.get(rel)
         if chart is None:
-            stale.append(f"{name}: no such chart")
+            stale.append(f"{rel}: not a scanned values file")
             continue
-        leaves, unread, _ = chart_report(chart)
+        leaves, unread, _ = chart_report(chart, _REPO / rel)
         if tuple(key.split(".")) not in leaves:
-            stale.append(f"{name}: {key} is no longer declared")
+            stale.append(f"{rel}: {key} is no longer declared")
         elif key not in unread:
-            stale.append(f"{name}: {key} is read now")
+            stale.append(f"{rel}: {key} is read now")
     assert not stale, stale
