@@ -293,7 +293,7 @@ implementation).
 
 1. **A file with no `defaults:` key** merges the **entire document** into `effective`, siblings
    included. ⚠️ The schema only admits this when **every** top-level key is on the whitelist
-   (`additionalProperties: false` + 15 fixed properties + `^_state_` / `^_routing`
+   (`additionalProperties: false` + the fixed properties + `^_state_` / `^_routing`
    patternProperties), so "drop the `defaults:` wrapper and write bare threshold keys" is in
    fact rejected by `check_confd_schema.py`. The shape exists in this repo
    (`rule-packs/recipes/examples/conf.d/finance/_defaults.yaml`, whose only top-level key is
@@ -610,8 +610,9 @@ equally load-bearing, all measured**:
    `da_config_reload_trigger_total{reason="defaults"}` each time — while the reason this ADR
    exists is the question above, how to avoid a reload storm. **It shares its root with why
    alternative A was rejected (both live on the reload-attribution line), but the problem
-   differs**: A's rejection reads verbatim "cannot tell which tenants are actually affected,
-   so it can only reload everything. At 1000+ tenants a reload storm is unacceptable." The
+   differs**: A's rejection reads verbatim "Cannot determine which tenants are actually affected
+   when `_defaults.yaml` changes, forcing full reload. Reload storms are unacceptable in
+   1000+ tenant environments." The
    problem here is purely **attribution** — mislabelling **the tick that already happens** from
    `cosmetic` to `applied`. Both `defaultsChanged` branches of `classifyTenant` have already
    run `recomputeMergedHash`, and `installNewHierarchyState` runs unconditionally, so merging

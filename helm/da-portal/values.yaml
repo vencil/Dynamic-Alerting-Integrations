@@ -195,7 +195,3 @@ podAnnotations:
   # Leave empty or add custom annotations as needed
   {}
 
-# Service account
-serviceAccount:
-  create: true
-  name: ""

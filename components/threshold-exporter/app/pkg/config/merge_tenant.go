@@ -89,9 +89,8 @@ func CheckTenantRootKeys(yamlContent []byte) []string {
 // exporter's WARNs when called on a TenantMerge. No tenant-api caller calls
 // them on one today (GET uses ResolveAt and ValidateTenantKeys); a caller
 // that starts to, per request, needs the same treatment first. (The list /
-// search paths already write such WARNs per request through a plain
-// *ThresholdConfig's OperationalStatesAt, not a TenantMerge — tracked in
-// #2467.)
+// search paths read a plain *ThresholdConfig, not a TenantMerge, through
+// OperationalStatesAtLogf with a nil sink — #2467.)
 type TenantMerge struct {
 	ThresholdConfig
 

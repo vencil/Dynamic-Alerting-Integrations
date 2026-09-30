@@ -53,6 +53,7 @@ type parityExpect struct {
 	Targets        *[]parityTarget   `json:"targets"`
 	Policy         [][3]string       `json:"policy"`
 	RejectedRoutes []string          `json:"rejected_routes"`
+	NotString      []string          `json:"values_not_string"`
 	UnknownProfile *string           `json:"unknown_profile"`
 	TenantAPI      *parityTenantAPI  `json:"tenant_api"`
 	PythonDiffers  *parityDiffers    `json:"python_differs"`
@@ -95,7 +96,9 @@ func loadParityMatrix(t *testing.T) parityMatrix {
 
 // tenantBlock is tenants.<id> of the tenant file that declares it — the
 // first in name order, at any depth (#2326) — and that file's path; a root
-// platform file's entry for it is the overlay, Layers.TenantBlock.
+// platform file's entry for it is the overlay, Layers.TenantBlock. Its
+// `_routing` carries the values the generator reads with PyYAML
+// (WithPyYAMLRouting, #2295 / #2431), as da-guard and tenant-api read it.
 func tenantBlock(t *testing.T, files map[string]string, tenantID string) (map[string]any, string) {
 	t.Helper()
 	names := make([]string, 0, len(files))
@@ -115,6 +118,9 @@ func tenantBlock(t *testing.T, files map[string]string, tenantID string) (map[st
 			t.Fatalf("%s: %v", name, err)
 		}
 		if b, ok := doc.Tenants[tenantID]; ok {
+			if r, has := b["_routing"]; has {
+				b["_routing"] = WithPyYAMLRouting(r, PyYAMLRoutingByTenant([]byte(content))[tenantID])
+			}
 			return b, name
 		}
 	}
@@ -151,6 +157,20 @@ func gotRejected(resolved map[string]any, ok bool) []string {
 			out = append(out, "routes["+itoa(i)+"]")
 		}
 	}
+	return out
+}
+
+// gotNotString is the `values_not_string` cell (#2431): the fields
+// ValuesNotString names in the resolved routing, in name order.
+func gotNotString(resolved map[string]any, ok bool) []string {
+	out := []string{}
+	if !ok {
+		return out
+	}
+	for _, v := range ValuesNotString(resolved) {
+		out = append(out, v.Field)
+	}
+	sort.Strings(out)
 	return out
 }
 
@@ -268,6 +288,9 @@ func TestRoutingPolicyParityMatrix(t *testing.T) {
 					resolved, ok, _, unknown := Resolve(tenantID, layers.TenantBlock(tenantID, block), layers)
 					jsonEq(t, "targets", gotTargets(resolved, ok), want.Targets)
 					jsonEq(t, "rejected_routes", gotRejected(resolved, ok), want.RejectedRoutes)
+					wantNotString := append([]string{}, want.NotString...)
+					sort.Strings(wantNotString)
+					jsonEq(t, "values_not_string", gotNotString(resolved, ok), wantNotString)
 					jsonEq(t, "policy", sortRows(gotPolicy(tenantID, resolved, ok, pols)), sortRows(want.Policy))
 					jsonEq(t, "escalation", gotEscalation(t, tenantID, resolved, ok, pols), want.Escalation)
 					if (unknown == nil) != (want.UnknownProfile == nil) ||
@@ -316,8 +339,8 @@ func checkTenantAPIModel(t *testing.T, files map[string]string, tenantID string,
 	put := "ok"
 	if verdict(block) {
 		put = "403"
-	} else if writesBadReceiver(block) {
-		put = "400"
+	} else if writesBadReceiver(block) || len(ValuesNotString(block["_routing"])) > 0 {
+		put = "400" // #2295 receiver contract, #2431 a matcher value the block writes
 	}
 	if put != want.Put {
 		t.Errorf("tenant_api.put model = %s, table says %s", put, want.Put)

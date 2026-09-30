@@ -173,9 +173,10 @@ tenants:
 ```
 
 > ℹ️ **The explicit-`null` opt-out is per-field** (settled and implemented in
-> \#1339): only `group_by` / `group_wait` / `group_interval` / `repeat_interval`
-> under `_routing` accept `null`, and the effect is that the generated route
-> omits that field. `_routing.receiver: ~` is **still rejected** — it would make
+> \#1339): the schema allows `null` only on `group_by` / `group_wait` /
+> `group_interval` / `repeat_interval` under `_routing`, and the effect is that
+> the generated route omits that field (the generator currently also accepts
+> `overrides: ~`, which the schema does not — see #2521). `_routing.receiver: ~` is **still rejected** — it would make
 > the tenant's entire route disappear and drop its alerts to the catch-all.
 > **For threshold keys always use `"disable"`**, never `null`:
 > `mysql_connections: ~` and a half-typed `mysql_connections:` are identical to

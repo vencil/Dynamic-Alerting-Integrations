@@ -132,9 +132,11 @@ echo "$image: HIGH $HIGH_CUR -> $HIGH_TGT"
 
 ```bash
 # scripts/scan-all.sh — 在 audit 機器上一次跑完
+# <tag> 是佔位符：版本一律取自 §3 盤點出的現行 pin（chart 的 values.yaml、
+# k8s/ manifest），不要照抄範本裡的版本號——寫死的版本會過時，掃到的是舊 image。
 IMAGES=(
-  "grafana/grafana:12.4.1|p0-grafana"
-  "quay.io/oauth2-proxy/oauth2-proxy:v7.7.1|p0-oauth2proxy"
+  "grafana/grafana:<tag>|p0-grafana"
+  "quay.io/oauth2-proxy/oauth2-proxy:<tag>|p0-oauth2proxy"
   ...
 )
 for entry in "${IMAGES[@]}"; do
