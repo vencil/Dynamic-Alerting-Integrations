@@ -117,13 +117,13 @@ OS=linux            # or darwin, windows
 ARCH=amd64          # or arm64
 URL=https://github.com/vencil/Dynamic-Alerting-Integrations/releases/download/${TAG}
 
-curl -fsSLo da-guard.tar.gz "${URL}/da-guard-${OS}-${ARCH}.tar.gz"
+curl -fsSLO "${URL}/da-guard-${OS}-${ARCH}.tar.gz"   # 保留原檔名，SHA256SUMS 才對得上
 curl -fsSLo SHA256SUMS "${URL}/SHA256SUMS"
 
 # 驗 hash（任何不符立即拒絕）
 sha256sum --check --ignore-missing SHA256SUMS
 
-tar xzf da-guard.tar.gz
+tar xzf da-guard-${OS}-${ARCH}.tar.gz
 sudo install -m 0755 da-guard-${OS}-${ARCH} /usr/local/bin/da-guard
 da-guard --version    # 應印出 da-guard v2.9.0
 ```
@@ -165,20 +165,20 @@ Exit code：`0` 通過 / `1` 偵測到 error 級 finding（block CI）/ `2` call
 
 ```bash
 TAG=tools/v2.9.0    # 版號由 bump_docs.py 在 release 時同步；可換成你要安裝的實際 release tag
-VER=2.7.0
+VER=${TAG#tools/v}
 URL=https://github.com/vencil/Dynamic-Alerting-Integrations/releases/download/${TAG}
 
 # 1. 下載 image tar + SHA256
-curl -fsSLo da-tools-image.tar.gz "${URL}/da-tools-image-v${VER}.tar.gz"
-curl -fsSLo da-tools-image.tar.gz.sha256 "${URL}/da-tools-image-v${VER}.tar.gz.sha256"
+curl -fsSLO "${URL}/da-tools-image-v${VER}.tar.gz"
+curl -fsSLO "${URL}/da-tools-image-v${VER}.tar.gz.sha256"
 
 # 2. 驗 hash
-sha256sum --check da-tools-image.tar.gz.sha256
+sha256sum --check da-tools-image-v${VER}.tar.gz.sha256
 
 # 3. 把整個 tar.gz 搬到 air-gapped 環境（USB / 內網 file transfer / etc.）
 
 # 4. 在 air-gapped 環境裡 import 進本地 docker
-gunzip -c da-tools-image.tar.gz | docker load
+gunzip -c da-tools-image-v${VER}.tar.gz | docker load
 # 印出: Loaded image: ghcr.io/vencil/da-tools:v2.9.0
 
 # 5. 重新 tag 到內網 registry（選用）

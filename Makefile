@@ -205,11 +205,11 @@ inspect-tenant: ## AI Agent: 檢查 Tenant 健康 (使用: make inspect-tenant T
 	@python3 ./scripts/tools/ops/diagnose.py $(TENANT)
 
 .PHONY: git-lock
-git-lock: ## 診斷 .git lock 殘留 (加 ARGS="--clean" 安全清理)
+git-lock: ## 診斷 .git lock 殘留（只列、不刪；加 ARGS="--clean" 另修壞掉的 HEAD）
 	@bash scripts/session-guards/git_check_lock.sh $(ARGS)
 
 .PHONY: git-preflight
-git-preflight: ## Git 操作前自動降噪（關閉 VS Code Git + 清理 stale lock）
+git-preflight: ## Git 操作前自動降噪（關閉 VS Code Git + 列出 stale lock、修 HEAD）
 	@python3 scripts/session-guards/vscode_git_toggle.py off 2>/dev/null || true
 	@bash scripts/session-guards/git_check_lock.sh --clean 2>/dev/null || true
 
@@ -301,9 +301,13 @@ win-commit: ## Windows 逃生門：sandbox hook-gate → Windows stage/commit/pu
 	fi
 	@echo ""
 	@echo "--- [2/3] Windows stage + commit ---"
-	@if [ "$(OS)" = "Windows_NT" ] || [ -x /mnt/c/Windows/System32/cmd.exe ]; then \
-		CMD_EXE="cmd.exe"; \
-		if [ -x /mnt/c/Windows/System32/cmd.exe ]; then CMD_EXE="/mnt/c/Windows/System32/cmd.exe"; fi; \
+	@# Only WSL runs the batch from here (#2248). A Windows_NT branch used to
+	@# call `cmd.exe /c` from Git Bash: MSYS rewrote `/c` as a path, cmd.exe
+	@# started interactive, read EOF and returned 0, and the recipe printed
+	@# Done with nothing committed. A Windows host has no make by default, so
+	@# that branch is gone -- there the else branch prints the three commands.
+	@if [ -x /mnt/c/Windows/System32/cmd.exe ]; then \
+		CMD_EXE="/mnt/c/Windows/System32/cmd.exe"; \
 		if [ -n "$(FILES)" ]; then \
 			$$CMD_EXE /c "scripts\\ops\\win_git_escape.bat add $(FILES)" || exit 1; \
 		fi; \
@@ -314,7 +318,7 @@ win-commit: ## Windows 逃生門：sandbox hook-gate → Windows stage/commit/pu
 		echo "✅ Done (hook-gated + committed + pushed)"; \
 	else \
 		echo ""; \
-		echo "⚠  Sandbox (Linux) side: cannot exec Windows batch directly."; \
+		echo "⚠  No WSL cmd.exe here: this recipe does not run the Windows batch itself."; \
 		echo "   Hooks already ran above. Copy/paste the following into Windows cmd.exe (repo root):"; \
 		echo ""; \
 		if [ -n "$(FILES)" ]; then \
@@ -469,7 +473,7 @@ fuse-reset: ## FUSE cache 重建 (Level 1+3) — 遇到 phantom lock / 檔案殘
 	@echo "[Level 3a] 關 VS Code Git 背景掃描"
 	@python3 scripts/session-guards/vscode_git_toggle.py off 2>/dev/null || true
 	@echo ""
-	@echo "[Level 3b] 清 stale .git/*.lock"
+	@echo "[Level 3b] 列出 stale .git/*.lock（不刪）、修 HEAD"
 	@bash scripts/session-guards/git_check_lock.sh --clean 2>/dev/null || true
 	@echo ""
 	@echo "[Level 3c] Kill 殘留 port-forward"
@@ -738,9 +742,8 @@ draft-advisory-check: ## ⛔ 擋住「有未發布 draft advisory 就打 tag」�
 # INSIDE Helm charts and are never published, so release.yaml never builds them
 # at all (#1337). Their other build paths differ — vector-projection-gate is
 # built ONLY here, by component-docker-build.yaml and by the nightly scan, while
-# federation-audit-sidecar is additionally built on every CI run by the
-# federation-e2e job's compose stack. audit-sidecar compiles mtail from source
-# (~25 s, needs the Go module proxy); pre-tag already reaches the network for
+# (Until #1278 D1 federation-audit-sidecar also compiled mtail and was rebuilt
+# by the federation-e2e compose stack; it is Alpine + logrotate now.) pre-tag already reaches the network for
 # recipe-preview's promtool tarball and tenant-api's `go mod download`, so this
 # is not a new class of failure — just a slower step.
 # Needs docker (buildx) + trivy on PATH — run on the maintainer machine /

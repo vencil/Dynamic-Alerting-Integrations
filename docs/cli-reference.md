@@ -238,7 +238,7 @@ da-tools check-alert MariaDBHighConnections db-a
 | 代碼 | 說明 |
 |------|------|
 | `0` | 成功（任何狀態） |
-| `1` | 只有未捕捉例外（traceback）會回 1——本命令沒有 violation 出口（inactive／pending／firing 都是 0） |
+| `1` | 只有未捕捉例外（traceback）會回 1——本命令沒有 violation 出口（inactive／pending／firing 都是 0） | <!-- datools-cmd-ignore: 只有 traceback 回 1，沒有出口可追 -->
 | `2` | 呼叫端錯誤：Prometheus API 連不上或回錯（stdout 印 `{"error": ...}` JSON），或 argparse 拒絕的參數 |
 
 ---
@@ -347,8 +347,8 @@ da-tools batch-diagnose --tenants db-a,db-b,db-c --output report.json
 
 | 代碼 | 說明 |
 |------|------|
-| `0` | 所有租戶健康 |
-| `1` | 一項或多項租戶檢查失敗 |
+| `0` | 執行完畢。⚠️ 租戶檢查失敗**目前也是 0**，要看輸出裡每個租戶的 `status`（改成回 1 在 [#2493](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/2493) 追蹤） |
+| `1` | 只有未捕捉例外（traceback）會回 1，例如 `--workers 0` | <!-- datools-cmd-ignore: 只有 traceback 回 1，沒有出口可追 -->
 | `2` | 呼叫端錯誤：參數錯誤，或 `-o/--output` 指到的輸出路徑寫不進去（#1641） |
 
 ---
@@ -408,7 +408,7 @@ da-tools baseline --tenant db-a --duration 1800 --interval 30 -o baseline_out
 | 代碼 | 說明 |
 |------|------|
 | `0` | 成功。⚠️ Prometheus 連線或查詢失敗**不是**錯誤——失敗的採樣記為空值、報告與 CSV 照出，仍是這一格 |
-| `1` | 只有未捕捉例外（traceback）會回 1——本命令沒有 violation 出口；實測 `--interval 0`（`duration // interval` 的 `ZeroDivisionError`）是這一格。⛔ 輸出路徑寫不進去自 #1789 起是 `2`，不再落在這裡 |
+| `1` | 只有未捕捉例外（traceback）會回 1——本命令沒有 violation 出口；實測 `--interval 0`（`duration // interval` 的 `ZeroDivisionError`）是這一格。⛔ 輸出路徑寫不進去自 #1789 起是 `2`，不再落在這裡 | <!-- datools-cmd-ignore: 只有 traceback 回 1，沒有出口可追 -->
 | `2` | 呼叫端錯誤：`--metrics` 列出的指標沒有一個是工具認得的（錯誤訊息會列出可用清單）、缺必需的 `--tenant`、argparse 拒絕的參數，或 `-o/--output-dir` 寫不進去（實測：父路徑是檔案、目錄下要建的 CSV 已是目錄）——一行 `ERROR: cannot …` 指名 `-o/--output-dir`，不再是 traceback（#1789） |
 
 ---
@@ -900,7 +900,7 @@ da-tools fed-key --rotate --existing-jwks federation-jwks.json \
 | 代碼 | 說明 |
 |------|------|
 | `0` | 金鑰已產生 |
-| `1` | 只有未捕捉例外（traceback）會回 1——本命令沒有 violation 出口；實測 `--existing-jwks` 指到一份 JSON **陣列**（頂層不是物件）時是這一格。⛔ 輸出路徑寫不進去自 #1789 起是 `2`，不再落在這裡 |
+| `1` | 只有未捕捉例外（traceback）會回 1——本命令沒有 violation 出口；實測 `--existing-jwks` 指到一份 JSON **陣列**（頂層不是物件）時是這一格。⛔ 輸出路徑寫不進去自 #1789 起是 `2`，不再落在這裡 | <!-- datools-cmd-ignore: 只有 traceback 回 1，沒有出口可追 -->
 | `2` | 呼叫端錯誤：`--jwks-out` 寫不進去（實測：目錄不存在）——一行 `ERROR: cannot …` 指名 `--jwks-out`，不再是 traceback（#1789）；`openssl` 不在 PATH、逾時或失敗；`--existing-jwks` 讀不到、不是 JWKS 文件（沒有 `keys` 陣列）或已含同一個 kid；`--rotate` 沒帶 `--existing-jwks`、`--key-bits` < 2048；stdout 是終端機（拒絕把私鑰 Secret 印到 tty，請接 `\| kubectl apply -f -`） |
 
 ---
@@ -1896,7 +1896,7 @@ da-tools scaffold --non-interactive --tenant db-c --db mariadb,redis
 | 代碼 | 說明 |
 |------|------|
 | `0` | 成功 |
-| `1` | 只有未捕捉的例外（stderr 有 traceback）；「輸入無效」是 2 不是 1 |
+| `1` | 只有未捕捉的例外（stderr 有 traceback）；「輸入無效」是 2 不是 1 | <!-- datools-cmd-ignore: 只有 traceback 回 1，沒有出口可追 -->
 | `2` | 呼叫端錯誤：參數錯誤、不支援的 `--db` 類型、`--non-interactive` 缺 `--tenant` 或 `--db`，或 `-o/--output-dir` 指到的輸出路徑寫不進去（#1641） |
 
 ---
@@ -1959,8 +1959,8 @@ da-tools migrate ./my-rules.yml -o migration_output/
 | 代碼 | 說明 |
 |------|------|
 | `0` | 成功 |
-| `1` | 輸入檔案無效 |
-| `2` | 呼叫端錯誤：參數錯誤，或 `-o/--output-dir` 指到的輸出路徑寫不進去（#1641） |
+| `1` | 只有未捕捉例外（traceback）會回 1；輸入檔無效是 2 | <!-- datools-cmd-ignore: 只有 traceback 回 1，沒有出口可追 -->
+| `2` | 呼叫端錯誤：參數錯誤、輸入檔讀不到或不是合法 YAML，或 `-o/--output-dir` 指到的輸出路徑寫不進去（#1641） |
 
 ---
 
@@ -2264,7 +2264,7 @@ da-tools onboard --alertmanager-config ./alertmanager.yaml \
 |------|------|
 | `0` | 至少一個 phase 產出結果（Phase 1 沒找到租戶 route 也算，只是不寫 `onboard-hints.json`） |
 | `1` | 沒有任何 phase 產出結果，例如 `--rule-files` 的 glob 一個檔都沒配到、`--scrape-config` 裡沒有 `scrape_configs` |
-| `2` | 呼叫端錯誤：三個輸入一個都沒給、參數錯誤，或 `-o/--output-dir` 指到的輸出路徑寫不進去（#1641）；輸入檔讀不到或無法解析（內容不是 UTF-8 或不是合法 YAML；訊息指名哪一檔，#1654） |
+| `2` | 呼叫端錯誤：三個輸入一個都沒給、參數錯誤，或 `-o/--output-dir` 指到的輸出路徑寫不進去（#1641）；輸入檔讀不到或無法解析（內容不是 UTF-8 或不是合法 YAML；訊息指名哪一檔，#1654）。⚠️ 例外：ConfigMap 包裝裡內嵌的 YAML 壞掉時是 traceback、回 1 |
 
 ---
 
@@ -2370,7 +2370,7 @@ da-tools config-diff --old-dir ./conf.d-old --new-dir ./conf.d-new --json-output
 | 代碼 | 說明 |
 |------|------|
 | `0` | 無配置變更 |
-| `1` | 偵測到變更 —— CI 用來判斷「這個 PR 動了配置」的訊號 |
+| `1` | 偵測到變更。⚠️ 只比對各租戶檔自己寫的值，且只讀頂層：只改 `_defaults.yaml` 或只動子目錄裡的檔都回 0，不能單靠它判斷「這個 PR 動了配置」 |
 | `2` | 呼叫端錯誤：目錄不存在、輸入無法解析，或執行未完成 |
 
 > ⚠️ **`1` 是「有變更」，不是失敗。** 裸呼叫這個命令的 CI 步驟，會在它正常運作時失敗。
@@ -2422,7 +2422,7 @@ da-tools evaluate-policy --config-dir conf.d/ --ci
 |------|------|
 | `0` | 無 error 違規 |
 | `1` | CI 模式：有 error 級別違規 |
-| `2` | 呼叫端錯誤：`--policy` 供了但不是檔案（含空字串）／`--config-dir` 不存在／`_defaults.yaml` 或租戶檔內容讀不到（不是 UTF-8 或不是合法 YAML；訊息指名哪一檔，#1654）。⛔ 不要靠拿掉 `--policy` 轉綠——那等於不帶你的策略檔評估（#1651） |
+| `2` | 呼叫端錯誤：參數錯誤（含沒給 `--config-dir`）／`--policy` 供了但不是檔案（含空字串）／`--config-dir` 不存在／`--policy` 檔或 `_defaults.yaml` 內容讀不到（不是 UTF-8、不是合法 YAML；訊息指名哪一檔，#1654）／租戶檔內容讀不到（只在有 policy 規則時才讀租戶檔，沒有規則時回 0）。⛔ 不要靠拿掉 `--policy` 轉綠——那等於不帶你的策略檔評估（#1651） |
 
 #### opa-evaluate
 
@@ -2513,6 +2513,8 @@ routing 檢查的對象是租戶**解析後**的 routing，與 route generator�
 |---|---|---|
 | `invalid_route_entry` | error | `routes` 不是 list，或某條目 generator 會略過（非 mapping、有 `continue` / `match_re` 等不支援的鍵、`match` 缺或空、label 不合法、值不是非空字串）；Field 為 `routes` 或 `routes[i]` |
 | `domain_policy_violation` | error | 主 receiver／`overrides[i]`／`routes[i]` 的 type 違反 domain policy；訊息含 domain、constraint 與該值來自哪一層 |
+| `critical_escalation_missing` | error | domain policy 設了 `require_critical_escalation: true`，但 severity=critical 告警到不了任何 pagerduty receiver：主 receiver 不是 pagerduty，也沒有會 render 的 `routes` 條目 match 含 `severity: critical` 且送 pagerduty（[#2325](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/2325)）；Field 為 `receiver.type`，每個要求此約束的 domain 各一筆。值不是布林時改報 `domain_policy_unusable`（Field `<檔案>:domain_policies.<domain>.constraints.require_critical_escalation`） |
+| `critical_escalation_leak` | warn | 租戶有升級路徑，但這個非 pagerduty 目的地（`overrides[i]`／`routes[i]`，最後是主 receiver）仍會比 pagerduty 先收到部分 severity=critical 告警；訊息點名攔走的 label 組合。判準與 generator `--validate` 的 WARN 相同（前面的子路由 match 是它的子集就不算、match 寫到別的 tenant 或非 critical 的 severity 也不算）；Field 為 `<ref>.receiver.type`。不擋 |
 | `unknown_routing_profile` | warn | `_routing_profile` 指向沒有定義的 profile（只有空白也算） |
 | `domain_policy_unusable` | error | `_domain_policy.yaml` 的結構無法使用（例如 `tenants` 不是 list）；tenant 欄空白，只略過依賴它的檢查 |
 | `routing_profiles_unusable` | warn | `routing_profiles:` 不是 mapping；tenant 欄空白 |

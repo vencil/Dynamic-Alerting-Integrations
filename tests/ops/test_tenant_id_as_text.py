@@ -579,18 +579,20 @@ def test_da_assembler_serves_what_the_cr_says(tmp_path, da_guard, q):
 
 @pytest.mark.parametrize("name,want", [
     ("010", None), ("0x1F", None), ("yes", None),
-    ('"010"', "010"), ('"0x1F"', "0x1F"), ('"yes"', "yes"), ("abc", "abc"),
+    ('"010"', "010"), ('"0x1f"', "0x1f"), ('"yes"', "yes"), ("abc", "abc"),
     ("2026-01-02", "2026-01-02"),
-    ("2026-01-02T03:04:05Z", "2026-01-02T03:04:05Z"),
-], ids=["010", "0x1F", "yes", "q010", "q0x1F", "qyes", "abc", "date",
-        "datetime"])
+    # #2396: quoted, but not a DNS-1123 subdomain (uppercase, `:`).
+    ('"0x1F"', None), ("2026-01-02T03:04:05Z", None),
+], ids=["010", "0x1F", "yes", "q010", "q0x1f", "qyes", "abc", "date",
+        "q0x1F-uppercase", "datetime"])
 def test_da_assembler_names_the_file_as_the_cr_does(tmp_path, name, want):
     """Before: `name: 010` → `8.yaml`, `0x1F` → `31.yaml`, `yes` →
     `True.yaml`; the header named the same wrong CR.
 
     #2371: an unquoted name YAML 1.1 (PyYAML) types as a number / bool is
     refused (rc 2, nothing written: `want` None); a quoted one, and an
-    unquoted date / datetime, names the file as written."""
+    unquoted date, names the file as written. #2396: so is any name that
+    is not a DNS-1123 subdomain, quoted or not (`0x1F`, a datetime)."""
     cr = tmp_path / "cr.yaml"
     cr.write_text(_cr(name, '    "010":\n      mysql_connections: "70"\n'),
                   encoding="utf-8")

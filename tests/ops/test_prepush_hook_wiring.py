@@ -1931,13 +1931,101 @@ def test_an_interrupted_push_leaves_no_temporary_worktree_behind(
     )
 
 
+# The recorder, failing only for the commit named in PREPUSH_TEST_FAIL_SHA and
+# marking what it printed on each stream, so the test can tell its output from
+# the guard's.
+_SENTINEL_CHECK = """#!/usr/bin/env bash
+git rev-parse HEAD >> "$PREPUSH_TEST_RECORD"
+[ "$(git rev-parse HEAD)" = "$PREPUSH_TEST_FAIL_SHA" ] || exit 0
+echo "CHECK-STDOUT"
+echo "CHECK-STDERR" >&2
+exit 1
+"""
+
+
+@pytest.mark.parametrize("failing", [0, 1], ids=["first-ref-fails", "second-ref-fails"])
+def test_a_failed_build_is_reported_verbatim_and_not_diagnosed(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, failing: int,
+) -> None:
+    """#2210 — a failed build (broken links, an abort, a Ctrl-C) gets no
+    advice: the guard adds one line naming the commit, pinned whole, and stops
+    there instead of building the next ref."""
+    work, record, sha_a, sha_b = _docs_repo(tmp_path, check=_SENTINEL_CHECK)
+    assert _git(work, "checkout", "-q", "-b", "topic2", "topic").returncode == 0
+    (work / "docs" / "index.md").write_text("# index\nchanged on topic2\n", encoding="utf-8")
+    assert _git(work, "add", "-A").returncode == 0
+    _commit(work, "docs: change on topic2 only")
+    sha_c = _git(work, "rev-parse", "HEAD").stdout.strip()
+    assert _git(work, "checkout", "-q", "main").returncode == 0
+    bad = (sha_b, sha_c)[failing]
+    monkeypatch.setenv("PREPUSH_TEST_FAIL_SHA", bad)
+    r = _run_guard(work, record, f"refs/heads/topic {sha_b} refs/heads/topic {sha_a}\n"
+                                 f"refs/heads/topic2 {sha_c} refs/heads/topic2 {sha_a}\n")
+
+    assert r.returncode == 1, f"a failed build let the push through:\n{r.stdout}{r.stderr}"
+    assert r.stderr == "CHECK-STDERR\n", f"stderr is not the build's own:\n{r.stderr}"
+    tail = r.stdout.split(f"validating pushed commit {bad[:8]}\n", 1)[-1].splitlines()
+    assert tail == ["CHECK-STDOUT", "", f"::error::mkdocs strict did not pass for {bad[:8]}"], (
+        f"the guard added to or dropped from the build's output:\n{r.stdout}"
+    )
+    assert record.read_text(encoding="utf-8").split() == [sha_b, sha_c][:failing + 1], (
+        "the guard went on building after a failure"
+    )
+
+
+def test_a_tree_created_by_a_failed_add_is_not_left_behind(tmp_path: Path) -> None:
+    """`git worktree add` returns non-zero AFTER creating the tree when the
+    post-checkout hook fails — git-lfs's hook does when git-lfs is missing.
+    The tree must be registered for clean-up before `add` runs, or it stays
+    in .git, still registered."""
+    work, record, sha_a, sha_b = _docs_repo(tmp_path)
+    hook = work / ".git" / "hooks" / "post-checkout"
+    hook.write_text("#!/bin/sh\nprintf '%s\\n' 'post-checkout: simulated failure' 'second line' >&2\n"
+                    "exit 7\n", encoding="utf-8")
+    hook.chmod(0o755)
+    # Local beats a developer's global core.hooksPath, which would skip the hook.
+    assert _git(work, "config", "core.hooksPath", str(hook.parent)).returncode == 0
+    before = _git(work, "worktree", "list", "--porcelain").stdout
+
+    r = _run_guard(work, record, f"refs/heads/topic {sha_b} refs/heads/topic {sha_a}\n")
+
+    # Must-fire half: the hook ran, so the tree did exist.
+    assert "post-checkout: simulated failure" in r.stderr, f"the hook never ran:\n{r.stderr}"
+    assert r.returncode == 1, f"a push it could not validate went through:\n{r.stdout}{r.stderr}"
+    _assert_refused_verbatim(r, sha_b, "post-checkout: simulated failure\nsecond line\n")
+    after = _git(work, "worktree", "list", "--porcelain").stdout
+    assert after == before, f"worktrees changed across the push:\n{before}\n---\n{after}"
+    assert not list((work / ".git").glob("mkdocs-strict-*")), "temporary tree left on disk"
+
+
 # ---------------------------------------------------------------------------
 # #1690 round 2 — gaps a coverage-inventory review measured as unasserted
 # ---------------------------------------------------------------------------
+def _assert_refused_verbatim(r, sha: str, git_says: str) -> None:
+    """A refused checkout shows git's own words and the guard's fixed refusal,
+    on both streams, pinned whole: no guessed cause slips in either one."""
+    assert r.stderr == git_says + (
+        "\n"
+        f"[pre-push-mkdocs] ⛔ could not check out {sha} to validate it.\n"
+        "\n"
+        "This guard builds the commit you are PUSHING, not the tree you are standing\n"
+        "in, so it cannot fall back to the working tree — that would report on the\n"
+        "wrong commit. Refusing instead.\n"
+        "\n"
+        "To push anyway (the docs build then runs only in CI):\n"
+        "    MKDOCS_STRICT_BYPASS=1 git push ...\n"
+        "\n"
+    ), "the guard hid git's own error or added to it. stderr=%s" % r.stderr
+    tail = r.stdout.split(f"validating pushed commit {sha[:8]}\n", 1)[-1].splitlines()
+    assert tail == ["", f"::error::mkdocs strict did not pass for {sha[:8]}"], (
+        "the guard added to its refusal on stdout. stdout=%s" % r.stdout
+    )
+
+
 _GIT_SHIM = """#!/usr/bin/env bash
 # Fail only `git worktree add`; delegate everything else to the real git.
 if [ "${1:-}" = "worktree" ] && [ "${2:-}" = "add" ]; then
-    echo "fatal: simulated worktree failure" >&2
+    printf '%s\\n' "fatal: simulated worktree failure" "hint: second line" >&2
     exit 1
 fi
 exec "$REAL_GIT" "$@"
@@ -1989,19 +2077,8 @@ def test_a_worktree_that_cannot_be_created_refuses_instead_of_building_the_tree(
         "the guard fell back to building the working tree — that is #1690, and "
         "as a fallback it reports the wrong tree's verdict"
     )
-    assert "MKDOCS_STRICT_BYPASS" in (r.stdout + r.stderr), (
-        "refusing without naming the one command that reaches green turns this "
-        "into a dead end; the message must offer the documented escape hatch"
-    )
-    # ⛔ The docs were never built here, so the doc-link advice would be a
-    # guess dressed as a diagnosis. A blind review measured the same shape on
-    # a missing mkdocs plugin: an environment failure told the contributor to
-    # go fix their `../../foo.md` links.
-    assert "site-root path gotcha" not in (r.stdout + r.stderr), (
-        "an environment failure was reported as a broken-links failure; the "
-        "contributor is sent to edit docs that were never built. stdout=%s"
-        % r.stdout
-    )
+    # ⛔ git's own words, all of them, and no guessed cause (#2210).
+    _assert_refused_verbatim(r, sha_b, "fatal: simulated worktree failure\nhint: second line\n")
 
 
 def test_a_branch_behind_the_base_is_not_charged_for_the_bases_own_docs(

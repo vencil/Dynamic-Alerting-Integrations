@@ -366,7 +366,7 @@ da-tools grafana-import \
 
 ### 與告警的對齊
 
-panel 閾值刻意**與 [configmap-rules-platform.yaml](https://github.com/vencil/Dynamic-Alerting-Integrations/blob/main/k8s/03-monitoring/configmap-rules-platform.yaml) 的七個告警同一數值**（單一「什麼叫壞」來源）：`FederationRevocationTamperSuspected`（>0, 5m, critical）、`FederationRevocationReconcileStale`（`time()-ts > 1800` 或 absent, 10m, critical）、`FederationRevocationEvidenceChannelDown`（`channel_up == 0`, 15m, critical）、`FederationGatewayRevocationLoadFailure`（>0, 2m, warning）、`FederationRevocationLiveSetRejected`（>0, 10m, critical）、`FederationGatewayRevokedSetReloadRejected`（>0, 10m, critical）、`FederationGatewayRevokedSetMissing`（>0, 5m, critical）。⛔ 最後三條**不是同一族**：`ReloadRejected` 那一對與 `FederationGatewayRevocationLoadFailure` **姿態相反**——那條是「讀不到、正在放行」，這兩條是「讀到了但被拒絕、沿用前一份撤銷集」，沒有多放行任何東西，但**此後發出的撤銷都沒生效**（`for:10m` ＝一個 reconcile 週期 300s 再加等量餘裕；此條件是持久性的，窗開長不花成本）。而 `RevokedSetMissing` 是**第三種姿態**、也是唯一執行面為**空集合**的那個：檔案不見了，gateway 手上什麼都沒有，每個已撤銷 token 都被放行至 TTL——所以是 critical 而非它鄰居那條的 warning，因為曝險是**進行中**而非**凍結**（#1236）。IR 步驟見 [runbook](internal/federation-revocation-reconciler-runbook.md)。
+panel 閾值照 [configmap-rules-platform.yaml](https://github.com/vencil/Dynamic-Alerting-Integrations/blob/main/k8s/03-monitoring/configmap-rules-platform.yaml) 裡的撤銷告警（`FederationRevocation*`／`FederationGateway*Revo*`）畫；兩邊沒有測試比對，門檻、`for`、severity 以規則檔為準。⛔ 其中 `FederationRevocationLiveSetRejected`、`FederationGatewayRevokedSetReloadRejected`、`FederationGatewayRevokedSetMissing` 三條**不是同一族**：`ReloadRejected` 那一對與 `FederationGatewayRevocationLoadFailure` **姿態相反**——那條是「讀不到、正在放行」，這兩條是「讀到了但被拒絕、沿用前一份撤銷集」，沒有多放行任何東西，但**此後發出的撤銷都沒生效**（`for:10m` ＝一個 reconcile 週期 300s 再加等量餘裕；此條件是持久性的，窗開長不花成本）。而 `RevokedSetMissing` 是**第三種姿態**、也是唯一執行面為**空集合**的那個：檔案不見了，gateway 手上什麼都沒有，每個已撤銷 token 都被放行至 TTL——所以是 critical 而非它鄰居那條的 warning，因為曝險是**進行中**而非**凍結**（#1236）。IR 步驟見 [runbook](internal/federation-revocation-reconciler-runbook.md)。
 
 ⛔ **#1238 之後，「panel 與 pager 同一數值」只剩門檻相同，觸發語意不再相同——看板綠而 pager 紅是預期行為，不是矛盾。** `TamperSuspected` / `RevokedSetReloadRejected` / `RevokedSetMissing` 三條已改為**鎖存**（`max_over_time(...[1h]) > 0`）：panel 畫的是**原始 gauge＝此刻狀態**，會在下一輪對帳（300s）就回到 0；告警畫的是**過去 1 小時內是否曾經非零**，因此最多會在 gauge 歸零後續燒約 1 小時。上表那三條的 `for:` 也不再是過濾器（鎖存之下單一取樣即滿足），只是延遲。**值班時看板全綠不足以判定 pager 是誤報**——請改看告警本身的 `ACTIVE SINCE` 與 runbook 對應章節。原因（三個 gauge 都每輪重算，有界事件撐不到自己的 `for:`）見 [ADR-028 §D3](adr/028-federation-revocation-tamper-evidence.md)。
 
@@ -378,7 +378,7 @@ panel 閾值刻意**與 [configmap-rules-platform.yaml](https://github.com/venci
 
 ### 動機
 
-租戶聯邦（[ADR-020](./adr/020-tenant-federation.md)）資料面的稽核視圖。全部 panel 都從**同一個** counter 導出：`tenant_federation_requests_total{tenant, status}`，由 `helm/federation-gateway` 的 mtail sidecar 從 Envoy audit access log 產生。status enum 六值全 dashboard 固定配色（`ok` 綠／`client_aborted` 藍／`rate_limited` 黃／`auth_failed` 橘／`bad_request` 淺橘／`backend_error` 紅），各 panel 間可直接互相對照。無 template 變數；時間範圍預設 `now-6h`。
+租戶聯邦（[ADR-020](./adr/020-tenant-federation.md)）資料面的稽核視圖。全部 panel 都從**同一個** counter 導出：`tenant_federation_requests_total{tenant, status}`，由 `helm/federation-gateway` 的 audit-metrics sidecar（Vector）從 Envoy audit access log 產生。status enum 六值全 dashboard 固定配色（`ok` 綠／`client_aborted` 藍／`rate_limited` 黃／`auth_failed` 橘／`bad_request` 淺橘／`backend_error` 紅），各 panel 間可直接互相對照。無 template 變數；時間範圍預設 `now-6h`。
 
 ### 部署
 
@@ -401,7 +401,7 @@ da-tools grafana-import \
 | 區 | Panel | PromQL（要點） | 判讀 |
 |---|-------|---------------|------|
 | 頂列 | **Federation Requests /s (5m)**（Stat） | `sum(rate(tenant_federation_requests_total[5m]))` | 全租戶聯邦請求總速率 |
-| 頂列 | **Rejection Rate (5m)**（Stat） | 被拒四狀態（`rate_limited\|auth_failed\|bad_request\|backend_error`）速率 ÷ 總速率（`clamp_min` 防除零） | 平台拒絕率，**刻意排除 `client_aborted`**（client 自行取消查詢不算平台拒絕）；口徑與 `FederationRejectionRateAnomaly` 告警一致；黃 ≥20%、紅 ≥50% |
+| 頂列 | **Rejection Rate (5m)**（Stat） | 被拒三狀態（`rate_limited\|auth_failed\|bad_request`）速率 ÷ 總速率（`clamp_min` 防除零） | 平台拒絕率，**刻意排除 `client_aborted`**（client 自行取消查詢不算平台拒絕）與 `backend_error`（平台故障，看 Backend Errors）；被拒狀態與 `FederationRejectionRateAnomaly` 告警相同（有測試比對），但告警逐租戶、看 10m；黃 ≥20%、紅 ≥50% |
 | 頂列 | **Active Federation Tenants**（Stat） | `count(count by(tenant) (tenant_federation_requests_total)) or vector(0)` | 送過至少一次聯邦請求的獨立租戶數 |
 | 頂列 | **Backend Errors /s (5m)**（Stat） | `sum(rate(...{status="backend_error"}[5m]))` | 儲存後端 5xx——**平台故障、非租戶被拒**；紅 ≥0.05 req/s |
 | Row 1 | **Request Rate by Status**（TimeSeries, stacked） | `sum by(status) (rate(...[5m]))` | 依 status enum 疊圖看流量組成 |
@@ -418,7 +418,7 @@ da-tools grafana-import \
 
 ### 動機
 
-租戶日誌查詢面（[ADR-021](./adr/021-tenant-log-query-federation.md)；federation-gateway 跑 **victorialogs mode** 時）的觀測視圖。兩個資料源 metric 皆由 `helm/federation-gateway` 的 mtail sidecar 從 Envoy audit access log 產生：
+租戶日誌查詢面（[ADR-021](./adr/021-tenant-log-query-federation.md)；federation-gateway 跑 **victorialogs mode** 時）的觀測視圖。兩個資料源 metric 皆由 `helm/federation-gateway` 的 audit-metrics sidecar（Vector）從 Envoy audit access log 產生：
 
 - `tenant_log_query_requests_total{account_id, project_id, status}`（counter）——查詢量與結果
 - `tenant_log_query_duration_ms`（histogram）——查詢延遲
@@ -446,7 +446,7 @@ da-tools grafana-import \
 | 區 | Panel | PromQL（要點） | 判讀 |
 |---|-------|---------------|------|
 | 頂列 | **Log Queries /s (5m)**（Stat） | `sum(rate(tenant_log_query_requests_total[5m]))` | 全 account 分區的查詢總速率 |
-| 頂列 | **Rejection Rate (5m)**（Stat） | 被拒四狀態（`rate_limited\|auth_failed\|bad_request\|backend_error`）速率 ÷ 總速率（`clamp_min` 防除零） | **刻意排除 `client_aborted`**（Grafana／LogsQL UI 自行取消查詢不算平台拒絕）；口徑與 `TenantLogQueryRejectionRateAnomaly` 告警一致；黃 ≥20%、紅 ≥50% |
+| 頂列 | **Rejection Rate (5m)**（Stat） | 被拒三狀態（`rate_limited\|auth_failed\|bad_request`）速率 ÷ 總速率（`clamp_min` 防除零） | **刻意排除 `client_aborted`**（Grafana／LogsQL UI 自行取消查詢不算平台拒絕）與 `backend_error`（平台故障）；被拒狀態與 `TenantLogQueryRejectionRateAnomaly` 告警相同（有測試比對），但告警逐租戶、看 10m；黃 ≥20%、紅 ≥50% |
 | 頂列 | **Active Log-Query Tenants**（Stat） | `count(sum by(account_id) (rate(...[5m])) > 0) or vector(0)` | **近 5m 視窗內活躍**（rate > 0）的 account 分區數——視窗活躍、非 all-time 累計 |
 | 頂列 | **Query Latency P95 (5m)**（Stat） | `histogram_quantile(0.95, sum by(le) (rate(tenant_log_query_duration_ms_bucket[5m])))` | 全租戶查詢延遲 P95。上界受 VictoriaLogs `-search.maxQueryDuration=25s`（小於 gateway route 30s）拘束——**P95 逼近 25s＝查詢正撞上儲存端 abort 天花板**；黃 ≥5s、紅 ≥20s |
 | Row 1 | **Request Rate by Status**（TimeSeries, stacked） | `sum by(status) (rate(...[5m]))` | 依 status enum 疊圖（配色同 Dashboard 5） |

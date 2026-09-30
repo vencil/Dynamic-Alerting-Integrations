@@ -474,7 +474,7 @@ repos:
         files: ^(docs/.*\.md|scripts/tools/ops/.*_dispatch\.py|scripts/tools/lint/check_doc_datools_cmds\.py|components/da-tools/(README\.md|app/QUICKSTART\.md)|try-local/README\.md)$
 
       - id: cli-contract-check
-        name: Doc da-tools invocations ↔ argparse contract (V0–V4 + baseline ledger, #1379)
+        name: Doc da-tools invocations ↔ argparse contract (V0–V6 + baseline ledger, #1379)
         entry: python3 -X utf8 scripts/tools/lint/check_cli_contract.py --ci
         language: python
         pass_filenames: false

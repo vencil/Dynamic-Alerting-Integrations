@@ -34,6 +34,12 @@ SCRIPT_PATH = (
 
 # ── helpers ────────────────────────────────────────────────────────────
 
+# ⛔ Resolved on PATH, not passed bare (#2328): on Windows CreateProcess
+# searches System32 before PATH, so a bare "bash" is WSL's bash.exe, and the
+# script ran under WSL -- with pgrep, and with a Linux git that cannot read a
+# linked worktree's `gitdir: C:/...`. The script's Windows users run Git Bash.
+_BASH = shutil.which("bash") or "bash"
+
 
 def _make_fake_repo(
     tmp_path: Path,
@@ -91,7 +97,7 @@ def _run_script(
     shutil.copy(SCRIPT_PATH, script_copy)
     try:
         return subprocess.run(
-            ["bash", "./_git_check_lock.sh", *args],
+            [_BASH, "./_git_check_lock.sh", *args],
             cwd=str(repo_root),
             capture_output=True,
             text=True,
@@ -196,14 +202,13 @@ class TestSelfPIDFilter:
             lock_age_seconds=60,  # stale enough to trigger cleanup
         )
         result = _run_script(tmp_path, "--clean")
-        # If self-PID filter works: cleanup proceeds (stale + no active git)
-        # If filter broken: message "有活躍 git 程序，跳過清理" appears
-        assert "跳過清理" not in result.stdout, (
-            "self-PID filter failed: script counted itself as active git "
-            "-> cleanup skipped wrongly.\n" + result.stdout
+        # The active-git list is information only since #2328 (nothing is
+        # deleted), but a script that lists itself would still mislead.
+        assert "有活躍的 git 程序" not in result.stdout, (
+            "self-PID filter failed: script counted itself as active git.\n"
+            + result.stdout
         )
-        # Should attempt cleanup (success or FUSE-phantom-lock fail both OK)
-        assert "清理 stale locks" in result.stdout
+        assert "殘留嫌疑的 lock" in result.stdout, result.stdout
 
     def test_filter_regex_excludes_self_and_parent(self, tmp_path):
         """Smoke: verify the printed 'active git' list excludes our own
@@ -253,17 +258,107 @@ class TestLockDiagnosis:
         assert result.returncode == 0
         assert "🔴" in result.stdout
 
-    def test_clean_mode_removes_stale_locks(self, tmp_path):
+    def test_clean_mode_lists_stale_locks_without_deleting(self, tmp_path):
+        """#2328: a crashed git's lock and a running git's lock look the same."""
         lock = tmp_path / ".git" / "index.lock"
         _make_fake_repo(
             tmp_path,
             lock_files=("index.lock",),
             lock_age_seconds=60,
         )
-        assert lock.exists()
         result = _run_script(tmp_path, "--clean")
         assert result.returncode == 0
-        assert not lock.exists(), "stale lock should have been removed"
+        assert lock.exists(), "--clean deleted a lock:\n" + result.stdout
+        assert "rm -f" in result.stdout and "index.lock" in result.stdout, result.stdout
+
+
+# ── #2328: real git — held locks, linked worktrees ────────────────────
+
+
+def _git(cwd: Path, *args: str) -> str:
+    return subprocess.run(
+        ["git", *args], cwd=cwd, check=True, capture_output=True,
+        text=True, encoding="utf-8", timeout=60,
+    ).stdout.strip()
+
+
+def _real_repo(tmp_path: Path) -> Path:
+    repo = tmp_path / "repo"
+    subprocess.run(["git", "init", "-q", str(repo)], check=True, capture_output=True, timeout=60)
+    _git(repo, "config", "user.email", "fixture@example.invalid")
+    _git(repo, "config", "user.name", "fixture")
+    _git(repo, "commit", "-q", "--allow-empty", "-m", "test: base")
+    return repo
+
+
+def _age(path: Path, seconds: int) -> None:
+    then = time.time() - seconds
+    os.utime(path, (then, then))
+
+
+class TestLocksAreNeverDeleted:
+    def test_a_lock_held_by_a_running_git_survives_clean(self, tmp_path):
+        """The #2328 measurement: Git Bash has no pgrep, the old script read
+        "can't tell" as "no git running" and deleted a lock git was holding."""
+        repo = _real_repo(tmp_path)
+        head = _git(repo, "rev-parse", "HEAD")
+        # Bytes, not text: text mode on Windows writes `\r\n`, and git reads
+        # `start\r` as an unknown command and exits.
+        proc = subprocess.Popen(
+            ["git", "update-ref", "--stdin"], cwd=repo, stdin=subprocess.PIPE,
+            stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+        )
+        try:
+            proc.stdin.write(f"start\ncreate refs/heads/held {head}\nprepare\n".encode())
+            proc.stdin.flush()
+            assert proc.stdout.readline().strip() == b"start: ok"
+            assert proc.stdout.readline().strip() == b"prepare: ok"
+            lock = repo / ".git" / "refs" / "heads" / "held.lock"
+            assert lock.exists(), "control: the transaction holds no lock"
+            _age(lock, 120)
+            result = _run_script(repo, "--clean")
+            assert lock.exists(), "--clean deleted a lock a running git holds:\n" + result.stdout
+            assert proc.poll() is None, "control: the holder exited during the check"
+            assert "held.lock" in result.stdout, result.stdout
+        finally:
+            proc.stdin.write(b"abort\n")
+            proc.stdin.close()
+            proc.wait(timeout=30)
+
+
+class TestLockLocation:
+    @staticmethod
+    def _plant(tree: Path) -> list[str]:
+        """Locks where git keeps them: this tree's index, and the common dir."""
+        names = []
+        for rel in ("index.lock", "packed-refs.lock"):
+            p = Path(_git(tree, "rev-parse", "--path-format=absolute", "--git-path", rel))
+            p.write_text("", encoding="utf-8")
+            _age(p, 60)
+            # Last two components: `linked/index.lock` names the linked tree's
+            # own index, not the main tree's.
+            names.append("/".join(p.as_posix().split("/")[-2:]))
+        return names
+
+    def test_linked_worktree_lists_its_locks(self, tmp_path):
+        """A linked tree's `.git` is a file: the old `find <tree>/.git` saw no
+        lock at all and reported everything fine."""
+        repo = _real_repo(tmp_path)
+        linked = tmp_path / "linked"
+        _git(repo, "worktree", "add", "-q", "-b", "feat", str(linked))
+        names = self._plant(linked)
+        result = _run_script(linked)
+        assert "一切正常" not in result.stdout, result.stdout
+        for name in names:
+            assert name in result.stdout, f"{name} not listed:\n{result.stdout}"
+
+    def test_main_tree_lists_its_locks(self, tmp_path):
+        """Must-not-ring control: the main tree was already covered."""
+        repo = _real_repo(tmp_path)
+        names = self._plant(repo)
+        result = _run_script(repo)
+        for name in names:
+            assert name in result.stdout, f"{name} not listed:\n{result.stdout}"
 
 
 # ── TestCheckHeadOnly ─────────────────────────────────────────────────

@@ -686,11 +686,12 @@ class TestV4ExitCodeTable:
         r = _scan(tmp_path, reference=_reference(tmp_path, exit_table=table))
         assert _open(r.findings) == [] and r.per_doc["ref.md"]["exit_codes"] == 3
 
-    def test_zero_and_documented_but_unreachable_codes_are_not_judged(self, tmp_path):
+    def test_v4_does_not_judge_documented_but_unreachable_codes(self, tmp_path):
+        """That direction is V6's (#2492); V4 only asks "reachable but unlisted"."""
         table = _REF_EXIT + "| `9` | never |\n"
         r = _scan(tmp_path, reference=_reference(tmp_path, exit_table=table),
                   exit_codes={"widget": mod.reachable_exit_codes("import sys\nsys.exit(1)\n")})
-        assert _open(r.findings) == []
+        assert [f for f in _open(r.findings) if f[0] == "V4"] == []
 
     def test_argparse_makes_2_reachable_even_when_the_source_never_spells_it(self, tmp_path):
         table = "\n**結束碼**\n\n| 代碼 | 說明 |\n|------|------|\n| `0` | ok |\n| `1` | x |\n"
@@ -731,6 +732,54 @@ class TestV4ExitCodeTable:
             ("代碼", "說明"), ("Code", "Description"), ("Code", "意義"),
             ("Code", "含義"), ("Code", "Meaning"), ("Exit Code", "含義", "CI 行為"),
         }
+
+
+class TestV6DocumentedCodeUnreachable:
+    """The reverse of V4 (#2492): a code the table lists must have an exit."""
+
+    _TABLE = ("\n**結束碼**\n\n| 代碼 | 說明 |\n|------|------|\n"
+              "| `0` | ok |\n| `1` | x |\n| `2` | caller |\n")
+
+    def _run(self, tmp_path, table, source="import sys\nsys.exit(2)\n"):
+        return _scan(tmp_path, reference=_reference(tmp_path, exit_table=table),
+                     exit_codes={"widget": mod.reachable_exit_codes(source)})
+
+    def test_a_listed_code_no_exit_produces_is_reported_on_its_row(self, tmp_path):
+        r = self._run(tmp_path, self._TABLE)
+        assert _open(r.findings) == [("V6", "widget", "1")]
+        row = next(f for f in r.findings if f.verdict == "V6")
+        lines = (tmp_path / "ref.md").read_text(encoding="utf-8").splitlines()
+        assert lines[row.line - 1].startswith("| `1` |")
+
+    def test_a_reachable_code_is_not_reported(self, tmp_path):
+        r = self._run(tmp_path, self._TABLE, source="import sys\nsys.exit(1)\n")
+        assert _open(r.findings) == []
+
+    def test_argparse_makes_2_reachable(self, tmp_path):
+        table = self._TABLE.replace("| `1` | x |\n", "")
+        r = self._run(tmp_path, table, source="import sys\nsys.exit(0)\n")
+        assert _open(r.findings) == []
+
+    def test_zero_is_never_judged(self, tmp_path):
+        table = self._TABLE.replace("| `1` | x |\n", "")
+        assert _open(self._run(tmp_path, table).findings) == []
+
+    def test_an_opaque_script_is_not_judged(self, tmp_path):
+        r = self._run(tmp_path, self._TABLE, source=_OPAQUE_SOURCE)
+        assert _open(r.findings) == [] and r.stats["exit_undecidable_scripts"] == 1
+
+    def test_a_traceback_only_row_is_exempted_with_its_reason(self, tmp_path):
+        table = self._TABLE.replace(
+            "| `1` | x |", "| `1` | traceback only | <!-- datools-cmd-ignore: no exit -->")
+        r = self._run(tmp_path, table)
+        assert _open(r.findings) == [] and r.errors == []
+        assert [f.ignored for f in r.findings if f.verdict == "V6"] == ["no exit"]
+
+    def test_an_exemption_on_a_reachable_code_is_stale(self, tmp_path):
+        table = self._TABLE.replace(
+            "| `1` | x |", "| `1` | x | <!-- datools-cmd-ignore: no exit -->")
+        r = self._run(tmp_path, table, source="import sys\nsys.exit(1)\n")
+        assert any("stale" in e for e in r.errors), r.errors
 
 
 def _probe_parser() -> argparse.ArgumentParser:

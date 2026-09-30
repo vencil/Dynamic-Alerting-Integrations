@@ -62,7 +62,7 @@ func TestPlatformLayerProblemsNeverBlockTheTenant(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			w, dir := platformLayerRepo(t, "tenants:\n  tx:\n"+tc.block)
 
-			errs, notices, err := w.DryRunValidate("tx", platformLayerTenant)
+			errs, notices, err := w.DryRunValidate(context.Background(), "tx", platformLayerTenant)
 			if err != nil {
 				t.Fatalf("DryRunValidate: %v", err)
 			}
@@ -91,7 +91,7 @@ func TestPlatformLayerControlSameKeyInTheTenantBodyIsRefused(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			w, _ := platformLayerRepo(t, "")
 			body := "tenants:\n  tx:\n    mysql_connections: \"90\"\n" + tc.block
-			errs, notices, err := w.DryRunValidate("tx", body)
+			errs, notices, err := w.DryRunValidate(context.Background(), "tx", body)
 			if err != nil {
 				t.Fatalf("DryRunValidate: %v", err)
 			}
@@ -125,7 +125,7 @@ func TestPlatformLayerControlSameKeyInTheTenantBodyIsRefused(t *testing.T) {
 func TestPlatformLayerKeyTheTenantWritesIsJudgedAsTheTenants(t *testing.T) {
 	w, _ := platformLayerRepo(t, "tenants:\n  tx:\n    mysql_conections_typo: \"5\"\n")
 	body := "tenants:\n  tx:\n    mysql_conections_typo: null\n"
-	errs, notices, err := w.DryRunValidate("tx", body)
+	errs, notices, err := w.DryRunValidate(context.Background(), "tx", body)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -166,7 +166,7 @@ func TestPlatformLayerElectingADefinedProfileIsNotFlagged(t *testing.T) {
 		"_platform.yaml": "tenants:\n  tx:\n    _profile: std\n",
 		"tx.yaml":        platformLayerTenant,
 	})
-	errs, notices, err := NewWriter(dir, dir).DryRunValidate("tx", platformLayerTenant)
+	errs, notices, err := NewWriter(dir, dir).DryRunValidate(context.Background(), "tx", platformLayerTenant)
 	if err != nil {
 		t.Fatal(err)
 	}

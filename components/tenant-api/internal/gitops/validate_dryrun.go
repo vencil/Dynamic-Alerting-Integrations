@@ -1,6 +1,7 @@
 package gitops
 
 import (
+	"context"
 	"errors"
 	"io/fs"
 	"log/slog"
@@ -48,7 +49,10 @@ import (
 // ErrTenantTreeScan, or a resolver read error). errs is the blocking set Write
 // would wrap in ErrValidation — the pre-flight's, or else validate()'s — and
 // notices is validate()'s advisory set; a structural failure is reported alone.
-func (w *Writer) DryRunValidate(tenantID, yamlContent string) (errs, notices []string, err error) {
+//
+// ctx carries only the #2405 WithReplaceUnparseable bit, so the verdict on a
+// current file that cannot be parsed is the one this caller's Write would get.
+func (w *Writer) DryRunValidate(ctx context.Context, tenantID, yamlContent string) (errs, notices []string, err error) {
 	if err := guardTenantID(tenantID); err != nil {
 		return nil, nil, err
 	}
@@ -59,7 +63,7 @@ func (w *Writer) DryRunValidate(tenantID, yamlContent string) (errs, notices []s
 	if err != nil {
 		return nil, nil, err
 	}
-	errs, notices = validate(w.configDir, tenantID, filePath, yamlContent)
+	errs, notices = validateReplacing(w.configDir, tenantID, filePath, yamlContent, replaceUnparseableAllowed(ctx))
 	return errs, notices, nil
 }
 

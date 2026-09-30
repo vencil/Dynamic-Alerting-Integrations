@@ -21,8 +21,11 @@ Prerequisites:
 
 import argparse
 import hashlib
+import io
 import logging
+import math
 import os
+import re
 import signal
 import stat
 import sys
@@ -297,7 +300,11 @@ def reconcile_one(
         # Error status, still returns. ⚠️ `api is None` is NOT the test: the
         # controller nulls `api` under `--dry-run`, so it would take this
         # branch too (see the docstring).
-        if cli and isinstance(e, OutputWriteError):
+        #
+        # #2395: ANY exception on the CLI path, not only OutputWriteError —
+        # anything else was logged here and `render_cr_file` still returned
+        # EXIT_OK with nothing written. `render_cr_file` turns it into rc 2.
+        if cli:
             raise
         log.error("Failed to reconcile %s/%s: %s", namespace, name, e)
         if api and not dry_run:
@@ -397,14 +404,80 @@ def run_watch(
 
 # ── Offline render (no K8s required) ─────────────────────────────────
 
-#: YAML 1.1 (PyYAML) implicit tags that make an unquoted name a caller
-#: error: int / float / bool. `timestamp` is absent — an unquoted date is
-#: kept as written. Close to what Kubernetes sees after YAML→JSON, NOT the
+#: YAML 1.1 (PyYAML) implicit tags that make an unquoted `metadata.name`
+#: or `metadata.namespace` a caller error: int / float / bool. `timestamp`
+#: is absent — an unquoted date passes this check (then the format one). Close to what Kubernetes sees after YAML→JSON, NOT the
 #: same: go-yaml v2 and PyYAML type `0o17`, `1e3`, `08`, `y`, `n`, `1:30`
-#: differently (#2371 review). Kubernetes' name format (DNS-1123) is not
-#: checked either.
+#: differently (#2371 review). The name FORMAT is checked separately, below.
 _NON_STRING_NAME_TAGS = frozenset("tag:yaml.org,2002:" + t
                                   for t in ("int", "float", "bool"))
+
+#: #2396: the formats the API server enforces on a ThresholdConfig, so the
+#: `--render-cr` path accepts the same names the controller path can ever
+#: see. `metadata.name` becomes the output FILE NAME and both land in the
+#: header comment: unchecked, `../x` was written outside `--config-dir` and
+#: a newline split the header into a top-level key of the rendered file.
+#: ⛔ Used with `re.fullmatch` only — `$` also matches before a trailing
+#: newline, which is exactly the shape this has to refuse.
+_DNS1123_LABEL = r"[a-z0-9](?:[-a-z0-9]*[a-z0-9])?"
+_DNS1123_SUBDOMAIN_RE = re.compile(rf"{_DNS1123_LABEL}(?:\.{_DNS1123_LABEL})*")
+_DNS1123_LABEL_RE = re.compile(_DNS1123_LABEL)
+_DNS1123_SUBDOMAIN_MAX = 253
+_DNS1123_LABEL_MAX = 63
+
+
+def _is_dns1123_subdomain(text: str) -> bool:
+    """RFC 1123 subdomain, as Kubernetes checks an object name."""
+    return (len(text) <= _DNS1123_SUBDOMAIN_MAX
+            and _DNS1123_SUBDOMAIN_RE.fullmatch(text) is not None)
+
+
+def _is_dns1123_label(text: str) -> bool:
+    """RFC 1123 label, as Kubernetes checks a namespace name."""
+    return (len(text) <= _DNS1123_LABEL_MAX
+            and _DNS1123_LABEL_RE.fullmatch(text) is not None)
+
+
+#: The spellings YAML 1.1 reads as null (plus an empty value). PyYAML
+#: builds None for `!!null <anything>`; Kubernetes (YAML→JSON, go-yaml)
+#: refuses the whole document when a `!!null` scalar is written as
+#: anything else (`!!null team`).
+_NULL_SPELLINGS = frozenset(("", "~", "null", "Null", "NULL"))
+_NULL_TAG = "tag:yaml.org,2002:null"
+
+
+def _null_tagged_non_null(root: Any) -> Any:
+    """The text of the first ``!!null`` scalar in *root* not written as null.
+
+    Walks the WHOLE composed graph, not one key: go-yaml refuses the
+    document wherever such a scalar sits — under a duplicate key the load
+    drops, in an earlier `metadata:` block, or behind a `<<` merge / alias
+    (visited once, by node id). None when there is none.
+    """
+    seen = set()
+    stack = [root]
+    while stack:
+        node = stack.pop()
+        if node is None or id(node) in seen:
+            continue
+        seen.add(id(node))
+        if isinstance(node, yaml.ScalarNode):
+            if node.tag == _NULL_TAG and node.value not in _NULL_SPELLINGS:
+                return node.value
+        elif isinstance(node, yaml.MappingNode):
+            for key, value in node.value:
+                stack.extend((key, value))
+        elif isinstance(node, yaml.SequenceNode):
+            stack.extend(node.value)
+    return None
+
+
+def _named_stream(text: str, path: Path) -> io.StringIO:
+    """*text* as a stream named *path*, so a YAML error names the file
+    (and prints no snippet) exactly as reading the file itself did."""
+    stream = io.StringIO(text)
+    stream.name = str(path)
+    return stream
 
 
 def _plain_tag(text: str) -> str:
@@ -451,13 +524,24 @@ def render_cr_file(
     # the file name, the log and the header name the CR as written.
     try:
         with open(cr_path, encoding="utf-8") as fh:
-            cr = _keys_as_plain_text(load_for_rewrite(fh))
+            text = fh.read()
+        cr = _keys_as_plain_text(
+            load_for_rewrite(_named_stream(text, cr_path)))
+        # #2396: the node graph, for the `!!null` check below.
+        root = yaml.compose(_named_stream(text, cr_path),
+                            Loader=yaml.SafeLoader)
     except (OSError, yaml.YAMLError) as e:
         log.error("Failed to parse %s: %s", cr_path, e)
         return EXIT_CALLER_ERROR
 
     if not isinstance(cr, dict) or cr.get("kind") != "ThresholdConfig":
         log.error("%s is not a ThresholdConfig resource", cr_path)
+        return EXIT_CALLER_ERROR
+    written = _null_tagged_non_null(root)
+    if written is not None:
+        log.error("%s: a scalar tagged !!null is written as %r; only an "
+                  "empty scalar or ~ / null / Null / NULL means null, and "
+                  "Kubernetes refuses the document", cr_path, written)
         return EXIT_CALLER_ERROR
 
     # #2371: shape checks `reconcile_one` does not make. Its
@@ -478,9 +562,11 @@ def render_cr_file(
         log.error("%s: metadata.name must be a non-empty string", cr_path)
         return EXIT_CALLER_ERROR
     # An unquoted name is RawPlain text. Judged by YAML 1.1 (PyYAML)
-    # implicit typing: one read as int / float / bool is a caller error;
-    # a date / datetime is kept as written (see _NON_STRING_NAME_TAGS for
-    # where this differs from Kubernetes). Null was refused above.
+    # implicit typing: one read as int / float / bool is a caller error; a
+    # date passes this type check and is then held to the DNS-1123 format
+    # check below, which refuses a datetime (`:`, `T`, `Z`, space). See
+    # _NON_STRING_NAME_TAGS for where the typing differs from Kubernetes.
+    # Null was refused above.
     tag = _plain_tag(name) if isinstance(name, RawPlain) else None
     if tag in _NON_STRING_NAME_TAGS:
         # #2430: before #2399/#2400 this name was rendered under its typed
@@ -507,16 +593,319 @@ def render_cr_file(
                       "name's file: do not delete it there)")
         log.error("%s: metadata.name must be a string, but unquoted %s is "
                   "read as %s (YAML 1.1). Quoting makes it a string; it "
-                  "must still be a valid Kubernetes object name (DNS-1123), "
-                  "which this tool does not check%s", cr_path, name,
-                  tag.rsplit(":", 1)[-1], stale)
+                  "must still be a valid Kubernetes object name (DNS-1123)%s",
+                  cr_path, name, tag.rsplit(":", 1)[-1], stale)
         return EXIT_CALLER_ERROR
+    # #2396: the name is the output file name and goes into the header
+    # comment, so its format is checked here, before anything is written.
+    if not _is_dns1123_subdomain(name):
+        log.error("%s: metadata.name %r is not a valid Kubernetes object "
+                  "name (DNS-1123 subdomain: lowercase a-z, 0-9, '-' and "
+                  "'.', starting and ending alphanumeric, at most %d "
+                  "characters)", cr_path, name, _DNS1123_SUBDOMAIN_MAX)
+        return EXIT_CALLER_ERROR
+    # #2396: a null / empty namespace is UNSET in Kubernetes (the API
+    # server fills in the request's namespace), so such a CR exists in a
+    # cluster. It is dropped here and renders exactly as an absent one:
+    # header `?`, log `default`. ⛔ None alone is not the test: PyYAML
+    # builds None for `!!null team` too, which Kubernetes refuses (checked
+    # over the whole document, above).
+    if metadata.get("namespace", "") in (None, ""):
+        metadata.pop("namespace", None)
+    if "namespace" in metadata:
+        namespace = metadata["namespace"]
+        ns_tag = (_plain_tag(namespace) if isinstance(namespace, RawPlain)
+                  else None)
+        if ns_tag in _NON_STRING_NAME_TAGS:
+            log.error("%s: metadata.namespace must be a string, but "
+                      "unquoted %s is read as %s (YAML 1.1). Quoting makes "
+                      "it a string; it must still be a valid Kubernetes "
+                      "namespace name (DNS-1123 label)",
+                      cr_path, namespace, ns_tag.rsplit(":", 1)[-1])
+            return EXIT_CALLER_ERROR
+        if not (isinstance(namespace, str) and _is_dns1123_label(namespace)):
+            log.error("%s: metadata.namespace %r is not a valid Kubernetes "
+                      "namespace name (DNS-1123 label: lowercase a-z, 0-9 "
+                      "and '-', starting and ending alphanumeric, at most "
+                      "%d characters)", cr_path, namespace,
+                      _DNS1123_LABEL_MAX)
+            return EXIT_CALLER_ERROR
     if "spec" in cr and not isinstance(cr["spec"], dict):
         log.error("%s: spec must be a mapping", cr_path)
         return EXIT_CALLER_ERROR
+    shape_error = _spec_block_shape_error(cr.get("spec") or {})
+    if shape_error:
+        log.error("%s: %s", cr_path, shape_error)
+        return EXIT_CALLER_ERROR
 
-    reconcile_one(cr, config_dir, dry_run=dry_run, cli=True)
+    # #2395: `reconcile_one(cli=True)` re-raises whatever stopped the
+    # render. OutputWriteError goes on to `main`'s decorator (#1789, rc 2
+    # naming --config-dir); anything else is one line and rc 2 here. rc 0
+    # only when the file was written (or, under --dry-run, would be) and
+    # nothing raised. ⚠️ A failure BEFORE the write leaves no file; one after
+    # it (e.g. in the log line that follows) is rc 2 with the file on disk.
+    try:
+        reconcile_one(cr, config_dir, dry_run=dry_run, cli=True)
+    except OutputWriteError:
+        raise
+    except Exception as e:  # noqa: BLE001 — every cause is a failed render
+        log.error("Failed to render %s: %s", cr_path, e)
+        return EXIT_CALLER_ERROR
     return EXIT_OK
+
+
+def _spec_block_shape_error(spec: dict) -> str:
+    """Why *spec*'s blocks would not render as the CR wrote them, or ``""``.
+
+    #2395. ``render_cr_to_yaml`` silently drops a block that is not a
+    mapping (``defaults: [x]``, ``stateFilters: foo``), and writes a tenant
+    whose value is not a mapping as-is — the exporter then refuses the WHOLE
+    file (``cannot unmarshal !!int``), every tenant in it included. The CRD
+    declares each of these ``type: object``.
+    Left alone: null (a null tenant is read by the exporter as empty), and a
+    BLOCK whose value YAML types as falsy (``defaults: 0``, ``tenants:
+    false``, ``[]``) — dropped as an empty block, which #2331 pins
+    (tests/ops/test_tenant_id_as_text.py). A TENANT value gets no such pass: it is
+    written, not dropped, and the exporter refuses ``t2: 0`` too.
+    A ``!!set`` is a mapping to the exporter (every value null), so it passes
+    wherever a mapping is WRITTEN (a tenant, a state filter); a block that is
+    a set is still refused, because ``render_cr_to_yaml`` would drop it.
+
+    Below the blocks, only as deep as the exporter's types go
+    (``pkg/config/types.go``): ``defaults`` is ``map[string]float64``
+    (:func:`_default_value_error`) and ``state_filters`` is
+    ``map[string]StateFilter`` (:func:`_state_filter_error`). Tenant values
+    below the tenant (``ScheduledValue``) are not checked.
+    Only ``--render-cr`` asks this; the controller path is unchanged.
+    """
+    for key in ("tenants", "defaults", "stateFilters"):
+        block = spec.get(key)
+        if block is None or isinstance(block, dict):
+            continue
+        # A plain scalar's text, as YAML types it — NOT re-parsed as a
+        # document: `yaml.safe_load("---")` is None, and `--- 0`, `--- no`
+        # would read as falsy too, dropping a block the CR wrote. Only a
+        # null / bool / int / float can be falsy; any other tag is text.
+        if isinstance(block, RawPlain):
+            block = (yaml.safe_load(block)
+                     if _plain_tag(block) in _FALSY_ABLE_TAGS else str(block))
+        if block:
+            return f"spec.{key} must be a mapping"
+    tenants = spec.get("tenants")
+    for tenant, values in (tenants if isinstance(tenants, dict) else {}).items():
+        if values is not None and not isinstance(values, (dict, set)):
+            return (f"spec.tenants.{tenant} must be a mapping; the exporter "
+                    f"skips the whole rendered file otherwise")
+    defaults = spec.get("defaults")
+    for metric, value in (defaults if isinstance(defaults, dict) else {}).items():
+        why = _default_value_error(value)
+        if why:
+            return (f"spec.defaults.{metric} {why}; the exporter skips the "
+                    f"whole rendered file otherwise")
+    filters = spec.get("stateFilters")
+    for name, sf in (filters if isinstance(filters, dict) else {}).items():
+        why = _state_filter_error(sf)
+        if why:
+            return (f"spec.stateFilters.{name}{why}; the exporter skips the "
+                    f"whole rendered file otherwise")
+    return ""
+
+
+_FALSY_ABLE_TAGS = frozenset("tag:yaml.org,2002:" + t
+                             for t in ("null", "bool", "int", "float"))
+
+# ── yaml.v3's plain-scalar → number resolution (#2395) ──────────────
+#
+# The exporter decodes `defaults` with gopkg.in/yaml.v3 (v3.0.1): a plain
+# scalar lands in a float64 only if `resolve()` (resolve.go) types it
+# int / float. What follows is that function's number path, step for step,
+# with the Go strconv calls it makes (internal/strconv/atoi.go, atof.go).
+# `test_the_rows_match_the_exporter` re-measures it against da-guard.
+# ⚠️ Not claimed for a mantissa thousands of digits long: Go's ParseFloat
+# reads those differently from Python's `float()` (`1` + 5000 `0` +
+# `e-1000` is 1e-201 in Go, inf here), so such a value may be refused.
+
+_V3_NAMED_FLOATS = frozenset(
+    p + w for w in (".inf", ".Inf", ".INF") for p in ("", "+", "-")
+) | frozenset((".nan", ".NaN", ".NAN"))
+# resolve.go `yamlStyleFloat`.
+_V3_STYLE_FLOAT = re.compile(
+    r"[-+]?(\.[0-9]+|[0-9]+(\.[0-9]*)?)([eE][-+]?[0-9]+)?")
+# Go strconv's digit value of an ASCII byte; anything else is not a digit.
+_GO_DIGIT_VALUE = {c: int(c, 36) for c in
+                   "0123456789abcdefghijklmnopqrstuvwxyz"
+                   "ABCDEFGHIJKLMNOPQRSTUVWXYZ"}
+# What Go's ParseFloat accepts from a text starting with `.` (no sign, no
+# 0x prefix, not inf/nan), once `_go_underscore_ok` has passed it.
+_GO_DOT_FLOAT = re.compile(r"\.[0-9]+([eE][-+]?[0-9]+)?")
+
+
+def _go_underscore_ok(s: str) -> bool:
+    """Go ``strconv.underscoreOK``: each ``_`` sits between digits (or
+    between a base prefix and a digit)."""
+    if s[:1] in ("+", "-"):
+        s = s[1:]
+    saw, i, hexa = "^", 0, False
+    if len(s) >= 2 and s[0] == "0" and s[1] in "bBoOxX":
+        saw, i, hexa = "0", 2, s[1] in "xX"
+    for c in s[i:]:
+        if "0" <= c <= "9" or hexa and c in "abcdefABCDEF":
+            saw = "0"
+        elif c == "_":
+            if saw != "0":
+                return False
+            saw = "_"
+        elif saw == "_":
+            return False
+        else:
+            saw = "!"
+    return saw != "_"
+
+
+def _go_parse_uint(s: str, base: int):
+    """Go ``strconv.ParseUint(s, base, 64)`` on a text without ``_``:
+    the value, or None on any error."""
+    if not s:
+        return None
+    if base == 0:
+        base = 10
+        if s[0] == "0":
+            prefix = {"b": 2, "B": 2, "o": 8, "O": 8,
+                      "x": 16, "X": 16}.get(s[1:2])
+            if len(s) >= 3 and prefix:
+                base, s = prefix, s[2:]
+            else:
+                base, s = 8, s[1:]
+    n = 0
+    for c in s:
+        # Go reads BYTES: only ASCII 0-9 / a-z / A-Z are digits. ⛔ No
+        # `c.lower()` on the raw char — `"İ".lower()` is two chars.
+        d = _GO_DIGIT_VALUE.get(c, 99)
+        if d >= base:
+            return None
+        n = n * base + d
+        # Go's cutoff: stop at the first overflow (ErrRange) instead of
+        # carrying a bignum to the end of a very long text.
+        if n >= 1 << 64:
+            return None
+    return n
+
+
+def _go_parse_int(s: str, base: int):
+    """Go ``strconv.ParseInt(s, base, 64)``: the value, or None."""
+    neg = s[:1] == "-"
+    un = _go_parse_uint(s[1:] if s[:1] in ("+", "-") else s, base)
+    if un is None or un > (1 << 63 if neg else (1 << 63) - 1):
+        return None
+    return -un if neg else un
+
+
+def _go_parse_float_ok(s: str) -> bool:
+    """Go ``strconv.ParseFloat(s, 64)`` succeeds, for the two shapes
+    resolve() hands it: a `.`-led text, or one `_V3_STYLE_FLOAT` matched.
+    Overflow (±Inf) is an error; underflow is not. Judged by Python's
+    `float()`, which matches Go except on a mantissa thousands of digits
+    long (see the section comment)."""
+    try:
+        return not math.isinf(float(s.replace("_", "")))
+    except ValueError:
+        return False
+
+
+def _v3_reads_as_number(text: str) -> bool:
+    """yaml.v3 resolves the PLAIN scalar *text* to an int or a float."""
+    if text in _V3_NAMED_FLOATS:
+        return True
+    head = text[:1]
+    if head == ".":
+        # `strconv.ParseFloat(in)` on the text as written, `_` included.
+        return (_go_underscore_ok(text)
+                and bool(_GO_DOT_FLOAT.fullmatch(text.replace("_", "")))
+                and _go_parse_float_ok(text))
+    if not head or head not in "+-0123456789":
+        return False  # hint 'M' (only the named table) or none: a string
+    plain = text.replace("_", "")
+    if (_go_parse_int(plain, 0) is not None
+            or _go_parse_uint(plain, 0) is not None):
+        return True
+    if _V3_STYLE_FLOAT.fullmatch(plain) and _go_parse_float_ok(plain):
+        return True
+    # Fallbacks after the float: an explicit base, where Go's ParseInt
+    # takes a sign after the prefix (`0b-1`).
+    for prefix, base in (("0b", 2), ("0o", 8)):
+        if plain.startswith(prefix):
+            rest = plain[2:]
+            return (_go_parse_int(rest, base) is not None
+                    or _go_parse_uint(rest, base) is not None)
+        if plain.startswith("-" + prefix):
+            return _go_parse_int("-" + plain[3:], base) is not None
+    return False
+
+
+def _default_value_error(value: Any) -> str:
+    """Why *value* is not a ``defaults`` value the exporter decodes, or ``""``.
+
+    The exporter reads ``defaults`` as ``map[string]float64``. Oracle
+    (``da-guard served-values``, rc 3 = file refused): null and numbers are
+    read; a bool, a date, a sequence / mapping, and ANY quoted scalar —
+    ``"80"`` included — make it refuse the whole file.
+    """
+    if value is None:
+        return ""
+    if isinstance(value, bool):
+        return "must be a number, not a boolean"
+    if isinstance(value, int):
+        # An int (`!!int "…"`) is dumped as its decimal digits, which
+        # yaml.v3 reads through ParseFloat when it passes 64 bits: refused
+        # once it rounds past float64 max (Go-measured: (2^54-1)*2^970 and
+        # up, either sign). `float()` rounds the same way and raises there;
+        # it also needs no `str()`, which is capped at 4300 digits.
+        try:
+            float(value)
+        except OverflowError:
+            return "must be a number within float64 range"
+        return ""
+    if isinstance(value, float):
+        return ""
+    if not isinstance(value, str):
+        return "must be a number"
+    # A RawPlain is dumped back plain, as written. Any other str is dumped
+    # plain only where PyYAML would not retype it; otherwise it is QUOTED,
+    # and yaml.v3 does not decode a quoted scalar into a number.
+    if (not isinstance(value, RawPlain)
+            and _plain_tag(value) != "tag:yaml.org,2002:str"):
+        return "must be a number, not a quoted string"
+    if not _v3_reads_as_number(value):
+        return f"must be a number, not {value!r}"
+    return ""
+
+
+def _state_filter_error(sf: Any) -> str:
+    """Why *sf* is not a ``StateFilter`` the exporter decodes, or ``""``.
+
+    ``StateFilter`` is ``{reasons: []string, severity: string,
+    default_state: string}``, other keys ignored. Oracle-measured: a
+    non-mapping filter, a non-sequence ``reasons`` or one holding a
+    sequence / mapping, and a sequence / mapping ``severity`` /
+    ``default_state`` are refused. Any scalar (null included) is a string.
+    The returned text follows the filter's name.
+    """
+    if sf is None or isinstance(sf, set):
+        return ""
+    if not isinstance(sf, dict):
+        return " must be a mapping"
+    reasons = sf.get("reasons")
+    if reasons is not None:
+        if not isinstance(reasons, list):
+            return ".reasons must be a list"
+        # `tuple`: an item of `!!omap` / `!!pairs`, a one-key mapping to
+        # the exporter.
+        if any(isinstance(r, (list, tuple, dict, set)) for r in reasons):
+            return ".reasons must be a list of strings"
+    for key in ("severity", "default_state"):
+        if isinstance(sf.get(key), (list, dict, set)):
+            return f".{key} must be a string"
+    return ""
 
 
 # ── Main ─────────────────────────────────────────────────────────────

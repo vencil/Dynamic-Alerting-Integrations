@@ -1,6 +1,11 @@
 #!/usr/bin/env python3
 """da_assembler.py 的 pytest 風格測試 — CRD → YAML 組合器。"""
 
+import io
+import json
+import os
+import shutil
+import subprocess
 import tempfile
 from pathlib import Path
 from unittest import mock
@@ -12,6 +17,8 @@ from _lib_exitcodes import EXIT_CALLER_ERROR  # noqa: E402
 from _lib_io import OutputWriteError  # noqa: E402  (#1789)
 from da_assembler import (  # noqa: E402
     _content_sha256,
+    _is_dns1123_label,
+    _is_dns1123_subdomain,
     _output_filename,
     _signal_handler,
     reconcile_one,
@@ -293,8 +300,8 @@ class TestRenderCrFile:
     #   `08`    PyYAML str (not valid octal)     go-yaml differs
     #   `y`/`n` PyYAML str                       go-yaml v2 bool
     #   `1:30`  PyYAML int (sexagesimal)         go-yaml string
-    # Shapes let through here cannot be created in a cluster anyway (not a
-    # DNS-1123 name), and the name format itself is not checked.
+    # Shapes let through here that are not a DNS-1123 name are refused by
+    # the name-format check instead (#2396, TestRenderCrNameFormat).
     # `stale`: the file an earlier version (before #2399/#2400) rendered
     # this name to — measured against that version, #2430. None where it
     # is the name as written: quoting then overwrites the same file.
@@ -318,7 +325,7 @@ class TestRenderCrFile:
 
         以 YAML 1.1（PyYAML）的隱式型別判定，與 Kubernetes 經 YAML→JSON
         後的型別大致相同但不完全一致（見上方註解）。訊息要指名型別，並說明
-        加引號只讓它變成字串，名稱格式（DNS-1123）本工具不檢查。
+        加引號只讓它變成字串，仍須是合法的 Kubernetes 名稱（DNS-1123）。
 
         #2430：舊版（#2399／#2400 之前）把這個 name 寫成型別化後的拼法
         （`010` → `8.yaml`）。加引號重 render 後新檔是 `010.yaml`，舊檔
@@ -389,12 +396,8 @@ class TestRenderCrFile:
         # PyYAML's date resolver needs two-digit month/day: this one stays str.
         pytest.param("2024-1-1", "2024-1-1", id="date-short-is-str"),
         pytest.param('"2024-01-01"', "2024-01-01", id="quoted-date"),
-        pytest.param("2024-01-01T10:20:30Z", "2024-01-01T10:20:30Z",
-                     id="name-datetime"),
-        pytest.param("2024-01-01 10:20:30", "2024-01-01 10:20:30",
-                     id="name-datetime-space"),
         pytest.param('"010"', "010", id="quoted-int"),
-        pytest.param("'0x1F'", "0x1F", id="quoted-hex"),
+        pytest.param("'0x1f'", "0x1f", id="quoted-hex"),
         pytest.param('"1.5"', "1.5", id="quoted-float"),
         pytest.param('"yes"', "yes", id="quoted-bool"),
         pytest.param('"null"', "null", id="quoted-null"),
@@ -407,8 +410,10 @@ class TestRenderCrFile:
     def test_string_name_renders_as_written(self, name, want, tmp_path):
         """#2371：字串 name 照原文收，檔名與檔頭用原文。
 
-        未加引號的日期／日期時間照原文收；加了引號（或 `!!str`）的任何值
-        同理。明示 `!!timestamp` 的日期是 `date` 物件，轉 isoformat 後照收。
+        未加引號的日期照原文收；加了引號（或 `!!str`）的值同理。明示
+        `!!timestamp` 的日期是 `date` 物件，轉 isoformat 後照收。日期時間
+        （含 `:`、大寫 `T`／`Z`、空白）不是 DNS-1123 名稱，#2396 起 rc 2，
+        見 TestRenderCrNameFormat。
         """
         cr_path = tmp_path / "cr.yaml"
         cr_path.write_text(
@@ -421,6 +426,695 @@ class TestRenderCrFile:
         header = (out_dir / f"{want}.yaml").read_text(
             encoding="utf-8").split("\n")[0]
         assert header.endswith(f"/{want}"), header
+
+    def test_a_non_write_exception_is_not_rc_0(self, tmp_path, caplog):
+        """#2395：render 途中非 OutputWriteError 的例外一律 rc 2、不寫檔。
+
+        先前 reconcile_one 只對 OutputWriteError 重拋，其餘例外只記一行
+        `Failed to reconcile`，render_cr_file 照樣回 rc 0 卻一個檔都沒寫。
+        會讓本測試轉紅的改動：把 reconcile_one 的重拋條件改回
+        `cli and isinstance(e, OutputWriteError)`。
+        """
+        cr_path = tmp_path / "cr.yaml"
+        cr_path.write_text(self._K + "metadata: {name: ok}\n" + self._T,
+                           encoding="utf-8")
+        out_dir = tmp_path / "out"
+        out_dir.mkdir()
+        with mock.patch("da_assembler.dump_for_rewrite",
+                        side_effect=RuntimeError("injected")):
+            rc = render_cr_file(cr_path, out_dir)
+        assert rc == EXIT_CALLER_ERROR
+        assert "injected" in caplog.text
+        assert list(out_dir.iterdir()) == []
+
+    @pytest.mark.parametrize("value", [
+        pytest.param("0", id="int"),
+        pytest.param("false", id="bool"),
+        pytest.param("[x]", id="list"),
+        pytest.param("x", id="scalar"),
+    ])
+    def test_a_non_mapping_tenant_is_caller_error(
+            self, value, tmp_path, caplog):
+        """#2395：租戶的值不是 mapping 時 rc 2、不寫檔。
+
+        先前照原樣寫出，exporter 以 `cannot unmarshal !!int` 之類整份
+        跳過該檔——連同一個檔裡其他合法租戶也不生效——而 rc 是 0。
+        會讓本測試轉紅的改動：拿掉 `_spec_block_shape_error` 的租戶迴圈。
+        """
+        cr_path = tmp_path / "cr.yaml"
+        cr_path.write_text(
+            self._K + "metadata: {name: ok}\nspec:\n  tenants:\n"
+            "    t1: {mysql_connections: '70'}\n"
+            f"    t2: {value}\n", encoding="utf-8")
+        out_dir = tmp_path / "out"
+        out_dir.mkdir()
+        assert render_cr_file(cr_path, out_dir) == EXIT_CALLER_ERROR
+        assert "spec.tenants.t2 must be a mapping" in caplog.text
+        assert list(out_dir.iterdir()) == []
+
+    @pytest.mark.parametrize("block", [
+        pytest.param("defaults: [x]", id="defaults-list"),
+        pytest.param("defaults: 1", id="defaults-int"),
+        pytest.param("stateFilters: foo", id="stateFilters-scalar"),
+        pytest.param("stateFilters: true", id="stateFilters-true"),
+        pytest.param("tenants: [x]", id="tenants-list"),
+        pytest.param("tenants: x", id="tenants-scalar"),
+    ])
+    def test_a_non_mapping_spec_block_is_caller_error(
+            self, block, tmp_path, caplog):
+        """#2395：spec 子區塊不是 mapping 時 rc 2、不寫檔。
+
+        先前 render_cr_to_yaml 把它靜默丟掉、rc 0，CR 寫的內容沒有一項
+        進到輸出。會讓本測試轉紅的改動：拿掉 `_spec_block_shape_error`
+        的區塊迴圈。
+        """
+        key = block.split(":")[0]
+        tenants = "" if key == "tenants" else "  tenants: {t1: {}}\n"
+        cr_path = tmp_path / "cr.yaml"
+        cr_path.write_text(
+            self._K + "metadata: {name: ok}\nspec:\n" + tenants
+            + f"  {block}\n", encoding="utf-8")
+        out_dir = tmp_path / "out"
+        out_dir.mkdir()
+        assert render_cr_file(cr_path, out_dir) == EXIT_CALLER_ERROR
+        assert f"spec.{key} must be a mapping" in caplog.text
+        assert list(out_dir.iterdir()) == []
+
+    @pytest.mark.parametrize("spec, body", [
+        pytest.param("  tenants: {t1: {m: '1'}, t2: null}\n",
+                     "tenants:\n  t1:\n    m: '1'\n  t2: null\n",
+                     id="null-tenant"),
+        pytest.param("  tenants: {t1: {m: '1'}}\n  defaults: null\n"
+                     "  stateFilters: {}\n",
+                     "tenants:\n  t1:\n    m: '1'\n",
+                     id="null-and-empty-blocks"),
+        pytest.param("  tenants: {t1: {m: '1'}}\n  defaults: 0\n"
+                     "  stateFilters: []\n",
+                     "tenants:\n  t1:\n    m: '1'\n",
+                     id="falsy-blocks"),
+    ])
+    def test_null_or_empty_shapes_still_render(self, spec, body, tmp_path):
+        """#2395 對照組：null 租戶與 null／空／falsy 區塊維持 rc 0、照舊寫出。
+
+        exporter 把 null 租戶讀成空（da-guard served-values 實測 rc 0）。
+        區塊值被 YAML 讀成 falsy（`defaults: 0`、`[]`）時當成空區塊丟掉，
+        這是 #2331 釘住的行為（test_tenant_id_as_text.py），本票不改。
+        """
+        cr_path = tmp_path / "cr.yaml"
+        cr_path.write_text(self._K + "metadata: {name: ok}\nspec:\n" + spec,
+                           encoding="utf-8")
+        out_dir = tmp_path / "out"
+        out_dir.mkdir()
+        assert render_cr_file(cr_path, out_dir) == 0
+        text = (out_dir / "ok.yaml").read_text(encoding="utf-8")
+        assert text.split("\n", 2)[2] == body
+
+
+# ── #2395 round 2: shapes below the blocks, judged against the exporter ──
+#
+# Each row is a CR `spec:` body and whether the exporter reads the file
+# `render_cr_to_yaml` makes of it. The `oracle` test below re-measures every
+# row with `da-guard served-values` (rc 3 = the exporter refused the file);
+# the other tests pin the tool's rc for the same rows.
+
+_T1 = "  tenants:\n    t1: {mysql_connections: '70'}\n"
+
+# An explicitly tagged, quoted int (`!!int "…"`) is a Python int, dumped as
+# its decimal digits; past 64 bits yaml.v3 reads those through ParseFloat.
+# The float64 edge: (2^54-1)*2^970 is the halfway point above float64 max,
+# rounded to even — i.e. up, to +Inf, which ParseFloat refuses (Go-measured).
+_F64_EDGE = (2**54 - 1) * 2**970
+
+
+def _tagged_int(n):
+    return '  defaults: {cpu: !!int "%d"}\n' % n
+
+#: (id, spec body below `_T1`) the exporter REFUSES once rendered.
+_REFUSED = [
+    ("defaults-true", "  defaults: {cpu: true}\n"),
+    ("defaults-yes", "  defaults: {cpu: yes}\n"),
+    ("defaults-word", "  defaults: {cpu: foo}\n"),
+    ("defaults-quoted-number", "  defaults: {cpu: \"80\"}\n"),
+    ("defaults-single-quoted", "  defaults: {cpu: '80'}\n"),
+    ("defaults-quoted-empty", "  defaults: {cpu: ''}\n"),
+    ("defaults-str-tag", "  defaults: {cpu: !!str 80}\n"),
+    ("defaults-sexagesimal", "  defaults: {cpu: 1:30}\n"),
+    ("defaults-date", "  defaults: {cpu: 2024-01-01}\n"),
+    ("defaults-list", "  defaults: {cpu: [1]}\n"),
+    ("defaults-map", "  defaults: {cpu: {a: 1}}\n"),
+    # Number-looking texts yaml.v3 still refuses: digits outside the base,
+    # overflow past float64 / uint64 / int64, a `_` not between digits.
+    ("defaults-bad-octal-digit", "  defaults: {cpu: 0o8}\n"),
+    ("defaults-bad-binary-digit", "  defaults: {cpu: 0b102}\n"),
+    ("defaults-hex-digit-in-binary", "  defaults: {cpu: 0b1F}\n"),
+    ("defaults-hex-digit-in-octal", "  defaults: {cpu: 0oF}\n"),
+    ("defaults-float-overflow", "  defaults: {cpu: 1e400}\n"),
+    ("defaults-negative-overflow", "  defaults: {cpu: -1e400}\n"),
+    ("defaults-quoted-overflow", "  defaults: {cpu: \"1e400\"}\n"),
+    ("defaults-hex-over-uint64", "  defaults: {cpu: 0x10000000000000000}\n"),
+    ("defaults-negative-hex-over-int64",
+     "  defaults: {cpu: -0xFFFFFFFFFFFFFFFF}\n"),
+    ("defaults-octal-over-uint64",
+     "  defaults: {cpu: 0o7777777777777777777777777}\n"),
+    ("defaults-binary-65-bits", "  defaults: {cpu: 0b" + "1" * 65 + "}\n"),
+    ("defaults-leading-underscore", "  defaults: {cpu: _1}\n"),
+    ("defaults-underscore-dot", "  defaults: {cpu: _.5}\n"),
+    ("defaults-dot-underscore", "  defaults: {cpu: ._5}\n"),
+    ("defaults-dot-trailing-underscore", "  defaults: {cpu: .5_}\n"),
+    # A non-ASCII letter whose lower() is two chars (U+0130); Go reads bytes.
+    ("defaults-dotted-I", "  defaults: {cpu: 1İ}\n"),
+    ("defaults-hex-dotted-I", "  defaults: {cpu: 0xİ}\n"),
+    ("defaults-quoted-dotted-I", "  defaults: {cpu: \"73İ\"}\n"),
+    ("defaults-kelvin-sign", "  defaults: {cpu: 1K}\n"),
+    ("defaults-fullwidth-digit", "  defaults: {cpu: １}\n"),
+    ("defaults-tagged-int-401-digits", _tagged_int(10**400)),
+    ("defaults-tagged-int-negative-401-digits", _tagged_int(-10**400)),
+    ("defaults-tagged-int-f64-edge", _tagged_int(_F64_EDGE)),
+    ("defaults-tagged-int-negative-f64-edge", _tagged_int(-_F64_EDGE)),
+    ("sf-reasons-omap", "  stateFilters: {x: {reasons: !!omap [a: 1]}}\n"),
+    ("sf-reasons-pairs", "  stateFilters: {x: {reasons: !!pairs [a: 1]}}\n"),
+    ("sf-int", "  stateFilters: {x: 1}\n"),
+    ("sf-word", "  stateFilters: {x: foo}\n"),
+    ("sf-empty-list", "  stateFilters: {x: []}\n"),
+    ("sf-list", "  stateFilters: {x: [a]}\n"),
+    ("sf-reasons-scalar", "  stateFilters: {x: {reasons: A}}\n"),
+    ("sf-reasons-nested-list", "  stateFilters: {x: {reasons: [[a]]}}\n"),
+    ("sf-reasons-map-item", "  stateFilters: {x: {reasons: [{a: 1}]}}\n"),
+    ("sf-severity-list", "  stateFilters: {x: {severity: [a]}}\n"),
+    ("sf-severity-map", "  stateFilters: {x: {severity: {a: 1}}}\n"),
+    ("sf-default-state-list", "  stateFilters: {x: {default_state: [a]}}\n"),
+]
+
+#: (id, spec body below `_T1`) the exporter READS once rendered.
+_READ = [
+    ("defaults-int", "  defaults: {cpu: 80}\n"),
+    ("defaults-float", "  defaults: {cpu: 80.5}\n"),
+    ("defaults-negative", "  defaults: {cpu: -5}\n"),
+    ("defaults-leading-dot", "  defaults: {cpu: .5}\n"),
+    ("defaults-exponent", "  defaults: {cpu: 1e3}\n"),
+    ("defaults-quoted-exponent", "  defaults: {cpu: \"1e3\"}\n"),
+    ("defaults-underscore", "  defaults: {cpu: 1_000}\n"),
+    ("defaults-hex", "  defaults: {cpu: 0x10}\n"),
+    ("defaults-signed-hex", "  defaults: {cpu: +0x10}\n"),
+    ("defaults-octal-0o", "  defaults: {cpu: 0o17}\n"),
+    ("defaults-binary", "  defaults: {cpu: 0b101}\n"),
+    ("defaults-leading-zero", "  defaults: {cpu: 010}\n"),
+    ("defaults-leading-zero-8", "  defaults: {cpu: 08}\n"),
+    ("defaults-inf", "  defaults: {cpu: .inf}\n"),
+    ("defaults-nan", "  defaults: {cpu: .nan}\n"),
+    ("defaults-null", "  defaults: {cpu: null}\n"),
+    ("defaults-float-tag", "  defaults: {cpu: !!float 80}\n"),
+    ("defaults-underflow", "  defaults: {cpu: 1e-400}\n"),
+    ("defaults-max-uint64", "  defaults: {cpu: 0xFFFFFFFFFFFFFFFF}\n"),
+    ("defaults-min-int64", "  defaults: {cpu: -0x8000000000000000}\n"),
+    ("defaults-trailing-underscore", "  defaults: {cpu: 1_}\n"),
+    ("defaults-dot-exponent-underscore", "  defaults: {cpu: .5e1_0}\n"),
+    # yaml.v3's 0b / 0o fallback hands the rest to ParseInt(base 2 / 8),
+    # which takes a sign there.
+    ("defaults-binary-signed-digits", "  defaults: {cpu: 0b-1}\n"),
+    ("defaults-octal-signed-digits", "  defaults: {cpu: 0o+7}\n"),
+    ("defaults-tagged-int", _tagged_int(80)),
+    ("defaults-tagged-int-20-digits", _tagged_int(2**64)),
+    ("defaults-tagged-int-301-digits", _tagged_int(10**300)),
+    ("defaults-tagged-int-below-f64-edge", _tagged_int(_F64_EDGE - 1)),
+    ("defaults-tagged-int-negative-below-f64-edge",
+     _tagged_int(-(_F64_EDGE - 1))),
+    ("sf-null", "  stateFilters: {x: null}\n"),
+    ("sf-empty", "  stateFilters: {x: {}}\n"),
+    ("sf-set", "  stateFilters: {x: !!set {reasons}}\n"),
+    ("sf-reasons", "  stateFilters: {x: {reasons: [A]}}\n"),
+    ("sf-reasons-scalars", "  stateFilters: {x: {reasons: [1, true, null]}}\n"),
+    ("sf-reasons-null", "  stateFilters: {x: {reasons: null}}\n"),
+    ("sf-severity-int", "  stateFilters: {x: {severity: 1}}\n"),
+    ("sf-severity-bool", "  stateFilters: {x: {severity: true}}\n"),
+    ("sf-default-state-int", "  stateFilters: {x: {default_state: 1}}\n"),
+    ("sf-unknown-key", "  stateFilters: {x: {other: [a, {b: 1}]}}\n"),
+    ("tenant-set", "    t2: !!set {cpu}\n"),
+]
+
+_CR_HEAD = "kind: ThresholdConfig\nmetadata: {name: ok}\nspec:\n"
+
+
+def _write_cr(tmp_path, body):
+    cr_path = tmp_path / "cr.yaml"
+    cr_path.write_text(_CR_HEAD + _T1 + body, encoding="utf-8")
+    out_dir = tmp_path / "out"
+    out_dir.mkdir()
+    return cr_path, out_dir
+
+
+@pytest.fixture(scope="module")
+def da_guard(tmp_path_factory):
+    """da-guard built from this checkout, or None when `go` is missing (the
+    oracle test then skips; VIBE_REQUIRE_GO=1 fails instead)."""
+    if shutil.which("go") is None:
+        assert os.environ.get("VIBE_REQUIRE_GO") != "1", \
+            "VIBE_REQUIRE_GO=1 but `go` is not on PATH"
+        return None
+    out = tmp_path_factory.mktemp("da-guard") / "da-guard"
+    env = {**os.environ}
+    env.setdefault("GOTOOLCHAIN", "auto")
+    repo = Path(__file__).resolve().parents[2]
+    subprocess.run(["go", "build", "-buildvcs=false", "-o", str(out),
+                    "./cmd/da-guard"],
+                   cwd=repo / "components" / "threshold-exporter" / "app",
+                   env=env, check=True, timeout=600)
+    return str(out)
+
+
+class TestRenderCrExporterShapes:
+    """#2395 第 2 輪：區塊以下、依 exporter 型別宣告深度的形狀。"""
+
+    @pytest.mark.parametrize("block, key", [
+        pytest.param("  tenants: ---\n", "tenants", id="tenants-doc-marker"),
+        pytest.param("  defaults: ---\n", "defaults", id="defaults-doc-marker"),
+        pytest.param("  stateFilters: ---\n", "stateFilters",
+                     id="stateFilters-doc-marker"),
+        pytest.param("  defaults: --- 0\n", "defaults", id="doc-marker-0"),
+        pytest.param("  defaults: --- []\n", "defaults", id="doc-marker-list"),
+        pytest.param("  defaults: --- no\n", "defaults", id="doc-marker-no"),
+    ])
+    def test_a_str_scalar_block_is_not_read_as_a_document(
+            self, block, key, tmp_path, caplog):
+        """F1：`---` 開頭的純量是字串（truthy 非 mapping），不是空文件。
+
+        先前用 `yaml.safe_load(原文)` 判 falsy，把 `---` 讀成 None、
+        `--- 0` 讀成 0，於是當空區塊丟掉、rc 0；`tenants: ---` 寫出 `{}`，
+        租戶全部消失。會讓本測試轉紅的改動：把 `_FALSY_ABLE_TAGS` 的判斷
+        換回對原文做 `yaml.safe_load`。
+        """
+        cr_path = tmp_path / "cr.yaml"
+        tenants = "" if key == "tenants" else _T1
+        cr_path.write_text(_CR_HEAD + tenants + block, encoding="utf-8")
+        out_dir = tmp_path / "out"
+        out_dir.mkdir()
+        assert render_cr_file(cr_path, out_dir) == EXIT_CALLER_ERROR
+        assert f"spec.{key} must be a mapping" in caplog.text
+        assert list(out_dir.iterdir()) == []
+
+    @pytest.mark.parametrize("body", [pytest.param(b, id=i)
+                                      for i, b in _REFUSED])
+    def test_a_value_the_exporter_refuses_is_caller_error(
+            self, body, tmp_path, caplog):
+        """F2：exporter 會因值型別整份拒收的 defaults／stateFilters → rc 2。
+
+        `defaults` 是 `map[string]float64`、`state_filters` 是
+        `map[string]StateFilter`（pkg/config/types.go）。會讓本測試轉紅的
+        改動：拿掉 `_default_value_error` 或 `_state_filter_error` 的呼叫。
+        """
+        cr_path, out_dir = _write_cr(tmp_path, body)
+        assert render_cr_file(cr_path, out_dir) == EXIT_CALLER_ERROR
+        assert "the exporter skips the whole rendered file" in caplog.text
+        assert list(out_dir.iterdir()) == []
+
+    @pytest.mark.parametrize("body", [pytest.param(b, id=i)
+                                      for i, b in _READ])
+    def test_a_value_the_exporter_reads_still_renders(self, body, tmp_path):
+        """F2／F3 對照組：exporter 讀得了的形狀維持 rc 0 並寫出檔案。
+
+        含 F3 的 `t2: !!set {cpu}`：Python 讀成 set，yaml.v3 讀成
+        mapping，exporter 照收。會讓本測試轉紅的改動：把數字判斷收緊成
+        PyYAML 的型別（`1e3`、`0o17`、`08` 會被誤擋），或租戶層不收 set。
+        """
+        cr_path, out_dir = _write_cr(tmp_path, body)
+        assert render_cr_file(cr_path, out_dir) == 0
+        assert (out_dir / "ok.yaml").exists()
+
+    @pytest.mark.parametrize("body, refused", [
+        *[pytest.param(b, True, id=i) for i, b in _REFUSED],
+        *[pytest.param(b, False, id=i) for i, b in _READ],
+    ])
+    def test_the_rows_match_the_exporter(
+            self, body, refused, tmp_path, da_guard):
+        """上面兩張表的分類本身，以 exporter 的解碼器重量。
+
+        把 CR 以 render_cr_to_yaml（不經 --render-cr 的檢查）寫成檔，
+        餵 `da-guard served-values`：拒收的列必須 rc 3，讀得了的列必須
+        rc 0。表錯了（例如把 exporter 讀得了的形狀列進拒收）這裡會紅。
+        """
+        if da_guard is None:
+            pytest.skip("go not on PATH (set VIBE_REQUIRE_GO=1 to fail)")
+        import da_assembler
+        from _lib_yaml_keys import load_for_rewrite
+        cr = da_assembler._keys_as_plain_text(load_for_rewrite(
+            io.StringIO(_CR_HEAD + _T1 + body)))
+        conf = tmp_path / "conf"
+        conf.mkdir()
+        (conf / "ok.yaml").write_text(
+            da_assembler.render_cr_to_yaml(cr), encoding="utf-8")
+        r = subprocess.run([da_guard, "served-values", "--config-dir",
+                            str(conf)], capture_output=True, text=True,
+                           encoding="utf-8", timeout=120)
+        assert r.returncode == (3 if refused else 0), r.stdout + r.stderr
+
+    def test_the_integer_parse_stops_at_the_first_overflow(self):
+        """整數累加一超過 2^64 就返回，不掃到字串尾端（這支是確定性的守衛；
+        它綁在 `for c in s` 逐字元迭代的實作形狀上，改成索引或 bytes 迭代時
+        `seen` 會變 0，要一起改這支）。
+
+        先前累加 bignum 到結尾才比較，極長數字是二次方時間（30 萬位端到端
+        約 17.7 s）。2^64 有 20 位，20 個 9 已經溢位，所以只該讀 20 個字元。
+        會讓本測試轉紅的改動：拿掉 `_go_parse_uint` 迴圈內的 cutoff 檢查。
+        """
+        import da_assembler
+
+        class Counting(str):
+            seen = 0
+
+            def __iter__(self):
+                for c in str.__iter__(self):
+                    Counting.seen += 1
+                    yield c
+
+        text = Counting("9" * 1000)
+        assert da_assembler._go_parse_uint(text, 10) is None
+        assert Counting.seen == 20
+
+    def test_a_very_long_number_is_refused_promptly(self, tmp_path, caplog):
+        """端到端：30 萬位的整數 rc 2（超出 uint64，exporter 拒收）。
+
+        計時上限刻意寬鬆（修前約 17.7 s，修後約 0.1–2 s，視 coverage 與 CPU
+        搶佔而定）：它只擋「又退回二次方時間」這種量級的回歸；確定性的守衛是
+        上一支 `test_the_integer_parse_stops_at_the_first_overflow`。"""
+        import time
+        cr_path, out_dir = _write_cr(
+            tmp_path, "  defaults: {cpu: " + "9" * 300_000 + "}\n")
+        start = time.monotonic()
+        assert render_cr_file(cr_path, out_dir) == EXIT_CALLER_ERROR
+        assert time.monotonic() - start < 12
+        assert list(out_dir.iterdir()) == []
+
+
+class TestRenderCrNameFormat:
+    """#2396：`--render-cr` 以 Kubernetes 的規則驗 name／namespace。
+
+    name 直接當輸出檔名、name 與 namespace 都寫進檔頭註解。先前不驗：
+    `../escaped` rc 0 並寫到 `--config-dir` 之外；含換行的 name／namespace
+    把檔頭註解斷行，輸出多出頂層鍵。現在 name 須是 RFC 1123 subdomain、
+    namespace（有給時）須是 RFC 1123 label，否則 rc 2 且不寫任何檔案。
+
+    會讓本組反例轉紅的改動：拿掉 render_cr_file 裡的
+    `_is_dns1123_subdomain` / `_is_dns1123_label` 檢查。
+    """
+
+    @staticmethod
+    def _run(tmp_path, metadata_yaml):
+        """寫 CR、渲染，回傳 (rc, 渲染前後 tmp_path 下新增的檔案)。
+
+        輸出目錄放兩層深，逃出 `--config-dir` 的檔案也還在 tmp_path 內，
+        才量得到「目錄內外都沒有新檔」。
+        """
+        cr_path = tmp_path / "cr.yaml"
+        cr_path.write_text(
+            "kind: ThresholdConfig\nmetadata:\n" + metadata_yaml
+            + "spec:\n  tenants:\n    t1: {}\n", encoding="utf-8")
+        out_dir = tmp_path / "work" / "out"
+        out_dir.mkdir(parents=True)
+        before = {p for p in tmp_path.rglob("*") if p.is_file()}
+        rc = render_cr_file(cr_path, out_dir)
+        after = {p for p in tmp_path.rglob("*") if p.is_file()}
+        return rc, sorted(str(p.relative_to(tmp_path))
+                          for p in after - before)
+
+    @staticmethod
+    def _q(text):
+        """YAML 雙引號字串（JSON 字串是合法的 YAML flow scalar）。"""
+        return json.dumps(text)
+
+    @pytest.mark.parametrize("name", [
+        pytest.param("../escaped", id="dotdot-escape"),
+        pytest.param("sub/x", id="slash"),
+        pytest.param("x\nevil: 1", id="newline-injects-key"),
+        pytest.param("ok\n", id="trailing-newline"),
+        pytest.param("Foo", id="uppercase"),
+        pytest.param("a_b", id="underscore"),
+        pytest.param("-a", id="leading-dash"),
+        pytest.param("a-", id="trailing-dash"),
+        pytest.param("a..b", id="empty-label"),
+        pytest.param(".a", id="leading-dot"),
+        pytest.param("a" * 254, id="len-254"),
+    ])
+    def test_invalid_name_is_caller_error(self, name, tmp_path, caplog):
+        rc, new_files = self._run(tmp_path, f"  name: {self._q(name)}\n")
+        assert rc == EXIT_CALLER_ERROR
+        assert new_files == []
+        assert "is not a valid Kubernetes object name" in caplog.text
+
+    @pytest.mark.parametrize("namespace", [
+        pytest.param("n\nevil: 1", id="newline-injects-key"),
+        pytest.param("ns\n", id="trailing-newline"),
+        pytest.param("Team", id="uppercase"),
+        pytest.param("a.b", id="dot-not-in-label"),
+        pytest.param("../x", id="dotdot"),
+        pytest.param("a" * 64, id="len-64"),
+    ])
+    def test_invalid_namespace_is_caller_error(
+            self, namespace, tmp_path, caplog):
+        rc, new_files = self._run(
+            tmp_path, f"  name: ok\n  namespace: {self._q(namespace)}\n")
+        assert rc == EXIT_CALLER_ERROR
+        assert new_files == []
+        assert "is not a valid Kubernetes namespace name" in caplog.text
+
+    @pytest.mark.parametrize("namespace, kind", [
+        pytest.param("8", "int", id="int"),
+        pytest.param("010", "int", id="int-octal"),
+        pytest.param("true", "bool", id="bool-true"),
+        pytest.param("yes", "bool", id="bool-yes"),
+        pytest.param("1.5", "float", id="float"),
+    ])
+    def test_non_string_namespace_is_caller_error(
+            self, namespace, kind, tmp_path, caplog):
+        """未加引號、YAML 1.1 讀成數字／布林的 namespace 比照 name，rc 2。
+
+        會讓本組轉紅的改動：拿掉 namespace 的 `_plain_tag` 型別檢查（`8`、
+        `010` 是合法 label，只靠格式檢查會照收、檔頭寫 `8/ok`）。
+        """
+        rc, new_files = self._run(
+            tmp_path, f"  name: ok\n  namespace: {namespace}\n")
+        assert rc == EXIT_CALLER_ERROR
+        assert new_files == []
+        assert "metadata.namespace must be a string" in caplog.text
+        assert f"read as {kind}" in caplog.text
+        assert "Quoting makes it a string" in caplog.text
+
+    @pytest.mark.parametrize("written", [
+        pytest.param("team", id="word"),
+        pytest.param('"team"', id="quoted-word"),
+        pytest.param("0", id="zero"),
+    ])
+    def test_tagged_null_with_a_value_is_caller_error(
+            self, written, tmp_path, caplog):
+        """`!!null team`：PyYAML 建成 None，Kubernetes（YAML→JSON）拒收。
+
+        只有原文為空或 null 字面時才算「未設」。會讓本組轉紅的改動：把
+        None 一律正規化成缺鍵（不看原文），此時 rc 0 並照寫。
+        """
+        rc, new_files = self._run(
+            tmp_path, f"  name: ok\n  namespace: !!null {written}\n")
+        assert rc == EXIT_CALLER_ERROR
+        assert new_files == []
+        assert "a scalar tagged !!null is written as" in caplog.text
+
+    _SPEC = "spec:\n  tenants:\n    t1: {}\n"
+
+    def _render_text(self, tmp_path, text, spec=None):
+        """整份 CR 文字 → (rc, 輸出位元組或 None)。*spec* 預設 `_SPEC`。"""
+        tmp_path.mkdir(parents=True, exist_ok=True)
+        cr_path = tmp_path / "cr.yaml"
+        cr_path.write_text(
+            "kind: ThresholdConfig\n" + text
+            + (self._SPEC if spec is None else spec), encoding="utf-8")
+        out_dir = tmp_path / "out"
+        out_dir.mkdir()
+        rc = render_cr_file(cr_path, out_dir)
+        out = out_dir / "ok.yaml"
+        files = list(out_dir.iterdir())
+        assert files in ([], [out]), files
+        return rc, (out.read_bytes() if files else None)
+
+    @pytest.mark.parametrize("text", [
+        pytest.param("base: &b {namespace: null}\n"
+                     "metadata: {<<: *b, name: ok}\n", id="merge-alias-null"),
+        pytest.param("base: &b {namespace: ~}\n"
+                     "metadata: {<<: *b, name: ok}\n", id="merge-alias-tilde"),
+        pytest.param("base: &b\n  namespace:\n"
+                     "metadata:\n  <<: *b\n  name: ok\n",
+                     id="merge-alias-empty"),
+        pytest.param("base: &b {namespace: null}\n"
+                     "metadata: {<<: [*b], name: ok}\n", id="merge-list"),
+        pytest.param("metadata: {<<: {namespace: null}, name: ok}\n",
+                     id="merge-inline"),
+        pytest.param("<<: {metadata: {name: ok, namespace: null}}\n",
+                     id="merge-top-level"),
+    ])
+    def test_namespace_unset_through_merge_renders_as_absent(
+            self, text, tmp_path):
+        """#2396：namespace 只經 `<<` merge 提供、值為 null 時也是「未設」。
+
+        Kubernetes（YAML→JSON）同樣展開 merge，這些 CR 建得進叢集。會讓
+        本組轉紅的改動：`!!null` 檢查改回只定位 namespace 節點原文（merge
+        進來的節點找不到原文 → 被誤擋 rc 2）。
+        """
+        rc, want = self._render_text(tmp_path / "absent",
+                                     "metadata: {name: ok}\n")
+        assert rc == 0
+        rc, got = self._render_text(tmp_path / "merged", text)
+        assert rc == 0
+        assert got == want
+
+    @pytest.mark.parametrize("text, spec", [
+        pytest.param("metadata:\n  name: ok\n  namespace: !!null team\n"
+                     "  namespace: null\n", None, id="duplicate-key"),
+        pytest.param("metadata:\n  name: ok\n  namespace: !!null team\n"
+                     "metadata:\n  name: ok\n", None,
+                     id="earlier-metadata-block"),
+        pytest.param("metadata: {name: ok}\nextra: !!null team\n", None,
+                     id="elsewhere-in-document"),
+        # Key position / sequence item: each covers one branch of the
+        # graph walk (mapping keys, sequence items).
+        pytest.param("metadata: {name: ok}\n",
+                     "spec:\n  tenants: {!!null team: {}}\n",
+                     id="mapping-key"),
+        pytest.param("metadata: {name: ok}\n",
+                     "spec:\n  tenants:\n    t1: [!!null team]\n",
+                     id="sequence-item"),
+        pytest.param("metadata: {name: ok}\n",
+                     "spec:\n  tenants: {!!null team}\n",
+                     id="flow-lone-key"),
+    ])
+    def test_tagged_null_anywhere_is_caller_error(self, text, spec, tmp_path,
+                                                   caplog):
+        """go-yaml 對文件任何位置的 `!!null <值>` 都整份拒收。
+
+        載入時「後者勝」會把前一個重複鍵或前一個 metadata 區塊丟掉，只看
+        最後生效的 namespace 會放行。會讓本組轉紅的改動：只檢查 namespace
+        節點、不走整份 compose 圖。
+        """
+        rc, got = self._render_text(tmp_path, text, spec)
+        assert rc == EXIT_CALLER_ERROR
+        assert got is None
+        assert "a scalar tagged !!null is written as 'team'" in caplog.text
+        assert "~ / null / Null / NULL" in caplog.text
+
+    @pytest.mark.parametrize("text", [
+        pytest.param("metadata: {name: ok\n", id="syntax"),
+        pytest.param("metadata:\n  name: ok\x01\n", id="control-char"),
+        pytest.param("metadata:\n  name: *nope\n", id="undefined-alias"),
+    ])
+    def test_yaml_error_names_the_file(self, text, tmp_path, caplog):
+        """YAML 錯誤訊息點名 CR 檔路徑，不是 `<unicode string>`。
+
+        會讓本組轉紅的改動：把讀進來的文字直接交給 loader
+        （`load_for_rewrite(text)`），PyYAML 會把來源名寫成
+        `<unicode string>`。
+        """
+        cr_path = tmp_path / "cr.yaml"
+        cr_path.write_text("kind: ThresholdConfig\n" + text,
+                           encoding="utf-8")
+        out_dir = tmp_path / "out"
+        out_dir.mkdir()
+        assert render_cr_file(cr_path, out_dir) == EXIT_CALLER_ERROR
+        assert f'in "{cr_path}"' in caplog.text
+        assert "<unicode string>" not in caplog.text
+        assert list(out_dir.iterdir()) == []
+
+    @pytest.mark.parametrize("namespace", [
+        pytest.param('"8"', id="quoted-int"),
+        pytest.param("'yes'", id="quoted-bool"),
+    ])
+    def test_quoted_numeric_namespace_renders(self, namespace, tmp_path):
+        """對照組：加了引號就是字串，且是合法 label，rc 0。"""
+        rc, new_files = self._run(
+            tmp_path, f"  name: ok\n  namespace: {namespace}\n")
+        assert rc == 0
+        assert new_files == ["work/out/ok.yaml"]
+
+    @pytest.mark.parametrize("ns_line", [
+        pytest.param("  namespace: null\n", id="null"),
+        pytest.param("  namespace: NULL\n", id="null-upper"),
+        pytest.param("  namespace: Null\n", id="null-title"),
+        pytest.param("  namespace: ~\n", id="tilde"),
+        pytest.param("  namespace:\n", id="empty-value"),
+        pytest.param('  namespace: ""\n', id="empty-string"),
+        pytest.param("  namespace: !!null\n", id="tagged-null-empty"),
+        pytest.param("  namespace: !!null null\n", id="tagged-null-null"),
+    ])
+    def test_unset_namespace_renders_as_absent(
+            self, ns_line, tmp_path, caplog):
+        """null／空值／`""` 在 Kubernetes 是「未設」，CR 建得進叢集。
+
+        比照沒寫 namespace：rc 0，輸出與缺鍵時逐位元組相同（檔頭 `?`），
+        log 為 `default`。會讓本組轉紅的改動：拿掉 render_cr_file 裡把
+        None／`""` 正規化成缺鍵的那一步（先前 rc 2；若只放行不正規化，
+        檔頭會寫 `None/ok`、`/ok`）。
+        """
+        caplog.set_level("INFO")
+        absent_dir = tmp_path / "absent"
+        absent_dir.mkdir()
+        rc, _ = self._run(absent_dir, "  name: ok\n")
+        assert rc == 0
+        want = (absent_dir / "work" / "out" / "ok.yaml").read_bytes()
+        caplog.clear()
+
+        rc, new_files = self._run(tmp_path, "  name: ok\n" + ns_line)
+        assert rc == 0
+        assert new_files == ["work/out/ok.yaml"]
+        assert (tmp_path / "work" / "out" / "ok.yaml").read_bytes() == want
+        assert "Rendered default/ok" in caplog.text
+
+    @pytest.mark.parametrize("name, namespace", [
+        pytest.param("ok", None, id="plain-no-namespace"),
+        pytest.param("a.b-c", "team-1", id="dot-and-dash"),
+        pytest.param("0-9.x", "0", id="digits"),
+        pytest.param("x", "a" * 63, id="namespace-len-63"),
+    ])
+    def test_valid_names_still_render(self, name, namespace, tmp_path):
+        """must-trigger 對照組：合法 name 照舊 rc 0，寫進 --config-dir。"""
+        meta = f"  name: {self._q(name)}\n"
+        if namespace is not None:
+            meta += f"  namespace: {self._q(namespace)}\n"
+        rc, new_files = self._run(tmp_path, meta)
+        assert rc == 0
+        assert new_files == [f"work/out/{name}.yaml"]
+        header = (tmp_path / "work" / "out" / f"{name}.yaml").read_text(
+            encoding="utf-8").split("\n")[0]
+        # 缺 namespace 時檔頭沿用既有的 `?`（#2396 不改這條）。
+        assert header.endswith(f" {namespace or '?'}/{name}"), header
+
+    @staticmethod
+    def _long_name(length):
+        """`length` 字元、由 63 字元 label 以 `.` 串成的合法 subdomain。"""
+        name = ".".join(["a" * 63] * 5)[:length - 1] + "b"
+        assert len(name) == length
+        return name
+
+    @pytest.mark.parametrize("length, want", [
+        pytest.param(253, True, id="len-253-accepted"),
+        pytest.param(254, False, id="len-254-refused"),
+    ])
+    def test_name_length_boundary(self, length, want):
+        """253 字元邊界，直接量驗證函式。
+
+        不走 render_cr_file：`<253 字元>.yaml` 超過多數檔案系統的
+        NAME_MAX（255），連 dry-run 的 `dest.exists()` 都會先丟
+        ENAMETOOLONG，量到的就不是本檢查了。len-254 的 rc 2 由
+        test_invalid_name_is_caller_error 端到端量。"""
+        assert _is_dns1123_subdomain(self._long_name(length)) is want
+
+    @pytest.mark.parametrize("length, want", [
+        pytest.param(63, True, id="len-63-accepted"),
+        pytest.param(64, False, id="len-64-refused"),
+    ])
+    def test_namespace_length_boundary(self, length, want):
+        assert _is_dns1123_label("a" * length) is want
+
+    def test_long_valid_name_renders(self, tmp_path):
+        """端到端對照組：檔名塞得進 NAME_MAX 的最長合法 name（250）rc 0。"""
+        name = self._long_name(250)
+        rc, new_files = self._run(tmp_path, f"  name: {name}\n")
+        assert rc == 0
+        assert new_files == [f"work/out/{name}.yaml"]
 
 
 class TestSignalHandler:
@@ -572,6 +1266,34 @@ class TestReconcileOne:
             (Path(d) / "db-a.yaml").mkdir()
             # Exactly what run_once/run_watch pass under --dry-run.
             reconcile_one(cr, Path(d), dry_run=True, api=None)
+
+    @pytest.mark.parametrize("dry_run", [False, True])
+    def test_controller_still_swallows_a_non_write_exception(self, dry_run):
+        """#2395 只改 `--render-cr`：controller 對非寫出例外的語意不變。
+
+        一個 CR render 失敗時 controller 記 log、（非 dry-run 時）把 CR
+        status 設成 Error，然後繼續——不往外丟，run_once 也照樣走完每個
+        CR、回 rc 0。會讓本測試轉紅的改動：把重拋條件寫成不看 `cli`。
+        """
+        mock_api = mock.MagicMock()
+        mock_api.list_cluster_custom_object.return_value = {
+            "items": [_make_cr(name="first"), _make_cr(name="second")]}
+        with tempfile.TemporaryDirectory() as d, \
+                mock.patch("da_assembler.dump_for_rewrite",
+                           side_effect=RuntimeError("injected")), \
+                mock.patch("da_assembler.reconcile_one",
+                           wraps=reconcile_one) as spy:
+            rc = run_once(mock_api, Path(d), dry_run=dry_run)
+            assert list(Path(d).iterdir()) == []
+        assert rc == 0
+        assert [c.args[0]["metadata"]["name"] for c in spy.call_args_list] \
+            == ["first", "second"]
+        patch = mock_api.patch_namespaced_custom_object_status
+        if dry_run:
+            patch.assert_not_called()
+        else:
+            assert patch.call_count == 2
+            assert all("'Error'" in str(c) for c in patch.call_args_list)
 
 
 class TestRunOnce:

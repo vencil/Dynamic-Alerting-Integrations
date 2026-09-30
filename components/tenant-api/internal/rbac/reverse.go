@@ -506,6 +506,23 @@ func (m *Manager) PlatformAdminNonOrgScoped(p *VerifiedPrincipal) bool {
 // an environment- or domain-restricted admin as someone who may read about
 // every tenant. Both zero-group states return false, like its sibling.
 func (m *Manager) PlatformAdminUnrestricted(p *VerifiedPrincipal) bool {
+	return m.PlatformUnrestricted(p, PermAdmin)
+}
+
+// PlatformUnrestricted is PlatformAdminUnrestricted for any permission level:
+// the caller passes iff at least ONE rule satisfies ruleMatches &&
+// tenantMatches(rule.Tenants, "*") && ruleGrants(rule, want) && rule.OrgScope
+// == "" && no rule.Environments && no rule.Domains — a grant of want on every
+// tenant, on every scope axis.
+//
+// Only the literal "*" entry qualifies: a prefix pattern ("svc-*") never
+// matches the query id "*" (tenantMatches), so it is not "all tenants". A rule
+// carrying org-scope / environments / domains does not qualify WHATEVER the
+// enforce flags say: in shadow mode such a rule still reaches unlabeled
+// tenants, but that leniency is a migration posture for tenants whose labels
+// can be read, not a platform-wide grant. Both zero-group states return false
+// (open mode grants read only; fail-closed-empty grants nothing).
+func (m *Manager) PlatformUnrestricted(p *VerifiedPrincipal, want Permission) bool {
 	cfg := m.Get()
 	subject := subjectFor(p)
 	for i := range cfg.Groups {
@@ -519,7 +536,7 @@ func (m *Manager) PlatformAdminUnrestricted(p *VerifiedPrincipal) bool {
 		if !tenantMatches(rule.Tenants, "*") {
 			continue
 		}
-		if !ruleGrants(rule, PermAdmin) {
+		if !ruleGrants(rule, want) {
 			continue
 		}
 		return true

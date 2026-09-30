@@ -157,7 +157,7 @@ services:
 
   # ── Monitoring stack (official multi-arch images) ────────────────────────
   pushgateway:
-    image: prom/pushgateway:v1.10.0
+    image: prom/pushgateway:v1.11.3
     ports:
       - "127.0.0.1:${EXPOSE_PUSHGATEWAY_PORT:-9091}:9091"
     restart: unless-stopped
@@ -213,7 +213,7 @@ services:
     # "Act 2" after the MariaDB red light (see README). Pinned to the SAME image
     # tag as the k8s Deployment (k8s/03-monitoring/deployment-grafana.yaml) so
     # what you see here matches prod.
-    image: grafana/grafana:12.4.11
+    image: grafana/grafana:12.4.12
     environment:
       # Anonymous Admin + no login form: a one-command laptop demo shouldn't ask
       # for a password. Safe ONLY because the port is loopback-only (below); the
@@ -285,7 +285,7 @@ services:
 
   seed-metrics:
     # Push the synthetic high-connections metric so the headline critical fires.
-    image: curlimages/curl:8.21.0
+    image: curlimages/curl:8.22.0
     entrypoint: ["/bin/sh"]
     command: ["/seed/push-metrics.sh"]
     environment:
@@ -308,7 +308,7 @@ services:
     # a live green sawtooth. (Full rationale in push-federation-metrics.sh.)
     # restart: unless-stopped so the freshness signal survives a pushgateway
     # bounce (re-push repopulates the memory-only gateway).
-    image: curlimages/curl:8.21.0
+    image: curlimages/curl:8.22.0
     entrypoint: ["/bin/sh"]
     command: ["/seed/push-federation-metrics.sh"]
     environment:

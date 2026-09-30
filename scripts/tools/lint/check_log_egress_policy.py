@@ -75,6 +75,16 @@ DEFAULT_ALLOWED_HOST_GLOBS = (
 # VECTOR_-prefixed config).
 RESERVED_ENV_GLOBS = ("VECTOR_*",)
 
+# Reserved vars the chart ITSELF sets as a literal, pinned to the one value it
+# ships. Exempt only on an exact name AND value match: any other value (e.g. an
+# extraEnv duplicate saying "false", which Kubernetes resolves last-wins) or any
+# valueFrom source is still an override. helm/vector sets the interpolation flag
+# so the documented `${VAR}` credential pattern in additionalSinks expands at
+# all — rationale in helm/vector/templates/daemonset.yaml.
+CHART_PINNED_RESERVED_ENV = {
+    "VECTOR_DANGEROUSLY_ALLOW_ENV_VAR_INTERPOLATION": "true",
+}
+
 # Env var name globs that are sensitive: allowed ONLY via valueFrom
 # (secretKeyRef / configMapKeyRef), never as a literal `value:` (which
 # would hardcode a secret into the manifest or let an attacker substitute
@@ -199,12 +209,18 @@ def lint_chart(chart_dir: Path, manifests: list[dict], allow_globs: list[str]) -
             # reserved name (literal value, or secret/configmap ref) is
             # an operator override that hijacks Vector's behavior.
             via_field_ref = "valueFrom" in env and "fieldRef" in (env.get("valueFrom") or {})
-            if _matches_any(name, RESERVED_ENV_GLOBS) and not via_field_ref:
+            chart_pinned = (
+                name in CHART_PINNED_RESERVED_ENV
+                and "valueFrom" not in env
+                and env.get("value") == CHART_PINNED_RESERVED_ENV[name]
+            )
+            if _matches_any(name, RESERVED_ENV_GLOBS) and not via_field_ref and not chart_pinned:
                 vios.append(Violation(
                     "ERROR", chart, f"{m.get('kind')}/{cname}.env.{name}",
                     f"overrides Vector-reserved env {name} via {'literal value' if is_literal else 'a non-fieldRef source'}; "
                     f"reserved vars are only legitimate via downward-API fieldRef "
-                    f"(the chart's own pattern). An override here hijacks pipeline behavior.",
+                    f"(the chart's own pattern) or as the chart's own pinned literal. "
+                    f"An override here hijacks pipeline behavior.",
                 ))
             elif _matches_any(name, SENSITIVE_ENV_GLOBS) and is_literal:
                 vios.append(Violation(
