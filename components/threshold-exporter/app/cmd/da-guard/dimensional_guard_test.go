@@ -81,46 +81,67 @@ func TestGuard_RedundantOverrideOnDimensionalKeys(t *testing.T) {
 		keep      string            // tx lines on both sides of the oracle
 		line      string            // the override under test
 		redundant bool
+		symlink   bool // read the tree through a symlink to its real root
 	}{
 		// The measured false advice (redundant before the fix).
 		{"root-only-dimensional-key-is-not-redundant",
 			map[string]string{"_defaults.yaml": root + "  " + dim + ": 50\n"},
-			"tx.yaml", "    mysql_connections: 80\n", dim + ": 50", false},
+			"tx.yaml", "    mysql_connections: 80\n", dim + ": 50", false, false},
 		{"root-only-regex-dimensional-key-is-not-redundant",
 			map[string]string{"_defaults.yaml": root + "  pg_connections{db=~\"a.*\"}: 50\n"},
-			"tx.yaml", "    mysql_connections: 80\n", "pg_connections{db=~\"a.*\"}: 50", false},
+			"tx.yaml", "    mysql_connections: 80\n", "pg_connections{db=~\"a.*\"}: 50", false, false},
 		{"root-only-dimensional-key-under-a-subtree-without-it-is-not-redundant",
 			map[string]string{"_defaults.yaml": root + "  " + dim + ": 50\n", "sub/_defaults.yaml": "defaults:\n  pg_connections: 60\n"},
-			"sub/tx.yaml", "    mysql_connections: 80\n", dim + ": 50", false},
+			"sub/tx.yaml", "    mysql_connections: 80\n", dim + ": 50", false, false},
 		{"root-dimensional-key-a-subtree-nulls-is-not-redundant",
 			map[string]string{"_defaults.yaml": root + "  " + dim + ": 50\n", "sub/_defaults.yaml": "defaults:\n  " + dim + ": null\n"},
-			"sub/tx.yaml", "    mysql_connections: 80\n", dim + ": 50", false},
+			"sub/tx.yaml", "    mysql_connections: 80\n", dim + ": 50", false, false},
+		// The root level is found by PATH, against the scan's resolved root:
+		// a config dir that is a symlink, and a root carrier spelled
+		// `_defaults.yml`, are still the root.
+		{"root-only-dimensional-key-through-a-symlinked-config-dir-is-not-redundant",
+			map[string]string{"_defaults.yaml": root + "  " + dim + ": 50\n"},
+			"tx.yaml", "    mysql_connections: 80\n", dim + ": 50", false, true},
+		{"root-only-dimensional-key-in-a-yml-root-carrier-is-not-redundant",
+			map[string]string{"_defaults.yml": root + "  " + dim + ": 50\n"},
+			"tx.yaml", "    mysql_connections: 80\n", dim + ": 50", false, false},
 		// Controls: the layers that DO fill the tenant's override map stay
 		// redundant — the check is narrowed, not switched off.
 		{"subtree-dimensional-key-is-redundant",
 			map[string]string{"_defaults.yaml": root, "sub/_defaults.yaml": "defaults:\n  " + dim + ": 50\n"},
-			"sub/tx.yaml", "    mysql_connections: 80\n", dim + ": 50", true},
+			"sub/tx.yaml", "    mysql_connections: 80\n", dim + ": 50", true, false},
 		{"root-and-subtree-dimensional-key-is-redundant",
 			map[string]string{"_defaults.yaml": root + "  " + dim + ": 50\n", "sub/_defaults.yaml": "defaults:\n  " + dim + ": 50\n"},
-			"sub/tx.yaml", "    mysql_connections: 80\n", dim + ": 50", true},
+			"sub/tx.yaml", "    mysql_connections: 80\n", dim + ": 50", true, false},
 		{"subtree-dimensional-key-with-no-root-defaults-is-redundant",
 			map[string]string{"sub/_defaults.yaml": "defaults:\n  pg_connections: 100\n  " + dim + ": 50\n"},
-			"sub/tx.yaml", "    pg_connections: 90\n", dim + ": 50", true},
+			"sub/tx.yaml", "    pg_connections: 90\n", dim + ": 50", true, false},
 		{"platform-entry-dimensional-key-is-redundant",
 			map[string]string{"_defaults.yaml": root + "tenants:\n  tx:\n    " + dim + ": 50\n"},
-			"tx.yaml", "    mysql_connections: 80\n", dim + ": 50", true},
+			"tx.yaml", "    mysql_connections: 80\n", dim + ": 50", true, false},
 		{"profile-dimensional-key-is-redundant",
 			map[string]string{"_defaults.yaml": root, "_profiles.yaml": "profiles:\n  std:\n    " + dim + ": 50\n"},
-			"tx.yaml", "    _profile: std\n", dim + ": 50", true},
+			"tx.yaml", "    _profile: std\n", dim + ": 50", true, false},
 		// Control: a plain root key is still redundant.
 		{"root-plain-key-is-redundant",
 			map[string]string{"_defaults.yaml": root},
-			"tx.yaml", "    mysql_connections: 70\n", "pg_connections: 100", true},
+			"tx.yaml", "    mysql_connections: 70\n", "pg_connections: 100", true, false},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()
 			dir := t.TempDir()
+			if tc.symlink {
+				real := filepath.Join(dir, "real")
+				link := filepath.Join(dir, "link")
+				if err := os.Mkdir(real, 0o755); err != nil {
+					t.Fatal(err)
+				}
+				if err := os.Symlink(real, link); err != nil {
+					t.Skipf("symlink unsupported: %v", err)
+				}
+				dir = link // every read below goes through the link
+			}
 			testutil.WriteTree(t, dir, tc.files)
 			path := filepath.Join(dir, filepath.FromSlash(tc.tfile))
 			if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
