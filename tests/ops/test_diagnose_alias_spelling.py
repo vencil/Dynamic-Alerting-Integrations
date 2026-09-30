@@ -1,7 +1,7 @@
 """#2368: diagnose's inheritance chain layers threshold keys per THRESHOLD,
 not per spelling — the #1231 alias rows of the shared overlay matrix
-(tests/shared/platform_tenant_overlay_matrix.json, the rows naming
-`metric_key`) must resolve to the value /metrics serves (their `metric`
+(tests/shared/platform_tenant_overlay_matrix.json, the top-level rows naming
+`metric_key` — see ALIAS_ROWS for why subtree rows are excluded) must resolve to the value /metrics serves (their `metric`
 column, which the Go half asserts against the exporter).
 
 Measured before the fix on row a1 (tenant legacy 90, platform canonical 70):
@@ -26,7 +26,16 @@ from _lib_confd import overlay_platform_tenants  # noqa: E402
 
 MATRIX = json.loads((REPO_ROOT / "tests" / "shared" / "platform_tenant_overlay_matrix.json")
                     .read_text(encoding="utf-8"))
-ALIAS_ROWS = [t for t in MATRIX["trees"] if t.get("metric_key")]
+# ⛔ Top-level trees only. diagnose's reader is FLAT by design (#1911,
+# `warn_nested`): a tree with files below the root — the #2414 subtree rows —
+# is read as its top level alone, with a WARN naming the skipped files, even
+# when every layer uses the same spelling (the tenant file itself is skipped).
+# "One effective value across spellings" for those rows is held only by the
+# Go half of the matrix (/metrics, plus assertWalkerAgreesWithMetrics); the
+# Python half checks describe_tenant's walker column, which keeps each
+# spelling separately. A recursive diagnose is its own change.
+ALIAS_ROWS = [t for t in MATRIX["trees"]
+              if t.get("metric_key") and not any("/" in rel for rel in t["files"])]
 
 
 def test_alias_rows_exist() -> None:
@@ -36,6 +45,7 @@ def test_alias_rows_exist() -> None:
 @pytest.mark.parametrize("tree", ALIAS_ROWS, ids=lambda t: t["name"])
 def test_resolved_carries_the_served_value_once(tree: dict, tmp_path: Path) -> None:
     for rel, content in tree["files"].items():
+        (tmp_path / rel).parent.mkdir(parents=True, exist_ok=True)
         (tmp_path / rel).write_text(content, encoding="utf-8")
     key = tree["metric_key"]
     spellings = {key, _legacy_tenant_key(key)}
