@@ -287,7 +287,7 @@ PagerDuty 的 `routing_key` 與 `service_key` 兩個都給會被擋：Alertmanag
 - URL 欄位（`url`、`api_url`、`webhook_url`）必須是帶 host 的 `http://` 或 `https://` URL，不含空白。
 - `smarthost` 必須是 `host:port`，port 為數字；IPv6 要加方括號，例如 `[2001:db8::1]:25`。
 - `to` 寫成清單時，每一項都必須是非空字串。
-- 必填欄位給了字串以外的值（清單、數字、布林）一律擋下。
+- 必填欄位給了字串以外的值（清單、數字、布林）一律擋下；例外只有上一條的 `to`，可以寫成清單。
 - receiver 的 `type` 必須完全等於上表的小寫名稱，不接受大小寫變化或前後空白。
 
 格式規則以 [`tenant-config.schema.json`](../schemas/tenant-config.schema.json) 的 `receiverHttpUrl`／`receiverSmtpHostPort` 為準；哪些值 Alertmanager 實際接受或拒收，以共享表 `receiver_presence_cases.json` 的 `am` 欄為準（測試以 Alertmanager `config.Load` 實跑斷言）。
