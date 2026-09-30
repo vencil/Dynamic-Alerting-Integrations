@@ -120,7 +120,7 @@ URL=https://github.com/vencil/Dynamic-Alerting-Integrations/releases/download/${
 curl -fsSLO "${URL}/da-guard-${OS}-${ARCH}.tar.gz"   # 保留原檔名，SHA256SUMS 才對得上
 curl -fsSLo SHA256SUMS "${URL}/SHA256SUMS"
 
-# 驗 hash（任何不符立即拒絕）
+# 驗 hash：不符時印出 FAILED、結束碼非零——看到 FAILED 就停，不要往下裝
 sha256sum --check --ignore-missing SHA256SUMS
 
 tar xzf da-guard-${OS}-${ARCH}.tar.gz
