@@ -98,7 +98,7 @@ POST /preview
 
 ### 4.1 認證與租戶隔離
 
-預覽服務**沿用 portal 的認證**：try-local 走 dev-bypass（[ADR-022](../adr/022-dev-auth-bypass-four-layer-containment.md) 四層防線），正式環境經 oauth2-proxy（與 tenant-api 同樣式）。服務**必須驗證 request 的 `tenant` 屬於登入者可存取的租戶**，否則回 403——否則「評自己的 recipe」會退化成跨租戶的查詢面。`recipe` / `scenario` 是使用者輸入：服務要先做格式驗證（或捕捉編譯器拋出的設定錯誤）→ 失敗即回 `state: error`，**驗過才編譯**（見 5.2）。
+預覽服務**沿用 portal 的認證**：try-local 走 dev-bypass（[ADR-022](../adr/022-dev-auth-bypass-four-layer-containment.md) 四層防線），正式環境經 oauth2-proxy（與 tenant-api 同樣式）。服務**必須驗證 request 的 `tenant` 屬於登入者可存取的租戶**，否則回 403——否則「評自己的 recipe」會退化成跨租戶的查詢面。`recipe` / `scenario` 是使用者輸入：服務要先做格式驗證（或捕捉編譯器拋出的設定錯誤），**驗過才編譯**（見 5.2）：body 型別不對（`recipe`／`scenario` 不是 object、缺 `tenant`）回 400；內容缺欄位或編譯失敗回 `state: error`。
 
 ## 5. 後端如何算出狀態
 
@@ -153,7 +153,7 @@ Prometheus 規則比對的是「序列」（series，帶標籤的時間序列）
 
 `promtool` 每次評估會開一個約 1 秒的子程序；預覽服務每個請求都會開一個，所以需要：
 
-1. **併發上限**——限制同時開的數量，滿了排隊／拒絕。
+1. **併發上限**——限制同時開的數量，滿了排隊；排隊逾時（`PREVIEW_QUEUE_TIMEOUT`）回 503。
 2. **單一請求逾時**——`promtool` 逾時即終止、回 `error`。
 3. **速率限制**——每租戶限流，避免被當成攻擊面。
 4. **互動設計**——因為約 1 秒延遲，不做即時連發；用手動「執行預覽」按鈕 + 載入中狀態。

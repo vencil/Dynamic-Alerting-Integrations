@@ -44,7 +44,7 @@
     "platform row, field = the key path in that file. The generator itself reports nothing there,",
     "so the Python reader leaves that kind out of its platform comparison (its targets pin it).",
     "A YAML merge key (`<<:`) in a platform tenants.<id> entry is expanded before the keys are read, as every reader's decoder does (#2291); an explicit key wins, earlier sources first.",
-    "#2437/#2438 - the same holds in domain_policies, a domain policy, its constraints and routing_profiles; an alias key names its anchor's text.",
+    "#2437/#2438 - the same holds in domain_policies, a domain policy, its constraints and routing_profiles, and at a file's top level (a `<<:` there supplies domain_policies / routing_profiles / _routing_defaults / tenants; an explicit key replaces a merged one whole); an alias key names its anchor's text.",
     "escalation (#2325): the ADR-007 require_critical_escalation verdict. null = no domain policy with",
     "`require_critical_escalation: true` lists the tenant, or it has no resolved routing / main receiver",
     "(nothing is judged). Else {verdict, leaks}: verdict 'violation' = severity=critical alerts reach no",
@@ -1414,6 +1414,279 @@
             "put": "ok",
             "batch": null
           },
+          "python_differs": null,
+          "escalation": null
+        }
+      }
+    },
+    {
+      "name": "top-level-yaml-merge-key",
+      "files": {
+        "_defaults.yaml": "defaults:\n  cpu_usage_percent: 80\n",
+        "_domain_policy.yaml": "_x: &x\n  domain_policies:\n    mk-top:\n      tenants:\n      - t-top-policy\n      - t-top-profile\n      - t-top-overlay\n      - t-top-overlay-profile\n      - t-top-explicit\n      - t-top-file\n      constraints:\n        forbidden_receiver_types:\n        - slack\n    mk-top-defaults:\n      tenants:\n      - t-top-defaults\n      constraints:\n        forbidden_receiver_types:\n        - email\n<<: *x\n",
+        "_routing_profiles.yaml": "_x: &x\n  routing_profiles:\n    mk-slack:\n      receiver:\n        type: slack\n        api_url: https://hooks.slack.com/services/T/B/x\n<<: *x\n",
+        "_routing.yaml": "_x: &x\n  _routing_defaults:\n    receiver:\n      type: email\n      to: [oncall@example.com]\n      from: alerting@example.com\n      smarthost: smtp.example.com:587\n<<: *x\n",
+        "_overlay.yaml": "_x: &x\n  tenants:\n    t-top-overlay:\n      _routing:\n        receiver:\n          type: slack\n          api_url: https://hooks.slack.com/services/T/B/x\n    t-top-overlay-profile:\n      _routing_profile: mk-slack\n<<: *x\n",
+        "_platform.yaml": "_x: &x\n  tenants:\n    t-top-explicit:\n      _routing:\n        receiver:\n          type: slack\n          api_url: https://hooks.slack.com/services/T/B/x\n<<: *x\ntenants:\n  t-top-explicit:\n    _routing:\n      receiver:\n        type: webhook\n        url: https://w.example/own\n",
+        "t-top-policy.yaml": "tenants:\n  t-top-policy:\n    cpu_usage_percent: '85'\n    _routing:\n      receiver:\n        type: slack\n        api_url: https://hooks.slack.com/services/T/B/x\n",
+        "t-top-profile.yaml": "tenants:\n  t-top-profile:\n    cpu_usage_percent: '85'\n    _routing_profile: mk-slack\n",
+        "t-top-defaults.yaml": "tenants:\n  t-top-defaults:\n    cpu_usage_percent: '85'\n",
+        "t-top-overlay.yaml": "tenants:\n  t-top-overlay:\n    cpu_usage_percent: '85'\n",
+        "t-top-overlay-profile.yaml": "tenants:\n  t-top-overlay-profile:\n    cpu_usage_percent: '85'\n",
+        "t-top-explicit.yaml": "tenants:\n  t-top-explicit:\n    cpu_usage_percent: '85'\n",
+        "t-top-file.yaml": "_x: &x\n  tenants:\n    t-top-file:\n      cpu_usage_percent: '85'\n      _routing:\n        receiver:\n          type: slack\n          api_url: https://hooks.slack.com/services/T/B/x\n<<: *x\n"
+      },
+      "platform": [],
+      "expect": {
+        "t-top-policy": {
+          "targets": [
+            {
+              "ref": "receiver",
+              "type": "slack"
+            }
+          ],
+          "policy": [
+            [
+              "mk-top",
+              "receiver",
+              "forbidden_receiver_types"
+            ]
+          ],
+          "rejected_routes": [],
+          "unknown_profile": null,
+          "tenant_api": {
+            "put": "403",
+            "batch": null
+          },
+          "python_differs": null,
+          "escalation": null
+        },
+        "t-top-profile": {
+          "targets": [
+            {
+              "ref": "receiver",
+              "type": "slack"
+            }
+          ],
+          "policy": [
+            [
+              "mk-top",
+              "receiver",
+              "forbidden_receiver_types"
+            ]
+          ],
+          "rejected_routes": [],
+          "unknown_profile": null,
+          "tenant_api": {
+            "put": "403",
+            "batch": null
+          },
+          "python_differs": null,
+          "escalation": null
+        },
+        "t-top-defaults": {
+          "targets": [
+            {
+              "ref": "receiver",
+              "type": "email"
+            }
+          ],
+          "policy": [
+            [
+              "mk-top-defaults",
+              "receiver",
+              "forbidden_receiver_types"
+            ]
+          ],
+          "rejected_routes": [],
+          "unknown_profile": null,
+          "tenant_api": {
+            "put": "403",
+            "batch": null
+          },
+          "python_differs": null,
+          "escalation": null
+        },
+        "t-top-overlay": {
+          "targets": [
+            {
+              "ref": "receiver",
+              "type": "slack"
+            }
+          ],
+          "policy": [
+            [
+              "mk-top",
+              "receiver",
+              "forbidden_receiver_types"
+            ]
+          ],
+          "rejected_routes": [],
+          "unknown_profile": null,
+          "tenant_api": {
+            "put": "ok",
+            "batch": null
+          },
+          "python_differs": null,
+          "escalation": null
+        },
+        "t-top-overlay-profile": {
+          "targets": [
+            {
+              "ref": "receiver",
+              "type": "slack"
+            }
+          ],
+          "policy": [
+            [
+              "mk-top",
+              "receiver",
+              "forbidden_receiver_types"
+            ]
+          ],
+          "rejected_routes": [],
+          "unknown_profile": null,
+          "tenant_api": {
+            "put": "ok",
+            "batch": null
+          },
+          "python_differs": null,
+          "escalation": null
+        },
+        "t-top-explicit": {
+          "targets": [
+            {
+              "ref": "receiver",
+              "type": "webhook"
+            }
+          ],
+          "policy": [],
+          "rejected_routes": [],
+          "unknown_profile": null,
+          "tenant_api": {
+            "put": "ok",
+            "batch": null
+          },
+          "python_differs": null,
+          "escalation": null
+        },
+        "t-top-file": {
+          "targets": [
+            {
+              "ref": "receiver",
+              "type": "slack"
+            }
+          ],
+          "policy": [
+            [
+              "mk-top",
+              "receiver",
+              "forbidden_receiver_types"
+            ]
+          ],
+          "rejected_routes": [],
+          "unknown_profile": null,
+          "tenant_api": {
+            "put": "403",
+            "batch": null
+          },
+          "python_differs": null,
+          "escalation": null
+        }
+      }
+    },
+    {
+      "name": "top-level-yaml-merge-key-subtree",
+      "files": {
+        "_defaults.yaml": "defaults:\n  cpu_usage_percent: 80\n_routing_defaults:\n  receiver:\n    type: email\n    to: [oncall@example.com]\n    from: alerting@example.com\n    smarthost: smtp.example.com:587\n",
+        "team/_domain_policy.yaml": "_x: &x\n  domain_policies:\n    mk-team:\n      tenants:\n      - t-sub-policy\n      - t-sub-profile\n      - t-sub-defaults\n      constraints:\n        forbidden_receiver_types:\n        - slack\n<<: *x\n",
+        "team/_routing_profiles.yaml": "_x: &x\n  routing_profiles:\n    mk-team-slack:\n      receiver:\n        type: slack\n        api_url: https://hooks.slack.com/services/T/B/x\n<<: *x\n",
+        "team/pol/_defaults.yaml": "defaults:\n  cpu_usage_percent: 70\n_x: &x\n  _routing_defaults:\n    receiver:\n      type: slack\n      api_url: https://hooks.slack.com/services/T/B/x\n<<: *x\n",
+        "team/t-sub-policy.yaml": "tenants:\n  t-sub-policy:\n    cpu_usage_percent: '85'\n    _routing:\n      receiver:\n        type: slack\n        api_url: https://hooks.slack.com/services/T/B/x\n",
+        "team/t-sub-profile.yaml": "tenants:\n  t-sub-profile:\n    cpu_usage_percent: '85'\n    _routing_profile: mk-team-slack\n",
+        "team/pol/t-sub-defaults.yaml": "tenants:\n  t-sub-defaults:\n    cpu_usage_percent: '85'\n",
+        "other/_routing.yaml": "_x: &x\n  _routing_defaults:\n    receiver:\n      type: slack\n      api_url: https://hooks.slack.com/services/T/B/x\n<<: *x\n",
+        "other/t-sub-unread.yaml": "tenants:\n  t-sub-unread:\n    cpu_usage_percent: '85'\n"
+      },
+      "platform": [
+        [
+          "routing_in_unread_location",
+          "other/_routing.yaml",
+          "_routing_defaults"
+        ]
+      ],
+      "expect": {
+        "t-sub-policy": {
+          "targets": [
+            {
+              "ref": "receiver",
+              "type": "slack"
+            }
+          ],
+          "policy": [
+            [
+              "mk-team",
+              "receiver",
+              "forbidden_receiver_types"
+            ]
+          ],
+          "rejected_routes": [],
+          "unknown_profile": null,
+          "tenant_api": null,
+          "python_differs": null,
+          "escalation": null
+        },
+        "t-sub-profile": {
+          "targets": [
+            {
+              "ref": "receiver",
+              "type": "slack"
+            }
+          ],
+          "policy": [
+            [
+              "mk-team",
+              "receiver",
+              "forbidden_receiver_types"
+            ]
+          ],
+          "rejected_routes": [],
+          "unknown_profile": null,
+          "tenant_api": null,
+          "python_differs": null,
+          "escalation": null
+        },
+        "t-sub-defaults": {
+          "targets": [
+            {
+              "ref": "receiver",
+              "type": "slack"
+            }
+          ],
+          "policy": [
+            [
+              "mk-team",
+              "receiver",
+              "forbidden_receiver_types"
+            ]
+          ],
+          "rejected_routes": [],
+          "unknown_profile": null,
+          "tenant_api": null,
+          "python_differs": null,
+          "escalation": null
+        },
+        "t-sub-unread": {
+          "targets": [
+            {
+              "ref": "receiver",
+              "type": "email"
+            }
+          ],
+          "policy": [],
+          "rejected_routes": [],
+          "unknown_profile": null,
+          "tenant_api": null,
           "python_differs": null,
           "escalation": null
         }
