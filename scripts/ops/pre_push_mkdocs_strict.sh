@@ -192,6 +192,8 @@ _build_one() {
     # post-checkout hook), and the path is this process's own.
     _live_wt="$_wt"
     # ⛔ git's own stderr is the diagnosis; no guessed causes (#2210).
+    # A bare `&` is enough here, unlike the build below: git sets its own
+    # SIGINT handler, so Ctrl-C still stops the checkout.
     git worktree add --detach --quiet "$_wt" "$_sha" &
     _bg_pid=$!
     if ! wait "$_bg_pid"; then

@@ -1985,12 +1985,13 @@ def test_a_sigterm_to_the_guard_alone_during_the_checkout_leaves_nothing_behind(
     assert _git(work, "checkout", "-q", "main").returncode == 0
     # Configured only now, so the checkouts above run no filter.
     assert _git(work, "config", "filter.slow.smudge",
-                ': > "$PREPUSH_TEST_STARTED"; sleep 3; cat').returncode == 0
+                ': > "$PREPUSH_TEST_STARTED"; sleep 3; : > "$PREPUSH_TEST_STARTED.done"; cat').returncode == 0
     bindir = tmp_path / "fakebin"
     bindir.mkdir()
     (bindir / "mkdocs").write_text(_FAKE_MKDOCS, encoding="utf-8")
     (bindir / "mkdocs").chmod(0o755)
     started = tmp_path / "started"
+    done = tmp_path / "started.done"
     env = {**os.environ, "PATH": str(bindir) + os.pathsep + os.environ.get("PATH", ""),
            "PREPUSH_TEST_STARTED": str(started), "PREPUSH_TEST_RECORD": str(record)}
     before = _git(work, "worktree", "list", "--porcelain").stdout
@@ -2011,6 +2012,9 @@ def test_a_sigterm_to_the_guard_alone_during_the_checkout_leaves_nothing_behind(
         assert re.search(r"^locked\b", _git(work, "worktree", "list", "--porcelain").stdout, re.M)
         os.kill(proc.pid, signal.SIGTERM)
         proc.wait(timeout=20)
+        # Removing the tree before the checkout ends races whatever `add` still
+        # writes; only a clean-up that waited for it is deterministic.
+        assert done.exists(), "the guard cleaned up before the checkout had ended"
         time.sleep(5)  # longer than the checkout has left: an orphaned `add` would be done
     finally:
         try:
