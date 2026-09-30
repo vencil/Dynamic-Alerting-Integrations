@@ -108,8 +108,31 @@ const (
 	// which tells the client to refresh and retry: a retry cannot succeed
 	// until the tenant file itself is repaired. Also carried per op on a
 	// direct-mode batch (BatchResult.Code).
+	//
+	// #2477: also the 409 of GET /tenants/{id}, PUT /tenants/{id} and
+	// PUT …/custom-alerts when the tenant's conf.d entry is not a regular
+	// file (config_error not_regular_file — the list row's value): tenant-api
+	// neither reads nor replaces such an entry, so the answer is immediate
+	// and names the reason instead of waiting on the file.
 	CodeTenantConfigNotLoadable = "TENANT_CONFIG_NOT_LOADABLE"
 )
+
+// writeTenantFileNotRegular answers a request about a tenant whose conf.d
+// entry is not a regular file (confd.ErrNotRegularFile, #2477). Same code and
+// envelope fields as writeTenantFileNotLoadable, with config_error set to the
+// value the list row carries for that file.
+func writeTenantFileNotRegular(w http.ResponseWriter, r *http.Request, tenantID string) {
+	WriteErrorEnvelope(w, r, http.StatusConflict, ErrorResponse{
+		Error: "tenant " + tenantID + ": its conf.d file is not a regular file (config_error: " +
+			string(confd.ProblemNotRegularFile) + "), so tenant-api neither reads nor replaces it; " +
+			"replace it with a regular file in git",
+		Code: CodeTenantConfigNotLoadable,
+		Extra: map[string]any{
+			"tenant_id":    tenantID,
+			"config_error": string(confd.ProblemNotRegularFile),
+		},
+	})
+}
 
 // msgTenantDeclaredElsewhere is the FIXED client-facing text for
 // gitops.ErrTenantDeclaredElsewhere. ⛔ It deliberately names no file: the

@@ -51,7 +51,10 @@ type: application
 #         VALUES: `auditLog.mtail` -> `auditLog.metrics` (adds image + dataSizeLimit;
 #         memory limit 64Mi -> 128Mi). auditLog.image (logrotate only now) tag
 #         3.0.8-3 -> alpine3.23.6-1 — rebuild and push before upgrading.
-version: 0.6.0
+# 0.6.1 — #2469: access-log `path` drops the query string (REQ_WITHOUT_QUERY),
+#         so a token put in the URL is no longer logged. Audit line format
+#         changes (other URL params gone); no value keys change. PATCH.
+version: 0.6.1
 # appVersion: pinned Envoy release
 appVersion: "v1.38.0"
 # kubeVersion: the deployment uses the native preStop.sleep lifecycle

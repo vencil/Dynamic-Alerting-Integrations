@@ -6,7 +6,8 @@ package main
 // says the route generator does: one domain_policy_violation per `policy`
 // row (Field <ref>.receiver.type), one invalid_route_entry per
 // `rejected_routes` ref, unknown_routing_profile exactly when the table
-// names one, critical_escalation_missing exactly when `escalation` says
+// names one, one routing_value_not_string per `values_not_string` field
+// (#2431), critical_escalation_missing exactly when `escalation` says
 // violation and one critical_escalation_leak Field per leak ref (#2325), and exactly the tree's `platform` rows as TenantID "" findings. The Python half reads only the same table.
 
 import (
@@ -24,6 +25,7 @@ type daGuardParityExpect struct {
 	Targets        json.RawMessage `json:"targets"`
 	Policy         [][3]string     `json:"policy"`
 	RejectedRoutes []string        `json:"rejected_routes"`
+	NotString      []string        `json:"values_not_string"`
 	UnknownProfile *string         `json:"unknown_profile"`
 	TenantAPI      json.RawMessage `json:"tenant_api"`
 	PythonDiffers  json.RawMessage `json:"python_differs"`
@@ -177,6 +179,12 @@ func TestDaGuard_RoutingPolicyParityMatrix(t *testing.T) {
 				sort.Strings(wantRejected)
 				if got := fieldsOf(findings, tenantID, "invalid_route_entry"); !equalStrings(got, wantRejected) {
 					t.Errorf("%s: invalid_route_entry fields %v, table says %v", tenantID, got, wantRejected)
+				}
+				// #2431: a matcher value PyYAML does not read as a string.
+				wantNotString := append([]string{}, want.NotString...)
+				sort.Strings(wantNotString)
+				if got := fieldsOf(findings, tenantID, "routing_value_not_string"); !equalStrings(got, wantNotString) {
+					t.Errorf("%s: routing_value_not_string fields %v, table says %v", tenantID, got, wantNotString)
 				}
 				// #2325: critical_escalation_missing ⇔ verdict violation; the
 				// critical_escalation_leak Fields are the leak refs (as a set:

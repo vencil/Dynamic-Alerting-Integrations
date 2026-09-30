@@ -327,14 +327,17 @@ func rootCarrierDropped(configDir, source string, parseFailed []string) bool {
 }
 
 // pyyamlOwn is the tenant file's block Resolve reads for ec, with the
-// receivers of its `_routing` as the route generator's PyYAML reads them
-// (#2295): the exporter's merge decodes the file with yaml.v3, which keeps a
-// plain `on` a string that PyYAML reads as a boolean. Nothing else in the
-// block changes; ec.TenantOverridesRaw is not modified. pyRouting holds
-// routingpolicy.PyYAMLRoutingByTenant per source file (nil: unreadable).
+// receivers, `routes[i].match` values and override `alertname` /
+// `metric_group` of its `_routing` as the route generator's PyYAML reads
+// them (#2295, #2431): the exporter's merge decodes the file with yaml.v3,
+// which keeps a plain `on` a string that PyYAML reads as a boolean. Nothing
+// else in the block changes; ec.TenantOverridesRaw is not modified.
+// pyRouting holds routingpolicy.PyYAMLRoutingByTenant per source file (nil:
+// unreadable).
 // ⛔ A `_routing` with no PyYAML counterpart (the file not re-read, the
 // tenant or its `_routing` not found there) is not judged as yaml.v3 read
-// it: WithPyYAMLReceivers(r, nil) makes each receiver Unmatched, refused.
+// it: WithPyYAMLRouting(r, nil) makes each of those values Unmatched /
+// UnmatchedValue, refused.
 func pyyamlOwn(ec *config.EffectiveConfig, pyRouting map[string]map[string]any) map[string]any {
 	own := ec.TenantOverridesRaw
 	r, has := own["_routing"]
@@ -346,7 +349,7 @@ func pyyamlOwn(ec *config.EffectiveConfig, pyRouting map[string]map[string]any) 
 	for k, v := range own {
 		out[k] = v
 	}
-	out["_routing"] = routingpolicy.WithPyYAMLReceivers(r, py)
+	out["_routing"] = routingpolicy.WithPyYAMLRouting(r, py)
 	return out
 }
 
@@ -409,8 +412,8 @@ func buildCheckInput(scoped *config.ScopedTenants, f *flags) guard.CheckInput {
 	// effective config, but no route is rendered from it.
 	problems = append(problems, routingpolicy.UnreadRouting(f.configDir, scoped.DefaultsFiles, skip)...)
 
-	// #2295: each tenant file's `_routing` blocks as PyYAML reads them, read
-	// once per file (a file declares many tenants, #2153); see pyyamlOwn.
+	// #2295 / #2431: each tenant file's `_routing` blocks as PyYAML reads
+	// them, read once per file (a file declares many tenants, #2153); see pyyamlOwn.
 	pyRouting := map[string]map[string]any{}
 	for _, ec := range scoped.Tenants {
 		if _, done := pyRouting[ec.SourceFile]; !done {

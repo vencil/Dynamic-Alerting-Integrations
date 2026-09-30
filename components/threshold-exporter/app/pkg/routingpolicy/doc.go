@@ -27,6 +27,9 @@
 //   - the receiver-type half of _grar_validate.check_domain_policies:
 //     `forbidden_receiver_types` and `allowed_receiver_types`, judged
 //     independently, so one receiver can break both;
+//   - the matcher values the generator needs as strings (#2431,
+//     _grar_validate.routing_values_not_string → ValuesNotString), read as
+//     PyYAML reads them (WithPyYAMLRouting);
 //   - `require_critical_escalation` (#2325, _grar_validate.
 //     critical_escalation_findings): whether severity=critical alerts reach
 //     a pagerduty receiver at all, and which non-pagerduty destinations
@@ -40,7 +43,8 @@
 //
 // Consumers: cmd/da-guard (through internal/guard) and tenant-api, which
 // cannot import internal/guard. Besides the standard library, yaml.v3 and
-// pkg/pyyamlcompat (receivers as the generator's PyYAML reads them, #2295) it
+// pkg/pyyamlcompat (receivers and matcher values as the generator's PyYAML
+// reads them, #2295 / #2431) it
 // imports only pkg/config — for the walker (config.RootPlatformFiles and
 // config.ScanDirTree: the one directory lister, #1911) and
 // config.IsDisabled — and never

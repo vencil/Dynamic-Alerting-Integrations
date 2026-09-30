@@ -149,7 +149,7 @@ kubectl exec -n monitoring deploy/alertmanager -- \
 kubectl get prometheusrules -n monitoring -l app.kubernetes.io/part-of=dynamic-alerting
 
 # 檢查 Prometheus 是否 reject rule
-kubectl logs prometheus-kube-prometheus-stack-prometheus-0 -c prometheus | grep "rule"
+kubectl logs -n monitoring prometheus-kube-prometheus-stack-prometheus-0 -c prometheus | grep "rule"
 
 # 確認 ruleSelector 匹配
 kubectl get prometheus -n monitoring -o jsonpath='{.items[0].spec.ruleSelector}'

@@ -163,17 +163,103 @@ func LoadRootPlatformProfiles(scan *TreeScan, bytesOf func(*TreeFile) ([]byte, e
 // the string, trimmed (ApplyProfiles trims ScheduledValue.Default). ""
 // (no profile) for anything else.
 //
-// ⚠️ Strings only, on purpose: tenant-config.schema.json types `_profile`
-// as a non-empty string. A non-string scalar (`_profile: 1`) still elects
-// profile "1" on /metrics (ScheduledValue decodes the scalar's text), but
-// the walker reads decoded values, whose text yaml.v3 and PyYAML render
-// differently (`yes`, `1.50`), so the two walker readers could not agree on
-// it with describe_tenant.py; the schema already rejects it.
+// A scalar `_profile` reaches here as its TEXT, not its decoded value
+// (#2433): decodeTenantFile and parsePlatformTenants re-read it with
+// withProfileText, as /metrics reads it (ScheduledValue keeps a scalar's
+// text) and as describe_tenant.py does since #2408. So bare `010` elects
+// profile "010" (the generic decode gave int 8, which elected nothing),
+// and `!!binary MDEw` elects "MDEw" (the generic decode gave "010"). A
+// mapping with `default:` reaches here as its default's text too; the
+// merge-key mapping and the shapes left as values (a sequence, a mapping
+// without `default:`) are covered in withProfileText.
 func profileNameOf(v any) string {
 	if s, ok := v.(string); ok {
 		return strings.TrimSpace(s)
 	}
 	return ""
+}
+
+// profileTexts is each tenant's `_profile` in one document's `tenants:`
+// block as the flat plane reads it — the typed decode /metrics runs
+// (ScheduledValue keeps a scalar's text; merge keys and aliases resolve as
+// they do there) — keyed by tenant id text. decode is that document's
+// yaml decode. nil when it does not decode: the flat plane rejects such a
+// file too, and the generic values are left as they were.
+func profileTexts(decode func(any) error) map[string]string {
+	var doc struct {
+		Tenants map[string]struct {
+			Profile *ScheduledValue `yaml:"_profile"`
+		} `yaml:"tenants"`
+	}
+	if decode(&doc) != nil {
+		return nil
+	}
+	var out map[string]string
+	for tid, b := range doc.Tenants {
+		if b.Profile == nil {
+			continue
+		}
+		if out == nil {
+			out = make(map[string]string)
+		}
+		out[tid] = b.Profile.Default
+	}
+	return out
+}
+
+// tenantsWriteProfile reports whether any tenant block in a generically
+// decoded `tenants:` mapping writes `_profile` — the only case profileTexts'
+// second decode can change anything, so a file without one skips it.
+func tenantsWriteProfile(block map[string]any) bool {
+	for _, body := range block {
+		if b, ok := body.(map[string]any); ok {
+			if _, has := b["_profile"]; has {
+				return true
+			}
+		}
+	}
+	return false
+}
+
+// withProfileText replaces `_profile` in body — one tenant's generically
+// decoded block — with the name /metrics elects from it, its flat-plane
+// text from profileTexts (#2433):
+//   - a scalar: its text (bare `010` is "010", not int 8);
+//   - a mapping with a `default:` key (the scheduled-value form): its
+//     default's text, which is all ApplyProfiles reads — a profile is not
+//     time-windowed, so the mapping's other keys elect nothing and
+//     /effective carries the elected name alone.
+//
+// A null, a sequence and a mapping without `default:` are left as the
+// generic decode gave them. A null keeps its meaning in the overlay (see
+// overlayTenant). For the other two the planes differ in what they read:
+// /metrics serialises the value to YAML text and elects that as a name —
+// normally an unknown profile, with ApplyProfiles' WARN — while the walker
+// elects no profile (profileNameOf). They serve the same values UNLESS a
+// profile happens to be named by exactly that YAML text; then /metrics
+// applies it and the walker does not. Not handled: no such name is
+// expected, and the schema allows only a string here.
+//
+// ⚠️ The merge-key shape `_profile: {<<: {default: x}}` is the exception to
+// "a mapping with `default:`": ScheduledValue checks the written keys, sees
+// `<<`, and takes the arbitrary-mapping branch, so /metrics elects the YAML
+// text `default: x` (unknown profile). The generic decode resolves the
+// merge and sees `default`, so the walker takes that same text from
+// profileTexts and shows it as `_profile` — the planes agree.
+func withProfileText(body map[string]any, texts map[string]string, tenantID string) {
+	text, ok := texts[tenantID]
+	if !ok {
+		return
+	}
+	switch v := body["_profile"].(type) {
+	case nil, []any:
+		return
+	case map[string]any:
+		if _, scheduled := v["default"]; !scheduled {
+			return
+		}
+	}
+	body["_profile"] = text
 }
 
 // profileFill is ApplyProfiles' per-key decision, shared by both planes

@@ -846,6 +846,15 @@ func (c *ThresholdConfig) ResolveStateFilters() []ResolvedStateFilter {
 
 // ResolveStateFiltersAt is the time-parameterized version for testability.
 func (c *ThresholdConfig) ResolveStateFiltersAt(now time.Time) []ResolvedStateFilter {
+	return c.resolveStateFiltersAt(now, log.Printf)
+}
+
+// resolveStateFiltersAt is ResolveStateFiltersAt with its WARN sink as a
+// parameter (#2467, same shape as resolveAtWithStats); nil = silent.
+func (c *ThresholdConfig) resolveStateFiltersAt(now time.Time, logf func(format string, args ...any)) []ResolvedStateFilter {
+	if logf == nil {
+		logf = func(string, ...any) {}
+	}
 	var result []ResolvedStateFilter
 
 	if len(c.StateFilters) == 0 {
@@ -876,7 +885,7 @@ func (c *ThresholdConfig) ResolveStateFiltersAt(now time.Time) []ResolvedStateFi
 				if filterName == "maintenance" && strings.Contains(val, "expires:") {
 					parsed := maintenanceModeStructured{}
 					if err := yaml.Unmarshal([]byte(val), &parsed); err != nil {
-						log.Printf("WARN: failed to parse structured _state_maintenance for tenant=%s: %v", tenant, err)
+						logf("WARN: failed to parse structured _state_maintenance for tenant=%s: %v", tenant, err)
 						continue
 					}
 					if parsed.Expires != "" {
@@ -893,7 +902,7 @@ func (c *ThresholdConfig) ResolveStateFiltersAt(now time.Time) []ResolvedStateFi
 							// than intended" is the recoverable failure, "alerts
 							// silently lost" is not. Keep in sync with
 							// ResolveMaintenanceExpiriesAt.
-							log.Printf("%s", maintenanceExpiresIgnoredWarn(tenant, parsed.Expires, err))
+							logf("%s", maintenanceExpiresIgnoredWarn(tenant, parsed.Expires, err))
 							continue
 						} else if now.After(t) {
 							continue // Expired → maintenance auto-deactivated
@@ -942,6 +951,15 @@ func maintenanceExpiresIgnoredWarn(tenant, expires string, err error) string {
 
 // ResolveSilentModesAt is the time-parameterized version for testability.
 func (c *ThresholdConfig) ResolveSilentModesAt(now time.Time) []ResolvedSilentMode {
+	return c.resolveSilentModesAt(now, log.Printf)
+}
+
+// resolveSilentModesAt is ResolveSilentModesAt with its WARN sink as a
+// parameter (#2467); nil = silent.
+func (c *ThresholdConfig) resolveSilentModesAt(now time.Time, logf func(format string, args ...any)) []ResolvedSilentMode {
+	if logf == nil {
+		logf = func(string, ...any) {}
+	}
 	var result []ResolvedSilentMode
 
 	for tenant, overrides := range c.Tenants {
@@ -957,7 +975,7 @@ func (c *ThresholdConfig) ResolveSilentModesAt(now time.Time) []ResolvedSilentMo
 		if strings.Contains(val, "target:") {
 			parsed := silentModeStructured{}
 			if err := yaml.Unmarshal([]byte(val), &parsed); err != nil {
-				log.Printf("WARN: failed to parse structured _silent_mode for tenant=%s: %v", tenant, err)
+				logf("WARN: failed to parse structured _silent_mode for tenant=%s: %v", tenant, err)
 				continue
 			}
 			target := strings.TrimSpace(strings.ToLower(parsed.Target))
@@ -974,7 +992,7 @@ func (c *ThresholdConfig) ResolveSilentModesAt(now time.Time) []ResolvedSilentMo
 					// structured _silent_mode (no silent entry → notifications NOT
 					// suppressed) rather than silencing with no end. Same reasoning
 					// as the maintenance branch in ResolveStateFiltersAt.
-					log.Printf("WARN: invalid expires %q in _silent_mode for tenant=%s: %v — expires is not RFC3339 (e.g. 2026-07-01T00:00:00Z), so this _silent_mode setting is IGNORED (not silenced) until it is fixed", parsed.Expires, tenant, err)
+					logf("WARN: invalid expires %q in _silent_mode for tenant=%s: %v — expires is not RFC3339 (e.g. 2026-07-01T00:00:00Z), so this _silent_mode setting is IGNORED (not silenced) until it is fixed", parsed.Expires, tenant, err)
 					continue
 				}
 				expires = t
@@ -994,7 +1012,7 @@ func (c *ThresholdConfig) ResolveSilentModesAt(now time.Time) []ResolvedSilentMo
 
 		entries := resolveSilentTarget(tenant, lower, time.Time{}, "", false)
 		if len(entries) == 0 {
-			log.Printf("WARN: unknown silent mode %q for tenant=%s, ignoring (valid: warning, critical, all, disable)", lower, tenant)
+			logf("WARN: unknown silent mode %q for tenant=%s, ignoring (valid: warning, critical, all, disable)", lower, tenant)
 		}
 		result = append(result, entries...)
 	}

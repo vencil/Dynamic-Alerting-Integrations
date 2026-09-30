@@ -172,11 +172,19 @@ class TestValuesYamlValid:
         assert "enabled" in netpol
         assert "allowedNamespaces" in netpol
 
-    def test_service_account_configuration(self, values_yaml_content: dict) -> None:
-        """驗證 serviceAccount 設定存在。"""
-        assert "serviceAccount" in values_yaml_content
-        sa = values_yaml_content["serviceAccount"]
-        assert "create" in sa
+    def test_service_account_configuration(self, values_yaml_content: dict, template_dir: Path) -> None:
+        """驗證 ServiceAccount 一律以固定名稱建立，values 不宣告沒有作用的開關。
+
+        values.yaml 原本有 `serviceAccount.create`／`name`，但沒有任何 template 讀它們，
+        覆寫是 silent no-op（#2532 移除）。這裡釘住實際的契約：SA template 不受 value
+        控制，deployment 引用同一個名稱。
+        """
+        assert "serviceAccount" not in values_yaml_content
+        sa_tmpl = (template_dir / "serviceaccount.yaml").read_text(encoding="utf-8")
+        assert ".Values" not in sa_tmpl
+        assert 'name: {{ include "da-portal.name" . }}' in sa_tmpl
+        deploy = (template_dir / "deployment.yaml").read_text(encoding="utf-8")
+        assert 'serviceAccountName: {{ include "da-portal.name" . }}' in deploy
 
 
 # ──────────────────────────────────────────────────────────────────────────────

@@ -1815,34 +1815,6 @@ def test_a_deletion_row_is_not_judged(tmp_path: Path) -> None:
     assert not record.exists(), "a deletion push was gated on a docs build"
 
 
-def test_the_guard_leaves_no_temporary_worktree_behind(tmp_path: Path) -> None:
-    """A guard that leaks a worktree per push poisons `git worktree list`.
-
-    ⚠️ Honest boundary, measured: this one is GREEN on the pre-#1690 script
-    too — that code never created a worktree, so there was nothing to leak. By
-    the repo's own rule (a guard earns its place when its silent failure brings
-    the ORIGINAL defect back) it would not qualify, because a leaked worktree
-    is a failure mode this fix introduces, not one it restores.
-
-    ⚠️ Since #2169 it no longer catches a dropped `git worktree remove` in
-    `_build_one` on its own: the EXIT trap removes the last tree anyway, so
-    with one ref this stays green. The two-ref row of
-    `test_an_interrupted_push_leaves_no_temporary_worktree_behind` is what
-    turns red then. What this one still pins is the uninterrupted path: the
-    must-not-fire twin of that test. The four tests above are the ones
-    that carry #1690 itself — all four fail on the pre-fix script, this one
-    does not, and that difference is the point of writing it down here.
-    """
-    work, record, sha_a, sha_b = _docs_repo(tmp_path)
-    _run_guard(work, record, f"refs/heads/topic {sha_b} refs/heads/topic {sha_a}\n")
-
-    listed = _git(work, "worktree", "list").stdout.strip().splitlines()
-    assert len(listed) == 1, f"temporary worktree left registered: {listed}"
-    assert not list((work / ".git").glob("mkdocs-strict-*")), (
-        "temporary worktree directory left on disk"
-    )
-
-
 # The recorder, plus: the build whose number is PREPUSH_TEST_HANG_ON says so and
 # hangs, so the interrupt lands mid-build in a known tree.
 _HANGING_RECORDER = """#!/usr/bin/env bash
@@ -1992,6 +1964,68 @@ def test_a_sigterm_to_the_guard_alone_during_the_build_leaves_nothing_behind(
     after = _git(work, "worktree", "list", "--porcelain").stdout
     assert after == before, f"worktrees changed:\n{before}\n---\n{after}"
     assert not list((work / ".git").glob("mkdocs-strict-*")), "the build wrote its tree back into .git"
+
+
+@pytest.mark.skipif(os.name == "nt", reason="needs POSIX signals to the guard alone")
+def test_a_sigterm_to_the_guard_alone_during_the_checkout_leaves_nothing_behind(
+    tmp_path: Path,
+) -> None:
+    """While `git worktree add` is still checking out, git holds the tree
+    locked and `remove --force` refuses; the `add` then finishes on its own, a
+    full checkout still registered. On a SIGTERM to the guard's bash alone the
+    clean-up must wait for the `add` first."""
+    work, record, sha_a, _sha_b = _docs_repo(tmp_path)
+    # A slow checkout: the pushed commit routes its doc through a smudge filter.
+    assert _git(work, "checkout", "-q", "topic").returncode == 0
+    (work / ".gitattributes").write_text("docs/*.md filter=slow\n", encoding="utf-8")
+    (work / "docs" / "index.md").write_text("# index\nslow to check out\n", encoding="utf-8")
+    assert _git(work, "add", "-A").returncode == 0
+    _commit(work, "docs: behind a slow filter")
+    sha_c = _git(work, "rev-parse", "HEAD").stdout.strip()
+    assert _git(work, "checkout", "-q", "main").returncode == 0
+    # Configured only now, so the checkouts above run no filter.
+    assert _git(work, "config", "filter.slow.smudge",
+                ': > "$PREPUSH_TEST_STARTED"; sleep 3; : > "$PREPUSH_TEST_STARTED.done"; cat').returncode == 0
+    bindir = tmp_path / "fakebin"
+    bindir.mkdir()
+    (bindir / "mkdocs").write_text(_FAKE_MKDOCS, encoding="utf-8")
+    (bindir / "mkdocs").chmod(0o755)
+    started = tmp_path / "started"
+    done = tmp_path / "started.done"
+    env = {**os.environ, "PATH": str(bindir) + os.pathsep + os.environ.get("PATH", ""),
+           "PREPUSH_TEST_STARTED": str(started), "PREPUSH_TEST_RECORD": str(record)}
+    before = _git(work, "worktree", "list", "--porcelain").stdout
+    proc = subprocess.Popen(  # subprocess-timeout: ignore
+        [_BASH, "scripts/ops/pre_push_mkdocs_strict.sh", "origin", "/dev/null"], cwd=work, env=env,
+        stdin=subprocess.PIPE, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+        start_new_session=True, preexec_fn=lambda: signal.signal(signal.SIGINT, signal.SIG_DFL),
+    )
+    try:
+        proc.stdin.write(f"refs/heads/topic {sha_c} refs/heads/topic {sha_a}\n".encode())
+        proc.stdin.close()
+        deadline = time.monotonic() + 30
+        while not started.exists():
+            assert proc.poll() is None and time.monotonic() < deadline, "the checkout never started"
+            time.sleep(0.05)
+        # Must-fire half: the tree is registered and locked while `add` runs.
+        # Only the key: the lock reason is a translated string.
+        assert re.search(r"^locked\b", _git(work, "worktree", "list", "--porcelain").stdout, re.M)
+        os.kill(proc.pid, signal.SIGTERM)
+        proc.wait(timeout=20)
+        # Removing the tree before the checkout ends races whatever `add` still
+        # writes; only a clean-up that waited for it is deterministic.
+        assert done.exists(), "the guard cleaned up before the checkout had ended"
+        time.sleep(5)  # longer than the checkout has left: an orphaned `add` would be done
+    finally:
+        try:
+            os.killpg(proc.pid, signal.SIGKILL)
+        except ProcessLookupError:
+            pass
+
+    assert not record.exists(), "the build ran after the guard was terminated"
+    after = _git(work, "worktree", "list", "--porcelain").stdout
+    assert after == before, f"worktrees changed:\n{before}\n---\n{after}"
+    assert not list((work / ".git").glob("mkdocs-strict-*")), "temporary tree left on disk"
 
 
 # The recorder, failing only for the commit named in PREPUSH_TEST_FAIL_SHA and
