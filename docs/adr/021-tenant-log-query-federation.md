@@ -158,7 +158,7 @@ VictoriaLogs (AccountID, ProjectID)：強制隔離
 
 平台營運 log 含基礎設施拓樸（`node_name` / `pod_ip` / 他租戶 namespace 命名規則…），**預設不對租戶可見**。
 
-- **做法**：Vector 寫入租戶 AccountID 分區**前**，VRL `drop_fields` 拔除敏感欄位 → 落在 `AccountID:X` 的資料 100% 乾淨，gateway 連 read-time strip 漏濾風險都不必承擔。過濾規則入 Git 版控。
+- **做法**：Vector 寫入租戶 AccountID 分區**前**，VRL 只照白名單 `tenantProjectionKeepFields` 重建每一列（不在清單上的欄位一律不帶；黑名單在這裡會 fail-open）→ 落在 `AccountID:X` 的資料 100% 乾淨，gateway 連 read-time strip 漏濾風險都不必承擔。過濾規則入 Git 版控。
 - **可見範圍是子集**：(b) 對租戶可見的僅 `log_type=federation_audit` 且帶有效 `tenant_id` 的列；`gateway_operational`（Envoy 操作層錯誤，非租戶可歸屬）與 JWT-fail 列**永遠 platform-only**（落 `0:0`），不進租戶分區。
 - **關聯性不斷鏈（Correlation id）**：drop 敏感欄位**之前**，Vector 注入一個全域唯一、無語意的 `log_event_id`，**同時存在於平台完整副本（`0:0`）與租戶淨化副本（`AccountID:X`）**。值班拿租戶截圖報修時，可用此 id 跨分區 join 回完整 node 資訊，避免淨化把 MTTR 拉長。
 - **已知 trade-off**：ingest-time drop **事後無法 un-drop**（改 whitelist 要 reprocess）。對「本來就不該給租戶看」的拓樸欄位可接受；動態可調的 read-time strip 留 Future Work。
