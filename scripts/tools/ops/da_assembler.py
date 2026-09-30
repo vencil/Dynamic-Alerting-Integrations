@@ -486,6 +486,33 @@ def _plain_tag(text: str) -> str:
         yaml.ScalarNode, text, (True, False))
 
 
+def _stale_render_hint(config_dir: Path, old_name: str, new_file: str) -> str:
+    """#2430: a hint about *old_name*.yaml, or "" when it is not there.
+
+    An earlier version of this tool rendered a CR whose name is refused now
+    to ``f"{name}.yaml"`` with the name as ``yaml.safe_load`` typed it
+    (``010`` -> ``8.yaml``, ``~`` -> ``None.yaml``). Such a file left in a
+    persistent --config-dir declares the tenant a second time once the CR
+    is fixed. Only a file that EXISTS is named: the name alone does not say
+    whether this directory ever held one. And an existing file is not
+    proof either — a CR named ``"8"`` renders to ``8.yaml`` too, under the
+    same header — so the hint asks for that check before any deletion.
+    """
+    try:
+        exists = (config_dir / f"{old_name}.yaml").is_file()
+    except (OSError, ValueError):  # ENAMETOOLONG is not swallowed by is_file
+        exists = False
+    if not exists:
+        return ""
+    return (f". {old_name}.yaml exists in this --config-dir: an earlier "
+            "version of this tool may have rendered this CR to it. Before "
+            "deleting it, confirm it is not the output of another CR whose "
+            f"metadata.name is the string {old_name!r} (the header comment "
+            f"is the same for both, so it cannot tell them apart). If it is "
+            f"this CR's, delete it, or it and the {new_file} file both "
+            "declare the tenant")
+
+
 def _keys_as_plain_text(obj: Any) -> Any:
     """*obj* with every mapping key a plain ``str`` (values untouched).
 
@@ -559,7 +586,20 @@ def render_cr_file(
     if isinstance(name, date) and not isinstance(name, datetime):
         name = name.isoformat()
     if not isinstance(name, str) or not name:
-        log.error("%s: metadata.name must be a non-empty string", cr_path)
+        # #2430: an earlier version rendered a null name (`~`, `null`, an
+        # empty scalar) to `None.yaml` and a `!!timestamp` datetime to its
+        # str(). A missing name crashed it, so there is nothing to name.
+        extra = ""
+        if isinstance(metadata, dict) and "name" in metadata \
+                and name is None:
+            extra = ("; a null name (empty, ~ or null) is not a string: if "
+                     "the string null is meant, quote it (\"null\")"
+                     + _stale_render_hint(config_dir, "None", "named CR's"))
+        elif isinstance(name, datetime):
+            extra = _stale_render_hint(config_dir, str(name),
+                                       "renamed CR's")
+        log.error("%s: metadata.name must be a non-empty string%s",
+                  cr_path, extra)
         return EXIT_CALLER_ERROR
     # An unquoted name is RawPlain text. Judged by YAML 1.1 (PyYAML)
     # implicit typing: one read as int / float / bool is a caller error; a
@@ -573,7 +613,8 @@ def render_cr_file(
         # spelling (`010` -> `8.yaml`, `yes` -> `True.yaml`); once quoted it
         # renders as `010.yaml`, and a stale typed-spelling file left in a
         # persistent --config-dir declares the tenant a second time. The
-        # message names that file; deleting it is left to the operator.
+        # message names that file when it exists (_stale_render_hint);
+        # deleting it is left to the operator.
         # Same spelling (`42`): quoting overwrites it, nothing is left.
         # Construction failing (`0x_`, a >4300-digit int): the earlier
         # version crashed on it and wrote nothing, so there is no hint.
@@ -589,11 +630,9 @@ def render_cr_file(
         quotable = _is_dns1123_subdomain(name)
         stale = ""
         if old_name is not None and (old_name != name or not quotable):
-            stale = (". If an earlier version of this tool rendered this "
-                     f"CR into this --config-dir, it wrote {old_name}.yaml "
-                     "there: delete it, or it and the "
-                     + ("quoted name's" if quotable else "renamed CR's")
-                     + " file both declare the tenant")
+            stale = _stale_render_hint(
+                config_dir, old_name,
+                "quoted name's" if quotable else "renamed CR's")
         if (stale and quotable
                 and old_name.casefold() == name.casefold()):
             stale += (" (on a case-insensitive file system it IS the quoted "
@@ -606,10 +645,22 @@ def render_cr_file(
     # #2396: the name is the output file name and goes into the header
     # comment, so its format is checked here, before anything is written.
     if not _is_dns1123_subdomain(name):
+        # #2430: an unquoted datetime (`2024-01-01T10:00:00Z`) was rendered
+        # by an earlier version to its Python spelling
+        # (`2024-01-01 10:00:00+00:00.yaml`); the CR has to be renamed, so
+        # that file is stale. A date is DNS-1123 and never gets here.
+        stale = ""
+        if tag == "tag:yaml.org,2002:timestamp":
+            try:
+                stale = _stale_render_hint(
+                    config_dir, str(yaml.safe_load(name)), "renamed CR's")
+            except (ValueError, yaml.YAMLError):
+                stale = ""
         log.error("%s: metadata.name %r is not a valid Kubernetes object "
                   "name (DNS-1123 subdomain: lowercase a-z, 0-9, '-' and "
                   "'.', starting and ending alphanumeric, at most %d "
-                  "characters)", cr_path, name, _DNS1123_SUBDOMAIN_MAX)
+                  "characters)%s", cr_path, name, _DNS1123_SUBDOMAIN_MAX,
+                  stale)
         return EXIT_CALLER_ERROR
     # #2396: a null / empty namespace is UNSET in Kubernetes (the API
     # server fills in the request's namespace), so such a CR exists in a

@@ -341,10 +341,13 @@ class TestRenderCrFile:
 
         #2430：舊版（#2399／#2400 之前）把這個 name 寫成型別化後的拼法
         （`010` → `8.yaml`）。加引號重 render 後新檔是 `010.yaml`，舊檔
-        若還在持久輸出目錄裡，同一租戶就有兩份。訊息要指名那個舊檔；拼法
-        相同（`42`）時加引號會覆寫同一個檔，不該提。本工具不刪檔。
+        若還在持久輸出目錄裡，同一租戶就有兩份。訊息只在那個舊檔**確實
+        存在**於 --config-dir 時指名它（空目錄不提）；拼法相同（`42`）時
+        加引號會覆寫同一個檔，不該提。本工具不刪檔。
         加引號仍非 DNS-1123（`TRUE`、`-5`，#2396）就得改名，舊檔即使拼法
         相同也會留下，要提；大小寫不分的檔案系統附註只在加引號可行時才成立。
+        會讓本測試轉紅的改動：拿掉 `_stale_render_hint` 的存在檢查（空目錄
+        也提），或整段不提。
         """
         cr_path = tmp_path / "cr.yaml"
         cr_path.write_text(
@@ -357,20 +360,129 @@ class TestRenderCrFile:
         assert f"read as {kind}" in caplog.text
         assert "Quoting makes it a string" in caplog.text
         assert "DNS-1123" in caplog.text
+        # Empty --config-dir: nothing was ever rendered here, no hint.
+        assert "earlier version" not in caplog.text
+        assert "case-insensitive file system" not in caplog.text
+        assert list(out_dir.iterdir()) == []
         if stale is None:
-            assert "earlier version" not in caplog.text
-        else:
-            assert (f"it wrote {stale} there: delete it" in caplog.text), \
-                caplog.text
-            new_file = ("quoted name's" if fix == "quote"
-                        else "renamed CR's")
-            assert f"it and the {new_file} file both" in caplog.text, \
-                caplog.text
+            return
+        # The earlier version's file is there: the hint must name it.
+        (out_dir / stale).write_text("# stale\n", encoding="utf-8")
+        caplog.clear()
+        assert render_cr_file(cr_path, out_dir) == EXIT_CALLER_ERROR
+        assert (f"{stale} exists in this --config-dir" in caplog.text), \
+            caplog.text
+        assert "confirm it is not the output of another CR" in caplog.text
+        new_file = "quoted name's" if fix == "quote" else "renamed CR's"
+        assert f"it and the {new_file} file both" in caplog.text, \
+            caplog.text
         # `true` -> `True.yaml` differs from `true.yaml` only in case; with
         # `TRUE` there is no quoted name's file for it to be.
-        case_only = stale is not None and fix == "quote" and \
+        case_only = fix == "quote" and \
             stale.casefold() == f"{name}.yaml".casefold()
         assert ("case-insensitive file system" in caplog.text) == case_only
+        assert [p.name for p in out_dir.iterdir()] == [stale]
+
+    def test_stale_hint_asks_to_rule_out_a_string_named_cr(
+            self, tmp_path, caplog):
+        """#2430：`8.yaml` 也可能是另一個 name 為 `"8"` 的合法 CR 的輸出。
+
+        兩者檔頭同為 `ThresholdConfig ?/8`，工具分不出來，所以提示必須要求
+        先確認再刪，且不得動那個檔。會讓本測試轉紅的改動：提示拿掉「確認」
+        那句，或改成只看 name 推算、不看目錄。
+        """
+        out_dir = tmp_path / "out"
+        out_dir.mkdir()
+        other = tmp_path / "other.yaml"
+        other.write_text(self._K + 'metadata: {name: "8"}\n' + self._T,
+                         encoding="utf-8")
+        assert render_cr_file(other, out_dir) == 0
+        rendered = (out_dir / "8.yaml").read_text(encoding="utf-8")
+        cr_path = tmp_path / "cr.yaml"
+        cr_path.write_text(self._K + "metadata: {name: 010}\n" + self._T,
+                           encoding="utf-8")
+        caplog.clear()
+        assert render_cr_file(cr_path, out_dir) == EXIT_CALLER_ERROR
+        assert "8.yaml exists in this --config-dir" in caplog.text
+        assert ("confirm it is not the output of another CR whose "
+                "metadata.name is the string '8'") in caplog.text
+        assert "cannot tell them apart" in caplog.text
+        assert [p.name for p in out_dir.iterdir()] == ["8.yaml"]
+        assert (out_dir / "8.yaml").read_text(encoding="utf-8") == rendered
+
+    # The file an earlier version (fb7acd71, measured for #2430) wrote for
+    # a name refused now for not being a string / not DNS-1123.
+    @pytest.mark.parametrize("name, stale", [
+        pytest.param("~", "None.yaml", id="tilde"),
+        pytest.param("null", "None.yaml", id="null"),
+        pytest.param("", "None.yaml", id="empty-scalar"),
+        pytest.param("2024-01-01T10:00:00Z", "2024-01-01 10:00:00+00:00.yaml",
+                     id="datetime-utc"),
+        pytest.param("2024-01-01 10:00:00", "2024-01-01 10:00:00.yaml",
+                     id="datetime-space"),
+        pytest.param("!!timestamp 2024-01-01T10:00:00Z",
+                     "2024-01-01 10:00:00+00:00.yaml",
+                     id="tagged-datetime"),
+    ])
+    def test_null_and_datetime_name_stale_hint(
+            self, name, stale, tmp_path, caplog):
+        """#2430：null 與 datetime name 舊版也會寫檔，舊檔存在才提示。
+
+        舊版把 null（`~`、`null`、空值）寫成 `None.yaml`，datetime 寫成
+        Python 的拼法。空目錄不提；舊檔存在就指名並要求先確認。null 另外
+        提示：本意是字串 null 就加引號。會讓本測試轉紅的改動：拿掉 null／
+        datetime 兩條路徑上的 `_stale_render_hint` 呼叫。
+        """
+        cr_path = tmp_path / "cr.yaml"
+        cr_path.write_text(self._K + f"metadata: {{name: {name}}}\n"
+                           + self._T, encoding="utf-8")
+        out_dir = tmp_path / "out"
+        out_dir.mkdir()
+        is_null = stale == "None.yaml"
+        assert render_cr_file(cr_path, out_dir) == EXIT_CALLER_ERROR
+        assert "exists in this --config-dir" not in caplog.text
+        assert ('quote it ("null")' in caplog.text) == is_null, caplog.text
+        (out_dir / stale).write_text("# stale\n", encoding="utf-8")
+        caplog.clear()
+        assert render_cr_file(cr_path, out_dir) == EXIT_CALLER_ERROR
+        assert f"{stale} exists in this --config-dir" in caplog.text, \
+            caplog.text
+        assert "confirm it is not the output of another CR" in caplog.text
+        assert ('quote it ("null")' in caplog.text) == is_null
+        assert [p.name for p in out_dir.iterdir()] == [stale]
+
+    def test_missing_name_has_no_stale_hint(self, tmp_path, caplog):
+        """#2430：缺 name 時舊版 crash、沒寫檔，`None.yaml` 在也不提。"""
+        cr_path = tmp_path / "cr.yaml"
+        cr_path.write_text(self._K + "metadata: {namespace: n}\n" + self._T,
+                           encoding="utf-8")
+        out_dir = tmp_path / "out"
+        out_dir.mkdir()
+        (out_dir / "None.yaml").write_text("# other\n", encoding="utf-8")
+        assert render_cr_file(cr_path, out_dir) == EXIT_CALLER_ERROR
+        assert self._BAD_NAME in caplog.text
+        assert "exists in this --config-dir" not in caplog.text
+        assert "quote it" not in caplog.text
+
+    def test_overlong_int_name_has_no_stale_hint(self, tmp_path, caplog):
+        """#2430：name 太長、舊檔名超過檔名上限時不提示、不 traceback。
+
+        300 位的 int name 加引號後也超過 DNS-1123 的 253 字元，走「須改名」
+        分支；舊版寫 `<300 位>.yaml` 會因檔名過長失敗，目錄裡不可能有它。
+        存在檢查本身會丟 ENAMETOOLONG，必須當成不存在。會讓本測試轉紅的
+        改動：拿掉存在檢查（偽提示），或拿掉它的 OSError 處理（traceback）。
+        """
+        name = "1" * 300
+        cr_path = tmp_path / "cr.yaml"
+        cr_path.write_text(self._K + f"metadata: {{name: {name}}}\n"
+                           + self._T, encoding="utf-8")
+        out_dir = tmp_path / "out"
+        out_dir.mkdir()
+        assert render_cr_file(cr_path, out_dir) == EXIT_CALLER_ERROR
+        errors = [r for r in caplog.records if r.levelname == "ERROR"]
+        assert len(errors) == 1, caplog.text
+        assert "read as int" in caplog.text
+        assert "exists in this --config-dir" not in caplog.text
         assert list(out_dir.iterdir()) == []
 
     def test_int_name_past_str_digit_limit_is_caller_error(
