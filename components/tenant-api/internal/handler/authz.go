@@ -27,7 +27,7 @@ package handler
 
 import (
 	"net/http"
-	"os"
+	"path/filepath"
 
 	"github.com/vencil/tenant-api/internal/confd"
 	"github.com/vencil/tenant-api/internal/gitops"
@@ -63,8 +63,12 @@ func WriteScopeMeta(configDir string) ScopeMetaFunc {
 		if err != nil {
 			return "", "" // absent, ambiguous or unsafe id → unlabeled
 		}
-		data, err := os.ReadFile(path)
-		if err != nil {
+		// #2477: confd.ReadTenantFile, not os.ReadFile — it opens without
+		// blocking and refuses a non-regular file on the opened fd, so a
+		// FIFO (or other special file) at the tenant's path cannot stall the
+		// write gate. Any problem → unlabeled, the same fail-soft as above.
+		data, problem := confd.ReadTenantFile(filepath.Dir(path), filepath.Base(path))
+		if problem != confd.ProblemNone {
 			return "", ""
 		}
 		var summary TenantSummary
