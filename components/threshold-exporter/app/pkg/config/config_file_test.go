@@ -268,3 +268,35 @@ func TestTreeScan_PartialsAreLazyAndReleased(t *testing.T) {
 		t.Errorf("warm scan lost the carried declarations: %v", warm.Files["a.yaml"].TenantIDs)
 	}
 }
+
+// TestParseConfigFile_NullDoesNotShadowTheOtherSpelling pins #2418 at the
+// decode: inside one `defaults:` block the canonical-wins dedup is among the
+// spellings the file WRITES (levelWritesSpelling). A null beside the other
+// spelling's value is dropped so that value is served; every other shape
+// decodes exactly as a plain yaml.Unmarshal does.
+func TestParseConfigFile_NullDoesNotShadowTheOtherSpelling(t *testing.T) {
+	t.Parallel()
+	C, L := "mysql_threads_running", "mysql_cpu"
+	cases := []struct {
+		name, body string
+		want       map[string]float64
+	}{
+		{"canonical null, legacy value", C + ": null\n  " + L + ": 30", map[string]float64{L: 30}},
+		{"legacy null, canonical value", L + ": ~\n  " + C + ": 30", map[string]float64{C: 30}},
+		{"critical: canonical null, legacy value", C + "_critical: null\n  " + L + "_critical: 30", map[string]float64{L + "_critical": 30}},
+		// Unchanged shapes: plain yaml.Unmarshal.
+		{"both null", C + ": null\n  " + L + ": null", map[string]float64{C: 0, L: 0}},
+		{"canonical null alone", C + ": null", map[string]float64{C: 0}},
+		{"both values", C + ": 40\n  " + L + ": 30", map[string]float64{C: 40, L: 30}},
+		{"non-aliased null", "pg_connections: null", map[string]float64{"pg_connections": 0}},
+	}
+	for _, tc := range cases {
+		got, err := ParseConfigFile([]byte("defaults:\n  " + tc.body + "\n"))
+		if err != nil {
+			t.Fatalf("%s: %v", tc.name, err)
+		}
+		if !reflect.DeepEqual(got.Defaults, tc.want) {
+			t.Errorf("%s: Defaults = %v, want %v", tc.name, got.Defaults, tc.want)
+		}
+	}
+}

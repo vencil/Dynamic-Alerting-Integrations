@@ -42,10 +42,11 @@ import (
 //     tenants by the walker, but the flat plane merges its `tenants:` block,
 //     so /metrics serves a tenant /effective does not know — #1982.
 //
-// Semantics are exactly a plain yaml.Unmarshal into ThresholdConfig — the
-// flat plane's historical decode — pinned against that oracle over a variant
-// corpus by config_file_test.go. The tenant set of a file is the key set of
-// the returned Tenants.
+// Semantics are a plain yaml.Unmarshal into ThresholdConfig — the flat
+// plane's historical decode — pinned against that oracle over a variant
+// corpus by config_file_test.go, with ONE post-decode step on `defaults:`
+// (dropNullShadowingSpellings, #2418). The tenant set of a file is the key
+// set of the returned Tenants.
 //
 // ⚠️ A TENANT FILE ASKS ParseTenantFile, NOT THIS. This accepts a tenant id
 // that is not valid UTF-8; that is right for a `_`-prefixed platform file
@@ -53,7 +54,70 @@ import (
 func ParseConfigFile(data []byte) (ThresholdConfig, error) {
 	var cfg ThresholdConfig
 	err := yaml.Unmarshal(data, &cfg)
+	if err == nil {
+		dropNullShadowingSpellings(cfg.Defaults, data)
+	}
 	return cfg, err
+}
+
+// dropNullShadowingSpellings removes from a decoded `defaults:` map every
+// spelling of a threshold that the file writes as null while it writes
+// another spelling of the same threshold (#2418).
+//
+// ⛔ WHY. `Defaults` is map[string]float64, so a null decodes to a PRESENT 0.
+// With the canonical spelling written as null beside the retired spelling
+// at 30 in the root `_defaults.yaml`, resolve's canonical-wins dedup
+// (canonicalizeDefaults) then served the null's 0 over the 30, while the
+// walker's defaults fold — which da-guard and /effective read — drops the
+// null and keeps the 30. The guard therefore judged a tenant writing the
+// retired spelling at 30 redundant, and deleting it moved /metrics from 30
+// to 0.
+//
+// "Does this level write spelling s" is levelWritesSpelling, the predicate
+// the subtree overlay (applySubtreeDefaults) and the walker's fold
+// (noteSpellingWriters) already share: the root level answers it the same
+// way, so the canonical-wins dedup inside one file is among the spellings
+// that file WRITES. Nothing else changes: a null with no written twin still
+// decodes to 0 exactly as before (a separate question, not this one's), and
+// a file writing both spellings with values is untouched (canonical wins).
+//
+// Fast path: the raw re-decode happens only when the map holds two
+// spellings of one threshold — never for a file without aliased keys.
+func dropNullShadowingSpellings(defaults map[string]float64, data []byte) {
+	var pairs []string
+	var buf [2]string
+	for k := range defaults {
+		for _, s := range otherSpellings(k, &buf) {
+			if _, both := defaults[s]; both {
+				pairs = append(pairs, k)
+				break
+			}
+		}
+	}
+	if len(pairs) == 0 {
+		return
+	}
+	var raw struct {
+		Defaults map[string]any `yaml:"defaults"`
+	}
+	if yaml.Unmarshal(data, &raw) != nil {
+		return // cannot happen: the typed decode of the same bytes succeeded
+	}
+	var drop []string
+	for _, k := range pairs {
+		if levelWritesSpelling(raw.Defaults, k) {
+			continue
+		}
+		for _, s := range otherSpellings(k, &buf) {
+			if _, in := defaults[s]; in && levelWritesSpelling(raw.Defaults, s) {
+				drop = append(drop, k)
+				break
+			}
+		}
+	}
+	for _, k := range drop {
+		delete(defaults, k)
+	}
 }
 
 // ParseTenantFile is ParseConfigFile for a file that declares tenants — a
