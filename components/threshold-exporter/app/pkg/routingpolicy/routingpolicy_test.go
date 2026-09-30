@@ -405,3 +405,22 @@ func TestParseDoc_GeneratorRepeatedKeyRefusesTheFile(t *testing.T) {
 		t.Errorf("merge override: %v", err)
 	}
 }
+
+// TestAliasKeyNamesAreTheAnchoredText (#2437): a profile or domain named by an
+// alias key is named by its anchor's text, as PyYAML reads it — not by the
+// anchor's name, which no tenant references.
+func TestAliasKeyNamesAreTheAnchoredText(t *testing.T) {
+	profiles, present, err := ParseRoutingProfiles([]byte(
+		"x: &p p1\nrouting_profiles:\n  *p :\n    receiver: {type: webhook, url: \"https://a\"}\n"))
+	if err != nil || !present {
+		t.Fatalf("ParseRoutingProfiles: present %v, err %v", present, err)
+	}
+	if _, ok := profiles["p1"]; !ok || len(profiles) != 1 {
+		t.Errorf("profile names = %v, want only p1", sortedKeys(profiles))
+	}
+	pols, probs, err := ParseDomainPolicies([]byte(
+		"x: &d fin\ndomain_policies:\n  *d :\n    tenants: [t1]\n    constraints: {forbidden_receiver_types: [slack]}\n"))
+	if err != nil || len(probs) != 0 || len(pols) != 1 || pols[0].Domain != "fin" {
+		t.Errorf("ParseDomainPolicies = %+v, %v, %v; want one policy for domain fin", pols, probs, err)
+	}
+}

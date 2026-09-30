@@ -154,6 +154,22 @@ func lookup(m *yaml.Node, key string) *yaml.Node {
 	return nil
 }
 
+// lookupEntry is lookup with YAML merge keys expanded (mappingEntries): a key
+// supplied through `<<:` is found, and one the mapping writes itself wins. A
+// domain policy and its constraints are read this way, as the generator's
+// safe_load reads them (#2438); lookup would miss a merged constraint.
+func lookupEntry(m *yaml.Node, key string) *yaml.Node {
+	if m == nil || m.Kind != yaml.MappingNode {
+		return nil
+	}
+	for _, e := range mappingEntries(m) {
+		if e.key == key {
+			return e.value
+		}
+	}
+	return nil
+}
+
 func deref(n *yaml.Node) *yaml.Node {
 	for n != nil && n.Kind == yaml.AliasNode {
 		n = n.Alias
@@ -415,15 +431,17 @@ func profilesFromNode(top *yaml.Node) (map[string]map[string]any, bool, error) {
 		return nil, true, fmt.Errorf("'routing_profiles:' must be a mapping of profile name to routing, got %s: %w",
 			kindName(n), errUnusable)
 	}
-	out := make(map[string]map[string]any, len(n.Content)/2)
-	for i := 0; i+1 < len(n.Content); i += 2 {
+	// mappingEntries, not the raw pairs: a `<<:` here supplies profiles the
+	// generator reads (#2438), and an alias key names its anchor's text (#2437).
+	entries := mappingEntries(n)
+	out := make(map[string]map[string]any, len(entries))
+	for _, e := range entries {
 		var v any
-		body := deref(n.Content[i+1])
-		if err := body.Decode(&v); err != nil {
+		if err := e.value.Decode(&v); err != nil {
 			return nil, true, err
 		}
-		m, _ := asStringMap(withPyYAMLReceiversFrom(v, body)) // not a mapping: known name, empty body
-		out[n.Content[i].Value] = m
+		m, _ := asStringMap(withPyYAMLReceiversFrom(v, e.value)) // not a mapping: known name, empty body
+		out[e.key] = m
 	}
 	return out, true, nil
 }
@@ -454,9 +472,11 @@ func policyNodesFrom(top *yaml.Node) (map[string]*yaml.Node, error) {
 		return nil, fmt.Errorf("'domain_policies:' must be a mapping of domain name to policy, got %s — "+
 			"the whole block is ignored: %w", kindName(n), errUnusable)
 	}
-	out := make(map[string]*yaml.Node, len(n.Content)/2)
-	for i := 0; i+1 < len(n.Content); i += 2 {
-		out[n.Content[i].Value] = deref(n.Content[i+1])
+	// As in profilesFromNode: `<<:` expanded (#2438), alias keys by text (#2437).
+	entries := mappingEntries(n)
+	out := make(map[string]*yaml.Node, len(entries))
+	for _, e := range entries {
+		out[e.key] = e.value
 	}
 	return out, nil
 }
@@ -491,7 +511,7 @@ func buildPolicies(nodes map[string]*yaml.Node, origin map[string]string) ([]Pol
 			continue
 		}
 		p := Policy{Domain: name}
-		if t := lookup(n, "tenants"); t != nil {
+		if t := lookupEntry(n, "tenants"); t != nil {
 			if t.Kind != yaml.SequenceNode {
 				bad(field+".tenants", "domain policy %q: 'tenants' must be a list, got %s — the policy cannot be enforced",
 					name, kindName(t))
@@ -503,7 +523,7 @@ func buildPolicies(nodes map[string]*yaml.Node, origin map[string]string) ([]Pol
 				}
 			}
 		}
-		c := lookup(n, "constraints")
+		c := lookupEntry(n, "constraints")
 		if isNull(c) {
 			continue // no constraints: inert
 		}
@@ -519,7 +539,7 @@ func buildPolicies(nodes map[string]*yaml.Node, origin map[string]string) ([]Pol
 			{ConstraintForbidden, &p.ForbiddenReceiverTypes},
 			{ConstraintAllowed, &p.AllowedReceiverTypes},
 		} {
-			l := lookup(c, cn.key)
+			l := lookupEntry(c, cn.key)
 			if isNull(l) {
 				continue
 			}
@@ -546,7 +566,7 @@ func buildPolicies(nodes map[string]*yaml.Node, origin map[string]string) ([]Pol
 		// #2325: only a YAML boolean is a value; the Python check enforces
 		// `is True` and --strict reports any other non-null value. Booleans
 		// are read PyYAML's way (DecodePyYAML): a plain `yes` is true there.
-		if e := lookup(c, ConstraintRequireCriticalEscalation); !isNull(e) {
+		if e := lookupEntry(c, ConstraintRequireCriticalEscalation); !isNull(e) {
 			// A value PyYAML refuses is a problem too (fail-closed): the
 			// generator drops the whole file over it.
 			v, err := DecodePyYAML(e)

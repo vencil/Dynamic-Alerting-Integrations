@@ -44,6 +44,7 @@
     "platform row, field = the key path in that file. The generator itself reports nothing there,",
     "so the Python reader leaves that kind out of its platform comparison (its targets pin it).",
     "A YAML merge key (`<<:`) in a platform tenants.<id> entry is expanded before the keys are read, as every reader's decoder does (#2291); an explicit key wins, earlier sources first.",
+    "#2437/#2438 - the same holds in domain_policies, a domain policy, its constraints and routing_profiles; an alias key names its anchor's text.",
     "escalation (#2325): the ADR-007 require_critical_escalation verdict. null = no domain policy with",
     "`require_critical_escalation: true` lists the tenant, or it has no resolved routing / main receiver",
     "(nothing is judged). Else {verdict, leaks}: verdict 'violation' = severity=critical alerts reach no",
@@ -1287,6 +1288,213 @@
           "unknown_profile": null,
           "tenant_api": {
             "put": "ok",
+            "batch": null
+          },
+          "python_differs": null,
+          "escalation": null
+        }
+      }
+    },
+    {
+      "name": "domain-policy-yaml-merge-key",
+      "files": {
+        "_defaults.yaml": "defaults:\n  cpu_usage_percent: 80\n",
+        "_domain_policy.yaml": "_c: &c\n  require_critical_escalation: false\n  forbidden_receiver_types:\n  - slack\n_n: &n\n  require_critical_escalation: !!null x\n  forbidden_receiver_types:\n  - slack\n_base: &base\n  tenants:\n  - t-mk-node\n  constraints:\n    forbidden_receiver_types:\n    - slack\n_more: &more\n  mk-block:\n    tenants:\n    - t-mk-block\n    constraints:\n      forbidden_receiver_types:\n      - slack\ndomain_policies:\n  <<: *more\n  mk-constraints:\n    tenants:\n    - t-mk-constraints\n    constraints:\n      <<: *c\n  mk-null-tag:\n    tenants:\n    - t-mk-null\n    constraints:\n      <<: *n\n  mk-node:\n    <<: *base\n  mk-explicit:\n    tenants:\n    - t-mk-explicit\n    constraints:\n      <<: *c\n      forbidden_receiver_types:\n      - webhook\n",
+        "t-mk-constraints.yaml": "tenants:\n  t-mk-constraints:\n    cpu_usage_percent: '85'\n    _routing:\n      receiver:\n        type: slack\n        api_url: https://hooks.slack.com/services/T/B/x\n",
+        "t-mk-null.yaml": "tenants:\n  t-mk-null:\n    cpu_usage_percent: '85'\n    _routing:\n      receiver:\n        type: slack\n        api_url: https://hooks.slack.com/services/T/B/x\n",
+        "t-mk-node.yaml": "tenants:\n  t-mk-node:\n    cpu_usage_percent: '85'\n    _routing:\n      receiver:\n        type: slack\n        api_url: https://hooks.slack.com/services/T/B/x\n",
+        "t-mk-block.yaml": "tenants:\n  t-mk-block:\n    cpu_usage_percent: '85'\n    _routing:\n      receiver:\n        type: slack\n        api_url: https://hooks.slack.com/services/T/B/x\n",
+        "t-mk-explicit.yaml": "tenants:\n  t-mk-explicit:\n    cpu_usage_percent: '85'\n    _routing:\n      receiver:\n        type: slack\n        api_url: https://hooks.slack.com/services/T/B/x\n"
+      },
+      "platform": [],
+      "expect": {
+        "t-mk-constraints": {
+          "targets": [
+            {
+              "ref": "receiver",
+              "type": "slack"
+            }
+          ],
+          "policy": [
+            [
+              "mk-constraints",
+              "receiver",
+              "forbidden_receiver_types"
+            ]
+          ],
+          "rejected_routes": [],
+          "unknown_profile": null,
+          "tenant_api": {
+            "put": "403",
+            "batch": null
+          },
+          "python_differs": null,
+          "escalation": null
+        },
+        "t-mk-null": {
+          "targets": [
+            {
+              "ref": "receiver",
+              "type": "slack"
+            }
+          ],
+          "policy": [
+            [
+              "mk-null-tag",
+              "receiver",
+              "forbidden_receiver_types"
+            ]
+          ],
+          "rejected_routes": [],
+          "unknown_profile": null,
+          "tenant_api": {
+            "put": "403",
+            "batch": null
+          },
+          "python_differs": null,
+          "escalation": null
+        },
+        "t-mk-node": {
+          "targets": [
+            {
+              "ref": "receiver",
+              "type": "slack"
+            }
+          ],
+          "policy": [
+            [
+              "mk-node",
+              "receiver",
+              "forbidden_receiver_types"
+            ]
+          ],
+          "rejected_routes": [],
+          "unknown_profile": null,
+          "tenant_api": {
+            "put": "403",
+            "batch": null
+          },
+          "python_differs": null,
+          "escalation": null
+        },
+        "t-mk-block": {
+          "targets": [
+            {
+              "ref": "receiver",
+              "type": "slack"
+            }
+          ],
+          "policy": [
+            [
+              "mk-block",
+              "receiver",
+              "forbidden_receiver_types"
+            ]
+          ],
+          "rejected_routes": [],
+          "unknown_profile": null,
+          "tenant_api": {
+            "put": "403",
+            "batch": null
+          },
+          "python_differs": null,
+          "escalation": null
+        },
+        "t-mk-explicit": {
+          "targets": [
+            {
+              "ref": "receiver",
+              "type": "slack"
+            }
+          ],
+          "policy": [],
+          "rejected_routes": [],
+          "unknown_profile": null,
+          "tenant_api": {
+            "put": "ok",
+            "batch": null
+          },
+          "python_differs": null,
+          "escalation": null
+        }
+      }
+    },
+    {
+      "name": "yaml-alias-key-names",
+      "files": {
+        "_defaults.yaml": "defaults:\n  cpu_usage_percent: 80\n",
+        "_routing_profiles.yaml": "names:\n- &p team-alias\n- &q team-merged\n_merged: &pm\n  *q :\n    receiver:\n      type: webhook\n      url: https://alerting.example/merged\nrouting_profiles:\n  <<: *pm\n  *p :\n    receiver:\n      type: webhook\n      url: https://alerting.example/alias\n",
+        "_domain_policy.yaml": "names:\n- &d alias-domain\ndomain_policies:\n  *d :\n    tenants:\n    - t-alias-dom\n    constraints:\n      forbidden_receiver_types:\n      - slack\n  profiled:\n    tenants:\n    - t-alias-prof\n    - t-merged-prof\n    constraints:\n      forbidden_receiver_types:\n      - webhook\n",
+        "t-alias-prof.yaml": "tenants:\n  t-alias-prof:\n    cpu_usage_percent: '85'\n    _routing_profile: team-alias\n",
+        "t-merged-prof.yaml": "tenants:\n  t-merged-prof:\n    cpu_usage_percent: '85'\n    _routing_profile: team-merged\n",
+        "t-alias-dom.yaml": "tenants:\n  t-alias-dom:\n    cpu_usage_percent: '85'\n    _routing:\n      receiver:\n        type: slack\n        api_url: https://hooks.slack.com/services/T/B/x\n"
+      },
+      "platform": [],
+      "expect": {
+        "t-alias-prof": {
+          "targets": [
+            {
+              "ref": "receiver",
+              "type": "webhook"
+            }
+          ],
+          "policy": [
+            [
+              "profiled",
+              "receiver",
+              "forbidden_receiver_types"
+            ]
+          ],
+          "rejected_routes": [],
+          "unknown_profile": null,
+          "tenant_api": {
+            "put": "403",
+            "batch": null
+          },
+          "python_differs": null,
+          "escalation": null
+        },
+        "t-merged-prof": {
+          "targets": [
+            {
+              "ref": "receiver",
+              "type": "webhook"
+            }
+          ],
+          "policy": [
+            [
+              "profiled",
+              "receiver",
+              "forbidden_receiver_types"
+            ]
+          ],
+          "rejected_routes": [],
+          "unknown_profile": null,
+          "tenant_api": {
+            "put": "403",
+            "batch": null
+          },
+          "python_differs": null,
+          "escalation": null
+        },
+        "t-alias-dom": {
+          "targets": [
+            {
+              "ref": "receiver",
+              "type": "slack"
+            }
+          ],
+          "policy": [
+            [
+              "alias-domain",
+              "receiver",
+              "forbidden_receiver_types"
+            ]
+          ],
+          "rejected_routes": [],
+          "unknown_profile": null,
+          "tenant_api": {
+            "put": "403",
             "batch": null
           },
           "python_differs": null,
