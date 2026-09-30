@@ -175,7 +175,6 @@ fi
 # full copies, so on a Windows checkout — where they are path stubs — the built
 # site gains three duplicated documents under docs/. That is the platform
 # dependence these aliases exist to remove, reintroduced by the build step.
-_checkout_failed=0
 # ⛔ ONE top-level EXIT trap for the tree being built, not a trap inside
 # _build_one: the loop is sequential, so at most one tree is alive, and a trap
 # set per call would replace the previous one. A clean-up written after the
@@ -188,10 +187,11 @@ _build_one() {
     local _sha="$1" _wt _rc
     _wt="$(git rev-parse --git-path "mkdocs-strict-$$-${_sha:0:8}")"
     rm -rf "$_wt"
-    # Set BEFORE `add`: the path is this process's own, so a failed add leaves
-    # nothing the trap could wrongly remove.
+    # Set BEFORE `add`: a failed add can still leave the tree (a failing
+    # post-checkout hook), and the path is this process's own.
     _live_wt="$_wt"
-    if ! git worktree add --detach --quiet "$_wt" "$_sha" 2>/dev/null; then
+    # ⛔ git's own stderr is the diagnosis; no guessed causes (#2210).
+    if ! git worktree add --detach --quiet "$_wt" "$_sha"; then
         # ⛔ FAIL CLOSED. The obvious fallback — build the working tree instead —
         # is EXACTLY the #1690 defect this guard exists to remove, and it is
         # worse as a fallback than as the original bug: it returns the wrong
@@ -206,14 +206,10 @@ This guard builds the commit you are PUSHING, not the tree you are standing
 in, so it cannot fall back to the working tree — that would report on the
 wrong commit. Refusing instead.
 
-Usual causes: no disk space, or a stale temporary worktree registration.
-    git worktree prune && git worktree list
-
 To push anyway (the docs build then runs only in CI):
     MKDOCS_STRICT_BYPASS=1 git push ...
 
 WORKTREE_FAILED
-        _checkout_failed=1
         return 1
     fi
     ( cd "$_wt" && bash scripts/tools/lint/mkdocs_strict_check.sh )
@@ -226,38 +222,19 @@ WORKTREE_FAILED
 # Tier 1: native mkdocs
 if command -v mkdocs >/dev/null 2>&1; then
     echo "[pre-push-mkdocs] Using native mkdocs ($(mkdocs --version 2>&1 | head -1))"
-    _all_ok=0
+    # ⛔ Every non-zero lands here — broken links, a failed checkout, a Ctrl-C
+    # (which prints nothing) — so name the commit, give no advice, and stop:
+    # carrying on would build the next ref after git has returned (#2210).
     for _sha in "${_build_shas[@]}"; do
         echo "[pre-push-mkdocs] validating pushed commit ${_sha:0:8}"
-        _build_one "$_sha" || _all_ok=1
-    done
-    if [ "$_all_ok" = "0" ]; then
-        echo "[pre-push-mkdocs] ✅ mkdocs strict PASS"
-        exit 0
-    elif [ "$_checkout_failed" = "1" ]; then
-        # ⛔ The docs were never built, so do not print the doc-link advice —
-        # that would blame the contributor's links for an environment failure.
-        # _build_one already said what went wrong and how to recover.
-        exit 1
-    else
-        echo ""
-        echo "::error::mkdocs strict check failed. See output above."
-        if [ -n "$_unknown_base" ]; then
+        if ! _build_one "$_sha"; then
             echo ""
-            echo "⚠️  This build was precautionary — the base for one or more refs"
-            echo "    could not be determined, so no doc change was actually seen."
-            echo "    The failure may have nothing to do with your links."
+            echo "::error::mkdocs strict did not pass for ${_sha:0:8}"
+            exit 1
         fi
-        echo ""
-        echo "Common fixes for the recurring site-root path gotcha:"
-        echo "  • ../../foo.md from docs/X/Y.md → use absolute GitHub URL"
-        echo "    https://github.com/vencil/Dynamic-Alerting-Integrations/blob/main/foo.md"
-        echo "  • #anchor-with--double-dash → single-dash (mkdocs normalizes consecutive dashes)"
-        echo "  • Missing file in nav → add to mkdocs.yml or remove the link"
-        echo ""
-        echo "Bypass (emergency only): MKDOCS_STRICT_BYPASS=1 git push"
-        exit 1
-    fi
+    done
+    echo "[pre-push-mkdocs] ✅ mkdocs strict PASS"
+    exit 0
 fi
 
 # Tier 2: no native mkdocs; soft fail

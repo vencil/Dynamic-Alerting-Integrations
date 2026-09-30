@@ -23,6 +23,29 @@ on:
 permissions:
   pull-requests: write
 
+# ⛔ One run per pull request (#1518). The report is a STICKY comment edited in
+# place, so without a group two pushes in quick succession race and the
+# comment ends up describing whichever run finished LAST — which can be the
+# older commit. Cancelling the superseded run removes that race.
+#   * The group is keyed on the PR NUMBER, not `github.ref`, and prefixed with
+#     `github.workflow`: this file and config-diff.yaml fire on the same paths,
+#     and a shared group would let one workflow cancel the other.
+#   * Any non-`pull_request` event gets a group of its own (`run-<run_id>`) and
+#     `cancel-in-progress` false, so such a run never cancels — or displaces a
+#     pending — run of anything else. Keying it on the ref would not be enough:
+#     a group with cancel-in-progress false still replaces its PENDING run
+#     with a newer one.
+#   * Cancelling the comment step mid-flight cannot leave a half-written
+#     comment: the body is sent whole in ONE updateComment/createComment call
+#     (the listComments before it only reads). A run cancelled before that
+#     call leaves the previous comment, and its commit stamp says which head
+#     it describes.
+# `tests/ops/test_pr_report_workflow_concurrency.py` evaluates both
+# expressions per event; it is the place to change them first.
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event_name == 'pull_request' && format('pr-{0}', github.event.pull_request.number) || format('run-{0}', github.run_id) }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
 jobs:
   blast-radius:
     name: Blast Radius Report

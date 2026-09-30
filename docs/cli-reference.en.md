@@ -237,7 +237,7 @@ da-tools check-alert MariaDBHighConnections db-a
 | Code | Description |
 |------|-------------|
 | `0` | Success (any state) |
-| `1` | Only an uncaught exception (traceback) returns 1 — the command has no violation exit (inactive / pending / firing are all 0) |
+| `1` | Only an uncaught exception (traceback) returns 1 — the command has no violation exit (inactive / pending / firing are all 0) | <!-- datools-cmd-ignore: only a traceback gives 1, no exit to trace -->
 | `2` | Caller error: Prometheus API unreachable or errored (stdout carries an `{"error": ...}` JSON), or arguments argparse rejects |
 
 ---
@@ -350,8 +350,8 @@ da-tools batch-diagnose --tenants db-a,db-b,db-c --output report.json
 
 | Code | Description |
 |------|-------------|
-| `0` | All tenants healthy |
-| `1` | One or more tenant checks failed |
+| `0` | The run finished. ⚠️ A failed tenant check **also gives 0 today**; read each tenant's `status` in the output (returning 1 is tracked in [#2493](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/2493)) |
+| `1` | Only an uncaught exception (traceback) returns 1, e.g. `--workers 0` | <!-- datools-cmd-ignore: only a traceback gives 1, no exit to trace -->
 | `2` | Caller error: bad arguments, or the output path given to `-o/--output` cannot be written (#1641) |
 
 ---
@@ -411,7 +411,7 @@ da-tools baseline --tenant db-a --duration 1800 --interval 30 -o baseline_out
 | Code | Description |
 |------|-------------|
 | `0` | Success. ⚠️ A Prometheus connection / query failure is **not** an error — failed samples are recorded as empty, the report and CSVs are still written, still this code |
-| `1` | Only an uncaught exception (traceback) returns 1 — this command has no violation exit; measured with `--interval 0` (`duration // interval` raises `ZeroDivisionError`). ⛔ An unwritable output path has been `2` since #1789 and no longer lands here |
+| `1` | Only an uncaught exception (traceback) returns 1 — this command has no violation exit; measured with `--interval 0` (`duration // interval` raises `ZeroDivisionError`). ⛔ An unwritable output path has been `2` since #1789 and no longer lands here | <!-- datools-cmd-ignore: only a traceback gives 1, no exit to trace -->
 | `2` | Caller error: none of the `--metrics` names is one the tool knows (the error lists the accepted ones), the required `--tenant` missing, arguments argparse rejects, or `-o/--output-dir` cannot be written (measured: the parent is a file; a CSV the tool must create inside it is already a directory) — one `ERROR: cannot …` line naming `-o/--output-dir`, no traceback (#1789) |
 
 ---
@@ -903,7 +903,7 @@ da-tools fed-key --rotate --existing-jwks federation-jwks.json \
 | Code | Description |
 |------|-------------|
 | `0` | Key generated |
-| `1` | Only an uncaught exception (traceback) returns 1 — this command has no violation exit; measured when `--existing-jwks` points at a JSON **array** (a top level that is not an object). ⛔ An unwritable output path has been `2` since #1789 and no longer lands here |
+| `1` | Only an uncaught exception (traceback) returns 1 — this command has no violation exit; measured when `--existing-jwks` points at a JSON **array** (a top level that is not an object). ⛔ An unwritable output path has been `2` since #1789 and no longer lands here | <!-- datools-cmd-ignore: only a traceback gives 1, no exit to trace -->
 | `2` | Caller error: `--jwks-out` cannot be written (measured: its directory does not exist) — one `ERROR: cannot …` line naming `--jwks-out`, no traceback (#1789); `openssl` not on PATH, timed out or failed; `--existing-jwks` unreadable, not a JWKS document (no `keys` array) or already holding the same kid; `--rotate` without `--existing-jwks`, `--key-bits` < 2048; stdout is a terminal (refuses to print the private-key Secret to a tty — pipe it to `\| kubectl apply -f -`) |
 
 ---
@@ -1908,7 +1908,7 @@ da-tools scaffold --non-interactive --tenant db-c --db mariadb,redis
 | Code | Description |
 |------|-------------|
 | `0` | Success |
-| `1` | Only an uncaught exception (traceback on stderr); "invalid input" is 2, not 1 |
+| `1` | Only an uncaught exception (traceback on stderr); "invalid input" is 2, not 1 | <!-- datools-cmd-ignore: only a traceback gives 1, no exit to trace -->
 | `2` | Caller error: bad arguments, an unsupported `--db` type, `--non-interactive` without `--tenant` or `--db`, or the output path given to `-o/--output-dir` cannot be written (#1641) |
 
 ---
@@ -1971,8 +1971,8 @@ da-tools migrate ./my-rules.yml -o migration_output/
 | Code | Description |
 |------|-------------|
 | `0` | Success |
-| `1` | Invalid input file |
-| `2` | Caller error: bad arguments, or the output path given to `-o/--output-dir` cannot be written (#1641) |
+| `1` | Only an uncaught exception (traceback) returns 1; an invalid input file is 2 | <!-- datools-cmd-ignore: only a traceback gives 1, no exit to trace -->
+| `2` | Caller error: bad arguments, an input file that cannot be read or is not valid YAML, or the output path given to `-o/--output-dir` cannot be written (#1641) |
 
 ---
 
@@ -2276,7 +2276,7 @@ da-tools onboard --alertmanager-config ./alertmanager.yaml \
 |------|-------------|
 | `0` | At least one phase produced results (Phase 1 with no tenant route counts; it just writes no `onboard-hints.json`) |
 | `1` | No phase produced results, e.g. the `--rule-files` glob matched no file, or `--scrape-config` has no `scrape_configs` |
-| `2` | Caller error: none of the three inputs given, bad arguments, or the output path given to `-o/--output-dir` cannot be written (#1641); an input file cannot be read or parsed (content not UTF-8 or not valid YAML; the message names the file, #1654) |
+| `2` | Caller error: none of the three inputs given, bad arguments, or the output path given to `-o/--output-dir` cannot be written (#1641); an input file cannot be read or parsed (content not UTF-8 or not valid YAML; the message names the file, #1654). ⚠️ Exception: broken YAML embedded in a ConfigMap wrapper is a traceback and returns 1 |
 
 ---
 
@@ -2382,7 +2382,7 @@ da-tools config-diff --old-dir ./conf.d-old --new-dir ./conf.d-new --json-output
 | Code | Description |
 |------|-------------|
 | `0` | No configuration changes |
-| `1` | Changes detected — the signal CI uses to tell that this PR touched config |
+| `1` | Changes detected. ⚠️ Only the values each tenant file writes itself are compared, top level only: a change to `_defaults.yaml` alone, or to files in subdirectories only, gives 0, so this alone cannot tell that a PR touched config |
 | `2` | Caller error: directory missing, input unreadable, or the run did not complete |
 
 > ⚠️ **`1` means "there are changes", not "it failed".** A CI step that calls
@@ -2436,7 +2436,7 @@ da-tools evaluate-policy --config-dir conf.d/ --ci
 |------|-------------|
 | `0` | No error-level violations |
 | `1` | CI mode: error-level violations found |
-| `2` | Caller error: `--policy` supplied but not a file (including the empty string) / `--config-dir` does not exist / `_defaults.yaml` or a tenant file whose content cannot be read (not UTF-8 or not valid YAML; the message names the file, #1654). ⛔ Do not go green by dropping `--policy` — that evaluates without your policy file (#1651) |
+| `2` | Caller error: bad arguments (including no `--config-dir`) / `--policy` supplied but not a file (including the empty string) / `--config-dir` does not exist / a `--policy` file or `_defaults.yaml` whose content cannot be read (not UTF-8, not valid YAML; the message names the file, #1654) / a tenant file whose content cannot be read (tenant files are read only when there are policy rules; with none the result is 0). ⛔ Do not go green by dropping `--policy` — that evaluates without your policy file (#1651) |
 
 #### opa-evaluate
 

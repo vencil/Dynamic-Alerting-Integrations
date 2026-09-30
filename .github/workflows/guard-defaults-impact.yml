@@ -151,6 +151,19 @@ permissions:
   contents: read
   pull-requests: write
 
+# ⛔ One run per pull request (#1518). This workflow also has
+# `workflow_dispatch`, which is why the group falls back to `run-<run_id>`
+# and cancel-in-progress is true ONLY for `pull_request`: a manual dispatch
+# must neither cancel nor be cancelled by a PR run, nor displace another
+# dispatch's pending run. The rest of the rationale (PR number over ref,
+# workflow prefix, why a cancelled run cannot tear the comment) is in the block
+# of the same shape in blast-radius.yml;
+# `tests/ops/test_pr_report_workflow_concurrency.py` evaluates both
+# expressions per event.
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event_name == 'pull_request' && format('pr-{0}', github.event.pull_request.number) || format('run-{0}', github.run_id) }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
 jobs:
   guard:
     name: Defaults Impact Guard
