@@ -402,11 +402,14 @@ func computeEffectiveConfigDocDetailed(
 	// debounced path's per-tenant call, and a slice per call was +1 alloc
 	// per re-merged tenant). A file after a broken one is never parsed.
 	var err error
+	var writers map[string]int // #2414: deepest chain level per aliased spelling
 	merged := make(map[string]any)
 	for i, defBytes := range defaultsChainYAML {
-		if merged, err = foldDefaults(merged, i, ParseChainDefaults(defBytes)); err != nil {
+		pd := ParseChainDefaults(defBytes)
+		if merged, err = foldDefaults(merged, i, pd); err != nil {
 			return effectiveParts{}, err
 		}
+		writers = noteSpellingWriters(writers, i, pd.block)
 	}
 
 	chain := merged
@@ -441,7 +444,12 @@ func computeEffectiveConfigDocDetailed(
 	// through undeduped leaves every da-guard alias test — the 16128-cell
 	// product included — unchanged. Kept so this call site does not depend
 	// on that upstream detail.
-	chainD := dropShadowedSpellings(chain)
+	//
+	// And inside the chain, a deeper `_defaults.yaml` beats a shallower one
+	// per threshold too (#2414, dropShallowerSpellings): /metrics hands a
+	// subtree level's value down over any other spelling a shallower level
+	// set, so that shallower spelling is no fallback either.
+	chainD := dropShadowedSpellings(dropShallowerSpellings(chain, writers))
 	switch {
 	case pr == nil && pi == nil:
 		p.mergedDefaults = deepCopyMap(chainD)
@@ -474,6 +482,64 @@ func dropShadowedSpellings(m map[string]any) map[string]any {
 		if canon, isAlias := canonicalKeyFor(k); isAlias {
 			if _, both := m[canon]; both {
 				drop = append(drop, k)
+			}
+		}
+	}
+	if len(drop) == 0 {
+		return m
+	}
+	out := make(map[string]any, len(m))
+	for k, v := range m {
+		out[k] = v
+	}
+	for _, k := range drop {
+		delete(out, k)
+	}
+	return out
+}
+
+// noteSpellingWriters records, for every key of chain level i that has
+// another spelling (touchesAlias), that level i wrote it — the last write
+// wins, so after the fold each entry is the deepest level writing that
+// spelling. "Wrote" is levelWritesSpelling, the predicate the /metrics
+// overlay (applySubtreeDefaults) uses too: a null or a non-threshold value
+// writes nothing. w stays nil until an aliased key is seen: the steady state
+// allocates nothing.
+func noteSpellingWriters(w map[string]int, i int, block map[string]any) map[string]int {
+	for k := range block {
+		if !touchesAlias(k) || !levelWritesSpelling(block, k) {
+			continue
+		}
+		if w == nil {
+			w = make(map[string]int)
+		}
+		w[k] = i
+	}
+	return w
+}
+
+// dropShallowerSpellings is the merged defaults chain with every spelling a
+// DEEPER level overrides under another spelling removed (#2414): the chain
+// merge is per threshold, deepest level wins — what applySubtreeDefaults
+// hands /metrics. Spellings written at the same level are left for
+// dropShadowedSpellings (canonical wins). Returns m itself when nothing is
+// dropped.
+func dropShallowerSpellings(m map[string]any, writers map[string]int) map[string]any {
+	if len(writers) < 2 {
+		return m
+	}
+	var drop []string
+	var buf [2]string
+	for k, lk := range writers {
+		if _, in := m[k]; !in {
+			continue
+		}
+		for _, s := range otherSpellings(k, &buf) {
+			if ls, ok := writers[s]; ok && ls > lk {
+				if _, in := m[s]; in {
+					drop = append(drop, k)
+					break
+				}
 			}
 		}
 	}
@@ -676,6 +742,16 @@ func decodeTenantFile(b []byte) (any, error) {
 	}
 	if block, ok := tenantsBlockByKeyText(&root); ok {
 		m["tenants"] = block
+	}
+	// A scalar `_profile` is its text, as on the flat plane (#2433): bare
+	// `010` names profile "010", not int 8.
+	if block, ok := m["tenants"].(map[string]any); ok && tenantsWriteProfile(block) {
+		texts := profileTexts(root.Decode)
+		for tid, body := range block {
+			if b, ok := body.(map[string]any); ok {
+				withProfileText(b, texts, tid)
+			}
+		}
 	}
 	return doc, nil
 }

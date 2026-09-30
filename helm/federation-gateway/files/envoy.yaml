@@ -85,6 +85,13 @@ static_resources:
                       "@type": type.googleapis.com/envoy.extensions.access_loggers.file.v3.FileAccessLog
                       path: /dev/stdout
                       log_format:
+                        # REQ_WITHOUT_QUERY is an extension formatter: every
+                        # log_format that uses it must declare it here, or
+                        # Envoy fails config load ("Not supported field").
+                        formatters: &audit_formatters
+                          - name: envoy.formatter.req_without_query
+                            typed_config:
+                              "@type": type.googleapis.com/envoy.extensions.formatter.req_without_query.v3.ReqWithoutQuery
                         json_format: &audit_json
                           ts: "%START_TIME%"
                           tenant_id: "%DYNAMIC_METADATA(envoy.filters.http.jwt_authn:fed_payload:tenant_id)%"
@@ -96,10 +103,12 @@ static_resources:
                           # derive tenant_log_query_requests_total per-tenant.
                           account_id: "%DYNAMIC_METADATA(envoy.filters.http.jwt_authn:fed_payload:account_id)%"
                           method: "%REQ(:METHOD)%"
-                          # Truncated — a tenant can pack a multi-KB selector
-                          # into a GET ?query=; an unbounded :path bloats
-                          # every audit line.
-                          path: "%REQ(:PATH):2048%"
+                          # Path WITHOUT the query string (#2469): a client that
+                          # puts ?access_token= in the URL is rejected (401), but
+                          # logging the full :path would still write the token
+                          # into both sinks. The selector is logged by the
+                          # `query` field below. Truncated to bound line size.
+                          path: "%REQ_WITHOUT_QUERY(:PATH):2048%"
                           # Unified PromQL / selector, extracted by the Lua
                           # filter from the GET query-string OR the POST form
                           # body, so this field is one consistent shape
@@ -115,6 +124,7 @@ static_resources:
                       "@type": type.googleapis.com/envoy.extensions.access_loggers.file.v3.FileAccessLog
                       path: {{ .Values.auditLog.path | quote }}
                       log_format:
+                        formatters: *audit_formatters
                         json_format: *audit_json
                   {{- end }}
                 route_config:
@@ -296,7 +306,9 @@ static_resources:
                           clock_skew_seconds: {{ .Values.jwt.clockSkewSeconds }}
                           # Header only. Specifying from_headers replaces the
                           # default extraction list, so an ?access_token= in
-                          # the URL is NOT accepted — tokens never hit a log.
+                          # the URL is NOT accepted. The access log records
+                          # the path without its query string, so such a
+                          # token is not logged either (#2469).
                           from_headers:
                             - name: Authorization
                               value_prefix: "Bearer "

@@ -1360,12 +1360,18 @@ func patchTenants(prev *ThresholdConfig, newConfigs, oldConfigs map[string]Thres
 	// `m.config`, which `GetConfig()` has already handed to scraping
 	// goroutines — verified by pointer identity across reloads. Two stages
 	// downstream write into tenant maps in place (`ApplyProfiles`,
-	// `applySubtreeDefaults` via `refreshRefused`), and today both are
-	// idempotent fill-ins that never touch a key already present, so a steady
-	// state performs no write at all and `-race` with concurrent scrapes is
-	// clean. Anything added here that OVERWRITES rather than fills in would
-	// mutate config a scrape is reading, with no test to catch it. Either keep
-	// new overlays idempotent or copy the map first. (#1569 blind review, C-1.)
+	// `applySubtreeDefaults` via `refreshRefused`). Neither changes a key that
+	// was already in the map when it started: `ApplyProfiles` only fills in,
+	// and `applySubtreeDefaults` fills in plus — since #2414 — DELETES, but
+	// only a key it wrote itself earlier in the same call (a shallower
+	// level's spelling displaced by a deeper level's other spelling). Every
+	// key already present reads as the tenant's own, under any spelling, so a
+	// re-run over a map it already overlaid writes and deletes nothing: a
+	// steady state performs no write at all and `-race` with concurrent
+	// scrapes is clean. Anything added here that overwrites or deletes a key
+	// it did not just add would mutate config a scrape is reading, with no
+	// test to catch it. Either keep new overlays to that rule or copy the map
+	// first. (#1569 blind review, C-1.)
 	for k, v := range prev.Tenants {
 		merged.Tenants[k] = v
 	}

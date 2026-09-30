@@ -259,7 +259,7 @@ audit log（issue [#511](https://github.com/vencil/Dynamic-Alerting-Integrations
   "tenant_id": "db-anonymized-001",
   "token_id": "ftk_8a3f...",
   "method": "POST",
-  "path": "/api/v1/query_range",              // 截斷 2048 字元
+  "path": "/api/v1/query_range",              // 不含 query string，截斷 2048 字元
   "query": "rate(http_requests_total[5m])",   // Lua 統一抽取，見下
   "status": 200,                              // 原始 HTTP code
   "duration_ms": 1843

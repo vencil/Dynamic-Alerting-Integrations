@@ -20,8 +20,8 @@ package handler
 import (
 	"encoding/json"
 	"errors"
+	"io/fs"
 	"net/http"
-	"os"
 
 	"github.com/go-chi/chi/v5"
 	cfg "github.com/vencil/threshold-exporter/pkg/config"
@@ -72,7 +72,9 @@ type PutCustomAlertsResponse struct {
 // @Description 409 TENANT_CONFIG_NOT_LOADABLE (with tenant_id, config_error) when the tenant's file cannot be loaded as a
 // @Description tenant config (malformed_yaml | invalid_config, as on GET): repair the tenant file itself first, e.g. with a
 // @Description whole-file PUT /api/v1/tenants/{id}, which replaces it (see GET /api/v1/tenants/{id} for the limits of that
-// @Description repair, e.g. a broken file shared with other tenants).
+// @Description repair, e.g. a broken file shared with other tenants). Also 409 TENANT_CONFIG_NOT_LOADABLE with config_error
+// @Description not_regular_file when the tenant's conf.d file is not a regular file: nothing is read or written, and the
+// @Description whole-file PUT refuses it too, so replace it with a regular file in git.
 // @Tags        tenants
 // @Accept      json
 // @Produce     json
@@ -164,9 +166,15 @@ func PutTenantCustomAlerts(d *Deps) http.HandlerFunc {
 			WriteJSONError(w, r, http.StatusInternalServerError, err.Error())
 			return
 		}
-		raw, err := os.ReadFile(filePath)
-		if os.IsNotExist(err) {
+		// #2477: a tenant file that is not a regular file is refused at once
+		// (409, config_error not_regular_file) instead of being read.
+		raw, err := confd.ReadRegularFile(filePath)
+		if errors.Is(err, fs.ErrNotExist) {
 			WriteJSONError(w, r, http.StatusNotFound, "tenant not found: "+tenantID)
+			return
+		}
+		if errors.Is(err, confd.ErrNotRegularFile) {
+			writeTenantFileNotRegular(w, r, tenantID)
 			return
 		}
 		if err != nil {

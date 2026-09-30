@@ -392,7 +392,7 @@ func routingDefaultsFromNode(top *yaml.Node) (defaults map[string]any, present, 
 	if err := n.Decode(&v); err != nil {
 		return nil, true, false, err
 	}
-	m, ok := asStringMap(withPyYAMLReceiversFrom(v, n))
+	m, ok := asStringMap(withPyYAMLRoutingFrom(v, n))
 	if !ok {
 		return nil, true, false, nil
 	}
@@ -430,7 +430,7 @@ func profilesFromNode(top *yaml.Node) (map[string]map[string]any, bool, error) {
 		if err := e.value.Decode(&v); err != nil {
 			return nil, true, err
 		}
-		m, _ := asStringMap(withPyYAMLReceiversFrom(v, e.value)) // not a mapping: known name, empty body
+		m, _ := asStringMap(withPyYAMLRoutingFrom(v, e.value)) // not a mapping: known name, empty body
 		out[e.key] = m
 	}
 	return out, true, nil
@@ -716,7 +716,7 @@ func overlayFrom(top *yaml.Node, layers *Layers) {
 			continue
 		}
 		if r, has := body["_routing"]; has {
-			body["_routing"] = withPyYAMLReceiversFrom(r, routingNode(e.value))
+			body["_routing"] = withPyYAMLRoutingFrom(r, routingNode(e.value))
 		}
 		tid := e.key
 		for _, k := range routingBlockKeys {

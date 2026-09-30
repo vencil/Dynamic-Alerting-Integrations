@@ -111,7 +111,9 @@ func (l aliasLayer) lines(indent string) string {
 func TestGuard_RedundantAdviceNeverMovesMetricsAcrossAliasSpellings(t *testing.T) {
 	t.Parallel()
 	C, L := aliasCanon, aliasLegacy
-	chains := []aliasLayer{{"cC30", [][2]string{{C, "30"}}}, {"cL30", [][2]string{{L, "30"}}}, {"cBoth", [][2]string{{C, "30"}, {L, "31"}}}}
+	chains := []aliasLayer{{"cC30", [][2]string{{C, "30"}}}, {"cL30", [][2]string{{L, "30"}}}, {"cBoth", [][2]string{{C, "30"}, {L, "31"}}},
+		// #2418: a null writes nothing, so the legacy 31 is the level's value.
+		{"cCnullL31", [][2]string{{C, "null"}, {L, "31"}}}}
 	profiles := []aliasLayer{{"p-", nil}, {"pC50", [][2]string{{C, "50"}}}, {"pL50", [][2]string{{L, "50"}}},
 		{"pBoth", [][2]string{{C, "50"}, {L, "51"}}}, {"pCnull", [][2]string{{C, "null"}}}, {"pLnull", [][2]string{{L, "null"}}},
 		{"pLdis", [][2]string{{L, "disable"}}}}

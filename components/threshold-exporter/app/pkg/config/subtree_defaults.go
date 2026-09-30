@@ -111,11 +111,16 @@ func applySubtreeDefaults(
 			if filepath.Dir(filepath.Clean(defaultsPath)) == rootDir {
 				continue // the global defaults file — already in cfg.Defaults
 			}
-			for key, raw := range parsed[defaultsPath] {
-				if _, present := overrides[key]; present {
-					if _, mine := inherited[key]; !mine {
-						continue // the tenant authored it — never touched
-					}
+			level := parsed[defaultsPath]
+			for key, raw := range level {
+				// ⛔ "THE TENANT AUTHORED IT" IS ASKED PER THRESHOLD, NOT PER
+				// SPELLING (#2414). A tenant writing the retired spelling has
+				// set the same threshold a subtree file names canonically;
+				// asking `overrides[key]` alone let the subtree value in beside
+				// it, and resolve's canonical-wins dedup then served the
+				// subtree's number over the tenant's own.
+				if tenantAuthoredThreshold(overrides, inherited, key) {
+					continue // the tenant authored it — never touched
 				}
 				value, ok := scheduledValueFromRaw(raw)
 				if !ok || !isThresholdShaped(value) {
@@ -165,6 +170,23 @@ func applySubtreeDefaults(
 				if inherited == nil {
 					inherited = map[string]struct{}{}
 				}
+				// The deeper level wins per threshold too: another spelling a
+				// SHALLOWER level handed down is displaced, exactly as the
+				// same spelling would be overwritten. A spelling this level
+				// writes itself stays (canonical-wins inside one file, as
+				// overlayAcrossSpellings rules for one layer).
+				var buf [2]string
+				for _, s := range otherSpellings(key, &buf) {
+					if _, mine := inherited[s]; !mine {
+						continue
+					}
+					if levelWritesSpelling(level, s) {
+						continue
+					}
+					delete(overrides, s)
+					delete(inherited, s)
+					filled--
+				}
 				if _, mine := inherited[key]; !mine {
 					filled++ // count keys filled, not times overwritten
 				}
@@ -174,6 +196,50 @@ func applySubtreeDefaults(
 		}
 	}
 	return filled, unreachableKeys(unreachable)
+}
+
+// levelWritesSpelling reports whether one defaults level WRITES spelling s:
+// present, not null, and threshold-shaped — the values this overlay would
+// hand down. It is the one definition both planes use for "this level wrote
+// that spelling": the overlay above (a spelling the same level writes is not
+// displaced) and the walker's MergedDefaults fold (noteSpellingWriters).
+//
+// ⛔ ONE PREDICATE, NOT TWO. The first version asked `level[s]` here and
+// skipped only nil in the walker, so a level writing the canonical spelling
+// as null beside a legacy value counted as "writes both" on /metrics (the
+// shallower canonical value survived and won the canonical-wins dedup) but
+// as "writes only the legacy one" in the guard — which then advised
+// deleting a tenant key whose removal moved /metrics. (#2414 round 2.)
+func levelWritesSpelling(level map[string]any, s string) bool {
+	raw, ok := level[s]
+	if !ok || raw == nil {
+		return false
+	}
+	sv, ok := scheduledValueFromRaw(raw)
+	return ok && isThresholdShaped(sv)
+}
+
+// tenantAuthoredThreshold reports whether the tenant's own map (overrides
+// minus what this overlay put there, `inherited`) sets key's threshold under
+// ANY spelling — hasAliasEquivalent, with the overlay's own writes excluded.
+func tenantAuthoredThreshold(overrides map[string]ScheduledValue, inherited map[string]struct{}, key string) bool {
+	authored := func(s string) bool {
+		if _, present := overrides[s]; !present {
+			return false
+		}
+		_, mine := inherited[s]
+		return !mine
+	}
+	if authored(key) {
+		return true
+	}
+	var buf [2]string
+	for _, s := range otherSpellings(key, &buf) {
+		if authored(s) {
+			return true
+		}
+	}
+	return false
 }
 
 // keyCanReachTheOutputPlane reports whether SOMETHING downstream will iterate

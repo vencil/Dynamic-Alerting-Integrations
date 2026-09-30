@@ -1742,6 +1742,7 @@ da-tools generate-routes --config-dir <path> [options]
 | `--base-config <FILE>` | 自訂 Alertmanager 基礎配置。**僅 `--output-configmap` 會讀它**；用在其他模式是呼叫端錯誤（結束碼 2），不會被靜默忽略 | 內建預設（**僅在未提供本旗標時**；供了但讀不到／不是合法 YAML／頂層不是 mapping 一律結束碼 2，不會退回預設） |
 | `--dry-run` | 僅輸出預覽，不寫入檔案。**`--validate` / `--apply` 不讀它**（結束碼 2） | false |
 | `--validate` | 僅驗證，不輸出。conf.d 裡任何解析不了的租戶檔 → 結束碼 1，不分 `--strict`（#1460）。其餘檢查都通過後，還會以**內建預設 base** 組出完整設定交給 `amtool`（見下方「Alertmanager 驗證」；#2260） | false |
+| `--strict` | 下列情況報 ERROR 並結束碼 1（CI 跑 `--strict`）：domain-policy（ADR-007）違規（不加時為 WARN）；`routes[i].match` 的值或 `overrides[i].alertname`／`metric_group` 未加引號、PyYAML 讀成非字串（`yes`、`1:30`、`~` 等，#2431；修法是加引號。不加時 routes 條目以 WARN 略過、override 則以 `str()` 渲染，如 `alertname="True"`）；`--apply`／`--output-configmap` 合併時 `equal:` 標籤沒有 presence gate 的 inhibit rule（#1132，不加時為 WARN） | false |
 | `--apply` | 直接套用至 Kubernetes（需 kubectl） | false |
 | `--namespace <NS>` | ConfigMap 所在 namespace。**只有 `--apply` / `--output-configmap` 會讀它**，其他模式結束碼 2 | `monitoring` |
 | `--configmap <NAME>` | ConfigMap 名稱。**只有 `--apply` / `--output-configmap` 會讀它**，其他模式結束碼 2 | `alertmanager-config` |
@@ -1813,7 +1814,7 @@ python3 scripts/tools/ops/patch_config.py [--diff] [--json] [--exporter-namespac
 
 **讀取**：純量取原文、不做型別轉換（`010` 就是 `010`）。
 
-**拒絕（結束碼 `2`、什麼都不寫）**：多個 key 宣告同一租戶；沒有讀得了的 key 宣告該租戶、又有 key 讀不了（訊息點名那些 key）；查找路徑上有 merge key `<<`；ConfigMap 的 `data` 不是 mapping；兩個 `_defaults`、既無 `_defaults` 也無 `config.yaml`；租戶區塊不是 mapping；要改的 key 宣告了一個以上的租戶（legacy 版面的 `config.yaml` 除外）；要新建的 key 以 `.` 或 `_` 開頭。⚠️ 改寫會以 YAML 1.1 型別重新序列化該 key 的其他值，並遺失註解。
+**拒絕（結束碼 `2`、什麼都不寫）**：多個 key 宣告同一租戶；沒有讀得了的 key 宣告該租戶、又有 key 讀不了（訊息點名那些 key）；查找路徑上有 merge key `<<`；ConfigMap 的 `data` 不是 mapping；兩個 `_defaults`、既無 `_defaults` 也無 `config.yaml`；租戶區塊不是 mapping；要改的 key 宣告了一個以上的租戶（legacy 版面的 `config.yaml` 除外）；要新建的 key 以 `.` 或 `_` 開頭。⚠️ 改寫不改動該 key 其他值的內容（`010`、`12:30` 照原文寫回），但不保留寫法：註解會遺失，flow（`{k: v}`）改成 block，引號可能變成單引號或拿掉。
 
 **寫後驗收（apply）**：新位元組與該 key 現有位元組相同 ⇒ 不寫、不等，結束碼 `0`。否則先經 `kubectl get --raw …/pods/<pod>:<port>/proxy/…`（只用 GET）逐一讀 Running 且未在刪除中的 pod 的 [`/api/v1/config/identity`](api/README.md)（`config_hash`：它服務的是哪一版位元組；`parse_failed`：因無法 parse 而被排除的 key）與 `/metrics`。patch 後由 patch 回傳的 ConfigMap 算出 exporter 服務該版本時應回報的 `config_hash`（exporter 會讀的 key——非 `.` 開頭、副檔名 `.yaml`／`.yml` 不分大小寫——依 key 排序、各自 SHA-256 後串接再 SHA-256；single-file 模式的 pod 則為 `config.yaml` 的 SHA-256），等每個 pod 回報相同值；之後的 `/metrics` 夾在兩次 identity 之間讀，兩次是同一次安裝才採用，否則重讀（有上限，超過視同逾時）。再逐 pod 比對全部 `user_*` series；parse 失敗看寫入後的 `parse_failed`：含被 patch 的 key、或含寫入前沒有的其他 key ⇒ 失敗，寫入前就已在其中的其他 key 只警告。⇒ 驗收通過代表每個 pod 服務的正是本次寫入產生的那一版整份位元組、且沒有把被 patch 的 key 當成無法 parse 排除；位元組生效後是否合預期（例如非數值被退回 default、未知 key 被忽略）不在此列，見 `patch-config --help`。對 identity 回 404 的舊 exporter，該 pod 退回舊驗法（等 `/api/v1/config` 的 `Last reload` 改變、比對 `da_config_parse_failure_total`），stderr 會提示、`--json` 的 `pods.<pod>.identity` 標為 `unavailable (404)`（否則為 `checked`）。`_` 開頭的 key（`_silent_mode`、`_profile` 等）不判目標租戶自己的 series，只列在 stderr（與 `--json`）。不合、逾時、途中連不到、寫入後被 Ctrl-C／SIGTERM 中斷或發生意外錯誤 ⇒ patch 回舊位元組（原本沒有的 key 會刪掉）並非 0 結束；寫入與回滾都以 ConfigMap 的 `resourceVersion` 為前置條件：讀取後被別人改過就不寫；回滾時同一個 key 已被別人改過就不回滾（不覆蓋對方）；驗收結束時 ConfigMap 必須仍是本次寫入產生的版本。patch 呼叫本身失敗時會重讀 ConfigMap 判定是否已套用。判準細節與已知殘留限制見 `patch-config --help`。
 
@@ -1993,7 +1994,7 @@ da-tools validate-config --config-dir <path> [options]
 | `--policy-dsl <FILE>` | 獨立 Policy-as-Code DSL 檔的路徑（頂層 `policies:` key）。⚠️ 供了但用不了 → exit 2（五種形狀同 `--policy`）；修前的輸出與**完全不給旗標逐字相同**（#1556） | （只讀 `_defaults.yaml` 的 `_policies`） |
 | `--version-check` | 一併跑版號一致性檢查 | false |
 | `--json` | 以 JSON 輸出結果（供 CI 消費） | false |
-| `--strict` | 把 domain-policy（ADR-007）違規從 WARN 升為 FAIL（對齊 CI 的 `generate-routes --strict`） | false |
+| `--strict` | 把 domain-policy（ADR-007）違規從 WARN 升為 FAIL（對齊 CI 的 `generate-routes --strict`）；另外，未加引號、PyYAML 讀成非字串的 matcher 值（`routes[i].match` 的值、`overrides[i].alertname`／`metric_group`，#2431）會讓 `schema` 列 FAIL | false |
 
 **檢查項目**
 
@@ -2514,6 +2515,7 @@ routing 檢查的對象是租戶**解析後**的 routing，與 route generator�
 | Finding kind | 嚴重度 | 觸發 |
 |---|---|---|
 | `invalid_route_entry` | error | `routes` 不是 list，或某條目 generator 會略過（非 mapping、有 `continue` / `match_re` 等不支援的鍵、`match` 缺或空、label 不合法、值不是非空字串）；Field 為 `routes` 或 `routes[i]` |
+| `routing_value_not_string` | error | `routes[i].match` 的值或 `overrides[i].alertname`／`metric_group` 未加引號、而 route generator 的 PyYAML 讀成非字串（`yes`／`on` 是布林、`1:30` 是整數 90、`2001-12-15` 是日期、`~` 是 null、`!!int 5`）；Field 為 `routes[i].match.<label>` 或 `overrides[i].alertname`／`metric_group`。與 `generate-routes --strict` 的 ERROR 同一判準（#2431）。修法：加引號，例如 `team: "yes"` |
 | `domain_policy_violation` | error | 主 receiver／`overrides[i]`／`routes[i]` 的 type 違反 domain policy；訊息含 domain、constraint 與該值來自哪一層 |
 | `critical_escalation_missing` | error | domain policy 設了 `require_critical_escalation: true`，但 severity=critical 告警到不了任何 pagerduty receiver：主 receiver 不是 pagerduty，也沒有會 render 的 `routes` 條目 match 含 `severity: critical` 且送 pagerduty（[#2325](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/2325)）；Field 為 `receiver.type`，每個要求此約束的 domain 各一筆。值不是布林時改報 `domain_policy_unusable`（Field `<檔案>:domain_policies.<domain>.constraints.require_critical_escalation`） |
 | `critical_escalation_leak` | warn | 租戶有升級路徑，但這個非 pagerduty 目的地（`overrides[i]`／`routes[i]`，最後是主 receiver）仍會比 pagerduty 先收到部分 severity=critical 告警；訊息點名攔走的 label 組合。判準與 generator `--validate` 的 WARN 相同（前面的子路由 match 是它的子集就不算、match 寫到別的 tenant 或非 critical 的 severity 也不算）；Field 為 `<ref>.receiver.type`。不擋 |
@@ -2948,7 +2950,7 @@ da-tools explain-route --config-dir <PATH> --tenant <NAME> --trace [--alertname 
 | `--base-config` | 追蹤用的 base Alertmanager YAML：`route.routes` 由產生的路由整份取代（只在 `--trace` 下讀取） | 內建 base（與 `generate_alertmanager_routes --validate` 相同） |
 | `--json` | 以 JSON 格式輸出 | `false` |
 
-`--trace` 的 alert label 由 `--alertname`、`--severity`、`--tenant` 與 `--label` 組成；`overrides` 的 `metric_group` 與 `routes` 的 `match` key 只能經 `--label` 帶入，否則追蹤永遠落在主 receiver。`--label` 以第一個 `=` 切分（值可含 `=`、可為空）；沒有 `=`、key 不是合法 label 名稱、key 為 `alertname`／`severity`／`tenant`（請改用對應旗標）、同一 key 重複、或沒有 `--trace` 卻給 `--label`，皆以結束碼 `2` 拒絕（[#2264](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/2264)）。
+`--trace` 的 alert label 由 `--alertname`、`--severity`、`--tenant` 與 `--label` 組成；`overrides` 的 `metric_group`，以及 `routes` 裡 `alertname`／`severity`／`tenant` 以外的 `match` key，只能經 `--label` 帶入，否則追蹤不會命中那條子路由。`--label` 以第一個 `=` 切分（值可含 `=`、可為空）；沒有 `=`、key 不是合法 label 名稱、key 為 `alertname`／`severity`／`tenant`（請改用對應旗標）、同一 key 重複、或沒有 `--trace` 卻給 `--label`，皆以結束碼 `2` 拒絕（[#2264](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/2264)）。
 
 `--trace` 的 step 4 列出生效的 inhibit rules（組好的設定裡的原文，含 `--base-config` 自帶的規則），不評估告警是否會被抑制——那取決於執行時同時 firing 的告警。
 
