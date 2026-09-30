@@ -21,6 +21,7 @@ Prerequisites:
 
 import argparse
 import hashlib
+import io
 import logging
 import math
 import os
@@ -403,14 +404,80 @@ def run_watch(
 
 # ── Offline render (no K8s required) ─────────────────────────────────
 
-#: YAML 1.1 (PyYAML) implicit tags that make an unquoted name a caller
-#: error: int / float / bool. `timestamp` is absent — an unquoted date is
-#: kept as written. Close to what Kubernetes sees after YAML→JSON, NOT the
+#: YAML 1.1 (PyYAML) implicit tags that make an unquoted `metadata.name`
+#: or `metadata.namespace` a caller error: int / float / bool. `timestamp`
+#: is absent — an unquoted date passes this check (then the format one). Close to what Kubernetes sees after YAML→JSON, NOT the
 #: same: go-yaml v2 and PyYAML type `0o17`, `1e3`, `08`, `y`, `n`, `1:30`
-#: differently (#2371 review). Kubernetes' name format (DNS-1123) is not
-#: checked either.
+#: differently (#2371 review). The name FORMAT is checked separately, below.
 _NON_STRING_NAME_TAGS = frozenset("tag:yaml.org,2002:" + t
                                   for t in ("int", "float", "bool"))
+
+#: #2396: the formats the API server enforces on a ThresholdConfig, so the
+#: `--render-cr` path accepts the same names the controller path can ever
+#: see. `metadata.name` becomes the output FILE NAME and both land in the
+#: header comment: unchecked, `../x` was written outside `--config-dir` and
+#: a newline split the header into a top-level key of the rendered file.
+#: ⛔ Used with `re.fullmatch` only — `$` also matches before a trailing
+#: newline, which is exactly the shape this has to refuse.
+_DNS1123_LABEL = r"[a-z0-9](?:[-a-z0-9]*[a-z0-9])?"
+_DNS1123_SUBDOMAIN_RE = re.compile(rf"{_DNS1123_LABEL}(?:\.{_DNS1123_LABEL})*")
+_DNS1123_LABEL_RE = re.compile(_DNS1123_LABEL)
+_DNS1123_SUBDOMAIN_MAX = 253
+_DNS1123_LABEL_MAX = 63
+
+
+def _is_dns1123_subdomain(text: str) -> bool:
+    """RFC 1123 subdomain, as Kubernetes checks an object name."""
+    return (len(text) <= _DNS1123_SUBDOMAIN_MAX
+            and _DNS1123_SUBDOMAIN_RE.fullmatch(text) is not None)
+
+
+def _is_dns1123_label(text: str) -> bool:
+    """RFC 1123 label, as Kubernetes checks a namespace name."""
+    return (len(text) <= _DNS1123_LABEL_MAX
+            and _DNS1123_LABEL_RE.fullmatch(text) is not None)
+
+
+#: The spellings YAML 1.1 reads as null (plus an empty value). PyYAML
+#: builds None for `!!null <anything>`; Kubernetes (YAML→JSON, go-yaml)
+#: refuses the whole document when a `!!null` scalar is written as
+#: anything else (`!!null team`).
+_NULL_SPELLINGS = frozenset(("", "~", "null", "Null", "NULL"))
+_NULL_TAG = "tag:yaml.org,2002:null"
+
+
+def _null_tagged_non_null(root: Any) -> Any:
+    """The text of the first ``!!null`` scalar in *root* not written as null.
+
+    Walks the WHOLE composed graph, not one key: go-yaml refuses the
+    document wherever such a scalar sits — under a duplicate key the load
+    drops, in an earlier `metadata:` block, or behind a `<<` merge / alias
+    (visited once, by node id). None when there is none.
+    """
+    seen = set()
+    stack = [root]
+    while stack:
+        node = stack.pop()
+        if node is None or id(node) in seen:
+            continue
+        seen.add(id(node))
+        if isinstance(node, yaml.ScalarNode):
+            if node.tag == _NULL_TAG and node.value not in _NULL_SPELLINGS:
+                return node.value
+        elif isinstance(node, yaml.MappingNode):
+            for key, value in node.value:
+                stack.extend((key, value))
+        elif isinstance(node, yaml.SequenceNode):
+            stack.extend(node.value)
+    return None
+
+
+def _named_stream(text: str, path: Path) -> io.StringIO:
+    """*text* as a stream named *path*, so a YAML error names the file
+    (and prints no snippet) exactly as reading the file itself did."""
+    stream = io.StringIO(text)
+    stream.name = str(path)
+    return stream
 
 
 def _plain_tag(text: str) -> str:
@@ -457,13 +524,24 @@ def render_cr_file(
     # the file name, the log and the header name the CR as written.
     try:
         with open(cr_path, encoding="utf-8") as fh:
-            cr = _keys_as_plain_text(load_for_rewrite(fh))
+            text = fh.read()
+        cr = _keys_as_plain_text(
+            load_for_rewrite(_named_stream(text, cr_path)))
+        # #2396: the node graph, for the `!!null` check below.
+        root = yaml.compose(_named_stream(text, cr_path),
+                            Loader=yaml.SafeLoader)
     except (OSError, yaml.YAMLError) as e:
         log.error("Failed to parse %s: %s", cr_path, e)
         return EXIT_CALLER_ERROR
 
     if not isinstance(cr, dict) or cr.get("kind") != "ThresholdConfig":
         log.error("%s is not a ThresholdConfig resource", cr_path)
+        return EXIT_CALLER_ERROR
+    written = _null_tagged_non_null(root)
+    if written is not None:
+        log.error("%s: a scalar tagged !!null is written as %r; only an "
+                  "empty scalar or ~ / null / Null / NULL means null, and "
+                  "Kubernetes refuses the document", cr_path, written)
         return EXIT_CALLER_ERROR
 
     # #2371: shape checks `reconcile_one` does not make. Its
@@ -484,17 +562,52 @@ def render_cr_file(
         log.error("%s: metadata.name must be a non-empty string", cr_path)
         return EXIT_CALLER_ERROR
     # An unquoted name is RawPlain text. Judged by YAML 1.1 (PyYAML)
-    # implicit typing: one read as int / float / bool is a caller error;
-    # a date / datetime is kept as written (see _NON_STRING_NAME_TAGS for
-    # where this differs from Kubernetes). Null was refused above.
+    # implicit typing: one read as int / float / bool is a caller error; a
+    # date passes this type check and is then held to the DNS-1123 format
+    # check below, which refuses a datetime (`:`, `T`, `Z`, space). See
+    # _NON_STRING_NAME_TAGS for where the typing differs from Kubernetes.
+    # Null was refused above.
     tag = _plain_tag(name) if isinstance(name, RawPlain) else None
     if tag in _NON_STRING_NAME_TAGS:
         log.error("%s: metadata.name must be a string, but unquoted %s is "
                   "read as %s (YAML 1.1). Quoting makes it a string; it "
-                  "must still be a valid Kubernetes object name (DNS-1123), "
-                  "which this tool does not check", cr_path, name,
-                  tag.rsplit(":", 1)[-1])
+                  "must still be a valid Kubernetes object name (DNS-1123)",
+                  cr_path, name, tag.rsplit(":", 1)[-1])
         return EXIT_CALLER_ERROR
+    # #2396: the name is the output file name and goes into the header
+    # comment, so its format is checked here, before anything is written.
+    if not _is_dns1123_subdomain(name):
+        log.error("%s: metadata.name %r is not a valid Kubernetes object "
+                  "name (DNS-1123 subdomain: lowercase a-z, 0-9, '-' and "
+                  "'.', starting and ending alphanumeric, at most %d "
+                  "characters)", cr_path, name, _DNS1123_SUBDOMAIN_MAX)
+        return EXIT_CALLER_ERROR
+    # #2396: a null / empty namespace is UNSET in Kubernetes (the API
+    # server fills in the request's namespace), so such a CR exists in a
+    # cluster. It is dropped here and renders exactly as an absent one:
+    # header `?`, log `default`. ⛔ None alone is not the test: PyYAML
+    # builds None for `!!null team` too, which Kubernetes refuses (checked
+    # over the whole document, above).
+    if metadata.get("namespace", "") in (None, ""):
+        metadata.pop("namespace", None)
+    if "namespace" in metadata:
+        namespace = metadata["namespace"]
+        ns_tag = (_plain_tag(namespace) if isinstance(namespace, RawPlain)
+                  else None)
+        if ns_tag in _NON_STRING_NAME_TAGS:
+            log.error("%s: metadata.namespace must be a string, but "
+                      "unquoted %s is read as %s (YAML 1.1). Quoting makes "
+                      "it a string; it must still be a valid Kubernetes "
+                      "namespace name (DNS-1123 label)",
+                      cr_path, namespace, ns_tag.rsplit(":", 1)[-1])
+            return EXIT_CALLER_ERROR
+        if not (isinstance(namespace, str) and _is_dns1123_label(namespace)):
+            log.error("%s: metadata.namespace %r is not a valid Kubernetes "
+                      "namespace name (DNS-1123 label: lowercase a-z, 0-9 "
+                      "and '-', starting and ending alphanumeric, at most "
+                      "%d characters)", cr_path, namespace,
+                      _DNS1123_LABEL_MAX)
+            return EXIT_CALLER_ERROR
     if "spec" in cr and not isinstance(cr["spec"], dict):
         log.error("%s: spec must be a mapping", cr_path)
         return EXIT_CALLER_ERROR
