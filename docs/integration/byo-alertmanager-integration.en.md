@@ -308,7 +308,7 @@ Optional values are checked too ([#2295](https://github.com/vencil/Dynamic-Alert
 
 The shapes deliberately stricter than Alertmanager are the rows marked `strict` in the shared table [`receiver_presence_cases.json`](https://github.com/vencil/Dynamic-Alerting-Integrations/blob/main/components/threshold-exporter/app/pkg/receiverspec/testdata/receiver_presence_cases.json).
 
-`generate_alertmanager_routes` (also without amtool on PATH, except whether `proxy_url` parses), da-guard, and tenant-api's `PUT /api/v1/tenants/{id}` and `POST /api/v1/tenants/{id}/validate` apply the same rules. tenant-api answers PUT with 400 `INVALID_BODY` and validate with `valid: false`, judging only the receivers the body writes.
+`generate_alertmanager_routes` (also without amtool on PATH, except whether `proxy_url` parses), da-guard, and tenant-api's `PUT /api/v1/tenants/{id}` and `POST /api/v1/tenants/{id}/validate` apply the same rules. tenant-api answers PUT with 400 `INVALID_BODY` and validate with `valid: false`, judging only the receivers the body writes. ⚠️ For the generator, "rejected" means a WARN and that tenant's receiver and route are skipped; the output is still written with rc 0 (`--strict` does not change that). Only `--validate` exits 1, so CI must run `--validate`.
 
 ### Message Templates (Go Template)
 
@@ -449,7 +449,7 @@ _routing_enforced:
 
 **Mode B: Per-tenant Independent Channel **
 
-When the receiver field contains `{{tenant}}` placeholder, the system automatically creates an independent enforced route for each tenant. Platform can use this to establish tenant-specific notification channels that tenants cannot reject or override:
+When the receiver field contains `{{tenant}}` placeholder, the system automatically creates an independent enforced route for each tenant. Platform can use this to establish tenant-specific notification channels that tenants cannot reject or override. ⚠️ Today only tenants with a routing configuration get this route — their own `_routing`, or one supplied by `_routing_defaults` or `_routing_profile`. Without platform `_routing_defaults`, a tenant that neither writes `_routing` nor references a profile is left out ([#2519](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/2519)):
 
 ```yaml
 # conf.d/_defaults.yaml

@@ -39,8 +39,8 @@ does not fix**: before v2.10.0 the §2.3 shape `generate-routes ... -o
 .output/xxx.yaml --validate` **printed `OK: all configs valid` and exited 0
 while the file named by `-o` never appeared** — `--validate` finishes before
 `-o` is used ([#1423](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/1423)).
-**From v2.10.0 the pair is refused outright: exit 2 with a line naming `-o`
-and `--validate`** ([#1650](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/1650)).
+**From v2.10.0 the pair is refused outright: exit 2 with a message naming `-o`
+and `--validate` and the remedy** ([#1650](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/1650)).
 With `--validate` dropped, a missing `.output/` is likewise exit 2 with a line
 naming `-o`, where it used to be an uncaught `FileNotFoundError` traceback at
 exit 1 ([#1617](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/1617)).

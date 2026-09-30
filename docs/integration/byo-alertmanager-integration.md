@@ -302,7 +302,7 @@ PagerDuty 的 `routing_key` 與 `service_key` 兩個都給會被擋：Alertmanag
 
 刻意比 Alertmanager 嚴格的形狀，以共享表 [`receiver_presence_cases.json`](https://github.com/vencil/Dynamic-Alerting-Integrations/blob/main/components/threshold-exporter/app/pkg/receiverspec/testdata/receiver_presence_cases.json) 中標 `strict` 的列為準。
 
-這些規則在 `generate_alertmanager_routes`（沒有 amtool 時也擋，`proxy_url` 能否解析除外）、da-guard，以及 tenant-api 的 `PUT /api/v1/tenants/{id}` 與 `POST /api/v1/tenants/{id}/validate` 都一致。tenant-api 對 PUT 回 400 `INVALID_BODY`，validate 回 `valid: false`，都只判 body 自己寫的 receiver。
+這些規則在 `generate_alertmanager_routes`（沒有 amtool 時也擋，`proxy_url` 能否解析除外）、da-guard，以及 tenant-api 的 `PUT /api/v1/tenants/{id}` 與 `POST /api/v1/tenants/{id}/validate` 都一致。tenant-api 對 PUT 回 400 `INVALID_BODY`，validate 回 `valid: false`，都只判 body 自己寫的 receiver。⚠️ 產生器的「擋」是印 WARN、略過該租戶的 receiver 與 route，產出照寫、rc 0（加 `--strict` 也一樣）；只有 `--validate` 會以 rc 1 結束，所以 CI 要跑 `--validate`。
 
 ### 訊息模板（Go Template）
 
@@ -445,7 +445,7 @@ _routing_enforced:
 
 **模式 B：Per-tenant 獨立通道**
 
-當 receiver 欄位包含 `{{tenant}}` 佔位符，系統自動為每個 tenant 建立獨立的 enforced route。Platform 可藉此為各 tenant 建立專屬通知通道，tenant 無法拒絕也無法覆寫：
+當 receiver 欄位包含 `{{tenant}}` 佔位符，系統自動為每個 tenant 建立獨立的 enforced route。Platform 可藉此為各 tenant 建立專屬通知通道，tenant 無法拒絕也無法覆寫。⚠️ 目前只有具備路由設定的租戶會拿到這條 route：自己寫了 `_routing`，或由 `_routing_defaults`、`_routing_profile` 帶來的都算。平台沒設 `_routing_defaults` 時，既沒寫 `_routing` 也沒引用 profile 的租戶不在範圍內（[#2519](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/2519)）：
 
 ```yaml
 # conf.d/_defaults.yaml

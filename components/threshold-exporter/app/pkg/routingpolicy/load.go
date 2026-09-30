@@ -141,24 +141,14 @@ func parseDoc(data []byte, policy bool) (*yaml.Node, error) {
 	return top, nil
 }
 
-// lookup returns the value node of key in a mapping node, or nil.
+// lookup returns the value node of key in a mapping node, or nil. YAML merge
+// keys are expanded (mappingEntries): a key supplied through `<<:` is found,
+// one the mapping writes itself wins, and an alias key names its anchor's
+// text. PyYAML's safe_load expands `<<` in EVERY mapping, the document's top
+// level included (#2438: a top-level `<<: *x` supplying `domain_policies`,
+// `routing_profiles`, `_routing_defaults` or `tenants`), so there is no
+// raw-pairs variant: one would miss what the route generator reads.
 func lookup(m *yaml.Node, key string) *yaml.Node {
-	if m == nil || m.Kind != yaml.MappingNode {
-		return nil
-	}
-	for i := 0; i+1 < len(m.Content); i += 2 {
-		if deref(m.Content[i]).Value == key { // an alias key: its anchor's text
-			return deref(m.Content[i+1])
-		}
-	}
-	return nil
-}
-
-// lookupEntry is lookup with YAML merge keys expanded (mappingEntries): a key
-// supplied through `<<:` is found, and one the mapping writes itself wins. A
-// domain policy and its constraints are read this way, as the generator's
-// safe_load reads them (#2438); lookup would miss a merged constraint.
-func lookupEntry(m *yaml.Node, key string) *yaml.Node {
 	if m == nil || m.Kind != yaml.MappingNode {
 		return nil
 	}
@@ -511,7 +501,7 @@ func buildPolicies(nodes map[string]*yaml.Node, origin map[string]string) ([]Pol
 			continue
 		}
 		p := Policy{Domain: name}
-		if t := lookupEntry(n, "tenants"); t != nil {
+		if t := lookup(n, "tenants"); t != nil {
 			if t.Kind != yaml.SequenceNode {
 				bad(field+".tenants", "domain policy %q: 'tenants' must be a list, got %s — the policy cannot be enforced",
 					name, kindName(t))
@@ -523,7 +513,7 @@ func buildPolicies(nodes map[string]*yaml.Node, origin map[string]string) ([]Pol
 				}
 			}
 		}
-		c := lookupEntry(n, "constraints")
+		c := lookup(n, "constraints")
 		if isNull(c) {
 			continue // no constraints: inert
 		}
@@ -539,7 +529,7 @@ func buildPolicies(nodes map[string]*yaml.Node, origin map[string]string) ([]Pol
 			{ConstraintForbidden, &p.ForbiddenReceiverTypes},
 			{ConstraintAllowed, &p.AllowedReceiverTypes},
 		} {
-			l := lookupEntry(c, cn.key)
+			l := lookup(c, cn.key)
 			if isNull(l) {
 				continue
 			}
@@ -566,7 +556,7 @@ func buildPolicies(nodes map[string]*yaml.Node, origin map[string]string) ([]Pol
 		// #2325: only a YAML boolean is a value; the Python check enforces
 		// `is True` and --strict reports any other non-null value. Booleans
 		// are read PyYAML's way (DecodePyYAML): a plain `yes` is true there.
-		if e := lookupEntry(c, ConstraintRequireCriticalEscalation); !isNull(e) {
+		if e := lookup(c, ConstraintRequireCriticalEscalation); !isNull(e) {
 			// A value PyYAML refuses is a problem too (fail-closed): the
 			// generator drops the whole file over it.
 			v, err := DecodePyYAML(e)

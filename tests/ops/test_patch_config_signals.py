@@ -405,3 +405,28 @@ def test_a_broken_stdout_cannot_fail_what_runs_after_main(tmp_path, json_flag):
         os.close(wfd)
         assert p.returncode == 0, (i, p.returncode)
         assert flag.read_text(encoding="utf-8") == "ok", i
+
+
+_AFTER_HEALTHY_MAIN = """
+import runpy, sys
+tool = sys.argv[1]
+sys.argv = [tool, "--help"]
+try:
+    runpy.run_path(tool, run_name="__main__")
+except SystemExit:
+    pass
+print("stdout after main", flush=True)
+print("stderr after main", file=sys.stderr, flush=True)
+"""
+
+
+def test_a_healthy_stream_is_not_sealed(tmp_path):
+    """#2505：讀端還在的 stdout／stderr 不可被導到 /dev/null，同一行程在 main
+    之後寫的東西要看得到。Windows 沒有 select.poll()，舊版把「沒有這個 API」
+    當成壞掉而封掉所有 stream（pytest 的 capture fd 也一起被換掉，之後的測試
+    全部 Errno 9）；Linux 上有 poll，這支只在 Windows 有鑑別力。"""
+    p = subprocess.run([sys.executable, "-c", _AFTER_HEALTHY_MAIN, str(TOOL)],
+                       capture_output=True, text=True, encoding="utf-8",
+                       errors="replace", timeout=60)
+    assert "stdout after main" in p.stdout, p.stdout[-300:]
+    assert "stderr after main" in p.stderr, p.stderr[-300:]

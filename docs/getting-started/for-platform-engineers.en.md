@@ -95,7 +95,7 @@ helm install tenant-api ./helm/tenant-api/ -n tenant-api --create-namespace
 ```
 
 Requires:
-- **Identity**: the chart ships an oauth2-proxy sidecar (`oauth2Proxy.enabled=true`, provider github); pre-create `oauth2-proxy-secrets` (see the chart's `secret-oauth2proxy.yaml` template). Production injects `X-Forwarded-Email` via oauth2-proxy; `--dev-bypass-auth` is local-dev only ([ADR-022](../adr/022-dev-auth-bypass-four-layer-containment.md), **not in the published image**). Without proper RBAC, `/api/v1/me` returns 403 (a correct deny).
+- **Identity**: the chart ships an oauth2-proxy sidecar (`oauth2Proxy.enabled=true`, provider github); pre-create `oauth2-proxy-secrets` (see the chart's `secret-oauth2proxy.yaml` template). Production injects `X-Forwarded-Email` via oauth2-proxy; `--dev-bypass-auth` is local-dev only ([ADR-022](../adr/022-dev-auth-bypass-four-layer-containment.md), **not in the published image**). Without `X-Forwarded-Email`, `/api/v1/me` returns 401; with an `_rbac.yaml`, anyone whose rules lack a `tenants: ["*"]` read grant gets 403 — including callers with only single-tenant or prefix grants ([#2520](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/2520)).
 - **conf.d source**: `gitRepoUrl` points at a git repo holding conf.d (an init container clones it); leave empty for an empty conf.d. `_rbac.yaml` is mounted at `/etc/rbac` from a ConfigMap.
 - **Write-back**: PR/MR mode (`--write-mode pr-github` / `pr-gitlab`, [ADR-011](../adr/011-pr-based-write-back.en.md)); the single-writer invariant needs `replicaCount=1`.
 
@@ -641,7 +641,7 @@ A: Create a new YAML file in `rule-packs/` directory and mount the corresponding
 A: Set `_routing_enforced` in `_defaults.yaml`. Notifications go to the NOC channel and each tenant's receiver independently.
 
 **Q: Why does the webhook allowlist reject my domain?**
-A: Check whether your webhook URL matches an fnmatch pattern under `allowed_domains:` in the policy YAML that `--policy` points at. `*` also matches dots, so `*.example.com` does match `webhook.internal.example.com`; the only thing it does not match is `example.com` itself, which needs its own entry.
+A: Check whether your webhook URL matches an fnmatch pattern under `allowed_domains:` in the policy YAML that `--policy` points at. `*` also matches dots, so `*.example.com` does match `webhook.internal.example.com`; but it does not match `example.com` itself (which needs its own entry), nor a trailing-dot `a.example.com.`. A receiver that does not match gets a WARN and is skipped; only `--validate` exits 1.
 
 **Q: How do I validate that a new tenant's config won't cause alert noise?**
 A: First use `validate_config.py` to check syntax and schema, then `config_diff.py` to see blast radius, finally test in a shadow monitoring environment (see shadow-monitoring-sop.md).
