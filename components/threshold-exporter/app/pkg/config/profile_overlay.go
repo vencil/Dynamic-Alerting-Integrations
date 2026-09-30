@@ -218,19 +218,30 @@ func tenantsWriteProfile(block map[string]any) bool {
 	return false
 }
 
-// withProfileText replaces a scalar `_profile` in body — one tenant's
-// generically decoded block — with its flat-plane text from profileTexts
-// (#2433). A null, a mapping or a sequence is left as the generic decode
-// gave it: a null keeps its meaning in the overlay (see overlayTenant), and
-// the other two are not a scalar whose text could differ.
+// withProfileText replaces `_profile` in body — one tenant's generically
+// decoded block — with the name /metrics elects from it, its flat-plane
+// text from profileTexts (#2433):
+//   - a scalar: its text (bare `010` is "010", not int 8);
+//   - a mapping with a `default:` key (the scheduled-value form): its
+//     default's text, which is all ApplyProfiles reads — a profile is not
+//     time-windowed, so the mapping's other keys elect nothing and
+//     /effective carries the elected name alone.
+//
+// A null, a sequence and a mapping without `default:` are left as the
+// generic decode gave them: a null keeps its meaning in the overlay (see
+// overlayTenant), and the other two elect no profile on either plane.
 func withProfileText(body map[string]any, texts map[string]string, tenantID string) {
 	text, ok := texts[tenantID]
 	if !ok {
 		return
 	}
-	switch body["_profile"].(type) {
-	case nil, map[string]any, []any:
+	switch v := body["_profile"].(type) {
+	case nil, []any:
 		return
+	case map[string]any:
+		if _, scheduled := v["default"]; !scheduled {
+			return
+		}
 	}
 	body["_profile"] = text
 }

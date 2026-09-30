@@ -18,9 +18,25 @@ func TestProfileRefIsReadAsTextLikeTheFlatPlane(t *testing.T) {
 		name     string
 		profile  string // the `_profile` value exactly as written
 		platform bool   // written in the root platform file's `tenants:` block, not the tenant file
+		file     string // the whole tenant file, when the case needs more than one line
 		wantName any    // effective `_profile`
 		want     float64
 	}{
+		// The mapping form with a `default:` key: /metrics elects its
+		// default's text (ScheduledValue.Default); /effective carries that
+		// text as `_profile` (see withProfileText).
+		{name: "mapping-default-bare", profile: "\n      default: 010", wantName: "010", want: 11},
+		{name: "platform-mapping-default-quoted", profile: "\n      default: '010'", platform: true, wantName: "010", want: 11},
+		// The flat plane resolves merge keys and aliases before reading the
+		// text; so does profileTexts.
+		{
+			name: "merge-key", wantName: "010", want: 11,
+			file: "tenants:\n  other: &base\n    _profile: 010\n  tx:\n    <<: *base\n    _metadata:\n      owner: x\n",
+		},
+		{
+			name: "alias", wantName: "010", want: 11,
+			file: "tenants:\n  other:\n    _profile: &p 010\n  tx:\n    _profile: *p\n",
+		},
 		// Controls: a plain string elected the same profile before #2433.
 		{name: "control-quoted", profile: "'010'", wantName: "010", want: 11},
 		{name: "control-unknown", profile: "nope", wantName: "nope", want: 80},
@@ -37,9 +53,12 @@ func TestProfileRefIsReadAsTextLikeTheFlatPlane(t *testing.T) {
 			defaults := "defaults:\n  mysql_connections: 80\n"
 			tenant := "tenants:\n  tx:\n    _metadata:\n      owner: x\n"
 			line := "    _profile: " + tc.profile + "\n"
-			if tc.platform {
+			switch {
+			case tc.file != "":
+				tenant = tc.file
+			case tc.platform:
 				defaults += "tenants:\n  tx:\n" + line
-			} else {
+			default:
 				tenant += line
 			}
 			dir := writePlatformTree(t, map[string]string{
