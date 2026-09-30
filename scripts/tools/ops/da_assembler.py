@@ -497,20 +497,49 @@ def _stale_render_hint(config_dir: Path, old_name: str, new_file: str) -> str:
     whether this directory ever held one. And an existing file is not
     proof either — a CR named ``"8"`` renders to ``8.yaml`` too, under the
     same header — so the hint asks for that check before any deletion.
+
+    File names are compared as ``os.listdir`` spells them, not by probing
+    the path: on a case-insensitive file system (macOS, NTFS) a probe for
+    ``True.yaml`` finds ``true.yaml``, the output of a valid CR named
+    ``"true"``. A name that matches only up to case gets its own message,
+    which sends the operator to the header comment instead.
     """
+    target = f"{old_name}.yaml"
     try:
-        exists = (config_dir / f"{old_name}.yaml").is_file()
-    except (OSError, ValueError):  # ENAMETOOLONG is not swallowed by is_file
-        exists = False
-    if not exists:
+        entries = os.listdir(config_dir)
+    except (OSError, ValueError):
+        entries = []
+    if target in entries:
+        hint = (f". {target} exists in this --config-dir: an earlier "
+                "version of this tool may have rendered this CR to it. "
+                "Before deleting it, confirm it is not the output of another "
+                f"CR whose metadata.name is the string {old_name!r} (the "
+                "header comment is the same for both, so it cannot tell them "
+                f"apart). If it is this CR's, delete it, or it and the "
+                f"{new_file} file both declare the tenant")
+        lower = old_name.lower()
+        if lower != old_name:
+            # Only a lowercase name is a valid CR name (DNS-1123), so the
+            # lowercase spelling is the one a case-insensitive file system
+            # can have written into this file.
+            hint += (" (on a case-insensitive file system it may instead "
+                     f"hold the output of a CR named {lower!r}: its header "
+                     "comment, ThresholdConfig <namespace>/<name>, tells "
+                     f"them apart; delete it only if that shows {old_name})")
+        return hint
+    folded = target.casefold()
+    variants = sorted(e for e in entries if e.casefold() == folded)
+    if not variants:
         return ""
-    return (f". {old_name}.yaml exists in this --config-dir: an earlier "
-            "version of this tool may have rendered this CR to it. Before "
-            "deleting it, confirm it is not the output of another CR whose "
-            f"metadata.name is the string {old_name!r} (the header comment "
-            f"is the same for both, so it cannot tell them apart). If it is "
-            f"this CR's, delete it, or it and the {new_file} file both "
-            "declare the tenant")
+    shown = ", ".join(variants)
+    return (f". {shown} exists in this --config-dir and differs only in "
+            f"case from {target}, the file an earlier version of this tool "
+            "would have rendered this CR to. On a case-insensitive file "
+            "system (macOS, Windows) the earlier version may have written "
+            "into it. Check its header comment, ThresholdConfig "
+            f"<namespace>/<name>: delete it only if that shows {old_name}, "
+            "the earlier version's form of this CR; otherwise it is another "
+            "CR's file, do not delete it")
 
 
 def _keys_as_plain_text(obj: Any) -> Any:
@@ -589,6 +618,8 @@ def render_cr_file(
         # #2430: an earlier version rendered a null name (`~`, `null`, an
         # empty scalar) to `None.yaml` and a `!!timestamp` datetime to its
         # str(). A missing name crashed it, so there is nothing to name.
+        # A sequence / mapping / `!!binary` name was rendered to a file too
+        # (its str() / repr), but is deliberately not covered: rare.
         extra = ""
         if isinstance(metadata, dict) and "name" in metadata \
                 and name is None:
@@ -621,8 +652,8 @@ def render_cr_file(
         # A name quoting cannot save (not DNS-1123 once quoted, #2396:
         # `TRUE`, `-5`, `1:30`) has to be renamed, so the old file is stale
         # even when spelled as written (`True` -> `True.yaml`).
-        # `true` -> `True.yaml` differs from `true.yaml` only in case: on a
-        # case-insensitive file system that is the quoted name's own file.
+        # `true` -> `True.yaml` differs from `true.yaml` only in case; the
+        # case-insensitive file system caveat is _stale_render_hint's.
         try:
             old_name = str(yaml.safe_load(name))
         except (ValueError, yaml.YAMLError):
@@ -633,10 +664,6 @@ def render_cr_file(
             stale = _stale_render_hint(
                 config_dir, old_name,
                 "quoted name's" if quotable else "renamed CR's")
-        if (stale and quotable
-                and old_name.casefold() == name.casefold()):
-            stale += (" (on a case-insensitive file system it IS the quoted "
-                      "name's file: do not delete it there)")
         log.error("%s: metadata.name must be a string, but unquoted %s is "
                   "read as %s (YAML 1.1). Quoting makes it a string; it "
                   "must still be a valid Kubernetes object name (DNS-1123)%s",

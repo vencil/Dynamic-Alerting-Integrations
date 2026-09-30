@@ -345,7 +345,8 @@ class TestRenderCrFile:
         存在**於 --config-dir 時指名它（空目錄不提）；拼法相同（`42`）時
         加引號會覆寫同一個檔，不該提。本工具不刪檔。
         加引號仍非 DNS-1123（`TRUE`、`-5`，#2396）就得改名，舊檔即使拼法
-        相同也會留下，要提；大小寫不分的檔案系統附註只在加引號可行時才成立。
+        相同也會留下，要提。舊檔名含大寫（`True.yaml`）時附大小寫不分檔案
+        系統的附註：那裡它也可能是小寫 name 的合法 CR 的檔，要看檔頭。
         會讓本測試轉紅的改動：拿掉 `_stale_render_hint` 的存在檢查（空目錄
         也提），或整段不提。
         """
@@ -376,11 +377,12 @@ class TestRenderCrFile:
         new_file = "quoted name's" if fix == "quote" else "renamed CR's"
         assert f"it and the {new_file} file both" in caplog.text, \
             caplog.text
-        # `true` -> `True.yaml` differs from `true.yaml` only in case; with
-        # `TRUE` there is no quoted name's file for it to be.
-        case_only = fix == "quote" and \
-            stale.casefold() == f"{name}.yaml".casefold()
-        assert ("case-insensitive file system" in caplog.text) == case_only
+        # `True.yaml`: on a case-insensitive file system a CR named
+        # "true" (the only valid spelling) may have written into it.
+        old = stale[:-len(".yaml")]
+        has_upper = old.lower() != old
+        assert ("case-insensitive file system" in caplog.text) == has_upper
+        assert "differs only in case" not in caplog.text
         assert [p.name for p in out_dir.iterdir()] == [stale]
 
     def test_stale_hint_asks_to_rule_out_a_string_named_cr(
@@ -420,9 +422,16 @@ class TestRenderCrFile:
                      id="datetime-utc"),
         pytest.param("2024-01-01 10:00:00", "2024-01-01 10:00:00.yaml",
                      id="datetime-space"),
+        # Unquoted, a tagged scalar is still RawPlain text: the DNS-1123
+        # branch, as the untagged spellings above.
         pytest.param("!!timestamp 2024-01-01T10:00:00Z",
                      "2024-01-01 10:00:00+00:00.yaml",
-                     id="tagged-datetime"),
+                     id="tagged-plain-datetime"),
+        # Quoted, only the tag types it: a `datetime`, the non-string
+        # branch.
+        pytest.param('!!timestamp "2024-01-01T10:00:00Z"',
+                     "2024-01-01 10:00:00+00:00.yaml",
+                     id="tagged-quoted-datetime"),
     ])
     def test_null_and_datetime_name_stale_hint(
             self, name, stale, tmp_path, caplog):
@@ -430,8 +439,11 @@ class TestRenderCrFile:
 
         舊版把 null（`~`、`null`、空值）寫成 `None.yaml`，datetime 寫成
         Python 的拼法。空目錄不提；舊檔存在就指名並要求先確認。null 另外
-        提示：本意是字串 null 就加引號。會讓本測試轉紅的改動：拿掉 null／
-        datetime 兩條路徑上的 `_stale_render_hint` 呼叫。
+        提示：本意是字串 null 就加引號。
+        提示分三條路徑：null 與加引號的 `!!timestamp "..."`（`datetime`
+        物件）走「不是字串」分支；未加引號的 datetime（含帶 `!!timestamp`
+        標籤者，仍是原文）走 DNS-1123 分支。會讓本測試轉紅的改動：拿掉這三處
+        任一處的 `_stale_render_hint` 呼叫。
         """
         cr_path = tmp_path / "cr.yaml"
         cr_path.write_text(self._K + f"metadata: {{name: {name}}}\n"
@@ -439,7 +451,9 @@ class TestRenderCrFile:
         out_dir = tmp_path / "out"
         out_dir.mkdir()
         is_null = stale == "None.yaml"
+        non_string = is_null or name.startswith('!!timestamp "')
         assert render_cr_file(cr_path, out_dir) == EXIT_CALLER_ERROR
+        assert (self._BAD_NAME in caplog.text) == non_string, caplog.text
         assert "exists in this --config-dir" not in caplog.text
         assert ('quote it ("null")' in caplog.text) == is_null, caplog.text
         (out_dir / stale).write_text("# stale\n", encoding="utf-8")
@@ -450,6 +464,90 @@ class TestRenderCrFile:
         assert "confirm it is not the output of another CR" in caplog.text
         assert ('quote it ("null")' in caplog.text) == is_null
         assert [p.name for p in out_dir.iterdir()] == [stale]
+
+    @pytest.mark.parametrize("name", [
+        "2024-13-01T00:00:00Z", "2024-02-30 10:00:00",
+        "2024-01-01T25:00:00Z",
+    ])
+    def test_unconstructable_datetime_name_is_caller_error(
+            self, name, tmp_path, caplog):
+        """#2430：YAML 判成 timestamp 卻建不出值的 name 仍是 rc 2 單行訊息。
+
+        推算舊版檔名要 safe_load 這個 name，月份／日期／小時超界時丟
+        ValueError；舊版對它同樣 crash、沒寫過檔，所以不附舊檔提醒，也不得
+        變成 traceback。會讓本測試轉紅的改動：拿掉 DNS-1123 分支推算舊檔名
+        時的 `except (ValueError, yaml.YAMLError)`。
+        """
+        cr_path = tmp_path / "cr.yaml"
+        cr_path.write_text(self._K + f"metadata: {{name: {name}}}\n"
+                           + self._T, encoding="utf-8")
+        out_dir = tmp_path / "out"
+        out_dir.mkdir()
+        assert render_cr_file(cr_path, out_dir) == EXIT_CALLER_ERROR
+        errors = [r for r in caplog.records if r.levelname == "ERROR"]
+        assert len(errors) == 1, caplog.text
+        assert "not a valid Kubernetes object name" in caplog.text
+        assert "earlier version" not in caplog.text
+        assert "Traceback" not in caplog.text
+        assert list(out_dir.iterdir()) == []
+
+    # `yes` was rendered by an earlier version to `True.yaml`; a valid CR
+    # named "true" renders to `true.yaml`. On a case-insensitive file
+    # system these are one file, whichever spelling was written first.
+    @pytest.mark.parametrize("present, exact", [
+        pytest.param("True.yaml", True, id="exact-spelling"),
+        pytest.param("true.yaml", False, id="case-only"),
+    ])
+    def test_stale_hint_compares_file_names_exactly(
+            self, present, exact, tmp_path, caplog):
+        """#2430：舊檔比對用 listdir 的確切檔名，只差大小寫另給一段訊息。
+
+        在大小寫不分的檔案系統（macOS／NTFS）上探測 `True.yaml` 會命中
+        合法租戶 `"true"` 的 `true.yaml`；舊提示聲稱「檔頭相同、分不出來」、
+        只叫人排除字串 'True' 的 CR，會誘導刪錯。這裡在 Linux 上以實際檔名
+        模擬兩種目錄狀態：確切同名 → 原提示（附大小寫附註）；只差大小寫 →
+        指名實際檔名、要人看檔頭，兩段訊息互不混用。會讓本測試轉紅的改動：
+        改回 `is_file()` 探測（Linux 上 case-only 就不提），或把兩段訊息
+        合成一段。
+        """
+        cr_path = tmp_path / "cr.yaml"
+        cr_path.write_text(self._K + "metadata: {name: yes}\n" + self._T,
+                           encoding="utf-8")
+        out_dir = tmp_path / "out"
+        out_dir.mkdir()
+        (out_dir / present).write_text("# other\n", encoding="utf-8")
+        assert render_cr_file(cr_path, out_dir) == EXIT_CALLER_ERROR
+        text = caplog.text
+        exact_hint = "True.yaml exists in this --config-dir: an earlier"
+        case_hint = ("true.yaml exists in this --config-dir and differs "
+                     "only in case from True.yaml")
+        assert (exact_hint in text) == exact, text
+        assert ("cannot tell them apart" in text) == exact
+        assert ("hold the output of a CR named 'true'" in text) == exact
+        assert (case_hint in text) == (not exact), text
+        assert ("Check its header comment" in text) == (not exact)
+        assert ("otherwise it is another CR's file, do not delete it"
+                in text) == (not exact)
+        assert [p.name for p in out_dir.iterdir()] == [present]
+
+    def test_unreadable_config_dir_has_no_stale_hint(
+            self, tmp_path, caplog):
+        """#2430：--config-dir 列不出來（不存在）時當作沒有舊檔。
+
+        舊檔比對靠 `os.listdir`，它的 OSError 必須當成不存在：rc 2、只有
+        一筆 ERROR、無提示、無 traceback。會讓本測試轉紅的改動：拿掉
+        `_stale_render_hint` 對 listdir 的 OSError 處理。
+        """
+        cr_path = tmp_path / "cr.yaml"
+        cr_path.write_text(self._K + "metadata: {name: 010}\n" + self._T,
+                           encoding="utf-8")
+        out_dir = tmp_path / "missing"
+        assert render_cr_file(cr_path, out_dir) == EXIT_CALLER_ERROR
+        errors = [r for r in caplog.records if r.levelname == "ERROR"]
+        assert len(errors) == 1, caplog.text
+        assert "read as int" in caplog.text
+        assert "exists in this --config-dir" not in caplog.text
+        assert not out_dir.exists()
 
     def test_missing_name_has_no_stale_hint(self, tmp_path, caplog):
         """#2430：缺 name 時舊版 crash、沒寫檔，`None.yaml` 在也不提。"""
@@ -469,8 +567,9 @@ class TestRenderCrFile:
 
         300 位的 int name 加引號後也超過 DNS-1123 的 253 字元，走「須改名」
         分支；舊版寫 `<300 位>.yaml` 會因檔名過長失敗，目錄裡不可能有它。
-        存在檢查本身會丟 ENAMETOOLONG，必須當成不存在。會讓本測試轉紅的
-        改動：拿掉存在檢查（偽提示），或拿掉它的 OSError 處理（traceback）。
+        存在檢查比對 listdir 的檔名，不探測那個過長的路徑。會讓本測試轉紅的
+        改動：拿掉存在檢查（偽提示），或改回探測路徑卻不處理 OSError
+        （ENAMETOOLONG → traceback）。
         """
         name = "1" * 300
         cr_path = tmp_path / "cr.yaml"
