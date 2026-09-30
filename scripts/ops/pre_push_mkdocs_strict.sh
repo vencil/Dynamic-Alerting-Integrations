@@ -186,7 +186,7 @@ fi
 _live_wt=""
 _build_pid=""
 trap 'trap "" INT TERM HUP
-[ -z "$_build_pid" ] || wait "$_build_pid" 2>/dev/null
+wait "$_build_pid" 2>/dev/null
 git worktree remove --force "$_live_wt" >/dev/null 2>&1 || rm -rf "$_live_wt"' EXIT
 _build_one() {
     local _sha="$1" _wt _rc
