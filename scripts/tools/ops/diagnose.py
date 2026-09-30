@@ -266,7 +266,7 @@ def metrics_treats_as_unset(value: object) -> bool:
     return not _go_parse_float_ok(value.split(":", 1)[0].strip())
 
 
-def _tenant_block(tenant, entries: list, base: Path, *, announce: bool) -> dict:
+def _tenant_block(tenant, entries: list, base: Path) -> dict:
     """The tenant's own block, read the way the exporter reads it (#1982).
 
     *entries* is every ``(fname, tenant, block)`` a root file offered for
@@ -276,19 +276,17 @@ def _tenant_block(tenant, entries: list, base: Path, *, announce: bool) -> dict:
     file in name order and stop, so `tx.yaml` (sorting after `_defaults.yaml`)
     got the platform's value and `_profile` while `TX.yaml` got its own. A
     platform entry for a tenant no tenant file declares is dropped: a platform
-    file cannot create a tenant. *announce* is False on the caller that
-    `check()` pairs with `resolve_inheritance_chain`, so the WARN prints once.
+    file cannot create a tenant, and says so on stderr.
     """
     # #2368: per threshold, across the #1231 spellings — a tenant's legacy
     # `mysql_cpu` beats a platform `mysql_threads_running`, as on /metrics.
     merged, orphans = overlay_platform_tenants(
         entries, lambda: declared_tenant_ids(base), merge=overlay_across_spellings)
-    if announce:
-        for fname, t in orphans:
-            print(f"  WARN: {safe_label(fname)}: tenants.{safe_label(str(t))} "
-                  f"ignored — no tenant file declares tenant "
-                  f"'{safe_label(str(t))}'; a platform file can only provide "
-                  f"defaults for a tenant that already exists", file=sys.stderr)
+    for fname, t in orphans:
+        print(f"  WARN: {safe_label(fname)}: tenants.{safe_label(str(t))} "
+              f"ignored — no tenant file declares tenant "
+              f"'{safe_label(str(t))}'; a platform file can only provide "
+              f"defaults for a tenant that already exists", file=sys.stderr)
     return merged.get(tenant, {})
 
 
@@ -296,56 +294,19 @@ def lookup_tenant_profile(tenant: str, config_dir: str | None) -> str | None:
     """Look up the _profile assignment for a tenant from config-dir YAML files.
 
     Returns profile name string or None.
+
+    #1522: a thin view over `resolve_inheritance_chain`, not a second reader.
+    This used to walk the same directory with its own copy of the tenant-file
+    loop and skip a file it could not read in SILENCE — its sibling WARNs and
+    records `skipped_unusable_files`, so a caller reaching this function on
+    its own got the profile answer with no trace that a file was left out.
+    Delegating gives every caller the sibling's signal, and one reader cannot
+    drift from the other. The WARN goes to stderr; a caller that needs the
+    skipped list as data calls `resolve_inheritance_chain` itself (as
+    `check()` does — once, not both).
     """
-    if not config_dir:
-        return None
-    base = Path(config_dir)
-    if not base.is_dir():
-        return None
-    # #1911: flat read — a hierarchical conf.d must not look empty.
-    warn_nested(base, tool="diagnose")
-    entries: list = []
-    # #1469: the selection predicate is `_lib_confd`'s, not a fourth
-    # hand-rolled copy. `iter_config_files` already applies `_is_config`
-    # (suffix + not hidden) and, on the `recursive=False` branch, `is_file()`
-    # — the three checks that used to sit inline here.
-    listed = list(iter_config_files(base, recursive=False))
-    # The unselected carrier spelling is read by no plane (#1674): its
-    # `tenants:` block must not reach the per-tenant merge either.
-    skip = unselected_carriers(listed)
-    for entry in listed:
-        fname = entry.name
-        if fname in skip:
-            continue
-        try:
-            with open(entry, encoding="utf-8") as f:
-                # #2114: tenant keys as source TEXT — the exporter's id, and
-                # what the CLI's `tenant` argument is. `123:` in a platform
-                # file used to be the int 123 and never matched "123".
-                # #2297: `_profile: 010` is profile "010" (PyYAML's 8 named
-                # none) — `_PROFILE_AS_TEXT`.
-                raw = strict_load_exporter_keys(f, raw_text_scalars=_PROFILE_AS_TEXT)
-        except (OSError, yaml.YAMLError):
-            # ⛔ Still silent, deliberately — see #1522. `check()` calls this
-            # AND `resolve_inheritance_chain` over the same directory, so
-            # announcing here would print every skip twice. The signal for a
-            # `check()` caller comes from the sibling; a caller reaching this
-            # function on its own still gets nothing, which is what #1522 is.
-            continue
-        if not isinstance(raw, dict):
-            continue
-        tenants = {}
-        if "tenants" in raw and isinstance(raw.get("tenants"), dict):
-            tenants = raw["tenants"]
-        elif not fname.startswith("_"):
-            t_name = fname.rsplit(".", 1)[0]
-            tenants = {t_name: raw}
-        if tenant in tenants and isinstance(tenants[tenant], dict):
-            entries.append((fname, tenant, tenants[tenant]))
-    profile = _tenant_block(tenant, entries, base, announce=False).get("_profile")
-    if profile and isinstance(profile, str):
-        return profile.strip()
-    return None
+    inheritance = resolve_inheritance_chain(tenant, config_dir)
+    return inheritance["profile_name"] if inheritance else None
 
 
 def resolve_inheritance_chain(tenant: str, config_dir: str) -> dict[str, object]:
@@ -523,8 +484,11 @@ def resolve_inheritance_chain(tenant: str, config_dir: str) -> dict[str, object]
             continue
         try:
             with open(entry, encoding="utf-8") as f:
-                # #2114: tenant keys as source TEXT, #2297: `_profile` too
-                # (see lookup_tenant_profile).
+                # #2114: tenant keys as source TEXT — the exporter's id, and
+                # what the CLI's `tenant` argument is. `123:` in a platform
+                # file used to be the int 123 and never matched "123".
+                # #2297: `_profile: 010` is profile "010" (PyYAML's 8 named
+                # none) — `_PROFILE_AS_TEXT`.
                 raw = strict_load_exporter_keys(
                     f, raw_text_scalars=_PROFILE_AS_TEXT) or {}
         except (OSError, yaml.YAMLError) as e:
@@ -542,7 +506,7 @@ def resolve_inheritance_chain(tenant: str, config_dir: str) -> dict[str, object]
             tenants = {t_name: raw}
         if tenant in tenants and isinstance(tenants[tenant], dict):
             entries.append((fname, tenant, tenants[tenant]))
-    tenant_overrides = _tenant_block(tenant, entries, base, announce=True)
+    tenant_overrides = _tenant_block(tenant, entries, base)
 
     # Layer 2: Profile overlay
     profile_name = None
@@ -787,8 +751,12 @@ def check(tenant: str, prom_url: str, config_dir: str | None = None,
         pass  # Non-fatal: mode query failure doesn't affect health status
 
     # 4. Profile lookup + inheritance chain (v1.12.0, optional — requires --config-dir)
-    profile_name = lookup_tenant_profile(tenant, config_dir)
+    # #1522: ONE read of config_dir. The profile is the chain's own
+    # `profile_name`, not a second walk of the same files by
+    # `lookup_tenant_profile` — two readers meant two chances to disagree
+    # and every skipped file announced from only one of them.
     inheritance = resolve_inheritance_chain(tenant, config_dir) if config_dir else None
+    profile_name = inheritance["profile_name"] if inheritance else None
 
     # 5. 輸出結果 (Token Saving 核心：正常時只回傳極簡 JSON)
     stream = sys.stdout if out is None else out

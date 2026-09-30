@@ -513,11 +513,18 @@ class TestPlatformTenantBlock:
 
     def test_platform_file_cannot_create_a_tenant(self, tmp_path, capsys):
         (tmp_path / "_defaults.yaml").write_text(self._PLATFORM, encoding="utf-8")
+        def _warns():
+            return [ln for ln in capsys.readouterr().err.splitlines()
+                    if "tenants.tx" in ln]
+
         chain = diagnose.resolve_inheritance_chain("tx", str(tmp_path))
         assert chain["resolved"]["mysql_connections"] == 80
+        warns = _warns()
+        assert len(warns) == 1 and "_defaults.yaml" in warns[0], warns
+        # #1522: lookup_tenant_profile is a view over the chain now, so
+        # called on its own it says it too — once.
         assert diagnose.lookup_tenant_profile("tx", str(tmp_path)) is None
-        warns = [ln for ln in capsys.readouterr().err.splitlines()
-                 if "tenants.tx" in ln]
+        warns = _warns()
         assert len(warns) == 1 and "_defaults.yaml" in warns[0], warns
 
     def test_unselected_carrier_spelling_is_not_read(self, tmp_path):
@@ -536,3 +543,62 @@ class TestPlatformTenantBlock:
         chain = diagnose.resolve_inheritance_chain("tx", str(tmp_path))
         assert chain["resolved"]["mysql_connections"] == "61"
         assert diagnose.lookup_tenant_profile("tx", str(tmp_path)) == "good"
+
+
+# ---------------------------------------------------------------------------
+# #1522: lookup_tenant_profile and check() read conf.d through the chain
+# ---------------------------------------------------------------------------
+
+class TestProfileLookupSharesTheChainRead:
+    """`lookup_tenant_profile` used to be a second reader of the same
+    directory that skipped a file it could not read in silence, while
+    `resolve_inheritance_chain` WARNed about it. It is now a view over the
+    chain, and `check()` reads the directory once."""
+
+    @staticmethod
+    def _confd(tmp_path):
+        (tmp_path / "_defaults.yaml").write_text(
+            "defaults:\n  mysql_connections: 80\n"
+            "tenants:\n  tx:\n    _profile: gold\n", encoding="utf-8")
+        (tmp_path / "tx.yaml").write_text(
+            "tenants:\n  tx:\n    mysql_connections: 70\n", encoding="utf-8")
+        (tmp_path / "_profiles.yaml").write_text(
+            "profiles:\n  gold:\n    mysql_slow_queries: 60\n", encoding="utf-8")
+        # Another tenant's file that does not parse.
+        (tmp_path / "broken.yaml").write_text(
+            "tenants:\n  other:\n    _profile: [unclosed\n", encoding="utf-8")
+        return str(tmp_path)
+
+    def test_called_on_its_own_it_names_the_file_it_could_not_read(
+            self, tmp_path, capsys):
+        d = self._confd(tmp_path)
+        assert diagnose.lookup_tenant_profile("tx", d) == "gold"
+        err = capsys.readouterr().err
+        assert "WARN: skip broken.yaml" in err, err
+
+    def test_answer_is_the_chains_profile_name(self, tmp_path, capsys):
+        d = self._confd(tmp_path)
+        chain = diagnose.resolve_inheritance_chain("tx", d)
+        assert chain["skipped_unusable_files"] == ["broken.yaml"]
+        assert diagnose.lookup_tenant_profile("tx", d) == chain["profile_name"]
+
+    def test_check_reads_the_directory_once_and_warns_once(
+            self, tmp_path, capsys):
+        d = self._confd(tmp_path)
+        out = io.StringIO()
+        real = diagnose.resolve_inheritance_chain
+        with mock.patch.object(diagnose, "tenant_db_type",
+                               return_value=(None, None)), \
+                mock.patch.object(diagnose, "query_prometheus",
+                                  return_value=([], None)), \
+                mock.patch.object(diagnose, "resolve_inheritance_chain",
+                                  wraps=real) as spy:
+            result = diagnose.check("tx", "http://prom:9090",
+                                    config_dir=d, out=out)
+        assert spy.call_count == 1
+        assert result["profile"] == "gold"
+        assert result["inheritance_chain"]["skipped_unusable_files"] == [
+            "broken.yaml"]
+        skips = [ln for ln in capsys.readouterr().err.splitlines()
+                 if "WARN: skip broken.yaml" in ln]
+        assert len(skips) == 1, skips
