@@ -14,8 +14,8 @@ from pathlib import Path
 import pytest
 import yaml
 
-_REPO = Path(__file__).resolve().parent.parent.parent
-_REGISTRY = _REPO / "docs/assets/tool-registry.yaml"
+REPO_ROOT = Path(__file__).resolve().parent.parent.parent
+_REGISTRY = REPO_ROOT / "docs/assets/tool-registry.yaml"
 _ROW = re.compile(r"^\|\s*\*\*(.+?)\*\*\s*\|")
 
 
@@ -35,7 +35,7 @@ def _table_names(path: Path) -> list[str]:
     ("docs/interactive-tools.en.md", "en"),
 ])
 def test_overview_names_are_registry_titles(doc: str, lang: str) -> None:
-    names = _table_names(_REPO / doc)
+    names = _table_names(REPO_ROOT / doc)
     assert names, f"{doc}: no bold tool names found — did the table format change?"
     unknown = [n for n in names if n not in _titles(lang)]
     assert not unknown, (
