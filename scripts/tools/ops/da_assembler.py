@@ -458,6 +458,31 @@ def _null_tagged_non_null(root: Any) -> Any:
     drops, in an earlier `metadata:` block, or behind a `<<` merge / alias
     (visited once, by node id). None when there is none.
     """
+    for node in _walk_nodes(root):
+        if (isinstance(node, yaml.ScalarNode) and node.tag == _NULL_TAG
+                and node.value not in _NULL_SPELLINGS):
+            return node.value
+    return None
+
+
+def _has_null_key(root: Any) -> bool:
+    """#2476: whether any mapping in *root* has a null key.
+
+    Kubernetes (sigs.k8s.io/yaml YAMLToJSON) refuses the whole document
+    with ``unsupported map key of type: <nil>`` — ``null:``, ``~:``, an
+    empty ``? `` key, one reached through an alias, or one under a key a
+    later duplicate replaces. Same whole-graph walk as
+    :func:`_null_tagged_non_null`. A QUOTED ``"null":`` is a string key and
+    is accepted.
+    """
+    return any(isinstance(node, yaml.MappingNode)
+               and any(isinstance(key, yaml.ScalarNode)
+                       and key.tag == _NULL_TAG for key, _v in node.value)
+               for node in _walk_nodes(root))
+
+
+def _walk_nodes(root: Any):
+    """Every node of the composed graph *root*, each once (by node id)."""
     seen = set()
     stack = [root]
     while stack:
@@ -465,15 +490,12 @@ def _null_tagged_non_null(root: Any) -> Any:
         if node is None or id(node) in seen:
             continue
         seen.add(id(node))
-        if isinstance(node, yaml.ScalarNode):
-            if node.tag == _NULL_TAG and node.value not in _NULL_SPELLINGS:
-                return node.value
-        elif isinstance(node, yaml.MappingNode):
+        yield node
+        if isinstance(node, yaml.MappingNode):
             for key, value in node.value:
                 stack.extend((key, value))
         elif isinstance(node, yaml.SequenceNode):
             stack.extend(node.value)
-    return None
 
 
 def _named_stream(text: str, path: Path) -> io.StringIO:
@@ -603,6 +625,24 @@ def render_cr_file(
     except (OSError, yaml.YAMLError) as e:
         log.error("Failed to parse %s: %s", cr_path, e)
         return EXIT_CALLER_ERROR
+    except RecursionError:
+        # #2476: this tool's (pure-Python) parser limit, NOT a verdict
+        # that Kubernetes refuses the file — go-yaml reads nesting far
+        # deeper. A self-referencing anchor (`&a [1, *a]`) lands here too.
+        log.error("Failed to parse %s: nested too deeply for this tool to "
+                  "read (or an anchor that contains itself)", cr_path)
+        return EXIT_CALLER_ERROR
+    except Exception as e:  # noqa: BLE001 — see comment
+        # #2476: building a value from the file failed — not UTF-8
+        # (UnicodeDecodeError), or an explicit tag whose text does not
+        # construct (`!!int team` ValueError, `!!bool team` KeyError,
+        # `!!timestamp team` AttributeError, `!!int ""` IndexError, a
+        # >4300-digit `!!int "…"`). Not a closed list, so every failure
+        # while reading the caller's file is rc 2 naming it, never a
+        # traceback.
+        log.error("Failed to parse %s: %s: %s", cr_path,
+                  type(e).__name__, e)
+        return EXIT_CALLER_ERROR
 
     if not isinstance(cr, dict) or cr.get("kind") != "ThresholdConfig":
         log.error("%s is not a ThresholdConfig resource", cr_path)
@@ -612,6 +652,11 @@ def render_cr_file(
         log.error("%s: a scalar tagged !!null is written as %r; only an "
                   "empty scalar or ~ / null / Null / NULL means null, and "
                   "Kubernetes refuses the document", cr_path, written)
+        return EXIT_CALLER_ERROR
+    if _has_null_key(root):
+        log.error("%s: a mapping has a null key (null, ~ or an empty key); "
+                  "Kubernetes refuses the document. If the string is meant, "
+                  "quote it (\"null\")", cr_path)
         return EXIT_CALLER_ERROR
 
     # #2371: shape checks `reconcile_one` does not make. Its

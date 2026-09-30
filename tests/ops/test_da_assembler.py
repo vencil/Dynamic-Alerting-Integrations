@@ -1338,6 +1338,107 @@ class TestRenderCrNameFormat:
         assert "<unicode string>" not in caplog.text
         assert list(out_dir.iterdir()) == []
 
+    @pytest.mark.parametrize("body", [
+        pytest.param(b"metadata: {name: ok}\nspec:\n  defaults:\n"
+                     b'    cpu: "\xff"\n', id="not-utf8"),
+        pytest.param(b"metadata: {name: ok}\n"
+                     b"spec: {defaults: {cpu: !!int team}}\n",
+                     id="int-tag-ValueError"),
+        pytest.param(b"metadata: {name: ok}\n"
+                     b"spec: {defaults: {cpu: !!bool team}}\n",
+                     id="bool-tag-KeyError"),
+        pytest.param(b"metadata: {name: ok}\n"
+                     b"spec: {defaults: {cpu: !!timestamp team}}\n",
+                     id="timestamp-tag-AttributeError"),
+        pytest.param(b'metadata: {name: ok}\n'
+                     b'spec: {defaults: {cpu: !!int ""}}\n',
+                     id="empty-int-IndexError"),
+        pytest.param(b'metadata:\n  name: !!timestamp "2024-13-01T00:00:00Z"\n',
+                     id="bad-month-name"),
+        pytest.param(b'metadata: {name: ok}\nspec: {defaults: {cpu: !!int "'
+                     + b"9" * 5000 + b'"}}\n', id="quoted-over-4300-digits"),
+        pytest.param(b"metadata: {name: ok}\nspec: {defaults: &a [1, *a]}\n",
+                     id="self-referencing-anchor"),
+        pytest.param(b"metadata: {name: ok}\nspec: {defaults: "
+                     + b"[" * 3000 + b"]" * 3000 + b"}\n",
+                     id="deep-nesting"),
+    ])
+    def test_value_that_cannot_be_read_is_caller_error(self, body, tmp_path,
+                                                        caplog):
+        """#2476：讀檔階段建構值失敗 → rc 2、一行錯誤點名檔案、不寫檔。
+
+        這些例外（`UnicodeDecodeError`／`ValueError`／`KeyError`／
+        `AttributeError`／`IndexError`／`RecursionError`）都不是
+        `OSError`／`YAMLError`，先前穿出 `render_cr_file`，CLI 印
+        traceback 並以 rc 1 結束。會讓本組轉紅的改動：讀檔的 except 退回
+        只接 `(OSError, yaml.YAMLError)`。
+        """
+        cr_path = tmp_path / "cr.yaml"
+        cr_path.write_bytes(b"kind: ThresholdConfig\n" + body)
+        out_dir = tmp_path / "out"
+        out_dir.mkdir()
+        assert render_cr_file(cr_path, out_dir) == EXIT_CALLER_ERROR
+        assert f"Failed to parse {cr_path}" in caplog.text
+        assert list(out_dir.iterdir()) == []
+
+    def test_deep_nesting_message_names_the_tool_limit(self, tmp_path,
+                                                       caplog):
+        """#2476：巢狀過深是本工具 parser 的上限，不是 K8s 拒收。
+
+        訊息要能讓人分辨「量不到」與「拒收」。會讓本組轉紅的改動：拿掉
+        `RecursionError` 的專屬分支（落到通用分支，訊息只剩例外原文）。
+        """
+        cr_path = tmp_path / "cr.yaml"
+        cr_path.write_text("kind: ThresholdConfig\nmetadata: {name: ok}\n"
+                           "spec: {defaults: " + "[" * 3000 + "]" * 3000
+                           + "}\n", encoding="utf-8")
+        out_dir = tmp_path / "out"
+        out_dir.mkdir()
+        assert render_cr_file(cr_path, out_dir) == EXIT_CALLER_ERROR
+        assert "nested too deeply for this tool to read" in caplog.text
+
+    @pytest.mark.parametrize("text, spec", [
+        pytest.param("metadata: {name: ok}\n", "spec:\n  tenants: {null: {}}\n",
+                     id="null"),
+        pytest.param("metadata: {name: ok}\n", "spec:\n  tenants: {~: {}}\n",
+                     id="tilde"),
+        pytest.param("metadata: {name: ok}\n",
+                     "spec:\n  tenants:\n    t1: {Null: 1}\n", id="Null"),
+        pytest.param("metadata: {name: ok}\n",
+                     "spec:\n  tenants:\n    t1:\n      ? \n      : 1\n",
+                     id="empty-key"),
+        pytest.param("metadata: {name: ok}\n",
+                     "spec:\n  tenants:\n    t1: {!!null ~: 1}\n",
+                     id="tagged-null-key"),
+        pytest.param("metadata:\n  name: ok\n  labels: {~: x}\n", None,
+                     id="in-metadata"),
+        pytest.param("x: &n ~\nmetadata: {name: ok}\n",
+                     "spec:\n  tenants: {*n : {}}\n", id="through-alias"),
+        pytest.param("metadata: {name: ok}\n",
+                     "spec:\n  tenants: {null: {}}\n  tenants: {t1: {}}\n",
+                     id="under-replaced-duplicate"),
+    ])
+    def test_null_mapping_key_is_caller_error(self, text, spec, tmp_path,
+                                              caplog):
+        """#2476：K8s（sigs.k8s.io/yaml YAMLToJSON）對任何位置的 null
+        mapping key 整份拒收（`unsupported map key of type: <nil>`）。
+
+        先前 `--render-cr` rc 0 並寫出檔案。會讓本組轉紅的改動：拿掉
+        `_has_null_key` 檢查，或只看最後生效的 `spec.tenants`。
+        """
+        rc, got = self._render_text(tmp_path, text, spec)
+        assert rc == EXIT_CALLER_ERROR
+        assert got is None
+        assert "a mapping has a null key" in caplog.text
+
+    def test_quoted_null_key_is_a_string(self, tmp_path):
+        """對照組：加引號的 `"null":`／`"~":` 是字串鍵，K8s 接受，照常 rc 0。"""
+        rc, got = self._render_text(
+            tmp_path, "metadata: {name: ok}\n",
+            "spec:\n  tenants:\n    t1: {\"null\": \"1\", \"~\": \"2\"}\n")
+        assert rc == 0
+        assert got is not None
+
     @pytest.mark.parametrize("namespace", [
         pytest.param('"8"', id="quoted-int"),
         pytest.param("'yes'", id="quoted-bool"),
