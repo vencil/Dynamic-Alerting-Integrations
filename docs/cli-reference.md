@@ -2502,8 +2502,8 @@ da-tools guard <subcommand> [flags]
 |---|---|
 | 0 | clean — 沒 error 級 finding（warning 不擋，除非 `--warn-as-error`） |
 | 1 | guard 偵測到 error — block merge / commit |
-| 2 | caller error（flag 錯、路徑找不到、scope 跑出 root 之外、binary 找不到） |
-| 3 | exporter 載入時會整份丟掉的檔，加上 da-guard 自己無法 decode 的檔，再加上 route generator 因重複 key 整份拒讀、而 exporter 照讀的檔（例如 alias key 與其 anchor 並列、同一 mapping 兩個 `<<`；`_domain_policy`／`_routing_profiles` 檔除外，那兩種以 `*_unusable` finding 回報，#2295），限與本次執行有關者（`--scope` 內的檔，及 `--scope` 以上各層目錄的 `_` 開頭檔）；與 `--cardinality-limit` 無關。報告與 stderr 列出這些檔（相對於 `--config-dir`）；一次可能只列出第一個，修好後重跑。優先於 1，也取代「vacuously safe」的 0。權威定義是契約測試 `TestExitThree_NamesExactlyTheFilesTheExporterDrops`（#2123、#2179） |
+| 2 | caller error（flag 錯、路徑找不到、scope 跑出 root 之外、binary 找不到）。`--baseline-config-dir` 例外：指到不存在的路徑不算錯，照常判定 |
+| 3 | exporter 載入時會整份丟掉的檔，加上 da-guard 自己無法 decode 的檔，再加上 route generator 因重複 key 整份拒讀、而 exporter 照讀的檔（例如 alias key 與其 anchor 並列；同一 mapping 兩個 `<<` 則是 exporter 自己就整份丟掉；`_domain_policy`／`_routing_profiles` 檔除外，那兩種以 `*_unusable` finding 回報，#2295），限與本次執行有關者（`--scope` 內的檔，及 `--scope` 以上各層目錄的 `_` 開頭檔）；與 `--cardinality-limit` 無關。報告與 stderr 列出這些檔（相對於 `--config-dir`）；一次可能只列出第一個，修好後重跑。優先於 1，也取代「vacuously safe」的 0。權威定義是契約測試 `TestExitThree_NamesExactlyTheFilesTheExporterDrops`（#2123、#2179） |
 
 **Routing 檢查（[#2280](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/2280)）**
 
@@ -2756,7 +2756,7 @@ da-tools tenant-verify db-fin-a --conf-d conf.d/ \
 | Code | 意義 |
 |---|---|
 | 0 | tenant 存在且只由一個檔宣告；若有 `--expect-merged-hash` 則一致。`--all`：沒有任何 tenant 被重複宣告 |
-| 1 | usage / IO 錯誤（缺 tenant_id、conf-d 找不到、`--all` + `--expect-*` 互斥等）|
+| 1 | 缺 tenant_id、conf-d 找不到、`--all` 與 `--expect-merged-hash` 並用。argparse 擋下的參數錯（未知旗標、多餘參數）是 2 |
 | 2 | tenant 不存在、`--expect-merged-hash` 不一致，或**重複宣告**（同一 tenant 出現在兩個以上的檔）（incremental migration playbook checklist 第 6 項擋下訊號）。`--all`：有任何 tenant 被重複宣告 |
 
 **重複宣告**（[#2093](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/2093)）：同一 tenant 由多個檔宣告時，本工具不計算任何 hash——掃描器只會留其中一份、留哪份取決於檔名排序，照算會讓第 6 項在多餘檔排前面時假通過。單一 tenant 模式（不論有沒有帶 `--expect-merged-hash`）回 exit 2，JSON 為 `{"tenant_id": ..., "error": "duplicate", "files": [...], "detail": ...}`（`files` 為排序後、相對 conf.d 的路徑），human 輸出逐行列出 `declared in: <檔>`。`--all` 把該 tenant 列成同形的 error 條目（沒有 `merged_hash`），其餘 tenant 照常輸出，最後 exit 2；human 輸出的 `# total:` 行把已驗證與重複宣告（未驗證）分開計數。處置：刪除多餘的宣告、讓 tenant 只留在一個檔，再重跑（`validate-config` 的 `tenant_uniqueness` 報的是同一件事）。

@@ -1400,7 +1400,7 @@ Every file-sourced string in the text output (alertname, silence id, matcher val
 |------|---------|
 | 0 | No orphan silences (or orphans present but no `--ci`) |
 | 1 | `--ci` mode detected orphans |
-| 2 | Caller error (file missing / JSON parse failure / `--rule-source` empty) |
+| 2 | Caller error (file missing / JSON parse failure / `--rule-source` an empty directory, etc.) |
 
 **Examples**
 
@@ -2516,8 +2516,8 @@ If none resolves, prints install hints (download from `tools/v*` release / `cd c
 |---|---|
 | 0 | clean — no error-tier findings (warnings don't block unless `--warn-as-error`) |
 | 1 | guard found errors — block merge / commit |
-| 2 | caller error (bad flags, path missing, scope outside root, binary missing) |
-| 3 | files the exporter drops whole when it loads the tree, plus files da-guard itself cannot decode, plus files the route generator refuses whole for a repeated key that the exporter reads anyway (an alias key beside its anchor, two `<<` in one mapping; except `_domain_policy` / `_routing_profiles` files, reported as a `*_unusable` finding, #2295), limited to those that bear on this run (files in `--scope`, and `_`-prefixed files in the directories above it); independent of `--cardinality-limit`. The report and stderr list them (relative to `--config-dir`); a run may list only the first one, so re-run after fixing. Takes precedence over 1 and replaces the "vacuously safe" 0. The contract test `TestExitThree_NamesExactlyTheFilesTheExporterDrops` is authoritative (#2123, #2179) |
+| 2 | caller error (bad flags, path missing, scope outside root, binary missing). Exception: a `--baseline-config-dir` that does not exist is not an error; the run is judged as usual |
+| 3 | files the exporter drops whole when it loads the tree, plus files da-guard itself cannot decode, plus files the route generator refuses whole for a repeated key that the exporter reads anyway (an alias key beside its anchor; two `<<` in one mapping is dropped by the exporter itself; except `_domain_policy` / `_routing_profiles` files, reported as a `*_unusable` finding, #2295), limited to those that bear on this run (files in `--scope`, and `_`-prefixed files in the directories above it); independent of `--cardinality-limit`. The report and stderr list them (relative to `--config-dir`); a run may list only the first one, so re-run after fixing. Takes precedence over 1 and replaces the "vacuously safe" 0. The contract test `TestExitThree_NamesExactlyTheFilesTheExporterDrops` is authoritative (#2123, #2179) |
 
 **Routing checks ([#2280](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/2280))**
 
@@ -2770,7 +2770,7 @@ da-tools tenant-verify db-fin-a --conf-d conf.d/ \
 | Code | Meaning |
 |---|---|
 | 0 | Tenant exists and is declared by exactly one file; if `--expect-merged-hash` supplied, it matched. `--all`: no tenant is declared more than once |
-| 1 | Usage / IO error (missing tenant_id, conf-d not found, `--all` + `--expect-*` mutually exclusive, etc.) |
+| 1 | Missing tenant_id, conf-d not found, or `--all` combined with `--expect-merged-hash`. Argument errors argparse rejects (unknown flag, extra argument) are 2 |
 | 2 | Tenant not found, `--expect-merged-hash` mismatch, OR **duplicate declaration** (the same tenant in two or more files) (this is the incremental migration playbook checklist item 6 stop-signal). `--all`: any tenant is declared more than once |
 
 **Duplicate declaration** ([#2093](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/2093)): when one tenant is declared by several files, the tool computes no hash — the scanner keeps just one of them, chosen by filename order, so hashing it would let item 6 pass falsely whenever the stray file sorts first. Single-tenant mode (with or without `--expect-merged-hash`) exits 2 with JSON `{"tenant_id": ..., "error": "duplicate", "files": [...], "detail": ...}` (`files` sorted, conf.d-relative paths); the human output lists each file as `declared in: <file>`. `--all` reports that tenant as an error entry of the same shape (no `merged_hash`), still reports every other tenant, and exits 2; the human `# total:` line counts verified and duplicate-declared (not verified) tenants separately. Fix: delete the extra declaration so the tenant lives in exactly one file, then re-run (`validate-config`'s `tenant_uniqueness` reports the same state).
