@@ -99,6 +99,55 @@ describe('CustomAlertsModal', () => {
     expect(screen.getByTestId('recipe-keep')).toBeInTheDocument(); // input preserved, not wiped
   });
 
+  // #2406: TENANT_CONFIG_NOT_LOADABLE (#2373) is a 409 too, but a broken
+  // tenant file — not a base_hash race. Body shapes below mirror tenant-api's
+  // ErrorResponse envelope (Extra inlined at top level).
+  it('#2406: GET with config_error does not open the editor and explains why', async () => {
+    // GET on an unloadable file: raw_yaml + source_hash + config_error, and
+    // custom_alerts ABSENT (not []).
+    const ft = vi.fn(() => Promise.resolve({ id: 'tenant-x', raw_yaml: 'tenants: [', source_hash: 'h1', config_error: 'malformed_yaml' }));
+    const save = vi.fn();
+    render(<CustomAlertsModal tenantId="tenant-x" onClose={() => {}} fetchTenant={ft} fetchMetrics={mockMetrics([])} saveCustomAlerts={save} />);
+    await waitFor(() => expect(screen.getByTestId('config-not-loadable')).toBeInTheDocument());
+    expect(screen.getByTestId('config-not-loadable').textContent).toContain('config_error: malformed_yaml');
+    // not editable: no list, no add, no save
+    expect(screen.queryByTestId('recipe-list')).toBeNull();
+    expect(screen.queryByTestId('add')).toBeNull();
+    expect(screen.queryByTestId('save')).toBeNull();
+    expect(save).not.toHaveBeenCalled();
+  });
+
+  it('#2406: a 409 TENANT_CONFIG_NOT_LOADABLE shows the server reason, not the refresh-and-retry conflict', async () => {
+    const ft = fetchTenant([{ recipe: 'threshold', name: 'keep', metric: 'm', threshold: '1', window: '5m' }]);
+    const serverError = 'tenant tenant-x: its config file cannot be loaded as a tenant config (config_error: invalid_config), '
+      + 'so threshold-exporter skips it and a partial update is refused; repair the tenant file itself first';
+    const save = vi.fn(() => Promise.resolve({
+      ok: false, status: 409,
+      data: { error: serverError, code: 'TENANT_CONFIG_NOT_LOADABLE', tenant_id: 'tenant-x', config_error: 'invalid_config' },
+    }));
+    render(<CustomAlertsModal tenantId="tenant-x" onClose={() => {}} fetchTenant={ft} fetchMetrics={mockMetrics([])} saveCustomAlerts={save} />);
+    await waitFor(() => expect(screen.getByTestId('save')).toBeInTheDocument());
+    fireEvent.click(screen.getByTestId('save'));
+    await waitFor(() => expect(screen.getByTestId('not-loadable')).toBeInTheDocument());
+    expect(screen.getByTestId('not-loadable').textContent).toContain(serverError);
+    expect(screen.queryByTestId('conflict')).toBeNull();
+    expect(document.body.textContent).not.toMatch(/updated by someone else/);
+    expect(screen.getByTestId('recipe-keep')).toBeInTheDocument(); // edits kept
+  });
+
+  it('#2406 control: a base_hash 409 (code CONFLICT) still shows the conflict box', async () => {
+    const ft = fetchTenant([{ recipe: 'threshold', name: 'keep', metric: 'm', threshold: '1', window: '5m' }]);
+    const save = vi.fn(() => Promise.resolve({
+      ok: false, status: 409,
+      data: { error: 'the tenant configuration was updated by someone else; refresh and retry', code: 'CONFLICT', current_source_hash: 'hX' },
+    }));
+    render(<CustomAlertsModal tenantId="tenant-x" onClose={() => {}} fetchTenant={ft} fetchMetrics={mockMetrics([])} saveCustomAlerts={save} />);
+    await waitFor(() => expect(screen.getByTestId('save')).toBeInTheDocument());
+    fireEvent.click(screen.getByTestId('save'));
+    await waitFor(() => expect(screen.getByTestId('conflict')).toBeInTheDocument());
+    expect(screen.queryByTestId('not-loadable')).toBeNull();
+  });
+
   it('Reef 4: a 400 surfaces violations and flags the offending recipe', async () => {
     const ft = fetchTenant([{ recipe: 'threshold', name: 'legacy_bad', metric: 'a:b', threshold: '1', window: '5m' }]);
     // real backend format from ValidateTenantCustomAlerts: `_custom_alerts[N] (name): ...`
