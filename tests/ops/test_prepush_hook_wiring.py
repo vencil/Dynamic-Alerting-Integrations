@@ -1815,34 +1815,6 @@ def test_a_deletion_row_is_not_judged(tmp_path: Path) -> None:
     assert not record.exists(), "a deletion push was gated on a docs build"
 
 
-def test_the_guard_leaves_no_temporary_worktree_behind(tmp_path: Path) -> None:
-    """A guard that leaks a worktree per push poisons `git worktree list`.
-
-    ⚠️ Honest boundary, measured: this one is GREEN on the pre-#1690 script
-    too — that code never created a worktree, so there was nothing to leak. By
-    the repo's own rule (a guard earns its place when its silent failure brings
-    the ORIGINAL defect back) it would not qualify, because a leaked worktree
-    is a failure mode this fix introduces, not one it restores.
-
-    ⚠️ Since #2169 it no longer catches a dropped `git worktree remove` in
-    `_build_one` on its own: the EXIT trap removes the last tree anyway, so
-    with one ref this stays green. The two-ref row of
-    `test_an_interrupted_push_leaves_no_temporary_worktree_behind` is what
-    turns red then. What this one still pins is the uninterrupted path: the
-    must-not-fire twin of that test. The four tests above are the ones
-    that carry #1690 itself — all four fail on the pre-fix script, this one
-    does not, and that difference is the point of writing it down here.
-    """
-    work, record, sha_a, sha_b = _docs_repo(tmp_path)
-    _run_guard(work, record, f"refs/heads/topic {sha_b} refs/heads/topic {sha_a}\n")
-
-    listed = _git(work, "worktree", "list").stdout.strip().splitlines()
-    assert len(listed) == 1, f"temporary worktree left registered: {listed}"
-    assert not list((work / ".git").glob("mkdocs-strict-*")), (
-        "temporary worktree directory left on disk"
-    )
-
-
 # The recorder, plus: the build whose number is PREPUSH_TEST_HANG_ON says so and
 # hangs, so the interrupt lands mid-build in a known tree.
 _HANGING_RECORDER = """#!/usr/bin/env bash
