@@ -465,103 +465,23 @@ def _null_tagged_non_null(root: Any) -> Any:
     return None
 
 
-_MERGE_TAG = "tag:yaml.org,2002:merge"
-#: go-yaml v2's bool spellings (YAML 1.1, including `y` / `n`, which
-#: PyYAML reads as strings).
-_V2_BOOLS = {**dict.fromkeys(("y", "Y", "yes", "Yes", "YES", "true", "True",
-                              "TRUE", "on", "On", "ON"), True),
-             **dict.fromkeys(("n", "N", "no", "No", "NO", "false", "False",
-                              "FALSE", "off", "Off", "OFF"), False)}
-_V2_FLOAT_RE = re.compile(r"[-+]?(\.[0-9]+|[0-9]+(\.[0-9]*)?)([eE][-+]?[0-9]+)?")
-
-
-def _v2_key_identity(node: Any) -> Any:
-    """The map key go-yaml v2 decodes *node* to, for "same key" tests.
-
-    None for a null key. Approximates go-yaml v2's `resolve` (bool / int /
-    float spellings; `010` is octal); a timestamp key is compared by its
-    text. A non-scalar key is its own identity (the load refuses it
-    anyway).
-    """
-    if not isinstance(node, yaml.ScalarNode):
-        return ("node", id(node))
-    text = node.value
-    if node.tag == _NULL_TAG:
-        return None
-    if node.tag in ("tag:yaml.org,2002:str", "tag:yaml.org,2002:binary") \
-            and not (node.style is None and _plain_tag(text) == node.tag):
-        return ("str", text)
-    if text in _V2_BOOLS:
-        return ("bool", _V2_BOOLS[text])
-    if text and text[0] in "+-.0123456789":
-        plain = text.replace("_", "")
-        octal = re.fullmatch(r"([-+]?)0([0-7]+)", plain)
-        try:
-            return ("int", int(octal[1] + octal[2], 8) if octal
-                    else int(plain, 0))
-        except ValueError:
-            pass
-        if _V2_FLOAT_RE.fullmatch(plain) or text[0] == ".":
-            try:
-                return ("float", float(plain))
-            except ValueError:
-                pass
-    return ("str", text)
-
-
-def _v2_effective_pairs(node: Any, out: dict, active: set) -> None:
-    """Apply mapping *node*'s pairs to *out* in go-yaml v2's order.
-
-    A pair replaces an earlier one with the same key; a `<<` merge is
-    applied where it stands (a sequence of maps from its last item to its
-    first, so earlier items win) — the order go-yaml v2 decodes in, not
-    PyYAML's (which lets every explicit key win over a merge).
-    """
-    if id(node) in active:
-        return
-    active.add(id(node))
-    for key, value in node.value:
-        if (isinstance(key, yaml.ScalarNode) and key.tag == _MERGE_TAG):
-            sources = (reversed(value.value)
-                       if isinstance(value, yaml.SequenceNode) else [value])
-            for source in sources:
-                if isinstance(source, yaml.MappingNode):
-                    _v2_effective_pairs(source, out, active)
-            continue
-        out[_v2_key_identity(key)] = (key, value)
-    active.discard(id(node))
-
-
 def _has_null_key(root: Any) -> bool:
-    """#2476: whether a mapping Kubernetes decodes from *root* has a null key.
+    """#2476: whether any mapping anywhere in *root* has a null key.
 
-    Kubernetes (sigs.k8s.io/yaml YAMLToJSON) refuses the whole document
-    with ``unsupported map key of type: <nil>`` — ``null:``, ``~:``, an
-    empty ``? `` key, or one reached through an alias or a ``<<`` merge.
-    That check runs AFTER go-yaml has decoded the document, so a value a
-    later duplicate key replaced is gone by then: ``x: {~: 1}`` followed
-    by ``x: 2`` is accepted. Only the pairs that survive are walked
-    (:func:`_v2_effective_pairs`), unlike :func:`_null_tagged_non_null`,
-    whose error comes while decoding. A QUOTED ``"null":`` is a string key
-    and is accepted.
+    Kubernetes (sigs.k8s.io/yaml YAMLToJSON) refuses a document whose
+    decoded form has a null map key (``unsupported map key of type:
+    <nil>``) — ``null:``, ``~:``, an empty ``? `` key, one reached through
+    an alias or a ``<<`` merge. Fail-closed: the WHOLE composed graph is
+    walked (:func:`_walk_nodes`), including a value a later duplicate key
+    replaces, which Kubernetes decodes away and then accepts. Telling those
+    apart means reproducing go-yaml's duplicate-key and merge order and its
+    key typing, which this tool does not do. A QUOTED ``"null":`` (or
+    ``!!str null``) is a string key and is accepted.
     """
-    seen = set()
-    stack = [root]
-    while stack:
-        node = stack.pop()
-        if node is None or id(node) in seen:
-            continue
-        seen.add(id(node))
-        if isinstance(node, yaml.MappingNode):
-            pairs: dict = {}
-            _v2_effective_pairs(node, pairs, set())
-            if None in pairs:
-                return True
-            for key, value in pairs.values():
-                stack.extend((key, value))
-        elif isinstance(node, yaml.SequenceNode):
-            stack.extend(node.value)
-    return False
+    return any(isinstance(node, yaml.MappingNode)
+               and any(isinstance(key, yaml.ScalarNode)
+                       and key.tag == _NULL_TAG for key, _v in node.value)
+               for node in _walk_nodes(root))
 
 
 def _walk_nodes(root: Any):
@@ -737,9 +657,12 @@ def render_cr_file(
                   "Kubernetes refuses the document", cr_path, written)
         return EXIT_CALLER_ERROR
     if _has_null_key(root):
-        log.error("%s: a mapping has a null key (null, ~ or an empty key); "
-                  "Kubernetes refuses the document. If the string is meant, "
-                  "quote it (\"null\")", cr_path)
+        log.error("%s: the document has a mapping with a null key (null, "
+                  "~ or an empty key), counting one inside a value a later "
+                  "duplicate key replaces. Kubernetes usually refuses such a "
+                  "document; this tool does not reproduce how duplicate keys "
+                  "override each other, so it always refuses it. If the "
+                  "string is meant, quote it (\"null\")", cr_path)
         return EXIT_CALLER_ERROR
 
     # #2371: shape checks `reconcile_one` does not make. Its

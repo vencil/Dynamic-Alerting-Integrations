@@ -1126,7 +1126,8 @@ class TestRenderCrExporterShapes:
 
 #: #2476: (id, text, spec) — `TestRenderCrNameFormat._render_text` input
 #: whose null mapping key survives go-yaml v2's decode, so Kubernetes
-#: refuses the document. spec None is the class's default `_SPEC`.
+#: refuses the document (each checked against sigs.k8s.io/yaml v1.6.0
+#: YAMLToJSON). spec None is the class's default `_SPEC`.
 NULL_KEY_REFUSED = [
     ("null", "metadata: {name: ok}\n", "spec:\n  tenants: {null: {}}\n"),
     ("tilde", "metadata: {name: ok}\n", "spec:\n  tenants: {~: {}}\n"),
@@ -1151,9 +1152,13 @@ NULL_KEY_REFUSED = [
     ("replaced-by-null-too", "x: {k: {~: 1}, k: {~: 2}}\nmetadata: {name: ok}\n",
      None),
 ]
-#: The same shapes with the null key's value replaced by a later pair
-#: before go-yaml's decode ends: Kubernetes accepts them.
-NULL_KEY_ACCEPTED = [
+#: ⛔ Deliberate fail-closed over-refusal (#2476): the null key sits in a
+#: value a later duplicate key (or a `<<` merge, in go-yaml's order)
+#: replaces, so Kubernetes decodes it away and ACCEPTS these. The tool
+#: refuses them anyway: telling them apart means reproducing go-yaml's
+#: duplicate-key / merge order and key typing, which was tried and does
+#: not converge. If this list ever renders rc 0, that emulation is back.
+NULL_KEY_OVER_REFUSED = [
     ("replaced-duplicate", "metadata: {name: ok}\n",
      "spec:\n  tenants: {null: {}}\n  tenants: {t1: {}}\n"),
     ("replaced-top-level", "x: {~: 1}\nx: 2\nmetadata: {name: ok}\n", None),
@@ -1168,6 +1173,15 @@ NULL_KEY_ACCEPTED = [
     ("octal-spelling", "x: {010: {~: 1}, 8: 2}\nmetadata: {name: ok}\n", None),
     ("v2-bool-spellings", "x: {y: {~: 1}, yes: 2}\nmetadata: {name: ok}\n",
      None),
+]
+#: Keys and values that only LOOK null: Kubernetes accepts them and so
+#: does the tool.
+NULL_KEY_ACCEPTED = [
+    ("quoted-null", "x: {\"null\": 1}\nmetadata: {name: ok}\n", None),
+    ("quoted-tilde", "x: {\"~\": 1}\nmetadata: {name: ok}\n", None),
+    ("str-tagged-null", "x: {!!str null: 1}\nmetadata: {name: ok}\n", None),
+    ("null-value", "x: {k: null, j: ~}\nmetadata: {name: ok}\n", None),
+    ("nUll-is-a-string", "x: {nUll: 1}\nmetadata: {name: ok}\n", None),
 ]
 
 
@@ -1447,7 +1461,8 @@ class TestRenderCrNameFormat:
     def test_deep_nesting_that_reads_names_the_tool_limit_at_render(
             self, tmp_path, caplog):
         """#2476：巢狀深到讀得進來、但 render 時用盡 stack（約 350–480
-        層）時，訊息同樣註明是本工具的上限。
+        層）時，訊息同樣註明是本工具的上限。400 層落在兩個上限之間，
+        依賴 Python 的預設 recursion limit。
 
         會讓本組轉紅的改動：拿掉 render 階段 `RecursionError` 的專屬分支
         （落回 `Failed to render …: maximum recursion depth exceeded`）。
@@ -1471,28 +1486,57 @@ class TestRenderCrNameFormat:
         mapping key 整份拒收（`unsupported map key of type: <nil>`）。
 
         先前 `--render-cr` rc 0 並寫出檔案。會讓本組轉紅的改動：拿掉
-        `_has_null_key` 檢查，或不照 go-yaml v2 的順序展開 `<<` merge。
+        `_has_null_key` 檢查，或只看最後生效的值。
         """
         rc, got = self._render_text(tmp_path, text, spec)
         assert rc == EXIT_CALLER_ERROR
         assert got is None
-        assert "a mapping has a null key" in caplog.text
+        assert "has a mapping with a null key" in caplog.text
+
+    @pytest.mark.parametrize("text, spec", [
+        pytest.param(text, spec, id=case_id)
+        for case_id, text, spec in NULL_KEY_OVER_REFUSED])
+    def test_null_key_in_a_replaced_value_is_refused_fail_closed(
+            self, text, spec, tmp_path, caplog):
+        """#2476：null key 在被後面同名鍵蓋掉的值裡——K8s 接受，本工具
+        刻意 fail-closed 拒收（見 `NULL_KEY_OVER_REFUSED` 的註解）。
+
+        訊息要說明是本工具不模擬覆寫順序，不是「K8s 一定拒收」。會讓本組
+        轉紅的改動：null key 改成模擬 go-yaml 的重複鍵／merge 覆寫。
+        """
+        rc, got = self._render_text(tmp_path, text, spec)
+        assert rc == EXIT_CALLER_ERROR
+        assert got is None
+        assert "does not reproduce how duplicate keys" in caplog.text
 
     @pytest.mark.parametrize("text, spec", [
         pytest.param(text, spec, id=case_id)
         for case_id, text, spec in NULL_KEY_ACCEPTED])
-    def test_null_key_replaced_before_decode_ends_renders(self, text, spec,
-                                                          tmp_path):
-        """#2476：K8s 在 decode 之後才判 null key，被後面同名鍵（含 `<<`
-        merge 依 go-yaml v2 順序）蓋掉的值已經不在，整份接受。
+    def test_key_that_only_looks_null_renders(self, text, spec, tmp_path):
+        """對照組：加引號、`!!str`、`nUll` 的鍵與 null 的值都不是 null key。
 
-        會讓本組轉紅的改動：null key 改回走整份 compose 圖（連被蓋掉的
-        pair 也看），或同鍵判定不照 go-yaml v2 的讀法（`0x1` 與 `1`、`y` 與
-        `yes` 是同一個鍵）。
+        會讓本組轉紅的改動：以原文而不是 tag 判 null（`"null"`、
+        `!!str null` 會被誤擋），或把 null 值也當成 null key。
         """
         rc, got = self._render_text(tmp_path, text, spec)
         assert rc == 0
         assert got is not None
+
+    def test_deep_merge_chain_does_not_traceback(self, tmp_path):
+        """#2476：merge 鏈很深、compose 卻很淺（40 個 anchor，各自包 30 層
+        `<<`）的文件不能 traceback：rc 0 或 rc 2 都可，不能丟例外。
+
+        會讓本組轉紅的改動：在讀檔的 try 之外用遞迴展開 `<<` merge。實測
+        本工具 rc 0（K8s 也接受）；結果依賴預設 recursion limit，所以兩種
+        rc 都接受。
+        """
+        lines = ["a0: &a0 {k: 1}"]
+        for i in range(1, 41):
+            lines.append(f"a{i}: &a{i} " + "{<<: " * 30 + f"*a{i - 1}"
+                         + "}" * 30)
+        rc, _got = self._render_text(
+            tmp_path, "\n".join(lines) + "\nmetadata: {name: ok}\n")
+        assert rc in (0, EXIT_CALLER_ERROR)
 
     def test_mapping_as_key_is_caller_error(self, tmp_path):
         """key 本身是 mapping（內含 null key）：K8s 拒收，本工具讀檔即 rc 2。"""
