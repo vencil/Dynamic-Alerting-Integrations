@@ -225,9 +225,12 @@ enforce=privileged carve-out**（見 `k8s/00-namespaces/namespace-vector.yaml`
 - 換 image 到與 `helm/vector/values.yaml` 的 `image.tag` **同版本**的
   `-distroless-static` 變體（例如 tag 是 `X.Y.Z-distroless-libc` 就用
   `X.Y.Z-distroless-static`；有 `nobody` user），同上需 host 端配合。
+  ⚠️ 只換 image 不會換 UID：chart 預設的 `containerSecurityContext.runAsUser: 0`
+  會蓋過 image 的 `USER`，要一併把 `runAsUser` 設成該 image `nobody` 的 UID，
+  否則 Vector 仍以 root + `DAC_READ_SEARCH` 跑。
   ⚠️ 該 chart 的 `image.digest` 是權威值，只改 `image.tag` 不會換 image——
-  要一併設成新 tag 的 digest 或清空。不要照抄舊文件裡寫死的版本號，那會把
-  Vector 降版。
+  要一併設成新 tag 的 digest。不要清空它：清空後只以 tag 拉 image，失去
+  digest pin（§7.6 T5）。不要照抄舊文件裡寫死的版本號，那會把 Vector 降版。
 
 ### 4.4 升 Vector 版本時的 VRL 編譯爆炸
 
@@ -468,12 +471,12 @@ GitOps self-heal，**不在 chart 內、是部署叢集的責任**：
 
 | # | 殘餘風險 | 目前邊界 |
 |---|---|---|
-| **T2-3** | Vector DaemonSet 以 root + `DAC_READ_SEARCH` 讀整個 node 的 `/var/log/pods` —— 被 RCE 後可讀同 node 上**所有** pod stdout，非僅 gateway | 未縮限;fix shape 是 distroless + `nobody` user + host 端 `/var/log/pods` group-readable 協調，需 host-side 配合 |
+| **T2-3** | Vector DaemonSet 以 root + `DAC_READ_SEARCH` 讀整個 node 的 `/var/log/pods` —— 被 RCE 後可讀同 node 上**所有** pod stdout，非僅 gateway | 未縮限;預設 `runAsUser: 0`，裝在 #1018 PSS privileged carve-out 的 `vector` ns，root + hostPath 是設計內。縮限的兩條路見 §4.3：改非 root UID，或換成與 `image.tag` 同版本的 `-distroless-static` 變體並把 `containerSecurityContext.runAsUser` 設成其 `nobody` UID（只換 image 仍以 root 跑）;兩條都要 host 端把 `/var/log/pods` 設成 group-readable，換 image 時 `image.digest` 要一併設成新 tag 的 digest |
 | **T3-2/3** | `kubectl edit cm` 篡改 chargeback script / Vector VRL（改演算法 under-bill、改路由）**不留 GitOps commit trace** | §7.5.2 的 RBAC + GitOps self-heal 是正解;但在該邊界**未 enforce** 的環境（kind demo、或 GitOps scope 尚未涵蓋平台 Helm chart 者）**無 in-cluster drift detector** —— 疑似竄改須手動 diff live ConfigMap vs chart baseline |
 | **X-2** | 被 RCE 的 Vector 可偽造與真實**無異**的 audit row（timestamp / tenant_id / query 皆可填），SIEM 無法 attest「此 row 真的來自 gateway」 | 無 producer-side 簽章;#568 已預留 schema seam，full chain-of-custody 是 gateway-side 架構改動，待真實 compliance 客戶觸發（屆時開 ADR） |
-| **T5** | chart image 以 tag pin（`timberio/vector:<tag>` 等），非 `@sha256:` digest;upstream registry 被攻陷即拉到惡意 binary | chart-local digest knob 已有（#567），但**無 repo-wide 強制 hook** —— 全域 enforce 屬 platform 供應鏈 backlog，非 #539-specific |
+| **T5** | upstream registry 被攻陷時，沒釘 digest 的 image 或 plugin 會拉到惡意 binary | chart 內的第三方 image 都已釘 `@sha256:` digest（#902 L2;digest 優先於 tag），Renovate 追蹤 digest（#902 L3）。**擋的方式是對帳，不是規則**：拿掉既有 pin 的 digest，`tests/ops/test_nightly_scan_matrix_drift.py`（deploy ref ≠ scan matrix）或 `tests/ops/test_renovate_config.py`（`EXPECTED_DEPNAMES`）會紅;但**沒有**「第三方 image 必須帶 digest」的通用檢查，新增一個只帶 tag 的 image（連 scan matrix 一起加）不會被擋。另外 Grafana 的 `victoriametrics-logs-datasource` plugin（`k8s/03-monitoring/deployment-grafana.yaml` 的 `GF_INSTALL_PLUGINS`）沒指定版本，開機時從 grafana.com 抓 |
 
-> 狀態與 fix shape 以 [#566](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/566) 為 SSOT;本表只列「operator 該知道的殘餘邊界」，不重複 issue 內的 severity / rollout 細節。
+> 狀態與 fix shape 以 [#566](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/566) 為 SSOT，T5 除外：T5 已由 [#902](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/902) 取代（第三方 image 的 digest pin 與 Renovate 追蹤;first-party image 不釘 digest、Grafana plugin 另案，兩者都寫在該 issue 的 out of scope）;本表只列「operator 該知道的殘餘邊界」，不重複 issue 內的 severity / rollout 細節。
 
 ## 8. (b) 租戶淨化投影（ADR-021 Phase 1 / #609）
 
