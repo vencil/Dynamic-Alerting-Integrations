@@ -55,7 +55,11 @@ type PutTenantResponse struct {
 // policy gate: a receiver type the tenant's domain may not use stays a 403
 // whatever its fields. It is this handler's, not the Writer's, so writes that
 // change only another part of the file (custom alerts, batch) are not refused
-// over a receiver already on disk.
+// over a receiver already on disk. #2431: the same check refuses a
+// `routes[i].match` value or `overrides[i].alertname` / `metric_group` the
+// body writes that the route generator's PyYAML does not read as a string
+// (routingpolicy.ValuesNotString) — only what the body writes, never a value
+// inherited from `_routing_defaults` or a routing profile.
 //
 // v2.6.0 Phase C: PR-based write-back (ADR-011) — when writeMode is PR,
 // creates a feature branch and PR/MR instead of direct commit.
@@ -71,7 +75,7 @@ type PutTenantResponse struct {
 // @Param       X-DA-Write-Source header string false "Attribute the PR to a non-UI write source. Allowlisted: threshold-governance (#656). Omit for tenant-manager UI."
 // @Param       X-DA-Base-Hash header string false "Optimistic concurrency: the source_hash GET /tenants/{id} returned for the file this body was derived from. 409 if the file changed since. 16 lowercase hex chars; a malformed value is a 400, never ignored. Direct write-back mode only (501 in PR mode)."
 // @Success     200   {object} PutTenantResponse
-// @Failure     400   {object} ErrorResponse "Bad request. A receiver the body writes in _routing (receiver, overrides[].receiver, routes[].receiver) that Alertmanager could not load or the route generator would skip is code INVALID_BODY with one violations[] entry per problem (#2295; nothing written). Also 400 when the current tenant file cannot be parsed and the caller lacks write permission on all tenants (#2405; nothing written)"
+// @Failure     400   {object} ErrorResponse "Bad request. A receiver the body writes in _routing (receiver, overrides[].receiver, routes[].receiver) that Alertmanager could not load or the route generator would skip is code INVALID_BODY with one violations[] entry per problem (#2295; nothing written); so is a routes[].match value or overrides[].alertname / metric_group the body writes that the route generator does not read as a string, e.g. unquoted yes, 1:30 or ~ (#2431; quote it). Also 400 when the current tenant file cannot be parsed and the caller lacks write permission on all tenants (#2405; nothing written)"
 // @Failure     403   {object} ErrorResponse
 // @Failure     409   {object} ErrorResponse "Conflict: base hash mismatch, pending PR, ambiguous tenant file, or the tenant is already declared by another conf.d file (code TENANT_DECLARED_ELSEWHERE; nothing written)"
 // @Failure     500   {object} ErrorResponse

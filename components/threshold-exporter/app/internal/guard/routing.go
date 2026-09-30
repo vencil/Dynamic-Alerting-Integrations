@@ -83,6 +83,12 @@ package guard
 //     profile, which the generator never renders — the tenant layer
 //     cmd/da-guard resolves is the tenant file's plus the root platform
 //     overlay's, never the effective config.
+// 10. A matcher value that is not a string (error, #2431,
+//     routing_value_not_string): `routes[i].match.<label>` or
+//     `overrides[i].alertname` / `metric_group` as the generator's PyYAML
+//     reads it (cmd/da-guard hands over the routing with those values
+//     re-read, routingpolicy.WithPyYAMLRouting) — the generator's --strict
+//     ERROR, one predicate: routingpolicy.ValuesNotString.
 //
 // Why these and not more:
 //   - Field-by-field receiver validation against type-specific
@@ -167,8 +173,26 @@ func checkRoutingGuardrails(input CheckInput) []Finding {
 			continue
 		}
 		out = append(out, checkOneTenantRouting(tenantID, routing)...)
+		out = append(out, checkValuesNotString(tenantID, routing)...)
 		out = append(out, checkDomainPolicies(tenantID, routing, input.DomainPolicies, input.RoutingProvenance[tenantID])...)
 		out = append(out, checkCriticalEscalation(tenantID, routing, input.DomainPolicies)...)
+	}
+	return out
+}
+
+// checkValuesNotString reports each matcher value of the resolved routing
+// the route generator's PyYAML does not read as a string (#2431,
+// routingpolicy.ValuesNotString — the generator's --strict ERROR).
+func checkValuesNotString(tenantID string, routing map[string]any) []Finding {
+	var out []Finding
+	for _, v := range routingpolicy.ValuesNotString(routing) {
+		out = append(out, Finding{
+			Severity: SeverityError,
+			Kind:     FindingRoutingValueNotString,
+			TenantID: tenantID,
+			Field:    v.Field,
+			Message:  fmt.Sprintf("tenant %q: %s", tenantID, v.Message()),
+		})
 	}
 	return out
 }

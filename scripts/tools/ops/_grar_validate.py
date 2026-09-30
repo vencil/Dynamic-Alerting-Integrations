@@ -1323,7 +1323,10 @@ ROUTE_ENTRY_KEYS = frozenset({"match", "receiver", "group_by", "group_wait",
 
 # Prometheus / Alertmanager classic label-name grammar — the same pattern as
 # the schema's `routingRoute.match.propertyNames`.
-_LABEL_NAME_RE = re.compile(r"^[a-zA-Z_][a-zA-Z0-9_]*$")
+# fullmatch, never match(): `$` also matches before a final "\n", so
+# match() took "team\n" for a label name that Go's labelNameRE refuses
+# (#2431 review F2).
+_LABEL_NAME_RE = re.compile(r"[a-zA-Z_][a-zA-Z0-9_]*")
 
 
 def _quote_matcher_value(value: str) -> str:
@@ -1370,7 +1373,7 @@ def route_entry_matchers(entry: object, idx: int,
                       "of the tenant), skipping"]
     matchers = []
     for label, value in match.items():
-        if not isinstance(label, str) or not _LABEL_NAME_RE.match(label):
+        if not isinstance(label, str) or not _LABEL_NAME_RE.fullmatch(label):
             return None, [f"  WARN: {ctx}: match label {label!r} is not a "
                           "valid label name, skipping"]
         if not isinstance(value, str):
@@ -1386,6 +1389,65 @@ def route_entry_matchers(entry: object, idx: int,
                           "label), skipping"]
         matchers.append(f"{label}={_quote_matcher_value(value)}")
     return matchers, []
+
+
+# #2431: the override keys the generator formats into the override route's
+# matcher (``_grar_routes._build_override_matchers``).
+OVERRIDE_MATCHER_KEYS = ("alertname", "metric_group")
+
+
+def routing_values_not_string(routing_config: object) -> list[tuple[str, object]]:
+    """``(field, value)`` per matcher value that is not a YAML string (#2431).
+
+    ⛔ THE predicate for the values the generator formats into a matcher and
+    so needs as text: ``overrides[i].alertname`` / ``metric_group`` when the
+    key is written (null included) and the value of every label-named key of
+    a ``routes[i].match`` mapping (a key that is no label name makes the
+    entry skipped by ``route_entry_matchers``; its value is not judged). An
+    unquoted YAML 1.1 word is not text to PyYAML — ``yes`` is
+    True, ``1:30`` is 90, ``2001-12-15`` a date, ``~`` None — and yaml.v3
+    (da-guard, tenant-api) reads the same bytes as strings, so the author's
+    intent is ambiguous: ``--strict`` refuses it and asks for quotes. The Go
+    copy is ``routingpolicy.ValuesNotString``; the parity matrix pins both.
+
+    ``field`` is the path in the routing (``routes[0].match.team``,
+    ``overrides[1].alertname``). Order: overrides, then routes, each in list
+    order, match labels in source order.
+    """
+    out: list[tuple[str, object]] = []
+    if not isinstance(routing_config, dict):
+        return out
+    overrides = routing_config.get("overrides")
+    if isinstance(overrides, list):
+        for idx, override in enumerate(overrides):
+            if not isinstance(override, dict):
+                continue
+            for key in OVERRIDE_MATCHER_KEYS:
+                if key in override and not isinstance(override[key], str):
+                    out.append((f"overrides[{idx}].{key}", override[key]))
+    routes = routing_config.get("routes")
+    if isinstance(routes, list):
+        for idx, entry in enumerate(routes):
+            match = entry.get("match") if isinstance(entry, dict) else None
+            if not isinstance(match, dict):
+                continue
+            for label, value in match.items():
+                # A key that is no label name makes route_entry_matchers
+                # skip the entry (its own WARN); its value is not judged
+                # (#2431 review F1).
+                if not (isinstance(label, str) and _LABEL_NAME_RE.fullmatch(label)):
+                    continue
+                if not isinstance(value, str):
+                    out.append((f"routes[{idx}].match.{label}", value))
+    return out
+
+
+def value_not_string_message(tenant: str, field: str, value: object) -> str:
+    """The ``--strict`` refusal for one ``routing_values_not_string`` entry."""
+    key = field.rsplit(".", 1)[-1]
+    return (f"tenant '{tenant}': {field} must be a string, got "
+            f"{type(value).__name__} {value!r} — quote it in YAML (e.g. "
+            f"{key}: \"...\") so the route generator reads it as text")
 
 
 # Keys an override route inherits from the tenant's main route when it does
