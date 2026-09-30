@@ -1784,6 +1784,15 @@ class TestUnparseableDefaults:
         "tagged-int": b"defaults:\n  x: !!int foo\n",
         "tagged-float": b"defaults:\n  x: !!float foo\n",
         "tagged-bool": b"defaults:\n  x: !!bool foo\n",
+        # #2459: parses, but yaml.v3 refuses it — PyYAML read True / b"".
+        "tagged-bool-yes": b"defaults:\n  x: !!bool yes\n",
+        "tagged-bool-mixed-case": b"defaults:\n  x: !!bool tRuE\n",
+        "tagged-binary-bad-chars": b'defaults:\n  x: !!binary "%%%"\n',
+        "tagged-binary-unpadded": b'defaults:\n  x: !!binary "aGVsbG8"\n',
+        # #2459: parses, but `defaults:` is not a mapping — an
+        # AttributeError traceback before.
+        "defaults-list": b"defaults: [1, 2]\n",
+        "defaults-scalar": b"defaults: 5\n",
     }
     MODES = {
         "tenant": ["tr"],
@@ -1842,3 +1851,88 @@ class TestUnparseableDefaults:
         assert res.returncode == 0, res.stderr
         assert set(json.loads(res.stdout)) == {"ts"}
         assert "WARNING: skipped" in res.stderr and "tr.yaml" in res.stderr
+
+
+class TestDefaultsDocumentParity:
+    """#2459: `_defaults.yaml` documents the exporter DOES serve, described
+    with its merged_hash. Every `go_hash` below is ResolveEffective's
+    MergedHash for the same two-file tree (`_defaults.yaml` + `tx.yaml`),
+    measured with a scratch Go program built against
+    components/threshold-exporter/app (`config.LoadDir` +
+    `config.ResolveEffective`); the flat load served the same values.
+
+    Fails when `_load_yaml` reads the whole stream again (the multi-document
+    rows: "does not parse", rc 2), when it stops tolerating a null or
+    non-mapping document (AttributeError), or when the chain stops taking
+    Go's `extractDefaultsBlock` (the `defaults: ~` + sibling row)."""
+
+    TENANT = 'tenants:\n  tx:\n    redis_memory: "50"\n'
+    WITH_80 = "664e2553d242d345"   # defaults {mysql_connections: 80}
+    NOTHING = "dc8202dfc4683b17"   # no defaults at all
+
+    CASES = {
+        # must-trigger control: the plain shape, same hash as Go.
+        "control": ("defaults:\n  mysql_connections: 80\n", WITH_80),
+        # yaml.v3 Unmarshal decodes the FIRST document only; a later one
+        # is never read, even when it would not parse or has a bad shape.
+        "multi-doc": ("defaults:\n  mysql_connections: 80\n---\n"
+                      "defaults:\n  mysql_connections: 90\n", WITH_80),
+        "multi-doc-later-unparseable": (
+            "defaults:\n  mysql_connections: 80\n---\n: : [\n", WITH_80),
+        "multi-doc-later-bad-shape": (
+            "defaults:\n  mysql_connections: 80\n---\ndefaults: [1]\n", WITH_80),
+        "multi-doc-empty-first": ("---\n---\ndefaults:\n  mysql_connections: 80\n",
+                                  NOTHING),
+        # null is no defaults block; the rest of the document is (Go's
+        # extractDefaultsBlock), and the null key itself merges away.
+        "defaults-null": ("defaults: ~\n", NOTHING),
+        "defaults-null-with-sibling": ("defaults: ~\nmysql_connections: 80\n", WITH_80),
+        # an explicit tag yaml.v3 accepts keeps loading.
+        "tagged-bool-true": ("defaults:\n  mysql_connections: 80\n  x: !!bool TRUE\n",
+                             "01fde994832c3568"),
+        "tagged-bool-quoted": ('defaults:\n  mysql_connections: 80\n  x: !!bool "true"\n',
+                               "01fde994832c3568"),
+        "tagged-binary-block": ("defaults:\n  mysql_connections: 80\n"
+                                "  x: !!binary |\n    aGVs\n    bG8=\n", "0ee9af955f7e7e01"),
+    }
+    # Not a mapping: the merge skips the document and the flat load drops
+    # the file, so neither takes anything from it.
+    NOT_A_MAPPING = {"list": "- 1\n- 2\n", "scalar": "hello\n", "false": "false\n"}
+
+    def _hash(self, tmp_path, body):
+        conf_d = tmp_path / "conf.d"
+        conf_d.mkdir()
+        (conf_d / "_defaults.yaml").write_text(body, encoding="utf-8")
+        (conf_d / "tx.yaml").write_text(self.TENANT, encoding="utf-8")
+        return dt.ConfDScanner(conf_d).source_info("tx")["merged_hash"][:16]
+
+    @pytest.mark.parametrize("case", sorted(CASES))
+    def test_merged_hash_matches_the_exporter(self, tmp_path, case):
+        body, go_hash = self.CASES[case]
+        assert self._hash(tmp_path, body) == go_hash
+
+    @pytest.mark.parametrize("case", sorted(NOT_A_MAPPING))
+    def test_a_document_that_is_not_a_mapping_supplies_nothing(self, tmp_path, capsys, case):
+        assert self._hash(tmp_path, self.NOT_A_MAPPING[case]) == self.NOTHING
+        err = capsys.readouterr().err
+        assert "_defaults.yaml supplies no defaults" in err, err
+
+    def test_multi_document_what_if_reads_its_first_document(self, tmp_path):
+        """The `--what-if` file stands in for a `_defaults.yaml`, so it is
+        read the same way: its first document. Refused with rc 2 before."""
+        conf_d = tmp_path / "conf.d"
+        conf_d.mkdir()
+        (conf_d / "_defaults.yaml").write_text("defaults:\n  mysql_connections: 80\n",
+                                               encoding="utf-8")
+        (conf_d / "tx.yaml").write_text(self.TENANT, encoding="utf-8")
+        what_if = tmp_path / "what-if.yaml"
+        what_if.write_text("defaults:\n  mysql_connections: 90\n---\n: : [\n",
+                           encoding="utf-8")
+        res = subprocess.run(
+            [sys.executable, TestUnparseableDefaults.DESCRIBE, "tx", "--conf-d",
+             str(conf_d), "--what-if", str(what_if)],
+            capture_output=True, text=True, encoding="utf-8", timeout=20)
+        assert res.returncode == 0, res.stderr
+        out = json.loads(res.stdout)
+        assert out["changed_keys"] == {
+            "mysql_connections": {"baseline": 80, "what_if": 90}}
