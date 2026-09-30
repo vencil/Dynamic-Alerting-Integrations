@@ -501,12 +501,13 @@ func dropShadowedSpellings(m map[string]any) map[string]any {
 // noteSpellingWriters records, for every key of chain level i that has
 // another spelling (touchesAlias), that level i wrote it — the last write
 // wins, so after the fold each entry is the deepest level writing that
-// spelling. A null writes nothing (deepMerge keeps the base value on a
-// threshold key). w stays nil until an aliased key is seen: the steady state
+// spelling. "Wrote" is levelWritesSpelling, the predicate the /metrics
+// overlay (applySubtreeDefaults) uses too: a null or a non-threshold value
+// writes nothing. w stays nil until an aliased key is seen: the steady state
 // allocates nothing.
 func noteSpellingWriters(w map[string]int, i int, block map[string]any) map[string]int {
-	for k, v := range block {
-		if v == nil || !touchesAlias(k) {
+	for k := range block {
+		if !touchesAlias(k) || !levelWritesSpelling(block, k) {
 			continue
 		}
 		if w == nil {

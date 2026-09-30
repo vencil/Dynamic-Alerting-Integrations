@@ -180,7 +180,7 @@ func applySubtreeDefaults(
 					if _, mine := inherited[s]; !mine {
 						continue
 					}
-					if _, same := level[s]; same {
+					if levelWritesSpelling(level, s) {
 						continue
 					}
 					delete(overrides, s)
@@ -196,6 +196,27 @@ func applySubtreeDefaults(
 		}
 	}
 	return filled, unreachableKeys(unreachable)
+}
+
+// levelWritesSpelling reports whether one defaults level WRITES spelling s:
+// present, not null, and threshold-shaped — the values this overlay would
+// hand down. It is the one definition both planes use for "this level wrote
+// that spelling": the overlay above (a spelling the same level writes is not
+// displaced) and the walker's MergedDefaults fold (noteSpellingWriters).
+//
+// ⛔ ONE PREDICATE, NOT TWO. The first version asked `level[s]` here and
+// skipped only nil in the walker, so a level writing the canonical spelling
+// as null beside a legacy value counted as "writes both" on /metrics (the
+// shallower canonical value survived and won the canonical-wins dedup) but
+// as "writes only the legacy one" in the guard — which then advised
+// deleting a tenant key whose removal moved /metrics. (#2414 round 2.)
+func levelWritesSpelling(level map[string]any, s string) bool {
+	raw, ok := level[s]
+	if !ok || raw == nil {
+		return false
+	}
+	sv, ok := scheduledValueFromRaw(raw)
+	return ok && isThresholdShaped(sv)
 }
 
 // tenantAuthoredThreshold reports whether the tenant's own map (overrides
