@@ -281,7 +281,11 @@ func (r *effectiveResolver) resolve(tenantID string) (*EffectiveConfig, error) {
 
 	chain := r.chain(filepath.Dir(tenantFile))
 	defaultsYAML := make([][]byte, 0, len(chain))
-	for _, p := range chain {
+	rootLevel := -1 // #2419: the root's `_defaults.yaml`, by path (see applySubtreeDefaults)
+	for i, p := range chain {
+		if filepath.Dir(filepath.Clean(p)) == r.scan.AbsRoot {
+			rootLevel = i
+		}
 		b, berr := r.bytesOf(p)
 		if berr != nil {
 			return nil, fmt.Errorf("read defaults %q: %w", p, berr)
@@ -290,7 +294,7 @@ func (r *effectiveResolver) resolve(tenantID string) (*EffectiveConfig, error) {
 	}
 
 	overlay := PlatformOverlayFor(r.platformTenants(), tenantID)
-	parts, err := computeEffectiveConfigDocDetailed(r.tenantDoc(tenantFile, tenantBytes), tenantID, defaultsYAML, overlay, r.platformProfiles())
+	parts, err := computeEffectiveConfigDocAt(r.tenantDoc(tenantFile, tenantBytes), tenantID, defaultsYAML, overlay, r.platformProfiles(), rootLevel)
 	if err != nil {
 		// #2123: name the file whose bytes the decode rejected, so a caller
 		// can tell "this file is broken" from any other resolve failure
@@ -391,6 +395,11 @@ func computeEffectiveConfigBytesDetailed(
 // computeEffectiveConfigDocDetailed is computeEffectiveConfigBytesDetailed
 // over a tenant file already parsed by ParseTenantDoc (#2153) — the one
 // implementation: the byte form above only parses and calls it.
+//
+// It does not know which chain entry is the conf.d root's `_defaults.yaml`,
+// so its mergedDefaults keeps a root-only dimensional key (see
+// computeEffectiveConfigDocAt); only ResolveEffective, which knows the
+// chain's paths, hands da-guard a mergedDefaults without it.
 func computeEffectiveConfigDocDetailed(
 	tenantDoc *TenantDoc,
 	tenantID string,
@@ -398,11 +407,36 @@ func computeEffectiveConfigDocDetailed(
 	overlay []PlatformBlock,
 	profiles *PlatformProfiles,
 ) (effectiveParts, error) {
+	return computeEffectiveConfigDocAt(tenantDoc, tenantID, defaultsChainYAML, overlay, profiles, -1)
+}
+
+// computeEffectiveConfigDocAt is computeEffectiveConfigDocDetailed with
+// rootLevel: the index in defaultsChainYAML of the conf.d root's own
+// `_defaults.yaml`, or -1 when the chain has none or the caller does not
+// know. The merged config does not depend on it; only mergedDefaults does.
+//
+// ⛔ #2419: a dimensional key (`mysql_connections{env="prod"}`) that only
+// the root level writes is no fallback. On /metrics the root's defaults go
+// to cfg.Defaults, where resolveBaseRows serves the key as its own row
+// (metric `connections{env="prod"}`, no labels), while the labelled series
+// comes only from the tenant's override map (resolveDimensionalRows) — which
+// a SUBTREE level fills (applySubtreeDefaults) and the root level does not.
+// Measured before the fix: root and tenant both at 30, da-guard called the
+// tenant's key redundant, and deleting it removed the `env="prod"` series.
+func computeEffectiveConfigDocAt(
+	tenantDoc *TenantDoc,
+	tenantID string,
+	defaultsChainYAML [][]byte,
+	overlay []PlatformBlock,
+	profiles *PlatformProfiles,
+	rootLevel int,
+) (effectiveParts, error) {
 	// Parse-and-fold one file at a time (no []ChainDefaults: this is the
 	// debounced path's per-tenant call, and a slice per call was +1 alloc
 	// per re-merged tenant). A file after a broken one is never parsed.
 	var err error
-	var writers map[string]int // #2414: deepest chain level per aliased spelling
+	var writers map[string]int      // #2414: deepest chain level per aliased spelling
+	var subtreeDims map[string]bool // #2419: dimensional keys a non-root level writes
 	merged := make(map[string]any)
 	for i, defBytes := range defaultsChainYAML {
 		pd := ParseChainDefaults(defBytes)
@@ -410,6 +444,9 @@ func computeEffectiveConfigDocDetailed(
 			return effectiveParts{}, err
 		}
 		writers = noteSpellingWriters(writers, i, pd.block)
+		if rootLevel >= 0 && i != rootLevel {
+			subtreeDims = noteDimensionalWriters(subtreeDims, pd.block)
+		}
 	}
 
 	chain := merged
@@ -449,7 +486,13 @@ func computeEffectiveConfigDocDetailed(
 	// per threshold too (#2414, dropShallowerSpellings): /metrics hands a
 	// subtree level's value down over any other spelling a shallower level
 	// set, so that shallower spelling is no fallback either.
-	chainD := dropShadowedSpellings(dropShallowerSpellings(chain, writers))
+	//
+	// And a dimensional key only the root level writes is dropped (#2419,
+	// dropRootOnlyDimensional): no labelled series falls back to it. The
+	// platform entry and the profile layered on below DO reach the tenant's
+	// override map, so a dimensional key they write stays a fallback.
+	chainD := dropRootOnlyDimensional(
+		dropShadowedSpellings(dropShallowerSpellings(chain, writers)), rootLevel, subtreeDims)
 	switch {
 	case pr == nil && pi == nil:
 		p.mergedDefaults = deepCopyMap(chainD)
@@ -483,6 +526,57 @@ func dropShadowedSpellings(m map[string]any) map[string]any {
 			if _, both := m[canon]; both {
 				drop = append(drop, k)
 			}
+		}
+	}
+	if len(drop) == 0 {
+		return m
+	}
+	out := make(map[string]any, len(m))
+	for k, v := range m {
+		out[k] = v
+	}
+	for _, k := range drop {
+		delete(out, k)
+	}
+	return out
+}
+
+// isDimensionalKey is resolveDimensionalRows' entry condition (the same one
+// keyBypassesTheDeclaredSurface mirrors): a key with a label segment that no
+// reserved-key resolver claims first.
+func isDimensionalKey(k string) bool {
+	return strings.Contains(k, "{") && !reservedShapeWins(k)
+}
+
+// noteDimensionalWriters records the dimensional keys one non-root chain
+// level writes — "writes" being levelWritesSpelling, the predicate
+// applySubtreeDefaults uses to decide what it hands the tenant's override
+// map. s stays nil until one is seen.
+func noteDimensionalWriters(s map[string]bool, block map[string]any) map[string]bool {
+	for k := range block {
+		if !isDimensionalKey(k) || !levelWritesSpelling(block, k) {
+			continue
+		}
+		if s == nil {
+			s = make(map[string]bool)
+		}
+		s[k] = true
+	}
+	return s
+}
+
+// dropRootOnlyDimensional is the merged chain without the dimensional keys
+// no non-root level writes (#2419; see computeEffectiveConfigDocAt). With
+// rootLevel < 0 nothing is dropped. Returns m itself when nothing is
+// dropped.
+func dropRootOnlyDimensional(m map[string]any, rootLevel int, subtreeWrites map[string]bool) map[string]any {
+	if rootLevel < 0 {
+		return m
+	}
+	var drop []string
+	for k := range m {
+		if isDimensionalKey(k) && !subtreeWrites[k] {
+			drop = append(drop, k)
 		}
 	}
 	if len(drop) == 0 {
