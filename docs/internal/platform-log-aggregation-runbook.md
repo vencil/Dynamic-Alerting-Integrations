@@ -222,8 +222,12 @@ enforce=privileged carve-out**（見 `k8s/00-namespaces/namespace-vector.yaml`
 
 - 切到 `--set containerSecurityContext.runAsUser=472` 並讓 host 把
   `/var/log/pods` group-readable，或
-- 換 image 到 `timberio/vector:0.55.0-distroless-static`（有 `nobody`
-  user），同上需 host 端配合。
+- 換 image 到與 `helm/vector/values.yaml` 的 `image.tag` **同版本**的
+  `-distroless-static` 變體（例如 tag 是 `X.Y.Z-distroless-libc` 就用
+  `X.Y.Z-distroless-static`；有 `nobody` user），同上需 host 端配合。
+  ⚠️ 該 chart 的 `image.digest` 是權威值，只改 `image.tag` 不會換 image——
+  要一併設成新 tag 的 digest 或清空。不要照抄舊文件裡寫死的版本號，那會把
+  Vector 降版。
 
 ### 4.4 升 Vector 版本時的 VRL 編譯爆炸
 
@@ -467,7 +471,7 @@ GitOps self-heal，**不在 chart 內、是部署叢集的責任**：
 | **T2-3** | Vector DaemonSet 以 root + `DAC_READ_SEARCH` 讀整個 node 的 `/var/log/pods` —— 被 RCE 後可讀同 node 上**所有** pod stdout，非僅 gateway | 未縮限;fix shape 是 distroless + `nobody` user + host 端 `/var/log/pods` group-readable 協調，需 host-side 配合 |
 | **T3-2/3** | `kubectl edit cm` 篡改 chargeback script / Vector VRL（改演算法 under-bill、改路由）**不留 GitOps commit trace** | §7.5.2 的 RBAC + GitOps self-heal 是正解;但在該邊界**未 enforce** 的環境（kind demo、或 GitOps scope 尚未涵蓋平台 Helm chart 者）**無 in-cluster drift detector** —— 疑似竄改須手動 diff live ConfigMap vs chart baseline |
 | **X-2** | 被 RCE 的 Vector 可偽造與真實**無異**的 audit row（timestamp / tenant_id / query 皆可填），SIEM 無法 attest「此 row 真的來自 gateway」 | 無 producer-side 簽章;#568 已預留 schema seam，full chain-of-custody 是 gateway-side 架構改動，待真實 compliance 客戶觸發（屆時開 ADR） |
-| **T5** | chart image 以 tag pin（`timberio/vector:0.55.0-…` 等），非 `@sha256:` digest;upstream registry 被攻陷即拉到惡意 binary | chart-local digest knob 已有（#567），但**無 repo-wide 強制 hook** —— 全域 enforce 屬 platform 供應鏈 backlog，非 #539-specific |
+| **T5** | chart image 以 tag pin（`timberio/vector:<tag>` 等），非 `@sha256:` digest;upstream registry 被攻陷即拉到惡意 binary | chart-local digest knob 已有（#567），但**無 repo-wide 強制 hook** —— 全域 enforce 屬 platform 供應鏈 backlog，非 #539-specific |
 
 > 狀態與 fix shape 以 [#566](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/566) 為 SSOT;本表只列「operator 該知道的殘餘邊界」，不重複 issue 內的 severity / rollout 細節。
 
