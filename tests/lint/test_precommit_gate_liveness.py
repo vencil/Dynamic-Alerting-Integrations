@@ -19,7 +19,9 @@ scratch git repo holding a copy of the tracked tree, it runs the real
     report ``Passed`` — ``Skipped`` means the checking path never ran.
 
 Each hook is checked against ONE violation shape; other rule branches of the
-same gate are not covered here (see #1984 for the measured boundary).
+same gate are not covered here (see #1984 for the measured boundary). The
+exception is ``open-encoding-audit``, which carries two rule families with
+separate scan roots (encoding=, and newline= since #1366): one case each.
 
 If pre-commit cannot build a hook's environment (it exits 3, e.g. offline
 with a cold cache), the case fails as UNMEASURED rather than as a dead gate.
@@ -145,6 +147,14 @@ CASES = [
                           "def f(p):\n    return open(p).read()\n"),
          lambda r: _write(r, "scripts/tools/zz_liveness_probe_enc.py",
                           'def f(p):\n    return open(p, encoding="utf-8").read()\n')),
+    # Same hook, second rule family (#1366): the line-ending rule runs over its
+    # own --line-ending-root trees. Planted under helm/ — a tree only that rule
+    # scans — so the case also proves `files:` selects it.
+    Case("open-encoding-audit",
+         lambda r: _write(r, "helm/zz_liveness_probe_nl.py",
+                          'def f(p, s):\n    p.write_text(s, encoding="utf-8")\n'),
+         lambda r: _write(r, "helm/zz_liveness_probe_nl.py",
+                          'def f(p, s):\n    p.write_text(s, encoding="utf-8", newline="\\n")\n')),
     Case("aria-references-check",
          lambda r: _write(r, _ARIA_PROBE, '<p aria-describedby="zz-probe-missing">x</p>\n'),
          lambda r: _write(r, _ARIA_PROBE,

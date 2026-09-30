@@ -22,66 +22,64 @@ text layer 會把寫出的每個 `\\n` 轉成 `os.linesep`。
 ⚠️ 早期版本還宣稱這會「打壞斷言檔案被還原成 byte-identical 的 mutation
 harness」——**那個危害在本 repo 不存在**：`tests/shared/_mutation_pilot.py`
 讀寫兩端都用 `newline=""`，還原是逐位元組的。已刪除該理由，不要再寫回去。
-真正的危害是上面那兩條，加上下面兩個**實測會壞**的具體站點（寫進 commit
+真正的危害是上面那兩條，加上兩個**實測會壞**的具體站點（寫進 commit
 object 的 message、以及 git hook 的 shebang 行）。
 
-⛔ 第 3 點決定了這個檔案為什麼分兩層
-====================================
+⛔ 第 3 點決定了閘門的形狀
+==========================
 CPython 的 CRLF 轉換寫死在 `TextIOWrapper` 的**編譯期 `#ifdef MS_WINDOWS`**，
 不是執行期查 `os.linesep`。實測：在 Windows 上 monkeypatch
 `os.linesep = "\\n"` 之後，`write_text` **照樣**寫出 `b"x\\r\\ny\\r\\n"`。
 
 ⇒ 在 Linux CI 上，**有 bug 的版本不可能產生 CRLF**。任何「跑一次 sync path、
-斷言輸出 bytes 沒有 `\\r\\n`」的行為測試，在 CI 裡都是**恆綠**的。
+斷言輸出 bytes 沒有 `\\r\\n`」的行為測試，在 CI 裡都是**恆綠**的。真正的閘門
+只能是 static AST 規則。
 
-所以本檔分兩層，兩層的職責不同、不可互相取代：
+閘門在哪（#1366 / TRK-358 起）
+=============================
+static 規則**本身**住在 pre-commit hook `open-encoding-audit`
+（`scripts/tools/lint/check_open_encoding.py` 的 line-ending 規則，
+`--strict-line-ending` ⇒ commit 當下擋）。偵測邏輯只有那一份；本檔不再
+自帶第二份判定器。本檔留下的是 hook 給不了的東西：
 
-* `TestWriteSitesPinNewline` — static AST guard。**跨平台都會紅**，
-  這才是真正的閘門，也是唯一能在 CI 擋下復發的東西。
-* `TestSyncCountsEmitsLF` — 端到端行為測試。跑真正的
-  `apply_count_updates()` 寫檔路徑，但**只在 Windows host 上具鑑別力**。
+* `TestGuardDetectsKnownViolations` — 正反例樣本對 **hook 的實作**跑，證明
+  偵測器活著。⛔ 不可刪：沒有它，偵測器可以整個回傳空 list 而全綠。
+* `TestHookScope` — 讀 `.pre-commit-config.yaml` 的 hook `entry`，釘住
+  「範圍不得被無聲收窄、行尾規則必須是 FATAL」；另有**一支**全樹掃描，是這條
+  規則在 CI 的唯一執行點——CI 的 Lint job 逐名跑 hook，而 `open-encoding-audit`
+  不在那份名單裡，拿掉它，CI 就再也看不到這條規則。
+* `TestSharedWriteHelpersPinLF` — 共用 helper 內部帶 ignore marker，static
+  規則對它是盲的；這層直接驗 bytes。
+* `TestSyncCountsEmitsLF` — 端到端行為測試，**只在 Windows host 上具鑑別力**。
 
-⚠️ 如果你打算精簡這個檔案：拿掉 static guard、只留行為測試，等於在 CI 裡留下
-一個永遠不會紅的守衛。要動之前請先讀懂上面這段。
+⚠️ 如果你打算精簡這個檔案：拿掉 `TestHookScope` 的全樹掃描、只留行為測試，
+等於在 CI 裡留下一個永遠不會紅的守衛。要動之前請先讀懂上面這段。
 """
 from __future__ import annotations
 
-import ast
 import inspect
 import re
+import shlex
 from pathlib import Path
 
 import pytest
+import yaml
 
 import bump_docs  # noqa: E402  (sys.path wired by tests/conftest.py)
+import check_open_encoding as hook  # noqa: E402  (scripts/tools/lint on sys.path)
 
 REPO_ROOT = Path(bump_docs.__file__).resolve().parent.parent.parent.parent
+HOOK_ID = "open-encoding-audit"
 
-# ── 守衛涵蓋範圍 ────────────────────────────────────────────────────────
-# 整棵 scripts/ ——「每個工具寫檔前都要對行尾表態」是可推導的邊界，比列舉
-# 目錄好：新增子目錄會自動納入，不需要有人記得回來改這張表。
-#
-# 這裡不會誤傷**合法**需要非 LF 的用法：規則只要求「明確表態」，不要求值
-# 一定是 LF。csv 模組要求的 `newline=""`（`run_chaos_soak.py`）與
-# `_federation_revocation_reconciler.py` 讀取端明文標註 load-bearing 的
-# `newline=""` 都照常通過。被擋的只有「沒表態」與「明確要平台預設
-# （`newline=None`）」兩種。
+# ⛔ 獨立於 hook `entry` 的硬編清單，用來釘住「範圍不得被無聲收窄」。
+# 必須寫死：拿 entry 自己去檢查自己，等於範圍縮小、斷言也跟著縮小。
+# `scripts/dx` 明確列入 —— `tests/dx/test_generate_adr_index.py` 記載 PR #477
+# 的 CRLF 回歸就出在那兩支 generator，是這條規則的起源現場。
 #
 # 範圍＝**所有會出貨或在生產跑的 Python**：`scripts/`（工具與 hook）、
 # `components/`（打包進映像的 CLI）、`helm/`（init-container 內跑的腳本）。
-# ⛔ 刻意**不含 `tests/`**（實測 1348 個 site）。理由是它們寫的是 tmp fixture、
-# 不是出貨產物，行尾不影響任何消費者；把它們拉進來只會製造一次性的大掃除與
-# 之後每支新測試的摩擦。這是刻意的邊界、不是漏掉——真要納入請先評估那 1348 個。
-GOVERNED_PATHS = [
-    REPO_ROOT / "scripts",
-    REPO_ROOT / "components",
-    REPO_ROOT / "helm",
-]
-
-# ⛔ 獨立於 `GOVERNED_PATHS` 的硬編清單，用來釘住「範圍不得被無聲收窄」。
-# 必須寫死：拿 GOVERNED_PATHS 自己去檢查自己，等於變數縮小、斷言也跟著縮小。
-# `scripts/dx` 明確列入 —— `tests/dx/test_generate_adr_index.py` 記載 PR #477
-# 的 CRLF 回歸就出在那兩支 generator，是這條規則的起源現場。
+# ⛔ 刻意**不含 `tests/`**（#1363 時實測 1348 個 site）。理由是它們寫的是 tmp
+# fixture、不是出貨產物，行尾不影響任何消費者。這是刻意的邊界、不是漏掉。
 REQUIRED_SUBTREES = (
     "scripts/dx",
     "scripts/ops",
@@ -94,260 +92,38 @@ REQUIRED_SUBTREES = (
     "helm",
 )
 
-# 與 check_open_encoding.py 的 `# open-encoding: ignore` 同風格。
-IGNORE_MARKER = "line-ending: ignore"
-
-# ⛔ 這張表刻意**只列 wrapper**，不列「開檔的語法形狀」。
-# 第一版守衛把規則寫成「`open` 或 `write_text` 這兩個名字」，結果是列舉而非推導：
-# `Path.open("w")` / `os.fdopen(fd,"w")` / `NamedTemporaryFile("w")` / `io.open`
-# / `gzip.open(...,"wt")` 全部從旁邊走過去（實測 22 種形狀中 20 種漏掉），樹裡
-# 當時就有 6 個真實未 pin 的站點。現在改成：**先判斷這個呼叫會不會交出一個
-# 可寫的文字 handle**，再要求它表態；名字只用來決定「預設 mode 是什麼」。
-#
-# `atomic_write_text` 自己 pin 了 LF（預設 `newline="\n"`，另有專門測試釘住），
-# 呼叫端不必再傳；但**明確傳 `newline=None`** 會把平台預設要回來
-# （`generate_tool_map.py` 正是這樣中招），所以那個形狀仍要擋。
-LF_PINNING_WRAPPERS = {"atomic_write_text"}
-
-# 會交出檔案 handle 的呼叫 → 該呼叫在「沒有指定 mode」時的預設 mode。
-# 依此判斷是否為可寫文字模式；`b` 一律視為二進位（無換行轉換）。
-HANDLE_FACTORIES = {
-    "open": "r",          # builtin open / Path.open / io.open / gzip.open / codecs.open
-    "fdopen": "r",        # os.fdopen
-    "NamedTemporaryFile": "w+b",
-    "TemporaryFile": "w+b",
-    "SpooledTemporaryFile": "w+b",
-}
-
-# 直接產生文字 handle、**沒有 mode 參數**的建構子：一律需要表態。
-# `io.TextIOWrapper(buf, encoding=...)` 的 `newline` 預設就是 `None`，也就是
-# 這支守衛存在的理由本身；它在本 repo 已是既有詞彙（`pr_preflight.py`、
-# `diag_pr_ci.py` 都用它包 `sys.stdout.buffer`）。
-TEXT_WRAPPER_FACTORIES = {"TextIOWrapper"}
-
-# `.open()` 這個名字被太多不相干的 API 借用。以下模組的 `.open()` **不是**
-# 文字檔 handle（回傳 fd／binary stream／DB handle／根本不是檔案），把它們
-# 排除，否則守衛會對連 `newline=` 參數都沒有的呼叫報錯，而失敗訊息還會叫人
-# 去傳那個參數（照做直接 TypeError）。
-NON_TEXT_OPEN_MODULES = {
-    "os",          # os.open → int fd
-    "tarfile", "zipfile", "shelve", "dbm", "sqlite3",
-    "webbrowser",  # 根本不是檔案
-    "socket",
-}
-
-# 位置引數中「第幾個開始才可能是 mode」：
-#   open(file, mode) / io.open(file, mode) / os.fdopen(fd, mode) → 1
-#   Path.open(mode) / NamedTemporaryFile(mode)                   → 0
-# ⛔ 這個偏移是必要的，不是潔癖：若從 0 開始掃，`open("r", "w")`（檔名剛好
-# 叫 `r`）會把**檔名**當成 mode、判為唯讀而放行——在一支處處 fail-closed 的
-# 守衛裡開一個 fail-open 的洞。
-_MODULE_STYLE_OPEN = {"io", "gzip", "codecs", "bz2", "lzma", "fileinput"}
-
-# 檔案 mode 字串的形狀。
-_MODE_RE = re.compile(r"^[rwxa]\+?[btU]*\+?$")
-
-
-def _iter_py_files(paths: list[Path]) -> list[Path]:
-    out: list[Path] = []
-    for p in paths:
-        if p.is_file() and p.suffix == ".py":
-            out.append(p)
-        elif p.is_dir():
-            out.extend(
-                f for f in sorted(p.rglob("*.py"))
-                if "__pycache__" not in f.parts
-            )
-    return out
-
-
-def _get_kwarg(call: ast.Call, name: str):
-    for kw in call.keywords:
-        if kw.arg == name:
-            return kw
-    return None
-
-
-_UNRESOLVED_MODE = object()
-
-
-def _mode_arg_start(call: ast.Call, name: str) -> int:
-    """First positional index that could hold a mode string.
-
-    `open(file, mode)` / `io.open(file, mode)` / `os.fdopen(fd, mode)` put the
-    file/fd first; `Path.open(mode)` / `NamedTemporaryFile(mode)` do not.
-    """
-    if name == "fdopen":
-        return 1
-    if name == "open":
-        fn = call.func
-        if isinstance(fn, ast.Name):
-            return 1  # builtin open(file, mode)
-        if isinstance(fn, ast.Attribute) and isinstance(fn.value, ast.Name) \
-                and fn.value.id in _MODULE_STYLE_OPEN:
-            return 1  # io.open(file, mode) etc.
-        return 0      # Path.open(mode)
-    return 0          # tempfile factories take mode first
-
-
-def _mode_of(call: ast.Call, default: str, name: str):
-    """Resolve the file mode of a handle-producing call.
-
-    Returns the mode string, or `_UNRESOLVED_MODE` when a mode is supplied but
-    is not a static literal (e.g. `open(p, mode_var)`).
-
-    ⛔ 「有給 mode 但看不懂」與「根本沒給 mode」必須是**不同**的回傳值。
-    最早的版本把兩者都回 `None` 然後一律放行 ⇒ `open(p, mode_var)` 靜默通過。
-    現在前者 fail-closed，後者才套用預設。
-    """
-    kw = _get_kwarg(call, "mode")
-    if kw is not None:
-        if isinstance(kw.value, ast.Constant) and isinstance(kw.value.value, str):
-            return kw.value.value
-        return _UNRESOLVED_MODE
-
-    start = _mode_arg_start(call, name)
-    saw_non_literal = False
-    for arg in call.args[start:]:
-        if isinstance(arg, ast.Constant) and isinstance(arg.value, str):
-            if _MODE_RE.match(arg.value):
-                return arg.value
-        elif not isinstance(arg, ast.Constant):
-            saw_non_literal = True
-    if saw_non_literal:
-        return _UNRESOLVED_MODE
-    return default
-
-
-def _newline_verdict(kw):
-    """Classify a `newline=` keyword. Returns None if acceptable, else a reason.
-
-    ⛔ 「有傳 newline=」不等於「pin 了行尾」。`newline=os.linesep` 會原封不動
-    把原始 bug 寫回去，卻長得完全合規（實測會產生 CRLF）——那正是想修這個
-    bug 的人最可能寫出的東西。所以只接受**字串字面值**；任何運算式（變數、
-    `os.linesep`、屬性存取）都要求作者改成字面值或明示 ignore。
-    """
-    if kw is None:
-        return "no newline= (platform default → CRLF on Windows)"
-    if isinstance(kw.value, ast.Constant):
-        if kw.value.value is None:
-            return "newline=None (explicit platform default)"
-        if isinstance(kw.value.value, str):
-            return None  # "\n" / "" / anything the author literally chose
-    return (
-        f"newline={ast.unparse(kw.value)} is not a string literal — "
-        f"os.linesep / a variable can still be CRLF"
-    )
+IGNORE_MARKER = hook.LINE_ENDING_IGNORE_MARKER
 
 
 def _violations_in(path: Path) -> list[tuple[int, str]]:
-    """Return [(lineno, reason)] for text-mode writes that don't pin newline.
-
-    規則由**操作**推導，不是列舉語法：凡是會交出「可寫的文字 handle」的呼叫，
-    或直接寫出文字的呼叫，都必須明確表態 `newline=` 且值為字串字面值。值本身
-    交給作者決定（csv 的 `newline=""` 合法通過），強制的是「必須表態」。
-    """
-    # Mirror check_open_encoding.py's robustness: a non-UTF-8 or unparseable
-    # .py landing under a governed tree should not turn the whole guard into an
-    # ERROR whose traceback points at the guard instead of the offending file.
-    try:
-        source = path.read_text(encoding="utf-8")
-    except (OSError, UnicodeDecodeError):
-        return []
-    try:
-        tree = ast.parse(source, filename=str(path))
-    except SyntaxError:
-        return []
-    lines = source.splitlines()
-    out: list[tuple[int, str]] = []
-
-    for node in ast.walk(tree):
-        if not isinstance(node, ast.Call):
-            continue
-
-        fn = node.func
-        name = fn.attr if isinstance(fn, ast.Attribute) else (
-            fn.id if isinstance(fn, ast.Name) else None)
-        if name is None:
-            continue
-        newline_kw = _get_kwarg(node, "newline")
-        reason = None
-
-        # `<module>.open()` on a module whose open() is not a text file handle
-        # (os → int fd, tarfile/zipfile → binary, shelve/dbm → DB, …). These
-        # do not even accept newline=, so flagging them would produce advice
-        # that raises TypeError if followed.
-        # ⚠️ Scoped to the name `open` on purpose: `os.open` is excluded but
-        # `os.fdopen` is a genuine text-handle factory and must stay in scope.
-        # (An earlier version excluded the whole `os` module and silently lost
-        # os.fdopen — the positive-control samples caught it.)
-        if name == "open" and isinstance(fn, ast.Attribute) \
-                and isinstance(fn.value, ast.Name) \
-                and fn.value.id in NON_TEXT_OPEN_MODULES:
-            continue
-
-        if name == "write_text":
-            # Path.write_text(...) — always text, always writing.
-            verdict = _newline_verdict(newline_kw)
-            if verdict:
-                reason = f"write_text(): {verdict}"
-
-        elif name in TEXT_WRAPPER_FACTORIES:
-            # No mode argument at all; it is a text handle by construction.
-            verdict = _newline_verdict(newline_kw)
-            if verdict:
-                reason = f"{name}(): {verdict}"
-
-        elif name in HANDLE_FACTORIES:
-            mode = _mode_of(node, HANDLE_FACTORIES[name], name)
-            if mode is _UNRESOLVED_MODE:
-                # ⛔ fail closed ONLY with positive evidence that this is a text
-                # stream — i.e. an encoding= kwarg. Without it we cannot tell a
-                # dynamic-mode text open from `os.open(p, flags, 0o600)` or a
-                # binary API, and guessing produces false positives on calls
-                # that have no newline= parameter to pin.
-                # (`encoding=` itself is separately enforced by
-                # scripts/tools/lint/check_open_encoding.py, so the pair covers
-                # the dynamic-mode case between them.)
-                if _get_kwarg(node, "encoding") is None:
-                    continue
-                reason = (
-                    f"{name}(): mode is not a literal, so it cannot be proven "
-                    f"read-only or binary — pin newline= or mark ignore"
-                )
-            elif "b" in mode:
-                continue  # binary — no newline translation happens
-            elif not any(c in mode for c in "wax+"):
-                continue  # read-only text ("r"); nothing is written
-            else:
-                verdict = _newline_verdict(newline_kw)
-                if verdict:
-                    reason = f"{name}(..., {mode!r}): {verdict}"
-
-        elif name in LF_PINNING_WRAPPERS:
-            # Helper pins LF internally; only an explicit opt-out is a problem.
-            if newline_kw is not None and isinstance(newline_kw.value, ast.Constant) \
-                    and newline_kw.value.value is None:
-                reason = (
-                    f"{name}(newline=None) — opts back out of the helper's "
-                    f'newline="\\n" default'
-                )
-
-        if reason is None:
-            continue
-        if 1 <= node.lineno <= len(lines) and IGNORE_MARKER in lines[node.lineno - 1]:
-            continue
-        out.append((node.lineno, reason))
-
-    return out
+    """The hook's own line-ending scanner — the one implementation."""
+    return hook.scan_line_endings(path)
 
 
-GOVERNED_FILES = _iter_py_files(GOVERNED_PATHS)
+def _hook_config() -> dict:
+    with open(REPO_ROOT / ".pre-commit-config.yaml", encoding="utf-8") as fh:
+        config = yaml.safe_load(fh)
+    for repo in config["repos"]:
+        for h in repo.get("hooks", []):
+            if h["id"] == HOOK_ID:
+                return h
+    raise AssertionError(f"hook {HOOK_ID!r} is gone from .pre-commit-config.yaml")
+
+
+def _entry_line_ending_roots(entry: str) -> list[Path]:
+    argv = shlex.split(entry)
+    return [REPO_ROOT / argv[i + 1] for i, a in enumerate(argv[:-1])
+            if a == "--line-ending-root"]
+
+
+def _governed_files() -> list[Path]:
+    return hook.collect_files(_entry_line_ending_roots(_hook_config()["entry"]))
 
 
 # ⛔ 反例樣本 —— 這一組的存在本身就是閘門的一部分。
 #
-# 第一版沒有這組樣本，後果是：把 `_violations_in()` 第一行改成 `return []`，
+# 第一版沒有這組樣本，後果是：把偵測器第一行改成 `return []`（當時是本檔的
+# `_violations_in()`，#1366 起是 hook 的 `scan_line_endings()`），
 # 250 個 case **全部維持綠**。因為受管的樹是乾淨的，parametrize 那層只走綠
 # 方向，從來沒有任何一個已知違規證明偵測器還活著——偵測器可以整個被掏空而
 # 沒有任何測試察覺。反例與正例必須成對。
@@ -404,11 +180,10 @@ COMPLIANT_SAMPLES = {
 
 
 class TestGuardDetectsKnownViolations:
-    """反例層：證明偵測器活著。
+    """反例層：證明偵測器活著——對 hook 的實作跑。
 
-    ⛔ 不要刪掉這個 class。沒有它，`_violations_in()` 可以整個回傳空 list 而
-    整份測試檔仍然全綠（實測 250/250 pass）——那是「守衛存在但不會跑」的
-    完全體。
+    ⛔ 不要刪掉這個 class。沒有它，偵測器可以整個回傳空 list 而整份測試檔
+    仍然全綠（#1363 實測 250/250 pass）——那是「守衛存在但不會跑」的完全體。
     """
 
     @pytest.mark.parametrize("name", sorted(VIOLATING_SAMPLES))
@@ -434,7 +209,7 @@ class TestGuardDetectsKnownViolations:
         )
 
     def test_ignore_marker_suppresses(self, tmp_path):
-        """逃生門必須真的有效——它在 repo 內 0 次使用，沒有測試就等於沒驗過。"""
+        """逃生門必須真的有效，且只關掉行尾規則自己。"""
         sample = tmp_path / "ignored.py"
         sample.write_text(
             f'open(p, "w", encoding="utf-8")  # {IGNORE_MARKER}\n',
@@ -446,64 +221,85 @@ class TestGuardDetectsKnownViolations:
         bare.write_text('open(p, "w", encoding="utf-8")\n',
                         encoding="utf-8", newline="\n")
         assert _violations_in(bare)
+        # 兩個 marker 互不代位：encoding 的 marker 不會放行行尾規則。
+        other = tmp_path / "other_marker.py"
+        other.write_text(
+            f'open(p, "w", encoding="utf-8")  # {hook.IGNORE_MARKER}\n',
+            encoding="utf-8", newline="\n")
+        assert _violations_in(other)
+
+    def test_call_missing_both_keywords_is_reported_once(self, tmp_path, capsys,
+                                                         monkeypatch):
+        """同一呼叫同時缺 encoding= 與 newline=：印一行、兩條規則各自計數。"""
+        sample = tmp_path / "both.py"
+        sample.write_text('open(p, "w").write(s)\n', encoding="utf-8", newline="\n")
+        monkeypatch.setattr("sys.argv", [
+            "check_open_encoding.py", "--ci", "--strict-line-ending",
+            "--subprocess-baseline", str(tmp_path / "none.json"), str(sample)])
+        rc = hook.main()
+        out, err = capsys.readouterr()
+        flagged = [ln for ln in out.splitlines() if "both.py:1:" in ln]
+        assert rc == 1
+        assert len(flagged) == 1, out
+        assert "encoding=" in flagged[0] and "newline=" in flagged[0], flagged
+        assert "1 encoding violations" in err and "1 line-ending violations" in err
 
 
-class TestWriteSitesPinNewline:
-    """Static AST guard — 跨平台閘門（見模組 docstring 的 ⛔ 段）。"""
+class TestHookScope:
+    """hook `entry` 是範圍的 SSOT；這裡釘住它不會被無聲收窄或降級成 warn-only。"""
 
-    def test_governed_paths_are_not_empty(self):
-        """守衛自身的活體檢查。
+    def test_line_ending_rule_is_fatal_in_the_hook(self):
+        argv = shlex.split(_hook_config()["entry"])
+        assert "--strict-line-ending" in argv, (
+            f"{HOOK_ID} no longer passes --strict-line-ending: the line-ending "
+            f"rule would only warn at commit time (#1366)."
+        )
 
-        如果 scripts/ 被搬走或改名，`_iter_py_files` 會安靜地回空 list，
-        底下每個 parametrize 都變成 0 個 case ⇒ 整層守衛無聲消失。
+    def test_required_subtrees_are_governed(self):
+        """守衛自身的活體檢查——逐一斷言，不用總數門檻。
 
-        ⛔ 不要把這個換回單一的總數門檻。原本寫的是 `> 150`，而實際值是 250：
-        把 `GOVERNED_PATHS` 收窄成 `scripts/tools` 會剩 231 個檔、照樣通過，
-        被靜靜丟掉的正好是 `scripts/ops` 與 `scripts/session-guards`——也就是
-        本次唯二「CRLF 會真的弄壞東西」的例子（寫 git ref、改 hook shebang）
-        所在的兩棵子樹。總數門檻對「範圍被收窄」是盲的，所以改成逐一斷言。
+        ⛔ 不要換回單一的總數門檻：曾經寫 `> 150` 而實際值是 250，把範圍收窄成
+        `scripts/tools` 會剩 231 個檔、照樣通過，被靜靜丟掉的正好是
+        `scripts/ops` 與 `scripts/session-guards`——也就是「CRLF 會真的弄壞
+        東西」的例子（寫 git ref、改 hook shebang）所在的兩棵子樹。
+
+        同時驗 hook 的 `files:`：entry 掃得到、但 `files:` 不選的樹，改那裡的
+        檔 commit 時 hook 根本不會觸發。
         """
-        # ⛔ 不可寫成 `for p in GOVERNED_PATHS: assert ...`。那是對「要被釘住的
-        # 那個變數」本身做斷言 —— 變數縮小，斷言也跟著縮小。實測把
-        # GOVERNED_PATHS 改回只剩 `scripts/` 時，那種寫法 292 個測試全綠，而
-        # 悄悄掉出去的正是本 PR 在 helm/ 修的那一站。所以清單寫死在這裡。
-        covered = {f.resolve() for f in GOVERNED_FILES}
+        cfg = _hook_config()
+        covered = {f.resolve() for f in _governed_files()}
+        files_re = re.compile(cfg["files"])
         for sub in REQUIRED_SUBTREES:
             subtree = REPO_ROOT / sub
             assert subtree.is_dir(), f"expected subtree missing: {subtree}"
-            in_subtree = [f for f in _iter_py_files([subtree])
+            in_subtree = [f for f in hook.collect_files([subtree])
                           if f.resolve() in covered]
             assert in_subtree, (
-                f"{sub} contributes 0 governed files — the guard's scope was "
-                f"narrowed and this subtree fell out silently. If that is "
-                f"intended, delete it from REQUIRED_SUBTREES in the same "
-                f"commit so the removal is reviewable."
+                f"{sub} contributes 0 governed files — the hook's "
+                f"--line-ending-root scope was narrowed and this subtree fell "
+                f"out silently. If that is intended, delete it from "
+                f"REQUIRED_SUBTREES in the same commit so the removal is reviewable."
+            )
+            rel = in_subtree[0].resolve().relative_to(REPO_ROOT).as_posix()
+            assert files_re.search(rel), (
+                f"{HOOK_ID}'s files: filter does not select {rel} — a commit "
+                f"touching {sub} would never run the hook."
             )
 
-    @pytest.mark.parametrize(
-        "py_file", GOVERNED_FILES, ids=lambda p: p.name,
-    )
-    def test_text_writes_pin_newline(self, py_file: Path):
-        violations = _violations_in(py_file)
-        if violations:
-            rel = py_file.relative_to(REPO_ROOT).as_posix()
-            detail = "\n".join(f"  {rel}:{ln}: {why}" for ln, why in violations)
+    def test_governed_tree_pins_newline(self):
+        """CI 的執行點：用 hook 的掃描器、hook 的範圍，掃整棵受管樹。
+
+        不是第二份判定器——偵測邏輯與範圍都取自 hook。它存在是因為 CI 的
+        Lint job 逐名跑 hook，`open-encoding-audit` 不在名單內。
+        """
+        failures = []
+        for f in _governed_files():
+            rel = f.resolve().relative_to(REPO_ROOT).as_posix()
+            failures += [f"  {rel}:{ln}: {why}" for ln, why in _violations_in(f)]
+        if failures:
             pytest.fail(
-                f"text-mode write(s) without an explicit LF policy:\n{detail}\n\n"
-                f'Fix: pass newline="\\n" (repo standard — .gitattributes pins '
-                f"`* text=auto eol=lf`).\n"
-                f"Without it the SAME generator emits LF on Linux/CI and CRLF "
-                f"on a Windows host.\n"
-                f"Other explicit values are accepted — the rule requires a "
-                f"stated policy, not LF specifically:\n"
-                f'  • csv via the csv module      → newline=""\n'
-                f'  • must be CRLF on every host  → newline="\\r\\n"\n'
-                f"    (.bat/.cmd/.ps1 are the only paths .gitattributes marks "
-                f"eol=crlf; pin CRLF explicitly — do NOT reach for the ignore\n"
-                f"     marker, which restores the platform-dependent default "
-                f"and so is LF on Linux.)\n"
-                f"Only if the call genuinely has no newline= parameter, append "
-                f"`# {IGNORE_MARKER}` on the call's own line."
+                "text-mode write(s) without an explicit LF policy:\n"
+                + "\n".join(failures) + "\n\n" + hook._LINE_ENDING_FIX
             )
 
 
@@ -551,7 +347,8 @@ class TestSyncCountsEmitsLF:
 
     ⚠️ 只在 Windows host 上具鑑別力（見模組 docstring）。在 Linux CI 上這個
     測試恆綠 —— 它證明的是「路徑沒壞」，不是「CRLF 不會復發」。
-    擋復發的是 TestWriteSitesPinNewline。
+    擋復發的是 hook `open-encoding-audit` 的 line-ending 規則（CI 上是
+    `TestHookScope.test_governed_tree_pins_newline`）。
     """
 
     def _build_fixture_repo(self, root: Path) -> Path:
