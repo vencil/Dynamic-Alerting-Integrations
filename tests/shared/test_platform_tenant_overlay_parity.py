@@ -61,6 +61,11 @@ def test_matrix_is_not_vacuous() -> None:
                 "a2-alias-tenant-canonical-beats-platform-legacy",
                 "a3-alias-control-same-spelling-both-files"):
         assert row in names, row
+    # #2414: subtree `_defaults.yaml` levels across the alias spellings.
+    for row in ("s1-alias-subtree-canonical-does-not-displace-tenant-legacy",
+                "s2-alias-control-subtree-legacy-beats-root-canonical",
+                "s3-alias-deeper-subtree-legacy-beats-shallower-canonical"):
+        assert row in names, row
 
 
 def test_matrix_keys_are_exactly_the_known_ones() -> None:

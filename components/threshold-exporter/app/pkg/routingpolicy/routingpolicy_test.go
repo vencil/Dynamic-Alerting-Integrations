@@ -348,11 +348,11 @@ func TestLoadRoot_ProblemsAndSkip(t *testing.T) {
 	}
 }
 
-// TestWithPyYAMLReceivers_NonStringKeysAndFailClosed (#2295 review): the
+// TestWithPyYAMLRouting_NonStringKeysAndFailClosed (#2295 review): the
 // PyYAML side is read by its string key `receiver` even when another key is
 // not a string (map[any]any), and a receiver whose PyYAML reading is not
 // found is Unmatched — never the yaml.v3 value it had.
-func TestWithPyYAMLReceivers_NonStringKeysAndFailClosed(t *testing.T) {
+func TestWithPyYAMLRouting_NonStringKeysAndFailClosed(t *testing.T) {
 	v3 := map[string]any{"true": "x", "receiver": "v3", "overrides": []any{map[string]any{"1": "y", "receiver": "v3"}}}
 	cases := []struct {
 		name        string
@@ -369,14 +369,14 @@ func TestWithPyYAMLReceivers_NonStringKeysAndFailClosed(t *testing.T) {
 		{"receiver key missing", map[string]any{"overrides": []any{map[string]any{}}}, Unmatched, Unmatched},
 	}
 	for _, tc := range cases {
-		got, _ := WithPyYAMLReceivers(v3, tc.py).(map[string]any)
+		got, _ := WithPyYAMLRouting(v3, tc.py).(map[string]any)
 		over0 := got["overrides"].([]any)[0].(map[string]any)["receiver"]
 		if !reflect.DeepEqual(got["receiver"], tc.main) || !reflect.DeepEqual(over0, tc.over0) {
 			t.Errorf("%s: receiver %#v, overrides[0].receiver %#v; want %#v, %#v", tc.name, got["receiver"], over0, tc.main, tc.over0)
 		}
 	}
 	if v3["receiver"] != "v3" || v3["overrides"].([]any)[0].(map[string]any)["receiver"] != "v3" {
-		t.Error("WithPyYAMLReceivers modified its routing argument")
+		t.Error("WithPyYAMLRouting modified its routing argument")
 	}
 }
 
@@ -422,5 +422,93 @@ func TestAliasKeyNamesAreTheAnchoredText(t *testing.T) {
 		"x: &d fin\ndomain_policies:\n  *d :\n    tenants: [t1]\n    constraints: {forbidden_receiver_types: [slack]}\n"))
 	if err != nil || len(probs) != 0 || len(pols) != 1 || pols[0].Domain != "fin" {
 		t.Errorf("ParseDomainPolicies = %+v, %v, %v; want one policy for domain fin", pols, probs, err)
+	}
+}
+
+// TestWithPyYAMLRouting_MatcherValues (#2431): `routes[i].match` values and
+// override `alertname` / `metric_group` are replaced by what PyYAML reads —
+// `yes` True, `1:30` 90, a quoted "yes" the string — and ValuesNotString
+// names every one that is not a string. A match label PyYAML types (`on`)
+// is still found, by the key PyYAML gives its text; a value whose PyYAML
+// reading is missing is UnmatchedValue, never the yaml.v3 string.
+func TestWithPyYAMLRouting_MatcherValues(t *testing.T) {
+	t.Parallel()
+	src := "routes:\n" +
+		"- match: {team: yes, zone: 1:30, 'on': x, quoted: \"yes\"}\n" +
+		"- match: {on: prod}\n" +
+		"overrides:\n" +
+		"- {alertname: no}\n" +
+		"- {metric_group: \"1:30\"}\n" +
+		"- {alertname: ~, metric_group: !!int 5}\n"
+	var n yaml.Node
+	if err := yaml.Unmarshal([]byte(src), &n); err != nil {
+		t.Fatal(err)
+	}
+	v3 := decode(t, src)
+	got, _ := withPyYAMLRoutingFrom(v3, &n).(map[string]any)
+	routes := got["routes"].([]any)
+	m0 := routes[0].(map[string]any)["match"].(map[string]any)
+	m1 := routes[1].(map[string]any)["match"].(map[string]any)
+	if m0["team"] != true || m0["zone"] != 90 || m0["on"] != "x" || m0["quoted"] != "yes" || m1["on"] != "prod" {
+		t.Errorf("match values = %#v, %#v", m0, m1)
+	}
+	ov := got["overrides"].([]any)
+	if ov[0].(map[string]any)["alertname"] != false || ov[1].(map[string]any)["metric_group"] != "1:30" {
+		t.Errorf("overrides = %#v", ov)
+	}
+	var fields []string
+	for _, v := range ValuesNotString(got) {
+		fields = append(fields, v.Field)
+	}
+	want := []string{"overrides[0].alertname", "overrides[2].alertname", "overrides[2].metric_group",
+		"routes[0].match.team", "routes[0].match.zone"}
+	if !reflect.DeepEqual(fields, want) {
+		t.Errorf("ValuesNotString fields = %v, want %v", fields, want)
+	}
+	if msg := ValuesNotString(got)[3].Message(); msg != `routes[0].match.team must be a string, got bool True — quote it in YAML (e.g. team: "...") so the route generator reads it as text` {
+		t.Errorf("message = %q", msg)
+	}
+	if _, isStr := v3["routes"].([]any)[0].(map[string]any)["match"].(map[string]any)["team"].(string); !isStr {
+		t.Error("WithPyYAMLRouting modified its routing argument")
+	}
+	// Fail-closed: no PyYAML reading at all.
+	blind, _ := WithPyYAMLRouting(v3, nil).(map[string]any)
+	if blind["routes"].([]any)[1].(map[string]any)["match"].(map[string]any)["on"] != UnmatchedValue ||
+		blind["overrides"].([]any)[1].(map[string]any)["metric_group"] != UnmatchedValue {
+		t.Errorf("without a PyYAML reading: %#v", blind)
+	}
+	if len(ValuesNotString(blind)) != 9 {
+		t.Errorf("without a PyYAML reading every matcher value is refused: %v", ValuesNotString(blind))
+	}
+}
+
+// TestWithPyYAMLRouting_KeyNotALabelName (#2431 review F1): a match key that
+// is no label name — a date, `.inf`, an integer beyond int64, `1` — makes
+// the entry invalid (RouteEntryProblem), as the generator skips it; its value
+// is left as it was and ValuesNotString does not judge it, even `yes`.
+func TestWithPyYAMLRouting_KeyNotALabelName(t *testing.T) {
+	t.Parallel()
+	src := "routes:\n" +
+		"- match: {2001-12-15: x, .inf: x, 99999999999999999999: x, 1: x, 2002-01-01: yes, team: x}\n"
+	var n yaml.Node
+	if err := yaml.Unmarshal([]byte(src), &n); err != nil {
+		t.Fatal(err)
+	}
+	var v3 map[string]any
+	if err := yaml.Unmarshal([]byte(src), &v3); err != nil {
+		t.Fatal(err)
+	}
+	got, _ := withPyYAMLRoutingFrom(v3, &n).(map[string]any)
+	if vs := ValuesNotString(got); len(vs) != 0 {
+		t.Errorf("ValuesNotString = %+v, want none", vs)
+	}
+	entry := got["routes"].([]any)[0]
+	if _, bad := RouteEntryProblem(entry); !bad {
+		t.Error("RouteEntryProblem accepts an entry whose match keys are no label names")
+	}
+	for k, v := range entry.(map[string]any)["match"].(map[any]any) {
+		if v == UnmatchedValue {
+			t.Errorf("match[%v] = UnmatchedValue, want the value left as it was", k)
+		}
 	}
 }

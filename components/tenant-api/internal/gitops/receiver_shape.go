@@ -10,6 +10,13 @@ package gitops
 // behind POST /tenants/{id}/validate (dryRunPreflight), so the two give the
 // same verdict on the same body.
 //
+// #2431: the same pre-flight refuses a matcher value the body writes in
+// `_routing` — `routes[i].match.<label>`, `overrides[i].alertname` /
+// `metric_group` — that the route generator's PyYAML does not read as a
+// string (`yes`, `1:30`, `~`, a `!!int` tag): routingpolicy.ValuesNotString,
+// the predicate da-guard uses, over the body's own `_routing` only (never a
+// value inherited from `_routing_defaults` or a routing profile).
+//
 // ⛔ NOT IN validateBodyOnly, AND NOT IN THE WRITER'S write(). Both also serve
 // writes that change only another part of the tenant file: a batch op's
 // MERGED document (readMergeBodyOnly) and the custom-alerts PUT (write() via
@@ -28,8 +35,10 @@ import (
 	"gopkg.in/yaml.v3"
 )
 
-// ReceiverViolation is one receiver problem: Field is the document path
-// (`tenants.<id>._routing.receiver.url`), Reason the receiverspec message.
+// ReceiverViolation is one receiver problem, or one matcher value that is
+// not a string (#2431): Field is the document path
+// (`tenants.<id>._routing.receiver.url`, `tenants.<id>._routing.routes[0].
+// match.team`), Reason the receiverspec / routingpolicy message.
 type ReceiverViolation struct {
 	Field  string
 	Reason string
@@ -57,7 +66,8 @@ func (e *ReceiverShapeError) lines() []string {
 	return out
 }
 
-// ReceiverPreflight judges the receivers a PUT /tenants/{id} body writes. A
+// ReceiverPreflight judges the receivers and matcher values a PUT
+// /tenants/{id} body writes. A
 // body the Writer's own pre-flight would refuse (over the size cap, bad YAML,
 // a missing tenant section) passes here, so the Writer answers it as before.
 func ReceiverPreflight(tenantID, yamlContent string) error {
@@ -112,13 +122,14 @@ func receiverViolations(tenantID, yamlContent string) []ReceiverViolation {
 	if !ok {
 		return nil
 	}
-	// #2295: the receivers as the route generator's PyYAML reads them —
-	// plain `on` a boolean, quoted "on" a string (yaml.v3 alone makes both
-	// the string "on"). ⛔ Fail-closed: a receiver with no PyYAML
-	// counterpart (the tenant or its `_routing` not found there) is
-	// routingpolicy.Unmatched and refused, never the yaml.v3 value.
+	// #2295 / #2431: the receivers and matcher values as the route
+	// generator's PyYAML reads them — plain `on` a boolean, quoted "on" a
+	// string (yaml.v3 alone makes both the string "on"). ⛔ Fail-closed: a
+	// value with no PyYAML counterpart (the tenant or its `_routing` not
+	// found there) is routingpolicy.Unmatched / UnmatchedValue and refused,
+	// never the yaml.v3 value.
 	py := routingpolicy.PyYAMLRoutingByTenant([]byte(yamlContent))[tenantID]
-	routing, _ = routingpolicy.WithPyYAMLReceivers(routing, py).(map[string]any)
+	routing, _ = routingpolicy.WithPyYAMLRouting(routing, py).(map[string]any)
 	base := fmt.Sprintf("tenants.%s._routing", tenantID)
 	var out []ReceiverViolation
 	check := func(path string, holder map[string]any) {
@@ -142,6 +153,9 @@ func receiverViolations(tenantID, yamlContent string) []ReceiverViolation {
 				check(fmt.Sprintf("%s.%s[%d]", base, list, i), m)
 			}
 		}
+	}
+	for _, v := range routingpolicy.ValuesNotString(routing) {
+		out = append(out, ReceiverViolation{Field: base + "." + v.Field, Reason: v.Message()})
 	}
 	return out
 }
