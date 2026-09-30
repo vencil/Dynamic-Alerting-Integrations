@@ -15,6 +15,7 @@ package config
 // drift #1988 was opened for.
 
 import (
+	"log"
 	"sort"
 	"time"
 )
@@ -40,15 +41,30 @@ type OperationalStates struct {
 
 // OperationalStatesAt resolves silent modes and state filters at `now` and
 // splits the silent entries by expiry — the split the collector used to make
-// inline in collectSilentModes.
+// inline in collectSilentModes. The resolvers' WARNs (unparseable or unknown
+// _silent_mode, unparseable _state_maintenance, invalid expires) go to the
+// process log, as the collector's scrape has always written them.
 func (c *ThresholdConfig) OperationalStatesAt(now time.Time) OperationalStates {
+	return c.OperationalStatesAtLogf(now, log.Printf)
+}
+
+// OperationalStatesAtLogf is OperationalStatesAt with the resolvers' WARN sink
+// as a parameter; nil = silent. The states are identical whatever the sink.
+//
+// ⛔ A PARAMETER, NOT A PROCESS-GLOBAL SWITCH OR A CONFIG FLAG (#2467, as
+// #2397 did for the threshold resolve): tenant-api's tenant list / search call
+// this per request (nil — a request must not write the tenant's findings to
+// the log each time) while, in the same process or a test binary, the
+// exporter's scrape resolves concurrently and keeps logging; neither may see
+// the other's choice.
+func (c *ThresholdConfig) OperationalStatesAtLogf(now time.Time, logf func(format string, args ...any)) OperationalStates {
 	var out OperationalStates
 	// The collector calls this once per scrape, so the split must not cost
 	// what the inline version did not: it partitions the resolved slice in
 	// place (it is ours) and returns two views of it, allocating nothing.
 	// Swapping reorders entries, which carries no meaning — the resolver
 	// walks a map, so its order was never stable to begin with.
-	all := c.ResolveSilentModesAt(now)
+	all := c.resolveSilentModesAt(now, logf)
 	k := 0
 	for i := range all {
 		if !all[i].Expired {
@@ -57,7 +73,7 @@ func (c *ThresholdConfig) OperationalStatesAt(now time.Time) OperationalStates {
 		}
 	}
 	out.Silences, out.ExpiredSilences = all[:k:k], all[k:]
-	out.StateFilters = c.ResolveStateFiltersAt(now)
+	out.StateFilters = c.resolveStateFiltersAt(now, logf)
 	return out
 }
 

@@ -89,7 +89,7 @@ v2.4.0 executed synchronously; `status` was always `"completed"`. v2.6.0 upgrade
 
 ### Why Go instead of Python?
 
-threshold-exporter's core config parsing logic (`ValidateTenantKeys`, `ResolveAt`, `ParseConfig`) is all in Go. Writing the API server in Go allows direct `import "github.com/vencil/threshold-exporter/pkg/config"`, ensuring configurations rejected by the API are exactly those rejected by `da-tools validate-config`. Using Python would require maintaining two parallel schema validators, and historically Go↔Python dual-maintenance has caused validation logic inconsistencies (see `governance-security.md §2`).
+threshold-exporter's core config parsing logic (`ValidateTenantKeys`, `ResolveAt`, `ParseConfigFile`) is all in Go. Writing the API server in Go allows direct `import "github.com/vencil/threshold-exporter/pkg/config"`, so key validation shares its source with the exporter. ⚠️ That does not make it match `da-tools validate-config`: that tool is Python (`validate_config.py`), and the two reject different sets (see [config-driven](../design/config-driven.en.md)). Using Python would require maintaining two parallel schema validators, and historically Go↔Python dual-maintenance has caused validation logic inconsistencies (see `governance-security.md §2`).
 
 ### Why no database?
 
@@ -121,7 +121,7 @@ v2.4.0's primary user scenario is low-frequency operations (≥1 second between 
 
 ### Risks
 
-- **Git conflict**: Multiple operators writing to the same tenant config simultaneously may cause conflicts. Mitigation: HEAD snapshot comparison before write; return 409 on conflict, requiring operator to refresh and retry
+- **Git conflict**: Multiple operators writing to the same tenant config simultaneously may cause conflicts. Mitigation: API writes are serialized by the writer lock; after the commit, its parent is compared with the HEAD recorded before the write, and a mismatch returns 409. ⚠️ By then the write is **already committed and not rolled back** ([#1535](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/1535)). A change made by someone else between read and write (lost update) is caught only by the opt-in `X-DA-Base-Hash` precondition (direct write-back mode only), which returns 409 on mismatch
 - **git binary dependency**: API server calls `git` via `os/exec`; container must have git installed. Mitigation: Dockerfile uses `golang:alpine` build stage to ensure git availability
 
 ## Evolution Status
