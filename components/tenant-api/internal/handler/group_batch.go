@@ -10,10 +10,8 @@ import (
 
 	"github.com/go-chi/chi/v5"
 	"github.com/vencil/tenant-api/internal/async"
-	"github.com/vencil/tenant-api/internal/gitops"
 	"github.com/vencil/tenant-api/internal/groups"
 	"github.com/vencil/tenant-api/internal/rbac"
-	"github.com/vencil/tenant-api/internal/tenantorg"
 )
 
 // GroupBatchRequest is the body for POST /api/v1/groups/{id}/batch.
@@ -25,19 +23,30 @@ type GroupBatchRequest struct {
 }
 
 // GroupBatchResponse is the response for POST /api/v1/groups/{id}/batch.
+// The PR-mode fields mirror BatchResponse: the group is expanded into one op
+// per member and runs the POST /tenants/batch pipeline (#2339).
 type GroupBatchResponse struct {
-	Status  string        `json:"status"`
-	TaskID  string        `json:"task_id"`
-	GroupID string        `json:"group_id"`
-	Results []BatchResult `json:"results"`
-	Summary string        `json:"summary"` // e.g., "5 succeeded, 1 failed"
+	Status   string        `json:"status"` // "completed" | "pending_review" (PR mode)
+	TaskID   string        `json:"task_id"`
+	GroupID  string        `json:"group_id"`
+	PRURL    string        `json:"pr_url,omitempty"`    // PR/MR URL in PR mode
+	PRNumber int           `json:"pr_number,omitempty"` // PR/MR number in PR mode
+	Results  []BatchResult `json:"results"`
+	Summary  string        `json:"summary"`           // e.g., "5 succeeded, 1 failed"
+	Message  string        `json:"message,omitempty"` // human-readable message (PR mode)
+	// Warnings is the batch-level advisory list for PR mode, as in
+	// BatchResponse.Warnings; each notice names its tenant.
+	Warnings []string `json:"warnings,omitempty"`
 }
 
 // GroupBatch handles POST /api/v1/groups/{id}/batch
 //
-// Applies a patch operation to all members of a group.
-// Per-tenant RBAC write permission is checked for each member.
-// Supports async mode via ?async=true query parameter.
+// Applies a patch operation to all members of a group. The group is expanded
+// into one BatchOperation per member and runs the POST /tenants/batch
+// pipeline (#2339): the same patch-value check, per-member RBAC, domain
+// policy, and — in PR write-back mode — one PR/MR for the whole group.
+// Supports async mode via ?async=true query parameter (direct mode only; PR
+// mode is synchronous, like /tenants/batch).
 //
 // Query Parameters:
 //
@@ -45,8 +54,11 @@ type GroupBatchResponse struct {
 //	(default)    — Sync mode; returns 200 with completed results
 //
 // @Summary     Batch operation on group members
-// @Description Apply a patch to all tenants in a group.
-// @Description A member whose config file cannot be loaded as a tenant config (config_error malformed_yaml | invalid_config)
+// @Description Apply a patch to all tenants in a group, through the same pipeline as POST /api/v1/tenants/batch
+// @Description (one operation per member): patch values are range-checked (400), and each member is checked for write permission and domain policy.
+// @Description PR write-back mode: the whole group becomes one PR/MR (status pending_review, pr_url, pr_number); nothing is committed to the base branch.
+// @Description PR write-back mode ignores ?async=true and answers 200 synchronously, as POST /api/v1/tenants/batch does.
+// @Description Direct mode: a member whose config file cannot be loaded as a tenant config (config_error malformed_yaml | invalid_config)
 // @Description is not patched: its result carries status error and code TENANT_CONFIG_NOT_LOADABLE; repair the tenant file itself first.
 // @Tags        groups
 // @Accept      json
@@ -57,8 +69,12 @@ type GroupBatchResponse struct {
 // @Success     200   {object} GroupBatchResponse
 // @Success     202   {object} map[string]interface{}
 // @Failure     400   {object} ErrorResponse
-// @Failure     413   {object} ErrorResponse
+// @Failure     403   {object} ErrorResponse "PR write-back mode: the forge token lacks write scope to open the PR/MR"
 // @Failure     404   {object} ErrorResponse
+// @Failure     409   {object} ErrorResponse "PR write-back mode: a member is already declared by another conf.d file (code TENANT_DECLARED_ELSEWHERE), or its config file cannot be loaded as a tenant config (code TENANT_CONFIG_NOT_LOADABLE, with tenant_id and config_error; repair the tenant file itself first); nothing written. Direct mode reports these per member in results[].code instead."
+// @Failure     413   {object} ErrorResponse
+// @Failure     500   {object} ErrorResponse
+// @Failure     503   {object} ErrorResponse
 // @Router      /api/v1/groups/{id}/batch [post]
 func GroupBatch(d *Deps) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
@@ -82,11 +98,10 @@ func GroupBatch(d *Deps) http.HandlerFunc {
 		}
 
 		// #1722: same budget, same reason as POST /tenants/batch — and this
-		// endpoint needed it MORE, not less. It reached the identical write
-		// path (executeGroupBatchOps → applyPatch → WriteMerged →
-		// readMergeValidate → validate) with a bare json.NewDecoder and no cap
-		// at all, and it applies ONE patch to EVERY member, so the in-lock cost
-		// is multiplied by the group size rather than paid once.
+		// endpoint needed it MORE, not less. It reaches the identical write
+		// path (executeBatchOps → applyPatch → WriteMerged → readMergeValidate
+		// → validate) and applies ONE patch to EVERY member, so the in-lock
+		// cost is multiplied by the group size rather than paid once.
 		//
 		// ⛔ The read happens before the per-member permission gate, so an
 		// oversize body is materialised for a caller who may hold no write
@@ -111,9 +126,13 @@ func GroupBatch(d *Deps) http.HandlerFunc {
 		// len(patch), runs inside the single-writer token, and here it runs once
 		// PER MEMBER. A body of ~18k short legal keys sits comfortably inside the
 		// 256 KiB budget. The `max` lives on the struct tag so the bound is one
-		// value, not two; it is enforced HERE because executeGroupBatchOps builds
-		// BatchOperation in Go, which never passes through JSON-decode validation.
-		if violations := ValidateStructTags(&req); len(violations) > 0 {
+		// value, not two; it is enforced HERE because the per-member
+		// BatchOperations are built in Go and never pass through JSON-decode
+		// validation. #2339: the patch values get the same range check as
+		// /tenants/batch.
+		violations := ValidateStructTags(&req)
+		violations = append(violations, validatePatchMap(req.Patch, "patch")...)
+		if len(violations) > 0 {
 			WriteValidationErrors(w, r, violations)
 			return
 		}
@@ -123,13 +142,50 @@ func GroupBatch(d *Deps) http.HandlerFunc {
 			return
 		}
 
+		// #2339: one op per member, run through the /tenants/batch pipeline.
+		// BatchRequest's struct tags (operations max=1000, tenant_id bounds)
+		// are deliberately NOT applied to the expansion: the group, not the
+		// caller, sets its size, and each member's id is checked per op.
+		// A member listed twice yields two ops on one tenant, exactly as two
+		// such ops in a /tenants/batch body would.
+		ops := make([]BatchOperation, len(g.Members))
+		for i, member := range g.Members {
+			ops[i] = BatchOperation{TenantID: member, Patch: req.Patch}
+		}
+
 		taskID := fmt.Sprintf("group-batch-%s-%s",
 			groupID, time.Now().UTC().Format("20060102-150405"))
+
+		if d.prWritePath() {
+			meta := batchPRMeta{
+				title: func(n int) string {
+					return fmt.Sprintf("[tenant-api] Group %s batch update %d tenants", groupID, n)
+				},
+				source: "tenant-manager UI (group batch: " + groupID + ")",
+				labels: []string{"tenant-api", "auto-generated", "batch", "group"},
+			}
+			resp, ok := runBatchPR(d, w, r, ops, email, p, meta)
+			if !ok {
+				return
+			}
+			writeJSON(w, http.StatusOK, GroupBatchResponse{
+				Status:   resp.Status,
+				TaskID:   taskID,
+				GroupID:  groupID,
+				PRURL:    resp.PRURL,
+				PRNumber: resp.PRNumber,
+				Results:  resp.Results,
+				Summary:  resp.Summary,
+				Message:  resp.Message,
+				Warnings: resp.Warnings,
+			})
+			return
+		}
 
 		// v2.6.0: Async mode — submit to goroutine pool and return immediately
 		if r.URL.Query().Get("async") == "true" && d.Tasks != nil {
 			task := d.Tasks.Submit(taskID, func(ctx context.Context) ([]async.TaskResult, error) {
-				results := executeGroupBatchOps(ctx, d.Writer, d.ConfigDir, g.Members, req.Patch, email, p, d.RBAC, d.TenantOrg)
+				results := executeBatchOps(ctx, d.Writer, d.ConfigDir, ops, email, p, d.RBAC, d.TenantOrg, d.Policy)
 				return toTaskResults(results), nil
 			})
 
@@ -138,7 +194,7 @@ func GroupBatch(d *Deps) http.HandlerFunc {
 		}
 
 		// Synchronous mode (default, backward compatible)
-		results := executeGroupBatchOps(r.Context(), d.Writer, d.ConfigDir, g.Members, req.Patch, email, p, d.RBAC, d.TenantOrg)
+		results := executeBatchOps(r.Context(), d.Writer, d.ConfigDir, ops, email, p, d.RBAC, d.TenantOrg, d.Policy)
 
 		writeJSON(w, http.StatusOK, GroupBatchResponse{
 			Status:  "completed",
@@ -149,29 +205,3 @@ func GroupBatch(d *Deps) http.HandlerFunc {
 		})
 	}
 }
-
-// executeGroupBatchOps runs group batch operations synchronously and returns results.
-// This function is shared between sync and async paths to ensure consistency.
-//
-// The per-member permission check is org-scope-aware (ADR-027 / LD-6 P4b) and
-// each member's org list is resolved INSIDE this loop, at execution time — not
-// at submit time. The async path runs this closure after the HTTP request has
-// returned, so a submit-time snapshot could authorize against orgs that a
-// _tenant_orgs.yaml hot-reload has since changed (stale-orgs hazard).
-func executeGroupBatchOps(ctx context.Context, writer *gitops.Writer, configDir string, members []string, patch map[string]string, email string, p *rbac.VerifiedPrincipal, rbacMgr *rbac.Manager, tenantOrg *tenantorg.Manager) []BatchResult {
-	results := make([]BatchResult, 0, len(members))
-	for _, tenantID := range members {
-		if res, failed := gateBatchOp(tenantID, p, rbacMgr, tenantOrg, configDir); failed {
-			results = append(results, res)
-			continue
-		}
-
-		op := BatchOperation{TenantID: tenantID, Patch: patch}
-		result := applyPatch(ctx, writer, configDir, op, email)
-		results = append(results, result)
-	}
-	return results
-}
-
-// applyPatch is reused from tenant_batch.go — already imported via the handler package.
-// (The function is defined in tenant_batch.go and accessible here since both files are in the same package.)

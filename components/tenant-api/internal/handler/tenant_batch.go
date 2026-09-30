@@ -179,6 +179,21 @@ func BatchTenants(d *Deps) http.HandlerFunc {
 	}
 }
 
+// batchPRMeta is what a batch PR/MR says about where it came from. Everything
+// else about PR-mode batch writes is shared by runBatchPR.
+type batchPRMeta struct {
+	// title renders the PR/MR title from the number of ops taken into it.
+	title  func(included int) string
+	source string // the PR body's **Source:** line
+	labels []string
+}
+
+var tenantBatchPRMeta = batchPRMeta{
+	title:  func(n int) string { return fmt.Sprintf("[tenant-api] Batch update %d tenants", n) },
+	source: "tenant-manager UI (batch)",
+	labels: []string{"tenant-api", "auto-generated", "batch"},
+}
+
 // batchTenantsPRMode handles a batch request in PR write-back mode (ADR-011):
 // all operations are consolidated into a single PR/MR (GitHub or GitLab via
 // the platform interfaces). Split out of BatchTenants (Cycle 10 refactor) to
@@ -186,6 +201,18 @@ func BatchTenants(d *Deps) http.HandlerFunc {
 // verified IsPRMode && PRClient != nil && PRTracker != nil. Always writes a
 // response.
 func batchTenantsPRMode(d *Deps, rw http.ResponseWriter, r *http.Request, req BatchRequest, email string, p *rbac.VerifiedPrincipal) {
+	if resp, ok := runBatchPR(d, rw, r, req.Operations, email, p, tenantBatchPRMeta); ok {
+		writeJSON(rw, http.StatusOK, resp)
+	}
+}
+
+// runBatchPR is the PR write-back core shared by POST /tenants/batch and
+// POST /groups/{id}/batch (#2339): per-op RBAC and domain policy, one
+// WritePRBatch, one PR/MR. On an error it writes the error response itself
+// and returns ok=false; otherwise it returns the 200 body for the caller to
+// write (the group endpoint wraps it with its group id). The caller must have
+// verified d.prWritePath().
+func runBatchPR(d *Deps, rw http.ResponseWriter, r *http.Request, ops []BatchOperation, email string, p *rbac.VerifiedPrincipal, meta batchPRMeta) (BatchResponse, bool) {
 	// Pre-validate all ops (RBAC + policy) before creating any branch
 	var batchOps []gitops.PRBatchOp
 	var batchResults []BatchResult
@@ -205,7 +232,7 @@ func batchTenantsPRMode(d *Deps, rw http.ResponseWriter, r *http.Request, req Ba
 	// advisories below flattens them.
 	advisoriesByTenant := map[string][]string{}
 	var advisoryTenants []string
-	for _, op := range req.Operations {
+	for _, op := range ops {
 		if err := ValidateTenantID(op.TenantID); err != nil {
 			batchResults = append(batchResults, BatchResult{TenantID: op.TenantID, Status: "error", Message: err.Error()})
 			continue
@@ -259,13 +286,12 @@ func batchTenantsPRMode(d *Deps, rw http.ResponseWriter, r *http.Request, req Ba
 	}
 
 	if len(batchOps) == 0 {
-		writeJSON(rw, http.StatusOK, BatchResponse{
+		return BatchResponse{
 			Status:  "completed",
 			Results: batchResults,
 			Summary: fmt.Sprintf("%d failed", len(batchResults)),
 			Message: "No valid operations to create PR/MR.",
-		})
-		return
+		}, true
 	}
 
 	result, err := d.Writer.WritePRBatch(r.Context(), batchOps, email)
@@ -273,7 +299,7 @@ func batchTenantsPRMode(d *Deps, rw http.ResponseWriter, r *http.Request, req Ba
 		// TRK-320 ErrWriteOverloaded / TRK-318 ErrForgeDegraded → canonical
 		// retry-hinting 503s (shared with the single-write path).
 		if writeWriteFlowError(rw, r, err) {
-			return
+			return BatchResponse{}, false
 		}
 		// #2373 review F1: an op's tenant file is one threshold-exporter
 		// rejects; the whole PR is refused (nothing is written), like the
@@ -281,7 +307,7 @@ func batchTenantsPRMode(d *Deps, rw http.ResponseWriter, r *http.Request, req Ba
 		var notLoadable *tenantFileNotLoadableError
 		if errors.As(err, &notLoadable) {
 			writeTenantFileNotLoadable(rw, r, notLoadable)
-			return
+			return BatchResponse{}, false
 		}
 		// #1102: an all-no-op batch (idempotent patch / retry) produced no
 		// commits — return a clean "no changes" success, never a forge error.
@@ -295,39 +321,38 @@ func batchTenantsPRMode(d *Deps, rw http.ResponseWriter, r *http.Request, req Ba
 			if result != nil {
 				warnings = result.Notices
 			}
-			writeJSON(rw, http.StatusOK, BatchResponse{
+			return BatchResponse{
 				Status:   "completed",
 				Results:  batchResults,
 				Summary:  fmt.Sprintf("%d unchanged", len(batchOps)),
 				Message:  "No changes to apply; no PR/MR created.",
 				Warnings: append(warnings, advisories...),
-			})
-			return
+			}, true
 		}
 		// #795 F1: a malformed op body is a CLIENT error → 400, not a 500.
 		if errors.Is(err, gitops.ErrValidation) {
 			WriteJSONError(rw, r, http.StatusBadRequest, err.Error())
-			return
+			return BatchResponse{}, false
 		}
 		// Anything else is an unexpected git failure → generic 500.
 		WriteJSONError(rw, r, http.StatusInternalServerError, "PR/MR batch write failed: "+err.Error())
-		return
+		return BatchResponse{}, false
 	}
 
 	// PR-6/11: shared post-write flow via createPRAndRegister.
 	// Per-tenant tracker entries get every field of the PR
 	// response (Title / HeadRef / CreatedAt) preserved
 	// consistently with the single-tenant path.
-	prTitle := fmt.Sprintf("[tenant-api] Batch update %d tenants", len(batchOps))
+	prTitle := meta.title(len(batchOps))
 	tenantList := make([]string, len(batchOps))
 	for i, op := range batchOps {
 		tenantList[i] = op.TenantID
 	}
-	prBody := fmt.Sprintf("**Operator:** %s\n**Source:** tenant-manager UI (batch)\n**Tenants:** %s",
-		email, strings.Join(tenantList, ", "))
+	prBody := fmt.Sprintf("**Operator:** %s\n**Source:** %s\n**Tenants:** %s",
+		email, meta.source, strings.Join(tenantList, ", "))
 	pr, err := createPRAndRegister(d,
 		prTitle, prBody, result.BranchName,
-		[]string{"tenant-api", "auto-generated", "batch"},
+		meta.labels,
 		tenantList,
 	)
 	if err != nil {
@@ -335,10 +360,10 @@ func batchTenantsPRMode(d *Deps, rw http.ResponseWriter, r *http.Request, req Ba
 		// the batch path was missing this and leaked a generic 503),
 		// circuit-open → sanitized 503, else generic 503.
 		writeForgeCreateError(rw, r, d.PRClient.ProviderName(), err)
-		return
+		return BatchResponse{}, false
 	}
 
-	writeJSON(rw, http.StatusOK, BatchResponse{
+	return BatchResponse{
 		Status:   "pending_review",
 		PRURL:    pr.WebURL,
 		PRNumber: pr.Number,
@@ -346,7 +371,7 @@ func batchTenantsPRMode(d *Deps, rw http.ResponseWriter, r *http.Request, req Ba
 		Summary:  fmt.Sprintf("%d included in PR/MR, %d failed", len(batchOps), len(batchResults)-len(batchOps)),
 		Message:  fmt.Sprintf("Batch PR/MR created with %d tenant changes.", len(batchOps)),
 		Warnings: append(result.Notices, advisories...),
-	})
+	}, true
 }
 
 // executeBatchOps runs batch operations synchronously and returns results.
