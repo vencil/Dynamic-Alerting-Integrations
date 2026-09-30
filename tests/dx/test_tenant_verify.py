@@ -396,3 +396,44 @@ def test_all_without_duplicate_exits_0(verify_module, conf_d, cli_argv):
     """Must-ring control: a clean tree keeps the --all rc 0 contract."""
     cli_argv("tenant-verify", "--all", "--conf-d", str(conf_d), "--json")
     assert verify_module.main() == 0
+
+
+# ---------------------------------------------------------------------------
+# #2459: a selected `_defaults.yaml` that does not parse
+# ---------------------------------------------------------------------------
+
+_BROKEN_DEFAULTS = {
+    "unclosed-flow": "defaults: [\n",
+    "defaults-not-a-mapping": "defaults: [1, 2]\n",
+    "tagged-bool-yes": "defaults:\n  x: !!bool yes\n",
+    "document-not-a-mapping": "- 1\n- 2\n",
+}
+# The rest parse, and are refused as an unsupported shape (#2459).
+_PARSE_ERRORS = {"unclosed-flow", "tagged-bool-yes"}
+
+
+@pytest.mark.parametrize("mode", [["db-fin-a"], ["--all"], ["db-fin-a", "--json"]])
+@pytest.mark.parametrize("shape", sorted(_BROKEN_DEFAULTS))
+@pytest.mark.parametrize("carrier", ["_defaults.yaml", "finance/_defaults.yaml"])
+def test_unparseable_defaults_is_a_named_usage_error(
+        verify_module, conf_d, capsys, cli_argv, carrier, shape, mode):
+    """#2459: exit 1 (this tool's input-error code) naming the file — not
+    the `DefaultsParseError` traceback, and not exit 2, which the rollback
+    checklist reads as a hash mismatch. Fails (the exception escapes
+    `main`) when the catch around `ConfDScanner` is removed."""
+    (conf_d / carrier).write_text(_BROKEN_DEFAULTS[shape], encoding="utf-8")
+    cli_argv("tenant-verify", *mode, "--conf-d", str(conf_d))
+    code = verify_module.main()
+    captured = capsys.readouterr()
+    assert code == 1, captured.err
+    verdict = "does not parse" if shape in _PARSE_ERRORS else "has an unsupported shape"
+    assert f"{conf_d / carrier} {verdict}" in captured.err, captured.err
+    assert captured.out == ""
+
+
+def test_control_parseable_defaults_still_verify(verify_module, conf_d, capsys, cli_argv):
+    """Must-trigger control for the test above: the same tree with its
+    defaults intact verifies with exit 0."""
+    cli_argv("tenant-verify", "db-fin-a", "--conf-d", str(conf_d))
+    assert verify_module.main() == 0
+    assert "does not parse" not in capsys.readouterr().err

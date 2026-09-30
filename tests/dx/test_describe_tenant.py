@@ -1784,7 +1784,25 @@ class TestUnparseableDefaults:
         "tagged-int": b"defaults:\n  x: !!int foo\n",
         "tagged-float": b"defaults:\n  x: !!float foo\n",
         "tagged-bool": b"defaults:\n  x: !!bool foo\n",
+        # #2459: parses, but yaml.v3 refuses it — PyYAML read True / b"".
+        "tagged-bool-yes": b"defaults:\n  x: !!bool yes\n",
+        "tagged-bool-mixed-case": b"defaults:\n  x: !!bool tRuE\n",
+        "tagged-binary-bad-chars": b'defaults:\n  x: !!binary "%%%"\n',
+        "tagged-binary-unpadded": b'defaults:\n  x: !!binary "aGVsbG8"\n',
+        # #2459: parses, but `defaults:` is not a mapping — an
+        # AttributeError traceback before.
+        "defaults-list": b"defaults: [1, 2]\n",
+        "defaults-scalar": b"defaults: 5\n",
+        # #2459: parses, but the document itself is not a mapping — a
+        # traceback before for a list or a string.
+        "document-list": b"- 1\n- 2\n",
+        "document-scalar": b"hello\n",
+        "document-false": b"false\n",
     }
+    # #2459: these parse; the message says the shape is unsupported
+    # (DefaultsShapeError), not that the file does not parse.
+    UNSUPPORTED = {"defaults-list", "defaults-scalar", "document-list",
+                   "document-scalar", "document-false"}
     MODES = {
         "tenant": ["tr"],
         "all-json": ["--all"],
@@ -1812,7 +1830,8 @@ class TestUnparseableDefaults:
         res = self._run(*self.MODES[mode], "--conf-d", str(conf_d))
         assert "Traceback" not in res.stderr, res.stderr
         assert res.returncode == EXIT_CALLER_ERROR, (res.returncode, res.stderr)
-        assert f"{conf_d / carrier} does not parse" in res.stderr, res.stderr
+        verdict = "has an unsupported shape" if shape in self.UNSUPPORTED else "does not parse"
+        assert f"{conf_d / carrier} {verdict}" in res.stderr, res.stderr
         assert res.stdout == ""
 
     @pytest.mark.parametrize("shape", sorted(SHAPES))
@@ -1824,6 +1843,10 @@ class TestUnparseableDefaults:
         assert "Traceback" not in res.stderr, res.stderr
         assert res.returncode == EXIT_CALLER_ERROR, (res.returncode, res.stderr)
         assert str(what_if.resolve()) in res.stderr, res.stderr
+        # #2459: a shape refusal is not reported as a parse failure.
+        if shape in self.UNSUPPORTED:
+            assert "has an unsupported shape" in res.stderr, res.stderr
+            assert "Failed to parse" not in res.stderr, res.stderr
 
     # must-trigger controls: the paths around the fix are unchanged.
     def test_control_parseable_defaults_still_describe(self, tmp_path):
@@ -1842,3 +1865,173 @@ class TestUnparseableDefaults:
         assert res.returncode == 0, res.stderr
         assert set(json.loads(res.stdout)) == {"ts"}
         assert "WARNING: skipped" in res.stderr and "tr.yaml" in res.stderr
+
+
+class TestDefaultsDocumentParity:
+    """#2459: `_defaults.yaml` documents the exporter DOES serve, described
+    with its merged_hash. Every `go_hash` below is ResolveEffective's
+    MergedHash for the same two-file tree (`_defaults.yaml` + `tx.yaml`),
+    measured with a scratch Go program built against
+    components/threshold-exporter/app (`config.LoadDir` +
+    `config.ResolveEffective`); the flat load served the same values.
+
+    Fails when `_load_yaml` reads the whole stream again (the multi-document
+    rows: "does not parse", rc 2), when it stops tolerating a null
+    document or `defaults: ~` (AttributeError), or when the chain stops taking
+    Go's `extractDefaultsBlock` (the `defaults: ~` + sibling row)."""
+
+    TENANT = 'tenants:\n  tx:\n    redis_memory: "50"\n'
+    WITH_80 = "664e2553d242d345"   # defaults {mysql_connections: 80}
+    NOTHING = "dc8202dfc4683b17"   # no defaults at all
+
+    CASES = {
+        # must-trigger control: the plain shape, same hash as Go.
+        "control": ("defaults:\n  mysql_connections: 80\n", WITH_80),
+        # yaml.v3 Unmarshal decodes the FIRST document only; a later one
+        # is never read, even when it would not parse or has a bad shape.
+        "multi-doc": ("defaults:\n  mysql_connections: 80\n---\n"
+                      "defaults:\n  mysql_connections: 90\n", WITH_80),
+        "multi-doc-later-unparseable": (
+            "defaults:\n  mysql_connections: 80\n---\n: : [\n", WITH_80),
+        "multi-doc-later-bad-shape": (
+            "defaults:\n  mysql_connections: 80\n---\ndefaults: [1]\n", WITH_80),
+        "multi-doc-empty-first": ("---\n---\ndefaults:\n  mysql_connections: 80\n",
+                                  NOTHING),
+        # null is no defaults block; the rest of the document is (Go's
+        # extractDefaultsBlock), and the null key itself merges away.
+        "defaults-null": ("defaults: ~\n", NOTHING),
+        "defaults-null-with-sibling": ("defaults: ~\nmysql_connections: 80\n", WITH_80),
+        # an explicit tag yaml.v3 accepts keeps loading.
+        "tagged-bool-true": ("defaults:\n  mysql_connections: 80\n  x: !!bool TRUE\n",
+                             "01fde994832c3568"),
+        "tagged-bool-quoted": ('defaults:\n  mysql_connections: 80\n  x: !!bool "true"\n',
+                               "01fde994832c3568"),
+        "tagged-binary-block": ("defaults:\n  mysql_connections: 80\n"
+                                "  x: !!binary |\n    aGVs\n    bG8=\n", "0ee9af955f7e7e01"),
+    }
+    # Not a mapping: refused, naming the file (rc 2 on the CLI).
+    NOT_A_MAPPING = {"list": "- 1\n- 2\n", "scalar": "hello\n", "false": "false\n"}
+
+    def _hash(self, tmp_path, body):
+        conf_d = tmp_path / "conf.d"
+        conf_d.mkdir()
+        (conf_d / "_defaults.yaml").write_text(body, encoding="utf-8")
+        (conf_d / "tx.yaml").write_text(self.TENANT, encoding="utf-8")
+        return dt.ConfDScanner(conf_d).source_info("tx")["merged_hash"][:16]
+
+    @pytest.mark.parametrize("case", sorted(CASES))
+    def test_merged_hash_matches_the_exporter(self, tmp_path, case):
+        body, go_hash = self.CASES[case]
+        assert self._hash(tmp_path, body) == go_hash
+
+    @pytest.mark.parametrize("case", sorted(NOT_A_MAPPING))
+    def test_a_document_that_is_not_a_mapping_is_refused(self, tmp_path, case):
+        """Owner's ruling on #2459: refused like a `defaults:` that is not a
+        mapping, not described around. The CLI half (rc 2, every mode, a
+        sub-directory level, `--what-if`) is TestUnparseableDefaults'
+        `document-*` shapes; the control is CASES["control"] — the same
+        file as a mapping describes with the exporter's hash."""
+        with pytest.raises(dt.DefaultsShapeError, match="the document is a .*, not a mapping"):
+            self._hash(tmp_path, self.NOT_A_MAPPING[case])
+
+    def _sub_tree(self, tmp_path, sub_defaults):
+        conf_d = tmp_path / "conf.d"
+        (conf_d / "team").mkdir(parents=True)
+        (conf_d / "_defaults.yaml").write_text("defaults:\n  mysql_connections: 80\n",
+                                               encoding="utf-8")
+        (conf_d / "team" / "_defaults.yaml").write_text(sub_defaults, encoding="utf-8")
+        (conf_d / "team" / "tx.yaml").write_text(self.TENANT, encoding="utf-8")
+        return conf_d
+
+    def _describe(self, conf_d, *args):
+        return subprocess.run(
+            [sys.executable, TestUnparseableDefaults.DESCRIBE, *args, "--conf-d", str(conf_d)],
+            capture_output=True, text=True, encoding="utf-8", timeout=20)
+
+    def test_a_subdirectory_defaults_not_a_mapping_is_named_unsupported(self, tmp_path):
+        """In a sub-directory the exporter DOES serve `defaults: [1]` beside
+        `mysql_connections: 81` (both planes take the whole document: 81 on
+        /metrics, merged_hash cef3dbb6…). Refused all the same (one rule for
+        every level), but the message must not claim the file does not
+        parse — it parses, and the exporter reads it."""
+        conf_d = self._sub_tree(tmp_path, "defaults: [1]\nmysql_connections: 81\n")
+        res = self._describe(conf_d, "tx", "--show-sources")
+        assert res.returncode == EXIT_CALLER_ERROR, res.stderr
+        carrier = conf_d / "team" / "_defaults.yaml"
+        assert f"{carrier} has an unsupported shape" in res.stderr, res.stderr
+        assert "does not parse" not in res.stderr, res.stderr
+        assert res.stdout == ""
+
+    def test_control_subdirectory_defaults_mapping_matches_the_exporter(self, tmp_path):
+        """Must-trigger control for the test above: the same level written
+        as a mapping describes with rc 0 and ResolveEffective's hash."""
+        conf_d = self._sub_tree(tmp_path, "defaults:\n  mysql_connections: 81\n")
+        res = self._describe(conf_d, "tx", "--show-sources")
+        assert res.returncode == 0, res.stderr
+        assert json.loads(res.stdout)["merged_hash"][:16] == "e4404f52c8e88f56"
+
+    def _custom_alerts_tree(self, tmp_path, root_defaults):
+        conf_d = tmp_path / "conf.d"
+        (conf_d / "team").mkdir(parents=True)
+        (conf_d / "_defaults.yaml").write_text(root_defaults, encoding="utf-8")
+        (conf_d / "team" / "_defaults.yaml").write_text(yaml.dump({"_custom_alerts": [
+            {"recipe": "threshold", "name": "team_policy", "metric": "policy_metric",
+             "op": ">", "window": "5m", "threshold": "200:critical"}]}), encoding="utf-8")
+        (conf_d / "team" / "tx.yaml").write_text(self.TENANT, encoding="utf-8")
+        return conf_d
+
+    def test_a_root_document_not_a_mapping_stops_before_custom_alerts(self, tmp_path):
+        """With the root document skipped, the `_custom_alerts` walker went
+        on to read it, failed, and fell back to REPLACE with a WARN. The
+        refusal stops the run before that walker runs."""
+        res = self._describe(self._custom_alerts_tree(tmp_path, "- 1\n"), "tx")
+        assert res.returncode == EXIT_CALLER_ERROR, res.stderr
+        assert "has an unsupported shape" in res.stderr, res.stderr
+        assert "inheritance resolution failed" not in res.stderr, res.stderr
+
+    def test_control_custom_alerts_resolve_under_a_mapping_root(self, tmp_path):
+        res = self._describe(self._custom_alerts_tree(
+            tmp_path, "defaults:\n  mysql_connections: 80\n"), "tx")
+        assert res.returncode == 0, res.stderr
+        assert "inheritance resolution failed" not in res.stderr, res.stderr
+        eff = json.loads(res.stdout)["effective_config"]
+        assert [a["name"] for a in eff["_custom_alerts"]] == ["team_policy"]
+
+    @pytest.mark.parametrize("value", ["!!bool yes", '!!binary "%%%"'])
+    def test_a_tenant_file_with_a_refused_tag_is_skipped(self, tmp_path, value):
+        """The tag rules live on the loader every conf.d read shares, so a
+        tenant file holding such a value is skipped (named on stderr) like
+        any tenant file that does not parse; ResolveEffective refuses the
+        tenant too ("parse tenant: …"). Control: the same file with a plain
+        value describes."""
+        conf_d = tmp_path / "conf.d"
+        conf_d.mkdir()
+        (conf_d / "_defaults.yaml").write_text("defaults:\n  mysql_connections: 80\n",
+                                               encoding="utf-8")
+        tenant = conf_d / "tx.yaml"
+        tenant.write_text(self.TENANT + f"    x: {value}\n", encoding="utf-8")
+        res = self._describe(conf_d, "tx")
+        assert res.returncode == EXIT_CALLER_ERROR, res.stderr
+        assert f"WARNING: skipped {tenant} — does not parse" in res.stderr, res.stderr
+        tenant.write_text(self.TENANT + "    x: plain\n", encoding="utf-8")
+        assert self._describe(conf_d, "tx").returncode == 0
+
+    def test_multi_document_what_if_reads_its_first_document(self, tmp_path):
+        """The `--what-if` file stands in for a `_defaults.yaml`, so it is
+        read the same way: its first document. Refused with rc 2 before."""
+        conf_d = tmp_path / "conf.d"
+        conf_d.mkdir()
+        (conf_d / "_defaults.yaml").write_text("defaults:\n  mysql_connections: 80\n",
+                                               encoding="utf-8")
+        (conf_d / "tx.yaml").write_text(self.TENANT, encoding="utf-8")
+        what_if = tmp_path / "what-if.yaml"
+        what_if.write_text("defaults:\n  mysql_connections: 90\n---\n: : [\n",
+                           encoding="utf-8")
+        res = subprocess.run(
+            [sys.executable, TestUnparseableDefaults.DESCRIBE, "tx", "--conf-d",
+             str(conf_d), "--what-if", str(what_if)],
+            capture_output=True, text=True, encoding="utf-8", timeout=20)
+        assert res.returncode == 0, res.stderr
+        out = json.loads(res.stdout)
+        assert out["changed_keys"] == {
+            "mysql_connections": {"baseline": 80, "what_if": 90}}

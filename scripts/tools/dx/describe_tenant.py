@@ -14,6 +14,7 @@ with override semantics (ADR-017). Array fields are replaced, not concatenated.
 Output: JSON or YAML of the effective (merged) config.
 """
 import argparse
+import binascii
 import codecs
 import copy
 import datetime
@@ -51,7 +52,7 @@ from _lib_exitcodes import EXIT_CALLER_ERROR, EXIT_VIOLATION  # noqa: E402
 from _lib_io import exit_on_output_write_error, output_write  # noqa: E402  (#1789)
 # #2123: conf.d YAML is read strictly — a key written twice in one mapping
 # raises (the exporter's yaml.v3 rejects that file) instead of last-wins.
-from _lib_io import strict_safe_load, strict_safe_load_all  # noqa: E402
+from _lib_io import strict_safe_load_all  # noqa: E402
 # #2114: tenant ids as the exporter keys them (raw text), on the same strict
 # reading — `_lib_io` composes the two loaders. #2371: this tool reads every
 # conf.d file through a subclass of it, `_GoKeyLoader`.
@@ -130,13 +131,62 @@ def _load_yaml(path: Path) -> dict:
     """Load a YAML file (a `_defaults.yaml`, or the `--what-if` file),
     returning its parsed dict. Keys are source text carrying the exporter's
     spelling (`_GoKeyLoader`, #2371) — the tenant files' key identity, so a
-    key merges across the two exactly when its text matches."""
+    key merges across the two exactly when its text matches.
+
+    #2459: only the FIRST document is read, as yaml.v3 `Unmarshal` does —
+    the exporter serves a multi-document `_defaults.yaml` from its first
+    document, where this used to refuse the whole file.
+
+    The document's shape is checked before the chain uses it. The two
+    shapes below parse, but this tool refuses them (`_UnsupportedShape`,
+    reported as `DefaultsShapeError`: the file named, rc 2) — both used to
+    end the run with an AttributeError traceback. What the exporter does
+    with them depends on the level (measured against LoadDir and
+    ResolveEffective):
+
+      * a document that is not a mapping (a list, a scalar, `false`): at
+        the ROOT the flat load puts the file in parse_failed and the merge
+        skips it; in a SUB-DIRECTORY the merge skips it and the flat load
+        does not report it. Either way nothing is served from it, but the
+        file is broken, and refusing says so (owner's ruling on #2459);
+      * a `defaults:` that is neither a mapping nor null: at the ROOT the
+        flat load drops the whole file while the merge takes the WHOLE
+        document as the defaults block — no answer both give. In a
+        SUB-DIRECTORY both take the whole document (`defaults: [1]` beside
+        `mysql_connections: 81` serves 81), so an answer exists there; it is
+        refused all the same, on one rule for every level, and the message
+        says the shape is unsupported rather than that the file does not
+        parse;
+      * empty, or `defaults: ~`: no defaults, in both planes — not refused.
+    """
+    if not yaml:
+        # Minimal fallback — only works for simple flat YAML
+        raise RuntimeError(f"PyYAML is required for describe-tenant. Install: pip install pyyaml")
     with open(path, "r", encoding="utf-8") as f:
         content = f.read()
-    if yaml:
-        return strict_safe_load(content, loader=_GoKeyLoader) or {}
-    # Minimal fallback — only works for simple flat YAML
-    raise RuntimeError(f"PyYAML is required for describe-tenant. Install: pip install pyyaml")
+    doc = next(strict_safe_load_all(content, loader=_GoKeyLoader), None)
+    if doc is None:
+        return {}
+    if not isinstance(doc, dict):
+        raise _UnsupportedShape(f"the document is a {type(doc).__name__}, not a mapping")
+    inner = doc.get("defaults")
+    if inner is not None and not isinstance(inner, dict):
+        raise _UnsupportedShape(f"'defaults' is a {type(inner).__name__}, not a mapping")
+    return doc
+
+
+class _UnsupportedShape(ValueError):
+    """A defaults document that parses but that this tool refuses to
+    describe (`_load_yaml`, #2459)."""
+
+
+def _defaults_block(ddata: dict) -> dict:
+    """The part of a loaded defaults document the chain merges — Go's
+    extractDefaultsBlock: its `defaults:` mapping, else the whole document
+    (a legacy flat file; also `defaults: ~`, whose null key the merge then
+    skips, as Go's does)."""
+    inner = ddata.get("defaults")
+    return inner if isinstance(inner, dict) else ddata
 
 
 class DefaultsParseError(Exception):
@@ -152,7 +202,24 @@ class DefaultsParseError(Exception):
     def __init__(self, path: Path, cause: BaseException):
         self.path = path
         self.cause = cause
-        super().__init__(f"{path} does not parse: {cause}")
+        super().__init__(self._text(path, cause))
+
+    @staticmethod
+    def _text(path: Path, cause: BaseException) -> str:
+        return f"{path} does not parse: {cause}"
+
+
+class DefaultsShapeError(DefaultsParseError):
+    """A selected `_defaults.yaml` carrier that parses but has a shape this
+    tool does not describe (#2459, `_load_yaml`). A subclass so every
+    caller that stops on `DefaultsParseError` stops on it too, with its
+    own message: the file parses, and at some levels the exporter serves
+    it, so "does not parse" would be wrong."""
+
+    @staticmethod
+    def _text(path: Path, cause: BaseException) -> str:
+        return (f"{path} has an unsupported shape: {cause} — refused, as "
+                f"this tool cannot tell that its answer would match the exporter's")
 
 
 def _file_hash(path: Path) -> str:
@@ -641,6 +708,11 @@ _YAML_STR_TAG = "tag:yaml.org,2002:str"
 _YAML_TIMESTAMP_TAG = "tag:yaml.org,2002:timestamp"
 _YAML_INT_TAG = "tag:yaml.org,2002:int"
 _YAML_FLOAT_TAG = "tag:yaml.org,2002:float"
+_YAML_BOOL_TAG = "tag:yaml.org,2002:bool"
+_YAML_BINARY_TAG = "tag:yaml.org,2002:binary"
+# yaml.v3's resolve table: the only texts an explicit `!!bool` accepts.
+_GO_BOOL_TEXTS = {"true": True, "True": True, "TRUE": True,
+                  "false": False, "False": False, "FALSE": False}
 
 
 def _go_key_spelling(loader: Any, node: Any) -> str:
@@ -757,6 +829,36 @@ class _GoKeyLoader(StrictExporterKeyLoader):
             return self.construct_yaml_int(node)
         return self.construct_yaml_float(node)
 
+    def _construct_bool(self, node):
+        """#2459: an EXPLICIT `!!bool` reads only yaml.v3's six texts
+        (`true` / `True` / `TRUE` and the three `false`), quoted or not;
+        `!!bool yes` is "cannot decode !!str `yes` as a !!bool" there, and
+        the exporter does not load the file. PyYAML's YAML 1.1 table read it
+        as True. Refused the same way, it takes this tool's existing "does
+        not parse" path. A PLAIN `yes` is left as it was."""
+        if getattr(node, "go_explicit_tag", False):
+            text = self.construct_scalar(node)
+            if text not in _GO_BOOL_TEXTS:
+                raise yaml.constructor.ConstructorError(
+                    None, None, f"cannot decode {text!r} as a !!bool", node.start_mark)
+            return _GO_BOOL_TEXTS[text]
+        return self.construct_yaml_bool(node)
+
+    def _construct_binary(self, node):
+        """#2459: `!!binary` decoded as Go's base64.StdEncoding does —
+        padding required, only CR / LF skipped — where PyYAML's decoder
+        dropped any character outside the alphabet (`!!binary "%%%"` loaded
+        as b""). yaml.v3 refuses such a value ("invalid base64 data") and
+        the exporter does not load the file; refused the same way here."""
+        text = self.construct_scalar(node)
+        try:
+            return binascii.a2b_base64(text.replace("\r", "").replace("\n", ""),
+                                       strict_mode=True)
+        except (binascii.Error, ValueError) as exc:
+            raise yaml.constructor.ConstructorError(
+                None, None, f"!!binary value contains invalid base64 data ({exc})",
+                node.start_mark) from exc
+
     def construct_mapping(self, node, deep=False):  # noqa: D102 — see class
         mapping = super().construct_mapping(node, deep=deep)
         nodes = {kn.value: kn for kn, _ in node.value if isinstance(kn, yaml.ScalarNode)}
@@ -776,6 +878,8 @@ _GoKeyLoader.add_constructor(_YAML_TIMESTAMP_TAG, _GoKeyLoader._construct_timest
 _GoKeyLoader.add_constructor(_YAML_STR_TAG, _GoKeyLoader._construct_str)
 _GoKeyLoader.add_constructor(_YAML_INT_TAG, _GoKeyLoader._construct_number)
 _GoKeyLoader.add_constructor(_YAML_FLOAT_TAG, _GoKeyLoader._construct_number)
+_GoKeyLoader.add_constructor(_YAML_BOOL_TAG, _GoKeyLoader._construct_bool)
+_GoKeyLoader.add_constructor(_YAML_BINARY_TAG, _GoKeyLoader._construct_binary)
 
 
 def _go_typed_key(key: Any) -> Any:
@@ -880,12 +984,12 @@ def _load_first_document(path: Path) -> Any:
 
 
 def _load_platform_doc(path: Path) -> Any:
-    """`path` as ONE document with source-text keys (#2114) — `_load_yaml`'s
-    read (single document, strict, pure parser) for the `--what-if` file's
-    `tenants:` block, so its ids match the tenant files' — and its
-    `_profile:` values (#2297)."""
-    with open(path, "r", encoding="utf-8") as f:
-        return strict_safe_load(f, loader=_GoKeyProfileTextLoader) or {}
+    """`path`'s first document with source-text keys (#2114) — the read
+    `_load_first_document` gives the root platform files it may stand in
+    for (first document, strict, pure parser; #2459 — it used to refuse a
+    multi-document file), for the `--what-if` file's `tenants:` block, so
+    its ids match the tenant files' — and its `_profile:` values (#2297)."""
+    return _load_first_document(path) or {}
 
 
 def _overlay_tenant(tenant_raw: Any, blocks: "list[tuple[str, dict]]",
@@ -1227,6 +1331,8 @@ class ConfDScanner:
             resolved = dict(listed[d])[chosen]
             try:
                 defaults_files[str(resolved)] = _load_yaml(chosen)
+            except _UnsupportedShape as exc:  # #2459: parses, refused
+                raise DefaultsShapeError(chosen, exc) from exc
             except Exception as exc:  # noqa: BLE001 — named, then refused
                 # As broad as `_load_tenant_file`: PyYAML's constructors
                 # raise more than YAMLError for an explicit tag whose text
@@ -1575,8 +1681,7 @@ class ConfDScanner:
         merged: dict = {}
         for dp in self.defaults_chain[tenant_id]:
             ddata = self.defaults_data.get(str(dp), {})
-            defaults_block = ddata.get("defaults", ddata)
-            merged = deep_merge(merged, defaults_block)
+            merged = deep_merge(merged, _defaults_block(ddata))
         return merged
 
     def source_info(self, tenant_id: str) -> dict:
@@ -1844,6 +1949,10 @@ def main() -> None:
             # platform files it may stand in for — `_load_yaml` keeps
             # PyYAML's typing for the defaults chain it has always fed.
             what_if_platform_doc = _load_platform_doc(what_if_path)
+        except _UnsupportedShape as e:  # #2459: parses, refused
+            print(f"❌ --what-if file {what_if_path} has an unsupported shape: {e}",
+                  file=sys.stderr)
+            sys.exit(EXIT_CALLER_ERROR)
         except Exception as e:  # noqa: BLE001 — named, then refused (#2413)
             print(f"❌ Failed to parse --what-if file {what_if_path}: {e}", file=sys.stderr)
             sys.exit(EXIT_CALLER_ERROR)
@@ -1889,8 +1998,7 @@ def main() -> None:
         simulated = {}
         for dp in simulated_chain:
             ddata = simulated_defaults_data.get(str(dp), {})
-            defaults_block = ddata.get("defaults", ddata) if isinstance(ddata, dict) else {}
-            simulated = deep_merge(simulated, defaults_block)
+            simulated = deep_merge(simulated, _defaults_block(ddata))
         # #2019 / #2117: the same platform per-tenant layer and profile
         # expansion as the baseline — taken from the what-if document when
         # it stands in for a root platform file, so an edit to its
