@@ -180,9 +180,15 @@ fi
 # set per call would replace the previous one. A clean-up written after the
 # build alone never runs on Ctrl-C or SIGTERM, leaving the tree in .git and
 # registered in `git worktree list` (#2169).
+# ⛔ Wait for a running build before removing its tree: a signal to this bash
+# alone does not reach mkdocs (a grandchild), which would write site/ back
+# into .git, unregistered (#2211). Killing the build's pid does not reach it
+# either.
 # ⚠️ Relies on bash running an EXIT trap on a signal; dash does not always.
 _live_wt=""
-trap 'git worktree remove --force "$_live_wt" >/dev/null 2>&1 || rm -rf "$_live_wt"' EXIT
+_build_pid=""
+trap '[ -z "$_build_pid" ] || wait "$_build_pid" 2>/dev/null
+git worktree remove --force "$_live_wt" >/dev/null 2>&1 || rm -rf "$_live_wt"' EXIT
 _build_one() {
     local _sha="$1" _wt _rc
     _wt="$(git rev-parse --git-path "mkdocs-strict-$$-${_sha:0:8}")"
@@ -212,7 +218,9 @@ To push anyway (the docs build then runs only in CI):
 WORKTREE_FAILED
         return 1
     fi
-    ( cd "$_wt" && bash scripts/tools/lint/mkdocs_strict_check.sh )
+    ( cd "$_wt" && bash scripts/tools/lint/mkdocs_strict_check.sh ) &
+    _build_pid=$!
+    wait "$_build_pid"
     _rc=$?
     git worktree remove --force "$_wt" >/dev/null 2>&1 || rm -rf "$_wt"
     return "$_rc"
@@ -222,9 +230,8 @@ WORKTREE_FAILED
 # Tier 1: native mkdocs
 if command -v mkdocs >/dev/null 2>&1; then
     echo "[pre-push-mkdocs] Using native mkdocs ($(mkdocs --version 2>&1 | head -1))"
-    # ⛔ Every non-zero lands here — broken links, a failed checkout, a Ctrl-C
-    # (which prints nothing) — so name the commit, give no advice, and stop:
-    # carrying on would build the next ref after git has returned (#2210).
+    # ⛔ Every non-zero lands here — broken links, a failed checkout, an aborted
+    # build — so name the commit, give no advice, and stop (#2210).
     for _sha in "${_build_shas[@]}"; do
         echo "[pre-push-mkdocs] validating pushed commit ${_sha:0:8}"
         if ! _build_one "$_sha"; then
