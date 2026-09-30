@@ -8,6 +8,9 @@
   V2  旗標是恰一個長旗標的前綴——argparse ``allow_abbrev`` 會收下並綁到別的旗標、rc 0；一律違規
   V3  cli-reference 選項表第一欄的旗標不在 parser
   V4  script 以 AST 可達的非零結束碼不在 cli-reference 該命令節的結束碼表（只判「可達但未列」）
+  V6  反向：結束碼表列的非零碼，script 沒有任何出口以 AST 解得到它（argparse 的 2 算可達）。
+      script 有解不開的出口時整支不判（揭露）。只有未捕捉例外（traceback）會給的 1 沒有出口
+      可追，那一列以 ``datools-cmd-ignore: <理由>`` 豁免
   V5  fence 裡的命令交給該 subcommand 真的 ``ArgumentParser.parse_args`` 會失敗（缺必填、多餘的
       位置參數、``choices``／``type=`` 不收、互斥、個數不對）——只在 V0–V2 沒抓到東西時判；
       synopsis 行（``[options]``、``...``）不判；含 placeholder 的命令只判「缺必填」與「多餘位置參數」；
@@ -86,7 +89,7 @@ PORTAL_PLAYGROUND_FILES = ("commands.js", "engine.js")
 PORTAL_REQUIRE_ENV = "CLI_CONTRACT_REQUIRE_NODE"
 _JS_FRONTMATTER = re.compile(r"\A---\n.*?\n---\n", re.S)
 INLINE_IGNORE = "datools-cmd-ignore"
-VERDICTS = ("V0", "V1", "V2", "V3", "V4", "V5")
+VERDICTS = ("V0", "V1", "V2", "V3", "V4", "V5", "V6")
 _TICKET_RE = re.compile(r"^#\d+$")
 
 # Tokens the dispatcher itself answers before any script runs.
@@ -1512,6 +1515,7 @@ def scan_reference(doc: Path, rel: str, parsers: dict[str, ParserModel],
     pending: tuple[str, ...] | None = None     # the last row's cells
     table_header: tuple[str, ...] | None = None  # the row before the separator
     documented: dict[str, set[int]] = {}
+    exit_rows: list[tuple[str, set[int], int, str | None]] = []
     exit_table_line: dict[str, int] = {}
     sections: set[str] = set()
     unmatched = 0
@@ -1579,8 +1583,9 @@ def scan_reference(doc: Path, rel: str, parsers: dict[str, ParserModel],
             continue
         if header in _EXIT_HEADERS:
             if _CODE_CELL.match(cells[0]):
-                documented.setdefault(command, set()).update(
-                    int(c) for c in re.findall(r"\d+", cells[0]))
+                codes = {int(c) for c in re.findall(r"\d+", cells[0])}
+                documented.setdefault(command, set()).update(codes)
+                exit_rows.append((command, codes, number, reason))
             continue
         # option table row
         flags = _FLAG_IN_CELL.findall(cells[0])
@@ -1641,6 +1646,28 @@ def scan_reference(doc: Path, rel: str, parsers: dict[str, ParserModel],
                 "V4", rel, exit_table_line.get(cmd, 0), cmd, str(code),
                 f"`{cmd}` can exit {code} ({where}) but its exit-code table lists "
                 f"only {sorted(codes)} (#1416). Add the row."))
+    # Carrier C, reverse (V6): a documented code no exit of the script produces
+    for cmd, codes, number, reason in exit_rows:
+        ec = exit_codes.get(cmd)
+        if ec is None or ec.undecidable:
+            continue
+        reachable = set(ec.reachable)
+        if cmd in parsers:
+            reachable.add(EXIT_CALLER_ERROR)
+        for code in sorted(codes - {EXIT_OK}):
+            stats["scored"] += 1
+            if code in reachable:
+                continue
+            f = Finding(
+                "V6", rel, number, cmd, str(code),
+                f"`{cmd}`'s exit-code table lists {code} but no exit of the script "
+                f"produces it (by AST; argparse's 2 counts as reachable) (#2492). "
+                f"Fix the row. If only an uncaught traceback gives it, say so in "
+                f"the row and mark it `<!-- {INLINE_IGNORE}: <why> -->`.")
+            if reason is not None:
+                stats["ignored"] += 1
+                f = f._replace(ignored=reason)
+            findings.append(f)
     return findings, ReferenceFacts(option_rows, exit_count, sections,
                                     set(documented), unmatched)
 
@@ -2110,7 +2137,7 @@ def _not_scored_lines(stats: dict[str, int]) -> list[str]:
         f"subcommand, {s['reference_sections_unmatched']} `####` headings naming no "
         f"command, {s['exit_tables_no_script']} exit-code tables with no script, "
         f"{s['exit_undecidable_scripts']} scripts with an opaque exit expression "
-        f"(judged only on what resolved), {s['commands_without_exit_table']} "
+        f"(V4 judged only on what resolved; V6 not judged), {s['commands_without_exit_table']} "
         f"commands with a parser and a reference section but no exit-code table, "
         f"{s['ignored']} lines/rows under `{INLINE_IGNORE}`, "
         f"{s['unscanned_carrier_files']} non-markdown files mentioning da-tools "
