@@ -232,10 +232,13 @@ func tenantsWriteProfile(block map[string]any) bool {
 //
 // A null, a sequence and a mapping without `default:` are left as the
 // generic decode gave them. A null keeps its meaning in the overlay (see
-// overlayTenant). For the other two the planes differ in what they read
-// but not in what they serve: /metrics serialises the value to YAML text
-// and elects that as a name — an unknown profile, with ApplyProfiles'
-// WARN — while the walker elects no profile (profileNameOf).
+// overlayTenant). For the other two the planes differ in what they read:
+// /metrics serialises the value to YAML text and elects that as a name —
+// normally an unknown profile, with ApplyProfiles' WARN — while the walker
+// elects no profile (profileNameOf). They serve the same values UNLESS a
+// profile happens to be named by exactly that YAML text; then /metrics
+// applies it and the walker does not. Not handled: no such name is
+// expected, and the schema allows only a string here.
 //
 // ⚠️ The merge-key shape `_profile: {<<: {default: x}}` is the exception to
 // "a mapping with `default:`": ScheduledValue checks the written keys, sees
