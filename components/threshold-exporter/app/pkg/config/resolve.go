@@ -113,7 +113,7 @@ func (c *ThresholdConfig) ResolveAt(now time.Time) []ResolvedThreshold {
 // 0 so a tenant that just dropped back below the limit reads 0 instead of
 // vanishing from the family.
 func (c *ThresholdConfig) ResolveAtWithStats(now time.Time) ([]ResolvedThreshold, ResolveStats) {
-	return c.resolveAtWithStats(now, nil)
+	return c.resolveAtWithStats(now, nil, log.Printf)
 }
 
 // rowSink is told, for a threshold row a resolve phase produces, the
@@ -128,7 +128,18 @@ const customAlertsKey = "_custom_alerts"
 // appends to *keyed every returned row paired with the key it serves, in the
 // returned order, after the cardinality cut (a truncated row is not there).
 // With keyed nil it is ResolveAtWithStats exactly.
-func (c *ThresholdConfig) resolveAtWithStats(now time.Time, keyed *[]KeyedThreshold) ([]ResolvedThreshold, ResolveStats) {
+//
+// logf is the resolver's ERROR/WARN sink (#2397): the public entry points pass
+// log.Printf, so /metrics writes exactly what it always wrote; nil = silent,
+// which is what the tenant-api merge core's TenantMerge.ResolveAt passes — a
+// GET must not write the resolver's lines to the process log per request.
+// A parameter, not a switch on the config or a package global: a scrape and
+// a concurrent GET resolve at the same time and must not see each other's
+// choice.
+func (c *ThresholdConfig) resolveAtWithStats(now time.Time, keyed *[]KeyedThreshold, logf func(format string, args ...any)) ([]ResolvedThreshold, ResolveStats) {
+	if logf == nil {
+		logf = func(string, ...any) {}
+	}
 	var result []ResolvedThreshold
 
 	// Cardinality limit per tenant: 0 = DefaultMaxMetricsPerTenant, < 0 = no limit
@@ -194,14 +205,14 @@ func (c *ThresholdConfig) resolveAtWithStats(now time.Time, keyed *[]KeyedThresh
 		// extraction appended in the original order; intra-segment order is
 		// otherwise governed by Go map iteration (non-deterministic, as before)
 		// and the cardinality sort below.
-		result = append(result, c.resolveBaseRows(tenant, canonDefaults, canonOverrides, now, collect)...)
-		result = append(result, c.resolveCriticalRows(tenant, canonDefaults, canonOverrides, now, collect)...)
-		result = append(result, c.resolveDimensionalRows(tenant, canonOverrides, now, collect)...)
+		result = append(result, c.resolveBaseRows(tenant, canonDefaults, canonOverrides, now, collect, logf)...)
+		result = append(result, c.resolveCriticalRows(tenant, canonDefaults, canonOverrides, now, collect, logf)...)
+		result = append(result, c.resolveDimensionalRows(tenant, canonOverrides, now, collect, logf)...)
 		// Phase 2C (#1189): declared-without-value keys — emitted ONLY when the
 		// tenant supplied a value. Must stay inside this segment: the
 		// cardinality guard below measures result[startIdx:] exactly once, so a
 		// row appended after it escapes the cap silently.
-		result = append(result, c.resolveDeclaredRows(tenant, canonDefaults, canonOptional, canonOverrides, now, collect)...)
+		result = append(result, c.resolveDeclaredRows(tenant, canonDefaults, canonOptional, canonOverrides, now, collect, logf)...)
 
 		// #741 S3a: tenant-authored custom alerts → user_threshold{component="custom",
 		// recipe_id,name,mode}. Appended into this tenant's segment BEFORE the
@@ -209,7 +220,7 @@ func (c *ThresholdConfig) resolveAtWithStats(now time.Time, keyed *[]KeyedThresh
 		// deterministically alongside regular thresholds (truncationSortKey folds
 		// CustomLabels via canonicalLabelKey, so recipe_id/name/mode keep the
 		// ordering total + stable). Malformed entries are dropped + counted.
-		caRows, caObjs, caErrs := resolveTenantCustomAlerts(tenant, overrides)
+		caRows, caObjs, caErrs := resolveTenantCustomAlertsLogf(tenant, overrides, logf)
 		if len(caRows) > 0 || caErrs > 0 {
 			result = append(result, caRows...)
 			perTenantCustomAlertErrors[tenant] = caErrs
@@ -251,7 +262,7 @@ func (c *ThresholdConfig) resolveAtWithStats(now time.Time, keyed *[]KeyedThresh
 					return truncationSortKey(seg[i]) < truncationSortKey(seg[j])
 				})
 			}
-			log.Printf("ERROR: tenant=%s produced %d metrics (limit=%d), truncating to limit", tenant, count, limit)
+			logf("ERROR: tenant=%s produced %d metrics (limit=%d), truncating to limit", tenant, count, limit)
 			result = result[:startIdx+limit]
 		}
 		perTenantOverLimit[tenant] = overflow
@@ -313,7 +324,7 @@ type KeyedThreshold struct {
 // resolver failed to name the key of a row it returned — never guessed at.
 func (c *ThresholdConfig) ResolveAtWithKeys(now time.Time) ([]KeyedThreshold, ResolveStats, error) {
 	var keyed []KeyedThreshold
-	rows, stats := c.resolveAtWithStats(now, &keyed)
+	rows, stats := c.resolveAtWithStats(now, &keyed, log.Printf)
 	if err := checkKeyed(rows, keyed); err != nil {
 		return nil, stats, err
 	}
@@ -410,7 +421,7 @@ func isThresholdExpired(sv ScheduledValue, now time.Time) bool {
 // onto their canonical key), and every append goes through appendWithLegacyTwin
 // so alias targets dual-emit a legacy-identity row during the transition
 // window. disable still suppresses BOTH rows (no canonical row → no twin).
-func (c *ThresholdConfig) resolveBaseRows(tenant string, defaults map[string]float64, overrides map[string]ScheduledValue, now time.Time, sink rowSink) []ResolvedThreshold {
+func (c *ThresholdConfig) resolveBaseRows(tenant string, defaults map[string]float64, overrides map[string]ScheduledValue, now time.Time, sink rowSink, logf func(format string, args ...any)) []ResolvedThreshold {
 	var rows []ResolvedThreshold
 	for metricKey, defaultValue := range defaults {
 		// Skip _state_ / _silent_ / _severity_dedup / _routing keys — handled
@@ -432,7 +443,7 @@ func (c *ThresholdConfig) resolveBaseRows(tenant string, defaults map[string]flo
 		// silent) and leaves the cardinality count unchanged; collectThresholdExpiries
 		// emits da_config_event so a cleanup PR removes the stale YAML.
 		if sv, exists := overrides[metricKey]; exists && !isThresholdExpired(sv, now) {
-			override := sv.ResolveValue(now)
+			override := sv.resolveValue(now, logf)
 			lower := strings.TrimSpace(strings.ToLower(override))
 
 			// State 3: disable
@@ -462,7 +473,7 @@ func (c *ThresholdConfig) resolveBaseRows(tenant string, defaults map[string]flo
 			// Unknown value — log warning, use default. #2377: the `:severity`
 			// suffix belongs to the discarded value, so it is dropped too —
 			// "7O:critical" resolves exactly like the bare "7O".
-			log.Printf("WARN: unknown value %q for tenant=%s metric=%s, using default", override, tenant, metricKey)
+			logf("WARN: unknown value %q for tenant=%s metric=%s, using default", override, tenant, metricKey)
 			severity = "warning"
 		}
 
@@ -519,7 +530,7 @@ func (c *ThresholdConfig) resolveBaseRows(tenant string, defaults map[string]flo
 // registry key has that shape (none is underscore-free, none is
 // `default_`-prefixed) and it needs the platform to author both halves, so
 // this is stated as a known limit rather than paid for with a per-key reparse.
-func (c *ThresholdConfig) resolveDeclaredRows(tenant string, defaults map[string]float64, declared map[string]struct{}, overrides map[string]ScheduledValue, now time.Time, sink rowSink) []ResolvedThreshold {
+func (c *ThresholdConfig) resolveDeclaredRows(tenant string, defaults map[string]float64, declared map[string]struct{}, overrides map[string]ScheduledValue, now time.Time, sink rowSink, logf func(format string, args ...any)) []ResolvedThreshold {
 	if len(declared) == 0 {
 		return nil // steady state today: nothing declared, nothing to walk
 	}
@@ -585,7 +596,7 @@ func (c *ThresholdConfig) resolveDeclaredRows(tenant string, defaults map[string
 			continue
 		}
 
-		override := sv.ResolveValue(now)
+		override := sv.resolveValue(now, logf)
 		lower := strings.TrimSpace(strings.ToLower(override))
 		// State 3: disable. Note that for a declared key this is
 		// indistinguishable in OUTPUT from "never set" — both emit nothing.
@@ -608,7 +619,7 @@ func (c *ThresholdConfig) resolveDeclaredRows(tenant string, defaults map[string
 			// No default to fall back to — drop it and say so, matching
 			// resolveCriticalRows / resolveDimensionalRows rather than
 			// resolveBaseRows (which can and does fall back).
-			log.Printf("WARN: invalid declared threshold %q for tenant=%s key=%s, skipping", override, tenant, metricKey)
+			logf("WARN: invalid declared threshold %q for tenant=%s key=%s, skipping", override, tenant, metricKey)
 			continue
 		}
 		rows = appendWithLegacyTwin(rows, metricKey, ResolvedThreshold{
@@ -631,7 +642,7 @@ func (c *ThresholdConfig) resolveDeclaredRows(tenant string, defaults map[string
 // `mysql_cpu_critical` is already `mysql_threads_running_critical` here and
 // its base lookup hits the canonical defaults view; the emit goes through
 // appendWithLegacyTwin for the transition-window legacy critical row.
-func (c *ThresholdConfig) resolveCriticalRows(tenant string, defaults map[string]float64, overrides map[string]ScheduledValue, now time.Time, sink rowSink) []ResolvedThreshold {
+func (c *ThresholdConfig) resolveCriticalRows(tenant string, defaults map[string]float64, overrides map[string]ScheduledValue, now time.Time, sink rowSink, logf func(format string, args ...any)) []ResolvedThreshold {
 	var rows []ResolvedThreshold
 	for key, sv := range overrides {
 		if !strings.HasSuffix(key, "_critical") || strings.HasPrefix(key, "_state_") || strings.HasPrefix(key, "_silent_") {
@@ -642,7 +653,7 @@ func (c *ThresholdConfig) resolveCriticalRows(tenant string, defaults map[string
 		// overrides — they have no platform default to fail-safe back to (reverting
 		// would go SILENT, the very thing PREVENT avoids). expires here is a no-op;
 		// ValidateTenantKeys warns the author. Honored only in resolveBaseRows.
-		override := sv.ResolveValue(now)
+		override := sv.resolveValue(now, logf)
 		lower := strings.TrimSpace(strings.ToLower(override))
 		if isDisabled(lower) {
 			continue
@@ -652,7 +663,7 @@ func (c *ThresholdConfig) resolveCriticalRows(tenant string, defaults map[string
 		baseKey := strings.TrimSuffix(key, "_critical")
 		// Verify that the base metric exists in defaults (otherwise ignore)
 		if _, exists := defaults[baseKey]; !exists {
-			log.Printf("WARN: _critical key %q has no matching default %q, skipping", key, baseKey)
+			logf("WARN: _critical key %q has no matching default %q, skipping", key, baseKey)
 			continue
 		}
 
@@ -666,7 +677,7 @@ func (c *ThresholdConfig) resolveCriticalRows(tenant string, defaults map[string
 				Component: component,
 			}, sink, key)
 		} else {
-			log.Printf("WARN: invalid critical threshold %q for tenant=%s key=%s", override, tenant, key)
+			logf("WARN: invalid critical threshold %q for tenant=%s key=%s", override, tenant, key)
 		}
 	}
 	return rows
@@ -686,7 +697,7 @@ func (c *ThresholdConfig) resolveCriticalRows(tenant string, defaults map[string
 // label set, closing the transition-window gap the base/_critical shapes
 // already covered (review F1: without this, upgrading a plain override to a
 // dimensional one made the legacy-identity series vanish mid-window).
-func (c *ThresholdConfig) resolveDimensionalRows(tenant string, overrides map[string]ScheduledValue, now time.Time, sink rowSink) []ResolvedThreshold {
+func (c *ThresholdConfig) resolveDimensionalRows(tenant string, overrides map[string]ScheduledValue, now time.Time, sink rowSink, logf func(format string, args ...any)) []ResolvedThreshold {
 	var rows []ResolvedThreshold
 	for key, sv := range overrides {
 		if !strings.Contains(key, "{") {
@@ -699,7 +710,7 @@ func (c *ThresholdConfig) resolveDimensionalRows(tenant string, overrides map[st
 
 		baseKey, customLabels, regexLabels := parseKeyWithLabels(key)
 		if len(customLabels) == 0 && len(regexLabels) == 0 {
-			log.Printf("WARN: failed to parse dimensional key %q for tenant=%s, skipping", key, tenant)
+			logf("WARN: failed to parse dimensional key %q for tenant=%s, skipping", key, tenant)
 			continue
 		}
 
@@ -707,7 +718,7 @@ func (c *ThresholdConfig) resolveDimensionalRows(tenant string, overrides map[st
 		// overrides — no platform default to fail-safe to (reverting would go
 		// SILENT). expires here is a no-op; ValidateTenantKeys warns. See
 		// resolveBaseRows for the honored path.
-		valStr := sv.ResolveValue(now)
+		valStr := sv.resolveValue(now, logf)
 		lower := strings.TrimSpace(strings.ToLower(valStr))
 		if isDisabled(lower) {
 			continue
@@ -724,7 +735,7 @@ func (c *ThresholdConfig) resolveDimensionalRows(tenant string, overrides map[st
 
 		v, err := strconv.ParseFloat(valueStr, 64)
 		if err != nil {
-			log.Printf("WARN: invalid dimensional threshold %q for tenant=%s key=%s, skipping", valStr, tenant, key)
+			logf("WARN: invalid dimensional threshold %q for tenant=%s key=%s, skipping", valStr, tenant, key)
 			continue
 		}
 

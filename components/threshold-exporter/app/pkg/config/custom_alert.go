@@ -44,8 +44,8 @@ const forecastCurrentBand = 0.5
 
 // logCustomAlertError surfaces a malformed custom-alert at ERROR (paired with
 // the da_custom_alert_parse_errors gauge so a silent skip is observable).
-func logCustomAlertError(tenant, name string, err error) {
-	log.Printf("ERROR: tenant=%s: custom alert %q rejected: %v", tenant, name, err)
+func logCustomAlertError(logf func(format string, args ...any), tenant, name string, err error) {
+	logf("ERROR: tenant=%s: custom alert %q rejected: %v", tenant, name, err)
 }
 
 // flexStr accepts a YAML scalar that may be quoted-string OR bare number and
@@ -879,6 +879,16 @@ func resolveSloBurnRate(tenant string, spec CustomAlertSpec) ([]ResolvedThreshol
 // count of malformed entries (for the da_custom_alert_parse_errors gauge —
 // fail-loud, never silent-skip).
 func resolveTenantCustomAlerts(tenant string, overrides map[string]ScheduledValue) ([]ResolvedThreshold, []ResolvedSloObjective, int) {
+	return resolveTenantCustomAlertsLogf(tenant, overrides, log.Printf)
+}
+
+// resolveTenantCustomAlertsLogf is resolveTenantCustomAlerts with the
+// rejected-alert ERROR sink as a parameter (#2397; nil = silent). The returned
+// error count — the da_custom_alert_parse_errors gauge — does not depend on it.
+func resolveTenantCustomAlertsLogf(tenant string, overrides map[string]ScheduledValue, logf func(format string, args ...any)) ([]ResolvedThreshold, []ResolvedSloObjective, int) {
+	if logf == nil {
+		logf = func(string, ...any) {}
+	}
 	sv, ok := overrides["_custom_alerts"]
 	if !ok || strings.TrimSpace(sv.Default) == "" {
 		return nil, nil, 0
@@ -887,7 +897,7 @@ func resolveTenantCustomAlerts(tenant string, overrides map[string]ScheduledValu
 	if err := yaml.Unmarshal([]byte(sv.Default), &specs); err != nil {
 		// whole block unparseable → count as 1 error; the tenant gets NO custom
 		// alerts but the rest of its config is unaffected.
-		logCustomAlertError(tenant, "<block>", fmt.Errorf("cannot parse _custom_alerts: %w", err))
+		logCustomAlertError(logf, tenant, "<block>", fmt.Errorf("cannot parse _custom_alerts: %w", err))
 		return nil, nil, 1
 	}
 	var out []ResolvedThreshold
@@ -899,7 +909,7 @@ func resolveTenantCustomAlerts(tenant string, overrides map[string]ScheduledValu
 			continue // three-state opt-out: no series, NOT an error
 		}
 		if err != nil {
-			logCustomAlertError(tenant, spec.Name, err)
+			logCustomAlertError(logf, tenant, spec.Name, err)
 			errCount++
 			continue
 		}
