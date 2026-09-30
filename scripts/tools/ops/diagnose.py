@@ -266,6 +266,31 @@ def metrics_treats_as_unset(value: object) -> bool:
     return not _go_parse_float_ok(value.split(":", 1)[0].strip())
 
 
+def _file_shape_error(raw: dict) -> str | None:
+    """Why the exporter drops this whole config file, or None (#1522).
+
+    The exporter decodes every conf.d file into ONE typed struct, so a
+    `defaults:` that is not a mapping, an `optional_overrides:` that is not
+    a list, or a profile body that is not a mapping fails the decode and the
+    FILE goes to parse_failed — every key in it, its `tenants:` block and
+    its other profiles included (measured against LoadDir). Absent or null
+    is fine. These used to reach `.items()` / iteration here and end the
+    run with a traceback.
+    """
+    shapes = (("defaults", dict, "a mapping"),
+              ("optional_overrides", list, "a list"),
+              ("profiles", dict, "a mapping"))
+    for key, want, noun in shapes:
+        v = raw.get(key)
+        if v is not None and not isinstance(v, want):
+            return f"'{key}' must be {noun}, got {type(v).__name__}"
+    for name, body in (raw.get("profiles") or {}).items():
+        if body is not None and not isinstance(body, dict):
+            return (f"'profiles.{name}' must be a mapping, got "
+                    f"{type(body).__name__}")
+    return None
+
+
 def _tenant_block(tenant, entries: list, base: Path) -> dict:
     """The tenant's own block, read the way the exporter reads it (#1982).
 
@@ -461,9 +486,16 @@ def resolve_inheritance_chain(tenant: str, config_dir: str) -> dict[str, object]
         with open(defaults_path, encoding="utf-8") as f:
             raw = strict_safe_load(f) or {}
         if isinstance(raw, dict):
-            defaults_raw = raw.get("defaults", {}) or {}
-            listed = raw.get("optional_overrides") or []
-            declared = [k for k in listed if isinstance(k, str)]
+            shape_error = _file_shape_error(raw)
+            if shape_error:
+                # The exporter drops the whole file: no defaults, no
+                # declared keys (and the tenant loop below drops its
+                # `tenants:` block for the same reason).
+                _skip(defaults_path.name, shape_error)
+            else:
+                defaults_raw = raw.get("defaults") or {}
+                listed = raw.get("optional_overrides") or []
+                declared = [k for k in listed if isinstance(k, str)]
     except FileNotFoundError:
         # Absent `_defaults.yaml` is a legal config, not a read failure.
         pass
@@ -498,6 +530,10 @@ def resolve_inheritance_chain(tenant: str, config_dir: str) -> dict[str, object]
             _skip(fname, f"top level must be a mapping, got "
                          f"{type(raw).__name__}")
             continue
+        shape_error = _file_shape_error(raw)
+        if shape_error:
+            _skip(fname, shape_error)
+            continue
         tenants = {}
         if "tenants" in raw and isinstance(raw.get("tenants"), dict):
             tenants = raw["tenants"]
@@ -526,28 +562,28 @@ def resolve_inheritance_chain(tenant: str, config_dir: str) -> dict[str, object]
             # the exact defect #1468 is about, inside the fix for #1468.
             # Only `None` (an empty document) is legitimately nothing.
             #
-            # ⛔ And the `profiles:` VALUE needs its own check. `raw` can be
-            # a fine mapping whose `profiles:` is a list, and the old
-            # `all_profiles.get(...)` then raised AttributeError — which is
-            # NOT in the `except (OSError, yaml.YAMLError)` below, so it
-            # escaped and killed the whole call. That is #1447's death
-            # ("parses cleanly, is not a mapping, reaches .get(), takes the
-            # run with it") reproduced one directory over.
+            # ⛔ And the VALUES need their own check (`_file_shape_error`).
+            # `raw` can be a fine mapping whose `profiles:` is a list, or
+            # whose profile body is a list, and `.get()` / `.items()` then
+            # raised AttributeError — which is NOT in the
+            # `except (OSError, yaml.YAMLError)` below, so it escaped and
+            # killed the whole call. That is #1447's death ("parses
+            # cleanly, is not a mapping, reaches .get(), takes the run with
+            # it") reproduced one directory over. Any such value makes the
+            # exporter drop the whole file, so the whole profile layer goes
+            # — even when the bad body is another profile's.
             if raw is None:
                 raw = {}
             if not isinstance(raw, dict):
                 _skip(profiles_path.name,
                       f"top level must be a mapping, got {type(raw).__name__}")
             else:
-                all_profiles = raw.get("profiles")
-                if all_profiles is None:
-                    all_profiles = {}
-                if not isinstance(all_profiles, dict):
-                    _skip(profiles_path.name,
-                          f"'profiles' must be a mapping, got "
-                          f"{type(all_profiles).__name__}")
+                shape_error = _file_shape_error(raw)
+                if shape_error:
+                    _skip(profiles_path.name, shape_error)
                 else:
-                    profile_keys = all_profiles.get(profile_name, {})
+                    all_profiles = raw.get("profiles") or {}
+                    profile_keys = all_profiles.get(profile_name) or {}
         except FileNotFoundError:
             # No `_profiles.yaml` at all: the tenant references a profile
             # this directory does not define. Still a read the chain is
