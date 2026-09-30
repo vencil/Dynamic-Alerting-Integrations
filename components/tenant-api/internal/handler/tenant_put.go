@@ -73,7 +73,7 @@ type PutTenantResponse struct {
 // @Success     200   {object} PutTenantResponse
 // @Failure     400   {object} ErrorResponse "Bad request. A receiver the body writes in _routing (receiver, overrides[].receiver, routes[].receiver) that Alertmanager could not load or the route generator would skip is code INVALID_BODY with one violations[] entry per problem (#2295; nothing written). Also 400 when the current tenant file cannot be parsed and the caller lacks write permission on all tenants (#2405; nothing written)"
 // @Failure     403   {object} ErrorResponse
-// @Failure     409   {object} ErrorResponse "Conflict: base hash mismatch, pending PR, ambiguous tenant file, or the tenant is already declared by another conf.d file (code TENANT_DECLARED_ELSEWHERE; nothing written)"
+// @Failure     409   {object} ErrorResponse "Conflict: base hash mismatch, pending PR, ambiguous tenant file, the tenant is already declared by another conf.d file (code TENANT_DECLARED_ELSEWHERE; nothing written), or the tenant's conf.d file is not a regular file (code TENANT_CONFIG_NOT_LOADABLE, config_error not_regular_file; nothing written)"
 // @Failure     500   {object} ErrorResponse
 // @Failure     501   {object} ErrorResponse
 // @Failure     503   {object} ErrorResponse
@@ -91,6 +91,16 @@ func PutTenant(d *Deps) http.HandlerFunc {
 		// nothing from policy-violation details.
 		if !RequireOrgWrite(rw, r, d, tenantID, rbac.PermWrite) {
 			return
+		}
+		// #2477: a tenant file that is not a regular file is refused here,
+		// at once (409, config_error not_regular_file), before any write step
+		// touches it. A new tenant (no file yet) and every other resolve
+		// outcome go on to the Writer exactly as before.
+		if existing, err := confd.ResolveTenantFile(d.ConfigDir, tenantID); err == nil {
+			if errors.Is(confd.CheckRegularFile(existing), confd.ErrNotRegularFile) {
+				writeTenantFileNotRegular(rw, r, tenantID)
+				return
+			}
 		}
 		email := rbac.RequestEmail(r)
 

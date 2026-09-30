@@ -64,9 +64,9 @@ func WriteScopeMeta(configDir string) ScopeMetaFunc {
 			return "", "" // absent, ambiguous or unsafe id → unlabeled
 		}
 		// #2477: confd.ReadTenantFile, not os.ReadFile — it opens without
-		// blocking and refuses a non-regular file on the opened fd, so a
-		// FIFO (or other special file) at the tenant's path cannot stall the
-		// write gate. Any problem → unlabeled, the same fail-soft as above.
+		// blocking and refuses a non-regular file on the opened fd, so the
+		// write gate answers at once whatever kind of file is at the path.
+		// Any problem → unlabeled, the same fail-soft as above.
 		data, problem := confd.ReadTenantFile(filepath.Dir(path), filepath.Base(path))
 		if problem != confd.ProblemNone {
 			return "", ""
