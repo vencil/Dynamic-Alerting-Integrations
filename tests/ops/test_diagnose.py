@@ -636,6 +636,21 @@ class TestProfileLookupSharesTheChainRead:
             "_defaults.yaml",
             "defaults:\n  mysql_connections: 80\noptional_overrides: [[a]]\n",
             "'optional_overrides' entries must be scalars, got list", 70, 60),
+        # `!!set` is a mapping node to the exporter: where a string entry
+        # is wanted, the file fails like `[{a: 1}]`.
+        "optional-overrides-entry-a-set": (
+            "_defaults.yaml",
+            "defaults:\n  mysql_connections: 80\noptional_overrides: [!!set {a}]\n",
+            "'optional_overrides' entries must be scalars, got set", 70, 60),
+        "optional-overrides-entry-an-empty-set": (
+            "_defaults.yaml",
+            "defaults:\n  mysql_connections: 80\noptional_overrides: [!!set {}]\n",
+            "'optional_overrides' entries must be scalars, got set", 70, 60),
+        "optional-overrides-entry-a-set-in-profiles-file": (
+            "_profiles.yaml",
+            "profiles:\n  gold:\n    mysql_slow_queries: 60\n"
+            "optional_overrides: [!!set {a}]\n",
+            "'optional_overrides' entries must be scalars, got set", 70, None),
     }
 
     # The other side of the line: each of these LOADS on the exporter
@@ -662,6 +677,22 @@ class TestProfileLookupSharesTheChainRead:
         # /metrics serves no row without a platform default, so there is no
         # value to compare here — only that the file is not dropped.
         "defaults-null": ("_defaults.yaml", "defaults: ~\n", None),
+        # `!!set` in a mapping position: to the exporter a mapping whose
+        # values are all null, so it loads (PyYAML hands us a Python set).
+        "defaults-a-set": (
+            "_defaults.yaml",
+            "defaults: !!set {mysql_connections, mysql_slow_queries}\n", {
+                "mysql_connections": 70, "mysql_slow_queries": 60}),
+        "profiles-a-set": (
+            "_profiles.yaml", "profiles: !!set {gold}\n", {
+                "mysql_connections": 70, "mysql_slow_queries": 90}),
+        "profile-body-a-set": (
+            "_profiles.yaml", "profiles:\n  gold: !!set {mysql_slow_queries}\n", {
+                "mysql_connections": 70, "mysql_slow_queries": 90}),
+        "sibling-profile-body-a-set": (
+            "_profiles.yaml",
+            "profiles:\n  gold:\n    mysql_slow_queries: 60\n  bad: !!set {k}\n", {
+                "mysql_connections": 70, "mysql_slow_queries": 60}),
     }
 
     @pytest.mark.parametrize("case", sorted(_NULL_IS_FINE))

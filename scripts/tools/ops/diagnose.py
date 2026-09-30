@@ -278,25 +278,50 @@ def _file_shape_error(raw: dict) -> str | None:
     `optional_overrides: ~`, `gold: ~` all load (measured; pinned by
     test_a_null_value_is_not_a_wrong_type). Some of these shapes used to end
     the run with a traceback; the rest were read as if valid.
+
+    ⛔ `!!set` cuts both ways, because PyYAML builds a Python `set` while the
+    exporter sees the YAML node — a mapping whose values are all null:
+      * in a MAPPING position (`defaults:`, `profiles:`, a profile body) it
+        loads, so it is not an error here (`_as_mapping` reads it);
+      * as an `optional_overrides` ENTRY it is a mapping where a string is
+        wanted, so the file fails like `[{a: 1}]` does.
     """
-    shapes = (("defaults", dict, "a mapping"),
+    shapes = (("defaults", (dict, set), "a mapping"),
               ("optional_overrides", list, "a list"),
-              ("profiles", dict, "a mapping"))
+              ("profiles", (dict, set), "a mapping"))
     for key, want, noun in shapes:
         v = raw.get(key)
         if v is not None and not isinstance(v, want):
             return f"'{key}' must be {noun}, got {type(v).__name__}"
     # Each entry decodes as a string: a scalar of any kind (int, null,
-    # bool) loads, a mapping or a sequence fails the file.
+    # bool) loads, a mapping (`!!set` included) or a sequence fails the file.
     for item in raw.get("optional_overrides") or []:
-        if isinstance(item, (dict, list)):
+        if isinstance(item, (dict, list, set)):
             return (f"'optional_overrides' entries must be scalars, got "
                     f"{type(item).__name__}")
-    for name, body in (raw.get("profiles") or {}).items():
-        if body is not None and not isinstance(body, dict):
+    for name, body in (_as_mapping(raw.get("profiles")) or {}).items():
+        if body is not None and not isinstance(body, (dict, set)):
             return (f"'profiles.{name}' must be a mapping, got "
                     f"{type(body).__name__}")
     return None
+
+
+def _as_mapping(value):
+    """A `!!set` in a mapping position, read as the exporter reads it: every
+    member a key whose value is null (#1522). Anything else is returned as
+    is. Sorted, because a set has no order of its own.
+
+    ⚠️ A null value then shows as None, the same as `key: ~` written out.
+    /metrics serves a null DEFAULT as 0 and emits a row only for keys the
+    defaults hold — neither is modelled by this reader (measured against
+    LoadDir: `defaults: !!set {mysql_connections}` serves no
+    mysql_slow_queries row even when a profile sets it). A null PROFILE
+    value is unset (`metrics_treats_as_unset`) and falls back, as on
+    /metrics.
+    """
+    if isinstance(value, set):
+        return {k: None for k in sorted(value, key=str)}
+    return value
 
 
 def _tenant_block(tenant, entries: list, base: Path) -> dict:
@@ -501,7 +526,7 @@ def resolve_inheritance_chain(tenant: str, config_dir: str) -> dict[str, object]
                 # `tenants:` block for the same reason).
                 _skip(defaults_path.name, shape_error)
             else:
-                defaults_raw = raw.get("defaults") or {}
+                defaults_raw = _as_mapping(raw.get("defaults")) or {}
                 listed = raw.get("optional_overrides") or []
                 declared = [k for k in listed if isinstance(k, str)]
     except FileNotFoundError:
@@ -590,8 +615,9 @@ def resolve_inheritance_chain(tenant: str, config_dir: str) -> dict[str, object]
                 if shape_error:
                     _skip(profiles_path.name, shape_error)
                 else:
-                    all_profiles = raw.get("profiles") or {}
-                    profile_keys = all_profiles.get(profile_name) or {}
+                    all_profiles = _as_mapping(raw.get("profiles")) or {}
+                    profile_keys = _as_mapping(
+                        all_profiles.get(profile_name)) or {}
         except FileNotFoundError:
             # No `_profiles.yaml` at all: the tenant references a profile
             # this directory does not define. Still a read the chain is
