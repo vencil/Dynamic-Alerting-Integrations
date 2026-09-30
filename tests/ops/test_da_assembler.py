@@ -1513,7 +1513,8 @@ class TestRenderCrNameFormat:
         rc, got = self._render_text(tmp_path, text, spec)
         assert rc == EXIT_CALLER_ERROR
         assert got is None
-        assert "later duplicate key replaces" in caplog.text
+        assert "another key replaces" in caplog.text
+        assert "<< merges are resolved" in caplog.text
         assert "non-specific ! tag" in caplog.text
         assert "does not reproduce those rules" in caplog.text
 

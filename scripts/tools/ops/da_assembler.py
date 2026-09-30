@@ -663,8 +663,9 @@ def render_cr_file(
         log.error("%s: the document has a mapping with a null key (null, "
                   "~ or an empty key), as this tool's YAML reader sees it. "
                   "Kubernetes usually refuses such a document; in a few rare "
-                  "spellings (a key inside a value a later duplicate key "
-                  "replaces, or a key with the non-specific ! tag) "
+                  "spellings (a key inside a value that another key replaces "
+                  "once duplicate keys and << merges are resolved, or a key "
+                  "with the non-specific ! tag) "
                   "Kubernetes reads it differently and accepts it, but this "
                   "tool does not reproduce those rules and always refuses. "
                   "If the string is meant, quote it (\"null\")", cr_path)
