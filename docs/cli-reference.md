@@ -99,6 +99,8 @@ da-tools <command> --help
 | 子命令自己的結束碼 | 原封透傳 | 工具在同一行程內以 `__main__` 執行，無重映射——語意見各命令章節的結束碼表與 SSOT [`_lib_exitcodes.py`](https://github.com/vencil/Dynamic-Alerting-Integrations/blob/main/scripts/tools/_lib_exitcodes.py) |
 | 子命令拋出未捕捉的例外（traceback） | `1` | Python 直譯器的預設；分派層刻意不包 `try/except`（否則透傳就壞了）。這是與「有發現」的 `1` 仍撞碼的殘餘——讀到 `1` 而 stdout 沒有報告、stderr 有 `Traceback`（或工具自己的一行錯誤訊息），就是這一列 |
 
+各命令章節的結束碼表列的是主要觸發條件，**不是窮舉**：輸入壞到讓工具拋出未捕捉例外時，Python 工具一律是上面那列的 `1`，Go 工具（`guard`、`batch-pr`、`parser`）的 panic 則是 `2`，表上不逐一列出。
+
 > ⚠️ 前兩列曾回 `1`，與各子命令「有發現」的 `1` 撞碼——`docker run … da-tools:<移動的 tag> <子命令>` 在子命令改名、或映像尚未收錄該子命令時，在 CI 看起來與「工具正常跑完並找到東西」完全同形（且 stdout 是一份空報告）。消費端請把 `2` 當「工具沒跑」處理，不要與 `1` 合併判定。
 
 ---
@@ -635,7 +637,7 @@ da-tools maintenance-scheduler --config-dir ./conf.d --alertmanager http://alert
 | 代碼 | 說明 |
 |------|------|
 | `0` | 成功（已建立、已存在或不需要 silence） |
-| `1` | 至少一個 silence 建立失敗 |
+| `1` | 至少一個 silence 建立或延長失敗 |
 | `2` | 呼叫端錯誤：`--config-dir` 不存在、有 recurring 排程卻沒裝 `croniter`，或底下有檔案讀不到（內容不是 UTF-8 或不是合法 YAML；訊息指名哪一檔，#1654） |
 
 ---
@@ -694,7 +696,7 @@ da-tools backtest --config-dir ./conf.d-new --baseline ./conf.d-old --lookback 7
 |------|------|
 | `0` | 成功 |
 | `1` | 至少一項門檻變更被評為 HIGH 風險（合併前先審閱）；Prometheus 連不上、git 跑不了都不是 1，見下列 |
-| `2` | 呼叫端錯誤：`--lookback` 供了但不可用（不符合 `<數字><d\|h\|m>`，#1625）；`--git-diff` 供了但 git 跑不了（沒裝 git、不在 git work tree 內、沒有 HEAD~1）——⛔ 不要改用 `--config-dir` 轉綠，那比的是兩棵樹、不是你的 PR；`-o/--output`／`--markdown-output` 指到的輸出路徑寫不進去（#1641）；conf.d 檔案內容讀不到（不是 UTF-8 或不是合法 YAML；訊息指名哪一檔，#1654） |
+| `2` | 呼叫端錯誤：Prometheus 連不上且沒帶 `--skip-if-unavailable`；`--lookback` 供了但不可用（不符合 `<數字><d\|h\|m>`，#1625）；`--git-diff` 供了但 git 跑不了（沒裝 git、不在 git work tree 內、沒有 HEAD~1）——⛔ 不要改用 `--config-dir` 轉綠，那比的是兩棵樹、不是你的 PR；`-o/--output`／`--markdown-output` 指到的輸出路徑寫不進去（#1641）；conf.d 檔案內容讀不到（不是 UTF-8 或不是合法 YAML；訊息指名哪一檔，#1654） |
 
 ---
 
@@ -749,7 +751,7 @@ da-tools shadow-verify all --mapping mapping.yaml --report-csv report.csv --json
 | 代碼 | 說明 |
 |------|------|
 | `0` | 所有檢查通過 |
-| `1` | 一項或多項檢查失敗 |
+| `1` | 一項或多項檢查失敗（`--mapping` 指到不存在的檔也算，列為 FAIL，不是呼叫端錯誤） |
 | `2` | 呼叫端錯誤：`preflight`（含 `all`）的 Prometheus 連不上或查詢失敗（該項檢查同樣列為 FAIL，但結束碼是 2 不是 1）、`runtime`（含 `all`）讀 `--report-csv` 時 I/O 錯誤（單獨跑 `convergence` 會略過這個錯誤），或 argparse 拒絕的參數。⚠️ `--report-csv` 指到不存在的檔**不是** 2——CSV 分析直接略過。⚠️ 單獨執行 `runtime` 時 Prometheus 連不上**不是** 2 也不是 1：兩項查詢失敗時不產生任何檢查項，結果是 `Overall: PASS`、結束碼 0 |
 
 ---
@@ -1044,7 +1046,7 @@ da-tools alert-correlate --prometheus http://prometheus:9090 --ci
 | 代碼 | 說明 |
 |------|------|
 | `0` | 成功（CI 模式：無 critical 告警群組） |
-| `1` | CI 模式：存在 critical 嚴重度的告警群組 |
+| `1` | CI 模式：存在含 critical 告警的群組（群組至少 2 筆告警；只有一筆 critical 告警時是 0） |
 | `2` | 呼叫端錯誤：`--window` 解析不出或 ≤ 0，或 argparse 拒絕的參數。⚠️ Alertmanager／Prometheus 連不上**不是** 2——印 WARN 後以零告警繼續、rc 0；`--input` 指到不存在的檔是未捕捉例外（traceback、rc 1） |
 
 ---
@@ -1396,7 +1398,7 @@ silence 有兩個相反的失效方向：orphan 命中零條、什麼都壓不�
 | Code | 含義 |
 |------|------|
 | 0 | 無 orphan silence（或有 orphan 但無 `--ci`） |
-| 1 | `--ci` 模式偵測到 orphan |
+| 1 | `--ci` 模式偵測到 orphan 或 malformed silence |
 | 2 | caller error（檔案不存在、JSON parse 失敗、`--rule-source` 空目錄等） |
 
 **典型用法**
@@ -2204,7 +2206,7 @@ da-tools lint ./rule-packs --ci
 | 代碼 | 說明 |
 |------|------|
 | `0` | 沒有 ERROR 級違規。⚠️ **未加 `--ci` 時，即使有 ERROR 級違規也是 `0`**；WARN 級從不影響結束碼 |
-| `1` | `--ci` 模式下發現 ERROR 級違規 |
+| `1` | `--ci` 模式下發現 ERROR 級違規（讀不到或 YAML 壞掉的規則檔也記成 ERROR） |
 | `2` | 呼叫端錯誤：`--policy` 供了但不可用（不是檔案／讀不到／不是合法 YAML／頂層不是 mapping）；掃描目標不存在（訊息指名哪一個，#1618）。⛔ 不要靠拿掉 `--policy` 或路徑轉綠——那等於改用內建政策 lint、或把沒掃過的目標當乾淨 |
 
 ---
@@ -2263,7 +2265,7 @@ da-tools onboard --alertmanager-config ./alertmanager.yaml \
 | 代碼 | 說明 |
 |------|------|
 | `0` | 至少一個 phase 產出結果（Phase 1 沒找到租戶 route 也算，只是不寫 `onboard-hints.json`） |
-| `1` | 沒有任何 phase 產出結果，例如 `--rule-files` 的 glob 一個檔都沒配到、`--scrape-config` 裡沒有 `scrape_configs` |
+| `1` | 沒有任何 phase 產出結果，例如 `--rule-files` 的 glob 一個檔都沒配到、`--scrape-config` 裡沒有 `scrape_configs`。⚠️ `--scrape-config` 檔案不存在也是 1（`--alertmanager-config` 不存在則是 2） |
 | `2` | 呼叫端錯誤：三個輸入一個都沒給、參數錯誤，或 `-o/--output-dir` 指到的輸出路徑寫不進去（#1641）；輸入檔讀不到或無法解析（內容不是 UTF-8 或不是合法 YAML；訊息指名哪一檔，#1654）。⚠️ 例外：ConfigMap 包裝裡內嵌的 YAML 壞掉時是 traceback、回 1 |
 
 ---
@@ -2501,7 +2503,7 @@ da-tools guard <subcommand> [flags]
 | Code | 意義 |
 |---|---|
 | 0 | clean — 沒 error 級 finding（warning 不擋，除非 `--warn-as-error`） |
-| 1 | guard 偵測到 error — block merge / commit |
+| 1 | guard 偵測到 error，或 `--warn-as-error` 下有 warning — block merge / commit |
 | 2 | caller error（flag 錯、路徑找不到、scope 跑出 root 之外、binary 找不到）。`--baseline-config-dir` 例外：指到不存在的路徑不算錯，照常判定 |
 | 3 | exporter 載入時會整份丟掉的檔，加上 da-guard 自己無法 decode 的檔，再加上 route generator 因重複 key 整份拒讀、而 exporter 照讀的檔（例如 alias key 與其 anchor 並列；同一 mapping 兩個 `<<` 則是 exporter 自己就整份丟掉；`_domain_policy`／`_routing_profiles` 檔除外，那兩種以 `*_unusable` finding 回報，#2295），限與本次執行有關者（`--scope` 內的檔，及 `--scope` 以上各層目錄的 `_` 開頭檔）；與 `--cardinality-limit` 無關。報告與 stderr 列出這些檔（相對於 `--config-dir`）；一次可能只列出第一個，修好後重跑。優先於 1，也取代「vacuously safe」的 0。權威定義是契約測試 `TestExitThree_NamesExactlyTheFilesTheExporterDrops`（#2123、#2179） |
 
@@ -2916,7 +2918,7 @@ da-tools test-notification --config-dir conf.d/ --ci
 | 代碼 | 說明 |
 |------|------|
 | `0` | 所有 receiver 連通正常（或非 CI 模式） |
-| `1` | CI 模式：任一 receiver 連通失敗 |
+| `1` | CI 模式：任一 receiver 連通失敗（receiver 設定無效或 URL 不合法也算，`--dry-run` 不連線時也一樣） |
 | `2` | 呼叫端錯誤：`--config-dir` 底下有檔案讀不到（內容不是 UTF-8 或不是合法 YAML；訊息指名哪一檔，#1654） |
 
 #### explain-route

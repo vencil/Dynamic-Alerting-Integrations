@@ -98,6 +98,8 @@ All commands support the following global options:
 | The subcommand's own exit code | Passed through unchanged | The tool runs as `__main__` in the same process, no remapping — see each command's exit-code table and the SSOT [`_lib_exitcodes.py`](https://github.com/vencil/Dynamic-Alerting-Integrations/blob/main/scripts/tools/_lib_exitcodes.py) |
 | The subcommand raises an uncaught exception (traceback) | `1` | The Python interpreter's default; the dispatcher deliberately has no `try/except` (that would break pass-through). This is the residual collision with the "findings" `1` — a `1` with no report on stdout and a `Traceback` (or the tool's own one-line error) on stderr is this row |
 
+The exit-code table in each command section lists the main triggers and is **not exhaustive**: when bad input makes a tool raise an uncaught exception, a Python tool ends at the `1` in the row above, and a Go tool (`guard`, `batch-pr`, `parser`) panics at `2`; tables do not list these one by one.
+
 > ⚠️ The first two rows used to return `1`, colliding with the per-subcommand "findings" `1` — `docker run … da-tools:<moving tag> <subcommand>` looked, in CI, exactly like "the tool ran fine and found something" (with an empty report on stdout) whenever a subcommand was renamed or the image did not ship it yet. Consumers should treat `2` as "the tool did not run" and never fold it into `1`.
 
 ---
@@ -638,7 +640,7 @@ da-tools maintenance-scheduler --config-dir ./conf.d --alertmanager http://alert
 | Code | Description |
 |------|-------------|
 | `0` | Success (silences created, already present, or not needed) |
-| `1` | At least one silence could not be created |
+| `1` | At least one silence could not be created or extended |
 | `2` | Caller error: `--config-dir` does not exist, a recurring schedule exists but `croniter` is not installed, or a file under it cannot be read (content not UTF-8 or not valid YAML; the message names the file, #1654) |
 
 ---
@@ -697,7 +699,7 @@ da-tools backtest --config-dir ./conf.d-new --baseline ./conf.d-old --lookback 7
 |------|-------------|
 | `0` | Success |
 | `1` | At least one threshold change was rated HIGH risk (review before merging); an unreachable Prometheus or a git that cannot run is not 1, see below |
-| `2` | Caller error: `--lookback` supplied but unusable (not `<number><d\|h\|m>`, #1625); `--git-diff` supplied but git cannot run (git not installed, not inside a git work tree, no HEAD~1) — ⛔ do not switch to `--config-dir` to go green, that compares two trees, not your PR; the output path given to `-o/--output` / `--markdown-output` cannot be written (#1641); a conf.d file whose content cannot be read (not UTF-8 or not valid YAML; the message names the file, #1654) |
+| `2` | Caller error: Prometheus unreachable without `--skip-if-unavailable`; `--lookback` supplied but unusable (not `<number><d\|h\|m>`, #1625); `--git-diff` supplied but git cannot run (git not installed, not inside a git work tree, no HEAD~1) — ⛔ do not switch to `--config-dir` to go green, that compares two trees, not your PR; the output path given to `-o/--output` / `--markdown-output` cannot be written (#1641); a conf.d file whose content cannot be read (not UTF-8 or not valid YAML; the message names the file, #1654) |
 
 ---
 
@@ -752,7 +754,7 @@ da-tools shadow-verify all --mapping mapping.yaml --report-csv report.csv --json
 | Code | Description |
 |------|-------------|
 | `0` | All checks passed |
-| `1` | One or more checks failed |
+| `1` | One or more checks failed (a `--mapping` that does not exist counts too: it is listed as FAIL, not as a caller error) |
 | `2` | Caller error: Prometheus unreachable or a query failed in `preflight` (including `all`; the check is still listed as FAIL, but the exit code is 2, not 1), an I/O error reading `--report-csv` in `runtime` (including `all`; `convergence` run alone skips that error), or arguments argparse rejects. ⚠️ A `--report-csv` that does not exist is **not** 2 — the CSV analysis is simply skipped. ⚠️ Running `runtime` alone with Prometheus unreachable is **neither** 2 nor 1: both queries fail without producing any check, so the result is `Overall: PASS` and exit code 0 |
 
 ---
@@ -1047,7 +1049,7 @@ da-tools alert-correlate --prometheus http://prometheus:9090 --ci
 | Code | Description |
 |------|-------------|
 | `0` | Success (CI mode: no critical alert clusters) |
-| `1` | CI mode: critical severity alert clusters found |
+| `1` | CI mode: a cluster containing a critical alert found (a cluster needs at least 2 alerts; a single critical alert gives 0) |
 | `2` | Caller error: `--window` unparsable or ≤ 0, or arguments argparse rejects. ⚠️ An unreachable Alertmanager/Prometheus is **not** 2 — a WARN is printed and the run continues with zero alerts (rc 0); an `--input` file that does not exist is an uncaught exception (traceback, rc 1) |
 
 ---
@@ -1399,7 +1401,7 @@ Every file-sourced string in the text output (alertname, silence id, matcher val
 | Code | Meaning |
 |------|---------|
 | 0 | No orphan silences (or orphans present but no `--ci`) |
-| 1 | `--ci` mode detected orphans |
+| 1 | `--ci` mode detected orphans or malformed silences |
 | 2 | Caller error (file missing / JSON parse failure / `--rule-source` an empty directory, etc.) |
 
 **Examples**
@@ -2216,7 +2218,7 @@ da-tools lint ./rule-packs --ci
 | Code | Description |
 |------|-------------|
 | `0` | No ERROR-level violations. ⚠️ **Without `--ci`, ERROR-level violations still exit `0`**; WARN level never affects the exit code |
-| `1` | ERROR-level violations found, in `--ci` mode |
+| `1` | ERROR-level violations found, in `--ci` mode (an unreadable rule file or one with broken YAML is recorded as an ERROR too) |
 | `2` | Caller error: `--policy` was supplied but is unusable (not a file / unreadable / not valid YAML / top level not a mapping); a scan target does not exist (the message names it, #1618). ⛔ Do not go green by dropping `--policy` or the path — that silently lints against the built-in policy, or treats an unscanned target as clean |
 
 ---
@@ -2275,7 +2277,7 @@ da-tools onboard --alertmanager-config ./alertmanager.yaml \
 | Code | Description |
 |------|-------------|
 | `0` | At least one phase produced results (Phase 1 with no tenant route counts; it just writes no `onboard-hints.json`) |
-| `1` | No phase produced results, e.g. the `--rule-files` glob matched no file, or `--scrape-config` has no `scrape_configs` |
+| `1` | No phase produced results, e.g. the `--rule-files` glob matched no file, or `--scrape-config` has no `scrape_configs`. ⚠️ A `--scrape-config` file that does not exist is 1 too (a missing `--alertmanager-config` is 2) |
 | `2` | Caller error: none of the three inputs given, bad arguments, or the output path given to `-o/--output-dir` cannot be written (#1641); an input file cannot be read or parsed (content not UTF-8 or not valid YAML; the message names the file, #1654). ⚠️ Exception: broken YAML embedded in a ConfigMap wrapper is a traceback and returns 1 |
 
 ---
@@ -2515,7 +2517,7 @@ If none resolves, prints install hints (download from `tools/v*` release / `cd c
 | Code | Meaning |
 |---|---|
 | 0 | clean — no error-tier findings (warnings don't block unless `--warn-as-error`) |
-| 1 | guard found errors — block merge / commit |
+| 1 | guard found errors, or warnings under `--warn-as-error` — block merge / commit |
 | 2 | caller error (bad flags, path missing, scope outside root, binary missing). Exception: a `--baseline-config-dir` that does not exist is not an error; the run is judged as usual |
 | 3 | files the exporter drops whole when it loads the tree, plus files da-guard itself cannot decode, plus files the route generator refuses whole for a repeated key that the exporter reads anyway (an alias key beside its anchor; two `<<` in one mapping is dropped by the exporter itself; except `_domain_policy` / `_routing_profiles` files, reported as a `*_unusable` finding, #2295), limited to those that bear on this run (files in `--scope`, and `_`-prefixed files in the directories above it); independent of `--cardinality-limit`. The report and stderr list them (relative to `--config-dir`); a run may list only the first one, so re-run after fixing. Takes precedence over 1 and replaces the "vacuously safe" 0. The contract test `TestExitThree_NamesExactlyTheFilesTheExporterDrops` is authoritative (#2123, #2179) |
 
@@ -2930,7 +2932,7 @@ da-tools test-notification --config-dir conf.d/ --ci
 | Code | Description |
 |------|-------------|
 | `0` | All receivers reachable (or non-CI mode) |
-| `1` | CI mode: one or more receivers unreachable |
+| `1` | CI mode: one or more receivers unreachable (an invalid receiver config or URL counts too, even under `--dry-run`, which connects to nothing) |
 | `2` | Caller error: a file under `--config-dir` cannot be read (content not UTF-8 or not valid YAML; the message names the file, #1654) |
 
 #### explain-route
