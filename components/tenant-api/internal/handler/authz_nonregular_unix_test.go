@@ -19,6 +19,7 @@ package handler
 import (
 	"bytes"
 	"encoding/json"
+	"fmt"
 	"net"
 	"net/http"
 	"net/http/httptest"
@@ -82,17 +83,19 @@ func mksocket(t *testing.T, path string) {
 	t.Helper()
 	l, err := net.Listen("unix", path)
 	if err != nil {
-		t.Skipf("unix socket: %v", err)
+		// Fatal, not Skip: a skip here would let the socket cases pass
+		// silently. shortTempDir keeps the path well under the limit.
+		t.Fatalf("unix socket at %s: %v", path, err)
 	}
 	t.Cleanup(func() { _ = l.Close() })
 }
 
 // shortTempDir is a conf.d directory with a short absolute path: a unix
-// socket path is capped near 108 bytes, which t.TempDir() under a long
-// subtest name can exceed.
+// socket path is capped near 108 bytes, which t.TempDir() — under a long
+// $TMPDIR or subtest name — can exceed. Fixed under /tmp, not $TMPDIR.
 func shortTempDir(t *testing.T) string {
 	t.Helper()
-	dir, err := os.MkdirTemp("", "ta2477")
+	dir, err := os.MkdirTemp("/tmp", "ta2477")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -202,25 +205,38 @@ func (f *nonRegularFixture) serve(t *testing.T, h http.HandlerFunc, perm rbac.Pe
 	return w, took
 }
 
-// state is what a refused write must leave untouched: git HEAD and the
-// entry's own (lstat) type.
-func (f *nonRegularFixture) state(t *testing.T) (head string, mode os.FileMode) {
+// state is what a refused write must leave untouched: git HEAD and every
+// top-level conf.d entry's name, (lstat) type and size — so a commit, a
+// replaced entry or a new file all show up.
+func (f *nonRegularFixture) state(t *testing.T) string {
 	t.Helper()
 	out, err := exec.Command("git", "-C", f.dir, "rev-parse", "HEAD").Output()
 	if err != nil {
 		t.Fatalf("git rev-parse HEAD: %v", err)
 	}
-	fi, err := os.Lstat(filepath.Join(f.dir, nonRegularTenantID+".yaml"))
+	var b strings.Builder
+	b.WriteString("HEAD " + strings.TrimSpace(string(out)) + "\n")
+	entries, err := os.ReadDir(f.dir)
 	if err != nil {
-		t.Fatalf("lstat the entry: %v", err)
+		t.Fatalf("read conf.d: %v", err)
 	}
-	return strings.TrimSpace(string(out)), fi.Mode().Type()
+	for _, e := range entries {
+		if e.Name() == ".git" {
+			continue
+		}
+		fi, err := e.Info()
+		if err != nil {
+			t.Fatalf("lstat %s: %v", e.Name(), err)
+		}
+		fmt.Fprintf(&b, "%s %v %d\n", e.Name(), fi.Mode().Type(), fi.Size())
+	}
+	return b.String()
 }
 
-func (f *nonRegularFixture) assertNothingWritten(t *testing.T, head string, mode os.FileMode) {
+func (f *nonRegularFixture) assertNothingWritten(t *testing.T, before string) {
 	t.Helper()
-	if h, m := f.state(t); h != head || m != mode {
-		t.Errorf("refused write changed state: HEAD %s→%s, entry type %v→%v", head, h, mode, m)
+	if after := f.state(t); after != before {
+		t.Errorf("refused write changed state:\nbefore:\n%safter:\n%s", before, after)
 	}
 }
 
@@ -276,12 +292,12 @@ func TestPutTenant_NonRegularTenantFileRefusedAtOnce(t *testing.T) {
 		t.Run(kind.name, func(t *testing.T) {
 			t.Parallel()
 			f := newNonRegularFixture(t, kind.make)
-			head, mode := f.state(t)
+			before := f.state(t)
 
 			w, took := f.serve(t, PutTenant(f.d), rbac.PermWrite,
 				"PUT", "/api/v1/tenants/"+nonRegularTenantID, nonRegularTenantID, putTenantBody(nonRegularTenantID))
 			f.assertNotRegularRefusal(t, w, took)
-			f.assertNothingWritten(t, head, mode)
+			f.assertNothingWritten(t, before)
 			if kind.name != "fifo" {
 				// With a FIFO still in conf.d every write's walk fails closed
 				// at its bound (#2078), so this runs for the other kinds only.
@@ -297,13 +313,13 @@ func TestPutTenantCustomAlerts_NonRegularTenantFileRefusedAtOnce(t *testing.T) {
 		t.Run(kind.name, func(t *testing.T) {
 			t.Parallel()
 			f := newNonRegularFixture(t, kind.make)
-			head, mode := f.state(t)
+			before := f.state(t)
 
 			w, took := f.serve(t, PutTenantCustomAlerts(f.d), rbac.PermWrite,
 				"PUT", "/api/v1/tenants/"+nonRegularTenantID+"/custom-alerts", nonRegularTenantID,
 				`{"custom_alerts":[],"base_hash":"0000000000000000"}`)
 			f.assertNotRegularRefusal(t, w, took)
-			f.assertNothingWritten(t, head, mode)
+			f.assertNothingWritten(t, before)
 		})
 	}
 }

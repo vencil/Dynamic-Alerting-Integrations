@@ -105,7 +105,9 @@ const (
 	// ProblemNotRegularFile: the path (after following symlinks) exists but
 	// is not a regular file — typically a symlink to a directory, or a FIFO /
 	// device (a symlink to /dev/null lands here too). Decided by fstat on the
-	// opened fd BEFORE any read, so a FIFO cannot block the reader.
+	// opened fd BEFORE any read, so a FIFO cannot block the reader. A special
+	// file whose open itself fails (a unix socket) is classified by a stat of
+	// the path instead (#2477).
 	ProblemNotRegularFile FileProblem = "not_regular_file"
 
 	// ProblemMalformedYAML: the bytes do not parse as YAML at all. This is a
@@ -141,6 +143,11 @@ func ReadTenantFile(dir, name string) (data []byte, problem FileProblem) {
 	// read.
 	f, err := openNoBlock(path)
 	if err != nil {
+		// #2477: some special files fail at open (a unix socket answers
+		// ENXIO); name them as openRegular does, not as unreadable.
+		if notRegularAfterOpenFailure(path) != nil {
+			return nil, ProblemNotRegularFile
+		}
 		return nil, ProblemUnreadable
 	}
 	defer func() { _ = f.Close() }() // read-only fd: a close error cannot lose data

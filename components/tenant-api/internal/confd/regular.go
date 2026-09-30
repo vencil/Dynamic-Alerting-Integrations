@@ -14,6 +14,20 @@ import (
 // the per-tenant handlers that answer one request about one file (#2477).
 var ErrNotRegularFile = errors.New("confd: not a regular file")
 
+// notRegularAfterOpenFailure classifies a path whose open just failed: when
+// it still stats as something other than a regular file (a unix socket
+// answers ENXIO at open, before any fstat could run), the answer is an error
+// wrapping ErrNotRegularFile; otherwise nil, and the caller keeps its own
+// verdict for the open error. The one classifier behind both openRegular and
+// ReadTenantFile, so the list row and the per-tenant endpoints name the same
+// reason for the same file.
+func notRegularAfterOpenFailure(path string) error {
+	if fi, err := os.Stat(path); err == nil && !fi.Mode().IsRegular() {
+		return fmt.Errorf("%w: %s", ErrNotRegularFile, filepath.Base(path))
+	}
+	return nil
+}
+
 // openRegular opens path the way ReadTenantFile does — without blocking, then
 // fstat on the opened fd — and returns the fd only when it is a regular file.
 //
@@ -26,8 +40,8 @@ var ErrNotRegularFile = errors.New("confd: not a regular file")
 func openRegular(path string) (*os.File, error) {
 	f, err := openNoBlock(path)
 	if err != nil {
-		if fi, serr := os.Stat(path); serr == nil && !fi.Mode().IsRegular() {
-			return nil, fmt.Errorf("%w: %s", ErrNotRegularFile, filepath.Base(path))
+		if nr := notRegularAfterOpenFailure(path); nr != nil {
+			return nil, nr
 		}
 		return nil, err
 	}
