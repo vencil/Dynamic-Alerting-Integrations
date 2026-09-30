@@ -50,7 +50,7 @@ If a running version (say v3) has **no** version-specific threshold declared, it
 Version-awareness is currently a **Kubernetes pilot**, and **only two metrics accept a `version` label**:
 
 - ✅ `container_cpu`, `container_memory`
-- ❌ any other metric (`redis_*`, `pg_*`, `mysql_*`, …) with `{version="..."}` is **rejected (400) when written through the tenant-api** (non-pilot metric — prevents cross-pack cardinality contamination). ⚠️ A direct GitOps push has no such gate: da-guard does not check `version`, and `generate-routes --validate` only prints a WARN and exits 0.
+- ❌ any other metric (`redis_*`, `pg_*`, `mysql_*`, …) with `{version="..."}` is **rejected outright by da-guard** (non-pilot metric — prevents cross-pack cardinality contamination).
 
 > **Silent-inert risk (you must know this)**: version-awareness relies on kube-state-metrics exposing the pod's version label. **If the platform's KSM does not enable the matching allowlist, the version thresholds you declare silently do nothing** (every pod is treated as `default`, your tightened v2 threshold never applies), and **you get no direct feedback on your side**. So:
 >
