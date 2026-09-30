@@ -324,9 +324,14 @@ and if you cannot write that assertion, that is the finding, not the number.
 from __future__ import annotations
 
 import ast
+import io
+import json
 import os
 import re
+import shutil
 import subprocess
+import sys
+import tokenize
 from functools import lru_cache
 from pathlib import Path
 
@@ -812,6 +817,138 @@ def _wrapped_references(text: str) -> list[tuple[int, str]]:
     return found
 
 
+# What ONE replacement field (`{v}`) becomes when a string value is rebuilt for
+# mapping (#1633). ⛔ It must lie OUTSIDE the token character class: at runtime a
+# field holds text nobody can grep for, so a token must never run through one.
+# Its runtime LENGTH is unknown and does not matter — the mapping measures the
+# rebuilt value, and `_fragments` checks the rebuild reproduces the node's own.
+_FIELD = "\0"
+
+# Marks an `_implicit_concat_references` hit whose string node could not be
+# mapped back to its source lines (#1633). NOT a verdict of "hidden".
+_UNMAPPABLE = "UNMAPPABLE: "
+
+# The line ends `ast` counts (see the use in `_implicit_concat_references`).
+_LINE_BREAK = re.compile(r"\r\n|\r|\n")
+
+# 3.12+ tokenises an f-string as FSTRING_START … FSTRING_END; before that it is
+# one STRING token. `None` never equals a token type, so on 3.11 the two
+# branches below that test these are simply never taken.
+_FSTRING_START = getattr(tokenize, "FSTRING_START", None)
+_FSTRING_END = getattr(tokenize, "FSTRING_END", None)
+
+
+class _Unmappable(Exception):
+    """A string node whose source literals do not reproduce its value (#1633)."""
+
+
+def _string_value(node: ast.expr) -> str:
+    """A string node's value, every replacement field collapsed to `_FIELD`.
+
+    ⛔ ONE rule for both sides of `_fragments`' self-check — the node as the
+    parser joined it, and each literal parsed alone — so a disagreement means
+    the MAPPING is wrong, never that two rebuild rules drifted apart.
+    """
+    if isinstance(node, ast.Constant) and isinstance(node.value, str):
+        return node.value
+    if isinstance(node, ast.JoinedStr):
+        return "".join(part.value if isinstance(part, ast.Constant) else _FIELD
+                       for part in node.values)
+    raise _Unmappable(f"a literal parsed to {type(node).__name__}, not str")
+
+
+def _string_nodes(tree: ast.AST) -> list[ast.expr]:
+    """Every WHOLE string expression: a str `Constant` or a `JoinedStr`.
+
+    ⛔ Never a PIECE of a `JoinedStr`, and never a format spec (`{x:>{w}}`
+    parses its spec as a `JoinedStr` of its own). A piece is judged as part of
+    its f-string; a format spec is not text anybody greps for. Before 3.12 a
+    piece also carries the WHOLE f-string's position, which is how the old
+    predicate came to judge the same source differently on 3.11 and 3.13
+    (#1633). A string nested INSIDE a replacement field (`f"{g('a/b')}"`) is a
+    whole expression in its own right and is kept.
+    """
+    pieces: set[int] = set()
+    for node in ast.walk(tree):
+        if isinstance(node, ast.JoinedStr):
+            pieces.update(id(part) for part in node.values)
+        elif isinstance(node, ast.FormattedValue) and node.format_spec is not None:
+            pieces.add(id(node.format_spec))
+    return [node for node in ast.walk(tree)
+            if id(node) not in pieces
+            and (isinstance(node, ast.JoinedStr)
+                 or (isinstance(node, ast.Constant) and isinstance(node.value, str)))]
+
+
+def _fragments(node: ast.expr, source: str) -> list[tuple[int, int, str]]:
+    """`(first line, last line, value)` of each source literal `node` is made of.
+
+    ⛔ WHY `tokenize` AND NOT THE AST: the AST cannot say where one literal
+    ends. From 3.12 the parser MERGES adjacent literals across an implicit
+    concatenation into one `Constant`, and before 3.12 every piece of an
+    f-string carries the whole f-string's position. Tokens are the only
+    boundary both versions agree on — measured on #1633, where the AST-only
+    route could not be made to work on either.
+
+    Each literal is then parsed ALONE for its value, so escapes, `{{`, raw
+    prefixes and backslash-newlines are decoded by Python rather than by a
+    re-implementation here. (The 3.12+ `FSTRING_MIDDLE` tokens are no substitute:
+    `{{` sits at the wrong offset, escapes stay in source form and a format spec
+    leaks into them — also measured on #1633.)
+
+    ⛔ SELF-CHECKED, and a failure RAISES rather than returning a best guess:
+    the literals' values, joined, must equal the node's own value under the same
+    `_FIELD` rule. A mapping that is wrong would put the token on the wrong
+    lines, and the resulting verdict — hidden or not — would be a guess that
+    looks like a measurement.
+    """
+    segment = ast.get_source_segment(source, node)
+    if segment is None:
+        raise _Unmappable("the parser gave this node no source position")
+    # Parenthesised, so the continuation lines of an implicit concatenation
+    # tokenise as one expression with no INDENT/DEDENT to trip over. Only the
+    # first line gains a column, and every slice below is taken from `snippet`
+    # itself, so nothing is shifted.
+    snippet = "(" + _LINE_BREAK.sub("\n", segment) + ")"
+    spans: list[tuple[tuple[int, int], tuple[int, int]]] = []
+    opened: list[tuple[int, int]] = []
+    try:
+        for token in tokenize.generate_tokens(io.StringIO(snippet).readline):
+            if token.type == tokenize.STRING:
+                spans.append((token.start, token.end))
+            elif token.type == _FSTRING_START:
+                opened.append(token.start)
+            elif token.type == _FSTRING_END:
+                spans.append((opened.pop(), token.end))
+    except (tokenize.TokenError, SyntaxError, IndexError) as exc:
+        raise _Unmappable(f"tokenize failed: {exc}") from None
+    lines = snippet.split("\n")
+    found: list[tuple[int, int, str]] = []
+    reached: tuple[int, int] | None = None
+    for (start_line, start_col), (end_line, end_col) in sorted(spans):
+        # ⛔ A literal that STARTS inside the previous one is nested in a
+        # replacement field (3.12+ tokenises those separately). Its text is
+        # already the outer literal's `_FIELD`, so taking it too would count
+        # it twice and fail the self-check below on every such f-string.
+        if reached is not None and (start_line, start_col) < reached:
+            continue
+        reached = (end_line, end_col)
+        if start_line == end_line:
+            literal = lines[start_line - 1][start_col:end_col]
+        else:
+            literal = "\n".join([lines[start_line - 1][start_col:]]
+                                + lines[start_line:end_line - 1]
+                                + [lines[end_line - 1][:end_col]])
+        try:
+            value = _string_value(ast.parse(literal, mode="eval").body)
+        except SyntaxError as exc:
+            raise _Unmappable(f"a literal did not parse alone: {exc.msg}") from None
+        found.append((node.lineno + start_line - 1, node.lineno + end_line - 1, value))
+    if "".join(value for _, _, value in found) != _string_value(node):
+        raise _Unmappable("its literals, joined, do not reproduce its value")
+    return found
+
+
 def _implicit_concat_references(text: str, path: str = "<synthetic>") -> list[tuple[int, str]]:
     """The sibling class `_wrapped_references` cannot see: a path split across
     IMPLICIT STRING CONCATENATION (#1394).
@@ -823,10 +960,14 @@ def _implicit_concat_references(text: str, path: str = "<synthetic>") -> list[tu
     and left the split one pointing at nothing.
 
     DERIVED, and that is the whole reason this is tractable. Python's parser
-    already joins implicitly concatenated literals into ONE `ast.Constant`, so
-    the question is asked of the constant's VALUE and compared against the raw
-    source of the LINES it sits on. Nothing here guesses at quote, comma or
-    continuation shapes.
+    already joins implicitly concatenated literals into ONE string node, so the
+    question is asked of that node's VALUE; `tokenize` then says which source
+    literal — and so which LINES — each character of it came from (#1633, see
+    `_fragments`). Nothing here guesses at quote, comma or continuation shapes.
+
+    Returns `(line, token)` per hidden site. ⛔ A site whose fragments could not
+    be mapped comes back as `(line, "UNMAPPABLE: <token> (<why>)")` — in the
+    SAME list, so no caller can drop that class by forgetting to ask for it.
 
     ⚠️ THE AXIS WAS CHOSEN BY MEASUREMENT, not taste. Asking the same question
     with a line-pair rule — first line ends in a quote, next starts with one, as
@@ -901,7 +1042,9 @@ def _implicit_concat_references(text: str, path: str = "<synthetic>") -> list[tu
     # ⛔ HERE, not at the read: this is a pure function, and the synthetic cases
     # below hand it text that never passes through `_decode_whole`, so a strip
     # living only at the read would leave them unprotected.
-    # ⚠️ Positions are unaffected -- nothing in this module reads `col_offset`.
+    # ⚠️ Positions stay consistent: since #1633 `_fragments` DOES read
+    # `col_offset` (through `ast.get_source_segment`), so the stripped `source`
+    # is what is parsed, sliced and split into lines — never `text`.
     # ⛔ Tolerating a BOM is not permitting one. SAST rule 1
     # (`test_sast.py::TestOpenEncoding::test_source_has_no_bom`) rejects a BOM'd
     # tracked `.py` outright; this scan's job is only to not CRASH on one. Both
@@ -909,8 +1052,9 @@ def _implicit_concat_references(text: str, path: str = "<synthetic>") -> list[tu
     # such a file invisible to a FATAL pre-commit hook and to six SAST rules.
     # ⚠️ Still unguarded: four sibling modules self-parse with no BOM handling
     # and no `filename=`. On #1632.
+    source = text.removeprefix("﻿")
     try:
-        tree = ast.parse(text.removeprefix("\ufeff"), filename=path)
+        tree = ast.parse(source, filename=path)
     except SyntaxError as exc:
         # ⚠️ The path prefix and the ticket pointer are what the caller's
         # `UNPARSEABLE` entry is built from, so this message is what the
@@ -918,65 +1062,82 @@ def _implicit_concat_references(text: str, path: str = "<synthetic>") -> list[tu
         # hides a path, which nobody has checked. #1632 holds the policy.
         exc.msg = f"{path}: {exc.msg} (this file must parse for the #1394 scan; see #1632)"
         raise
-    lines = text.split("\n")
+    # ⛔ THE LINE BREAKS `ast` COUNTS, not `str.split("\n")`: the parser reads a
+    # lone `\r` as a line end too, and a line list that disagrees with
+    # `node.lineno` would ask the grep question of the wrong line.
+    lines = _LINE_BREAK.split(source)
     found: list[tuple[int, str]] = []
-    for node in ast.walk(tree):
-        if not (isinstance(node, ast.Constant) and isinstance(node.value, str)):
-            continue
+    for node in _string_nodes(tree):
         if node.end_lineno == node.lineno:
             # ⚠️ A real gap, not "nothing was joined" — see the NOT-modelled
             # bullet on same-line concatenation in this function's docstring.
             continue
-        # ⛔ THE LINES THE CONSTANT SITS ON — deliberately NOT its exact source
-        # span, and the granularity IS the predicate. The question this guard
-        # asks is not "is the token inside this constant"; it is "does
+        occurrences = [
+            (match.start(), match.end(), match.group(0))
+            for pattern in (_extension_token(), _extensionless_token())
+            for match in pattern.finditer(_string_value(node))
+            if "/" in match.group(0) and _resolves(match.group(0))]
+        if not occurrences:
+            continue
+        # ⛔ THE EXACT QUESTION (#1633), and the granularity IS the predicate.
+        # It is not "is the token inside this constant"; it is "does
         # `git grep <path>` return this site", because that is what a rename
-        # sweep works from. Grep answers per LINE.
+        # sweep works from, and grep answers per LINE. So: a site is hidden iff
+        # NO line grep returns — a line where the token is written contiguously,
+        # ANYWHERE in the file — is a line carrying one of the fragments the
+        # token's characters come from.
         #
-        # ⛔ THIS IS AN APPROXIMATION OF THAT QUESTION, AND SO IS THE OBVIOUS
-        # ALTERNATIVE. Both were measured against the exact criterion — a site
-        # is hidden iff NO line grep returns is a line carrying one of the
-        # fragments the token is split across, computed with `tokenize` rather
-        # than guessed:
+        # ⛔ BOTH APPROXIMATIONS OF THIS WERE SHIPPED OR PROPOSED, and they erred
+        # in opposite directions (#1608, measured then; #1633 re-measured):
         #
-        #   case                                    hidden  these lines  AST span
-        #   3 fragments, neighbour on closing line    yes     silent✗     report✓
-        #   2 fragments, neighbour on closing line    no      silent✓     report✗
-        #   2 fragments, neighbour on opening line    no      silent✓     report✗
-        #   plain split, no neighbour                 yes     report✓     report✓
+        #   case                                    hidden  its lines  AST span
+        #   3 fragments, neighbour on closing line    yes     silent✗    report✓
+        #   2 fragments, neighbour on closing line    no      silent✓    report✗
+        #   2 fragments, neighbour on opening line    no      silent✓    report✗
+        #   plain split, no neighbour                 yes     report✓    report✓
         #
-        # Narrowing to `ast.get_source_segment` was tried and reverted (#1608):
-        # it is right on the first row and wrong on the next two, and its error
-        # direction is a FALSE RED on a shipped idiom (an assert message
-        # repeating the value it compares, wrapped at the column) whose cheapest
-        # cure is deleting the repeated path from the diagnostic. This version's
-        # error direction is a MISS. Both reported ZERO over every tracked `.py`
-        # file when the choice was made, so it was made on error direction rather
-        # than on yield. (The corpus size is deliberately not written down here:
-        # it moves with every merge, and this sentence outlived `610` by two
-        # within a day of being written.)
-        # ⚠️ WHAT THIS LEAVES UNGUARDED, and it is the cost of that choice, not
-        # a pre-existing limitation: a constant of THREE or more fragments whose
-        # closing line carries a contiguous mention while the split sits in
-        # earlier fragments. Grep sends the sweep to the closing line, the break
-        # is above it, and this check is silent. The exact predicate above is
-        # implementable (~25 lines, `tokenize` + fragment/value mapping) and was
-        # prototyped; it needs its own handling for f-strings, so it is deferred
-        # rather than half-built here — #1633 carries the prototype, the four
-        # scored cases, and the three questions to settle before starting.
-        raw = "\n".join(lines[node.lineno - 1:node.end_lineno])
-        for token in sorted(_tokens(node.value)):
-            # ⛔ `raw` is this constant's OWN lines, never the whole file. Blind
-            # review measured what file-global costs: the live instance had a
-            # contiguous mention of the same path elsewhere in the same file, so
-            # `token in text` silences it — which is #1373's shape exactly, and
-            # is the property `a split whose token appears elsewhere` pins. That
-            # mention sits on a DIFFERENT line, which is exactly why grep sends
-            # the sweep somewhere else and the split stays hidden.
-            if token in raw or "/" not in token:
-                continue
-            if _resolves(token):
-                found.append((node.lineno, token))
+        # "Its lines" (is the token anywhere on the lines the constant sits on)
+        # was what shipped, and its miss is #1394's own shape: grep sends the
+        # sweep to the closing line, the break sits above it, the sweep fixes
+        # one and leaves the other. The AST span errs toward a FALSE RED on a
+        # shipped idiom (an assert message repeating the value it compares,
+        # wrapped at the column) whose cheapest cure is deleting the repeated
+        # path from the diagnostic. The exact predicate is right on all four,
+        # and every pinned case in the test below keeps its verdict.
+        #
+        # ⚠️ STILL COARSER THAN GREP IN ONE PLACE: the carrier is a FRAGMENT's
+        # lines, not the exact line inside it. A triple-quoted literal that
+        # breaks a path with a backslash-newline AND repeats it contiguously
+        # further down the SAME literal is silent. The old predicate was silent
+        # there too, so this is not a narrowing; mapping a value offset to a
+        # line inside one literal means re-implementing escape decoding.
+        try:
+            fragments = _fragments(node, source)
+        except _Unmappable as exc:
+            # ⛔ FAIL-CLOSED. A site this cannot map is a site it cannot judge,
+            # and "cannot judge" must never read as "clean" — that is the
+            # verdict this whole module exists to stop being given silently.
+            # One entry per token, so the reader sees which paths went unjudged.
+            found.extend(
+                (node.lineno, f"{_UNMAPPABLE}{token} ({exc})")
+                for token in sorted({token for _, _, token in occurrences}))
+            continue
+        hidden: set[str] = set()
+        for start, end, token in occurrences:
+            carriers: set[int] = set()
+            offset = 0
+            for first, last, piece in fragments:
+                if offset < end and start < offset + len(piece):
+                    carriers.update(range(first, last + 1))
+                offset += len(piece)
+            # ⛔ `lines` is the WHOLE FILE here, and that is correct only
+            # because it is intersected with the carriers. Asked file-wide on
+            # its own (`token in text`), a contiguous mention on some OTHER
+            # line silences the split — which is #1373's shape exactly, and is
+            # what the `elsewhere` case pins.
+            if not any(token in lines[number - 1] for number in carriers):
+                hidden.add(token)
+        found.extend((node.lineno, token) for token in sorted(hidden))
     return found
 
 
@@ -1019,7 +1180,14 @@ def _implicit_concat_offenders(files: list[tuple[str, str]]) -> dict[str, list[s
             found[path] = [f"{_UNPARSEABLE}{exc.msg} [line {exc.lineno}]"]
         else:
             for line, token in hits:
-                found.setdefault(path, []).append(f"line {line} -> {token}")
+                # ⛔ An unmappable site keeps its marker IN FRONT, so the
+                # message can file it apart from a hidden path (#1633).
+                if token.startswith(_UNMAPPABLE):
+                    entry = (f"{_UNMAPPABLE}line {line} -> "
+                             f"{token.removeprefix(_UNMAPPABLE)}")
+                else:
+                    entry = f"line {line} -> {token}"
+                found.setdefault(path, []).append(entry)
     return found
 
 
@@ -1034,10 +1202,17 @@ def _implicit_concat_message(offenders: dict[str, list[str]]) -> str:
     "does not parse" and never under "hides a path". The two are handled in
     opposite ways, and a contributor told their broken file "splits a path"
     goes looking for a literal that is not there.
+
+    ⛔ Filed per ENTRY, not per file (#1633): one file can hold a hidden path
+    AND a constant the check could not map, and each needs its own reading.
     """
-    unparseable = {p: v for p, v in offenders.items()
-                   if any(h.startswith(_UNPARSEABLE) for h in v)}
-    splits = {p: v for p, v in offenders.items() if p not in unparseable}
+    def entries(keep) -> dict[str, list[str]]:
+        return {p: kept for p, v in offenders.items()
+                if (kept := [h for h in v if keep(h)])}
+
+    unparseable = entries(lambda h: h.startswith(_UNPARSEABLE))
+    unmappable = entries(lambda h: h.startswith(_UNMAPPABLE))
+    splits = entries(lambda h: not h.startswith((_UNPARSEABLE, _UNMAPPABLE)))
     sections = []
     if splits:
         sections.append(
@@ -1072,6 +1247,20 @@ def _implicit_concat_message(offenders: dict[str, list[str]]) -> str:
             "(under `tmp_path`) instead.\n"
             + "\n".join(f"  {p}:\n    " + "\n    ".join(v)
                         for p, v in sorted(unparseable.items())))
+    if unmappable:
+        sections.append(
+            "UNMAPPABLE — each string below carries a path to one of our files, "
+            "but this check could not map the string's value back to the source "
+            "literals it is written as, so it could NOT TELL whether the path is "
+            "hidden (#1633). This is NOT a report of a hidden path, and the file "
+            "parsed fine.\n"
+            "⛔ It stays red on purpose: a site this check cannot judge is not a "
+            "site it has judged clean, and reading one as the other is the exact "
+            "failure this module exists for. The defect is in THIS CHECK's "
+            "mapping (`_fragments` in tests/ops/test_wrapped_path_references.py) — "
+            "raise it against the check, with the file, line and reason below.\n"
+            + "\n".join(f"  {p}:\n    " + "\n    ".join(v)
+                        for p, v in sorted(unmappable.items())))
     return "\n\n".join(sections)
 
 
@@ -1862,7 +2051,58 @@ def test_each_tripwire_fires_on_degenerate_input() -> None:
     # the thing it protects is not a floor.
 
 
-def test_no_reference_is_split_across_implicit_concatenation() -> None:
+def _exact_predicate_cases() -> list[tuple[str, str, list[tuple[int, str]]]]:
+    """`(name, source, expected hits)` for the cells #1633 added.
+
+    A function rather than inline asserts because TWO tests read it: the
+    pinned-case test below asserts every expectation on whatever interpreter
+    runs it, and `test_implicit_concat_verdicts_agree_across_interpreters`
+    hands the same table to a second interpreter. ⛔ The expectations are
+    LITERAL, not "whatever this interpreter says" — so each interpreter is
+    pinned to the same answer even where only one of them runs (CI is 3.13;
+    the dev container's default `python3` is 3.11).
+    """
+    subject = "tests/ops/test_wrapped_path_references.py"
+    head, tail = subject[:24], subject[24:]
+    hit = [(2, subject)]
+    return [
+        # ⛔ MUST REPORT — the cell the "its lines" approximation missed. Grep
+        # returns ONLY the closing line; the break is two lines above it.
+        ("3 fragments, contiguous mention on the closing line",
+         'x = (\n    "see %s"\n    "%s here"\n    "bbb"), "%s"\n'
+         % (head, tail, subject), hit),
+        ("f-string: 3 fragments, contiguous mention on the closing line",
+         'x = (\n    f"{v} see %s"\n    "%s here"\n    "bbb"), "%s"\n'
+         % (head, tail, subject), hit),
+        # The break is INSIDE the f-fragments themselves, with a replacement
+        # field after it. On 3.11 the old predicate was silent here and on 3.13
+        # it reported (#1633 measurement §5): the AST pieces it read carried
+        # the whole f-string's position on one and their own on the other.
+        ("f-string: split inside f-fragments, `{w}` after, mention on closing line",
+         'x = (\n    f"{v} see %s"\n    f"%s {w}"\n    "bbb"), "%s"\n'
+         % (head, tail, subject), hit),
+        # ⛔ MUST NOT REPORT — the f-string versions of the two boundary cells.
+        # Treating every f-string as unjudgeable (fail-closed on the class)
+        # reports all three. Measured on #1633's tree (counted then, not now):
+        # that rule went red on 97 sites, every one of them a path written
+        # contiguously.
+        ("f-string: 2 fragments, contiguous mention on the closing line",
+         'x = (\n    f"{v} see %s"\n    "%s here"), "%s"\n'
+         % (head, tail, subject), []),
+        ("f-string: 2 fragments, contiguous mention on the opening line",
+         'x = ["%s", f"{v} see %s"\n    "%s here"]\n'
+         % (subject, head, tail), []),
+        ("f-string: one triple-quoted literal over several lines, path contiguous",
+         'x = f"""{v}\nsee %s\nhere"""\n' % subject, []),
+        # A string NESTED in a replacement field is tokenised separately on
+        # 3.12+; counting it as a fragment of the outer f-string breaks the
+        # self-check and turns an ordinary f-string UNMAPPABLE.
+        ("f-string: nested string in a replacement field, path contiguous",
+         "x = (\n    f\"{d['k']} see %s\"\n    \" here\"\n)\n" % subject, []),
+    ]
+
+
+def test_no_reference_is_split_across_implicit_concatenation(monkeypatch) -> None:
     """The #1394 half. Same question, different join.
 
     ⛔ EVERY CASE BELOW PINS A PROPERTY A ONE-LINE EDIT WAS MEASURED TO SILENCE,
@@ -1873,6 +2113,9 @@ def test_no_reference_is_split_across_implicit_concatenation() -> None:
         the lines -> the AST span           FALSE REDS armed  -> boundary cases
         token predicate narrowed to `.py`   defect silenced   -> non-`.py` case
         skip constants inside an f-string   defect silenced   -> f-string case
+        carriers -> the constant's lines    3-fragment miss   -> #1633 cells
+        every f-string fail-closed          FALSE REDS armed  -> #1633 cells
+        drop the UNMAPPABLE entries         unjudged = clean  -> unmappable case
         `ast.walk` -> `tree.body`           all verdicts gone -> plain case
         swallow SyntaxError inside the scan  file leaves silently -> isolation case
         abort on the first bad file (#1632)  later splits unseen  -> isolation case
@@ -1971,8 +2214,9 @@ def test_no_reference_is_split_across_implicit_concatenation() -> None:
     # is the case above (drop the strip, or skip BOM'd files) plus rule 1.
 
     # MUST REPORT: a split whose token ALSO appears contiguously ELSEWHERE in
-    # the same file. Comparing against the whole file instead of the constant's
-    # own lines silences exactly this, and the live instance had precisely that
+    # the same file. Asking "is it anywhere in the file" instead of "is it on a
+    # line that carries the split" silences exactly this, and the live instance
+    # had precisely that
     # shape — the same path written contiguously earlier in the same file, which
     # is why the rename sweep fixed one site and left the other. ⚠️ Same
     # SYMPTOM as #1373, different mechanism (that one wrapped an identifier).
@@ -1980,7 +2224,7 @@ def test_no_reference_is_split_across_implicit_concatenation() -> None:
                  % (subject, head, tail))
     assert [t for _, t in _implicit_concat_references(elsewhere)] == [subject], (
         "a contiguous mention elsewhere in the file does not make the split one "
-        "greppable; comparing against the file instead of the constant's lines "
+        "greppable; asking the whole file instead of the split's own lines "
         "is how a rename sweep reports a clean tree: "
         + repr(_implicit_concat_references(elsewhere)))
 
@@ -2007,8 +2251,8 @@ def test_no_reference_is_split_across_implicit_concatenation() -> None:
     closes_with = ('x = (\n    "see %s"\n    "%s here"), "%s"\n'
                    % (head, tail, subject))
     assert _implicit_concat_references(closes_with) == [], (
-        "same on the line the constant CLOSES on — narrowing `raw` to the AST "
-        "span reports this, and it is greppable: "
+        "same on the line the constant CLOSES on — judging by the AST span "
+        "reports this, and it is greppable: "
         + repr(_implicit_concat_references(closes_with)))
 
     # MUST NOT REPORT: contiguous. Nothing is hidden, so there is nothing to fix.
@@ -2025,6 +2269,54 @@ def test_no_reference_is_split_across_implicit_concatenation() -> None:
         "a comma-separated list is not implicit concatenation; reporting it "
         "would arm this check over every list of paths in the repo: "
         + repr(_implicit_concat_references(listed)))
+
+    # ⛔ THE EXACT PREDICATE'S CELLS (#1633) — see `_exact_predicate_cases`
+    # for what each one pins. Every one is asserted, not just counted, so a
+    # weakening that flips one cell is named by that cell.
+    for name, source, expected in _exact_predicate_cases():
+        assert _implicit_concat_references(source) == expected, (
+            f"{name}: expected {expected}, got "
+            f"{_implicit_concat_references(source)}")
+
+    # ⛔ UNMAPPABLE IS RED, NEVER SILENT (#1633). No natural input fails the
+    # self-check today — that is what it is for — so the failure is induced:
+    # the tokeniser this module sees loses the LAST string literal, which is
+    # exactly a mapping that is wrong. `closes_with` is the input because its
+    # verdict DEPENDS on the mapping (the token is on the closing line), and
+    # without the self-check that site would come back silent — a guess that
+    # looks like a measurement. Driven through the offenders/message pair too,
+    # because an entry nobody files is an entry nobody reads.
+    real_tokenize = tokenize
+
+    class _LosesTheLastLiteral:
+        def __getattr__(self, name: str):
+            return getattr(real_tokenize, name)
+
+        @staticmethod
+        def generate_tokens(readline):
+            tokens = list(real_tokenize.generate_tokens(readline))
+            last = max(i for i, t in enumerate(tokens)
+                       if t.type == real_tokenize.STRING)
+            return tokens[:last] + tokens[last + 1:]
+
+    with monkeypatch.context() as patch:
+        # `globals()` is this module's namespace, which is where `_fragments`
+        # looks the name up — so only this scan sees the lossy tokeniser.
+        patch.setitem(globals(), "tokenize", _LosesTheLastLiteral())
+        unmapped = _implicit_concat_references(closes_with)
+        unmapped_files = _implicit_concat_offenders(
+            [("tests/ops/zfake_unmapped.py", closes_with)])
+    assert unmapped == [(2, f"{_UNMAPPABLE}{subject} "
+                         "(its literals, joined, do not reproduce its value)")], (
+        "a string whose literals do not reproduce its value must be REPORTED "
+        "as unmappable — dropping it reads 'could not judge' as 'clean': "
+        + repr(unmapped))
+    unmapped_message = _implicit_concat_message(unmapped_files)
+    split_part, _, unmapped_part = unmapped_message.partition("UNMAPPABLE — ")
+    assert "tests/ops/zfake_unmapped.py" in unmapped_part and (
+        "zfake_unmapped" not in split_part), (
+        "an unmappable site must be filed under its own heading and never as "
+        "a hidden path:\n" + unmapped_message)
 
     # ⛔ FAIL-CLOSED WITH PER-FILE ISOLATION (#1632), driven through the SAME
     # function production uses. Asserting only that the check raises left the
@@ -2145,7 +2437,65 @@ def test_no_reference_is_split_across_implicit_concatenation() -> None:
     # the call expression itself, is silent. `_unread_drift` still reports a
     # tracked file that was never read, which covers the accidental half.
     offenders = _implicit_concat_offenders(files)
-    # ⛔ ONE assert over BOTH classes — splits and unparseable files (#1632). The
-    # message keeps them apart; the verdict does not, so neither can go green
-    # by being left out of it.
+    # ⛔ ONE assert over EVERY class — splits, unparseable files (#1632) and
+    # unmappable sites (#1633). The message keeps them apart; the verdict does
+    # not, so none can go green by being left out of it.
     assert not offenders, _implicit_concat_message(offenders)
+
+
+# Interpreters the cross-version check below asks. 3.11 is the dev container's
+# default `python3` and 3.13 is CI's — the pair the old predicate disagreed on.
+_SIBLING_INTERPRETERS = ("python3.11", "python3.12", "python3.13", "python3.14")
+
+# Run by a SIBLING interpreter: load this module from its path and print the
+# verdict on every `_exact_predicate_cases` source. `pytest` is stubbed because
+# the table needs none of it and a sibling interpreter need not have it.
+_VERDICTS_SCRIPT = r"""
+import importlib.util, json, sys, types
+sys.modules.setdefault("pytest", types.ModuleType("pytest"))
+spec = importlib.util.spec_from_file_location("wrapped_guard", sys.argv[1])
+guard = importlib.util.module_from_spec(spec)
+spec.loader.exec_module(guard)
+print(json.dumps({name: guard._implicit_concat_references(source)
+                  for name, source, _ in guard._exact_predicate_cases()}))
+"""
+
+
+def test_implicit_concat_verdicts_agree_across_interpreters() -> None:
+    """The same source gets the same verdict on every interpreter (#1633).
+
+    ⛔ The predicate this replaced did NOT have that property: the cell "split
+    inside f-fragments, mention on the closing line" was silent on 3.11 and
+    reported on 3.13, because the AST pieces it read carried different
+    positions on the two. The dev container's default `python3` is 3.11 and CI
+    is 3.13, so a contributor could see green locally for a tree CI turns red.
+
+    ⚠️ WHAT THIS ADDS, and what it does not: the pinned-case test already
+    asserts LITERAL expectations, so each interpreter that runs it is held to
+    the same table. This test runs a SECOND interpreter in the same session,
+    which is the only way one run can compare two. Where none is on PATH (CI
+    installs one Python) it skips and says so — the literal expectations are
+    what still pin that interpreter there.
+    """
+    here = {name: [list(hit) for hit in _implicit_concat_references(source)]
+            for name, source, _ in _exact_predicate_cases()}
+    mine = f"python{sys.version_info[0]}.{sys.version_info[1]}"
+    siblings = [(name, exe) for name in _SIBLING_INTERPRETERS if name != mine
+                if (exe := shutil.which(name))]
+    if not siblings:
+        pytest.skip(f"no CPython other than {mine} on PATH, so there is nothing "
+                    "to compare against; the literal expectations in "
+                    "`_exact_predicate_cases` still pin this interpreter")
+    for name, exe in siblings:
+        run = subprocess.run(
+            [exe, "-P", "-c", _VERDICTS_SCRIPT, __file__], cwd=ROOT,
+            capture_output=True, text=True, encoding="utf-8",
+            stdin=subprocess.DEVNULL, timeout=300)
+        assert run.returncode == 0, (
+            f"{name} could not compute the verdicts (rc {run.returncode}):\n"
+            + run.stderr)
+        theirs = json.loads(run.stdout.strip().splitlines()[-1])
+        assert theirs == here, (
+            f"{mine} and {name} disagree on the same source:\n"
+            + "\n".join(f"  {case}: {mine}={here[case]} {name}={theirs.get(case)}"
+                        for case in sorted(here) if here[case] != theirs.get(case)))
