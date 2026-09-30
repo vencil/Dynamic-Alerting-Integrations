@@ -92,10 +92,17 @@ func parsePlatformTenants(key string, f *TreeFile, data []byte) PlatformTenants 
 	if _, err := ParseConfigFile(data); err != nil {
 		return pt
 	}
+	var texts map[string]string // a scalar `_profile` is its text (#2433)
 	for tid, body := range doc.Tenants {
 		m, ok := normalizeYAMLToJSON(body).(map[string]any)
 		if !ok || len(m) == 0 {
 			continue
+		}
+		if _, has := m["_profile"]; has {
+			if texts == nil {
+				texts = profileTexts(func(v any) error { return yaml.Unmarshal(data, v) })
+			}
+			withProfileText(m, texts, tid)
 		}
 		if pt.tenants == nil {
 			pt.tenants = make(map[string]map[string]any, len(doc.Tenants))

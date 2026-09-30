@@ -677,6 +677,16 @@ func decodeTenantFile(b []byte) (any, error) {
 	if block, ok := tenantsBlockByKeyText(&root); ok {
 		m["tenants"] = block
 	}
+	// A scalar `_profile` is its text, as on the flat plane (#2433): bare
+	// `010` names profile "010", not int 8.
+	if block, ok := m["tenants"].(map[string]any); ok && tenantsWriteProfile(block) {
+		texts := profileTexts(root.Decode)
+		for tid, body := range block {
+			if b, ok := body.(map[string]any); ok {
+				withProfileText(b, texts, tid)
+			}
+		}
+	}
 	return doc, nil
 }
 
