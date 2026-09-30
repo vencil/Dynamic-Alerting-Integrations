@@ -513,11 +513,18 @@ class TestPlatformTenantBlock:
 
     def test_platform_file_cannot_create_a_tenant(self, tmp_path, capsys):
         (tmp_path / "_defaults.yaml").write_text(self._PLATFORM, encoding="utf-8")
+        def _warns():
+            return [ln for ln in capsys.readouterr().err.splitlines()
+                    if "tenants.tx" in ln]
+
         chain = diagnose.resolve_inheritance_chain("tx", str(tmp_path))
         assert chain["resolved"]["mysql_connections"] == 80
+        warns = _warns()
+        assert len(warns) == 1 and "_defaults.yaml" in warns[0], warns
+        # #1522: lookup_tenant_profile is a view over the chain now, so
+        # called on its own it says it too — once.
         assert diagnose.lookup_tenant_profile("tx", str(tmp_path)) is None
-        warns = [ln for ln in capsys.readouterr().err.splitlines()
-                 if "tenants.tx" in ln]
+        warns = _warns()
         assert len(warns) == 1 and "_defaults.yaml" in warns[0], warns
 
     def test_unselected_carrier_spelling_is_not_read(self, tmp_path):
@@ -536,3 +543,327 @@ class TestPlatformTenantBlock:
         chain = diagnose.resolve_inheritance_chain("tx", str(tmp_path))
         assert chain["resolved"]["mysql_connections"] == "61"
         assert diagnose.lookup_tenant_profile("tx", str(tmp_path)) == "good"
+
+
+# ---------------------------------------------------------------------------
+# #1522: lookup_tenant_profile and check() read conf.d through the chain
+# ---------------------------------------------------------------------------
+
+class TestProfileLookupSharesTheChainRead:
+    """`lookup_tenant_profile` used to be a second reader of the same
+    directory that skipped a file it could not read in silence, while
+    `resolve_inheritance_chain` WARNed about it. It is now a view over the
+    chain, and `check()` reads the directory once."""
+
+    @staticmethod
+    def _confd(tmp_path):
+        (tmp_path / "_defaults.yaml").write_text(
+            "defaults:\n  mysql_connections: 80\n"
+            "tenants:\n  tx:\n    _profile: gold\n", encoding="utf-8")
+        (tmp_path / "tx.yaml").write_text(
+            "tenants:\n  tx:\n    mysql_connections: 70\n", encoding="utf-8")
+        (tmp_path / "_profiles.yaml").write_text(
+            "profiles:\n  gold:\n    mysql_slow_queries: 60\n", encoding="utf-8")
+        # Another tenant's file that does not parse.
+        (tmp_path / "broken.yaml").write_text(
+            "tenants:\n  other:\n    _profile: [unclosed\n", encoding="utf-8")
+        return str(tmp_path)
+
+    def test_called_on_its_own_it_names_the_file_it_could_not_read(
+            self, tmp_path, capsys):
+        d = self._confd(tmp_path)
+        assert diagnose.lookup_tenant_profile("tx", d) == "gold"
+        err = capsys.readouterr().err
+        assert "WARN: skip broken.yaml" in err, err
+
+    def test_answer_is_the_chains_profile_name(self, tmp_path, capsys):
+        d = self._confd(tmp_path)
+        chain = diagnose.resolve_inheritance_chain("tx", d)
+        assert chain["skipped_unusable_files"] == ["broken.yaml"]
+        assert diagnose.lookup_tenant_profile("tx", d) == chain["profile_name"]
+
+    @staticmethod
+    def _check(d):
+        with mock.patch.object(diagnose, "tenant_db_type",
+                               return_value=(None, None)), \
+                mock.patch.object(diagnose, "query_prometheus",
+                                  return_value=([], None)):
+            return diagnose.check("tx", "http://prom:9090",
+                                  config_dir=d, out=io.StringIO())
+
+    def test_check_resolves_the_chain_once_and_warns_once(
+            self, tmp_path, capsys):
+        """Counts `resolve_inheritance_chain` CALLS from `check()` — the
+        profile comes from that one call, not from a second
+        `lookup_tenant_profile` call over the same files."""
+        d = self._confd(tmp_path)
+        real = diagnose.resolve_inheritance_chain
+        with mock.patch.object(diagnose, "resolve_inheritance_chain",
+                               wraps=real) as spy:
+            result = self._check(d)
+        assert spy.call_count == 1
+        assert result["profile"] == "gold"
+        assert result["inheritance_chain"]["skipped_unusable_files"] == [
+            "broken.yaml"]
+        skips = [ln for ln in capsys.readouterr().err.splitlines()
+                 if "WARN: skip broken.yaml" in ln]
+        assert len(skips) == 1, skips
+
+    # A value of the wrong type that the exporter's typed decode refuses:
+    # it drops the WHOLE file (parse_failed), measured against LoadDir.
+    # These used to end both readers with AttributeError / TypeError.
+    _WRONG_TYPE = {
+        "defaults-not-a-mapping": (
+            "_defaults.yaml", "defaults: [1, 2]\n",
+            "'defaults' must be a mapping, got list", 70, 60),
+        "optional-overrides-not-a-list": (
+            "_defaults.yaml",
+            "defaults:\n  mysql_connections: 80\noptional_overrides: 5\n",
+            "'optional_overrides' must be a list, got int", 70, 60),
+        "profile-body-not-a-mapping": (
+            "_profiles.yaml", "profiles:\n  gold: [1, 2]\n",
+            "'profiles.gold' must be a mapping, got list", 70, None),
+        # Another profile's body: the file still goes, gold with it.
+        "sibling-profile-body-not-a-mapping": (
+            "_profiles.yaml",
+            "profiles:\n  gold:\n    mysql_slow_queries: 60\n  bad: [1, 2]\n",
+            "'profiles.bad' must be a mapping, got list", 70, None),
+        "optional-overrides-entry-a-mapping": (
+            "_defaults.yaml",
+            "defaults:\n  mysql_connections: 80\noptional_overrides: [{a: 1}]\n",
+            "'optional_overrides' entries must be scalars, got dict", 70, 60),
+        "optional-overrides-entry-a-list": (
+            "_defaults.yaml",
+            "defaults:\n  mysql_connections: 80\noptional_overrides: [[a]]\n",
+            "'optional_overrides' entries must be scalars, got list", 70, 60),
+        # `!!set` is a mapping node to the exporter (and to diagnose's
+        # loaders): where a string entry is wanted, the file fails like
+        # `[{a: 1}]`.
+        "optional-overrides-entry-a-set": (
+            "_defaults.yaml",
+            "defaults:\n  mysql_connections: 80\noptional_overrides: [!!set {a}]\n",
+            "'optional_overrides' entries must be scalars, got dict", 70, 60),
+        "optional-overrides-entry-an-empty-set": (
+            "_defaults.yaml",
+            "defaults:\n  mysql_connections: 80\noptional_overrides: [!!set {}]\n",
+            "'optional_overrides' entries must be scalars, got dict", 70, 60),
+        "optional-overrides-entry-a-set-in-profiles-file": (
+            "_profiles.yaml",
+            "profiles:\n  gold:\n    mysql_slow_queries: 60\n"
+            "optional_overrides: [!!set {a}]\n",
+            "'optional_overrides' entries must be scalars, got dict", 70, None),
+    }
+
+    # The other side of the line: each of these LOADS on the exporter
+    # (parse_failed empty; the values are what /metrics serves, measured
+    # against LoadDir), so nothing may be skipped.
+    _NULL_IS_FINE = {
+        "profile-body-null": (
+            "_profiles.yaml", "profiles:\n  gold: ~\n", {
+                "mysql_connections": 70, "mysql_slow_queries": 90}),
+        "sibling-profile-body-null": (
+            "_profiles.yaml",
+            "profiles:\n  gold:\n    mysql_slow_queries: 60\n  bad: ~\n", {
+                "mysql_connections": 70, "mysql_slow_queries": 60}),
+        "optional-overrides-null": (
+            "_defaults.yaml",
+            "defaults:\n  mysql_connections: 80\n  mysql_slow_queries: 90\n"
+            "optional_overrides: ~\n", {
+                "mysql_connections": 70, "mysql_slow_queries": 60}),
+        "optional-overrides-scalar-entries": (
+            "_defaults.yaml",
+            "defaults:\n  mysql_connections: 80\n  mysql_slow_queries: 90\n"
+            "optional_overrides: [1, ~, true, x]\n", {
+                "mysql_connections": 70, "mysql_slow_queries": 60}),
+        # /metrics serves no row without a platform default, so there is no
+        # value to compare here — only that the file is not dropped.
+        "defaults-null": ("_defaults.yaml", "defaults: ~\n", None),
+        # `!!set` in a mapping position: to the exporter a mapping (here
+        # with every value null), so it loads.
+        "defaults-a-set": (
+            "_defaults.yaml",
+            "defaults: !!set {mysql_connections, mysql_slow_queries}\n", {
+                "mysql_connections": 70, "mysql_slow_queries": 60}),
+        "profiles-a-set": (
+            "_profiles.yaml", "profiles: !!set {gold}\n", {
+                "mysql_connections": 70, "mysql_slow_queries": 90}),
+        "profile-body-a-set": (
+            "_profiles.yaml", "profiles:\n  gold: !!set {mysql_slow_queries}\n", {
+                "mysql_connections": 70, "mysql_slow_queries": 90}),
+        "sibling-profile-body-a-set": (
+            "_profiles.yaml",
+            "profiles:\n  gold:\n    mysql_slow_queries: 60\n  bad: !!set {k}\n", {
+                "mysql_connections": 70, "mysql_slow_queries": 60}),
+    }
+
+    @pytest.mark.parametrize("case", sorted(_NULL_IS_FINE))
+    def test_a_null_value_is_not_a_wrong_type(self, tmp_path, capsys, case):
+        fname, body, resolved = self._NULL_IS_FINE[case]
+        files = {
+            "_defaults.yaml":
+                "defaults:\n  mysql_connections: 80\n  mysql_slow_queries: 90\n",
+            "tx.yaml": "tenants:\n  tx:\n    _profile: gold\n"
+                       "    mysql_connections: 70\n",
+            "_profiles.yaml": "profiles:\n  gold:\n    mysql_slow_queries: 60\n",
+        }
+        files[fname] = body
+        for name, text in files.items():
+            (tmp_path / name).write_text(text, encoding="utf-8")
+        d = str(tmp_path)
+        assert diagnose.lookup_tenant_profile("tx", d) == "gold"
+        chain = diagnose.resolve_inheritance_chain("tx", d)
+        assert "skipped_unusable_files" not in chain
+        if resolved is not None:
+            assert chain["resolved"] == resolved
+        result = self._check(d)
+        assert "skipped_unusable_files" not in result["inheritance_chain"]
+        assert "WARN" not in capsys.readouterr().err
+
+    @pytest.mark.parametrize("case", sorted(_WRONG_TYPE))
+    def test_a_wrong_type_value_skips_its_file_instead_of_crashing(
+            self, tmp_path, capsys, case):
+        fname, body, reason, conn, slow = self._WRONG_TYPE[case]
+        files = {
+            "_defaults.yaml": "defaults:\n  mysql_connections: 80\n",
+            "tx.yaml": "tenants:\n  tx:\n    _profile: gold\n"
+                       "    mysql_connections: 70\n",
+            "_profiles.yaml": "profiles:\n  gold:\n    mysql_slow_queries: 60\n",
+        }
+        files[fname] = body
+        for name, text in files.items():
+            (tmp_path / name).write_text(text, encoding="utf-8")
+        d = str(tmp_path)
+        want = f"WARN: skip {fname}: {reason}"
+
+        assert diagnose.lookup_tenant_profile("tx", d) == "gold"
+        assert want in capsys.readouterr().err
+
+        chain = diagnose.resolve_inheritance_chain("tx", d)
+        capsys.readouterr()
+        assert chain["skipped_unusable_files"] == [fname]
+        assert chain["resolved"].get("mysql_connections") == conn
+        assert chain["resolved"].get("mysql_slow_queries") == slow
+
+        result = self._check(d)
+        assert result["profile"] == "gold"
+        assert result["inheritance_chain"]["skipped_unusable_files"] == [fname]
+        lines = [ln for ln in capsys.readouterr().err.splitlines()
+                 if want in ln]
+        assert len(lines) == 1, lines
+
+    def test_a_platform_file_dropped_for_its_type_takes_its_tenants_block(
+            self, tmp_path, capsys):
+        """The exporter drops the whole file, so its `tenants:` entry
+        (here the profile assignment) is gone too."""
+        (tmp_path / "_defaults.yaml").write_text(
+            "defaults:\n  mysql_connections: 80\n", encoding="utf-8")
+        (tmp_path / "_platform.yaml").write_text(
+            "optional_overrides: 5\ntenants:\n  tx:\n    _profile: gold\n",
+            encoding="utf-8")
+        (tmp_path / "tx.yaml").write_text(
+            "tenants:\n  tx:\n    mysql_connections: 70\n", encoding="utf-8")
+        assert diagnose.lookup_tenant_profile("tx", str(tmp_path)) is None
+        assert ("WARN: skip _platform.yaml: 'optional_overrides' must be a "
+                "list, got int") in capsys.readouterr().err
+
+
+class TestSetTagReadAsTheExporterReadsIt:
+    """#1522: yaml.v3 decodes a `!!set`-tagged node by its kind, so in a
+    mapping position it is that mapping, values kept. PyYAML's own `!!set`
+    builds a Python set and drops the values; diagnose's loaders do not.
+
+    Each case is written twice — with `!!set` and as the plain mapping
+    (the control, which must already give the right answer) — and both
+    must resolve to what /metrics serves (measured against LoadDir +
+    ResolveAt on the same tree)."""
+
+    _DEFAULTS = "defaults:\n  mysql_connections: 80\n  mysql_slow_queries: 90\n"
+    _TX = "tenants:\n  tx:\n    _profile: gold\n    mysql_connections: 70\n"
+    _PROF = "profiles:\n  gold:\n    mysql_slow_queries: 60\n"
+
+    # case: (files with {TAG} where the set/plain tag goes, profile, /metrics)
+    _CASES = {
+        "profile-body-flow": (
+            {"_profiles.yaml": "profiles:\n  gold: {TAG}{mysql_slow_queries: 55}\n"},
+            "gold", {"mysql_connections": 70, "mysql_slow_queries": 55}),
+        "profile-body-block": (
+            {"_profiles.yaml": "profiles:\n  gold: {TAG}\n    mysql_slow_queries: 55\n"},
+            "gold", {"mysql_connections": 70, "mysql_slow_queries": 55}),
+        "profiles": (
+            {"_profiles.yaml": "profiles: {TAG}{gold: {mysql_slow_queries: 55}}\n"},
+            "gold", {"mysql_connections": 70, "mysql_slow_queries": 55}),
+        "defaults": (
+            {"_defaults.yaml":
+                "defaults: {TAG}{mysql_connections: 5, mysql_slow_queries: 6}\n",
+             "tx.yaml": "tenants:\n  tx:\n    mysql_connections: 70\n",
+             "_profiles.yaml": None},
+            None, {"mysql_connections": 70, "mysql_slow_queries": 6}),
+        "tenant-block": (
+            {"tx.yaml": "tenants: {tx: {TAG}{mysql_connections: 71, "
+                        "_profile: gold}}\n"},
+            "gold", {"mysql_connections": 71, "mysql_slow_queries": 60}),
+    }
+
+    def _tree(self, tmp_path, overrides, tag):
+        files = {"_defaults.yaml": self._DEFAULTS, "tx.yaml": self._TX,
+                 "_profiles.yaml": self._PROF}
+        files.update(overrides)
+        for name, text in files.items():
+            if text is not None:
+                (tmp_path / name).write_text(text.replace("{TAG}", tag),
+                                             encoding="utf-8")
+        return str(tmp_path)
+
+    @pytest.mark.parametrize("tag", ["!!set ", ""], ids=["set", "plain"])
+    @pytest.mark.parametrize("case", sorted(_CASES))
+    def test_a_set_in_a_mapping_position_keeps_its_values(
+            self, tmp_path, capsys, case, tag):
+        overrides, profile, served = self._CASES[case]
+        d = self._tree(tmp_path, overrides, tag)
+        chain = diagnose.resolve_inheritance_chain("tx", d)
+        assert "skipped_unusable_files" not in chain
+        assert chain["profile_name"] == profile
+        assert chain["resolved"] == served
+        assert diagnose.lookup_tenant_profile("tx", d) == profile
+        assert "WARN" not in capsys.readouterr().err
+
+    def test_a_tenants_set_names_tenants_with_no_keys(self, tmp_path, capsys):
+        """`tenants: !!set {tx}` is `tenants: {tx: ~}` on /metrics: the
+        tenant exists with nothing of its own (80/90 = the defaults)."""
+        d = self._tree(tmp_path, {"tx.yaml": "tenants: !!set {tx}\n"}, "")
+        chain = diagnose.resolve_inheritance_chain("tx", d)
+        assert "skipped_unusable_files" not in chain
+        assert chain["resolved"] == {"mysql_connections": 80,
+                                     "mysql_slow_queries": 90}
+
+    def test_a_repeated_key_in_a_set_still_skips_the_file(
+            self, tmp_path, capsys):
+        d = self._tree(tmp_path, {
+            "_profiles.yaml":
+                "profiles:\n  gold: !!set {mysql_slow_queries: 55, "
+                "mysql_slow_queries: 56}\n"}, "")
+        chain = diagnose.resolve_inheritance_chain("tx", d)
+        assert chain["skipped_unusable_files"] == ["_profiles.yaml"]
+        assert "WARN: skip _profiles.yaml" in capsys.readouterr().err
+
+    @pytest.mark.parametrize("body", [
+        "defaults: !!set {1, mysql_connections}\n",
+        "defaults: {1: 5, mysql_connections: 80}\n"], ids=["set", "plain"])
+    def test_a_non_string_defaults_key_does_not_end_the_run(
+            self, tmp_path, capsys, body):
+        """/metrics serves the key as `default_1` (value 0 / 5); diagnose
+        shows it under the key PyYAML built, but must not raise."""
+        d = self._tree(tmp_path, {
+            "_defaults.yaml": body,
+            "tx.yaml": "tenants:\n  tx:\n    mysql_connections: 70\n",
+            "_profiles.yaml": None}, "")
+        chain = diagnose.resolve_inheritance_chain("tx", d)
+        assert chain["resolved"]["mysql_connections"] == 70
+        assert "skipped_unusable_files" not in chain
+        with mock.patch.object(diagnose, "tenant_db_type",
+                               return_value=(None, None)), \
+                mock.patch.object(diagnose, "query_prometheus",
+                                  return_value=([], None)):
+            result = diagnose.check("tx", "http://prom:9090", config_dir=d,
+                                    out=io.StringIO())
+        assert result["status"] == "unchecked"
