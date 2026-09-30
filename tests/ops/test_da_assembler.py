@@ -1124,6 +1124,53 @@ class TestRenderCrExporterShapes:
         assert list(out_dir.iterdir()) == []
 
 
+#: #2476: (id, text, spec) — `TestRenderCrNameFormat._render_text` input
+#: whose null mapping key survives go-yaml v2's decode, so Kubernetes
+#: refuses the document. spec None is the class's default `_SPEC`.
+NULL_KEY_REFUSED = [
+    ("null", "metadata: {name: ok}\n", "spec:\n  tenants: {null: {}}\n"),
+    ("tilde", "metadata: {name: ok}\n", "spec:\n  tenants: {~: {}}\n"),
+    ("Null", "metadata: {name: ok}\n", "spec:\n  tenants:\n    t1: {Null: 1}\n"),
+    ("empty-key", "metadata: {name: ok}\n",
+     "spec:\n  tenants:\n    t1:\n      ? \n      : 1\n"),
+    ("tagged-null-key", "metadata: {name: ok}\n",
+     "spec:\n  tenants:\n    t1: {!!null ~: 1}\n"),
+    ("in-metadata", "metadata:\n  name: ok\n  labels: {~: x}\n", None),
+    ("through-alias", "x: &n ~\nmetadata: {name: ok}\n",
+     "spec:\n  tenants: {*n : {}}\n"),
+    ("merge-alias", "b: &b {~: 1}\nb: 0\nx: {<<: *b}\nmetadata: {name: ok}\n",
+     None),
+    ("merge-list", "b: &b {~: 1}\nb: 0\nx: {<<: [*b]}\nmetadata: {name: ok}\n",
+     None),
+    ("merge-then-same-key", "x: {<<: {~: 1}, ~: 2}\nmetadata: {name: ok}\n",
+     None),
+    ("merge-list-earlier-wins",
+     "x: {<<: [{k: {~: 1}}, {k: 1}]}\nmetadata: {name: ok}\n", None),
+    ("in-sequence", "x: [{~: 1}]\nmetadata: {name: ok}\n", None),
+    ("two-null-keys", "x: {~: 1, null: 2}\nmetadata: {name: ok}\n", None),
+    ("replaced-by-null-too", "x: {k: {~: 1}, k: {~: 2}}\nmetadata: {name: ok}\n",
+     None),
+]
+#: The same shapes with the null key's value replaced by a later pair
+#: before go-yaml's decode ends: Kubernetes accepts them.
+NULL_KEY_ACCEPTED = [
+    ("replaced-duplicate", "metadata: {name: ok}\n",
+     "spec:\n  tenants: {null: {}}\n  tenants: {t1: {}}\n"),
+    ("replaced-top-level", "x: {~: 1}\nx: 2\nmetadata: {name: ok}\n", None),
+    ("merge-source-replaced-and-overridden",
+     "b: &b {k: {~: 1}}\nb: 0\nx: {<<: *b, k: 1}\nmetadata: {name: ok}\n",
+     None),
+    ("merge-after-explicit",
+     "x: {k: {~: 1}, <<: {k: 2}}\nmetadata: {name: ok}\n", None),
+    ("merge-list-earlier-wins",
+     "x: {<<: [{k: 1}, {k: {~: 1}}]}\nmetadata: {name: ok}\n", None),
+    ("int-spellings", "x: {1: {~: 1}, 0x1: 2}\nmetadata: {name: ok}\n", None),
+    ("octal-spelling", "x: {010: {~: 1}, 8: 2}\nmetadata: {name: ok}\n", None),
+    ("v2-bool-spellings", "x: {y: {~: 1}, yes: 2}\nmetadata: {name: ok}\n",
+     None),
+]
+
+
 class TestRenderCrNameFormat:
     """#2396：`--render-cr` 以 Kubernetes 的規則驗 name／namespace。
 
@@ -1397,39 +1444,62 @@ class TestRenderCrNameFormat:
         assert render_cr_file(cr_path, out_dir) == EXIT_CALLER_ERROR
         assert "nested too deeply for this tool to read" in caplog.text
 
+    def test_deep_nesting_that_reads_names_the_tool_limit_at_render(
+            self, tmp_path, caplog):
+        """#2476：巢狀深到讀得進來、但 render 時用盡 stack（約 350–480
+        層）時，訊息同樣註明是本工具的上限。
+
+        會讓本組轉紅的改動：拿掉 render 階段 `RecursionError` 的專屬分支
+        （落回 `Failed to render …: maximum recursion depth exceeded`）。
+        """
+        cr_path = tmp_path / "cr.yaml"
+        cr_path.write_text("kind: ThresholdConfig\nmetadata: {name: ok}\n"
+                           "spec: {tenants: {t1: {k: " + "{a: " * 400 + "1"
+                           + "}" * 400 + "}}}\n", encoding="utf-8")
+        out_dir = tmp_path / "out"
+        out_dir.mkdir()
+        assert render_cr_file(cr_path, out_dir) == EXIT_CALLER_ERROR
+        assert "Failed to parse" not in caplog.text
+        assert "nested too deeply for this tool to render" in caplog.text
+
     @pytest.mark.parametrize("text, spec", [
-        pytest.param("metadata: {name: ok}\n", "spec:\n  tenants: {null: {}}\n",
-                     id="null"),
-        pytest.param("metadata: {name: ok}\n", "spec:\n  tenants: {~: {}}\n",
-                     id="tilde"),
-        pytest.param("metadata: {name: ok}\n",
-                     "spec:\n  tenants:\n    t1: {Null: 1}\n", id="Null"),
-        pytest.param("metadata: {name: ok}\n",
-                     "spec:\n  tenants:\n    t1:\n      ? \n      : 1\n",
-                     id="empty-key"),
-        pytest.param("metadata: {name: ok}\n",
-                     "spec:\n  tenants:\n    t1: {!!null ~: 1}\n",
-                     id="tagged-null-key"),
-        pytest.param("metadata:\n  name: ok\n  labels: {~: x}\n", None,
-                     id="in-metadata"),
-        pytest.param("x: &n ~\nmetadata: {name: ok}\n",
-                     "spec:\n  tenants: {*n : {}}\n", id="through-alias"),
-        pytest.param("metadata: {name: ok}\n",
-                     "spec:\n  tenants: {null: {}}\n  tenants: {t1: {}}\n",
-                     id="under-replaced-duplicate"),
-    ])
+        pytest.param(text, spec, id=case_id)
+        for case_id, text, spec in NULL_KEY_REFUSED])
     def test_null_mapping_key_is_caller_error(self, text, spec, tmp_path,
                                               caplog):
-        """#2476：K8s（sigs.k8s.io/yaml YAMLToJSON）對任何位置的 null
+        """#2476：K8s（sigs.k8s.io/yaml YAMLToJSON）對 decode 後仍在的 null
         mapping key 整份拒收（`unsupported map key of type: <nil>`）。
 
         先前 `--render-cr` rc 0 並寫出檔案。會讓本組轉紅的改動：拿掉
-        `_has_null_key` 檢查，或只看最後生效的 `spec.tenants`。
+        `_has_null_key` 檢查，或不照 go-yaml v2 的順序展開 `<<` merge。
         """
         rc, got = self._render_text(tmp_path, text, spec)
         assert rc == EXIT_CALLER_ERROR
         assert got is None
         assert "a mapping has a null key" in caplog.text
+
+    @pytest.mark.parametrize("text, spec", [
+        pytest.param(text, spec, id=case_id)
+        for case_id, text, spec in NULL_KEY_ACCEPTED])
+    def test_null_key_replaced_before_decode_ends_renders(self, text, spec,
+                                                          tmp_path):
+        """#2476：K8s 在 decode 之後才判 null key，被後面同名鍵（含 `<<`
+        merge 依 go-yaml v2 順序）蓋掉的值已經不在，整份接受。
+
+        會讓本組轉紅的改動：null key 改回走整份 compose 圖（連被蓋掉的
+        pair 也看），或同鍵判定不照 go-yaml v2 的讀法（`0x1` 與 `1`、`y` 與
+        `yes` 是同一個鍵）。
+        """
+        rc, got = self._render_text(tmp_path, text, spec)
+        assert rc == 0
+        assert got is not None
+
+    def test_mapping_as_key_is_caller_error(self, tmp_path):
+        """key 本身是 mapping（內含 null key）：K8s 拒收，本工具讀檔即 rc 2。"""
+        rc, got = self._render_text(
+            tmp_path, "metadata: {name: ok}\nx: {? {~: 1} : 1}\n")
+        assert rc == EXIT_CALLER_ERROR
+        assert got is None
 
     def test_quoted_null_key_is_a_string(self, tmp_path):
         """對照組：加引號的 `"null":`／`"~":` 是字串鍵，K8s 接受，照常 rc 0。"""
