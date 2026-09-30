@@ -257,7 +257,7 @@ effective = deep_merge( defaults_block(L0), …, defaults_block(Ln), tenant_body
 ### 已知的可達例外（非窮舉——這份清單不是保證）
 
 1. **無 `defaults:` 鍵的檔案**會把**整份文件**併進 `effective`，兄弟鍵一併進來。
-   ⚠️ schema 只在**頂層鍵全部落在白名單內**時才放行（`additionalProperties: false` ＋ 15 個
+   ⚠️ schema 只在**頂層鍵全部落在白名單內**時才放行（`additionalProperties: false` ＋
    固定 properties ＋ `^_state_` / `^_routing` patternProperties），所以「省略 `defaults:`
    直接裸寫閾值鍵」其實會被 `check_confd_schema.py` 擋下。這個形狀 repo 內現有
    （`rule-packs/recipes/examples/conf.d/finance/_defaults.yaml`，頂層只有 `_custom_alerts`）。

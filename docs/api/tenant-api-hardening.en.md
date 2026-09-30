@@ -113,8 +113,10 @@ v2.7.0 RBAC enforced `PermRead` / `PermWrite` at the route level via `rbacMgr.Mi
 |---|---|---|
 | `PUT /api/v1/groups/{id}` | Any `PermWrite` user could rewrite any group's `members` | Caller must hold `PermWrite` on **every** member tenant; forbidden ones listed in 403 message |
 | `DELETE /api/v1/groups/{id}` | Any `PermWrite` user could delete any group | Caller must hold `PermWrite` on each existing member (DoS protection) |
-| `GET /api/v1/tasks/{id}` | Returned the full `Results[]` (all tenants the task touched) | Filters `Results[]` to the readable subset; zero readable → 403 |
+| `GET /api/v1/tasks/{id}` | Returned the full `Results[]` (all tenants the task touched) | Filters `Results[]` to the readable subset; results present but none readable → 403 (a task with no results yet still returns 200) |
 | `GET /api/v1/prs` | Returned all pending PRs/MRs | Bulk mode: filtered to readable tenants; `?tenant=<id>` mode: **empty list** (not 403) when forbidden, to avoid existence oracle |
+
+⚠️ This table describes the handler layer. All four endpoints also have a route-level gate that first requires the matching permission on `*`, i.e. a rule with `tenants: ["*"]` (org / metadata scope allowed). A caller with only single-tenant or prefix grants (such as `["db-a-*"]`) always gets 403 `insufficient permissions for tenant *` and never reaches the filtering above. That 403 names no tenant, so it is not an existence oracle. Whether this is intended: [#2520](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/2520).
 
 ### 3.2 Why `?tenant=<id>` does NOT return 403
 
