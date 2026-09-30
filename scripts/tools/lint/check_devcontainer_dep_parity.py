@@ -27,7 +27,7 @@ and yet absent — proof that the declaration and the live container can diverge
 with nothing noticing.
 
 This is the same "silent skip = toothless" failure mode the repo already
-fails CLOSED on elsewhere (`VIBE_REQUIRE_MTAIL=1`, `WAVEFORM_PROMTOOL_REQUIRE=1`,
+fails CLOSED on elsewhere (`VIBE_REQUIRE_VECTOR=1`, `WAVEFORM_PROMTOOL_REQUIRE=1`,
 the vmalert-tool provisioning step). This gate applies that discipline to the
 dev container's declared Python dependencies.
 

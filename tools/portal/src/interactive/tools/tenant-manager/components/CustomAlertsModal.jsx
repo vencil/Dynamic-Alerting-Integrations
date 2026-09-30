@@ -53,7 +53,7 @@ function CustomAlertsModal(props) {
   } = props || {};
 
   const { copy } = useCopyToClipboard();
-  const [phase, setPhase] = useState('loading'); // loading | list | form | error
+  const [phase, setPhase] = useState('loading'); // loading | list | form | error | unloadable
   const [recipes, setRecipes] = useState([]);
   const [baseHash, setBaseHash] = useState('');
   const [originalJSON, setOriginalJSON] = useState('[]');
@@ -61,6 +61,13 @@ function CustomAlertsModal(props) {
   const [isSubmitting, setIsSubmitting] = useState(false); // Reef 7
   const [violations, setViolations] = useState([]); // Reef 4
   const [conflict, setConflict] = useState(null); // Reef 6
+  // #2406: the tenant file cannot be loaded as a tenant config (#2373).
+  // configError comes from GET's `config_error`; notLoadable from a save
+  // answered 409 TENANT_CONFIG_NOT_LOADABLE. Neither is a base_hash race, so
+  // neither may be shown as the Reef 6 "refresh and retry" conflict — a
+  // refresh re-reads the same unloadable file and the retry 409s again.
+  const [configError, setConfigError] = useState('');
+  const [notLoadable, setNotLoadable] = useState(null);
   const [loadError, setLoadError] = useState('');
   const [notice, setNotice] = useState('');
   const [collision, setCollision] = useState('');
@@ -79,6 +86,14 @@ function CustomAlertsModal(props) {
     fetchTenant(tenantId)
       .then((d) => {
         if (!liveRef.current) return;
+        // #2406: GET answers an unloadable file WITHOUT custom_alerts (absent,
+        // not empty). Reading that as [] would offer an empty editor whose
+        // save the backend refuses — so don't open the editor at all.
+        if (d && d.config_error) {
+          setConfigError(String(d.config_error));
+          setPhase('unloadable');
+          return;
+        }
         const list = Array.isArray(d.custom_alerts) ? d.custom_alerts : [];
         setRecipes(list);
         setBaseHash(d.source_hash || '');
@@ -143,6 +158,7 @@ function CustomAlertsModal(props) {
     setNotice('');
     setViolations([]);
     setConflict(null);
+    setNotLoadable(null);
     setWarnings([]);
     saveCustomAlerts(tenantId, { custom_alerts: recipes, base_hash: baseHash })
       .then((res) => {
@@ -155,6 +171,13 @@ function CustomAlertsModal(props) {
           // #1231: surface the API's non-blocking advisories verbatim
           // (pass-through — the message text is owned by the backend).
           setWarnings(Array.isArray(res.data && res.data.warnings) ? res.data.warnings : []);
+          return;
+        }
+        if (res.status === 409 && res.data && res.data.code === 'TENANT_CONFIG_NOT_LOADABLE') {
+          // #2406: the tenant file itself is broken — not a concurrent edit.
+          // Show the backend's reason (it owns the repair wording); keep the
+          // user's work, like Reef 6.
+          setNotLoadable({ error: res.data.error || '', configError: res.data.config_error || '' });
           return;
         }
         if (res.status === 409) {
@@ -219,6 +242,33 @@ function CustomAlertsModal(props) {
             <p className="text-sm pl-2 border-l-2 border-[color:var(--da-color-error)] text-[color:var(--da-color-error)]" data-testid="load-error">
               {t('載入失敗：', 'Load failed: ')}{loadError}
             </p>
+          )}
+
+          {phase === 'unloadable' && (
+            <div className="p-3 rounded-md border-l-2 border-[color:var(--da-color-error)] bg-[color:var(--da-color-error-soft)]" data-testid="config-not-loadable">
+              <p className="text-sm font-semibold">
+                {t('此租戶的設定檔無法載入為租戶設定', 'This tenant\'s config file cannot be loaded as a tenant config')}
+                {' '}(<span className="font-mono">config_error: {configError}</span>)
+              </p>
+              <p className="text-sm mt-1">
+                {t('threshold-exporter 會整份略過這個檔案，所以這裡讀不到它的自訂告警，也不開放編輯（寫入會被後端拒絕）。請先修復租戶設定檔本身。',
+                  'threshold-exporter skips this file whole, so its custom alerts cannot be read here and editing is disabled (the backend refuses the write). Repair the tenant file itself first.')}
+              </p>
+            </div>
+          )}
+
+          {notLoadable && (
+            <div className="mb-3 p-3 rounded-md border-l-2 border-[color:var(--da-color-error)] bg-[color:var(--da-color-error-soft)]" data-testid="not-loadable">
+              <p className="text-sm font-semibold">
+                {t('寫入被拒：此租戶的設定檔無法載入為租戶設定，重整重試不會成功。你的編輯已保留。',
+                  'Write refused: this tenant\'s config file cannot be loaded as a tenant config, so refreshing and retrying will not help. Your edits are kept.')}
+              </p>
+              <p className="text-xs mt-1">{notLoadable.error || ('config_error: ' + notLoadable.configError)}</p>
+              <button type="button" className={btn + ' mt-2'} data-testid="copy-backup"
+                onClick={() => copy(JSON.stringify(recipes, null, 2))}>
+                {t('複製目前 recipe 備份', 'Copy current recipes')}
+              </button>
+            </div>
           )}
 
           {conflict && (

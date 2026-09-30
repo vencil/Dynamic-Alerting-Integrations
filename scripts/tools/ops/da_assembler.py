@@ -23,6 +23,7 @@ import argparse
 import hashlib
 import io
 import logging
+import math
 import os
 import re
 import signal
@@ -299,7 +300,11 @@ def reconcile_one(
         # Error status, still returns. ⚠️ `api is None` is NOT the test: the
         # controller nulls `api` under `--dry-run`, so it would take this
         # branch too (see the docstring).
-        if cli and isinstance(e, OutputWriteError):
+        #
+        # #2395: ANY exception on the CLI path, not only OutputWriteError —
+        # anything else was logged here and `render_cr_file` still returned
+        # EXIT_OK with nothing written. `render_cr_file` turns it into rc 2.
+        if cli:
             raise
         log.error("Failed to reconcile %s/%s: %s", namespace, name, e)
         if api and not dry_run:
@@ -606,9 +611,279 @@ def render_cr_file(
     if "spec" in cr and not isinstance(cr["spec"], dict):
         log.error("%s: spec must be a mapping", cr_path)
         return EXIT_CALLER_ERROR
+    shape_error = _spec_block_shape_error(cr.get("spec") or {})
+    if shape_error:
+        log.error("%s: %s", cr_path, shape_error)
+        return EXIT_CALLER_ERROR
 
-    reconcile_one(cr, config_dir, dry_run=dry_run, cli=True)
+    # #2395: `reconcile_one(cli=True)` re-raises whatever stopped the
+    # render. OutputWriteError goes on to `main`'s decorator (#1789, rc 2
+    # naming --config-dir); anything else is one line and rc 2 here. rc 0
+    # only when the file was written (or, under --dry-run, would be) and
+    # nothing raised. ⚠️ A failure BEFORE the write leaves no file; one after
+    # it (e.g. in the log line that follows) is rc 2 with the file on disk.
+    try:
+        reconcile_one(cr, config_dir, dry_run=dry_run, cli=True)
+    except OutputWriteError:
+        raise
+    except Exception as e:  # noqa: BLE001 — every cause is a failed render
+        log.error("Failed to render %s: %s", cr_path, e)
+        return EXIT_CALLER_ERROR
     return EXIT_OK
+
+
+def _spec_block_shape_error(spec: dict) -> str:
+    """Why *spec*'s blocks would not render as the CR wrote them, or ``""``.
+
+    #2395. ``render_cr_to_yaml`` silently drops a block that is not a
+    mapping (``defaults: [x]``, ``stateFilters: foo``), and writes a tenant
+    whose value is not a mapping as-is — the exporter then refuses the WHOLE
+    file (``cannot unmarshal !!int``), every tenant in it included. The CRD
+    declares each of these ``type: object``.
+    Left alone: null (a null tenant is read by the exporter as empty), and a
+    BLOCK whose value YAML types as falsy (``defaults: 0``, ``tenants:
+    false``, ``[]``) — dropped as an empty block, which #2331 pins
+    (tests/ops/test_tenant_id_as_text.py). A TENANT value gets no such pass: it is
+    written, not dropped, and the exporter refuses ``t2: 0`` too.
+    A ``!!set`` is a mapping to the exporter (every value null), so it passes
+    wherever a mapping is WRITTEN (a tenant, a state filter); a block that is
+    a set is still refused, because ``render_cr_to_yaml`` would drop it.
+
+    Below the blocks, only as deep as the exporter's types go
+    (``pkg/config/types.go``): ``defaults`` is ``map[string]float64``
+    (:func:`_default_value_error`) and ``state_filters`` is
+    ``map[string]StateFilter`` (:func:`_state_filter_error`). Tenant values
+    below the tenant (``ScheduledValue``) are not checked.
+    Only ``--render-cr`` asks this; the controller path is unchanged.
+    """
+    for key in ("tenants", "defaults", "stateFilters"):
+        block = spec.get(key)
+        if block is None or isinstance(block, dict):
+            continue
+        # A plain scalar's text, as YAML types it — NOT re-parsed as a
+        # document: `yaml.safe_load("---")` is None, and `--- 0`, `--- no`
+        # would read as falsy too, dropping a block the CR wrote. Only a
+        # null / bool / int / float can be falsy; any other tag is text.
+        if isinstance(block, RawPlain):
+            block = (yaml.safe_load(block)
+                     if _plain_tag(block) in _FALSY_ABLE_TAGS else str(block))
+        if block:
+            return f"spec.{key} must be a mapping"
+    tenants = spec.get("tenants")
+    for tenant, values in (tenants if isinstance(tenants, dict) else {}).items():
+        if values is not None and not isinstance(values, (dict, set)):
+            return (f"spec.tenants.{tenant} must be a mapping; the exporter "
+                    f"skips the whole rendered file otherwise")
+    defaults = spec.get("defaults")
+    for metric, value in (defaults if isinstance(defaults, dict) else {}).items():
+        why = _default_value_error(value)
+        if why:
+            return (f"spec.defaults.{metric} {why}; the exporter skips the "
+                    f"whole rendered file otherwise")
+    filters = spec.get("stateFilters")
+    for name, sf in (filters if isinstance(filters, dict) else {}).items():
+        why = _state_filter_error(sf)
+        if why:
+            return (f"spec.stateFilters.{name}{why}; the exporter skips the "
+                    f"whole rendered file otherwise")
+    return ""
+
+
+_FALSY_ABLE_TAGS = frozenset("tag:yaml.org,2002:" + t
+                             for t in ("null", "bool", "int", "float"))
+
+# ── yaml.v3's plain-scalar → number resolution (#2395) ──────────────
+#
+# The exporter decodes `defaults` with gopkg.in/yaml.v3 (v3.0.1): a plain
+# scalar lands in a float64 only if `resolve()` (resolve.go) types it
+# int / float. What follows is that function's number path, step for step,
+# with the Go strconv calls it makes (internal/strconv/atoi.go, atof.go).
+# `test_the_rows_match_the_exporter` re-measures it against da-guard.
+# ⚠️ Not claimed for a mantissa thousands of digits long: Go's ParseFloat
+# reads those differently from Python's `float()` (`1` + 5000 `0` +
+# `e-1000` is 1e-201 in Go, inf here), so such a value may be refused.
+
+_V3_NAMED_FLOATS = frozenset(
+    p + w for w in (".inf", ".Inf", ".INF") for p in ("", "+", "-")
+) | frozenset((".nan", ".NaN", ".NAN"))
+# resolve.go `yamlStyleFloat`.
+_V3_STYLE_FLOAT = re.compile(
+    r"[-+]?(\.[0-9]+|[0-9]+(\.[0-9]*)?)([eE][-+]?[0-9]+)?")
+# Go strconv's digit value of an ASCII byte; anything else is not a digit.
+_GO_DIGIT_VALUE = {c: int(c, 36) for c in
+                   "0123456789abcdefghijklmnopqrstuvwxyz"
+                   "ABCDEFGHIJKLMNOPQRSTUVWXYZ"}
+# What Go's ParseFloat accepts from a text starting with `.` (no sign, no
+# 0x prefix, not inf/nan), once `_go_underscore_ok` has passed it.
+_GO_DOT_FLOAT = re.compile(r"\.[0-9]+([eE][-+]?[0-9]+)?")
+
+
+def _go_underscore_ok(s: str) -> bool:
+    """Go ``strconv.underscoreOK``: each ``_`` sits between digits (or
+    between a base prefix and a digit)."""
+    if s[:1] in ("+", "-"):
+        s = s[1:]
+    saw, i, hexa = "^", 0, False
+    if len(s) >= 2 and s[0] == "0" and s[1] in "bBoOxX":
+        saw, i, hexa = "0", 2, s[1] in "xX"
+    for c in s[i:]:
+        if "0" <= c <= "9" or hexa and c in "abcdefABCDEF":
+            saw = "0"
+        elif c == "_":
+            if saw != "0":
+                return False
+            saw = "_"
+        elif saw == "_":
+            return False
+        else:
+            saw = "!"
+    return saw != "_"
+
+
+def _go_parse_uint(s: str, base: int):
+    """Go ``strconv.ParseUint(s, base, 64)`` on a text without ``_``:
+    the value, or None on any error."""
+    if not s:
+        return None
+    if base == 0:
+        base = 10
+        if s[0] == "0":
+            prefix = {"b": 2, "B": 2, "o": 8, "O": 8,
+                      "x": 16, "X": 16}.get(s[1:2])
+            if len(s) >= 3 and prefix:
+                base, s = prefix, s[2:]
+            else:
+                base, s = 8, s[1:]
+    n = 0
+    for c in s:
+        # Go reads BYTES: only ASCII 0-9 / a-z / A-Z are digits. ⛔ No
+        # `c.lower()` on the raw char — `"İ".lower()` is two chars.
+        d = _GO_DIGIT_VALUE.get(c, 99)
+        if d >= base:
+            return None
+        n = n * base + d
+        # Go's cutoff: stop at the first overflow (ErrRange) instead of
+        # carrying a bignum to the end of a very long text.
+        if n >= 1 << 64:
+            return None
+    return n
+
+
+def _go_parse_int(s: str, base: int):
+    """Go ``strconv.ParseInt(s, base, 64)``: the value, or None."""
+    neg = s[:1] == "-"
+    un = _go_parse_uint(s[1:] if s[:1] in ("+", "-") else s, base)
+    if un is None or un > (1 << 63 if neg else (1 << 63) - 1):
+        return None
+    return -un if neg else un
+
+
+def _go_parse_float_ok(s: str) -> bool:
+    """Go ``strconv.ParseFloat(s, 64)`` succeeds, for the two shapes
+    resolve() hands it: a `.`-led text, or one `_V3_STYLE_FLOAT` matched.
+    Overflow (±Inf) is an error; underflow is not. Judged by Python's
+    `float()`, which matches Go except on a mantissa thousands of digits
+    long (see the section comment)."""
+    try:
+        return not math.isinf(float(s.replace("_", "")))
+    except ValueError:
+        return False
+
+
+def _v3_reads_as_number(text: str) -> bool:
+    """yaml.v3 resolves the PLAIN scalar *text* to an int or a float."""
+    if text in _V3_NAMED_FLOATS:
+        return True
+    head = text[:1]
+    if head == ".":
+        # `strconv.ParseFloat(in)` on the text as written, `_` included.
+        return (_go_underscore_ok(text)
+                and bool(_GO_DOT_FLOAT.fullmatch(text.replace("_", "")))
+                and _go_parse_float_ok(text))
+    if not head or head not in "+-0123456789":
+        return False  # hint 'M' (only the named table) or none: a string
+    plain = text.replace("_", "")
+    if (_go_parse_int(plain, 0) is not None
+            or _go_parse_uint(plain, 0) is not None):
+        return True
+    if _V3_STYLE_FLOAT.fullmatch(plain) and _go_parse_float_ok(plain):
+        return True
+    # Fallbacks after the float: an explicit base, where Go's ParseInt
+    # takes a sign after the prefix (`0b-1`).
+    for prefix, base in (("0b", 2), ("0o", 8)):
+        if plain.startswith(prefix):
+            rest = plain[2:]
+            return (_go_parse_int(rest, base) is not None
+                    or _go_parse_uint(rest, base) is not None)
+        if plain.startswith("-" + prefix):
+            return _go_parse_int("-" + plain[3:], base) is not None
+    return False
+
+
+def _default_value_error(value: Any) -> str:
+    """Why *value* is not a ``defaults`` value the exporter decodes, or ``""``.
+
+    The exporter reads ``defaults`` as ``map[string]float64``. Oracle
+    (``da-guard served-values``, rc 3 = file refused): null and numbers are
+    read; a bool, a date, a sequence / mapping, and ANY quoted scalar —
+    ``"80"`` included — make it refuse the whole file.
+    """
+    if value is None:
+        return ""
+    if isinstance(value, bool):
+        return "must be a number, not a boolean"
+    if isinstance(value, int):
+        # An int (`!!int "…"`) is dumped as its decimal digits, which
+        # yaml.v3 reads through ParseFloat when it passes 64 bits: refused
+        # once it rounds past float64 max (Go-measured: (2^54-1)*2^970 and
+        # up, either sign). `float()` rounds the same way and raises there;
+        # it also needs no `str()`, which is capped at 4300 digits.
+        try:
+            float(value)
+        except OverflowError:
+            return "must be a number within float64 range"
+        return ""
+    if isinstance(value, float):
+        return ""
+    if not isinstance(value, str):
+        return "must be a number"
+    # A RawPlain is dumped back plain, as written. Any other str is dumped
+    # plain only where PyYAML would not retype it; otherwise it is QUOTED,
+    # and yaml.v3 does not decode a quoted scalar into a number.
+    if (not isinstance(value, RawPlain)
+            and _plain_tag(value) != "tag:yaml.org,2002:str"):
+        return "must be a number, not a quoted string"
+    if not _v3_reads_as_number(value):
+        return f"must be a number, not {value!r}"
+    return ""
+
+
+def _state_filter_error(sf: Any) -> str:
+    """Why *sf* is not a ``StateFilter`` the exporter decodes, or ``""``.
+
+    ``StateFilter`` is ``{reasons: []string, severity: string,
+    default_state: string}``, other keys ignored. Oracle-measured: a
+    non-mapping filter, a non-sequence ``reasons`` or one holding a
+    sequence / mapping, and a sequence / mapping ``severity`` /
+    ``default_state`` are refused. Any scalar (null included) is a string.
+    The returned text follows the filter's name.
+    """
+    if sf is None or isinstance(sf, set):
+        return ""
+    if not isinstance(sf, dict):
+        return " must be a mapping"
+    reasons = sf.get("reasons")
+    if reasons is not None:
+        if not isinstance(reasons, list):
+            return ".reasons must be a list"
+        # `tuple`: an item of `!!omap` / `!!pairs`, a one-key mapping to
+        # the exporter.
+        if any(isinstance(r, (list, tuple, dict, set)) for r in reasons):
+            return ".reasons must be a list of strings"
+    for key in ("severity", "default_state"):
+        if isinstance(sf.get(key), (list, dict, set)):
+            return f".{key} must be a string"
+    return ""
 
 
 # ── Main ─────────────────────────────────────────────────────────────

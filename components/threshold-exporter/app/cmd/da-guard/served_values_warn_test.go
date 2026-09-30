@@ -7,12 +7,12 @@ package main
 // process's stderr; the child process below is how this test reads that
 // stderr without swapping the global logger.
 //
-// ⚠️ Not covered by the #2374 fix: the _state_maintenance expires WARN. When
-// the tree declares `state_filters.maintenance`, ONE collector scrape prints
-// it twice — ResolveStateFiltersAt and ResolveMaintenanceExpiriesAt each log
-// maintenanceExpiresIgnoredWarn — so the exporter prints it twice per scrape
-// as well. That is the collector's own double log, not served-values
-// resolving twice; it is a known follow-up, pinned below as it is today.
+// The _state_maintenance expires WARN was not covered by the #2374 fix: when
+// the tree declares `state_filters.maintenance`, ONE collector scrape printed
+// it twice — ResolveStateFiltersAt and ResolveMaintenanceExpiriesAt each
+// logged maintenanceExpiresIgnoredWarn — the collector's own double log, not
+// served-values resolving twice. #2426 fixed it in the collector, so it is
+// counted below with both trees.
 
 import (
 	"os"
@@ -74,7 +74,11 @@ func servedValuesWarnCounts(t *testing.T, files map[string]string) (map[string]i
 func TestServedValues_EachResolverWarnOnce(t *testing.T) {
 	t.Parallel()
 	const maintenanceWarn = `invalid expires "nope" in _state_maintenance for tenant=a8`
+	// a9's value is not YAML at all: the other maintenance WARN, same two
+	// resolvers, same once-per-scrape rule (#2426).
+	const maintenanceParseWarn = `failed to parse structured _state_maintenance for tenant=a9`
 	tenants := map[string]string{
+		"a9.yaml": "tenants:\n  a9:\n    _state_maintenance: \"expires: [\"\n",
 		"a1.yaml": "tenants:\n  a1:\n    _silent_mode: \"bogus\"\n",
 		"a3.yaml": "tenants:\n  a3:\n    _severity_dedup: \"bogus\"\n",
 		"b2.yaml": "tenants:\n  b2:\n    _metadata: [1, 2]\n",
@@ -85,7 +89,7 @@ func TestServedValues_EachResolverWarnOnce(t *testing.T) {
 	for _, tc := range []struct {
 		name     string
 		defaults string
-		// maintenanceWant is how many times the a8 WARN is printed.
+		// maintenanceWant is how many times each of the a8 and a9 WARNs is printed.
 		maintenanceWant int
 	}{
 		// No maintenance filter: ResolveStateFiltersAt never reaches a8, so
@@ -93,13 +97,12 @@ func TestServedValues_EachResolverWarnOnce(t *testing.T) {
 		// This row therefore checks nothing about the fix for a8; it is here
 		// so the other six lines are counted over a tree that has it.
 		{"no maintenance filter", "defaults:\n  container_cpu: 80\n", 1},
-		// ⚠️ Known follow-up, NOT the desired state: with the filter declared
-		// (as the repo's own conf.d/_defaults.yaml does), both collector
-		// resolvers log the same WARN in one scrape, so it prints twice (three
-		// times before #2374). Pinned so a change to it is seen; when the
-		// follow-up lands, this becomes 1.
+		// With the filter declared (as the repo's own conf.d/_defaults.yaml
+		// does), both collector resolvers parse the same value in one scrape;
+		// only the first logs it (#2426: printed twice before, three times
+		// before #2374).
 		{"maintenance filter declared", "defaults:\n  container_cpu: 80\n" +
-			"state_filters:\n  maintenance:\n    reasons: []\n    severity: \"info\"\n    default_state: \"disable\"\n", 2},
+			"state_filters:\n  maintenance:\n    reasons: []\n    severity: \"info\"\n    default_state: \"disable\"\n", 1},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()
@@ -123,12 +126,14 @@ func TestServedValues_EachResolverWarnOnce(t *testing.T) {
 					t.Errorf("WARN containing %q printed %d times, want 1; stderr:\n%s", want, n, stderr)
 				}
 			}
-			if n := countContaining(count, maintenanceWarn); n != tc.maintenanceWant {
-				t.Errorf("WARN containing %q printed %d times, want %d; stderr:\n%s", maintenanceWarn, n, tc.maintenanceWant, stderr)
+			for _, want := range []string{maintenanceWarn, maintenanceParseWarn} {
+				if n := countContaining(count, want); n != tc.maintenanceWant {
+					t.Errorf("WARN containing %q printed %d times, want %d; stderr:\n%s", want, n, tc.maintenanceWant, stderr)
+				}
 			}
 			// Nothing else printed more than once.
 			for line, n := range count {
-				if n != 1 && !strings.Contains(line, maintenanceWarn) {
+				if n != 1 {
 					t.Errorf("printed %d times, want 1: %s", n, line)
 				}
 			}

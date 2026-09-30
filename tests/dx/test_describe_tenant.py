@@ -1762,3 +1762,83 @@ class TestYamlMappingKeyParity:
         (conf_d / "_x.yaml").write_text('tenants:\n  tx:\n    _profile: "\\udfff"\n', encoding="utf-8")
         with_file, _ = merged_hash()
         assert with_file == without
+
+
+class TestUnparseableDefaults:
+    """#2413: a `_defaults.yaml` that does not parse ends the run with
+    EXIT_CALLER_ERROR and names the file, instead of a traceback (rc 1).
+
+    Fails when the `DefaultsParseError` raise in `ConfDScanner._scan` or its
+    catch in `main` is removed: every case below then prints a Traceback
+    with rc 1 and no file name. The `tagged-*` shapes also fail when that
+    raise catches only `yaml.YAMLError` / `UnicodeDecodeError`."""
+
+    DESCRIBE = os.path.join(REPO_ROOT, "scripts", "tools", "dx", "describe_tenant.py")
+
+    SHAPES = {
+        "unclosed-flow": b"defaults: [\n",
+        "not-utf8": b'defaults:\n  x: "\xff\xfe"\n',
+        "surrogate-escape": b'defaults:\n  _x: "\\udfff"\n',
+        # An explicit tag whose text does not fit it: PyYAML raises
+        # ValueError / KeyError here, not a YAMLError.
+        "tagged-int": b"defaults:\n  x: !!int foo\n",
+        "tagged-float": b"defaults:\n  x: !!float foo\n",
+        "tagged-bool": b"defaults:\n  x: !!bool foo\n",
+    }
+    MODES = {
+        "tenant": ["tr"],
+        "all-json": ["--all"],
+        "all-yaml": ["--all", "--format", "yaml"],
+    }
+
+    def _tree(self, tmp_path):
+        conf_d = tmp_path / "conf.d"
+        (conf_d / "sub").mkdir(parents=True)
+        (conf_d / "_defaults.yaml").write_text("defaults:\n  mysql_connections: 50\n", encoding="utf-8")
+        (conf_d / "tr.yaml").write_text("tenants:\n  tr:\n    mysql_connections: 10\n", encoding="utf-8")
+        (conf_d / "sub" / "ts.yaml").write_text("tenants:\n  ts: {}\n", encoding="utf-8")
+        return conf_d
+
+    def _run(self, *args):
+        return subprocess.run([sys.executable, self.DESCRIBE, *args],
+                              capture_output=True, text=True, encoding="utf-8", timeout=20)
+
+    @pytest.mark.parametrize("mode", sorted(MODES))
+    @pytest.mark.parametrize("shape", sorted(SHAPES))
+    @pytest.mark.parametrize("carrier", ["_defaults.yaml", "sub/_defaults.yaml"])
+    def test_unparseable_defaults_is_a_named_caller_error(self, tmp_path, carrier, shape, mode):
+        conf_d = self._tree(tmp_path)
+        (conf_d / carrier).write_bytes(self.SHAPES[shape])
+        res = self._run(*self.MODES[mode], "--conf-d", str(conf_d))
+        assert "Traceback" not in res.stderr, res.stderr
+        assert res.returncode == EXIT_CALLER_ERROR, (res.returncode, res.stderr)
+        assert f"{conf_d / carrier} does not parse" in res.stderr, res.stderr
+        assert res.stdout == ""
+
+    @pytest.mark.parametrize("shape", sorted(SHAPES))
+    def test_unparseable_what_if_file_is_named(self, tmp_path, shape):
+        conf_d = self._tree(tmp_path)
+        what_if = tmp_path / "what-if.yaml"
+        what_if.write_bytes(self.SHAPES[shape])
+        res = self._run("tr", "--conf-d", str(conf_d), "--what-if", str(what_if))
+        assert "Traceback" not in res.stderr, res.stderr
+        assert res.returncode == EXIT_CALLER_ERROR, (res.returncode, res.stderr)
+        assert str(what_if.resolve()) in res.stderr, res.stderr
+
+    # must-trigger controls: the paths around the fix are unchanged.
+    def test_control_parseable_defaults_still_describe(self, tmp_path):
+        conf_d = self._tree(tmp_path)
+        res = self._run("--all", "--conf-d", str(conf_d))
+        assert res.returncode == 0, res.stderr
+        out = json.loads(res.stdout)
+        assert out["tr"]["effective_config"] == {"mysql_connections": 10}
+        assert out["ts"]["effective_config"] == {"mysql_connections": 50}
+        assert "does not parse" not in res.stderr
+
+    def test_control_unparseable_tenant_file_is_still_skipped(self, tmp_path):
+        conf_d = self._tree(tmp_path)
+        (conf_d / "tr.yaml").write_text("tenants: [\n", encoding="utf-8")
+        res = self._run("--all", "--conf-d", str(conf_d))
+        assert res.returncode == 0, res.stderr
+        assert set(json.loads(res.stdout)) == {"ts"}
+        assert "WARNING: skipped" in res.stderr and "tr.yaml" in res.stderr

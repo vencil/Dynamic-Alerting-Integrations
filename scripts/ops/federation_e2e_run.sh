@@ -60,7 +60,7 @@ python3 -m venv "$VENV"
 # generous so S5 proves the per-TENANT limiter (not per-token) is the
 # ceiling; a 2s revoked-set reload so S4 (revocation) is quick;
 # auditLog.enabled so envoy.yaml renders the second access-log sink the
-# mtail service tails.
+# audit-metrics service tails.
 # ---------------------------------------------------------------------------
 echo "[fed-e2e] rendering chart configs into rendered/"
 rm -rf "$RENDERED"
@@ -84,9 +84,9 @@ helm template fed "$GATEWAY_CHART" \
     > /tmp/fed-e2e-cm-envoy.yaml
 
 helm template fed "$GATEWAY_CHART" \
-    --show-only templates/configmap-mtail.yaml \
+    --show-only templates/configmap-audit-metrics.yaml \
     --set auditLog.enabled=true \
-    > /tmp/fed-e2e-cm-mtail.yaml
+    > /tmp/fed-e2e-cm-audit-metrics.yaml
 
 "$PY" - "$RENDERED" <<'PYEOF'
 import sys
@@ -97,11 +97,11 @@ cm = yaml.safe_load(open("/tmp/fed-e2e-cm-envoy.yaml"))
 for key in ("envoy.yaml", "revoked_check.lua", "audit_extract.lua"):
     with open(f"{rendered}/{key}", "w", newline="\n") as fh:
         fh.write(cm["data"][key])
-mt = yaml.safe_load(open("/tmp/fed-e2e-cm-mtail.yaml"))
-with open(f"{rendered}/federation-audit.mtail", "w", newline="\n") as fh:
-    fh.write(mt["data"]["federation-audit.mtail"])
+am = yaml.safe_load(open("/tmp/fed-e2e-cm-audit-metrics.yaml"))
+with open(f"{rendered}/audit-metrics.yaml", "w", newline="\n") as fh:
+    fh.write(am["data"]["audit-metrics.yaml"])
 print("[fed-e2e] rendered envoy.yaml + revoked_check.lua + "
-      "audit_extract.lua + federation-audit.mtail")
+      "audit_extract.lua + audit-metrics.yaml")
 PYEOF
 
 # ---------------------------------------------------------------------------
@@ -153,7 +153,7 @@ PYEOF
 # Step 4: empty revoked set (S4 rewrites it in place) + the audit-log
 # dir. The latter is a 0777 bind-mount target: the gateway runs as the
 # distroless Envoy image's non-root uid (65532) and must be able to
-# create the access-log file there; the mtail sidecar (uid 101) reads
+# create the access-log file there; the audit-metrics sidecar reads
 # it. A docker named volume would be root-owned and break that write.
 # ---------------------------------------------------------------------------
 : > "$RENDERED/revoked.txt"
@@ -161,8 +161,9 @@ mkdir -p "$RENDERED/audit-log"
 chmod 0777 "$RENDERED/audit-log"
 
 # ---------------------------------------------------------------------------
-# Step 5: bring the METRICS stack up (--build for the mtail audit-sidecar
-# image).
+# Step 5: bring the METRICS stack up. No service builds from source since
+# #1278 D1 (the audit-sidecar image used to, for mtail); --build stays so a
+# `build:` service added later is never run from a stale local image.
 # ---------------------------------------------------------------------------
 echo "[fed-e2e] docker compose up (metrics stack)..."
 docker compose up -d --build

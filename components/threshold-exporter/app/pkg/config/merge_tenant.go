@@ -7,6 +7,7 @@ import (
 	"sort"
 	"strings"
 	"sync"
+	"time"
 
 	"gopkg.in/yaml.v3"
 )
@@ -68,6 +69,29 @@ func CheckTenantRootKeys(yamlContent []byte) []string {
 // profile keys as if the tenant had written them — a write refused for a
 // key the tenant cannot fix in its own file. Every caller goes through the
 // TenantMerge one.
+//
+// ⛔ SO ARE THE THRESHOLD RESOLVE ENTRY POINTS (#2397). TenantMerge.Resolve /
+// ResolveAt / ResolveAtWithStats / ResolveAtWithKeys return exactly the embedded
+// methods' rows and stats, but write none of the resolver's ERROR/WARN lines
+// (cardinality truncation, unknown / invalid values, dangling `_critical`,
+// bad dimensional keys, bad time windows, rejected custom alerts) to the
+// process log: the merge runs per request, and a GET must not log the
+// tenant's resolver findings on every call. The lines are dropped, not
+// handed on: some of the same facts reach the caller as ValidateTenantKeys
+// Errors / notices (a dangling `_critical`, for one), but not all (a
+// non-numeric base value is not flagged there). /metrics resolves a
+// ThresholdConfig, not a TenantMerge, and keeps logging every line.
+//
+// ⚠️ ONLY those four. The other promoted resolvers — ResolveStateFilters(At),
+// ResolveSilentModes(At), OperationalStatesAt, ResolveMaintenanceExpiries(At),
+// ResolveThresholdExpiries(At), ResolveSeverityDedup, ResolveMetadata,
+// ResolveRouting, ApplyProfiles — are NOT shadowed and still write the
+// exporter's WARNs when called on a TenantMerge. No tenant-api caller calls
+// them on one today (GET uses ResolveAt and ValidateTenantKeys); a caller
+// that starts to, per request, needs the same treatment first. (The list /
+// search paths already write such WARNs per request through a plain
+// *ThresholdConfig's OperationalStatesAt, not a TenantMerge — tracked in
+// #2467.)
 type TenantMerge struct {
 	ThresholdConfig
 
@@ -83,6 +107,37 @@ type TenantMerge struct {
 	// notice. profileFileOrder is those files in merge order.
 	profileFiles     map[string]map[string]string
 	profileFileOrder []string
+}
+
+// Resolve is ThresholdConfig.Resolve without the resolver's log lines — see
+// TenantMerge. Shadowed too: the promoted one calls ResolveAt on the embedded
+// *ThresholdConfig, which would bypass the shadow below.
+func (m *TenantMerge) Resolve() []ResolvedThreshold {
+	return m.ResolveAt(time.Now())
+}
+
+// ResolveAt is ThresholdConfig.ResolveAt without the resolver's log lines —
+// see TenantMerge.
+func (m *TenantMerge) ResolveAt(now time.Time) []ResolvedThreshold {
+	rows, _ := m.ResolveAtWithStats(now)
+	return rows
+}
+
+// ResolveAtWithStats is ThresholdConfig.ResolveAtWithStats without the
+// resolver's log lines — see TenantMerge.
+func (m *TenantMerge) ResolveAtWithStats(now time.Time) ([]ResolvedThreshold, ResolveStats) {
+	return m.resolveAtWithStats(now, nil, nil)
+}
+
+// ResolveAtWithKeys is ThresholdConfig.ResolveAtWithKeys without the
+// resolver's log lines — see TenantMerge.
+func (m *TenantMerge) ResolveAtWithKeys(now time.Time) ([]KeyedThreshold, ResolveStats, error) {
+	var keyed []KeyedThreshold
+	rows, stats := m.resolveAtWithStats(now, &keyed, nil)
+	if err := checkKeyed(rows, keyed); err != nil {
+		return nil, stats, err
+	}
+	return keyed, stats, nil
 }
 
 // platformSupply is one root platform file's contribution to one tenant: the

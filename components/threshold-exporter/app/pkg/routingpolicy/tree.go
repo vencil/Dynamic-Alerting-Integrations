@@ -238,7 +238,10 @@ func LoadTree(configDir string, skip func(rel string) bool) (Tree, []Policy, []P
 		level, base := LevelOf(k), path.Base(k)
 		isPolicy := contains(policyFileNames, base)
 		isProfiles := contains(profileFileNames, base)
-		top, err := parseDoc(f.Data)
+		// isPolicy: a subtree `_domain_policy.yaml` is a policy document
+		// too (#2326), so its `require_critical_escalation` gets the same
+		// `!!null` handling as the root one (#2325).
+		top, err := parseDoc(f.Data, isPolicy)
 		if err != nil {
 			switch {
 			case isPolicy:

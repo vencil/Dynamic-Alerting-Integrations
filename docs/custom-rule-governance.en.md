@@ -358,7 +358,7 @@ When you **cannot** reshape the metric into label-form (off-the-shelf exporter, 
   threshold: "1236:critical"
 ```
 
-`==` is **threshold-recipe-only** (computed-value recipes — rate/ratio/p99/forecast — reject it on both validators: float equality is fragile). Its semantics are **any-match**: each replica's raw value is compared to the code *before* aggregating, so it fires if **any** instance equals the code — replicas holding different codes do not mask each other.
+`==` is **threshold-recipe-only** (both validators reject it for every other recipe: float equality on a computed value is fragile, and absence compares no value at all). Its semantics are **any-match**: each replica's raw value is compared to the code *before* aggregating, so it fires if **any** instance equals the code — replicas holding different codes do not mask each other.
 
 **Decision tree**
 

@@ -293,7 +293,7 @@ Required field values are format-checked too ([#2180](https://github.com/vencil/
 - URL fields (`url`, `api_url`, `webhook_url`) must be an `http://` or `https://` URL with a host and no whitespace.
 - `smarthost` must be `host:port` with a numeric port; an IPv6 host is bracketed, e.g. `[2001:db8::1]:25`.
 - When `to` is a list, every item must be a non-empty string.
-- A required field given anything other than a string (a list, a number, a boolean) is rejected.
+- A required field given anything other than a string (a list, a number, a boolean) is rejected; the one exception is `to` above, which may be a list.
 - The receiver `type` must equal the lowercase name in the table above exactly; other letter case and surrounding whitespace are rejected.
 
 The format rules are defined by `receiverHttpUrl` / `receiverSmtpHostPort` in [`tenant-config.schema.json`](../schemas/tenant-config.schema.json); which values Alertmanager actually accepts or rejects is recorded in the `am` column of the shared table `receiver_presence_cases.json` (asserted by a test that runs Alertmanager's `config.Load`).

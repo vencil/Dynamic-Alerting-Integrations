@@ -5,7 +5,7 @@
   "graphTooltip": 1,
   "id": null,
   "links": [],
-  "description": "ADR-020 IV-2f (#511) federation data-plane audit. Source metric: tenant_federation_requests_total{tenant,status}, emitted by the mtail sidecar in helm/federation-gateway from the Envoy audit access log.",
+  "description": "ADR-020 IV-2f (#511) federation data-plane audit. Source metric: tenant_federation_requests_total{tenant,status}, emitted by the audit-metrics sidecar (Vector) in helm/federation-gateway from the Envoy audit access log.",
   "panels": [
     {
       "title": "Federation Requests /s (5m)",
@@ -27,11 +27,11 @@
     },
     {
       "title": "Rejection Rate (5m)",
-      "description": "Fraction of federation requests rejected (rate_limited / auth_failed / bad_request / backend_error). Excludes client_aborted - a client cancelling its own query is not a platform rejection. Mirrors the FederationRejectionRateAnomaly alert.",
+      "description": "Fraction of federation requests rejected (rate_limited / auth_failed / bad_request). backend_error is a platform fault, not a rejection - see Backend Errors /s. Excludes client_aborted - a client cancelling its own query is not a platform rejection. Same statuses as the FederationRejectionRateAnomaly alert, which is per tenant over 10m.",
       "type": "stat",
       "gridPos": { "h": 4, "w": 6, "x": 6, "y": 0 },
       "targets": [{
-        "expr": "sum(rate(tenant_federation_requests_total{status=~\"rate_limited|auth_failed|bad_request|backend_error\"}[5m])) / clamp_min(sum(rate(tenant_federation_requests_total[5m])), 0.0001)",
+        "expr": "sum(rate(tenant_federation_requests_total{status=~\"rate_limited|auth_failed|bad_request\"}[5m])) / clamp_min(sum(rate(tenant_federation_requests_total[5m])), 0.0001)",
         "legendFormat": ""
       }],
       "fieldConfig": {

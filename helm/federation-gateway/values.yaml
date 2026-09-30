@@ -345,7 +345,7 @@ podSecurityContext:
   runAsUser: 101
   runAsGroup: 101
   # fsGroup so the audit-log emptyDir is group-writable by every
-  # container: Envoy (uid 101) writes it, the mtail / logrotate sidecars
+  # container: Envoy (uid 101) writes it, the audit-metrics / logrotate sidecars
   # read and rotate it. Without fsGroup the sidecars cannot touch a file
   # Envoy created (ADR-020 IV-2f).
   fsGroup: 101
@@ -360,15 +360,15 @@ podAnnotations: {}
 #   * stdout         — the durable, collector-ready compliance trail.
 #     Shipping it to a central store (Loki / SIEM) is the IV-2f
 #     follow-up #539; until then it rides the container-log path.
-#   * the emptyDir file below — tailed by the mtail sidecar to derive
-#     tenant_federation_requests_total{tenant,status}. EPHEMERAL by
+#   * the emptyDir file below — tailed by the audit-metrics sidecar to
+#     derive tenant_federation_requests_total{tenant,status}. EPHEMERAL by
 #     design: a per-pod metrics feed, not the system of record.
 # It is an emptyDir, NOT a PVC: a single ReadWriteOnce PVC cannot be
 # mounted by the gateway's replicaCount>1 / podAntiAffinity pods at all,
 # and a ReadWriteMany PVC would drag in NFS/EFS for throwaway data.
 auditLog:
-  # Master switch for the in-pod metrics pipeline — the mtail + logrotate
-  # sidecars, the emptyDir mirror they share, and the
+  # Master switch for the in-pod metrics pipeline — the audit-metrics +
+  # logrotate sidecars, the emptyDir mirror they share, and the
   # tenant_federation_requests_total scrape. true (default) renders all
   # of it. Set false to run the gateway WITHOUT those sidecars: a
   # missing or broken audit-sidecar image can then never crash-loop a
@@ -390,34 +390,50 @@ auditLog:
   # must win the race before the emptyDir fills and Kubelet evicts the
   # pod. 1 GiB + the 10s logrotate loop below leaves a wide margin.
   volumeSizeLimit: 1Gi
-  # The mtail + logrotate sidecars share one image, built from
-  # audit-sidecar/Dockerfile. Override repository before deploying.
-  # ⛔ TAG BUMPED TO 3.0.8-3 (#1278; previously 3.0.8-2, #1337) — you must rebuild
-  # and push before upgrading. 3.0.8-3 = Go 1.26.8 builder + Alpine 3.23.6 runtime.
-  # The mtail version did NOT change; the BUILD did (compiled from mtail's pinned
-  # upstream commit with a current Go toolchain, and Alpine 3.23.5), taking the
-  # image from 23 fixable HIGH/CRITICAL to 2. The `-2` build-revision suffix is
-  # what makes that visible: this container has no `digest` knob and the pod
-  # template's checksum annotations only hash ConfigMaps, so leaving the tag at
-  # 3.0.8 would render a BYTE-IDENTICAL pod spec — no rollout, and with the
-  # default `IfNotPresent` the kubelet would keep serving the old 23-CVE image
-  # while the platform's nightly scan reported 2. Rebuild from
-  # audit-sidecar/Dockerfile, push as 3.0.8-3, then upgrade.
+  # The logrotate sidecar's image, built from audit-sidecar/Dockerfile.
+  # Override repository before deploying. (Until #1278 D1 this image also
+  # carried mtail; the metrics sidecar is now upstream Vector — see
+  # `metrics` below — and this image is Alpine + logrotate only.)
+  # ⛔ TAG IS `alpine<version>-<build revision>` and MOVES WITH THE RECIPE —
+  # you must rebuild and push before upgrading. This container has no `digest`
+  # knob and the pod template's checksum annotations only hash ConfigMaps, so a
+  # recipe change under an unchanged tag renders a BYTE-IDENTICAL pod spec: no
+  # rollout, and with the default `IfNotPresent` the kubelet keeps serving the
+  # old image while the platform's nightly scan reports the new one.
+  # tests/shared/test_federation_audit_metrics.py pins recipe ↔ tag.
+  # (History: 3.0.8-N while the image built mtail 3.0.8; alpine3.23.6-1 is the
+  # first logrotate-only build.)
   image:
     repository: federation-audit-sidecar
-    tag: "3.0.8-3"
+    tag: "alpine3.23.6-1"
     pullPolicy: IfNotPresent
-  # mtail — tails sink 2, exposes the metric on this port; the Service
-  # carries the prometheus.io/scrape annotations for it.
-  mtail:
+  # audit-metrics — tails sink 2 and exposes tenant_federation_requests_total,
+  # tenant_log_query_requests_total and tenant_log_query_duration_ms on this
+  # port; the Service carries the prometheus.io/scrape annotations for it.
+  # Program: files/audit-metrics.vector.yaml. Replaced mtail (#1278 D1): same
+  # metric names, labels and buckets; mtail's automatic `prog` label is gone.
+  metrics:
+    image:
+      # ⛔ SAME repository/tag/digest as helm/vector's image — one Vector
+      # version on the platform, one Renovate bump, one nightly-scan row
+      # (tests/shared/test_federation_audit_metrics.py binds the two).
+      # renovate: datasource=docker depName=timberio/vector
+      repository: timberio/vector
+      tag: "0.57.0-distroless-libc"
+      digest: "sha256:bb5968aa63f3bf7cf77f8cd7548c1442cc91f2a8c20d7ef5c5a03e2a37fbf205"
+      pullPolicy: IfNotPresent
     port: 3903
     resources:
       requests:
         cpu: 10m
-        memory: 32Mi
+        memory: 48Mi
       limits:
         cpu: 100m
-        memory: 64Mi
+        # Measured ~42 MiB RSS on the audit pipeline (mtail was ~17 MiB).
+        memory: 128Mi
+    # Vector's file-checkpoint dir (emptyDir). Survives a container restart,
+    # so a restarted sidecar resumes where it stopped instead of re-counting.
+    dataSizeLimit: 16Mi
   # logrotate — caps the emptyDir mirror. Runs on a sleep loop, no cron.
   logrotate:
     # Rotate once the live file exceeds this size (MiB).
