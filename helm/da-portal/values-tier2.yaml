@@ -192,10 +192,6 @@ podAnnotations:
   # Example for Loki logging:
   # logs.grafana.com/enabled: "true"
 
-# Service account
-serviceAccount:
-  create: true
-  name: ""
 
 # ============================================================================
 # 部署指南 (Deployment Guide)
