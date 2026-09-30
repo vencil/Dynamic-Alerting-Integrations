@@ -27,6 +27,17 @@ func TestProfileRefIsReadAsTextLikeTheFlatPlane(t *testing.T) {
 		// text as `_profile` (see withProfileText).
 		{name: "mapping-default-bare", profile: "\n      default: 010", wantName: "010", want: 11},
 		{name: "platform-mapping-default-quoted", profile: "\n      default: '010'", platform: true, wantName: "010", want: 11},
+		// The mapping's other keys elect nothing: a window covering the
+		// whole day, an expiry in the past and a reason leave the election
+		// on the default's text.
+		{
+			name: "mapping-default-with-window-expiry-reason", wantName: "010", want: 11,
+			profile: "\n      default: 010\n      overrides:\n        - window: \"00:00-23:59\"\n          value: nope" +
+				"\n      expires: \"2020-01-01T00:00:00Z\"\n      reason: r",
+		},
+		// A null default elects no profile on either plane; /effective
+		// carries the empty text /metrics read.
+		{name: "mapping-default-null", profile: "\n      default: ~", wantName: "", want: 80},
 		// The flat plane resolves merge keys and aliases before reading the
 		// text; so does profileTexts.
 		{
@@ -77,7 +88,7 @@ func TestProfileRefIsReadAsTextLikeTheFlatPlane(t *testing.T) {
 				t.Errorf("ResolveEffective mysql_connections = %v, /metrics serves %v", got, tc.want)
 			}
 			if got := ec.EffectiveConfig["_profile"]; got != tc.wantName {
-				t.Errorf("ResolveEffective _profile = %#v, want %#v (the scalar's text)", got, tc.wantName)
+				t.Errorf("ResolveEffective _profile = %#v, want %#v (the text /metrics elects)", got, tc.wantName)
 			}
 			scoped, err := ScopeEffective(dir, dir)
 			if err != nil {
@@ -89,6 +100,9 @@ func TestProfileRefIsReadAsTextLikeTheFlatPlane(t *testing.T) {
 					found = true
 					if got := effectiveMySQLConnections(t, s); got != tc.want {
 						t.Errorf("ScopeEffective mysql_connections = %v, /metrics serves %v", got, tc.want)
+					}
+					if got := s.EffectiveConfig["_profile"]; got != tc.wantName {
+						t.Errorf("ScopeEffective _profile = %#v, want %#v", got, tc.wantName)
 					}
 				}
 			}

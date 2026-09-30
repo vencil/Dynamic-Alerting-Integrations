@@ -168,7 +168,10 @@ func LoadRootPlatformProfiles(scan *TreeScan, bytesOf func(*TreeFile) ([]byte, e
 // withProfileText, as /metrics reads it (ScheduledValue keeps a scalar's
 // text) and as describe_tenant.py does since #2408. So bare `010` elects
 // profile "010" (the generic decode gave int 8, which elected nothing),
-// and `!!binary MDEw` elects "MDEw" (the generic decode gave "010").
+// and `!!binary MDEw` elects "MDEw" (the generic decode gave "010"). A
+// mapping with `default:` reaches here as its default's text too; the
+// merge-key mapping and the shapes left as values (a sequence, a mapping
+// without `default:`) are covered in withProfileText.
 func profileNameOf(v any) string {
 	if s, ok := v.(string); ok {
 		return strings.TrimSpace(s)
@@ -228,8 +231,18 @@ func tenantsWriteProfile(block map[string]any) bool {
 //     /effective carries the elected name alone.
 //
 // A null, a sequence and a mapping without `default:` are left as the
-// generic decode gave them: a null keeps its meaning in the overlay (see
-// overlayTenant), and the other two elect no profile on either plane.
+// generic decode gave them. A null keeps its meaning in the overlay (see
+// overlayTenant). For the other two the planes differ in what they read
+// but not in what they serve: /metrics serialises the value to YAML text
+// and elects that as a name — an unknown profile, with ApplyProfiles'
+// WARN — while the walker elects no profile (profileNameOf).
+//
+// ⚠️ The merge-key shape `_profile: {<<: {default: x}}` is the exception to
+// "a mapping with `default:`": ScheduledValue checks the written keys, sees
+// `<<`, and takes the arbitrary-mapping branch, so /metrics elects the YAML
+// text `default: x` (unknown profile). The generic decode resolves the
+// merge and sees `default`, so the walker takes that same text from
+// profileTexts and shows it as `_profile` — the planes agree.
 func withProfileText(body map[string]any, texts map[string]string, tenantID string) {
 	text, ok := texts[tenantID]
 	if !ok {
