@@ -449,7 +449,7 @@ _routing_enforced:
 
 **Mode B: Per-tenant Independent Channel **
 
-When the receiver field contains `{{tenant}}` placeholder, the system automatically creates an independent enforced route for each tenant. Platform can use this to establish tenant-specific notification channels that tenants cannot reject or override. ⚠️ Today only tenants that set `_routing` get this route; tenants without `_routing` are left out ([#2519](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/2519)):
+When the receiver field contains `{{tenant}}` placeholder, the system automatically creates an independent enforced route for each tenant. Platform can use this to establish tenant-specific notification channels that tenants cannot reject or override. ⚠️ Today only tenants with a routing configuration get this route — their own `_routing`, or one supplied by `_routing_defaults` or `_routing_profile`. Without platform `_routing_defaults`, a tenant that neither writes `_routing` nor references a profile is left out ([#2519](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/2519)):
 
 ```yaml
 # conf.d/_defaults.yaml
