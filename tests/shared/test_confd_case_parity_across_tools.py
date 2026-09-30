@@ -263,6 +263,46 @@ def _observed(tool: pathlib.Path, flag: str,
 
 
 # ── running one tool ──────────────────────────────────────────────────
+# #2480: the `kubectl` every tool sees. ⛔ Not whatever the host has.
+#
+# Some tools in the population (`operator_check`, `diagnose`) shell out to
+# `kubectl` with their own timeout, and map "binary missing" / "timed out"
+# to a caller-error rc (2) but a prompt refusal to a finding (rc 0). With
+# the host's PATH inherited, the three runs of one tool could each take a
+# different branch: a CI runner has kubectl and no cluster, so a call either
+# fails at once or hangs past the tool's timeout, and which one it is varies
+# per call. Measured on #2475: `lower rc=2 upper rc=0` with byte-identical
+# reports, which makes `lower == notenants` false, drops the tool out of
+# the insensitive path and fails the casing comparison on a difference
+# that has nothing to do with the conf.d. Locally (no kubectl at all) the
+# same tool always skipped, so the gate's answer depended on the machine.
+#
+# A stub that refuses immediately, first on PATH, makes every run take the
+# same branch on every host — and keeps the sweep off a real cluster a
+# developer happens to have configured. It stands in for "kubectl present,
+# no cluster reachable", which is the only state this file can promise
+# everywhere; nothing here is asking about cluster behaviour.
+_KUBECTL_STUB = (
+    "#!/bin/sh\n"
+    "echo 'kubectl stub (test_confd_case_parity_across_tools): "
+    "no cluster in this harness' >&2\n"
+    "exit 1\n"
+)
+
+
+def _tool_env(sandbox: pathlib.Path) -> dict[str, str]:
+    """The environment every tool run gets: host env + the kubectl stub."""
+    stub_dir = sandbox.parent / "_harness_bin"
+    stub = stub_dir / "kubectl"
+    if not stub.is_file():
+        stub_dir.mkdir(parents=True, exist_ok=True)
+        stub.write_text(_KUBECTL_STUB, encoding="utf-8")
+        stub.chmod(0o755)
+    path = os.environ.get("PATH", "")
+    return dict(os.environ, PYTHONIOENCODING="utf-8",
+                PATH=str(stub_dir) + (os.pathsep + path if path else ""))
+
+
 def _run(tool: pathlib.Path, flag: str, config_dir: pathlib.Path,
          sandbox: pathlib.Path) -> tuple[str, str, int] | None:
     args = [sys.executable, "-X", "utf8", str(tool), flag, str(config_dir)]
@@ -276,8 +316,7 @@ def _run(tool: pathlib.Path, flag: str, config_dir: pathlib.Path,
         args += [SANDBOX_DIR_ARGS[tool.name], str(empty)]
     try:
         r = subprocess.run(args, capture_output=True, timeout=120,
-                           cwd=str(sandbox),
-                           env=dict(os.environ, PYTHONIOENCODING="utf-8"))
+                           cwd=str(sandbox), env=_tool_env(sandbox))
     except subprocess.TimeoutExpired:
         return None
     return (r.stdout.decode("utf-8", "replace"),
@@ -726,6 +765,51 @@ def test_the_insensitive_set_is_named(_all_outcomes) -> None:
         f"  now visible : {sorted(KNOWN_INSENSITIVE - actual)}\n"
         f"⛔ A tool arriving here has stopped reacting to the conf.d at "
         f"all, which is a bigger problem than the casing question."
+    )
+
+
+@pytest.mark.skipif(os.name == "nt",
+                    reason="the harness stub is a POSIX shell script")
+def test_tools_see_the_harness_kubectl_not_the_hosts(
+        tmp_path, monkeypatch) -> None:
+    """#2480: `_run` must hide whatever `kubectl` the host has.
+
+    A host kubectl is put FIRST on the inherited PATH and answers with a
+    marker and rc 0 — the opposite of the stub. A probe tool asks for
+    `kubectl` exactly the way `operator_check` does. If `_run` passes the
+    host PATH through, the probe reports the marker, and the parity sweep's
+    rc again depends on the machine it runs on.
+    """
+    host_bin = tmp_path / "host_bin"
+    host_bin.mkdir()
+    host = host_bin / "kubectl"
+    host.write_text("#!/bin/sh\necho HOST-KUBECTL\nexit 0\n",
+                    encoding="utf-8")
+    host.chmod(0o755)
+    monkeypatch.setenv("PATH",
+                       str(host_bin) + os.pathsep + os.environ.get("PATH", ""))
+
+    probe = tmp_path / "probe_tool.py"
+    probe.write_text(
+        "import subprocess, sys\n"
+        "try:\n"
+        "    r = subprocess.run(['kubectl', 'version'], capture_output=True,\n"
+        "                       text=True, timeout=10)\n"
+        "    print(f'rc={r.returncode} out={r.stdout.strip()}')\n"
+        "except FileNotFoundError:\n"
+        "    print('rc=127 missing')\n",
+        encoding="utf-8")
+    conf = tmp_path / "conf.d"
+    conf.mkdir()
+
+    r = _run(probe, "--config-dir", conf, tmp_path / "sweep" / "lower")
+    assert r is not None, "probe tool timed out"
+    stdout, stderr, rc = r
+    assert rc == 0, stderr
+    assert stdout.strip() == "rc=1 out=", (
+        f"the tool reached a kubectl other than the harness stub: "
+        f"{stdout.strip()!r}. Every run must see the same kubectl on every "
+        f"host, or a tool's rc varies with the machine (see #2480)."
     )
 
 
