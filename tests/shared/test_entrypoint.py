@@ -697,3 +697,44 @@ def test_dispatcher_mirror_of_the_exit_code_ssot_does_not_drift():
     against the SSOT so a renumbering there cannot leave the dispatcher on
     the old value (blind review, #1406)."""
     assert entrypoint.EXIT_CALLER_ERROR == _lib_exitcodes.EXIT_CALLER_ERROR
+
+
+# ── Invoked through the PATH symlink (issue 1444) ─────────────────
+
+
+def test_dispatch_through_the_path_symlink_finds_the_tools(tmp_path):
+    """`da-tools <cmd>` via the image's /usr/local/bin/da-tools symlink must work.
+
+    The Dockerfile links /usr/local/bin/da-tools -> /opt/da-tools/entrypoint.py,
+    and every GitLab job `da-tools init --ci gitlab` emits clears the image
+    ENTRYPOINT (issue 1408) and calls `da-tools <cmd>` from the shell — i.e.
+    THROUGH that link. Resolving the tools directory without following the
+    link looks for the scripts next to the link and finds none, so every such
+    job exits 2 before doing anything (measured on a real GitLab runner, and on
+    the published v2.9.0 image). This mirrors the image layout: the dispatcher
+    and a tool flat in one directory, the link elsewhere, cwd somewhere else.
+    """
+    import shutil
+    import subprocess
+
+    opt = tmp_path / "opt" / "da-tools"
+    opt.mkdir(parents=True)
+    shutil.copy(os.path.join(DA_TOOLS_DIR, "entrypoint.py"), opt / "entrypoint.py")
+    script = entrypoint.COMMAND_MAP["validate-config"]
+    (opt / script).write_text('print("STUB-RAN")\n', encoding="utf-8")
+    bin_dir = tmp_path / "usr" / "local" / "bin"
+    bin_dir.mkdir(parents=True)
+    link = bin_dir / "da-tools"
+    try:
+        link.symlink_to(opt / "entrypoint.py")
+    except (OSError, NotImplementedError):
+        pytest.skip("this filesystem cannot create symlinks")
+    work = tmp_path / "builds"
+    work.mkdir()
+    p = subprocess.run(
+        [sys.executable, str(link), "validate-config"], cwd=work,
+        capture_output=True, encoding="utf-8", errors="replace", timeout=60,
+        env={**os.environ, "PYTHONIOENCODING": "utf-8"},
+    )
+    assert p.returncode == 0, p.stderr
+    assert "STUB-RAN" in p.stdout, p.stdout + p.stderr

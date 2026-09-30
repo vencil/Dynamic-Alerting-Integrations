@@ -146,7 +146,7 @@ pre-commit run --hook-stage manual --all-files   # manual stage（較重）
 - `make contract-test` — schemathesis 契約測試。
 - `make platform-data` — 重新產生 Rule Pack 數據。
 - `make portal-build` / `make test-portal` — portal JSX bundle 與 Vitest。
-- `make win-commit MSG=_msg.txt FILES="a b"` — FUSE 卡死時的 hook-gated Windows commit（siblings：`fuse-commit` / `fuse-locks` / `recover-index`）。
+- `make win-commit MSG=_msg.txt FILES="a b"` — FUSE 卡死時的 hook-gated Windows commit（siblings：`fuse-commit` / `fuse-locks` / `recover-index`）。只在 WSL 真的執行 commit／push，其他環境只印指令；Windows host 沒有 make，直接用 `scripts/ops/win_git_escape.bat`（[#2248](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/2248)）。
 - `make configmap-assemble` — ⚠️ 這支是**客戶**跑的部署步驟，列在這裡只為了一件事：它對 `CONFDIR` 的**內建預設值**（repo 自帶的開發範例樹）**硬擋**，在 repo 內直接跑會非零退出。要麼帶 `CONFDIR=<你的樹>`，要麼明示 `ALLOW_SAMPLE_CONFDIR=1`。⛔ 其餘契約（exit code、檔名須是合法 ConfigMap key、扁平組裝、大小寫）**刻意不複製**在這裡——見 [`gitops-deployment.md`](docs/integration/gitops-deployment.md) §3。
 
 ### Agent 開的 PR：review 迴路上「看起來綠／看起來卡」的坑

@@ -1565,7 +1565,7 @@ data:
       # Federation Audit (ADR-020 IV-2f, issue #511)
       # Monitors the federation data plane via the metric
       # tenant_federation_requests_total{tenant,status}, emitted by the
-      # mtail sidecar in helm/federation-gateway. status enum:
+      # audit-metrics sidecar in helm/federation-gateway. status enum:
       # ok | rate_limited | auth_failed | bad_request | backend_error.
       # Actionable alerts (severity: warning) — the issue calls them
       # "sentinel alerts" loosely; they are not severity:none inhibit
@@ -1640,9 +1640,9 @@ data:
 
           # ── Audit pipeline liveness (#566 X-4) ──────────────────────
           # `tenant_federation_requests_total` is emitted by the gateway
-          # mtail sidecar (#511 IV-2f) every time a request lands. If the
+          # audit-metrics sidecar (#511 IV-2f) every time a request lands. If the
           # metric goes absent for 10m something upstream is wrong — pod
-          # crashloop / mtail-sidecar dead / network partition between
+          # crashloop / audit-metrics sidecar dead / network partition between
           # Prometheus and the gateway. A "0 audit rows in last 24h" CSV
           # in chargeback is otherwise ambiguous between "tenant didn't
           # use" / "audit pipeline broke" / "operator wiped data"; this
@@ -1658,7 +1658,7 @@ data:
               description: |
                 No `tenant_federation_requests_total` samples in the last
                 10m — federation gateway audit pipeline is broken. Check
-                (a) gateway pods Running, (b) mtail-sidecar logs, (c) the
+                (a) gateway pods Running, (b) audit-metrics sidecar logs, (c) the
                 Prometheus scrape target. If both gateway + sidecar are
                 healthy the silence may indicate genuine zero traffic
                 (suppress the alert during planned maintenance).
@@ -1699,7 +1699,7 @@ data:
           # for 15m, floored at ~1 rejection/min so a single fluke on a
           # near-idle tenant can't trip it. Source metric:
           # tenant_log_query_requests_total{account_id,project_id,status}
-          # (gateway victorialogs-mode mtail sidecar, #609 PR-4).
+          # (gateway victorialogs-mode audit-metrics sidecar, #609 PR-4).
           #
           # Keyed by account_id (the verified VictoriaLogs partition,
           # tenant-agnostic), NOT tenant — the log-query audit line carries

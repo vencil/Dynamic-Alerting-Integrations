@@ -270,7 +270,7 @@ audit log（issue [#511](https://github.com/vencil/Dynamic-Alerting-Integrations
 - **`status`**：access log 記**原始 HTTP code**；下游 metric 的 `status` label 才是分桶 enum。
 - audit schema **不含** `matched_whitelist_rule`（whitelist 不在查詢路徑執行，沒有「規則匹配」這回事）與 `series_returned`（Envoy 不該 buffer 並解 response body 來數 series——成本過高；blast-radius 的執行靠 storage 的 `--query.max-samples`，不靠 log 算）。
 
-新 metric **`tenant_federation_requests_total{tenant,status}`** 由 gateway pod 的 **mtail sidecar** tail access log 產出（Envoy 原生 stats 無法產生 per-tenant 高基數 label）。`status` label 為 HTTP code 分桶 enum：
+新 metric **`tenant_federation_requests_total{tenant,status}`** 由 gateway pod 的 **audit-metrics sidecar** tail access log 產出（原為 mtail；#1278 D1 起改為上游 Vector 跑 `files/audit-metrics.vector.yaml`，metric 名稱、label 與 bucket 不變）（Envoy 原生 stats 無法產生 per-tenant 高基數 label）。`status` label 為 HTTP code 分桶 enum：
 
 | enum | HTTP | 意義 |
 |---|---|---|
@@ -283,7 +283,7 @@ audit log（issue [#511](https://github.com/vencil/Dynamic-Alerting-Integrations
 
 配 alert `FederationRejectionRateAnomaly`（per-tenant rejection ratio 異常 → `severity: warning`，notify platform ops；非 `severity: none` inhibit sentinel）。該規則 join `tenant_metadata_info`，只評估仍在 conf.d 的活躍租戶 —— 已退租租戶的殭屍 token 持續被 `403` 拒絕（撤銷後、4h TTL 未到期前計入 `auth_failed`，見下「Metric 邊界」）不會誤報（[#550](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/550)）。
 
-> **Metric 邊界**：mtail 以 `tenant_id` 為必要分桶欄位，故**純 JWT 驗證失敗**的請求（偽造 / 過期 token —— `jwt_authn` 在 claim 注入前就 401，access log 無 `tenant_id`）**不計入** `tenant_federation_requests_total`：它們無有效租戶、不屬 per-tenant 用量，屬攻擊噪音，由 Envoy `jwt_authn` 自身的 stats 觀測。被撤銷的 token 不同 —— 那是合法 JWT（claim 已注入）、由 revoked set 擋下的 403，正常計入 `auth_failed`。
+> **Metric 邊界**：audit-metrics sidecar 以 `tenant_id` 為必要分桶欄位，故**純 JWT 驗證失敗**的請求（偽造 / 過期 token —— `jwt_authn` 在 claim 注入前就 401，access log 無 `tenant_id`）**不計入** `tenant_federation_requests_total`：它們無有效租戶、不屬 per-tenant 用量，屬攻擊噪音，由 Envoy `jwt_authn` 自身的 stats 觀測。被撤銷的 token 不同 —— 那是合法 JWT（claim 已注入）、由 revoked set 擋下的 403，正常計入 `auth_failed`。
 
 #### Control-plane audit（誰授權了什麼）
 
@@ -298,7 +298,7 @@ federation 控制平面操作（簽發／撤銷 token、改 whitelist／subset�
 data-plane audit log 的**持久、可中央查詢的合規儲存不在本 ADR 交付範圍**。平台目前無 log 聚合 stack（無 Loki / ELK / Fluentd / Vector）；把 audit log 寫 per-pod PVC 是 cloud-native anti-pattern——RWO PVC 在 gateway 的 `replicaCount>1` / `podAntiAffinity` 下根本無法多副本掛載，RWX 則拖入 NFS／EFS 依賴。交付的是：
 
 1. **aggregate 層**——`tenant_federation_requests_total` 進 Prometheus，本即 durable + queryable（誰拉多少、拒絕率多少）。
-2. **per-request 層**——結構化 JSON 寫 gateway stdout（collector-ready），持久度等同 node container-log 輪替，**尚非中央可查**；另有一份 in-pod emptyDir mirror 供 mtail，為 ephemeral metrics feed，非系統紀錄。
+2. **per-request 層**——結構化 JSON 寫 gateway stdout（collector-ready），持久度等同 node container-log 輪替，**尚非中央可查**；另有一份 in-pod emptyDir mirror 供 audit-metrics sidecar，為 ephemeral metrics feed，非系統紀錄。
 
 真正的中央 forensic log store（node-level log shipper + Loki／SIEM + retention policy）為 follow-up [#539](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/539)。觸發條件：合規客戶要求中央 forensic 查詢，或 stdout audit log volume 超出 node container-log 輪替可用保留。
 

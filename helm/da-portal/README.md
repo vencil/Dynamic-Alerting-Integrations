@@ -215,7 +215,7 @@ helm install da-portal helm/da-portal -n monitoring \
 | service.internalPort | int | 8080 | Internal port (nginx direct) |
 | ingress.enabled | bool | false | Enable Ingress |
 | ingress.className | string | `""` | Ingress class name |
-| ingress.hosts | list | `[da-portal.example.com]` | Ingress hosts (inert while `ingress.enabled=false`) |
+| ingress.hosts | list | `[{host: da-portal.example.com, paths: [{path: /, pathType: Prefix}]}]` | Ingress hosts, each an object with `host` and optional `paths` (inert while `ingress.enabled=false`) |
 
 ### Resources
 
