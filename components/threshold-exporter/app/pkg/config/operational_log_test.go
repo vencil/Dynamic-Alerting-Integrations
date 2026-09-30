@@ -75,6 +75,21 @@ func TestOperationalStatesLogSink(t *testing.T) {
 		t.Fatalf("precondition: no silences resolved: %+v", logged)
 	}
 
+	// The public per-reader entry points (still called directly, e.g. by
+	// /api/config) keep logging too: together, every line once.
+	buf.Reset()
+	cfg.ResolveSilentModesAt(platformMergeNow)
+	cfg.ResolveStateFiltersAt(platformMergeNow)
+	out = buf.String()
+	for _, line := range operationalLogLines {
+		if n := strings.Count(out, line); n != 1 {
+			t.Errorf("ResolveSilentModesAt + ResolveStateFiltersAt: %q written %d times, want 1:\n%s", line, n, out)
+		}
+	}
+	if n := strings.Count(out, " WARN: "); n != len(operationalLogLines) {
+		t.Errorf("ResolveSilentModesAt + ResolveStateFiltersAt: %d WARN entries, want %d:\n%s", n, len(operationalLogLines), out)
+	}
+
 	// nil sink: nothing in the process log, same states.
 	buf.Reset()
 	quiet := sortedStates(cfg.OperationalStatesAtLogf(platformMergeNow, nil))
