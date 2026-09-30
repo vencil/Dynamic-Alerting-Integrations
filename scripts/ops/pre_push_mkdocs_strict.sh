@@ -94,9 +94,15 @@ _doc_changes=""
 _unknown_base=""
 while read -r remote_ref local_sha remote_sha; do
     [ -n "${remote_ref:-}" ] || continue
-    # Deletions and "nothing to push" carry no tree to build.
+    # Deletions carry no tree to build.
     [ "$local_sha" = "$_Z40" ] && continue
-    [ "$local_sha" = "-" ] && continue
+    # ⛔ `-` is an unknown commit, not "nothing to push" — and `git worktree
+    # add` reads `-` as the previous branch, so building it would validate the
+    # wrong tree.
+    if [ "$local_sha" = "-" ]; then
+        echo "[pre-push-mkdocs] ⛔ cannot tell which commit ${remote_ref} pushes; refusing." >&2
+        exit 1
+    fi
     case "$remote_ref" in refs/tags/*) continue ;; esac
 
     # Base for "what does THIS push introduce?".
@@ -171,8 +177,7 @@ fi
 # are path stubs — the extracted tree matches neither: the platform dependence
 # these aliases exist to remove, reintroduced by the build step.
 # ⛔ The clean-up is an EXIT trap, not INT/TERM alone: a clean-up that runs
-# only after the build is skipped on Ctrl-C or SIGTERM (#2169), and a failed
-# `add` that left its tree behind leaves through a plain `exit 1`.
+# only after the build is skipped on Ctrl-C or SIGTERM (#2169).
 # ⛔ `add` and the build run in the background, and the trap waits for the
 # running one before removing the tree: a signal to this bash alone reaches
 # neither. An `add` still checking out holds the tree locked, so `remove`
@@ -188,13 +193,13 @@ git worktree remove --force "$_live_wt" >/dev/null 2>&1' EXIT
 _build_one() {
     local _sha="$1" _wt _rc
     _wt="$(git rev-parse --git-path "mkdocs-strict-$$-${_sha:0:8}")"
-    # Set BEFORE `add`: a failed add can still leave the tree (a failing
-    # post-checkout hook), and the path is this process's own.
     _live_wt="$_wt"
     # ⛔ git's own stderr is the diagnosis; no guessed causes (#2210).
     # A bare `&` is enough here, unlike the build below: git sets its own
     # SIGINT handler, so Ctrl-C still stops the checkout.
-    git worktree add --detach --quiet "$_wt" "$_sha" &
+    # ⛔ The user's hooks stay out of this tree: CI runs none, and a failing
+    # post-checkout hook would be reported as a failed checkout.
+    git -c core.hooksPath=/dev/null worktree add --detach --quiet "$_wt" "$_sha" &
     _bg_pid=$!
     if ! wait "$_bg_pid"; then
         # ⛔ FAIL CLOSED. The obvious fallback — build the working tree instead —
@@ -245,7 +250,6 @@ fi
 
 # Tier 2: no native mkdocs; soft fail
 echo "[pre-push-mkdocs] ⚠️  mkdocs not on PATH; cannot validate locally."
-echo "                  Doc changes will be validated by CI."
 echo ""
 echo "  To enable local pre-push validation (one-time install):"
 echo "    pip install --user mkdocs-material mkdocs-static-i18n pymdown-extensions"
