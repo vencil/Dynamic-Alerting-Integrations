@@ -235,7 +235,9 @@ def test_only_the_candidate_resolve_raising_oserror_is_caught_too(
     assert ei.value is original
     assert not isinstance(ei.value, OutputWriteError)
     # Both arms really ran — otherwise this would pass for the wrong reason.
-    assert seen == [str(out), "relative/x"], seen
+    # str(Path(...)): `seen` records what the patch saw, in the host's own
+    # separator — "relative/x" on POSIX, "relative\x" on Windows.
+    assert seen == [str(out), str(Path("relative/x"))], seen
 
 
 def test_oserror_with_no_filename_is_converted(blocker: Path):

@@ -746,7 +746,7 @@ class TestCLI:
         exit_code = pe.main(["--config-dir", str(tmp_path), "--policy", str(missing)])
         assert exit_code == 2
         err = capsys.readouterr().err
-        assert str(missing) in err
+        assert repr(str(missing)) in err
         assert "Do not drop the flag" in err or "不要靠拿掉" in err
 
     def test_main_policy_missing_file_json_envelope(self, tmp_path, capsys):
@@ -762,7 +762,7 @@ class TestCLI:
         assert doc["reason"] == "policy_file_not_found"
         assert doc["passed"] is False
         assert doc["violations"] == []
-        assert str(missing) in captured.err
+        assert repr(str(missing)) in captured.err
 
     # ── #1651 blind-review follow-up: --policy IS a file but cannot be read ──
     # Measured on HEAD before the fix (820c7785): `policies: [` and a cp950
@@ -790,7 +790,7 @@ class TestCLI:
         assert exit_code == 2
         captured = capsys.readouterr()
         assert captured.out == ""
-        assert str(pol) in captured.err
+        assert repr(str(pol)) in captured.err
         assert "not valid YAML" in captured.err or "不是有效的 YAML" in captured.err
         assert "Traceback" not in captured.err
 
@@ -806,7 +806,7 @@ class TestCLI:
         exit_code = pe.main(["--config-dir", str(cfg), "--policy", str(pol)])
         assert exit_code == 2
         captured = capsys.readouterr()
-        assert str(pol) in captured.err
+        assert repr(str(pol)) in captured.err
         assert "not valid UTF-8" in captured.err or "不是有效的 UTF-8" in captured.err
         assert "Traceback" not in captured.err
 
@@ -827,7 +827,7 @@ class TestCLI:
         exit_code = pe.main(["--config-dir", str(cfg), "--policy", str(pol)])
         assert exit_code == 2
         err = capsys.readouterr().err
-        assert str(pol) in err
+        assert repr(str(pol)) in err
         assert kind in err
         assert "mapping" in err
         assert "No policy rules found" not in err
@@ -859,7 +859,7 @@ class TestCLI:
         assert doc["reason"] == reason
         assert doc["passed"] is False
         assert doc["violations"] == []
-        assert str(pol) in captured.err
+        assert repr(str(pol)) in captured.err
 
     def test_main_policy_valid_file_still_evaluates(self, tmp_path, capsys):
         """control: a valid mapping with `policies:` still loads and evaluates
@@ -911,7 +911,7 @@ class TestCLI:
         assert "No policy rules found" in err or "未找到策略規則" in err
         assert "specify --policy" not in err
         assert "指定 --policy" not in err
-        assert str(pol) in err
+        assert repr(str(pol)) in err
 
     def test_main_no_policies_json_envelope(self, tmp_path, capsys):
         """#1112: 無策略規則 + --json → stdout 仍是恰好一份 JSON（report schema 歸零）。"""

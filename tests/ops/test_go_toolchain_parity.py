@@ -22,7 +22,7 @@ standard Python Tests job.
 from __future__ import annotations
 
 import re
-from pathlib import Path
+from pathlib import Path, PurePosixPath
 
 import pytest
 import yaml
@@ -68,7 +68,7 @@ def _go_directive(module_dir: str) -> str:
 
 
 def _modules() -> list[str]:
-    mods = [str(Path(p).parent) for p in _rel("go.mod")]
+    mods = [PurePosixPath(p).parent.as_posix() for p in _rel("go.mod")]
     assert SSOT_MODULE in mods, (
         f"the SSOT module {SSOT_MODULE!r} has no tracked go.mod — every "
         "assertion below would compare against nothing")
@@ -82,10 +82,10 @@ def _ssot() -> str:
 def _module_for(dockerfile: str, modules: list[str]) -> str:
     """Nearest ancestor directory holding a go.mod; the SSOT when there is none
     (a builder that compiles upstream source, not a module of this repo)."""
-    d = Path(dockerfile).parent
-    while str(d) not in (".", ""):
-        if str(d) in modules:
-            return str(d)
+    d = PurePosixPath(dockerfile).parent
+    while d.as_posix() not in (".", ""):
+        if d.as_posix() in modules:
+            return d.as_posix()
         d = d.parent
     return SSOT_MODULE
 
@@ -201,8 +201,8 @@ def test_workflows_take_go_from_go_mod() -> None:
             floating.append(f"{wf}::{job_id} sets neither go-version nor go-version-file")
             continue
         for path in _expand_matrix(str(with_["go-version-file"]), job):
-            module = str(Path(path).parent)
-            if Path(path).name != "go.mod" or module not in modules:
+            module = PurePosixPath(path).parent.as_posix()
+            if PurePosixPath(path).name != "go.mod" or module not in modules:
                 wrong_file.append(f"{wf}::{job_id} go-version-file {path!r} is not a tracked go.mod")
             elif module in GO_DIRECTIVE_FLOORS:
                 wrong_file.append(
