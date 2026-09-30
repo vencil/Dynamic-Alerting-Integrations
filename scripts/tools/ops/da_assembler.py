@@ -575,20 +575,27 @@ def render_cr_file(
         # persistent --config-dir declares the tenant a second time. The
         # message names that file; deleting it is left to the operator.
         # Same spelling (`42`): quoting overwrites it, nothing is left.
-        # `0x_` / `0b_` resolve as int but do not construct: the earlier
-        # version crashed on them and wrote nothing, so there is no hint.
+        # Construction failing (`0x_`, a >4300-digit int): the earlier
+        # version crashed on it and wrote nothing, so there is no hint.
+        # A name quoting cannot save (not DNS-1123 once quoted, #2396:
+        # `TRUE`, `-5`, `1:30`) has to be renamed, so the old file is stale
+        # even when spelled as written (`True` -> `True.yaml`).
         # `true` -> `True.yaml` differs from `true.yaml` only in case: on a
         # case-insensitive file system that is the quoted name's own file.
         try:
             old_name = str(yaml.safe_load(name))
         except (ValueError, yaml.YAMLError):
-            old_name = name
-        stale = ("" if old_name == name else
-                 ". If an earlier version of this tool rendered this CR "
-                 f"into this --config-dir, it wrote {old_name}.yaml there: "
-                 "delete it, or it and the quoted name's file both "
-                 "declare the tenant")
-        if stale and old_name.casefold() == name.casefold():
+            old_name = None
+        quotable = _is_dns1123_subdomain(name)
+        stale = ""
+        if old_name is not None and (old_name != name or not quotable):
+            stale = (". If an earlier version of this tool rendered this "
+                     f"CR into this --config-dir, it wrote {old_name}.yaml "
+                     "there: delete it, or it and the "
+                     + ("quoted name's" if quotable else "renamed CR's")
+                     + " file both declare the tenant")
+        if (stale and quotable
+                and old_name.casefold() == name.casefold()):
             stale += (" (on a case-insensitive file system it IS the quoted "
                       "name's file: do not delete it there)")
         log.error("%s: metadata.name must be a string, but unquoted %s is "

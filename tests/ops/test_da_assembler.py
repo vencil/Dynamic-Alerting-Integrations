@@ -303,24 +303,36 @@ class TestRenderCrFile:
     # Shapes let through here that are not a DNS-1123 name are refused by
     # the name-format check instead (#2396, TestRenderCrNameFormat).
     # `stale`: the file an earlier version (before #2399/#2400) rendered
-    # this name to — measured against that version, #2430. None where it
-    # is the name as written: quoting then overwrites the same file.
-    @pytest.mark.parametrize("name, kind, stale", [
-        pytest.param("42", "int", None, id="name-int"),
-        pytest.param("8", "int", None, id="name-int-8"),
-        pytest.param("010", "int", "8.yaml", id="name-int-octal"),
-        pytest.param("0x1F", "int", "31.yaml", id="name-int-hex"),
-        pytest.param("1:30", "int", "90.yaml", id="name-int-sexagesimal"),
-        pytest.param("-5", "int", None, id="name-int-negative"),
-        pytest.param("1.5", "float", None, id="name-float"),
-        pytest.param("1.50", "float", "1.5.yaml", id="name-float-trailing-0"),
-        pytest.param(".inf", "float", "inf.yaml", id="name-float-inf"),
-        pytest.param("true", "bool", "True.yaml", id="name-bool-true"),
-        pytest.param("yes", "bool", "True.yaml", id="name-bool-yes"),
-        pytest.param("off", "bool", "False.yaml", id="name-bool-off"),
+    # this name to — measured against tools/v2.9.0, #2430. None where it
+    # is the name as written and quoting saves it: quoting then overwrites
+    # the same file. `fix`: "quote" when the quoted name is DNS-1123;
+    # "rename" when it is not (#2396), and then even a same-spelling file
+    # (`True` -> `True.yaml`, `-5` -> `-5.yaml`) is left behind.
+    @pytest.mark.parametrize("name, kind, stale, fix", [
+        pytest.param("42", "int", None, "quote", id="name-int"),
+        pytest.param("8", "int", None, "quote", id="name-int-8"),
+        pytest.param("010", "int", "8.yaml", "quote", id="name-int-octal"),
+        pytest.param("0x1F", "int", "31.yaml", "rename", id="name-int-hex"),
+        pytest.param("1:30", "int", "90.yaml", "rename",
+                     id="name-int-sexagesimal"),
+        pytest.param("-5", "int", "-5.yaml", "rename",
+                     id="name-int-negative"),
+        pytest.param("1.5", "float", None, "quote", id="name-float"),
+        pytest.param("1.50", "float", "1.5.yaml", "quote",
+                     id="name-float-trailing-0"),
+        pytest.param(".inf", "float", "inf.yaml", "rename",
+                     id="name-float-inf"),
+        pytest.param("true", "bool", "True.yaml", "quote",
+                     id="name-bool-true"),
+        pytest.param("TRUE", "bool", "True.yaml", "rename",
+                     id="name-bool-upper"),
+        pytest.param("True", "bool", "True.yaml", "rename",
+                     id="name-bool-title"),
+        pytest.param("yes", "bool", "True.yaml", "quote", id="name-bool-yes"),
+        pytest.param("off", "bool", "False.yaml", "quote", id="name-bool-off"),
     ])
     def test_non_string_name_is_caller_error(
-            self, name, kind, stale, tmp_path, caplog):
+            self, name, kind, stale, fix, tmp_path, caplog):
         """#2371：未加引號、YAML 會解成數字／布林的 name 一律 rc 2。
 
         以 YAML 1.1（PyYAML）的隱式型別判定，與 Kubernetes 經 YAML→JSON
@@ -331,6 +343,8 @@ class TestRenderCrFile:
         （`010` → `8.yaml`）。加引號重 render 後新檔是 `010.yaml`，舊檔
         若還在持久輸出目錄裡，同一租戶就有兩份。訊息要指名那個舊檔；拼法
         相同（`42`）時加引號會覆寫同一個檔，不該提。本工具不刪檔。
+        加引號仍非 DNS-1123（`TRUE`、`-5`，#2396）就得改名，舊檔即使拼法
+        相同也會留下，要提；大小寫不分的檔案系統附註只在加引號可行時才成立。
         """
         cr_path = tmp_path / "cr.yaml"
         cr_path.write_text(
@@ -348,10 +362,37 @@ class TestRenderCrFile:
         else:
             assert (f"it wrote {stale} there: delete it" in caplog.text), \
                 caplog.text
-        # `true` -> `True.yaml` differs from `true.yaml` only in case.
-        case_only = stale is not None and \
+            new_file = ("quoted name's" if fix == "quote"
+                        else "renamed CR's")
+            assert f"it and the {new_file} file both" in caplog.text, \
+                caplog.text
+        # `true` -> `True.yaml` differs from `true.yaml` only in case; with
+        # `TRUE` there is no quoted name's file for it to be.
+        case_only = stale is not None and fix == "quote" and \
             stale.casefold() == f"{name}.yaml".casefold()
         assert ("case-insensitive file system" in caplog.text) == case_only
+        assert list(out_dir.iterdir()) == []
+
+    def test_int_name_past_str_digit_limit_is_caller_error(
+            self, tmp_path, caplog):
+        """#2430：超過 Python 4300 位 int↔str 上限的 int name 仍是 rc 2。
+
+        推算舊版檔名時 int(...)／str(...) 會丟 ValueError；舊版對它同樣
+        crash、沒寫過檔，所以不附舊檔提醒，也不得變成 traceback。
+        """
+        name = "1" * 5000
+        cr_path = tmp_path / "cr.yaml"
+        cr_path.write_text(
+            self._K + f"metadata: {{name: {name}}}\n" + self._T,
+            encoding="utf-8")
+        out_dir = tmp_path / "out"
+        out_dir.mkdir()
+        assert render_cr_file(cr_path, out_dir) == EXIT_CALLER_ERROR
+        errors = [r for r in caplog.records if r.levelname == "ERROR"]
+        assert len(errors) == 1, caplog.text
+        assert "read as int" in caplog.text
+        assert "earlier version" not in caplog.text
+        assert "4300" not in caplog.text
         assert list(out_dir.iterdir()) == []
 
     @pytest.mark.parametrize("name", ["0b_", "0x_", "-0x_"])
