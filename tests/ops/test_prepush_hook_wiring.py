@@ -1931,6 +1931,69 @@ def test_an_interrupted_push_leaves_no_temporary_worktree_behind(
     )
 
 
+# A build shaped like mkdocs_strict_check.sh's `mkdocs build 2>&1 | tee`: the
+# writer is a grandchild in a pipeline, takes its output path at the start and
+# writes it late.
+_LATE_WRITER = """#!/usr/bin/env bash
+: > "$PREPUSH_TEST_STARTED"
+bash -c 'sleep 2; mkdir -p "$1" && : > "$1/index.html"' _ "$PWD/site" 2>&1 | tee /dev/null
+"""
+
+
+@pytest.mark.skipif(os.name == "nt", reason="needs POSIX signals to the guard alone")
+@pytest.mark.parametrize("second", [None, "TERM-guard", "INT-group"],
+                         ids=["once", "then-SIGTERM-again", "then-Ctrl-C"])
+def test_a_sigterm_to_the_guard_alone_during_the_build_leaves_nothing_behind(
+    tmp_path: Path, second: str | None,
+) -> None:
+    """#2211 — a SIGTERM to the guard's bash, not its group, must not let the
+    build outlive the clean-up and write site/ back into .git, unregistered.
+    The guard then waits for the build; a second signal while it waits (an
+    impatient Ctrl-C) must not cut the clean-up short."""
+    work, record, sha_a, sha_b = _docs_repo(tmp_path, check=_LATE_WRITER)
+    bindir = tmp_path / "fakebin"
+    bindir.mkdir()
+    (bindir / "mkdocs").write_text(_FAKE_MKDOCS, encoding="utf-8")
+    (bindir / "mkdocs").chmod(0o755)
+    started = tmp_path / "started"
+    env = {**os.environ, "PATH": str(bindir) + os.pathsep + os.environ.get("PATH", ""),
+           "PREPUSH_TEST_STARTED": str(started)}
+    before = _git(work, "worktree", "list", "--porcelain").stdout
+    proc = subprocess.Popen(  # subprocess-timeout: ignore
+        [_BASH, "scripts/ops/pre_push_mkdocs_strict.sh", "origin", "/dev/null"], cwd=work, env=env,
+        stdin=subprocess.PIPE, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+        start_new_session=True, preexec_fn=lambda: signal.signal(signal.SIGINT, signal.SIG_DFL),
+    )
+    try:
+        proc.stdin.write(f"refs/heads/topic {sha_b} refs/heads/topic {sha_a}\n".encode())
+        proc.stdin.close()
+        deadline = time.monotonic() + 30
+        while not started.exists():
+            assert proc.poll() is None and time.monotonic() < deadline, "the build never started"
+            time.sleep(0.05)
+        # Must-fire half: the tree is there while the build runs.
+        assert list((work / ".git").glob("mkdocs-strict-*")), "no temporary tree during the build"
+        os.kill(proc.pid, signal.SIGTERM)
+        if second:
+            time.sleep(0.5)
+            if second == "TERM-guard":
+                os.kill(proc.pid, signal.SIGTERM)
+            else:
+                os.killpg(proc.pid, signal.SIGINT)
+        proc.wait(timeout=20)
+        time.sleep(3)  # longer than the build has left: a survivor would have written by now
+    finally:
+        try:
+            os.killpg(proc.pid, signal.SIGKILL)
+        except ProcessLookupError:
+            pass
+
+    assert proc.returncode != 0, "the guard reported success after being terminated"
+    after = _git(work, "worktree", "list", "--porcelain").stdout
+    assert after == before, f"worktrees changed:\n{before}\n---\n{after}"
+    assert not list((work / ".git").glob("mkdocs-strict-*")), "the build wrote its tree back into .git"
+
+
 # The recorder, failing only for the commit named in PREPUSH_TEST_FAIL_SHA and
 # marking what it printed on each stream, so the test can tell its output from
 # the guard's.
@@ -1947,7 +2010,7 @@ exit 1
 def test_a_failed_build_is_reported_verbatim_and_not_diagnosed(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch, failing: int,
 ) -> None:
-    """#2210 — a failed build (broken links, an abort, a Ctrl-C) gets no
+    """#2210 — a failed build (broken links, an abort) gets no
     advice: the guard adds one line naming the commit, pinned whole, and stops
     there instead of building the next ref."""
     work, record, sha_a, sha_b = _docs_repo(tmp_path, check=_SENTINEL_CHECK)
