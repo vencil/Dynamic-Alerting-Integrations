@@ -23,6 +23,9 @@ What this module holds, and how:
     `github` / `context`, on both the create and the update path, and the body
     it sends must carry the PR's HEAD sha (not the merge sha `context.sha`
     holds on a pull_request) and the run link.
+  * The same harness serves comments in 30-per-page pages, as the API does:
+    a sticky comment on page 2 must be edited, not duplicated (#2485), and a
+    comment with a null body must not break the marker lookup.
 
 ⛔ Fail-closed boundaries, stated once:
   * The expression evaluator below reads only `==`, `!=`, `&&`, `||`, `!`,
@@ -404,12 +407,30 @@ const fakeRequire = (m) => {
   if (m === 'fs') return fakeFs;
   throw new Error('harness does not model require(' + JSON.stringify(m) + ')');
 };
+// `spec.pages` is the PR's comment list as the API serves it, one array per
+// page. listComments answers ONE page (page 1 unless asked), like the real
+// endpoint; only `github.paginate` walks them all (#2485).
+const listComments = async (a) => {
+  const perPage = (a && a.per_page) || 30;
+  if (perPage !== 30) throw new Error('harness models 30-per-page pages only, got per_page=' + perPage);
+  return { data: spec.pages[((a && a.page) || 1) - 1] || [] };
+};
+const paginate = async (fn, params) => {
+  if (fn !== listComments) throw new Error('harness paginates listComments only');
+  const all = [];
+  for (let page = 1; page <= spec.pages.length + 1; page++) {
+    const { data } = await fn({ ...params, page });
+    all.push(...data);
+    if (data.length < 30) break;
+  }
+  return all;
+};
 const issues = {
-  listComments: async () => ({ data: spec.existing }),
+  listComments,
   createComment: async (a) => { writes.push({ op: 'create', ...a }); return { data: {} }; },
   updateComment: async (a) => { writes.push({ op: 'update', ...a }); return { data: {} }; },
 };
-const github = { rest: { issues } };
+const github = { rest: { issues }, paginate };
 const context = {
   payload: { pull_request: { number: 7, head: { sha: spec.head } } },
   sha: spec.merge, runId: spec.runId, serverUrl: 'https://github.com',
@@ -440,8 +461,12 @@ def _script_steps(rel: str) -> list[dict]:
     return steps
 
 
-def _run(script: str, env: dict, existing: list) -> list[dict]:
-    spec = {"script": script, "existing": existing, "head": _HEAD_SHA,
+def _run(script: str, env: dict, existing: list,
+         pages: list[list] | None = None) -> list[dict]:
+    """`existing` is a one-page comment list; `pages` spells out several."""
+    if pages is None:
+        pages = [existing]
+    spec = {"script": script, "pages": pages, "head": _HEAD_SHA,
             "merge": _MERGE_SHA, "runId": _RUN_ID}
     proc = subprocess.run(
         [_require_node(), "-e", _HARNESS], input=json.dumps(spec),
@@ -486,3 +511,48 @@ def test_sticky_comment_is_stamped_with_head_sha_and_run(rel) -> None:
     assert posted >= 1, (
         f"{rel}: no github-script step posted a comment under the harness, so "
         f"every assertion above was skipped.")
+
+
+# ============================================================
+# ── The sticky comment is found past the first page (#2485) ──
+# ============================================================
+
+
+def _posting_steps(rel: str):
+    """(script, env, created-body) for every step that posts under the harness."""
+    found = []
+    for step in _script_steps(rel):
+        script = step["with"]["script"]
+        env = {k: f"ENV-{k}" for k in (step.get("env") or {})}
+        created = _run(script, env, existing=[])
+        if created:
+            found.append((script, env, created[0]["body"]))
+    assert found, f"{rel}: no github-script step posted a comment under the harness"
+    return found
+
+
+@pytest.mark.parametrize("rel", WORKFLOWS)
+def test_sticky_comment_on_page_two_is_updated_not_duplicated(rel) -> None:
+    # A full first page (30 = the API default per_page) without the marker,
+    # the marker on page 2. One listComments call sees only page 1, so the
+    # step would open a NEW comment on every run of a busy PR.
+    first = [{"id": i, "body": f"unrelated comment {i}"} for i in range(1, 31)]
+    for script, env, body in _posting_steps(rel):
+        wrote = _run(script, env, existing=[],
+                     pages=[first, [{"id": 99, "body": body}]])
+        assert [(w["op"], w.get("comment_id")) for w in wrote] == [("update", 99)], (
+            f"{rel}: the sticky comment sits on page 2 of the PR's comments "
+            f"and the step did not edit it: {wrote}. Listing without "
+            f"`github.paginate` reads only the first 30 comments.")
+
+
+@pytest.mark.parametrize("rel", WORKFLOWS)
+def test_comment_with_null_body_does_not_break_the_lookup(rel) -> None:
+    for script, env, body in _posting_steps(rel):
+        wrote = _run(script, env, existing=[{"id": 1, "body": None},
+                                            {"id": 99, "body": body}])
+        assert [(w["op"], w.get("comment_id")) for w in wrote] == [("update", 99)], (
+            f"{rel}: a comment whose body is null derailed the marker "
+            f"lookup: {wrote}")
+        wrote = _run(script, env, existing=[{"id": 1, "body": None}])
+        assert [w["op"] for w in wrote] == ["create"], wrote
