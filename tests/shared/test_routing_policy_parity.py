@@ -11,6 +11,9 @@ What this half measures, per tree written to a tmp dir:
 * `targets` — `load_tenant_tree(...).routing_configs[t]`: the main receiver,
   then `list_tenant_subroutes` (the generator's render order);
 * `rejected_routes` — the `routes` entries `route_entry_matchers` rejects;
+* `values_not_string` (#2431) — the strict ERROR lines for a routes match
+  value / override alertname / metric_group that PyYAML does not read as a
+  string (`_grar_validate.routing_values_not_string`), parsed back to fields;
 * `policy` — the receiver-type lines `check_domain_policies` (strict) put in
   `schema_warnings`, parsed back to (domain, ref, constraint);
 * `unknown_profile` — the `_routing_profile references unknown profile` WARN;
@@ -64,8 +67,8 @@ PLATFORM_KINDS = {"routing_defaults_routes_ignored", "routing_in_unread_location
 # leaves the kind out of its platform comparison — the tree's `targets`
 # column is what pins "not rendered" here.
 GO_ONLY_PLATFORM_KINDS = {"routing_in_unread_location"}
-EXPECT_KEYS = {"targets", "policy", "rejected_routes", "unknown_profile",
-               "tenant_api", "python_differs", "escalation"}
+EXPECT_KEYS = {"targets", "policy", "rejected_routes", "values_not_string",
+               "unknown_profile", "tenant_api", "python_differs", "escalation"}
 ESCALATION_KEYS = {"verdict", "leaks"}
 ESCALATION_VERDICTS = {"compliant", "violation"}
 TENANT_API_KEYS = {"put", "batch"}
@@ -87,6 +90,9 @@ _DEFAULTS_ROUTES = re.compile(
 # compared on kind and field only.
 _ESC_NOT_BOOL = re.compile(
     r"domain_policy '(?P<domain>[^']*)': constraint 'require_critical_escalation' must be a boolean")
+# #2431: the strict line for a matcher value PyYAML does not read as a string.
+_NOT_STRING = re.compile(
+    r"ERROR: tenant '(?P<tenant>[^']*)': (?P<field>\S+) must be a string, got ")
 _UNKNOWN_PROFILE = re.compile(
     r"WARN: (?P<tenant>\S+): _routing_profile references unknown profile '(?P<name>[^']*)'")
 # #2325: the require_critical_escalation lines — the non-compliance line
@@ -124,7 +130,7 @@ def test_matrix_is_not_vacuous() -> None:
     for required in ("i-routes-entry-unknown-receiver-type", "ii-routes-entry-forbidden-type",
                      "iii-override-unknown-receiver-type", "iv-override-forbidden-type",
                      "adr007-five-tenants", "yaml11-bool-match-value",
-                     "require-critical-escalation"):
+                     "require-critical-escalation", "routing-values-yaml11"):
         assert required in names, required
 
 
@@ -262,6 +268,9 @@ def test_python_reader_matches_the_table(tree, tmp_path: Path) -> None:
         rc = got.routing_configs.get(tenant)
         assert _targets(rc) == _want(want, "targets"), (where, rc)
         assert _rejected(tenant, rc) == _want(want, "rejected_routes"), (where, rc)
+        not_string = sorted(m["field"] for m in map(_NOT_STRING.search, got.schema_warnings)
+                            if m and m["tenant"] == tenant)
+        assert not_string == sorted(want["values_not_string"]), (where, not_string)
         mine = sorted((d, r, c) for t, d, r, c in rows if t == tenant)
         assert mine == sorted(tuple(p) for p in _want(want, "policy")), (where, mine)
         assert unknown.get(tenant) == want["unknown_profile"], (where, unknown)
@@ -291,3 +300,5 @@ def test_python_reader_matches_the_table(tree, tmp_path: Path) -> None:
     expected_total = sum(len(_want(w, "policy")) for w in tree["expect"].values())
     assert len(rows) == expected_total, (tree["name"], rows)
     assert Counter(t for t, *_ in rows).keys() <= set(tree["expect"]), (tree["name"], rows)
+    not_string_tenants = {m["tenant"] for m in map(_NOT_STRING.search, got.schema_warnings) if m}
+    assert not_string_tenants <= set(tree["expect"]), (tree["name"], not_string_tenants)

@@ -148,6 +148,21 @@ func TestPutTenant_ReceiverShape(t *testing.T) {
 			"          proxy_url: http://p.example.com:3128\n          proxy_connect_header:\n            on: [x]\n", nil},
 		{"http_config with a 1: key", webhookOK + "        http_config:\n          1: x\n          bearer_token: t\n",
 			[]string{"tenants.rs-t._routing.receiver.http_config"}},
+		// #2431: a matcher value the body writes that the route generator's
+		// PyYAML does not read as a string — a routes match value, an
+		// override alertname / metric_group — is refused the same way;
+		// quoted, it is taken.
+		{"routes match value plain 1:30", webhookOK + "      routes:\n      - match: {team: 1:30}\n" +
+			"        receiver: {type: webhook, url: https://hook.example.com/b}\n",
+			[]string{"tenants.rs-t._routing.routes[0].match.team"}},
+		{"routes match value quoted 1:30", webhookOK + "      routes:\n      - match: {team: '1:30'}\n" +
+			"        receiver: {type: webhook, url: https://hook.example.com/b}\n", nil},
+		{"override alertname plain yes, metric_group null", webhookOK + "      overrides:\n      - alertname: yes\n" +
+			"        receiver: {type: webhook, url: https://hook.example.com/b}\n      - metric_group: ~\n" +
+			"        receiver: {type: webhook, url: https://hook.example.com/c}\n",
+			[]string{"tenants.rs-t._routing.overrides[0].alertname", "tenants.rs-t._routing.overrides[1].metric_group"}},
+		{"override alertname quoted yes", webhookOK + "      overrides:\n      - alertname: \"yes\"\n" +
+			"        receiver: {type: webhook, url: https://hook.example.com/b}\n", nil},
 		{"every receiver of the body, one violation each", "      receiver:\n        type: bogus\n" +
 			"      overrides:\n      - alertname: X\n        receiver: {type: webhook}\n" +
 			"      routes:\n      - match: {severity: critical}\n        receiver: {type: pagerduty, service_key: a, routing_key: b}\n",

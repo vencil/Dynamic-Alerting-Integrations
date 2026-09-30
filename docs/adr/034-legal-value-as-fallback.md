@@ -219,7 +219,7 @@ default:                  → 直接 commit
 
 記在這裡的唯一理由是：它是上面「廣義版套不進來」那個論證的證據。**它套不進本規則**——那裡沒有「被寫錯的設定值」，而是檢查涵蓋不足。
 
-`PUT /api/v1/tenants/{id}` 讓租戶送一份 YAML 上來，而告警接收端的必填欄位本身就是憑證。**整檔 PUT 這條路上沒有任何 key 層級的檢查**——它跑的是 YAML 解析、拒絕非 `tenants` 頂層 key、要求 tenant 區段存在、以及 key **名稱**對照 `_defaults.yaml`，四步都不看欄位的值。（`internal/handler/body_validator.go` 那份 reserved-key 驗證器只被批次 patch 端點呼叫。）平台有憑證形狀檢查，但只掃 `helm/**` 與 `k8s/**`，沒有涵蓋租戶設定目錄。
+`PUT /api/v1/tenants/{id}` 讓租戶送一份 YAML 上來，而告警接收端的必填欄位本身就是憑證。**整檔 PUT 這條路上沒有憑證形狀的檢查**——它跑的是 YAML 解析、拒絕非 `tenants` 頂層 key、要求 tenant 區段存在、拒絕新增別的租戶區段、key **名稱**對照 `_defaults.yaml`；自 [#2295](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/2295) 起也檢查 receiver 欄位的值（type、必填欄位、布林、認證方式互斥、`proxy_url`），但不判斷值是不是明文憑證（`bearer_token: t` 照樣 200）。（`internal/handler/body_validator.go` 那份 reserved-key 驗證器只被批次 patch 端點呼叫。）平台有憑證形狀檢查，但只掃 `helm/**` 與 `k8s/**`，沒有涵蓋租戶設定目錄。
 
 已開票追蹤：[#1560](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/1560)，端到端實測（PUT → 200 → 值出現在 `git show HEAD`）已補在該票，本 ADR 不重複。
 

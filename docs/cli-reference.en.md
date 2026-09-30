@@ -98,6 +98,8 @@ All commands support the following global options:
 | The subcommand's own exit code | Passed through unchanged | The tool runs as `__main__` in the same process, no remapping — see each command's exit-code table and the SSOT [`_lib_exitcodes.py`](https://github.com/vencil/Dynamic-Alerting-Integrations/blob/main/scripts/tools/_lib_exitcodes.py) |
 | The subcommand raises an uncaught exception (traceback) | `1` | The Python interpreter's default; the dispatcher deliberately has no `try/except` (that would break pass-through). This is the residual collision with the "findings" `1` — a `1` with no report on stdout and a `Traceback` (or the tool's own one-line error) on stderr is this row |
 
+The exit-code table in each command section lists the main triggers and is **not exhaustive**: when bad input makes a tool raise an uncaught exception, a Python tool ends at the `1` in the row above, and a Go tool (`guard`, `batch-pr`, `parser`) panics at `2`; tables do not list these one by one.
+
 > ⚠️ The first two rows used to return `1`, colliding with the per-subcommand "findings" `1` — `docker run … da-tools:<moving tag> <subcommand>` looked, in CI, exactly like "the tool ran fine and found something" (with an empty report on stdout) whenever a subcommand was renamed or the image did not ship it yet. Consumers should treat `2` as "the tool did not run" and never fold it into `1`.
 
 ---
@@ -480,7 +482,7 @@ da-tools validate --mapping migration_output/prefix-mapping.yaml --watch --auto-
 |------|-------------|
 | `0` | Every pair matches; with `--watch --auto-detect-convergence`, converged |
 | `1` | A mismatch, or a value found on only one side (`old_missing` / `new_missing`); with `--watch --auto-detect-convergence`, still not converged after `--rounds` |
-| `2` | Caller error: bad arguments, no comparison pairs in the mapping, a Prometheus connection or query failure (ignored once converged), or the output path given to `-o/--output-dir` / `--convergence-output` cannot be written (#1641) |
+| `2` | Caller error: bad arguments, no comparison pairs in the mapping, a Prometheus connection or query failure (`--watch` looks at the last round only; ignored once converged), or the output path given to `-o/--output-dir` / `--convergence-output` cannot be written (#1641) |
 
 ⚠️ The v2.9.0 image does not have these exit codes yet. It returns `2` only for bad arguments and `0` for everything else, and it still prints "🎉 可以安全切換" (safe to cut over) when Prometheus is unreachable. On v2.9.0, do not gate on the exit code; read the mismatch / missing counts in the summary instead. <!-- image-caveat: v2.9.0 -->
 
@@ -539,7 +541,7 @@ da-tools cutover --readiness-json cutover-readiness.json --tenant db-a --force
 |------|-------------|
 | `0` | Cutover successful |
 | `1` | Readiness says not ready (without `--force`), or a cutover step failed |
-| `2` | Caller error: a required argument is missing, the readiness JSON is unreadable or missing fields, Prometheus is unreachable, or `kubectl` is not found |
+| `2` | Caller error: a required argument is missing, the readiness JSON does not exist, is not valid JSON, or is missing fields, Prometheus is unreachable, or `kubectl` is not found |
 
 ---
 
@@ -588,7 +590,7 @@ da-tools blind-spot --config-dir ./conf.d --json-output
 | Code | Description |
 |------|-------------|
 | `0` | Success (regardless of blind spots) |
-| `1` | Prometheus connection failed |
+| `1` | Only an uncaught exception (traceback) returns 1. An unreachable Prometheus only prints a WARN and the run ends at 0 |
 | `2` | Caller error: a file under `--config-dir` cannot be read (content not UTF-8 or not valid YAML; the message names the file, #1654) |
 
 ---
@@ -638,8 +640,8 @@ da-tools maintenance-scheduler --config-dir ./conf.d --alertmanager http://alert
 | Code | Description |
 |------|-------------|
 | `0` | Success (silences created, already present, or not needed) |
-| `1` | At least one silence could not be created |
-| `2` | Caller error: `--config-dir` does not exist, `croniter` is missing, or a file under it cannot be read (content not UTF-8 or not valid YAML; the message names the file, #1654) |
+| `1` | At least one silence could not be created or extended |
+| `2` | Caller error: `--config-dir` does not exist, a recurring schedule exists but `croniter` is not installed, or a file under it cannot be read (content not UTF-8 or not valid YAML; the message names the file, #1654) |
 
 ---
 
@@ -697,7 +699,7 @@ da-tools backtest --config-dir ./conf.d-new --baseline ./conf.d-old --lookback 7
 |------|-------------|
 | `0` | Success |
 | `1` | At least one threshold change was rated HIGH risk (review before merging); an unreachable Prometheus or a git that cannot run is not 1, see below |
-| `2` | Caller error: `--lookback` supplied but unusable (not `<number><d\|h\|m>`, #1625); `--git-diff` supplied but git cannot run (git not installed, not inside a git work tree, no HEAD~1) — ⛔ do not switch to `--config-dir` to go green, that compares two trees, not your PR; the output path given to `-o/--output` / `--markdown-output` cannot be written (#1641); `--lookback` supplied but unusable (not `<number><d\|h\|m>`, #1625); `--git-diff` supplied but git cannot run (git not installed, not inside a git work tree, no HEAD~1) — ⛔ do not switch to `--config-dir` to go green, that compares two trees, not your PR; a conf.d file whose content cannot be read (not UTF-8 or not valid YAML; the message names the file, #1654) |
+| `2` | Caller error: Prometheus unreachable without `--skip-if-unavailable`; `--lookback` supplied but unusable (not `<number><d\|h\|m>`, #1625); `--git-diff` supplied but git cannot run (git not installed, not inside a git work tree, no HEAD~1) — ⛔ do not switch to `--config-dir` to go green, that compares two trees, not your PR; the output path given to `-o/--output` / `--markdown-output` cannot be written (#1641); a conf.d file whose content cannot be read (not UTF-8 or not valid YAML; the message names the file, #1654) |
 
 ---
 
@@ -752,8 +754,8 @@ da-tools shadow-verify all --mapping mapping.yaml --report-csv report.csv --json
 | Code | Description |
 |------|-------------|
 | `0` | All checks passed |
-| `1` | One or more checks failed |
-| `2` | Caller error: Prometheus unreachable or a query failed in `preflight` (including `all`; the check is still listed as FAIL, but the exit code is 2, not 1), an I/O error reading `--report-csv`, or arguments argparse rejects. ⚠️ A `--report-csv` that does not exist is **not** 2 — the CSV analysis is simply skipped. ⚠️ Running `runtime` alone with Prometheus unreachable is **neither** 2 nor 1: both queries fail without producing any check, so the result is `Overall: PASS` and exit code 0 |
+| `1` | One or more checks failed (a `--mapping` that does not exist counts too: it is listed as FAIL, not as a caller error) |
+| `2` | Caller error: Prometheus unreachable or a query failed in `preflight` (including `all`; the check is still listed as FAIL, but the exit code is 2, not 1), an I/O error reading `--report-csv` in `runtime` (including `all`; `convergence` run alone skips that error), or arguments argparse rejects. ⚠️ A `--report-csv` that does not exist is **not** 2 — the CSV analysis is simply skipped. ⚠️ Running `runtime` alone with Prometheus unreachable is **neither** 2 nor 1: both queries fail without producing any check, so the result is `Overall: PASS` and exit code 0 |
 
 ---
 
@@ -1047,7 +1049,7 @@ da-tools alert-correlate --prometheus http://prometheus:9090 --ci
 | Code | Description |
 |------|-------------|
 | `0` | Success (CI mode: no critical alert clusters) |
-| `1` | CI mode: critical severity alert clusters found |
+| `1` | CI mode: a cluster containing a critical alert found (a cluster needs at least 2 alerts; a single critical alert gives 0) |
 | `2` | Caller error: `--window` unparsable or ≤ 0, or arguments argparse rejects. ⚠️ An unreachable Alertmanager/Prometheus is **not** 2 — a WARN is printed and the run continues with zero alerts (rc 0); an `--input` file that does not exist is an uncaught exception (traceback, rc 1) |
 
 ---
@@ -1266,7 +1268,7 @@ da-tools state-reconcile [options]
 |------|-------------|
 | `0` | State directory consistent (or changes applied successfully) |
 | `1` | Unresolvable schema drift (including a state file that cannot be read or lacks `schema_version`); or `--ci` with `--dry-run` detecting pending changes |
-| `2` | Caller error: arguments argparse rejects (unknown flags etc.). ⚠️ A missing `--state-dir` is **not** 2 — a warning is printed and it is treated as empty (manifest rebuilt with 0 states, rc 0; 1 under `--ci --dry-run` because a rebuild is pending) |
+| `2` | Caller error: arguments argparse rejects (unknown flags etc.). ⚠️ A missing `--state-dir` is **not** 2 — it is treated as empty (text mode prints a warning, `--json` only sets `state_dir_missing: true` in the report; manifest rebuilt with 0 states, rc 0; 1 under `--ci --dry-run` because a rebuild is pending) |
 
 **Why a single declarative command, not micro-commands**
 
@@ -1399,8 +1401,8 @@ Every file-sourced string in the text output (alertname, silence id, matcher val
 | Code | Meaning |
 |------|---------|
 | 0 | No orphan silences (or orphans present but no `--ci`) |
-| 1 | `--ci` mode detected orphans |
-| 2 | Caller error (file missing / JSON parse failure / `--rule-source` empty) |
+| 1 | `--ci` mode detected orphans or malformed silences |
+| 2 | Caller error (file missing / JSON parse failure / `--rule-source` an empty directory, etc.) |
 
 **Examples**
 
@@ -1752,6 +1754,7 @@ da-tools generate-routes --config-dir <path> [options]
 | `--base-config <FILE>` | Custom Alertmanager base config. **Only `--output-configmap` reads it**; supplying it in any other mode is a caller error (exit 2), not a silent no-op | built-in default (**only when the flag is omitted**; a supplied value that is unreadable / not valid YAML / not a mapping exits 2 rather than falling back) |
 | `--dry-run` | Show preview without writing. **Not read by `--validate` / `--apply`** (exit 2) | false |
 | `--validate` | Validate only, don't output. Any tenant file in conf.d that cannot be parsed → exit 1, with or without `--strict` (#1460). Once every other check passes, it also assembles the complete config on the **built-in default base** and hands it to `amtool` (see "Alertmanager validation" below; #2260) | false |
+| `--strict` | Report these as ERROR with exit code 1 (CI runs `--strict`): domain-policy (ADR-007) violations (WARN without it); a `routes[i].match` value or `overrides[i].alertname` / `metric_group` left unquoted that PyYAML reads as a non-string (`yes`, `1:30`, `~`, ...; #2431; fix: quote it. Without it a routes entry is skipped with a WARN and an override is rendered via `str()`, e.g. `alertname="True"`); on the `--apply` / `--output-configmap` merge, an inhibit rule whose `equal:` label is not presence-gated (#1132, WARN without it) | false |
 | `--apply` | Apply directly to Kubernetes (requires kubectl) | false |
 | `--namespace <NS>` | Namespace of the ConfigMap. **Read only by `--apply` / `--output-configmap`**; exit 2 in any other mode | `monitoring` |
 | `--configmap <NAME>` | ConfigMap name. **Read only by `--apply` / `--output-configmap`**; exit 2 in any other mode | `alertmanager-config` |
@@ -1762,7 +1765,7 @@ da-tools generate-routes --config-dir <path> [options]
 
 Every mode first prints one stdout line, `Config files: N read, M skipped (<names>)` (#1460) — N / M come from the structured record, not from the stderr WARN lines; when M > 0 and a skipped file is a tenant file, the run produces nothing further.
 
-**Hierarchical conf.d ([#2326](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/2326))**: the whole tree is read (the exporter's walk rules: hidden directories skipped, a directory holding only a README contributes nothing), and a tenant at any depth gets a route. Semantics in [ADR-017 amendment 2026-09-28](adr/017-defaults-yaml-inheritance-dual-hash.en.md): `_routing_defaults` comes from any root `_` file, then from the top level of the defaults carrier (`_defaults.yaml` / `.yml`) of every subdirectory on the tenant's path, a shallow merge per top-level key, deeper wins; `_routing_profiles.yaml` and `_domain_policy.yaml` may sit in a subdirectory and apply to that subtree only, with policies at every level judged additively. In **every mode** these exit 2 and produce and write nothing: `_routing_enforced` in any file below the root; `receiver` or `overrides` written as null in a subdirectory level's `_routing_defaults`; one routing-profile name defined in two files (root `.yaml` beside `.yml` included); one tenant id declared by two tenant files. A subtree policy whose `tenants:` names a tenant outside the subtree is an ERROR under `--strict` (exit 1) and a WARN otherwise; that entry is not enforced. The `tenants:` block of a platform file below the root is still read by no plane and only WARNs. `_routing_defaults` in a `_` file below the root that is not the defaults carrier is not read, and `--validate` exits 1 naming the file; the unselected carrier spelling of a subdirectory (`_defaults.yml` beside `_defaults.yaml`) still exits 2 if it carries `_routing_enforced`; a tenant entry with a null body (`t:` with nothing under it) counts as a declaration too. ⚠️ The v2.9.0 image reads the top level only: a tenant in a subdirectory gets no route, at exit 0 <!-- image-caveat: v2.9.0 -->
+**Hierarchical conf.d ([#2326](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/2326))**: the whole tree is read (the exporter's walk rules: hidden directories skipped, a directory holding only a README contributes nothing), and a tenant at any depth gets a route. Semantics in [ADR-017 amendment 2026-09-28](adr/017-defaults-yaml-inheritance-dual-hash.en.md): `_routing_defaults` comes from any root `_` file, then from the top level of the defaults carrier (`_defaults.yaml` / `.yml`) of every subdirectory on the tenant's path, a shallow merge per top-level key, deeper wins; `_routing_profiles.yaml` and `_domain_policy.yaml` may sit in a subdirectory and apply to that subtree only, with policies at every level judged additively. In **every mode** these exit 2 and produce and write nothing: `_routing_enforced` in any file below the root; `receiver` or `overrides` written as null in a subdirectory level's `_routing_defaults`; one routing-profile name defined in two files (root `.yaml` beside `.yml` included). One tenant id declared by two tenant files exits 1 in every mode (`FAIL: N tenant(s) declared in more than one file`). A subtree policy whose `tenants:` names a tenant outside the subtree is an ERROR under `--strict` (exit 1) and a WARN otherwise; that entry is not enforced. The `tenants:` block of a platform file below the root is still read by no plane and only WARNs. `_routing_defaults` in a `_` file below the root that is not the defaults carrier is not read, and `--validate` exits 1 naming the file; the unselected carrier spelling of a subdirectory (`_defaults.yml` beside `_defaults.yaml`) still exits 2 if it carries `_routing_enforced`; a tenant entry with a null body (`t:` with nothing under it) counts as a declaration too. ⚠️ The v2.9.0 image reads the top level only: a tenant in a subdirectory gets no route, at exit 0 <!-- image-caveat: v2.9.0 -->
 
 **Fragment Mode** (no `--output-configmap`):
 YAML fragment containing route, receivers, inhibit_rules.
@@ -1788,8 +1791,8 @@ da-tools generate-routes --config-dir ./conf.d --apply --yes
 | Code | Description |
 |------|-------------|
 | `0` | Success |
-| `1` | Config validation failed; **or conf.d holds a tenant file that could not be parsed / read** (bad YAML, not UTF-8, top level not a mapping, a directory named `x.yaml`) — refused in every mode, with or without `--strict`, and the file is named on stdout (#1460); **or the `amtool` on PATH rejected the config `--output-configmap` / `--apply` was about to write / apply** — nothing written, nothing applied (#2219); **or it rejected the config `--validate` assembled on the built-in base** (#2260); **or two sources generate a receiver of the same name** (every mode, with or without `--strict`), or the `--output-configmap` base has a receiver named like a generated one (#2279); **or the assembly violates a platform invariant** (e.g. a base inhibit rule that would let a tenant silence a platform alert) — reported as `FAIL:`, no longer a traceback (#2260) |
-| `2` | Caller error: **the tool could not do its job because of how it was invoked or its environment** — not because your config violates something. Reaching it today (non-exhaustive): `--policy` / `--base-config` supplied but unusable (not a file, unreadable, not valid YAML, top level not a mapping); `--base-config` used in a mode other than `--output-configmap`; **`-o` / `--dry-run` / `--namespace` / `--configmap` / `--yes` used in a mode that never reads them** (the message names the flag and the mode and gives a remedy argparse accepts; #1650); the `-o` output path cannot be written; `--apply` without `--yes` where stdin cannot be read; and kubectl / cluster operations failing (#1556, #1616, #1617); `amtool` on PATH but not runnable, timed out, or failing without a rejection verdict; Alertmanager's `/-/reload` failing after `--apply` (before v2.10.0 a WARN at exit 0; #2219); a conf.d tree whose shape the routing plane refuses (the four cases under "Hierarchical conf.d" above, message starting `ERROR: N routing-tree error(s)`; #2326). ⚠️ **This row is the v2.10.0 contract**; the `v2.9.0` image pinned at the top of this page returns 0 or 1 for most of them <!-- image-caveat: v2.9.0 --> |
+| `1` | Config validation failed; **or conf.d holds a tenant file that could not be parsed / read** (bad YAML, not UTF-8, top level not a mapping, a directory named `x.yaml`) — refused in every mode, with or without `--strict`, and the file is named on stdout (#1460); **or the `amtool` on PATH rejected the config `--output-configmap` / `--apply` was about to write / apply** — nothing written, nothing applied (#2219); **or it rejected the config `--validate` assembled on the built-in base** (#2260); **or two sources generate a receiver of the same name** (every mode, with or without `--strict`), or the `--output-configmap` base has a receiver named like a generated one (#2279); **or the assembly violates a platform invariant** (e.g. a base inhibit rule that would let a tenant silence a platform alert) — `--output-configmap` / `--validate` report it as `FAIL:` (#2260); under `--apply` a cluster config that violates an invariant still ends in a traceback; **or one tenant id is declared by two tenant files** (every mode, see "Hierarchical conf.d" above) |
+| `2` | Caller error: **the tool could not do its job because of how it was invoked or its environment** — not because your config violates something. Reaching it today (non-exhaustive): `--policy` / `--base-config` supplied but unusable (not a file, unreadable, not valid YAML, top level not a mapping); `--base-config` used in a mode other than `--output-configmap`; **`-o` / `--dry-run` / `--namespace` / `--configmap` / `--yes` used in a mode that never reads them** (the message names the flag and the mode and gives a remedy argparse accepts; #1650); the `-o` output path cannot be written; `--apply` without `--yes` where stdin cannot be read; and kubectl / cluster operations failing (#1556, #1616, #1617); `amtool` on PATH but not runnable, timed out, or failing without a rejection verdict; Alertmanager's `/-/reload` failing after `--apply` (before v2.10.0 a WARN at exit 0; #2219); a conf.d tree whose shape the routing plane refuses (the three exit-2 cases under "Hierarchical conf.d" above, message starting `ERROR: N routing-tree error(s)`; #2326). ⚠️ **This row is the v2.10.0 contract**; the `v2.9.0` image pinned at the top of this page returns 0 or 1 for most of them <!-- image-caveat: v2.9.0 --> |
 
 ---
 
@@ -1846,7 +1849,7 @@ python3 scripts/tools/ops/patch_config.py --json db-a mysql_connections 100 | jq
 |------|-------------|
 | `0` | Success (verified on every exporter pod), including a `default` or same-bytes no-op |
 | `1` | Post-write verification failed (another tenant's series changed, the target tenant changed beyond the bound, a new parse failure, ...); rolled back |
-| `2` | Caller error, **nothing written**: `kubectl` could not run or exited non-zero (e.g. not on PATH, cluster unreachable, ConfigMap missing, no permission), any refusal above, the ConfigMap changed after it was read (`reason: configmap_changed`; re-run), arguments argparse rejects, or an unexpected exception before the write |
+| `2` | Caller error, **nothing written**: `kubectl` could not run or exited non-zero while reading the ConfigMap or sending the patch (e.g. not on PATH, cluster unreachable, ConfigMap missing, no permission; a failure listing pods is `4`), any refusal above, the ConfigMap changed after it was read (`reason: configmap_changed`; re-run), arguments argparse rejects, or an unexpected exception before the write |
 | `3` | Some pod was not serving the written bytes when `--reload-timeout` ran out (its `config_hash` differs; an older exporter: no reload seen); rolled back |
 | `4` | Exporter unreachable (no pod matches the selector, pods/proxy failed, an unexpected response shape): before the write nothing was written, after it the write was rolled back |
 | `5` | The rollback itself failed: the ConfigMap may still hold the new bytes; fix it by hand |
@@ -1908,7 +1911,7 @@ da-tools scaffold --non-interactive --tenant db-c --db mariadb,redis
 | Code | Description |
 |------|-------------|
 | `0` | Success |
-| `1` | Only an uncaught exception (traceback on stderr); "invalid input" is 2, not 1 | <!-- datools-cmd-ignore: only a traceback gives 1, no exit to trace -->
+| `1` | Only an uncaught exception (traceback on stderr). Most invalid input is 2, but a broken or wrongly shaped `--from-onboard` JSON currently also ends in a traceback at 1 | <!-- datools-cmd-ignore: only a traceback gives 1, no exit to trace -->
 | `2` | Caller error: bad arguments, an unsupported `--db` type, `--non-interactive` without `--tenant` or `--db`, or the output path given to `-o/--output-dir` cannot be written (#1641) |
 
 ---
@@ -1971,7 +1974,7 @@ da-tools migrate ./my-rules.yml -o migration_output/
 | Code | Description |
 |------|-------------|
 | `0` | Success |
-| `1` | Only an uncaught exception (traceback) returns 1; an invalid input file is 2 | <!-- datools-cmd-ignore: only a traceback gives 1, no exit to trace -->
+| `1` | Only an uncaught exception (traceback) returns 1. A missing input file or a YAML syntax error is 2, but an empty file, a top level that is not a mapping, or non-UTF-8 content currently ends in a traceback at 1 | <!-- datools-cmd-ignore: only a traceback gives 1, no exit to trace -->
 | `2` | Caller error: bad arguments, an input file that cannot be read or is not valid YAML, or the output path given to `-o/--output-dir` cannot be written (#1641) |
 
 ---
@@ -2003,7 +2006,7 @@ da-tools validate-config --config-dir <path> [options]
 | `--policy-dsl <FILE>` | Path to a standalone Policy-as-Code DSL file (top-level `policies:` key). ⚠️ A supplied value that cannot be used exits 2 (same five shapes as `--policy`); before the fix its output was byte-identical to passing no flag at all (#1556) | (only `_policies` in `_defaults.yaml`) |
 | `--version-check` | Also run the version consistency check | false |
 | `--json` | Output results as JSON (for CI consumption) | false |
-| `--strict` | Escalate domain-policy (ADR-007) violations from WARN to FAIL (matches CI `generate-routes --strict`) | false |
+| `--strict` | Escalate domain-policy (ADR-007) violations from WARN to FAIL (matches CI `generate-routes --strict`); in addition, a matcher value left unquoted that PyYAML reads as a non-string (`routes[i].match` values, `overrides[i].alertname` / `metric_group`; #2431) makes the `schema` row FAIL | false |
 
 **Checks Performed**
 
@@ -2216,7 +2219,7 @@ da-tools lint ./rule-packs --ci
 | Code | Description |
 |------|-------------|
 | `0` | No ERROR-level violations. ⚠️ **Without `--ci`, ERROR-level violations still exit `0`**; WARN level never affects the exit code |
-| `1` | ERROR-level violations found, in `--ci` mode |
+| `1` | ERROR-level violations found, in `--ci` mode (an unreadable rule file or one with broken YAML is recorded as an ERROR too) |
 | `2` | Caller error: `--policy` was supplied but is unusable (not a file / unreadable / not valid YAML / top level not a mapping); a scan target does not exist (the message names it, #1618). ⛔ Do not go green by dropping `--policy` or the path — that silently lints against the built-in policy, or treats an unscanned target as clean |
 
 ---
@@ -2275,7 +2278,7 @@ da-tools onboard --alertmanager-config ./alertmanager.yaml \
 | Code | Description |
 |------|-------------|
 | `0` | At least one phase produced results (Phase 1 with no tenant route counts; it just writes no `onboard-hints.json`) |
-| `1` | No phase produced results, e.g. the `--rule-files` glob matched no file, or `--scrape-config` has no `scrape_configs` |
+| `1` | No phase produced results, e.g. the `--rule-files` glob matched no file, or `--scrape-config` has no `scrape_configs`. ⚠️ A `--scrape-config` file that does not exist is 1 too (a missing `--alertmanager-config` is 2) |
 | `2` | Caller error: none of the three inputs given, bad arguments, or the output path given to `-o/--output-dir` cannot be written (#1641); an input file cannot be read or parsed (content not UTF-8 or not valid YAML; the message names the file, #1654). ⚠️ Exception: broken YAML embedded in a ConfigMap wrapper is a traceback and returns 1 |
 
 ---
@@ -2515,9 +2518,9 @@ If none resolves, prints install hints (download from `tools/v*` release / `cd c
 | Code | Meaning |
 |---|---|
 | 0 | clean — no error-tier findings (warnings don't block unless `--warn-as-error`) |
-| 1 | guard found errors — block merge / commit |
-| 2 | caller error (bad flags, path missing, scope outside root, binary missing) |
-| 3 | files the exporter drops whole when it loads the tree, plus files da-guard itself cannot decode, plus files the route generator refuses whole for a repeated key that the exporter reads anyway (an alias key beside its anchor, two `<<` in one mapping; except `_domain_policy` / `_routing_profiles` files, reported as a `*_unusable` finding, #2295), limited to those that bear on this run (files in `--scope`, and `_`-prefixed files in the directories above it); independent of `--cardinality-limit`. The report and stderr list them (relative to `--config-dir`); a run may list only the first one, so re-run after fixing. Takes precedence over 1 and replaces the "vacuously safe" 0. The contract test `TestExitThree_NamesExactlyTheFilesTheExporterDrops` is authoritative (#2123, #2179) |
+| 1 | guard found errors, or warnings under `--warn-as-error` — block merge / commit |
+| 2 | caller error (bad flags, path missing, scope outside root, binary missing). Exception: a `--baseline-config-dir` that does not exist is not an error; the run is judged as usual |
+| 3 | files the exporter drops whole when it loads the tree, plus files da-guard itself cannot decode, plus files the route generator refuses whole for a repeated key that the exporter reads anyway (an alias key beside its anchor; two `<<` in one mapping is dropped by the exporter itself; except `_domain_policy` / `_routing_profiles` files, reported as a `*_unusable` finding, #2295), limited to those that bear on this run (files in `--scope`, and `_`-prefixed files in the directories above it); independent of `--cardinality-limit`. The report and stderr list them (relative to `--config-dir`); a run may list only the first one, so re-run after fixing. Takes precedence over 1 and replaces the "vacuously safe" 0. The contract test `TestExitThree_NamesExactlyTheFilesTheExporterDrops` is authoritative (#2123, #2179) |
 
 **Routing checks ([#2280](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/2280))**
 
@@ -2526,6 +2529,7 @@ The routing checks look at each tenant's **resolved** routing, merged from the s
 | Finding kind | Severity | Trigger |
 |---|---|---|
 | `invalid_route_entry` | error | `routes` is not a list, or an entry the generator skips (not a mapping, an unsupported key such as `continue` / `match_re`, a missing or empty `match`, an invalid label, a value that is not a non-empty string); Field is `routes` or `routes[i]` |
+| `routing_value_not_string` | error | a `routes[i].match` value or `overrides[i].alertname` / `metric_group` left unquoted that the route generator's PyYAML reads as a non-string (`yes` / `on` a boolean, `1:30` the integer 90, `2001-12-15` a date, `~` null, `!!int 5`); Field is `routes[i].match.<label>` or `overrides[i].alertname` / `metric_group`. Same judgement as the `generate-routes --strict` ERROR (#2431). Fix: quote it, e.g. `team: "yes"` |
 | `domain_policy_violation` | error | the main receiver / `overrides[i]` / `routes[i]` type breaks a domain policy; the message names the domain, the constraint and the layer the value came from |
 | `critical_escalation_missing` | error | a domain policy sets `require_critical_escalation: true`, yet severity=critical alerts reach no pagerduty receiver: the main receiver is not pagerduty, and no rendered `routes` entry whose match has `severity: critical` sends to one ([#2325](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/2325)); Field is `receiver.type`, one finding per requiring domain. A non-boolean value is reported as `domain_policy_unusable` instead (Field `<file>:domain_policies.<domain>.constraints.require_critical_escalation`) |
 | `critical_escalation_leak` | warn | the tenant escalates, but this non-pagerduty destination (`overrides[i]` / `routes[i]`, the main receiver last) still receives some severity=critical alerts before any pagerduty receiver does; the message names the label set it catches. Same judgement as the generator's `--validate` WARN (not listed when an earlier sub-route's match is a subset of it, or when its match names another tenant or a non-critical severity); Field is `<ref>.receiver.type`. Never blocks |
@@ -2770,7 +2774,7 @@ da-tools tenant-verify db-fin-a --conf-d conf.d/ \
 | Code | Meaning |
 |---|---|
 | 0 | Tenant exists and is declared by exactly one file; if `--expect-merged-hash` supplied, it matched. `--all`: no tenant is declared more than once |
-| 1 | Usage / IO error (missing tenant_id, conf-d not found, `--all` + `--expect-*` mutually exclusive, etc.) |
+| 1 | Missing tenant_id, conf-d not found, or `--all` combined with `--expect-merged-hash`. Argument errors argparse rejects (unknown flag, extra argument) are 2 |
 | 2 | Tenant not found, `--expect-merged-hash` mismatch, OR **duplicate declaration** (the same tenant in two or more files) (this is the incremental migration playbook checklist item 6 stop-signal). `--all`: any tenant is declared more than once |
 
 **Duplicate declaration** ([#2093](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/2093)): when one tenant is declared by several files, the tool computes no hash — the scanner keeps just one of them, chosen by filename order, so hashing it would let item 6 pass falsely whenever the stray file sorts first. Single-tenant mode (with or without `--expect-merged-hash`) exits 2 with JSON `{"tenant_id": ..., "error": "duplicate", "files": [...], "detail": ...}` (`files` sorted, conf.d-relative paths); the human output lists each file as `declared in: <file>`. `--all` reports that tenant as an error entry of the same shape (no `merged_hash`), still reports every other tenant, and exits 2; the human `# total:` line counts verified and duplicate-declared (not verified) tenants separately. Fix: delete the extra declaration so the tenant lives in exactly one file, then re-run (`validate-config`'s `tenant_uniqueness` reports the same state).
@@ -2930,7 +2934,7 @@ da-tools test-notification --config-dir conf.d/ --ci
 | Code | Description |
 |------|-------------|
 | `0` | All receivers reachable (or non-CI mode) |
-| `1` | CI mode: one or more receivers unreachable |
+| `1` | CI mode: one or more receivers unreachable (an invalid receiver config or URL counts too, even under `--dry-run`, which connects to nothing) |
 | `2` | Caller error: a file under `--config-dir` cannot be read (content not UTF-8 or not valid YAML; the message names the file, #1654) |
 
 #### explain-route
@@ -3033,8 +3037,8 @@ da-tools discover-mappings --endpoint http://mariadb-exporter:9104/metrics --jso
 | Code | Description |
 |------|-------------|
 | `0` | Successfully discovered partition labels and generated mapping draft |
-| `1` | Connection failed or no suitable partition labels found |
-| `2` | Caller error: bad arguments, or the output path given to `-o/--output` cannot be written (#1641) |
+| `1` | `--prometheus` unreachable (a failed query counts as no labels), or no suitable partition labels found |
+| `2` | Caller error: bad arguments, `--endpoint` unreachable or not a valid URL, or the output path given to `-o/--output` cannot be written (#1641) |
 
 ---
 
