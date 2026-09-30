@@ -120,7 +120,7 @@ token TTL 4h、**無 sliding refresh** —— 持續性的拉取必須自動換�
 
 ## 4. 設定你的 Prometheus / Grafana 拉取
 
-平台會給你一個 **federation gateway URL**（記為 `$FED_GW`）。token 一律放 `Authorization: Bearer <jwt>` header —— **不要**放 URL query string（gateway 只從 header 取 token，URL 裡的 token 一律不讀：只放在 URL 就等於沒帶，回 401；header 已帶時 URL 另帶的也照樣放行。兩種情況下整條 URL 都會進 gateway 的 access log）。
+平台會給你一個 **federation gateway URL**（記為 `$FED_GW`）。token 一律放 `Authorization: Bearer <jwt>` header —— **不要**放 URL query string（gateway 只從 header 取 token，URL 裡的 token 一律不讀：只放在 URL 就等於沒帶，回 401；header 已帶時 URL 另帶的也照樣放行。兩種情況下 URL（前 2048 字元）都會進 gateway 的 access log）。
 
 ### 4.1 Prometheus federation（持續拉取）
 

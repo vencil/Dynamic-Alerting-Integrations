@@ -98,7 +98,7 @@ POST /preview
 
 ### 4.1 Auth and tenant isolation
 
-The preview service **inherits the portal's auth**: try-local uses dev-bypass ([ADR-022](../adr/022-dev-auth-bypass-four-layer-containment.md) four-layer containment), production goes through oauth2-proxy (same pattern as tenant-api). The service **must validate that the request's `tenant` is one the signed-in user may access**, else return 403 — otherwise "preview your own recipe" degrades into a cross-tenant query surface. `recipe` / `scenario` are user input: the service validates the shape first (or catches the compiler's config error) → returns `state: error` on failure, and **only compiles after it validates** (see 5.2).
+The preview service **inherits the portal's auth**: try-local uses dev-bypass ([ADR-022](../adr/022-dev-auth-bypass-four-layer-containment.md) four-layer containment), production goes through oauth2-proxy (same pattern as tenant-api). The service **must validate that the request's `tenant` is one the signed-in user may access**, else return 403 — otherwise "preview your own recipe" degrades into a cross-tenant query surface. `recipe` / `scenario` are user input: the service validates the shape first (or catches the compiler's config error) and **only compiles after it validates** (see 5.2): a body of the wrong type (`recipe` / `scenario` not an object, `tenant` missing) returns 400; missing fields or a failed compile return `state: error`.
 
 ## 5. How the backend computes the state
 
@@ -153,7 +153,7 @@ The service is Python, so it **calls the compiler directly**: write the form's s
 
 Each `promtool` eval forks an ~1s subprocess; the preview service forks one per request, so it needs:
 
-1. **A concurrency cap** — limit simultaneous forks; queue / reject when full.
+1. **A concurrency cap** — limit simultaneous forks; queue when full, and return 503 once the queue wait (`PREVIEW_QUEUE_TIMEOUT`) runs out.
 2. **A per-request timeout** — kill `promtool` on timeout, return `error`.
 3. **Rate limiting** — per tenant, so it can't be used as an attack surface.
 4. **Interaction design** — because of the ~1s latency, no live spamming; a manual "Run preview" button + loading state.

@@ -1025,16 +1025,22 @@ def _to_devnull(stream):
 def _seal_std_streams():
     """At the end of main: flush stdout / stderr, and send any of them that
     fails to flush or whose reader is gone (POLLERR / POLLHUP) to
-    /dev/null — including one this tool never wrote to."""
+    /dev/null — including one this tool never wrote to.
+
+    Windows has no select.poll(): there only a failed flush counts. Treating
+    the missing API as a broken stream sealed every healthy one, so anything
+    the same process wrote after main was lost (#2505)."""
     for stream in {id(s): s for s in (sys.stdout, sys.stderr, sys.__stdout__,
                                       sys.__stderr__) if s is not None}.values():
         try:
             stream.flush()
             fd = stream.fileno()
-            poller = select.poll()
-            poller.register(fd, select.POLLOUT)
-            broken = any(ev & (select.POLLERR | select.POLLHUP | select.POLLNVAL)
-                         for _, ev in poller.poll(0))
+            broken = False
+            if hasattr(select, "poll"):
+                poller = select.poll()
+                poller.register(fd, select.POLLOUT)
+                broken = any(ev & (select.POLLERR | select.POLLHUP | select.POLLNVAL)
+                             for _, ev in poller.poll(0))
         except Exception:  # noqa: BLE001 — a failed flush is a broken stream
             broken = True
         if broken:

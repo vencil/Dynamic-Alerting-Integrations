@@ -230,7 +230,7 @@ docker run -p 8080:80 \
 | Hub 載入後工具白屏 / 404 | image 沒含 `docs/assets/dist/`（舊 / 自建 image） | 確認 `make portal-build` 跑過且 `docs/assets/dist/` 有進 image；重 build |
 | 404 on `/healthz` | 舊 image（< v2.3.0） | 重 build：`make portal-image` |
 | CORS error on tenant-api | nginx proxy upstream 錯 | 改 `nginx.conf` 的 `proxy_pass`，或在 K8s 確認 `tenant-api` Service 存在於專屬 `tenant-api` namespace（#1004；proxy_pass 應為 `tenant-api.tenant-api.svc.cluster.local:8080`） |
-| Tenant Manager 顯示 demo-mode 提示 | `/api/v1/tenants/search` 回 404 / 5xx | 確認 tenant-api 跑著且 RBAC 有 read 權限；也可能是純靜態部署（無後端），demo mode 為 expected |
+| Tenant Manager 顯示的是示範租戶（`prod-mariadb-01` 等） | `/api/v1/tenants/search` 非 2xx（含 401／403）或連不上，**且** `platform-data.json` 缺或是空的（有內容時改顯示那份靜態資料） | 確認 tenant-api 跑著且 RBAC 有 read 權限；也可能是純靜態部署（無後端），demo mode 為 expected |
 | 工具顯示舊資料 | 掛載的 `platform-data.json` 過舊 | `make platform-data` 重產 + 重 mount |
 | air-gapped 環境 vendor probe 失敗 | `make vendor-download` 沒跑 / `docs/assets/vendor/` 沒進 image | 確認 `docs/assets/vendor/react.production.min.js` 存在；重 build |
 | `var(--da-*)` 顯示為 fallback 色 | 用了未定義的 token | 跑 `python3 scripts/tools/lint/check_undefined_tokens.py`，補 `design-tokens.css` |
