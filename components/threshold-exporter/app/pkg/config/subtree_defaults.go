@@ -111,11 +111,16 @@ func applySubtreeDefaults(
 			if filepath.Dir(filepath.Clean(defaultsPath)) == rootDir {
 				continue // the global defaults file — already in cfg.Defaults
 			}
-			for key, raw := range parsed[defaultsPath] {
-				if _, present := overrides[key]; present {
-					if _, mine := inherited[key]; !mine {
-						continue // the tenant authored it — never touched
-					}
+			level := parsed[defaultsPath]
+			for key, raw := range level {
+				// ⛔ "THE TENANT AUTHORED IT" IS ASKED PER THRESHOLD, NOT PER
+				// SPELLING (#2414). A tenant writing the retired spelling has
+				// set the same threshold a subtree file names canonically;
+				// asking `overrides[key]` alone let the subtree value in beside
+				// it, and resolve's canonical-wins dedup then served the
+				// subtree's number over the tenant's own.
+				if tenantAuthoredThreshold(overrides, inherited, key) {
+					continue // the tenant authored it — never touched
 				}
 				value, ok := scheduledValueFromRaw(raw)
 				if !ok || !isThresholdShaped(value) {
@@ -165,6 +170,23 @@ func applySubtreeDefaults(
 				if inherited == nil {
 					inherited = map[string]struct{}{}
 				}
+				// The deeper level wins per threshold too: another spelling a
+				// SHALLOWER level handed down is displaced, exactly as the
+				// same spelling would be overwritten. A spelling this level
+				// writes itself stays (canonical-wins inside one file, as
+				// overlayAcrossSpellings rules for one layer).
+				var buf [2]string
+				for _, s := range otherSpellings(key, &buf) {
+					if _, mine := inherited[s]; !mine {
+						continue
+					}
+					if _, same := level[s]; same {
+						continue
+					}
+					delete(overrides, s)
+					delete(inherited, s)
+					filled--
+				}
 				if _, mine := inherited[key]; !mine {
 					filled++ // count keys filled, not times overwritten
 				}
@@ -174,6 +196,29 @@ func applySubtreeDefaults(
 		}
 	}
 	return filled, unreachableKeys(unreachable)
+}
+
+// tenantAuthoredThreshold reports whether the tenant's own map (overrides
+// minus what this overlay put there, `inherited`) sets key's threshold under
+// ANY spelling — hasAliasEquivalent, with the overlay's own writes excluded.
+func tenantAuthoredThreshold(overrides map[string]ScheduledValue, inherited map[string]struct{}, key string) bool {
+	authored := func(s string) bool {
+		if _, present := overrides[s]; !present {
+			return false
+		}
+		_, mine := inherited[s]
+		return !mine
+	}
+	if authored(key) {
+		return true
+	}
+	var buf [2]string
+	for _, s := range otherSpellings(key, &buf) {
+		if authored(s) {
+			return true
+		}
+	}
+	return false
 }
 
 // keyCanReachTheOutputPlane reports whether SOMETHING downstream will iterate

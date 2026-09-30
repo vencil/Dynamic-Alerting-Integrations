@@ -67,7 +67,15 @@
     "first when checking it against /metrics - sound only because no a-row sets a",
     "legacy spelling in the defaults chain. Measured on main f806e092 before the fix:",
     "a1 served 70 on /metrics and the tenant-api core, walker attributed",
-    "mysql_threads_running to _defaults.yaml."
+    "mysql_threads_running to _defaults.yaml.",
+    "#2414 s-rows (subtree `_defaults.yaml` x the #1231 alias spellings): a tenant writing",
+    "either spelling keeps its own value on /metrics whatever spelling a subtree level uses,",
+    "and with no tenant key the DEEPEST level writing the threshold is served (canonical wins",
+    "only inside one level). The walker column keeps each layer's own spelling on both sides",
+    "(merged_hash is unchanged). Measured on main ca7adc10 before the fix: s1 served 40, s3 40.",
+    "The mirror of s1 (subtree legacy, tenant canonical) is pinned by da-guard's",
+    "subtree_alias_guard_test.go only: the walker column keeps both spellings there and",
+    "assertWalkerAgreesWithMetrics reads the legacy one, which is not what /metrics serves."
   ],
   "trees": [
     {
@@ -1313,6 +1321,88 @@
                 ]
               }
             ],
+            "profile_overlay": null
+          }
+        }
+      }
+    },
+    {
+      "name": "s1-alias-subtree-canonical-does-not-displace-tenant-legacy",
+      "metric_key": "mysql_threads_running",
+      "files": {
+        "_defaults.yaml": "defaults:\n  mysql_cpu: 30\n",
+        "sub/_defaults.yaml": "defaults:\n  mysql_threads_running: 40\n",
+        "sub/tx.yaml": "tenants:\n  tx:\n    mysql_cpu: \"35\"\n"
+      },
+      "expect": {
+        "tx": {
+          "metric": 35,
+          "tenant_api": null,
+          "dedup": "enable",
+          "group_wait": null,
+          "exporter_dedup": "enable",
+          "silent_mode": "",
+          "walker": {
+            "effective_config": {
+              "mysql_cpu": "35",
+              "mysql_threads_running": 40
+            },
+            "platform_overlay": null,
+            "profile_overlay": null
+          }
+        }
+      }
+    },
+    {
+      "name": "s2-alias-control-subtree-legacy-beats-root-canonical",
+      "metric_key": "mysql_threads_running",
+      "files": {
+        "_defaults.yaml": "defaults:\n  mysql_threads_running: 30\n",
+        "sub/_defaults.yaml": "defaults:\n  mysql_cpu: 40\n",
+        "sub/tx.yaml": "tenants:\n  tx: {}\n"
+      },
+      "expect": {
+        "tx": {
+          "metric": 40,
+          "tenant_api": null,
+          "dedup": "enable",
+          "group_wait": null,
+          "exporter_dedup": "enable",
+          "silent_mode": "",
+          "walker": {
+            "effective_config": {
+              "mysql_threads_running": 30,
+              "mysql_cpu": 40
+            },
+            "platform_overlay": null,
+            "profile_overlay": null
+          }
+        }
+      }
+    },
+    {
+      "name": "s3-alias-deeper-subtree-legacy-beats-shallower-canonical",
+      "metric_key": "mysql_threads_running",
+      "files": {
+        "_defaults.yaml": "defaults:\n  mysql_threads_running: 30\n",
+        "sub/_defaults.yaml": "defaults:\n  mysql_threads_running: 40\n",
+        "sub/deep/_defaults.yaml": "defaults:\n  mysql_cpu: 50\n",
+        "sub/deep/tx.yaml": "tenants:\n  tx: {}\n"
+      },
+      "expect": {
+        "tx": {
+          "metric": 50,
+          "tenant_api": null,
+          "dedup": "enable",
+          "group_wait": null,
+          "exporter_dedup": "enable",
+          "silent_mode": "",
+          "walker": {
+            "effective_config": {
+              "mysql_threads_running": 40,
+              "mysql_cpu": 50
+            },
+            "platform_overlay": null,
             "profile_overlay": null
           }
         }
