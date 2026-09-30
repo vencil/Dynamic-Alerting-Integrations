@@ -169,11 +169,16 @@ func isPathByte(c byte) bool {
 }
 
 // statesAt is the per-tenant reading at now; nil when the load failed.
+//
+// Quiet (#2467): the list and search run this on every request, so the
+// resolvers' WARNs for a tenant's malformed _silent_mode / _state_maintenance
+// must not reach the process log each time. The states are the ones
+// OperationalStatesAt returns; the exporter's scrape keeps logging them.
 func (d *configDerivation) statesAt(now time.Time) map[string]cfg.TenantOperationalState {
 	if d.config == nil {
 		return nil
 	}
-	return d.config.OperationalStatesAt(now).ByTenant(d.config)
+	return d.config.OperationalStatesAtLogf(now, nil).ByTenant(d.config)
 }
 
 // withConfigDerived returns a copy of in — the snapshot's summaries are
