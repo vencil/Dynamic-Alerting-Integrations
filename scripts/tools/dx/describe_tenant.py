@@ -135,20 +135,29 @@ def _load_yaml(path: Path) -> dict:
 
     #2459: only the FIRST document is read, as yaml.v3 `Unmarshal` does —
     the exporter serves a multi-document `_defaults.yaml` from its first
-    document, where this used to refuse the whole file. The document's
-    shape is judged as the exporter's two planes judge it (both measured
-    against LoadDir and ResolveEffective); each case used to end the run
-    with an AttributeError traceback:
+    document, where this used to refuse the whole file.
 
-      * not a mapping (a list, a scalar): contributes nothing, named on
-        stderr. The merge skips it (Go's extractDefaultsBlock) and the flat
-        load drops it at the root, so neither plane takes anything from it;
-      * a `defaults:` that is neither a mapping nor null: ValueError, which
-        the callers report as "does not parse", naming the file. The flat
-        load drops a root file like that whole while the merge takes the
-        WHOLE document as the defaults block — no answer both give, so none
-        is given;
-      * empty, or `defaults: ~`: no defaults, in both planes.
+    The document's shape is checked before the chain uses it. The two
+    shapes below parse, but this tool refuses them (`_UnsupportedShape`,
+    reported as `DefaultsShapeError`: the file named, rc 2) — both used to
+    end the run with an AttributeError traceback. What the exporter does
+    with them depends on the level (measured against LoadDir and
+    ResolveEffective):
+
+      * a document that is not a mapping (a list, a scalar, `false`): at
+        the ROOT the flat load puts the file in parse_failed and the merge
+        skips it; in a SUB-DIRECTORY the merge skips it and the flat load
+        does not report it. Either way nothing is served from it, but the
+        file is broken, and refusing says so (owner's ruling on #2459);
+      * a `defaults:` that is neither a mapping nor null: at the ROOT the
+        flat load drops the whole file while the merge takes the WHOLE
+        document as the defaults block — no answer both give. In a
+        SUB-DIRECTORY both take the whole document (`defaults: [1]` beside
+        `mysql_connections: 81` serves 81), so an answer exists there; it is
+        refused all the same, on one rule for every level, and the message
+        says the shape is unsupported rather than that the file does not
+        parse;
+      * empty, or `defaults: ~`: no defaults, in both planes — not refused.
     """
     if not yaml:
         # Minimal fallback — only works for simple flat YAML
@@ -159,14 +168,16 @@ def _load_yaml(path: Path) -> dict:
     if doc is None:
         return {}
     if not isinstance(doc, dict):
-        print(f"WARNING: {path} supplies no defaults — the document is a "
-              f"{type(doc).__name__}, not a mapping; the exporter takes "
-              f"nothing from it either", file=sys.stderr)
-        return {}
+        raise _UnsupportedShape(f"the document is a {type(doc).__name__}, not a mapping")
     inner = doc.get("defaults")
     if inner is not None and not isinstance(inner, dict):
-        raise ValueError(f"'defaults' must be a mapping, got {type(inner).__name__}")
+        raise _UnsupportedShape(f"'defaults' is a {type(inner).__name__}, not a mapping")
     return doc
+
+
+class _UnsupportedShape(ValueError):
+    """A defaults document that parses but that this tool refuses to
+    describe (`_load_yaml`, #2459)."""
 
 
 def _defaults_block(ddata: dict) -> dict:
@@ -191,7 +202,24 @@ class DefaultsParseError(Exception):
     def __init__(self, path: Path, cause: BaseException):
         self.path = path
         self.cause = cause
-        super().__init__(f"{path} does not parse: {cause}")
+        super().__init__(self._text(path, cause))
+
+    @staticmethod
+    def _text(path: Path, cause: BaseException) -> str:
+        return f"{path} does not parse: {cause}"
+
+
+class DefaultsShapeError(DefaultsParseError):
+    """A selected `_defaults.yaml` carrier that parses but has a shape this
+    tool does not describe (#2459, `_load_yaml`). A subclass so every
+    caller that stops on `DefaultsParseError` stops on it too, with its
+    own message: the file parses, and at some levels the exporter serves
+    it, so "does not parse" would be wrong."""
+
+    @staticmethod
+    def _text(path: Path, cause: BaseException) -> str:
+        return (f"{path} has an unsupported shape: {cause} — refused, as "
+                f"this tool cannot tell that its answer would match the exporter's")
 
 
 def _file_hash(path: Path) -> str:
@@ -1303,6 +1331,8 @@ class ConfDScanner:
             resolved = dict(listed[d])[chosen]
             try:
                 defaults_files[str(resolved)] = _load_yaml(chosen)
+            except _UnsupportedShape as exc:  # #2459: parses, refused
+                raise DefaultsShapeError(chosen, exc) from exc
             except Exception as exc:  # noqa: BLE001 — named, then refused
                 # As broad as `_load_tenant_file`: PyYAML's constructors
                 # raise more than YAMLError for an explicit tag whose text
@@ -1919,6 +1949,10 @@ def main() -> None:
             # platform files it may stand in for — `_load_yaml` keeps
             # PyYAML's typing for the defaults chain it has always fed.
             what_if_platform_doc = _load_platform_doc(what_if_path)
+        except _UnsupportedShape as e:  # #2459: parses, refused
+            print(f"❌ --what-if file {what_if_path} has an unsupported shape: {e}",
+                  file=sys.stderr)
+            sys.exit(EXIT_CALLER_ERROR)
         except Exception as e:  # noqa: BLE001 — named, then refused (#2413)
             print(f"❌ Failed to parse --what-if file {what_if_path}: {e}", file=sys.stderr)
             sys.exit(EXIT_CALLER_ERROR)

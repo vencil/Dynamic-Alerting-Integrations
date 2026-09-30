@@ -406,7 +406,10 @@ _BROKEN_DEFAULTS = {
     "unclosed-flow": "defaults: [\n",
     "defaults-not-a-mapping": "defaults: [1, 2]\n",
     "tagged-bool-yes": "defaults:\n  x: !!bool yes\n",
+    "document-not-a-mapping": "- 1\n- 2\n",
 }
+# The rest parse, and are refused as an unsupported shape (#2459).
+_PARSE_ERRORS = {"unclosed-flow", "tagged-bool-yes"}
 
 
 @pytest.mark.parametrize("mode", [["db-fin-a"], ["--all"], ["db-fin-a", "--json"]])
@@ -423,7 +426,8 @@ def test_unparseable_defaults_is_a_named_usage_error(
     code = verify_module.main()
     captured = capsys.readouterr()
     assert code == 1, captured.err
-    assert f"{conf_d / carrier} does not parse" in captured.err, captured.err
+    verdict = "does not parse" if shape in _PARSE_ERRORS else "has an unsupported shape"
+    assert f"{conf_d / carrier} {verdict}" in captured.err, captured.err
     assert captured.out == ""
 
 
