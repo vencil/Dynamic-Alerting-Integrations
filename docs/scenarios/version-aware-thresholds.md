@@ -50,7 +50,7 @@ cutover 不是你按一個鈕，而是 **emergent**：pod 升到 v2 後，它的
 版本感知目前是 **Kubernetes pilot**，**只有兩個 metric 吃 `version` label**：
 
 - ✅ `container_cpu`、`container_memory`
-- ❌ 其他任何 metric（`redis_*`、`pg_*`、`mysql_*`…）寫 `{version="..."}` 經 tenant-api 寫入會被**拒絕（400）**（非-pilot metric，避免跨 pack 基數污染）。⚠️ 直推 GitOps 沒有這道擋：da-guard 不檢查 `version`，`generate-routes --validate` 只出 WARN、rc 0。
+- ❌ 其他任何 metric（`redis_*`、`pg_*`、`mysql_*`…）寫 `{version="..."}` 會被 **da-guard 直接拒絕**（非-pilot metric，避免跨 pack 基數污染）。
 
 > **silent-inert 風險（務必知道）**：版本感知靠 kube-state-metrics 暴露 pod 的版號 label。**若平台的 KSM 沒開對應 allowlist，你宣告的版本閾值會靜默失效**（所有 pod 被當成 `default`、你的 v2 嚴閾值不生效），而**你這端不會收到直接回饋**。所以：
 >
