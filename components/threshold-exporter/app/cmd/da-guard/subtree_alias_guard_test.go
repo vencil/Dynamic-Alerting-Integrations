@@ -24,6 +24,13 @@ package main
 // shallower level writing the canonical spelling, was "writes both" to the
 // overlay and "writes the legacy one" to the guard — wrong advice, and the
 // shallower value served. The null / disable rows hold that.
+//
+// #2418: the same null-beside-a-value shape at the ROOT level. The root's
+// `defaults:` decodes into map[string]float64, where a null is a present 0,
+// and that 0 won /metrics' canonical-wins dedup; the walker's fold dropped
+// the null and kept the legacy value — so the guard called a tenant's legacy
+// 30 redundant and deleting it moved /metrics 30 → 0. The rCnullL30 row
+// holds that.
 
 import (
 	"fmt"
@@ -67,7 +74,10 @@ func TestGuard_SubtreeDefaultsAcrossAliasSpellings(t *testing.T) {
 	C, L := aliasCanon, aliasLegacy
 	// The root always declares the threshold: a key no root default names is
 	// not served at all (#1976), which is a different question.
-	root := []aliasLayer{{"rC30", [][2]string{{C, "30"}}}, {"rL30", [][2]string{{L, "30"}}}}
+	// rCnullL30 / rLnullC30 (#2418): the root answers "does this level write
+	// that spelling" like every other level — a null is no write.
+	root := []aliasLayer{{"rC30", [][2]string{{C, "30"}}}, {"rL30", [][2]string{{L, "30"}}},
+		{"rCnullL30", [][2]string{{C, "null"}, {L, "30"}}}, {"rLnullC30", [][2]string{{L, "null"}, {C, "30"}}}}
 	// null and "disable" level values (#2414 round 2): a null writes
 	// nothing, so the other spelling beside it is that level's only write;
 	// "disable" is a value like any other and turns the threshold off.

@@ -119,6 +119,14 @@ def _cr_trees() -> "list[tuple[str, dict, dict]]":
           "_profiles.yaml": f"profiles:\n  p:\n    {canon}: '20'\n    {legacy}: '21'\n",
           "tx.yaml": "tenants:\n  tx:\n    redis_x: '1'\n    _profile: p\n"},
          {canon: "20", "mysql_connections": 80}),
+        # #2418: a canonical null beside a legacy value in the ROOT defaults
+        # writes only the legacy one (Go `levelWritesSpelling`), so /metrics
+        # serves the 30 (Go measured: 30), not the null's 0. `resolved` keeps
+        # the spelling that supplied the value.
+        ("root-canonical-null-legacy-value",
+         {"_defaults.yaml": f"defaults:\n  mysql_connections: 80\n  {canon}: null\n  {legacy}: 30\n",
+          "tx.yaml": "tenants:\n  tx:\n    redis_x: '1'\n"},
+         {legacy: 30, "mysql_connections": 80}),
         # Not an alias shape: a tenant null on a plain threshold also falls
         # back to the defaults on /metrics.
         ("tenant-null-plain-threshold",
