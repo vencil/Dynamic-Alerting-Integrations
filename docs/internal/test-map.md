@@ -196,7 +196,7 @@ if !waitFor(t, 2*time.Second, func() bool {
 | `dx/test_bump_docs.py` | bump_docs.py 六條版號線 + 計數同步 + 診斷 × gating mode | Wave 12 unittest→pytest；#1407 大幅擴充 |
 | `ops/test_init_project.py` | `da-tools init` 產生器：GitLab root 五態分類、子目錄接線、summary 真話、CLI 契約 | #1357 |
 | `ops/test_generated_ci_artifacts.py` | 產出的 CI YAML 本身（可解析 / 可達 / image pin / 不含 `git`） | #1357 / #1358 / #1408 |
-| `dx/test_line_ending_policy.py` | 行尾政策：出貨/生產 Python（`scripts`+`components`+`helm`）的寫檔 site 必須明確表態 `newline=` | ⚠️ 判定器本身在 pre-commit `open-encoding-audit`（#1366）；本檔是正反例樣本（對 hook 實作跑，證明偵測器活著）／hook 範圍釘住＋CI 上的全樹掃描／行為測試只在 Windows 具鑑別力 |
+| `dx/test_line_ending_policy.py` | 行尾政策：出貨/生產 Python（`scripts`+`components`+`helm`）的寫檔 site 必須明確表態 `newline=` | ⚠️ 判定器本身在 pre-commit `open-encoding-audit`（#1366）；本檔是正反例樣本（對 hook 實作跑，證明偵測器活著）／hook 範圍釘住＋CI Lint job 逐名跑該 hook 的接線斷言（#2539）／行為測試只在 Windows 具鑑別力 |
 | `ops/test_maintenance_scheduler.py` | maintenance_scheduler.py 排程 | Wave 12 mock 統一 |
 | `ops/test_performance.py` | 效能曲線（scaling / load） | slow marker |
 | `ops/test_benchmark.py` | 效能基線 | benchmark + slow markers |

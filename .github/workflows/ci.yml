@@ -611,6 +611,11 @@ jobs:
           pre-commit run bat-ascii-purity-check --all-files
           pre-commit run design-token-usage --all-files
           pre-commit run tool-consistency-check --all-files
+          # #2539: text I/O hygiene (encoding= + the #1366 newline= rule).
+          # Named here because this job runs hooks BY NAME — without this line
+          # the rule had no CI entry point at all. Pinned by
+          # tests/dx/test_line_ending_policy.py::TestHookScope.
+          pre-commit run open-encoding-audit --all-files
           # CI-ROI 6C blind-spot fix: these 4 lints' live-dogfood pytest
           # twins (tests/lint/*::TestLiveRepo*) had "Python Tests" as
           # their ONLY CI enforcement point — but their scan surfaces
