@@ -26,7 +26,15 @@ from _lib_confd import overlay_platform_tenants  # noqa: E402
 
 MATRIX = json.loads((REPO_ROOT / "tests" / "shared" / "platform_tenant_overlay_matrix.json")
                     .read_text(encoding="utf-8"))
-ALIAS_ROWS = [t for t in MATRIX["trees"] if t.get("metric_key")]
+# ⛔ Top-level trees only. diagnose's reader is FLAT by design (#1911,
+# `warn_nested`): a tree with files below the root — the #2414 subtree rows —
+# is read as its top level alone, with a WARN naming the skipped files, even
+# when every layer uses the same spelling (the tenant file itself is skipped).
+# Those rows are held against /metrics by the Go half of the matrix and
+# against describe_tenant by the Python half; a recursive diagnose is its own
+# change.
+ALIAS_ROWS = [t for t in MATRIX["trees"]
+              if t.get("metric_key") and not any("/" in rel for rel in t["files"])]
 
 
 def test_alias_rows_exist() -> None:
@@ -36,6 +44,7 @@ def test_alias_rows_exist() -> None:
 @pytest.mark.parametrize("tree", ALIAS_ROWS, ids=lambda t: t["name"])
 def test_resolved_carries_the_served_value_once(tree: dict, tmp_path: Path) -> None:
     for rel, content in tree["files"].items():
+        (tmp_path / rel).parent.mkdir(parents=True, exist_ok=True)
         (tmp_path / rel).write_text(content, encoding="utf-8")
     key = tree["metric_key"]
     spellings = {key, _legacy_tenant_key(key)}
