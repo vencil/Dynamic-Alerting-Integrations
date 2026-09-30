@@ -259,7 +259,7 @@ audit log（issue [#511](https://github.com/vencil/Dynamic-Alerting-Integrations
   "tenant_id": "db-anonymized-001",
   "token_id": "ftk_8a3f...",
   "method": "POST",
-  "path": "/api/v1/query_range",              // 截斷 2048 字元
+  "path": "/api/v1/query_range",              // 不含 query string，截斷 2048 字元
   "query": "rate(http_requests_total[5m])",   // Lua 統一抽取，見下
   "status": 200,                              // 原始 HTTP code
   "duration_ms": 1843
@@ -295,7 +295,7 @@ federation 控制平面操作（簽發／撤銷 token、改 whitelist／subset�
 
 #### 持久化邊界（已知 trade-off）
 
-data-plane audit log 的**持久、可中央查詢的合規儲存不在本 ADR 交付範圍**。平台目前無 log 聚合 stack（無 Loki / ELK / Fluentd / Vector）；把 audit log 寫 per-pod PVC 是 cloud-native anti-pattern——RWO PVC 在 gateway 的 `replicaCount>1` / `podAntiAffinity` 下根本無法多副本掛載，RWX 則拖入 NFS／EFS 依賴。交付的是：
+data-plane audit log 的**持久、可中央查詢的合規儲存不在本 ADR 交付範圍**。撰寫本 ADR 時平台沒有 log 聚合 stack（無 Loki / ELK / Fluentd / Vector；⚠️ [ADR-021](021-tenant-log-query-federation.md) 之後平台已出貨 Vector＋VictoriaLogs chart，部署後 gateway 的 audit 列會進平台分區 `0:0`）；把 audit log 寫 per-pod PVC 是 cloud-native anti-pattern——RWO PVC 在 gateway 的 `replicaCount>1` / `podAntiAffinity` 下根本無法多副本掛載，RWX 則拖入 NFS／EFS 依賴。交付的是：
 
 1. **aggregate 層**——`tenant_federation_requests_total` 進 Prometheus，本即 durable + queryable（誰拉多少、拒絕率多少）。
 2. **per-request 層**——結構化 JSON 寫 gateway stdout（collector-ready），持久度等同 node container-log 輪替，**尚非中央可查**；另有一份 in-pod emptyDir mirror 供 audit-metrics sidecar，為 ephemeral metrics feed，非系統紀錄。

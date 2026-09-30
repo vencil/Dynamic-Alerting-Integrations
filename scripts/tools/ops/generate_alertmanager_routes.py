@@ -798,9 +798,14 @@ def _build_parser() -> argparse.ArgumentParser:
                         help="Validate generated config (exit 0 if valid, 1 if errors)")
     parser.add_argument("--strict", action="store_true",
                         help="Escalate to ERROR and fail (exit 1): domain-policy "
-                             "violations (ADR-007) and, on the --apply/--output-configmap "
+                             "violations (ADR-007), an unquoted routes[].match value "
+                             "or overrides[].alertname / metric_group that PyYAML "
+                             "reads as a non-string (yes, 1:30, ~; #2431 — quote "
+                             "it) and, on the --apply/--output-configmap "
                              "merge, any inhibit rule with an ungated `equal:` label "
-                             "(#1132). Without --strict these surface as WARN. CI runs "
+                             "(#1132). Without --strict these surface as WARN (an "
+                             "unquoted override value is rendered via str() "
+                             "instead). CI runs "
                              "--strict.")
     mode_group = parser.add_mutually_exclusive_group()
     mode_group.add_argument("--apply", action="store_true",
@@ -980,8 +985,9 @@ def main() -> None:
     if args.strict:
         policy_errors = _policy_errors(all_warnings)
         if policy_errors:
-            print(f"FAIL: {len(policy_errors)} domain-policy violation(s) "
-                  "under --strict:", file=sys.stderr)
+            print(f"FAIL: {len(policy_errors)} blocking error(s) under "
+                  "--strict (domain policy, unquoted matcher value):",
+                  file=sys.stderr)
             for e in policy_errors:
                 print(e, file=sys.stderr)
             sys.exit(EXIT_VIOLATION)

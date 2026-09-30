@@ -112,8 +112,9 @@ Which read APIs a tenant can call through the gateway depends on the mode:
   rejects any token whose audience is not `tenant-federation-logs` before the
   Lua even runs, so a metrics-pull token cannot reach the log store at all.
 - **Tokens never reach a log.** `jwt_authn` is configured `from_headers`
-  only — an `?access_token=` in the URL is not accepted, so a token cannot
-  land in an access log via the query string.
+  only — an `?access_token=` in the URL is not accepted — and the access log
+  records the path **without** its query string (`%REQ_WITHOUT_QUERY(:PATH)%`),
+  so a token put in the URL is not logged either.
 - **RSA-CPU exhaustion is bounded.** The per-IP limiter runs before
   `jwt_authn`, so a flood of forged tokens is shed without spending RSA
   verifies; the verified-JWT cache absorbs repeat presentations.

@@ -94,7 +94,7 @@ v2.4.0 同步執行，`status` 永遠為 `"completed"`。v2.6.0 已升級為非�
 
 ### 為何選 Go 而非 Python？
 
-threshold-exporter 的核心 config 解析邏輯（`ValidateTenantKeys`, `ResolveAt`, `ParseConfig`）全在 Go。以 Go 撰寫 API server 可直接 `import "github.com/vencil/threshold-exporter/pkg/config"`，確保 API 拒絕的配置與 `da-tools validate-config` 拒絕的完全一致。若改用 Python，必須同步維護兩套 schema validator，歷史上 Go↔Python 雙端維護曾造成驗證邏輯不一致（參見 `governance-security.md §2`）。
+threshold-exporter 的核心 config 解析邏輯（`ValidateTenantKeys`, `ResolveAt`, `ParseConfigFile`）全在 Go。以 Go 撰寫 API server 可直接 `import "github.com/vencil/threshold-exporter/pkg/config"`，鍵驗證與 exporter 同源。⚠️ 這不等於與 `da-tools validate-config` 一致：後者是 Python（`validate_config.py`），兩邊拒收的集合不同（見 [config-driven](../design/config-driven.md)）。若改用 Python，必須同步維護兩套 schema validator，歷史上 Go↔Python 雙端維護曾造成驗證邏輯不一致（參見 `governance-security.md §2`）。
 
 ### 為何不用資料庫？
 
@@ -126,7 +126,7 @@ v2.4.0 的主要用戶場景是低頻操作（每次操作間隔 ≥1 秒），p
 
 ### 風險
 
-- **Git conflict**：多個操作者同時寫入同一 tenant 配置可能產生 conflict。Mitigation：寫入前 HEAD 快照比對，衝突時返回 409，要求操作者重新整理後重試
+- **Git conflict**：多個操作者同時寫入同一 tenant 配置可能產生 conflict。Mitigation：API 的寫入由 writer lock 序列化；commit 後比對 parent 是否仍是寫入前的 HEAD，不是就回 409。⚠️ 回 409 時這筆寫入**已經 commit、不會回滾**（[#1535](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/1535)）。讀到寫之間被別人改過（lost update）要靠選用的 `X-DA-Base-Hash` 前置條件（僅 direct 寫回模式），不符回 409
 - **git binary 依賴**：API server 以 `os/exec` 呼叫 `git` 指令，容器內需安裝 git。Mitigation：Dockerfile 使用 `golang:alpine` build stage 確保 git 可用
 
 ## 演進狀態

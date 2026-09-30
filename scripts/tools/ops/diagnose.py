@@ -25,8 +25,11 @@ Returns JSON: {"status": "healthy"|"error", "tenant", ...}
 from __future__ import annotations
 
 import argparse
+import datetime
 import json
+import math
 import os
+import re
 import subprocess
 import sys
 from pathlib import Path
@@ -40,6 +43,7 @@ sys.path.insert(0, _THIS_DIR)  # Docker flat layout
 sys.path.insert(0, os.path.join(_THIS_DIR, '..'))  # Repo subdir layout
 from _lib_python import detect_cli_lang, http_get_json, query_prometheus_instant, add_prometheus_arg  # noqa: E402
 from _lib_python import format_json_report  # noqa: E402
+from _lib_constants import _DISABLED_VALUES  # noqa: E402
 from _lib_exitcodes import EXIT_OK, EXIT_VIOLATION, EXIT_CALLER_ERROR  # noqa: E402
 from _lib_io import safe_label  # noqa: E402  (#1538 output-layer escaping)
 # #2231: STRICT — a file holding a key twice is one the exporter drops whole,
@@ -165,6 +169,101 @@ query_prometheus = query_prometheus_instant
 # #2297: a tenant's `_profile:` value is read as its source text, as the
 # exporter reads it (precedent: `deprecate_rule._read_yaml`, #2216).
 _PROFILE_AS_TEXT = ("_profile",)
+
+
+# #2421: Go `strconv.ParseFloat(s, 64)`'s accepted grammar. Python's
+# `float()` is NOT that grammar — it takes `+nan` and returns inf for
+# `1e400`, both of which Go refuses (syntax error / ErrRange), and it
+# refuses the hex form `0x1p3` Go accepts.
+_GO_FLOAT_SPECIAL = re.compile(r"[+-]?(?:inf|infinity)|nan", re.IGNORECASE)
+_GO_FLOAT_DEC = re.compile(r"[+-]?(?:[0-9]+\.?[0-9]*|\.[0-9]+)(?:[eE][+-]?[0-9]+)?")
+_GO_FLOAT_HEX = re.compile(
+    r"[+-]?0[xX](?:[0-9a-fA-F]+\.?[0-9a-fA-F]*|\.[0-9a-fA-F]+)[pP][+-]?[0-9]+")
+
+
+def _go_underscore_ok(s: str) -> bool:
+    """Go ``strconv.underscoreOK``: every ``_`` sits between digits (or
+    right after a base prefix)."""
+    if s[:1] in ("+", "-"):
+        s = s[1:]
+    saw, i, hexa = "^", 0, False
+    if len(s) >= 2 and s[0] == "0" and s[1] in "bBoOxX":
+        saw, i, hexa = "0", 2, s[1] in "xX"
+    for c in s[i:]:
+        if "0" <= c <= "9" or hexa and c in "abcdefABCDEF":
+            saw = "0"
+        elif c == "_":
+            if saw != "0":
+                return False
+            saw = "_"
+        elif saw == "_":
+            return False
+        else:
+            saw = "!"
+    return saw != "_"
+
+
+def _go_parse_float_ok(s: str) -> bool:
+    """Go ``strconv.ParseFloat(s, 64)`` returns no error. Overflow is an
+    error (ErrRange); inf/nan spelled out are not."""
+    if _GO_FLOAT_SPECIAL.fullmatch(s):
+        return True
+    if "_" in s and not _go_underscore_ok(s):
+        return False
+    plain = s.replace("_", "")
+    try:
+        if _GO_FLOAT_DEC.fullmatch(plain):
+            return not math.isinf(float(plain))
+        if _GO_FLOAT_HEX.fullmatch(plain):
+            return not math.isinf(float.fromhex(plain))
+    except OverflowError:
+        return False
+    return False
+
+
+def metrics_treats_as_unset(value: object) -> bool:
+    """/metrics serves a threshold written as *value* as if it were NOT
+    written: the exporter falls back to the layer below (#2421).
+
+    Oracle: `resolveBaseRows` in
+    components/threshold-exporter/app/pkg/config/resolve.go. It reads the YAML scalar's SOURCE TEXT; unless that text
+    means disable, it parses the part before `:` with `strconv.ParseFloat`,
+    and on failure logs `unknown value ... using default`. So for the value
+    PyYAML hands us:
+
+      * None (`null`, `~`, empty) — the text is not a number;
+      * a str — decided exactly as Go decides it (`''`, `'  '`, `abc`,
+        `7O:critical`, `+nan`, `1e400` are unset; `disable`, `70:critical`,
+        `0x1p3` are not);
+      * True — only `true` / `yes` / `on` load as True, and none of those
+        texts parse;
+      * a non-finite float — PyYAML makes one only from `.inf` / `.nan` or
+        an overflowing literal, all of which Go refuses;
+      * a date / datetime — a timestamp text never parses as a float;
+      * a list — a sequence is never a threshold value.
+
+    ⛔ Anything else counts as a value, including False: `false` / `off`
+    DISABLE on /metrics while `no` is unset, and the loaded False cannot
+    tell them apart. Ints are the same case (`0x10`, `017`, `12:30` do not
+    read on /metrics as the int PyYAML hands us). Guessing there would
+    trade a visible raw value for a wrong answer. A mapping is a scheduled
+    value whose answer depends on the time of day: also left alone.
+
+    Reserved (`_`-prefixed) keys are not thresholds; callers apply this to
+    threshold keys only.
+    """
+    if value is None or value is True:
+        return True
+    # datetime.datetime is a subclass of datetime.date.
+    if isinstance(value, (datetime.date, list)):
+        return True
+    if isinstance(value, float):
+        return not math.isfinite(value)
+    if not isinstance(value, str):
+        return False
+    if value.strip().lower() in _DISABLED_VALUES:
+        return False
+    return not _go_parse_float_ok(value.split(":", 1)[0].strip())
 
 
 def _tenant_block(tenant, entries: list, base: Path, *, announce: bool) -> dict:
@@ -537,25 +636,32 @@ def resolve_inheritance_chain(tenant: str, config_dir: str) -> dict[str, object]
     # #2420 (CodeRabbit, checked against Go): each layer first takes
     # resolve's canonical-wins dedup (drop_shadowed_spellings) — a layer
     # writing BOTH spellings serves only the canonical one on /metrics — and
-    # a tenant-layer threshold written as null is NOT a value: /metrics logs
-    # `unknown value ""` and falls back to the defaults, so it is left out of
-    # the tenant overlay (it still keeps the profile out, via _tenant_sets,
-    # and still displaced the platform's other spelling in _tenant_block,
-    # both as on /metrics).
+    # a threshold /metrics treats as unset (null, `''`, any text that is
+    # neither a number nor disable — `metrics_treats_as_unset`, #2421) is
+    # NOT a value: /metrics logs `unknown value` and falls back to the
+    # defaults, so it is left out of its overlay. That holds for the tenant
+    # layer AND the profile layer (the profile fill-in copies the value into
+    # the tenant's overrides, where the same fallback applies). A tenant key
+    # so written still keeps the profile out, via _tenant_sets, and still
+    # displaced the platform's other spelling in _tenant_block, both as on
+    # /metrics.
+    #
+    # Dedup BEFORE dropping unset values: a canonical null still shadows the
+    # legacy spelling in the same layer (canonical wins, then "" → defaults
+    # on /metrics); filtering first would let the legacy value through
+    # (#2420 round 4).
+    def _set_only(m: dict) -> dict:
+        return {k: v for k, v in drop_shadowed_spellings(m).items()
+                if not metrics_treats_as_unset(v)}
+
     resolved = {}
     overlay_across_spellings(resolved, drop_shadowed_spellings(default_only))
     if profile_keys:
         # Profile fills in only where tenant hasn't overridden
-        overlay_across_spellings(resolved, drop_shadowed_spellings({
+        overlay_across_spellings(resolved, _set_only({
             k: v for k, v in profile_keys.items()
             if not k.startswith("_") and not _tenant_sets(k)}))
-    # Dedup BEFORE dropping nulls: a canonical null still shadows the legacy
-    # spelling in the same layer (canonical wins, then "" → defaults on
-    # /metrics); filtering first would let the legacy value through (#2420
-    # round 4).
-    overlay_across_spellings(resolved, {
-        k: v for k, v in drop_shadowed_spellings(tenant_metric_keys).items()
-        if v is not None})
+    overlay_across_spellings(resolved, _set_only(tenant_metric_keys))
 
     out: dict[str, object] = {
         "chain": chain,

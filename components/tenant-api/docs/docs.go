@@ -1031,7 +1031,7 @@ const docTemplate = `{
                         }
                     },
                     "409": {
-                        "description": "Conflict",
+                        "description": "Conflict: ambiguous tenant file, or the tenant's conf.d file is not a regular file (code TENANT_CONFIG_NOT_LOADABLE, config_error not_regular_file)",
                         "schema": {
                             "$ref": "#/definitions/ErrorResponse"
                         }
@@ -1094,7 +1094,7 @@ const docTemplate = `{
                         }
                     },
                     "400": {
-                        "description": "Bad request. A receiver the body writes in _routing (receiver, overrides[].receiver, routes[].receiver) that Alertmanager could not load or the route generator would skip is code INVALID_BODY with one violations[] entry per problem (#2295; nothing written). Also 400 when the current tenant file cannot be parsed and the caller lacks write permission on all tenants (#2405; nothing written)",
+                        "description": "Bad request. A receiver the body writes in _routing (receiver, overrides[].receiver, routes[].receiver) that Alertmanager could not load or the route generator would skip is code INVALID_BODY with one violations[] entry per problem (#2295; nothing written); so is a routes[].match value or overrides[].alertname / metric_group the body writes that the route generator does not read as a string, e.g. unquoted yes, 1:30 or ~ (#2431; quote it). Also 400 when the current tenant file cannot be parsed and the caller lacks write permission on all tenants (#2405; nothing written)",
                         "schema": {
                             "$ref": "#/definitions/ErrorResponse"
                         }
@@ -1106,7 +1106,7 @@ const docTemplate = `{
                         }
                     },
                     "409": {
-                        "description": "Conflict: base hash mismatch, pending PR, ambiguous tenant file, or the tenant is already declared by another conf.d file (code TENANT_DECLARED_ELSEWHERE; nothing written)",
+                        "description": "Conflict: base hash mismatch, pending PR, ambiguous tenant file, the tenant is already declared by another conf.d file (code TENANT_DECLARED_ELSEWHERE; nothing written), or the tenant's conf.d file is not a regular file (code TENANT_CONFIG_NOT_LOADABLE, config_error not_regular_file; nothing written)",
                         "schema": {
                             "$ref": "#/definitions/ErrorResponse"
                         }
@@ -1181,7 +1181,7 @@ const docTemplate = `{
         },
         "/api/v1/tenants/{id}/custom-alerts": {
             "put": {
-                "description": "Merges the supplied recipe array into the tenant's\n` + "`" + `_custom_alerts` + "`" + ` (comment-preserving AST edit), validates\n(S5 Go validator), and commits. Optimistic concurrency via\nbase_hash (409 on drift). Empty array deletes the key.\n409 TENANT_CONFIG_NOT_LOADABLE (with tenant_id, config_error) when the tenant's file cannot be loaded as a\ntenant config (malformed_yaml | invalid_config, as on GET): repair the tenant file itself first, e.g. with a\nwhole-file PUT /api/v1/tenants/{id}, which replaces it (see GET /api/v1/tenants/{id} for the limits of that\nrepair, e.g. a broken file shared with other tenants).",
+                "description": "Merges the supplied recipe array into the tenant's\n` + "`" + `_custom_alerts` + "`" + ` (comment-preserving AST edit), validates\n(S5 Go validator), and commits. Optimistic concurrency via\nbase_hash (409 on drift). Empty array deletes the key.\n409 TENANT_CONFIG_NOT_LOADABLE (with tenant_id, config_error) when the tenant's file cannot be loaded as a\ntenant config (malformed_yaml | invalid_config, as on GET): repair the tenant file itself first, e.g. with a\nwhole-file PUT /api/v1/tenants/{id}, which replaces it (see GET /api/v1/tenants/{id} for the limits of that\nrepair, e.g. a broken file shared with other tenants). Also 409 TENANT_CONFIG_NOT_LOADABLE with config_error\nnot_regular_file when the tenant's conf.d file is not a regular file: nothing is read or written, and the\nwhole-file PUT refuses it too, so replace it with a regular file in git.",
                 "consumes": [
                     "application/json"
                 ],

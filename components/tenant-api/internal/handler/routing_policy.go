@@ -18,7 +18,12 @@ import (
 )
 
 // extractTenantBlock returns `tenants.<tenantID>` of a tenant document, or
-// nil when the document does not parse or does not declare the tenant.
+// nil when the document does not parse or does not declare the tenant. Its
+// `_routing` carries the receivers, `routes[i].match` values and override
+// `alertname` / `metric_group` as the route generator's PyYAML reads them
+// (routingpolicy.WithPyYAMLRouting, #2431), so the policy judges the routes
+// the generator renders; a value with no PyYAML reading is refused
+// (Unmatched), never judged as yaml.v3 read it.
 func extractTenantBlock(body []byte, tenantID string) map[string]any {
 	var doc struct {
 		Tenants map[string]map[string]any `yaml:"tenants"`
@@ -26,7 +31,11 @@ func extractTenantBlock(body []byte, tenantID string) map[string]any {
 	if err := yaml.Unmarshal(body, &doc); err != nil {
 		return nil
 	}
-	return doc.Tenants[tenantID]
+	block := doc.Tenants[tenantID]
+	if r, has := block["_routing"]; has {
+		block["_routing"] = routingpolicy.WithPyYAMLRouting(r, routingpolicy.PyYAMLRoutingByTenant(body)[tenantID])
+	}
+	return block
 }
 
 // loadRoutingLayers reads `_routing_defaults` and the routing profiles from

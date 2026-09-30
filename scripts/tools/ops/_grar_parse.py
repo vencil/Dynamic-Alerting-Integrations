@@ -60,7 +60,9 @@ from _grar_validate import (  # noqa: E402
     _validate_profile_refs,
     check_domain_policies,
     check_policy_scope,
+    routing_values_not_string,
     validate_tenant_keys,
+    value_not_string_message,
 )
 
 # ADR-007 --strict fail-open closure: filenames whose content carries the
@@ -1246,7 +1248,17 @@ def load_tenant_tree(
     # or a domain_policies block in a wrongly named file makes every policy
     # silently vanish (validation stays green). Strict mode surfaces both as
     # blocking ERRORs; non-strict keeps the legacy stderr WARN prints only.
+    # #2431: a matcher value (`routes[i].match.<label>`, `overrides[i].
+    # alertname` / `metric_group`) of the RESOLVED routing that PyYAML does
+    # not read as a string is a blocking ERROR too — da-guard and tenant-api
+    # refuse the same value; without --strict the generator keeps its legacy
+    # behaviour (routes: WARN + skip; overrides: truthiness + str()).
     if strict_policies:
+        for tenant, rc in sorted(routing_configs.items()):
+            for fld, value in routing_values_not_string(rc):
+                schema_warnings.append(
+                    f"  {POLICY_ERROR_PREFIX} "
+                    f"{value_not_string_message(tenant, fld, value)}")
         for err in parsed.get("policy_file_errors", []):
             # The cause and the remedy travel with the record (see
             # _drop_unusable_policy); this line only frames the consequence.

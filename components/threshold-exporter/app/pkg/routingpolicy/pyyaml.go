@@ -14,8 +14,11 @@ package routingpolicy
 
 import (
 	"fmt"
+	"math/big"
 	"regexp"
+	"sort"
 	"strings"
+	"time"
 	"unicode"
 
 	"github.com/vencil/threshold-exporter/pkg/pyyamlcompat"
@@ -322,50 +325,66 @@ func pyYAMLBinary(v string) bool {
 	return quad == 0
 }
 
-// Receivers as the route generator reads them (#2295).
+// Routing values as the route generator reads them (#2295, #2431).
 //
 // The Go readers decode routing with yaml.v3, which keeps plain `on` or
-// `1:30` a string; PyYAML — the generator — reads a boolean and an integer,
-// so a receiver field that must be a string is refused there and the
-// receiver skipped. Only the receivers are re-read: each one a routing
-// carries (`receiver`, `overrides[i].receiver`, `routes[i].receiver`) is
-// replaced by the value pkg/pyyamlcompat builds from the same node, and
-// everything else in the routing stays the yaml.v3 value it was.
+// `1:30` a string; PyYAML — the generator — reads a boolean and an integer.
+// Where the generator needs a string that decides what it renders: a
+// receiver field (the receiver is refused and skipped), a `routes[i].match`
+// value (the entry is skipped) and `overrides[i].alertname` /
+// `metric_group` (truthiness decides whether the override renders, str()
+// what it matches). Only those values are re-read: each receiver
+// (`receiver`, `overrides[i].receiver`, `routes[i].receiver`), each
+// `routes[i].match` value and each `overrides[i].alertname` /
+// `metric_group` is replaced by the value pkg/pyyamlcompat builds from the
+// same node, and everything else stays the yaml.v3 value it was. A match
+// KEY is not re-read: the generator keeps keys as their source text.
 //
-// ⛔ FAIL-CLOSED: a receiver whose PyYAML reading cannot be found (no such
-// node on the PyYAML side, a list of another length, an entry that is not a
-// mapping there) becomes Unmatched — never the yaml.v3 value, which would
-// judge a string the generator never sees. A mapping on the PyYAML side
-// whose other keys are not strings (`on:`, `1:`, `~:` are a boolean, an
-// integer and null to PyYAML) is still read by its string key `receiver`.
+// ⛔ FAIL-CLOSED: a value whose PyYAML reading cannot be found (no such node
+// on the PyYAML side, a list of another length, an entry or a match that is
+// not a mapping there) becomes Unmatched / UnmatchedValue — never the yaml.v3
+// value, which would judge a string the generator never sees. A mapping on
+// the PyYAML side whose other keys are not strings (`on:`, `1:`, `~:` are a
+// boolean, an integer and null to PyYAML) is still read by its string keys;
+// a match label such as `on` is found under the key PyYAML gives its text.
 
-// Unmatched is the receiver WithPyYAMLReceivers leaves where it cannot find
+// Unmatched is the receiver WithPyYAMLRouting leaves where it cannot find
 // the one the route generator reads. It is not a mapping, so the receiver
 // check (pkg/receiverspec) refuses it.
 var Unmatched = pyyamlcompat.Unsupported{Tag: "receiver", Reason: "not found where the route generator reads it"}
 
-// WithPyYAMLReceivers returns routing with its receivers taken from py, the
+// UnmatchedValue is the match / override matcher value WithPyYAMLRouting
+// leaves where it cannot find the one the route generator reads. It is not
+// a string, so RouteEntryProblem and ValuesNotString refuse it.
+var UnmatchedValue = pyyamlcompat.Unsupported{Tag: "value", Reason: "not found where the route generator reads it"}
+
+// overrideMatcherKeys are the override keys the generator formats into the
+// override route's matcher (_grar_routes._build_override_matchers).
+var overrideMatcherKeys = []string{"alertname", "metric_group"}
+
+// WithPyYAMLRouting returns routing with its receivers, `routes[i].match`
+// values and `overrides[i].alertname` / `metric_group` taken from py, the
 // same `_routing` decoded by pyyamlcompat (nil when it could not be found).
-// routing is not modified. A routing, list or entry that is not a
-// string-keyed mapping on the yaml.v3 side is left as it is: no receiver is
-// read from it downstream either. Every receiver the yaml.v3 side carries
-// and py does not is Unmatched (see the fail-closed note above).
-func WithPyYAMLReceivers(routing, py any) any {
+// routing is not modified. A routing, list, entry or match that is not a
+// mapping on the yaml.v3 side is left as it is: nothing is read from it
+// downstream either. Every such value the yaml.v3 side carries and py does
+// not is Unmatched / UnmatchedValue (see the fail-closed note above).
+func WithPyYAMLRouting(routing, py any) any {
 	r, ok := asStringMap(routing)
 	if !ok {
 		return routing
 	}
-	withReceiver := func(dst map[string]any, src any) {
-		if _, has := dst["receiver"]; !has {
+	withKey := func(dst map[string]any, src any, key string, missing any) {
+		if _, has := dst[key]; !has {
 			return
 		}
-		if v, has := stringKey(src, "receiver"); has {
-			dst["receiver"] = v
+		if v, has := stringKey(src, key); has {
+			dst[key] = v
 		} else {
-			dst["receiver"] = Unmatched
+			dst[key] = missing
 		}
 	}
-	withReceiver(r, py)
+	withKey(r, py, "receiver", Unmatched)
 	for _, list := range []string{"overrides", "routes"} {
 		entries, ok := r[list].([]any)
 		if !ok {
@@ -374,7 +393,7 @@ func WithPyYAMLReceivers(routing, py any) any {
 		pyList, _ := stringKey(py, list)
 		pyEntries, ok := pyList.([]any)
 		if !ok || len(pyEntries) != len(entries) {
-			pyEntries = make([]any, len(entries)) // nothing matches: every receiver Unmatched
+			pyEntries = make([]any, len(entries)) // nothing matches: every value Unmatched
 		}
 		out := make([]any, len(entries))
 		for i, e := range entries {
@@ -383,12 +402,181 @@ func WithPyYAMLReceivers(routing, py any) any {
 			if !ok {
 				continue
 			}
-			withReceiver(em, pyEntries[i])
+			withKey(em, pyEntries[i], "receiver", Unmatched)
+			if list == "overrides" {
+				for _, k := range overrideMatcherKeys {
+					withKey(em, pyEntries[i], k, UnmatchedValue)
+				}
+			} else if m, has := em["match"]; has {
+				pyMatch, _ := stringKey(pyEntries[i], "match")
+				em["match"] = withPyYAMLMatch(m, pyMatch)
+			}
 			out[i] = em
 		}
 		r[list] = out
 	}
 	return r
+}
+
+// withPyYAMLMatch is a `routes[i].match` mapping with each value taken from
+// pyMatch, the same mapping as PyYAML reads it; keys stay as they are. A
+// match that is not a mapping is left as it is (RouteEntryProblem refuses
+// it). A string key is found in pyMatch by its text, or else by the value
+// PyYAML's resolver gives that text (`on` is True there); a value not found
+// is UnmatchedValue. A key that is not a label name (`2001-12-15`, `.inf`,
+// `1`) keeps its value untouched: RouteEntryProblem already refuses the
+// entry, as the generator skips it, and nothing downstream reads the value.
+func withPyYAMLMatch(match, pyMatch any) any {
+	lookup := func(k, orig any) any {
+		s, ok := matchLabel(k)
+		if !ok {
+			return orig
+		}
+		if v, has := stringKey(pyMatch, s); has {
+			return v
+		}
+		if pm, isAny := pyMatch.(map[any]any); isAny {
+			pk := pyyamlcompat.Decode(&yaml.Node{Kind: yaml.ScalarNode, Value: s})
+			switch pk.(type) {
+			case nil, bool, int, float64: // the hashable keys a label name can resolve to
+				if v, has := pm[pk]; has {
+					return v
+				}
+			}
+		}
+		return UnmatchedValue
+	}
+	switch m := match.(type) {
+	case map[string]any:
+		out := make(map[string]any, len(m))
+		for k, v := range m {
+			out[k] = lookup(k, v)
+		}
+		return out
+	case map[any]any:
+		out := make(map[any]any, len(m))
+		for k, v := range m {
+			out[k] = lookup(k, v)
+		}
+		return out
+	}
+	return match
+}
+
+// matchLabel is k as a match label name — the same grammar RouteEntryProblem
+// holds a `routes` entry to (labelNameRE). ok=false: not a string, or not a
+// label name; the generator skips such an entry, so its values are neither
+// re-read nor judged (#2431 review F1).
+func matchLabel(k any) (string, bool) {
+	s, ok := k.(string)
+	return s, ok && labelNameRE.MatchString(s)
+}
+
+// NotString is one routing value the route generator needs as a YAML string
+// and PyYAML does not read as one (#2431): Field is its path in the routing
+// (`routes[0].match.team`, `overrides[1].alertname`), Value what PyYAML read.
+type NotString struct {
+	Field string
+	Value any
+}
+
+// Message is the operator-facing refusal, naming what PyYAML read and asking
+// for quotes.
+func (n NotString) Message() string {
+	key := n.Field[strings.LastIndexByte(n.Field, '.')+1:]
+	return fmt.Sprintf("%s must be a string, got %s — quote it in YAML (e.g. %s: \"...\") so the route generator reads it as text",
+		n.Field, describePy(n.Value), key)
+}
+
+// ValuesNotString is THE predicate (#2431) for the routing values the route
+// generator formats into a matcher and so needs as strings:
+// `overrides[i].alertname` / `metric_group` when the key is written (null
+// included) and the value of every label-named key of a `routes[i].match`
+// mapping (a key that is no label name makes the entry invalid_route_entry,
+// and its value is not judged). It is the Go copy
+// of _grar_validate.routing_values_not_string; routing must already carry
+// the PyYAML readings (WithPyYAMLRouting) — yaml.v3 alone reads `yes` as a
+// string. Order: overrides, then routes, each in list order, match labels
+// in name order. The generator refuses these under --strict; da-guard and
+// tenant-api call this one function.
+func ValuesNotString(routing any) []NotString {
+	r, ok := asStringMap(routing)
+	if !ok {
+		return nil
+	}
+	var out []NotString
+	overrides, _ := r["overrides"].([]any)
+	for i, e := range overrides {
+		em, ok := asStringMap(e)
+		if !ok {
+			continue
+		}
+		for _, k := range overrideMatcherKeys {
+			if v, has := em[k]; has {
+				if _, isStr := v.(string); !isStr {
+					out = append(out, NotString{Field: fmt.Sprintf("overrides[%d].%s", i, k), Value: v})
+				}
+			}
+		}
+	}
+	routes, _ := r["routes"].([]any)
+	for i, e := range routes {
+		em, ok := asStringMap(e)
+		if !ok {
+			continue
+		}
+		var labels []string
+		values := map[string]any{}
+		switch m := em["match"].(type) {
+		case map[string]any:
+			for k, v := range m {
+				if _, ok := matchLabel(k); ok {
+					labels, values[k] = append(labels, k), v
+				}
+			}
+		case map[any]any:
+			for k, v := range m {
+				if s, ok := matchLabel(k); ok {
+					labels, values[s] = append(labels, s), v
+				}
+			}
+		}
+		sort.Strings(labels)
+		for _, k := range labels {
+			if _, isStr := values[k].(string); !isStr {
+				out = append(out, NotString{Field: fmt.Sprintf("routes[%d].match.%s", i, k), Value: values[k]})
+			}
+		}
+	}
+	return out
+}
+
+// describePy names a decoded value the way the generator's message does
+// (Python's type name, then the value): `bool True`, `int 90`,
+// `NoneType None`, `date 2001-12-15`.
+func describePy(v any) string {
+	switch t := v.(type) {
+	case nil:
+		return "NoneType None"
+	case bool:
+		return "bool " + PyStr(t)
+	case int, int64, uint64, *big.Int:
+		return fmt.Sprintf("int %v", t)
+	case float64:
+		return "float " + PyStr(t)
+	case time.Time:
+		if t.Hour() == 0 && t.Minute() == 0 && t.Second() == 0 && t.Nanosecond() == 0 && t.Location() == time.UTC {
+			return "date " + t.Format("2006-01-02")
+		}
+		return "datetime " + t.Format(time.RFC3339Nano)
+	case []any:
+		return "list " + PyStr(t)
+	case map[string]any, map[any]any:
+		return "dict " + PyStr(t)
+	case pyyamlcompat.Unsupported:
+		return t.String()
+	}
+	return fmt.Sprintf("%T %v", v, v)
 }
 
 // stringKey is the value under the string key k of a decoded mapping of
@@ -405,15 +593,15 @@ func stringKey(m any, k string) (any, bool) {
 	return nil, false
 }
 
-// withPyYAMLReceiversFrom is WithPyYAMLReceivers over the node the routing
-// was decoded from (nil: not found, every receiver Unmatched).
-func withPyYAMLReceiversFrom(routing any, n *yaml.Node) any {
-	return WithPyYAMLReceivers(routing, pyyamlcompat.Decode(n))
+// withPyYAMLRoutingFrom is WithPyYAMLRouting over the node the routing was
+// decoded from (nil: not found, every re-read value Unmatched).
+func withPyYAMLRoutingFrom(routing any, n *yaml.Node) any {
+	return WithPyYAMLRouting(routing, pyyamlcompat.Decode(n))
 }
 
 // PyYAMLRoutingByTenant returns, per tenant id, the `_routing` of one tenant
 // file's `tenants:` entries decoded by pyyamlcompat — the value to hand
-// WithPyYAMLReceivers for that tenant's own routing. Tenant ids and the
+// WithPyYAMLRouting for that tenant's own routing. Tenant ids and the
 // `_routing` key are matched by source text (an alias key by its anchor's),
 // merge keys expanded, as the exporter keys tenants. nil when the document
 // does not parse or has no such entries.

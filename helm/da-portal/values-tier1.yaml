@@ -143,10 +143,6 @@ networkPolicy:
 podAnnotations:
   {}
 
-# Service account
-serviceAccount:
-  create: true
-  name: ""
 
 # ============================================================================
 # 部署指南 (Deployment Guide)
