@@ -111,6 +111,7 @@ from typing import Callable
 import pytest
 
 import test_json_stdout_contract as _jsc  # noqa: E402  (tests/shared on sys.path)
+from _platform_fs import DIR_WRITE_ERROR
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
 TOOLS_DIR = REPO_ROOT / "scripts" / "tools"
@@ -1159,7 +1160,7 @@ class TestSiblingShapes:
         out = _bad_path(tmp_path, "sibling_is_dir", row)
         blocked = out.parent / ".da-history" / "snap-1" / "a.yaml"
         assert blocked.is_dir(), "intermediate components must be created too"
-        with pytest.raises(IsADirectoryError):
+        with pytest.raises(DIR_WRITE_ERROR):
             blocked.write_text("x\n", encoding="utf-8")
 
     def test_the_asserted_path_is_the_sibling(self, tmp_path):
@@ -1180,7 +1181,7 @@ class TestTargetIsDirShape:
                            shapes=("target_is_dir",))
         out = _bad_path(tmp_path, "target_is_dir", row)
         assert out.is_dir() and out.parent.is_dir()
-        with pytest.raises(IsADirectoryError):
+        with pytest.raises(DIR_WRITE_ERROR):
             out.write_text("x\n", encoding="utf-8")
 
     def test_the_asserted_path_is_the_target_itself(self, tmp_path):
@@ -1249,7 +1250,7 @@ class TestArtifactIsDirShape:
 
         assert out.is_dir(), "the output directory must be usable — the tool's own mkdir -p has to succeed"
         assert (out / "summary.txt").is_dir()
-        with pytest.raises(IsADirectoryError):
+        with pytest.raises(DIR_WRITE_ERROR):
             open(out / "summary.txt", "w", encoding="utf-8")
         # A sibling artefact still writes: this shape blocks ONE sink, which
         # is what lets a row reach a sink the mkdir-side shapes never touch.

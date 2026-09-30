@@ -47,6 +47,7 @@ from _lib_io import (  # noqa: E402
     _output_write_names_target,
     output_write,
 )
+from _platform_fs import DIR_WRITE_ERROR  # noqa: E402
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
 TOOLS_DIR = REPO_ROOT / "scripts" / "tools"
@@ -302,7 +303,7 @@ def test_copy2_with_a_directory_source_flies_through(tmp_path: Path):
     out_dir = tmp_path / "build"
     out_dir.mkdir()
     dst = out_dir / "x.yaml"
-    with pytest.raises(IsADirectoryError) as ei:
+    with pytest.raises(DIR_WRITE_ERROR) as ei:
         with output_write(dst, flag="--output", action="copy into"):
             shutil.copy2(src, dst)
     assert not isinstance(ei.value, OutputWriteError)
