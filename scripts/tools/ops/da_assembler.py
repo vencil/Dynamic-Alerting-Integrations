@@ -505,13 +505,16 @@ def _rendered_cr_name(path: Path) -> str | None:
             return None
         with open(path, "rb") as fh:
             head = fh.read(_HEADER_READ_MAX)
-        first = head.split(b"\n", 1)[0].decode("utf-8")
+        # A CRLF file (written on Windows, or checked out with
+        # core.autocrlf) must not read its name as `8\r`.
+        first = head.split(b"\n", 1)[0].removesuffix(b"\r").decode("utf-8")
     except (OSError, ValueError):
         # ValueError: an over-long / NUL path, or UnicodeDecodeError.
         return None
     if not first.startswith(_HEADER_PREFIX):
         return None
-    _, sep, name = first[len(_HEADER_PREFIX):].partition("/")
+    # An earlier version's name never has `/`; a namespace might.
+    _, sep, name = first[len(_HEADER_PREFIX):].rpartition("/")
     return name if sep else None
 
 

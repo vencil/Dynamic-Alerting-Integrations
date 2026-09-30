@@ -504,6 +504,9 @@ class TestRenderCrFile:
 
     @pytest.mark.parametrize("content, expect", [
         pytest.param(_rendered("True"), "stale", id="own-header"),
+        # The name is after the LAST `/`: a `/` in the namespace is kept.
+        pytest.param(_rendered("True", "ns/a"), "stale",
+                     id="slash-in-namespace"),
         pytest.param(_rendered("true"), "other", id="case-folded-other-cr"),
         pytest.param("tenants: {}\n", "none", id="hand-written"),
         pytest.param(_NO_SLASH, "none", id="header-without-slash"),
@@ -519,7 +522,8 @@ class TestRenderCrFile:
         CR 的輸出、不要刪；沒有 da-assembler 檔頭（手寫檔）或是目錄 →
         不提示。Linux 上以寫入不同檔頭的 `True.yaml` 模擬開檔結果。
         會讓本測試轉紅的改動：不看檔頭、存在即提示（other／none 轉紅），
-        或不分辨檔頭 name（other 轉紅）。
+        或不分辨檔頭 name（other 轉紅）；以第一個 `/` 切 name
+        （slash-in-namespace 轉紅）。
         """
         cr_path = tmp_path / "cr.yaml"
         cr_path.write_text(self._K + "metadata: {name: yes}\n" + self._T,
@@ -550,6 +554,33 @@ class TestRenderCrFile:
         if before is not None:
             assert target.read_bytes() == before
 
+    @pytest.mark.parametrize("name, stale", [
+        pytest.param("010", "8.yaml", id="int-octal"),
+        pytest.param("yes", "True.yaml", id="bool-yes"),
+    ])
+    def test_crlf_header_gets_the_stale_hint(
+            self, name, stale, tmp_path, caplog):
+        """#2430：CRLF 換行的舊檔（Windows 寫出或 core.autocrlf）照樣提示。
+
+        檔頭行尾的 `\r` 不屬於 name；讀成 `8\r` 會被當成「另一個 CR 的
+        檔、不要刪」，方向相反。會讓本測試轉紅的改動：拿掉
+        `_rendered_cr_name` 去掉行尾 `\r` 的處理。
+        """
+        cr_path = tmp_path / "cr.yaml"
+        cr_path.write_text(self._K + f"metadata: {{name: {name}}}\n"
+                           + self._T, encoding="utf-8")
+        out_dir = tmp_path / "out"
+        out_dir.mkdir()
+        old = stale[:-len(".yaml")]
+        (out_dir / stale).write_bytes(
+            self._rendered(old).replace("\n", "\r\n").encode("utf-8"))
+        assert render_cr_file(cr_path, out_dir) == EXIT_CALLER_ERROR
+        assert f"{stale} exists in this --config-dir" in caplog.text, \
+            caplog.text
+        assert "cannot tell them apart" in caplog.text
+        assert "do not delete it" not in caplog.text
+        assert [p.name for p in out_dir.iterdir()] == [stale]
+
     def test_undecodable_header_has_no_stale_hint(self, tmp_path, caplog):
         """#2430：檔頭解不出 UTF-8 時當作讀不到，不提示、不 traceback。"""
         cr_path = tmp_path / "cr.yaml"
@@ -567,7 +598,7 @@ class TestRenderCrFile:
 
     def test_unreadable_config_dir_has_no_stale_hint(
             self, tmp_path, caplog):
-        """#2430：--config-dir 列不出來（不存在）時當作沒有舊檔。
+        """#2430：--config-dir 不存在、探測 `<old_name>.yaml` 失敗時當作沒有舊檔。
 
         舊檔檢查探測 `<old_name>.yaml`，它的 OSError 必須當成不存在：rc 2、
         只有一筆 ERROR、無提示、無 traceback。會讓本測試轉紅的改動：拿掉
