@@ -628,7 +628,64 @@ class TestProfileLookupSharesTheChainRead:
             "_profiles.yaml",
             "profiles:\n  gold:\n    mysql_slow_queries: 60\n  bad: [1, 2]\n",
             "'profiles.bad' must be a mapping, got list", 70, None),
+        "optional-overrides-entry-a-mapping": (
+            "_defaults.yaml",
+            "defaults:\n  mysql_connections: 80\noptional_overrides: [{a: 1}]\n",
+            "'optional_overrides' entries must be scalars, got dict", 70, 60),
+        "optional-overrides-entry-a-list": (
+            "_defaults.yaml",
+            "defaults:\n  mysql_connections: 80\noptional_overrides: [[a]]\n",
+            "'optional_overrides' entries must be scalars, got list", 70, 60),
     }
+
+    # The other side of the line: each of these LOADS on the exporter
+    # (parse_failed empty; the values are what /metrics serves, measured
+    # against LoadDir), so nothing may be skipped.
+    _NULL_IS_FINE = {
+        "profile-body-null": (
+            "_profiles.yaml", "profiles:\n  gold: ~\n", {
+                "mysql_connections": 70, "mysql_slow_queries": 90}),
+        "sibling-profile-body-null": (
+            "_profiles.yaml",
+            "profiles:\n  gold:\n    mysql_slow_queries: 60\n  bad: ~\n", {
+                "mysql_connections": 70, "mysql_slow_queries": 60}),
+        "optional-overrides-null": (
+            "_defaults.yaml",
+            "defaults:\n  mysql_connections: 80\n  mysql_slow_queries: 90\n"
+            "optional_overrides: ~\n", {
+                "mysql_connections": 70, "mysql_slow_queries": 60}),
+        "optional-overrides-scalar-entries": (
+            "_defaults.yaml",
+            "defaults:\n  mysql_connections: 80\n  mysql_slow_queries: 90\n"
+            "optional_overrides: [1, ~, true, x]\n", {
+                "mysql_connections": 70, "mysql_slow_queries": 60}),
+        # /metrics serves no row without a platform default, so there is no
+        # value to compare here — only that the file is not dropped.
+        "defaults-null": ("_defaults.yaml", "defaults: ~\n", None),
+    }
+
+    @pytest.mark.parametrize("case", sorted(_NULL_IS_FINE))
+    def test_a_null_value_is_not_a_wrong_type(self, tmp_path, capsys, case):
+        fname, body, resolved = self._NULL_IS_FINE[case]
+        files = {
+            "_defaults.yaml":
+                "defaults:\n  mysql_connections: 80\n  mysql_slow_queries: 90\n",
+            "tx.yaml": "tenants:\n  tx:\n    _profile: gold\n"
+                       "    mysql_connections: 70\n",
+            "_profiles.yaml": "profiles:\n  gold:\n    mysql_slow_queries: 60\n",
+        }
+        files[fname] = body
+        for name, text in files.items():
+            (tmp_path / name).write_text(text, encoding="utf-8")
+        d = str(tmp_path)
+        assert diagnose.lookup_tenant_profile("tx", d) == "gold"
+        chain = diagnose.resolve_inheritance_chain("tx", d)
+        assert "skipped_unusable_files" not in chain
+        if resolved is not None:
+            assert chain["resolved"] == resolved
+        result = self._check(d)
+        assert "skipped_unusable_files" not in result["inheritance_chain"]
+        assert "WARN" not in capsys.readouterr().err
 
     @pytest.mark.parametrize("case", sorted(_WRONG_TYPE))
     def test_a_wrong_type_value_skips_its_file_instead_of_crashing(

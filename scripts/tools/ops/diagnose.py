@@ -271,11 +271,13 @@ def _file_shape_error(raw: dict) -> str | None:
 
     The exporter decodes every conf.d file into ONE typed struct, so a
     `defaults:` that is not a mapping, an `optional_overrides:` that is not
-    a list, or a profile body that is not a mapping fails the decode and the
-    FILE goes to parse_failed — every key in it, its `tenants:` block and
-    its other profiles included (measured against LoadDir). Absent or null
-    is fine. These used to reach `.items()` / iteration here and end the
-    run with a traceback.
+    a list (or holds a mapping or a list), or a profile body that is not a
+    mapping fails the decode and the FILE goes to parse_failed — every key
+    in it, its `tenants:` block and its other profiles included (measured
+    against LoadDir). ⛔ Absent or NULL is fine — `defaults: ~`,
+    `optional_overrides: ~`, `gold: ~` all load (measured; pinned by
+    test_a_null_value_is_not_a_wrong_type). Some of these shapes used to end
+    the run with a traceback; the rest were read as if valid.
     """
     shapes = (("defaults", dict, "a mapping"),
               ("optional_overrides", list, "a list"),
@@ -284,6 +286,12 @@ def _file_shape_error(raw: dict) -> str | None:
         v = raw.get(key)
         if v is not None and not isinstance(v, want):
             return f"'{key}' must be {noun}, got {type(v).__name__}"
+    # Each entry decodes as a string: a scalar of any kind (int, null,
+    # bool) loads, a mapping or a sequence fails the file.
+    for item in raw.get("optional_overrides") or []:
+        if isinstance(item, (dict, list)):
+            return (f"'optional_overrides' entries must be scalars, got "
+                    f"{type(item).__name__}")
     for name, body in (raw.get("profiles") or {}).items():
         if body is not None and not isinstance(body, dict):
             return (f"'profiles.{name}' must be a mapping, got "
