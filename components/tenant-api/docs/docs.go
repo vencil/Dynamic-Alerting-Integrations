@@ -994,7 +994,7 @@ const docTemplate = `{
         },
         "/api/v1/tenants/{id}": {
             "get": {
-                "description": "Returns the raw YAML and resolved thresholds for a single tenant.\nWhen the tenant's file cannot be loaded as a tenant config, the answer is still 200 with raw_yaml and\nsource_hash, plus ` + "`" + `config_error` + "`" + ` (malformed_yaml | invalid_config, as on the list row); threshold-exporter\nskips such a file, so resolved_thresholds, custom_alerts and the validation fields are absent (not empty:\nthe file's content is not vouched for). Partial writes refuse such a file (409 TENANT_CONFIG_NOT_LOADABLE) until the\ntenant file itself is repaired; a whole-file PUT can replace one whose only problem is a non-UTF-8 tenant id, while a\nYAML syntax error, a non-mapping tenants: or duplicate keys currently has to be fixed in git.",
+                "description": "Returns the raw YAML and resolved thresholds for a single tenant.\nWhen the tenant's file cannot be loaded as a tenant config, the answer is still 200 with raw_yaml and\nsource_hash, plus ` + "`" + `config_error` + "`" + ` (malformed_yaml | invalid_config, as on the list row); threshold-exporter\nskips such a file, so resolved_thresholds, custom_alerts and the validation fields are absent (not empty:\nthe file's content is not vouched for). Partial writes refuse such a file (409 TENANT_CONFIG_NOT_LOADABLE) until the\ntenant file itself is repaired. A whole-file PUT can replace it. When tenant-api cannot parse the current file,\nthat PUT requires write permission on all tenants (an RBAC rule with tenants: [\"*\"] granting write and no\norg-scope, environments or domains; a prefix pattern does not count) and is otherwise refused with 400, file\nunchanged — fix it in git then. When allowed, its end-of-life recipe usage counts as none, so a body with an\nend-of-life recipe is refused, and other tenants' sections in the body count as added and are refused. A file\ntenant-api can parse is compared by its actual usage; a file that exists but cannot be read at all (permissions,\nI/O, a directory) refuses the write. \"Cannot parse\" is the end-of-life check's decode (the tenants: block, though\nthe whole file must be valid YAML); the added-section check decodes the whole file as a tenant config, and which\nbroken files each can parse is not guaranteed to match, so fix the file in git when needed.",
                 "produces": [
                     "application/json"
                 ],
@@ -1094,7 +1094,7 @@ const docTemplate = `{
                         }
                     },
                     "400": {
-                        "description": "Bad request. A receiver the body writes in _routing (receiver, overrides[].receiver, routes[].receiver) that Alertmanager could not load or the route generator would skip is code INVALID_BODY with one violations[] entry per problem (#2295; nothing written)",
+                        "description": "Bad request. A receiver the body writes in _routing (receiver, overrides[].receiver, routes[].receiver) that Alertmanager could not load or the route generator would skip is code INVALID_BODY with one violations[] entry per problem (#2295; nothing written). Also 400 when the current tenant file cannot be parsed and the caller lacks write permission on all tenants (#2405; nothing written)",
                         "schema": {
                             "$ref": "#/definitions/ErrorResponse"
                         }
@@ -1181,7 +1181,7 @@ const docTemplate = `{
         },
         "/api/v1/tenants/{id}/custom-alerts": {
             "put": {
-                "description": "Merges the supplied recipe array into the tenant's\n` + "`" + `_custom_alerts` + "`" + ` (comment-preserving AST edit), validates\n(S5 Go validator), and commits. Optimistic concurrency via\nbase_hash (409 on drift). Empty array deletes the key.\n409 TENANT_CONFIG_NOT_LOADABLE (with tenant_id, config_error) when the tenant's file cannot be loaded as a\ntenant config (malformed_yaml | invalid_config, as on GET): repair the tenant file itself first. A whole-file\nPUT can replace one whose only problem is a non-UTF-8 tenant id; a YAML syntax error, a non-mapping tenants:\nor duplicate keys currently has to be fixed in git.",
+                "description": "Merges the supplied recipe array into the tenant's\n` + "`" + `_custom_alerts` + "`" + ` (comment-preserving AST edit), validates\n(S5 Go validator), and commits. Optimistic concurrency via\nbase_hash (409 on drift). Empty array deletes the key.\n409 TENANT_CONFIG_NOT_LOADABLE (with tenant_id, config_error) when the tenant's file cannot be loaded as a\ntenant config (malformed_yaml | invalid_config, as on GET): repair the tenant file itself first, e.g. with a\nwhole-file PUT /api/v1/tenants/{id}, which replaces it (see GET /api/v1/tenants/{id} for the limits of that\nrepair, e.g. a broken file shared with other tenants).",
                 "consumes": [
                     "application/json"
                 ],

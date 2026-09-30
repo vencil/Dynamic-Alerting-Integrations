@@ -82,8 +82,15 @@ type tenantDetailNotLoadable struct {
 // @Description source_hash, plus `config_error` (malformed_yaml | invalid_config, as on the list row); threshold-exporter
 // @Description skips such a file, so resolved_thresholds, custom_alerts and the validation fields are absent (not empty:
 // @Description the file's content is not vouched for). Partial writes refuse such a file (409 TENANT_CONFIG_NOT_LOADABLE) until the
-// @Description tenant file itself is repaired; a whole-file PUT can replace one whose only problem is a non-UTF-8 tenant id, while a
-// @Description YAML syntax error, a non-mapping tenants: or duplicate keys currently has to be fixed in git.
+// @Description tenant file itself is repaired. A whole-file PUT can replace it. When tenant-api cannot parse the current file,
+// @Description that PUT requires write permission on all tenants (an RBAC rule with tenants: ["*"] granting write and no
+// @Description org-scope, environments or domains; a prefix pattern does not count) and is otherwise refused with 400, file
+// @Description unchanged — fix it in git then. When allowed, its end-of-life recipe usage counts as none, so a body with an
+// @Description end-of-life recipe is refused, and other tenants' sections in the body count as added and are refused. A file
+// @Description tenant-api can parse is compared by its actual usage; a file that exists but cannot be read at all (permissions,
+// @Description I/O, a directory) refuses the write. "Cannot parse" is the end-of-life check's decode (the tenants: block, though
+// @Description the whole file must be valid YAML); the added-section check decodes the whole file as a tenant config, and which
+// @Description broken files each can parse is not guaranteed to match, so fix the file in git when needed.
 // @Tags        tenants
 // @Produce     json
 // @Param       id   path     string true "Tenant ID"
