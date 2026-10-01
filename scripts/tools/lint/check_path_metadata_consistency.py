@@ -261,7 +261,7 @@ def _display_path(file: str, repo_root: Path) -> Path:
 
 
 def _format_mismatch(m: Mismatch, repo_root: Path) -> str:
-    display = _display_path(m.file, repo_root)
+    display = _display_path(m.file, repo_root).as_posix()
     return (
         f"WARN path/metadata mismatch: {display}\n"
         f"  tenant={m.tenant}  field={m.field}"
@@ -357,7 +357,7 @@ def main() -> int:
 
     if args.ci:
         for m in mismatches:
-            display = _display_path(m.file, repo_root)
+            display = _display_path(m.file, repo_root).as_posix()
             print(
                 f"{display}:0: warning: path/metadata mismatch "
                 f"tenant={m.tenant} field={m.field} "
