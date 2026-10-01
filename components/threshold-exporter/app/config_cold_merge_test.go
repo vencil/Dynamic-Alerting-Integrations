@@ -415,15 +415,17 @@ func TestColdLoadBrokenDefaultsKeepsItsSignal(t *testing.T) {
 // valid and must add 0 — so the broken-reload delta is attributable to the
 // syntax damage, not to "the file changed".
 //
-// ⚠️ WHICH CALL SITE THIS REACHES. `IncrementalLoad` redirects any nested
-// key to `fullDirLoadFrom` (`anyNestedKey`), so the flat-plane probe that
+// ⚠️ WHICH CALL SITE THIS REACHES. The tree has a carrier, so the watch
+// path reloads it hierarchically (commitFlatFrom); and even on a flat tree
+// `incrementalLoadFrom` redirects any nested key to `fullDirLoadFrom`
+// (`anyNestedKey`). Either way the flat-plane probe that
 // runs here is the one in pkg/config's flat build — `incrementalLoadFrom`'s
 // own copy is unreachable today (see the comment on it). ⛔ MEASURED: passing
 // nil metrics to the pkg/config probe drops this delta to +1 (red); passing
 // nil at `incrementalLoadFrom`'s call site leaves it green, because that
-// branch never runs. With the redirect removed this test already goes red
-// earlier, on the control's 65 (the defect
-// TestANestedTenantKeepsItsSubtreeDefaultAcrossAnIncrementalReload pins).
+// branch never runs. Removing the `anyNestedKey` redirect also leaves it
+// green since #1577 (the carrier keeps the reload hierarchical); that
+// redirect is pinned by TestConfigIdentity_IncrementalNestedRedirect.
 //
 // Content changes size on every write, so the scanner's hash sees them
 // regardless of TreeScanMtimeGuard — no sleep or backdating is needed.
@@ -454,8 +456,8 @@ func TestReloadBrokenNestedDefaultsKeepsItsFlatPlaneCount(t *testing.T) {
 	// Control: the file changes but stays valid.
 	writeFile(t, nested, "defaults:\n  mysql_connections: 65\n# still valid\n")
 	before := counter()
-	if err := mgr.IncrementalLoad(); err != nil {
-		t.Fatalf("IncrementalLoad (valid edit): %v", err)
+	if err := watchReload(mgr); err != nil {
+		t.Fatalf("reload (valid edit): %v", err)
 	}
 	if d := counter() - before; d != 0 {
 		t.Errorf("valid edit of the nested defaults: parse_failure{_defaults.yaml} +%v, want +0; log:\n%s", d, buf.String())
@@ -470,8 +472,8 @@ func TestReloadBrokenNestedDefaultsKeepsItsFlatPlaneCount(t *testing.T) {
 	buf.Reset()
 	writeFile(t, nested, "defaults: [this is not a map\n")
 	before = counter()
-	if err := mgr.IncrementalLoad(); err != nil {
-		t.Fatalf("IncrementalLoad (broken edit): %v", err)
+	if err := watchReload(mgr); err != nil {
+		t.Fatalf("reload (broken edit): %v", err)
 	}
 	if d := counter() - before; d != 2 {
 		t.Errorf("broken nested defaults on reload: parse_failure{_defaults.yaml} +%v, want +2 "+

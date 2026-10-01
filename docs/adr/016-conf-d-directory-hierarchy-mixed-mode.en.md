@@ -138,8 +138,8 @@ State after the PR #1343 fix:
 > the fact that a document once protected a defect.
 >
 > The shape at the time: the recursive scanner (`scanDirHierarchical`) was
-> **opt-in**, while both paths feeding `GetConfig()` (`IncrementalLoad` /
-> `fullDirLoad`) called the flat `scanDirFileHashes`. One tree, two readers,
+> **opt-in**, while both paths feeding `GetConfig()` (`IncrementalLoad`, an
+> entry since removed in #1577, / `fullDirLoad`) called the flat `scanDirFileHashes`. One tree, two readers,
 > unequal populations:
 >
 > ```text

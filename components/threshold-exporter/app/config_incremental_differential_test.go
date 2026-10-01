@@ -33,12 +33,31 @@ package main
 //	patch loop reverted to whole-map replace      270 / 300
 //	declaration index built without sorting       163 / 300  (was 0 / 300)
 //
-// The last row is why `tenantFileFor` gives `a.yaml` a key that
-// `_defaults.yaml` ALSO supplies: with disjoint keys the union's ordering is
+// The last row is why `tenantFileFor` gives `a.yaml` a key that the platform
+// file ALSO supplies: with disjoint keys the union's ordering is
 // unfalsifiable, and the sort was unguarded.
 //
 // The oracle is the only one that cannot drift: load the same directory from
 // scratch and compare what a scrape would see.
+//
+// ⛔ TWO TREES, BECAUSE THE WATCH PATH HAS TWO RELOADS (#1577). Reloads go
+// through watchReload — the watch loop's own entry — and that reaches the
+// fast path (incrementalLoadFrom, patchTenants) only for a tree with no
+// `_defaults` carrier. This file used to drive the removed `IncrementalLoad()`
+// on a tree WITH one, so every catch rate above was measured on a combination
+// production never runs. The "flat" tree keeps the same competing-sources shape
+// with the platform `tenants:` block in `_profiles.yaml` (no carrier), and is
+// the one that guards the fast path; the "carrier" tree is the original
+// fixture, and now differentials the hierarchical reload against a restart.
+// Re-measured on the flat tree after the move (each fix reverted alone,
+// failing seeds out of 300; the carrier tree catches none of them, since it
+// never reaches that code):
+//
+//	append alias reinstated                       56
+//	ApplyProfiles back inside the rebuild branch  270
+//	reclaim reverted to last-file-wins            270
+//	patch loop reverted to whole-map replace      270
+//	declaration index built without sorting       96
 
 import (
 	"fmt"
@@ -53,121 +72,146 @@ import (
 func TestTheFastPathAlwaysLandsWhereAFullLoadWould(t *testing.T) {
 	t.Parallel()
 	const seeds = 300
-	for seed := 0; seed < seeds; seed++ {
-		seed := seed
-		t.Run(fmt.Sprintf("seed=%d", seed), func(t *testing.T) {
-			dir := t.TempDir()
-			// ⛔ The platform file contributes a KEY of `t-shared`; `a.yaml`
-			// contributes a different one. Whole-map-replace loses one of them,
-			// per-key union keeps both — and only a tree with this shape can
-			// tell those apart.
-			writeTestYAML(t, filepath.Join(dir, "_defaults.yaml"),
-				"defaults:\n  mysql_connections: 80\n  mysql_slow_queries: 5\n  mysql_threads_running: 60\n"+
-					"tenants:\n  t-shared:\n    _profile: gold\n    mysql_slow_queries: \"3\"\n")
-			// ⛔ A PROFILE, because the fast path used to skip ApplyProfiles
-			// entirely and no generated tree without one can see that.
-			writeTestYAML(t, filepath.Join(dir, "_profiles.yaml"),
-				"profiles:\n  gold:\n    mysql_threads_running: \"95\"\n")
+	// ⛔ The platform file contributes a KEY of `t-shared`; `a.yaml`
+	// contributes a different one. Whole-map-replace loses one of them,
+	// per-key union keeps both — and only a tree with this shape can tell
+	// those apart.
+	// ⛔ A PROFILE, because the fast path used to skip ApplyProfiles
+	// entirely and no generated tree without one can see that.
+	trees := []struct {
+		name     string
+		flat     bool // no `_defaults` carrier: the watch path takes incrementalLoadFrom
+		platform map[string]string
+	}{
+		{"flat", true, map[string]string{
+			"_profiles.yaml": "profiles:\n  gold:\n    mysql_threads_running: \"95\"\n" +
+				"tenants:\n  t-shared:\n    _profile: gold\n    mysql_slow_queries: \"3\"\n",
+		}},
+		{"carrier", false, map[string]string{
+			"_defaults.yaml": "defaults:\n  mysql_connections: 80\n  mysql_slow_queries: 5\n  mysql_threads_running: 60\n" +
+				"tenants:\n  t-shared:\n    _profile: gold\n    mysql_slow_queries: \"3\"\n",
+			"_profiles.yaml": "profiles:\n  gold:\n    mysql_threads_running: \"95\"\n",
+		}},
+	}
+	for _, tree := range trees {
+		for seed := 0; seed < seeds; seed++ {
+			tree, seed := tree, seed
+			t.Run(fmt.Sprintf("%s/seed=%d", tree.name, seed), func(t *testing.T) {
+				differentialSeed(t, seed, tree.flat, tree.platform)
+			})
+		}
+	}
+}
 
-			// Deterministic, but actually mixed: splitmix64. A seed that
-			// reproduces by number is worth more than entropy — a stream whose
-			// low bits are a counter is worth nothing.
-			state := uint64(seed) + 0x9E3779B97F4A7C15
-			next := func(_ *int, n int) int {
-				state += 0x9E3779B97F4A7C15
-				z := state
-				z = (z ^ (z >> 30)) * 0xBF58476D1CE4E5B9
-				z = (z ^ (z >> 27)) * 0x94D049BB133111EB
-				z ^= z >> 31
-				return int(z % uint64(n))
+// differentialSeed is one seed of TestTheFastPathAlwaysLandsWhereAFullLoadWould
+// on the tree whose platform files are `platform`.
+func differentialSeed(t *testing.T, seed int, flat bool, platform map[string]string) {
+	dir := t.TempDir()
+	for name, body := range platform {
+		writeTestYAML(t, filepath.Join(dir, name), body)
+	}
+
+	// Deterministic, but actually mixed: splitmix64. A seed that
+	// reproduces by number is worth more than entropy — a stream whose
+	// low bits are a counter is worth nothing.
+	state := uint64(seed) + 0x9E3779B97F4A7C15
+	next := func(_ *int, n int) int {
+		state += 0x9E3779B97F4A7C15
+		z := state
+		z = (z ^ (z >> 30)) * 0xBF58476D1CE4E5B9
+		z = (z ^ (z >> 27)) * 0x94D049BB133111EB
+		z ^= z >> 31
+		return int(z % uint64(n))
+	}
+	var unused int
+
+	files := []string{"a.yaml", "b.yaml", "c.yaml"}
+	// Round 0: a starting tree, then three reload rounds each doing an
+	// arbitrary mix of add / edit / delete across those files.
+	for _, f := range files[:1+next(&unused, len(files)-1)] {
+		writeTestYAML(t, filepath.Join(dir, f), tenantFileFor(f, next(&unused, 90)+10))
+	}
+	m := NewConfigManager(dir)
+	if err := m.Load(); err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+	if flat {
+		requireFlatWatchPath(t, m)
+	}
+
+	for round := 0; round < 3; round++ {
+		touched := false
+		// ⛔ ONE ROUND IS FORCED TO BOTH ADD AND EDIT. That combination
+		// is what `append(changed, added...)` aliasing needs, and a
+		// purely random walk produced it too rarely to be a guard —
+		// reverting the fix left all 300 seeds green until this was
+		// forced. Which file plays which role still varies by seed.
+		if round == 1 {
+			var absent, present []string
+			for _, f := range files {
+				if _, err := os.Stat(filepath.Join(dir, f)); err == nil {
+					present = append(present, f)
+				} else {
+					absent = append(absent, f)
+				}
 			}
-			var unused int
-
-			files := []string{"a.yaml", "b.yaml", "c.yaml"}
-			// Round 0: a starting tree, then three reload rounds each doing an
-			// arbitrary mix of add / edit / delete across those files.
-			for _, f := range files[:1+next(&unused, len(files)-1)] {
+			if len(absent) > 0 && len(present) > 0 {
+				// ⛔ ONE INDEX, USED TWICE. This picked the filename at
+				// random but built the CONTENT for `absent[0]`. It
+				// survived only because the old counter-PRNG always
+				// left exactly one absent file; with a real stream the
+				// two diverge, two files declare the same tenant, and
+				// the full-load oracle dies with DuplicateTenantError —
+				// the test then fails on its own fixture while
+				// reporting a config error, which reads as a product
+				// defect. (#1569 blind review.)
+				add := absent[next(&unused, len(absent))]
+				writeTestYAML(t, filepath.Join(dir, add),
+					tenantFileFor(add, next(&unused, 90)+10))
+				edit := present[next(&unused, len(present))]
+				writeTestYAML(t, filepath.Join(dir, edit), tenantFileFor(edit, next(&unused, 90)+10))
+				touched = true
+			}
+		}
+		for _, f := range files {
+			switch next(&unused, 4) {
+			case 0: // leave it alone
+			case 1, 2: // write (add or edit)
 				writeTestYAML(t, filepath.Join(dir, f), tenantFileFor(f, next(&unused, 90)+10))
+				touched = true
+			case 3: // delete if present
+				if err := os.Remove(filepath.Join(dir, f)); err == nil {
+					touched = true
+				}
 			}
-			m := NewConfigManager(dir)
-			if err := m.Load(); err != nil {
-				t.Fatalf("Load: %v", err)
-			}
+		}
+		if !touched {
+			continue
+		}
+		if err := watchReload(m); err != nil {
+			t.Fatalf("round %d reload: %v", round, err)
+		}
 
-			for round := 0; round < 3; round++ {
-				touched := false
-				// ⛔ ONE ROUND IS FORCED TO BOTH ADD AND EDIT. That combination
-				// is what `append(changed, added...)` aliasing needs, and a
-				// purely random walk produced it too rarely to be a guard —
-				// reverting the fix left all 300 seeds green until this was
-				// forced. Which file plays which role still varies by seed.
-				if round == 1 {
-					var absent, present []string
-					for _, f := range files {
-						if _, err := os.Stat(filepath.Join(dir, f)); err == nil {
-							present = append(present, f)
-						} else {
-							absent = append(absent, f)
-						}
-					}
-					if len(absent) > 0 && len(present) > 0 {
-						// ⛔ ONE INDEX, USED TWICE. This picked the filename at
-						// random but built the CONTENT for `absent[0]`. It
-						// survived only because the old counter-PRNG always
-						// left exactly one absent file; with a real stream the
-						// two diverge, two files declare the same tenant, and
-						// the full-load oracle dies with DuplicateTenantError —
-						// the test then fails on its own fixture while
-						// reporting a config error, which reads as a product
-						// defect. (#1569 blind review.)
-						add := absent[next(&unused, len(absent))]
-						writeTestYAML(t, filepath.Join(dir, add),
-							tenantFileFor(add, next(&unused, 90)+10))
-						edit := present[next(&unused, len(present))]
-						writeTestYAML(t, filepath.Join(dir, edit), tenantFileFor(edit, next(&unused, 90)+10))
-						touched = true
-					}
-				}
-				for _, f := range files {
-					switch next(&unused, 4) {
-					case 0: // leave it alone
-					case 1, 2: // write (add or edit)
-						writeTestYAML(t, filepath.Join(dir, f), tenantFileFor(f, next(&unused, 90)+10))
-						touched = true
-					case 3: // delete if present
-						if err := os.Remove(filepath.Join(dir, f)); err == nil {
-							touched = true
-						}
-					}
-				}
-				if !touched {
-					continue
-				}
-				if err := m.IncrementalLoad(); err != nil {
-					t.Fatalf("round %d IncrementalLoad: %v", round, err)
-				}
-
-				// ⛔ COMPARED EVERY ROUND. Comparing only after the last one
-				// misses a divergence that appears in round 1 and is masked
-				// again in round 2 — and a fast path that self-heals is still
-				// a fast path that served wrong data in between.
-				reference := NewConfigManager(dir)
-				if err := reference.Load(); err != nil {
-					t.Fatalf("round %d reference Load: %v", round, err)
-				}
-				if got, want := scrapeView(m.GetConfig()), scrapeView(reference.GetConfig()); got != want {
-					t.Fatalf("round %d: the fast path published something a restart does not reproduce\n"+
-						"--- incremental ---\n%s\n--- full load ---\n%s\n"+
-						"tree now:\n%s", round, got, want, listTree(t, dir))
-				}
-			}
-		})
+		// ⛔ COMPARED EVERY ROUND. Comparing only after the last one
+		// misses a divergence that appears in round 1 and is masked
+		// again in round 2 — and a fast path that self-heals is still
+		// a fast path that served wrong data in between.
+		reference := NewConfigManager(dir)
+		if err := reference.Load(); err != nil {
+			t.Fatalf("round %d reference Load: %v", round, err)
+		}
+		if got, want := scrapeView(m.GetConfig()), scrapeView(reference.GetConfig()); got != want {
+			t.Fatalf("round %d: the fast path published something a restart does not reproduce\n"+
+				"--- incremental ---\n%s\n--- full load ---\n%s\n"+
+				"tree now:\n%s", round, got, want, listTree(t, dir))
+		}
 	}
 }
 
 // tenantFileFor gives each file a tenant of its own. `a.yaml` additionally
-// contributes ONE key of the shared tenant that `_defaults.yaml` also
-// contributes to — the legitimate two-sources-one-tenant shape.
+// contributes ONE key of the shared tenant that the platform file's
+// `tenants:` block also contributes to — the legitimate
+// two-sources-one-tenant shape.
 //
 // ⛔ THE SHARED TENANT IS WHY THIS CATCHES ANYTHING, and it has to come from a
 // PLATFORM file. The first version had two ordinary tenant files declare the
@@ -185,7 +229,7 @@ func tenantFileFor(name string, value int) string {
 	body := fmt.Sprintf("tenants:\n  %s:\n    mysql_connections: \"%d\"\n    mysql_slow_queries: \"%d\"\n",
 		own, value, value+1)
 	if name == "a.yaml" {
-		// ⛔ THE SECOND KEY IS THE ONE `_defaults.yaml` ALSO SUPPLIES, so the
+		// ⛔ THE SECOND KEY IS THE ONE THE PLATFORM FILE ALSO SUPPLIES, so the
 		// two sources COMPETE for it and the merge order decides the winner.
 		// Without a contested key the union's ordering is unfalsifiable:
 		// deleting the sort from indexTenantDeclarations left all 300 seeds

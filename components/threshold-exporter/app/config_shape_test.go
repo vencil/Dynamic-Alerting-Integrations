@@ -145,7 +145,7 @@ func TestLoad_DirMode_PublishesConfigShape(t *testing.T) {
 	}
 }
 
-// Flat directory mode (no `_defaults.yaml`) reloads through IncrementalLoad,
+// Flat directory mode (no `_defaults.yaml`) reloads through incrementalLoadFrom,
 // whose commit carries the unchanged files' cached partials — an untouched
 // file must still count.
 func TestIncrementalLoad_PublishesConfigShape(t *testing.T) {
@@ -161,11 +161,11 @@ func TestIncrementalLoad_PublishesConfigShape(t *testing.T) {
 		t.Fatalf("Load: %v", err)
 	}
 	writeTestYAML(t, filepath.Join(dir, "small.yaml"), tenantsYAML("small", 3, 1))
-	if err := m.IncrementalLoad(); err != nil {
-		t.Fatalf("IncrementalLoad: %v", err)
+	if err := watchReload(m); err != nil {
+		t.Fatalf("reload: %v", err)
 	}
 	if tenants, keys := shapeGauges(fresh); tenants != 9 || keys != 9 {
-		t.Fatalf("after IncrementalLoad: max_tenants_per_file=%v max_mapping_keys=%v, want 9 and 9", tenants, keys)
+		t.Fatalf("after reload: max_tenants_per_file=%v max_mapping_keys=%v, want 9 and 9", tenants, keys)
 	}
 }
 

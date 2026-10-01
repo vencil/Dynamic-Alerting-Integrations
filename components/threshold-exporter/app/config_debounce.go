@@ -24,7 +24,7 @@ package main
 // the public pkg/config: the debounce state is intrinsic to the running
 // daemon's reload loop — library consumers (tenant-api) don't need it.
 //
-// Interaction with the flat incremental path (v2.6.0, IncrementalLoad):
+// Interaction with the flat incremental path (v2.6.0, incrementalLoadFrom):
 //
 //   - When hierarchicalMode == false, diffAndReload delegates to
 //     incrementalLoadFrom (fed the scan it already took) so legacy flat
@@ -380,9 +380,9 @@ func (m *ConfigManager) scanAndCheckHierarchical(prior reloadPriorState) (reload
 
 	// If no _defaults.yaml was discovered AND we haven't activated
 	// hierarchical mode yet, stay on the flat path — fed this scan, so the
-	// flat tick does not walk again. IncrementalLoad's own cold-start
-	// guard (no flat cache yet → full load) is kept here for the same
-	// reason it exists there.
+	// flat tick does not walk again. With no flat cache yet there is
+	// nothing to diff against, so that case is a full load of the same
+	// scan instead.
 	if !prior.hierarchicalMode && len(scan.Defaults) == 0 {
 		m.mu.RLock()
 		hasCache := len(m.flat.hashes) > 0
@@ -803,7 +803,7 @@ func (m *ConfigManager) diffAndReload() (reloaded, noOp int, err error) {
 	scan, fallback, scanErr := m.scanAndCheckHierarchical(prior)
 	if fallback {
 		// Either an error (returned to caller) or a successful flat-mode
-		// IncrementalLoad. Both cases: nothing more to do here.
+		// incremental reload. Both cases: nothing more to do here.
 		return 0, 0, scanErr
 	}
 

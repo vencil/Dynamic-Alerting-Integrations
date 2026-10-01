@@ -8,7 +8,7 @@ package config
 // link's OWN mtime; os.Chtimes follows links). Without that, the defective
 // walker re-reads the young link through the guard and these tests pass on
 // the defect. The app-level end-to-end twin (the manager's watch tick and
-// IncrementalLoad) is app/config_symlink_reload_test.go.
+// its reload) is app/config_symlink_reload_test.go.
 //
 // Seams: none — t.TempDir() trees; the scan logger is a local buffer.
 

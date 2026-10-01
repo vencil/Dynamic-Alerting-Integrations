@@ -247,7 +247,7 @@ func TestBothWrappersAreProjectionsOfOneScan(t *testing.T) {
 }
 
 // TestFlatWrapperKeepsItsCacheRule pins the projection detail the flat
-// plane's IncrementalLoad depends on: with a prior, only changed/added files
+// plane's incrementalLoadFrom depends on: with a prior, only changed/added files
 // carry bytes, and a stale prior hash on an unchanged-by-stat file is
 // trusted (that is what "fast-path" has always meant here).
 func TestFlatWrapperKeepsItsCacheRule(t *testing.T) {

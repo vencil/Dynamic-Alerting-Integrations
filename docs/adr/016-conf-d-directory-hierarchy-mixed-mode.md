@@ -140,7 +140,8 @@ Directory Scanner 的設計哲學是「檔案系統即 source of truth」。
 > 過度宣稱的證據——刪掉等於把「文件保護缺陷」這件事也一併抹掉。
 >
 > 當時的形狀：遞迴掃描器（`scanDirHierarchical`）是 **opt-in**，而餵給
-> `GetConfig()` 的兩條路（`IncrementalLoad` / `fullDirLoad`）用的都是平面的
+> `GetConfig()` 的兩條路（`IncrementalLoad`——該入口已於 #1577 移除——／
+> `fullDirLoad`）用的都是平面的
 > `scanDirFileHashes`。同一份設定、兩個 reader、母體不相等：
 >
 > ```text

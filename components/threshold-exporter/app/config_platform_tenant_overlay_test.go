@@ -517,22 +517,61 @@ func TestNestedPlatformFileTenantsBlockIsNamed(t *testing.T) {
 	})
 }
 
-// TestPlatformTenantOverlaySurvivesReload drives the same edits through
-// both reload entries and checks precedence and existence after each one:
+// TestPlatformTenantOverlaySurvivesReload drives tenant-file and
+// platform-file edits through the watch path's reload and checks precedence
+// and existence after each one. On the carrier layout that reload is the
+// hierarchical one (commitFlatFrom on the reload's own scan) on every step.
 //
-//   - IncrementalLoad: a tenant-file-only edit takes the patchTenants fast
-//     path (reclaimTenantFrom's order), a platform-file edit the
-//     incremental full rebuild (mergePartialConfigs);
-//   - diffAndReload: the debounced production path (commitFlatFrom on the
-//     reload's own scan).
+// ⚠️ CARRIER LAYOUT ONLY, AND THAT IS A LOSS (#1577). This test reads what
+// /metrics serves, and a tree with no `_defaults` carrier serves no threshold
+// row at all (measured: Resolve() returns 0 rows for a tenant file setting
+// mysql_connections; 1 row once a carrier exists) — every key is "not in
+// defaults" — so on the only layout where the watch path takes
+// incrementalLoadFrom there is nothing for these assertions to read. It used
+// to reach patchTenants through the removed `IncrementalLoad()` on the
+// carrier tree, a combination production never runs. On the flat layout
+// the fast path's precedence is pinned by the flat tree of
+// TestTheFastPathAlwaysLandsWhereAFullLoadWould (every tenant override
+// against a full load), and which tenants exist by the flat leg of
+// TestPlatformTenantOverlayReloadMatchesFreshLoad.
 //
 // The tenant file is `TX.yaml` on purpose: it sorts BEFORE `_defaults.yaml`,
 // which is the spelling that used to lose to the platform value.
 func TestPlatformTenantOverlaySurvivesReload(t *testing.T) {
 	t.Parallel()
 	f := func(v float64) *float64 { return &v }
-	const platform = "defaults:\n  mysql_connections: 80\n" +
-		"tenants:\n  tx:\n    mysql_connections: \"60\"\n"
+	for _, tree := range overlayReloadTrees() {
+		if tree.flat {
+			continue // no threshold rows to read — see above
+		}
+		overlaySurvivesReload(t, tree, f)
+	}
+}
+
+// overlayReloadTree is one platform-file layout for the reload tests below:
+// `platform` names tx at 60, `ty` serves 80 as the control. The flat layout
+// has no `_defaults` carrier, so the watch path reloads it through
+// incrementalLoadFrom; the carrier layout is reloaded hierarchically (#1577).
+type overlayReloadTree struct {
+	name, platformFile, platform, ty string
+	flat                             bool
+}
+
+func overlayReloadTrees() []overlayReloadTree {
+	return []overlayReloadTree{
+		{"flat", "_profiles.yaml",
+			"tenants:\n  tx:\n    mysql_connections: \"60\"\n",
+			"tenants:\n  ty:\n    mysql_connections: \"80\"\n", true},
+		{"carrier", "_defaults.yaml",
+			"defaults:\n  mysql_connections: 80\n" +
+				"tenants:\n  tx:\n    mysql_connections: \"60\"\n",
+			"tenants:\n  ty: {}\n", false},
+	}
+}
+
+func overlaySurvivesReload(t *testing.T, tree overlayReloadTree, f func(float64) *float64) {
+	t.Helper()
+	platform := tree.platform
 	steps := []struct {
 		name   string
 		mutate func(t *testing.T, dir string)
@@ -544,7 +583,7 @@ func TestPlatformTenantOverlaySurvivesReload(t *testing.T) {
 				"tenants:\n  tx:\n    mysql_connections: \"70\"\n    redis_memory_used_bytes: \"1\"\n")
 		}, f(70), false},
 		{"platform-file-edit", func(t *testing.T, dir string) {
-			writeTestYAML(t, filepath.Join(dir, "_defaults.yaml"), platform+"    redis_memory_used_bytes: \"2\"\n")
+			writeTestYAML(t, filepath.Join(dir, tree.platformFile), platform+"    redis_memory_used_bytes: \"2\"\n")
 		}, f(70), false},
 		{"tenant-file-removed", func(t *testing.T, dir string) {
 			if err := os.Remove(filepath.Join(dir, "TX.yaml")); err != nil {
@@ -555,39 +594,31 @@ func TestPlatformTenantOverlaySurvivesReload(t *testing.T) {
 			writeTestYAML(t, filepath.Join(dir, "0tx.yaml"), "tenants:\n  tx: {}\n")
 		}, f(60), false},
 	}
-	reloaders := map[string]func(m *ConfigManager) error{
-		"IncrementalLoad": func(m *ConfigManager) error { return m.IncrementalLoad() },
-		"diffAndReload": func(m *ConfigManager) error {
-			_, _, err := m.diffAndReload()
-			return err
-		},
+	rname := tree.name
+	dir := t.TempDir()
+	writeOverlayTree(t, dir, map[string]string{
+		tree.platformFile: platform,
+		"TX.yaml":         "tenants:\n  tx:\n    mysql_connections: \"70\"\n",
+		"ty.yaml":         tree.ty,
+	})
+	m, buf := newOverlayManager(t, dir)
+	if tree.flat {
+		requireFlatWatchPath(t, m)
 	}
-	for rname, reload := range reloaders {
-		t.Run(rname, func(t *testing.T) {
-			t.Parallel()
-			dir := t.TempDir()
-			writeOverlayTree(t, dir, map[string]string{
-				"_defaults.yaml": platform,
-				"TX.yaml":        "tenants:\n  tx:\n    mysql_connections: \"70\"\n",
-				"ty.yaml":        "tenants:\n  ty: {}\n",
-			})
-			m, buf := newOverlayManager(t, dir)
-			assertServed(t, m, rname+"/load", "tx", f(70))
-			for i, st := range steps {
-				buf.Reset()
-				st.mutate(t, dir)
-				touchTreeAt(t, dir, time.Now().Add(time.Duration(i+3)*time.Second))
-				if err := reload(m); err != nil {
-					t.Fatalf("%s/%s: %v", rname, st.name, err)
-				}
-				assertServed(t, m, rname+"/"+st.name, "tx", st.want)
-				assertServed(t, m, rname+"/"+st.name+" (control)", "ty", f(80))
-				got := len(logLinesWith(buf.String(), orphanAnchor)) > 0
-				if got != st.orphan {
-					t.Errorf("%s/%s: orphan WARN emitted=%v, want %v; log:\n%s", rname, st.name, got, st.orphan, buf.String())
-				}
-			}
-		})
+	assertServed(t, m, rname+"/load", "tx", f(70))
+	for i, st := range steps {
+		buf.Reset()
+		st.mutate(t, dir)
+		touchTreeAt(t, dir, time.Now().Add(time.Duration(i+3)*time.Second))
+		if err := watchReload(m); err != nil {
+			t.Fatalf("%s/%s: %v", rname, st.name, err)
+		}
+		assertServed(t, m, rname+"/"+st.name, "tx", st.want)
+		assertServed(t, m, rname+"/"+st.name+" (control)", "ty", f(80))
+		got := len(logLinesWith(buf.String(), orphanAnchor)) > 0
+		if got != st.orphan {
+			t.Errorf("%s/%s: orphan WARN emitted=%v, want %v; log:\n%s", rname, st.name, got, st.orphan, buf.String())
+		}
 	}
 }
 
@@ -626,10 +657,11 @@ func snapshotServed(m *ConfigManager, probe []string) servedSnapshot {
 // the platform entry kept the deleted tenant alive after an incremental
 // reload) and the `_`-file skip in refreshTenantSources (without it
 // /effective answered for the orphan, attributed to `_defaults.yaml`).
+// Both halves live in incrementalLoadFrom, which the watch path reaches only
+// on the flat layout of overlayReloadTrees (#1577); the carrier layout pins
+// the hierarchical reload against the same oracle.
 func TestPlatformTenantOverlayReloadMatchesFreshLoad(t *testing.T) {
 	t.Parallel()
-	const platform = "defaults:\n  mysql_connections: 80\n" +
-		"tenants:\n  tx:\n    mysql_connections: \"60\"\n"
 	probe := []string{"tx", "tw", "ty"}
 	steps := []struct {
 		name, body string
@@ -639,27 +671,25 @@ func TestPlatformTenantOverlayReloadMatchesFreshLoad(t *testing.T) {
 		{"tenant-back", "tenants:\n  tx:\n    mysql_connections: \"70\"\n"},
 		{"tenant-emptied-again", "tenants: {}\n"},
 	}
-	reloaders := map[string]func(m *ConfigManager) error{
-		"IncrementalLoad": func(m *ConfigManager) error { return m.IncrementalLoad() },
-		"diffAndReload": func(m *ConfigManager) error {
-			_, _, err := m.diffAndReload()
-			return err
-		},
-	}
-	for rname, reload := range reloaders {
+	for _, tree := range overlayReloadTrees() {
+		tree := tree
+		rname := tree.name
 		t.Run(rname, func(t *testing.T) {
 			t.Parallel()
 			dir := t.TempDir()
 			writeOverlayTree(t, dir, map[string]string{
-				"_defaults.yaml": platform,
-				"TX.yaml":        "tenants:\n  tx:\n    mysql_connections: \"70\"\n",
-				"ty.yaml":        "tenants:\n  ty: {}\n",
+				tree.platformFile: tree.platform,
+				"TX.yaml":         "tenants:\n  tx:\n    mysql_connections: \"70\"\n",
+				"ty.yaml":         tree.ty,
 			})
 			m, _ := newOverlayManager(t, dir)
+			if tree.flat {
+				requireFlatWatchPath(t, m)
+			}
 			for i, st := range steps {
 				writeTestYAML(t, filepath.Join(dir, "TX.yaml"), st.body)
 				touchTreeAt(t, dir, time.Now().Add(time.Duration(i+3)*time.Second))
-				if err := reload(m); err != nil {
+				if err := watchReload(m); err != nil {
 					t.Fatalf("%s/%s: %v", rname, st.name, err)
 				}
 				fresh, _ := newOverlayManager(t, dir)
@@ -683,24 +713,29 @@ func TestPlatformTenantOverlayReloadMatchesFreshLoad(t *testing.T) {
 // unparseable keeps its tenant on the last good values on the incremental
 // patch path (the fail-safe, #1980) — platform-supplied keys included. The
 // orphan WARN must not then claim the platform entry is ignored while the
-// same commit serves it. Two trees: one with the defaults carrier (the
-// IncrementalLoad patch path) and a flat one whose per-tenant platform
-// values live in `_profiles.yaml` (no carrier — diffAndReload delegates to
-// incrementalLoadFrom there too).
+// same commit serves it.
+//
+// ⚠️ TWO TREES, TWO ANSWERS, ONE RULE (#1577). The watch path reaches the
+// patch path only for a tree with no `_defaults` carrier: the flat leg, whose
+// per-tenant platform values live in `_profiles.yaml`, keeps tx. With a
+// carrier every reload is the hierarchical path's full flat rebuild, which
+// drops tx as a restart does — so that leg asserts the other half of the
+// rule: tx is not served, and the WARN does say its platform entry is
+// ignored. (This leg used to drive the removed `IncrementalLoad()` and assert
+// the fail-safe on the carrier tree too: a state the watch path never
+// produces.)
 func TestPlatformOrphanWarnFollowsWhatIsServed(t *testing.T) {
 	t.Parallel()
 	cases := []struct {
-		name     string
-		platform string
-		body     string
-		reloader string
+		name       string
+		platform   string
+		body       string
+		wantServed bool
 	}{
-		{"carrier/IncrementalLoad", "_defaults.yaml",
-			"defaults:\n  mysql_connections: 80\ntenants:\n  tx:\n    mysql_connections: \"60\"\n", "IncrementalLoad"},
-		{"flat-profiles/IncrementalLoad", "_profiles.yaml",
-			"tenants:\n  tx:\n    mysql_connections: \"60\"\n", "IncrementalLoad"},
-		{"flat-profiles/diffAndReload", "_profiles.yaml",
-			"tenants:\n  tx:\n    mysql_connections: \"60\"\n", "diffAndReload"},
+		{"carrier (hierarchical path drops it)", "_defaults.yaml",
+			"defaults:\n  mysql_connections: 80\ntenants:\n  tx:\n    mysql_connections: \"60\"\n", false},
+		{"flat-profiles (patch path keeps it)", "_profiles.yaml",
+			"tenants:\n  tx:\n    mysql_connections: \"60\"\n", true},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
@@ -715,23 +750,32 @@ func TestPlatformOrphanWarnFollowsWhatIsServed(t *testing.T) {
 			if got := m.GetConfig().Tenants["tx"]["mysql_connections"].Default; got != "60" {
 				t.Fatalf("load: tx mysql_connections=%q, want the platform's 60", got)
 			}
+			if tc.wantServed {
+				requireFlatWatchPath(t, m)
+			}
 			buf.Reset()
 			writeTestYAML(t, filepath.Join(dir, "tx.yaml"), "tenants:\n  tx: [1\n")
 			touchTreeAt(t, dir, time.Now().Add(3*time.Second))
-			var err error
-			if tc.reloader == "IncrementalLoad" {
-				err = m.IncrementalLoad()
-			} else {
-				_, _, err = m.diffAndReload()
-			}
-			if err != nil {
+			if err := watchReload(m); err != nil {
 				t.Fatal(err)
 			}
 			ov, served := m.GetConfig().Tenants["tx"]
+			lines := logLinesWith(buf.String(), orphanAnchor)
+			if !tc.wantServed {
+				if served {
+					t.Fatalf("tx served (%v) after its only file stopped parsing on the hierarchical path — "+
+						"this leg's premise is gone", ov)
+				}
+				if len(lines) != 1 {
+					t.Errorf("tx is not served, so its platform entry is ignored — want exactly one orphan WARN, got %d: %q",
+						len(lines), lines)
+				}
+				return
+			}
 			if !served || ov["mysql_connections"].Default != "60" || ov["redis_x"].Default != "1" {
 				t.Fatalf("fail-safe not in effect (served=%v, %v) — this test's premise is gone", served, ov)
 			}
-			if lines := logLinesWith(buf.String(), orphanAnchor); len(lines) != 0 {
+			if len(lines) != 0 {
 				t.Errorf("tx is still served with the platform value, yet: %q", lines)
 			}
 		})
@@ -740,7 +784,7 @@ func TestPlatformOrphanWarnFollowsWhatIsServed(t *testing.T) {
 
 // TestPlatformOrphanStaysOutAfterPlatformFileEdit: an orphan platform entry
 // must stay out of /metrics when the PLATFORM file itself is edited, which
-// sends IncrementalLoad down its full-rebuild branch
+// on the flat tree sends incrementalLoadFrom down its full-rebuild branch
 // (mergePartialConfigs(newConfigs, exists)). Measured: passing nil there
 // put tx on /metrics while the WARN still said the entry was ignored, and
 // no other test noticed. Two trees: the defaults carrier, and a flat one
@@ -768,7 +812,7 @@ func TestPlatformOrphanStaysOutAfterPlatformFileEdit(t *testing.T) {
 			buf.Reset()
 			writeTestYAML(t, filepath.Join(dir, tc.platform), tc.body+"    redis_x: \"1\"\n")
 			touchTreeAt(t, dir, time.Now().Add(3*time.Second))
-			if err := m.IncrementalLoad(); err != nil {
+			if err := watchReload(m); err != nil {
 				t.Fatal(err)
 			}
 			if ov, served := m.GetConfig().Tenants["tx"]; served {

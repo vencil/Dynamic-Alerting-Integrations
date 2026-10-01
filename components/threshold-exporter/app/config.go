@@ -20,7 +20,7 @@ import (
 // ============================================================
 
 // flatScanState bundles the v2.1.0 incremental-reload caches used by the
-// flat-mode pipeline (`scanDirTree` + `IncrementalLoad`). Per-file
+// flat-mode pipeline (`scanDirTree` + `incrementalLoadFrom`). Per-file
 // SHA-256 + parsed partial config + mtime fast-path stat. nil maps when
 // the manager is in single-file mode or has not yet completed its first
 // directory scan.
@@ -76,7 +76,7 @@ type flatScanState struct {
 // the two can no longer disagree about which files exist.
 //
 // When `enabled` is false, all maps/graph are nil and diffAndReload falls
-// back to IncrementalLoad (flat path).
+// back to incrementalLoadFrom (flat path).
 //
 // All fields atomic-swap together at the end of diffAndReload under
 // `ConfigManager.mu.Lock()`. A desync between, e.g., `hashes[X]=H_new`
@@ -458,7 +458,7 @@ func (m *ConfigManager) Mode() string {
 // commitConfig installs a freshly-loaded ThresholdConfig + composite
 // hash into the manager under m.mu.Lock, then runs the post-commit
 // hooks (config-source detection + stats log). Shared by Load,
-// fullDirLoad, and IncrementalLoad — every loader's "atomic swap"
+// fullDirLoad, and incrementalLoadFrom — every loader's "atomic swap"
 // step now goes through this single seam.
 //
 // flatScan.hashes != nil signals "I have a new flat-scan snapshot to
@@ -502,7 +502,7 @@ func (m *ConfigManager) commitConfig(cfg *ThresholdConfig, hash string, flatScan
 	// the hierarchical scanner behind /effective is. Compare the two
 	// tenant populations here — this is the only site in the package that
 	// assigns m.config, so hooking the audit in means every publishing
-	// path (Load, fullDirLoad, IncrementalLoad, and diffAndReload via
+	// path (Load, fullDirLoad, incrementalLoadFrom, and diffAndReload via
 	// installNewHierarchyState → fullDirLoad) is covered by construction
 	// rather than by remembering to add a call. Observability only: it
 	// never fails the commit — see config_subtree_undeliverable.go for why not.
@@ -559,7 +559,8 @@ func rejectDuplicateTenant(scan *treeScan) error { return config.RejectDuplicate
 // Load loads config from either a single file or a directory.
 //
 // Directory mode delegates to the single fullDirLoad path also used by the
-// watch loop and IncrementalLoad's cold-start fallback. Sharing it means the
+// watch loop's cold start (no flat cache yet → fullDirLoadFrom on the
+// reload's own scan). Sharing it means the
 // initial commit uses the same composite-hash construction (scanDirTree
 // hash-of-hashes) that the first watch tick recomputes — so the first tick no
 // longer sees a phantom change against a differently-built byte composite — and
@@ -617,44 +618,24 @@ func anyNestedKey(groups ...[]string) bool {
 	return false
 }
 
-// IncrementalLoad performs an incremental reload in directory mode.
-// It compares per-file hashes with the cached state, re-parses only
-// changed/added files, removes deleted files from cache, then rebuilds
-// the merged config from cached partials.
+// incrementalLoadFrom is the flat plane's incremental reload: it diffs the
+// scan's per-file hashes against the cached state, re-parses only
+// changed/added files, drops deleted ones, then rebuilds the merged config
+// from the cached partials. Its only caller is scanAndCheckHierarchical
+// (config_debounce.go), which hands it the scan it took to decide the path —
+// so a flat-mode reload tick walks the tree once — and only after that scan
+// passed the duplicate-tenant check (TreeScan.Conflict) and a flat cache was
+// found to exist.
 //
-// Falls back to full Load() for single-file mode or first-time load.
-func (m *ConfigManager) IncrementalLoad() error {
-	// Single-file mode or first load: fall back to full Load
-	if !m.isDir {
-		return m.Load()
-	}
-
-	m.mu.RLock()
-	hasCache := len(m.flat.hashes) > 0
-	m.mu.RUnlock()
-
-	if !hasCache {
-		return m.fullDirLoad()
-	}
-
-	// Phase 1: ONE walk with the mtime guard (cheap — stat + skip unchanged).
-	// The prior is the retained scan, never a rebuilt one (see flatScanState).
-	m.mu.RLock()
-	tree := m.flat.tree
-	m.mu.RUnlock()
-
-	scan, err := scanDirTree(m.path, tree, m.getMetrics(), m.getLogger())
-	if err != nil {
-		return err
-	}
-	return m.incrementalLoadFrom(scan)
-}
-
-// incrementalLoadFrom is IncrementalLoad from phase 2 on, fed a scan the
-// caller already has. scanAndCheckHierarchical (config_debounce.go) calls
-// it with the scan it took to decide the path, so a flat-mode reload tick
-// walks the tree once instead of twice. The caller has already checked
-// that a flat cache exists.
+// ⛔ THERE IS NO SECOND ENTRY ON PURPOSE (#1577). `IncrementalLoad()` used to
+// be one: a public method that walked the tree and called this directly,
+// skipping the Conflict check the watch path runs first. No production code
+// called it, but sixteen test files did, so they asserted on a path the
+// exporter never takes — measured, it served a tenant declared in two files
+// (err=nil, flat and hierarchical alike) while a full Load and the watch path
+// both reject that tree. Tests drive reloads through diffAndReload now; a
+// test that needs this function's behaviour on a state the watch path refuses
+// to reach must build that scan itself and say so.
 //
 // ⛔ EVERY KEY BELOW IS A ROOT-RELATIVE SLASH PATH (scan.relHashes()), never
 // the hierarchy plane's absolute keys: `anyNestedKey` and
@@ -685,7 +666,8 @@ func (m *ConfigManager) incrementalLoadFrom(scan *treeScan) error {
 	// "Config reloaded (incremental, 0 changed, 0 added, N removed)" at INFO.
 	// Measured on a symlinked `-config-dir` re-pointed at a directory holding
 	// no YAML — an ordinary step of a blue/green or `..data` swap, no race
-	// needed: `IncrementalLoad` returned nil and `GetConfig().Tenants` went
+	// needed: the then-public `IncrementalLoad()` entry into this function
+	// returned nil and `GetConfig().Tenants` went
 	// from 1 to 0. Every tenant's thresholds vanish, every alert stops firing,
 	// and nothing says so. (#1569 blind review.)
 	//
@@ -708,7 +690,7 @@ func (m *ConfigManager) incrementalLoadFrom(scan *treeScan) error {
 	changed, added, removed := diffFileHashes(oldHashes, newHashes)
 
 	// ⛔ #1521: a change under a SUBDIRECTORY takes the full path. This one is
-	// not about the merge — it is about `m.hierarchy`, which IncrementalLoad
+	// not about the merge — it is about `m.hierarchy`, which this function
 	// never refreshes (measured: zero references to it in this function, and
 	// `tenantSources` has exactly two writers, neither on this path). A nested
 	// tenant added here would land in the config with no inheritance chain
@@ -1126,7 +1108,8 @@ func (m *ConfigManager) failSafeHeldTenants(prev *ThresholdConfig, newHashes map
 
 // diffFileHashes compares the previous and current per-file hash maps and
 // classifies each file as changed (hash differs), added (new), or removed
-// (gone from the new scan). Pure helper extracted from IncrementalLoad Phase 2.
+// (gone from the new scan). Pure helper extracted from incrementalLoadFrom's
+// phase 2.
 func diffFileHashes(oldHashes, newHashes map[string]string) (changed, added, removed []string) {
 	for name, newHash := range newHashes {
 		oldHash, exists := oldHashes[name]
@@ -1146,7 +1129,7 @@ func diffFileHashes(oldHashes, newHashes map[string]string) (changed, added, rem
 
 // isTenantOnlyChange reports whether an incremental reload touched only tenant
 // files — i.e. no underscore-prefixed file (_defaults.yaml / _profiles.yaml /
-// _state_filters). When true, IncrementalLoad can patch just the affected
+// _state_filters). When true, incrementalLoadFrom can patch just the affected
 // tenants instead of re-merging the whole tree. Extracted from Phase 4.
 //
 // An underscore prefix already subsumes the specific _defaults.yaml /
@@ -1175,7 +1158,7 @@ func isTenantOnlyChange(changed, added, removed []string) bool {
 // With one tenant file changed that is invisible — which is the only case the
 // cost comment measured — but a reload that rewrites the whole tree is
 // O(tenants x files). Measured on 1000 tenant files, all changed:
-// `IncrementalLoad` went 182-195 ms against a full `Load` of 80-94 ms on the
+// the incremental reload went 182-195 ms against a full `Load` of 80-94 ms on the
 // same tree, i.e. the fast path became more than twice as slow as the rebuild
 // it exists to avoid. Reachable by anything that regenerates the tree:
 // `assemble_config_dir`, a `da-batchpr` sweep, a formatting migration.
@@ -1288,7 +1271,7 @@ func reclaimTenantFrom(newConfigs map[string]ThresholdConfig, declaredIn tenantD
 // patchTenants builds a merged config from the tenant-only incremental fast
 // path: it shallow-copies prev (Defaults/StateFilters/Profiles shared, Tenants
 // map cloned) then overwrites tenants from changed/added files and drops
-// tenants from removed files. Extracted from IncrementalLoad Phase 4; the
+// tenants from removed files. Extracted from incrementalLoadFrom's phase 4; the
 // caller reads prev under the lock, this function is otherwise pure.
 //
 // Two invariants keep this fast path equivalent to the full-rebuild path
@@ -1402,7 +1385,7 @@ func patchTenants(prev *ThresholdConfig, newConfigs, oldConfigs map[string]Thres
 				// and badly wrong as a per-reload claim: the implementation it
 				// described rescanned every file per patched tenant, so a
 				// reload that rewrites the whole tree was O(tenants x files).
-				// Measured at 1000 tenant files all changed: `IncrementalLoad`
+				// Measured at 1000 tenant files all changed: the incremental reload
 				// 182-195 ms against a full `Load` of 80-94 ms on the same tree
 				// — the fast path became slower than the rebuild it exists to
 				// avoid. The declaration index fixed that; current figures on
@@ -1437,7 +1420,11 @@ func patchTenants(prev *ThresholdConfig, newConfigs, oldConfigs map[string]Thres
 				//
 				// ⚠️ It also said "the only benchmark that reaches this loop
 				// with a changed file". False: BenchmarkIncrementalLoad_100_
-				// OneFileChanged does too. ⚠️ And bytes/op on these benchmarks
+				// OneFileChanged did too. ⚠️ Since #1577 NEITHER does: both
+				// drive the watch path's reload on a tree with a `_defaults.yaml`,
+				// which is the hierarchical reload, so every figure in this note
+				// was measured through the removed `IncrementalLoad()` and no
+				// benchmark reaches this loop today. ⚠️ And bytes/op on these benchmarks
 				// is bimodal (two clusters ~32 KB apart, map bucket growth) — a
 				// comment-only commit moved the CI figure — so a one-shot bytes
 				// delta is never the signal on its own; the two arms above are
@@ -1522,8 +1509,7 @@ func tenantExists(exists map[string]struct{}, tenant string) bool {
 }
 
 // fullDirLoad performs a full directory load: ONE walk of the tree, then
-// fullDirLoadFrom. Used for the initial load and as IncrementalLoad's
-// cold-start fallback. The prior is whatever the manager retained, so a
+// fullDirLoadFrom. Used for the initial load (Load). The prior is whatever the manager retained, so a
 // full load on a warm manager still takes the mtime fast-path and reuses
 // its parsed partials; on a cold manager every file is read and cached.
 func (m *ConfigManager) fullDirLoad() error {
@@ -1718,7 +1704,7 @@ func (m *ConfigManager) populateHierarchyStateWith(scan *treeScan, in *coldMerge
 	m.mu.Lock()
 	// Only flip hierarchicalMode on once we've seen a _defaults.yaml
 	// somewhere. Pure-flat trees keep hierarchicalMode=false, letting
-	// WatchLoop take the v2.6.0 IncrementalLoad path.
+	// WatchLoop take the v2.6.0 incremental path (incrementalLoadFrom).
 	if len(defaults) > 0 {
 		m.hierarchy.enabled = true
 	}

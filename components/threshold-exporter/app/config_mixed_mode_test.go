@@ -250,8 +250,8 @@ tenants:
 
 // ─────────────────────────────────────────────────────────────────
 // Test 2b — DuplicateAcrossModes_RejectedAtFullDirLoad (issue #127)
-// fullDirLoad is the hot-reload path (called from IncrementalLoad
-// when file-hash cache misses). Same v2.8.x contract as Load: hard
+// fullDirLoad is the full-load path (the watch path's reload reaches its
+// fullDirLoadFrom half when there is no flat cache yet). Same v2.8.x contract as Load: hard
 // reject on *DuplicateTenantError + don't trash prior known-good
 // state.
 //
@@ -298,7 +298,7 @@ tenants:
     mysql_connections: "200"
 `)
 
-	// fullDirLoad is the path IncrementalLoad uses when cache misses.
+	// fullDirLoad: the full load a cold reload falls back to.
 	err := mgr.fullDirLoad()
 	if err == nil {
 		t.Fatal("expected fullDirLoad to reject mixed-mode duplicate, got nil")

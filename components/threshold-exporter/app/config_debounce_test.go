@@ -269,7 +269,7 @@ defaults:
 
 // TestDiffAndReload_FlatModeFallback verifies that when there is no
 // _defaults.yaml anywhere in the tree, diffAndReload delegates to the
-// v2.6.0 IncrementalLoad path and does not try to build an inheritance
+// v2.6.0 incremental path (incrementalLoadFrom) and does not try to build an inheritance
 // graph.
 func TestDiffAndReload_FlatModeFallback(t *testing.T) {
 	dir := t.TempDir()
@@ -289,7 +289,7 @@ tenants:
 	if err != nil {
 		t.Fatalf("diffAndReload: %v", err)
 	}
-	// Flat-mode fallback returns (0, 0) because IncrementalLoad owns the
+	// Flat-mode fallback returns (0, 0) because incrementalLoadFrom owns the
 	// counters — we just need to assert no error and no hierarchical state.
 	if reloaded != 0 || noOp != 0 {
 		t.Errorf("flat-mode fallback should return (0,0); got (%d,%d)", reloaded, noOp)

@@ -311,7 +311,7 @@ type TreeScan struct {
 	dups   map[string]*DuplicateTenantError
 
 	// graph is built on first use (InheritanceGraph), not by the walk: the
-	// flat plane's paths (IncrementalLoad, the flat branch of detectChange)
+	// flat plane's paths (incrementalLoadFrom, the flat branch of detectChange)
 	// never read it, and building it on every quiet tick was ~1 ms and ~2k
 	// allocs the bench gate charged to IncrementalLoad_1000_NoChange_MtimeGuard.
 	// Tenants and Defaults are immutable once the walk returns, so the lazy

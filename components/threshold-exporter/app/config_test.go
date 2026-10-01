@@ -20,7 +20,7 @@ package main
 //   config_metadata_test.go    · _metadata + ValidateTenantKeys
 //   config_routing_test.go     · _routing_profiles
 //   config_loaddir_test.go     · LoadDir directory-mode tests
-//   config_incremental_test.go · IncrementalLoad / scanDirFileHashes
+//   config_incremental_test.go · watch-path reload (watchReload) / scanDirFileHashes
 
 import (
 	"bytes"

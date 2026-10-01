@@ -17,7 +17,7 @@ package config
 //   mergePartialConfigs(...) — deep-merge per-file partials into a
 //                              single ThresholdConfig (used by
 //                              BuildFlatConfig + package main's
-//                              IncrementalLoad full-rebuild branch).
+//                              incrementalLoadFrom full-rebuild branch).
 
 import (
 	"fmt"
@@ -216,7 +216,7 @@ func scanKeyBase(key string) string { return path.Base(key) }
 // platform file BELOW the conf.d root.
 //
 // ⛔ ONE PREDICATE, TWO CALLERS, ON PURPOSE. `fullDirLoad` and
-// `IncrementalLoad` each decide which files reach the merged config, and a
+// `incrementalLoadFrom` each decide which files reach the merged config, and a
 // predicate copied into both is precisely the shape of the defect this whole
 // change set exists to close: two enumerations over one tree that can drift
 // apart silently. (CodeRabbit, #1569.)
@@ -274,7 +274,7 @@ func reportUnparseableNestedPlatformFile(fullPath string, data []byte, metrics S
 // archive §S#37d, cost 5+ hours at WARN) or WARN for tenant files — then
 // returns ok=false so the caller can skip the file. `name` is the base filename
 // (drives the underscore severity choice); `path` is the display path used for
-// logs and the metric basename. Shared by IncrementalLoad and fullDirLoad so
+// logs and the metric basename. Shared by incrementalLoadFrom and fullDirLoad so
 // the flat-mode parse paths report failures identically.
 func parsePartialConfig(name, path string, data []byte, metrics ScanObserver, logger *log.Logger) (ThresholdConfig, bool) {
 	decode := ParseTenantFile // same verdict as the walker's (#2266)
@@ -698,7 +698,7 @@ func selectedRootCarrierKey(scan *TreeScan) string {
 
 // mergePartialInto deep-merges one partial config into merged using the
 // flat-mode merge semantics shared by mergePartialConfigs (full rebuild) and
-// the IncrementalLoad diff path: defaults and state_filters overwrite by key;
+// the incrementalLoadFrom diff path: defaults and state_filters overwrite by key;
 // profiles and tenants deep-merge per name (later values win). Keeping this in
 // one place guarantees the full-rebuild and incremental paths can never drift
 // in merge precedence.
