@@ -184,17 +184,28 @@
 
 ### Metrics(`/metrics`)
 
-```prometheus
-tenant_api_up 1
-tenant_api_uptime_seconds 3600.0
-tenant_api_requests_total 42
-tenant_api_errors_total 2
-tenant_api_writes_total 5
-tenant_api_rate_limit_rejections_total 3
-tenant_api_rate_limit_active_callers 12
-```
+Prometheus 文字格式(`text/plain; version=0.0.4`)。「何時出現」寫「恆有」的,程序一起來就輸出(計數從 0 起);其餘只在條件成立時才有,沒有時整族不輸出。這張表由 `internal/handler/metrics_readme_parity_test.go` 對原始碼比對名稱、型別、label,對 `testdata/metrics.golden` 比對「值:」列出的 label 值。
 
-`rate_limit_rejections_total` 為程序啟動以來被限流擋下的請求數;`rate_limit_active_callers` 為滾動視窗內仍活躍的呼叫者數(背景 sweeper 控管記憶體)。
+| Metric | Type | 何時出現 | 用途 |
+|--------|------|----------|------|
+| `tenant_api_up` | Gauge | 恆有 | 值恆 1 |
+| `tenant_api_uptime_seconds` | Gauge | 恆有 | 程序啟動至今秒數 |
+| `tenant_api_requests_total` | Counter | 恆有 | API 請求總數 |
+| `tenant_api_errors_total` | Counter | 恆有 | 回應狀態碼 ≥ 400 的請求數 |
+| `tenant_api_writes_total` | Counter | 恆有 | 寫入次數(git commit) |
+| `tenant_api_rate_limit_rejections_total` | Counter | 恆有 | 被逐呼叫者限流擋下的請求數;限流關閉時恆 0 |
+| `tenant_api_rate_limit_active_callers` | Gauge | 恆有 | 滾動視窗內仍有請求的呼叫者數(背景 sweeper 控管記憶體) |
+| `tenant_api_federation_orphaned_tokens` | Gauge | 恆有 | 租戶已不在 conf.d、卻仍有效的聯邦 token 記錄數;非 0 照 [租戶下架 runbook](../../docs/internal/tenant-offboarding-runbook.md) 處理 |
+| `tenant_api_federation_orphaned_subset_files` | Gauge | 恆有 | 已不在 conf.d、仍留有 `conf.d/_federation/` subset 檔的租戶數(名稱寫 files,實際按租戶計) |
+| `tenant_api_identity_audit_total{result}` | Counter | 恆有 | 機器身分(KSA／TokenReview)稽核結果,只記錄、不參與授權;未開 `--machine-identity-audit` 時全為 0。值:`mismatch` / `no_token` / `unknown_issuer` / `unknown_workload` / `verified` / `verify_failed` |
+| `tenant_api_scope_would_deny_total{axis}` | Counter | 恆有 | shadow 模式放行、但切 enforce 後會被拒的次數;`increase()` 在觀察期內維持 0 才切對應的 `--rbac-*-scope-enforce`。值:`metadata` / `metadata_write` / `org` / `org_write` |
+| `tenant_api_config_reload_failures_total{component}` | Counter | 恆有 | 該設定重載解析失敗次數(失敗時沿用上一份正確設定)。值:`RBAC` / `federation-policy` / `groups` / `policy` / `tenantorg` / `views` |
+| `tenant_api_config_last_reload_successful{component}` | Gauge | 恆有 | 該設定最後一次重載是否成功;0 = 目前正用舊設定。值:`RBAC` / `federation-policy` / `groups` / `policy` / `tenantorg` / `views` |
+| `tenant_api_dev_auth_bypass_active` | Gauge | 恆有 | 1 = `--dev-bypass-auth` 開著(僅限本機開發,正式環境須為 0) |
+| `tenant_api_sse_clients` | Gauge | 恆有 | 目前連線中的 SSE(`/api/v1/events`)客戶端數 |
+| `tenant_api_human_socket_up` | Gauge | 設了 `--human-socket` | 1 = human-plane Unix socket 回應了 readiness 自我探測 |
+| `tenant_api_forge_circuit_state{provider}` | Gauge | PR／MR 寫回模式 | forge 斷路器狀態:0 = closed、1 = half-open、2 = open(forge 故障,寫入回 503) |
+| `tenant_api_forge_pr_conflicts{provider}` | Gauge | PR／MR 寫回模式,tracker 同步過一次後 | 上次同步時處於 merge conflict 的 PR／MR 數 |
 
 ### Request 對應
 
