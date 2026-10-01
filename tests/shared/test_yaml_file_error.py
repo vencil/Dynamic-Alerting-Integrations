@@ -451,8 +451,10 @@ def test_tool_names_the_unreadable_file_with_its_class_rc(fx, label, script, bad
     assert "cannot read" in p.stderr or "cannot compare" in p.stderr, p.stderr[-500:]
     if label in _SERVED_VALUES_ROWS:
         # #2115: the verdict is the exporter's (da-guard served-values
-        # parse_failed), which names the file but not a Python cause class.
+        # parse_failed): no Python cause class, but the exporter's own parse
+        # reason — here the byte that is not UTF-8 — is carried along.
         assert "the exporter's load skips" in p.stderr, p.stderr[-500:]
+        assert "invalid leading UTF-8 octet" in p.stderr, "the exporter's parse reason must reach the operator"
     else:
         assert "UnicodeDecodeError" in p.stderr, "the cause class tells apart bad bytes from bad syntax"
 

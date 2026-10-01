@@ -36,7 +36,7 @@ from _lib_python import (  # noqa: E402
 from _lib_tenant_values import (  # noqa: E402
     exit_on_served_values_error,
     load_served_tree,
-    warn_skipped,
+    print_load_warnings,
 )
 from _lib_exitcodes import EXIT_VIOLATION  # noqa: E402
 
@@ -120,7 +120,8 @@ def load_monitored_db_types(config_dir):
     `defaults:`, a platform `tenants:` block, the tenant file, a subtree —
     and at any depth. A key switched off (`disable`) or with no row on
     /metrics (e.g. no default for it) does not count. Files the load serves
-    no tenant from are named on stderr. da-guard missing or failing, or a
+    no tenant from are named on stderr, after da-guard's own WARN lines
+    (e.g. a file the load cannot read). da-guard missing or failing, or a
     file the load cannot decode, raises (the CLI exits 2).
     """
     result = {}
@@ -129,7 +130,7 @@ def load_monitored_db_types(config_dir):
         return result
 
     tree = load_served_tree(config_dir)
-    warn_skipped(tree)
+    print_load_warnings(tree)
     for t_name, served in tree.tenants.items():
         for key in served.severities:  # exactly the threshold keys with a row
             db_type = _infer_db_type_from_metric(key)

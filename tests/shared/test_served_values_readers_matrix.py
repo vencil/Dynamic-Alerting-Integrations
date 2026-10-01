@@ -11,13 +11,15 @@
 繼承。舊讀取端（`_lib_io.load_tenant_configs`）只讀根目錄租戶檔本身，所以除了
 「租戶檔」那一格，tenant-a 的答案都錯（子樹那格整個租戶消失）。
 
-另有三格：平面格式檔（Go 列進 `skipped`）、Go 丟掉的檔（`parse_failed`，fail-closed
-rc 2）、`disable`／沒有預設值的鍵（不算已監控）。
+另有幾格：平面格式檔（Go 列進 `skipped`）、Go 丟掉的檔（`parse_failed`，fail-closed
+rc 2，訊息附解析原因）、exporter 讀不到的檔（Go 只 WARN，讀取端轉印、rc 0）、
+`disable`／沒有預設值的鍵（不算已監控）。
 
 da-guard 由 conftest 的 session fixture 以 `go build` 建出；建不起來就 fail、不 skip。
 """
 from __future__ import annotations
 
+import json
 import subprocess
 import sys
 from pathlib import Path
@@ -163,6 +165,7 @@ def test_file_the_exporter_drops_fails_closed(script, extra, tmp_path):
     p = _cli(script, conf_d, *extra)
     assert p.returncode == 2, (p.returncode, p.stderr)
     assert "_platform.yaml" in p.stderr and "Traceback" not in p.stderr, p.stderr
+    assert "cannot unmarshal" in p.stderr, p.stderr  # exporter 自己的解析原因
 
 
 @pytest.mark.parametrize("script, extra", _CLIS, ids=[c[0] for c in _CLIS])
@@ -176,3 +179,18 @@ def test_tree_the_exporter_rejects_fails_closed(script, extra, tmp_path):
     p = _cli(script, conf_d, *extra)
     assert p.returncode == 2, (p.returncode, p.stderr)
     assert "duplicate tenant" in p.stderr and "Traceback" not in p.stderr, p.stderr
+
+
+@pytest.mark.parametrize("script, extra", _CLIS, ids=[c[0] for c in _CLIS])
+def test_file_the_exporter_cannot_read_is_warned_and_rc_stays_0(script, extra, tmp_path):
+    """exporter 讀不到的檔（這裡是指向目錄的 symlink `tb.yaml`）：Go 只 WARN 後跳過，
+    不進 parse_failed／skipped，rc 0。讀取端把 da-guard 的那行 WARN 轉印到 stderr，
+    stdout 照常是一份 JSON。"""
+    conf_d = _tree(tmp_path, {"_defaults.yaml": _BASE, "tenant-b.yaml": _B})
+    (conf_d / "realdir").mkdir()
+    (conf_d / "tb.yaml").symlink_to("realdir")
+    p = _cli(script, conf_d, *extra)
+    assert p.returncode == 0, p.stderr
+    warn = [ln for ln in p.stderr.splitlines() if ln.startswith("WARN: cannot read ")]
+    assert len(warn) == 1 and "tb.yaml" in warn[0], p.stderr
+    json.loads(p.stdout)

@@ -43,7 +43,7 @@ from _lib_python import (  # noqa: E402
 from _lib_tenant_values import (  # noqa: E402  (#2115)
     exit_on_served_values_error,
     load_served_tree,
-    warn_skipped,
+    print_load_warnings,
 )
 from _lib_exitcodes import EXIT_CALLER_ERROR  # noqa: E402
 
@@ -77,7 +77,8 @@ def load_tenant_configs(config_dir=None, tenant_config=None):
       a subtree counts, and a nested tenant is seen; a key switched off
       (``disable``) or with no row on /metrics (e.g. no default for it) does
       not. A file the load serves no tenant from (no ``tenants:`` mapping)
-      is named on stderr, not read as a tenant. da-guard missing or failing,
+      is named on stderr, not read as a tenant; da-guard's own WARN lines
+      (e.g. a file the load cannot read) are passed through to stderr. da-guard missing or failing,
       or a file the load cannot decode, raises (the CLI exits 2).
     - Single-file branch: unchanged — the file as written. It unwraps the
       ``tenants:`` wrapper, and derives the flat-format tenant name via
@@ -105,7 +106,7 @@ def load_tenant_configs(config_dir=None, tenant_config=None):
             configs[name] = data if isinstance(data, dict) else {}
     elif config_dir:
         tree = load_served_tree(config_dir)
-        warn_skipped(tree)
+        print_load_warnings(tree)
         configs = {t: {k: served.values[k] for k in served.severities}
                    for t, served in tree.tenants.items()}
 
