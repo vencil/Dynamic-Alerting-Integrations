@@ -19,7 +19,9 @@ import (
 	"os"
 	"path/filepath"
 	"testing"
+	"time"
 
+	"github.com/jonboulle/clockwork"
 	"github.com/prometheus/client_golang/prometheus/testutil"
 )
 
@@ -118,12 +120,11 @@ func TestTickOnce_DuplicateTenant_CountsScanFailureNotReloadTrigger(t *testing.T
 	}
 }
 
-// Flat mode (no _defaults.yaml anywhere) freezes on a duplicate too: its
-// detectChange does not look at the Conflict, so every tick sees the tree
-// "changed" and schedules a reload, and the reload's scan
-// (scanAndCheckHierarchical) rejects the Conflict before it ever reaches the
-// flat branch. Each such tick must count once under duplicate_tenant; the
-// flat path never moves reload_trigger_total in any case.
+// Flat mode (no _defaults.yaml anywhere) freezes on a duplicate too, and
+// its detectChange fails on the Conflict just like hierarchical mode's, so
+// each tick takes tickOnce's WARN + IncScanFailure path: one count per tick
+// under duplicate_tenant, and no reload scheduled — reload_trigger_total
+// never moves.
 //
 // Also pins the premise ConfigScanFailing rests on: the last-scan gauge is
 // NOT stamped while the duplicate is present (it is set to a sentinel after
@@ -187,6 +188,60 @@ func TestTickOnce_FlatMode_DuplicateTenant_CountsScanFailure(t *testing.T) {
 	}
 	if m.GetConfig() == before {
 		t.Error("flat: no config committed by the first clean tick after recovery (the pending t-b edit should land)")
+	}
+}
+
+// The CodeRabbit shape on #2581: flat mode with -scan-debounce longer than
+// -reload-interval. When flat detectChange ignored the Conflict, every tick
+// saw the tree "changed" and re-armed the debounce timer before it could
+// fire, so the reload whose scan would have counted the duplicate never ran
+// and the counter sat at 0 for as long as the duplicate stayed. The ticks
+// here advance a fake clock by the interval, exactly as WatchLoop does.
+func TestTickOnce_FlatMode_DuplicateTenant_DebounceLongerThanInterval(t *testing.T) {
+	t.Parallel()
+	const (
+		window   = 60 * time.Second
+		interval = 30 * time.Second
+		ticks    = 5
+	)
+	dir := t.TempDir()
+	writeTestYAML(t, filepath.Join(dir, "t-a.yaml"), "tenants:\n  t-a:\n    mysql_connections: \"11\"\n")
+	writeTestYAML(t, filepath.Join(dir, "t-b.yaml"), "tenants:\n  t-b:\n    mysql_connections: \"21\"\n")
+	fresh, _ := freshMetrics(t)
+	m := NewConfigManagerWithDebounce(dir, window)
+	t.Cleanup(m.Close)
+	fc := clockwork.NewFakeClock()
+	m.SetClock(fc)
+	m.SetMetrics(fresh)
+	m.SetLogger(log.New(io.Discard, "", 0))
+	if err := m.Load(); err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+	m.mu.RLock()
+	hier := m.hierarchy.enabled
+	m.mu.RUnlock()
+	if hier {
+		t.Fatal("fixture must stay in flat mode (no _defaults.yaml)")
+	}
+
+	writeTestYAML(t, filepath.Join(dir, "t-a-copy.yaml"), "tenants:\n  t-a:\n    mysql_connections: \"12\"\n")
+	for i := 0; i < ticks; i++ {
+		m.tickOnce()
+		fc.Advance(interval)
+	}
+
+	if got := scanFailures(fresh, ScanFailureReasonDuplicateTenant); got != ticks {
+		t.Errorf("flat, debounce %v > interval %v: scan_failures{duplicate_tenant} = %v after %d ticks, want %d",
+			window, interval, got, ticks, ticks)
+	}
+	m.debounce.mu.Lock()
+	armed := m.debounce.timer != nil
+	m.debounce.mu.Unlock()
+	if armed {
+		t.Error("flat: a debounced reload is armed while the duplicate is present; a failing check must not schedule one")
+	}
+	if n := reloadTriggerSeries(fresh); n != 0 {
+		t.Errorf("flat: da_config_reload_trigger_total has %d series, want 0", n)
 	}
 }
 

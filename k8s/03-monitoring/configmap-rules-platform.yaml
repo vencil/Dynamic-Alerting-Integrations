@@ -546,8 +546,8 @@ data:
           # da_config_scan_failures_total{reason} counts each failed
           # watch-path scan (reason ∈ {duplicate_tenant, walk_error}, a
           # closed set; both pre-initialised at 0). Both directory modes:
-          # the flat mode (no _defaults.yaml) also rejects a duplicate tenant
-          # on its reload scan and freezes the same way.
+          # the flat mode (no _defaults.yaml) rejects a duplicate tenant in
+          # its per-tick change check too and freezes the same way.
           #
           # Expression rationale — the question is "has the config been
           # unscannable for more than 5 minutes", NOT "how many failures":
@@ -605,14 +605,12 @@ data:
                 the exporter keeps serving the last good config and /ready
                 stays 200, so edits to ANY tenant (git-sync, kubectl apply,
                 Tenant API) are NOT applied. duplicate_tenant = one tenant id
-                is declared in two files; the exporter log names both files:
-                with a root _defaults.yaml, "WARN: cannot check config ...:
-                hierarchical scan: duplicate tenant ID ..." every tick;
-                without one (flat mode), "ERROR: hierarchical scan failed:
-                duplicate tenant ID ..." followed by "ERROR: debounced reload
-                failed: ..." ("synchronous reload failed" when
-                --scan-debounce=0). Remove one declaration. walk_error = the
-                config directory is missing or not a directory. Once the
+                is declared in two files; the exporter log names both files
+                in "WARN: cannot check config ...: duplicate tenant ID ..."
+                every tick ("...: hierarchical scan: duplicate tenant ID ..."
+                with a root _defaults.yaml). Remove one declaration.
+                walk_error = the config directory is missing or not a
+                directory. Once the
                 duplicate declaration is removed the next tick reloads the
                 tree (pending edits included), no restart needed, and the
                 alert resolves once that tick's successful scan is scraped.

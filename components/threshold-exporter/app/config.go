@@ -1997,9 +1997,10 @@ func (m *ConfigManager) tickOnce() {
 //     da_config_reload_trigger_total{reason="source"}.
 //   - Hierarchical: per-file hash against the installed hierarchy plane's
 //     (absolute keys); any file added/removed/changed constitutes a
-//     change, and a duplicate tenant is a scan error as it always was.
-//     Returns reason=forced; diffAndReload will categorize the actual
-//     reason via its per-tenant hash compare.
+//     change. Returns reason=forced; diffAndReload will categorize the
+//     actual reason via its per-tenant hash compare.
+//
+// In both, a duplicate tenant (TreeScan.Conflict) is a scan error.
 //
 // O(N) compare for hierarchical mode is acceptable: at WatchInterval
 // cadence (30s default) with 1000 files it adds ~1k comparisons/30s —
@@ -2024,10 +2025,17 @@ func (m *ConfigManager) detectChange() (bool, string, error) {
 	m.mu.RUnlock()
 
 	scan, err := scanDirTree(m.path, tree, m.getMetrics(), m.getLogger())
+	// A duplicate tenant is a scan error in BOTH modes (#2452). Flat mode
+	// used to ignore the Conflict here: the composite hash still moved, so
+	// every tick scheduled a reload and the reload's own scan rejected it —
+	// and with -scan-debounce longer than -reload-interval each tick reset
+	// the debounce timer before it could fire, so that reload never ran and
+	// the duplicate was never counted. Failing here sends both modes down
+	// tickOnce's WARN + IncScanFailure path, once per tick.
+	if err == nil && scan.Conflict != nil {
+		err = scan.Conflict
+	}
 	if hierarchical {
-		if err == nil && scan.Conflict != nil {
-			err = scan.Conflict
-		}
 		if err != nil {
 			return false, "", fmt.Errorf("hierarchical scan: %w", err)
 		}

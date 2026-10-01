@@ -125,16 +125,13 @@ type configMetrics struct {
 // The split follows the only two ways config.ScanDirTree can fail:
 //   - duplicate_tenant: the walk succeeded but one tenant id is declared in
 //     two files (*config.DuplicateTenantError, TreeScan.Conflict). Counted
-//     in BOTH directory modes. With a root _defaults.yaml it is detectChange
-//     that fails, every tick (tickOnce logs `WARN: cannot check config …:
-//     hierarchical scan: duplicate tenant ID …`). In flat mode detectChange
-//     ignores the Conflict, sees the tree as changed and schedules a reload,
-//     and it is the reload's scan (scanAndCheckHierarchical) that rejects
-//     the Conflict before the flat branch — logging `ERROR: hierarchical
-//     scan failed: duplicate tenant ID …` then `ERROR: debounced reload
-//     failed: …` (`synchronous reload failed` at -scan-debounce=0). Either
-//     way the tree is frozen at the last good config. (Making the flat
-//     plane's own IncrementalLoad run that check is #1577.)
+//     in BOTH directory modes, the same way: detectChange fails, every tick,
+//     and tickOnce logs `WARN: cannot check config <dir>: …` — the message
+//     is `hierarchical scan: duplicate tenant ID …` with a root
+//     _defaults.yaml and the bare `duplicate tenant ID …` in flat mode.
+//     No reload is scheduled, so -scan-debounce plays no part. The tree is
+//     frozen at the last good config. (Making the flat plane's own
+//     IncrementalLoad run that check is #1577.)
 //   - walk_error: every other error ScanDirTree returns — the root cannot
 //     be statted, is not a directory, or the walk itself errors. Per-file
 //     stat / read / parse problems are NOT scan failures: the walker logs
@@ -306,9 +303,12 @@ func (cm *configMetrics) IncReloadTrigger(reason string) {
 // (#2452), under the reason classifyScanFailure gives err. Called where the
 // watch pipeline gives up on a scan: tickOnce (detectChange failed, so no
 // reload is scheduled) and scanAndCheckHierarchical (the debounced reload's
-// own scan failed). A tick reaches at most one of the two, so a lasting
-// failure moves the counter by one per tick. It never bumps
-// da_config_reload_trigger_total: nothing was reloaded.
+// own scan failed — a reload scheduled by an earlier clean tick, which the
+// failure reached before the reload ran). A tick that fails its check
+// schedules nothing, so a lasting failure moves the counter by one per
+// tick, plus one for each reload that was already pending when it
+// appeared. It never bumps da_config_reload_trigger_total: nothing was
+// reloaded.
 // Nil-receiver safe (see IncParseFailure).
 func (cm *configMetrics) IncScanFailure(err error) {
 	if cm == nil {
