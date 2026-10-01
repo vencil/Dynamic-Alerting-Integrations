@@ -638,7 +638,7 @@ def test_safe_label_is_defined_exactly_once():
         if "__pycache__" in p.parts:
             continue
         if pattern.search(p.read_text(encoding="utf-8")):
-            offenders.append(str(p.relative_to(REPO_ROOT)))
+            offenders.append(p.relative_to(REPO_ROOT).as_posix())
 
     assert offenders == ["scripts/tools/_lib_io.py"], (
         f"the control-char escaping rule must exist once, in _lib_io.safe_label. "

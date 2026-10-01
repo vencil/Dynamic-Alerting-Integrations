@@ -45,6 +45,11 @@ type FlatBuildInput struct {
 	ParsedDefaults map[string]map[string]any  // defaults file → parsed dict (ParseDefaultsFiles)
 	Obs            ScanObserver               // parse-failure counter; may be nil
 	Logger         *log.Logger                // must be non-nil
+	// ProfileLogf receives the profile expansion's WARNs (unknown profile,
+	// declared-key fill); nil = Logger.Printf (#2513). Only ScopeEffective
+	// sets it, to keep those WARNs on the process log while discarding the
+	// rest of the build's lines, as it did before.
+	ProfileLogf func(format string, args ...any)
 }
 
 // FlatBuild is BuildFlatConfig's result: the merged config the collector
@@ -184,7 +189,15 @@ func BuildFlatConfig(scan *TreeScan, in FlatBuildInput) (FlatBuild, error) {
 	exists := tenantExistenceFor(fileConfigs, scan)
 	reportPlatformOrphans(fileConfigs, exists, logger)
 	merged := mergePartialConfigs(fileConfigs, exists)
-	merged.ApplyProfiles()
+	// #2513: the profile WARNs go to the caller's logger like every other
+	// line of this build, not to the process-global log. The exporter passes
+	// log.Default() (same output as ApplyProfiles' log.Printf); LoadDir with a
+	// nil logger (tenant-api's snapshot reload) discards them.
+	profileLogf := in.ProfileLogf
+	if profileLogf == nil {
+		profileLogf = logger.Printf
+	}
+	merged.applyProfiles(profileLogf)
 
 	n, unreachable := applySubtreeDefaults(&merged, in.Root, in.TenantDefaults, in.ParsedDefaults)
 	return FlatBuild{Config: merged, FileConfigs: fileConfigs, SubtreeFilled: n, Unreachable: unreachable, ParseFailed: parseFailed}, nil

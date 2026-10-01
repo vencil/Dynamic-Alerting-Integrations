@@ -51,136 +51,16 @@ curl -s http://localhost:8080/metrics | head -50
 ### 回應
 
 **狀態碼**: 200 OK  
-**Content-Type**: `application/openmetrics-text; version=1.0.0`
+**Content-Type**: `text/plain; version=0.0.4`（Prometheus 文字格式；沒有開 OpenMetrics，送 `Accept: application/openmetrics-text` 也一樣）
 
-### 指標類型
+### 指標清單
 
-#### `user_threshold` - 閾值指標
+每個 metric 的名稱、型別與 label 只列在一處：[threshold-exporter README §3.3 Metrics](https://github.com/vencil/Dynamic-Alerting-Integrations/blob/main/components/threshold-exporter/README.md#33-metrics)。那張表有測試逐條比對原始碼（`metrics_readme_parity_test.go`），這裡不再複製。
 
-包含按租戶、警示名稱和維度的閾值值。支援多維度標籤，允許按執行個體或其他維度維度進行細緻的閾值設定。
-
-```
-# HELP user_threshold Threshold values by tenant, alert, and dimensions
-# TYPE user_threshold gauge
-user_threshold{tenant="db-a",alertname="HighCPU",metric_group="compute"} 80.0
-user_threshold{tenant="db-a",alertname="HighCPU",metric_group="compute",dimension="instance=prod-01"} 85.0
-user_threshold{tenant="db-b",alertname="HighMemory",metric_group="memory"} 75.0
-user_threshold{tenant="db-b",alertname="HighMemory",metric_group="memory",dimension_re="instance=~staging-.*"} 65.0
-```
-
-**標籤：**
-- `tenant`: 租戶 ID
-- `alertname`: 警示名稱（來自 Rule Pack）
-- `metric_group`: 指標分組（自訂警示組織單位）
-- `dimension` (可選): 特定維度的閾值（如 `instance=prod-01`）
-- `dimension_re` (可選): 正規表達式維度選擇器
-
-#### `user_state_filter` - 警示抑制狀態
-
-表示警示是否被狀態過濾器抑制。
-
-```
-# HELP user_state_filter Alert suppression state
-# TYPE user_state_filter gauge
-user_state_filter{tenant="db-a",alertname="HighCPU",metric_group="compute"} 0
-user_state_filter{tenant="db-b",alertname="HighMemory",metric_group="memory"} 1
-```
-
-**值：**
-- `0`: 警示處於活躍狀態（未被抑制）
-- `1`: 警示被抑制（狀態過濾器啟用）
-
-#### `user_silent_mode` - 租戶靜音模式
-
-租戶的靜音模式生效中時才發出，每個被靜音的嚴重度一筆（`target_severity`），值恆為 `1`。靜音期間告警照常觸發（TSDB 有紀錄），只是通知被 Alertmanager inhibit 攔下。下例 `db-b` 設了 `_silent_mode: all`，`db-a` 沒設所以沒有這個 series。
-
-```
-# HELP user_silent_mode Silent mode flag (1=active). Alerts fire (TSDB records) but notifications suppressed via Alertmanager inhibit.
-# TYPE user_silent_mode gauge
-user_silent_mode{target_severity="critical",tenant="db-b"} 1
-user_silent_mode{target_severity="warning",tenant="db-b"} 1
-```
-
-**值：**
-- `1`: 該嚴重度的通知靜音中。沒有 `0`——未靜音（或 `expires` 已過）的租戶／嚴重度不會出現這個 series
-
-#### `user_severity_dedup` - 嚴重度去重旗標
-
-表示警示是否已啟用嚴重度去重。此設定控制 Alertmanager 如何抑制低嚴重度警示。
-
-```
-# HELP user_severity_dedup Severity deduplication flag
-# TYPE user_severity_dedup gauge
-user_severity_dedup{tenant="db-a",alertname="HighCPU"} 1
-user_severity_dedup{tenant="db-b",alertname="HighMemory"} 0
-```
-
-**值：**
-- `0`: 嚴重度去重已停用
-- `1`: 嚴重度去重已啟用
-
-#### `tenant_metadata_info` - 租戶中繼資料
-
-以標籤形式暴露租戶中繼資料的資訊指標。在 Prometheus Rule Pack 中用 `group_left` 進行動態註解注入。
-
-```
-# HELP tenant_metadata_info Tenant metadata information
-# TYPE tenant_metadata_info info
-tenant_metadata_info{tenant="db-a",team="platform",env="prod",sla_tier="gold"} 1
-tenant_metadata_info{tenant="db-b",team="data",env="prod",sla_tier="silver"} 1
-tenant_metadata_info{tenant="db-b",oncall="sre-team@example.com",alert_channel="#prod-db-alerts"} 1
-```
-
-**用途：** 在警示規則中動態注入 SLA 等級、團隊資訊或値班資訊。
-
-#### `da_config_event` - 定時組態過期事件
-
-Gauge，值恆為 1。帶 `expires` 的組態過期後發出，組態被更新或移除後消失。Labels：`{tenant, event, reason, target_severity}`；`event` 為 `silence_expired` / `maintenance_expired` / `threshold_expired`。`target_severity` 只在 `silence_expired` 有值（`warning` / `critical`），其他事件為空值。
-
-```
-# TYPE da_config_event gauge
-da_config_event{event="silence_expired",reason="DB maintenance",target_severity="critical",tenant="db-b"} 1
-da_config_event{event="silence_expired",reason="DB maintenance",target_severity="warning",tenant="db-b"} 1
-da_config_event{event="threshold_expired",reason="mysql_connections: incident #1234",target_severity="",tenant="db-a"} 1
-```
-
-### 完整範例
+要看自己環境實際輸出什麼，直接抓：
 
 ```bash
-$ curl -s http://localhost:8080/metrics
-
-# HELP user_threshold Threshold values by tenant, alert, and dimensions
-# TYPE user_threshold gauge
-user_threshold{tenant="db-a",alertname="HighCPU",metric_group="compute"} 80.0
-user_threshold{tenant="db-a",alertname="HighCPU",metric_group="compute",dimension="instance=prod-01"} 85.0
-user_threshold{tenant="db-a",alertname="HighMemory",metric_group="memory"} 75.0
-user_threshold{tenant="db-b",alertname="HighCPU",metric_group="compute"} 70.0
-user_threshold{tenant="db-b",alertname="HighDiskUsage",metric_group="storage"} 90.0
-
-# HELP user_state_filter Alert suppression state
-# TYPE user_state_filter gauge
-user_state_filter{tenant="db-a",alertname="HighCPU",metric_group="compute"} 0
-user_state_filter{tenant="db-a",alertname="HighMemory",metric_group="memory"} 1
-user_state_filter{tenant="db-b",alertname="HighCPU",metric_group="compute"} 0
-
-# HELP user_silent_mode Silent mode flag (1=active). Alerts fire (TSDB records) but notifications suppressed via Alertmanager inhibit.
-# TYPE user_silent_mode gauge
-user_silent_mode{target_severity="critical",tenant="db-b"} 1
-user_silent_mode{target_severity="warning",tenant="db-b"} 1
-
-# HELP user_severity_dedup Severity deduplication flag
-# TYPE user_severity_dedup gauge
-user_severity_dedup{tenant="db-a",alertname="HighCPU"} 1
-user_severity_dedup{tenant="db-a",alertname="HighMemory"} 0
-user_severity_dedup{tenant="db-b",alertname="HighCPU"} 1
-user_severity_dedup{tenant="db-b",alertname="HighDiskUsage"} 0
-
-# HELP tenant_metadata_info Tenant metadata information
-# TYPE tenant_metadata_info info
-tenant_metadata_info{tenant="db-a",team="platform",env="prod",sla_tier="gold",oncall="platform-team"} 1
-tenant_metadata_info{tenant="db-b",team="data",env="staging",sla_tier="silver",oncall="data-team"} 1
-
-# EOF
+curl -s http://localhost:8080/metrics | grep -E '^(user_|tenant_|da_)'
 ```
 
 ---

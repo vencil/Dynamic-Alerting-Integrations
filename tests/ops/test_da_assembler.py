@@ -1217,7 +1217,7 @@ class TestRenderCrNameFormat:
         before = {p for p in tmp_path.rglob("*") if p.is_file()}
         rc = render_cr_file(cr_path, out_dir)
         after = {p for p in tmp_path.rglob("*") if p.is_file()}
-        return rc, sorted(str(p.relative_to(tmp_path))
+        return rc, sorted(p.relative_to(tmp_path).as_posix()
                           for p in after - before)
 
     @staticmethod

@@ -112,7 +112,7 @@ lang: zh
 | **契約測試**（schemathesis） | `make contract-test` | tenant-api 全 method fuzz | 改 tenant-api API 後 |
 | **執行期 encoding 閘門**（`tests/_encoding_gate.py`，[#2005](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/2005)） | `PYTHONWARNDEFAULTENCODING=1 pytest tests/`（沒設這個變數時閘門不作用，結尾會印 `encoding gate: INACTIVE`） | `scripts/`、`components/` 的程式在測試中讀寫文字檔沒帶 `encoding=`，含 `Path.open`／`read_text`／`write_text`；只看得到測試實際走到的路徑，`subprocess(text=True)` 與在子行程裡跑的程式不在內 | 改任何讀寫檔的 Python 後 |
 
-行尾政策（`newline=`）原本列在這一節：它曾只是 `tests/dx/test_line_ending_policy.py` 的 pytest，忘了 `newline=` 要 push 後才從 CI 得知。#1366 已把它併進 §3 的 `open-encoding-audit`，commit 當下擋；判準同 `verify_diff` 的先例（本地成本低、可用 `files:` 限縮 ⇒ 升為 hook，#1185）。⚠️ CI 的 Lint job 逐名跑 hook，而 `open-encoding-audit` 不在那份名單裡，所以這條規則在 CI 上仍靠 `test_line_ending_policy.py::TestHookScope` 的全樹掃描（用 hook 的掃描器與範圍，不是第二份判定器）。
+行尾政策（`newline=`）原本列在這一節：它曾只是 `tests/dx/test_line_ending_policy.py` 的 pytest，忘了 `newline=` 要 push 後才從 CI 得知。#1366 已把它併進 §3 的 `open-encoding-audit`，commit 當下擋；判準同 `verify_diff` 的先例（本地成本低、可用 `files:` 限縮 ⇒ 升為 hook，#1185）。⚠️ CI 的 Lint job 逐名跑 hook；#2539 起 `open-encoding-audit` 在那份名單裡，是這條規則（與 `encoding=`）在 CI 的唯一執行點。`test_line_ending_policy.py::TestHookScope` 解析 `ci.yml` 釘住那一行存在、未被註解、沒有 `if:`／`continue-on-error`／吞 rc 的寫法。
 
 ---
 

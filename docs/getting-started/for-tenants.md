@@ -173,7 +173,7 @@ tenants:
       tier: "tier-1"
 ```
 
-這些 metadata 會自動注入到所有 alert 的 annotation 中，出現在通知裡。
+和你閾值比較的告警會把這三個值帶進 annotation，出現在通知裡。停機、exporter 缺席這類告警目前不帶（[#2566](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/2566)）。
 
 ## 你會收到的通知
 

@@ -66,7 +66,7 @@ func LoadDir(dir string, logger *log.Logger) (cfg *ThresholdConfig, parseFailed 
 	if len(scan.Files) == 0 {
 		return nil, nil, fmt.Errorf("no .yaml files found in %s", dir)
 	}
-	built, err := loadDirBuild(scan, dir, logger)
+	built, err := loadDirBuild(scan, dir, logger, nil)
 	if err != nil {
 		return nil, nil, err
 	}
@@ -83,7 +83,9 @@ func LoadDir(dir string, logger *log.Logger) (cfg *ThresholdConfig, parseFailed 
 // exporter rejects such a tree before this step; ScopeEffective does not
 // when the duplicate is outside its scope), so no subtree chain applies.
 // Per-file parse verdicts do not depend on the chain.
-func loadDirBuild(scan *TreeScan, dir string, logger *log.Logger) (FlatBuild, error) {
+//
+// profileLogf is FlatBuildInput.ProfileLogf (nil = logger.Printf).
+func loadDirBuild(scan *TreeScan, dir string, logger *log.Logger, profileLogf func(format string, args ...any)) (FlatBuild, error) {
 	// Mirrors populateHierarchyStateFrom: a tree with neither a defaults file
 	// nor a tenant installs no hierarchy state, so no subtree chain applies.
 	var tenantDefaults map[string][]string
@@ -100,6 +102,7 @@ func loadDirBuild(scan *TreeScan, dir string, logger *log.Logger) (FlatBuild, er
 		TenantDefaults: tenantDefaults,
 		ParsedDefaults: parsedDefaults,
 		Logger:         logger,
+		ProfileLogf:    profileLogf,
 	})
 }
 

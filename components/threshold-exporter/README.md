@@ -92,16 +92,19 @@
 | `user_state_filter` | Gauge | 狀態型告警 filter 旗標（label: tenant / filter / severity） |
 | `user_silent_mode` | Gauge | silent mode 生效中（告警仍進 TSDB，只抑制通知；label: tenant / target_severity） |
 | `user_severity_dedup` | Gauge | critical 觸發時抑制 warning 通知（label: tenant / mode） |
-| `tenant_metadata_info` | Gauge | metadata 注入用，值恆 1（labels: runbook_url / owner / tier） |
+| `user_slo_objective` | Gauge | 租戶在 `slo_burn_rate` 自訂告警宣告的 SLO 目標百分比；`objective: "disable"` 不發（labels: tenant / recipe_id；ADR-031） |
+| `tenant_metadata_info` | Gauge | 租戶 `_metadata` 的資訊指標，值恆 1；Rule Pack 以 `group_left(runbook_url, owner, tier)` join 進告警（labels: tenant / runbook_url / owner / tier） |
 | `tenant_expected_exporter` | Gauge | per-tenant exporter liveness 期望，值恆 1（labels: tenant / db_type；**僅對宣告 `_metadata.db_type` 的租戶 emit**）。`TenantExporterAbsent` anti-join 的左手邊（#869） |
-| `da_config_event` | Gauge | timed config 失效事件（silent / maintenance 自動解除） |
-| `da_custom_alert_parse_errors` | Gauge | 每租戶被丟棄的 `_custom_alerts` 數（fail-loud；0 = 全數有效） |
-| `da_tenant_metrics_over_limit` | Gauge | 每租戶超出 cardinality 上限的量（`max(0, 產出數 − 上限)`；持續超限就持續報該值） |
+| `da_config_event` | Gauge | timed config 失效事件（silent / maintenance 自動解除；labels: tenant / event / reason / target_severity） |
+| `da_custom_alert_parse_errors` | Gauge | 每租戶被丟棄的 `_custom_alerts` 數（fail-loud；0 = 全數有效；label: tenant） |
+| `da_tenant_metrics_over_limit` | Gauge | 每租戶超出 cardinality 上限的量（`max(0, 產出數 − 上限)`；持續超限就持續報該值；label: tenant） |
+| `da_config_deprecated_keys` | Gauge | 每租戶設定裡仍在用的舊 key 拼法數（#1231 改名過渡期；只供觀察遷移進度，沒有告警；label: tenant） |
 
 **營運域**（觀測 exporter 自身的熱重載健康）：
 
 | Metric | Type | 用途 |
 |--------|------|------|
+| `threshold_exporter_config_info{config_source,git_commit}` | Gauge | 設定來源與 git revision，值恆 1（GitOps drift 觀察用） |
 | `da_config_reload_trigger_total{reason}` | Counter | reload 次數，reason: `source` / `defaults` / `new` / `delete` / `forced` |
 | `da_config_reload_duration_seconds` | Histogram | 完整 reload 耗時（scan + parse + merge + commit） |
 | `da_config_scan_duration_seconds` | Histogram | 目錄掃描耗時 |

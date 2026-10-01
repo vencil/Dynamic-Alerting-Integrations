@@ -45,21 +45,24 @@ static 規則**本身**住在 pre-commit hook `open-encoding-audit`
 * `TestGuardDetectsKnownViolations` — 正反例樣本對 **hook 的實作**跑，證明
   偵測器活著。⛔ 不可刪：沒有它，偵測器可以整個回傳空 list 而全綠。
 * `TestHookScope` — 讀 `.pre-commit-config.yaml` 的 hook `entry`，釘住
-  「範圍不得被無聲收窄、行尾規則必須是 FATAL」；另有**一支**全樹掃描，是這條
-  規則在 CI 的唯一執行點——CI 的 Lint job 逐名跑 hook，而 `open-encoding-audit`
-  不在那份名單裡，拿掉它，CI 就再也看不到這條規則。
+  「範圍不得被無聲收窄、行尾規則必須是 FATAL」；並解析 `ci.yml`，釘住 CI
+  Lint job 逐名跑 `pre-commit run open-encoding-audit --all-files`。那一行是
+  這條規則全樹掃描在 CI 的**唯一**執行點（#2539 起；之前是本檔自帶的一支
+  全樹掃描測試，已移除，不要加回第二份）。
 * `TestSharedWriteHelpersPinLF` — 共用 helper 內部帶 ignore marker，static
   規則對它是盲的；這層直接驗 bytes。
 * `TestSyncCountsEmitsLF` — 端到端行為測試，**只在 Windows host 上具鑑別力**。
 
-⚠️ 如果你打算精簡這個檔案：拿掉 `TestHookScope` 的全樹掃描、只留行為測試，
-等於在 CI 裡留下一個永遠不會紅的守衛。要動之前請先讀懂上面這段。
+⚠️ 如果你打算精簡這個檔案：拿掉 `TestHookScope` 的 CI 接線斷言、只留行為
+測試，Lint job 那一行就能被無聲刪掉，等於在 CI 裡留下一個永遠不會紅的守衛。
+要動之前請先讀懂上面這段。
 """
 from __future__ import annotations
 
 import inspect
 import re
 import shlex
+import sys
 from pathlib import Path
 
 import pytest
@@ -70,6 +73,17 @@ import check_open_encoding as hook  # noqa: E402  (scripts/tools/lint on sys.pat
 
 REPO_ROOT = Path(bump_docs.__file__).resolve().parent.parent.parent.parent
 HOOK_ID = "open-encoding-audit"
+CI_WORKFLOW = REPO_ROOT / ".github" / "workflows" / "ci.yml"
+
+# The shared workflow loader and `run:` line splitter. ⛔ Imported, not
+# reimplemented: the splitter already knows that a `#` comment is not continued
+# by a trailing backslash, which a second copy would have to relearn.
+sys.path.insert(0, str(REPO_ROOT / "tests" / "ops"))
+from test_ci_path_filter_coverage import (  # noqa: E402
+    _load_workflow,
+    _logical_shell_lines,
+)
+from _precommit_selection import silencing_keys  # noqa: E402  (tests/ on sys.path)
 
 # ⛔ 獨立於 hook `entry` 的硬編清單，用來釘住「範圍不得被無聲收窄」。
 # 必須寫死：拿 entry 自己去檢查自己，等於範圍縮小、斷言也跟著縮小。
@@ -100,9 +114,13 @@ def _violations_in(path: Path) -> list[tuple[int, str]]:
     return hook.scan_line_endings(path)
 
 
-def _hook_config() -> dict:
+def _precommit_config() -> dict:
     with open(REPO_ROOT / ".pre-commit-config.yaml", encoding="utf-8") as fh:
-        config = yaml.safe_load(fh)
+        return yaml.safe_load(fh)
+
+
+def _hook_config() -> dict:
+    config = _precommit_config()
     for repo in config["repos"]:
         for h in repo.get("hooks", []):
             if h["id"] == HOOK_ID:
@@ -246,7 +264,8 @@ class TestGuardDetectsKnownViolations:
 
 
 class TestHookScope:
-    """hook `entry` 是範圍的 SSOT；這裡釘住它不會被無聲收窄或降級成 warn-only。"""
+    """hook `entry` 是範圍的 SSOT；這裡釘住它不會被無聲收窄或降級成 warn-only，
+    以及 CI 真的會跑它（Lint job 那一行是全樹掃描在 CI 的唯一執行點，#2539）。"""
 
     def test_line_ending_rule_is_fatal_in_the_hook(self):
         argv = shlex.split(_hook_config()["entry"])
@@ -286,21 +305,82 @@ class TestHookScope:
                 f"touching {sub} would never run the hook."
             )
 
-    def test_governed_tree_pins_newline(self):
-        """CI 的執行點：用 hook 的掃描器、hook 的範圍，掃整棵受管樹。
+    def test_hook_is_not_filtered_off_its_files(self):
+        """CI 那一行要真的掃到檔案，不只是「有跑」。
 
-        不是第二份判定器——偵測邏輯與範圍都取自 hook。它存在是因為 CI 的
-        Lint job 逐名跑 hook，`open-encoding-audit` 不在名單內。
+        ⛔ 這格是拿掉全樹掃描（#2539）的代價：舊測試直接呼叫掃描器、不經
+        pre-commit 的檔案篩選；改由 `pre-commit run open-encoding-audit
+        --all-files` 執行之後，hook 上一個 `exclude: .*`（或 `types:` 收窄、
+        `exclude_types:`、頂層 `exclude:`／`files:`）就讓它印
+        "(no files to check) Skipped"、rc 0——CI 綠、什麼都沒掃。實測過。
+        清單是共用的 `tests/_precommit_selection.py`，不在這裡另寫一份。
+
+        `files:` 被收窄是同一個形狀，由 `test_required_subtrees_are_governed`
+        逐棵子樹守（它用 hook 的 `files:` 比對每棵樹裡的一個受管檔）。
         """
-        failures = []
-        for f in _governed_files():
-            rel = f.resolve().relative_to(REPO_ROOT).as_posix()
-            failures += [f"  {rel}:{ln}: {why}" for ln, why in _violations_in(f)]
-        if failures:
-            pytest.fail(
-                "text-mode write(s) without an explicit LF policy:\n"
-                + "\n".join(failures) + "\n\n" + hook._LINE_ENDING_FIX
-            )
+        silenced = silencing_keys(_hook_config(), _precommit_config())
+        assert not silenced, (
+            f"{HOOK_ID} is filtered off its files: {silenced}. The CI Lint job "
+            f"runs it through pre-commit, so it would report Skipped and exit 0 "
+            f"— the encoding= / newline= rules would stop running in CI with "
+            f"every check green.")
+
+    def test_ci_lint_job_runs_the_hook_over_the_whole_tree(self):
+        """CI 的執行點：Lint job 逐名跑 `pre-commit run open-encoding-audit --all-files`。
+
+        全樹掃描的**唯一** CI 執行點是那一行（#2539）——本檔不再自帶一份全樹
+        掃描。Lint job 逐名跑 hook，不在名單上的 hook 在 CI 等於不存在，所以
+        這裡釘的是「那一行在、而且真的會讓 job 紅」。
+
+        ⛔ 解析 YAML，不 grep：`ci.yml` 的註解裡本來就會提到 hook 名稱。
+        `run:` 逐邏輯行比對（`_logical_shell_lines` 丟掉註解行、接續行併行），
+        且整行必須**恰好**是那條指令——`|| true`、`; true` 之類吞 rc 的寫法
+        因此比對不到。step 與 job 都不得帶 `if:` / `continue-on-error`，step
+        不得改 `shell:`、script 裡不得 `set +e`（預設 shell 是 `bash -e`，
+        一行失敗整個 step 就失敗）。
+
+        ⚠️ 量不到的形狀：包進 shell 函式或 `if` 區塊再呼叫、`trap`、在更早的
+        step 改寫 `pre-commit` 本身。這些不是吞 rc 的慣用寫法，未建模。
+        """
+        workflow = _load_workflow(CI_WORKFLOW)
+        assert "lint" in workflow.get("jobs", {}), (
+            f"job 'lint' is gone from {CI_WORKFLOW.name}; if it was renamed, "
+            f"update this pin — do not drop it.")
+        job = workflow["jobs"]["lint"]
+        for key in ("if", "continue-on-error"):
+            assert key not in job, (
+                f"{CI_WORKFLOW.name}::lint has job-level `{key}:` — the "
+                f"{HOOK_ID} line would no longer be an unconditional gate.")
+        for scope in (workflow, job):
+            shell = ((scope.get("defaults") or {}).get("run") or {}).get("shell")
+            assert shell is None, (
+                f"`defaults.run.shell: {shell}` overrides GitHub's `bash -e`; "
+                f"a failing {HOOK_ID} line might no longer fail its step.")
+
+        wanted = ["pre-commit", "run", HOOK_ID, "--all-files"]
+        hits = []
+        for step in job.get("steps") or []:
+            lines = _logical_shell_lines(str(step.get("run") or ""))
+            if any(line.split() == wanted for line in lines):
+                hits.append((step, lines))
+        assert hits, (
+            f"{CI_WORKFLOW.name}::lint no longer runs `{' '.join(wanted)}` as "
+            f"a bare, uncommented line. That line is the ONLY CI entry point "
+            f"for the encoding= / newline= rules (#2539); without it they "
+            f"only run where a contributor's local hook happens to.")
+        for step, lines in hits:
+            label = step.get("name") or "<unnamed step>"
+            for key in ("if", "continue-on-error", "shell"):
+                assert key not in step, (
+                    f"step {label!r} running {HOOK_ID} sets `{key}:` — it can "
+                    f"be skipped or its failure swallowed.")
+            disarmed = [ln for ln in lines
+                        if ln.split()[:1] == ["set"]
+                        and any(t.startswith("+") and "e" in t
+                                for t in ln.split()[1:])]
+            assert not disarmed, (
+                f"step {label!r} turns off errexit ({disarmed}); a failing "
+                f"{HOOK_ID} line would no longer fail the step.")
 
 
 class TestSharedWriteHelpersPinLF:
@@ -347,8 +427,9 @@ class TestSyncCountsEmitsLF:
 
     ⚠️ 只在 Windows host 上具鑑別力（見模組 docstring）。在 Linux CI 上這個
     測試恆綠 —— 它證明的是「路徑沒壞」，不是「CRLF 不會復發」。
-    擋復發的是 hook `open-encoding-audit` 的 line-ending 規則（CI 上是
-    `TestHookScope.test_governed_tree_pins_newline`）。
+    擋復發的是 hook `open-encoding-audit` 的 line-ending 規則（CI 上是 Lint
+    job 的 `pre-commit run open-encoding-audit --all-files`，由
+    `TestHookScope.test_ci_lint_job_runs_the_hook_over_the_whole_tree` 釘住）。
     """
 
     def _build_fixture_repo(self, root: Path) -> Path:

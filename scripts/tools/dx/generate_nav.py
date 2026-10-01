@@ -106,7 +106,7 @@ def scan_docs(docs_dir: Path, repo_root: Path) -> list:
     for md_file in sorted(docs_dir.rglob('*.md')):
         if md_file.name.endswith('.en.md'):
             continue
-        rel = str(md_file.relative_to(docs_dir))
+        rel = md_file.relative_to(docs_dir).as_posix()
         if is_excluded(rel):
             continue
         fm = extract_front_matter(md_file)
@@ -134,7 +134,7 @@ def scan_bridged_rule_packs(repo_root: Path) -> list:
             continue
         fm = extract_front_matter(rp_md)
         files.append({
-            'path': str(rp_md.relative_to(repo_root)),
+            'path': rp_md.relative_to(repo_root).as_posix(),
             'title': fm.get('title', rp_md.stem),
             'tags': fm.get('tags', '[]'),
             'lang': fm.get('lang', 'zh'),
