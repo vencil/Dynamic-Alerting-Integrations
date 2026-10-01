@@ -49,8 +49,9 @@ oauth2Proxy:
     # Pinned by digest (#902 L2) — same digest as tenant-api's oauth2-proxy; the
     # drift-guard requires both charts + the scan matrix to carry it identically.
     # ⛔ Digest is AUTHORITATIVE: `--set oauth2Proxy.image.tag=…` ALONE does NOT
-    #    upgrade — k8s silently keeps running THIS digest. Also set/clear
-    #    oauth2Proxy.image.digest. L3/Renovate will automate both.
+    #    upgrade — k8s silently keeps running THIS digest. Also set
+    #    oauth2Proxy.image.digest to the new tag's digest; do NOT clear it.
+    #    Renovate (#902 L3) bumps tag + digest together.
     digest: "sha256:b1b2021fe8f4004573e8d690dec6c7bb29cc44364572cf8510a05bf3a0ae2ded"
     pullPolicy: IfNotPresent
   # Provider: github | google | oidc | gitlab
