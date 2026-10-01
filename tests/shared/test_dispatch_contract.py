@@ -78,10 +78,10 @@ SPECS = [
         binary_name="da-guard",
         binary_flag="--da-guard-binary",
         env_var="DA_GUARD_BINARY",
-        subcommands=("defaults-impact", "served-values"),
+        subcommands=("defaults-impact", "served-values", "effective"),
         pass_subcommand=False,
         sample_flags=("--config-dir", "/tmp/conf.d"),
-        help_regexes=(r"guard", r"defaults-impact", r"served-values"),
+        help_regexes=(r"guard", r"defaults-impact", r"served-values", r"effective"),
         passthrough_samples=(
             (
                 "defaults-impact",
@@ -98,8 +98,12 @@ SPECS = [
                 "served-values",
                 ("--config-dir", "/conf.d", "--at", "2026-07-01T03:00:00Z"),
             ),
+            (
+                "effective",
+                ("--config-dir", "/conf.d"),
+            ),
         ),
-        forwarded_subcommands=("served-values",),
+        forwarded_subcommands=("served-values", "effective"),
     ),
     ShimSpec(
         id="batchpr",

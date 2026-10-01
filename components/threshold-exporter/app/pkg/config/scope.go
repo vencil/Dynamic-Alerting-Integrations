@@ -140,6 +140,25 @@ type DefaultsFile struct {
 // will simply be nil. The caller (CLI) prints a friendly message
 // and exits success in that case (vacuously safe defaults change).
 func ScopeEffective(configDir, scopeDir string) (*ScopedTenants, error) {
+	return scopeEffective(configDir, scopeDir, false)
+}
+
+// EffectiveTree is ScopeEffective over the whole tree (scopeDir = configDir)
+// with every tenant's KeySources filled (#2564): the per-tenant /effective
+// answer — the same resolver, the same one walk, the same merge — plus, per
+// key, the layer and file its value came from. `da-guard effective` prints
+// it for the Python readers.
+//
+// Errors are ScopeEffective's, plus one: a tree with no .yaml file at all is
+// refused with the exporter's own load's message (LoadDir), since the
+// exporter refuses to serve it — an empty result would read as "no tenants".
+func EffectiveTree(configDir string) (*ScopedTenants, error) {
+	return scopeEffective(configDir, "", true)
+}
+
+// scopeEffective is ScopeEffective; wholeTree is EffectiveTree's mode (key
+// attribution on, an empty tree refused).
+func scopeEffective(configDir, scopeDir string, wholeTree bool) (*ScopedTenants, error) {
 	// The configDir checks keep their historical messages (callers and the
 	// CLI print them); ScanDirTree below repeats the same stat on the same
 	// resolved path, so the two cannot disagree.
@@ -161,6 +180,9 @@ func ScopeEffective(configDir, scopeDir string) (*ScopedTenants, error) {
 		return nil, err
 	}
 	absRoot = scan.AbsRoot
+	if wholeTree && len(scan.Files) == 0 {
+		return nil, fmt.Errorf("no .yaml files found in %s", configDir)
+	}
 
 	// ⛔ The scope is symlink-resolved exactly like the root. Comparing a
 	// resolved root with an unresolved scope made every mixed spelling fail
@@ -226,6 +248,7 @@ func ScopeEffective(configDir, scopeDir string) (*ScopedTenants, error) {
 	// used to call ResolveEffective per tenant, re-walking configDir each
 	// time — O(files × tenants)); the defaults selection is computed once.
 	resolver := newEffectiveResolver(scan)
+	resolver.withSources = wholeTree
 	out := &ScopedTenants{
 		Tenants:       make([]*EffectiveConfig, 0, len(tenantIDs)),
 		ParseFailed:   parseFailed,

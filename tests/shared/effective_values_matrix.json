@@ -1,0 +1,86 @@
+{
+  "_comment": [
+    "#2564: one value (mysql_connections = 55) written in exactly one place per tree; tenant-a reads it, tenant-b is the control (its value only in its own tenant file, 80) and never changes.",
+    "Go half: components/threshold-exporter/app/cmd/da-guard/effective_test.go runs `da-guard effective` on every tree and requires each tenant entry to equal config.ResolveEffective (the function tenant-api's /effective calls) AND the `expect` column below.",
+    "Python half: tests/shared/test_effective_values_parity.py requires _lib_tenant_values.load_effective() to give the same `expect` column. Both halves read only this table, so the Python reading equals Go's.",
+    "expect.<tenant>: value = effective_config.mysql_connections; source = key_sources.mysql_connections ({layer, file, level?}); profile = the bound profile (null for none); merged_hash = /effective's merged_hash.",
+    "profile-mapping is #2515's shape: `_profile: {default: p55}` binds the profile on /effective (describe_tenant.py does not bind it)."
+  ],
+  "trees": [
+    {
+      "name": "root-defaults",
+      "files": {
+        "_defaults.yaml": "defaults:\n  mysql_connections: 55\n",
+        "sub/tenant-a.yaml": "tenants:\n  tenant-a:\n    _silent_mode: disable\n",
+        "tenant-b.yaml": "tenants:\n  tenant-b:\n    mysql_connections: 80\n"
+      },
+      "expect": {
+        "tenant-a": {"value": 55, "source": {"layer": "defaults", "file": "_defaults.yaml", "level": 0}, "profile": null, "merged_hash": "4c421421cf66fa9c"},
+        "tenant-b": {"value": 80, "source": {"layer": "tenant", "file": "tenant-b.yaml"}, "profile": null, "merged_hash": "762f49c6683c4640"}
+      }
+    },
+    {
+      "name": "platform-tenants",
+      "files": {
+        "_defaults.yaml": "defaults:\n  mysql_connections: 70\ntenants:\n  tenant-a:\n    mysql_connections: 55\n",
+        "sub/tenant-a.yaml": "tenants:\n  tenant-a:\n    _silent_mode: disable\n",
+        "tenant-b.yaml": "tenants:\n  tenant-b:\n    mysql_connections: 80\n"
+      },
+      "expect": {
+        "tenant-a": {"value": 55, "source": {"layer": "platform", "file": "_defaults.yaml"}, "profile": null, "merged_hash": "4c421421cf66fa9c"},
+        "tenant-b": {"value": 80, "source": {"layer": "tenant", "file": "tenant-b.yaml"}, "profile": null, "merged_hash": "762f49c6683c4640"}
+      }
+    },
+    {
+      "name": "tenant-file",
+      "files": {
+        "_defaults.yaml": "defaults:\n  mysql_connections: 70\n",
+        "sub/tenant-a.yaml": "tenants:\n  tenant-a:\n    mysql_connections: 55\n",
+        "tenant-b.yaml": "tenants:\n  tenant-b:\n    mysql_connections: 80\n"
+      },
+      "expect": {
+        "tenant-a": {"value": 55, "source": {"layer": "tenant", "file": "sub/tenant-a.yaml"}, "profile": null, "merged_hash": "021c76780b4718ea"},
+        "tenant-b": {"value": 80, "source": {"layer": "tenant", "file": "tenant-b.yaml"}, "profile": null, "merged_hash": "762f49c6683c4640"}
+      }
+    },
+    {
+      "name": "subtree-defaults",
+      "files": {
+        "_defaults.yaml": "defaults:\n  mysql_connections: 70\n",
+        "sub/_defaults.yaml": "defaults:\n  mysql_connections: 55\n",
+        "sub/tenant-a.yaml": "tenants:\n  tenant-a:\n    _silent_mode: disable\n",
+        "tenant-b.yaml": "tenants:\n  tenant-b:\n    mysql_connections: 80\n"
+      },
+      "expect": {
+        "tenant-a": {"value": 55, "source": {"layer": "defaults", "file": "sub/_defaults.yaml", "level": 1}, "profile": null, "merged_hash": "4c421421cf66fa9c"},
+        "tenant-b": {"value": 80, "source": {"layer": "tenant", "file": "tenant-b.yaml"}, "profile": null, "merged_hash": "762f49c6683c4640"}
+      }
+    },
+    {
+      "name": "profile",
+      "files": {
+        "_defaults.yaml": "defaults:\n  mysql_connections: 70\n",
+        "_profiles.yaml": "profiles:\n  p55:\n    mysql_connections: 55\n",
+        "sub/tenant-a.yaml": "tenants:\n  tenant-a:\n    _profile: p55\n",
+        "tenant-b.yaml": "tenants:\n  tenant-b:\n    mysql_connections: 80\n"
+      },
+      "expect": {
+        "tenant-a": {"value": 55, "source": {"layer": "profile", "file": "_profiles.yaml"}, "profile": "p55", "merged_hash": "d9d087fc9e530137"},
+        "tenant-b": {"value": 80, "source": {"layer": "tenant", "file": "tenant-b.yaml"}, "profile": null, "merged_hash": "762f49c6683c4640"}
+      }
+    },
+    {
+      "name": "profile-mapping",
+      "files": {
+        "_defaults.yaml": "defaults:\n  mysql_connections: 70\n",
+        "_profiles.yaml": "profiles:\n  p55:\n    mysql_connections: 55\n",
+        "sub/tenant-a.yaml": "tenants:\n  tenant-a:\n    _profile:\n      default: p55\n",
+        "tenant-b.yaml": "tenants:\n  tenant-b:\n    mysql_connections: 80\n"
+      },
+      "expect": {
+        "tenant-a": {"value": 55, "source": {"layer": "profile", "file": "_profiles.yaml"}, "profile": "p55", "merged_hash": "d9d087fc9e530137"},
+        "tenant-b": {"value": 80, "source": {"layer": "tenant", "file": "tenant-b.yaml"}, "profile": null, "merged_hash": "762f49c6683c4640"}
+      }
+    }
+  ]
+}
