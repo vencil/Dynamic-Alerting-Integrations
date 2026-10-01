@@ -34,7 +34,8 @@ package config
 //     Only tenants whose tenant.yaml file lives at-or-below scopeDir
 //     are returned. This matches the GitHub Actions trigger:
 //     "_defaults.yaml at path X changed; validate everyone under
-//     dirname(X)".
+//     dirname(X)" — passed relative to configDir (or absolute), since a
+//     relative scopeDir is resolved against configDir (#2588).
 //
 //   - scopeDir equal to configDir means "validate every tenant in
 //     the tree". That's the natural pre-commit / local-dev flow.
@@ -210,16 +211,17 @@ func scopeEffective(configDir, scopeDir string, wholeTree bool) (*ScopedTenants,
 		return nil, err
 	}
 	absRoot = scan.AbsRoot
-	if wholeTree && len(scan.Files) == 0 {
-		return nil, fmt.Errorf("no .yaml files found in %s", configDir)
-	}
 	// ⛔ A root the walk cannot list is not an empty tree (#2588). The walker
 	// records no Unreadable entry for the root itself (TreeScan.RootWalkErr),
 	// so the scoped mode — where an empty tree is a valid, vacuously-safe
 	// scope — would read it as "nothing in scope". Refuse it, as the
-	// exporter's load does.
+	// exporter's load does. Checked BEFORE the whole-tree "no .yaml files"
+	// refusal, so every mode names the reason (e.g. permission denied).
 	if len(scan.Files) == 0 && scan.RootWalkErr != nil {
 		return nil, fmt.Errorf("cannot list configDir %q: %w", absRoot, scan.RootWalkErr)
+	}
+	if wholeTree && len(scan.Files) == 0 {
+		return nil, fmt.Errorf("no .yaml files found in %s", configDir)
 	}
 
 	// ⛔ The scope is symlink-resolved exactly like the root. Comparing a

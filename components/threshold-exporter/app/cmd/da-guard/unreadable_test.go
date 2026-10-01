@@ -290,6 +290,18 @@ func TestUnreadable_GuardScope_EmptyScopeIsNotSafe(t *testing.T) {
 			},
 			want: []skippedFile{{"team", config.UnreadableWalkError}},
 		},
+		{
+			// A directory BELOW the scope that cannot be listed: the
+			// directory rule's "lies below the scope" branch.
+			name:    "directory below the scope 0000",
+			nonRoot: true,
+			scope:   "team",
+			breakIt: func(t *testing.T, dir string) {
+				writeTeamDeep(t, dir, false)
+				chmodT(t, filepath.Join(dir, "team", "deep"), 0, 0o755)
+			},
+			want: []skippedFile{{"team/deep", config.UnreadableWalkError}},
+		},
 	} {
 		t.Run(s.name, func(t *testing.T) {
 			t.Parallel()
@@ -326,6 +338,51 @@ func TestUnreadable_GuardScope_EmptyScopeIsNotSafe(t *testing.T) {
 				t.Errorf("md report still says vacuously safe:\n%s", md)
 			}
 		})
+	}
+}
+
+// writeTeamDeep writes team/deep/t.yaml (tenant-deep) and, with readable,
+// team/t.yaml (tenant-team) beside it.
+func writeTeamDeep(t *testing.T, dir string, readable bool) {
+	t.Helper()
+	files := map[string]string{"team/deep/t.yaml": "tenants:\n  tenant-deep:\n    mysql_connections: 60\n"}
+	if readable {
+		files["team/t.yaml"] = "tenants:\n  tenant-team:\n    mysql_connections: 50\n"
+	}
+	for rel, body := range files {
+		p := filepath.Join(dir, filepath.FromSlash(rel))
+		if err := os.MkdirAll(filepath.Dir(p), 0o755); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(p, []byte(body), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+}
+
+// An unlistable directory below the scope, beside a tenant the run does
+// check: still exit 3 naming it, and the report must not call it safe.
+func TestUnreadable_GuardScope_UnlistableDirBelowScopeBesideReadableTenant(t *testing.T) {
+	t.Parallel()
+	if os.Geteuid() == 0 {
+		t.Skip("running as root: chmod does not stop root")
+	}
+	dir := writeParityTree(t, unreadableBase())
+	writeTeamDeep(t, dir, true)
+	chmodT(t, filepath.Join(dir, "team", "deep"), 0, 0o755)
+	code, doc, stderr := guardJSON(t, dir, "--scope", "team")
+	if code != exitParseFailed {
+		t.Fatalf("exit = %d, want %d; stderr=%q", code, exitParseFailed, stderr)
+	}
+	if want := []skippedFile{{"team/deep", config.UnreadableWalkError}}; !reflect.DeepEqual(doc.Unreadable, want) {
+		t.Errorf("unreadable = %v, want %v", doc.Unreadable, want)
+	}
+	if doc.Report == nil || doc.Report.Summary.TotalTenants != 1 {
+		t.Errorf("report = %+v, want tenant-team checked", doc.Report)
+	}
+	_, md, _ := runOnce(t, "--config-dir", dir, "--scope", "team")
+	if strings.Contains(md, "safe to merge") || !strings.Contains(md, "`team/deep` (walk_error)") {
+		t.Errorf("md report must name team/deep and not say safe to merge:\n%s", md)
 	}
 }
 
@@ -481,8 +538,30 @@ func TestUnreadable_UnlistableConfigDir_ExitsTwo(t *testing.T) {
 			t.Errorf("%v: exit = %d, want %d; stderr=%q", args, code, exitCallerErr, stderr)
 		}
 	}
-	_, _, stderr := runOnce(t, "--config-dir", dir)
-	if !strings.Contains(stderr, "cannot list configDir") {
-		t.Errorf("guard stderr does not say why: %q", stderr)
+	// The reason is named in both the scoped mode (guard) and the whole-tree
+	// mode (effective) — not "no .yaml files found" (#2588 review).
+	for _, args := range [][]string{{"--config-dir", dir}, {effectiveCmd, "--config-dir", dir}} {
+		_, _, stderr := runOnce(t, args...)
+		if !strings.Contains(stderr, "cannot list configDir") || !strings.Contains(stderr, "permission denied") {
+			t.Errorf("%v: stderr does not say why: %q", args, stderr)
+		}
+	}
+}
+
+// The --scope help must teach the spelling the flag now takes: a directory
+// relative to --config-dir, not a repo-relative dirname (#2588 review).
+func TestScopeHelp_TeachesConfigDirRelativeSpelling(t *testing.T) {
+	t.Parallel()
+	_, _, stderr := runOnce(t, "-h")
+	i := strings.Index(stderr, "-scope")
+	if i < 0 {
+		t.Fatalf("-h does not list -scope: %q", stderr)
+	}
+	help := stderr[i:]
+	if j := strings.Index(help[1:], "\n  -"); j >= 0 {
+		help = help[:j+1]
+	}
+	if strings.Contains(help, "dirname") || !strings.Contains(help, "the changed _defaults.yaml's directory, relative to --config-dir") {
+		t.Errorf("-scope help does not teach the config-dir-relative spelling: %q", help)
 	}
 }
