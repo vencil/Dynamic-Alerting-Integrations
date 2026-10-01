@@ -333,7 +333,8 @@ func pyYAMLBinary(v string) bool {
 // receiver field (the receiver is refused and skipped), a `routes[i].match`
 // value (the entry is skipped) and `overrides[i].alertname` /
 // `metric_group` (truthiness decides whether the override renders, str()
-// what it matches). Only those values are re-read: each receiver
+// what it matches), and each `group_by` (#2503: an unquoted `8` / `on` is no
+// label name to it, GroupByInvalid). Only those values are re-read: each receiver
 // (`receiver`, `overrides[i].receiver`, `routes[i].receiver`), each
 // `routes[i].match` value and each `overrides[i].alertname` /
 // `metric_group` is replaced by the value pkg/pyyamlcompat builds from the
@@ -363,11 +364,13 @@ var UnmatchedValue = pyyamlcompat.Unsupported{Tag: "value", Reason: "not found w
 var overrideMatcherKeys = []string{"alertname", "metric_group"}
 
 // WithPyYAMLRouting returns routing with its receivers, `routes[i].match`
-// values and `overrides[i].alertname` / `metric_group` taken from py, the
+// values, `overrides[i].alertname` / `metric_group` and the `group_by` of
+// the routing and of each entry (#2503) taken from py, the
 // same `_routing` decoded by pyyamlcompat (nil when it could not be found).
 // routing is not modified. A routing, list, entry or match that is not a
 // mapping on the yaml.v3 side is left as it is: nothing is read from it
-// downstream either. Every such value the yaml.v3 side carries and py does
+// downstream either — except an entry's `group_by` when yaml.v3 read the
+// entry as a map[any]any. Every such value the yaml.v3 side carries and py does
 // not is Unmatched / UnmatchedValue (see the fail-closed note above).
 func WithPyYAMLRouting(routing, py any) any {
 	r, ok := asStringMap(routing)
@@ -385,6 +388,7 @@ func WithPyYAMLRouting(routing, py any) any {
 		}
 	}
 	withKey(r, py, "receiver", Unmatched)
+	withPyYAMLGroupBy(r, py)
 	for _, list := range []string{"overrides", "routes"} {
 		entries, ok := r[list].([]any)
 		if !ok {
@@ -400,9 +404,16 @@ func WithPyYAMLRouting(routing, py any) any {
 			out[i] = e
 			em, ok := asStringMap(e)
 			if !ok {
+				// A key yaml.v3 reads as no string (`1:`): only the
+				// group_by is re-read (#2503) — GroupByInvalid judges
+				// every mapping entry, as the generator does.
+				if am, isAny := e.(map[any]any); isAny {
+					out[i] = withPyYAMLGroupByAny(am, pyEntries[i])
+				}
 				continue
 			}
 			withKey(em, pyEntries[i], "receiver", Unmatched)
+			withPyYAMLGroupBy(em, pyEntries[i])
 			if list == "overrides" {
 				for _, k := range overrideMatcherKeys {
 					withKey(em, pyEntries[i], k, UnmatchedValue)
@@ -416,6 +427,45 @@ func WithPyYAMLRouting(routing, py any) any {
 		r[list] = out
 	}
 	return r
+}
+
+// withPyYAMLGroupBy replaces dst's `group_by`, when it has one, with the one
+// py (the same mapping as PyYAML reads it) carries (#2503). ⛔ Fail-closed:
+// not found there, a list becomes a list of UnmatchedValue of its length
+// (each element refused by GroupByInvalid), anything else UnmatchedValue.
+func withPyYAMLGroupBy(dst map[string]any, py any) {
+	if v, has := dst["group_by"]; has {
+		dst["group_by"] = pyYAMLGroupBy(v, py)
+	}
+}
+
+// withPyYAMLGroupByAny is withPyYAMLGroupBy for an entry yaml.v3 decoded as
+// map[any]any; e is not modified.
+func withPyYAMLGroupByAny(e map[any]any, py any) map[any]any {
+	v, has := e["group_by"]
+	if !has {
+		return e
+	}
+	out := make(map[any]any, len(e))
+	for k, x := range e {
+		out[k] = x
+	}
+	out["group_by"] = pyYAMLGroupBy(v, py)
+	return out
+}
+
+func pyYAMLGroupBy(v, py any) any {
+	if pv, found := stringKey(py, "group_by"); found {
+		return pv
+	}
+	if list, isList := v.([]any); isList {
+		out := make([]any, len(list))
+		for i := range out {
+			out[i] = UnmatchedValue
+		}
+		return out
+	}
+	return UnmatchedValue
 }
 
 // withPyYAMLMatch is a `routes[i].match` mapping with each value taken from
