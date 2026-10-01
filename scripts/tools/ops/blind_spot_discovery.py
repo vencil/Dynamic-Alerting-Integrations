@@ -120,8 +120,8 @@ def load_monitored_db_types(config_dir):
     `defaults:`, a platform `tenants:` block, the tenant file, a subtree —
     and at any depth. A key switched off (`disable`) or with no row on
     /metrics (e.g. no default for it) does not count. Files the load serves
-    no tenant from are named on stderr, after da-guard's own WARN lines
-    (e.g. a file the load cannot read). da-guard missing or failing, or a
+    no tenant from are named on stderr, after whatever da-guard prints on
+    stderr (passed on whole, line by line). da-guard missing or failing, or a
     file the load cannot decode, raises (the CLI exits 2).
     """
     result = {}

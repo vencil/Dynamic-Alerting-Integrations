@@ -77,8 +77,8 @@ def load_tenant_configs(config_dir=None, tenant_config=None):
       a subtree counts, and a nested tenant is seen; a key switched off
       (``disable``) or with no row on /metrics (e.g. no default for it) does
       not. A file the load serves no tenant from (no ``tenants:`` mapping)
-      is named on stderr, not read as a tenant; da-guard's own WARN lines
-      (e.g. a file the load cannot read) are passed through to stderr. da-guard missing or failing,
+      is named on stderr, not read as a tenant; whatever da-guard prints on
+      stderr is passed on whole, line by line. da-guard missing or failing,
       or a file the load cannot decode, raises (the CLI exits 2).
     - Single-file branch: unchanged — the file as written. It unwraps the
       ``tenants:`` wrapper, and derives the flat-format tenant name via

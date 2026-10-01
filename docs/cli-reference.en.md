@@ -577,7 +577,7 @@ Presented in three sections:
 - **Blind Spots**: Exporters without tenant config
 - **Unrecognized**: Jobs with unidentifiable DB type
 
-"Corresponding tenant config" means the thresholds the exporter's `/metrics` actually serves for the tenant (read through `da-guard served-values`, #2115): a value written in `defaults:`, a platform file's `tenants:`, the tenant file or a subdirectory counts, and so does a tenant in a subdirectory; a key switched off with `disable`, or one with no default that is never served, does not. A file with no `tenants:` is not a tenant; stderr prints one `WARN` per such file. A file the exporter cannot read (e.g. no permission, a symlink to a directory) is only skipped and does not change the exit code; the `WARN` lines da-guard prints are passed through to stderr. Needs da-guard (shipped in the image; when running from the repo, via `$DA_GUARD_BINARY` or `$PATH`).
+"Corresponding tenant config" means the thresholds the exporter's `/metrics` actually serves for the tenant (read through `da-guard served-values`, #2115): a value written in `defaults:`, a platform file's `tenants:`, the tenant file or a subdirectory counts, and so does a tenant in a subdirectory; a key switched off with `disable`, or one with no default that is never served, does not. A file with no `tenants:` is not a tenant; stderr prints one `WARN` per such file. A file the exporter cannot read (e.g. no permission, a symlink to a directory) is only skipped and does not change the exit code; whatever da-guard prints on stderr is passed on to stderr, line by line. Needs da-guard (shipped in the image; when running from the repo, via `$DA_GUARD_BINARY` or `$PATH`).
 
 **Examples**
 
@@ -593,7 +593,7 @@ da-tools blind-spot --config-dir ./conf.d --json-output
 |------|-------------|
 | `0` | Success (regardless of blind spots) |
 | `1` | Only an uncaught exception (traceback) returns 1. An unreachable Prometheus only prints a WARN and the run ends at 0 |
-| `2` | Caller error: a file under `--config-dir` that the exporter fails to parse and skips whole (e.g. content not UTF-8 or not valid YAML; the message names the file and carries the exporter's parse reason); a tree the exporter rejects (e.g. one tenant declared in two files); or da-guard not found / failing |
+| `2` | Caller error: a file under `--config-dir` that the exporter fails to parse and skips whole (e.g. content not UTF-8 or not valid YAML; the `ERROR` line names the file, and what da-guard prints on stderr — the exporter's parse reasons among it — follows, one indented line per line); a tree the exporter rejects (e.g. one tenant declared in two files); or da-guard not found / failing |
 
 ---
 
@@ -2311,7 +2311,7 @@ da-tools analyze-gaps (--tenant-config <FILE> | --config-dir <DIR>) [options]
 | `--json` | Print only JSON on stdout | false |
 | `--metric-dictionary <FILE>` | Metric dictionary; exit code 2 if given but the file does not exist | `metric-dictionary.yaml` beside the tool (image) or one level up (`scripts/tools/` in the repo) |
 
-`--config-dir` reads the thresholds, and their values, that the exporter's `/metrics` actually serves for each tenant (through `da-guard served-values`, #2115): an inherited `custom_` threshold is listed; a key switched off with `disable`, or one with no default that is never served, is not. A file with no `tenants:` is not a tenant; stderr prints one `WARN` per such file; a file the exporter cannot read is only skipped and does not change the exit code, and the `WARN` lines da-guard prints are passed through to stderr. Needs da-guard (shipped in the image; when running from the repo, via `$DA_GUARD_BINARY` or `$PATH`). `--tenant-config` still reads the one file as written.
+`--config-dir` reads the thresholds, and their values, that the exporter's `/metrics` actually serves for each tenant (through `da-guard served-values`, #2115): an inherited `custom_` threshold is listed; a key switched off with `disable`, or one with no default that is never served, is not. A file with no `tenants:` is not a tenant; stderr prints one `WARN` per such file; a file the exporter cannot read is only skipped and does not change the exit code, and whatever da-guard prints on stderr is passed on to stderr, line by line. Needs da-guard (shipped in the image; when running from the repo, via `$DA_GUARD_BINARY` or `$PATH`). `--tenant-config` still reads the one file as written.
 
 If the dictionary is in neither default location, one `WARN` line goes to stderr and matching falls back to name prefix and token overlap (`match_type: "prefix"`, `confidence: 0.7`). ⚠️ The v2.9.0 image is not affected (the dictionary sits beside the tool), but running that version's code directly in the repo as `python3 scripts/tools/ops/analyze_rule_pack_gaps.py` finds no dictionary and does not warn; pass `--metric-dictionary scripts/tools/metric-dictionary.yaml`. <!-- image-caveat: v2.9.0 -->
 

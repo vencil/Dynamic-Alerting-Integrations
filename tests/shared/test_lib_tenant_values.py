@@ -107,11 +107,13 @@ def test_parse_failed_raises_yaml_file_error_naming_the_file(tmp_path, da_guard)
     })
     with pytest.raises(YamlFileError) as ei:
         tv.load_served_values(conf_d, binary=da_guard)
+    assert isinstance(ei.value, tv.ParseFailedError)
     assert ei.value.path == str(conf_d / "tenant-b.yaml")
     assert "tenant-b.yaml" in str(ei.value)
-    # 附上 exporter 自己的解析原因；da-guard 的收尾行（只是重複 parse_failed）不附。
-    assert "cannot unmarshal" in str(ei.value), str(ei.value)
-    assert "cannot be decoded" not in str(ei.value), str(ei.value)
+    assert "\n" not in str(ei.value)  # YamlFileError 的單行契約不變
+    # da-guard 的 stderr 整份附在 stderr_lines（exporter 的解析原因在其中），不篩選。
+    assert any("cannot unmarshal" in ln for ln in ei.value.stderr_lines), ei.value.stderr_lines
+    assert any("cannot be decoded" in ln for ln in ei.value.stderr_lines), ei.value.stderr_lines
 
 
 def test_nonzero_exit_raises_with_stderr(tmp_path, da_guard):
@@ -323,14 +325,15 @@ def test_da_guard_warn_lines_are_kept_on_a_successful_run(tmp_path, da_guard, ca
     (conf_d / "realdir").mkdir()
     (conf_d / "tb.yaml").symlink_to("realdir")
     tree = tv.load_served_tree(conf_d, binary=da_guard)
-    assert len(tree.warnings) == 1 and tree.warnings[0].startswith("WARN: cannot read "), tree.warnings
-    assert "tb.yaml" in tree.warnings[0]
+    assert len(tree.stderr_lines) == 1, tree.stderr_lines
+    assert tree.stderr_lines[0].startswith("WARN: cannot read ") and "tb.yaml" in tree.stderr_lines[0]
     tv.print_load_warnings(tree)
-    assert capsys.readouterr().err.splitlines() == tree.warnings
+    assert capsys.readouterr().err.splitlines() == tree.stderr_lines
 
 
 def test_missing_binary_message_names_only_what_these_tools_take(monkeypatch, capsys):
     """decorator 不轉印 dispatcher 的訊息（那段講 `da-tools guard` 的 --da-guard-binary 旗標）。"""
+    monkeypatch.delenv("DA_GUARD_BINARY", raising=False)
     @tv.exit_on_served_values_error
     def main():
         raise tv.DaGuardNotFoundError("Error: da-guard binary not found.\nResolution order:\n  1. --da-guard-binary <path>")
@@ -342,6 +345,24 @@ def test_missing_binary_message_names_only_what_these_tools_take(monkeypatch, ca
     assert err.splitlines() == [f"ERROR: {tv.MISSING_BINARY_MESSAGE}"]
     assert "--da-guard-binary" not in err and "v2.8.0" not in err
     assert "$DA_GUARD_BINARY" in err and "$PATH" in err and "/usr/local/bin/da-guard" in err
+
+
+def test_da_guard_binary_env_naming_no_file_is_said_so(monkeypatch, tmp_path, capsys):
+    """F5：`$DA_GUARD_BINARY` 有設但那個路徑沒有檔案時，訊息印出該值並說是它不存在。"""
+    missing = tmp_path / "no-such-da-guard"
+    monkeypatch.setenv("DA_GUARD_BINARY", str(missing))
+
+    @tv.exit_on_served_values_error
+    def main():
+        tv.load_served_tree(tmp_path)
+
+    with pytest.raises(SystemExit) as ei:
+        main()
+    assert ei.value.code == 2
+    err = capsys.readouterr().err
+    assert err.splitlines() == [err.rstrip("\n")], err  # 一行
+    assert f"$DA_GUARD_BINARY is set to '{missing}'" in err
+    assert "no file exists at that path" in err
 
 
 def test_served_values_error_stderr_is_printed_line_by_line(capsys):

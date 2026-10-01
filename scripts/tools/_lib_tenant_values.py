@@ -7,11 +7,11 @@ subcommand and parses its JSON; it decides nothing about the values itself.
 `tenants` is `load_served_values`'s answer, `skipped` the files the exporter's
 load read but serves no tenant from (a file outside the `_` files with no
 `tenants:` mapping, #2115 R3), each a `SkippedFile(file, reason)` in the words
-of the load; `warnings` the `WARN:` lines da-guard wrote to stderr on a run
-that succeeded (a file the load cannot read, a dangling symlink, `defaults:`
-in a tenant file, ...), which a successful run would otherwise swallow.
-`print_load_warnings` prints both: da-guard's WARN lines, then one named WARN line
-per skipped file.
+of the load; `stderr_lines` every non-empty line da-guard wrote to stderr on
+a run that succeeded, as written (a successful run would otherwise swallow
+them). They are not sorted into kinds here: what da-guard prints is passed on
+whole. `print_load_warnings` prints both: those lines, then one named WARN
+line per skipped file.
 
 `load_served_values(conf_d, at=None, binary=None)` returns
 `{tenant_id: TenantValues}`:
@@ -36,8 +36,10 @@ only drops that row and /metrics still serves.
 
 Raises:
 
-* `YamlFileError` (`_lib_io`) — the exporter's load skips a file that does
-  not decode; `path` names the first, the message names all.
+* `ParseFailedError` (a `YamlFileError`, `_lib_io`) — the exporter's load
+  skips a file that does not decode; `path` names the first, the one-line
+  message names all, `stderr_lines` carries da-guard's stderr whole (the
+  exporter's reasons among it).
 * `DaGuardNotFoundError` — no da-guard binary; the message says how to get one.
 * `ServedValuesError` — da-guard failed, or its output is not the JSON it
   should be; carries the exit code and stderr.
@@ -48,7 +50,7 @@ from __future__ import annotations
 
 import functools
 import json
-import re
+import os
 import subprocess
 import sys
 from pathlib import Path
@@ -72,6 +74,7 @@ __all__ = [
     "TenantValues",
     "YamlFileError",
     "MISSING_BINARY_MESSAGE",
+    "ParseFailedError",
     "exit_on_served_values_error",
     "load_served_tree",
     "load_served_values",
@@ -103,7 +106,19 @@ class SkippedFile(NamedTuple):
 class ServedTree(NamedTuple):
     tenants: dict[str, TenantValues]
     skipped: list[SkippedFile]
-    warnings: list[str]  # da-guard's own `WARN:` lines, as written
+    stderr_lines: list[str]  # every non-empty line of da-guard's stderr, as written
+
+
+class ParseFailedError(YamlFileError):
+    """The exporter's load skips a file that does not decode (parse_failed).
+
+    `str()` keeps `YamlFileError`'s one-line contract; `stderr_lines` is
+    da-guard's stderr, every non-empty line as written, for a caller to show
+    below that line."""
+
+    def __init__(self, path: str, cause: Exception, stderr_lines: list[str]) -> None:
+        super().__init__(path, cause)
+        self.stderr_lines = stderr_lines
 
 
 class DaGuardNotFoundError(FileNotFoundError):
@@ -128,11 +143,10 @@ def _stderr_text(b: bytes | str | None) -> str:
     return b if isinstance(b, str) else b.decode("utf-8", errors="backslashreplace")
 
 
-# A `WARN:` line of da-guard's stderr: the load's logger writes it bare, the
-# process-wide `log` (the resolvers) with its date/time prefix.
-_WARN_LINE = re.compile(r"^(?:\d{4}/\d{2}/\d{2} \d{2}:\d{2}:\d{2} )?WARN: ")
-# da-guard's own closing line on exit 3; it repeats parse_failed.
-_EXIT3_SUMMARY = re.compile(r"^da-guard: \d+ file\(s\) cannot be decoded: ")
+def _nonempty_lines(text: str) -> list[str]:
+    """Every non-empty line of `text`, trailing whitespace dropped and the
+    leading indent kept (a continuation line of a Go error is indented)."""
+    return [ln.rstrip() for ln in text.splitlines() if ln.strip()]
 
 
 def _threshold(v: Any) -> float:
@@ -202,15 +216,11 @@ def load_served_tree(
             proc.returncode, stderr) from e
 
     if parse_failed:
-        # The exporter's own reasons (line, YAML error), minus da-guard's
-        # closing line, which only repeats parse_failed.
-        reasons = [ln.strip() for ln in stderr.splitlines()
-                   if ln.strip() and not _EXIT3_SUMMARY.match(ln)]
-        raise YamlFileError(
+        raise ParseFailedError(
             str(Path(conf_d) / parse_failed[0]),
             ValueError(f"the exporter's load skips {len(parse_failed)} file(s) that do not decode: "
-                       f"{', '.join(parse_failed)}"
-                       + (f"; {'; '.join(reasons)}" if reasons else "")))
+                       f"{', '.join(parse_failed)}"),
+            _nonempty_lines(stderr))
     if proc.returncode != _EXIT_OK:
         raise ServedValuesError(
             f"da-guard {SUBCOMMAND} exited {proc.returncode} with no file in parse_failed",
@@ -231,17 +241,16 @@ def load_served_tree(
                 proc.returncode, stderr) from e
         out[tenant_id] = TenantValues(tenant_id, values, severities, dict(tv["unserved"]),
                                      {k: list(v) for k, v in tv["dropped"].items()})
-    warnings = [ln for ln in stderr.splitlines() if _WARN_LINE.match(ln)]
-    return ServedTree(out, skipped, warnings)
+    return ServedTree(out, skipped, _nonempty_lines(stderr))
 
 
 def print_load_warnings(tree: ServedTree, stream: TextIO | None = None) -> None:
-    """da-guard's own `WARN:` lines (as written), then one
-    `WARN: <file>: <reason>` line per file the load serves no tenant from, in
-    the load's order (#2115 R3). Every line is escaped for the terminal
-    (`safe_label`): the file names in it come from the tree."""
+    """Every non-empty line da-guard wrote to stderr (as written, indent
+    kept), then one `WARN: <file>: <reason>` line per file the load serves no
+    tenant from, in the load's order (#2115 R3). Every line is escaped for
+    the terminal (`safe_label`): the file names in it come from the tree."""
     stream = sys.stderr if stream is None else stream
-    for line in tree.warnings:
+    for line in tree.stderr_lines:
         print(safe_label(line), file=stream)
     for s in tree.skipped:
         print(f"WARN: {safe_label(s.file)}: {s.reason}", file=stream)
@@ -252,10 +261,14 @@ _F = TypeVar("_F", bound=Callable[..., Any])
 
 def exit_on_served_values_error(fn: _F) -> _F:
     """Decorate a CLI `main` so that da-guard missing or failing exits 2
-    (`EXIT_CALLER_ERROR`) with an `ERROR:` line, as `exit_on_yaml_file_error`
-    does for an unreadable file; da-guard's stderr follows, one escaped line
-    per line. `YamlFileError` is left to that decorator (or the tool's own
-    handler).
+    (`EXIT_CALLER_ERROR`) with one `ERROR:` line; da-guard's stderr follows,
+    every non-empty line escaped and indented.
+
+    `ParseFailedError` gets the line `exit_on_yaml_file_error` prints
+    (`ERROR: cannot read <path>: <message>`) with da-guard's stderr below it:
+    that decorator prints `str()` only, which is one line by contract, so the
+    exporter's reasons would be lost there. Any other `YamlFileError` is left
+    to that decorator (or the tool's own handler).
 
     A missing binary gets this module's own text, not the dispatcher's: that
     one names `da-tools guard`'s `--da-guard-binary` flag, which the tools
@@ -265,15 +278,33 @@ def exit_on_served_values_error(fn: _F) -> _F:
         try:
             return fn(*args, **kwargs)
         except DaGuardNotFoundError:
-            print(f"ERROR: {MISSING_BINARY_MESSAGE}", file=sys.stderr)
+            print(f"ERROR: {_missing_binary_message()}", file=sys.stderr)
             sys.exit(EXIT_CALLER_ERROR)
+        except ParseFailedError as exc:
+            _print_error_with_stderr(f"cannot read {exc}", exc.stderr_lines)
         except ServedValuesError as exc:
-            print(f"ERROR: {safe_label(exc.message)}", file=sys.stderr)
-            for line in exc.stderr.splitlines():
-                if line.strip():
-                    print(f"  {safe_label(line)}", file=sys.stderr)
-            sys.exit(EXIT_CALLER_ERROR)
+            _print_error_with_stderr(exc.message, _nonempty_lines(exc.stderr))
     return _wrapped  # type: ignore[return-value]
+
+
+def _print_error_with_stderr(head: str, stderr_lines: list[str]) -> None:
+    print(f"ERROR: {safe_label(head)}", file=sys.stderr)
+    for line in stderr_lines:
+        print(f"  {safe_label(line)}", file=sys.stderr)
+    sys.exit(EXIT_CALLER_ERROR)
+
+
+def _missing_binary_message() -> str:
+    """`MISSING_BINARY_MESSAGE`, or — when `$DA_GUARD_BINARY` is set but names
+    no file, which stops the resolution there — that path and that fact."""
+    env_var = guard_dispatch.DISPATCHER.env_var
+    set_to = os.environ.get(env_var, "").strip()  # as the dispatcher reads it
+    if set_to and not os.path.isfile(set_to):
+        return (f"da-guard binary not found: ${env_var} is set to '{safe_label(set_to)}', "
+                f"and no file exists at that path. Point it at the da-guard binary, or unset "
+                f"it to use da-guard on $PATH (the da-tools image ships it as "
+                f"/usr/local/bin/da-guard).")
+    return MISSING_BINARY_MESSAGE
 
 
 MISSING_BINARY_MESSAGE = (

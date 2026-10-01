@@ -20,6 +20,7 @@ da-guard 由 conftest 的 session fixture 以 `go build` 建出；建不起來�
 from __future__ import annotations
 
 import json
+import re
 import subprocess
 import sys
 from pathlib import Path
@@ -194,3 +195,74 @@ def test_file_the_exporter_cannot_read_is_warned_and_rc_stays_0(script, extra, t
     warn = [ln for ln in p.stderr.splitlines() if ln.startswith("WARN: cannot read ")]
     assert len(warn) == 1 and "tb.yaml" in warn[0], p.stderr
     json.loads(p.stdout)
+
+
+# ── da-guard 的 stderr：照轉，不分類、不篩選（第 2 輪盲審 F1–F4）──────────────
+
+_A_OK = "tenants:\n  tenant-a:\n    mysql_connections: 70\n"
+_DATE = re.compile(r"^\d{4}/\d{2}/\d{2} \d{2}:\d{2}:\d{2} ")
+
+# rc 0 時 da-guard 寫在 stderr 的幾種形狀；每一格的每一行都要原樣（逐行、保留縮排）出現。
+_RC0_SHAPES = {
+    # F1：多行 WARN，第二行是縮排的續行。
+    "multi-line WARN": ("tenants:\n  tenant-a:\n    _metadata: [1, 2]\n",
+                        ["WARN: tenant=tenant-a: failed to parse _metadata: yaml: unmarshal errors:",
+                         "  line 1: cannot unmarshal !!seq into config.TenantMetadata"]),
+    # F2：rc 0 的 ERROR 行（custom alert 被拒，其餘照常發出）。
+    "ERROR line": ("tenants:\n  tenant-a:\n    _custom_alerts: 5\n",
+                   ["ERROR: tenant=tenant-a: custom alert \"<block>\" rejected: cannot parse _custom_alerts:",
+                    "  line 1: cannot unmarshal !!int `5` into []config.CustomAlertSpec"]),
+    # F4：Go `log` 帶日期時間前綴的 WARN。
+    "date-prefixed WARN": ("tenants:\n  tenant-a:\n    mysql_connections:\n      default: \"70\"\n"
+                           "      expires: bad\n",
+                           ["WARN: invalid expires \"bad\" in threshold \"mysql_connections\" for tenant=tenant-a"]),
+}
+
+
+@pytest.mark.parametrize("shape", sorted(_RC0_SHAPES))
+@pytest.mark.parametrize("script, extra", _CLIS, ids=[c[0] for c in _CLIS])
+def test_da_guard_stderr_is_passed_on_whole_at_rc_0(script, extra, shape, tmp_path):
+    body, wants = _RC0_SHAPES[shape]
+    conf_d = _tree(tmp_path, {"_defaults.yaml": _BASE, "tenant-b.yaml": _B, "tenant-a.yaml": body})
+    direct = subprocess.run([tv.guard_dispatch.DISPATCHER.resolve_binary(None), "served-values",
+                             "--config-dir", str(conf_d)],
+                            capture_output=True, text=True, encoding="utf-8", errors="replace", timeout=300)
+    assert direct.returncode == 0, direct.stderr  # 前提：da-guard 這格是 rc 0
+    p = _cli(script, conf_d, *extra)
+    assert p.returncode == 0, p.stderr
+    # 工具 stderr 包含 da-guard stderr 的每一個非空行（只經 safe_label，這些行沒有控制字元）。
+    # 兩次執行的日期時間前綴可能差一秒，比對前去掉。
+    got = [_DATE.sub("", ln) for ln in p.stderr.splitlines()]
+    da_lines = [_DATE.sub("", ln.rstrip()) for ln in direct.stderr.splitlines() if ln.strip()]
+    assert da_lines and all(ln in got for ln in da_lines), (da_lines, got)
+    for want in wants:  # 以及每個形狀該有的那幾行
+        assert any(want in ln for ln in got), (want, got)
+    if shape == "date-prefixed WARN":  # 前綴本身也照轉，不被剝掉
+        assert any(_DATE.match(ln) and "WARN: invalid expires" in ln
+                   for ln in p.stderr.splitlines()), p.stderr
+    json.loads(p.stdout)
+
+
+@pytest.mark.parametrize("script, extra", _CLIS, ids=[c[0] for c in _CLIS])
+def test_several_files_dropped_each_reason_shown_below_one_error_line(script, extra, tmp_path):
+    """F3：三個壞檔＋一行無關 WARN。ERROR 首行只講 parse_failed（不含無關 WARN），
+    da-guard 的 stderr 逐行縮排附在下面，每個壞檔的原因都在、多行原因不被擠成一行。"""
+    conf_d = _tree(tmp_path, {
+        "_defaults.yaml": _BASE,
+        "tenant-a.yaml": _A_OK,
+        "x1.yaml": "tenants:\n  x1:\n    mysql_connections: [1\n",
+        "x3.yaml": "tenants:\n  x3: [1]\n",
+        "td.yaml": "defaults:\n  mysql_connections: 5\ntenants:\n  td:\n    mysql_connections: 1\n",
+    })
+    (conf_d / "x2.yaml").write_bytes(b"tenants:\n  x2:\n    mysql_connections: 1 # \xff\n")
+    p = _cli(script, conf_d, *extra)
+    assert p.returncode == 2, p.stderr
+    lines = p.stderr.splitlines()
+    err = [i for i, ln in enumerate(lines) if ln.startswith("ERROR: ")]
+    assert len(err) == 1, lines
+    head, below = lines[err[0]], lines[err[0] + 1:]
+    assert "x1.yaml, x2.yaml, x3.yaml" in head and "defaults found" not in head, head
+    assert all(ln.startswith("  ") for ln in below), below
+    for reason in ("did not find expected", "invalid leading UTF-8 octet",
+                   "    line 2: cannot unmarshal !!seq", "defaults found in td.yaml"):
+        assert any(reason in ln for ln in below), (reason, below)
