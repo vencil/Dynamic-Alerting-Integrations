@@ -601,7 +601,7 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument(
         "paths",
         nargs="*",
-        help="Files or directories to scan. See _resolve_target_paths.",
+        help="Files to scan (directories are not expanded; see _resolve_target_paths).",
     )
     parser.add_argument(
         "--ci",
