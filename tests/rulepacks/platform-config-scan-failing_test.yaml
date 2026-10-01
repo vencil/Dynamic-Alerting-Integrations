@@ -16,11 +16,14 @@
 #   1) FIRES within 10m of the duplicate appearing at a 30s, 120s and 300s
 #      --reload-interval (a public Helm value), carrying {reason} and the
 #      topology labels — and ONLY the failing reason (no cross-talk).
-#   2) one failed tick (30s interval) does NOT fire;
+#   2) one failed tick at a SHORT interval (30s) does NOT fire; at 240s it
+#      does (2b, pinned: no clean scan for 480s IS >5m unscannable);
 #   3) a healthy exporter does NOT fire — including at a 600s interval, where
 #      the gauge is legitimately older than 300s between ticks;
 #   4) RESOLVES on the first clean tick after the fix;
-#   5) a counter reset (pod restart) is not read as failures;
+#   5) a counter reset (pod restart) is not read as failures, even while the
+#      gauge is older than 300s (the restart in 5 is modelled by hand, not by
+#      the tick model);
 #   6) a healthy second exporter next to a failing one is not alerted.
 # Run: promtool test rules tests/rulepacks/platform-config-scan-failing_test.yaml
 rule_files:
@@ -127,6 +130,8 @@ tests:
 
   # 2) R=30s, ONE failed tick at 120s (a tenant moved between two files, the
   #    new one written first); the 150s tick is clean again. Never fires.
+  #    ⚠️ Short intervals only: the gauge's age peaks at about 2R around a
+  #    single failed tick, so this holds while that stays near 300s — see 2b.
   - interval: 30s
     name: single-failed-tick-does-not-fire
     input_series:
@@ -142,6 +147,37 @@ tests:
         alertname: ConfigScanFailing
         exp_alerts: []
       - eval_time: 20m
+        alertname: ConfigScanFailing
+        exp_alerts: []
+
+  # 2b) Pinned current behaviour, not a goal: R=240s, ONE failed tick at 480s.
+  #     Clean ticks at 240s and 720s, so for that stretch no scan succeeded
+  #     for 480s — the config really was unscannable for more than 5 minutes,
+  #     and the alert fires (11m), then resolves once the 720s clean tick is
+  #     scraped (13m). Tick-by-tick grid over every 30s phase (scrape 30s):
+  #     one failed tick never fires at R ≤ 180s, fires in some phases at
+  #     190s and in every phase at 200s–420s. Requiring ≥ 2 failures instead
+  #     would push R=420s past the 10-minute acceptance bound.
+  - interval: 30s
+    name: single-failed-tick-at-240s-interval-fires
+    input_series:
+      - series: 'da_config_scan_failures_total{reason="duplicate_tenant", job="threshold-exporter", instance="10.0.0.9:8080"}'
+        values: '0x15 1x24'
+      - series: 'da_config_last_scan_complete_unixtime_seconds{job="threshold-exporter", instance="10.0.0.9:8080"}'
+        values: '0x7 240x15 720x7 960x7 1200'
+    alert_rule_test:
+      - eval_time: 11m
+        alertname: ConfigScanFailing
+        exp_alerts:
+          - exp_labels:
+              severity: critical
+              alert_source: platform
+              reason: duplicate_tenant
+              job: threshold-exporter
+              instance: 10.0.0.9:8080
+            exp_annotations:
+              summary: "Threshold-exporter conf.d unscannable for >5m (duplicate_tenant) — config frozen at last good state"
+      - eval_time: 13m
         alertname: ConfigScanFailing
         exp_alerts: []
 
@@ -207,20 +243,25 @@ tests:
         alertname: ConfigScanFailing
         exp_alerts: []
 
-  # 5) Counter reset: an exporter that had failed 5 times restarts at 300s
-  #    (the counter drops to 0) and scans cleanly every 30s throughout.
+  # 5) Counter reset: a HEALTHY exporter at R=600s whose counter read 5 (old
+  #    failures, long fixed) restarts at 300s — the counter drops to 0, the
+  #    startup scan stamps the gauge at 300s, the next tick is at 900s. From
+  #    600s to 900s the gauge is older than 300s, so the RHS is TRUE and only
+  #    the LHS keeps this quiet: increase() reads the 5→0 drop as a reset, not
+  #    as failures. (A delta-style LHS such as max_over_time - min_over_time
+  #    would read it as 5 and fire here.)
   - interval: 30s
     name: counter-reset-does-not-fire
     input_series:
       - series: 'da_config_scan_failures_total{reason="duplicate_tenant", job="threshold-exporter", instance="10.0.0.9:8080"}'
         values: '5x9 0x30'
       - series: 'da_config_last_scan_complete_unixtime_seconds{job="threshold-exporter", instance="10.0.0.9:8080"}'
-        values: '0+30x39'
+        values: '0x9 300x19 900x10'
     alert_rule_test:
-      - eval_time: 5m
+      - eval_time: 12m
         alertname: ConfigScanFailing
         exp_alerts: []
-      - eval_time: 10m
+      - eval_time: 14m
         alertname: ConfigScanFailing
         exp_alerts: []
 

@@ -579,6 +579,14 @@ data:
           # every phase measured the worst onset-to-fire at 360s for intervals
           # 30s-300s and 450s at 420s. Not covered: an interval longer than
           # the [10m] window, which can then hold no failure between ticks.
+          # ⚠️ ONE failed tick can fire it at a long interval: the gauge's age
+          # around a single failed tick peaks at about 2x --reload-interval.
+          # Same grid, one failed tick: never fires at <= 180s, fires in some
+          # phases at 190s and in every phase at 200s-420s. That is the alert
+          # telling the truth — no scan succeeded for more than 5 minutes —
+          # so it is kept; requiring >= 2 failures instead would push a 420s
+          # interval past the 10-minute bound. Pinned by the
+          # single-failed-tick-at-240s-interval-fires case.
           - alert: ConfigScanFailing
             expr: |
               (increase(da_config_scan_failures_total[10m]) > 0)
