@@ -126,10 +126,20 @@ func TestANestedDefaultsCapIsIgnoredLoudly(t *testing.T) {
 	}
 }
 
-func TestTheCapSurvivesATenantOnlyIncrementalReload(t *testing.T) {
-	// patchTenants copies platform-scoped fields from the previous config one
-	// by one; a field it forgets is correct after Load and gone after the
-	// first tenant edit — the full-vs-incremental drift its header warns about.
+// TestTheCapSurvivesATenantOnlyReload: the global cap is still in force after
+// a tenant-only edit reloads through the watch path.
+//
+// ⚠️ SINCE #1577 THIS PINS THE WATCH PATH, NOT THE GUARD IT WAS WRITTEN FOR.
+// It used to drive the removed `IncrementalLoad()` into patchTenants, which
+// copies platform-scoped fields from the previous config one by one — a field
+// it forgets is correct after Load and gone after the first tenant edit.
+// `max_metrics_per_tenant` is honoured only from a ROOT `_defaults` carrier,
+// and any carrier makes the reload hierarchical (sticky), so the watch path
+// never reaches patchTenants with a cap to carry: the reload here is a full
+// flat rebuild. MEASURED: setting patchTenants' `MaxMetricsPerTenant` to 0
+// leaves this test green. That copy is unreachable from the watch path and has
+// no test; its clean-up is tracked in #2593.
+func TestTheCapSurvivesATenantOnlyReload(t *testing.T) {
 	dir := t.TempDir()
 	writeFile(t, filepath.Join(dir, "_defaults.yaml"), rootDefaultsWithCap)
 	tenant := filepath.Join(dir, "tenant-a.yaml")
@@ -149,7 +159,7 @@ func TestTheCapSurvivesATenantOnlyIncrementalReload(t *testing.T) {
 		t.Fatalf("premise: the tenant edit did not land (cap_a = %q), so this run proves nothing", got)
 	}
 	if cfg.MaxMetricsPerTenant != 2 {
-		t.Errorf("MaxMetricsPerTenant = %d after a tenant-only reload, want 2 — patchTenants dropped it", cfg.MaxMetricsPerTenant)
+		t.Errorf("MaxMetricsPerTenant = %d after a tenant-only reload, want 2 — the watch path's reload dropped it", cfg.MaxMetricsPerTenant)
 	}
 }
 

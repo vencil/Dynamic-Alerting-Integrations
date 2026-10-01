@@ -288,8 +288,8 @@ func benchNoChangeTick(b *testing.B, mgr *ConfigManager) {
 // tree. The watch path does not: buildDirConfig writes a `_defaults.yaml`, so
 // every reload is the hierarchical one (a full flat rebuild). That is what
 // production pays for this edit; figures from before #1577 are not
-// comparable (measured 30x on one box: allocs/op 1845 → 2592 here, 16287 →
-// 20669 for the 1000-tenant variant).
+// comparable (measured with -count=30 on one box: allocs/op 1845 → 2592
+// here, 16287 → 20669 for the 1000-tenant variant).
 func BenchmarkIncrementalLoad_100_OneFileChanged(b *testing.B) {
 	dir := buildDirConfig(b, 100)
 	silenceLogs(b)

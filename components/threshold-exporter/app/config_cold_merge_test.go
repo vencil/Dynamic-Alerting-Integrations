@@ -423,9 +423,9 @@ func TestColdLoadBrokenDefaultsKeepsItsSignal(t *testing.T) {
 // own copy is unreachable today (see the comment on it). ⛔ MEASURED: passing
 // nil metrics to the pkg/config probe drops this delta to +1 (red); passing
 // nil at `incrementalLoadFrom`'s call site leaves it green, because that
-// branch never runs. With the redirect removed this test already goes red
-// earlier, on the control's 65 (the defect
-// TestANestedTenantKeepsItsSubtreeDefaultAcrossAnIncrementalReload pins).
+// branch never runs. Removing the `anyNestedKey` redirect also leaves it
+// green since #1577 (the carrier keeps the reload hierarchical); that
+// redirect is pinned by TestConfigIdentity_IncrementalNestedRedirect.
 //
 // Content changes size on every write, so the scanner's hash sees them
 // regardless of TreeScanMtimeGuard — no sleep or backdating is needed.

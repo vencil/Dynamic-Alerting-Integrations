@@ -618,10 +618,19 @@ func TestTheGaugeHelpStatesTheCurrentCause(t *testing.T) {
 	}
 }
 
-// TestANestedTenantKeepsItsSubtreeDefaultAcrossAnIncrementalReload covers the
-// `anyNestedKey` redirect, which had no test at all.
+// TestANestedTenantKeepsItsSubtreeDefaultAcrossAnIncrementalReload: a nested
+// tenant keeps its subtree default across an ordinary edit, through the watch
+// path's reload.
 //
-// ⛔ MEASURED: making `anyNestedKey` return false — the obvious future
+// ⚠️ IT DOES NOT GUARD THE `anyNestedKey` REDIRECT (#1577 blind review). This
+// tree has `_defaults` carriers, so the watch path reloads it hierarchically
+// and never reaches incrementalLoadFrom; making `anyNestedKey` return false
+// leaves this test green. The redirect is pinned by
+// TestConfigIdentity_IncrementalNestedRedirect (config_identity_test.go),
+// whose carrier-less nested tree does go red under that mutation.
+//
+// ⛔ MEASURED when it was written (#1569, through the since-removed
+// `IncrementalLoad()`): making `anyNestedKey` return false — the obvious future
 // optimisation, since the redirect is what costs nested trees their
 // tenant-patch fast path — left the package green while a nested tenant
 // silently reverted to the ROOT threshold after an ordinary edit: 60 became
@@ -916,17 +925,22 @@ func TestAChangedUnreachableSetRePrintsTheReport(t *testing.T) {
 	}
 }
 
-// TestTheRefusedSetIsRefreshedOnTheIncrementalPath closes the asymmetry between
-// the two fields the commit hands to the audit.
+// TestTheRefusedSetIsRefreshedWhenTheTreeIsRepaired: repairing the tree at
+// the ROOT `_defaults.yaml` clears the refused set the audit reports, on the
+// watch path's reload.
 //
-// ⛔ `tenantSources` is snapshotted on every commit; the refused set was
-// written in ONE loader. A root `_defaults.yaml` edit is a flat key, so
-// `anyNestedKey` does not redirect it to the full loader — and the audit then
-// reported a set belonging to the previous config. Measured: after the tree
-// was repaired the gauge stayed at 1, and only a later full `Load()` cleared
-// it. Latent rather than live (the production watch path goes through the full
-// loader), fixed because the asymmetry is exactly the kind that becomes live.
-func TestTheRefusedSetIsRefreshedOnTheIncrementalPath(t *testing.T) {
+// ⚠️ SINCE #1577 THIS PINS THE WATCH PATH, NOT THE GUARD IT WAS WRITTEN FOR.
+// It used to drive the removed `IncrementalLoad()` into incrementalLoadFrom,
+// where the refused set was written in ONE loader while `tenantSources` was
+// snapshotted on every commit (the fix: incrementalLoadFrom's
+// `refreshRefused`). A refused key needs a SUBTREE `_defaults.yaml`, and any
+// `_defaults` carrier makes the reload hierarchical (sticky), so the watch
+// path never reaches incrementalLoadFrom with a refused set to refresh: the
+// reload here is a full flat rebuild. MEASURED: dropping incrementalLoadFrom's
+// `refreshRefused(&merged)` call leaves this test green. That branch is
+// unreachable from the watch path and has no test; its clean-up is tracked in
+// #2593.
+func TestTheRefusedSetIsRefreshedWhenTheTreeIsRepaired(t *testing.T) {
 	dir := t.TempDir()
 	writeTestYAML(t, filepath.Join(dir, "_defaults.yaml"), "defaults:\n  mysql_connections: 80\n")
 	mkSub(t, dir, "finance")
@@ -949,11 +963,11 @@ func TestTheRefusedSetIsRefreshedOnTheIncrementalPath(t *testing.T) {
 		t.Fatalf("reload: %v", err)
 	}
 	if got := testutil.ToFloat64(fresh.subtreeUndeliverableTenants); got != 0 {
-		t.Errorf("gauge = %v after the tree was repaired through the incremental path — "+
+		t.Errorf("gauge = %v after the tree was repaired and the watch path reloaded — "+
 			"the audit is reporting a refused set from an earlier config", got)
 	}
 	if _, delivered := m.GetConfig().Tenants["t1"]["redis_evicted_keys"]; !delivered {
-		t.Errorf("the now-declared key was not delivered on the incremental path; "+
+		t.Errorf("the now-declared key was not delivered by the watch path's reload; "+
 			"tenant map = %v", m.GetConfig().Tenants["t1"])
 	}
 }

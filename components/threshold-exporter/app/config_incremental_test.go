@@ -34,10 +34,13 @@ func requireFlatWatchPath(t testing.TB, m *ConfigManager) {
 	}
 }
 
-// watchReload runs ONE reload exactly as the watch loop's debounced fire
-// does: reloadMu held, then diffAndReload (fireDebounced and the zero-window
-// branch of triggerDebouncedReload). It is the synchronous test entry for
-// "a file changed, now reload" (#1577).
+// watchReload runs ONE reload under the same lock and through the same entry
+// point as the watch loop's debounced fire: reloadMu held, then diffAndReload
+// (fireDebounced and the zero-window branch of triggerDebouncedReload). It is
+// the synchronous test entry for "a file changed, now reload" (#1577). Unlike
+// those callers it does not ObserveReloadDuration, call maybeFreeOSMemory, or
+// log the ERROR line — it returns the error instead (so the reload benchmarks
+// do not include maybeFreeOSMemory's cost).
 //
 // ⛔ IT IS NOT A RENAMED IncrementalLoad, AND THE DIFFERENCES ARE THE POINT.
 // That method walked the tree and went straight to incrementalLoadFrom; the
