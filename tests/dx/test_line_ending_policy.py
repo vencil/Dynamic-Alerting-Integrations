@@ -83,6 +83,7 @@ from test_ci_path_filter_coverage import (  # noqa: E402
     _load_workflow,
     _logical_shell_lines,
 )
+from _precommit_selection import silencing_keys  # noqa: E402  (tests/ on sys.path)
 
 # ⛔ 獨立於 hook `entry` 的硬編清單，用來釘住「範圍不得被無聲收窄」。
 # 必須寫死：拿 entry 自己去檢查自己，等於範圍縮小、斷言也跟著縮小。
@@ -113,9 +114,13 @@ def _violations_in(path: Path) -> list[tuple[int, str]]:
     return hook.scan_line_endings(path)
 
 
-def _hook_config() -> dict:
+def _precommit_config() -> dict:
     with open(REPO_ROOT / ".pre-commit-config.yaml", encoding="utf-8") as fh:
-        config = yaml.safe_load(fh)
+        return yaml.safe_load(fh)
+
+
+def _hook_config() -> dict:
+    config = _precommit_config()
     for repo in config["repos"]:
         for h in repo.get("hooks", []):
             if h["id"] == HOOK_ID:
@@ -299,6 +304,26 @@ class TestHookScope:
                 f"{HOOK_ID}'s files: filter does not select {rel} — a commit "
                 f"touching {sub} would never run the hook."
             )
+
+    def test_hook_is_not_filtered_off_its_files(self):
+        """CI 那一行要真的掃到檔案，不只是「有跑」。
+
+        ⛔ 這格是拿掉全樹掃描（#2539）的代價：舊測試直接呼叫掃描器、不經
+        pre-commit 的檔案篩選；改由 `pre-commit run open-encoding-audit
+        --all-files` 執行之後，hook 上一個 `exclude: .*`（或 `types:` 收窄、
+        `exclude_types:`、頂層 `exclude:`／`files:`）就讓它印
+        "(no files to check) Skipped"、rc 0——CI 綠、什麼都沒掃。實測過。
+        清單是共用的 `tests/_precommit_selection.py`，不在這裡另寫一份。
+
+        `files:` 被收窄是同一個形狀，由 `test_required_subtrees_are_governed`
+        逐棵子樹守（它用 hook 的 `files:` 比對每棵樹裡的一個受管檔）。
+        """
+        silenced = silencing_keys(_hook_config(), _precommit_config())
+        assert not silenced, (
+            f"{HOOK_ID} is filtered off its files: {silenced}. The CI Lint job "
+            f"runs it through pre-commit, so it would report Skipped and exit 0 "
+            f"— the encoding= / newline= rules would stop running in CI with "
+            f"every check green.")
 
     def test_ci_lint_job_runs_the_hook_over_the_whole_tree(self):
         """CI 的執行點：Lint job 逐名跑 `pre-commit run open-encoding-audit --all-files`。
