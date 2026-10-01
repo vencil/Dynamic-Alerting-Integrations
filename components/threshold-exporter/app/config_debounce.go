@@ -368,7 +368,12 @@ func (m *ConfigManager) scanAndCheckHierarchical(prior reloadPriorState) (reload
 		scanErr = scan.Conflict
 	}
 	if scanErr != nil {
-		m.getLogger().Printf("ERROR: hierarchical scan failed: %v", scanErr)
+		// #2587: the wording names no mode. This scan runs before the path
+		// is chosen (the flat/hierarchical decision below needs its
+		// result), so it fails the same way in both modes, and naming
+		// either one would send a flat-mode operator looking for a
+		// `_defaults.yaml` that is not there.
+		m.getLogger().Printf("ERROR: scan failed: %v", scanErr)
 		m.getMetrics().IncScanFailure(scanErr) // #2452
 		return reloadScanState{}, true, scanErr
 	}
