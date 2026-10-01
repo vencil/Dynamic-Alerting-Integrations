@@ -259,13 +259,27 @@ class TestLoadTenantConfigs:
         assert len(configs) == 1
         assert "test" in configs
 
-    def test_load_directory(self, config_dir):
+    # #2115：目錄分支改讀 /metrics 實際發出的閾值（da-guard served-values）。
+    # 閾值要有 `defaults:` 才會發出、值是 float；平面格式檔不是租戶（R3）。
+    # 以下目錄分支的測試照此改寫，單檔分支（--tenant-config）不變。
+
+    def test_load_directory(self, config_dir, da_guard_env):
         """目錄載入跳過 _ 前綴檔案。"""
-        write_yaml(config_dir, "db-a.yaml", "mysql_connections: 50\n")
-        write_yaml(config_dir, "_defaults.yaml", "defaults: {}\n")
+        write_yaml(config_dir, "db-a.yaml", "tenants:\n  db-a:\n    mysql_connections: 50\n")
+        write_yaml(config_dir, "_defaults.yaml", "defaults:\n  mysql_connections: 80\n")
         configs = ag.load_tenant_configs(config_dir=config_dir)
         assert len(configs) == 1
-        assert "db-a" in configs
+        assert configs["db-a"] == {"mysql_connections": 50.0}
+
+    def test_load_directory_flat_file_is_not_a_tenant(self, config_dir, da_guard_env, capsys):
+        """平面格式檔（無 `tenants:`）：exporter 不當租戶，具名 WARN（R3）。
+        改寫前：被當成以檔名為 id 的租戶。"""
+        write_yaml(config_dir, "_defaults.yaml", "defaults:\n  custom_mysql_uptime: 1\n")
+        write_yaml(config_dir, "db-a.yaml", "custom_mysql_uptime: 50\n")
+        write_yaml(config_dir, "db-b.yaml", "tenants:\n  db-b:\n    custom_mysql_uptime: 7\n")
+        configs = ag.load_tenant_configs(config_dir=config_dir)
+        assert configs == {"db-b": {"custom_mysql_uptime": 7.0}}
+        assert "WARN: db-a.yaml: declares no tenant" in capsys.readouterr().err
 
     def test_no_args_returns_empty(self):
         """不帶參數回傳空字典。"""
@@ -273,13 +287,15 @@ class TestLoadTenantConfigs:
 
     # ── r3 W2 bug-fix regression：wrapper 格式此前對 gap 分析靜默隱形 ──
 
-    def test_load_directory_wrapper_format(self, config_dir):
+    def test_load_directory_wrapper_format(self, config_dir, da_guard_env):
         """目錄載入解開 `tenants:` wrapper（兩種官方 conf.d 格式都要被掃到）。
 
         修前的 local loader 完全不解 wrapper——wrapper 格式租戶被存成
         {檔名: {"tenants": {...}}}，extract_custom_metrics 只迭代頂層
         key、`tenants` 不是 custom_ key → wrapper 租戶對 gap 分析隱形。
         """
+        write_yaml(config_dir, "_defaults.yaml",
+                   "defaults:\n  custom_mysql_uptime: 9\n  mysql_threads_running: 50\n")
         write_yaml(config_dir, "team.yaml",
                    "tenants:\n"
                    "  db-a:\n"
@@ -288,14 +304,15 @@ class TestLoadTenantConfigs:
                    "    mysql_threads_running: 80\n")
         configs = ag.load_tenant_configs(config_dir=config_dir)
         assert set(configs) == {"db-a", "db-b"}
-        assert configs["db-a"]["custom_mysql_uptime"] == 1
+        assert configs["db-a"]["custom_mysql_uptime"] == 1.0
 
-    def test_load_directory_yml_extension(self, config_dir):
+    def test_load_directory_yml_extension(self, config_dir, da_guard_env):
         """`.yml` 副檔名也要被掃到（修前只 glob `*.yaml`）。"""
-        write_yaml(config_dir, "db-c.yml", "mysql_connections: 50\n")
+        write_yaml(config_dir, "_defaults.yaml", "defaults:\n  mysql_connections: 80\n")
+        write_yaml(config_dir, "db-c.yml", "tenants:\n  db-c:\n    mysql_connections: 50\n")
         configs = ag.load_tenant_configs(config_dir=config_dir)
         assert "db-c" in configs
-        assert configs["db-c"]["mysql_connections"] == 50
+        assert configs["db-c"]["mysql_connections"] == 50.0
 
     def test_load_single_file_wrapper_format(self, config_dir):
         """單檔分支同樣解開 wrapper（簽名與 flat 語意保留）。"""
@@ -319,8 +336,9 @@ class TestLoadTenantConfigs:
         assert configs == {"weird": {}}
         assert ag.extract_custom_metrics(configs) == []
 
-    def test_wrapper_tenants_reach_gap_analysis(self, config_dir):
+    def test_wrapper_tenants_reach_gap_analysis(self, config_dir, da_guard_env):
         """端到端：wrapper 租戶的 custom_ 指標真的進到 gap 分析。"""
+        write_yaml(config_dir, "_defaults.yaml", "defaults:\n  custom_mysql_uptime: 9\n")
         write_yaml(config_dir, "team.yaml",
                    "tenants:\n"
                    "  db-a:\n"

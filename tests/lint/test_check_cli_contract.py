@@ -17,6 +17,7 @@ import sys
 from pathlib import Path
 
 import pytest
+from _platform_fs import require_symlinks, symlink_or_skip  # noqa: E402
 import yaml
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
@@ -515,7 +516,7 @@ class TestCommandForms:
         (tmp_path / "docs").mkdir()
         real = tmp_path / "docs" / "real.md"
         real.write_text(_fence("da-tools widget db-a --ci"), encoding="utf-8")
-        (tmp_path / "docs" / "link.md").symlink_to(real)
+        symlink_or_skip(real, (tmp_path / "docs" / "link.md"))
         docs, _missing = mod.doc_files(tmp_path)
         assert [d.name for d in docs] == ["real.md"]
 
@@ -1738,6 +1739,9 @@ class TestRealRepo:
         rels = {d.relative_to(REPO_ROOT).as_posix() for d in docs}
         assert set(mod.EXTRA_DOC_FILES) <= rels
         assert not any("/internal/" in r for r in rels)
+        # A host that cannot create symlinks got this one checked out as a
+        # plain file (git `core.symlinks=false`): nothing to measure below.
+        require_symlinks()
         assert (REPO_ROOT / "docs" / "CHANGELOG.md").is_symlink(), "the control lost its object"
         assert "docs/CHANGELOG.md" not in rels
 

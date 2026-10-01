@@ -8,6 +8,7 @@ import re
 import sys
 
 import pytest
+from _platform_fs import symlink_or_skip  # noqa: E402
 
 REPO = pathlib.Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(REPO / "scripts" / "tools"))
@@ -340,7 +341,7 @@ def with_unusable(tmp_path: pathlib.Path) -> pathlib.Path:
     (root / "acme.yaml").write_text(
         'tenants:\n  acme:\n    mysql_connections: "90"\n', encoding="utf-8")
     (root / "beta.yaml").mkdir()                    # interrupted mkdir / bad merge
-    (root / "gamma.yaml").symlink_to(root / "nope.yaml")   # broken symlink
+    symlink_or_skip(root / "nope.yaml", (root / "gamma.yaml"))   # broken symlink
     (root / "notes.txt").write_text("not a config\n", encoding="utf-8")
     return root
 
@@ -613,12 +614,12 @@ def test_a_broken_symlink_is_on_exactly_one_side(
     root = tmp_path / "conf.d"
     (root / "sub").mkdir(parents=True)
     (root / "sub" / "real.yaml").write_text("tenants: {}\n", encoding="utf-8")
-    (root / "sub" / "ghost.yaml").symlink_to(root / "sub" / "nope.yaml")
+    symlink_or_skip(root / "sub" / "nope.yaml", (root / "sub" / "ghost.yaml"))
     # A symlink LOOP as well: `is_file()` raises ELOOP rather than
     # returning False, which is the other way the shared predicate has to
     # answer without exploding.
-    (root / "sub" / "loop_a.yaml").symlink_to(root / "sub" / "loop_b.yaml")
-    (root / "sub" / "loop_b.yaml").symlink_to(root / "sub" / "loop_a.yaml")
+    symlink_or_skip(root / "sub" / "loop_b.yaml", (root / "sub" / "loop_a.yaml"))
+    symlink_or_skip(root / "sub" / "loop_a.yaml", (root / "sub" / "loop_b.yaml"))
 
     scan = root if recursive else root / "sub"
     readable = set(iter_config_files(scan, recursive=recursive))

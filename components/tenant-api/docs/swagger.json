@@ -661,7 +661,7 @@
         },
         "/api/v1/groups/{id}/batch": {
             "post": {
-                "description": "Apply a patch to all tenants in a group.\nA member whose config file cannot be loaded as a tenant config (config_error malformed_yaml | invalid_config)\nis not patched: its result carries status error and code TENANT_CONFIG_NOT_LOADABLE; repair the tenant file itself first.",
+                "description": "Apply a patch to all tenants in a group, through the same pipeline as POST /api/v1/tenants/batch\n(one operation per member): patch values are range-checked (400), and each member is checked for write permission and domain policy.\nPR write-back mode: the whole group becomes one PR/MR (status pending_review, pr_url, pr_number); nothing is committed to the base branch.\nPR write-back mode ignores ?async=true and answers 200 synchronously, as POST /api/v1/tenants/batch does.\nDirect mode: a member whose config file cannot be loaded as a tenant config (config_error malformed_yaml | invalid_config)\nis not patched: its result carries status error and code TENANT_CONFIG_NOT_LOADABLE; repair the tenant file itself first.",
                 "consumes": [
                     "application/json"
                 ],
@@ -716,14 +716,38 @@
                             "$ref": "#/definitions/ErrorResponse"
                         }
                     },
+                    "403": {
+                        "description": "PR write-back mode: the forge token lacks write scope to open the PR/MR",
+                        "schema": {
+                            "$ref": "#/definitions/ErrorResponse"
+                        }
+                    },
                     "404": {
                         "description": "Not Found",
                         "schema": {
                             "$ref": "#/definitions/ErrorResponse"
                         }
                     },
+                    "409": {
+                        "description": "PR write-back mode: a member is already declared by another conf.d file (code TENANT_DECLARED_ELSEWHERE), or its config file cannot be loaded as a tenant config (code TENANT_CONFIG_NOT_LOADABLE, with tenant_id and config_error; repair the tenant file itself first); nothing written. Direct mode reports these per member in results[].code instead.",
+                        "schema": {
+                            "$ref": "#/definitions/ErrorResponse"
+                        }
+                    },
                     "413": {
                         "description": "Request Entity Too Large",
+                        "schema": {
+                            "$ref": "#/definitions/ErrorResponse"
+                        }
+                    },
+                    "500": {
+                        "description": "Internal Server Error",
+                        "schema": {
+                            "$ref": "#/definitions/ErrorResponse"
+                        }
+                    },
+                    "503": {
+                        "description": "Service Unavailable",
                         "schema": {
                             "$ref": "#/definitions/ErrorResponse"
                         }
@@ -2682,6 +2706,18 @@
                 "group_id": {
                     "type": "string"
                 },
+                "message": {
+                    "description": "human-readable message (PR mode)",
+                    "type": "string"
+                },
+                "pr_number": {
+                    "description": "PR/MR number in PR mode",
+                    "type": "integer"
+                },
+                "pr_url": {
+                    "description": "PR/MR URL in PR mode",
+                    "type": "string"
+                },
                 "results": {
                     "type": "array",
                     "items": {
@@ -2689,6 +2725,7 @@
                     }
                 },
                 "status": {
+                    "description": "\"completed\" | \"pending_review\" (PR mode)",
                     "type": "string"
                 },
                 "summary": {
@@ -2697,6 +2734,13 @@
                 },
                 "task_id": {
                     "type": "string"
+                },
+                "warnings": {
+                    "description": "Warnings is the batch-level advisory list for PR mode, as in\nBatchResponse.Warnings; each notice names its tenant.",
+                    "type": "array",
+                    "items": {
+                        "type": "string"
+                    }
                 }
             }
         },

@@ -38,11 +38,23 @@ The cases are deliberately PAIRED. Two require a non-zero exit and one requires
 a ZERO exit from a correctly set-up tree — without the last one, ``exit 1`` as
 the script's entire body would satisfy this file, and a broken harness would
 satisfy the other two (it did: see ``_BASH`` below).
+
+WHAT IS NOT HERE ANY MORE (#1446)
+---------------------------------
+The links BELOW the script — ``package.json``'s ``lint``, eslint's ``ignores``
+and ``files``, the rule's options — used to be pinned here by reading each
+setting and asserting a property of it. Five rounds of blind review found a
+new spelling around that each time, and each was proven the same way: inject
+a ``test.fixme()``, run the real script, watch rc=0. That proof is now the test
+— ``tests/lint/test_e2e_spec_lint_behaviour.py`` — and the column of readers
+was deleted once every shape it held was shown to red the behavioural module.
+What stays here is what the behavioural module cannot see: the three entry
+points, the CI job's triggers and off-switches, the hook's file selection, and
+the step that runs the behavioural module itself.
 """
 from __future__ import annotations
 
 import ast
-import json
 import os
 import re
 import shlex
@@ -115,72 +127,6 @@ def _hook() -> dict:
         "pinning nothing."
     )
     return hooks[0]
-
-
-_ESLINT_CONFIG = _REPO_ROOT / "tests/e2e/eslint.config.mjs"
-_NPM_PACKAGE = _REPO_ROOT / "tests/e2e/package.json"
-
-
-def _npm_scripts() -> dict:
-    return json.loads(_NPM_PACKAGE.read_text(encoding="utf-8")).get("scripts", {})
-
-
-def _js_literal(text: str, opener: str) -> str:
-    """The balanced `{…}` or `[…]` that starts at `opener`, as source text.
-
-    Enough JS to read two literals out of a flat config, and no more: a real
-    parser is not available here and a regex would stop at the first `}`.
-    """
-    start = text.index(opener) + len(opener) - 1
-    pairs = {"{": "}", "[": "]"}
-    close = pairs[text[start]]
-    depth = 0
-    for i in range(start, len(text)):
-        if text[i] == text[start]:
-            depth += 1
-        elif text[i] == close:
-            depth -= 1
-            if depth == 0:
-                return text[start:i + 1]
-    raise AssertionError(f"unbalanced {text[start]!r} after {opener!r}")
-
-
-def _rule_options(config: str) -> dict:
-    """The `no-skipped-test` options object, read as data not matched as text."""
-    body = _js_literal(config, "'playwright/no-skipped-test': [")
-    brace = body.index("{")
-    out: dict = {}
-    for pair in body[brace + 1:body.rindex("}")].split(","):
-        if ":" not in pair:
-            continue
-        key, _, value = pair.partition(":")
-        out[key.strip().strip("'\"")] = {"true": True, "false": False}.get(
-            value.strip(), value.strip())
-    return out
-
-
-def _js_string_arrays(config: str, key: str) -> list[list[str]]:
-    """EVERY `<key>: [ … ]` array in the config, as lists of string literals.
-
-    ⛔ Three separate holes closed here, each proven end to end with a real
-    injected `test.fixme()` and each leaving the script at rc=0:
-
-    * the first version took only the FIRST `ignores:` — a second config object
-      further down the flat-config array carries its own and was unread;
-    * it kept only lines that START with a quote, so `ignores: ['a','b']` on one
-      line read as the empty list and the assertion below went vacuous;
-    * `files:` was never read at all, and narrowing it to one spec removes every
-      other spec from the run exactly as an ignore would.
-
-    Entries are extracted by quoted-literal rather than by line, so formatting
-    is genuinely free — which the previous docstring claimed while a one-line
-    list silently emptied it.
-    """
-    out: list[list[str]] = []
-    for match in re.finditer(re.escape(key) + r"\s*:\s*\[", config):
-        body = _js_literal(config[match.start():], f"{key}: [")
-        out.append(re.findall(r"['\"]([^'\"]+)['\"]", body))
-    return out
 
 
 def _precommit_config() -> dict:
@@ -377,7 +323,41 @@ def _reads_trigger_key(node: ast.AST) -> bool:
             and node.args[0].value in _TRIGGER_KEYS)
 
 
-_CI_WORKFLOW = _REPO_ROOT / ".github/workflows/ci.yml"
+def _bound_names(node: ast.AST) -> list[str]:
+    """Every name this one node BINDS, in any scope (#1446).
+
+    ⛔ Exists because the door test used to exempt accessors by NAME, and a
+    name is not an identity: a blind review defined a two-line `_trigger_paths`
+    inside a caller, read `paths` through it with no negation rejection, and the
+    file stayed green. Closing that means proving each accessor name is bound
+    exactly once in the file — which needs every form of binding, not the
+    `def` form alone: a parameter, a `lambda` assigned at module level, an
+    import alias or a `for` target shadows a function just as well.
+    """
+    if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef)):
+        return [node.name]
+    if isinstance(node, ast.Name) and isinstance(node.ctx, (ast.Store, ast.Del)):
+        # Assign / AugAssign / AnnAssign / For / With-as / walrus /
+        # comprehension targets all bind through a Name in Store context.
+        return [node.id]
+    if isinstance(node, ast.arg):
+        return [node.arg]
+    if isinstance(node, ast.alias):
+        return [node.asname or node.name.split(".")[0]]
+    if isinstance(node, (ast.Global, ast.Nonlocal)):
+        return list(node.names)
+    if isinstance(node, (ast.ExceptHandler, ast.MatchAs, ast.MatchStar)):
+        return [node.name] if node.name else []
+    if isinstance(node, ast.MatchMapping):
+        return [node.rest] if node.rest else []
+    # PEP 695 type parameters (3.12+); absent on older interpreters.
+    name = getattr(node, "name", None)
+    if type(node).__name__ in {"TypeVar", "ParamSpec", "TypeVarTuple"} and name:
+        return [name]
+    return []
+
+
+_CI_WORKFLOW =_REPO_ROOT / ".github/workflows/ci.yml"
 
 
 def _branches_that_carry_required_checks(event: str) -> list[str]:
@@ -463,6 +443,77 @@ def _script_step() -> tuple[str, dict, dict]:
         "execution point, and this job is the only one A-13 has that does not "
         "depend on a developer's work tree being installed."
     )
+
+
+# The behavioural half of A-13 (#1446). It lives in its own module because it
+# needs tests/e2e/node_modules, which only the lint-specs job is guaranteed to
+# have; the assertions that it RUNS there live here, because this file is
+# collected by Python Tests on every pull request and that one is not.
+_BEHAVIOUR_TEST_REL = "tests/lint/test_e2e_spec_lint_behaviour.py"
+_BEHAVIOUR_TEST = _REPO_ROOT / "tests/lint/test_e2e_spec_lint_behaviour.py"
+
+
+def _behaviour_require_env() -> str:
+    """The behaviour module's `REQUIRE_ENV`, read off its AST — not retyped.
+
+    A literal here would be a second copy of the name, and renaming it on one
+    side only would leave the workflow exporting a variable nobody reads: the
+    module skips, the step is green, and this file still agrees with itself.
+    """
+    for node in parse_py(_BEHAVIOUR_TEST).body:
+        if (isinstance(node, ast.Assign)
+                and [getattr(t, "id", None) for t in node.targets] == ["REQUIRE_ENV"]
+                and isinstance(node.value, ast.Constant)
+                and isinstance(node.value.value, str)):
+            return node.value.value
+    raise AssertionError(
+        f"{_BEHAVIOUR_TEST_REL} has no module-level `REQUIRE_ENV = \"…\"`. "
+        "That variable is what turns its skip into a failure in CI; without a "
+        "name to check, the step below cannot be shown to set it."
+    )
+
+
+_PYTEST_HEADS = (["python", "-m", "pytest"], ["python3", "-m", "pytest"], ["pytest"])
+_PIP_HEADS = (["pip", "install"], ["python", "-m", "pip", "install"],
+              ["python3", "-m", "pip", "install"])
+# Output-shaping flags only. ⛔ An allow-list, refused rather than classified,
+# for `_is_sole_invocation`'s reason: `-k nothing`, `--deselect`,
+# `--collect-only` and `-p no:…` each turn this step green without running
+# the cases, and sorting flags into harmless and silencing is the enumeration
+# this file has already lost.
+_PYTEST_FLAG = re.compile(r"-q|-v|-r[a-zA-Z]+|--tb=[a-z]+")
+_SHELL_META = set(";|&<>`$()")
+
+
+def _runs_behaviour_test(run: str) -> bool:
+    """True when this `run:` block executes the behavioural module and its exit
+    status is the step's.
+
+    The grammar is deliberately tiny: any number of `pip install …` lines, then
+    the pytest line LAST. Last, because a step's status is its last command's
+    whatever `set -e` does; and nothing else, because `set +e`, `|| true` or a
+    trailing `exit 0` would each make a red module a green step.
+    """
+    lines = [ln.strip() for ln in run.splitlines()
+             if ln.strip() and not ln.strip().startswith("#")]
+    if not lines:
+        return False
+    *setup, last = lines
+    argv = _argv(last)
+    head = next((h for h in _PYTEST_HEADS if argv[:len(h)] == h), None)
+    if head is None:
+        return False
+    rest = argv[len(head):]
+    if rest.count(_BEHAVIOUR_TEST_REL) != 1 or not all(
+            t == _BEHAVIOUR_TEST_REL or _PYTEST_FLAG.fullmatch(t) for t in rest):
+        return False
+    for line in setup:
+        tokens = _argv(line)
+        if not any(tokens[:len(h)] == h for h in _PIP_HEADS):
+            return False
+        if any(set(t) & _SHELL_META for t in tokens):
+            return False
+    return True
 
 
 # --------------------------------------------------------------------------
@@ -623,6 +674,41 @@ def test_is_sole_invocation_refuses_trailing_tokens_but_not_spellings() -> None:
         )
 
 
+def test_runs_behaviour_test_accepts_the_plain_forms_and_refuses_disarms() -> None:
+    """Control for `_runs_behaviour_test`: on the real workflow it only ever
+    sees the one form that should pass, so a `return True` body would be
+    invisible without this table. Both halves, for the reason the sibling
+    control for `_is_sole_invocation` gives."""
+    f = _BEHAVIOUR_TEST_REL
+    pip = "pip install pytest pyyaml -c requirements/ci-constraints.txt"
+    for accepted in (
+        f"{pip}\npython -m pytest {f} -q -rs\n",
+        f"python3 -m pytest {f}",
+        f"pytest {f} -q",
+        f"# install first\n{pip}\npython -m pytest {f} --tb=short -rsx\n",
+    ):
+        assert _runs_behaviour_test(accepted), (
+            f"{accepted!r} runs the module and lets its status stand, but was "
+            "refused — a false red paid by whoever next touches this step.")
+
+    for refused in (
+        f"{pip}\npython -m pytest {f} -q || true\n",
+        f"{pip}\npython -m pytest {f} -k nothing\n",
+        f"{pip}\npython -m pytest {f} --collect-only\n",
+        f"{pip}\npython -m pytest {f} --deselect {f}\n",
+        f"{pip}\npython -m pytest {f}\nexit 0\n",
+        f"set +e\n{pip}\npython -m pytest {f}\n",
+        f"{pip} || true\npython -m pytest {f}\n",
+        f"echo python -m pytest {f}",
+        f"{pip}\npython -m pytest tests/lint/test_e2e_spec_lint.py\n",
+        "",
+    ):
+        assert not _runs_behaviour_test(refused), (
+            f"{refused!r} was read as running the behavioural module with its "
+            "verdict intact. Each of these either runs no case or makes a red "
+            "module a green step.")
+
+
 def test_reading_a_paths_list_goes_through_the_negation_rejection(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -651,6 +737,50 @@ def test_reading_a_paths_list_goes_through_the_negation_rejection(
         _trigger_paths("push")
 
 
+def test_bound_names_sees_every_way_to_bind_a_name() -> None:
+    """Control for `_bound_names`: on this file every accessor is bound once,
+    so a body of `return []` — or one that only knew `def` — would leave the
+    door test green. Every form below rebinds `x`, and each must be seen."""
+    def _count(src: str) -> int:
+        return sum(n == "x" for node in ast.walk(ast.parse(src))
+                   for n in _bound_names(node))
+
+    for src in (
+        "def x(): pass",
+        "async def x(): pass",
+        "class x: pass",
+        "x = 1",
+        "x += 1",
+        "x: int = 1",
+        "for x in []: pass",
+        "with open('f') as x: pass",
+        "(x := 1)",
+        "def f(x): pass",
+        "def f(*, x): pass",
+        "def f(*x): pass",
+        "def f(**x): pass",
+        "f = lambda x: x",
+        "import x",
+        "import x.y",
+        "import os as x",
+        "from os import x",
+        "from os import path as x",
+        "def f():\n    global x",
+        "def f():\n    def g():\n        nonlocal x",
+        "[0 for x in []]",
+        "try:\n    pass\nexcept Exception as x:\n    pass",
+        "del x",
+    ):
+        assert _count(src) == 1, (
+            f"{src!r} binds `x` and `_bound_names` counted {_count(src)}. The "
+            "door test's 'bound exactly once' is only as wide as this.")
+
+    for src in ("x()", "print(x)", "y = x", "s = 'x'", "obj.x = 1", "d['x'] = 1"):
+        assert _count(src) == 0, (
+            f"{src!r} does not bind `x` but was counted — a false rebinding "
+            "makes the door test unsatisfiable on an honest file.")
+
+
 def test_nothing_in_this_file_reads_a_trigger_key_around_the_accessor() -> None:
     """⛔ The accessor only helps while it is the only door.
 
@@ -667,21 +797,46 @@ def test_nothing_in_this_file_reads_a_trigger_key_around_the_accessor() -> None:
     quantifier's clothes — it misses module scope, `async def`, lambdas and
     comprehensions alike. Walking the whole tree and subtracting the accessor's
     own nodes cannot miss a scope, because it never names one.
+
+    ⛔ And the exemption is an IDENTITY, not a name (#1446). It used to cover
+    every `def` called `_trigger_paths` anywhere in the tree, so a blind review
+    defined a second one inside a caller — two lines, reading `paths` with no
+    negation rejection — and this file stayed green. Now each accessor must be
+    a `def` directly in the module body, and its name must be bound exactly
+    once in the whole file (`_bound_names` lists what counts as binding), so
+    the node exempted below is the only thing that name can refer to.
     """
     tree = parse_py(__file__)
     accessor_names = {"_trigger_paths", "_trigger_branches",
                       "_branches_that_carry_required_checks"}
     accessors = [
-        node for node in ast.walk(tree)
+        node for node in tree.body
         if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef))
         and node.name in accessor_names
     ]
-    assert {a.name for a in accessors} == accessor_names, (
-        f"the accessors {sorted(accessor_names)} are not both present "
-        f"(found {sorted(a.name for a in accessors)}). They are the only "
-        "places allowed to read a trigger key, so a missing one makes this "
-        "check permit every read in the file — restore it, or delete this "
-        "test in the same commit so the loss is visible."
+    assert sorted(a.name for a in accessors) == sorted(accessor_names), (
+        f"the accessors {sorted(accessor_names)} are not each defined exactly "
+        f"once at module level (found {sorted(a.name for a in accessors)}). "
+        "They are the only places allowed to read a trigger key, so a missing "
+        "one makes this check permit every read in the file — restore it, or "
+        "delete this test in the same commit so the loss is visible. A nested "
+        "or conditional definition does not count: only a top-level `def` is "
+        "unambiguously the thing a call by that name reaches."
+    )
+    bindings: dict[str, list[int]] = {name: [] for name in accessor_names}
+    for node in ast.walk(tree):
+        for name in _bound_names(node):
+            if name in bindings:
+                bindings[name].append(getattr(node, "lineno", 0))
+    rebound = {name: lines for name, lines in bindings.items() if len(lines) != 1}
+    assert not rebound, (
+        f"{rebound} — an accessor name is bound more than once in this file "
+        "(a nested `def`, a parameter, an assignment, an import alias …). The "
+        "exemption below is granted to the module-level `def` only, so any "
+        "second binding of the same name is either shadowing it — a caller "
+        "reading trigger keys through a look-alike that skips the negation "
+        "rejection — or replacing it after the fact. Rename whichever one is "
+        "not the accessor."
     )
     inside_accessors = {
         id(node) for a in accessors for node in ast.walk(a)
@@ -847,90 +1002,6 @@ def test_all_three_entry_points_run_the_one_script() -> None:
     _script_step()  # raises with its own message when no step runs the script
 
 
-def test_the_rule_itself_cannot_be_disarmed_below_the_script() -> None:
-    """⛔ The links under the script, which nothing was watching.
-
-    Everything else in this file guards the chain down to `npm run lint`.
-    Blind reviews walked what is below that, with a `test.fixme()` already
-    injected into a real spec, and every one of these went green — script rc=0,
-    whole repo green:
-
-    * emptying the rule's options object — `disallowFixme` defaults to false,
-      so `test.fixme()` reports nothing and `eslint .` exits 0;
-    * `lint: "eslint . || exit 0"`, which keeps `eslint` as the first token
-      while npm's shell throws the status away;
-    * `lint: "eslint one-file.spec.ts"`, which keeps it while linting one file;
-    * `ignores` gaining a spec glob — on its own line, on the SAME line as the
-      opening bracket, or in a second config object further down;
-    * `files:` narrowed off `**/*.spec.{ts,js}`, which removes specs from the
-      run from the other side and was not read at all until a later round.
-
-    Every one of them leaves the script, all three entry points and this file's
-    other assertions untouched. ⛔ Counts were removed from this paragraph on
-    purpose: each round of review has added a link to it.
-
-    The options object, the ignore and files arrays are read as DATA — every
-    occurrence of each key, entries split by quoted literal rather than by line,
-    so formatting really is free. The `lint` script is pinned WHOLE instead,
-    for the reason `_is_sole_invocation` gives: npm hands it to a shell, and
-    sorting trailing tokens into harmless and silencing is the enumeration this
-    file has already lost five times.
-    """
-    config = _ESLINT_CONFIG.read_text(encoding="utf-8")
-    options = _rule_options(config)
-    assert options.get("disallowFixme") is True, (
-        f"`playwright/no-skipped-test` options are {options!r}. "
-        "`disallowFixme` defaults to FALSE, so dropping it takes `test.fixme()` "
-        "back to passing silently — measured against this exact config, with "
-        "the options object emptied, an injected `test.fixme()` reports "
-        "nothing and `eslint .` exits 0. The regression this repo already "
-        "recorded once."
-    )
-    assert options.get("allowConditional") is False, (
-        f"`allowConditional` is {options.get('allowConditional')!r}. Setting it "
-        "true exempts a call when ANY of three things holds — it takes at "
-        "least one argument, OR sits inside an `if` block, OR inside a "
-        "`switch` case — none of which asks whether the condition means "
-        "anything. Four documents were corrected rather than flipping this; "
-        "flipping it now silently reverses that decision."
-    )
-
-    lint = _npm_scripts().get("lint", "")
-    assert shlex.split(lint) == ["eslint", "."], (
-        f"`package.json`'s `lint` script is {lint!r}, not `eslint .`. ⛔ Pinned "
-        "whole rather than by first token: npm hands this to a shell, so "
-        "`eslint . || exit 0` keeps `eslint` in front and still exits 0, and "
-        "`eslint one-file.spec.ts` keeps it while linting one file. Both were "
-        "measured against an injected `test.fixme()` — script rc=0, whole repo "
-        "green. Same treatment as the three entry points above: anything other "
-        "than the invocation is refused without being interpreted, so a "
-        "deliberate change updates this line too."
-    )
-
-    offenders = {
-        f"ignores{i}": [p for p in arr if ".spec." in p]
-        for i, arr in enumerate(_js_string_arrays(config, "ignores"))
-        if any(".spec." in p for p in arr)
-    }
-    assert not offenders, (
-        f"eslint `ignores` contains {offenders}, which removes specs from the "
-        "run while leaving the rule configured exactly as written — the "
-        "quietest of the ways down here, because every assertion about the "
-        "rule still reads true."
-    )
-
-    selected = _js_string_arrays(config, "files")
-    assert selected and all(
-        set(arr) >= {"**/*.spec.ts", "**/*.spec.js"} for arr in selected), (
-        f"eslint `files:` is {selected}, which no longer selects every spec. "
-        "⛔ This is the same link as `ignores:` approached from the other side "
-        "and it was unread until a blind review narrowed it to a single file — "
-        "injected `test.fixme()`, script rc=0, this file green. Narrowing here "
-        "removes specs from the run without touching the rule, the script, or "
-        "any of the three entry points."
-    )
-
-
 def test_the_ci_legs_signal_is_not_silently_switched_off() -> None:
     """⛔ What this can prove, and what it deliberately does NOT claim.
 
@@ -995,6 +1066,82 @@ def test_the_ci_legs_signal_is_not_silently_switched_off() -> None:
     )
 
 
+def test_the_behavioural_test_runs_in_the_job_that_installs_eslint() -> None:
+    """⛔ The execution point for `test_e2e_spec_lint_behaviour.py` (#1446).
+
+    That module is the only thing that proves the chain under the script still
+    CATCHES a parked spec — it replaced a column of read-the-config assertions
+    that five rounds of blind review walked through one spelling at a time. It
+    needs `tests/e2e/node_modules`, so everywhere else it skips, and a skip is
+    not a pass: this step is where it must run, with the variable that turns
+    the skip into a failure, after the install that makes it runnable.
+
+    Checked here rather than in that module because this file is collected by
+    Python Tests on every pull request; the behaviour module itself only runs
+    when `playwright.yml` does.
+
+    ⛔ Known gap, not closed: `playwright.yml` is path-filtered, so a pull
+    request touching only `.pre-commit-config.yaml` or the Makefile does not
+    start it. Those two entry points are guarded by
+    `test_all_three_entry_points_run_the_one_script`, which the behavioural
+    module could not see anyway.
+    """
+    job_id, job, _ = _script_step()
+    steps = job.get("steps") or []
+    hits = [i for i, st in enumerate(steps)
+            if _runs_behaviour_test(str(st.get("run", "")))]
+    assert len(hits) == 1, (
+        f"job {job_id!r} has {len(hits)} step(s) that run {_BEHAVIOUR_TEST_REL} "
+        "as `pip install …` lines followed by a bare pytest call. Zero means "
+        "nothing executes the behavioural proof — or the step was wrapped in "
+        "something (`|| true`, `-k`, a trailing command) that `_runs_behaviour_"
+        "test` refuses without interpreting; two means it is unclear which "
+        "one this assertion is about."
+    )
+    index = hits[0]
+    step = steps[index]
+
+    installs = [i for i, st in enumerate(steps)
+                if _argv(str(st.get("run", "")).strip())[:2] == ["npm", "ci"]]
+    assert installs and installs[0] < index, (
+        f"the behavioural step (#{index}) does not come after an `npm ci` "
+        f"step (found at {installs}). Before the install there is no eslint "
+        "to run, so the module either skips or — with its variable set — "
+        "fails for a reason that says nothing about the chain."
+    )
+
+    name = _behaviour_require_env()
+    env = {**(_workflow().get("env") or {}), **(job.get("env") or {}),
+           **(step.get("env") or {})}
+    assert str(env.get(name)) == "1", (
+        f"`{name}` is {env.get(name)!r} for the behavioural step, not \"1\". "
+        "Without it a missing node_modules makes every case SKIP and the step "
+        "reports green having checked nothing — the skip-as-green shape this "
+        "module was written to avoid."
+    )
+
+    for where, node in (("job", job), ("step", step)):
+        assert "if" not in node, (
+            f"the {where} running the behavioural test has an `if:` "
+            f"({node.get('if')!r}). A skipped step is a green job.")
+        assert node.get("continue-on-error") in (None, False), (
+            f"the {where} running the behavioural test sets "
+            f"`continue-on-error: {node.get('continue-on-error')!r}`, which "
+            "turns its red into a green job.")
+    shells = {
+        "step": step.get("shell"),
+        "job defaults": ((job.get("defaults") or {}).get("run") or {}).get("shell"),
+        "workflow defaults": ((_workflow().get("defaults") or {}).get("run")
+                              or {}).get("shell"),
+    }
+    assert not any(shells.values()), (
+        f"a `shell:` is set for the behavioural step ({shells}). The grammar "
+        "`_runs_behaviour_test` accepts is read under the runner's default "
+        "bash; another shell changes what those lines mean, so it is refused "
+        "until somebody teaches that function what the new one does."
+    )
+
+
 def test_editing_a_spec_or_the_runner_triggers_the_workflow() -> None:
     """⛔ A path-filtered workflow does not run for files outside its filter.
 
@@ -1054,6 +1201,10 @@ def test_editing_a_spec_or_the_runner_triggers_the_workflow() -> None:
         for target, why in (
             (sample, "editing an E2E spec is the change class A-13 guards"),
             (_SCRIPT_REL, "editing the runner is the change most likely to break it"),
+            # #1446: the behavioural module only runs in this workflow, so an
+            # edit to it that this filter missed would land unexecuted.
+            (_BEHAVIOUR_TEST_REL,
+             "the behavioural A-13 test runs only in this workflow"),
         ):
             assert any(
                 _match_segments(pattern.split("/"), target.split("/"))

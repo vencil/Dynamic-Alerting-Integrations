@@ -673,7 +673,7 @@ func TestOrgWriteEnforce_StarSemantics_ListEndpoint(t *testing.T) {
 }
 
 // Site #5 async: GroupBatch's async path funnels through the same
-// executeGroupBatchOps as the sync path (group_batch.go:99 vs :120), so the
+// executeBatchOps as the sync path (#2339), so the
 // per-member org gate must hold after the HTTP request has returned. Mirrors
 // the sync GroupBatch pin plus the async submit/poll cycle.
 func TestOrgWriteEnforce_GroupBatch_Async(t *testing.T) {

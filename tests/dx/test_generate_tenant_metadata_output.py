@@ -39,7 +39,11 @@ from pathlib import Path
 import pytest
 
 import generate_tenant_metadata as gtm  # noqa: E402
-from _platform_fs import DIR_WRITE_STRERROR  # noqa: E402
+from _platform_fs import (  # noqa: E402
+    DIR_WRITE_STRERROR,
+    require_symlinks,
+    symlink_or_skip,
+)
 
 _TENANT = (
     "tenants:\n"
@@ -234,7 +238,7 @@ class TestNoRegressionVsInPlace:
         target = tmp_path / "real" / "t.json"
         target.write_text(_PREVIOUS, encoding="utf-8")
         link = tmp_path / "link.json"
-        link.symlink_to(Path("real") / "t.json")
+        symlink_or_skip(Path("real") / "t.json", link)
 
         assert _run(monkeypatch, confd, link) == 0
 
@@ -703,6 +707,7 @@ class TestSameResultAsInPlace:
     ):
         """F4: between ``mkstemp`` and the chmod, the tmp NAME can be swapped
         for a symlink. A path chmod would then chmod whatever it points at."""
+        require_symlinks()  # the swap below runs inside the tool: skip here
         out = tmp_path / "meta.json"
         out.write_text(_PREVIOUS, encoding="utf-8")
         victim = tmp_path / "victim"

@@ -1,6 +1,6 @@
 """_lib_tenant_values：經 da-guard served-values 讀出 /metrics 實際發出的租戶值（#2115）。
 
-測試用真的 da-guard：session 級 fixture 以 `go build` 建到 tmp 目錄。建不起來
+測試用真的 da-guard：conftest 的 session 級 fixture `da_guard_binary` 以 `go build` 建到 tmp 目錄。建不起來
 （含沒有 go）一律 fail、不 skip——這支 lib 的全部意義就是「值來自 Go」，
 量不到 Go 的測試綠燈等於沒測。
 """
@@ -18,22 +18,10 @@ import _lib_io
 import _lib_tenant_values as tv
 from _lib_io import YamlFileError
 
-REPO_ROOT = Path(__file__).resolve().parents[2]
-APP = REPO_ROOT / "components" / "threshold-exporter" / "app"
-
-
 @pytest.fixture(scope="session")
-def da_guard(tmp_path_factory) -> str:
-    go = shutil.which("go")
-    if go is None:
-        pytest.fail("`go` is not on PATH: da-guard cannot be built, so nothing here can be measured")
-    out = tmp_path_factory.mktemp("da-guard") / "da-guard"
-    proc = subprocess.run(
-        [go, "build", "-buildvcs=false", "-o", str(out), "./cmd/da-guard"],
-        cwd=APP, capture_output=True, text=True, encoding="utf-8", errors="replace", check=False, timeout=600)
-    if proc.returncode != 0:
-        pytest.fail(f"go build da-guard failed (rc={proc.returncode}):\n{proc.stderr}")
-    return str(out)
+def da_guard(da_guard_binary) -> str:
+    """conftest 的 `da_guard_binary`：同一次 session build（沒有 go 或建不起來就 fail）。"""
+    return da_guard_binary
 
 
 def _tree(root: Path, files: dict[str, str]) -> Path:
@@ -119,8 +107,13 @@ def test_parse_failed_raises_yaml_file_error_naming_the_file(tmp_path, da_guard)
     })
     with pytest.raises(YamlFileError) as ei:
         tv.load_served_values(conf_d, binary=da_guard)
+    assert isinstance(ei.value, tv.ParseFailedError)
     assert ei.value.path == str(conf_d / "tenant-b.yaml")
     assert "tenant-b.yaml" in str(ei.value)
+    assert "\n" not in str(ei.value)  # YamlFileError 的單行契約不變
+    # da-guard 的 stderr 整份附在 stderr_lines（exporter 的解析原因在其中），不篩選。
+    assert any("cannot unmarshal" in ln for ln in ei.value.stderr_lines), ei.value.stderr_lines
+    assert any("cannot be decoded" in ln for ln in ei.value.stderr_lines), ei.value.stderr_lines
 
 
 def test_nonzero_exit_raises_with_stderr(tmp_path, da_guard):
@@ -263,3 +256,149 @@ def test_non_utf8_file_name_raises_served_values_error(tmp_path, da_guard):
         tv.load_served_values(conf_d, binary=da_guard)
     assert ei.value.returncode == 2
     assert 'parse_failed[0]: "b\\xff.yaml"' in str(ei.value)
+
+
+# ── skipped：exporter 讀了、但不當租戶的檔（#2115 R3）────────────────────────
+
+def test_skipped_names_files_that_declare_no_tenant(tmp_path, da_guard):
+    """平面格式檔（無 `tenants:`）由 Go 判定、列進 skipped；lib 原樣交出檔名與原因。"""
+    conf_d = _tree(tmp_path, {
+        "_defaults.yaml": _DEFAULTS,
+        "tenant-a.yaml": "tenants:\n  tenant-a:\n    mysql_connections: 70\n",
+        "flat-t.yaml": "mysql_connections: 5\n",
+        "team/flat-u.yml": "mysql_connections: 6\n",
+    })
+    tree = tv.load_served_tree(conf_d, binary=da_guard)
+    assert [s.file for s in tree.skipped] == ["flat-t.yaml", "team/flat-u.yml"]
+    assert all(s.reason.startswith("declares no tenant") for s in tree.skipped)
+    assert set(tree.tenants) == {"tenant-a"}  # 平面檔不是租戶
+
+
+def test_skipped_is_empty_on_a_clean_tree(tmp_path, da_guard):
+    conf_d = _tree(tmp_path, {"_defaults.yaml": _DEFAULTS,
+                              "tenant-a.yaml": "tenants:\n  tenant-a:\n    mysql_connections: 70\n"})
+    assert tv.load_served_tree(conf_d, binary=da_guard).skipped == []
+
+
+def test_print_load_warnings_prints_one_named_line_per_file(tmp_path, da_guard, capsys):
+    conf_d = _tree(tmp_path, {
+        "_defaults.yaml": _DEFAULTS,
+        "tenant-a.yaml": "tenants:\n  tenant-a:\n    mysql_connections: 70\n",
+        "flat\x1b[31m.yaml": "mysql_connections: 5\n",
+    })
+    tv.print_load_warnings(tv.load_served_tree(conf_d, binary=da_guard))
+    lines = capsys.readouterr().err.splitlines()
+    assert len(lines) == 1, lines
+    assert lines[0].startswith("WARN: flat") and ": declares no tenant" in lines[0]
+    assert "\x1b" not in lines[0]  # 檔名來自樹，印到終端前已跳脫
+
+
+def test_output_without_skipped_is_refused(tmp_path):
+    """舊版 da-guard（JSON 沒有 skipped）：不靜默當成「沒有略過的檔」，而是 raise。"""
+    fake = tmp_path / "old-da-guard"
+    fake.write_text("#!/bin/sh\necho '{\"at\": \"x\", \"parse_failed\": [], \"tenants\": {}}'\n",
+                    encoding="utf-8")
+    fake.chmod(0o755)
+    with pytest.raises(tv.ServedValuesError) as ei:
+        tv.load_served_tree(tmp_path, binary=str(fake))
+    assert "skipped" in str(ei.value)
+    assert "older than this tool: upgrade or rebuild it" in str(ei.value)
+
+
+def test_output_without_unreadable_is_refused(tmp_path):
+    """da-guard 的 JSON 沒有 unreadable（早於該欄位的版本）：不當成「每個檔都讀得到」，而是 raise。"""
+    fake = tmp_path / "old-da-guard"
+    fake.write_text("#!/bin/sh\necho '{\"at\": \"x\", \"parse_failed\": [], \"skipped\": [], "
+                    "\"tenants\": {}}'\n", encoding="utf-8")
+    fake.chmod(0o755)
+    with pytest.raises(tv.ServedValuesError) as ei:
+        tv.load_served_tree(tmp_path, binary=str(fake))
+    assert "unreadable" in str(ei.value)
+    assert "older than this tool: upgrade or rebuild it" in str(ei.value)
+
+
+def test_unreadable_raises_parse_failed_error_naming_file_and_reason(tmp_path, da_guard):
+    """exporter 讀不到的檔（懸空 symlink）：raise ParseFailedError，path 指向該檔，
+    訊息帶封閉值原因，`unreadable` 原樣交出。"""
+    conf_d = _tree(tmp_path, {
+        "_defaults.yaml": _DEFAULTS,
+        "tenant-a.yaml": "tenants:\n  tenant-a:\n    mysql_connections: 70\n",
+    })
+    (conf_d / "tenant-b.yaml").symlink_to("missing.yaml")
+    with pytest.raises(tv.ParseFailedError) as ei:
+        tv.load_served_tree(conf_d, binary=da_guard)
+    assert ei.value.path == str(conf_d / "tenant-b.yaml")
+    assert ei.value.unreadable == [tv.UnreadableFile("tenant-b.yaml", "stat_error")]
+    assert "cannot read 1 path(s): tenant-b.yaml (stat_error)" in str(ei.value)
+
+
+def test_exit_on_served_values_error_is_rc2_one_line(capsys):
+    @tv.exit_on_served_values_error
+    def main():
+        raise tv.ServedValuesError("da-guard served-values exited 2", 2, "duplicate tenant x\n")
+
+    with pytest.raises(SystemExit) as ei:
+        main()
+    assert ei.value.code == 2
+    err = capsys.readouterr().err
+    assert err.startswith("ERROR: da-guard served-values exited 2") and "duplicate tenant" in err
+
+
+def test_da_guard_warn_lines_are_kept_on_a_successful_run(tmp_path, da_guard, capsys):
+    """rc 0 時 da-guard 的 WARN（例如指向目錄的 symlink 讀不到）不被丟掉：
+    收進 `warnings`，`print_load_warnings` 逐行跳脫後轉印。"""
+    conf_d = _tree(tmp_path, {"_defaults.yaml": _DEFAULTS,
+                              "tenant-a.yaml": "tenants:\n  tenant-a:\n    mysql_connections: 70\n"})
+    (conf_d / "realdir").mkdir()
+    (conf_d / "tb.yaml").symlink_to("realdir")
+    tree = tv.load_served_tree(conf_d, binary=da_guard)
+    assert len(tree.stderr_lines) == 1, tree.stderr_lines
+    assert tree.stderr_lines[0].startswith("WARN: cannot read ") and "tb.yaml" in tree.stderr_lines[0]
+    tv.print_load_warnings(tree)
+    assert capsys.readouterr().err.splitlines() == [tv.DA_GUARD_PREFIX + ln for ln in tree.stderr_lines]
+
+
+def test_missing_binary_message_names_only_what_these_tools_take(monkeypatch, capsys):
+    """decorator 不轉印 dispatcher 的訊息（那段講 `da-tools guard` 的 --da-guard-binary 旗標）。"""
+    monkeypatch.delenv("DA_GUARD_BINARY", raising=False)
+    @tv.exit_on_served_values_error
+    def main():
+        raise tv.DaGuardNotFoundError("Error: da-guard binary not found.\nResolution order:\n  1. --da-guard-binary <path>")
+
+    with pytest.raises(SystemExit) as ei:
+        main()
+    assert ei.value.code == 2
+    err = capsys.readouterr().err
+    assert err.splitlines() == [f"ERROR: {tv.MISSING_BINARY_MESSAGE}"]
+    assert "--da-guard-binary" not in err and "v2.8.0" not in err
+    assert "$DA_GUARD_BINARY" in err and "$PATH" in err and "/usr/local/bin/da-guard" in err
+
+
+def test_da_guard_binary_env_naming_no_file_is_said_so(monkeypatch, tmp_path, capsys):
+    """F5：`$DA_GUARD_BINARY` 有設但那個路徑沒有檔案時，訊息印出該值並說是它不存在。"""
+    missing = tmp_path / "no-such-da-guard"
+    monkeypatch.setenv("DA_GUARD_BINARY", str(missing))
+
+    @tv.exit_on_served_values_error
+    def main():
+        tv.load_served_tree(tmp_path)
+
+    with pytest.raises(SystemExit) as ei:
+        main()
+    assert ei.value.code == 2
+    err = capsys.readouterr().err
+    assert err.splitlines() == [err.rstrip("\n")], err  # 一行
+    assert f"$DA_GUARD_BINARY is set to '{missing}'" in err
+    assert "no file exists at that path" in err
+
+
+def test_served_values_error_stderr_is_printed_line_by_line(capsys):
+    @tv.exit_on_served_values_error
+    def main():
+        raise tv.ServedValuesError("da-guard served-values exited 2", 2, "first\nsecond \x1b[31m\n")
+
+    with pytest.raises(SystemExit):
+        main()
+    assert capsys.readouterr().err.splitlines() == [
+        "ERROR: da-guard served-values exited 2",
+        tv.DA_GUARD_PREFIX + "first", tv.DA_GUARD_PREFIX + "second ?[31m"]

@@ -18,6 +18,7 @@ from typing import Any, Dict
 from unittest.mock import patch
 
 import pytest
+from _platform_fs import symlink_or_skip  # noqa: E402
 
 # Add scripts/tools to path
 _REPO_ROOT = Path(__file__).parent.parent.parent
@@ -520,7 +521,7 @@ def _unusable_confd(root: Path) -> Path:
     (root / "alpha.yaml").write_text(
         "tenants:\n  alpha:\n    pg_connections: 90\n", encoding="utf-8")
     (root / "notes.yaml").mkdir()                       # directory-shaped
-    (root / "broken.yaml").symlink_to(root / "gone.yaml")   # dangling
+    symlink_or_skip(root / "gone.yaml", (root / "broken.yaml"))   # dangling
     return root
 
 

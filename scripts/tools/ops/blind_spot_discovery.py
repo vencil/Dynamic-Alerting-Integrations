@@ -25,10 +25,18 @@ from _lib_python import (  # noqa: E402
     exit_on_yaml_file_error,
     format_json_report,
     http_get_json,
-    load_tenant_configs,
     load_yaml_file,
     JOB_DB_MAP,
     METRIC_PREFIX_DB_MAP,
+)
+# #2115: the thresholds each tenant is monitored by are the ones the
+# exporter's /metrics serves (da-guard served-values), not the keys its own
+# file spells — so a value inherited from `defaults:`, a platform `tenants:`
+# block or a subtree counts, and a nested tenant is seen.
+from _lib_tenant_values import (  # noqa: E402
+    exit_on_served_values_error,
+    load_served_tree,
+    print_load_warnings,
 )
 from _lib_exitcodes import EXIT_VIOLATION  # noqa: E402
 
@@ -103,19 +111,28 @@ def _infer_db_type_from_job(job):
 
 
 def load_monitored_db_types(config_dir):
-    """Load tenant configs and infer which DB types are monitored per namespace.
+    """Infer which DB types each tenant is monitored for.
 
     Returns {db_type: set(tenant_ids)}.
+
+    A tenant is monitored by the threshold keys /metrics serves for it
+    (`da-guard served-values`, #2115): wherever the value is written —
+    `defaults:`, a platform `tenants:` block, the tenant file, a subtree —
+    and at any depth. A key switched off (`disable`) or with no row on
+    /metrics (e.g. no default for it) does not count. Files the load serves
+    no tenant from are named on stderr, after whatever da-guard prints on
+    stderr (line by line, each behind `DA_GUARD_PREFIX`). da-guard missing or failing, or a
+    file the load cannot decode, raises (the CLI exits 2).
     """
     result = {}
     if not Path(config_dir).is_dir():
         print(f"WARN: config-dir not found: {config_dir}", file=sys.stderr)
         return result
 
-    for t_name, t_data in load_tenant_configs(config_dir).items():
-        for key in t_data:
-            if key.startswith("_"):
-                continue
+    tree = load_served_tree(config_dir)
+    print_load_warnings(tree)
+    for t_name, served in tree.tenants.items():
+        for key in served.severities:  # exactly the threshold keys with a row
             db_type = _infer_db_type_from_metric(key)
             if db_type:
                 result.setdefault(db_type, set()).add(t_name)
@@ -248,6 +265,7 @@ def build_parser():
 
 
 @exit_on_yaml_file_error  # #1654: unreadable tenant file → rc 2, named
+@exit_on_served_values_error  # #2115: da-guard missing or failing → rc 2, named
 def main():
     """Entry point."""
     parser = build_parser()

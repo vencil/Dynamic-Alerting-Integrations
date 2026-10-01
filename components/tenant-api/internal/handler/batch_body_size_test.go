@@ -327,7 +327,7 @@ func TestReadBodyWithinDoesNotOverflowAtMaxInt64(t *testing.T) {
 }
 
 // TestGroupBatchRejectsOversizeBody: the sibling endpoint reaches the SAME
-// write path (executeGroupBatchOps → applyPatch → WriteMerged → validate) and
+// write path (executeBatchOps → applyPatch → WriteMerged → validate) and
 // applies one patch to EVERY member, so an uncapped body there costs more than
 // on /tenants/batch, not less. It had no cap at all.
 func TestGroupBatchRejectsOversizeBody(t *testing.T) {
@@ -635,7 +635,7 @@ func TestUnboundedMapsAreRejectedBeforeTheWriteLock(t *testing.T) {
 	// and GroupBatch called neither ValidateStructTags nor validatePatchMap, so
 	// the endpoint where the quadratic merge is paid ONCE PER MEMBER was the one
 	// endpoint with no key-count bound at all. A tag alone is not enough here —
-	// executeGroupBatchOps builds BatchOperation in Go, so the tenant-batch
+	// GroupBatch builds the per-member BatchOperations in Go, so the tenant-batch
 	// endpoint's tag never applies to this path.
 	t.Run("group batch patch key count", func(t *testing.T) {
 		t.Parallel()
