@@ -182,11 +182,10 @@ class TestOpenEncoding:
         assert not _starts_with_bom(head), (
             f"{_short_path(py_file)} 以 UTF-8 BOM 開頭。這個檔案跑得起來"
             "（直譯器編譯 bytes 時會剝掉一個前導 U+FEFF），所以不會有任何"
-            "執行期症狀；但本模組其餘規則、`check_open_encoding` 與 "
-            "`check_subprocess_timeout` 讀到的是帶 U+FEFF 的字串，實測會"
-            "**靜默跳過**這個檔（#1632）。⚠️ 本模組其餘規則已不在此列——"
-            "同一顆 commit 的 `_read_source` 會剝掉它，所以它們現在看得見"
-            "這個檔。修法：把它存成不帶 BOM 的 UTF-8。"
+            "執行期症狀，也就沒有別的東西會替你攔它（#1632）。⚠️ 讀到它的"
+            "掃描器已不會因此靜默跳過：本模組其餘規則經 `_read_source` 剝掉"
+            "它，`check_open_encoding` 與 `check_subprocess_timeout` 照直譯器"
+            "的方式解碼（#2601）。修法：把它存成不帶 BOM 的 UTF-8。"
         )
 
 
