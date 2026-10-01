@@ -130,6 +130,37 @@ func TestLoadDirReport_DirectoryLinksAndDirsAreNotUnreadable(t *testing.T) {
 	}
 }
 
+// A real sub-directory the process may not list: every tenant under it is
+// lost, so it is walk_error (RelKey = the directory). chmod cannot stop root;
+// TestLoadDirReport_UnlistableDeepDirIsWalkError (Linux) runs as any user.
+func TestLoadDirReport_UnlistableSubdirIsWalkError(t *testing.T) {
+	t.Parallel()
+	if os.Geteuid() == 0 {
+		t.Skip("running as root: chmod 000 does not stop listing a directory")
+	}
+	dir := writeUnreadableTree(t)
+	sub := filepath.Join(dir, "team")
+	if err := os.MkdirAll(sub, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(sub, "tenant-c.yaml"),
+		[]byte("tenants:\n  tenant-c:\n    mysql_connections: 60\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Chmod(sub, 0); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = os.Chmod(sub, 0o755) })
+	cfg, rep, _ := loadReport(t, dir)
+	want := []UnreadableFile{{RelKey: "team", Reason: UnreadableWalkError}}
+	if !reflect.DeepEqual(rep.Unreadable, want) {
+		t.Errorf("Unreadable = %v, want %v", rep.Unreadable, want)
+	}
+	if _, ok := cfg.Tenants["tenant-a"]; !ok {
+		t.Errorf("tenant-a missing: the rest of the tree must still load")
+	}
+}
+
 func TestLoadDirReport_CleanTreeHasNoUnreadable(t *testing.T) {
 	t.Parallel()
 	_, rep, _ := loadReport(t, writeUnreadableTree(t))

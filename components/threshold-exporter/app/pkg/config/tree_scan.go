@@ -243,12 +243,15 @@ const (
 	// UnreadableReadError: the stat succeeded but reading the bytes failed
 	// (e.g. permission denied).
 	UnreadableReadError = "read_error"
+	// UnreadableWalkError: a directory below the root (RelKey is the
+	// directory's path) could not be listed, so nothing under it was seen.
+	UnreadableWalkError = "walk_error"
 )
 
 // UnreadableFile is one entry of TreeScan.Unreadable.
 type UnreadableFile struct {
-	RelKey string // root-relative slash path, as a kept file's RelKey
-	Reason string // UnreadableStatError or UnreadableReadError
+	RelKey string // root-relative slash path of the file (or, for walk_error, the directory)
+	Reason string // UnreadableStatError, UnreadableReadError or UnreadableWalkError
 }
 
 // TreeScan is everything one walk of the conf.d tree yields.
@@ -287,7 +290,8 @@ type TreeScan struct {
 	Conflict *DuplicateTenantError
 
 	// Unreadable is every config-named entry the walk dropped because its
-	// stat or its read failed — the "cannot stat" / "cannot read" WARNs as
+	// stat or its read failed, and every directory below the root it could
+	// not list — the "cannot stat" / "cannot read" / "walk error" WARNs as
 	// data (#2115), sorted by RelKey; nil when there is none. Such an entry
 	// is in no other map, exactly as before: this records the drop, it does
 	// not change it. An entry whose target is a directory (a config-named
@@ -374,7 +378,8 @@ func (s *TreeScan) InheritanceGraph() *InheritanceGraph {
 // Rules (one answer per cell; the hierarchical walker's where they differed):
 //   - root is absolutised, cleaned and symlink-resolved via AbsScanRoot; a
 //     missing root or a root that is not a directory is an error.
-//   - a walk error is logged and the walk continues (never SkipDir).
+//   - a walk error is logged and the walk continues (never SkipDir); one
+//     on a directory below the root is recorded in Unreadable (#2115).
 //   - directories whose name starts with '.' are pruned whole (never the
 //     root); files whose name starts with '.' are skipped.
 //   - only files whose lower-cased name ends in `.yaml` / `.yml` are kept.
@@ -556,6 +561,16 @@ func walkDirTree(root string, prior *TreeScan, obs ScanObserver, logger *log.Log
 	walkErr := filepath.WalkDir(absRoot, func(path string, d fs.DirEntry, werr error) error {
 		if werr != nil {
 			logger.Printf("WARN: walk error at %s: %v", path, werr)
+			// A real directory below the root that cannot be listed (e.g.
+			// permission denied): every file under it is lost, so it is
+			// recorded like an unreadable file (#2115). The root's own
+			// failure is not recorded here: the tree then holds no file and
+			// the caller's "no .yaml files" error already stops the load. A
+			// symlink to a directory never gets here (it is a leaf, not
+			// walked).
+			if path != absRoot {
+				dropUnreadable(path, UnreadableWalkError)
+			}
 			return nil
 		}
 		name := d.Name()

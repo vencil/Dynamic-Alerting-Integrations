@@ -45,10 +45,10 @@ Raises:
 
 * `ParseFailedError` (a `YamlFileError`, `_lib_io`) — the exporter's load
   skips a file that does not decode (`parse_failed`) or that it cannot stat
-  or read (`unreadable`: a dangling symlink, a file it may not read; a
-  symlink to a directory is not one); `path` names the first, the one-line
-  message names all (an unreadable one with its reason, `stat_error` /
-  `read_error`), `stderr_lines` carries da-guard's stderr whole (the
+  or read (`unreadable`: a dangling symlink, a file it may not read, a
+  sub-directory it may not list; a symlink to a directory is not one);
+  `path` names the first, the one-line message names all (an unreadable one
+  with its reason, `stat_error` / `read_error` / `walk_error`), `stderr_lines` carries da-guard's stderr whole (the
   exporter's reasons among it).
 * `DaGuardNotFoundError` — no da-guard binary; the message says how to get one.
 * `ServedValuesError` — da-guard failed, or its output is not the JSON it
@@ -122,8 +122,8 @@ class ServedTree(NamedTuple):
 
 
 class UnreadableFile(NamedTuple):
-    file: str    # root-relative slash path, as the exporter's scan keys it
-    reason: str  # closed set: "stat_error" | "read_error"
+    file: str    # root-relative slash path (a directory's, for walk_error)
+    reason: str  # closed set: "stat_error" | "read_error" | "walk_error"
 
 
 class ParseFailedError(YamlFileError):

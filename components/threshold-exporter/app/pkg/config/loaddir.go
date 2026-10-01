@@ -75,7 +75,9 @@ type LoadReport struct {
 	NoTenant []string
 	// Unreadable is TreeScan.Unreadable: the config-named entries the walk
 	// dropped because their stat or read failed (a dangling symlink, a file
-	// the process may not read), each with a closed-set reason. The exporter
+	// the process may not read) and the directories below the root it could
+	// not list (everything under them is lost), each with a closed-set
+	// reason. The exporter
 	// logs a WARN for each and serves the rest of the tree without it — the
 	// load still succeeds (#2115). A symlink to a directory is not listed.
 	// nil when there is none.

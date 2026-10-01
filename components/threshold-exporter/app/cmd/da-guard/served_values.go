@@ -60,9 +60,10 @@ type servedValuesDoc struct {
 	// Always present ([] when none).
 	Skipped []skippedFile `json:"skipped"`
 	// Unreadable: the config-named files the exporter's load could not stat
-	// or read (config.LoadReport.Unreadable), each with a closed-set reason
-	// — config.UnreadableStatError or config.UnreadableReadError, never the
-	// OS error text. The exporter WARNs and serves the tree without them, so
+	// or read, and the directories below the root it could not list
+	// (config.LoadReport.Unreadable), each with a closed-set reason —
+	// config.UnreadableStatError, UnreadableReadError or UnreadableWalkError,
+	// never the OS error text. The exporter WARNs and serves the tree without them, so
 	// the tenants they hold are absent from Tenants; the exit code is 3, as
 	// for ParseFailed, so a caller that does not know this field fails too
 	// (#2115). A symlink to a directory is not listed. Always present ([]

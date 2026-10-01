@@ -411,6 +411,36 @@ func TestServedValues_PermissionDenied_IsUnreadableExitThree(t *testing.T) {
 	}
 }
 
+// A sub-directory the process may not list: the tenants under it vanish from
+// /metrics, so it is unreadable (walk_error, the directory's path) and exit 3.
+// chmod cannot stop root (pkg/config has a Linux shape that runs as root).
+func TestServedValues_UnlistableSubdir_IsUnreadableExitThree(t *testing.T) {
+	t.Parallel()
+	if os.Geteuid() == 0 {
+		t.Skip("running as root: chmod 000 does not stop listing a directory")
+	}
+	dir := unreadableTree(t)
+	sub := filepath.Join(dir, "team")
+	testutil.WriteTree(t, dir, map[string]string{
+		"team/tenant-c.yaml": "tenants:\n  tenant-c:\n    mysql_connections: 60\n",
+	})
+	if err := os.Chmod(sub, 0); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = os.Chmod(sub, 0o755) })
+	code, doc, _, stderr := servedDir(t, dir)
+	if code != exitParseFailed {
+		t.Fatalf("exit = %d, want %d; stderr=%q", code, exitParseFailed, stderr)
+	}
+	if len(doc.Unreadable) != 1 || doc.Unreadable[0].File != "team" ||
+		doc.Unreadable[0].Reason != config.UnreadableWalkError {
+		t.Errorf("unreadable = %+v, want [{team %s}]", doc.Unreadable, config.UnreadableWalkError)
+	}
+	if ids := keysOf(doc.Tenants); !reflect.DeepEqual(ids, []string{"tenant-a"}) {
+		t.Errorf("tenants = %v, want [tenant-a]", ids)
+	}
+}
+
 // A config-named symlink to a directory is never followed by the exporter
 // (a ConfigMap volume can carry one): not unreadable, exit 0 as before.
 func TestServedValues_DirectorySymlink_IsNotUnreadable(t *testing.T) {

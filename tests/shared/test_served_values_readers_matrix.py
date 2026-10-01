@@ -217,6 +217,25 @@ def test_file_without_read_permission_fails_closed(script, extra, name, tmp_path
     assert "Traceback" not in p.stderr, p.stderr
 
 
+@pytest.mark.skipif(not hasattr(os, "geteuid") or os.geteuid() == 0,
+                    reason="chmod 000 does not stop root (or Windows); pkg/config has a Linux walk_error shape for root")
+@pytest.mark.parametrize("script, extra", _CLIS, ids=[c[0] for c in _CLIS])
+def test_subdir_without_permission_fails_closed(script, extra, tmp_path):
+    """讀不到的子目錄（chmod 000）：底下的租戶全部從 /metrics 消失。Go 列進
+    `unreadable`（`walk_error`，路徑是該目錄），讀取端 rc 2、指名該目錄（原為 rc 0）。"""
+    conf_d = _tree(tmp_path, {"_defaults.yaml": _BASE, "tenant-a.yaml": _A_OK,
+                              "team/tenant-b.yaml": _B})
+    (conf_d / "team").chmod(0)
+    try:
+        p = _cli(script, conf_d, *extra)
+    finally:
+        (conf_d / "team").chmod(0o755)
+    assert p.returncode == 2, (p.returncode, p.stderr)
+    err = [ln for ln in p.stderr.split("\n") if ln.startswith("ERROR: ")]
+    assert len(err) == 1 and "team (walk_error)" in err[0], p.stderr
+    assert "Traceback" not in p.stderr, p.stderr
+
+
 @pytest.mark.parametrize("script, extra", _CLIS, ids=[c[0] for c in _CLIS])
 def test_file_the_exporter_cannot_read_is_warned_and_rc_stays_0(script, extra, tmp_path):
     """例外（owner 裁決）：指向目錄的 symlink `tb.yaml`——exporter 本來就不跟進
