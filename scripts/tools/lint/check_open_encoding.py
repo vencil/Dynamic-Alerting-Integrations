@@ -124,7 +124,9 @@ towards each rule's total, since each rule has its own severity switch.
 
 Severity model
 --------------
-- **default mode / --ci**: report violations, exit 0 (warn-only).
+- **default mode / --ci**: report violations, exit 0 (warn-only). A file
+  that cannot be parsed is not a violation but an unscanned file: exit 2 in
+  every mode (see below).
 - **--strict-open-encoding**: open() violations exit 1; subprocess sites
   exit 1 when a file's count differs from its ledger row, or the ledger is
   missing or malformed.
@@ -135,6 +137,15 @@ blocks only under the roots it names; which roots those are lives in
 ``.pre-commit-config.yaml`` and nowhere else (#1984). A scan root that does
 not exist exits 2: a typo or a renamed directory would otherwise scan zero
 files and exit 0, indistinguishable from a clean tree.
+
+The same holds per file (#2601). Source is decoded as the interpreter
+decodes it — one leading UTF-8 BOM is stripped, a PEP 263 coding cookie
+picks the codec — so a file Python runs is a file this scans. A file that
+still cannot be read, decoded or parsed (two BOMs, a syntax error, bytes
+the declared codec rejects) is reported by name and cause and exits 2 in
+every mode: it was not scanned, so it must not read as clean. Before this,
+such a file was skipped silently, and a BOM or a ``# -*- coding: latin-1
+-*-`` header was enough to hide a violation from the gate.
 
 Usage
 -----
@@ -159,7 +170,8 @@ Exit codes
 
     0 — no violations, OR violations whose rule is not in strict mode
     1 — violations found under --strict-open-encoding / --strict-line-ending
-    2 — a given scan path does not exist
+    2 — a given scan path does not exist, OR a scanned file could not be
+        read, decoded or parsed (in every mode, strict or not: #2601)
 """
 from __future__ import annotations
 
@@ -180,6 +192,7 @@ sys.path.insert(0, str(_THIS_DIR))
 sys.path.insert(0, os.path.join(str(_THIS_DIR), ".."))
 from _lib_compat import try_utf8_stdout  # noqa: E402
 from _lib_exitcodes import EXIT_CALLER_ERROR, EXIT_OK, EXIT_VIOLATION  # noqa: E402
+from _lint_helpers import PythonSourceError, parse_python_file  # noqa: E402
 
 REPO_ROOT = Path(__file__).resolve().parent.parent.parent.parent
 
@@ -441,7 +454,9 @@ def _line_ending_verdict(call: ast.Call) -> str | None:
 @dataclass
 class FileScan:
     """Everything one file contributes. Rows carry (lineno, col) so a call
-    flagged by two rules can be reported once."""
+    flagged by two rules can be reported once. ``error`` is set — and every
+    row list left empty — when the file could not be read or parsed."""
+    error: str | None = None
     open_encoding: list[tuple[int, int, str]] = field(default_factory=list)
     line_ending: list[tuple[int, int, str, str]] = field(default_factory=list)
     subprocess: list[tuple[int, str, str]] = field(default_factory=list)
@@ -457,16 +472,18 @@ def scan_source(path: Path, *, encoding: bool = True,
                 line_ending: bool = True) -> FileScan:
     """Parse *path* once and apply the selected rule families in one AST walk.
 
-    A file that is not UTF-8 or does not parse contributes nothing: the
-    offending file should not turn the gate into a traceback about the gate.
+    The source is decoded the way the interpreter decodes it (a UTF-8 BOM, a
+    PEP 263 coding cookie), so a file Python runs is a file this scans.
+    A file that cannot be read, decoded or parsed is NOT clean: the result
+    carries ``error`` (file and cause) and ``main`` exits 2 on it (#2601).
+    It is still not a traceback about the gate.
     """
     result = FileScan()
     try:
-        source = path.read_text(encoding="utf-8")
-        tree = ast.parse(source, filename=str(path))
-    except (OSError, UnicodeDecodeError, SyntaxError):
+        tree, source_lines = parse_python_file(path)
+    except PythonSourceError as exc:
+        result.error = str(exc)
         return result
-    source_lines = source.splitlines()
 
     sp_modules = {"subprocess"}
     sp_funcs: dict[str, str] = {}
@@ -515,16 +532,25 @@ def scan_source(path: Path, *, encoding: bool = True,
     return result
 
 
+def _scan_or_raise(path: Path, **rules: bool) -> FileScan:
+    """``scan_source`` for the per-rule wrappers below: a file that cannot be
+    parsed raises ``PythonSourceError`` instead of reading as no findings."""
+    scan = scan_source(path, **rules)
+    if scan.error is not None:
+        raise PythonSourceError(scan.error)
+    return scan
+
+
 def scan_file(path: Path) -> list[tuple[int, str]]:
     """(lineno, snippet) for each builtin open() missing encoding=."""
     return [(ln, snip) for ln, _col, snip
-            in scan_source(path, line_ending=False).open_encoding]
+            in _scan_or_raise(path, line_ending=False).open_encoding]
 
 
 def scan_line_endings(path: Path) -> list[tuple[int, str]]:
     """(lineno, reason) for each text write that does not pin newline=."""
     return [(ln, reason) for ln, _col, reason, _snip
-            in scan_source(path, encoding=False).line_ending]
+            in _scan_or_raise(path, encoding=False).line_ending]
 
 
 def _subprocess_func(call: ast.Call, modules: set[str], funcs: dict[str, str]) -> str | None:
@@ -571,7 +597,7 @@ def _span_has_ignore(source_lines: list[str], call: ast.Call) -> bool:
 
 def scan_subprocess(path: Path) -> list[tuple[int, str, str]]:
     """Return (lineno, reason, snippet) for each subprocess call flagged."""
-    return scan_source(path, line_ending=False).subprocess
+    return _scan_or_raise(path, line_ending=False).subprocess
 
 
 def ledger_key(path: Path) -> str:
@@ -762,8 +788,12 @@ def main() -> int:
     # rel -> (lineno, col) -> [encoding flagged?, line-ending reason, snippet]
     report: dict[str, dict[tuple[int, int], list]] = {}
     sp_by_file: dict[str, list[tuple[int, str, str]]] = {}
+    parse_errors: list[str] = []
     for key, f in all_files:
         scan = scan_source(f, encoding=key in enc_files, line_ending=key in le_files)
+        if scan.error is not None:
+            parse_errors.append(scan.error)
+            continue
         rel = os.path.relpath(f, REPO_ROOT)
         for lineno, col, snippet in scan.open_encoding:
             report.setdefault(rel, {}).setdefault((lineno, col), [False, None, snippet])[0] = True
@@ -774,6 +804,22 @@ def main() -> int:
         if scan.subprocess:
             sp_by_file[ledger_key(f)] = scan.subprocess
     sp_counts = {k: len(v) for k, v in sp_by_file.items()}
+
+    # A file that could not be parsed was not scanned: it is neither clean nor
+    # a known count, so it fails the run in every mode (#2601). The ledger
+    # writer stops before writing — the file's missing count would otherwise
+    # read as "all sites fixed" and lower its row.
+    for e in parse_errors:
+        print(f"ERROR: {e}", file=sys.stderr)
+    if parse_errors:
+        print(
+            f"ERROR: {len(parse_errors)} file(s) could not be scanned, so this "
+            "run cannot vouch for them. Fix the file (it must parse the way "
+            "the interpreter reads it), then re-run.",
+            file=sys.stderr,
+        )
+        if args.write_subprocess_baseline:
+            return EXIT_CALLER_ERROR
 
     if args.write_subprocess_baseline:
         rows, errors = load_subprocess_baseline(args.subprocess_baseline)
@@ -842,6 +888,8 @@ def main() -> int:
             file=sys.stderr,
         )
 
+    if parse_errors:
+        return EXIT_CALLER_ERROR
     if args.strict_open_encoding and (enc_total or sp_errors):
         return EXIT_VIOLATION
     if args.strict_line_ending and le_total:
