@@ -29,6 +29,7 @@ from _lib_exitcodes import EXIT_CALLER_ERROR  # noqa: E402
 from _lib_io import safe_label  # noqa: E402  (#1538 output-layer escaping)
 # #2123 duplicate key = YAML error; #2114 tenant ids as raw text — composed.
 from _lib_io import strict_load_exporter_keys  # noqa: E402
+from _lib_yaml_keys import ExporterKeyLoader  # noqa: E402  (#2504)
 from _lib_confd import (  # noqa: E402
     declared_tenant_ids,
     duplicate_declarations,
@@ -595,6 +596,177 @@ def _parse_tenant_overrides(tenant: str, overrides: dict, result: dict) -> None:
         result["explicit_routing"][tenant] = routing
 
 
+# ── #2504: a null key in a routes `match` ──────────────────────────────────
+#
+# The shared loader drops a null key (`~:`, `null:`, an empty `? ` key) in
+# EVERY mapping, as the exporter does. In a routes `match` that is fail-open:
+# `{~: x, severity: critical}` became a route on severity alone, wider than
+# written, while yaml.v3 keeps the key and da-guard reports
+# invalid_route_entry. So, after the normal read, the null key is put back —
+# as `None`, which `route_entry_matchers` refuses as "not a valid label
+# name", exactly like `a-b` — but ONLY at the paths the generator reads a
+# route `match` from (ROUTE_MATCH_SOURCES), never by key text: a tenant
+# named `match`, or `_metadata.match`, is not a route match.
+#
+# ⛔ The loader is NOT changed, and no object of the normal read is mutated.
+# A `match` can be an alias of a mapping used elsewhere (`match: *t`, with
+# `&t` a tenant body); the route gets a NEW dict (the original's items plus
+# the null key) along a copied path, so every other reference still sees the
+# mapping with its null key dropped.
+#
+# Where the generator reads a route `match` (each in any file it reads; the
+# later stages decide which files count):
+#   * tenants.<id>._routing.routes[i].match — tenant files and root platform
+#     `tenants:` overlays;
+#   * routing_profiles.<name>.routes[i].match — `_routing_profiles.yaml`.
+# `_routing_defaults.routes` is dropped before any merge (blocking WARN), and
+# `_routing_enforced.match` is a list of matcher strings, not a mapping.
+ROUTE_MATCH_SOURCES = (("tenants", "_routing"), ("routing_profiles", None))
+
+_NULL_TAG = "tag:yaml.org,2002:null"
+_STR_TAG = "tag:yaml.org,2002:str"
+# A NUL cannot occur in a YAML stream, so no key written in a file is this.
+_NULL_KEY_TEXT = "\x00null-key"
+
+
+class _NullKeyAsTextLoader(ExporterKeyLoader):
+    """The routing reader's loader, but every null key reads as
+    ``_NULL_KEY_TEXT: ""`` instead of being dropped. Used only to find null
+    keys by structural path; its result is never routed on. Merge keys
+    expand as in the normal read, so a null key merged into a ``match`` is
+    seen.
+
+    ⛔ The null key's VALUE is replaced by an empty ``!!str`` scalar, never
+    constructed (#2504 review F3). The normal read skips a null key without
+    building its value, so a value SafeConstructor cannot build
+    (``2024-13-45``, ``=``, ``!!int x``, ``!vault x``, a
+    ``!!python/object``) is harmless there; built here, it failed the whole
+    probe — and with it the match check for the whole file, so the route
+    was widened again. With the value replaced, this read constructs exactly
+    the nodes the normal read constructs (an aliased value node is still
+    built where the normal read builds it), so it can fail only where that
+    read fails, plus I/O on the second ``open``.
+    """
+
+    raw_text_sequences = frozenset({"tenants"})
+
+    def construct_document(self, node):  # noqa: D102 — see class
+        stack, seen = [node], set()
+        while stack:
+            n = stack.pop()
+            if n is None or id(n) in seen:
+                continue
+            seen.add(id(n))
+            if isinstance(n, yaml.MappingNode):
+                pairs = []
+                for k, v in n.value:
+                    if isinstance(k, yaml.ScalarNode) and k.tag == _NULL_TAG:
+                        k = yaml.ScalarNode(_STR_TAG, _NULL_KEY_TEXT,
+                                            k.start_mark, k.end_mark)
+                        v = yaml.ScalarNode(_STR_TAG, "", v.start_mark,
+                                            v.end_mark)
+                    else:
+                        stack.extend((k, v))
+                    pairs.append((k, v))
+                n.value = pairs
+            elif isinstance(n, yaml.SequenceNode):
+                stack.extend(n.value)
+        return super().construct_document(node)
+
+
+def _probe_null_keys(path: str) -> object:
+    """*path* read by ``_NullKeyAsTextLoader``; None when that read fails.
+
+    Called only after the strict read of the same file succeeded; per the
+    loader's docstring the probe then fails only on I/O (the file vanished
+    or changed between the two reads), and ``keep_route_match_null_keys``
+    keeps the normal read as it is.
+    """
+    try:
+        with open(path, encoding="utf-8") as f:
+            loader = _NullKeyAsTextLoader(f)
+            try:
+                return loader.get_single_data()
+            finally:
+                loader.dispose()
+    except Exception:  # noqa: BLE001 — see docstring
+        return None
+
+
+def _sub(obj: object, key: str | None) -> object:
+    if key is None:
+        return obj
+    return obj.get(key) if isinstance(obj, dict) else None
+
+
+def _route_lists(data: dict):
+    """``(top, name, routes)`` for every routes list at ROUTE_MATCH_SOURCES."""
+    for top, inner in ROUTE_MATCH_SOURCES:
+        block = data.get(top)
+        if not isinstance(block, dict):
+            continue
+        for name, body in block.items():
+            routes = _sub(_sub(body, inner), "routes")
+            if isinstance(routes, list):
+                yield top, name, routes
+
+
+def keep_route_match_null_keys(data: object, path: str) -> object:
+    """*data* (the normal read of *path*) with each route ``match`` that has
+    a null key in the file replaced by a copy carrying ``None: ""``. The
+    value is the probe's placeholder, never the file's (it is not built, see
+    ``_NullKeyAsTextLoader``). No verdict reads it — ``route_entry_matchers``
+    refuses the label first, and ``routing_values_not_string`` skips a key
+    that is no label name — but ``explain_route`` displays it as ``''``.
+
+    Returns *data* itself when nothing changes; otherwise a new top-level
+    mapping whose changed containers, along the route's path only, are
+    shallow copies — nothing of *data* is mutated (see the section comment).
+    """
+    if not isinstance(data, dict) or not any(
+            isinstance(e, dict) and isinstance(e.get("match"), dict)
+            for _t, _n, routes in _route_lists(data) for e in routes):
+        return data  # no route match to judge: skip the second read
+    raw = _probe_null_keys(path)
+    if not isinstance(raw, dict):
+        return data
+    out = data
+    for top, inner in ROUTE_MATCH_SOURCES:
+        block, raw_block = data.get(top), raw.get(top)
+        if not isinstance(block, dict) or not isinstance(raw_block, dict):
+            continue
+        new_block = None
+        for name, body in block.items():
+            routing = _sub(body, inner)
+            routes = _sub(routing, "routes")
+            raw_routes = _sub(_sub(raw_block.get(name), inner), "routes")
+            if not (isinstance(routes, list) and isinstance(raw_routes, list)
+                    and len(routes) == len(raw_routes)):
+                continue
+            new_routes = None
+            for idx, (entry, raw_entry) in enumerate(zip(routes, raw_routes)):
+                match, raw_match = _sub(entry, "match"), _sub(raw_entry, "match")
+                if not (isinstance(match, dict) and isinstance(raw_match, dict)
+                        and _NULL_KEY_TEXT in raw_match):
+                    continue
+                if new_routes is None:
+                    new_routes = list(routes)
+                new_routes[idx] = {**entry, "match": {
+                    **match, None: raw_match[_NULL_KEY_TEXT]}}
+            if new_routes is None:
+                continue
+            new_routing = {**routing, "routes": new_routes}
+            if new_block is None:
+                new_block = dict(block)
+            new_block[name] = (new_routing if inner is None
+                               else {**body, inner: new_routing})
+        if new_block is not None:
+            if out is data:
+                out = dict(data)
+            out[top] = new_block
+    return out
+
+
 def _parse_config_files(config_dir: str) -> dict:
     """Parse all YAML files in config_dir and extract raw data.
 
@@ -824,6 +996,9 @@ def _parse_config_files(config_dir: str) -> dict:
         result["files_read"] += 1
         if data is None:
             continue
+        # #2504: a null key in a routes `match` is put back as None (by
+        # structural path, on a copy — see keep_route_match_null_keys).
+        data = keep_route_match_null_keys(data, path)
 
         # #1447: a document that parses cleanly but is not a mapping (a bare
         # YAML list, a lone scalar) reaches `data.get(...)` below and raises

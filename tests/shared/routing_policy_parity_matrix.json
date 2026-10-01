@@ -88,7 +88,8 @@
     "routingpolicy.IsBlocking is true for exactly these among every Problem kind, so the lists cannot",
     "drift. routing_in_unread_location with field `_routing_defaults` is the one row of that kind the",
     "Python reader also reports (a `_` non-carrier file below the root; --validate-blocking there).",
-    "#2412 - a root `_routing_defaults` that is not a mapping (list, string, number) contributes nothing, as below the root: no platform row (the generator WARNs, rc 0); it still replaces an earlier root file's `_routing_defaults` WHOLE (root _ files in name order), so the later file decides."
+    "#2412 - a root `_routing_defaults` that is not a mapping (list, string, number) contributes nothing, as below the root: no platform row (the generator WARNs, rc 0); it still replaces an earlier root file's `_routing_defaults` WHOLE (root _ files in name order), so the later file decides.",
+    "#2504 - a null key in a routes match (~, null, an empty `? ` key) is no label name: the entry is rejected in every reader, alone or beside a valid label. The generator keeps that key (as None) instead of dropping it as its loader drops null keys elsewhere, so it no longer renders the route on the other labels alone; a critical -> pagerduty route that carries one is no escalation."
   ],
   "blocking_kinds": [
     "routing_defaults_null_below_root",
@@ -3492,6 +3493,104 @@
             {
               "ref": "receiver",
               "type": "pagerduty"
+            }
+          ],
+          "policy": [],
+          "rejected_routes": [
+            "routes[0]"
+          ],
+          "values_not_string": [],
+          "unknown_profile": null,
+          "tenant_api": {
+            "put": "ok",
+            "batch": null
+          },
+          "python_differs": null,
+          "escalation": null
+        }
+      }
+    },
+    {
+      "name": "routes-match-null-key",
+      "files": {
+        "_defaults.yaml": "defaults:\n  cpu_usage_percent: 80\n",
+        "t-null-pair.yaml": "tenants:\n  t-null-pair:\n    cpu_usage_percent: '85'\n    _routing:\n      receiver:\n        type: webhook\n        url: https://hooks.example.com/main\n      routes:\n      - match:\n          ~: x\n          severity: critical\n        receiver:\n          type: pagerduty\n          service_key: k\n",
+        "t-null-alone.yaml": "tenants:\n  t-null-alone:\n    cpu_usage_percent: '85'\n    _routing:\n      receiver:\n        type: webhook\n        url: https://hooks.example.com/main\n      routes:\n      - match:\n          null: x\n        receiver:\n          type: pagerduty\n          service_key: k\n",
+        "t-null-empty.yaml": "tenants:\n  t-null-empty:\n    cpu_usage_percent: '85'\n    _routing:\n      receiver:\n        type: webhook\n        url: https://hooks.example.com/main\n      routes:\n      - match:\n          ? \n          : x\n          severity: critical\n        receiver:\n          type: pagerduty\n          service_key: k\n",
+        "t-null-profile.yaml": "tenants:\n  t-null-profile:\n    cpu_usage_percent: '85'\n    _routing_profile: p-null-key\n",
+        "_routing_profiles.yaml": "routing_profiles:\n  p-null-key:\n    receiver:\n      type: webhook\n      url: https://hooks.example.com/main\n    routes:\n    - match:\n        ~: x\n        severity: critical\n      receiver:\n        type: pagerduty\n        service_key: k\n",
+        "_domain_policy.yaml": "domain_policies:\n  finance:\n    tenants:\n    - t-null-pair\n    constraints:\n      require_critical_escalation: true\n"
+      },
+      "platform": [],
+      "expect": {
+        "t-null-pair": {
+          "targets": [
+            {
+              "ref": "receiver",
+              "type": "webhook"
+            }
+          ],
+          "policy": [],
+          "rejected_routes": [
+            "routes[0]"
+          ],
+          "values_not_string": [],
+          "unknown_profile": null,
+          "tenant_api": {
+            "put": "403",
+            "batch": null
+          },
+          "python_differs": null,
+          "escalation": {
+            "verdict": "violation",
+            "leaks": []
+          }
+        },
+        "t-null-alone": {
+          "targets": [
+            {
+              "ref": "receiver",
+              "type": "webhook"
+            }
+          ],
+          "policy": [],
+          "rejected_routes": [
+            "routes[0]"
+          ],
+          "values_not_string": [],
+          "unknown_profile": null,
+          "tenant_api": {
+            "put": "ok",
+            "batch": null
+          },
+          "python_differs": null,
+          "escalation": null
+        },
+        "t-null-empty": {
+          "targets": [
+            {
+              "ref": "receiver",
+              "type": "webhook"
+            }
+          ],
+          "policy": [],
+          "rejected_routes": [
+            "routes[0]"
+          ],
+          "values_not_string": [],
+          "unknown_profile": null,
+          "tenant_api": {
+            "put": "ok",
+            "batch": null
+          },
+          "python_differs": null,
+          "escalation": null
+        },
+        "t-null-profile": {
+          "targets": [
+            {
+              "ref": "receiver",
+              "type": "webhook"
             }
           ],
           "policy": [],
