@@ -1635,15 +1635,16 @@ def test_a_push_that_changes_no_docs_is_not_gated_when_another_branch_did(
     )
 
 
-@pytest.mark.parametrize("to_ref", [None, "sha_b"], ids=["no-TO_REF", "control-with-TO_REF"])
-def test_an_unknown_pushed_commit_is_refused(tmp_path: Path, to_ref: str | None) -> None:
-    """pre-commit exports REMOTE_BRANCH without TO_REF on a first push to an
-    empty remote, so the pushed commit reaches the guard as `-`. That is not
-    "nothing to push", and `git worktree add … -` checks out the PREVIOUS
-    branch."""
+@pytest.mark.parametrize("case", ["no-TO_REF", "control-with-TO_REF", "tag-no-TO_REF"])
+def test_an_unknown_pushed_commit_is_refused(tmp_path: Path, case: str) -> None:
+    """Run by pre-commit itself (a wiring the guard forbids), a first push to
+    an empty remote exports REMOTE_BRANCH without TO_REF, so the pushed commit
+    reaches the guard as `-`. That is not "nothing to push", and `git worktree
+    add … -` checks out the PREVIOUS branch. A tag is still never judged."""
     work, record, _sha_a, sha_b = _docs_repo(tmp_path)
-    env_extra = {"PRE_COMMIT": "1", "PRE_COMMIT_REMOTE_BRANCH": "refs/heads/topic"}
-    if to_ref:
+    ref = "refs/tags/v1" if case.startswith("tag") else "refs/heads/topic"
+    env_extra = {"PRE_COMMIT": "1", "PRE_COMMIT_REMOTE_BRANCH": ref}
+    if case.startswith("control"):
         env_extra["PRE_COMMIT_TO_REF"] = sha_b
     bindir = work.parent / "fakebin"
     bindir.mkdir()
@@ -1659,9 +1660,12 @@ def test_an_unknown_pushed_commit_is_refused(tmp_path: Path, to_ref: str | None)
         encoding="utf-8", errors="replace", env=env, timeout=60,
     )
 
-    if to_ref:
+    if case.startswith("control"):
         assert r.returncode == 0, f"{r.stdout}{r.stderr}"
         assert record.read_text(encoding="utf-8").split() == [sha_b]
+    elif case.startswith("tag"):
+        assert (r.returncode, r.stdout, r.stderr) == (0, "", ""), f"{r.stdout}{r.stderr}"
+        assert not record.exists()
     else:
         assert r.returncode == 1, f"an unknown commit went through:\n{r.stdout}{r.stderr}"
         assert not record.exists(), f"built {record.read_text(encoding='utf-8')!r} for an unknown commit"
