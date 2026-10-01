@@ -57,6 +57,7 @@ import pytest
 import yaml
 
 from _pysource import parse_py
+from _precommit_selection import silencing_keys as _silencing_keys
 
 _REPO_ROOT = Path(__file__).resolve().parents[2]
 
@@ -184,55 +185,6 @@ def _js_string_arrays(config: str, key: str) -> list[list[str]]:
 
 def _precommit_config() -> dict:
     return yaml.safe_load(_PRECOMMIT_CONFIG.read_text(encoding="utf-8"))
-
-
-def _silencing_keys(hook: dict, config: dict) -> list[str]:
-    """Every reason pre-commit would NOT run this hook on `git commit`.
-
-    ⛔ Returns a list rather than a bool so the failure names the key. Four
-    mechanisms, all measured against real pre-commit 4.5.1 in a throwaway git
-    repo, all of which leave `files:` reading perfectly:
-
-    * `stages:` on the hook without `pre-commit` in it;
-    * a top-level `default_stages:` without `pre-commit`, when the hook does
-      not override it — THIS REPO ALREADY SETS THAT KEY, so the interaction is
-      live, not hypothetical;
-    * `types:` narrowed off the default `[file]`, which ANDs with `files:`;
-    * any `exclude_types:`, which subtracts from it.
-
-    The first version asserted `"stages" not in hook`. That is a key-existence
-    check, and it was wrong in both directions at once: `stages: [pre-commit,
-    pre-push]` is a legitimate widening that it reds, while the top-level
-    default it never reads silences the hook just as completely.
-    """
-    reasons: list[str] = []
-    stages = hook.get("stages")
-    if stages is None:
-        stages = config.get("default_stages")
-        where = "the top-level `default_stages:`"
-    else:
-        where = "the hook's `stages:`"
-    if stages is not None and "pre-commit" not in stages:
-        reasons.append(f"{where} is {stages!r}, which omits `pre-commit`")
-
-    types = hook.get("types")
-    if types is not None and list(types) != ["file"]:
-        reasons.append(
-            f"`types: {types!r}` narrows the file set beyond `files:` "
-            "(pre-commit ANDs them; the default is `[file]`)")
-    if hook.get("exclude_types"):
-        reasons.append(f"`exclude_types: {hook['exclude_types']!r}` subtracts "
-                       "from the file set without touching `files:`")
-    # ⛔ `types_or:` is the fifth member of the same closed set, one line away
-    # from `types:` in pre-commit's own schema — `run.py` ANDs it in as
-    # `(not types_or or tags & types_or)`. A blind review set it to `[python]`
-    # against the real hook and got "(no files to check) Skipped" with this
-    # file green. Enumerating here is legitimate BECAUSE the set is closed and
-    # published; the failure was reading four of five, not the approach.
-    if hook.get("types_or"):
-        reasons.append(f"`types_or: {hook['types_or']!r}` narrows the file set "
-                       "the same way `types:` does (pre-commit ANDs it in)")
-    return reasons
 
 
 def _make_commands(makefile_text: str, target: str) -> list[str]:
@@ -768,6 +720,10 @@ def test_silencing_keys_names_every_measured_way_off_the_commit_path() -> None:
         (live, {"default_stages": ["pre-push"]}, "top-level, pre-push only"),
         ({**live, "types": ["python"]}, {}, "types narrowed"),
         ({**live, "exclude_types": ["ts"]}, {}, "exclude_types subtracts"),
+        ({**live, "types_or": ["python"]}, {}, "types_or narrows"),
+        ({**live, "exclude": ".*"}, {}, "hook exclude"),
+        (live, {"exclude": ".*"}, "top-level exclude"),
+        (live, {"files": "^nomatch$"}, "top-level files"),
     ):
         assert _silencing_keys(hook, config), (
             f"{why}: {hook!r} + {config!r} was read as still running on "
