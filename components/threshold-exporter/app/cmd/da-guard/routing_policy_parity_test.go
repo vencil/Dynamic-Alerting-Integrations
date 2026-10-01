@@ -7,7 +7,8 @@ package main
 // row (Field <ref>.receiver.type), one invalid_route_entry per
 // `rejected_routes` ref, unknown_routing_profile exactly when the table
 // names one, one routing_value_not_string per `values_not_string` field
-// (#2431), critical_escalation_missing exactly when `escalation` says
+// (#2431), one routing_group_by_invalid per `group_by_invalid` field
+// (#2503), critical_escalation_missing exactly when `escalation` says
 // violation and one critical_escalation_leak Field per leak ref (#2325), and exactly the tree's `platform` rows as TenantID "" findings. The Python half reads only the same table.
 
 import (
@@ -26,6 +27,7 @@ type daGuardParityExpect struct {
 	Policy         [][3]string     `json:"policy"`
 	RejectedRoutes []string        `json:"rejected_routes"`
 	NotString      []string        `json:"values_not_string"`
+	GroupByInvalid [][2]string     `json:"group_by_invalid"`
 	UnknownProfile *string         `json:"unknown_profile"`
 	TenantAPI      json.RawMessage `json:"tenant_api"`
 	PythonDiffers  json.RawMessage `json:"python_differs"`
@@ -185,6 +187,16 @@ func TestDaGuard_RoutingPolicyParityMatrix(t *testing.T) {
 				sort.Strings(wantNotString)
 				if got := fieldsOf(findings, tenantID, "routing_value_not_string"); !equalStrings(got, wantNotString) {
 					t.Errorf("%s: routing_value_not_string fields %v, table says %v", tenantID, got, wantNotString)
+				}
+				// #2503: a bad group_by element (the kind is pinned by
+				// pkg/routingpolicy's half; the finding carries the field).
+				wantGroupBy := []string{}
+				for _, row := range want.GroupByInvalid {
+					wantGroupBy = append(wantGroupBy, row[0])
+				}
+				sort.Strings(wantGroupBy)
+				if got := fieldsOf(findings, tenantID, "routing_group_by_invalid"); !equalStrings(got, wantGroupBy) {
+					t.Errorf("%s: routing_group_by_invalid fields %v, table says %v", tenantID, got, wantGroupBy)
 				}
 				// #2325: critical_escalation_missing ⇔ verdict violation; the
 				// critical_escalation_leak Fields are the leak refs (as a set:

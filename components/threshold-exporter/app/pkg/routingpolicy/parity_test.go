@@ -41,6 +41,7 @@ type parityDiffers struct {
 	Targets        *[]parityTarget `json:"targets"`
 	Policy         [][3]string     `json:"policy"`
 	RejectedRoutes []string        `json:"rejected_routes"`
+	GroupByInvalid [][2]string     `json:"group_by_invalid"` // #2503: the Python value only
 }
 
 // parityEscalation is the `escalation` cell (#2325).
@@ -54,6 +55,7 @@ type parityExpect struct {
 	Policy         [][3]string       `json:"policy"`
 	RejectedRoutes []string          `json:"rejected_routes"`
 	NotString      []string          `json:"values_not_string"`
+	GroupByInvalid [][2]string       `json:"group_by_invalid"`
 	UnknownProfile *string           `json:"unknown_profile"`
 	TenantAPI      *parityTenantAPI  `json:"tenant_api"`
 	PythonDiffers  *parityDiffers    `json:"python_differs"`
@@ -174,6 +176,20 @@ func gotNotString(resolved map[string]any, ok bool) []string {
 	return out
 }
 
+// gotGroupBy is the `group_by_invalid` cell (#2503): [field, kind] per
+// GroupByInvalid finding of the resolved routing, in its order (main,
+// overrides, routes; element index order).
+func gotGroupBy(resolved map[string]any, ok bool) [][2]string {
+	out := [][2]string{}
+	if !ok {
+		return out
+	}
+	for _, p := range GroupByInvalid(resolved) {
+		out = append(out, [2]string{p.Field, p.Kind})
+	}
+	return out
+}
+
 func gotPolicy(tenantID string, resolved map[string]any, ok bool, pols []Policy) [][3]string {
 	out := [][3]string{}
 	if !ok {
@@ -291,6 +307,8 @@ func TestRoutingPolicyParityMatrix(t *testing.T) {
 					wantNotString := append([]string{}, want.NotString...)
 					sort.Strings(wantNotString)
 					jsonEq(t, "values_not_string", gotNotString(resolved, ok), wantNotString)
+					wantGroupBy := append([][2]string{}, want.GroupByInvalid...)
+					jsonEq(t, "group_by_invalid", gotGroupBy(resolved, ok), wantGroupBy)
 					jsonEq(t, "policy", sortRows(gotPolicy(tenantID, resolved, ok, pols)), sortRows(want.Policy))
 					jsonEq(t, "escalation", gotEscalation(t, tenantID, resolved, ok, pols), want.Escalation)
 					if (unknown == nil) != (want.UnknownProfile == nil) ||
@@ -339,8 +357,9 @@ func checkTenantAPIModel(t *testing.T, files map[string]string, tenantID string,
 	put := "ok"
 	if verdict(block) {
 		put = "403"
-	} else if writesBadReceiver(block) || len(ValuesNotString(block["_routing"])) > 0 {
-		put = "400" // #2295 receiver contract, #2431 a matcher value the block writes
+	} else if writesBadReceiver(block) || len(ValuesNotString(block["_routing"])) > 0 ||
+		len(GroupByInvalidForTenant(tenantID, block["_routing"])) > 0 {
+		put = "400" // #2295 receiver contract, #2431 a matcher value / #2503 a group_by element the block writes
 	}
 	if put != want.Put {
 		t.Errorf("tenant_api.put model = %s, table says %s", put, want.Put)

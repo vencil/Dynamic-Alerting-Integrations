@@ -61,10 +61,14 @@ from _grar_validate import (  # noqa: E402
     _validate_profile_refs,
     check_domain_policies,
     check_policy_scope,
+    group_by_problem_text,
+    routing_group_by_invalid,
     routing_values_not_string,
     validate_tenant_keys,
     value_not_string_message,
 )
+# #2503: the strict twin of the enforced routes' group_by render.
+from _grar_routes import enforced_group_by_problems  # noqa: E402
 
 # ADR-007 --strict fail-open closure: filenames whose content carries the
 # domain policies. If such a file is unparseable, or a domain_policies
@@ -1428,12 +1432,28 @@ def load_tenant_tree(
     # not read as a string is a blocking ERROR too — da-guard and tenant-api
     # refuse the same value; without --strict the generator keeps its legacy
     # behaviour (routes: WARN + skip; overrides: truthiness + str()).
+    # #2503: a bad group_by element (not a string as PyYAML reads it, empty,
+    # repeated, `...` mixed with labels) of the resolved routing or of
+    # `_routing_enforced` is a blocking ERROR too (da-guard:
+    # routing_group_by_invalid; tenant-api: 400); without --strict the
+    # generator drops the element with a `WARN … skipping` line instead.
     if strict_policies:
         for tenant, rc in sorted(routing_configs.items()):
             for fld, value in routing_values_not_string(rc):
                 schema_warnings.append(
                     f"  {POLICY_ERROR_PREFIX} "
                     f"{value_not_string_message(tenant, fld, value)}")
+            for fld, kind, value in routing_group_by_invalid(rc):
+                schema_warnings.append(
+                    f"  {POLICY_ERROR_PREFIX} tenant '{tenant}': "
+                    f"{group_by_problem_text(fld, kind, value)}")
+        # Only the enforced routes the generator renders, the `{{tenant}}`
+        # shape per tenant after substitution (#2503 round 2, F1 / F4).
+        for ctx, idx, kind, value in enforced_group_by_problems(
+                parsed["enforced_routing"], list(routing_configs)):
+            schema_warnings.append(
+                f"  {POLICY_ERROR_PREFIX} {ctx}: "
+                f"{group_by_problem_text(f'group_by[{idx}]', kind, value)}")
         for err in parsed.get("policy_file_errors", []):
             # The cause and the remedy travel with the record (see
             # _drop_unusable_policy); this line only frames the consequence.

@@ -14,6 +14,9 @@ What this half measures, per tree written to a tmp dir:
 * `values_not_string` (#2431) — the strict ERROR lines for a routes match
   value / override alertname / metric_group that PyYAML does not read as a
   string (`_grar_validate.routing_values_not_string`), parsed back to fields;
+* `group_by_invalid` (#2503) — the strict ERROR lines for a bad group_by
+  element (`_grar_validate.routing_group_by_invalid`), parsed back to
+  (field, kind);
 * `policy` — the receiver-type lines `check_domain_policies` (strict) put in
   `schema_warnings`, parsed back to (domain, ref, constraint);
 * `unknown_profile` — the `_routing_profile references unknown profile` WARN;
@@ -68,12 +71,14 @@ PLATFORM_KINDS = {"routing_defaults_routes_ignored", "routing_in_unread_location
 # column is what pins "not rendered" here.
 GO_ONLY_PLATFORM_KINDS = {"routing_in_unread_location"}
 EXPECT_KEYS = {"targets", "policy", "rejected_routes", "values_not_string",
-               "unknown_profile", "tenant_api", "python_differs", "escalation"}
+               "group_by_invalid", "unknown_profile", "tenant_api",
+               "python_differs", "escalation"}
+GROUP_BY_KINDS = {"not_string", "empty", "duplicate", "wildcard_mixed"}
 ESCALATION_KEYS = {"verdict", "leaks"}
 ESCALATION_VERDICTS = {"compliant", "violation"}
 TENANT_API_KEYS = {"put", "batch"}
 BATCH_KEYS = {"patch", "verdict"}
-DIFFERS_KEYS = {"reason", "targets", "policy", "rejected_routes"}
+DIFFERS_KEYS = {"reason", "targets", "policy", "rejected_routes", "group_by_invalid"}
 CONSTRAINTS = {"forbidden_receiver_types", "allowed_receiver_types"}
 
 # One receiver-type violation line of check_domain_policies. `ref` is absent
@@ -93,6 +98,13 @@ _ESC_NOT_BOOL = re.compile(
 # #2431: the strict line for a matcher value PyYAML does not read as a string.
 _NOT_STRING = re.compile(
     r"ERROR: tenant '(?P<tenant>[^']*)': (?P<field>\S+) must be a string, got ")
+# #2503: the strict line for a bad group_by element; the wording after the
+# field names the kind (_grar_validate.group_by_problem_text).
+_GROUP_BY = re.compile(
+    r"ERROR: tenant '(?P<tenant>[^']*)': (?P<field>\S*group_by\[\d+\]) "
+    r"(?P<why>is an empty string|repeats label|is '\.\.\.' alongside|is .*?, not a string)")
+_GROUP_BY_WHY = {"is an empty string": "empty", "repeats label": "duplicate",
+                 "is '...' alongside": "wildcard_mixed"}
 _UNKNOWN_PROFILE = re.compile(
     r"WARN: (?P<tenant>\S+): _routing_profile references unknown profile '(?P<name>[^']*)'")
 # #2325: the require_critical_escalation lines — the non-compliance line
@@ -130,7 +142,8 @@ def test_matrix_is_not_vacuous() -> None:
     for required in ("i-routes-entry-unknown-receiver-type", "ii-routes-entry-forbidden-type",
                      "iii-override-unknown-receiver-type", "iv-override-forbidden-type",
                      "adr007-five-tenants", "yaml11-bool-match-value",
-                     "require-critical-escalation", "routing-values-yaml11"):
+                     "require-critical-escalation", "routing-values-yaml11",
+                     "group-by-elements"):
         assert required in names, required
 
 
@@ -145,6 +158,8 @@ def test_matrix_keys_are_exactly_the_known_ones() -> None:
             assert set(want) == EXPECT_KEYS, (where, set(want) ^ EXPECT_KEYS)
             for row in want["policy"]:
                 assert len(row) == 3 and row[2] in CONSTRAINTS, (where, row)
+            for row in want["group_by_invalid"]:
+                assert len(row) == 2 and row[1] in GROUP_BY_KINDS, (where, row)
             api = want["tenant_api"]
             assert api is None or set(api) == TENANT_API_KEYS, (where, api)
             if api is not None:
@@ -271,6 +286,10 @@ def test_python_reader_matches_the_table(tree, tmp_path: Path) -> None:
         not_string = sorted(m["field"] for m in map(_NOT_STRING.search, got.schema_warnings)
                             if m and m["tenant"] == tenant)
         assert not_string == sorted(want["values_not_string"]), (where, not_string)
+        group_by = [[m["field"], _GROUP_BY_WHY.get(m["why"], "not_string")]
+                    for m in map(_GROUP_BY.search, got.schema_warnings)
+                    if m and m["tenant"] == tenant]
+        assert group_by == _want(want, "group_by_invalid"), (where, group_by)
         mine = sorted((d, r, c) for t, d, r, c in rows if t == tenant)
         assert mine == sorted(tuple(p) for p in _want(want, "policy")), (where, mine)
         assert unknown.get(tenant) == want["unknown_profile"], (where, unknown)
@@ -302,3 +321,5 @@ def test_python_reader_matches_the_table(tree, tmp_path: Path) -> None:
     assert Counter(t for t, *_ in rows).keys() <= set(tree["expect"]), (tree["name"], rows)
     not_string_tenants = {m["tenant"] for m in map(_NOT_STRING.search, got.schema_warnings) if m}
     assert not_string_tenants <= set(tree["expect"]), (tree["name"], not_string_tenants)
+    group_by_tenants = {m["tenant"] for m in map(_GROUP_BY.search, got.schema_warnings) if m}
+    assert group_by_tenants <= set(tree["expect"]), (tree["name"], group_by_tenants)

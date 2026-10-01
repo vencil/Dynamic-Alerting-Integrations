@@ -30,6 +30,9 @@
 //   - the matcher values the generator needs as strings (#2431,
 //     _grar_validate.routing_values_not_string → ValuesNotString), read as
 //     PyYAML reads them (WithPyYAMLRouting);
+//   - the group_by contract (#2503, _grar_validate.group_by_problems /
+//     routing_group_by_invalid → GroupByProblems / GroupByInvalid): no
+//     non-string, empty or repeated element, no `...` beside other labels;
 //   - `require_critical_escalation` (#2325, _grar_validate.
 //     critical_escalation_findings): whether severity=critical alerts reach
 //     a pagerduty receiver at all, and which non-pagerduty destinations
