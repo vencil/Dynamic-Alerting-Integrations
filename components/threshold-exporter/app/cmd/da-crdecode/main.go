@@ -95,7 +95,8 @@ func run(args []string, stdout, stderr io.Writer) int {
 var errMultiDoc = errors.New("the file holds more than one YAML document; only one is read")
 
 // decode converts *data* with sigs.k8s.io/yaml.YAMLToJSON and refuses a file
-// with more than one document.
+// with more than one document, or one whose conversion is not fixed
+// (keyCollision).
 //
 // YAMLToJSON itself reads only the FIRST document and ignores the rest, so the
 // documents are counted separately, with the go-yaml v2 decoder YAMLToJSON is
@@ -112,6 +113,9 @@ func decode(data []byte) (json.RawMessage, error) {
 	}
 	if n > 1 {
 		return nil, errMultiDoc
+	}
+	if err := keyCollision(data); err != nil {
+		return nil, err
 	}
 	return doc, nil
 }

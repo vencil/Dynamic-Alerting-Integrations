@@ -2,10 +2,14 @@ package main
 
 import (
 	"bytes"
+	"encoding/json"
 	"os"
 	"path/filepath"
 	"strings"
 	"testing"
+
+	yamlv2 "go.yaml.in/yaml/v2"
+	"sigs.k8s.io/yaml"
 )
 
 // runOn writes *content* to a temp file and runs the CLI on it.
@@ -60,6 +64,12 @@ func TestRefusesWhatKubernetesClientsRefuse(t *testing.T) {
 		// YAMLToJSON alone would read only the first document.
 		{"two-documents", "a: 1\n---\nb: 2\n", "more than one YAML document"},
 		{"trailing-separator", "a: 1\n---\n", "more than one YAML document"},
+		// #2476 F1: the int 8 and the string "8" are one JSON key; which one
+		// YAMLToJSON keeps depends on Go's map iteration order.
+		{"int-and-string-collide", "010: a\n\"8\": b\n\"010\": c\n", `the same JSON key "8"`},
+		{"collide-nested", "spec:\n  tenants:\n    010: {}\n    \"8\": {}\n", "in spec.tenants"},
+		{"collide-in-list", "x:\n- {yes: 1, \"true\": 2}\n", "in x[0]"},
+		{"float-and-string", "1.5: a\n\"1.5\": b\n", `the same JSON key "1.5"`},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
@@ -73,6 +83,60 @@ func TestRefusesWhatKubernetesClientsRefuse(t *testing.T) {
 				t.Fatalf("stderr %q does not start with %q", errOut, programName+": ")
 			}
 		})
+	}
+}
+
+// The conversion of a file with colliding keys used to vary from run to run;
+// refused, it is the same every time.
+func TestCollisionIsRefusedEveryTime(t *testing.T) {
+	t.Parallel()
+	for i := 0; i < 30; i++ {
+		rc, out, errOut := runOn(t, "010: a\n\"8\": b\n\"010\": c\n")
+		if rc != exitCallerErr || out != "" || !strings.Contains(errOut, "same JSON key") {
+			t.Fatalf("run %d: rc=%d stdout=%q stderr=%q", i, rc, out, errOut)
+		}
+	}
+}
+
+// Keys that are one YAML value are not a collision: go-yaml keeps the last,
+// every time (as before #2476).
+func TestSameValueKeysStillDecode(t *testing.T) {
+	t.Parallel()
+	for in, want := range map[string]string{
+		"t1: 1\nt1: 2\n":   `{"documents":[{"t1":2}]}` + "\n",
+		"8: a\n010: b\n":   `{"documents":[{"8":"b"}]}` + "\n",
+		"- {a: 1, a: 2}\n": `{"documents":[[{"a":2}]]}` + "\n",
+	} {
+		rc, out, errOut := runOn(t, in)
+		if rc != exitOK || out != want {
+			t.Fatalf("%q: rc=%d stdout=%q stderr=%q; want %q", in, rc, out, errOut, want)
+		}
+	}
+}
+
+// jsonKey is a copy of sigs.k8s.io/yaml's key conversion; re-measure it
+// against YAMLToJSON itself for the key types go-yaml v2 produces.
+func TestJSONKeyMatchesYAMLToJSON(t *testing.T) {
+	t.Parallel()
+	for _, key := range []string{"t1", "010", "0x1F", "8", "-5", "1.5", "1.50", "1e3", "0.1",
+		"3.14159265358979", "1e+23", "99999999999999999999999", "yes", "off", "y", "true",
+		"\"8\"", "1_000", "0b101", "2024-01-01", "1:30", ".5", "-0"} {
+		var doc yamlv2.MapSlice
+		if err := yamlv2.Unmarshal([]byte(key+": 1\n"), &doc); err != nil || len(doc) != 1 {
+			t.Fatalf("%s: %v %v", key, doc, err)
+		}
+		got, ok := jsonKey(doc[0].Key)
+		j, err := yaml.YAMLToJSON([]byte(key + ": 1\n"))
+		if err != nil || !ok {
+			t.Fatalf("%s: ok=%v err=%v", key, ok, err)
+		}
+		var m map[string]interface{}
+		if err := json.Unmarshal(j, &m); err != nil {
+			t.Fatal(err)
+		}
+		if _, found := m[got]; !found || len(m) != 1 {
+			t.Errorf("%s: jsonKey %q, YAMLToJSON %s", key, got, j)
+		}
 	}
 }
 

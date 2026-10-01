@@ -51,7 +51,6 @@ from _lib_io import (  # noqa: E402  (#1789)
     safe_label,
 )
 from _lib_yaml_keys import (  # noqa: E402  (#2216, #2331)
-    RawPlain,
     dump_for_rewrite,
     load_for_rewrite,
 )
@@ -102,8 +101,9 @@ def render_cr_to_yaml(cr: dict) -> str:
     id. Both callers hand over JSON, whose keys are strings: the API path,
     and ``render_cr_file`` (decoded as Kubernetes clients decode it, #2476).
 
-    A VALUE that is a :class:`RawPlain` is written back plain, as written;
-    any other value dumps as ``yaml.safe_dump`` would.
+    Values dump as ``yaml.safe_dump`` would: both callers hand over
+    JSON-decoded data, so ``dump_for_rewrite``'s plain-text case
+    (``RawPlain``) never applies here.
     """
     spec = cr.get("spec", {})
     metadata = cr.get("metadata", {})
@@ -111,11 +111,9 @@ def render_cr_to_yaml(cr: dict) -> str:
     doc: Dict[str, Any] = {}
 
     # Each block is written only when it is a non-empty MAPPING. ⛔ Not a
-    # truthiness test: a RawPlain scalar is text, so `defaults: 0` /
-    # `stateFilters: false` read as "0" / "false" are truthy, and writing
-    # them out makes the exporter skip the whole file (YamlFileError,
-    # ValueError). Read PyYAML-typed they were falsy and dropped; this keeps
-    # that — and drops any other non-mapping block the same way.
+    # truthiness test: a text block (`defaults: "0"`) is truthy, and writing
+    # it out makes the exporter skip the whole file (YamlFileError,
+    # ValueError). Any non-mapping block is dropped.
 
     # Tenants block (required)
     tenants = spec.get("tenants")
@@ -722,6 +720,36 @@ def _tenant_id_divergence(decoded: Any, written: Any) -> str:
             "so both readings are the same text")
 
 
+def _profile_divergence(decoded: Any, written: Any) -> str:
+    """#2476: why a tenant's ``_profile`` reads differently to Kubernetes
+    than as written, or ``""``.
+
+    ``_profile`` names a profile, as a tenant id names a tenant: an unquoted
+    ``_profile: 010`` is the number 8 to Kubernetes, ``yes`` is ``true``,
+    and rendering that would point the tenant at a profile that does not
+    exist. Compared as :func:`_tenant_id_divergence` compares ids (two real
+    readings); a null on both sides is no profile.
+    """
+    if not isinstance(decoded, dict) or not isinstance(written, dict):
+        return ""
+    by_text = {_as_text(k): v for k, v in written.items()}
+    for tenant, values in decoded.items():
+        as_written = by_text.get(tenant)
+        if not isinstance(values, dict) or not isinstance(as_written, dict) \
+                or "_profile" not in as_written:
+            continue
+        raw = as_written["_profile"]
+        read = values.get("_profile")
+        if raw is None and read is None:
+            continue
+        if not isinstance(read, str) or _as_text(raw) != read:
+            return (f"spec.tenants.{tenant}._profile is read by Kubernetes "
+                    f"as {read!r}, which is not the text written in the CR "
+                    f"({raw!r}): the tenant would point at another profile. "
+                    "Quote it so both are the same")
+    return ""
+
+
 def _in_written_order(decoded: Any, written: Any) -> Any:
     """*decoded* (da-crdecode's JSON, every object's keys sorted) with each
     mapping's keys in the order the CR wrote them, values untouched.
@@ -885,8 +913,10 @@ def render_cr_file(
                     if isinstance(as_written, dict) else None)
     if not isinstance(written_spec, dict):
         written_spec = {}
-    why = _tenant_id_divergence(spec.get("tenants"),
-                                written_spec.get("tenants"))
+    why = (_tenant_id_divergence(spec.get("tenants"),
+                                 written_spec.get("tenants"))
+           or _profile_divergence(spec.get("tenants"),
+                                  written_spec.get("tenants")))
     if why:
         log.error("%s: %s", cr_path, why)
         return EXIT_CALLER_ERROR
@@ -947,13 +977,6 @@ def _spec_block_shape_error(spec: dict) -> str:
         block = spec.get(key)
         if block is None or isinstance(block, dict):
             continue
-        # A plain scalar's text, as YAML types it — NOT re-parsed as a
-        # document: `yaml.safe_load("---")` is None, and `--- 0`, `--- no`
-        # would read as falsy too, dropping a block the CR wrote. Only a
-        # null / bool / int / float can be falsy; any other tag is text.
-        if isinstance(block, RawPlain):
-            block = (yaml.safe_load(block)
-                     if _plain_tag(block) in _FALSY_ABLE_TAGS else str(block))
         if block:
             return f"spec.{key} must be a mapping"
     tenants = spec.get("tenants")
@@ -975,9 +998,6 @@ def _spec_block_shape_error(spec: dict) -> str:
                     f"whole rendered file otherwise")
     return ""
 
-
-_FALSY_ABLE_TAGS = frozenset("tag:yaml.org,2002:" + t
-                             for t in ("null", "bool", "int", "float"))
 
 # ── yaml.v3's plain-scalar → number resolution (#2395) ──────────────
 #
@@ -1134,11 +1154,10 @@ def _default_value_error(value: Any) -> str:
         return ""
     if not isinstance(value, str):
         return "must be a number"
-    # A RawPlain is dumped back plain, as written. Any other str is dumped
-    # plain only where PyYAML would not retype it; otherwise it is QUOTED,
-    # and yaml.v3 does not decode a quoted scalar into a number.
-    if (not isinstance(value, RawPlain)
-            and _plain_tag(value) != "tag:yaml.org,2002:str"):
+    # A str (da-crdecode's JSON, #2476) is dumped plain only where PyYAML
+    # would not retype it; otherwise it is QUOTED, and yaml.v3 does not
+    # decode a quoted scalar into a number.
+    if _plain_tag(value) != "tag:yaml.org,2002:str":
         return "must be a number, not a quoted string"
     if not _v3_reads_as_number(value):
         return f"must be a number, not {value!r}"

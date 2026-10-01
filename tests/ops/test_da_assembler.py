@@ -731,8 +731,9 @@ class TestRenderCrFile:
         pytest.param('"yes"', "yes", id="quoted-bool"),
         pytest.param('"null"', "null", id="quoted-null"),
         pytest.param("!!str 010", "010", id="tagged-str-int"),
-        # Only a PLAIN scalar is RawPlain: an explicit tag still builds a
-        # `date` object. Rendered `2024-01-01.yaml` before #2371 (rc 0).
+        # The explicit tag builds a `date` as written and Kubernetes reads
+        # "2024-01-01": the two agree (#2476). Rendered `2024-01-01.yaml`
+        # before #2371 (rc 0).
         pytest.param('!!timestamp "2024-01-01"', "2024-01-01",
                      id="tagged-timestamp-date"),
     ])
@@ -1034,8 +1035,9 @@ class TestRenderCrExporterShapes:
 
         先前用 `yaml.safe_load(原文)` 判 falsy，把 `---` 讀成 None、
         `--- 0` 讀成 0，於是當空區塊丟掉、rc 0；`tenants: ---` 寫出 `{}`，
-        租戶全部消失。會讓本測試轉紅的改動：把 `_FALSY_ABLE_TAGS` 的判斷
-        換回對原文做 `yaml.safe_load`。
+        租戶全部消失。#2476 起值取自 da-crdecode（`---` 是字串）。會讓本
+        測試轉紅的改動：改回以 PyYAML 讀 CR、對原文做 `yaml.safe_load` 判
+        falsy。
         """
         cr_path = tmp_path / "cr.yaml"
         tenants = "" if key == "tenants" else _T1
@@ -1797,7 +1799,8 @@ class TestRenderCrDecoder:
         """da-crdecode 逾時 → rc 2、不寫檔（subprocess 帶 timeout）。
 
         會讓本測試轉紅的改動：拿掉 subprocess.run 的 timeout（本測試會
-        等滿 30 秒且 rc 不是 2）。
+        等滿 30 秒；假 binary 結束時無輸出，仍 rc 2，但訊息不含
+        `did not finish`）。
         """
         self._fake_binary(tmp_path, monkeypatch, "time.sleep(30)")
         monkeypatch.setattr(da_assembler, "CRDECODE_TIMEOUT_SECONDS", 1)
@@ -1844,6 +1847,60 @@ class TestRenderCrDecoder:
         assert render_cr_file(cr_path, out_dir) == EXIT_CALLER_ERROR
         assert "cannot read it as written" in caplog.text
         assert list(out_dir.iterdir()) == []
+
+    def test_keys_that_become_one_json_key_are_caller_error(
+            self, tmp_path, caplog):
+        """未加引號的 `010`（int 8）與 `"8"` 在 YAMLToJSON 裡是同一個 JSON
+        key，留下哪一個取決於 Go map 的迭代順序；與 `"010"` 並列時兩邊的
+        id 集合相等，id 比對擋不住。da-crdecode 拒收 → 每次都 rc 2、不寫檔。
+
+        會讓本測試轉紅的改動：拿掉 da-crdecode 的 keyCollision 檢查（rc 0，
+        輸出每次可能不同）。
+        """
+        text = self._CR.replace(
+            "    t1: {}\n", "    010: {}\n    \"8\": {}\n    \"010\": {}\n")
+        for _ in range(5):
+            cr_path, out_dir = self._write(tmp_path, text)
+            assert render_cr_file(cr_path, out_dir) == EXIT_CALLER_ERROR
+            assert 'the same JSON key "8"' in caplog.text
+            assert list(out_dir.iterdir()) == []
+            out_dir.rmdir()
+            caplog.clear()
+
+    @pytest.mark.parametrize("written, read", [
+        pytest.param("010", "8", id="octal"),
+        pytest.param("yes", "True", id="bool"),
+        pytest.param("1e3", "1000", id="exponent"),
+    ])
+    def test_profile_kubernetes_reads_differently_is_caller_error(
+            self, written, read, tmp_path, caplog):
+        """`_profile` 指向 profile 名稱，與租戶 id 同性質：Kubernetes 讀出的
+        值與原文不同（`010` → 8）就 rc 2、提示加引號、不寫檔。
+
+        會讓本測試轉紅的改動：拿掉 `_profile_divergence`（rc 0，寫出
+        `_profile: 8`，租戶指向不存在的 profile）。
+        """
+        cr_path, out_dir = self._write(
+            tmp_path, self._CR.replace("    t1: {}\n",
+                                       f"    t1: {{_profile: {written}}}\n"))
+        assert render_cr_file(cr_path, out_dir) == EXIT_CALLER_ERROR
+        assert (f"spec.tenants.t1._profile is read by Kubernetes as {read}"
+                in caplog.text), caplog.text
+        assert "Quote it" in caplog.text
+        assert list(out_dir.iterdir()) == []
+
+    @pytest.mark.parametrize("written, line", [
+        pytest.param('"010"', "_profile: '010'", id="quoted"),
+        pytest.param("gold", "_profile: gold", id="word"),
+        pytest.param("null", "_profile: null", id="null"),
+    ])
+    def test_profile_read_the_same_renders(self, written, line, tmp_path):
+        """對照組：加了引號、一般字、null 的 `_profile` 照常 render。"""
+        cr_path, out_dir = self._write(
+            tmp_path, self._CR.replace("    t1: {}\n",
+                                       f"    t1: {{_profile: {written}}}\n"))
+        assert render_cr_file(cr_path, out_dir) == 0
+        assert line in (out_dir / "ok.yaml").read_text(encoding="utf-8")
 
     def test_keys_keep_the_order_the_cr_wrote(self, tmp_path):
         """da-crdecode 的 JSON 物件鍵依字母排序；輸出仍照 CR 原文的順序，
