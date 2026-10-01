@@ -816,16 +816,17 @@ func (m *ConfigManager) diffAndReload() (reloaded, noOp int, err error) {
 }
 
 // recomputeMergedHash reads the tenant file + each file in its defaults
-// chain, then runs computeMergedHash. Separated from diffAndReload so
-// the debounced reload, the merge retry and tests can share the
-// disk-read sequence.
+// chain, then merges and hashes them. It is recomputeMergedHashWith with a
+// fresh tenantFilesOnce; the production paths (the debounced reload and the
+// merged-hash retry) call recomputeMergedHashWith directly, and this entry
+// is called only from tests.
 //
 // Returns empty string + error if the tenant file or any chain entry is
-// unreadable; computeMergedHash itself errors only on parse failures,
+// unreadable; the merge itself errors only on parse failures,
 // which are returned to the caller.
 //
 // v2.8.0 Phase B Track A A4 (hierarchical-path companion of the flat-mode
-// fix in config.go): when computeMergedHash fails on a defaults-chain
+// fix in config.go): when the merge fails on a defaults-chain
 // parse error, classify the offending file, increment
 // `da_config_parse_failure_total` and ERROR-log it. Cycle-6 RCA showed
 // that broken `_defaults.yaml` silently dropped the entire defaults
@@ -1091,16 +1092,17 @@ func tenantsByFile(tenants map[string]string) []string {
 	return ids
 }
 
-// emitParseFailureSignal classifies a computeMergedHash error and, if
+// emitParseFailureSignal classifies a merged_hash merge error and, if
 // it's a defaults-chain parse failure, emits the structured signal pair
 // (metric + ERROR log) that ops dashboards depend on. Tenant-file parse
 // errors stay at WARN via logMergeSkip — those are per-tenant noise,
 // not infra-wide.
 //
-// Format contract: the pkg/config merge (computeMergedHash →
-// config.ComputeMergedHash) wraps defaults parse errors with
-// `parse defaults[%d]: %w` and tenant errors with `parse tenant: %w`
-// (pkg/config/errors.go). We string-match the prefix to map the index
+// Format contract: the errors come from config.ComputeMergedHashDoc
+// (recomputeMergedHashWith) and config.ComputeMergedHashFromChainDoc
+// (coldMergedHash), which report defaults parse errors as
+// `parse defaults[%d]: …` and tenant errors as `parse tenant: …` (text
+// defined in pkg/config/errors.go). We string-match the prefix to map the index
 // back to defaultsChain[i] for filename attribution.
 //
 // metrics + logger are plumbed in (not the package globals) so the

@@ -8,14 +8,15 @@ package main
 // `pkg/config` (with capital exports for library consumers like
 // `cmd/da-guard` and `tenant-api`).
 //
-// These wrappers exist so `package main` files (config.go,
-// config_debounce.go, config_defaults_diff.go) keep compiling without
-// renaming every `deepMerge(...)` / `computeMergedHash(...)` call site.
 // Behavior pin: every wrapper is `return config.X(args...)`, no extra
-// logic. A wrapper with no production caller left is removed rather than
-// kept for tests (#2586 removed computeEffectiveConfig and
-// computeSourceHash; tests call config.ComputeEffectiveConfig /
-// config.ComputeSourceHash directly).
+// logic. Current callers outside tests: `parseChainDefaults` /
+// `chainDefaults` (config.go, the cold-merge chain cache) and
+// `logMergeSkip` (config.go, config_debounce.go). `deepMerge`,
+// `normalizeYAMLToJSON`, `extractDefaultsBlock`, `canonicalJSON` and
+// `computeMergedHash` are called only from tests
+// (config_inheritance_test.go, config_golden_parity_test.go).
+// #2586 removed `computeEffectiveConfig` and `computeSourceHash`; their
+// tests call config.ComputeEffectiveConfig / config.ComputeSourceHash.
 //
 // The 8 semantic traps from §8.11.2 are enforced inside `pkg/config`
 // (DeepMerge / ComputeEffectiveConfig / ComputeMergedHash). Golden

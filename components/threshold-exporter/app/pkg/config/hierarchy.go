@@ -1321,8 +1321,8 @@ func oneLayers(layers []TenantLayers) TenantLayers {
 }
 
 // ComputeEffectiveConfig is the byte-input version of
-// computeEffectiveConfigBytes — public-facing alias for the simulate
-// primitive (app/handler_simulate.go) and the inheritance.go wrappers.
+// computeEffectiveConfigBytes. It has no caller outside tests at present
+// (package main's golden parity and platform-overlay reload tests call it).
 //
 // `layers` (at most one) is the tenant's platform overlay and the tree's
 // profiles (TenantLayers). ⛔ Variadic ON PURPOSE: a caller that passes
