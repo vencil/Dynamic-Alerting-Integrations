@@ -76,14 +76,14 @@ const undeliverableLogSampleLimit = 10
 const undeliverableIssueURL = "https://github.com/vencil/Dynamic-Alerting-Integrations/issues/1976"
 
 // subtreeUndeliverableTenants returns the sorted tenant IDs, among those the
-// hierarchy serves (`tenantSources`, the population behind /effective), that
+// committed hierarchy knows (`tenantSources`), that
 // inherit at least one key the collector cannot emit (`unreachable`, from
 // applySubtreeDefaults).
 //
 // ⛔ Iterates tenantSources, not `unreachable`, on purpose: both come from ONE
 // lock window (see auditSubtreeUndeliverable), and the log names each
-// tenant's source file, so a tenant is reported only while /effective still
-// serves it. An empty tenantSources yields nil: the hierarchical view has
+// tenant's source file, so a tenant is reported only while the committed
+// hierarchy still lists it. An empty tenantSources yields nil: the hierarchical view has
 // nothing to say (not populated / single-file mode).
 func subtreeUndeliverableTenants(tenantSources map[string]string, unreachable map[string][]string) []string {
 	if len(tenantSources) == 0 || len(unreachable) == 0 {
@@ -157,8 +157,9 @@ func formatUndeliverableLog(
 // property of this function's inputs rather than of who holds which lock.
 //
 // Reading both under commitConfig's existing Lock buys exactly one thing: the
-// pair is the manager's OWN state at one instant — what /effective is serving
-// and what the collector refuses at the moment cfg is installed. It does NOT
+// pair is the manager's OWN state at one instant — what the committed
+// hierarchy holds and what the collector refuses at the moment cfg is
+// installed. It does NOT
 // guarantee both halves come from the same reload (populateHierarchyStateFrom
 // installs tenantSources under its own Lock earlier); what a mixed state can
 // produce is a TRANSIENT that the next commit's audit clears, because the

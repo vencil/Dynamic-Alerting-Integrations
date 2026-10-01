@@ -210,7 +210,7 @@ type ConfigManager struct {
 	// down would self-deadlock. Lock order: reloadMu is the OUTERMOST lock —
 	// it is acquired while holding none of m.mu, debounce.mu or
 	// undeliverable.mu, and each of those is taken and released inside it.
-	// Scrapes and /effective only take m.mu, so they never wait on it.
+	// Scrapes only take m.mu, so they never wait on it.
 	reloadMu sync.Mutex
 
 	// undeliverable tracks what the subtree-undeliverable audit last put in
@@ -499,7 +499,8 @@ func (m *ConfigManager) commitConfig(cfg *ThresholdConfig, hash string, flatScan
 	}
 
 	// #1521: the flat scanner that produced `cfg` is not recursive while
-	// the hierarchical scanner behind /effective is. Compare the two
+	// the hierarchical scanner behind the committed hierarchy
+	// (tenantSources / mergedHashes) is. Compare the two
 	// tenant populations here — this is the only site in the package that
 	// assigns m.config, so hooking the audit in means every publishing
 	// path (Load, fullDirLoad, incrementalLoadFrom, and diffAndReload via
@@ -871,9 +872,10 @@ func (m *ConfigManager) incrementalLoadFrom(scan *treeScan) error {
 	// The block above fixed `unreachableInherited` and named the risk —
 	// "the asymmetry between the two fields `installConfig` returns is exactly
 	// the kind that becomes live later". It already was. `tenantSources` is
-	// the population /effective serves (and the one the commit-time audit
-	// iterates), so a tenant that leaves the tree lingered there — still
-	// resolvable while /metrics had dropped it. Until #1957 the audit then
+	// the committed hierarchy's tenant population (the one the commit-time
+	// audit iterates, and the one the removed ConfigManager.Resolve read), so
+	// a tenant that leaves the tree lingered there — still listed while
+	// /metrics had dropped it. Until #1957 the audit then
 	// reported it as a scanner divergence pointing at a parse-failure line
 	// that did not exist, because nothing was broken: the operator deleted
 	// the tenant. Measured both ways it can leave: removing one of two root
@@ -893,14 +895,14 @@ func (m *ConfigManager) incrementalLoadFrom(scan *treeScan) error {
 	// the walker's verdict, and a full load drops its tenants from BOTH planes.
 	// This path may instead keep them in the merged config — patchTenants'
 	// "keep the last good values" on the tenant-only branch — or drop them —
-	// the full-rebuild branch. Whichever it did, /effective must answer for
-	// the same tenant set /metrics serves: before #1957 this row was "KEEP,
+	// the full-rebuild branch. Whichever it did, the committed hierarchy
+	// (tenantSources) must hold the same tenant set /metrics serves: before #1957 this row was "KEEP,
 	// so cause (a) still fires", i.e. the rule deliberately MADE the two
 	// planes disagree so the divergence audit could report it.
 	//
 	// Additions are attributed from the flat scan rather than left blank: a
-	// tenant absent from `tenantSources` is invisible to /effective while
-	// /metrics serves it. Never OVERWRITES an existing attribution — where
+	// tenant absent from `tenantSources` has no committed hierarchy entry
+	// (no defaults chain, no merged_hash) while /metrics serves it. Never OVERWRITES an existing attribution — where
 	// the two disagree about which file owns a tenant (a duplicate the fast
 	// path accepts), the hierarchical one stands.
 	refreshTenantSources := func() {
@@ -941,8 +943,8 @@ func (m *ConfigManager) incrementalLoadFrom(scan *treeScan) error {
 			// supplies per-tenant DEFAULTS and cannot attribute (or create)
 			// a tenant: before this, an entry naming a tenant no tenant file
 			// declares was attributed to `_defaults.yaml` here, so the
-			// incremental path made /effective answer for a tenant the full
-			// load never locates.
+			// incremental path kept in tenantSources a tenant the full load
+			// never locates.
 			if isPlatformKey(key) {
 				continue
 			}
@@ -1453,7 +1455,8 @@ func patchTenants(prev *ThresholdConfig, newConfigs, oldConfigs map[string]Thres
 	// file's tenants are left alone — today's fail-safe "keep the last good
 	// values". A full load drops them instead (the walker rejects the file,
 	// #1957), so the two PATHS still disagree there — though on each path
-	// /effective follows /metrics (refreshTenantSources keeps such a tenant
+	// the committed hierarchy (tenantSources) follows /metrics
+	// (refreshTenantSources keeps such a tenant
 	// exactly while this merged config does). That difference is a
 	// deliberate behaviour question (silently keep stale values vs. stop a
 	// tenant's alerts on a typo), not something to settle inside a bug fix.
@@ -1648,7 +1651,7 @@ func (m *ConfigManager) commitFlatFrom(scan *treeScan) error {
 // Memory: the hashes map may be large at 1000 tenants (roughly
 // tenants × 64-char strings = ~100KB). We swap the pointer rather than
 // merging in place so a partial install never leaves torn state visible
-// to the /effective read path.
+// to readers of the committed hierarchy.
 func (m *ConfigManager) populateHierarchyStateFrom(scan *treeScan) {
 	m.populateHierarchyStateWith(scan, newColdMergeInputs(scan))
 }

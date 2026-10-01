@@ -554,8 +554,8 @@ func (m *ConfigManager) classifyTenant(tid, srcPath string, prior reloadPriorSta
 		} else {
 			logMergeSkip(m.getLogger(), tid, "debounced-reload", mergeErr)
 		}
-		// Preserve any prior merged_hash we had so the /effective
-		// endpoint still serves the last-known-good value. Absent prior
+		// Preserve any prior merged_hash we had so the committed
+		// hierarchy keeps the last-known-good value. Absent prior
 		// → mark empty (tenant will read as merge-failing).
 		if prev, ok := prior.mergedHashes[tid]; ok {
 			res.newMergedHashes[tid] = prev
@@ -817,7 +817,8 @@ func (m *ConfigManager) diffAndReload() (reloaded, noOp int, err error) {
 
 // recomputeMergedHash reads the tenant file + each file in its defaults
 // chain, then runs computeMergedHash. Separated from diffAndReload so
-// tests and /effective (read path) can share the disk-read sequence.
+// the debounced reload, the merge retry and tests can share the
+// disk-read sequence.
 //
 // Returns empty string + error if the tenant file or any chain entry is
 // unreadable; computeMergedHash itself errors only on parse failures,
@@ -1096,9 +1097,10 @@ func tenantsByFile(tenants map[string]string) []string {
 // errors stay at WARN via logMergeSkip — those are per-tenant noise,
 // not infra-wide.
 //
-// Format contract: computeEffectiveConfig wraps defaults parse errors
-// with `parse defaults[%d]: %w` and tenant errors with `parse tenant: %w`
-// (config_inheritance.go). We string-match the prefix to map the index
+// Format contract: the pkg/config merge (computeMergedHash →
+// config.ComputeMergedHash) wraps defaults parse errors with
+// `parse defaults[%d]: %w` and tenant errors with `parse tenant: %w`
+// (pkg/config/errors.go). We string-match the prefix to map the index
 // back to defaultsChain[i] for filename attribution.
 //
 // metrics + logger are plumbed in (not the package globals) so the
