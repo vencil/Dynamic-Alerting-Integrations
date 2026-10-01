@@ -96,6 +96,7 @@ while read -r remote_ref local_sha remote_sha; do
     [ -n "${remote_ref:-}" ] || continue
     # Deletions carry no tree to build.
     [ "$local_sha" = "$_Z40" ] && continue
+    case "$remote_ref" in refs/tags/*) continue ;; esac
     # ⛔ `-` is an unknown commit, not "nothing to push" — and `git worktree
     # add` reads `-` as the previous branch, so building it would validate the
     # wrong tree.
@@ -103,7 +104,6 @@ while read -r remote_ref local_sha remote_sha; do
         echo "[pre-push-mkdocs] ⛔ cannot tell which commit ${remote_ref} pushes; refusing." >&2
         exit 1
     fi
-    case "$remote_ref" in refs/tags/*) continue ;; esac
 
     # Base for "what does THIS push introduce?".
     # ⛔ Unknown must mean BUILD, never skip.
@@ -164,7 +164,7 @@ if [ -n "$_doc_changes" ]; then
     echo ""
 fi
 if [ -n "$_unknown_base" ]; then
-    echo "[pre-push-mkdocs] Cannot tell what these refs introduce; building to be safe:"
+    echo "[pre-push-mkdocs] Cannot tell what these refs introduce:"
     printf '%s\n' "$_unknown_base" | grep -v '^[[:space:]]*$' | sed 's/^/  • /'
     echo ""
 fi
@@ -176,8 +176,9 @@ fi
 # `tar -x` does not read core.symlinks, so on a Windows checkout — where they
 # are path stubs — the extracted tree matches neither: the platform dependence
 # these aliases exist to remove, reintroduced by the build step.
-# ⛔ The clean-up is an EXIT trap, not INT/TERM alone: a clean-up that runs
-# only after the build is skipped on Ctrl-C or SIGTERM (#2169).
+# ⛔ The clean-up is a trap, because one that runs only after the build is
+# skipped on Ctrl-C or SIGTERM (#2169); and an EXIT trap, not INT/TERM alone,
+# because a closed terminal (SIGHUP) ends the guard too.
 # ⛔ `add` and the build run in the background, and the trap waits for the
 # running one before removing the tree: a signal to this bash alone reaches
 # neither. An `add` still checking out holds the tree locked, so `remove`

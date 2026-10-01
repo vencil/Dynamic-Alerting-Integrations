@@ -1589,9 +1589,8 @@ def test_the_docs_guard_validates_the_pushed_commit_not_the_working_tree(
 ) -> None:
     """#1690: standing on A while pushing B must validate B.
 
-    A guard that diffs ``@{u}...HEAD`` finds nothing here (A is in sync with
-    its own upstream) and exits 0 without building. The assertion is on the
-    recorded SHA, because "it ran" was never the question.
+    A guard that looks at the working tree builds A here. The assertion is on
+    the recorded SHA, because "it ran" was never the question.
     """
     work, record, sha_a, sha_b = _docs_repo(tmp_path)
     r = _run_guard(work, record, f"refs/heads/topic {sha_b} refs/heads/topic {sha_a}\n")
@@ -1641,9 +1640,8 @@ def test_an_unknown_pushed_commit_is_refused(tmp_path: Path, to_ref: str | None)
     """pre-commit exports REMOTE_BRANCH without TO_REF on a first push to an
     empty remote, so the pushed commit reaches the guard as `-`. That is not
     "nothing to push", and `git worktree add … -` checks out the PREVIOUS
-    branch — here `topic` itself, so only the refusal tells the two apart."""
+    branch."""
     work, record, _sha_a, sha_b = _docs_repo(tmp_path)
-    assert _git(work, "rev-parse", "@{-1}").stdout.strip() == sha_b
     env_extra = {"PRE_COMMIT": "1", "PRE_COMMIT_REMOTE_BRANCH": "refs/heads/topic"}
     if to_ref:
         env_extra["PRE_COMMIT_TO_REF"] = sha_b
@@ -1809,18 +1807,22 @@ def test_a_failed_diff_builds_and_says_it_could_not_tell(
     assert "Doc changes detected" not in r.stdout, r.stdout
 
 
-def test_a_deletion_row_is_not_judged(tmp_path: Path) -> None:
-    """`git push origin :topic` carries no tree, so there is nothing to build.
+@pytest.mark.parametrize("row", ["deletion", "tag"])
+def test_a_deletion_or_tag_row_is_not_judged(tmp_path: Path, row: str) -> None:
+    """`git push origin :topic` carries no tree, so there is nothing to build;
+    a tag is never built either, even one whose commit changes docs.
 
     The dispatcher also skips this guard on a no-commit push
     (GUARDS_NEEDING_COMMITS); this pins the guard's own answer when it is run
     on a deletion row directly.
     """
-    work, record, sha_a, _sha_b = _docs_repo(tmp_path)
-    r = _run_guard(work, record, f"refs/heads/topic {_Z40} refs/heads/topic {sha_a}\n")
+    work, record, sha_a, sha_b = _docs_repo(tmp_path)
+    rows = {"deletion": f"refs/heads/topic {_Z40} refs/heads/topic {sha_a}\n",
+            "tag": f"refs/tags/v1 {sha_b} refs/tags/v1 {_Z40}\n"}
+    r = _run_guard(work, record, rows[row])
 
     assert r.returncode == 0, f"{r.stdout}{r.stderr}"
-    assert not record.exists(), "a deletion push was gated on a docs build"
+    assert not record.exists(), f"a {row} push was gated on a docs build"
 
 
 # The recorder, plus: the build whose number is PREPUSH_TEST_HANG_ON says so and
@@ -1837,14 +1839,15 @@ fi
 @pytest.mark.skipif(not hasattr(os, "killpg"), reason="needs POSIX process groups to deliver the interrupt")
 @pytest.mark.parametrize(
     ("sig", "refs"),
-    [(signal.SIGTERM, ("topic",)), (signal.SIGINT, ("topic", "topic2"))],
-    ids=["SIGTERM", "SIGINT-in-second-tree"],
+    [(signal.SIGTERM, ("topic",)), (signal.SIGHUP, ("topic",)), (signal.SIGINT, ("topic", "topic2"))],
+    ids=["SIGTERM", "SIGHUP", "SIGINT-in-second-tree"],
 )
 def test_an_interrupted_push_leaves_no_temporary_worktree_behind(
     tmp_path: Path, sig: signal.Signals, refs: tuple[str, ...],
 ) -> None:
     """#2169 — Ctrl-C or SIGTERM mid-build skipped the clean-up that followed
     the build, leaving the tree in `.git` and registered in `git worktree list`.
+    SIGHUP (a closed terminal) is why the trap is on EXIT, not INT/TERM alone.
 
     Driven through the installed wiring (git → shim → dispatcher → guard), not
     the guard alone. The two-ref row interrupts the SECOND tree: clean-up that
@@ -2101,30 +2104,6 @@ def test_the_users_hooks_do_not_run_in_the_temporary_tree(tmp_path: Path) -> Non
     assert record.read_text(encoding="utf-8").split() == [sha_b]
 
 
-# ---------------------------------------------------------------------------
-# #1690 round 2 — gaps a coverage-inventory review measured as unasserted
-# ---------------------------------------------------------------------------
-def _assert_refused_verbatim(r, sha: str, git_says: str) -> None:
-    """A refused checkout shows git's own words and the guard's fixed refusal,
-    on both streams, pinned whole: no guessed cause slips in either one."""
-    assert r.stderr == git_says + (
-        "\n"
-        f"[pre-push-mkdocs] ⛔ could not check out {sha} to validate it.\n"
-        "\n"
-        "This guard builds the commit you are PUSHING, not the tree you are standing\n"
-        "in, so it cannot fall back to the working tree — that would report on the\n"
-        "wrong commit. Refusing instead.\n"
-        "\n"
-        "To push anyway (the docs build then runs only in CI):\n"
-        "    MKDOCS_STRICT_BYPASS=1 git push ...\n"
-        "\n"
-    ), "the guard hid git's own error or added to it. stderr=%s" % r.stderr
-    tail = r.stdout.split(f"validating pushed commit {sha[:8]}\n", 1)[-1].splitlines()
-    assert tail == ["", f"::error::mkdocs strict did not pass for {sha[:8]}"], (
-        "the guard added to its refusal on stdout. stdout=%s" % r.stdout
-    )
-
-
 _GIT_SHIM = """#!/usr/bin/env bash
 # Fail only `git [-c k=v] worktree add`; delegate everything else to the real git.
 case " $* " in
@@ -2182,7 +2161,22 @@ def test_a_worktree_that_cannot_be_created_refuses_instead_of_building_the_tree(
         "as a fallback it reports the wrong tree's verdict"
     )
     # ⛔ git's own words, all of them, and no guessed cause (#2210).
-    _assert_refused_verbatim(r, sha_b, "fatal: simulated worktree failure\nhint: second line\n")
+    assert r.stderr == "fatal: simulated worktree failure\nhint: second line\n" + (
+        "\n"
+        f"[pre-push-mkdocs] ⛔ could not check out {sha_b} to validate it.\n"
+        "\n"
+        "This guard builds the commit you are PUSHING, not the tree you are standing\n"
+        "in, so it cannot fall back to the working tree — that would report on the\n"
+        "wrong commit. Refusing instead.\n"
+        "\n"
+        "To push anyway (the docs build then runs only in CI):\n"
+        "    MKDOCS_STRICT_BYPASS=1 git push ...\n"
+        "\n"
+    ), "the guard hid git's own error or added to it. stderr=%s" % r.stderr
+    tail = r.stdout.split(f"validating pushed commit {sha_b[:8]}\n", 1)[-1].splitlines()
+    assert tail == ["", f"::error::mkdocs strict did not pass for {sha_b[:8]}"], (
+        "the guard added to its refusal on stdout. stdout=%s" % r.stdout
+    )
 
 
 def test_a_branch_behind_the_base_is_not_charged_for_the_bases_own_docs(
