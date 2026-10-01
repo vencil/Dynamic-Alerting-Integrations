@@ -48,10 +48,6 @@ digest, values + template + matrix + EXPECTED count updated but
   overlay that overrides only `tag:`, is not in `discover_refs()`; those are
   pushed INTO this set indirectly — `test_nightly_scan_matrix_drift.py` demands
   them in the scan matrix, and the matrix must equal this set.
-* **A third-party ref with no tag at all** (`image: nginx`, i.e. `:latest`).
-  `discover_refs()` keeps only refs with a `:` or `@` in the last path segment
-  (`_is_concrete`), so such a ref never reaches this rule and adding one stays
-  green. Found by the #2605 R post-hoc review of #2600; fixed separately.
 * **Grafana plugins** are not images. Their version pin is a separate rule:
   `test_grafana_plugins_are_version_pinned.py` (TRK-2605, runbook §7.6 T5).
 """
