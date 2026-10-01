@@ -648,8 +648,8 @@ func TestANestedTenantKeepsItsSubtreeDefaultAcrossAnIncrementalReload(t *testing
 	// An ordinary edit to the nested tenant's own file.
 	writeTestYAML(t, filepath.Join(dir, "finance", "t1.yaml"),
 		"tenants:\n  t1: {}\n# touched\n")
-	if err := m.IncrementalLoad(); err != nil {
-		t.Fatalf("IncrementalLoad: %v", err)
+	if err := watchReload(m); err != nil {
+		t.Fatalf("reload: %v", err)
 	}
 	got, ok := seriesFor(t, m, "t1", "connections")
 	if !ok {
@@ -945,8 +945,8 @@ func TestTheRefusedSetIsRefreshedOnTheIncrementalPath(t *testing.T) {
 	// Repair the tree by declaring the key at the ROOT — a flat key.
 	writeTestYAML(t, filepath.Join(dir, "_defaults.yaml"),
 		"defaults:\n  mysql_connections: 80\n  redis_evicted_keys: 10\n")
-	if err := m.IncrementalLoad(); err != nil {
-		t.Fatalf("IncrementalLoad: %v", err)
+	if err := watchReload(m); err != nil {
+		t.Fatalf("reload: %v", err)
 	}
 	if got := testutil.ToFloat64(fresh.subtreeUndeliverableTenants); got != 0 {
 		t.Errorf("gauge = %v after the tree was repaired through the incremental path — "+

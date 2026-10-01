@@ -131,8 +131,8 @@ type configMetrics struct {
 //     has been seen anywhere in the tree (the mode is sticky) and the bare
 //     `duplicate tenant ID …` in flat mode.
 //     No reload is scheduled, so -scan-debounce plays no part. The tree is
-//     frozen at the last good config. (Making the flat plane's own
-//     IncrementalLoad run that check is #1577.)
+//     frozen at the last good config. (#1577 removed `IncrementalLoad()`,
+//     the one reload entry that skipped this check.)
 //   - walk_error: every other error ScanDirTree returns — the root cannot
 //     be statted, is not a directory, or the walk itself errors. Per-file
 //     stat / read / parse problems are NOT scan failures: the walker logs

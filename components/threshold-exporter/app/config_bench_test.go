@@ -241,25 +241,55 @@ func BenchmarkFullDirLoad_100(b *testing.B) {
 	}
 }
 
-// BenchmarkIncrementalLoad_100_NoChange benchmarks incremental reload
-// when nothing has changed (should be near-zero cost after hash check).
+// BenchmarkIncrementalLoad_100_NoChange benchmarks a watch tick when
+// nothing has changed (should be near-zero cost after hash check).
+//
+// ⚠️ THE TICK, NOT A RELOAD (#1577). When nothing moved, production runs
+// detectChange and schedules nothing; it never calls diffAndReload. This
+// used to drive the removed `IncrementalLoad()`, whose cost on an unchanged
+// tree was the same shape — one walk, then a hash compare — so the tick is
+// the production counterpart, not a reload a quiet tree never pays for.
+// benchNoChangeTick pins that the tick really is a no-op on this tree.
 func BenchmarkIncrementalLoad_100_NoChange(b *testing.B) {
 	dir := buildDirConfig(b, 100)
 	silenceLogs(b)
-	mgr := NewConfigManager(dir)
+	mgr := NewConfigManagerWithDebounce(dir, 0)
 	if err := mgr.fullDirLoad(); err != nil {
 		b.Fatal(err)
 	}
+	benchNoChangeTick(b, mgr)
+}
+
+// benchNoChangeTick times mgr.tickOnce over an unchanged tree. The manager
+// must have a zero debounce window, so a tick that wrongly sees a change
+// reloads synchronously instead of arming a timer the loop never waits for;
+// a pre-loop probe then fails the bench if the tick reloaded at all.
+func benchNoChangeTick(b *testing.B, mgr *ConfigManager) {
+	b.Helper()
+	if mgr.debounce.window != 0 {
+		b.Fatal("benchNoChangeTick needs a zero debounce window (NewConfigManagerWithDebounce(dir, 0))")
+	}
+	before := mgr.LastReload()
+	mgr.tickOnce()
+	if !mgr.LastReload().Equal(before) {
+		b.Fatal("NoChange probe: a tick over the unchanged tree reloaded — this bench would time a reload, not a tick")
+	}
 	b.ResetTimer()
 	for i := 0; i < b.N; i++ {
-		if err := mgr.IncrementalLoad(); err != nil {
-			b.Fatal(err)
-		}
+		mgr.tickOnce()
 	}
 }
 
-// BenchmarkIncrementalLoad_100_OneFileChanged benchmarks incremental reload
-// when exactly one tenant file has changed out of 100.
+// BenchmarkIncrementalLoad_100_OneFileChanged benchmarks the watch path's
+// reload when exactly one tenant file has changed out of 100.
+//
+// ⚠️ NOT THE TENANT-PATCH FAST PATH SINCE #1577. It used to drive the removed
+// `IncrementalLoad()`, which took incrementalLoadFrom's tenant patch on this
+// tree. The watch path does not: buildDirConfig writes a `_defaults.yaml`, so
+// every reload is the hierarchical one (a full flat rebuild). That is what
+// production pays for this edit; figures from before #1577 are not
+// comparable (measured 30x on one box: allocs/op 1845 → 2592 here, 16287 →
+// 20669 for the 1000-tenant variant).
 func BenchmarkIncrementalLoad_100_OneFileChanged(b *testing.B) {
 	dir := buildDirConfig(b, 100)
 	silenceLogs(b)
@@ -274,7 +304,7 @@ func BenchmarkIncrementalLoad_100_OneFileChanged(b *testing.B) {
 		content := fmt.Sprintf("tenants:\n  tenant-0050:\n    mysql_connections: \"%d\"\n    mysql_threads_running: \"%d\"\n    container_cpu: \"%d\"\n    container_memory: \"%d\"\n",
 			50+i%100, 60+i%40, 70+i%30, 80+i%15)
 		os.WriteFile(targetFile, []byte(content), 0600)
-		if err := mgr.IncrementalLoad(); err != nil {
+		if err := watchReload(mgr); err != nil {
 			b.Fatal(err)
 		}
 	}
@@ -404,43 +434,37 @@ func BenchmarkFullDirLoad_1000(b *testing.B) {
 // BenchmarkDiffAndReload_Hierarchical_*_NoChange is pinned to WARM (#2048,
 // config_hierarchy_bench_test.go). Flat ..._NoChange here is REREAD. Do not
 // read the two "NoChange" numbers as the same mode.
+//
+// A watch tick, not a reload — see BenchmarkIncrementalLoad_100_NoChange.
 func BenchmarkIncrementalLoad_1000_NoChange(b *testing.B) {
 	dir := buildDirConfig(b, 1000)
 	silenceLogs(b)
 	setFixtureMtimes(b, dir, time.Now().Add(time.Hour))
-	mgr := NewConfigManager(dir)
+	mgr := NewConfigManagerWithDebounce(dir, 0)
 	if err := mgr.fullDirLoad(); err != nil {
 		b.Fatal(err)
 	}
 	requireRereadMode(b, mgr, dir)
-	b.ResetTimer()
-	for i := 0; i < b.N; i++ {
-		if err := mgr.IncrementalLoad(); err != nil {
-			b.Fatal(err)
-		}
-	}
+	benchNoChangeTick(b, mgr)
 }
 
 // BenchmarkIncrementalLoad_1000_NoChange_MtimeGuard measures NoChange with
-// mtime guard active (files backdated so stat-only path fires).
+// mtime guard active (files backdated so stat-only path fires). A watch
+// tick, not a reload — see BenchmarkIncrementalLoad_100_NoChange.
 func BenchmarkIncrementalLoad_1000_NoChange_MtimeGuard(b *testing.B) {
 	dir := buildDirConfig(b, 1000)
 	silenceLogs(b)
 	backdateFiles(b, dir)
-	mgr := NewConfigManager(dir)
+	mgr := NewConfigManagerWithDebounce(dir, 0)
 	if err := mgr.fullDirLoad(); err != nil {
 		b.Fatal(err)
 	}
-	b.ResetTimer()
-	for i := 0; i < b.N; i++ {
-		if err := mgr.IncrementalLoad(); err != nil {
-			b.Fatal(err)
-		}
-	}
+	benchNoChangeTick(b, mgr)
 }
 
 // BenchmarkIncrementalLoad_1000_OneFileChanged: Reread mode, see the note
-// above ..._NoChange. The per-iteration os.WriteFile gives tenant-0500.yaml a
+// above ..._NoChange. The hierarchical reload since #1577 — see
+// BenchmarkIncrementalLoad_100_OneFileChanged. The per-iteration os.WriteFile gives tenant-0500.yaml a
 // current mtime, not the pinned future one; that file is inside the guard
 // either way, and the other 999 stay pinned. The pre-loop probe checks both
 // halves: the tree is in Reread mode, and a rewrite is still detected.
@@ -460,7 +484,7 @@ func BenchmarkIncrementalLoad_1000_OneFileChanged(b *testing.B) {
 	if err := os.WriteFile(targetFile, []byte("tenants:\n  tenant-0500:\n    mysql_connections: \"1\"\n"), 0600); err != nil {
 		b.Fatal(err)
 	}
-	if err := mgr.IncrementalLoad(); err != nil {
+	if err := watchReload(mgr); err != nil {
 		b.Fatal(err)
 	}
 	mgr.mu.RLock()
@@ -474,7 +498,7 @@ func BenchmarkIncrementalLoad_1000_OneFileChanged(b *testing.B) {
 		content := fmt.Sprintf("tenants:\n  tenant-0500:\n    mysql_connections: \"%d\"\n    mysql_threads_running: \"%d\"\n    container_cpu: \"%d\"\n    container_memory: \"%d\"\n",
 			50+i%100, 60+i%40, 70+i%30, 80+i%15)
 		os.WriteFile(targetFile, []byte(content), 0600)
-		if err := mgr.IncrementalLoad(); err != nil {
+		if err := watchReload(mgr); err != nil {
 			b.Fatal(err)
 		}
 	}

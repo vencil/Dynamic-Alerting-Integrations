@@ -141,8 +141,8 @@ func TestTheCapSurvivesATenantOnlyIncrementalReload(t *testing.T) {
 	}
 
 	writeFile(t, tenant, "tenants:\n  t-a:\n    cap_a: \"6\"\n")
-	if err := m.IncrementalLoad(); err != nil {
-		t.Fatalf("IncrementalLoad: %v", err)
+	if err := watchReload(m); err != nil {
+		t.Fatalf("reload: %v", err)
 	}
 	cfg := m.GetConfig()
 	if got := cfg.Tenants["t-a"]["cap_a"].Default; got != "6" {
@@ -161,8 +161,8 @@ func TestRemovingTheKeyRestoresTheBuiltInCap(t *testing.T) {
 
 	m, _ := loadCapFixture(t, dir)
 	writeFile(t, defaults, strings.Replace(rootDefaultsWithCap, "max_metrics_per_tenant: 2\n", "", 1))
-	if err := m.IncrementalLoad(); err != nil {
-		t.Fatalf("IncrementalLoad: %v", err)
+	if err := watchReload(m); err != nil {
+		t.Fatalf("reload: %v", err)
 	}
 	if got := m.GetConfig().MaxMetricsPerTenant; got != 0 {
 		t.Errorf("MaxMetricsPerTenant = %d after removing the key, want 0 (built-in)", got)

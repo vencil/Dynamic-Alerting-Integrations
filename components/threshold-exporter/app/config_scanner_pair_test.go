@@ -100,46 +100,76 @@ func TestBothScannersSeeTheSameFiles(t *testing.T) {
 //
 // ⛔ WHY A MATRIX AND NOT THE TWO CASES WE ALREADY HIT. Round 5 found that the
 // refused-key set went stale on the incremental path, and shipped a test for
-// that one field. But the field was not special: `IncrementalLoad` rebuilds
+// that one field. But the field was not special: `incrementalLoadFrom` rebuilds
 // SOME of what `fullDirLoad` publishes, and every piece it forgets is a fast
 // path that silently disagrees with a restart. Asserting the whole published
 // state against a from-scratch load of the same tree makes "which fields did
 // you remember" stop being a judgement call.
+//
+// ⛔ TWO BASE TREES (#1577). The reload is the watch path's (watchReload), and
+// that reaches the fast path only for a tree with no `_defaults` carrier — on
+// the carrier tree every mutation below is a hierarchical reload (a full flat
+// rebuild), which is what production runs there and is still worth pinning
+// against a restart. The flat tree is the same layout without a carrier
+// anywhere, and is the one that exercises incrementalLoadFrom; mutations that
+// write or delete a carrier are skipped on it (they would flip it
+// hierarchical, i.e. test the other tree again).
 func TestIncrementalLoadLandsWhereAFullLoadWould(t *testing.T) {
 	t.Parallel()
-	for _, mut := range incrementalMutations() {
-		t.Run(mut.name, func(t *testing.T) {
-			t.Parallel()
+	bases := []struct {
+		name  string
+		build func(t *testing.T, dir string)
+		flat  bool
+	}{
+		{"carrier tree", buildPairBaseTree, false},
+		{"flat tree", buildPairFlatTree, true},
+	}
+	for _, base := range bases {
+		for _, mut := range incrementalMutations() {
+			if base.flat && mut.touchesCarrier {
+				continue
+			}
+			base, mut := base, mut
+			t.Run(base.name+"/"+mut.name, func(t *testing.T) {
+				t.Parallel()
+				pairMutationAgrees(t, base.build, base.flat, mut)
+			})
+		}
+	}
+}
 
-			// Path A: load the tree, mutate it, take the fast path.
-			warm := t.TempDir()
-			buildPairBaseTree(t, warm)
-			mIncr := NewConfigManager(warm)
-			if err := mIncr.Load(); err != nil {
-				t.Fatalf("warm Load: %v", err)
-			}
-			mut.apply(t, warm)
-			if err := mIncr.IncrementalLoad(); err != nil {
-				t.Fatalf("IncrementalLoad: %v", err)
-			}
+// pairMutationAgrees is one cell of TestIncrementalLoadLandsWhereAFullLoadWould.
+func pairMutationAgrees(t *testing.T, build func(t *testing.T, dir string), flat bool, mut incrMutation) {
+	// Path A: load the tree, mutate it, reload as the watch path does.
+	warm := t.TempDir()
+	build(t, warm)
+	mIncr := NewConfigManager(warm)
+	if err := mIncr.Load(); err != nil {
+		t.Fatalf("warm Load: %v", err)
+	}
+	if flat {
+		requireFlatWatchPath(t, mIncr)
+	}
+	mut.apply(t, warm)
+	if err := watchReload(mIncr); err != nil {
+		t.Fatalf("watchReload: %v", err)
+	}
 
-			// Path B: the same mutated tree, loaded from scratch — what an
-			// operator gets by restarting the exporter.
-			cold := t.TempDir()
-			buildPairBaseTree(t, cold)
-			mut.apply(t, cold)
-			mFull := NewConfigManager(cold)
-			if err := mFull.Load(); err != nil {
-				t.Fatalf("cold Load: %v", err)
-			}
+	// Path B: the same mutated tree, loaded from scratch — what an
+	// operator gets by restarting the exporter.
+	cold := t.TempDir()
+	build(t, cold)
+	mut.apply(t, cold)
+	mFull := NewConfigManager(cold)
+	if err := mFull.Load(); err != nil {
+		t.Fatalf("cold Load: %v", err)
+	}
 
-			got := publishedStateFingerprint(t, mIncr, warm)
-			want := publishedStateFingerprint(t, mFull, cold)
-			if got != want {
-				t.Fatalf("after %s the incremental path disagrees with a restart\n--- incremental ---\n%s\n--- full ---\n%s",
-					mut.name, got, want)
-			}
-		})
+	got := publishedStateFingerprint(t, mIncr, warm)
+	want := publishedStateFingerprint(t, mFull, cold)
+	if got != want {
+		t.Fatalf("after %s the reload disagrees with a restart\n--- reload ---\n%s\n--- full ---\n%s",
+			mut.name, got, want)
 	}
 }
 
@@ -155,18 +185,25 @@ func TestIncrementalLoadLandsWhereAFullLoadWould(t *testing.T) {
 // plane, and the state cause (a) described is a bug, not a signal.
 //
 // ⛔ BOTH MERGE BRANCHES, because they disagree about the tenant itself.
-// The full-rebuild branch (forced here by touching `_defaults.yaml` in the
+// The full-rebuild branch (forced here by touching `_profiles.yaml` in the
 // same reload) drops the broken file's tenants, as a restart does; the
 // tenant-only branch keeps them (patchTenants' "keep the last good values",
 // a deliberate fail-safe this ticket does not revisit). The prune must follow
 // whichever the merged config did — measured: keying it on the file alone
 // (prune on every parse failure) reddens the tenant-only leg, keying it on
 // "keep" (the pre-#1957 rule) reddens the full-rebuild leg.
+//
+// ⚠️ THE TREE HAS NO `_defaults` CARRIER, AND MUST NOT (#1577). Both branches
+// live in incrementalLoadFrom, which the watch path reaches only for a tree
+// with no carrier; with one, every reload is the hierarchical path's full
+// flat rebuild and the tenant-only leg's fail-safe never runs (measured: the
+// leg's precondition fails, served=false). The full-rebuild branch is forced
+// with `_profiles.yaml` instead, a platform file that is not a carrier.
 func TestAnUnparseableFileMovesBothPlanesTogether(t *testing.T) {
 	t.Parallel()
 	for _, tc := range []struct {
 		name       string
-		touchPlat  bool // also edit _defaults.yaml → full-rebuild branch
+		touchPlat  bool // also edit _profiles.yaml → full-rebuild branch
 		wantServed bool
 	}{
 		{"full-rebuild branch drops it from both", true, false},
@@ -175,7 +212,7 @@ func TestAnUnparseableFileMovesBothPlanesTogether(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()
 			dir := t.TempDir()
-			writeTestYAML(t, filepath.Join(dir, "_defaults.yaml"), "defaults:\n  mysql_connections: 80\n")
+			writeTestYAML(t, filepath.Join(dir, "_profiles.yaml"), "profiles:\n  gold:\n    mysql_connections: \"80\"\n")
 			writeTestYAML(t, filepath.Join(dir, "a.yaml"), "tenants:\n  t-a: {}\n")
 			writeTestYAML(t, filepath.Join(dir, "b.yaml"), "tenants:\n  t-b: {}\n")
 
@@ -183,14 +220,15 @@ func TestAnUnparseableFileMovesBothPlanesTogether(t *testing.T) {
 			if err := m.Load(); err != nil {
 				t.Fatalf("Load: %v", err)
 			}
+			requireFlatWatchPath(t, m)
 			logBuf.Reset()
 
 			if tc.touchPlat {
-				writeTestYAML(t, filepath.Join(dir, "_defaults.yaml"), "defaults:\n  mysql_connections: 81\n")
+				writeTestYAML(t, filepath.Join(dir, "_profiles.yaml"), "profiles:\n  gold:\n    mysql_connections: \"81\"\n")
 			}
 			writeTestYAML(t, filepath.Join(dir, "a.yaml"), "tenants:\n  t-a: {}\n  \tbroken: [\n")
-			if err := m.IncrementalLoad(); err != nil {
-				t.Fatalf("IncrementalLoad: %v", err)
+			if err := watchReload(m); err != nil {
+				t.Fatalf("reload: %v", err)
 			}
 
 			_, served := m.GetConfig().Tenants["t-a"]
@@ -214,8 +252,8 @@ func TestAnUnparseableFileMovesBothPlanesTogether(t *testing.T) {
 			if err := os.Remove(filepath.Join(dir, "b.yaml")); err != nil {
 				t.Fatalf("Remove: %v", err)
 			}
-			if err := m.IncrementalLoad(); err != nil {
-				t.Fatalf("IncrementalLoad: %v", err)
+			if err := watchReload(m); err != nil {
+				t.Fatalf("reload: %v", err)
 			}
 			m.mu.RLock()
 			_, stillThere := m.hierarchy.tenantSources["t-b"]
@@ -233,8 +271,9 @@ func TestAnUnparseableFileMovesBothPlanesTogether(t *testing.T) {
 //
 // ⛔ `patchedTenants` ANSWERS "DID IT MOVE THIS ROUND", NOT "IS IT STILL
 // DECLARED". A tenant named by two files at once is invalid — a full load
-// hard-rejects it with DuplicateTenantError — but the incremental fast path
-// accepts it silently, so a live tree can be in that state. Once it is, both
+// hard-rejects it with DuplicateTenantError — but `incrementalLoadFrom`
+// itself does not check, and when this test was written the
+// `IncrementalLoad()` entry fed it such a scan unchecked. Once it was, both
 // removal loops deleted the tenant the moment EITHER owning file was edited
 // for any reason, because the other file did not change this round and so was
 // absent from `patchedTenants`. The tenant left the merged config while a file
@@ -245,10 +284,16 @@ func TestAnUnparseableFileMovesBothPlanesTogether(t *testing.T) {
 // Measured on both loops, before the fix: `dup present after r2=false,
 // divergenceERR=true`; after: `true / false`.
 //
-// ⚠️ WHAT THIS DOES NOT ASSERT. The fast path still ACCEPTS the duplicate that
-// a full load rejects. That asymmetry is real and recorded; it is not what
-// these loops are for, and closing it means rejecting a config on the hot
-// reload path, which is a policy decision rather than a bug fix.
+// ⛔ THE WATCH PATH NO LONGER REACHES THIS STATE, AND THE TEST REACHES IT ON
+// PURPOSE (#1577). Since #2452 the watch path rejects a scan carrying a
+// duplicate (TreeScan.Conflict) before incrementalLoadFrom sees it, and the
+// unchecked `IncrementalLoad()` entry is gone. The removal loops' "is it still
+// declared, and whose value" logic is unchanged and still the only thing
+// standing between a two-source tenant and a silent drop, so this test feeds
+// incrementalLoadFrom the duplicate scan directly, with Conflict cleared by
+// hand (incrementalLoadAcceptingDuplicate) — the state the fix was written
+// for, stated as the fixture it is rather than reached through a path that
+// no longer exists.
 func TestATenantDeclaredInTwoFilesSurvivesAnEditToEitherOne(t *testing.T) {
 	t.Parallel()
 	// ⛔ WHICH DECLARATION GOES AWAY IS LOAD-BEARING, and the first version of
@@ -300,8 +345,8 @@ func TestATenantDeclaredInTwoFilesSurvivesAnEditToEitherOne(t *testing.T) {
 
 			// The invalid-but-live state: b.yaml now names dup as well, at 22.
 			writeTestYAML(t, filepath.Join(dir, "b.yaml"), "tenants:\n  other: {}\n  dup:\n    _profile: gold\n    mysql_connections: \"22\"\n")
-			if err := m.IncrementalLoad(); err != nil {
-				t.Fatalf("IncrementalLoad: %v", err)
+			if err := incrementalLoadAcceptingDuplicate(t, m, true); err != nil {
+				t.Fatalf("incrementalLoadFrom (duplicate accepted by hand): %v", err)
 			}
 			// ⛔ ASSERTED, NOT SKIPPED. This was a t.Skip whose condition was
 			// "dup left the merged config" — which is ALSO what several
@@ -332,8 +377,12 @@ func TestATenantDeclaredInTwoFilesSurvivesAnEditToEitherOne(t *testing.T) {
 				}
 				writeTestYAML(t, filepath.Join(dir, tc.editFile), body)
 			}
-			if err := m.IncrementalLoad(); err != nil {
-				t.Fatalf("IncrementalLoad: %v", err)
+			// The edit resolves the duplicate, so this scan has no Conflict —
+			// but it still goes straight to incrementalLoadFrom: the tree has
+			// a `_defaults.yaml`, so watchReload would take the hierarchical
+			// path (a full flat rebuild) and never run the removal loops.
+			if err := incrementalLoadAcceptingDuplicate(t, m, false); err != nil {
+				t.Fatalf("incrementalLoadFrom: %v", err)
 			}
 
 			got, ok := m.GetConfig().Tenants["dup"]
@@ -388,6 +437,30 @@ func TestATenantDeclaredInTwoFilesSurvivesAnEditToEitherOne(t *testing.T) {
 			}
 		})
 	}
+}
+
+// incrementalLoadAcceptingDuplicate walks the tree as the watch path does and
+// hands the scan to incrementalLoadFrom — with TreeScan.Conflict cleared, which
+// the watch path never does (scanAndCheckHierarchical / detectChange reject
+// it). wantConflict states which kind of scan the caller is feeding, so the
+// fixture cannot quietly stop building the duplicate it exists for.
+func incrementalLoadAcceptingDuplicate(t *testing.T, m *ConfigManager, wantConflict bool) error {
+	t.Helper()
+	m.reloadMu.Lock()
+	defer m.reloadMu.Unlock()
+	m.mu.RLock()
+	tree := m.flat.tree
+	m.mu.RUnlock()
+	scan, err := scanDirTree(m.path, tree, m.getMetrics(), m.getLogger())
+	if err != nil {
+		return err
+	}
+	if got := scan.Conflict != nil; got != wantConflict {
+		t.Fatalf("scan.Conflict present = %v, want %v (%v) — the fixture no longer builds the state this step is for",
+			got, wantConflict, scan.Conflict)
+	}
+	scan.Conflict = nil
+	return m.incrementalLoadFrom(scan)
 }
 
 // TestReclaimTenantFromMirrorsTheFullMergePrecedence pins the ordering rule
@@ -516,6 +589,27 @@ func buildPairBaseTree(t *testing.T, dir string) {
 		"tenants:\n  t-use:\n    redis_evicted_keys: 99\n")
 }
 
+// buildPairFlatTree is buildPairBaseTree without a `_defaults` carrier
+// anywhere: the same root and nested tenant files, so the watch path stays
+// flat and reloads through incrementalLoadFrom (#1577). A `_profiles.yaml`
+// stands in as the root platform file, with a `tenants:` block giving t-root a
+// key its own file does not — the two-source shape the patch path must union.
+func buildPairFlatTree(t *testing.T, dir string) {
+	t.Helper()
+	writeTestYAML(t, filepath.Join(dir, "_profiles.yaml"),
+		"profiles:\n  gold:\n    redis_evicted_keys: 7\n"+
+			"tenants:\n  t-root:\n    _profile: gold\n    mysql_connections: 81\n")
+	writeTestYAML(t, filepath.Join(dir, "root-tenant.yaml"), "tenants:\n  t-root: {}\n")
+	writeTestYAML(t, filepath.Join(dir, "notes.yaml"), "unrelated: true\n")
+
+	mkSub(t, dir, "finance")
+	writeTestYAML(t, filepath.Join(dir, "finance", "t-fin.yaml"), "tenants:\n  t-fin: {}\n")
+
+	mkSub(t, filepath.Join(dir, "finance"), "us-east")
+	writeTestYAML(t, filepath.Join(dir, "finance", "us-east", "t-use.yaml"),
+		"tenants:\n  t-use:\n    redis_evicted_keys: 99\n")
+}
+
 type pairTree struct {
 	name  string
 	build func(t *testing.T, dir string)
@@ -556,6 +650,9 @@ func scannerPairTrees() []pairTree {
 type incrMutation struct {
 	name  string
 	apply func(t *testing.T, dir string)
+	// touchesCarrier: writes or deletes a `_defaults` carrier, so it has no
+	// meaning on buildPairFlatTree (see TestIncrementalLoadLandsWhereAFullLoadWould).
+	touchesCarrier bool
 }
 
 func incrementalMutations() []incrMutation {
@@ -563,69 +660,71 @@ func incrementalMutations() []incrMutation {
 		{"edit a nested tenant file", func(t *testing.T, dir string) {
 			writeTestYAML(t, filepath.Join(dir, "finance", "us-east", "t-use.yaml"),
 				"tenants:\n  t-use:\n    redis_evicted_keys: 123\n")
-		}},
+		}, false},
 		{"edit a subtree defaults file", func(t *testing.T, dir string) {
 			writeTestYAML(t, filepath.Join(dir, "finance", "_defaults.yaml"),
 				"defaults:\n  mysql_connections: 65\n  finance_only_key: 5\n")
-		}},
+		}, true},
 		{"edit the root defaults file", func(t *testing.T, dir string) {
 			writeTestYAML(t, filepath.Join(dir, "_defaults.yaml"),
 				"defaults:\n  mysql_connections: 85\n  redis_evicted_keys: 10\n"+
 					"state_filters:\n  maintenance:\n    severity: warning\n")
-		}},
+		}, true},
 		{"add a tenant in a brand new subdirectory", func(t *testing.T, dir string) {
 			mkSub(t, dir, "ops")
 			writeTestYAML(t, filepath.Join(dir, "ops", "_defaults.yaml"),
 				"defaults:\n  mysql_connections: 40\n")
 			writeTestYAML(t, filepath.Join(dir, "ops", "t-ops.yaml"), "tenants:\n  t-ops: {}\n")
-		}},
+		}, true},
 		{"delete a nested tenant file", func(t *testing.T, dir string) {
 			if err := os.Remove(filepath.Join(dir, "finance", "us-east", "t-use.yaml")); err != nil {
 				t.Fatalf("Remove: %v", err)
 			}
-		}},
+		}, false},
 		{"delete a subtree defaults file", func(t *testing.T, dir string) {
 			if err := os.Remove(filepath.Join(dir, "finance", "us-east", "_defaults.yaml")); err != nil {
 				t.Fatalf("Remove: %v", err)
 			}
-		}},
+		}, true},
 		{"add a subtree-only key that cannot be delivered", func(t *testing.T, dir string) {
 			writeTestYAML(t, filepath.Join(dir, "finance", "us-east", "_defaults.yaml"),
 				"defaults:\n  mysql_connections: 70\n  another_subtree_only_key: 7\n")
-		}},
-		// ⛔ THE FOUR CASES BELOW ARE THE ONLY ONES THAT REACH THE FAST PATH.
-		// `IncrementalLoad` redirects to `fullDirLoad` the moment any changed
-		// scan key names a file below the conf.d root (`anyNestedKey`), so every
-		// nested mutation above compares fullDirLoad against fullDirLoad and
-		// cannot see a defect in the incremental code at all. Measured: deleting
-		// the round-5 refused-set refresh from `IncrementalLoad` reddened
-		// exactly one of the eight nested cases and none of the others. Root-
-		// level mutations are what actually exercise the path.
+		}, true},
+		// ⛔ THE CASES BELOW ARE THE ONLY ONES THAT REACH THE FAST PATH, and
+		// only on the flat tree (#1577: on the carrier tree nothing does).
+		// incrementalLoadFrom redirects to `fullDirLoadFrom` the moment any
+		// changed scan key names a file below the conf.d root (`anyNestedKey`),
+		// so every nested mutation above compares a full load against a full
+		// load and cannot see a defect in the incremental code at all.
+		// Measured when this was the removed `IncrementalLoad()`: deleting the
+		// round-5 refused-set refresh from it reddened exactly one of the eight
+		// nested cases and none of the others. Root-level mutations are what
+		// actually exercise the path.
 		{"edit a root tenant file", func(t *testing.T, dir string) {
 			writeTestYAML(t, filepath.Join(dir, "root-tenant.yaml"),
 				"tenants:\n  t-root:\n    mysql_connections: 33\n")
-		}},
+		}, false},
 		{"add a root tenant file", func(t *testing.T, dir string) {
 			writeTestYAML(t, filepath.Join(dir, "root-tenant-2.yaml"), "tenants:\n  t-root-2: {}\n")
-		}},
+		}, false},
 		{"delete a root tenant file", func(t *testing.T, dir string) {
 			if err := os.Remove(filepath.Join(dir, "root-tenant.yaml")); err != nil {
 				t.Fatalf("Remove: %v", err)
 			}
-		}},
+		}, false},
 		{"remove a tenant from a root file that stays on disk", func(t *testing.T, dir string) {
 			writeTestYAML(t, filepath.Join(dir, "root-tenant.yaml"), "tenants: {}\n")
-		}},
+		}, false},
 		{"rename a tenant inside a root file", func(t *testing.T, dir string) {
 			writeTestYAML(t, filepath.Join(dir, "root-tenant.yaml"), "tenants:\n  t-renamed: {}\n")
-		}},
+		}, false},
 		{"edit an unrelated root yaml that declares nothing", func(t *testing.T, dir string) {
 			writeTestYAML(t, filepath.Join(dir, "notes.yaml"), "unrelated: false\n")
-		}},
+		}, false},
 		{"a tenant starts authoring a key it used to inherit", func(t *testing.T, dir string) {
 			writeTestYAML(t, filepath.Join(dir, "finance", "us-east", "t-use.yaml"),
 				"tenants:\n  t-use:\n    redis_evicted_keys: 99\n    mysql_connections: 11\n")
-		}},
+		}, false},
 	}
 }
 

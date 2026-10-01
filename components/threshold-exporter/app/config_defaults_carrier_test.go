@@ -219,9 +219,16 @@ tenants:
 	}
 }
 
-// The incremental flat path re-merges from CACHED partials; the selection
-// must be applied at merge time, not baked into the cache.
-func TestRootCarrierSelectionMovesOnIncrementalLoad(t *testing.T) {
+// A reload re-merges from CACHED partials; the selection must be applied at
+// merge time, not baked into the cache.
+//
+// ⚠️ SINCE #1577 THIS PINS THE WATCH PATH, NOT THE GUARD IT WAS WRITTEN FOR.
+// It used to drive the removed `IncrementalLoad()` into incrementalLoadFrom's
+// root-carrier redirect (`anyRootCarrierKey`). The watch path never gets
+// there with a carrier in the tree — any carrier makes the reload
+// hierarchical — so the reload here is a full flat rebuild, and that redirect
+// is not reached by any test (nor, by the same argument, by production).
+func TestRootCarrierSelectionMovesOnReload(t *testing.T) {
 	t.Parallel()
 	dir := t.TempDir()
 	writeFile(t, filepath.Join(dir, "_defaults.yaml"), "defaults:\n  cpu_pct: 50\n")
@@ -231,8 +238,8 @@ func TestRootCarrierSelectionMovesOnIncrementalLoad(t *testing.T) {
 	m := NewConfigManager(dir)
 	defer m.Close()
 	m.SetLogger(log.New(&bytes.Buffer{}, "", 0))
-	if err := m.IncrementalLoad(); err != nil {
-		t.Fatalf("IncrementalLoad (cold): %v", err)
+	if err := watchReload(m); err != nil {
+		t.Fatalf("reload (cold): %v", err)
 	}
 	if got := m.GetConfig().Defaults["cpu_pct"]; got != 50 {
 		t.Fatalf("cold: cpu_pct = %v, want 50", got)
@@ -240,8 +247,8 @@ func TestRootCarrierSelectionMovesOnIncrementalLoad(t *testing.T) {
 	if err := os.Remove(filepath.Join(dir, "_defaults.yaml")); err != nil {
 		t.Fatal(err)
 	}
-	if err := m.IncrementalLoad(); err != nil {
-		t.Fatalf("IncrementalLoad (after removal): %v", err)
+	if err := watchReload(m); err != nil {
+		t.Fatalf("reload (after removal): %v", err)
 	}
 	if got := m.GetConfig().Defaults["cpu_pct"]; got != 90 {
 		t.Errorf("after removing _defaults.yaml: cpu_pct = %v, want 90 from _defaults.yml", got)
@@ -253,6 +260,13 @@ func TestRootCarrierSelectionMovesOnIncrementalLoad(t *testing.T) {
 // `Ambiguous > 1` arm the incremental path parses the `.yml` and merges it
 // over the `.yaml` (blind review of #1674 round 2: mutating the guard to
 // `anyRootCarrierKey(added, removed)` alone left the suite green).
+//
+// ⚠️ SINCE #1577 THIS PINS THE WATCH PATH, NOT THE GUARD IT WAS WRITTEN FOR.
+// It used to drive the removed `IncrementalLoad()` into incrementalLoadFrom's
+// root-carrier redirect (`anyRootCarrierKey`). The watch path never gets
+// there with a carrier in the tree — any carrier makes the reload
+// hierarchical — so the reload here is a full flat rebuild, and that redirect
+// is not reached by any test (nor, by the same argument, by production).
 func TestEditingTheUnselectedRootCarrierChangesNothing(t *testing.T) {
 	t.Parallel()
 	dir := t.TempDir()
@@ -263,12 +277,12 @@ func TestEditingTheUnselectedRootCarrierChangesNothing(t *testing.T) {
 	m := NewConfigManager(dir)
 	defer m.Close()
 	m.SetLogger(log.New(&bytes.Buffer{}, "", 0))
-	if err := m.IncrementalLoad(); err != nil {
-		t.Fatalf("IncrementalLoad (cold): %v", err)
+	if err := watchReload(m); err != nil {
+		t.Fatalf("reload (cold): %v", err)
 	}
 	writeFile(t, filepath.Join(dir, "_defaults.yml"), "defaults:\n  cpu_pct: 91\n")
-	if err := m.IncrementalLoad(); err != nil {
-		t.Fatalf("IncrementalLoad (after editing _defaults.yml): %v", err)
+	if err := watchReload(m); err != nil {
+		t.Fatalf("reload (after editing _defaults.yml): %v", err)
 	}
 	if want := map[string]float64{"cpu_pct": 50}; !reflect.DeepEqual(m.GetConfig().Defaults, want) {
 		t.Errorf("after editing the unselected _defaults.yml, Defaults = %v, want %v", m.GetConfig().Defaults, want)

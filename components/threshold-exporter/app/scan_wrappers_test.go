@@ -26,7 +26,7 @@ import (
 // scanDirFileHashes scans a directory and returns per-file SHA-256 hashes,
 // the composite hash, per-file mtime+size stats, and a byte cache of files
 // that were actually read (for reuse by callers that need file contents,
-// avoiding double disk reads in fullDirLoad/IncrementalLoad).
+// avoiding double disk reads in fullDirLoad/incrementalLoadFrom).
 //
 // Uses DirEntry.Info() to get mtime+size from the directory listing itself,
 // avoiding separate os.Stat calls per file.

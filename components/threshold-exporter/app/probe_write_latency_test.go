@@ -86,7 +86,7 @@ func BenchmarkProbeWriteLatency(b *testing.B) {
 				b.Fatal(err)
 			}
 			t1 := time.Now()
-			if err := mgr.IncrementalLoad(); err != nil {
+			if err := watchReload(mgr); err != nil {
 				b.Fatal(err)
 			}
 			t2 := time.Now()

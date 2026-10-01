@@ -42,10 +42,23 @@ func TestClassifyDefaultsNoOpEffect_PlatformKeyShadowedAcrossSpellings(t *testin
 
 // TestPlatformTenantAliasSurvivesReload (#2368): the tenant's legacy
 // `mysql_cpu` keeps beating the platform entry's canonical
-// `mysql_threads_running` after a tenant-file-only edit — the patchTenants
-// fast path, which rebuilds the tenant from every declaring file
-// (reclaimTenantFrom's multi-source union) — and after a platform-file edit
-// (the incremental full rebuild). Both reload entries.
+// `mysql_threads_running` after a tenant-file-only edit and after a
+// platform-file edit, through the watch path's reload — on this carrier
+// tree, the hierarchical one.
+//
+// ⚠️ CARRIER LAYOUT ONLY, AND THAT IS A LOSS (#1577). This test reads what
+// /metrics serves, and a tree with no `_defaults` carrier serves no threshold
+// row at all (measured: Resolve() returns 0 rows for a tenant file setting
+// mysql_connections; 1 row once a carrier exists) — every key is "not in
+// defaults" — so on the only layout where the watch path takes
+// incrementalLoadFrom there is nothing for these assertions to read. It used
+// to reach patchTenants through the removed `IncrementalLoad()` on the
+// carrier tree, a combination production never runs. On the flat layout
+// the fast path's multi-source precedence is pinned by the flat tree of
+// TestTheFastPathAlwaysLandsWhereAFullLoadWould (every tenant override
+// against a full load) — but it never writes the legacy spelling, so the
+// ACROSS-SPELLING half of reclaimTenantFrom's union has no flat-layout test
+// after this change.
 func TestPlatformTenantAliasSurvivesReload(t *testing.T) {
 	t.Parallel()
 	m := loadOverlayMatrix(t)
@@ -67,28 +80,16 @@ func TestPlatformTenantAliasSurvivesReload(t *testing.T) {
 			writeTestYAML(t, filepath.Join(dir, "tx.yaml"), "tenants:\n  tx:\n    redis_x: \"1\"\n")
 		}, f(75)},
 	}
-	reloaders := map[string]func(m *ConfigManager) error{
-		"IncrementalLoad": func(m *ConfigManager) error { return m.IncrementalLoad() },
-		"diffAndReload": func(m *ConfigManager) error {
-			_, _, err := m.diffAndReload()
-			return err
-		},
-	}
-	for rname, reload := range reloaders {
-		t.Run(rname, func(t *testing.T) {
-			t.Parallel()
-			dir := t.TempDir()
-			writeOverlayTree(t, dir, overlayTree(m, t, "a1-alias-tenant-legacy-beats-platform-canonical"))
-			mgr, _ := newOverlayManager(t, dir)
-			assertServedKey(t, mgr, rname+"/load", "tx", key, f(90))
-			for i, st := range steps {
-				st.mutate(t, dir)
-				touchTreeAt(t, dir, time.Now().Add(time.Duration(i+3)*time.Second))
-				if err := reload(mgr); err != nil {
-					t.Fatalf("%s/%s: %v", rname, st.name, err)
-				}
-				assertServedKey(t, mgr, rname+"/"+st.name, "tx", key, st.want)
-			}
-		})
+	dir := t.TempDir()
+	writeOverlayTree(t, dir, overlayTree(m, t, "a1-alias-tenant-legacy-beats-platform-canonical"))
+	mgr, _ := newOverlayManager(t, dir)
+	assertServedKey(t, mgr, "load", "tx", key, f(90))
+	for i, st := range steps {
+		st.mutate(t, dir)
+		touchTreeAt(t, dir, time.Now().Add(time.Duration(i+3)*time.Second))
+		if err := watchReload(mgr); err != nil {
+			t.Fatalf("%s: %v", st.name, err)
+		}
+		assertServedKey(t, mgr, st.name, "tx", key, st.want)
 	}
 }
