@@ -27,6 +27,7 @@ import (
 	"os"
 	"path/filepath"
 	"regexp"
+	"slices"
 	"sort"
 	"strconv"
 	"strings"
@@ -205,7 +206,7 @@ func TestMetricsReadmeParity(t *testing.T) {
 		if s.typ != d.typ {
 			t.Errorf("%s: README type %q, source %q", name, d.typ, s.typ)
 		}
-		if strings.Join(s.labels, ",") != strings.Join(d.labels, ",") {
+		if !slices.Equal(s.labels, d.labels) {
 			t.Errorf("%s: README labels {%s}, source {%s}", name, strings.Join(d.labels, ","), strings.Join(s.labels, ","))
 		}
 		if d.values == nil {
@@ -216,7 +217,7 @@ func TestMetricsReadmeParity(t *testing.T) {
 			t.Errorf("%s: README lists label values but metrics.golden renders none to check them against", name)
 			continue
 		}
-		if strings.Join(g, ",") != strings.Join(d.values, ",") {
+		if !slices.Equal(g, d.values) {
 			t.Errorf("%s: README values %v, metrics.golden %v", name, d.values, g)
 		}
 	}
