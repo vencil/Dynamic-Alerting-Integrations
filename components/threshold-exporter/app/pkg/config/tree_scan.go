@@ -232,6 +232,28 @@ type TreeFile struct {
 	ParseFailed bool
 }
 
+// Closed set of UnreadableFile.Reason values. The OS error itself is only
+// logged: its text carries paths and platform wording, and a reader must
+// not have to parse it.
+const (
+	// UnreadableStatError: the entry's stat failed — for a symlink, the
+	// link's lstat or its target's stat (a dangling link, a target the
+	// process may not search).
+	UnreadableStatError = "stat_error"
+	// UnreadableReadError: the stat succeeded but reading the bytes failed
+	// (e.g. permission denied).
+	UnreadableReadError = "read_error"
+	// UnreadableWalkError: a directory below the root (RelKey is the
+	// directory's path) could not be listed, so nothing under it was seen.
+	UnreadableWalkError = "walk_error"
+)
+
+// UnreadableFile is one entry of TreeScan.Unreadable.
+type UnreadableFile struct {
+	RelKey string // root-relative slash path of the file (or, for walk_error, the directory)
+	Reason string // UnreadableStatError, UnreadableReadError or UnreadableWalkError
+}
+
 // TreeScan is everything one walk of the conf.d tree yields.
 type TreeScan struct {
 	AbsRoot   string
@@ -266,6 +288,16 @@ type TreeScan struct {
 	// Conflict is the FIRST cross-file duplicate in walk order (PathA/PathB
 	// are the first two declaring files for that tenant, in walk order).
 	Conflict *DuplicateTenantError
+
+	// Unreadable is every config-named entry the walk dropped because its
+	// stat or its read failed, and every directory below the root it could
+	// not list — the "cannot stat" / "cannot read" / "walk error" WARNs as
+	// data (#2115), sorted by RelKey; nil when there is none. Such an entry
+	// is in no other map, exactly as before: this records the drop, it does
+	// not change it. An entry whose target is a directory (a config-named
+	// symlink to a directory) is NOT listed: the walk never follows one, and
+	// a ConfigMap volume can carry such links by design.
+	Unreadable []UnreadableFile
 
 	// attrib is every tenant's FIRST declaring file in walk order, recorded
 	// even when the tree has a conflict. When Conflict is nil it is the very
@@ -346,13 +378,15 @@ func (s *TreeScan) InheritanceGraph() *InheritanceGraph {
 // Rules (one answer per cell; the hierarchical walker's where they differed):
 //   - root is absolutised, cleaned and symlink-resolved via AbsScanRoot; a
 //     missing root or a root that is not a directory is an error.
-//   - a walk error is logged and the walk continues (never SkipDir).
+//   - a walk error is logged and the walk continues (never SkipDir); one
+//     on a directory below the root is recorded in Unreadable (#2115).
 //   - directories whose name starts with '.' are pruned whole (never the
 //     root); files whose name starts with '.' are skipped.
 //   - only files whose lower-cased name ends in `.yaml` / `.yml` are kept.
 //   - an entry whose stat or read fails is logged and dropped from every map;
 //     a symlinked file is statted through its target too, so a dangling
-//     link is dropped here (#1969).
+//     link is dropped here (#1969). The drop is recorded in Unreadable
+//     (#2115), except for a symlink whose target is a directory.
 //   - `_`-prefixed files are hashed but never parsed for tenants; the ones
 //     confdname.IsDefaults accepts are entered in `Defaults` (every spelling;
 //     which ONE a directory's chain reads is DefaultsCarriers' question).
@@ -516,9 +550,27 @@ func walkDirTree(root string, prior *TreeScan, obs ScanObserver, logger *log.Log
 		link *FileStat // symlinks only; see TreeFile.LinkStat
 	}
 	var entries []entry
+	var unreadable []UnreadableFile
+	dropUnreadable := func(path, reason string) {
+		rel := path
+		if r, err := filepath.Rel(absRoot, path); err == nil {
+			rel = r
+		}
+		unreadable = append(unreadable, UnreadableFile{RelKey: filepath.ToSlash(rel), Reason: reason})
+	}
 	walkErr := filepath.WalkDir(absRoot, func(path string, d fs.DirEntry, werr error) error {
 		if werr != nil {
 			logger.Printf("WARN: walk error at %s: %v", path, werr)
+			// A real directory below the root that cannot be listed (e.g.
+			// permission denied): every file under it is lost, so it is
+			// recorded like an unreadable file (#2115). The root's own
+			// failure is not recorded here: the tree then holds no file and
+			// the caller's "no .yaml files" error already stops the load. A
+			// symlink to a directory never gets here (it is a leaf, not
+			// walked).
+			if path != absRoot {
+				dropUnreadable(path, UnreadableWalkError)
+			}
 			return nil
 		}
 		name := d.Name()
@@ -617,11 +669,13 @@ func walkDirTree(root string, prior *TreeScan, obs ScanObserver, logger *log.Log
 			linkInfo, lerr := d.Info()
 			if lerr != nil {
 				logger.Printf("WARN: cannot stat %s: %v", path, lerr)
+				dropUnreadable(path, UnreadableStatError)
 				return nil
 			}
 			targetInfo, terr := os.Stat(path)
 			if terr != nil {
 				logger.Printf("WARN: cannot stat symlink target of %s (dropped): %v", path, terr)
+				dropUnreadable(path, UnreadableStatError)
 				return nil
 			}
 			st = FileStat{ModTime: targetInfo.ModTime().UnixNano(), Size: targetInfo.Size()}
@@ -630,6 +684,7 @@ func walkDirTree(root string, prior *TreeScan, obs ScanObserver, logger *log.Log
 			entryInfo, ierr := d.Info()
 			if ierr != nil {
 				logger.Printf("WARN: cannot stat %s: %v", path, ierr)
+				dropUnreadable(path, UnreadableStatError)
 				return nil
 			}
 			st = FileStat{ModTime: entryInfo.ModTime().UnixNano(), Size: entryInfo.Size()}
@@ -685,6 +740,13 @@ func walkDirTree(root string, prior *TreeScan, obs ScanObserver, logger *log.Log
 			data, rerr := os.ReadFile(e.abs)
 			if rerr != nil {
 				logger.Printf("WARN: cannot read %s: %v", e.abs, rerr)
+				// A config-named symlink to a directory stats fine and fails
+				// here; it is never followed, so it is not "unreadable"
+				// (see TreeScan.Unreadable). The extra stat runs only on
+				// this failure path.
+				if ti, serr := os.Stat(e.abs); serr != nil || !ti.IsDir() {
+					unreadable = append(unreadable, UnreadableFile{RelKey: e.rel, Reason: UnreadableReadError})
+				}
 				continue
 			}
 			f.Hash = fmt.Sprintf("%x", sha256.Sum256(data))
@@ -725,6 +787,10 @@ func walkDirTree(root string, prior *TreeScan, obs ScanObserver, logger *log.Log
 	// Composite: hash-of-hashes in sorted key order, the flat plane's
 	// change-detection identity since v2.1.0.
 	sort.Strings(scan.Keys)
+	if len(unreadable) > 0 {
+		sort.Slice(unreadable, func(i, j int) bool { return unreadable[i].RelKey < unreadable[j].RelKey })
+		scan.Unreadable = unreadable
+	}
 	compositeHasher := sha256.New()
 	for _, k := range scan.Keys {
 		compositeHasher.Write([]byte(scan.Files[k].Hash))

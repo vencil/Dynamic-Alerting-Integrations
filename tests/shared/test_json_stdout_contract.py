@@ -154,6 +154,10 @@ from typing import Callable
 
 import pytest
 
+# #2115: blind_spot_discovery 與 analyze_rule_pack_gaps（目錄模式）的值來自
+# `da-guard served-values`；子行程經 `$DA_GUARD_BINARY` 找到本 repo 建出的 da-guard。
+pytestmark = pytest.mark.usefixtures("da_guard_env")
+
 REPO_ROOT = Path(__file__).resolve().parents[2]
 TOOLS_DIR = REPO_ROOT / "scripts" / "tools"
 OPS_DIR = TOOLS_DIR / "ops"

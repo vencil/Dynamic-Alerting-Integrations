@@ -7,6 +7,23 @@ Semantics: `da-guard served-values` = /metrics, `da-guard effective` =
 /effective. This module runs those subcommands and parses their JSON; it
 decides nothing about the values itself.
 
+`load_served_tree(conf_d, at=None, binary=None)` returns a `ServedTree`:
+`tenants` is `load_served_values`'s answer, `skipped` the files the exporter's
+load read but serves no tenant from (a file outside the `_` files with no
+`tenants:` mapping, #2115 R3), each a `SkippedFile(file, reason)` in the words
+of the load; `stderr_lines` every non-empty line da-guard wrote to stderr on
+a run that succeeded (a successful run would otherwise swallow them), split on
+"\n" only. They are not sorted into kinds here. `print_load_warnings` prints
+both: each of those lines behind `DA_GUARD_PREFIX` and escaped with
+`safe_label`, then one named WARN line per skipped file. A file the load
+cannot stat or read (da-guard's `unreadable`) is not a warning: it raises
+`ParseFailedError`, as a file that does not decode does.
+
+What is passed on is da-guard's stderr line by line, never a faithful copy of
+what the exporter meant: a file name holding a real "\n" is printed by Go as
+two lines, and nothing here can tell those two from two messages. The prefix
+is what keeps either of them off column 0.
+
 `load_served_values(conf_d, at=None, binary=None)` returns
 `{tenant_id: TenantValues}`:
 
@@ -46,8 +63,17 @@ arrives as the text `"Infinity"` / `"-Infinity"` / `"NaN"`.
 
 Raises (both loaders):
 
-* `YamlFileError` (`_lib_io`) — the exporter's load skips a file that does
-  not decode; `path` names the first, the message names all.
+* `ParseFailedError` (a `YamlFileError`, `_lib_io`) — the exporter's load
+  skips a file that does not decode (`parse_failed`, both loaders) or, for
+  `load_served_values` / `load_served_tree` only, a path it cannot stat or
+  read (`unreadable`: a dangling symlink, a file it may not read, a
+  sub-directory it may not list; a symlink to a directory is not one);
+  `path` names the first, the one-line message names all (an unreadable one
+  with its reason, `stat_error` / `read_error` / `walk_error`),
+  `stderr_lines` carries da-guard's stderr whole (the exporter's reasons
+  among it). `load_effective` does NOT check `unreadable` (`da-guard
+  effective` does not report it): a tenant in a file the exporter cannot
+  read is simply absent from its result.
 * `DaGuardNotFoundError` — no da-guard binary; the message says how to get one.
 * `ServedValuesError` / `EffectiveError` (both `DaGuardError`) — da-guard
   failed, or its output is not the JSON it should be (for `effective`, a
@@ -59,11 +85,13 @@ Raises (both loaders):
 """
 from __future__ import annotations
 
+import functools
 import json
+import os
 import subprocess
 import sys
 from pathlib import Path
-from typing import Any, NamedTuple
+from typing import Any, Callable, NamedTuple, TextIO, TypeVar
 
 _HERE = Path(__file__).resolve().parent
 # guard_dispatch lives in ops/ in the repo; the image ships it flat beside
@@ -71,7 +99,8 @@ _HERE = Path(__file__).resolve().parent
 if (_HERE / "ops").is_dir() and str(_HERE / "ops") not in sys.path:
     sys.path.append(str(_HERE / "ops"))
 
-from _lib_io import YamlFileError  # noqa: E402
+from _lib_io import YamlFileError, safe_label  # noqa: E402
+from _lib_exitcodes import EXIT_CALLER_ERROR  # noqa: E402
 import guard_dispatch  # noqa: E402
 
 __all__ = [
@@ -79,12 +108,21 @@ __all__ = [
     "DaGuardNotFoundError",
     "EffectiveError",
     "KeySource",
+    "ServedTree",
     "ServedValuesError",
+    "SkippedFile",
     "TenantEffective",
     "TenantValues",
+    "UnreadableFile",
     "YamlFileError",
+    "DA_GUARD_PREFIX",
+    "MISSING_BINARY_MESSAGE",
+    "ParseFailedError",
+    "exit_on_served_values_error",
     "load_effective",
+    "load_served_tree",
     "load_served_values",
+    "print_load_warnings",
 ]
 
 SUBCOMMAND = "served-values"
@@ -106,6 +144,37 @@ class TenantValues(NamedTuple):
     severities: dict[str, str]
     unserved: dict[str, Any]
     dropped: dict[str, list[str]]
+
+
+class SkippedFile(NamedTuple):
+    file: str    # root-relative slash path, as the exporter's scan keys it
+    reason: str  # the load's own words
+
+
+class ServedTree(NamedTuple):
+    tenants: dict[str, TenantValues]
+    skipped: list[SkippedFile]
+    stderr_lines: list[str]  # every non-empty line of da-guard's stderr, as written
+
+
+class UnreadableFile(NamedTuple):
+    file: str    # root-relative slash path (a directory's, for walk_error)
+    reason: str  # closed set: "stat_error" | "read_error" | "walk_error"
+
+
+class ParseFailedError(YamlFileError):
+    """The exporter's load skips a file that does not decode (parse_failed)
+    or that it cannot stat or read (unreadable).
+
+    `str()` keeps `YamlFileError`'s one-line contract; `stderr_lines` is
+    da-guard's stderr, every non-empty line as written, for a caller to show
+    below that line; `unreadable` the unreadable files ([] when none)."""
+
+    def __init__(self, path: str, cause: Exception, stderr_lines: list[str],
+                 unreadable: list[UnreadableFile] | None = None) -> None:
+        super().__init__(path, cause)
+        self.stderr_lines = stderr_lines
+        self.unreadable = list(unreadable or [])
 
 
 class KeySource(NamedTuple):
@@ -136,6 +205,7 @@ class DaGuardError(RuntimeError):
     """A da-guard subcommand failed. `returncode` and `stderr` are its own."""
 
     def __init__(self, message: str, returncode: int | None, stderr: str) -> None:
+        self.message = message
         self.returncode = returncode
         self.stderr = stderr
         detail = stderr.strip()
@@ -157,6 +227,24 @@ def _stderr_text(b: bytes | str | None) -> str:
     return b if isinstance(b, str) else b.decode("utf-8", errors="backslashreplace")
 
 
+# Every line of da-guard's stderr a tool passes on is printed behind this, on
+# both paths (a successful run, and the lines below an ERROR), so none of it
+# ever starts at column 0 — not even text after a "\n" inside a file name.
+DA_GUARD_PREFIX = "  da-guard| "
+
+
+def _nonempty_lines(text: str) -> list[str]:
+    """Every non-empty line of `text`, split on "\n" ONLY — `str.splitlines`
+    also splits on NEL, \v, \f, \x1c-\x1e and U+2028/2029, which can sit in a
+    file name, and would cut the line there. NEL, \v, \f and \x1c-\x1e then
+    reach `safe_label`, which prints each as `?`. U+2028/2029 are not control
+    characters to `safe_label` and pass through as they are; they stay inside
+    the line, behind `DA_GUARD_PREFIX`.
+    Trailing whitespace (a "\r" too) is dropped, the leading indent kept (a
+    continuation line of a Go error is indented)."""
+    return [ln.rstrip() for ln in text.split("\n") if ln.strip()]
+
+
 def _threshold(v: Any) -> float:
     """A threshold value from the JSON as a float: JSON's number (an int when
     it has no fraction), or the text da-guard writes for a value JSON has no
@@ -170,6 +258,9 @@ def _threshold(v: Any) -> float:
     return float(v)
 
 
+_T = TypeVar("_T")
+
+
 def _run_da_guard(
     subcommand: str,
     extra: list[str],
@@ -178,12 +269,21 @@ def _run_da_guard(
     timeout: float,
     error: type[DaGuardError],
     schema: str | None,
-) -> tuple[Any, int, str]:
+    read: Callable[[dict[str, Any]], _T],
+    reads_unreadable: bool = False,
+) -> tuple[_T, int, str]:
     """Run `da-guard <subcommand> --config-dir <conf_d> <extra>` and return
-    (the document's `tenants`, the exit code, stderr) — the one error contract
-    both loaders share. A missing binary, an exit code other than 0 / 3,
-    output that is not the JSON it should be (with `schema` given, a `schema`
-    field of any other value included) and a non-empty `parse_failed` raise."""
+    (`read(document)`, the exit code, stderr) — the one error contract both
+    loaders share. `read` takes from the document what its caller reads
+    (`tenants`, and for served-values `skipped`); a field it needs that is
+    missing or not of its shape is output that is not the JSON it should be.
+
+    Raises: a missing binary; an exit code other than 0 / 3; output that is
+    not the JSON it should be (with `schema` given, a `schema` field of any
+    other value included; a missing `skipped` / `unreadable` named as a
+    da-guard older than this tool); `ParseFailedError` for a non-empty
+    `parse_failed` or — with `reads_unreadable`, which makes `unreadable` a
+    field the document must carry — `unreadable`; exit 3 with neither."""
     dispatcher = guard_dispatch.DISPATCHER
     exe = dispatcher.resolve_binary(binary)
     if exe is None:
@@ -208,22 +308,33 @@ def _run_da_guard(
         if schema is not None and doc["schema"] != schema:
             raise ValueError(f"schema {doc['schema']!r}, this reader reads {schema!r}")
         parse_failed = list(doc["parse_failed"])
-        tenants = doc["tenants"]
+        got = read(doc)
+        unreadable = ([UnreadableFile(str(e["file"]), str(e["reason"])) for e in doc["unreadable"]]
+                      if reads_unreadable else [])
     except (ValueError, KeyError, TypeError) as e:  # UnicodeDecodeError is a ValueError
+        stale = (" — this da-guard is older than this tool: upgrade or rebuild it"
+                 if isinstance(e, KeyError) and e.args in (("skipped",), ("unreadable",)) else "")
         raise error(
-            f"da-guard {subcommand} exited {proc.returncode} without the expected JSON ({e})",
+            f"da-guard {subcommand} exited {proc.returncode} without the expected JSON ({e}){stale}",
             proc.returncode, stderr) from e
 
-    if parse_failed:
-        raise YamlFileError(
-            str(Path(conf_d) / parse_failed[0]),
-            ValueError(f"the exporter's load skips {len(parse_failed)} file(s) that do not decode: "
-                       f"{', '.join(parse_failed)}"))
+    if parse_failed or unreadable:
+        clauses = []
+        if parse_failed:
+            clauses.append(f"the exporter's load skips {len(parse_failed)} file(s) that do not decode: "
+                           f"{', '.join(parse_failed)}")
+        if unreadable:
+            clauses.append(f"the exporter's load cannot read {len(unreadable)} path(s): "
+                           f"{', '.join(f'{u.file} ({u.reason})' for u in unreadable)}")
+        first = parse_failed[0] if parse_failed else unreadable[0].file
+        raise ParseFailedError(str(Path(conf_d) / first), ValueError("; ".join(clauses)),
+                               _nonempty_lines(stderr), unreadable)
     if proc.returncode != _EXIT_OK:
+        fields = "parse_failed or unreadable" if reads_unreadable else "parse_failed"
         raise error(
-            f"da-guard {subcommand} exited {proc.returncode} with no file in parse_failed",
+            f"da-guard {subcommand} exited {proc.returncode} with no file in {fields}",
             proc.returncode, stderr)
-    return tenants, proc.returncode, stderr
+    return got, proc.returncode, stderr
 
 
 def load_served_values(
@@ -235,9 +346,23 @@ def load_served_values(
     """`{tenant_id: TenantValues}` for the conf.d tree at `conf_d`, as
     /metrics serves it at `at` (RFC3339; None = now). See the module
     docstring for the contract and the exceptions."""
+    return load_served_tree(conf_d, at=at, binary=binary, timeout=timeout).tenants
+
+
+def load_served_tree(
+    conf_d: str | Path,
+    at: str | None = None,
+    binary: str | None = None,
+    timeout: float = DEFAULT_TIMEOUT,
+) -> ServedTree:
+    """`load_served_values`'s tenants plus the files the load serves no
+    tenant from. Same arguments and exceptions."""
     extra = ["--at", at] if at is not None else []
-    tenants, returncode, stderr = _run_da_guard(
-        SUBCOMMAND, extra, conf_d, binary, timeout, ServedValuesError, schema=None)
+    (tenants, skipped), returncode, stderr = _run_da_guard(
+        SUBCOMMAND, extra, conf_d, binary, timeout, ServedValuesError, schema=None,
+        read=lambda doc: (doc["tenants"],
+                          [SkippedFile(str(e["file"]), str(e["reason"])) for e in doc["skipped"]]),
+        reads_unreadable=True)
 
     out: dict[str, TenantValues] = {}
     for tenant_id, tv in tenants.items():
@@ -254,7 +379,77 @@ def load_served_values(
                 returncode, stderr) from e
         out[tenant_id] = TenantValues(tenant_id, values, severities, dict(tv["unserved"]),
                                      {k: list(v) for k, v in tv["dropped"].items()})
-    return out
+    return ServedTree(out, skipped, _nonempty_lines(stderr))
+
+
+def print_load_warnings(tree: ServedTree, stream: TextIO | None = None) -> None:
+    """Every non-empty line da-guard wrote to stderr, each behind
+    `DA_GUARD_PREFIX`, then one `WARN: <file>: <reason>` line per file the
+    load serves no tenant from, in the load's order (#2115 R3). Every line is
+    escaped for the terminal (`safe_label`): the file names in it come from
+    the tree."""
+    stream = sys.stderr if stream is None else stream
+    for line in tree.stderr_lines:
+        print(f"{DA_GUARD_PREFIX}{safe_label(line)}", file=stream)
+    for s in tree.skipped:
+        print(f"WARN: {safe_label(s.file)}: {s.reason}", file=stream)
+
+
+_F = TypeVar("_F", bound=Callable[..., Any])
+
+
+def exit_on_served_values_error(fn: _F) -> _F:
+    """Decorate a CLI `main` so that da-guard missing or failing exits 2
+    (`EXIT_CALLER_ERROR`) with one `ERROR:` line; da-guard's stderr follows,
+    every non-empty line escaped and behind `DA_GUARD_PREFIX`.
+
+    `ParseFailedError` gets the line `exit_on_yaml_file_error` prints
+    (`ERROR: cannot read <path>: <message>`) with da-guard's stderr below it:
+    that decorator prints `str()` only, which is one line by contract, so the
+    exporter's reasons would be lost there. Any other `YamlFileError` is left
+    to that decorator (or the tool's own handler).
+
+    A missing binary gets this module's own text, not the dispatcher's: that
+    one names `da-tools guard`'s `--da-guard-binary` flag, which the tools
+    using this decorator do not have."""
+    @functools.wraps(fn)
+    def _wrapped(*args: Any, **kwargs: Any) -> Any:
+        try:
+            return fn(*args, **kwargs)
+        except DaGuardNotFoundError:
+            print(f"ERROR: {_missing_binary_message()}", file=sys.stderr)
+            sys.exit(EXIT_CALLER_ERROR)
+        except ParseFailedError as exc:
+            _print_error_with_stderr(f"cannot read {exc}", exc.stderr_lines)
+        except ServedValuesError as exc:
+            _print_error_with_stderr(exc.message, _nonempty_lines(exc.stderr))
+    return _wrapped  # type: ignore[return-value]
+
+
+def _print_error_with_stderr(head: str, stderr_lines: list[str]) -> None:
+    print(f"ERROR: {safe_label(head)}", file=sys.stderr)
+    for line in stderr_lines:
+        print(f"{DA_GUARD_PREFIX}{safe_label(line)}", file=sys.stderr)
+    sys.exit(EXIT_CALLER_ERROR)
+
+
+def _missing_binary_message() -> str:
+    """`MISSING_BINARY_MESSAGE`, or — when `$DA_GUARD_BINARY` is set but names
+    no file, which stops the resolution there — that path and that fact."""
+    env_var = guard_dispatch.DISPATCHER.env_var
+    set_to = os.environ.get(env_var, "").strip()  # as the dispatcher reads it
+    if set_to and not os.path.isfile(set_to):
+        return (f"da-guard binary not found: ${env_var} is set to '{safe_label(set_to)}', "
+                f"and no file exists at that path. Point it at the da-guard binary, or unset "
+                f"it to use da-guard on $PATH (the da-tools image ships it as "
+                f"/usr/local/bin/da-guard).")
+    return MISSING_BINARY_MESSAGE
+
+
+MISSING_BINARY_MESSAGE = (
+    "da-guard binary not found: this tool reads the values through "
+    "`da-guard served-values`. Set $DA_GUARD_BINARY to its path, or put "
+    "da-guard on $PATH (the da-tools image ships it as /usr/local/bin/da-guard).")
 
 
 def load_effective(
@@ -266,7 +461,8 @@ def load_effective(
     `conf_d`, as tenant-api's /effective resolves it. See the module docstring
     for the contract and the exceptions."""
     tenants, returncode, stderr = _run_da_guard(
-        EFFECTIVE_SUBCOMMAND, [], conf_d, binary, timeout, EffectiveError, schema=EFFECTIVE_SCHEMA)
+        EFFECTIVE_SUBCOMMAND, [], conf_d, binary, timeout, EffectiveError, schema=EFFECTIVE_SCHEMA,
+        read=lambda doc: doc["tenants"])
     out: dict[str, TenantEffective] = {}
     try:
         for tenant_id, t in tenants.items():

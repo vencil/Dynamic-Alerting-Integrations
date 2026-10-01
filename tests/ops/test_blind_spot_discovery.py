@@ -98,48 +98,75 @@ class TestExtractDbInstances:
 
 # ── 3. Load Monitored DB Types ──────────────────────────────────────
 
+@pytest.mark.usefixtures("da_guard_env")
 class TestLoadMonitoredDbTypes:
-    """Test load_monitored_db_types()。"""
+    """Test load_monitored_db_types()。
 
-    def test_basic_loading_flat(self):
-        """平坦格式 (legacy): {metric: value}。"""
+    #2115：已監控＝exporter 的 /metrics 對該租戶實際發出的閾值（da-guard
+    served-values），不是租戶檔字面上寫了哪些 key。以下各支在該裁決下改寫：
+    閾值要有 `defaults:` 才會發出；平面格式檔不是租戶（具名 WARN）。
+    """
+
+    @staticmethod
+    def _write(d, files):
+        for rel, body in files.items():
+            p = os.path.join(d, rel)
+            os.makedirs(os.path.dirname(p), exist_ok=True)
+            with open(p, "w", encoding="utf-8") as f:
+                f.write(body)
+
+    _DEFAULTS = "defaults:\n  mysql_connections: 80\n  redis_memory: 1024\n"
+
+    def test_flat_file_is_not_a_tenant_and_is_named(self, capsys):
+        """平面格式（無 `tenants:` 包裝）：exporter 不當租戶，不算已監控，並具名 WARN（R3）。
+        改寫前：被當成租戶 `db-a`、算 mariadb＋redis 已監控。"""
         with tempfile.TemporaryDirectory() as d:
-            with open(os.path.join(d, "db-a.yaml"), "w", encoding="utf-8") as f:
-                yaml.dump({"mysql_connections": 50, "redis_memory": 1024}, f)
+            self._write(d, {"_defaults.yaml": self._DEFAULTS,
+                            "db-a.yaml": "mysql_connections: 50\nredis_memory: 1024\n"})
             result = bsd.load_monitored_db_types(d)
-            assert "mariadb" in result
-            assert "redis" in result
-            assert "db-a" in result["mariadb"]
+            assert result == {}
+            err = capsys.readouterr().err
+            assert "WARN: db-a.yaml: declares no tenant" in err
 
     def test_basic_loading_wrapped(self):
         """包裝格式 (actual conf.d/): {tenants: {name: {metric: value}}}。"""
         with tempfile.TemporaryDirectory() as d:
-            with open(os.path.join(d, "db-a.yaml"), "w", encoding="utf-8") as f:
-                yaml.dump({"tenants": {"db-a": {
-                    "mysql_connections": "70",
-                    "_routing": {"receiver": {"type": "webhook"}},
-                }}}, f)
+            self._write(d, {"_defaults.yaml": self._DEFAULTS,
+                            "db-a.yaml": yaml.dump({"tenants": {"db-a": {
+                                "mysql_connections": "70",
+                                "_routing": {"receiver": {"type": "webhook",
+                                                          "url": "https://example.com/h"}},
+                            }}})})
             result = bsd.load_monitored_db_types(d)
             assert "mariadb" in result
             assert "db-a" in result["mariadb"]
 
     def test_skips_reserved_keys(self):
-        """跳過保留鍵。"""
+        """保留鍵不算閾值：只有 mariadb／redis（defaults 的兩把），沒有 _routing 之類。"""
         with tempfile.TemporaryDirectory() as d:
-            with open(os.path.join(d, "db-a.yaml"), "w", encoding="utf-8") as f:
-                yaml.dump({"_routing": {}, "_severity_dedup": "enable",
-                           "mysql_connections": 50}, f)
+            self._write(d, {"_defaults.yaml": self._DEFAULTS,
+                            "db-a.yaml": "tenants:\n  db-a:\n    _severity_dedup: enable\n"
+                                         "    mysql_connections: 50\n"})
             result = bsd.load_monitored_db_types(d)
-            assert "mariadb" in result
-            assert len(result) == 1  # only mariadb, not _routing
+            assert set(result) == {"mariadb", "redis"}
 
     def test_skips_defaults_file(self):
-        """跳過 _defaults.yaml。"""
+        """`_defaults.yaml` 本身不是租戶：沒有租戶檔 → 沒有已監控。"""
         with tempfile.TemporaryDirectory() as d:
-            with open(os.path.join(d, "_defaults.yaml"), "w", encoding="utf-8") as f:
-                yaml.dump({"mysql_connections": 99}, f)
+            self._write(d, {"_defaults.yaml": "defaults:\n  mysql_connections: 99\n"})
             result = bsd.load_monitored_db_types(d)
             assert result == {}
+
+    def test_disabled_or_unserved_key_is_not_monitored(self):
+        """#2115 行為變更：`disable` 的鍵、沒有預設值（/metrics 不發）的鍵都不算已監控。
+        改寫前兩者都因為租戶檔寫了 key 而算已監控（db-a 算 redis、db-b 算 mariadb）。"""
+        with tempfile.TemporaryDirectory() as d:
+            self._write(d, {"_defaults.yaml": "defaults:\n  redis_memory: 1024\n",
+                            "db-a.yaml": "tenants:\n  db-a:\n    redis_memory: disable\n",
+                            "db-b.yaml": "tenants:\n  db-b:\n    mysql_slow_queries: 5\n"})
+            result = bsd.load_monitored_db_types(d)
+            # db-b 只有 defaults 的 redis_memory；db-a 關掉了它。
+            assert result == {"redis": {"db-b"}}
 
     def test_missing_dir(self):
         """缺失目錄返回空字典。"""
@@ -347,6 +374,7 @@ class TestRenderReportAdvanced:
 
 # ── 9. main() 整合測試 ───────────────────────────────────────────
 
+@pytest.mark.usefixtures("da_guard_env")
 class TestMainIntegration:
     """main() CLI 整合測試。"""
 

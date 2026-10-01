@@ -37,9 +37,13 @@ from _lib_io import load_yaml_file_strict_exporter_keys  # noqa: E402  (#2231)
 from _lib_python import (  # noqa: E402
     exit_on_yaml_file_error,
     format_json_report,
-    load_tenant_configs as _load_tenant_configs_dir,
     load_yaml_file,
     write_json_or_die,
+)
+from _lib_tenant_values import (  # noqa: E402  (#2115)
+    exit_on_served_values_error,
+    load_served_tree,
+    print_load_warnings,
 )
 from _lib_exitcodes import EXIT_CALLER_ERROR  # noqa: E402
 
@@ -67,19 +71,20 @@ RULE_PACK_PREFIXES = {
 def load_tenant_configs(config_dir=None, tenant_config=None):
     """Load tenant configs from directory or single file.
 
-    Both official conf.d formats are scanned (da-tools ROI r3 W2 bug fix):
-    the ``tenants:`` wrapper format and the flat single-tenant format.
-    The pre-fix local loader only globbed ``*.yaml`` (missing ``.yml``)
-    and never unwrapped ``tenants:`` — wrapper-format tenants were
-    silently invisible to gap analysis (`extract_custom_metrics` iterates
-    top-level keys, and ``tenants`` is not a ``custom_`` key).
-
-    - Directory branch: delegates to the shared
-      ``_lib_io.load_tenant_configs`` (wrapper + flat, ``.yaml`` + ``.yml``,
-      skips ``_``/``.`` reserved files).
-    - Single-file branch: keeps its signature; now also unwraps the
+    - Directory branch (#2115): the threshold keys the exporter's /metrics
+      serves per tenant, with the served value (``da-guard served-values``).
+      A value inherited from ``defaults:``, a platform ``tenants:`` block or
+      a subtree counts, and a nested tenant is seen; a key switched off
+      (``disable``) or with no row on /metrics (e.g. no default for it) does
+      not. A file the load serves no tenant from (no ``tenants:`` mapping)
+      is named on stderr, not read as a tenant; whatever da-guard prints on
+      stderr is passed on line by line, each behind ``DA_GUARD_PREFIX``.
+      da-guard missing or failing, or a file the load cannot decode, raises
+      (the CLI exits 2).
+    - Single-file branch: unchanged — the file as written. It unwraps the
       ``tenants:`` wrapper, and derives the flat-format tenant name via
-      ``splitext`` (so ``x.yml`` → ``x``, matching the lib's stem rule).
+      ``splitext`` (so ``x.yml`` → ``x``). It is not switched (owner, #2115):
+      one file is not a tree /metrics serves.
 
     Returns dict: {tenant_name: {metric_key: value, ...}}
     """
@@ -101,7 +106,10 @@ def load_tenant_configs(config_dir=None, tenant_config=None):
             # (_lib_io skips non-dict); extract_custom_metrics needs .items().
             configs[name] = data if isinstance(data, dict) else {}
     elif config_dir:
-        configs = _load_tenant_configs_dir(config_dir)
+        tree = load_served_tree(config_dir)
+        print_load_warnings(tree)
+        configs = {t: {k: served.values[k] for k in served.severities}
+                   for t, served in tree.tenants.items()}
 
     return configs
 
@@ -305,6 +313,7 @@ def print_report(results):
 
 
 @exit_on_yaml_file_error  # #1654: unreadable tenant/dictionary file → rc 2, named
+@exit_on_served_values_error  # #2115: da-guard missing or failing → rc 2, named
 def main():
     """CLI entry point: Rule Pack gap analysis for custom rules."""
     parser = argparse.ArgumentParser(
