@@ -15,11 +15,16 @@ Pinned contracts
 6. **End-to-end** — running main() with --dry-run reports correct
    actions; without dry-run actually writes; generated test file
    is also valid Python.
+7. **Generated ast lint fails closed** (#2609) — decodes like the
+   interpreter (BOM, PEP 263 cookie), reports true line numbers, and an
+   unreadable / unparseable file exits 2 instead of passing as clean; an
+   unreadable file exits 2 for every kind.
 """
 from __future__ import annotations
 
 import importlib.util
 import os
+import subprocess
 import sys
 from pathlib import Path
 
@@ -469,3 +474,182 @@ class TestMainE2E:
                 "--kind", "javascript",
                 "--description", "Test",
             ])
+
+
+# ---------------------------------------------------------------------------
+# Generated ast lint fails closed and reads source like the interpreter (#2609)
+# ---------------------------------------------------------------------------
+_REPO_ROOT = Path(__file__).resolve().parents[2]
+_REAL_LINT_DIR = _REPO_ROOT / "scripts" / "tools" / "lint"
+_REAL_TOOLS_DIR = _REPO_ROOT / "scripts" / "tools"
+
+# Swapped in for the template's stub loop body: flag any bare ``eval(...)``.
+_STUB_BODY = "        del node  # placeholder\n"
+_EVAL_RULE = (
+    "        if not (isinstance(node, ast.Call)\n"
+    "                and isinstance(node.func, ast.Name)\n"
+    "                and node.func.id == \"eval\"):\n"
+    "            continue\n"
+    "        if _line_has_ignore(source_lines, node.lineno):\n"
+    "            continue\n"
+    "        findings.append(EvalProbeFinding(\n"
+    "            path=path,\n"
+    "            line=node.lineno,\n"
+    "            col=node.col_offset + 1,\n"
+    "            snippet=source_lines[node.lineno - 1].strip(),\n"
+    "        ))\n"
+)
+
+
+@pytest.fixture
+def eval_lint(tmp_path, monkeypatch):
+    """Scaffold an ast lint into a fake root and give it a real rule.
+
+    The generated file imports ``_lint_helpers`` / ``_lib_exitcodes`` from
+    its own directory and its parent; in the fake root those are absent,
+    so the real directories go on ``PYTHONPATH`` (CLI) and ``sys.path``.
+    """
+    fake_root = tmp_path / "fake"
+    fake_lint = fake_root / "scripts" / "tools" / "lint"
+    fake_test = fake_root / "tests" / "lint"
+    fake_lint.mkdir(parents=True)
+    fake_test.mkdir(parents=True)
+    monkeypatch.setattr(sl, "PROJECT_ROOT", fake_root)
+    monkeypatch.setattr(sl, "LINT_DIR", fake_lint)
+    monkeypatch.setattr(sl, "TESTS_DIR", fake_test)
+    monkeypatch.setattr(sl, "PRECOMMIT_CONFIG", fake_root / ".pre-commit-config.yaml")
+    rc = sl.main([
+        "--name", "eval_probe",
+        "--kind", "ast",
+        "--description", "Flag eval calls",
+        "--no-hook",
+    ])
+    assert rc == 0
+    script = fake_lint / "check_eval_probe.py"
+    source = script.read_text(encoding="utf-8")
+    assert source.count(_STUB_BODY) == 1, "template stub moved; update _STUB_BODY"
+    script.write_text(
+        source.replace(_STUB_BODY, _EVAL_RULE), encoding="utf-8", newline="\n",
+    )
+    return script
+
+
+def _run_cli(script: Path, *args: str) -> subprocess.CompletedProcess:
+    env = dict(os.environ)
+    env["PYTHONPATH"] = os.pathsep.join(
+        [str(_REAL_LINT_DIR), str(_REAL_TOOLS_DIR), env.get("PYTHONPATH", "")]
+    )
+    return subprocess.run(
+        [sys.executable, str(script), *args],
+        capture_output=True,
+        text=True,
+        encoding="utf-8",
+        env=env,
+        timeout=60,
+    )
+
+
+def _load(script: Path, monkeypatch):
+    monkeypatch.syspath_prepend(str(_REAL_TOOLS_DIR))
+    monkeypatch.syspath_prepend(str(_REAL_LINT_DIR))
+    spec = importlib.util.spec_from_file_location("check_eval_probe", script)
+    module = importlib.util.module_from_spec(spec)
+    monkeypatch.setitem(sys.modules, "check_eval_probe", module)
+    spec.loader.exec_module(module)
+    return module
+
+
+class TestGeneratedAstLintFailsClosed:
+    """The scaffolded ast lint must not report an unscanned file as clean."""
+
+    @pytest.mark.timeout(60)
+    def test_bom_file_violation_is_reported_with_true_line(self, eval_lint, tmp_path):
+        target = tmp_path / "bom.py"
+        # The form feed is one line to the tokenizer but two to
+        # str.splitlines(): a splitlines()-based snippet would be off by one.
+        target.write_text(
+            "x = 1\n\x0c\ny = eval('1')\n", encoding="utf-8-sig", newline="\n",
+        )
+        assert target.read_bytes().startswith(b"\xef\xbb\xbf")
+        res = _run_cli(eval_lint, "--ci", str(target))
+        assert res.returncode == 1, res.stderr
+        assert f"{target}:3:5 y = eval('1')" in res.stderr
+
+    @pytest.mark.timeout(60)
+    def test_latin1_cookie_file_violation_is_reported(self, eval_lint, tmp_path):
+        target = tmp_path / "cookie.py"
+        # The é is byte 0xE9: invalid UTF-8, so a reader that ignores the
+        # cookie cannot even parse this identifier.
+        target.write_text(
+            "# -*- coding: latin-1 -*-\ncafé = eval('2')\n",
+            encoding="latin-1",
+            newline="\n",
+        )
+        res = _run_cli(eval_lint, "--ci", str(target))
+        assert res.returncode == 1, res.stderr
+        # Column not pinned: ast col_offset counts UTF-8 bytes, so "é" is 2.
+        assert f"{target}:2:" in res.stderr
+        assert "café = eval('2')" in res.stderr
+
+    @pytest.mark.timeout(60)
+    @pytest.mark.parametrize("ci", [True, False])
+    def test_unparseable_file_exits_2_naming_it(self, eval_lint, tmp_path, ci):
+        target = tmp_path / "broken.py"
+        target.write_text("def broken(:\n    eval('3')\n", encoding="utf-8", newline="\n")
+        res = _run_cli(eval_lint, *(["--ci"] if ci else []), str(target))
+        assert res.returncode == 2, (res.stdout, res.stderr)
+        assert f"{target}: cannot parse as Python" in res.stderr
+
+    @pytest.mark.timeout(60)
+    def test_unreadable_file_exits_2_naming_it(self, eval_lint, tmp_path):
+        target = tmp_path / "dangling.py"
+        target.symlink_to(tmp_path / "does-not-exist.py")
+        res = _run_cli(eval_lint, "--ci", str(target))
+        assert res.returncode == 2, (res.stdout, res.stderr)
+        assert f"{target}: cannot read" in res.stderr
+
+    @pytest.mark.timeout(60)
+    def test_unscanned_file_does_not_hide_others(self, eval_lint, tmp_path, monkeypatch, capsys):
+        good = tmp_path / "dirty.py"
+        good.write_text("z = eval('4')\n", encoding="utf-8", newline="\n")
+        bad = tmp_path / "broken.py"
+        bad.write_text("def broken(:\n", encoding="utf-8", newline="\n")
+        lint = _load(eval_lint, monkeypatch)
+        rc = lint.main(["--ci", str(good), str(bad)])
+        err = capsys.readouterr().err
+        assert rc == 2
+        assert f"{good}:1:5" in err
+        assert str(bad) in err
+
+    @pytest.mark.timeout(60)
+    def test_scan_source_raises_instead_of_returning_empty(self, eval_lint, monkeypatch):
+        lint = _load(eval_lint, monkeypatch)
+        with pytest.raises(lint.PythonSourceError, match="cannot parse"):
+            lint.scan_source(Path("x.py"), "def broken(:\n")
+        hits = lint.scan_source(Path("x.py"), b"\xef\xbb\xbfq = eval('5')\n")
+        assert [(f.line, f.snippet) for f in hits] == [(1, "q = eval('5')")]
+
+
+class TestGeneratedTextKindsFailClosed:
+    """Non-ast kinds share ``main``: an unreadable file exits 2 for them too."""
+
+    @pytest.mark.timeout(60)
+    @pytest.mark.parametrize("kind", [k for k in sl.VALID_KINDS if k != "ast"])
+    def test_unreadable_file_exits_2(self, kind, tmp_path, monkeypatch, capsys):
+        script = tmp_path / f"check_probe_{kind}.py"
+        script.write_text(
+            sl.render_script(sl.derive_paths("probe", kind), "probe"),
+            encoding="utf-8",
+            newline="\n",
+        )
+        monkeypatch.syspath_prepend(str(_REAL_TOOLS_DIR))
+        monkeypatch.syspath_prepend(str(_REAL_LINT_DIR))
+        spec = importlib.util.spec_from_file_location(f"check_probe_{kind}", script)
+        module = importlib.util.module_from_spec(spec)
+        monkeypatch.setitem(sys.modules, f"check_probe_{kind}", module)
+        spec.loader.exec_module(module)
+        target = tmp_path / "dangling.md"
+        target.symlink_to(tmp_path / "nowhere.md")
+        rc = module.main([str(target)])
+        assert rc == 2
+        assert f"{target}: cannot read" in capsys.readouterr().err

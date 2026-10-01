@@ -13,7 +13,11 @@ v2.8.0 shipped 4 lint scripts in one cycle (PR #154 / #162 / #166 /
   3. ``Finding`` dataclass with ``path/line/col/snippet`` fields and
      ``render()`` method that handles paths-outside-PROJECT_ROOT
      (PR #166 amend caught this as a real bug)
-  4. ``scan_source(path, source) -> list[Finding]`` pure scanner
+  4. ``scan_source(path, source) -> list[Finding]`` pure scanner, plus
+     ``scan_file(path)`` — the per-file entry ``main`` calls. A file it
+     cannot read (or, for the ``ast`` kind, decode / parse via
+     ``_lint_helpers.parse_python_file``) is reported on stderr and the
+     run exits 2 in every mode; it is never skipped as clean (#2609)
   5. ``_iter_target_files()`` / ``_resolve_paths()`` for file discovery
   6. ``main(argv)`` argparse + scan + print + exit
   7. Per-line ignore comment with **3-line lookback** (consistent
@@ -216,10 +220,19 @@ from __future__ import annotations
 
 import argparse
 {kind_imports}
+import os
 import sys
 from dataclasses import dataclass
 from pathlib import Path
 
+# Shared helpers: ``_lint_helpers`` sits next to this file, ``_lib_exitcodes``
+# one level up. Put both on sys.path so the lint runs the same as a script, as
+# a pre-commit hook and when its test imports it.
+_THIS_DIR = os.path.dirname(os.path.abspath(__file__))
+sys.path.insert(0, _THIS_DIR)
+sys.path.insert(0, os.path.join(_THIS_DIR, ".."))
+from _lib_exitcodes import EXIT_OK, EXIT_VIOLATION, EXIT_CALLER_ERROR  # noqa: E402
+{helper_imports}
 PROJECT_ROOT = Path(__file__).resolve().parents[3]
 
 # Per-line ignore marker — append to the line containing the call OR
@@ -265,19 +278,51 @@ def _line_has_ignore(source_lines: list[str], line_no: int) -> bool:
 
 '''
 
-_AST_SCAN = '''def scan_source(path: Path, source: str) -> list[{finding_class}]:
-    """Walk a Python source string and return all findings.
+_AST_SCAN = '''def scan_source(path: Path, source: str | bytes) -> list[{finding_class}]:
+    """Parse a Python source and return all findings.
 
-    Robust to syntax errors (returns empty list rather than crashing —
-    the lint should not block commits because some other file has a
-    parse error; that's caught by other lints).
+    *source* as ``bytes`` is decoded the way the interpreter decodes a file
+    (UTF-8 BOM, PEP 263 coding cookie); as ``str`` it is parsed as given.
+    A source that does not decode or parse raises ``PythonSourceError``
+    naming *path* and the cause — never an empty list, which would read as
+    "no findings" for a file that was never walked (#2601 / #2609).
     """
     try:
+        if isinstance(source, bytes):
+            source = decode_python_source(source)
+        else:
+            source = source.replace("\\r\\n", "\\n").replace("\\r", "\\n")
         tree = ast.parse(source, filename=str(path))
-    except SyntaxError:
-        return []
+    except (SyntaxError, UnicodeDecodeError, ValueError) as exc:
+        raise PythonSourceError(
+            f"{{path}}: cannot parse as Python: {{type(exc).__name__}}: {{exc}}"
+        ) from exc
+    return scan_tree(path, tree, source.split("\\n"))
 
-    source_lines = source.splitlines()
+
+def scan_file(path: Path) -> list[{finding_class}]:
+    """Read *path* as the interpreter would and return all findings.
+
+    Raises ``PythonSourceError`` when the file cannot be read, decoded or
+    parsed — never an empty list for a file that was not scanned.
+    """
+    tree, source_lines = parse_python_file(path)
+    return scan_tree(path, tree, source_lines)
+
+
+def scan_tree(
+    path: Path,
+    tree: ast.AST,
+    source_lines: list[str],
+) -> list[{finding_class}]:
+    """Walk a parsed module and return all findings.
+
+    ``source_lines[lineno - 1]`` must be the line an AST ``lineno`` names:
+    split on ``\\\\n`` after newline normalisation, as ``parse_python_file``
+    returns it. ⛔ Not ``str.splitlines()`` — it also breaks on form feeds,
+    ``\\\\x1c`` and U+2028, which the tokenizer does not, so every later line
+    number (and the ignore lookback) would shift.
+    """
     findings: list[{finding_class}] = []
 
     for node in ast.walk(tree):
@@ -301,6 +346,27 @@ _AST_SCAN = '''def scan_source(path: Path, source: str) -> list[{finding_class}]
         del node  # placeholder
 
     return findings
+
+'''
+
+# Non-AST kinds read the file as text. Reading can still fail (dangling
+# symlink, permission, a directory passed as a path); that is reported, not
+# skipped — a file that was not read must not count as clean (#2609).
+_TEXT_SCAN_FILE = '''class UnreadableFileError(Exception):
+    """A target file this lint could not read. Reported, never skipped."""
+
+
+def scan_file(path: Path) -> list[{finding_class}]:
+    """Read *path* and return all findings.
+
+    Raises ``UnreadableFileError`` naming *path* when it cannot be read —
+    never an empty list for a file that was not scanned.
+    """
+    try:
+        source = path.read_text(encoding="utf-8", errors="replace")
+    except OSError as exc:
+        raise UnreadableFileError(f"{{path}}: cannot read: {{exc}}") from exc
+    return scan_source(path, source)
 
 '''
 
@@ -502,10 +568,14 @@ _SHARED_FOOTER = '''def _resolve_target_paths(args: argparse.Namespace) -> list[
     return []
 
 
-def _compute_exit_code(*, ci: bool, n_findings: int) -> int:
+def _compute_exit_code(*, ci: bool, n_findings: int, n_unscanned: int = 0) -> int:
     """Pure helper for severity routing.
 
-    Severity matrix:
+    A file that could not be read or parsed (``n_unscanned``) exits 2 in
+    every mode, before the matrix below: it was not scanned, so the run
+    cannot call it clean (#2609).
+
+    Severity matrix (all files scanned):
 
     | --ci  | n_findings | exit |
     |-------|------------|------|
@@ -517,9 +587,11 @@ def _compute_exit_code(*, ci: bool, n_findings: int) -> int:
     helper with additional bool parameters. See PR #166's
     ``check_subprocess_timeout.py`` for the granular shape.
     """
+    if n_unscanned:
+        return EXIT_CALLER_ERROR
     if not ci:
-        return 0
-    return 1 if n_findings > 0 else 0
+        return EXIT_OK
+    return EXIT_VIOLATION if n_findings > 0 else EXIT_OK
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -545,18 +617,28 @@ def main(argv: list[str] | None = None) -> int:
         return 0
 
     all_findings: list[{finding_class}] = []
+    unscanned: list[str] = []
     for path in paths:
         try:
-            source = path.read_text(encoding="utf-8", errors="replace")
-        except OSError as exc:
-            print(f"⚠ cannot read {{path}}: {{exc}}", file=sys.stderr)
-            continue
-        all_findings.extend(scan_source(path, source))
+            all_findings.extend(scan_file(path))
+        except {scan_error} as exc:
+            unscanned.append(str(exc))
+
+    for err in unscanned:
+        print(f"ERROR: {{err}}", file=sys.stderr)
+    if unscanned:
+        print(
+            f"ERROR: {{len(unscanned)}} file(s) could not be scanned, so this "
+            "run cannot vouch for them. Fix or remove the file, then re-run.",
+            file=sys.stderr,
+        )
 
     if not all_findings:
-        if args.ci:
+        if args.ci and not unscanned:
             print(f"✓ no findings across {{len(paths)}} file(s)")
-        return 0
+        return _compute_exit_code(
+            ci=args.ci, n_findings=0, n_unscanned=len(unscanned),
+        )
 
     print(
         f"✗ {{len(all_findings)}} finding(s) in "
@@ -566,7 +648,11 @@ def main(argv: list[str] | None = None) -> int:
     for f in all_findings:
         print(f"  {{f.render()}}", file=sys.stderr)
 
-    return _compute_exit_code(ci=args.ci, n_findings=len(all_findings))
+    return _compute_exit_code(
+        ci=args.ci,
+        n_findings=len(all_findings),
+        n_unscanned=len(unscanned),
+    )
 
 
 if __name__ == "__main__":
@@ -580,6 +666,23 @@ _KIND_IMPORTS = {
     "yaml": "import yaml",
     "meta": "import re\nimport yaml",
     "freshness": "import yaml",
+}
+
+# ``scan_file`` — the per-file entry ``main`` calls — and the exception it
+# raises for a file it could not scan. AST kinds parse via ``_lint_helpers``
+# (interpreter decoding, #2601); text kinds read UTF-8 text.
+_KIND_HELPER_IMPORTS = {
+    "ast": (
+        "from _lint_helpers import (  # noqa: E402\n"
+        "    PythonSourceError,\n"
+        "    decode_python_source,\n"
+        "    parse_python_file,\n"
+        ")\n"
+    ),
+}
+
+_KIND_SCAN_ERROR = {
+    "ast": "PythonSourceError",
 }
 
 _KIND_SCAN = {
@@ -608,11 +711,15 @@ def render_script(paths: ScaffoldPaths, description: str) -> str:
         ignore_marker_inner=paths.ignore_marker.replace("\"", "\\\""),
         finding_class=finding_class,
         kind_imports=_KIND_IMPORTS[paths.kind],
+        helper_imports=_KIND_HELPER_IMPORTS.get(paths.kind, ""),
     )
     scan = _KIND_SCAN[paths.kind].format(finding_class=finding_class)
+    if paths.kind != "ast":
+        scan += "\n" + _TEXT_SCAN_FILE.format(finding_class=finding_class)
     footer = _SHARED_FOOTER.format(
         description=description,
         finding_class=finding_class,
+        scan_error=_KIND_SCAN_ERROR.get(paths.kind, "UnreadableFileError"),
     )
     return header + scan + footer
 
@@ -632,7 +739,8 @@ Pinned contracts
    - !ci, * → exit 0
    - ci, 0 findings → exit 0
    - ci, >0 findings → exit 1
-4. **Robustness**: TODO syntax-error / weird-input survival.
+4. **Fail closed**: a file the lint cannot read (or parse) exits 2 in
+   every mode — it is reported, never counted as clean.
 5. **Live dogfood** (`TestLiveRepo`): scans the actual repo and
    confirms zero findings before merge — gates broken state from
    landing if --ci is fatal.
@@ -710,6 +818,11 @@ class TestComputeExitCode:
     def test_ci_with_findings_exit_1(self, n):
         assert lint._compute_exit_code(ci=True, n_findings=n) == 1
 
+    @pytest.mark.parametrize("ci", [False, True])
+    @pytest.mark.parametrize("n", [0, 3])
+    def test_unscanned_files_exit_2_in_every_mode(self, ci, n):
+        assert lint._compute_exit_code(ci=ci, n_findings=n, n_unscanned=1) == 2
+
 
 # ---------------------------------------------------------------------------
 # main() integration — argparse + exit code wiring
@@ -719,9 +832,18 @@ class TestMain:
     def test_main_clean_exit_0(self, tmp_path, capsys, monkeypatch):
         # TODO: write a clean fixture file and assert main() returns 0.
         clean = tmp_path / "clean.txt"
-        clean.write_text("# placeholder clean file\\n", encoding="utf-8")
+        clean.write_text(
+            "# placeholder clean file\\n", encoding="utf-8", newline="\\n",
+        )
         rc = lint.main(["--ci", str(clean)])
         assert rc == 0
+
+    @pytest.mark.timeout(15)
+    def test_main_unreadable_file_exit_2(self, tmp_path, capsys):
+        missing = tmp_path / "missing.txt"
+        rc = lint.main([str(missing)])
+        assert rc == 2
+        assert str(missing) in capsys.readouterr().err
 
     @pytest.mark.timeout(15)
     def test_main_dirty_under_ci_exit_1(self, tmp_path, capsys, monkeypatch):
@@ -748,11 +870,9 @@ class TestLiveRepo:
             pytest.skip("No targets resolved; fill TODO before merge")
         all_findings = []
         for path in candidates:
-            try:
-                source = path.read_text(encoding="utf-8", errors="replace")
-            except OSError:
-                continue
-            all_findings.extend(lint.scan_source(path, source))
+            # scan_file raises on a file it cannot read / parse — let it:
+            # an unscanned file must fail this gate, not pass it.
+            all_findings.extend(lint.scan_file(path))
 
         assert all_findings == [], (
             f"Live repo has {{len(all_findings)}} finding(s):\\n"
