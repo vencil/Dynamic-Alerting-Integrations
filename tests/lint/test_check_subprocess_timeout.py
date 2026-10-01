@@ -612,6 +612,23 @@ class TestUnscannableFileFailsTheRun:
         assert rc == 2
         assert "broken.py" in err and "SyntaxError" in err
 
+    @pytest.mark.timeout(30)
+    def test_unreadable_file_exits_2_and_names_the_file(self, tmp_path, capsys, cli_argv):
+        """A ``.py`` the scan walks but cannot read fails the run.
+
+        It used to print a warning and ``continue`` — exit 0, contradicting this
+        tool's own "2 — unreadable source" (#2601). A dangling symlink is the
+        portable way to get an entry ``rglob`` yields but ``read_bytes`` rejects.
+        """
+        (tmp_path / "gone.py").symlink_to(tmp_path / "does-not-exist.py")
+        (tmp_path / "clean.py").write_text("x = 1\n", encoding="utf-8", newline="\n")
+        cli_argv("check_subprocess_timeout.py", "--ci", "--strict-subprocess-timeout",
+                 str(tmp_path))
+        rc = cst.main()
+        err = capsys.readouterr().err
+        assert rc == 2
+        assert "gone.py" in err and "cannot read" in err
+
     @pytest.mark.timeout(60)
     def test_cli_bom_violation_and_unparseable_file(self, tmp_path):
         """The real CLI, as the pre-commit hook runs it."""
