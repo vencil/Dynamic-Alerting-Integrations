@@ -230,6 +230,12 @@ func TestUnreadable_EffectiveAndGuardMatchServedValues(t *testing.T) {
 			if !strings.Contains(gstderr, "da-guard: 1 path(s) cannot be read: "+s.want[0].File) {
 				t.Errorf("guard stderr does not name the path: %q", gstderr)
 			}
+			// The cap line must not claim the root defaults file is missing
+			// when it is there but unreadable.
+			if s.want[0].File == "_defaults.yaml" &&
+				!strings.Contains(gstderr, "built-in default (root _defaults.yaml absent or unreadable)") {
+				t.Errorf("guard cap line does not cover an unreadable root defaults file: %q", gstderr)
+			}
 		})
 	}
 }
@@ -241,6 +247,7 @@ func TestUnreadable_GuardScope_EmptyScopeIsNotSafe(t *testing.T) {
 	for _, s := range []struct {
 		name    string
 		nonRoot bool
+		scope   string // root-relative; "" = sub
 		breakIt func(t *testing.T, dir string)
 		want    []skippedFile
 	}{
@@ -263,6 +270,26 @@ func TestUnreadable_GuardScope_EmptyScopeIsNotSafe(t *testing.T) {
 			},
 			want: []skippedFile{{"sub", config.UnreadableWalkError}},
 		},
+		{
+			// A directory ABOVE the scope that cannot be listed but can be
+			// searched (0311): the scope itself still stats, and every
+			// tenant under it is lost — the directory rule's "contains the
+			// scope" branch.
+			name:    "directory containing the scope 0311",
+			nonRoot: true,
+			scope:   "team/sub2",
+			breakIt: func(t *testing.T, dir string) {
+				if err := os.MkdirAll(filepath.Join(dir, "team", "sub2"), 0o755); err != nil {
+					t.Fatal(err)
+				}
+				if err := os.WriteFile(filepath.Join(dir, "team", "sub2", "t.yaml"),
+					[]byte("tenants:\n  tenant-x:\n    mysql_connections: 60\n"), 0o644); err != nil {
+					t.Fatal(err)
+				}
+				chmodT(t, filepath.Join(dir, "team"), 0o311, 0o755)
+			},
+			want: []skippedFile{{"team", config.UnreadableWalkError}},
+		},
 	} {
 		t.Run(s.name, func(t *testing.T) {
 			t.Parallel()
@@ -271,7 +298,11 @@ func TestUnreadable_GuardScope_EmptyScopeIsNotSafe(t *testing.T) {
 			}
 			dir := writeParityTree(t, unreadableBase())
 			s.breakIt(t, dir)
-			scope := filepath.Join(dir, "sub")
+			rel := s.scope
+			if rel == "" {
+				rel = "sub"
+			}
+			scope := filepath.Join(dir, filepath.FromSlash(rel))
 			code, doc, stderr := guardJSON(t, dir, "--scope", scope)
 			if code != exitParseFailed {
 				t.Fatalf("exit = %d, want %d; stderr=%q", code, exitParseFailed, stderr)
@@ -300,9 +331,31 @@ func TestUnreadable_GuardScope_EmptyScopeIsNotSafe(t *testing.T) {
 
 // Scope rule: what bears on a scoped run is ParseFailed's rule — a path at or
 // below the scope, or a `_` file in a directory above it. A tenant file
-// outside the scope does not; the root `_defaults.yaml` does.
+// outside the scope does not; the root `_defaults.yaml` does. A directory the
+// walk cannot list follows the directory rule only: a `_`-named directory
+// beside the scope does not bear on it.
 func TestUnreadable_GuardScope_FollowsTheParseFailedRule(t *testing.T) {
 	t.Parallel()
+	t.Run("unlistable _ directory beside the scope", func(t *testing.T) {
+		t.Parallel()
+		if os.Geteuid() == 0 {
+			t.Skip("running as root: chmod does not stop root")
+		}
+		files := unreadableBase()
+		files["_archive/old.yaml"] = "tenants:\n  tenant-old:\n    mysql_connections: 1\n"
+		dir := writeParityTree(t, files)
+		chmodT(t, filepath.Join(dir, "_archive"), 0, 0o755)
+		// Precondition: the whole tree does see it, so the shape is live.
+		if wcode, wdoc, _ := guardJSON(t, dir); wcode != exitParseFailed ||
+			!reflect.DeepEqual(wdoc.Unreadable, []skippedFile{{"_archive", config.UnreadableWalkError}}) {
+			t.Fatalf("precondition: whole-tree run exit %d unreadable %v", wcode, wdoc.Unreadable)
+		}
+		code, doc, stderr := guardJSON(t, dir, "--scope", filepath.Join(dir, "sub"))
+		mustOK(t, code, stderr)
+		if doc.Unreadable != nil {
+			t.Errorf("unreadable = %v, want absent", doc.Unreadable)
+		}
+	})
 	t.Run("tenant file outside the scope", func(t *testing.T) {
 		t.Parallel()
 		dir := writeParityTree(t, unreadableBase())
@@ -404,5 +457,32 @@ func TestUnreadable_DecodeStopStillNamesUnreadable(t *testing.T) {
 	_, md, _ := runOnce(t, "--config-dir", dir)
 	if !strings.Contains(md, "`tenant-c.yaml` (stat_error)") {
 		t.Errorf("md decode-stop report does not name the unreadable path:\n%s", md)
+	}
+}
+
+// A --config-dir the walk cannot list at all is not an empty tree: exit 2
+// with the reason, as served-values and effective refuse it — never the
+// vacuously-safe 0 (#2588 review F1).
+func TestUnreadable_UnlistableConfigDir_ExitsTwo(t *testing.T) {
+	t.Parallel()
+	if os.Geteuid() == 0 {
+		t.Skip("running as root: chmod does not stop root")
+	}
+	dir := writeParityTree(t, unreadableBase())
+	chmodT(t, dir, 0, 0o755)
+	for _, args := range [][]string{
+		{"--config-dir", dir},
+		{"--config-dir", dir, "--format", "json"},
+		{effectiveCmd, "--config-dir", dir},
+		{servedValuesCmd, "--config-dir", dir},
+	} {
+		code, _, stderr := runOnce(t, args...)
+		if code != exitCallerErr {
+			t.Errorf("%v: exit = %d, want %d; stderr=%q", args, code, exitCallerErr, stderr)
+		}
+	}
+	_, _, stderr := runOnce(t, "--config-dir", dir)
+	if !strings.Contains(stderr, "cannot list configDir") {
+		t.Errorf("guard stderr does not say why: %q", stderr)
 	}
 }

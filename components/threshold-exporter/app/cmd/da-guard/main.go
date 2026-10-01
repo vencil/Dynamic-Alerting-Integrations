@@ -50,8 +50,9 @@
 // file describe only part of it, so "fix the file first" is the one
 // actionable answer. 3 also replaces the vacuously-safe 0 of an
 // empty scope — a scope whose only tenant file is broken has no
-// tenants to check, and that is not "safe" — nor is a scope whose files the
-// walk cannot read (#2588).
+// tenants to check, and that is not "safe" — nor is a scope with paths the
+// walk cannot stat, read or list (3, #2588). A --config-dir the walk cannot
+// list at all is a caller error (2), as for served-values and effective.
 //
 // Warnings never affect exit code (`--warn-as-error` flips this if
 // a customer wants strict mode).
@@ -274,7 +275,7 @@ func run(args []string, stdout, errOut io.Writer) int {
 		}
 		f.cardinalityLimit = limit
 		if source == "" {
-			source = "built-in default (no root _defaults.yaml)"
+			source = "built-in default (root _defaults.yaml absent or unreadable)"
 		}
 		fmt.Fprintf(errOut, "%s: cardinality limit %d from %s (0 = no check; override with --cardinality-limit)\n",
 			programName, limit, source)
