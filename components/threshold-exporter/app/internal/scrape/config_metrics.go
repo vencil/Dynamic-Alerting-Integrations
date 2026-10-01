@@ -40,6 +40,13 @@ type ConfigMetrics struct {
 	// per process and is a different operation (cold scan, every
 	// merged_hash) from the debounced reload that histogram's p99 describes.
 	InitialLoadDuration prometheus.Gauge
+	// #2452: conf.d tree scans that failed on the watch path, by reason. A
+	// failed scan applies nothing and so never reaches
+	// da_config_reload_trigger_total; before this counter a running
+	// exporter whose tree stopped scanning (every later edit ignored, the
+	// last good config still served) had no series to alert on. reason is a
+	// closed set — see package main's ScanFailureReason* constants.
+	ScanFailures *prometheus.CounterVec
 }
 
 // NewConfigMetrics builds a fresh set without registering it.
@@ -134,6 +141,10 @@ func NewConfigMetrics() *ConfigMetrics {
 			Name: "da_config_initial_load_duration_seconds",
 			Help: "Wall-clock seconds the startup config load took (#2153). Set once, when that load succeeds. The HTTP server (and so /metrics, /health and /ready) starts only after it, so a startup probe must allow at least this long. Reloads are measured by da_config_reload_duration_seconds instead.",
 		}),
+		ScanFailures: prometheus.NewCounterVec(prometheus.CounterOpts{
+			Name: "da_config_scan_failures_total",
+			Help: "Count of conf.d tree scans that failed on the watch path (#2452): the per-tick change check and the debounced reload's scan, directory mode only. A failed scan applies nothing: the exporter keeps serving the last good config, /ready stays 200 and da_config_reload_trigger_total does not move, so while this keeps rising every later edit is ignored. reason is a closed set: duplicate_tenant (one tenant id declared in two files; both directory modes) or walk_error (the config directory cannot be walked: missing, not a directory). One increment per failed scan, i.e. about one per watch tick while the condition lasts. Alert: ConfigScanFailing (failures, and da_config_last_scan_complete_unixtime_seconds older than 5m).",
+		}, []string{"reason"}),
 	}
 }
 
@@ -155,5 +166,6 @@ func (s *ConfigMetrics) Collectors() []prometheus.Collector {
 		s.MaxTenantsPerFile,
 		s.MaxMappingKeys,
 		s.InitialLoadDuration,
+		s.ScanFailures,
 	}
 }

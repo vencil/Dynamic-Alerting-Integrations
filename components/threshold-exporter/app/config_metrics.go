@@ -15,6 +15,11 @@ package main
 //     reason ∈ {source, defaults, new, delete, forced}
 //     incremented by diffAndReload per-tenant classification.
 //
+//   da_config_scan_failures_total          (CounterVec, labels=[reason])  [#2452]
+//     reason ∈ {duplicate_tenant, walk_error} (closed; classifyScanFailure)
+//     incremented when a watch-path scan fails — the case that applies
+//     nothing and so never moves da_config_reload_trigger_total.
+//
 //   da_config_defaults_change_noop_total   (Counter)
 //     incremented when a defaults file changed but no dependent tenant's
 //     merged_hash moved (ADR-017 "quiet defaults edit"). v2.8.0 Issue #61
@@ -55,6 +60,7 @@ package main
 //     the documented escape hatch for TestMain-free packages).
 
 import (
+	"errors"
 	"log"
 	"strings"
 	"sync"
@@ -106,6 +112,44 @@ type configMetrics struct {
 	// per process and is a different operation (cold scan, every
 	// merged_hash) from the debounced reload that histogram's p99 describes.
 	initialLoadDuration prometheus.Gauge
+	// #2452: failed conf.d tree scans on the watch path, labelled by
+	// ScanFailureReason*. See IncScanFailure.
+	scanFailures *prometheus.CounterVec
+}
+
+// da_config_scan_failures_total{reason} label values (#2452). ⛔ A CLOSED
+// SET — classifyScanFailure maps every scan error onto one of these two, so
+// the counter has at most two series whatever the error text says (the
+// error names files and tenant ids; none of that reaches a label).
+//
+// The split follows the only two ways config.ScanDirTree can fail:
+//   - duplicate_tenant: the walk succeeded but one tenant id is declared in
+//     two files (*config.DuplicateTenantError, TreeScan.Conflict). Counted
+//     in BOTH directory modes, the same way: detectChange fails, every tick,
+//     and tickOnce logs `WARN: cannot check config <dir>: …` — the message
+//     is `hierarchical scan: duplicate tenant ID …` once a _defaults.yaml
+//     has been seen anywhere in the tree (the mode is sticky) and the bare
+//     `duplicate tenant ID …` in flat mode.
+//     No reload is scheduled, so -scan-debounce plays no part. The tree is
+//     frozen at the last good config. (Making the flat plane's own
+//     IncrementalLoad run that check is #1577.)
+//   - walk_error: every other error ScanDirTree returns — the root cannot
+//     be statted, is not a directory, or the walk itself errors. Per-file
+//     stat / read / parse problems are NOT scan failures: the walker logs
+//     them and drops the file (parse failures have their own counter,
+//     da_config_parse_failure_total).
+const (
+	ScanFailureReasonDuplicateTenant = "duplicate_tenant"
+	ScanFailureReasonWalkError       = "walk_error"
+)
+
+// classifyScanFailure maps a scan error onto the closed reason set above.
+func classifyScanFailure(err error) string {
+	var dup *DuplicateTenantError
+	if errors.As(err, &dup) {
+		return ScanFailureReasonDuplicateTenant
+	}
+	return ScanFailureReasonWalkError
 }
 
 // Default metric instance used by the production server. Tests that want
@@ -124,6 +168,12 @@ var (
 // Callers must MustRegister on an isolated prometheus.Registry.
 func newConfigMetrics() *configMetrics {
 	s := scrape.NewConfigMetrics()
+	// #2452: both reasons exist at 0 from the first scrape, so the first
+	// failure is an increase() Prometheus can see (a series born at 1 has
+	// no earlier sample to rise from) and a healthy exporter shows 0.
+	for _, r := range []string{ScanFailureReasonDuplicateTenant, ScanFailureReasonWalkError} {
+		s.ScanFailures.WithLabelValues(r)
+	}
 	return &configMetrics{
 		set:                         s,
 		scanDuration:                s.ScanDuration,
@@ -141,6 +191,7 @@ func newConfigMetrics() *configMetrics {
 		maxTenantsPerFile:           s.MaxTenantsPerFile,
 		maxMappingKeys:              s.MaxMappingKeys,
 		initialLoadDuration:         s.InitialLoadDuration,
+		scanFailures:                s.ScanFailures,
 	}
 }
 
@@ -247,6 +298,24 @@ func (cm *configMetrics) ObserveScanElapsed(d time.Duration) {
 // from the documented set in config_debounce.go).
 func (cm *configMetrics) IncReloadTrigger(reason string) {
 	cm.reloadTriggers.WithLabelValues(reason).Inc()
+}
+
+// IncScanFailure counts one failed conf.d tree scan on the watch path
+// (#2452), under the reason classifyScanFailure gives err. Called where the
+// watch pipeline gives up on a scan: tickOnce (detectChange failed, so no
+// reload is scheduled) and scanAndCheckHierarchical (the debounced reload's
+// own scan failed — a reload scheduled by an earlier clean tick, which the
+// failure reached before the reload ran). A tick that fails its check
+// schedules nothing, so a lasting failure moves the counter by one per
+// tick, plus one for each reload that was already pending when it
+// appeared. It never bumps da_config_reload_trigger_total: nothing was
+// reloaded.
+// Nil-receiver safe (see IncParseFailure).
+func (cm *configMetrics) IncScanFailure(err error) {
+	if cm == nil {
+		return
+	}
+	cm.scanFailures.WithLabelValues(classifyScanFailure(err)).Inc()
 }
 
 // IncReloadTriggerBy bumps the counter by N (for the batch case where

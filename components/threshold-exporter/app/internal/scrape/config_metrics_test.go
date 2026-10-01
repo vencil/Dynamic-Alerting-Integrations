@@ -63,3 +63,32 @@ func TestRegister_ConfigShapeGaugesAndAppendedBuckets(t *testing.T) {
 		}
 	}
 }
+
+// #2452: da_config_scan_failures_total is registered with the rest, as a
+// counter labelled by reason only (the label set is what bounds it).
+func TestRegister_ScanFailuresCounter(t *testing.T) {
+	reg := prometheus.NewRegistry()
+	placeholder := prometheus.NewGauge(prometheus.GaugeOpts{Name: "placeholder_collector"})
+	s := NewConfigMetrics()
+	Register(reg, placeholder, s)
+	s.ScanFailures.WithLabelValues("duplicate_tenant").Inc()
+
+	mfs, err := reg.Gather()
+	if err != nil {
+		t.Fatalf("Gather: %v", err)
+	}
+	for _, mf := range mfs {
+		if mf.GetName() != "da_config_scan_failures_total" {
+			continue
+		}
+		if mf.GetType() != dto.MetricType_COUNTER {
+			t.Fatalf("type = %v, want COUNTER", mf.GetType())
+		}
+		labels := mf.GetMetric()[0].GetLabel()
+		if len(labels) != 1 || labels[0].GetName() != "reason" {
+			t.Fatalf("labels = %v, want exactly [reason]", labels)
+		}
+		return
+	}
+	t.Fatal("da_config_scan_failures_total not gathered after Register")
+}
