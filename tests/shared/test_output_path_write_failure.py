@@ -113,6 +113,10 @@ import pytest
 import test_json_stdout_contract as _jsc  # noqa: E402  (tests/shared on sys.path)
 from _platform_fs import DIR_WRITE_ERROR
 
+# #2115: blind_spot_discovery 與 analyze_rule_pack_gaps（目錄模式）的值來自
+# `da-guard served-values`；子行程經 `$DA_GUARD_BINARY` 找到本 repo 建出的 da-guard。
+pytestmark = pytest.mark.usefixtures("da_guard_env")
+
 REPO_ROOT = Path(__file__).resolve().parents[2]
 TOOLS_DIR = REPO_ROOT / "scripts" / "tools"
 WAVEFORM_FIXTURE = REPO_ROOT / "tests" / "dx" / "fixtures" / "waveform" / "selftest_disk_used_percent.yaml"

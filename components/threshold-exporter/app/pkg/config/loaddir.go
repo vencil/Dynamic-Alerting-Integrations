@@ -53,24 +53,68 @@ func RejectDuplicateTenant(scan *TreeScan) error {
 // ⚠️ Cold means every file is read and decoded on every call. A caller serving
 // requests should cache the result.
 func LoadDir(dir string, logger *log.Logger) (cfg *ThresholdConfig, parseFailed []string, err error) {
+	cfg, rep, err := LoadDirReport(dir, logger)
+	return cfg, rep.ParseFailed, err
+}
+
+// NoTenantReason is why a file in LoadReport.NoTenant contributes no tenant.
+const NoTenantReason = "declares no tenant: a file whose name does not start with `_` " +
+	"is read only through its `tenants:` mapping, and this one has none (or an empty one)"
+
+// LoadReport is what LoadDirReport says about the files of the tree besides
+// the config it built.
+type LoadReport struct {
+	// ParseFailed is LoadDir's parseFailed.
+	ParseFailed []string
+	// NoTenant is the scan keys (root-relative slash paths, sorted) of the
+	// files whose name does not start with `_` that the walker parsed and
+	// found no tenant in (TreeFile.TenantIDs empty, not ParseFailed): a
+	// flat-format file with no `tenants:` wrapper, an empty file, or
+	// `tenants: {}`. The exporter serves no tenant from such a file and logs
+	// nothing about it (#2115 R3). nil when there is none.
+	NoTenant []string
+	// Unreadable is TreeScan.Unreadable: the config-named entries the walk
+	// dropped because their stat or read failed (a dangling symlink, a file
+	// the process may not read) and the directories below the root it could
+	// not list (everything under them is lost), each with a closed-set
+	// reason. The exporter
+	// logs a WARN for each and serves the rest of the tree without it — the
+	// load still succeeds (#2115). A symlink to a directory is not listed.
+	// nil when there is none.
+	Unreadable []UnreadableFile
+}
+
+// LoadDirReport is LoadDir, also naming the files that contribute no tenant
+// (LoadReport.NoTenant) and the files the walk could not stat or read
+// (LoadReport.Unreadable). It adds no verdict of its own: both are read off
+// the walker's own result on the same cold scan.
+func LoadDirReport(dir string, logger *log.Logger) (cfg *ThresholdConfig, rep LoadReport, err error) {
 	if logger == nil {
 		logger = discardLogger
 	}
 	scan, err := ScanDirTree(dir, nil, nil, logger)
 	if err != nil {
-		return nil, nil, err
+		return nil, LoadReport{}, err
 	}
 	if err := RejectDuplicateTenant(scan); err != nil {
-		return nil, nil, err
+		return nil, LoadReport{}, err
 	}
 	if len(scan.Files) == 0 {
-		return nil, nil, fmt.Errorf("no .yaml files found in %s", dir)
+		return nil, LoadReport{}, fmt.Errorf("no .yaml files found in %s", dir)
 	}
 	built, err := loadDirBuild(scan, dir, logger, nil)
 	if err != nil {
-		return nil, nil, err
+		return nil, LoadReport{}, err
 	}
-	return &built.Config, built.ParseFailed, nil
+	rep.ParseFailed = built.ParseFailed
+	rep.Unreadable = scan.Unreadable
+	for _, k := range scan.Keys { // sorted
+		f := scan.Files[k]
+		if !isPlatformKey(k) && !f.ParseFailed && len(f.TenantIDs) == 0 {
+			rep.NoTenant = append(rep.NoTenant, k)
+		}
+	}
+	return &built.Config, rep, nil
 }
 
 // loadDirBuild is LoadDir's build step over a scan it already has: the

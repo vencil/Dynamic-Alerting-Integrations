@@ -53,8 +53,29 @@ type servedValuesDoc struct {
 	At string `json:"at"`
 	// ParseFailed is LoadDir's parseFailed: the files the exporter's load
 	// skips because they do not decode. Always present ([] when none).
-	ParseFailed []string                      `json:"parse_failed"`
-	Tenants     map[string]servedTenantValues `json:"tenants"`
+	ParseFailed []string `json:"parse_failed"`
+	// Skipped: the files the exporter's load read but serves no tenant from
+	// (config.LoadReport.NoTenant), each with the load's reason, so a reader
+	// can name them without judging a file's format itself (#2115 R3).
+	// Always present ([] when none).
+	Skipped []skippedFile `json:"skipped"`
+	// Unreadable: the config-named files the exporter's load could not stat
+	// or read, and the directories below the root it could not list
+	// (config.LoadReport.Unreadable), each with a closed-set reason —
+	// config.UnreadableStatError, UnreadableReadError or UnreadableWalkError,
+	// never the OS error text. The exporter WARNs and serves the tree without them, so
+	// the tenants they hold are absent from Tenants; the exit code is 3, as
+	// for ParseFailed, so a caller that does not know this field fails too
+	// (#2115). A symlink to a directory is not listed. Always present ([]
+	// when none).
+	Unreadable []skippedFile                 `json:"unreadable"`
+	Tenants    map[string]servedTenantValues `json:"tenants"`
+}
+
+// skippedFile is one entry of servedValuesDoc.Skipped or .Unreadable.
+type skippedFile struct {
+	File   string `json:"file"`
+	Reason string `json:"reason"`
 }
 
 // servedTenantValues is one tenant's reading.
@@ -96,7 +117,8 @@ func parseServedValuesFlags(args []string, errOut io.Writer) (*servedValuesFlags
 		fmt.Fprintf(errOut, "\nExit codes:\n  0  ok\n  2  caller error, a tree the exporter rejects (e.g. a tenant declared twice),\n"+
 			"     any output string that is not valid UTF-8, or a Gather failure of the same\n"+
 			"     collectors production /metrics serves (e.g. two keys producing one series)\n"+
-			"  3  config files the exporter cannot decode; the JSON is still written and names them in parse_failed\n\n"+
+			"  3  config files the exporter cannot decode or cannot read; the JSON is still written and\n"+
+			"     names them in parse_failed / unreadable\n\n"+
 			"Served means served to a UTF-8-negotiated scrape (the Prometheus 3 default); a scrape with\n"+
 			"legacy or underscores escaping may see labels such as {a-b} and {a.b} collide.\n")
 	}
@@ -134,7 +156,7 @@ func runServedValues(args []string, stdout, errOut io.Writer) int {
 		}
 	}
 
-	cfg, parseFailed, err := config.LoadDir(f.configDir, log.New(errOut, "", 0))
+	cfg, rep, err := config.LoadDirReport(f.configDir, log.New(errOut, "", 0))
 	if err != nil {
 		fmt.Fprintf(errOut, "%s %s: %v\n", programName, servedValuesCmd, err)
 		return exitCallerErr
@@ -148,12 +170,23 @@ func runServedValues(args []string, stdout, errOut io.Writer) int {
 		fmt.Fprintf(errOut, "%s %s: %v\n", programName, servedValuesCmd, err)
 		return exitCallerErr
 	}
+	parseFailed := rep.ParseFailed
 	if parseFailed == nil {
 		parseFailed = []string{}
+	}
+	skipped := make([]skippedFile, 0, len(rep.NoTenant))
+	for _, name := range rep.NoTenant {
+		skipped = append(skipped, skippedFile{File: name, Reason: config.NoTenantReason})
+	}
+	unreadable := make([]skippedFile, 0, len(rep.Unreadable))
+	for _, u := range rep.Unreadable {
+		unreadable = append(unreadable, skippedFile{File: u.RelKey, Reason: u.Reason})
 	}
 	doc := servedValuesDoc{
 		At:          at.Format(time.RFC3339),
 		ParseFailed: parseFailed,
+		Skipped:     skipped,
+		Unreadable:  unreadable,
 		Tenants:     tenants,
 	}
 	if err := checkOutputUTF8("", reflect.ValueOf(doc)); err != nil {
@@ -171,6 +204,16 @@ func runServedValues(args []string, stdout, errOut io.Writer) int {
 	}
 	if len(parseFailed) > 0 {
 		reportParseFailed(errOut, parseFailed)
+	}
+	if len(unreadable) > 0 {
+		names := make([]string, 0, len(unreadable))
+		for _, u := range unreadable {
+			names = append(names, u.File+" ("+u.Reason+")")
+		}
+		fmt.Fprintf(errOut, "%s %s: %d path(s) cannot be read: %s — fix them and re-run (exit 3)\n",
+			programName, servedValuesCmd, len(names), strings.Join(names, ", "))
+	}
+	if len(parseFailed) > 0 || len(unreadable) > 0 {
 		return exitParseFailed
 	}
 	return exitOK

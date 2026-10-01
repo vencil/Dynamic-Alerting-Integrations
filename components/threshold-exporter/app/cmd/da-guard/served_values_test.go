@@ -22,7 +22,15 @@ import (
 type servedOut struct {
 	At          string   `json:"at"`
 	ParseFailed []string `json:"parse_failed"`
-	Tenants     map[string]struct {
+	Skipped     []struct {
+		File   string `json:"file"`
+		Reason string `json:"reason"`
+	} `json:"skipped"`
+	Unreadable []struct {
+		File   string `json:"file"`
+		Reason string `json:"reason"`
+	} `json:"unreadable"`
+	Tenants map[string]struct {
 		Values     map[string]any      `json:"values"`
 		Severities map[string]string   `json:"severities"`
 		Unserved   map[string]any      `json:"unserved"`
@@ -259,6 +267,225 @@ func TestServedValues_CleanTree_ParseFailedIsEmptyList(t *testing.T) {
 	// there: [] and never null or absent.
 	if !strings.Contains(stdout, `"parse_failed": []`) {
 		t.Errorf("parse_failed must be an empty list on a clean tree:\n%s", stdout)
+	}
+}
+
+// #2115 R3: a file that is not a `_` file but declares no tenant is one the
+// exporter serves nothing from, silently. `skipped` names it with the load's
+// reason so a reader can warn without judging the file's format itself.
+func TestServedValues_NoTenantFiles_AreNamedInSkipped(t *testing.T) {
+	t.Parallel()
+	code, doc, _, stderr := served(t, map[string]string{
+		"_defaults.yaml":      defaultsOnly,
+		"_platform.yaml":      "tenants:\n  tenant-a:\n    mysql_connections: 60\n",
+		"tenant-a.yaml":       "tenants:\n  tenant-a:\n    mysql_connections: 70\n",
+		"flat-t.yaml":         "mysql_connections: 5\n",
+		"empty.yaml":          "# comments only\n", // WriteTree reads "" as a directory
+		"empty-wrapper.yaml":  "tenants: {}\n",
+		"team/flat-u.yml":     "mysql_connections: 6\n",
+		"team/_defaults.yaml": defaultsOnly,
+	}, "")
+	mustOK(t, code, stderr)
+	var got []string
+	for _, s := range doc.Skipped {
+		got = append(got, s.File)
+		if s.Reason != config.NoTenantReason {
+			t.Errorf("%s: reason = %q, want %q", s.File, s.Reason, config.NoTenantReason)
+		}
+	}
+	want := []string{"empty-wrapper.yaml", "empty.yaml", "flat-t.yaml", "team/flat-u.yml"}
+	if !reflect.DeepEqual(got, want) {
+		t.Errorf("skipped = %v, want %v", got, want)
+	}
+	// Nothing listed is served: the only tenant is the wrapped one.
+	if ids := keysOf(doc.Tenants); !reflect.DeepEqual(ids, []string{"tenant-a"}) {
+		t.Errorf("tenants = %v, want [tenant-a]", ids)
+	}
+}
+
+// A file the load cannot decode is parse_failed, not skipped: the two lists
+// never share a file.
+func TestServedValues_ParseFailedFileIsNotSkipped(t *testing.T) {
+	t.Parallel()
+	code, doc, _, stderr := served(t, map[string]string{
+		"_defaults.yaml": defaultsOnly,
+		"tenant-a.yaml":  "tenants:\n  tenant-a:\n    mysql_connections: 70\n",
+		"broken.yaml":    "tenants: [oops\n",
+	}, "")
+	if code != exitParseFailed {
+		t.Fatalf("exit = %d, want %d; stderr=%q", code, exitParseFailed, stderr)
+	}
+	if !reflect.DeepEqual(doc.ParseFailed, []string{"broken.yaml"}) {
+		t.Errorf("parse_failed = %v, want [broken.yaml]", doc.ParseFailed)
+	}
+	if len(doc.Skipped) != 0 {
+		t.Errorf("skipped = %v, want none", doc.Skipped)
+	}
+}
+
+func TestServedValues_CleanTree_SkippedIsEmptyList(t *testing.T) {
+	t.Parallel()
+	tmp := t.TempDir()
+	testutil.WriteTree(t, tmp, map[string]string{
+		"conf.d/_defaults.yaml": defaultsOnly,
+		"conf.d/tenant-a.yaml":  "tenants:\n  tenant-a:\n    mysql_connections: 70\n",
+	})
+	code, stdout, stderr := runOnce(t, servedValuesCmd, "--config-dir", filepath.Join(tmp, "conf.d"))
+	mustOK(t, code, stderr)
+	if !strings.Contains(stdout, `"skipped": []`) {
+		t.Errorf("skipped must be an empty list on a clean tree:\n%s", stdout)
+	}
+	if !strings.Contains(stdout, `"unreadable": []`) {
+		t.Errorf("unreadable must be an empty list on a clean tree:\n%s", stdout)
+	}
+}
+
+// #2115: a config file the exporter's load cannot stat or read is dropped
+// with a WARN, and the tenants in it vanish from /metrics. served-values
+// names it in `unreadable` (closed-set reason, not the OS error) and exits
+// 3 like parse_failed, so a caller that ignores the field still fails.
+func unreadableTree(t *testing.T) string {
+	t.Helper()
+	tmp := t.TempDir()
+	testutil.WriteTree(t, tmp, map[string]string{
+		"conf.d/_defaults.yaml": defaultsOnly,
+		"conf.d/tenant-a.yaml":  "tenants:\n  tenant-a:\n    mysql_connections: 70\n",
+	})
+	return filepath.Join(tmp, "conf.d")
+}
+
+func servedDir(t *testing.T, dir string) (int, servedOut, string, string) {
+	t.Helper()
+	code, stdout, stderr := runOnce(t, servedValuesCmd, "--config-dir", dir)
+	var doc servedOut
+	if err := json.Unmarshal([]byte(stdout), &doc); err != nil {
+		t.Fatalf("stdout is not JSON (%v): %q; stderr=%q", err, stdout, stderr)
+	}
+	return code, doc, stdout, stderr
+}
+
+func TestServedValues_DanglingSymlink_IsUnreadableExitThree(t *testing.T) {
+	t.Parallel()
+	dir := unreadableTree(t)
+	if err := os.Symlink("missing.yaml", filepath.Join(dir, "tenant-b.yaml")); err != nil {
+		t.Skipf("os.Symlink unavailable here (%v); CI measures this on ubuntu-latest", err)
+	}
+	code, doc, _, stderr := servedDir(t, dir)
+	if code != exitParseFailed {
+		t.Fatalf("exit = %d, want %d; stderr=%q", code, exitParseFailed, stderr)
+	}
+	if len(doc.Unreadable) != 1 || doc.Unreadable[0].File != "tenant-b.yaml" ||
+		doc.Unreadable[0].Reason != config.UnreadableStatError {
+		t.Errorf("unreadable = %+v, want [{tenant-b.yaml %s}]", doc.Unreadable, config.UnreadableStatError)
+	}
+	if len(doc.ParseFailed) != 0 || len(doc.Skipped) != 0 {
+		t.Errorf("parse_failed = %v, skipped = %v, want none", doc.ParseFailed, doc.Skipped)
+	}
+	if ids := keysOf(doc.Tenants); !reflect.DeepEqual(ids, []string{"tenant-a"}) {
+		t.Errorf("tenants = %v, want [tenant-a]", ids)
+	}
+	if !strings.Contains(stderr, "1 path(s) cannot be read: tenant-b.yaml (stat_error)") {
+		t.Errorf("stderr does not name the file: %q", stderr)
+	}
+}
+
+// chmod cannot stop root; the dangling-symlink test above always runs.
+func TestServedValues_PermissionDenied_IsUnreadableExitThree(t *testing.T) {
+	t.Parallel()
+	if os.Geteuid() == 0 {
+		t.Skip("running as root: chmod 000 does not stop a read")
+	}
+	dir := unreadableTree(t)
+	p := filepath.Join(dir, "_defaults.yaml")
+	if err := os.Chmod(p, 0); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = os.Chmod(p, 0o644) })
+	code, doc, _, stderr := servedDir(t, dir)
+	if code != exitParseFailed {
+		t.Fatalf("exit = %d, want %d; stderr=%q", code, exitParseFailed, stderr)
+	}
+	if len(doc.Unreadable) != 1 || doc.Unreadable[0].File != "_defaults.yaml" ||
+		doc.Unreadable[0].Reason != config.UnreadableReadError {
+		t.Errorf("unreadable = %+v, want [{_defaults.yaml %s}]", doc.Unreadable, config.UnreadableReadError)
+	}
+}
+
+// A sub-directory the process may not list: the tenants under it vanish from
+// /metrics, so it is unreadable (walk_error, the directory's path) and exit 3.
+// chmod cannot stop root (pkg/config has a Linux shape that runs as root).
+func TestServedValues_UnlistableSubdir_IsUnreadableExitThree(t *testing.T) {
+	t.Parallel()
+	if os.Geteuid() == 0 {
+		t.Skip("running as root: chmod 000 does not stop listing a directory")
+	}
+	dir := unreadableTree(t)
+	sub := filepath.Join(dir, "team")
+	testutil.WriteTree(t, dir, map[string]string{
+		"team/tenant-c.yaml": "tenants:\n  tenant-c:\n    mysql_connections: 60\n",
+	})
+	if err := os.Chmod(sub, 0); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = os.Chmod(sub, 0o755) })
+	code, doc, _, stderr := servedDir(t, dir)
+	if code != exitParseFailed {
+		t.Fatalf("exit = %d, want %d; stderr=%q", code, exitParseFailed, stderr)
+	}
+	if len(doc.Unreadable) != 1 || doc.Unreadable[0].File != "team" ||
+		doc.Unreadable[0].Reason != config.UnreadableWalkError {
+		t.Errorf("unreadable = %+v, want [{team %s}]", doc.Unreadable, config.UnreadableWalkError)
+	}
+	if ids := keysOf(doc.Tenants); !reflect.DeepEqual(ids, []string{"tenant-a"}) {
+		t.Errorf("tenants = %v, want [tenant-a]", ids)
+	}
+}
+
+// A sub-directory that lists but cannot be searched (0644): its file cannot
+// be statted, so it is unreadable (stat_error) and exit 3. Root ignores the
+// missing x bit.
+func TestServedValues_UnsearchableSubdir_FileIsStatErrorExitThree(t *testing.T) {
+	t.Parallel()
+	if os.Geteuid() == 0 {
+		t.Skip("running as root: a directory without x is still searched")
+	}
+	dir := unreadableTree(t)
+	sub := filepath.Join(dir, "team")
+	testutil.WriteTree(t, dir, map[string]string{
+		"team/t.yaml": "tenants:\n  tenant-c:\n    mysql_connections: 60\n",
+	})
+	if err := os.Chmod(sub, 0o644); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = os.Chmod(sub, 0o755) })
+	code, doc, _, stderr := servedDir(t, dir)
+	if code != exitParseFailed {
+		t.Fatalf("exit = %d, want %d; stderr=%q", code, exitParseFailed, stderr)
+	}
+	if len(doc.Unreadable) != 1 || doc.Unreadable[0].File != "team/t.yaml" ||
+		doc.Unreadable[0].Reason != config.UnreadableStatError {
+		t.Errorf("unreadable = %+v, want [{team/t.yaml %s}]", doc.Unreadable, config.UnreadableStatError)
+	}
+}
+
+// A config-named symlink to a directory is never followed by the exporter
+// (a ConfigMap volume can carry one): not unreadable, exit 0 as before.
+func TestServedValues_DirectorySymlink_IsNotUnreadable(t *testing.T) {
+	t.Parallel()
+	dir := unreadableTree(t)
+	if err := os.Mkdir(filepath.Join(dir, "realdir"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink("realdir", filepath.Join(dir, "x.yaml")); err != nil {
+		t.Skipf("os.Symlink unavailable here (%v); CI measures this on ubuntu-latest", err)
+	}
+	code, doc, stdout, stderr := servedDir(t, dir)
+	mustOK(t, code, stderr)
+	if !strings.Contains(stdout, `"unreadable": []`) {
+		t.Errorf("unreadable must be an empty list:\n%s", stdout)
+	}
+	if ids := keysOf(doc.Tenants); !reflect.DeepEqual(ids, []string{"tenant-a"}) {
+		t.Errorf("tenants = %v, want [tenant-a]", ids)
 	}
 }
 

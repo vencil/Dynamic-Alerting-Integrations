@@ -77,6 +77,7 @@ _EXEMPT_GO_FILES: dict[str, str] = {}
 #   unlinted      → outside the CI build, deliberately
 _TAG_DISPOSITION = {
     "forge_e2e": "enrol",
+    "linux": "default-build",
     "unix": "default-build",
 }
 _DISPOSITIONS = frozenset({"enrol", "default-build", "unlinted"})

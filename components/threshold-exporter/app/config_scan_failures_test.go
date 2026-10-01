@@ -18,6 +18,7 @@ import (
 	"log"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
@@ -310,6 +311,79 @@ func TestDiffAndReload_DuplicateTenant_CountsScanFailure(t *testing.T) {
 	}
 	if n := reloadTriggerSeries(fresh); n != 0 {
 		t.Errorf("da_config_reload_trigger_total has %d series, want 0", n)
+	}
+}
+
+// #2587: the debounced reload's own scan logged `ERROR: hierarchical scan
+// failed: …` in flat mode too, sending the operator to look for a
+// `_defaults.yaml` that does not exist. The production shape: an ordinary
+// edit makes tickOnce schedule a debounced reload, a duplicate declaration
+// appears before it fires, and the reload's scan fails on it. Both modes
+// must log the same mode-free line; the flat run must not say
+// "hierarchical" anywhere.
+func TestDebouncedReload_ScanFailureLogNamesNoMode(t *testing.T) {
+	t.Parallel()
+	const window = time.Minute
+	for _, hier := range []bool{false, true} {
+		hier := hier
+		name := "flat"
+		if hier {
+			name = "hierarchical"
+		}
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+			dir := t.TempDir()
+			if hier {
+				writeHierarchicalFixture(t, dir, "90")
+			} else {
+				writeTestYAML(t, filepath.Join(dir, "tenant-a.yaml"),
+					"tenants:\n  tenant-a:\n    mysql_connections: \"11\"\n")
+			}
+			fresh, _ := freshMetrics(t)
+			m := NewConfigManagerWithDebounce(dir, window)
+			t.Cleanup(m.Close)
+			fc := clockwork.NewFakeClock()
+			m.SetClock(fc)
+			m.SetMetrics(fresh)
+			var buf syncBuffer
+			m.SetLogger(log.New(&buf, "", 0))
+			if err := m.Load(); err != nil {
+				t.Fatalf("Load: %v", err)
+			}
+			m.mu.RLock()
+			gotHier := m.hierarchy.enabled
+			m.mu.RUnlock()
+			if gotHier != hier {
+				t.Fatalf("fixture mode: hierarchy.enabled = %v, want %v", gotHier, hier)
+			}
+
+			// A clean edit: the tick's check passes and schedules a reload.
+			writeTestYAML(t, filepath.Join(dir, "tenant-b.yaml"),
+				"tenants:\n  tenant-b:\n    mysql_connections: \"5\"\n")
+			m.tickOnce()
+			m.debounce.mu.Lock()
+			armed := m.debounce.timer != nil
+			m.debounce.mu.Unlock()
+			if !armed {
+				t.Fatal("the clean edit did not schedule a debounced reload; the shape needs one pending")
+			}
+
+			// The duplicate lands before the reload fires.
+			writeTestYAML(t, filepath.Join(dir, "tenant-a-copy.yaml"),
+				"tenants:\n  tenant-a:\n    mysql_connections: \"12\"\n")
+			fc.Advance(window)
+			if !waitFor(t, 5*time.Second, func() bool {
+				return strings.Contains(buf.String(), "ERROR: debounced reload failed:")
+			}) {
+				t.Fatalf("the debounced reload never reported its failure; log:\n%s", buf.String())
+			}
+
+			logs := buf.String()
+			assertLogLineWith(t, logs, "ERROR: scan failed:", `duplicate tenant ID "tenant-a"`)
+			if !hier && strings.Contains(logs, "hierarchical") {
+				t.Errorf("flat mode logged %q; the tree has no _defaults.yaml. log:\n%s", "hierarchical", logs)
+			}
+		})
 	}
 }
 
