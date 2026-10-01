@@ -1769,7 +1769,8 @@ class TestOverrideRoutesNestUnderTenantRoute:
         assert "routes" not in routes[0]
 
     def test_assembled_configmap_keeps_the_nesting(self):
-        """組完整 ConfigMap 後巢狀仍在，custom 子樹照樣拿到 tenant child。"""
+        """組完整 ConfigMap 後巢狀仍在，custom 子樹的 tenant child 帶著同一批
+        子路由（#2342）。"""
         from generate_alertmanager_routes import (
             assemble_configmap, load_base_config)
         routes, receivers, _ = generate_routes(self._cfg(
@@ -1785,7 +1786,8 @@ class TestOverrideRoutesNestUnderTenantRoute:
             f"tenant-{self._T}-override-0"
         custom = [r for r in top if 'component="custom"' in r["matchers"]][0]
         assert custom["routes"] == [{"matchers": [f'tenant="{self._T}"'],
-                                     "receiver": f"tenant-{self._T}"}]
+                                     "receiver": f"tenant-{self._T}",
+                                     "routes": tenant_routes[0]["routes"]}]
         assert all("-override-" not in r.get("receiver", "") for r in top)
 
 

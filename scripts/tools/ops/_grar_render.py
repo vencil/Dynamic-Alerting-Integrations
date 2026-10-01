@@ -88,8 +88,8 @@ def _enforce_equal_labels_gated(inhibit_rules: list[dict] | None, strict: bool) 
             file=sys.stderr)
 
 
-def _main_tenant_route_tenants(routes: list[dict]) -> list[str]:
-    """Extract tenant names that own a MAIN tenant route in *routes*.
+def _main_tenant_routes(routes: list[dict]) -> dict[str, dict]:
+    """Map each tenant that owns a MAIN tenant route in *routes* to that route.
 
     #1092 0-pre: a route qualifies as a main tenant route only when BOTH hold —
     it carries a matcher that is exactly ``tenant="<t>"`` (literal value, no
@@ -98,21 +98,22 @@ def _main_tenant_route_tenants(routes: list[dict]) -> list[str]:
     matcher, and promoting one would funnel custom alerts into the platform NOC
     (the exact leak the isolation subtree exists to prevent). Per-rule
     ``tenant-<t>-override-<idx>`` routes are children of the main tenant route
-    since #2252 (only its top-level ``routes`` are scanned here, and they carry
-    no tenant matcher); an override only applies to a specific
-    alertname/metric_group outside this subtree.
+    since #2252 (only the top level of *routes* is scanned here, and those
+    children carry no tenant matcher); they reach the custom subtree through
+    the returned main route's ``routes`` (#2342).
 
-    Returns sorted, de-duplicated tenant names.
+    Returns ``{tenant: main_route}``; when a tenant has several, the first wins
+    (the one Alertmanager would match).
     """
-    tenants = set()
+    tenants: dict[str, dict] = {}
     for route in routes or []:
         receiver = route.get("receiver")
         for matcher in route.get("matchers", []) or []:
             m = re.match(r'^tenant="(.+)"$', matcher)
             if m and receiver == f"tenant-{m.group(1)}":
-                tenants.add(m.group(1))
+                tenants.setdefault(m.group(1), route)
                 break
-    return sorted(tenants)
+    return tenants
 
 
 def _inject_custom_alert_isolation(routes: list[dict], receivers: list[dict]) -> tuple[list[dict], list[dict]]:
@@ -133,9 +134,10 @@ def _inject_custom_alert_isolation(routes: list[dict], receivers: list[dict]) ->
 
     #1092 0-pre: the custom isolation route is rebuilt with per-tenant child
     routes derived from the CURRENT main tenant routes (see
-    _main_tenant_route_tenants) — each child points at the existing
-    ``tenant-<name>`` receiver; tenants without a main tenant route get no child
-    and fall back to the parent's ``custom-alerts-firehose``.
+    _main_tenant_routes) — each child points at the existing
+    ``tenant-<name>`` receiver and (#2342) carries that main route's sub-routes;
+    tenants without a main tenant route get no child and fall back to the
+    parent's ``custom-alerts-firehose``.
 
     Idempotent: any pre-existing Watchdog / component="custom" / component=
     "synthetic-probe" / component="sentinel" route is dropped and re-prepended
@@ -168,8 +170,9 @@ def _inject_custom_alert_isolation(routes: list[dict], receivers: list[dict]) ->
     # #1092 0-pre: rebuild the custom route AFTER filtering, from the surviving
     # main tenant routes — the dropped stale custom route never contributes
     # children, so the subtree always mirrors this run's tenant set.
+    mains = _main_tenant_routes(rest)
     cust_routes, cust_receivers = _build_custom_alert_routes(
-        _main_tenant_route_tenants(rest))
+        list(mains), {t: r.get("routes") or [] for t, r in mains.items()})
     # Order is load-bearing + pinned for determinism: Watchdog (0) → Custom (1) →
     # synthetic-probe (2) → sentinel sink (3), all ahead of the enforced NOC
     # match-all. The four matchers are mutually exclusive so none shadows another.

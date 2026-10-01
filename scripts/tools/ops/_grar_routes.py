@@ -25,6 +25,7 @@ Functions:
 """
 from __future__ import annotations
 
+import copy
 import os
 import sys
 
@@ -597,7 +598,9 @@ def _record_sources(sources: list[tuple[str, str]] | None, receivers: list[dict]
         sources.append((name, f"tenant '{tenant}' {field}[{idx}]"))
 
 
-def _build_custom_alert_routes(tenant_names: list[str] | None = None) -> tuple[list[dict], list[dict]]:
+def _build_custom_alert_routes(tenant_names: list[str] | None = None,
+                               tenant_sub_routes: dict[str, list[dict]] | None = None,
+                               ) -> tuple[list[dict], list[dict]]:
     """Build the platform-static Custom Alerts isolation route + firehose receiver.
 
     #741 S7/S8. ALWAYS emitted (tenant-agnostic), and prepended AHEAD of all
@@ -620,11 +623,15 @@ def _build_custom_alert_routes(tenant_names: list[str] | None = None) -> tuple[l
     Page-mode custom alerts thus reach the tenant's own channel instead of the
     firehose; tenants WITHOUT a valid `_routing` have no child and fall back to
     ``custom-alerts-firehose`` (the parent receiver, unchanged — AM-UI-visible,
-    no notifier). Children carry ONLY matchers + receiver: group_by / group_wait
-    / group_interval ride Alertmanager's native inheritance from THIS route
-    (deliberately not restated — a second SoT would drift), and the tenant's
-    `_routing` timing / per-rule overrides are NOT honored inside the custom
-    subtree in v1 (deferred). The parent sets no repeat_interval → inherits the
+    no notifier). Children carry matchers + receiver, plus — #2342 — a deep
+    copy of that tenant's main-route sub-routes from *tenant_sub_routes* (the
+    rendered ``overrides`` then ``routes`` children, original order), so custom
+    alerts split exactly like the tenant's other alerts; a tenant with no
+    sub-routes gets no ``routes`` key. The main route's group_by / group_wait /
+    group_interval / repeat_interval are NOT copied (a copied sub-route keeps
+    whatever it declares itself): the child rides Alertmanager's native
+    inheritance from THIS route (deliberately not restated — a second SoT would
+    drift). The parent sets no repeat_interval → inherits the
     root's 12h. When *tenant_names* is falsy the output stays the flat route,
     byte-identical to the pre-#1092 shape (never an empty ``routes`` key) — the
     committed-base drift guard compares dicts exactly.
@@ -646,10 +653,14 @@ def _build_custom_alert_routes(tenant_names: list[str] | None = None) -> tuple[l
         "continue": False,
     }
     if tenant_names:
-        route["routes"] = [
-            {"matchers": [f'tenant="{t}"'], "receiver": f"tenant-{t}"}
-            for t in sorted(tenant_names)
-        ]
+        children = []
+        for t in sorted(tenant_names):
+            child = {"matchers": [f'tenant="{t}"'], "receiver": f"tenant-{t}"}
+            subs = (tenant_sub_routes or {}).get(t)
+            if subs:
+                child["routes"] = copy.deepcopy(subs)
+            children.append(child)
+        route["routes"] = children
     return [route], [{"name": "custom-alerts-firehose"}]
 
 

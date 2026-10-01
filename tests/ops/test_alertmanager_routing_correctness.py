@@ -506,3 +506,23 @@ class TestProfileRoutesRouting:
             "alertname": _PROFILE_OVERRIDE_ALERTNAME,
             "tenant": _PROFILE_TENANT, "severity": "critical",
         }, f"tenant-{_PROFILE_TENANT}-override-0")
+
+    # #2342：custom 隔離子樹的 per-tenant child 帶著主 route 的子路由，
+    # 所以 custom 告警的分流與非 custom 告警一致（timing 不繼承，不影響送達）。
+    def test_custom_critical_hits_the_profile_route(self, profile_routes_etc):
+        _assert_routed(profile_routes_etc, {
+            "alertname": "Custom_demo_rule", "component": "custom",
+            "tenant": _PROFILE_TENANT, "severity": "critical",
+        }, f"tenant-{_PROFILE_TENANT}-route-0")
+
+    def test_custom_warning_stays_on_the_main_receiver(self, profile_routes_etc):
+        _assert_routed(profile_routes_etc, {
+            "alertname": "Custom_demo_rule", "component": "custom",
+            "tenant": _PROFILE_TENANT, "severity": "warning",
+        }, f"tenant-{_PROFILE_TENANT}")
+
+    def test_custom_override_is_matched_before_routes(self, profile_routes_etc):
+        _assert_routed(profile_routes_etc, {
+            "alertname": _PROFILE_OVERRIDE_ALERTNAME, "component": "custom",
+            "tenant": _PROFILE_TENANT, "severity": "critical",
+        }, f"tenant-{_PROFILE_TENANT}-override-0")
