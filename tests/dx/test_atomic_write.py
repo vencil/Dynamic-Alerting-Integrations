@@ -29,6 +29,7 @@ from pathlib import Path
 from unittest import mock
 
 import pytest
+from _platform_fs import symlink_or_skip  # noqa: E402
 
 _REPO_ROOT = Path(__file__).resolve().parents[2]
 _SCRIPT = _REPO_ROOT / "scripts" / "tools" / "dx" / "_atomic_write.py"
@@ -151,7 +152,7 @@ class TestSymlink:
         real.parent.mkdir()
         real.write_text(OLD, encoding="utf-8")
         link = tmp_path / "link.md"
-        link.symlink_to(real)
+        symlink_or_skip(real, link)
         mod.atomic_write_text(link, NEW)
         assert link.is_symlink(), "the symlink was replaced by a regular file"
         assert os.readlink(link) == str(real)
@@ -163,7 +164,7 @@ class TestSymlink:
     def test_a_dangling_symlink_creates_its_target(self, mod, tmp_path):
         real = tmp_path / "real.md"
         link = tmp_path / "link.md"
-        link.symlink_to(real)
+        symlink_or_skip(real, link)
         mod.atomic_write_text(link, NEW)
         assert link.is_symlink() and real.read_text(encoding="utf-8") == NEW
 
@@ -375,7 +376,7 @@ class TestErrorNamesTheTarget:
         real = tmp_path / "real.md"
         real.write_text(OLD, encoding="utf-8")
         link = tmp_path / "link.md"
-        link.symlink_to(real)
+        symlink_or_skip(real, link)
         _failing_replace(monkeypatch)
         with pytest.raises(_lib_io.OutputWriteError) as info:
             mod.atomic_write_text(link, NEW)
@@ -566,7 +567,7 @@ def test_a_dangling_symlink_into_a_missing_directory_is_an_error(mod, tmp_path):
     such a link with a regular file; now the link stays and it is an error
     named by the link."""
     link = tmp_path / "link.md"
-    link.symlink_to(tmp_path / "no-such-dir" / "data.md")
+    symlink_or_skip(tmp_path / "no-such-dir" / "data.md", link)
     with pytest.raises(_lib_io.OutputWriteError) as info:
         mod.atomic_write_text(link, NEW)
     assert info.value.path == str(link)

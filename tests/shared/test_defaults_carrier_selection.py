@@ -17,6 +17,7 @@ import sys
 from pathlib import Path
 
 import pytest
+from _platform_fs import symlink_or_skip  # noqa: E402
 
 from _lib_confd import (
     multi_carrier_warning,
@@ -115,10 +116,7 @@ def test_describe_tenant_reads_one_carrier_and_warns(tmp_path: Path) -> None:
 
 
 def _symlink_or_skip(link: Path, target: Path) -> None:
-    try:
-        link.symlink_to(target)
-    except (OSError, NotImplementedError) as exc:
-        pytest.skip(f"symlinks unavailable here: {exc}")
+    symlink_or_skip(target, link)
 
 
 def test_describe_tenant_selects_a_symlinked_carrier_by_its_entry_name(

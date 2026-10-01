@@ -5,6 +5,7 @@ import os
 import sys
 
 import pytest
+from _platform_fs import symlink_or_skip  # noqa: E402
 import yaml
 
 _TOOLS_DIR = os.path.join(os.path.dirname(__file__), '..', '..', 'scripts', 'tools', 'ops')
@@ -283,7 +284,7 @@ def _confd_with_unusable(tmp_path):
     (root / "alpha.yaml").write_text(
         "tenants:\n  alpha:\n    pg_connections: 90\n", encoding="utf-8")
     (root / "notes.yaml").mkdir()
-    (root / "broken.yaml").symlink_to(root / "gone.yaml")
+    symlink_or_skip(root / "gone.yaml", (root / "broken.yaml"))
     return root
 
 

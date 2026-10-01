@@ -21,6 +21,7 @@ import tempfile
 from pathlib import Path
 
 import pytest
+from _platform_fs import symlink_or_skip  # noqa: E402
 
 import check_path_metadata_consistency as cpmc  # noqa: E402
 
@@ -541,10 +542,7 @@ class TestExtensionSpellingAxis:
 
 
 def _symlink_or_skip(link: Path, target: str) -> None:
-    try:
-        link.symlink_to(target)
-    except (OSError, NotImplementedError) as exc:  # pragma: no cover
-        pytest.skip(f"cannot create symlink here: {exc}")
+    symlink_or_skip(target, link)
 
 
 class TestHiddenAxis:
