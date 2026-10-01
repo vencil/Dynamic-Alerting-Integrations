@@ -36,7 +36,7 @@ import stat
 import subprocess
 import sys
 import time
-from datetime import datetime, timezone
+from datetime import date, datetime, timezone
 from pathlib import Path
 from typing import Any, Dict
 
@@ -53,6 +53,7 @@ from _lib_io import (  # noqa: E402  (#1789)
 from _lib_yaml_keys import (  # noqa: E402  (#2216, #2331)
     RawPlain,
     dump_for_rewrite,
+    load_for_rewrite,
 )
 
 try:
@@ -682,6 +683,69 @@ def _metadata_name_node(root: Any) -> Any:
     return node if isinstance(node, yaml.ScalarNode) else None
 
 
+def _as_text(value: Any) -> str | None:
+    """*value* from the CR read as written, as the text it was written as:
+    a ``str`` (a plain scalar is RawPlain, its source text), a ``date`` in
+    its ISO spelling (``!!timestamp 2024-01-01``); None for anything else
+    (null, a number or a ``datetime`` from an explicit tag, bytes, ...)."""
+    if isinstance(value, str):
+        return str(value)
+    if isinstance(value, date) and not isinstance(value, datetime):
+        return value.isoformat()
+    return None
+
+
+def _tenant_id_divergence(decoded: Any, written: Any) -> str:
+    """#2476: why the tenant ids da-crdecode read differ from the ids as
+    written, or ``""``.
+
+    An unquoted ``010:`` is the tenant ``8`` to Kubernetes, ``yes:`` is
+    ``true``: rendering either would rename the tenant (the id written in
+    the CR is not the id the cluster holds). Two real readings are compared,
+    by their key sets; nothing about YAML typing is decided here. Only a
+    mapping on both sides is compared; any other shape is left to the
+    shape checks.
+    """
+    if not isinstance(decoded, dict) or not isinstance(written, dict):
+        return ""
+    as_written = {_as_text(k) for k in written}
+    as_read = set(decoded)
+    if as_written == as_read:
+        return ""
+    only_written = sorted(repr(k) for k in as_written - as_read)
+    only_read = sorted(repr(k) for k in as_read - as_written)
+    return ("spec.tenants: the tenant ids as written ("
+            + (", ".join(only_written) or "none")
+            + ") are not the ids Kubernetes reads ("
+            + (", ".join(only_read) or "none")
+            + "); rendering would rename the tenant. Quote each tenant id "
+            "so both readings are the same text")
+
+
+def _in_written_order(decoded: Any, written: Any) -> Any:
+    """*decoded* (da-crdecode's JSON, every object's keys sorted) with each
+    mapping's keys in the order the CR wrote them, values untouched.
+
+    A key is matched to the written one by its text; keys with no written
+    counterpart keep their (sorted) order, after the matched ones. A list is
+    walked item by item when both sides have the same length.
+    """
+    if isinstance(decoded, dict) and isinstance(written, dict):
+        by_text = {}
+        for key, value in written.items():
+            text = _as_text(key)
+            if text is not None and text not in by_text:
+                by_text[text] = value
+        order = [k for k in by_text if k in decoded]
+        order += [k for k in decoded if k not in by_text]
+        return {k: _in_written_order(decoded[k], by_text.get(k))
+                for k in order}
+    if (isinstance(decoded, list) and isinstance(written, list)
+            and len(decoded) == len(written)):
+        return [_in_written_order(d, w) for d, w in zip(decoded, written)]
+    return decoded
+
+
 def render_cr_file(
     cr_path: Path,
     config_dir: Path,
@@ -691,11 +755,13 @@ def render_cr_file(
     """Render a single CR YAML file to config-dir (offline mode).
 
     #2476: the CR is decoded by ``da-crdecode``, as Kubernetes clients decode
-    it (see ``CRDECODE_BINARY_NAME``), so this renders what the controller
-    path renders for the CR once it is in a cluster — keys and values
-    included (an unquoted ``010`` is the number 8 there, as it is in the
-    cluster). What this path checks on top of the controller path is below;
-    it does not reproduce the API server's validation.
+    it (see ``CRDECODE_BINARY_NAME``): values are rendered as decoded (an
+    unquoted ``010`` VALUE is the number 8). The ids — ``metadata.name`` /
+    ``namespace`` and the tenant ids — must read the same as written
+    (``_lib_yaml_keys``) and as decoded, or the CR is refused: an unquoted
+    ``010:`` tenant would otherwise be renamed. The CR as written also gives
+    the key order. What this path checks on top of the controller path is
+    below; it does not reproduce the API server's validation.
     """
     try:
         cr, warn_lines = decode_cr(cr_path)
@@ -770,6 +836,39 @@ def render_cr_file(
                       "%d characters)", cr_path, namespace,
                       _DNS1123_LABEL_MAX)
             return EXIT_CALLER_ERROR
+    # #2476: the CR as written (`_lib_yaml_keys`: keys and plain scalars as
+    # their source text), to compare the ids with da-crdecode's reading and
+    # to keep the CR's key order. Not used for any value.
+    try:
+        with open(cr_path, encoding="utf-8") as fh:
+            as_written = load_for_rewrite(fh)
+    except RecursionError:
+        log.error("Failed to parse %s: nested too deeply for this tool to "
+                  "read", cr_path)
+        return EXIT_CALLER_ERROR
+    except Exception as e:  # noqa: BLE001 — any failure: nothing to compare
+        log.error("%s: Kubernetes' YAML→JSON conversion reads this CR, but "
+                  "this tool cannot read it as written (%s: %s), so its ids "
+                  "cannot be compared with that reading", cr_path,
+                  type(e).__name__, e)
+        return EXIT_CALLER_ERROR
+    written_meta = (as_written.get("metadata")
+                    if isinstance(as_written, dict) else None)
+    if not isinstance(written_meta, dict):
+        written_meta = {}
+    if _as_text(written_meta.get("name")) != name:
+        log.error("%s: metadata.name is read by Kubernetes as %r, which is "
+                  "not the text written in the CR (%r). Quote it so both "
+                  "are the same", cr_path, name, written_meta.get("name"))
+        return EXIT_CALLER_ERROR
+    namespace = metadata.get("namespace")
+    if namespace is not None \
+            and _as_text(written_meta.get("namespace")) != namespace:
+        log.error("%s: metadata.namespace is read by Kubernetes as %r, "
+                  "which is not the text written in the CR (%r). Quote it "
+                  "so both are the same", cr_path, namespace,
+                  written_meta.get("namespace"))
+        return EXIT_CALLER_ERROR
     if "spec" in cr and not isinstance(cr["spec"], dict):
         log.error("%s: spec must be a mapping", cr_path)
         return EXIT_CALLER_ERROR
@@ -782,6 +881,17 @@ def render_cr_file(
                   "rendered file would carry no profile. Set _profile on "
                   "each tenant under spec.tenants instead", cr_path)
         return EXIT_CALLER_ERROR
+    written_spec = (as_written.get("spec")
+                    if isinstance(as_written, dict) else None)
+    if not isinstance(written_spec, dict):
+        written_spec = {}
+    why = _tenant_id_divergence(spec.get("tenants"),
+                                written_spec.get("tenants"))
+    if why:
+        log.error("%s: %s", cr_path, why)
+        return EXIT_CALLER_ERROR
+    if spec:
+        cr["spec"] = spec = _in_written_order(spec, written_spec)
     shape_error = _spec_block_shape_error(spec)
     if shape_error:
         log.error("%s: %s", cr_path, shape_error)

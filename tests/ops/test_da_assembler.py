@@ -1806,6 +1806,59 @@ class TestRenderCrDecoder:
         assert "did not finish within 1s" in caplog.text
         assert list(out_dir.iterdir()) == []
 
+    @pytest.mark.parametrize("metadata, field", [
+        pytest.param("{name: !!binary b2s=}", "metadata.name", id="name"),
+        pytest.param("{name: ok, namespace: !!binary b2s=}",
+                     "metadata.namespace", id="namespace"),
+    ])
+    def test_name_kubernetes_reads_as_other_text_is_caller_error(
+            self, metadata, field, tmp_path, caplog):
+        """#2476：Kubernetes 讀出的 name／namespace 字串（`!!binary b2s=` →
+        `ok`）與 CR 原文不同 → rc 2、指名兩邊、提示加引號、不寫檔。
+
+        會讓本測試轉紅的改動：拿掉 render_cr_file 的 name／namespace 原文
+        比對（rc 0，寫出 `ok.yaml`）。
+        """
+        cr_path, out_dir = self._write(
+            tmp_path, self._CR.replace("metadata: {name: ok}",
+                                       "metadata: " + metadata))
+        assert render_cr_file(cr_path, out_dir) == EXIT_CALLER_ERROR
+        assert f"{field} is read by Kubernetes as 'ok'" in caplog.text
+        assert "Quote it" in caplog.text
+        assert list(out_dir.iterdir()) == []
+
+    def test_tagged_date_name_still_renders(self, tmp_path):
+        """對照組：`!!timestamp 2024-01-01` 原文與 Kubernetes 讀法同為
+        `2024-01-01`，照常 rc 0（與先前相同）。"""
+        cr_path, out_dir = self._write(
+            tmp_path, self._CR.replace("{name: ok}",
+                                       "{name: !!timestamp 2024-01-01}"))
+        assert render_cr_file(cr_path, out_dir) == 0
+        assert [p.name for p in out_dir.iterdir()] == ["2024-01-01.yaml"]
+
+    def test_unreadable_as_written_is_caller_error(self, tmp_path, caplog):
+        """Kubernetes 讀得了、本工具以原文讀不了（自訂標籤 `!foo`）→ 無從
+        比對 id，rc 2、不寫檔（fail-closed；先前以 PyYAML 讀時同為 rc 2）。"""
+        cr_path, out_dir = self._write(
+            tmp_path, self._CR + "  defaults: {cpu: !foo 1}\n")
+        assert render_cr_file(cr_path, out_dir) == EXIT_CALLER_ERROR
+        assert "cannot read it as written" in caplog.text
+        assert list(out_dir.iterdir()) == []
+
+    def test_keys_keep_the_order_the_cr_wrote(self, tmp_path):
+        """da-crdecode 的 JSON 物件鍵依字母排序；輸出仍照 CR 原文的順序，
+        既有輸出檔不會只因排序而被重寫。會讓本測試轉紅的改動：拿掉
+        `_in_written_order`（輸出變成 aa、zz／a、b）。
+        """
+        cr_path, out_dir = self._write(
+            tmp_path, self._CR.replace(
+                "    t1: {}\n",
+                "    zz: {b: '1', a: '2'}\n    aa: {cpu: '1'}\n"))
+        assert render_cr_file(cr_path, out_dir) == 0
+        body = (out_dir / "ok.yaml").read_text(encoding="utf-8")
+        assert body.split("\n", 2)[2] == (
+            "tenants:\n  zz:\n    b: '1'\n    a: '2'\n  aa:\n    cpu: '1'\n")
+
     @pytest.mark.parametrize("stdout", [
         pytest.param("print('hello')", id="not-json"),
         pytest.param("print('{\"documents\": []}')", id="no-document"),
