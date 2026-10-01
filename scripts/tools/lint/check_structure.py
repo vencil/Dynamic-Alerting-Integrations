@@ -51,7 +51,7 @@ ALLOWED_TOOLS_ROOT = {
     "_lib_yaml_keys.py",   # #2114: one reader of tenant ids as the exporter keys them (the scalar's raw text)
     "_lib_toolcount.py",   # #1511: single answer to "what counts as a Python tool" (lint checker + two dx writers)
     "_lib_tenant_uniqueness.py",  # #1794: one answer to "does this artifact declare a tenant twice" (two producers)
-    "_lib_tenant_values.py",  # #2115: per-tenant values as /metrics serves them (runs da-guard served-values)
+    "_lib_tenant_values.py",  # #2115/#2564: per-tenant values from Go (runs da-guard served-values / effective)
     "metric-dictionary.yaml",
     "validate_all.py",
     "vendor_download.sh",

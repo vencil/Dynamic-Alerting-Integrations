@@ -45,7 +45,7 @@ DOCS_DIR = REPO_ROOT / "docs"
 # `test_subcommand_map_matches_dispatchers` greps the dispatchers so this drifts
 # loudly if a subcommand is added/removed.
 WRAPPER_SUBCOMMANDS: Dict[str, Set[str]] = {
-    "guard": {"defaults-impact", "served-values"},
+    "guard": {"defaults-impact", "served-values", "effective"},
     "parser": {"import", "allowlist"},
     "batch-pr": {"apply", "refresh", "refresh-source"},
 }

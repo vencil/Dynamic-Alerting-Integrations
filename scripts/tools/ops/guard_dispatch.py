@@ -25,6 +25,11 @@ Subcommands:
                     serves per tenant (#2115; forwarded as
                     da-guard served-values ...). The reader library is
                     scripts/tools/_lib_tenant_values.py.
+  effective         Print, as JSON, every tenant's effective config as
+                    tenant-api's /effective resolves it, with profile
+                    binding and per-key sources (#2564; forwarded as
+                    da-guard effective ...). Read by load_effective in
+                    scripts/tools/_lib_tenant_values.py.
 
 Resolution order for the `da-guard` binary:
   1. --da-guard-binary <path>   (explicit override)
@@ -41,6 +46,7 @@ at the top of cmd/da-guard/main.go):
 
 Usage:
   da-tools guard served-values --config-dir conf.d/ [--at 2026-07-01T03:00:00Z]
+  da-tools guard effective --config-dir conf.d/
   da-tools guard defaults-impact --config-dir conf.d/
   da-tools guard defaults-impact --config-dir conf.d/ --scope conf.d/db/ \\
       --required-fields cpu,memory
@@ -68,6 +74,9 @@ _USAGE_EN = (
     "                    Defaults Guard (schema + routing + cardinality).\n"
     "  served-values     Print, as JSON, the values the exporter's /metrics\n"
     "                    serves per tenant (--config-dir, optional --at RFC3339).\n"
+    "  effective         Print, as JSON, every tenant's effective config as\n"
+    "                    tenant-api's /effective resolves it, with profile\n"
+    "                    binding and per-key sources (--config-dir).\n"
     "\n"
     "Flags (most common; full list via `da-tools guard defaults-impact --help`):\n"
     "  --config-dir <path>          Required. conf.d/ root.\n"
@@ -103,6 +112,8 @@ _USAGE_ZH = (
     "                    驗證 conf.d/ 樹 (schema + routing + cardinality)。\n"
     "  served-values     以 JSON 印出 exporter /metrics 對每個租戶實際發出的值\n"
     "                    (--config-dir，可加 --at RFC3339)。\n"
+    "  effective         以 JSON 印出每個租戶在 tenant-api /effective 的有效設定，\n"
+    "                    含綁定的 profile 與每個 key 的來源 (--config-dir)。\n"
     "\n"
     "常用選項 (完整選項見 `da-tools guard defaults-impact --help`):\n"
     "  --config-dir <path>          必填，conf.d/ 根目錄。\n"
@@ -132,18 +143,18 @@ _USAGE_ZH = (
 
 # `defaults-impact` is a Python-side organising layer — da-guard's
 # default mode takes flags directly — so it is stripped before
-# forwarding (pass_subcommand=False). `served-values` is a real
-# da-guard subcommand and is forwarded.
+# forwarding (pass_subcommand=False). `served-values` and `effective`
+# (#2564) are real da-guard subcommands and are forwarded.
 _DISPATCHER = GoBinaryDispatcher(
     binary_name="da-guard",
     cli_alias="guard",
     binary_flag="--da-guard-binary",
     env_var="DA_GUARD_BINARY",
-    subcommands={"defaults-impact", "served-values"},
+    subcommands={"defaults-impact", "served-values", "effective"},
     pass_subcommand=False,
     usage_en=_USAGE_EN,
     usage_zh=_USAGE_ZH,
-    forwarded_subcommands=frozenset({"served-values"}),
+    forwarded_subcommands=frozenset({"served-values", "effective"}),
 )
 
 # The same resolution, for _lib_tenant_values (which calls da-guard as a

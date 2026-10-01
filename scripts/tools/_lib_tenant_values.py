@@ -1,5 +1,7 @@
-"""Per-tenant values as the exporter's /metrics serves them (#2115) and as
-tenant-api's /effective resolves them (#2564).
+"""Per-tenant values from Go: /metrics via da-guard served-values, /effective via da-guard effective.
+
+What /metrics serves (#2115) and what tenant-api's /effective resolves
+(#2564), each read from da-guard rather than re-derived in Python.
 
 Semantics: `da-guard served-values` = /metrics, `da-guard effective` =
 /effective. This module runs those subcommands and parses their JSON; it

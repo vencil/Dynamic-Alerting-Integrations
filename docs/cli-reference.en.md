@@ -2490,6 +2490,7 @@ da-tools guard <subcommand> [flags]
 |---|---|
 | `defaults-impact` | Run deepMerge → guard checks against every tenant under conf.d/ (or the `--scope` subdirectory); emit Markdown / JSON report |
 | `served-values` | Print, as JSON, the values the exporter's `/metrics` serves per tenant ([#2115](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/2115)); Python readers call it through `scripts/tools/_lib_tenant_values.py` |
+| `effective` | Print, as JSON, every tenant's effective config as tenant-api's `/effective` resolves it, plus the bound profile and each key's source ([#2564](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/2564)); Python readers call it through `load_effective()` in `scripts/tools/_lib_tenant_values.py` |
 
 **Binary resolution order**
 
@@ -2556,7 +2557,7 @@ None of these puts a file on the exit-3 list; a platform file whose syntax the e
 
 The values come from the exporter's own load and resolvers; the subcommand judges nothing itself. JSON output: `parse_failed` (files the exporter's load skips whole; `[]` when none) and `tenants`, each with `values` (every threshold key `/metrics` emits a row for, canonical name → value, plus the reserved keys as the exporter's resolvers read them at `--at`), `severities` (each threshold key's severity label) , `unserved` (keys of the tenant's merged config absent from `values`, switched-off ones included, value as written) and `dropped` (keys whose row `/metrics` drops because the exporter cannot build its series; the reason for each dropped row). Which rows are kept is decided by `Gather` over a private registry holding the same collectors the exporter's `/metrics` serves. Exit codes: 0 ok; 2 caller error, the exporter rejects the whole tree (e.g. a tenant declared in two files), or `Gather` fails (e.g. two keys produce one series; the exporter's `/metrics` then answers 500 as a whole), with the reason — and the keys where they can be named — on stderr; 3 a file was skipped whole — the JSON is still written and names it in `parse_failed`. Any string in the output that is not valid UTF-8 is exit 2 too (JSON cannot carry it), even where the exporter only drops that row and `/metrics` still answers 200. Exit 2 follows `Gather` over the same collectors production `/metrics` serves. Served means served to a UTF-8-negotiated scrape (the Prometheus 3 default); a scrape with legacy or underscores escaping may see labels such as `{a-b}` and `{a.b}` collide in the text output. `dropped` is keyed by the canonical spelling, `unserved` by the spelling as written.
 
-**`da-guard effective`** ([#2564](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/2564); a subcommand of the da-guard binary, not forwarded by `da-tools guard`)
+**`effective`** ([#2564](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/2564); `da-tools guard effective` forwards to `da-guard effective`)
 
 | Flag | Default | Description |
 |---|---|---|
@@ -2580,6 +2581,9 @@ da-tools guard defaults-impact --config-dir conf.d/ \
 
 # What /metrics serves per tenant, at a given instant
 da-tools guard served-values --config-dir conf.d/ --at 2026-07-01T03:00:00Z
+
+# Each tenant's effective config on /effective, with profile binding and per-key sources
+da-tools guard effective --config-dir conf.d/
 ```
 
 **Scope simplification**: `da-guard` ships a *current-working-tree* validator (reads conf.d/ from disk as-is). Equivalent to a "delta-aware" model in CI / pre-commit flows because by the time the tool runs, the proposed change is already on disk. Speculative simulation is out of scope (handled per-tenant by the `/simulate` endpoint). The full design rationale and three-layer check explainer live in `components/threshold-exporter/README.md` (outside the MkDocs site — open from GitHub).
