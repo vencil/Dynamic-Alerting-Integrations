@@ -1440,7 +1440,7 @@ _HELPER_MISSING = {
     "pre_push_mkdocs_strict.sh": "_prepush_refs.sh is not next to",
 }
 _INSTALL = "bash scripts/ops/install_prepush_hook.sh"
-_RESTORE_RE = re.compile(r"^\s*git checkout HEAD -- (\S.*)$", re.M)
+_RESTORE_RE = re.compile(r"^\s*(git -C \S+(?:\\ \S+)* checkout HEAD -- \S+)$", re.M)
 
 
 def _helper_missing_lines(out: str) -> list[str]:
@@ -1456,26 +1456,54 @@ def _assert_the_guards_are_back(work: Path) -> None:
     assert not _helper_missing_lines(out), f"the guards still cannot find their helper:\n{out}"
 
 
+_USER_HOOK = (
+    "#!/usr/bin/env bash\n"
+    '. "$(git rev-parse --show-toplevel)/scripts/ops/_prepush_refs.sh"\n'
+    "echo USER-HOOK-RAN >&2\n"
+)
+
+
+def _repo_with_a_shipped_old_guard(tmp_path: Path, guard: str) -> tuple[Path, bytes]:
+    """A repo whose history holds an older version of ``guard`` — the bytes a
+    stale copy carries — before the current one."""
+    work = _make_repo(tmp_path, _PROTECT_ONLY)
+    current = (_OPS / guard).read_bytes()
+    old = current + b"# an older shipped version\n"
+    target = work / "scripts" / "ops" / guard
+    for content, msg in ((old, "old guard"), (current, "current guard")):
+        target.write_bytes(content)
+        assert _git(work, "add", "scripts").returncode == 0
+        assert _git(work, "-c", "core.hooksPath=/dev/null", "commit", "-qm", msg).returncode == 0
+    return work, old
+
+
+def _occupy(work: Path, slot: str, content: bytes) -> Path:
+    if slot == "pre-push.chained":
+        assert _install_guards(work).returncode == 0
+    elif slot == "pre-push.legacy":
+        _install_precommit(work)
+    hook = work / ".git" / "hooks" / slot
+    hook.write_bytes(content)
+    hook.chmod(0o755)
+    return hook
+
+
+_SLOTS = ["pre-push", "pre-push.chained", "pre-push.legacy"]
+
+
 @pytest.mark.parametrize("guard", sorted(_HELPER_MISSING))
-@pytest.mark.parametrize("slot", ["pre-push", "pre-push.chained", "pre-push.legacy"])
+@pytest.mark.parametrize("slot", _SLOTS)
 def test_a_stale_guard_copy_is_replaced_by_the_installer(
     tmp_path: Path, guard: str, slot: str
 ) -> None:
     """A guard copied alone into the hooks directory (the recipe before #1689)
     cannot find its helper, and every message such a copy has ever printed says
-    to run the installer. Copies already out there carry their old bytes, so the
-    fix has to be the installer: it must replace the copy, not chain it.
-    ``pre-push.chained`` is where an earlier installer put one; ``pre-push.legacy``
-    is where pre-commit migrates one."""
-    work = _make_repo(tmp_path, _PROTECT_ONLY)
-    hooks = work / ".git" / "hooks"
-    if slot == "pre-push.chained":
-        assert _install_guards(work).returncode == 0
-    elif slot == "pre-push.legacy":
-        _install_precommit(work)
-    copy = hooks / slot
-    copy.write_bytes((_OPS / guard).read_bytes())
-    copy.chmod(0o755)
+    to run the installer. Copies already out there carry the bytes of the version
+    they were taken from, so the installer must recognise them by that, and
+    replace them rather than chain them. ``pre-push.chained`` is where an earlier
+    installer put one; ``pre-push.legacy`` is where pre-commit migrates one."""
+    work, old = _repo_with_a_shipped_old_guard(tmp_path, guard)
+    _occupy(work, slot, old)
 
     r, out = _push(work, "HEAD:refs/heads/feat/legacy")
     assert r.returncode != 0, f"a broken install silently allowed the push:\n{out}"
@@ -1486,6 +1514,22 @@ def test_a_stale_guard_copy_is_replaced_by_the_installer(
     _assert_the_guards_are_back(work)
 
 
+@pytest.mark.parametrize("slot", _SLOTS)
+def test_a_users_own_hook_that_sources_the_helper_is_kept(tmp_path: Path, slot: str) -> None:
+    """Mentioning, even sourcing, the helper does not make a hook a stale guard
+    copy. Only identity with a committed guard does; anything else is someone's
+    hook, which the installer chains and the dispatcher keeps running."""
+    work, _ = _repo_with_a_shipped_old_guard(tmp_path, "protect_main_push.sh")
+    _occupy(work, slot, _USER_HOOK.encode())
+
+    r = _install_guards(work)
+    assert r.returncode == 0, f"installer failed:\n{r.stdout}{r.stderr}"
+    chained = work / ".git" / "hooks" / "pre-push.chained"
+    assert chained.read_text(encoding="utf-8") == _USER_HOOK, "the user's hook is gone"
+    r, out = _push(work, "HEAD:refs/heads/main")
+    assert "USER-HOOK-RAN" in out and _BANNER in out, out
+
+
 @pytest.mark.parametrize("missing", ["_prepush_refs.sh", "protect_main_push.sh"])
 def test_a_file_gone_from_scripts_ops_is_restored_the_way_the_message_says(
     tmp_path: Path, missing: str
@@ -1493,31 +1537,38 @@ def test_a_file_gone_from_scripts_ops_is_restored_the_way_the_message_says(
     """With the shipped wiring everything runs from scripts/ops/, so a missing
     file there is gone from the checkout and the installer, which writes only
     the hooks directory, cannot bring it back. The deletion is staged and a
-    sibling has uncommitted work: restoring from the index would do nothing, and
-    restoring the whole directory would throw that work away. The command is run
-    exactly as printed, from a subdirectory."""
-    work = _make_repo(tmp_path, _PROTECT_ONLY)
+    tracked sibling has uncommitted work: restoring from the index would do
+    nothing, and restoring the whole directory would throw that work away. The
+    printed command is run verbatim by a shell outside the repository, under a
+    path with a space in it."""
+    base = tmp_path / "a dir"
+    base.mkdir()
+    work = _make_repo(base, _PROTECT_ONLY)
     assert _git(work, "add", "scripts").returncode == 0
     assert _git(work, "-c", "core.hooksPath=/dev/null", "commit", "-qm", "ops").returncode == 0
     assert _install_guards(work).returncode == 0
     assert _git(work, "rm", "-q", f"scripts/ops/{missing}").returncode == 0
-    sibling = work / "scripts" / "ops" / "dx-run.sh"
-    sibling.write_text("# uncommitted work\n", encoding="utf-8")
+    sibling = work / "scripts" / "ops" / "install_prepush_hook.sh"   # tracked
+    wip = sibling.read_text(encoding="utf-8") + "# uncommitted work\n"
+    sibling.write_text(wip, encoding="utf-8")
 
     r, out = _push(work, "HEAD:refs/heads/feat/x")
     assert r.returncode != 0, f"a broken checkout silently allowed the push:\n{out}"
     commands = _RESTORE_RE.findall(out)
     # A missing helper is reported by each guard; a missing guard by the dispatcher.
     assert len(commands) == (len(_HELPER_MISSING) if missing == "_prepush_refs.sh" else 1), out
-    assert all(c.endswith(f"scripts/ops/{missing}") for c in commands), out
+    assert all(c.endswith(f" -- {missing}") for c in commands), out
     if missing == "_prepush_refs.sh":
         # Quoted heredocs: the backticks are text, not a command to run.
         assert out.count("`pre-commit install --hook-type pre-push`") == 2, out
 
-    sub = work / "docs"
-    sub.mkdir()
-    assert _git(sub, "checkout", "HEAD", "--", commands[0]).returncode == 0
-    assert sibling.read_text(encoding="utf-8") == "# uncommitted work\n"
+    assert _BASH, "no bash resolved; the module-level skip should have fired"
+    r = subprocess.run(  # subprocess-timeout: ignore
+        [_BASH, "-c", commands[0]], cwd=tmp_path, capture_output=True, text=True,
+        encoding="utf-8", errors="replace",
+    )
+    assert r.returncode == 0, f"{commands[0]}\n{r.stderr}"
+    assert sibling.read_text(encoding="utf-8") == wip, "the restore threw away other work"
     _assert_the_guards_are_back(work)
 
 

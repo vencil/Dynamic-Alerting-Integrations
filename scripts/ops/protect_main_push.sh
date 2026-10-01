@@ -44,7 +44,7 @@ _prepush_dir="${BASH_SOURCE[0]%/*}"
 # 全都有害，所以這裡自己把可行的出路講出來。
 if [ ! -r "$_prepush_dir/_prepush_refs.sh" ]; then
     printf '\n[protect_main_push] ⛔ %s 旁邊找不到 _prepush_refs.sh，本守衛無法判斷你在推什麼。\n' "${BASH_SOURCE[0]}" >&2
-    printf '\n如果那在 scripts/ops/ 裡：helper 從你的 checkout 裡不見了——\n    git checkout HEAD -- %s\n' "$_prepush_dir/_prepush_refs.sh" >&2
+    printf '\n如果那在 scripts/ops/ 裡：helper 從你的 checkout 裡不見了——\n    git -C %q checkout HEAD -- _prepush_refs.sh\n' "$_prepush_dir" >&2
     cat >&2 <<'PREPUSH_MISSING'
 
 在其他位置：那是本守衛的舊複本，安裝器會把它換掉：

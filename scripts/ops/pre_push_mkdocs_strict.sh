@@ -69,9 +69,10 @@ fi
 # often and still builds the tree you are standing in.
 # shellcheck source=scripts/ops/_prepush_refs.sh
 if [ ! -r "$_prepush_dir/_prepush_refs.sh" ]; then
+    printf -v _q '%q' "$_prepush_dir"
     echo "[pre-push-mkdocs] ⛔ _prepush_refs.sh is not next to ${BASH_SOURCE[0]}" >&2
     echo "  If that is in scripts/ops/, the helper is gone from your checkout:" >&2
-    echo "    git checkout HEAD -- $_prepush_dir/_prepush_refs.sh" >&2
+    echo "    git -C $_q checkout HEAD -- _prepush_refs.sh" >&2
     echo "  Anywhere else it is a stale copy of this guard, and the installer replaces it:" >&2
     echo "    bash scripts/ops/install_prepush_hook.sh" >&2
     exit 1

@@ -85,13 +85,14 @@ for _guard in "${GUARDS[@]}"; do
     fi
     _path="$_dispatch_dir/$_guard"
     if [ ! -r "$_path" ]; then
+        printf -v _q_dir '%q' "$_dispatch_dir"
         cat >&2 <<GUARD_MISSING
 
 [prepush_dispatch] ⛔ $_guard is missing next to this script, so one of the
 pre-push guards cannot run. Stopping here rather than running the rest.
 
 The guards are version-controlled files, so restore it from git:
-    git checkout HEAD -- $_path
+    git -C $_q_dir checkout HEAD -- $_guard
 
 ⛔ Not the installer: it writes .git/hooks, never scripts/ops, so it exits 0
 and changes nothing here. And do not reach for --no-verify or delete

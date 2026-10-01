@@ -82,11 +82,22 @@ contains() {   # $1 = file, $2 = needle
 }
 is_ours()      { contains "$1" "$MARKER"; }
 is_precommit() { contains "$1" "--hook-type=pre-push"; }
-# ⛔ A hook that sources _prepush_refs.sh is a copy of one of our guards (the
-# single-file install from before #1689). It only runs next to its helper in
-# scripts/ops/, so chaining it keeps the push failing on every run. The guards
-# it duplicates already run from the dispatcher: replace it, never chain it.
-is_guard_copy() { contains "$1" "_prepush_refs.sh"; }
+# ⛔ A hook byte-identical to a committed version of one of our guards is a
+# single-file install from before #1689. It cannot run outside scripts/ops/, so
+# chaining it keeps every push failing; the dispatcher already runs what it
+# duplicates. Identity, not content: a hook of the user's own that happens to
+# source the helper must still be chained. Removing an identical copy loses
+# nothing, since git holds the same blob.
+guard_blobs="$(git -C "$root" log --all --no-renames --format= --raw --no-abbrev -- \
+    scripts/ops/protect_main_push.sh scripts/ops/require_preflight_pass.sh \
+    scripts/ops/pre_push_mkdocs_strict.sh 2>/dev/null)"
+is_guard_copy() {
+    [ -f "$1" ] || return 1
+    local id
+    id="$(git hash-object -- "$1" 2>/dev/null)" || return 1
+    case "$guard_blobs" in (*" $id "*) return 0 ;; esac
+    return 1
+}
 
 # Move a foreign hook into the chained slot. Fails loudly: a silent failure here
 # means either that hook stops running or ours never installs.
@@ -113,12 +124,18 @@ stash_foreign() {   # $1 = path to the foreign hook
 # An earlier install chained a guard copy (this installer did, before it knew
 # better). Take it out of the slot, or the dispatcher keeps running it.
 if is_guard_copy "$chained"; then
-    command -v rm >/dev/null 2>&1 && rm -f "$chained" || {
+    command -v rm >/dev/null 2>&1 || {
+        warn "⛔ \`rm\` is not on PATH, so $chained, a copy of a pre-push guard"
+        warn "   that cannot run there, stays. Delete it by hand (git holds the same"
+        warn "   content), then re-run."
+        exit 1
+    }
+    rm -f "$chained" || {
         warn "⛔ could not remove $chained, a copy of a pre-push guard that"
         warn "   cannot run there. Delete it by hand, then re-run."
         exit 1
     }
-    say "removed $CHAINED_NAME: it was a copy of a guard, which only runs from scripts/ops/"
+    say "removed $CHAINED_NAME: identical to a committed version of a guard, which only runs from scripts/ops/"
 fi
 
 target="$hook"

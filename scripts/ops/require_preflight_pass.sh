@@ -60,7 +60,7 @@ _prepush_dir="${BASH_SOURCE[0]%/*}"
 # worse, so name the way back here instead.
 if [ ! -r "$_prepush_dir/_prepush_refs.sh" ]; then
     printf '\n[require_preflight_pass] ⛔ _prepush_refs.sh is not next to %s,\nso the gate cannot tell what is being pushed.\n' "${BASH_SOURCE[0]}" >&2
-    printf '\nIf that is in scripts/ops/, the helper is gone from your checkout:\n    git checkout HEAD -- %s\n' "$_prepush_dir/_prepush_refs.sh" >&2
+    printf '\nIf that is in scripts/ops/, the helper is gone from your checkout:\n    git -C %q checkout HEAD -- _prepush_refs.sh\n' "$_prepush_dir" >&2
     cat >&2 <<'PREPUSH_MISSING'
 
 Anywhere else it is a stale copy of this gate, and the installer replaces it:
