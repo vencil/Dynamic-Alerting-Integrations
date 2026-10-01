@@ -577,6 +577,8 @@ Presented in three sections:
 - **Blind Spots**: Exporters without tenant config
 - **Unrecognized**: Jobs with unidentifiable DB type
 
+"Corresponding tenant config" means the thresholds the exporter's `/metrics` actually serves for the tenant (read through `da-guard served-values`, #2115): a value written in `defaults:`, a platform file's `tenants:`, the tenant file or a subdirectory counts, and so does a tenant in a subdirectory; a key switched off with `disable`, or one with no default that is never served, does not. A file with no `tenants:` is not a tenant; stderr prints one `WARN` per such file. Needs da-guard (shipped in the image; when running from the repo, via `$DA_GUARD_BINARY` or `$PATH`).
+
 **Examples**
 
 ```bash
@@ -591,7 +593,7 @@ da-tools blind-spot --config-dir ./conf.d --json-output
 |------|-------------|
 | `0` | Success (regardless of blind spots) |
 | `1` | Only an uncaught exception (traceback) returns 1. An unreachable Prometheus only prints a WARN and the run ends at 0 |
-| `2` | Caller error: a file under `--config-dir` cannot be read (content not UTF-8 or not valid YAML; the message names the file, #1654) |
+| `2` | Caller error: a file under `--config-dir` that the exporter cannot load and skips whole (the message names the file); a tree the exporter rejects (e.g. one tenant declared in two files); or da-guard not found / failing |
 
 ---
 
@@ -2309,6 +2311,8 @@ da-tools analyze-gaps (--tenant-config <FILE> | --config-dir <DIR>) [options]
 | `--json` | Print only JSON on stdout | false |
 | `--metric-dictionary <FILE>` | Metric dictionary; exit code 2 if given but the file does not exist | `metric-dictionary.yaml` beside the tool (image) or one level up (`scripts/tools/` in the repo) |
 
+`--config-dir` reads the thresholds, and their values, that the exporter's `/metrics` actually serves for each tenant (through `da-guard served-values`, #2115): an inherited `custom_` threshold is listed; a key switched off with `disable`, or one with no default that is never served, is not. A file with no `tenants:` is not a tenant; stderr prints one `WARN` per such file. Needs da-guard (shipped in the image; when running from the repo, via `$DA_GUARD_BINARY` or `$PATH`). `--tenant-config` still reads the one file as written.
+
 If the dictionary is in neither default location, one `WARN` line goes to stderr and matching falls back to name prefix and token overlap (`match_type: "prefix"`, `confidence: 0.7`). ⚠️ The v2.9.0 image is not affected (the dictionary sits beside the tool), but running that version's code directly in the repo as `python3 scripts/tools/ops/analyze_rule_pack_gaps.py` finds no dictionary and does not warn; pass `--metric-dictionary scripts/tools/metric-dictionary.yaml`. <!-- image-caveat: v2.9.0 -->
 
 **Output**
@@ -2326,7 +2330,7 @@ da-tools analyze-gaps --tenant-config ./conf.d/db-a.yaml
 | Code | Description |
 |------|-------------|
 | `0` | Success |
-| `2` | Caller error: bad arguments; a `--config-dir` / `--tenant-config` / `--metric-dictionary` path that does not exist (the message names the flag); the output path given to `-o/--output` cannot be written (#1641); an input file cannot be read (content not UTF-8 or not valid YAML; the message names the file, #1654). ⚠️ The v2.9.0 image returns `0` for an input path that does not exist, treating it as having no `custom_` metrics <!-- image-caveat: v2.9.0 --> |
+| `2` | Caller error: bad arguments; a `--config-dir` / `--tenant-config` / `--metric-dictionary` path that does not exist (the message names the flag); the output path given to `-o/--output` cannot be written (#1641); an input file cannot be read (content not UTF-8 or not valid YAML; the message names the file, #1654); under `--config-dir`, a file the exporter skips whole, a tree the exporter rejects, or da-guard not found / failing (#2115). ⚠️ The v2.9.0 image returns `0` for an input path that does not exist, treating it as having no `custom_` metrics <!-- image-caveat: v2.9.0 --> |
 
 ---
 
@@ -2554,7 +2558,7 @@ None of these puts a file on the exit-3 list; a platform file whose syntax the e
 | `--config-dir <path>` | (required) | conf.d/ root |
 | `--at <RFC3339>` | now | Instant to resolve at (schedule windows, `expires`, silence / maintenance end times all follow it) |
 
-The values come from the exporter's own load and resolvers; the subcommand judges nothing itself. JSON output: `parse_failed` (files the exporter's load skips whole; `[]` when none) and `tenants`, each with `values` (every threshold key `/metrics` emits a row for, canonical name → value, plus the reserved keys as the exporter's resolvers read them at `--at`), `severities` (each threshold key's severity label) , `unserved` (keys of the tenant's merged config absent from `values`, switched-off ones included, value as written) and `dropped` (keys whose row `/metrics` drops because the exporter cannot build its series; the reason for each dropped row). Which rows are kept is decided by `Gather` over a private registry holding the same collectors the exporter's `/metrics` serves. Exit codes: 0 ok; 2 caller error, the exporter rejects the whole tree (e.g. a tenant declared in two files), or `Gather` fails (e.g. two keys produce one series; the exporter's `/metrics` then answers 500 as a whole), with the reason — and the keys where they can be named — on stderr; 3 a file was skipped whole — the JSON is still written and names it in `parse_failed`. Any string in the output that is not valid UTF-8 is exit 2 too (JSON cannot carry it), even where the exporter only drops that row and `/metrics` still answers 200. Exit 2 follows `Gather` over the same collectors production `/metrics` serves. Served means served to a UTF-8-negotiated scrape (the Prometheus 3 default); a scrape with legacy or underscores escaping may see labels such as `{a-b}` and `{a.b}` collide in the text output. `dropped` is keyed by the canonical spelling, `unserved` by the spelling as written.
+The values come from the exporter's own load and resolvers; the subcommand judges nothing itself. JSON output: `parse_failed` (files the exporter's load skips whole; `[]` when none), `skipped` (files the load reads but serves no tenant from: a name not starting with `_` and no `tenants:`, or an empty one; each a `file` and a `reason`; `[]` when none) and `tenants`, each with `values` (every threshold key `/metrics` emits a row for, canonical name → value, plus the reserved keys as the exporter's resolvers read them at `--at`), `severities` (each threshold key's severity label) , `unserved` (keys of the tenant's merged config absent from `values`, switched-off ones included, value as written) and `dropped` (keys whose row `/metrics` drops because the exporter cannot build its series; the reason for each dropped row). Which rows are kept is decided by `Gather` over a private registry holding the same collectors the exporter's `/metrics` serves. Exit codes: 0 ok; 2 caller error, the exporter rejects the whole tree (e.g. a tenant declared in two files), or `Gather` fails (e.g. two keys produce one series; the exporter's `/metrics` then answers 500 as a whole), with the reason — and the keys where they can be named — on stderr; 3 a file was skipped whole — the JSON is still written and names it in `parse_failed`. Any string in the output that is not valid UTF-8 is exit 2 too (JSON cannot carry it), even where the exporter only drops that row and `/metrics` still answers 200. Exit 2 follows `Gather` over the same collectors production `/metrics` serves. Served means served to a UTF-8-negotiated scrape (the Prometheus 3 default); a scrape with legacy or underscores escaping may see labels such as `{a-b}` and `{a.b}` collide in the text output. `dropped` is keyed by the canonical spelling, `unserved` by the spelling as written.
 
 **Examples**
 

@@ -53,8 +53,19 @@ type servedValuesDoc struct {
 	At string `json:"at"`
 	// ParseFailed is LoadDir's parseFailed: the files the exporter's load
 	// skips because they do not decode. Always present ([] when none).
-	ParseFailed []string                      `json:"parse_failed"`
-	Tenants     map[string]servedTenantValues `json:"tenants"`
+	ParseFailed []string `json:"parse_failed"`
+	// Skipped: the files the exporter's load read but serves no tenant from
+	// (config.LoadReport.NoTenant), each with the load's reason, so a reader
+	// can name them without judging a file's format itself (#2115 R3).
+	// Always present ([] when none).
+	Skipped []skippedFile                 `json:"skipped"`
+	Tenants map[string]servedTenantValues `json:"tenants"`
+}
+
+// skippedFile is one entry of servedValuesDoc.Skipped.
+type skippedFile struct {
+	File   string `json:"file"`
+	Reason string `json:"reason"`
 }
 
 // servedTenantValues is one tenant's reading.
@@ -134,7 +145,7 @@ func runServedValues(args []string, stdout, errOut io.Writer) int {
 		}
 	}
 
-	cfg, parseFailed, err := config.LoadDir(f.configDir, log.New(errOut, "", 0))
+	cfg, rep, err := config.LoadDirReport(f.configDir, log.New(errOut, "", 0))
 	if err != nil {
 		fmt.Fprintf(errOut, "%s %s: %v\n", programName, servedValuesCmd, err)
 		return exitCallerErr
@@ -148,12 +159,18 @@ func runServedValues(args []string, stdout, errOut io.Writer) int {
 		fmt.Fprintf(errOut, "%s %s: %v\n", programName, servedValuesCmd, err)
 		return exitCallerErr
 	}
+	parseFailed := rep.ParseFailed
 	if parseFailed == nil {
 		parseFailed = []string{}
+	}
+	skipped := make([]skippedFile, 0, len(rep.NoTenant))
+	for _, name := range rep.NoTenant {
+		skipped = append(skipped, skippedFile{File: name, Reason: config.NoTenantReason})
 	}
 	doc := servedValuesDoc{
 		At:          at.Format(time.RFC3339),
 		ParseFailed: parseFailed,
+		Skipped:     skipped,
 		Tenants:     tenants,
 	}
 	if err := checkOutputUTF8("", reflect.ValueOf(doc)); err != nil {

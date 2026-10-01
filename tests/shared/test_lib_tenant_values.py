@@ -263,3 +263,61 @@ def test_non_utf8_file_name_raises_served_values_error(tmp_path, da_guard):
         tv.load_served_values(conf_d, binary=da_guard)
     assert ei.value.returncode == 2
     assert 'parse_failed[0]: "b\\xff.yaml"' in str(ei.value)
+
+
+# ── skipped：exporter 讀了、但不當租戶的檔（#2115 R3）────────────────────────
+
+def test_skipped_names_files_that_declare_no_tenant(tmp_path, da_guard):
+    """平面格式檔（無 `tenants:`）由 Go 判定、列進 skipped；lib 原樣交出檔名與原因。"""
+    conf_d = _tree(tmp_path, {
+        "_defaults.yaml": _DEFAULTS,
+        "tenant-a.yaml": "tenants:\n  tenant-a:\n    mysql_connections: 70\n",
+        "flat-t.yaml": "mysql_connections: 5\n",
+        "team/flat-u.yml": "mysql_connections: 6\n",
+    })
+    tree = tv.load_served_tree(conf_d, binary=da_guard)
+    assert [s.file for s in tree.skipped] == ["flat-t.yaml", "team/flat-u.yml"]
+    assert all(s.reason.startswith("declares no tenant") for s in tree.skipped)
+    assert set(tree.tenants) == {"tenant-a"}  # 平面檔不是租戶
+
+
+def test_skipped_is_empty_on_a_clean_tree(tmp_path, da_guard):
+    conf_d = _tree(tmp_path, {"_defaults.yaml": _DEFAULTS,
+                              "tenant-a.yaml": "tenants:\n  tenant-a:\n    mysql_connections: 70\n"})
+    assert tv.load_served_tree(conf_d, binary=da_guard).skipped == []
+
+
+def test_warn_skipped_prints_one_named_line_per_file(tmp_path, da_guard, capsys):
+    conf_d = _tree(tmp_path, {
+        "_defaults.yaml": _DEFAULTS,
+        "tenant-a.yaml": "tenants:\n  tenant-a:\n    mysql_connections: 70\n",
+        "flat\x1b[31m.yaml": "mysql_connections: 5\n",
+    })
+    tv.warn_skipped(tv.load_served_tree(conf_d, binary=da_guard))
+    lines = capsys.readouterr().err.splitlines()
+    assert len(lines) == 1, lines
+    assert lines[0].startswith("WARN: flat") and ": declares no tenant" in lines[0]
+    assert "\x1b" not in lines[0]  # 檔名來自樹，印到終端前已跳脫
+
+
+def test_output_without_skipped_is_refused(tmp_path):
+    """舊版 da-guard（JSON 沒有 skipped）：不靜默當成「沒有略過的檔」，而是 raise。"""
+    fake = tmp_path / "old-da-guard"
+    fake.write_text("#!/bin/sh\necho '{\"at\": \"x\", \"parse_failed\": [], \"tenants\": {}}'\n",
+                    encoding="utf-8")
+    fake.chmod(0o755)
+    with pytest.raises(tv.ServedValuesError) as ei:
+        tv.load_served_tree(tmp_path, binary=str(fake))
+    assert "skipped" in str(ei.value)
+
+
+def test_exit_on_served_values_error_is_rc2_one_line(capsys):
+    @tv.exit_on_served_values_error
+    def main():
+        raise tv.ServedValuesError("da-guard served-values exited 2", 2, "duplicate tenant x\n")
+
+    with pytest.raises(SystemExit) as ei:
+        main()
+    assert ei.value.code == 2
+    err = capsys.readouterr().err
+    assert err.startswith("ERROR: da-guard served-values exited 2") and "duplicate tenant" in err

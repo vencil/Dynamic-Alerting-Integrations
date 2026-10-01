@@ -174,6 +174,36 @@ def metric_dictionary():
         return yaml.safe_load(f)
 
 
+@pytest.fixture(scope="session")
+def da_guard_binary(tmp_path_factory):
+    """從本 repo 的 Go 原始碼建出的 da-guard（#2115）。
+
+    讀取端改接 `da-guard served-values` 後，值來自 Go；建不起來（含沒有 go）
+    一律 fail、不 skip——量不到 Go 的綠燈等於沒測。每個 xdist worker 建一次。
+    """
+    import subprocess
+    go = shutil.which("go")
+    if go is None:
+        pytest.fail("`go` is not on PATH: da-guard cannot be built, so the readers that "
+                    "take their values from it cannot be measured")
+    out = tmp_path_factory.mktemp("da-guard-bin") / "da-guard"
+    proc = subprocess.run(
+        [go, "build", "-buildvcs=false", "-o", str(out), "./cmd/da-guard"],
+        cwd=os.path.join(REPO_ROOT, "components", "threshold-exporter", "app"),
+        capture_output=True, text=True, encoding="utf-8", errors="replace",
+        check=False, timeout=600)
+    if proc.returncode != 0:
+        pytest.fail(f"go build da-guard failed (rc={proc.returncode}):\n{proc.stderr}")
+    return str(out)
+
+
+@pytest.fixture
+def da_guard_env(monkeypatch, da_guard_binary):
+    """`$DA_GUARD_BINARY` 指向 `da_guard_binary`，只在本測試期間（子行程繼承）。"""
+    monkeypatch.setenv("DA_GUARD_BINARY", da_guard_binary)
+    return da_guard_binary
+
+
 # ── Function-scoped fixtures ──────────────────────────────────────────
 
 @pytest.fixture

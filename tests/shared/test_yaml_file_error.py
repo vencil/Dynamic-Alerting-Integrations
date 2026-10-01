@@ -58,6 +58,10 @@ from pathlib import Path
 import pytest
 import yaml
 
+# #2115: blind_spot_discovery 與 analyze_rule_pack_gaps（目錄模式）的值來自
+# `da-guard served-values`；子行程經 `$DA_GUARD_BINARY` 找到本 repo 建出的 da-guard。
+pytestmark = pytest.mark.usefixtures("da_guard_env")
+
 REPO_ROOT = Path(__file__).resolve().parents[2]
 TOOLS = REPO_ROOT / "scripts" / "tools"
 sys.path.insert(0, str(TOOLS))
@@ -416,6 +420,10 @@ _ROWS = [
      lambda f: ["--old-dir", str(f["confd_ok"]), "--new-dir", str(f["confd_ok"])], EXIT_OK),
 ]
 _ROW_IDS = [r[0] for r in _ROWS]
+# Rows whose tool reads the tree through `da-guard served-values` (#2115): the
+# file is named and the rc is 2, but the cause is the exporter's verdict.
+_SERVED_VALUES_ROWS = {"blind_spot_discovery"}
+assert _SERVED_VALUES_ROWS <= set(_ROW_IDS), _SERVED_VALUES_ROWS - set(_ROW_IDS)
 
 def _expected_bad_rc(script: Path) -> int:
     """Derived from the tool's CLASS, not a per-label table (re-review).
@@ -441,7 +449,12 @@ def test_tool_names_the_unreadable_file_with_its_class_rc(fx, label, script, bad
     assert "Traceback" not in p.stderr, f"{label}: {p.stderr[-500:]!r}"
     assert named in p.stderr, f"{label}: stderr must name the file; got {p.stderr[-500:]!r}"
     assert "cannot read" in p.stderr or "cannot compare" in p.stderr, p.stderr[-500:]
-    assert "UnicodeDecodeError" in p.stderr, "the cause class tells apart bad bytes from bad syntax"
+    if label in _SERVED_VALUES_ROWS:
+        # #2115: the verdict is the exporter's (da-guard served-values
+        # parse_failed), which names the file but not a Python cause class.
+        assert "the exporter's load skips" in p.stderr, p.stderr[-500:]
+    else:
+        assert "UnicodeDecodeError" in p.stderr, "the cause class tells apart bad bytes from bad syntax"
 
 
 @pytest.mark.parametrize("label, script, bad, cwd, named, ctrl, ctrl_rc", _ROWS, ids=_ROW_IDS)
@@ -543,8 +556,11 @@ def test_validate_config_unchanged_rc_1_named(fx):
 # `load_yaml_file_strict` (#2123) raises the same YamlFileError, so its sites
 # owe the same guard; so do the #2114 exporter-key siblings of both.
 _LIB_ROOTS = {"load_yaml_file", "load_yaml_file_strict", "load_tenant_configs",
-              "load_yaml_file_exporter_keys", "load_yaml_file_strict_exporter_keys"}
-_LIB_MODULES = {"_lib_io", "_lib_python", "scripts.tools._lib_io", "scripts.tools._lib_python"}
+              "load_yaml_file_exporter_keys", "load_yaml_file_strict_exporter_keys",
+              # #2115: raises YamlFileError for a file the exporter's load skips.
+              "load_served_tree", "load_served_values"}
+_LIB_MODULES = {"_lib_io", "_lib_python", "scripts.tools._lib_io", "scripts.tools._lib_python",
+                "_lib_tenant_values", "scripts.tools._lib_tenant_values"}
 # Handler spellings that catch YamlFileError (a yaml.YAMLError). Matched on
 # the LAST attribute segment, so `yaml.error.YAMLError`, `_lib_io.YamlFileError`
 # and `_lib_python.YamlFileError` count too (re-review: they were judged

@@ -22,7 +22,11 @@ import (
 type servedOut struct {
 	At          string   `json:"at"`
 	ParseFailed []string `json:"parse_failed"`
-	Tenants     map[string]struct {
+	Skipped     []struct {
+		File   string `json:"file"`
+		Reason string `json:"reason"`
+	} `json:"skipped"`
+	Tenants map[string]struct {
 		Values     map[string]any      `json:"values"`
 		Severities map[string]string   `json:"severities"`
 		Unserved   map[string]any      `json:"unserved"`
@@ -259,6 +263,73 @@ func TestServedValues_CleanTree_ParseFailedIsEmptyList(t *testing.T) {
 	// there: [] and never null or absent.
 	if !strings.Contains(stdout, `"parse_failed": []`) {
 		t.Errorf("parse_failed must be an empty list on a clean tree:\n%s", stdout)
+	}
+}
+
+// #2115 R3: a file that is not a `_` file but declares no tenant is one the
+// exporter serves nothing from, silently. `skipped` names it with the load's
+// reason so a reader can warn without judging the file's format itself.
+func TestServedValues_NoTenantFiles_AreNamedInSkipped(t *testing.T) {
+	t.Parallel()
+	code, doc, _, stderr := served(t, map[string]string{
+		"_defaults.yaml":      defaultsOnly,
+		"_platform.yaml":      "tenants:\n  tenant-a:\n    mysql_connections: 60\n",
+		"tenant-a.yaml":       "tenants:\n  tenant-a:\n    mysql_connections: 70\n",
+		"flat-t.yaml":         "mysql_connections: 5\n",
+		"empty.yaml":          "# comments only\n", // WriteTree reads "" as a directory
+		"empty-wrapper.yaml":  "tenants: {}\n",
+		"team/flat-u.yml":     "mysql_connections: 6\n",
+		"team/_defaults.yaml": defaultsOnly,
+	}, "")
+	mustOK(t, code, stderr)
+	var got []string
+	for _, s := range doc.Skipped {
+		got = append(got, s.File)
+		if s.Reason != config.NoTenantReason {
+			t.Errorf("%s: reason = %q, want %q", s.File, s.Reason, config.NoTenantReason)
+		}
+	}
+	want := []string{"empty-wrapper.yaml", "empty.yaml", "flat-t.yaml", "team/flat-u.yml"}
+	if !reflect.DeepEqual(got, want) {
+		t.Errorf("skipped = %v, want %v", got, want)
+	}
+	// Nothing listed is served: the only tenant is the wrapped one.
+	if ids := keysOf(doc.Tenants); !reflect.DeepEqual(ids, []string{"tenant-a"}) {
+		t.Errorf("tenants = %v, want [tenant-a]", ids)
+	}
+}
+
+// A file the load cannot decode is parse_failed, not skipped: the two lists
+// never share a file.
+func TestServedValues_ParseFailedFileIsNotSkipped(t *testing.T) {
+	t.Parallel()
+	code, doc, _, stderr := served(t, map[string]string{
+		"_defaults.yaml": defaultsOnly,
+		"tenant-a.yaml":  "tenants:\n  tenant-a:\n    mysql_connections: 70\n",
+		"broken.yaml":    "tenants: [oops\n",
+	}, "")
+	if code != exitParseFailed {
+		t.Fatalf("exit = %d, want %d; stderr=%q", code, exitParseFailed, stderr)
+	}
+	if !reflect.DeepEqual(doc.ParseFailed, []string{"broken.yaml"}) {
+		t.Errorf("parse_failed = %v, want [broken.yaml]", doc.ParseFailed)
+	}
+	if len(doc.Skipped) != 0 {
+		t.Errorf("skipped = %v, want none", doc.Skipped)
+	}
+}
+
+func TestServedValues_CleanTree_SkippedIsEmptyList(t *testing.T) {
+	t.Parallel()
+	tmp := t.TempDir()
+	testutil.WriteTree(t, tmp, map[string]string{
+		"conf.d/_defaults.yaml": defaultsOnly,
+		"conf.d/tenant-a.yaml":  "tenants:\n  tenant-a:\n    mysql_connections: 70\n",
+	})
+	code, stdout, stderr := runOnce(t, servedValuesCmd, "--config-dir", filepath.Join(tmp, "conf.d"))
+	mustOK(t, code, stderr)
+	if !strings.Contains(stdout, `"skipped": []`) {
+		t.Errorf("skipped must be an empty list on a clean tree:\n%s", stdout)
 	}
 }
 

@@ -205,6 +205,12 @@ TOOL_FILES=(
     # subcommands (guard / batchpr / parser). Imported by their
     # respective ops/*_dispatch.py shims.
     _lib_godispatch.py
+    # #2115 — per-tenant values as /metrics serves them (runs `da-guard
+    # served-values`, shipped in this image). Imported by
+    # blind_spot_discovery and analyze_rule_pack_gaps; without it the
+    # flat-layout image ImportErrors on startup. Imports _lib_io,
+    # _lib_exitcodes and ops/guard_dispatch (all above).
+    _lib_tenant_values.py
     # Data files
     metric-dictionary.yaml
     # #719 — SoT map read by _observed_map_lib.py via same-dir lookup
