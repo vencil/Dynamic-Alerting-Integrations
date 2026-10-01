@@ -535,6 +535,88 @@ data:
                 lock contention; restart the pod if no obvious cause.
               runbook_url: "https://github.com/vencil/Dynamic-Alerting-Integrations/blob/main/docs/troubleshooting.md"
 
+          # --- Config Scan Failing (issue #2452) ---
+          # ConfigReloadStuck above CANNOT see this one: when the conf.d scan
+          # itself fails (one tenant id declared in two files, or the config
+          # directory cannot be walked) no reload is ever triggered, so
+          # da_config_reload_trigger_total never moves and that alert's LHS
+          # gate stays false. The exporter keeps serving the last good config
+          # and /ready stays 200 (by decision), so every later edit — to ANY
+          # tenant — is silently ignored until the tree is fixed.
+          # da_config_scan_failures_total{reason} counts each failed
+          # watch-path scan (reason ∈ {duplicate_tenant, walk_error}, a
+          # closed set; both pre-initialised at 0). Both directory modes:
+          # the flat mode (no _defaults.yaml) rejects a duplicate tenant in
+          # its per-tick change check too and freezes the same way.
+          #
+          # Expression rationale — the question is "has the config been
+          # unscannable for more than 5 minutes", NOT "how many failures":
+          #   - RHS `(time() - da_config_last_scan_complete_unixtime_seconds)
+          #     > 300`: that gauge is stamped by pkg/config.ScanDirTree only
+          #     on a scan that returned no error AND no duplicate-tenant
+          #     Conflict, on every watch tick of either mode. Its age is how
+          #     long the tree has been unscannable, independent of how many
+          #     ticks --reload-interval (a public Helm value) fits into the
+          #     window, and the first clean
+          #     tick after the fix resets it — the alert resolves on that
+          #     tick, not when some window drains.
+          #   - LHS `increase(...[10m]) > 0` is the guard that this is a scan
+          #     FAILURE: with a --reload-interval above 300s a healthy
+          #     exporter's gauge is legitimately older than 300s between
+          #     ticks. It also carries {reason} into the alert.
+          #   - `and ignoring (reason)`: `and` is a set operation, so the
+          #     match needs no group_left/right and a many-to-one shape
+          #     cannot error; the gauge has no `reason` label and every
+          #     other label (job / instance / pod / namespace) comes from
+          #     the same scrape target on both sides, so each failing reason
+          #     series matches its own target's gauge only. The result keeps
+          #     the LHS labels.
+          # `for: 1m` rides out one missed scrape. promtool
+          # (tests/rulepacks/platform-config-scan-failing_test.yaml): fires
+          # within 10m of the duplicate appearing at a 30s, 120s and 300s
+          # reload interval; one failed tick at 30s does not fire; a healthy
+          # exporter at a 600s interval does not fire. A tick-by-tick grid over
+          # every phase measured the worst onset-to-fire at 360s for intervals
+          # 30s-300s and 450s at 420s. Not covered: an interval longer than
+          # the [10m] window, which can then hold no failure between ticks.
+          # ⚠️ ONE failed tick can fire it at a long interval: the gauge's age
+          # around a single failed tick peaks at about 2x --reload-interval.
+          # Same grid, one failed tick: never fires at <= 180s, fires in some
+          # phases at 190s and in every phase at 200s-420s. That is the alert
+          # telling the truth — no scan succeeded for more than 5 minutes —
+          # so it is kept; requiring >= 2 failures instead would push a 420s
+          # interval past the 10-minute bound. Pinned by the
+          # single-failed-tick-at-240s-interval-fires case.
+          - alert: ConfigScanFailing
+            expr: |
+              (increase(da_config_scan_failures_total[10m]) > 0)
+              and ignoring (reason)
+              ((time() - da_config_last_scan_complete_unixtime_seconds) > 300)
+            for: 1m
+            labels:
+              severity: critical
+              alert_source: platform
+            annotations:
+              summary: "Threshold-exporter conf.d unscannable for >5m ({{ $labels.reason }}) — config frozen at last good state"
+              description: |
+                No conf.d scan on {{ $labels.instance }} has succeeded for
+                more than 5 minutes, and scans are failing with reason
+                `{{ $labels.reason }}`. Nothing is reloaded while it lasts:
+                the exporter keeps serving the last good config and /ready
+                stays 200, so edits to ANY tenant (git-sync, kubectl apply,
+                Tenant API) are NOT applied. duplicate_tenant = one tenant id
+                is declared in two files; the exporter log names both files
+                in "WARN: cannot check config ...: duplicate tenant ID ..."
+                every tick ("...: hierarchical scan: duplicate tenant ID ..."
+                once a _defaults.yaml has been seen anywhere in the tree).
+                Remove one declaration.
+                walk_error = the config directory is missing or not a
+                directory. Once the
+                duplicate declaration is removed the next tick reloads the
+                tree (pending edits included), no restart needed, and the
+                alert resolves once that tick's successful scan is scraped.
+              runbook_url: "https://github.com/vencil/Dynamic-Alerting-Integrations/blob/main/docs/troubleshooting.md"
+
           # --- Tenant Cardinality Cap Truncation (issue #652) ---
           # Companion to the v1.5.0 runtime per-tenant cardinality cap
           # (`pkg/config/resolve.go:189-195`): the cap *enforces* a 500-

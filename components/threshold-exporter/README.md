@@ -106,6 +106,7 @@
 |--------|------|------|
 | `threshold_exporter_config_info{config_source,git_commit}` | Gauge | 設定來源與 git revision，值恆 1（GitOps drift 觀察用） |
 | `da_config_reload_trigger_total{reason}` | Counter | reload 次數，reason: `source` / `defaults` / `new` / `delete` / `forced` |
+| `da_config_scan_failures_total{reason}` | Counter | watch 路徑掃描失敗次數（[#2452](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/2452)），reason 為封閉集合：`duplicate_tenant`（同一租戶 id 在兩個檔宣告；有無 `_defaults.yaml` 兩種目錄模式都會）/ `walk_error`（設定目錄不存在或不是目錄），兩者從 0 起。失敗時不套用任何變更、上一列的 reload 計數不動、`/ready` 仍 200；持續失敗每 tick 加 1，失敗出現前已排定、尚未執行的 debounced reload 再各加 1。告警 `ConfigScanFailing`：有掃描失敗，且 `da_config_last_scan_complete_unixtime_seconds` 已超過 5 分鐘沒更新（設定已超過 5 分鐘無法掃描） |
 | `da_config_reload_duration_seconds` | Histogram | 完整 reload 耗時（scan + parse + merge + commit） |
 | `da_config_scan_duration_seconds` | Histogram | 目錄掃描耗時 |
 | `da_config_initial_load_duration_seconds` | Gauge | 啟動時那一次載入的秒數；只在載入成功時設一次，之後的 reload 不動它。HTTP server 在載入完成後才啟動，startupProbe 的上限要大於這個值（[#2153](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/2153)） |

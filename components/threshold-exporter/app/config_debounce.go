@@ -369,6 +369,7 @@ func (m *ConfigManager) scanAndCheckHierarchical(prior reloadPriorState) (reload
 	}
 	if scanErr != nil {
 		m.getLogger().Printf("ERROR: hierarchical scan failed: %v", scanErr)
+		m.getMetrics().IncScanFailure(scanErr) // #2452
 		return reloadScanState{}, true, scanErr
 	}
 
