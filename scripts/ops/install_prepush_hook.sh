@@ -210,6 +210,16 @@ fi
 exec bash "$_dispatch" "$@"
 VIBE_SHIM_EOF
 
+# ⛔ Never write through a symlink. A hook linked to a guard in scripts/ops is
+# recognised as a guard copy and refreshed in place, and `>` would follow the
+# link and overwrite the version-controlled guard with the shim.
+if [ -L "$target" ]; then
+    command -v rm >/dev/null 2>&1 && rm -f "$target" || {
+        warn "⛔ $target is a symlink and could not be removed; writing would"
+        warn "   follow it. Remove the link by hand, then re-run."
+        exit 1
+    }
+fi
 printf '%s' "$SHIM_BODY" > "$target" || { warn "⛔ could not write $target"; exit 1; }
 
 # ⛔ Not `|| true`. git SILENTLY IGNORES a hook without the executable bit — it

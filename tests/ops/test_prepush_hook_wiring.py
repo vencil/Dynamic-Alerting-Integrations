@@ -1443,8 +1443,12 @@ _INSTALL = "bash scripts/ops/install_prepush_hook.sh"
 _RESTORE_RE = re.compile(r"^\s*(git -C \S+(?:\\ \S+)* checkout HEAD -- \S+)$", re.M)
 
 
+_OLD_COPY = "OLD-COPY: helper not found"
+
+
 def _helper_missing_lines(out: str) -> list[str]:
-    return [ln for ln in out.splitlines() if any(n in ln for n in _HELPER_MISSING.values())]
+    needles = (*_HELPER_MISSING.values(), _OLD_COPY)
+    return [ln for ln in out.splitlines() if any(n in ln for n in needles)]
 
 
 def _assert_the_guards_are_back(work: Path) -> None:
@@ -1465,10 +1469,14 @@ _USER_HOOK = (
 
 def _repo_with_a_shipped_old_guard(tmp_path: Path, guard: str) -> tuple[Path, bytes]:
     """A repo whose history holds an older version of ``guard`` — the bytes a
-    stale copy carries — before the current one."""
+    stale copy carries — before the current one. The old version lacks the
+    current message text, as real ones do, so recognising a copy by a string
+    only today's guards print cannot pass."""
     work = _make_repo(tmp_path, _PROTECT_ONLY)
     current = (_OPS / guard).read_bytes()
-    old = current + b"# an older shipped version\n"
+    needle = _HELPER_MISSING[guard].encode()
+    assert needle in current
+    old = current.replace(needle, _OLD_COPY.encode())
     target = work / "scripts" / "ops" / guard
     for content, msg in ((old, "old guard"), (current, "current guard")):
         target.write_bytes(content)
@@ -1511,6 +1519,24 @@ def test_a_stale_guard_copy_is_replaced_by_the_installer(
 
     r = _install_guards(work)
     assert r.returncode == 0, f"installer failed:\n{r.stdout}{r.stderr}"
+    _assert_the_guards_are_back(work)
+
+
+def test_a_hook_symlinked_to_a_guard_is_replaced_without_touching_the_guard(
+    tmp_path: Path,
+) -> None:
+    """A symlink to a tracked guard is identical to it, so it is refreshed in
+    place — and writing through the link would overwrite the guard itself."""
+    work, _ = _repo_with_a_shipped_old_guard(tmp_path, "protect_main_push.sh")
+    hook = work / ".git" / "hooks" / "pre-push"
+    hook.unlink(missing_ok=True)
+    hook.symlink_to(work / "scripts" / "ops" / "protect_main_push.sh")
+
+    r = _install_guards(work)
+    assert r.returncode == 0, f"installer failed:\n{r.stdout}{r.stderr}"
+    status = _git(work, "status", "--porcelain", "--", "scripts").stdout
+    assert status == "", f"the installer wrote into the tracked guard:\n{status}"
+    assert not hook.is_symlink()
     _assert_the_guards_are_back(work)
 
 
