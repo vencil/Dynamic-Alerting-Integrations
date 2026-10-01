@@ -127,8 +127,9 @@ type configMetrics struct {
 //     two files (*config.DuplicateTenantError, TreeScan.Conflict). Counted
 //     in BOTH directory modes, the same way: detectChange fails, every tick,
 //     and tickOnce logs `WARN: cannot check config <dir>: …` — the message
-//     is `hierarchical scan: duplicate tenant ID …` with a root
-//     _defaults.yaml and the bare `duplicate tenant ID …` in flat mode.
+//     is `hierarchical scan: duplicate tenant ID …` once a _defaults.yaml
+//     has been seen anywhere in the tree (the mode is sticky) and the bare
+//     `duplicate tenant ID …` in flat mode.
 //     No reload is scheduled, so -scan-debounce plays no part. The tree is
 //     frozen at the last good config. (Making the flat plane's own
 //     IncrementalLoad run that check is #1577.)

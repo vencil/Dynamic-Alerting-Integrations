@@ -608,7 +608,8 @@ data:
                 is declared in two files; the exporter log names both files
                 in "WARN: cannot check config ...: duplicate tenant ID ..."
                 every tick ("...: hierarchical scan: duplicate tenant ID ..."
-                with a root _defaults.yaml). Remove one declaration.
+                once a _defaults.yaml has been seen anywhere in the tree).
+                Remove one declaration.
                 walk_error = the config directory is missing or not a
                 directory. Once the
                 duplicate declaration is removed the next tick reloads the
