@@ -226,24 +226,13 @@ def defaults_doc_violations(rel: str, doc: object, platform_schema: dict,
     if not isinstance(doc, dict):
         return [f"ERROR: {rel}: top-level YAML document must be a mapping "
                 f"(`_defaults` platform file; got {type(doc).__name__})"]
-    registry = registry if registry is not None else default_registry()
     try:
-        validator.validate(doc, platform_schema, registry=registry)
+        validator.validate(doc, platform_schema,
+                           registry=registry if registry is not None
+                           else default_registry())
     except validator.ValidationError as exc:
         loc = "/".join(str(p) for p in exc.absolute_path)
-        out = [f"ERROR: {rel}: {_explain(exc, validator)} @ /{loc}"]
-        # #2386: a missing top-level `defaults` is reported in preference to
-        # every other error, so a `defalts:` typo would read as "'defaults'
-        # is a required property" without naming the typo. Judge the rest of
-        # the document too and report its first error as well.
-        if exc.validator == "required" and not exc.absolute_path:
-            rest = {k: v for k, v in platform_schema.items() if k != "required"}
-            try:
-                validator.validate(doc, rest, registry=registry)
-            except validator.ValidationError as more:
-                loc = "/".join(str(p) for p in more.absolute_path)
-                out.append(f"ERROR: {rel}: {_explain(more, validator)} @ /{loc}")
-        return out
+        return [f"ERROR: {rel}: {_explain(exc, validator)} @ /{loc}"]
     return []
 
 

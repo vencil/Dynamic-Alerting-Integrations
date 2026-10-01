@@ -1855,6 +1855,8 @@ class TestTheJsonDocumentCarriesNoInternalBookkeeping:
         # tree turns this red on purpose — add its name here, and only if it
         # really does read `--config-dir`.
         assert carriers == {
+            # #2386. Reads every level's `_defaults.yaml` under `--config-dir`.
+            "defaults_wrapper",
             "policy_dsl",
             "profiles",
             # #2291. Reads the root `_defaults.yaml` under `--config-dir`.
@@ -2573,13 +2575,13 @@ class TestRootDefaultsValues:
 
 
 class TestRootDefaultsWrapper:
-    """Check 10 (#2386): a root `_defaults.yaml` with no `defaults:` key whose
-    top level holds a threshold FAILs.
+    """Check 10 (#2386): a root `_defaults.yaml` with no `defaults:` mapping
+    whose top level holds a threshold FAILs.
 
     Measured before this rule: `mysql_connections: 80` written at the top of
-    the root file printed `nothing to check`, rc 0 — while `da-guard
-    served-values` had no `mysql_connections` series for the tenant and
-    `/effective` showed 80.
+    the root file (no `defaults:` key, or `defaults:` with no value) printed
+    `nothing to check`, rc 0 — while `da-guard served-values` had no
+    `mysql_connections` series for the tenant and `/effective` showed 80.
     """
 
     _TENANT = "tenants:\n  tenant-x:\n    container_cpu: \"70\"\n"
@@ -2592,8 +2594,12 @@ class TestRootDefaultsWrapper:
         (d / "tenant-x.yaml").write_text(cls._TENANT, encoding="utf-8")
         return d
 
-    def test_unwrapped_root_threshold_fails(self, tmp_path):
-        d = self._tree(tmp_path, "mysql_connections: 80\ncontainer_cpu: 60\n")
+    @pytest.mark.parametrize("body", [
+        "mysql_connections: 80\ncontainer_cpu: 60\n",
+        "defaults:\nmysql_connections: 80\ncontainer_cpu: 60\n",
+    ], ids=["no-defaults-key", "defaults-with-no-value"])
+    def test_unwrapped_root_threshold_fails(self, tmp_path, body):
+        d = self._tree(tmp_path, body)
         r = vc.check_root_defaults(str(d))
         assert r["status"] == vc.FAIL, r
         assert len(r["details"]) == 1, r
@@ -2650,3 +2656,95 @@ class TestRootDefaultsWrapper:
         out = capsys.readouterr().out
         assert exc.value.code == 1, out
         assert "[FAIL] root_defaults" in out, out
+
+
+class TestDefaultsWrapperRow:
+    """Check 11 (#2386): at any level, a `defaults:` mapping beside top-level
+    keys that would act if merged FAILs — the mapping makes the defaults
+    merge read only itself. Measured on a subtree: top-level
+    `_severity_dedup: disable` was served as `disable` with no wrapper or
+    with `defaults:` and no value, and as `enable` once `defaults: {}` was
+    added."""
+
+    _ROOT = "defaults:\n  mysql_connections: 80\n"
+    _TENANT = "tenants:\n  tx:\n    container_cpu: \"70\"\n"
+    _TOP = "_severity_dedup: disable\nmysql_connections: 70\n"
+
+    def _tree(self, tmp_path, sub_body, root_body=None):
+        d = tmp_path / "conf.d"
+        (d / "team").mkdir(parents=True)
+        (d / "_defaults.yaml").write_text(root_body or self._ROOT, encoding="utf-8")
+        if sub_body is not None:
+            (d / "team" / "_defaults.yaml").write_text(sub_body, encoding="utf-8")
+        (d / "team" / "tx.yaml").write_text(self._TENANT, encoding="utf-8")
+        return d
+
+    def test_subtree_empty_mapping_plus_top_keys_fails(self, tmp_path):
+        d = self._tree(tmp_path, "defaults: {}\n" + self._TOP)
+        r = vc.check_defaults_wrapper(str(d))
+        assert r["status"] == vc.FAIL, r
+        assert len(r["details"]) == 1, r
+        line = r["details"][0]
+        assert line.startswith("team/_defaults.yaml: "), line
+        assert "`_severity_dedup`, `mysql_connections` reach no tenant" in line, line
+        assert "Move them under `defaults:`" in line, line
+
+    @pytest.mark.parametrize("sub", [
+        _TOP,
+        "defaults:\n" + _TOP,
+        "defaults:\n  _severity_dedup: disable\n  mysql_connections: 70\n",
+    ], ids=["unwrapped", "null-defaults", "keys-under-defaults"])
+    def test_shapes_the_merge_reads_whole_pass(self, tmp_path, sub):
+        """⛔ `defaults:` with no value is not a mapping: the merge still reads
+        the whole document, so it is the control this row must not fire on."""
+        d = self._tree(tmp_path, sub)
+        r = vc.check_defaults_wrapper(str(d))
+        assert r["status"] == vc.PASS, r
+
+    def test_root_mapping_plus_top_reserved_key_fails(self, tmp_path):
+        d = self._tree(tmp_path, None,
+                       root_body=self._ROOT + "_severity_dedup: disable\n")
+        r = vc.check_defaults_wrapper(str(d))
+        assert r["status"] == vc.FAIL, r
+        assert r["details"][0].startswith("_defaults.yaml: "), r
+        assert "the root file holds numbers only" in r["details"][0], r
+
+    def test_end_to_end_exits_1(self, tmp_path, capsys, cli_argv):
+        d = self._tree(tmp_path, "defaults: {}\n" + self._TOP)
+        cli_argv("validate_config", "--config-dir", str(d))
+        with pytest.raises(SystemExit) as exc:
+            vc.main()
+        out = capsys.readouterr().out
+        assert exc.value.code == 1, out
+        assert "[FAIL] defaults_wrapper" in out, out
+
+
+_WRAPPER_MATRIX = json.loads(
+    (pathlib.Path(__file__).resolve().parents[1] / "shared"
+     / "defaults_wrapper_matrix.json").read_text(encoding="utf-8"))
+
+
+class TestDefaultsWrapperMatrix:
+    """The table da-guard's TestDefaultsWrapperMatrix also runs: the two rows
+    FAIL exactly where da-guard reports, on the same files."""
+
+    def test_read_elsewhere_list_matches(self):
+        assert sorted(vc.TOP_LEVEL_READ_ELSEWHERE) == \
+            _WRAPPER_MATRIX["top_level_read_elsewhere"]
+
+    @pytest.mark.parametrize("case", _WRAPPER_MATRIX["cases"],
+                             ids=[c["name"] for c in _WRAPPER_MATRIX["cases"]])
+    def test_rows_match_da_guard(self, tmp_path, case):
+        d = tmp_path / "conf.d"
+        for rel, body in case["files"].items():
+            (d / rel).parent.mkdir(parents=True, exist_ok=True)
+            (d / rel).write_text(body, encoding="utf-8")
+        got = []
+        root = vc.check_root_defaults(str(d))
+        if any("no top-level `defaults:` mapping" in x for x in root["details"]):
+            got.append(["root_defaults_unwrapped", "_defaults.yaml"])
+        wrap = vc.check_defaults_wrapper(str(d))
+        if wrap["status"] == vc.FAIL:
+            got += [["defaults_toplevel_ignored", x.split(": ", 1)[0]]
+                    for x in wrap["details"]]
+        assert sorted(got) == sorted(case["expect"]), (root, wrap)

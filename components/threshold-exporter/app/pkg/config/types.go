@@ -1,6 +1,9 @@
 package config
 
-import "time"
+import (
+	"strings"
+	"time"
+)
 
 // StateFilter defines a state-based monitoring filter (Scenario C).
 // Each filter maps to kube_pod_container_status_waiting_reason or similar K8s state metrics.
@@ -298,6 +301,20 @@ var validReservedKeys = map[string]bool{
 var validReservedPrefixes = []string{
 	"_state_",
 	"_routing",
+}
+
+// IsReservedKey reports whether k is a reserved tenant config key: one of
+// validReservedKeys, or starting with one of validReservedPrefixes.
+func IsReservedKey(k string) bool {
+	if validReservedKeys[k] {
+		return true
+	}
+	for _, prefix := range validReservedPrefixes {
+		if strings.HasPrefix(k, prefix) {
+			return true
+		}
+	}
+	return false
 }
 
 // RoutingConfig represents a tenant's alert routing preferences.

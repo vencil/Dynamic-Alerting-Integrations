@@ -345,21 +345,3 @@ def test_unresolvable_ref_fails_even_when_no_block_reaches_it(tmp_path: Path) ->
 def test_routing_defaults_block_passes_with_repo_schemas(tmp_path: Path) -> None:
     r = _run(_mkrepo(tmp_path, "rd.md", _ROUTING_DEFAULTS_BLOCK))
     assert r.returncode == EXIT_OK, r.stdout + r.stderr
-
-
-def test_platform_excerpt_without_defaults_is_judged_on_its_keys(tmp_path: Path) -> None:
-    """#2386: the schema requires `defaults:` in every `_defaults*` file, but
-    a doc block showing one section of that file is an excerpt. It is judged
-    on the keys it shows — a valid section passes, a typo'd sibling key still
-    fails."""
-    ok = ("```yaml\n# conf.d/_defaults.yaml\n_routing_enforced:\n  enabled: true\n"
-          "  receiver:\n    type: webhook\n    url: https://noc.example.com/a\n"
-          "  match:\n    - 'severity=\"critical\"'\n```\n")
-    r = _run(_mkrepo(tmp_path, "excerpt.md", ok))
-    assert r.returncode == EXIT_OK, r.stdout + r.stderr
-    assert "'defaults' is a required property" not in r.stdout
-
-    typo = "```yaml\nstate_filters:\n  m:\n    severity: info\nstate_flters: {}\n```\n"
-    r = _run(_mkrepo(tmp_path, "excerpt.md", typo))
-    assert r.returncode == EXIT_VIOLATION, r.stdout
-    assert "state_flters" in r.stdout

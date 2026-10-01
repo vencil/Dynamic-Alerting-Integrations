@@ -973,9 +973,12 @@ var taggedNullOutsidePolicyTrees = map[string]map[string]string{
 		"t-pol.yaml": "tenants:\n  t-pol:\n    cpu: 80\n    _routing_profile: p1\n",
 	},
 	"defaults file carrying _routing_defaults": {
+		// #2386: `_meta`, not `meta` — a top-level threshold-shaped key beside
+		// a `defaults:` mapping is defaults_toplevel_ignored, not this test's
+		// subject.
 		"_defaults.yaml": "defaults:\n  cpu: 70\n_routing_defaults:\n" +
 			"  receiver: {type: slack, api_url: 'https://hooks.slack.com/services/T/B/x'}\n" +
-			"meta: {require_critical_escalation: !!null {}}\n",
+			"_meta: {require_critical_escalation: !!null {}}\n",
 		"t-pol.yaml": "tenants:\n  t-pol:\n    cpu: 80\n    _routing:\n      group_wait: 30s\n",
 	},
 }

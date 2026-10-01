@@ -3566,8 +3566,7 @@ def run_check(
     # empty one means its reader broke — but 2 of the derived ARTIFACTS
     # legitimately carry none (the recipes example root
     # `rule-packs/recipes/examples/conf.d/_defaults.yaml` and its `finance/`
-    # child declare no threshold — the child writes an empty `defaults:`
-    # since #2386). Applying the generator rule to
+    # child declare only the other sections). Applying the generator rule to
     # artifacts turned this gate red on arrival for two correct files.
     #
     # Vacuity is still closed for artifacts, by three links: a file that cannot

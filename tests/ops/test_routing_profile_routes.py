@@ -379,9 +379,7 @@ class TestSchemaConsolidation:
         assert validate(doc) is not None
 
     def test_routing_defaults_routes_rejected_by_platform_schema(self, validate):
-        # #2386: `defaults` is required in every `_defaults*` file.
-        doc = {"defaults": None,
-               "_routing_defaults": {"receiver": _MAIN, "routes": [_route()]}}
+        doc = {"_routing_defaults": {"receiver": _MAIN, "routes": [_route()]}}
         assert validate(doc, validate.platform) is not None
         del doc["_routing_defaults"]["routes"]
         assert validate(doc, validate.platform) is None

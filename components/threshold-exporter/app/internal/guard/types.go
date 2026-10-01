@@ -65,10 +65,12 @@
 //     it lands. Two tiers: SeverityWarn at WarnRatio×Limit (80%
 //     by default), SeverityError above Limit.
 //
-//  5. Root defaults wrapper (#2386; see rootdefaults.go)
-//     The conf.d root `_defaults.yaml` with no `defaults:` mapping
-//     (error): its top-level thresholds are not served on /metrics,
-//     while the merged effective configs show them.
+//  5. Defaults wrapper (#2386; see rootdefaults.go), both errors:
+//     the conf.d root `_defaults.yaml` with no `defaults:` mapping
+//     (its top-level thresholds are not served on /metrics, while the
+//     merged effective configs show them), and a `_defaults.yaml` at
+//     any level whose `defaults:` mapping leaves top-level keys out of
+//     the defaults merge.
 //
 // Future PRs in the C-12 family:
 //   - PR-4: CLI subcommand `da-tools guard defaults-impact` plus
@@ -366,8 +368,8 @@ type CheckInput struct {
 	CardinalityWarnRatio float64 `json:"cardinality_warn_ratio,omitempty"`
 
 	// DefaultsFiles are the defaults carriers of the scan
-	// (config.ScopedTenants.DefaultsFiles). The root one is checked for a
-	// missing `defaults:` wrapper (#2386, rootdefaults.go); nil skips it.
+	// (config.ScopedTenants.DefaultsFiles), checked for the `defaults:`
+	// wrapper shapes (#2386, rootdefaults.go); nil skips the check.
 	DefaultsFiles []config.DefaultsFile `json:"-"`
 
 	// ParseFailed are the files the exporter drops
