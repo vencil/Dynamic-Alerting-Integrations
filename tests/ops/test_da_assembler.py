@@ -1,11 +1,11 @@
 #!/usr/bin/env python3
 """da_assembler.py 的 pytest 風格測試 — CRD → YAML 組合器。"""
 
-import io
 import json
 import os
 import shutil
 import subprocess
+import sys
 import tempfile
 from pathlib import Path
 from unittest import mock
@@ -13,6 +13,7 @@ from unittest import mock
 import pytest
 import yaml
 
+import da_assembler  # noqa: E402
 from _lib_exitcodes import EXIT_CALLER_ERROR  # noqa: E402
 from _lib_io import OutputWriteError  # noqa: E402  (#1789)
 from da_assembler import (  # noqa: E402
@@ -29,6 +30,12 @@ from da_assembler import (  # noqa: E402
     update_cr_status,
     write_rendered,
 )
+
+
+@pytest.fixture(autouse=True)
+def _crdecode(da_crdecode_env):
+    """`--render-cr` 以 da-crdecode 解碼 CR（#2476）；本檔每支測試都可用。"""
+    return da_crdecode_env
 
 
 def _make_cr(name="db-a", namespace="db-a", tenants=None):
@@ -296,18 +303,14 @@ class TestRenderCrFile:
         assert message in caplog.text
         assert list(out_dir.iterdir()) == []
 
-    # Unquoted names YAML 1.1 (PyYAML resolver, measured) types as int /
-    # float / bool are a caller error. This is CLOSE TO, not the same as,
-    # what Kubernetes sees after YAML→JSON (sigs.k8s.io/yaml, go-yaml v2).
-    # Known differences, deliberately NOT asserted (the #2371 contract is
-    # "YAML 1.1 as PyYAML reads it", not "as Kubernetes reads it"):
-    #   `0o17`  PyYAML str (1.1 has no 0o)       go-yaml int
-    #   `1e3`   PyYAML str (1.1 float needs `.`) go-yaml float
-    #   `08`    PyYAML str (not valid octal)     go-yaml differs
-    #   `y`/`n` PyYAML str                       go-yaml v2 bool
-    #   `1:30`  PyYAML int (sexagesimal)         go-yaml string
-    # Shapes let through here that are not a DNS-1123 name are refused by
-    # the name-format check instead (#2396, TestRenderCrNameFormat).
+    # #2476: an unquoted name is typed as Kubernetes clients type it
+    # (da-crdecode, sigs.k8s.io/yaml YAMLToJSON): `kind` is what the decoded
+    # JSON holds, "number" / "boolean", or None where it stays a string
+    # (`1:30`) and the name-format check refuses it instead (#2396). The
+    # rows `0o17` … `n` are the ones the earlier PyYAML reading let through
+    # (YAML 1.1 types them as strings) although Kubernetes reads a number or
+    # a boolean. `.inf` is refused by the decoder itself (no JSON for it):
+    # TestRenderCrNameFormat.test_decoder_refusal_names_the_file.
     # `stale`: the file an earlier version (before #2399/#2400) rendered
     # this name to — measured against tools/v2.9.0, #2430. None where it
     # is the name as written and quoting saves it: quoting then overwrites
@@ -315,35 +318,39 @@ class TestRenderCrFile:
     # "rename" when it is not (#2396), and then even a same-spelling file
     # (`True` -> `True.yaml`, `-5` -> `-5.yaml`) is left behind.
     @pytest.mark.parametrize("name, kind, stale, fix", [
-        pytest.param("42", "int", None, "quote", id="name-int"),
-        pytest.param("8", "int", None, "quote", id="name-int-8"),
-        pytest.param("010", "int", "8.yaml", "quote", id="name-int-octal"),
-        pytest.param("0x1F", "int", "31.yaml", "rename", id="name-int-hex"),
-        pytest.param("1:30", "int", "90.yaml", "rename",
+        pytest.param("42", "number", None, "quote", id="name-int"),
+        pytest.param("8", "number", None, "quote", id="name-int-8"),
+        pytest.param("010", "number", "8.yaml", "quote", id="name-int-octal"),
+        pytest.param("0x1F", "number", "31.yaml", "rename", id="name-int-hex"),
+        pytest.param("1:30", None, "90.yaml", "rename",
                      id="name-int-sexagesimal"),
-        pytest.param("-5", "int", "-5.yaml", "rename",
+        pytest.param("-5", "number", "-5.yaml", "rename",
                      id="name-int-negative"),
-        pytest.param("1.5", "float", None, "quote", id="name-float"),
-        pytest.param("1.50", "float", "1.5.yaml", "quote",
+        pytest.param("1.5", "number", None, "quote", id="name-float"),
+        pytest.param("1.50", "number", "1.5.yaml", "quote",
                      id="name-float-trailing-0"),
-        pytest.param(".inf", "float", "inf.yaml", "rename",
-                     id="name-float-inf"),
-        pytest.param("true", "bool", "True.yaml", "quote",
+        pytest.param("true", "boolean", "True.yaml", "quote",
                      id="name-bool-true"),
-        pytest.param("TRUE", "bool", "True.yaml", "rename",
+        pytest.param("TRUE", "boolean", "True.yaml", "rename",
                      id="name-bool-upper"),
-        pytest.param("True", "bool", "True.yaml", "rename",
+        pytest.param("True", "boolean", "True.yaml", "rename",
                      id="name-bool-title"),
-        pytest.param("yes", "bool", "True.yaml", "quote", id="name-bool-yes"),
-        pytest.param("off", "bool", "False.yaml", "quote", id="name-bool-off"),
+        pytest.param("yes", "boolean", "True.yaml", "quote", id="name-bool-yes"),
+        pytest.param("off", "boolean", "False.yaml", "quote", id="name-bool-off"),
+        pytest.param("0o17", "number", None, "quote", id="name-0o17"),
+        pytest.param("1e3", "number", None, "quote", id="name-1e3"),
+        pytest.param("08", "number", None, "quote", id="name-08"),
+        pytest.param("y", "boolean", None, "quote", id="name-y"),
+        pytest.param("n", "boolean", None, "quote", id="name-n"),
     ])
     def test_non_string_name_is_caller_error(
             self, name, kind, stale, fix, tmp_path, caplog):
-        """#2371：未加引號、YAML 會解成數字／布林的 name 一律 rc 2。
+        """#2371／#2476：未加引號、Kubernetes 會解成數字／布林的 name 一律 rc 2。
 
-        以 YAML 1.1（PyYAML）的隱式型別判定，與 Kubernetes 經 YAML→JSON
-        後的型別大致相同但不完全一致（見上方註解）。訊息要指名型別，並說明
-        加引號只讓它變成字串，仍須是合法的 Kubernetes 名稱（DNS-1123）。
+        型別取自 da-crdecode（Kubernetes client 的 YAML→JSON），不是 YAML 1.1。
+        訊息要指名型別，並說明加引號只讓它變成字串，仍須是合法的 Kubernetes
+        名稱（DNS-1123）。`0o17`、`1e3`、`08`、`y`、`n` 先前以 PyYAML 讀成
+        字串而 rc 0；會讓這幾列轉紅的改動：改回以 YAML 1.1 判型別。
 
         #2430：舊版（#2399／#2400 之前）把這個 name 寫成型別化後的拼法
         （`010` → `8.yaml`）。加引號重 render 後新檔是 `010.yaml`，舊檔
@@ -362,9 +369,12 @@ class TestRenderCrFile:
         out_dir = tmp_path / "out"
         out_dir.mkdir()
         assert render_cr_file(cr_path, out_dir) == EXIT_CALLER_ERROR
-        assert "metadata.name must be a string" in caplog.text
-        assert f"read as {kind}" in caplog.text
-        assert "Quoting makes it a string" in caplog.text
+        if kind is None:
+            assert "is not a valid Kubernetes object name" in caplog.text
+        else:
+            assert "metadata.name must be a string" in caplog.text
+            assert f"Kubernetes reads it as a {kind}" in caplog.text
+            assert "Quoting makes it a string" in caplog.text
         assert "DNS-1123" in caplog.text
         # Empty --config-dir: nothing was ever rendered here, no hint.
         assert "earlier version" not in caplog.text
@@ -423,13 +433,11 @@ class TestRenderCrFile:
                      id="datetime-utc"),
         pytest.param("2024-01-01 10:00:00", "2024-01-01 10:00:00.yaml",
                      id="datetime-space"),
-        # Unquoted, a tagged scalar is still RawPlain text: the DNS-1123
-        # branch, as the untagged spellings above.
+        # Kubernetes clients decode every timestamp spelling to a string,
+        # tagged or not, quoted or not: the DNS-1123 branch.
         pytest.param("!!timestamp 2024-01-01T10:00:00Z",
                      "2024-01-01 10:00:00+00:00.yaml",
                      id="tagged-plain-datetime"),
-        # Quoted, only the tag types it: a `datetime`, the non-string
-        # branch.
         pytest.param('!!timestamp "2024-01-01T10:00:00Z"',
                      "2024-01-01 10:00:00+00:00.yaml",
                      id="tagged-quoted-datetime"),
@@ -441,10 +449,10 @@ class TestRenderCrFile:
         舊版把 null（`~`、`null`、空值）寫成 `None.yaml`，datetime 寫成
         Python 的拼法。空目錄不提；舊檔存在就指名並要求先確認。null 另外
         提示：本意是字串 null 就加引號。
-        提示分三條路徑：null 與加引號的 `!!timestamp "..."`（`datetime`
-        物件）走「不是字串」分支；未加引號的 datetime（含帶 `!!timestamp`
-        標籤者，仍是原文）走 DNS-1123 分支。會讓本測試轉紅的改動：拿掉這三處
-        任一處的 `_stale_render_hint` 呼叫。
+        提示分兩條路徑：null 走「不是字串」分支；datetime（Kubernetes
+        client 一律解成字串，含帶 `!!timestamp` 標籤、加不加引號）走
+        DNS-1123 分支，舊檔名由 `_legacy_name_hint` 以 PyYAML 重建。會讓本
+        測試轉紅的改動：拿掉任一處的提示呼叫。
         """
         cr_path = tmp_path / "cr.yaml"
         cr_path.write_text(self._K + f"metadata: {{name: {name}}}\n"
@@ -453,7 +461,7 @@ class TestRenderCrFile:
         out_dir.mkdir()
         is_null = stale == "None.yaml"
         old = stale[:-len(".yaml")]
-        non_string = is_null or name.startswith('!!timestamp "')
+        non_string = is_null
         assert render_cr_file(cr_path, out_dir) == EXIT_CALLER_ERROR
         assert (self._BAD_NAME in caplog.text) == non_string, caplog.text
         assert "exists in this --config-dir" not in caplog.text
@@ -476,10 +484,10 @@ class TestRenderCrFile:
             self, name, tmp_path, caplog):
         """#2430：YAML 判成 timestamp 卻建不出值的 name 仍是 rc 2 單行訊息。
 
-        推算舊版檔名要 safe_load 這個 name，月份／日期／小時超界時丟
+        推算舊版檔名要以 PyYAML 建這個 name，月份／日期／小時超界時丟
         ValueError；舊版對它同樣 crash、沒寫過檔，所以不附舊檔提醒，也不得
-        變成 traceback。會讓本測試轉紅的改動：拿掉 DNS-1123 分支推算舊檔名
-        時的 `except (ValueError, yaml.YAMLError)`。
+        變成 traceback。會讓本測試轉紅的改動：拿掉 `_legacy_name_hint` 建值
+        時的 except。
         """
         cr_path = tmp_path / "cr.yaml"
         cr_path.write_text(self._K + f"metadata: {{name: {name}}}\n"
@@ -611,7 +619,7 @@ class TestRenderCrFile:
         assert render_cr_file(cr_path, out_dir) == EXIT_CALLER_ERROR
         errors = [r for r in caplog.records if r.levelname == "ERROR"]
         assert len(errors) == 1, caplog.text
-        assert "read as int" in caplog.text
+        assert "Kubernetes reads it as a number" in caplog.text
         assert "exists in this --config-dir" not in caplog.text
         assert not out_dir.exists()
 
@@ -647,7 +655,7 @@ class TestRenderCrFile:
         assert render_cr_file(cr_path, out_dir) == EXIT_CALLER_ERROR
         errors = [r for r in caplog.records if r.levelname == "ERROR"]
         assert len(errors) == 1, caplog.text
-        assert "read as int" in caplog.text
+        assert "Kubernetes reads it as a number" in caplog.text
         assert "exists in this --config-dir" not in caplog.text
         assert list(out_dir.iterdir()) == []
 
@@ -656,7 +664,8 @@ class TestRenderCrFile:
         """#2430：超過 Python 4300 位 int↔str 上限的 int name 仍是 rc 2。
 
         推算舊版檔名時 int(...)／str(...) 會丟 ValueError；舊版對它同樣
-        crash、沒寫過檔，所以不附舊檔提醒，也不得變成 traceback。
+        crash、沒寫過檔，所以不附舊檔提醒，也不得變成 traceback。Kubernetes
+        client 把這麼長的數字解成字串，於是由名稱格式（長度）拒收。
         """
         name = "1" * 5000
         cr_path = tmp_path / "cr.yaml"
@@ -668,7 +677,7 @@ class TestRenderCrFile:
         assert render_cr_file(cr_path, out_dir) == EXIT_CALLER_ERROR
         errors = [r for r in caplog.records if r.levelname == "ERROR"]
         assert len(errors) == 1, caplog.text
-        assert "read as int" in caplog.text
+        assert "is not a valid Kubernetes object name" in caplog.text
         assert "earlier version" not in caplog.text
         assert "4300" not in caplog.text
         assert list(out_dir.iterdir()) == []
@@ -678,8 +687,9 @@ class TestRenderCrFile:
             self, name, tmp_path, caplog):
         """#2430：YAML 判成 int 卻建不出值的 name 仍是 rc 2 單行訊息。
 
-        推算舊版檔名要 safe_load 這個 name，這些形狀會丟 ValueError；舊版
+        推算舊版檔名要以 PyYAML 建這個 name，這些形狀會丟 ValueError；舊版
         對它們同樣 crash、沒寫過檔，所以不附舊檔提醒，也不得變成 traceback。
+        Kubernetes client 把它們解成字串，由名稱格式拒收。
         """
         cr_path = tmp_path / "cr.yaml"
         cr_path.write_text(
@@ -688,7 +698,7 @@ class TestRenderCrFile:
         out_dir = tmp_path / "out"
         out_dir.mkdir()
         assert render_cr_file(cr_path, out_dir) == EXIT_CALLER_ERROR
-        assert "read as int" in caplog.text
+        assert "is not a valid Kubernetes object name" in caplog.text
         assert "earlier version" not in caplog.text
         assert list(out_dir.iterdir()) == []
 
@@ -906,10 +916,6 @@ _REFUSED = [
     ("defaults-quoted-dotted-I", "  defaults: {cpu: \"73İ\"}\n"),
     ("defaults-kelvin-sign", "  defaults: {cpu: 1K}\n"),
     ("defaults-fullwidth-digit", "  defaults: {cpu: １}\n"),
-    ("defaults-tagged-int-401-digits", _tagged_int(10**400)),
-    ("defaults-tagged-int-negative-401-digits", _tagged_int(-10**400)),
-    ("defaults-tagged-int-f64-edge", _tagged_int(_F64_EDGE)),
-    ("defaults-tagged-int-negative-f64-edge", _tagged_int(-_F64_EDGE)),
     ("sf-reasons-omap", "  stateFilters: {x: {reasons: !!omap [a: 1]}}\n"),
     ("sf-reasons-pairs", "  stateFilters: {x: {reasons: !!pairs [a: 1]}}\n"),
     ("sf-int", "  stateFilters: {x: 1}\n"),
@@ -939,8 +945,6 @@ _READ = [
     ("defaults-binary", "  defaults: {cpu: 0b101}\n"),
     ("defaults-leading-zero", "  defaults: {cpu: 010}\n"),
     ("defaults-leading-zero-8", "  defaults: {cpu: 08}\n"),
-    ("defaults-inf", "  defaults: {cpu: .inf}\n"),
-    ("defaults-nan", "  defaults: {cpu: .nan}\n"),
     ("defaults-null", "  defaults: {cpu: null}\n"),
     ("defaults-float-tag", "  defaults: {cpu: !!float 80}\n"),
     ("defaults-underflow", "  defaults: {cpu: 1e-400}\n"),
@@ -953,11 +957,6 @@ _READ = [
     ("defaults-binary-signed-digits", "  defaults: {cpu: 0b-1}\n"),
     ("defaults-octal-signed-digits", "  defaults: {cpu: 0o+7}\n"),
     ("defaults-tagged-int", _tagged_int(80)),
-    ("defaults-tagged-int-20-digits", _tagged_int(2**64)),
-    ("defaults-tagged-int-301-digits", _tagged_int(10**300)),
-    ("defaults-tagged-int-below-f64-edge", _tagged_int(_F64_EDGE - 1)),
-    ("defaults-tagged-int-negative-below-f64-edge",
-     _tagged_int(-(_F64_EDGE - 1))),
     ("sf-null", "  stateFilters: {x: null}\n"),
     ("sf-empty", "  stateFilters: {x: {}}\n"),
     ("sf-set", "  stateFilters: {x: !!set {reasons}}\n"),
@@ -969,6 +968,22 @@ _READ = [
     ("sf-default-state-int", "  stateFilters: {x: {default_state: 1}}\n"),
     ("sf-unknown-key", "  stateFilters: {x: {other: [a, {b: 1}]}}\n"),
     ("tenant-set", "    t2: !!set {cpu}\n"),
+]
+
+#: (id, spec body below `_T1`) Kubernetes clients' YAML→JSON conversion
+#: (da-crdecode, #2476) refuses, so such a CR never reaches a cluster: an
+#: explicit `!!int` past 64 bits (go-yaml), `.inf` / `.nan` (no JSON for
+#: them). PyYAML read them, and the earlier rows judged them against the
+#: exporter.
+_DECODER_REFUSED = [
+    ("defaults-inf", "  defaults: {cpu: .inf}\n"),
+    ("defaults-nan", "  defaults: {cpu: .nan}\n"),
+    ("defaults-tagged-int-20-digits", _tagged_int(2**64)),
+    ("defaults-tagged-int-301-digits", _tagged_int(10**300)),
+    ("defaults-tagged-int-401-digits", _tagged_int(10**400)),
+    ("defaults-tagged-int-negative-401-digits", _tagged_int(-10**400)),
+    ("defaults-tagged-int-f64-edge", _tagged_int(_F64_EDGE)),
+    ("defaults-tagged-int-negative-f64-edge", _tagged_int(-_F64_EDGE)),
 ]
 
 _CR_HEAD = "kind: ThresholdConfig\nmetadata: {name: ok}\nspec:\n"
@@ -1059,6 +1074,23 @@ class TestRenderCrExporterShapes:
         assert render_cr_file(cr_path, out_dir) == 0
         assert (out_dir / "ok.yaml").exists()
 
+    @pytest.mark.parametrize("body", [pytest.param(b, id=i)
+                                      for i, b in _DECODER_REFUSED])
+    def test_a_value_the_decoder_refuses_is_caller_error(
+            self, body, tmp_path, caplog):
+        """#2476：Kubernetes client 的 YAML→JSON 拒收的值 → rc 2、不寫檔，
+        da-crdecode 的 stderr 照轉、每行帶前綴。
+
+        先前以 PyYAML 讀得到這些值，於是依 exporter 判定（`.inf` 照寫）。
+        會讓本測試轉紅的改動：改回 PyYAML 讀 CR，或不轉 stderr。
+        """
+        cr_path, out_dir = _write_cr(tmp_path, body)
+        assert render_cr_file(cr_path, out_dir) == EXIT_CALLER_ERROR
+        assert f"Failed to parse {cr_path}: da-crdecode exited 2" \
+            in caplog.text
+        assert "  da-crdecode| da-crdecode: " in caplog.text
+        assert list(out_dir.iterdir()) == []
+
     @pytest.mark.parametrize("body, refused", [
         *[pytest.param(b, True, id=i) for i, b in _REFUSED],
         *[pytest.param(b, False, id=i) for i, b in _READ],
@@ -1067,16 +1099,16 @@ class TestRenderCrExporterShapes:
             self, body, refused, tmp_path, da_guard):
         """上面兩張表的分類本身，以 exporter 的解碼器重量。
 
-        把 CR 以 render_cr_to_yaml（不經 --render-cr 的檢查）寫成檔，
-        餵 `da-guard served-values`：拒收的列必須 rc 3，讀得了的列必須
+        把 CR 以 da-crdecode 解碼（與 --render-cr 同一個入口）、再以
+        render_cr_to_yaml（不經 --render-cr 的檢查）寫成檔，餵
+        `da-guard served-values`：拒收的列必須 rc 3，讀得了的列必須
         rc 0。表錯了（例如把 exporter 讀得了的形狀列進拒收）這裡會紅。
         """
         if da_guard is None:
             pytest.skip("go not on PATH (set VIBE_REQUIRE_GO=1 to fail)")
         import da_assembler
-        from _lib_yaml_keys import load_for_rewrite
-        cr = da_assembler._keys_as_plain_text(load_for_rewrite(
-            io.StringIO(_CR_HEAD + _T1 + body)))
+        cr_path, _ = _write_cr(tmp_path, body)
+        cr, _ = da_assembler.decode_cr(cr_path)
         conf = tmp_path / "conf"
         conf.mkdir()
         (conf / "ok.yaml").write_text(
@@ -1152,15 +1184,13 @@ NULL_KEY_REFUSED = [
     ("replaced-by-null-too", "x: {k: {~: 1}, k: {~: 2}}\nmetadata: {name: ok}\n",
      None),
 ]
-#: ⛔ Deliberate fail-closed over-refusal (#2476): Kubernetes ACCEPTS
-#: these, the tool refuses them. Two kinds: the null key sits in a value a
-#: later duplicate key (or a `<<` merge, in go-yaml's order) replaces, so
-#: go-yaml decodes it away; or the key has the non-specific `!` tag, which
-#: PyYAML reads as null and go-yaml as a string. Telling them apart means
-#: reproducing go-yaml's duplicate-key / merge order and key typing, which
-#: was tried and does not converge. If this list ever renders rc 0, that
-#: emulation is back.
-NULL_KEY_OVER_REFUSED = [
+#: Kubernetes ACCEPTS these (#2476): the null key sits in a value a later
+#: duplicate key (or a `<<` merge, in go-yaml's order) replaces, so go-yaml
+#: decodes it away; or the key has the non-specific `!` tag, which PyYAML
+#: reads as null and go-yaml as a string. The PyYAML-based check refused
+#: them on purpose (telling them apart in Python did not converge); decoded
+#: by da-crdecode, they render, as they do in a cluster.
+NULL_KEY_K8S_ACCEPTS = [
     ("replaced-duplicate", "metadata: {name: ok}\n",
      "spec:\n  tenants: {null: {}}\n  tenants: {t1: {}}\n"),
     ("replaced-top-level", "x: {~: 1}\nx: 2\nmetadata: {name: ok}\n", None),
@@ -1175,7 +1205,7 @@ NULL_KEY_OVER_REFUSED = [
     ("octal-spelling", "x: {010: {~: 1}, 8: 2}\nmetadata: {name: ok}\n", None),
     ("v2-bool-spellings", "x: {y: {~: 1}, yes: 2}\nmetadata: {name: ok}\n",
      None),
-    # K8s accepts (go-yaml reads `! ~` as the string "~"); refused on purpose.
+    # go-yaml reads `! ~` as the string "~".
     ("non-specific-tag", "x: {! ~: 1}\nmetadata: {name: ok}\n", None),
 ]
 #: Keys and values that only LOOK null: Kubernetes accepts them and so
@@ -1261,26 +1291,29 @@ class TestRenderCrNameFormat:
         assert "is not a valid Kubernetes namespace name" in caplog.text
 
     @pytest.mark.parametrize("namespace, kind", [
-        pytest.param("8", "int", id="int"),
-        pytest.param("010", "int", id="int-octal"),
-        pytest.param("true", "bool", id="bool-true"),
-        pytest.param("yes", "bool", id="bool-yes"),
-        pytest.param("1.5", "float", id="float"),
+        pytest.param("8", "number", id="int"),
+        pytest.param("010", "number", id="int-octal"),
+        pytest.param("true", "boolean", id="bool-true"),
+        pytest.param("yes", "boolean", id="bool-yes"),
+        pytest.param("1.5", "number", id="float"),
+        pytest.param("0o17", "number", id="0o17"),
+        pytest.param("y", "boolean", id="y"),
     ])
     def test_non_string_namespace_is_caller_error(
             self, namespace, kind, tmp_path, caplog):
-        """未加引號、YAML 1.1 讀成數字／布林的 namespace 比照 name，rc 2。
+        """未加引號、Kubernetes 讀成數字／布林的 namespace 比照 name，rc 2。
 
-        會讓本組轉紅的改動：拿掉 namespace 的 `_plain_tag` 型別檢查（`8`、
-        `010` 是合法 label，只靠格式檢查會照收、檔頭寫 `8/ok`）。
+        型別取自 da-crdecode（#2476）。會讓本組轉紅的改動：拿掉 namespace
+        的型別檢查（`8` 經解碼是數字，只靠格式檢查會在 `_is_dns1123_label`
+        丟 TypeError），或改回以 YAML 1.1 判型別（`0o17`、`y` 轉紅）。
         """
         rc, new_files = self._run(
             tmp_path, f"  name: ok\n  namespace: {namespace}\n")
         assert rc == EXIT_CALLER_ERROR
         assert new_files == []
         assert "metadata.namespace must be a string" in caplog.text
-        assert f"read as {kind}" in caplog.text
-        assert "Quoting makes it a string" in caplog.text
+        assert f"Kubernetes reads it as a {kind}" in caplog.text
+        assert "Quoting makes a scalar a string" in caplog.text
 
     @pytest.mark.parametrize("written", [
         pytest.param("team", id="word"),
@@ -1291,14 +1324,16 @@ class TestRenderCrNameFormat:
             self, written, tmp_path, caplog):
         """`!!null team`：PyYAML 建成 None，Kubernetes（YAML→JSON）拒收。
 
-        只有原文為空或 null 字面時才算「未設」。會讓本組轉紅的改動：把
-        None 一律正規化成缺鍵（不看原文），此時 rc 0 並照寫。
+        只有原文為空或 null 字面時才算「未設」。由 da-crdecode 拒收（#2476），
+        錯誤原文照轉。會讓本組轉紅的改動：改回以 PyYAML 讀 CR 並把 None
+        一律正規化成缺鍵，此時 rc 0 並照寫。
         """
         rc, new_files = self._run(
             tmp_path, f"  name: ok\n  namespace: !!null {written}\n")
         assert rc == EXIT_CALLER_ERROR
         assert new_files == []
-        assert "a scalar tagged !!null is written as" in caplog.text
+        assert "as a !!null" in caplog.text
+        assert "  da-crdecode| " in caplog.text
 
     _SPEC = "spec:\n  tenants:\n    t1: {}\n"
 
@@ -1372,14 +1407,13 @@ class TestRenderCrNameFormat:
         """go-yaml 對文件任何位置的 `!!null <值>` 都整份拒收。
 
         載入時「後者勝」會把前一個重複鍵或前一個 metadata 區塊丟掉，只看
-        最後生效的 namespace 會放行。會讓本組轉紅的改動：只檢查 namespace
-        節點、不走整份 compose 圖。
+        最後生效的 namespace 會放行。#2476 起由 da-crdecode 判定。會讓本組
+        轉紅的改動：改回 PyYAML 讀 CR、只檢查 namespace 節點。
         """
         rc, got = self._render_text(tmp_path, text, spec)
         assert rc == EXIT_CALLER_ERROR
         assert got is None
-        assert "a scalar tagged !!null is written as 'team'" in caplog.text
-        assert "~ / null / Null / NULL" in caplog.text
+        assert "cannot decode !!str `team` as a !!null" in caplog.text
 
     @pytest.mark.parametrize("text", [
         pytest.param("metadata: {name: ok\n", id="syntax"),
@@ -1387,11 +1421,10 @@ class TestRenderCrNameFormat:
         pytest.param("metadata:\n  name: *nope\n", id="undefined-alias"),
     ])
     def test_yaml_error_names_the_file(self, text, tmp_path, caplog):
-        """YAML 錯誤訊息點名 CR 檔路徑，不是 `<unicode string>`。
+        """YAML 錯誤訊息點名 CR 檔路徑（da-crdecode 的 stderr 照轉，#2476）。
 
-        會讓本組轉紅的改動：把讀進來的文字直接交給 loader
-        （`load_for_rewrite(text)`），PyYAML 會把來源名寫成
-        `<unicode string>`。
+        會讓本組轉紅的改動：不轉 da-crdecode 的 stderr，或改由 stdin 餵它
+        （訊息就不含路徑）。
         """
         cr_path = tmp_path / "cr.yaml"
         cr_path.write_text("kind: ThresholdConfig\n" + text,
@@ -1399,8 +1432,9 @@ class TestRenderCrNameFormat:
         out_dir = tmp_path / "out"
         out_dir.mkdir()
         assert render_cr_file(cr_path, out_dir) == EXIT_CALLER_ERROR
-        assert f'in "{cr_path}"' in caplog.text
-        assert "<unicode string>" not in caplog.text
+        assert f"Failed to parse {cr_path}: da-crdecode exited 2" \
+            in caplog.text
+        assert f"  da-crdecode| da-crdecode: {cr_path}: yaml: " in caplog.text
         assert list(out_dir.iterdir()) == []
 
     @pytest.mark.parametrize("body", [
@@ -1430,13 +1464,14 @@ class TestRenderCrNameFormat:
     ])
     def test_value_that_cannot_be_read_is_caller_error(self, body, tmp_path,
                                                         caplog):
-        """#2476：讀檔階段建構值失敗 → rc 2、一行錯誤點名檔案、不寫檔。
+        """#2476：讀不出值的 CR → rc 2、錯誤點名檔案、不寫檔，不是 traceback。
 
-        這些例外（`UnicodeDecodeError`／`ValueError`／`KeyError`／
-        `AttributeError`／`IndexError`／`RecursionError`）都不是
-        `OSError`／`YAMLError`，先前穿出 `render_cr_file`，CLI 印
-        traceback 並以 rc 1 結束。會讓本組轉紅的改動：讀檔的 except 退回
-        只接 `(OSError, yaml.YAMLError)`。
+        以 PyYAML 讀時，這些形狀丟的例外（`UnicodeDecodeError`／
+        `ValueError`／`KeyError`／`AttributeError`／`IndexError`／
+        `RecursionError`）曾穿出 `render_cr_file`（rc 1）。現在由
+        da-crdecode 拒收，或 Python 的 JSON 讀取深度不夠（deep-nesting）。
+        會讓本組轉紅的改動：拿掉 `CrDecodeError` 或 `RecursionError` 的
+        except。
         """
         cr_path = tmp_path / "cr.yaml"
         cr_path.write_bytes(b"kind: ThresholdConfig\n" + body)
@@ -1448,7 +1483,8 @@ class TestRenderCrNameFormat:
 
     def test_deep_nesting_message_names_the_tool_limit(self, tmp_path,
                                                        caplog):
-        """#2476：巢狀過深是本工具 parser 的上限，不是 K8s 拒收。
+        """#2476：巢狀過深是本工具（Python 的 JSON 讀取）的上限，不是 K8s
+        拒收：da-crdecode 讀得了這份文件。
 
         訊息要能讓人分辨「量不到」與「拒收」。會讓本組轉紅的改動：拿掉
         `RecursionError` 的專屬分支（落到通用分支，訊息只剩例外原文）。
@@ -1489,34 +1525,27 @@ class TestRenderCrNameFormat:
         """#2476：K8s（sigs.k8s.io/yaml YAMLToJSON）對 decode 後仍在的 null
         mapping key 整份拒收（`unsupported map key of type: <nil>`）。
 
-        先前 `--render-cr` rc 0 並寫出檔案。會讓本組轉紅的改動：拿掉
-        `_has_null_key` 檢查，或只看最後生效的值。
+        先前 `--render-cr` rc 0 並寫出檔案。#2476 起由 da-crdecode（同一個
+        YAMLToJSON）拒收。會讓本組轉紅的改動：改回以 PyYAML 讀 CR。
         """
         rc, got = self._render_text(tmp_path, text, spec)
         assert rc == EXIT_CALLER_ERROR
         assert got is None
-        assert "has a mapping with a null key" in caplog.text
+        assert "unsupported map key of type" in caplog.text
 
     @pytest.mark.parametrize("text, spec", [
         pytest.param(text, spec, id=case_id)
-        for case_id, text, spec in NULL_KEY_OVER_REFUSED])
-    def test_null_key_kubernetes_accepts_is_refused_fail_closed(
-            self, text, spec, tmp_path, caplog):
-        """#2476：K8s 接受、本工具刻意 fail-closed 拒收的 null key 形狀
-        （重複鍵與 `<<` merge 解開後被其他鍵取代的值、非特定標籤 `!`；見 `NULL_KEY_OVER_REFUSED`
-        的註解）。
+        for case_id, text, spec in NULL_KEY_K8S_ACCEPTS])
+    def test_null_key_kubernetes_accepts_renders(self, text, spec, tmp_path):
+        """#2476：K8s 接受的 null key 寫法（重複鍵與 `<<` merge 解開後被其他
+        鍵取代的值、非特定標籤 `!`；見 `NULL_KEY_K8S_ACCEPTS`）照常 rc 0。
 
-        訊息要點名這兩類、說明是本工具不重現那些規則，不是「K8s 一定拒收」。
-        會讓本組轉紅的改動：null key 改成模擬 go-yaml 的重複鍵／merge 覆寫或
-        鍵的型別判定。
+        先前以 PyYAML 判 null key，只能一律 fail-closed 拒收。會讓本組轉紅的
+        改動：改回以 PyYAML 讀 CR 並判 null key。
         """
         rc, got = self._render_text(tmp_path, text, spec)
-        assert rc == EXIT_CALLER_ERROR
-        assert got is None
-        assert "another key replaces" in caplog.text
-        assert "<< merges are resolved" in caplog.text
-        assert "non-specific ! tag" in caplog.text
-        assert "does not reproduce those rules" in caplog.text
+        assert rc == 0
+        assert got is not None
 
     @pytest.mark.parametrize("text, spec", [
         pytest.param(text, spec, id=case_id)
@@ -1658,6 +1687,138 @@ class TestRenderCrNameFormat:
         rc, new_files = self._run(tmp_path, f"  name: {name}\n")
         assert rc == 0
         assert new_files == [f"work/out/{name}.yaml"]
+
+
+class TestRenderCrDecoder:
+    """#2476：`--render-cr` 經 da-crdecode（Kubernetes client 的 YAML→JSON）
+    解碼 CR 的契約：spec.profile、多文件、找不到／跑不起來的 binary、
+    stderr 照轉、逾時。"""
+
+    _CR = ("apiVersion: dynamicalerting.io/v1alpha1\nkind: ThresholdConfig\n"
+           "metadata: {name: ok}\nspec:\n  tenants:\n    t1: {}\n")
+
+    @staticmethod
+    def _write(tmp_path, text):
+        cr_path = tmp_path / "cr.yaml"
+        cr_path.write_text(text, encoding="utf-8")
+        out_dir = tmp_path / "out"
+        out_dir.mkdir()
+        return cr_path, out_dir
+
+    @staticmethod
+    def _fake_binary(tmp_path, monkeypatch, body):
+        """一支冒充 da-crdecode 的 Python 腳本，`$DA_CRDECODE_BINARY` 指向它。"""
+        fake = tmp_path / "fake-crdecode"
+        fake.write_text(f"#!{sys.executable}\nimport sys, time\n{body}\n",
+                        encoding="utf-8")
+        fake.chmod(0o755)
+        monkeypatch.setenv("DA_CRDECODE_BINARY", str(fake))
+
+    def test_spec_profile_is_caller_error(self, tmp_path, caplog):
+        """CRD 宣告了 `spec.profile`，但兩條路徑都不 render 它。
+
+        先前 rc 0、輸出不含 profile。會讓本測試轉紅的改動：拿掉
+        render_cr_file 的 spec.profile 檢查。
+        """
+        cr_path, out_dir = self._write(tmp_path,
+                                       self._CR + "  profile: gold\n")
+        assert render_cr_file(cr_path, out_dir) == EXIT_CALLER_ERROR
+        assert "spec.profile is set, but it is not rendered" in caplog.text
+        assert "Set _profile on each tenant" in caplog.text
+        assert list(out_dir.iterdir()) == []
+
+    @pytest.mark.parametrize("line", ["  profile: null\n", "  profile: ~\n",
+                                      "  profile:\n"])
+    def test_null_spec_profile_renders(self, line, tmp_path):
+        """對照組：null 的 profile 等於沒寫，照常 rc 0。"""
+        cr_path, out_dir = self._write(tmp_path, self._CR + line)
+        assert render_cr_file(cr_path, out_dir) == 0
+        assert (out_dir / "ok.yaml").exists()
+
+    @pytest.mark.parametrize("tail", [
+        pytest.param("---\nkind: x\n", id="two-documents"),
+        pytest.param("---\n", id="trailing-separator"),
+    ])
+    def test_more_than_one_document_is_caller_error(
+            self, tail, tmp_path, caplog):
+        """YAMLToJSON 只讀第一份文件、靜默丟掉其餘；da-crdecode 另外數文件，
+        多於一份就拒收（與先前以 PyYAML 讀時同為 rc 2；#2529 另議）。
+
+        會讓本測試轉紅的改動：拿掉 da-crdecode 的 countDocuments 檢查（rc 0，
+        只 render 第一份）。
+        """
+        cr_path, out_dir = self._write(tmp_path, self._CR + tail)
+        assert render_cr_file(cr_path, out_dir) == EXIT_CALLER_ERROR
+        assert "more than one YAML document" in caplog.text
+        assert list(out_dir.iterdir()) == []
+
+    def test_missing_binary_is_caller_error(self, tmp_path, monkeypatch,
+                                            caplog):
+        """沒有 `$DA_CRDECODE_BINARY`、`$PATH` 上也沒有 → rc 2，說明怎麼建。"""
+        monkeypatch.delenv("DA_CRDECODE_BINARY", raising=False)
+        monkeypatch.setenv("PATH", str(tmp_path / "empty"))
+        cr_path, out_dir = self._write(tmp_path, self._CR)
+        assert render_cr_file(cr_path, out_dir) == EXIT_CALLER_ERROR
+        assert "da-crdecode was not found" in caplog.text
+        assert "DA_CRDECODE_BINARY" in caplog.text
+        assert list(out_dir.iterdir()) == []
+
+    def test_unrunnable_binary_is_caller_error(self, tmp_path, monkeypatch,
+                                               caplog):
+        """`$DA_CRDECODE_BINARY` 指向不存在的檔 → rc 2 一行錯誤，不 traceback。"""
+        monkeypatch.setenv("DA_CRDECODE_BINARY", str(tmp_path / "nope"))
+        cr_path, out_dir = self._write(tmp_path, self._CR)
+        assert render_cr_file(cr_path, out_dir) == EXIT_CALLER_ERROR
+        assert "cannot run" in caplog.text
+        assert list(out_dir.iterdir()) == []
+
+    def test_stderr_is_passed_on_whole_split_on_newline_only(
+            self, tmp_path, monkeypatch, caplog):
+        """stderr 每一個非空行都照轉、各帶前綴、只在 `\\n` 切行。
+
+        NEL（U+0085）與 U+2028 留在行內；NEL 經 safe_label 印成 `?`。
+        會讓本測試轉紅的改動：改用 `splitlines()`（在 NEL、U+2028 處斷行，
+        3 行變 5 行），或只挑部分行轉。
+        """
+        self._fake_binary(
+            tmp_path, monkeypatch,
+            "sys.stderr.buffer.write('first\\u0085still\\nsecond\\u2028still"
+            "\\n\\n  third\\n'.encode())\nsys.exit(2)")
+        cr_path, out_dir = self._write(tmp_path, self._CR)
+        assert render_cr_file(cr_path, out_dir) == EXIT_CALLER_ERROR
+        passed_on = [r.getMessage() for r in caplog.records
+                     if r.getMessage().startswith("  da-crdecode| ")]
+        assert passed_on == ["  da-crdecode| first?still",
+                             "  da-crdecode| second still",
+                             "  da-crdecode|   third"], passed_on
+        assert "da-crdecode exited 2" in caplog.text
+
+    def test_timeout_is_caller_error(self, tmp_path, monkeypatch, caplog):
+        """da-crdecode 逾時 → rc 2、不寫檔（subprocess 帶 timeout）。
+
+        會讓本測試轉紅的改動：拿掉 subprocess.run 的 timeout（本測試會
+        等滿 30 秒且 rc 不是 2）。
+        """
+        self._fake_binary(tmp_path, monkeypatch, "time.sleep(30)")
+        monkeypatch.setattr(da_assembler, "CRDECODE_TIMEOUT_SECONDS", 1)
+        cr_path, out_dir = self._write(tmp_path, self._CR)
+        assert render_cr_file(cr_path, out_dir) == EXIT_CALLER_ERROR
+        assert "did not finish within 1s" in caplog.text
+        assert list(out_dir.iterdir()) == []
+
+    @pytest.mark.parametrize("stdout", [
+        pytest.param("print('hello')", id="not-json"),
+        pytest.param("print('{\"documents\": []}')", id="no-document"),
+        pytest.param("print('[1]')", id="not-an-object"),
+    ])
+    def test_output_off_contract_is_caller_error(
+            self, stdout, tmp_path, monkeypatch, caplog):
+        """rc 0 但 stdout 不合 `{"documents": [<一份>]}` → rc 2，不 traceback。"""
+        self._fake_binary(tmp_path, monkeypatch, stdout)
+        cr_path, out_dir = self._write(tmp_path, self._CR)
+        assert render_cr_file(cr_path, out_dir) == EXIT_CALLER_ERROR
+        assert "Failed to parse" in caplog.text
+        assert list(out_dir.iterdir()) == []
 
 
 class TestSignalHandler:

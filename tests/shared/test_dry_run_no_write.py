@@ -135,6 +135,10 @@ import pytest
 
 import test_json_stdout_contract as _jsc
 
+# #2476: `da_assembler --render-cr` 以 da-crdecode 解碼 CR；子行程經
+# `$DA_CRDECODE_BINARY` 找到本 repo 建出的那一支。
+pytestmark = pytest.mark.usefixtures("da_crdecode_env")
+
 REPO_ROOT = Path(__file__).resolve().parents[2]
 TOOLS_ROOT = REPO_ROOT / "scripts" / "tools"
 OPS_DIR = TOOLS_ROOT / "ops"

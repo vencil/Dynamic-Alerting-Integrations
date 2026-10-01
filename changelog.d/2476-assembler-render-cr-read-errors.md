@@ -4,5 +4,6 @@ topic: confd-family
 issues: [2476, 2481]
 created: 2026-09-30T12:10:20+00:00
 ---
-- **`da_assembler --render-cr` 讀不了 CR 檔時回 rc 2 的一行錯誤，不再印 traceback；null 的 mapping key 改為拒收（da-tools；[#2476](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/2476)）**：CR 檔不是合法 UTF-8、帶明確標籤但內容建構不出值（`!!int team`、`!!bool team`、`!!timestamp "2024-13-01"`、加引號且超過 4300 位的 `!!int "…"`），或巢狀過深、anchor 引用自己時，先前 rc 1 加 traceback，現在印一行點名檔案的錯誤、rc 2、不寫檔。巢狀過深時，不論卡在讀檔或 render 階段，訊息都註明這是本工具的上限，Kubernetes 本身可能收得下。
-  文件任何位置有 null 的 mapping key（`null:`、`~:`、空鍵，含經 alias 或 `<<` merge 帶入的）時，先前 rc 0 並寫出檔案，現在 rc 2、不寫檔；Kubernetes 一般會拒收這種文件。⚠️ 少數寫法 Kubernetes 會接受，本工具不重現那些規則，仍一律拒收：null key 只出現在「重複鍵與 `<<` merge 解開後被其他鍵取代」的值裡，或鍵帶非特定標籤 `!`（如 `! ~:`）。加引號的 `"null":` 或 `!!str null` 是字串鍵，行為不變。
+- **`da_assembler --render-cr` 改以 Kubernetes client 的方式解碼 CR，讀不了的 CR 回 rc 2 的錯誤而非 traceback（da-tools；[#2476](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/2476)）**：CR 改由新的 `da-crdecode`（`components/threshold-exporter/app/cmd/da-crdecode`）以 kubectl 同一套 YAML→JSON 轉換（`sigs.k8s.io/yaml`）解碼，不再以 PyYAML（YAML 1.1）讀。`--render-cr` 需要這支 binary：放在 `$PATH`，或以 `$DA_CRDECODE_BINARY` 指定；`make assembler-render` 會先建它。
+  因此型別、null key、重複鍵與 `<<` merge 都依 Kubernetes 的讀法：沒加引號的 `name: 0o17`、`1e3`、`08`、`y`、`n` 讀成數字或布林，改為 rc 2（先前 rc 0 並寫出 `0o17.yaml` 等檔）；null key 只在 Kubernetes 也拒收時拒收。輸出的租戶 id 與值也是轉換後的樣子：沒加引號的 `010` 寫成 `8`（租戶 id 寫成 `'8'`），`12:30` 與日期時間維持文字，鍵依字母排序。
+  非 UTF-8、帶標籤卻建不出值（`!!int team`）、anchor 引用自己、多於一份文件、`.inf`：rc 2，`da-crdecode` 的錯誤原文逐行轉出。巢狀過深超過本工具上限時亦 rc 2，訊息註明是本工具的上限。CRD 宣告的 `spec.profile` 兩條路徑都不會寫出，`--render-cr` 遇到非 null 的 `spec.profile` 改為 rc 2。不重現 API server 的 CRD schema 驗證。
