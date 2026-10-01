@@ -1943,6 +1943,11 @@ func (m *ConfigManager) tickOnce() {
 		changed, reason, err := m.detectChange()
 		if err != nil {
 			m.getLogger().Printf("WARN: cannot check config %s: %v", m.path, err)
+			// #2452: this tick applies nothing, and the tree stays frozen at
+			// the last good config for as long as the scan keeps failing
+			// (/ready stays 200 by decision). The counter is the only
+			// alertable trace; reload_trigger_total must NOT move here.
+			m.getMetrics().IncScanFailure(err)
 			return
 		}
 		if changed {

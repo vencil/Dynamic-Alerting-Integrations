@@ -1,0 +1,18 @@
+# Bare-rules promtool target for the ConfigScanFailing alert (#2452). promtool
+# can't consume the deployed ConfigMap directly (it needs a top-level `groups:`
+# document, not `data: platform-alert.yml: |`), so this is an EXTRACTED COPY of
+# the alert from k8s/03-monitoring/configmap-rules-platform.yaml.
+#
+# ⚠️ KEEP IN SYNC with that ConfigMap — the expr/for/labels/summary here must match
+# byte-for-byte. tests/rulepacks/test_platform_rules_extract_sync.py enforces it.
+groups:
+  - name: platform-self-monitoring
+    rules:
+      - alert: ConfigScanFailing
+        expr: increase(da_config_scan_failures_total[5m]) > 2
+        for: 3m
+        labels:
+          severity: critical
+          alert_source: platform
+        annotations:
+          summary: "Threshold-exporter conf.d scan failing ({{ $labels.reason }}) — config frozen at last good state"

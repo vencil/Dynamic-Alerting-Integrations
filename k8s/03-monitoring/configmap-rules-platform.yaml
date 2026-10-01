@@ -535,6 +535,50 @@ data:
                 lock contention; restart the pod if no obvious cause.
               runbook_url: "https://github.com/vencil/Dynamic-Alerting-Integrations/blob/main/docs/troubleshooting.md"
 
+          # --- Config Scan Failing (issue #2452) ---
+          # ConfigReloadStuck above CANNOT see this one: when the conf.d scan
+          # itself fails (one tenant id declared in two files, or the config
+          # directory cannot be walked) no reload is ever triggered, so
+          # da_config_reload_trigger_total never moves and that alert's LHS
+          # gate stays false. The exporter keeps serving the last good config
+          # and /ready stays 200 (by decision), so every later edit — to ANY
+          # tenant — is silently ignored until the tree is fixed.
+          # da_config_scan_failures_total{reason} counts each failed
+          # watch-path scan (reason ∈ {duplicate_tenant, walk_error}, a
+          # closed set; both pre-initialised at 0).
+          #
+          # `> 2` over [5m] (not `> 0`): a lasting failure fails EVERY tick —
+          # ~10 in 5m at the 30s default --reload-interval, ~5 at 60s — while
+          # a transient mid-write blip (a tenant moved between two files,
+          # the new one landing first) fails one or two ticks and recovers.
+          # `for: 3m` adds the hold-down; together the alert fires ~5m after
+          # onset at 30s, and within 10m for any --reload-interval up to 60s
+          # (tests/rulepacks/platform-config-scan-failing_test.yaml). Kept
+          # per-reason (no `sum`) so on-call sees WHICH failure it is;
+          # topology labels ride through from the series.
+          - alert: ConfigScanFailing
+            expr: increase(da_config_scan_failures_total[5m]) > 2
+            for: 3m
+            labels:
+              severity: critical
+              alert_source: platform
+            annotations:
+              summary: "Threshold-exporter conf.d scan failing ({{ $labels.reason }}) — config frozen at last good state"
+              description: |
+                Every conf.d scan on {{ $labels.instance }} has been failing
+                with reason `{{ $labels.reason }}`. Nothing is reloaded while
+                it lasts: the exporter keeps serving the last good config and
+                /ready stays 200, so edits to ANY tenant (git-sync, kubectl
+                apply, Tenant API) are NOT applied. duplicate_tenant = one
+                tenant id is declared in two files — the exporter WARN log
+                "cannot check config ...: hierarchical scan: duplicate tenant
+                ID" names both; remove one declaration. walk_error = the
+                config directory is missing or not a directory. Once the
+                duplicate declaration is removed the next tick reloads the
+                tree (pending edits included), no restart needed; the alert
+                clears once the 5m window no longer holds 3 failures.
+              runbook_url: "https://github.com/vencil/Dynamic-Alerting-Integrations/blob/main/docs/troubleshooting.md"
+
           # --- Tenant Cardinality Cap Truncation (issue #652) ---
           # Companion to the v1.5.0 runtime per-tenant cardinality cap
           # (`pkg/config/resolve.go:189-195`): the cap *enforces* a 500-

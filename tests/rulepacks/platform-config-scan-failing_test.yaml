@@ -1,0 +1,167 @@
+# promtool behavioural test for ConfigScanFailing (#2452). The contract:
+#   1) FIRES within 10m of a lasting scan failure appearing under a running
+#      exporter (the ticket's shape: a second file declaring an existing tenant
+#      id) — at the 30s default --reload-interval AND at 60s. The counter rises
+#      by one per failed tick; both reasons exist at 0 beforehand (the exporter
+#      pre-initialises them).
+#   2) does NOT fire on a transient blip (two failed ticks, then recovered).
+#   3) does NOT fire on a healthy exporter whose normal reloads move
+#      da_config_reload_trigger_total and leave scan failures at 0 — the
+#      control: the old reload counter is not what this alert reads.
+#   4) RESOLVES once the failures stop.
+#   5) a counter reset (pod restart) is not read as failures.
+# The {reason} label and the topology labels must ride through.
+# Run: promtool test rules tests/rulepacks/platform-config-scan-failing_test.yaml
+rule_files:
+  - platform-config-scan-failing.rules.yaml
+
+evaluation_interval: 30s
+
+tests:
+  # 1a) Duplicate tenant appears at t=2m under a 30s reload interval: one
+  #     failure per 30s from then on. Pending at 4m, firing by 7m (5m after
+  #     onset) and still firing at 12m (the 10m acceptance bound).
+  - interval: 30s
+    name: duplicate-tenant-30s-interval-fires-within-10m
+    input_series:
+      - series: 'da_config_scan_failures_total{reason="duplicate_tenant", job="threshold-exporter", instance="10.0.0.9:8080"}'
+        values: '0 0 0 0 1+1x40'
+      - series: 'da_config_scan_failures_total{reason="walk_error", job="threshold-exporter", instance="10.0.0.9:8080"}'
+        values: '0x44'
+    alert_rule_test:
+      - eval_time: 4m
+        alertname: ConfigScanFailing
+        exp_alerts: []
+      - eval_time: 7m
+        alertname: ConfigScanFailing
+        exp_alerts:
+          - exp_labels:
+              severity: critical
+              alert_source: platform
+              reason: duplicate_tenant
+              job: threshold-exporter
+              instance: 10.0.0.9:8080
+            exp_annotations:
+              summary: "Threshold-exporter conf.d scan failing (duplicate_tenant) — config frozen at last good state"
+      - eval_time: 12m
+        alertname: ConfigScanFailing
+        exp_alerts:
+          - exp_labels:
+              severity: critical
+              alert_source: platform
+              reason: duplicate_tenant
+              job: threshold-exporter
+              instance: 10.0.0.9:8080
+            exp_annotations:
+              summary: "Threshold-exporter conf.d scan failing (duplicate_tenant) — config frozen at last good state"
+
+  # 1b) Same, at a 60s reload interval: one failure per minute from t=2m.
+  #     Firing by 12m (10m after onset).
+  - interval: 1m
+    name: duplicate-tenant-60s-interval-fires-within-10m
+    input_series:
+      - series: 'da_config_scan_failures_total{reason="duplicate_tenant", job="threshold-exporter", instance="10.0.0.9:8080"}'
+        values: '0 0 1+1x20'
+    alert_rule_test:
+      - eval_time: 12m
+        alertname: ConfigScanFailing
+        exp_alerts:
+          - exp_labels:
+              severity: critical
+              alert_source: platform
+              reason: duplicate_tenant
+              job: threshold-exporter
+              instance: 10.0.0.9:8080
+            exp_annotations:
+              summary: "Threshold-exporter conf.d scan failing (duplicate_tenant) — config frozen at last good state"
+
+  # 1c) walk_error rides through the same way.
+  - interval: 30s
+    name: walk-error-fires-with-reason-label
+    input_series:
+      - series: 'da_config_scan_failures_total{reason="walk_error", job="threshold-exporter", instance="10.0.0.9:8080"}'
+        values: '0 0 1+1x30'
+    alert_rule_test:
+      - eval_time: 10m
+        alertname: ConfigScanFailing
+        exp_alerts:
+          - exp_labels:
+              severity: critical
+              alert_source: platform
+              reason: walk_error
+              job: threshold-exporter
+              instance: 10.0.0.9:8080
+            exp_annotations:
+              summary: "Threshold-exporter conf.d scan failing (walk_error) — config frozen at last good state"
+
+  # 2) Transient blip: two failed ticks (a tenant moved between files, the new
+  #    one written first), then the scan succeeds again — never fires.
+  - interval: 30s
+    name: transient-blip-does-not-fire
+    input_series:
+      - series: 'da_config_scan_failures_total{reason="duplicate_tenant", job="threshold-exporter", instance="10.0.0.9:8080"}'
+        values: '0 0 1 2 2x40'
+    alert_rule_test:
+      - eval_time: 3m
+        alertname: ConfigScanFailing
+        exp_alerts: []
+      - eval_time: 6m
+        alertname: ConfigScanFailing
+        exp_alerts: []
+      - eval_time: 12m
+        alertname: ConfigScanFailing
+        exp_alerts: []
+
+  # 3) Control — healthy exporter with ordinary reloads: reload_trigger_total
+  #    keeps rising, scan failures stay at 0. Must NOT fire.
+  - interval: 30s
+    name: normal-reloads-do-not-fire
+    input_series:
+      - series: 'da_config_reload_trigger_total{reason="source", job="threshold-exporter", instance="10.0.0.9:8080"}'
+        values: '0+1x40'
+      - series: 'da_config_scan_failures_total{reason="duplicate_tenant", job="threshold-exporter", instance="10.0.0.9:8080"}'
+        values: '0x40'
+      - series: 'da_config_scan_failures_total{reason="walk_error", job="threshold-exporter", instance="10.0.0.9:8080"}'
+        values: '0x40'
+    alert_rule_test:
+      - eval_time: 12m
+        alertname: ConfigScanFailing
+        exp_alerts: []
+
+  # 4) Recovery: failures from t=1m to t=6m, then the duplicate is removed and
+  #    the counter stops. Firing while it lasts, resolved 5m+ after the stop.
+  - interval: 30s
+    name: resolves-after-failures-stop
+    input_series:
+      - series: 'da_config_scan_failures_total{reason="duplicate_tenant", job="threshold-exporter", instance="10.0.0.9:8080"}'
+        values: '0 0 1+1x10 11x30'
+    alert_rule_test:
+      - eval_time: 6m
+        alertname: ConfigScanFailing
+        exp_alerts:
+          - exp_labels:
+              severity: critical
+              alert_source: platform
+              reason: duplicate_tenant
+              job: threshold-exporter
+              instance: 10.0.0.9:8080
+            exp_annotations:
+              summary: "Threshold-exporter conf.d scan failing (duplicate_tenant) — config frozen at last good state"
+      - eval_time: 14m
+        alertname: ConfigScanFailing
+        exp_alerts: []
+
+  # 5) Counter reset: an exporter that had failed a few times restarts (the
+  #    series drops to 0) and is healthy afterwards — not read as failures.
+  - interval: 30s
+    name: counter-reset-does-not-fire
+    input_series:
+      - series: 'da_config_scan_failures_total{reason="duplicate_tenant", job="threshold-exporter", instance="10.0.0.9:8080"}'
+        values: '2 2 2 2 0x40'
+    alert_rule_test:
+      - eval_time: 5m
+        alertname: ConfigScanFailing
+        exp_alerts: []
+      - eval_time: 10m
+        alertname: ConfigScanFailing
+        exp_alerts: []
