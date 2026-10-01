@@ -10,7 +10,11 @@ package main
 //
 //	scanDirTree → commitFlatFrom → mergePartialConfigs → m.config
 //	            → GetConfig() → ThresholdCollector → /metrics
-//	scanDirTree → m.hierarchy.tenantSources → Resolve() → /effective
+//	scanDirTree → m.hierarchy.tenantSources → mergedHashes
+//
+// (The exporter serves no /effective. "/effective" below is tenant-api's
+// GET /api/v1/tenants/{id}/effective — pkg/config.ResolveEffective — which
+// reads the same conf.d tree from disk on each request.)
 //
 // So the same file gets the same tenant verdict on both planes. (Not "both
 // planes hold the same tenants" unconditionally: the incremental tenant-only

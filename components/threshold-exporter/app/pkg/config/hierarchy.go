@@ -1328,8 +1328,8 @@ func oneLayers(layers []TenantLayers) TenantLayers {
 // profiles (TenantLayers). ⛔ Variadic ON PURPOSE: a caller that passes
 // none gets exactly the chain + tenant-file merge, and every call site
 // keeps using ONE merge function, not a *WithOverlay / *WithProfiles twin
-// that could drift from it. The exporter's merged_hash, ConfigManager.Resolve
-// and /effective pass the same layers, so the three agree (#2019, #2117).
+// that could drift from it. The exporter's merged_hash and /effective pass
+// the same layers, so the two agree (#2019, #2117).
 func ComputeEffectiveConfig(
 	tenantYAMLBytes []byte,
 	tenantID string,
