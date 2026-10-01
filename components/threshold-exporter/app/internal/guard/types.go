@@ -135,7 +135,12 @@ const (
 	// other than `...`,
 	// or is `...` alongside other labels. Alertmanager refuses the last
 	// three and groups by a label named after the text of the first. The
-	// generator refuses it under --strict; quote or remove it.
+	// generator refuses it under --strict; quote or remove it. The same
+	// element of a `_routing_enforced` route the generator renders is this
+	// kind too, with an empty TenantID (it is a platform file's) and Field
+	// `<root file>:_routing_enforced.group_by[i]`, or
+	// `<root file>:_routing_enforced (<tenant>).group_by[i]` for the
+	// `{{tenant}}` shape, judged per tenant after substitution.
 	FindingRoutingGroupByInvalid FindingKind = "routing_group_by_invalid"
 	// FindingDomainPolicyViolation: a receiver type an ADR-007 domain
 	// policy forbids, or leaves out of its allowed list.
@@ -344,6 +349,11 @@ type CheckInput struct {
 	// could not use (routingpolicy.LoadRoot). Each becomes one finding with
 	// an empty TenantID; the checks that do not depend on it still run.
 	PlatformProblems []routingpolicy.Problem `json:"-"`
+
+	// RoutingEnforced is the root's `_routing_enforced` block the route
+	// generator renders from (routingpolicy.Tree.Enforced; nil: none). Only
+	// its group_by is judged (#2503), over the tenants in RoutingByTenant.
+	RoutingEnforced *routingpolicy.Enforced `json:"-"`
 
 	// CardinalityLimit is the per-tenant ceiling the cardinality
 	// check (PR-3) compares each tenant's predicted metric count

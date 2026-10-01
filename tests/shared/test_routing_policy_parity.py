@@ -17,6 +17,12 @@ What this half measures, per tree written to a tmp dir:
 * `group_by_invalid` (#2503) — the strict ERROR lines for a bad group_by
   element (`_grar_validate.routing_group_by_invalid`), parsed back to
   (field, kind);
+* `enforced_group_by_invalid` (#2503, per tree) — the strict ERROR lines for
+  a bad group_by element of the rendered `_routing_enforced` route(s)
+  (`_grar_routes.enforced_group_by_problems`), parsed back to (field, kind)
+  with the line's context (`_routing_enforced` / `_routing_enforced
+  (<tenant>)`) in the field; the line names no file, so the file column is
+  the Go readers' alone;
 * `policy` — the receiver-type lines `check_domain_policies` (strict) put in
   `schema_warnings`, parsed back to (domain, ref, constraint);
 * `unknown_profile` — the `_routing_profile references unknown profile` WARN;
@@ -58,7 +64,7 @@ MATRIX = json.loads((Path(__file__).parent / "routing_policy_parity_matrix.json"
 # Exact key sets: a misspelt key read as absent would turn a row into one
 # that tests nothing while staying green.
 TOP_KEYS = {"_comment", "blocking_kinds", "trees"}
-TREE_KEYS = {"name", "files", "platform", "expect"}
+TREE_KEYS = {"name", "files", "platform", "expect", "enforced_group_by_invalid"}
 PLATFORM_KINDS = {"routing_defaults_routes_ignored", "routing_in_unread_location",
                   "domain_policy_unusable",
                   # #2326: the hierarchical routing plane's tree findings.
@@ -102,6 +108,11 @@ _NOT_STRING = re.compile(
 # field names the kind (_grar_validate.group_by_problem_text).
 _GROUP_BY = re.compile(
     r"ERROR: tenant '(?P<tenant>[^']*)': (?P<field>\S*group_by\[\d+\]) "
+    r"(?P<why>is an empty string|repeats label|is '\.\.\.' alongside|is .*?, not a string)")
+# #2503: the same refusal for a `_routing_enforced` route; the context is
+# `_routing_enforced` or, for the `{{tenant}}` shape, `_routing_enforced (<tenant>)`.
+_ENFORCED_GROUP_BY = re.compile(
+    r"ERROR: (?P<ctx>_routing_enforced(?: \([^)]*\))?): (?P<field>group_by\[\d+\]) "
     r"(?P<why>is an empty string|repeats label|is '\.\.\.' alongside|is .*?, not a string)")
 _GROUP_BY_WHY = {"is an empty string": "empty", "repeats label": "duplicate",
                  "is '...' alongside": "wildcard_mixed"}
@@ -153,6 +164,8 @@ def test_matrix_keys_are_exactly_the_known_ones() -> None:
         assert set(tree) == TREE_KEYS, (tree.get("name"), set(tree) ^ TREE_KEYS)
         for row in tree["platform"]:
             assert len(row) == 3 and row[0] in PLATFORM_KINDS, (tree["name"], row)
+        for row in tree["enforced_group_by_invalid"]:
+            assert len(row) == 3 and row[2] in GROUP_BY_KINDS, (tree["name"], row)
         for tenant, want in tree["expect"].items():
             where = (tree["name"], tenant)
             assert set(want) == EXPECT_KEYS, (where, set(want) ^ EXPECT_KEYS)
@@ -312,6 +325,13 @@ def test_python_reader_matches_the_table(tree, tmp_path: Path) -> None:
         for m in map(_ESC_NOT_BOOL.search, got.schema_warnings) if m)
     want_unusable = sorted(r[2] for r in tree["platform"] if r[0] == "domain_policy_unusable")
     assert got_unusable == want_unusable, (tree["name"], got_unusable)
+
+    # #2503: the enforced route(s)' group_by, in the generator's order (tenants
+    # in name order, element index order). The file column is Go's alone.
+    enforced = [[f"{m['ctx']}.{m['field']}", _GROUP_BY_WHY.get(m["why"], "not_string")]
+                for m in map(_ENFORCED_GROUP_BY.search, got.schema_warnings) if m]
+    assert enforced == [[f, k] for _file, f, k in tree["enforced_group_by_invalid"]], (
+        tree["name"], enforced)
 
     # Nothing the table does not name: every routed tenant and every policy
     # line belongs to a listed tenant, and the line count is the table's.

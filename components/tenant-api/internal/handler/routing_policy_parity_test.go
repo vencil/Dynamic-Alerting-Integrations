@@ -61,6 +61,9 @@ type tenantAPIParityTree struct {
 			Leaks   []string `json:"leaks"`
 		} `json:"escalation"`
 	} `json:"expect"`
+	// EnforcedGroupBy (#2503) is the platform's `_routing_enforced`, which a
+	// tenant PUT cannot write: not judged here.
+	EnforcedGroupBy json.RawMessage `json:"enforced_group_by_invalid"`
 }
 
 func loadTenantAPIParityMatrix(t *testing.T) []tenantAPIParityTree {

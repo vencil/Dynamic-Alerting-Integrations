@@ -67,6 +67,9 @@ type parityTree struct {
 	Files    map[string]string       `json:"files"`
 	Platform [][3]string             `json:"platform"`
 	Expect   map[string]parityExpect `json:"expect"`
+	// EnforcedGroupBy (#2503): [file, field, kind] per bad group_by element
+	// of the rendered `_routing_enforced` route(s).
+	EnforcedGroupBy [][3]string `json:"enforced_group_by_invalid"`
 }
 
 type parityMatrix struct {
@@ -291,6 +294,22 @@ func TestRoutingPolicyParityMatrix(t *testing.T) {
 				gotPlatform = append(gotPlatform, [3]string{p.Kind, p.File, p.Field})
 			}
 			jsonEq(t, "platform", sortRows(gotPlatform), sortRows(append([][3]string{}, tree.Platform...)))
+			// #2503: the enforced route(s)' group_by, over the tenants with a
+			// resolved routing (every routed tenant is in expect: the Python
+			// half asserts it), in EnforcedGroupByInvalid's order.
+			var routed []string
+			for tenantID := range tree.Expect {
+				block, file := tenantBlock(t, tree.Files, tenantID)
+				layers := ltree.LayersFor(LevelOf(file))
+				if _, ok, _, _ := Resolve(tenantID, layers.TenantBlock(tenantID, block), layers); ok {
+					routed = append(routed, tenantID)
+				}
+			}
+			gotEnforced := [][3]string{}
+			for _, p := range EnforcedGroupByInvalid(ltree.Enforced, routed) {
+				gotEnforced = append(gotEnforced, [3]string{p.File, p.Path(), p.Kind})
+			}
+			jsonEq(t, "enforced_group_by_invalid", gotEnforced, append([][3]string{}, tree.EnforcedGroupBy...))
 			for tenantID, want := range tree.Expect {
 				t.Run(tenantID, func(t *testing.T) {
 					// The generator's tenant layer: the tenant file's keys over

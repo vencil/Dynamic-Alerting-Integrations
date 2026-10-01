@@ -596,26 +596,29 @@ func buildPolicies(nodes map[string]*yaml.Node, origin map[string]string) ([]Pol
 // reports as failed, so they are named once, not twice. LoadRoot never adds
 // to that list: what it cannot use comes back as Problems.
 func LoadRoot(configDir string, skip func(rel string) bool) (Layers, []Policy, []Problem) {
-	layers, pols, probs, _ := loadRoot(configDir, skip)
+	layers, pols, probs, _, _ := loadRoot(configDir, skip)
 	return layers, pols, probs
 }
 
 // loadRoot is LoadRoot plus, per routing-profile name, the root file that
-// defined it (LoadTree continues the uniqueness check below the root).
+// defined it (LoadTree continues the uniqueness check below the root), and
+// the `_routing_enforced` block the generator renders from (Tree.Enforced,
+// #2503: the last root file, in name order, that enables one).
 //
 // #2326 (ADR-007 amendment 2026-09-28 (c)): a profile name is unique across
 // the tree, so a second root file defining it (`_routing_profiles.yml` beside
 // `.yaml`) is ProblemRoutingProfileDuplicate and the FIRST definition, in name
 // order, is kept — before, the later file silently replaced it.
-func loadRoot(configDir string, skip func(rel string) bool) (Layers, []Policy, []Problem, map[string]string) {
+func loadRoot(configDir string, skip func(rel string) bool) (Layers, []Policy, []Problem, map[string]string, *Enforced) {
 	var layers Layers
 	var probs []Problem
+	var enforced *Enforced
 	profileOrigin := map[string]string{}
 
 	files, err := config.RootPlatformFiles(configDir)
 	if err != nil {
 		return layers, nil, []Problem{{Kind: ProblemDomainPolicyUnusable,
-			Message: fmt.Sprintf("conf.d root could not be read, so no domain policy was read: %v", err)}}, profileOrigin
+			Message: fmt.Sprintf("conf.d root could not be read, so no domain policy was read: %v", err)}}, profileOrigin, nil
 	}
 
 	policyNodes := map[string]*yaml.Node{}
@@ -640,6 +643,9 @@ func loadRoot(configDir string, skip func(rel string) bool) (Layers, []Policy, [
 		}
 		if top == nil {
 			continue
+		}
+		if e := enforcedFrom(f.Name, top); e != nil {
+			enforced = e
 		}
 		if d, present, stripped, err := routingDefaultsFromNode(top); present {
 			if err != nil {
@@ -687,7 +693,7 @@ func loadRoot(configDir string, skip func(rel string) bool) (Layers, []Policy, [
 	}
 	pols, pprobs := buildPolicies(policyNodes, policyOrigin)
 	probs = append(probs, pprobs...)
-	return layers, pols, probs, profileOrigin
+	return layers, pols, probs, profileOrigin, enforced
 }
 
 // overlayFrom records the `_routing` / `_routing_profile` keys of one root

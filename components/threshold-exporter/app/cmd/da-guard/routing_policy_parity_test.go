@@ -8,8 +8,11 @@ package main
 // `rejected_routes` ref, unknown_routing_profile exactly when the table
 // names one, one routing_value_not_string per `values_not_string` field
 // (#2431), one routing_group_by_invalid per `group_by_invalid` field
-// (#2503), critical_escalation_missing exactly when `escalation` says
-// violation and one critical_escalation_leak Field per leak ref (#2325), and exactly the tree's `platform` rows as TenantID "" findings. The Python half reads only the same table.
+// (#2503) and one with an empty TenantID and Field <file>:<field> per
+// `enforced_group_by_invalid` row (#2503), critical_escalation_missing
+// exactly when `escalation` says violation and one critical_escalation_leak
+// Field per leak ref (#2325), and exactly the tree's `platform` rows as
+// TenantID "" findings. The Python half reads only the same table.
 
 import (
 	"bytes"
@@ -42,6 +45,10 @@ type daGuardParityTree struct {
 	Files    map[string]string              `json:"files"`
 	Platform [][3]string                    `json:"platform"`
 	Expect   map[string]daGuardParityExpect `json:"expect"`
+	// EnforcedGroupBy (#2503): [file, field, kind] per bad group_by element
+	// of the rendered `_routing_enforced` route(s) — a TenantID ""
+	// routing_group_by_invalid finding with Field <file>:<field> each.
+	EnforcedGroupBy [][3]string `json:"enforced_group_by_invalid"`
 }
 
 func loadRoutingPolicyMatrix(t *testing.T) []daGuardParityTree {
@@ -152,7 +159,7 @@ func TestDaGuard_RoutingPolicyParityMatrix(t *testing.T) {
 			}
 			gotPlatform, wantPlatform := []string{}, []string{}
 			for _, f := range findings {
-				if f.TenantID == "" {
+				if f.TenantID == "" && f.Kind != "routing_group_by_invalid" {
 					gotPlatform = append(gotPlatform, f.Kind+" "+f.Field)
 				}
 			}
@@ -163,6 +170,16 @@ func TestDaGuard_RoutingPolicyParityMatrix(t *testing.T) {
 			sort.Strings(wantPlatform)
 			if !equalStrings(gotPlatform, wantPlatform) {
 				t.Errorf("platform findings %v, table says %v", gotPlatform, wantPlatform)
+			}
+			// #2503: the enforced route(s)' group_by (the kind is pinned by
+			// pkg/routingpolicy's half; the finding carries file and field).
+			wantEnforced := []string{}
+			for _, row := range tree.EnforcedGroupBy {
+				wantEnforced = append(wantEnforced, row[0]+":"+row[1])
+			}
+			sort.Strings(wantEnforced)
+			if got := fieldsOf(findings, "", "routing_group_by_invalid"); !equalStrings(got, wantEnforced) {
+				t.Errorf("enforced routing_group_by_invalid fields %v, table says %v", got, wantEnforced)
 			}
 			for tenantID, want := range tree.Expect {
 				wantPolicy := []string{}

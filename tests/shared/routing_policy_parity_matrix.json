@@ -97,7 +97,8 @@
     "drift. routing_in_unread_location with field `_routing_defaults` is the one row of that kind the",
     "Python reader also reports (a `_` non-carrier file below the root; --validate-blocking there).",
     "#2412 - a root `_routing_defaults` that is not a mapping (list, string, number) contributes nothing, as below the root: no platform row (the generator WARNs, rc 0); it still replaces an earlier root file's `_routing_defaults` WHOLE (root _ files in name order), so the later file decides.",
-    "#2504 - a null key in a routes match (~, null, an empty `? ` key) is no label name: the entry is rejected in every reader, alone or beside a valid label. The generator keeps that key (as None) instead of dropping it as its loader drops null keys elsewhere, so it no longer renders the route on the other labels alone; a critical -> pagerduty route that carries one is no escalation."
+    "#2504 - a null key in a routes match (~, null, an empty `? ` key) is no label name: the entry is rejected in every reader, alone or beside a valid label. The generator keeps that key (as None) instead of dropping it as its loader drops null keys elsewhere, so it no longer renders the route on the other labels alone; a critical -> pagerduty route that carries one is no escalation.",
+    "enforced_group_by_invalid (#2503, per tree): [file, field, kind] per bad group_by element of the `_routing_enforced` route(s) the generator renders - read from the root `_` files in name order, a later one with `enabled: true` (as PyYAML reads it: `yes` / `on` too) replacing an earlier; judged only with a truthy receiver that the receiver contract accepts (pkg/receiverspec, _grar_merge.build_receiver_config) and a non-empty group_by list, the `{{tenant}}` shape once per routed tenant AFTER substitution. field is `_routing_enforced.group_by[i]`, or `_routing_enforced (<tenant>).group_by[i]` for the `{{tenant}}` shape; file is the root file the enforced block came from. The generator's --strict ERROR (it names no file, so the Python half compares field and kind), da-guard's routing_group_by_invalid with an empty tenant and Field <file>:<field>. The --policy domain allowlist is not applied (load_tenant_tree does not know it)."
   ],
   "blocking_kinds": [
     "routing_defaults_null_below_root",
@@ -137,7 +138,8 @@
           "python_differs": null,
           "escalation": null
         }
-      }
+      },
+      "enforced_group_by_invalid": []
     },
     {
       "name": "ii-routes-entry-forbidden-type",
@@ -177,7 +179,8 @@
           "python_differs": null,
           "escalation": null
         }
-      }
+      },
+      "enforced_group_by_invalid": []
     },
     {
       "name": "iii-override-unknown-receiver-type",
@@ -211,7 +214,8 @@
           "python_differs": null,
           "escalation": null
         }
-      }
+      },
+      "enforced_group_by_invalid": []
     },
     {
       "name": "iv-override-forbidden-type",
@@ -251,7 +255,8 @@
           "python_differs": null,
           "escalation": null
         }
-      }
+      },
+      "enforced_group_by_invalid": []
     },
     {
       "name": "adr007-five-tenants",
@@ -455,7 +460,8 @@
             "leaks": []
           }
         }
-      }
+      },
+      "enforced_group_by_invalid": []
     },
     {
       "name": "tenant-empty-routes-drops-profile-routes",
@@ -516,7 +522,8 @@
           "python_differs": null,
           "escalation": null
         }
-      }
+      },
+      "enforced_group_by_invalid": []
     },
     {
       "name": "unknown-routing-profile",
@@ -588,7 +595,8 @@
           "python_differs": null,
           "escalation": null
         }
-      }
+      },
+      "enforced_group_by_invalid": []
     },
     {
       "name": "routing-disable-with-profile",
@@ -650,7 +658,8 @@
           "python_differs": null,
           "escalation": null
         }
-      }
+      },
+      "enforced_group_by_invalid": []
     },
     {
       "name": "main-receiver-empty-and-override-matchers",
@@ -705,7 +714,8 @@
           "python_differs": null,
           "escalation": null
         }
-      }
+      },
+      "enforced_group_by_invalid": []
     },
     {
       "name": "tenant-in-two-domains",
@@ -766,7 +776,8 @@
           "python_differs": null,
           "escalation": null
         }
-      }
+      },
+      "enforced_group_by_invalid": []
     },
     {
       "name": "forbidden-and-allowed-both-fire",
@@ -812,7 +823,8 @@
           "python_differs": null,
           "escalation": null
         }
-      }
+      },
+      "enforced_group_by_invalid": []
     },
     {
       "name": "routing-defaults-supply-receiver",
@@ -874,7 +886,8 @@
           "python_differs": null,
           "escalation": null
         }
-      }
+      },
+      "enforced_group_by_invalid": []
     },
     {
       "name": "routes-entry-shapes",
@@ -947,7 +960,8 @@
           "python_differs": null,
           "escalation": null
         }
-      }
+      },
+      "enforced_group_by_invalid": []
     },
     {
       "name": "yaml11-bool-match-value",
@@ -981,7 +995,8 @@
           "python_differs": null,
           "escalation": null
         }
-      }
+      },
+      "enforced_group_by_invalid": []
     },
     {
       "name": "domain-policy-yml-spelling",
@@ -1017,7 +1032,8 @@
           "python_differs": null,
           "escalation": null
         }
-      }
+      },
+      "enforced_group_by_invalid": []
     },
     {
       "name": "routing-defaults-routes-in-other-platform-file",
@@ -1054,7 +1070,8 @@
           "python_differs": null,
           "escalation": null
         }
-      }
+      },
+      "enforced_group_by_invalid": []
     },
     {
       "name": "allowed-list-non-string-entries",
@@ -1110,7 +1127,8 @@
           "python_differs": null,
           "escalation": null
         }
-      }
+      },
+      "enforced_group_by_invalid": []
     },
     {
       "name": "whitespace-profile-reference",
@@ -1135,7 +1153,8 @@
           "python_differs": null,
           "escalation": null
         }
-      }
+      },
+      "enforced_group_by_invalid": []
     },
     {
       "name": "threshold-profile-routing-is-not-read",
@@ -1167,7 +1186,8 @@
           "python_differs": null,
           "escalation": null
         }
-      }
+      },
+      "enforced_group_by_invalid": []
     },
     {
       "name": "unwrapped-defaults-routing-is-not-read",
@@ -1203,7 +1223,8 @@
           "python_differs": null,
           "escalation": null
         }
-      }
+      },
+      "enforced_group_by_invalid": []
     },
     {
       "name": "platform-overlay-routing-is-read",
@@ -1287,7 +1308,8 @@
           "python_differs": null,
           "escalation": null
         }
-      }
+      },
+      "enforced_group_by_invalid": []
     },
     {
       "name": "platform-overlay-yaml-merge-key",
@@ -1370,7 +1392,8 @@
           "python_differs": null,
           "escalation": null
         }
-      }
+      },
+      "enforced_group_by_invalid": []
     },
     {
       "name": "domain-policy-yaml-merge-key",
@@ -1504,7 +1527,8 @@
           "python_differs": null,
           "escalation": null
         }
-      }
+      },
+      "enforced_group_by_invalid": []
     },
     {
       "name": "top-level-yaml-merge-key",
@@ -1694,7 +1718,8 @@
           "python_differs": null,
           "escalation": null
         }
-      }
+      },
+      "enforced_group_by_invalid": []
     },
     {
       "name": "top-level-yaml-merge-key-subtree",
@@ -1799,7 +1824,8 @@
           "python_differs": null,
           "escalation": null
         }
-      }
+      },
+      "enforced_group_by_invalid": []
     },
     {
       "name": "yaml-alias-key-names",
@@ -1888,7 +1914,8 @@
           "python_differs": null,
           "escalation": null
         }
-      }
+      },
+      "enforced_group_by_invalid": []
     },
     {
       "name": "require-critical-escalation",
@@ -2248,7 +2275,8 @@
             "leaks": []
           }
         }
-      }
+      },
+      "enforced_group_by_invalid": []
     },
     {
       "name": "require-critical-escalation-yaml11-bool",
@@ -2370,7 +2398,8 @@
           "python_differs": null,
           "escalation": null
         }
-      }
+      },
+      "enforced_group_by_invalid": []
     },
     {
       "name": "require-critical-escalation-explicit-bool-tag",
@@ -2502,7 +2531,8 @@
             "leaks": []
           }
         }
-      }
+      },
+      "enforced_group_by_invalid": []
     },
     {
       "name": "hier-a-routing-defaults-chain-deeper-wins",
@@ -2590,7 +2620,8 @@
           "python_differs": null,
           "escalation": null
         }
-      }
+      },
+      "enforced_group_by_invalid": []
     },
     {
       "name": "hier-a-null-receiver-below-root",
@@ -2645,7 +2676,8 @@
           "python_differs": null,
           "escalation": null
         }
-      }
+      },
+      "enforced_group_by_invalid": []
     },
     {
       "name": "hier-b-routing-enforced-below-root",
@@ -2684,7 +2716,8 @@
           "python_differs": null,
           "escalation": null
         }
-      }
+      },
+      "enforced_group_by_invalid": []
     },
     {
       "name": "hier-c-profiles-scoped-to-subtree",
@@ -2770,7 +2803,8 @@
           "python_differs": null,
           "escalation": null
         }
-      }
+      },
+      "enforced_group_by_invalid": []
     },
     {
       "name": "hier-c-profile-name-defined-twice",
@@ -2827,7 +2861,8 @@
           "python_differs": null,
           "escalation": null
         }
-      }
+      },
+      "enforced_group_by_invalid": []
     },
     {
       "name": "hier-d-subtree-policy-additive-and-scoped",
@@ -2895,7 +2930,8 @@
           "python_differs": null,
           "escalation": null
         }
-      }
+      },
+      "enforced_group_by_invalid": []
     },
     {
       "name": "hier-e-duplicate-tenant-id",
@@ -2928,7 +2964,8 @@
           "python_differs": null,
           "escalation": null
         }
-      }
+      },
+      "enforced_group_by_invalid": []
     },
     {
       "name": "hier-b-enforced-in-unselected-carrier-spelling",
@@ -2962,7 +2999,8 @@
           "python_differs": null,
           "escalation": null
         }
-      }
+      },
+      "enforced_group_by_invalid": []
     },
     {
       "name": "hier-e-duplicate-tenant-with-null-body",
@@ -2995,7 +3033,8 @@
           "python_differs": null,
           "escalation": null
         }
-      }
+      },
+      "enforced_group_by_invalid": []
     },
     {
       "name": "hier-f-routing-defaults-in-nested-non-carrier",
@@ -3028,7 +3067,8 @@
           "python_differs": null,
           "escalation": null
         }
-      }
+      },
+      "enforced_group_by_invalid": []
     },
     {
       "name": "hier-a-root-routing-defaults-not-a-mapping",
@@ -3084,7 +3124,8 @@
           "python_differs": null,
           "escalation": null
         }
-      }
+      },
+      "enforced_group_by_invalid": []
     },
     {
       "name": "hier-a-root-later-file-not-a-mapping-replaces",
@@ -3106,7 +3147,8 @@
           "python_differs": null,
           "escalation": null
         }
-      }
+      },
+      "enforced_group_by_invalid": []
     },
     {
       "name": "hier-a-root-earlier-file-not-a-mapping-is-replaced",
@@ -3133,7 +3175,8 @@
           "python_differs": null,
           "escalation": null
         }
-      }
+      },
+      "enforced_group_by_invalid": []
     },
     {
       "name": "routing-values-yaml11",
@@ -3417,7 +3460,8 @@
           "python_differs": null,
           "escalation": null
         }
-      }
+      },
+      "enforced_group_by_invalid": []
     },
     {
       "name": "routing-values-yaml11-routing-defaults",
@@ -3453,7 +3497,8 @@
           "python_differs": null,
           "escalation": null
         }
-      }
+      },
+      "enforced_group_by_invalid": []
     },
     {
       "name": "routing-values-invalid-label-keys",
@@ -3640,7 +3685,8 @@
           "python_differs": null,
           "escalation": null
         }
-      }
+      },
+      "enforced_group_by_invalid": []
     },
     {
       "name": "group-by-elements",
@@ -4065,7 +4111,8 @@
           "python_differs": null,
           "escalation": null
         }
-      }
+      },
+      "enforced_group_by_invalid": []
     },
     {
       "name": "routes-match-null-key",
@@ -4167,7 +4214,250 @@
           "python_differs": null,
           "escalation": null
         }
-      }
+      },
+      "enforced_group_by_invalid": []
+    },
+    {
+      "name": "routing-enforced-group-by-single",
+      "files": {
+        "_defaults.yaml": "defaults:\n  cpu_usage_percent: 80\n_routing_enforced:\n  enabled: yes\n  receiver:\n    type: webhook\n    url: https://noc.example.com/hook\n  group_by: [alertname, on, alertname, '', \"...\"]\n",
+        "t-a.yaml": "tenants:\n  t-a:\n    cpu_usage_percent: '85'\n    _routing:\n      receiver:\n        type: pagerduty\n        service_key: main-key\n"
+      },
+      "platform": [],
+      "expect": {
+        "t-a": {
+          "targets": [
+            {
+              "ref": "receiver",
+              "type": "pagerduty"
+            }
+          ],
+          "policy": [],
+          "rejected_routes": [],
+          "values_not_string": [],
+          "group_by_invalid": [],
+          "unknown_profile": null,
+          "tenant_api": null,
+          "python_differs": null,
+          "escalation": null
+        }
+      },
+      "enforced_group_by_invalid": [
+        [
+          "_defaults.yaml",
+          "_routing_enforced.group_by[1]",
+          "not_string"
+        ],
+        [
+          "_defaults.yaml",
+          "_routing_enforced.group_by[2]",
+          "duplicate"
+        ],
+        [
+          "_defaults.yaml",
+          "_routing_enforced.group_by[3]",
+          "empty"
+        ],
+        [
+          "_defaults.yaml",
+          "_routing_enforced.group_by[4]",
+          "wildcard_mixed"
+        ]
+      ]
+    },
+    {
+      "name": "routing-enforced-group-by-per-tenant",
+      "files": {
+        "_defaults.yaml": "defaults:\n  cpu_usage_percent: 80\n",
+        "_platform.yaml": "_routing_enforced:\n  enabled: true\n  receiver:\n    type: webhook\n    url: https://noc.example.com/hook\n  group_by: [alertname, \"{{tenant}}\"]\n",
+        "alertname.yaml": "tenants:\n  alertname:\n    cpu_usage_percent: '85'\n    _routing:\n      receiver:\n        type: pagerduty\n        service_key: main-key\n",
+        "t-b.yaml": "tenants:\n  t-b:\n    cpu_usage_percent: '85'\n    _routing:\n      receiver:\n        type: pagerduty\n        service_key: main-key\n"
+      },
+      "platform": [],
+      "expect": {
+        "alertname": {
+          "targets": [
+            {
+              "ref": "receiver",
+              "type": "pagerduty"
+            }
+          ],
+          "policy": [],
+          "rejected_routes": [],
+          "values_not_string": [],
+          "group_by_invalid": [],
+          "unknown_profile": null,
+          "tenant_api": null,
+          "python_differs": null,
+          "escalation": null
+        },
+        "t-b": {
+          "targets": [
+            {
+              "ref": "receiver",
+              "type": "pagerduty"
+            }
+          ],
+          "policy": [],
+          "rejected_routes": [],
+          "values_not_string": [],
+          "group_by_invalid": [],
+          "unknown_profile": null,
+          "tenant_api": null,
+          "python_differs": null,
+          "escalation": null
+        }
+      },
+      "enforced_group_by_invalid": [
+        [
+          "_platform.yaml",
+          "_routing_enforced (alertname).group_by[1]",
+          "duplicate"
+        ]
+      ]
+    },
+    {
+      "name": "routing-enforced-group-by-disabled",
+      "files": {
+        "_defaults.yaml": "defaults:\n  cpu_usage_percent: 80\n_routing_enforced:\n  enabled: false\n  receiver:\n    type: webhook\n    url: https://noc.example.com/hook\n  group_by: [alertname, on]\n",
+        "t-a.yaml": "tenants:\n  t-a:\n    cpu_usage_percent: '85'\n    _routing:\n      receiver:\n        type: pagerduty\n        service_key: main-key\n"
+      },
+      "platform": [],
+      "expect": {
+        "t-a": {
+          "targets": [
+            {
+              "ref": "receiver",
+              "type": "pagerduty"
+            }
+          ],
+          "policy": [],
+          "rejected_routes": [],
+          "values_not_string": [],
+          "group_by_invalid": [],
+          "unknown_profile": null,
+          "tenant_api": null,
+          "python_differs": null,
+          "escalation": null
+        }
+      },
+      "enforced_group_by_invalid": []
+    },
+    {
+      "name": "routing-enforced-group-by-no-receiver",
+      "files": {
+        "_defaults.yaml": "defaults:\n  cpu_usage_percent: 80\n_routing_enforced:\n  enabled: true\n  group_by: [alertname, on]\n",
+        "t-a.yaml": "tenants:\n  t-a:\n    cpu_usage_percent: '85'\n    _routing:\n      receiver:\n        type: pagerduty\n        service_key: main-key\n"
+      },
+      "platform": [],
+      "expect": {
+        "t-a": {
+          "targets": [
+            {
+              "ref": "receiver",
+              "type": "pagerduty"
+            }
+          ],
+          "policy": [],
+          "rejected_routes": [],
+          "values_not_string": [],
+          "group_by_invalid": [],
+          "unknown_profile": null,
+          "tenant_api": null,
+          "python_differs": null,
+          "escalation": null
+        }
+      },
+      "enforced_group_by_invalid": []
+    },
+    {
+      "name": "routing-enforced-group-by-receiver-refused",
+      "files": {
+        "_defaults.yaml": "defaults:\n  cpu_usage_percent: 80\n_routing_enforced:\n  enabled: true\n  receiver:\n    type: webhook\n  group_by: [alertname, on]\n",
+        "t-a.yaml": "tenants:\n  t-a:\n    cpu_usage_percent: '85'\n    _routing:\n      receiver:\n        type: pagerduty\n        service_key: main-key\n"
+      },
+      "platform": [],
+      "expect": {
+        "t-a": {
+          "targets": [
+            {
+              "ref": "receiver",
+              "type": "pagerduty"
+            }
+          ],
+          "policy": [],
+          "rejected_routes": [],
+          "values_not_string": [],
+          "group_by_invalid": [],
+          "unknown_profile": null,
+          "tenant_api": null,
+          "python_differs": null,
+          "escalation": null
+        }
+      },
+      "enforced_group_by_invalid": []
+    },
+    {
+      "name": "routing-enforced-group-by-valid",
+      "files": {
+        "_defaults.yaml": "defaults:\n  cpu_usage_percent: 80\n_routing_enforced:\n  enabled: true\n  receiver:\n    type: webhook\n    url: https://noc.example.com/hook\n  group_by: [alertname, tenant]\n",
+        "t-a.yaml": "tenants:\n  t-a:\n    cpu_usage_percent: '85'\n    _routing:\n      receiver:\n        type: pagerduty\n        service_key: main-key\n"
+      },
+      "platform": [],
+      "expect": {
+        "t-a": {
+          "targets": [
+            {
+              "ref": "receiver",
+              "type": "pagerduty"
+            }
+          ],
+          "policy": [],
+          "rejected_routes": [],
+          "values_not_string": [],
+          "group_by_invalid": [],
+          "unknown_profile": null,
+          "tenant_api": null,
+          "python_differs": null,
+          "escalation": null
+        }
+      },
+      "enforced_group_by_invalid": []
+    },
+    {
+      "name": "routing-enforced-group-by-last-enabled-root-file",
+      "files": {
+        "_defaults.yaml": "defaults:\n  cpu_usage_percent: 80\n_routing_enforced:\n  enabled: true\n  receiver:\n    type: webhook\n    url: https://noc.example.com/hook\n  group_by: [severity, severity]\n",
+        "_noc.yaml": "_routing_enforced:\n  enabled: true\n  receiver:\n    type: webhook\n    url: https://noc.example.com/hook\n  group_by: [alertname, on]\n",
+        "_zz.yaml": "_routing_enforced:\n  enabled: false\n  receiver:\n    type: webhook\n    url: https://noc.example.com/hook\n  group_by: [tenant, tenant]\n",
+        "t-a.yaml": "tenants:\n  t-a:\n    cpu_usage_percent: '85'\n    _routing:\n      receiver:\n        type: pagerduty\n        service_key: main-key\n"
+      },
+      "platform": [],
+      "expect": {
+        "t-a": {
+          "targets": [
+            {
+              "ref": "receiver",
+              "type": "pagerduty"
+            }
+          ],
+          "policy": [],
+          "rejected_routes": [],
+          "values_not_string": [],
+          "group_by_invalid": [],
+          "unknown_profile": null,
+          "tenant_api": null,
+          "python_differs": null,
+          "escalation": null
+        }
+      },
+      "enforced_group_by_invalid": [
+        [
+          "_noc.yaml",
+          "_routing_enforced.group_by[1]",
+          "not_string"
+        ]
+      ]
     }
   ]
 }
