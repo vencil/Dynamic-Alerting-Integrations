@@ -193,8 +193,10 @@ def load_exporter_keys(stream: Any, *,
 
     The safety property is therefore pinned by BEHAVIOUR, not by spelling:
     ``tests/shared/test_tenant_id_yaml_spelling_parity.py::
-    test_the_loader_cannot_construct_python_objects`` feeds both entry
-    points an actual ``!!python/object/apply`` payload and requires it to be
+    test_the_loader_cannot_construct_python_objects`` feeds every entry in
+    that file's ``LOADS`` table (``load_exporter_keys``,
+    ``load_first_document_exporter_keys``, ``load_all_exporter_keys``) an
+    actual ``!!python/object/apply`` payload and requires it to be
     refused, with a must-still-work control beside it. ⛔ Deleting that test
     leaves this shape completely unguarded. ⚠️ NOT GUARDED: it pins THIS
     loader only — nothing pins a future copy.

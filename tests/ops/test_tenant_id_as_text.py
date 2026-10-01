@@ -1039,3 +1039,37 @@ def test_offboard_finds_a_reference_written_as_a_list_value(
                      fname: body.format(id=spell)})
     configs = ot.load_all_configs(str(tmp_path))
     assert ot.check_cross_references("010", configs) == [fname]
+
+
+_AM_ROUTES_2216 = (
+    "route:\n  receiver: default\n  routes:\n    - receiver: r1\n"
+    "      match:\n        {label}: {id}\n"
+    "receivers:\n  - name: default\n  - name: r1\n"
+    "    webhook_configs:\n      - url: http://x\n")
+
+
+def _am_configmap(body: str) -> str:
+    indented = "".join("    " + ln + "\n" for ln in body.splitlines())
+    return ("apiVersion: v1\nkind: ConfigMap\nmetadata:\n  name: am\n"
+            "data:\n  alertmanager.yml: |\n" + indented)
+
+
+@pytest.mark.parametrize("variant", sorted(_ID_SPELLINGS))
+@pytest.mark.parametrize("label", ["tenant", "team"])
+@pytest.mark.parametrize("wrapped", [False, True], ids=["raw", "configmap"])
+def test_onboard_platform_cli_reads_the_tenant_label_value_as_written(
+        tmp_path, variant, label, wrapped):
+    """End to end through main(): the ConfigMap-wrapped body and a custom
+    ``--tenant-label`` both reach the text read. Before (#2216) UNQ gave
+    tenant "8" on every row; a wrapped body or a label main() does not pass
+    on would bring it back."""
+    body = _AM_ROUTES_2216.format(label=label, id=_ID_SPELLINGS[variant])
+    cfg = _tree(tmp_path, {"am.yaml": _am_configmap(body) if wrapped else body})
+    p = subprocess.run(
+        [sys.executable, str(TOOLS / "ops" / "onboard_platform.py"),
+         "--alertmanager-config", str(cfg / "am.yaml"),
+         "--tenant-label", label, "--dry-run", "--json"],
+        capture_output=True, text=True, encoding="utf-8", errors="replace",
+        timeout=60)
+    assert p.returncode == 0, p.stderr[-2000:]
+    assert json.loads(p.stdout)["phases"]["phase1"]["tenants"] == ["010"], p.stdout
