@@ -161,6 +161,43 @@ func TestLoadDirReport_UnlistableSubdirIsWalkError(t *testing.T) {
 	}
 }
 
+// A sub-directory that can be listed but not searched (0644: r, no x): the
+// walk sees its entries but cannot lstat them. A regular file there is
+// stat_error from the entry's own stat; a symlink there is stat_error from
+// the link's own lstat (the symlink branch's first check). Root ignores the
+// missing x bit, so this row is skipped there.
+func TestLoadDirReport_UnsearchableSubdirEntriesAreStatError(t *testing.T) {
+	t.Parallel()
+	if os.Geteuid() == 0 {
+		t.Skip("running as root: a directory without x is still searched")
+	}
+	dir := writeUnreadableTree(t)
+	sub := filepath.Join(dir, "team")
+	if err := os.MkdirAll(sub, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(sub, "t.yaml"),
+		[]byte("tenants:\n  tenant-c:\n    mysql_connections: 60\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	symlinkOrSkip(t, "../tenant-a.yaml", filepath.Join(sub, "l.yaml"))
+	if err := os.Chmod(sub, 0o644); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = os.Chmod(sub, 0o755) })
+	cfg, rep, _ := loadReport(t, dir)
+	want := []UnreadableFile{
+		{RelKey: "team/l.yaml", Reason: UnreadableStatError},
+		{RelKey: "team/t.yaml", Reason: UnreadableStatError},
+	}
+	if !reflect.DeepEqual(rep.Unreadable, want) {
+		t.Errorf("Unreadable = %v, want %v", rep.Unreadable, want)
+	}
+	if _, ok := cfg.Tenants["tenant-c"]; ok {
+		t.Errorf("tenant-c present: its file cannot be statted, so it must not load")
+	}
+}
+
 func TestLoadDirReport_CleanTreeHasNoUnreadable(t *testing.T) {
 	t.Parallel()
 	_, rep, _ := loadReport(t, writeUnreadableTree(t))

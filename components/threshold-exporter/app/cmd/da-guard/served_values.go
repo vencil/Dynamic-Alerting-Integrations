@@ -210,7 +210,7 @@ func runServedValues(args []string, stdout, errOut io.Writer) int {
 		for _, u := range unreadable {
 			names = append(names, u.File+" ("+u.Reason+")")
 		}
-		fmt.Fprintf(errOut, "%s %s: %d file(s) cannot be read: %s — fix them and re-run (exit 3)\n",
+		fmt.Fprintf(errOut, "%s %s: %d path(s) cannot be read: %s — fix them and re-run (exit 3)\n",
 			programName, servedValuesCmd, len(names), strings.Join(names, ", "))
 	}
 	if len(parseFailed) > 0 || len(unreadable) > 0 {

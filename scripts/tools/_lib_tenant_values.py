@@ -254,7 +254,7 @@ def load_served_tree(
             clauses.append(f"the exporter's load skips {len(parse_failed)} file(s) that do not decode: "
                            f"{', '.join(parse_failed)}")
         if unreadable:
-            clauses.append(f"the exporter's load cannot read {len(unreadable)} file(s): "
+            clauses.append(f"the exporter's load cannot read {len(unreadable)} path(s): "
                            f"{', '.join(f'{u.file} ({u.reason})' for u in unreadable)}")
         first = parse_failed[0] if parse_failed else unreadable[0].file
         raise ParseFailedError(str(Path(conf_d) / first), ValueError("; ".join(clauses)),

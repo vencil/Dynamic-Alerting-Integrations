@@ -329,7 +329,7 @@ def test_unreadable_raises_parse_failed_error_naming_file_and_reason(tmp_path, d
         tv.load_served_tree(conf_d, binary=da_guard)
     assert ei.value.path == str(conf_d / "tenant-b.yaml")
     assert ei.value.unreadable == [tv.UnreadableFile("tenant-b.yaml", "stat_error")]
-    assert "cannot read 1 file(s): tenant-b.yaml (stat_error)" in str(ei.value)
+    assert "cannot read 1 path(s): tenant-b.yaml (stat_error)" in str(ei.value)
 
 
 def test_exit_on_served_values_error_is_rc2_one_line(capsys):

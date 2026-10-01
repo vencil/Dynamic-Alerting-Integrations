@@ -384,7 +384,7 @@ func TestServedValues_DanglingSymlink_IsUnreadableExitThree(t *testing.T) {
 	if ids := keysOf(doc.Tenants); !reflect.DeepEqual(ids, []string{"tenant-a"}) {
 		t.Errorf("tenants = %v, want [tenant-a]", ids)
 	}
-	if !strings.Contains(stderr, "1 file(s) cannot be read: tenant-b.yaml (stat_error)") {
+	if !strings.Contains(stderr, "1 path(s) cannot be read: tenant-b.yaml (stat_error)") {
 		t.Errorf("stderr does not name the file: %q", stderr)
 	}
 }
@@ -438,6 +438,33 @@ func TestServedValues_UnlistableSubdir_IsUnreadableExitThree(t *testing.T) {
 	}
 	if ids := keysOf(doc.Tenants); !reflect.DeepEqual(ids, []string{"tenant-a"}) {
 		t.Errorf("tenants = %v, want [tenant-a]", ids)
+	}
+}
+
+// A sub-directory that lists but cannot be searched (0644): its file cannot
+// be statted, so it is unreadable (stat_error) and exit 3. Root ignores the
+// missing x bit.
+func TestServedValues_UnsearchableSubdir_FileIsStatErrorExitThree(t *testing.T) {
+	t.Parallel()
+	if os.Geteuid() == 0 {
+		t.Skip("running as root: a directory without x is still searched")
+	}
+	dir := unreadableTree(t)
+	sub := filepath.Join(dir, "team")
+	testutil.WriteTree(t, dir, map[string]string{
+		"team/t.yaml": "tenants:\n  tenant-c:\n    mysql_connections: 60\n",
+	})
+	if err := os.Chmod(sub, 0o644); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = os.Chmod(sub, 0o755) })
+	code, doc, _, stderr := servedDir(t, dir)
+	if code != exitParseFailed {
+		t.Fatalf("exit = %d, want %d; stderr=%q", code, exitParseFailed, stderr)
+	}
+	if len(doc.Unreadable) != 1 || doc.Unreadable[0].File != "team/t.yaml" ||
+		doc.Unreadable[0].Reason != config.UnreadableStatError {
+		t.Errorf("unreadable = %+v, want [{team/t.yaml %s}]", doc.Unreadable, config.UnreadableStatError)
 	}
 }
 
