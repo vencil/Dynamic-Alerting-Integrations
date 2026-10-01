@@ -594,7 +594,7 @@ da-tools blind-spot --config-dir ./conf.d --json-output
 
 結束碼 2 時，附在 `ERROR` 行下面的每一行都以 `  da-guard| ` 開頭（與正常結束時轉印的 stderr 相同）；其中出現的 `exit 3` 是 da-guard 自己的結束碼，本工具以 2 結束。
 
-`walk_error` 不看目錄裡有沒有設定檔：`--config-dir` 底下任何一個執行身分列不出內容的子目錄（例如權限不足的 `docs/`，或 conf.d 剛好是 ext4 volume 根目錄、以非 root 執行時的 `lost+found`）都會讓本工具以 2 結束。解法是把 `--config-dir` 指向不含該目錄的子路徑，或調整權限讓執行身分可以列出它。
+`walk_error` 不看目錄裡有沒有設定檔：`--config-dir` 底下任何一個執行身分列不出內容的子目錄（例如權限不足的 `docs/`，或 conf.d 剛好是 ext4 volume 根目錄、以非 root 執行時的 `lost+found`）都會讓本工具以 2 結束；以 `.` 開頭的目錄（例如 `.git`）不算，exporter 的載入本來就不進去。解法是把 `--config-dir` 指向不含該目錄的子路徑，或調整權限讓執行身分可以列出它。
 
 ---
 
@@ -2324,7 +2324,7 @@ da-tools analyze-gaps --tenant-config ./conf.d/db-a.yaml
 | `0` | 成功 |
 | `2` | 呼叫端錯誤：參數錯誤；`--config-dir`／`--tenant-config`／`--metric-dictionary` 指到不存在的路徑（訊息指名是哪一個旗標）；`-o/--output` 指到的輸出路徑寫不進去（#1641）；輸入檔讀不到（內容不是 UTF-8 或不是合法 YAML；訊息指名哪一檔，#1654）；`--config-dir` 底下有 exporter 解析失敗而整份跳過的檔或讀不到的檔或子目錄（權限不足、懸空 symlink；指向目錄的 symlink 除外；`ERROR` 行指名哪一檔，da-guard 的 stderr 逐行附在下面，每行加固定前綴，見上方說明）、整棵樹被 exporter 拒收，或找不到 da-guard／da-guard 執行失敗（#2115）。⚠️ v2.9.0 映像對不存在的輸入路徑回 `0`，當成沒有 `custom_` 指標 <!-- image-caveat: v2.9.0 --> |
 
-`walk_error` 不看目錄裡有沒有設定檔：`--config-dir` 底下任何一個執行身分列不出內容的子目錄（例如權限不足的 `docs/`，或 conf.d 剛好是 ext4 volume 根目錄、以非 root 執行時的 `lost+found`）都會讓本工具以 2 結束。解法是把 `--config-dir` 指向不含該目錄的子路徑，或調整權限讓執行身分可以列出它。
+`walk_error` 不看目錄裡有沒有設定檔：`--config-dir` 底下任何一個執行身分列不出內容的子目錄（例如權限不足的 `docs/`，或 conf.d 剛好是 ext4 volume 根目錄、以非 root 執行時的 `lost+found`）都會讓本工具以 2 結束；以 `.` 開頭的目錄（例如 `.git`）不算，exporter 的載入本來就不進去。解法是把 `--config-dir` 指向不含該目錄的子路徑，或調整權限讓執行身分可以列出它。
 
 ---
 

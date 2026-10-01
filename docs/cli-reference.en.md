@@ -597,7 +597,7 @@ da-tools blind-spot --config-dir ./conf.d --json-output
 
 On exit 2, every line below the `ERROR` line starts with `  da-guard| ` (the same prefix as the stderr passed on in a successful run); an `exit 3` among them is da-guard's own exit code, this tool exits 2.
 
-`walk_error` does not depend on whether the directory holds config files: any sub-directory under `--config-dir` that the running user cannot list (e.g. a `docs/` without permission, or `lost+found` when conf.d is the root of an ext4 volume and the tool runs as non-root) makes this tool exit 2. Point `--config-dir` at a sub-path that does not contain that directory, or change the permissions so the running user can list it.
+`walk_error` does not depend on whether the directory holds config files: any sub-directory under `--config-dir` that the running user cannot list (e.g. a `docs/` without permission, or `lost+found` when conf.d is the root of an ext4 volume and the tool runs as non-root) makes this tool exit 2; a directory whose name starts with `.` (e.g. `.git`) does not, as the exporter's load never enters it. Point `--config-dir` at a sub-path that does not contain that directory, or change the permissions so the running user can list it.
 
 ---
 
@@ -2336,7 +2336,7 @@ da-tools analyze-gaps --tenant-config ./conf.d/db-a.yaml
 | `0` | Success |
 | `2` | Caller error: bad arguments; a `--config-dir` / `--tenant-config` / `--metric-dictionary` path that does not exist (the message names the flag); the output path given to `-o/--output` cannot be written (#1641); an input file cannot be read (content not UTF-8 or not valid YAML; the message names the file, #1654); under `--config-dir`, a file the exporter fails to parse and skips whole, or a file or sub-directory it cannot read (no permission, a dangling symlink; a symlink to a directory excepted; the `ERROR` line names the file and da-guard's stderr follows line by line, each line behind a fixed prefix, see the text above), a tree the exporter rejects, or da-guard not found / failing (#2115). ⚠️ The v2.9.0 image returns `0` for an input path that does not exist, treating it as having no `custom_` metrics <!-- image-caveat: v2.9.0 --> |
 
-`walk_error` does not depend on whether the directory holds config files: any sub-directory under `--config-dir` that the running user cannot list (e.g. a `docs/` without permission, or `lost+found` when conf.d is the root of an ext4 volume and the tool runs as non-root) makes this tool exit 2. Point `--config-dir` at a sub-path that does not contain that directory, or change the permissions so the running user can list it.
+`walk_error` does not depend on whether the directory holds config files: any sub-directory under `--config-dir` that the running user cannot list (e.g. a `docs/` without permission, or `lost+found` when conf.d is the root of an ext4 volume and the tool runs as non-root) makes this tool exit 2; a directory whose name starts with `.` (e.g. `.git`) does not, as the exporter's load never enters it. Point `--config-dir` at a sub-path that does not contain that directory, or change the permissions so the running user can list it.
 
 ---
 
