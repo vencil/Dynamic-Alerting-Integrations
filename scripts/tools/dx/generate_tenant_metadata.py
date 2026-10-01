@@ -42,6 +42,7 @@ from _lib_confd import (  # noqa: E402
 )
 from _lib_io import safe_label  # noqa: E402  (#1538 output-layer escaping)
 from _lib_io import strict_load_exporter_keys  # noqa: E402  (#2231 duplicate key = YAML error; #2216 tenant id as text)
+from _lib_yaml_keys import load_exporter_keys  # noqa: E402  (#2216 tenant id as text)
 from _lib_io import (  # noqa: E402  (#1789)
     exit_on_output_write_error,
     output_write,
@@ -423,7 +424,10 @@ def _load_custom_groups(config_dir: Path) -> dict:
         return {}
 
     try:
-        data = yaml.safe_load(groups_file.read_text(encoding="utf-8"))
+        # #2216: `members:` lists tenant ids, read as their source text —
+        # `members: [010]` names tenant "010", not 8.
+        data = load_exporter_keys(groups_file.read_text(encoding="utf-8"),
+                                  raw_text_sequences=("members",))
         if data and isinstance(data.get("groups"), dict):
             result = {}
             for gid, gdef in data["groups"].items():

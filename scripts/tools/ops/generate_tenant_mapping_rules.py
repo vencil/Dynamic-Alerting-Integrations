@@ -48,6 +48,7 @@ from _lib_python import (  # noqa: E402
     iter_yaml_files,
 )
 from _lib_io import load_yaml_file_strict_exporter_keys  # noqa: E402  (#2231 duplicate key = YAML error; #2216 tenant id as text)
+from _lib_io import load_yaml_file_exporter_keys  # noqa: E402  (#2216 tenant id as text)
 from _lib_exitcodes import EXIT_OK, EXIT_VIOLATION, EXIT_CALLER_ERROR  # noqa: E402
 
 _LANG = detect_cli_lang()
@@ -141,8 +142,13 @@ def find_mapping_file(config_dir: str) -> str | None:
 
 
 def parse_mapping_file(path: str) -> list[InstanceMapping]:
-    """Parse _instance_mapping.yaml into structured mappings."""
-    data = load_yaml_file(path)
+    """Parse _instance_mapping.yaml into structured mappings.
+
+    #2216: an entry's ``tenant:`` value is a tenant id, read as its source
+    text — ``tenant: 010`` is tenant "010", not the int 8 ``.strip()``
+    raised on.
+    """
+    data = load_yaml_file_exporter_keys(path, raw_text_scalars=("tenant",))
     if not data or not isinstance(data, dict):
         return []
 

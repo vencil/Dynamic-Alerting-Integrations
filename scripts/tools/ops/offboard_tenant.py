@@ -82,6 +82,10 @@ def find_config_file(tenant, config_dir):
     return None
 
 
+#: Keys whose list value is a list of tenant ids (#2216).
+_TENANT_ID_LISTS = ("exclude_tenants", "tenants", "members")
+
+
 def load_all_configs(config_dir, unreadable=None):
     """載入 conf.d 下所有設定檔案。
 
@@ -116,7 +120,12 @@ def load_all_configs(config_dir, unreadable=None):
                 # error instead of reporting PyYAML's last value.
                 # #2216: tenant ids are the keys' source text, as the
                 # exporter reads them — `010:` is tenant "010", not 8.
-                data = strict_load_exporter_keys(f) or {}
+                # The lists that name tenants by VALUE are read as text too
+                # (`exclude_tenants:` in a policy, `tenants:` in a domain
+                # policy, `members:` in `_groups.yaml`), so a reference
+                # written `[010]` is found by check_cross_references.
+                data = strict_load_exporter_keys(
+                    f, raw_text_sequences=_TENANT_ID_LISTS) or {}
             configs[filename] = {"path": str(entry), "data": data}
         except (OSError, yaml.YAMLError) as e:
             print(f"  ⚠️  無法讀取 {safe_label(filename)}: {safe_label(e)}")

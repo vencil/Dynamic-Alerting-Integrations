@@ -227,7 +227,9 @@ def load_first_document_exporter_keys(
         loader.dispose()
 
 
-def load_all_exporter_keys(stream: Any) -> "list[Any]":
+def load_all_exporter_keys(stream: Any, *,
+                           raw_text_sequences: Iterable[str] = (),
+                           raw_text_scalars: Iterable[str] = ()) -> "list[Any]":
     """EVERY document of *stream*, keys as text: ``list(yaml.safe_load_all(
     stream))`` with the exporter's tenant ids (#2216).
 
@@ -235,9 +237,10 @@ def load_all_exporter_keys(stream: Any) -> "list[Any]":
     above; the strict sibling is ``_lib_io.strict_load_all_exporter_keys``.
     Eager, so the loader is disposed before this returns; an error in ANY
     document raises, as ``list(yaml.safe_load_all(...))`` did. Longhand for
-    the reason given in ``load_exporter_keys``.
+    the reason given in ``load_exporter_keys``. *raw_text_sequences* /
+    *raw_text_scalars*: see ``ExporterKeyLoader``.
     """
-    loader = _make_loader(stream, ())
+    loader = _make_loader(stream, raw_text_sequences, raw_text_scalars)
     try:
         docs = []
         while loader.check_data():

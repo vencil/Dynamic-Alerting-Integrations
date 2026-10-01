@@ -976,3 +976,66 @@ def test_load_all_exporter_keys_reads_every_document_as_text():
     assert _lib_yaml_keys.load_all_exporter_keys("") == []
     # Not strict, like the single-document entry: the last value is kept.
     assert _lib_yaml_keys.load_all_exporter_keys("a: 1\na: 2\n") == [{"a": 2}]
+    # The opt-ins reach every document; without them values keep their type.
+    two = "instance: 010\n---\ninstance: yes\nn: 010\n"
+    assert _lib_yaml_keys.load_all_exporter_keys(
+        two, raw_text_scalars=("instance",)) == [
+            {"instance": "010"}, {"instance": "yes", "n": 8}]
+    assert _lib_yaml_keys.load_all_exporter_keys(two)[0] == {"instance": 8}
+
+
+# ── #2216: tenant ids written as VALUES ──────────────────────────────
+
+
+def _ids_mapping_file(d, spell):
+    import generate_tenant_mapping_rules as m
+    _tree(d, {"_instance_mapping.yaml": (
+        f"instance_tenant_mapping:\n  i1:\n    - tenant: {spell}\n"
+        "      filter: x\n")})
+    return {e.tenant for im in m.parse_mapping_file(str(d / "_instance_mapping.yaml"))
+            for e in im.entries}
+
+
+def _ids_custom_groups(d, spell):
+    import generate_tenant_metadata as m
+    _tree(d, {"_groups.yaml": f"groups:\n  g1:\n    members: [{spell}]\n"})
+    return set(m._load_custom_groups(d)["g1"]["members"])
+
+
+def _ids_retire_namespaces(d, spell):
+    import check_retire_drift as m
+    _tree(d, {"ns.yaml": ("apiVersion: v1\nkind: Namespace\nmetadata:\n"
+                          f"  name: db-x\n  labels:\n    instance: {spell}\n")})
+    return m.namespace_declared_targets(d / "ns.yaml")
+
+
+_VALUE_READERS_2216 = {
+    "mapping_file_tenant": _ids_mapping_file,
+    "groups_members": _ids_custom_groups,
+    "retire_drift_namespace_instance": _ids_retire_namespaces,
+}
+
+
+@pytest.mark.parametrize("variant", sorted(_ID_SPELLINGS))
+@pytest.mark.parametrize("reader", sorted(_VALUE_READERS_2216))
+def test_value_reader_returns_the_tenant_id_as_written(tmp_path, capsys, reader, variant):
+    """Before (#2216): UNQ gave {8} / {"8"}, and parse_mapping_file raised
+    AttributeError (`.strip()` on the int)."""
+    assert _VALUE_READERS_2216[reader](tmp_path, _ID_SPELLINGS[variant]) == {"010"}
+
+
+@pytest.mark.parametrize("variant", sorted(_ID_SPELLINGS))
+@pytest.mark.parametrize("fname,body", [
+    ("_policy.yaml", "policies:\n  - name: p\n    exclude_tenants: [{id}]\n"),
+    ("_domain_policy.yaml", "domains:\n  d1:\n    tenants: [{id}]\n"),
+    ("_groups.yaml", "groups:\n  g1:\n    members: [{id}]\n"),
+], ids=["exclude_tenants", "domain_tenants", "groups_members"])
+def test_offboard_finds_a_reference_written_as_a_list_value(
+        tmp_path, capsys, variant, fname, body):
+    """Before: UNQ `[010]` was read as [8], so the reference was not found."""
+    import offboard_tenant as ot
+    spell = _ID_SPELLINGS[variant]
+    _tree(tmp_path, {"010.yaml": _T2216.format(id=spell),
+                     fname: body.format(id=spell)})
+    configs = ot.load_all_configs(str(tmp_path))
+    assert ot.check_cross_references("010", configs) == [fname]
