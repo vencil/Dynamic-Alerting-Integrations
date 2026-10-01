@@ -52,7 +52,6 @@ package config
 import (
 	"errors"
 	"fmt"
-	"io"
 	"log"
 	"os"
 	"path"
@@ -213,14 +212,12 @@ func scopeEffective(configDir, scopeDir string, wholeTree bool) (*ScopedTenants,
 		return nil, fmt.Errorf("no .yaml files found in %s", configDir)
 	}
 	// ⛔ A root the walk cannot list is not an empty tree (#2588). The walker
-	// records no Unreadable entry for the root itself (its own failure leaves
-	// no file, and LoadDir's "no .yaml files" stops the load), so the scoped
-	// mode — where an empty tree is a valid, vacuously-safe scope — would
-	// read it as "nothing in scope". Refuse it, as the exporter's load does.
-	if len(scan.Files) == 0 {
-		if err := listable(absRoot); err != nil {
-			return nil, fmt.Errorf("cannot list configDir %q: %w", absRoot, err)
-		}
+	// records no Unreadable entry for the root itself (TreeScan.RootWalkErr),
+	// so the scoped mode — where an empty tree is a valid, vacuously-safe
+	// scope — would read it as "nothing in scope". Refuse it, as the
+	// exporter's load does.
+	if len(scan.Files) == 0 && scan.RootWalkErr != nil {
+		return nil, fmt.Errorf("cannot list configDir %q: %w", absRoot, scan.RootWalkErr)
 	}
 
 	// ⛔ The scope is symlink-resolved exactly like the root. Comparing a
@@ -409,20 +406,6 @@ func scopeUnreadable(scan *TreeScan, scopeRel string) []UnreadableFile {
 		}
 	}
 	return out
-}
-
-// listable reports whether dir's entries can be read (nil), as the walker
-// would read them.
-func listable(dir string) error {
-	f, err := os.Open(dir)
-	if err != nil {
-		return err
-	}
-	defer func() { _ = f.Close() }() // read-only: a close error changes nothing
-	if _, err := f.ReadDir(1); err != nil && !errors.Is(err, io.EOF) {
-		return err
-	}
-	return nil
 }
 
 // bearsOnScope: key (a root-relative slash scan key) at-or-below scopeRel, or

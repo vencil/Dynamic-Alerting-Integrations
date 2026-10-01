@@ -299,6 +299,13 @@ type TreeScan struct {
 	// a ConfigMap volume can carry such links by design.
 	Unreadable []UnreadableFile
 
+	// RootWalkErr is the walk's error on the root directory itself (it could
+	// not be listed), nil otherwise. Not an Unreadable entry: the tree then
+	// holds no file, and LoadDir's "no .yaml files" already stops the load.
+	// A caller that accepts an empty tree (ScopeEffective's scoped mode)
+	// reads it to tell "empty" from "could not be listed" (#2588).
+	RootWalkErr error
+
 	// attrib is every tenant's FIRST declaring file in walk order, recorded
 	// even when the tree has a conflict. When Conflict is nil it is the very
 	// map exported as Tenants (no second allocation on the clean path).
@@ -551,6 +558,7 @@ func walkDirTree(root string, prior *TreeScan, obs ScanObserver, logger *log.Log
 	}
 	var entries []entry
 	var unreadable []UnreadableFile
+	var rootWalkErr error
 	dropUnreadable := func(path, reason string) {
 		rel := path
 		if r, err := filepath.Rel(absRoot, path); err == nil {
@@ -570,6 +578,8 @@ func walkDirTree(root string, prior *TreeScan, obs ScanObserver, logger *log.Log
 			// walked).
 			if path != absRoot {
 				dropUnreadable(path, UnreadableWalkError)
+			} else {
+				rootWalkErr = werr
 			}
 			return nil
 		}
@@ -791,6 +801,7 @@ func walkDirTree(root string, prior *TreeScan, obs ScanObserver, logger *log.Log
 		sort.Slice(unreadable, func(i, j int) bool { return unreadable[i].RelKey < unreadable[j].RelKey })
 		scan.Unreadable = unreadable
 	}
+	scan.RootWalkErr = rootWalkErr
 	compositeHasher := sha256.New()
 	for _, k := range scan.Keys {
 		compositeHasher.Write([]byte(scan.Files[k].Hash))
