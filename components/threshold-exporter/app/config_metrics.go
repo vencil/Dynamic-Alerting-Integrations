@@ -124,9 +124,17 @@ type configMetrics struct {
 //
 // The split follows the only two ways config.ScanDirTree can fail:
 //   - duplicate_tenant: the walk succeeded but one tenant id is declared in
-//     two files (*config.DuplicateTenantError, TreeScan.Conflict). Only the
-//     hierarchical plane rejects the tree for it; the flat plane does not
-//     look at Conflict (#1577), so there this reason never occurs.
+//     two files (*config.DuplicateTenantError, TreeScan.Conflict). Counted
+//     in BOTH directory modes. With a root _defaults.yaml it is detectChange
+//     that fails, every tick (tickOnce logs `WARN: cannot check config …:
+//     hierarchical scan: duplicate tenant ID …`). In flat mode detectChange
+//     ignores the Conflict, sees the tree as changed and schedules a reload,
+//     and it is the reload's scan (scanAndCheckHierarchical) that rejects
+//     the Conflict before the flat branch — logging `ERROR: hierarchical
+//     scan failed: duplicate tenant ID …` then `ERROR: debounced reload
+//     failed: …` (`synchronous reload failed` at -scan-debounce=0). Either
+//     way the tree is frozen at the last good config. (Making the flat
+//     plane's own IncrementalLoad run that check is #1577.)
 //   - walk_error: every other error ScanDirTree returns — the root cannot
 //     be statted, is not a directory, or the walk itself errors. Per-file
 //     stat / read / parse problems are NOT scan failures: the walker logs

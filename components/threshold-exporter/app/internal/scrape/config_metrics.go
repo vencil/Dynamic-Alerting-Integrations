@@ -143,7 +143,7 @@ func NewConfigMetrics() *ConfigMetrics {
 		}),
 		ScanFailures: prometheus.NewCounterVec(prometheus.CounterOpts{
 			Name: "da_config_scan_failures_total",
-			Help: "Count of conf.d tree scans that failed on the watch path (#2452): the per-tick change check and the debounced reload's scan, directory mode only. A failed scan applies nothing: the exporter keeps serving the last good config, /ready stays 200 and da_config_reload_trigger_total does not move, so while this keeps rising every later edit is ignored. reason is a closed set: duplicate_tenant (one tenant id declared in two files; hierarchical mode only) or walk_error (the config directory cannot be walked: missing, not a directory). One increment per failed scan, i.e. about one per watch tick while the condition lasts. Alert: ConfigScanFailing.",
+			Help: "Count of conf.d tree scans that failed on the watch path (#2452): the per-tick change check and the debounced reload's scan, directory mode only. A failed scan applies nothing: the exporter keeps serving the last good config, /ready stays 200 and da_config_reload_trigger_total does not move, so while this keeps rising every later edit is ignored. reason is a closed set: duplicate_tenant (one tenant id declared in two files; both directory modes) or walk_error (the config directory cannot be walked: missing, not a directory). One increment per failed scan, i.e. about one per watch tick while the condition lasts. Alert: ConfigScanFailing (failures, and da_config_last_scan_complete_unixtime_seconds older than 5m).",
 		}, []string{"reason"}),
 	}
 }

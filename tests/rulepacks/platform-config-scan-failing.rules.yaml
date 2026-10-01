@@ -9,10 +9,13 @@ groups:
   - name: platform-self-monitoring
     rules:
       - alert: ConfigScanFailing
-        expr: increase(da_config_scan_failures_total[5m]) > 2
-        for: 3m
+        expr: |
+          (increase(da_config_scan_failures_total[10m]) > 0)
+          and ignoring (reason)
+          ((time() - da_config_last_scan_complete_unixtime_seconds) > 300)
+        for: 1m
         labels:
           severity: critical
           alert_source: platform
         annotations:
-          summary: "Threshold-exporter conf.d scan failing ({{ $labels.reason }}) — config frozen at last good state"
+          summary: "Threshold-exporter conf.d unscannable for >5m ({{ $labels.reason }}) — config frozen at last good state"

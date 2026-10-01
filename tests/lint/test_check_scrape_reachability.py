@@ -105,8 +105,10 @@ def _jobs_without_monitoring_ns():
     return jobs
 
 
-# The 14 threshold-exporter series both rule trees consume (#1285; the 14th,
-# da_config_scan_failures_total, since #2452's ConfigScanFailing). All emitted
+# The 15 threshold-exporter series both rule trees consume (#1285; the last
+# two, da_config_scan_failures_total and
+# da_config_last_scan_complete_unixtime_seconds, since #2452's
+# ConfigScanFailing). All emitted
 # by one binary / one registry / one /metrics handler, so all share ONE scrape
 # provenance — the threshold-exporter Service in ns `monitoring`. Two DIFFERENT
 # declaration sites feed that one registry, and both must be named here so
@@ -116,7 +118,7 @@ def _jobs_without_monitoring_ns():
 #       da_tenant_metrics_over_limit (per-scrape ConstMetric); wired in by
 #       components/threshold-exporter/app/collector.go
 #   components/threshold-exporter/app/internal/scrape/config_metrics.go — the
-#       other 6 da_* (cumulative collectors, registered onto the same registry);
+#       other 7 da_* (cumulative collectors, registered onto the same registry);
 #       mutated through components/threshold-exporter/app/config_metrics.go
 #   components/threshold-exporter/app/main.go            — mounts the handler
 _THRESHOLD_EXPORTER_METRICS = (
@@ -124,6 +126,7 @@ _THRESHOLD_EXPORTER_METRICS = (
     "da_config_defaults_shadowed_total",
     "da_config_event",
     "da_config_last_reload_complete_unixtime_seconds",
+    "da_config_last_scan_complete_unixtime_seconds",
     "da_config_parse_failure_total",
     "da_config_reload_trigger_total",
     "da_config_scan_failures_total",
@@ -347,7 +350,7 @@ def test_threshold_exporter_series_all_route_to_one_family():
     They used to be excluded from the leaf set outright, on a value-origin
     argument ("conf.d-synthesised"). Value origin is not scrape provenance:
     every one of them is registered on threshold-exporter's single /metrics
-    registry, so all 14 must resolve to the same threshold-exporter family.
+    registry, so all 15 must resolve to the same threshold-exporter family.
     """
     for m in _THRESHOLD_EXPORTER_METRICS:
         fam = gate._resolve_family(m)
@@ -361,7 +364,7 @@ def test_threshold_exporter_series_all_route_to_one_family():
 
 
 def test_threshold_exporter_series_are_leaves_and_reachable_on_real_repo():
-    """All 14 are now judged by this gate, and all pass on the live manifests."""
+    """All 15 are now judged by this gate, and all pass on the live manifests."""
     result = gate.run_check()
     classes = result["classes"]
     for m in _THRESHOLD_EXPORTER_METRICS:
@@ -423,10 +426,10 @@ def test_threshold_exporter_series_die_if_a_name_filter_rejects_them():
 
 
 def test_threshold_exporter_series_are_dead_if_monitoring_ns_leaves_sd_list():
-    """Namespace/SD-face drift also reaches these 14 now that they are judged.
+    """Namespace/SD-face drift also reaches these 15 now that they are judged.
 
     Weaker evidence than the test above — this drift was already caught via
-    other families in the same namespace — but it pins that the 14 participate
+    other families in the same namespace — but it pins that the 15 participate
     rather than being silently skipped.
     """
     consumed = {m: {f"platform::Consumer_{m}"} for m in _THRESHOLD_EXPORTER_METRICS}
@@ -450,7 +453,7 @@ def test_threshold_exporter_chart_still_hardcodes_the_pinned_namespace():
 
     That is a one-line edit away from false, and a tempting one: the SAME chart
     already uses the templated form in servicemonitor.yaml, so "make the
-    namespace handling consistent" would silently turn 14 REACHABLE verdicts
+    namespace handling consistent" would silently turn 15 REACHABLE verdicts
     into fiction with no gate firing (helm/** is not in this hook's files
     filter either). Verifying the chart at gate runtime is deferred (#1286);
     until then this test is the tripwire.
@@ -465,7 +468,7 @@ def test_threshold_exporter_chart_still_hardcodes_the_pinned_namespace():
     assert ns == gate.THRESHOLD_EXPORTER_NAMESPACE, (
         f"chart Service namespace is now {ns!r}, but the gate assumes "
         f"{gate.THRESHOLD_EXPORTER_NAMESPACE!r}. If the chart was templatised, the "
-        "14 threshold-exporter metrics are no longer statically decidable — drop "
+        "15 threshold-exporter metrics are no longer statically decidable — drop "
         "the threshold-exporter rows from _FAMILY_TABLE/_FAMILY_EXACT FIRST, then "
         "ledger them in KNOWN_UNKNOWN_SOURCE. Ledgering alone does not work: "
         "classify() resolves the family before any ledger lookup, so the metrics "

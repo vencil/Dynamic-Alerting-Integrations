@@ -65,6 +65,9 @@ func tenantAThreshold(m *ConfigManager) string {
 func TestTickOnce_DuplicateTenant_CountsScanFailureNotReloadTrigger(t *testing.T) {
 	t.Parallel()
 	m, fresh, dir := newScanFailureManager(t)
+	// Sentinel for the last-scan gauge (see the flat-mode test below).
+	const sentinel = 1
+	fresh.lastScanComplete.Set(sentinel)
 
 	writeTestYAML(t, filepath.Join(dir, "tenant-a-copy.yaml"),
 		"tenants:\n  tenant-a:\n    mysql_connections: \"91\"\n")
@@ -91,6 +94,9 @@ func TestTickOnce_DuplicateTenant_CountsScanFailureNotReloadTrigger(t *testing.T
 	if got := tenantAThreshold(m); got != "90" {
 		t.Errorf("tenant-a mysql_connections = %s while the duplicate is present, want the last good 90", got)
 	}
+	if got := testutil.ToFloat64(fresh.lastScanComplete); got != sentinel {
+		t.Errorf("last_scan_complete = %v while the duplicate is present, want it untouched (%d)", got, sentinel)
+	}
 
 	// Removing the second file unfreezes the tree: the next tick reloads
 	// (the pending edit lands) and the failure count stops rising.
@@ -106,6 +112,81 @@ func TestTickOnce_DuplicateTenant_CountsScanFailureNotReloadTrigger(t *testing.T
 	}
 	if got := tenantAThreshold(m); got != "77" {
 		t.Errorf("tenant-a mysql_connections = %s after recovery, want 77", got)
+	}
+	if got := testutil.ToFloat64(fresh.lastScanComplete); got == sentinel {
+		t.Error("last_scan_complete not stamped by the first clean tick after recovery")
+	}
+}
+
+// Flat mode (no _defaults.yaml anywhere) freezes on a duplicate too: its
+// detectChange does not look at the Conflict, so every tick sees the tree
+// "changed" and schedules a reload, and the reload's scan
+// (scanAndCheckHierarchical) rejects the Conflict before it ever reaches the
+// flat branch. Each such tick must count once under duplicate_tenant; the
+// flat path never moves reload_trigger_total in any case.
+//
+// Also pins the premise ConfigScanFailing rests on: the last-scan gauge is
+// NOT stamped while the duplicate is present (it is set to a sentinel after
+// Load, and must still read it), and the first clean tick stamps it again.
+func TestTickOnce_FlatMode_DuplicateTenant_CountsScanFailure(t *testing.T) {
+	t.Parallel()
+	dir := t.TempDir()
+	writeTestYAML(t, filepath.Join(dir, "t-a.yaml"), "tenants:\n  t-a:\n    mysql_connections: \"11\"\n")
+	writeTestYAML(t, filepath.Join(dir, "t-b.yaml"), "tenants:\n  t-b:\n    mysql_connections: \"21\"\n")
+	fresh, _ := freshMetrics(t)
+	m := NewConfigManagerWithDebounce(dir, 0)
+	t.Cleanup(m.Close)
+	m.SetMetrics(fresh)
+	m.SetLogger(log.New(io.Discard, "", 0))
+	if err := m.Load(); err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+	m.mu.RLock()
+	hier := m.hierarchy.enabled
+	m.mu.RUnlock()
+	if hier {
+		t.Fatal("fixture must stay in flat mode (no _defaults.yaml)")
+	}
+	const sentinel = 1
+	fresh.lastScanComplete.Set(sentinel)
+
+	before := m.GetConfig()
+	writeTestYAML(t, filepath.Join(dir, "t-a-copy.yaml"), "tenants:\n  t-a:\n    mysql_connections: \"12\"\n")
+	// An edit to an innocent tenant made while the duplicate is present.
+	writeTestYAML(t, filepath.Join(dir, "t-b.yaml"), "tenants:\n  t-b:\n    mysql_connections: \"23\"\n")
+	const ticks = 3
+	for i := 0; i < ticks; i++ {
+		m.tickOnce()
+	}
+
+	if got := scanFailures(fresh, ScanFailureReasonDuplicateTenant); got != ticks {
+		t.Errorf("flat: scan_failures{duplicate_tenant} = %v after %d failing ticks, want %d", got, ticks, ticks)
+	}
+	if got := scanFailures(fresh, ScanFailureReasonWalkError); got != 0 {
+		t.Errorf("flat: scan_failures{walk_error} = %v, want 0", got)
+	}
+	if n := reloadTriggerSeries(fresh); n != 0 {
+		t.Errorf("flat: da_config_reload_trigger_total has %d series, want 0", n)
+	}
+	if got := testutil.ToFloat64(fresh.lastScanComplete); got != sentinel {
+		t.Errorf("flat: last_scan_complete = %v while the duplicate is present, want it untouched (%d)", got, sentinel)
+	}
+	if m.GetConfig() != before {
+		t.Error("flat: a config was committed while the duplicate is present; want the tree frozen at the last good config")
+	}
+
+	if err := os.Remove(filepath.Join(dir, "t-a-copy.yaml")); err != nil {
+		t.Fatal(err)
+	}
+	m.tickOnce()
+	if got := scanFailures(fresh, ScanFailureReasonDuplicateTenant); got != ticks {
+		t.Errorf("flat: scan_failures{duplicate_tenant} = %v after recovery, want it to stay %d", got, ticks)
+	}
+	if got := testutil.ToFloat64(fresh.lastScanComplete); got == sentinel {
+		t.Error("flat: last_scan_complete not stamped by the first clean tick after recovery")
+	}
+	if m.GetConfig() == before {
+		t.Error("flat: no config committed by the first clean tick after recovery (the pending t-b edit should land)")
 	}
 }
 
