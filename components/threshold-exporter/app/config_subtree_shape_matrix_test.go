@@ -25,7 +25,7 @@ package main
 // declared, and no individual case has to be foreseen.
 //
 // ⛔ WHAT THIS MATRIX DOES NOT COVER, stated because a reader will assume it
-// does: every shape here is a cold `Load()`. It never calls `IncrementalLoad`,
+// does: every shape here is a cold `Load()`. It never reloads,
 // so no defect on the reload fast path is visible to it — reverting the
 // orphan-value fix in `patchTenants` leaves all 96 subtests green. That half
 // is `config_incremental_differential_test.go`'s job.

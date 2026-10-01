@@ -1,12 +1,14 @@
 package main
 
-// Incremental hot-reload tests — scanDirFileHashes, IncrementalLoad
+// Incremental hot-reload tests — scanDirFileHashes, the watch-path reload
 // (initial / modified / added / removed / no-change paths), boundary
 // enforcement during reload, profile reload, defaults-modified, cache
 // only-reparses-changed-files invariant, mergePartialConfigs. Split out
 // of config_test.go in PR-2; shared helpers live in config_test.go.
 
 import (
+	"io"
+	"log"
 	"os"
 	"path/filepath"
 	"sort"
@@ -15,6 +17,52 @@ import (
 )
 
 // region IncrementalReloading — hot-reload, file hash detection, and directory watching
+
+// requireFlatWatchPath fails a test whose reloads are meant to exercise
+// incrementalLoadFrom when the manager would not take it: the watch path
+// reaches that function only while hierarchical mode is off, which a
+// `_defaults` carrier anywhere in the tree turns on (sticky). Without this a
+// fixture that grows a carrier silently moves its reloads onto the
+// hierarchical path and its assertions stop being about the code they name.
+func requireFlatWatchPath(t testing.TB, m *ConfigManager) {
+	t.Helper()
+	m.mu.RLock()
+	hier := m.hierarchy.enabled
+	m.mu.RUnlock()
+	if hier {
+		t.Fatal("fixture precondition: hierarchical mode is on, so the watch path never reaches incrementalLoadFrom")
+	}
+}
+
+// watchReload runs ONE reload under the same lock and through the same entry
+// point as the watch loop's debounced fire: reloadMu held, then diffAndReload
+// (fireDebounced and the zero-window branch of triggerDebouncedReload). It is
+// the synchronous test entry for "a file changed, now reload" (#1577). Unlike
+// those callers it does not ObserveReloadDuration, call maybeFreeOSMemory, or
+// log the ERROR line — it returns the error instead (so the reload benchmarks
+// do not include maybeFreeOSMemory's cost).
+//
+// ⛔ IT IS NOT A RENAMED IncrementalLoad, AND THE DIFFERENCES ARE THE POINT.
+// That method walked the tree and went straight to incrementalLoadFrom; the
+// watch path decides first, and tests written against the method asserted on
+// a path the exporter never took:
+//
+//   - a duplicate tenant (TreeScan.Conflict) is an error here, never served;
+//   - a tree with any `_defaults` carrier is hierarchical, and reloads through
+//     classifyAndCount + installNewHierarchyState (a full flat rebuild via
+//     commitFlatFrom) — incrementalLoadFrom, and with it patchTenants' fast
+//     path, is reached only by a tree with no `_defaults` carrier at all;
+//   - no flat cache yet ⇒ fullDirLoadFrom on the same scan.
+//
+// It does NOT run detectChange: a tick that sees no change schedules no
+// reload, while this always reloads. Flat mode's own composite-hash check in
+// incrementalLoadFrom makes that a no-op there; hierarchical mode recomputes.
+func watchReload(m *ConfigManager) error {
+	m.reloadMu.Lock()
+	defer m.reloadMu.Unlock()
+	_, _, err := m.diffAndReload()
+	return err
+}
 
 // ============================================================
 // Incremental Hot-Reload Tests (v2.1.0 §5.6)
@@ -125,11 +173,11 @@ tenants:
 `)
 
 	mgr := NewConfigManager(dir)
-	if err := mgr.IncrementalLoad(); err != nil {
-		t.Fatalf("IncrementalLoad (initial) failed: %v", err)
+	if err := watchReload(mgr); err != nil {
+		t.Fatalf("reload (initial) failed: %v", err)
 	}
 	if !mgr.IsLoaded() {
-		t.Error("should be loaded after IncrementalLoad")
+		t.Error("should be loaded after the first reload")
 	}
 	if len(mgr.flat.hashes) != 2 {
 		t.Errorf("expected 2 file hashes, got %d", len(mgr.flat.hashes))
@@ -160,7 +208,7 @@ tenants:
 `)
 
 	mgr := NewConfigManager(dir)
-	if err := mgr.IncrementalLoad(); err != nil {
+	if err := watchReload(mgr); err != nil {
 		t.Fatalf("initial load failed: %v", err)
 	}
 	hash1 := mgr.lastHash
@@ -172,7 +220,7 @@ tenants:
     mysql_connections: "90"
 `)
 
-	if err := mgr.IncrementalLoad(); err != nil {
+	if err := watchReload(mgr); err != nil {
 		t.Fatalf("incremental load failed: %v", err)
 	}
 	if mgr.lastHash == hash1 {
@@ -193,7 +241,7 @@ defaults:
 `)
 
 	mgr := NewConfigManager(dir)
-	if err := mgr.IncrementalLoad(); err != nil {
+	if err := watchReload(mgr); err != nil {
 		t.Fatalf("initial load failed: %v", err)
 	}
 	if len(mgr.GetConfig().Tenants) != 0 {
@@ -207,7 +255,7 @@ tenants:
     mysql_connections: "60"
 `)
 
-	if err := mgr.IncrementalLoad(); err != nil {
+	if err := watchReload(mgr); err != nil {
 		t.Fatalf("incremental load after add failed: %v", err)
 	}
 	cfg := mgr.GetConfig()
@@ -241,7 +289,7 @@ tenants:
 `)
 
 	mgr := NewConfigManager(dir)
-	if err := mgr.IncrementalLoad(); err != nil {
+	if err := watchReload(mgr); err != nil {
 		t.Fatalf("initial load failed: %v", err)
 	}
 	if len(mgr.GetConfig().Tenants) != 2 {
@@ -251,7 +299,7 @@ tenants:
 	// Remove one tenant file
 	os.Remove(filepath.Join(dir, "db-b.yaml"))
 
-	if err := mgr.IncrementalLoad(); err != nil {
+	if err := watchReload(mgr); err != nil {
 		t.Fatalf("incremental load after remove failed: %v", err)
 	}
 	cfg := mgr.GetConfig()
@@ -266,73 +314,130 @@ tenants:
 	}
 }
 
+// TestIncrementalLoad_NoChange: a reload over an unchanged tree commits
+// nothing — lastReload does not move.
+//
+// ⚠️ TWO GATES, ONE PER MODE (#1577). In production nothing reloads unless a
+// tick's detectChange says the tree moved, so the tick is asserted in both
+// modes, with a zero debounce window so a spurious "changed" would reload
+// synchronously and show up here (a real window would only arm a timer and
+// leave lastReload alone either way). incrementalLoadFrom has a second gate
+// of its own, the composite-hash early return; the watch path reaches it only
+// for a tree with no `_defaults` carrier, so it is asserted on the flat leg
+// only. A hierarchical diffAndReload has no such gate — it recomputes
+// unconditionally — and asserting one there would be asserting a path
+// production does not take.
 func TestIncrementalLoad_NoChange(t *testing.T) {
 	t.Parallel()
-	dir := t.TempDir()
-	writeTestFile(t, dir, "_defaults.yaml", `
+	for _, tc := range []struct {
+		name         string
+		hierarchical bool
+	}{{"flat", false}, {"hierarchical", true}} {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			dir := t.TempDir()
+			if tc.hierarchical {
+				writeTestFile(t, dir, "_defaults.yaml", `
 defaults:
   mysql_connections: 80
 `)
-
-	mgr := NewConfigManager(dir)
-	if err := mgr.IncrementalLoad(); err != nil {
-		t.Fatalf("initial load failed: %v", err)
-	}
-	reload1 := mgr.LastReload()
-
-	// Small delay to detect timestamp change
-	time.Sleep(10 * time.Millisecond)
-
-	if err := mgr.IncrementalLoad(); err != nil {
-		t.Fatalf("no-change reload failed: %v", err)
-	}
-	// lastReload should NOT update (composite hash unchanged → early return)
-	if !mgr.LastReload().Equal(reload1) {
-		t.Error("lastReload should not update when nothing changed")
-	}
-}
-
-// TestLoadThenIncrementalNoChange pins the first-tick no-spurious-reload
-// contract from the production entry point. Load() is what boots the exporter;
-// the watch loop's first tick then calls IncrementalLoad. Because Load now
-// shares fullDirLoad's composite-hash construction (hash-of-hashes) and
-// populates the flat cache, that first tick sees an unchanged hash and early
-// returns. Before the convergence Load built a byte composite that never
-// matched what the tick recomputed, forcing a full reload on every cold start.
-func TestLoadThenIncrementalNoChange(t *testing.T) {
-	t.Parallel()
-	dir := t.TempDir()
-	writeTestFile(t, dir, "_defaults.yaml", `
-defaults:
-  mysql_connections: 80
-`)
-	writeTestFile(t, dir, "acme.yaml", `
+			}
+			writeTestFile(t, dir, "acme.yaml", `
 tenants:
   acme:
     mysql_connections: "70"
 `)
 
-	mgr := NewConfigManager(dir)
-	if err := mgr.Load(); err != nil {
-		t.Fatalf("Load failed: %v", err)
-	}
-	reload1 := mgr.LastReload()
-	hash1 := mgr.lastHash
-	if hash1 == "" {
-		t.Fatal("Load did not set a composite hash")
-	}
+			mgr := NewConfigManagerWithDebounce(dir, 0)
+			mgr.SetLogger(log.New(io.Discard, "", 0))
+			if err := watchReload(mgr); err != nil {
+				t.Fatalf("initial load failed: %v", err)
+			}
+			if got := mgr.hierarchy.enabled; got != tc.hierarchical {
+				t.Fatalf("fixture precondition: hierarchical mode = %v, want %v", got, tc.hierarchical)
+			}
+			reload1 := mgr.LastReload()
 
-	// Small delay so a spurious reload would move LastReload measurably.
-	time.Sleep(10 * time.Millisecond)
+			// Small delay so a spurious reload would move LastReload measurably.
+			time.Sleep(10 * time.Millisecond)
 
-	if err := mgr.IncrementalLoad(); err != nil {
-		t.Fatalf("no-change IncrementalLoad after Load failed: %v", err)
+			mgr.tickOnce()
+			if !mgr.LastReload().Equal(reload1) {
+				t.Error("a tick over an unchanged tree reloaded (detectChange reported a change that is not there)")
+			}
+			if !tc.hierarchical {
+				if err := watchReload(mgr); err != nil {
+					t.Fatalf("no-change reload failed: %v", err)
+				}
+				// composite hash unchanged → incrementalLoadFrom's early return
+				if !mgr.LastReload().Equal(reload1) {
+					t.Error("lastReload should not update when nothing changed")
+				}
+			}
+		})
 	}
-	if !mgr.LastReload().Equal(reload1) {
-		t.Error("first IncrementalLoad after Load reloaded despite no file change (spurious first-tick reload regressed)")
-	}
-	if mgr.lastHash != hash1 {
-		t.Errorf("lastHash changed on a no-op reload: %q -> %q", hash1, mgr.lastHash)
+}
+
+// TestLoadThenIncrementalNoChange pins the first-tick no-spurious-reload
+// contract from the production entry point. Load() is what boots the exporter;
+// the watch loop's first tick then runs detectChange against what Load
+// committed. Because Load shares fullDirLoad's composite-hash construction
+// (hash-of-hashes) and populates the flat cache and the hierarchy hashes,
+// that first tick sees nothing moved and schedules no reload. Before the
+// convergence Load built a byte composite that never matched what the tick
+// recomputed, forcing a full reload on every cold start.
+//
+// ⚠️ BOTH MODES, because detectChange compares different things in each
+// (#1577): the composite hash in flat mode — the comparison the convergence
+// fixed — and the per-file hierarchy hashes once a `_defaults` carrier turns
+// hierarchical mode on. The tick runs with a zero debounce window so a
+// spurious change reloads synchronously and moves LastReload.
+func TestLoadThenIncrementalNoChange(t *testing.T) {
+	t.Parallel()
+	for _, tc := range []struct {
+		name         string
+		hierarchical bool
+	}{{"flat", false}, {"hierarchical", true}} {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			dir := t.TempDir()
+			if tc.hierarchical {
+				writeTestFile(t, dir, "_defaults.yaml", `
+defaults:
+  mysql_connections: 80
+`)
+			}
+			writeTestFile(t, dir, "acme.yaml", `
+tenants:
+  acme:
+    mysql_connections: "70"
+`)
+
+			mgr := NewConfigManagerWithDebounce(dir, 0)
+			mgr.SetLogger(log.New(io.Discard, "", 0))
+			if err := mgr.Load(); err != nil {
+				t.Fatalf("Load failed: %v", err)
+			}
+			if got := mgr.hierarchy.enabled; got != tc.hierarchical {
+				t.Fatalf("fixture precondition: hierarchical mode = %v, want %v", got, tc.hierarchical)
+			}
+			reload1 := mgr.LastReload()
+			hash1 := mgr.lastHash
+			if hash1 == "" {
+				t.Fatal("Load did not set a composite hash")
+			}
+
+			// Small delay so a spurious reload would move LastReload measurably.
+			time.Sleep(10 * time.Millisecond)
+
+			mgr.tickOnce()
+			if !mgr.LastReload().Equal(reload1) {
+				t.Error("first tick after Load reloaded despite no file change (spurious first-tick reload regressed)")
+			}
+			if mgr.lastHash != hash1 {
+				t.Errorf("lastHash changed on a no-op tick: %q -> %q", hash1, mgr.lastHash)
+			}
+		})
 	}
 }
 
@@ -350,8 +455,8 @@ tenants:
 
 	mgr := NewConfigManager(path)
 	// Should fall back to full Load for single-file mode
-	if err := mgr.IncrementalLoad(); err != nil {
-		t.Fatalf("IncrementalLoad (single-file) failed: %v", err)
+	if err := watchReload(mgr); err != nil {
+		t.Fatalf("reload (single-file) failed: %v", err)
 	}
 	if !mgr.IsLoaded() {
 		t.Error("should be loaded")
@@ -371,7 +476,7 @@ defaults:
 `)
 
 	mgr := NewConfigManager(dir)
-	if err := mgr.IncrementalLoad(); err != nil {
+	if err := watchReload(mgr); err != nil {
 		t.Fatalf("initial load failed: %v", err)
 	}
 
@@ -384,7 +489,7 @@ tenants:
     mysql_connections: "70"
 `)
 
-	if err := mgr.IncrementalLoad(); err != nil {
+	if err := watchReload(mgr); err != nil {
 		t.Fatalf("incremental load failed: %v", err)
 	}
 	cfg := mgr.GetConfig()
@@ -394,14 +499,13 @@ tenants:
 	}
 }
 
+// TestIncrementalLoad_ProfilesAfterIncremental: a `_profiles.yaml` edit reaches
+// the tenant that uses the profile. No `_defaults` carrier on purpose (#1577):
+// with one, the watch path reloads hierarchically and the incremental
+// full-rebuild branch this pins is never taken.
 func TestIncrementalLoad_ProfilesAfterIncremental(t *testing.T) {
 	t.Parallel()
 	dir := t.TempDir()
-	writeTestFile(t, dir, "_defaults.yaml", `
-defaults:
-  mysql_connections: 80
-  mysql_threads_running: 80
-`)
 	writeTestFile(t, dir, "_profiles.yaml", `
 profiles:
   high-load:
@@ -414,9 +518,10 @@ tenants:
 `)
 
 	mgr := NewConfigManager(dir)
-	if err := mgr.IncrementalLoad(); err != nil {
+	if err := watchReload(mgr); err != nil {
 		t.Fatalf("initial load failed: %v", err)
 	}
+	requireFlatWatchPath(t, mgr)
 	cfg := mgr.GetConfig()
 	// Profile should be applied
 	if cfg.Tenants["db-a"]["mysql_connections"].Default != "100" {
@@ -430,7 +535,7 @@ profiles:
     mysql_connections: "120"
 `)
 
-	if err := mgr.IncrementalLoad(); err != nil {
+	if err := watchReload(mgr); err != nil {
 		t.Fatalf("incremental load failed: %v", err)
 	}
 	cfg = mgr.GetConfig()
@@ -550,7 +655,7 @@ tenants:
 `)
 
 	mgr := NewConfigManager(dir)
-	if err := mgr.IncrementalLoad(); err != nil {
+	if err := watchReload(mgr); err != nil {
 		t.Fatalf("initial load: %v", err)
 	}
 	if len(mgr.GetConfig().Tenants) != 3 {
@@ -571,7 +676,7 @@ tenants:
     mysql_connections: "40"
 `)
 
-	if err := mgr.IncrementalLoad(); err != nil {
+	if err := watchReload(mgr); err != nil {
 		t.Fatalf("multi-op incremental: %v", err)
 	}
 	cfg := mgr.GetConfig()
@@ -622,7 +727,7 @@ tenants:
 `)
 
 	mgr := NewConfigManager(dir)
-	if err := mgr.IncrementalLoad(); err != nil {
+	if err := watchReload(mgr); err != nil {
 		t.Fatalf("initial load: %v", err)
 	}
 	cfg := mgr.GetConfig()
@@ -645,7 +750,7 @@ tenants:
           value: "disable"
 `)
 
-	if err := mgr.IncrementalLoad(); err != nil {
+	if err := watchReload(mgr); err != nil {
 		t.Fatalf("incremental load: %v", err)
 	}
 	cfg = mgr.GetConfig()
@@ -675,7 +780,7 @@ tenants:
 `)
 
 	mgr := NewConfigManager(dir)
-	if err := mgr.IncrementalLoad(); err != nil {
+	if err := watchReload(mgr); err != nil {
 		t.Fatalf("initial load: %v", err)
 	}
 	cfg := mgr.GetConfig()
@@ -691,7 +796,7 @@ defaults:
   container_memory: 90
 `)
 
-	if err := mgr.IncrementalLoad(); err != nil {
+	if err := watchReload(mgr); err != nil {
 		t.Fatalf("incremental load: %v", err)
 	}
 	cfg = mgr.GetConfig()
@@ -728,7 +833,7 @@ tenants:
 `)
 
 	mgr := NewConfigManager(dir)
-	if err := mgr.IncrementalLoad(); err != nil {
+	if err := watchReload(mgr); err != nil {
 		t.Fatalf("initial load: %v", err)
 	}
 
@@ -743,7 +848,7 @@ tenants:
     mysql_connections: "99"
 `)
 
-	if err := mgr.IncrementalLoad(); err != nil {
+	if err := watchReload(mgr); err != nil {
 		t.Fatalf("incremental load: %v", err)
 	}
 
@@ -772,10 +877,8 @@ tenants:
 func TestIncrementalLoad_TenantMovedBetweenFiles(t *testing.T) {
 	t.Parallel()
 	dir := t.TempDir()
-	writeTestFile(t, dir, "_defaults.yaml", `
-defaults:
-  mysql_connections: 80
-`)
+	// No `_defaults` carrier (#1577): with one the watch path reloads
+	// hierarchically, a full rebuild, and patchTenants never runs.
 	// db-a initially lives in pool-1.yaml.
 	writeTestFile(t, dir, "pool-1.yaml", `
 tenants:
@@ -784,12 +887,13 @@ tenants:
 `)
 
 	mgr := NewConfigManager(dir)
-	if err := mgr.IncrementalLoad(); err != nil {
+	if err := watchReload(mgr); err != nil {
 		t.Fatalf("initial load: %v", err)
 	}
 	if mgr.GetConfig().Tenants["db-a"]["mysql_connections"].Default != "70" {
 		t.Fatalf("setup: expected db-a=70 in pool-1")
 	}
+	requireFlatWatchPath(t, mgr)
 
 	// Single reload: remove pool-1.yaml AND add pool-2.yaml carrying db-a.
 	// Both are tenant files (no underscore) → the tenant-only patch path
@@ -801,14 +905,14 @@ tenants:
     mysql_connections: "75"
 `)
 
-	if err := mgr.IncrementalLoad(); err != nil {
+	if err := watchReload(mgr); err != nil {
 		t.Fatalf("move-reload incremental load: %v", err)
 	}
 	got := mgr.GetConfig()
 
 	// Full-rebuild reference: a fresh manager loading the SAME final dir.
 	ref := NewConfigManager(dir)
-	if err := ref.IncrementalLoad(); err != nil { // fresh → fullDirLoad
+	if err := watchReload(ref); err != nil { // fresh → fullDirLoad
 		t.Fatalf("reference full load: %v", err)
 	}
 	want := ref.GetConfig()

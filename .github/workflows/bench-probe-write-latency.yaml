@@ -4,7 +4,7 @@ name: Bench Probe — write vs load latency (#1497 mechanism 1)
 #
 # 為什麼需要它
 # ============
-# #1497 列了兩個候選機制。**機制 2**（同 mtime tick 讓 `IncrementalLoad` 走到
+# #1497 列了兩個候選機制。**機制 2**（同 mtime tick 讓增量 reload 走到
 # 不同分支）已被逐迭代分支計數打死：目標檔每次迭代都被重寫，`flat_scanner.go`
 # 的 `age > 2*time.Second` 永遠先失敗，`cur == prev` 對它從未被求值，穩態是
 # **恰好 1 個檔案走慢路徑、285/285 零變異**。
@@ -14,7 +14,8 @@ name: Bench Probe — write vs load latency (#1497 mechanism 1)
 # 量什麼
 # ======
 # `BenchmarkProbeWriteLatency` 把 `BenchmarkIncrementalLoad_1000_OneFileChanged`
-# 的迴圈拆成兩半，逐迭代記 `os.WriteFile` 與 `IncrementalLoad` 各自的延遲，
+# 的迴圈拆成兩半，逐迭代記 `os.WriteFile` 與 reload 各自的延遲（#1577 起 reload
+# 是 watch path 的 `diffAndReload`，前身 `IncrementalLoad()` 已移除），
 # 每輪印一列分位數（`PROBEROW`）與最慢的十次迭代（`PROBETAIL`）。
 # 每一輪都**重建整棵 config 樹**，所以一輪 ≡ 一次完整的 benchmark 呼叫（含
 # 前約 135 迭代的暖機期）——否則只有第 0 輪付暖機成本，各輪不可比。

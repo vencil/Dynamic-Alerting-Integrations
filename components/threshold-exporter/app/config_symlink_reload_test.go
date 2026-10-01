@@ -25,9 +25,11 @@ package main
 // hierarchical plane, so the tick is detectChange (per-file hash compare) →
 // diffAndReload's hierarchical pipeline; a tree without one stays flat, so
 // the tick is detectChange (composite hash) → diffAndReload →
-// incrementalLoadFrom. IncrementalLoad is also driven directly (its own
-// scan). Each row asserts which plane it is on, so a fixture that silently
-// changed plane cannot pass for the other.
+// incrementalLoadFrom. diffAndReload is also driven on its own, without the
+// tick's detectChange in front of it (it walks the tree itself; this row used
+// to drive the removed `IncrementalLoad()`, #1577). Each row asserts which
+// plane it is on, so a fixture that silently changed plane cannot pass for
+// the other.
 //
 // Seams: NewConfigManagerWithDebounce(root, 0) makes the tick's debounced
 // reload synchronous (no timer); SetMetrics(fresh) + SetLogger(buffer) per
@@ -296,11 +298,13 @@ func symlinkReloadDrivers() []symlinkReloadDriver {
 			},
 		},
 		{
-			name: "IncrementalLoad",
+			// The reload alone: its own walk must see the swap whether or
+			// not a tick's detectChange did.
+			name: "reload alone (diffAndReload)",
 			run: func(t *testing.T, m *ConfigManager) {
 				t.Helper()
-				if err := m.IncrementalLoad(); err != nil {
-					t.Fatalf("IncrementalLoad: %v", err)
+				if err := watchReload(m); err != nil {
+					t.Fatalf("watchReload: %v", err)
 				}
 			},
 		},

@@ -13,6 +13,7 @@ package main
 
 import (
 	"path/filepath"
+	"reflect"
 	"testing"
 	"time"
 )
@@ -42,10 +43,25 @@ func TestClassifyDefaultsNoOpEffect_PlatformKeyShadowedAcrossSpellings(t *testin
 
 // TestPlatformTenantAliasSurvivesReload (#2368): the tenant's legacy
 // `mysql_cpu` keeps beating the platform entry's canonical
-// `mysql_threads_running` after a tenant-file-only edit — the patchTenants
-// fast path, which rebuilds the tenant from every declaring file
-// (reclaimTenantFrom's multi-source union) — and after a platform-file edit
-// (the incremental full rebuild). Both reload entries.
+// `mysql_threads_running` after a tenant-file-only edit and after a
+// platform-file edit, through the watch path's reload — on this carrier
+// tree, the hierarchical one.
+//
+// ⚠️ CARRIER LAYOUT ONLY, AND THAT IS A LOSS (#1577). This test reads what
+// /metrics serves, and a tree with no `_defaults` carrier serves no threshold
+// row at all (measured: Resolve() returns 0 rows for a tenant file setting
+// mysql_connections; 1 row once a carrier exists) — every key is "not in
+// defaults" — so on the only layout where the watch path takes
+// incrementalLoadFrom there is nothing for these assertions to read. It used
+// to reach patchTenants through the removed `IncrementalLoad()` on the
+// carrier tree, a combination production never runs. On the flat layout
+// the fast path's multi-source precedence is pinned by the flat tree of
+// TestTheFastPathAlwaysLandsWhereAFullLoadWould (every tenant override
+// against a full load), which never writes the legacy spelling; the
+// ACROSS-SPELLING half of reclaimTenantFrom's union is pinned on the flat
+// layout by TestTheFlatFastPathUnionsAcrossSpellings below, at the config
+// layer (`Tenants`) rather than /metrics — the difference is visible there
+// even though the flat tree serves no threshold row.
 func TestPlatformTenantAliasSurvivesReload(t *testing.T) {
 	t.Parallel()
 	m := loadOverlayMatrix(t)
@@ -67,28 +83,65 @@ func TestPlatformTenantAliasSurvivesReload(t *testing.T) {
 			writeTestYAML(t, filepath.Join(dir, "tx.yaml"), "tenants:\n  tx:\n    redis_x: \"1\"\n")
 		}, f(75)},
 	}
-	reloaders := map[string]func(m *ConfigManager) error{
-		"IncrementalLoad": func(m *ConfigManager) error { return m.IncrementalLoad() },
-		"diffAndReload": func(m *ConfigManager) error {
-			_, _, err := m.diffAndReload()
-			return err
-		},
+	dir := t.TempDir()
+	writeOverlayTree(t, dir, overlayTree(m, t, "a1-alias-tenant-legacy-beats-platform-canonical"))
+	mgr, _ := newOverlayManager(t, dir)
+	assertServedKey(t, mgr, "load", "tx", key, f(90))
+	for i, st := range steps {
+		st.mutate(t, dir)
+		touchTreeAt(t, dir, time.Now().Add(time.Duration(i+3)*time.Second))
+		if err := watchReload(mgr); err != nil {
+			t.Fatalf("%s: %v", st.name, err)
+		}
+		assertServedKey(t, mgr, st.name, "tx", key, st.want)
 	}
-	for rname, reload := range reloaders {
-		t.Run(rname, func(t *testing.T) {
-			t.Parallel()
-			dir := t.TempDir()
-			writeOverlayTree(t, dir, overlayTree(m, t, "a1-alias-tenant-legacy-beats-platform-canonical"))
-			mgr, _ := newOverlayManager(t, dir)
-			assertServedKey(t, mgr, rname+"/load", "tx", key, f(90))
-			for i, st := range steps {
-				st.mutate(t, dir)
-				touchTreeAt(t, dir, time.Now().Add(time.Duration(i+3)*time.Second))
-				if err := reload(mgr); err != nil {
-					t.Fatalf("%s/%s: %v", rname, st.name, err)
-				}
-				assertServedKey(t, mgr, rname+"/"+st.name, "tx", key, st.want)
-			}
-		})
+}
+
+// TestTheFlatFastPathUnionsAcrossSpellings (#1577): on a tree with no
+// `_defaults` carrier — the only layout where the watch path reaches
+// incrementalLoadFrom and patchTenants — a tenant declared by a platform file
+// (`_profiles.yaml`, canonical `mysql_threads_running`) and by its own file
+// (legacy `mysql_cpu`) must come out of a tenant-only reload with the same
+// `Tenants` entry a fresh Load builds: one threshold, the tenant's spelling.
+//
+// ⛔ CONFIG LAYER ON PURPOSE. A flat tree serves no threshold row (see the
+// test above), so /metrics cannot tell the two apart; `Tenants` can.
+// MEASURED: with reclaimTenantFrom's config.OverlayAcrossSpellings replaced by
+// a per-key assignment, the reload keeps BOTH spellings
+// (mysql_cpu:91 mysql_threads_running:75 redis_x:1) while a fresh Load keeps
+// only mysql_cpu — this test fails; restored, it passes.
+func TestTheFlatFastPathUnionsAcrossSpellings(t *testing.T) {
+	t.Parallel()
+	dir := t.TempDir()
+	writeTestYAML(t, filepath.Join(dir, "_profiles.yaml"),
+		"tenants:\n  tx:\n    mysql_threads_running: \"75\"\n")
+	tenantFile := filepath.Join(dir, "tx.yaml")
+	writeTestYAML(t, tenantFile, "tenants:\n  tx:\n    mysql_cpu: \"90\"\n    redis_x: \"1\"\n")
+
+	mgr, _ := newOverlayManager(t, dir)
+	requireFlatWatchPath(t, mgr)
+
+	writeTestYAML(t, tenantFile, "tenants:\n  tx:\n    mysql_cpu: \"91\"\n    redis_x: \"1\"\n")
+	if err := watchReload(mgr); err != nil {
+		t.Fatalf("reload: %v", err)
 	}
+	reloaded := tenantDefaults(mgr.GetConfig().Tenants["tx"])
+	if reloaded["mysql_cpu"] != "91" {
+		t.Fatalf("premise: the tenant edit did not land (tx = %v), so this run proves nothing", reloaded)
+	}
+
+	ref, _ := newOverlayManager(t, dir)
+	if full := tenantDefaults(ref.GetConfig().Tenants["tx"]); !reflect.DeepEqual(reloaded, full) {
+		t.Errorf("tenant-only reload on the flat tree diverged from a fresh Load across spellings\n"+
+			"reload=%v\nfull=  %v", reloaded, full)
+	}
+}
+
+// tenantDefaults is a tenant's override map reduced to key → Default.
+func tenantDefaults(ov map[string]ScheduledValue) map[string]string {
+	out := make(map[string]string, len(ov))
+	for k, v := range ov {
+		out[k] = v.Default
+	}
+	return out
 }

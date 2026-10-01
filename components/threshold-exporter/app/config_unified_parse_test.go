@@ -120,8 +120,8 @@ func TestOneTenantSet_HierarchicalHotReload(t *testing.T) {
 	}
 }
 
-// TestOneTenantSet_FlatIncrementalReload drives IncrementalLoad on a tree
-// with no `_defaults.yaml`. A tenant-only change takes patchTenants, which
+// TestOneTenantSet_FlatIncrementalReload drives the watch path's reload on a
+// tree with no `_defaults.yaml`, so it is incrementalLoadFrom. A tenant-only change takes patchTenants, which
 // keeps a now-rejected file's last good values (a deliberate fail-safe of
 // that path), so the subject stays served — and must then stay resolvable.
 func TestOneTenantSet_FlatIncrementalReload(t *testing.T) {
@@ -138,8 +138,8 @@ func TestOneTenantSet_FlatIncrementalReload(t *testing.T) {
 				t.Fatalf("Load: %v", err)
 			}
 			writeTestYAML(t, filepath.Join(dir, "x.yaml"), body)
-			if err := m.IncrementalLoad(); err != nil {
-				t.Fatalf("IncrementalLoad: %v", err)
+			if err := watchReload(m); err != nil {
+				t.Fatalf("reload: %v", err)
 			}
 			assertOneTenantSet(t, m, body, true)
 		})
@@ -158,8 +158,9 @@ func TestOneTenantSet_FlatIncrementalReload(t *testing.T) {
 // counted by the flat plane alone — until the decode was unified, after
 // which it too would have been counted by both.
 //
-// Each leg drives exactly ONE scan (a cold Load, one diffAndReload, one
-// IncrementalLoad), so the expected delta is 1. tickOnce is not used: a tick
+// Each leg drives exactly ONE scan (a cold Load, one diffAndReload — on the
+// flat leg through watchReload, i.e. incrementalLoadFrom fed that scan), so
+// the expected delta is 1. tickOnce is not used: a tick
 // is a detectChange scan plus a reload scan, i.e. two scans.
 func TestAParseFailureIsCountedOncePerScan(t *testing.T) {
 	t.Parallel()
@@ -210,8 +211,8 @@ func TestAParseFailureIsCountedOncePerScan(t *testing.T) {
 			// Still broken, different bytes: the incremental path takes it
 			// as a changed file.
 			writeTestYAML(t, filepath.Join(dir, "x.yaml"), tc.rewrite)
-			if err := m.IncrementalLoad(); err != nil {
-				t.Fatalf("IncrementalLoad: %v", err)
+			if err := watchReload(m); err != nil {
+				t.Fatalf("reload: %v", err)
 			}
 			if got := parseFailureCount(fresh, "x.yaml") - before; got != 1 {
 				t.Errorf("one incremental reload counted x.yaml %v time(s), want 1", got)
@@ -249,8 +250,8 @@ func TestOneTenantSet_KnownException_IncrementalKeepsLastGood(t *testing.T) {
 				t.Fatalf("Load: %v", err)
 			}
 			writeTestYAML(t, filepath.Join(dir, "x.yaml"), body)
-			if err := m.IncrementalLoad(); err != nil {
-				t.Fatalf("IncrementalLoad: %v", err)
+			if err := watchReload(m); err != nil {
+				t.Fatalf("reload: %v", err)
 			}
 
 			// Exporter side: /metrics and its own /effective keep t-x.

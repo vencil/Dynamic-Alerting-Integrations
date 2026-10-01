@@ -15,10 +15,10 @@ image:
   repository: timberio/vector
   # distroless-libc: no shell, no package manager — production tag.
   tag: "0.57.0-distroless-libc"
-  # Optional digest pin (#566 T5). See helm/victorialogs/values.yaml
-  # for rationale + how to fetch.
+  # Pinned by digest (#902 L2), bumped by Renovate (#902 L3). See
+  # helm/victorialogs/values.yaml for rationale + how to fetch.
   # ⛔ Digest AUTHORITATIVE: `--set image.tag=…` alone won't upgrade (k8s keeps THIS
-  #    digest); also set/clear image.digest. #902 L2 (L3/Renovate will automate).
+  #    digest); set image.digest to the new tag's digest too. Do NOT clear it.
   digest: "sha256:bb5968aa63f3bf7cf77f8cd7548c1442cc91f2a8c20d7ef5c5a03e2a37fbf205"
   pullPolicy: IfNotPresent
 

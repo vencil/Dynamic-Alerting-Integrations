@@ -141,7 +141,7 @@ flowchart LR
 
 #### Incremental Reload Internal Mechanism (v2.1.0)
 
-`ConfigManager.IncrementalLoad()` implements four-phase incremental reload to avoid full parsing on every reload:
+Incremental reload is implemented by the package-internal `ConfigManager.incrementalLoadFrom()`, in four phases, to avoid full parsing on every reload. Its only entry is the watch loop's `diffAndReload`: it walks the tree once with `scanDirTree` (Phase 1 below), rejects a tenant declared in two files, and hands the scan over only when the tree has **no** `_defaults` carrier at all; a tree with a carrier takes the hierarchical reload (a full flat rebuild every time). The former public entry `IncrementalLoad()` skipped the duplicate-tenant check and was removed in [#1577](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/1577).
 
 ```
 Phase 1: Mtime Guard — Quick Filtering

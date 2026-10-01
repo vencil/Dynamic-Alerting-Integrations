@@ -19,16 +19,15 @@ image:
   # renovate: datasource=docker depName=victoriametrics/victoria-logs
   repository: victoriametrics/victoria-logs
   tag: "v1.52.0"
-  # Optional digest pin (#566 T5 — supply-chain hardening). When set,
-  # the rendered image becomes `repo:tag@sha256:...` and kubelet pulls
-  # by digest (immutable; upstream tag-swap cannot substitute). Get
-  # the digest with:
+  # Pinned by digest (#902 L2 supply-chain; was #566 T5): the rendered image
+  # is `repo:tag@sha256:...`, so kubelet pulls by digest (immutable; an
+  # upstream tag swap cannot substitute). Renovate bumps tag + digest together
+  # (#902 L3). To bump by hand, get the digest with:
   #   docker buildx imagetools inspect <repo>:<tag> | grep Digest
-  # Empty (default) keeps `repo:tag` form — vulnerable to upstream
-  # registry compromise but matches existing chart convention. Flip
-  # the moment you have a supply-chain threat model that names this.
   # ⛔ Digest AUTHORITATIVE: `--set image.tag=…` alone won't upgrade (k8s keeps THIS
-  #    digest); also set/clear image.digest. #902 L2 (L3/Renovate will automate).
+  #    digest); set image.digest to the new tag's digest too. Do NOT clear it:
+  #    that pulls by tag alone and drops the pin. In-repo, a third-party image
+  #    without a digest fails tests/ops/test_thirdparty_images_are_digest_pinned.py.
   digest: "sha256:47b820890d64c4575a2a0a46415dcd8a4fd59a0f1fcd6a377693d7aea639442e"
   pullPolicy: IfNotPresent
 

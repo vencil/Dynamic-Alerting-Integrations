@@ -136,7 +136,7 @@ func formatUndeliverableLog(
 //
 // Called from commitConfig — the single site in this package that assigns
 // m.config — so every path that publishes a config is covered: Load (both
-// modes), fullDirLoad, IncrementalLoad, and the hierarchical hot-reload
+// modes), fullDirLoad, incrementalLoadFrom, and the hierarchical hot-reload
 // path (diffAndReload → installNewHierarchyState → commitFlatFrom).
 //
 // ⛔ BOTH halves are passed in, and that is the whole point: they must come

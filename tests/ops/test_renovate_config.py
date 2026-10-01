@@ -40,6 +40,10 @@ _SKIP_DIRS = {".git", "node_modules", ".claude", "site", "__pycache__", ".mypy_c
 # in the chart values, the k8s manifests, and the scan matrix. Pin a NEW third-party
 # image -> add it here AND ensure a customManager matches it (this set is the SSOT the
 # coverage test enforces against the config).
+# ⚠️ This set only sees refs that ALREADY carry `@sha256:` (every customManager keys
+# on it), so it cannot catch a NEW tag-only image. That rule lives in
+# test_thirdparty_images_are_digest_pinned.py (#2594); once it holds, the matrix
+# manager's extraction makes the new depName mandatory here.
 EXPECTED_DEPNAMES = {
     "envoyproxy/envoy",
     "quay.io/oauth2-proxy/oauth2-proxy",

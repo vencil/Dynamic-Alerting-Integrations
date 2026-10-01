@@ -50,8 +50,8 @@ func profiledValue(t *testing.T, m *ConfigManager) string {
 func patchTenantA(t *testing.T, m *ConfigManager, dir, cpu string) {
 	t.Helper()
 	writeTestFile(t, dir, "t-a.yaml", "tenants:\n  t-a:\n    _profile: gold\n    container_cpu: \""+cpu+"\"\n")
-	if err := m.IncrementalLoad(); err != nil {
-		t.Fatalf("tenant-only IncrementalLoad: %v", err)
+	if err := watchReload(m); err != nil {
+		t.Fatalf("tenant-only reload: %v", err)
 	}
 	if got := profiledValue(t, m); got != "95" {
 		t.Fatalf("after the tenant-only patch t-a mysql_connections = %q, want the profile's 95", got)
@@ -78,14 +78,14 @@ func TestProfileEditSurvivesAReusedPartial(t *testing.T) {
 	patchTenantA(t, m, dir, "2")
 
 	// Profile edit + a nested key in the same reload → the nested key sends
-	// IncrementalLoad to fullDirLoadFrom, which reuses t-a's unchanged partial.
+	// incrementalLoadFrom to fullDirLoadFrom, which reuses t-a's unchanged partial.
 	writeProfile(t, dir, "97")
 	if err := os.MkdirAll(filepath.Join(dir, "nested"), 0o755); err != nil {
 		t.Fatalf("mkdir: %v", err)
 	}
 	writeTestFile(t, filepath.Join(dir, "nested"), "t-c.yaml", "tenants:\n  t-c:\n    container_cpu: \"1\"\n")
-	if err := m.IncrementalLoad(); err != nil {
-		t.Fatalf("IncrementalLoad with a nested key: %v", err)
+	if err := watchReload(m); err != nil {
+		t.Fatalf("reload with a nested key: %v", err)
 	}
 	if got := profiledValue(t, m); got != "97" {
 		t.Errorf("full load reused a partial carrying the OLD profile value: t-a mysql_connections = %q, want 97", got)
@@ -102,7 +102,7 @@ func TestProfileEditSurvivesAReusedPartial(t *testing.T) {
 
 // TestProfileEditReachesAPatchedTenantOnIncrementalReload is the
 // comparison measurement for the SAME aliasing on the pre-#1568 path: a
-// pure `_profiles.yaml` edit is a `_` file change, so IncrementalLoad
+// pure `_profiles.yaml` edit is a `_` file change, so incrementalLoadFrom
 // rebuilds via mergePartialConfigs from the cached partials — and a partial
 // polluted by an earlier tenant-only patch carried the old value there too.
 // Whether this was red before the copy landed is answered by the report's
@@ -119,8 +119,8 @@ func TestProfileEditReachesAPatchedTenantOnIncrementalReload(t *testing.T) {
 	patchTenantA(t, m, dir, "2")
 
 	writeProfile(t, dir, "97")
-	if err := m.IncrementalLoad(); err != nil {
-		t.Fatalf("IncrementalLoad after the profile edit: %v", err)
+	if err := watchReload(m); err != nil {
+		t.Fatalf("reload after the profile edit: %v", err)
 	}
 	if got := profiledValue(t, m); got != "97" {
 		t.Errorf("incremental full rebuild merged a partial carrying the OLD profile value: t-a mysql_connections = %q, want 97", got)

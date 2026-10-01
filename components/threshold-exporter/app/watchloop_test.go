@@ -255,7 +255,7 @@ func TestFullDirLoad_NonexistentDir(t *testing.T) {
 }
 
 // ============================================================
-// IncrementalLoad edge cases
+// Reload edge cases (watchReload: the watch path's diffAndReload)
 // ============================================================
 
 func TestIncrementalLoad_AddAndRemoveFiles(t *testing.T) {
@@ -291,7 +291,7 @@ tenants:
     mysql_connections: "100"
 `)
 
-	if err := m.IncrementalLoad(); err != nil {
+	if err := watchReload(m); err != nil {
 		t.Fatalf("incremental load after add failed: %v", err)
 	}
 
@@ -303,7 +303,7 @@ tenants:
 	// Remove db-a file
 	os.Remove(filepath.Join(dir, "db-a.yaml"))
 
-	if err := m.IncrementalLoad(); err != nil {
+	if err := watchReload(m); err != nil {
 		t.Fatalf("incremental load after remove failed: %v", err)
 	}
 
@@ -317,7 +317,7 @@ tenants:
 }
 
 // ============================================================
-// IncrementalLoad specific paths
+// Reload fallbacks (single-file mode, no flat cache, no change)
 // ============================================================
 
 func TestIncrementalLoad_SingleFileFallback(t *testing.T) {
@@ -335,9 +335,9 @@ tenants:
 		path:  configFile,
 		isDir: false,
 	}
-	// IncrementalLoad on single-file mode falls back to Load()
-	if err := m.IncrementalLoad(); err != nil {
-		t.Fatalf("IncrementalLoad single-file fallback failed: %v", err)
+	// The reload on single-file mode is a full Load()
+	if err := watchReload(m); err != nil {
+		t.Fatalf("reload single-file fallback failed: %v", err)
 	}
 	cfg := m.GetConfig()
 	if cfg == nil || cfg.Defaults["mysql_connections"] != 80 {
@@ -357,8 +357,8 @@ defaults:
 		isDir: true,
 		// No fileHashes cache — first load
 	}
-	if err := m.IncrementalLoad(); err != nil {
-		t.Fatalf("IncrementalLoad no-cache fallback failed: %v", err)
+	if err := watchReload(m); err != nil {
+		t.Fatalf("reload no-cache fallback failed: %v", err)
 	}
 	cfg := m.GetConfig()
 	if cfg == nil || cfg.Defaults["mysql_connections"] != 80 {
@@ -382,8 +382,8 @@ defaults:
 	}
 
 	// Second incremental load with no changes should be a no-op
-	if err := m.IncrementalLoad(); err != nil {
-		t.Fatalf("IncrementalLoad no-change should succeed: %v", err)
+	if err := watchReload(m); err != nil {
+		t.Fatalf("reload no-change should succeed: %v", err)
 	}
 }
 

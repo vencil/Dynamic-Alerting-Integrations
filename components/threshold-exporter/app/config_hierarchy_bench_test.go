@@ -302,12 +302,13 @@ func reportResourceMetrics(b *testing.B) {
 // (linear vs super-linear) and inform the sharding decision empirically
 // — not via 10× extrapolation from a single 1000-tenant data point.
 
-// Note on IncrementalLoad vs diffAndReload: both walk the tree through the
-// one shared scanDirTree (#1568; the flat walk has been recursive since
-// #1521), so the two differ in what they do AFTER the walk, not in what
-// they see. diffAndReload is what WatchLoop drives on a hierarchical tree
-// (it refreshes m.hierarchy); IncrementalLoad is the flat plane's tenant-
-// patch fast path, covered by the flat benchmarks in config_bench_test.go.
+// Note on the flat benchmarks vs these: since #1577 both families drive
+// diffAndReload (the flat ones through watchReload, or a tick for NoChange),
+// and buildDirConfig's tree has a root `_defaults.yaml`, so the flat
+// OneFileChanged benchmarks also take the hierarchical reload — the
+// tenant-patch fast path (incrementalLoadFrom), reached only by a tree with
+// no carrier, has no benchmark. The families still differ in tree shape:
+// the flat one is a single directory, these are nested.
 // All hierarchical benchmarks below use diffAndReload.
 
 // ── Size-parameterized cores (called by the per-N wrappers below) ──────

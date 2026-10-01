@@ -143,7 +143,7 @@ flowchart LR
 
 #### Incremental Reload Internal Mechanism (v2.1.0)
 
-`ConfigManager.IncrementalLoad()` 實現四階段增量重載，避免每次 reload 都全量解析：
+增量重載由套件內部方法 `ConfigManager.incrementalLoadFrom()` 實作，分四階段，避免每次 reload 都全量解析。它唯一的入口是 watch loop 的 `diffAndReload`：先以 `scanDirTree` 走一次樹（即下方 Phase 1）、拒絕跨檔重複宣告的租戶，且只有樹內**沒有任何** `_defaults` carrier 時才把這次掃描交給它；有 carrier 的樹走階層式 reload（每次都是完整的平面重建）。原本的公開入口 `IncrementalLoad()` 會跳過重複租戶檢查，已於 [#1577](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/1577) 移除。
 
 ```
 Phase 1: Mtime Guard — 快速篩選
