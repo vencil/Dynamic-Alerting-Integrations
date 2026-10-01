@@ -31,17 +31,26 @@
 
 ## 設定（env）
 
+預設欄寫的是**沒設這個變數時的實際值**；`(空)` = 空字串或未設，意義寫在說明欄。表格由 `tests/preview/test_env_readme_parity.py` 對 `app.py` 比對：變數名單兩向一致、預設值逐一相同。
+
 | 變數 | 預設 | 說明 |
 |---|---|---|
 | `PREVIEW_TENANT_API_URL` | `http://tenant-api.tenant-api.svc.cluster.local:8080` | PEP 打的 tenant-api base URL（tenant-api 位於專屬 `tenant-api` namespace，#1004）|
 | `PREVIEW_AUTHZ_TIMEOUT` | `5` | authz 探測（打 tenant-api `/access`）的 timeout 秒數；逾時→fail-closed 拒絕（`403`）|
+| `PREVIEW_AUTH_TOKEN_FILE` | (空) | 送給 tenant-api 的 SA token 檔路徑，只用於對方的 machine-identity 稽核、不影響授權。Helm chart 設成 `/var/run/secrets/tokens/tenant-api-token`。空或讀不到 = 不帶 Bearer、照常預覽（讀不到時印 warning）|
+| `PREVIEW_CLAIM_HEADERS` | (空) | 逗號分隔的 header 名稱，有帶就一併轉發給 tenant-api `/access`（例如 org claim，對齊 tenant-api 的 `--identity-claim-headers`）。`X-Forwarded-Email`／`X-Forwarded-Groups`／`Authorization`／`Cookie` 會被忽略並印 warning |
+| `PREVIEW_LISTEN_HOST` | `0.0.0.0` | 監聽位址 |
 | `PREVIEW_LISTEN_PORT` | `8082` | 監聽埠 |
 | `PREVIEW_MAX_CONCURRENCY` | `4` | 同時評估上限（每次評估開一個 `promtool` 子程序）|
 | `PREVIEW_QUEUE_TIMEOUT` | `10` | 評估併發 slot 的排隊上限秒數；超時→`503` |
 | `PREVIEW_RATE_LIMIT_PER_MIN` | `30` | 每租戶每分鐘上限（`0`=關閉）|
 | `PREVIEW_MAX_BODY_BYTES` | `65536` | request body 上限（讀進記憶體前擋；超過回 `413`）|
 | `PREVIEW_REQUEST_TIMEOUT` | `60` | 每連線 socket 讀取 timeout 秒數（防 idle／慢速連線占住 thread）|
-| `PREVIEW_DEV_BYPASS_AUTH` | `false` | try-local：無身分標頭時注入 demo 身分（k8s 內開會**拒絕啟動**）|
+| `PREVIEW_DEV_BYPASS_AUTH` | (空) | try-local 用：`1`／`true`／`yes`（不分大小寫）開啟，請求沒帶 `X-Forwarded-Email` 時注入下面兩列的 demo 身分；其他值 = 關。偵測到 Kubernetes（`KUBERNETES_SERVICE_HOST` 有值）時開啟會**拒絕啟動** |
+| `PREVIEW_DEV_BYPASS_EMAIL` | `dev@local` | dev-bypass 注入的 email |
+| `PREVIEW_DEV_BYPASS_GROUPS` | `demo-admins` | dev-bypass 注入的 groups |
+| `PREVIEW_CORE_DIR` | (空) | eval core（`_recipe_preview.py` 所在目錄）。image 設成 `/opt/recipe-preview/core/dx`；空或不是目錄就依序試 `app.py` 旁的 `core/dx`、repo 的 `scripts/tools/dx` |
+| `GIT_SHA` | `unknown` | 由 image build 的 `GIT_SHA` build arg 寫入、`/healthz` 回報，不必手設 |
 
 ## 範圍
 
