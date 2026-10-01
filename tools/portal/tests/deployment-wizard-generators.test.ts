@@ -2,8 +2,8 @@
  * Tests for deployment-wizard's per-chart Helm values generator.
  *
  * THE LOAD-BEARING GATE is the first describe block: every leaf key the
- * wizard emits, for every config combination, must be read by the target
- * chart's templates. The previous generator emitted an umbrella-chart shape
+ * wizard emits, for every config combination, must be declared by the target
+ * chart's values.yaml. The previous generator emitted an umbrella-chart shape
  * (`thresholdExporter:` / `prometheus:` / `platform:` …) that no chart in
  * helm/ has, so a customer following its own `helm install threshold-exporter
  * -f values.yaml` instruction got a file the chart read NONE of — including
@@ -12,14 +12,16 @@
  * used to contain) could not see that: they proved the text was emitted, not
  * that anything consumed it.
  *
- * "Read by the chart" is resolved structurally, not by grep: each emitted
- * values file is parsed to leaf paths, and each chart's templates are
- * tokenised into `{{ … }}` actions whose `.Values.*` / `$.Values.*`
- * references (plus relative `.x` inside `with` / `range`) are collected. A
- * leaf is consumed iff some reference is a prefix of it (e.g. `toYaml
- * .Values.resources` consumes `resources.limits.cpu`). The resolver itself
- * carries controls: it must find keys known to be read and must reject the
- * three fictional keys, otherwise a broken resolver would pass everything.
+ * Declared is enough because the other half is guarded on the Python side:
+ * tests/helm/test_values_keys_are_read.py fails on any values.yaml leaf no
+ * template reads (declared ⇒ read; its `_UNREAD_ALLOWED` table is the only
+ * escape, so a key listed there must not be one the wizard emits). That guard
+ * resolves Go template bindings properly; this file used to carry a second,
+ * looser resolver of its own (#2555 F), and two resolvers drift. Each emitted
+ * values file is parsed to leaf paths and compared with the leaves of the
+ * chart's values.yaml, read by js-yaml. Controls: keys the chart declares must
+ * be found, and the three fictional keys must be rejected, otherwise a broken
+ * lookup would pass everything.
  *
  * NOTE: output embeds `# Generated: <today>`, so the date FORMAT is pinned,
  * never its value.
@@ -28,6 +30,7 @@ import { describe, it, expect } from 'vitest';
 import { readFileSync, readdirSync } from 'node:fs';
 import { resolve, dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { load } from 'js-yaml';
 import { deployGenerateHelmReleases } from '../src/interactive/tools/deployment-wizard/utils/generators.js';
 import { DEPLOY_RULE_PACKS } from '../src/interactive/tools/deployment-wizard/fixtures/wizard-defaults.js';
 
@@ -91,65 +94,37 @@ function leafPaths(yaml: string): string[] {
   return out;
 }
 
-// ── template side: .Values references a chart actually reads ────────────────
-const NON_VALUES = new Set(['Release', 'Chart', 'Capabilities', 'Template', 'Files', 'Values']);
-function chartValueRefs(chart: string): string[][] {
-  const dir = join(HELM, chart, 'templates');
-  const refs: string[][] = [];
-  for (const f of readdirSync(dir).sort()) {
-    const src = readFileSync(join(dir, f), 'utf8');
-    // null = root / unknown context; 'IF' = transparent (if/else keep the context)
-    const stack: (string[] | null | 'IF')[] = [];
-    for (const m of src.matchAll(/\{\{-?([\s\S]*?)-?\}\}/g)) {
-      const action = m[1].trim();
-      if (action.startsWith('/*')) continue;
-      const kw = action.split(/\s+/)[0];
-      const ctx = [...stack].reverse().find(c => c !== 'IF') ?? null;
-      const found: (string[] | null)[] = [];
-      for (const r of action.matchAll(/(\$?)\.([A-Za-z_][\w-]*(?:\.[A-Za-z_][\w-]*)*)/g)) {
-        const parts = r[2].split('.');
-        if (parts[0] === 'Values') found.push(parts.slice(1));
-        else if (r[1] || NON_VALUES.has(parts[0]) || ctx === null || ctx === 'IF') found.push(null);
-        else found.push([...ctx, ...parts]);
-      }
-      for (const p of found) if (p && p.length) refs.push(p);
-      if (kw === 'with' || kw === 'range') {
-        const target = found.find(Boolean) ?? null;
-        // range elements are not addressable leaves of a scalar-only values file
-        stack.push(kw === 'range' ? null : target);
-      } else if (kw === 'if') stack.push('IF');
-      else if (kw === 'define' || kw === 'block') stack.push(null);
-      else if (kw === 'end') stack.pop();
-    }
-  }
-  return refs;
+// ── chart side: leaf paths values.yaml declares ─────────────────────────────
+// Same leaf rule as tests/helm/test_values_keys_are_read.py `_leaves`: a
+// non-empty map recurses, anything else (scalar, list, empty map) is a leaf.
+function declaredLeaves(node: unknown, path: string[] = [], out: Set<string> = new Set()): Set<string> {
+  if (node && typeof node === 'object' && !Array.isArray(node) && Object.keys(node).length) {
+    for (const [k, v] of Object.entries(node)) declaredLeaves(v, [...path, k], out);
+  } else if (path.length) out.add(path.join('.'));
+  return out;
 }
-const REFS: Record<string, string[][]> = {};
-const isConsumed = (chart: string, leaf: string) => {
-  REFS[chart] ??= chartValueRefs(chart);
-  const p = leaf.split('.');
-  return REFS[chart].some(r => r.length <= p.length && r.every((seg, i) => seg === p[i]));
+const DECLARED: Record<string, Set<string>> = {};
+const isDeclared = (chart: string, leaf: string) => {
+  DECLARED[chart] ??= declaredLeaves(load(readFileSync(join(HELM, chart, 'values.yaml'), 'utf8')));
+  return DECLARED[chart].has(leaf);
 };
 
-describe('every emitted key is read by the target chart (structural, all configs)', () => {
-  it('resolver controls: finds keys known to be read, rejects keys known to be fictional', () => {
-    expect(isConsumed('threshold-exporter', 'replicaCount')).toBe(true);
-    expect(isConsumed('threshold-exporter', 'resources.limits.cpu')).toBe(true); // via toYaml subtree
-    expect(isConsumed('da-portal', 'oauth2Proxy.oidcIssuerUrl')).toBe(true);     // via `with`
+describe('every emitted key is declared by the target chart (structural, all configs)', () => {
+  it('lookup controls: finds keys the chart declares, rejects keys it does not', () => {
+    expect(isDeclared('threshold-exporter', 'replicaCount')).toBe(true);
+    expect(isDeclared('threshold-exporter', 'resources.limits.cpu')).toBe(true);
+    expect(isDeclared('da-portal', 'oauth2Proxy.oidcIssuerUrl')).toBe(true);
     for (const fictional of [
       'tripleState.enabled', 'cardinalityGuard.maxPerTenant', 'configValidation.sha256',
       'thresholdExporter.replicaCount', 'prometheus.retention',
     ]) {
-      expect(isConsumed('threshold-exporter', fictional), fictional).toBe(false);
+      expect(isDeclared('threshold-exporter', fictional), fictional).toBe(false);
     }
-    // Read by no template: the ServiceAccount is created unconditionally under
-    // a fixed name. da-portal's values.yaml declared this key until #2532
-    // removed it (tests/helm/test_values_keys_are_read.py now fails on any
-    // declared-but-unread key), so it stays here as the negative control.
-    expect(isConsumed('da-portal', 'serviceAccount.create')).toBe(false);
-    // #2027 gave both charts an Ingress template; ingress.* is now read.
-    expect(isConsumed('da-portal', 'ingress.enabled')).toBe(true);
-    expect(isConsumed('tenant-api', 'ingress.hosts')).toBe(true);
+    // da-portal's values.yaml declared this key until #2532 removed it as
+    // read by no template; it stays here as the negative control.
+    expect(isDeclared('da-portal', 'serviceAccount.create')).toBe(false);
+    // A map is not a leaf: only its children are.
+    expect(isDeclared('threshold-exporter', 'resources')).toBe(false);
   });
 
   it('leafPaths control: parses nesting, and throws on shapes it cannot read', () => {
@@ -159,7 +134,7 @@ describe('every emitted key is read by the target chart (structural, all configs
     expect(() => leafPaths('a:\nb: 1\n')).toThrow(/no value and no children/);
   });
 
-  it(`no dead keys across ${ALL_CONFIGS.length} configs`, () => {
+  it(`no undeclared keys across ${ALL_CONFIGS.length} configs`, () => {
     const dead = new Set<string>();
     let checked = 0;
     for (const cfg of ALL_CONFIGS) {
@@ -168,7 +143,7 @@ describe('every emitted key is read by the target chart (structural, all configs
         expect(leaves.length, `${rel.chart} emitted nothing`).toBeGreaterThan(0);
         for (const leaf of leaves) {
           checked++;
-          if (!isConsumed(rel.chart, leaf)) dead.add(`${rel.chart}: ${leaf}`);
+          if (!isDeclared(rel.chart, leaf)) dead.add(`${rel.chart}: ${leaf}`);
         }
       }
     }
