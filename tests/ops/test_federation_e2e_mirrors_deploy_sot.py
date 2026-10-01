@@ -16,7 +16,7 @@ version passes every scenario. That is the failure mode this module exists for:
 Federation E2E kept certifying ADR-020's request path against binaries we do not
 ship, and reported success while doing it.
 
-WHY THE FIX IS NOT "ADD IT TO RENOVATE". The three customManagers in
+WHY THE FIX IS NOT "ADD IT TO RENOVATE". The three image customManagers in
 renovate.json glob `helm/**`, `k8s/**` and the scan-matrix workflow only, and
 their matchStrings are anchored on an `@sha256:` digest — these refs are
 deliberately tag-only, so even widening the globs would not match. Widening is

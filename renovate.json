@@ -66,9 +66,37 @@
       ],
       "datasourceTemplate": "docker",
       "versioningTemplate": "regex:^(?<major>\\d+)\\.(?<minor>\\d+)\\.(?<patch>\\d+)-ce\\.(?<build>\\d+)$"
+    },
+    {
+      "customType": "regex",
+      "description": "TRK-2605 — the Grafana plugin pinned as '<plugin id>@<version>' in GF_PLUGINS_PREINSTALL_SYNC on the Grafana Deployment. Looked up in the grafana.com plugin catalog (customDatasources below), the source Grafana itself installs from — a GitHub release tag can exist before the catalog has the version, and a pin the catalog cannot serve fails Grafana's startup. One entry per env value: tests/ops/test_grafana_plugins_are_version_pinned.py asserts every pinned entry is extracted here, so a second comma-separated entry goes red there instead of going untracked.",
+      "managerFilePatterns": ["/^k8s/03-monitoring/deployment-grafana\\.yaml$/"],
+      "matchStrings": [
+        "name:[ \\t]*GF_PLUGINS_PREINSTALL_SYNC[ \\t]*\\n[ \\t]*value:[ \\t]*[\"']?(?<depName>[a-z0-9][a-z0-9-]*)@(?<currentValue>[0-9]+\\.[0-9]+\\.[0-9]+)[\"']?[ \\t]*\\n"
+      ],
+      "datasourceTemplate": "custom.grafana-plugins",
+      "versioningTemplate": "semver"
     }
   ],
+  "customDatasources": {
+    "grafana-plugins": {
+      "description": "TRK-2605 — grafana.com plugin catalog. The versions endpoint returns {items: [{version, createdAt, ...}]}, newest first.",
+      "defaultRegistryUrlTemplate": "https://grafana.com/api/plugins/{{packageName}}/versions",
+      "transformTemplates": ["{\"releases\": items.{\"version\": version, \"releaseTimestamp\": createdAt}}"]
+    }
+  },
   "packageRules": [
+    {
+      "description": "TRK-2605 — Grafana plugin bumps get their own PR, apart from the image digests: a plugin version is not an image and is not in the scan matrix. A MAJOR waits for the Dependency Dashboard, the same policy as image majors (and Grafana's own preinstall auto-update, which skips majors).",
+      "matchDatasources": ["custom.grafana-plugins"],
+      "groupName": "grafana plugins"
+    },
+    {
+      "description": "TRK-2605 — see the rule above.",
+      "matchDatasources": ["custom.grafana-plugins"],
+      "matchUpdateTypes": ["major"],
+      "dependencyDashboardApproval": true
+    },
     {
       "description": "#902 L3 — group all non-major third-party image updates (incl. digest-only refreshes) into ONE PR for low review noise. The self-hosted workflow's weekly cron sets the cadence; a manual workflow_dispatch (incl. dry-run) runs on demand. #1354: scoped to custom.regex so the Dockerfile / dev-container docker deps (also datasource=docker) do NOT fall into this group — each built-in manager has its own group below.",
       "matchManagers": ["custom.regex"],
