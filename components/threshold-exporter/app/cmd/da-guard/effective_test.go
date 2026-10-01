@@ -275,12 +275,12 @@ func TestEffective_ParseFailedIsServedValuesVerdict(t *testing.T) {
 	t.Parallel()
 	tenants := "tenants:\n  t-x:\n    mysql_connections: \"90\"\n  t-y:\n    _silent_mode: critical\n"
 	for name, files := range map[string]map[string]string{
-		"reserved key in root defaults": {"_defaults.yaml": "defaults:\n  mysql_connections: 80\n  _silent_mode: warning\n", "tenants.yaml": tenants},
-		"quoted number in root defaults": {"_defaults.yaml": "defaults:\n  mysql_connections: \"80\"\n", "tenants.yaml": tenants},
-		"_metadata in root defaults": {"_defaults.yaml": "defaults:\n  mysql_connections: 80\n  _metadata:\n    owner: dba\n", "tenants.yaml": tenants},
-		"disable in root defaults": {"_defaults.yaml": "defaults:\n  mysql_connections: 80\n  container_memory: disable\n", "tenants.yaml": tenants},
+		"reserved key in root defaults":       {"_defaults.yaml": "defaults:\n  mysql_connections: 80\n  _silent_mode: warning\n", "tenants.yaml": tenants},
+		"quoted number in root defaults":      {"_defaults.yaml": "defaults:\n  mysql_connections: \"80\"\n", "tenants.yaml": tenants},
+		"_metadata in root defaults":          {"_defaults.yaml": "defaults:\n  mysql_connections: 80\n  _metadata:\n    owner: dba\n", "tenants.yaml": tenants},
+		"disable in root defaults":            {"_defaults.yaml": "defaults:\n  mysql_connections: 80\n  container_memory: disable\n", "tenants.yaml": tenants},
 		"scalar tenant body in root defaults": {"_defaults.yaml": "defaults:\n  mysql_connections: 80\ntenants:\n  t-x: 3\n", "tenants.yaml": tenants},
-		"tenant file body a list": {"_defaults.yaml": "defaults:\n  mysql_connections: 80\n", "tenants.yaml": tenants, "b.yaml": "tenants:\n  t-z: [1]\n"},
+		"tenant file body a list":             {"_defaults.yaml": "defaults:\n  mysql_connections: 80\n", "tenants.yaml": tenants, "b.yaml": "tenants:\n  t-z: [1]\n"},
 	} {
 		dir := writeParityTree(t, files)
 		code, doc, stderr := runEffectiveOn(t, dir)
