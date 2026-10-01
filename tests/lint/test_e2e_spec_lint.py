@@ -323,7 +323,41 @@ def _reads_trigger_key(node: ast.AST) -> bool:
             and node.args[0].value in _TRIGGER_KEYS)
 
 
-_CI_WORKFLOW = _REPO_ROOT / ".github/workflows/ci.yml"
+def _bound_names(node: ast.AST) -> list[str]:
+    """Every name this one node BINDS, in any scope (#1446).
+
+    ⛔ Exists because the door test used to exempt accessors by NAME, and a
+    name is not an identity: a blind review defined a two-line `_trigger_paths`
+    inside a caller, read `paths` through it with no negation rejection, and the
+    file stayed green. Closing that means proving each accessor name is bound
+    exactly once in the file — which needs every form of binding, not the
+    `def` form alone: a parameter, a `lambda` assigned at module level, an
+    import alias or a `for` target shadows a function just as well.
+    """
+    if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef)):
+        return [node.name]
+    if isinstance(node, ast.Name) and isinstance(node.ctx, (ast.Store, ast.Del)):
+        # Assign / AugAssign / AnnAssign / For / With-as / walrus /
+        # comprehension targets all bind through a Name in Store context.
+        return [node.id]
+    if isinstance(node, ast.arg):
+        return [node.arg]
+    if isinstance(node, ast.alias):
+        return [node.asname or node.name.split(".")[0]]
+    if isinstance(node, (ast.Global, ast.Nonlocal)):
+        return list(node.names)
+    if isinstance(node, (ast.ExceptHandler, ast.MatchAs, ast.MatchStar)):
+        return [node.name] if node.name else []
+    if isinstance(node, ast.MatchMapping):
+        return [node.rest] if node.rest else []
+    # PEP 695 type parameters (3.12+); absent on older interpreters.
+    name = getattr(node, "name", None)
+    if type(node).__name__ in {"TypeVar", "ParamSpec", "TypeVarTuple"} and name:
+        return [name]
+    return []
+
+
+_CI_WORKFLOW =_REPO_ROOT / ".github/workflows/ci.yml"
 
 
 def _branches_that_carry_required_checks(event: str) -> list[str]:
@@ -703,6 +737,50 @@ def test_reading_a_paths_list_goes_through_the_negation_rejection(
         _trigger_paths("push")
 
 
+def test_bound_names_sees_every_way_to_bind_a_name() -> None:
+    """Control for `_bound_names`: on this file every accessor is bound once,
+    so a body of `return []` — or one that only knew `def` — would leave the
+    door test green. Every form below rebinds `x`, and each must be seen."""
+    def _count(src: str) -> int:
+        return sum(n == "x" for node in ast.walk(ast.parse(src))
+                   for n in _bound_names(node))
+
+    for src in (
+        "def x(): pass",
+        "async def x(): pass",
+        "class x: pass",
+        "x = 1",
+        "x += 1",
+        "x: int = 1",
+        "for x in []: pass",
+        "with open('f') as x: pass",
+        "(x := 1)",
+        "def f(x): pass",
+        "def f(*, x): pass",
+        "def f(*x): pass",
+        "def f(**x): pass",
+        "f = lambda x: x",
+        "import x",
+        "import x.y",
+        "import os as x",
+        "from os import x",
+        "from os import path as x",
+        "def f():\n    global x",
+        "def f():\n    def g():\n        nonlocal x",
+        "[0 for x in []]",
+        "try:\n    pass\nexcept Exception as x:\n    pass",
+        "del x",
+    ):
+        assert _count(src) == 1, (
+            f"{src!r} binds `x` and `_bound_names` counted {_count(src)}. The "
+            "door test's 'bound exactly once' is only as wide as this.")
+
+    for src in ("x()", "print(x)", "y = x", "s = 'x'", "obj.x = 1", "d['x'] = 1"):
+        assert _count(src) == 0, (
+            f"{src!r} does not bind `x` but was counted — a false rebinding "
+            "makes the door test unsatisfiable on an honest file.")
+
+
 def test_nothing_in_this_file_reads_a_trigger_key_around_the_accessor() -> None:
     """⛔ The accessor only helps while it is the only door.
 
@@ -719,21 +797,46 @@ def test_nothing_in_this_file_reads_a_trigger_key_around_the_accessor() -> None:
     quantifier's clothes — it misses module scope, `async def`, lambdas and
     comprehensions alike. Walking the whole tree and subtracting the accessor's
     own nodes cannot miss a scope, because it never names one.
+
+    ⛔ And the exemption is an IDENTITY, not a name (#1446). It used to cover
+    every `def` called `_trigger_paths` anywhere in the tree, so a blind review
+    defined a second one inside a caller — two lines, reading `paths` with no
+    negation rejection — and this file stayed green. Now each accessor must be
+    a `def` directly in the module body, and its name must be bound exactly
+    once in the whole file (`_bound_names` lists what counts as binding), so
+    the node exempted below is the only thing that name can refer to.
     """
     tree = parse_py(__file__)
     accessor_names = {"_trigger_paths", "_trigger_branches",
                       "_branches_that_carry_required_checks"}
     accessors = [
-        node for node in ast.walk(tree)
+        node for node in tree.body
         if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef))
         and node.name in accessor_names
     ]
-    assert {a.name for a in accessors} == accessor_names, (
-        f"the accessors {sorted(accessor_names)} are not both present "
-        f"(found {sorted(a.name for a in accessors)}). They are the only "
-        "places allowed to read a trigger key, so a missing one makes this "
-        "check permit every read in the file — restore it, or delete this "
-        "test in the same commit so the loss is visible."
+    assert sorted(a.name for a in accessors) == sorted(accessor_names), (
+        f"the accessors {sorted(accessor_names)} are not each defined exactly "
+        f"once at module level (found {sorted(a.name for a in accessors)}). "
+        "They are the only places allowed to read a trigger key, so a missing "
+        "one makes this check permit every read in the file — restore it, or "
+        "delete this test in the same commit so the loss is visible. A nested "
+        "or conditional definition does not count: only a top-level `def` is "
+        "unambiguously the thing a call by that name reaches."
+    )
+    bindings: dict[str, list[int]] = {name: [] for name in accessor_names}
+    for node in ast.walk(tree):
+        for name in _bound_names(node):
+            if name in bindings:
+                bindings[name].append(getattr(node, "lineno", 0))
+    rebound = {name: lines for name, lines in bindings.items() if len(lines) != 1}
+    assert not rebound, (
+        f"{rebound} — an accessor name is bound more than once in this file "
+        "(a nested `def`, a parameter, an assignment, an import alias …). The "
+        "exemption below is granted to the module-level `def` only, so any "
+        "second binding of the same name is either shadowing it — a caller "
+        "reading trigger keys through a look-alike that skips the negation "
+        "rejection — or replacing it after the fact. Rename whichever one is "
+        "not the accessor."
     )
     inside_accessors = {
         id(node) for a in accessors for node in ast.walk(a)
