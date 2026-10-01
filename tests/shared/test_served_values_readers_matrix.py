@@ -12,7 +12,8 @@
 「租戶檔」那一格，tenant-a 的答案都錯（子樹那格整個租戶消失）。
 
 另有幾格：平面格式檔（Go 列進 `skipped`）、Go 丟掉的檔（`parse_failed`，fail-closed
-rc 2，訊息附解析原因）、exporter 讀不到的檔（Go 只 WARN，讀取端轉印、rc 0）、
+rc 2，訊息附解析原因）、exporter 讀不到的檔（`unreadable`，同樣 rc 2；指向目錄的 symlink
+例外：Go 只 WARN，讀取端轉印、rc 0）、
 `disable`／沒有預設值的鍵（不算已監控）。
 
 da-guard 由 conftest 的 session fixture 以 `go build` 建出；建不起來就 fail、不 skip。
@@ -20,6 +21,7 @@ da-guard 由 conftest 的 session fixture 以 `go build` 建出；建不起來�
 from __future__ import annotations
 
 import json
+import os
 import re
 import subprocess
 import sys
@@ -183,9 +185,43 @@ def test_tree_the_exporter_rejects_fails_closed(script, extra, tmp_path):
 
 
 @pytest.mark.parametrize("script, extra", _CLIS, ids=[c[0] for c in _CLIS])
+def test_dangling_symlink_fails_closed(script, extra, tmp_path):
+    """懸空 symlink `tenant-b.yaml`：exporter 只 WARN 後跳過、該租戶從 /metrics 消失。
+    Go 列進 `unreadable`（rc 3），讀取端 rc 2、ERROR 行指名該檔與原因（行為變更：原為 rc 0）。
+    不依賴權限，root 下也會跑。"""
+    conf_d = _tree(tmp_path, {"_defaults.yaml": _BASE, "tenant-a.yaml": _A_OK})
+    (conf_d / "tenant-b.yaml").symlink_to("missing.yaml")
+    p = _cli(script, conf_d, *extra)
+    assert p.returncode == 2, (p.returncode, p.stderr)
+    err = [ln for ln in p.stderr.split("\n") if ln.startswith("ERROR: ")]
+    assert len(err) == 1 and "tenant-b.yaml (stat_error)" in err[0], p.stderr
+    assert "Traceback" not in p.stderr and p.stdout == "", (p.stdout, p.stderr)
+
+
+@pytest.mark.skipif(not hasattr(os, "geteuid") or os.geteuid() == 0,
+                    reason="chmod 000 does not stop root (or Windows); the dangling-symlink row covers unreadable")
+@pytest.mark.parametrize("name", ["tenant-a.yaml", "_defaults.yaml"])
+@pytest.mark.parametrize("script, extra", _CLIS, ids=[c[0] for c in _CLIS])
+def test_file_without_read_permission_fails_closed(script, extra, name, tmp_path):
+    """讀取權限不足：租戶檔（該租戶消失）或 `_defaults.yaml`（所有鍵變成沒有預設值）
+    都是 rc 2、指名該檔（`read_error`），不再 rc 0 只轉印一行 WARN。"""
+    conf_d = _tree(tmp_path, {"_defaults.yaml": _BASE, "tenant-a.yaml": _A_OK, "tenant-b.yaml": _B})
+    (conf_d / name).chmod(0)
+    try:
+        p = _cli(script, conf_d, *extra)
+    finally:
+        (conf_d / name).chmod(0o644)
+    assert p.returncode == 2, (p.returncode, p.stderr)
+    err = [ln for ln in p.stderr.split("\n") if ln.startswith("ERROR: ")]
+    assert len(err) == 1 and f"{name} (read_error)" in err[0], p.stderr
+    assert "Traceback" not in p.stderr, p.stderr
+
+
+@pytest.mark.parametrize("script, extra", _CLIS, ids=[c[0] for c in _CLIS])
 def test_file_the_exporter_cannot_read_is_warned_and_rc_stays_0(script, extra, tmp_path):
-    """exporter 讀不到的檔（這裡是指向目錄的 symlink `tb.yaml`）：Go 只 WARN 後跳過，
-    不進 parse_failed／skipped，rc 0。讀取端把 da-guard 的那行 WARN 轉印到 stderr，
+    """例外（owner 裁決）：指向目錄的 symlink `tb.yaml`——exporter 本來就不跟進
+    （k8s ConfigMap 巢狀路徑會掛成目錄 symlink）。Go 只 WARN 後跳過，不進
+    parse_failed／skipped／unreadable，rc 0。讀取端把 da-guard 的那行 WARN 轉印到 stderr，
     stdout 照常是一份 JSON。"""
     conf_d = _tree(tmp_path, {"_defaults.yaml": _BASE, "tenant-b.yaml": _B})
     (conf_d / "realdir").mkdir()

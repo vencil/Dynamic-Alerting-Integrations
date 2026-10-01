@@ -11,7 +11,9 @@ of the load; `stderr_lines` every non-empty line da-guard wrote to stderr on
 a run that succeeded (a successful run would otherwise swallow them), split on
 "\n" only. They are not sorted into kinds here. `print_load_warnings` prints
 both: each of those lines behind `DA_GUARD_PREFIX` and escaped with
-`safe_label`, then one named WARN line per skipped file.
+`safe_label`, then one named WARN line per skipped file. A file the load
+cannot stat or read (da-guard's `unreadable`) is not a warning: it raises
+`ParseFailedError`, as a file that does not decode does.
 
 What is passed on is da-guard's stderr line by line, never a faithful copy of
 what the exporter meant: a file name holding a real "\n" is printed by Go as
@@ -42,8 +44,11 @@ only drops that row and /metrics still serves.
 Raises:
 
 * `ParseFailedError` (a `YamlFileError`, `_lib_io`) — the exporter's load
-  skips a file that does not decode; `path` names the first, the one-line
-  message names all, `stderr_lines` carries da-guard's stderr whole (the
+  skips a file that does not decode (`parse_failed`) or that it cannot stat
+  or read (`unreadable`: a dangling symlink, a file it may not read; a
+  symlink to a directory is not one); `path` names the first, the one-line
+  message names all (an unreadable one with its reason, `stat_error` /
+  `read_error`), `stderr_lines` carries da-guard's stderr whole (the
   exporter's reasons among it).
 * `DaGuardNotFoundError` — no da-guard binary; the message says how to get one.
 * `ServedValuesError` — da-guard failed, or its output is not the JSON it
@@ -77,6 +82,7 @@ __all__ = [
     "ServedValuesError",
     "SkippedFile",
     "TenantValues",
+    "UnreadableFile",
     "YamlFileError",
     "DA_GUARD_PREFIX",
     "MISSING_BINARY_MESSAGE",
@@ -115,16 +121,24 @@ class ServedTree(NamedTuple):
     stderr_lines: list[str]  # every non-empty line of da-guard's stderr, as written
 
 
+class UnreadableFile(NamedTuple):
+    file: str    # root-relative slash path, as the exporter's scan keys it
+    reason: str  # closed set: "stat_error" | "read_error"
+
+
 class ParseFailedError(YamlFileError):
-    """The exporter's load skips a file that does not decode (parse_failed).
+    """The exporter's load skips a file that does not decode (parse_failed)
+    or that it cannot stat or read (unreadable).
 
     `str()` keeps `YamlFileError`'s one-line contract; `stderr_lines` is
     da-guard's stderr, every non-empty line as written, for a caller to show
-    below that line."""
+    below that line; `unreadable` the unreadable files ([] when none)."""
 
-    def __init__(self, path: str, cause: Exception, stderr_lines: list[str]) -> None:
+    def __init__(self, path: str, cause: Exception, stderr_lines: list[str],
+                 unreadable: list[UnreadableFile] | None = None) -> None:
         super().__init__(path, cause)
         self.stderr_lines = stderr_lines
+        self.unreadable = list(unreadable or [])
 
 
 class DaGuardNotFoundError(FileNotFoundError):
@@ -225,23 +239,29 @@ def load_served_tree(
         doc = json.loads(proc.stdout.decode("utf-8"))
         parse_failed = list(doc["parse_failed"])
         skipped = [SkippedFile(str(e["file"]), str(e["reason"])) for e in doc["skipped"]]
+        unreadable = [UnreadableFile(str(e["file"]), str(e["reason"])) for e in doc["unreadable"]]
         tenants = doc["tenants"]
     except (ValueError, KeyError, TypeError) as e:  # UnicodeDecodeError is a ValueError
         stale = (" — this da-guard is older than this tool: upgrade or rebuild it"
-                 if isinstance(e, KeyError) and e.args == ("skipped",) else "")
+                 if isinstance(e, KeyError) and e.args in (("skipped",), ("unreadable",)) else "")
         raise ServedValuesError(
             f"da-guard {SUBCOMMAND} exited {proc.returncode} without the expected JSON ({e}){stale}",
             proc.returncode, stderr) from e
 
-    if parse_failed:
-        raise ParseFailedError(
-            str(Path(conf_d) / parse_failed[0]),
-            ValueError(f"the exporter's load skips {len(parse_failed)} file(s) that do not decode: "
-                       f"{', '.join(parse_failed)}"),
-            _nonempty_lines(stderr))
+    if parse_failed or unreadable:
+        clauses = []
+        if parse_failed:
+            clauses.append(f"the exporter's load skips {len(parse_failed)} file(s) that do not decode: "
+                           f"{', '.join(parse_failed)}")
+        if unreadable:
+            clauses.append(f"the exporter's load cannot read {len(unreadable)} file(s): "
+                           f"{', '.join(f'{u.file} ({u.reason})' for u in unreadable)}")
+        first = parse_failed[0] if parse_failed else unreadable[0].file
+        raise ParseFailedError(str(Path(conf_d) / first), ValueError("; ".join(clauses)),
+                               _nonempty_lines(stderr), unreadable)
     if proc.returncode != _EXIT_OK:
         raise ServedValuesError(
-            f"da-guard {SUBCOMMAND} exited {proc.returncode} with no file in parse_failed",
+            f"da-guard {SUBCOMMAND} exited {proc.returncode} with no file in parse_failed or unreadable",
             proc.returncode, stderr)
 
     out: dict[str, TenantValues] = {}

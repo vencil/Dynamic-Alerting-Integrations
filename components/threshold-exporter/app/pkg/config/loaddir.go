@@ -73,11 +73,19 @@ type LoadReport struct {
 	// `tenants: {}`. The exporter serves no tenant from such a file and logs
 	// nothing about it (#2115 R3). nil when there is none.
 	NoTenant []string
+	// Unreadable is TreeScan.Unreadable: the config-named entries the walk
+	// dropped because their stat or read failed (a dangling symlink, a file
+	// the process may not read), each with a closed-set reason. The exporter
+	// logs a WARN for each and serves the rest of the tree without it — the
+	// load still succeeds (#2115). A symlink to a directory is not listed.
+	// nil when there is none.
+	Unreadable []UnreadableFile
 }
 
 // LoadDirReport is LoadDir, also naming the files that contribute no tenant
-// (LoadReport.NoTenant). It adds no verdict of its own: NoTenant is read off
-// the walker's own per-file result on the same cold scan.
+// (LoadReport.NoTenant) and the files the walk could not stat or read
+// (LoadReport.Unreadable). It adds no verdict of its own: both are read off
+// the walker's own result on the same cold scan.
 func LoadDirReport(dir string, logger *log.Logger) (cfg *ThresholdConfig, rep LoadReport, err error) {
 	if logger == nil {
 		logger = discardLogger
@@ -97,6 +105,7 @@ func LoadDirReport(dir string, logger *log.Logger) (cfg *ThresholdConfig, rep Lo
 		return nil, LoadReport{}, err
 	}
 	rep.ParseFailed = built.ParseFailed
+	rep.Unreadable = scan.Unreadable
 	for _, k := range scan.Keys { // sorted
 		f := scan.Files[k]
 		if !isPlatformKey(k) && !f.ParseFailed && len(f.TenantIDs) == 0 {

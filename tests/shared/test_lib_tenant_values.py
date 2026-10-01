@@ -305,6 +305,33 @@ def test_output_without_skipped_is_refused(tmp_path):
     assert "older than this tool: upgrade or rebuild it" in str(ei.value)
 
 
+def test_output_without_unreadable_is_refused(tmp_path):
+    """da-guard 的 JSON 沒有 unreadable（早於該欄位的版本）：不當成「每個檔都讀得到」，而是 raise。"""
+    fake = tmp_path / "old-da-guard"
+    fake.write_text("#!/bin/sh\necho '{\"at\": \"x\", \"parse_failed\": [], \"skipped\": [], "
+                    "\"tenants\": {}}'\n", encoding="utf-8")
+    fake.chmod(0o755)
+    with pytest.raises(tv.ServedValuesError) as ei:
+        tv.load_served_tree(tmp_path, binary=str(fake))
+    assert "unreadable" in str(ei.value)
+    assert "older than this tool: upgrade or rebuild it" in str(ei.value)
+
+
+def test_unreadable_raises_parse_failed_error_naming_file_and_reason(tmp_path, da_guard):
+    """exporter 讀不到的檔（懸空 symlink）：raise ParseFailedError，path 指向該檔，
+    訊息帶封閉值原因，`unreadable` 原樣交出。"""
+    conf_d = _tree(tmp_path, {
+        "_defaults.yaml": _DEFAULTS,
+        "tenant-a.yaml": "tenants:\n  tenant-a:\n    mysql_connections: 70\n",
+    })
+    (conf_d / "tenant-b.yaml").symlink_to("missing.yaml")
+    with pytest.raises(tv.ParseFailedError) as ei:
+        tv.load_served_tree(conf_d, binary=da_guard)
+    assert ei.value.path == str(conf_d / "tenant-b.yaml")
+    assert ei.value.unreadable == [tv.UnreadableFile("tenant-b.yaml", "stat_error")]
+    assert "cannot read 1 file(s): tenant-b.yaml (stat_error)" in str(ei.value)
+
+
 def test_exit_on_served_values_error_is_rc2_one_line(capsys):
     @tv.exit_on_served_values_error
     def main():
