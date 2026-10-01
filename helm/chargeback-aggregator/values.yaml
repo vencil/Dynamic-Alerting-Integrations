@@ -19,10 +19,10 @@ image:
   # renovate: datasource=docker depName=gcr.io/distroless/python3-debian13
   repository: gcr.io/distroless/python3-debian13
   tag: "nonroot"
-  # Optional digest pin (#566 T5). See helm/victorialogs/values.yaml
-  # for rationale + how to fetch.
+  # Pinned by digest (#902 L2), bumped by Renovate (#902 L3). See
+  # helm/victorialogs/values.yaml for rationale + how to fetch.
   # ⛔ Digest AUTHORITATIVE: `--set image.tag=…` alone won't upgrade (k8s keeps THIS
-  #    digest); also set/clear image.digest. #902 L2 (L3/Renovate will automate).
+  #    digest); set image.digest to the new tag's digest too. Do NOT clear it.
   digest: "sha256:8ee214843129f43e2ebf5e0ca9f2e4e6d8292143d1b8a6787f169b5898578884"
   pullPolicy: IfNotPresent
 
