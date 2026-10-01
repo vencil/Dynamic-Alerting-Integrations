@@ -222,28 +222,78 @@ data: {"type":"config_change","tenant_id":"db-a-prod","timestamp":"2026-05-03T10
 
 ### 環境變數
 
+預設欄寫的是**沒設這個變數時的實際值**;`(空)` = 空字串,意義寫在說明欄。表格由 `cmd/server/env_readme_parity_test.go` 對原始碼比對:變數名單兩向一致,預設值能從原始碼推得的逐一比對(推不出的幾個在測試裡列明原因)。
+
+**基本**
+
 | 變數 | 預設 | 說明 |
 |------|------|------|
 | `TA_CONFIG_DIR` | `/conf.d` | 租戶 YAML 目錄 |
-| `TA_GIT_DIR` | (同 config dir) | Git repository 根目錄 |
-| `TA_RBAC_PATH` | (空 = open-read) | `_rbac.yaml` 路徑 |
+| `TA_GIT_DIR` | (空) | Git repository 根目錄;空 = 同 `TA_CONFIG_DIR` |
+| `TA_RBAC_PATH` | (空) | `_rbac.yaml` 路徑;空 = open-read |
 | `TA_ADDR` | `:8080` | HTTP listen address |
+| `TA_HUMAN_SOCKET` | (空) | 給 human plane(同 pod 的 oauth2-proxy)用的 Unix socket 路徑;設了就在這個 socket 上**另外**提供同一套路由。空 = 只有 TCP |
+| `TA_LOG_LEVEL` | `info` | `debug` / `info` / `warn` / `error`;其他值當成 `info` |
+
+**請求上限與逾時**
+
+| 變數 | 預設 | 說明 |
+|------|------|------|
 | `TA_RATE_LIMIT_PER_MIN` | `100` | 逐呼叫者限流;`0` 關閉;非整數值回退預設並印 WARN |
 | `TA_MAX_BODY_BYTES` | `1048576` | request body 上限(bytes) |
 | `TA_MAX_BATCH_BODY_BYTES` | `262144` | **兩個**批次端點(`POST /tenants/batch`、`POST /groups/{id}/batch`)的 request body 上限(bytes)。比 `TA_MAX_BODY_BYTES` 緊,因為批次在持有 single-writer token 期間會把整個 body 反覆解析,超量會延遲其他租戶的寫入;group batch 更把同一個 patch 套用到每個成員。超量回 **413** (`code: PAYLOAD_TOO_LARGE`),訊息寫「at least N bytes」——只讀到 `limit+1`,精確長度結構上不可知 |
 | `TA_MAX_TENANT_DOC_BYTES` | `65536` | 單一租戶文件的 parse 前上限(bytes)。量的是寫入路徑實際會解析的那份文件 —— 在合併路徑上那是**合併後的整份檔案**,不是請求裡的 patch |
 | `TA_READ_TIMEOUT` / `TA_WRITE_TIMEOUT` / `TA_IDLE_TIMEOUT` | `15s` / `30s` / `60s` | HTTP server timeout(大批次 + 慢 git push 時可調高 write timeout) |
-| `TA_LOG_LEVEL` | `info` | `debug` / `info` / `warn` / `error` |
-| `TA_WRITE_MODE` | `direct` | `direct` / `pr` / `pr-github` / `pr-gitlab`。⛔ 前後空白先 trim,trim 後須逐字等於這四個之一;大小寫敏感,不符者(含 `DIRECT`、打錯字、`--write-mode=` 空值)一律**拒絕啟動**,不會退回 `direct`([ADR-034](../../docs/adr/034-legal-value-as-fallback.md)) |
-| `TA_GITHUB_TOKEN` / `TA_GITHUB_REPO` / `TA_GITHUB_BASE_BRANCH` / `TA_GITHUB_API_URL` | (空) | GitHub PR 模式;repo 為 `owner/repo`,API URL 供 Enterprise |
-| `TA_GITLAB_TOKEN` / `TA_GITLAB_PROJECT` / `TA_GITLAB_TARGET_BRANCH` / `TA_GITLAB_API_URL` | (空) | GitLab MR 模式;project 為 `group/project` 或數字 ID,API URL 供自託管 |
-| `GIT_COMMITTER_NAME` / `GIT_COMMITTER_EMAIL` | (空) | service account 身分;空時 fallback 到 author |
-| `TA_FEDERATION_KEY` | (空 = 停用) | 簽發聯邦 token 的私鑰 PEM 路徑;空則聯邦 token 端點不註冊 |
-| `TA_FEDERATION_STORE` | `tenant-federation-store` | 存放聯邦 token 記錄的 ConfigMap 名稱(Helm chart 預建) |
-| `TA_FEDERATION_NAMESPACE` | (空 = pod 自身 namespace) | 上述 ConfigMap 所在 namespace |
-| `TA_FEDERATION_TOKEN_TTL` | `4h` | 聯邦 token 效期 |
+| `TA_SSE_HEARTBEAT` | `25s` | SSE 每個客戶端的 heartbeat 間隔;須小於下游 proxy 的 idle timeout。`0` 關閉(會讓卡住的閒置連線再度累積) |
+| `TA_SSE_WRITE_TIMEOUT` | `10s` | SSE 單次寫入期限,卡住的客戶端在期限後釋放;`0` 關閉 |
+| `TA_SSE_MAX_LIFETIME` | `0s` | SSE 連線最長存活時間;`0` = 不限 |
 
-布林開關(`TA_RBAC_EMPTY_OPEN` / `TA_RBAC_METADATA_SCOPE_ENFORCE` / `TA_RBAC_METADATA_WRITE_SCOPE_ENFORCE` / `TA_RBAC_ORG_SCOPE_ENFORCE` / `TA_DEV_BYPASS_AUTH` / `TA_MACHINE_IDENTITY_AUDIT`)另立一格:它們是同名 flag 的**預設值**,一律以 `strconv.ParseBool` 解讀——與命令列走的是同一支解析器。接受 `1` / `t` / `T` / `TRUE` / `true` / `True` / `0` / `f` / `F` / `FALSE` / `false` / `False`;未設或只有空白 = 維持該 flag 自己的預設;**其餘任何值一律啟動失敗**,不會靜默退成 false——這幾支開關決定某道檢查跑不跑,打錯字若退成 false 就與「刻意關掉」無法區分([#1599](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/1599))。⚠️ **`yes` / `on` 在 #1599 之前被當成 true,現已改為啟動失敗**;`t` / `T` 則相反,過去被靜默當成 false,現在是 true。
+**寫回(Git／PR／MR)**
+
+| 變數 | 預設 | 說明 |
+|------|------|------|
+| `TA_WRITE_MODE` | `direct` | `direct` / `pr` / `pr-github` / `pr-gitlab`。⛔ 前後空白先 trim,trim 後須逐字等於這四個之一;大小寫敏感,不符者(含 `DIRECT`、打錯字、`--write-mode=` 空值)一律**拒絕啟動**,不會退回 `direct`([ADR-034](../../docs/adr/034-legal-value-as-fallback.md)) |
+| `TA_WRITE_QUEUE_DEPTH` | `5` | 排在進行中那筆寫入後面、可等待的寫入數;再多的直接拒絕。`0` = 不排隊 |
+| `TA_GIT_BASE_BRANCH` | `main` | PR／MR 模式下,本地 git 開分支的基準 branch(conf.d repo 預設 branch 不是 `main` 時要設) |
+| `TENANT_API_GIT_TIMEOUT` | `60s` | 單一 git 指令的期限(⚠️ 前綴是 `TENANT_API_`,不是 `TA_`) |
+| `TA_GIT_FETCH_TIMEOUT` | `5s` | PR 寫入前在寫入鎖內 fetch 基準 branch 的期限;forge 變慢時快速回 503、放掉鎖 |
+| `TA_GITHUB_TOKEN` / `TA_GITHUB_REPO` / `TA_GITHUB_API_URL` | (空) | GitHub PR 模式:token 與 repo(`owner/repo`)必填;API URL 供 Enterprise |
+| `TA_GITHUB_BASE_BRANCH` | `main` | GitHub PR 的目標 branch |
+| `TA_GITLAB_TOKEN` / `TA_GITLAB_PROJECT` / `TA_GITLAB_API_URL` | (空) | GitLab MR 模式:token 與 project(`group/project` 或數字 ID)必填;API URL 供自託管 |
+| `TA_GITLAB_TARGET_BRANCH` | `main` | GitLab MR 的目標 branch |
+| `GIT_COMMITTER_NAME` / `GIT_COMMITTER_EMAIL` | (空) | service account 身分;空時 fallback 到 author |
+
+**聯邦**
+
+| 變數 | 預設 | 說明 |
+|------|------|------|
+| `TA_FEDERATION_KEY` | (空) | 簽發聯邦 token 的私鑰 PEM 路徑;空 = 聯邦 token 端點不註冊 |
+| `TA_FEDERATION_STORE` | `tenant-federation-store` | 存放聯邦 token 記錄的 ConfigMap 名稱(Helm chart 預建) |
+| `TA_FEDERATION_NAMESPACE` | (空) | 上述 ConfigMap 所在 namespace;空 = pod 自身 namespace |
+| `TA_FEDERATION_TOKEN_TTL` | `4h` | 聯邦 token 效期 |
+| `TA_FEDERATION_PROMETHEUS_URL` | (空) | 聯邦准入檢查查詢的 Prometheus／VictoriaMetrics base URL;空 = 不做准入檢查 |
+| `TA_FEDERATION_HEARTBEAT_INTERVAL` | `5m` | 撤銷證據通道的存活 heartbeat 間隔;須遠小於 reconciler 的 30m 視窗 |
+
+**身分與 RBAC**
+
+| 變數 | 預設 | 說明 |
+|------|------|------|
+| `TA_IDENTITY_CLAIM_HEADERS` | (空) | `claim=Header-Name` 逗號分隔,宣告從哪些受信任 header 讀取具名 claim。空 = 不讀 |
+| `TA_RBAC_EMPTY_OPEN` | `false` | `--rbac` 指到的檔解析出 0 個 group 時,改為 open-read(預設 fail closed) |
+| `TA_RBAC_METADATA_SCOPE_ENFORCE` / `TA_RBAC_METADATA_WRITE_SCOPE_ENFORCE` / `TA_RBAC_ORG_SCOPE_ENFORCE` | `false` | 各 scope 軸由 shadow 切成 enforce;切之前看 `tenant_api_scope_would_deny_total` 對應的 `axis` |
+| `TA_MACHINE_IDENTITY_AUDIT` | `false` | 以 TokenReview 稽核呼叫端的 ServiceAccount token;只記錄,不影響授權。需要 in-cluster config |
+| `TA_MACHINE_IDENTITY_AUDIENCE` | `tenant-api` | 上述稽核要求的 audience |
+| `TA_MACHINE_IDENTITY_ISSUER` | (空) | 稽核的 issuer 允許清單(逗號分隔);空 = 全部交給 TokenReview |
+
+**本機開發(⛔ 不得用於正式環境)**
+
+| 變數 | 預設 | 說明 |
+|------|------|------|
+| `TA_DEV_BYPASS_AUTH` | `false` | 沒有 oauth2-proxy header 時注入開發身分;在 Kubernetes 內啟動會 panic([ADR-022](../../docs/adr/022-dev-auth-bypass-four-layer-containment.md)) |
+| `TA_DEV_BYPASS_EMAIL` | `dev@local` | 注入的身分 email |
+| `TA_DEV_BYPASS_GROUPS` | `demo-admins` | 注入的 IdP group(逗號分隔;須在 `_rbac.yaml` 對得到租戶) |
+
+布林開關(上表預設為 `false` 的那幾支)的值是同名 flag 的**預設值**,一律以 `strconv.ParseBool` 解讀——與命令列走的是同一支解析器。接受 `1` / `t` / `T` / `TRUE` / `true` / `True` / `0` / `f` / `F` / `FALSE` / `false` / `False`;未設或只有空白 = 維持該 flag 自己的預設;**其餘任何值一律啟動失敗**,不會靜默退成 false——這幾支開關決定某道檢查跑不跑,打錯字若退成 false 就與「刻意關掉」無法區分([#1599](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/1599))。⚠️ **`yes` / `on` 在 #1599 之前被當成 true,現已改為啟動失敗**;`t` / `T` 則相反,過去被靜默當成 false,現在是 true。
 
 ### RBAC YAML
 
