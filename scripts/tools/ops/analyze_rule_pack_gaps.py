@@ -78,8 +78,9 @@ def load_tenant_configs(config_dir=None, tenant_config=None):
       (``disable``) or with no row on /metrics (e.g. no default for it) does
       not. A file the load serves no tenant from (no ``tenants:`` mapping)
       is named on stderr, not read as a tenant; whatever da-guard prints on
-      stderr is passed on whole, line by line. da-guard missing or failing,
-      or a file the load cannot decode, raises (the CLI exits 2).
+      stderr is passed on line by line, each behind ``DA_GUARD_PREFIX``.
+      da-guard missing or failing, or a file the load cannot decode, raises
+      (the CLI exits 2).
     - Single-file branch: unchanged — the file as written. It unwraps the
       ``tenants:`` wrapper, and derives the flat-format tenant name via
       ``splitext`` (so ``x.yml`` → ``x``). It is not switched (owner, #2115):

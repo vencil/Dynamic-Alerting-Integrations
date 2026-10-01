@@ -574,7 +574,7 @@ da-tools blind-spot --config-dir <path> [options]
 - **Blind Spots**：有 exporter 但無 tenant 配置
 - **Unrecognized**：無法推斷 DB 類型的 job
 
-「有對應 tenant 配置」指 exporter 的 `/metrics` 對該租戶實際發出的閾值（經 `da-guard served-values` 讀出，#2115）：值寫在 `defaults:`、平台檔 `tenants:`、租戶檔或子目錄都算，子目錄裡的租戶也算；`disable` 的鍵、沒有預設值而不會發出的鍵不算。沒有 `tenants:` 的檔不是租戶，stderr 逐檔印 `WARN`。exporter 讀不到的檔（例如權限不足、指向目錄的 symlink）只跳過，不影響結束碼；da-guard 在 stderr 印的內容逐行照轉到 stderr。需要 da-guard（映像內建；repo 裡直接跑時用 `$DA_GUARD_BINARY` 或 `$PATH`）。
+「有對應 tenant 配置」指 exporter 的 `/metrics` 對該租戶實際發出的閾值（經 `da-guard served-values` 讀出，#2115）：值寫在 `defaults:`、平台檔 `tenants:`、租戶檔或子目錄都算，子目錄裡的租戶也算；`disable` 的鍵、沒有預設值而不會發出的鍵不算。沒有 `tenants:` 的檔不是租戶，stderr 逐檔印 `WARN`。exporter 讀不到的檔（例如權限不足、指向目錄的 symlink）只跳過，不影響結束碼；da-guard 在 stderr 印的內容逐行轉印到 stderr，每行前面加 `  da-guard| `、經控制字元跳脫（檔名裡的換行會讓 da-guard 印成兩行，轉印時無法還原，但不會出現在行首）。需要 da-guard（映像內建；repo 裡直接跑時用 `$DA_GUARD_BINARY` 或 `$PATH`）。
 
 **範例**
 
@@ -590,7 +590,7 @@ da-tools blind-spot --config-dir ./conf.d --json-output
 |------|------|
 | `0` | 成功（無論是否有盲區） |
 | `1` | 只有未捕捉例外（traceback）會回 1。Prometheus 連不上只印 WARN，照常以 0 結束 |
-| `2` | 呼叫端錯誤：`--config-dir` 底下有 exporter 解析失敗而整份跳過的檔（例如內容不是 UTF-8 或不是合法 YAML；`ERROR` 行指名哪一檔，da-guard 在 stderr 印的內容（含 exporter 的解析原因）逐行縮排附在下面）、整棵樹被 exporter 拒收（例如同一租戶在兩個檔宣告），或找不到 da-guard／da-guard 執行失敗 |
+| `2` | 呼叫端錯誤：`--config-dir` 底下有 exporter 解析失敗而整份跳過的檔（例如內容不是 UTF-8 或不是合法 YAML；`ERROR` 行指名哪一檔，da-guard 在 stderr 印的內容（含 exporter 的解析原因）逐行加 `  da-guard| ` 附在下面；其中的 `exit 3` 是 da-guard 自己的結束碼，本工具以 2 結束）、整棵樹被 exporter 拒收（例如同一租戶在兩個檔宣告），或找不到 da-guard／da-guard 執行失敗 |
 
 ---
 
@@ -2299,7 +2299,7 @@ da-tools analyze-gaps (--tenant-config <FILE> | --config-dir <DIR>) [options]
 | `--json` | stdout 只印 JSON | false |
 | `--metric-dictionary <FILE>` | 指標字典；給了但檔案不存在時結束碼 2 | 工具同層的 `metric-dictionary.yaml`（映像），或上一層（repo 的 `scripts/tools/`） |
 
-`--config-dir` 讀的是 exporter 的 `/metrics` 對每個租戶實際發出的閾值與其值（經 `da-guard served-values`，#2115）：繼承來的 `custom_` 閾值也列入，`disable` 的鍵、沒有預設值而不會發出的鍵不列；沒有 `tenants:` 的檔不是租戶，stderr 逐檔印 `WARN`；exporter 讀不到的檔只跳過、不影響結束碼，da-guard 在 stderr 印的內容逐行照轉到 stderr。需要 da-guard（映像內建；repo 裡直接跑時用 `$DA_GUARD_BINARY` 或 `$PATH`）。`--tenant-config` 照舊讀單一檔案的原文。
+`--config-dir` 讀的是 exporter 的 `/metrics` 對每個租戶實際發出的閾值與其值（經 `da-guard served-values`，#2115）：繼承來的 `custom_` 閾值也列入，`disable` 的鍵、沒有預設值而不會發出的鍵不列；沒有 `tenants:` 的檔不是租戶，stderr 逐檔印 `WARN`；exporter 讀不到的檔只跳過、不影響結束碼，da-guard 在 stderr 印的內容逐行轉印到 stderr，每行前面加 `  da-guard| `；da-guard 拒收時，`ERROR` 行下面附的 da-guard 訊息若寫 `exit 3`，那是 da-guard 自己的結束碼，本工具以 2 結束。需要 da-guard（映像內建；repo 裡直接跑時用 `$DA_GUARD_BINARY` 或 `$PATH`）。`--tenant-config` 照舊讀單一檔案的原文。
 
 兩個預設位置都找不到字典時，stderr 印一行 `WARN`，比對退回名稱前綴與字詞重疊（`match_type: "prefix"`、`confidence: 0.7`）。⚠️ v2.9.0 映像不受影響（字典與工具同層）；但在 repo 裡用那個版本的程式直接跑 `python3 scripts/tools/ops/analyze_rule_pack_gaps.py` 時找不到字典，而且不會警告，請帶 `--metric-dictionary scripts/tools/metric-dictionary.yaml`。 <!-- image-caveat: v2.9.0 -->
 

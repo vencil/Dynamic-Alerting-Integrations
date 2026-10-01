@@ -8,10 +8,15 @@ subcommand and parses its JSON; it decides nothing about the values itself.
 load read but serves no tenant from (a file outside the `_` files with no
 `tenants:` mapping, #2115 R3), each a `SkippedFile(file, reason)` in the words
 of the load; `stderr_lines` every non-empty line da-guard wrote to stderr on
-a run that succeeded, as written (a successful run would otherwise swallow
-them). They are not sorted into kinds here: what da-guard prints is passed on
-whole. `print_load_warnings` prints both: those lines, then one named WARN
-line per skipped file.
+a run that succeeded (a successful run would otherwise swallow them), split on
+"\n" only. They are not sorted into kinds here. `print_load_warnings` prints
+both: each of those lines behind `DA_GUARD_PREFIX` and escaped with
+`safe_label`, then one named WARN line per skipped file.
+
+What is passed on is da-guard's stderr line by line, never a faithful copy of
+what the exporter meant: a file name holding a real "\n" is printed by Go as
+two lines, and nothing here can tell those two from two messages. The prefix
+is what keeps either of them off column 0.
 
 `load_served_values(conf_d, at=None, binary=None)` returns
 `{tenant_id: TenantValues}`:
@@ -73,6 +78,7 @@ __all__ = [
     "SkippedFile",
     "TenantValues",
     "YamlFileError",
+    "DA_GUARD_PREFIX",
     "MISSING_BINARY_MESSAGE",
     "ParseFailedError",
     "exit_on_served_values_error",
@@ -143,10 +149,19 @@ def _stderr_text(b: bytes | str | None) -> str:
     return b if isinstance(b, str) else b.decode("utf-8", errors="backslashreplace")
 
 
+# Every line of da-guard's stderr a tool passes on is printed behind this, on
+# both paths (a successful run, and the lines below an ERROR), so none of it
+# ever starts at column 0 — not even text after a "\n" inside a file name.
+DA_GUARD_PREFIX = "  da-guard| "
+
+
 def _nonempty_lines(text: str) -> list[str]:
-    """Every non-empty line of `text`, trailing whitespace dropped and the
-    leading indent kept (a continuation line of a Go error is indented)."""
-    return [ln.rstrip() for ln in text.splitlines() if ln.strip()]
+    """Every non-empty line of `text`, split on "\n" ONLY — `str.splitlines`
+    also splits on NEL, \v, \f, \x1c-\x1e and U+2028/2029, which can sit in a
+    file name, and would cut the line before `safe_label` could escape them.
+    Trailing whitespace (a "\r" too) is dropped, the leading indent kept (a
+    continuation line of a Go error is indented)."""
+    return [ln.rstrip() for ln in text.split("\n") if ln.strip()]
 
 
 def _threshold(v: Any) -> float:
@@ -245,13 +260,14 @@ def load_served_tree(
 
 
 def print_load_warnings(tree: ServedTree, stream: TextIO | None = None) -> None:
-    """Every non-empty line da-guard wrote to stderr (as written, indent
-    kept), then one `WARN: <file>: <reason>` line per file the load serves no
-    tenant from, in the load's order (#2115 R3). Every line is escaped for
-    the terminal (`safe_label`): the file names in it come from the tree."""
+    """Every non-empty line da-guard wrote to stderr, each behind
+    `DA_GUARD_PREFIX`, then one `WARN: <file>: <reason>` line per file the
+    load serves no tenant from, in the load's order (#2115 R3). Every line is
+    escaped for the terminal (`safe_label`): the file names in it come from
+    the tree."""
     stream = sys.stderr if stream is None else stream
     for line in tree.stderr_lines:
-        print(safe_label(line), file=stream)
+        print(f"{DA_GUARD_PREFIX}{safe_label(line)}", file=stream)
     for s in tree.skipped:
         print(f"WARN: {safe_label(s.file)}: {s.reason}", file=stream)
 
@@ -262,7 +278,7 @@ _F = TypeVar("_F", bound=Callable[..., Any])
 def exit_on_served_values_error(fn: _F) -> _F:
     """Decorate a CLI `main` so that da-guard missing or failing exits 2
     (`EXIT_CALLER_ERROR`) with one `ERROR:` line; da-guard's stderr follows,
-    every non-empty line escaped and indented.
+    every non-empty line escaped and behind `DA_GUARD_PREFIX`.
 
     `ParseFailedError` gets the line `exit_on_yaml_file_error` prints
     (`ERROR: cannot read <path>: <message>`) with da-guard's stderr below it:
@@ -290,7 +306,7 @@ def exit_on_served_values_error(fn: _F) -> _F:
 def _print_error_with_stderr(head: str, stderr_lines: list[str]) -> None:
     print(f"ERROR: {safe_label(head)}", file=sys.stderr)
     for line in stderr_lines:
-        print(f"  {safe_label(line)}", file=sys.stderr)
+        print(f"{DA_GUARD_PREFIX}{safe_label(line)}", file=sys.stderr)
     sys.exit(EXIT_CALLER_ERROR)
 
 

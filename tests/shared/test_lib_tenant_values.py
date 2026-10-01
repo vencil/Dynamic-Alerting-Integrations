@@ -328,7 +328,7 @@ def test_da_guard_warn_lines_are_kept_on_a_successful_run(tmp_path, da_guard, ca
     assert len(tree.stderr_lines) == 1, tree.stderr_lines
     assert tree.stderr_lines[0].startswith("WARN: cannot read ") and "tb.yaml" in tree.stderr_lines[0]
     tv.print_load_warnings(tree)
-    assert capsys.readouterr().err.splitlines() == tree.stderr_lines
+    assert capsys.readouterr().err.splitlines() == [tv.DA_GUARD_PREFIX + ln for ln in tree.stderr_lines]
 
 
 def test_missing_binary_message_names_only_what_these_tools_take(monkeypatch, capsys):
@@ -373,4 +373,5 @@ def test_served_values_error_stderr_is_printed_line_by_line(capsys):
     with pytest.raises(SystemExit):
         main()
     assert capsys.readouterr().err.splitlines() == [
-        "ERROR: da-guard served-values exited 2", "  first", "  second ?[31m"]
+        "ERROR: da-guard served-values exited 2",
+        tv.DA_GUARD_PREFIX + "first", tv.DA_GUARD_PREFIX + "second ?[31m"]

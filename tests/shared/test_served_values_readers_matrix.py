@@ -192,7 +192,7 @@ def test_file_the_exporter_cannot_read_is_warned_and_rc_stays_0(script, extra, t
     (conf_d / "tb.yaml").symlink_to("realdir")
     p = _cli(script, conf_d, *extra)
     assert p.returncode == 0, p.stderr
-    warn = [ln for ln in p.stderr.splitlines() if ln.startswith("WARN: cannot read ")]
+    warn = [ln for ln in p.stderr.split("\n") if ln.startswith(_P + "WARN: cannot read ")]
     assert len(warn) == 1 and "tb.yaml" in warn[0], p.stderr
     json.loads(p.stdout)
 
@@ -200,6 +200,7 @@ def test_file_the_exporter_cannot_read_is_warned_and_rc_stays_0(script, extra, t
 # ── da-guard 的 stderr：照轉，不分類、不篩選（第 2 輪盲審 F1–F4）──────────────
 
 _A_OK = "tenants:\n  tenant-a:\n    mysql_connections: 70\n"
+_P = tv.DA_GUARD_PREFIX
 _DATE = re.compile(r"^\d{4}/\d{2}/\d{2} \d{2}:\d{2}:\d{2} ")
 
 # rc 0 時 da-guard 寫在 stderr 的幾種形狀；每一格的每一行都要原樣（逐行、保留縮排）出現。
@@ -230,16 +231,16 @@ def test_da_guard_stderr_is_passed_on_whole_at_rc_0(script, extra, shape, tmp_pa
     assert direct.returncode == 0, direct.stderr  # 前提：da-guard 這格是 rc 0
     p = _cli(script, conf_d, *extra)
     assert p.returncode == 0, p.stderr
-    # 工具 stderr 包含 da-guard stderr 的每一個非空行（只經 safe_label，這些行沒有控制字元）。
-    # 兩次執行的日期時間前綴可能差一秒，比對前去掉。
-    got = [_DATE.sub("", ln) for ln in p.stderr.splitlines()]
-    da_lines = [_DATE.sub("", ln.rstrip()) for ln in direct.stderr.splitlines() if ln.strip()]
+    # 工具 stderr 包含 da-guard stderr 的每一個非空行，各自加上固定前綴（只經 safe_label，
+    # 這些行沒有控制字元）。兩次執行的日期時間前綴可能差一秒，比對前去掉。
+    passed_on = [ln[len(_P):] for ln in p.stderr.split("\n") if ln.startswith(_P)]
+    got = [_DATE.sub("", ln) for ln in passed_on]
+    da_lines = [_DATE.sub("", ln.rstrip()) for ln in direct.stderr.split("\n") if ln.strip()]
     assert da_lines and all(ln in got for ln in da_lines), (da_lines, got)
     for want in wants:  # 以及每個形狀該有的那幾行
         assert any(want in ln for ln in got), (want, got)
-    if shape == "date-prefixed WARN":  # 前綴本身也照轉，不被剝掉
-        assert any(_DATE.match(ln) and "WARN: invalid expires" in ln
-                   for ln in p.stderr.splitlines()), p.stderr
+    if shape == "date-prefixed WARN":  # 日期時間前綴本身也照轉，不被剝掉
+        assert any(_DATE.match(ln) and "WARN: invalid expires" in ln for ln in passed_on), p.stderr
     json.loads(p.stdout)
 
 
@@ -262,7 +263,48 @@ def test_several_files_dropped_each_reason_shown_below_one_error_line(script, ex
     assert len(err) == 1, lines
     head, below = lines[err[0]], lines[err[0] + 1:]
     assert "x1.yaml, x2.yaml, x3.yaml" in head and "defaults found" not in head, head
-    assert all(ln.startswith("  ") for ln in below), below
+    assert all(ln.startswith(_P) for ln in below), below
     for reason in ("did not find expected", "invalid leading UTF-8 octet",
-                   "    line 2: cannot unmarshal !!seq", "defaults found in td.yaml"):
+                   _P + "  line 2: cannot unmarshal !!seq", "defaults found in td.yaml"):
         assert any(reason in ln for ln in below), (reason, below)
+
+
+# ── 檔名裡的換行：轉印的每一行都在前綴之後，不會出現在第 0 欄（第 3 輪盲審 F6）──
+
+_FORGED = "[OK] forged.yaml"
+
+
+def _defaults_in_tenant_file(conf_d: Path, name: bytes) -> None:
+    """一個租戶檔，內含 `defaults:`：Go 以 `%s` 把檔名印進 rc 0 的 WARN。"""
+    (conf_d / name.decode("utf-8")).write_bytes(
+        b"defaults:\n  mysql_connections: 5\ntenants:\n  td:\n    mysql_connections: 1\n")
+
+
+@pytest.mark.parametrize("script, extra", _CLIS, ids=[c[0] for c in _CLIS])
+def test_nel_in_a_file_name_does_not_start_a_line(script, extra, tmp_path):
+    """NEL（U+0085）不再被當成換行切開：整行留在前綴之後，NEL 經 safe_label 變成 `?`。"""
+    conf_d = _tree(tmp_path, {"_defaults.yaml": _BASE, "tenant-b.yaml": _B})
+    _defaults_in_tenant_file(conf_d, b"nel\xc2\x85" + _FORGED.encode())
+    p = _cli(script, conf_d, *extra)
+    assert p.returncode == 0, p.stderr
+    lines = p.stderr.split("\n")
+    assert not any(ln.startswith(_FORGED) for ln in lines), lines
+    hit = [ln for ln in lines if _FORGED in ln]
+    assert hit and all(ln.startswith(_P) for ln in hit), hit
+    assert any("nel?" + _FORGED in ln for ln in hit), hit
+    assert "\x85" not in p.stderr
+    json.loads(p.stdout)
+
+
+@pytest.mark.parametrize("script, extra", _CLIS, ids=[c[0] for c in _CLIS])
+def test_real_newline_in_a_file_name_stays_behind_the_prefix(script, extra, tmp_path):
+    """真的 `\n`：Go 以 `%s` 印出時在位元組層就是兩行，這裡分不出來；
+    兩段都在前綴之後，偽造的文字不會出現在第 0 欄。"""
+    conf_d = _tree(tmp_path, {"_defaults.yaml": _BASE, "tenant-b.yaml": _B})
+    _defaults_in_tenant_file(conf_d, b"nl\n" + _FORGED.encode())
+    p = _cli(script, conf_d, *extra)
+    assert p.returncode == 0, p.stderr
+    lines = p.stderr.split("\n")
+    assert not any(ln.startswith(_FORGED) for ln in lines), lines
+    assert any(ln.startswith(_P + _FORGED) for ln in lines), lines
+    json.loads(p.stdout)

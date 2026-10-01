@@ -121,7 +121,7 @@ def load_monitored_db_types(config_dir):
     and at any depth. A key switched off (`disable`) or with no row on
     /metrics (e.g. no default for it) does not count. Files the load serves
     no tenant from are named on stderr, after whatever da-guard prints on
-    stderr (passed on whole, line by line). da-guard missing or failing, or a
+    stderr (line by line, each behind `DA_GUARD_PREFIX`). da-guard missing or failing, or a
     file the load cannot decode, raises (the CLI exits 2).
     """
     result = {}
