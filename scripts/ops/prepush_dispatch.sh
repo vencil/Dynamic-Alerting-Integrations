@@ -90,8 +90,8 @@ for _guard in "${GUARDS[@]}"; do
 [prepush_dispatch] ⛔ $_guard is missing next to this script, so one of the
 pre-push guards cannot run. Stopping here rather than running the rest.
 
-The guards are version-controlled files, so restore them from git:
-    git checkout -- scripts/ops/
+The guards are version-controlled files, so restore it from git:
+    git checkout HEAD -- $_path
 
 ⛔ Not the installer: it writes .git/hooks, never scripts/ops, so it exits 0
 and changes nothing here. And do not reach for --no-verify or delete

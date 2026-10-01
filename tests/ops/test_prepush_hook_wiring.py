@@ -1439,8 +1439,8 @@ _HELPER_MISSING = {
     "require_preflight_pass.sh": "_prepush_refs.sh is not next to",
     "pre_push_mkdocs_strict.sh": "_prepush_refs.sh is not next to",
 }
-_RESTORE = "git checkout -- scripts/ops/"
 _INSTALL = "bash scripts/ops/install_prepush_hook.sh"
+_RESTORE_RE = re.compile(r"^\s*git checkout HEAD -- (\S.*)$", re.M)
 
 
 def _helper_missing_lines(out: str) -> list[str]:
@@ -1453,63 +1453,71 @@ def _assert_the_guards_are_back(work: Path) -> None:
     absent means "fixed", not "never ran"."""
     r, out = _push(work, "HEAD:refs/heads/main")
     assert r.returncode != 0 and _BANNER in out, f"the guards did not run:\n{out}"
-    assert not _helper_missing_lines(out), f"following the message did not fix it:\n{out}"
+    assert not _helper_missing_lines(out), f"the guards still cannot find their helper:\n{out}"
 
 
 @pytest.mark.parametrize("guard", sorted(_HELPER_MISSING))
-@pytest.mark.parametrize("slot", ["pre-push", "pre-push.chained"])
-def test_a_single_file_copy_is_named_and_the_way_back_works(
+@pytest.mark.parametrize("slot", ["pre-push", "pre-push.chained", "pre-push.legacy"])
+def test_a_stale_guard_copy_is_replaced_by_the_installer(
     tmp_path: Path, guard: str, slot: str
 ) -> None:
-    """A guard copied alone into .git/hooks (the recipe before #1689) cannot
-    find its helper. Re-running the installer does not fix that: it moves the
-    copy to pre-push.chained and the dispatcher keeps running it — the
-    ``pre-push.chained`` row is the state a user is in after doing just that.
-    The message must name the copy, and deleting it then installing must work.
-    """
+    """A guard copied alone into the hooks directory (the recipe before #1689)
+    cannot find its helper, and every message such a copy has ever printed says
+    to run the installer. Copies already out there carry their old bytes, so the
+    fix has to be the installer: it must replace the copy, not chain it.
+    ``pre-push.chained`` is where an earlier installer put one; ``pre-push.legacy``
+    is where pre-commit migrates one."""
     work = _make_repo(tmp_path, _PROTECT_ONLY)
-    copy = work / ".git" / "hooks" / "pre-push"
-    copy.write_bytes((_OPS / guard).read_bytes())
-    copy.chmod(0o755)
+    hooks = work / ".git" / "hooks"
     if slot == "pre-push.chained":
         assert _install_guards(work).returncode == 0
-        copy = copy.with_name(slot)
-        assert copy.exists()
+    elif slot == "pre-push.legacy":
+        _install_precommit(work)
+    copy = hooks / slot
+    copy.write_bytes((_OPS / guard).read_bytes())
+    copy.chmod(0o755)
 
     r, out = _push(work, "HEAD:refs/heads/feat/legacy")
     assert r.returncode != 0, f"a broken install silently allowed the push:\n{out}"
-    named = _helper_missing_lines(out)
-    assert any(re.search(rf"\.git/hooks/{re.escape(slot)}(?![\w.])", ln) for ln in named), (
-        f"the message does not name the copy at .git/hooks/{slot}:\n{out}"
-    )
-    assert _INSTALL in out, out
+    assert _helper_missing_lines(out) and _INSTALL in out, out
 
-    copy.unlink()
     r = _install_guards(work)
     assert r.returncode == 0, f"installer failed:\n{r.stdout}{r.stderr}"
     _assert_the_guards_are_back(work)
 
 
-def test_a_helper_gone_from_scripts_ops_is_restored_the_way_the_message_says(
-    tmp_path: Path,
+@pytest.mark.parametrize("missing", ["_prepush_refs.sh", "protect_main_push.sh"])
+def test_a_file_gone_from_scripts_ops_is_restored_the_way_the_message_says(
+    tmp_path: Path, missing: str
 ) -> None:
-    """With the shipped wiring the guards run from scripts/ops/, so a missing
-    helper means it is gone from the checkout. The installer writes only
-    .git/hooks, exits 0 and changes nothing here; the message must say how to
-    get the file back instead, and doing so must work."""
+    """With the shipped wiring everything runs from scripts/ops/, so a missing
+    file there is gone from the checkout and the installer, which writes only
+    the hooks directory, cannot bring it back. The deletion is staged and a
+    sibling has uncommitted work: restoring from the index would do nothing, and
+    restoring the whole directory would throw that work away. The command is run
+    exactly as printed, from a subdirectory."""
     work = _make_repo(tmp_path, _PROTECT_ONLY)
     assert _git(work, "add", "scripts").returncode == 0
     assert _git(work, "-c", "core.hooksPath=/dev/null", "commit", "-qm", "ops").returncode == 0
     assert _install_guards(work).returncode == 0
-    (work / "scripts" / "ops" / "_prepush_refs.sh").unlink()
+    assert _git(work, "rm", "-q", f"scripts/ops/{missing}").returncode == 0
+    sibling = work / "scripts" / "ops" / "dx-run.sh"
+    sibling.write_text("# uncommitted work\n", encoding="utf-8")
 
     r, out = _push(work, "HEAD:refs/heads/feat/x")
     assert r.returncode != 0, f"a broken checkout silently allowed the push:\n{out}"
-    assert len(_helper_missing_lines(out)) == len(_HELPER_MISSING), out
-    # Each of the three must say it; one guard's line would cover another's gap.
-    assert out.count(_RESTORE) == len(_HELPER_MISSING), out
+    commands = _RESTORE_RE.findall(out)
+    # A missing helper is reported by each guard; a missing guard by the dispatcher.
+    assert len(commands) == (len(_HELPER_MISSING) if missing == "_prepush_refs.sh" else 1), out
+    assert all(c.endswith(f"scripts/ops/{missing}") for c in commands), out
+    if missing == "_prepush_refs.sh":
+        # Quoted heredocs: the backticks are text, not a command to run.
+        assert out.count("`pre-commit install --hook-type pre-push`") == 2, out
 
-    assert _git(work, *_RESTORE.split()[1:]).returncode == 0
+    sub = work / "docs"
+    sub.mkdir()
+    assert _git(sub, "checkout", "HEAD", "--", commands[0]).returncode == 0
+    assert sibling.read_text(encoding="utf-8") == "# uncommitted work\n"
     _assert_the_guards_are_back(work)
 
 

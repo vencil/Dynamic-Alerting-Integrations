@@ -50,8 +50,7 @@ set -uo pipefail
 _prepush_dir="${BASH_SOURCE[0]%/*}"
 [ "$_prepush_dir" = "${BASH_SOURCE[0]}" ] && _prepush_dir="."
 # ⛔ Absolute BEFORE the cd below, or a relative invocation from a subdirectory
-# reports "_prepush_refs.sh is not next to this script" while it is sitting
-# right there — and sends the reader to a fix for a problem they do not have.
+# reports the helper missing while it is sitting right there.
 case "$_prepush_dir" in /* | ?:[/\\]*) ;; *) _prepush_dir="$PWD/$_prepush_dir" ;; esac
 # ⛔ Keep REPO_ROOT on its own line, without naming `_prepush_dir`: the
 # sourcing-form test refuses a `$(` on any line that mentions that variable.
@@ -71,9 +70,10 @@ fi
 # shellcheck source=scripts/ops/_prepush_refs.sh
 if [ ! -r "$_prepush_dir/_prepush_refs.sh" ]; then
     echo "[pre-push-mkdocs] ⛔ _prepush_refs.sh is not next to ${BASH_SOURCE[0]}" >&2
-    echo "  If that is scripts/ops/: git checkout -- scripts/ops/" >&2
-    echo "  Anywhere else, it is a single-file copy from before #1689. Delete that file," >&2
-    echo "  then run: bash scripts/ops/install_prepush_hook.sh" >&2
+    echo "  If that is in scripts/ops/, the helper is gone from your checkout:" >&2
+    echo "    git checkout HEAD -- $_prepush_dir/_prepush_refs.sh" >&2
+    echo "  Anywhere else it is a stale copy of this guard, and the installer replaces it:" >&2
+    echo "    bash scripts/ops/install_prepush_hook.sh" >&2
     exit 1
 fi
 . "$_prepush_dir/_prepush_refs.sh"

@@ -44,20 +44,17 @@ _prepush_dir="${BASH_SOURCE[0]%/*}"
 # 全都有害，所以這裡自己把可行的出路講出來。
 if [ ! -r "$_prepush_dir/_prepush_refs.sh" ]; then
     printf '\n[protect_main_push] ⛔ %s 旁邊找不到 _prepush_refs.sh，本守衛無法判斷你在推什麼。\n' "${BASH_SOURCE[0]}" >&2
+    printf '\n如果那在 scripts/ops/ 裡：helper 從你的 checkout 裡不見了——\n    git checkout HEAD -- %s\n' "$_prepush_dir/_prepush_refs.sh" >&2
     cat >&2 <<'PREPUSH_MISSING'
 
-如果那是 scripts/ops/：helper 從你的 checkout 裡不見了——
-    git checkout -- scripts/ops/
-
-在其他位置：那是 #1689 以前單獨複製出去的舊檔。刪掉那個檔，再跑：
+在其他位置：那是本守衛的舊複本，安裝器會把它換掉：
     bash scripts/ops/install_prepush_hook.sh
-不刪就重裝沒有用：安裝器會把舊檔搬到 .git/hooks/pre-push.chained 繼續執行。
 
 ⛔ 不要自己 printf 一個只掛本檔的 hook：那會把 require_preflight_pass 與
 mkdocs strict 靜默拆掉，而畫面上本守衛還在。⛔ 也不要用
 `pre-commit install --hook-type pre-push`：它不會把守衛裝上（#1689）。
 
-⛔ 不要用 --no-verify、也不要刪掉 .git/hooks/pre-push 不重裝來轉綠——那會把擋直推
+⛔ 不要用 --no-verify、也不要刪掉 .git/hooks/pre-push 來轉綠——那會把擋直推
 main 這道閘門永久關掉，正是 #1664 修掉的那件事。
 
 PREPUSH_MISSING

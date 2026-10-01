@@ -60,24 +60,19 @@ _prepush_dir="${BASH_SOURCE[0]%/*}"
 # worse, so name the way back here instead.
 if [ ! -r "$_prepush_dir/_prepush_refs.sh" ]; then
     printf '\n[require_preflight_pass] ⛔ _prepush_refs.sh is not next to %s,\nso the gate cannot tell what is being pushed.\n' "${BASH_SOURCE[0]}" >&2
+    printf '\nIf that is in scripts/ops/, the helper is gone from your checkout:\n    git checkout HEAD -- %s\n' "$_prepush_dir/_prepush_refs.sh" >&2
     cat >&2 <<'PREPUSH_MISSING'
 
-If that is scripts/ops/, the helper is gone from your checkout:
-    git checkout -- scripts/ops/
-
-Anywhere else, it is a single-file copy from before #1689. Delete that file,
-then run:
+Anywhere else it is a stale copy of this gate, and the installer replaces it:
     bash scripts/ops/install_prepush_hook.sh
-Re-running the installer without deleting it does not help: the installer
-moves the copy to .git/hooks/pre-push.chained and keeps running it.
 
 ⛔ Do not hand-write a hook that runs only this script: that silently drops
 protect_main_push and the mkdocs strict check while this one still looks fine.
 ⛔ Do not use `pre-commit install --hook-type pre-push` either: a hook run by
 pre-commit sees only one refspec (#1689).
 
-⛔ Do not reach for --no-verify and do not leave .git/hooks/pre-push deleted:
-both turn off the direct-push-to-main guard for good, which is what #1664 fixed.
+⛔ Do not reach for --no-verify and do not delete .git/hooks/pre-push: both
+turn off the direct-push-to-main guard for good, which is what #1664 fixed.
 
 PREPUSH_MISSING
     exit 1

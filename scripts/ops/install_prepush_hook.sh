@@ -10,7 +10,7 @@
 #   `shutil.which("bash")` can resolve to WSL, and Git's `usr/bin/bash` under a
 #   non-MSYS parent has no `grep`, which a `2>/dev/null` probe swallows. This
 #   script is only ever run BY a shell, so it keeps to bash builtins plus
-#   `mv`/`chmod` and says so when those are missing.
+#   `mv`/`chmod`/`rm` and says so when those are missing.
 #
 # ⛔ IT CHAINS WHAT WAS ALREADY THERE — NOT A CONVENIENCE. This repo has
 #   `filter=lfs` paths and `git lfs install` is global, so a fresh clone
@@ -82,6 +82,11 @@ contains() {   # $1 = file, $2 = needle
 }
 is_ours()      { contains "$1" "$MARKER"; }
 is_precommit() { contains "$1" "--hook-type=pre-push"; }
+# ⛔ A hook that sources _prepush_refs.sh is a copy of one of our guards (the
+# single-file install from before #1689). It only runs next to its helper in
+# scripts/ops/, so chaining it keeps the push failing on every run. The guards
+# it duplicates already run from the dispatcher: replace it, never chain it.
+is_guard_copy() { contains "$1" "_prepush_refs.sh"; }
 
 # Move a foreign hook into the chained slot. Fails loudly: a silent failure here
 # means either that hook stops running or ours never installs.
@@ -105,14 +110,25 @@ stash_foreign() {   # $1 = path to the foreign hook
     return 0
 }
 
+# An earlier install chained a guard copy (this installer did, before it knew
+# better). Take it out of the slot, or the dispatcher keeps running it.
+if is_guard_copy "$chained"; then
+    command -v rm >/dev/null 2>&1 && rm -f "$chained" || {
+        warn "⛔ could not remove $chained, a copy of a pre-push guard that"
+        warn "   cannot run there. Delete it by hand, then re-run."
+        exit 1
+    }
+    say "removed $CHAINED_NAME: it was a copy of a guard, which only runs from scripts/ops/"
+fi
+
 target="$hook"
-if is_ours "$hook"; then
+if is_ours "$hook" || is_guard_copy "$hook"; then
     target="$hook"                       # refresh in place
 elif is_precommit "$hook"; then
     # pre-commit keeps the hook file; we take the slot it calls with the full
     # stdin. If something else is already in that slot it is a real hook that
     # pre-commit migrated — chain it rather than destroy it.
-    if [ -e "$legacy" ] && ! is_ours "$legacy"; then
+    if [ -e "$legacy" ] && ! is_ours "$legacy" && ! is_guard_copy "$legacy"; then
         stash_foreign "$legacy" || exit 1
     fi
     target="$legacy"
