@@ -52,6 +52,7 @@ package config
 import (
 	"errors"
 	"fmt"
+	"log"
 	"os"
 	"path"
 	"path/filepath"
@@ -277,7 +278,11 @@ func scopeParseFailed(scan *TreeScan, scopeRel string) ([]string, error) {
 	if len(scan.Files) == 0 {
 		return nil, nil // the exporter refuses an empty tree; nothing was dropped
 	}
-	built, err := loadDirBuild(scan, scan.AbsRoot, discardLogger)
+	// ⚠️ log.Printf, not discardLogger, for the profile WARNs (#2513): they
+	// reached the process log here before the build took its logger for them,
+	// and on da-guard's stderr that line is the only place a tenant electing
+	// an unknown profile is named (the report does not list it).
+	built, err := loadDirBuild(scan, scan.AbsRoot, discardLogger, log.Printf)
 	if err != nil {
 		return nil, err
 	}
