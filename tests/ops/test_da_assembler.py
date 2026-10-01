@@ -1902,6 +1902,78 @@ class TestRenderCrDecoder:
         assert render_cr_file(cr_path, out_dir) == 0
         assert line in (out_dir / "ok.yaml").read_text(encoding="utf-8")
 
+    @pytest.mark.parametrize("tenant, shown", [
+        pytest.param("{8: '1', 010: '2'}", "'010'", id="8-and-unquoted-010"),
+        pytest.param("{yes: '1'}", "'yes'", id="metric-yes"),
+        pytest.param("{a: {010: '1'}}", "'010'", id="two-levels-down"),
+        pytest.param("{a: [{1e3: '1'}]}", "'1e3'", id="inside-a-list"),
+    ])
+    def test_inner_key_kubernetes_reads_differently_is_caller_error(
+            self, tenant, shown, tmp_path, caplog):
+        """owner 裁決：spec.tenants 底下任何一層的鍵都比照租戶 id——
+        Kubernetes 讀出的字串與原文不同（`010` → `8`、`yes` → `true`）就
+        rc 2、提示加引號、不寫檔。`8:` 與未加引號的 `010:` 先前併成一個鍵。
+
+        會讓本測試轉紅的改動：`_key_divergence` 只比最上層（rc 0，鍵被改名
+        或合併）。
+        """
+        cr_path, out_dir = self._write(
+            tmp_path, self._CR.replace("    t1: {}\n", f"    t1: {tenant}\n"))
+        assert render_cr_file(cr_path, out_dir) == EXIT_CALLER_ERROR
+        assert "the keys as written (" + shown in caplog.text, caplog.text
+        assert "Quote each such key" in caplog.text
+        assert list(out_dir.iterdir()) == []
+
+    @pytest.mark.parametrize("tenant, line", [
+        pytest.param("{'010': '1'}", "'010': '1'", id="quoted-010"),
+        pytest.param("{a: '1', a: '2'}", "a: '2'", id="same-text-twice"),
+        pytest.param("{a: [{b: '1'}]}", "- b: '1'", id="list-of-maps"),
+    ])
+    def test_inner_key_read_the_same_renders(self, tenant, line, tmp_path):
+        """對照組：加引號的鍵、同字重複鍵（後者勝，維持先前行為）、list
+        裡的 mapping 照常 render。"""
+        cr_path, out_dir = self._write(
+            tmp_path, self._CR.replace("    t1: {}\n", f"    t1: {tenant}\n"))
+        assert render_cr_file(cr_path, out_dir) == 0
+        assert line in (out_dir / "ok.yaml").read_text(encoding="utf-8")
+
+    @pytest.mark.parametrize("value", [
+        pytest.param("!!omap [a: '1']", id="omap"),
+        pytest.param("!!pairs [a: '1']", id="pairs"),
+    ])
+    def test_structure_that_cannot_be_paired_is_caller_error(
+            self, value, tmp_path, caplog):
+        """兩邊的結構對不上（原文讀成 (key, value) tuple、Kubernetes 讀成
+        mapping）時無從逐層比對鍵 → fail-closed rc 2、寫明原因。
+
+        會讓本測試轉紅的改動：`_key_divergence` 遇到結構不一致時直接放行。
+        """
+        cr_path, out_dir = self._write(
+            tmp_path, self._CR.replace("    t1: {}\n", f"    t1: {{x: {value}}}\n"))
+        assert render_cr_file(cr_path, out_dir) == EXIT_CALLER_ERROR
+        assert "spec.tenants.t1.x[0]: Kubernetes reads a mapping here" \
+            in caplog.text, caplog.text
+        assert "cannot be compared" in caplog.text
+        assert list(out_dir.iterdir()) == []
+
+    def test_keys_colliding_through_a_merge_are_caller_error(
+            self, tmp_path, caplog):
+        """`<<` 帶進來的 `010`（int 8）與寫出的 `"8"` 也是同一個 JSON key；
+        da-crdecode 以套用 merge 的解碼檢查 → 每次都 rc 2。
+
+        會讓本測試轉紅的改動：keyCollision 改回 MapSlice 解碼（merge 帶入的
+        鍵被丟掉，rc 0 且輸出不固定）。
+        """
+        text = ("base: &b {010: {cpu: '1'}}\n" + self._CR.replace(
+            "    t1: {}\n", "    <<: *b\n    \"8\": {cpu: '2'}\n"))
+        for _ in range(5):
+            cr_path, out_dir = self._write(tmp_path, text)
+            assert render_cr_file(cr_path, out_dir) == EXIT_CALLER_ERROR
+            assert 'the same JSON key "8"' in caplog.text, caplog.text
+            assert list(out_dir.iterdir()) == []
+            out_dir.rmdir()
+            caplog.clear()
+
     def test_keys_keep_the_order_the_cr_wrote(self, tmp_path):
         """da-crdecode 的 JSON 物件鍵依字母排序；輸出仍照 CR 原文的順序，
         既有輸出檔不會只因排序而被重寫。會讓本測試轉紅的改動：拿掉

@@ -492,14 +492,15 @@ def test_da_assembler_refuses_an_id_kubernetes_reads_differently(
     `true` / `31` / `1000` to Kubernetes (da-crdecode): rendering either
     spelling would disagree with the CR or with the cluster, so rc 2,
     nothing written, every such id named. Turns green→red if the id
-    comparison (`_tenant_id_divergence`) is dropped (rc 0, ids renamed)."""
+    comparison (`_key_divergence`) is dropped (rc 0, ids renamed)."""
     out = _assemble(tmp_path, "t", _UNQ, rc=2)
     assert not out.exists()
     for written, read in (("010", "8"), ("yes", "true"), ("0x1F", "31"),
                           ("1_000", "1000")):
         assert repr(written) in caplog.text, caplog.text
         assert repr(read) in caplog.text, caplog.text
-    assert "Quote each tenant id" in caplog.text
+    assert "spec.tenants: the keys as written" in caplog.text
+    assert "Quote each such key" in caplog.text
 
 
 @pytest.mark.usefixtures("da_crdecode_env")

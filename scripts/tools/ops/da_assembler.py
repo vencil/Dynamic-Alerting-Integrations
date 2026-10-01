@@ -693,31 +693,64 @@ def _as_text(value: Any) -> str | None:
     return None
 
 
-def _tenant_id_divergence(decoded: Any, written: Any) -> str:
-    """#2476: why the tenant ids da-crdecode read differ from the ids as
-    written, or ``""``.
+def _shape_name(value: Any) -> str:
+    """How a value's structure is named in a :func:`_key_divergence` error."""
+    if isinstance(value, dict):
+        return "a mapping"
+    if isinstance(value, (set, frozenset)):
+        return "a set"
+    if isinstance(value, list):
+        return f"a list of {len(value)}"
+    return "a scalar"
 
-    An unquoted ``010:`` is the tenant ``8`` to Kubernetes, ``yes:`` is
-    ``true``: rendering either would rename the tenant (the id written in
-    the CR is not the id the cluster holds). Two real readings are compared,
-    by their key sets; nothing about YAML typing is decided here. Only a
-    mapping on both sides is compared; any other shape is left to the
-    shape checks.
+
+def _key_divergence(decoded: Any, written: Any, path: str) -> str:
+    """#2476: why the keys da-crdecode read under *path* differ from the
+    keys as written, at any depth, or ``""``.
+
+    An unquoted ``010:`` is the key ``8`` to Kubernetes, ``yes:`` is
+    ``true``: rendering either would rename it — a tenant id, a metric
+    name — and ``8:`` next to ``010:`` would become one key. Two real
+    readings are compared mapping by mapping, by their key sets; nothing
+    about YAML typing is decided here. Values are not compared (they are
+    rendered as decoded), but the two readings must have the same
+    structure: where one has a mapping or a list and the other has not, or
+    two lists differ in length, the CR is refused (fail-closed) — the keys
+    below cannot be paired. A ``!!set`` as written is a mapping of keys.
+    A key written twice with the same text is one key in both readings.
     """
-    if not isinstance(decoded, dict) or not isinstance(written, dict):
+    if isinstance(written, (set, frozenset)):
+        written = dict.fromkeys(written)
+    if isinstance(decoded, dict) and isinstance(written, dict):
+        by_text = {}
+        for key, value in written.items():
+            by_text[_as_text(key)] = value
+        if set(by_text) != set(decoded):
+            only_written = sorted(repr(k) for k in set(by_text) - set(decoded))
+            only_read = sorted(repr(k) for k in set(decoded) - set(by_text))
+            return (f"{path}: the keys as written ("
+                    + (", ".join(only_written) or "none")
+                    + ") are not the keys Kubernetes reads ("
+                    + (", ".join(only_read) or "none")
+                    + "); rendering would rename them. Quote each such key "
+                    "so both readings are the same text")
+        for key, value in decoded.items():
+            why = _key_divergence(value, by_text[key], f"{path}.{key}")
+            if why:
+                return why
         return ""
-    as_written = {_as_text(k) for k in written}
-    as_read = set(decoded)
-    if as_written == as_read:
+    if isinstance(decoded, list) and isinstance(written, list) \
+            and len(decoded) == len(written):
+        for i, (d, w) in enumerate(zip(decoded, written)):
+            why = _key_divergence(d, w, f"{path}[{i}]")
+            if why:
+                return why
         return ""
-    only_written = sorted(repr(k) for k in as_written - as_read)
-    only_read = sorted(repr(k) for k in as_read - as_written)
-    return ("spec.tenants: the tenant ids as written ("
-            + (", ".join(only_written) or "none")
-            + ") are not the ids Kubernetes reads ("
-            + (", ".join(only_read) or "none")
-            + "); rendering would rename the tenant. Quote each tenant id "
-            "so both readings are the same text")
+    if isinstance(decoded, (dict, list)) or isinstance(written, (dict, list)):
+        return (f"{path}: Kubernetes reads {_shape_name(decoded)} here but "
+                f"the CR as written holds {_shape_name(written)}, so the keys "
+                "below cannot be compared; this tool refuses such a CR")
+    return ""
 
 
 def _profile_divergence(decoded: Any, written: Any) -> str:
@@ -727,7 +760,7 @@ def _profile_divergence(decoded: Any, written: Any) -> str:
     ``_profile`` names a profile, as a tenant id names a tenant: an unquoted
     ``_profile: 010`` is the number 8 to Kubernetes, ``yes`` is ``true``,
     and rendering that would point the tenant at a profile that does not
-    exist. Compared as :func:`_tenant_id_divergence` compares ids (two real
+    exist. Compared as :func:`_key_divergence` compares keys (two real
     readings); a null on both sides is no profile.
     """
     if not isinstance(decoded, dict) or not isinstance(written, dict):
@@ -913,10 +946,12 @@ def render_cr_file(
                     if isinstance(as_written, dict) else None)
     if not isinstance(written_spec, dict):
         written_spec = {}
-    why = (_tenant_id_divergence(spec.get("tenants"),
-                                 written_spec.get("tenants"))
-           or _profile_divergence(spec.get("tenants"),
-                                  written_spec.get("tenants")))
+    why = ""
+    if isinstance(spec.get("tenants"), dict):
+        why = (_key_divergence(spec["tenants"], written_spec.get("tenants"),
+                               "spec.tenants")
+               or _profile_divergence(spec["tenants"],
+                                      written_spec.get("tenants")))
     if why:
         log.error("%s: %s", cr_path, why)
         return EXIT_CALLER_ERROR

@@ -70,6 +70,8 @@ func TestRefusesWhatKubernetesClientsRefuse(t *testing.T) {
 		{"collide-nested", "spec:\n  tenants:\n    010: {}\n    \"8\": {}\n", "in spec.tenants"},
 		{"collide-in-list", "x:\n- {yes: 1, \"true\": 2}\n", "in x[0]"},
 		{"float-and-string", "1.5: a\n\"1.5\": b\n", `the same JSON key "1.5"`},
+		// The int 8 comes in through a `<<` merge.
+		{"collide-through-merge", mergeCollision, `in m, the keys "8" (string) and 8 (int)`},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
@@ -86,15 +88,56 @@ func TestRefusesWhatKubernetesClientsRefuse(t *testing.T) {
 	}
 }
 
+// mergeCollision brings the int 8 into `m` through a merge, next to "8".
+const mergeCollision = "b: &b {010: x}\nm: {<<: *b, \"8\": y}\n"
+
 // The conversion of a file with colliding keys used to vary from run to run;
-// refused, it is the same every time.
+// refused, it is the same every time — the stderr included.
 func TestCollisionIsRefusedEveryTime(t *testing.T) {
 	t.Parallel()
-	for i := 0; i < 30; i++ {
-		rc, out, errOut := runOn(t, "010: a\n\"8\": b\n\"010\": c\n")
-		if rc != exitCallerErr || out != "" || !strings.Contains(errOut, "same JSON key") {
-			t.Fatalf("run %d: rc=%d stdout=%q stderr=%q", i, rc, out, errOut)
+	for _, in := range []string{"010: a\n\"8\": b\n\"010\": c\n", mergeCollision} {
+		_, _, first := runOn(t, in)
+		for i := 0; i < 30; i++ {
+			rc, out, errOut := runOn(t, in)
+			if rc != exitCallerErr || out != "" || !strings.Contains(errOut, "same JSON key") {
+				t.Fatalf("%q run %d: rc=%d stdout=%q stderr=%q", in, i, rc, out, errOut)
+			}
+			// The file path differs per run; the message after it must not.
+			if tail(errOut) != tail(first) {
+				t.Fatalf("%q run %d: stderr %q differs from %q", in, i, errOut, first)
+			}
 		}
+	}
+}
+
+// tail drops the "da-crdecode: <path>: " prefix of a stderr line.
+func tail(s string) string {
+	if i := strings.Index(s, ".yaml: "); i >= 0 {
+		return s[i:]
+	}
+	return s
+}
+
+// keyCollision relies on go-yaml v2 applying `<<` merges when it decodes
+// into map[interface{}]interface{} (YAMLToJSON's path) — unlike MapSlice,
+// which drops the merged keys. Measured here so a go-yaml upgrade that
+// changes it turns red.
+func TestMapDecodeAppliesMerge(t *testing.T) {
+	t.Parallel()
+	var doc map[interface{}]interface{}
+	if err := yamlv2.Unmarshal([]byte(mergeCollision), &doc); err != nil {
+		t.Fatal(err)
+	}
+	m, ok := doc["m"].(map[interface{}]interface{})
+	if !ok || len(m) != 2 || m[8] != "x" || m["8"] != true {
+		t.Fatalf("map decode of m = %#v; want the merged int 8 and the string \"8\"", doc["m"])
+	}
+	var slice yamlv2.MapSlice
+	if err := yamlv2.Unmarshal([]byte(mergeCollision), &slice); err != nil {
+		t.Fatal(err)
+	}
+	if ms, ok := slice[1].Value.(yamlv2.MapSlice); !ok || len(ms) != 1 {
+		t.Fatalf("MapSlice decode of m = %#v; the merged key was expected to be dropped", slice[1].Value)
 	}
 }
 
