@@ -173,7 +173,7 @@ tenants:
       tier: "tier-1"
 ```
 
-These metadata fields are automatically injected into all alert annotations and appear in notifications.
+Alerts that compare against your thresholds carry these three values in their annotations, so they appear in notifications. Down and exporter-absent alerts do not carry them yet ([#2566](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/2566)).
 
 ## What Your Notifications Look Like
 

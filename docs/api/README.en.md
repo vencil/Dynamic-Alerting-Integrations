@@ -51,136 +51,16 @@ curl -s http://localhost:8080/metrics | head -50
 ### Response
 
 **Status Code**: 200 OK  
-**Content-Type**: `application/openmetrics-text; version=1.0.0`
+**Content-Type**: `text/plain; version=0.0.4` (Prometheus text format; OpenMetrics is not enabled, so `Accept: application/openmetrics-text` gets the same)
 
-### Metric Types
+### Metric List
 
-#### `user_threshold` - Threshold Metrics
+Each metric's name, type and labels are listed in one place: [threshold-exporter README §3.3 Metrics](https://github.com/vencil/Dynamic-Alerting-Integrations/blob/main/components/threshold-exporter/README.md#33-metrics). A test checks that table against the source row by row (`metrics_readme_parity_test.go`), so it is not copied here.
 
-Contains threshold values organized by tenant, alert name, and dimensions. Supports multi-dimensional labels allowing fine-grained per-instance or per-dimension threshold configuration.
-
-```
-# HELP user_threshold Threshold values by tenant, alert, and dimensions
-# TYPE user_threshold gauge
-user_threshold{tenant="db-a",alertname="HighCPU",metric_group="compute"} 80.0
-user_threshold{tenant="db-a",alertname="HighCPU",metric_group="compute",dimension="instance=prod-01"} 85.0
-user_threshold{tenant="db-b",alertname="HighMemory",metric_group="memory"} 75.0
-user_threshold{tenant="db-b",alertname="HighMemory",metric_group="memory",dimension_re="instance=~staging-.*"} 65.0
-```
-
-**Labels:**
-- `tenant`: Tenant ID
-- `alertname`: Alert name (from Rule Pack)
-- `metric_group`: Metric group (custom alert organization unit)
-- `dimension` (optional): Threshold for specific dimension (e.g., `instance=prod-01`)
-- `dimension_re` (optional): Regex dimension selector
-
-#### `user_state_filter` - Alert Suppression State
-
-Indicates whether an alert is suppressed by a state filter.
-
-```
-# HELP user_state_filter Alert suppression state
-# TYPE user_state_filter gauge
-user_state_filter{tenant="db-a",alertname="HighCPU",metric_group="compute"} 0
-user_state_filter{tenant="db-b",alertname="HighMemory",metric_group="memory"} 1
-```
-
-**Values:**
-- `0`: Alert is active (not suppressed)
-- `1`: Alert is suppressed (state filter enabled)
-
-#### `user_silent_mode` - Tenant Silent Mode
-
-Emitted only while a tenant's silent mode is active, one series per muted severity (`target_severity`); the value is always `1`. Alerts still fire during silence (TSDB records them) — only notifications are blocked by Alertmanager inhibit. In the example `db-b` has `_silent_mode: all`; `db-a` has none, so it has no series.
-
-```
-# HELP user_silent_mode Silent mode flag (1=active). Alerts fire (TSDB records) but notifications suppressed via Alertmanager inhibit.
-# TYPE user_silent_mode gauge
-user_silent_mode{target_severity="critical",tenant="db-b"} 1
-user_silent_mode{target_severity="warning",tenant="db-b"} 1
-```
-
-**Values:**
-- `1`: notifications for that severity are silenced. There is no `0` — a tenant/severity that is not silenced (or whose `expires` has passed) has no series
-
-#### `user_severity_dedup` - Severity Deduplication Flag
-
-Indicates whether severity deduplication is enabled for an alert. This setting controls how Alertmanager suppresses lower-severity alerts.
-
-```
-# HELP user_severity_dedup Severity deduplication flag
-# TYPE user_severity_dedup gauge
-user_severity_dedup{tenant="db-a",alertname="HighCPU"} 1
-user_severity_dedup{tenant="db-b",alertname="HighMemory"} 0
-```
-
-**Values:**
-- `0`: Severity deduplication disabled
-- `1`: Severity deduplication enabled
-
-#### `tenant_metadata_info` - Tenant Metadata
-
-An info metric that exposes tenant metadata as labels. Used in Prometheus Rule Packs with `group_left` for dynamic annotation injection.
-
-```
-# HELP tenant_metadata_info Tenant metadata information
-# TYPE tenant_metadata_info info
-tenant_metadata_info{tenant="db-a",team="platform",env="prod",sla_tier="gold"} 1
-tenant_metadata_info{tenant="db-b",team="data",env="prod",sla_tier="silver"} 1
-tenant_metadata_info{tenant="db-b",oncall="sre-team@example.com",alert_channel="#prod-db-alerts"} 1
-```
-
-**Usage:** Dynamically inject SLA tier, team information, or on-call information into alert rules.
-
-#### `da_config_event` - Timed Config Expiry Event
-
-Gauge, value always 1. Emitted once a config with `expires` has expired; disappears when the config is updated or removed. Labels: `{tenant, event, reason, target_severity}`; `event` is `silence_expired` / `maintenance_expired` / `threshold_expired`. `target_severity` is set only for `silence_expired` (`warning` / `critical`) and empty for the other events.
-
-```
-# TYPE da_config_event gauge
-da_config_event{event="silence_expired",reason="DB maintenance",target_severity="critical",tenant="db-b"} 1
-da_config_event{event="silence_expired",reason="DB maintenance",target_severity="warning",tenant="db-b"} 1
-da_config_event{event="threshold_expired",reason="mysql_connections: incident #1234",target_severity="",tenant="db-a"} 1
-```
-
-### Complete Example
+To see what your own deployment serves, fetch it:
 
 ```bash
-$ curl -s http://localhost:8080/metrics
-
-# HELP user_threshold Threshold values by tenant, alert, and dimensions
-# TYPE user_threshold gauge
-user_threshold{tenant="db-a",alertname="HighCPU",metric_group="compute"} 80.0
-user_threshold{tenant="db-a",alertname="HighCPU",metric_group="compute",dimension="instance=prod-01"} 85.0
-user_threshold{tenant="db-a",alertname="HighMemory",metric_group="memory"} 75.0
-user_threshold{tenant="db-b",alertname="HighCPU",metric_group="compute"} 70.0
-user_threshold{tenant="db-b",alertname="HighDiskUsage",metric_group="storage"} 90.0
-
-# HELP user_state_filter Alert suppression state
-# TYPE user_state_filter gauge
-user_state_filter{tenant="db-a",alertname="HighCPU",metric_group="compute"} 0
-user_state_filter{tenant="db-a",alertname="HighMemory",metric_group="memory"} 1
-user_state_filter{tenant="db-b",alertname="HighCPU",metric_group="compute"} 0
-
-# HELP user_silent_mode Silent mode flag (1=active). Alerts fire (TSDB records) but notifications suppressed via Alertmanager inhibit.
-# TYPE user_silent_mode gauge
-user_silent_mode{target_severity="critical",tenant="db-b"} 1
-user_silent_mode{target_severity="warning",tenant="db-b"} 1
-
-# HELP user_severity_dedup Severity deduplication flag
-# TYPE user_severity_dedup gauge
-user_severity_dedup{tenant="db-a",alertname="HighCPU"} 1
-user_severity_dedup{tenant="db-a",alertname="HighMemory"} 0
-user_severity_dedup{tenant="db-b",alertname="HighCPU"} 1
-user_severity_dedup{tenant="db-b",alertname="HighDiskUsage"} 0
-
-# HELP tenant_metadata_info Tenant metadata information
-# TYPE tenant_metadata_info info
-tenant_metadata_info{tenant="db-a",team="platform",env="prod",sla_tier="gold",oncall="platform-team"} 1
-tenant_metadata_info{tenant="db-b",team="data",env="staging",sla_tier="silver",oncall="data-team"} 1
-
-# EOF
+curl -s http://localhost:8080/metrics | grep -E '^(user_|tenant_|da_)'
 ```
 
 ---
