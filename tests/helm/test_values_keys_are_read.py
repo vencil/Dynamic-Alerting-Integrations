@@ -42,7 +42,8 @@ Overlay values files are held to the same rule: a key misspelled in
   * anywhere else -> the chart named for it in `_REPO_OVERLAYS`.
 
 An overlay with no owner fails instead of being skipped, and so does an
-`_REPO_OVERLAYS` entry naming a file or chart that does not exist.
+`_REPO_OVERLAYS` entry naming a file or chart that does not exist, or a file
+inside a chart directory (which that directory already owns).
 
 A key that is legitimately declared but not read by a template goes in
 `_UNREAD_ALLOWED` with a reason. An entry whose key is now read, or no longer
@@ -241,17 +242,21 @@ def overlay_owners() -> tuple[dict[str, Path], list[str]]:
             if path.name != "values.yaml":
                 owners[rel] = path.parent
         elif rel in _REPO_OVERLAYS:
-            chart = by_name.get(_REPO_OVERLAYS[rel])
-            if chart is None:
-                problems.append(f"{rel}: _REPO_OVERLAYS names chart {_REPO_OVERLAYS[rel]!r}, which does not exist")
-            else:
-                owners[rel] = chart
+            if _REPO_OVERLAYS[rel] in by_name:
+                owners[rel] = by_name[_REPO_OVERLAYS[rel]]
         else:
             problems.append(
                 f"{rel}: not in a chart directory and not in _REPO_OVERLAYS — which chart is it passed to?")
-    for rel in _REPO_OVERLAYS:
-        if not (_REPO / rel).is_file():
+    # Every entry on its own, whatever discovery saw: a chart-local file listed
+    # here would otherwise be owned by its directory and the entry never read.
+    for rel, chart_name in _REPO_OVERLAYS.items():
+        path = _REPO / rel
+        if not path.is_file():
             problems.append(f"_REPO_OVERLAYS entry {rel}: no such file")
+        elif (path.parent / "Chart.yaml").is_file():
+            problems.append(f"_REPO_OVERLAYS entry {rel}: inside a chart directory, which already owns it")
+        if chart_name not in by_name:
+            problems.append(f"_REPO_OVERLAYS entry {rel}: names chart {chart_name!r}, which does not exist")
     return owners, problems
 
 
