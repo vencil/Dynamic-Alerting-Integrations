@@ -134,9 +134,11 @@ type DefaultsFile struct {
 // whose YAML file lives at-or-below scopeDir, using configDir as
 // the conf.d root for chain resolution.
 //
-// Both arguments are absolute or relative filesystem paths;
-// scopeDir must be at-or-below configDir after Clean. An empty
-// scopeDir defaults to configDir (whole tree).
+// configDir is an absolute path or one relative to the working directory.
+// scopeDir is an absolute path or one relative to configDir — NOT to the
+// working directory (#2588: `--config-dir conf.d --scope db`, "." = the
+// root). It must be at-or-below configDir after Clean. An empty scopeDir
+// defaults to configDir (whole tree).
 //
 // Errors:
 //   - configDir doesn't exist or isn't a directory.
@@ -227,7 +229,13 @@ func scopeEffective(configDir, scopeDir string, wholeTree bool) (*ScopedTenants,
 	// "outside configDir").
 	absScope := absRoot
 	if scopeDir != "" {
-		absScope = AbsScanRoot(scopeDir)
+		// A relative scope is relative to configDir (#2588), joined to it as
+		// given so the symlink resolution below treats both spellings alike.
+		s := scopeDir
+		if !filepath.IsAbs(s) {
+			s = filepath.Join(configDir, s)
+		}
+		absScope = AbsScanRoot(s)
 	}
 
 	// Containment check. filepath.Rel produces "../" when scope

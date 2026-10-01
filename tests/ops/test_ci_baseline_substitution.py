@@ -2889,7 +2889,8 @@ def test_unmanaged_rows_alone_still_run_the_whole_tree_smoke(
     assert "dangling default in tree-a" in report, (
         f"only unmanaged rows, and da-guard was never invoked — the whole-tree "
         f"smoke over CONF_D was skipped:\n{report}\n{proc.stdout}")
-    assert "(scope: `tree-a`)" in report, report
+    # --scope is relative to --config-dir (#2588): the whole-tree smoke passes ".".
+    assert "### `tree-a` (scope: `.`)" in report, report
     for line in targets_text.splitlines():
         path = line.split("\t", 1)[1]
         assert f"`{path}` — NOT CHECKED" in report, (

@@ -125,9 +125,9 @@ func parseFlags(args []string, errOut io.Writer) (*flags, error) {
 	fs.StringVar(&f.configDir, "config-dir", "",
 		"Path to the conf.d/ root. Required. Defaults chains anchor here.")
 	fs.StringVar(&f.scopeDir, "scope", "",
-		"A directory at or below --config-dir to limit validation to. Empty = whole tree. "+
-			"A relative path resolves against the working directory, as --config-dir does, "+
-			"NOT against --config-dir (--config-dir conf.d --scope conf.d/db). "+
+		"Subdirectory under --config-dir to limit validation. Empty = whole tree. "+
+			"A relative path is relative to --config-dir, not to the working directory "+
+			"(--config-dir conf.d --scope db; '.' = the whole tree); an absolute path is used as is. "+
 			"Typical use: pass dirname of the changed _defaults.yaml in a CI hook.")
 	fs.StringVar(&f.requiredFields, "required-fields", "",
 		"Comma-separated dotted paths every tenant's effective config must have "+

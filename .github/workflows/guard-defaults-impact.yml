@@ -555,7 +555,8 @@ jobs:
             # after this change".
             # (push / workflow_dispatch land here too: no PR diff to scope against.)
             echo "No conf.d tree resolved from this diff — running whole-tree over ${CONF_D}"
-            run_one "${CONF_D}" "${CONF_D}"
+            # --scope is relative to --config-dir (#2588): "." = the whole tree.
+            run_one "${CONF_D}" "."
           fi
 
           echo "exit=$WORST" >> "$GITHUB_OUTPUT"
