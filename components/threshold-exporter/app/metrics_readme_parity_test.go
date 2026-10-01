@@ -47,6 +47,9 @@ type sourceMetric struct {
 }
 
 func stringLits(e ast.Expr) ([]string, bool) {
+	if id, ok := e.(*ast.Ident); ok && id.Name == "nil" {
+		return []string{}, true
+	}
 	cl, ok := e.(*ast.CompositeLit)
 	if !ok {
 		return nil, false
@@ -236,6 +239,7 @@ func readmeMetrics(t *testing.T) map[string]readmeRow {
 }
 
 func TestMetricsREADMEMatchesSource(t *testing.T) {
+	t.Parallel()
 	src := collectSourceMetrics(t)
 	doc := readmeMetrics(t)
 
