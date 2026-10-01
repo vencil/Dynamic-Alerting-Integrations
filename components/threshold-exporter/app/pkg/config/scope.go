@@ -98,6 +98,27 @@ type ScopedTenants struct {
 	// (routingpolicy.UnreadRouting). A file in ParseFailed is listed too;
 	// the caller skips it.
 	DefaultsFiles []DefaultsFile
+
+	// Unreadable is every entry of the walk's TreeScan.Unreadable — a
+	// config-named file whose stat or read failed (a dangling symlink, a file
+	// the process may not read) and a directory below the root it could not
+	// list — that bears on the scope, by ParseFailed's rule plus one for
+	// directories: a directory that is the scope, lies below it or contains
+	// it. Same entries, same order (by RelKey) as the exporter's own load
+	// (LoadReport.Unreadable) over the whole tree; nil when there are none
+	// (#2588). A symlink to a directory is not listed.
+	//
+	// ⛔ Not an error, like ParseFailed and for the same reason: the walker
+	// skips the entry and serves the rest. Tenants silently omits the tenants
+	// such a file declares, and an effective config silently lacks what an
+	// unreadable `_defaults.yaml` would have given it — a caller that turns
+	// this result into a verdict must read this field too.
+	//
+	// ⚠️ Also filled when ScopeEffective returns a *DecodeError: the result
+	// then carries this field (and ParseFailed, DefaultsFiles) and no tenant,
+	// so a run stopped by one undecodable file still names the unreadable
+	// ones. Every other error returns a nil result.
+	Unreadable []UnreadableFile
 }
 
 // DefaultsFile is one defaults carrier of a scan: its root-relative slash
@@ -129,8 +150,13 @@ type DefaultsFile struct {
 //
 // A tenant file that is unreadable or not valid YAML is not an error: the
 // walker logs (here: discards) and skips it, as the exporter does. A file
-// the decode rejects is listed in ScopedTenants.ParseFailed (#2123) so the
-// caller can still tell "no tenants" from "tenants it could not read".
+// the decode rejects is listed in ScopedTenants.ParseFailed (#2123), and a
+// file or directory the walk cannot stat, read or list in
+// ScopedTenants.Unreadable (#2588), so the caller can still tell "no
+// tenants" from "tenants it could not read".
+//
+// A *DecodeError is returned WITH a non-nil result that holds no tenant
+// (see ScopedTenants.Unreadable); every other error with a nil one.
 //
 // configDir and scopeDir are both symlink-resolved (AbsScanRoot) before
 // the containment check, so a symlinked --config-dir and a --scope spelled
@@ -230,8 +256,9 @@ func scopeEffective(configDir, scopeDir string, wholeTree bool) (*ScopedTenants,
 		return nil, err
 	}
 	defaultsFiles := scopeDefaultsFiles(scan, filepath.ToSlash(rel))
+	unreadable := scopeUnreadable(scan, filepath.ToSlash(rel))
 	if len(inScope) == 0 {
-		return &ScopedTenants{ParseFailed: parseFailed, DefaultsFiles: defaultsFiles}, nil
+		return &ScopedTenants{ParseFailed: parseFailed, DefaultsFiles: defaultsFiles, Unreadable: unreadable}, nil
 	}
 
 	// Sort tenant IDs for deterministic output. The CLI's exit-code
@@ -253,6 +280,7 @@ func scopeEffective(configDir, scopeDir string, wholeTree bool) (*ScopedTenants,
 		Tenants:       make([]*EffectiveConfig, 0, len(tenantIDs)),
 		ParseFailed:   parseFailed,
 		DefaultsFiles: defaultsFiles,
+		Unreadable:    unreadable,
 	}
 	seenFiles := make(map[string]struct{}, len(tenantIDs))
 	for _, id := range tenantIDs {
@@ -265,7 +293,14 @@ func scopeEffective(configDir, scopeDir string, wholeTree bool) (*ScopedTenants,
 			if errors.As(err, &dup) {
 				return nil, err
 			}
-			return nil, fmt.Errorf("resolve tenant %q: %w", id, err)
+			err = fmt.Errorf("resolve tenant %q: %w", id, err)
+			// A file that does not decode stops the scope; the files the walk
+			// could not read are still the caller's to name (#2588).
+			var de *DecodeError
+			if errors.As(err, &de) {
+				return &ScopedTenants{ParseFailed: parseFailed, DefaultsFiles: defaultsFiles, Unreadable: unreadable}, err
+			}
+			return nil, err
 		}
 		out.Tenants = append(out.Tenants, ec)
 		seenFiles[ec.SourceFile] = struct{}{}
@@ -337,6 +372,21 @@ func scopeDefaultsFiles(scan *TreeScan, scopeRel string) []DefaultsFile {
 		out = append(out, DefaultsFile{Name: key, Data: f.Data})
 	}
 	sort.Slice(out, func(i, j int) bool { return out[i].Name < out[j].Name })
+	return out
+}
+
+// scopeUnreadable is ScopedTenants.Unreadable: the scan's Unreadable entries
+// that bear on the scope. A file follows bearsOnScope (ParseFailed's rule); a
+// directory the walk could not list (walk_error) bears when it is the scope,
+// lies below it, or contains it — everything under it is lost.
+func scopeUnreadable(scan *TreeScan, scopeRel string) []UnreadableFile {
+	var out []UnreadableFile
+	for _, u := range scan.Unreadable { // sorted by RelKey (ScanDirTree)
+		if bearsOnScope(u.RelKey, scopeRel) ||
+			(u.Reason == UnreadableWalkError && (u.RelKey == scopeRel || strings.HasPrefix(scopeRel+"/", u.RelKey+"/"))) {
+			out = append(out, u)
+		}
+	}
 	return out
 }
 
