@@ -2570,3 +2570,83 @@ class TestRootDefaultsValues:
         out = capsys.readouterr().out
         assert exc.value.code == 1, out
         assert "[FAIL] root_defaults" in out, out
+
+
+class TestRootDefaultsWrapper:
+    """Check 10 (#2386): a root `_defaults.yaml` with no `defaults:` key whose
+    top level holds a threshold FAILs.
+
+    Measured before this rule: `mysql_connections: 80` written at the top of
+    the root file printed `nothing to check`, rc 0 — while `da-guard
+    served-values` had no `mysql_connections` series for the tenant and
+    `/effective` showed 80.
+    """
+
+    _TENANT = "tenants:\n  tenant-x:\n    container_cpu: \"70\"\n"
+
+    @classmethod
+    def _tree(cls, tmp_path, defaults_body):
+        d = tmp_path / "conf.d"
+        d.mkdir()
+        (d / "_defaults.yaml").write_text(defaults_body, encoding="utf-8")
+        (d / "tenant-x.yaml").write_text(cls._TENANT, encoding="utf-8")
+        return d
+
+    def test_unwrapped_root_threshold_fails(self, tmp_path):
+        d = self._tree(tmp_path, "mysql_connections: 80\ncontainer_cpu: 60\n")
+        r = vc.check_root_defaults(str(d))
+        assert r["status"] == vc.FAIL, r
+        assert len(r["details"]) == 1, r
+        assert "`container_cpu`, `mysql_connections`" in r["details"][0], r
+        assert "nothing to check" not in r["details"][0], r
+
+    def test_only_the_undecoded_keys_are_named(self, tmp_path):
+        """`state_filters` / `max_metrics_per_tenant` are fields the root
+        decode reads, `_routing_defaults` a reserved key: not named."""
+        d = self._tree(tmp_path, "state_filters: {}\nmax_metrics_per_tenant: 10\n"
+                       "_routing_defaults: {}\nmysql_connections: 80\n")
+        r = vc.check_root_defaults(str(d))
+        assert r["status"] == vc.FAIL, r
+        assert "key(s) `mysql_connections` are" in r["details"][0], r
+
+    @pytest.mark.parametrize("body", [
+        "defaults:\n  mysql_connections: 80\n",
+        "defaults:\nstate_filters: {}\n",
+        "state_filters: {}\n_routing_defaults: {}\n",
+        "# placeholder\n",
+    ], ids=["wrapped", "null-defaults", "decoded-and-reserved-only",
+            "comment-only"])
+    def test_must_stay_green(self, tmp_path, body):
+        d = self._tree(tmp_path, body)
+        r = vc.check_root_defaults(str(d))
+        assert r["status"] == vc.PASS, r
+
+    def test_unwrapped_subtree_file_is_not_this_rows_finding(self, tmp_path):
+        """A subtree carrier is merged whole by the hierarchical plane and
+        served; ROOT only."""
+        d = self._tree(tmp_path, "defaults:\n  container_cpu: 60\n")
+        sub = d / "team"
+        sub.mkdir()
+        (sub / "_defaults.yaml").write_text("mysql_connections: 70\n",
+                                            encoding="utf-8")
+        r = vc.check_root_defaults(str(d))
+        assert r["status"] == vc.PASS, r
+
+    def test_without_the_schema_every_plain_key_is_named(self, tmp_path,
+                                                         monkeypatch):
+        """Fail-closed: with no schema the decoded fields are unknown."""
+        monkeypatch.setattr(vc, "_find_schema", lambda name: None)
+        d = self._tree(tmp_path, "state_filters: {}\nmysql_connections: 80\n")
+        r = vc.check_root_defaults(str(d))
+        assert r["status"] == vc.FAIL, r
+        assert "`mysql_connections`, `state_filters`" in r["details"][0], r
+        assert "was not found" in r["details"][0], r
+
+    def test_end_to_end_exits_1(self, tmp_path, capsys, cli_argv):
+        d = self._tree(tmp_path, "mysql_connections: 80\n")
+        cli_argv("validate_config", "--config-dir", str(d))
+        with pytest.raises(SystemExit) as exc:
+            vc.main()
+        out = capsys.readouterr().out
+        assert exc.value.code == 1, out
+        assert "[FAIL] root_defaults" in out, out

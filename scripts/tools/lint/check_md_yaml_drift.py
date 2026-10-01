@@ -286,6 +286,17 @@ class MdYamlDriftChecker:
         """
         keys = set(data)
         if keys & PLATFORM_KEYS:
+            # #2386: the schema requires `defaults:` in every `_defaults*`
+            # FILE, but a doc block showing one top-level section
+            # (`_routing_enforced:` …) is an excerpt of that file — the same
+            # reason a bare tenant body is wrapped in a synthetic tenant
+            # below. Such a block is judged on the keys it shows: the same
+            # schema without its top-level `required` (every other keyword,
+            # `additionalProperties` included, still applies).
+            if "defaults" not in keys:
+                excerpt = {k: v for k, v in self.platform_schema.items()
+                           if k != "required"}
+                return excerpt, data, "platform"
             return self.platform_schema, data, "platform"
         if "tenants" in keys:
             return self.schema, data, "tenant-file"

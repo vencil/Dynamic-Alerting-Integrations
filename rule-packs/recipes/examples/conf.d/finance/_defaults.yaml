@@ -2,6 +2,10 @@
 # A recipe here applies to every tenant defined under finance/ (here: pay-a),
 # as ONE vectorized rule covering the subtree — not N per-tenant rules. Tenants
 # in the subtree cannot override it (platform/domain policy = generated rule).
+#
+# `defaults: {}` — this level sets no threshold, but every `_defaults*.yaml`
+# carries the `defaults:` key (platform-defaults.schema.json, #2386).
+defaults: {}
 _custom_alerts:
   - recipe: ratio
     name: payment_failure_ratio

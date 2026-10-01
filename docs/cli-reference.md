@@ -2015,7 +2015,7 @@ da-tools validate-config --config-dir <path> [options]
 - 版號一致性——**只在給了 `--version-check` 時**
 - Policy-as-Code DSL 評估（`_defaults.yaml` 的 `_policies`，或 `--policy-dsl`）
 - **租戶宣告唯一性**：同一個租戶 id 被**兩個檔案**同時宣告時 FAIL。⚠️ exporter 對這個狀態的回應是**拒載整個 config dir**（`DuplicateTenantError`），所以後果不是「那一個租戶失去告警」，而是**這棵樹裡每一個租戶都失去告警**，而且發生在部署／重啟當下、CI 通過之後。最常見的成因是編輯器在 `db-a.yaml` 旁邊留下一份 `db-a.yml`，但判準是「一個 id、兩個檔」——換成 `archive/db-a.yaml` 一樣會擋（#1577）。⚠️ **v2.9.0 映像沒有這一項**：同一棵樹在那顆映像上回報 `Result: PASS`、exit 0 <!-- image-caveat: v2.9.0 -->
-- **根目錄 defaults**（`root_defaults`）：依 exporter 的解法檢查**根目錄** `_defaults.yaml` 的 `defaults:`，兩類 FAIL。其一是值：exporter 把根目錄 `defaults:` 當 `map[string]float64` 解，**解不成數字的值**（`"70"`、`disable`、mapping、list、布林、日期等）會讓 exporter **丟掉整個 `defaults:` 區塊**、所有平台閾值一起失效，而載入照樣回報成功；**空值**（`k:`、`~`、`null`）則被解成 **0**，對每個沒有自訂值的租戶送出 0 閾值——只想宣告 key、不給平台值，請改列在 `optional_overrides:`。判定與 `deprecate` 的載體體檢共用同一個 yaml.v3 鏡射（#1414）。其二是路由：`defaults:` 底下出現 `_routing` 或任何 `_routing` 前綴的鍵，不論值為何都 FAIL。`defaults:` 只放數值閾值；路由預設值寫在頂層的 `_routing_defaults:`。⚠️ 在這裡放一個 `_routing` mapping，損失的不只是路由：exporter 把根目錄的 `defaults:` 當成純數值讀取，解不進去就**整個區塊丟棄——所有平台閾值一起失效**，而載入本身照樣回報成功；路由產生器也從不讀 `defaults:`。子目錄的 `_defaults.yaml` 不在這一列的判定範圍（#2291）。⚠️ **v2.9.0 映像沒有這一項** <!-- image-caveat: v2.9.0 -->
+- **根目錄 defaults**（`root_defaults`）：依 exporter 的解法檢查**根目錄** `_defaults.yaml` 的 `defaults:`，三類 FAIL。其一是值：exporter 把根目錄 `defaults:` 當 `map[string]float64` 解，**解不成數字的值**（`"70"`、`disable`、mapping、list、布林、日期等）會讓 exporter **丟掉整個 `defaults:` 區塊**、所有平台閾值一起失效，而載入照樣回報成功；**空值**（`k:`、`~`、`null`）則被解成 **0**，對每個沒有自訂值的租戶送出 0 閾值——只想宣告 key、不給平台值，請改列在 `optional_overrides:`。判定與 `deprecate` 的載體體檢共用同一個 yaml.v3 鏡射（#1414）。其二是路由：`defaults:` 底下出現 `_routing` 或任何 `_routing` 前綴的鍵，不論值為何都 FAIL。`defaults:` 只放數值閾值；路由預設值寫在頂層的 `_routing_defaults:`。⚠️ 在這裡放一個 `_routing` mapping，損失的不只是路由：exporter 把根目錄的 `defaults:` 當成純數值讀取，解不進去就**整個區塊丟棄——所有平台閾值一起失效**，而載入本身照樣回報成功；路由產生器也從不讀 `defaults:`。其三是包裝（[#2386](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/2386)）：根目錄 `_defaults.yaml` 沒有頂層 `defaults:` 鍵、頂層卻有 exporter 根目錄解析不讀的鍵（不以 `_` 開頭、也不是 `state_filters` 等 `platform-defaults.schema.json` 列出的欄位）時 FAIL，並列出這些鍵：exporter 只從 `defaults:` 底下讀根目錄的平台閾值，寫在頂層的值 `/metrics` 不會送出，`/effective` 卻照樣顯示。以 `_` 開頭的鍵不在判定範圍，所以名稱以 `_` 開頭的 metric 也不會被這條擋到。子目錄的 `_defaults.yaml` 不在這一列的判定範圍（#2291）。⚠️ **v2.9.0 映像沒有這一項** <!-- image-caveat: v2.9.0 -->
 
 ⛔ **以報表實際印出的列為準**（`Total: N checks` 那一段）。這份清單先前列著一個叫「Tenant 名稱一致性」的項目，而**沒有任何檢查在做那件事**——實測檔名 `hotel.yaml` 宣告租戶 `totally-different`，六項全 PASS、exit 0；同時它漏掉了四個真的會跑的檢查。條件式的那幾項省略對應旗標時**整列不會出現**，不是靜默通過。
 
@@ -2543,6 +2543,12 @@ routing 檢查的對象是租戶**解析後**的 routing，與 route generator�
 同一個租戶 id 由兩個租戶檔宣告時，exporter 的解析直接拒絕（`duplicate tenant ID`），da-guard 在任何檢查之前以結束碼 2 結束。
 
 這些 finding 不會把檔案列進 exit 3；語法壞到 exporter 讀不了的平台檔仍只以 exit 3 點名一次。
+
+**根目錄 `_defaults.yaml` 的包裝（[#2386](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/2386)）**
+
+| Finding kind | 嚴重度 | 觸發 |
+|---|---|---|
+| `root_defaults_unwrapped` | error | 根目錄的 defaults 檔（`_defaults.yaml`／`.yml`）是 mapping、沒有頂層 `defaults:` 鍵，頂層卻有 exporter 根目錄解析不讀的鍵（不以 `_` 開頭、也不是 exporter 根目錄設定結構的欄位，例如 `state_filters`、`max_metrics_per_tenant`）。exporter 只從 `defaults:` 底下讀根目錄的平台閾值，這些值 `/metrics` 不會送出、載入也不出聲，而 `/effective` 與其他檢查讀的合併結果把整份文件當成 defaults，照樣顯示它們。tenant 欄空白，Field 為檔名，訊息列出這些鍵。只看根目錄：子目錄的 defaults 檔沒有包裝時整份文件就是 defaults 區塊，值照常送出。以 `_` 開頭的鍵不在判定範圍（例如 `_routing_defaults`；寫錯位置的 `_routing*` 由 `routing_in_unread_location` 報），所以名稱以 `_` 開頭的 metric 也不會被擋到。exporter 丟掉的檔仍只以 exit 3 點名 |
 
 **`served-values`**
 

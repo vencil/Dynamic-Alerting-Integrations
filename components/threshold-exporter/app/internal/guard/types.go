@@ -21,7 +21,9 @@
 //     a CLI subcommand by C-11 Migration Toolkit).
 //
 // Pure library — operates on already-merged effective configs
-// supplied by the caller, never touches YAML or disk. Checks shipped:
+// supplied by the caller, never touches disk; the one YAML decode is
+// of the root defaults carrier's bytes, also supplied by the caller
+// (check 5). Checks shipped:
 //
 //  1. Schema validation (Severity=error, PR-1)
 //     For every tenant under the affected scope: required fields
@@ -63,6 +65,11 @@
 //     it lands. Two tiers: SeverityWarn at WarnRatio×Limit (80%
 //     by default), SeverityError above Limit.
 //
+//  5. Root defaults wrapper (#2386; see rootdefaults.go)
+//     The conf.d root `_defaults.yaml` with no `defaults:` mapping
+//     (error): its top-level thresholds are not served on /metrics,
+//     while the merged effective configs show them.
+//
 // Future PRs in the C-12 family:
 //   - PR-4: CLI subcommand `da-tools guard defaults-impact` plus
 //     YAML parsing convenience layer that runs the actual merge
@@ -76,7 +83,10 @@
 // emitter), then hands the merged maps to CheckDefaultsImpact.
 package guard
 
-import "github.com/vencil/threshold-exporter/pkg/routingpolicy"
+import (
+	"github.com/vencil/threshold-exporter/pkg/config"
+	"github.com/vencil/threshold-exporter/pkg/routingpolicy"
+)
 
 // Severity classifies a Finding. Two tiers in PR-1; PR-2/3 may add
 // "info" for the routing/cardinality layers if useful.
@@ -354,4 +364,14 @@ type CheckInput struct {
 	// truncation kicks in. Set to 1.0 to disable the warning tier
 	// (errors only).
 	CardinalityWarnRatio float64 `json:"cardinality_warn_ratio,omitempty"`
+
+	// DefaultsFiles are the defaults carriers of the scan
+	// (config.ScopedTenants.DefaultsFiles). The root one is checked for a
+	// missing `defaults:` wrapper (#2386, rootdefaults.go); nil skips it.
+	DefaultsFiles []config.DefaultsFile `json:"-"`
+
+	// ParseFailed are the files the exporter drops
+	// (config.ScopedTenants.ParseFailed); the wrapper check skips them, so a
+	// broken file is named once, by exit 3.
+	ParseFailed []string `json:"-"`
 }

@@ -1805,8 +1805,10 @@ _WITNESS_NESTED = "defaults:\n  threshold:\n    cpu: 90\n"
 # `recipe` key — correctly, and that is the point: this witness validates the
 # WHOLE platform-defaults schema, not only the set of top-level key names. A
 # fixture that is merely "shaped like" the tree would have made the two silent
-# rows below prove nothing.
+# rows below prove nothing. Since #2386 the schema requires the `defaults:`
+# key and that file writes it empty, so the fixture does too.
 _WITNESS_NO_SECTION = (
+    "defaults: {}\n"
     "_custom_alerts:\n"
     "  - recipe: ratio\n"
     "    name: payment_failure_ratio\n"
@@ -1973,11 +1975,13 @@ def test_the_witness_reads_every_artifact_and_every_document_in_it():
         assert found, exc.value
         return tuple(int(n) for n in found[0])
 
+    # #2386: a renamed section is two violations per file — the missing
+    # `defaults` (required) and the unknown `defalts` key.
     assert _counts({"a/conf.d/_defaults.yaml": _WITNESS_RENAMED,
-                    "b/conf.d/_defaults.yaml": _WITNESS_RENAMED}) == (2, 2)
+                    "b/conf.d/_defaults.yaml": _WITNESS_RENAMED}) == (4, 2)
     assert _counts({"a/conf.d/_defaults.yaml": _WITNESS_OK,
                     "b/conf.d/_defaults.yaml": _WITNESS_OK,
-                    "c/conf.d/_defaults.yaml": _WITNESS_RENAMED}) == (1, 1)
+                    "c/conf.d/_defaults.yaml": _WITNESS_RENAMED}) == (2, 1)
 
 
 def test_the_witness_validates_artifacts_outside_conf_d_without_refusing_them():

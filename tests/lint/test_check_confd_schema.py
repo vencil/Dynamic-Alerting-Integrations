@@ -302,8 +302,11 @@ class TestDefaultsValidation:
     def test_inherited_override_keys_pass(self, confd, schema, platform_schema):
         # A _defaults.yaml carrying inherited tenant-override keys (reserved keys +
         # _state_*/_routing prefixes) must NOT false-red.
+        # #2386: `defaults:` is required. Null, not `{}`: below the root a
+        # `defaults:` MAPPING takes the top-level keys out of the
+        # defaults-chain merge, and inheriting them is this file's point.
         _write(confd, "_defaults.yaml",
-               "_metadata:\n  owner: dba\n_severity_dedup: enable\n"
+               "defaults:\n_metadata:\n  owner: dba\n_severity_dedup: enable\n"
                # #2164: `_routing_enforced` is typed now (an object whose
                # `enabled` is a boolean); a bare `true` was never a shape the
                # generator used (it WARNs "must be a dict" and ignores it).
@@ -328,6 +331,24 @@ class TestDefaultsValidation:
         _write(confd, "_defaults.yaml", "# placeholder, no defaults yet\nnull\n")
         _checked, viol, _skipped = validate_dir(confd, schema, jsonschema, platform_schema)
         assert viol == [], f"null/empty _defaults.yaml false-rejected: {viol}"
+
+    def test_defaults_key_is_required(self, confd, schema, platform_schema):
+        # #2386 (owner ruling D2(b)): every `_defaults*` file carries the
+        # `defaults:` key. Only the ROOT file's top-level thresholds are
+        # dropped from /metrics without it; the schema cannot tell the root
+        # from a subtree, so it asks for the key everywhere.
+        _write(confd, "_defaults.yaml", "_routing_defaults:\n  group_wait: \"30s\"\n")
+        _c, viol, _s = validate_dir(confd, schema, jsonschema, platform_schema)
+        assert viol == ["ERROR: _defaults.yaml: 'defaults' is a required property @ /"], viol
+
+    def test_missing_defaults_does_not_hide_a_typo(self, confd, schema, platform_schema):
+        # The `required` error would otherwise be the only line, and a
+        # `defalts:` typo would never be named.
+        _write(confd, "_defaults.yaml", "defalts:\n  mysql_threads_running: 80\n")
+        _c, viol, _s = validate_dir(confd, schema, jsonschema, platform_schema)
+        assert len(viol) == 2, viol
+        assert "'defaults' is a required property" in viol[0], viol
+        assert "'defalts' does not match" in viol[1], viol
 
     def test_list_defaults_still_flagged(self, confd, schema, platform_schema):
         # A _defaults.yaml whose top doc is a LIST/scalar (not None) is still malformed.
@@ -420,7 +441,9 @@ class TestQuotingAndDefaultsRouting:
             "re-enabled-n", "re-enabled-quoted-yes", "re-match-mapping"])
     def test_defaults_routing_blocks_are_typed(
             self, confd, schema, platform_schema, body, expect):
-        _write(confd, "_defaults.yaml", body)
+        # #2386: `defaults:` is required; these cases are about the routing
+        # blocks beside it.
+        _write(confd, "_defaults.yaml", "defaults: {}\n" + body)
         _c, viol, _s = validate_dir(confd, schema, jsonschema, platform_schema)
         if expect is None:
             assert viol == []
@@ -526,7 +549,8 @@ class TestUnresolvableCrossFileRef:
     silent rc 0 when no `_defaults*` file happens to walk into the `$ref`."""
 
     _REF = "tenant-config.schema.json#/definitions/routingDefaults"
-    _ROUTING_DEFAULTS = ("_routing_defaults:\n  receiver:\n    type: webhook\n"
+    _ROUTING_DEFAULTS = ("defaults: {}\n"  # #2386: the key is required
+                         "_routing_defaults:\n  receiver:\n    type: webhook\n"
                          "    url: \"https://a.example.com/h\"\n")
     _TENANT = "tenants:\n  t1:\n    _severity_dedup: \"enable\"\n"
 

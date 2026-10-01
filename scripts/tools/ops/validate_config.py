@@ -1404,10 +1404,52 @@ def _root_defaults_value_detail(rel: str, key: str | None, raw: str,
             f"unquoted number.")
 
 
+def _root_defaults_unwrapped_detail(rel: str, raw: dict) -> list[str]:
+    """The FAIL line for a root carrier with no `defaults:` key (#2386).
+
+    threshold-exporter reads the root file's platform thresholds only from
+    under ``defaults:`` — a top-level key that is not one of the fields its
+    root decode reads is not served on /metrics, while /effective (the
+    defaults-chain merge, which takes an unwrapped document as the block)
+    shows it. "Fields the root decode reads" are the non-``_`` ``properties``
+    of platform-defaults.schema.json; the Go test
+    ``TestRootDecodedKeysMatchSchema`` pins them to the exporter's
+    ``ThresholdConfig`` fields, which da-guard's ``root_defaults_unwrapped``
+    finding reads for the same judgement.
+
+    ``_``-prefixed keys are not reported: they are the reserved keys other
+    readers take from the top level (``_routing_defaults``,
+    ``_custom_alerts`` …). A metric key that starts with ``_`` is therefore
+    not caught here.
+
+    ⚠️ Without the schema the decoded fields are unknown, so the line is
+    written for every non-``_`` key (fail-closed): it may then name a field
+    such as ``state_filters`` the exporter does read.
+    """
+    schema_path = _find_schema(_PLATFORM_SCHEMA)
+    known: set[str] = set()
+    if schema_path is not None:
+        with open(schema_path, encoding="utf-8") as fh:
+            known = set(json.load(fh).get("properties", {}))
+    dropped = sorted(str(k) for k in raw
+                     if not str(k).startswith("_") and str(k) not in known)
+    if not dropped:
+        return []
+    keys = ", ".join(f"`{k}`" for k in dropped)
+    unknown = ("" if schema_path is not None else
+               f" ({_PLATFORM_SCHEMA} was not found, so every top-level key "
+               f"not starting with `_` is listed)")
+    return [f"{rel}: no top-level `defaults:` mapping — threshold-exporter "
+            f"reads the root file's platform thresholds only from under "
+            f"`defaults:`, so the top-level key(s) {keys} are not served on "
+            f"/metrics, although /effective shows them{unknown}. Put them "
+            f"under `defaults:`."]
+
+
 def check_root_defaults(config_dir: str) -> dict[str, object]:
     """The ROOT `_defaults.yaml`'s `defaults:` as the exporter decodes it.
 
-    Two rules, one row:
+    Three rules, one row:
 
     * #1414 — every value must decode as a number. The exporter decodes the
       root ``defaults:`` as ``map[string]float64`` with yaml.v3: a value it
@@ -1423,6 +1465,12 @@ def check_root_defaults(config_dir: str) -> dict[str, object]:
     * #2291 — no ``_routing*`` key, whatever its value (below). A
       ``_routing*`` key gets that rule's line only, never a second one from
       the value rule.
+    * #2386 — a root carrier with no ``defaults:`` key whose top level holds
+      a key the exporter's root decode does not read FAILs: that value is
+      not served on /metrics while /effective shows it
+      (``_root_defaults_unwrapped_detail``). A root carrier with no
+      ``defaults:`` key and only such fields or ``_`` keys still PASSes as
+      "nothing to check".
 
     ⚠️ A file PyYAML cannot read at all still fails through
     ``load_yaml_file_strict`` and ``_run_check``'s input-error row, as before;
@@ -1488,6 +1536,8 @@ def check_root_defaults(config_dir: str) -> dict[str, object]:
                for k, r, kind in verdicts
                if not (k is not None and k.startswith("_routing"))
                and (kind in dr.BLOCKING_KINDS or kind == dr.DECODES_TO_ZERO)]
+    if "defaults" not in raw:
+        details += _root_defaults_unwrapped_detail(rel, raw)
     block = raw.get("defaults")
     if not isinstance(block, dict):
         if details:

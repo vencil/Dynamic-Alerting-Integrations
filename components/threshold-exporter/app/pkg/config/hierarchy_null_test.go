@@ -61,16 +61,19 @@ func TestDeepMerge_NullOnReservedKey_StillDeletes(t *testing.T) {
 	//       shipped _defaults.yaml. extractDefaultsBlock falls through and
 	//       returns the WHOLE document whenever the assertion on m["defaults"]
 	//       fails — no `defaults:` key at all, or one that is explicitly null.
-	//       rule-packs/recipes/examples/conf.d/finance/_defaults.yaml does this
-	//       today via `_custom_alerts` — whose value is a LIST, so it merges
-	//       normally and never reaches the delete below.
+	//       No shipped file does this any more: since #2386
+	//       platform-defaults.schema.json requires the `defaults:` key, and
+	//       rule-packs/recipes/examples/conf.d/finance/_defaults.yaml (which
+	//       reached it via `_custom_alerts`, a LIST that merges normally and
+	//       never reaches the delete below) now writes `defaults: {}`. An
+	//       operator's file the schema is not run on still can.
 	//
 	//   (b) This delete branch additionally requires that key's value to be an
 	//       explicit null. Measured: 0 of the 17 shipped `_defaults*.yaml` files
 	//       currently carry a `_`-prefixed key with a null value.
 	//
-	// So: the path into this branch exists in shipped data (a); the triggering
-	// value does not occur in the repo today (b). No config file exercises it,
+	// So: the path into this branch is open to operator files (a); the
+	// triggering value does not occur in the repo today (b). No config file exercises it,
 	// which means THIS hand-constructed test is the only thing holding the
 	// branch in place — remove the branch and this test, and nothing else in
 	// the repo goes red. That is why it is pinned here.

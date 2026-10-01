@@ -1131,7 +1131,7 @@
     {
       "name": "unwrapped-defaults-routing-is-not-read",
       "files": {
-        "_defaults.yaml": "cpu_usage_percent: 80\n_routing:\n  receiver:\n    type: slack\n    api_url: https://hooks.slack.com/services/T/B/x\n_routing_defaults:\n  receiver:\n    type: webhook\n    url: https://w.example/hook\n",
+        "_defaults.yaml": "_routing:\n  receiver:\n    type: slack\n    api_url: https://hooks.slack.com/services/T/B/x\n_routing_defaults:\n  receiver:\n    type: webhook\n    url: https://w.example/hook\n",
         "_domain_policy.yaml": "domain_policies:\n  chat-free:\n    constraints:\n      forbidden_receiver_types:\n      - slack\n    tenants:\n    - t-flat\n",
         "t-flat.yaml": "tenants:\n  t-flat:\n    _severity_dedup: disable\n"
       },

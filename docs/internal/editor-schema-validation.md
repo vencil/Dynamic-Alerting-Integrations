@@ -106,6 +106,7 @@ JetBrains 內建 YAML schema 支援（不需 yaml-language-server）：
 此 schema 是**最小守門**：
 
 - **頂層 key 嚴格**（`additionalProperties:false`）→ 擋上述非前綴類 typo。`^_state_` / `^_routing` patternProperties 放行 prefix-class（同 tenant validator 的寬鬆 prefix 模型 → prefix **內部** typo 如 `_routing_defualts` **不在守備**）。
+- **`defaults` 鍵必填**（`required: [defaults]`，[#2386](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/2386)）：每個 `_defaults*` 檔都要有頂層 `defaults:`（值可為空或 null；全檔只有註解／空白／null 的佔位檔不受此規則約束）。schema 分不出根目錄與子目錄，所以對所有層一律要求，這是形狀統一。執行期只有**根目錄**檔受影響：沒有包裝時頂層的閾值不會出現在 `/metrics`，那部分由 da-guard `root_defaults_unwrapped` 與 `validate-config` 的 `root_defaults` 列報出。⚠️ 子目錄檔補上包裝會改變行為：`defaults:` 一旦是 mapping（含 `{}`），檔內其他頂層鍵（例如要往下繼承的 `_severity_dedup`）就不再進入 defaults 合併、也不再送出；把它們移到 `defaults:` 底下才會保留原本的效果。
 - **巢狀值刻意 loose**（`defaults` / `state_filters` 下的 metric / filter 名是動態的、不建模）。
 - 頂層 properties 同時鏡像 Go `ThresholdConfig`（`tenants` / `profiles` / `max_metrics_per_tenant` 也放行——loader 從任何檔解碼它們；但 exporter 只採信根目錄 `_defaults.yaml` 的 `max_metrics_per_tenant`，其他位置記 WARN 忽略，#2028）。
 - **CI（`check_confd_schema.py`）與編輯器（devcontainer `yaml.schemas`）用同一 schema、同一組檔案**（兩種副檔名拼法、不分大小寫；例外見〈適用範圍〉的已知差異）。
