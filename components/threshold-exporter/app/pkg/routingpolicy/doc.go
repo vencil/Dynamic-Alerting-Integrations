@@ -7,8 +7,14 @@
 //     _grar_merge.merge_routing_with_defaults): `_routing_defaults` →
 //     routing profile → the tenant's `_routing`, each a SHALLOW top-level
 //     merge, then `{{tenant}}` replaced in every string value. The fourth
-//     layer, `_routing_enforced` (NOC), takes no part in policy checks and is
-//     not modelled here;
+//     layer, `_routing_enforced` (NOC), takes no part in resolution or in
+//     policy checks; of it only the group_by of the route(s) the generator
+//     renders is modelled (#2503, _grar_routes.enforced_group_by_problems →
+//     Tree.Enforced / EnforcedGroupByInvalid: the block of the last root
+//     platform file that enables it, read as PyYAML reads it; judged only
+//     with a receiver pkg/receiverspec accepts, the `{{tenant}}` shape per
+//     tenant after substitution). Its match, timing and the `--policy`
+//     domain allowlist are not read;
 //   - the platform files that feed it (_grar_parse._parse_platform_config
 //     and, below the root, _parse_nested_config): LoadTree reads the whole
 //     tree (#2326, ADR-017 amendment 2026-09-28) — `_routing_defaults` along
@@ -30,6 +36,9 @@
 //   - the matcher values the generator needs as strings (#2431,
 //     _grar_validate.routing_values_not_string → ValuesNotString), read as
 //     PyYAML reads them (WithPyYAMLRouting);
+//   - the group_by contract (#2503, _grar_validate.group_by_problems /
+//     routing_group_by_invalid → GroupByProblems / GroupByInvalid): no
+//     non-string, empty or repeated element, no `...` beside other labels;
 //   - `require_critical_escalation` (#2325, _grar_validate.
 //     critical_escalation_findings): whether severity=critical alerts reach
 //     a pagerduty receiver at all, and which non-pagerduty destinations
@@ -42,9 +51,10 @@
 // side. A behaviour change on either side goes into the matrix first.
 //
 // Consumers: cmd/da-guard (through internal/guard) and tenant-api, which
-// cannot import internal/guard. Besides the standard library, yaml.v3 and
+// cannot import internal/guard. Besides the standard library, yaml.v3,
 // pkg/pyyamlcompat (receivers and matcher values as the generator's PyYAML
-// reads them, #2295 / #2431) it
+// reads them, #2295 / #2431) and pkg/receiverspec (whether an enforced
+// route's receiver is rendered, #2503) it
 // imports only pkg/config — for the walker (config.RootPlatformFiles and
 // config.ScanDirTree: the one directory lister, #1911) and
 // config.IsDisabled — and never

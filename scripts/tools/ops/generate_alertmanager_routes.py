@@ -801,11 +801,13 @@ def _build_parser() -> argparse.ArgumentParser:
                              "violations (ADR-007), an unquoted routes[].match value "
                              "or overrides[].alertname / metric_group that PyYAML "
                              "reads as a non-string (yes, 1:30, ~; #2431 — quote "
-                             "it) and, on the --apply/--output-configmap "
+                             "it), a group_by entry that is not a non-empty string, "
+                             "repeats a label or mixes '...' with labels (#2503) "
+                             "and, on the --apply/--output-configmap "
                              "merge, any inhibit rule with an ungated `equal:` label "
                              "(#1132). Without --strict these surface as WARN (an "
                              "unquoted override value is rendered via str() "
-                             "instead). CI runs "
+                             "instead; a bad group_by entry is dropped). CI runs "
                              "--strict.")
     mode_group = parser.add_mutually_exclusive_group()
     mode_group.add_argument("--apply", action="store_true",
@@ -986,7 +988,8 @@ def main() -> None:
         policy_errors = _policy_errors(all_warnings)
         if policy_errors:
             print(f"FAIL: {len(policy_errors)} blocking error(s) under "
-                  "--strict (domain policy, unquoted matcher value):",
+                  "--strict (domain policy, unquoted matcher value, "
+                  "invalid group_by entry):",
                   file=sys.stderr)
             for e in policy_errors:
                 print(e, file=sys.stderr)

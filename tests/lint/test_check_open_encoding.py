@@ -10,11 +10,16 @@ like a clean tree. These tests pin both directions of the fix:
   - an existing root is scanned for real: a bare ``open()`` under it
     exits 1 in strict mode, and a clean one exits 0 (an existing root is
     not mistaken for a missing one).
+
+The same fail-closed rule holds per file (#2601): a file is decoded the way
+the interpreter decodes it (BOM, PEP 263 coding cookie), and one that still
+cannot be parsed exits 2 instead of reading as clean.
 """
 from __future__ import annotations
 
 import importlib.util
 import json
+import subprocess
 import sys
 from pathlib import Path
 
@@ -245,3 +250,124 @@ class TestWriteSubprocessLedger:
         ledger = _ledger(tmp_path, {})
         assert self._write(monkeypatch, root, ledger) == 1
         assert self._rows(ledger) == {}
+
+
+# ---------------------------------------------------------------------------
+# #2601 — decode as the interpreter does; an unscanned file is never clean
+# ---------------------------------------------------------------------------
+_BOM = b"\xef\xbb\xbf"
+_BARE_BYTES = _BARE.encode("utf-8")
+
+
+class TestSourceDecoding:
+    """A file Python runs is a file the lint scans (#2601).
+
+    Every fixture here is runnable — ``compile(bytes)`` accepts it — and
+    carries a real violation. The old ``read_text("utf-8")`` +
+    ``ast.parse(str)`` skipped each of them silently.
+    """
+
+    def test_bom_file_is_scanned(self, tmp_path):
+        path = tmp_path / "bom.py"
+        path.write_bytes(_BOM + _BARE_BYTES)
+        compile(path.read_bytes(), str(path), "exec")
+        assert [ln for ln, _snip in mod.scan_file(path)] == [2]
+
+    def test_latin1_cookie_file_is_scanned(self, tmp_path):
+        path = tmp_path / "latin1.py"
+        path.write_bytes(
+            b"# -*- coding: latin-1 -*-\n"
+            b"S = '\xe9'\n"  # not valid UTF-8 on its own
+            b"def f(p):\n"
+            b"    return open(p).read()\n"
+        )
+        compile(path.read_bytes(), str(path), "exec")
+        assert [ln for ln, _snip in mod.scan_file(path)] == [4]
+
+    def test_double_bom_is_an_error_like_the_interpreter(self, tmp_path):
+        path = tmp_path / "bom2.py"
+        path.write_bytes(_BOM + _BOM + _BARE_BYTES)
+        with pytest.raises(SyntaxError):
+            compile(path.read_bytes(), str(path), "exec")
+        scan = mod.scan_source(path)
+        assert scan.error and "bom2.py" in scan.error
+        assert scan.open_encoding == []
+        with pytest.raises(mod.PythonSourceError):
+            mod.scan_file(path)
+
+    def test_form_feed_does_not_shift_the_ignore_marker(self, tmp_path):
+        """str.splitlines() also breaks on \\x0c, the tokenizer does not."""
+        path = tmp_path / "ff.py"
+        path.write_bytes(
+            b"\x0c# section\n"
+            b"open(p)  # open-encoding: ignore\n"
+        )
+        assert mod.scan_file(path) == []
+
+
+class TestUnscannableFileFailsTheRun:
+    @pytest.mark.parametrize("argv", [
+        ("--ci", "--strict-open-encoding", "--strict-line-ending"),
+        ("--ci",),
+        (),
+    ], ids=["ci-strict", "ci", "audit"])
+    def test_syntax_error_exits_2_and_names_the_file(
+        self, monkeypatch, capsys, tmp_path, clean_root, argv
+    ):
+        broken = clean_root / "broken.py"
+        broken.write_text("def broken(\n", encoding="utf-8", newline="\n")
+        rc = _run(monkeypatch, *argv, str(clean_root))
+        err = capsys.readouterr().err
+        assert rc == 2
+        assert "broken.py" in err and "SyntaxError" in err
+
+    def test_double_bom_next_to_a_violation_still_exits_2(
+        self, monkeypatch, capsys, tmp_path
+    ):
+        """The caller error wins over the violation: the run did not see
+        every file, so its exit 1 would understate what is wrong."""
+        root = tmp_path / "pkg"
+        root.mkdir()
+        (root / "bad.py").write_bytes(_BARE_BYTES)
+        (root / "bom2.py").write_bytes(_BOM + _BOM + _BARE_BYTES)
+        rc = _run(monkeypatch, "--ci", "--strict-open-encoding", str(root))
+        captured = capsys.readouterr()
+        assert rc == 2
+        assert "bad.py:2" in captured.out
+        assert "bom2.py" in captured.err
+
+    def test_ledger_writer_refuses_when_a_file_is_unscannable(
+        self, monkeypatch, tmp_path
+    ):
+        """An unparsed file has no count; writing would read that as "every
+        site fixed" and drop its row."""
+        root = tmp_path / "pkg"
+        root.mkdir()
+        broken = root / "broken.py"
+        broken.write_bytes(_BOM + _BOM + b"import subprocess\n"
+                           b"subprocess.run(c, text=True)\n")
+        ledger = tmp_path / "ledger.json"
+        before = {"files": {mod.ledger_key(broken): 1}}
+        ledger.write_text(json.dumps(before), encoding="utf-8", newline="\n")
+        rc = _run(monkeypatch, "--write-subprocess-baseline",
+                  "--subprocess-baseline", str(ledger), str(root))
+        assert rc == 2
+        assert json.loads(ledger.read_text(encoding="utf-8")) == before
+
+    @pytest.mark.timeout(60)
+    def test_cli_bom_violation_and_unparseable_file(self, tmp_path):
+        """The real CLI, with the flags the pre-commit hook passes."""
+        bom = tmp_path / "bom.py"
+        bom.write_bytes(_BOM + _BARE_BYTES)
+        argv = [sys.executable, "-X", "utf8", str(_SCRIPT),
+                "--ci", "--strict-open-encoding", str(tmp_path)]
+        proc = subprocess.run(argv, capture_output=True, text=True,
+                              encoding="utf-8", timeout=60)
+        assert proc.returncode == 1, proc.stdout + proc.stderr
+        assert "bom.py:2" in proc.stdout
+
+        bom.write_bytes(_BOM + _BOM + _BARE_BYTES)
+        proc = subprocess.run(argv, capture_output=True, text=True,
+                              encoding="utf-8", timeout=60)
+        assert proc.returncode == 2, proc.stdout + proc.stderr
+        assert "bom.py" in proc.stderr

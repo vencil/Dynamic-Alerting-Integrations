@@ -183,3 +183,31 @@ func TestRoutingValueNotString(t *testing.T) {
 		t.Errorf("routing_value_not_string fields = %v, want %v", got, want)
 	}
 }
+
+// TestRoutingGroupByInvalid (#2503): each bad group_by element of the
+// resolved routing (routingpolicy.GroupByInvalid over the PyYAML readings
+// cmd/da-guard hands over) is one error finding, Field the element's path;
+// a clean list is not reported.
+func TestRoutingGroupByInvalid(t *testing.T) {
+	t.Parallel()
+	routing := map[string]any{
+		"receiver": map[string]any{"type": "pagerduty", "service_key": "k"},
+		"group_by": []any{"alertname", true, 8},
+		"overrides": []any{map[string]any{"alertname": "X", "group_by": []any{"alertname", "8"},
+			"receiver": map[string]any{"type": "webhook", "url": "https://h.example/x"}}},
+		"routes": []any{map[string]any{"match": map[string]any{"team": "db"}, "group_by": []any{"a", "..."},
+			"receiver": map[string]any{"type": "webhook", "url": "https://h.example/y"}}},
+	}
+	var got []string
+	for _, f := range checkRoutingGuardrails(CheckInput{RoutingByTenant: map[string]map[string]any{"t1": routing}}) {
+		if f.Kind == FindingRoutingGroupByInvalid {
+			if f.Severity != SeverityError || !strings.HasPrefix(f.Message, `tenant "t1": `+f.Field+" ") {
+				t.Errorf("finding = %+v", f)
+			}
+			got = append(got, f.Field)
+		}
+	}
+	if want := []string{"group_by[1]", "group_by[2]", "routes[0].group_by[1]"}; !reflect.DeepEqual(got, want) {
+		t.Errorf("routing_group_by_invalid fields = %v, want %v", got, want)
+	}
+}

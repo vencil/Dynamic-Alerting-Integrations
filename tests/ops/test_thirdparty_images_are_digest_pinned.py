@@ -8,7 +8,7 @@ Before this module the digest pin was held by RECONCILIATION, not by a RULE
   `test_renovate_config.py` (`EXPECTED_DEPNAMES`);
 * add a NEW tag-only third-party image, together with its scan-matrix row and
   the report's EXPECTED count, and nothing goes red: both sides of every
-  comparison move together, and Renovate's managers all key on `@sha256:`, so a
+  comparison move together, and Renovate's image managers all key on `@sha256:`, so a
   tag-only ref is simply invisible to `test_renovate_config.py`.
 
 This is the rule. Its subject set is exactly what
@@ -48,8 +48,12 @@ digest, values + template + matrix + EXPECTED count updated but
   overlay that overrides only `tag:`, is not in `discover_refs()`; those are
   pushed INTO this set indirectly — `test_nightly_scan_matrix_drift.py` demands
   them in the scan matrix, and the matrix must equal this set.
-* **Grafana's `victoriametrics-logs-datasource` plugin** has no version pin at
-  all; it is not an image (runbook §7.6 T5, tracked separately under #902).
+* **A third-party ref with no tag at all** (`image: nginx`, i.e. `:latest`).
+  `discover_refs()` keeps only refs with a `:` or `@` in the last path segment
+  (`_is_concrete`), so such a ref never reaches this rule and adding one stays
+  green. Found by the #2605 R post-hoc review of #2600; fixed separately.
+* **Grafana plugins** are not images. Their version pin is a separate rule:
+  `test_grafana_plugins_are_version_pinned.py` (TRK-2605, runbook §7.6 T5).
 """
 from __future__ import annotations
 

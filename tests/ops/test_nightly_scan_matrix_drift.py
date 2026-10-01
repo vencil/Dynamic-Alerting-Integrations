@@ -510,7 +510,7 @@ def test_the_resolve_workflow_triggers_on_overlay_values_files() -> None:
 # registry at all. Not by decision, by three independent misses that each read
 # as deliberate scoping until checked against the question:
 #   * the extractor's SOURCE_GLOBS cover `helm/` and `k8s/`, never `scripts/`;
-#   * all three Renovate customManagers require `@sha256:` in the match, which
+#   * all three Renovate image customManagers require `@sha256:` in the match, which
 #     these refs deliberately do not carry (tag pins: the customer has no
 #     updater of ours to re-resolve a digest);
 #   * the offline pin guard that DOES exist says in its own docstring that it
@@ -950,7 +950,7 @@ def test_every_ref_a_generated_customer_repo_carries_is_scanned() -> None:
         f"nightly scan-delivered matrix: {unscanned}\n"
         "They are executed by the customer's pipeline (the apply stage carries "
         "`environment: name: production` plus cluster-write credentials) and "
-        "nothing else looks at them — not Renovate (its customManagers all "
+        "nothing else looks at them — not Renovate (its image customManagers all "
         "require `@sha256:` and none reach `scripts/**`), not the deploy-scope "
         "extractor (it globs `helm/` and `k8s/`).\n"
         "Route the ref through the pin table and add it to the matrix in "

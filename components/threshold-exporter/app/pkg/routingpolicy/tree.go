@@ -66,6 +66,11 @@ type Tree struct {
 	// routing profiles and the root platform overlay.
 	Root Layers
 
+	// Enforced is the root's `_routing_enforced` block the generator
+	// renders from (nil: none, or not enabled) — read for its group_by only
+	// (EnforcedGroupByInvalid, #2503).
+	Enforced *Enforced
+
 	levelDefaults map[string]map[string]any            // level → `_routing_defaults` (nil: contributes nothing)
 	levelProfiles map[string]map[string]map[string]any // level → profile name → body (below the root)
 	tenantDirs    map[string]string                    // tenant id → level of its tenant file
@@ -162,7 +167,8 @@ var discardTreeLogger = log.New(io.Discard, "", 0)
 //
 //   - `_routing_defaults` from each subdirectory's selected defaults carrier
 //     (top level of the document), for the tenants at and below it;
-//   - `_routing_enforced` below the root: ProblemRoutingEnforcedBelowRoot;
+//   - `_routing_enforced` below the root: ProblemRoutingEnforcedBelowRoot
+//     (the root's, for its group_by only, is Tree.Enforced);
 //   - `_routing_profiles.yaml` / `.yml` below the root: profiles visible to
 //     that subtree; a name defined twice anywhere: ProblemRoutingProfileDuplicate;
 //   - `_domain_policy.yaml` / `.yml` below the root: policies with Scope set,
@@ -175,9 +181,10 @@ var discardTreeLogger = log.New(io.Discard, "", 0)
 // Files are visited in name order (TreeScan.Keys), root files first for
 // profiles (LoadRoot), as the Python reader does. skip is LoadRoot's.
 func LoadTree(configDir string, skip func(rel string) bool) (Tree, []Policy, []Problem) {
-	root, pols, probs, profileOrigin := loadRoot(configDir, skip)
+	root, pols, probs, profileOrigin, enforced := loadRoot(configDir, skip)
 	t := Tree{
 		Root:          root,
+		Enforced:      enforced,
 		levelDefaults: map[string]map[string]any{},
 		levelProfiles: map[string]map[string]map[string]any{},
 		tenantDirs:    map[string]string{},
