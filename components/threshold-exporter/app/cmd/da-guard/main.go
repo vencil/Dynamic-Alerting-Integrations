@@ -55,6 +55,10 @@
 // serves per tenant as JSON, for the Python readers. Same exit codes: 0 ok,
 // 2 caller error or a tree the exporter's load rejects, 3 files the load
 // skips (the JSON is still written, naming them in parse_failed).
+//
+// Subcommand `effective` (#2564, effective.go) prints every tenant's
+// effective config as tenant-api's /effective resolves it, with profile
+// binding and per-key sources, as JSON. Same exit codes as served-values.
 package main
 
 import (
@@ -146,9 +150,12 @@ func parseFlags(args []string, errOut io.Writer) (*flags, error) {
 	fs.Usage = func() {
 		fmt.Fprintf(errOut, "Usage: %s [flags]\n", programName)
 		fmt.Fprintf(errOut, "       %s %s --config-dir <dir> [--at <RFC3339>]\n", programName, servedValuesCmd)
+		fmt.Fprintf(errOut, "       %s %s --config-dir <dir>\n", programName, effectiveCmd)
 		fmt.Fprintf(errOut, "Validate a conf.d/ tree against the C-12 Dangling Defaults Guard.\n")
 		fmt.Fprintf(errOut, "'%s' prints the values the exporter's /metrics serves per tenant, as JSON "+
-			"(see '%s %s -h').\n\n", servedValuesCmd, programName, servedValuesCmd)
+			"(see '%s %s -h').\n", servedValuesCmd, programName, servedValuesCmd)
+		fmt.Fprintf(errOut, "'%s' prints every tenant's effective config as tenant-api's /effective resolves it, "+
+			"with profile binding and per-key sources, as JSON (see '%s %s -h').\n\n", effectiveCmd, programName, effectiveCmd)
 		fs.PrintDefaults()
 		fmt.Fprintf(errOut, "\nExit codes:\n  0  clean\n  1  guard found errors\n  2  caller error\n"+
 			"  3  config files the exporter cannot decode; the report names them (fix, re-run)\n")
@@ -173,6 +180,9 @@ func run(args []string, stdout, errOut io.Writer) int {
 	// run() never touches the process-global `log` (see main, #2444).
 	if len(args) > 0 && args[0] == servedValuesCmd {
 		return runServedValues(args[1:], stdout, errOut)
+	}
+	if len(args) > 0 && args[0] == effectiveCmd {
+		return runEffective(args[1:], stdout, errOut)
 	}
 
 	f, err := parseFlags(args, errOut)

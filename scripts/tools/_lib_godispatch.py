@@ -95,7 +95,7 @@ class GoBinaryDispatcher:
             even when pass_subcommand is False — for a binary whose
             default mode takes flags directly but which also has real
             subcommands (da-guard: `defaults-impact` is stripped,
-            `served-values` is forwarded).
+            `served-values` and `effective` are forwarded).
 
     Notes:
         Language detection is deferred to message-build time

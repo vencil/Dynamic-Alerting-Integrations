@@ -53,6 +53,14 @@ REPO_ROOT = Path(__file__).resolve().parents[2]
 INIT = REPO_ROOT / "scripts" / "tools" / "ops" / "init_project.py"
 CI_YML = REPO_ROOT / ".github" / "workflows" / "ci.yml"
 THIS_MODULE = "tests/ops/test_generated_kustomize_build.py"
+# Every module whose kustomize tests depend on the `kustomize` fixture below.
+# test_ci_runs_this_module_with_the_pinned_kustomize requires ci.yml's
+# KUSTOMIZE_REQUIRE=1 step to run ALL of them — a module missing from that step
+# would skip-as-green in CI (#2542).
+KUSTOMIZE_MODULES = (
+    THIS_MODULE,
+    "tests/ops/test_init_customer_instructions.py",
+)
 
 # ⛔ 與 ci.yml `Install kustomize` 步驟的版本必須相同；
 # test_ci_runs_this_module_with_the_pinned_kustomize 比對兩者。
@@ -298,11 +306,14 @@ def test_every_generated_overlay_builds(overlay, kustomize, tmp_path):
 # The gate runs (not just exists)
 # ═══════════════════════════════════════════════════════════════════════════
 def test_ci_runs_this_module_with_the_pinned_kustomize():
-    """ci.yml 必須以釘住版本安裝 kustomize，並以 KUSTOMIZE_REQUIRE=1 跑本模組。
+    """ci.yml 必須以釘住版本安裝 kustomize，並以 KUSTOMIZE_REQUIRE=1 跑本模組
+    與 ``KUSTOMIZE_MODULES`` 裡其他借用 ``kustomize`` fixture 的模組。
 
     不需要 kustomize binary——這條在任何地方都跑，保證上面那些 skip 在 CI
     上不會發生。
     """
+    for module in KUSTOMIZE_MODULES:
+        assert (REPO_ROOT / module).is_file(), f"{module} listed but missing"
     ci = yaml.safe_load(CI_YML.read_text(encoding="utf-8"))
     hits = []
     for name, job in (ci.get("jobs") or {}).items():
@@ -312,7 +323,8 @@ def test_ci_runs_this_module_with_the_pinned_kustomize():
                     and f"KUSTOMIZE_VERSION={KUSTOMIZE_PIN}" in str(s.get("run") or "")
                     and "_verify_download.sh" in str(s.get("run") or "")]
         runs = [s for s in steps
-                if THIS_MODULE in str(s.get("run") or "")
+                if all(m in str(s.get("run") or "").split()
+                       for m in KUSTOMIZE_MODULES)
                 and str((s.get("env") or {}).get("KUSTOMIZE_REQUIRE")) == "1"]
         if installs and runs:
             assert steps.index(installs[0]) < steps.index(runs[0]), (
@@ -322,8 +334,8 @@ def test_ci_runs_this_module_with_the_pinned_kustomize():
             hits.append(name)
     assert hits, (
         f"no ci.yml job installs kustomize v{KUSTOMIZE_PIN} (sha-verified) and "
-        f"then runs {THIS_MODULE} with KUSTOMIZE_REQUIRE=1 — without that step "
-        "every test above is a skip in CI")
+        f"then runs all of {list(KUSTOMIZE_MODULES)} with KUSTOMIZE_REQUIRE=1 "
+        "in one step — without that every kustomize test is a skip in CI")
 
 
 def test_kubectl_kustomize_stand_in_matches_the_delivered_image():

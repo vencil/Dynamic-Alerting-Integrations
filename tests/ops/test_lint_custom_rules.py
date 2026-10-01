@@ -367,7 +367,7 @@ def test_main_missing_target_is_caller_error(tmp_path, monkeypatch, capsys, extr
         lint_custom_rules.main()
     assert exc.value.code == 2
     err = capsys.readouterr().err
-    assert str(missing) in err
+    assert repr(str(missing)) in err
     assert "Do not drop the path" in err
 
 
@@ -431,7 +431,7 @@ def test_main_existing_empty_dir_is_ok(tmp_path, monkeypatch, capsys):
     assert exc.value.code == 0
     out = capsys.readouterr().out
     assert "No YAML files found" in out
-    assert str(empty) in out
+    assert repr(str(empty)) in out
 
 
 _CP950_BYTES = b"groups:\n  - name: \xa4\xa4\n"   # cp950「中」— invalid UTF-8
