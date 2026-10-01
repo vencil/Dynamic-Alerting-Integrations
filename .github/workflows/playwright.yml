@@ -25,6 +25,9 @@ on:
       # that executes it never runs — and the local hook would be running the
       # edited copy against itself. #1428.
       - 'scripts/tools/lint/e2e_spec_lint.sh'
+      # The behavioural test the lint-specs job runs (#1446): a PR that only
+      # edits it must still run it, or a broken edit lands unexecuted.
+      - 'tests/lint/test_e2e_spec_lint_behaviour.py'
   pull_request:
     branches:
       - main
@@ -41,6 +44,9 @@ on:
       # that executes it never runs — and the local hook would be running the
       # edited copy against itself. #1428.
       - 'scripts/tools/lint/e2e_spec_lint.sh'
+      # The behavioural test the lint-specs job runs (#1446): a PR that only
+      # edits it must still run it, or a broken edit lands unexecuted.
+      - 'tests/lint/test_e2e_spec_lint_behaviour.py'
 
 permissions:
   contents: read
@@ -104,6 +110,27 @@ jobs:
       # run the very same file from wherever they happen to be invoked.
       - name: Lint E2E specs (A-13 fixme/skip guard)
         run: bash scripts/tools/lint/e2e_spec_lint.sh
+
+      # #1446: the step above proves today's specs are clean; it cannot prove
+      # the chain would still CATCH a parked one. This runs the real script
+      # against a throwaway tree holding a byte-for-byte copy of tests/e2e plus
+      # an injected `test.fixme()`, and requires a red. It needs the
+      # node_modules installed above, and without it the module skips — so
+      # VIBE_REQUIRE_E2E_ESLINT=1 makes that skip a failure here, the one place
+      # the install is guaranteed. tests/lint/test_e2e_spec_lint.py (Python
+      # Tests, every PR) pins this step's existence, its variable and its
+      # order after `npm ci`.
+      - name: Setup Python (A-13 behavioural test)
+        uses: actions/setup-python@v6
+        with:
+          python-version: "3.13"
+
+      - name: A-13 chain catches a parked spec (behavioural test)
+        env:
+          VIBE_REQUIRE_E2E_ESLINT: "1"
+        run: |
+          pip install pytest pyyaml -c requirements/ci-constraints.txt
+          python -m pytest tests/lint/test_e2e_spec_lint_behaviour.py -q -rs
 
   test:
     name: Smoke Tests (Chromium)
