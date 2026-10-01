@@ -13,6 +13,7 @@ import subprocess
 from pathlib import Path
 
 import pytest
+from _platform_fs import require_file_name  # noqa: E402
 
 import _lib_io
 import _lib_tenant_values as tv
@@ -258,6 +259,7 @@ def test_non_utf8_file_name_raises_served_values_error(tmp_path, da_guard):
         "_defaults.yaml": _DEFAULTS,
         "tenant-a.yaml": "tenants:\n  tenant-a:\n    mysql_connections: 70\n",
     })
+    require_file_name(b"b\xff.yaml")
     (conf_d / os.fsdecode(b"b\xff.yaml")).write_bytes(b"tenants: [\n")
     with pytest.raises(tv.ServedValuesError) as ei:
         tv.load_served_values(conf_d, binary=da_guard)

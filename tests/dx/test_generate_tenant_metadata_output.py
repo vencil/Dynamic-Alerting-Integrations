@@ -41,6 +41,8 @@ import pytest
 import generate_tenant_metadata as gtm  # noqa: E402
 from _platform_fs import (  # noqa: E402
     DIR_WRITE_STRERROR,
+    require_os_attrs,
+    require_posix_modes,
     require_symlinks,
     symlink_or_skip,
 )
@@ -264,6 +266,7 @@ class TestNoRegressionVsInPlace:
     ):
         """Root can write anywhere, so the unwritable directory is simulated
         at the point it bites: ``mkstemp`` refusing with EACCES."""
+        require_posix_modes()
         out = tmp_path / "meta.json"
         out.write_text(_PREVIOUS, encoding="utf-8")
         # The in-place writer chmodded after writing, so a 0600 file came
@@ -536,6 +539,7 @@ class TestNoRegressionVsInPlace:
     def test_the_mode_is_0644_as_before(self, monkeypatch, confd, tmp_path, before):
         """Measured on the in-place writer: a new file AND an existing 0600
         one both came out 0644 (it chmodded after writing). Kept."""
+        require_posix_modes()
         out = tmp_path / "meta.json"
         if before is not None:
             out.write_text(_PREVIOUS, encoding="utf-8")
@@ -622,6 +626,7 @@ class TestSameResultAsInPlace:
         """The root test above, simulated so it also runs unprivileged: the
         run's euid differs from the file's owner and ``fchown`` succeeds —
         the tmp must be handed to that owner and the replace must happen."""
+        require_os_attrs("geteuid", "getegid")
         out = tmp_path / "meta.json"
         out.write_text(_PREVIOUS, encoding="utf-8")
         st = out.stat()
@@ -646,6 +651,7 @@ class TestSameResultAsInPlace:
         EPERM (not in that group) or EINVAL (unmapped gid in a rootless /
         userns container, F1). The owner can still rewrite the file, so the
         replace goes ahead: rc 0, atomic, owner unchanged."""
+        require_os_attrs("geteuid", "getegid")
         out = tmp_path / "meta.json"
         out.write_text(_PREVIOUS, encoding="utf-8")
         st = out.stat()
@@ -674,6 +680,7 @@ class TestSameResultAsInPlace:
         the content already written — "cannot write" for a write that
         happened. Since #2128 S1 that chmod EPERM is a WARN: rc 0, and the
         lost atomicity is WARNed too (N2)."""
+        require_os_attrs("geteuid", "getegid")
         out = tmp_path / "meta.json"
         out.write_text(_PREVIOUS, encoding="utf-8")
         st = out.stat()

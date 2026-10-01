@@ -74,6 +74,7 @@ import sys
 from pathlib import Path
 
 import pytest
+from _platform_fs import require_file_name  # noqa: E402
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
 TOOLS_DIR = REPO_ROOT / "scripts" / "tools"
@@ -160,6 +161,7 @@ def _write_hostile_tree(root: Path, *, malformed: bool) -> None:
       report renderers. Necessary because a malformed body makes several tools
       raise before they print anything, which HIDES their happy-path sites.
     """
+    require_file_name(f"evil\n{FN_MARK}\nx.yaml".encode())
     root.mkdir(parents=True, exist_ok=True)
     body = "tenants:\n  {name}:\n    a: [1, 2\n" if malformed else \
            "tenants:\n  {name}:\n    pg_connections: 90\n"

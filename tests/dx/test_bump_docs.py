@@ -20,6 +20,7 @@ import tempfile
 from pathlib import Path
 
 import pytest
+from _platform_fs import require_tool  # noqa: E402
 
 # Add scripts/tools to path
 
@@ -3482,6 +3483,7 @@ class TestRoundEightMutationSurvivors:
                 f"`make bump-docs` 裡靜靜被跳過\n{recipe}")
             assert flag in recipe, (var, flag, recipe)
         # 端到端：同時給兩條，兩條都要出現在展開的命令列上。
+        require_tool("make")
         out = subprocess.run(
             ["make", "-n", "bump-docs", "TENANT_API=2.9.99",
              "PLATFORM=2.10.0"],
