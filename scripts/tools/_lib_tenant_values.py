@@ -158,7 +158,10 @@ DA_GUARD_PREFIX = "  da-guard| "
 def _nonempty_lines(text: str) -> list[str]:
     """Every non-empty line of `text`, split on "\n" ONLY — `str.splitlines`
     also splits on NEL, \v, \f, \x1c-\x1e and U+2028/2029, which can sit in a
-    file name, and would cut the line before `safe_label` could escape them.
+    file name, and would cut the line there. NEL, \v, \f and \x1c-\x1e then
+    reach `safe_label`, which prints each as `?`. U+2028/2029 are not control
+    characters to `safe_label` and pass through as they are; they stay inside
+    the line, behind `DA_GUARD_PREFIX`.
     Trailing whitespace (a "\r" too) is dropped, the leading indent kept (a
     continuation line of a Go error is indented)."""
     return [ln.rstrip() for ln in text.split("\n") if ln.strip()]
