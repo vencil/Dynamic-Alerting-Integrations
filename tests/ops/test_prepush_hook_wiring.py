@@ -1434,24 +1434,83 @@ def test_the_helper_is_sourced_without_spawning_anything(script: str, var: str) 
     )
 
 
-def test_a_legacy_single_file_install_says_how_to_reinstall(tmp_path: Path) -> None:
-    """The pre-#1664 recipe was ``cp scripts/ops/protect_main_push.sh
-    .git/hooks/pre-push``. That copy can no longer find its sibling helper, and
-    ``set -e`` turns the failed source into a total abort — feature-branch
-    pushes die too. Measured before this message existed: a bare
-    ``_prepush_refs.sh: No such file or directory`` and rc=1, whose three
-    cheapest greens (``--no-verify``, delete the hook, freeze a copy of the
-    helper in .git/hooks) all make things worse.
+_HELPER_MISSING = {
+    "protect_main_push.sh": "旁邊找不到 _prepush_refs.sh",
+    "require_preflight_pass.sh": "_prepush_refs.sh is not next to",
+    "pre_push_mkdocs_strict.sh": "_prepush_refs.sh is not next to",
+}
+_RESTORE = "git checkout -- scripts/ops/"
+_INSTALL = "bash scripts/ops/install_prepush_hook.sh"
+
+
+def _helper_missing_lines(out: str) -> list[str]:
+    return [ln for ln in out.splitlines() if any(n in ln for n in _HELPER_MISSING.values())]
+
+
+def _assert_the_guards_are_back(work: Path) -> None:
+    """Must-fire control first: protect_main_push blocking main proves the
+    dispatcher ran the guards with their helper, so the missing message being
+    absent means "fixed", not "never ran"."""
+    r, out = _push(work, "HEAD:refs/heads/main")
+    assert r.returncode != 0 and _BANNER in out, f"the guards did not run:\n{out}"
+    assert not _helper_missing_lines(out), f"following the message did not fix it:\n{out}"
+
+
+@pytest.mark.parametrize("guard", sorted(_HELPER_MISSING))
+@pytest.mark.parametrize("slot", ["pre-push", "pre-push.chained"])
+def test_a_single_file_copy_is_named_and_the_way_back_works(
+    tmp_path: Path, guard: str, slot: str
+) -> None:
+    """A guard copied alone into .git/hooks (the recipe before #1689) cannot
+    find its helper. Re-running the installer does not fix that: it moves the
+    copy to pre-push.chained and the dispatcher keeps running it — the
+    ``pre-push.chained`` row is the state a user is in after doing just that.
+    The message must name the copy, and deleting it then installing must work.
     """
     work = _make_repo(tmp_path, _PROTECT_ONLY)
-    hook = work / ".git" / "hooks" / "pre-push"
-    hook.write_bytes((_OPS / "protect_main_push.sh").read_bytes())
-    hook.chmod(0o755)
+    copy = work / ".git" / "hooks" / "pre-push"
+    copy.write_bytes((_OPS / guard).read_bytes())
+    copy.chmod(0o755)
+    if slot == "pre-push.chained":
+        assert _install_guards(work).returncode == 0
+        copy = copy.with_name(slot)
+        assert copy.exists()
+
     r, out = _push(work, "HEAD:refs/heads/feat/legacy")
     assert r.returncode != 0, f"a broken install silently allowed the push:\n{out}"
-    assert "scripts/ops/install_prepush_hook.sh" in out, (
-        f"the failure names no way back to a working install:\n{out}"
+    named = _helper_missing_lines(out)
+    assert any(re.search(rf"\.git/hooks/{re.escape(slot)}(?![\w.])", ln) for ln in named), (
+        f"the message does not name the copy at .git/hooks/{slot}:\n{out}"
     )
+    assert _INSTALL in out, out
+
+    copy.unlink()
+    r = _install_guards(work)
+    assert r.returncode == 0, f"installer failed:\n{r.stdout}{r.stderr}"
+    _assert_the_guards_are_back(work)
+
+
+def test_a_helper_gone_from_scripts_ops_is_restored_the_way_the_message_says(
+    tmp_path: Path,
+) -> None:
+    """With the shipped wiring the guards run from scripts/ops/, so a missing
+    helper means it is gone from the checkout. The installer writes only
+    .git/hooks, exits 0 and changes nothing here; the message must say how to
+    get the file back instead, and doing so must work."""
+    work = _make_repo(tmp_path, _PROTECT_ONLY)
+    assert _git(work, "add", "scripts").returncode == 0
+    assert _git(work, "-c", "core.hooksPath=/dev/null", "commit", "-qm", "ops").returncode == 0
+    assert _install_guards(work).returncode == 0
+    (work / "scripts" / "ops" / "_prepush_refs.sh").unlink()
+
+    r, out = _push(work, "HEAD:refs/heads/feat/x")
+    assert r.returncode != 0, f"a broken checkout silently allowed the push:\n{out}"
+    assert len(_helper_missing_lines(out)) == len(_HELPER_MISSING), out
+    # Each of the three must say it; one guard's line would cover another's gap.
+    assert out.count(_RESTORE) == len(_HELPER_MISSING), out
+
+    assert _git(work, *_RESTORE.split()[1:]).returncode == 0
+    _assert_the_guards_are_back(work)
 
 
 def test_tag_pushes_are_allowed_as_the_header_promises(tmp_path: Path) -> None:

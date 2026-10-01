@@ -57,26 +57,27 @@ _prepush_dir="${BASH_SOURCE[0]%/*}"
 # total abort — feature-branch pushes die too — under a bare "No such file or
 # directory". The three cheapest ways out of that picture (--no-verify, delete
 # the hook, copy the helper into .git/hooks and freeze it) all make things
-# worse, so name the reinstall here instead.
+# worse, so name the way back here instead.
 if [ ! -r "$_prepush_dir/_prepush_refs.sh" ]; then
+    printf '\n[require_preflight_pass] ⛔ _prepush_refs.sh is not next to %s,\nso the gate cannot tell what is being pushed.\n' "${BASH_SOURCE[0]}" >&2
     cat >&2 <<'PREPUSH_MISSING'
 
-[require_preflight_pass] ⛔ _prepush_refs.sh is not next to this script, so the
-gate cannot tell what is being pushed.
+If that is scripts/ops/, the helper is gone from your checkout:
+    git checkout -- scripts/ops/
 
-Most likely cause: the hook was installed by copying this file alone (the
-pre-#1664 recipe). It needs its sibling helper.
-
-Reinstall — since #1689 there is exactly one way:
+Anywhere else, it is a single-file copy from before #1689. Delete that file,
+then run:
     bash scripts/ops/install_prepush_hook.sh
+Re-running the installer without deleting it does not help: the installer
+moves the copy to .git/hooks/pre-push.chained and keeps running it.
 
 ⛔ Do not hand-write a hook that runs only this script: that silently drops
 protect_main_push and the mkdocs strict check while this one still looks fine.
 ⛔ Do not use `pre-commit install --hook-type pre-push` either: a hook run by
 pre-commit sees only one refspec (#1689).
 
-⛔ Do not reach for --no-verify and do not delete .git/hooks/pre-push: both
-turn off the direct-push-to-main guard for good, which is what #1664 fixed.
+⛔ Do not reach for --no-verify and do not leave .git/hooks/pre-push deleted:
+both turn off the direct-push-to-main guard for good, which is what #1664 fixed.
 
 PREPUSH_MISSING
     exit 1
