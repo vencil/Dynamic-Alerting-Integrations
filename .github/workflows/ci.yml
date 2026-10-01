@@ -611,6 +611,11 @@ jobs:
           pre-commit run bat-ascii-purity-check --all-files
           pre-commit run design-token-usage --all-files
           pre-commit run tool-consistency-check --all-files
+          # #2539: text I/O hygiene (encoding= + the #1366 newline= rule).
+          # Named here because this job runs hooks BY NAME — without this line
+          # the rule had no CI entry point at all. Pinned by
+          # tests/dx/test_line_ending_policy.py::TestHookScope.
+          pre-commit run open-encoding-audit --all-files
           # CI-ROI 6C blind-spot fix: these 4 lints' live-dogfood pytest
           # twins (tests/lint/*::TestLiveRepo*) had "Python Tests" as
           # their ONLY CI enforcement point — but their scan surfaces
@@ -949,6 +954,9 @@ jobs:
       # no-binary skip into a failure here, so a green job cannot mean "skipped".
       # The version is pinned in that module too (KUSTOMIZE_PIN) and the module
       # asserts this step exists — keep the two in sync when re-pinning.
+      # #2542: tests/ops/test_init_customer_instructions.py borrows the same
+      # fixture to run the README's own `kustomize build` line; the guard's
+      # KUSTOMIZE_MODULES requires every such module on this one pytest line.
       - name: Cache pinned binary downloads (kustomize)
         uses: actions/cache@v5
         with:
@@ -976,7 +984,8 @@ jobs:
           KUSTOMIZE_REQUIRE: "1"
         run: |
           pip install pytest pyyaml -c requirements/ci-constraints.txt
-          python -m pytest tests/ops/test_generated_kustomize_build.py -q -rsx
+          python -m pytest tests/ops/test_generated_kustomize_build.py \
+            tests/ops/test_init_customer_instructions.py -q -rsx
 
       - name: Install vmalert-tool (VictoriaMetrics MetricsQL unit-test engine)
         # REQUIRED provisioning for the promoted parity gate below (soak (a) met, #947).

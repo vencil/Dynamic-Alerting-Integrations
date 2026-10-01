@@ -8,6 +8,7 @@ from __future__ import annotations
 import importlib.util
 import json
 import os
+import shutil
 import subprocess
 import sys
 from pathlib import Path
@@ -17,6 +18,9 @@ import yaml
 
 REPO = Path(__file__).resolve().parents[2]
 SCRIPT = REPO / "scripts" / "ops" / "bench_synth_tenants.py"
+# Resolved on PATH, not passed bare (#2560, same as #2328): on Windows
+# CreateProcess searches System32 before PATH, so a bare "bash" is WSL's.
+_BASH = shutil.which("bash") or "bash"
 
 _spec = importlib.util.spec_from_file_location("bench_synth_tenants", SCRIPT)
 bst = importlib.util.module_from_spec(_spec)
@@ -255,7 +259,7 @@ def test_benchmark_sh_rejects_tenants_that_are_not_a_plain_positive_number(
     shim.write_text("#!/bin/sh\nexit 1\n", encoding="utf-8", newline="\n")
     shim.chmod(0o755)
     env = dict(os.environ, PATH=f"{bin_dir}{os.pathsep}{os.environ['PATH']}")
-    r = subprocess.run(["bash", str(REPO / "scripts" / "benchmark.sh"),
+    r = subprocess.run([_BASH, str(REPO / "scripts" / "benchmark.sh"),
                         "--tenants", n], capture_output=True, text=True, encoding="utf-8", errors="replace",
                        env=env, timeout=60)
     assert r.returncode == 1

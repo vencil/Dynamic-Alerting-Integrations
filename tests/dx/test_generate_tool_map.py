@@ -15,6 +15,7 @@ sys.path.insert(0, _TOOLS_DIR)
 sys.path.insert(0, os.path.join(_TOOLS_DIR, '..'))
 
 import generate_tool_map as gtm  # noqa: E402
+from _platform_fs import DIR_WRITE_ERROR  # noqa: E402
 
 # Captured before any test patches `gtm.gather_tools`, for the one row that
 # needs the real walker inside the sandboxed `env` fixture.
@@ -119,7 +120,7 @@ class TestExtractToolDescription:
         out, err = capsys.readouterr()
         assert desc == gtm.UNREADABLE_DESCRIPTION
         assert "pkg.py" in err
-        assert "IsADirectoryError" in err
+        assert DIR_WRITE_ERROR.__name__ in err
         assert out == ""
 
     def test_permission_error_yields_placeholder_and_warns(

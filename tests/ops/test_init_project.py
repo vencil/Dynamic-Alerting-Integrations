@@ -7,6 +7,7 @@ YAML structure validation, K8s naming validation, and end-to-end initialization.
 
 import os
 import re
+import shutil
 import sys
 import tempfile
 from datetime import datetime
@@ -16,6 +17,9 @@ import yaml
 
 TESTS_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 REPO_ROOT = os.path.dirname(TESTS_DIR)
+# Resolved on PATH, not passed bare (#2560, same as #2328): on Windows
+# CreateProcess searches System32 before PATH, so a bare "bash" is WSL's.
+_BASH = shutil.which("bash") or "bash"
 sys.path.insert(0, os.path.join(REPO_ROOT, "scripts", "tools", "ops"))
 
 import init_project as ip  # noqa: E402
@@ -1912,7 +1916,7 @@ class TestKustomizeBaseEnumeratesConfd:
                     fh.write('tenants: {}\n')
             for name, target in links.items():
                 os.symlink(target, os.path.join(conf, name))
-            run = subprocess.run(['bash', '-c', cmd], cwd=base,
+            run = subprocess.run([_BASH, '-c', cmd], cwd=base,
                                  capture_output=True, text=True, encoding="utf-8", errors="replace", timeout=30)
             assert run.returncode == 0, run.stderr
             assert set(os.listdir(base)) == expected
@@ -1946,7 +1950,7 @@ class TestKustomizeBaseEnumeratesConfd:
                     fh.write(f'tenants: {{{name[0]}: {{}}}}\n')
                 os.symlink(os.path.join('..', '..', 'conf.d', name),
                            os.path.join(base, name))
-            run = subprocess.run(['bash', '-c', cmd], cwd=base,
+            run = subprocess.run([_BASH, '-c', cmd], cwd=base,
                                  capture_output=True, text=True, encoding="utf-8", errors="replace", timeout=30)
             assert run.returncode == 0, run.stderr
             for name in ('a.yaml', 'b.yml'):
@@ -1975,7 +1979,7 @@ class TestKustomizeBaseEnumeratesConfd:
             os.makedirs(os.path.join(base, 'a.yaml'))   # cannot be rm -f'd
             with open(os.path.join(conf, 'a.yaml'), 'w', encoding='utf-8') as fh:
                 fh.write('tenants: {}\n')
-            run = subprocess.run(['bash', '-c', cmd], cwd=base,
+            run = subprocess.run([_BASH, '-c', cmd], cwd=base,
                                  capture_output=True, text=True, encoding="utf-8", errors="replace", timeout=30)
             assert run.returncode != 0, (run.stdout, run.stderr)
 
