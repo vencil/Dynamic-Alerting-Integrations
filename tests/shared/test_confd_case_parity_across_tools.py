@@ -80,6 +80,7 @@ import sys
 import time
 
 import pytest
+from _platform_fs import symlink_or_skip  # noqa: E402
 
 # ⛔ ONE implementation of "which flag is the conf.d flag" (#1761). The
 # argparse walk used to live here while `test_confd_enumeration_contract`
@@ -1083,7 +1084,7 @@ def _unusable_tree(root: pathlib.Path) -> pathlib.Path:
     (root / "alpha.yaml").write_text(
         "tenants:\n  alpha:\n    pg_connections: 90\n", encoding="utf-8")
     (root / "notes.yaml").mkdir()
-    (root / "broken.yaml").symlink_to(root / "no-such-target.yaml")
+    symlink_or_skip(root / "no-such-target.yaml", (root / "broken.yaml"))
     return root
 
 
@@ -1238,7 +1239,7 @@ def test_defaults_carrier_is_reported_once_not_twice(
 
     tree = _unusable_tree(tmp_path / "conf.d")
     (tree / "_defaults.yaml").unlink()
-    (tree / "_defaults.yaml").symlink_to(tree / "no-such-defaults.yaml")
+    symlink_or_skip(tree / "no-such-defaults.yaml", (tree / "_defaults.yaml"))
     _, file_errors = loader.collect_instances(tree)
     hits = [r for r in file_errors if r["origin"] == "_defaults.yaml"]
     assert len(hits) == 1, (

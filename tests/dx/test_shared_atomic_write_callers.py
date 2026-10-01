@@ -32,6 +32,7 @@ from pathlib import Path
 from typing import Callable
 
 import pytest
+from _platform_fs import symlink_or_skip  # noqa: E402
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
 for _d in (REPO_ROOT / "scripts" / "dx", REPO_ROOT / "scripts" / "ops"):
@@ -241,7 +242,7 @@ def test_a_symlink_target_stays_a_symlink_and_its_target_is_updated(name, root, 
     real.write_text(OLD, encoding="utf-8")
     (root / "out").mkdir()
     link = root / "out" / "target.md"
-    link.symlink_to(real)
+    symlink_or_skip(real, link)
     rc, err = run_caller(name, monkeypatch, root, link)
     assert rc == 0, err
     assert link.is_symlink(), "the symlink was replaced by a regular file"

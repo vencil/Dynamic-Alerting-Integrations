@@ -1247,9 +1247,10 @@ class TestCustomSubtreeTenantDelivery:
     """The injected Custom Alerts isolation route (index 1) carries per-tenant
     child routes pointing at the EXISTING tenant-<name> receivers (#1092 0-pre).
     Tenants without a valid _routing get no child and fall back to the parent
-    custom-alerts-firehose; children carry ONLY matchers + receiver — grouping /
-    timing ride Alertmanager-native inheritance from the parent (restating them
-    would be a second SoT). Fixture tenant names (db-a/db-b) follow this file's
+    custom-alerts-firehose; children carry matchers + receiver + (#2342) a copy
+    of the tenant main route's sub-routes — grouping / timing ride
+    Alertmanager-native inheritance from the parent (restating them would be a
+    second SoT). Fixture tenant names (db-a/db-b) follow this file's
     existing fixture convention."""
 
     def _custom_route_of(self, cm_yaml):
@@ -1363,6 +1364,77 @@ class TestCustomSubtreeTenantDelivery:
                        for c in custom["routes"])
         # parent fallback receiver unchanged
         assert custom["receiver"] == "custom-alerts-firehose"
+
+    # ---- #2342 (A1): children carry the tenant main route's sub-routes ----
+
+    @staticmethod
+    def _split_routing_configs():
+        # db-a: main receiver + `routes` severity=critical → its own receiver,
+        # plus an alertname override; db-b: main receiver only (no sub-routes).
+        cfg_a = make_routing_config()
+        cfg_a["routes"] = [{"match": {"severity": "critical"},
+                            "receiver": make_receiver("pagerduty")}]
+        cfg_a["overrides"] = [{"alertname": "SplitOverrideAlert",
+                               "receiver": make_receiver("webhook")}]
+        return {"db-a": cfg_a, "db-b": make_routing_config()}
+
+    def _generated_custom_route(self, routing_configs=None):
+        routes, receivers, warnings = generate_routes(
+            routing_configs or self._split_routing_configs())
+        assert not [w for w in warnings if "skipping" in w], warnings
+        cm_yaml = assemble_configmap(load_base_config(None), routes, receivers, [])
+        am = yaml.safe_load(yaml.safe_load(cm_yaml)["data"]["alertmanager.yml"])
+        main = {r["receiver"]: r for r in am["route"]["routes"]
+                if r.get("receiver", "").startswith("tenant-")}
+        return self._custom_route_of(cm_yaml), main, am
+
+    def test_children_inherit_main_route_sub_routes(self):
+        custom, main, _am = self._generated_custom_route()
+        child_a, child_b = custom["routes"]
+        assert child_a["matchers"] == ['tenant="db-a"']
+        assert child_a["receiver"] == "tenant-db-a"
+        # the main route's sub-routes, same order (overrides → routes)
+        assert child_a["routes"] == main["tenant-db-a"]["routes"]
+        assert [r["receiver"] for r in child_a["routes"]] == \
+            ["tenant-db-a-override-0", "tenant-db-a-route-0"]
+        # a tenant WITHOUT sub-routes keeps the pre-#2342 child shape exactly
+        assert child_b == {"matchers": ['tenant="db-b"'], "receiver": "tenant-db-b"}
+
+    def test_children_do_not_inherit_main_route_timing(self):
+        # A1, not A2: grouping / timing stay the custom parent's own.
+        cfg = self._split_routing_configs()
+        cfg["db-a"].update({"group_wait": "1m", "repeat_interval": "6h"})
+        custom, main, _am = self._generated_custom_route(cfg)
+        assert main["tenant-db-a"]["group_wait"] == "1m"   # premise
+        assert set(custom["routes"][0]) == {"matchers", "receiver", "routes"}
+
+    def test_inherited_sub_routes_reference_defined_receivers(self):
+        custom, _main, am = self._generated_custom_route()
+        defined = {r["name"] for r in am["receivers"]}
+        used = {sub["receiver"] for c in custom["routes"] for sub in c.get("routes", [])}
+        assert used, "premise: the custom subtree carries sub-routes"
+        assert used <= defined, used - defined
+
+    def test_inherited_sub_routes_are_copies(self):
+        # mutating the rendered custom subtree must not reach the main route
+        subs = [{"matchers": ['severity="critical"'], "receiver": "tenant-db-a-route-0"}]
+        cust = _build_custom_alert_routes(["db-a"], {"db-a": subs})[0][0]
+        cust["routes"][0]["routes"][0]["receiver"] = "mutated"
+        assert subs[0]["receiver"] == "tenant-db-a-route-0"
+
+    def test_reinjection_does_not_accumulate_sub_routes(self):
+        routes, receivers, _w = generate_routes(self._split_routing_configs())
+        existing = {"route": {"receiver": "default", "routes": []},
+                    "receivers": [{"name": "default"}], "inhibit_rules": []}
+        merged = _merge_routes_receivers_inhibits(existing, routes, receivers, [])
+        first = copy.deepcopy(merged["route"]["routes"])
+        merged2 = _merge_routes_receivers_inhibits(
+            merged, copy.deepcopy(first), receivers, [])
+        assert merged2["route"]["routes"] == first
+        customs = [r for r in merged2["route"]["routes"]
+                   if 'component="custom"' in r.get("matchers", [])]
+        assert len(customs) == 1
+        assert len(customs[0]["routes"][0]["routes"]) == 2
 
 
 # ============================================================

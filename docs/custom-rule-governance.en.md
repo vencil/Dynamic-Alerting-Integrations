@@ -58,7 +58,7 @@ mysql_replication_lag: "disable" # Disable: turn off this alert
 
 Each metric supports Warning / Critical severity levels (`_critical` suffix) and dimension label filtering.
 
-The `_routing` channel now also delivers custom alerts (`component="custom"`): page-mode recipes go out via the tenant's own receiver and inherit the custom isolation subtree's debounce (`group_wait` 30s / `group_interval` 5m, `group_by [tenant, alertname]`); tenant `_routing` timing / per-rule overrides are not applied inside the custom subtree in v1. Tenants without an **effective** `_routing` (no explicit `_routing` and no applicable `_routing_defaults` / profile inheritance) keep their custom alerts on the platform firehose (visible in the AM UI, no notification); to fully opt a tenant out of custom-alert notifications, use `_routing: disable` — tenants that merely inherit the defaults do receive delivery.
+The `_routing` channel now also delivers custom alerts (`component="custom"`): page-mode recipes are split by the tenant's `_routing` (including `routes` and per-rule overrides) but keep the custom isolation subtree's debounce (`group_wait` 30s / `group_interval` 5m, `group_by [tenant, alertname]`); the tenant's top-level `_routing` timing is not applied (timing and `group_by` a sub-route declares itself still are). Tenants without an **effective** `_routing` (no explicit `_routing` and no applicable `_routing_defaults` / profile inheritance) keep their custom alerts on the platform firehose (visible in the AM UI, no notification); to fully opt a tenant out of custom-alert notifications, use `_routing: disable` — tenants that merely inherit the defaults do receive delivery.
 
 **Rule complexity**: O(M) — does not grow with tenant count.
 

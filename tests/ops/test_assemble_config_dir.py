@@ -22,6 +22,7 @@ import sys
 from pathlib import Path
 
 import pytest
+from _platform_fs import symlink_or_skip  # noqa: E402
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[2] / "scripts" / "tools"))
 import _lib_tenant_uniqueness as tu  # noqa: E402
@@ -344,8 +345,8 @@ class TestValidateMerged:
         if shape == "directory":
             os.mkdir(os.path.join(config_dir, "stale.yaml"))
         else:
-            os.symlink(os.path.join(config_dir, "nowhere.yaml"),
-                       os.path.join(config_dir, "stale.yaml"))
+            symlink_or_skip(os.path.join(config_dir, "nowhere.yaml"),
+                            os.path.join(config_dir, "stale.yaml"))
         _write_file(os.path.join(config_dir, "good.yaml"),
                      "tenants:\n  t-a:\n    x: '1'")
         issues = validate_merged(Path(config_dir))
@@ -984,7 +985,7 @@ class TestANonRegularCarrierIsAnInputFactNotAFailedMeasurement:
     def test_a_broken_symlink_does_not_become_could_not_measure(
             self, config_dir, capsys, cli_argv):
         s = self._tree(config_dir)
-        (s / "dangling.yaml").symlink_to("../gone/dangling.yaml")
+        symlink_or_skip("../gone/dangling.yaml", (s / "dangling.yaml"))
         cli_argv("assemble", "--sources", str(s), "--check")
         assert main() == 0
         assert "dangling.yaml" in capsys.readouterr().err, (

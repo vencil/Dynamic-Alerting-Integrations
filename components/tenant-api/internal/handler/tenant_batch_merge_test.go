@@ -147,7 +147,7 @@ func TestMergePatchYAML_ValueStaysQuotedString(t *testing.T) {
 // shared per-tenant write both tenant-batch and group-batch funnel through: a
 // partial patch commits a file that keeps the tenant's other keys and comments.
 // Exercises the real applyPatch → WriteMerged → mergePatchYAML → commit chain
-// (RBAC is enforced one layer up, in executeBatchOps/executeGroupBatchOps, and
+// (RBAC is enforced one layer up, in executeBatchOps / runBatchPR, and
 // is orthogonal to the merge behavior under test here).
 func TestApplyPatch_PreservesExistingKeys(t *testing.T) {
 	configDir := setupConfigDir(t, map[string]string{
