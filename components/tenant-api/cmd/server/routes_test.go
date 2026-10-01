@@ -42,7 +42,7 @@ const (
 	// becomes known (body / query / stored record).
 	gateInHandler = "in-handler OrgAllowed"
 	// gateHelperFunnel — per-tenant loop funnels through an OrgAllowed-based
-	// helper (tenantsLackingPermission / executeBatchOps / executeGroupBatchOps).
+	// helper (tenantsLackingPermission / executeBatchOps / runBatchPR).
 	gateHelperFunnel = "helper funnel over OrgAllowed"
 	// gatePlatformStar — platform-scope gate Allowed(p, "*", …): org-scope
 	// deliberately does not apply to platform scope (invariant I6; the
@@ -85,7 +85,7 @@ var writeRouteManifest = map[string]string{
 	"DELETE /api/v1/groups/{id}/": gateHelperFunnel +
 		" — sites #1/#2: tenantsLackingPermission(PermWrite) over the stored member list",
 	"POST /api/v1/groups/{id}/batch": gateHelperFunnel +
-		" — site #5: executeGroupBatchOps checks OrgAllowed per member at execution time",
+		" — site #5: one op per member through the /tenants/batch pipeline (runBatchPR inline OrgAllowed in PR mode; executeBatchOps at execution time otherwise)",
 	"PUT /api/v1/views/{id}/": gateNonTenantData +
 		" — saved views hold filter definitions, not tenant config; no per-tenant write decision exists",
 	"DELETE /api/v1/views/{id}/": gateNonTenantData +
