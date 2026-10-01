@@ -22,6 +22,7 @@ Measured against the grafana/grafana v12.4.12 source:
 The rules below, over every Grafana container in `k8s/**` and
 `try-local/docker-compose.yaml`:
 
+0. the env is readable: no envFrom / env_file, no `GF_*__FILE` install key;
 1. no `GF_INSTALL_PLUGINS` (deprecated, and its syntax is not checked here);
 2. every `GF_PLUGINS_PREINSTALL[_SYNC]` entry is `<id>@<X.Y.Z>`, literal value;
 3. Renovate tracks every pinned entry (the grafana.com catalog datasource in
@@ -59,7 +60,9 @@ TRYLOCAL_COMPOSE = REPO / "try-local" / "docker-compose.yaml"
 PROVISIONING_CM = K8S / "03-monitoring" / "configmap-grafana.yaml"
 RENOVATE_JSON = REPO / "renovate.json"
 
-GRAFANA_IMAGE = "grafana/grafana"
+# grafana/grafana and its -oss / -enterprise variants, under any registry or
+# mirror prefix (`docker.io/grafana/grafana`, `mirror.example/grafana/grafana`).
+_GRAFANA_REPO = re.compile(r"(?:^|/)grafana/grafana(?:-oss|-enterprise)?$")
 DEPRECATED_ENV = "GF_INSTALL_PLUGINS"
 PREINSTALL_ENVS = ("GF_PLUGINS_PREINSTALL", "GF_PLUGINS_PREINSTALL_SYNC")
 DISABLE_ENV = "GF_PLUGINS_DISABLE_PLUGINS"
@@ -90,11 +93,12 @@ CORE_DATASOURCE_TYPES = {
     "cloudwatch", "testdata",
 }
 
-# Keys that install plugins, as they appear in any text file: env names, and
-# the grafana.ini `[plugins]` keys.
+# Keys that install plugins, as they appear in any text file: env names (also
+# the `__FILE` form, which the image's run.sh reads from a file), and the
+# grafana.ini `[plugins]` keys (go-ini accepts both `=` and `:`).
 _INSTALL_KEY = re.compile(
-    r"\bGF_INSTALL_PLUGINS\b|\bGF_PLUGINS_PREINSTALL(?:_SYNC)?\b"
-    r"|^[ \t]*preinstall(?:_sync)?[ \t]*=", re.M)
+    r"\bGF_(?:INSTALL_PLUGINS|PLUGINS_PREINSTALL(?:_SYNC)?)(?:__FILE)?\b"
+    r"|^[ \t]*preinstall(?:_sync)?[ \t]*[=:]", re.M)
 _TRIPWIRE_ROOTS = ("k8s/", "helm/", "try-local/")
 # Whole-line YAML / shell / ini comments: a key named in prose installs nothing.
 _COMMENT_LINE = re.compile(r"^[ \t]*[#;].*$", re.M)
@@ -117,12 +121,24 @@ def _containers(node):
 
 
 def _is_grafana(image) -> bool:
-    return isinstance(image, str) and image.split("@")[0].rsplit(":", 1)[0] == GRAFANA_IMAGE
+    if not isinstance(image, str):
+        return False
+    repo = image.split("@")[0]
+    if ":" in repo.rsplit("/", 1)[-1]:          # a tag, not a registry port
+        repo = repo[:repo.rfind(":")]
+    return bool(_GRAFANA_REPO.search(repo))
+
+
+def _opaque_env_sources(spec: dict) -> list[str]:
+    """Env sources whose variable names are not in the spec itself: k8s
+    `envFrom`, compose `env_file`."""
+    return [key for key in ("envFrom", "env_file") if spec.get(key)]
 
 
 def _k8s_grafanas() -> tuple[list[dict], list[str]]:
-    """Grafana containers in k8s/**, as {file, image, env}. env maps a name to
-    its literal value, or to None when it is set through valueFrom."""
+    """Grafana containers in k8s/**, as {file, image, env, opaque}. env maps a
+    name to its literal value, or to None when it is set through valueFrom;
+    opaque lists env sources whose names this module cannot see (envFrom)."""
     found, unparsable = [], []
     for path in sorted(repo_files(".yaml", ".yml")):
         rel = path.relative_to(REPO).as_posix()
@@ -138,7 +154,8 @@ def _k8s_grafanas() -> tuple[list[dict], list[str]]:
                 if _is_grafana(c.get("image")):
                     env = {e["name"]: (e.get("value") if "valueFrom" not in e else None)
                            for e in c.get("env") or [] if isinstance(e, dict) and "name" in e}
-                    found.append({"file": rel, "image": c["image"], "env": env})
+                    found.append({"file": rel, "image": c["image"], "env": env,
+                                  "opaque": _opaque_env_sources(c)})
     return found, unparsable
 
 
@@ -152,7 +169,8 @@ def _trylocal_grafanas() -> list[dict]:
         if isinstance(raw, list):
             raw = dict(item.split("=", 1) if "=" in item else (item, None) for item in raw)
         out.append({"file": TRYLOCAL_COMPOSE.relative_to(REPO).as_posix(),
-                    "image": svc["image"], "env": {k: v for k, v in raw.items()}})
+                    "image": svc["image"], "env": {k: v for k, v in raw.items()},
+                    "opaque": _opaque_env_sources(svc)})
     return out
 
 
@@ -186,6 +204,21 @@ def test_no_deprecated_install_plugins_env() -> None:
     assert not hits, (
         f"{DEPRECATED_ENV} is deprecated in Grafana 12.x and installs latest when no "
         f"version is given; use GF_PLUGINS_PREINSTALL_SYNC=<id>@<version>: {hits}")
+
+
+def test_grafana_env_is_readable() -> None:
+    """Rules 1–3 read the container's literal env. A source they cannot read
+    (envFrom / env_file, or a `GF_*__FILE` install key, whose value is a path
+    run.sh reads at start) would carry an unpinned install past all of them."""
+    bad = []
+    for g in _all_grafanas():
+        bad += [f"{g['file']}: {src}" for src in g["opaque"]]
+        bad += [f"{g['file']}: {name}" for name in g["env"]
+                if name.endswith("__FILE") and _INSTALL_KEY.fullmatch(name)]
+    assert not bad, (
+        "Grafana env this module cannot check for plugin installs:\n"
+        + "\n".join(f"  - {b}" for b in bad)
+        + "\nSet plugin installs as a literal `env` value instead.")
 
 
 def test_every_preinstall_entry_is_pinned() -> None:
@@ -222,6 +255,13 @@ def test_renovate_tracks_every_pinned_plugin() -> None:
     cfg = json.loads(RENOVATE_JSON.read_text(encoding="utf-8"))
     url = cfg.get("customDatasources", {}).get("grafana-plugins", {}).get("defaultRegistryUrlTemplate", "")
     assert url.startswith("https://grafana.com/api/plugins/{{packageName}}/versions"), url
+    # JSONata turns a one-item `items.{...}` into an object, not an array, and
+    # Renovate's custom datasource then rejects the result — a plugin with a
+    # single catalog version would become a dead pin with every rule here green.
+    # JSONata does not run in this lane, so the array constructor is pinned
+    # instead (measured with Renovate 41.173.1's bundled jsonata, TRK-2605).
+    (transform,) = cfg["customDatasources"]["grafana-plugins"]["transformTemplates"]
+    assert re.fullmatch(r'\{"releases": \[items\.\{.*\}\]\}', transform), transform
     pinned = {(f, *entry.split("@", 1)) for f, _, entry in _pinned_entries(_all_grafanas())
               if _PINNED.fullmatch(entry)}
     tracked = _renovate_plugin_deps()
@@ -294,6 +334,18 @@ def test_the_predicate_rejects_what_it_must() -> None:
         assert not _PINNED.fullmatch(bad), bad
     assert _INSTALL_KEY.search("  - name: GF_PLUGINS_PREINSTALL_SYNC")
     assert _INSTALL_KEY.search("[plugins]\npreinstall = a@1.0.0")
+    assert _INSTALL_KEY.search("[plugins]\npreinstall_sync: a@1.0.0")
+    assert _INSTALL_KEY.fullmatch("GF_PLUGINS_PREINSTALL__FILE")
+    assert _INSTALL_KEY.fullmatch("GF_INSTALL_PLUGINS__FILE")
+    assert not _INSTALL_KEY.search("GF_PLUGINS_PREINSTALL_ASYNC")
+    for img in ("grafana/grafana:12.4.12", "docker.io/grafana/grafana:13.0.0@sha256:ab",
+                "grafana/grafana-oss", "localhost:5000/grafana/grafana-enterprise:1.0"):
+        assert _is_grafana(img), img
+    for img in ("grafana/grafana-image-renderer:4.0", "busybox:1.36", "grafana/loki:3.0"):
+        assert not _is_grafana(img), img
+    assert _opaque_env_sources({"envFrom": [{"configMapRef": {"name": "x"}}]}) == ["envFrom"]
+    assert _opaque_env_sources({"env_file": ".env"}) == ["env_file"]
+    assert _opaque_env_sources({"env": [{"name": "A", "value": "b"}]}) == []
     assert not _INSTALL_KEY.search("GF_PLUGINS_DISABLE_PLUGINS")
     assert not _INSTALL_KEY.search(_COMMENT_LINE.sub("", "  # set GF_PLUGINS_PREINSTALL_SYNC"))
     assert _INSTALL_KEY.search(_COMMENT_LINE.sub("", "# note\n  - name: GF_INSTALL_PLUGINS"))

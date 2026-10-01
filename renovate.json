@@ -80,9 +80,9 @@
   ],
   "customDatasources": {
     "grafana-plugins": {
-      "description": "TRK-2605 — grafana.com plugin catalog. The versions endpoint returns {items: [{version, createdAt, ...}]}, newest first.",
+      "description": "TRK-2605 — grafana.com plugin catalog. The versions endpoint returns {items: [{version, createdAt, ...}]}, newest first. The outer [ ] keeps releases an array when a plugin has only one version (JSONata collapses a one-item result to an object, which Renovate rejects).",
       "defaultRegistryUrlTemplate": "https://grafana.com/api/plugins/{{packageName}}/versions",
-      "transformTemplates": ["{\"releases\": items.{\"version\": version, \"releaseTimestamp\": createdAt}}"]
+      "transformTemplates": ["{\"releases\": [items.{\"version\": version, \"releaseTimestamp\": createdAt}]}"]
     }
   },
   "packageRules": [
