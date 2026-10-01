@@ -1,7 +1,11 @@
-"""Per-tenant values as the exporter's /metrics serves them (#2115).
+"""Per-tenant values from Go: /metrics via da-guard served-values, /effective via da-guard effective.
 
-Semantics: `da-guard served-values` = /metrics. This module runs that
-subcommand and parses its JSON; it decides nothing about the values itself.
+What /metrics serves (#2115) and what tenant-api's /effective resolves
+(#2564), each read from da-guard rather than re-derived in Python.
+
+Semantics: `da-guard served-values` = /metrics, `da-guard effective` =
+/effective. This module runs those subcommands and parses their JSON; it
+decides nothing about the values itself.
 
 `load_served_tree(conf_d, at=None, binary=None)` returns a `ServedTree`:
 `tenants` is `load_served_values`'s answer, `skipped` the files the exporter's
@@ -38,10 +42,26 @@ production /metrics serves. A tree whose output would carry any string that
 is not valid UTF-8 is refused (JSON cannot carry it), even where the exporter
 only drops that row and /metrics still serves.
 
+`load_effective(conf_d, binary=None)` returns `{tenant_id: TenantEffective}`,
+one entry per tenant of the tree, each field tenant-api's /effective answer
+for that tenant (`effective_config`, `merged_hash`, `source_file`,
+`source_hash`, `defaults_chain`, `platform_overlay`, `profile_overlay`,
+`warnings`) plus:
+
+* `profile` — the profile the tenant is bound to, None for none.
+* `key_sources` — per top-level key of `effective_config`, a `KeySource`:
+  `layer` (`defaults` / `platform` / `profile` / `tenant`), `file` (relative
+  to `conf_d`) and `level` (the index in `defaults_chain`, 0 = root; None
+  outside the defaults layer). A mapping merged across layers names the
+  highest layer that wrote any part of it.
+
+`effective_config` is the JSON as /effective sends it: a YAML `.inf` / `.nan`
+arrives as the text `"Infinity"` / `"-Infinity"` / `"NaN"`.
+
 `binary` is the da-guard path; without it, `$DA_GUARD_BINARY`, then
 `da-guard` on `$PATH` (the resolution `da-tools guard` uses).
 
-Raises:
+Raises (both loaders):
 
 * `ParseFailedError` (a `YamlFileError`, `_lib_io`) — the exporter's load
   skips a file that does not decode (`parse_failed`) or that it cannot stat
@@ -51,10 +71,13 @@ Raises:
   with its reason, `stat_error` / `read_error` / `walk_error`), `stderr_lines` carries da-guard's stderr whole (the
   exporter's reasons among it).
 * `DaGuardNotFoundError` — no da-guard binary; the message says how to get one.
-* `ServedValuesError` — da-guard failed, or its output is not the JSON it
-  should be; carries the exit code and stderr.
+* `ServedValuesError` / `EffectiveError` (both `DaGuardError`) — da-guard
+  failed, or its output is not the JSON it should be (for `effective`, a
+  `schema` other than `da-guard.effective/v1` included); carries the exit
+  code and stderr.
 
 #2115: https://github.com/vencil/Dynamic-Alerting-Integrations/issues/2115
+#2564: https://github.com/vencil/Dynamic-Alerting-Integrations/issues/2564
 """
 from __future__ import annotations
 
@@ -77,10 +100,14 @@ from _lib_exitcodes import EXIT_CALLER_ERROR  # noqa: E402
 import guard_dispatch  # noqa: E402
 
 __all__ = [
+    "DaGuardError",
     "DaGuardNotFoundError",
+    "EffectiveError",
+    "KeySource",
     "ServedTree",
     "ServedValuesError",
     "SkippedFile",
+    "TenantEffective",
     "TenantValues",
     "UnreadableFile",
     "YamlFileError",
@@ -88,12 +115,17 @@ __all__ = [
     "MISSING_BINARY_MESSAGE",
     "ParseFailedError",
     "exit_on_served_values_error",
+    "load_effective",
     "load_served_tree",
     "load_served_values",
     "print_load_warnings",
 ]
 
 SUBCOMMAND = "served-values"
+EFFECTIVE_SUBCOMMAND = "effective"
+# The `schema` value load_effective reads; any other is refused.
+EFFECTIVE_SCHEMA = "da-guard.effective/v1"
+_KEY_LAYERS = frozenset({"defaults", "platform", "profile", "tenant"})
 # Seconds: generous for a large tree, and a hang still ends.
 DEFAULT_TIMEOUT = 600
 
@@ -141,12 +173,32 @@ class ParseFailedError(YamlFileError):
         self.unreadable = list(unreadable or [])
 
 
+class KeySource(NamedTuple):
+    layer: str
+    file: str
+    level: int | None
+
+
+class TenantEffective(NamedTuple):
+    tenant_id: str
+    effective_config: dict[str, Any]
+    key_sources: dict[str, KeySource]
+    profile: str | None
+    merged_hash: str
+    source_file: str
+    source_hash: str
+    defaults_chain: list[str]
+    platform_overlay: list[dict[str, Any]]
+    profile_overlay: list[dict[str, Any]]
+    warnings: list[str]
+
+
 class DaGuardNotFoundError(FileNotFoundError):
     """No da-guard binary at the explicit path, `$DA_GUARD_BINARY` or `$PATH`."""
 
 
-class ServedValuesError(RuntimeError):
-    """da-guard served-values failed. `returncode` and `stderr` are its own."""
+class DaGuardError(RuntimeError):
+    """A da-guard subcommand failed. `returncode` and `stderr` are its own."""
 
     def __init__(self, message: str, returncode: int | None, stderr: str) -> None:
         self.message = message
@@ -154,6 +206,14 @@ class ServedValuesError(RuntimeError):
         self.stderr = stderr
         detail = stderr.strip()
         super().__init__(f"{message}: {detail}" if detail else message)
+
+
+class ServedValuesError(DaGuardError):
+    """da-guard served-values failed."""
+
+
+class EffectiveError(DaGuardError):
+    """da-guard effective failed."""
 
 
 def _stderr_text(b: bytes | str | None) -> str:
@@ -194,6 +254,85 @@ def _threshold(v: Any) -> float:
     return float(v)
 
 
+_T = TypeVar("_T")
+
+
+def _run_da_guard(
+    subcommand: str,
+    extra: list[str],
+    conf_d: str | Path,
+    binary: str | None,
+    timeout: float,
+    error: type[DaGuardError],
+    schema: str | None,
+    read: Callable[[dict[str, Any]], _T],
+    reads_unreadable: bool = False,
+) -> tuple[_T, int, str]:
+    """Run `da-guard <subcommand> --config-dir <conf_d> <extra>` and return
+    (`read(document)`, the exit code, stderr) — the one error contract both
+    loaders share. `read` takes from the document what its caller reads
+    (`tenants`, and for served-values `skipped`); a field it needs that is
+    missing or not of its shape is output that is not the JSON it should be.
+
+    Raises: a missing binary; an exit code other than 0 / 3; output that is
+    not the JSON it should be (with `schema` given, a `schema` field of any
+    other value included; a missing `skipped` / `unreadable` named as a
+    da-guard older than this tool); `ParseFailedError` for a non-empty
+    `parse_failed` or — with `reads_unreadable`, which makes `unreadable` a
+    field the document must carry — `unreadable`; exit 3 with neither."""
+    dispatcher = guard_dispatch.DISPATCHER
+    exe = dispatcher.resolve_binary(binary)
+    if exe is None:
+        raise DaGuardNotFoundError(dispatcher.binary_missing_message(binary).rstrip())
+
+    cmd = [exe, subcommand, "--config-dir", str(conf_d), *extra]
+    try:
+        # Bytes, not text: stderr may carry a file name that is not UTF-8
+        # (the exporter's load logs it as is).
+        proc = subprocess.run(cmd, capture_output=True, check=False, timeout=timeout)
+    except subprocess.TimeoutExpired as e:
+        raise error(f"da-guard {subcommand} did not finish within {timeout}s", None,
+                    _stderr_text(e.stderr)) from e
+    except OSError as e:
+        raise error(f"da-guard {subcommand} could not be run ({exe}): {e}", None, "") from e
+
+    stderr = _stderr_text(proc.stderr)
+    if proc.returncode not in (_EXIT_OK, _EXIT_PARSE_FAILED):
+        raise error(f"da-guard {subcommand} exited {proc.returncode}", proc.returncode, stderr)
+    try:
+        doc = json.loads(proc.stdout.decode("utf-8"))
+        if schema is not None and doc["schema"] != schema:
+            raise ValueError(f"schema {doc['schema']!r}, this reader reads {schema!r}")
+        parse_failed = list(doc["parse_failed"])
+        got = read(doc)
+        unreadable = ([UnreadableFile(str(e["file"]), str(e["reason"])) for e in doc["unreadable"]]
+                      if reads_unreadable else [])
+    except (ValueError, KeyError, TypeError) as e:  # UnicodeDecodeError is a ValueError
+        stale = (" — this da-guard is older than this tool: upgrade or rebuild it"
+                 if isinstance(e, KeyError) and e.args in (("skipped",), ("unreadable",)) else "")
+        raise error(
+            f"da-guard {subcommand} exited {proc.returncode} without the expected JSON ({e}){stale}",
+            proc.returncode, stderr) from e
+
+    if parse_failed or unreadable:
+        clauses = []
+        if parse_failed:
+            clauses.append(f"the exporter's load skips {len(parse_failed)} file(s) that do not decode: "
+                           f"{', '.join(parse_failed)}")
+        if unreadable:
+            clauses.append(f"the exporter's load cannot read {len(unreadable)} path(s): "
+                           f"{', '.join(f'{u.file} ({u.reason})' for u in unreadable)}")
+        first = parse_failed[0] if parse_failed else unreadable[0].file
+        raise ParseFailedError(str(Path(conf_d) / first), ValueError("; ".join(clauses)),
+                               _nonempty_lines(stderr), unreadable)
+    if proc.returncode != _EXIT_OK:
+        fields = "parse_failed or unreadable" if reads_unreadable else "parse_failed"
+        raise error(
+            f"da-guard {subcommand} exited {proc.returncode} with no file in {fields}",
+            proc.returncode, stderr)
+    return got, proc.returncode, stderr
+
+
 def load_served_values(
     conf_d: str | Path,
     at: str | None = None,
@@ -214,55 +353,12 @@ def load_served_tree(
 ) -> ServedTree:
     """`load_served_values`'s tenants plus the files the load serves no
     tenant from. Same arguments and exceptions."""
-    dispatcher = guard_dispatch.DISPATCHER
-    exe = dispatcher.resolve_binary(binary)
-    if exe is None:
-        raise DaGuardNotFoundError(dispatcher.binary_missing_message(binary).rstrip())
-
-    cmd = [exe, SUBCOMMAND, "--config-dir", str(conf_d)]
-    if at is not None:
-        cmd += ["--at", at]
-    try:
-        # Bytes, not text: stderr may carry a file name that is not UTF-8
-        # (the exporter's load logs it as is).
-        proc = subprocess.run(cmd, capture_output=True, check=False, timeout=timeout)
-    except subprocess.TimeoutExpired as e:
-        raise ServedValuesError(f"da-guard {SUBCOMMAND} did not finish within {timeout}s", None,
-                                _stderr_text(e.stderr)) from e
-    except OSError as e:
-        raise ServedValuesError(f"da-guard {SUBCOMMAND} could not be run ({exe}): {e}", None, "") from e
-
-    stderr = _stderr_text(proc.stderr)
-    if proc.returncode not in (_EXIT_OK, _EXIT_PARSE_FAILED):
-        raise ServedValuesError(f"da-guard {SUBCOMMAND} exited {proc.returncode}", proc.returncode, stderr)
-    try:
-        doc = json.loads(proc.stdout.decode("utf-8"))
-        parse_failed = list(doc["parse_failed"])
-        skipped = [SkippedFile(str(e["file"]), str(e["reason"])) for e in doc["skipped"]]
-        unreadable = [UnreadableFile(str(e["file"]), str(e["reason"])) for e in doc["unreadable"]]
-        tenants = doc["tenants"]
-    except (ValueError, KeyError, TypeError) as e:  # UnicodeDecodeError is a ValueError
-        stale = (" — this da-guard is older than this tool: upgrade or rebuild it"
-                 if isinstance(e, KeyError) and e.args in (("skipped",), ("unreadable",)) else "")
-        raise ServedValuesError(
-            f"da-guard {SUBCOMMAND} exited {proc.returncode} without the expected JSON ({e}){stale}",
-            proc.returncode, stderr) from e
-
-    if parse_failed or unreadable:
-        clauses = []
-        if parse_failed:
-            clauses.append(f"the exporter's load skips {len(parse_failed)} file(s) that do not decode: "
-                           f"{', '.join(parse_failed)}")
-        if unreadable:
-            clauses.append(f"the exporter's load cannot read {len(unreadable)} path(s): "
-                           f"{', '.join(f'{u.file} ({u.reason})' for u in unreadable)}")
-        first = parse_failed[0] if parse_failed else unreadable[0].file
-        raise ParseFailedError(str(Path(conf_d) / first), ValueError("; ".join(clauses)),
-                               _nonempty_lines(stderr), unreadable)
-    if proc.returncode != _EXIT_OK:
-        raise ServedValuesError(
-            f"da-guard {SUBCOMMAND} exited {proc.returncode} with no file in parse_failed or unreadable",
-            proc.returncode, stderr)
+    extra = ["--at", at] if at is not None else []
+    (tenants, skipped), returncode, stderr = _run_da_guard(
+        SUBCOMMAND, extra, conf_d, binary, timeout, ServedValuesError, schema=None,
+        read=lambda doc: (doc["tenants"],
+                          [SkippedFile(str(e["file"]), str(e["reason"])) for e in doc["skipped"]]),
+        reads_unreadable=True)
 
     out: dict[str, TenantValues] = {}
     for tenant_id, tv in tenants.items():
@@ -276,7 +372,7 @@ def load_served_tree(
         except (ValueError, KeyError, TypeError) as e:
             raise ServedValuesError(
                 f"da-guard {SUBCOMMAND}: tenant {tenant_id!r} carries a value that is not a threshold ({e})",
-                proc.returncode, stderr) from e
+                returncode, stderr) from e
         out[tenant_id] = TenantValues(tenant_id, values, severities, dict(tv["unserved"]),
                                      {k: list(v) for k, v in tv["dropped"].items()})
     return ServedTree(out, skipped, _nonempty_lines(stderr))
@@ -350,3 +446,51 @@ MISSING_BINARY_MESSAGE = (
     "da-guard binary not found: this tool reads the values through "
     "`da-guard served-values`. Set $DA_GUARD_BINARY to its path, or put "
     "da-guard on $PATH (the da-tools image ships it as /usr/local/bin/da-guard).")
+
+
+def load_effective(
+    conf_d: str | Path,
+    binary: str | None = None,
+    timeout: float = DEFAULT_TIMEOUT,
+) -> dict[str, TenantEffective]:
+    """`{tenant_id: TenantEffective}` for every tenant of the conf.d tree at
+    `conf_d`, as tenant-api's /effective resolves it. See the module docstring
+    for the contract and the exceptions."""
+    tenants, returncode, stderr = _run_da_guard(
+        EFFECTIVE_SUBCOMMAND, [], conf_d, binary, timeout, EffectiveError, schema=EFFECTIVE_SCHEMA,
+        read=lambda doc: doc["tenants"])
+    out: dict[str, TenantEffective] = {}
+    try:
+        for tenant_id, t in tenants.items():
+            if t["tenant_id"] != tenant_id:
+                raise ValueError(f"entry {tenant_id!r} carries tenant_id {t['tenant_id']!r}")
+            sources: dict[str, KeySource] = {}
+            for key, ks in t["key_sources"].items():
+                layer, level = ks["layer"], ks.get("level")
+                if layer not in _KEY_LAYERS:
+                    raise ValueError(f"tenant {tenant_id!r} key {key!r}: unknown layer {layer!r}")
+                if (level is None) == (layer == "defaults"):
+                    raise ValueError(f"tenant {tenant_id!r} key {key!r}: layer {layer!r} with level {level!r}")
+                sources[key] = KeySource(layer, ks["file"], level)
+            effective = dict(t["effective_config"])
+            if set(sources) != set(effective):
+                raise ValueError(f"tenant {tenant_id!r}: key_sources and effective_config differ on "
+                                 f"{sorted(set(sources) ^ set(effective))!r}")
+            out[tenant_id] = TenantEffective(
+                tenant_id=tenant_id,
+                effective_config=effective,
+                key_sources=sources,
+                profile=t["profile"],
+                merged_hash=t["merged_hash"],
+                source_file=t["source_file"],
+                source_hash=t["source_hash"],
+                defaults_chain=list(t["defaults_chain"]),
+                platform_overlay=list(t.get("platform_overlay") or []),
+                profile_overlay=list(t.get("profile_overlay") or []),
+                warnings=list(t.get("warnings") or []),
+            )
+    except (ValueError, KeyError, TypeError, AttributeError) as e:
+        raise EffectiveError(
+            f"da-guard {EFFECTIVE_SUBCOMMAND}: an entry is not the shape this reader reads ({e})",
+            returncode, stderr) from e
+    return out

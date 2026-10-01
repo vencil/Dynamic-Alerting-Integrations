@@ -255,6 +255,12 @@ GitHub Actions 範本：[`guard-defaults-impact.yml`](../../.github/workflows/gu
 da-guard served-values --config-dir conf.d/ --at 2026-07-01T03:00:00Z
 ```
 
+子命令 `effective`（[#2564](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/2564)）以 JSON 印出每個租戶在 tenant-api `/effective` 的答案（同一個 `pkg/config` resolver），另加綁定的 profile 與每個 key 的來源層級與檔案；Python 讀取端經 `scripts/tools/_lib_tenant_values.py` 的 `load_effective()` 呼叫。輸出欄位與 exit code 見 [cli-reference §guard](../../docs/cli-reference.md#guard)。
+
+```bash
+da-guard effective --config-dir conf.d/
+```
+
 ### `da-parser` — kube-prometheus 規則 → ParseResult JSON
 
 導入既有 PrometheusRule 的第一步：解析、dialect 分類（標準 PromQL / VictoriaMetrics-only）、可選 portability gate。

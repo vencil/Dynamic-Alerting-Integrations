@@ -1686,7 +1686,8 @@ func (c *ThresholdConfig) ApplyProfiles() {
 // ApplyProfiles writes them; nil = silent. The tenant-api merge core
 // (#1385) passes nil — it runs per request, and it hands both facts to its
 // caller as an Error / a notice (TenantMerge.ValidateTenantKeys) instead of
-// writing them to the process log on every GET.
+// writing them to the process log on every GET. BuildFlatConfig passes its
+// FlatBuildInput.Logger (#2513), so LoadDir's logger decides where they go.
 func (c *ThresholdConfig) applyProfiles(logf func(format string, args ...any)) {
 	if logf == nil {
 		logf = func(string, ...any) {}

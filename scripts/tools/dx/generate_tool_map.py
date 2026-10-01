@@ -90,12 +90,13 @@ UNREADABLE_DESCRIPTION = "⚠️ description unreadable"
 _UNREADABLE: dict = {}
 
 
-def _shown(filepath: Path) -> "Path":
-    """Path as printed: repo-relative when it is under REPO_ROOT."""
+def _shown(filepath: Path) -> str:
+    """Path as printed: repo-relative with `/` when it is under REPO_ROOT
+    (the same text on every OS, #2558), as given otherwise."""
     try:
-        return filepath.relative_to(REPO_ROOT)
+        return filepath.relative_to(REPO_ROOT).as_posix()
     except ValueError:
-        return filepath
+        return str(filepath)
 
 
 def _unreadable_detail() -> str:
@@ -382,12 +383,12 @@ def main():
                 os.chmod(target,
                          stat.S_IRUSR | stat.S_IWUSR | stat.S_IRGRP
                          | stat.S_IROTH)
-            print(f"✅ Generated {target.relative_to(REPO_ROOT)} "
+            print(f"✅ Generated {_shown(target)} "
                   f"({total} tools, {lang})")
 
         elif args.check:
             if not target.exists():
-                print(f"❌ {target.relative_to(REPO_ROOT)} does not exist. "
+                print(f"❌ {_shown(target)} does not exist. "
                       f"Run with --generate --lang {args.lang} first.")
                 if not _UNREADABLE:
                     sys.exit(EXIT_VIOLATION)
@@ -409,7 +410,7 @@ def main():
                         f"extra: {', '.join(sorted(extra))}")
                 detail_str = (f" ({'; '.join(details)})"
                               if details else "")
-                print(f"❌ {target.relative_to(REPO_ROOT)} is outdated"
+                print(f"❌ {_shown(target)} is outdated"
                       f"{detail_str}. Run with --generate --lang {args.lang} "
                       f"to update.")
                 if not _UNREADABLE:
