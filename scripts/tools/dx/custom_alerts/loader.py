@@ -131,7 +131,7 @@ def _dir_defaults_alerts(config_dir: Path, file_errors: List[dict]) -> Dict[Path
         # `_defaults.yml` and yield no alerts (blind review of #1674).
         readable, unreadable = readable_carriers(defaults_files_in(root, files))
         for bad, exc in unreadable:
-            file_errors.append(_file_skip(str(bad.relative_to(config_dir)), exc))
+            file_errors.append(_file_skip(bad.relative_to(config_dir).as_posix(), exc))
         chosen = select_defaults_carrier(readable)
         if chosen is None:
             continue
@@ -141,7 +141,7 @@ def _dir_defaults_alerts(config_dir: Path, file_errors: List[dict]) -> Dict[Path
         try:
             data = _load_yaml(chosen)
         except Exception as exc:  # noqa: BLE001 — malformed file quarantined, not fatal
-            file_errors.append(_file_skip(str(chosen.relative_to(config_dir)), exc))
+            file_errors.append(_file_skip(chosen.relative_to(config_dir).as_posix(), exc))
             continue
         alerts = data.get("_custom_alerts") or []
         if alerts:
@@ -269,7 +269,7 @@ def collect_instances(config_dir: Path) -> Tuple[List[Tuple[str, dict, str, bool
             warn_dir_symlink_once(bad)
             continue
         file_errors.append(_file_record(
-            str(bad.relative_to(config_dir)), unusable_reason(bad)))
+            bad.relative_to(config_dir).as_posix(), unusable_reason(bad)))
     # `entries` are regular, non-hidden files with either YAML spelling
     # (#1603) — `list_config_tree` already applied all three filters.
     for path in entries:
@@ -278,7 +278,7 @@ def collect_instances(config_dir: Path) -> Tuple[List[Tuple[str, dict, str, bool
         try:
             data = _load_yaml(path)
         except Exception as exc:  # noqa: BLE001 — malformed file quarantined, not fatal
-            file_errors.append(_file_skip(str(path.relative_to(config_dir)), exc))
+            file_errors.append(_file_skip(path.relative_to(config_dir).as_posix(), exc))
             continue
         tenants = data.get("tenants") or {}
         if not isinstance(tenants, dict):
@@ -288,11 +288,11 @@ def collect_instances(config_dir: Path) -> Tuple[List[Tuple[str, dict, str, bool
             if not isinstance(cfg, dict):
                 continue
             own = cfg.get("_custom_alerts") or []
-            rel = path.relative_to(config_dir)
+            rel = path.relative_to(config_dir).as_posix()
             for inst in inherited:
                 triples.append((tenant, inst, f"{rel} (inherited _defaults.yaml)", False))
             for inst in own:
-                triples.append((tenant, inst, str(rel), True))
+                triples.append((tenant, inst, rel, True))
     return triples, file_errors
 
 
