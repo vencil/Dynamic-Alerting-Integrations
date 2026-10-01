@@ -68,6 +68,8 @@ from _lib_python import (  # noqa: E402
     METRIC_PREFIX_DB_MAP,
 )
 from _lib_exitcodes import EXIT_OK, EXIT_VIOLATION, EXIT_CALLER_ERROR  # noqa: E402
+from _lib_io import load_yaml_file_exporter_keys  # noqa: E402  (#2216 tenant id as text)
+from _lib_yaml_keys import load_exporter_keys  # noqa: E402  (#2216 tenant id as text)
 
 # #1641: every path this tool writes descends from -o/--output-dir, so every
 # writer names that flag; an unusable path is rc=2 + one line, not a
@@ -108,13 +110,18 @@ for _rtype, _spec in RECEIVER_TYPES.items():
 # Phase 1: Alertmanager Config Reverse Analysis
 # ============================================================
 
-def parse_alertmanager_config(path):
+def parse_alertmanager_config(path, tenant_label=DEFAULT_TENANT_LABEL):
     """Load and parse an Alertmanager configuration file.
 
     Handles both raw alertmanager.yml and ConfigMap-wrapped YAML.
     Returns the parsed Alertmanager config dict, or None on error.
+
+    #2216: a ``match:`` / ``match_re:`` value under *tenant_label* is a
+    tenant id, read as its source text — ``tenant: 010`` is tenant "010",
+    not 8. Keys are source text too.
     """
-    data = load_yaml_file(path)
+    raw_text = (tenant_label,)
+    data = load_yaml_file_exporter_keys(path, raw_text_scalars=raw_text)
     if data is None:
         return None
 
@@ -122,7 +129,7 @@ def parse_alertmanager_config(path):
     if "data" in data and isinstance(data["data"], dict):
         am_yml = data["data"].get("alertmanager.yml")
         if am_yml and isinstance(am_yml, str):
-            data = yaml.safe_load(am_yml)
+            data = load_exporter_keys(am_yml, raw_text_scalars=raw_text)
         elif am_yml and isinstance(am_yml, dict):
             data = am_yml
 
@@ -1293,7 +1300,8 @@ def main():
     if args.alertmanager_config:
         print(f"Phase 1: Analyzing Alertmanager config: {args.alertmanager_config}",
               file=sys.stderr)
-        am_config = parse_alertmanager_config(args.alertmanager_config)
+        am_config = parse_alertmanager_config(args.alertmanager_config,
+                                              args.tenant_label)
         if am_config is None:
             print(f"ERROR: Failed to parse Alertmanager config: {args.alertmanager_config}",
                   file=sys.stderr)

@@ -383,7 +383,9 @@ class TestFileWritePermissions:
 #    本 repo 兩個活實例（今天都安全，但改壞了沒有人會看見）：
 #      `check_admin_config_schema._StrictSafeLoader`（走 `load_all`）；
 #      `_lib_yaml_keys.load_exporter_keys()` / `load_first_document_exporter_keys()`
-#      （自己建 loader；#2114 自 `validate_config._load_with_exporter_keys()` 搬來）。
+#      / `load_all_exporter_keys()`
+#      （自己建 loader；#2114 自 `validate_config._load_with_exporter_keys()` 搬來，
+#      第三個入口 #2216 加入）。
 #    後者的安全性質由**行為級**測試釘住（`tests/shared/test_tenant_id_yaml_spelling_parity.py::
 #    test_the_loader_cannot_construct_python_objects`，對兩個入口
 #    都餵真的 `!!python/object/apply` payload）。⛔ 刪那支測試等於讓它完全無人看守。

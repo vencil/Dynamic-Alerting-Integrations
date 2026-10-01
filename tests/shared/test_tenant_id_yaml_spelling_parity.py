@@ -35,7 +35,15 @@ REJECTED = [r for r in ROWS if r.get("rejected")]
 LOADS = {
     "single": lambda s: yk.load_exporter_keys(io.StringIO(s)),
     "first": lambda s: yk.load_first_document_exporter_keys(io.StringIO(s)),
+    # #2216: the multi-document entry, held to the same table; every input
+    # here is one document, so it must come back as a one-item list.
+    "all": lambda s: _only(yk.load_all_exporter_keys(io.StringIO(s))),
 }
+
+
+def _only(docs: list) -> object:
+    assert len(docs) == 1, docs
+    return docs[0]
 
 
 def _doc(source: str) -> str:

@@ -84,6 +84,7 @@ except Exception:  # pragma: no cover - compat shim optional
         pass
 from _lib_exitcodes import EXIT_OK, EXIT_VIOLATION, EXIT_CALLER_ERROR  # noqa: E402
 from _lib_confd import has_yaml_extension, is_hidden_name  # noqa: E402
+from _lib_yaml_keys import load_exporter_keys  # noqa: E402  (#2216 tenant id as text)
 
 
 def _repo_root() -> Path:
@@ -95,8 +96,12 @@ def _repo_root() -> Path:
 
 
 def _load_yaml(path: Path) -> dict:
-    """Parse a YAML mapping; '' / non-mapping → {} so callers can .get safely."""
-    data = yaml.safe_load(path.read_text(encoding="utf-8"))
+    """Parse a YAML mapping; '' / non-mapping → {} so callers can .get safely.
+
+    #2216: tenant ids are the keys' source text, as the exporter reads them
+    — `010:` is tenant "010", not 8.
+    """
+    data = load_exporter_keys(path.read_text(encoding="utf-8"))
     return data if isinstance(data, dict) else {}
 
 

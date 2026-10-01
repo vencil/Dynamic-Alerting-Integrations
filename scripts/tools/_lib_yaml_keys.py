@@ -99,6 +99,7 @@ __all__ = [
     "RewriteDumper",
     "RewriteLoader",
     "dump_for_rewrite",
+    "load_all_exporter_keys",
     "load_exporter_keys",
     "load_first_document_exporter_keys",
     "load_for_rewrite",
@@ -222,6 +223,26 @@ def load_first_document_exporter_keys(
         if loader.check_data():
             return loader.get_data()
         return None
+    finally:
+        loader.dispose()
+
+
+def load_all_exporter_keys(stream: Any) -> "list[Any]":
+    """EVERY document of *stream*, keys as text: ``list(yaml.safe_load_all(
+    stream))`` with the exporter's tenant ids (#2216).
+
+    NOT strict (a repeated key keeps the last value), like the two entries
+    above; the strict sibling is ``_lib_io.strict_load_all_exporter_keys``.
+    Eager, so the loader is disposed before this returns; an error in ANY
+    document raises, as ``list(yaml.safe_load_all(...))`` did. Longhand for
+    the reason given in ``load_exporter_keys``.
+    """
+    loader = _make_loader(stream, ())
+    try:
+        docs = []
+        while loader.check_data():
+            docs.append(loader.get_data())
+        return docs
     finally:
         loader.dispose()
 
