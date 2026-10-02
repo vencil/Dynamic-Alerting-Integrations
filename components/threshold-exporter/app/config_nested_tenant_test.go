@@ -7,7 +7,7 @@ package main
 // order was the point: the criterion had to be fixed before the design was, or
 // it would have been written to match whatever the implementation happened to
 // do. The defect it pinned — a tenant declared in a conf.d SUBDIRECTORY
-// resolving through `Resolve()` / `/effective` while never reaching
+// resolving through `Resolve()` (removed in #2586) / `/effective` while never reaching
 // `GetConfig()`, so `ThresholdCollector` emits no `user_threshold` and its
 // alerts can never fire — is closed. #1526 had only made the divergence loud.
 //
@@ -36,6 +36,8 @@ import (
 	"testing"
 
 	"github.com/prometheus/client_golang/prometheus"
+
+	"github.com/vencil/threshold-exporter/pkg/config"
 )
 
 // nestedSubdir is the subdirectory the nested tenant lives in. Named for its
@@ -148,8 +150,8 @@ func TestNestedTenantReachesTheOutputPlane(t *testing.T) {
 
 	// (1) Control — the flat tenant must be present on every plane. If this
 	//     fails the fixture is broken and nothing below means anything.
-	if _, ok := m.Resolve(flatTenant); !ok {
-		t.Fatalf("control: Resolve(%s) not found — fixture is broken", flatTenant)
+	if _, err := config.ResolveEffective(dir, flatTenant); err != nil {
+		t.Fatalf("control: ResolveEffective(%s): %v — fixture is broken", flatTenant, err)
 	}
 	if got := keysOfTenants(m.GetConfig()); !contains(got, flatTenant) {
 		t.Fatalf("control: GetConfig().Tenants missing %s — fixture is broken, got %v",
@@ -166,15 +168,15 @@ func TestNestedTenantReachesTheOutputPlane(t *testing.T) {
 	//     `diagnose --show-inheritance`, which #1447 calls the ONLY way out of
 	//     "config looks right but the alert never fires") is told everything
 	//     is fine.
-	if _, ok := m.Resolve(nestedTenant); !ok {
-		t.Fatalf("premise: Resolve(%s) must succeed — without it this test is "+
-			"about a tenant that does not exist, not about a split population",
-			nestedTenant)
+	if _, err := config.ResolveEffective(dir, nestedTenant); err != nil {
+		t.Fatalf("premise: ResolveEffective(%s) must succeed (%v) — without it "+
+			"this test is about a tenant that does not exist, not about a split "+
+			"population", nestedTenant, err)
 	}
 
 	// (3) The defect. The nested tenant must reach the output plane too.
 	if got := keysOfTenants(m.GetConfig()); !contains(got, nestedTenant) {
-		t.Errorf("#1521: GetConfig().Tenants is missing %s, which Resolve() "+
+		t.Errorf("#1521: GetConfig().Tenants is missing %s, which ResolveEffective "+
 			"just found. The flat scanner skips subdirectories, so the tenant "+
 			"exists on the diagnostic plane and nowhere else.\n  got: %v",
 			nestedTenant, got)
@@ -283,8 +285,8 @@ func TestTheSameTenantFlattenedIsFine(t *testing.T) {
 	}
 
 	for _, tenant := range []string{flatTenant, movedTenant} {
-		if _, ok := m.Resolve(tenant); !ok {
-			t.Errorf("Resolve(%s) not found", tenant)
+		if _, err := config.ResolveEffective(dir, tenant); err != nil {
+			t.Errorf("ResolveEffective(%s): %v", tenant, err)
 		}
 		if got := keysOfTenants(m.GetConfig()); !contains(got, tenant) {
 			t.Errorf("GetConfig().Tenants missing %s, got %v", tenant, got)
@@ -378,11 +380,11 @@ func TestTheEmittedValueMatchesTheResolvedOne(t *testing.T) {
 			"leaked into the one global map", got)
 	}
 
-	eff, ok := m.Resolve("tenant-inheritor")
-	if !ok {
-		t.Fatalf("premise: Resolve(tenant-inheritor) must succeed")
+	eff, err := config.ResolveEffective(dir, "tenant-inheritor")
+	if err != nil {
+		t.Fatalf("premise: ResolveEffective(tenant-inheritor) must succeed: %v", err)
 	}
-	if got := eff.Config["mysql_connections"]; got != 60 {
+	if got := eff.EffectiveConfig["mysql_connections"]; got != 60 {
 		t.Fatalf("premise: /effective should report the subtree default 60, got %v", got)
 	}
 
@@ -482,15 +484,15 @@ func TestTheDeepestSubtreeDefaultWins(t *testing.T) {
 		t.Fatalf("Load: %v", err)
 	}
 
-	eff, ok := m.Resolve(inheritor)
-	if !ok {
-		t.Fatalf("premise: Resolve(%s) must succeed", inheritor)
+	eff, err := config.ResolveEffective(dir, inheritor)
+	if err != nil {
+		t.Fatalf("premise: ResolveEffective(%s) must succeed: %v", inheritor, err)
 	}
 	if len(eff.DefaultsChain) != 3 {
 		t.Fatalf("premise: this test is about a THREE-level chain; got %d level(s): %v",
 			len(eff.DefaultsChain), eff.DefaultsChain)
 	}
-	if got := eff.Config["mysql_connections"]; got != 70 {
+	if got := eff.EffectiveConfig["mysql_connections"]; got != 70 {
 		t.Fatalf("premise: /effective should report the deepest default 70, got %v", got)
 	}
 

@@ -10,7 +10,7 @@
 #   `shutil.which("bash")` can resolve to WSL, and Git's `usr/bin/bash` under a
 #   non-MSYS parent has no `grep`, which a `2>/dev/null` probe swallows. This
 #   script is only ever run BY a shell, so it keeps to bash builtins plus
-#   `mv`/`chmod` and says so when those are missing.
+#   `mv`/`chmod`/`rm` and says so when those are missing.
 #
 # ⛔ IT CHAINS WHAT WAS ALREADY THERE — NOT A CONVENIENCE. This repo has
 #   `filter=lfs` paths and `git lfs install` is global, so a fresh clone
@@ -82,6 +82,22 @@ contains() {   # $1 = file, $2 = needle
 }
 is_ours()      { contains "$1" "$MARKER"; }
 is_precommit() { contains "$1" "--hook-type=pre-push"; }
+# ⛔ A hook byte-identical to a committed version of one of our guards is a
+# single-file install from before #1689. It cannot run outside scripts/ops/, so
+# chaining it keeps every push failing; the dispatcher already runs what it
+# duplicates. Identity, not content: a hook of the user's own that happens to
+# source the helper must still be chained. Removing an identical copy loses
+# nothing, since git holds the same blob.
+guard_blobs="$(git -C "$root" log --all --no-renames --format= --raw --no-abbrev -- \
+    scripts/ops/protect_main_push.sh scripts/ops/require_preflight_pass.sh \
+    scripts/ops/pre_push_mkdocs_strict.sh 2>/dev/null)"
+is_guard_copy() {
+    [ -f "$1" ] || return 1
+    local id
+    id="$(git hash-object -- "$1" 2>/dev/null)" || return 1
+    case "$guard_blobs" in (*" $id "*) return 0 ;; esac
+    return 1
+}
 
 # Move a foreign hook into the chained slot. Fails loudly: a silent failure here
 # means either that hook stops running or ours never installs.
@@ -105,14 +121,32 @@ stash_foreign() {   # $1 = path to the foreign hook
     return 0
 }
 
+# An earlier install chained a guard copy (this installer did, before it knew
+# better). Take it out of the slot, or the dispatcher keeps running it.
+if is_guard_copy "$chained"; then
+    command -v rm >/dev/null 2>&1 || {
+        warn "⛔ \`rm\` is not on PATH, so $chained, a copy of a pre-push guard"
+        warn "   that cannot run there, stays. Delete it by hand (git holds the same"
+        warn "   content), then re-run."
+        exit 1
+    }
+    rm -f "$chained" || {
+        warn "⛔ could not remove $chained, a copy of a pre-push guard that"
+        warn "   cannot run there. Delete it by hand, then re-run."
+        exit 1
+    }
+    say "removed $CHAINED_NAME: identical to a committed version of a guard, which only runs from scripts/ops/"
+fi
+
 target="$hook"
-if is_ours "$hook"; then
-    target="$hook"                       # refresh in place
+replaced=""
+if is_ours "$hook" || is_guard_copy "$hook"; then
+    target="$hook"                       # refresh, or replace a guard copy
 elif is_precommit "$hook"; then
     # pre-commit keeps the hook file; we take the slot it calls with the full
     # stdin. If something else is already in that slot it is a real hook that
     # pre-commit migrated — chain it rather than destroy it.
-    if [ -e "$legacy" ] && ! is_ours "$legacy"; then
+    if [ -e "$legacy" ] && ! is_ours "$legacy" && ! is_guard_copy "$legacy"; then
         stash_foreign "$legacy" || exit 1
     fi
     target="$legacy"
@@ -177,22 +211,39 @@ fi
 exec bash "$_dispatch" "$@"
 VIBE_SHIM_EOF
 
-printf '%s' "$SHIM_BODY" > "$target" || { warn "⛔ could not write $target"; exit 1; }
+# ⛔ A guard copy is replaced by `mv`, never written into: a hook symlinked or
+# hard-linked to a guard in scripts/ops is identical to it, and `>` would go
+# through the link into the version-controlled guard. Until the `mv`, the old
+# hook stays as it was, so a failure on the way leaves nothing worse.
+out="$target"
+if is_guard_copy "$target"; then
+    replaced=" (replacing a copy of a guard that was there)"
+    out="$target.vibe-new"
+fi
+printf '%s' "$SHIM_BODY" > "$out" || { warn "⛔ could not write $out"; exit 1; }
 
 # ⛔ Not `|| true`. git SILENTLY IGNORES a hook without the executable bit — it
 # prints one `hint:` line that `advice.ignoredHook=false` turns off — so a
 # swallowed chmod failure leaves a hook file that looks installed and never
 # runs. Measured: with the bit cleared, a direct push to main succeeded with the
 # guard banner absent.
-if ! chmod +x "$target"; then
-    warn "⛔ could not make $target executable. git ignores non-executable hooks"
+if ! chmod +x "$out"; then
+    warn "⛔ could not make $out executable. git ignores non-executable hooks"
     warn "   with only a hint, so the guards would look installed and never run."
     exit 1
 fi
+if [ "$out" != "$target" ]; then
+    command -v mv >/dev/null 2>&1 && mv -f "$out" "$target" || {
+        warn "⛔ could not move $out over $target, a copy of a pre-push guard."
+        warn "   $target is unchanged. Delete it by hand (git holds the same content),"
+        warn "   then re-run."
+        exit 1
+    }
+fi
 
 if [ "$target" = "$legacy" ]; then
-    say "installed guard shim at $target (pre-commit owns $hook and calls it with the full refspec)"
+    say "installed guard shim at $target$replaced (pre-commit owns $hook and calls it with the full refspec)"
 else
-    say "installed guard shim at $target"
+    say "installed guard shim at $target$replaced"
 fi
 exit 0

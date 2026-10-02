@@ -87,11 +87,11 @@ for _guard in "${GUARDS[@]}"; do
     if [ ! -r "$_path" ]; then
         cat >&2 <<GUARD_MISSING
 
-[prepush_dispatch] ⛔ $_guard is missing next to this script, so one of the
+[prepush_dispatch] ⛔ $_guard is missing from $_dispatch_dir, so one of the
 pre-push guards cannot run. Stopping here rather than running the rest.
 
-The guards are version-controlled files, so restore them from git:
-    git checkout -- scripts/ops/
+It is version-controlled: restore it from HEAD (the deletion may already be
+staged).
 
 ⛔ Not the installer: it writes .git/hooks, never scripts/ops, so it exits 0
 and changes nothing here. And do not reach for --no-verify or delete

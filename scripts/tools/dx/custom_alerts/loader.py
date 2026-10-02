@@ -34,7 +34,7 @@ from _lib_confd import (  # noqa: E402  (#1588 shared name predicates)
     warn_dir_symlink_once,
     warn_multi_carrier,
 )
-from _lib_io import strict_safe_load  # noqa: E402  (#2123)
+from _lib_io import strict_load_exporter_keys, strict_safe_load  # noqa: E402  (#2123; #2216)
 
 from . import shape as _shape
 
@@ -60,6 +60,13 @@ def _load_yaml(path: Path) -> dict:
     would emit alerts for a config that is never served. Callers quarantine it
     exactly like a syntax error."""
     return strict_safe_load(path.read_text(encoding="utf-8")) or {}
+
+
+def _load_tenant_yaml(path: Path) -> dict:
+    """`_load_yaml` for a file carrying a `tenants:` block: the tenant ids
+    are the keys' source text, as the exporter reads them (#2216) — `010:` is
+    tenant "010", not 8. Strict like `_load_yaml`."""
+    return strict_load_exporter_keys(path.read_text(encoding="utf-8")) or {}
 
 
 def _is_dir(p: Path) -> bool:
@@ -276,7 +283,7 @@ def collect_instances(config_dir: Path) -> Tuple[List[Tuple[str, dict, str, bool
         if is_defaults_name(path.name):
             continue
         try:
-            data = _load_yaml(path)
+            data = _load_tenant_yaml(path)
         except Exception as exc:  # noqa: BLE001 — malformed file quarantined, not fatal
             file_errors.append(_file_skip(path.relative_to(config_dir).as_posix(), exc))
             continue

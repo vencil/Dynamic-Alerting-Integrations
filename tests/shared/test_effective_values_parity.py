@@ -13,6 +13,7 @@ Go 那一半（components/threshold-exporter/app/cmd/da-guard/effective_test.go�
 from __future__ import annotations
 
 import json
+import os
 import shutil
 import subprocess
 from pathlib import Path
@@ -172,6 +173,78 @@ def test_empty_tree_raises_effective_error(tmp_path, da_guard):
     assert ei.value.returncode == 2 and "no .yaml files found" in ei.value.stderr
 
 
+# #2588：exporter 讀不到的路徑（stat／read 失敗、列不出的子目錄）。tenant-b 自己不寫值，
+# 它的有效設定全來自 _defaults.yaml——讀不到 defaults 時它會變成 {}，讀起來像「沒有設定」。
+_UNREADABLE_BASE = {
+    "_defaults.yaml": "defaults:\n  mysql_connections: 80\n",
+    "tenant-a.yaml": "tenants:\n  tenant-a:\n    mysql_connections: 70\n",
+    "sub/tenant-b.yaml": "tenants:\n  tenant-b: {}\n",
+}
+
+
+def _dangling(conf_d: Path, rel: str) -> None:
+    p = conf_d / rel
+    if p.exists():
+        p.unlink()
+    p.symlink_to("missing.yaml")
+
+
+def _chmod(conf_d: Path, rel: str, mode: int) -> None:
+    (conf_d / rel).chmod(mode)
+
+
+_NON_ROOT = pytest.mark.skipif(
+    hasattr(os, "geteuid") and os.geteuid() == 0,
+    reason="root 不受 chmod 限制；懸空 symlink 兩格任何身分都會跑")
+
+
+@pytest.mark.parametrize("break_it, want", [
+    pytest.param(lambda d: _dangling(d, "tenant-c.yaml"), ("tenant-c.yaml", "stat_error"), id="dangling-tenant"),
+    pytest.param(lambda d: _dangling(d, "_defaults.yaml"), ("_defaults.yaml", "stat_error"), id="dangling-defaults"),
+    pytest.param(lambda d: _chmod(d, "tenant-a.yaml", 0), ("tenant-a.yaml", "read_error"),
+                 id="tenant-0000", marks=_NON_ROOT),
+    pytest.param(lambda d: _chmod(d, "_defaults.yaml", 0), ("_defaults.yaml", "read_error"),
+                 id="defaults-0000", marks=_NON_ROOT),
+    pytest.param(lambda d: _chmod(d, "sub", 0), ("sub", "walk_error"), id="subdir-0000", marks=_NON_ROOT),
+    pytest.param(lambda d: _chmod(d, "sub", 0o644), ("sub/tenant-b.yaml", "stat_error"),
+                 id="subdir-0644", marks=_NON_ROOT),
+])
+def test_unreadable_raises_parse_failed_error_with_unreadable(break_it, want, tmp_path, da_guard):
+    """讀不到的路徑：load_effective 不交出少了租戶或少了繼承值的結果，raise ParseFailedError
+    並帶 `unreadable`（與 served-values 同一份 {file, reason}）。"""
+    conf_d = _tree(tmp_path, _UNREADABLE_BASE)
+    break_it(conf_d)
+    try:
+        with pytest.raises(tv.ParseFailedError) as ei:
+            tv.load_effective(conf_d, binary=da_guard)
+    finally:
+        for rel in ("sub", "tenant-a.yaml", "_defaults.yaml"):
+            p = conf_d / rel
+            if p.exists() and not p.is_symlink():
+                p.chmod(0o755 if p.is_dir() else 0o644)
+    assert ei.value.unreadable == [tv.UnreadableFile(*want)]
+    assert ei.value.path == str(conf_d / want[0])
+    assert f"cannot read 1 path(s): {want[0]} ({want[1]})" in str(ei.value)
+
+
+def test_directory_symlink_is_not_unreadable(tmp_path, da_guard):
+    """指向目錄的 symlink 只跳過（與 served-values 相同的例外）：照常回傳。"""
+    conf_d = _tree(tmp_path, _UNREADABLE_BASE)
+    (conf_d / "realdir").mkdir()
+    (conf_d / "x.yaml").symlink_to("realdir")
+    got = tv.load_effective(conf_d, binary=da_guard)
+    assert sorted(got) == ["tenant-a", "tenant-b"]
+    assert got["tenant-b"].effective_config == {"mysql_connections": 80}
+
+
+def test_output_without_unreadable_is_refused(tmp_path):
+    """da-guard effective 的 JSON 沒有 unreadable（早於該欄位的版本）：不當成「每個檔都讀得到」。"""
+    doc = {k: v for k, v in _doc().items() if k != "unreadable"}
+    with pytest.raises(tv.EffectiveError) as ei:
+        tv.load_effective(tmp_path, binary=_fake_da_guard(tmp_path, json.dumps(doc)))
+    assert "older than this tool: upgrade or rebuild it" in str(ei.value)
+
+
 def _fake_da_guard(tmp_path: Path, stdout: str, rc: int = 0) -> str:
     script = tmp_path / "fake-da-guard"
     script.write_text(f"#!/bin/sh\ncat <<'EOF'\n{stdout}\nEOF\nexit {rc}\n", encoding="utf-8")
@@ -184,7 +257,7 @@ def _doc(**tenant_over) -> dict:
               "defaults_chain": [], "effective_config": {"k": 1}, "profile": None,
               "key_sources": {"k": {"layer": "tenant", "file": "t.yaml"}}}
     tenant.update(tenant_over)
-    return {"schema": tv.EFFECTIVE_SCHEMA, "parse_failed": [], "tenants": {"t": tenant}}
+    return {"schema": tv.EFFECTIVE_SCHEMA, "parse_failed": [], "unreadable": [], "tenants": {"t": tenant}}
 
 
 def test_fake_binary_baseline_reads(tmp_path):
