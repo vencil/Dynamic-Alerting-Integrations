@@ -30,9 +30,12 @@ func keyCollision(data []byte) error {
 	return walkCollisions(doc, "")
 }
 
-// keyEntry is one key of a decoded map, with the string YAMLToJSON makes of it.
+// keyEntry is one key of a decoded map, its value, and the string YAMLToJSON
+// makes of the key. The value is kept here, not looked up again with the key:
+// a NaN key (`.nan:`) is never equal to itself, so t[key] would miss it.
 type keyEntry struct {
 	key  interface{}
+	val  interface{}
 	json string
 	desc string
 }
@@ -41,12 +44,12 @@ func walkCollisions(v interface{}, path string) error {
 	switch t := v.(type) {
 	case map[interface{}]interface{}:
 		entries := make([]keyEntry, 0, len(t))
-		for k := range t {
+		for k, v := range t {
 			ks, ok := jsonKey(k)
 			if !ok {
 				continue // YAMLToJSON already refused an unsupported key
 			}
-			entries = append(entries, keyEntry{k, ks, describe(k)})
+			entries = append(entries, keyEntry{k, v, ks, describe(k)})
 		}
 		// Map order is random; sort so the error and the walk are the same
 		// on every run.
@@ -69,7 +72,7 @@ func walkCollisions(v interface{}, path string) error {
 			}
 		}
 		for _, e := range entries {
-			if err := walkCollisions(t[e.key], joinPath(path, e.json)); err != nil {
+			if err := walkCollisions(e.val, joinPath(path, e.json)); err != nil {
 				return err
 			}
 		}

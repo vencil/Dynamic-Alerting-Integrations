@@ -1951,10 +1951,85 @@ class TestRenderCrDecoder:
         cr_path, out_dir = self._write(
             tmp_path, self._CR.replace("    t1: {}\n", f"    t1: {{x: {value}}}\n"))
         assert render_cr_file(cr_path, out_dir) == EXIT_CALLER_ERROR
-        assert "spec.tenants.t1.x[0]: Kubernetes reads a mapping here" \
+        assert ("spec.tenants.t1.x[0]: Kubernetes reads a mapping here but "
+                "the CR as written holds a (key, value) pair") \
             in caplog.text, caplog.text
         assert "cannot be compared" in caplog.text
         assert list(out_dir.iterdir()) == []
+
+    @pytest.mark.parametrize("old, new, message", [
+        pytest.param("    t1: {}\n",
+                     "    t1: {x: {a: '1'}, <<: {x: {b: '1'}}}\n",
+                     "spec.tenants.t1.x: the keys as written ('a')",
+                     id="merge-overrides-a-mapping"),
+        pytest.param("metadata: {name: ok}",
+                     "metadata: {name: ok, <<: {name: other}}",
+                     "metadata.name is read by Kubernetes as 'other'",
+                     id="merge-overrides-the-name"),
+        pytest.param("    t1: {}\n",
+                     "    t1: {x: {a: '1'}, <<: {x: ['1']}}\n",
+                     "spec.tenants.t1.x: Kubernetes reads a list of 1 here",
+                     id="merge-overrides-the-structure"),
+    ])
+    def test_merge_after_explicit_keys_names_the_mechanism(
+            self, old, new, message, tmp_path, caplog):
+        """go-yaml（Kubernetes 端）讓寫在明寫鍵之後的 `<<` 覆寫明寫鍵，PyYAML
+        是明寫鍵優先，兩種讀法因此不同 → rc 2。這時加引號解決不了，訊息
+        要說明 merge 的機制與改法。
+
+        會讓本測試轉紅的改動：拿掉 `_merge_note`（訊息只叫人加引號）。
+        """
+        cr_path, out_dir = self._write(tmp_path, self._CR.replace(old, new))
+        assert render_cr_file(cr_path, out_dir) == EXIT_CALLER_ERROR
+        assert message in caplog.text, caplog.text
+        assert ("on the Kubernetes side a << written after explicit keys "
+                "overrides them: move << before the explicit keys, or do not "
+                "use merges") in caplog.text, caplog.text
+        assert list(out_dir.iterdir()) == []
+
+    def test_merge_before_explicit_keys_renders(self, tmp_path):
+        """對照組：`<<` 寫在明寫鍵之前，兩種讀法都是明寫鍵優先，rc 0。"""
+        cr_path, out_dir = self._write(tmp_path, self._CR.replace(
+            "    t1: {}\n", "    t1: {<<: {x: {b: '1'}}, x: {a: '1'}}\n"))
+        assert render_cr_file(cr_path, out_dir) == 0
+        assert "a: '1'" in (out_dir / "ok.yaml").read_text(encoding="utf-8")
+
+    def test_no_merge_note_without_a_merge(self, tmp_path, caplog):
+        """對照組：沒有 `<<` 的分歧只提示加引號，不附 merge 說明。"""
+        cr_path, out_dir = self._write(tmp_path, self._CR.replace(
+            "    t1: {}\n", "    t1: {010: '1'}\n"))
+        assert render_cr_file(cr_path, out_dir) == EXIT_CALLER_ERROR
+        assert "Quote each such key" in caplog.text
+        assert "<< merges" not in caplog.text
+
+    def test_lists_of_different_length_cannot_be_paired(self):
+        """防禦性分支（YAML 難以觸發）：兩個 list 長度不同 → 拒收並寫明。
+
+        會讓本測試轉紅的改動：list 長度不同時改為逐項比到較短者為止。
+        """
+        assert da_assembler._key_divergence([1], [1, 2], "p") == (
+            "p: Kubernetes reads a list of 1 here but the CR as written holds "
+            "a list of 2, so the keys below cannot be compared; this tool "
+            "refuses such a CR")
+
+    @pytest.mark.parametrize("decoded, written, shapes", [
+        pytest.param([1], "x", ("a list of 1", "a scalar"), id="list-vs-scalar"),
+        pytest.param("x", [1], ("a scalar", "a list of 1"), id="scalar-vs-list"),
+        pytest.param({"a": 1}, ("a", 1), ("a mapping", "a (key, value) pair"),
+                     id="mapping-vs-pair"),
+    ])
+    def test_list_or_mapping_against_another_shape_cannot_be_paired(
+            self, decoded, written, shapes):
+        """防禦性分支：一邊是 list／mapping、另一邊不是 → 拒收並寫明兩邊結構。"""
+        assert da_assembler._key_divergence(decoded, written, "p") == (
+            f"p: Kubernetes reads {shapes[0]} here but the CR as written holds "
+            f"{shapes[1]}, so the keys below cannot be compared; this tool "
+            "refuses such a CR")
+
+    def test_shape_name_of_an_omap_item_is_a_pair(self):
+        """`!!omap`／`!!pairs` 的項目讀成 tuple，不該叫 "a scalar"。"""
+        assert da_assembler._shape_name(("a", 1)) == "a (key, value) pair"
+        assert da_assembler._shape_name("a") == "a scalar"
 
     def test_keys_colliding_through_a_merge_are_caller_error(
             self, tmp_path, caplog):

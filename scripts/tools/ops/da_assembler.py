@@ -694,14 +694,49 @@ def _as_text(value: Any) -> str | None:
 
 
 def _shape_name(value: Any) -> str:
-    """How a value's structure is named in a :func:`_key_divergence` error."""
+    """How a value's structure is named in a :func:`_key_divergence` error.
+    A tuple is an item of ``!!omap`` / ``!!pairs`` as written."""
     if isinstance(value, dict):
         return "a mapping"
     if isinstance(value, (set, frozenset)):
         return "a set"
     if isinstance(value, list):
         return f"a list of {len(value)}"
+    if isinstance(value, tuple):
+        return "a (key, value) pair"
     return "a scalar"
+
+
+#: Appended to a divergence error when the CR uses `<<` merges: quoting does
+#: not help when the two readings differ because of the merge itself.
+_MERGE_NOTE = ("; the CR uses << merges, and on the Kubernetes side a << "
+               "written after explicit keys overrides them: move << before "
+               "the explicit keys, or do not use merges")
+
+
+def _merge_note(cr_path: Path) -> str:
+    """:data:`_MERGE_NOTE` when the CR has a ``<<`` merge key anywhere, else
+    ``""``. Read from the composed node graph (no value is built); any
+    failure to read gives ``""`` — the note is an explanation only."""
+    try:
+        with open(cr_path, encoding="utf-8") as fh:
+            root = yaml.compose(fh, Loader=yaml.SafeLoader)
+    except Exception:  # noqa: BLE001 — a note only
+        return ""
+    seen, stack = set(), [root]
+    while stack:
+        node = stack.pop()
+        if node is None or id(node) in seen:
+            continue
+        seen.add(id(node))
+        if isinstance(node, yaml.MappingNode):
+            for key, value in node.value:
+                if key.tag == "tag:yaml.org,2002:merge":
+                    return _MERGE_NOTE
+                stack.extend((key, value))
+        elif isinstance(node, yaml.SequenceNode):
+            stack.extend(node.value)
+    return ""
 
 
 def _key_divergence(decoded: Any, written: Any, path: str) -> str:
@@ -920,15 +955,16 @@ def render_cr_file(
     if _as_text(written_meta.get("name")) != name:
         log.error("%s: metadata.name is read by Kubernetes as %r, which is "
                   "not the text written in the CR (%r). Quote it so both "
-                  "are the same", cr_path, name, written_meta.get("name"))
+                  "are the same%s", cr_path, name, written_meta.get("name"),
+                  _merge_note(cr_path))
         return EXIT_CALLER_ERROR
     namespace = metadata.get("namespace")
     if namespace is not None \
             and _as_text(written_meta.get("namespace")) != namespace:
         log.error("%s: metadata.namespace is read by Kubernetes as %r, "
                   "which is not the text written in the CR (%r). Quote it "
-                  "so both are the same", cr_path, namespace,
-                  written_meta.get("namespace"))
+                  "so both are the same%s", cr_path, namespace,
+                  written_meta.get("namespace"), _merge_note(cr_path))
         return EXIT_CALLER_ERROR
     if "spec" in cr and not isinstance(cr["spec"], dict):
         log.error("%s: spec must be a mapping", cr_path)
@@ -953,7 +989,7 @@ def render_cr_file(
                or _profile_divergence(spec["tenants"],
                                       written_spec.get("tenants")))
     if why:
-        log.error("%s: %s", cr_path, why)
+        log.error("%s: %s%s", cr_path, why, _merge_note(cr_path))
         return EXIT_CALLER_ERROR
     if spec:
         cr["spec"] = spec = _in_written_order(spec, written_spec)

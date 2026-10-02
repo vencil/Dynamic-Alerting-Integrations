@@ -72,6 +72,8 @@ func TestRefusesWhatKubernetesClientsRefuse(t *testing.T) {
 		{"float-and-string", "1.5: a\n\"1.5\": b\n", `the same JSON key "1.5"`},
 		// The int 8 comes in through a `<<` merge.
 		{"collide-through-merge", mergeCollision, `in m, the keys "8" (string) and 8 (int)`},
+		// Below a NaN key, which a map lookup by key never finds.
+		{"collide-below-nan-key", "a:\n  .nan: {010: x, \"8\": y}\n", "in a..nan"},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
