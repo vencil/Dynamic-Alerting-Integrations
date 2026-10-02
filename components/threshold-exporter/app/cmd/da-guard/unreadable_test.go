@@ -518,33 +518,69 @@ func TestUnreadable_DecodeStopStillNamesUnreadable(t *testing.T) {
 	}
 }
 
-// A --config-dir the walk cannot list at all is not an empty tree: exit 2
-// with the reason, as served-values and effective refuse it — never the
-// vacuously-safe 0 (#2588 review F1).
-func TestUnreadable_UnlistableConfigDir_ExitsTwo(t *testing.T) {
+// A --config-dir the walk cannot list at all is not an empty tree — never the
+// vacuously-safe 0 (#2588 review F1). It is a path that cannot be read, so
+// exit 3 like every other one (#2627; it was exit 2 before): the guard,
+// effective and served-values all name the root as "." (walk_error) in
+// unreadable — in the JSON too — and say why on stderr, not "no .yaml files
+// found". A --config-dir that does not exist stays exit 2.
+func TestUnreadable_UnlistableConfigDir_ExitsThree(t *testing.T) {
 	t.Parallel()
+	missing := filepath.Join(t.TempDir(), "does-not-exist")
+	for _, args := range [][]string{
+		{"--config-dir", missing},
+		{effectiveCmd, "--config-dir", missing},
+		{servedValuesCmd, "--config-dir", missing},
+	} {
+		code, _, stderr := runOnce(t, args...)
+		if code != exitCallerErr || !strings.Contains(stderr, "no such file or directory") {
+			t.Errorf("%v: exit = %d stderr = %q, want %d naming the missing path", args, code, stderr, exitCallerErr)
+		}
+	}
+
 	if os.Geteuid() == 0 {
 		t.Skip("running as root: chmod does not stop root")
 	}
 	dir := writeParityTree(t, unreadableBase())
 	chmodT(t, dir, 0, 0o755)
+	want := []skippedFile{{".", config.UnreadableWalkError}}
 	for _, args := range [][]string{
-		{"--config-dir", dir},
 		{"--config-dir", dir, "--format", "json"},
 		{effectiveCmd, "--config-dir", dir},
 		{servedValuesCmd, "--config-dir", dir},
 	} {
-		code, _, stderr := runOnce(t, args...)
-		if code != exitCallerErr {
-			t.Errorf("%v: exit = %d, want %d; stderr=%q", args, code, exitCallerErr, stderr)
+		code, stdout, stderr := runOnce(t, args...)
+		if code != exitParseFailed {
+			t.Errorf("%v: exit = %d, want %d; stderr=%q", args, code, exitParseFailed, stderr)
 		}
+		var doc struct {
+			Unreadable []skippedFile `json:"unreadable"`
+		}
+		if err := json.Unmarshal([]byte(stdout), &doc); err != nil {
+			t.Errorf("%v: stdout is not JSON (%v): %q; stderr=%q", args, err, stdout, stderr)
+		} else if !reflect.DeepEqual(doc.Unreadable, want) {
+			t.Errorf("%v: unreadable = %v, want %v", args, doc.Unreadable, want)
+		}
+		if !strings.Contains(stderr, "1 path(s) cannot be read: . (walk_error)") {
+			t.Errorf("%v: stderr does not name the root in the unreadable format: %q", args, stderr)
+		}
+	}
+	// A --scope under it: the root and the scope the process cannot stat.
+	scode, sdoc, sstderr := guardJSON(t, dir, "--scope", "sub")
+	if swant := []skippedFile{{".", config.UnreadableWalkError}, {"sub", config.UnreadableStatError}}; scode != exitParseFailed || !reflect.DeepEqual(sdoc.Unreadable, swant) {
+		t.Errorf("--scope sub: exit = %d unreadable = %v, want %d %v; stderr=%q", scode, sdoc.Unreadable, exitParseFailed, swant, sstderr)
+	}
+	code, md, stderr := runOnce(t, "--config-dir", dir)
+	if code != exitParseFailed || !strings.Contains(md, "`.` (walk_error)") {
+		t.Errorf("md: exit = %d report = %q, want %d naming `.`; stderr=%q", code, md, exitParseFailed, stderr)
 	}
 	// The reason is named in the scoped mode (guard), the whole-tree mode
 	// (effective) and served-values — not "no .yaml files found" (#2588
 	// review, #2627).
 	for _, args := range [][]string{{"--config-dir", dir}, {effectiveCmd, "--config-dir", dir}, {servedValuesCmd, "--config-dir", dir}} {
 		_, _, stderr := runOnce(t, args...)
-		if !strings.Contains(stderr, "cannot list configDir") || !strings.Contains(stderr, "permission denied") {
+		if !strings.Contains(stderr, "cannot list configDir") || !strings.Contains(stderr, "permission denied") ||
+			strings.Contains(stderr, "no .yaml files found") {
 			t.Errorf("%v: stderr does not say why: %q", args, stderr)
 		}
 	}

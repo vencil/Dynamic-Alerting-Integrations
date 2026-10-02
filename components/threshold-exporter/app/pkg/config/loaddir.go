@@ -62,7 +62,8 @@ func LoadDir(dir string, logger *log.Logger) (cfg *ThresholdConfig, parseFailed 
 // config file from: the exporter refuses to load it. When the walk dropped
 // files it could not read (every config file of the tree is unreadable), the
 // error comes with a LoadReport whose Unreadable names them, so a caller can
-// tell that tree from one with no config file at all (#2627).
+// tell that tree from one with no config file at all (#2627). A root the walk
+// cannot list is refused with it too, Unreadable holding RootUnreadable.
 var ErrNoYAMLFiles = errors.New("no .yaml files found")
 
 // NoTenantReason is why a file in LoadReport.NoTenant contributes no tenant.
@@ -90,6 +91,10 @@ type LoadReport struct {
 	// load still succeeds (#2115). A symlink to a directory is not listed.
 	// nil when there is none.
 	Unreadable []UnreadableFile
+	// RootListErr is set only beside ErrNoYAMLFiles, when the walk could not
+	// list the root itself: `cannot list configDir` with the walk's reason,
+	// for the caller to print (#2627). Unreadable is then RootUnreadable.
+	RootListErr error
 }
 
 // LoadDirReport is LoadDir, also naming the files that contribute no tenant
@@ -99,9 +104,9 @@ type LoadReport struct {
 //
 // A tree with no config file the walk could keep is refused (ErrNoYAMLFiles),
 // as the exporter refuses it; the report then carries only Unreadable — the
-// files the walk dropped, when every config file is unreadable (#2627). A
-// root the walk cannot list at all is refused as `cannot list configDir`,
-// with the walk's error, not as an empty tree.
+// files the walk dropped, when every config file is unreadable, or
+// RootUnreadable alone when the walk could not list the root at all, the
+// error then reading `cannot list configDir` with the walk's reason (#2627).
 func LoadDirReport(dir string, logger *log.Logger) (cfg *ThresholdConfig, rep LoadReport, err error) {
 	if logger == nil {
 		logger = discardLogger
@@ -115,7 +120,9 @@ func LoadDirReport(dir string, logger *log.Logger) (cfg *ThresholdConfig, rep Lo
 	}
 	if len(scan.Files) == 0 {
 		if scan.RootWalkErr != nil {
-			return nil, LoadReport{}, fmt.Errorf("cannot list configDir %q: %w", dir, scan.RootWalkErr)
+			listErr := fmt.Errorf("cannot list configDir %q: %w", dir, scan.RootWalkErr)
+			return nil, LoadReport{Unreadable: []UnreadableFile{RootUnreadable}, RootListErr: listErr},
+				fmt.Errorf("%w: %w", listErr, ErrNoYAMLFiles)
 		}
 		return nil, LoadReport{Unreadable: scan.Unreadable}, fmt.Errorf("%w in %s", ErrNoYAMLFiles, dir)
 	}

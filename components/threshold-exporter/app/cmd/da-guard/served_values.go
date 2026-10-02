@@ -161,12 +161,17 @@ func runServedValues(args []string, stdout, errOut io.Writer) int {
 	// A tree whose every config file is unreadable is not "no .yaml files"
 	// (#2627): the exporter serves nothing from it, so the document carries
 	// no tenant and names the files in unreadable (exit 3), as effective and
-	// the guard do on the same tree. Only a tree with no config file at all
+	// the guard do on the same tree — a --config-dir the walk cannot list
+	// too, named as "." (walk_error). Only a tree with no config file at all
 	// keeps the refusal (exit 2).
 	allUnreadable := errors.Is(err, config.ErrNoYAMLFiles) && len(rep.Unreadable) > 0
 	if err != nil && !allUnreadable {
 		fmt.Fprintf(errOut, "%s %s: %v\n", programName, servedValuesCmd, err)
 		return exitCallerErr
+	}
+	if rep.RootListErr != nil {
+		// The reason; the root itself is named in unreadable as "." (#2627).
+		fmt.Fprintf(errOut, "%s %s: %v\n", programName, servedValuesCmd, rep.RootListErr)
 	}
 	tenants := map[string]servedTenantValues{}
 	if !allUnreadable {
