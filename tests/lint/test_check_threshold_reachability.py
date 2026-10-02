@@ -15,13 +15,13 @@ from __future__ import annotations
 import contextlib
 import importlib.util
 import io
-import os
 import re
 import subprocess
 import sys
 import tarfile
 
 import pytest
+from _platform_fs import symlink_or_else  # noqa: E402
 import yaml
 from pathlib import Path
 
@@ -4664,7 +4664,9 @@ def _unpack_git_archive(data: bytes, dest: Path) -> None:
     content is the link target. Measured after `git add -A -f` on such a host:
     2294 index entries, every blob id equal to `git ls-tree -r` of the commit.
 
-    ⛔ The fallback is Windows-only on purpose. Anywhere else a refused symlink
+    ⛔ The fallback is taken only where the host cannot create symlinks at all
+    (`_platform_fs.can_symlink()`, pinned True on POSIX by
+    `tests/shared/test_platform_fs.py`). Anywhere else a refused symlink
     raises, as `tar` would have, so the tree CI measures keeps real symlinks
     and cannot quietly change shape.
     """
@@ -4675,12 +4677,10 @@ def _unpack_git_archive(data: bytes, dest: Path) -> None:
                 continue
             link = dest / member.name
             link.parent.mkdir(parents=True, exist_ok=True)
-            try:
-                os.symlink(member.linkname, link)
-            except OSError:
-                if os.name != "nt":
-                    raise
-                link.write_bytes(member.linkname.encode("utf-8"))
+            symlink_or_else(
+                member.linkname, link,
+                lambda link=link, member=member: link.write_bytes(
+                    member.linkname.encode("utf-8")))
 
 
 @pytest.fixture(scope="module")

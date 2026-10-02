@@ -71,6 +71,20 @@ def symlink_or_skip(src, dst, **kwargs) -> None:
     os.symlink(src, dst, **kwargs)
 
 
+def symlink_or_else(src, dst, fallback) -> None:
+    """``os.symlink(src, dst)`` where this host can make symlinks; call
+    ``fallback()`` where it cannot.
+
+    For a fixture that is NOT allowed to skip and has a faithful stand-in for
+    the link (the regular file git itself writes under ``core.symlinks=false``,
+    say). The choice is the capability probe, not ``os.name``: on POSIX the
+    probe is pinned True, so a symlink refused there still raises."""
+    if can_symlink():
+        os.symlink(src, dst)
+    else:
+        fallback()
+
+
 @functools.cache
 def can_name_file(name) -> bool:
     """Whether this filesystem stores a file under exactly *name* (str or
