@@ -47,7 +47,7 @@ from _lib_io import (  # noqa: E402
     _output_write_names_target,
     output_write,
 )
-from _platform_fs import DIR_WRITE_ERROR  # noqa: E402
+from _platform_fs import DIR_WRITE_ERROR, has_posix_modes  # noqa: E402
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
 TOOLS_DIR = REPO_ROOT / "scripts" / "tools"
@@ -385,7 +385,8 @@ def test_success_path_writes_the_exact_bytes_and_mode(tmp_path: Path):
             fh.write(b"a\r\nb\n")
         os.chmod(out, 0o644)
     assert out.read_bytes() == b"a\r\nb\n"
-    assert out.stat().st_mode & 0o777 == 0o644
+    if has_posix_modes():  # pinned True on POSIX by test_platform_fs.py
+        assert out.stat().st_mode & 0o777 == 0o644
 
 
 # ═══════════════════════════════════════════════════════════════════════════

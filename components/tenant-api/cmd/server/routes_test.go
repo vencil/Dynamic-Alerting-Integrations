@@ -176,29 +176,32 @@ func (routeStubTracker) RegisterPR(platform.PRInfo) {}
 func (routeStubTracker) LastSyncTime() time.Time    { return time.Time{} }
 func (routeStubTracker) RefreshNow(context.Context) {}
 
-func TestWriteRoutesMatchOrgGateManifest(t *testing.T) {
-	t.Parallel()
-
+// buildRouterAllRoutes builds the production router with the CONDITIONAL
+// dependencies stubbed non-nil so every route registers. Zero-value stubs are
+// fine: chi.Walk never invokes a handler, it only enumerates the routing tree.
+func buildRouterAllRoutes(t *testing.T) *chi.Mux {
+	t.Helper()
 	rbacMgr, err := rbac.NewManager("", nil)
 	if err != nil {
 		t.Fatalf("rbac.NewManager: %v", err)
 	}
-
-	// Stub the CONDITIONAL dependencies non-nil so buildRouter registers
-	// every route. Zero-value stubs are fine: chi.Walk never invokes a
-	// handler, it only enumerates the routing tree.
 	deps := &handler.Deps{
 		RBAC:       rbacMgr,
 		Federation: &token.Manager{}, // registers /federation/tokens/* + accounts/backfill
 		PRTracker:  routeStubTracker{},
 	}
-
-	r := buildRouter(routerDeps{
+	return buildRouter(routerDeps{
 		Deps:      deps,
 		RBAC:      rbacMgr,
 		Events:    func(http.ResponseWriter, *http.Request) {},
 		RateLimit: func(next http.Handler) http.Handler { return next },
 	})
+}
+
+func TestWriteRoutesMatchOrgGateManifest(t *testing.T) {
+	t.Parallel()
+
+	r := buildRouterAllRoutes(t)
 
 	writeMethods := map[string]bool{"PUT": true, "POST": true, "DELETE": true, "PATCH": true}
 	seen := make(map[string]bool, len(writeRouteManifest))
@@ -254,21 +257,7 @@ func TestWriteRoutesMatchOrgGateManifest(t *testing.T) {
 func TestReadRoutesMatchOrgGateManifest(t *testing.T) {
 	t.Parallel()
 
-	rbacMgr, err := rbac.NewManager("", nil)
-	if err != nil {
-		t.Fatalf("rbac.NewManager: %v", err)
-	}
-	deps := &handler.Deps{
-		RBAC:       rbacMgr,
-		Federation: &token.Manager{},
-		PRTracker:  routeStubTracker{},
-	}
-	r := buildRouter(routerDeps{
-		Deps:      deps,
-		RBAC:      rbacMgr,
-		Events:    func(http.ResponseWriter, *http.Request) {},
-		RateLimit: func(next http.Handler) http.Handler { return next },
-	})
+	r := buildRouterAllRoutes(t)
 
 	seen := make(map[string]bool, len(readRouteManifest))
 	var unregistered []string

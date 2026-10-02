@@ -29,6 +29,8 @@ carry weight.
 import errno
 import functools
 import os
+import shutil
+import subprocess
 import tempfile
 
 import pytest
@@ -67,6 +69,106 @@ def symlink_or_skip(src, dst, **kwargs) -> None:
     parent) still raises, on every host."""
     require_symlinks()
     os.symlink(src, dst, **kwargs)
+
+
+@functools.cache
+def can_name_file(name) -> bool:
+    """Whether this filesystem stores a file under exactly *name* (str or
+    bytes; a single path component).
+
+    Windows refuses control characters, ``"`` and most ``:`` in a name, and
+    cannot spell a non-UTF-8 byte name at all. The listing is read back
+    because a refusal is not the only failure: NTFS takes ``a:b`` as stream
+    ``b`` of file ``a`` and reports success."""
+    with tempfile.TemporaryDirectory() as d:
+        base = os.fsencode(d) if isinstance(name, bytes) else d
+        try:
+            with open(os.path.join(base, name), "wb"):
+                pass
+            return name in os.listdir(base)
+        except (OSError, ValueError):   # UnicodeDecodeError is a ValueError
+            return False
+
+
+def require_file_name(name) -> None:
+    """Skip the calling test when this filesystem cannot hold *name*."""
+    if not can_name_file(name):
+        pytest.skip(f"this filesystem cannot hold a file named {name!r}")
+
+
+@functools.cache
+def has_posix_modes() -> bool:
+    """Whether ``chmod`` permission bits are stored and enforced as POSIX
+    modes. On Windows only the read-only bit exists: ``chmod(0o600)`` reads
+    back as ``0o666``."""
+    with tempfile.TemporaryDirectory() as d:
+        path = os.path.join(d, "probe")
+        with open(path, "wb"):
+            pass
+        os.chmod(path, 0o600)
+        return (os.stat(path).st_mode & 0o777) == 0o600
+
+
+def require_posix_modes() -> None:
+    """Skip the calling test when permission bits are not POSIX modes here."""
+    if not has_posix_modes():
+        pytest.skip("this filesystem does not keep POSIX mode bits "
+                    "(chmod 0o600 reads back differently)")
+
+
+@functools.cache
+def has_case_sensitive_names() -> bool:
+    """Whether ``a.yaml`` and ``A.YAML`` are two files here (NTFS and the
+    default macOS volume say no: the second write lands in the first)."""
+    with tempfile.TemporaryDirectory() as d:
+        for name in ("probe.yaml", "PROBE.YAML"):
+            with open(os.path.join(d, name), "wb"):
+                pass
+        return len(os.listdir(d)) == 2
+
+
+def require_case_sensitive_names() -> None:
+    """Skip the calling test when names differing only in case collide here."""
+    if not has_case_sensitive_names():
+        pytest.skip("this filesystem is case-insensitive: two names differing "
+                    "only in case are one file")
+
+
+def require_os_attrs(*names: str) -> None:
+    """Skip the calling test when ``os`` lacks any of *names* on this
+    platform (``geteuid``, ``listxattr``, ...)."""
+    missing = [n for n in names if not hasattr(os, n)]
+    if missing:
+        pytest.skip("os." + ", os.".join(missing) + " does not exist on this platform")
+
+
+@functools.cache
+def can_exec_shebang_scripts() -> bool:
+    """Whether a file starting ``#!`` can be run as a command here. Windows'
+    CreateProcess does not read the shebang, so a script standing in for a
+    binary on PATH (a fake ``kubectl``) cannot be started."""
+    with tempfile.TemporaryDirectory() as d:
+        script = os.path.join(d, "probe")
+        with open(script, "wb") as fh:
+            fh.write(b"#!/bin/sh\nexit 0\n")
+        os.chmod(script, 0o755)
+        try:
+            return subprocess.run([script], timeout=30).returncode == 0
+        except OSError:
+            return False
+
+
+def require_shebang_scripts() -> None:
+    """Skip the calling test when a ``#!`` script cannot be run as a command."""
+    if not can_exec_shebang_scripts():
+        pytest.skip("this host cannot run a `#!` script as a command "
+                    "(a POSIX shebang stand-in for a binary on PATH)")
+
+
+def require_tool(name: str) -> None:
+    """Skip the calling test when executable *name* is not on PATH."""
+    if shutil.which(name) is None:
+        pytest.skip(f"`{name}` is not on PATH")
 
 
 #: The exception type opening a directory for writing raises on this OS.
