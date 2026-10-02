@@ -208,6 +208,7 @@ ENGLISH_ONLY: dict[str, str] = {
     "check_env_bool_parsers.py": _R_LINT,
     "check_flaky_registry.py": _R_LINT,
     "check_frontmatter_versions.py": _R_LINT,
+    "check_go_fmt.py": _R_LINT,
     "check_ha_threshold_aggregation.py": _R_LINT,
     "check_hardcode_tenant.py": _R_LINT,
     "check_head_blob_hygiene.py": _R_LINT,
