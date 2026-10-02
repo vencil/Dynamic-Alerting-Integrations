@@ -93,7 +93,9 @@ func TestResolve_NoRouting(t *testing.T) {
 		{"known but not a mapping", "_routing_profile: broken\n", false, "-"},
 		{"empty _routing mapping", "_routing: {}\n", false, "-"},
 		{"non-string profile reference is ignored", "_routing_profile: 7\n_routing: {receiver: {type: email}}\n", true, "-"},
-		{"non-disabling string _routing is ignored", "_routing_profile: chat\n_routing: yes-please\n", true, "-"},
+		// #2341 R5: written but neither a mapping nor a disabling string —
+		// nothing renders, the profile included.
+		{"non-disabling string _routing renders nothing", "_routing_profile: chat\n_routing: yes-please\n", false, "-"},
 	}
 	for _, tc := range cases {
 		_, ok, _, unknown := Resolve("t-x", decode(t, tc.block), layers)
@@ -113,6 +115,16 @@ func TestIsDisabled_MatchesTheExporter(t *testing.T) {
 		want := config.IsDisabled(strings.ToLower(strings.TrimSpace(s)))
 		if got := IsDisabled(s); got != want {
 			t.Errorf("IsDisabled(%q) = %v, exporter says %v", s, got, want)
+		}
+	}
+	// #2341: where Python's strip()/lower() and Go's TrimSpace/ToLower part
+	// ways, the routing verdict is Python's (_lib_validation.is_disabled).
+	for s, want := range map[string]bool{
+		"\x1coff": true, "\x1fdisable\x1d": true, "\u00a0false\u2003": true, "\u0085off": true,
+		"d\u0130sable": false, "\u0130": false, "o\u212af": false, "off\u200b": false,
+	} {
+		if got := IsDisabled(s); got != want {
+			t.Errorf("IsDisabled(%q) = %v, Python's is_disabled says %v", s, got, want)
 		}
 	}
 	if IsDisabled(false) || IsDisabled(nil) {
@@ -382,8 +394,9 @@ func TestWithPyYAMLRouting_NonStringKeysAndFailClosed(t *testing.T) {
 
 // TestParseDoc_GeneratorRepeatedKeyRefusesTheFile (#2295): a key the route
 // generator counts as written twice and yaml.v3 does not (an alias key beside
-// its anchor, two `<<`) fails the whole document, as a plain repeat does — no
-// block of it is read, whatever mapping the repeat is in.
+// its anchor) fails the whole document, as a plain repeat does — no block of
+// it is read, whatever mapping the repeat is in. Two `<<` in one mapping are
+// refused too, by yaml.v3's own decode.
 func TestParseDoc_GeneratorRepeatedKeyRefusesTheFile(t *testing.T) {
 	for name, src := range map[string]string{
 		"policy alias key":   "domain_policies:\n  d1:\n    &c constraints :\n      forbidden_receiver_types: [webhook]\n    *c : {}\n",

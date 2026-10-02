@@ -42,6 +42,7 @@ func CheckDefaultsImpact(input CheckInput) (*GuardReport, error) {
 	findings = append(findings, checkRedundantOverrides(input)...)
 	findings = append(findings, checkRoutingGuardrails(input)...)
 	findings = append(findings, checkCardinality(input)...)
+	findings = append(findings, checkDefaultsWrapper(input)...)
 
 	// Stable sort: errors before warnings, then by tenant id, then
 	// by field path. Within the same (severity, tenant, field) we
@@ -78,7 +79,10 @@ func CheckDefaultsImpact(input CheckInput) (*GuardReport, error) {
 		switch f.Severity {
 		case SeverityError:
 			report.Summary.Errors++
-			if f.TenantID != "" {
+			// A finding with an empty TenantID is a platform file's —
+			// except invalid_tenant_id, whose TenantID IS the id, the
+			// empty one included (#2341).
+			if f.TenantID != "" || f.Kind == FindingInvalidTenantID {
 				failingTenants[f.TenantID] = struct{}{}
 			}
 		case SeverityWarn:

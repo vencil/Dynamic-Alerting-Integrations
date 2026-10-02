@@ -75,12 +75,13 @@ import json
 import os
 import pathlib
 import re
+import shutil
 import subprocess
 import sys
 import time
 
 import pytest
-from _platform_fs import symlink_or_skip  # noqa: E402
+from _platform_fs import require_shebang_scripts, symlink_or_skip  # noqa: E402
 
 # ⛔ ONE implementation of "which flag is the conf.d flag" (#1761). The
 # argparse walk used to live here while `test_confd_enumeration_contract`
@@ -285,10 +286,11 @@ def _observed(tool: pathlib.Path, flag: str,
 # a developer happens to have configured. It stands in for "kubectl present,
 # no cluster reachable", which is the only state this file can promise;
 # nothing here is asking about cluster behaviour.
-# ⚠️ NOT GUARDED on Windows: the stub has no extension, and CreateProcess
-# appends `.exe` when it searches PATH, so a host `kubectl.exe` still wins
-# there and the regression test below is skipped. No CI job runs this file
-# on Windows; this was read from the lookup rule, not measured.
+# ⚠️ NOT GUARDED where a `#!` script cannot be started as a command
+# (`_platform_fs.can_exec_shebang_scripts()` probes it; False on Windows,
+# whose CreateProcess does not read the shebang and looks for `kubectl.exe`):
+# a host kubectl still wins there, and the regression test below skips on
+# that probe. No CI job runs this file on such a host.
 _KUBECTL_STUB = (
     "#!/bin/sh\n"
     "echo 'kubectl stub (test_confd_case_parity_across_tools): "
@@ -357,7 +359,41 @@ def _normalise(text: str, config_dir: pathlib.Path,
     return _DURATION.sub("<D>", out)
 
 
-def _why_unmeasurable(stdout: str, stderr: str) -> str | None:
+# Tools that stop on something outside this harness, each mapped to the line
+# THAT TOOL prints when it does (#2559).
+#
+# ⛔ The tool's own words, never the OS's or the HTTP library's. The earlier
+# predicate searched the output for `Connection refused` / `URLError` /
+# `Max retries` — text a tool merely relays from the exception. On a zh-TW
+# Windows host the same refusal reads `[WinError 10061] 無法連線，因為目標電腦
+# 拒絕連線。`, none of the keywords match, and both pinned sets below went red
+# on tools that had behaved identically.
+#
+# ⛔ Per tool, and never "rc != 0" or "any tool printing something like
+# this": a tool that is merely broken must stay a red comparison, not become
+# a skip. A tool belongs here only if the quoted line is a literal in its own
+# source (or in a helper it calls).
+#
+#   blind_spot_discovery.py   `_lib_tenant_values.exit_on_served_values_error`
+#                             prints `ERROR: ` + `MISSING_BINARY_MESSAGE` (or
+#                             its `$DA_GUARD_BINARY` variant); both start
+#                             with the words below.
+_STOPPED_ON: dict[str, str] = {
+    "blind_spot_discovery.py": "ERROR: da-guard binary not found:",
+}
+
+
+def _da_guard_resolvable() -> bool:
+    """Whether a tool run by `_run` would find da-guard — the order
+    `_lib_godispatch` resolves it in: `$DA_GUARD_BINARY` if set (and then
+    only that), else PATH."""
+    override = os.environ.get("DA_GUARD_BINARY", "").strip()
+    if override:
+        return os.path.isfile(override)
+    return shutil.which("da-guard") is not None
+
+
+def _why_unmeasurable(tool_name: str, stdout: str, stderr: str) -> str | None:
     blob = stdout + stderr
     m = re.search(r"error: (the following arguments are required[^\n]*)", blob)
     if m:
@@ -371,10 +407,9 @@ def _why_unmeasurable(stdout: str, stderr: str) -> str | None:
     m = re.search(r"(ModuleNotFoundError|ImportError): ([^\n]*)", blob)
     if m:
         return m.group(0)
-    m = re.search(r"(ConnectionError|URLError|Max retries|Connection refused)",
-                  blob)
-    if m:
-        return f"external precondition: {m.group(1)}"
+    marker = _STOPPED_ON.get(tool_name)
+    if marker and marker in blob:
+        return f"external precondition: {marker}"
     return None
 
 
@@ -410,7 +445,7 @@ def _observe(tool: pathlib.Path, flag: str,
 
     for key in ("lower", "upper"):
         (so, se, _), _ = runs[key]
-        why = _why_unmeasurable(so, se)
+        why = _why_unmeasurable(tool.name, so, se)
         if why:
             return _Outcome(skip_reason=why)
 
@@ -608,9 +643,21 @@ def test_no_tool_declares_flags_the_population_walk_cannot_read() -> None:
 # ratchet #1538 had to close by hand.
 
 KNOWN_UNMEASURABLE: dict[str, str] = {
-    # Needs a live Prometheus; refuses before reading the conf.d.
-    "blind_spot_discovery.py": "external precondition",
-    "threshold_recommend.py": "external precondition",
+    # ⛔ `blind_spot_discovery.py` and `threshold_recommend.py` LEFT this
+    # table in #2559. Their recorded reason — "Needs a live Prometheus;
+    # refuses before reading the conf.d" — was not what either does. Both
+    # were parked because the OS's refusal text, relayed in their output,
+    # matched the old keyword search.
+    #
+    # `threshold_recommend` loads the tenants first, prints one row per
+    # tenant key, and a failed query becomes a `query error: ...` cell in
+    # that row: rc 0, and the report shrinks to "No analyzable tenant metric
+    # keys found." with the tenant files removed. It is measured now.
+    #
+    # `blind_spot_discovery` warns that Prometheus is unreachable, carries on
+    # with zero targets and reads the conf.d through da-guard. What stops it
+    # is da-guard — see `UNMEASURABLE_WITHOUT_DA_GUARD` below.
+    #
     # Requires arguments this file deliberately does not fabricate,
     # because inventing them would exercise a different code path than
     # the one an operator runs.
@@ -627,6 +674,28 @@ KNOWN_UNMEASURABLE: dict[str, str] = {
     # not to "measured".
     "run_chaos_soak.py": "argparse: required argument",
 }
+
+# Unmeasurable on a host where da-guard cannot be resolved, MEASURED on one
+# where it can. ⛔ A capability, not a platform: `_da_guard_resolvable()`
+# asks the same question the tool does, so the pinned set is true on both.
+#
+# `blind_spot_discovery` reads the conf.d through `da-guard served-values`.
+# This harness sets no `$DA_GUARD_BINARY`, so without one on PATH every run
+# ends `ERROR: da-guard binary not found`, rc 2, on all three trees. Measured
+# with a da-guard supplied (and still no Prometheus): rc 0, "1 DB type(s)
+# covered" on both casings and "0 DB type(s) covered" with the tenants
+# removed — it has discriminating power, and the comparison runs.
+UNMEASURABLE_WITHOUT_DA_GUARD: dict[str, str] = {
+    "blind_spot_discovery.py": "external precondition",
+}
+
+
+def _expected_unmeasurable() -> dict[str, str]:
+    expected = dict(KNOWN_UNMEASURABLE)
+    if not _da_guard_resolvable():
+        expected.update(UNMEASURABLE_WITHOUT_DA_GUARD)
+    return expected
+
 
 # Tools that RUN but whose output does not change when the tenant files
 # are removed. ⚠️ This is not a clean bill of health — it says the A/B
@@ -754,13 +823,28 @@ def test_the_unmeasurable_set_is_named(_all_outcomes) -> None:
         name for name, o in _all_outcomes.items()
         if o.skip_reason and not o.insensitive
     }
-    assert actual == set(KNOWN_UNMEASURABLE), (
-        f"the set of tools that cannot be measured changed.\n"
-        f"  newly unmeasurable: {sorted(actual - set(KNOWN_UNMEASURABLE))}\n"
-        f"  now measurable    : {sorted(set(KNOWN_UNMEASURABLE) - actual)}\n"
+    expected = _expected_unmeasurable()
+    assert actual == set(expected), (
+        f"the set of tools that cannot be measured changed "
+        f"(da-guard resolvable here: {_da_guard_resolvable()}).\n"
+        f"  newly unmeasurable: {sorted(actual - set(expected))}\n"
+        f"  now measurable    : {sorted(set(expected) - actual)}\n"
         f"A tool moving INTO this set is coverage lost — fix the "
         f"invocation, or record it here with the reason. A tool moving "
         f"OUT is coverage gained: delete its entry."
+    )
+
+    # The recorded KIND of reason must be the one that fired. Membership
+    # alone let a tool sit here under a reason that was not what stopped it.
+    def kind(reason: str) -> str:
+        return reason.split(":", 1)[0]
+
+    wrong = {name: (kind(reason), _all_outcomes[name].skip_reason)
+             for name, reason in expected.items()
+             if kind(_all_outcomes[name].skip_reason) != kind(reason)}
+    assert not wrong, (
+        f"recorded reason kind != what this run measured "
+        f"(name: (recorded, measured)): {wrong}"
     )
 
 
@@ -775,8 +859,6 @@ def test_the_insensitive_set_is_named(_all_outcomes) -> None:
     )
 
 
-@pytest.mark.skipif(os.name == "nt",
-                    reason="the harness stub is a POSIX shell script")
 def test_tools_see_the_harness_kubectl_not_the_hosts(
         tmp_path, monkeypatch) -> None:
     """#2480: `_run` must hide whatever `kubectl` the host has.
@@ -787,6 +869,8 @@ def test_tools_see_the_harness_kubectl_not_the_hosts(
     host PATH through, the probe reports the marker, and the parity sweep's
     rc again depends on the machine it runs on.
     """
+    # Both the stub and the stand-in host kubectl below are `#!` scripts.
+    require_shebang_scripts()
     host_bin = tmp_path / "host_bin"
     host_bin.mkdir()
     host = host_bin / "kubectl"

@@ -70,8 +70,8 @@ func assertOneTenantSet(t *testing.T, m *ConfigManager, body string, wantServed 
 		_, perr := config.ParseConfigFile([]byte(body))
 		t.Errorf("t-x served = %v, want %v (the one decode's verdict on the file: err=%v)", served, wantServed, perr)
 	}
-	if _, ok := m.Resolve("t-x"); ok != served {
-		t.Errorf("Resolve(t-x) ok = %v while /metrics serves it = %v", ok, served)
+	if _, ok := committedTenantState(m, "t-x"); ok != served {
+		t.Errorf("committed hierarchy knows t-x = %v while /metrics serves it = %v", ok, served)
 	}
 }
 
@@ -254,12 +254,12 @@ func TestOneTenantSet_KnownException_IncrementalKeepsLastGood(t *testing.T) {
 				t.Fatalf("reload: %v", err)
 			}
 
-			// Exporter side: /metrics and its own /effective keep t-x.
+			// Exporter side: /metrics and its committed hierarchy keep t-x.
 			if _, served := m.GetConfig().Tenants["t-x"]; !served {
 				t.Errorf("/metrics dropped t-x: the tenant-only branch no longer keeps last good values — update #1980")
 			}
-			if _, ok := m.Resolve("t-x"); !ok {
-				t.Errorf("exporter /effective (Resolve) dropped t-x; on this path it follows /metrics — update #1980")
+			if _, ok := committedTenantState(m, "t-x"); !ok {
+				t.Errorf("the committed hierarchy dropped t-x; on this path it follows /metrics — update #1980")
 			}
 			// Stateless readers: not found.
 			if _, err := config.ResolveEffective(dir, "t-x"); !errors.Is(err, config.ErrTenantNotFound) {

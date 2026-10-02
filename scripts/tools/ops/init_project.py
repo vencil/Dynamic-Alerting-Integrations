@@ -1531,7 +1531,7 @@ def _gen_github_actions(
               docker run --rm \\
                 -v "${{{{ github.workspace }}}}/${{{{ env.CONFIG_DIR }}}}:/data/conf.d:ro" \\
                 ${{{{ env.DA_TOOLS_IMAGE }}}} \\
-                generate-routes --config-dir /data/conf.d --validate
+                generate-routes --config-dir /data/conf.d --validate --strict
 
           - name: Resolve base config snapshot
             id: snapshot
@@ -2674,7 +2674,7 @@ def _gen_gitlab_ci(
             echo "ERROR: $config_dir at $base_sha is a $kind, not a directory, so no baseline can be built from it. A kind of 'commit' means a submodule is mounted there; 'blob' means either a file has that name, or the path is a symlink. Reporting any of those as a first import would hide the fault." >&2
             exit 1
           fi
-        - da-tools generate-routes --config-dir "$CONFIG_DIR" --validate
+        - da-tools generate-routes --config-dir "$CONFIG_DIR" --validate --strict
         # config-diff signals findings through its exit code: 0 = no config
         # change, 1 = changes detected (the ordinary answer on a merge request
         # that edits tenants), 2 and above = the run did not complete. A bare
@@ -3080,7 +3080,7 @@ def _gen_precommit_snippet(da_tools_image: str, offset: str = '') -> str:
         # #1650: `--dry-run` is never read under `--validate` (the validate
         # path returns before the render step) and the tool now exits 2 on
         # that combination rather than ignoring half of it.
-        f'          generate-routes --config-dir "{_PRECOMMIT_REPO_MOUNT}/{config_dir}" --validate\n'
+        f'          generate-routes --config-dir "{_PRECOMMIT_REPO_MOUNT}/{config_dir}" --validate --strict\n'
         "        language: docker_image\n"
         f"        files: {files_regex}\n"
         "        pass_filenames: false\n"

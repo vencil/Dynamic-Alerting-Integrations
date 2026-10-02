@@ -1406,10 +1406,183 @@ def _root_defaults_value_detail(rel: str, key: str | None, raw: str,
             f"unquoted number.")
 
 
+#: `_`-prefixed keys another reader takes from the TOP level of a defaults
+#: file — the route generator's `_routing_defaults` / `_routing_enforced`, the
+#: custom-alert compiler's `_custom_alerts` — so they are never reported
+#: (#2386). da-guard's `TopLevelReadElsewhere` is the same list;
+#: tests/shared/defaults_wrapper_matrix.json pins both.
+TOP_LEVEL_READ_ELSEWHERE = frozenset(
+    {"_custom_alerts", "_routing_defaults", "_routing_enforced"})
+
+#: Keys the defaults-chain merge drops at every level, so they act in no
+#: shape (#2386): Go's ``config.MergeDroppedKeys``, pinned by
+#: tests/shared/defaults_wrapper_matrix.json.
+MERGE_DROPPED_KEYS = frozenset({"_metadata"})
+
+
+def _root_decoded_keys() -> tuple[set[str], bool]:
+    """(the top-level fields the exporter's root decode reads, schema found).
+
+    They are the non-``_`` ``properties`` of platform-defaults.schema.json;
+    the Go test ``TestRootDecodedKeysMatchSchema`` pins them to the
+    exporter's ``ThresholdConfig`` fields, which da-guard reads for the same
+    judgements (#2386). Without the schema the set is empty and the callers
+    fail closed, saying so.
+    """
+    schema_path = _find_schema(_PLATFORM_SCHEMA)
+    if schema_path is None:
+        return set(), False
+    with open(schema_path, encoding="utf-8") as fh:
+        props = json.load(fh).get("properties", {})
+    return {k for k in props if not k.startswith("_")}, True
+
+
+def _schema_missing_note(found: bool) -> str:
+    return ("" if found else
+            f" ({_PLATFORM_SCHEMA} was not found, so fields the exporter "
+            f"does read may be listed)")
+
+
+def _keys_acting_when_merged(raw: dict) -> tuple[list[str], bool]:
+    """(sorted top-level keys the defaults merge takes into a tenant's config
+    when it reads the whole document, schema found) — da-guard's
+    ``actsWhenMerged``, pinned to it by tests/shared/defaults_wrapper_matrix.json.
+
+    A threshold (no ``_`` prefix) or a reserved tenant key
+    (``VALID_RESERVED_KEYS`` / ``VALID_RESERVED_PREFIXES``, pinned to Go by
+    tests/shared/test_reserved_key_py_go_parity.py). Excluded: ``defaults``;
+    a root-decode field (``_root_decoded_keys``); ``TOP_LEVEL_READ_ELSEWHERE``;
+    ``MERGE_DROPPED_KEYS``, which act in no shape; ``_routing*`` keys, which
+    the route generator does not read from a defaults file in any shape; and
+    any other ``_`` key (``_x: &x``, a key that only carries a YAML anchor).
+    """
+    known, found = _root_decoded_keys()
+    out = []
+    for key in raw:
+        k = str(key)
+        if (k == "defaults" or k in known or k in TOP_LEVEL_READ_ELSEWHERE
+                or k in MERGE_DROPPED_KEYS):
+            continue
+        if not k.startswith("_") or (
+                (k in VALID_RESERVED_KEYS
+                 or k.startswith(VALID_RESERVED_PREFIXES))
+                and not k.startswith("_routing")):
+            out.append(k)
+    return sorted(out), found
+
+
+_ROOT_NUMBERS_ONLY = (
+    "A threshold among them goes under `defaults:`; the root `defaults:` "
+    "holds numbers only (a non-numeric value there drops the whole block), "
+    "so another key has no place in this file.")
+
+
+def _root_defaults_unwrapped_detail(rel: str, raw: dict) -> list[str]:
+    """The FAIL line for a root carrier with no `defaults:` mapping (#2386).
+
+    Called when ``defaults`` is absent or has no value: the defaults-chain
+    merge behind /effective then takes the whole document as the block and
+    shows its top-level keys, while threshold-exporter's root decode reads
+    platform thresholds only from a ``defaults:`` mapping and has no field
+    for the others. Measured: a top-level threshold was absent from /metrics,
+    and a top-level ``_severity_dedup: disable`` showed ``disable`` on
+    /effective while /metrics served ``enable``. Reported keys:
+    ``_keys_acting_when_merged``.
+    """
+    keys, found = _keys_acting_when_merged(raw)
+    if not keys:
+        return []
+    shown = ", ".join(f"`{k}`" for k in keys)
+    return [f"{rel}: no `defaults:` mapping, so /effective (the defaults-chain "
+            f"merge, which then reads the whole document) shows the top-level "
+            f"key(s) {shown}, but threshold-exporter's root decode does not "
+            f"read them: /metrics does not carry them from this file"
+            f"{_schema_missing_note(found)}. {_ROOT_NUMBERS_ONLY}"]
+
+
+def _defaults_toplevel_ignored_detail(rel: str, raw: dict,
+                                      root: bool) -> list[str]:
+    """The FAIL line for a carrier whose `defaults:` is a mapping while its
+    top level holds keys the merge would otherwise take (#2386).
+
+    With ``defaults:`` a mapping (``{}`` included), the defaults-chain merge
+    reads only that mapping; a ``defaults:`` with no value, or none at all,
+    makes it read the whole document (Go ``ExtractDefaultsBlock``). Reported
+    keys: ``_keys_acting_when_merged``. Measured on a subtree: wrapped this
+    way, a top-level threshold and ``_severity_dedup`` were no longer served
+    on /metrics; ``_silent_mode`` and ``_state_*`` changed /effective only.
+    """
+    keys, found = _keys_acting_when_merged(raw)
+    if not keys:
+        return []
+    shown = ", ".join(f"`{k}`" for k in keys)
+    fix = ("Move them under `defaults:`, or leave `defaults:` with no value "
+           "so the whole document is merged.")
+    if root:
+        fix = _ROOT_NUMBERS_ONLY
+    return [f"{rel}: `defaults:` is a mapping, so the defaults merge reads "
+            f"only the keys under it; the top-level key(s) {shown} are left "
+            f"out of every tenant's merged config (/effective), and a "
+            f"threshold among them is not served on /metrics"
+            f"{_schema_missing_note(found)}. {fix}"]
+
+
+def _is_yaml_mapping(value: object) -> bool:
+    """Whether a `defaults:` value is a YAML mapping as yaml.v3 decodes it.
+
+    PyYAML turns ``!!set {a}`` — a mapping in YAML — into a Python ``set``;
+    yaml.v3 decodes it as a mapping (nil values), and the merge then reads
+    only it. ``!!omap`` / ``!!pairs`` are sequences on both sides. Pinned by
+    tests/shared/defaults_wrapper_matrix.json.
+    """
+    return isinstance(value, (dict, set, frozenset))
+
+
+def check_defaults_wrapper(config_dir: str) -> dict[str, object]:
+    """Every level's `_defaults.yaml`: top-level keys a `defaults:` mapping
+    leaves out of the defaults merge (#2386).
+
+    One carrier per directory, selected as every plane selects it
+    (``select_defaults_carrier`` over the readable carriers); a file that
+    does not load as a mapping is left to ``yaml_syntax`` /
+    ``root_defaults``. Measured on a subtree: top-level
+    ``_severity_dedup: disable`` was served as ``disable`` with no wrapper
+    or with ``defaults:`` and no value, and as ``enable`` once
+    ``defaults: {}`` was added.
+    """
+    root = Path(config_dir)
+    by_dir: dict[Path, list[Path]] = {}
+    for p in iter_config_files(root):
+        if is_defaults_name(p.name):
+            by_dir.setdefault(p.parent, []).append(p)
+    details: list[str] = []
+    checked = 0
+    for d in sorted(by_dir):
+        readable, _unreadable = readable_carriers(by_dir[d])
+        carrier = select_defaults_carrier(readable)
+        if carrier is None:
+            continue
+        try:
+            raw = load_yaml_file_strict(str(carrier), default={})
+        except YamlFileError:
+            continue  # yaml_syntax names a file that does not load
+        if not isinstance(raw, dict):
+            continue
+        checked += 1
+        if _is_yaml_mapping(raw.get("defaults")):
+            rel = carrier.relative_to(root).as_posix()
+            details += _defaults_toplevel_ignored_detail(rel, raw, d == root)
+    if details:
+        return _make_result("defaults_wrapper", FAIL, details)
+    return _make_result("defaults_wrapper", PASS, [
+        f"{checked} defaults file(s): no top-level key left out by a "
+        f"`defaults:` mapping"])
+
+
 def check_root_defaults(config_dir: str) -> dict[str, object]:
     """The ROOT `_defaults.yaml`'s `defaults:` as the exporter decodes it.
 
-    Two rules, one row:
+    Three rules, one row:
 
     * #1414 — every value must decode as a number. The exporter decodes the
       root ``defaults:`` as ``map[string]float64`` with yaml.v3: a value it
@@ -1425,6 +1598,14 @@ def check_root_defaults(config_dir: str) -> dict[str, object]:
     * #2291 — no ``_routing*`` key, whatever its value (below). A
       ``_routing*`` key gets that rule's line only, never a second one from
       the value rule.
+    * #2386 — a root carrier with no ``defaults:`` mapping (the key absent,
+      or present with no value) whose top level holds a key the merge takes
+      (``_keys_acting_when_merged``: a threshold, or a reserved key such as
+      ``_severity_dedup``) FAILs: /effective shows it, the exporter's root
+      decode does not read it (``_root_defaults_unwrapped_detail``). With no
+      such key it still PASSes as "nothing to check".
+      A ``defaults:`` mapping beside ignored top-level keys is the
+      ``defaults_wrapper`` row's finding, at every level.
 
     ⚠️ A file PyYAML cannot read at all still fails through
     ``load_yaml_file_strict`` and ``_run_check``'s input-error row, as before;
@@ -1490,6 +1671,8 @@ def check_root_defaults(config_dir: str) -> dict[str, object]:
                for k, r, kind in verdicts
                if not (k is not None and k.startswith("_routing"))
                and (kind in dr.BLOCKING_KINDS or kind == dr.DECODES_TO_ZERO)]
+    if raw.get("defaults") is None:
+        details += _root_defaults_unwrapped_detail(rel, raw)
     block = raw.get("defaults")
     if not isinstance(block, dict):
         if details:
@@ -1627,6 +1810,13 @@ _CHECK_HINTS: dict[str, tuple[str, str]] = {
         "empty; and move routing settings to a top-level "
         "`_routing_defaults:` block (the only place platform routing "
         "defaults are read from).",
+        "docs/cli-reference.md#validate-config",
+    ),
+    # #2386: the row names the file and keys; where they go depends on level.
+    "defaults_wrapper": (
+        "A `defaults:` mapping makes the defaults merge read only that "
+        "mapping: move the listed top-level keys under `defaults:` (in the "
+        "root file, thresholds only), or give `defaults:` no value.",
         "docs/cli-reference.md#validate-config",
     ),
     # #1653: not a check — the one row `main()` emits under --json when
@@ -2173,6 +2363,11 @@ def main() -> None:
     # 10. Root `defaults:` block (#2291) — unconditional, same reason: a
     # `_routing` mapping there costs the exporter every platform threshold.
     results.append(_run_check("root_defaults", check_root_defaults,
+                              args.config_dir, _config_dir=args.config_dir))
+
+    # 11. `defaults:` mapping beside ignored top-level keys (#2386), every
+    # level — unconditional: it changes what is served.
+    results.append(_run_check("defaults_wrapper", check_defaults_wrapper,
                               args.config_dir, _config_dir=args.config_dir))
 
     # Report

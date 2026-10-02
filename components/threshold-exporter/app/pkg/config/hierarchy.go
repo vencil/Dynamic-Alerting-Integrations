@@ -1009,13 +1009,29 @@ func mergeTenantOver(merged map[string]any, tenantDoc *TenantDoc, tenantID strin
 	}, nil
 }
 
+// mergeDroppedKeys are the override keys deepMerge never takes: a level's
+// `_metadata` reaches no tenant's merged config, wherever it is written.
+var mergeDroppedKeys = map[string]bool{"_metadata": true}
+
+// MergeDroppedKeys lists, sorted, the keys the defaults-chain merge drops
+// from every level (mergeDroppedKeys). da-guard reads it to leave such keys
+// out of its `defaults:` wrapper findings (#2386).
+func MergeDroppedKeys() []string {
+	out := make([]string, 0, len(mergeDroppedKeys))
+	for k := range mergeDroppedKeys {
+		out = append(out, k)
+	}
+	sort.Strings(out)
+	return out
+}
+
 func deepMerge(base, override map[string]any) map[string]any {
 	result := deepCopyMap(base)
 	if override == nil {
 		return result
 	}
 	for k, v := range override {
-		if k == "_metadata" {
+		if mergeDroppedKeys[k] {
 			continue
 		}
 		if v == nil {
@@ -1321,15 +1337,15 @@ func oneLayers(layers []TenantLayers) TenantLayers {
 }
 
 // ComputeEffectiveConfig is the byte-input version of
-// computeEffectiveConfigBytes — public-facing alias for the simulate
-// primitive (app/handler_simulate.go) and the inheritance.go wrappers.
+// computeEffectiveConfigBytes. It has no caller outside tests at present
+// (package main's golden parity and platform-overlay reload tests call it).
 //
 // `layers` (at most one) is the tenant's platform overlay and the tree's
 // profiles (TenantLayers). ⛔ Variadic ON PURPOSE: a caller that passes
 // none gets exactly the chain + tenant-file merge, and every call site
 // keeps using ONE merge function, not a *WithOverlay / *WithProfiles twin
-// that could drift from it. The exporter's merged_hash, ConfigManager.Resolve
-// and /effective pass the same layers, so the three agree (#2019, #2117).
+// that could drift from it. The exporter's merged_hash and /effective pass
+// the same layers, so the two agree (#2019, #2117).
 func ComputeEffectiveConfig(
 	tenantYAMLBytes []byte,
 	tenantID string,

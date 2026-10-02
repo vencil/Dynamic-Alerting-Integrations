@@ -31,6 +31,7 @@ import time
 from pathlib import Path
 
 import pytest
+from _platform_fs import symlink_or_skip  # noqa: E402
 
 # Every test in this module invokes require_preflight_pass.sh via
 # `bash <script-path>`. Git Bash on Windows mangles `C:\path\file`
@@ -290,7 +291,7 @@ def _make_gh_missing_path(tmp_path: Path) -> Path:
         if src.exists():
             target = shim / tool
             if not target.exists():
-                target.symlink_to(src)
+                symlink_or_skip(src, target)
     return shim
 
 
@@ -744,7 +745,7 @@ def _path_without(scratch: Path, *names: str) -> str:
             copy.mkdir(parents=True)
             for entry in Path(d).iterdir():
                 if entry.name not in names:
-                    (copy / entry.name).symlink_to(entry)
+                    symlink_or_skip(entry, copy / entry.name)
             d = str(copy)
         dirs.append(d)
     path = os.pathsep.join(dirs)
@@ -970,7 +971,7 @@ def test_git_missing_refuses_instead_of_allowing_silently(tmp_path: Path):
         src = shutil.which(tool)
         if src:
             try:
-                os.symlink(src, nogit / tool)
+                symlink_or_skip(src, nogit / tool)
             except OSError:
                 shutil.copy2(src, nogit / tool)
     gh = nogit / "gh"

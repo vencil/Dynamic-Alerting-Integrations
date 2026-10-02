@@ -14,11 +14,14 @@ from __future__ import annotations
 
 import contextlib
 import importlib.util
+import io
 import re
 import subprocess
 import sys
+import tarfile
 
 import pytest
+from _platform_fs import symlink_or_else  # noqa: E402
 import yaml
 from pathlib import Path
 
@@ -4641,11 +4644,50 @@ def _module_isolation():
         sys.path[:] = saved_path
 
 
+def _unpack_git_archive(data: bytes, dest: Path) -> None:
+    """Unpack `git archive` output into `dest` without shelling out to `tar`.
+
+    ⛔ WHY NOT `tar`: which `tar` answers is not a property of this repo. On a
+    Windows host `subprocess.run(["tar", ...])` resolves to System32's bsdtar
+    (CreateProcess searches the system directory before PATH, so Git's GNU tar
+    is never reached), and the frozen commit carries three symlinks
+    (`docs/CHANGELOG.md`, `docs/README-root.md`, `docs/README-root.en.md`) that
+    bsdtar cannot create without the symlink privilege — rc 1, and the three
+    replay tests ERROR in a fixture that is not allowed to skip. The archive
+    bytes are unchanged; only the program that unpacks them is.
+
+    ⛔ SYMLINK MEMBERS ARE HANDLED HERE, NOT LEFT TO `tarfile`. When
+    `os.symlink` is refused, `tarfile` silently extracts a COPY OF THE LINK'S
+    TARGET instead (measured: `docs/CHANGELOG.md` became the 985 kB changelog
+    and its blob id no longer matched the commit's). What is written instead is
+    what git itself writes under `core.symlinks=false`: a regular file whose
+    content is the link target. Measured after `git add -A -f` on such a host:
+    2294 index entries, every blob id equal to `git ls-tree -r` of the commit.
+
+    ⛔ The fallback is taken only where the host cannot create symlinks at all
+    (`_platform_fs.can_symlink()`, pinned True on POSIX by
+    `tests/shared/test_platform_fs.py`). Anywhere else a refused symlink
+    raises, as `tar` would have, so the tree CI measures keeps real symlinks
+    and cannot quietly change shape.
+    """
+    with tarfile.open(fileobj=io.BytesIO(data)) as archive:
+        for member in archive:
+            if not member.issym():
+                archive.extract(member, dest, filter="tar")
+                continue
+            link = dest / member.name
+            link.parent.mkdir(parents=True, exist_ok=True)
+            symlink_or_else(
+                member.linkname, link,
+                lambda link=link, member=member: link.write_bytes(
+                    member.linkname.encode("utf-8")))
+
+
 @pytest.fixture(scope="module")
 def _frozen_checkout(tmp_path_factory):
     """`72fdaf56`, materialised: its files and its index. NO modules loaded.
 
-    ⛔ THE SPLIT IS THE POINT. This half is the expensive one (archive, untar,
+    ⛔ THE SPLIT IS THE POINT. This half is the expensive one (archive, unpack,
     `git init`, `git add -A -f`) and it is inert — a directory of files touches
     no interpreter state, so sharing it across the module costs nothing and
     leaks nothing. `frozen_tree` below is the half that mutates `sys.modules`,
@@ -4691,12 +4733,16 @@ def _frozen_checkout(tmp_path_factory):
     archive = subprocess.run(
         ["git", "-C", str(REPO_ROOT), "archive", _FROZEN_COMMIT],
         capture_output=True, check=True, timeout=120)
-    subprocess.run(["tar", "-x", "-C", str(dest)], input=archive.stdout,
-                   check=True, timeout=120)
+    # ⛔ Not `tar` — see `_unpack_git_archive` for why and for what the three
+    # symlinks in this commit become on a host that cannot create them.
+    _unpack_git_archive(archive.stdout, dest)
     subprocess.run(["git", "init", "-q", str(dest)], check=True,
                    capture_output=True, timeout=60)
+    # ⚠️ 600, not 120: measured on a busy Windows host, this one `git add` of
+    # the 2294 files took 82 s on one run and blew a 120 s limit on another. The
+    # limit only exists to stop a hang; it is not a measurement of anything.
     subprocess.run(["git", "-C", str(dest), "add", "-A", "-f"],
-                   check=True, capture_output=True, timeout=120)
+                   check=True, capture_output=True, timeout=600)
     return dest
 
 

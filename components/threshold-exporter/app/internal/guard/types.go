@@ -21,7 +21,9 @@
 //     a CLI subcommand by C-11 Migration Toolkit).
 //
 // Pure library — operates on already-merged effective configs
-// supplied by the caller, never touches YAML or disk. Checks shipped:
+// supplied by the caller, never touches disk; the one YAML decode is
+// of the root defaults carrier's bytes, also supplied by the caller
+// (check 5). Checks shipped:
 //
 //  1. Schema validation (Severity=error, PR-1)
 //     For every tenant under the affected scope: required fields
@@ -63,6 +65,13 @@
 //     it lands. Two tiers: SeverityWarn at WarnRatio×Limit (80%
 //     by default), SeverityError above Limit.
 //
+//  5. Defaults wrapper (#2386; see rootdefaults.go), both errors:
+//     the conf.d root `_defaults.yaml` with no `defaults:` mapping
+//     (its top-level thresholds are not served on /metrics, while the
+//     merged effective configs show them), and a `_defaults.yaml` at
+//     any level whose `defaults:` mapping leaves top-level keys out of
+//     the defaults merge.
+//
 // Future PRs in the C-12 family:
 //   - PR-4: CLI subcommand `da-tools guard defaults-impact` plus
 //     YAML parsing convenience layer that runs the actual merge
@@ -76,7 +85,10 @@
 // emitter), then hands the merged maps to CheckDefaultsImpact.
 package guard
 
-import "github.com/vencil/threshold-exporter/pkg/routingpolicy"
+import (
+	"github.com/vencil/threshold-exporter/pkg/config"
+	"github.com/vencil/threshold-exporter/pkg/routingpolicy"
+)
 
 // Severity classifies a Finding. Two tiers in PR-1; PR-2/3 may add
 // "info" for the routing/cardinality layers if useful.
@@ -173,6 +185,23 @@ const (
 	// it — a defaults block, the top level of an unwrapped defaults file,
 	// a threshold profile. Field is `<file>:<key path>`.
 	FindingRoutingInUnreadLocation FindingKind = "routing_in_unread_location"
+	// FindingRoutingNotMapping (error; #2341): the tenant's `_routing`, as
+	// the route generator's PyYAML reads it, is neither a mapping nor a
+	// disabling string (`"slack"`, a list, null, an unquoted `false` / `off`
+	// / `no`, which is a YAML boolean). The generator renders no route for
+	// the tenant and refuses it (`--validate`, `--strict`). Field `_routing`.
+	FindingRoutingNotMapping FindingKind = "routing_not_mapping"
+	// FindingRoutingDefaultsNotMapping (error, TenantID ""; #2341): a
+	// `_routing_defaults` (root platform file, or a subdirectory's defaults
+	// carrier) that is neither a mapping nor null; the level contributes
+	// nothing and the generator refuses it. Field `<file>:_routing_defaults`.
+	FindingRoutingDefaultsNotMapping FindingKind = "routing_defaults_not_mapping"
+	// FindingInvalidTenantID (error; #2341): a declared tenant id the route
+	// generator renders nothing for (routingpolicy.IsValidTenantID: empty,
+	// or a character outside letters, digits, `_`, `-`). TenantID is the id
+	// (it may be empty, so the finding is told from a platform one by its
+	// kind), Field `<tenant file>:tenants.<id>`.
+	FindingInvalidTenantID FindingKind = "invalid_tenant_id"
 )
 
 // Routing-tree findings (#2326, ADR-017 / ADR-007 "Amendment 2026-09-28"):
@@ -337,6 +366,17 @@ type CheckInput struct {
 	// of reading as an omission (#2291).
 	RoutingDisabled map[string]bool `json:"-"`
 
+	// RoutingNotMapping maps tenant ID → its `_routing` value (as PyYAML
+	// reads it) when that is neither a mapping nor a disabling string
+	// (#2341, routingpolicy.RoutingNotMapping). Such tenants are absent from
+	// RoutingByTenant: the generator renders no route for them.
+	RoutingNotMapping map[string]any `json:"-"`
+
+	// InvalidTenantIDs maps each declared tenant id routingpolicy.IsValidTenantID
+	// refuses to the tenant file that declares it (#2341). Such tenants are
+	// absent from RoutingByTenant.
+	InvalidTenantIDs map[string]string `json:"-"`
+
 	// UnknownRoutingProfiles maps tenant ID → the `_routing_profile` it
 	// references that no profile file defines (warn finding).
 	UnknownRoutingProfiles map[string]string `json:"-"`
@@ -373,4 +413,14 @@ type CheckInput struct {
 	// truncation kicks in. Set to 1.0 to disable the warning tier
 	// (errors only).
 	CardinalityWarnRatio float64 `json:"cardinality_warn_ratio,omitempty"`
+
+	// DefaultsFiles are the defaults carriers of the scan
+	// (config.ScopedTenants.DefaultsFiles), checked for the `defaults:`
+	// wrapper shapes (#2386, rootdefaults.go); nil skips the check.
+	DefaultsFiles []config.DefaultsFile `json:"-"`
+
+	// ParseFailed are the files the exporter drops
+	// (config.ScopedTenants.ParseFailed); the wrapper check skips them, so a
+	// broken file is named once, by exit 3.
+	ParseFailed []string `json:"-"`
 }

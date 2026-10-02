@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import importlib.util
+import os
 import subprocess
 import sys
 from pathlib import Path
@@ -220,14 +221,33 @@ class TestCLI:
         assert "--status" in result.stdout
         assert "--up" in result.stdout
 
-    def test_status_flag_parses(self):
-        """Smoke test: --status must parse even without docker."""
+    def test_status_flag_parses(self, tmp_path):
+        """Smoke test: --status must parse even without docker.
+
+        Hermetic: the child's PATH is one empty directory, so `docker` cannot
+        be found and no daemon is ever asked. Run against the machine's real
+        docker, this test waited on `docker version` / `docker ps` (up to 70s
+        inside the tool) behind a 15s timeout, and had to accept any rc. The
+        rc for each real docker state is pinned by TestStatus with mocks.
+        """
+        empty = tmp_path / "no-docker-here"
+        empty.mkdir()
+        env = dict(os.environ)
+        # Windows spells it `Path`; drop every casing before setting ours.
+        for key in [k for k in env if k.upper() == "PATH"]:
+            del env[key]
+        env["PATH"] = str(empty)
+        # cwd too: Windows looks for a bare `docker` in the working directory
+        # (and in the interpreter's and the system directories, which a test
+        # cannot empty) before it looks at PATH.
         result = subprocess.run(
             [sys.executable, str(_SCRIPT), "--status"],
-            capture_output=True, text=True, encoding="utf-8", errors="replace", timeout=15,
+            capture_output=True, text=True, encoding="utf-8", errors="replace",
+            timeout=30, env=env, cwd=empty,
         )
-        # Returns 1 (no docker) or a real status code. Must not crash.
-        assert result.returncode in (0, 1, 2, 3)
+        assert result.returncode == 1, result.stderr
+        assert "docker: not available on PATH" in result.stderr
+        assert "Traceback" not in result.stderr
 
 
 class TestEnvOverride:

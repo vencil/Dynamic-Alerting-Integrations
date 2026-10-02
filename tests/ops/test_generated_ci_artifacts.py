@@ -341,6 +341,7 @@ sys.path.insert(0, str(_TESTS_DIR / "ops"))
 
 import init_project as ip  # noqa: E402
 from test_init_project import CI_DEPLOY_COMBINATIONS  # noqa: E402
+from _platform_fs import symlink_or_skip  # noqa: E402
 
 
 # ============================================================
@@ -4212,7 +4213,7 @@ _EXPECTED_GH_GENERATE: list[str] = [
     # and since #1650 the tool exits 2 on that combination, so the old line
     # would have turned every customer's PR red. `mkdir -p .output` stays:
     # the config-diff step below still redirects into it on the host.
-    'docker run --rm -v "${{ github.workspace }}/${{ env.CONFIG_DIR }}:/data/conf.d:ro" ${{ env.DA_TOOLS_IMAGE }} generate-routes --config-dir /data/conf.d --validate',
+    'docker run --rm -v "${{ github.workspace }}/${{ env.CONFIG_DIR }}:/data/conf.d:ro" ${{ env.DA_TOOLS_IMAGE }} generate-routes --config-dir /data/conf.d --validate --strict',
     ': "${RUNNER_TEMP:?RUNNER_TEMP is not set; this step writes its intermediate files there}"',
     'config_dir="${CONFIG_DIR%/}"',
     'mkdir -p .output/base/"$config_dir"',
@@ -4325,7 +4326,7 @@ _EXPECTED_GL_GENERATE: list[str] = [
     'echo "ERROR: $config_dir at $base_sha is a $kind, not a directory, so no baseline can be built from it. A kind of \'commit\' means a submodule is mounted there; \'blob\' means either a file has that name, or the path is a symlink. Reporting any of those as a first import would hide the fault." >&2',
     'exit 1',
     'fi',
-    'da-tools generate-routes --config-dir "$CONFIG_DIR" --validate',
+    'da-tools generate-routes --config-dir "$CONFIG_DIR" --validate --strict',
     'set +e',
     'da-tools config-diff --old-dir .output/base/"${CONFIG_DIR%/}" --new-dir "$CONFIG_DIR" --format markdown > .output/blast-radius.md',
     'rc=$?',
@@ -5380,7 +5381,7 @@ def _symlinks_usable(tmp: Path) -> bool:
     probe.mkdir(parents=True, exist_ok=True)
     (probe / "target").write_text("x\n", encoding="utf-8", newline="\n")
     try:
-        (probe / "link").symlink_to("target")
+        symlink_or_skip("target", probe / "link")
     except (OSError, NotImplementedError):
         return False
     return (probe / "link").is_symlink()
@@ -5421,7 +5422,7 @@ def _synthetic_repo(root: Path, *, base_has_config: bool,
             # does not, so a count-based post-condition failed a perfectly
             # healthy repository here. Measured before the fix: rc=1 with the
             # extraction fully correct.
-            (root / "conf.d" / "db-alias.yaml").symlink_to("db-a.yaml")
+            symlink_or_skip("db-a.yaml", root / "conf.d" / "db-alias.yaml")
     _git(root, "add", "-A")
     if submodule:
         # A gitlink whose commit belongs to no repository reachable from here

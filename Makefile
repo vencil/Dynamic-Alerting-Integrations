@@ -605,7 +605,9 @@ sharded-check: ## Sharded GitOps: 衝突偵測（dry-run）
 .PHONY: assembler-render
 assembler-render: ## CRD Assembler: 離線渲染 CR → YAML (使用: make assembler-render CR=k8s/crd/example-thresholdconfig.yaml)
 	@mkdir -p .build/config-dir
-	@python3 ./scripts/tools/ops/da_assembler.py \
+	@# #2476: --render-cr 以 da-crdecode（Kubernetes client 的 YAML→JSON）解碼 CR
+	@cd components/threshold-exporter/app && go build -buildvcs=false -o $(CURDIR)/.build/da-crdecode ./cmd/da-crdecode
+	@DA_CRDECODE_BINARY=$(CURDIR)/.build/da-crdecode python3 ./scripts/tools/ops/da_assembler.py \
 		--render-cr $(CR) --config-dir .build/config-dir
 	@echo "✓ rendered to .build/config-dir/"
 

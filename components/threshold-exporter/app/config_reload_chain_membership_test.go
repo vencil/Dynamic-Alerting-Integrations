@@ -255,9 +255,9 @@ func TestReload_DefaultsChainMembershipChange_MatchesEffective(t *testing.T) {
 				t.Errorf("noOp = %d, want %d", noOp, tc.wantNoOp)
 			}
 
-			ec, ok := m.Resolve("t")
+			ec, ok := committedTenantState(m, "t")
 			if !ok {
-				t.Fatalf("Resolve(t): unknown tenant after reload")
+				t.Fatalf("t is not in the committed hierarchy after reload")
 			}
 			pe, err := config.ResolveEffective(dir, "t")
 			if err != nil {

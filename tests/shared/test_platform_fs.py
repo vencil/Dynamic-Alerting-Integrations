@@ -6,6 +6,7 @@ symlink test into a skip under a green run. The first test is that guard.
 """
 from __future__ import annotations
 
+import ast
 import os
 import shutil
 import sys
@@ -13,6 +14,8 @@ import sys
 import pytest
 
 import _platform_fs as pf
+from _pysource import parse_py
+from _tree import REPO_ROOT, repo_files
 
 
 @pytest.mark.skipif(os.name == "nt", reason="Windows may lack the privilege; that is what the probe is for")
@@ -121,3 +124,70 @@ def test_with_the_capability_it_creates_the_link(tmp_path):
     pf.symlink_or_skip(target, link)
     assert link.is_symlink()
     assert link.read_text(encoding="utf-8") == "x\n"
+
+
+def test_symlink_or_else_falls_back_only_without_the_capability(tmp_path, monkeypatch):
+    """Without the capability the fallback runs and no link is attempted;
+    with it, the link is attempted and a failure of the call still raises."""
+    called = []
+    monkeypatch.setattr(pf, "can_symlink", lambda: False)
+    monkeypatch.setattr(pf.os, "symlink", lambda *a, **k: pytest.fail("attempted a symlink"))
+    pf.symlink_or_else("t", tmp_path / "l", lambda: called.append("fallback"))
+    assert called == ["fallback"]
+
+    def refuse(src, dst, **kwargs):
+        raise PermissionError(1, "Operation not permitted", str(dst))
+
+    monkeypatch.setattr(pf, "can_symlink", lambda: True)
+    monkeypatch.setattr(pf.os, "symlink", refuse)
+    with pytest.raises(PermissionError):
+        pf.symlink_or_else("t", tmp_path / "l", lambda: called.append("fallback"))
+    assert called == ["fallback"], "the fallback must not absorb a refused symlink"
+
+
+def _bare_symlink_calls(tree: ast.AST) -> list[int]:
+    """Line numbers of ``os.symlink(...)`` and ``<x>.symlink_to(...)`` CALLS.
+    A reference that is not called (``monkeypatch.setattr(os, "symlink", f)``)
+    creates nothing and is not counted."""
+    lines = []
+    for node in ast.walk(tree):
+        if not isinstance(node, ast.Call) or not isinstance(node.func, ast.Attribute):
+            continue
+        f = node.func
+        if f.attr == "symlink_to" or (
+                f.attr == "symlink" and isinstance(f.value, ast.Name) and f.value.id == "os"):
+            lines.append(node.lineno)
+    return lines
+
+
+def test_the_scanner_sees_both_spellings_and_only_calls():
+    """The guard below is only as good as this predicate: both spellings are
+    caught, and a non-call reference is not."""
+    src = "\n".join([
+        "import os",
+        "os.symlink(a, b)",
+        "(p / 'l').symlink_to(t)",
+        "monkeypatch.setattr(os, 'symlink', f)",
+        "x = os.symlink",
+    ])
+    assert _bare_symlink_calls(ast.parse(src)) == [2, 3]
+
+
+def test_tests_create_symlinks_only_through_the_helper():
+    """⛔ A test that calls ``os.symlink`` / ``Path.symlink_to`` directly goes
+    red on a host without the capability instead of skipping (#2559): seven
+    such tests reached main within days of the helper landing. Use
+    ``symlink_or_skip(target, link)`` from ``tests/_platform_fs.py``."""
+    tests_dir = REPO_ROOT / "tests"
+    exempt = {tests_dir / "_platform_fs.py"}
+    scanned, offenders = 0, []
+    for path in repo_files(".py"):
+        if tests_dir not in path.parents or path in exempt:
+            continue
+        scanned += 1
+        offenders += [f"{path.relative_to(REPO_ROOT).as_posix()}:{n}"
+                      for n in _bare_symlink_calls(parse_py(path))]
+    assert scanned > 100, f"scanned only {scanned} test files: the listing is wrong"
+    assert not offenders, (
+        "create symlinks with symlink_or_skip(target, link) from _platform_fs, "
+        f"not directly: {offenders}")

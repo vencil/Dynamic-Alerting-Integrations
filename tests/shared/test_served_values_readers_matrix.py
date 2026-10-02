@@ -32,6 +32,7 @@ import pytest
 import _lib_tenant_values as tv
 import analyze_rule_pack_gaps as arg
 import blind_spot_discovery as bsd
+from _platform_fs import require_file_name, symlink_or_skip  # noqa: E402
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
 OPS = REPO_ROOT / "scripts" / "tools" / "ops"
@@ -190,7 +191,7 @@ def test_dangling_symlink_fails_closed(script, extra, tmp_path):
     Go 列進 `unreadable`（rc 3），讀取端 rc 2、ERROR 行指名該檔與原因（行為變更：原為 rc 0）。
     不依賴權限，root 下也會跑。"""
     conf_d = _tree(tmp_path, {"_defaults.yaml": _BASE, "tenant-a.yaml": _A_OK})
-    (conf_d / "tenant-b.yaml").symlink_to("missing.yaml")
+    symlink_or_skip("missing.yaml", conf_d / "tenant-b.yaml")
     p = _cli(script, conf_d, *extra)
     assert p.returncode == 2, (p.returncode, p.stderr)
     err = [ln for ln in p.stderr.split("\n") if ln.startswith("ERROR: ")]
@@ -244,7 +245,7 @@ def test_file_the_exporter_cannot_read_is_warned_and_rc_stays_0(script, extra, t
     stdout 照常是一份 JSON。"""
     conf_d = _tree(tmp_path, {"_defaults.yaml": _BASE, "tenant-b.yaml": _B})
     (conf_d / "realdir").mkdir()
-    (conf_d / "tb.yaml").symlink_to("realdir")
+    symlink_or_skip("realdir", conf_d / "tb.yaml")
     p = _cli(script, conf_d, *extra)
     assert p.returncode == 0, p.stderr
     warn = [ln for ln in p.stderr.split("\n") if ln.startswith(_P + "WARN: cannot read ")]
@@ -331,6 +332,7 @@ _FORGED = "[OK] forged.yaml"
 
 def _defaults_in_tenant_file(conf_d: Path, name: bytes) -> None:
     """一個租戶檔，內含 `defaults:`：Go 以 `%s` 把檔名印進 rc 0 的 WARN。"""
+    require_file_name(name)
     (conf_d / name.decode("utf-8")).write_bytes(
         b"defaults:\n  mysql_connections: 5\ntenants:\n  td:\n    mysql_connections: 1\n")
 
