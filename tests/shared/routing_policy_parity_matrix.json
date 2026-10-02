@@ -134,7 +134,8 @@
       "t-a ",
       "tenänt",
       "a:b",
-      "{{tenant}}"
+      "{{tenant}}",
+      "1.5e3"
     ]
   },
   "trees": [
@@ -5038,6 +5039,29 @@
           "python_differs": null,
           "escalation": null,
           "refused": null
+        }
+      },
+      "enforced_group_by_invalid": []
+    },
+    {
+      "name": "every-tenant-id-invalid",
+      "files": {
+        "_defaults.yaml": "defaults:\n  cpu_usage_percent: 80\n_routing_defaults:\n  receiver:\n    type: webhook\n    url: https://hooks.example.com/x\n",
+        "t.yaml": "tenants:\n  1.5e3:\n    cpu_usage_percent: '85'\n"
+      },
+      "platform": [],
+      "expect": {
+        "1.5e3": {
+          "targets": null,
+          "policy": [],
+          "rejected_routes": [],
+          "values_not_string": [],
+          "group_by_invalid": [],
+          "unknown_profile": null,
+          "tenant_api": null,
+          "python_differs": null,
+          "escalation": null,
+          "refused": "invalid_tenant_id"
         }
       },
       "enforced_group_by_invalid": []

@@ -946,6 +946,20 @@ def main() -> None:
     has_dedup = bool(dedup_configs)
 
     if not has_routing and not has_dedup and not enforced_routing:
+        # #2341: "nothing to render" can be the result of refusing every
+        # tenant (an invalid tenant id, an unreadable `_routing`): those
+        # lines are blocking here as everywhere else — `--validate` and
+        # `--strict` fail on them, render mode prints them and exits 0.
+        for w in schema_warnings:
+            print(safe_label(w), file=sys.stderr)
+        errors = ((blocking_generation_errors(schema_warnings) if args.validate else [])
+                  + (_policy_errors(schema_warnings) if args.strict else []))
+        if errors:
+            print(f"FAIL: {len(errors)} error(s) found and nothing to render:",
+                  file=sys.stderr)
+            for e in errors:
+                print(safe_label(e), file=sys.stderr)
+            sys.exit(EXIT_VIOLATION)
         print("No tenants found in config directory.")
         sys.exit(EXIT_OK)
 

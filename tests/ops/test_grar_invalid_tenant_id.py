@@ -70,3 +70,20 @@ def test_ids_an_existing_rule_accepts_still_render(tmp_path, tid):
     p = _gar(d, "--validate", "--strict")
     assert p.returncode == 0, p.stderr
     assert tid in load_tenant_tree(str(d)).routing_configs
+
+
+def test_every_tenant_refused_still_blocks(tmp_path):
+    """租戶 id 全部不合法、沒有東西可產出時，仍走同一判定（不是 `No tenants found` rc 0）。"""
+    d = tmp_path / "conf.d"
+    d.mkdir()
+    (d / "_defaults.yaml").write_text(_DEFAULTS, encoding="utf-8")
+    (d / "t.yaml").write_text("tenants:\n  1.5e3:\n    cpu_usage_percent: '85'\n",
+                              encoding="utf-8")
+    dry = _gar(d, "--dry-run")
+    assert dry.returncode == 0, dry.stderr
+    assert "tenant id '1.5e3' is not a valid tenant id" in dry.stderr, dry.stderr
+    val = _gar(d, "--validate")
+    assert val.returncode == 1 and "skipping" in val.stderr, val.stderr
+    strict = _gar(d, "--dry-run", "--strict")
+    assert strict.returncode == 1, strict.stderr
+    assert "ERROR: tenant id '1.5e3'" in strict.stderr
