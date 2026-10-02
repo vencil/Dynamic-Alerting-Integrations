@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"log"
 	"os"
+	"strings"
 )
 
 // RejectDuplicateTenant is the issue-#127 hard reject shared by every full
@@ -91,9 +92,12 @@ type LoadReport struct {
 	// load still succeeds (#2115). A symlink to a directory is not listed.
 	// nil when there is none.
 	Unreadable []UnreadableFile
-	// RootListErr is set only beside ErrNoYAMLFiles, when the walk could not
-	// list the root itself: `cannot list configDir` with the walk's reason,
-	// for the caller to print (#2627). Unreadable is then RootUnreadable.
+	// RootListErr is set only beside ErrNoYAMLFiles, when the root itself
+	// cannot be read: `cannot list configDir` with the walk's reason
+	// (Unreadable is then RootUnreadable), or `stat configDir` when the
+	// process may not stat it (RootStatUnreadable), for the caller to print
+	// (#2627). The walk's own WARN for the root is not logged then: this
+	// error carries the same reason.
 	RootListErr error
 }
 
@@ -106,12 +110,20 @@ type LoadReport struct {
 // as the exporter refuses it; the report then carries only Unreadable — the
 // files the walk dropped, when every config file is unreadable, or
 // RootUnreadable alone when the walk could not list the root at all, the
-// error then reading `cannot list configDir` with the walk's reason (#2627).
+// error then reading `cannot list configDir` with the walk's reason, or
+// RootStatUnreadable when the root cannot even be stat'ed for a reason other
+// than a wrong path (StatErrIsWrongPath) (#2627).
 func LoadDirReport(dir string, logger *log.Logger) (cfg *ThresholdConfig, rep LoadReport, err error) {
 	if logger == nil {
 		logger = discardLogger
 	}
-	scan, err := ScanDirTree(dir, nil, nil, logger)
+	absRoot := AbsScanRoot(dir)
+	if _, serr := os.Stat(absRoot); serr != nil && !StatErrIsWrongPath(serr) {
+		statErr := fmt.Errorf("stat configDir %q: %w", dir, serr)
+		return nil, LoadReport{Unreadable: []UnreadableFile{RootStatUnreadable}, RootListErr: statErr},
+			fmt.Errorf("%w: %w", statErr, ErrNoYAMLFiles)
+	}
+	scan, err := ScanDirTree(dir, nil, nil, withoutRootWalkWarn(logger, absRoot))
 	if err != nil {
 		return nil, LoadReport{}, err
 	}
@@ -139,6 +151,32 @@ func LoadDirReport(dir string, logger *log.Logger) (cfg *ThresholdConfig, rep Lo
 		}
 	}
 	return &built.Config, rep, nil
+}
+
+// withoutRootWalkWarn is logger without the walker's WARN for the root
+// directory itself (`WARN: walk error at <absRoot>: …`): LoadDirReport
+// returns that failure as RootListErr, so the caller would print the same
+// reason twice (#2627). Every other line goes to logger unchanged, through
+// its own prefix and flags.
+func withoutRootWalkWarn(logger *log.Logger, absRoot string) *log.Logger {
+	if logger == discardLogger {
+		return logger
+	}
+	return log.New(rootWarnFilter{dst: logger, drop: "WARN: walk error at " + absRoot + ": "}, "", 0)
+}
+
+type rootWarnFilter struct {
+	dst  *log.Logger
+	drop string
+}
+
+func (f rootWarnFilter) Write(p []byte) (int, error) {
+	if !strings.HasPrefix(string(p), f.drop) {
+		if err := f.dst.Output(2, strings.TrimSuffix(string(p), "\n")); err != nil {
+			return 0, err
+		}
+	}
+	return len(p), nil
 }
 
 // loadDirBuild is LoadDir's build step over a scan it already has: the

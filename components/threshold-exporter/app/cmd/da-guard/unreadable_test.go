@@ -583,6 +583,87 @@ func TestUnreadable_UnlistableConfigDir_ExitsThree(t *testing.T) {
 			strings.Contains(stderr, "no .yaml files found") {
 			t.Errorf("%v: stderr does not say why: %q", args, stderr)
 		}
+		// Once: served-values' load does not also log the walker's WARN for
+		// the root (#2627 review).
+		if n := strings.Count(stderr, "permission denied"); n != 1 {
+			t.Errorf("%v: the reason is printed %d times, want 1: %q", args, n, stderr)
+		}
+	}
+}
+
+// A --config-dir the process may not even stat (under a directory it may not
+// search) is a path it cannot read: exit 3 from the guard, effective and
+// served-values, the root named as "." (stat_error) in the JSON and on
+// stderr, the reason printed once. It was exit 2 (#2627 review). A
+// --config-dir that does not exist stays exit 2
+// (TestUnreadable_UnlistableConfigDir_ExitsThree).
+func TestUnreadable_ConfigDirStatDenied_ExitsThree(t *testing.T) {
+	t.Parallel()
+	if os.Geteuid() == 0 {
+		t.Skip("running as root: chmod does not stop root")
+	}
+	dir := writeParityTree(t, unreadableBase())
+	chmodT(t, filepath.Dir(dir), 0, 0o755)
+	want := []skippedFile{{".", config.UnreadableStatError}}
+	for _, args := range [][]string{
+		{"--config-dir", dir, "--format", "json"},
+		{effectiveCmd, "--config-dir", dir},
+		{servedValuesCmd, "--config-dir", dir},
+	} {
+		code, stdout, stderr := runOnce(t, args...)
+		if code != exitParseFailed {
+			t.Errorf("%v: exit = %d, want %d; stderr=%q", args, code, exitParseFailed, stderr)
+		}
+		var doc struct {
+			Unreadable []skippedFile `json:"unreadable"`
+		}
+		if err := json.Unmarshal([]byte(stdout), &doc); err != nil {
+			t.Errorf("%v: stdout is not JSON (%v): %q; stderr=%q", args, err, stdout, stderr)
+		} else if !reflect.DeepEqual(doc.Unreadable, want) {
+			t.Errorf("%v: unreadable = %v, want %v", args, doc.Unreadable, want)
+		}
+		if !strings.Contains(stderr, "stat configDir") || strings.Count(stderr, "permission denied") != 1 ||
+			!strings.Contains(stderr, "1 path(s) cannot be read: . (stat_error)") {
+			t.Errorf("%v: stderr does not name the root and the reason once: %q", args, stderr)
+		}
+	}
+}
+
+// A --scope through a symlink to a directory outside --config-dir is a
+// caller error (outside configDir) whether or not the target can be read:
+// `a` and `a/b` alike — a/b is no path the exporter reads (it never follows a
+// directory symlink). Before, `a/b` under an unreadable target was exit 3,
+// "unreadable a/b" (#2627 review). A symlink to a directory inside the tree
+// resolves to it, as any resolvable link does: its unreadable paths are named.
+func TestUnreadable_GuardScope_SymlinkOutsideIsCallerError(t *testing.T) {
+	t.Parallel()
+	if os.Geteuid() == 0 {
+		t.Skip("running as root: chmod does not stop root")
+	}
+	dir := writeParityTree(t, map[string]string{
+		"t.yaml":          "tenants:\n  tenant-t:\n    mysql_connections: 70\n",
+		"locked/b/t.yaml": "tenants:\n  tenant-l: {}\n",
+	})
+	outside := writeParityTree(t, map[string]string{"locked/b/t.yaml": "tenants:\n  tenant-o: {}\n"})
+	symlinkOrSkipT(t, filepath.Join(outside, "locked"), filepath.Join(dir, "a"))
+	symlinkOrSkipT(t, filepath.Join(dir, "locked"), filepath.Join(dir, "in"))
+	chmodT(t, filepath.Join(outside, "locked"), 0, 0o755)
+	chmodT(t, filepath.Join(dir, "locked"), 0, 0o755)
+
+	for _, scope := range []string{"a", "a/b"} {
+		code, _, stderr := runOnce(t, "--config-dir", dir, "--scope", scope)
+		if code != exitCallerErr || !strings.Contains(stderr, "is outside configDir") {
+			t.Errorf("--scope %s: exit = %d stderr = %q, want %d outside configDir", scope, code, stderr, exitCallerErr)
+		}
+	}
+	for scope, want := range map[string][]skippedFile{
+		"in":   {{"locked", config.UnreadableWalkError}},
+		"in/b": {{"locked", config.UnreadableWalkError}, {"locked/b", config.UnreadableStatError}},
+	} {
+		code, doc, stderr := guardJSON(t, dir, "--scope", scope)
+		if code != exitParseFailed || !reflect.DeepEqual(doc.Unreadable, want) {
+			t.Errorf("--scope %s: exit = %d unreadable = %v, want %d %v; stderr=%q", scope, code, doc.Unreadable, exitParseFailed, want, stderr)
+		}
 	}
 }
 

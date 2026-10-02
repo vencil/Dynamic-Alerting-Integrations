@@ -60,6 +60,7 @@ import (
 	"path/filepath"
 	"sort"
 	"strings"
+	"syscall"
 
 	"github.com/vencil/threshold-exporter/internal/confdname"
 )
@@ -132,10 +133,11 @@ type ScopedTenants struct {
 	// ones. Every other error returns a nil result.
 	Unreadable []UnreadableFile
 
-	// RootListErr is set when the walk could not list configDir itself
-	// (#2627): the error, naming configDir and the walk's reason (e.g.
-	// permission denied), for the caller to print. Unreadable then holds
-	// RootUnreadable and Tenants is empty. nil otherwise.
+	// RootListErr is set when configDir itself cannot be read (#2627): the
+	// walk could not list it (Unreadable then holds RootUnreadable) or the
+	// process may not stat it (RootStatUnreadable). The error names
+	// configDir and the reason (e.g. permission denied), for the caller to
+	// print. Tenants is then empty. nil otherwise.
 	RootListErr error
 
 	// NestedPlatformFiles is every `_` file below the root that is not a
@@ -165,11 +167,12 @@ type DefaultsFile struct {
 // defaults to configDir (whole tree).
 //
 // Errors:
-//   - configDir doesn't exist or isn't a directory.
-//   - scopeDir doesn't exist or isn't a directory. A scopeDir whose stat
-//     fails with permission denied is NOT an error: it is listed in
-//     ScopedTenants.Unreadable and holds no tenant (#2627) — it is a path
-//     that cannot be read, not a path that is wrong.
+//   - configDir or scopeDir is a wrong path (StatErrIsWrongPath: does not
+//     exist, a component is not a directory, a symlink loop) or isn't a
+//     directory. A configDir or scopeDir whose stat fails otherwise (e.g.
+//     permission denied) is NOT an error: it is listed in
+//     ScopedTenants.Unreadable ("." for configDir) and holds no tenant
+//     (#2627) — a path that cannot be read, not a path that is wrong.
 //   - scopeDir lies outside configDir (security guard against
 //     `--scope ../etc/passwd`).
 //   - a tenant ID under the scope is defined in two different files
@@ -223,7 +226,14 @@ func scopeEffective(configDir, scopeDir string, wholeTree bool) (*ScopedTenants,
 	absRoot := AbsScanRoot(configDir)
 	info, err := os.Stat(absRoot)
 	if err != nil {
-		return nil, fmt.Errorf("stat configDir %q: %w", absRoot, err)
+		statErr := fmt.Errorf("stat configDir %q: %w", absRoot, err)
+		if StatErrIsWrongPath(err) {
+			return nil, statErr
+		}
+		// A configDir the process may not stat (e.g. under a directory it
+		// may not search) is a path it cannot read, not a wrong one (#2627):
+		// no tenant, the root named in Unreadable (the caller's exit 3).
+		return &ScopedTenants{Unreadable: []UnreadableFile{RootStatUnreadable}, RootListErr: statErr}, nil
 	}
 	if !info.IsDir() {
 		return nil, fmt.Errorf("configDir %q is not a directory", absRoot)
@@ -252,7 +262,7 @@ func scopeEffective(configDir, scopeDir string, wholeTree bool) (*ScopedTenants,
 	// Unreadable entries named (the caller's exit 3), as when one readable
 	// file is beside them (#2588).
 	if wholeTree && !rootUnlistable && len(scan.Files) == 0 && len(scan.Unreadable) == 0 {
-		return nil, fmt.Errorf("no .yaml files found in %s", configDir)
+		return nil, fmt.Errorf("%w in %s", ErrNoYAMLFiles, configDir)
 	}
 
 	// ⛔ The scope is symlink-resolved exactly like the root. Comparing a
@@ -268,7 +278,7 @@ func scopeEffective(configDir, scopeDir string, wholeTree bool) (*ScopedTenants,
 		if !filepath.IsAbs(s) {
 			s = filepath.Join(configDir, s)
 		}
-		absScope = AbsScanRoot(s)
+		absScope = resolveScopePath(s)
 	}
 
 	// Containment check. filepath.Rel produces "../" when scope
@@ -283,11 +293,12 @@ func scopeEffective(configDir, scopeDir string, wholeTree bool) (*ScopedTenants,
 	}
 	// A scope the process may not stat is unreadable, not wrong (#2627): it
 	// goes on with no tenant and is named in Unreadable (the caller's exit 3),
-	// as a scope the walk could not list already is. Only permission denied:
-	// a scope that does not exist stays the caller's error.
+	// as a scope the walk could not list already is. The split is
+	// StatErrIsWrongPath's: a scope that does not exist (or names a file on
+	// the way, or loops) stays the caller's error.
 	var scopeStatDenied bool
 	if scopeInfo, err := os.Stat(absScope); err != nil {
-		if !errors.Is(err, fs.ErrPermission) {
+		if StatErrIsWrongPath(err) {
 			return nil, fmt.Errorf("stat scopeDir %q: %w", absScope, err)
 		}
 		scopeStatDenied = true
@@ -472,6 +483,50 @@ func scopeUnreadable(scan *TreeScan, scopeRel string) []UnreadableFile {
 // list at all (TreeScan.RootWalkErr): the root's own root-relative path "."
 // with UnreadableWalkError — everything under it is lost (#2627).
 var RootUnreadable = UnreadableFile{RelKey: ".", Reason: UnreadableWalkError}
+
+// RootStatUnreadable is the Unreadable entry for a configDir the process may
+// not even stat (e.g. under a directory it may not search): "." with
+// UnreadableStatError (#2627).
+var RootStatUnreadable = UnreadableFile{RelKey: ".", Reason: UnreadableStatError}
+
+// StatErrIsWrongPath is the one split, for a path the caller names
+// (--config-dir, --scope), between "the path is wrong" — the caller's error
+// (exit 2) — and "the path cannot be read" (exit 3, #2627). Wrong: the path
+// does not exist (ENOENT), a component on the way is not a directory
+// (ENOTDIR), or symlinks loop (ELOOP). Every other stat failure (permission
+// denied, EIO, a name too long, …) is a path that cannot be read, as the
+// walker records any stat failure of an entry as UnreadableStatError.
+func StatErrIsWrongPath(err error) bool {
+	return errors.Is(err, fs.ErrNotExist) || errors.Is(err, syscall.ENOTDIR) || errors.Is(err, syscall.ELOOP)
+}
+
+// resolveScopePath is AbsScanRoot for --scope, resolving symlinks as far as
+// the path can be resolved: the longest leading part EvalSymlinks resolves,
+// with the rest joined to it as written. AbsScanRoot falls back to the path
+// as given when resolution fails (e.g. EACCES below a symlink), and the
+// containment check then compares only the spelling: `a -> <outside>/locked`
+// made `--scope a/b` read as an unreadable path inside the tree, while the
+// exporter never follows a directory symlink (#2627). Resolving the leading
+// part puts such a scope outside configDir, as `--scope a` already is. A path
+// that resolves whole is AbsScanRoot's answer.
+func resolveScopePath(s string) string {
+	p := filepath.Clean(s)
+	if abs, err := filepath.Abs(s); err == nil {
+		p = filepath.Clean(abs)
+	}
+	rest := ""
+	for {
+		if r, err := filepath.EvalSymlinks(p); err == nil {
+			return filepath.Join(r, rest)
+		}
+		parent := filepath.Dir(p)
+		if parent == p {
+			return filepath.Join(p, rest)
+		}
+		rest = filepath.Join(filepath.Base(p), rest)
+		p = parent
+	}
+}
 
 // withUnreadable is us plus u, kept sorted by RelKey (the walk's order); u is
 // not added again when us already names its path.

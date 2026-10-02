@@ -77,9 +77,10 @@ Raises (both loaders):
   file is unreadable (or its only entries are sub-directories it cannot
   list) raises `ParseFailedError` from both loaders too (#2627; before,
   `da-guard served-values` refused it with exit 2, "no .yaml files
-  found"), and so does a `conf_d` that cannot be listed at all, named in
-  `unreadable` as `.` (`walk_error`) (#2627; before, exit 2 from all
-  three subcommands). A tree with no config file at all, or a `conf_d`
+  found"), and so does a `conf_d` that cannot be read itself, named in
+  `unreadable` as `.` (`walk_error` when it cannot be listed, `stat_error`
+  when it cannot be stat'ed) (#2627; before, exit 2 from all three
+  subcommands). A tree with no config file at all, or a `conf_d`
   that does not exist, is still exit 2: `ServedValuesError` /
   `EffectiveError`.
 * `DaGuardNotFoundError` — no da-guard binary; the message says how to get one.
