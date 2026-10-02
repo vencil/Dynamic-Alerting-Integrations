@@ -834,3 +834,242 @@ def test_patch_config_apply_sends_one_patch_for_the_colliding_pair(capsys):
     assert _pc_tenants(cluster.data["config.yaml"]) == {
         "8": {"connections": "2", "mem": "50"},
         "010": {"connections": "3", "mem": "5"}}
+
+
+# ── #2216: the remaining tenant-id readers ────────────────────────────
+#
+# Each reader below took PyYAML's YAML 1.1 type for the tenant key, so
+# `010:` came back as 8 (or, in generate_tenant_metadata, as a traceback).
+# One row per reader; the id is asserted as the text written. QUOTED
+# (`'010'`) is the control: it read "010" before and must still.
+
+_ID_SPELLINGS = {"UNQ": "010", "QUOTED": "'010'"}
+_T2216 = "tenants:\n  {id}:\n    mysql_connections: '70'\n"
+_CA2216 = "tenants:\n  {id}:\n    _custom_alerts:\n      - name: x\n"
+_META2216 = ("tenants:\n  {id}:\n    _metadata:\n      domain: db\n"
+             "      environment: prod\n      db_type: postgres\n")
+
+
+def _ids_mapping_rules(d, spell):
+    import generate_tenant_mapping_rules as m
+    _tree(d, {"t.yaml": _T2216.format(id=spell)})
+    return m.collect_tenant_ids_from_config_dir(str(d))
+
+
+def _ids_tenant_metadata(d, spell):
+    import generate_tenant_metadata as m
+    _tree(d, {"t.yaml": _T2216.format(id=spell)})
+    return set(m.build_tenant_metadata(d)["tenant_metadata"])
+
+
+def _ids_backtest(d, spell):
+    import backtest_threshold as m
+    _tree(d, {"t.yaml": _CA2216.format(id=spell)})
+    return set(m.find_custom_alert_tenants(m.load_conf_files([str(d / "t.yaml")])))
+
+
+def _ids_custom_alerts(d, spell):
+    from custom_alerts import loader
+    _tree(d, {"t.yaml": _CA2216.format(id=spell)})
+    triples, _errors = loader.collect_instances(d)
+    return {t[0] for t in triples}
+
+
+def _ids_migrate(d, spell):
+    import migrate_conf_d as m
+    _tree(d, {"t.yaml": _META2216.format(id=spell)})
+    return {a["tenant_id"] for a in m.plan_migration(d)}
+
+
+def _ids_path_metadata(d, spell):
+    import check_path_metadata_consistency as m
+    _tree(d, {"other/prod/t.yaml": _META2216.format(id=spell)})
+    return {x.tenant for x in m.scan(d)}
+
+
+def _ids_retire_drift(d, spell):
+    import check_retire_drift as m
+    _tree(d, {"t.yaml": _META2216.format(id=spell)})
+    return set(m.conf_d_declared_db_type_tenants(d))
+
+
+def _ids_onboard_platform(d, spell):
+    import onboard_platform as m
+    _tree(d, {"am.yml": (
+        "route:\n  receiver: default\n  routes:\n    - receiver: r1\n"
+        f"      match:\n        tenant: {spell}\n"
+        "receivers:\n  - name: default\n  - name: r1\n"
+        "    webhook_configs:\n      - url: http://x\n")})
+    routings, _summary = m.analyze_alertmanager(
+        m.parse_alertmanager_config(str(d / "am.yml")))
+    return set(routings)
+
+
+_READERS_2216 = {
+    "generate_tenant_mapping_rules": _ids_mapping_rules,
+    "generate_tenant_metadata": _ids_tenant_metadata,
+    "backtest_threshold": _ids_backtest,
+    "custom_alerts_loader": _ids_custom_alerts,
+    "migrate_conf_d": _ids_migrate,
+    "check_path_metadata_consistency": _ids_path_metadata,
+    "check_retire_drift": _ids_retire_drift,
+    "onboard_platform": _ids_onboard_platform,
+}
+
+
+@pytest.mark.parametrize("variant", sorted(_ID_SPELLINGS))
+@pytest.mark.parametrize("reader", sorted(_READERS_2216))
+def test_reader_returns_the_tenant_id_as_written(tmp_path, capsys, reader, variant):
+    """Before (#2216): UNQ gave {8} — {"8"} where the reader stringified —
+    and generate_tenant_metadata raised AttributeError on the int."""
+    assert _READERS_2216[reader](tmp_path, _ID_SPELLINGS[variant]) == {"010"}
+
+
+@pytest.mark.parametrize("variant", sorted(_ID_SPELLINGS))
+def test_threshold_govern_finds_the_tenant_as_written(variant):
+    """Before: UNQ answered "tenant '010' vanished from config after edit"
+    for an edit that changed only the expected key."""
+    import threshold_govern as tg
+    old = _T2216.format(id=_ID_SPELLINGS[variant])
+    new = old.replace("'70'", "'45'")
+    assert tg.verify_only_changed(old, new, "010",
+                                  {"mysql_connections": '"45"'}) is None
+    # Control: the gate still refuses a change it was not told about.
+    assert tg.verify_only_changed(old, new, "010", {}) is not None
+
+
+@pytest.mark.parametrize("variant", sorted(_ID_SPELLINGS))
+def test_offboard_precheck_sees_the_tenant_as_written(tmp_path, capsys, variant):
+    """Before: UNQ found 0 metrics for tenant 010 and no reference to it in
+    the platform file, because both held the key 8."""
+    import offboard_tenant as ot
+    spell = _ID_SPELLINGS[variant]
+    _tree(tmp_path, {"010.yaml": _T2216.format(id=spell),
+                     "_platform.yaml": _T2216.format(id=spell),
+                     "other.yaml": _T2216.format(id="acme")})
+    configs = ot.load_all_configs(str(tmp_path))
+    assert ot.get_tenant_metrics("010", configs) == {"mysql_connections": "70"}
+    assert ot.check_cross_references("010", configs) == ["_platform.yaml"]
+
+
+@pytest.mark.parametrize("variant", sorted(_ID_SPELLINGS))
+def test_md_yaml_drift_judges_each_tenant_body(tmp_path, capsys, variant):
+    """`010:` and `8:` in one documented block are two tenants to the
+    exporter. Before, PyYAML folded them into one key 8 (last wins), so the
+    invalid `010` body was never judged: rc 0, 0 violations."""
+    import check_md_yaml_drift as m
+    _tree(tmp_path, {"docs/x.md": (
+        "# x\n\n```yaml\ntenants:\n  " + _ID_SPELLINGS[variant] + ":\n"
+        "    _routing:\n      receiver:\n        type: webhook\n"
+        "        bogus_key: 1\n  8:\n    mysql_connections: '70'\n```\n")})
+    shutil.copytree(REPO_ROOT / "docs" / "schemas", tmp_path / "docs" / "schemas")
+    rc = m.MdYamlDriftChecker(str(tmp_path)).run()
+    out = capsys.readouterr().out
+    assert rc == 1, out
+    assert out.count("[SCHEMA]") == 1, out
+
+
+def test_load_all_exporter_keys_reads_every_document_as_text():
+    src = "tenants:\n  010: {}\n---\n---\na: 1\n"
+    assert _lib_yaml_keys.load_all_exporter_keys(src) == [
+        {"tenants": {"010": {}}}, None, {"a": 1}]
+    assert _lib_yaml_keys.load_all_exporter_keys("") == []
+    # Not strict, like the single-document entry: the last value is kept.
+    assert _lib_yaml_keys.load_all_exporter_keys("a: 1\na: 2\n") == [{"a": 2}]
+    # The opt-ins reach every document; without them values keep their type.
+    two = "instance: 010\n---\ninstance: yes\nn: 010\n"
+    assert _lib_yaml_keys.load_all_exporter_keys(
+        two, raw_text_scalars=("instance",)) == [
+            {"instance": "010"}, {"instance": "yes", "n": 8}]
+    assert _lib_yaml_keys.load_all_exporter_keys(two)[0] == {"instance": 8}
+
+
+# ── #2216: tenant ids written as VALUES ──────────────────────────────
+
+
+def _ids_mapping_file(d, spell):
+    import generate_tenant_mapping_rules as m
+    _tree(d, {"_instance_mapping.yaml": (
+        f"instance_tenant_mapping:\n  i1:\n    - tenant: {spell}\n"
+        "      filter: x\n")})
+    return {e.tenant for im in m.parse_mapping_file(str(d / "_instance_mapping.yaml"))
+            for e in im.entries}
+
+
+def _ids_custom_groups(d, spell):
+    import generate_tenant_metadata as m
+    _tree(d, {"_groups.yaml": f"groups:\n  g1:\n    members: [{spell}]\n"})
+    return set(m._load_custom_groups(d)["g1"]["members"])
+
+
+def _ids_retire_namespaces(d, spell):
+    import check_retire_drift as m
+    _tree(d, {"ns.yaml": ("apiVersion: v1\nkind: Namespace\nmetadata:\n"
+                          f"  name: db-x\n  labels:\n    instance: {spell}\n")})
+    return m.namespace_declared_targets(d / "ns.yaml")
+
+
+_VALUE_READERS_2216 = {
+    "mapping_file_tenant": _ids_mapping_file,
+    "groups_members": _ids_custom_groups,
+    "retire_drift_namespace_instance": _ids_retire_namespaces,
+}
+
+
+@pytest.mark.parametrize("variant", sorted(_ID_SPELLINGS))
+@pytest.mark.parametrize("reader", sorted(_VALUE_READERS_2216))
+def test_value_reader_returns_the_tenant_id_as_written(tmp_path, capsys, reader, variant):
+    """Before (#2216): UNQ gave {8} / {"8"}, and parse_mapping_file raised
+    AttributeError (`.strip()` on the int)."""
+    assert _VALUE_READERS_2216[reader](tmp_path, _ID_SPELLINGS[variant]) == {"010"}
+
+
+@pytest.mark.parametrize("variant", sorted(_ID_SPELLINGS))
+@pytest.mark.parametrize("fname,body", [
+    ("_policy.yaml", "policies:\n  - name: p\n    exclude_tenants: [{id}]\n"),
+    ("_domain_policy.yaml", "domains:\n  d1:\n    tenants: [{id}]\n"),
+    ("_groups.yaml", "groups:\n  g1:\n    members: [{id}]\n"),
+], ids=["exclude_tenants", "domain_tenants", "groups_members"])
+def test_offboard_finds_a_reference_written_as_a_list_value(
+        tmp_path, capsys, variant, fname, body):
+    """Before: UNQ `[010]` was read as [8], so the reference was not found."""
+    import offboard_tenant as ot
+    spell = _ID_SPELLINGS[variant]
+    _tree(tmp_path, {"010.yaml": _T2216.format(id=spell),
+                     fname: body.format(id=spell)})
+    configs = ot.load_all_configs(str(tmp_path))
+    assert ot.check_cross_references("010", configs) == [fname]
+
+
+_AM_ROUTES_2216 = (
+    "route:\n  receiver: default\n  routes:\n    - receiver: r1\n"
+    "      match:\n        {label}: {id}\n"
+    "receivers:\n  - name: default\n  - name: r1\n"
+    "    webhook_configs:\n      - url: http://x\n")
+
+
+def _am_configmap(body: str) -> str:
+    indented = "".join("    " + ln + "\n" for ln in body.splitlines())
+    return ("apiVersion: v1\nkind: ConfigMap\nmetadata:\n  name: am\n"
+            "data:\n  alertmanager.yml: |\n" + indented)
+
+
+@pytest.mark.parametrize("variant", sorted(_ID_SPELLINGS))
+@pytest.mark.parametrize("label", ["tenant", "team"])
+@pytest.mark.parametrize("wrapped", [False, True], ids=["raw", "configmap"])
+def test_onboard_platform_cli_reads_the_tenant_label_value_as_written(
+        tmp_path, variant, label, wrapped):
+    """End to end through main(): the ConfigMap-wrapped body and a custom
+    ``--tenant-label`` both reach the text read. Before (#2216) UNQ gave
+    tenant "8" on every row; a wrapped body or a label main() does not pass
+    on would bring it back."""
+    body = _AM_ROUTES_2216.format(label=label, id=_ID_SPELLINGS[variant])
+    cfg = _tree(tmp_path, {"am.yaml": _am_configmap(body) if wrapped else body})
+    p = subprocess.run(
+        [sys.executable, str(TOOLS / "ops" / "onboard_platform.py"),
+         "--alertmanager-config", str(cfg / "am.yaml"),
+         "--tenant-label", label, "--dry-run", "--json"],
+        capture_output=True, text=True, encoding="utf-8", errors="replace",
+        timeout=60)
+    assert p.returncode == 0, p.stderr[-2000:]
+    assert json.loads(p.stdout)["phases"]["phase1"]["tenants"] == ["010"], p.stdout

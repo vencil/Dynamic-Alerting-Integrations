@@ -45,6 +45,7 @@ _THIS_DIR = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, _THIS_DIR)  # Docker flat layout
 sys.path.insert(0, os.path.join(_THIS_DIR, ".."))  # Repo subdir layout
 from _lib_exitcodes import EXIT_OK  # noqa: E402
+from _lib_yaml_keys import load_exporter_keys  # noqa: E402  (#2216 tenant id as text)
 from _lib_confd import (  # noqa: E402  (#1588 shared name predicates)
     has_yaml_extension,
     is_dir_symlink,
@@ -199,7 +200,9 @@ def scan_file(
     except OSError:
         return []
     try:
-        data = yaml.safe_load(raw)
+        # #2216: tenant ids are the keys' source text, as the exporter reads
+        # them — `010:` is tenant "010", not 8.
+        data = load_exporter_keys(raw)
     except yaml.YAMLError:
         # Malformed YAML is another tool's problem — we don't block on it.
         return []

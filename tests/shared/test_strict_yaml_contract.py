@@ -68,7 +68,8 @@ _YAML_LENIENT = {"safe_load", "safe_load_all", "load", "load_all", "full_load",
 # (`strict_load_exporter_keys`, `strict_load_all_exporter_keys`,
 # `load_yaml_file_strict_exporter_keys`) are not.
 _LENIENT_ANY = {"load_yaml_file", "load_exporter_keys",
-                "load_first_document_exporter_keys", "load_yaml_file_exporter_keys"}
+                "load_first_document_exporter_keys", "load_all_exporter_keys",
+                "load_yaml_file_exporter_keys"}
 
 LENIENT_BY_DESIGN: dict[str, str] = {
     "_lib_confd.py":

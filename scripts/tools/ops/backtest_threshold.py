@@ -54,6 +54,7 @@ from _lib_io import safe_label  # noqa: E402  (#1538 output-layer escaping)
 # #2231: a conf.d file holding a key twice is one the exporter drops whole;
 # strict reads raise YamlFileError for it, the path bad syntax already takes.
 from _lib_io import load_yaml_file_strict, strict_safe_load  # noqa: E402
+from _lib_io import load_yaml_file_strict_exporter_keys  # noqa: E402  (#2216)
 from _lib_exitcodes import EXIT_OK, EXIT_VIOLATION, EXIT_CALLER_ERROR  # noqa: E402
 from _lib_confd import (  # noqa: E402
     config_stem,
@@ -674,7 +675,9 @@ def load_conf_files(paths):
         # The caller's own spelling, not `str(path)`: on Windows that turns
         # the `conf.d/x.yaml` git reported into `conf.d\x.yaml`, and an
         # unreadable file is then named in a form nobody typed (#2558).
-        data = load_yaml_file_strict(os.fspath(p), default={})
+        # #2216: tenant ids are the keys' source text, as the exporter reads
+        # them — `find_custom_alert_tenants` reports `010:` as "010", not 8.
+        data = load_yaml_file_strict_exporter_keys(os.fspath(p), default={})
         if isinstance(data, dict):
             parsed[path.stem] = data
     return parsed
