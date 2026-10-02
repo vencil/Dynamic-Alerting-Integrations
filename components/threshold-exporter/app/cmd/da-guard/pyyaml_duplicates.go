@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"path"
 	"path/filepath"
 	"sort"
 
@@ -22,10 +23,14 @@ import (
 // drops a file it cannot decode.
 //
 // Files: the tenant files that declared in-scope tenants, the defaults
-// carriers bearing on the scope, and the root platform files. Not the root
-// `_domain_policy` / `_routing_profiles` files: routingpolicy.LoadRoot
-// names one it cannot parse as a Problem, a repeated key of either kind
-// included (routingpolicy.ReportsUnusable), as it always has.
+// carriers bearing on the scope, the root platform files and the other `_`
+// files below the root bearing on the scope (#2439: the exporter reads
+// none of those, so its decode no longer rejects them for us). Not the root
+// `_domain_policy` / `_routing_profiles` files, nor a nested
+// `_domain_policy`: the routing loader names one it cannot parse as a
+// Problem, a repeated key included (routingpolicy.ReportsUnusable). A
+// nested `_routing_profiles` stays here: its Problem is only a warning,
+// and before #2439 the exporter's decode made its repeated key exit 3.
 //
 // Each file found is named on errOut with the key, since the report's
 // parse-failure block is worded for the exporter's decode.
@@ -63,6 +68,11 @@ func withGeneratorDuplicates(configDir string, scoped *config.ScopedTenants, err
 			if !routingpolicy.ReportsUnusable(f.Name) {
 				check(f.Name, f.Data)
 			}
+		}
+	}
+	for _, f := range scoped.NestedPlatformFiles {
+		if !routingpolicy.IsDomainPolicyFile(path.Base(f.Name)) {
+			check(f.Name, f.Data)
 		}
 	}
 	if len(dup) == 0 {
