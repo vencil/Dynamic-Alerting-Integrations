@@ -17,6 +17,13 @@ package gitops
 // the predicate da-guard uses, over the body's own `_routing` only (never a
 // value inherited from `_routing_defaults` or a routing profile).
 //
+// #2503: likewise a `group_by` element the body writes (main route,
+// `overrides[i]`, `routes[i]`) that is not a string as PyYAML reads it
+// (`8`, `on`), is empty, repeats a label or is `...` beside other labels:
+// routingpolicy.GroupByInvalid, da-guard's routing_group_by_invalid. A batch
+// patch cannot write a group_by (its values are scalars, and a scalar over
+// the structured `_routing` is refused), so batch has nothing to judge.
+//
 // ⛔ NOT IN validateBodyOnly, AND NOT IN THE WRITER'S write(). Both also serve
 // writes that change only another part of the tenant file: a batch op's
 // MERGED document (readMergeBodyOnly) and the custom-alerts PUT (write() via
@@ -35,8 +42,9 @@ import (
 	"gopkg.in/yaml.v3"
 )
 
-// ReceiverViolation is one receiver problem, or one matcher value that is
-// not a string (#2431): Field is the document path
+// ReceiverViolation is one receiver problem, one matcher value that is
+// not a string (#2431), or one bad group_by element (#2503): Field is the
+// document path
 // (`tenants.<id>._routing.receiver.url`, `tenants.<id>._routing.routes[0].
 // match.team`), Reason the receiverspec / routingpolicy message.
 type ReceiverViolation struct {
@@ -156,6 +164,10 @@ func receiverViolations(tenantID, yamlContent string) []ReceiverViolation {
 	}
 	for _, v := range routingpolicy.ValuesNotString(routing) {
 		out = append(out, ReceiverViolation{Field: base + "." + v.Field, Reason: v.Message()})
+	}
+	// #2503: after `{{tenant}}` substitution, as the generator renders it.
+	for _, p := range routingpolicy.GroupByInvalidForTenant(tenantID, routing) {
+		out = append(out, ReceiverViolation{Field: base + "." + p.Field, Reason: p.Message()})
 	}
 	return out
 }

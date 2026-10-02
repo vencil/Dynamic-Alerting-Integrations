@@ -671,7 +671,10 @@ def load_conf_files(paths):
         if (path.name.startswith("_") or is_hidden_name(path.name)
                 or not path.is_file()):
             continue
-        data = load_yaml_file_strict(str(path), default={})
+        # The caller's own spelling, not `str(path)`: on Windows that turns
+        # the `conf.d/x.yaml` git reported into `conf.d\x.yaml`, and an
+        # unreadable file is then named in a form nobody typed (#2558).
+        data = load_yaml_file_strict(os.fspath(p), default={})
         if isinstance(data, dict):
             parsed[path.stem] = data
     return parsed

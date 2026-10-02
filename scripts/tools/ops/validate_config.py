@@ -208,14 +208,16 @@ READ_ERRORS_FIRST = ("-> Fix the read errors above FIRST — this check's "
                      "findings may be artefacts of the files it could not "
                      "read.")
 # #2431: under --strict the same ERROR prefix also carries a routing matcher
-# value that is not a string, so the advice names both kinds.
+# value that is not a string, and (#2503) a bad group_by entry, so the
+# advice names every kind.
 POLICY_ONLY_SCHEMA_HINT = (
     "The findings above are --strict errors (ADR-007 domain-policy errors, "
-    "or a routing matcher value that is not a string), not tenant key "
-    "problems: no unknown key was reported in this run. \u26d4 Ignore the "
-    "generic advice about removing keys: fix what each error names (the "
-    "domain policy file, or quote the matcher value in YAML, e.g. "
-    "team: \"yes\"), then re-run.")
+    "a routing matcher value that is not a string, or a bad group_by "
+    "entry), not tenant key problems: no unknown key was reported in this "
+    "run. \u26d4 Ignore the generic advice about removing keys: fix what "
+    "each error names (the domain policy file, quote the matcher value in "
+    "YAML, e.g. team: \"yes\", or quote / remove the group_by entry), then "
+    "re-run.")
 SKIPPED_ENTRY_SCHEMA_HINT = (
     "A line above ends in 'skipping': that setting was dropped as unusable, "
     "not merely flagged. Fix the value it names — e.g. "

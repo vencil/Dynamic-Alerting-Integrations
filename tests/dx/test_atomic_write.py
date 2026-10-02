@@ -29,7 +29,7 @@ from pathlib import Path
 from unittest import mock
 
 import pytest
-from _platform_fs import symlink_or_skip  # noqa: E402
+from _platform_fs import require_os_attrs, symlink_or_skip  # noqa: E402
 
 _REPO_ROOT = Path(__file__).resolve().parents[2]
 _SCRIPT = _REPO_ROOT / "scripts" / "tools" / "dx" / "_atomic_write.py"
@@ -461,6 +461,7 @@ class TestChmodAfterAnInPlaceWrite:
 
     def test_eperm_with_the_mode_already_right_is_silent_about_the_mode(
             self, mod, target, monkeypatch, capsys):
+        require_os_attrs("geteuid")
         _hard_link_forces_in_place(target)
         os.chmod(target, 0o644)
         _chmod_refused_for(monkeypatch, target, errno.EPERM)
@@ -478,6 +479,7 @@ class TestChmodAfterAnInPlaceWrite:
 def test_an_owner_that_cannot_be_restored_goes_in_place_with_a_warn(mod, target, monkeypatch,
                                                                      capsys):
     """N2: the fchown fallback WARNs, as the module docstring says."""
+    require_os_attrs("geteuid")
     st = os.stat(target)
     monkeypatch.setattr(os, "geteuid", lambda: st.st_uid + 1)
 
@@ -605,6 +607,7 @@ def test_an_xattr_the_replacement_would_drop_is_kept_in_place(mod, target, capsy
 def test_ima_and_evm_are_not_compared(mod, target, monkeypatch):
     """Kernel-maintained values differ on every new inode; comparing them
     would send every write in place on an IMA/EVM host."""
+    require_os_attrs("listxattr", "getxattr")
     real_list, real_get = os.listxattr, os.getxattr
 
     def listxattr(ref, *a, **k):

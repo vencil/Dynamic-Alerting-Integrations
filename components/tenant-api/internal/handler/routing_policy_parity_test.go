@@ -7,9 +7,10 @@ package handler
 //   - put: PUT of the tenant's own file (files[<tenant>.yaml]) verbatim over
 //     the tree's other files, policy loaded from the tree by
 //     policy.NewManager — "403" = refused with POLICY_VIOLATION and nothing
-//     written, "400" = refused with INVALID_BODY (a receiver, #2295, or a
-//     matcher value the body writes that is not a YAML string, #2431) and
-//     nothing written, "ok" = 200 and written.
+//     written, "400" = refused with INVALID_BODY (a receiver, #2295, a
+//     matcher value the body writes that is not a YAML string, #2431, or a
+//     bad group_by element the body writes, #2503) and nothing written,
+//     "ok" = 200 and written.
 //   - batch: the patch as one op through executeBatchOps (direct mode) over
 //     the whole tree — "policy_violation" = the op is refused for domain
 //     policy, "ok" = it is not.
@@ -51,6 +52,7 @@ type tenantAPIParityTree struct {
 		Policy         json.RawMessage      `json:"policy"`
 		RejectedRoutes json.RawMessage      `json:"rejected_routes"`
 		NotString      json.RawMessage      `json:"values_not_string"`
+		GroupByInvalid json.RawMessage      `json:"group_by_invalid"`
 		UnknownProfile json.RawMessage      `json:"unknown_profile"`
 		TenantAPI      *tenantAPIParityCell `json:"tenant_api"`
 		PythonDiffers  json.RawMessage      `json:"python_differs"`
@@ -59,6 +61,9 @@ type tenantAPIParityTree struct {
 			Leaks   []string `json:"leaks"`
 		} `json:"escalation"`
 	} `json:"expect"`
+	// EnforcedGroupBy (#2503) is the platform's `_routing_enforced`, which a
+	// tenant PUT cannot write: not judged here.
+	EnforcedGroupBy json.RawMessage `json:"enforced_group_by_invalid"`
 }
 
 func loadTenantAPIParityMatrix(t *testing.T) []tenantAPIParityTree {

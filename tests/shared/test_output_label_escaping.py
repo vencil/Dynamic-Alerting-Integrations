@@ -74,6 +74,7 @@ import sys
 from pathlib import Path
 
 import pytest
+from _platform_fs import require_file_name  # noqa: E402
 
 # #2115: blind_spot_discovery 與 analyze_rule_pack_gaps（目錄模式）的值來自
 # `da-guard served-values`；子行程經 `$DA_GUARD_BINARY` 找到本 repo 建出的 da-guard。
@@ -164,6 +165,7 @@ def _write_hostile_tree(root: Path, *, malformed: bool) -> None:
       report renderers. Necessary because a malformed body makes several tools
       raise before they print anything, which HIDES their happy-path sites.
     """
+    require_file_name(f"evil\n{FN_MARK}\nx.yaml".encode())
     root.mkdir(parents=True, exist_ok=True)
     body = "tenants:\n  {name}:\n    a: [1, 2\n" if malformed else \
            "tenants:\n  {name}:\n    pg_connections: 90\n"

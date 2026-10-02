@@ -163,6 +163,25 @@ func TestPutTenant_ReceiverShape(t *testing.T) {
 			[]string{"tenants.rs-t._routing.overrides[0].alertname", "tenants.rs-t._routing.overrides[1].metric_group"}},
 		{"override alertname quoted yes", webhookOK + "      overrides:\n      - alertname: \"yes\"\n" +
 			"        receiver: {type: webhook, url: https://hook.example.com/b}\n", nil},
+		// #2503: a group_by element the body writes that is not a string
+		// as PyYAML reads it (plain on / 8), empty, repeated or `...` beside
+		// other labels is refused the same way; quoted, it is taken.
+		{"group_by plain on and 8", webhookOK + "      group_by: [alertname, on, 8]\n",
+			[]string{"tenants.rs-t._routing.group_by[1]", "tenants.rs-t._routing.group_by[2]"}},
+		{"group_by quoted on and 8", webhookOK + "      group_by: [alertname, 'on', \"8\"]\n", nil},
+		{"override and routes group_by repeat / wildcard", webhookOK + "      overrides:\n      - alertname: X\n" +
+			"        group_by: [alertname, alertname]\n        receiver: {type: webhook, url: https://hook.example.com/b}\n" +
+			"      routes:\n      - match: {team: db}\n        group_by: [alertname, '...']\n" +
+			"        receiver: {type: webhook, url: https://hook.example.com/c}\n",
+			[]string{"tenants.rs-t._routing.overrides[0].group_by[1]", "tenants.rs-t._routing.routes[0].group_by[1]"}},
+		{"group_by wildcard alone", webhookOK + "      group_by: ['...']\n", nil},
+		// #2503 round 3 N2: judged after `{{tenant}}` substitution, as the
+		// generator renders it — here it repeats the tenant id listed before.
+		{"group_by {{tenant}} repeats the tenant id", webhookOK + "      group_by: [rs-t, \"{{tenant}}\"]\n" +
+			"      overrides:\n      - alertname: X\n        group_by: [\"{{tenant}}\", rs-t]\n" +
+			"        receiver: {type: webhook, url: https://hook.example.com/b}\n",
+			[]string{"tenants.rs-t._routing.group_by[1]", "tenants.rs-t._routing.overrides[0].group_by[1]"}},
+		{"group_by {{tenant}} alone", webhookOK + "      group_by: [alertname, \"{{tenant}}\"]\n", nil},
 		{"every receiver of the body, one violation each", "      receiver:\n        type: bogus\n" +
 			"      overrides:\n      - alertname: X\n        receiver: {type: webhook}\n" +
 			"      routes:\n      - match: {severity: critical}\n        receiver: {type: pagerduty, service_key: a, routing_key: b}\n",

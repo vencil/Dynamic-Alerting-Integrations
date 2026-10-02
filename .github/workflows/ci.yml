@@ -1070,7 +1070,8 @@ jobs:
             tar -xzf "$DL/pint-${PINT}.tar.gz" -C /tmp
             # the tarball ships the binary as `pint-linux-amd64`, not `pint`.
             sudo install -m0755 /tmp/pint-linux-amd64 /usr/local/bin/pint
-            pint --version
+            # pint reports its version via a subcommand; `--version` is not a flag.
+            pint version
           else
             echo "::warning::pint binary unavailable/unverified; check_pint.py uses the Docker fallback"
           fi
