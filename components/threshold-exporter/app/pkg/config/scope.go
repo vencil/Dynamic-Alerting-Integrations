@@ -53,14 +53,12 @@ package config
 import (
 	"errors"
 	"fmt"
-	"io/fs"
 	"log"
 	"os"
 	"path"
 	"path/filepath"
 	"sort"
 	"strings"
-	"syscall"
 
 	"github.com/vencil/threshold-exporter/internal/confdname"
 )
@@ -488,17 +486,6 @@ var RootUnreadable = UnreadableFile{RelKey: ".", Reason: UnreadableWalkError}
 // not even stat (e.g. under a directory it may not search): "." with
 // UnreadableStatError (#2627).
 var RootStatUnreadable = UnreadableFile{RelKey: ".", Reason: UnreadableStatError}
-
-// StatErrIsWrongPath is the one split, for a path the caller names
-// (--config-dir, --scope), between "the path is wrong" — the caller's error
-// (exit 2) — and "the path cannot be read" (exit 3, #2627). Wrong: the path
-// does not exist (ENOENT), a component on the way is not a directory
-// (ENOTDIR), or symlinks loop (ELOOP). Every other stat failure (permission
-// denied, EIO, a name too long, …) is a path that cannot be read, as the
-// walker records any stat failure of an entry as UnreadableStatError.
-func StatErrIsWrongPath(err error) bool {
-	return errors.Is(err, fs.ErrNotExist) || errors.Is(err, syscall.ENOTDIR) || errors.Is(err, syscall.ELOOP)
-}
 
 // resolveScopePath is AbsScanRoot for --scope, resolving symlinks as far as
 // the path can be resolved: the longest leading part EvalSymlinks resolves,

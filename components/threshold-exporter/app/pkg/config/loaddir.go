@@ -123,7 +123,12 @@ func LoadDirReport(dir string, logger *log.Logger) (cfg *ThresholdConfig, rep Lo
 		return nil, LoadReport{Unreadable: []UnreadableFile{RootStatUnreadable}, RootListErr: statErr},
 			fmt.Errorf("%w: %w", statErr, ErrNoYAMLFiles)
 	}
-	scan, err := ScanDirTree(dir, nil, nil, withoutRootWalkWarn(logger, absRoot))
+	scanLogger, rootWarn := withRootWalkWarnHeld(logger, absRoot)
+	scan, err := ScanDirTree(dir, nil, nil, scanLogger)
+	// The root's walk WARN is dropped only when RootListErr carries it below
+	// (the caller prints that); otherwise — e.g. the root's listing failed
+	// part-way, so the walk kept files — it is logged as the walker wrote it.
+	rootWarn.release(err == nil && len(scan.Files) == 0 && scan.RootWalkErr != nil)
 	if err != nil {
 		return nil, LoadReport{}, err
 	}
@@ -153,30 +158,48 @@ func LoadDirReport(dir string, logger *log.Logger) (cfg *ThresholdConfig, rep Lo
 	return &built.Config, rep, nil
 }
 
-// withoutRootWalkWarn is logger without the walker's WARN for the root
-// directory itself (`WARN: walk error at <absRoot>: …`): LoadDirReport
-// returns that failure as RootListErr, so the caller would print the same
-// reason twice (#2627). Every other line goes to logger unchanged, through
-// its own prefix and flags.
-func withoutRootWalkWarn(logger *log.Logger, absRoot string) *log.Logger {
+// withRootWalkWarnHeld is logger with the walker's WARN for the root
+// directory itself (`WARN: walk error at <absRoot>: …`) held back until the
+// caller knows whether RootListErr will carry the same reason (#2627): the
+// returned filter's release(true) drops it (the caller prints RootListErr),
+// release(false) logs it — after the walk's other lines. Every other line
+// goes to logger at once, unchanged, through its own prefix and flags.
+func withRootWalkWarnHeld(logger *log.Logger, absRoot string) (*log.Logger, *rootWarnFilter) {
+	f := &rootWarnFilter{dst: logger, hold: "WARN: walk error at " + absRoot + ": "}
 	if logger == discardLogger {
-		return logger
+		return logger, f
 	}
-	return log.New(rootWarnFilter{dst: logger, drop: "WARN: walk error at " + absRoot + ": "}, "", 0)
+	return log.New(f, "", 0), f
 }
 
+// rootWarnFilter is withRootWalkWarnHeld's writer.
 type rootWarnFilter struct {
 	dst  *log.Logger
-	drop string
+	hold string
+	held []string
 }
 
-func (f rootWarnFilter) Write(p []byte) (int, error) {
-	if !strings.HasPrefix(string(p), f.drop) {
-		if err := f.dst.Output(2, strings.TrimSuffix(string(p), "\n")); err != nil {
-			return 0, err
-		}
+func (f *rootWarnFilter) Write(p []byte) (int, error) {
+	line := strings.TrimSuffix(string(p), "\n")
+	if strings.HasPrefix(line, f.hold) {
+		f.held = append(f.held, line)
+		return len(p), nil
+	}
+	if err := f.dst.Output(2, line); err != nil {
+		return 0, err
 	}
 	return len(p), nil
+}
+
+// release ends the hold: drop discards the held lines (the reason is
+// reported another way), otherwise they are logged.
+func (f *rootWarnFilter) release(drop bool) {
+	if !drop {
+		for _, line := range f.held {
+			_ = f.dst.Output(2, line)
+		}
+	}
+	f.held = nil
 }
 
 // loadDirBuild is LoadDir's build step over a scan it already has: the

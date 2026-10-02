@@ -227,3 +227,56 @@ func TestScopeThroughSymlink_OutsideStaysOutside(t *testing.T) {
 		}
 	}
 }
+
+// Windows never returns ENOTDIR or ELOOP from stat; its malformed-path codes
+// are the wrong-path set there (stat_classify.go). Tested here on any
+// platform through the pure classifier.
+func TestStatErrIsWrongPath_WindowsErrnos(t *testing.T) {
+	t.Parallel()
+	pathErr := func(e syscall.Errno) error { return &fs.PathError{Op: "stat", Path: "p", Err: e} }
+	for _, c := range []struct {
+		name  string
+		errno syscall.Errno
+		wrong bool
+	}{
+		{"ERROR_INVALID_NAME", 123, true},
+		{"ERROR_BAD_PATHNAME", 161, true},
+		{"ERROR_DIRECTORY", 267, true},
+		{"ERROR_CANT_RESOLVE_FILENAME", 1921, true},
+		{"ERROR_ACCESS_DENIED", 5, false},
+		{"ERROR_SHARING_VIOLATION", 32, false},
+		{"ENOTDIR is not Windows' code", syscall.ENOTDIR, false},
+	} {
+		if got := statErrIsWrongPath(pathErr(c.errno), windowsWrongPathErrnos); got != c.wrong {
+			t.Errorf("%s (%d): wrong path = %v, want %v", c.name, c.errno, got, c.wrong)
+		}
+	}
+	if !statErrIsWrongPath(fs.ErrNotExist, windowsWrongPathErrnos) {
+		t.Error("fs.ErrNotExist is a wrong path on every platform")
+	}
+}
+
+// The root's walk WARN is dropped only when the caller reports the same
+// reason (RootListErr); otherwise it is logged, through the caller's logger
+// (prefix and flags), after the walk's other lines (#2627 review).
+func TestRootWarnFilter_DropsOnlyWhenReported(t *testing.T) {
+	t.Parallel()
+	for _, reported := range []bool{true, false} {
+		var buf bytes.Buffer
+		lg, f := withRootWalkWarnHeld(log.New(&buf, "P ", 0), "/r")
+		lg.Printf("WARN: walk error at /r: boom")
+		lg.Printf("WARN: walk error at /r/sub: other")
+		f.release(reported)
+		want := "P WARN: walk error at /r/sub: other\n"
+		if !reported {
+			want += "P WARN: walk error at /r: boom\n"
+		}
+		if buf.String() != want {
+			t.Errorf("reported=%v: logged %q, want %q", reported, buf.String(), want)
+		}
+	}
+	// The discard logger needs no filter; release is still safe.
+	lg, f := withRootWalkWarnHeld(discardLogger, "/r")
+	lg.Printf("WARN: walk error at /r: boom")
+	f.release(false)
+}
