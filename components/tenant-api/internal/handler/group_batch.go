@@ -18,8 +18,15 @@ import (
 // Applies a patch to all members of the specified group.
 type GroupBatchRequest struct {
 	// key → value to set on every member (e.g., "_silent_mode": "warning");
-	// at most 1000 entries.
+	// at most 1000 entries. May be omitted when unset names a key: patch and
+	// unset must not both be empty.
 	Patch map[string]string `json:"patch" validate:"max=1000"`
+	// keys to remove from every member's config block; at most 1000 entries. Only "_routing" is
+	// accepted: removing it resets the member to `_routing_defaults` and its routing profile,
+	// which turns routing back on for a member a disabling `_routing` turned off (the change is
+	// judged by domain policy like a `_routing` patch). A key the member does not carry is a
+	// no-op. A key must not appear twice, nor in both patch and unset.
+	Unset []string `json:"unset,omitempty" validate:"max=1000"`
 }
 
 // GroupBatchResponse is the response for POST /api/v1/groups/{id}/batch.
@@ -56,6 +63,7 @@ type GroupBatchResponse struct {
 // @Summary     Batch operation on group members
 // @Description Apply a patch to all tenants in a group, through the same pipeline as POST /api/v1/tenants/batch
 // @Description (one operation per member): patch values are range-checked (400), and each member is checked for write permission and domain policy.
+// @Description unset removes keys from every member (only "_routing"): unset ["_routing"] turns routing back on for members a disabling _routing turned off, judged by domain policy.
 // @Description PR write-back mode: the whole group becomes one PR/MR (status pending_review, pr_url, pr_number); nothing is committed to the base branch.
 // @Description PR write-back mode ignores ?async=true and answers 200 synchronously, as POST /api/v1/tenants/batch does.
 // @Description Direct mode: a member whose config file cannot be loaded as a tenant config (config_error malformed_yaml | invalid_config)
@@ -117,10 +125,6 @@ func GroupBatch(d *Deps) http.HandlerFunc {
 			WriteJSONError(w, r, http.StatusBadRequest, "invalid JSON: "+err.Error())
 			return
 		}
-		if len(req.Patch) == 0 {
-			WriteJSONError(w, r, http.StatusBadRequest, "patch must not be empty")
-			return
-		}
 		// #1722: the byte cap above does NOT bound the key count, and this is the
 		// endpoint where that matters most — mergePatchYAML is quadratic in
 		// len(patch), runs inside the single-writer token, and here it runs once
@@ -129,9 +133,10 @@ func GroupBatch(d *Deps) http.HandlerFunc {
 		// value, not two; it is enforced HERE because the per-member
 		// BatchOperations are built in Go and never pass through JSON-decode
 		// validation. #2339: the patch values get the same range check as
-		// /tenants/batch.
+		// /tenants/batch. B2: so do the unset keys, and an empty patch is
+		// refused here (INVALID_BODY) unless unset names a key.
 		violations := ValidateStructTags(&req)
-		violations = append(violations, validatePatchMap(req.Patch, "patch")...)
+		violations = append(violations, validateBatchEdit(req.Patch, req.Unset, "")...)
 		if len(violations) > 0 {
 			WriteValidationErrors(w, r, violations)
 			return
@@ -150,7 +155,7 @@ func GroupBatch(d *Deps) http.HandlerFunc {
 		// such ops in a /tenants/batch body would.
 		ops := make([]BatchOperation, len(g.Members))
 		for i, member := range g.Members {
-			ops[i] = BatchOperation{TenantID: member, Patch: req.Patch}
+			ops[i] = BatchOperation{TenantID: member, Patch: req.Patch, Unset: req.Unset}
 		}
 
 		taskID := fmt.Sprintf("group-batch-%s-%s",

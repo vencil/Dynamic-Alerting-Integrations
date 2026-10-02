@@ -668,7 +668,7 @@ const docTemplate = `{
         },
         "/api/v1/groups/{id}/batch": {
             "post": {
-                "description": "Apply a patch to all tenants in a group, through the same pipeline as POST /api/v1/tenants/batch\n(one operation per member): patch values are range-checked (400), and each member is checked for write permission and domain policy.\nPR write-back mode: the whole group becomes one PR/MR (status pending_review, pr_url, pr_number); nothing is committed to the base branch.\nPR write-back mode ignores ?async=true and answers 200 synchronously, as POST /api/v1/tenants/batch does.\nDirect mode: a member whose config file cannot be loaded as a tenant config (config_error malformed_yaml | invalid_config)\nis not patched: its result carries status error and code TENANT_CONFIG_NOT_LOADABLE; repair the tenant file itself first.",
+                "description": "Apply a patch to all tenants in a group, through the same pipeline as POST /api/v1/tenants/batch\n(one operation per member): patch values are range-checked (400), and each member is checked for write permission and domain policy.\nunset removes keys from every member (only \"_routing\"): unset [\"_routing\"] turns routing back on for members a disabling _routing turned off, judged by domain policy.\nPR write-back mode: the whole group becomes one PR/MR (status pending_review, pr_url, pr_number); nothing is committed to the base branch.\nPR write-back mode ignores ?async=true and answers 200 synchronously, as POST /api/v1/tenants/batch does.\nDirect mode: a member whose config file cannot be loaded as a tenant config (config_error malformed_yaml | invalid_config)\nis not patched: its result carries status error and code TENANT_CONFIG_NOT_LOADABLE; repair the tenant file itself first.",
                 "consumes": [
                     "application/json"
                 ],
@@ -847,7 +847,7 @@ const docTemplate = `{
         },
         "/api/v1/tenants/batch": {
             "post": {
-                "description": "Apply patch operations to multiple tenants in one call.\nDirect mode: an operation whose tenant config file cannot be loaded as a tenant config (config_error malformed_yaml | invalid_config)\nis not applied: its result carries status error and code TENANT_CONFIG_NOT_LOADABLE; repair the tenant file itself first.",
+                "description": "Apply patch operations to multiple tenants in one call.\nAn operation may also remove keys with unset (only \"_routing\"): unset [\"_routing\"] turns routing back on for a tenant a disabling _routing turned off, judged by domain policy.\nDirect mode: an operation whose tenant config file cannot be loaded as a tenant config (config_error malformed_yaml | invalid_config)\nis not applied: its result carries status error and code TENANT_CONFIG_NOT_LOADABLE; repair the tenant file itself first.",
                 "consumes": [
                     "application/json"
                 ],
@@ -2356,7 +2356,7 @@ const docTemplate = `{
             ],
             "properties": {
                 "patch": {
-                    "description": "key → value to set (e.g., \"_silent_mode\": \"warning\"); at most 1000 entries.",
+                    "description": "key → value to set (e.g., \"_silent_mode\": \"warning\"); at most 1000 entries.\nMay be omitted when unset names a key: patch and unset must not both be empty.",
                     "type": "object",
                     "additionalProperties": {
                         "type": "string"
@@ -2366,6 +2366,14 @@ const docTemplate = `{
                     "type": "string",
                     "maxLength": 256,
                     "minLength": 1
+                },
+                "unset": {
+                    "description": "keys to remove from the tenant's config block; at most 1000 entries. Only \"_routing\" is\naccepted: removing it resets the tenant to ` + "`" + `_routing_defaults` + "`" + ` and its routing profile,\nwhich turns routing back on for a tenant a disabling ` + "`" + `_routing` + "`" + ` turned off (the change is\njudged by domain policy like a ` + "`" + `_routing` + "`" + ` patch). A key the tenant does not carry is a\nno-op. A key must not appear twice, nor in both patch and unset.",
+                    "type": "array",
+                    "maxItems": 1000,
+                    "items": {
+                        "type": "string"
+                    }
                 }
             }
         },
@@ -2699,9 +2707,17 @@ const docTemplate = `{
             "type": "object",
             "properties": {
                 "patch": {
-                    "description": "key → value to set on every member (e.g., \"_silent_mode\": \"warning\");\nat most 1000 entries.",
+                    "description": "key → value to set on every member (e.g., \"_silent_mode\": \"warning\");\nat most 1000 entries. May be omitted when unset names a key: patch and\nunset must not both be empty.",
                     "type": "object",
                     "additionalProperties": {
+                        "type": "string"
+                    }
+                },
+                "unset": {
+                    "description": "keys to remove from every member's config block; at most 1000 entries. Only \"_routing\" is\naccepted: removing it resets the member to ` + "`" + `_routing_defaults` + "`" + ` and its routing profile,\nwhich turns routing back on for a member a disabling ` + "`" + `_routing` + "`" + ` turned off (the change is\njudged by domain policy like a ` + "`" + `_routing` + "`" + ` patch). A key the member does not carry is a\nno-op. A key must not appear twice, nor in both patch and unset.",
+                    "type": "array",
+                    "maxItems": 1000,
+                    "items": {
                         "type": "string"
                     }
                 }

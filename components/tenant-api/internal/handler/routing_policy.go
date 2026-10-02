@@ -63,12 +63,36 @@ func loadRoutingLayers(configDir string) routingpolicy.Layers {
 	return layers
 }
 
-// touchesRouting reports whether a flat batch patch changes what the
-// tenant's routing resolves to.
-func touchesRouting(patch map[string]string) bool {
-	_, profile := patch["_routing_profile"]
-	_, routing := patch["_routing"]
-	return profile || routing
+// touchesRouting reports whether a batch op changes what the tenant's
+// routing resolves to: it sets `_routing_profile` or `_routing`, or it
+// removes one of them (B2: unset ["_routing"] turns routing back on for a
+// tenant a disabling `_routing` turned off — the very change the domain
+// policy must see). `_routing_profile` is listed for unset too so that
+// widening unsetAllowedKeys cannot leave a routing removal unjudged.
+func touchesRouting(op BatchOperation) bool {
+	_, profile := op.Patch["_routing_profile"]
+	_, routing := op.Patch["_routing"]
+	if profile || routing {
+		return true
+	}
+	for _, k := range op.Unset {
+		if k == "_routing" || k == "_routing_profile" {
+			return true
+		}
+	}
+	return false
+}
+
+// applyBatchEdit lays one op over a tenant block as mergePatchYAML lays it
+// over the file: its patch keys set, then its unset keys removed (the two
+// are disjoint — validateBatchEdit).
+func applyBatchEdit(block map[string]any, op BatchOperation) {
+	for k, v := range op.Patch {
+		block[k] = v
+	}
+	for _, k := range op.Unset {
+		delete(block, k)
+	}
 }
 
 // tenantBlockOnDisk is tenants.<tenantID> of the tenant's file in configDir,
@@ -97,33 +121,33 @@ func tenantBlockOnDisk(configDir, tenantID string) map[string]any {
 }
 
 // batchRoutingViolations judges a batch op's effect on the tenant's routing:
-// the tenant's block ON DISK, then each patch in prior, then this op's patch,
-// laid over its top level in that order, resolved and checked. An op that
-// touches neither `_routing_profile` nor `_routing` is not judged — an
-// unrelated write is not refused for the routing already on disk (documented
-// asymmetry with PUT, which always judges the whole body).
+// the tenant's block ON DISK, then each op in prior, then op itself, laid
+// over its top level in that order (applyBatchEdit: set, then remove),
+// resolved and checked. An op that touches routing neither by its patch nor
+// by its unset (touchesRouting) is not judged — an unrelated write is not
+// refused for the routing already on disk (documented asymmetry with PUT,
+// which always judges the whole body).
 //
 // prior is the SAME tenant's earlier ops of this request that will be
 // applied before this one without being written first — PR mode, where
 // WritePRBatch merges every op onto the same base in order. Only ops that
-// were taken into the batch belong there. Direct mode writes each op
-// before judging the next, which reads the file back, so it passes nil.
+// were taken into the batch belong there. Each carries its unset as well as
+// its patch: an earlier op that removes `_routing` re-enables routing under
+// every later op, and one that sets `_routing: disable` disables it. Direct
+// mode writes each op before judging the next, which reads the file back,
+// so it passes nil.
 //
 // advisories are the non-blocking `require_critical_escalation` leak
 // messages (#2325) for the same resolved routing; the caller adds them to
 // the op's warnings when the op goes through.
-func batchRoutingViolations(configDir string, mgr *policy.Manager, tenantID string, prior []map[string]string, patch map[string]string) (violations []policy.Violation, advisories []string) {
-	if mgr == nil || !touchesRouting(patch) {
+func batchRoutingViolations(configDir string, mgr *policy.Manager, prior []BatchOperation, op BatchOperation) (violations []policy.Violation, advisories []string) {
+	if mgr == nil || !touchesRouting(op) {
 		return nil, nil
 	}
-	block := tenantBlockOnDisk(configDir, tenantID)
+	block := tenantBlockOnDisk(configDir, op.TenantID)
 	for _, p := range prior {
-		for k, v := range p {
-			block[k] = v
-		}
+		applyBatchEdit(block, p)
 	}
-	for k, v := range patch {
-		block[k] = v
-	}
-	return mgr.JudgeTenantRouting(tenantID, block, loadRoutingLayers(configDir))
+	applyBatchEdit(block, op)
+	return mgr.JudgeTenantRouting(op.TenantID, block, loadRoutingLayers(configDir))
 }
