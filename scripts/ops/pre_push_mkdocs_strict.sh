@@ -11,13 +11,10 @@
 #   one runs locally during pre-commit; the other fires only in CI. Issue
 #   #412 documents the pattern and its recurrence.
 #
-#   This hook closes the gap by running mkdocs strict at pre-push time
-#   when docs changed.
+#   This hook closes the gap by running mkdocs strict at pre-push time.
 #
-# Triggers (pre-push only) — read from the PUSHED REFSPEC (#1690). ⛔ Which
-#   paths count as docs is `DOC_RE` below and nowhere else: a second spelling
-#   of it in prose drifts. A ref whose base cannot be determined is built
-#   regardless; tags and deletions never are.
+# Triggers (pre-push only) — read from the PUSHED REFSPEC (#1690): every
+#   commit pushed to a branch is built. Deletions and non-branch refs are not.
 #
 # Tiered execution:
 #   Tier 1 — Native `mkdocs` on PATH: run directly
@@ -82,97 +79,34 @@ if [ ! -r "$_prepush_dir/_prepush_refs.sh" ]; then
 fi
 . "$_prepush_dir/_prepush_refs.sh"
 
-if ! _refs="$(prepush_refs_full)"; then
+if ! _refs="$(prepush_refs)"; then
     prepush_refs_unavailable_message >&2
     exit 1
 fi
 
 _Z40="0000000000000000000000000000000000000000"
-DOC_RE='^(docs/.*\.(md|jsx|html)$|mkdocs\.yml$|README\.md$|README\.en\.md$|CHANGELOG\.md$)'
 
-# git hands a pre-push hook the remote's name as $1. The dispatcher passes it
-# through, so a clone whose remote is not called `origin` still gets a base.
-_remote_name="${1:-}"
-
-# Rows: <remote_ref> <local_sha> <remote_sha>; `-` means "not known".
+# ⛔ Every pushed branch commit is built; there is no "did docs change?" test.
+# Such a test needs a list of paths that matches everything the build reads —
+# rule-packs/, the hooks under scripts/mkdocs/, the slug function, the strict
+# check and its ledger — and a second list kept in step by hand drifts.
 _build_shas=()
-_doc_changes=""
-_unknown_base=""
-while read -r remote_ref local_sha remote_sha; do
+while read -r remote_ref local_sha; do
     [ -n "${remote_ref:-}" ] || continue
-    # Deletions carry no tree to build.
-    [ "$local_sha" = "$_Z40" ] && continue
-    case "$remote_ref" in refs/tags/*) continue ;; esac
-    # ⛔ `-` is an unknown commit, not "nothing to push" — and `git worktree
-    # add` reads `-` as the previous branch, so building it would validate the
-    # wrong tree.
-    if [ "$local_sha" = "-" ]; then
+    # Deletions carry no tree to build, and only branches are built: a note
+    # has no site at all.
+    [ "${local_sha:-}" = "$_Z40" ] && continue
+    case "$remote_ref" in refs/heads/*) ;; *) continue ;; esac
+    # ⛔ Unknown is not "nothing to push"; refuse rather than build a guess.
+    if [ -z "${local_sha:-}" ]; then
         echo "[pre-push-mkdocs] ⛔ cannot tell which commit ${remote_ref} pushes; refusing." >&2
         exit 1
     fi
-
-    # Base for "what does THIS push introduce?".
-    # ⛔ Unknown must mean BUILD, never skip.
-    _base=""
-    if [ "$remote_sha" != "-" ] && [ "$remote_sha" != "$_Z40" ] \
-       && git cat-file -e "${remote_sha}^{commit}" 2>/dev/null; then
-        _base="$remote_sha"
-    else
-        for _cand in ${_remote_name:+"$_remote_name/main"} origin/main; do
-            if git rev-parse --verify --quiet "${_cand}^{commit}" >/dev/null 2>&1; then
-                _base="$_cand"
-                break
-            fi
-        done
-    fi
-
-    # ⛔ Diff from the MERGE BASE, never `git diff A B` — that is two-way, so a
-    # branch merely BEHIND the base reports the base's own files as changed by
-    # this push. With no merge base at all (orphan branch)
-    # this is the unknown case, which must build.
-    _mb=""
-    [ -n "$_base" ] && _mb=$(git merge-base "$_base" "$local_sha" 2>/dev/null || true)
-
-    # ⛔ No --diff-filter: every change status counts, deletions included.
-    # Deleting a doc is precisely what breaks mkdocs strict (dangling nav
-    # entries, cross-refs to the gone file), and an enumerated list silently
-    # drops whatever it forgets (#2195).
-    # ⛔ -z: without it git C-quotes a non-ASCII path ("docs/\346…") and the
-    # leading quote defeats DOC_RE (#2195). A newline inside a file name
-    # still splits.
-    # ⛔ A failed diff is the unknown case, never "no doc changes" (#2195).
-    # It reaches the else branch only through `set -o pipefail` above;
-    # without it the pipeline's status is tr's, and the failure is lost.
-    if [ -n "$_mb" ] && _changed=$(git diff --name-only -z "$_mb" "$local_sha" | tr '\0' '\n'); then
-        _hit=$(printf '%s\n' "$_changed" | grep -E "$DOC_RE" || true)
-        if [ -n "$_hit" ]; then
-            _doc_changes="${_doc_changes}${_hit}"$'\n'
-            _build_shas+=("$local_sha")
-        fi
-    else
-        # ⛔ Fail-safe, not fail-open: with no base, or a diff that failed, we
-        # cannot tell, so we build.
-        # ⛔ Reported separately: filing it under "doc changes detected" tells a
-        # contributor pushing pure code that they changed docs.
-        _unknown_base="${_unknown_base}${remote_ref}"$'\n'
-        _build_shas+=("$local_sha")
-    fi
+    _build_shas+=("$local_sha")
 done <<< "$_refs"
 
 if [ "${#_build_shas[@]}" -eq 0 ]; then
-    # Non-doc push; nothing to check.
     exit 0
-fi
-
-if [ -n "$_doc_changes" ]; then
-    echo "[pre-push-mkdocs] Doc changes detected in this push:"
-    printf '%s\n' "$_doc_changes" | grep -v '^[[:space:]]*$' | sed 's/^/  • /'
-    echo ""
-fi
-if [ -n "$_unknown_base" ]; then
-    echo "[pre-push-mkdocs] Cannot tell what these refs introduce:"
-    printf '%s\n' "$_unknown_base" | grep -v '^[[:space:]]*$' | sed 's/^/  • /'
-    echo ""
 fi
 
 # --- Build the PUSHED tree, not the working tree (#1690) ---------------------

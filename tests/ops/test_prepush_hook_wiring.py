@@ -1800,39 +1800,31 @@ def test_the_docs_guard_validates_the_pushed_commit_not_the_working_tree(
     assert r.returncode == 0, f"a passing build did not let the push through:\n{r.stdout}{r.stderr}"
 
 
-def test_a_push_that_changes_no_docs_is_not_gated_when_another_branch_did(
-    tmp_path: Path,
-) -> None:
-    """The reverse false-red, which fixing only the trigger would have opened.
-
-    The pushed ref carries no doc change; the working tree stands on the branch
-    that does. A guard that also looked at HEAD here would block a push for
-    changes the push is not carrying. No test in this file drives the guard
-    with a dirty working tree.
-    """
+def test_a_push_that_changes_no_docs_is_still_built(tmp_path: Path) -> None:
+    """The build reads more than docs/: rule-packs/, the mkdocs hooks, the slug
+    function, the strict check and its ledger. Deciding from the changed paths
+    whether to build needs a list of all of that, so there is none: a branch
+    push that touches no doc is built like any other."""
     work, record, sha_a, _sha_b = _docs_repo(tmp_path)
     _git(work, "checkout", "-q", "-b", "codeonly")
     (work / "note.txt").write_text("not a doc\n", encoding="utf-8")
     assert _git(work, "add", "-A").returncode == 0
     _commit(work, "chore: no docs here")
     sha_code = _git(work, "rev-parse", "HEAD").stdout.strip()
-    assert _git(work, "checkout", "-q", "topic").returncode == 0
 
     r = _run_guard(work, record, f"refs/heads/codeonly {sha_code} refs/heads/codeonly {sha_a}\n")
 
     assert r.returncode == 0, f"{r.stdout}{r.stderr}"
-    assert not record.exists(), (
-        "the guard built a site for a push that carries no doc change; that is "
-        "the false-red that fixing the trigger alone would have introduced"
-    )
+    assert record.exists(), f"a code-only push was not built. {r.stdout}{r.stderr}"
+    assert record.read_text(encoding="utf-8").split() == [sha_code]
 
 
 @pytest.mark.parametrize("case", ["no-TO_REF", "control-with-TO_REF", "tag-no-TO_REF"])
 def test_an_unknown_pushed_commit_is_refused(tmp_path: Path, case: str) -> None:
     """Run by pre-commit itself (a wiring the guard forbids), a first push to
     an empty remote exports REMOTE_BRANCH without TO_REF, so the pushed commit
-    reaches the guard as `-`. That is not "nothing to push", and `git worktree
-    add … -` checks out the PREVIOUS branch. A tag is still never judged."""
+    reaches the guard unknown. That is not "nothing to push". A tag is still
+    never judged."""
     work, record, _sha_a, sha_b = _docs_repo(tmp_path)
     ref = "refs/tags/v1" if case.startswith("tag") else "refs/heads/topic"
     env_extra = {"PRE_COMMIT": "1", "PRE_COMMIT_REMOTE_BRANCH": ref}
@@ -1866,147 +1858,11 @@ def test_an_unknown_pushed_commit_is_refused(tmp_path: Path, case: str) -> None:
         ), r.stderr
 
 
-def _topic_commit(work: Path, message: str) -> str:
-    """Commit everything on a fresh branch off main; return its SHA."""
-    _git(work, "checkout", "-q", "-b", "topic2", "main")
-    return _commit_all(work, message)
-
-
-def _commit_all(work: Path, message: str) -> str:
-    assert _git(work, "add", "-A").returncode == 0
-    _commit(work, message)
-    return _git(work, "rev-parse", "HEAD").stdout.strip()
-
-
-@pytest.mark.skipif(os.name == "nt", reason="needs a real symlink in the tree")
-def test_a_doc_turned_into_a_symlink_is_built(tmp_path: Path) -> None:
-    """#2195: a type change (T) is a doc change.
-
-    An enumerated ``--diff-filter=ACMRD`` drops ``T docs/index.md``, and the
-    guard then exits 0 with no output.
-    """
-    work, record, sha_a, _sha_b = _docs_repo(tmp_path)
-    _git(work, "checkout", "-q", "-b", "topic2", "main")
-    (work / "docs" / "other.md").write_text("# other\n", encoding="utf-8")
-    _commit_all(work, "docs: add other")
-    base = _git(work, "rev-parse", "HEAD").stdout.strip()
-    (work / "docs" / "index.md").unlink()
-    os.symlink("other.md", work / "docs" / "index.md")
-    sha_t = _commit_all(work, "docs: index becomes a symlink")
-    # ⚠️ `_commit` also touches a.txt, so the doc is not the only change.
-    status = _git(work, "diff", "--name-status", base, sha_t).stdout.splitlines()
-    assert "T\tdocs/index.md" in status, status
-
-    r = _run_guard(work, record, f"refs/heads/topic2 {sha_t} refs/heads/topic2 {base}\n")
-
-    assert record.exists(), f"a type change to a doc was not built. {r.stdout}{r.stderr}"
-    assert record.read_text(encoding="utf-8").split() == [sha_t]
-    assert "docs/index.md" in r.stdout
-
-
-def test_a_deleted_doc_is_built(tmp_path: Path) -> None:
-    """#2195: dropping the enumerated filter must keep D.
-
-    Deleting a doc is what leaves dangling nav entries. With the filter gone
-    nothing names D any more, so this pins it; ``--diff-filter=d`` (the
-    helper's filter, lower-case = exclude) turns it red.
-    """
-    work, record, sha_a, _sha_b = _docs_repo(tmp_path)
-    (work / "docs" / "gone.md").write_text("# gone\n", encoding="utf-8")
-    _git(work, "checkout", "-q", "-b", "topic2", "main")
-    base = _commit_all(work, "docs: add gone")
-    (work / "docs" / "gone.md").unlink()
-    sha_d = _commit_all(work, "docs: delete gone")
-    status = _git(work, "diff", "--name-status", base, sha_d).stdout.splitlines()
-    assert "D\tdocs/gone.md" in status, status
-
-    r = _run_guard(work, record, f"refs/heads/topic2 {sha_d} refs/heads/topic2 {base}\n")
-
-    assert record.exists(), f"a doc deletion was not built. {r.stdout}{r.stderr}"
-    assert record.read_text(encoding="utf-8").split() == [sha_d]
-    assert "docs/gone.md" in r.stdout
-
-
-def test_a_new_doc_with_a_non_ascii_name_is_built(tmp_path: Path) -> None:
-    """#2195: without ``-z`` git C-quotes the path and DOC_RE never sees it."""
-    work, record, sha_a, _sha_b = _docs_repo(tmp_path)
-    (work / "docs" / "測試.md").write_text("# 測試\n", encoding="utf-8")
-    sha_n = _topic_commit(work, "docs: non-ascii name")
-
-    r = _run_guard(work, record, f"refs/heads/topic2 {sha_n} refs/heads/topic2 {sha_a}\n")
-
-    assert record.exists(), f"a new non-ASCII doc was not built. {r.stdout}{r.stderr}"
-    assert record.read_text(encoding="utf-8").split() == [sha_n]
-    assert "docs/測試.md" in r.stdout, r.stdout
-
-
-_DIFF_FAILS_SHIM = """#!/usr/bin/env bash
-if [ "${1:-}" = "diff" ]; then
-    echo "fatal: simulated diff failure" >&2
-    exit 128
-fi
-exec "$REAL_GIT" "$@"
-"""
-
-
-def _run_guard_with_failing_diff(work: Path, record: Path, rows: str):
-    real_git = shutil.which("git")
-    assert real_git, "no git on PATH"
-    bindir = work.parent / "diffshim"
-    bindir.mkdir(exist_ok=True)
-    shim = bindir / "git"
-    shim.write_text(_DIFF_FAILS_SHIM, encoding="utf-8")
-    shim.chmod(0o755)
-    fake_dir = work.parent / "fakebin"
-    fake_dir.mkdir(exist_ok=True)
-    fm = fake_dir / "mkdocs"
-    fm.write_text(_FAKE_MKDOCS, encoding="utf-8")
-    fm.chmod(0o755)
-    env = {
-        **os.environ,
-        "REAL_GIT": real_git,
-        "PATH": str(bindir) + os.pathsep + str(fake_dir) + os.pathsep
-                + os.environ.get("PATH", ""),
-        "PREPUSH_TEST_RECORD": str(record),
-    }
-    return subprocess.run(  # subprocess-timeout: ignore
-        [_BASH, "scripts/ops/pre_push_mkdocs_strict.sh", "origin", "/dev/null"],
-        cwd=work, input=rows, capture_output=True, text=True,
-        encoding="utf-8", errors="replace", env=env,
-    )
-
-
-@pytest.mark.parametrize("carries_docs", [True, False])
-def test_a_failed_diff_builds_and_says_it_could_not_tell(
-    tmp_path: Path, carries_docs: bool,
-) -> None:
-    """#2195: a failed ``git diff`` is "cannot tell", never "no doc changes".
-
-    ``2>/dev/null || echo ""`` turns the failure into an empty list, and the
-    guard exits 0 for a push that changes docs/index.md. Both directions build, because the guard cannot know
-    which one it is looking at, and neither is reported as a doc change.
-    """
-    work, record, sha_a, sha_b = _docs_repo(tmp_path)
-    if carries_docs:
-        sha = sha_b
-    else:
-        (work / "note.txt").write_text("not a doc\n", encoding="utf-8")
-        sha = _topic_commit(work, "chore: no docs here")
-
-    r = _run_guard_with_failing_diff(
-        work, record, f"refs/heads/topic {sha} refs/heads/topic {sha_a}\n")
-
-    assert record.exists(), (
-        f"a push whose diff failed was not built. {r.stdout}{r.stderr}")
-    assert record.read_text(encoding="utf-8").split() == [sha]
-    assert "Cannot tell what these refs introduce" in r.stdout, r.stdout
-    assert "Doc changes detected" not in r.stdout, r.stdout
-
-
-@pytest.mark.parametrize("row", ["deletion", "tag"])
+@pytest.mark.parametrize("row", ["deletion", "tag", "note"])
 def test_a_deletion_or_tag_row_is_not_judged(tmp_path: Path, row: str) -> None:
     """`git push origin :topic` carries no tree, so there is nothing to build;
-    a tag is never built either, even one whose commit changes docs.
+    only branches are built, so neither a tag nor a note is — and a note's
+    tree has no strict check in it to run.
 
     The dispatcher also skips this guard on a no-commit push
     (GUARDS_NEEDING_COMMITS); this pins the guard's own answer when it is run
@@ -2014,7 +1870,8 @@ def test_a_deletion_or_tag_row_is_not_judged(tmp_path: Path, row: str) -> None:
     """
     work, record, sha_a, sha_b = _docs_repo(tmp_path)
     rows = {"deletion": f"refs/heads/topic {_Z40} refs/heads/topic {sha_a}\n",
-            "tag": f"refs/tags/v1 {sha_b} refs/tags/v1 {_Z40}\n"}
+            "tag": f"refs/tags/v1 {sha_b} refs/tags/v1 {_Z40}\n",
+            "note": f"refs/notes/commits {sha_b} refs/notes/commits {_Z40}\n"}
     r = _run_guard(work, record, rows[row])
 
     assert r.returncode == 0, f"{r.stdout}{r.stderr}"
@@ -2373,108 +2230,6 @@ def test_a_worktree_that_cannot_be_created_refuses_instead_of_building_the_tree(
     assert tail == ["", f"::error::mkdocs strict did not pass for {sha_b[:8]}"], (
         "the guard added to its refusal on stdout. stdout=%s" % r.stdout
     )
-
-
-def test_a_branch_behind_the_base_is_not_charged_for_the_bases_own_docs(
-    tmp_path: Path,
-) -> None:
-    """The diff runs from the MERGE BASE, not two-way against the base.
-
-    ⛔ `git diff <base> <pushed>` is two-way, so a branch that is merely BEHIND
-    the base reports the base's own files as changed by this push. The first
-    push of a branch has no remote sha, so its base is `origin/main` — which
-    puts every branch cut before main's last docs commit on this path.
-
-    With the two-dot form, a push carrying one code-only commit reports
-    docs/later.md as a doc change and builds: a false red on a real
-    contributor action, at the cost of a full mkdocs build every time.
-    """
-    work, record, _sha_a, _sha_b = _docs_repo(tmp_path)
-
-    # main gains a docs commit that the branch will not have.
-    assert _git(work, "checkout", "-q", "main").returncode == 0
-    (work / "docs" / "later.md").write_text("# later\n", encoding="utf-8")
-    assert _git(work, "add", "-A").returncode == 0
-    _commit(work, "docs: only on main")
-    assert _git(work, "update-ref", "refs/remotes/origin/main", "main").returncode == 0
-
-    # A branch cut BEFORE that commit, carrying one code-only commit.
-    assert _git(work, "checkout", "-q", "-b", "behind", "main~1").returncode == 0
-    (work / "src.txt").write_text("code only\n", encoding="utf-8")
-    assert _git(work, "add", "-A").returncode == 0
-    _commit(work, "code only")
-    sha = _git(work, "rev-parse", "HEAD").stdout.strip()
-
-    r = _run_guard(work, record, f"refs/heads/behind {sha} refs/heads/behind {_Z40}\n")
-
-    assert not record.exists(), (
-        "a code-only push was gated on docs that live on the BASE and are not "
-        f"in this push. stdout={r.stdout} stderr={r.stderr}"
-    )
-    assert "Doc changes detected" not in r.stdout, (
-        f"the guard told a code-only push it changed docs. stdout={r.stdout}"
-    )
-
-
-def test_a_remote_not_called_origin_still_gets_a_base(tmp_path: Path) -> None:
-    """git names the remote in $1; the base comes from there before `origin`.
-
-    ⚠️ Without this the fail-safe swallows the whole clone: `origin/main` never
-    resolves, so EVERY push is "base unknown" and pays a full mkdocs build.
-    Fail-safe is the right default for one ref, but as a permanent state it is
-    a tax on a legitimate setup (a fork, or `git clone -o upstream`).
-
-    ⛔ This is the base lookup only. Deciding a default branch by name is a
-    different question and is deliberately not attempted here.
-    """
-    work, record, _sha_a, _sha_b = _docs_repo(tmp_path)
-    assert _git(work, "remote", "rename", "origin", "upstream").returncode == 0
-    assert _git(work, "rev-parse", "--verify", "--quiet",
-                "origin/main^{commit}").returncode != 0, "origin/main still resolves"
-    assert _git(work, "rev-parse", "--verify", "--quiet",
-                "upstream/main^{commit}").returncode == 0, "upstream/main missing"
-    # ⛔ `_make_repo` published main at the ROOT commit, before `_docs_repo`
-    # added docs/. Leaving the tracking ref there makes the branch genuinely
-    # introduce docs/index.md, and the test would then pass for a reason that
-    # has nothing to do with which remote name was consulted.
-    assert _git(work, "update-ref", "refs/remotes/upstream/main", "main").returncode == 0
-
-    assert _git(work, "checkout", "-q", "-b", "codeonly", "main").returncode == 0
-    (work / "src.txt").write_text("code only\n", encoding="utf-8")
-    assert _git(work, "add", "-A").returncode == 0
-    _commit(work, "code only")
-    sha = _git(work, "rev-parse", "HEAD").stdout.strip()
-
-    r = _run_guard(
-        work, record,
-        f"refs/heads/codeonly {sha} refs/heads/codeonly {_Z40}\n",
-        remote="upstream",
-    )
-
-    assert not record.exists(), (
-        "a code-only push built anyway: the base was not found through the "
-        f"remote's real name. stdout={r.stdout} stderr={r.stderr}"
-    )
-
-
-def test_no_base_at_all_builds_rather_than_skipping(tmp_path: Path) -> None:
-    """The fail-safe branch, reached for real — no `origin/main` to fall back on.
-
-    `_make_repo` publishes `main`, so with the remote in place a `-` row takes
-    the `origin/main` fallback and never reaches this branch.
-    """
-    work, record, _sha_a, sha_b = _docs_repo(tmp_path)
-    assert _git(work, "remote", "remove", "origin").returncode == 0
-    assert _git(work, "rev-parse", "--verify", "--quiet",
-                "origin/main^{commit}").returncode != 0, "origin/main still resolves"
-
-    r = _run_guard(work, record, "refs/heads/topic %s refs/heads/topic -\n" % sha_b)
-
-    assert record.exists(), (
-        "with no base at all the guard skipped instead of building — that is "
-        "#1690 through a different door. stdout=%s stderr=%s" % (r.stdout, r.stderr)
-    )
-    assert record.read_text(encoding="utf-8").split() == [sha_b]
 
 
 def test_the_docs_guard_refuses_when_no_channel_carries_a_refspec(

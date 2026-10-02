@@ -1,7 +1,7 @@
 ---
 section: Fixed
 topic: dx
-issues: [2195]
+issues: [2195, 2573]
 created: 2026-09-27T17:30:00+00:00
 ---
-- **mkdocs strict 的 pre-push 守衛不再把量不到的推送當成沒有文件變更（dx；[#2195](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/2195)）**：`scripts/ops/pre_push_mkdocs_strict.sh` 判斷推送是否動到文件時，`git diff` 失敗改走「無法判斷」路徑、照樣建站並分開回報，不再吞成空清單；拿掉列舉式 `--diff-filter=ACMRD`，文件的型別變更（例如改成 symlink）也會觸發建站；改用 `-z` 列檔，非 ASCII 檔名的文件不再因 git 加引號而漏判。
+- **mkdocs strict 的 pre-push 守衛對每顆被推到 branch 的 commit 建站（dx；[#2195](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/2195)、[#2573](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/2573)）**：`scripts/ops/pre_push_mkdocs_strict.sh` 不再用路徑清單判斷「這次推送有沒有動到文件」。那份清單漏了 `rule-packs/`、`scripts/mkdocs/` 等建站實際讀的輸入，只改這些的推送會略過建站。現在只要推的是 branch 且帶著 commit 就建站（裝了 mkdocs 時每次多花一次建站的時間）；刪除、tag、`refs/notes/*` 不建，推 notes 不再被誤擋。

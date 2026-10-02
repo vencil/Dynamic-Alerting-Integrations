@@ -57,25 +57,16 @@
 #   ⚠️ Silent by design, unlike the two sibling bypass flags: this branch is
 #   taken on every up-to-date push, which is ordinary, not an override.
 #
-# OUTPUT — TWO shapes, ONE channel decision
-#   prepush_refs        <remote_ref> <local_sha>
-#   prepush_refs_full   <remote_ref> <local_sha> <remote_sha>
+# OUTPUT
+#   prepush_refs   <remote_ref> <local_sha>
 #
-#   One walk produces both, so the channel decision has one implementation.
+#   ⛔ `local_sha` is EMPTY when unknown. A consumer must read that as "I do
+#   not know what is pushed", never as "nothing to push".
 #
-#   ⛔ Do not add a third column to `prepush_refs`. Its consumers parse with
+#   ⛔ Do not add a third column. Consumers parse with
 #   `read -r remote_ref local_sha`, which folds any extra field into
 #   `local_sha`, and one of them compares that against the 40-zero sha to skip
 #   deletions — widening it brings #1691 back.
-#
-#   ⛔ In the three-column shape, unknown is the literal `-`, never blank. A
-#   blank middle field is collapsed by default-IFS `read` and shifts every
-#   later column left (the FIELD ORDER defect below, one position right).
-#
-#   ⛔ `-` for remote_sha does not mean "use PRE_COMMIT_FROM_REF instead": that
-#   variable is `<first-ancestor>^` when the remote lacks the branch, which is
-#   a different quantity in a documented slot. Consumers must read `-` as "base
-#   unknown" and do the work rather than skip it.
 #
 #   ⛔ FIELD ORDER: remote_ref FIRST. That is not cosmetic. `local_sha` can
 #   legitimately be empty — hook_impl._pre_push_ns has an `all_files=True`
@@ -129,13 +120,13 @@
 #   sourcing line fails there with `command not found` and takes the whole gate
 #   down with it — on Linux only, so a Windows run reports the sourcing as fine.
 
-_prepush_rows() {
-    local _local_ref local_sha remote_ref remote_sha
+prepush_refs() {
+    local _local_ref local_sha remote_ref _remote_sha
     local _rows=()
 
-    while read -r _local_ref local_sha remote_ref remote_sha; do
+    while read -r _local_ref local_sha remote_ref _remote_sha; do
         [ -n "${remote_ref:-}" ] || continue
-        _rows+=("$remote_ref ${local_sha:--} ${remote_sha:--}")
+        _rows+=("$remote_ref $local_sha")
     done
 
     if [ "${#_rows[@]}" -gt 0 ]; then
@@ -152,7 +143,7 @@ _prepush_rows() {
     fi
 
     if [ -n "${PRE_COMMIT_REMOTE_BRANCH:-}" ]; then
-        printf '%s %s -\n' "${PRE_COMMIT_REMOTE_BRANCH}" "${PRE_COMMIT_TO_REF:--}"
+        printf '%s %s\n' "${PRE_COMMIT_REMOTE_BRANCH}" "${PRE_COMMIT_TO_REF:-}"
         return 0
     fi
 
@@ -160,26 +151,6 @@ _prepush_rows() {
         return 3
     fi
 
-    return 0
-}
-
-prepush_refs_full() {
-    _prepush_rows
-}
-
-# ⛔ Second column is EMPTY (not `-`) when unknown — that is the shape its two
-# consumers have always parsed. Emitting `-` here is a silent behaviour change.
-prepush_refs() {
-    local _rc=0 _out
-    _out="$(_prepush_rows)" || _rc=$?
-    [ "$_rc" -ne 0 ] && return "$_rc"
-    [ -z "$_out" ] && return 0
-    local remote_ref local_sha _remote_sha
-    while read -r remote_ref local_sha _remote_sha; do
-        [ -n "${remote_ref:-}" ] || continue
-        [ "$local_sha" = "-" ] && local_sha=""
-        printf '%s %s\n' "$remote_ref" "$local_sha"
-    done <<< "$_out"
     return 0
 }
 
