@@ -452,9 +452,10 @@ func computeEffectiveConfigBytesDetailed(
 // implementation: the byte form above only parses and calls it.
 //
 // It does not know which chain entry is the conf.d root's `_defaults.yaml`,
-// so its mergedDefaults keeps a root-only dimensional key (see
-// computeEffectiveConfigDocAt); only ResolveEffective, which knows the
-// chain's paths, hands da-guard a mergedDefaults without it.
+// so its mergedDefaults keeps a root-only dimensional key (#2419) and a
+// root-only `_critical` key (#2544; see computeEffectiveConfigDocAt); only
+// ResolveEffective, which knows the chain's paths, hands da-guard a
+// mergedDefaults without them.
 func computeEffectiveConfigDocDetailed(
 	tenantDoc *TenantDoc,
 	tenantID string,

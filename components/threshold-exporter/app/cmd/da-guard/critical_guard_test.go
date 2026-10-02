@@ -129,6 +129,18 @@ func TestGuard_RedundantOverrideOnCriticalKeys(t *testing.T) {
 		{name: "profile-critical-key-is-redundant",
 			files: map[string]string{"_defaults.yaml": root, "_profiles.yaml": "profiles:\n  std:\n    " + conn + ": 60\n"},
 			tfile: "tx.yaml", keep: "    _profile: std\n", line: conn + ": 60", redundant: true},
+		// Controls: `_critical`-suffixed keys under the `_state_` / `_silent_`
+		// reserved prefixes are not critical-row keys (resolveCriticalRows
+		// skips them; resolveBaseRows serves no row for them either). The
+		// root's stays an inherited value — /metrics is the same with or
+		// without the tenant's line, so it is redundant as before — and gets
+		// no root_defaults_critical_key warning.
+		{name: "root-state-prefixed-critical-key-is-redundant",
+			files: map[string]string{"_defaults.yaml": root + "  _state_maintenance_critical: 60\n"},
+			tfile: "tx.yaml", keep: "    mysql_connections: 70\n", line: "_state_maintenance_critical: 60", redundant: true},
+		{name: "root-silent-prefixed-critical-key-is-redundant",
+			files: map[string]string{"_defaults.yaml": root + "  _silent_mode_critical: 60\n"},
+			tfile: "tx.yaml", keep: "    mysql_connections: 70\n", line: "_silent_mode_critical: 60", redundant: true},
 		// Control: a plain root key is still redundant.
 		{name: "root-plain-key-is-redundant",
 			files: map[string]string{"_defaults.yaml": root},
