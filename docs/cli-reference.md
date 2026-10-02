@@ -2501,7 +2501,7 @@ da-tools guard <subcommand> [flags]
 | Flag | 預設 | 說明 |
 |---|---|---|
 | `--config-dir <path>` | （必填） | conf.d/ 根目錄 |
-| `--scope <path>` | 整棵樹 | 限定子目錄（CI 由變更 `_defaults.yaml` 的 dirname 推算） |
+| `--scope <path>` | 整棵樹 | 限定 `--config-dir` 底下（含其本身）的某個目錄（CI 傳變更的 `_` 開頭 YAML（如 `_defaults.yaml`、`_profiles.yaml`）所在目錄，相對於 `--config-dir`；同一根下改到多個目錄時傳 `.`）。相對路徑**相對於 `--config-dir`**，與目前工作目錄無關：`--config-dir conf.d/ --scope db/`（`.` 為整棵樹）；絕對路徑照用。解析後落在 `--config-dir` 之外為 exit 2（[#2588](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/2588)） |
 | `--required-fields <a,b,c>` | 空 | dotted-path 必填欄位 CSV；一般欄位對有效設定判定，`_routing` 與 `_routing.` 開頭的欄位改對解析後的 routing 判定（見下方 Routing 檢查） |
 | `--cardinality-limit <n>` | 根 `_defaults.yaml` 的 `max_metrics_per_tenant`（未設 = 500；負值 = 不檢查） | per-tenant 預測 metric 上限；明確給值即覆寫，`0` = 停用 |
 | `--cardinality-warn-ratio <r>` | 0.8 | warn-tier 比例（0 < r < 1） |
@@ -2516,8 +2516,8 @@ da-tools guard <subcommand> [flags]
 |---|---|
 | 0 | clean — 沒 error 級 finding（warning 不擋，除非 `--warn-as-error`） |
 | 1 | guard 偵測到 error，或 `--warn-as-error` 下有 warning — block merge / commit |
-| 2 | caller error（flag 錯、路徑找不到、scope 跑出 root 之外、binary 找不到）。`--baseline-config-dir` 例外：指到不存在的路徑不算錯，照常判定 |
-| 3 | exporter 載入時會整份丟掉的檔，加上 da-guard 自己無法 decode 的檔，再加上 route generator 因重複 key 整份拒讀、而 exporter 照讀的檔（例如 alias key 與其 anchor 並列；同一 mapping 兩個 `<<` 則是 exporter 自己就整份丟掉；`_domain_policy`／`_routing_profiles` 檔除外，那兩種以 `*_unusable` finding 回報，#2295），限與本次執行有關者（`--scope` 內的檔，及 `--scope` 以上各層目錄的 `_` 開頭檔）；與 `--cardinality-limit` 無關。報告與 stderr 列出這些檔（相對於 `--config-dir`）；一次可能只列出第一個，修好後重跑。優先於 1，也取代「vacuously safe」的 0。權威定義是契約測試 `TestExitThree_NamesExactlyTheFilesTheExporterDrops`（#2123、#2179） |
+| 2 | caller error（flag 錯、路徑找不到、`--config-dir` 本身無法列出內容、scope 跑出 root 之外、binary 找不到）。`--baseline-config-dir` 例外：指到不存在的路徑不算錯，照常判定 |
+| 3 | exporter 載入時會整份丟掉的檔，加上 da-guard 自己無法 decode 的檔，再加上 route generator 因重複 key 整份拒讀、exporter 卻照讀或根本不讀的檔（例如 alias key 與其 anchor 並列、子目錄 exporter 不讀的 `_` 檔裡的重複 key；同一 mapping 兩個 `<<` 則是 exporter 自己就整份丟掉；根目錄的 `_domain_policy`／`_routing_profiles` 與子目錄的 `_domain_policy` 檔除外，以 `*_unusable` finding 回報，#2295、#2439），以及 exporter 載入時 stat 或讀取失敗的檔與無法列出內容的子目錄（與 `served-values` 的 `unreadable` 同一份，報告另列「Files the exporter cannot read」，JSON 報告為 `unreadable`；指向目錄的 symlink 不列入，[#2588](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/2588)），限與本次執行有關者（`--scope` 內的檔，及 `--scope` 以上各層目錄的 `_` 開頭檔；無法列出內容的目錄則在它就是 `--scope`、位於 `--scope` 之下或包含 `--scope` 時才算）；與 `--cardinality-limit` 無關。報告與 stderr 列出這些檔（相對於 `--config-dir`）；無法 decode 的檔一次可能只列出第一個，修好後重跑。優先於 1，也取代「vacuously safe」的 0。權威定義是契約測試 `TestExitThree_NamesExactlyTheFilesTheExporterDrops`（#2123、#2179） |
 
 **Routing 檢查（[#2280](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/2280)）**
 
@@ -2560,7 +2560,7 @@ routing 檢查的對象是租戶**解析後**的 routing，與 route generator�
 |---|---|---|
 | `--config-dir <path>` | （必填） | conf.d/ 根目錄 |
 
-以 JSON 印出整棵樹每個租戶的有效設定，內容與 tenant-api `/effective` 同一條程式路徑（`pkg/config` 的同一個 resolver），這個子命令不另做判斷；Python 讀取端經 `scripts/tools/_lib_tenant_values.py` 的 `load_effective()` 呼叫。輸出 JSON：`schema`（目前為 `da-guard.effective/v1`，讀取端遇到其他值即拒收）、`parse_failed`（exporter 載入時整份跳過的檔，沒有時為 `[]`）與 `tenants`。每個租戶的欄位與 `/effective` 回應相同（`effective_config`、`merged_hash`、`source_file`、`source_hash`、`defaults_chain`、`platform_overlay`、`profile_overlay`），另加兩欄：`profile`（租戶綁定的 profile 名稱；沒有 `_profile`，或名稱在根目錄平台檔找不到時為 `null`）與 `key_sources`（`effective_config` 每個頂層 key 的來源：`layer` 為 `defaults`／`platform`／`profile`／`tenant`，`file` 為寫出該值的檔，`defaults` 層另有 `level`，即在 `defaults_chain` 中的位置，0 為根目錄）。值為 mapping、跨層逐葉合併的 key，來源記寫到其中任何部分的最高層，較低層可能還提供了其他葉子。YAML 的 `.inf`／`.nan` 與 `/effective` 一樣以字串 `"Infinity"`／`"NaN"` 輸出。Exit code：0 成功；2 caller error、resolver 拒收整棵樹（例如同一租戶跨檔重複宣告、樹中沒有任何 `.yaml` 檔），或輸出中有字串不是合法 UTF-8，stderr 帶出原因；3 有檔無法 decode，JSON 照樣輸出並在 `parse_failed` 點名（若是某個租戶 defaults chain 上的檔讓 resolve 中止，`tenants` 為空、`parse_failed` 只列該檔）。`parse_failed` 與 `served-values` 是同一個判定（exporter 載入的結果）：例如根 `_defaults.yaml` 因內容型別錯被 exporter 整份丟掉時，`/effective` 仍讀得到它的值，這裡則列進 `parse_failed` 並 exit 3，此時 `tenants` 的值不代表 `/metrics` 實際使用的值。
+以 JSON 印出整棵樹每個租戶的有效設定，內容與 tenant-api `/effective` 同一條程式路徑（`pkg/config` 的同一個 resolver），這個子命令不另做判斷；Python 讀取端經 `scripts/tools/_lib_tenant_values.py` 的 `load_effective()` 呼叫。輸出 JSON：`schema`（目前為 `da-guard.effective/v1`，讀取端遇到其他值即拒收）、`parse_failed`（exporter 載入時整份跳過的檔，沒有時為 `[]`）、`unreadable`（exporter 載入時 stat 或讀取失敗而跳過的檔，以及無法列出內容的子目錄；與 `served-values` 的 `unreadable` 同一份、同一形狀，沒有時為 `[]`，[#2588](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/2588)）與 `tenants`。每個租戶的欄位與 `/effective` 回應相同（`effective_config`、`merged_hash`、`source_file`、`source_hash`、`defaults_chain`、`platform_overlay`、`profile_overlay`），另加兩欄：`profile`（租戶綁定的 profile 名稱；沒有 `_profile`，或名稱在根目錄平台檔找不到時為 `null`）與 `key_sources`（`effective_config` 每個頂層 key 的來源：`layer` 為 `defaults`／`platform`／`profile`／`tenant`，`file` 為寫出該值的檔，`defaults` 層另有 `level`，即在 `defaults_chain` 中的位置，0 為根目錄）。值為 mapping、跨層逐葉合併的 key，來源記寫到其中任何部分的最高層，較低層可能還提供了其他葉子。YAML 的 `.inf`／`.nan` 與 `/effective` 一樣以字串 `"Infinity"`／`"NaN"` 輸出。Exit code：0 成功；2 caller error、resolver 拒收整棵樹（例如同一租戶跨檔重複宣告、樹中沒有任何 `.yaml` 檔），或輸出中有字串不是合法 UTF-8，stderr 帶出原因；3 有檔無法 decode 或讀不到，JSON 照樣輸出並在 `parse_failed`／`unreadable` 點名（若是某個租戶 defaults chain 上的檔讓 resolve 中止，`tenants` 為空、`parse_failed` 只列該檔，`unreadable` 照列）。讀不到的租戶檔，其租戶不在 `tenants` 裡；讀不到的 `_defaults.yaml`，其值不在任何租戶的 `effective_config` 裡。`parse_failed` 與 `served-values` 是同一個判定（exporter 載入的結果）：例如根 `_defaults.yaml` 因內容型別錯被 exporter 整份丟掉時，`/effective` 仍讀得到它的值，這裡則列進 `parse_failed` 並 exit 3，此時 `tenants` 的值不代表 `/metrics` 實際使用的值。
 
 **範例**
 
@@ -2568,9 +2568,9 @@ routing 檢查的對象是租戶**解析後**的 routing，與 route generator�
 # 整棵 conf.d/ 跑 schema check
 da-tools guard defaults-impact --config-dir conf.d/ --required-fields cpu,memory
 
-# CI hook：限定 _defaults.yaml 變更目錄（上限自動取根 _defaults.yaml）
+# CI hook：限定變更的 _defaults.yaml 所在目錄（相對於 --config-dir；上限自動取根 _defaults.yaml）
 da-tools guard defaults-impact --config-dir conf.d/ \
-    --scope conf.d/db/
+    --scope db/
 
 # JSON 輸出供下游 PR comment poster
 da-tools guard defaults-impact --config-dir conf.d/ \

@@ -16,7 +16,7 @@ import shlex
 import shutil
 import subprocess
 import sys
-from pathlib import Path
+from pathlib import Path, PurePosixPath
 
 import pytest
 import yaml
@@ -70,21 +70,39 @@ class TestRootResolution:
 
     def test_single_dir_narrows_scope(self):
         targets, unmanaged = mod.resolve(["x/conf.d/db/_defaults.yaml"])
-        assert targets == [("x/conf.d", "x/conf.d/db")]
+        assert targets == [("x/conf.d", "db")]
         assert unmanaged == []
 
-    def test_multiple_dirs_under_one_root_widen_to_root(self):
+    @pytest.mark.parametrize("changed", [
+        ["x/conf.d/_defaults.yaml", "x/conf.d/db/_defaults.yaml"],
+        # 兩個都不是根：只有「擴成根」會得到 "."，挑其中一個目錄則不會。
+        ["x/conf.d/a/_defaults.yaml", "x/conf.d/b/_defaults.yaml"],
+    ], ids=["root-and-sub", "two-subs"])
+    def test_multiple_dirs_under_one_root_widen_to_root(self, changed):
         """串接編輯必須整棵重驗，否則跨層的 redundant-override 驗不出來。"""
-        targets, _ = mod.resolve(
-            ["x/conf.d/_defaults.yaml", "x/conf.d/db/_defaults.yaml"]
-        )
-        assert targets == [("x/conf.d", "x/conf.d")]
+        targets, _ = mod.resolve(changed)
+        assert targets == [("x/conf.d", ".")]
 
     def test_independent_trees_produce_independent_targets(self):
         targets, _ = mod.resolve(
             ["a/conf.d/_defaults.yaml", "b/conf.d/_defaults.yaml"]
         )
-        assert targets == [("a/conf.d", "a/conf.d"), ("b/conf.d", "b/conf.d")]
+        assert targets == [("a/conf.d", "."), ("b/conf.d", ".")]
+
+    @pytest.mark.parametrize("changed", [
+        "x/conf.d/db/_defaults.yaml",
+        "x/conf.d/_defaults.yaml",
+        "a/conf.d/b/conf.d/team/sub/_defaults.yaml",
+    ])
+    def test_scope_is_relative_to_the_config_dir(self, changed):
+        """⛔ da-guard 的 `--scope` 相對路徑對 `--config-dir` 解析（#2588）。
+
+        輸出 repo 相對的 `x/conf.d/db` 會被 da-guard 解析成 `x/conf.d/x/conf.d/db`
+        ⇒ 不存在 ⇒ exit 2。所以 config-dir 接上 scope 必須回到被改檔案所在的目錄。
+        """
+        (root, scope), = mod.resolve([changed])[0]
+        assert not scope.startswith(root), (root, scope)
+        assert str(PurePosixPath(root) / scope) == str(PurePosixPath(changed).parent)
 
     def test_unmanaged_is_reported_not_dropped(self):
         """⛔ 靜默略過正是本票要消滅的形狀——必須回報出來讓呼叫端說明。"""
@@ -110,7 +128,7 @@ class TestRootResolution:
     def test_a_trailing_blank_is_not_trimmed_away_either(self):
         """同一條的另一半：尾隨空白也是檔名的一部分。"""
         targets, _ = mod.resolve(["x/conf.d/db /_defaults.yaml"])
-        assert targets == [("x/conf.d", "x/conf.d/db ")], targets
+        assert targets == [("x/conf.d", "db ")], targets
 
     def test_a_backslash_in_a_name_is_not_a_directory_separator(self):
         """⛔ 同一類別的第三個成員，先前活在同一個函式裡。
@@ -125,7 +143,7 @@ class TestRootResolution:
         path = "conf.d/we\\ird/_defaults.yaml"
         assert mod.conf_d_root(path) == "conf.d", mod.conf_d_root(path)
         targets, unmanaged = mod.resolve([path])
-        assert targets == [("conf.d", "conf.d/we\\ird")], targets
+        assert targets == [("conf.d", "we\\ird")], targets
         assert unmanaged == []
 
     def test_a_backslash_does_not_invent_a_conf_d_ancestor(self):
@@ -209,7 +227,7 @@ class TestLiveRepo:
         """
         targets, unmanaged = mod.resolve(["try-local/seed/conf.d/_defaults.yaml"])
         assert unmanaged == []
-        assert targets == [("try-local/seed/conf.d", "try-local/seed/conf.d")]
+        assert targets == [("try-local/seed/conf.d", ".")]
         assert targets[0][0] != _LEGACY_ONLY_ROOT
 
 
@@ -509,7 +527,7 @@ class TestScopeListingPlacesPlatformFiles:
             f"scope step 的 git diff 沒列出 {changed}（實得 {listing}）——"
             "清單為空會走 zero-target，驗的是自動偵測的樹而不是這棵")
         targets, unmanaged = mod.resolve(listing)
-        assert targets == [(root, root)]
+        assert targets == [(root, ".")]
         assert unmanaged == []
 
     @pytest.mark.parametrize("changed", _NEG_FILES)
@@ -595,7 +613,7 @@ class TestNonAsciiPathsAreNotSilentlyMisplaced:
         # 兩個目錄同根 → scope 收窄到根（既有規則），且完全沒有 unmanaged。
         assert "unmanaged" not in out, (
             f"a real conf.d tree was reported as outside every tree: {out!r}")
-        assert out.splitlines() == ["target\tconf.d\tconf.d"], out
+        assert out.splitlines() == ["target\tconf.d\t."], out
 
     def test_ascii_input_still_works_without_the_flag(self, capsys, monkeypatch):
         """反向樣本：拒絕規則不可以朝『見人就咬』漂移。"""
@@ -603,7 +621,7 @@ class TestNonAsciiPathsAreNotSilentlyMisplaced:
         rc = mod.main(["-"])
         out = capsys.readouterr().out
         assert rc == 0, out
-        assert out.splitlines() == ["target\tconf.d\tconf.d/a"], out
+        assert out.splitlines() == ["target\tconf.d\ta"], out
 
     def test_a_leading_quote_is_a_legal_name_under_null_mode(self, capsys,
                                                              monkeypatch):
@@ -622,7 +640,7 @@ class TestNonAsciiPathsAreNotSilentlyMisplaced:
         out = capsys.readouterr()
         assert rc == 0, f"a legal directory name was refused: {out.err!r}"
         assert out.out.splitlines() == [
-            'target\t"quoted-dir/conf.d\t"quoted-dir/conf.d'], out.out
+            'target\t"quoted-dir/conf.d\t.'], out.out
 
     @pytest.mark.parametrize("bad", ["conf.d/we\tird/_defaults.yaml",
                                      "conf.d/we\nird/_defaults.yaml"])
@@ -687,7 +705,7 @@ class TestNonAsciiPathsAreNotSilentlyMisplaced:
         rc = mod.main(["-"])
         out = capsys.readouterr()
         assert rc == 0, out.err
-        expected = "target\tconf.d\tconf.d/we" + sep + "ird\n"
+        expected = "target\tconf.d\twe" + sep + "ird\n"
         assert out.out == expected, (
             f"{sep!r} split the path: {out.out!r}")
     def test_the_newline_splitter_still_accepts_ordinary_lines(self, capsys,
@@ -698,8 +716,8 @@ class TestNonAsciiPathsAreNotSilentlyMisplaced:
         rc = mod.main(["-"])
         out = capsys.readouterr()
         assert rc == 0, out.err
-        assert out.out.splitlines() == ["target\ta/conf.d\ta/conf.d/x",
-                                        "target\tb/conf.d\tb/conf.d/y"], out.out
+        assert out.out.splitlines() == ["target\ta/conf.d\tx",
+                                        "target\tb/conf.d\ty"], out.out
 
     @pytest.mark.parametrize("suffix", ["\r", "\v", "\x85"],
                              ids=["cr", "vtab", "nel"])
@@ -784,7 +802,8 @@ class TestNonAsciiPathsAreNotSilentlyMisplaced:
             assert rc == 0, f"a legal path was refused: {out.err!r}"
             # 輸出的是 scope（父目錄），所以逐位元組比對的對象是父目錄——這正
             # 是「別把期望值從產物抄下來」的相反面：期望值由**輸入**推導。
-            scope = path.rsplit("/", 1)[0]
+            # scope 相對於 config-dir 輸出（#2588），所以去掉 `conf.d/` 前綴。
+            scope = path.rsplit("/", 1)[0].removeprefix("conf.d/")
             assert out.out == f"target\tconf.d\t{scope}\n", (
                 f"{scope!r} did not reach the output verbatim: {out.out!r}")
 
@@ -804,7 +823,7 @@ class TestNonAsciiPathsAreNotSilentlyMisplaced:
         out = capsysbinary.readouterr().out
         assert rc == 0, out
         # 逐位元組原封不動——不是 `??`，也不是任何 replacement 字元。
-        assert out == b"target\tconf.d\tconf.d/\xb4\xfa-prod\n", out
+        assert out == b"target\tconf.d\t\xb4\xfa-prod\n", out
         assert b"?" not in out
 
 

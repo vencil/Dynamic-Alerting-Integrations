@@ -555,7 +555,8 @@ jobs:
             # after this change".
             # (push / workflow_dispatch land here too: no PR diff to scope against.)
             echo "No conf.d tree resolved from this diff — running whole-tree over ${CONF_D}"
-            run_one "${CONF_D}" "${CONF_D}"
+            # --scope is relative to --config-dir (#2588): "." = the whole tree.
+            run_one "${CONF_D}" "."
           fi
 
           echo "exit=$WORST" >> "$GITHUB_OUTPUT"
@@ -683,7 +684,7 @@ jobs:
               # (docs/cli-reference.md §guard). WORST is the max
               # over trees, so another tree's 1 or 2 is in the PR comment's
               # per-tree "exit N" headings.
-              echo "::error::da-guard exit 3: config files the exporter cannot decode. The PR comment lists the files under 'Files the exporter cannot parse' — fix them and push again. If this run also printed other ::error:: lines (e.g. from guard_defaults_scopes.py, the producer), look at those first: WORST keeps only the highest code."
+              echo "::error::da-guard exit 3: config files the exporter cannot decode or cannot read (e.g. a dangling symlink). The PR comment lists them under 'Files the exporter cannot parse' / 'Files the exporter cannot read' — fix them and push again. If this run also printed other ::error:: lines (e.g. from guard_defaults_scopes.py, the producer), look at those first: WORST keeps only the highest code."
               exit 1
               ;;
             *)

@@ -9,12 +9,13 @@ package main
 //      error paths (no HTTP).
 //   2. simulateHandler HTTP tests — request shape, error codes,
 //      content-type contract.
-//   3. **Parity gate** — TestSimulate_VsResolve_ParityHash writes the
-//      same bytes to disk under a tmp dir, lets ConfigManager.Resolve
-//      compute its merged_hash, then calls config.SimulateEffective with the
-//      identical bytes and asserts byte-identical SourceHash, MergedHash,
-//      DefaultsChain length, and effective Config map. This is the
-//      contract Phase .c relies on: a /simulate response is the same
+//   3. **Parity gate** — TestSimulate_VsCommitted_ParityHash writes the
+//      same bytes to disk under a tmp dir, lets ConfigManager.Load commit
+//      their merged_hash, then calls config.SimulateEffective with the
+//      identical bytes and asserts the committed MergedHash and
+//      DefaultsChain length, and config.ResolveEffective's SourceHash,
+//      MergedHash and effective Config map, are byte-identical. This is
+//      the contract Phase .c relies on: a /simulate response is the same
 //      thing /effective will produce after the caller commits.
 
 import (
@@ -354,17 +355,18 @@ func TestSimulateHandler_UnknownField(t *testing.T) {
 
 // --- Layer 3: Parity gate -------------------------------------------
 
-// TestSimulate_VsResolve_ParityHash is the contract Phase .c relies on:
-// for a given (tenant.yaml, _defaults.yaml chain), the simulate path and
-// the disk-backed Resolve path must produce byte-identical SourceHash,
-// MergedHash, and effective Config. If this drifts, /simulate stops being
-// a useful preview of what would happen after commit, and the C-7a/C-7b
-// design is broken.
+// TestSimulate_VsCommitted_ParityHash is the contract Phase .c relies on:
+// for a given (tenant.yaml, _defaults.yaml chain), the simulate path must
+// produce the merged_hash and chain length the exporter commits for the
+// same bytes on disk, and the SourceHash, MergedHash and effective Config
+// that config.ResolveEffective (/effective) reads for them. If this drifts,
+// /simulate stops being a useful preview of what would happen after
+// commit, and the C-7a/C-7b design is broken.
 //
 // Intentionally exercises a non-trivial case: 2-level chain, tenant
 // override at every level, plus a `_metadata` block in the tenant file
 // (which must be stripped by both paths).
-func TestSimulate_VsResolve_ParityHash(t *testing.T) {
+func TestSimulate_VsCommitted_ParityHash(t *testing.T) {
 	t.Parallel()
 	dir := t.TempDir()
 
@@ -384,15 +386,20 @@ func TestSimulate_VsResolve_ParityHash(t *testing.T) {
 	testutil.WriteYAMLBytes(t, teamDir, "_defaults.yaml", l1Bytes)
 	testutil.WriteYAMLBytes(t, teamDir, "tenant-a.yaml", tenantBytes)
 
-	// Disk path
+	// Committed path: what the exporter commits for these bytes.
 	m := NewConfigManager(dir)
 	defer m.Close()
 	if err := m.Load(); err != nil {
 		t.Fatalf("Load: %v", err)
 	}
-	disk, ok := m.Resolve("tenant-a")
+	committed, ok := committedTenantState(m, "tenant-a")
 	if !ok {
-		t.Fatalf("Resolve(tenant-a) not ok")
+		t.Fatalf("tenant-a is not in the committed hierarchy")
+	}
+	// Disk path: the shared resolver over the same tree.
+	disk, err := config.ResolveEffective(dir, "tenant-a")
+	if err != nil {
+		t.Fatalf("config.ResolveEffective: %v", err)
 	}
 
 	// Simulate path: same bytes, manually-ordered chain.
@@ -410,13 +417,16 @@ func TestSimulate_VsResolve_ParityHash(t *testing.T) {
 	}
 	if disk.MergedHash != sim.MergedHash {
 		t.Errorf("MergedHash drift: disk=%q sim=%q\ndisk Config=%v\nsim  Config=%v",
-			disk.MergedHash, sim.MergedHash, disk.Config, sim.Config)
+			disk.MergedHash, sim.MergedHash, disk.EffectiveConfig, sim.Config)
 	}
-	if len(disk.DefaultsChain) != len(sim.DefaultsChain) {
-		t.Errorf("chain length drift: disk=%d sim=%d", len(disk.DefaultsChain), len(sim.DefaultsChain))
+	if committed.MergedHash != sim.MergedHash {
+		t.Errorf("MergedHash drift: committed=%q sim=%q", committed.MergedHash, sim.MergedHash)
 	}
-	if !reflect.DeepEqual(disk.Config, sim.Config) {
-		t.Errorf("Config drift:\ndisk=%v\nsim =%v", disk.Config, sim.Config)
+	if len(committed.DefaultsChain) != len(sim.DefaultsChain) {
+		t.Errorf("chain length drift: committed=%d sim=%d", len(committed.DefaultsChain), len(sim.DefaultsChain))
+	}
+	if !reflect.DeepEqual(disk.EffectiveConfig, sim.Config) {
+		t.Errorf("Config drift:\ndisk=%v\nsim =%v", disk.EffectiveConfig, sim.Config)
 	}
 	// Spot-check merged values.
 	if got := sim.Config["mysql_connections"]; got != 90 {

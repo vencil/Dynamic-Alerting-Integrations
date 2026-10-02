@@ -9,14 +9,13 @@ package config
 // without writing to disk and without disturbing the WatchLoop.
 //
 // It is the pure function the /api/v1/tenants/simulate handler dispatches
-// to. Importantly it goes through the same merge path
-// (computeEffectiveConfig + computeMergedHash) as
-// ConfigManager.Resolve, so a simulated hash is byte-identical to what
-// you'd see after committing the same bytes — that contract is asserted
-// by TestSimulate_VsResolve_ParityHash.
+// to. Importantly a simulated hash is byte-identical to the merged_hash
+// the exporter commits for the same bytes, and the simulated config equals
+// what ResolveEffective reads for them from disk — that contract is
+// asserted by TestSimulate_VsCommitted_ParityHash.
 //
-// ⚠️ "Same path as ConfigManager.Resolve" is NOT "same path as the
-// exported metric". Resolve is the DIAGNOSTIC path; the series
+// ⚠️ "Same merged_hash" is NOT "same path as the exported metric". This
+// merge is the DIAGNOSTIC path; the series
 // `user_threshold` is produced by collector.go →
 // ThresholdConfig.ResolveAtWithStats, a different resolver that decodes
 // into typed ScheduledValue rather than merging `map[string]any`. The two
@@ -97,9 +96,9 @@ var ErrSimulateTenantNotFound = errors.New("tenant id not present in tenant_yaml
 
 // SimulateEffective is the pure (no IO, no globals) computation behind
 // the /simulate endpoint. Given a tenant file, its defaults chain, and
-// the tenant ID, it returns the same EffectiveConfig data the disk-
-// backed ConfigManager.Resolve would produce for an equivalent on-disk
-// commit.
+// the tenant ID, it returns the same effective config and hashes the
+// disk-backed ResolveEffective would produce for an equivalent on-disk
+// tree.
 //
 // Errors:
 //   - SimulateRequest.TenantID empty                → fmt error

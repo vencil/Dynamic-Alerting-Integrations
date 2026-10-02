@@ -100,9 +100,9 @@ profiles:
 		}
 	}
 
-	ec, ok := m.Resolve("t-a")
+	ec, ok := committedTenantState(m, "t-a")
 	if !ok {
-		t.Fatalf("Resolve(t-a): unknown tenant")
+		t.Fatalf("t-a is not in the committed hierarchy")
 	}
 	if got := chainBases(ec.DefaultsChain); !reflect.DeepEqual(got, []string{"_defaults.yaml"}) {
 		t.Errorf("exporter chain = %v, want [_defaults.yaml]", got)
@@ -137,9 +137,9 @@ func TestRootCarrierPairIsOneFileOnEveryPlane(t *testing.T) {
 
 	// Exporter hierarchy plane and pkg/config's /effective plane: one chain,
 	// one merged hash.
-	ec, ok := m.Resolve("t-b")
+	ec, ok := committedTenantState(m, "t-b")
 	if !ok {
-		t.Fatalf("Resolve(t-b): unknown tenant")
+		t.Fatalf("t-b is not in the committed hierarchy")
 	}
 	if got := chainBases(ec.DefaultsChain); !reflect.DeepEqual(got, []string{"_defaults.yaml"}) {
 		t.Errorf("exporter chain = %v, want [_defaults.yaml]", got)
@@ -307,9 +307,9 @@ func TestUpperCaseRootCarrierFeedsFlatAndChain(t *testing.T) {
 	if got := m.GetConfig().Defaults["cpu_pct"]; got != 50 {
 		t.Errorf("flat cpu_pct = %v, want 50", got)
 	}
-	ec, ok := m.Resolve("t-d")
+	ec, ok := committedTenantState(m, "t-d")
 	if !ok {
-		t.Fatalf("Resolve(t-d): unknown tenant")
+		t.Fatalf("t-d is not in the committed hierarchy")
 	}
 	if got := chainBases(ec.DefaultsChain); !reflect.DeepEqual(got, []string{"_DEFAULTS.YAML"}) {
 		t.Errorf("exporter chain = %v, want [_DEFAULTS.YAML]", got)
