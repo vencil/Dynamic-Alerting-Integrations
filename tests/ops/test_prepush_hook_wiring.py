@@ -1637,7 +1637,10 @@ def test_a_file_gone_from_scripts_ops_is_named_and_restorable_from_head(
         # Quoted heredocs: the backticks are text, not a command to run.
         assert out.count("`pre-commit install --hook-type pre-push`") == 2, out
     else:
-        assert f"{missing} is missing from {work}" in out and "restore it from HEAD" in out, out
+        # as_posix: the hook is a shell script and prints the path as the
+        # shell spells it (`C:/…` under Git Bash), not as str(WindowsPath).
+        assert (f"{missing} is missing from {Path(work).as_posix()}" in out
+                and "restore it from HEAD" in out), out
         # The dispatcher itself stops the push: with the other two guards
         # bypassed, nothing else is left to block main.
         r, out = _push(work, "HEAD:refs/heads/main", env_extra=_SIBLINGS_OFF)

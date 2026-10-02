@@ -13,7 +13,7 @@ import subprocess
 from pathlib import Path
 
 import pytest
-from _platform_fs import require_file_name, symlink_or_skip  # noqa: E402
+from _platform_fs import require_file_name, require_shebang_scripts, symlink_or_skip  # noqa: E402
 
 import _lib_io
 import _lib_tenant_values as tv
@@ -298,6 +298,7 @@ def test_print_load_warnings_prints_one_named_line_per_file(tmp_path, da_guard, 
 
 def test_output_without_skipped_is_refused(tmp_path):
     """舊版 da-guard（JSON 沒有 skipped）：不靜默當成「沒有略過的檔」，而是 raise。"""
+    require_shebang_scripts()  # the stand-in da-guard below is a `#!` script
     fake = tmp_path / "old-da-guard"
     fake.write_text("#!/bin/sh\necho '{\"at\": \"x\", \"parse_failed\": [], \"tenants\": {}}'\n",
                     encoding="utf-8")
@@ -310,6 +311,7 @@ def test_output_without_skipped_is_refused(tmp_path):
 
 def test_output_without_unreadable_is_refused(tmp_path):
     """da-guard 的 JSON 沒有 unreadable（早於該欄位的版本）：不當成「每個檔都讀得到」，而是 raise。"""
+    require_shebang_scripts()  # the stand-in da-guard below is a `#!` script
     fake = tmp_path / "old-da-guard"
     fake.write_text("#!/bin/sh\necho '{\"at\": \"x\", \"parse_failed\": [], \"skipped\": [], "
                     "\"tenants\": {}}'\n", encoding="utf-8")

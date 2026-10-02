@@ -32,7 +32,7 @@ import pytest
 import _lib_tenant_values as tv
 import analyze_rule_pack_gaps as arg
 import blind_spot_discovery as bsd
-from _platform_fs import symlink_or_skip  # noqa: E402
+from _platform_fs import require_file_name, symlink_or_skip  # noqa: E402
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
 OPS = REPO_ROOT / "scripts" / "tools" / "ops"
@@ -332,6 +332,7 @@ _FORGED = "[OK] forged.yaml"
 
 def _defaults_in_tenant_file(conf_d: Path, name: bytes) -> None:
     """一個租戶檔，內含 `defaults:`：Go 以 `%s` 把檔名印進 rc 0 的 WARN。"""
+    require_file_name(name)
     (conf_d / name.decode("utf-8")).write_bytes(
         b"defaults:\n  mysql_connections: 5\ntenants:\n  td:\n    mysql_connections: 1\n")
 
