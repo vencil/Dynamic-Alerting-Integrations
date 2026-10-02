@@ -26,8 +26,10 @@ Without ``-s`` this hook would be green on a file CI rejects.
 
 ``--`` is passed both in the hook entry (to this script's argparse) and to
 gofmt, so a staged file whose name starts with ``-`` is a path, not a flag:
-without it gofmt answers ``flag provided but not defined: -x.go`` (rc 2). With no ``.go`` file staged
-pre-commit does not call it at all ("(no files to check)Skipped").
+without it gofmt answers ``flag provided but not defined: -x.go`` (rc 2).
+
+With no ``.go`` file staged pre-commit does not call this hook at all
+("(no files to check)Skipped").
 
 Which gofmt
 -----------
