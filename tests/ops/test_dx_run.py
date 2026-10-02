@@ -237,10 +237,13 @@ class TestCLI:
         for key in [k for k in env if k.upper() == "PATH"]:
             del env[key]
         env["PATH"] = str(empty)
+        # cwd too: Windows looks for a bare `docker` in the working directory
+        # (and in the interpreter's and the system directories, which a test
+        # cannot empty) before it looks at PATH.
         result = subprocess.run(
             [sys.executable, str(_SCRIPT), "--status"],
             capture_output=True, text=True, encoding="utf-8", errors="replace",
-            timeout=30, env=env,
+            timeout=30, env=env, cwd=empty,
         )
         assert result.returncode == 1, result.stderr
         assert "docker: not available on PATH" in result.stderr
