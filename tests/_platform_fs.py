@@ -71,6 +71,21 @@ def symlink_or_skip(src, dst, **kwargs) -> None:
     os.symlink(src, dst, **kwargs)
 
 
+def symlink_or_link_file(src, dst) -> None:
+    """``os.symlink(src, dst)``, or — only where this host cannot make
+    symlinks — what git writes under ``core.symlinks=false``: a regular file
+    whose content is the link target.
+
+    For a fixture that must reproduce a tree and is not allowed to skip.
+    Decided by the probe, like the rest of this module: where symlinks can be
+    made, a refused one still raises."""
+    if can_symlink():
+        os.symlink(src, dst)
+        return
+    with open(dst, "wb") as f:
+        f.write(os.fsencode(src))
+
+
 @functools.cache
 def can_name_file(name) -> bool:
     """Whether this filesystem stores a file under exactly *name* (str or
