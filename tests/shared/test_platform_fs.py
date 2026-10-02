@@ -116,31 +116,6 @@ def test_only_the_missing_capability_skips(tmp_path, monkeypatch):
         pf.symlink_or_skip(tmp_path / "target", tmp_path / "link")
 
 
-def test_without_the_capability_the_link_becomes_a_file_holding_its_target(
-    tmp_path, monkeypatch,
-):
-    """What git writes under ``core.symlinks=false``, for a fixture that must
-    not skip."""
-    monkeypatch.setattr(pf, "can_symlink", lambda: False)
-    link = tmp_path / "link"
-    pf.symlink_or_link_file("../docs/目標.md", link)
-    assert not link.is_symlink()
-    assert link.read_bytes() == "../docs/目標.md".encode("utf-8")
-
-
-def test_with_the_capability_a_refused_link_still_raises(tmp_path, monkeypatch):
-    """The fallback is for a missing capability only, never for a failed call."""
-    monkeypatch.setattr(pf, "can_symlink", lambda: True)
-
-    def refuse(src, dst, **kwargs):
-        raise FileExistsError(17, "File exists", str(dst))
-
-    monkeypatch.setattr(pf.os, "symlink", refuse)
-    with pytest.raises(FileExistsError):
-        pf.symlink_or_link_file("target", tmp_path / "link")
-    assert not os.path.lexists(tmp_path / "link")
-
-
 def test_with_the_capability_it_creates_the_link(tmp_path):
     pf.require_symlinks()
     target = tmp_path / "target"
@@ -149,6 +124,25 @@ def test_with_the_capability_it_creates_the_link(tmp_path):
     pf.symlink_or_skip(target, link)
     assert link.is_symlink()
     assert link.read_text(encoding="utf-8") == "x\n"
+
+
+def test_symlink_or_else_falls_back_only_without_the_capability(tmp_path, monkeypatch):
+    """Without the capability the fallback runs and no link is attempted;
+    with it, the link is attempted and a failure of the call still raises."""
+    called = []
+    monkeypatch.setattr(pf, "can_symlink", lambda: False)
+    monkeypatch.setattr(pf.os, "symlink", lambda *a, **k: pytest.fail("attempted a symlink"))
+    pf.symlink_or_else("t", tmp_path / "l", lambda: called.append("fallback"))
+    assert called == ["fallback"]
+
+    def refuse(src, dst, **kwargs):
+        raise PermissionError(1, "Operation not permitted", str(dst))
+
+    monkeypatch.setattr(pf, "can_symlink", lambda: True)
+    monkeypatch.setattr(pf.os, "symlink", refuse)
+    with pytest.raises(PermissionError):
+        pf.symlink_or_else("t", tmp_path / "l", lambda: called.append("fallback"))
+    assert called == ["fallback"], "the fallback must not absorb a refused symlink"
 
 
 def _bare_symlink_calls(tree: ast.AST) -> list[int]:

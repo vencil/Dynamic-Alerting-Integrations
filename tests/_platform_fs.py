@@ -71,19 +71,18 @@ def symlink_or_skip(src, dst, **kwargs) -> None:
     os.symlink(src, dst, **kwargs)
 
 
-def symlink_or_link_file(src, dst) -> None:
-    """``os.symlink(src, dst)``, or — only where this host cannot make
-    symlinks — what git writes under ``core.symlinks=false``: a regular file
-    whose content is the link target.
+def symlink_or_else(src, dst, fallback) -> None:
+    """``os.symlink(src, dst)`` where this host can make symlinks; call
+    ``fallback()`` where it cannot.
 
-    For a fixture that must reproduce a tree and is not allowed to skip.
-    Decided by the probe, like the rest of this module: where symlinks can be
-    made, a refused one still raises."""
+    For a fixture that is NOT allowed to skip and has a faithful stand-in for
+    the link (the regular file git itself writes under ``core.symlinks=false``,
+    say). The choice is the capability probe, not ``os.name``: on POSIX the
+    probe is pinned True, so a symlink refused there still raises."""
     if can_symlink():
         os.symlink(src, dst)
-        return
-    with open(dst, "wb") as f:
-        f.write(os.fsencode(src))
+    else:
+        fallback()
 
 
 @functools.cache
