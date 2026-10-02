@@ -29,6 +29,7 @@ import sys
 from pathlib import Path
 
 import pytest
+from _platform_fs import symlink_or_skip  # noqa: E402
 
 _TOOLS_DIR = os.path.join(
     os.path.dirname(__file__), "..", "..", "scripts", "tools", "dx"
@@ -603,7 +604,7 @@ class TestGeneratedAstLintFailsClosed:
     @pytest.mark.timeout(60)
     def test_unreadable_file_exits_2_naming_it(self, eval_lint, tmp_path):
         target = tmp_path / "dangling.py"
-        target.symlink_to(tmp_path / "does-not-exist.py")
+        symlink_or_skip(tmp_path / "does-not-exist.py", target)
         res = _run_cli(eval_lint, "--ci", str(target))
         assert res.returncode == 2, (res.stdout, res.stderr)
         assert f"{target}: cannot read" in res.stderr
@@ -649,7 +650,7 @@ class TestGeneratedTextKindsFailClosed:
         monkeypatch.setitem(sys.modules, f"check_probe_{kind}", module)
         spec.loader.exec_module(module)
         target = tmp_path / "dangling.md"
-        target.symlink_to(tmp_path / "nowhere.md")
+        symlink_or_skip(tmp_path / "nowhere.md", target)
         rc = module.main([str(target)])
         assert rc == 2
         assert f"{target}: cannot read" in capsys.readouterr().err
