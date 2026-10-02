@@ -104,10 +104,11 @@ var errUnusable = errors.New("unusable")
 
 // parseDoc decodes one YAML document into its top-level node. A nil node with
 // a nil error is an empty document. The full decode is run as well so that a
-// duplicate key fails here as it fails in every other reader of the file —
-// and so does a key only the route generator counts as written twice (an
-// alias key beside its anchor, two `<<`): its StrictLoader refuses the whole
-// file (#2295, pyyamlcompat.FindDuplicateKey), so nothing in it is read.
+// duplicate key fails here as it fails in every other reader of the file
+// (two `<<` in one mapping included: the decode refuses that) — and so does a
+// key only the route generator counts as written twice (an alias key beside
+// its anchor): its StrictLoader refuses the whole file (#2295,
+// pyyamlcompat.FindDuplicateKey), so nothing in it is read.
 //
 // policy is true only for a `_domain_policy.yaml` / `.yml` document: only
 // there does `require_critical_escalation` go through

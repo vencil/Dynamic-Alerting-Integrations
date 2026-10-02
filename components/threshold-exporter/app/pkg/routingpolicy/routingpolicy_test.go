@@ -384,8 +384,9 @@ func TestWithPyYAMLRouting_NonStringKeysAndFailClosed(t *testing.T) {
 
 // TestParseDoc_GeneratorRepeatedKeyRefusesTheFile (#2295): a key the route
 // generator counts as written twice and yaml.v3 does not (an alias key beside
-// its anchor, two `<<`) fails the whole document, as a plain repeat does — no
-// block of it is read, whatever mapping the repeat is in.
+// its anchor) fails the whole document, as a plain repeat does — no block of
+// it is read, whatever mapping the repeat is in. Two `<<` in one mapping are
+// refused too, by yaml.v3's own decode.
 func TestParseDoc_GeneratorRepeatedKeyRefusesTheFile(t *testing.T) {
 	for name, src := range map[string]string{
 		"policy alias key":   "domain_policies:\n  d1:\n    &c constraints :\n      forbidden_receiver_types: [webhook]\n    *c : {}\n",

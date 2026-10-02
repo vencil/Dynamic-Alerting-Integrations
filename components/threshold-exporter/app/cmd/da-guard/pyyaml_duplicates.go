@@ -15,7 +15,9 @@ import (
 
 // withGeneratorDuplicates adds to scoped.ParseFailed every file in scope that
 // the route generator refuses for a repeated mapping key the exporter's
-// yaml.v3 lets through (#2295): an alias key beside its anchor, two `<<`.
+// decode lets through (#2295): an alias key beside its anchor (anywhere), or
+// two `<<` in a mapping that decode does not read (a top-level key such as
+// `_routing_defaults`; inside `tenants:` yaml.v3 refuses two `<<` itself).
 // The generator's StrictLoader refuses the WHOLE file
 // (pyyamlcompat.FindDuplicateKey), so such a file takes the path a plain
 // repeated key takes — the exporter's decode rejects that one and the file
