@@ -18,6 +18,7 @@ import (
 	"os"
 	"path/filepath"
 	"reflect"
+	"slices"
 	"strings"
 	"syscall"
 	"testing"
@@ -253,6 +254,19 @@ func TestStatErrIsWrongPath_WindowsErrnos(t *testing.T) {
 	}
 	if !statErrIsWrongPath(fs.ErrNotExist, windowsWrongPathErrnos) {
 		t.Error("fs.ErrNotExist is a wrong path on every platform")
+	}
+}
+
+// The platform set is picked by GOOS, not a build tag (a GOOS-tagged file is
+// not linted by the linux CI run), so the pick itself is pinned here.
+func TestWrongPathErrnosFor(t *testing.T) {
+	if got := wrongPathErrnosFor("windows"); !slices.Equal(got, windowsWrongPathErrnos) {
+		t.Errorf("windows: got %v, want %v", got, windowsWrongPathErrnos)
+	}
+	for _, goos := range []string{"linux", "darwin"} {
+		if got := wrongPathErrnosFor(goos); !slices.Equal(got, unixWrongPathErrnos) {
+			t.Errorf("%s: got %v, want %v", goos, got, unixWrongPathErrnos)
+		}
 	}
 }
 
