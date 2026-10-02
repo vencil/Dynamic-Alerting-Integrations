@@ -9,6 +9,7 @@ var allProblemKinds = []string{
 	ProblemDomainPolicyUnusable, ProblemRoutingProfilesUnusable, ProblemRoutingDefaultsRoutes,
 	ProblemRoutingInUnreadLocation, ProblemRoutingEnforcedBelowRoot, ProblemRoutingDefaultsNullBelowRoot,
 	ProblemRoutingProfileDuplicate, ProblemDuplicateTenant, ProblemDomainPolicyOutOfScope,
+	ProblemRoutingDefaultsNotMapping,
 }
 
 // TestIsBlockingMatchesTheTable (#2326 review F5): IsBlocking answers true for

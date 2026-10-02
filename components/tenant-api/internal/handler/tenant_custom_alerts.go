@@ -92,7 +92,7 @@ type PutCustomAlertsResponse struct {
 func PutTenantCustomAlerts(d *Deps) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		tenantID := chi.URLParam(r, "id")
-		if err := ValidateTenantID(tenantID); err != nil {
+		if err := ValidateWritableTenantID(tenantID); err != nil {
 			WriteJSONError(w, r, http.StatusBadRequest, err.Error())
 			return
 		}

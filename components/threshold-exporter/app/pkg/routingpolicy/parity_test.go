@@ -60,6 +60,7 @@ type parityExpect struct {
 	TenantAPI      *parityTenantAPI  `json:"tenant_api"`
 	PythonDiffers  *parityDiffers    `json:"python_differs"`
 	Escalation     *parityEscalation `json:"escalation"`
+	Refused        *string           `json:"refused"` // #2341
 }
 
 type parityTree struct {
@@ -73,9 +74,14 @@ type parityTree struct {
 }
 
 type parityMatrix struct {
-	Comment       []string     `json:"_comment"`
-	BlockingKinds []string     `json:"blocking_kinds"`
-	Trees         []parityTree `json:"trees"`
+	Comment       []string `json:"_comment"`
+	BlockingKinds []string `json:"blocking_kinds"`
+	// TenantIDs (#2341 R8): the ids IsValidTenantID accepts and refuses.
+	TenantIDs struct {
+		Valid   []string `json:"valid"`
+		Invalid []string `json:"invalid"`
+	} `json:"tenant_ids"`
+	Trees []parityTree `json:"trees"`
 }
 
 func loadParityMatrix(t *testing.T) parityMatrix {
@@ -193,6 +199,20 @@ func gotGroupBy(resolved map[string]any, ok bool) [][2]string {
 	return out
 }
 
+// gotRefused is the `refused` cell (#2341): why the tenant renders nothing —
+// its id first (R8), then its `_routing` (R5).
+func gotRefused(tenantID string, block map[string]any) *string {
+	if !IsValidTenantID(tenantID) {
+		kind := "invalid_tenant_id"
+		return &kind
+	}
+	if r, has := block["_routing"]; has && RoutingNotMapping(r) {
+		kind := "routing_not_mapping"
+		return &kind
+	}
+	return nil
+}
+
 func gotPolicy(tenantID string, resolved map[string]any, ok bool, pols []Policy) [][3]string {
 	out := [][3]string{}
 	if !ok {
@@ -255,6 +275,25 @@ func jsonEq(t *testing.T, what string, got, want any) {
 	}
 }
 
+// TestTenantIDTable (#2341 R8): IsValidTenantID against the shared table.
+func TestTenantIDTable(t *testing.T) {
+	t.Parallel()
+	m := loadParityMatrix(t)
+	if len(m.TenantIDs.Valid) == 0 || len(m.TenantIDs.Invalid) == 0 {
+		t.Fatal("tenant_ids table is empty")
+	}
+	for _, id := range m.TenantIDs.Valid {
+		if !IsValidTenantID(id) {
+			t.Errorf("IsValidTenantID(%q) = false, table says valid", id)
+		}
+	}
+	for _, id := range m.TenantIDs.Invalid {
+		if IsValidTenantID(id) {
+			t.Errorf("IsValidTenantID(%q) = true, table says invalid", id)
+		}
+	}
+}
+
 func TestRoutingPolicyParityMatrix(t *testing.T) {
 	t.Parallel()
 	m := loadParityMatrix(t)
@@ -301,7 +340,7 @@ func TestRoutingPolicyParityMatrix(t *testing.T) {
 			for tenantID := range tree.Expect {
 				block, file := tenantBlock(t, tree.Files, tenantID)
 				layers := ltree.LayersFor(LevelOf(file))
-				if _, ok, _, _ := Resolve(tenantID, layers.TenantBlock(tenantID, block), layers); ok {
+				if _, ok, _, _ := Resolve(tenantID, layers.TenantBlock(tenantID, block), layers); ok && IsValidTenantID(tenantID) {
 					routed = append(routed, tenantID)
 				}
 			}
@@ -321,6 +360,9 @@ func TestRoutingPolicyParityMatrix(t *testing.T) {
 					}
 					layers := ltree.LayersFor(LevelOf(file))
 					resolved, ok, _, unknown := Resolve(tenantID, layers.TenantBlock(tenantID, block), layers)
+					if !IsValidTenantID(tenantID) { // #2341 R8: nothing is rendered for it
+						resolved, ok = nil, false
+					}
 					jsonEq(t, "targets", gotTargets(resolved, ok), want.Targets)
 					jsonEq(t, "rejected_routes", gotRejected(resolved, ok), want.RejectedRoutes)
 					wantNotString := append([]string{}, want.NotString...)
@@ -330,6 +372,7 @@ func TestRoutingPolicyParityMatrix(t *testing.T) {
 					jsonEq(t, "group_by_invalid", gotGroupBy(resolved, ok), wantGroupBy)
 					jsonEq(t, "policy", sortRows(gotPolicy(tenantID, resolved, ok, pols)), sortRows(want.Policy))
 					jsonEq(t, "escalation", gotEscalation(t, tenantID, resolved, ok, pols), want.Escalation)
+					jsonEq(t, "refused", gotRefused(tenantID, layers.TenantBlock(tenantID, block)), want.Refused)
 					if (unknown == nil) != (want.UnknownProfile == nil) ||
 						(unknown != nil && *unknown != *want.UnknownProfile) {
 						t.Errorf("unknown profile = %v, want %v", unknown, want.UnknownProfile)
@@ -374,9 +417,10 @@ func checkTenantAPIModel(t *testing.T, files map[string]string, tenantID string,
 		return false
 	}
 	put := "ok"
+	r, writesRouting := block["_routing"]
 	if verdict(block) {
 		put = "403"
-	} else if writesBadReceiver(block) || len(ValuesNotString(block["_routing"])) > 0 ||
+	} else if (writesRouting && RoutingNotMapping(r)) || writesBadReceiver(block) || len(ValuesNotString(block["_routing"])) > 0 ||
 		len(GroupByInvalidForTenant(tenantID, block["_routing"])) > 0 {
 		put = "400" // #2295 receiver contract, #2431 a matcher value / #2503 a group_by element the block writes
 	}
@@ -396,7 +440,9 @@ func checkTenantAPIModel(t *testing.T, files map[string]string, tenantID string,
 		touches = touches || k == "_routing_profile" || k == "_routing"
 	}
 	got := "ok"
-	if touches && verdict(patched) {
+	if v, has := want.Batch.Patch["_routing"]; has && !IsDisabled(v) {
+		got = "400" // #2341: a flat `_routing` patch can only disable
+	} else if touches && verdict(patched) {
 		got = "policy_violation"
 	}
 	if got != want.Batch.Verdict {

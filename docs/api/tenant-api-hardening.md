@@ -209,6 +209,7 @@ ADR-016 提到「flat tenant 缺 `_metadata.{domain,region,environment}` 時可�
 | `BatchOperation.patch._timeout_ms` | integer 0..3,600,000（≤ 1h）|
 | `BatchOperation.patch._quench_min` | integer 0..86,400（≤ 1d）|
 | `BatchOperation.patch._routing_profile` / `_profile` | 1-256 chars |
+| `BatchOperation.patch._routing` | 只接受停用字串 `disable`／`disabled`／`off`／`false`（大小寫不敏感、可有前後空白，與 route generator 同一判定）；其他值（`on`、`slack`、空字串、JSON `null`）回 400——要重新啟用請用 PUT 寫入 `_routing` mapping 或移除 `_routing`（#2341）|
 | 其他 `_*` 開頭 reserved key | **soft whitelist** — 通過（避免 tenant-api 跟 threshold-exporter release cadence 耦合）|
 | `PutGroupRequest.label` / `PutViewRequest.label` | required, 1-256 chars |
 | `PutGroupRequest.description` / `PutViewRequest.description` | ≤ 4096 chars |

@@ -542,7 +542,8 @@ def test_an_unparseable_unselected_carrier_spelling_is_not_refused(tmp_path):
 
 def test_a_non_mapping_level_contributes_nothing(tmp_path):
     """A subdirectory `_routing_defaults` that is not a mapping is named and
-    skipped: the tenant inherits the levels above it unchanged."""
+    skipped: the tenant inherits the levels above it unchanged. #2341: the
+    line is blocking (`WARN … skipping`), so `--validate` fails on it."""
     d = _write(tmp_path / "conf.d", {
         "_defaults.yaml": _EMAIL_RD,
         "team/_defaults.yaml": "_routing_defaults: [a, b]\n",
@@ -552,21 +553,23 @@ def test_a_non_mapping_level_contributes_nothing(tmp_path):
     assert res.returncode == EXIT_OK, res.stderr
     assert ("_routing_defaults in team/_defaults.yaml must be a mapping, got list"
             in res.stderr)
+    assert _gar("--config-dir", str(d), "--validate").returncode == EXIT_VIOLATION
     tree = load_tenant_tree(str(d))
     assert tree.routing_configs["t-team"]["receiver"]["type"] == "email"
 
 
-_ROOT_NOT_A_MAPPING = [("[a, b]", "list"), ("not-a-mapping", "str"),
-                       ("42", "int"), ("false", "bool")]
+_ROOT_NOT_A_MAPPING = [("[a, b]", "list"), ("not-a-mapping", "string"),
+                       ("42", "int"), ("false", "boolean")]
 
 
 @pytest.mark.parametrize("value, kind", _ROOT_NOT_A_MAPPING,
                          ids=[k for _v, k in _ROOT_NOT_A_MAPPING])
 def test_a_non_mapping_root_contributes_nothing(tmp_path, value, kind):
-    """#2412: the ROOT gets the subdirectory verdict above — named, no layer,
-    rc 0 — where it used to die in `resolve_routing_defaults`' `dict(root)`
-    with a traceback (generate-routes `--validate --strict` and explain-route
-    at rc 1; validate-config's routing rows too).
+    """#2412: the ROOT gets the subdirectory verdict above — named, no layer
+    — where it used to die in `resolve_routing_defaults`' `dict(root)` with a
+    traceback (generate-routes `--validate --strict` and explain-route at rc
+    1; validate-config's routing rows too). #2341: the line is blocking, so
+    `--validate --strict` and validate-config fail on it (rc 1, no traceback).
     Go's `routingDefaultsFromNode` agrees (parity matrix
     `hier-a-root-routing-defaults-not-a-mapping`); a level below still
     contributes its own."""
@@ -577,9 +580,9 @@ def test_a_non_mapping_root_contributes_nothing(tmp_path, value, kind):
         "team/t-team.yaml": _tenant("t-team"),
     })
     warn = (f"WARN: _routing_defaults in _defaults.yaml must be a mapping, "
-            f"got {kind} — this level contributes nothing")
+            f"got {kind} ")
     res = _gar("--config-dir", str(d), "--validate", "--strict")
-    assert res.returncode == EXIT_OK, res.stderr
+    assert res.returncode == EXIT_VIOLATION, res.stderr
     assert "Traceback" not in res.stderr, res.stderr
     assert warn in res.stderr
     for tenant in ("t-root", "t-team"):
@@ -591,7 +594,7 @@ def test_a_non_mapping_root_contributes_nothing(tmp_path, value, kind):
         assert warn in exp.stderr, (tenant, exp.stderr)
     vc = subprocess.run([sys.executable, "-s", str(_VC), "--config-dir", str(d)],
                         capture_output=True, text=True, encoding="utf-8", timeout=300)
-    assert vc.returncode == EXIT_OK, (vc.stdout, vc.stderr)
+    assert vc.returncode == EXIT_VIOLATION, (vc.stdout, vc.stderr)
     assert "Traceback" not in vc.stdout + vc.stderr, (vc.stdout, vc.stderr)
     tree = load_tenant_tree(str(d))
     assert "t-root" not in tree.routing_configs
@@ -620,14 +623,15 @@ def test_a_later_root_file_replaces_the_root_defaults_whole(tmp_path, first,
     """#2412: among root `_` files (name order) the later
     `_routing_defaults` replaces the earlier WHOLE, even when it is not a
     mapping — Go's "defaults then become nil" (parity matrix
-    `hier-a-root-later-file-*` / `-earlier-file-*`)."""
+    `hier-a-root-later-file-*` / `-earlier-file-*`). #2341: the non-mapping
+    one is still named, and blocking."""
     d = _write(tmp_path / "conf.d", {
         "_defaults.yaml": first,
         "_platform.yaml": second,
         "t-root.yaml": _tenant("t-root"),
     })
     res = _gar("--config-dir", str(d), "--validate", "--strict")
-    assert res.returncode == EXIT_OK, res.stderr
+    assert res.returncode == EXIT_VIOLATION, res.stderr
     rc = load_tenant_tree(str(d)).routing_configs.get("t-root")
     assert (rc["receiver"]["type"] if rc else None) == want, rc
 

@@ -257,16 +257,15 @@ func offTree(disk string) map[string]string {
 
 const offDisabledChat = "    _routing_profile: team-chat\n    _routing: disable\n"
 
-// The block ON DISK is part of what a batch op is judged on: re-enabling
-// routing on a tenant whose file names a violating profile is refused even
-// though the patch alone names nothing forbidden. And the other way round,
-// pointing a disabled tenant at that profile is allowed (nothing renders).
+// The block ON DISK is part of what a batch op is judged on: pointing a
+// disabled tenant at a violating profile is allowed (nothing renders).
+// #2341: re-enabling with `_routing: "on"` is refused before that, as an
+// invalid patch value (TestBatchTenants_RoutingPatchMustDisable).
 func TestBatchTenants_RoutingPatchJudgedOverDiskBlock(t *testing.T) {
 	cases := []struct {
 		name, disk, patch string
 		refused           bool
 	}{
-		{"re-enable over a violating profile on disk", offDisabledChat, `{"_routing":"on"}`, true},
 		{"violating profile while disabled on disk", "    _routing_profile: domain-ok\n    _routing: disable\n",
 			`{"_routing_profile":"team-chat"}`, false},
 	}
@@ -295,9 +294,11 @@ func TestBatchTenants_RoutingPatchJudgedOverDiskBlock(t *testing.T) {
 	}
 }
 
-// Two ops on one tenant in one request, each fine alone: point the disabled
-// tenant at the violating profile, then re-enable routing. Stacked they
-// render slack. The second op must be refused in BOTH write modes.
+// Two ops on one tenant in one request: point the disabled tenant at the
+// violating profile, then write `_routing: on`. Before #2341 the second op
+// re-enabled routing and, stacked, rendered slack. Now the whole request is
+// refused (400, the `_routing` patch value) in BOTH write modes, and nothing
+// is written.
 const stackedOps = `[
 	{"tenant_id":"t-off","patch":{"_routing_profile":"team-chat"}},
 	{"tenant_id":"t-off","patch":{"_routing":"on"}}]`
@@ -306,14 +307,11 @@ func TestBatchTenants_StackedOpsSameTenant_Direct(t *testing.T) {
 	configDir := seedGitTree(t, offTree("    _routing_profile: domain-ok\n    _routing: disable\n"))
 	d := &Deps{Writer: newTestWriter(configDir), ConfigDir: configDir, RBAC: adminRBAC(t),
 		Policy: policy.NewManager(configDir), WriteMode: WriteModeDirect}
-	resp := runBatch(t, configDir, d, stackedOps)
-	if len(resp.Results) != 2 || resp.Results[0].Status != "ok" || resp.Results[1].Status != "error" ||
-		!strings.Contains(resp.Results[1].Message, "domain policy violation") {
-		t.Fatalf("results = %+v, want the first op ok and the second refused", resp.Results)
-	}
-	b, _ := os.ReadFile(filepath.Join(configDir, "t-off.yaml"))
-	if !strings.Contains(string(b), "team-chat") || !strings.Contains(string(b), "disable") {
-		t.Errorf("t-off.yaml should hold op 1 only (team-chat, still disabled):\n%s", b)
+	before, _ := os.ReadFile(filepath.Join(configDir, "t-off.yaml"))
+	assertRoutingPatchRefused(t, postTenantBatch(t, d, stackedOps), `operations[1].patch["_routing"]`)
+	after, _ := os.ReadFile(filepath.Join(configDir, "t-off.yaml"))
+	if !bytes.Equal(before, after) {
+		t.Errorf("refused batch changed t-off.yaml:\n%s", after)
 	}
 }
 
@@ -330,20 +328,9 @@ func TestBatchTenants_StackedOpsSameTenant_PRMode(t *testing.T) {
 	d := &Deps{Writer: newTestWriter(configDir), ConfigDir: configDir, RBAC: adminRBAC(t),
 		Policy: policy.NewManager(configDir), WriteMode: WriteModePR, PRClient: mockClient,
 		PRTracker: &mockPlatformTracker{}}
-	resp := runBatch(t, configDir, d, stackedOps)
-	if len(resp.Results) != 2 || resp.Results[0].Status != "included" || resp.Results[1].Status != "error" ||
-		!strings.Contains(resp.Results[1].Message, "policy violation") {
-		t.Fatalf("results = %+v, want the first op included and the second refused", resp.Results)
-	}
-	if head == "" {
-		t.Fatalf("no PR opened: %+v", resp)
-	}
-	out, err := exec.Command("git", "-C", configDir, "show", head+":t-off.yaml").CombinedOutput()
-	if err != nil {
-		t.Fatalf("git show %s:t-off.yaml: %v\n%s", head, err, out)
-	}
-	if !strings.Contains(string(out), "team-chat") || !strings.Contains(string(out), "disable") {
-		t.Errorf("PR branch must hold op 1 only (team-chat, still disabled):\n%s", out)
+	assertRoutingPatchRefused(t, postTenantBatch(t, d, stackedOps), `operations[1].patch["_routing"]`)
+	if head != "" {
+		t.Errorf("refused batch opened a PR on %s", head)
 	}
 }
 
@@ -391,8 +378,8 @@ func statuses(results []BatchResult) string {
 
 // A REFUSED op is not stacked under the ops after it: nothing of it is
 // written, so judging a later op as if it were would judge a state that
-// never lands. Two shapes, both write modes (PR mode stacks in memory,
-// direct mode reads the file back).
+// never lands. Both write modes (PR mode stacks in memory, direct mode reads
+// the file back).
 func TestBatchTenants_RefusedOpIsNotStacked(t *testing.T) {
 	ok := "included"
 	for _, mode := range []WriteMode{WriteModePR, WriteModeDirect} {
@@ -413,22 +400,6 @@ func TestBatchTenants_RefusedOpIsNotStacked(t *testing.T) {
 			}
 			if strings.Contains(file, "team-chat") || strings.Contains(file, "disable") || !strings.Contains(file, "domain-ok") {
 				t.Errorf("t-off.yaml must keep domain-ok, enabled:\n%s", file)
-			}
-		})
-		t.Run(string(mode)+"/variant B: op3 is judged over op1 only", func(t *testing.T) {
-			// Disk: compliant profile, disabled. op1 (violating profile,
-			// still disabled) is fine; op2 re-enables → refused; op3 swaps
-			// to another violating profile — fine over op1 (still
-			// disabled), refused only if the refused op2 were stacked.
-			results, file := runOffBatch(t, mode, "    _routing_profile: domain-ok\n    _routing: disable\n", `[
-				{"tenant_id":"t-off","patch":{"_routing_profile":"team-chat"}},
-				{"tenant_id":"t-off","patch":{"_routing":"on"}},
-				{"tenant_id":"t-off","patch":{"_routing_profile":"team-page"}}]`)
-			if got := statuses(results); got != ok+",error,"+ok {
-				t.Fatalf("statuses = %s, want %s,error,%s: %+v", got, ok, ok, results)
-			}
-			if !strings.Contains(file, "team-page") || !strings.Contains(file, "disable") {
-				t.Errorf("t-off.yaml must be team-page, still disabled:\n%s", file)
 			}
 		})
 	}

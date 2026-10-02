@@ -65,6 +65,7 @@ modules:
       _yaml_bool_true: "#2295 value of a YAML boolean word; table-covered by the proxy_from_environment rows"
       receiver_bool_fields: "#2295 schema lookup (properties referencing yamlBool); pinned by test_pipeline_writes_yaml_bool_words_as_booleans"
       coerce_yaml_bool: "#2295 word → boolean at emission; covered by test_pipeline_writes_yaml_bool_words_as_booleans"
+      is_valid_tenant_id: "#2341 R8 membership in one fixed regex (no numeric/string law beyond it); table-pinned against the Go copy by the tenant_ids table of tests/shared/routing_policy_parity_matrix.json"
 
   scripts/tools/_lib_io.py:
     covered:
@@ -262,6 +263,11 @@ modules:
       value_not_string_message: "#2431 message formatter for routing_values_not_string (the --strict ERROR text); exact string pinned by test_grar_routing_values_not_string.py::TestPredicate::test_message_asks_for_quotes"
       group_by_problems: "#2503 THE group_by element predicate (not a str / empty / later repeat / '...' mixed with labels, judged by original index) + the repaired list the generator renders; Go copy routingpolicy.GroupByProblems; closed case list example-pinned by test_grar_group_by.py::TestPredicate::test_rules (same list as groupby_test.go) and cross-language by the group_by_invalid column of routing_policy_parity_matrix.json"
       routing_group_by_invalid: "#2503 walks group_by_problems over the resolved routing (main, overrides[i], routes[i]); Go copy routingpolicy.GroupByInvalid; render order and skipped shapes example-pinned by test_grar_group_by.py::TestPredicate"
+      invalid_tenant_id_text: "#2341 R8 message formatter for a refused tenant id (repr so an empty id is visible); pinned by test_grar_invalid_tenant_id.py and the Python parity half's _INVALID_TENANT_ID regex"
+      _shape_of: "#2341 message helper (YAML type name + capped repr) for the two not-a-mapping texts; no invariant beyond its string, pinned through test_grar_routing_not_mapping.py"
+      routing_not_mapping_text: "#2341 message formatter for a tenant _routing that is neither a mapping nor a disabling string (with the quote hint for a boolean); verdict pinned cross-language by the refused column of routing_policy_parity_matrix.json, text by test_grar_routing_not_mapping.py"
+      routing_not_mapping_warning: "#2341 the blocking WARN … skipping line around routing_not_mapping_text; pinned by test_grar_routing_not_mapping.py and the Python parity half's _ROUTING_NOT_MAPPING regex"
+      routing_defaults_not_mapping_text: "#2341 message formatter for a _routing_defaults that is neither a mapping nor null; verdict pinned by the routing_defaults_not_mapping platform rows of routing_policy_parity_matrix.json"
       group_by_problem_text: "#2503 message formatter for group_by_problems (the --strict ERROR / non-strict WARN text); strings pinned by test_grar_group_by.py and the Go Message() pin in groupby_test.go"
       _quote_matcher_value: "#2245 three-character escape (backslash, double quote, newline) for AM matcher values; example-pinned by test_routing_profile_routes.py::TestRouteEntryPredicate and end-to-end by the amtool acceptance test"
       critical_escalation_findings: "#2244 require_critical_escalation judge over list_tenant_subroutes (escalation target; #2312 exact leak list: each non-escalation destination whose match ∪ severity=critical is not covered by an earlier sub-route's match); closed case list example-pinned by test_critical_escalation.py (ADR-007 fixture table + TestLeaks table), every table row cross-checked against amtool (TestAmtoolOracle)"
