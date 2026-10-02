@@ -256,6 +256,30 @@ func TestStatErrIsWrongPath_WindowsErrnos(t *testing.T) {
 	}
 }
 
+// rootListReported is the one condition for RootListErr and for dropping the
+// root's walk WARN: a root whose listing failed part-way (files kept) is not
+// reported, so its WARN must be logged (#2627 review).
+func TestRootListReported(t *testing.T) {
+	t.Parallel()
+	walkErr := errors.New("open /r: permission denied")
+	for _, c := range []struct {
+		name string
+		scan *TreeScan
+		err  error
+		want bool
+	}{
+		{"listing failed part-way: files kept", &TreeScan{Files: map[string]*TreeFile{"t.yaml": {}}, RootWalkErr: walkErr}, nil, false},
+		{"root not listed, nothing kept", &TreeScan{RootWalkErr: walkErr}, nil, true},
+		{"scan failed", nil, errors.New("stat /r: boom"), false},
+		{"scan failed with a scan", &TreeScan{RootWalkErr: walkErr}, errors.New("boom"), false},
+		{"empty tree, root listed", &TreeScan{}, nil, false},
+	} {
+		if got := rootListReported(c.scan, c.err); got != c.want {
+			t.Errorf("%s: rootListReported = %v, want %v", c.name, got, c.want)
+		}
+	}
+}
+
 // The root's walk WARN is dropped only when the caller reports the same
 // reason (RootListErr); otherwise it is logged, through the caller's logger
 // (prefix and flags), after the walk's other lines (#2627 review).

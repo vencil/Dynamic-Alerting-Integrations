@@ -128,19 +128,20 @@ func LoadDirReport(dir string, logger *log.Logger) (cfg *ThresholdConfig, rep Lo
 	// The root's walk WARN is dropped only when RootListErr carries it below
 	// (the caller prints that); otherwise — e.g. the root's listing failed
 	// part-way, so the walk kept files — it is logged as the walker wrote it.
-	rootWarn.release(err == nil && len(scan.Files) == 0 && scan.RootWalkErr != nil)
+	reported := rootListReported(scan, err)
+	rootWarn.release(reported)
 	if err != nil {
 		return nil, LoadReport{}, err
 	}
 	if err := RejectDuplicateTenant(scan); err != nil {
 		return nil, LoadReport{}, err
 	}
+	if reported {
+		listErr := fmt.Errorf("cannot list configDir %q: %w", dir, scan.RootWalkErr)
+		return nil, LoadReport{Unreadable: []UnreadableFile{RootUnreadable}, RootListErr: listErr},
+			fmt.Errorf("%w: %w", listErr, ErrNoYAMLFiles)
+	}
 	if len(scan.Files) == 0 {
-		if scan.RootWalkErr != nil {
-			listErr := fmt.Errorf("cannot list configDir %q: %w", dir, scan.RootWalkErr)
-			return nil, LoadReport{Unreadable: []UnreadableFile{RootUnreadable}, RootListErr: listErr},
-				fmt.Errorf("%w: %w", listErr, ErrNoYAMLFiles)
-		}
 		return nil, LoadReport{Unreadable: scan.Unreadable}, fmt.Errorf("%w in %s", ErrNoYAMLFiles, dir)
 	}
 	built, err := loadDirBuild(scan, dir, logger, nil)
@@ -156,6 +157,16 @@ func LoadDirReport(dir string, logger *log.Logger) (cfg *ThresholdConfig, rep Lo
 		}
 	}
 	return &built.Config, rep, nil
+}
+
+// rootListReported is LoadDirReport's one condition for "the root could not
+// be listed, and RootListErr reports it": the scan succeeded, kept no file,
+// and the walk failed on the root itself. It decides both that RootListErr is
+// set and that the walker's root WARN is dropped, so the two cannot drift: a
+// root whose listing failed part-way (files kept) is not reported this way,
+// and its WARN is logged (#2627).
+func rootListReported(scan *TreeScan, scanErr error) bool {
+	return scanErr == nil && scan != nil && len(scan.Files) == 0 && scan.RootWalkErr != nil
 }
 
 // withRootWalkWarnHeld is logger with the walker's WARN for the root
