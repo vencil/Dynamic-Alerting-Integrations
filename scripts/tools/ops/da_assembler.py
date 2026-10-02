@@ -17,17 +17,23 @@ Usage:
 Prerequisites:
     pip install kubernetes pyyaml
     (or run inside a pod with ServiceAccount + RBAC)
+    --render-cr also needs the da-crdecode binary (#2476): on $PATH, or
+    named by $DA_CRDECODE_BINARY. Build it with
+    `go build ./cmd/da-crdecode` in components/threshold-exporter/app
+    (`make assembler-render` does).
 """
 
 import argparse
 import hashlib
-import io
+import json
 import logging
 import math
 import os
 import re
+import shutil
 import signal
 import stat
+import subprocess
 import sys
 import time
 from datetime import date, datetime, timezone
@@ -42,9 +48,9 @@ from _lib_io import (  # noqa: E402  (#1789)
     OutputWriteError,
     exit_on_output_write_error,
     output_write,
+    safe_label,
 )
 from _lib_yaml_keys import (  # noqa: E402  (#2216, #2331)
-    RawPlain,
     dump_for_rewrite,
     load_for_rewrite,
 )
@@ -92,14 +98,12 @@ def render_cr_to_yaml(cr: dict) -> str:
 
     Tenant ids must arrive as ``str`` (#2216): the dump quotes a text
     key YAML would retype (``'010':``), so the exporter reads back the same
-    id. A non-str key (``8``) is already a renamed tenant and cannot be
-    recovered here — the reader is where it is kept (``render_cr_file``;
-    the API path hands over JSON, whose keys are strings).
+    id. Both callers hand over JSON, whose keys are strings: the API path,
+    and ``render_cr_file`` (decoded as Kubernetes clients decode it, #2476).
 
-    A VALUE read as :class:`RawPlain` (``render_cr_file``, #2331) is written
-    back plain, as the CR wrote it: ``010`` stays ``010``, ``12:30`` stays
-    ``12:30`` — the exporter reads the CR's value, not PyYAML's retyping of
-    it (``8``, ``750``). Any other value dumps as ``yaml.safe_dump`` would.
+    Values dump as ``yaml.safe_dump`` would: both callers hand over
+    JSON-decoded data, so ``dump_for_rewrite``'s plain-text case
+    (``RawPlain``) never applies here.
     """
     spec = cr.get("spec", {})
     metadata = cr.get("metadata", {})
@@ -107,11 +111,9 @@ def render_cr_to_yaml(cr: dict) -> str:
     doc: Dict[str, Any] = {}
 
     # Each block is written only when it is a non-empty MAPPING. ⛔ Not a
-    # truthiness test: a RawPlain scalar is text, so `defaults: 0` /
-    # `stateFilters: false` read as "0" / "false" are truthy, and writing
-    # them out makes the exporter skip the whole file (YamlFileError,
-    # ValueError). Read PyYAML-typed they were falsy and dropped; this keeps
-    # that — and drops any other non-mapping block the same way.
+    # truthiness test: a text block (`defaults: "0"`) is truthy, and writing
+    # it out makes the exporter skip the whole file (YamlFileError,
+    # ValueError). Any non-mapping block is dropped.
 
     # Tenants block (required)
     tenants = spec.get("tenants")
@@ -404,13 +406,113 @@ def run_watch(
 
 # ── Offline render (no K8s required) ─────────────────────────────────
 
-#: YAML 1.1 (PyYAML) implicit tags that make an unquoted `metadata.name`
-#: or `metadata.namespace` a caller error: int / float / bool. `timestamp`
-#: is absent — an unquoted date passes this check (then the format one). Close to what Kubernetes sees after YAML→JSON, NOT the
-#: same: go-yaml v2 and PyYAML type `0o17`, `1e3`, `08`, `y`, `n`, `1:30`
-#: differently (#2371 review). The name FORMAT is checked separately, below.
-_NON_STRING_NAME_TAGS = frozenset("tag:yaml.org,2002:" + t
-                                  for t in ("int", "float", "bool"))
+#: #2476: `--render-cr` does not read the CR with PyYAML. It asks
+#: `da-crdecode` (components/threshold-exporter/app/cmd/da-crdecode), which
+#: runs the YAML→JSON conversion Kubernetes clients run before a CR reaches
+#: the API server (sigs.k8s.io/yaml.YAMLToJSON), and works on that JSON:
+#: types, null keys, duplicate keys and merges are what that conversion
+#: makes of them, not what YAML 1.1 makes of them. The API server's own
+#: checks (the CRD schema) are not part of that conversion; the checks below
+#: cover some of them, without a guarantee that they match.
+CRDECODE_BINARY_NAME = "da-crdecode"
+CRDECODE_ENV = "DA_CRDECODE_BINARY"
+CRDECODE_TIMEOUT_SECONDS = 60
+#: Every line of da-crdecode's stderr is passed on behind this, so none of
+#: it starts at column 0.
+CRDECODE_PREFIX = "  da-crdecode| "
+
+
+class CrDecodeError(Exception):
+    """da-crdecode could not be run, or refused the file.
+
+    ``str()`` is one line; ``stderr_lines`` is da-crdecode's stderr, every
+    non-empty line as written.
+    """
+
+    def __init__(self, message: str, stderr_lines: list[str]) -> None:
+        super().__init__(message)
+        self.stderr_lines = stderr_lines
+
+
+def _stderr_lines(raw: bytes | None) -> list[str]:
+    """Every non-empty line of *raw*, split on ``\\n`` only (not
+    ``str.splitlines``, which also splits on NEL, U+2028 and others that can
+    sit inside a file name). Bytes that are not UTF-8 are shown escaped."""
+    if not raw:
+        return []
+    text = raw.decode("utf-8", errors="backslashreplace")
+    return [ln.rstrip() for ln in text.split("\n") if ln.strip()]
+
+
+def _crdecode_binary() -> str | None:
+    """``$DA_CRDECODE_BINARY`` when set, else ``da-crdecode`` on ``$PATH``."""
+    return os.environ.get(CRDECODE_ENV) or shutil.which(CRDECODE_BINARY_NAME)
+
+
+def decode_cr(cr_path: Path) -> tuple[Any, list[str]]:
+    """The CR in *cr_path* as Kubernetes clients decode it, and da-crdecode's
+    stderr lines (empty on a normal run).
+
+    Raises :class:`CrDecodeError` when the binary is missing, cannot be run,
+    does not finish within ``CRDECODE_TIMEOUT_SECONDS``, exits non-zero (the
+    file cannot be read, the conversion refuses it, or it holds more than one
+    document) or prints something that is not its JSON contract.
+    ``json.loads`` raises RecursionError for a document nested too deeply for
+    Python's JSON reader; that is left to the caller.
+    """
+    binary = _crdecode_binary()
+    if not binary:
+        raise CrDecodeError(
+            f"{CRDECODE_BINARY_NAME} was not found: --render-cr decodes the CR "
+            "with it. Build it (cd components/threshold-exporter/app && go "
+            f"build ./cmd/{CRDECODE_BINARY_NAME}) and put it on $PATH, or set "
+            f"${CRDECODE_ENV} to its path", [])
+    # An absolute path never starts with `-`, so it is not read as a flag.
+    cmd = [binary, os.path.abspath(cr_path)]
+    try:
+        proc = subprocess.run(cmd, capture_output=True, check=False,
+                              timeout=CRDECODE_TIMEOUT_SECONDS)
+    except subprocess.TimeoutExpired as e:
+        raise CrDecodeError(
+            f"{CRDECODE_BINARY_NAME} did not finish within "
+            f"{CRDECODE_TIMEOUT_SECONDS}s", _stderr_lines(e.stderr)) from e
+    except OSError as e:
+        raise CrDecodeError(f"cannot run {binary}: {e}", []) from e
+    lines = _stderr_lines(proc.stderr)
+    if proc.returncode != 0:
+        raise CrDecodeError(
+            f"{CRDECODE_BINARY_NAME} exited {proc.returncode}", lines)
+    try:
+        out = json.loads(proc.stdout)
+    except ValueError as e:  # JSONDecodeError, or stdout that is not UTF-8
+        raise CrDecodeError(
+            f"{CRDECODE_BINARY_NAME} printed output that is not JSON: {e}",
+            lines) from e
+    docs = out.get("documents") if isinstance(out, dict) else None
+    if not isinstance(docs, list) or len(docs) != 1:
+        raise CrDecodeError(
+            f"{CRDECODE_BINARY_NAME} printed JSON without exactly one "
+            "document under \"documents\"", lines)
+    return docs[0], lines
+
+
+def _log_crdecode_lines(lines: list[str], level: int) -> None:
+    """Every line of da-crdecode's stderr, escaped, behind ``CRDECODE_PREFIX``."""
+    for line in lines:
+        log.log(level, "%s%s", CRDECODE_PREFIX, safe_label(line))
+
+
+def _json_kind(value: Any) -> str:
+    """How *value*, decoded from JSON, is described in an error."""
+    if isinstance(value, bool):
+        return f"a boolean ({json.dumps(value)})"
+    if isinstance(value, (int, float)):
+        return f"a number ({json.dumps(value)})"
+    if isinstance(value, list):
+        return "a list"
+    if isinstance(value, dict):
+        return "a mapping"
+    return f"{value!r}"
 
 #: #2396: the formats the API server enforces on a ThresholdConfig, so the
 #: `--render-cr` path accepts the same names the controller path can ever
@@ -440,76 +542,6 @@ def _is_dns1123_label(text: str) -> bool:
     """RFC 1123 label, as Kubernetes checks a namespace name."""
     return (len(text) <= _DNS1123_LABEL_MAX
             and _DNS1123_LABEL_RE.fullmatch(text) is not None)
-
-
-#: The spellings YAML 1.1 reads as null (plus an empty value). PyYAML
-#: builds None for `!!null <anything>`; Kubernetes (YAML→JSON, go-yaml)
-#: refuses the whole document when a `!!null` scalar is written as
-#: anything else (`!!null team`).
-_NULL_SPELLINGS = frozenset(("", "~", "null", "Null", "NULL"))
-_NULL_TAG = "tag:yaml.org,2002:null"
-
-
-def _null_tagged_non_null(root: Any) -> Any:
-    """The text of the first ``!!null`` scalar in *root* not written as null.
-
-    Walks the WHOLE composed graph, not one key: go-yaml refuses the
-    document wherever such a scalar sits — under a duplicate key the load
-    drops, in an earlier `metadata:` block, or behind a `<<` merge / alias
-    (visited once, by node id). None when there is none.
-    """
-    for node in _walk_nodes(root):
-        if (isinstance(node, yaml.ScalarNode) and node.tag == _NULL_TAG
-                and node.value not in _NULL_SPELLINGS):
-            return node.value
-    return None
-
-
-def _has_null_key(root: Any) -> bool:
-    """#2476: whether any mapping anywhere in *root* has a null key.
-
-    Kubernetes (sigs.k8s.io/yaml YAMLToJSON) refuses a document whose
-    decoded form has a null map key (``unsupported map key of type:
-    <nil>``) — ``null:``, ``~:``, an empty ``? `` key, one reached through
-    an alias or a ``<<`` merge. Fail-closed: the WHOLE composed graph is
-    walked (:func:`_walk_nodes`) as PyYAML types it, so two rare spellings
-    Kubernetes accepts are refused too: a null key inside a value a later
-    duplicate key replaces (go-yaml decodes it away), and a key with the
-    non-specific ``!`` tag (``! ~:``, ``! null:``, ``! :`` — PyYAML reads
-    null, go-yaml a string). Telling them apart means reproducing go-yaml's
-    duplicate-key / merge order and key typing, which this tool does not
-    do. A QUOTED ``"null":`` (or ``!!str null``) is a string key and is
-    accepted.
-    """
-    return any(isinstance(node, yaml.MappingNode)
-               and any(isinstance(key, yaml.ScalarNode)
-                       and key.tag == _NULL_TAG for key, _v in node.value)
-               for node in _walk_nodes(root))
-
-
-def _walk_nodes(root: Any):
-    """Every node of the composed graph *root*, each once (by node id)."""
-    seen = set()
-    stack = [root]
-    while stack:
-        node = stack.pop()
-        if node is None or id(node) in seen:
-            continue
-        seen.add(id(node))
-        yield node
-        if isinstance(node, yaml.MappingNode):
-            for key, value in node.value:
-                stack.extend((key, value))
-        elif isinstance(node, yaml.SequenceNode):
-            stack.extend(node.value)
-
-
-def _named_stream(text: str, path: Path) -> io.StringIO:
-    """*text* as a stream named *path*, so a YAML error names the file
-    (and prints no snippet) exactly as reading the file itself did."""
-    stream = io.StringIO(text)
-    stream.name = str(path)
-    return stream
 
 
 def _plain_tag(text: str) -> str:
@@ -584,21 +616,230 @@ def _stale_render_hint(config_dir: Path, old_name: str, new_file: str) -> str:
             f"{new_file} file both declare the tenant")
 
 
-def _keys_as_plain_text(obj: Any) -> Any:
-    """*obj* with every mapping key a plain ``str`` (values untouched).
+def _legacy_name_hint(cr_path: Path, config_dir: Path) -> str:
+    """#2430: the stale-file hint for a refused ``metadata.name``, or ``""``.
 
-    ``load_for_rewrite`` reads an unquoted key as :class:`RawPlain`, which
-    would be dumped back unquoted (``010:``). A tenant id is written QUOTED
-    wherever YAML would retype it (``'010':``, #2216), so a reader that still
-    types keys reads the same id — and an unquoted and a quoted CR render
-    the same body. Only VALUES keep their plain spelling (#2331).
+    Versions before #2371 read the CR with PyYAML and named the output file
+    after the name AS PYYAML TYPED IT (``010`` -> ``8.yaml``, ``yes`` ->
+    ``True.yaml``, ``1:30`` -> ``90.yaml``, an unquoted datetime -> its
+    Python spelling). Rebuilding that file name needs PyYAML's reading of the
+    name, so this — and only this — still reads the file with PyYAML. It
+    decides nothing about the CR: the name was already refused from
+    da-crdecode's output. Best effort: no hint when PyYAML cannot read the
+    file, or the name is not a scalar under ``metadata``.
+
+    The hint is given when the earlier version's file name differs from the
+    name as written, or when the name as written is not a valid name either
+    (the CR has to be renamed, so the old file is stale even when spelled as
+    written). A null name was rendered to ``None.yaml``; that hint is given
+    by the caller.
     """
-    if isinstance(obj, dict):
-        return {(str(k) if isinstance(k, RawPlain) else k):
-                _keys_as_plain_text(v) for k, v in obj.items()}
-    if isinstance(obj, list):
-        return [_keys_as_plain_text(v) for v in obj]
-    return obj
+    try:
+        with open(cr_path, encoding="utf-8") as fh:
+            root = yaml.compose(fh, Loader=yaml.SafeLoader)
+        node = _metadata_name_node(root)
+        if node is None or node.tag == "tag:yaml.org,2002:null":
+            return ""
+        value = yaml.SafeLoader("").construct_object(node, deep=True)
+    except Exception:  # noqa: BLE001 — a hint only; any failure means none
+        return ""
+    plain = node.style is None
+    if plain and node.tag in _LEGACY_RETYPED_TAGS:
+        try:
+            legacy = str(value)
+        except ValueError:  # an int past Python's str() digit limit
+            return ""
+        quotable = _is_dns1123_subdomain(node.value)
+        if legacy == node.value and quotable:
+            return ""  # quoting renders to the same file and overwrites it
+        return _stale_render_hint(
+            config_dir, legacy,
+            "quoted name's" if quotable else "renamed CR's")
+    if isinstance(value, datetime):
+        return _stale_render_hint(config_dir, str(value), "renamed CR's")
+    return ""
+
+
+#: Tags of a plain scalar PyYAML retyped, so the earlier version's file name
+#: was not the name as written (see :func:`_legacy_name_hint`).
+_LEGACY_RETYPED_TAGS = frozenset("tag:yaml.org,2002:" + t
+                                 for t in ("int", "float", "bool"))
+
+
+def _metadata_name_node(root: Any) -> Any:
+    """The scalar node of ``metadata.name`` in the composed *root*, or None.
+    The last ``metadata`` / ``name`` key wins, as it did for the load."""
+    def last(mapping: Any, key: str) -> Any:
+        if not isinstance(mapping, yaml.MappingNode):
+            return None
+        found = None
+        for k, v in mapping.value:
+            if isinstance(k, yaml.ScalarNode) and k.value == key:
+                found = v
+        return found
+    node = last(last(root, "metadata"), "name")
+    return node if isinstance(node, yaml.ScalarNode) else None
+
+
+def _as_text(value: Any) -> str | None:
+    """*value* from the CR read as written, as the text it was written as:
+    a ``str`` (a plain scalar is RawPlain, its source text), a ``date`` in
+    its ISO spelling (``!!timestamp 2024-01-01``); None for anything else
+    (null, a number or a ``datetime`` from an explicit tag, bytes, ...)."""
+    if isinstance(value, str):
+        return str(value)
+    if isinstance(value, date) and not isinstance(value, datetime):
+        return value.isoformat()
+    return None
+
+
+def _shape_name(value: Any) -> str:
+    """How a value's structure is named in a :func:`_key_divergence` error.
+    A tuple is an item of ``!!omap`` / ``!!pairs`` as written."""
+    if isinstance(value, dict):
+        return "a mapping"
+    if isinstance(value, (set, frozenset)):
+        return "a set"
+    if isinstance(value, list):
+        return f"a list of {len(value)}"
+    if isinstance(value, tuple):
+        return "a (key, value) pair"
+    return "a scalar"
+
+
+#: Appended to a divergence error when the CR uses `<<` merges: quoting does
+#: not help when the two readings differ because of the merge itself.
+_MERGE_NOTE = ("; the CR uses << merges: if the difference comes from a << "
+               "written after explicit keys (on the Kubernetes side it "
+               "overrides them), move it before them or do not use merges")
+
+
+def _merge_note(cr_path: Path) -> str:
+    """:data:`_MERGE_NOTE` when the CR has a ``<<`` merge key anywhere, else
+    ``""``. Read from the composed node graph (no value is built); any
+    failure to read gives ``""`` — the note is an explanation only."""
+    try:
+        with open(cr_path, encoding="utf-8") as fh:
+            root = yaml.compose(fh, Loader=yaml.SafeLoader)
+    except Exception:  # noqa: BLE001 — a note only
+        return ""
+    seen, stack = set(), [root]
+    while stack:
+        node = stack.pop()
+        if node is None or id(node) in seen:
+            continue
+        seen.add(id(node))
+        if isinstance(node, yaml.MappingNode):
+            for key, value in node.value:
+                if key.tag == "tag:yaml.org,2002:merge":
+                    return _MERGE_NOTE
+                stack.extend((key, value))
+        elif isinstance(node, yaml.SequenceNode):
+            stack.extend(node.value)
+    return ""
+
+
+def _key_divergence(decoded: Any, written: Any, path: str) -> str:
+    """#2476: why the keys da-crdecode read under *path* differ from the
+    keys as written, at any depth, or ``""``.
+
+    An unquoted ``010:`` is the key ``8`` to Kubernetes, ``yes:`` is
+    ``true``: rendering either would rename it — a tenant id, a metric
+    name — and ``8:`` next to ``010:`` would become one key. Two real
+    readings are compared mapping by mapping, by their key sets; nothing
+    about YAML typing is decided here. Values are not compared (they are
+    rendered as decoded), but the two readings must have the same
+    structure: where one has a mapping or a list and the other has not, or
+    two lists differ in length, the CR is refused (fail-closed) — the keys
+    below cannot be paired. A ``!!set`` as written is a mapping of keys.
+    A key written twice with the same text is one key in both readings.
+    """
+    if isinstance(written, (set, frozenset)):
+        written = dict.fromkeys(written)
+    if isinstance(decoded, dict) and isinstance(written, dict):
+        by_text = {}
+        for key, value in written.items():
+            by_text[_as_text(key)] = value
+        if set(by_text) != set(decoded):
+            only_written = sorted(repr(k) for k in set(by_text) - set(decoded))
+            only_read = sorted(repr(k) for k in set(decoded) - set(by_text))
+            return (f"{path}: the keys as written ("
+                    + (", ".join(only_written) or "none")
+                    + ") are not the keys Kubernetes reads ("
+                    + (", ".join(only_read) or "none")
+                    + "); rendering would rename them. Quote each such key "
+                    "so both readings are the same text")
+        for key, value in decoded.items():
+            why = _key_divergence(value, by_text[key], f"{path}.{key}")
+            if why:
+                return why
+        return ""
+    if isinstance(decoded, list) and isinstance(written, list) \
+            and len(decoded) == len(written):
+        for i, (d, w) in enumerate(zip(decoded, written)):
+            why = _key_divergence(d, w, f"{path}[{i}]")
+            if why:
+                return why
+        return ""
+    if isinstance(decoded, (dict, list)) or isinstance(written, (dict, list)):
+        return (f"{path}: Kubernetes reads {_shape_name(decoded)} here but "
+                f"the CR as written holds {_shape_name(written)}, so the keys "
+                "below cannot be compared; this tool refuses such a CR")
+    return ""
+
+
+def _profile_divergence(decoded: Any, written: Any) -> str:
+    """#2476: why a tenant's ``_profile`` reads differently to Kubernetes
+    than as written, or ``""``.
+
+    ``_profile`` names a profile, as a tenant id names a tenant: an unquoted
+    ``_profile: 010`` is the number 8 to Kubernetes, ``yes`` is ``true``,
+    and rendering that would point the tenant at a profile that does not
+    exist. Compared as :func:`_key_divergence` compares keys (two real
+    readings); a null on both sides is no profile.
+    """
+    if not isinstance(decoded, dict) or not isinstance(written, dict):
+        return ""
+    by_text = {_as_text(k): v for k, v in written.items()}
+    for tenant, values in decoded.items():
+        as_written = by_text.get(tenant)
+        if not isinstance(values, dict) or not isinstance(as_written, dict) \
+                or "_profile" not in as_written:
+            continue
+        raw = as_written["_profile"]
+        read = values.get("_profile")
+        if raw is None and read is None:
+            continue
+        if not isinstance(read, str) or _as_text(raw) != read:
+            return (f"spec.tenants.{tenant}._profile is read by Kubernetes "
+                    f"as {read!r}, which is not the text written in the CR "
+                    f"({raw!r}): the tenant would point at another profile. "
+                    "Quote it so both are the same")
+    return ""
+
+
+def _in_written_order(decoded: Any, written: Any) -> Any:
+    """*decoded* (da-crdecode's JSON, every object's keys sorted) with each
+    mapping's keys in the order the CR wrote them, values untouched.
+
+    A key is matched to the written one by its text; keys with no written
+    counterpart keep their (sorted) order, after the matched ones. A list is
+    walked item by item when both sides have the same length.
+    """
+    if isinstance(decoded, dict) and isinstance(written, dict):
+        by_text = {}
+        for key, value in written.items():
+            text = _as_text(key)
+            if text is not None and text not in by_text:
+                by_text[text] = value
+        order = [k for k in by_text if k in decoded]
+        order += [k for k in decoded if k not in by_text]
+        return {k: _in_written_order(decoded[k], by_text.get(k))
+                for k in order}
+    if (isinstance(decoded, list) and isinstance(written, list)
+            and len(decoded) == len(written)):
+        return [_in_written_order(d, w) for d, w in zip(decoded, written)]
+    return decoded
 
 
 def render_cr_file(
@@ -607,68 +848,33 @@ def render_cr_file(
     *,
     dry_run: bool = False,
 ) -> int:
-    """Render a single CR YAML file to config-dir (offline mode)."""
-    # #2216: keys as the exporter reads them (the scalar's source text,
-    # #2114) — a `tenants:` key read as `010` → 8 was rendered as `8:`, a
-    # tenant the CR never named. `render_cr_to_yaml` dumps the text back,
-    # quoted wherever YAML would retype it. Not strict, as before (#2123).
-    #
-    # #2331 / #2372: VALUES as the CR wrote them too. A PyYAML-typed read
-    # retyped every unquoted scalar before it was dumped back: a threshold
-    # `010` rendered as `8`, `12:30` as `750` (its `:30` severity lost), a
-    # timestamp in Python's spelling — and `metadata.name: 010` named the
-    # output `8.yaml` (`yes` → `True.yaml`), which tenant-api cannot find.
-    # `load_for_rewrite` keeps a plain scalar's text (RawPlain, a `str`), so
-    # the file name, the log and the header name the CR as written.
+    """Render a single CR YAML file to config-dir (offline mode).
+
+    #2476: the CR is decoded by ``da-crdecode``, as Kubernetes clients decode
+    it (see ``CRDECODE_BINARY_NAME``): values are rendered as decoded (an
+    unquoted ``010`` VALUE is the number 8). The ids — ``metadata.name`` /
+    ``namespace`` and the tenant ids — must read the same as written
+    (``_lib_yaml_keys``) and as decoded, or the CR is refused: an unquoted
+    ``010:`` tenant would otherwise be renamed. The CR as written also gives
+    the key order. What this path checks on top of the controller path is
+    below; it does not reproduce the API server's validation.
+    """
     try:
-        with open(cr_path, encoding="utf-8") as fh:
-            text = fh.read()
-        cr = _keys_as_plain_text(
-            load_for_rewrite(_named_stream(text, cr_path)))
-        # #2396: the node graph, for the `!!null` check below.
-        root = yaml.compose(_named_stream(text, cr_path),
-                            Loader=yaml.SafeLoader)
-    except (OSError, yaml.YAMLError) as e:
+        cr, warn_lines = decode_cr(cr_path)
+    except CrDecodeError as e:
         log.error("Failed to parse %s: %s", cr_path, e)
+        _log_crdecode_lines(e.stderr_lines, logging.ERROR)
         return EXIT_CALLER_ERROR
     except RecursionError:
-        # #2476: this tool's (pure-Python) parser limit, NOT a verdict
-        # that Kubernetes refuses the file — go-yaml reads nesting far
-        # deeper. A self-referencing anchor (`&a [1, *a]`) lands here too.
+        # Python's JSON reader has a depth limit; Kubernetes' decoder reads
+        # far deeper. This tool's limit, not a verdict on the file.
         log.error("Failed to parse %s: nested too deeply for this tool to "
-                  "read (or an anchor that contains itself)", cr_path)
+                  "read", cr_path)
         return EXIT_CALLER_ERROR
-    except Exception as e:  # noqa: BLE001 — see comment
-        # #2476: building a value from the file failed — not UTF-8
-        # (UnicodeDecodeError), or an explicit tag whose text does not
-        # construct (`!!int team` ValueError, `!!bool team` KeyError,
-        # `!!timestamp team` AttributeError, `!!int ""` IndexError, a
-        # >4300-digit `!!int "…"`). Not a closed list, so every failure
-        # while reading the caller's file is rc 2 naming it, never a
-        # traceback.
-        log.error("Failed to parse %s: %s: %s", cr_path,
-                  type(e).__name__, e)
-        return EXIT_CALLER_ERROR
+    _log_crdecode_lines(warn_lines, logging.WARNING)
 
     if not isinstance(cr, dict) or cr.get("kind") != "ThresholdConfig":
         log.error("%s is not a ThresholdConfig resource", cr_path)
-        return EXIT_CALLER_ERROR
-    written = _null_tagged_non_null(root)
-    if written is not None:
-        log.error("%s: a scalar tagged !!null is written as %r; only an "
-                  "empty scalar or ~ / null / Null / NULL means null, and "
-                  "Kubernetes refuses the document", cr_path, written)
-        return EXIT_CALLER_ERROR
-    if _has_null_key(root):
-        log.error("%s: the document has a mapping with a null key (null, "
-                  "~ or an empty key), as this tool's YAML reader sees it. "
-                  "Kubernetes usually refuses such a document; in a few rare "
-                  "spellings (a key inside a value that another key replaces "
-                  "once duplicate keys and << merges are resolved, or a key "
-                  "with the non-specific ! tag) "
-                  "Kubernetes reads it differently and accepts it, but this "
-                  "tool does not reproduce those rules and always refuses. "
-                  "If the string is meant, quote it (\"null\")", cr_path)
         return EXIT_CALLER_ERROR
 
     # #2371: shape checks `reconcile_one` does not make. Its
@@ -679,119 +885,115 @@ def render_cr_file(
     # renders as `spec: {}` did before.
     metadata = cr.get("metadata")
     name = metadata.get("name") if isinstance(metadata, dict) else None
-    # An explicitly tagged `!!timestamp "2024-01-01"` is still a `date`
-    # object (only a plain scalar is RawPlain); it rendered to
-    # `2024-01-01.yaml` before #2371, so it stays accepted. A `datetime`
-    # does not: its str() is not the text the CR wrote.
-    if isinstance(name, date) and not isinstance(name, datetime):
-        name = name.isoformat()
+    if isinstance(name, (bool, int, float)):
+        log.error("%s: metadata.name must be a string, but Kubernetes reads "
+                  "it as %s. Quoting makes it a string; it must still be a "
+                  "valid Kubernetes object name (DNS-1123)%s", cr_path,
+                  _json_kind(name), _legacy_name_hint(cr_path, config_dir))
+        return EXIT_CALLER_ERROR
     if not isinstance(name, str) or not name:
-        # #2430: an earlier version rendered a null name (`~`, `null`, an
-        # empty scalar) to `None.yaml` and a `!!timestamp` datetime to its
-        # str(). A missing name crashed it, so there is nothing to name.
-        # A sequence / mapping / `!!binary` name was rendered to a file too
-        # (its str() / repr), but is deliberately not covered: rare.
         extra = ""
         if isinstance(metadata, dict) and "name" in metadata \
                 and name is None:
+            # #2430: an earlier version rendered a null name to `None.yaml`.
             extra = ("; a null name (empty, ~ or null) is not a string: if "
                      "the string null is meant, quote it (\"null\")"
                      + _stale_render_hint(config_dir, "None", "named CR's"))
-        elif isinstance(name, datetime):
-            extra = _stale_render_hint(config_dir, str(name),
-                                       "renamed CR's")
         log.error("%s: metadata.name must be a non-empty string%s",
                   cr_path, extra)
-        return EXIT_CALLER_ERROR
-    # An unquoted name is RawPlain text. Judged by YAML 1.1 (PyYAML)
-    # implicit typing: one read as int / float / bool is a caller error; a
-    # date passes this type check and is then held to the DNS-1123 format
-    # check below, which refuses a datetime (`:`, `T`, `Z`, space). See
-    # _NON_STRING_NAME_TAGS for where the typing differs from Kubernetes.
-    # Null was refused above.
-    tag = _plain_tag(name) if isinstance(name, RawPlain) else None
-    if tag in _NON_STRING_NAME_TAGS:
-        # #2430: before #2399/#2400 this name was rendered under its typed
-        # spelling (`010` -> `8.yaml`, `yes` -> `True.yaml`); once quoted it
-        # renders as `010.yaml`, and a stale typed-spelling file left in a
-        # persistent --config-dir declares the tenant a second time. The
-        # message names that file when it exists with this tool's header
-        # (_stale_render_hint);
-        # deleting it is left to the operator.
-        # Same spelling (`42`): quoting overwrites it, nothing is left.
-        # Construction failing (`0x_`, a >4300-digit int): the earlier
-        # version crashed on it and wrote nothing, so there is no hint.
-        # A name quoting cannot save (not DNS-1123 once quoted, #2396:
-        # `TRUE`, `-5`, `1:30`) has to be renamed, so the old file is stale
-        # even when spelled as written (`True` -> `True.yaml`).
-        # `true` -> `True.yaml` differs from `true.yaml` only in case; on a
-        # case-insensitive file system the header tells them apart
-        # (_stale_render_hint).
-        try:
-            old_name = str(yaml.safe_load(name))
-        except (ValueError, yaml.YAMLError):
-            old_name = None
-        quotable = _is_dns1123_subdomain(name)
-        stale = ""
-        if old_name is not None and (old_name != name or not quotable):
-            stale = _stale_render_hint(
-                config_dir, old_name,
-                "quoted name's" if quotable else "renamed CR's")
-        log.error("%s: metadata.name must be a string, but unquoted %s is "
-                  "read as %s (YAML 1.1). Quoting makes it a string; it "
-                  "must still be a valid Kubernetes object name (DNS-1123)%s",
-                  cr_path, name, tag.rsplit(":", 1)[-1], stale)
         return EXIT_CALLER_ERROR
     # #2396: the name is the output file name and goes into the header
     # comment, so its format is checked here, before anything is written.
     if not _is_dns1123_subdomain(name):
-        # #2430: an unquoted datetime (`2024-01-01T10:00:00Z`) was rendered
-        # by an earlier version to its Python spelling
-        # (`2024-01-01 10:00:00+00:00.yaml`); the CR has to be renamed, so
-        # that file is stale. A date is DNS-1123 and never gets here.
-        stale = ""
-        if tag == "tag:yaml.org,2002:timestamp":
-            try:
-                stale = _stale_render_hint(
-                    config_dir, str(yaml.safe_load(name)), "renamed CR's")
-            except (ValueError, yaml.YAMLError):
-                stale = ""
         log.error("%s: metadata.name %r is not a valid Kubernetes object "
                   "name (DNS-1123 subdomain: lowercase a-z, 0-9, '-' and "
                   "'.', starting and ending alphanumeric, at most %d "
                   "characters)%s", cr_path, name, _DNS1123_SUBDOMAIN_MAX,
-                  stale)
+                  _legacy_name_hint(cr_path, config_dir))
         return EXIT_CALLER_ERROR
     # #2396: a null / empty namespace is UNSET in Kubernetes (the API
     # server fills in the request's namespace), so such a CR exists in a
     # cluster. It is dropped here and renders exactly as an absent one:
-    # header `?`, log `default`. ⛔ None alone is not the test: PyYAML
-    # builds None for `!!null team` too, which Kubernetes refuses (checked
-    # over the whole document, above).
+    # header `?`, log `default`.
     if metadata.get("namespace", "") in (None, ""):
         metadata.pop("namespace", None)
     if "namespace" in metadata:
         namespace = metadata["namespace"]
-        ns_tag = (_plain_tag(namespace) if isinstance(namespace, RawPlain)
-                  else None)
-        if ns_tag in _NON_STRING_NAME_TAGS:
+        if not isinstance(namespace, str):
             log.error("%s: metadata.namespace must be a string, but "
-                      "unquoted %s is read as %s (YAML 1.1). Quoting makes "
-                      "it a string; it must still be a valid Kubernetes "
-                      "namespace name (DNS-1123 label)",
-                      cr_path, namespace, ns_tag.rsplit(":", 1)[-1])
+                      "Kubernetes reads it as %s. Quoting makes a scalar a "
+                      "string; it must still be a valid Kubernetes namespace "
+                      "name (DNS-1123 label)", cr_path, _json_kind(namespace))
             return EXIT_CALLER_ERROR
-        if not (isinstance(namespace, str) and _is_dns1123_label(namespace)):
+        if not _is_dns1123_label(namespace):
             log.error("%s: metadata.namespace %r is not a valid Kubernetes "
                       "namespace name (DNS-1123 label: lowercase a-z, 0-9 "
                       "and '-', starting and ending alphanumeric, at most "
                       "%d characters)", cr_path, namespace,
                       _DNS1123_LABEL_MAX)
             return EXIT_CALLER_ERROR
+    # #2476: the CR as written (`_lib_yaml_keys`: keys and plain scalars as
+    # their source text), to compare the ids with da-crdecode's reading and
+    # to keep the CR's key order. Not used for any value.
+    try:
+        with open(cr_path, encoding="utf-8") as fh:
+            as_written = load_for_rewrite(fh)
+    except RecursionError:
+        log.error("Failed to parse %s: nested too deeply for this tool to "
+                  "read", cr_path)
+        return EXIT_CALLER_ERROR
+    except Exception as e:  # noqa: BLE001 — any failure: nothing to compare
+        log.error("%s: Kubernetes' YAML→JSON conversion reads this CR, but "
+                  "this tool cannot read it as written (%s: %s), so its ids "
+                  "cannot be compared with that reading", cr_path,
+                  type(e).__name__, e)
+        return EXIT_CALLER_ERROR
+    written_meta = (as_written.get("metadata")
+                    if isinstance(as_written, dict) else None)
+    if not isinstance(written_meta, dict):
+        written_meta = {}
+    if _as_text(written_meta.get("name")) != name:
+        log.error("%s: metadata.name is read by Kubernetes as %r, which is "
+                  "not the text written in the CR (%r). Quote it so both "
+                  "are the same%s", cr_path, name, written_meta.get("name"),
+                  _merge_note(cr_path))
+        return EXIT_CALLER_ERROR
+    namespace = metadata.get("namespace")
+    if namespace is not None \
+            and _as_text(written_meta.get("namespace")) != namespace:
+        log.error("%s: metadata.namespace is read by Kubernetes as %r, "
+                  "which is not the text written in the CR (%r). Quote it "
+                  "so both are the same%s", cr_path, namespace,
+                  written_meta.get("namespace"), _merge_note(cr_path))
+        return EXIT_CALLER_ERROR
     if "spec" in cr and not isinstance(cr["spec"], dict):
         log.error("%s: spec must be a mapping", cr_path)
         return EXIT_CALLER_ERROR
-    shape_error = _spec_block_shape_error(cr.get("spec") or {})
+    spec = cr.get("spec") or {}
+    # #2476: the CRD declares `spec.profile`, but nothing renders it (the
+    # controller path drops it too), so the rendered file would carry no
+    # profile. A null one is no profile.
+    if spec.get("profile") is not None:
+        log.error("%s: spec.profile is set, but it is not rendered: the "
+                  "rendered file would carry no profile. Set _profile on "
+                  "each tenant under spec.tenants instead", cr_path)
+        return EXIT_CALLER_ERROR
+    written_spec = (as_written.get("spec")
+                    if isinstance(as_written, dict) else None)
+    if not isinstance(written_spec, dict):
+        written_spec = {}
+    why = ""
+    if isinstance(spec.get("tenants"), dict):
+        why = (_key_divergence(spec["tenants"], written_spec.get("tenants"),
+                               "spec.tenants")
+               or _profile_divergence(spec["tenants"],
+                                      written_spec.get("tenants")))
+    if why:
+        log.error("%s: %s%s", cr_path, why, _merge_note(cr_path))
+        return EXIT_CALLER_ERROR
+    if spec:
+        cr["spec"] = spec = _in_written_order(spec, written_spec)
+    shape_error = _spec_block_shape_error(spec)
     if shape_error:
         log.error("%s: %s", cr_path, shape_error)
         return EXIT_CALLER_ERROR
@@ -817,7 +1019,6 @@ def render_cr_file(
         log.error("Failed to render %s: %s", cr_path, e)
         return EXIT_CALLER_ERROR
     return EXIT_OK
-
 
 def _spec_block_shape_error(spec: dict) -> str:
     """Why *spec*'s blocks would not render as the CR wrote them, or ``""``.
@@ -847,13 +1048,6 @@ def _spec_block_shape_error(spec: dict) -> str:
         block = spec.get(key)
         if block is None or isinstance(block, dict):
             continue
-        # A plain scalar's text, as YAML types it — NOT re-parsed as a
-        # document: `yaml.safe_load("---")` is None, and `--- 0`, `--- no`
-        # would read as falsy too, dropping a block the CR wrote. Only a
-        # null / bool / int / float can be falsy; any other tag is text.
-        if isinstance(block, RawPlain):
-            block = (yaml.safe_load(block)
-                     if _plain_tag(block) in _FALSY_ABLE_TAGS else str(block))
         if block:
             return f"spec.{key} must be a mapping"
     tenants = spec.get("tenants")
@@ -875,9 +1069,6 @@ def _spec_block_shape_error(spec: dict) -> str:
                     f"whole rendered file otherwise")
     return ""
 
-
-_FALSY_ABLE_TAGS = frozenset("tag:yaml.org,2002:" + t
-                             for t in ("null", "bool", "int", "float"))
 
 # ── yaml.v3's plain-scalar → number resolution (#2395) ──────────────
 #
@@ -1034,11 +1225,10 @@ def _default_value_error(value: Any) -> str:
         return ""
     if not isinstance(value, str):
         return "must be a number"
-    # A RawPlain is dumped back plain, as written. Any other str is dumped
-    # plain only where PyYAML would not retype it; otherwise it is QUOTED,
-    # and yaml.v3 does not decode a quoted scalar into a number.
-    if (not isinstance(value, RawPlain)
-            and _plain_tag(value) != "tag:yaml.org,2002:str"):
+    # A str (da-crdecode's JSON, #2476) is dumped plain only where PyYAML
+    # would not retype it; otherwise it is QUOTED, and yaml.v3 does not
+    # decode a quoted scalar into a number.
+    if _plain_tag(value) != "tag:yaml.org,2002:str":
         return "must be a number, not a quoted string"
     if not _v3_reads_as_number(value):
         return f"must be a number, not {value!r}"
