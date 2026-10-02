@@ -81,5 +81,3 @@ func reportPlatformOrphans(configs map[string]ThresholdConfig, exists map[string
 func mergePartialInto(merged *ThresholdConfig, partial ThresholdConfig) {
 	config.MergePartialInto(merged, partial)
 }
-
-func anyRootCarrierKey(groups ...[]string) bool { return config.AnyRootCarrierKey(groups...) }

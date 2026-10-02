@@ -330,9 +330,17 @@ func TestATenantDeclaredInTwoFilesSurvivesAnEditToEitherOne(t *testing.T) {
 			// leaves all four subtests PASS. The only test that catches that
 			// defect is the randomised differential. Kept because the fixture
 			// is more realistic with it, not because it guards anything.
+			//
+			// ⛔ NO `_defaults` CARRIER (#2593). incrementalLoadFrom refuses a
+			// scan holding one — the watch path never hands it one — so a
+			// carrier here would make every step below fail on that refusal
+			// instead of exercising the removal loops. The tree used to have
+			// one; it supplied root defaults no assertion reads. Measured
+			// before and after removing it, with the two removal loops'
+			// reclaim disabled (4/4 subtests red both times) and with the
+			// survivor's value not re-taken (the two WINNER subtests red both
+			// times).
 			dir := t.TempDir()
-			writeTestYAML(t, filepath.Join(dir, "_defaults.yaml"),
-				"defaults:\n  mysql_connections: 80\n  mysql_slow_queries: 5\n")
 			writeTestYAML(t, filepath.Join(dir, "_profiles.yaml"),
 				"profiles:\n  gold:\n    mysql_slow_queries: \"95\"\n")
 			writeTestYAML(t, filepath.Join(dir, "a.yaml"), "tenants:\n  dup:\n    _profile: gold\n    mysql_connections: \"11\"\n")
@@ -377,10 +385,9 @@ func TestATenantDeclaredInTwoFilesSurvivesAnEditToEitherOne(t *testing.T) {
 				}
 				writeTestYAML(t, filepath.Join(dir, tc.editFile), body)
 			}
-			// The edit resolves the duplicate, so this scan has no Conflict —
-			// but it still goes straight to incrementalLoadFrom: the tree has
-			// a `_defaults.yaml`, so watchReload would take the hierarchical
-			// path (a full flat rebuild) and never run the removal loops.
+			// The edit resolves the duplicate, so this scan has no Conflict;
+			// it goes through the same helper so both steps feed
+			// incrementalLoadFrom the same way.
 			if err := incrementalLoadAcceptingDuplicate(t, m, false); err != nil {
 				t.Fatalf("incrementalLoadFrom: %v", err)
 			}
@@ -443,7 +450,9 @@ func TestATenantDeclaredInTwoFilesSurvivesAnEditToEitherOne(t *testing.T) {
 // hands the scan to incrementalLoadFrom — with TreeScan.Conflict cleared, which
 // the watch path never does (scanAndCheckHierarchical / detectChange reject
 // it). wantConflict states which kind of scan the caller is feeding, so the
-// fixture cannot quietly stop building the duplicate it exists for.
+// fixture cannot quietly stop building the duplicate it exists for. Only the
+// Conflict is cleared: a tree with a `_defaults` carrier is still refused by
+// incrementalLoadFrom (#2593), so the fixture must be carrier-free.
 func incrementalLoadAcceptingDuplicate(t *testing.T, m *ConfigManager, wantConflict bool) error {
 	t.Helper()
 	m.reloadMu.Lock()
