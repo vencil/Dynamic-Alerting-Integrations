@@ -2182,6 +2182,9 @@ class TestRenderCrSignals:
         with pytest.raises(ProcessLookupError):
             os.kill(child, 0)
 
+    @pytest.mark.skipif(sys.platform == "win32",
+                        reason="os.kill(self, SIGTERM) ends the pytest worker "
+                               "on Windows instead of running the handler")
     def test_signal_during_write_is_raised_after_it(self, tmp_path,
                                                     monkeypatch):
         """寫檔途中到的訊號延到寫完才生效：檔案完整、之後才停。
@@ -2206,6 +2209,99 @@ class TestRenderCrSignals:
         assert exc.value.signum == signal.SIGTERM
         written = (out_dir / "ok.yaml").read_text(encoding="utf-8")
         assert written.endswith("tenants:\n  t1: {}\n"), written
+
+    def test_signal_while_restoring_handlers_restores_both(self, monkeypatch):
+        """還原 handler 途中到的訊號：兩個 handler 都還原完才拋出。
+
+        以直接呼叫 handler 模擬訊號（不對 pytest 行程送訊號）。會讓本測試
+        轉紅的改動：拿掉 `_handling_signals.__exit__` 的 `_signals_deferred`
+        （第一個還原後就拋出，第二個停在 `_render_signal_handler`）。
+        """
+        import signal
+        before = [signal.getsignal(s) for s in (signal.SIGINT, signal.SIGTERM)]
+        real_signal = signal.signal
+        calls = []
+
+        def signal_then_interrupt(sig, handler):
+            previous = real_signal(sig, handler)
+            calls.append(handler)
+            if handler is not da_assembler._render_signal_handler \
+                    and len(calls) == 3:  # the first restore
+                da_assembler._render_signal_handler(signal.SIGTERM, None)
+            return previous
+
+        monkeypatch.setattr(da_assembler.signal, "signal",
+                            signal_then_interrupt)
+        with pytest.raises(da_assembler._Interrupted):
+            with da_assembler._handling_signals(
+                    da_assembler._render_signal_handler):
+                pass
+        monkeypatch.undo()
+        assert [signal.getsignal(s)
+                for s in (signal.SIGINT, signal.SIGTERM)] == before
+
+    @staticmethod
+    def _run_main(prelude, tmp_path, cr_text):
+        """在子行程跑 `main()`（`--render-cr`），之前先執行 *prelude*。"""
+        cr_path, out_dir = TestRenderCrDecoder._write(tmp_path, cr_text)
+        code = ("import os, signal, sys, time, logging\n"
+                f"sys.path.insert(0, {str(_ASSEMBLER.parent)!r})\n"
+                "import da_assembler\n"
+                f"{prelude}\n"
+                f"sys.argv = ['da_assembler.py', '--config-dir', "
+                f"{str(out_dir)!r}, '--render-cr', {str(cr_path)!r}]\n"
+                "sys.exit(da_assembler.main())\n")
+        r = subprocess.run([sys.executable, "-c", code], capture_output=True,
+                           text=True, encoding="utf-8", errors="replace",
+                           check=False, timeout=60)
+        return r, out_dir
+
+    @pytest.mark.skipif(sys.platform == "win32",
+                        reason="POSIX signal to one PID")
+    def test_signal_as_handlers_are_restored_ends_by_signal(self, tmp_path):
+        """render 已回傳、還原 handler 前到的訊號：以該訊號結束，不是
+        traceback rc 1（盲審重現：`__exit__` 開頭送 SIGTERM）。
+
+        會讓本測試轉紅的改動：把 main() 的 `try` 移回 `with` 之內。
+        """
+        import signal
+        prelude = (
+            "real_exit = da_assembler._handling_signals.__exit__\n"
+            "def exit_after_signal(self, *exc):\n"
+            "    os.kill(os.getpid(), signal.SIGTERM)\n"
+            "    time.sleep(0.2)\n"
+            "    return real_exit(self, *exc)\n"
+            "da_assembler._handling_signals.__exit__ = exit_after_signal\n")
+        r, _ = self._run_main(prelude, tmp_path, self._CR)
+        assert r.returncode == -signal.SIGTERM, r.stderr
+        assert "Traceback" not in r.stderr, r.stderr
+
+    @pytest.mark.skipif(sys.platform == "win32",
+                        reason="POSIX signal to one PID")
+    def test_second_signal_while_stopping_is_ignored(self, tmp_path,
+                                                     monkeypatch):
+        """停下途中（印 log 時）再來一個 SIGINT（連按兩次 Ctrl-C）：仍以第一
+        個訊號結束，不是 traceback rc 1。
+
+        會讓本測試轉紅的改動：拿掉 main() `except _Interrupted` 開頭的
+        `_ignore_signals()`。
+        """
+        import signal
+        TestRenderCrDecoder._fake_binary(
+            tmp_path, monkeypatch,
+            "import os, signal\nos.kill(os.getppid(), signal.SIGTERM)\n"
+            "time.sleep(30)")
+        prelude = (
+            "class SecondSignal(logging.Handler):\n"
+            "    def emit(self, record):\n"
+            "        if 'stopped rendering' in record.getMessage():\n"
+            "            os.kill(os.getpid(), signal.SIGINT)\n"
+            "            time.sleep(0.2)\n"
+            "logging.getLogger('da-assembler').addHandler(SecondSignal())\n")
+        r, out_dir = self._run_main(prelude, tmp_path, self._CR)
+        assert r.returncode == -signal.SIGTERM, r.stderr
+        assert "Traceback" not in r.stderr, r.stderr
+        assert list(out_dir.iterdir()) == []
 
 
 class TestUpdateCrStatus:

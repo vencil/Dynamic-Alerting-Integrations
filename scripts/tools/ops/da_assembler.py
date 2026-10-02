@@ -144,17 +144,28 @@ class _handling_signals:
             self.previous[sig] = signal.signal(sig, self.handler)
 
     def __exit__(self, *exc):
-        for sig, handler in self.previous.items():
-            signal.signal(sig, handler)
+        # Both handlers come back even when a signal arrives in between:
+        # `_render_signal_handler` holds it until both are restored, then
+        # it is raised (#2529 review). One that arrives before this point
+        # is raised here and is the caller's to catch.
+        with _signals_deferred():
+            for sig, handler in self.previous.items():
+                signal.signal(sig, handler)
         return False
+
+
+def _ignore_signals() -> None:
+    """SIGINT / SIGTERM do nothing from here on (a second Ctrl-C while the
+    process is already stopping would otherwise raise again)."""
+    for sig in (signal.SIGINT, signal.SIGTERM):
+        signal.signal(sig, signal.SIG_IGN)
 
 
 def _die_by_signal(signum: int) -> int:
     """End the process the way *signum* would have ended it (rc 128+N in a
     shell), as `ops/patch_config` does before its write. Returns only where
     the signal does not end the process."""
-    for sig in (signal.SIGINT, signal.SIGTERM):  # a second one changes nothing
-        signal.signal(sig, signal.SIG_IGN)
+    _ignore_signals()
     signal.signal(signum, signal.SIG_DFL)
     os.kill(os.getpid(), signum)
     return EXIT_CALLER_ERROR
@@ -1387,14 +1398,17 @@ def main() -> int:
         # #2529: SIGINT / SIGTERM stop the render — da-crdecode included —
         # and end the process as the signal would. Before the write nothing
         # is written; during it the write completes first.
-        with _handling_signals(_render_signal_handler):
-            try:
+        # ⛔ The try is OUTSIDE the with: a signal that arrives as the
+        # handlers are being restored is raised from `__exit__`.
+        try:
+            with _handling_signals(_render_signal_handler):
                 return render_cr_file(
                     Path(args.render_cr), config_dir, dry_run=args.dry_run)
-            except _Interrupted as e:
-                log.error("Received signal %d, stopped rendering %s",
-                          e.signum, args.render_cr)
-                return _die_by_signal(e.signum)
+        except _Interrupted as e:
+            _ignore_signals()  # before the log line: a second signal waits
+            log.error("Received signal %d, stopped rendering %s",
+                      e.signum, args.render_cr)
+            return _die_by_signal(e.signum)
 
     with _handling_signals(_signal_handler):
         return _controller_main(args, config_dir)
