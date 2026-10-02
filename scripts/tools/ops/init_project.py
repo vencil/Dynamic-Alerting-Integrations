@@ -3618,6 +3618,12 @@ def _plan_confd(config: dict, output_dir: str) -> _ConfdPlan:
     would write has, at ANY level below the output directory, an existing
     entry whose name differs only in case (`Conf.D/` for `conf.d/`,
     `DB-C.YAML` for `db-c.yaml`; `_case_variants_along`).
+    ⛔ "Exactly" is why every file below is identified by its output-relative
+    POSIX STRING (`_rel`) and never by a `Path`: `Path` equality and hashing
+    fold case on Windows, so `Path('conf.d/DB-C.YAML')` was init's own
+    `conf.d/db-c.yaml` there — the customer's file stopped counting as
+    "another file", its tenant was generated instead of skipped, and the
+    case check then refused a run every other platform completes (#2558).
 
     ⛔ Rewriting init's own `conf.d/<t>.yaml` keeps only t, so every other
     tenant that file declares would lose its declaration. Two refusals cover
@@ -3634,36 +3640,43 @@ def _plan_confd(config: dict, output_dir: str) -> _ConfdPlan:
     conf_dir = out / 'conf.d'
     requested = list(config['tenants'])
     root_defaults: list[Path] = []
-    tenant_files: list[Path] = []
-    mentions: dict[Path, set[str]] = {}
-    blanket: dict[Path, str] = {}          # (d) files -> why
+    # Tenant files, `mentions` and `blanket` are all keyed by `_rel(p)` — a
+    # str, compared exactly on every platform (see the docstring).
+    tenant_files: list[str] = []
+    mentions: dict[str, set[str]] = {}
+    blanket: dict[str, str] = {}           # (d) files -> why
     conflicts: list[_Conflict] = []
 
     def _rel(p: Path) -> str:
         return p.relative_to(out).as_posix()
+
+    def _own(t: str) -> str:
+        """init's own path for tenant t, in the same spelling as the keys."""
+        return _rel(conf_dir / f'{t}.yaml')
 
     for p in iter_config_files(conf_dir):
         if is_reserved_name(p.name):
             if p.parent == conf_dir and is_defaults_name(p.name):
                 root_defaults.append(p)
             continue
-        tenant_files.append(p)
-        mentions[p], why = _mentions(p, requested)
+        f = _rel(p)
+        tenant_files.append(f)
+        mentions[f], why = _mentions(p, requested)
         if why:
-            blanket[p] = why
+            blanket[f] = why
 
     generate: list[str] = []
     skipped: dict[str, list[str]] = {}
     unverified: dict[str, list[tuple[str, str]]] = {}
     for t in requested:
-        own = conf_dir / f'{t}.yaml'
-        others = [p for p in tenant_files if p != own and t in mentions[p]]
-        concrete = [p for p in others if p not in blanket]
+        own = _own(t)
+        others = [f for f in tenant_files if f != own and t in mentions[f]]
+        concrete = [f for f in others if f not in blanket]
         if not others:
             generate.append(t)
         elif own in mentions and concrete:
             conflicts.append(_Conflict(
-                'duplicate', t, [_rel(own)] + [_rel(p) for p in concrete]))
+                'duplicate', t, [own] + concrete))
         elif own in mentions and own not in blanket and t in mentions[own]:
             # ⛔ Coexistence refuses only on a CONCRETE mention. Its purpose
             # is that init never CREATES a duplicate — not that it validates
@@ -3678,30 +3691,30 @@ def _plan_confd(config: dict, output_dir: str) -> _ConfdPlan:
             # else is NOT already a carrier of t, so rewriting it WOULD add
             # one beside the (d) file. That case falls through to the skip.
             generate.append(t)
-            unverified[t] = [(_rel(p), blanket[p]) for p in others]
+            unverified[t] = [(f, blanket[f]) for f in others]
         else:
-            skipped[t] = [_rel(p) for p in others]
+            skipped[t] = others
     # ⛔ A requested tenant skipped BECAUSE of a file this run is about to
     # overwrite (init's `db-a.yaml` path, holding a file that also mentions
     # db-z, with both requested): the run would report "db-z may be declared
     # by conf.d/db-a.yaml" and then replace that very file.
-    generated_paths = {conf_dir / f'{t}.yaml': t for t in generate}
+    generated_paths = {_own(t): t for t in generate}
     for t, files in list(skipped.items()):
         for f in files:
-            if out / f in generated_paths:
+            if f in generated_paths:
                 del skipped[t]
                 conflicts.append(_Conflict('clobber', t, [f],
-                                           generated_paths[out / f]))
+                                           generated_paths[f]))
                 break
     # 'drops': the unrequested half of the same loss (see the docstring).
     for t in generate:
-        own = conf_dir / f'{t}.yaml'
+        own = _own(t)
         if own not in mentions or own in blanket:
             continue
-        keys = _all_tenant_keys(own)
+        keys = _all_tenant_keys(conf_dir / f'{t}.yaml')
         lost = None if keys is None else sorted(keys - set(requested))
         if lost is None or lost:
-            conflicts.append(_Conflict('drops', t, [_rel(own)],
+            conflicts.append(_Conflict('drops', t, [own],
                                        ', '.join(lost or [])))
 
     own_defaults = [p for p in root_defaults if p.name == '_defaults.yaml']
@@ -3712,8 +3725,8 @@ def _plan_confd(config: dict, output_dir: str) -> _ConfdPlan:
             'defaults', '', [_rel(p) for p in own_defaults + other_defaults]))
 
     plan = _ConfdPlan(generate, skipped, defaults_carriers, conflicts,
-                      {_rel(p): sorted(ts) for p, ts in mentions.items()},
-                      unverified, {_rel(p): why for p, why in blanket.items()})
+                      {f: sorted(ts) for f, ts in mentions.items()},
+                      unverified, dict(blanket))
     # F4: every path this run would write, not only conf.d's — the preview is
     # the one list of them (`test_dry_run_preview_matches_what_run_init_writes`
     # pins it equal to the writes).
@@ -4211,7 +4224,8 @@ def _print_summary(created: list[str], output_dir: str, config: dict,
 
     overwritten = []
     for f in created:
-        rel = str(Path(f).relative_to(output_dir))
+        # POSIX separators, like every other path this summary prints.
+        rel = Path(f).relative_to(output_dir).as_posix()
         if pre_existing and str(Path(f).resolve()) in pre_existing:
             overwritten.append(rel)
             print(f"  ✓ {rel}" + ("（已覆寫）" if is_zh else " (overwritten)"))
@@ -5056,7 +5070,10 @@ def _handle_dry_run(config: dict, output_dir: str,
     files = _preview_files(config, output_dir, plan)
     overwritten = 0
     for f in files:
-        rel = Path(f).relative_to(output_dir)
+        # ⛔ `as_posix()`: the skip notices below spell paths with `/` on every
+        # platform, and a bare `Path` printed `conf.d\db-a.yaml` on Windows —
+        # two spellings of one tree in one preview (#2558).
+        rel = Path(f).relative_to(output_dir).as_posix()
         if str(Path(f).resolve()) in existing:
             overwritten += 1
             print(f"  {rel}" + ("（已存在，會被覆寫）" if is_zh
