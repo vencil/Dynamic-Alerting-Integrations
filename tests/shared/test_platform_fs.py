@@ -126,6 +126,25 @@ def test_with_the_capability_it_creates_the_link(tmp_path):
     assert link.read_text(encoding="utf-8") == "x\n"
 
 
+def test_symlink_or_else_falls_back_only_without_the_capability(tmp_path, monkeypatch):
+    """Without the capability the fallback runs and no link is attempted;
+    with it, the link is attempted and a failure of the call still raises."""
+    called = []
+    monkeypatch.setattr(pf, "can_symlink", lambda: False)
+    monkeypatch.setattr(pf.os, "symlink", lambda *a, **k: pytest.fail("attempted a symlink"))
+    pf.symlink_or_else("t", tmp_path / "l", lambda: called.append("fallback"))
+    assert called == ["fallback"]
+
+    def refuse(src, dst, **kwargs):
+        raise PermissionError(1, "Operation not permitted", str(dst))
+
+    monkeypatch.setattr(pf, "can_symlink", lambda: True)
+    monkeypatch.setattr(pf.os, "symlink", refuse)
+    with pytest.raises(PermissionError):
+        pf.symlink_or_else("t", tmp_path / "l", lambda: called.append("fallback"))
+    assert called == ["fallback"], "the fallback must not absorb a refused symlink"
+
+
 def _bare_symlink_calls(tree: ast.AST) -> list[int]:
     """Line numbers of ``os.symlink(...)`` and ``<x>.symlink_to(...)`` CALLS.
     A reference that is not called (``monkeypatch.setattr(os, "symlink", f)``)
