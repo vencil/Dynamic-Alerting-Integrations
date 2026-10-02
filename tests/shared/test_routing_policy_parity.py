@@ -94,6 +94,9 @@ ESCALATION_KEYS = {"verdict", "leaks"}
 ESCALATION_VERDICTS = {"compliant", "violation"}
 TENANT_API_KEYS = {"put", "batch"}
 BATCH_KEYS = {"patch", "verdict"}
+# B2 (#2341): the keys a batch op may remove (tenant-api's unsetAllowedKeys).
+BATCH_OPTIONAL_KEYS = {"unset"}
+BATCH_UNSET_KEYS = {"_routing"}
 DIFFERS_KEYS = {"reason", "targets", "policy", "rejected_routes", "group_by_invalid"}
 CONSTRAINTS = {"forbidden_receiver_types", "allowed_receiver_types"}
 
@@ -182,7 +185,7 @@ def test_matrix_is_not_vacuous() -> None:
                      "iii-override-unknown-receiver-type", "iv-override-forbidden-type",
                      "adr007-five-tenants", "yaml11-bool-match-value",
                      "require-critical-escalation", "routing-values-yaml11",
-                     "group-by-elements"):
+                     "group-by-elements", "routing-unset-reenable"):
         assert required in names, required
 
 
@@ -206,8 +209,15 @@ def test_matrix_keys_are_exactly_the_known_ones() -> None:
             if api is not None:
                 assert api["put"] in ("403", "400", "ok"), where
                 batch = api["batch"]
-                assert batch is None or (set(batch) == BATCH_KEYS
+                assert batch is None or (BATCH_KEYS <= set(batch) <= BATCH_KEYS | BATCH_OPTIONAL_KEYS
                                          and batch["verdict"] in ("ok", "policy_violation", "400")), where
+                if batch is not None and "unset" in batch:
+                    unset = batch["unset"]
+                    # The cell models a request tenant-api accepts: a non-empty
+                    # list of allowed keys, none repeated, none also patched.
+                    assert (isinstance(unset, list) and unset and len(set(unset)) == len(unset)
+                            and set(unset) <= BATCH_UNSET_KEYS
+                            and not set(unset) & set(batch["patch"])), where
             differs = want["python_differs"]
             assert differs is None or (set(differs) == DIFFERS_KEYS and differs["reason"]), where
             assert want["refused"] is None or want["refused"] in REFUSED_KINDS, where

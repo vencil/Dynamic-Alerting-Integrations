@@ -18,8 +18,15 @@ import (
 // Applies a patch to all members of the specified group.
 type GroupBatchRequest struct {
 	// key → value to set on every member (e.g., "_silent_mode": "warning");
-	// at most 1000 entries.
+	// at most 1000 entries. May be empty only when unset names a key (else 400).
 	Patch map[string]string `json:"patch" validate:"max=1000"`
+	// keys to remove from every member's config block; at most 1000 entries. Only "_routing" is
+	// accepted: removing it resets the member to `_routing_defaults` and its routing profile,
+	// which turns routing back on for a member a disabling `_routing` turned off (the change is
+	// judged by domain policy like a `_routing` patch). A key the member does not carry, or a
+	// member that does not exist, makes it a no-op: with no patch nothing is written and no
+	// tenant is created. A key must not appear twice, nor in both patch and unset.
+	Unset []string `json:"unset,omitempty" validate:"max=1000"`
 }
 
 // GroupBatchResponse is the response for POST /api/v1/groups/{id}/batch.
@@ -56,6 +63,7 @@ type GroupBatchResponse struct {
 // @Summary     Batch operation on group members
 // @Description Apply a patch to all tenants in a group, through the same pipeline as POST /api/v1/tenants/batch
 // @Description (one operation per member): patch values are range-checked (400), and each member is checked for write permission and domain policy.
+// @Description unset removes keys from every member (only "_routing"): unset ["_routing"] turns routing back on for members a disabling _routing turned off, judged by domain policy.
 // @Description PR write-back mode: the whole group becomes one PR/MR (status pending_review, pr_url, pr_number); nothing is committed to the base branch.
 // @Description PR write-back mode ignores ?async=true and answers 200 synchronously, as POST /api/v1/tenants/batch does.
 // @Description Direct mode: a member whose config file cannot be loaded as a tenant config (config_error malformed_yaml | invalid_config)
@@ -69,7 +77,7 @@ type GroupBatchResponse struct {
 // @Success     200   {object} GroupBatchResponse
 // @Success     202   {object} map[string]interface{}
 // @Failure     400   {object} ErrorResponse
-// @Failure     403   {object} ErrorResponse "PR write-back mode: the forge token lacks write scope to open the PR/MR"
+// @Failure     403   {object} ErrorResponse "PR write-back mode: the forge token lacks write scope to open the PR/MR, or a member's operation breaks the domain policy on the latest base branch, which this server's local copy lags, or the base's _domain_policy.yaml cannot be loaded (code POLICY_VIOLATION, with tenant_id and operation = the member's index); nothing written"
 // @Failure     404   {object} ErrorResponse
 // @Failure     409   {object} ErrorResponse "PR write-back mode: a member is already declared by another conf.d file (code TENANT_DECLARED_ELSEWHERE), or its config file cannot be loaded as a tenant config (code TENANT_CONFIG_NOT_LOADABLE, with tenant_id and config_error; repair the tenant file itself first); nothing written. Direct mode reports these per member in results[].code instead."
 // @Failure     413   {object} ErrorResponse
@@ -117,7 +125,9 @@ func GroupBatch(d *Deps) http.HandlerFunc {
 			WriteJSONError(w, r, http.StatusBadRequest, "invalid JSON: "+err.Error())
 			return
 		}
-		if len(req.Patch) == 0 {
+		// B2: an unset-only request is allowed; one with neither keeps the
+		// pre-B2 refusal, code and message unchanged.
+		if len(req.Patch) == 0 && len(req.Unset) == 0 {
 			WriteJSONError(w, r, http.StatusBadRequest, "patch must not be empty")
 			return
 		}
@@ -129,9 +139,9 @@ func GroupBatch(d *Deps) http.HandlerFunc {
 		// value, not two; it is enforced HERE because the per-member
 		// BatchOperations are built in Go and never pass through JSON-decode
 		// validation. #2339: the patch values get the same range check as
-		// /tenants/batch.
+		// /tenants/batch. B2: so do the unset keys.
 		violations := ValidateStructTags(&req)
-		violations = append(violations, validatePatchMap(req.Patch, "patch")...)
+		violations = append(violations, validateBatchEdit(req.Patch, req.Unset, "")...)
 		if len(violations) > 0 {
 			WriteValidationErrors(w, r, violations)
 			return
@@ -150,7 +160,7 @@ func GroupBatch(d *Deps) http.HandlerFunc {
 		// such ops in a /tenants/batch body would.
 		ops := make([]BatchOperation, len(g.Members))
 		for i, member := range g.Members {
-			ops[i] = BatchOperation{TenantID: member, Patch: req.Patch}
+			ops[i] = BatchOperation{TenantID: member, Patch: req.Patch, Unset: req.Unset}
 		}
 
 		taskID := fmt.Sprintf("group-batch-%s-%s",

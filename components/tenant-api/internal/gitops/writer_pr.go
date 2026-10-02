@@ -346,6 +346,12 @@ func (w *Writer) WritePRBatch(ctx context.Context, ops []PRBatchOp, authorEmail 
 			if errors.Is(err, ErrMergeBaseNotLoadable) {
 				continue
 			}
+			// B2: the same holds for a domain-policy refusal — the local
+			// tree may lag the base (and a same-tenant op is merged here
+			// without the ops before it); the post-checkout pass decides.
+			if errors.Is(err, ErrMergePolicyRefused) {
+				continue
+			}
 			return nil, err
 		}
 	}
@@ -390,6 +396,12 @@ func (w *Writer) WritePRBatch(ctx context.Context, ops []PRBatchOp, authorEmail 
 			return nil, err
 		}
 		content, existing, opNotices, err := w.readMergeValidate(op.TenantID, filePath, op.Merge)
+		if errors.Is(err, ErrMergeNoOp) {
+			// B2: the merge changes nothing — skipped like a byte-identical
+			// one, its notices kept like one's.
+			notices = append(notices, opNotices...)
+			continue
+		}
 		if err != nil {
 			w.abortFeatureBranch(base, branchName)
 			return nil, err

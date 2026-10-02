@@ -260,7 +260,8 @@ const offDisabledChat = "    _routing_profile: team-chat\n    _routing: disable\
 // The block ON DISK is part of what a batch op is judged on: pointing a
 // disabled tenant at a violating profile is allowed (nothing renders).
 // #2341: re-enabling with `_routing: "on"` is refused before that, as an
-// invalid patch value (TestBatchTenants_RoutingPatchMustDisable).
+// invalid patch value (TestBatchTenants_RoutingPatchMustDisable); a batch
+// re-enables with unset ["_routing"] (batch_unset_test.go).
 func TestBatchTenants_RoutingPatchJudgedOverDiskBlock(t *testing.T) {
 	cases := []struct {
 		name, disk, patch string
