@@ -531,6 +531,8 @@ func buildCheckInput(scoped *config.ScopedTenants, f *flags) guard.CheckInput {
 		NewDefaultsByTenant:    newDefaultsByTenant,
 		CardinalityLimit:       f.cardinalityLimit,
 		CardinalityWarnRatio:   f.cardinalityWarnRatio,
+		DefaultsFiles:          scoped.DefaultsFiles,
+		ParseFailed:            scoped.ParseFailed,
 	}
 }
 

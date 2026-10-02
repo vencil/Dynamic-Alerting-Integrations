@@ -1009,13 +1009,29 @@ func mergeTenantOver(merged map[string]any, tenantDoc *TenantDoc, tenantID strin
 	}, nil
 }
 
+// mergeDroppedKeys are the override keys deepMerge never takes: a level's
+// `_metadata` reaches no tenant's merged config, wherever it is written.
+var mergeDroppedKeys = map[string]bool{"_metadata": true}
+
+// MergeDroppedKeys lists, sorted, the keys the defaults-chain merge drops
+// from every level (mergeDroppedKeys). da-guard reads it to leave such keys
+// out of its `defaults:` wrapper findings (#2386).
+func MergeDroppedKeys() []string {
+	out := make([]string, 0, len(mergeDroppedKeys))
+	for k := range mergeDroppedKeys {
+		out = append(out, k)
+	}
+	sort.Strings(out)
+	return out
+}
+
 func deepMerge(base, override map[string]any) map[string]any {
 	result := deepCopyMap(base)
 	if override == nil {
 		return result
 	}
 	for k, v := range override {
-		if k == "_metadata" {
+		if mergeDroppedKeys[k] {
 			continue
 		}
 		if v == nil {
