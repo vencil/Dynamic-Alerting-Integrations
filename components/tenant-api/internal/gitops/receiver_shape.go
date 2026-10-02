@@ -24,6 +24,11 @@ package gitops
 // patch cannot write a group_by (its values are scalars, and a scalar over
 // the structured `_routing` is refused), so batch has nothing to judge.
 //
+// #2341: and a `_routing` the body writes that is neither a mapping nor a
+// disabling string (`"slack"`, a list, null, an unquoted `false` / `off`,
+// which PyYAML reads as a boolean) — routingpolicy.RoutingNotMapping,
+// da-guard's routing_not_mapping.
+//
 // ⛔ NOT IN validateBodyOnly, AND NOT IN THE WRITER'S write(). Both also serve
 // writes that change only another part of the tenant file: a batch op's
 // MERGED document (readMergeBodyOnly) and the custom-alerts PUT (write() via
@@ -107,9 +112,11 @@ func dryRunPreflight(tenantID, yamlContent string) []string {
 // out or writes as null is not judged here either. That is a gap, not a
 // verdict: an override or a routes entry without a receiver of its own is
 // skipped by the route generator and reported by da-guard (the override is
-// not routed to the main receiver). Shapes that are not a receiver's (a
-// non-map `_routing`, a routes entry that is not a mapping) are left to the
-// checks that own them. Known limitation: nothing else in the tenant block
+// not routed to the main receiver). A `_routing` that is neither a mapping
+// nor a disabling string is one violation and nothing else is judged
+// (#2341, routingpolicy.RoutingNotMapping). Other shapes that are not a
+// receiver's (a routes entry that is not a mapping) are left to the checks
+// that own them. Known limitation: nothing else in the tenant block
 // (other sections that end up in Alertmanager's config) is judged here.
 func receiverViolations(tenantID, yamlContent string) []ReceiverViolation {
 	// #1722's pre-parse size gate, first: an oversize body is the Writer's
@@ -124,10 +131,8 @@ func receiverViolations(tenantID, yamlContent string) []ReceiverViolation {
 	if yaml.Unmarshal([]byte(yamlContent), &doc) != nil || pyyamlcompat.FindDuplicateKeyIn([]byte(yamlContent)) != nil {
 		return nil // validateBodyOnly owns every decode error, a repeated key included
 	}
-	// Keys made strings as the exporter's merge does, so a `1:` or `~:` key
-	// beside the receiver leaves `_routing` a mapping (da-guard reads it so).
-	routing, ok := cfg.NormalizeYAMLToJSON(doc.Tenants[tenantID]["_routing"]).(map[string]any)
-	if !ok {
+	raw, written := doc.Tenants[tenantID]["_routing"]
+	if !written {
 		return nil
 	}
 	// #2295 / #2431: the receivers and matcher values as the route
@@ -137,8 +142,20 @@ func receiverViolations(tenantID, yamlContent string) []ReceiverViolation {
 	// found there) is routingpolicy.Unmatched / UnmatchedValue and refused,
 	// never the yaml.v3 value.
 	py := routingpolicy.PyYAMLRoutingByTenant([]byte(yamlContent))[tenantID]
-	routing, _ = routingpolicy.WithPyYAMLRouting(routing, py).(map[string]any)
 	base := fmt.Sprintf("tenants.%s._routing", tenantID)
+	// #2341 R5: a `_routing` that is neither a mapping nor a disabling string
+	// (as PyYAML reads it: an unquoted `off` is a boolean) renders no route
+	// at all; nothing below applies to it.
+	if v := routingpolicy.WithPyYAMLRouting(raw, py); routingpolicy.RoutingNotMapping(v) {
+		return []ReceiverViolation{{Field: base, Reason: routingpolicy.RoutingNotMappingMessage(v)}}
+	}
+	// Keys made strings as the exporter's merge does, so a `1:` or `~:` key
+	// beside the receiver leaves `_routing` a mapping (da-guard reads it so).
+	routing, ok := cfg.NormalizeYAMLToJSON(raw).(map[string]any)
+	if !ok {
+		return nil
+	}
+	routing, _ = routingpolicy.WithPyYAMLRouting(routing, py).(map[string]any)
 	var out []ReceiverViolation
 	check := func(path string, holder map[string]any) {
 		recv, present := holder["receiver"]

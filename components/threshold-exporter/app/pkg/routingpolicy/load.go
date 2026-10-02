@@ -381,28 +381,35 @@ func RoutingDefaultsFrom(data []byte) (defaults map[string]any, present bool, er
 	if err != nil || top == nil {
 		return nil, false, err
 	}
-	d, present, _, err := routingDefaultsFromNode(top)
+	d, present, _, _, err := routingDefaultsFromNode(top)
 	return d, present, err
 }
 
 // routingDefaultsFromNode is RoutingDefaultsFrom over a parsed document;
 // stripped reports that the block carried `routes`, which were removed.
-func routingDefaultsFromNode(top *yaml.Node) (defaults map[string]any, present, stripped bool, err error) {
+// notMapping (#2341 R5) is the value when, as PyYAML reads it, it is neither
+// a mapping nor null (nil otherwise): the caller reports
+// ProblemRoutingDefaultsNotMapping.
+func routingDefaultsFromNode(top *yaml.Node) (defaults map[string]any, present, stripped bool, notMapping any, err error) {
 	n := lookup(top, "_routing_defaults")
 	if n == nil {
-		return nil, false, false, nil
+		return nil, false, false, nil, nil
 	}
 	var v any
 	if err := n.Decode(&v); err != nil {
-		return nil, true, false, err
+		return nil, true, false, nil, err
 	}
-	m, ok := asStringMap(withPyYAMLRoutingFrom(v, n))
+	pv := withPyYAMLRoutingFrom(v, n)
+	m, ok := asStringMap(pv)
 	if !ok {
-		return nil, true, false, nil
+		if _, isMap := pv.(map[any]any); !isMap && pv != nil {
+			notMapping = pv
+		}
+		return nil, true, false, notMapping, nil
 	}
 	_, stripped = m["routes"]
 	delete(m, "routes")
-	return m, true, stripped, nil
+	return m, true, stripped, nil, nil
 }
 
 // ParseRoutingProfiles returns the `routing_profiles:` block of one
@@ -651,11 +658,14 @@ func loadRoot(configDir string, skip func(rel string) bool) (Layers, []Policy, [
 		if e := enforcedFrom(f.Name, top); e != nil {
 			enforced = e
 		}
-		if d, present, stripped, err := routingDefaultsFromNode(top); present {
+		if d, present, stripped, bad, err := routingDefaultsFromNode(top); present {
 			if err != nil {
 				d = nil
 			}
 			layers.Defaults = d
+			if bad != nil {
+				probs = append(probs, routingDefaultsNotMapping(f.Name, bad))
+			}
 			if stripped {
 				probs = append(probs, Problem{Kind: ProblemRoutingDefaultsRoutes, File: f.Name,
 					Field: "_routing_defaults.routes",

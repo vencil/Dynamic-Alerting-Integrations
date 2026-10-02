@@ -39,6 +39,11 @@
 //   - the group_by contract (#2503, _grar_validate.group_by_problems /
 //     routing_group_by_invalid → GroupByProblems / GroupByInvalid): no
 //     non-string, empty or repeated element, no `...` beside other labels;
+//   - routing that cannot be read at all (#2341, shape.go): a tenant
+//     `_routing` that is neither a mapping nor a disabling string, as PyYAML
+//     reads it (RoutingNotMapping — the tenant renders nothing), and a
+//     `_routing_defaults` that is neither a mapping nor null
+//     (ProblemRoutingDefaultsNotMapping);
 //   - `require_critical_escalation` (#2325, _grar_validate.
 //     critical_escalation_findings): whether severity=critical alerts reach
 //     a pagerduty receiver at all, and which non-pagerduty destinations

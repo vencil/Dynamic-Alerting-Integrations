@@ -55,6 +55,8 @@ from _grar_validate import (  # noqa: E402
     ROUTING_TREE_ERROR_PREFIX,
     check_policy_scope,
     duplicate_tenant_errors,
+    routing_defaults_not_mapping_text,
+    routing_not_mapping_warning,
 )
 from _grar_parse import BLOCKING_TREE_KINDS, policy_level_source  # noqa: E402
 # #2326: the layer chain across conf.d directory levels — the generator's own.
@@ -1231,6 +1233,11 @@ def main(argv: list[str] | None = None) -> int:
                 parsed.get("duplicate_tenants", {})):
             print(f"{safe_label(line)} — generate-routes refuses this tree",
                   file=sys.stderr)
+        # #2341 R5: a `_routing_defaults` that is not a mapping (blocking in
+        # generate-routes --validate; the level contributes nothing here too).
+        for fname, value in parsed.get("routing_defaults_not_mapping", []):
+            print(f"  WARN: {safe_label(routing_defaults_not_mapping_text(fname, value))}",
+                  file=sys.stderr)
 
     # --trace mode: simulate alert routing path
     if args.trace:
@@ -1271,6 +1278,7 @@ def main(argv: list[str] | None = None) -> int:
     # Default: explain tenant routing
     all_tenants = sorted(set(parsed["all_tenants"]))
     disabled = parsed.get("disabled_tenants", set())
+    refused = parsed.get("routing_refused", {})
     target_tenants = args.tenants or all_tenants
 
     results = []
@@ -1281,6 +1289,11 @@ def main(argv: list[str] | None = None) -> int:
             continue
         if t in disabled:
             print(f"  INFO: tenant '{safe_label(t)}' has routing disabled, skipping",
+                  file=sys.stderr)
+            continue
+        if t in refused:
+            # #2341 R5: generate-routes renders no route for this tenant.
+            print(safe_label(routing_not_mapping_warning(t, refused[t])),
                   file=sys.stderr)
             continue
         explanation = explain_tenant_routing(parsed, t)

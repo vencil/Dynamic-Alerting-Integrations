@@ -60,6 +60,7 @@ type tenantAPIParityTree struct {
 			Verdict string   `json:"verdict"`
 			Leaks   []string `json:"leaks"`
 		} `json:"escalation"`
+		Refused json.RawMessage `json:"refused"` // #2341: its PUT verdict is the put column
 	} `json:"expect"`
 	// EnforcedGroupBy (#2503) is the platform's `_routing_enforced`, which a
 	// tenant PUT cannot write: not judged here.

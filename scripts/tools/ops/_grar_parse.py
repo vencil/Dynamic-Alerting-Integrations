@@ -62,7 +62,10 @@ from _grar_validate import (  # noqa: E402
     check_domain_policies,
     check_policy_scope,
     group_by_problem_text,
+    routing_defaults_not_mapping_text,
     routing_group_by_invalid,
+    routing_not_mapping_text,
+    routing_not_mapping_warning,
     routing_values_not_string,
     validate_tenant_keys,
     value_not_string_message,
@@ -273,10 +276,11 @@ def _parse_platform_config(data: dict, fname: str, result: dict) -> None:
             # key replaces an earlier one WHOLE, whatever its value. Before,
             # the value reached `resolve_routing_defaults`' `dict(root)` and
             # the generator died with a traceback at rc 1. Null stays silent.
+            # #2341 R5: and that is blocking (`WARN … skipping`; --strict
+            # ERROR) — every tenant without its own `_routing` lost its
+            # receiver in silence.
             if rd is not None and not isinstance(rd, dict):
-                print(f"  WARN: _routing_defaults in {_f} must be a mapping, "
-                      f"got {type(rd).__name__} — this level contributes "
-                      "nothing", file=sys.stderr)
+                _routing_defaults_not_mapping(fname, rd, result)
                 rd = None
             # #2245: ADR-007 `routes` belong to a routing profile or the
             # tenant, never to the platform-wide defaults (every tenant would
@@ -324,6 +328,18 @@ def _parse_platform_config(data: dict, fname: str, result: dict) -> None:
                   "(only allowed in _ prefixed files)", file=sys.stderr)
 
     _parse_profiles_and_policies(data, fname, ROOT_LEVEL, result)
+
+
+def _routing_defaults_not_mapping(fname: str, value: object,
+                                  result: dict) -> None:
+    """#2341 R5: a ``_routing_defaults`` (root or a subdirectory's carrier)
+    that is neither a mapping nor null. The level contributes nothing (as
+    since #2412) and the finding is blocking: a ``WARN … skipping`` line in
+    every mode, an ERROR under ``--strict`` (``load_tenant_tree``)."""
+    result.setdefault("routing_defaults_errors", []).append(
+        f"  WARN: {routing_defaults_not_mapping_text(fname, value)}, skipping")
+    result.setdefault("routing_defaults_not_mapping", []).append(
+        (fname, value))
 
 
 def _tree_problem(result: dict, kind: str, fname: str, field: str,
@@ -452,9 +468,7 @@ def _parse_nested_config(data: dict, fname: str, level: str,
         elif rd is None:
             pass   # an empty key: this level contributes nothing
         elif not isinstance(rd, dict):
-            print(f"  WARN: _routing_defaults in {_f} must be a mapping, got "
-                  f"{type(rd).__name__} — this level contributes nothing",
-                  file=sys.stderr)
+            _routing_defaults_not_mapping(fname, rd, result)   # #2341 R5
         else:
             # #2245, as at the root: `routes` never belong to the defaults.
             if "routes" in rd:
@@ -596,8 +610,17 @@ def _parse_tenant_overrides(tenant: str, overrides: dict, result: dict) -> None:
         result["disabled_tenants"].add(tenant)
         return
 
-    if routing and isinstance(routing, dict):
-        result["explicit_routing"][tenant] = routing
+    if isinstance(routing, dict):
+        if routing:
+            result["explicit_routing"][tenant] = routing
+    elif "_routing" in overrides:
+        # #2341 R5: neither a mapping nor a disabling string (`"slack"`, a
+        # list, null, an unquoted `false` / `off` / `no`, which PyYAML reads
+        # as a boolean). It used to fall through to the defaults route in
+        # silence; now the tenant renders NO route (the routing it wrote
+        # cannot be read, and guessing "defaults" or "off" is both wrong)
+        # and the line below is blocking (`WARN … skipping`).
+        result.setdefault("routing_refused", {})[tenant] = routing
 
 
 # ── #2504: a null key in a routes `match` ──────────────────────────────────
@@ -1215,7 +1238,8 @@ def _merge_tenant_routing(parsed: dict, routing_defaults: dict) -> dict[str, dic
     routing_configs = {}
     seen_tenants = set()
     for tenant in sorted(set(parsed["all_tenants"])):
-        if tenant in parsed["disabled_tenants"] or tenant in seen_tenants:
+        if (tenant in parsed["disabled_tenants"] or tenant in seen_tenants
+                or tenant in parsed.get("routing_refused", {})):
             continue
         seen_tenants.add(tenant)
         level = tenant_dirs.get(tenant, ROOT_LEVEL)
@@ -1390,6 +1414,11 @@ def load_tenant_tree(
     schema_warnings.extend(parsed.get("enforced_errors", []))
     # #2245: `_routing_defaults.routes` — dropped at parse, same blocking line.
     schema_warnings.extend(parsed.get("routing_defaults_errors", []))
+    # #2341 R5: a tenant `_routing` that is neither a mapping nor a disabling
+    # string — the tenant renders no route; blocking like the lines above.
+    refused = parsed.get("routing_refused", {})
+    for tenant in sorted(refused, key=str):
+        schema_warnings.append(routing_not_mapping_warning(tenant, refused[tenant]))
 
     # v2.1.0 ADR-007: Validate domain policies against resolved routing.
     # #2326 (d): a policy file below the root applies to the tenants of its
@@ -1438,6 +1467,15 @@ def load_tenant_tree(
     # routing_group_by_invalid; tenant-api: 400); without --strict the
     # generator drops the element with a `WARN … skipping` line instead.
     if strict_policies:
+        # #2341 R5: the same two shapes as a blocking ERROR under --strict.
+        for tenant in sorted(refused, key=str):
+            schema_warnings.append(
+                f"  {POLICY_ERROR_PREFIX} tenant '{tenant}': "
+                f"{routing_not_mapping_text(refused[tenant])}")
+        for fname, value in parsed.get("routing_defaults_not_mapping", []):
+            schema_warnings.append(
+                f"  {POLICY_ERROR_PREFIX} "
+                f"{routing_defaults_not_mapping_text(fname, value)}")
         for tenant, rc in sorted(routing_configs.items()):
             for fld, value in routing_values_not_string(rc):
                 schema_warnings.append(

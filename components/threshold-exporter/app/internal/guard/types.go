@@ -173,6 +173,17 @@ const (
 	// it — a defaults block, the top level of an unwrapped defaults file,
 	// a threshold profile. Field is `<file>:<key path>`.
 	FindingRoutingInUnreadLocation FindingKind = "routing_in_unread_location"
+	// FindingRoutingNotMapping (error; #2341): the tenant's `_routing`, as
+	// the route generator's PyYAML reads it, is neither a mapping nor a
+	// disabling string (`"slack"`, a list, null, an unquoted `false` / `off`
+	// / `no`, which is a YAML boolean). The generator renders no route for
+	// the tenant and refuses it (`--validate`, `--strict`). Field `_routing`.
+	FindingRoutingNotMapping FindingKind = "routing_not_mapping"
+	// FindingRoutingDefaultsNotMapping (error, TenantID ""; #2341): a
+	// `_routing_defaults` (root platform file, or a subdirectory's defaults
+	// carrier) that is neither a mapping nor null; the level contributes
+	// nothing and the generator refuses it. Field `<file>:_routing_defaults`.
+	FindingRoutingDefaultsNotMapping FindingKind = "routing_defaults_not_mapping"
 )
 
 // Routing-tree findings (#2326, ADR-017 / ADR-007 "Amendment 2026-09-28"):
@@ -336,6 +347,12 @@ type CheckInput struct {
 	// RoutingByTenant; a required `_routing*` field names the opt-out instead
 	// of reading as an omission (#2291).
 	RoutingDisabled map[string]bool `json:"-"`
+
+	// RoutingNotMapping maps tenant ID → its `_routing` value (as PyYAML
+	// reads it) when that is neither a mapping nor a disabling string
+	// (#2341, routingpolicy.RoutingNotMapping). Such tenants are absent from
+	// RoutingByTenant: the generator renders no route for them.
+	RoutingNotMapping map[string]any `json:"-"`
 
 	// UnknownRoutingProfiles maps tenant ID → the `_routing_profile` it
 	// references that no profile file defines (warn finding).

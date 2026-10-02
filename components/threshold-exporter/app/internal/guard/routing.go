@@ -98,6 +98,11 @@ package guard
 //     `<file>:_routing_enforced[ (<tenant>)].group_by[i]`):
 //     routingpolicy.EnforcedGroupByInvalid — the only part of the NOC layer
 //     da-guard reads.
+// 12. Routing that cannot be read (error, #2341): a tenant `_routing` that
+//     is neither a mapping nor a disabling string (routing_not_mapping,
+//     routingpolicy.RoutingNotMapping — the tenant renders no route), and a
+//     `_routing_defaults` that is not a mapping (routing_defaults_not_mapping,
+//     TenantID "").
 //
 // Why these and not more:
 //   - Field-by-field receiver validation against type-specific
@@ -167,6 +172,16 @@ func checkRoutingGuardrails(input CheckInput) []Finding {
 			Message: fmt.Sprintf(
 				"tenant %q: _routing_profile references unknown profile %q (no _routing_profiles.yaml at the conf.d root defines it); nothing from it is applied",
 				tenantID, name),
+		})
+	}
+	for _, tenantID := range sortedAnyKeys(input.RoutingNotMapping) {
+		out = append(out, Finding{
+			Severity: SeverityError,
+			Kind:     FindingRoutingNotMapping,
+			TenantID: tenantID,
+			Field:    "_routing",
+			Message: fmt.Sprintf("tenant %q: %s — the route generator renders no route for this tenant",
+				tenantID, routingpolicy.RoutingNotMappingMessage(input.RoutingNotMapping[tenantID])),
 		})
 	}
 	tenants := make([]string, 0, len(input.RoutingByTenant))
@@ -368,6 +383,8 @@ func platformProblemFindings(problems []routingpolicy.Problem) []Finding {
 			f.Kind = FindingDuplicateTenant
 		case routingpolicy.ProblemDomainPolicyOutOfScope:
 			f.Kind = FindingDomainPolicyOutOfScope
+		case routingpolicy.ProblemRoutingDefaultsNotMapping:
+			f.Kind = FindingRoutingDefaultsNotMapping
 		}
 		switch {
 		case p.File != "" && p.Field != "":
@@ -379,6 +396,15 @@ func platformProblemFindings(problems []routingpolicy.Problem) []Finding {
 		}
 		out = append(out, f)
 	}
+	return out
+}
+
+func sortedAnyKeys(m map[string]any) []string {
+	out := make([]string, 0, len(m))
+	for k := range m {
+		out = append(out, k)
+	}
+	sort.Strings(out)
 	return out
 }
 

@@ -55,7 +55,8 @@ func IsDisabled(v any) bool {
 //
 // block is the tenant's config block (its `_routing` and `_routing_profile`
 // keys are read). ok=false: the tenant has no routing — `_routing` is a
-// disabling string, or no layer supplies anything. unknownProfile is the
+// disabling string, is written but is no mapping (RoutingNotMapping, #2341),
+// or no layer supplies anything. unknownProfile is the
 // referenced profile name, trimmed, when no profile has that name (nil
 // otherwise); it is reported even when ok=false, like the Python reader's
 // WARN. A reference is any non-empty string, so `"   "` is a reference to the
@@ -78,8 +79,13 @@ func Resolve(tenantID string, block map[string]any, l Layers) (resolved map[stri
 		profile = p
 	}
 
-	routing := block["_routing"]
+	routing, written := block["_routing"]
 	if IsDisabled(routing) {
+		return nil, false, nil, unknownProfile
+	}
+	// #2341 R5: a `_routing` that is neither a mapping nor a disabling
+	// string renders nothing — not the defaults route (RoutingNotMapping).
+	if written && RoutingNotMapping(routing) {
 		return nil, false, nil, unknownProfile
 	}
 

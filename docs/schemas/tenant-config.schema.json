@@ -71,9 +71,16 @@
           "examples": ["team-sre-apac", "team-dba-global", "domain-finance-tier1"]
         },
         "_routing": {
-          "$ref": "#/definitions/routing",
+          "oneOf": [
+            {"$ref": "#/definitions/routing"},
+            {
+              "type": "string",
+              "pattern": "^\\s*([Dd][Ii][Ss][Aa][Bb][Ll][Ee][Dd]?|[Oo][Ff][Ff]|[Ff][Aa][Ll][Ss][Ee])\\s*$",
+              "description": "Turns this tenant's routing off: disable / disabled / off / false, case-insensitive, surrounding whitespace ignored (the set _lib_validation.is_disabled accepts). Must be a YAML string: an unquoted off / false is a boolean, which the route generator refuses (#2341) — quote it ('off')."
+            }
+          ],
           "title": "Alert Routing Configuration",
-          "description": "Per-tenant alert routing to custom receivers (webhook, email, slack, teams, rocketchat, pagerduty). Supports per-alertname and metric_group overrides. Tenant routing is inserted after _routing_enforced."
+          "description": "Per-tenant alert routing to custom receivers (webhook, email, slack, teams, rocketchat, pagerduty). Supports per-alertname and metric_group overrides. Tenant routing is inserted after _routing_enforced. A disabling string turns the tenant's routing off; any other non-mapping value is refused (#2341)."
         },
         "_routing_enforced": {
           "$ref": "#/definitions/routingEnforced",

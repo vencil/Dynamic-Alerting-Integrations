@@ -280,11 +280,14 @@ func LoadTree(configDir string, skip func(rel string) bool) (Tree, []Policy, []P
 					"defaults carrier (_defaults.yaml / _defaults.yml) carries it; move it there", k)})
 		}
 		if selected[k] {
-			if d, present, stripped, err := routingDefaultsFromNode(top); present {
+			if d, present, stripped, bad, err := routingDefaultsFromNode(top); present {
 				if err != nil {
 					d = nil
 				}
 				t.levelDefaults[level] = d
+				if bad != nil {
+					probs = append(probs, routingDefaultsNotMapping(k, bad))
+				}
 				if stripped {
 					probs = append(probs, Problem{Kind: ProblemRoutingDefaultsRoutes, File: k,
 						Field: "_routing_defaults.routes",

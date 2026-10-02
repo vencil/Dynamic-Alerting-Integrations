@@ -93,7 +93,9 @@ func TestResolve_NoRouting(t *testing.T) {
 		{"known but not a mapping", "_routing_profile: broken\n", false, "-"},
 		{"empty _routing mapping", "_routing: {}\n", false, "-"},
 		{"non-string profile reference is ignored", "_routing_profile: 7\n_routing: {receiver: {type: email}}\n", true, "-"},
-		{"non-disabling string _routing is ignored", "_routing_profile: chat\n_routing: yes-please\n", true, "-"},
+		// #2341 R5: written but neither a mapping nor a disabling string —
+		// nothing renders, the profile included.
+		{"non-disabling string _routing renders nothing", "_routing_profile: chat\n_routing: yes-please\n", false, "-"},
 	}
 	for _, tc := range cases {
 		_, ok, _, unknown := Resolve("t-x", decode(t, tc.block), layers)

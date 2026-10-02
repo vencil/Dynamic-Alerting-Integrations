@@ -427,6 +427,7 @@ func buildCheckInput(scoped *config.ScopedTenants, f *flags) guard.CheckInput {
 	provenance := make(map[string]routingpolicy.Provenance)
 	unknownProfiles := make(map[string]string)
 	disabled := make(map[string]bool)
+	notMapping := make(map[string]any)
 	tenantOverrides := make(map[string]map[string]any)
 	newDefaultsByTenant := make(map[string]map[string]any)
 
@@ -490,6 +491,9 @@ func buildCheckInput(scoped *config.ScopedTenants, f *flags) guard.CheckInput {
 		if routingpolicy.IsDisabled(block["_routing"]) {
 			disabled[ec.TenantID] = true
 		}
+		if r, has := block["_routing"]; has && routingpolicy.RoutingNotMapping(r) {
+			notMapping[ec.TenantID] = r // #2341 R5
+		}
 		resolved, ok, prov, unknown := routingpolicy.Resolve(ec.TenantID, block, layers)
 		if ok {
 			routing[ec.TenantID] = resolved
@@ -523,6 +527,7 @@ func buildCheckInput(scoped *config.ScopedTenants, f *flags) guard.CheckInput {
 		RoutingByTenant:        routing,
 		RoutingProvenance:      provenance,
 		RoutingDisabled:        disabled,
+		RoutingNotMapping:      notMapping,
 		UnknownRoutingProfiles: unknownProfiles,
 		DomainPolicies:         policies,
 		PlatformProblems:       problems,

@@ -60,6 +60,7 @@ type parityExpect struct {
 	TenantAPI      *parityTenantAPI  `json:"tenant_api"`
 	PythonDiffers  *parityDiffers    `json:"python_differs"`
 	Escalation     *parityEscalation `json:"escalation"`
+	Refused        *string           `json:"refused"` // #2341
 }
 
 type parityTree struct {
@@ -191,6 +192,15 @@ func gotGroupBy(resolved map[string]any, ok bool) [][2]string {
 		out = append(out, [2]string{p.Field, p.Kind})
 	}
 	return out
+}
+
+// gotRefused is the `refused` cell (#2341): why the tenant renders nothing.
+func gotRefused(block map[string]any) *string {
+	if r, has := block["_routing"]; has && RoutingNotMapping(r) {
+		kind := "routing_not_mapping"
+		return &kind
+	}
+	return nil
 }
 
 func gotPolicy(tenantID string, resolved map[string]any, ok bool, pols []Policy) [][3]string {
@@ -330,6 +340,7 @@ func TestRoutingPolicyParityMatrix(t *testing.T) {
 					jsonEq(t, "group_by_invalid", gotGroupBy(resolved, ok), wantGroupBy)
 					jsonEq(t, "policy", sortRows(gotPolicy(tenantID, resolved, ok, pols)), sortRows(want.Policy))
 					jsonEq(t, "escalation", gotEscalation(t, tenantID, resolved, ok, pols), want.Escalation)
+					jsonEq(t, "refused", gotRefused(layers.TenantBlock(tenantID, block)), want.Refused)
 					if (unknown == nil) != (want.UnknownProfile == nil) ||
 						(unknown != nil && *unknown != *want.UnknownProfile) {
 						t.Errorf("unknown profile = %v, want %v", unknown, want.UnknownProfile)
@@ -374,9 +385,10 @@ func checkTenantAPIModel(t *testing.T, files map[string]string, tenantID string,
 		return false
 	}
 	put := "ok"
+	r, writesRouting := block["_routing"]
 	if verdict(block) {
 		put = "403"
-	} else if writesBadReceiver(block) || len(ValuesNotString(block["_routing"])) > 0 ||
+	} else if (writesRouting && RoutingNotMapping(r)) || writesBadReceiver(block) || len(ValuesNotString(block["_routing"])) > 0 ||
 		len(GroupByInvalidForTenant(tenantID, block["_routing"])) > 0 {
 		put = "400" // #2295 receiver contract, #2431 a matcher value / #2503 a group_by element the block writes
 	}

@@ -38,6 +38,9 @@ type daGuardParityExpect struct {
 		Verdict string   `json:"verdict"`
 		Leaks   []string `json:"leaks"`
 	} `json:"escalation"`
+	// Refused (#2341): why the generator renders nothing for the tenant —
+	// the da-guard finding kind of that name, Field `_routing`.
+	Refused *string `json:"refused"`
 }
 
 type daGuardParityTree struct {
@@ -236,6 +239,15 @@ func TestDaGuard_RoutingPolicyParityMatrix(t *testing.T) {
 				sort.Strings(wantLeaks)
 				if got := dedupe(fieldsOf(findings, tenantID, "critical_escalation_leak")); !equalStrings(got, dedupe(wantLeaks)) {
 					t.Errorf("%s: critical_escalation_leak fields %v, table says %v", tenantID, got, wantLeaks)
+				}
+				for _, kind := range []string{"routing_not_mapping"} {
+					wantFields := []string{}
+					if want.Refused != nil && *want.Refused == kind {
+						wantFields = []string{"_routing"}
+					}
+					if got := fieldsOf(findings, tenantID, kind); !equalStrings(got, wantFields) {
+						t.Errorf("%s: %s fields %v, table says %v", tenantID, kind, got, wantFields)
+					}
 				}
 				gotUnknown := len(fieldsOf(findings, tenantID, "unknown_routing_profile")) > 0
 				if gotUnknown != (want.UnknownProfile != nil) {

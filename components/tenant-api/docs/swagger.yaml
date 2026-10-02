@@ -1863,9 +1863,12 @@ paths:
             quote it), and a group_by entry the body writes (group_by, overrides[].group_by,
             routes[].group_by) that is not a string as the route generator reads it
             (unquoted 8, on), is empty, repeats a label or is ... beside other labels
-            (#2503; quote or remove it). Also 400 when the current tenant file cannot
-            be parsed and the caller lacks write permission on all tenants (#2405;
-            nothing written)
+            (#2503; quote or remove it), and a _routing the body writes that is neither
+            a mapping nor a disabling string (disable / disabled / off / false), e.g.
+            "slack", a list, null or an unquoted false / off, which the route generator
+            reads as a boolean (#2341; to turn routing off quote it, 'off'). Also
+            400 when the current tenant file cannot be parsed and the caller lacks
+            write permission on all tenants (#2405; nothing written)
           schema:
             $ref: '#/definitions/ErrorResponse'
         "403":
