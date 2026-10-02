@@ -72,8 +72,12 @@ if [ ! -r "$_prepush_dir/_prepush_refs.sh" ]; then
     echo "[pre-push-mkdocs] ⛔ _prepush_refs.sh is not next to ${BASH_SOURCE[0]}" >&2
     echo "  If that is in scripts/ops/, the helper is gone from your checkout. It is" >&2
     echo "  version-controlled: restore it from HEAD (the deletion may already be staged)." >&2
-    echo "  Anywhere else it is a stale copy of this guard, and the installer replaces it:" >&2
+    echo "  The installer cannot restore it." >&2
+    echo "  Anywhere else it is a stale copy of this guard. The installer replaces a copy" >&2
+    echo "  identical to a committed version:" >&2
     echo "    bash scripts/ops/install_prepush_hook.sh" >&2
+    echo "  If it moves the copy to pre-push.chained instead (an edited copy, or history" >&2
+    echo "  too shallow to hold that version), delete the copy by hand." >&2
     exit 1
 fi
 . "$_prepush_dir/_prepush_refs.sh"

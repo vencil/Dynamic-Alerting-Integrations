@@ -139,6 +139,7 @@ if is_guard_copy "$chained"; then
 fi
 
 target="$hook"
+replaced=""
 if is_ours "$hook" || is_guard_copy "$hook"; then
     target="$hook"                       # refresh in place
 elif is_precommit "$hook"; then
@@ -210,13 +211,14 @@ fi
 exec bash "$_dispatch" "$@"
 VIBE_SHIM_EOF
 
-# ⛔ Never write through a symlink. A hook linked to a guard in scripts/ops is
-# recognised as a guard copy and refreshed in place, and `>` would follow the
-# link and overwrite the version-controlled guard with the shim.
-if [ -L "$target" ]; then
+# ⛔ Never write into the existing file: remove it first. A hook symlinked or
+# hard-linked to a guard in scripts/ops is recognised as a guard copy, and `>`
+# would write through the link into the version-controlled guard.
+if [ -e "$target" ] || [ -L "$target" ]; then
+    is_guard_copy "$target" && replaced=" (replacing a copy of a guard that was there)"
     command -v rm >/dev/null 2>&1 && rm -f "$target" || {
-        warn "⛔ $target is a symlink and could not be removed; writing would"
-        warn "   follow it. Remove the link by hand, then re-run."
+        warn "⛔ could not remove $target before writing the shim. Remove it by"
+        warn "   hand, then re-run."
         exit 1
     }
 fi
@@ -234,8 +236,8 @@ if ! chmod +x "$target"; then
 fi
 
 if [ "$target" = "$legacy" ]; then
-    say "installed guard shim at $target (pre-commit owns $hook and calls it with the full refspec)"
+    say "installed guard shim at $target$replaced (pre-commit owns $hook and calls it with the full refspec)"
 else
-    say "installed guard shim at $target"
+    say "installed guard shim at $target$replaced"
 fi
 exit 0

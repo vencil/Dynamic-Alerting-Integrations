@@ -1504,10 +1504,10 @@ def test_a_stale_guard_copy_is_replaced_by_the_installer(
     tmp_path: Path, guard: str, slot: str
 ) -> None:
     """A guard copied alone into the hooks directory (the recipe before #1689)
-    cannot find its helper, and every message such a copy has ever printed says
-    to run the installer. Copies already out there carry the bytes of the version
-    they were taken from, so the installer must recognise them by that, and
-    replace them rather than chain them. ``pre-push.chained`` is where an earlier
+    cannot find its helper, and its message says to run the installer. Copies
+    already out there carry the bytes of the version they were taken from, so
+    the installer must recognise them by that, and replace them rather than
+    chain them. ``pre-push.chained`` is where an earlier
     installer put one; ``pre-push.legacy`` is where pre-commit migrates one."""
     work, old = _repo_with_a_shipped_old_guard(tmp_path, guard)
     _occupy(work, slot, old)
@@ -1518,18 +1518,25 @@ def test_a_stale_guard_copy_is_replaced_by_the_installer(
 
     r = _install_guards(work)
     assert r.returncode == 0, f"installer failed:\n{r.stdout}{r.stderr}"
+    said = "removed pre-push.chained" if slot == "pre-push.chained" else "replacing a copy of a guard"
+    assert said in r.stdout, f"the installer did not say it replaced the copy:\n{r.stdout}"
     _assert_the_guards_are_back(work)
 
 
-def test_a_hook_symlinked_to_a_guard_is_replaced_without_touching_the_guard(
-    tmp_path: Path,
+@pytest.mark.parametrize("link", ["symlink", "hardlink"])
+def test_a_hook_linked_to_a_guard_is_replaced_without_touching_the_guard(
+    tmp_path: Path, link: str
 ) -> None:
-    """A symlink to a tracked guard is identical to it, so it is refreshed in
-    place — and writing through the link would overwrite the guard itself."""
+    """A link to a tracked guard is identical to it, so it is replaced — and
+    writing into the existing file would go through the link into the guard."""
     work, _ = _repo_with_a_shipped_old_guard(tmp_path, "protect_main_push.sh")
     hook = work / ".git" / "hooks" / "pre-push"
     hook.unlink(missing_ok=True)
-    hook.symlink_to(work / "scripts" / "ops" / "protect_main_push.sh")
+    guard = work / "scripts" / "ops" / "protect_main_push.sh"
+    if link == "symlink":
+        hook.symlink_to(guard)
+    else:
+        os.link(guard, hook)
 
     r = _install_guards(work)
     assert r.returncode == 0, f"installer failed:\n{r.stdout}{r.stderr}"
