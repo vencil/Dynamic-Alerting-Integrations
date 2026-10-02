@@ -348,11 +348,18 @@ def test_enospc_mid_write_is_rc2_and_keeps_the_previous_file(name, root, monkeyp
     def fdopen(fd, mode="r", *a, **k):
         # The helper's tmp is the fd's inode among `where`'s entries — found
         # by fstat, not /proc/self/fd, so this runs where /proc does not.
+        # ``os.stat(e.path)``, not ``e.stat()``: on Windows DirEntry.stat()
+        # reports st_dev == st_ino == 0 (the directory listing carries no file
+        # id), so the pair never matched and the fault was never injected.
+        # os.stat asks the file itself; on POSIX it is the same lstat.
         st = os.fstat(fd)
-        in_where = any(
-            (e.stat(follow_symlinks=False).st_dev, e.stat(follow_symlinks=False).st_ino)
-            == (st.st_dev, st.st_ino)
-            for e in os.scandir(where))
+
+        def _ident(entry):
+            s = os.stat(entry.path, follow_symlinks=False)
+            return (s.st_dev, s.st_ino)
+
+        in_where = any(_ident(e) == (st.st_dev, st.st_ino)
+                       for e in os.scandir(where))
         fh = real_fdopen(fd, mode, *a, **k)
         if "w" in mode and in_where:
             return _Half(fh)
