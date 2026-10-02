@@ -428,6 +428,7 @@ func buildCheckInput(scoped *config.ScopedTenants, f *flags) guard.CheckInput {
 	unknownProfiles := make(map[string]string)
 	disabled := make(map[string]bool)
 	notMapping := make(map[string]any)
+	invalidIDs := make(map[string]string)
 	tenantOverrides := make(map[string]map[string]any)
 	newDefaultsByTenant := make(map[string]map[string]any)
 
@@ -486,21 +487,27 @@ func buildCheckInput(scoped *config.ScopedTenants, f *flags) guard.CheckInput {
 		// threshold profile. Routing there is never rendered (UnreadRouting
 		// names it); reading it here judged routes that do not exist.
 		// #2326: the layers of the tenant's own directory level.
-		layers := tree.LayersFor(routingpolicy.LevelOf(ec.SourceFile))
-		block := layers.TenantBlock(ec.TenantID, pyyamlOwn(ec, pyRouting))
-		if routingpolicy.IsDisabled(block["_routing"]) {
-			disabled[ec.TenantID] = true
-		}
-		if r, has := block["_routing"]; has && routingpolicy.RoutingNotMapping(r) {
-			notMapping[ec.TenantID] = r // #2341 R5
-		}
-		resolved, ok, prov, unknown := routingpolicy.Resolve(ec.TenantID, block, layers)
-		if ok {
-			routing[ec.TenantID] = resolved
-			provenance[ec.TenantID] = prov
-		}
-		if unknown != nil {
-			unknownProfiles[ec.TenantID] = *unknown
+		// #2341 R8: an id the routing plane refuses gets no routing at all —
+		// the generator renders nothing for it (routingpolicy.IsValidTenantID).
+		if !routingpolicy.IsValidTenantID(ec.TenantID) {
+			invalidIDs[ec.TenantID] = ec.SourceFile
+		} else {
+			layers := tree.LayersFor(routingpolicy.LevelOf(ec.SourceFile))
+			block := layers.TenantBlock(ec.TenantID, pyyamlOwn(ec, pyRouting))
+			if routingpolicy.IsDisabled(block["_routing"]) {
+				disabled[ec.TenantID] = true
+			}
+			if r, has := block["_routing"]; has && routingpolicy.RoutingNotMapping(r) {
+				notMapping[ec.TenantID] = r // #2341 R5
+			}
+			resolved, ok, prov, unknown := routingpolicy.Resolve(ec.TenantID, block, layers)
+			if ok {
+				routing[ec.TenantID] = resolved
+				provenance[ec.TenantID] = prov
+			}
+			if unknown != nil {
+				unknownProfiles[ec.TenantID] = *unknown
+			}
 		}
 		// PR-5: redundant-override warn-tier inputs. We populate
 		// both fields as soon as the resolver hands them to us; an
@@ -528,6 +535,7 @@ func buildCheckInput(scoped *config.ScopedTenants, f *flags) guard.CheckInput {
 		RoutingProvenance:      provenance,
 		RoutingDisabled:        disabled,
 		RoutingNotMapping:      notMapping,
+		InvalidTenantIDs:       invalidIDs,
 		UnknownRoutingProfiles: unknownProfiles,
 		DomainPolicies:         policies,
 		PlatformProblems:       problems,

@@ -804,8 +804,10 @@ def _build_parser() -> argparse.ArgumentParser:
                              "it), a group_by entry that is not a non-empty string, "
                              "repeats a label or mixes '...' with labels (#2503), "
                              "a tenant _routing that is neither a mapping nor a "
-                             "disabling string or a _routing_defaults that is not "
-                             "a mapping (#2341) "
+                             "disabling string, a _routing_defaults that is not "
+                             "a mapping, or a tenant id that is empty or has a "
+                             "character other than letters, digits, '_' and '-' "
+                             "(#2341) "
                              "and, on the --apply/--output-configmap "
                              "merge, any inhibit rule with an ungated `equal:` label "
                              "(#1132). Without --strict these surface as WARN (an "
@@ -993,7 +995,7 @@ def main() -> None:
             print(f"FAIL: {len(policy_errors)} blocking error(s) under "
                   "--strict (domain policy, unquoted matcher value, "
                   "invalid group_by entry, unreadable _routing / "
-                  "_routing_defaults):",
+                  "_routing_defaults, invalid tenant id):",
                   file=sys.stderr)
             for e in policy_errors:
                 print(e, file=sys.stderr)

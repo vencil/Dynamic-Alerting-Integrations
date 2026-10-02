@@ -25,6 +25,7 @@ _THIS_DIR = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, _THIS_DIR)  # Docker flat layout
 sys.path.insert(0, os.path.join(_THIS_DIR, '..'))  # Repo subdir layout
 from _lib_python import is_disabled as _is_disabled  # noqa: E402
+from _lib_validation import is_valid_tenant_id  # noqa: E402  (#2341 R8)
 from _lib_exitcodes import EXIT_CALLER_ERROR  # noqa: E402
 from _lib_io import safe_label  # noqa: E402  (#1538 output-layer escaping)
 # #2123 duplicate key = YAML error; #2114 tenant ids as raw text — composed.
@@ -62,6 +63,7 @@ from _grar_validate import (  # noqa: E402
     check_domain_policies,
     check_policy_scope,
     group_by_problem_text,
+    invalid_tenant_id_text,
     routing_defaults_not_mapping_text,
     routing_group_by_invalid,
     routing_not_mapping_text,
@@ -1212,6 +1214,13 @@ def _apply_tenant_entries(config_dir: str, entries: list, result: dict) -> None:
     for tenant in dict.fromkeys(t for _f, t, _o in entries):
         if tenant not in merged:
             continue  # an orphan, named above
+        if not is_valid_tenant_id(tenant):
+            # #2341 R8: nothing at all is rendered for it — no route, no
+            # receiver, no inhibit rule, in every mode (an empty id became
+            # `tenant=""`, which Alertmanager matches on alerts WITHOUT a
+            # tenant label: platform alerts were routed to `tenant-`).
+            result.setdefault("invalid_tenant_ids", []).append(tenant)
+            continue
         _parse_tenant_overrides(tenant, merged[tenant], result)
 
 
@@ -1419,6 +1428,10 @@ def load_tenant_tree(
     refused = parsed.get("routing_refused", {})
     for tenant in sorted(refused, key=str):
         schema_warnings.append(routing_not_mapping_warning(tenant, refused[tenant]))
+    # #2341 R8: a tenant id the routing plane refuses — nothing rendered.
+    invalid_ids = sorted(set(parsed.get("invalid_tenant_ids", [])), key=str)
+    for tenant in invalid_ids:
+        schema_warnings.append(f"  WARN: {invalid_tenant_id_text(tenant)}, skipping")
 
     # v2.1.0 ADR-007: Validate domain policies against resolved routing.
     # #2326 (d): a policy file below the root applies to the tenants of its
@@ -1467,6 +1480,9 @@ def load_tenant_tree(
     # routing_group_by_invalid; tenant-api: 400); without --strict the
     # generator drops the element with a `WARN … skipping` line instead.
     if strict_policies:
+        for tenant in invalid_ids:  # #2341 R8
+            schema_warnings.append(
+                f"  {POLICY_ERROR_PREFIX} {invalid_tenant_id_text(tenant)}")
         # #2341 R5: the same two shapes as a blocking ERROR under --strict.
         for tenant in sorted(refused, key=str):
             schema_warnings.append(

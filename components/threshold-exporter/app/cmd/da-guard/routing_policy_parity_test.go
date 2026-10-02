@@ -66,6 +66,7 @@ func loadRoutingPolicyMatrix(t *testing.T) []daGuardParityTree {
 	var m struct {
 		Comment       []string            `json:"_comment"`
 		BlockingKinds json.RawMessage     `json:"blocking_kinds"`
+		TenantIDs     json.RawMessage     `json:"tenant_ids"` // pinned by pkg/routingpolicy
 		Trees         []daGuardParityTree `json:"trees"`
 	}
 	dec := json.NewDecoder(bytes.NewReader(raw))
@@ -162,7 +163,7 @@ func TestDaGuard_RoutingPolicyParityMatrix(t *testing.T) {
 			}
 			gotPlatform, wantPlatform := []string{}, []string{}
 			for _, f := range findings {
-				if f.TenantID == "" && f.Kind != "routing_group_by_invalid" {
+				if f.TenantID == "" && f.Kind != "routing_group_by_invalid" && f.Kind != "invalid_tenant_id" {
 					gotPlatform = append(gotPlatform, f.Kind+" "+f.Field)
 				}
 			}
@@ -239,6 +240,12 @@ func TestDaGuard_RoutingPolicyParityMatrix(t *testing.T) {
 				sort.Strings(wantLeaks)
 				if got := dedupe(fieldsOf(findings, tenantID, "critical_escalation_leak")); !equalStrings(got, dedupe(wantLeaks)) {
 					t.Errorf("%s: critical_escalation_leak fields %v, table says %v", tenantID, got, wantLeaks)
+				}
+				// #2341 R8: one invalid_tenant_id finding iff the id is refused
+				// (its Field names the file, which the table does not).
+				gotInvalid := len(fieldsOf(findings, tenantID, "invalid_tenant_id")) > 0
+				if wantInvalid := want.Refused != nil && *want.Refused == "invalid_tenant_id"; gotInvalid != wantInvalid {
+					t.Errorf("%q: invalid_tenant_id reported=%v, table says %v", tenantID, gotInvalid, wantInvalid)
 				}
 				for _, kind := range []string{"routing_not_mapping"} {
 					wantFields := []string{}

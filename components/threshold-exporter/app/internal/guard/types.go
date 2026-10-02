@@ -184,6 +184,12 @@ const (
 	// carrier) that is neither a mapping nor null; the level contributes
 	// nothing and the generator refuses it. Field `<file>:_routing_defaults`.
 	FindingRoutingDefaultsNotMapping FindingKind = "routing_defaults_not_mapping"
+	// FindingInvalidTenantID (error; #2341): a declared tenant id the route
+	// generator renders nothing for (routingpolicy.IsValidTenantID: empty,
+	// or a character outside letters, digits, `_`, `-`). TenantID is the id
+	// (it may be empty, so the finding is told from a platform one by its
+	// kind), Field `<tenant file>:tenants.<id>`.
+	FindingInvalidTenantID FindingKind = "invalid_tenant_id"
 )
 
 // Routing-tree findings (#2326, ADR-017 / ADR-007 "Amendment 2026-09-28"):
@@ -353,6 +359,11 @@ type CheckInput struct {
 	// (#2341, routingpolicy.RoutingNotMapping). Such tenants are absent from
 	// RoutingByTenant: the generator renders no route for them.
 	RoutingNotMapping map[string]any `json:"-"`
+
+	// InvalidTenantIDs maps each declared tenant id routingpolicy.IsValidTenantID
+	// refuses to the tenant file that declares it (#2341). Such tenants are
+	// absent from RoutingByTenant.
+	InvalidTenantIDs map[string]string `json:"-"`
 
 	// UnknownRoutingProfiles maps tenant ID → the `_routing_profile` it
 	// references that no profile file defines (warn finding).

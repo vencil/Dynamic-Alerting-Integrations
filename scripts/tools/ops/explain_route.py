@@ -55,6 +55,7 @@ from _grar_validate import (  # noqa: E402
     ROUTING_TREE_ERROR_PREFIX,
     check_policy_scope,
     duplicate_tenant_errors,
+    invalid_tenant_id_text,
     routing_defaults_not_mapping_text,
     routing_not_mapping_warning,
 )
@@ -1237,6 +1238,11 @@ def main(argv: list[str] | None = None) -> int:
         # generate-routes --validate; the level contributes nothing here too).
         for fname, value in parsed.get("routing_defaults_not_mapping", []):
             print(f"  WARN: {safe_label(routing_defaults_not_mapping_text(fname, value))}",
+                  file=sys.stderr)
+        # #2341 R8: a tenant id generate-routes renders nothing for (it is
+        # not in all_tenants, so it is not explained below either).
+        for tenant in sorted(set(parsed.get("invalid_tenant_ids", [])), key=str):
+            print(f"  WARN: {safe_label(invalid_tenant_id_text(tenant))}",
                   file=sys.stderr)
 
     # --trace mode: simulate alert routing path

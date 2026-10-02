@@ -99,14 +99,43 @@
     "#2412 / #2341 - a `_routing_defaults` that is neither a mapping nor null (list, string, number, an unquoted boolean) contributes nothing, at the root and below; it still replaces an earlier root file's `_routing_defaults` WHOLE (root _ files in name order), so the later file decides. It is a platform row, routing_defaults_not_mapping [kind, file, '_routing_defaults']: the generator's blocking `WARN ... skipping` (--strict: ERROR), da-guard's error with an empty tenant.",
     "#2504 - a null key in a routes match (~, null, an empty `? ` key) is no label name: the entry is rejected in every reader, alone or beside a valid label. The generator keeps that key (as None) instead of dropping it as its loader drops null keys elsewhere, so it no longer renders the route on the other labels alone; a critical -> pagerduty route that carries one is no escalation.",
     "enforced_group_by_invalid (#2503, per tree): [file, field, kind] per bad group_by element of the `_routing_enforced` route(s) the generator renders - read from the root `_` files in name order, a later one with `enabled: true` (as PyYAML reads it: `yes` / `on` too) replacing an earlier; judged only with a truthy receiver that the receiver contract accepts (pkg/receiverspec, _grar_merge.build_receiver_config) and a non-empty group_by list, the `{{tenant}}` shape once per routed tenant AFTER substitution. field is `_routing_enforced.group_by[i]`, or `_routing_enforced (<tenant>).group_by[i]` for the `{{tenant}}` shape; file is the root file the enforced block came from. The generator's --strict ERROR (it names no file, so the Python half compares field and kind), da-guard's routing_group_by_invalid with an empty tenant and Field <file>:<field>. The --policy domain allowlist is not applied (load_tenant_tree does not know it).",
-    "refused (#2341): null, or why the generator renders NOTHING for the tenant although it is declared - 'routing_not_mapping' = its `_routing` (tenant file over the root platform overlay), as PyYAML reads it, is neither a mapping nor a disabling string (disable / disabled / off / false, a YAML string): `slack`, a list, null, an unquoted false / off / no (a YAML boolean; a quoted 'off' disables). targets is then null. The generator's blocking `WARN ... skipping` (--strict: ERROR), da-guard's routing_not_mapping, tenant-api's 400 for a PUT body that writes it.",
-    "#2341 - a batch patch `_routing: on` (any string but a disabling one) no longer re-enables a disabled tenant's routing: every reader refuses that `_routing` and renders nothing, so the domain policy has nothing to judge (batch verdict 'ok')."
+    "refused (#2341): null, or why the generator renders NOTHING for the tenant although it is declared - 'invalid_tenant_id' = its id is refused (tenant_ids, below; checked first); 'routing_not_mapping' = its `_routing` (tenant file over the root platform overlay), as PyYAML reads it, is neither a mapping nor a disabling string (disable / disabled / off / false, a YAML string): `slack`, a list, null, an unquoted false / off / no (a YAML boolean; a quoted 'off' disables). targets is then null. The generator's blocking `WARN ... skipping` (--strict: ERROR), da-guard's routing_not_mapping, tenant-api's 400 for a PUT body that writes it.",
+    "#2341 - a batch patch `_routing: on` (any string but a disabling one) no longer re-enables a disabled tenant's routing: every reader refuses that `_routing` and renders nothing, so the domain policy has nothing to judge (batch verdict 'ok').",
+    "tenant_ids (#2341 R8): the ids every reader refuses (Python _lib_validation.is_valid_tenant_id, Go routingpolicy.IsValidTenantID) and accepts. Refused = the empty id plus every id that ALL three existing tenant-name rules refuse (operator_generate.py / migrate_to_operator.py: DNS-1123 label; alert_quality.py: ^[a-zA-Z0-9_-]+$) - i.e. not ^[A-Za-z0-9_-]+$; an id any of them accepts (UPPER) stays valid. A declared tenant with a refused id renders NOTHING (no route, receiver or inhibit rule): refused 'invalid_tenant_id', targets null - the generator's blocking `WARN ... skipping` (--strict: ERROR), da-guard's invalid_tenant_id (Field <file>:tenants.<id>), tenant-api's 400 on a write to that id."
   ],
   "blocking_kinds": [
     "routing_defaults_null_below_root",
     "routing_enforced_below_root",
     "routing_profile_duplicate"
   ],
+  "tenant_ids": {
+    "valid": [
+      "t-a",
+      "tenant-x",
+      "UPPER",
+      "Mixed_Case-1",
+      "a",
+      "_x",
+      "-x",
+      "x_",
+      "010",
+      "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+    ],
+    "invalid": [
+      "",
+      " ",
+      "bad tenant",
+      "Bad_Tenant!",
+      "a.b",
+      "a/b",
+      "t\n",
+      " t-a",
+      "t-a ",
+      "tenänt",
+      "a:b",
+      "{{tenant}}"
+    ]
+  },
   "trees": [
     {
       "name": "i-routes-entry-unknown-receiver-type",
@@ -4879,6 +4908,88 @@
           "refused": null
         },
         "t-b": {
+          "targets": [
+            {
+              "ref": "receiver",
+              "type": "webhook"
+            }
+          ],
+          "policy": [],
+          "rejected_routes": [],
+          "values_not_string": [],
+          "group_by_invalid": [],
+          "unknown_profile": null,
+          "tenant_api": null,
+          "python_differs": null,
+          "escalation": null,
+          "refused": null
+        }
+      },
+      "enforced_group_by_invalid": []
+    },
+    {
+      "name": "invalid-tenant-ids",
+      "files": {
+        "_defaults.yaml": "defaults:\n  cpu_usage_percent: 80\n_routing_defaults:\n  receiver:\n    type: webhook\n    url: https://hooks.example.com/{{tenant}}\n",
+        "bad.yaml": "tenants:\n  \"\":\n    cpu_usage_percent: '85'\n  \"bad tenant\":\n    cpu_usage_percent: '85'\n  \"Bad_Tenant!\":\n    cpu_usage_percent: '85'\n    _routing: slack\n  UPPER:\n    cpu_usage_percent: '85'\n",
+        "t-ok.yaml": "tenants:\n  t-ok:\n    cpu_usage_percent: '85'\n"
+      },
+      "platform": [],
+      "expect": {
+        "": {
+          "targets": null,
+          "policy": [],
+          "rejected_routes": [],
+          "values_not_string": [],
+          "group_by_invalid": [],
+          "unknown_profile": null,
+          "tenant_api": null,
+          "python_differs": null,
+          "escalation": null,
+          "refused": "invalid_tenant_id"
+        },
+        "bad tenant": {
+          "targets": null,
+          "policy": [],
+          "rejected_routes": [],
+          "values_not_string": [],
+          "group_by_invalid": [],
+          "unknown_profile": null,
+          "tenant_api": null,
+          "python_differs": null,
+          "escalation": null,
+          "refused": "invalid_tenant_id"
+        },
+        "Bad_Tenant!": {
+          "targets": null,
+          "policy": [],
+          "rejected_routes": [],
+          "values_not_string": [],
+          "group_by_invalid": [],
+          "unknown_profile": null,
+          "tenant_api": null,
+          "python_differs": null,
+          "escalation": null,
+          "refused": "invalid_tenant_id"
+        },
+        "UPPER": {
+          "targets": [
+            {
+              "ref": "receiver",
+              "type": "webhook"
+            }
+          ],
+          "policy": [],
+          "rejected_routes": [],
+          "values_not_string": [],
+          "group_by_invalid": [],
+          "unknown_profile": null,
+          "tenant_api": null,
+          "python_differs": null,
+          "escalation": null,
+          "refused": null
+        },
+        "t-ok": {
           "targets": [
             {
               "ref": "receiver",

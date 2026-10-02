@@ -1588,6 +1588,17 @@ def routing_not_mapping_warning(tenant: str, value: object) -> str:
             "is rendered for this tenant, skipping")
 
 
+def invalid_tenant_id_text(tenant: object) -> str:
+    """#2341 R8: a tenant id the routing plane refuses (is_valid_tenant_id).
+
+    The id is shown as a repr so an empty or blank one is visible. ⚠️ Wording
+    as ``routing_not_mapping_text``.
+    """
+    return (f"tenant id {str(tenant)!r} is not a valid tenant id (non-empty; "
+            "letters, digits, '_' and '-' only) — no route, receiver or "
+            "inhibit rule is rendered for it")
+
+
 def routing_defaults_not_mapping_text(fname: str, value: object) -> str:
     """#2341 R5: a ``_routing_defaults`` that is neither a mapping nor null."""
     return (f"_routing_defaults in {fname} must be a mapping, got "

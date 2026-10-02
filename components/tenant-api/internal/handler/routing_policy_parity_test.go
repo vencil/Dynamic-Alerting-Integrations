@@ -79,6 +79,7 @@ func loadTenantAPIParityMatrix(t *testing.T) []tenantAPIParityTree {
 	var m struct {
 		Comment       []string              `json:"_comment"`
 		BlockingKinds json.RawMessage       `json:"blocking_kinds"`
+		TenantIDs     json.RawMessage       `json:"tenant_ids"` // pinned by pkg/routingpolicy
 		Trees         []tenantAPIParityTree `json:"trees"`
 	}
 	dec := json.NewDecoder(bytes.NewReader(raw))
