@@ -11,6 +11,7 @@ from pathlib import Path
 from unittest import mock
 
 import pytest
+from _platform_fs import require_file_name  # noqa: E402
 import yaml
 
 from _lib_exitcodes import EXIT_CALLER_ERROR  # noqa: E402
@@ -458,6 +459,7 @@ class TestRenderCrFile:
         assert (self._BAD_NAME in caplog.text) == non_string, caplog.text
         assert "exists in this --config-dir" not in caplog.text
         assert ('quote it ("null")' in caplog.text) == is_null, caplog.text
+        require_file_name(stale)
         (out_dir / stale).write_text(self._rendered(old, "ns"),
                                      encoding="utf-8")
         caplog.clear()
