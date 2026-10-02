@@ -7,6 +7,8 @@ symlink test into a skip under a green run. The first test is that guard.
 from __future__ import annotations
 
 import os
+import shutil
+import sys
 
 import pytest
 
@@ -20,6 +22,73 @@ def test_a_posix_host_can_create_symlinks():
     assert pf.can_symlink(), (
         "tests/_platform_fs.can_symlink() is False on a POSIX host: every test "
         "using symlink_or_skip / require_symlinks is being skipped here")
+
+
+_ON_LINUX = sys.platform.startswith("linux")
+_NOT_LINUX = "the guard is for Linux, where CI and the dev container run"
+
+#: Every name a test passes to ``require_file_name``. Linux holds them all.
+_HOSTILE_NAMES = (
+    b"evil\nx.yaml", b"has\nnewline.yaml", b'has"quote.yaml',
+    b"has\\backslash.yaml", b"legacy-\xff.yaml", b"b\xff.yaml",
+    "db-\x1b[2J\x1b[Hevil.yaml", "2024-01-01 10:00:00+00:00.yaml",
+)
+
+
+@pytest.mark.skipif(not _ON_LINUX, reason=_NOT_LINUX)
+def test_linux_has_every_filesystem_capability_the_probes_ask_about():
+    """⛔ Same guard as above for the other probes: any of these False on
+    Linux means tests are skipping where they are supposed to run."""
+    unmet = [repr(n) for n in _HOSTILE_NAMES if not pf.can_name_file(n)]
+    if not pf.has_posix_modes():
+        unmet.append("POSIX mode bits")
+    if not pf.has_case_sensitive_names():
+        unmet.append("case-sensitive names")
+    if not pf.can_exec_shebang_scripts():
+        unmet.append("running a #! script as a command")
+    unmet += [f"os.{a}" for a in ("geteuid", "getegid", "listxattr", "getxattr")
+              if not hasattr(os, a)]
+    assert not unmet, f"probes answering False on Linux (tests are skipping): {unmet}"
+
+
+@pytest.mark.skipif(not (_ON_LINUX and os.environ.get("GITHUB_ACTIONS") == "true"),
+                    reason="the tools are only guaranteed on the CI runner")
+@pytest.mark.parametrize("tool", ["make", "kubectl"])
+def test_the_ci_runner_has_the_tools_tests_require(tool):
+    """⛔ ``require_tool`` skips when a tool is absent. On the CI runner that
+    would be a silent loss, so there the tool must exist."""
+    assert shutil.which(tool), f"`{tool}` is not on PATH on the CI runner"
+
+
+@pytest.mark.parametrize("probe, require, args", [
+    ("can_name_file", "require_file_name", ("x.yaml",)),
+    ("has_posix_modes", "require_posix_modes", ()),
+    ("has_case_sensitive_names", "require_case_sensitive_names", ()),
+    ("can_exec_shebang_scripts", "require_shebang_scripts", ()),
+])
+def test_each_require_skips_exactly_when_its_probe_says_no(monkeypatch, probe, require, args):
+    monkeypatch.setattr(pf, probe, lambda *a: True)
+    getattr(pf, require)(*args)          # capability present: returns
+    monkeypatch.setattr(pf, probe, lambda *a: False)
+    with pytest.raises(pytest.skip.Exception):
+        getattr(pf, require)(*args)
+
+
+def test_require_os_attrs_and_tool_skip_only_for_what_is_missing():
+    pf.require_os_attrs("getcwd")
+    pf.require_tool(os.path.basename(sys.executable))
+    with pytest.raises(pytest.skip.Exception) as ei:
+        pf.require_os_attrs("getcwd", "no_such_os_attr_2559")
+    assert "os.no_such_os_attr_2559" in str(ei.value) and "getcwd" not in str(ei.value)
+    with pytest.raises(pytest.skip.Exception):
+        pf.require_tool("definitely-not-a-real-binary-2559")
+
+
+def test_the_name_probe_reads_the_listing_back(tmp_path):
+    """A plain name is storable everywhere; the probe must say so (a probe
+    that always answered False would skip every caller and stay green)."""
+    assert pf.can_name_file("plain-2559.yaml")
+    assert pf.can_name_file(b"plain-2559.yaml")
 
 
 def test_without_the_capability_it_skips_and_creates_nothing(tmp_path, monkeypatch):

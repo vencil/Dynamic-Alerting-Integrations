@@ -1748,7 +1748,7 @@ da-tools generate-routes --config-dir <path> [options]
 | `--base-config <FILE>` | 自訂 Alertmanager 基礎配置。**僅 `--output-configmap` 會讀它**；用在其他模式是呼叫端錯誤（結束碼 2），不會被靜默忽略 | 內建預設（**僅在未提供本旗標時**；供了但讀不到／不是合法 YAML／頂層不是 mapping 一律結束碼 2，不會退回預設） |
 | `--dry-run` | 僅輸出預覽，不寫入檔案。**`--validate` / `--apply` 不讀它**（結束碼 2） | false |
 | `--validate` | 僅驗證，不輸出。conf.d 裡任何解析不了的租戶檔 → 結束碼 1，不分 `--strict`（#1460）。其餘檢查都通過後，還會以**內建預設 base** 組出完整設定交給 `amtool`（見下方「Alertmanager 驗證」；#2260） | false |
-| `--strict` | 下列情況報 ERROR 並結束碼 1（CI 跑 `--strict`）：domain-policy（ADR-007）違規（不加時為 WARN）；`routes[i].match` 的值或 `overrides[i].alertname`／`metric_group` 未加引號、PyYAML 讀成非字串（`yes`、`1:30`、`~` 等，#2431；修法是加引號。不加時 routes 條目以 WARN 略過、override 則以 `str()` 渲染，如 `alertname="True"`）；`--apply`／`--output-configmap` 合併時 `equal:` 標籤沒有 presence gate 的 inhibit rule（#1132，不加時為 WARN） | false |
+| `--strict` | 下列情況報 ERROR 並結束碼 1（CI 跑 `--strict`）：domain-policy（ADR-007）違規（不加時為 WARN）；`routes[i].match` 的值或 `overrides[i].alertname`／`metric_group` 未加引號、PyYAML 讀成非字串（`yes`、`1:30`、`~` 等，#2431；修法是加引號。不加時 routes 條目以 WARN 略過、override 則以 `str()` 渲染，如 `alertname="True"`）；`group_by` 的元素不是非空字串（未加引號的 `8`、`on` 等）、重複、或 `...` 與其他 label 並存（#2503；不加時該元素以 `WARN … skipping` 略過後輸出，略過後為空就不輸出 `group_by`）；`--apply`／`--output-configmap` 合併時 `equal:` 標籤沒有 presence gate 的 inhibit rule（#1132，不加時為 WARN） | false |
 | `--apply` | 直接套用至 Kubernetes（需 kubectl） | false |
 | `--namespace <NS>` | ConfigMap 所在 namespace。**只有 `--apply` / `--output-configmap` 會讀它**，其他模式結束碼 2 | `monitoring` |
 | `--configmap <NAME>` | ConfigMap 名稱。**只有 `--apply` / `--output-configmap` 會讀它**，其他模式結束碼 2 | `alertmanager-config` |
@@ -2000,7 +2000,7 @@ da-tools validate-config --config-dir <path> [options]
 | `--policy-dsl <FILE>` | 獨立 Policy-as-Code DSL 檔的路徑（頂層 `policies:` key）。⚠️ 供了但用不了 → exit 2（五種形狀同 `--policy`）；修前的輸出與**完全不給旗標逐字相同**（#1556） | （只讀 `_defaults.yaml` 的 `_policies`） |
 | `--version-check` | 一併跑版號一致性檢查 | false |
 | `--json` | 以 JSON 輸出結果（供 CI 消費） | false |
-| `--strict` | 把 domain-policy（ADR-007）違規從 WARN 升為 FAIL（對齊 CI 的 `generate-routes --strict`）；另外，未加引號、PyYAML 讀成非字串的 matcher 值（`routes[i].match` 的值、`overrides[i].alertname`／`metric_group`，#2431）會讓 `schema` 列 FAIL | false |
+| `--strict` | 把 domain-policy（ADR-007）違規從 WARN 升為 FAIL（對齊 CI 的 `generate-routes --strict`）；另外，未加引號、PyYAML 讀成非字串的 matcher 值（`routes[i].match` 的值、`overrides[i].alertname`／`metric_group`，#2431）與不合規的 `group_by` 元素（#2503）會讓 `schema` 列 FAIL | false |
 
 **檢查項目**
 
@@ -2501,7 +2501,7 @@ da-tools guard <subcommand> [flags]
 | Flag | 預設 | 說明 |
 |---|---|---|
 | `--config-dir <path>` | （必填） | conf.d/ 根目錄 |
-| `--scope <path>` | 整棵樹 | 限定子目錄（CI 由變更 `_defaults.yaml` 的 dirname 推算） |
+| `--scope <path>` | 整棵樹 | 限定 `--config-dir` 底下（含其本身）的某個目錄（CI 傳變更的 `_` 開頭 YAML（如 `_defaults.yaml`、`_profiles.yaml`）所在目錄，相對於 `--config-dir`；同一根下改到多個目錄時傳 `.`）。相對路徑**相對於 `--config-dir`**，與目前工作目錄無關：`--config-dir conf.d/ --scope db/`（`.` 為整棵樹）；絕對路徑照用。解析後落在 `--config-dir` 之外為 exit 2（[#2588](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/2588)） |
 | `--required-fields <a,b,c>` | 空 | dotted-path 必填欄位 CSV；一般欄位對有效設定判定，`_routing` 與 `_routing.` 開頭的欄位改對解析後的 routing 判定（見下方 Routing 檢查） |
 | `--cardinality-limit <n>` | 根 `_defaults.yaml` 的 `max_metrics_per_tenant`（未設 = 500；負值 = 不檢查） | per-tenant 預測 metric 上限；明確給值即覆寫，`0` = 停用 |
 | `--cardinality-warn-ratio <r>` | 0.8 | warn-tier 比例（0 < r < 1） |
@@ -2516,17 +2516,18 @@ da-tools guard <subcommand> [flags]
 |---|---|
 | 0 | clean — 沒 error 級 finding（warning 不擋，除非 `--warn-as-error`） |
 | 1 | guard 偵測到 error，或 `--warn-as-error` 下有 warning — block merge / commit |
-| 2 | caller error（flag 錯、路徑找不到、scope 跑出 root 之外、binary 找不到）。`--baseline-config-dir` 例外：指到不存在的路徑不算錯，照常判定 |
-| 3 | exporter 載入時會整份丟掉的檔，加上 da-guard 自己無法 decode 的檔，再加上 route generator 因重複 key 整份拒讀、而 exporter 照讀的檔（例如 alias key 與其 anchor 並列；同一 mapping 兩個 `<<` 則是 exporter 自己就整份丟掉；`_domain_policy`／`_routing_profiles` 檔除外，那兩種以 `*_unusable` finding 回報，#2295），限與本次執行有關者（`--scope` 內的檔，及 `--scope` 以上各層目錄的 `_` 開頭檔）；與 `--cardinality-limit` 無關。報告與 stderr 列出這些檔（相對於 `--config-dir`）；一次可能只列出第一個，修好後重跑。優先於 1，也取代「vacuously safe」的 0。權威定義是契約測試 `TestExitThree_NamesExactlyTheFilesTheExporterDrops`（#2123、#2179） |
+| 2 | caller error（flag 錯、路徑找不到、`--config-dir` 本身無法列出內容、scope 跑出 root 之外、binary 找不到）。`--baseline-config-dir` 例外：指到不存在的路徑不算錯，照常判定 |
+| 3 | exporter 載入時會整份丟掉的檔，加上 da-guard 自己無法 decode 的檔，再加上 route generator 因重複 key 整份拒讀、exporter 卻照讀或根本不讀的檔（例如 alias key 與其 anchor 並列、子目錄 exporter 不讀的 `_` 檔裡的重複 key；同一 mapping 兩個 `<<` 則是 exporter 自己就整份丟掉；根目錄的 `_domain_policy`／`_routing_profiles` 與子目錄的 `_domain_policy` 檔除外，以 `*_unusable` finding 回報，#2295、#2439），以及 exporter 載入時 stat 或讀取失敗的檔與無法列出內容的子目錄（與 `served-values` 的 `unreadable` 同一份，報告另列「Files the exporter cannot read」，JSON 報告為 `unreadable`；指向目錄的 symlink 不列入，[#2588](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/2588)），限與本次執行有關者（`--scope` 內的檔，及 `--scope` 以上各層目錄的 `_` 開頭檔；無法列出內容的目錄則在它就是 `--scope`、位於 `--scope` 之下或包含 `--scope` 時才算）；與 `--cardinality-limit` 無關。報告與 stderr 列出這些檔（相對於 `--config-dir`）；無法 decode 的檔一次可能只列出第一個，修好後重跑。優先於 1，也取代「vacuously safe」的 0。權威定義是契約測試 `TestExitThree_NamesExactlyTheFilesTheExporterDrops`（#2123、#2179） |
 
 **Routing 檢查（[#2280](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/2280)）**
 
-routing 檢查的對象是租戶**解析後**的 routing，與 route generator（`generate-routes`）合併的三層相同：根目錄的 `_routing_defaults` → `_routing_profile` 參照的 routing profile → 租戶自己的 `_routing`，逐頂層鍵淺合併，最後把 `{{tenant}}` 換成租戶 id。`_routing_enforced` 不參與。平台檔讀 `--config-dir` 整棵樹（與 generator 一致，[#2326](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/2326)）：`_routing_defaults` 沿租戶的目錄鏈逐層淺合併、子目錄的 routing profile 與 domain policy 只作用於所在子樹；不看 `--scope`，所以子樹外的樹形錯誤在 scoped 執行也會報（generator 會拒收整棵樹）。租戶那一層就是 generator 讀的來源（[#2291](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/2291)）：租戶檔自己的 `_routing` / `_routing_profile`，蓋在根目錄平台檔 `tenants.<id>` 同名鍵之上（租戶檔寫了該鍵就整個取代）；**不**讀合併後的有效設定，所以 defaults 區塊或 threshold profile 裡的 `_routing` 不會被當成租戶的 routing 來判，而是報 `routing_in_unread_location`。`--required-fields` 中 `_routing` 或 `_routing.` 開頭的欄位同樣對解析後的 routing 判定，其他欄位照舊讀有效設定。主 receiver、`overrides`、ADR-007 `routes` 各條目的 receiver 都做相同的形狀檢查，並依 `_domain_policy.yaml` 判 receiver type：`forbidden_receiver_types` 與 `allowed_receiver_types` 分開判，同一個 receiver 可同時違反兩條。
+routing 檢查的對象是租戶**解析後**的 routing，與 route generator（`generate-routes`）合併的三層相同：根目錄的 `_routing_defaults` → `_routing_profile` 參照的 routing profile → 租戶自己的 `_routing`，逐頂層鍵淺合併，最後把 `{{tenant}}` 換成租戶 id。`_routing_enforced` 不參與，只有它的 `group_by` 會判 `routing_group_by_invalid`。平台檔讀 `--config-dir` 整棵樹（與 generator 一致，[#2326](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/2326)）：`_routing_defaults` 沿租戶的目錄鏈逐層淺合併、子目錄的 routing profile 與 domain policy 只作用於所在子樹；不看 `--scope`，所以子樹外的樹形錯誤在 scoped 執行也會報（generator 會拒收整棵樹）。租戶那一層就是 generator 讀的來源（[#2291](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/2291)）：租戶檔自己的 `_routing` / `_routing_profile`，蓋在根目錄平台檔 `tenants.<id>` 同名鍵之上（租戶檔寫了該鍵就整個取代）；**不**讀合併後的有效設定，所以 defaults 區塊或 threshold profile 裡的 `_routing` 不會被當成租戶的 routing 來判，而是報 `routing_in_unread_location`。`--required-fields` 中 `_routing` 或 `_routing.` 開頭的欄位同樣對解析後的 routing 判定，其他欄位照舊讀有效設定。主 receiver、`overrides`、ADR-007 `routes` 各條目的 receiver 都做相同的形狀檢查，並依 `_domain_policy.yaml` 判 receiver type：`forbidden_receiver_types` 與 `allowed_receiver_types` 分開判，同一個 receiver 可同時違反兩條。
 
 | Finding kind | 嚴重度 | 觸發 |
 |---|---|---|
 | `invalid_route_entry` | error | `routes` 不是 list，或某條目 generator 會略過（非 mapping、有 `continue` / `match_re` 等不支援的鍵、`match` 缺或空、label 不合法、值不是非空字串）；Field 為 `routes` 或 `routes[i]` |
 | `routing_value_not_string` | error | `routes[i].match` 的值或 `overrides[i].alertname`／`metric_group` 未加引號、而 route generator 的 PyYAML 讀成非字串（`yes`／`on` 是布林、`1:30` 是整數 90、`2001-12-15` 是日期、`~` 是 null、`!!int 5`）；Field 為 `routes[i].match.<label>` 或 `overrides[i].alertname`／`metric_group`。與 `generate-routes --strict` 的 ERROR 同一判準（#2431）。修法：加引號，例如 `team: "yes"` |
+| `routing_group_by_invalid` | error | `group_by`（主 route、`overrides[i]`、`routes[i]`）的元素照 route generator 的 PyYAML 讀法不是字串（未加引號的 `8`、`on`／`yes`）、是空字串、重複前面已列的 label，或是 `...` 與其他 label 並存；Field 為 `group_by[i]`、`overrides[i].group_by[j]` 或 `routes[i].group_by[j]`。根目錄 `_routing_enforced.group_by` 也會判，僅限 generator 會產出那條 route 時；此時 tenant 欄空白，Field 為 `<檔案>:_routing_enforced.group_by[i]`，用了 `{{tenant}}` 時為 `<檔案>:_routing_enforced (<租戶>).group_by[i]`。後三者 Alertmanager 拒收整份 config，非字串則會以名為該文字的 label 分組。與 `generate-routes --strict` 的 ERROR 同一判準（#2503）。修法：加引號（`"8"`）或刪掉該元素 |
 | `domain_policy_violation` | error | 主 receiver／`overrides[i]`／`routes[i]` 的 type 違反 domain policy；訊息含 domain、constraint 與該值來自哪一層 |
 | `critical_escalation_missing` | error | domain policy 設了 `require_critical_escalation: true`，但 severity=critical 告警到不了任何 pagerduty receiver：主 receiver 不是 pagerduty，也沒有會 render 的 `routes` 條目 match 含 `severity: critical` 且送 pagerduty（[#2325](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/2325)）；Field 為 `receiver.type`，每個要求此約束的 domain 各一筆。值不是布林時改報 `domain_policy_unusable`（Field `<檔案>:domain_policies.<domain>.constraints.require_critical_escalation`） |
 | `critical_escalation_leak` | warn | 租戶有升級路徑，但這個非 pagerduty 目的地（`overrides[i]`／`routes[i]`，最後是主 receiver）仍會比 pagerduty 先收到部分 severity=critical 告警；訊息點名攔走的 label 組合。判準與 generator `--validate` 的 WARN 相同（前面的子路由 match 是它的子集就不算、match 寫到別的 tenant 或非 critical 的 severity 也不算）；Field 為 `<ref>.receiver.type`。不擋 |
@@ -2559,7 +2560,7 @@ routing 檢查的對象是租戶**解析後**的 routing，與 route generator�
 |---|---|---|
 | `--config-dir <path>` | （必填） | conf.d/ 根目錄 |
 
-以 JSON 印出整棵樹每個租戶的有效設定，內容與 tenant-api `/effective` 同一條程式路徑（`pkg/config` 的同一個 resolver），這個子命令不另做判斷；Python 讀取端經 `scripts/tools/_lib_tenant_values.py` 的 `load_effective()` 呼叫。輸出 JSON：`schema`（目前為 `da-guard.effective/v1`，讀取端遇到其他值即拒收）、`parse_failed`（exporter 載入時整份跳過的檔，沒有時為 `[]`）與 `tenants`。每個租戶的欄位與 `/effective` 回應相同（`effective_config`、`merged_hash`、`source_file`、`source_hash`、`defaults_chain`、`platform_overlay`、`profile_overlay`），另加兩欄：`profile`（租戶綁定的 profile 名稱；沒有 `_profile`，或名稱在根目錄平台檔找不到時為 `null`）與 `key_sources`（`effective_config` 每個頂層 key 的來源：`layer` 為 `defaults`／`platform`／`profile`／`tenant`，`file` 為寫出該值的檔，`defaults` 層另有 `level`，即在 `defaults_chain` 中的位置，0 為根目錄）。值為 mapping、跨層逐葉合併的 key，來源記寫到其中任何部分的最高層，較低層可能還提供了其他葉子。YAML 的 `.inf`／`.nan` 與 `/effective` 一樣以字串 `"Infinity"`／`"NaN"` 輸出。Exit code：0 成功；2 caller error、resolver 拒收整棵樹（例如同一租戶跨檔重複宣告、樹中沒有任何 `.yaml` 檔），或輸出中有字串不是合法 UTF-8，stderr 帶出原因；3 有檔無法 decode，JSON 照樣輸出並在 `parse_failed` 點名（若是某個租戶 defaults chain 上的檔讓 resolve 中止，`tenants` 為空、`parse_failed` 只列該檔）。`parse_failed` 與 `served-values` 是同一個判定（exporter 載入的結果）：例如根 `_defaults.yaml` 因內容型別錯被 exporter 整份丟掉時，`/effective` 仍讀得到它的值，這裡則列進 `parse_failed` 並 exit 3，此時 `tenants` 的值不代表 `/metrics` 實際使用的值。
+以 JSON 印出整棵樹每個租戶的有效設定，內容與 tenant-api `/effective` 同一條程式路徑（`pkg/config` 的同一個 resolver），這個子命令不另做判斷；Python 讀取端經 `scripts/tools/_lib_tenant_values.py` 的 `load_effective()` 呼叫。輸出 JSON：`schema`（目前為 `da-guard.effective/v1`，讀取端遇到其他值即拒收）、`parse_failed`（exporter 載入時整份跳過的檔，沒有時為 `[]`）、`unreadable`（exporter 載入時 stat 或讀取失敗而跳過的檔，以及無法列出內容的子目錄；與 `served-values` 的 `unreadable` 同一份、同一形狀，沒有時為 `[]`，[#2588](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/2588)）與 `tenants`。每個租戶的欄位與 `/effective` 回應相同（`effective_config`、`merged_hash`、`source_file`、`source_hash`、`defaults_chain`、`platform_overlay`、`profile_overlay`），另加兩欄：`profile`（租戶綁定的 profile 名稱；沒有 `_profile`，或名稱在根目錄平台檔找不到時為 `null`）與 `key_sources`（`effective_config` 每個頂層 key 的來源：`layer` 為 `defaults`／`platform`／`profile`／`tenant`，`file` 為寫出該值的檔，`defaults` 層另有 `level`，即在 `defaults_chain` 中的位置，0 為根目錄）。值為 mapping、跨層逐葉合併的 key，來源記寫到其中任何部分的最高層，較低層可能還提供了其他葉子。YAML 的 `.inf`／`.nan` 與 `/effective` 一樣以字串 `"Infinity"`／`"NaN"` 輸出。Exit code：0 成功；2 caller error、resolver 拒收整棵樹（例如同一租戶跨檔重複宣告、樹中沒有任何 `.yaml` 檔），或輸出中有字串不是合法 UTF-8，stderr 帶出原因；3 有檔無法 decode 或讀不到，JSON 照樣輸出並在 `parse_failed`／`unreadable` 點名（若是某個租戶 defaults chain 上的檔讓 resolve 中止，`tenants` 為空、`parse_failed` 只列該檔，`unreadable` 照列）。讀不到的租戶檔，其租戶不在 `tenants` 裡；讀不到的 `_defaults.yaml`，其值不在任何租戶的 `effective_config` 裡。`parse_failed` 與 `served-values` 是同一個判定（exporter 載入的結果）：例如根 `_defaults.yaml` 因內容型別錯被 exporter 整份丟掉時，`/effective` 仍讀得到它的值，這裡則列進 `parse_failed` 並 exit 3，此時 `tenants` 的值不代表 `/metrics` 實際使用的值。
 
 **範例**
 
@@ -2567,9 +2568,9 @@ routing 檢查的對象是租戶**解析後**的 routing，與 route generator�
 # 整棵 conf.d/ 跑 schema check
 da-tools guard defaults-impact --config-dir conf.d/ --required-fields cpu,memory
 
-# CI hook：限定 _defaults.yaml 變更目錄（上限自動取根 _defaults.yaml）
+# CI hook：限定變更的 _defaults.yaml 所在目錄（相對於 --config-dir；上限自動取根 _defaults.yaml）
 da-tools guard defaults-impact --config-dir conf.d/ \
-    --scope conf.d/db/
+    --scope db/
 
 # JSON 輸出供下游 PR comment poster
 da-tools guard defaults-impact --config-dir conf.d/ \

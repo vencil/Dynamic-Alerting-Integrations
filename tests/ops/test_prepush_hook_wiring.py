@@ -1434,24 +1434,216 @@ def test_the_helper_is_sourced_without_spawning_anything(script: str, var: str) 
     )
 
 
-def test_a_legacy_single_file_install_says_how_to_reinstall(tmp_path: Path) -> None:
-    """The pre-#1664 recipe was ``cp scripts/ops/protect_main_push.sh
-    .git/hooks/pre-push``. That copy can no longer find its sibling helper, and
-    ``set -e`` turns the failed source into a total abort — feature-branch
-    pushes die too. Measured before this message existed: a bare
-    ``_prepush_refs.sh: No such file or directory`` and rc=1, whose three
-    cheapest greens (``--no-verify``, delete the hook, freeze a copy of the
-    helper in .git/hooks) all make things worse.
-    """
+_HELPER_MISSING = {
+    "protect_main_push.sh": "旁邊找不到 _prepush_refs.sh",
+    "require_preflight_pass.sh": "_prepush_refs.sh is not next to",
+    "pre_push_mkdocs_strict.sh": "_prepush_refs.sh is not next to",
+}
+_INSTALL = "bash scripts/ops/install_prepush_hook.sh"
+
+
+_OLD_COPY = "OLD-COPY: helper not found"
+
+
+def _helper_missing_lines(out: str) -> list[str]:
+    needles = (*_HELPER_MISSING.values(), _OLD_COPY)
+    return [ln for ln in out.splitlines() if any(n in ln for n in needles)]
+
+
+def _assert_the_guards_are_back(work: Path) -> None:
+    """Must-fire control first: protect_main_push blocking main proves the
+    dispatcher ran the guards with their helper, so the missing message being
+    absent means "fixed", not "never ran"."""
+    r, out = _push(work, "HEAD:refs/heads/main")
+    assert r.returncode != 0 and _BANNER in out, f"the guards did not run:\n{out}"
+    assert not _helper_missing_lines(out), f"the guards still cannot find their helper:\n{out}"
+
+
+_USER_HOOK = (
+    "#!/usr/bin/env bash\n"
+    '. "$(git rev-parse --show-toplevel)/scripts/ops/_prepush_refs.sh"\n'
+    "echo USER-HOOK-RAN >&2\n"
+)
+
+
+def _repo_with_a_shipped_old_guard(tmp_path: Path, guard: str) -> tuple[Path, bytes]:
+    """A repo whose history holds an older version of ``guard`` — the bytes a
+    stale copy carries — before the current one. The old version lacks the
+    current message text, as real ones do, so recognising a copy by a string
+    only today's guards print cannot pass."""
     work = _make_repo(tmp_path, _PROTECT_ONLY)
-    hook = work / ".git" / "hooks" / "pre-push"
-    hook.write_bytes((_OPS / "protect_main_push.sh").read_bytes())
+    current = (_OPS / guard).read_bytes()
+    needle = _HELPER_MISSING[guard].encode()
+    assert needle in current
+    old = current.replace(needle, _OLD_COPY.encode())
+    target = work / "scripts" / "ops" / guard
+    for content, msg in ((old, "old guard"), (current, "current guard")):
+        target.write_bytes(content)
+        assert _git(work, "add", "scripts").returncode == 0
+        assert _git(work, "-c", "core.hooksPath=/dev/null", "commit", "-qm", msg).returncode == 0
+    return work, old
+
+
+def _occupy(work: Path, slot: str, content: bytes) -> Path:
+    if slot == "pre-push.chained":
+        assert _install_guards(work).returncode == 0
+    elif slot == "pre-push.legacy":
+        _install_precommit(work)
+    hook = work / ".git" / "hooks" / slot
+    hook.write_bytes(content)
     hook.chmod(0o755)
+    return hook
+
+
+_SLOTS = ["pre-push", "pre-push.chained", "pre-push.legacy"]
+
+
+@pytest.mark.parametrize("guard", sorted(_HELPER_MISSING))
+@pytest.mark.parametrize("slot", _SLOTS)
+def test_a_stale_guard_copy_is_replaced_by_the_installer(
+    tmp_path: Path, guard: str, slot: str
+) -> None:
+    """A guard copied alone into the hooks directory (the recipe before #1689)
+    cannot find its helper, and its message says to run the installer. Copies
+    already out there carry the bytes of the version they were taken from, so
+    the installer must recognise them by that, and replace them rather than
+    chain them. ``pre-push.chained`` is where an earlier
+    installer put one; ``pre-push.legacy`` is where pre-commit migrates one."""
+    work, old = _repo_with_a_shipped_old_guard(tmp_path, guard)
+    _occupy(work, slot, old)
+
     r, out = _push(work, "HEAD:refs/heads/feat/legacy")
     assert r.returncode != 0, f"a broken install silently allowed the push:\n{out}"
-    assert "scripts/ops/install_prepush_hook.sh" in out, (
-        f"the failure names no way back to a working install:\n{out}"
+    assert _helper_missing_lines(out) and _INSTALL in out, out
+
+    r = _install_guards(work)
+    assert r.returncode == 0, f"installer failed:\n{r.stdout}{r.stderr}"
+    said = "removed pre-push.chained" if slot == "pre-push.chained" else "replacing a copy of a guard"
+    assert said in r.stdout, f"the installer did not say it replaced the copy:\n{r.stdout}"
+    _assert_the_guards_are_back(work)
+
+
+@pytest.mark.parametrize("link", ["symlink", "hardlink"])
+def test_a_hook_linked_to_a_guard_is_replaced_without_touching_the_guard(
+    tmp_path: Path, link: str
+) -> None:
+    """A link to a tracked guard is identical to it, so it is replaced — and
+    writing into the existing file would go through the link into the guard."""
+    work, _ = _repo_with_a_shipped_old_guard(tmp_path, "protect_main_push.sh")
+    hook = work / ".git" / "hooks" / "pre-push"
+    hook.unlink(missing_ok=True)
+    guard = work / "scripts" / "ops" / "protect_main_push.sh"
+    if link == "symlink":
+        hook.symlink_to(guard)
+    else:
+        os.link(guard, hook)
+
+    r = _install_guards(work)
+    assert r.returncode == 0, f"installer failed:\n{r.stdout}{r.stderr}"
+    status = _git(work, "status", "--porcelain", "--", "scripts").stdout
+    assert status == "", f"the installer wrote into the tracked guard:\n{status}"
+    assert not hook.is_symlink()
+    _assert_the_guards_are_back(work)
+
+
+@pytest.mark.parametrize("slot", _SLOTS)
+def test_a_users_own_hook_that_sources_the_helper_is_kept(tmp_path: Path, slot: str) -> None:
+    """Mentioning, even sourcing, the helper does not make a hook a stale guard
+    copy. Only identity with a committed guard does; anything else is someone's
+    hook, which the installer chains and the dispatcher keeps running."""
+    work, _ = _repo_with_a_shipped_old_guard(tmp_path, "protect_main_push.sh")
+    _occupy(work, slot, _USER_HOOK.encode())
+
+    r = _install_guards(work)
+    assert r.returncode == 0, f"installer failed:\n{r.stdout}{r.stderr}"
+    chained = work / ".git" / "hooks" / "pre-push.chained"
+    assert chained.read_text(encoding="utf-8") == _USER_HOOK, "the user's hook is gone"
+    r, out = _push(work, "HEAD:refs/heads/main")
+    assert "USER-HOOK-RAN" in out and _BANNER in out, out
+
+
+_SHAPES = ["side-branch", "two-generations-back", "from-a-subdirectory", "minimal-path",
+           "from-a-linked-worktree"]
+
+
+@pytest.mark.parametrize("shape", _SHAPES)
+def test_a_stale_guard_copy_is_recognised_however_it_got_there(
+    tmp_path: Path, shape: str
+) -> None:
+    """The version a copy was taken from need not be on the current branch or the
+    last one before it, and the installer is not always run from the top of the
+    main work tree with a full PATH. Each shape must still find the copy."""
+    work, old = _repo_with_a_shipped_old_guard(tmp_path, "protect_main_push.sh")
+    if shape == "side-branch":
+        # The copied version lives only on another branch.
+        assert _git(work, "checkout", "-q", "-b", "side").returncode == 0
+        side = old.replace(_OLD_COPY.encode(), _OLD_COPY.encode() + b" (side branch)")
+        old = side
+        (work / "scripts" / "ops" / "protect_main_push.sh").write_bytes(side)
+        assert _git(work, "-c", "core.hooksPath=/dev/null", "commit", "-qam", "side").returncode == 0
+        assert _git(work, "checkout", "-q", "-").returncode == 0
+    elif shape == "two-generations-back":
+        target = work / "scripts" / "ops" / "protect_main_push.sh"
+        current = target.read_bytes()
+        target.write_bytes(current + b"# newer still\n")
+        assert _git(work, "-c", "core.hooksPath=/dev/null", "commit", "-qam", "newer").returncode == 0
+        target.write_bytes(current)
+        assert _git(work, "-c", "core.hooksPath=/dev/null", "commit", "-qam", "current").returncode == 0
+    _occupy(work, "pre-push", old)
+
+    assert _BASH, "no bash resolved; the module-level skip should have fired"
+    cwd, env = work, None
+    if shape == "from-a-subdirectory":
+        cwd = work / "scripts" / "ops"
+    elif shape == "minimal-path":
+        bindir = tmp_path / "bin"
+        bindir.mkdir()
+        for tool in ("bash", "git", "mv", "rm", "chmod"):
+            (bindir / tool).symlink_to(shutil.which(tool))
+        env = {**os.environ, "PATH": str(bindir)}
+    elif shape == "from-a-linked-worktree":
+        cwd = tmp_path / "wt"
+        assert _git(work, "worktree", "add", "-q", "--detach", str(cwd)).returncode == 0
+    r = subprocess.run(  # subprocess-timeout: ignore
+        [_BASH, str(cwd / "scripts" / "ops" / "install_prepush_hook.sh")
+         if shape != "from-a-subdirectory" else "install_prepush_hook.sh"],
+        cwd=cwd, env=env, capture_output=True, text=True, encoding="utf-8", errors="replace",
     )
+    assert r.returncode == 0, f"installer failed:\n{r.stdout}{r.stderr}"
+    _assert_the_guards_are_back(work)
+
+
+@pytest.mark.parametrize("missing", ["_prepush_refs.sh", "protect_main_push.sh"])
+def test_a_file_gone_from_scripts_ops_is_named_and_restorable_from_head(
+    tmp_path: Path, missing: str
+) -> None:
+    """With the shipped wiring everything runs from scripts/ops/, so a missing
+    file there is gone from the checkout and the installer, which writes only the
+    hooks directory, cannot bring it back. The message says where and that HEAD
+    has it — the deletion is staged here, so restoring from the index would do
+    nothing — and restoring it from HEAD does fix the push."""
+    work = _make_repo(tmp_path, _PROTECT_ONLY)
+    assert _git(work, "add", "scripts").returncode == 0
+    assert _git(work, "-c", "core.hooksPath=/dev/null", "commit", "-qm", "ops").returncode == 0
+    assert _install_guards(work).returncode == 0
+    assert _git(work, "rm", "-q", f"scripts/ops/{missing}").returncode == 0
+
+    r, out = _push(work, "HEAD:refs/heads/feat/x")
+    assert r.returncode != 0, f"a broken checkout silently allowed the push:\n{out}"
+    if missing == "_prepush_refs.sh":
+        assert len(_helper_missing_lines(out)) == len(_HELPER_MISSING), out
+        assert out.count("restore it from HEAD") + out.count("從 HEAD 還原") == len(_HELPER_MISSING), out
+        # Quoted heredocs: the backticks are text, not a command to run.
+        assert out.count("`pre-commit install --hook-type pre-push`") == 2, out
+    else:
+        assert f"{missing} is missing from {work}" in out and "restore it from HEAD" in out, out
+        # The dispatcher itself stops the push: with the other two guards
+        # bypassed, nothing else is left to block main.
+        r, out = _push(work, "HEAD:refs/heads/main", env_extra=_SIBLINGS_OFF)
+        assert r.returncode != 0, f"a missing guard let a push to main through:\n{out}"
+
+    assert _git(work, "checkout", "HEAD", "--", f"scripts/ops/{missing}").returncode == 0
+    _assert_the_guards_are_back(work)
 
 
 def test_tag_pushes_are_allowed_as_the_header_promises(tmp_path: Path) -> None:
