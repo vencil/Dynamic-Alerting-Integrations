@@ -105,7 +105,7 @@ type BatchResponse struct {
 // @Success     200  {object} BatchResponse
 // @Success     202  {object} map[string]interface{}
 // @Failure     400  {object} ErrorResponse
-// @Failure     403  {object} ErrorResponse "PR write-back mode: an operation breaks the domain policy on the latest base branch, which this server's local copy lags (code POLICY_VIOLATION, with tenant_id and operation); nothing written, no PR/MR. Direct mode and violations the local copy shows are reported per operation in results instead."
+// @Failure     403  {object} ErrorResponse "PR write-back mode: the forge token lacks write scope to open the PR/MR, or an operation breaks the domain policy on the latest base branch, which this server's local copy lags, or the base's _domain_policy.yaml cannot be loaded (code POLICY_VIOLATION, with tenant_id and operation); nothing written. Direct mode and violations the local copy shows are reported per operation in results instead."
 // @Failure     409  {object} ErrorResponse "PR write-back mode: a tenant in the batch is already declared by another conf.d file (code TENANT_DECLARED_ELSEWHERE), or its config file cannot be loaded as a tenant config (code TENANT_CONFIG_NOT_LOADABLE, with tenant_id and config_error; repair the tenant file itself first); nothing written. Direct mode reports these per op in results[].code instead."
 // @Failure     413  {object} ErrorResponse
 // @Failure     500  {object} ErrorResponse
@@ -295,8 +295,11 @@ func runBatchPR(d *Deps, rw http.ResponseWriter, r *http.Request, ops []BatchOpe
 				// B2 F1: the check above read the pod's local tree; this one
 				// reads the fresh base the branch is cut from. A refusal here
 				// aborts the whole batch (WritePRBatch), nothing written.
-				if v := freshBaseRoutingCheck(d.ConfigDir, d.Policy, op, existing, merged); len(v) > 0 {
-					return "", &freshBasePolicyError{TenantID: op.TenantID, Op: i, Violations: v}
+				if d.Policy != nil {
+					v, loadErr := freshBasePolicyCheck(d.ConfigDir, op, existing, merged)
+					if loadErr != nil || len(v) > 0 {
+						return "", &freshBasePolicyError{TenantID: op.TenantID, Op: i, Violations: v, LoadErr: loadErr}
+					}
 				}
 				return merged, nil
 			},

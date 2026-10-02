@@ -396,13 +396,25 @@ func policyViolationEnvelope(msg string, violations []policy.Violation) ErrorRes
 // FRESH base the feature branch is cut from, after the pre-check on the pod's
 // local tree let it through (B2 F1, #2341). Op is the op's index in the
 // request (for /groups/{id}/batch, the member's index in the expansion).
+//
+// LoadErr set: the base's `_domain_policy.yaml` could not be read or parsed,
+// so the op could not be judged and the batch is refused (fail-closed).
 type freshBasePolicyError struct {
 	TenantID   string
 	Op         int
 	Violations []policy.Violation
+	LoadErr    error
 }
 
 func (e *freshBasePolicyError) Error() string {
+	if e.LoadErr != nil {
+		// Fixed text: LoadErr names the server's conf.d path, which only the
+		// server log may see (writeFreshBasePolicyViolation logs it).
+		return fmt.Sprintf("the domain policy file _domain_policy.yaml on the latest base branch cannot be loaded, "+
+			"so operations[%d] (tenant %s) cannot be judged against it. "+
+			"Nothing in this batch was written and no PR/MR was opened; repair the policy file on the base branch.",
+			e.Op, e.TenantID)
+	}
 	msgs := make([]string, len(e.Violations))
 	for i, v := range e.Violations {
 		msgs[i] = v.Message
@@ -418,6 +430,10 @@ func (e *freshBasePolicyError) Unwrap() error { return gitops.ErrMergePolicyRefu
 // writeFreshBasePolicyViolation answers a freshBasePolicyError with the
 // same 403 POLICY_VIOLATION envelope as writePolicyViolation, naming the op.
 func writeFreshBasePolicyViolation(w http.ResponseWriter, r *http.Request, e *freshBasePolicyError) {
+	if e.LoadErr != nil {
+		slog.Error("PR batch refused: domain policy on the fresh base cannot be loaded",
+			"tenant", e.TenantID, "error", e.LoadErr)
+	}
 	env := policyViolationEnvelope(e.Error(), e.Violations)
 	env.Extra = map[string]any{"tenant_id": e.TenantID, "operation": e.Op}
 	WriteErrorEnvelope(w, r, http.StatusForbidden, env)

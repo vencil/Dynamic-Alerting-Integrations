@@ -53,11 +53,15 @@ func newStaleFixture(t *testing.T, local, originFiles map[string]string) *staleF
 			t.Fatalf("clone: %v\n%s", err, out)
 		}
 		for name, content := range originFiles {
+			if content == "" { // "" = removed on origin
+				runGit(t, other, "rm", "-q", name)
+				continue
+			}
 			if err := os.WriteFile(filepath.Join(other, name), []byte(content), 0o644); err != nil {
 				t.Fatal(err)
 			}
 		}
-		runGit(t, other, "add", ".")
+		runGit(t, other, "add", "-A", ".")
 		runGit(t, other, "-c", "user.email=a@b", "-c", "user.name=a", "commit", "-m", "moved on")
 		runGit(t, other, "push", "origin", "main")
 	}
@@ -224,6 +228,84 @@ func TestGroupBatch_PRMode_PolicyJudgedOnFreshBase(t *testing.T) {
 	w := httptest.NewRecorder()
 	f.deps.RBAC.Middleware(rbac.PermRead, nil)(GroupBatch(f.deps)).ServeHTTP(w, req)
 	assertFreshBaseRefused(t, f, w, 1, "t-off", before)
+}
+
+// B2 round 3 (B-1): the domain policy itself is read from the branch, not
+// from the policy watcher's copy of the local tree.
+func policyListing(tenants string) string {
+	return "domain_policies:\n  finance:\n    tenants: [" + tenants + "]\n" +
+		"    constraints:\n      forbidden_receiver_types: [slack]\n"
+}
+
+func TestBatchTenants_PRMode_DomainPolicyReadFromFreshBase(t *testing.T) {
+	refused := []struct {
+		name, localTOff, ops string
+		origin               map[string]string
+	}{
+		// The base's policy lists t-off; the local one does not.
+		{"profile patch, tenant added to the policy on the base", "    _routing_profile: domain-ok\n",
+			`[{"tenant_id":"t-off","patch":{"_routing_profile":"team-chat"}}]`,
+			map[string]string{"_domain_policy.yaml": policyListing("t-off, t-other")}},
+		{"unset, tenant added to the policy on the base", offDisabledChat,
+			`[{"tenant_id":"t-off","unset":["_routing"]}]`,
+			map[string]string{"_domain_policy.yaml": policyListing("t-off, t-other")}},
+		// CheckWrite's flat key is re-judged on the base too.
+		{"receiver-type patch, tenant added to the policy on the base", "    _routing_profile: domain-ok\n",
+			`[{"tenant_id":"t-off","patch":{"_routing_receiver_type":"slack"}}]`,
+			map[string]string{"_domain_policy.yaml": policyListing("t-off, t-other")}},
+	}
+	for _, tc := range refused {
+		t.Run(tc.name, func(t *testing.T) {
+			local := staleTree(tc.localTOff)
+			local["_domain_policy.yaml"] = policyListing("t-other")
+			f := newStaleFixture(t, local, tc.origin)
+			before := gitRev(t, f.bare, "main")
+			assertFreshBaseRefused(t, f, postTenantBatch(t, f.deps, tc.ops), 0, "t-off", before)
+		})
+	}
+
+	// Fail-closed: the base's policy file does not parse.
+	t.Run("policy file broken on the base", func(t *testing.T) {
+		local := staleTree("    _routing_profile: domain-ok\n")
+		local["_domain_policy.yaml"] = policyListing("t-other")
+		f := newStaleFixture(t, local, map[string]string{"_domain_policy.yaml": "domain_policies: [unclosed\n"})
+		before := gitRev(t, f.bare, "main")
+		w := postTenantBatch(t, f.deps, `[{"tenant_id":"t-off","patch":{"_routing_profile":"team-chat"}}]`)
+		var env map[string]any
+		_ = json.Unmarshal(w.Body.Bytes(), &env)
+		msg, _ := env["error"].(string)
+		if w.Code != http.StatusForbidden || env["code"] != CodePolicyViolation || env["tenant_id"] != "t-off" ||
+			!strings.Contains(msg, "_domain_policy.yaml on the latest base branch cannot be loaded") || strings.Contains(msg, f.dir) {
+			t.Errorf("status %d, body %s; want 403 %s naming the unloadable policy file (and no server path)", w.Code, w.Body.String(), CodePolicyViolation)
+		}
+		if f.prOpened || f.batchBranches(t) != "" || gitRev(t, f.bare, "main") != before {
+			t.Errorf("fail-closed batch wrote something: PR %v, branches %q", f.prOpened, f.batchBranches(t))
+		}
+	})
+
+	// No policy file on the base reads as the watcher's empty config: allowed.
+	t.Run("policy file removed on the base", func(t *testing.T) {
+		local := staleTree("    _routing_profile: domain-ok\n")
+		local["_domain_policy.yaml"] = policyListing("t-other")
+		f := newStaleFixture(t, local, map[string]string{"_domain_policy.yaml": ""})
+		w := postTenantBatch(t, f.deps, `[{"tenant_id":"t-off","patch":{"_routing_profile":"team-chat"}}]`)
+		if w.Code != http.StatusOK || !f.prOpened {
+			t.Errorf("status = %d (PR opened %v), want 200 and a PR; body: %s", w.Code, f.prOpened, w.Body.String())
+		}
+	})
+
+	// The base RELAXES the policy: the local pre-check still refuses the op
+	// per op (pre-existing behaviour — it never reaches the branch).
+	t.Run("policy relaxed on the base", func(t *testing.T) {
+		local := staleTree("    _routing_profile: domain-ok\n")
+		f := newStaleFixture(t, local, map[string]string{"_domain_policy.yaml": policyListing("t-other")})
+		w := postTenantBatch(t, f.deps, `[{"tenant_id":"t-off","patch":{"_routing_profile":"team-chat"}}]`)
+		var resp BatchResponse
+		_ = json.Unmarshal(w.Body.Bytes(), &resp)
+		if w.Code != http.StatusOK || statuses(resp.Results) != "error" || f.prOpened {
+			t.Errorf("status %d, results %+v, PR %v; want 200 with the op refused per op by the local check", w.Code, resp.Results, f.prOpened)
+		}
+	})
 }
 
 // F2: a no-op op still carries the file's deprecation notices.

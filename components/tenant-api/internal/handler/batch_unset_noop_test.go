@@ -147,3 +147,60 @@ func TestGroupBatch_EmptyEditRefused(t *testing.T) {
 		})
 	}
 }
+
+// B2 round 3 (B-2): a no-op is not refused for what the file already holds —
+// a file with no section for the tenant, or a key the write validator
+// rejects. Before the fix, its notices validation turned these into a 400
+// (PR mode: the whole batch).
+func noOpOddTree() map[string]string {
+	files := routingPolicyTree()
+	files["t-empty.yaml"] = "tenants: {}\n"
+	files["t-odd.yaml"] = "tenants:\n  t-odd:\n    totally_unknown_key: '1'\n"
+	files["t-other.yaml"] = tOther
+	files["_groups.yaml"] = "groups:\n  g-fin:\n    label: Finance\n    members: [t-odd, t-other]\n"
+	return files
+}
+
+func TestBatchTenants_NoOpOverFileValidateRejects(t *testing.T) {
+	cases := []struct{ name, ops string }{
+		{"no section, unset", `[{"tenant_id":"t-empty","unset":["_routing"]}]`},
+		{"no section, empty patch", `[{"tenant_id":"t-empty","patch":{}}]`},
+		{"key validate rejects, unset", `[{"tenant_id":"t-odd","unset":["_routing"]}]`},
+	}
+	for _, mode := range bothModes {
+		for _, tc := range cases {
+			t.Run(string(mode)+"/"+tc.name, func(t *testing.T) {
+				resp, prOpened, headMoved, _ := noOpRun(t, mode, noOpOddTree(), tc.ops)
+				for _, r := range resp.Results {
+					if r.Status == "error" {
+						t.Fatalf("no-op refused: %+v", r)
+					}
+				}
+				assertUnchanged(t, mode, resp, prOpened, headMoved)
+			})
+		}
+		t.Run(string(mode)+"/beside a real op", func(t *testing.T) {
+			resp, prOpened, headMoved, _ := noOpRun(t, mode, noOpOddTree(),
+				`[{"tenant_id":"t-empty","unset":["_routing"]},{"tenant_id":"t-odd","unset":["_routing"]},
+				  {"tenant_id":"t-other","patch":{"cpu_usage_percent":"90"}}]`)
+			if want := okStatus(mode) + "," + okStatus(mode) + "," + okStatus(mode); statuses(resp.Results) != want {
+				t.Errorf("statuses = %s, want %s: %+v", statuses(resp.Results), want, resp)
+			}
+			if (mode == WriteModePR && !prOpened) || (mode == WriteModeDirect && !headMoved) {
+				t.Errorf("the real op did not land: PR %v, HEAD moved %v", prOpened, headMoved)
+			}
+		})
+		t.Run(string(mode)+"/group", func(t *testing.T) {
+			f := newGroupBatchFixtureOver(t, mode, noOpOddTree())
+			resp := decodeGroupBatch(t, f.post(t, `{"unset":["_routing"]}`))
+			for _, r := range resp.Results {
+				if r.Status == "error" {
+					t.Errorf("member refused: %+v", r)
+				}
+			}
+			if f.prCalls != 0 {
+				t.Errorf("an all-no-op group batch opened a PR")
+			}
+		})
+	}
+}

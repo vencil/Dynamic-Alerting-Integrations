@@ -1164,13 +1164,13 @@ func (w *Writer) readMergeBodyOnly(tenantID, filePath string, merge MergeFunc) e
 func (w *Writer) readMergeValidate(tenantID, filePath string, merge MergeFunc) (content string, existing []byte, notices []string, err error) {
 	content, existing, err = w.readMerge(tenantID, filePath, merge)
 	if errors.Is(err, ErrMergeNoOp) && len(bytes.TrimSpace(existing)) > 0 {
-		// The file stays as it is, so judge it as a byte-identical merge is
-		// judged: the same validation, and its notices still reach the
-		// caller (#1231 F5) — the caller sees ErrMergeNoOp with them.
-		errs, notices := validate(w.configDir, tenantID, filePath, string(existing))
-		if len(errs) > 0 {
-			return "", existing, nil, fmt.Errorf("%w for %s: %s", ErrValidation, tenantID, strings.Join(errs, "; "))
-		}
+		// The file stays as it is: nothing is written, so nothing is refused
+		// for what the file already holds (B2 round 3 — a file with no
+		// section for this tenant, or a key validate rejects, used to turn
+		// a successful no-op into a 400). Only the file's notices are taken
+		// from validate (#1231 F5); its errors are deliberately dropped. The
+		// caller sees ErrMergeNoOp with the notices.
+		_, notices := validate(w.configDir, tenantID, filePath, string(existing))
 		return "", existing, notices, err
 	}
 	if err != nil {

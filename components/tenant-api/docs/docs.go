@@ -724,7 +724,7 @@ const docTemplate = `{
                         }
                     },
                     "403": {
-                        "description": "PR write-back mode: the forge token lacks write scope to open the PR/MR, or a member's operation breaks the domain policy on the latest base branch, which this server's local copy lags (code POLICY_VIOLATION, with tenant_id and operation = the member's index); nothing written",
+                        "description": "PR write-back mode: the forge token lacks write scope to open the PR/MR, or a member's operation breaks the domain policy on the latest base branch, which this server's local copy lags, or the base's _domain_policy.yaml cannot be loaded (code POLICY_VIOLATION, with tenant_id and operation = the member's index); nothing written",
                         "schema": {
                             "$ref": "#/definitions/ErrorResponse"
                         }
@@ -896,7 +896,7 @@ const docTemplate = `{
                         }
                     },
                     "403": {
-                        "description": "PR write-back mode: an operation breaks the domain policy on the latest base branch, which this server's local copy lags (code POLICY_VIOLATION, with tenant_id and operation); nothing written, no PR/MR. Direct mode and violations the local copy shows are reported per operation in results instead.",
+                        "description": "PR write-back mode: the forge token lacks write scope to open the PR/MR, or an operation breaks the domain policy on the latest base branch, which this server's local copy lags, or the base's _domain_policy.yaml cannot be loaded (code POLICY_VIOLATION, with tenant_id and operation); nothing written. Direct mode and violations the local copy shows are reported per operation in results instead.",
                         "schema": {
                             "$ref": "#/definitions/ErrorResponse"
                         }

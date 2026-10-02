@@ -179,29 +179,43 @@ func judgeTenantBlock(configDir string, mgr *policy.Manager, tenantID string, bl
 	return mgr.JudgeTenantRouting(tenantID, block, loadRoutingLayers(configDir))
 }
 
-// freshBaseRoutingCheck is PR mode's authoritative routing check (B2 F1),
-// run inside the op's merge closure, under the writer lock, after the
-// feature branch is cut from the FRESH origin base: existing is the
-// tenant's file there (with the request's earlier ops already committed on
-// the branch), merged is what this op makes of it. The pre-check judged the
-// pod's LOCAL tree, which is synced only at startup and may lag the base, so
-// it can pass an op that breaks the policy on the base. Same judgement as
-// the pre-check, on the merged block; an op that does not change the routing
-// is not judged. configDir is the working tree, checked out at the branch,
-// so the routing layers read are the base's too.
-func freshBaseRoutingCheck(configDir string, mgr *policy.Manager, op BatchOperation, existing []byte, merged string) []policy.Violation {
-	if mgr == nil || !touchesRouting(op) {
-		return nil
+// freshBasePolicyCheck is PR mode's authoritative domain-policy check (B2
+// F1), run inside the op's merge closure, under the writer lock, after the
+// feature branch is cut from the FRESH origin base. The pre-check judged the
+// pod's LOCAL tree (and the policy watcher's copy of its
+// `_domain_policy.yaml`), which is synced only at startup and may lag the
+// base, so it can pass an op that breaks the policy on the base. Here EVERY
+// input comes from the branch: existing is the tenant's file there (with the
+// request's earlier ops already committed on it), merged is what this op
+// makes of it, and configDir is the working tree checked out at the branch —
+// so the routing layers AND the domain policy (policy.LoadSnapshot, the file
+// the watcher reads) are the base's. The same two checks as the pre-check:
+// CheckWrite on the flat `_routing_receiver_type`, and the resolved routing
+// of the merged block for an op that changes it. An op neither concerns is
+// not judged, and does not read the policy file. loadErr is non-nil when the
+// base's policy file cannot be read or parsed: the caller refuses the batch.
+func freshBasePolicyCheck(configDir string, op BatchOperation, existing []byte, merged string) (violations []policy.Violation, loadErr error) {
+	_, receiverType := op.Patch["_routing_receiver_type"]
+	routing := touchesRouting(op) && changesRouting(extractTenantBlock(existing, op.TenantID), op)
+	if !receiverType && !routing {
+		return nil, nil
 	}
-	if !changesRouting(extractTenantBlock(existing, op.TenantID), op) {
-		return nil
+	snap, err := policy.LoadSnapshot(configDir)
+	if err != nil {
+		return nil, err
 	}
-	block := extractTenantBlock([]byte(merged), op.TenantID)
-	if block == nil {
-		block = map[string]any{}
+	if receiverType {
+		violations = append(violations, snap.CheckWrite(op.TenantID, op.Patch)...)
 	}
-	violations, _ := judgeTenantBlock(configDir, mgr, op.TenantID, block)
-	return violations
+	if routing {
+		block := extractTenantBlock([]byte(merged), op.TenantID)
+		if block == nil {
+			block = map[string]any{}
+		}
+		rv, _ := judgeTenantBlock(configDir, snap, op.TenantID, block)
+		violations = append(violations, rv...)
+	}
+	return violations, nil
 }
 
 // removesAny reports whether block carries any of keys.
