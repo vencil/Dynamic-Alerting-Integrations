@@ -672,9 +672,12 @@ def load_conf_files(paths):
         if (path.name.startswith("_") or is_hidden_name(path.name)
                 or not path.is_file()):
             continue
+        # The caller's own spelling, not `str(path)`: on Windows that turns
+        # the `conf.d/x.yaml` git reported into `conf.d\x.yaml`, and an
+        # unreadable file is then named in a form nobody typed (#2558).
         # #2216: tenant ids are the keys' source text, as the exporter reads
         # them — `find_custom_alert_tenants` reports `010:` as "010", not 8.
-        data = load_yaml_file_strict_exporter_keys(str(path), default={})
+        data = load_yaml_file_strict_exporter_keys(os.fspath(p), default={})
         if isinstance(data, dict):
             parsed[path.stem] = data
     return parsed

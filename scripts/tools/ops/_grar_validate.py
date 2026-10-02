@@ -1450,6 +1450,111 @@ def value_not_string_message(tenant: str, field: str, value: object) -> str:
             f"{key}: \"...\") so the route generator reads it as text")
 
 
+# #2503: Alertmanager's group_by wildcard (group by every label).
+GROUP_BY_WILDCARD = "..."
+
+
+def group_by_problems(group_by: list) -> tuple[list[str], list[tuple[int, str, object]]]:
+    """``(kept, problems)`` for one ``group_by`` list (#2503).
+
+    ⛔ THE group_by predicate, measured against Alertmanager v0.34.1 with its
+    default (UTF-8) label validation — the deployed manifest sets no feature
+    flag. AM refuses the WHOLE config for an empty label name, a repeated
+    non-wildcard label or ``...`` mixed with labels, and ACCEPTS a YAML
+    ``8`` / ``true``, grouping by a label literally named ``"8"`` /
+    ``"true"`` — which is not what an unquoted ``8`` / ``on`` (PyYAML: int /
+    bool) was meant to be. A repeated ``...`` alone (``['...', '...']``) is
+    accepted (its repeat check skips the wildcard), so it is neither a
+    finding nor repaired. In this order, each element is judged by its
+    original index:
+
+    1. not a ``str`` (as PyYAML reads it) → ``not_string``; ``""`` →
+       ``empty``. No label-name regex: AM's UTF-8 validation takes any
+       non-empty string (a quoted ``"8"``, ``"a b"``).
+    2. a non-wildcard string already kept → ``duplicate`` (compared as
+       strings).
+    3. every ``...`` while some other label remains → ``wildcard_mixed``.
+
+    ``kept`` is the list the generator renders without ``--strict`` (every
+    problem element dropped; ``[]`` means "render no group_by"). ``problems``
+    is ``(index, kind, value)`` in index order. The Go copy is
+    ``routingpolicy.GroupByProblems``; the parity matrix pins both.
+    """
+    problems: list[tuple[int, str, object]] = []
+    kept: list[tuple[int, str]] = []
+    seen: set[str] = set()
+    for idx, value in enumerate(group_by):
+        if not isinstance(value, str):
+            problems.append((idx, "not_string", value))
+        elif value == "":
+            problems.append((idx, "empty", value))
+        elif value in seen and value != GROUP_BY_WILDCARD:
+            problems.append((idx, "duplicate", value))
+        else:
+            seen.add(value)
+            kept.append((idx, value))
+    if GROUP_BY_WILDCARD in seen and len(seen) > 1:
+        problems.extend((idx, "wildcard_mixed", value) for idx, value in kept
+                        if value == GROUP_BY_WILDCARD)
+        kept = [(idx, value) for idx, value in kept if value != GROUP_BY_WILDCARD]
+    problems.sort(key=lambda p: p[0])
+    return [value for _idx, value in kept], problems
+
+
+def routing_group_by_invalid(routing_config: object) -> list[tuple[str, str, object]]:
+    """``(field, kind, value)`` per bad ``group_by`` element of a routing (#2503).
+
+    The lists judged are every one the generator renders from a tenant's
+    resolved routing: the main route's ``group_by``, then each mapping
+    entry's of ``overrides``, then of ``routes`` (list order). A non-list
+    ``group_by`` is not judged (the generator renders none). ``field`` is
+    the element's path (``group_by[1]``, ``overrides[0].group_by[2]``).
+    ``_routing_enforced.group_by`` goes through ``group_by_problems`` at the
+    call site. The Go copy is ``routingpolicy.GroupByInvalid``.
+    """
+    out: list[tuple[str, str, object]] = []
+    if not isinstance(routing_config, dict):
+        return out
+
+    def judge(prefix: str, holder: dict) -> None:
+        group_by = holder.get("group_by")
+        if isinstance(group_by, list):
+            out.extend((f"{prefix}group_by[{idx}]", kind, value)
+                       for idx, kind, value in group_by_problems(group_by)[1])
+
+    judge("", routing_config)
+    for key in ("overrides", "routes"):
+        entries = routing_config.get(key)
+        if isinstance(entries, list):
+            for idx, entry in enumerate(entries):
+                if isinstance(entry, dict):
+                    judge(f"{key}[{idx}].", entry)
+    return out
+
+
+def group_by_problem_text(field: str, kind: str, value: object) -> str:
+    """One bad group_by element, for the ``--strict`` ERROR and the WARN.
+
+    ⚠️ Wording: no "domain" / "allowlist" / "blocked" (validate-config's
+    policy row classifies on those) and no "must be a string, got" (the
+    #2431 line's parse key).
+    """
+    if kind == "not_string":
+        return (f"{field} is {type(value).__name__} {value!r}, not a string — "
+                "quote it in YAML (e.g. \"8\", \"on\") so it is a label name; "
+                "Alertmanager would group by a label named after its text")
+    if kind == "empty":
+        return (f"{field} is an empty string — Alertmanager refuses an empty "
+                "label name; remove it")
+    if kind == "duplicate":
+        return (f"{field} repeats label '{value}' listed earlier — "
+                "Alertmanager refuses a repeated non-wildcard group_by label; "
+                "remove it")
+    return (f"{field} is '...' alongside other labels — Alertmanager refuses "
+            "the wildcard mixed with labels; keep ['...'] alone or list only "
+            "the labels")
+
+
 # Keys an override route inherits from the tenant's main route when it does
 # not declare them itself (#2252): the generator nests every override route
 # under the tenant route, and Alertmanager's ``dispatch/route.go`` ``newRoute``
@@ -1468,7 +1573,8 @@ def _renders_on_route(key: str, value: object) -> bool:
     the main route's own check, which also reads the unclamped value.
     """
     if key == "group_by":
-        return bool(value) and isinstance(value, list)
+        # #2503: what renders is the repaired list; emptied → none rendered.
+        return isinstance(value, list) and bool(group_by_problems(value)[0])
     return bool(value)
 
 
@@ -2014,6 +2120,10 @@ def check_domain_policies(
                 if enforce_group_by:
                     tenant_gb = rc.get("group_by", [])
                     if isinstance(tenant_gb, list):
+                        # #2503: judge the list the generator renders — a
+                        # non-string element is dropped there, and set() of
+                        # an unhashable one (`{a: 1}`) used to crash here.
+                        tenant_gb = group_by_problems(tenant_gb)[0]
                         missing = set(enforce_group_by) - set(tenant_gb)
                         if missing:
                             messages.append(_fmt(

@@ -46,12 +46,23 @@ spec:
                   key: admin-password
             - name: GF_USERS_ALLOW_SIGN_UP
               value: "false"
-            # VictoriaLogs datasource plugin (#539 Phase 1). Grafana
-            # installs from grafana.com at first boot — air-gapped
-            # clusters MUST pre-bake the plugin into a custom image and
-            # remove this env var.
-            - name: GF_INSTALL_PLUGINS
-              value: "victoriametrics-logs-datasource"
+            # VictoriaLogs datasource plugin (#539 Phase 1), pinned to an
+            # exact version (TRK-2605). Grafana installs it from grafana.com
+            # before it starts serving (a failed install fails startup) and,
+            # because the version is pinned, never auto-updates it. Renovate
+            # tracks the grafana.com catalog (renovate.json, datasource
+            # custom.grafana-plugins); tests/ops/test_grafana_plugins_are_version_pinned.py
+            # rejects an entry without `@<version>`. Air-gapped clusters MUST
+            # pre-bake the plugin into a custom image and remove this env var.
+            - name: GF_PLUGINS_PREINSTALL_SYNC
+              value: "victoriametrics-logs-datasource@0.32.0"
+            # Grafana 12.4 also installs these app plugins from grafana.com in
+            # the background, unpinned and auto-updated, unless they are
+            # disabled (pkg/setting/setting_plugins.go defaultPreinstallPlugins).
+            # No dashboard here uses them. Keep the list in step with the
+            # Grafana minor; the guard above pins which minor it was taken from.
+            - name: GF_PLUGINS_DISABLE_PLUGINS
+              value: "grafana-lokiexplore-app,grafana-pyroscope-app,grafana-exploretraces-app,grafana-metricsdrilldown-app"
           volumeMounts:
             - name: provisioning-datasources
               mountPath: /etc/grafana/provisioning/datasources/datasources.yaml

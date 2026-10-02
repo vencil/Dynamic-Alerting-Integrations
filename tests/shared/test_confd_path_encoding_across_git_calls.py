@@ -56,6 +56,7 @@ import sys
 import threading
 
 import pytest
+from _platform_fs import require_file_name  # noqa: E402
 
 REPO = pathlib.Path(__file__).resolve().parents[2]
 TOOLS_DIR = REPO / "scripts" / "tools"
@@ -142,6 +143,7 @@ def _repo_with_removal(root: pathlib.Path, carriers) -> pathlib.Path:
 
     def write(body_template):
         for rel, tenant in carriers:
+            require_file_name(rel.rsplit(b"/", 1)[-1])
             path = root_b + b"/conf.d/" + rel
             os.makedirs(os.path.dirname(path), exist_ok=True)
             with open(path, "wb") as handle:
@@ -251,6 +253,7 @@ def test_an_unusable_carrier_is_named_once_not_once_per_metric(
     _git(repo, "config", "user.email", "t@example.invalid")
     _git(repo, "config", "user.name", "t")
     _git(repo, "config", "core.quotepath", "true")
+    require_file_name(INVALID_UTF8_CARRIER.rsplit(b"/", 1)[-1])
     path = os.fsencode(str(repo)) + b"/conf.d/" + INVALID_UTF8_CARRIER
     # Two thresholds removed and NOTHING added: an added key is a change too,
     # so an `after` body that introduces one makes the count 3 rather than 2.

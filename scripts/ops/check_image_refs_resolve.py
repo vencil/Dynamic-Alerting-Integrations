@@ -330,8 +330,15 @@ def _is_concrete(ref: str) -> bool:
     return ":" in last or "@" in last
 
 
-def _refs_from_node(node) -> set[str]:
-    """Recursively collect concrete image refs from a parsed YAML node."""
+def _refs_from_node(node, dropped: set[str] | None = None) -> set[str]:
+    """Recursively collect concrete image refs from a parsed YAML node.
+
+    `dropped`, when given, receives what an image-shaped node held but this
+    function did NOT return: a Shape A block whose `tag` is empty, missing or
+    not a string (YAML reads `tag: 11` as an int), and a Shape B `image:` with
+    no tag or digest (`image: nginx`, i.e. `:latest`). Helm-template strings are
+    not reported — they are not refs. Callers that ask "is every ref pinned"
+    need this; `discover_refs()` alone cannot see a ref it never returns."""
     found: set[str] = set()
 
     def walk(n):
@@ -346,11 +353,16 @@ def _refs_from_node(node) -> set[str]:
                 ref = f"{ref}:{tag}@{digest}" if isinstance(digest, str) and digest else f"{ref}:{tag}"
                 if _is_concrete(ref):
                     found.add(ref)
+            elif (dropped is not None and isinstance(repo, str) and "{{" not in repo
+                  and ("tag" in n or "digest" in n)):
+                dropped.add(f"{repo} (tag: {tag!r})")
             # Shape B: `image:` as a single "repo:tag" string (e.g. mariadb.image,
             # raw k8s container image).
             img = n.get("image")
             if isinstance(img, str) and _is_concrete(img):
                 found.add(img.strip())
+            elif dropped is not None and isinstance(img, str) and img.strip() and "{{" not in img:
+                dropped.add(img.strip())
             for v in n.values():
                 walk(v)
         elif isinstance(n, list):
@@ -361,7 +373,14 @@ def _refs_from_node(node) -> set[str]:
     return found
 
 
-def discover_refs(root: Path) -> set[str]:
+def _keep(r: str) -> bool:
+    """Third-party and published: not locally built, not first-party (needs ghcr
+    auth; release's job) — an anonymous resolve would false-fail those."""
+    repo = _repo_of(r)
+    return repo not in LOCAL_BUILT_IMAGES and not repo.startswith(SKIP_REPO_PREFIXES)
+
+
+def _walk_sources(root: Path, dropped: set[str] | None = None) -> set[str]:
     refs: set[str] = set()
     for pattern in SOURCE_GLOBS:
         for path in sorted(root.glob(pattern)):
@@ -372,14 +391,22 @@ def discover_refs(root: Path) -> set[str]:
                 continue
             for doc in docs:
                 if doc is not None:
-                    refs |= _refs_from_node(doc)
-    # Skip locally-built (never published) + first-party (needs ghcr auth; release's
-    # job) refs — an anonymous resolve would false-fail them. L1-B = public third-party.
-    def _keep(r: str) -> bool:
-        repo = _repo_of(r)
-        return repo not in LOCAL_BUILT_IMAGES and not repo.startswith(SKIP_REPO_PREFIXES)
+                    refs |= _refs_from_node(doc, dropped)
+    return refs
 
-    return {r for r in refs if _keep(r)}
+
+def discover_refs(root: Path) -> set[str]:
+    # L1-B = public third-party; see _keep.
+    return {r for r in _walk_sources(root) if _keep(r)}
+
+
+def discover_dropped_refs(root: Path) -> set[str]:
+    """Third-party image refs in the same sources that `discover_refs()` does
+    NOT return because they carry no usable tag (see `_refs_from_node`). Empty
+    on a healthy tree; `test_thirdparty_images_are_digest_pinned.py` asserts it."""
+    dropped: set[str] = set()
+    _walk_sources(root, dropped)
+    return {r for r in dropped if _keep(r.split(" (tag:", 1)[0])}
 
 
 def _resolver():
