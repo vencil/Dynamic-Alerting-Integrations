@@ -65,7 +65,7 @@
 #
 #   ⛔ Do not add a third column. Consumers parse with
 #   `read -r remote_ref local_sha`, which folds any extra field into
-#   `local_sha`, and one of them compares that against the 40-zero sha to skip
+#   `local_sha`, and two of them compare that against the 40-zero sha to skip
 #   deletions — widening it brings #1691 back.
 #
 #   ⛔ FIELD ORDER: remote_ref FIRST. That is not cosmetic. `local_sha` can

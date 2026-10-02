@@ -1026,10 +1026,6 @@ Q2. 這個紅是這次 commits 造成的嗎？（用下面的 A/B）
 BR=$(git symbolic-ref --short HEAD)
 BASE=$(git merge-base HEAD origin/main)
 
-# ⛔ 先確認這個 refspec 真的描述了 ≥1 個 commit。零筆時守衛會短路，
-#    畫面同樣是 rc=0 而且**一行輸出都沒有**——與「三道都過」無法區分。
-git rev-list --count "$BASE"..HEAD
-
 bash scripts/ops/prepush_dispatch.sh origin "$(git remote get-url origin)" <<EOF
 refs/heads/$BR $(git rev-parse HEAD) refs/heads/$BR $BASE
 EOF

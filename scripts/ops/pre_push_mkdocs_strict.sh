@@ -13,8 +13,8 @@
 #
 #   This hook closes the gap by running mkdocs strict at pre-push time.
 #
-# Triggers (pre-push only) — read from the PUSHED REFSPEC (#1690): every
-#   commit pushed to a branch is built. Deletions and non-branch refs are not.
+# Triggers (pre-push only) — read from the PUSHED REFSPEC (#1690): the tip of
+#   every pushed branch is built. Deletions and non-branch refs are not.
 #
 # Tiered execution:
 #   Tier 1 — Native `mkdocs` on PATH: run directly
@@ -61,9 +61,6 @@ if [ "${MKDOCS_STRICT_BYPASS:-0}" = "1" ]; then
 fi
 
 # --- What is this push actually updating? (#1690) ----------------------------
-# ⛔ BOTH the trigger and the subject come from the pushed refspec. Changing
-# only the trigger is worse than changing neither: the guard then fires more
-# often and still builds the tree you are standing in.
 # shellcheck source=scripts/ops/_prepush_refs.sh
 if [ ! -r "$_prepush_dir/_prepush_refs.sh" ]; then
     echo "[pre-push-mkdocs] ⛔ _prepush_refs.sh is not next to ${BASH_SOURCE[0]}" >&2
@@ -86,7 +83,7 @@ fi
 
 _Z40="0000000000000000000000000000000000000000"
 
-# ⛔ Every pushed branch commit is built; there is no "did docs change?" test.
+# ⛔ The tip of every pushed branch is built; there is no "did docs change?" test.
 # Such a test needs a list of paths that matches everything the build reads —
 # rule-packs/, the hooks under scripts/mkdocs/, the slug function, the strict
 # check and its ledger — and a second list kept in step by hand drifts.

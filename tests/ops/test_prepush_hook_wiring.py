@@ -508,12 +508,8 @@ def test_deleting_a_branch_does_not_require_a_green_docs_build(tmp_path: Path) -
     (work / "scripts" / "tools" / "lint" / "mkdocs_strict_check.sh").write_text(
         "#!/bin/sh\necho 'strict says no'\nexit 1\n", encoding="utf-8", newline="\n")
     (work / "scripts" / "tools" / "lint" / "mkdocs_strict_check.sh").chmod(0o755)
-    # ⛔ `_commit` only stages a.txt, so a docs file written next to it never
-    # reaches the diff the mkdocs guard looks at — the first version of this
-    # test did exactly that, the guard reported "non-doc push", and the control
-    # below caught it. Stage everything explicitly instead.
-    (work / "docs").mkdir(exist_ok=True)
-    (work / "docs" / "a.md").write_text("# d\n", encoding="utf-8")
+    # ⛔ `_commit` only stages a.txt, and the guard builds the pushed commit, so
+    # the stand-in strict check has to be committed. Stage everything.
     assert _git(work, "add", "-A").returncode == 0
     assert _git(work, "-c", "core.hooksPath=/dev/null", "commit", "-q",
                 "-m", "docs edit").returncode == 0
@@ -526,8 +522,8 @@ def test_deleting_a_branch_does_not_require_a_green_docs_build(tmp_path: Path) -
     # ⛔ CONTROL FIRST: with commits to push, the mkdocs guard MUST fire. If it
     # does not, the deletion result below says nothing.
     blocked, blocked_out = _push(work, "HEAD:refs/heads/feat/docs", env_extra=env)
-    assert blocked.returncode != 0, (
-        f"CONTROL FAILED: the mkdocs guard did not fire on a docs push:\n{blocked_out}"
+    assert blocked.returncode != 0 and "strict says no" in blocked_out, (
+        f"CONTROL FAILED: the mkdocs guard did not run the strict check:\n{blocked_out}"
     )
 
     deleted, del_out = _push(work, ":refs/heads/tmpdel", env_extra=env)
@@ -1754,8 +1750,7 @@ def _docs_repo(tmp_path: Path, check: str = _RECORDER) -> tuple[Path, Path, str,
     return work, tmp_path / "record.txt", sha_a, sha_b
 
 
-def _run_guard(work: Path, record: Path, rows: str, *, rc: str = "0",
-               remote: str = "origin"):
+def _run_guard(work: Path, record: Path, rows: str, *, rc: str = "0"):
     """Feed the guard a refspec exactly as prepush_dispatch.sh does."""
     assert _BASH, "no bash resolved; the module-level skip should have fired"
     bindir = work.parent / "fakebin"
@@ -1770,7 +1765,7 @@ def _run_guard(work: Path, record: Path, rows: str, *, rc: str = "0",
         "PREPUSH_TEST_RC": rc,
     }
     return subprocess.run(  # subprocess-timeout: ignore
-        [_BASH, "scripts/ops/pre_push_mkdocs_strict.sh", remote, "/dev/null"],
+        [_BASH, "scripts/ops/pre_push_mkdocs_strict.sh", "origin", "/dev/null"],
         cwd=work, input=rows, capture_output=True, text=True,
         encoding="utf-8", errors="replace", env=env,
     )
