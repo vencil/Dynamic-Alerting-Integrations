@@ -19,6 +19,7 @@ import (
 	"os"
 	"path/filepath"
 	"reflect"
+	"strconv"
 	"strings"
 	"testing"
 
@@ -538,9 +539,10 @@ func TestUnreadable_UnlistableConfigDir_ExitsTwo(t *testing.T) {
 			t.Errorf("%v: exit = %d, want %d; stderr=%q", args, code, exitCallerErr, stderr)
 		}
 	}
-	// The reason is named in both the scoped mode (guard) and the whole-tree
-	// mode (effective) — not "no .yaml files found" (#2588 review).
-	for _, args := range [][]string{{"--config-dir", dir}, {effectiveCmd, "--config-dir", dir}} {
+	// The reason is named in the scoped mode (guard), the whole-tree mode
+	// (effective) and served-values — not "no .yaml files found" (#2588
+	// review, #2627).
+	for _, args := range [][]string{{"--config-dir", dir}, {effectiveCmd, "--config-dir", dir}, {servedValuesCmd, "--config-dir", dir}} {
 		_, _, stderr := runOnce(t, args...)
 		if !strings.Contains(stderr, "cannot list configDir") || !strings.Contains(stderr, "permission denied") {
 			t.Errorf("%v: stderr does not say why: %q", args, stderr)
@@ -569,6 +571,9 @@ func TestScopeHelp_TeachesConfigDirRelativeSpelling(t *testing.T) {
 // A tree whose root lists but whose every config file is unreadable is not
 // "no .yaml files": effective exits 3 naming them, as the guard does and as
 // effective does when one readable file is beside them (#2588 review N2).
+// served-values too: it used to exit 2 with "no .yaml files found" and no
+// JSON (#2627); it now writes the document with no tenant and the files in
+// unreadable, and exits 3.
 func TestUnreadable_EveryFileUnreadable_EffectiveExitsThree(t *testing.T) {
 	t.Parallel()
 	for _, s := range []struct {
@@ -587,6 +592,19 @@ func TestUnreadable_EveryFileUnreadable_EffectiveExitsThree(t *testing.T) {
 				symlinkOrSkipT(t, "missing.yaml", p)
 			},
 			want: []skippedFile{{"t.yaml", config.UnreadableStatError}},
+		},
+		{
+			// The #2627 shape, for every user: `_defaults.yaml` unreadable too.
+			name: "tenant file and _defaults.yaml dangling symlinks",
+			breakIt: func(t *testing.T, dir string) {
+				p := filepath.Join(dir, "t.yaml")
+				if err := os.Remove(p); err != nil {
+					t.Fatal(err)
+				}
+				symlinkOrSkipT(t, "missing.yaml", p)
+				symlinkOrSkipT(t, "missing-defaults.yaml", filepath.Join(dir, "_defaults.yaml"))
+			},
+			want: []skippedFile{{"_defaults.yaml", config.UnreadableStatError}, {"t.yaml", config.UnreadableStatError}},
 		},
 		{
 			name:    "only file 0000",
@@ -647,6 +665,95 @@ func TestUnreadable_EveryFileUnreadable_EffectiveExitsThree(t *testing.T) {
 				t.Errorf("guard exit = %d unreadable = %v, want %d %v; stderr=%q",
 					gcode, gdoc.Unreadable, exitParseFailed, s.want, gstderr)
 			}
+
+			scode, sout, sstderr := runOnce(t, servedValuesCmd, "--config-dir", dir)
+			if scode != exitParseFailed {
+				t.Fatalf("served-values exit = %d, want %d; stderr=%q", scode, exitParseFailed, sstderr)
+			}
+			var sdoc struct {
+				ParseFailed []string                   `json:"parse_failed"`
+				Unreadable  []skippedFile              `json:"unreadable"`
+				Tenants     map[string]json.RawMessage `json:"tenants"`
+			}
+			if err := json.Unmarshal([]byte(sout), &sdoc); err != nil {
+				t.Fatalf("served-values stdout is not JSON (%v): %q; stderr=%q", err, sout, sstderr)
+			}
+			if !reflect.DeepEqual(sdoc.Unreadable, s.want) {
+				t.Errorf("served-values unreadable = %v, want %v", sdoc.Unreadable, s.want)
+			}
+			if sdoc.Tenants == nil || len(sdoc.Tenants) != 0 || sdoc.ParseFailed == nil {
+				t.Errorf("served-values tenants = %v parse_failed = %v, want {} and []", sdoc.Tenants, sdoc.ParseFailed)
+			}
+			if strings.Contains(sstderr, "no .yaml files found") ||
+				!strings.Contains(sstderr, "da-guard served-values: "+strconv.Itoa(len(s.want))+" path(s) cannot be read: "+s.want[0].File) {
+				t.Errorf("served-values stderr does not name the unreadable paths: %q", sstderr)
+			}
 		})
 	}
+}
+
+// A tree with no config file at all is still "no .yaml files found", exit 2
+// — the #2627 change is only for files that are there and cannot be read.
+func TestUnreadable_TrulyEmptyTree_ServedValuesExitsTwo(t *testing.T) {
+	t.Parallel()
+	dir := t.TempDir()
+	code, stdout, stderr := runOnce(t, servedValuesCmd, "--config-dir", dir)
+	if code != exitCallerErr || stdout != "" || !strings.Contains(stderr, "no .yaml files found") {
+		t.Errorf("exit = %d stdout = %q stderr = %q, want %d, no JSON, \"no .yaml files found\"",
+			code, stdout, stderr, exitCallerErr)
+	}
+}
+
+// A --scope the process may not stat (permission denied: under a directory
+// it may not search) is a path it cannot read: exit 3, naming the scope and
+// the directory that hides it in the unreadable format — as a scope the walk
+// cannot list already is. It used to be exit 2 with the stat error (#2627).
+// A --scope that does not exist stays exit 2.
+func TestUnreadable_GuardScope_StatDeniedIsUnreadable(t *testing.T) {
+	t.Parallel()
+	files := map[string]string{
+		"_defaults.yaml":      "defaults:\n  mysql_connections: 80\n",
+		"team/sub/t.yaml":     "tenants:\n  tenant-t:\n    mysql_connections: 70\n",
+		"locked/inner/t.yaml": "tenants:\n  tenant-l:\n    mysql_connections: 70\n",
+	}
+
+	t.Run("does not exist", func(t *testing.T) {
+		t.Parallel()
+		dir := writeParityTree(t, files)
+		code, _, stderr := runOnce(t, "--config-dir", dir, "--scope", "nope")
+		if code != exitCallerErr || !strings.Contains(stderr, "stat scopeDir") ||
+			!strings.Contains(stderr, "no such file or directory") {
+			t.Errorf("exit = %d stderr = %q, want %d naming the stat error", code, stderr, exitCallerErr)
+		}
+	})
+
+	t.Run("permission denied", func(t *testing.T) {
+		t.Parallel()
+		if os.Geteuid() == 0 {
+			t.Skip("running as root: chmod does not stop root")
+		}
+		dir := writeParityTree(t, files)
+		chmodT(t, filepath.Join(dir, "locked"), 0, 0o755)
+		want := []skippedFile{
+			{"locked", config.UnreadableWalkError},
+			{"locked/inner", config.UnreadableStatError},
+		}
+		for _, scope := range []string{"locked/inner", filepath.Join(dir, "locked", "inner")} {
+			code, doc, stderr := guardJSON(t, dir, "--scope", scope)
+			if code != exitParseFailed {
+				t.Errorf("--scope %s: exit = %d, want %d; stderr=%q", scope, code, exitParseFailed, stderr)
+			}
+			if !reflect.DeepEqual(doc.Unreadable, want) {
+				t.Errorf("--scope %s: unreadable = %v, want %v", scope, doc.Unreadable, want)
+			}
+			if !strings.Contains(stderr, "da-guard: 2 path(s) cannot be read: locked (walk_error), locked/inner (stat_error)") ||
+				strings.Contains(stderr, "stat scopeDir") {
+				t.Errorf("--scope %s: stderr does not name the paths in the unreadable format: %q", scope, stderr)
+			}
+		}
+		code, md, stderr := runOnce(t, "--config-dir", dir, "--scope", "locked/inner")
+		if code != exitParseFailed || !strings.Contains(md, "`locked/inner` (stat_error)") {
+			t.Errorf("md: exit = %d report = %q, want %d naming locked/inner; stderr=%q", code, md, exitParseFailed, stderr)
+		}
+	})
 }

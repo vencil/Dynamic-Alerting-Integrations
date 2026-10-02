@@ -67,7 +67,8 @@ type servedValuesDoc struct {
 	// the tenants they hold are absent from Tenants; the exit code is 3, as
 	// for ParseFailed, so a caller that does not know this field fails too
 	// (#2115). A symlink to a directory is not listed. Always present ([]
-	// when none).
+	// when none). When every config file of the tree is unreadable, the
+	// document still comes out, with no tenant and those files here (#2627).
 	Unreadable []skippedFile                 `json:"unreadable"`
 	Tenants    map[string]servedTenantValues `json:"tenants"`
 }
@@ -157,18 +158,27 @@ func runServedValues(args []string, stdout, errOut io.Writer) int {
 	}
 
 	cfg, rep, err := config.LoadDirReport(f.configDir, log.New(errOut, "", 0))
-	if err != nil {
+	// A tree whose every config file is unreadable is not "no .yaml files"
+	// (#2627): the exporter serves nothing from it, so the document carries
+	// no tenant and names the files in unreadable (exit 3), as effective and
+	// the guard do on the same tree. Only a tree with no config file at all
+	// keeps the refusal (exit 2).
+	allUnreadable := errors.Is(err, config.ErrNoYAMLFiles) && len(rep.Unreadable) > 0
+	if err != nil && !allUnreadable {
 		fmt.Fprintf(errOut, "%s %s: %v\n", programName, servedValuesCmd, err)
 		return exitCallerErr
 	}
-	if err := checkUTF8(cfg); err != nil {
-		fmt.Fprintf(errOut, "%s %s: %v\n", programName, servedValuesCmd, err)
-		return exitCallerErr
-	}
-	tenants, err := servedValues(cfg, at)
-	if err != nil {
-		fmt.Fprintf(errOut, "%s %s: %v\n", programName, servedValuesCmd, err)
-		return exitCallerErr
+	tenants := map[string]servedTenantValues{}
+	if !allUnreadable {
+		if err := checkUTF8(cfg); err != nil {
+			fmt.Fprintf(errOut, "%s %s: %v\n", programName, servedValuesCmd, err)
+			return exitCallerErr
+		}
+		tenants, err = servedValues(cfg, at)
+		if err != nil {
+			fmt.Fprintf(errOut, "%s %s: %v\n", programName, servedValuesCmd, err)
+			return exitCallerErr
+		}
 	}
 	parseFailed := rep.ParseFailed
 	if parseFailed == nil {

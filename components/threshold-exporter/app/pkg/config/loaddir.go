@@ -1,6 +1,7 @@
 package config
 
 import (
+	"errors"
 	"fmt"
 	"log"
 	"os"
@@ -57,6 +58,13 @@ func LoadDir(dir string, logger *log.Logger) (cfg *ThresholdConfig, parseFailed 
 	return cfg, rep.ParseFailed, err
 }
 
+// ErrNoYAMLFiles is LoadDirReport's refusal of a tree the walk kept no
+// config file from: the exporter refuses to load it. When the walk dropped
+// files it could not read (every config file of the tree is unreadable), the
+// error comes with a LoadReport whose Unreadable names them, so a caller can
+// tell that tree from one with no config file at all (#2627).
+var ErrNoYAMLFiles = errors.New("no .yaml files found")
+
 // NoTenantReason is why a file in LoadReport.NoTenant contributes no tenant.
 const NoTenantReason = "declares no tenant: a file whose name does not start with `_` " +
 	"is read only through its `tenants:` mapping, and this one has none (or an empty one)"
@@ -88,6 +96,12 @@ type LoadReport struct {
 // (LoadReport.NoTenant) and the files the walk could not stat or read
 // (LoadReport.Unreadable). It adds no verdict of its own: both are read off
 // the walker's own result on the same cold scan.
+//
+// A tree with no config file the walk could keep is refused (ErrNoYAMLFiles),
+// as the exporter refuses it; the report then carries only Unreadable — the
+// files the walk dropped, when every config file is unreadable (#2627). A
+// root the walk cannot list at all is refused as `cannot list configDir`,
+// with the walk's error, not as an empty tree.
 func LoadDirReport(dir string, logger *log.Logger) (cfg *ThresholdConfig, rep LoadReport, err error) {
 	if logger == nil {
 		logger = discardLogger
@@ -100,7 +114,10 @@ func LoadDirReport(dir string, logger *log.Logger) (cfg *ThresholdConfig, rep Lo
 		return nil, LoadReport{}, err
 	}
 	if len(scan.Files) == 0 {
-		return nil, LoadReport{}, fmt.Errorf("no .yaml files found in %s", dir)
+		if scan.RootWalkErr != nil {
+			return nil, LoadReport{}, fmt.Errorf("cannot list configDir %q: %w", dir, scan.RootWalkErr)
+		}
+		return nil, LoadReport{Unreadable: scan.Unreadable}, fmt.Errorf("%w in %s", ErrNoYAMLFiles, dir)
 	}
 	built, err := loadDirBuild(scan, dir, logger, nil)
 	if err != nil {

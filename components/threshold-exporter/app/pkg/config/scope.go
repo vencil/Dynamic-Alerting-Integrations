@@ -53,6 +53,7 @@ package config
 import (
 	"errors"
 	"fmt"
+	"io/fs"
 	"log"
 	"os"
 	"path"
@@ -113,6 +114,12 @@ type ScopedTenants struct {
 	// (LoadReport.Unreadable) over the whole tree; nil when there are none
 	// (#2588). A symlink to a directory is not listed.
 	//
+	// A scope ScopeEffective may not stat (permission denied — e.g. under a
+	// directory the process may not search) is listed here too, as its own
+	// root-relative path with UnreadableStatError, beside the walk_error of
+	// the directory that hides it when the walk recorded one (#2627). A
+	// scope that does not exist is still an error.
+	//
 	// ⛔ Not an error, like ParseFailed and for the same reason: the walker
 	// skips the entry and serves the rest. Tenants silently omits the tenants
 	// such a file declares, and an effective config silently lacks what an
@@ -153,6 +160,10 @@ type DefaultsFile struct {
 //
 // Errors:
 //   - configDir doesn't exist or isn't a directory.
+//   - scopeDir doesn't exist or isn't a directory. A scopeDir whose stat
+//     fails with permission denied is NOT an error: it is listed in
+//     ScopedTenants.Unreadable and holds no tenant (#2627) — it is a path
+//     that cannot be read, not a path that is wrong.
 //   - scopeDir lies outside configDir (security guard against
 //     `--scope ../etc/passwd`).
 //   - a tenant ID under the scope is defined in two different files
@@ -266,8 +277,16 @@ func scopeEffective(configDir, scopeDir string, wholeTree bool) (*ScopedTenants,
 		return nil, fmt.Errorf(
 			"scopeDir %q is outside configDir %q", absScope, absRoot)
 	}
+	// A scope the process may not stat is unreadable, not wrong (#2627): it
+	// goes on with no tenant and is named in Unreadable (the caller's exit 3),
+	// as a scope the walk could not list already is. Only permission denied:
+	// a scope that does not exist stays the caller's error.
+	var scopeStatDenied bool
 	if scopeInfo, err := os.Stat(absScope); err != nil {
-		return nil, fmt.Errorf("stat scopeDir %q: %w", absScope, err)
+		if !errors.Is(err, fs.ErrPermission) {
+			return nil, fmt.Errorf("stat scopeDir %q: %w", absScope, err)
+		}
+		scopeStatDenied = true
 	} else if !scopeInfo.IsDir() {
 		return nil, fmt.Errorf("scopeDir %q is not a directory", absScope)
 	}
@@ -293,6 +312,9 @@ func scopeEffective(configDir, scopeDir string, wholeTree bool) (*ScopedTenants,
 	}
 	defaultsFiles := scopeDefaultsFiles(scan, filepath.ToSlash(rel))
 	unreadable := scopeUnreadable(scan, filepath.ToSlash(rel))
+	if scopeStatDenied {
+		unreadable = withUnreadable(unreadable, UnreadableFile{RelKey: filepath.ToSlash(rel), Reason: UnreadableStatError})
+	}
 	nestedFiles := scopeNestedPlatformFiles(scan, filepath.ToSlash(rel))
 	if len(inScope) == 0 {
 		return &ScopedTenants{ParseFailed: parseFailed, DefaultsFiles: defaultsFiles, Unreadable: unreadable, NestedPlatformFiles: nestedFiles}, nil
@@ -433,6 +455,19 @@ func scopeUnreadable(scan *TreeScan, scopeRel string) []UnreadableFile {
 			out = append(out, u)
 		}
 	}
+	return out
+}
+
+// withUnreadable is us plus u, kept sorted by RelKey (the walk's order); u is
+// not added again when us already names its path.
+func withUnreadable(us []UnreadableFile, u UnreadableFile) []UnreadableFile {
+	for _, have := range us {
+		if have.RelKey == u.RelKey {
+			return us
+		}
+	}
+	out := append(append([]UnreadableFile(nil), us...), u)
+	sort.SliceStable(out, func(i, j int) bool { return out[i].RelKey < out[j].RelKey })
 	return out
 }
 

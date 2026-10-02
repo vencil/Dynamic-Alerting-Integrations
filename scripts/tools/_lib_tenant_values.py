@@ -73,13 +73,12 @@ Raises (both loaders):
   (an unreadable one with its reason, `stat_error` / `read_error` /
   `walk_error`), `unreadable` lists the unreadable ones, `stderr_lines`
   carries da-guard's stderr whole (the exporter's reasons among it).
-  ⚠️ One exception, `load_served_values` / `load_served_tree` only: a tree
-  from which the load keeps no file at all (every config file unreadable,
-  or only sub-directories it cannot list) is refused by `da-guard
-  served-values` with exit 2 ("no .yaml files found"), so they raise
-  `ServedValuesError`, its stderr carrying the load's WARN for each path,
-  not `ParseFailedError`; `load_effective` raises `ParseFailedError` for
-  that tree too.
+  A tree from which the load keeps no file at all because every config
+  file is unreadable (or its only entries are sub-directories it cannot
+  list) raises `ParseFailedError` from both loaders too (#2627; before,
+  `da-guard served-values` refused it with exit 2, "no .yaml files
+  found"). A tree with no config file at all, or a `--config-dir` that
+  cannot be listed, is still exit 2: `ServedValuesError` / `EffectiveError`.
 * `DaGuardNotFoundError` — no da-guard binary; the message says how to get one.
 * `ServedValuesError` / `EffectiveError` (both `DaGuardError`) — da-guard
   failed, or its output is not the JSON it should be (for `effective`, a

@@ -53,6 +53,9 @@
 // tenants to check, and that is not "safe" — nor is a scope with paths the
 // walk cannot stat, read or list (3, #2588). A --config-dir the walk cannot
 // list at all is a caller error (2), as for served-values and effective.
+// A --scope that does not exist is a caller error (2); one the process may
+// not stat (permission denied) is a path it cannot read: 3, named in
+// unreadable (#2627).
 //
 // Warnings never affect exit code (`--warn-as-error` flips this if
 // a customer wants strict mode).
