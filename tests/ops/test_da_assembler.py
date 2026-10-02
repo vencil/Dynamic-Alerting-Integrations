@@ -1982,9 +1982,9 @@ class TestRenderCrDecoder:
         cr_path, out_dir = self._write(tmp_path, self._CR.replace(old, new))
         assert render_cr_file(cr_path, out_dir) == EXIT_CALLER_ERROR
         assert message in caplog.text, caplog.text
-        assert ("on the Kubernetes side a << written after explicit keys "
-                "overrides them: move << before the explicit keys, or do not "
-                "use merges") in caplog.text, caplog.text
+        assert ("if the difference comes from a << written after explicit "
+                "keys (on the Kubernetes side it overrides them), move it "
+                "before them or do not use merges") in caplog.text, caplog.text
         assert list(out_dir.iterdir()) == []
 
     def test_merge_before_explicit_keys_renders(self, tmp_path):

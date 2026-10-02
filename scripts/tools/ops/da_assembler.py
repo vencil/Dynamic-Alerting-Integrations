@@ -709,9 +709,9 @@ def _shape_name(value: Any) -> str:
 
 #: Appended to a divergence error when the CR uses `<<` merges: quoting does
 #: not help when the two readings differ because of the merge itself.
-_MERGE_NOTE = ("; the CR uses << merges, and on the Kubernetes side a << "
-               "written after explicit keys overrides them: move << before "
-               "the explicit keys, or do not use merges")
+_MERGE_NOTE = ("; the CR uses << merges: if the difference comes from a << "
+               "written after explicit keys (on the Kubernetes side it "
+               "overrides them), move it before them or do not use merges")
 
 
 def _merge_note(cr_path: Path) -> str:
