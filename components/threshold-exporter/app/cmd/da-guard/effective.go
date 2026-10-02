@@ -40,8 +40,18 @@ type effectiveDoc struct {
 	// ParseFailed: the files the exporter's load of the tree skips because
 	// they do not decode (ScopedTenants.ParseFailed over the whole tree).
 	// Always present ([] when none).
-	ParseFailed []string                   `json:"parse_failed"`
-	Tenants     map[string]effectiveTenant `json:"tenants"`
+	ParseFailed []string `json:"parse_failed"`
+	// Unreadable: the config-named files the walk could not stat or read and
+	// the directories below the root it could not list
+	// (ScopedTenants.Unreadable over the whole tree), each {file, reason} as
+	// served-values names them (#2588). A tenant in such a file is absent
+	// from Tenants, and a value an unreadable `_defaults.yaml` would have
+	// given is absent from every effective_config — so the exit code is 3,
+	// as for ParseFailed. Added without a schema bump: a reader that does not
+	// know the field still fails on the exit code. A symlink to a directory
+	// is not listed. Always present ([] when none).
+	Unreadable []skippedFile              `json:"unreadable"`
+	Tenants    map[string]effectiveTenant `json:"tenants"`
 }
 
 // effectiveTenant is one tenant: the /effective body (the embedded
@@ -67,7 +77,8 @@ func parseEffectiveFlags(args []string, errOut io.Writer) (string, error) {
 		fs.PrintDefaults()
 		fmt.Fprintf(errOut, "\nExit codes:\n  0  ok\n  2  caller error, or a tree the resolver rejects (e.g. a tenant declared twice,\n"+
 			"     no .yaml file at all), or any output string that is not valid UTF-8\n"+
-			"  3  config files the exporter cannot decode; the JSON is still written and names them in parse_failed\n")
+			"  3  config files the exporter cannot decode or cannot read; the JSON is still written and\n"+
+			"     names them in parse_failed / unreadable\n")
 	}
 	if err := fs.Parse(args); err != nil {
 		return "", err
@@ -93,8 +104,14 @@ func runEffective(args []string, stdout, errOut io.Writer) int {
 		return exitCallerErr
 	}
 
-	doc := effectiveDoc{Schema: effectiveSchema, ParseFailed: []string{}, Tenants: map[string]effectiveTenant{}}
+	doc := effectiveDoc{Schema: effectiveSchema, ParseFailed: []string{}, Unreadable: []skippedFile{},
+		Tenants: map[string]effectiveTenant{}}
 	tree, err := config.EffectiveTree(configDir)
+	if tree != nil {
+		// Set on success and on a DecodeError stop alike (#2588): a run
+		// stopped by one undecodable file still names the unreadable ones.
+		doc.Unreadable = unreadableEntries(tree.Unreadable)
+	}
 	if err != nil {
 		fmt.Fprintf(errOut, "%s %s: %v\n", programName, effectiveCmd, err)
 		// A file the resolve's decode rejects (a chain `_defaults.yaml`, or a
@@ -140,6 +157,11 @@ func runEffective(args []string, stdout, errOut io.Writer) int {
 	}
 	if len(doc.ParseFailed) > 0 {
 		reportParseFailed(errOut, doc.ParseFailed)
+	}
+	if len(doc.Unreadable) > 0 {
+		reportUnreadable(errOut, programName+" "+effectiveCmd, doc.Unreadable)
+	}
+	if len(doc.ParseFailed) > 0 || len(doc.Unreadable) > 0 {
 		return exitParseFailed
 	}
 	return exitOK
