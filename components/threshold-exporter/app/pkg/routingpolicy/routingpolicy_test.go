@@ -117,6 +117,16 @@ func TestIsDisabled_MatchesTheExporter(t *testing.T) {
 			t.Errorf("IsDisabled(%q) = %v, exporter says %v", s, got, want)
 		}
 	}
+	// #2341: where Python's strip()/lower() and Go's TrimSpace/ToLower part
+	// ways, the routing verdict is Python's (_lib_validation.is_disabled).
+	for s, want := range map[string]bool{
+		"\x1coff": true, "\x1fdisable\x1d": true, "\u00a0false\u2003": true, "\u0085off": true,
+		"d\u0130sable": false, "\u0130": false, "o\u212af": false, "off\u200b": false,
+	} {
+		if got := IsDisabled(s); got != want {
+			t.Errorf("IsDisabled(%q) = %v, Python's is_disabled says %v", s, got, want)
+		}
+	}
 	if IsDisabled(false) || IsDisabled(nil) {
 		t.Error("a non-string is never a disabling value")
 	}

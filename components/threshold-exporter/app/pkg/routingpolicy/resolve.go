@@ -3,6 +3,8 @@ package routingpolicy
 import (
 	"fmt"
 	"strings"
+	"unicode"
+	"unicode/utf8"
 
 	"github.com/vencil/threshold-exporter/pkg/config"
 )
@@ -34,12 +36,34 @@ func Describe(source string) string {
 	return "an unknown layer"
 }
 
-// IsDisabled reports whether v is a string that turns a feature off
-// (pkg/config.IsDisabled after lower-casing and trimming — the set
-// _lib_validation.is_disabled uses too).
+// IsDisabled reports whether v is a string that turns routing off, decided
+// exactly as the generator's _lib_validation.is_disabled decides it (#2341):
+// Python's str.strip() — Unicode whitespace plus U+001C–U+001F, which
+// strings.TrimSpace keeps — then lower() and membership in pkg/config's set.
+// The stripped text must be ASCII: no non-ASCII rune lowers, in Python, to
+// ASCII letters of disable / disabled / off / false (only U+212A KELVIN SIGN
+// lowers to ASCII at all, to `k`), while Go lowers U+0130 to `i`, which
+// would accept `dİsable`. Routing only: the exporter's own isDisabled
+// callers (thresholds, `_silent_mode`, …) keep their trim and lower.
 func IsDisabled(v any) bool {
 	s, ok := v.(string)
-	return ok && config.IsDisabled(strings.ToLower(strings.TrimSpace(s)))
+	if !ok {
+		return false
+	}
+	s = strings.TrimFunc(s, pyIsSpace)
+	for i := 0; i < len(s); i++ {
+		if s[i] >= utf8.RuneSelf {
+			return false
+		}
+	}
+	return config.IsDisabled(strings.ToLower(s))
+}
+
+// pyIsSpace is Python's str.isspace() for one rune: unicode.IsSpace plus
+// the four information separators U+001C–U+001F (measured over every code
+// point against Python 3.11; nothing else differs).
+func pyIsSpace(r rune) bool {
+	return unicode.IsSpace(r) || (r >= 0x1c && r <= 0x1f)
 }
 
 // Resolve merges one tenant's routing from the three layers, as

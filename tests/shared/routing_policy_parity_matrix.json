@@ -101,7 +101,8 @@
     "enforced_group_by_invalid (#2503, per tree): [file, field, kind] per bad group_by element of the `_routing_enforced` route(s) the generator renders - read from the root `_` files in name order, a later one with `enabled: true` (as PyYAML reads it: `yes` / `on` too) replacing an earlier; judged only with a truthy receiver that the receiver contract accepts (pkg/receiverspec, _grar_merge.build_receiver_config) and a non-empty group_by list, the `{{tenant}}` shape once per routed tenant AFTER substitution. field is `_routing_enforced.group_by[i]`, or `_routing_enforced (<tenant>).group_by[i]` for the `{{tenant}}` shape; file is the root file the enforced block came from. The generator's --strict ERROR (it names no file, so the Python half compares field and kind), da-guard's routing_group_by_invalid with an empty tenant and Field <file>:<field>. The --policy domain allowlist is not applied (load_tenant_tree does not know it).",
     "refused (#2341): null, or why the generator renders NOTHING for the tenant although it is declared - 'invalid_tenant_id' = its id is refused (tenant_ids, below; checked first); 'routing_not_mapping' = its `_routing` (tenant file over the root platform overlay), as PyYAML reads it, is neither a mapping nor a disabling string (disable / disabled / off / false, a YAML string): `slack`, a list, null, an unquoted false / off / no (a YAML boolean; a quoted 'off' disables). targets is then null. The generator's blocking `WARN ... skipping` (--strict: ERROR), da-guard's routing_not_mapping, tenant-api's 400 for a PUT body that writes it.",
     "#2341 - a batch patch `_routing: on` (any string but a disabling one) no longer re-enables a disabled tenant's routing: every reader refuses that `_routing` and renders nothing, so the domain policy has nothing to judge (batch verdict 'ok').",
-    "tenant_ids (#2341 R8): the ids every reader refuses (Python _lib_validation.is_valid_tenant_id, Go routingpolicy.IsValidTenantID) and accepts. Refused = the empty id plus every id that ALL three existing tenant-name rules refuse (operator_generate.py / migrate_to_operator.py: DNS-1123 label; alert_quality.py: ^[a-zA-Z0-9_-]+$) - i.e. not ^[A-Za-z0-9_-]+$; an id any of them accepts (UPPER) stays valid. A declared tenant with a refused id renders NOTHING (no route, receiver or inhibit rule): refused 'invalid_tenant_id', targets null - the generator's blocking `WARN ... skipping` (--strict: ERROR), da-guard's invalid_tenant_id (Field <file>:tenants.<id>), tenant-api's 400 on a write to that id."
+    "tenant_ids (#2341 R8): the ids every reader refuses (Python _lib_validation.is_valid_tenant_id, Go routingpolicy.IsValidTenantID) and accepts. Refused = the empty id plus every id that ALL three existing tenant-name rules refuse (operator_generate.py / migrate_to_operator.py: DNS-1123 label; alert_quality.py: ^[a-zA-Z0-9_-]+$) - i.e. not ^[A-Za-z0-9_-]+$; an id any of them accepts (UPPER) stays valid. A declared tenant with a refused id renders NOTHING (no route, receiver or inhibit rule): refused 'invalid_tenant_id', targets null - the generator's blocking `WARN ... skipping` (--strict: ERROR), da-guard's invalid_tenant_id (Field <file>:tenants.<id>), tenant-api's 400 on a write to that id.",
+    "#2341 - a disabling string is decided as _lib_validation.is_disabled decides it: Python str.strip() (U+001C-U+001F are whitespace too) then lower() on the remaining text, which must be ASCII (U+0130 'I with dot' never lowers to 'i'): `\"\\x1coff\"` disables, `\"d\\u0130sable\"` is routing_not_mapping."
   ],
   "blocking_kinds": [
     "routing_defaults_null_below_root",
@@ -4676,7 +4677,9 @@
         "t-upper-disable.yaml": "tenants:\n  t-upper-disable:\n    cpu_usage_percent: '85'\n    _routing: ' DISABLED '\n",
         "t-empty-map.yaml": "tenants:\n  t-empty-map:\n    cpu_usage_percent: '85'\n    _routing: {}\n",
         "t-silent.yaml": "tenants:\n  t-silent:\n    cpu_usage_percent: '85'\n",
-        "t-overlay.yaml": "tenants:\n  t-overlay:\n    cpu_usage_percent: '85'\n"
+        "t-overlay.yaml": "tenants:\n  t-overlay:\n    cpu_usage_percent: '85'\n",
+        "t-dotted-i.yaml": "tenants:\n  t-dotted-i:\n    cpu_usage_percent: '85'\n    _routing: \"d\\u0130sable\"\n",
+        "t-fs-off.yaml": "tenants:\n  t-fs-off:\n    cpu_usage_percent: '85'\n    _routing: \"\\x1Coff\"\n"
       },
       "platform": [],
       "expect": {
@@ -4869,6 +4872,36 @@
           "python_differs": null,
           "escalation": null,
           "refused": "routing_not_mapping"
+        },
+        "t-dotted-i": {
+          "targets": null,
+          "policy": [],
+          "rejected_routes": [],
+          "values_not_string": [],
+          "group_by_invalid": [],
+          "unknown_profile": null,
+          "tenant_api": {
+            "put": "400",
+            "batch": null
+          },
+          "python_differs": null,
+          "escalation": null,
+          "refused": "routing_not_mapping"
+        },
+        "t-fs-off": {
+          "targets": null,
+          "policy": [],
+          "rejected_routes": [],
+          "values_not_string": [],
+          "group_by_invalid": [],
+          "unknown_profile": null,
+          "tenant_api": {
+            "put": "ok",
+            "batch": null
+          },
+          "python_differs": null,
+          "escalation": null,
+          "refused": null
         }
       },
       "enforced_group_by_invalid": []
