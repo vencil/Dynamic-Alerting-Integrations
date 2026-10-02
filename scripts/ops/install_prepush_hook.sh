@@ -141,7 +141,7 @@ fi
 target="$hook"
 replaced=""
 if is_ours "$hook" || is_guard_copy "$hook"; then
-    target="$hook"                       # refresh in place
+    target="$hook"                       # refresh, or replace a guard copy
 elif is_precommit "$hook"; then
     # pre-commit keeps the hook file; we take the slot it calls with the full
     # stdin. If something else is already in that slot it is a real hook that
@@ -211,28 +211,34 @@ fi
 exec bash "$_dispatch" "$@"
 VIBE_SHIM_EOF
 
-# ⛔ Never write into the existing file: remove it first. A hook symlinked or
-# hard-linked to a guard in scripts/ops is recognised as a guard copy, and `>`
-# would write through the link into the version-controlled guard.
-if [ -e "$target" ] || [ -L "$target" ]; then
-    is_guard_copy "$target" && replaced=" (replacing a copy of a guard that was there)"
-    command -v rm >/dev/null 2>&1 && rm -f "$target" || {
-        warn "⛔ could not remove $target before writing the shim. Remove it by"
-        warn "   hand, then re-run."
-        exit 1
-    }
+# ⛔ A guard copy is replaced by `mv`, never written into: a hook symlinked or
+# hard-linked to a guard in scripts/ops is identical to it, and `>` would go
+# through the link into the version-controlled guard. Until the `mv`, the old
+# hook stays as it was, so a failure on the way leaves nothing worse.
+out="$target"
+if is_guard_copy "$target"; then
+    replaced=" (replacing a copy of a guard that was there)"
+    out="$target.vibe-new"
 fi
-printf '%s' "$SHIM_BODY" > "$target" || { warn "⛔ could not write $target"; exit 1; }
+printf '%s' "$SHIM_BODY" > "$out" || { warn "⛔ could not write $out"; exit 1; }
 
 # ⛔ Not `|| true`. git SILENTLY IGNORES a hook without the executable bit — it
 # prints one `hint:` line that `advice.ignoredHook=false` turns off — so a
 # swallowed chmod failure leaves a hook file that looks installed and never
 # runs. Measured: with the bit cleared, a direct push to main succeeded with the
 # guard banner absent.
-if ! chmod +x "$target"; then
-    warn "⛔ could not make $target executable. git ignores non-executable hooks"
+if ! chmod +x "$out"; then
+    warn "⛔ could not make $out executable. git ignores non-executable hooks"
     warn "   with only a hint, so the guards would look installed and never run."
     exit 1
+fi
+if [ "$out" != "$target" ]; then
+    command -v mv >/dev/null 2>&1 && mv -f "$out" "$target" || {
+        warn "⛔ could not move $out over $target, a copy of a pre-push guard."
+        warn "   $target is unchanged. Delete it by hand (git holds the same content),"
+        warn "   then re-run."
+        exit 1
+    }
 fi
 
 if [ "$target" = "$legacy" ]; then
