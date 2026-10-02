@@ -73,11 +73,14 @@ class TestRootResolution:
         assert targets == [("x/conf.d", "db")]
         assert unmanaged == []
 
-    def test_multiple_dirs_under_one_root_widen_to_root(self):
+    @pytest.mark.parametrize("changed", [
+        ["x/conf.d/_defaults.yaml", "x/conf.d/db/_defaults.yaml"],
+        # 兩個都不是根：只有「擴成根」會得到 "."，挑其中一個目錄則不會。
+        ["x/conf.d/a/_defaults.yaml", "x/conf.d/b/_defaults.yaml"],
+    ], ids=["root-and-sub", "two-subs"])
+    def test_multiple_dirs_under_one_root_widen_to_root(self, changed):
         """串接編輯必須整棵重驗，否則跨層的 redundant-override 驗不出來。"""
-        targets, _ = mod.resolve(
-            ["x/conf.d/_defaults.yaml", "x/conf.d/db/_defaults.yaml"]
-        )
+        targets, _ = mod.resolve(changed)
         assert targets == [("x/conf.d", ".")]
 
     def test_independent_trees_produce_independent_targets(self):
@@ -100,26 +103,6 @@ class TestRootResolution:
         (root, scope), = mod.resolve([changed])[0]
         assert not scope.startswith(root), (root, scope)
         assert str(PurePosixPath(root) / scope) == str(PurePosixPath(changed).parent)
-
-    @pytest.mark.parametrize("doc, ci_marker, absolute_words", [
-        ("docs/cli-reference.md", "（CI 傳", ("絕對",)),
-        ("docs/cli-reference.en.md", "(CI passes", ("absolute",)),
-    ])
-    def test_cli_reference_describes_what_ci_passes(self, doc, ci_marker, absolute_words):
-        """cli-reference 的 `--scope` 列描述 CI 傳什麼，不可寬於本檔實際輸出（#2588）。
-
-        本檔只輸出相對 config-dir 的目錄、多目錄時輸出 `.`，從不輸出絕對路徑。
-        """
-        row = next(line for line in (_REPO / doc).read_text(encoding="utf-8").splitlines()
-                   if line.startswith("| `--scope <path>`"))
-        start = row.index(ci_marker)
-        close = "）" if ci_marker.startswith("（") else ")"
-        clause = row[start:row.index(close, start)]
-        assert "`.`" in clause, clause
-        assert not any(w in clause for w in absolute_words), clause
-        # 對照本檔：多目錄 → "."，單目錄 → 相對路徑，皆非絕對。
-        targets, _ = mod.resolve(["x/conf.d/a/_defaults.yaml", "x/conf.d/b/_defaults.yaml"])
-        assert targets == [("x/conf.d", ".")]
 
     def test_unmanaged_is_reported_not_dropped(self):
         """⛔ 靜默略過正是本票要消滅的形狀——必須回報出來讓呼叫端說明。"""

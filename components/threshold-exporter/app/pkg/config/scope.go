@@ -221,9 +221,11 @@ func scopeEffective(configDir, scopeDir string, wholeTree bool) (*ScopedTenants,
 	if len(scan.Files) == 0 && scan.RootWalkErr != nil {
 		return nil, fmt.Errorf("cannot list configDir %q: %w", absRoot, scan.RootWalkErr)
 	}
-	// A tree whose every config file is unreadable is not "no .yaml files"
-	// either: it goes on with no tenant and its Unreadable entries named (the
-	// caller's exit 3), as when one readable file is beside them (#2588).
+	// A tree the walk kept no file from because every config file is
+	// unreadable, or because its only entries are directories it cannot list,
+	// is not "no .yaml files" either: it goes on with no tenant and its
+	// Unreadable entries named (the caller's exit 3), as when one readable
+	// file is beside them (#2588).
 	if wholeTree && len(scan.Files) == 0 && len(scan.Unreadable) == 0 {
 		return nil, fmt.Errorf("no .yaml files found in %s", configDir)
 	}

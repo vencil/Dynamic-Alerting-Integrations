@@ -604,6 +604,26 @@ func TestUnreadable_EveryFileUnreadable_EffectiveExitsThree(t *testing.T) {
 			},
 			want: []skippedFile{{"t.yaml", config.UnreadableStatError}},
 		},
+		{
+			// No config file the walk can see at all: the only entry is a
+			// sub-directory it cannot list.
+			name:    "only a sub-directory it cannot list",
+			nonRoot: true,
+			breakIt: func(t *testing.T, dir string) {
+				if err := os.Remove(filepath.Join(dir, "t.yaml")); err != nil {
+					t.Fatal(err)
+				}
+				if err := os.Mkdir(filepath.Join(dir, "sub"), 0o755); err != nil {
+					t.Fatal(err)
+				}
+				if err := os.WriteFile(filepath.Join(dir, "sub", "t.yaml"),
+					[]byte("tenants:\n  tenant-t:\n    mysql_connections: 70\n"), 0o644); err != nil {
+					t.Fatal(err)
+				}
+				chmodT(t, filepath.Join(dir, "sub"), 0, 0o755)
+			},
+			want: []skippedFile{{"sub", config.UnreadableWalkError}},
+		},
 	} {
 		t.Run(s.name, func(t *testing.T) {
 			t.Parallel()
