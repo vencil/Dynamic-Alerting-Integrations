@@ -259,10 +259,10 @@ func TestTickOnce_NormalEdit_NoScanFailure(t *testing.T) {
 	if got := testutil.ToFloat64(fresh.reloadTriggers.WithLabelValues(ReloadReasonSource)); got != 1 {
 		t.Errorf("reload_trigger_total{source} = %v, want 1", got)
 	}
-	if n := testutil.CollectAndCount(fresh.scanFailures); n != 2 {
-		t.Errorf("da_config_scan_failures_total has %d series, want 2 (both reasons pre-initialised)", n)
+	if n := testutil.CollectAndCount(fresh.scanFailures); n != len(scanFailureReasons) {
+		t.Errorf("da_config_scan_failures_total has %d series, want %d (every reason pre-initialised)", n, len(scanFailureReasons))
 	}
-	for _, r := range []string{ScanFailureReasonDuplicateTenant, ScanFailureReasonWalkError} {
+	for _, r := range scanFailureReasons {
 		if got := scanFailures(fresh, r); got != 0 {
 			t.Errorf("scan_failures{%s} = %v on a clean reload, want 0", r, got)
 		}

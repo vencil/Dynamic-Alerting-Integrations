@@ -16,9 +16,17 @@ package main
 //     incremented by diffAndReload per-tenant classification.
 //
 //   da_config_scan_failures_total          (CounterVec, labels=[reason])  [#2452]
-//     reason ∈ {duplicate_tenant, walk_error} (closed; classifyScanFailure)
+//     reason ∈ scanFailureReasons (closed; classifyScanFailure)
 //     incremented when a watch-path scan fails — the case that applies
 //     nothing and so never moves da_config_reload_trigger_total.
+//
+//   da_config_unreadable_files             (GaugeVec, labels=[reason])  [#2592]
+//     reason ∈ unreadableFileReasons (pkg/config's UnreadableFile reasons)
+//     re-Set by every walk to that walk's TreeScan.Unreadable.
+//
+//   da_config_defaults_unusable            (GaugeVec, labels=[reason])  [#2592]
+//     reason ∈ defaultsUnusableReasons
+//     re-Set by every directory-mode commit; see SetDefaultsUnusable.
 //
 //   da_config_defaults_change_noop_total   (Counter)
 //     incremented when a defaults file changed but no dependent tenant's
@@ -61,14 +69,18 @@ package main
 
 import (
 	"errors"
+	"fmt"
 	"log"
+	"path"
 	"strings"
 	"sync"
 	"time"
 
 	"github.com/prometheus/client_golang/prometheus"
 
+	"github.com/vencil/threshold-exporter/internal/confdname"
 	"github.com/vencil/threshold-exporter/internal/scrape"
+	"github.com/vencil/threshold-exporter/pkg/config"
 )
 
 // configMetrics bundles the three Phase 4 metrics. A single-instance
@@ -115,33 +127,104 @@ type configMetrics struct {
 	// #2452: failed conf.d tree scans on the watch path, labelled by
 	// ScanFailureReason*. See IncScanFailure.
 	scanFailures *prometheus.CounterVec
+	// #2592: the children of the two state-coded GaugeVecs, one per reason,
+	// resolved once here so the per-walk / per-commit Set does no label
+	// lookup. Keyed by the reason constants below.
+	unreadableFiles  map[string]prometheus.Gauge
+	defaultsUnusable map[string]prometheus.Gauge
 }
 
-// da_config_scan_failures_total{reason} label values (#2452). ⛔ A CLOSED
-// SET — classifyScanFailure maps every scan error onto one of these two, so
-// the counter has at most two series whatever the error text says (the
-// error names files and tenant ids; none of that reaches a label).
+// da_config_scan_failures_total{reason} label values (#2452, #2592). ⛔ A
+// CLOSED SET — classifyScanFailure maps every scan error onto one of
+// scanFailureReasons, so the counter has at most that many series whatever
+// the error text says (the error names files and tenant ids; none of that
+// reaches a label).
 //
-// The split follows the only two ways config.ScanDirTree can fail:
+// Every reason is counted the same way, in BOTH directory modes: the
+// per-tick change check (detectChange) fails, every tick, and tickOnce logs
+// `WARN: cannot check config <dir>: …` (followed by `hierarchical scan: `
+// once a _defaults.yaml has been seen anywhere in the tree — the mode is
+// sticky). No reload is scheduled, so -scan-debounce plays no part, and the
+// tree is frozen at the last good config. A reload scheduled before the
+// failure appeared fails its own scan and counts once more
+// (scanAndCheckHierarchical).
 //   - duplicate_tenant: the walk succeeded but one tenant id is declared in
-//     two files (*config.DuplicateTenantError, TreeScan.Conflict). Counted
-//     in BOTH directory modes, the same way: detectChange fails, every tick,
-//     and tickOnce logs `WARN: cannot check config <dir>: …` — the message
-//     is `hierarchical scan: duplicate tenant ID …` once a _defaults.yaml
-//     has been seen anywhere in the tree (the mode is sticky) and the bare
-//     `duplicate tenant ID …` in flat mode.
-//     No reload is scheduled, so -scan-debounce plays no part. The tree is
-//     frozen at the last good config. (#1577 removed `IncrementalLoad()`,
-//     the one reload entry that skipped this check.)
-//   - walk_error: every other error ScanDirTree returns — the root cannot
-//     be statted, is not a directory, or the walk itself errors. Per-file
-//     stat / read / parse problems are NOT scan failures: the walker logs
-//     them and drops the file (parse failures have their own counter,
-//     da_config_parse_failure_total).
+//     two files (*config.DuplicateTenantError, TreeScan.Conflict). (#1577
+//     removed `IncrementalLoad()`, the one reload entry that skipped this
+//     check.)
+//   - walk_error: the error config.ScanDirTree itself returns — the root
+//     cannot be statted or is not a directory. (Its WalkDir callback never
+//     returns an error, so the walk erroring is not a further source; see
+//     the walkErr branch in pkg/config/tree_scan.go.)
+//   - root_unreadable (#2592): the root is a directory but could not be
+//     listed (TreeScan.RootWalkErr, e.g. permission denied), so the walk saw
+//     nothing, or only part of the root.
+//   - empty_tree (#2592): the walk kept no config file — every file was
+//     deleted, or none of them could be read.
+//
+// The last two used to be no error at all: the scan "succeeded", stamped
+// da_config_last_scan_complete_unixtime_seconds, and the hierarchical reload
+// counted every tenant as reload_trigger{delete} before its commit refused
+// the empty tree — a frozen tree ConfigScanFailing could not see. scanVerdict
+// now rejects them before any reload is scheduled, and config.ScanDirTree
+// does not stamp the gauge for them (TreeScan.Usable).
+//
+// Per-entry stat / read / list problems below the root are NOT scan
+// failures: the walker drops the entry and the rest of the tree applies
+// (da_config_unreadable_files counts them), and parse failures have their
+// own counter, da_config_parse_failure_total.
 const (
 	ScanFailureReasonDuplicateTenant = "duplicate_tenant"
 	ScanFailureReasonWalkError       = "walk_error"
+	ScanFailureReasonRootUnreadable  = "root_unreadable"
+	ScanFailureReasonEmptyTree       = "empty_tree"
 )
+
+// scanFailureReasons is the closed set above; newConfigMetrics pre-creates
+// every member at 0.
+var scanFailureReasons = []string{
+	ScanFailureReasonDuplicateTenant,
+	ScanFailureReasonWalkError,
+	ScanFailureReasonRootUnreadable,
+	ScanFailureReasonEmptyTree,
+}
+
+// unusableTreeError is the scan error scanVerdict returns for a walk that
+// succeeded but yields no tree the exporter may apply (#2592). reason is
+// ScanFailureReasonRootUnreadable or ScanFailureReasonEmptyTree.
+type unusableTreeError struct {
+	reason string
+	root   string
+	cause  error // TreeScan.RootWalkErr for root_unreadable; nil otherwise
+}
+
+func (e *unusableTreeError) Error() string {
+	if e.reason == ScanFailureReasonRootUnreadable {
+		return fmt.Sprintf("cannot list config directory %s: %v (previous config kept)", e.root, e.cause)
+	}
+	return fmt.Sprintf("no .yaml files found in %s (previous config kept)", e.root)
+}
+
+func (e *unusableTreeError) Unwrap() error { return e.cause }
+
+// scanVerdict is the watch path's whole-tree judgement of a scan that
+// config.ScanDirTree returned without error: nil when the tree may be
+// applied, otherwise the scan error to log and count (classifyScanFailure).
+// Shared by detectChange and scanAndCheckHierarchical so the two scans of a
+// changed tick cannot judge one tree differently. ⚠️ ScanDirTree's
+// last-scan-gauge stamp asks the same three questions (TreeScan.Usable);
+// TestScanVerdict_AgreesWithUsable keeps them in step.
+func scanVerdict(scan *treeScan, root string) error {
+	switch {
+	case scan.Conflict != nil:
+		return scan.Conflict
+	case scan.RootWalkErr != nil:
+		return &unusableTreeError{reason: ScanFailureReasonRootUnreadable, root: root, cause: scan.RootWalkErr}
+	case len(scan.Files) == 0:
+		return &unusableTreeError{reason: ScanFailureReasonEmptyTree, root: root}
+	}
+	return nil
+}
 
 // classifyScanFailure maps a scan error onto the closed reason set above.
 func classifyScanFailure(err error) string {
@@ -149,7 +232,37 @@ func classifyScanFailure(err error) string {
 	if errors.As(err, &dup) {
 		return ScanFailureReasonDuplicateTenant
 	}
+	var unusable *unusableTreeError
+	if errors.As(err, &unusable) {
+		return unusable.reason
+	}
 	return ScanFailureReasonWalkError
+}
+
+// da_config_unreadable_files{reason} label values (#2592): pkg/config's
+// closed UnreadableFile.Reason set, used as is, so the label, TreeScan.
+// Unreadable and da-guard's `unreadable` output say the same word.
+var unreadableFileReasons = []string{
+	config.UnreadableStatError,
+	config.UnreadableReadError,
+	config.UnreadableWalkError,
+}
+
+// da_config_defaults_unusable{reason} label values (#2592). A CLOSED SET:
+//   - parse_failure: a `_defaults` file the flat build rejected
+//     (flatScanState.parseFailed), so its whole block is dropped (ADR-017).
+//   - unreadable: a `_defaults` file the walk dropped with stat_error or
+//     read_error (TreeScan.Unreadable). A defaults file inside a directory
+//     the walk could not list is unknown to it; that directory is
+//     da_config_unreadable_files{reason="walk_error"}.
+const (
+	DefaultsUnusableReasonParseFailure = "parse_failure"
+	DefaultsUnusableReasonUnreadable   = "unreadable"
+)
+
+var defaultsUnusableReasons = []string{
+	DefaultsUnusableReasonParseFailure,
+	DefaultsUnusableReasonUnreadable,
 }
 
 // Default metric instance used by the production server. Tests that want
@@ -168,13 +281,24 @@ var (
 // Callers must MustRegister on an isolated prometheus.Registry.
 func newConfigMetrics() *configMetrics {
 	s := scrape.NewConfigMetrics()
-	// #2452: both reasons exist at 0 from the first scrape, so the first
+	// #2452: every reason exists at 0 from the first scrape, so the first
 	// failure is an increase() Prometheus can see (a series born at 1 has
 	// no earlier sample to rise from) and a healthy exporter shows 0.
-	for _, r := range []string{ScanFailureReasonDuplicateTenant, ScanFailureReasonWalkError} {
+	for _, r := range scanFailureReasons {
 		s.ScanFailures.WithLabelValues(r)
 	}
+	// #2592: the two state gauges likewise exist at 0 per reason.
+	unreadable := make(map[string]prometheus.Gauge, len(unreadableFileReasons))
+	for _, r := range unreadableFileReasons {
+		unreadable[r] = s.UnreadableFiles.WithLabelValues(r)
+	}
+	defaultsUnusable := make(map[string]prometheus.Gauge, len(defaultsUnusableReasons))
+	for _, r := range defaultsUnusableReasons {
+		defaultsUnusable[r] = s.DefaultsUnusable.WithLabelValues(r)
+	}
 	return &configMetrics{
+		unreadableFiles:             unreadable,
+		defaultsUnusable:            defaultsUnusable,
 		set:                         s,
 		scanDuration:                s.ScanDuration,
 		reloadTriggers:              s.ReloadTriggers,
@@ -455,4 +579,63 @@ func (cm *configMetrics) SetConfigShape(s configShape) {
 // Called once, by LoadInitial, when that load succeeds.
 func (cm *configMetrics) SetInitialLoadDuration(d time.Duration) {
 	cm.initialLoadDuration.Set(d.Seconds())
+}
+
+// SetUnreadableFiles publishes one walk's TreeScan.Unreadable as
+// da_config_unreadable_files{reason} (#2592): every reason is re-Set, the
+// ones absent from us to 0, so the gauge follows the tree back down once the
+// files are readable again. Called by scanDirTree on every walk that returns
+// a scan — including one scanVerdict then rejects, so a tree whose every
+// file is unreadable shows them here beside scan_failures{empty_tree}. A
+// walk that returns an error (root missing) leaves the gauge as it was.
+// Nil-receiver safe (see IncParseFailure).
+func (cm *configMetrics) SetUnreadableFiles(us []config.UnreadableFile) {
+	if cm == nil {
+		return
+	}
+	var stat, read, walk int
+	for _, u := range us {
+		switch u.Reason {
+		case config.UnreadableStatError:
+			stat++
+		case config.UnreadableReadError:
+			read++
+		case config.UnreadableWalkError:
+			walk++
+		}
+	}
+	cm.unreadableFiles[config.UnreadableStatError].Set(float64(stat))
+	cm.unreadableFiles[config.UnreadableReadError].Set(float64(read))
+	cm.unreadableFiles[config.UnreadableWalkError].Set(float64(walk))
+}
+
+// SetDefaultsUnusable publishes how many `_defaults` files the config being
+// committed cannot use, as da_config_defaults_unusable{reason} (#2592).
+// parseFailed is the commit's flatScanState.parseFailed (scan keys); us is
+// the same scan's TreeScan.Unreadable. Only `_defaults` files count
+// (confdname.IsDefaults, the predicate the walker classifies with), at any
+// level: a nested one drops its subtree's block the way the root one drops
+// everybody's. Both reasons are re-Set on every directory-mode commit, so
+// the gauge stays up for exactly as long as the file stays unusable —
+// da_config_parse_failure_total, by contrast, moves only when a reload
+// reads the file, so an increase() over it decays to 0 while the defaults
+// are still gone.
+// Nil-receiver safe (see IncParseFailure).
+func (cm *configMetrics) SetDefaultsUnusable(parseFailed []string, us []config.UnreadableFile) {
+	if cm == nil {
+		return
+	}
+	var broken, unreadable int
+	for _, k := range parseFailed {
+		if confdname.IsDefaults(path.Base(k)) {
+			broken++
+		}
+	}
+	for _, u := range us {
+		if u.Reason != config.UnreadableWalkError && confdname.IsDefaults(path.Base(u.RelKey)) {
+			unreadable++
+		}
+	}
+	cm.defaultsUnusable[DefaultsUnusableReasonParseFailure].Set(float64(broken))
+	cm.defaultsUnusable[DefaultsUnusableReasonUnreadable].Set(float64(unreadable))
 }

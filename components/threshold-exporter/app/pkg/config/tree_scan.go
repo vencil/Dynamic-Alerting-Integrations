@@ -420,8 +420,9 @@ func (s *TreeScan) InheritanceGraph() *InheritanceGraph {
 // the walker directly keep it: the scan duration is observed on EVERY call
 // including error returns (a scan that errors out fast is itself useful
 // signal), and the last-scan-complete gauge is stamped ONLY on a clean
-// success — never on an error and never on a duplicate-tenant conflict, so
-// a rejected tree cannot look like a completed scan. logger nil falls back
+// success — never on an error, a duplicate-tenant conflict, an unlistable
+// root or a tree with no kept file (TreeScan.Usable, #2592), so a rejected
+// tree cannot look like a completed scan. logger nil falls back
 // to log.Default().
 func ScanDirTree(root string, prior *TreeScan, obs ScanObserver, logger *log.Logger) (*TreeScan, error) {
 	if logger == nil {
@@ -435,10 +436,21 @@ func ScanDirTree(root string, prior *TreeScan, obs ScanObserver, logger *log.Log
 	if err != nil {
 		return nil, err
 	}
-	if scan.Conflict == nil && obs != nil {
+	if obs != nil && scan.Usable() {
 		obs.SetLastScanComplete(time.Now())
 	}
 	return scan, nil
+}
+
+// Usable reports whether the scan is a whole tree a consumer may apply: no
+// duplicate-tenant Conflict, the root itself was listed (RootWalkErr nil),
+// and at least one config file was kept. It is the condition for
+// ScanDirTree's last-scan-complete stamp (#2592): an unlistable root or an
+// emptied tree is a frozen exporter, not a completed scan, and stamping it
+// kept ConfigScanFailing quiet. Package main's scanVerdict asks the same
+// three questions to pick a scan-failure reason.
+func (s *TreeScan) Usable() bool {
+	return s.Conflict == nil && s.RootWalkErr == nil && len(s.Files) > 0
 }
 
 // walkMode selects how much of the tree walkDirTree visits. Unexported on
@@ -707,6 +719,13 @@ func walkDirTree(root string, prior *TreeScan, obs ScanObserver, logger *log.Log
 		entries = append(entries, entry{abs: filepath.Clean(path), rel: filepath.ToSlash(rel), stat: st, link: link})
 		return nil
 	})
+	// ⚠️ Unreachable today (#2592): the callback above returns only nil or
+	// fs.SkipDir, and WalkDir turns SkipDir into nil, so a walk error never
+	// gets here — it is logged (and, below the root, recorded in Unreadable;
+	// on the root, in RootWalkErr) by the callback instead. Kept so that a
+	// future callback returning a real error fails the scan rather than
+	// being dropped; the root's own stat failures are the error returns
+	// above.
 	if walkErr != nil {
 		return nil, fmt.Errorf("walk %q: %w", absRoot, walkErr)
 	}

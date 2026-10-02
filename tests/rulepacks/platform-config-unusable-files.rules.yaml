@@ -1,0 +1,27 @@
+# Bare-rules promtool target for the ConfigFilesUnreadable and
+# ConfigDefaultsUnusable alerts (#2592). promtool can't consume the deployed
+# ConfigMap directly (it needs a top-level `groups:` document, not
+# `data: platform-alert.yml: |`), so this is an EXTRACTED COPY of the two
+# alerts from k8s/03-monitoring/configmap-rules-platform.yaml.
+#
+# ⚠️ KEEP IN SYNC with that ConfigMap — the expr/for/labels/summary here must match
+# byte-for-byte. tests/rulepacks/test_platform_rules_extract_sync.py enforces it.
+groups:
+  - name: platform-self-monitoring
+    rules:
+      - alert: ConfigFilesUnreadable
+        expr: da_config_unreadable_files > 0
+        for: 10m
+        labels:
+          severity: warning
+          alert_source: platform
+        annotations:
+          summary: "Threshold-exporter cannot read conf.d entries ({{ $labels.reason }}) — tenants in them are not served"
+      - alert: ConfigDefaultsUnusable
+        expr: da_config_defaults_unusable > 0
+        for: 10m
+        labels:
+          severity: critical
+          alert_source: platform
+        annotations:
+          summary: "Threshold-exporter cannot use a _defaults.yaml ({{ $labels.reason }}) — inherited thresholds dropped"

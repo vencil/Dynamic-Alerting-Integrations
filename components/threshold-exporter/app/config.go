@@ -497,6 +497,14 @@ func (m *ConfigManager) commitConfig(cfg *ThresholdConfig, hash string, flatScan
 	// maps (the merged cfg here would overstate a tenant's own mapping).
 	if flatScan != nil {
 		m.getMetrics().SetConfigShape(configShapeOfFiles(flatScan.configs))
+		// #2592: the `_defaults` files this commit could not use — state,
+		// not an event, so a broken or unreadable root `_defaults.yaml`
+		// stays visible for as long as its block is missing.
+		var unreadable []config.UnreadableFile
+		if flatScan.tree != nil {
+			unreadable = flatScan.tree.Unreadable
+		}
+		m.getMetrics().SetDefaultsUnusable(flatScan.parseFailed, unreadable)
 	}
 
 	// #1521: the flat scanner that produced `cfg` is not recursive while
@@ -2039,8 +2047,14 @@ func (m *ConfigManager) detectChange() (bool, string, error) {
 	// the debounce timer before it could fire, so that reload never ran and
 	// the duplicate was never counted. Failing here sends both modes down
 	// tickOnce's WARN + IncScanFailure path, once per tick.
-	if err == nil && scan.Conflict != nil {
-		err = scan.Conflict
+	//
+	// #2592: so is a root that cannot be listed, or a tree with no usable
+	// file (scanVerdict). Both used to read as "every file removed": the
+	// tree stayed frozen anyway (the commit refuses an empty tree), but the
+	// scan counted as clean and, in hierarchical mode, every tenant was
+	// counted as a delete on every tick.
+	if err == nil {
+		err = scanVerdict(scan, m.path)
 	}
 	if hierarchical {
 		if err != nil {

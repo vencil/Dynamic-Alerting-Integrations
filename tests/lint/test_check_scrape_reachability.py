@@ -105,10 +105,12 @@ def _jobs_without_monitoring_ns():
     return jobs
 
 
-# The 15 threshold-exporter series both rule trees consume (#1285; the last
-# two, da_config_scan_failures_total and
-# da_config_last_scan_complete_unixtime_seconds, since #2452's
-# ConfigScanFailing). All emitted
+# The 17 threshold-exporter series both rule trees consume (#1285;
+# da_config_scan_failures_total and
+# da_config_last_scan_complete_unixtime_seconds since #2452's
+# ConfigScanFailing; da_config_unreadable_files and
+# da_config_defaults_unusable since #2592's ConfigFilesUnreadable /
+# ConfigDefaultsUnusable). All emitted
 # by one binary / one registry / one /metrics handler, so all share ONE scrape
 # provenance — the threshold-exporter Service in ns `monitoring`. Two DIFFERENT
 # declaration sites feed that one registry, and both must be named here so
@@ -118,7 +120,7 @@ def _jobs_without_monitoring_ns():
 #       da_tenant_metrics_over_limit (per-scrape ConstMetric); wired in by
 #       components/threshold-exporter/app/collector.go
 #   components/threshold-exporter/app/internal/scrape/config_metrics.go — the
-#       other 7 da_* (cumulative collectors, registered onto the same registry);
+#       other 9 da_* (cumulative collectors, registered onto the same registry);
 #       mutated through components/threshold-exporter/app/config_metrics.go
 #   components/threshold-exporter/app/main.go            — mounts the handler
 _THRESHOLD_EXPORTER_METRICS = (
@@ -130,6 +132,8 @@ _THRESHOLD_EXPORTER_METRICS = (
     "da_config_parse_failure_total",
     "da_config_reload_trigger_total",
     "da_config_scan_failures_total",
+    "da_config_unreadable_files",
+    "da_config_defaults_unusable",
     "da_tenant_metrics_over_limit",
     "user_severity_dedup",
     "user_silent_mode",

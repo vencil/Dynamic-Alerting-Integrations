@@ -544,17 +544,20 @@ data:
           # and /ready stays 200 (by decision), so every later edit — to ANY
           # tenant — is silently ignored until the tree is fixed.
           # da_config_scan_failures_total{reason} counts each failed
-          # watch-path scan (reason ∈ {duplicate_tenant, walk_error}, a
-          # closed set; both pre-initialised at 0). Both directory modes:
-          # the flat mode (no _defaults.yaml) rejects a duplicate tenant in
-          # its per-tick change check too and freezes the same way.
+          # watch-path scan (reason ∈ {duplicate_tenant, walk_error,
+          # root_unreadable, empty_tree}, a closed set; all pre-initialised
+          # at 0; #2592 added the last two — a root that cannot be listed and
+          # a tree with no usable file used to count as clean scans). Both
+          # directory modes: the flat mode (no _defaults.yaml) rejects them
+          # in its per-tick change check too and freezes the same way.
           #
           # Expression rationale — the question is "has the config been
           # unscannable for more than 5 minutes", NOT "how many failures":
           #   - RHS `(time() - da_config_last_scan_complete_unixtime_seconds)
           #     > 300`: that gauge is stamped by pkg/config.ScanDirTree only
-          #     on a scan that returned no error AND no duplicate-tenant
-          #     Conflict, on every watch tick of either mode. Its age is how
+          #     on a scan that returned no error, no duplicate-tenant
+          #     Conflict, a listed root and at least one kept file
+          #     (TreeScan.Usable), on every watch tick of either mode. Its age is how
           #     long the tree has been unscannable, independent of how many
           #     ticks --reload-interval (a public Helm value) fits into the
           #     window, and the first clean
@@ -611,11 +614,87 @@ data:
                 once a _defaults.yaml has been seen anywhere in the tree).
                 Remove one declaration.
                 walk_error = the config directory is missing or not a
-                directory. Once the
-                duplicate declaration is removed the next tick reloads the
+                directory. root_unreadable = it exists but cannot be listed
+                (permissions; log "cannot list config directory").
+                empty_tree = it holds no usable config file (all deleted, or
+                none readable — see da_config_unreadable_files). Once the
+                cause is fixed the next tick reloads the
                 tree (pending edits included), no restart needed, and the
                 alert resolves once that tick's successful scan is scraped.
               runbook_url: "https://github.com/vencil/Dynamic-Alerting-Integrations/blob/main/docs/troubleshooting.md"
+
+          # --- Config Files Unreadable (issue #2592) ---
+          # A conf.d entry below the root that the walk cannot stat, read or
+          # list is DROPPED, not a scan failure: the rest of the tree keeps
+          # reloading, so ConfigScanFailing stays quiet by design — but the
+          # tenants in that file (or under that directory) are no longer
+          # served, and before #2592 nothing but a WARN log said so.
+          # da_config_unreadable_files{reason} is a state gauge, re-Set by
+          # every walk (reason ∈ {stat_error, read_error, walk_error},
+          # pkg/config's closed UnreadableFile set; all pre-initialised at 0),
+          # so it stays up exactly as long as the entries are unreadable.
+          # `for: 10m` rides out a deploy that writes a file before fixing its
+          # mode. warning, like ConfigParseFailure: the per-file loss of a
+          # tenant. promtool:
+          # tests/rulepacks/platform-config-unusable-files_test.yaml.
+          - alert: ConfigFilesUnreadable
+            expr: da_config_unreadable_files > 0
+            for: 10m
+            labels:
+              severity: warning
+              alert_source: platform
+            annotations:
+              summary: "Threshold-exporter cannot read conf.d entries ({{ $labels.reason }}) — tenants in them are not served"
+              description: |
+                {{ $value }} config-named entr(ies) under the conf.d tree of
+                {{ $labels.instance }} could not be used for more than 10
+                minutes ({{ $labels.reason }}): stat_error = the file (or a
+                symlink's target) cannot be statted, e.g. a dangling link;
+                read_error = it cannot be read, e.g. permission denied;
+                walk_error = a directory cannot be listed, so nothing under
+                it is loaded. Every tenant declared there has no thresholds
+                on /metrics, while every other tenant keeps reloading. The
+                exporter log names each entry ("WARN: cannot read ...",
+                "WARN: cannot stat ...", "WARN: walk error at ..."). Fix the
+                file mode / ownership or the link; the next tick picks it up.
+              runbook_url: "https://github.com/vencil/Dynamic-Alerting-Integrations/blob/main/docs/troubleshooting.md"
+
+          # --- Config Defaults Unusable (issue #2592) ---
+          # ConfigDefaultsParseFailure above is an EVENT alert: its counter
+          # moves only on the reload that reads the broken file, so the
+          # alert resolves about 5 minutes later while the defaults block is
+          # still dropped (and an UNREADABLE `_defaults.yaml` never moves the
+          # counter at all). With the root one gone every tenant loses the
+          # thresholds it inherits — their user_threshold series disappear.
+          # da_config_defaults_unusable{reason} is the state: the number of
+          # `_defaults.yaml` files (either spelling, any level) the committed
+          # config could not use, reason ∈ {parse_failure, unreadable},
+          # re-Set on every commit, so this fires for as long as the file is
+          # unusable and resolves on the commit that can read it again.
+          # critical, like ConfigDefaultsParseFailure. promtool:
+          # tests/rulepacks/platform-config-unusable-files_test.yaml (fires
+          # within 10m and keeps firing while the file stays broken).
+          - alert: ConfigDefaultsUnusable
+            expr: da_config_defaults_unusable > 0
+            for: 10m
+            labels:
+              severity: critical
+              alert_source: platform
+            annotations:
+              summary: "Threshold-exporter cannot use a _defaults.yaml ({{ $labels.reason }}) — inherited thresholds dropped"
+              description: |
+                {{ $value }} `_defaults.yaml` file(s) under the conf.d tree
+                of {{ $labels.instance }} have been unusable for more than
+                10 minutes ({{ $labels.reason }}). Per ADR-017 the whole
+                defaults block of such a file is dropped: every tenant below
+                it loses the thresholds it inherits from it (for the ROOT
+                file, every tenant — those user_threshold series are gone).
+                parse_failure = the YAML does not parse (exporter log:
+                "ERROR: skip unparseable defaults/profiles file ...");
+                unreadable = it cannot be statted or read (log: "WARN:
+                cannot read ..." / "WARN: cannot stat ..."). Fix the file;
+                the next tick reloads and the alert resolves.
+              runbook_url: "https://github.com/vencil/Dynamic-Alerting-Integrations/blob/main/docs/adr/017-defaults-yaml-inheritance-dual-hash.md"
 
           # --- Tenant Cardinality Cap Truncation (issue #652) ---
           # Companion to the v1.5.0 runtime per-tenant cardinality cap
