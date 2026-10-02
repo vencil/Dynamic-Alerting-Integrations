@@ -19,6 +19,13 @@ matrix is pinned to. ⛔ Reused, not re-derived: the source globs
 (`SKIP_REPO_PREFIXES`, `LOCAL_BUILT_IMAGES`) come from the extractor, so there
 is no second list here to drift from it.
 
+⛔ `discover_refs()` returns only refs with a usable tag, so a ref with NO tag
+(`image: nginx`, i.e. `:latest`; or a values block with `tag: ""`) never
+reached the rule above and added nothing red (#2605 R, the post-hoc review of
+#2600). `discover_dropped_refs()` reports exactly those — same sources, same
+third-party filter — and `test_no_thirdparty_ref_is_dropped_for_lack_of_a_tag`
+asserts it is empty.
+
 Relation to `test_renovate_config.py`'s `EXPECTED_DEPNAMES`: not asserted here,
 because it is already implied. Once every extractor ref carries a digest, the
 scan matrix (pinned to the extractor by set equality) does too, so Renovate's
@@ -41,10 +48,6 @@ digest, values + template + matrix + EXPECTED count updated but
   overlay that overrides only `tag:`, is not in `discover_refs()`; those are
   pushed INTO this set indirectly — `test_nightly_scan_matrix_drift.py` demands
   them in the scan matrix, and the matrix must equal this set.
-* **A third-party ref with no tag at all** (`image: nginx`, i.e. `:latest`).
-  `discover_refs()` keeps only refs with a `:` or `@` in the last path segment
-  (`_is_concrete`), so such a ref never reaches this rule and adding one stays
-  green. Found by the #2605 R post-hoc review of #2600; fixed separately.
 * **Grafana plugins** are not images. Their version pin is a separate rule:
   `test_grafana_plugins_are_version_pinned.py` (TRK-2605, runbook §7.6 T5).
 """
@@ -90,6 +93,38 @@ def test_every_thirdparty_image_ref_is_digest_pinned() -> None:
           "If the image is actually first-party, it belongs under "
           f"{_cir.SKIP_REPO_PREFIXES} instead."
     )
+
+
+def test_no_thirdparty_ref_is_dropped_for_lack_of_a_tag() -> None:
+    dropped = sorted(_cir.discover_dropped_refs(REPO))
+    assert not dropped, (
+        "third-party image ref(s) with no usable tag — `discover_refs()` skips "
+        "them, so the digest rule above never sees them:\n"
+        + "\n".join(f"  - {r}" for r in dropped)
+        + "\nPin them like any other third-party image (`tag` + `digest`, or "
+          "`repo:tag@sha256:…`). A YAML `tag: 11` is an int, not a string: quote it."
+    )
+
+
+def test_the_dropped_collector_reports_what_it_must() -> None:
+    """Control for the test above: what the extractor drops must reach the
+    collector, and only third-party, non-template refs may count."""
+    def dropped_of(doc) -> set[str]:
+        out: set[str] = set()
+        _cir._refs_from_node(doc, out)
+        return out
+
+    assert dropped_of({"image": "nginx"}) == {"nginx"}
+    assert dropped_of({"image": {"repository": "nginx", "tag": ""}}) == {"nginx (tag: '')"}
+    assert dropped_of({"image": {"repository": "mariadb", "tag": 11}}) == {"mariadb (tag: 11)"}
+    assert dropped_of({"image": {"repository": "nginx", "digest": ""}}) == {"nginx (tag: None)"}
+    for clean in ({"image": "nginx:1.27.0"},
+                  {"image": "{{ .Values.image }}"},
+                  {"image": {"repository": "nginx", "tag": "1.27.0"}},
+                  {"source": {"repository": "https://example.com/r.git"}}):
+        assert dropped_of(clean) == set(), clean
+    # the public function applies the same first-party / local-build filter
+    assert _cir._keep("nginx") and not _cir._keep("ghcr.io/vencil/da-portal")
 
 
 def test_the_rule_has_subjects() -> None:
