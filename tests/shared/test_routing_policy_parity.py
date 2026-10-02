@@ -26,6 +26,10 @@ What this half measures, per tree written to a tmp dir:
 * `policy` — the receiver-type lines `check_domain_policies` (strict) put in
   `schema_warnings`, parsed back to (domain, ref, constraint);
 * `unknown_profile` — the `_routing_profile references unknown profile` WARN;
+* `refused` (#2341) — the blocking WARN for a `_routing` that is neither a
+  mapping nor a disabling string (`routing_not_mapping`) or for a tenant id
+  the routing plane refuses (`invalid_tenant_id`; the `tenant_ids` table pins
+  `_lib_validation.is_valid_tenant_id` itself);
 * `escalation` (#2325) — the `require_critical_escalation` lines
   `check_domain_policies` (strict) put in `schema_warnings` (the non-compliance
   ERROR, one WARN per leaking destination, in render order), for the domains
@@ -33,6 +37,7 @@ What this half measures, per tree written to a tmp dir:
   policies only: no row carries the constraint in a subtree policy yet, and
   `_escalation` asserts on any line from a domain not listed here);
 * `platform` — the generator's blocking `_routing_defaults.routes` WARN, its
+  blocking non-mapping `_routing_defaults` WARN (#2341), its
   strict non-boolean `require_critical_escalation` line (#2325,
   `domain_policy_unusable`, kind and field only: the line names no file) and
   (#2326) its routing-tree findings, `TenantTree.routing_tree_problems`; the
@@ -44,6 +49,7 @@ disagree (see the matrix `_comment`).
 """
 from __future__ import annotations
 
+import ast
 import json
 import re
 import sys
@@ -57,20 +63,23 @@ sys.path.insert(0, str(REPO_ROOT / "scripts" / "tools"))
 sys.path.insert(0, str(REPO_ROOT / "scripts" / "tools" / "ops"))
 from _grar_parse import BLOCKING_TREE_KINDS, _parse_config_files, load_tenant_tree  # noqa: E402
 from _grar_validate import list_tenant_subroutes, route_entry_matchers  # noqa: E402
+from _lib_validation import is_valid_tenant_id  # noqa: E402
 
 MATRIX = json.loads((Path(__file__).parent / "routing_policy_parity_matrix.json")
                     .read_text(encoding="utf-8"))
 
 # Exact key sets: a misspelt key read as absent would turn a row into one
 # that tests nothing while staying green.
-TOP_KEYS = {"_comment", "blocking_kinds", "trees"}
+TOP_KEYS = {"_comment", "blocking_kinds", "tenant_ids", "trees"}
 TREE_KEYS = {"name", "files", "platform", "expect", "enforced_group_by_invalid"}
 PLATFORM_KINDS = {"routing_defaults_routes_ignored", "routing_in_unread_location",
                   "domain_policy_unusable",
                   # #2326: the hierarchical routing plane's tree findings.
                   "routing_enforced_below_root", "routing_defaults_null_below_root",
                   "routing_profile_duplicate", "duplicate_tenant",
-                  "domain_policy_out_of_scope"}
+                  "domain_policy_out_of_scope",
+                  # #2341: a `_routing_defaults` that is not a mapping.
+                  "routing_defaults_not_mapping"}
 # #2291: routing where the generator never reads it. The Go side reports it;
 # the generator says nothing (it does not read those bytes), so this half
 # leaves the kind out of its platform comparison — the tree's `targets`
@@ -78,7 +87,8 @@ PLATFORM_KINDS = {"routing_defaults_routes_ignored", "routing_in_unread_location
 GO_ONLY_PLATFORM_KINDS = {"routing_in_unread_location"}
 EXPECT_KEYS = {"targets", "policy", "rejected_routes", "values_not_string",
                "group_by_invalid", "unknown_profile", "tenant_api",
-               "python_differs", "escalation"}
+               "python_differs", "escalation", "refused"}
+REFUSED_KINDS = {"routing_not_mapping", "invalid_tenant_id"}
 GROUP_BY_KINDS = {"not_string", "empty", "duplicate", "wildcard_mixed"}
 ESCALATION_KEYS = {"verdict", "leaks"}
 ESCALATION_VERDICTS = {"compliant", "violation"}
@@ -116,6 +126,13 @@ _ENFORCED_GROUP_BY = re.compile(
     r"(?P<why>is an empty string|repeats label|is '\.\.\.' alongside|is .*?, not a string)")
 _GROUP_BY_WHY = {"is an empty string": "empty", "repeats label": "duplicate",
                  "is '...' alongside": "wildcard_mixed"}
+# #2341: the blocking lines for routing that cannot be read at all.
+_DEFAULTS_NOT_MAPPING = re.compile(
+    r"WARN: _routing_defaults in (?P<file>\S+) must be a mapping, got ")
+_ROUTING_NOT_MAPPING = re.compile(
+    r"WARN: (?P<tenant>\S+): _routing must be a mapping or a disabling string")
+_INVALID_TENANT_ID = re.compile(
+    r"WARN: tenant id (?P<repr>'(?:[^'\\]|\\.)*'|\"(?:[^\"\\]|\\.)*\") is not a valid tenant id")
 _UNKNOWN_PROFILE = re.compile(
     r"WARN: (?P<tenant>\S+): _routing_profile references unknown profile '(?P<name>[^']*)'")
 # #2325: the require_critical_escalation lines — the non-compliance line
@@ -143,6 +160,17 @@ def test_blocking_kinds_are_the_generators() -> None:
     asserts `routingpolicy.IsBlocking` against the same list."""
     assert set(MATRIX["blocking_kinds"]) == set(BLOCKING_TREE_KINDS)
     assert set(MATRIX["blocking_kinds"]) <= PLATFORM_KINDS
+
+
+def test_tenant_id_table() -> None:
+    """#2341 R8: the routing plane's tenant-id predicate, both columns."""
+    table = MATRIX["tenant_ids"]
+    assert set(table) == {"valid", "invalid"} and table["valid"] and table["invalid"]
+    assert "" in table["invalid"]
+    for tid in table["valid"]:
+        assert is_valid_tenant_id(tid), repr(tid)
+    for tid in table["invalid"]:
+        assert not is_valid_tenant_id(tid), repr(tid)
 
 
 def test_matrix_is_not_vacuous() -> None:
@@ -179,9 +207,11 @@ def test_matrix_keys_are_exactly_the_known_ones() -> None:
                 assert api["put"] in ("403", "400", "ok"), where
                 batch = api["batch"]
                 assert batch is None or (set(batch) == BATCH_KEYS
-                                         and batch["verdict"] in ("ok", "policy_violation")), where
+                                         and batch["verdict"] in ("ok", "policy_violation", "400")), where
             differs = want["python_differs"]
             assert differs is None or (set(differs) == DIFFERS_KEYS and differs["reason"]), where
+            assert want["refused"] is None or want["refused"] in REFUSED_KINDS, where
+            assert want["refused"] is None or want["targets"] is None, where
             esc = want["escalation"]
             assert esc is None or (set(esc) == ESCALATION_KEYS
                                    and esc["verdict"] in ESCALATION_VERDICTS
@@ -291,6 +321,11 @@ def test_python_reader_matches_the_table(tree, tmp_path: Path) -> None:
 
     rows = _policy_rows(got.schema_warnings)
     unknown = {m["tenant"]: m["name"] for m in map(_UNKNOWN_PROFILE.search, got.schema_warnings) if m}
+    refused = {m["tenant"]: "routing_not_mapping"
+               for m in map(_ROUTING_NOT_MAPPING.search, got.schema_warnings) if m}
+    refused.update({ast.literal_eval(m["repr"]): "invalid_tenant_id"
+                    for m in map(_INVALID_TENANT_ID.search, got.schema_warnings) if m})
+    assert set(refused) <= set(tree["expect"]), (tree["name"], refused)
     for tenant, want in tree["expect"].items():
         where = (tree["name"], tenant)
         rc = got.routing_configs.get(tenant)
@@ -306,6 +341,7 @@ def test_python_reader_matches_the_table(tree, tmp_path: Path) -> None:
         mine = sorted((d, r, c) for t, d, r, c in rows if t == tenant)
         assert mine == sorted(tuple(p) for p in _want(want, "policy")), (where, mine)
         assert unknown.get(tenant) == want["unknown_profile"], (where, unknown)
+        assert refused.get(tenant) == want["refused"], (where, refused)
         esc = _escalation(tenant, rc, _requiring_domains(policies, tenant), got.schema_warnings)
         assert esc == want["escalation"], (where, esc)
 
@@ -313,6 +349,8 @@ def test_python_reader_matches_the_table(tree, tmp_path: Path) -> None:
     got_platform = sorted(
         [["routing_defaults_routes_ignored", m["file"], "_routing_defaults.routes"]
          for m in map(_DEFAULTS_ROUTES.search, got.schema_warnings) if m]
+        + [["routing_defaults_not_mapping", m["file"], "_routing_defaults"]
+           for m in map(_DEFAULTS_NOT_MAPPING.search, got.schema_warnings) if m]
         # #2326: the tree findings travel as data on the tree, not as text.
         + [[kind, fname, fld] for kind, fname, fld, _msg in got.routing_tree_problems])
     # domain_policy_unusable (#2325) is compared on kind and field below.

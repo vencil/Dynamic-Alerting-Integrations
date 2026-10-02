@@ -6,6 +6,7 @@ import (
 	"strings"
 
 	"github.com/vencil/tenant-api/internal/confd"
+	"github.com/vencil/threshold-exporter/pkg/routingpolicy"
 )
 
 // ValidateTenantID checks that a tenant ID is safe for use as a filename.
@@ -37,5 +38,22 @@ func ValidateTenantID(id string) error {
 	// These checks must keep agreeing with confd.IsAddressableTenantID, the
 	// predicate the write plane gates on; that is asserted by
 	// TestValidateTenantIDAgreesWithTheSharedPredicate, not by a branch here.
+	return nil
+}
+
+// ValidateWritableTenantID is ValidateTenantID for a request that writes the
+// tenant (PUT, its dry-run, custom-alerts PUT, batch ops), plus one more
+// refusal (#2341 R8): an id the route generator renders nothing for —
+// routingpolicy.IsValidTenantID, the predicate da-guard reports as
+// invalid_tenant_id (empty, or a character outside letters, digits, `_`,
+// `-`). Reads keep ValidateTenantID alone, so an existing tenant with such an
+// id can still be looked at.
+func ValidateWritableTenantID(id string) error {
+	if err := ValidateTenantID(id); err != nil {
+		return err
+	}
+	if !routingpolicy.IsValidTenantID(id) {
+		return fmt.Errorf("tenant ID %q is not valid: only letters, digits, '_' and '-' are allowed (the route generator renders nothing for any other id)", id)
+	}
 	return nil
 }

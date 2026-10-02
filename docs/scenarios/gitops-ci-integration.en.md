@@ -451,7 +451,7 @@ repos:
         name: Generate Alertmanager routes (validate)
         entry: >-
           ghcr.io/vencil/da-tools:latest
-          generate-routes --config-dir "/src/conf.d" --validate
+          generate-routes --config-dir "/src/conf.d" --validate --strict
         language: docker_image
         files: ^conf\.d/.*\.ya?ml$
         pass_filenames: false
@@ -461,7 +461,7 @@ repos:
 
 Trade-off, stated: that mount is the **whole repo, read-write** — wider than the read-only `conf.d` mount the hand-written form asked for. It is pre-commit's own mechanism, and a hook that cannot run protects nothing.
 
-Every commit touching `conf.d/` files runs local validation (`da-validate-config`) plus a read-only routing validation (`da-generate-routes`, `--validate`).
+Every commit touching `conf.d/` files runs local validation (`da-validate-config`) plus a read-only routing validation (`da-generate-routes`, `--validate --strict`).
 
 ## 5. End-to-End Workflow Example
 

@@ -233,7 +233,7 @@ func runBatchPR(d *Deps, rw http.ResponseWriter, r *http.Request, ops []BatchOpe
 	advisoriesByTenant := map[string][]string{}
 	var advisoryTenants []string
 	for _, op := range ops {
-		if err := ValidateTenantID(op.TenantID); err != nil {
+		if err := ValidateWritableTenantID(op.TenantID); err != nil {
 			batchResults = append(batchResults, BatchResult{TenantID: op.TenantID, Status: "error", Message: err.Error()})
 			continue
 		}

@@ -460,6 +460,26 @@ func TestCheckDefaultsImpact_PassedCountExcludesErroringTenants(t *testing.T) {
 	}
 }
 
+// #2341 R8: a tenant with the EMPTY id fails on its invalid_tenant_id
+// finding like any other erroring tenant — its TenantID "" must not read as
+// a platform finding in the roll-up.
+func TestCheckDefaultsImpact_EmptyTenantIDFails(t *testing.T) {
+	t.Parallel()
+	r, err := CheckDefaultsImpact(CheckInput{
+		EffectiveConfigs: map[string]map[string]any{
+			"":     {"thresholds": map[string]any{}},
+			"t-ok": {"thresholds": map[string]any{}},
+		},
+		InvalidTenantIDs: map[string]string{"": "bad.yaml"},
+	})
+	if err != nil {
+		t.Fatalf("CheckDefaultsImpact: %v", err)
+	}
+	if r.Summary.Errors != 1 || r.Summary.PassedTenantCount != 1 {
+		t.Errorf("Errors = %d, PassedTenantCount = %d; want 1 and 1", r.Summary.Errors, r.Summary.PassedTenantCount)
+	}
+}
+
 func TestCheckDefaultsImpact_WarningsAlonePass(t *testing.T) {
 	t.Parallel()
 	r, err := CheckDefaultsImpact(CheckInput{

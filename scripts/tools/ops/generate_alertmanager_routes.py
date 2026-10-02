@@ -802,7 +802,12 @@ def _build_parser() -> argparse.ArgumentParser:
                              "or overrides[].alertname / metric_group that PyYAML "
                              "reads as a non-string (yes, 1:30, ~; #2431 — quote "
                              "it), a group_by entry that is not a non-empty string, "
-                             "repeats a label or mixes '...' with labels (#2503) "
+                             "repeats a label or mixes '...' with labels (#2503), "
+                             "a tenant _routing that is neither a mapping nor a "
+                             "disabling string, a _routing_defaults that is not "
+                             "a mapping, or a tenant id that is empty or has a "
+                             "character other than letters, digits, '_' and '-' "
+                             "(#2341) "
                              "and, on the --apply/--output-configmap "
                              "merge, any inhibit rule with an ungated `equal:` label "
                              "(#1132). Without --strict these surface as WARN (an "
@@ -941,6 +946,20 @@ def main() -> None:
     has_dedup = bool(dedup_configs)
 
     if not has_routing and not has_dedup and not enforced_routing:
+        # #2341: "nothing to render" can be the result of refusing every
+        # tenant (an invalid tenant id, an unreadable `_routing`): those
+        # lines are blocking here as everywhere else — `--validate` and
+        # `--strict` fail on them, render mode prints them and exits 0.
+        for w in schema_warnings:
+            print(safe_label(w), file=sys.stderr)
+        errors = ((blocking_generation_errors(schema_warnings) if args.validate else [])
+                  + (_policy_errors(schema_warnings) if args.strict else []))
+        if errors:
+            print(f"FAIL: {len(errors)} error(s) found and nothing to render:",
+                  file=sys.stderr)
+            for e in errors:
+                print(safe_label(e), file=sys.stderr)
+            sys.exit(EXIT_VIOLATION)
         print("No tenants found in config directory.")
         sys.exit(EXIT_OK)
 
@@ -989,7 +1008,8 @@ def main() -> None:
         if policy_errors:
             print(f"FAIL: {len(policy_errors)} blocking error(s) under "
                   "--strict (domain policy, unquoted matcher value, "
-                  "invalid group_by entry):",
+                  "invalid group_by entry, unreadable _routing / "
+                  "_routing_defaults, invalid tenant id):",
                   file=sys.stderr)
             for e in policy_errors:
                 print(e, file=sys.stderr)
