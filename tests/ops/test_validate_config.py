@@ -2629,9 +2629,9 @@ class TestRootDefaultsWrapper:
 
     def test_metadata_and_anchor_keys_are_not_named(self, tmp_path):
         """`_metadata` is dropped by the merge at every level, so it reaches
-        neither /effective nor /metrics. `_x` is no reserved key: it does
-        appear in /effective (measured: `_x: 1`), but in no shape on
-        /metrics, so the wrapper never changes what is served for it."""
+        neither /effective nor /metrics. `_x` is no reserved key; the row
+        leaves such `_`-prefixed keys out by design (they are the usual
+        holders of YAML anchors), whatever the merge does with them."""
         d = self._tree(tmp_path, "_metadata:\n  owner: dba\n_x: &x 1\n")
         r = vc.check_root_defaults(str(d))
         assert r["status"] == vc.PASS, r
