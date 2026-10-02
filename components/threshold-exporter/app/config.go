@@ -12,6 +12,7 @@ import (
 
 	"github.com/jonboulle/clockwork"
 
+	"github.com/vencil/threshold-exporter/internal/confdname"
 	"github.com/vencil/threshold-exporter/pkg/config"
 )
 
@@ -643,7 +644,47 @@ func anyNestedKey(groups ...[]string) bool {
 // `isNestedPlatformFile` read a separator as "below the root", so an
 // absolute key would make every file nested, redirect every reload into
 // fullDirLoadFrom, and say nothing — no error, no WARN.
+//
+// ⛔ A SCAN WITH A `_defaults` CARRIER IS REFUSED, NOT HANDLED (#2593). The
+// caller enters here only when `len(scan.Defaults) == 0` and hierarchical
+// mode is off, and the walker puts every `IsDefaults` file — root or nested,
+// selected or not, parseable or not — into `scan.Files` and `scan.Defaults`
+// in the same step, so this scan holds no carrier key. Nor does the cached
+// prior: every commit of a scan that held one went through fullDirLoadFrom
+// or installNewHierarchyState, both of which turn hierarchical mode on, and
+// it never turns off. So changed/added/removed never name a carrier here,
+// and the code that used to handle one — the #1674 root-carrier redirect and
+// the #1569 refused-set recomputation — could not run in production; it was
+// reached only through the removed `IncrementalLoad()` and is gone. With no
+// carrier, `Defaults`, `StateFilters`, `OptionalOverrides` and
+// `MaxMetricsPerTenant` are empty on this path (applyBoundaryRules strips
+// them from every other file), and the refused set has nothing to derive
+// from. A scan that breaks this is a caller bug: refusing it keeps the
+// previous config live, where proceeding would merge a carrier this function
+// no longer knows how to select.
+//
+// ⚠️ BOTH HALVES OF THE SCAN ARE ASKED. `scan.Defaults` is what the caller
+// branches on; the per-key test over `scan.Keys` asks the name itself
+// (confdname.IsDefaults — the predicate the walker and the deleted redirect
+// both used), so a walker that one day files a carrier in `Files` without
+// `Defaults` is refused here too, where the deleted redirect would have
+// caught it. One pass over a slice with no allocation, paid once per reload.
 func (m *ConfigManager) incrementalLoadFrom(scan *treeScan) error {
+	if len(scan.Defaults) != 0 {
+		return fmt.Errorf(
+			"incremental reload of %s was handed a scan with %d `_defaults` carrier(s); "+
+				"only a tree with none reloads incrementally — refusing (previous config kept)",
+			m.path, len(scan.Defaults))
+	}
+	for _, k := range scan.Keys {
+		if confdname.IsDefaults(scanKeyBase(k)) {
+			return fmt.Errorf(
+				"incremental reload of %s was handed a scan whose files include the `_defaults` carrier %s "+
+					"but whose carrier set is empty; only a tree with none reloads incrementally — "+
+					"refusing (previous config kept)",
+				m.path, k)
+		}
+	}
 	m.mu.RLock()
 	prevHash := m.lastHash
 	m.mu.RUnlock()
@@ -706,25 +747,11 @@ func (m *ConfigManager) incrementalLoadFrom(scan *treeScan) error {
 	if anyNestedKey(changed, added, removed) {
 		return m.fullDirLoadFrom(scan)
 	}
-	// ⛔ #1674: an unselected root carrier is never parsed or cached
-	// (isUnselectedRootCarrier), and this path only re-parses changed/added
-	// files — so a carrier that BECOMES selected (`_defaults.yml` once its
-	// `_defaults.yaml` sibling is deleted) would be missing from the cache it
-	// merges, and one that is unselected would be parsed and merged here. The
-	// full load re-reads whatever is uncached and skips the unselected.
-	//
-	// ⚠️ NARROW ON PURPOSE: only when a root carrier was added or removed
-	// (the selection can move) or the root holds more than one (there is an
-	// unselected one). An ordinary edit of the root's only `_defaults.yaml`
-	// keeps the incremental full-rebuild branch below — redirecting every
-	// such edit changed which hierarchy state that branch leaves behind
-	// (measured: TestAnUnparseableFileKeepsItsTenantAttributed went red).
-	// The scan's selection is only consulted when a root carrier moved, so a
-	// tenant-only reload pays nothing for it.
-	if anyRootCarrierKey(changed, added, removed) &&
-		(anyRootCarrierKey(added, removed) || len(scan.DefaultsCarriers().Ambiguous[scan.AbsRoot]) > 1) {
-		return m.fullDirLoadFrom(scan)
-	}
+	// No root-carrier redirect here any more (#1674 added one, #2593 removed
+	// it): a carrier cannot reach this function — see the refusal at its top.
+	// The carrier selection (`_defaults.yml` becoming selected once its
+	// `_defaults.yaml` sibling goes) is handled by the full load the
+	// hierarchical reload runs, pinned by TestRootCarrierSelectionMovesOnReload.
 
 	// Copy cache for mutation — deferred until after diff to avoid
 	// unnecessary allocation when the per-file diff shows no changes
@@ -842,35 +869,19 @@ func (m *ConfigManager) incrementalLoadFrom(scan *treeScan) error {
 	// Phase 4: merge — incremental tenant patch when only tenant files changed,
 	// full rebuild when a _defaults/_profiles/_state_filters file changed.
 	var merged ThresholdConfig
-	// ⛔ #1569: THIS PATH MUST REFRESH THE REFUSED-KEY SET TOO. `m.hierarchy`
-	// is not re-scanned here (a nested change was redirected to `fullDirLoad`
-	// above), but `cfg.Defaults` CAN change on this path — a root
-	// `_defaults.yaml` edit is a flat key — and the refused set is derived
-	// from it. Leaving the field alone made the audit report a set belonging
-	// to an earlier config: measured, the gauge stayed at 1 after the tree was
-	// repaired and only a later full `Load()` cleared it.
-	//
-	// ⚠️ Latent rather than live: the production watch path reaches
-	// `fullDirLoad` via `installNewHierarchyState`, so a real deployment
-	// refreshes it. Fixed anyway — the asymmetry between the two fields
-	// `installConfig` returns is exactly the kind that becomes live later.
-	refreshRefused := func(merged *ThresholdConfig) {
-		m.mu.RLock()
-		var td map[string][]string
-		if m.hierarchy.graph != nil {
-			td = m.hierarchy.graph.TenantDefaults
-		}
-		pd := m.hierarchy.parsedDefaults
-		m.mu.RUnlock()
-		_, unreachable := applySubtreeDefaults(merged, m.path, td, pd)
-		m.mu.Lock()
-		m.hierarchy.unreachableInherited = unreachable
-		m.mu.Unlock()
-	}
+	// ⚠️ THE REFUSED-KEY SET (`unreachableInherited`) IS NOT RECOMPUTED HERE,
+	// and that is not the stale-field bug #1569 fixed. #1569 added a
+	// recomputation (`refreshRefused`) for a reload that edits a carrier; a
+	// refused key needs a SUBTREE `_defaults.yaml`, and no carrier reaches
+	// this function (see its top), so the set every commit on this path
+	// inherits — written by commitFlatFrom over the same carrier-free tree —
+	// is already empty. The recomputation could only ever rewrite empty with
+	// empty; #2593 removed it. The repair-the-tree case it was written for is
+	// pinned on the watch path by TestTheRefusedSetIsRefreshedWhenTheTreeIsRepaired.
 
-	// ⛔ ITS SIBLING FIELD WENT STALE THE SAME WAY, AND THAT ONE IS LIVE.
-	// The block above fixed `unreachableInherited` and named the risk —
-	// "the asymmetry between the two fields `installConfig` returns is exactly
+	// ⛔ THE REFUSED SET'S SIBLING FIELD WENT STALE, AND THAT ONE IS LIVE.
+	// #1569 named the risk while fixing `unreachableInherited` — "the
+	// asymmetry between the two fields `installConfig` returns is exactly
 	// the kind that becomes live later". It already was. `tenantSources` is
 	// the committed hierarchy's tenant population (the one the commit-time
 	// audit iterates, and the one the removed ConfigManager.Resolve read), so
@@ -1006,7 +1017,6 @@ func (m *ConfigManager) incrementalLoadFrom(scan *treeScan) error {
 	// is fill-in-not-overwrite, so a tenant that already carries the key keeps
 	// its own value. (#1569 blind review.)
 	merged.ApplyProfiles()
-	refreshRefused(&merged)
 	refreshTenantSources()
 
 	scan.ReleaseData()
@@ -1335,6 +1345,15 @@ func patchTenants(prev *ThresholdConfig, newConfigs, oldConfigs map[string]Thres
 		// #2028: same obligation — without it the cap set in the root
 		// `_defaults.yaml` silently fell back to the built-in one on the first
 		// tenant-only reload.
+		//
+		// ⚠️ Since #2593, in production these four carrier-only fields
+		// (Defaults, OptionalOverrides, StateFilters, MaxMetricsPerTenant)
+		// are always empty here: only a `_defaults` carrier sets them, and
+		// incrementalLoadFrom refuses a tree with one. They are carried
+		// anyway — copying an empty value costs nothing, patchTenants stays
+		// a pure "prev with tenants patched" (TestPatchTenantsCarriesOptionalOverrides
+		// calls it directly), and dropping them would turn the empty maps a
+		// full rebuild publishes into nil ones.
 		MaxMetricsPerTenant: prev.MaxMetricsPerTenant,
 		Tenants:             make(map[string]map[string]ScheduledValue, len(prev.Tenants)),
 	}
@@ -1343,17 +1362,16 @@ func patchTenants(prev *ThresholdConfig, newConfigs, oldConfigs map[string]Thres
 	// ⛔ "IMMUTABLE" IS AN OBLIGATION ON EVERY LATER STAGE, NOT A FACT. An
 	// untouched tenant's inner map is the SAME OBJECT as the one inside
 	// `m.config`, which `GetConfig()` has already handed to scraping
-	// goroutines — verified by pointer identity across reloads. Two stages
-	// downstream write into tenant maps in place (`ApplyProfiles`,
-	// `applySubtreeDefaults` via `refreshRefused`). Neither changes a key that
-	// was already in the map when it started: `ApplyProfiles` only fills in,
-	// and `applySubtreeDefaults` fills in plus — since #2414 — DELETES, but
-	// only a key it wrote itself earlier in the same call (a shallower
-	// level's spelling displaced by a deeper level's other spelling). Every
-	// key already present reads as the tenant's own, under any spelling, so a
-	// re-run over a map it already overlaid writes and deletes nothing: a
+	// goroutines — verified by pointer identity across reloads. One stage
+	// downstream writes into tenant maps in place: `ApplyProfiles`, which only
+	// fills in, so it never changes a key that was already in the map when it
+	// started, and a re-run over a map it already filled writes nothing: a
 	// steady state performs no write at all and `-race` with concurrent
-	// scrapes is clean. Anything added here that overwrites or deletes a key
+	// scrapes is clean. (`applySubtreeDefaults` used to be a second such
+	// stage on this path; #2593 removed that call, since a tree reaching
+	// this path has no subtree defaults to apply. Its own rule — fill in, and
+	// delete only a key it wrote earlier in the same call, #2414 — still
+	// holds where it runs.) Anything added here that overwrites or deletes a key
 	// it did not just add would mutate config a scrape is reading, with no
 	// test to catch it. Either keep new overlays to that rule or copy the map
 	// first. (#1569 blind review, C-1.)

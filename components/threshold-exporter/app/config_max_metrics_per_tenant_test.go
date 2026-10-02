@@ -137,8 +137,10 @@ func TestANestedDefaultsCapIsIgnoredLoudly(t *testing.T) {
 // and any carrier makes the reload hierarchical (sticky), so the watch path
 // never reaches patchTenants with a cap to carry: the reload here is a full
 // flat rebuild. MEASURED: setting patchTenants' `MaxMetricsPerTenant` to 0
-// leaves this test green. That copy is unreachable from the watch path and has
-// no test; its clean-up is tracked in #2593.
+// leaves this test green. #2593 settled that copy: incrementalLoadFrom now
+// refuses any scan holding a carrier, so on the incremental path the cap is
+// always 0 and the copy carries nothing. It stays because it is free and keeps
+// patchTenants a pure "prev with tenants patched".
 func TestTheCapSurvivesATenantOnlyReload(t *testing.T) {
 	dir := t.TempDir()
 	writeFile(t, filepath.Join(dir, "_defaults.yaml"), rootDefaultsWithCap)
