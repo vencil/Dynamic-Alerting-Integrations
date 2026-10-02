@@ -33,6 +33,34 @@ func cachedMergedHash(m *ConfigManager, tid string) string {
 	return m.hierarchy.mergedHashes[tid]
 }
 
+// committedTenant is what the last commit cached for one tenant on the
+// hierarchical plane. It reads no file, so it moves only when a reload
+// commits — the same state /metrics is served from. (#2586: it replaces
+// ConfigManager.Resolve, which re-read the tenant and defaults files on
+// every call and so, inside a debounce window, answered with bytes the
+// exporter had not committed.)
+type committedTenant struct {
+	SourceFile    string
+	DefaultsChain []string // root first
+	MergedHash    string
+}
+
+// committedTenantState returns tid's committed hierarchy entry; ok is false
+// when the last commit does not know the tenant.
+func committedTenantState(m *ConfigManager, tid string) (committedTenant, bool) {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+	src, ok := m.hierarchy.tenantSources[tid]
+	if !ok {
+		return committedTenant{}, false
+	}
+	var chain []string
+	if m.hierarchy.graph != nil {
+		chain = append(chain, m.hierarchy.graph.TenantDefaults[tid]...)
+	}
+	return committedTenant{SourceFile: src, DefaultsChain: chain, MergedHash: m.hierarchy.mergedHashes[tid]}, true
+}
+
 // cachedLayers is what the cached merged_hash of tid was computed with:
 // its platform entries (#2019) and the tree's profiles (#2117).
 func cachedLayers(m *ConfigManager, tid string) config.TenantLayers {
@@ -57,32 +85,37 @@ func readAll(t *testing.T, paths ...string) [][]byte {
 	return out
 }
 
-// TestConfigManagerResolve_AgreesWithResolveEffective: ConfigManager.Resolve
-// serves a cached merged_hash (which includes the platform per-tenant
-// layer) next to a config it merges on demand. Both must describe the same
-// merge — the one /effective (config.ResolveEffective) serves — on a cold
-// load and after a reload that edits only a platform file's entry.
-func TestConfigManagerResolve_AgreesWithResolveEffective(t *testing.T) {
+// TestCommittedMergedHash_AgreesWithResolveEffective: the exporter's
+// committed merged_hash (which includes the platform per-tenant layer) must
+// describe the same merge /effective (config.ResolveEffective) serves for
+// the same tree — on a cold load and after a reload that edits only a
+// platform file's entry. Checked with the tree at rest (nothing written
+// after the commit), so disk and commit are the same bytes.
+func TestCommittedMergedHash_AgreesWithResolveEffective(t *testing.T) {
 	t.Parallel()
 	check := func(t *testing.T, m *ConfigManager, dir, where, tid string) {
 		t.Helper()
-		got, ok := m.Resolve(tid)
+		got, ok := committedTenantState(m, tid)
 		if !ok {
-			t.Fatalf("%s: Resolve(%s): unknown", where, tid)
+			t.Fatalf("%s: %s is not in the committed hierarchy", where, tid)
 		}
 		pe, err := config.ResolveEffective(dir, tid)
 		if err != nil {
 			t.Fatalf("%s: ResolveEffective(%s): %v", where, tid, err)
 		}
-		gotCfg, _ := json.Marshal(got.Config)
-		wantCfg, _ := json.Marshal(pe.EffectiveConfig)
-		if string(gotCfg) != string(wantCfg) || got.MergedHash != pe.MergedHash {
-			t.Errorf("%s: Resolve(%s) = %s %s, /effective = %s %s", where, tid, gotCfg, got.MergedHash, wantCfg, pe.MergedHash)
+		if got.MergedHash != pe.MergedHash {
+			t.Errorf("%s: committed merged_hash(%s) = %s, /effective = %s", where, tid, got.MergedHash, pe.MergedHash)
 		}
-		// The served config hashes to the served merged_hash.
+		// The committed hash is the hash of /effective's own merge inputs
+		// under the committed layers.
 		h, err := config.ComputeMergedHash(readAll(t, got.SourceFile)[0], tid, readAll(t, got.DefaultsChain...), cachedLayers(m, tid))
 		if err != nil || h != got.MergedHash {
-			t.Errorf("%s: Resolve(%s) merged_hash %s is not its own merge's (%s, %v)", where, tid, got.MergedHash, h, err)
+			t.Errorf("%s: committed merged_hash(%s) %s is not the merge of its committed chain (%s, %v)", where, tid, got.MergedHash, h, err)
+		}
+		wantCfg, _ := json.Marshal(pe.EffectiveConfig)
+		gotCfg, err := config.ComputeEffectiveConfig(readAll(t, got.SourceFile)[0], tid, readAll(t, got.DefaultsChain...), cachedLayers(m, tid))
+		if gotJSON, _ := json.Marshal(gotCfg); err != nil || string(gotJSON) != string(wantCfg) {
+			t.Errorf("%s: the committed chain of %s merges to %s, /effective = %s (%v)", where, tid, gotJSON, wantCfg, err)
 		}
 	}
 	mx := loadOverlayMatrix(t)
