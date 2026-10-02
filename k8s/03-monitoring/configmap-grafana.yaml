@@ -14,10 +14,10 @@ data:
         isDefault: true
         editable: true
       # VictoriaLogs — central log store for federation-gateway audit +
-      # operational streams (#539 Phase 1). The plugin is installed via
-      # GF_INSTALL_PLUGINS on the Grafana Deployment; if Grafana cannot
-      # reach the internet at startup the datasource will show as
-      # "Unknown plugin" until the install completes.
+      # operational streams (#539 Phase 1). The plugin is installed, at a
+      # pinned version, via GF_PLUGINS_PREINSTALL_SYNC on the Grafana
+      # Deployment (TRK-2605); if Grafana cannot reach grafana.com at
+      # startup the install fails and Grafana does not start.
       - name: VictoriaLogs
         type: victoriametrics-logs-datasource
         access: proxy

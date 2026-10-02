@@ -59,7 +59,10 @@ type PutTenantResponse struct {
 // `routes[i].match` value or `overrides[i].alertname` / `metric_group` the
 // body writes that the route generator's PyYAML does not read as a string
 // (routingpolicy.ValuesNotString) — only what the body writes, never a value
-// inherited from `_routing_defaults` or a routing profile.
+// inherited from `_routing_defaults` or a routing profile. #2503: so is a
+// `group_by` element the body writes that is not a string as PyYAML reads
+// it, is empty, repeats a label or is `...` beside other labels
+// (routingpolicy.GroupByInvalid).
 //
 // v2.6.0 Phase C: PR-based write-back (ADR-011) — when writeMode is PR,
 // creates a feature branch and PR/MR instead of direct commit.
@@ -75,7 +78,7 @@ type PutTenantResponse struct {
 // @Param       X-DA-Write-Source header string false "Attribute the PR to a non-UI write source. Allowlisted: threshold-governance (#656). Omit for tenant-manager UI."
 // @Param       X-DA-Base-Hash header string false "Optimistic concurrency: the source_hash GET /tenants/{id} returned for the file this body was derived from. 409 if the file changed since. 16 lowercase hex chars; a malformed value is a 400, never ignored. Direct write-back mode only (501 in PR mode)."
 // @Success     200   {object} PutTenantResponse
-// @Failure     400   {object} ErrorResponse "Bad request. A receiver the body writes in _routing (receiver, overrides[].receiver, routes[].receiver) that Alertmanager could not load or the route generator would skip is code INVALID_BODY with one violations[] entry per problem (#2295; nothing written); so is a routes[].match value or overrides[].alertname / metric_group the body writes that the route generator does not read as a string, e.g. unquoted yes, 1:30 or ~ (#2431; quote it). Also 400 when the current tenant file cannot be parsed and the caller lacks write permission on all tenants (#2405; nothing written)"
+// @Failure     400   {object} ErrorResponse "Bad request. A receiver the body writes in _routing (receiver, overrides[].receiver, routes[].receiver) that Alertmanager could not load or the route generator would skip is code INVALID_BODY with one violations[] entry per problem (#2295; nothing written); so is a routes[].match value or overrides[].alertname / metric_group the body writes that the route generator does not read as a string, e.g. unquoted yes, 1:30 or ~ (#2431; quote it), and a group_by entry the body writes (group_by, overrides[].group_by, routes[].group_by) that is not a string as the route generator reads it (unquoted 8, on), is empty, repeats a label or is ... beside other labels (#2503; quote or remove it). Also 400 when the current tenant file cannot be parsed and the caller lacks write permission on all tenants (#2405; nothing written)"
 // @Failure     403   {object} ErrorResponse
 // @Failure     409   {object} ErrorResponse "Conflict: base hash mismatch, pending PR, ambiguous tenant file, the tenant is already declared by another conf.d file (code TENANT_DECLARED_ELSEWHERE; nothing written), or the tenant's conf.d file is not a regular file (code TENANT_CONFIG_NOT_LOADABLE, config_error not_regular_file; nothing written)"
 // @Failure     500   {object} ErrorResponse

@@ -40,10 +40,72 @@ from _grar_merge import (  # noqa: E402
     build_receiver_config,
 )
 from _grar_validate import (  # noqa: E402
+    group_by_problem_text,
+    group_by_problems,
     receiver_name_collisions,
     route_entry_matchers,
     validate_receiver_domains,
 )
+
+
+def _apply_group_by(route: dict, group_by: object, ctx: str) -> list[str]:
+    """Set ``route["group_by"]`` from a written ``group_by``; return its WARNs.
+
+    #2503: the ONE place each of the generator's group_by outputs goes
+    through (tenant main route, ``overrides[i]``, ``routes[i]``, both
+    ``_routing_enforced`` shapes). A non-list or empty value renders
+    nothing, as before. A list is repaired by
+    ``_grar_validate.group_by_problems`` — non-string / empty elements, later
+    repeats and a ``...`` mixed with labels are dropped, one ``WARN …
+    skipping`` line each (blocking under ``--validate``, like every dropped
+    entry) — and a list repaired to empty renders no ``group_by`` (the route
+    then inherits its parent's). ``--strict`` refuses the same elements
+    earlier (``_grar_parse.load_tenant_tree``).
+    """
+    if not (group_by and isinstance(group_by, list)):
+        return []
+    kept, problems = group_by_problems(group_by)
+    if kept:
+        route["group_by"] = kept
+    return [f"  WARN: {ctx}: {group_by_problem_text(f'group_by[{idx}]', kind, value)}, skipping"
+            for idx, kind, value in problems]
+
+
+def enforced_group_by_problems(enforced_routing: object, tenants: list[str]
+                               ) -> list[tuple[str, int, str, object]]:
+    """``(ctx, index, kind, value)`` per bad group_by element of the
+    ``_routing_enforced`` routes the generator renders (#2503 round 2).
+
+    The ``--strict`` twin of ``_apply_group_by`` on the enforced routes, so
+    strict is never laxer than the render's ``WARN … skipping``: the
+    ``{{tenant}}`` shape is judged per tenant AFTER substitution (a tenant
+    id can repeat a listed label), and a route the generator does not render
+    — no ``receiver``, or one ``build_receiver_config`` refuses — is not
+    judged (F4). ``ctx`` matches the render's WARN (``_routing_enforced`` /
+    ``_routing_enforced (<tenant>)``). The domain allowlist (``--policy``)
+    is not applied: ``load_tenant_tree`` does not know it.
+    """
+    out: list[tuple[str, int, str, object]] = []
+    if not isinstance(enforced_routing, dict) or not enforced_routing.get("receiver"):
+        return out
+
+    def judge(ctx: str, cfg: dict, receiver_ctx: str) -> None:
+        group_by = cfg.get("group_by")
+        if not (group_by and isinstance(group_by, list)):
+            return
+        if build_receiver_config(cfg.get("receiver"), receiver_ctx)[0] is None:
+            return
+        out.extend((ctx, idx, kind, value)
+                   for idx, kind, value in group_by_problems(group_by)[1])
+
+    if _contains_tenant_placeholder(enforced_routing):
+        for tenant in sorted(tenants):
+            judge(f"_routing_enforced ({tenant})",
+                  _substitute_tenant(enforced_routing, tenant),
+                  f"platform-enforced-{tenant}")
+    else:
+        judge("_routing_enforced", enforced_routing, "platform-enforced")
+    return out
 
 
 # ============================================================
@@ -132,10 +194,9 @@ def _build_override_route(idx: int, tenant: str, matchers: list[str],
         "receiver": f"tenant-{tenant}-override-{idx}",
     }
 
-    # Optional: group_by from override
-    group_by = override.get("group_by")
-    if group_by and isinstance(group_by, list):
-        sub_route["group_by"] = group_by
+    # Optional: group_by from override (#2503: repaired, WARN per dropped element)
+    warnings.extend(_apply_group_by(sub_route, override.get("group_by"),
+                                    f"{tenant}: override[{idx}]"))
 
     # Optional: timing parameters with guardrails
     timing, timing_warnings = _apply_timing_params(override, f"{tenant}-override-{idx}")
@@ -289,9 +350,8 @@ def expand_routing_routes(tenant: str, routing_config: dict,
 
         receiver_name = _route_receiver_name(tenant, idx)
         sub_route: dict = {"matchers": matchers, "receiver": receiver_name}
-        group_by = entry.get("group_by")
-        if group_by and isinstance(group_by, list):
-            sub_route["group_by"] = group_by
+        warnings.extend(_apply_group_by(sub_route, entry.get("group_by"),
+                                        f"{tenant}: routes[{idx}]"))
         timing, timing_warnings = _apply_timing_params(entry, ctx)
         warnings.extend(timing_warnings)
         sub_route.update(timing)
@@ -342,9 +402,8 @@ def _build_per_tenant_enforced_route(tenant: str, enforced_routing: dict,
     if match and isinstance(match, list):
         route["matchers"].extend(match)
 
-    group_by = substituted.get("group_by")
-    if group_by and isinstance(group_by, list):
-        route["group_by"] = group_by
+    warnings.extend(_apply_group_by(route, substituted.get("group_by"),
+                                    f"_routing_enforced ({tenant})"))
 
     timing, timing_warnings = _apply_timing_params(
         substituted, f"platform-enforced-{tenant}")
@@ -390,9 +449,8 @@ def _build_single_enforced_route(enforced_routing: dict,
         route["matchers"] = match
 
     # Optional group_by
-    group_by = enforced_routing.get("group_by")
-    if group_by and isinstance(group_by, list):
-        route["group_by"] = group_by
+    warnings.extend(_apply_group_by(route, enforced_routing.get("group_by"),
+                                    "_routing_enforced"))
 
     # Timing parameters with guardrails
     timing, timing_warnings = _apply_timing_params(enforced_routing, "platform-enforced")
@@ -553,10 +611,8 @@ def _build_tenant_routes(routing_configs: dict[str, dict], allowed_domains: list
             "receiver": receiver_name,
         }
 
-        # group_by（可選）
-        group_by = cfg.get("group_by")
-        if group_by and isinstance(group_by, list):
-            route["group_by"] = group_by
+        # group_by（可選；#2503：修正後輸出，每個略過的元素一行 WARN）
+        warnings.extend(_apply_group_by(route, cfg.get("group_by"), tenant))
 
         # Timing parameters with guardrails
         timing, timing_warnings = _apply_timing_params(cfg, tenant)

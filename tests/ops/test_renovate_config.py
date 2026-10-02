@@ -153,10 +153,17 @@ def _forge_manager(cfg: dict) -> dict:
                 if "forge_e2e_run" in "".join(_manager_file_patterns(m)))
 
 
+def _image_managers(cfg: dict) -> list[dict]:
+    """The customManagers that own container image refs (datasource docker).
+    TRK-2605 added one that is not: the Grafana plugin version, guarded by
+    test_grafana_plugins_are_version_pinned.py."""
+    return [m for m in cfg["customManagers"] if m.get("datasourceTemplate") == "docker"]
+
+
 def _deploy_managers(cfg: dict) -> list[dict]:
-    """The customManagers that own DEPLOYED refs (helm + k8s + da-tools COPY)."""
+    """The customManagers that own DEPLOYED image refs (helm + k8s + da-tools COPY)."""
     skip = (_matrix_manager(cfg), _forge_manager(cfg))
-    return [m for m in cfg["customManagers"] if not any(m is x for x in skip)]
+    return [m for m in _image_managers(cfg) if not any(m is x for x in skip)]
 
 
 def test_renovate_json_is_strict_json_and_well_formed():
@@ -167,13 +174,18 @@ def test_renovate_json_is_strict_json_and_well_formed():
     # SSOT and lang-dep bumps are #902 L3 Category C, deliberately out).
     assert sorted(cfg["enabledManagers"]) == sorted(ENABLED_MANAGERS)
     assert cfg.get("pinDigests") is True
-    assert len(cfg["customManagers"]) == 4
+    assert len(_image_managers(cfg)) == 4
+    # TRK-2605: plus exactly one Grafana plugin manager on the catalog datasource.
+    others = [m for m in cfg["customManagers"] if m not in _image_managers(cfg)]
+    assert [m.get("datasourceTemplate") for m in others] == ["custom.grafana-plugins"], others
+    assert "grafana-plugins" in cfg.get("customDatasources", {})
     assert cfg.get("packageRules"), "expected grouping + major-approval rules"
 
 
 def test_every_custom_manager_matches_something():
     """The classic custom-manager failure is a regex that matches NOTHING. Assert each
-    manager extracts >=1 dep, each with a non-empty tag and a well-formed sha256."""
+    manager extracts >=1 dep, each with a non-empty tag and, for an image manager, a
+    well-formed sha256 (a Grafana plugin version has no digest)."""
     cfg = _load_config()
     for mgr in cfg["customManagers"]:
         deps = _extract(mgr)
@@ -181,6 +193,8 @@ def test_every_custom_manager_matches_something():
         for d in deps:
             assert d.get("depName"), f"empty depName in {d['file']}"
             assert d.get("currentValue"), f"empty currentValue ({d.get('depName')} in {d['file']})"
+            if mgr.get("datasourceTemplate") != "docker":
+                continue
             assert re.fullmatch(r"sha256:[0-9a-f]{64}", d.get("currentDigest", "")), \
                 f"bad digest for {d.get('depName')} in {d['file']}: {d.get('currentDigest')!r}"
 
@@ -189,7 +203,7 @@ def test_coverage_is_complete_and_exact():
     """Every #902-pinned third-party image is covered — and nothing extra (a stray
     match would mean Renovate touches an unintended ref)."""
     cfg = _load_config()
-    seen = {d["depName"] for mgr in cfg["customManagers"] for d in _extract(mgr)}
+    seen = {d["depName"] for mgr in _image_managers(cfg) for d in _extract(mgr)}
     expected = EXPECTED_DEPNAMES | FORGE_E2E_DEPNAMES | TRY_LOCAL_ONLY_DEPNAMES
     assert seen == expected, (
         f"\n  missing (pinned but Renovate won't bump): {sorted(expected - seen)}"
@@ -291,6 +305,23 @@ def test_forge_e2e_gitlab_has_its_own_group_and_gated_majors():
         assert not got.get("dependencyDashboardApproval"), (update, got)
     major = _resolve(cfg, manager="custom.regex", dep="gitlab/gitlab-ce",
                      datasource="docker", update="major")
+    assert major.get("dependencyDashboardApproval") is True, major
+
+
+def test_grafana_plugin_bumps_have_their_own_group_and_gated_majors():
+    """TRK-2605: a plugin version is not an image and is not in the scan matrix, so
+    it must not ride the third-party image group PR; a major waits for the Dashboard."""
+    cfg = _load_config()
+    image_group = _resolve(cfg, manager="custom.regex", dep="grafana/grafana",
+                           datasource="docker", update="minor").get("groupName")
+    for update in ("patch", "minor"):
+        got = _resolve(cfg, manager="custom.regex", dep="victoriametrics-logs-datasource",
+                       datasource="custom.grafana-plugins", update=update)
+        assert got["enabled"] is True, got
+        assert got.get("groupName") and got["groupName"] != image_group, (update, got)
+        assert not got.get("dependencyDashboardApproval"), (update, got)
+    major = _resolve(cfg, manager="custom.regex", dep="victoriametrics-logs-datasource",
+                     datasource="custom.grafana-plugins", update="major")
     assert major.get("dependencyDashboardApproval") is True, major
 
 
