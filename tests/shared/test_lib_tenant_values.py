@@ -13,7 +13,7 @@ import subprocess
 from pathlib import Path
 
 import pytest
-from _platform_fs import require_file_name  # noqa: E402
+from _platform_fs import require_file_name, symlink_or_skip  # noqa: E402
 
 import _lib_io
 import _lib_tenant_values as tv
@@ -283,6 +283,7 @@ def test_skipped_is_empty_on_a_clean_tree(tmp_path, da_guard):
 
 
 def test_print_load_warnings_prints_one_named_line_per_file(tmp_path, da_guard, capsys):
+    require_file_name("flat[31m.yaml")
     conf_d = _tree(tmp_path, {
         "_defaults.yaml": _DEFAULTS,
         "tenant-a.yaml": "tenants:\n  tenant-a:\n    mysql_connections: 70\n",
@@ -326,7 +327,7 @@ def test_unreadable_raises_parse_failed_error_naming_file_and_reason(tmp_path, d
         "_defaults.yaml": _DEFAULTS,
         "tenant-a.yaml": "tenants:\n  tenant-a:\n    mysql_connections: 70\n",
     })
-    (conf_d / "tenant-b.yaml").symlink_to("missing.yaml")
+    symlink_or_skip("missing.yaml", conf_d / "tenant-b.yaml")
     with pytest.raises(tv.ParseFailedError) as ei:
         tv.load_served_tree(conf_d, binary=da_guard)
     assert ei.value.path == str(conf_d / "tenant-b.yaml")
@@ -352,7 +353,7 @@ def test_da_guard_warn_lines_are_kept_on_a_successful_run(tmp_path, da_guard, ca
     conf_d = _tree(tmp_path, {"_defaults.yaml": _DEFAULTS,
                               "tenant-a.yaml": "tenants:\n  tenant-a:\n    mysql_connections: 70\n"})
     (conf_d / "realdir").mkdir()
-    (conf_d / "tb.yaml").symlink_to("realdir")
+    symlink_or_skip("realdir", conf_d / "tb.yaml")
     tree = tv.load_served_tree(conf_d, binary=da_guard)
     assert len(tree.stderr_lines) == 1, tree.stderr_lines
     assert tree.stderr_lines[0].startswith("WARN: cannot read ") and "tb.yaml" in tree.stderr_lines[0]

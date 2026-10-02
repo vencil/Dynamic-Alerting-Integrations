@@ -39,6 +39,7 @@ sys.path.insert(0, os.path.join(
     os.path.dirname(__file__), "..", "..", "scripts", "tools", "dx",
 ))
 import gen_agent_adapters as gaa  # noqa: E402
+from _platform_fs import symlink_or_skip  # noqa: E402
 
 
 FM = b"---\nname: x\ndescription: d\n---\n"
@@ -651,7 +652,7 @@ def test_lf_and_crlf_frontmatter_agree_on_the_field_values():
 
 def _symlinks_work(tmp_path):
     try:
-        (tmp_path / "_probe").symlink_to(tmp_path)
+        symlink_or_skip(tmp_path, tmp_path / "_probe")
     except (OSError, NotImplementedError):
         return False
     (tmp_path / "_probe").unlink()
@@ -669,7 +670,7 @@ def test_a_symlinked_ssot_file_is_refused(tmp_path, monkeypatch):
         pytest.skip("this filesystem cannot create symlinks")
     outside = tmp_path.parent / "outside.md"
     outside.write_bytes(b"---\nname: evil\n---\n")
-    (tmp_path / gaa.SSOT_SKILLS / "alpha" / "extra.md").symlink_to(outside)
+    symlink_or_skip(outside, tmp_path / gaa.SSOT_SKILLS / "alpha" / "extra.md")
     with pytest.raises(gaa.UnsafePath):
         gaa.planned_outputs()
 
@@ -680,7 +681,7 @@ def test_a_symlinked_ssot_directory_is_refused(tmp_path, monkeypatch):
         pytest.skip("this filesystem cannot create symlinks")
     outside = tmp_path.parent / "outside_dir"
     outside.mkdir(exist_ok=True)
-    (tmp_path / gaa.SSOT_SKILLS / "linked").symlink_to(outside)
+    symlink_or_skip(outside, tmp_path / gaa.SSOT_SKILLS / "linked")
     with pytest.raises(gaa.UnsafePath):
         gaa.planned_outputs()
 
@@ -695,7 +696,7 @@ def test_writing_through_a_symlinked_target_is_refused(tmp_path, monkeypatch):
     target.parent.mkdir(parents=True, exist_ok=True)
     outside = tmp_path.parent / "victim.md"
     outside.write_bytes(b"original\n")
-    target.symlink_to(outside)
+    symlink_or_skip(outside, target)
     with pytest.raises(gaa.UnsafePath):
         gaa.write_outputs(plan)
     assert outside.read_bytes() == b"original\n"
@@ -714,6 +715,6 @@ def test_main_reports_an_unsafe_path_as_caller_error(tmp_path, monkeypatch, caps
         pytest.skip("this filesystem cannot create symlinks")
     outside = tmp_path.parent / "outside2.md"
     outside.write_bytes(b"x\n")
-    (tmp_path / gaa.SSOT_SKILLS / "alpha" / "extra.md").symlink_to(outside)
+    symlink_or_skip(outside, tmp_path / gaa.SSOT_SKILLS / "alpha" / "extra.md")
     assert gaa.main(["--check"]) == gaa.EXIT_CALLER_ERROR
     assert "refusing" in capsys.readouterr().err

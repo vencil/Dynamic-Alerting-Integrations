@@ -40,6 +40,7 @@ import compile_custom_alerts as cc  # noqa: E402
 from custom_alerts import shape as shp  # noqa: E402
 from custom_alerts import loader as ld  # noqa: E402
 from custom_alerts.loader import CustomAlertConfigError  # noqa: E402
+from _platform_fs import symlink_or_skip  # noqa: E402
 
 _REPO = Path(__file__).resolve().parents[2]
 _VECTORS = _REPO / "tests" / "dx" / "fixtures" / "recipe_id_vectors.json"
@@ -1915,8 +1916,8 @@ def _configmap_tree(root: Path, payload: str, data: str) -> None:
     each key at the root is a link through `data`. The kubelet's names are
     `..<timestamp>` / `..data`; the control renames them visible."""
     _write_tree(root, {f"{payload}/acme.yaml": _ca_tenant("acme", _ca("a1"))})
-    os.symlink(payload, root / data, target_is_directory=True)
-    os.symlink(f"{data}/acme.yaml", root / "acme.yaml")
+    symlink_or_skip(payload, root / data, target_is_directory=True)
+    symlink_or_skip(f"{data}/acme.yaml", root / "acme.yaml")
 
 
 def test_a_configmap_mount_reads_each_tenant_once(tmp_path):

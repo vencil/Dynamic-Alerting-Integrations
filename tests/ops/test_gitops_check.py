@@ -63,6 +63,7 @@ import yaml
 
 import gitops_check as gc
 from _lib_exitcodes import EXIT_CALLER_ERROR  # noqa: E402
+from _platform_fs import symlink_or_skip  # noqa: E402
 
 
 def run_main(argv):
@@ -1326,7 +1327,7 @@ class TestErrorRecovery:
 
         # Create symlink
         link_dir = os.path.join(config_dir, "link")
-        os.symlink(actual_dir, link_dir)
+        symlink_or_skip(actual_dir, link_dir)
 
         result = gc.check_local(link_dir)
 

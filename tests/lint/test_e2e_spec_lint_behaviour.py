@@ -61,6 +61,7 @@ import subprocess
 from pathlib import Path
 
 import pytest
+from _platform_fs import symlink_or_skip  # noqa: E402
 
 _REPO_ROOT = Path(__file__).resolve().parents[2]
 # Literal paths: verify_diff.py maps sources to tests by scanning for them.
@@ -133,8 +134,7 @@ def _tree(tmp_path: Path) -> Path:
 
     e2e = root / "tests/e2e"
     shutil.copytree(_E2E, e2e, ignore=_ignore, symlinks=True)
-    (e2e / "node_modules").symlink_to(_REAL_NODE_MODULES.resolve(),
-                                      target_is_directory=True)
+    symlink_or_skip(_REAL_NODE_MODULES.resolve(), e2e / "node_modules", target_is_directory=True)
     return root
 
 

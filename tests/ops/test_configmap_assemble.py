@@ -36,7 +36,7 @@ import sys
 from pathlib import Path
 
 import pytest
-from _platform_fs import require_case_sensitive_names, require_tool  # noqa: E402
+from _platform_fs import require_case_sensitive_names, require_tool, symlink_or_skip  # noqa: E402
 
 REPO = Path(__file__).resolve().parents[2]
 SCRIPT = REPO / "scripts" / "ops" / "configmap_assemble.py"
@@ -556,7 +556,7 @@ class TestTheSampleTreeBlockCannotBeWalkedAround:
     def test_a_symlink_to_the_sample_tree_is_refused(self, tmp_path):
         link = tmp_path / "conf.d"
         try:
-            link.symlink_to(SAMPLE_TREE, target_is_directory=True)
+            symlink_or_skip(SAMPLE_TREE, link, target_is_directory=True)
         except (OSError, NotImplementedError):  # pragma: no cover
             pytest.skip("this filesystem/user cannot create symlinks")
         r = _run(link, _out(tmp_path))
@@ -1134,7 +1134,7 @@ class TestAConfigNamedEntryNothingCanBeReadFromIsNamed:
             self, tmp_path, kubectl_shim):
         d = _tree(tmp_path, ["db-a.yaml"])
         try:
-            (d / "db-gone.yaml").symlink_to(tmp_path / "nowhere.yaml")
+            symlink_or_skip(tmp_path / "nowhere.yaml", d / "db-gone.yaml")
         except (OSError, NotImplementedError):  # pragma: no cover
             pytest.skip("this filesystem/user cannot create symlinks")
         (d / "db-dir.yaml").mkdir()

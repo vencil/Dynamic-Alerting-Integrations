@@ -28,6 +28,7 @@ from pathlib import Path
 
 import pytest
 import yaml
+from _platform_fs import symlink_or_skip  # noqa: E402
 
 _REPO_ROOT = Path(__file__).resolve().parents[2]
 _OPS = _REPO_ROOT / "scripts" / "ops"
@@ -1534,7 +1535,7 @@ def test_a_hook_linked_to_a_guard_is_replaced_without_touching_the_guard(
     hook.unlink(missing_ok=True)
     guard = work / "scripts" / "ops" / "protect_main_push.sh"
     if link == "symlink":
-        hook.symlink_to(guard)
+        symlink_or_skip(guard, hook)
     else:
         os.link(guard, hook)
 
@@ -1599,7 +1600,7 @@ def test_a_stale_guard_copy_is_recognised_however_it_got_there(
         bindir = tmp_path / "bin"
         bindir.mkdir()
         for tool in ("bash", "git", "mv", "rm", "chmod"):
-            (bindir / tool).symlink_to(shutil.which(tool))
+            symlink_or_skip(shutil.which(tool), bindir / tool)
         env = {**os.environ, "PATH": str(bindir)}
     elif shape == "from-a-linked-worktree":
         cwd = tmp_path / "wt"
@@ -1891,7 +1892,7 @@ def test_a_doc_turned_into_a_symlink_is_built(tmp_path: Path) -> None:
     _commit_all(work, "docs: add other")
     base = _git(work, "rev-parse", "HEAD").stdout.strip()
     (work / "docs" / "index.md").unlink()
-    os.symlink("other.md", work / "docs" / "index.md")
+    symlink_or_skip("other.md", work / "docs" / "index.md")
     sha_t = _commit_all(work, "docs: index becomes a symlink")
     # ⚠️ `_commit` also touches a.txt, so the doc is not the only change.
     status = _git(work, "diff", "--name-status", base, sha_t).stdout.splitlines()
@@ -2035,7 +2036,11 @@ fi
 @pytest.mark.skipif(not hasattr(os, "killpg"), reason="needs POSIX process groups to deliver the interrupt")
 @pytest.mark.parametrize(
     ("sig", "refs"),
-    [(signal.SIGTERM, ("topic",)), (signal.SIGHUP, ("topic",)), (signal.SIGINT, ("topic", "topic2"))],
+    # getattr: the list is evaluated at import, before the skipif above can
+    # apply, and Windows has no SIGHUP — a bare attribute made this whole file
+    # (and, without --continue-on-collection-errors, the whole run) uncollectable.
+    [(signal.SIGTERM, ("topic",)), (getattr(signal, "SIGHUP", None), ("topic",)),
+     (signal.SIGINT, ("topic", "topic2"))],
     ids=["SIGTERM", "SIGHUP", "SIGINT-in-second-tree"],
 )
 def test_an_interrupted_push_leaves_no_temporary_worktree_behind(
