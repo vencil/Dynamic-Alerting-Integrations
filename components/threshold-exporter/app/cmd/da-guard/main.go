@@ -37,16 +37,22 @@
 //	   parse-failure list, kept when the file bears on --scope — plus the
 //	   files the route generator refuses whole for a repeated key yaml.v3
 //	   lets through (#2295, withGeneratorDuplicates) — or a
-//	   config.DecodeError met while resolving. Independent of
+//	   config.DecodeError met while resolving — plus the paths the walk
+//	   cannot stat, read or list that bear on --scope
+//	   (ScopedTenants.Unreadable, #2588: the tenants and defaults in them
+//	   are absent from what is checked). Independent of
 //	   --cardinality-limit. The report names them (relative to
 //	   --config-dir). A DecodeError stops the run before any tenant is
-//	   checked, so only that first file is named.
+//	   checked, so only that first undecodable file is named (the
+//	   unreadable paths still are).
 //
-// 3 wins over 1: findings computed over a tree with a skipped file
-// describe only part of it, so "fix the file first" is the one
+// 3 wins over 1: findings computed over a tree with a skipped or unreadable
+// file describe only part of it, so "fix the file first" is the one
 // actionable answer. 3 also replaces the vacuously-safe 0 of an
 // empty scope — a scope whose only tenant file is broken has no
-// tenants to check, and that is not "safe".
+// tenants to check, and that is not "safe" — nor is a scope with paths the
+// walk cannot stat, read or list (3, #2588). A --config-dir the walk cannot
+// list at all is a caller error (2), as for served-values and effective.
 //
 // Warnings never affect exit code (`--warn-as-error` flips this if
 // a customer wants strict mode).
@@ -54,11 +60,13 @@
 // Subcommand `served-values` (#2115, served_values.go) prints what /metrics
 // serves per tenant as JSON, for the Python readers. Same exit codes: 0 ok,
 // 2 caller error or a tree the exporter's load rejects, 3 files the load
-// skips (the JSON is still written, naming them in parse_failed).
+// skips or cannot read (the JSON is still written, naming them in
+// parse_failed / unreadable).
 //
 // Subcommand `effective` (#2564, effective.go) prints every tenant's
 // effective config as tenant-api's /effective resolves it, with profile
-// binding and per-key sources, as JSON. Same exit codes as served-values.
+// binding and per-key sources, as JSON. Same exit codes as served-values
+// (3 also for paths the walk cannot read, named in unreadable, #2588).
 package main
 
 import (
@@ -118,7 +126,9 @@ func parseFlags(args []string, errOut io.Writer) (*flags, error) {
 		"Path to the conf.d/ root. Required. Defaults chains anchor here.")
 	fs.StringVar(&f.scopeDir, "scope", "",
 		"Subdirectory under --config-dir to limit validation. Empty = whole tree. "+
-			"Typical use: pass dirname of the changed _defaults.yaml in a CI hook.")
+			"A relative path is relative to --config-dir, not to the working directory "+
+			"(--config-dir conf.d --scope db; '.' = the whole tree); an absolute path is used as is. "+
+			"Typical use in a CI hook: the changed _defaults.yaml's directory, relative to --config-dir (or absolute).")
 	fs.StringVar(&f.requiredFields, "required-fields", "",
 		"Comma-separated dotted paths every tenant's effective config must have "+
 			"(e.g. 'thresholds.cpu,_routing.receiver.type'). A '_routing' or '_routing.*' path is "+
@@ -158,7 +168,7 @@ func parseFlags(args []string, errOut io.Writer) (*flags, error) {
 			"with profile binding and per-key sources, as JSON (see '%s %s -h').\n\n", effectiveCmd, programName, effectiveCmd)
 		fs.PrintDefaults()
 		fmt.Fprintf(errOut, "\nExit codes:\n  0  clean\n  1  guard found errors\n  2  caller error\n"+
-			"  3  config files the exporter cannot decode; the report names them (fix, re-run)\n")
+			"  3  config files the exporter cannot decode or cannot read; the report names them (fix, re-run)\n")
 	}
 
 	if err := fs.Parse(args); err != nil {
@@ -222,11 +232,20 @@ func run(args []string, stdout, errOut io.Writer) int {
 		// but the merge rejects) is the author's to fix — exit 3, not 2.
 		var de *config.DecodeError
 		if errors.As(err, &de) {
-			if werr := writeDecodeStopReport(stdout, errOut, f, de); werr != nil {
+			// ScopeEffective returns the files the walk could not read
+			// beside a DecodeError (#2588); name them too.
+			var unreadable []skippedFile
+			if scoped != nil {
+				unreadable = unreadableEntries(scoped.Unreadable)
+			}
+			if werr := writeDecodeStopReport(stdout, errOut, f, de, unreadable); werr != nil {
 				fmt.Fprintf(errOut, "%s: %v\n", programName, werr)
 				return exitCallerErr
 			}
 			reportParseFailed(errOut, []string{de.Path})
+			if len(unreadable) > 0 {
+				reportUnreadable(errOut, programName, unreadable)
+			}
 			return exitParseFailed
 		}
 		return exitCallerErr
@@ -256,7 +275,7 @@ func run(args []string, stdout, errOut io.Writer) int {
 		}
 		f.cardinalityLimit = limit
 		if source == "" {
-			source = "built-in default (no root _defaults.yaml)"
+			source = "built-in default (root _defaults.yaml absent or unreadable)"
 		}
 		fmt.Fprintf(errOut, "%s: cardinality limit %d from %s (0 = no check; override with --cardinality-limit)\n",
 			programName, limit, source)
@@ -274,19 +293,16 @@ func run(args []string, stdout, errOut io.Writer) int {
 	// file under a directory with no tenants yet (e.g. brand-new
 	// domain skeleton) is a real, valid scenario.
 	//
-	// ⛔ Unless a file in scope failed the exporter's decode (#2123): the
-	// walker skipped it, so "no tenants" may be exactly the tenants that
-	// file declares. That is exit 3, never the vacuous 0.
+	// ⛔ Unless a file in scope failed the exporter's decode (#2123) or
+	// could not be read at all (#2588): the walker skipped it, so "no
+	// tenants" may be exactly the tenants that file declares. That is exit
+	// 3, never the vacuous 0.
 	if len(scoped.Tenants) == 0 {
-		if err := writeEmptyReport(stdout, errOut, f, scoped.ParseFailed); err != nil {
+		if err := writeEmptyReport(stdout, errOut, f, scoped.ParseFailed, scoped.Unreadable); err != nil {
 			fmt.Fprintf(errOut, "%s: %v\n", programName, err)
 			return exitCallerErr
 		}
-		if len(scoped.ParseFailed) > 0 {
-			reportParseFailed(errOut, scoped.ParseFailed)
-			return exitParseFailed
-		}
-		return exitOK
+		return reportDroppedFiles(errOut, scoped, exitOK)
 	}
 
 	input := buildCheckInput(scoped, f)
@@ -303,9 +319,8 @@ func run(args []string, stdout, errOut io.Writer) int {
 
 	// Before the findings: see the exit-code contract at the top (3 wins
 	// over 1, the findings cover only the files the exporter can read).
-	if len(scoped.ParseFailed) > 0 {
-		reportParseFailed(errOut, scoped.ParseFailed)
-		return exitParseFailed
+	if code := reportDroppedFiles(errOut, scoped, exitOK); code != exitOK {
+		return code
 	}
 	if report.Summary.Errors > 0 {
 		return exitFindings
@@ -314,6 +329,22 @@ func run(args []string, stdout, errOut io.Writer) int {
 		return exitFindings
 	}
 	return exitOK
+}
+
+// reportDroppedFiles: when the scope has files the exporter's load drops
+// (ParseFailed) or the walk cannot read (Unreadable, #2588), name them on
+// stderr and return exitParseFailed; otherwise return otherwise.
+func reportDroppedFiles(errOut io.Writer, scoped *config.ScopedTenants, otherwise int) int {
+	if len(scoped.ParseFailed) == 0 && len(scoped.Unreadable) == 0 {
+		return otherwise
+	}
+	if len(scoped.ParseFailed) > 0 {
+		reportParseFailed(errOut, scoped.ParseFailed)
+	}
+	if len(scoped.Unreadable) > 0 {
+		reportUnreadable(errOut, programName, unreadableEntries(scoped.Unreadable))
+	}
+	return exitParseFailed
 }
 
 // rootCarrierDropped reports whether source (the root defaults carrier
@@ -541,6 +572,7 @@ func writeReport(stdout, errOut io.Writer, f *flags, scoped *config.ScopedTenant
 			SourceFiles []string           `json:"source_files"`
 			Notices     []string           `json:"notices,omitempty"`
 			ParseFailed []string           `json:"parse_failed,omitempty"`
+			Unreadable  []skippedFile      `json:"unreadable,omitempty"`
 			Report      *guard.GuardReport `json:"report"`
 		}{
 			ConfigDir:   f.configDir,
@@ -548,6 +580,7 @@ func writeReport(stdout, errOut io.Writer, f *flags, scoped *config.ScopedTenant
 			SourceFiles: scoped.SourceFiles,
 			Notices:     notices,
 			ParseFailed: scoped.ParseFailed,
+			Unreadable:  unreadableOrNil(scoped.Unreadable),
 			Report:      report,
 		}, "", "  ")
 		if err != nil {
@@ -582,8 +615,9 @@ func renderMarkdown(scoped *config.ScopedTenants, report *guard.GuardReport, not
 		b.WriteString("> ⚠️ " + n + "\n\n")
 	}
 	b.WriteString(parseFailedMarkdown(scoped.ParseFailed))
+	b.WriteString(unreadableMarkdown(scoped.Unreadable))
 	body := report.Markdown()
-	if len(scoped.ParseFailed) > 0 {
+	if len(scoped.ParseFailed) > 0 || len(scoped.Unreadable) > 0 {
 		// #2123: the guard library's all-clear line says the change is safe
 		// to merge; with files the exporter cannot decode it is not. Swapped
 		// here, not in GuardReport.Markdown(), so no other caller's output
@@ -612,17 +646,17 @@ func renderMarkdown(scoped *config.ScopedTenants, report *guard.GuardReport, not
 // Emits a clean Markdown / JSON shell so downstream consumers (PR
 // comment poster, dashboards, log scrapers) don't have to
 // special-case empty input.
-func writeEmptyReport(stdout, errOut io.Writer, f *flags, parseFailed []string) error {
+func writeEmptyReport(stdout, errOut io.Writer, f *flags, parseFailed []string, unreadable []config.UnreadableFile) error {
 	var body string
 	switch f.format {
 	case "md":
 		verdict := "_No tenants under the requested scope; defaults change is vacuously safe._\n"
-		if len(parseFailed) > 0 {
-			// #2123: not "safe" — the tenants may be in the files listed.
+		if len(parseFailed) > 0 || len(unreadable) > 0 {
+			// #2123, #2588: not "safe" — the tenants may be in the files listed.
 			verdict = "_No tenant could be checked under the requested scope; " +
-				"the files listed above cannot be decoded, so this is NOT a safe result._\n"
+				"the files listed above cannot be decoded or read, so this is NOT a safe result._\n"
 		}
-		body = parseFailedMarkdown(parseFailed) +
+		body = parseFailedMarkdown(parseFailed) + unreadableMarkdown(unreadable) +
 			"## Dangling Defaults Guard\n\n" +
 			"### Summary\n\n" +
 			"- Tenants in scope: **0**\n" +
@@ -647,6 +681,9 @@ func writeEmptyReport(stdout, errOut io.Writer, f *flags, parseFailed []string) 
 		}
 		if len(parseFailed) > 0 {
 			doc["parse_failed"] = parseFailed
+		}
+		if len(unreadable) > 0 {
+			doc["unreadable"] = unreadableEntries(unreadable)
 		}
 		b, err := json.MarshalIndent(doc, "", "  ")
 		if err != nil {
@@ -678,24 +715,28 @@ func writeEmptyReport(stdout, errOut io.Writer, f *flags, parseFailed []string) 
 // the scope because one file failed the decode (#2123, exit 3). No tenant was
 // checked: ScopeEffective fails the whole scope on the first such file, so
 // the list names that file only — fix it and re-run to see the next one.
-func writeDecodeStopReport(stdout, errOut io.Writer, f *flags, de *config.DecodeError) error {
+func writeDecodeStopReport(stdout, errOut io.Writer, f *flags, de *config.DecodeError, unreadable []skippedFile) error {
 	files := []string{de.Path}
 	var body string
 	switch f.format {
 	case "md":
-		body = parseFailedMarkdown(files) +
+		body = parseFailedMarkdown(files) + unreadableMarkdownEntries(unreadable) +
 			"## Dangling Defaults Guard\n\n" +
 			"_Stopped before checking any tenant: resolving the scope hit the file above " +
 			"(`" + de.Err.Error() + "`). The run stops at the first such file; fix it and re-run._\n"
 	case "json":
-		b, err := json.MarshalIndent(map[string]any{
+		doc := map[string]any{
 			"config_dir":   f.configDir,
 			"scope":        f.scopeDir,
 			"source_files": []string{},
 			"parse_failed": files,
 			"error":        de.Err.Error(),
 			"report":       nil,
-		}, "", "  ")
+		}
+		if len(unreadable) > 0 {
+			doc["unreadable"] = unreadable
+		}
+		b, err := json.MarshalIndent(doc, "", "  ")
 		if err != nil {
 			return fmt.Errorf("encode JSON report: %w", err)
 		}
@@ -721,7 +762,7 @@ func writeDecodeStopReport(stdout, errOut io.Writer, f *flags, de *config.Decode
 const (
 	noFindingsSafeLine    = "✅ No findings — defaults change is safe to merge.\n"
 	noFindingsNotSafeLine = "No findings among the tenants that were checked; the change cannot be " +
-		"judged until the files listed above decode (exit 3).\n"
+		"judged until the files listed above can be decoded and read (exit 3).\n"
 )
 
 // parseFailedMarkdown is the report block naming the files whose exporter
@@ -743,12 +784,67 @@ func parseFailedMarkdown(files []string) string {
 	return b.String()
 }
 
+// unreadableMarkdown is the report block naming the paths the walk cannot
+// stat, read or list (#2588); "" when there are none, so a clean tree's
+// report is unchanged.
+func unreadableMarkdown(us []config.UnreadableFile) string {
+	return unreadableMarkdownEntries(unreadableEntries(us))
+}
+
+func unreadableMarkdownEntries(files []skippedFile) string {
+	if len(files) == 0 {
+		return ""
+	}
+	var b strings.Builder
+	b.WriteString("### Files the exporter cannot read\n\n")
+	b.WriteString("The exporter cannot stat, read or list these paths and serves the tree without them, " +
+		"so the tenants and defaults they hold are not checked. Fix them and re-run (exit 3):\n\n")
+	for _, u := range files {
+		b.WriteString("- `" + u.File + "` (" + u.Reason + ")\n")
+	}
+	b.WriteString("\n")
+	return b.String()
+}
+
+// unreadableOrNil: the guard report's optional `unreadable` (omitted when
+// there is none, like `parse_failed`).
+func unreadableOrNil(us []config.UnreadableFile) []skippedFile {
+	if len(us) == 0 {
+		return nil
+	}
+	return unreadableEntries(us)
+}
+
 // reportParseFailed is the stderr line for exit 3, so a CI log names the
 // files even when the report went to --output.
 func reportParseFailed(errOut io.Writer, files []string) {
 	fmt.Fprintf(errOut, "%s: %d file(s) cannot be decoded: %s — "+
 		"fix them and re-run (exit 3)\n",
 		programName, len(files), strings.Join(files, ", "))
+}
+
+// unreadableEntries is the JSON form of the walk's unreadable entries
+// (served-values, effective and the guard report share it): never nil, so a
+// field that is always present encodes as [] when there is none.
+func unreadableEntries(us []config.UnreadableFile) []skippedFile {
+	out := make([]skippedFile, 0, len(us))
+	for _, u := range us {
+		out = append(out, skippedFile{File: u.RelKey, Reason: u.Reason})
+	}
+	return out
+}
+
+// reportUnreadable is the stderr line for exit 3 when the walk could not
+// stat, read or list paths (#2115, #2588), so a CI log names them even when
+// the report went to --output. who is the program name, plus the subcommand
+// for one.
+func reportUnreadable(errOut io.Writer, who string, files []skippedFile) {
+	names := make([]string, 0, len(files))
+	for _, u := range files {
+		names = append(names, u.File+" ("+u.Reason+")")
+	}
+	fmt.Fprintf(errOut, "%s: %d path(s) cannot be read: %s — fix them and re-run (exit 3)\n",
+		who, len(names), strings.Join(names, ", "))
 }
 
 func main() {

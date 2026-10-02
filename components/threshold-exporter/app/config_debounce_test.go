@@ -10,6 +10,8 @@ package main
 
 import (
 	"errors"
+	"io"
+	"log"
 	"os"
 	"path/filepath"
 	"strings"
@@ -17,8 +19,11 @@ import (
 	"testing"
 	"time"
 
+	"github.com/jonboulle/clockwork"
 	"github.com/prometheus/client_golang/prometheus"
 	"github.com/prometheus/client_golang/prometheus/testutil"
+
+	"github.com/vencil/threshold-exporter/pkg/config"
 )
 
 // waitFor polls `cond` until it returns true or the timeout expires. Returns
@@ -663,5 +668,70 @@ func TestEmitParseFailureSignal(t *testing.T) {
 				t.Errorf("log missing %q; got: %s", tt.wantLog, logBuf.String())
 			}
 		})
+	}
+}
+
+// TestDebounceWindow_ServedAndCommittedStateLagDiskUntilFire pins what a
+// test oracle for "the value the exporter serves" must read (#2586). Inside
+// a 60s debounce window the tenant file already says 23 while the last
+// commit said 21: /metrics and the committed hierarchy must both still say
+// 21, and only the window firing may move them — together — to 23.
+//
+// The removed ConfigManager.Resolve re-read the files on every call and
+// answered 23 here while /metrics served 21; a test using it as the oracle
+// took the disk's value for the served one. ResolveEffective is asserted to
+// see 23 so the window is known to hold an uncommitted change (otherwise
+// "both say 21" would hold vacuously).
+func TestDebounceWindow_ServedAndCommittedStateLagDiskUntilFire(t *testing.T) {
+	dir := t.TempDir()
+	writeHierarchicalFixture(t, dir, "21")
+
+	m := NewConfigManagerWithDebounce(dir, 60*time.Second)
+	defer m.Close()
+	fc := clockwork.NewFakeClock()
+	m.SetClock(fc)
+	m.SetLogger(log.New(io.Discard, "", 0))
+	if err := m.Load(); err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+	before, ok := committedTenantState(m, "tenant-a")
+	if !ok {
+		t.Fatalf("tenant-a is not in the committed hierarchy after Load")
+	}
+
+	writeHierarchicalFixture(t, dir, "23")
+	touchTreeAt(t, dir, time.Now().Add(3*time.Second))
+	m.triggerDebouncedReload(ReloadReasonSource)
+
+	disk, err := config.ResolveEffective(dir, "tenant-a")
+	if err != nil {
+		t.Fatalf("ResolveEffective: %v", err)
+	}
+	if got := disk.EffectiveConfig["mysql_connections"]; got != "23" {
+		t.Fatalf("premise: the file on disk should already say 23, ResolveEffective reads %v", got)
+	}
+	if disk.MergedHash == before.MergedHash {
+		t.Fatalf("premise: the disk's merged_hash should differ from the committed one")
+	}
+
+	// Inside the window: nothing is committed, so nothing served moves.
+	if got, ok := seriesFor(t, m, "tenant-a", "connections"); !ok || got != 21 {
+		t.Errorf("in window: /metrics = %v (present=%v), want the committed 21", got, ok)
+	}
+	if in, _ := committedTenantState(m, "tenant-a"); in.MergedHash != before.MergedHash {
+		t.Errorf("in window: committed merged_hash moved %s → %s before the window fired", before.MergedHash, in.MergedHash)
+	}
+
+	// Must-trigger: the window fires, the commit moves both.
+	fc.Advance(61 * time.Second)
+	if !waitFor(t, 5*time.Second, func() bool {
+		got, ok := seriesFor(t, m, "tenant-a", "connections")
+		return ok && got == 23
+	}) {
+		got, ok := seriesFor(t, m, "tenant-a", "connections")
+		t.Fatalf("after fire: /metrics = %v (present=%v), want 23 (fired=%d)", got, ok, m.DebounceFiredCount())
+	}
+	if after, _ := committedTenantState(m, "tenant-a"); after.MergedHash != disk.MergedHash {
+		t.Errorf("after fire: committed merged_hash = %s, want the disk's %s", after.MergedHash, disk.MergedHash)
 	}
 }

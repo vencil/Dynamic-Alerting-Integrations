@@ -35,7 +35,8 @@ sys.path.insert(0, os.path.join(str(_THIS_DIR), ".."))
 from _lib_compat import try_utf8_stdout  # noqa: E402
 from _lib_exitcodes import EXIT_CALLER_ERROR  # noqa: E402
 from _lib_io import exit_on_output_write_error, output_write  # noqa: E402  (#1789)
-from _lib_io import exit_on_yaml_file_error, load_yaml_file_strict  # noqa: E402  (#2231)
+from _lib_io import exit_on_yaml_file_error  # noqa: E402  (#2231)
+from _lib_io import load_yaml_file_strict_exporter_keys  # noqa: E402  (#2231; #2216)
 from _lib_confd import (  # noqa: E402
     has_yaml_extension,
     is_hidden_name,
@@ -54,9 +55,12 @@ def _load_yaml(path: Path) -> dict:
     Strict (#2231): a key written twice is a file the exporter drops whole,
     so it raises YamlFileError like bad syntax — main() exits 2, named —
     instead of planning a move from whichever value PyYAML kept last.
+
+    #2216: tenant ids are the keys' source text, as the exporter reads them
+    — `010:` is tenant "010", not 8.
     """
     if yaml:
-        return load_yaml_file_strict(str(path)) or {}
+        return load_yaml_file_strict_exporter_keys(str(path)) or {}
     raise RuntimeError("PyYAML is required. Install: pip install pyyaml")
 
 

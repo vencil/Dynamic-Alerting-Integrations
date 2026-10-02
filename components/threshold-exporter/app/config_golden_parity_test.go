@@ -3,7 +3,7 @@ package main
 // Golden parity test — the TRUMP CARD for ADR-017 conformance.
 //
 // This test reads tests/golden/golden.json (captured from Python
-// describe_tenant.py) and runs the Go computeMergedHash + computeSourceHash
+// describe_tenant.py) and runs the Go computeMergedHash + config.ComputeSourceHash
 // against the same fixtures. Byte-for-byte hash equality is required;
 // any divergence is a §8.11.2 semantic trap and a ship blocker.
 //
@@ -172,7 +172,7 @@ func TestGoldenParity_SourceHash(t *testing.T) {
 			if err != nil {
 				t.Fatalf("read %s: %v", tenantPath, err)
 			}
-			got := computeSourceHash(data)
+			got := config.ComputeSourceHash(data)
 			if got != g.SourceHash {
 				t.Errorf("source_hash drift: got %q want %q (file=%s)",
 					got, g.SourceHash, tenantPath)
@@ -254,9 +254,9 @@ func TestGoldenParity_EffectiveConfig(t *testing.T) {
 				defaultsBytes = append(defaultsBytes, b)
 			}
 
-			got, err := computeEffectiveConfig(tenantBytes, g.TenantID, defaultsBytes)
+			got, err := config.ComputeEffectiveConfig(tenantBytes, g.TenantID, defaultsBytes)
 			if err != nil {
-				t.Fatalf("computeEffectiveConfig: %v", err)
+				t.Fatalf("config.ComputeEffectiveConfig: %v", err)
 			}
 
 			// Compare via canonical JSON round-trip so int vs float coercion

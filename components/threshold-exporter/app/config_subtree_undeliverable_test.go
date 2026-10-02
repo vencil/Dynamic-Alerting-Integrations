@@ -95,8 +95,8 @@ func TestUndeliverableAudit_ColdStart_NestedTenantIsSilent(t *testing.T) {
 
 	// Both planes, same tenant. The pair is the point — either one alone was
 	// satisfied before #1521.
-	if _, ok := m.Resolve("hier-tenant"); !ok {
-		t.Fatalf("precondition: the hierarchical scanner must still resolve hier-tenant")
+	if _, ok := committedTenantState(m, "hier-tenant"); !ok {
+		t.Fatalf("precondition: the committed hierarchy must still know hier-tenant")
 	}
 	if _, ok := m.GetConfig().Tenants["hier-tenant"]; !ok {
 		t.Errorf("#1521 REGRESSED: the nested tenant is back to resolving through "+
@@ -182,8 +182,8 @@ func TestUndeliverableAudit_HotReload_HierarchicalPath(t *testing.T) {
 	writeNestedTenant(t, dir)
 	m.tickOnce()
 
-	if _, ok := m.Resolve("hier-tenant"); !ok {
-		t.Errorf("hot reload should have made the nested tenant resolvable via /effective")
+	if _, ok := committedTenantState(m, "hier-tenant"); !ok {
+		t.Errorf("hot reload should have committed the nested tenant to the hierarchy")
 	}
 	if _, ok := m.GetConfig().Tenants["hier-tenant"]; !ok {
 		t.Errorf("#1521 REGRESSED on the hot-reload path: the nested tenant did not "+

@@ -178,10 +178,7 @@ func runServedValues(args []string, stdout, errOut io.Writer) int {
 	for _, name := range rep.NoTenant {
 		skipped = append(skipped, skippedFile{File: name, Reason: config.NoTenantReason})
 	}
-	unreadable := make([]skippedFile, 0, len(rep.Unreadable))
-	for _, u := range rep.Unreadable {
-		unreadable = append(unreadable, skippedFile{File: u.RelKey, Reason: u.Reason})
-	}
+	unreadable := unreadableEntries(rep.Unreadable)
 	doc := servedValuesDoc{
 		At:          at.Format(time.RFC3339),
 		ParseFailed: parseFailed,
@@ -206,12 +203,7 @@ func runServedValues(args []string, stdout, errOut io.Writer) int {
 		reportParseFailed(errOut, parseFailed)
 	}
 	if len(unreadable) > 0 {
-		names := make([]string, 0, len(unreadable))
-		for _, u := range unreadable {
-			names = append(names, u.File+" ("+u.Reason+")")
-		}
-		fmt.Fprintf(errOut, "%s %s: %d path(s) cannot be read: %s — fix them and re-run (exit 3)\n",
-			programName, servedValuesCmd, len(names), strings.Join(names, ", "))
+		reportUnreadable(errOut, programName+" "+servedValuesCmd, unreadable)
 	}
 	if len(parseFailed) > 0 || len(unreadable) > 0 {
 		return exitParseFailed

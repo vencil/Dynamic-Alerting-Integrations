@@ -623,14 +623,15 @@ func overlaySurvivesReload(t *testing.T, tree overlayReloadTree, f func(float64)
 }
 
 // servedSnapshot is every (tenant → overlayMetricKey value) /metrics
-// carries, plus the tenants /effective answers for among `probe`.
+// carries, plus the tenants among `probe` the committed hierarchy
+// (tenantSources) knows.
 type servedSnapshot struct {
 	values    map[string]float64
-	effective map[string]bool
+	committed map[string]bool
 }
 
 func snapshotServed(m *ConfigManager, probe []string) servedSnapshot {
-	snap := servedSnapshot{values: map[string]float64{}, effective: map[string]bool{}}
+	snap := servedSnapshot{values: map[string]float64{}, committed: map[string]bool{}}
 	for tenant := range m.GetConfig().Tenants {
 		v, ok := servedValue(m, tenant)
 		if !ok {
@@ -639,8 +640,8 @@ func snapshotServed(m *ConfigManager, probe []string) servedSnapshot {
 		snap.values[tenant] = v
 	}
 	for _, tid := range probe {
-		_, found := m.Resolve(tid)
-		snap.effective[tid] = found
+		_, found := committedTenantState(m, tid)
+		snap.committed[tid] = found
 	}
 	return snap
 }
@@ -649,14 +650,14 @@ func snapshotServed(m *ConfigManager, probe []string) servedSnapshot {
 // differential for the two ways a tenant leaves a tenant file that STAYS on
 // disk — `tenants: {}` and re-declaring it as another tenant — while a
 // platform file still names it. After every step the reloaded manager must
-// serve exactly what a fresh Load of the same tree serves, and /effective
-// must answer for the same tenants (an orphan: not found).
+// serve exactly what a fresh Load of the same tree serves, and its committed
+// hierarchy must know the same tenants (an orphan: not known).
 //
 // Each half of the fix is pinned by it, measured by removing it: the
 // `tenantExists` condition in patchTenants' changed-file loop (without it
 // the platform entry kept the deleted tenant alive after an incremental
-// reload) and the `_`-file skip in refreshTenantSources (without it
-// /effective answered for the orphan, attributed to `_defaults.yaml`).
+// reload) and the `_`-file skip in refreshTenantSources (without it the
+// committed tenantSources kept the orphan, attributed to `_defaults.yaml`).
 // Both halves live in incrementalLoadFrom, which the watch path reaches only
 // on the flat layout of overlayReloadTrees (#1577); the carrier layout pins
 // the hierarchical reload against the same oracle.
@@ -700,8 +701,8 @@ func TestPlatformTenantOverlayReloadMatchesFreshLoad(t *testing.T) {
 				// The differential alone would pass if BOTH sides kept the
 				// orphan; state the expected answer too.
 				if strings.HasPrefix(st.name, "tenant-emptied") {
-					if _, served := got.values["tx"]; served || got.effective["tx"] {
-						t.Errorf("%s/%s: orphan tx still served=%v effective=%v", rname, st.name, served, got.effective["tx"])
+					if _, served := got.values["tx"]; served || got.committed["tx"] {
+						t.Errorf("%s/%s: orphan tx still served=%v committed=%v", rname, st.name, served, got.committed["tx"])
 					}
 				}
 			}

@@ -210,7 +210,7 @@ type ConfigManager struct {
 	// down would self-deadlock. Lock order: reloadMu is the OUTERMOST lock —
 	// it is acquired while holding none of m.mu, debounce.mu or
 	// undeliverable.mu, and each of those is taken and released inside it.
-	// Scrapes and /effective only take m.mu, so they never wait on it.
+	// Scrapes only take m.mu, so they never wait on it.
 	reloadMu sync.Mutex
 
 	// undeliverable tracks what the subtree-undeliverable audit last put in
@@ -499,7 +499,8 @@ func (m *ConfigManager) commitConfig(cfg *ThresholdConfig, hash string, flatScan
 	}
 
 	// #1521: the flat scanner that produced `cfg` is not recursive while
-	// the hierarchical scanner behind /effective is. Compare the two
+	// the hierarchical scanner behind the committed hierarchy
+	// (tenantSources / mergedHashes) is. Compare the two
 	// tenant populations here — this is the only site in the package that
 	// assigns m.config, so hooking the audit in means every publishing
 	// path (Load, fullDirLoad, incrementalLoadFrom, and diffAndReload via
@@ -871,9 +872,10 @@ func (m *ConfigManager) incrementalLoadFrom(scan *treeScan) error {
 	// The block above fixed `unreachableInherited` and named the risk —
 	// "the asymmetry between the two fields `installConfig` returns is exactly
 	// the kind that becomes live later". It already was. `tenantSources` is
-	// the population /effective serves (and the one the commit-time audit
-	// iterates), so a tenant that leaves the tree lingered there — still
-	// resolvable while /metrics had dropped it. Until #1957 the audit then
+	// the committed hierarchy's tenant population (the one the commit-time
+	// audit iterates, and the one the removed ConfigManager.Resolve read), so
+	// a tenant that leaves the tree lingered there — still listed while
+	// /metrics had dropped it. Until #1957 the audit then
 	// reported it as a scanner divergence pointing at a parse-failure line
 	// that did not exist, because nothing was broken: the operator deleted
 	// the tenant. Measured both ways it can leave: removing one of two root
@@ -893,14 +895,14 @@ func (m *ConfigManager) incrementalLoadFrom(scan *treeScan) error {
 	// the walker's verdict, and a full load drops its tenants from BOTH planes.
 	// This path may instead keep them in the merged config — patchTenants'
 	// "keep the last good values" on the tenant-only branch — or drop them —
-	// the full-rebuild branch. Whichever it did, /effective must answer for
-	// the same tenant set /metrics serves: before #1957 this row was "KEEP,
+	// the full-rebuild branch. Whichever it did, the committed hierarchy
+	// (tenantSources) must hold the same tenant set /metrics serves: before #1957 this row was "KEEP,
 	// so cause (a) still fires", i.e. the rule deliberately MADE the two
 	// planes disagree so the divergence audit could report it.
 	//
 	// Additions are attributed from the flat scan rather than left blank: a
-	// tenant absent from `tenantSources` is invisible to /effective while
-	// /metrics serves it. Never OVERWRITES an existing attribution — where
+	// tenant absent from `tenantSources` has no committed hierarchy entry
+	// (no defaults chain, no merged_hash) while /metrics serves it. Never OVERWRITES an existing attribution — where
 	// the two disagree about which file owns a tenant (a duplicate the fast
 	// path accepts), the hierarchical one stands.
 	refreshTenantSources := func() {
@@ -941,8 +943,8 @@ func (m *ConfigManager) incrementalLoadFrom(scan *treeScan) error {
 			// supplies per-tenant DEFAULTS and cannot attribute (or create)
 			// a tenant: before this, an entry naming a tenant no tenant file
 			// declares was attributed to `_defaults.yaml` here, so the
-			// incremental path made /effective answer for a tenant the full
-			// load never locates.
+			// incremental path kept in tenantSources a tenant the full load
+			// never locates.
 			if isPlatformKey(key) {
 				continue
 			}
@@ -1453,7 +1455,8 @@ func patchTenants(prev *ThresholdConfig, newConfigs, oldConfigs map[string]Thres
 	// file's tenants are left alone — today's fail-safe "keep the last good
 	// values". A full load drops them instead (the walker rejects the file,
 	// #1957), so the two PATHS still disagree there — though on each path
-	// /effective follows /metrics (refreshTenantSources keeps such a tenant
+	// the committed hierarchy (tenantSources) follows /metrics
+	// (refreshTenantSources keeps such a tenant
 	// exactly while this merged config does). That difference is a
 	// deliberate behaviour question (silently keep stale values vs. stop a
 	// tenant's alerts on a typo), not something to settle inside a bug fix.
@@ -1648,7 +1651,7 @@ func (m *ConfigManager) commitFlatFrom(scan *treeScan) error {
 // Memory: the hashes map may be large at 1000 tenants (roughly
 // tenants × 64-char strings = ~100KB). We swap the pointer rather than
 // merging in place so a partial install never leaves torn state visible
-// to the /effective read path.
+// to readers of the committed hierarchy.
 func (m *ConfigManager) populateHierarchyStateFrom(scan *treeScan) {
 	m.populateHierarchyStateWith(scan, newColdMergeInputs(scan))
 }
@@ -2047,113 +2050,6 @@ func (m *ConfigManager) GetConfig() *ThresholdConfig {
 	m.mu.RLock()
 	defer m.mu.RUnlock()
 	return m.config
-}
-
-// EffectiveConfig is the result of resolving one tenant's full config
-// chain (L0→Ln defaults merged + tenant override applied) with both the
-// raw-source and canonical-merged hashes. Surfaced via
-// ConfigManager.Resolve and the /api/v1/tenants/{id}/effective endpoint
-// (§8.11.3 Phase 6).
-//
-// Field naming matches describe_tenant.py JSON output + tenant-api Go
-// shape to keep cross-language consumers drop-in compatible.
-type EffectiveConfig struct {
-	TenantID      string         // tenant identifier
-	SourceFile    string         // absolute path to tenant YAML
-	SourceHash    string         // SHA-256[:16] of raw tenant bytes
-	MergedHash    string         // SHA-256[:16] of canonical merged JSON
-	DefaultsChain []string       // L0→Ln defaults file paths (root first)
-	Config        map[string]any // merged tenant config (full dict)
-	Warnings      []string       // merge-time warnings (currently empty)
-}
-
-// Resolve returns the effective config for one tenant, computed on
-// demand from the cached hierarchy state. Returns (nil, false) when the
-// tenant is not currently known (404 signal for the /effective handler).
-//
-// The returned Config is a freshly-allocated map owned by the caller —
-// safe to serialize concurrently with future reloads.
-//
-// Error semantics: merge failures (unreadable file, bad YAML) return
-// (nil, true) with a single warning. This lets the API respond with a
-// structured error body instead of 404/500.
-func (m *ConfigManager) Resolve(tenantID string) (*EffectiveConfig, bool) {
-	m.mu.RLock()
-	srcPath, known := m.hierarchy.tenantSources[tenantID]
-	var chain []string
-	if m.hierarchy.graph != nil {
-		chain = append(chain, m.hierarchy.graph.TenantDefaults[tenantID]...)
-	}
-	cachedHash := m.hierarchy.mergedHashes[tenantID]
-	// #2019: the cached merged_hash includes the root platform files'
-	// entries for this tenant, so the config served next to it must be
-	// merged with the SAME entries (the ones that hash was computed from),
-	// or the two contradict each other.
-	// #2117: and with the SAME profiles.
-	layers := config.TenantLayers{
-		Overlay:  config.PlatformOverlayFor(m.hierarchy.platform, tenantID),
-		Profiles: m.hierarchy.profiles,
-	}
-	m.mu.RUnlock()
-
-	if !known {
-		return nil, false
-	}
-
-	tenantBytes, err := os.ReadFile(srcPath)
-	if err != nil {
-		return &EffectiveConfig{
-			TenantID:      tenantID,
-			SourceFile:    srcPath,
-			DefaultsChain: chain,
-			Warnings:      []string{fmt.Sprintf("read tenant file: %v", err)},
-		}, true
-	}
-
-	// Re-read each defaults file. This is intentional: the cached
-	// merged_hash is valid under the last scan, but we want the /effective
-	// response to contain the live effective_config map, not just the
-	// hash. Future optimization: cache the merged map alongside the hash.
-	chainBytes := make([][]byte, 0, len(chain))
-	var warnings []string
-	for _, dp := range chain {
-		b, rerr := os.ReadFile(dp)
-		if rerr != nil {
-			warnings = append(warnings, fmt.Sprintf("read defaults %s: %v", dp, rerr))
-			continue
-		}
-		chainBytes = append(chainBytes, b)
-	}
-
-	merged, err := computeEffectiveConfig(tenantBytes, tenantID, chainBytes, layers)
-	if err != nil {
-		return &EffectiveConfig{
-			TenantID:      tenantID,
-			SourceFile:    srcPath,
-			DefaultsChain: chain,
-			Warnings:      append(warnings, fmt.Sprintf("merge: %v", err)),
-		}, true
-	}
-
-	sourceHash := computeSourceHash(tenantBytes)
-	mergedHash := cachedHash
-	if mergedHash == "" {
-		// Cold path: cache miss (first /effective before any reload).
-		// Compute on the fly.
-		if mh, mErr := computeMergedHash(tenantBytes, tenantID, chainBytes, layers); mErr == nil {
-			mergedHash = mh
-		}
-	}
-
-	return &EffectiveConfig{
-		TenantID:      tenantID,
-		SourceFile:    srcPath,
-		SourceHash:    sourceHash,
-		MergedHash:    mergedHash,
-		DefaultsChain: chain,
-		Config:        merged,
-		Warnings:      warnings,
-	}, true
 }
 
 func (m *ConfigManager) IsLoaded() bool {
