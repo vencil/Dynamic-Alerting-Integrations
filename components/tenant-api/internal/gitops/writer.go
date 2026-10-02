@@ -1619,10 +1619,11 @@ func validateShape(tenantID, yamlContent string) (cfg.ThresholdConfig, []string)
 	if err := yaml.Unmarshal([]byte(yamlContent), &tcfg); err != nil {
 		return tcfg, []string{"invalid YAML: " + err.Error()}
 	}
-	// A key the route generator counts as written twice and yaml.v3 does not
-	// (an alias key beside its anchor, two `<<`): the generator's StrictLoader
-	// refuses the whole file (#2295), so it is refused here as a plain repeated
-	// key is by the Unmarshal above.
+	// A key the route generator counts as written twice and the Unmarshal
+	// above does not (an alias key beside its anchor; two `<<` only in a
+	// mapping that typed decode skips — inside `tenants:` it refuses them
+	// itself): the generator's StrictLoader refuses the whole file (#2295), so
+	// it is refused here as a plain repeated key is by the Unmarshal above.
 	if d := pyyamlcompat.FindDuplicateKeyIn([]byte(yamlContent)); d != nil {
 		return tcfg, []string{"invalid YAML: " + d.Error()}
 	}

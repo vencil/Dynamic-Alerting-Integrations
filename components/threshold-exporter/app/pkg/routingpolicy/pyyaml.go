@@ -372,10 +372,18 @@ var overrideMatcherKeys = []string{"alertname", "metric_group"}
 // downstream either — except an entry's `group_by` when yaml.v3 read the
 // entry as a map[any]any. Every such value the yaml.v3 side carries and py does
 // not is Unmatched / UnmatchedValue (see the fail-closed note above).
+//
+// #2341 R5: a routing that is not a mapping at all (a scalar, a list, null)
+// is returned as py reads it — an unquoted `off` is a boolean there, not the
+// string yaml.v3 makes of it, and RoutingNotMapping judges that reading. py
+// nil (not found) reads as null and is refused too (fail-closed).
 func WithPyYAMLRouting(routing, py any) any {
 	r, ok := asStringMap(routing)
 	if !ok {
-		return routing
+		if _, isMap := routing.(map[any]any); isMap {
+			return routing
+		}
+		return py
 	}
 	withKey := func(dst map[string]any, src any, key string, missing any) {
 		if _, has := dst[key]; !has {

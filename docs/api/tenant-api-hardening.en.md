@@ -209,6 +209,7 @@ Without the fix, PUT/DELETE Groups will hit the new tenant-scoped check and retu
 | `BatchOperation.patch._timeout_ms` | integer 0..3,600,000 (≤ 1h) |
 | `BatchOperation.patch._quench_min` | integer 0..86,400 (≤ 1d) |
 | `BatchOperation.patch._routing_profile` / `_profile` | 1-256 chars |
+| `BatchOperation.patch._routing` | a disabling string only: `disable` / `disabled` / `off` / `false` (case-insensitive, surrounding whitespace allowed; the route generator's own test); any other value (`on`, `slack`, an empty string, JSON `null`) is 400 — to turn routing back on, PUT a `_routing` mapping or remove `_routing` (#2341) |
 | Other `_*`-prefixed reserved keys | **soft whitelist** — pass through (decouples tenant-api release cadence from threshold-exporter's evolving key set) |
 | `PutGroupRequest.label` / `PutViewRequest.label` | required, 1-256 chars |
 | `PutGroupRequest.description` / `PutViewRequest.description` | ≤ 4096 chars |

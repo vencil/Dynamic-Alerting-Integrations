@@ -4213,7 +4213,7 @@ _EXPECTED_GH_GENERATE: list[str] = [
     # and since #1650 the tool exits 2 on that combination, so the old line
     # would have turned every customer's PR red. `mkdir -p .output` stays:
     # the config-diff step below still redirects into it on the host.
-    'docker run --rm -v "${{ github.workspace }}/${{ env.CONFIG_DIR }}:/data/conf.d:ro" ${{ env.DA_TOOLS_IMAGE }} generate-routes --config-dir /data/conf.d --validate',
+    'docker run --rm -v "${{ github.workspace }}/${{ env.CONFIG_DIR }}:/data/conf.d:ro" ${{ env.DA_TOOLS_IMAGE }} generate-routes --config-dir /data/conf.d --validate --strict',
     ': "${RUNNER_TEMP:?RUNNER_TEMP is not set; this step writes its intermediate files there}"',
     'config_dir="${CONFIG_DIR%/}"',
     'mkdir -p .output/base/"$config_dir"',
@@ -4326,7 +4326,7 @@ _EXPECTED_GL_GENERATE: list[str] = [
     'echo "ERROR: $config_dir at $base_sha is a $kind, not a directory, so no baseline can be built from it. A kind of \'commit\' means a submodule is mounted there; \'blob\' means either a file has that name, or the path is a symlink. Reporting any of those as a first import would hide the fault." >&2',
     'exit 1',
     'fi',
-    'da-tools generate-routes --config-dir "$CONFIG_DIR" --validate',
+    'da-tools generate-routes --config-dir "$CONFIG_DIR" --validate --strict',
     'set +e',
     'da-tools config-diff --old-dir .output/base/"${CONFIG_DIR%/}" --new-dir "$CONFIG_DIR" --format markdown > .output/blast-radius.md',
     'rc=$?',

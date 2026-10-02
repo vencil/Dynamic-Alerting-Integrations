@@ -96,15 +96,48 @@
     "routingpolicy.IsBlocking is true for exactly these among every Problem kind, so the lists cannot",
     "drift. routing_in_unread_location with field `_routing_defaults` is the one row of that kind the",
     "Python reader also reports (a `_` non-carrier file below the root; --validate-blocking there).",
-    "#2412 - a root `_routing_defaults` that is not a mapping (list, string, number) contributes nothing, as below the root: no platform row (the generator WARNs, rc 0); it still replaces an earlier root file's `_routing_defaults` WHOLE (root _ files in name order), so the later file decides.",
+    "#2412 / #2341 - a `_routing_defaults` that is neither a mapping nor null (list, string, number, an unquoted boolean) contributes nothing, at the root and below; it still replaces an earlier root file's `_routing_defaults` WHOLE (root _ files in name order), so the later file decides. It is a platform row, routing_defaults_not_mapping [kind, file, '_routing_defaults']: the generator's blocking `WARN ... skipping` (--strict: ERROR), da-guard's error with an empty tenant.",
     "#2504 - a null key in a routes match (~, null, an empty `? ` key) is no label name: the entry is rejected in every reader, alone or beside a valid label. The generator keeps that key (as None) instead of dropping it as its loader drops null keys elsewhere, so it no longer renders the route on the other labels alone; a critical -> pagerduty route that carries one is no escalation.",
-    "enforced_group_by_invalid (#2503, per tree): [file, field, kind] per bad group_by element of the `_routing_enforced` route(s) the generator renders - read from the root `_` files in name order, a later one with `enabled: true` (as PyYAML reads it: `yes` / `on` too) replacing an earlier; judged only with a truthy receiver that the receiver contract accepts (pkg/receiverspec, _grar_merge.build_receiver_config) and a non-empty group_by list, the `{{tenant}}` shape once per routed tenant AFTER substitution. field is `_routing_enforced.group_by[i]`, or `_routing_enforced (<tenant>).group_by[i]` for the `{{tenant}}` shape; file is the root file the enforced block came from. The generator's --strict ERROR (it names no file, so the Python half compares field and kind), da-guard's routing_group_by_invalid with an empty tenant and Field <file>:<field>. The --policy domain allowlist is not applied (load_tenant_tree does not know it)."
+    "enforced_group_by_invalid (#2503, per tree): [file, field, kind] per bad group_by element of the `_routing_enforced` route(s) the generator renders - read from the root `_` files in name order, a later one with `enabled: true` (as PyYAML reads it: `yes` / `on` too) replacing an earlier; judged only with a truthy receiver that the receiver contract accepts (pkg/receiverspec, _grar_merge.build_receiver_config) and a non-empty group_by list, the `{{tenant}}` shape once per routed tenant AFTER substitution. field is `_routing_enforced.group_by[i]`, or `_routing_enforced (<tenant>).group_by[i]` for the `{{tenant}}` shape; file is the root file the enforced block came from. The generator's --strict ERROR (it names no file, so the Python half compares field and kind), da-guard's routing_group_by_invalid with an empty tenant and Field <file>:<field>. The --policy domain allowlist is not applied (load_tenant_tree does not know it).",
+    "refused (#2341): null, or why the generator renders NOTHING for the tenant although it is declared - 'invalid_tenant_id' = its id is refused (tenant_ids, below; checked first); 'routing_not_mapping' = its `_routing` (tenant file over the root platform overlay), as PyYAML reads it, is neither a mapping nor a disabling string (disable / disabled / off / false, a YAML string): `slack`, a list, null, an unquoted false / off / no (a YAML boolean; a quoted 'off' disables). targets is then null. The generator's blocking `WARN ... skipping` (--strict: ERROR), da-guard's routing_not_mapping, tenant-api's 400 for a PUT body that writes it.",
+    "#2341 - tenant_api.batch verdict '400' = the whole batch request is refused with INVALID_BODY before any write: a `_routing` patch value that is no disabling string (`on`, `slack`, '', a JSON null) - a flat patch cannot write a `_routing` mapping, so re-enabling routing is a PUT.",
+    "tenant_ids (#2341 R8): the ids every reader refuses (Python _lib_validation.is_valid_tenant_id, Go routingpolicy.IsValidTenantID) and accepts. Refused = the empty id plus every id that ALL three existing tenant-name rules refuse (operator_generate.py / migrate_to_operator.py: DNS-1123 label; alert_quality.py: ^[a-zA-Z0-9_-]+$) - i.e. not ^[A-Za-z0-9_-]+$; an id any of them accepts (UPPER) stays valid. A declared tenant with a refused id renders NOTHING (no route, receiver or inhibit rule): refused 'invalid_tenant_id', targets null - the generator's blocking `WARN ... skipping` (--strict: ERROR), da-guard's invalid_tenant_id (Field <file>:tenants.<id>), tenant-api's 400 on a write to that id.",
+    "#2341 - a disabling string is decided as _lib_validation.is_disabled decides it: Python str.strip() (U+001C-U+001F are whitespace too) then lower() on the remaining text, which must be ASCII (U+0130 'I with dot' never lowers to 'i'): `\"\\x1coff\"` disables, `\"d\\u0130sable\"` is routing_not_mapping."
   ],
   "blocking_kinds": [
     "routing_defaults_null_below_root",
     "routing_enforced_below_root",
     "routing_profile_duplicate"
   ],
+  "tenant_ids": {
+    "valid": [
+      "t-a",
+      "tenant-x",
+      "UPPER",
+      "Mixed_Case-1",
+      "a",
+      "_x",
+      "-x",
+      "x_",
+      "010",
+      "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+    ],
+    "invalid": [
+      "",
+      " ",
+      "bad tenant",
+      "Bad_Tenant!",
+      "a.b",
+      "a/b",
+      "t\n",
+      " t-a",
+      "t-a ",
+      "tenänt",
+      "a:b",
+      "{{tenant}}",
+      "1.5e3"
+    ]
+  },
   "trees": [
     {
       "name": "i-routes-entry-unknown-receiver-type",
@@ -136,7 +169,8 @@
             "batch": null
           },
           "python_differs": null,
-          "escalation": null
+          "escalation": null,
+          "refused": null
         }
       },
       "enforced_group_by_invalid": []
@@ -177,7 +211,8 @@
             "batch": null
           },
           "python_differs": null,
-          "escalation": null
+          "escalation": null,
+          "refused": null
         }
       },
       "enforced_group_by_invalid": []
@@ -212,7 +247,8 @@
             "batch": null
           },
           "python_differs": null,
-          "escalation": null
+          "escalation": null,
+          "refused": null
         }
       },
       "enforced_group_by_invalid": []
@@ -253,7 +289,8 @@
             "batch": null
           },
           "python_differs": null,
-          "escalation": null
+          "escalation": null,
+          "refused": null
         }
       },
       "enforced_group_by_invalid": []
@@ -312,7 +349,8 @@
           "escalation": {
             "verdict": "compliant",
             "leaks": []
-          }
+          },
+          "refused": null
         },
         "t-dba": {
           "targets": [
@@ -350,7 +388,8 @@
           "escalation": {
             "verdict": "violation",
             "leaks": []
-          }
+          },
+          "refused": null
         },
         "t-fin": {
           "targets": [
@@ -377,7 +416,8 @@
           "escalation": {
             "verdict": "compliant",
             "leaks": []
-          }
+          },
+          "refused": null
         },
         "t-ovr": {
           "targets": [
@@ -425,7 +465,8 @@
             "leaks": [
               "overrides[0]"
             ]
-          }
+          },
+          "refused": null
         },
         "t-livedbb": {
           "targets": [
@@ -458,7 +499,8 @@
           "escalation": {
             "verdict": "violation",
             "leaks": []
-          }
+          },
+          "refused": null
         }
       },
       "enforced_group_by_invalid": []
@@ -501,7 +543,8 @@
             "batch": null
           },
           "python_differs": null,
-          "escalation": null
+          "escalation": null,
+          "refused": null
         },
         "t-clear": {
           "targets": [
@@ -520,7 +563,8 @@
             "batch": null
           },
           "python_differs": null,
-          "escalation": null
+          "escalation": null,
+          "refused": null
         }
       },
       "enforced_group_by_invalid": []
@@ -549,7 +593,8 @@
             "batch": null
           },
           "python_differs": null,
-          "escalation": null
+          "escalation": null,
+          "refused": null
         },
         "t-ghost-own": {
           "targets": [
@@ -568,7 +613,8 @@
             "batch": null
           },
           "python_differs": null,
-          "escalation": null
+          "escalation": null,
+          "refused": null
         },
         "t-known": {
           "targets": [
@@ -593,7 +639,8 @@
             "batch": null
           },
           "python_differs": null,
-          "escalation": null
+          "escalation": null,
+          "refused": null
         }
       },
       "enforced_group_by_invalid": []
@@ -622,11 +669,12 @@
               "patch": {
                 "_routing": "on"
               },
-              "verdict": "policy_violation"
+              "verdict": "400"
             }
           },
           "python_differs": null,
-          "escalation": null
+          "escalation": null,
+          "refused": null
         },
         "t-on": {
           "targets": [
@@ -656,7 +704,8 @@
             }
           },
           "python_differs": null,
-          "escalation": null
+          "escalation": null,
+          "refused": null
         }
       },
       "enforced_group_by_invalid": []
@@ -683,7 +732,8 @@
             "batch": null
           },
           "python_differs": null,
-          "escalation": null
+          "escalation": null,
+          "refused": null
         },
         "t-matcher": {
           "targets": [
@@ -712,7 +762,8 @@
             "batch": null
           },
           "python_differs": null,
-          "escalation": null
+          "escalation": null,
+          "refused": null
         }
       },
       "enforced_group_by_invalid": []
@@ -755,7 +806,8 @@
             "batch": null
           },
           "python_differs": null,
-          "escalation": null
+          "escalation": null,
+          "refused": null
         },
         "t-ops-only": {
           "targets": [
@@ -774,7 +826,8 @@
             "batch": null
           },
           "python_differs": null,
-          "escalation": null
+          "escalation": null,
+          "refused": null
         }
       },
       "enforced_group_by_invalid": []
@@ -821,7 +874,8 @@
             }
           },
           "python_differs": null,
-          "escalation": null
+          "escalation": null,
+          "refused": null
         }
       },
       "enforced_group_by_invalid": []
@@ -865,7 +919,8 @@
             "batch": null
           },
           "python_differs": null,
-          "escalation": null
+          "escalation": null,
+          "refused": null
         },
         "t-own": {
           "targets": [
@@ -884,7 +939,8 @@
             "batch": null
           },
           "python_differs": null,
-          "escalation": null
+          "escalation": null,
+          "refused": null
         }
       },
       "enforced_group_by_invalid": []
@@ -937,7 +993,8 @@
             "batch": null
           },
           "python_differs": null,
-          "escalation": null
+          "escalation": null,
+          "refused": null
         },
         "t-routes-scalar": {
           "targets": [
@@ -958,7 +1015,8 @@
             "batch": null
           },
           "python_differs": null,
-          "escalation": null
+          "escalation": null,
+          "refused": null
         }
       },
       "enforced_group_by_invalid": []
@@ -993,7 +1051,8 @@
             "batch": null
           },
           "python_differs": null,
-          "escalation": null
+          "escalation": null,
+          "refused": null
         }
       },
       "enforced_group_by_invalid": []
@@ -1030,7 +1089,8 @@
             "batch": null
           },
           "python_differs": null,
-          "escalation": null
+          "escalation": null,
+          "refused": null
         }
       },
       "enforced_group_by_invalid": []
@@ -1068,7 +1128,8 @@
             "batch": null
           },
           "python_differs": null,
-          "escalation": null
+          "escalation": null,
+          "refused": null
         }
       },
       "enforced_group_by_invalid": []
@@ -1106,7 +1167,8 @@
             "batch": null
           },
           "python_differs": null,
-          "escalation": null
+          "escalation": null,
+          "refused": null
         },
         "t-forb-nonstr": {
           "targets": [
@@ -1125,7 +1187,8 @@
             "batch": null
           },
           "python_differs": null,
-          "escalation": null
+          "escalation": null,
+          "refused": null
         }
       },
       "enforced_group_by_invalid": []
@@ -1151,7 +1214,8 @@
             "batch": null
           },
           "python_differs": null,
-          "escalation": null
+          "escalation": null,
+          "refused": null
         }
       },
       "enforced_group_by_invalid": []
@@ -1184,7 +1248,8 @@
             "batch": null
           },
           "python_differs": null,
-          "escalation": null
+          "escalation": null,
+          "refused": null
         }
       },
       "enforced_group_by_invalid": []
@@ -1221,7 +1286,8 @@
             "batch": null
           },
           "python_differs": null,
-          "escalation": null
+          "escalation": null,
+          "refused": null
         }
       },
       "enforced_group_by_invalid": []
@@ -1262,7 +1328,8 @@
             "batch": null
           },
           "python_differs": null,
-          "escalation": null
+          "escalation": null,
+          "refused": null
         },
         "t-ovl-own": {
           "targets": [
@@ -1281,7 +1348,8 @@
             "batch": null
           },
           "python_differs": null,
-          "escalation": null
+          "escalation": null,
+          "refused": null
         },
         "t-ovl-ref": {
           "targets": [
@@ -1306,7 +1374,8 @@
             "batch": null
           },
           "python_differs": null,
-          "escalation": null
+          "escalation": null,
+          "refused": null
         }
       },
       "enforced_group_by_invalid": []
@@ -1346,7 +1415,8 @@
             "batch": null
           },
           "python_differs": null,
-          "escalation": null
+          "escalation": null,
+          "refused": null
         },
         "t-mk-own": {
           "targets": [
@@ -1365,7 +1435,8 @@
             "batch": null
           },
           "python_differs": null,
-          "escalation": null
+          "escalation": null,
+          "refused": null
         },
         "t-mk-seq": {
           "targets": [
@@ -1390,7 +1461,8 @@
             "batch": null
           },
           "python_differs": null,
-          "escalation": null
+          "escalation": null,
+          "refused": null
         }
       },
       "enforced_group_by_invalid": []
@@ -1431,7 +1503,8 @@
             "batch": null
           },
           "python_differs": null,
-          "escalation": null
+          "escalation": null,
+          "refused": null
         },
         "t-mk-null": {
           "targets": [
@@ -1456,7 +1529,8 @@
             "batch": null
           },
           "python_differs": null,
-          "escalation": null
+          "escalation": null,
+          "refused": null
         },
         "t-mk-node": {
           "targets": [
@@ -1481,7 +1555,8 @@
             "batch": null
           },
           "python_differs": null,
-          "escalation": null
+          "escalation": null,
+          "refused": null
         },
         "t-mk-block": {
           "targets": [
@@ -1506,7 +1581,8 @@
             "batch": null
           },
           "python_differs": null,
-          "escalation": null
+          "escalation": null,
+          "refused": null
         },
         "t-mk-explicit": {
           "targets": [
@@ -1525,7 +1601,8 @@
             "batch": null
           },
           "python_differs": null,
-          "escalation": null
+          "escalation": null,
+          "refused": null
         }
       },
       "enforced_group_by_invalid": []
@@ -1572,7 +1649,8 @@
             "batch": null
           },
           "python_differs": null,
-          "escalation": null
+          "escalation": null,
+          "refused": null
         },
         "t-top-profile": {
           "targets": [
@@ -1597,7 +1675,8 @@
             "batch": null
           },
           "python_differs": null,
-          "escalation": null
+          "escalation": null,
+          "refused": null
         },
         "t-top-defaults": {
           "targets": [
@@ -1622,7 +1701,8 @@
             "batch": null
           },
           "python_differs": null,
-          "escalation": null
+          "escalation": null,
+          "refused": null
         },
         "t-top-overlay": {
           "targets": [
@@ -1647,7 +1727,8 @@
             "batch": null
           },
           "python_differs": null,
-          "escalation": null
+          "escalation": null,
+          "refused": null
         },
         "t-top-overlay-profile": {
           "targets": [
@@ -1672,7 +1753,8 @@
             "batch": null
           },
           "python_differs": null,
-          "escalation": null
+          "escalation": null,
+          "refused": null
         },
         "t-top-explicit": {
           "targets": [
@@ -1691,7 +1773,8 @@
             "batch": null
           },
           "python_differs": null,
-          "escalation": null
+          "escalation": null,
+          "refused": null
         },
         "t-top-file": {
           "targets": [
@@ -1716,7 +1799,8 @@
             "batch": null
           },
           "python_differs": null,
-          "escalation": null
+          "escalation": null,
+          "refused": null
         }
       },
       "enforced_group_by_invalid": []
@@ -1762,7 +1846,8 @@
           "unknown_profile": null,
           "tenant_api": null,
           "python_differs": null,
-          "escalation": null
+          "escalation": null,
+          "refused": null
         },
         "t-sub-profile": {
           "targets": [
@@ -1784,7 +1869,8 @@
           "unknown_profile": null,
           "tenant_api": null,
           "python_differs": null,
-          "escalation": null
+          "escalation": null,
+          "refused": null
         },
         "t-sub-defaults": {
           "targets": [
@@ -1806,7 +1892,8 @@
           "unknown_profile": null,
           "tenant_api": null,
           "python_differs": null,
-          "escalation": null
+          "escalation": null,
+          "refused": null
         },
         "t-sub-unread": {
           "targets": [
@@ -1822,7 +1909,8 @@
           "unknown_profile": null,
           "tenant_api": null,
           "python_differs": null,
-          "escalation": null
+          "escalation": null,
+          "refused": null
         }
       },
       "enforced_group_by_invalid": []
@@ -1862,7 +1950,8 @@
             "batch": null
           },
           "python_differs": null,
-          "escalation": null
+          "escalation": null,
+          "refused": null
         },
         "t-merged-prof": {
           "targets": [
@@ -1887,7 +1976,8 @@
             "batch": null
           },
           "python_differs": null,
-          "escalation": null
+          "escalation": null,
+          "refused": null
         },
         "t-alias-dom": {
           "targets": [
@@ -1912,7 +2002,8 @@
             "batch": null
           },
           "python_differs": null,
-          "escalation": null
+          "escalation": null,
+          "refused": null
         }
       },
       "enforced_group_by_invalid": []
@@ -1966,7 +2057,8 @@
           "escalation": {
             "verdict": "compliant",
             "leaks": []
-          }
+          },
+          "refused": null
         },
         "t-int-override": {
           "targets": [
@@ -2007,7 +2099,8 @@
           "escalation": {
             "verdict": "compliant",
             "leaks": []
-          }
+          },
+          "refused": null
         },
         "t-main-leak": {
           "targets": [
@@ -2035,7 +2128,8 @@
             "leaks": [
               "receiver"
             ]
-          }
+          },
+          "refused": null
         },
         "t-other-tenant": {
           "targets": [
@@ -2061,7 +2155,8 @@
           "escalation": {
             "verdict": "compliant",
             "leaks": []
-          }
+          },
+          "refused": null
         },
         "t-ovr-shadow": {
           "targets": [
@@ -2093,7 +2188,8 @@
             "leaks": [
               "overrides[0]"
             ]
-          }
+          },
+          "refused": null
         },
         "t-own-tenant": {
           "targets": [
@@ -2125,7 +2221,8 @@
             "leaks": [
               "routes[1]"
             ]
-          }
+          },
+          "refused": null
         },
         "t-s1": {
           "targets": [
@@ -2157,7 +2254,8 @@
             "leaks": [
               "routes[1]"
             ]
-          }
+          },
+          "refused": null
         },
         "t-s2": {
           "targets": [
@@ -2193,7 +2291,8 @@
             "leaks": [
               "routes[1]"
             ]
-          }
+          },
+          "refused": null
         },
         "t-skipped-esc": {
           "targets": [
@@ -2217,7 +2316,8 @@
           "escalation": {
             "verdict": "violation",
             "leaks": []
-          }
+          },
+          "refused": null
         },
         "t-subset": {
           "targets": [
@@ -2247,7 +2347,8 @@
           "escalation": {
             "verdict": "compliant",
             "leaks": []
-          }
+          },
+          "refused": null
         },
         "t-violation": {
           "targets": [
@@ -2273,7 +2374,8 @@
           "escalation": {
             "verdict": "violation",
             "leaks": []
-          }
+          },
+          "refused": null
         }
       },
       "enforced_group_by_invalid": []
@@ -2317,7 +2419,8 @@
           "escalation": {
             "verdict": "violation",
             "leaks": []
-          }
+          },
+          "refused": null
         },
         "t-on": {
           "targets": [
@@ -2339,7 +2442,8 @@
           "escalation": {
             "verdict": "violation",
             "leaks": []
-          }
+          },
+          "refused": null
         },
         "t-no": {
           "targets": [
@@ -2358,7 +2462,8 @@
             "batch": null
           },
           "python_differs": null,
-          "escalation": null
+          "escalation": null,
+          "refused": null
         },
         "t-off": {
           "targets": [
@@ -2377,7 +2482,8 @@
             "batch": null
           },
           "python_differs": null,
-          "escalation": null
+          "escalation": null,
+          "refused": null
         },
         "t-quoted": {
           "targets": [
@@ -2396,7 +2502,8 @@
             "batch": null
           },
           "python_differs": null,
-          "escalation": null
+          "escalation": null,
+          "refused": null
         }
       },
       "enforced_group_by_invalid": []
@@ -2434,7 +2541,8 @@
           "escalation": {
             "verdict": "violation",
             "leaks": []
-          }
+          },
+          "refused": null
         },
         "t-tag-mixed": {
           "targets": [
@@ -2456,7 +2564,8 @@
           "escalation": {
             "verdict": "violation",
             "leaks": []
-          }
+          },
+          "refused": null
         },
         "t-tag-long": {
           "targets": [
@@ -2478,7 +2587,8 @@
           "escalation": {
             "verdict": "violation",
             "leaks": []
-          }
+          },
+          "refused": null
         },
         "t-tag-no": {
           "targets": [
@@ -2497,7 +2607,8 @@
             "batch": null
           },
           "python_differs": null,
-          "escalation": null
+          "escalation": null,
+          "refused": null
         },
         "t-tag-forbid": {
           "targets": [
@@ -2529,7 +2640,8 @@
           "escalation": {
             "verdict": "compliant",
             "leaks": []
-          }
+          },
+          "refused": null
         }
       },
       "enforced_group_by_invalid": []
@@ -2564,7 +2676,8 @@
           "unknown_profile": null,
           "tenant_api": null,
           "python_differs": null,
-          "escalation": null
+          "escalation": null,
+          "refused": null
         },
         "t-team": {
           "targets": [
@@ -2586,7 +2699,8 @@
           "unknown_profile": null,
           "tenant_api": null,
           "python_differs": null,
-          "escalation": null
+          "escalation": null,
+          "refused": null
         },
         "t-deep": {
           "targets": [
@@ -2602,7 +2716,8 @@
           "unknown_profile": null,
           "tenant_api": null,
           "python_differs": null,
-          "escalation": null
+          "escalation": null,
+          "refused": null
         },
         "t-other": {
           "targets": [
@@ -2618,7 +2733,8 @@
           "unknown_profile": null,
           "tenant_api": null,
           "python_differs": null,
-          "escalation": null
+          "escalation": null,
+          "refused": null
         }
       },
       "enforced_group_by_invalid": []
@@ -2658,7 +2774,8 @@
           "unknown_profile": null,
           "tenant_api": null,
           "python_differs": null,
-          "escalation": null
+          "escalation": null,
+          "refused": null
         },
         "t-own": {
           "targets": [
@@ -2674,7 +2791,8 @@
           "unknown_profile": null,
           "tenant_api": null,
           "python_differs": null,
-          "escalation": null
+          "escalation": null,
+          "refused": null
         }
       },
       "enforced_group_by_invalid": []
@@ -2714,7 +2832,8 @@
           "unknown_profile": null,
           "tenant_api": null,
           "python_differs": null,
-          "escalation": null
+          "escalation": null,
+          "refused": null
         }
       },
       "enforced_group_by_invalid": []
@@ -2742,7 +2861,8 @@
           "unknown_profile": "team-p",
           "tenant_api": null,
           "python_differs": null,
-          "escalation": null
+          "escalation": null,
+          "refused": null
         },
         "t-a": {
           "targets": [
@@ -2758,7 +2878,8 @@
           "unknown_profile": null,
           "tenant_api": null,
           "python_differs": null,
-          "escalation": null
+          "escalation": null,
+          "refused": null
         },
         "t-b": {
           "targets": [
@@ -2774,7 +2895,8 @@
           "unknown_profile": null,
           "tenant_api": null,
           "python_differs": null,
-          "escalation": null
+          "escalation": null,
+          "refused": null
         },
         "t-c": {
           "targets": [
@@ -2790,7 +2912,8 @@
           "unknown_profile": null,
           "tenant_api": null,
           "python_differs": null,
-          "escalation": null
+          "escalation": null,
+          "refused": null
         },
         "t-d": {
           "targets": null,
@@ -2801,7 +2924,8 @@
           "unknown_profile": "team-p",
           "tenant_api": null,
           "python_differs": null,
-          "escalation": null
+          "escalation": null,
+          "refused": null
         }
       },
       "enforced_group_by_invalid": []
@@ -2843,7 +2967,8 @@
           "unknown_profile": null,
           "tenant_api": null,
           "python_differs": null,
-          "escalation": null
+          "escalation": null,
+          "refused": null
         },
         "t-team": {
           "targets": [
@@ -2859,7 +2984,8 @@
           "unknown_profile": null,
           "tenant_api": null,
           "python_differs": null,
-          "escalation": null
+          "escalation": null,
+          "refused": null
         }
       },
       "enforced_group_by_invalid": []
@@ -2901,7 +3027,8 @@
           "unknown_profile": null,
           "tenant_api": null,
           "python_differs": null,
-          "escalation": null
+          "escalation": null,
+          "refused": null
         },
         "t-team": {
           "targets": [
@@ -2928,7 +3055,8 @@
           "unknown_profile": null,
           "tenant_api": null,
           "python_differs": null,
-          "escalation": null
+          "escalation": null,
+          "refused": null
         }
       },
       "enforced_group_by_invalid": []
@@ -2962,7 +3090,8 @@
           "unknown_profile": null,
           "tenant_api": null,
           "python_differs": null,
-          "escalation": null
+          "escalation": null,
+          "refused": null
         }
       },
       "enforced_group_by_invalid": []
@@ -2997,7 +3126,8 @@
           "unknown_profile": null,
           "tenant_api": null,
           "python_differs": null,
-          "escalation": null
+          "escalation": null,
+          "refused": null
         }
       },
       "enforced_group_by_invalid": []
@@ -3031,7 +3161,8 @@
           "unknown_profile": null,
           "tenant_api": null,
           "python_differs": null,
-          "escalation": null
+          "escalation": null,
+          "refused": null
         }
       },
       "enforced_group_by_invalid": []
@@ -3065,7 +3196,8 @@
           "unknown_profile": null,
           "tenant_api": null,
           "python_differs": null,
-          "escalation": null
+          "escalation": null,
+          "refused": null
         }
       },
       "enforced_group_by_invalid": []
@@ -3079,7 +3211,13 @@
         "team/_defaults.yaml": "_routing_defaults:\n  receiver:\n    type: email\n    to: [oncall@example.com]\n    from: alerting@example.com\n    smarthost: smtp.example.com:587\n",
         "team/t-team.yaml": "tenants:\n  t-team:\n    cpu_usage_percent: '85'\n"
       },
-      "platform": [],
+      "platform": [
+        [
+          "routing_defaults_not_mapping",
+          "_defaults.yaml",
+          "_routing_defaults"
+        ]
+      ],
       "expect": {
         "t-root": {
           "targets": null,
@@ -3090,7 +3228,8 @@
           "unknown_profile": null,
           "tenant_api": null,
           "python_differs": null,
-          "escalation": null
+          "escalation": null,
+          "refused": null
         },
         "t-own": {
           "targets": [
@@ -3106,7 +3245,8 @@
           "unknown_profile": null,
           "tenant_api": null,
           "python_differs": null,
-          "escalation": null
+          "escalation": null,
+          "refused": null
         },
         "t-team": {
           "targets": [
@@ -3122,7 +3262,8 @@
           "unknown_profile": null,
           "tenant_api": null,
           "python_differs": null,
-          "escalation": null
+          "escalation": null,
+          "refused": null
         }
       },
       "enforced_group_by_invalid": []
@@ -3134,7 +3275,13 @@
         "_platform.yaml": "_routing_defaults: 42\n",
         "t-root.yaml": "tenants:\n  t-root:\n    cpu_usage_percent: '85'\n"
       },
-      "platform": [],
+      "platform": [
+        [
+          "routing_defaults_not_mapping",
+          "_platform.yaml",
+          "_routing_defaults"
+        ]
+      ],
       "expect": {
         "t-root": {
           "targets": null,
@@ -3145,7 +3292,8 @@
           "unknown_profile": null,
           "tenant_api": null,
           "python_differs": null,
-          "escalation": null
+          "escalation": null,
+          "refused": null
         }
       },
       "enforced_group_by_invalid": []
@@ -3157,7 +3305,13 @@
         "_platform.yaml": "_routing_defaults:\n  receiver:\n    type: email\n    to: [oncall@example.com]\n    from: alerting@example.com\n    smarthost: smtp.example.com:587\n",
         "t-root.yaml": "tenants:\n  t-root:\n    cpu_usage_percent: '85'\n"
       },
-      "platform": [],
+      "platform": [
+        [
+          "routing_defaults_not_mapping",
+          "_defaults.yaml",
+          "_routing_defaults"
+        ]
+      ],
       "expect": {
         "t-root": {
           "targets": [
@@ -3173,7 +3327,8 @@
           "unknown_profile": null,
           "tenant_api": null,
           "python_differs": null,
-          "escalation": null
+          "escalation": null,
+          "refused": null
         }
       },
       "enforced_group_by_invalid": []
@@ -3223,7 +3378,8 @@
           "escalation": {
             "verdict": "violation",
             "leaks": []
-          }
+          },
+          "refused": null
         },
         "t-m-on": {
           "targets": [
@@ -3251,7 +3407,8 @@
             }
           },
           "python_differs": null,
-          "escalation": null
+          "escalation": null,
+          "refused": null
         },
         "t-m-sexagesimal": {
           "targets": [
@@ -3274,7 +3431,8 @@
             "batch": null
           },
           "python_differs": null,
-          "escalation": null
+          "escalation": null,
+          "refused": null
         },
         "t-m-quoted": {
           "targets": [
@@ -3297,7 +3455,8 @@
             "batch": null
           },
           "python_differs": null,
-          "escalation": null
+          "escalation": null,
+          "refused": null
         },
         "t-m-label-on": {
           "targets": [
@@ -3320,7 +3479,8 @@
             "batch": null
           },
           "python_differs": null,
-          "escalation": null
+          "escalation": null,
+          "refused": null
         },
         "t-m-date": {
           "targets": [
@@ -3343,7 +3503,8 @@
             "batch": null
           },
           "python_differs": null,
-          "escalation": null
+          "escalation": null,
+          "refused": null
         },
         "t-m-null": {
           "targets": [
@@ -3366,7 +3527,8 @@
             "batch": null
           },
           "python_differs": null,
-          "escalation": null
+          "escalation": null,
+          "refused": null
         },
         "t-m-int-tag": {
           "targets": [
@@ -3389,7 +3551,8 @@
             "batch": null
           },
           "python_differs": null,
-          "escalation": null
+          "escalation": null,
+          "refused": null
         },
         "t-o-no": {
           "targets": [
@@ -3410,7 +3573,8 @@
             "batch": null
           },
           "python_differs": null,
-          "escalation": null
+          "escalation": null,
+          "refused": null
         },
         "t-o-yes": {
           "targets": [
@@ -3435,7 +3599,8 @@
             "batch": null
           },
           "python_differs": null,
-          "escalation": null
+          "escalation": null,
+          "refused": null
         },
         "t-o-quoted": {
           "targets": [
@@ -3458,7 +3623,8 @@
             "batch": null
           },
           "python_differs": null,
-          "escalation": null
+          "escalation": null,
+          "refused": null
         }
       },
       "enforced_group_by_invalid": []
@@ -3495,7 +3661,8 @@
             "batch": null
           },
           "python_differs": null,
-          "escalation": null
+          "escalation": null,
+          "refused": null
         }
       },
       "enforced_group_by_invalid": []
@@ -3536,7 +3703,8 @@
             "batch": null
           },
           "python_differs": null,
-          "escalation": null
+          "escalation": null,
+          "refused": null
         },
         "t-k-inf": {
           "targets": [
@@ -3557,7 +3725,8 @@
             "batch": null
           },
           "python_differs": null,
-          "escalation": null
+          "escalation": null,
+          "refused": null
         },
         "t-k-bigint": {
           "targets": [
@@ -3578,7 +3747,8 @@
             "batch": null
           },
           "python_differs": null,
-          "escalation": null
+          "escalation": null,
+          "refused": null
         },
         "t-k-date-yes": {
           "targets": [
@@ -3599,7 +3769,8 @@
             "batch": null
           },
           "python_differs": null,
-          "escalation": null
+          "escalation": null,
+          "refused": null
         },
         "t-k-profile-int": {
           "targets": [
@@ -3620,7 +3791,8 @@
             "batch": null
           },
           "python_differs": null,
-          "escalation": null
+          "escalation": null,
+          "refused": null
         },
         "t-k-overlay-int": {
           "targets": [
@@ -3641,7 +3813,8 @@
             "batch": null
           },
           "python_differs": null,
-          "escalation": null
+          "escalation": null,
+          "refused": null
         },
         "t-k-newline-yes": {
           "targets": [
@@ -3662,7 +3835,8 @@
             "batch": null
           },
           "python_differs": null,
-          "escalation": null
+          "escalation": null,
+          "refused": null
         },
         "t-k-newline-x": {
           "targets": [
@@ -3683,7 +3857,8 @@
             "batch": null
           },
           "python_differs": null,
-          "escalation": null
+          "escalation": null,
+          "refused": null
         }
       },
       "enforced_group_by_invalid": []
@@ -3734,7 +3909,8 @@
             "batch": null
           },
           "python_differs": null,
-          "escalation": null
+          "escalation": null,
+          "refused": null
         },
         "t-gb-int": {
           "targets": [
@@ -3758,7 +3934,8 @@
             "batch": null
           },
           "python_differs": null,
-          "escalation": null
+          "escalation": null,
+          "refused": null
         },
         "t-gb-quoted-int": {
           "targets": [
@@ -3777,7 +3954,8 @@
             "batch": null
           },
           "python_differs": null,
-          "escalation": null
+          "escalation": null,
+          "refused": null
         },
         "t-gb-on-yes": {
           "targets": [
@@ -3805,7 +3983,8 @@
             "batch": null
           },
           "python_differs": null,
-          "escalation": null
+          "escalation": null,
+          "refused": null
         },
         "t-gb-dup": {
           "targets": [
@@ -3829,7 +4008,8 @@
             "batch": null
           },
           "python_differs": null,
-          "escalation": null
+          "escalation": null,
+          "refused": null
         },
         "t-gb-wildcard": {
           "targets": [
@@ -3848,7 +4028,8 @@
             "batch": null
           },
           "python_differs": null,
-          "escalation": null
+          "escalation": null,
+          "refused": null
         },
         "t-gb-wildcard-mixed": {
           "targets": [
@@ -3872,7 +4053,8 @@
             "batch": null
           },
           "python_differs": null,
-          "escalation": null
+          "escalation": null,
+          "refused": null
         },
         "t-gb-empty": {
           "targets": [
@@ -3896,7 +4078,8 @@
             "batch": null
           },
           "python_differs": null,
-          "escalation": null
+          "escalation": null,
+          "refused": null
         },
         "t-gb-ok": {
           "targets": [
@@ -3915,7 +4098,8 @@
             "batch": null
           },
           "python_differs": null,
-          "escalation": null
+          "escalation": null,
+          "refused": null
         },
         "t-gb-subroutes": {
           "targets": [
@@ -3955,7 +4139,8 @@
             "batch": null
           },
           "python_differs": null,
-          "escalation": null
+          "escalation": null,
+          "refused": null
         },
         "t-gb-profile": {
           "targets": [
@@ -3979,7 +4164,8 @@
             "batch": null
           },
           "python_differs": null,
-          "escalation": null
+          "escalation": null,
+          "refused": null
         },
         "t-gb-batch": {
           "targets": [
@@ -4003,7 +4189,8 @@
             }
           },
           "python_differs": null,
-          "escalation": null
+          "escalation": null,
+          "refused": null
         },
         "t-gb-tagged": {
           "targets": [
@@ -4027,7 +4214,8 @@
             "batch": null
           },
           "python_differs": null,
-          "escalation": null
+          "escalation": null,
+          "refused": null
         },
         "t-gb-wildcard-twice": {
           "targets": [
@@ -4046,7 +4234,8 @@
             "batch": null
           },
           "python_differs": null,
-          "escalation": null
+          "escalation": null,
+          "refused": null
         },
         "t-gb-nonspecific-tag": {
           "targets": [
@@ -4085,7 +4274,8 @@
               ]
             ]
           },
-          "escalation": null
+          "escalation": null,
+          "refused": null
         },
         "alertname": {
           "targets": [
@@ -4109,7 +4299,8 @@
             "batch": null
           },
           "python_differs": null,
-          "escalation": null
+          "escalation": null,
+          "refused": null
         }
       },
       "enforced_group_by_invalid": []
@@ -4149,7 +4340,8 @@
           "escalation": {
             "verdict": "violation",
             "leaks": []
-          }
+          },
+          "refused": null
         },
         "t-null-alone": {
           "targets": [
@@ -4170,7 +4362,8 @@
             "batch": null
           },
           "python_differs": null,
-          "escalation": null
+          "escalation": null,
+          "refused": null
         },
         "t-null-empty": {
           "targets": [
@@ -4191,7 +4384,8 @@
             "batch": null
           },
           "python_differs": null,
-          "escalation": null
+          "escalation": null,
+          "refused": null
         },
         "t-null-profile": {
           "targets": [
@@ -4212,7 +4406,8 @@
             "batch": null
           },
           "python_differs": null,
-          "escalation": null
+          "escalation": null,
+          "refused": null
         }
       },
       "enforced_group_by_invalid": []
@@ -4239,7 +4434,8 @@
           "unknown_profile": null,
           "tenant_api": null,
           "python_differs": null,
-          "escalation": null
+          "escalation": null,
+          "refused": null
         }
       },
       "enforced_group_by_invalid": [
@@ -4289,7 +4485,8 @@
           "unknown_profile": null,
           "tenant_api": null,
           "python_differs": null,
-          "escalation": null
+          "escalation": null,
+          "refused": null
         },
         "t-b": {
           "targets": [
@@ -4305,7 +4502,8 @@
           "unknown_profile": null,
           "tenant_api": null,
           "python_differs": null,
-          "escalation": null
+          "escalation": null,
+          "refused": null
         }
       },
       "enforced_group_by_invalid": [
@@ -4338,7 +4536,8 @@
           "unknown_profile": null,
           "tenant_api": null,
           "python_differs": null,
-          "escalation": null
+          "escalation": null,
+          "refused": null
         }
       },
       "enforced_group_by_invalid": []
@@ -4365,7 +4564,8 @@
           "unknown_profile": null,
           "tenant_api": null,
           "python_differs": null,
-          "escalation": null
+          "escalation": null,
+          "refused": null
         }
       },
       "enforced_group_by_invalid": []
@@ -4392,7 +4592,8 @@
           "unknown_profile": null,
           "tenant_api": null,
           "python_differs": null,
-          "escalation": null
+          "escalation": null,
+          "refused": null
         }
       },
       "enforced_group_by_invalid": []
@@ -4419,7 +4620,8 @@
           "unknown_profile": null,
           "tenant_api": null,
           "python_differs": null,
-          "escalation": null
+          "escalation": null,
+          "refused": null
         }
       },
       "enforced_group_by_invalid": []
@@ -4448,7 +4650,8 @@
           "unknown_profile": null,
           "tenant_api": null,
           "python_differs": null,
-          "escalation": null
+          "escalation": null,
+          "refused": null
         }
       },
       "enforced_group_by_invalid": [
@@ -4458,6 +4661,410 @@
           "not_string"
         ]
       ]
+    },
+    {
+      "name": "routing-not-mapping",
+      "files": {
+        "_defaults.yaml": "defaults:\n  cpu_usage_percent: 80\n_routing_defaults:\n  receiver:\n    type: webhook\n    url: https://hooks.example.com/default\n",
+        "_platform.yaml": "tenants:\n  t-overlay:\n    _routing: slack\n",
+        "t-str.yaml": "tenants:\n  t-str:\n    cpu_usage_percent: '85'\n    _routing: slack\n",
+        "t-list.yaml": "tenants:\n  t-list:\n    cpu_usage_percent: '85'\n    _routing: [x]\n",
+        "t-null.yaml": "tenants:\n  t-null:\n    cpu_usage_percent: '85'\n    _routing: ~\n",
+        "t-false.yaml": "tenants:\n  t-false:\n    cpu_usage_percent: '85'\n    _routing: false\n",
+        "t-off.yaml": "tenants:\n  t-off:\n    cpu_usage_percent: '85'\n    _routing: off\n",
+        "t-no.yaml": "tenants:\n  t-no:\n    cpu_usage_percent: '85'\n    _routing: no\n",
+        "t-number.yaml": "tenants:\n  t-number:\n    cpu_usage_percent: '85'\n    _routing: 0\n",
+        "t-quoted-off.yaml": "tenants:\n  t-quoted-off:\n    cpu_usage_percent: '85'\n    _routing: 'off'\n",
+        "t-upper-disable.yaml": "tenants:\n  t-upper-disable:\n    cpu_usage_percent: '85'\n    _routing: ' DISABLED '\n",
+        "t-empty-map.yaml": "tenants:\n  t-empty-map:\n    cpu_usage_percent: '85'\n    _routing: {}\n",
+        "t-silent.yaml": "tenants:\n  t-silent:\n    cpu_usage_percent: '85'\n",
+        "t-overlay.yaml": "tenants:\n  t-overlay:\n    cpu_usage_percent: '85'\n",
+        "t-dotted-i.yaml": "tenants:\n  t-dotted-i:\n    cpu_usage_percent: '85'\n    _routing: \"d\\u0130sable\"\n",
+        "t-fs-off.yaml": "tenants:\n  t-fs-off:\n    cpu_usage_percent: '85'\n    _routing: \"\\x1Coff\"\n"
+      },
+      "platform": [],
+      "expect": {
+        "t-str": {
+          "targets": null,
+          "policy": [],
+          "rejected_routes": [],
+          "values_not_string": [],
+          "group_by_invalid": [],
+          "unknown_profile": null,
+          "tenant_api": {
+            "put": "400",
+            "batch": null
+          },
+          "python_differs": null,
+          "escalation": null,
+          "refused": "routing_not_mapping"
+        },
+        "t-list": {
+          "targets": null,
+          "policy": [],
+          "rejected_routes": [],
+          "values_not_string": [],
+          "group_by_invalid": [],
+          "unknown_profile": null,
+          "tenant_api": {
+            "put": "400",
+            "batch": null
+          },
+          "python_differs": null,
+          "escalation": null,
+          "refused": "routing_not_mapping"
+        },
+        "t-null": {
+          "targets": null,
+          "policy": [],
+          "rejected_routes": [],
+          "values_not_string": [],
+          "group_by_invalid": [],
+          "unknown_profile": null,
+          "tenant_api": {
+            "put": "400",
+            "batch": null
+          },
+          "python_differs": null,
+          "escalation": null,
+          "refused": "routing_not_mapping"
+        },
+        "t-false": {
+          "targets": null,
+          "policy": [],
+          "rejected_routes": [],
+          "values_not_string": [],
+          "group_by_invalid": [],
+          "unknown_profile": null,
+          "tenant_api": {
+            "put": "400",
+            "batch": null
+          },
+          "python_differs": null,
+          "escalation": null,
+          "refused": "routing_not_mapping"
+        },
+        "t-off": {
+          "targets": null,
+          "policy": [],
+          "rejected_routes": [],
+          "values_not_string": [],
+          "group_by_invalid": [],
+          "unknown_profile": null,
+          "tenant_api": {
+            "put": "400",
+            "batch": null
+          },
+          "python_differs": null,
+          "escalation": null,
+          "refused": "routing_not_mapping"
+        },
+        "t-no": {
+          "targets": null,
+          "policy": [],
+          "rejected_routes": [],
+          "values_not_string": [],
+          "group_by_invalid": [],
+          "unknown_profile": null,
+          "tenant_api": {
+            "put": "400",
+            "batch": null
+          },
+          "python_differs": null,
+          "escalation": null,
+          "refused": "routing_not_mapping"
+        },
+        "t-number": {
+          "targets": null,
+          "policy": [],
+          "rejected_routes": [],
+          "values_not_string": [],
+          "group_by_invalid": [],
+          "unknown_profile": null,
+          "tenant_api": {
+            "put": "400",
+            "batch": null
+          },
+          "python_differs": null,
+          "escalation": null,
+          "refused": "routing_not_mapping"
+        },
+        "t-quoted-off": {
+          "targets": null,
+          "policy": [],
+          "rejected_routes": [],
+          "values_not_string": [],
+          "group_by_invalid": [],
+          "unknown_profile": null,
+          "tenant_api": {
+            "put": "ok",
+            "batch": null
+          },
+          "python_differs": null,
+          "escalation": null,
+          "refused": null
+        },
+        "t-upper-disable": {
+          "targets": null,
+          "policy": [],
+          "rejected_routes": [],
+          "values_not_string": [],
+          "group_by_invalid": [],
+          "unknown_profile": null,
+          "tenant_api": {
+            "put": "ok",
+            "batch": null
+          },
+          "python_differs": null,
+          "escalation": null,
+          "refused": null
+        },
+        "t-empty-map": {
+          "targets": [
+            {
+              "ref": "receiver",
+              "type": "webhook"
+            }
+          ],
+          "policy": [],
+          "rejected_routes": [],
+          "values_not_string": [],
+          "group_by_invalid": [],
+          "unknown_profile": null,
+          "tenant_api": {
+            "put": "ok",
+            "batch": null
+          },
+          "python_differs": null,
+          "escalation": null,
+          "refused": null
+        },
+        "t-silent": {
+          "targets": [
+            {
+              "ref": "receiver",
+              "type": "webhook"
+            }
+          ],
+          "policy": [],
+          "rejected_routes": [],
+          "values_not_string": [],
+          "group_by_invalid": [],
+          "unknown_profile": null,
+          "tenant_api": {
+            "put": "ok",
+            "batch": null
+          },
+          "python_differs": null,
+          "escalation": null,
+          "refused": null
+        },
+        "t-overlay": {
+          "targets": null,
+          "policy": [],
+          "rejected_routes": [],
+          "values_not_string": [],
+          "group_by_invalid": [],
+          "unknown_profile": null,
+          "tenant_api": {
+            "put": "ok",
+            "batch": null
+          },
+          "python_differs": null,
+          "escalation": null,
+          "refused": "routing_not_mapping"
+        },
+        "t-dotted-i": {
+          "targets": null,
+          "policy": [],
+          "rejected_routes": [],
+          "values_not_string": [],
+          "group_by_invalid": [],
+          "unknown_profile": null,
+          "tenant_api": {
+            "put": "400",
+            "batch": null
+          },
+          "python_differs": null,
+          "escalation": null,
+          "refused": "routing_not_mapping"
+        },
+        "t-fs-off": {
+          "targets": null,
+          "policy": [],
+          "rejected_routes": [],
+          "values_not_string": [],
+          "group_by_invalid": [],
+          "unknown_profile": null,
+          "tenant_api": {
+            "put": "ok",
+            "batch": null
+          },
+          "python_differs": null,
+          "escalation": null,
+          "refused": null
+        }
+      },
+      "enforced_group_by_invalid": []
+    },
+    {
+      "name": "routing-defaults-not-mapping-below-root",
+      "files": {
+        "_defaults.yaml": "defaults:\n  cpu_usage_percent: 80\n_routing_defaults:\n  receiver:\n    type: webhook\n    url: https://hooks.example.com/default\n",
+        "team-a/_defaults.yaml": "_routing_defaults: off\n",
+        "team-b/_defaults.yaml": "_routing_defaults: ~\n",
+        "team-a/t-a.yaml": "tenants:\n  t-a:\n    cpu_usage_percent: '85'\n",
+        "team-b/t-b.yaml": "tenants:\n  t-b:\n    cpu_usage_percent: '85'\n"
+      },
+      "platform": [
+        [
+          "routing_defaults_not_mapping",
+          "team-a/_defaults.yaml",
+          "_routing_defaults"
+        ]
+      ],
+      "expect": {
+        "t-a": {
+          "targets": [
+            {
+              "ref": "receiver",
+              "type": "webhook"
+            }
+          ],
+          "policy": [],
+          "rejected_routes": [],
+          "values_not_string": [],
+          "group_by_invalid": [],
+          "unknown_profile": null,
+          "tenant_api": null,
+          "python_differs": null,
+          "escalation": null,
+          "refused": null
+        },
+        "t-b": {
+          "targets": [
+            {
+              "ref": "receiver",
+              "type": "webhook"
+            }
+          ],
+          "policy": [],
+          "rejected_routes": [],
+          "values_not_string": [],
+          "group_by_invalid": [],
+          "unknown_profile": null,
+          "tenant_api": null,
+          "python_differs": null,
+          "escalation": null,
+          "refused": null
+        }
+      },
+      "enforced_group_by_invalid": []
+    },
+    {
+      "name": "invalid-tenant-ids",
+      "files": {
+        "_defaults.yaml": "defaults:\n  cpu_usage_percent: 80\n_routing_defaults:\n  receiver:\n    type: webhook\n    url: https://hooks.example.com/{{tenant}}\n",
+        "bad.yaml": "tenants:\n  \"\":\n    cpu_usage_percent: '85'\n  \"bad tenant\":\n    cpu_usage_percent: '85'\n  \"Bad_Tenant!\":\n    cpu_usage_percent: '85'\n    _routing: slack\n  UPPER:\n    cpu_usage_percent: '85'\n",
+        "t-ok.yaml": "tenants:\n  t-ok:\n    cpu_usage_percent: '85'\n"
+      },
+      "platform": [],
+      "expect": {
+        "": {
+          "targets": null,
+          "policy": [],
+          "rejected_routes": [],
+          "values_not_string": [],
+          "group_by_invalid": [],
+          "unknown_profile": null,
+          "tenant_api": null,
+          "python_differs": null,
+          "escalation": null,
+          "refused": "invalid_tenant_id"
+        },
+        "bad tenant": {
+          "targets": null,
+          "policy": [],
+          "rejected_routes": [],
+          "values_not_string": [],
+          "group_by_invalid": [],
+          "unknown_profile": null,
+          "tenant_api": null,
+          "python_differs": null,
+          "escalation": null,
+          "refused": "invalid_tenant_id"
+        },
+        "Bad_Tenant!": {
+          "targets": null,
+          "policy": [],
+          "rejected_routes": [],
+          "values_not_string": [],
+          "group_by_invalid": [],
+          "unknown_profile": null,
+          "tenant_api": null,
+          "python_differs": null,
+          "escalation": null,
+          "refused": "invalid_tenant_id"
+        },
+        "UPPER": {
+          "targets": [
+            {
+              "ref": "receiver",
+              "type": "webhook"
+            }
+          ],
+          "policy": [],
+          "rejected_routes": [],
+          "values_not_string": [],
+          "group_by_invalid": [],
+          "unknown_profile": null,
+          "tenant_api": null,
+          "python_differs": null,
+          "escalation": null,
+          "refused": null
+        },
+        "t-ok": {
+          "targets": [
+            {
+              "ref": "receiver",
+              "type": "webhook"
+            }
+          ],
+          "policy": [],
+          "rejected_routes": [],
+          "values_not_string": [],
+          "group_by_invalid": [],
+          "unknown_profile": null,
+          "tenant_api": null,
+          "python_differs": null,
+          "escalation": null,
+          "refused": null
+        }
+      },
+      "enforced_group_by_invalid": []
+    },
+    {
+      "name": "every-tenant-id-invalid",
+      "files": {
+        "_defaults.yaml": "defaults:\n  cpu_usage_percent: 80\n_routing_defaults:\n  receiver:\n    type: webhook\n    url: https://hooks.example.com/x\n",
+        "t.yaml": "tenants:\n  1.5e3:\n    cpu_usage_percent: '85'\n"
+      },
+      "platform": [],
+      "expect": {
+        "1.5e3": {
+          "targets": null,
+          "policy": [],
+          "rejected_routes": [],
+          "values_not_string": [],
+          "group_by_invalid": [],
+          "unknown_profile": null,
+          "tenant_api": null,
+          "python_differs": null,
+          "escalation": null,
+          "refused": "invalid_tenant_id"
+        }
+      },
+      "enforced_group_by_invalid": []
     }
   ]
 }

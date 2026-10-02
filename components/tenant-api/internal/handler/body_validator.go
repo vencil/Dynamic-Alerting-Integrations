@@ -41,6 +41,7 @@ import (
 	"strings"
 
 	"github.com/go-playground/validator/v10"
+	"github.com/vencil/threshold-exporter/pkg/routingpolicy"
 )
 
 // Violation describes one body-validation failure. Exported because
@@ -187,6 +188,7 @@ var reservedKeyValidators = map[string]reservedKeyValidator{
 	"_timeout_ms":      validateNonNegativeIntCap(3_600_000), // ≤ 1h
 	"_routing_profile": validateProfileReference,
 	"_profile":         validateProfileReference,
+	"_routing":         validateRoutingPatch,
 }
 
 // validateSilentMode mirrors threshold-exporter's `config_resolve.go`
@@ -229,6 +231,21 @@ func validateNonNegativeIntCap(maxVal int64) reservedKeyValidator {
 		}
 		return ""
 	}
+}
+
+// validateRoutingPatch (#2341): a flat patch value is a string scalar, so the
+// only `_routing` it can write that the route generator reads is a disabling
+// string — routingpolicy.IsDisabled, the same set as the generator's
+// _lib_validation.is_disabled. Anything else (`on`, `slack`, an empty or
+// blank string — and a JSON null, which decodes to "") would write a
+// `_routing` the generator refuses and renders nothing for.
+func validateRoutingPatch(value string) string {
+	if routingpolicy.IsDisabled(value) {
+		return ""
+	}
+	return fmt.Sprintf("a batch patch can only turn routing off: _routing must be a disabling string "+
+		"(disable, disabled, off, false), got %q; to turn routing back on, PUT the tenant with a _routing "+
+		"mapping, or remove _routing", value)
 }
 
 // validateProfileReference enforces the length cap on a profile-name

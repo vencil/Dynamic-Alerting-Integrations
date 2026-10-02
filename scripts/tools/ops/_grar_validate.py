@@ -1555,6 +1555,57 @@ def group_by_problem_text(field: str, kind: str, value: object) -> str:
             "the labels")
 
 
+def _shape_of(value: object) -> str:
+    """``<type> <repr>`` of a YAML value as PyYAML read it, repr capped."""
+    if value is None:
+        return "null"
+    kind = {type(None): "null", bool: "boolean", str: "string",
+            list: "list"}.get(type(value), type(value).__name__)
+    text = repr(value)
+    if len(text) > 60:
+        text = text[:57] + "..."
+    return f"{kind} {text}"
+
+
+def routing_not_mapping_text(value: object) -> str:
+    """#2341 R5: why a tenant's ``_routing`` cannot be read.
+
+    ⚠️ Wording: like ``group_by_problem_text`` — no "domain" / "allowlist" /
+    "blocked", no "must be a string, got".
+    """
+    text = ("_routing must be a mapping or a disabling string (disable, "
+            f"disabled, off, false), got {_shape_of(value)}")
+    if isinstance(value, bool):
+        text += (" — an unquoted true / false / on / off / yes / no is a YAML "
+                 "boolean, not a string; to turn routing off write a quoted "
+                 "string ('off') or disable")
+    return text
+
+
+def routing_not_mapping_warning(tenant: str, value: object) -> str:
+    """The render-mode line (blocking under ``--validate``)."""
+    return (f"  WARN: {tenant}: {routing_not_mapping_text(value)} — no route "
+            "is rendered for this tenant, skipping")
+
+
+def invalid_tenant_id_text(tenant: object) -> str:
+    """#2341 R8: a tenant id the routing plane refuses (is_valid_tenant_id).
+
+    The id is shown as a repr so an empty or blank one is visible. ⚠️ Wording
+    as ``routing_not_mapping_text``.
+    """
+    return (f"tenant id {str(tenant)!r} is not a valid tenant id (non-empty; "
+            "letters, digits, '_' and '-' only) — no route, receiver or "
+            "inhibit rule is rendered for it")
+
+
+def routing_defaults_not_mapping_text(fname: str, value: object) -> str:
+    """#2341 R5: a ``_routing_defaults`` that is neither a mapping nor null."""
+    return (f"_routing_defaults in {fname} must be a mapping, got "
+            f"{_shape_of(value)} — this level contributes nothing to the "
+            "routing of the tenants it reaches")
+
+
 # Keys an override route inherits from the tenant's main route when it does
 # not declare them itself (#2252): the generator nests every override route
 # under the tenant route, and Alertmanager's ``dispatch/route.go`` ``newRoute``
