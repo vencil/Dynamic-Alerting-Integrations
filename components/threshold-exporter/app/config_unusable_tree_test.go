@@ -462,14 +462,14 @@ func TestDefaultsUnusableGauge_PermissionDenied(t *testing.T) {
 func TestSetDefaultsUnusable_CountsOnlyDefaultsFiles(t *testing.T) {
 	t.Parallel()
 	fresh, _ := freshMetrics(t)
-	fresh.SetDefaultsUnusable(
-		[]string{"_defaults.yaml", "team/_defaults.yml", "tenant-a.yaml", "_profiles.yaml"},
-		[]config.UnreadableFile{
-			{RelKey: "team/_defaults.yaml", Reason: config.UnreadableReadError},
-			{RelKey: "_defaults.yml", Reason: config.UnreadableStatError},
-			{RelKey: "_defaults.yaml", Reason: config.UnreadableWalkError},
-			{RelKey: "tenant-b.yaml", Reason: config.UnreadableReadError},
-		})
+	fresh.SetDefaultsParseFailures(
+		[]string{"_defaults.yaml", "team/_defaults.yml", "tenant-a.yaml", "_profiles.yaml"})
+	fresh.SetUnreadableFiles([]config.UnreadableFile{
+		{RelKey: "team/_defaults.yaml", Reason: config.UnreadableReadError},
+		{RelKey: "_defaults.yml", Reason: config.UnreadableStatError},
+		{RelKey: "_defaults.yaml", Reason: config.UnreadableWalkError},
+		{RelKey: "tenant-b.yaml", Reason: config.UnreadableReadError},
+	})
 	if got := defaultsUnusableGauge(fresh, DefaultsUnusableReasonParseFailure); got != 2 {
 		t.Errorf("parse_failure = %v, want 2", got)
 	}
@@ -484,8 +484,115 @@ func TestUnusableTreeSetters_NilReceiver(t *testing.T) {
 	t.Parallel()
 	var cm *configMetrics
 	cm.SetUnreadableFiles([]config.UnreadableFile{{RelKey: "a.yaml", Reason: config.UnreadableReadError}})
-	cm.SetDefaultsUnusable([]string{"_defaults.yaml"}, nil)
+	cm.SetDefaultsParseFailures([]string{"_defaults.yaml"})
 	if _, err := scanDirTree(t.TempDir(), nil, nil, log.New(io.Discard, "", 0)); err != nil {
 		t.Fatalf("scanDirTree with nil metrics: %v", err)
+	}
+}
+
+// Review F1: a dropped (unreadable) file is in no TreeScan map, so it is not
+// a change-detection input — adding or deleting one schedules no reload and
+// no commit. The `unreadable` half of defaults_unusable must therefore follow
+// the walk, in both directions:
+//   - removed: a dangling root `_defaults.yaml` link is deleted; the gauge
+//     must drop to 0 on the next tick although nothing reloads;
+//   - added: a dangling `_defaults.yaml` appears beside a flat tree that does
+//     not otherwise move; the gauge must rise to 1 although nothing reloads.
+func TestDefaultsUnusableGauge_UnreadableFollowsTheWalkNotTheCommit(t *testing.T) {
+	t.Parallel()
+	t.Run("removed", func(t *testing.T) {
+		t.Parallel()
+		m, fresh, dir := newUnusableTreeManager(t, true)
+		p := filepath.Join(dir, "_defaults.yaml")
+		if err := os.Remove(p); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.Symlink(filepath.Join(dir, "gone.yaml"), p); err != nil {
+			t.Fatal(err)
+		}
+		m.tickOnce()
+		if got := defaultsUnusableGauge(fresh, DefaultsUnusableReasonUnreadable); got != 1 {
+			t.Fatalf("precondition: defaults_unusable{unreadable} = %v with the dangling link, want 1", got)
+		}
+		lastReload := m.LastReload()
+		if err := os.Remove(p); err != nil {
+			t.Fatal(err)
+		}
+		for i := 0; i < 3; i++ {
+			m.tickOnce()
+		}
+		if m.LastReload() != lastReload {
+			t.Fatal("precondition broken: removing the dropped link committed a reload; the shape needs none")
+		}
+		if got := defaultsUnusableGauge(fresh, DefaultsUnusableReasonUnreadable); got != 0 {
+			t.Errorf("defaults_unusable{unreadable} = %v after the link was removed, want 0 (stale critical alert)", got)
+		}
+	})
+	t.Run("added", func(t *testing.T) {
+		t.Parallel()
+		m, fresh, dir := newUnusableTreeManager(t, false)
+		lastReload := m.LastReload()
+		if err := os.Symlink(filepath.Join(dir, "gone.yaml"), filepath.Join(dir, "_defaults.yaml")); err != nil {
+			t.Fatal(err)
+		}
+		for i := 0; i < 2; i++ {
+			m.tickOnce()
+		}
+		if m.LastReload() != lastReload {
+			t.Fatal("precondition broken: adding a dangling link committed a reload; the shape needs none")
+		}
+		if got := defaultsUnusableGauge(fresh, DefaultsUnusableReasonUnreadable); got != 1 {
+			t.Errorf("defaults_unusable{unreadable} = %v with a dangling _defaults.yaml, want 1", got)
+		}
+	})
+}
+
+// Review F2: detectChange — the per-tick check, the ONLY scan that runs
+// while -scan-debounce exceeds -reload-interval (each tick re-arms the
+// debounce timer, so the reload's own scan never runs) — must reject an
+// emptied tree itself, in both modes. The tick-driven tests above cannot
+// tell: with debounce 0 the reload's scanVerdict catches it too.
+func TestDetectChange_RejectsEmptyTree(t *testing.T) {
+	t.Parallel()
+	for _, hier := range []bool{false, true} {
+		hier := hier
+		t.Run(modeName(hier), func(t *testing.T) {
+			t.Parallel()
+			m, _, dir := newUnusableTreeManager(t, hier)
+			err := filepath.WalkDir(dir, func(p string, d fs.DirEntry, err error) error {
+				if err == nil && !d.IsDir() {
+					return os.Remove(p)
+				}
+				return err
+			})
+			if err != nil {
+				t.Fatal(err)
+			}
+			changed, _, err := m.detectChange()
+			if err == nil {
+				t.Fatalf("detectChange on an empty tree: err = nil (changed=%v), want an empty_tree scan error", changed)
+			}
+			if got := classifyScanFailure(err); got != ScanFailureReasonEmptyTree {
+				t.Errorf("classifyScanFailure(%v) = %q, want %q", err, got, ScanFailureReasonEmptyTree)
+			}
+		})
+	}
+}
+
+// F2, non-root: same for an unlistable root.
+func TestDetectChange_RejectsUnlistableRoot(t *testing.T) {
+	skipAsRoot(t)
+	t.Parallel()
+	for _, hier := range []bool{false, true} {
+		hier := hier
+		t.Run(modeName(hier), func(t *testing.T) {
+			t.Parallel()
+			m, _, dir := newUnusableTreeManager(t, hier)
+			chmodRestore(t, dir, 0o300, 0o755)
+			_, _, err := m.detectChange()
+			if got := classifyScanFailure(err); err == nil || got != ScanFailureReasonRootUnreadable {
+				t.Errorf("detectChange on an unlistable root: err = %v (reason %q), want %q", err, got, ScanFailureReasonRootUnreadable)
+			}
+		})
 	}
 }

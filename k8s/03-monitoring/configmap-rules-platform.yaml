@@ -632,7 +632,9 @@ data:
           # da_config_unreadable_files{reason} is a state gauge, re-Set by
           # every walk (reason ∈ {stat_error, read_error, walk_error},
           # pkg/config's closed UnreadableFile set; all pre-initialised at 0),
-          # so it stays up exactly as long as the entries are unreadable.
+          # so it stays up exactly as long as the entries are unreadable. A
+          # walk that itself fails (root missing) keeps the previous value;
+          # ConfigScanFailing (walk_error) fires for that state.
           # `for: 10m` rides out a deploy that writes a file before fixing its
           # mode. warning, like ConfigParseFailure: the per-file loss of a
           # tenant. promtool:
@@ -668,9 +670,12 @@ data:
           # thresholds it inherits — their user_threshold series disappear.
           # da_config_defaults_unusable{reason} is the state: the number of
           # `_defaults.yaml` files (either spelling, any level) the committed
-          # config could not use, reason ∈ {parse_failure, unreadable},
-          # re-Set on every commit, so this fires for as long as the file is
-          # unusable and resolves on the commit that can read it again.
+          # config could not use, reason ∈ {parse_failure, unreadable};
+          # parse_failure is re-Set on every commit, unreadable on every
+          # completed walk (an unreadable file is not a change-detection
+          # input, so adding or deleting one schedules no commit). So this
+          # fires for as long as the file is unusable and resolves once it
+          # is usable again.
           # critical, like ConfigDefaultsParseFailure. promtool:
           # tests/rulepacks/platform-config-unusable-files_test.yaml (fires
           # within 10m and keeps firing while the file stays broken).

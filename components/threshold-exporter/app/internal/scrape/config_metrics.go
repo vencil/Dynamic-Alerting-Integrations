@@ -51,7 +51,8 @@ type ConfigMetrics struct {
 	// tree reads 0 again. UnreadableFiles is the conf.d entries the most
 	// recent walk could not stat, read or list (TreeScan.Unreadable), by
 	// that list's closed reason set; DefaultsUnusable is the `_defaults`
-	// files the most recent commit could not use, by reason (package main's
+	// files the exporter cannot use (parse_failure per commit, unreadable
+	// per walk), by reason (package main's
 	// DefaultsUnusableReason* constants). Before them an unreadable tenant
 	// file, or an unreadable root `_defaults.yaml`, left no series at all,
 	// and a broken one left only a counter that stops rising after the one
@@ -158,11 +159,11 @@ func NewConfigMetrics() *ConfigMetrics {
 		}, []string{"reason"}),
 		UnreadableFiles: prometheus.NewGaugeVec(prometheus.GaugeOpts{
 			Name: "da_config_unreadable_files",
-			Help: "Number of config-named conf.d entries the most recent tree walk dropped because it could not use them (#2592), by reason: stat_error (the entry, or a symlink's target, cannot be statted), read_error (statted, but the bytes cannot be read, e.g. permission denied) or walk_error (a directory below the root cannot be listed; one per directory, whatever it holds). The tenants of a dropped file are not served, while every other tenant keeps reloading. Re-Set on every walk, so it returns to 0 once the files are readable again; all three reasons exist at 0 from the first scrape. The root directory is not counted here: an unlistable root fails the scan instead (da_config_scan_failures_total{reason=\"root_unreadable\"}). Alert: ConfigFilesUnreadable (> 0 for 10m).",
+			Help: "Number of config-named conf.d entries the most recent tree walk dropped because it could not use them (#2592), by reason: stat_error (the entry, or a symlink's target, cannot be statted), read_error (statted, but the bytes cannot be read, e.g. permission denied) or walk_error (a directory below the root cannot be listed; one per directory, whatever it holds). The tenants of a dropped file are not served, while every other tenant keeps reloading. Re-Set by every walk that completes, so it returns to 0 once the files are readable again; a walk that itself fails (the config directory is missing or not a directory) keeps the previous value, and ConfigScanFailing fires for that state (da_config_scan_failures_total{reason=\"walk_error\"}). All three reasons exist at 0 from the first scrape. The root directory is not counted here: an unlistable root fails the scan instead (da_config_scan_failures_total{reason=\"root_unreadable\"}). Alert: ConfigFilesUnreadable (> 0 for 10m).",
 		}, []string{"reason"}),
 		DefaultsUnusable: prometheus.NewGaugeVec(prometheus.GaugeOpts{
 			Name: "da_config_defaults_unusable",
-			Help: "Number of _defaults.yaml files (either spelling, any level) the most recently committed config could not use (#2592), by reason: parse_failure (the file does not parse, so its whole defaults block is dropped, ADR-017) or unreadable (it cannot be statted or read). A root one drops every tenant's inherited defaults, and every user_threshold series that comes only from them disappears. Unlike da_config_parse_failure_total, which moves only when a reload reads the file, this keeps its value for as long as the file stays unusable and returns to 0 with the commit that can use it again; both reasons exist at 0 from the first scrape. Alert: ConfigDefaultsUnusable (> 0 for 10m).",
+			Help: "Number of _defaults.yaml files (either spelling, any level) the exporter cannot use (#2592), by reason: parse_failure (the file does not parse, so its whole defaults block is dropped, ADR-017; re-Set by every config commit) or unreadable (it cannot be statted or read; re-Set by every walk that completes, like da_config_unreadable_files — a walk that itself fails keeps the previous value while ConfigScanFailing fires). A root one drops every tenant's inherited defaults, and every user_threshold series that comes only from them disappears. Unlike da_config_parse_failure_total, which moves only when a reload reads the file, this keeps its value for as long as the file stays unusable and returns to 0 once it is usable again; both reasons exist at 0 from the first scrape. Alert: ConfigDefaultsUnusable (> 0 for 10m).",
 		}, []string{"reason"}),
 	}
 }

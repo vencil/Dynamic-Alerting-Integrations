@@ -26,7 +26,9 @@ package main
 //
 //   da_config_defaults_unusable            (GaugeVec, labels=[reason])  [#2592]
 //     reason ∈ defaultsUnusableReasons
-//     re-Set by every directory-mode commit; see SetDefaultsUnusable.
+//     parse_failure re-Set by every directory-mode commit
+//     (SetDefaultsParseFailures), unreadable by every walk
+//     (SetUnreadableFiles).
 //
 //   da_config_defaults_change_noop_total   (Counter)
 //     incremented when a defaults file changed but no dependent tenant's
@@ -581,19 +583,31 @@ func (cm *configMetrics) SetInitialLoadDuration(d time.Duration) {
 	cm.initialLoadDuration.Set(d.Seconds())
 }
 
-// SetUnreadableFiles publishes one walk's TreeScan.Unreadable as
-// da_config_unreadable_files{reason} (#2592): every reason is re-Set, the
-// ones absent from us to 0, so the gauge follows the tree back down once the
-// files are readable again. Called by scanDirTree on every walk that returns
-// a scan — including one scanVerdict then rejects, so a tree whose every
-// file is unreadable shows them here beside scan_failures{empty_tree}. A
-// walk that returns an error (root missing) leaves the gauge as it was.
+// SetUnreadableFiles publishes one walk's TreeScan.Unreadable (#2592) as
+// da_config_unreadable_files{reason} AND as the `unreadable` half of
+// da_config_defaults_unusable (the `_defaults` files among those entries,
+// stat_error / read_error only). Every series is re-Set, the absent ones to
+// 0, so both follow the tree back down once the files are readable again.
+//
+// ⛔ The defaults half is set HERE, per walk, not at commit. A dropped entry
+// is in no TreeScan map, so it is not a change-detection input (hierarchical
+// mode compares Files' count and hashes, flat mode the Composite): deleting
+// a dangling `_defaults.yaml`, or adding one beside a tree that does not
+// otherwise move, changes nothing a reload would be scheduled for — a value
+// set at commit would stay stale in both directions (a critical alert that
+// never resolves, or one that never fires). The walk always knows.
+//
+// Called by scanDirTree on every walk that returns a scan — including one
+// scanVerdict then rejects, so a tree whose every file is unreadable shows
+// them beside scan_failures{empty_tree}. A walk that itself fails (the root
+// is missing or not a directory) returns no scan and leaves both as they
+// were; scan_failures{walk_error} and ConfigScanFailing cover that state.
 // Nil-receiver safe (see IncParseFailure).
 func (cm *configMetrics) SetUnreadableFiles(us []config.UnreadableFile) {
 	if cm == nil {
 		return
 	}
-	var stat, read, walk int
+	var stat, read, walk, defaults int
 	for _, u := range us {
 		switch u.Reason {
 		case config.UnreadableStatError:
@@ -602,40 +616,44 @@ func (cm *configMetrics) SetUnreadableFiles(us []config.UnreadableFile) {
 			read++
 		case config.UnreadableWalkError:
 			walk++
+			continue // a directory, never a defaults file
+		}
+		if confdname.IsDefaults(path.Base(u.RelKey)) {
+			defaults++
 		}
 	}
 	cm.unreadableFiles[config.UnreadableStatError].Set(float64(stat))
 	cm.unreadableFiles[config.UnreadableReadError].Set(float64(read))
 	cm.unreadableFiles[config.UnreadableWalkError].Set(float64(walk))
+	cm.defaultsUnusable[DefaultsUnusableReasonUnreadable].Set(float64(defaults))
 }
 
-// SetDefaultsUnusable publishes how many `_defaults` files the config being
-// committed cannot use, as da_config_defaults_unusable{reason} (#2592).
-// parseFailed is the commit's flatScanState.parseFailed (scan keys); us is
-// the same scan's TreeScan.Unreadable. Only `_defaults` files count
+// SetDefaultsParseFailures publishes the `parse_failure` half of
+// da_config_defaults_unusable (#2592): how many `_defaults` files the config
+// being committed rejected as unparseable. parseFailed is the commit's
+// flatScanState.parseFailed (scan keys). Only `_defaults` files count
 // (confdname.IsDefaults, the predicate the walker classifies with), at any
 // level: a nested one drops its subtree's block the way the root one drops
-// everybody's. Both reasons are re-Set on every directory-mode commit, so
-// the gauge stays up for exactly as long as the file stays unusable —
-// da_config_parse_failure_total, by contrast, moves only when a reload
-// reads the file, so an increase() over it decays to 0 while the defaults
-// are still gone.
+// everybody's.
+//
+// Set at commit, unlike the `unreadable` half (see SetUnreadableFiles),
+// because only the flat build parses a `_` file — and here commit-time is
+// exact: a broken file IS in Files with its hash, so fixing, replacing or
+// deleting it moves the hash or the file count, which schedules the reload
+// whose commit re-Sets this. Held for as long as the file stays broken —
+// da_config_parse_failure_total, by contrast, moves only when a reload reads
+// the file, so an increase() over it decays to 0 while the defaults are
+// still gone.
 // Nil-receiver safe (see IncParseFailure).
-func (cm *configMetrics) SetDefaultsUnusable(parseFailed []string, us []config.UnreadableFile) {
+func (cm *configMetrics) SetDefaultsParseFailures(parseFailed []string) {
 	if cm == nil {
 		return
 	}
-	var broken, unreadable int
+	var broken int
 	for _, k := range parseFailed {
 		if confdname.IsDefaults(path.Base(k)) {
 			broken++
 		}
 	}
-	for _, u := range us {
-		if u.Reason != config.UnreadableWalkError && confdname.IsDefaults(path.Base(u.RelKey)) {
-			unreadable++
-		}
-	}
 	cm.defaultsUnusable[DefaultsUnusableReasonParseFailure].Set(float64(broken))
-	cm.defaultsUnusable[DefaultsUnusableReasonUnreadable].Set(float64(unreadable))
 }
