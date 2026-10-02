@@ -105,6 +105,7 @@ type BatchResponse struct {
 // @Success     200  {object} BatchResponse
 // @Success     202  {object} map[string]interface{}
 // @Failure     400  {object} ErrorResponse
+// @Failure     403  {object} ErrorResponse "PR write-back mode: an operation breaks the domain policy on the latest base branch, which this server's local copy lags (code POLICY_VIOLATION, with tenant_id and operation); nothing written, no PR/MR. Direct mode and violations the local copy shows are reported per operation in results instead."
 // @Failure     409  {object} ErrorResponse "PR write-back mode: a tenant in the batch is already declared by another conf.d file (code TENANT_DECLARED_ELSEWHERE), or its config file cannot be loaded as a tenant config (code TENANT_CONFIG_NOT_LOADABLE, with tenant_id and config_error; repair the tenant file itself first); nothing written. Direct mode reports these per op in results[].code instead."
 // @Failure     413  {object} ErrorResponse
 // @Failure     500  {object} ErrorResponse
@@ -245,7 +246,7 @@ func runBatchPR(d *Deps, rw http.ResponseWriter, r *http.Request, ops []BatchOpe
 	// advisories below flattens them.
 	advisoriesByTenant := map[string][]string{}
 	var advisoryTenants []string
-	for _, op := range ops {
+	for i, op := range ops {
 		if err := ValidateWritableTenantID(op.TenantID); err != nil {
 			batchResults = append(batchResults, BatchResult{TenantID: op.TenantID, Status: "error", Message: err.Error()})
 			continue
@@ -287,7 +288,17 @@ func runBatchPR(d *Deps, rw http.ResponseWriter, r *http.Request, ops []BatchOpe
 		batchOps = append(batchOps, gitops.PRBatchOp{
 			TenantID: op.TenantID,
 			Merge: func(existing []byte) (string, error) {
-				return mergePatchYAML(existing, op.TenantID, op.Patch, op.Unset)
+				merged, err := mergePatchYAML(existing, op.TenantID, op.Patch, op.Unset)
+				if err != nil {
+					return "", err
+				}
+				// B2 F1: the check above read the pod's local tree; this one
+				// reads the fresh base the branch is cut from. A refusal here
+				// aborts the whole batch (WritePRBatch), nothing written.
+				if v := freshBaseRoutingCheck(d.ConfigDir, d.Policy, op, existing, merged); len(v) > 0 {
+					return "", &freshBasePolicyError{TenantID: op.TenantID, Op: i, Violations: v}
+				}
+				return merged, nil
 			},
 		})
 		batchResults = append(batchResults, BatchResult{TenantID: op.TenantID, Status: "included"})
@@ -321,6 +332,15 @@ func runBatchPR(d *Deps, rw http.ResponseWriter, r *http.Request, ops []BatchOpe
 		var notLoadable *tenantFileNotLoadableError
 		if errors.As(err, &notLoadable) {
 			writeTenantFileNotLoadable(rw, r, notLoadable)
+			return BatchResponse{}, false
+		}
+		// B2 F1: an op breaks the domain policy on the fresh base although
+		// the pre-check (the pod's local tree) let it through. The whole PR
+		// is refused, like the refusals above; same 403 POLICY_VIOLATION as
+		// PUT (writePolicyViolation).
+		var freshPolicy *freshBasePolicyError
+		if errors.As(err, &freshPolicy) {
+			writeFreshBasePolicyViolation(rw, r, freshPolicy)
 			return BatchResponse{}, false
 		}
 		// #1102: an all-no-op batch (idempotent patch / retry) produced no

@@ -39,6 +39,7 @@ import (
 	"log/slog"
 	"net/http"
 	"strconv"
+	"strings"
 
 	"github.com/go-chi/chi/v5/middleware"
 	"github.com/vencil/tenant-api/internal/confd"
@@ -376,13 +377,50 @@ func WriteValidationErrors(w http.ResponseWriter, r *http.Request, violations []
 // violations. The pre-PR-9 shape included a `help` URL and an
 // actionable `action` string; both preserved.
 func writePolicyViolation(w http.ResponseWriter, r *http.Request, violations []policy.Violation) {
-	WriteErrorEnvelope(w, r, http.StatusForbidden, ErrorResponse{
-		Error:   "domain policy violation",
+	WriteErrorEnvelope(w, r, http.StatusForbidden, policyViolationEnvelope("domain policy violation", violations))
+}
+
+// policyViolationEnvelope is the 403 POLICY_VIOLATION body shared by
+// writePolicyViolation and writeFreshBasePolicyViolation.
+func policyViolationEnvelope(msg string, violations []policy.Violation) ErrorResponse {
+	return ErrorResponse{
+		Error:   msg,
 		Code:    CodePolicyViolation,
 		PolicyV: violations,
 		Help:    "https://github.com/vencil/vibe-k8s-lab/blob/main/docs/internal/test-coverage-matrix.md",
 		Action:  "Review the _domain_policy.yaml constraints for this tenant's domain. Contact a platform admin to update the policy if this change is necessary.",
-	})
+	}
+}
+
+// freshBasePolicyError is a PR-mode batch op the domain policy refuses on the
+// FRESH base the feature branch is cut from, after the pre-check on the pod's
+// local tree let it through (B2 F1, #2341). Op is the op's index in the
+// request (for /groups/{id}/batch, the member's index in the expansion).
+type freshBasePolicyError struct {
+	TenantID   string
+	Op         int
+	Violations []policy.Violation
+}
+
+func (e *freshBasePolicyError) Error() string {
+	msgs := make([]string, len(e.Violations))
+	for i, v := range e.Violations {
+		msgs[i] = v.Message
+	}
+	return fmt.Sprintf("domain policy violation on the latest base branch: operations[%d] (tenant %s) would break it: %s. "+
+		"This server's local config is behind the base branch, so the per-operation check did not catch it. "+
+		"Nothing in this batch was written and no PR/MR was opened.",
+		e.Op, e.TenantID, strings.Join(msgs, "; "))
+}
+
+func (e *freshBasePolicyError) Unwrap() error { return gitops.ErrMergePolicyRefused }
+
+// writeFreshBasePolicyViolation answers a freshBasePolicyError with the
+// same 403 POLICY_VIOLATION envelope as writePolicyViolation, naming the op.
+func writeFreshBasePolicyViolation(w http.ResponseWriter, r *http.Request, e *freshBasePolicyError) {
+	env := policyViolationEnvelope(e.Error(), e.Violations)
+	env.Extra = map[string]any{"tenant_id": e.TenantID, "operation": e.Op}
+	WriteErrorEnvelope(w, r, http.StatusForbidden, env)
 }
 
 // forgeDegradedRetryAfterS is the coarse Retry-After hint (seconds) on the 503

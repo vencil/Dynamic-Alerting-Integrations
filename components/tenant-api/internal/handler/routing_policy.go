@@ -154,12 +154,54 @@ func batchRoutingViolations(configDir string, mgr *policy.Manager, prior []Batch
 	for _, p := range prior {
 		applyBatchEdit(block, p)
 	}
-	if !touchesRouting(BatchOperation{Patch: op.Patch}) && !removesAny(block, op.Unset) {
+	if !changesRouting(block, op) {
 		return nil, nil, false
 	}
 	applyBatchEdit(block, op)
-	violations, advisories = mgr.JudgeTenantRouting(op.TenantID, block, loadRoutingLayers(configDir))
+	violations, advisories = judgeTenantBlock(configDir, mgr, op.TenantID, block)
 	return violations, advisories, true
+}
+
+// changesRouting reports whether op, laid over block (the tenant block it
+// will be merged into), changes the routing: its patch sets a routing key,
+// or its unset removes one block carries. An unset of an absent key changes
+// nothing (mergePatchYAML writes nothing for it) and is not judged.
+func changesRouting(block map[string]any, op BatchOperation) bool {
+	return touchesRouting(BatchOperation{Patch: op.Patch}) || removesAny(block, op.Unset)
+}
+
+// judgeTenantBlock is the judging half shared by the pre-check
+// (batchRoutingViolations: the block on disk with the prior ops stacked) and
+// PR mode's in-lock check (freshBaseRoutingCheck: the block as merged on the
+// fresh base): block resolved over the routing layers in configDir and
+// judged by the domain policy.
+func judgeTenantBlock(configDir string, mgr *policy.Manager, tenantID string, block map[string]any) ([]policy.Violation, []string) {
+	return mgr.JudgeTenantRouting(tenantID, block, loadRoutingLayers(configDir))
+}
+
+// freshBaseRoutingCheck is PR mode's authoritative routing check (B2 F1),
+// run inside the op's merge closure, under the writer lock, after the
+// feature branch is cut from the FRESH origin base: existing is the
+// tenant's file there (with the request's earlier ops already committed on
+// the branch), merged is what this op makes of it. The pre-check judged the
+// pod's LOCAL tree, which is synced only at startup and may lag the base, so
+// it can pass an op that breaks the policy on the base. Same judgement as
+// the pre-check, on the merged block; an op that does not change the routing
+// is not judged. configDir is the working tree, checked out at the branch,
+// so the routing layers read are the base's too.
+func freshBaseRoutingCheck(configDir string, mgr *policy.Manager, op BatchOperation, existing []byte, merged string) []policy.Violation {
+	if mgr == nil || !touchesRouting(op) {
+		return nil
+	}
+	if !changesRouting(extractTenantBlock(existing, op.TenantID), op) {
+		return nil
+	}
+	block := extractTenantBlock([]byte(merged), op.TenantID)
+	if block == nil {
+		block = map[string]any{}
+	}
+	violations, _ := judgeTenantBlock(configDir, mgr, op.TenantID, block)
+	return violations
 }
 
 // removesAny reports whether block carries any of keys.

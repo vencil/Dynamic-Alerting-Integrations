@@ -812,8 +812,18 @@ type MergeFunc func(existing []byte) (string, error)
 // WritePRBatch skips the op like a byte-identical merge (an all-no-op batch is
 // ErrNoChanges), and the pre-flight passes it. Needed because the existing
 // byte-compare cannot express "nothing to write" for a file that does not
-// exist: any content written there creates the tenant.
+// exist: any content written there creates the tenant. The existing file is
+// still validated for its notices, as a byte-identical merge is (#1231 F5).
 var ErrMergeNoOp = errors.New("merge changes nothing")
+
+// ErrMergePolicyRefused is what a MergeFunc's error wraps (errors.Is) when the
+// merged content would break the domain policy (B2, #2341). Like
+// ErrMergeBaseNotLoadable it is a verdict on the tree it was read from, so
+// WritePRBatch's pre-flight (the local tree, before checkout) tolerates it
+// and the post-checkout pass — the fresh base the branch is cut from —
+// decides: there it aborts the feature branch and returns the error, and
+// nothing of the batch is written.
+var ErrMergePolicyRefused = errors.New("merged content breaks the domain policy")
 
 // ErrMergeBaseNotLoadable is what a MergeFunc's error wraps (errors.Is) when it
 // refuses the EXISTING file as its base because the file cannot be loaded as
@@ -1153,6 +1163,16 @@ func (w *Writer) readMergeBodyOnly(tenantID, filePath string, merge MergeFunc) e
 // advisory deprecation channel (#1231 1b), meaningful only when err is nil.
 func (w *Writer) readMergeValidate(tenantID, filePath string, merge MergeFunc) (content string, existing []byte, notices []string, err error) {
 	content, existing, err = w.readMerge(tenantID, filePath, merge)
+	if errors.Is(err, ErrMergeNoOp) && len(bytes.TrimSpace(existing)) > 0 {
+		// The file stays as it is, so judge it as a byte-identical merge is
+		// judged: the same validation, and its notices still reach the
+		// caller (#1231 F5) — the caller sees ErrMergeNoOp with them.
+		errs, notices := validate(w.configDir, tenantID, filePath, string(existing))
+		if len(errs) > 0 {
+			return "", existing, nil, fmt.Errorf("%w for %s: %s", ErrValidation, tenantID, strings.Join(errs, "; "))
+		}
+		return "", existing, notices, err
+	}
 	if err != nil {
 		return "", existing, nil, err
 	}
@@ -1202,7 +1222,7 @@ func (w *Writer) WriteMerged(ctx context.Context, tenantID, authorEmail string, 
 	}
 	content, existing, notices, err := w.readMergeValidate(tenantID, filePath, merge)
 	if errors.Is(err, ErrMergeNoOp) {
-		return nil, nil // B2: the merge changes nothing — success, nothing written
+		return notices, nil // B2: the merge changes nothing — success, nothing written, notices kept
 	}
 	if err != nil {
 		return nil, err
