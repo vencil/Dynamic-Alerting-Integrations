@@ -216,6 +216,12 @@ func TestTenantAPI_RoutingPolicyParityMatrix(t *testing.T) {
 				d := &Deps{Writer: newTestWriter(configDir), ConfigDir: configDir, RBAC: adminRBAC(t),
 					Policy: policy.NewManager(configDir), WriteMode: WriteModeDirect}
 				patch, _ := json.Marshal(batch.Patch)
+				if batch.Verdict == "400" { // #2341: refused as an invalid patch value
+					if w := postTenantBatch(t, d, `[{"tenant_id":"`+tenantID+`","patch":`+string(patch)+`}]`); w.Code != http.StatusBadRequest {
+						t.Errorf("status = %d, table says 400; body: %s", w.Code, w.Body.String())
+					}
+					return
+				}
 				resp := runBatch(t, configDir, d, `[{"tenant_id":"`+tenantID+`","patch":`+string(patch)+`}]`)
 				if len(resp.Results) != 1 {
 					t.Fatalf("results = %+v", resp.Results)

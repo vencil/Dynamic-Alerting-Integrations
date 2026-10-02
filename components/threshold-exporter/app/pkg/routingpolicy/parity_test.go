@@ -440,7 +440,9 @@ func checkTenantAPIModel(t *testing.T, files map[string]string, tenantID string,
 		touches = touches || k == "_routing_profile" || k == "_routing"
 	}
 	got := "ok"
-	if touches && verdict(patched) {
+	if v, has := want.Batch.Patch["_routing"]; has && !IsDisabled(v) {
+		got = "400" // #2341: a flat `_routing` patch can only disable
+	} else if touches && verdict(patched) {
 		got = "policy_violation"
 	}
 	if got != want.Batch.Verdict {

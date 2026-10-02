@@ -207,7 +207,7 @@ def test_matrix_keys_are_exactly_the_known_ones() -> None:
                 assert api["put"] in ("403", "400", "ok"), where
                 batch = api["batch"]
                 assert batch is None or (set(batch) == BATCH_KEYS
-                                         and batch["verdict"] in ("ok", "policy_violation")), where
+                                         and batch["verdict"] in ("ok", "policy_violation", "400")), where
             differs = want["python_differs"]
             assert differs is None or (set(differs) == DIFFERS_KEYS and differs["reason"]), where
             assert want["refused"] is None or want["refused"] in REFUSED_KINDS, where

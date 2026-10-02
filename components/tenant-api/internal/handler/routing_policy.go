@@ -103,16 +103,10 @@ func tenantBlockOnDisk(configDir, tenantID string) map[string]any {
 // unrelated write is not refused for the routing already on disk (documented
 // asymmetry with PUT, which always judges the whole body).
 //
-// The disk block is load-bearing: a patch judged alone would let
-// `_routing: "on"` re-enable a tenant whose file already names a violating
-// profile.
-//
 // prior is the SAME tenant's earlier ops of this request that will be
 // applied before this one without being written first — PR mode, where
-// WritePRBatch merges every op onto the same base in order (#2280 review:
-// `_routing_profile: <violating>` then `_routing: "on"` on a disabled tenant
-// each passed alone and stacked into a violation on the PR branch). Only ops
-// that were taken into the batch belong there. Direct mode writes each op
+// WritePRBatch merges every op onto the same base in order. Only ops that
+// were taken into the batch belong there. Direct mode writes each op
 // before judging the next, which reads the file back, so it passes nil.
 //
 // advisories are the non-blocking `require_critical_escalation` leak

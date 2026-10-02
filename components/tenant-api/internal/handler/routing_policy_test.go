@@ -259,16 +259,13 @@ const offDisabledChat = "    _routing_profile: team-chat\n    _routing: disable\
 
 // The block ON DISK is part of what a batch op is judged on: pointing a
 // disabled tenant at a violating profile is allowed (nothing renders).
-// #2341: `_routing: "on"` no longer re-enables routing — a `_routing` that is
-// neither a mapping nor a disabling string renders NOTHING in every reader
-// (routingpolicy.RoutingNotMapping), so the policy has nothing to judge and
-// the op goes through; the route generator and da-guard refuse that file.
+// #2341: re-enabling with `_routing: "on"` is refused before that, as an
+// invalid patch value (TestBatchTenants_RoutingPatchMustDisable).
 func TestBatchTenants_RoutingPatchJudgedOverDiskBlock(t *testing.T) {
 	cases := []struct {
 		name, disk, patch string
 		refused           bool
 	}{
-		{"`_routing: on` over a violating profile on disk renders nothing", offDisabledChat, `{"_routing":"on"}`, false},
 		{"violating profile while disabled on disk", "    _routing_profile: domain-ok\n    _routing: disable\n",
 			`{"_routing_profile":"team-chat"}`, false},
 	}
@@ -299,9 +296,9 @@ func TestBatchTenants_RoutingPatchJudgedOverDiskBlock(t *testing.T) {
 
 // Two ops on one tenant in one request: point the disabled tenant at the
 // violating profile, then write `_routing: on`. Before #2341 the second op
-// re-enabled routing and, stacked, rendered slack. Now `on` renders nothing
-// (RoutingNotMapping), so both ops go through in BOTH write modes and nothing
-// renders slack; the generator refuses the resulting `_routing`.
+// re-enabled routing and, stacked, rendered slack. Now the whole request is
+// refused (400, the `_routing` patch value) in BOTH write modes, and nothing
+// is written.
 const stackedOps = `[
 	{"tenant_id":"t-off","patch":{"_routing_profile":"team-chat"}},
 	{"tenant_id":"t-off","patch":{"_routing":"on"}}]`
@@ -310,13 +307,11 @@ func TestBatchTenants_StackedOpsSameTenant_Direct(t *testing.T) {
 	configDir := seedGitTree(t, offTree("    _routing_profile: domain-ok\n    _routing: disable\n"))
 	d := &Deps{Writer: newTestWriter(configDir), ConfigDir: configDir, RBAC: adminRBAC(t),
 		Policy: policy.NewManager(configDir), WriteMode: WriteModeDirect}
-	resp := runBatch(t, configDir, d, stackedOps)
-	if len(resp.Results) != 2 || resp.Results[0].Status != "ok" || resp.Results[1].Status != "ok" {
-		t.Fatalf("results = %+v, want both ops ok", resp.Results)
-	}
-	b, _ := os.ReadFile(filepath.Join(configDir, "t-off.yaml"))
-	if !strings.Contains(string(b), "team-chat") || !strings.Contains(string(b), `"on"`) {
-		t.Errorf("t-off.yaml should hold both ops (team-chat, _routing \"on\"):\n%s", b)
+	before, _ := os.ReadFile(filepath.Join(configDir, "t-off.yaml"))
+	assertRoutingPatchRefused(t, postTenantBatch(t, d, stackedOps), `operations[1].patch["_routing"]`)
+	after, _ := os.ReadFile(filepath.Join(configDir, "t-off.yaml"))
+	if !bytes.Equal(before, after) {
+		t.Errorf("refused batch changed t-off.yaml:\n%s", after)
 	}
 }
 
@@ -333,19 +328,9 @@ func TestBatchTenants_StackedOpsSameTenant_PRMode(t *testing.T) {
 	d := &Deps{Writer: newTestWriter(configDir), ConfigDir: configDir, RBAC: adminRBAC(t),
 		Policy: policy.NewManager(configDir), WriteMode: WriteModePR, PRClient: mockClient,
 		PRTracker: &mockPlatformTracker{}}
-	resp := runBatch(t, configDir, d, stackedOps)
-	if len(resp.Results) != 2 || resp.Results[0].Status != "included" || resp.Results[1].Status != "included" {
-		t.Fatalf("results = %+v, want both ops included", resp.Results)
-	}
-	if head == "" {
-		t.Fatalf("no PR opened: %+v", resp)
-	}
-	out, err := exec.Command("git", "-C", configDir, "show", head+":t-off.yaml").CombinedOutput()
-	if err != nil {
-		t.Fatalf("git show %s:t-off.yaml: %v\n%s", head, err, out)
-	}
-	if !strings.Contains(string(out), "team-chat") || !strings.Contains(string(out), `"on"`) {
-		t.Errorf("PR branch must hold both ops (team-chat, _routing \"on\"):\n%s", out)
+	assertRoutingPatchRefused(t, postTenantBatch(t, d, stackedOps), `operations[1].patch["_routing"]`)
+	if head != "" {
+		t.Errorf("refused batch opened a PR on %s", head)
 	}
 }
 
