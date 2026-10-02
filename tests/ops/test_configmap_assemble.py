@@ -36,6 +36,7 @@ import sys
 from pathlib import Path
 
 import pytest
+from _platform_fs import require_case_sensitive_names, require_tool  # noqa: E402
 
 REPO = Path(__file__).resolve().parents[2]
 SCRIPT = REPO / "scripts" / "ops" / "configmap_assemble.py"
@@ -771,7 +772,9 @@ class TestNeverTreatsCannotMeasureAsClean:
             stdout = ("apiVersion: v1\nkind: ConfigMap\ndata:\n"
                       + "".join(
                           f"  {p.name}: "
-                          f"{json.dumps(p.read_text(encoding='utf-8'))}\n"
+                          # bytes, not read_text: text mode folds the CRLF a
+                          # Windows host wrote, and the script counts bytes.
+                          f"{json.dumps(p.read_bytes().decode('utf-8'))}\n"
                           for p in sorted(d.iterdir())))
             stderr = ""
 
@@ -882,6 +885,8 @@ class TestSelectionFollowsTheExportersOwnPredicate:
         only the lowercase one and the gate only ever looked at what the glob
         shipped. Both ship now, so the exporter would reject the ENTIRE dir —
         and the gate says so instead of the deploy discovering it."""
+        require_case_sensitive_names()
+        require_tool("kubectl")
         d = _tree(tmp_path, ["db-a.yaml", "DB-A.YAML"],
                   tenant_of={"db-a.yaml": "db-a", "DB-A.YAML": "db-a"})
         r = _run(d, _out(tmp_path))
