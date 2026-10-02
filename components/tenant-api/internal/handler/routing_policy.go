@@ -42,8 +42,9 @@ func extractTenantBlock(body []byte, tenantID string) map[string]any {
 // the conf.d root, per request. A layer that cannot be read is logged by name
 // and left out, and the check runs on what remains — fail-open, the same side
 // the domain-policy watcher fails on. Domain policies themselves come from
-// the policy watcher (`_domain_policy.yaml`), so LoadRoot's policy problems
-// are not repeated here.
+// the caller's policy.Manager (the watcher, or freshBasePolicyCheck's
+// snapshot of the PR base), so LoadRoot's policy problems are not repeated
+// here.
 func loadRoutingLayers(configDir string) routingpolicy.Layers {
 	layers, _, problems := routingpolicy.LoadRoot(configDir, nil)
 	for _, p := range problems {
@@ -172,9 +173,9 @@ func changesRouting(block map[string]any, op BatchOperation) bool {
 
 // judgeTenantBlock is the judging half shared by the pre-check
 // (batchRoutingViolations: the block on disk with the prior ops stacked) and
-// PR mode's in-lock check (freshBaseRoutingCheck: the block as merged on the
-// fresh base): block resolved over the routing layers in configDir and
-// judged by the domain policy.
+// PR mode's in-lock check (freshBasePolicyCheck: the block as merged on the
+// fresh base, judged by a policy snapshot read from it): block resolved over
+// the routing layers in configDir and judged by mgr.
 func judgeTenantBlock(configDir string, mgr *policy.Manager, tenantID string, block map[string]any) ([]policy.Violation, []string) {
 	return mgr.JudgeTenantRouting(tenantID, block, loadRoutingLayers(configDir))
 }
