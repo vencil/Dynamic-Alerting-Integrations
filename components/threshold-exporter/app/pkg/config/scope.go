@@ -58,6 +58,8 @@ import (
 	"path/filepath"
 	"sort"
 	"strings"
+
+	"github.com/vencil/threshold-exporter/internal/confdname"
 )
 
 // ScopedTenants is the bundle ScopeEffective returns: per-tenant
@@ -98,6 +100,14 @@ type ScopedTenants struct {
 	// (routingpolicy.UnreadRouting). A file in ParseFailed is listed too;
 	// the caller skips it.
 	DefaultsFiles []DefaultsFile
+
+	// NestedPlatformFiles is every `_` file below the root that is not a
+	// defaults carrier spelling (confdname.IsDefaults) and bears on the
+	// scope, with the bytes the scan read, sorted by Name (#2439). The
+	// exporter reads none of them, so only the YAML parser's verdict puts
+	// one in ParseFailed; da-guard checks them for the repeated keys the
+	// route generator refuses (withGeneratorDuplicates).
+	NestedPlatformFiles []DefaultsFile
 }
 
 // DefaultsFile is one defaults carrier of a scan: its root-relative slash
@@ -230,8 +240,9 @@ func scopeEffective(configDir, scopeDir string, wholeTree bool) (*ScopedTenants,
 		return nil, err
 	}
 	defaultsFiles := scopeDefaultsFiles(scan, filepath.ToSlash(rel))
+	nestedFiles := scopeNestedPlatformFiles(scan, filepath.ToSlash(rel))
 	if len(inScope) == 0 {
-		return &ScopedTenants{ParseFailed: parseFailed, DefaultsFiles: defaultsFiles}, nil
+		return &ScopedTenants{ParseFailed: parseFailed, DefaultsFiles: defaultsFiles, NestedPlatformFiles: nestedFiles}, nil
 	}
 
 	// Sort tenant IDs for deterministic output. The CLI's exit-code
@@ -250,9 +261,10 @@ func scopeEffective(configDir, scopeDir string, wholeTree bool) (*ScopedTenants,
 	resolver := newEffectiveResolver(scan)
 	resolver.withSources = wholeTree
 	out := &ScopedTenants{
-		Tenants:       make([]*EffectiveConfig, 0, len(tenantIDs)),
-		ParseFailed:   parseFailed,
-		DefaultsFiles: defaultsFiles,
+		Tenants:             make([]*EffectiveConfig, 0, len(tenantIDs)),
+		ParseFailed:         parseFailed,
+		DefaultsFiles:       defaultsFiles,
+		NestedPlatformFiles: nestedFiles,
 	}
 	seenFiles := make(map[string]struct{}, len(tenantIDs))
 	for _, id := range tenantIDs {
@@ -332,6 +344,21 @@ func scopeDefaultsFiles(scan *TreeScan, scopeRel string) []DefaultsFile {
 		key := filepath.ToSlash(rel)
 		f, ok := scan.Files[key]
 		if !ok || f.Data == nil || !bearsOnScope(key, scopeRel) {
+			continue
+		}
+		out = append(out, DefaultsFile{Name: key, Data: f.Data})
+	}
+	sort.Slice(out, func(i, j int) bool { return out[i].Name < out[j].Name })
+	return out
+}
+
+// scopeNestedPlatformFiles is ScopedTenants.NestedPlatformFiles.
+func scopeNestedPlatformFiles(scan *TreeScan, scopeRel string) []DefaultsFile {
+	var out []DefaultsFile
+	for _, key := range scan.Keys {
+		f := scan.Files[key]
+		if f == nil || f.Data == nil || !isNestedPlatformFile(key) ||
+			confdname.IsDefaults(scanKeyBase(key)) || !bearsOnScope(key, scopeRel) {
 			continue
 		}
 		out = append(out, DefaultsFile{Name: key, Data: f.Data})

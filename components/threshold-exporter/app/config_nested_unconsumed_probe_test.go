@@ -105,3 +105,42 @@ func TestNestedPlatformFileProbe_OnlyTheCarrierIsJudgedByItsDecode(t *testing.T)
 		})
 	}
 }
+
+// TestNestedPlatformFileProbe_UndecodableFileKeepsItsWarnings (#2439 review
+// F2): a nested non-carrier the decode refuses is not a parse failure, but
+// the two WARNs that read its top-level keys still fire — from the Node the
+// probe already parsed.
+func TestNestedPlatformFileProbe_UndecodableFileKeepsItsWarnings(t *testing.T) {
+	t.Parallel()
+	root := writeColdMergeFixture(t, map[string]string{
+		"_defaults.yaml":   "defaults:\n  mysql_connections: 80\n",
+		"team/t-team.yaml": "tenants:\n  t-team: {}\n",
+		"team/_platform.yaml": "tenants:\n  t-team:\n    mysql_connections: \"1\"\n" +
+			"max_metrics_per_tenant: 5\nnote: !!null x\n",
+	})
+	fresh, _ := freshMetrics(t)
+	logger, buf := newTestLogger()
+	mgr := NewConfigManager(root)
+	defer mgr.Close()
+	mgr.SetMetrics(fresh)
+	mgr.SetLogger(logger)
+	if err := mgr.Load(); err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+	if got := promtest.ToFloat64(fresh.parseFailures.WithLabelValues("_platform.yaml")); got != 0 {
+		t.Errorf("parse_failure{_platform.yaml} = %v, want 0", got)
+	}
+	log := buf.String()
+	for _, want := range []string{
+		`WARN: tenants: block in nested platform file`,
+		`(tenants "t-team")`,
+		`WARN: max_metrics_per_tenant found in`,
+	} {
+		if !strings.Contains(log, want) {
+			t.Errorf("log lacks %q; log:\n%s", want, log)
+		}
+	}
+	if strings.Contains(log, "ERROR: skip unparseable") {
+		t.Errorf("ERROR logged for a file the exporter does not read; log:\n%s", log)
+	}
+}
