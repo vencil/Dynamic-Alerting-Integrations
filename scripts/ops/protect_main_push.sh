@@ -41,18 +41,18 @@ _prepush_dir="${BASH_SOURCE[0]%/*}"
 # ⛔ 明說 helper 不見的情況。`set -e` 會讓 source 失敗直接中止，而那個中止是
 # 全面的——feature branch 也推不了——訊息卻只有一句 "No such file or directory"。
 # 照那個畫面最省事的三種轉綠（--no-verify／刪掉 hook／把 helper 也 cp 進去）
-# 全都有害，所以這裡自己把可行的重裝路徑講出來。
+# 全都有害，所以這裡自己把可行的出路講出來。
 if [ ! -r "$_prepush_dir/_prepush_refs.sh" ]; then
+    printf '\n[protect_main_push] ⛔ %s 旁邊找不到 _prepush_refs.sh，本守衛無法判斷你在推什麼。\n' "${BASH_SOURCE[0]}" >&2
     cat >&2 <<'PREPUSH_MISSING'
 
-[protect_main_push] ⛔ 找不到同目錄的 _prepush_refs.sh，本守衛無法判斷你在推什麼。
+如果那在 scripts/ops/ 裡：helper 從你的 checkout 裡不見了。它受版控，
+從 HEAD 還原（刪除可能已經 stage）。安裝器還原不了它。
 
-最可能的原因：你是用舊說明安裝的——
-    cp scripts/ops/protect_main_push.sh .git/hooks/pre-push
-那個做法只複製了一個檔，而本檔需要同目錄的 helper。
-
-重裝（#1689 之後只有這一條）：
+在其他位置：那是本守衛的舊複本。與某個已 commit 版本完全相同的複本，安裝器會換掉：
     bash scripts/ops/install_prepush_hook.sh
+如果安裝器改把它搬到 pre-push.chained（複本被改過，或歷史太淺不含那個版本），
+就手動刪掉那個複本。
 
 ⛔ 不要自己 printf 一個只掛本檔的 hook：那會把 require_preflight_pass 與
 mkdocs strict 靜默拆掉，而畫面上本守衛還在。⛔ 也不要用
