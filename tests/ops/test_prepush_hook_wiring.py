@@ -489,16 +489,15 @@ def test_deleting_a_branch_does_not_require_a_green_docs_build(tmp_path: Path) -
     test exists to pin would not have run this test.
 
     #1691 makes deletions reach the dispatcher — deleting `main` is exactly the
-    case the direct-push guard must judge. But the mkdocs guard does not read
-    the refspec at all (#1690), so on a deletion it renders a verdict about
-    something the push is not doing. Before #1689 it never ran there:
+    case the direct-push guard must judge. The mkdocs guard has no tree to
+    build on a deletion, so it must not render a verdict there. Before #1689 it
+    never ran there:
     pre-commit's `_pre_push_ns` returns None for an all-deletion push and then
     runs no pre-push hooks. Measured, old wiring vs new, with a docs edit
     outstanding: old rc=0, new rc=1.
     """
     work = _make_repo(tmp_path, _PROTECT_ONLY)
-    # make the mkdocs guard's Tier 1 fire and fail, the way an in-progress docs
-    # edit does locally
+    # make the mkdocs guard's Tier 1 fire and fail
     fake = work / "fakebin"
     fake.mkdir()
     (fake / "mkdocs").write_text("#!/bin/sh\necho 'mkdocs 1.0.0'\n",
@@ -1783,8 +1782,8 @@ def test_the_docs_guard_validates_the_pushed_commit_not_the_working_tree(
     r = _run_guard(work, record, f"refs/heads/topic {sha_b} refs/heads/topic {sha_a}\n")
 
     assert record.exists(), (
-        "the strict check never ran at all, so the guard skipped a push that "
-        f"changes docs/index.md. stdout={r.stdout} stderr={r.stderr}"
+        "the strict check never ran at all, so the guard skipped a branch "
+        f"push. stdout={r.stdout} stderr={r.stderr}"
     )
     seen = record.read_text(encoding="utf-8").split()
     assert seen == [sha_b], (
