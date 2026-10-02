@@ -116,6 +116,31 @@ def test_only_the_missing_capability_skips(tmp_path, monkeypatch):
         pf.symlink_or_skip(tmp_path / "target", tmp_path / "link")
 
 
+def test_without_the_capability_the_link_becomes_a_file_holding_its_target(
+    tmp_path, monkeypatch,
+):
+    """What git writes under ``core.symlinks=false``, for a fixture that must
+    not skip."""
+    monkeypatch.setattr(pf, "can_symlink", lambda: False)
+    link = tmp_path / "link"
+    pf.symlink_or_link_file("../docs/目標.md", link)
+    assert not link.is_symlink()
+    assert link.read_bytes() == "../docs/目標.md".encode("utf-8")
+
+
+def test_with_the_capability_a_refused_link_still_raises(tmp_path, monkeypatch):
+    """The fallback is for a missing capability only, never for a failed call."""
+    monkeypatch.setattr(pf, "can_symlink", lambda: True)
+
+    def refuse(src, dst, **kwargs):
+        raise FileExistsError(17, "File exists", str(dst))
+
+    monkeypatch.setattr(pf.os, "symlink", refuse)
+    with pytest.raises(FileExistsError):
+        pf.symlink_or_link_file("target", tmp_path / "link")
+    assert not os.path.lexists(tmp_path / "link")
+
+
 def test_with_the_capability_it_creates_the_link(tmp_path):
     pf.require_symlinks()
     target = tmp_path / "target"
