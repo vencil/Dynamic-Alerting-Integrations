@@ -102,6 +102,13 @@ _CORPUS = [
                            "    group_wait: \"30s\"\n")}, {
         "tenant-x.yaml": "tenants:\n  tenant-x:\n    mysql_connections: \"70\"\n"},
      [], False),
+    # #2386: a `defaults:` mapping beside a top-level reserved key — the
+    # defaults_wrapper row, which judges every level, so the moved twin
+    # (`prod/_defaults.yaml`) must FAIL as well.
+    ("defaults-mapping-leaves-top-level-out", {
+        "_defaults.yaml": _DEFAULTS + "_severity_dedup: disable\n"}, {
+        "db-a.yaml": "tenants:\n  db-a:\n    mysql_connections: \"70\"\n"},
+     [], True),
     # #1652 blind review F1: the policies live ONLY in a nested carrier. The
     # root-carrier lookup finds a `_defaults.yaml` with no `_policies`, so
     # before the fix `policy_dsl` said "No _policies defined — skipped" /

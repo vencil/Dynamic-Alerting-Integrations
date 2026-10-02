@@ -28,6 +28,7 @@ from pathlib import Path
 
 import pytest
 import yaml
+from _platform_fs import symlink_or_skip  # noqa: E402
 
 _REPO_ROOT = Path(__file__).resolve().parents[2]
 _OPS = _REPO_ROOT / "scripts" / "ops"
@@ -1528,7 +1529,7 @@ def test_a_hook_linked_to_a_guard_is_replaced_without_touching_the_guard(
     hook.unlink(missing_ok=True)
     guard = work / "scripts" / "ops" / "protect_main_push.sh"
     if link == "symlink":
-        hook.symlink_to(guard)
+        symlink_or_skip(guard, hook)
     else:
         os.link(guard, hook)
 
@@ -1593,7 +1594,7 @@ def test_a_stale_guard_copy_is_recognised_however_it_got_there(
         bindir = tmp_path / "bin"
         bindir.mkdir()
         for tool in ("bash", "git", "mv", "rm", "chmod"):
-            (bindir / tool).symlink_to(shutil.which(tool))
+            symlink_or_skip(shutil.which(tool), bindir / tool)
         env = {**os.environ, "PATH": str(bindir)}
     elif shape == "from-a-linked-worktree":
         cwd = tmp_path / "wt"
@@ -1630,7 +1631,10 @@ def test_a_file_gone_from_scripts_ops_is_named_and_restorable_from_head(
         # Quoted heredocs: the backticks are text, not a command to run.
         assert out.count("`pre-commit install --hook-type pre-push`") == 2, out
     else:
-        assert f"{missing} is missing from {work}" in out and "restore it from HEAD" in out, out
+        # as_posix: the hook is a shell script and prints the path as the
+        # shell spells it (`C:/…` under Git Bash), not as str(WindowsPath).
+        assert (f"{missing} is missing from {Path(work).as_posix()}" in out
+                and "restore it from HEAD" in out), out
         # The dispatcher itself stops the push: with the other two guards
         # bypassed, nothing else is left to block main.
         r, out = _push(work, "HEAD:refs/heads/main", env_extra=_SIBLINGS_OFF)
@@ -1885,7 +1889,11 @@ fi
 @pytest.mark.skipif(not hasattr(os, "killpg"), reason="needs POSIX process groups to deliver the interrupt")
 @pytest.mark.parametrize(
     ("sig", "refs"),
-    [(signal.SIGTERM, ("topic",)), (signal.SIGHUP, ("topic",)), (signal.SIGINT, ("topic", "topic2"))],
+    # getattr: the list is evaluated at import, before the skipif above can
+    # apply, and Windows has no SIGHUP — a bare attribute made this whole file
+    # (and, without --continue-on-collection-errors, the whole run) uncollectable.
+    [(signal.SIGTERM, ("topic",)), (getattr(signal, "SIGHUP", None), ("topic",)),
+     (signal.SIGINT, ("topic", "topic2"))],
     ids=["SIGTERM", "SIGHUP", "SIGINT-in-second-tree"],
 )
 def test_an_interrupted_push_leaves_no_temporary_worktree_behind(

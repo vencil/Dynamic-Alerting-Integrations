@@ -22,6 +22,7 @@ import pytest
 import entrypoint  # noqa: E402  (path set by conftest.py)
 import _lib_exitcodes  # noqa: E402  (scripts/tools on sys.path via conftest)
 from _lint_helpers import parse_build_sh_tools, BUILD_EXEMPT
+from _platform_fs import symlink_or_skip  # noqa: E402
 
 DA_TOOLS_DIR = os.path.join(
     os.path.dirname(__file__), os.pardir, os.pardir,
@@ -726,7 +727,7 @@ def test_dispatch_through_the_path_symlink_finds_the_tools(tmp_path):
     bin_dir.mkdir(parents=True)
     link = bin_dir / "da-tools"
     try:
-        link.symlink_to(opt / "entrypoint.py")
+        symlink_or_skip(opt / "entrypoint.py", link)
     except (OSError, NotImplementedError):
         pytest.skip("this filesystem cannot create symlinks")
     work = tmp_path / "builds"

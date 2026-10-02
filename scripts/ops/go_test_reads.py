@@ -54,7 +54,13 @@ depending on it.
 
 Exit codes: 0 every direct read is covered; 1 some are not; 2 the check could
 not measure (no logs, a log without the header or outside the repo, an
-unlisted root walk, an unmodelled gate, a `!` pattern) — never read as a pass.
+unlisted root walk, an unmodelled gate, a `!` pattern, a repo root that is not
+a POSIX absolute path) — never read as a pass.
+
+⚠️ POSIX paths only. Every path here is resolved with `posixpath`, so on a
+root like `C:/repo` an absolute `open` is not seen as absolute, lands outside
+the tracked set and is dropped. Such a root exits 2 instead of reporting zero
+reads; the Go legs run on Linux, where the root always starts with `/`.
 
 Usage:
     python3 scripts/ops/go_test_reads.py --job go-tests-tenant-api \\
@@ -147,6 +153,14 @@ def direct_reads(log: Path, root: str, tracked: frozenset[str]) -> tuple[set[str
     if not cwd_file.is_file():
         raise Unmeasurable(f"{log.name} has no .cwd beside it")
     cwd = cwd_file.read_text(encoding="utf-8").strip()
+    if not posixpath.isabs(root):
+        # posixpath would not see an absolute `open` under this root as
+        # absolute; it would join it onto cwd, miss every tracked file and
+        # report zero direct reads — a green run measuring nothing.
+        raise Unmeasurable(
+            f"{log.name}: the repo root {root} is not a POSIX absolute path; "
+            "this tool resolves POSIX paths only, so nothing under that root "
+            "can be measured")
     if not cwd.startswith(root + "/"):
         # Every open would resolve outside the repo and be dropped: a green
         # run measuring nothing (e.g. a symlinked checkout path).

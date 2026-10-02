@@ -1,0 +1,224 @@
+{
+  "_comment": "#2386: which `_defaults.yaml` shapes are reported, judged by da-guard (Go: internal/guard TestDefaultsWrapperMatrix) and by validate-config (Python: tests/ops/test_validate_config.py TestDefaultsWrapperMatrix) from this one table. `expect` lists [finding kind, file]; root_defaults_unwrapped is validate-config's `root_defaults` row, defaults_toplevel_ignored its `defaults_wrapper` row. `top_level_read_elsewhere` is the key list both sides exempt. `merge_dropped_keys` is the list both sides leave out because the defaults merge drops it at every level (Go config.MergeDroppedKeys).",
+  "top_level_read_elsewhere": [
+    "_custom_alerts",
+    "_routing_defaults",
+    "_routing_enforced"
+  ],
+  "cases": [
+    {
+      "name": "root-wrapped",
+      "files": {
+        "_defaults.yaml": "defaults:\n  mysql_connections: 80\n"
+      },
+      "expect": []
+    },
+    {
+      "name": "root-unwrapped-threshold",
+      "files": {
+        "_defaults.yaml": "mysql_connections: 80\n"
+      },
+      "expect": [
+        [
+          "root_defaults_unwrapped",
+          "_defaults.yaml"
+        ]
+      ]
+    },
+    {
+      "name": "root-null-defaults-plus-threshold",
+      "files": {
+        "_defaults.yaml": "defaults:\nmysql_connections: 80\n"
+      },
+      "expect": [
+        [
+          "root_defaults_unwrapped",
+          "_defaults.yaml"
+        ]
+      ]
+    },
+    {
+      "name": "root-unwrapped-only-decoded-read-elsewhere-and-dropped",
+      "files": {
+        "_defaults.yaml": "state_filters: {}\nmax_metrics_per_tenant: 10\n_routing_defaults: {}\n_metadata:\n  owner: dba\n_x: &x 1\n"
+      },
+      "expect": []
+    },
+    {
+      "name": "root-mapping-plus-top-reserved",
+      "files": {
+        "_defaults.yaml": "defaults:\n  mysql_connections: 80\n_severity_dedup: disable\n"
+      },
+      "expect": [
+        [
+          "defaults_toplevel_ignored",
+          "_defaults.yaml"
+        ]
+      ]
+    },
+    {
+      "name": "root-mapping-plus-read-elsewhere-and-decoded",
+      "files": {
+        "_defaults.yaml": "defaults:\n  mysql_connections: 80\nstate_filters: {}\nmax_metrics_per_tenant: 10\n_routing_defaults: {}\n_routing_enforced:\n  enabled: false\n_custom_alerts: []\n"
+      },
+      "expect": []
+    },
+    {
+      "name": "sub-unwrapped",
+      "files": {
+        "_defaults.yaml": "defaults:\n  mysql_connections: 80\n",
+        "team/_defaults.yaml": "_severity_dedup: disable\nmysql_connections: 70\n"
+      },
+      "expect": []
+    },
+    {
+      "name": "sub-empty-mapping-plus-top-keys",
+      "files": {
+        "_defaults.yaml": "defaults:\n  mysql_connections: 80\n",
+        "team/_defaults.yaml": "defaults: {}\n_severity_dedup: disable\nmysql_connections: 70\n"
+      },
+      "expect": [
+        [
+          "defaults_toplevel_ignored",
+          "team/_defaults.yaml"
+        ]
+      ]
+    },
+    {
+      "name": "sub-null-defaults-plus-top-keys",
+      "files": {
+        "_defaults.yaml": "defaults:\n  mysql_connections: 80\n",
+        "team/_defaults.yaml": "defaults:\n_severity_dedup: disable\nmysql_connections: 70\n"
+      },
+      "expect": []
+    },
+    {
+      "name": "sub-keys-under-defaults",
+      "files": {
+        "_defaults.yaml": "defaults:\n  mysql_connections: 80\n",
+        "team/_defaults.yaml": "defaults:\n  _severity_dedup: disable\n  mysql_connections: 70\n"
+      },
+      "expect": []
+    },
+    {
+      "name": "sub-unwrapped-custom-alerts-only",
+      "files": {
+        "_defaults.yaml": "defaults:\n  mysql_connections: 80\n",
+        "team/_defaults.yaml": "_custom_alerts: []\n"
+      },
+      "expect": []
+    },
+    {
+      "name": "sub-mapping-plus-anchor-helper-key",
+      "files": {
+        "_defaults.yaml": "defaults:\n  mysql_connections: 80\n",
+        "team/_defaults.yaml": "defaults:\n  mysql_connections: 70\n_x: &x\n  owner: dba\n"
+      },
+      "expect": []
+    },
+    {
+      "name": "sub-mapping-plus-top-routing-is-not-this-finding",
+      "files": {
+        "_defaults.yaml": "defaults:\n  mysql_connections: 80\n",
+        "team/_defaults.yaml": "defaults: {}\n_routing:\n  group_wait: 30s\n_routing_profile: p\n"
+      },
+      "expect": []
+    },
+    {
+      "name": "root-unwrapped-top-reserved",
+      "files": {
+        "_defaults.yaml": "state_filters: {}\n_severity_dedup: disable\n_silent_mode: warning\n"
+      },
+      "expect": [
+        [
+          "root_defaults_unwrapped",
+          "_defaults.yaml"
+        ]
+      ]
+    },
+    {
+      "name": "root-null-defaults-top-reserved",
+      "files": {
+        "_defaults.yaml": "defaults:\n_severity_dedup: disable\n"
+      },
+      "expect": [
+        [
+          "root_defaults_unwrapped",
+          "_defaults.yaml"
+        ]
+      ]
+    },
+    {
+      "name": "root-mapping-plus-top-threshold",
+      "files": {
+        "_defaults.yaml": "defaults:\n  mysql_connections: 80\ncontainer_cpu: 60\n"
+      },
+      "expect": [
+        [
+          "defaults_toplevel_ignored",
+          "_defaults.yaml"
+        ]
+      ]
+    },
+    {
+      "name": "sub-mapping-plus-top-metadata",
+      "files": {
+        "_defaults.yaml": "defaults:\n  mysql_connections: 80\n",
+        "team/_defaults.yaml": "defaults:\n  mysql_connections: 70\n_metadata:\n  owner: dba\n"
+      },
+      "expect": []
+    },
+    {
+      "name": "sub-mapping-plus-top-state-and-silent",
+      "files": {
+        "_defaults.yaml": "defaults:\n  mysql_connections: 80\n",
+        "team/_defaults.yaml": "defaults: {}\n_silent_mode: warning\n_state_undeclared: enable\n"
+      },
+      "expect": [
+        [
+          "defaults_toplevel_ignored",
+          "team/_defaults.yaml"
+        ]
+      ]
+    },
+    {
+      "name": "sub-set-defaults-plus-top-threshold",
+      "files": {
+        "_defaults.yaml": "defaults:\n  mysql_connections: 80\n",
+        "team/_defaults.yaml": "defaults: !!set {a}\nmysql_connections: 70\n"
+      },
+      "expect": [
+        [
+          "defaults_toplevel_ignored",
+          "team/_defaults.yaml"
+        ]
+      ]
+    },
+    {
+      "name": "sub-omap-defaults-plus-top-threshold",
+      "files": {
+        "_defaults.yaml": "defaults:\n  mysql_connections: 80\n",
+        "team/_defaults.yaml": "defaults: !!omap [a: 1]\nmysql_connections: 70\n"
+      },
+      "expect": []
+    },
+    {
+      "name": "sub-pairs-defaults-plus-top-threshold",
+      "files": {
+        "_defaults.yaml": "defaults:\n  mysql_connections: 80\n",
+        "team/_defaults.yaml": "defaults: !!pairs [a: 1]\nmysql_connections: 70\n"
+      },
+      "expect": []
+    },
+    {
+      "name": "comment-only-root",
+      "files": {
+        "_defaults.yaml": "# placeholder\n"
+      },
+      "expect": []
+    }
+  ],
+  "merge_dropped_keys": [
+    "_metadata"
+  ]
+}

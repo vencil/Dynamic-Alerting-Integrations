@@ -26,6 +26,7 @@ import doc_coverage as dc
 import generate_doc_map as gdm
 import _version_patterns as vp
 from _lib_exitcodes import EXIT_CALLER_ERROR
+from _platform_fs import symlink_or_skip  # noqa: E402
 
 
 # ---------------------------------------------------------------------------
@@ -129,7 +130,7 @@ class TestIsExcluded:
         (tmp_path / "docs").mkdir()
         alias = tmp_path / "docs" / "CHANGELOG.md"
         try:
-            alias.symlink_to(Path("..") / "CHANGELOG.md")
+            symlink_or_skip(Path("..") / "CHANGELOG.md", alias)
         except (OSError, NotImplementedError) as exc:
             # ⛔ fail-closed：只有「這個平台本來就建不出 symlink」才略過。
             # POSIX 上建不出來代表環境壞了，不是本測試不適用——靜默 skip

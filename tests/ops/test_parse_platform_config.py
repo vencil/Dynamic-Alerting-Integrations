@@ -18,6 +18,7 @@ from generate_alertmanager_routes import (  # noqa: E402
     _parse_platform_config,
     _parse_tenant_overrides,
 )
+from _platform_fs import symlink_or_skip  # noqa: E402
 
 
 # ===========================================================================
@@ -417,7 +418,7 @@ def test_parse_config_files_dangling_carrier_is_not_selected(tmp_path):
     (tmp_path / "_defaults.yml").write_text(
         "defaults:\n  yml_pct: 1\n", encoding="utf-8")
     try:
-        os.symlink(tmp_path / "missing.yaml", tmp_path / "_defaults.yaml")
+        symlink_or_skip(tmp_path / "missing.yaml", tmp_path / "_defaults.yaml")
     except OSError as exc:
         pytest.skip(f"symlinks unavailable here: {exc}")
     from generate_alertmanager_routes import _parse_config_files  # noqa: PLC0415

@@ -311,7 +311,9 @@ MUTATIONS: list[Mutation] = [
         test_target="./...",
         label="deepMerge: drop _metadata skip (override _metadata leaks into base)",
         fn_name="deepMerge",
-        old='if k == "_metadata" {\n\t\t\tcontinue\n\t\t}',
+        # #2386: the skip reads mergeDroppedKeys (`_metadata`), which
+        # config.MergeDroppedKeys exports to da-guard.
+        old='if mergeDroppedKeys[k] {\n\t\t\tcontinue\n\t\t}',
         new='if false {\n\t\t\tcontinue\n\t\t}',
     ),
     Mutation(

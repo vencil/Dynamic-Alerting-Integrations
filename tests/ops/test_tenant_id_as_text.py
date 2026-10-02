@@ -463,57 +463,82 @@ def _cr(name: str, tenants_yaml: str) -> str:
             f"spec:\n  tenants:\n{tenants_yaml}")
 
 
-def _assemble(tmp_path: Path, name: str, keys) -> Path:
+def _assemble(tmp_path: Path, name: str, keys, rc: int = 0) -> Path:
     body = "".join(f'    {k}:\n      mysql_connections: "70"\n'
                    '      _severity_dedup: "enable"\n' for k in keys)
     cr = tmp_path / f"{name}-cr.yaml"
     cr.write_text(_cr(name, body), encoding="utf-8")
     out = tmp_path / "out"
     out.mkdir(exist_ok=True)
-    assert da_assembler.render_cr_file(cr, out) == 0
+    assert da_assembler.render_cr_file(cr, out) == rc
     return out / f"{name}.yaml"
 
 
-@pytest.mark.parametrize("keys", [_UNQ, _QUOTED], ids=["UNQ", "QUOTED"])
-def test_da_assembler_renders_the_tenant_ids_as_written(tmp_path, keys):
-    """Before: `010:` in the CR rendered as `tenants:\\n  8:`."""
-    got = _as_text(_assemble(tmp_path, "t", keys))
+@pytest.mark.usefixtures("da_crdecode_env")
+def test_da_assembler_renders_the_tenant_ids_as_written(tmp_path):
+    """Before #2216: `010:` in the CR rendered as `tenants:\\n  8:`. Quoted,
+    each id is the same text to Kubernetes and to the CR, and is written
+    as written."""
+    got = _as_text(_assemble(tmp_path, "t", _QUOTED))
     assert got == {"tenants": {t: {"mysql_connections": "70",
                                    "_severity_dedup": "enable"}
                                for t in _UNQ}}, got
 
 
-def test_da_assembler_unq_and_quoted_render_the_same_body(tmp_path):
-    unq = _assemble(tmp_path, "t", _UNQ).read_text(encoding="utf-8")
-    quo = _assemble(tmp_path, "t2", _QUOTED).read_text(encoding="utf-8")
-    # Only the header line naming the CR differs.
-    assert unq.split("\n", 1)[1] == quo.split("\n", 1)[1]
+@pytest.mark.usefixtures("da_crdecode_env")
+def test_da_assembler_refuses_an_id_kubernetes_reads_differently(
+        tmp_path, caplog):
+    """#2476: unquoted, `010:` / `yes:` / `0x1F:` / `1_000:` are `8` /
+    `true` / `31` / `1000` to Kubernetes (da-crdecode): rendering either
+    spelling would disagree with the CR or with the cluster, so rc 2,
+    nothing written, every such id named. Turns green→red if the id
+    comparison (`_key_divergence`) is dropped (rc 0, ids renamed)."""
+    out = _assemble(tmp_path, "t", _UNQ, rc=2)
+    assert not out.exists()
+    for written, read in (("010", "8"), ("yes", "true"), ("0x1F", "31"),
+                          ("1_000", "1000")):
+        assert repr(written) in caplog.text, caplog.text
+        assert repr(read) in caplog.text, caplog.text
+    assert "spec.tenants: the keys as written" in caplog.text
+    assert "Quote each such key" in caplog.text
 
 
+@pytest.mark.usefixtures("da_crdecode_env")
 def test_da_assembler_ctrl_output_is_what_main_wrote(tmp_path):
     out = _assemble(tmp_path, "ctrl", ("acme",))
     assert out.read_text(encoding="utf-8") == _ASSEMBLER_CTRL_ON_MAIN
 
 
+@pytest.mark.usefixtures("da_crdecode_env")
 @pytest.mark.parametrize("row", _MATRIX_IDS, ids=lambda r: r["source"])
 def test_da_assembler_keeps_every_matrix_spelling(tmp_path, row):
+    """Each spelling either renders as the exporter reads it (Kubernetes
+    reads the same text), or — when Kubernetes reads another id
+    (da-crdecode, #2476) — is refused, nothing written."""
     cr = tmp_path / "cr.yaml"
     cr.write_text(_cr("m", f'    {row["source"]}:\n      container_cpu: "2"\n'),
                   encoding="utf-8")
-    assert da_assembler.render_cr_file(cr, tmp_path) == 0
+    doc, _ = da_assembler.decode_cr(cr)
+    (stored,) = doc["spec"]["tenants"]
+    rc = da_assembler.render_cr_file(cr, tmp_path)
+    if stored != row["exporter_key"]:
+        assert rc == 2
+        assert not (tmp_path / "m.yaml").exists()
+        return
+    assert rc == 0
     got = _as_text(tmp_path / "m.yaml")
     assert got == {"tenants": {row["exporter_key"]: {"container_cpu": "2"}}}, got
 
 
-# ── da_assembler --render-cr: VALUES and metadata.name as written ──────
+# ── da_assembler --render-cr: VALUES and metadata.name ─────────────────
 #
-# #2331: the CR was read with PyYAML typing and dumped back, so an unquoted
-# value was retyped on the way through — `010` written as `8`, `0x1F` as
-# `31`, `12:30` as `750` (the `:30` severity suffix gone), a timestamp as
-# `2026-01-02 03:04:05+00:00`. The exporter's value moved with it.
-# #2372: `metadata.name` was read the same way, so `name: 010` rendered
-# `8.yaml` (and `yes` → `True.yaml`) while the body still said `010` —
-# tenant-api finds a tenant by file name and answered 404.
+# #2476: the CR is decoded as Kubernetes clients decode it (da-crdecode),
+# so values are what a cluster stores: an unquoted `010` is 8, `0x1F` 31,
+# `12:30` and a timestamp stay text. (#2331 had kept the CR's text instead;
+# PyYAML before it read `12:30` as 750 and lost the `:30` severity.)
+# #2372: `metadata.name` read PyYAML-typed rendered `name: 010` to `8.yaml`
+# while the body still said `010` — tenant-api finds a tenant by file name
+# and answered 404. A name Kubernetes reads as a number is refused now.
 
 _VALUES_BLOCK = ("    t1:\n"
                  "      mysql_connections: {q}010{q}\n"
@@ -521,6 +546,13 @@ _VALUES_BLOCK = ("    t1:\n"
                  "      pg_connections: {q}12:30{q}\n"
                  "      _metadata:\n"
                  "        owner: {q}2026-01-02T03:04:05Z{q}\n")
+# `_VALUES_BLOCK` (unquoted) as Kubernetes stores it, written by hand.
+_VALUES_AS_STORED = ("    t1:\n"
+                     "      mysql_connections: 8\n"
+                     "      container_cpu: 31\n"
+                     "      pg_connections: \"12:30\"\n"
+                     "      _metadata:\n"
+                     "        owner: \"2026-01-02T03:04:05Z\"\n")
 _VALUES_DEFAULTS = ("defaults:\n  mysql_connections: 1\n  container_cpu: 1\n"
                     "  pg_connections: 1\n")
 
@@ -536,16 +568,21 @@ def _render_values(tmp_path: Path, q: str) -> tuple[str, Path]:
     return block, out / "t1.yaml"
 
 
-def test_da_assembler_writes_unquoted_values_back_as_written(tmp_path):
-    """Before: `mysql_connections: 8`, `container_cpu: 31`,
-    `pg_connections: 750`, `owner: 2026-01-02 03:04:05+00:00`."""
+@pytest.mark.usefixtures("da_crdecode_env")
+def test_da_assembler_writes_unquoted_values_as_kubernetes_stores_them(
+        tmp_path):
+    """#2476: `010` → 8 and `0x1F` → 31 (numbers in the cluster); `12:30`
+    and the timestamp are text there, written quoted so YAML 1.1 readers
+    keep them text. Before #2476 (#2331): the CR's text, as written."""
     _block, out = _render_values(tmp_path, "")
     body = out.read_text(encoding="utf-8")
-    for line in ("mysql_connections: 010\n", "container_cpu: 0x1F\n",
-                 "pg_connections: 12:30\n", "owner: 2026-01-02T03:04:05Z\n"):
+    for line in ("mysql_connections: 8\n", "container_cpu: 31\n",
+                 "pg_connections: '12:30'\n",
+                 "owner: '2026-01-02T03:04:05Z'\n"):
         assert line in body, (line, body)
 
 
+@pytest.mark.usefixtures("da_crdecode_env")
 def test_da_assembler_quoted_values_stay_quoted(tmp_path):
     """Control: a quoted value was a string before and still is."""
     _block, out = _render_values(tmp_path, '"')
@@ -557,11 +594,15 @@ def test_da_assembler_quoted_values_stay_quoted(tmp_path):
 
 
 @pytest.mark.parametrize("q", ["", '"'], ids=["UNQ", "QUOTED"])
-def test_da_assembler_serves_what_the_cr_says(tmp_path, da_guard, q):
+@pytest.mark.usefixtures("da_crdecode_env")
+def test_da_assembler_serves_what_the_cluster_stores(tmp_path, da_guard, q):
     """Oracle: the exporter's served values for the rendered file equal those
-    for the CR's `tenants:` block copied verbatim into conf.d. Before (UNQ):
-    10 → 8, 12 → 750, the `:30` severity lost, the timestamp text changed."""
+    for the CR's `tenants:` block as Kubernetes stores it, written into
+    conf.d by hand (QUOTED: the block verbatim; UNQ: `_VALUES_AS_STORED`).
+    PyYAML-typed, UNQ served 750 for `12:30`, its `:30` severity lost."""
     block, out = _render_values(tmp_path, q)
+    if not q:
+        block = _VALUES_AS_STORED
     (out.parent / "_defaults.yaml").write_text(_VALUES_DEFAULTS,
                                                encoding="utf-8")
     ref = _tree(tmp_path / "ref", {
@@ -585,11 +626,12 @@ def test_da_assembler_serves_what_the_cr_says(tmp_path, da_guard, q):
     ('"0x1F"', None), ("2026-01-02T03:04:05Z", None),
 ], ids=["010", "0x1F", "yes", "q010", "q0x1f", "qyes", "abc", "date",
         "q0x1F-uppercase", "datetime"])
+@pytest.mark.usefixtures("da_crdecode_env")
 def test_da_assembler_names_the_file_as_the_cr_does(tmp_path, name, want):
     """Before: `name: 010` → `8.yaml`, `0x1F` → `31.yaml`, `yes` →
     `True.yaml`; the header named the same wrong CR.
 
-    #2371: an unquoted name YAML 1.1 (PyYAML) types as a number / bool is
+    #2371 / #2476: an unquoted name Kubernetes reads as a number / bool is
     refused (rc 2, nothing written: `want` None); a quoted one, and an
     unquoted date, names the file as written. #2396: so is any name that
     is not a DNS-1123 subdomain, quoted or not (`0x1F`, a datetime)."""
@@ -626,6 +668,7 @@ def _cr_with_spec_extra(extra: str) -> str:
     "  defaults: 0\n  stateFilters: false\n",
 ], ids=["defaults-0", "defaults-false", "defaults-no", "stateFilters-false",
         "stateFilters-0", "both"])
+@pytest.mark.usefixtures("da_crdecode_env")
 def test_da_assembler_drops_a_scalar_spec_block(tmp_path, da_guard, extra):
     cr = tmp_path / "cr.yaml"
     cr.write_text(_cr_with_spec_extra(extra), encoding="utf-8")
@@ -640,6 +683,7 @@ def test_da_assembler_drops_a_scalar_spec_block(tmp_path, da_guard, extra):
 
 
 @pytest.mark.parametrize("tenants", ["0", "false"])
+@pytest.mark.usefixtures("da_crdecode_env")
 def test_da_assembler_drops_a_scalar_tenants_block(tmp_path, tenants):
     cr = tmp_path / "cr.yaml"
     cr.write_text(_cr("t1", "").replace("  tenants:\n",
@@ -651,6 +695,7 @@ def test_da_assembler_drops_a_scalar_tenants_block(tmp_path, tenants):
     assert _as_text(out / "t1.yaml") == {}
 
 
+@pytest.mark.usefixtures("da_crdecode_env")
 def test_da_assembler_still_writes_mapping_spec_blocks(tmp_path, da_guard):
     """Control: a mapping `stateFilters` is written as before."""
     extra = ("  stateFilters:\n    container_crashloop:\n"

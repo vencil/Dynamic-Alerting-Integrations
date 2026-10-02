@@ -20,6 +20,7 @@ sys.path.insert(0, os.path.join(REPO_ROOT, "scripts", "tools", "dx"))
 
 import describe_tenant as dt  # noqa: E402
 from _lib_exitcodes import EXIT_CALLER_ERROR  # noqa: E402
+from _platform_fs import symlink_or_skip  # noqa: E402
 
 
 # ---------------------------------------------------------------------------
@@ -396,7 +397,7 @@ class TestDuplicateDeclaration:
         if shape == "link":        # dupA: a link beside its own target
             (conf_d / "real.yaml").write_text("tenants:\n  acme:\n    cpu_pct: 70\n", encoding="utf-8")
             try:
-                os.symlink("real.yaml", conf_d / "acme.yaml")
+                symlink_or_skip("real.yaml", conf_d / "acme.yaml")
             except (OSError, NotImplementedError) as exc:
                 pytest.skip(f"symlinks unavailable here: {exc}")
             files = ["acme.yaml", "real.yaml"]
@@ -483,9 +484,9 @@ class TestDuplicateDeclaration:
         (payload / "_defaults.yaml").write_text("defaults:\n  cpu_pct: 50\n", encoding="utf-8")
         (payload / "acme.yaml").write_text("tenants:\n  acme:\n    cpu_pct: 70\n", encoding="utf-8")
         try:
-            os.symlink("..2026_09_26", conf_d / "..data", target_is_directory=True)
-            os.symlink("..data/acme.yaml", conf_d / "acme.yaml")
-            os.symlink("..data/_defaults.yaml", conf_d / "_defaults.yaml")
+            symlink_or_skip("..2026_09_26", conf_d / "..data", target_is_directory=True)
+            symlink_or_skip("..data/acme.yaml", conf_d / "acme.yaml")
+            symlink_or_skip("..data/_defaults.yaml", conf_d / "_defaults.yaml")
         except (OSError, NotImplementedError) as exc:
             pytest.skip(f"symlinks unavailable here: {exc}")
         assert dt.ConfDScanner(conf_d).duplicates == {}
@@ -715,7 +716,7 @@ class TestLinkTargetOutsideConfD:
 
     def _link(self, link, target):
         try:
-            os.symlink(target, link)
+            symlink_or_skip(target, link)
         except (OSError, NotImplementedError) as exc:
             pytest.skip(f"symlinks unavailable here: {exc}")
 

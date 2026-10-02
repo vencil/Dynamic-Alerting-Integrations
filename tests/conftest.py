@@ -204,6 +204,36 @@ def da_guard_env(monkeypatch, da_guard_binary):
     return da_guard_binary
 
 
+@pytest.fixture(scope="session")
+def da_crdecode_binary(tmp_path_factory):
+    """從本 repo 的 Go 原始碼建出的 da-crdecode（#2476）。
+
+    `da_assembler --render-cr` 以它解碼 CR；建不起來（含沒有 go）一律 fail、
+    不 skip，理由同 `da_guard_binary`。每個 xdist worker 建一次。
+    """
+    import subprocess
+    go = shutil.which("go")
+    if go is None:
+        pytest.fail("`go` is not on PATH: da-crdecode cannot be built, so "
+                    "`da_assembler --render-cr` cannot be measured")
+    out = tmp_path_factory.mktemp("da-crdecode-bin") / "da-crdecode"
+    proc = subprocess.run(
+        [go, "build", "-buildvcs=false", "-o", str(out), "./cmd/da-crdecode"],
+        cwd=os.path.join(REPO_ROOT, "components", "threshold-exporter", "app"),
+        capture_output=True, text=True, encoding="utf-8", errors="replace",
+        check=False, timeout=600)
+    if proc.returncode != 0:
+        pytest.fail(f"go build da-crdecode failed (rc={proc.returncode}):\n{proc.stderr}")
+    return str(out)
+
+
+@pytest.fixture
+def da_crdecode_env(monkeypatch, da_crdecode_binary):
+    """`$DA_CRDECODE_BINARY` 指向 `da_crdecode_binary`，只在本測試期間。"""
+    monkeypatch.setenv("DA_CRDECODE_BINARY", da_crdecode_binary)
+    return da_crdecode_binary
+
+
 # ── Function-scoped fixtures ──────────────────────────────────────────
 
 @pytest.fixture

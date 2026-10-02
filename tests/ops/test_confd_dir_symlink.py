@@ -35,6 +35,7 @@ REPO = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(REPO / "scripts" / "tools"))
 
 from _lib_confd import list_config_tree, unusable_reason  # noqa: E402
+from _platform_fs import symlink_or_skip  # noqa: E402
 
 VALIDATE = REPO / "scripts" / "tools" / "ops" / "validate_config.py"
 ASSEMBLE = REPO / "scripts" / "tools" / "ops" / "assemble_config_dir.py"
@@ -58,15 +59,15 @@ def _kubelet_tree(root: Path, *, nested: bool) -> Path:
     payload = root / "..v1"
     payload.mkdir(parents=True)
     (payload / "_defaults.yaml").write_text(DEFAULTS, encoding="utf-8")
-    os.symlink("..v1", root / "..data")
-    os.symlink("..data/_defaults.yaml", root / "_defaults.yaml")
+    symlink_or_skip("..v1", root / "..data")
+    symlink_or_skip("..data/_defaults.yaml", root / "_defaults.yaml")
     if nested:
         (payload / "team-a").mkdir()
         (payload / "team-a" / "x.yaml").write_text(TENANT, encoding="utf-8")
-        os.symlink("..data/team-a", root / "team-a")
+        symlink_or_skip("..data/team-a", root / "team-a")
     else:
         (payload / "x.yaml").write_text(TENANT, encoding="utf-8")
-        os.symlink("..data/x.yaml", root / "x.yaml")
+        symlink_or_skip("..data/x.yaml", root / "x.yaml")
     return root
 
 
@@ -87,7 +88,7 @@ def alias(tmp_path: Path) -> Path:
     (root / "alias" / "team-b").mkdir(parents=True)
     (root / "_defaults.yaml").write_text(DEFAULTS, encoding="utf-8")
     (root / "alias" / "team-b" / "x.yaml").write_text(TENANT, encoding="utf-8")
-    os.symlink("team-b", root / "alias" / "current")
+    symlink_or_skip("team-b", root / "alias" / "current")
     return root
 
 
@@ -98,7 +99,7 @@ def shared(tmp_path: Path) -> Path:
     (root / ".payload" / "_shared").mkdir(parents=True)
     (root / "_defaults.yaml").write_text(DEFAULTS, encoding="utf-8")
     (root / ".payload" / "_shared" / "x.yaml").write_text(TENANT, encoding="utf-8")
-    os.symlink(".payload/_shared", root / "_shared")
+    symlink_or_skip(".payload/_shared", root / "_shared")
     return root
 
 
@@ -142,7 +143,7 @@ def test_list_config_tree_link_outside_the_root_is_unusable(tmp_path: Path):
     root.mkdir()
     (tmp_path / "elsewhere").mkdir()
     (tmp_path / "elsewhere" / "x.yaml").write_text(TENANT, encoding="utf-8")
-    os.symlink(tmp_path / "elsewhere", root / "ext")
+    symlink_or_skip(tmp_path / "elsewhere", root / "ext")
     assert [p.name for p in list_config_tree(root).unusable] == ["ext"]
 
 

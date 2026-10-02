@@ -200,7 +200,10 @@ func TestRun_RoutingSource(t *testing.T) {
 		{
 			name: "root-routing-defaults-in-an-unwrapped-carrier-is-legal",
 			files: map[string]string{
-				"_defaults.yaml": "mysql_connections: 80\n_routing_defaults:" + rsOKRoute,
+				// #2386: no top-level threshold here — one at the top level
+				// of an unwrapped ROOT carrier is root_defaults_unwrapped
+				// (not served on /metrics), a different finding.
+				"_defaults.yaml": "_routing_defaults:" + rsOKRoute,
 				"tx.yaml":        rsTenant,
 			},
 			wantCode: exitOK,
