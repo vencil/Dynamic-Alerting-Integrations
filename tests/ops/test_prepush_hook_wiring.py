@@ -1292,9 +1292,8 @@ def test_the_shipped_wiring_runs_exactly_the_three_guards() -> None:
 
     # ⛔ The commits-only list is a pin too, and its membership is a decision,
     # not a detail: a guard added here silently stops running on deletions and
-    # on up-to-date pushes. Only the mkdocs check belongs — it is the one that
-    # does not read the refspec (#1690), so on a deletion it judges something
-    # the push is not doing. The other two MUST NOT be here: `git push origin
+    # on up-to-date pushes. Only the mkdocs check belongs — a deletion has no
+    # tree for it to build. The other two MUST NOT be here: `git push origin
     # :main` is exactly what #1691 is about.
     needs_commits = _dispatcher_array("GUARDS_NEEDING_COMMITS")
     assert needs_commits == ["pre_push_mkdocs_strict.sh"], (
