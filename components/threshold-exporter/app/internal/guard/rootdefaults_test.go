@@ -25,6 +25,7 @@ func TestDefaultsWrapperMatrix(t *testing.T) {
 	t.Parallel()
 	var m struct {
 		ReadElsewhere []string `json:"top_level_read_elsewhere"`
+		MergeDropped  []string `json:"merge_dropped_keys"`
 		Cases         []struct {
 			Name   string            `json:"name"`
 			Files  map[string]string `json:"files"`
@@ -36,6 +37,9 @@ func TestDefaultsWrapperMatrix(t *testing.T) {
 	}
 	if strings.Join(m.ReadElsewhere, ",") != strings.Join(TopLevelReadElsewhere, ",") {
 		t.Fatalf("matrix top_level_read_elsewhere %q != TopLevelReadElsewhere %q", m.ReadElsewhere, TopLevelReadElsewhere)
+	}
+	if strings.Join(m.MergeDropped, ",") != strings.Join(config.MergeDroppedKeys(), ",") {
+		t.Fatalf("matrix merge_dropped_keys %q != config.MergeDroppedKeys %q", m.MergeDropped, config.MergeDroppedKeys())
 	}
 	if len(m.Cases) == 0 {
 		t.Fatal("matrix has no cases")
@@ -74,12 +78,13 @@ func TestDefaultsWrapperMessagesNameTheKeys(t *testing.T) {
 	cases := []struct {
 		name, file, body, want, notWant string
 	}{
-		{"unwrapped-root", "_defaults.yaml", "mysql_connections: 80\ncontainer_cpu: 60\nstate_filters: {}\n_x: 1\n",
-			"key(s) `container_cpu`, `mysql_connections` are", "state_filters"},
-		{"subtree-trap", "team/_defaults.yaml", "defaults: {}\n_severity_dedup: disable\nmysql_connections: 70\n_routing_defaults: {}\n",
-			"key(s) `_severity_dedup`, `mysql_connections` reach no tenant. Move them under `defaults:`", "_routing_defaults"},
+		{"unwrapped-root", "_defaults.yaml", "mysql_connections: 80\ncontainer_cpu: 60\nstate_filters: {}\n_x: 1\n_severity_dedup: disable\n_metadata: {}\n",
+			"key(s) `_severity_dedup`, `container_cpu`, `mysql_connections`, but", "state_filters"},
+		{"subtree-trap", "team/_defaults.yaml", "defaults: {}\n_severity_dedup: disable\nmysql_connections: 70\n_routing_defaults: {}\n_metadata: {}\n",
+			"key(s) `_severity_dedup`, `mysql_connections` are left out of every tenant's merged config (/effective), " +
+				"and a threshold among them is not served on /metrics. Move them under `defaults:`", "_metadata"},
 		{"root-trap", "_defaults.yaml", "defaults:\n  a: 1\n_severity_dedup: disable\n",
-			"the root file holds numbers only", "Move them"},
+			"the root `defaults:` holds numbers only", "Move them"},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {

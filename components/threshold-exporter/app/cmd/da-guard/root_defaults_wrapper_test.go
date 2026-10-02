@@ -57,6 +57,14 @@ func TestRun_DefaultsWrapper(t *testing.T) {
 			wantConn: nil, wantDedup: "enable",
 		},
 		{
+			// /effective shows `disable` (the merge reads the whole document);
+			// /metrics serves `enable`.
+			name:     "root-unwrapped-reserved-key-is-not-served",
+			files:    map[string]string{"_defaults.yaml": "_severity_dedup: disable\n", "team/tx.yaml": tenant},
+			wantCode: exitFindings, want: []string{"error root_defaults_unwrapped  _defaults.yaml"},
+			wantConn: nil, wantDedup: "enable",
+		},
+		{
 			name:     "root-wrapped-is-clean",
 			files:    map[string]string{"_defaults.yaml": root, "team/tx.yaml": tenant},
 			wantCode: exitOK, want: []string{},

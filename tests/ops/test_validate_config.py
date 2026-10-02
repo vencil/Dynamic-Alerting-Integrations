@@ -2613,7 +2613,26 @@ class TestRootDefaultsWrapper:
                        "_routing_defaults: {}\nmysql_connections: 80\n")
         r = vc.check_root_defaults(str(d))
         assert r["status"] == vc.FAIL, r
-        assert "key(s) `mysql_connections` are" in r["details"][0], r
+        assert "key(s) `mysql_connections`, but" in r["details"][0], r
+
+    @pytest.mark.parametrize("body", [
+        "_severity_dedup: disable\n",
+        "defaults:\n_severity_dedup: disable\n",
+    ], ids=["no-defaults-key", "defaults-with-no-value"])
+    def test_unwrapped_root_reserved_key_fails(self, tmp_path, body):
+        """/effective shows `disable` (the merge reads the whole document);
+        /metrics serves `enable` (measured with da-guard served-values)."""
+        d = self._tree(tmp_path, body)
+        r = vc.check_root_defaults(str(d))
+        assert r["status"] == vc.FAIL, r
+        assert "key(s) `_severity_dedup`, but" in r["details"][0], r
+
+    def test_metadata_and_anchor_keys_are_not_named(self, tmp_path):
+        """`_metadata` is dropped by the merge at every level; `_x` is no
+        reserved key. Neither acts in any shape."""
+        d = self._tree(tmp_path, "_metadata:\n  owner: dba\n_x: &x 1\n")
+        r = vc.check_root_defaults(str(d))
+        assert r["status"] == vc.PASS, r
 
     @pytest.mark.parametrize("body", [
         "defaults:\n  mysql_connections: 80\n",
@@ -2686,7 +2705,8 @@ class TestDefaultsWrapperRow:
         assert len(r["details"]) == 1, r
         line = r["details"][0]
         assert line.startswith("team/_defaults.yaml: "), line
-        assert "`_severity_dedup`, `mysql_connections` reach no tenant" in line, line
+        assert ("`_severity_dedup`, `mysql_connections` are left out of every "
+                "tenant's merged config (/effective)") in line, line
         assert "Move them under `defaults:`" in line, line
 
     @pytest.mark.parametrize("sub", [
@@ -2707,7 +2727,7 @@ class TestDefaultsWrapperRow:
         r = vc.check_defaults_wrapper(str(d))
         assert r["status"] == vc.FAIL, r
         assert r["details"][0].startswith("_defaults.yaml: "), r
-        assert "the root file holds numbers only" in r["details"][0], r
+        assert "the root `defaults:` holds numbers only" in r["details"][0], r
 
     def test_end_to_end_exits_1(self, tmp_path, capsys, cli_argv):
         d = self._tree(tmp_path, "defaults: {}\n" + self._TOP)
@@ -2732,6 +2752,10 @@ class TestDefaultsWrapperMatrix:
         assert sorted(vc.TOP_LEVEL_READ_ELSEWHERE) == \
             _WRAPPER_MATRIX["top_level_read_elsewhere"]
 
+    def test_merge_dropped_list_matches(self):
+        assert sorted(vc.MERGE_DROPPED_KEYS) == \
+            _WRAPPER_MATRIX["merge_dropped_keys"]
+
     @pytest.mark.parametrize("case", _WRAPPER_MATRIX["cases"],
                              ids=[c["name"] for c in _WRAPPER_MATRIX["cases"]])
     def test_rows_match_da_guard(self, tmp_path, case):
@@ -2741,7 +2765,7 @@ class TestDefaultsWrapperMatrix:
             (d / rel).write_text(body, encoding="utf-8")
         got = []
         root = vc.check_root_defaults(str(d))
-        if any("no top-level `defaults:` mapping" in x for x in root["details"]):
+        if any("no `defaults:` mapping, so /effective" in x for x in root["details"]):
             got.append(["root_defaults_unwrapped", "_defaults.yaml"])
         wrap = vc.check_defaults_wrapper(str(d))
         if wrap["status"] == vc.FAIL:
