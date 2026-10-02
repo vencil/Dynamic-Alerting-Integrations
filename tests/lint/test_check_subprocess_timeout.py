@@ -41,6 +41,7 @@ import sys
 from pathlib import Path
 
 import pytest
+from _platform_fs import symlink_or_skip  # noqa: E402
 
 _TOOLS_DIR = os.path.join(
     os.path.dirname(__file__), "..", "..", "scripts", "tools", "lint"
@@ -620,7 +621,7 @@ class TestUnscannableFileFailsTheRun:
         tool's own "2 — unreadable source" (#2601). A dangling symlink is the
         portable way to get an entry ``rglob`` yields but ``read_bytes`` rejects.
         """
-        (tmp_path / "gone.py").symlink_to(tmp_path / "does-not-exist.py")
+        symlink_or_skip(tmp_path / "does-not-exist.py", tmp_path / "gone.py")
         (tmp_path / "clean.py").write_text("x = 1\n", encoding="utf-8", newline="\n")
         cli_argv("check_subprocess_timeout.py", "--ci", "--strict-subprocess-timeout",
                  str(tmp_path))

@@ -99,6 +99,7 @@ __all__ = [
     "RewriteDumper",
     "RewriteLoader",
     "dump_for_rewrite",
+    "load_all_exporter_keys",
     "load_exporter_keys",
     "load_first_document_exporter_keys",
     "load_for_rewrite",
@@ -192,8 +193,10 @@ def load_exporter_keys(stream: Any, *,
 
     The safety property is therefore pinned by BEHAVIOUR, not by spelling:
     ``tests/shared/test_tenant_id_yaml_spelling_parity.py::
-    test_the_loader_cannot_construct_python_objects`` feeds both entry
-    points an actual ``!!python/object/apply`` payload and requires it to be
+    test_the_loader_cannot_construct_python_objects`` feeds every entry in
+    that file's ``LOADS`` table (``load_exporter_keys``,
+    ``load_first_document_exporter_keys``, ``load_all_exporter_keys``) an
+    actual ``!!python/object/apply`` payload and requires it to be
     refused, with a must-still-work control beside it. ⛔ Deleting that test
     leaves this shape completely unguarded. ⚠️ NOT GUARDED: it pins THIS
     loader only — nothing pins a future copy.
@@ -222,6 +225,29 @@ def load_first_document_exporter_keys(
         if loader.check_data():
             return loader.get_data()
         return None
+    finally:
+        loader.dispose()
+
+
+def load_all_exporter_keys(stream: Any, *,
+                           raw_text_sequences: Iterable[str] = (),
+                           raw_text_scalars: Iterable[str] = ()) -> "list[Any]":
+    """EVERY document of *stream*, keys as text: ``list(yaml.safe_load_all(
+    stream))`` with the exporter's tenant ids (#2216).
+
+    NOT strict (a repeated key keeps the last value), like the two entries
+    above; the strict sibling is ``_lib_io.strict_load_all_exporter_keys``.
+    Eager, so the loader is disposed before this returns; an error in ANY
+    document raises, as ``list(yaml.safe_load_all(...))`` did. Longhand for
+    the reason given in ``load_exporter_keys``. *raw_text_sequences* /
+    *raw_text_scalars*: see ``ExporterKeyLoader``.
+    """
+    loader = _make_loader(stream, raw_text_sequences, raw_text_scalars)
+    try:
+        docs = []
+        while loader.check_data():
+            docs.append(loader.get_data())
+        return docs
     finally:
         loader.dispose()
 

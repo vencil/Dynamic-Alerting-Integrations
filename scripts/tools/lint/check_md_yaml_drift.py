@@ -28,6 +28,7 @@ sys.path.insert(0, str(_THIS_DIR))
 sys.path.insert(0, os.path.join(str(_THIS_DIR), ".."))
 from _lib_compat import try_utf8_stdout  # noqa: E402
 from _lib_exitcodes import EXIT_OK, EXIT_VIOLATION, EXIT_CALLER_ERROR  # noqa: E402
+from _lib_yaml_keys import load_all_exporter_keys  # noqa: E402  (#2216 tenant id as text)
 
 try:
     import yaml
@@ -495,7 +496,10 @@ class MdYamlDriftChecker:
             for line_num, yaml_content in self._extract_yaml_blocks(md_file, self._skipped):
                 for offset, text in self._split_documented_files(yaml_content.split("\n")):
                     try:
-                        docs = list(yaml.safe_load_all(text))
+                        # #2216: tenant ids are the keys' source text, as
+                        # the exporter reads them — `010:` and `8:` are two
+                        # tenants, so both bodies are judged, not one.
+                        docs = load_all_exporter_keys(text)
                     except yaml.YAMLError:
                         continue
                     for data in docs:

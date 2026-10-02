@@ -484,15 +484,17 @@ def verify_only_changed(
     yaml is imported lazily (the dry-run path needs none of this).
     """
     import yaml  # lazy: keeps `--dry-run` import-light and host-portable
-    from _lib_io import strict_safe_load
+    from _lib_io import strict_load_exporter_keys
 
     try:
         # Strict (#2231): a key written twice — the edited one or any other —
         # makes a file the exporter drops whole. Last-wins parsing saw two
         # equal docs and let it be PUT; DuplicateKeyError is a YAMLError, so
         # it takes the "did not parse" refusal below.
-        old_doc = strict_safe_load(old_yaml) or {}
-        new_doc = strict_safe_load(new_yaml) or {}
+        # #2216: tenant ids are the keys' source text, as the exporter reads
+        # them — `010:` is tenant "010", not 8, so `tenant` is found.
+        old_doc = strict_load_exporter_keys(old_yaml) or {}
+        new_doc = strict_load_exporter_keys(new_yaml) or {}
     except yaml.YAMLError as exc:
         return f"post-edit YAML did not parse: {exc}"
 

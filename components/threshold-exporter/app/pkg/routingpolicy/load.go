@@ -95,6 +95,10 @@ func ReportsUnusable(name string) bool {
 	return contains(policyFileNames, name) || contains(profileFileNames, name)
 }
 
+// IsDomainPolicyFile reports whether name is a `_domain_policy.yaml` /
+// `.yml` — the one ReportsUnusable kind whose Problem is an error.
+func IsDomainPolicyFile(name string) bool { return contains(policyFileNames, name) }
+
 // errUnusable marks a block that decodes but has the wrong shape.
 var errUnusable = errors.New("unusable")
 

@@ -19,12 +19,16 @@ guard 驗錯樹之後貼上綠色 sticky comment。
 * 一個檔案的 **conf.d 根** ＝ 往上找到的第一個名為 `conf.d` 的祖先目錄。
 * 同一個根底下若只動到單一目錄 → scope 收窄到該目錄；動到多個 → scope 用根本身
   （沿用原 workflow 對「多檔串接編輯」的處置：整棵重驗）。
+* scope **相對於 config-dir** 輸出（`db`；根本身為 `.`），因為 da-guard 的
+  `--scope` 相對路徑是對 `--config-dir` 解析（#2588）。過去輸出 repo 相對路徑
+  （`conf.d/db`），那是 da-guard 以前對工作目錄解析時的寫法；現在照舊傳會被解析成
+  `conf.d/conf.d/db`。
 * 找不到 `conf.d` 祖先的檔案 ＝ **unmanaged**，由呼叫端顯式回報「未檢查、原因為何」。
   ⛔ 不可靜默略過——那正是本票要消滅的失效形狀。
 
 輸出（TSV，供 workflow 的 bash 直接讀）
 --------------------------------------
-  target<TAB><config-dir><TAB><scope>
+  target<TAB><config-dir><TAB><scope（相對 config-dir）>
   unmanaged<TAB><path>
 
 用法
@@ -169,7 +173,10 @@ def resolve(paths: list[str]) -> tuple[list[tuple[str, str]], list[str]]:
         # 單一目錄才收窄；多個目錄代表串接編輯，整棵重驗才驗得出跨層的
         # redundant-override（沿用原 workflow 的語意）。
         scope = next(iter(dirs)) if len(dirs) == 1 else root
-        targets.append((root, scope))
+        # da-guard resolves a relative --scope against --config-dir (#2588),
+        # so the scope is emitted relative to the root ("." = the root).
+        # relative_to on the verbatim strings: no normalisation (see above).
+        targets.append((root, str(PurePosixPath(scope).relative_to(root))))
     return targets, sorted(unmanaged)
 
 

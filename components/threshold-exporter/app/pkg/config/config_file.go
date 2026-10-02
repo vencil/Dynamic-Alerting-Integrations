@@ -34,7 +34,7 @@ import (
 // THE SAME TENANTS". Two known exceptions, both pre-existing and tracked:
 //   - the exporter's incremental tenant-only reload (package main's
 //     patchTenants) KEEPS a now-rejected file's last good values on /metrics
-//     and the exporter's own /effective, while the stateless readers here
+//     and in its committed hierarchy (tenantSources), while the stateless readers here
 //     (ResolveEffective → tenant-api, ScopeEffective → da-guard) have no
 //     prior and answer not-found — #1980, pinned by package main's
 //     TestOneTenantSet_KnownException_IncrementalKeepsLastGood;
