@@ -995,4 +995,48 @@ func TestTheIncrementalReloadRefusesACarrierScan(t *testing.T) {
 	}
 }
 
+// TestTheIncrementalReloadRefusesACarrierMissingFromTheCarrierSet: the
+// refusal asks the file names too, not only `scan.Defaults`. The scan is a
+// walker that filed a carrier in `Files` but not in `Defaults` — a state no
+// walker produces today, built by emptying `Defaults` by hand. The deleted
+// root-carrier redirect would have caught that file by name; the refusal must
+// as well, or removing the redirect lost a defence.
+func TestTheIncrementalReloadRefusesACarrierMissingFromTheCarrierSet(t *testing.T) {
+	t.Parallel()
+	dir := t.TempDir()
+	writeTestFile(t, dir, "tenant-a.yaml", "tenants:\n  t-a:\n    mysql_connections: \"70\"\n")
+	m := NewConfigManager(dir)
+	m.SetLogger(log.New(io.Discard, "", 0))
+	if err := watchReload(m); err != nil {
+		t.Fatalf("cold reload: %v", err)
+	}
+	requireFlatWatchPath(t, m)
+	before := m.GetConfig()
+
+	writeTestFile(t, dir, "_defaults.yaml", "defaults:\n  mysql_connections: 80\n")
+	writeTestFile(t, dir, "tenant-a.yaml", "tenants:\n  t-a:\n    mysql_connections: \"71\"\n")
+	m.mu.RLock()
+	prior := m.flat.tree
+	m.mu.RUnlock()
+	scan, err := scanDirTree(m.path, prior, m.getMetrics(), m.getLogger())
+	if err != nil {
+		t.Fatalf("scan: %v", err)
+	}
+	if scan.Files["_defaults.yaml"] == nil {
+		t.Fatal("fixture precondition: the carrier is not in scan.Files, so it tests nothing")
+	}
+	scan.Defaults = map[string]bool{} // the walker defect this guards against
+
+	m.reloadMu.Lock()
+	err = m.incrementalLoadFrom(scan)
+	m.reloadMu.Unlock()
+	if err == nil || !strings.Contains(err.Error(), "_defaults.yaml") {
+		t.Fatalf("incrementalLoadFrom accepted a scan whose files hold a carrier (err=%v)", err)
+	}
+	if got := m.GetConfig(); got != before {
+		t.Fatalf("a refused reload replaced the config: t-a=%q, Defaults=%v",
+			got.Tenants["t-a"]["mysql_connections"].Default, got.Defaults)
+	}
+}
+
 // endregion

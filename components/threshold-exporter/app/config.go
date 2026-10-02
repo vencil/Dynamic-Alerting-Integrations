@@ -12,6 +12,7 @@ import (
 
 	"github.com/jonboulle/clockwork"
 
+	"github.com/vencil/threshold-exporter/internal/confdname"
 	"github.com/vencil/threshold-exporter/pkg/config"
 )
 
@@ -661,12 +662,28 @@ func anyNestedKey(groups ...[]string) bool {
 // from. A scan that breaks this is a caller bug: refusing it keeps the
 // previous config live, where proceeding would merge a carrier this function
 // no longer knows how to select.
+//
+// ⚠️ BOTH HALVES OF THE SCAN ARE ASKED. `scan.Defaults` is what the caller
+// branches on; the per-key test over `scan.Keys` asks the name itself
+// (confdname.IsDefaults — the predicate the walker and the deleted redirect
+// both used), so a walker that one day files a carrier in `Files` without
+// `Defaults` is refused here too, where the deleted redirect would have
+// caught it. One pass over a slice with no allocation, paid once per reload.
 func (m *ConfigManager) incrementalLoadFrom(scan *treeScan) error {
 	if len(scan.Defaults) != 0 {
 		return fmt.Errorf(
 			"incremental reload of %s was handed a scan with %d `_defaults` carrier(s); "+
 				"only a tree with none reloads incrementally — refusing (previous config kept)",
 			m.path, len(scan.Defaults))
+	}
+	for _, k := range scan.Keys {
+		if confdname.IsDefaults(scanKeyBase(k)) {
+			return fmt.Errorf(
+				"incremental reload of %s was handed a scan whose files include the `_defaults` carrier %s "+
+					"but whose carrier set is empty; only a tree with none reloads incrementally — "+
+					"refusing (previous config kept)",
+				m.path, k)
+		}
 	}
 	m.mu.RLock()
 	prevHash := m.lastHash

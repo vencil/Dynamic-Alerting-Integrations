@@ -256,11 +256,12 @@ func TestRootCarrierSelectionMovesOnReload(t *testing.T) {
 	}
 }
 
-// The other arm of the incremental guard: nothing was added or removed, but
-// the root holds two carriers and the UNSELECTED one changed. Without the
-// `Ambiguous > 1` arm the incremental path parses the `.yml` and merges it
-// over the `.yaml` (blind review of #1674 round 2: mutating the guard to
-// `anyRootCarrierKey(added, removed)` alone left the suite green).
+// Historical (the guard below no longer exists, see the ⚠️ paragraph): this
+// was written for the other arm of the incremental guard — nothing added or
+// removed, but the root held two carriers and the UNSELECTED one changed.
+// Without the `Ambiguous > 1` arm the incremental path parsed the `.yml` and
+// merged it over the `.yaml` (blind review of #1674 round 2: mutating the
+// guard to `anyRootCarrierKey(added, removed)` alone left the suite green).
 //
 // ⚠️ SINCE #1577 THIS PINS THE WATCH PATH, NOT THE GUARD IT WAS WRITTEN FOR.
 // It used to drive the removed `IncrementalLoad()` into incrementalLoadFrom's
