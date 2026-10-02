@@ -805,6 +805,16 @@ func (w *Writer) write(ctx context.Context, tenantID, authorEmail, yamlContent, 
 // between the read and the write.
 type MergeFunc func(existing []byte) (string, error)
 
+// ErrMergeNoOp is what a MergeFunc returns (errors.Is) when the edit it was
+// given changes nothing in the file — e.g. a batch op that only removes keys
+// from a tenant that does not exist, or that does not carry them (B2, #2341).
+// It is NOT a failure: WriteMerged returns success without writing,
+// WritePRBatch skips the op like a byte-identical merge (an all-no-op batch is
+// ErrNoChanges), and the pre-flight passes it. Needed because the existing
+// byte-compare cannot express "nothing to write" for a file that does not
+// exist: any content written there creates the tenant.
+var ErrMergeNoOp = errors.New("merge changes nothing")
+
 // ErrMergeBaseNotLoadable is what a MergeFunc's error wraps (errors.Is) when it
 // refuses the EXISTING file as its base because the file cannot be loaded as
 // a tenant config (#2373). It is a verdict on the file's content, so like
@@ -1117,6 +1127,9 @@ func (w *Writer) readMerge(tenantID, filePath string, merge MergeFunc) (content 
 // out structurally (it takes no path and no configDir).
 func (w *Writer) readMergeBodyOnly(tenantID, filePath string, merge MergeFunc) error {
 	content, _, err := w.readMerge(tenantID, filePath, merge)
+	if errors.Is(err, ErrMergeNoOp) {
+		return nil // nothing to write, nothing to validate
+	}
 	if err != nil {
 		return err
 	}
@@ -1188,6 +1201,9 @@ func (w *Writer) WriteMerged(ctx context.Context, tenantID, authorEmail string, 
 		return nil, err
 	}
 	content, existing, notices, err := w.readMergeValidate(tenantID, filePath, merge)
+	if errors.Is(err, ErrMergeNoOp) {
+		return nil, nil // B2: the merge changes nothing — success, nothing written
+	}
 	if err != nil {
 		return nil, err
 	}

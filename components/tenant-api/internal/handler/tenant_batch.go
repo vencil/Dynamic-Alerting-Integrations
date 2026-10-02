@@ -28,13 +28,14 @@ import (
 type BatchOperation struct {
 	TenantID string `json:"tenant_id" validate:"required,min=1,max=256"`
 	// key → value to set (e.g., "_silent_mode": "warning"); at most 1000 entries.
-	// May be omitted when unset names a key: patch and unset must not both be empty.
+	// May be omitted; an operation with neither patch nor unset changes nothing.
 	Patch map[string]string `json:"patch" validate:"max=1000"`
 	// keys to remove from the tenant's config block; at most 1000 entries. Only "_routing" is
 	// accepted: removing it resets the tenant to `_routing_defaults` and its routing profile,
 	// which turns routing back on for a tenant a disabling `_routing` turned off (the change is
-	// judged by domain policy like a `_routing` patch). A key the tenant does not carry is a
-	// no-op. A key must not appear twice, nor in both patch and unset.
+	// judged by domain policy like a `_routing` patch). A key the tenant does not carry, or a
+	// tenant that does not exist, makes it a no-op: with no patch nothing is written and no
+	// tenant is created. A key must not appear twice, nor in both patch and unset.
 	Unset []string `json:"unset,omitempty" validate:"max=1000"`
 }
 
@@ -260,7 +261,7 @@ func runBatchPR(d *Deps, rw http.ResponseWriter, r *http.Request, ops []BatchOpe
 			// closure, so one refused op is left out instead of aborting the
 			// whole PR.
 			violations := d.Policy.CheckWrite(op.TenantID, op.Patch)
-			routingViolations, adv := batchRoutingViolations(d.ConfigDir, d.Policy, included[op.TenantID], op)
+			routingViolations, adv, judged := batchRoutingViolations(d.ConfigDir, d.Policy, included[op.TenantID], op)
 			violations = append(violations, routingViolations...)
 			if len(violations) > 0 {
 				msgs := make([]string, len(violations))
@@ -271,7 +272,7 @@ func runBatchPR(d *Deps, rw http.ResponseWriter, r *http.Request, ops []BatchOpe
 				continue
 			}
 			// #2325: batch-level, like the notices (each names its tenant).
-			if touchesRouting(op) {
+			if judged {
 				if _, seen := advisoriesByTenant[op.TenantID]; !seen {
 					advisoryTenants = append(advisoryTenants, op.TenantID)
 				}
@@ -407,7 +408,7 @@ func executeBatchOps(ctx context.Context, w *gitops.Writer, configDir string, op
 			violations := policyMgr.CheckWrite(op.TenantID, op.Patch)
 			// nil prior: each op is written before the next one is judged,
 			// and the next one reads the file back.
-			routingViolations, adv := batchRoutingViolations(configDir, policyMgr, nil, op)
+			routingViolations, adv, _ := batchRoutingViolations(configDir, policyMgr, nil, op)
 			violations = append(violations, routingViolations...)
 			if len(violations) > 0 {
 				msgs := make([]string, len(violations))
@@ -507,8 +508,19 @@ func applyPatch(ctx context.Context, w *gitops.Writer, configDir string, op Batc
 // removed is decided before this runs (validateBatchEdit); a brand-new
 // tenant (existing empty) has nothing to remove, so buildPatchYAML ignores
 // unset.
+//
+// An edit that changes nothing returns gitops.ErrMergeNoOp, which the writer
+// treats as success without writing (as RFC 7396 treats removing an absent
+// member): an empty patch whose unset removes nothing — the tenant has no
+// file, no section in its file, or none of the keys. Without it, an
+// unset-only op would CREATE the tenant (`<id>: {}`) or re-encode an
+// unchanged file into a reformatting commit. An empty patch with an empty
+// unset is the same no-op (the pre-B2 tenant batch accepted it with 200).
 func mergePatchYAML(existing []byte, tenantID string, patch map[string]string, unset []string) (string, error) {
 	if len(bytes.TrimSpace(existing)) == 0 {
+		if len(patch) == 0 {
+			return "", gitops.ErrMergeNoOp
+		}
 		return buildPatchYAML(tenantID, patch), nil
 	}
 	// #2373 review F1: refuse a file threshold-exporter rejects. The patch
@@ -535,6 +547,11 @@ func mergePatchYAML(existing []byte, tenantID string, patch map[string]string, u
 		return "", fmt.Errorf("current tenant yaml has no `tenants:` mapping")
 	}
 	tenantVal := yamlMapValue(tenantsVal, tenantID)
+	if len(patch) == 0 && (tenantVal == nil || (tenantVal.Kind == yaml.MappingNode && !carriesAny(tenantVal, unset))) {
+		// Nothing to set and nothing there to remove. A section that is not
+		// a mapping still gets the structural error below.
+		return "", gitops.ErrMergeNoOp
+	}
 	if tenantVal == nil {
 		// File exists (perhaps other content) but not this tenant's section: add it.
 		tenantVal = &yaml.Node{Kind: yaml.MappingNode, Tag: "!!map"}
@@ -630,6 +647,16 @@ func yamlSetMapValue(m *yaml.Node, key string, val *yaml.Node) {
 	}
 	m.Content = append(m.Content,
 		&yaml.Node{Kind: yaml.ScalarNode, Tag: "!!str", Value: key}, val)
+}
+
+// carriesAny reports whether mapping m carries at least one of keys.
+func carriesAny(m *yaml.Node, keys []string) bool {
+	for _, k := range keys {
+		if yamlMapValue(m, k) != nil {
+			return true
+		}
+	}
+	return false
 }
 
 // yamlDeleteMapValue removes key and its value from a mapping node; a key the

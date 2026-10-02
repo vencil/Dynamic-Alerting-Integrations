@@ -9,6 +9,7 @@ package handler
 
 import (
 	"encoding/json"
+	"errors"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -16,6 +17,8 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+
+	"github.com/vencil/tenant-api/internal/gitops"
 )
 
 // offDisabledOK: t-off on the compliant profile, routing disabled.
@@ -189,8 +192,6 @@ func unsetValidationCases() []unsetValidationCase {
 		{"null element", `"unset":[null]`, "unset[0]", `unset can only remove "_routing"; got ""`, false},
 		{"repeated", `"unset":["_routing","_routing"]`, "unset[1]", `"_routing" is already listed at`, false},
 		{"also in patch", `"patch":{"_routing":"disable"},"unset":["_routing"]`, "unset[0]", "also in patch", false},
-		{"both omitted", ``, "patch", "patch and unset must not both be empty", false},
-		{"both empty", `"patch":{},"unset":[]`, "patch", "patch and unset must not both be empty", false},
 		{"too many", `"unset":[` + strings.Join(tooMany, ",") + `]`, "unset", "must not exceed 1000 items", true},
 	}
 }
@@ -322,9 +323,26 @@ func TestMergePatchYAML_Unset(t *testing.T) {
 	if out != want {
 		t.Errorf("unset _routing mapping:\n got %q\nwant %q", out, want)
 	}
-	again, err := mergePatchYAML([]byte(out), "t-a", nil, []string{"_routing"})
-	if err != nil || again != out {
-		t.Errorf("unset of an absent key must be a no-op: err %v\n got %q\nwant %q", err, again, out)
+	// Nothing to remove, nothing to set: gitops.ErrMergeNoOp, so the writer
+	// writes nothing — no reformatting commit, and no tenant created.
+	noOps := []struct {
+		name, existing, tenant string
+		patch                  map[string]string
+		unset                  []string
+	}{
+		{"absent key", out, "t-a", nil, []string{"_routing"}},
+		{"no file", "", "t-a", nil, []string{"_routing"}},
+		{"no section", "tenants:\n  other:\n    cpu_usage_percent: '85'\n", "t-a", nil, []string{"_routing"}},
+		{"neither patch nor unset", existing, "t-a", map[string]string{}, nil},
+		{"neither, no file", "", "t-a", nil, nil},
+	}
+	for _, tc := range noOps {
+		if got, err := mergePatchYAML([]byte(tc.existing), tc.tenant, tc.patch, tc.unset); !errors.Is(err, gitops.ErrMergeNoOp) {
+			t.Errorf("%s: got %q, %v; want gitops.ErrMergeNoOp", tc.name, got, err)
+		}
+	}
+	if _, err := mergePatchYAML([]byte("tenants:\n  t-a: oops\n"), "t-a", nil, []string{"_routing"}); err == nil || errors.Is(err, gitops.ErrMergeNoOp) {
+		t.Errorf("a non-mapping section must stay a structural error, got %v", err)
 	}
 	both, err := mergePatchYAML([]byte(existing), "t-a", map[string]string{"cpu_usage_percent": "90"}, []string{"_routing"})
 	if err != nil || strings.Contains(both, "_routing:") || !strings.Contains(both, "cpu_usage_percent: \"90\"") {

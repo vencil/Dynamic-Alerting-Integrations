@@ -140,14 +140,34 @@ func tenantBlockOnDisk(configDir, tenantID string) map[string]any {
 // advisories are the non-blocking `require_critical_escalation` leak
 // messages (#2325) for the same resolved routing; the caller adds them to
 // the op's warnings when the op goes through.
-func batchRoutingViolations(configDir string, mgr *policy.Manager, prior []BatchOperation, op BatchOperation) (violations []policy.Violation, advisories []string) {
+//
+// An op whose only routing change is an unset of a key the stacked block
+// does not carry changes nothing (mergePatchYAML writes nothing for it,
+// gitops.ErrMergeNoOp) and is not judged either: a no-op is not refused for
+// the routing already there. judged reports whether the op was judged — the
+// caller registers advisories only for an op that was.
+func batchRoutingViolations(configDir string, mgr *policy.Manager, prior []BatchOperation, op BatchOperation) (violations []policy.Violation, advisories []string, judged bool) {
 	if mgr == nil || !touchesRouting(op) {
-		return nil, nil
+		return nil, nil, false
 	}
 	block := tenantBlockOnDisk(configDir, op.TenantID)
 	for _, p := range prior {
 		applyBatchEdit(block, p)
 	}
+	if !touchesRouting(BatchOperation{Patch: op.Patch}) && !removesAny(block, op.Unset) {
+		return nil, nil, false
+	}
 	applyBatchEdit(block, op)
-	return mgr.JudgeTenantRouting(op.TenantID, block, loadRoutingLayers(configDir))
+	violations, advisories = mgr.JudgeTenantRouting(op.TenantID, block, loadRoutingLayers(configDir))
+	return violations, advisories, true
+}
+
+// removesAny reports whether block carries any of keys.
+func removesAny(block map[string]any, keys []string) bool {
+	for _, k := range keys {
+		if _, has := block[k]; has {
+			return true
+		}
+	}
+	return false
 }

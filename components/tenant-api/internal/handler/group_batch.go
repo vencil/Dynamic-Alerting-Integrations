@@ -18,14 +18,14 @@ import (
 // Applies a patch to all members of the specified group.
 type GroupBatchRequest struct {
 	// key → value to set on every member (e.g., "_silent_mode": "warning");
-	// at most 1000 entries. May be omitted when unset names a key: patch and
-	// unset must not both be empty.
+	// at most 1000 entries. May be empty only when unset names a key (else 400).
 	Patch map[string]string `json:"patch" validate:"max=1000"`
 	// keys to remove from every member's config block; at most 1000 entries. Only "_routing" is
 	// accepted: removing it resets the member to `_routing_defaults` and its routing profile,
 	// which turns routing back on for a member a disabling `_routing` turned off (the change is
-	// judged by domain policy like a `_routing` patch). A key the member does not carry is a
-	// no-op. A key must not appear twice, nor in both patch and unset.
+	// judged by domain policy like a `_routing` patch). A key the member does not carry, or a
+	// member that does not exist, makes it a no-op: with no patch nothing is written and no
+	// tenant is created. A key must not appear twice, nor in both patch and unset.
 	Unset []string `json:"unset,omitempty" validate:"max=1000"`
 }
 
@@ -125,6 +125,12 @@ func GroupBatch(d *Deps) http.HandlerFunc {
 			WriteJSONError(w, r, http.StatusBadRequest, "invalid JSON: "+err.Error())
 			return
 		}
+		// B2: an unset-only request is allowed; one with neither keeps the
+		// pre-B2 refusal, code and message unchanged.
+		if len(req.Patch) == 0 && len(req.Unset) == 0 {
+			WriteJSONError(w, r, http.StatusBadRequest, "patch must not be empty")
+			return
+		}
 		// #1722: the byte cap above does NOT bound the key count, and this is the
 		// endpoint where that matters most — mergePatchYAML is quadratic in
 		// len(patch), runs inside the single-writer token, and here it runs once
@@ -133,8 +139,7 @@ func GroupBatch(d *Deps) http.HandlerFunc {
 		// value, not two; it is enforced HERE because the per-member
 		// BatchOperations are built in Go and never pass through JSON-decode
 		// validation. #2339: the patch values get the same range check as
-		// /tenants/batch. B2: so do the unset keys, and an empty patch is
-		// refused here (INVALID_BODY) unless unset names a key.
+		// /tenants/batch. B2: so do the unset keys.
 		violations := ValidateStructTags(&req)
 		violations = append(violations, validateBatchEdit(req.Patch, req.Unset, "")...)
 		if len(violations) > 0 {

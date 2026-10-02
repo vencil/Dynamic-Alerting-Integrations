@@ -342,9 +342,11 @@ func unsetAllowedList() string {
 // validateBatchEdit validates one batch op's patch and unset together:
 // validatePatchMap on the patch (field `<prefix>.patch[...]`), then each
 // unset key (field `<prefix>.unset[i]`) — in unsetAllowedKeys, not repeated,
-// not also in the patch — and that the op names at least one key (field
-// `<prefix>.patch`). prefix is "operations[i]" for /tenants/batch and ""
+// not also in the patch. prefix is "operations[i]" for /tenants/batch and ""
 // for /groups/{id}/batch. Returns every violation, like validatePatchMap.
+// An op with neither patch nor unset is NOT refused here: /tenants/batch
+// keeps its pre-B2 no-op for it, and /groups/{id}/batch keeps its own
+// earlier 400.
 func validateBatchEdit(patch map[string]string, unset []string, prefix string) []Violation {
 	field := func(name string) string {
 		if prefix == "" {
@@ -353,12 +355,6 @@ func validateBatchEdit(patch map[string]string, unset []string, prefix string) [
 		return prefix + "." + name
 	}
 	violations := validatePatchMap(patch, field("patch"))
-	if len(patch) == 0 && len(unset) == 0 {
-		violations = append(violations, Violation{
-			Field:  field("patch"),
-			Reason: "patch and unset must not both be empty: name at least one key to set or to remove",
-		})
-	}
 	seen := make(map[string]int, len(unset))
 	for i, k := range unset {
 		at := fmt.Sprintf("%s[%d]", field("unset"), i)

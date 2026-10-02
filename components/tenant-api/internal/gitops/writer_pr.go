@@ -390,6 +390,9 @@ func (w *Writer) WritePRBatch(ctx context.Context, ops []PRBatchOp, authorEmail 
 			return nil, err
 		}
 		content, existing, opNotices, err := w.readMergeValidate(op.TenantID, filePath, op.Merge)
+		if errors.Is(err, ErrMergeNoOp) {
+			continue // B2: the merge changes nothing — skipped like a byte-identical one
+		}
 		if err != nil {
 			w.abortFeatureBranch(base, branchName)
 			return nil, err
