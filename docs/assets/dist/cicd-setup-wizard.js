@@ -251,7 +251,7 @@ ${n}jobs:
           docker run --rm \\
             -v "\${{ github.workspace }}/\${{ env.CONFIG_DIR }}:/data/conf.d:ro" \\
             \${{ env.DA_TOOLS_IMAGE }} \\
-            generate-routes --config-dir /data/conf.d --validate
+            generate-routes --config-dir /data/conf.d --validate --strict
 
       - name: Resolve base config snapshot
         id: snapshot

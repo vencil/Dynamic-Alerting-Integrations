@@ -417,7 +417,7 @@ repos:
         name: Generate Alertmanager routes (validate)
         entry: >-
           ghcr.io/vencil/da-tools:latest
-          generate-routes --config-dir "/src/conf.d" --validate
+          generate-routes --config-dir "/src/conf.d" --validate --strict
         language: docker_image
         files: ^conf\.d/.*\.ya?ml$
         pass_filenames: false
@@ -427,7 +427,7 @@ repos:
 
 代價講明白：那個掛載是**整個 repo 可讀寫**，比手寫的唯讀 `conf.d` 掛載寬。這是 pre-commit 自己的機制，而跑不起來的 hook 保護不了任何東西。
 
-每次 commit 修改 `conf.d/` 下的檔案時，自動在本機執行驗證（`da-validate-config`）並對路由做一次只讀驗證（`da-generate-routes`，`--validate`）。
+每次 commit 修改 `conf.d/` 下的檔案時，自動在本機執行驗證（`da-validate-config`）並對路由做一次只讀驗證（`da-generate-routes`，`--validate --strict`）。
 
 ## 5. 完整流程示例
 
