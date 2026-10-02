@@ -216,11 +216,15 @@ func scopeEffective(configDir, scopeDir string, wholeTree bool) (*ScopedTenants,
 	// so the scoped mode — where an empty tree is a valid, vacuously-safe
 	// scope — would read it as "nothing in scope". Refuse it, as the
 	// exporter's load does. Checked BEFORE the whole-tree "no .yaml files"
-	// refusal, so every mode names the reason (e.g. permission denied).
+	// refusal, so an unlistable root is reported with the walk's error
+	// (e.g. permission denied) in the scoped and the whole-tree mode alike.
 	if len(scan.Files) == 0 && scan.RootWalkErr != nil {
 		return nil, fmt.Errorf("cannot list configDir %q: %w", absRoot, scan.RootWalkErr)
 	}
-	if wholeTree && len(scan.Files) == 0 {
+	// A tree whose every config file is unreadable is not "no .yaml files"
+	// either: it goes on with no tenant and its Unreadable entries named (the
+	// caller's exit 3), as when one readable file is beside them (#2588).
+	if wholeTree && len(scan.Files) == 0 && len(scan.Unreadable) == 0 {
 		return nil, fmt.Errorf("no .yaml files found in %s", configDir)
 	}
 

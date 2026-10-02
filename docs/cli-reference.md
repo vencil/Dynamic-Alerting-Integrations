@@ -2501,7 +2501,7 @@ da-tools guard <subcommand> [flags]
 | Flag | 預設 | 說明 |
 |---|---|---|
 | `--config-dir <path>` | （必填） | conf.d/ 根目錄 |
-| `--scope <path>` | 整棵樹 | 限定 `--config-dir` 底下（含其本身）的某個目錄（CI 傳變更的 `_defaults.yaml` 所在目錄，相對於 `--config-dir`，或絕對路徑）。相對路徑**相對於 `--config-dir`**，與目前工作目錄無關：`--config-dir conf.d/ --scope db/`（`.` 為整棵樹）；絕對路徑照用。解析後落在 `--config-dir` 之外為 exit 2（[#2588](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/2588)） |
+| `--scope <path>` | 整棵樹 | 限定 `--config-dir` 底下（含其本身）的某個目錄（CI 傳變更的 `_defaults.yaml` 所在目錄，相對於 `--config-dir`；同一根下改到多個目錄時傳 `.`）。相對路徑**相對於 `--config-dir`**，與目前工作目錄無關：`--config-dir conf.d/ --scope db/`（`.` 為整棵樹）；絕對路徑照用。解析後落在 `--config-dir` 之外為 exit 2（[#2588](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/2588)） |
 | `--required-fields <a,b,c>` | 空 | dotted-path 必填欄位 CSV；一般欄位對有效設定判定，`_routing` 與 `_routing.` 開頭的欄位改對解析後的 routing 判定（見下方 Routing 檢查） |
 | `--cardinality-limit <n>` | 根 `_defaults.yaml` 的 `max_metrics_per_tenant`（未設 = 500；負值 = 不檢查） | per-tenant 預測 metric 上限；明確給值即覆寫，`0` = 停用 |
 | `--cardinality-warn-ratio <r>` | 0.8 | warn-tier 比例（0 < r < 1） |

@@ -565,3 +565,68 @@ func TestScopeHelp_TeachesConfigDirRelativeSpelling(t *testing.T) {
 		t.Errorf("-scope help does not teach the config-dir-relative spelling: %q", help)
 	}
 }
+
+// A tree whose root lists but whose every config file is unreadable is not
+// "no .yaml files": effective exits 3 naming them, as the guard does and as
+// effective does when one readable file is beside them (#2588 review N2).
+func TestUnreadable_EveryFileUnreadable_EffectiveExitsThree(t *testing.T) {
+	t.Parallel()
+	for _, s := range []struct {
+		name    string
+		nonRoot bool
+		breakIt func(t *testing.T, dir string)
+		want    []skippedFile
+	}{
+		{
+			name: "only file a dangling symlink",
+			breakIt: func(t *testing.T, dir string) {
+				p := filepath.Join(dir, "t.yaml")
+				if err := os.Remove(p); err != nil {
+					t.Fatal(err)
+				}
+				symlinkOrSkipT(t, "missing.yaml", p)
+			},
+			want: []skippedFile{{"t.yaml", config.UnreadableStatError}},
+		},
+		{
+			name:    "only file 0000",
+			nonRoot: true,
+			breakIt: func(t *testing.T, dir string) {
+				chmodT(t, filepath.Join(dir, "t.yaml"), 0, 0o644)
+			},
+			want: []skippedFile{{"t.yaml", config.UnreadableReadError}},
+		},
+		{
+			name:    "root 0444 (lists, cannot stat)",
+			nonRoot: true,
+			breakIt: func(t *testing.T, dir string) {
+				chmodT(t, dir, 0o444, 0o755)
+			},
+			want: []skippedFile{{"t.yaml", config.UnreadableStatError}},
+		},
+	} {
+		t.Run(s.name, func(t *testing.T) {
+			t.Parallel()
+			if s.nonRoot && os.Geteuid() == 0 {
+				t.Skip("running as root: chmod does not stop root")
+			}
+			dir := writeParityTree(t, map[string]string{"t.yaml": "tenants:\n  tenant-t:\n    mysql_connections: 70\n"})
+			s.breakIt(t, dir)
+			code, doc, stderr := effectiveUnreadable(t, dir)
+			if code != exitParseFailed {
+				t.Fatalf("effective exit = %d, want %d; stderr=%q", code, exitParseFailed, stderr)
+			}
+			if !reflect.DeepEqual(doc.Unreadable, s.want) {
+				t.Errorf("effective unreadable = %v, want %v", doc.Unreadable, s.want)
+			}
+			if len(doc.Tenants) != 0 {
+				t.Errorf("effective tenants = %v, want none", keysOf(doc.Tenants))
+			}
+			gcode, gdoc, gstderr := guardJSON(t, dir)
+			if gcode != exitParseFailed || !reflect.DeepEqual(gdoc.Unreadable, s.want) {
+				t.Errorf("guard exit = %d unreadable = %v, want %d %v; stderr=%q",
+					gcode, gdoc.Unreadable, exitParseFailed, s.want, gstderr)
+			}
+		})
+	}
+}

@@ -2515,7 +2515,7 @@ If none resolves, prints install hints (download from `tools/v*` release / `cd c
 | Flag | Default | Description |
 |---|---|---|
 | `--config-dir <path>` | (required) | conf.d/ root |
-| `--scope <path>` | whole tree | Limit to a directory at or below `--config-dir` (CI passes the changed `_defaults.yaml`'s directory, relative to `--config-dir`, or absolute). A relative path is **relative to `--config-dir`**, whatever the working directory: `--config-dir conf.d/ --scope db/` (`.` = the whole tree); an absolute path is used as is. A scope that resolves outside `--config-dir` is exit 2 ([#2588](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/2588)) |
+| `--scope <path>` | whole tree | Limit to a directory at or below `--config-dir` (CI passes the changed `_defaults.yaml`'s directory, relative to `--config-dir`; `.` when several directories under one root changed). A relative path is **relative to `--config-dir`**, whatever the working directory: `--config-dir conf.d/ --scope db/` (`.` = the whole tree); an absolute path is used as is. A scope that resolves outside `--config-dir` is exit 2 ([#2588](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/2588)) |
 | `--required-fields <a,b,c>` | empty | CSV of dotted-path fields every tenant must have; a plain field is judged against the effective config, a `_routing` or `_routing.`-prefixed field against the resolved routing (see Routing checks below) |
 | `--cardinality-limit <n>` | the root `_defaults.yaml`'s `max_metrics_per_tenant` (unset = 500; negative = no check) | Per-tenant predicted-metric ceiling; an explicit value overrides, `0` disables |
 | `--cardinality-warn-ratio <r>` | 0.8 | Warn-tier ratio (0 < r < 1) |
