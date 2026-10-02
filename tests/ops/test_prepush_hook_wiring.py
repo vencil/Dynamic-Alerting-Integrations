@@ -1440,7 +1440,6 @@ _HELPER_MISSING = {
     "pre_push_mkdocs_strict.sh": "_prepush_refs.sh is not next to",
 }
 _INSTALL = "bash scripts/ops/install_prepush_hook.sh"
-_RESTORE_RE = re.compile(r"^\s*(git -C \S+(?:\\ \S+)* checkout HEAD -- \S+)$", re.M)
 
 
 _OLD_COPY = "OLD-COPY: helper not found"
@@ -1556,45 +1555,87 @@ def test_a_users_own_hook_that_sources_the_helper_is_kept(tmp_path: Path, slot: 
     assert "USER-HOOK-RAN" in out and _BANNER in out, out
 
 
+_SHAPES = ["side-branch", "two-generations-back", "from-a-subdirectory", "minimal-path",
+           "from-a-linked-worktree"]
+
+
+@pytest.mark.parametrize("shape", _SHAPES)
+def test_a_stale_guard_copy_is_recognised_however_it_got_there(
+    tmp_path: Path, shape: str
+) -> None:
+    """The version a copy was taken from need not be on the current branch or the
+    last one before it, and the installer is not always run from the top of the
+    main work tree with a full PATH. Each shape must still find the copy."""
+    work, old = _repo_with_a_shipped_old_guard(tmp_path, "protect_main_push.sh")
+    if shape == "side-branch":
+        # The copied version lives only on another branch.
+        assert _git(work, "checkout", "-q", "-b", "side").returncode == 0
+        side = old.replace(_OLD_COPY.encode(), _OLD_COPY.encode() + b" (side branch)")
+        old = side
+        (work / "scripts" / "ops" / "protect_main_push.sh").write_bytes(side)
+        assert _git(work, "-c", "core.hooksPath=/dev/null", "commit", "-qam", "side").returncode == 0
+        assert _git(work, "checkout", "-q", "-").returncode == 0
+    elif shape == "two-generations-back":
+        target = work / "scripts" / "ops" / "protect_main_push.sh"
+        current = target.read_bytes()
+        target.write_bytes(current + b"# newer still\n")
+        assert _git(work, "-c", "core.hooksPath=/dev/null", "commit", "-qam", "newer").returncode == 0
+        target.write_bytes(current)
+        assert _git(work, "-c", "core.hooksPath=/dev/null", "commit", "-qam", "current").returncode == 0
+    _occupy(work, "pre-push", old)
+
+    assert _BASH, "no bash resolved; the module-level skip should have fired"
+    cwd, env = work, None
+    if shape == "from-a-subdirectory":
+        cwd = work / "scripts" / "ops"
+    elif shape == "minimal-path":
+        bindir = tmp_path / "bin"
+        bindir.mkdir()
+        for tool in ("bash", "git", "mv", "rm", "chmod"):
+            (bindir / tool).symlink_to(shutil.which(tool))
+        env = {**os.environ, "PATH": str(bindir)}
+    elif shape == "from-a-linked-worktree":
+        cwd = tmp_path / "wt"
+        assert _git(work, "worktree", "add", "-q", "--detach", str(cwd)).returncode == 0
+    r = subprocess.run(  # subprocess-timeout: ignore
+        [_BASH, str(cwd / "scripts" / "ops" / "install_prepush_hook.sh")
+         if shape != "from-a-subdirectory" else "install_prepush_hook.sh"],
+        cwd=cwd, env=env, capture_output=True, text=True, encoding="utf-8", errors="replace",
+    )
+    assert r.returncode == 0, f"installer failed:\n{r.stdout}{r.stderr}"
+    _assert_the_guards_are_back(work)
+
+
 @pytest.mark.parametrize("missing", ["_prepush_refs.sh", "protect_main_push.sh"])
-def test_a_file_gone_from_scripts_ops_is_restored_the_way_the_message_says(
+def test_a_file_gone_from_scripts_ops_is_named_and_restorable_from_head(
     tmp_path: Path, missing: str
 ) -> None:
     """With the shipped wiring everything runs from scripts/ops/, so a missing
-    file there is gone from the checkout and the installer, which writes only
-    the hooks directory, cannot bring it back. The deletion is staged and a
-    tracked sibling has uncommitted work: restoring from the index would do
-    nothing, and restoring the whole directory would throw that work away. The
-    printed command is run verbatim by a shell outside the repository, under a
-    path with a space in it."""
-    base = tmp_path / "a dir"
-    base.mkdir()
-    work = _make_repo(base, _PROTECT_ONLY)
+    file there is gone from the checkout and the installer, which writes only the
+    hooks directory, cannot bring it back. The message says where and that HEAD
+    has it — the deletion is staged here, so restoring from the index would do
+    nothing — and restoring it from HEAD does fix the push."""
+    work = _make_repo(tmp_path, _PROTECT_ONLY)
     assert _git(work, "add", "scripts").returncode == 0
     assert _git(work, "-c", "core.hooksPath=/dev/null", "commit", "-qm", "ops").returncode == 0
     assert _install_guards(work).returncode == 0
     assert _git(work, "rm", "-q", f"scripts/ops/{missing}").returncode == 0
-    sibling = work / "scripts" / "ops" / "install_prepush_hook.sh"   # tracked
-    wip = sibling.read_text(encoding="utf-8") + "# uncommitted work\n"
-    sibling.write_text(wip, encoding="utf-8")
 
     r, out = _push(work, "HEAD:refs/heads/feat/x")
     assert r.returncode != 0, f"a broken checkout silently allowed the push:\n{out}"
-    commands = _RESTORE_RE.findall(out)
-    # A missing helper is reported by each guard; a missing guard by the dispatcher.
-    assert len(commands) == (len(_HELPER_MISSING) if missing == "_prepush_refs.sh" else 1), out
-    assert all(c.endswith(f" -- {missing}") for c in commands), out
     if missing == "_prepush_refs.sh":
+        assert len(_helper_missing_lines(out)) == len(_HELPER_MISSING), out
+        assert out.count("restore it from HEAD") + out.count("從 HEAD 還原") == len(_HELPER_MISSING), out
         # Quoted heredocs: the backticks are text, not a command to run.
         assert out.count("`pre-commit install --hook-type pre-push`") == 2, out
+    else:
+        assert f"{missing} is missing from {work}" in out and "restore it from HEAD" in out, out
+        # The dispatcher itself stops the push: with the other two guards
+        # bypassed, nothing else is left to block main.
+        r, out = _push(work, "HEAD:refs/heads/main", env_extra=_SIBLINGS_OFF)
+        assert r.returncode != 0, f"a missing guard let a push to main through:\n{out}"
 
-    assert _BASH, "no bash resolved; the module-level skip should have fired"
-    r = subprocess.run(  # subprocess-timeout: ignore
-        [_BASH, "-c", commands[0]], cwd=tmp_path, capture_output=True, text=True,
-        encoding="utf-8", errors="replace",
-    )
-    assert r.returncode == 0, f"{commands[0]}\n{r.stderr}"
-    assert sibling.read_text(encoding="utf-8") == wip, "the restore threw away other work"
+    assert _git(work, "checkout", "HEAD", "--", f"scripts/ops/{missing}").returncode == 0
     _assert_the_guards_are_back(work)
 
 
