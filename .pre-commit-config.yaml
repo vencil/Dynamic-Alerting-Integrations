@@ -1231,12 +1231,14 @@ repos:
         # `# pipestatus-ok: <why>` on the read line. Boundaries in the docstring.
 
       # #2583: gofmt existed only in CI (each module's .golangci.yml → Go Lint).
-      # `\.go$` with no path anchor covers every go.mod module. Lists, never
-      # rewrites. No gofmt/go on PATH ⇒ rc 2 (fail-closed); the opt-out is
-      # `SKIP=go-fmt`, which pre-commit shows as Skipped, not Passed.
+      # `\.go$` with no path anchor covers every go.mod module. Runs `gofmt -s`
+      # because golangci-lint's gofmt formatter defaults to simplify: true.
+      # Lists, never rewrites. No gofmt/go on PATH ⇒ rc 2 (fail-closed); the
+      # opt-out is `SKIP=go-fmt`, which pre-commit shows as Skipped, not Passed.
+      # The trailing `--` keeps a staged `-x.go` a path, not a flag.
       - id: go-fmt
-        name: "gofmt -l on staged .go files (#2583)"
-        entry: python3 -X utf8 scripts/tools/lint/check_go_fmt.py
+        name: "gofmt -s -l on staged .go files (#2583)"
+        entry: python3 -X utf8 scripts/tools/lint/check_go_fmt.py --
         language: python
         files: \.go$
 

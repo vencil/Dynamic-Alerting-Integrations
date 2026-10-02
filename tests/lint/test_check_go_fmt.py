@@ -30,18 +30,32 @@ SCRIPT = _TOOLS_DIR / "check_go_fmt.py"
 UNFORMATTED = "package x\nfunc  F( ){ }\n"
 FORMATTED = "package x\n\nfunc F() {}\n"
 UNPARSABLE = "package x\nfunc F( {\n"
+# gofmt-clean, but `gofmt -s` rewrites `[]T{T{A: 1}}` to `[]T{{A: 1}}`. CI's
+# golangci-lint gofmt formatter defaults to simplify: true (#2583 F1).
+SIMPLIFIABLE = "package x\n\ntype T struct{ A int }\n\nvar X = []T{T{A: 1}}\n"
 
-# Stub gofmt: `-l -- files...` lists every file that is not byte-equal to
-# FORMATTED; a file containing "{\n" without a closing brace on the func line
-# is reported as a parse error (rc 2), like the real one.
+# Stub gofmt, modelling the real one closely enough to tell argv shapes apart:
+# - flags must be followed by `--`, else rc 3 (so dropping `--` is visible);
+# - only FORMATTED is clean; SIMPLIFIABLE is listed only under `-s`;
+# - UNPARSABLE goes to stderr with rc 2 while other files are still listed;
+# - a missing path crashes it (rc 4): the script must pre-check instead.
 _STUB_GOFMT = f"""#!/usr/bin/env python3
-import sys
-args = [a for a in sys.argv[1:] if a not in ("-l", "--")]
+import os, sys
+argv = sys.argv[1:]
+if "--" not in argv:
+    sys.stderr.write("stub: no -- before paths\\n"); sys.exit(3)
+i = argv.index("--")
+flags, paths = argv[:i], argv[i + 1:]
 rc = 0
-for p in args:
+for p in paths:
+    if not os.path.isfile(p):
+        sys.stderr.write("stub: crashed on missing " + p + "\\n"); sys.exit(4)
     text = open(p, encoding="utf-8").read()
     if text == {UNPARSABLE!r}:
         sys.stderr.write(p + ":2:9: expected ')', found '{{'\\n"); rc = 2
+    elif text == {SIMPLIFIABLE!r}:
+        if "-s" in flags:
+            print(p)
     elif text != {FORMATTED!r}:
         print(p)
 sys.exit(rc)
@@ -102,8 +116,42 @@ def test_gofmt_error_is_cannot_measure_not_pass(stub_path, tmp_path, capsys):
     assert "cannot measure" in capsys.readouterr().err
 
 
-def test_missing_file_is_cannot_measure(stub_path, tmp_path):
-    assert lint.main([str(tmp_path / "gone.go")]) == lint.EXIT_CALLER_ERROR
+def test_missing_file_is_cannot_measure(stub_path, tmp_path, capsys):
+    gone = str(tmp_path / "gone.go")
+    good = _go(tmp_path, "good.go", FORMATTED)
+    assert lint.main([good, gone]) == lint.EXIT_CALLER_ERROR
+    err = capsys.readouterr().err
+    # The pre-check names it; the stub never ran (it would say "crashed").
+    assert f"no such file: {gone}" in err
+    assert "crashed" not in err
+
+
+def test_simplifiable_file_fails_like_ci(stub_path, tmp_path, capsys):
+    # #2583 F1: plain `gofmt -l` passes this; CI (gofmt simplify) rejects it.
+    simp = _go(tmp_path, "simp.go", SIMPLIFIABLE)
+    assert lint.main([simp]) == lint.EXIT_VIOLATION
+    assert simp in capsys.readouterr().out
+
+
+def test_syntax_error_still_lists_other_unformatted_files(stub_path, tmp_path, capsys):
+    # #2583 F2: gofmt rc 2 on one file must not hide the others it listed.
+    bad = _go(tmp_path, "bad.go", UNFORMATTED)
+    broken = _go(tmp_path, "broken.go", UNPARSABLE)
+    good = _go(tmp_path, "good.go", FORMATTED)
+    assert lint.main([bad, broken, good]) == lint.EXIT_CALLER_ERROR
+    cap = capsys.readouterr()
+    assert bad in cap.out
+    assert good not in cap.out
+    assert "cannot measure" in cap.err
+    assert "expected ')'" in cap.err
+
+
+def test_dash_leading_file_name_is_a_path(stub_path, tmp_path, monkeypatch, capsys):
+    # pre-commit appends file names after the entry's `--`; gofmt gets `--` too.
+    monkeypatch.chdir(tmp_path)
+    (tmp_path / "-x.go").write_text(UNFORMATTED, encoding="utf-8")
+    assert lint.main(["--", "-x.go"]) == lint.EXIT_VIOLATION
+    assert "-x.go" in capsys.readouterr().out
 
 
 def test_no_files_is_ok_and_says_nothing_was_measured(stub_path, capsys):
@@ -167,10 +215,25 @@ def test_real_gofmt_red_then_green(tmp_path):
 
 
 @_needs_gofmt
-def test_real_gofmt_parse_error_raises(tmp_path):
+def test_real_gofmt_parse_error_raises_and_keeps_listed(tmp_path):
+    bad = _go(tmp_path, "bad.go", UNFORMATTED)
     broken = _go(tmp_path, "broken.go", UNPARSABLE)
-    with pytest.raises(lint.MeasureError):
-        lint.unformatted(_REAL_GOFMT, [broken])
+    with pytest.raises(lint.MeasureError) as exc:
+        lint.unformatted(_REAL_GOFMT, [bad, broken])
+    assert exc.value.listed == [bad]
+
+
+@_needs_gofmt
+def test_real_gofmt_simplify_is_on(tmp_path):
+    simp = _go(tmp_path, "simp.go", SIMPLIFIABLE)
+    assert lint.unformatted(_REAL_GOFMT, [simp]) == [simp]
+
+
+@_needs_gofmt
+def test_real_gofmt_dash_leading_name(tmp_path, monkeypatch):
+    monkeypatch.chdir(tmp_path)
+    (tmp_path / "-x.go").write_text(UNFORMATTED, encoding="utf-8")
+    assert lint.unformatted(_REAL_GOFMT, ["-x.go"]) == ["-x.go"]
 
 
 # --- pre-commit wiring --------------------------------------------------------
@@ -193,6 +256,8 @@ def _go_modules() -> list[str]:
 def test_hook_runs_this_script_on_staged_files_at_commit():
     hook = _hook()
     assert "scripts/tools/lint/check_go_fmt.py" in hook["entry"]
+    # pre-commit appends file names after the entry: `--` keeps `-x.go` a path.
+    assert hook["entry"].split()[-1] == "--"
     # Staged files must reach the script, and it must run at commit time.
     assert hook.get("pass_filenames", True) is True
     assert "manual" not in hook.get("stages", [])

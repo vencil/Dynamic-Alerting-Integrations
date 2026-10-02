@@ -166,7 +166,7 @@ lang: en
 | `check_env_bool_parsers.py` | ADR-034 mechanical enforcement (narrow). |
 | `check_flaky_registry.py` | Validate `flaky-tests.yaml` schema + expire_at. |
 | `check_frontmatter_versions.py` | Frontmatter version global scan |
-| `check_go_fmt.py` | gofmt -l over the staged .go files; any unformatted file fails the commit (#2583). |
+| `check_go_fmt.py` | gofmt -s -l over the staged .go files; any unformatted file fails the commit (#2583). |
 | `check_ha_threshold_aggregation.py` | HA-max invariant lint: `user_threshold` must be aggregated with `max`. |
 | `check_hardcode_tenant.py` | Detect hardcoded tenant literals in PromQL label selectors (Rule #2). |
 | `check_head_blob_hygiene.py` | Inspect committed HEAD blobs for corruption. |
