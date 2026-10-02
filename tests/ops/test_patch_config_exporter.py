@@ -22,6 +22,7 @@ import urllib.request
 from pathlib import Path
 
 import pytest
+from _platform_fs import require_shebang_scripts  # noqa: E402
 
 REPO = Path(__file__).resolve().parents[2]
 APP = REPO / "components" / "threshold-exporter" / "app"
@@ -116,6 +117,7 @@ class Cluster:
         self.dir.mkdir()
         for name, text in files.items():
             (self.dir / name).write_text(text, encoding="utf-8")
+        require_shebang_scripts()  # the fake kubectl below is one
         bindir = tmp_path / "bin"
         bindir.mkdir()
         (bindir / "kubectl").write_text(FAKE_KUBECTL, encoding="utf-8")

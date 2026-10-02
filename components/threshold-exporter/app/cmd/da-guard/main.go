@@ -495,6 +495,7 @@ func buildCheckInput(scoped *config.ScopedTenants, f *flags) guard.CheckInput {
 		UnknownRoutingProfiles: unknownProfiles,
 		DomainPolicies:         policies,
 		PlatformProblems:       problems,
+		RoutingEnforced:        tree.Enforced,
 		TenantOverrides:        tenantOverrides,
 		NewDefaultsByTenant:    newDefaultsByTenant,
 		CardinalityLimit:       f.cardinalityLimit,

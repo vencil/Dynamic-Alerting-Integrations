@@ -8,7 +8,7 @@ import re
 import sys
 
 import pytest
-from _platform_fs import symlink_or_skip  # noqa: E402
+from _platform_fs import require_file_name, require_posix_modes, symlink_or_skip  # noqa: E402
 
 REPO = pathlib.Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(REPO / "scripts" / "tools"))
@@ -130,6 +130,7 @@ def test_a_file_name_cannot_drive_the_operators_terminal(tmp_path: pathlib.Path)
     the warning goes to a terminal. A name holding `\\x1b[2J` cleared the
     screen, so the message that exists to make a silent loss audible could
     erase the output around it."""
+    require_file_name("db-\x1b[2J\x1b[Hevil.yaml")
     root = tmp_path / "conf.d"
     (root / "sub").mkdir(parents=True)
     (root / "sub" / "db-\x1b[2J\x1b[Hevil.yaml").write_text(
@@ -528,6 +529,7 @@ def test_unusable_reason_names_permission_denied_for_real(tmp_path: pathlib.Path
     as uid 0, where the clause is unreachable; CI runners do not, so the
     branch is exercised there rather than silently never.
     """
+    require_posix_modes()
     locked = tmp_path / "locked.yaml"
     locked.write_text("a: 1\n", encoding="utf-8")
     locked.chmod(0o000)
@@ -863,7 +865,7 @@ def test_entries_returns_posix_path_order_not_basename_order(tmp_path):
     (root / "a" / "zzz.yaml").mkdir()
     (root / "b" / "aaa.yaml").mkdir()
     unsorted = [root / "b" / "aaa.yaml", root / "a" / "zzz.yaml"]
-    got = [str(p.relative_to(root)) for p in
+    got = [p.relative_to(root).as_posix() for p in
            unusable_config_entries(unsorted)]
     assert got == ["a/zzz.yaml", "b/aaa.yaml"], (
         f"expected POSIX path order; basename order would give "

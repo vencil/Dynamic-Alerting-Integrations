@@ -12,10 +12,13 @@ Provides common parsers for entrypoint.py COMMAND_MAP and build.sh TOOL_FILES.
 """
 from __future__ import annotations
 
+import ast
+import io
 import os
 import re
 import shlex
 import subprocess
+import tokenize
 from functools import lru_cache
 from pathlib import Path
 from typing import Dict, List, Set, Tuple
@@ -120,6 +123,62 @@ def _strip_bom(text: str) -> str:
     hands the BOM straight through.
     """
     return text.lstrip("﻿")
+
+
+# ── Python source as the interpreter reads it (#2601) ──────────────────
+
+class PythonSourceError(Exception):
+    """A ``.py`` file an AST lint could not read, decode or parse.
+
+    ⛔ Callers must REPORT this, not swallow it: a scanner that skips a file
+    it cannot parse reports that file as clean, and the cheapest way to make
+    a file unparseable to a scanner — but not to the interpreter — used to be
+    a UTF-8 BOM or a PEP 263 coding cookie (#2601).
+    """
+
+
+def decode_python_source(data: bytes) -> str:
+    """Decode *data* the way the interpreter decodes a source file.
+
+    The encoding comes from ``tokenize.detect_encoding``: a UTF-8 BOM selects
+    ``utf-8-sig``, which strips EXACTLY one BOM (a second one stays in the
+    text as U+FEFF and ``ast.parse`` rejects it — so does the interpreter);
+    a PEP 263 coding cookie selects its codec; otherwise UTF-8.
+
+    Newlines are normalised to ``\\n`` (``\\r\\n`` and a lone ``\\r`` are both
+    line ends to the tokenizer), so ``text.split("\\n")[lineno - 1]`` is the
+    line an AST node's ``lineno`` names. ⛔ Not ``str.splitlines()``: it also
+    breaks on ``\\x0c`` / ``\\x1c`` / ``\\x85`` / ``\\u2028``, which the
+    tokenizer does not, so every line after one of those would shift.
+
+    Raises ``SyntaxError`` (bad or unknown cookie, BOM next to a non-UTF-8
+    cookie) or ``UnicodeDecodeError`` (bytes the declared codec rejects).
+    """
+    encoding, _ = tokenize.detect_encoding(io.BytesIO(data).readline)
+    text = data.decode(encoding)
+    return text.replace("\r\n", "\n").replace("\r", "\n")
+
+
+def parse_python_file(path: Path) -> Tuple[ast.Module, List[str]]:
+    """Read, decode and parse *path*; return ``(tree, source_lines)``.
+
+    ``source_lines[lineno - 1]`` is the line an AST node's ``lineno`` names
+    (see ``decode_python_source``). Every failure — unreadable file,
+    undecodable bytes, a syntax error — raises ``PythonSourceError`` whose
+    message names the file and the cause; nothing is returned empty.
+    """
+    try:
+        data = path.read_bytes()
+    except OSError as exc:
+        raise PythonSourceError(f"{path}: cannot read: {exc}") from exc
+    try:
+        source = decode_python_source(data)
+        tree = ast.parse(source, filename=str(path))
+    except (SyntaxError, UnicodeDecodeError, ValueError) as exc:
+        raise PythonSourceError(
+            f"{path}: cannot parse as Python: {type(exc).__name__}: {exc}"
+        ) from exc
+    return tree, source.split("\n")
 
 
 _COMMAND_MAP_ENTRY_RE = re.compile(r'"([a-z][a-z0-9-]+)":\s*"([^"]+)"')

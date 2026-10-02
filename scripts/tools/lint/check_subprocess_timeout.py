@@ -77,11 +77,23 @@ Usage
     # Future: post-cleanup hard gate
     python3 scripts/tools/lint/check_subprocess_timeout.py --ci --strict-subprocess-timeout
 
+Unparseable files fail closed (#2601)
+-------------------------------------
+Source is decoded the way the interpreter decodes it: one leading UTF-8 BOM
+is stripped and a PEP 263 coding cookie picks the codec, so a file Python
+runs is a file this scans. A file that still cannot be read, decoded or
+parsed (two BOMs, a syntax error, bytes its codec rejects) is reported on
+stderr by name and cause and the run exits 2 in every mode. It used to be
+skipped silently (an empty result, on the theory that "other lints" catch
+parse errors — no lint here parses every file), so a BOM was enough to
+hide a missing ``timeout=`` from the gate.
+
 Exit codes
 ----------
 - ``0``  — no violations OR --ci without --strict-subprocess-timeout
 - ``1``  — violations found AND (--ci AND --strict-subprocess-timeout)
-- ``2``  — bad arguments / unreadable source
+- ``2``  — bad arguments, OR a scanned file could not be read / decoded /
+  parsed (any mode)
 
 S#74 reference: ``docs/internal/testing-playbook.md`` v2.8.0
 Lessons §4. PR #164 / PR #165 establish the underlying pattern.
@@ -104,6 +116,11 @@ sys.path.insert(0, str(_THIS_DIR))
 sys.path.insert(0, os.path.join(str(_THIS_DIR), ".."))
 from _lib_compat import try_utf8_stdout  # noqa: E402
 from _lib_exitcodes import EXIT_OK, EXIT_VIOLATION, EXIT_CALLER_ERROR  # noqa: E402
+from _lint_helpers import (  # noqa: E402
+    PythonSourceError,
+    decode_python_source,
+    parse_python_file,
+)
 
 PROJECT_ROOT = Path(__file__).resolve().parents[3]
 
@@ -249,19 +266,47 @@ def _line_has_ignore(source_lines: list[str], line_no: int) -> bool:
     return False
 
 
-def scan_source(path: Path, source: str) -> list[TimeoutViolation]:
-    """Walk a Python source string and return all violations.
+def scan_source(path: Path, source: str | bytes) -> list[TimeoutViolation]:
+    """Parse a Python source and return all violations.
 
-    Robust to syntax errors (returns empty list rather than crashing —
-    the lint should not block commits because some other file has a
-    parse error; that's caught by other lints).
+    *source* as ``bytes`` is decoded the way the interpreter decodes a file
+    (UTF-8 BOM, PEP 263 coding cookie); as ``str`` it is parsed as given.
+    A source that does not decode or parse raises ``PythonSourceError``
+    naming *path* and the cause (#2601). It used to return an empty list —
+    "robust to syntax errors, caught by other lints" — but no other lint in
+    this repo parses every file, and the empty list read as "no violations":
+    a UTF-8 BOM alone was enough to hide a file from the gate.
     """
     try:
+        if isinstance(source, bytes):
+            source = decode_python_source(source)
+        else:
+            source = source.replace("\r\n", "\n").replace("\r", "\n")
         tree = ast.parse(source, filename=str(path))
-    except SyntaxError:
-        return []
+    except (SyntaxError, UnicodeDecodeError, ValueError) as exc:
+        raise PythonSourceError(
+            f"{path}: cannot parse as Python: {type(exc).__name__}: {exc}"
+        ) from exc
+    return scan_tree(path, tree, source.split("\n"))
 
-    source_lines = source.splitlines()
+
+def scan_file(path: Path) -> list[TimeoutViolation]:
+    """Read *path* as the interpreter would and return all violations.
+
+    Raises ``PythonSourceError`` when the file cannot be read, decoded or
+    parsed — never an empty list for a file that was not scanned.
+    """
+    tree, source_lines = parse_python_file(path)
+    return scan_tree(path, tree, source_lines)
+
+
+def scan_tree(path: Path, tree: ast.AST, source_lines: list[str]) -> list[TimeoutViolation]:
+    """Walk a parsed module and return all violations.
+
+    ``source_lines[lineno - 1]`` must be the line an AST ``lineno`` names
+    (split on ``\\n`` after newline normalisation, not ``splitlines()``,
+    which also breaks on form feeds and would shift the ignore lookback).
+    """
     violations: list[TimeoutViolation] = []
 
     for node in ast.walk(tree):
@@ -325,10 +370,15 @@ def _resolve_scan_paths(args: argparse.Namespace) -> list[Path]:
     return [PROJECT_ROOT / r for r in _DEFAULT_SCAN_ROOTS if (PROJECT_ROOT / r).exists()]
 
 
-def _compute_exit_code(*, ci: bool, strict_subprocess_timeout: bool, n_violations: int) -> int:
+def _compute_exit_code(*, ci: bool, strict_subprocess_timeout: bool, n_violations: int,
+                       n_unscanned: int = 0) -> int:
     """Pure helper for unit-testable severity routing.
 
-    Severity matrix:
+    A file that could not be read or parsed (``n_unscanned``) exits 2 in
+    every mode, before the matrix below: it was not scanned, so the run
+    cannot call it clean (#2601).
+
+    Severity matrix (all files scanned):
 
     | --ci  | --strict-subprocess-timeout | violations | exit |
     |-------|-----------------------------|------------|------|
@@ -337,6 +387,8 @@ def _compute_exit_code(*, ci: bool, strict_subprocess_timeout: bool, n_violation
     | True  | True                        | 0          | 0    |
     | True  | True                        | >0         | 1    |
     """
+    if n_unscanned:
+        return EXIT_CALLER_ERROR
     if not ci:
         return EXIT_OK
     if not strict_subprocess_timeout:
@@ -379,18 +431,32 @@ def main() -> int:
         return EXIT_CALLER_ERROR
 
     all_violations: list[TimeoutViolation] = []
+    unscanned: list[str] = []
     for py_file in _iter_python_files(scan_paths):
         try:
-            source = py_file.read_text(encoding="utf-8", errors="replace")
-        except OSError as exc:
-            print(f"⚠ cannot read {py_file}: {exc}", file=sys.stderr)
-            continue
-        all_violations.extend(scan_source(py_file, source))
+            all_violations.extend(scan_file(py_file))
+        except PythonSourceError as exc:
+            unscanned.append(str(exc))
+
+    for err in unscanned:
+        print(f"ERROR: {err}", file=sys.stderr)
+    if unscanned:
+        print(
+            f"ERROR: {len(unscanned)} file(s) could not be scanned, so this run "
+            "cannot vouch for them. Fix the file (it must parse the way the "
+            "interpreter reads it), then re-run.",
+            file=sys.stderr,
+        )
 
     if not all_violations:
-        if args.ci:
+        if args.ci and not unscanned:
             print("✓ no subprocess calls without timeout= found")
-        return EXIT_OK
+        return _compute_exit_code(
+            ci=args.ci,
+            strict_subprocess_timeout=args.strict_subprocess_timeout,
+            n_violations=0,
+            n_unscanned=len(unscanned),
+        )
 
     by_file: dict[Path, list[TimeoutViolation]] = {}
     for v in all_violations:
@@ -416,6 +482,7 @@ def main() -> int:
         ci=args.ci,
         strict_subprocess_timeout=args.strict_subprocess_timeout,
         n_violations=len(all_violations),
+        n_unscanned=len(unscanned),
     )
 
 

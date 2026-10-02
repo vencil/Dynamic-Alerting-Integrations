@@ -18,7 +18,11 @@ Pinned contracts
    - ci, strict, >0 violations → exit 1
 
 3. **Robustness**:
-   - syntax errors in source → empty result (don't crash)
+   - source is decoded as the interpreter decodes it: a UTF-8 BOM or a
+     PEP 263 coding cookie does not hide a file (#2601)
+   - a file that does not decode / parse → ``PythonSourceError`` naming
+     the file, and ``main`` exits 2 in every mode — never an empty result
+     that reads as clean (#2601; it used to return ``[]``)
    - subprocess.Popen(...) constructor → NOT flagged (Popen has no
      timeout kwarg in its constructor; timeout belongs on later
      .communicate() / .wait())
@@ -32,6 +36,7 @@ pattern from PR #162's ``lint_jsx_babel.py`` granular --strict split.
 from __future__ import annotations
 
 import os
+import subprocess
 import sys
 from pathlib import Path
 
@@ -212,10 +217,13 @@ class TestIgnoreComment:
 # Robustness
 # ---------------------------------------------------------------------------
 class TestRobustness:
-    def test_syntax_error_returns_empty(self):
-        """A file with syntax errors must not crash the lint."""
+    def test_syntax_error_is_reported_not_empty(self):
+        """#2601: a syntax error used to return [] — read as "no violations".
+        It must raise, naming the file, and must not crash with a bare
+        SyntaxError either."""
         src = "def broken(\n    x = subprocess.run('ls')\n"
-        assert _scan(src) == []
+        with pytest.raises(cst.PythonSourceError, match=r"broken\.py: cannot parse"):
+            _scan(src, "broken.py")
 
     def test_string_containing_subprocess_run_not_flagged(self):
         """AST-based, not string-matching: subprocess.run() inside a
@@ -516,3 +524,126 @@ class TestReportShape:
         assert "a" in rendered and "b.py" in rendered
         assert ":42:8" in rendered
         assert "[subprocess.run-no-timeout]" in rendered
+
+
+# ---------------------------------------------------------------------------
+# #2601 — decode as the interpreter does; an unscanned file is never clean
+# ---------------------------------------------------------------------------
+_BOM = b"\xef\xbb\xbf"
+_NO_TIMEOUT = b"import subprocess\nsubprocess.run(['ls'])\n"
+
+
+class TestSourceDecoding:
+    """A file Python runs is a file the lint scans (#2601).
+
+    Each fixture is runnable Python — ``compile(bytes)`` accepts it — which
+    is the whole point: the old ``read_text(errors="replace")`` +
+    ``ast.parse(str)`` choked on it and returned [] for a file with a
+    real violation in it.
+    """
+
+    @pytest.mark.timeout(30)
+    def test_bom_file_is_scanned(self, tmp_path):
+        path = tmp_path / "bom.py"
+        path.write_bytes(_BOM + _NO_TIMEOUT)
+        compile(path.read_bytes(), str(path), "exec")  # the interpreter runs it
+        violations = cst.scan_file(path)
+        assert [(v.line, v.rule) for v in violations] == [(2, "subprocess.run-no-timeout")]
+
+    @pytest.mark.timeout(30)
+    def test_latin1_cookie_file_is_scanned(self, tmp_path):
+        path = tmp_path / "latin1.py"
+        path.write_bytes(
+            b"# -*- coding: latin-1 -*-\n"
+            b"import subprocess\n"
+            b"S = '\xe9'\n"  # not valid UTF-8 on its own
+            b"subprocess.run(['ls'])\n"
+        )
+        compile(path.read_bytes(), str(path), "exec")
+        violations = cst.scan_file(path)
+        assert [(v.line, v.rule) for v in violations] == [(4, "subprocess.run-no-timeout")]
+
+    @pytest.mark.timeout(30)
+    def test_double_bom_is_an_error_like_the_interpreter(self, tmp_path):
+        path = tmp_path / "bom2.py"
+        path.write_bytes(_BOM + _BOM + _NO_TIMEOUT)
+        with pytest.raises(SyntaxError):
+            compile(path.read_bytes(), str(path), "exec")
+        with pytest.raises(cst.PythonSourceError, match="bom2.py"):
+            cst.scan_file(path)
+
+    @pytest.mark.timeout(30)
+    def test_form_feed_does_not_shift_the_ignore_lookback(self, tmp_path):
+        """str.splitlines() also breaks on \\x0c, the tokenizer does not: a
+        form feed above the call would move the marker out of reach."""
+        path = tmp_path / "ff.py"
+        path.write_bytes(
+            b"import subprocess\n"
+            b"\x0c# section\n"
+            b"# subprocess-timeout: ignore\n"
+            b"subprocess.run(['ls'])\n"
+        )
+        assert cst.scan_file(path) == []
+
+    def test_compute_exit_code_unscanned_wins_in_every_mode(self):
+        for ci in (False, True):
+            for strict in (False, True):
+                for n in (0, 3):
+                    assert cst._compute_exit_code(
+                        ci=ci, strict_subprocess_timeout=strict,
+                        n_violations=n, n_unscanned=1) == 2
+
+
+class TestUnscannableFileFailsTheRun:
+    @pytest.mark.timeout(30)
+    @pytest.mark.parametrize("argv", [
+        ("--ci", "--strict-subprocess-timeout"),
+        ("--ci",),
+        (),
+    ], ids=["ci-strict", "ci", "audit"])
+    def test_syntax_error_exits_2_and_names_the_file(self, tmp_path, capsys, cli_argv, argv):
+        broken = tmp_path / "broken.py"
+        broken.write_text("def broken(\n", encoding="utf-8", newline="\n")
+        clean = tmp_path / "clean.py"
+        clean.write_text("x = 1\n", encoding="utf-8", newline="\n")
+        cli_argv("check_subprocess_timeout.py", *argv, str(tmp_path))
+        rc = cst.main()
+        err = capsys.readouterr().err
+        assert rc == 2
+        assert "broken.py" in err and "SyntaxError" in err
+
+    @pytest.mark.timeout(30)
+    def test_unreadable_file_exits_2_and_names_the_file(self, tmp_path, capsys, cli_argv):
+        """A ``.py`` the scan walks but cannot read fails the run.
+
+        It used to print a warning and ``continue`` — exit 0, contradicting this
+        tool's own "2 — unreadable source" (#2601). A dangling symlink is the
+        portable way to get an entry ``rglob`` yields but ``read_bytes`` rejects.
+        """
+        (tmp_path / "gone.py").symlink_to(tmp_path / "does-not-exist.py")
+        (tmp_path / "clean.py").write_text("x = 1\n", encoding="utf-8", newline="\n")
+        cli_argv("check_subprocess_timeout.py", "--ci", "--strict-subprocess-timeout",
+                 str(tmp_path))
+        rc = cst.main()
+        err = capsys.readouterr().err
+        assert rc == 2
+        assert "gone.py" in err and "cannot read" in err
+
+    @pytest.mark.timeout(60)
+    def test_cli_bom_violation_and_unparseable_file(self, tmp_path):
+        """The real CLI, as the pre-commit hook runs it."""
+        script = Path(cst.__file__).resolve()
+        bom = tmp_path / "bom.py"
+        bom.write_bytes(_BOM + _NO_TIMEOUT)
+        argv = [sys.executable, "-X", "utf8", str(script),
+                "--ci", "--strict-subprocess-timeout"]
+        proc = subprocess.run(argv + [str(bom)], capture_output=True,
+                              text=True, encoding="utf-8", timeout=60)
+        assert proc.returncode == 1, proc.stdout + proc.stderr
+        assert "subprocess.run-no-timeout" in proc.stdout
+
+        bom.write_bytes(_BOM + _BOM + _NO_TIMEOUT)
+        proc = subprocess.run(argv + [str(bom)], capture_output=True,
+                              text=True, encoding="utf-8", timeout=60)
+        assert proc.returncode == 2, proc.stdout + proc.stderr
+        assert "bom.py" in proc.stderr
