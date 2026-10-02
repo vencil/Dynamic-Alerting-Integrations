@@ -18,6 +18,7 @@ import tomllib
 
 import pytest
 from pathlib import Path
+from _platform_fs import symlink_or_skip  # noqa: E402
 
 _REPO_ROOT = Path(__file__).resolve().parents[2]
 _TOOL = _REPO_ROOT / "scripts" / "tools" / "dx" / "list_subprocess_only_modules.py"
@@ -731,7 +732,7 @@ def test_a_symlinked_module_matches_its_measured_target(tmp_path: Path) -> None:
     repo = _fixture(tmp_path, {"scripts/tools/ops/real.py": _TOOL_SRC}, coverage_map={})
     link = repo / "scripts" / "tools" / "ops" / "link.py"
     try:
-        os.symlink(repo / "scripts" / "tools" / "ops" / "real.py", link)
+        symlink_or_skip(repo / "scripts" / "tools" / "ops" / "real.py", link)
     except (OSError, NotImplementedError) as exc:       # Windows 無權限時
         pytest.skip(f"建不了 symlink：{exc}")
     subprocess.run(["git", "add", "-A"], cwd=repo, check=True, timeout=60)

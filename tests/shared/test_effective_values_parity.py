@@ -22,6 +22,11 @@ import pytest
 
 import _lib_tenant_values as tv
 from _lib_io import YamlFileError
+from _platform_fs import (  # noqa: E402
+    require_posix_modes,
+    require_shebang_scripts,
+    symlink_or_skip,
+)
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
 APP = REPO_ROOT / "components" / "threshold-exporter" / "app"
@@ -186,10 +191,11 @@ def _dangling(conf_d: Path, rel: str) -> None:
     p = conf_d / rel
     if p.exists():
         p.unlink()
-    p.symlink_to("missing.yaml")
+    symlink_or_skip("missing.yaml", p)
 
 
 def _chmod(conf_d: Path, rel: str, mode: int) -> None:
+    require_posix_modes()  # chmod 0 must really make it unreadable
     (conf_d / rel).chmod(mode)
 
 
@@ -231,7 +237,7 @@ def test_directory_symlink_is_not_unreadable(tmp_path, da_guard):
     """指向目錄的 symlink 只跳過（與 served-values 相同的例外）：照常回傳。"""
     conf_d = _tree(tmp_path, _UNREADABLE_BASE)
     (conf_d / "realdir").mkdir()
-    (conf_d / "x.yaml").symlink_to("realdir")
+    symlink_or_skip("realdir", conf_d / "x.yaml")
     got = tv.load_effective(conf_d, binary=da_guard)
     assert sorted(got) == ["tenant-a", "tenant-b"]
     assert got["tenant-b"].effective_config == {"mysql_connections": 80}
@@ -246,6 +252,7 @@ def test_output_without_unreadable_is_refused(tmp_path):
 
 
 def _fake_da_guard(tmp_path: Path, stdout: str, rc: int = 0) -> str:
+    require_shebang_scripts()  # the stand-in below is a `#!` script
     script = tmp_path / "fake-da-guard"
     script.write_text(f"#!/bin/sh\ncat <<'EOF'\n{stdout}\nEOF\nexit {rc}\n", encoding="utf-8")
     script.chmod(0o755)

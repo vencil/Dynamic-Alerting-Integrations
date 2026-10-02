@@ -25,6 +25,7 @@ _TOOLS_DIR = os.path.join(os.path.dirname(__file__), '..', '..', 'scripts', 'too
 sys.path.insert(0, _TOOLS_DIR)
 
 import fix_file_hygiene as ffh  # noqa: E402
+from _platform_fs import symlink_or_skip  # noqa: E402
 
 
 # ---------------------------------------------------------------------------
@@ -124,7 +125,7 @@ class TestFixFileNonRegular:
         target = tmp_path / "real.txt"
         target.write_bytes(b"content\n")
         link = tmp_path / "link.txt"
-        os.symlink(target, link)
+        symlink_or_skip(target, link)
 
         assert ffh.fix_file(str(link), check_only=False) is False
         # Link still points at target (not corrupted).

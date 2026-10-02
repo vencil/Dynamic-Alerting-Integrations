@@ -19,6 +19,7 @@ import sys
 from pathlib import Path
 
 import pytest
+from _platform_fs import symlink_or_skip  # noqa: E402
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
 DESCRIBE = REPO_ROOT / "scripts" / "tools" / "dx" / "describe_tenant.py"
@@ -110,8 +111,7 @@ def test_describe_tenant_matches_the_pinned_go_answer(tree, tmp_path: Path) -> N
         # `target_is_directory` only matters on Windows; a dangling target
         # (created later in this loop) is fine on POSIX.
         try:
-            os.symlink(target, tmp_path / link,
-                       target_is_directory=(tmp_path / link).parent.joinpath(target).is_dir())
+            symlink_or_skip(target, tmp_path / link, target_is_directory=(tmp_path / link).parent.joinpath(target).is_dir())
         except (OSError, NotImplementedError) as exc:
             pytest.skip(f"symlinks unavailable here: {exc}")
     # #1967: `conf_d` (optional) names the directory handed over as conf.d,

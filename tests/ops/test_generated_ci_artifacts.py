@@ -341,6 +341,7 @@ sys.path.insert(0, str(_TESTS_DIR / "ops"))
 
 import init_project as ip  # noqa: E402
 from test_init_project import CI_DEPLOY_COMBINATIONS  # noqa: E402
+from _platform_fs import symlink_or_skip  # noqa: E402
 
 
 # ============================================================
@@ -5380,7 +5381,7 @@ def _symlinks_usable(tmp: Path) -> bool:
     probe.mkdir(parents=True, exist_ok=True)
     (probe / "target").write_text("x\n", encoding="utf-8", newline="\n")
     try:
-        (probe / "link").symlink_to("target")
+        symlink_or_skip("target", probe / "link")
     except (OSError, NotImplementedError):
         return False
     return (probe / "link").is_symlink()
@@ -5421,7 +5422,7 @@ def _synthetic_repo(root: Path, *, base_has_config: bool,
             # does not, so a count-based post-condition failed a perfectly
             # healthy repository here. Measured before the fix: rc=1 with the
             # extraction fully correct.
-            (root / "conf.d" / "db-alias.yaml").symlink_to("db-a.yaml")
+            symlink_or_skip("db-a.yaml", root / "conf.d" / "db-alias.yaml")
     _git(root, "add", "-A")
     if submodule:
         # A gitlink whose commit belongs to no repository reachable from here

@@ -132,7 +132,7 @@ def _symlinks_usable(tmp) -> bool:
     probe.mkdir(parents=True, exist_ok=True)
     (probe / 'target').write_text('x\n', encoding='utf-8', newline='\n')
     try:
-        (probe / 'link').symlink_to('target')
+        symlink_or_skip('target', probe / 'link')
     except (OSError, NotImplementedError):
         return False
     return (probe / 'link').is_symlink()
@@ -559,6 +559,7 @@ from _stub_declared_shared import (  # noqa: E402
     shipped_chart_declared_keys,
     stub_key_lines as _stub_key_lines,
 )
+from _platform_fs import symlink_or_skip  # noqa: E402
 
 # The parameterised difference: this generator renders the English stub.
 _LANG = 'en'
@@ -1915,7 +1916,7 @@ class TestKustomizeBaseEnumeratesConfd:
                 with open(os.path.join(conf, name), 'w', encoding='utf-8') as fh:
                     fh.write('tenants: {}\n')
             for name, target in links.items():
-                os.symlink(target, os.path.join(conf, name))
+                symlink_or_skip(target, os.path.join(conf, name))
             run = subprocess.run([_BASH, '-c', cmd], cwd=base,
                                  capture_output=True, text=True, encoding="utf-8", errors="replace", timeout=30)
             assert run.returncode == 0, run.stderr
@@ -1948,8 +1949,7 @@ class TestKustomizeBaseEnumeratesConfd:
             for name in ('a.yaml', 'b.yml'):
                 with open(os.path.join(conf, name), 'w', encoding='utf-8') as fh:
                     fh.write(f'tenants: {{{name[0]}: {{}}}}\n')
-                os.symlink(os.path.join('..', '..', 'conf.d', name),
-                           os.path.join(base, name))
+                symlink_or_skip(os.path.join('..', '..', 'conf.d', name), os.path.join(base, name))
             run = subprocess.run([_BASH, '-c', cmd], cwd=base,
                                  capture_output=True, text=True, encoding="utf-8", errors="replace", timeout=30)
             assert run.returncode == 0, run.stderr
@@ -2082,7 +2082,7 @@ class TestKustomizeBaseEnumeratesConfd:
             os.makedirs(os.path.join(conf, 't-dir.yaml'))
             broken = _symlinks_usable(os.path.join(tmp, 'probe'))
             if broken:
-                os.symlink('nowhere.yaml', os.path.join(conf, 't-gone.yaml'))
+                symlink_or_skip('nowhere.yaml', os.path.join(conf, 't-gone.yaml'))
             capsys.readouterr()
             ip.run_init(dict(_KUST_CFG, tenants=['t-one']), tmp)
             err = capsys.readouterr().err
@@ -3174,7 +3174,7 @@ class TestRunInit:
             os.makedirs(os.path.dirname(outside))
             target = os.path.join(tmpdir, 'repo')
             os.makedirs(target)
-            os.symlink(outside, os.path.join(target, '.gitlab-ci.yml'))
+            symlink_or_skip(outside, os.path.join(target, '.gitlab-ci.yml'))
             config = {
                 'ci': 'gitlab',
                 'deploy': 'kustomize',
@@ -5650,7 +5650,7 @@ class TestRoundEightFindings:
             out = _P(tmpdir) / 'out'
             out.mkdir()
             escaped = _P(tmpdir) / 'ESCAPED.yaml'
-            (out / '.da-init.yaml').symlink_to(escaped)
+            symlink_or_skip(escaped, out / '.da-init.yaml')
             r = subprocess.run(
                 [sys.executable, str(_P(ip.__file__)), '--non-interactive',
                  '--tenants', 'db-a', '--ci', 'github', '-o', str(out)],

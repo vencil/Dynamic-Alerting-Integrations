@@ -81,6 +81,7 @@ import sys
 from pathlib import Path
 
 import pytest
+from _platform_fs import require_shebang_scripts  # noqa: E402
 
 from _pysource import parse_py
 
@@ -1031,6 +1032,10 @@ raise SystemExit(9)
 @pytest.fixture
 def gh_stub(tmp_path):
     """Put a stub `gh` first on PATH and hand back a runner for the CLI."""
+    # ⛔ Without this, a host that cannot run a `#!` script as a command
+    # (Windows) resolves `gh` to the REAL gh.exe further down PATH and the
+    # test queries the real repository instead of the stub (#2559).
+    require_shebang_scripts()
     binhome = tmp_path / "bin"
     binhome.mkdir()
     stub = binhome / "gh"
@@ -1226,6 +1231,10 @@ def test_from_gh_two_runs_on_one_calendar_night_do_not_satisfy_k_of_2(tmp_path):
     "2 consecutive nights" from ONE measurement occasion and the header read
     `FINDINGS over 2 counted night(s) ... (2026-08-20 .. 2026-08-20)`.
     """
+    # ⛔ Without this, a host that cannot run a `#!` script as a command
+    # (Windows) resolves `gh` to the REAL gh.exe further down PATH and the
+    # test queries the real repository instead of the stub (#2559).
+    require_shebang_scripts()
     binhome = tmp_path / "bin"
     binhome.mkdir()
     stub = binhome / "gh"
@@ -1460,6 +1469,10 @@ def test_from_gh_never_borrows_a_head_sha_for_an_unidentifiable_run(tmp_path):
     last — a wrong sha that renders exactly like a right one, in the column
     that exists to attribute payloads to producers.
     """
+    # ⛔ Without this, a host that cannot run a `#!` script as a command
+    # (Windows) resolves `gh` to the REAL gh.exe further down PATH and the
+    # test queries the real repository instead of the stub (#2559).
+    require_shebang_scripts()
     binhome = tmp_path / "bin"
     binhome.mkdir()
     stub = binhome / "gh"

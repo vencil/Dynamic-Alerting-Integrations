@@ -725,7 +725,7 @@ class TestSameResultAsInPlace:
         def swapped(*a, **k):
             fd, name = real_mkstemp(*a, **k)
             os.unlink(name)
-            os.symlink(victim, name)
+            symlink_or_skip(victim, name)
             return fd, name
 
         monkeypatch.setattr(tempfile, "mkstemp", swapped)
