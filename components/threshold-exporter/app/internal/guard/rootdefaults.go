@@ -247,8 +247,9 @@ func checkRootCriticalKeys(input CheckInput) []Finding {
 				Message: fmt.Sprintf("%s: `%s` under the conf.d root `defaults:` is served as a threshold of its own "+
 					"(severity=warning), not as the severity=critical row of `%s`: only a tenant's own `%s` "+
 					"(or one a subtree `_defaults.yaml`, a root platform `tenants:` entry or a profile supplies) "+
-					"produces that row, so this root value is never what a tenant falls back to, and a tenant's "+
-					"`%s` is not reported redundant against it.", f.Name, k, base, k, k),
+					"produces that row. A tenant deleting its own `%s` falls back to this root value only on that "+
+					"separate warning series, never on the critical row, so the tenant's key is not reported "+
+					"redundant against it.", f.Name, k, base, k, k),
 			})
 		}
 	}
