@@ -8,14 +8,18 @@ package main
 // `pkg/config` (with capital exports for library consumers like
 // `cmd/da-guard` and `tenant-api`).
 //
-// These wrappers exist so `package main` files (config.go,
-// config_debounce.go, config_simulate.go, config_defaults_diff.go)
-// keep compiling without renaming every `deepMerge(...)` /
-// `computeEffectiveConfig(...)` call site. Behavior pin: every wrapper
-// is `return config.X(args...)`, no extra logic.
+// Behavior pin: every wrapper is `return config.X(args...)`, no extra
+// logic. Current callers outside tests: `parseChainDefaults` /
+// `chainDefaults` (config.go, the cold-merge chain cache) and
+// `logMergeSkip` (config.go, config_debounce.go). `deepMerge`,
+// `normalizeYAMLToJSON`, `extractDefaultsBlock`, `canonicalJSON` and
+// `computeMergedHash` are called only from tests
+// (config_inheritance_test.go, config_golden_parity_test.go).
+// #2586 removed `computeEffectiveConfig` and `computeSourceHash`; their
+// tests call config.ComputeEffectiveConfig / config.ComputeSourceHash.
 //
 // The 8 semantic traps from §8.11.2 are enforced inside `pkg/config`
-// (deepMerge / computeEffectiveConfig / computeMergedHash). Golden
+// (DeepMerge / ComputeEffectiveConfig / ComputeMergedHash). Golden
 // fixtures in config_golden_parity_test.go pin the 16-char merged_hash
 // output across Go and Python implementations.
 
@@ -48,17 +52,6 @@ func canonicalJSON(data any) ([]byte, error) {
 	return config.CanonicalJSON(data)
 }
 
-// computeEffectiveConfig builds the merged dict over a defaults chain
-// + tenant override. Used by simulate + recomputeMergedHash.
-func computeEffectiveConfig(
-	tenantYAMLBytes []byte,
-	tenantID string,
-	defaultsChainYAML [][]byte,
-	layers ...config.TenantLayers,
-) (map[string]any, error) {
-	return config.ComputeEffectiveConfig(tenantYAMLBytes, tenantID, defaultsChainYAML, layers...)
-}
-
 // computeMergedHash returns the 16-char tenant-config fingerprint.
 // `layers` is the tenant's platform overlay (#2019) and the tree's
 // profiles (#2117); see config.ComputeEffectiveConfig.
@@ -80,11 +73,6 @@ func computeMergedHash(
 type chainDefaults = config.ChainDefaults
 
 func parseChainDefaults(b []byte) chainDefaults { return config.ParseChainDefaults(b) }
-
-// computeSourceHash returns the 16-char source-file fingerprint.
-func computeSourceHash(tenantYAMLBytes []byte) string {
-	return config.ComputeSourceHash(tenantYAMLBytes)
-}
 
 // logMergeSkip — APP-ONLY. Standardizes the skip-with-context log line
 // used when one tenant's merge fails while others succeed. Stays in

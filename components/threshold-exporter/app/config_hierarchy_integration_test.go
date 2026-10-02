@@ -85,10 +85,12 @@ tenants:
 	}
 }
 
-// TestResolve_ReturnsEffectiveConfig verifies the /effective happy path:
-// the merged config contains both L0 defaults (inherited) and tenant
-// override applied correctly.
-func TestResolve_ReturnsEffectiveConfig(t *testing.T) {
+// TestHierarchicalLoad_CommitsChainAndServesOverride verifies the cold-Load
+// happy path on both halves of the exporter's state: the committed hierarchy
+// knows the tenant (source file, L0 chain, 16-char merged_hash) and does not
+// know an undeclared one, and /metrics serves the tenant override (90) over
+// the inherited L0 default (80).
+func TestHierarchicalLoad_CommitsChainAndServesOverride(t *testing.T) {
 	dir := t.TempDir()
 	writeHierarchicalFixture(t, dir, "90") // tenant-a overrides mysql_connections=90
 
@@ -98,18 +100,12 @@ func TestResolve_ReturnsEffectiveConfig(t *testing.T) {
 		t.Fatalf("Load: %v", err)
 	}
 
-	ec, ok := m.Resolve("tenant-a")
+	ec, ok := committedTenantState(m, "tenant-a")
 	if !ok {
-		t.Fatalf("tenant-a not resolved")
-	}
-	if ec.TenantID != "tenant-a" {
-		t.Errorf("TenantID = %q, want tenant-a", ec.TenantID)
+		t.Fatalf("tenant-a is not in the committed hierarchy")
 	}
 	if ec.SourceFile == "" {
 		t.Errorf("SourceFile empty")
-	}
-	if len(ec.SourceHash) != 16 {
-		t.Errorf("SourceHash length = %d, want 16 (hex[:16])", len(ec.SourceHash))
 	}
 	if len(ec.MergedHash) != 16 {
 		t.Errorf("MergedHash length = %d, want 16 (hex[:16])", len(ec.MergedHash))
@@ -117,36 +113,11 @@ func TestResolve_ReturnsEffectiveConfig(t *testing.T) {
 	if len(ec.DefaultsChain) == 0 {
 		t.Errorf("DefaultsChain empty; expected at least 1 (L0 _defaults.yaml)")
 	}
-	if ec.Config == nil {
-		t.Errorf("Config nil")
-	} else if got := ec.Config["mysql_connections"]; got != "90" {
-		// Tenant override wins — the scalar "90" (string, because
-		// ScheduledValue → string after parse) should be the merged value.
-		// Note: the low-level computeEffectiveConfig produces raw YAML
-		// values (yaml.v3 → map[string]any), where mysql_connections: "90"
-		// parses as string "90".
-		t.Errorf("mysql_connections = %v (%T), want \"90\"", got, got)
+	if got, ok := seriesFor(t, m, "tenant-a", "connections"); !ok || got != 90 {
+		t.Errorf("/metrics connections for tenant-a = %v (present=%v), want 90 — the tenant override must win over the L0 default 80", got, ok)
 	}
-}
-
-// TestResolve_UnknownTenant_Returns404Signal verifies the (nil, false)
-// shape used by the /effective handler to emit 404 Not Found.
-func TestResolve_UnknownTenant_Returns404Signal(t *testing.T) {
-	dir := t.TempDir()
-	writeHierarchicalFixture(t, dir, "90")
-
-	m := NewConfigManager(dir)
-	defer m.Close()
-	if err := m.Load(); err != nil {
-		t.Fatalf("Load: %v", err)
-	}
-
-	ec, ok := m.Resolve("nonexistent-tenant")
-	if ok {
-		t.Errorf("Resolve should return ok=false for unknown tenant, got ec=%v", ec)
-	}
-	if ec != nil {
-		t.Errorf("ec should be nil for unknown tenant, got %v", ec)
+	if _, ok := committedTenantState(m, "nonexistent-tenant"); ok {
+		t.Errorf("an undeclared tenant is in the committed hierarchy")
 	}
 }
 

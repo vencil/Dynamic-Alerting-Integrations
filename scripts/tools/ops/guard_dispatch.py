@@ -42,13 +42,13 @@ at the top of cmd/da-guard/main.go):
   0  clean
   1  guard found errors
   2  caller error / binary missing
-  3  config files the exporter cannot decode (#2123)
+  3  config files the exporter cannot decode (#2123) or read (#2588)
 
 Usage:
   da-tools guard served-values --config-dir conf.d/ [--at 2026-07-01T03:00:00Z]
   da-tools guard effective --config-dir conf.d/
   da-tools guard defaults-impact --config-dir conf.d/
-  da-tools guard defaults-impact --config-dir conf.d/ --scope conf.d/db/ \\
+  da-tools guard defaults-impact --config-dir conf.d/ --scope db/ \\
       --required-fields cpu,memory
 
 v2.8.0 PR-2: dispatcher boilerplate (binary resolution, subcommand
@@ -80,7 +80,8 @@ _USAGE_EN = (
     "\n"
     "Flags (most common; full list via `da-tools guard defaults-impact --help`):\n"
     "  --config-dir <path>          Required. conf.d/ root.\n"
-    "  --scope <path>               Sub-directory to validate (default: whole tree).\n"
+    "  --scope <path>               Sub-directory to validate, relative to --config-dir\n"
+    "                               (default: whole tree).\n"
     "  --required-fields <a,b,c>    Comma-separated dotted paths every tenant must have.\n"
     "  --cardinality-limit <n>      Per-tenant predicted-metric ceiling (0 disables).\n"
     "                               Omitted: the root _defaults.yaml's\n"
@@ -91,7 +92,7 @@ _USAGE_EN = (
     "\n"
     "Exit codes (from da-guard):\n"
     "  0  clean    1  guard found errors    2  caller error / binary missing\n"
-    "  3  config files the exporter cannot decode (see docs/cli-reference.md §guard)\n"
+    "  3  config files the exporter cannot decode or read (see docs/cli-reference.md §guard)\n"
     "\n"
     "Binary resolution:\n"
     "  1. --da-guard-binary <path>\n"
@@ -101,7 +102,7 @@ _USAGE_EN = (
     "Examples:\n"
     "  da-tools guard defaults-impact --config-dir conf.d/\n"
     "  da-tools guard defaults-impact --config-dir conf.d/ \\\n"
-    "      --scope conf.d/db/ --format json\n"
+    "      --scope db/ --format json\n"
 )
 
 _USAGE_ZH = (
@@ -117,7 +118,7 @@ _USAGE_ZH = (
     "\n"
     "常用選項 (完整選項見 `da-tools guard defaults-impact --help`):\n"
     "  --config-dir <path>          必填，conf.d/ 根目錄。\n"
-    "  --scope <path>               限定驗證的子目錄 (預設: 整棵樹)。\n"
+    "  --scope <path>               限定驗證的子目錄，相對於 --config-dir (預設: 整棵樹)。\n"
     "  --required-fields <a,b,c>    每個租戶 effective config 必有的點分路徑欄位 (CSV)。\n"
     "  --cardinality-limit <n>      每租戶 metric 數上限 (0 = 關閉檢查)。\n"
     "                               省略時取根目錄 _defaults.yaml 的\n"
@@ -128,7 +129,7 @@ _USAGE_ZH = (
     "\n"
     "Exit code (來自 da-guard):\n"
     "  0  通過    1  guard 偵測到 error    2  caller error / 找不到 binary\n"
-    "  3  exporter 無法 decode 的設定檔（見 docs/cli-reference.md §guard）\n"
+    "  3  exporter 無法 decode 或讀不到的設定檔（見 docs/cli-reference.md §guard）\n"
     "\n"
     "Binary 解析順序:\n"
     "  1. --da-guard-binary <path>\n"
@@ -138,7 +139,7 @@ _USAGE_ZH = (
     "範例:\n"
     "  da-tools guard defaults-impact --config-dir conf.d/\n"
     "  da-tools guard defaults-impact --config-dir conf.d/ \\\n"
-    "      --scope conf.d/db/ --format json\n"
+    "      --scope db/ --format json\n"
 )
 
 # `defaults-impact` is a Python-side organising layer — da-guard's

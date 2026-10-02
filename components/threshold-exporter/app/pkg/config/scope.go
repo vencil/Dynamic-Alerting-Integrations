@@ -34,7 +34,8 @@ package config
 //     Only tenants whose tenant.yaml file lives at-or-below scopeDir
 //     are returned. This matches the GitHub Actions trigger:
 //     "_defaults.yaml at path X changed; validate everyone under
-//     dirname(X)".
+//     dirname(X)" — passed relative to configDir (or absolute), since a
+//     relative scopeDir is resolved against configDir (#2588).
 //
 //   - scopeDir equal to configDir means "validate every tenant in
 //     the tree". That's the natural pre-commit / local-dev flow.
@@ -58,6 +59,8 @@ import (
 	"path/filepath"
 	"sort"
 	"strings"
+
+	"github.com/vencil/threshold-exporter/internal/confdname"
 )
 
 // ScopedTenants is the bundle ScopeEffective returns: per-tenant
@@ -98,6 +101,37 @@ type ScopedTenants struct {
 	// (routingpolicy.UnreadRouting). A file in ParseFailed is listed too;
 	// the caller skips it.
 	DefaultsFiles []DefaultsFile
+
+	// Unreadable is every entry of the walk's TreeScan.Unreadable — a
+	// config-named file whose stat or read failed (a dangling symlink, a file
+	// the process may not read) and a directory below the root it could not
+	// list — that bears on the scope. A file (stat_error / read_error) bears
+	// by ParseFailed's rule: at or below the scope, or a `_` file in a
+	// directory above it. A directory (walk_error) bears only by the
+	// directory rule: it is the scope, lies below it, or contains it — a
+	// `_`-named directory beside the scope does not. Same entries, same order (by RelKey) as the exporter's own load
+	// (LoadReport.Unreadable) over the whole tree; nil when there are none
+	// (#2588). A symlink to a directory is not listed.
+	//
+	// ⛔ Not an error, like ParseFailed and for the same reason: the walker
+	// skips the entry and serves the rest. Tenants silently omits the tenants
+	// such a file declares, and an effective config silently lacks what an
+	// unreadable `_defaults.yaml` would have given it — a caller that turns
+	// this result into a verdict must read this field too.
+	//
+	// ⚠️ Also filled when ScopeEffective returns a *DecodeError: the result
+	// then carries this field (and ParseFailed, DefaultsFiles) and no tenant,
+	// so a run stopped by one undecodable file still names the unreadable
+	// ones. Every other error returns a nil result.
+	Unreadable []UnreadableFile
+
+	// NestedPlatformFiles is every `_` file below the root that is not a
+	// defaults carrier spelling (confdname.IsDefaults) and bears on the
+	// scope, with the bytes the scan read, sorted by Name (#2439). The
+	// exporter reads none of them, so only the YAML parser's verdict puts
+	// one in ParseFailed; da-guard checks them for the repeated keys the
+	// route generator refuses (withGeneratorDuplicates).
+	NestedPlatformFiles []DefaultsFile
 }
 
 // DefaultsFile is one defaults carrier of a scan: its root-relative slash
@@ -111,9 +145,11 @@ type DefaultsFile struct {
 // whose YAML file lives at-or-below scopeDir, using configDir as
 // the conf.d root for chain resolution.
 //
-// Both arguments are absolute or relative filesystem paths;
-// scopeDir must be at-or-below configDir after Clean. An empty
-// scopeDir defaults to configDir (whole tree).
+// configDir is an absolute path or one relative to the working directory.
+// scopeDir is an absolute path or one relative to configDir — NOT to the
+// working directory (#2588: `--config-dir conf.d --scope db`, "." = the
+// root). It must be at-or-below configDir after Clean. An empty scopeDir
+// defaults to configDir (whole tree).
 //
 // Errors:
 //   - configDir doesn't exist or isn't a directory.
@@ -129,8 +165,13 @@ type DefaultsFile struct {
 //
 // A tenant file that is unreadable or not valid YAML is not an error: the
 // walker logs (here: discards) and skips it, as the exporter does. A file
-// the decode rejects is listed in ScopedTenants.ParseFailed (#2123) so the
-// caller can still tell "no tenants" from "tenants it could not read".
+// the decode rejects is listed in ScopedTenants.ParseFailed (#2123), and a
+// file or directory the walk cannot stat, read or list in
+// ScopedTenants.Unreadable (#2588), so the caller can still tell "no
+// tenants" from "tenants it could not read".
+//
+// A *DecodeError is returned WITH a non-nil result that holds no tenant
+// (see ScopedTenants.Unreadable); every other error with a nil one.
 //
 // configDir and scopeDir are both symlink-resolved (AbsScanRoot) before
 // the containment check, so a symlinked --config-dir and a --scope spelled
@@ -180,7 +221,22 @@ func scopeEffective(configDir, scopeDir string, wholeTree bool) (*ScopedTenants,
 		return nil, err
 	}
 	absRoot = scan.AbsRoot
-	if wholeTree && len(scan.Files) == 0 {
+	// ⛔ A root the walk cannot list is not an empty tree (#2588). The walker
+	// records no Unreadable entry for the root itself (TreeScan.RootWalkErr),
+	// so the scoped mode — where an empty tree is a valid, vacuously-safe
+	// scope — would read it as "nothing in scope". Refuse it, as the
+	// exporter's load does. Checked BEFORE the whole-tree "no .yaml files"
+	// refusal, so an unlistable root is reported with the walk's error
+	// (e.g. permission denied) in the scoped and the whole-tree mode alike.
+	if len(scan.Files) == 0 && scan.RootWalkErr != nil {
+		return nil, fmt.Errorf("cannot list configDir %q: %w", absRoot, scan.RootWalkErr)
+	}
+	// A tree the walk kept no file from because every config file is
+	// unreadable, or because its only entries are directories it cannot list,
+	// is not "no .yaml files" either: it goes on with no tenant and its
+	// Unreadable entries named (the caller's exit 3), as when one readable
+	// file is beside them (#2588).
+	if wholeTree && len(scan.Files) == 0 && len(scan.Unreadable) == 0 {
 		return nil, fmt.Errorf("no .yaml files found in %s", configDir)
 	}
 
@@ -191,7 +247,13 @@ func scopeEffective(configDir, scopeDir string, wholeTree bool) (*ScopedTenants,
 	// "outside configDir").
 	absScope := absRoot
 	if scopeDir != "" {
-		absScope = AbsScanRoot(scopeDir)
+		// A relative scope is relative to configDir (#2588), joined to it as
+		// given so the symlink resolution below treats both spellings alike.
+		s := scopeDir
+		if !filepath.IsAbs(s) {
+			s = filepath.Join(configDir, s)
+		}
+		absScope = AbsScanRoot(s)
 	}
 
 	// Containment check. filepath.Rel produces "../" when scope
@@ -230,8 +292,10 @@ func scopeEffective(configDir, scopeDir string, wholeTree bool) (*ScopedTenants,
 		return nil, err
 	}
 	defaultsFiles := scopeDefaultsFiles(scan, filepath.ToSlash(rel))
+	unreadable := scopeUnreadable(scan, filepath.ToSlash(rel))
+	nestedFiles := scopeNestedPlatformFiles(scan, filepath.ToSlash(rel))
 	if len(inScope) == 0 {
-		return &ScopedTenants{ParseFailed: parseFailed, DefaultsFiles: defaultsFiles}, nil
+		return &ScopedTenants{ParseFailed: parseFailed, DefaultsFiles: defaultsFiles, Unreadable: unreadable, NestedPlatformFiles: nestedFiles}, nil
 	}
 
 	// Sort tenant IDs for deterministic output. The CLI's exit-code
@@ -250,9 +314,11 @@ func scopeEffective(configDir, scopeDir string, wholeTree bool) (*ScopedTenants,
 	resolver := newEffectiveResolver(scan)
 	resolver.withSources = wholeTree
 	out := &ScopedTenants{
-		Tenants:       make([]*EffectiveConfig, 0, len(tenantIDs)),
-		ParseFailed:   parseFailed,
-		DefaultsFiles: defaultsFiles,
+		Tenants:             make([]*EffectiveConfig, 0, len(tenantIDs)),
+		ParseFailed:         parseFailed,
+		DefaultsFiles:       defaultsFiles,
+		Unreadable:          unreadable,
+		NestedPlatformFiles: nestedFiles,
 	}
 	seenFiles := make(map[string]struct{}, len(tenantIDs))
 	for _, id := range tenantIDs {
@@ -265,7 +331,14 @@ func scopeEffective(configDir, scopeDir string, wholeTree bool) (*ScopedTenants,
 			if errors.As(err, &dup) {
 				return nil, err
 			}
-			return nil, fmt.Errorf("resolve tenant %q: %w", id, err)
+			err = fmt.Errorf("resolve tenant %q: %w", id, err)
+			// A file that does not decode stops the scope; the files the walk
+			// could not read are still the caller's to name (#2588).
+			var de *DecodeError
+			if errors.As(err, &de) {
+				return &ScopedTenants{ParseFailed: parseFailed, DefaultsFiles: defaultsFiles, Unreadable: unreadable}, err
+			}
+			return nil, err
 		}
 		out.Tenants = append(out.Tenants, ec)
 		seenFiles[ec.SourceFile] = struct{}{}
@@ -332,6 +405,44 @@ func scopeDefaultsFiles(scan *TreeScan, scopeRel string) []DefaultsFile {
 		key := filepath.ToSlash(rel)
 		f, ok := scan.Files[key]
 		if !ok || f.Data == nil || !bearsOnScope(key, scopeRel) {
+			continue
+		}
+		out = append(out, DefaultsFile{Name: key, Data: f.Data})
+	}
+	sort.Slice(out, func(i, j int) bool { return out[i].Name < out[j].Name })
+	return out
+}
+
+// scopeUnreadable is ScopedTenants.Unreadable: the scan's Unreadable entries
+// that bear on the scope. A file follows bearsOnScope (ParseFailed's rule); a
+// directory the walk could not list (walk_error) bears only when it is the
+// scope, lies below it, or contains it — everything under it is lost. A
+// directory never takes the `_`-file branch of bearsOnScope: an unlistable
+// `_archive/` beside the scope holds nothing the scope reads.
+func scopeUnreadable(scan *TreeScan, scopeRel string) []UnreadableFile {
+	var out []UnreadableFile
+	for _, u := range scan.Unreadable { // sorted by RelKey (ScanDirTree)
+		var bears bool
+		if u.Reason == UnreadableWalkError {
+			bears = scopeRel == "." || u.RelKey == scopeRel ||
+				strings.HasPrefix(u.RelKey, scopeRel+"/") || strings.HasPrefix(scopeRel+"/", u.RelKey+"/")
+		} else {
+			bears = bearsOnScope(u.RelKey, scopeRel)
+		}
+		if bears {
+			out = append(out, u)
+		}
+	}
+	return out
+}
+
+// scopeNestedPlatformFiles is ScopedTenants.NestedPlatformFiles.
+func scopeNestedPlatformFiles(scan *TreeScan, scopeRel string) []DefaultsFile {
+	var out []DefaultsFile
+	for _, key := range scan.Keys {
+		f := scan.Files[key]
+		if f == nil || f.Data == nil || !isNestedPlatformFile(key) ||
+			confdname.IsDefaults(scanKeyBase(key)) || !bearsOnScope(key, scopeRel) {
 			continue
 		}
 		out = append(out, DefaultsFile{Name: key, Data: f.Data})

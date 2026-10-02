@@ -6,7 +6,7 @@ package config
 //
 // Two production code paths share the hierarchical merge engine:
 //
-//  1. ConfigManager.Resolve / WatchLoop — reads from disk under
+//  1. ConfigManager's Load / WatchLoop — reads from disk under
 //     `--config-dir`, walks `_defaults.yaml` chains, computes
 //     `merged_hash` per tenant. The InheritanceGraph is a snapshot of
 //     what's currently on disk.

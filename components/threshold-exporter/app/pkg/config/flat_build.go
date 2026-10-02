@@ -237,14 +237,43 @@ func isNestedPlatformFile(key string) bool {
 // incrementing `parse_failure` and stopped logging at all. A syntax-only probe
 // answers the right question — the same one `ERROR:` has always meant here.
 //
+// ⛔ SYNTAX MEANS THE PARSER, NOT THE DECODE INTO `any` (#2439). Only a
+// defaults carrier (confdname.IsDefaults) below the root is read by this
+// exporter at all — the subtree chain decodes it into `any`
+// (ParseChainDefaults), so a decode failure there drops the block for real
+// and stays a parse failure here. Every other nested `_` file
+// (`_domain_policy.yaml`, `_routing_profiles.yaml`, `_profiles.yaml`, a
+// notes file) is read by no plane of this exporter; for it only what the
+// YAML parser refuses counts. A tag the decode rejects (`a: !!null x`,
+// which PyYAML and the route generator read fine), a repeated key or any
+// other content the `any` decode refuses is not a parse failure of a file
+// the exporter never consumes — it used to raise da_config_parse_failure_total
+// and da-guard's exit 3 for a tree the generator accepts. Readers that DO
+// consume such a file judge it themselves (routingpolicy.LoadTree reports
+// an unusable nested policy / routing-profiles file; da-guard names a
+// repeated key the generator refuses, ScopedTenants.NestedPlatformFiles).
+//
 // Returns the probe's decode and ok=true when the file is syntactically
 // fine, so reportNestedPlatformTenants can inspect it WITHOUT a second
 // parse (a separate decode there measured +10k allocs / +1.4 MiB per
 // DiffAndReload_Hierarchical_1000 reload — every nested carrier parsed
-// twice on every full load, #1982 bench gate).
+// twice on every full load, #1982 bench gate). ⚠️ So the healthy path is
+// still the ONE decode into `any`; only a non-carrier that decode refuses
+// is parsed a second time, into a yaml.Node, to tell a syntax error from
+// content the decode does not want. Parsing every file into a Node first
+// and decoding that measured +600 allocs / +62 KiB per
+// DiffAndReload_Hierarchical_1000 reload on a tree with no broken file.
+// A non-carrier that parses but does not decode comes back fine, with the
+// top-level keys of that same parse (topLevelKeysProbe) for the WARNs.
 func reportUnparseableNestedPlatformFile(fullPath string, data []byte, metrics ScanObserver, logger *log.Logger) (any, bool) {
 	var probe any
 	err := yaml.Unmarshal(data, &probe)
+	if err != nil && !confdname.IsDefaults(filepath.Base(fullPath)) {
+		var doc yaml.Node
+		if yaml.Unmarshal(data, &doc) == nil {
+			probe, err = topLevelKeysProbe(&doc), nil
+		}
+	}
 	if err == nil {
 		// Syntactically fine; its content simply is not for this plane —
 		// except a key that exists ONLY on this plane (#2028). Subtree
@@ -263,6 +292,46 @@ func reportUnparseableNestedPlatformFile(fullPath string, data []byte, metrics S
 	}
 	logger.Printf("ERROR: skip unparseable defaults/profiles file %q: %v (entire block dropped — fix file or remove)", fullPath, err)
 	return nil, false
+}
+
+// topLevelKeysProbe stands in for the `any` decode of a nested file that
+// parses but does not decode: the document's top-level keys, and the keys
+// of its `tenants:` mapping, with nil values — all that the WARNs in
+// reportUnparseableNestedPlatformFile and reportNestedPlatformTenants read.
+// Built from the Node already parsed, never a parse of its own. A
+// top-level `<<` merge is not expanded (best effort: the WARNs only).
+func topLevelKeysProbe(doc *yaml.Node) any {
+	if doc.Kind != yaml.DocumentNode || len(doc.Content) == 0 {
+		return nil
+	}
+	top := doc.Content[0]
+	if top.Kind != yaml.MappingNode {
+		return nil
+	}
+	out := make(map[string]any, len(top.Content)/2)
+	for i := 0; i+1 < len(top.Content); i += 2 {
+		key, val := top.Content[i], top.Content[i+1]
+		if key.Kind != yaml.ScalarNode {
+			continue
+		}
+		var v any
+		if key.Value == "tenants" {
+			for val.Kind == yaml.AliasNode && val.Alias != nil {
+				val = val.Alias
+			}
+			if val.Kind == yaml.MappingNode {
+				ids := make(map[string]any, len(val.Content)/2)
+				for j := 0; j+1 < len(val.Content); j += 2 {
+					if val.Content[j].Kind == yaml.ScalarNode {
+						ids[val.Content[j].Value] = nil
+					}
+				}
+				v = ids
+			}
+		}
+		out[key.Value] = v
+	}
+	return out
 }
 
 // parsePartialConfig decodes one config file's bytes with the ONE decode,

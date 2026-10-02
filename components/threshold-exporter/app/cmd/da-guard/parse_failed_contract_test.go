@@ -75,6 +75,16 @@ func contractCases() map[string]map[string]string {
 		"N1_nested_defaults_type":   base(map[string]string{"db/_defaults.yaml": "defaults:\n  mem: abc\n  disk: 50\n"}),
 		"N2_nested_defaults_syntax": base(map[string]string{"db/_defaults.yaml": "defaults:\n  mem: [90\n"}),
 		"N3_nested_defaults_dupkey": base(map[string]string{"db/_defaults.yaml": "defaults:\n  mem: 90\n  mem: 91\n"}),
+		// #2439: a tag the untyped decode refuses. The nested carrier is read
+		// (dropped); a nested file the exporter never reads is not, unless
+		// the parser itself refuses it.
+		"N4_nested_defaults_tag": base(map[string]string{"db/_defaults.yaml": "defaults:\n  mem: 90\nnote: !!null x\n"}),
+		"N5_nested_policy_tag":   base(map[string]string{"db/_domain_policy.yaml": "domain_policies:\n  d1:\n    tenants: [tenant-b]\n    note: !!null x\n"}),
+		"N6_nested_notes_tag":    base(map[string]string{"db/_notes.yaml": "note: !!null x\n"}),
+		"N7_nested_notes_syntax": base(map[string]string{"db/_notes.yaml": "note: [1,\n"}),
+		// #2439 review F1: a repeated key there is the generator's refusal.
+		"N8_nested_notes_dupkey":          base(map[string]string{"db/_notes.yaml": "note: 1\nnote: 2\n"}),
+		"N9_nested_route_profiles_dupkey": base(map[string]string{"db/_routing_profiles.yaml": "routing_profiles:\n  p1: {}\n  p1: {}\n"}),
 
 		"T1_tenant_type":   base(map[string]string{"db/tenant-b.yaml": "tenants:\n  tenant-b: 5\n"}),
 		"T2_tenant_syntax": base(map[string]string{"db/tenant-b.yaml": "tenants:\n  tenant-b:\n    mem: [60\n"}),
@@ -143,9 +153,10 @@ func guardUndecodable(tree map[string]string, scopeRel string) []string {
 // key — pyyamlcompat.FindDuplicateKeyIn, which its oracle table pins to the
 // generator's StrictLoader. Read for the scope: each tenant file under it
 // (every one in these trees declares a tenant), every `_defaults.yaml`
-// bearing on it, and the root's other platform files except the
+// bearing on it, the root's other platform files except the
 // `_domain_policy` / `_routing_profiles` files (routingpolicy names those as
-// a Problem, never exit 3).
+// a Problem, never exit 3), and every other nested `_` file except a
+// `_domain_policy` (#2439).
 func generatorRefused(tree map[string]string, scopeRel string) []string {
 	var out []string
 	for rel, body := range tree {
@@ -162,6 +173,8 @@ func generatorRefused(tree map[string]string, scopeRel string) []string {
 			read = bearsOnScope(rel, scopeRel)
 		case path.Dir(rel) == ".":
 			read = !routingpolicy.ReportsUnusable(base)
+		default:
+			read = !routingpolicy.IsDomainPolicyFile(base)
 		}
 		if read && pyyamlcompat.FindDuplicateKeyIn([]byte(body)) != nil {
 			out = append(out, rel)
