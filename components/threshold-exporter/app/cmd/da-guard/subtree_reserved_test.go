@@ -494,7 +494,7 @@ func TestGuard_SubtreeReservedBareStatePrefix(t *testing.T) {
 			deny: []string{"not a recognised key", "Move it", "filter ``"}},
 		{name: "declared", root: "defaults:\n  mysql_connections: 80\n" +
 			"state_filters:\n  \"\":\n    reasons: [x]\n    severity: warning\n    default_state: enable\n",
-			want: []string{"Reserved key `_state_`", "Move it: set `_state_`", "`state_filters.\"\".default_state`"},
+			want: []string{"Reserved key `_state_`", "Move it: set `_state_: disable`", "`state_filters.\"\".default_state`"},
 			deny: []string{"does not declare", "not a recognised key"}},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
@@ -536,7 +536,7 @@ func TestGuard_SubtreeRefusedKeyDeleteFirst(t *testing.T) {
 		"a/t.yaml":         "tenants:\n  t1:\n    _silent_mode: warning\n",
 	}
 	_, stdout, _ := runOnce(t, "--format", "json", "--config-dir", writeReservedConfD(t, m4))
-	if !strings.Contains(stdout, "Today the exporter ignores this value; delete it from this file to keep things as they are.") {
+	if !strings.Contains(stdout, "Today it has no effect here") || !strings.Contains(stdout, "delete it from this file to keep things as they are.") {
 		t.Errorf("m4: no delete instruction: %s", stdout)
 	}
 	mixed := map[string]string{
@@ -577,7 +577,7 @@ func TestGuard_SubtreeReservedMoveKeepsServedValues(t *testing.T) {
 		t.Fatalf("before: findings = %+v, want 2", got)
 	}
 	for _, f := range got {
-		if !strings.Contains(f.Message, "Move it") || !strings.Contains(f.Message, "Deleting it alone changes") ||
+		if !strings.Contains(f.Message, "Move it") || !strings.Contains(f.Message, "Deleting it alone can change") ||
 			strings.Contains(f.Message, "Delete it from this file.") {
 			t.Errorf("%s: message = %s", f.Field, f.Message)
 		}
@@ -657,7 +657,7 @@ func TestGuard_SubtreeReservedIgnoredValueDelete(t *testing.T) {
 		t.Fatalf("before: findings = %+v, want 2", got)
 	}
 	for _, f := range got {
-		if !strings.Contains(f.Message, "Today the exporter ignores this value; delete it from this file to keep things as they are.") ||
+		if !strings.Contains(f.Message, "Today the exporter ignores this value; delete it from this file: what the exporter serves stays the same") ||
 			strings.Contains(f.Message, "Move it") {
 			t.Errorf("%s: message = %s", f.Field, f.Message)
 		}
@@ -705,12 +705,153 @@ func TestGuard_SubtreeReservedMixedAppliedAndIgnored(t *testing.T) {
 	for _, f := range got {
 		msg[f.Field] = f.Message
 	}
-	if m := msg["_state_maintenance"]; !strings.Contains(m, "Move it: set `_state_maintenance`") ||
-		!strings.Contains(m, "Deleting it alone changes what is served today") || strings.Contains(m, "ignores this value") {
+	if m := msg["_state_maintenance"]; !strings.Contains(m, "Move it: set `_state_maintenance: disable`") ||
+		!strings.Contains(m, "Deleting it alone can change what is served") || strings.Contains(m, "ignores this value") {
 		t.Errorf("_state_maintenance (applied): %s", m)
 	}
 	if m := msg["_silent_mode"]; !strings.Contains(m, "Today the exporter ignores this value") ||
 		strings.Contains(m, "Move it") {
 		t.Errorf("_silent_mode (ignored): %s", m)
+	}
+}
+
+// #2388 A r2 (F1): a subtree file is shared. c3: a/_defaults.yaml
+// `_state_maintenance: disable` is applied for t1 and ignored for t2 (which
+// sets the key itself). t2's finding must not say "delete it": that turns t1's
+// filter on. It names t1 instead — also under `--scope a/x`, where t1 is not
+// in scope (c4). Following t1's Move first, then deleting, keeps every served
+// value.
+func TestGuard_SubtreeReservedSharedFile(t *testing.T) {
+	t.Parallel()
+	root := "defaults:\n  mysql_connections: 80\n" +
+		"state_filters:\n  maintenance:\n    reasons: []\n    severity: warning\n    default_state: enable\n"
+	for _, tc := range []struct {
+		name, t2File string
+		scope        []string
+	}{
+		{name: "same-dir", t2File: "a/t2.yaml"},
+		{name: "scoped-to-t2", t2File: "a/x/t2.yaml", scope: []string{"--scope", "a/x"}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			files := map[string]string{
+				"_defaults.yaml":   root,
+				"a/_defaults.yaml": "defaults:\n  _state_maintenance: disable\n",
+				"a/t1.yaml":        "tenants:\n  t1: {}\n",
+				tc.t2File:          "tenants:\n  t2:\n    _state_maintenance: enable\n",
+			}
+			_, got := reservedFindings(t, append([]string{"--config-dir", writeReservedConfD(t, files)}, tc.scope...)...)
+			var t2 string
+			for _, f := range got {
+				if f.TenantID == "t2" {
+					t2 = f.Message
+				}
+			}
+			for _, w := range []string{"This tenant's own entry sets `_state_maintenance`",
+				"applied to other tenants that inherit the same file: `t1`", "Do not just delete it from the file"} {
+				if !strings.Contains(t2, w) {
+					t.Errorf("t2 message lacks %q: %s", w, t2)
+				}
+			}
+			if strings.Contains(t2, "stays the same") {
+				t.Errorf("t2 message promises nothing changes: %s", t2)
+			}
+		})
+	}
+	// Following the messages: t1 moves the value into its own entry, then the
+	// key is deleted from the file — served values unchanged, no finding.
+	before := map[string]string{
+		"_defaults.yaml":   root,
+		"a/_defaults.yaml": "defaults:\n  _state_maintenance: disable\n",
+		"a/t1.yaml":        "tenants:\n  t1: {}\n",
+		"a/t2.yaml":        "tenants:\n  t2:\n    _state_maintenance: enable\n",
+	}
+	after := map[string]string{
+		"_defaults.yaml":   root,
+		"a/_defaults.yaml": "defaults:\n  mysql_connections: 70\n",
+		"a/t1.yaml":        "tenants:\n  t1:\n    _state_maintenance: disable\n",
+		"a/t2.yaml":        "tenants:\n  t2:\n    _state_maintenance: enable\n",
+	}
+	if got := allFindings(t, "--config-dir", writeReservedConfD(t, after), "--warn-as-error"); len(got) != 0 {
+		t.Errorf("after: findings = %q, want none", got)
+	}
+	_, b, _, _ := served(t, before, "2026-10-01T00:00:00Z")
+	code, a, _, stderr := served(t, after, "2026-10-01T00:00:00Z")
+	mustOK(t, code, stderr)
+	for _, id := range []string{"t1", "t2"} {
+		if !reflect.DeepEqual(reservedValues(b.Tenants[id].Values), reservedValues(a.Tenants[id].Values)) {
+			t.Errorf("%s served values changed:\n before %v\n after  %v", id, b.Tenants[id].Values, a.Tenants[id].Values)
+		}
+	}
+}
+
+// #2388 A r2 (F2): with two subtree levels writing the key, the Move names the
+// value the tenant gets today and its file (c1: a/ `disable` applied, a/us/
+// `warning` dropped → `[]` served), and says to delete the key from every
+// listed file. Doing exactly that keeps served values unchanged.
+func TestGuard_SubtreeReservedMoveNamesTheValue(t *testing.T) {
+	t.Parallel()
+	root := reservedRoot("enable")
+	before := map[string]string{
+		"_defaults.yaml":      root,
+		"a/_defaults.yaml":    "defaults:\n  _silent_mode: disable\n",
+		"a/us/_defaults.yaml": "defaults:\n  _silent_mode: warning\n",
+		"a/us/t.yaml":         "tenants:\n  t1: {}\n",
+	}
+	_, got := reservedFindings(t, "--config-dir", writeReservedConfD(t, before))
+	if len(got) != 1 {
+		t.Fatalf("findings = %+v, want 1", got)
+	}
+	for _, w := range []string{"Move it: set `_silent_mode: disable` (the value this tenant gets today, from `a/_defaults.yaml`)",
+		"delete `_silent_mode` from every subtree file listed above"} {
+		if !strings.Contains(got[0].Message, w) {
+			t.Errorf("message lacks %q: %s", w, got[0].Message)
+		}
+	}
+	after := map[string]string{
+		"_defaults.yaml":      root,
+		"a/_defaults.yaml":    "defaults:\n  mysql_connections: 70\n",
+		"a/us/_defaults.yaml": "defaults:\n  mysql_connections: 70\n",
+		"a/us/t.yaml":         "tenants:\n  t1:\n    _silent_mode: disable\n",
+	}
+	if got := allFindings(t, "--config-dir", writeReservedConfD(t, after), "--warn-as-error"); len(got) != 0 {
+		t.Errorf("after: findings = %q, want none", got)
+	}
+	_, b, _, _ := served(t, before, "2026-10-01T00:00:00Z")
+	code, a, _, stderr := served(t, after, "2026-10-01T00:00:00Z")
+	mustOK(t, code, stderr)
+	if !reflect.DeepEqual(reservedValues(b.Tenants["t1"].Values), reservedValues(a.Tenants["t1"].Values)) {
+		t.Errorf("served values changed:\n before %v\n after  %v", b.Tenants["t1"].Values, a.Tenants["t1"].Values)
+	}
+}
+
+// reservedValues is the `_` keys of a served-values `values` map — the
+// reserved settings, without the threshold rows a test tree may add to keep a
+// subtree file non-empty.
+func reservedValues(v map[string]any) map[string]any {
+	out := map[string]any{}
+	for k, x := range v {
+		if strings.HasPrefix(k, "_") {
+			out[k] = x
+		}
+	}
+	return out
+}
+
+// #2388 A r2 (F5): ignored because the tenant sets the key itself, and no other
+// tenant gets the file's value: its own entry is what is served — no "to have
+// it take effect, set it in each tenant's own entry".
+func TestGuard_SubtreeReservedTenantSetsItself(t *testing.T) {
+	t.Parallel()
+	files := reservedCase{defaultState: "enable", tenant: "\n    _silent_mode: critical"}.files()
+	files["finance/_defaults.yaml"] = "defaults:\n  _silent_mode: warning\n"
+	_, got := reservedFindings(t, "--config-dir", writeReservedConfD(t, files))
+	if len(got) != 1 {
+		t.Fatalf("findings = %+v, want 1", got)
+	}
+	m := got[0].Message
+	if !strings.Contains(m, "This tenant's own entry sets `_silent_mode`, and that is what the exporter serves") ||
+		strings.Contains(m, "To have it take effect") {
+		t.Errorf("message = %s", m)
 	}
 }

@@ -70,7 +70,7 @@ func checkSubtreeReservedKeys(input CheckInput) []Finding {
 				Kind:     FindingSubtreeDefaultReservedKey,
 				TenantID: id,
 				Field:    k,
-				Message:  subtreeReservedMessage(k, files, input.DeclaredStateFilters, input.SubtreeReservedApplied[id][k]),
+				Message:  subtreeReservedMessage(input, id, k, files),
 			})
 		}
 	}
@@ -126,10 +126,12 @@ func writtenInsideDefaults(files []string, unwrapped map[string]bool) []string {
 // away while the value was still not served, and nothing said so. Those get
 // "declare the filter or delete it" / "delete it" instead.
 //
-// applied is the exporter overlay's own verdict (config FlatBuild.
-// SubtreeRefusedApplied): whether the subtree's value of k is in effect for
-// this tenant today. It picks the recognised key's fix (#2388 A).
-func subtreeReservedMessage(k string, files []string, declared map[string]bool, applied bool) string {
+// A recognised key's fix follows the exporter overlay's own verdict
+// (input.SubtreeRefusedVerdicts, #2388 A): applied for this tenant → move the
+// value it gets; ignored → delete, unless another tenant gets its value from
+// one of these files (sharedApplied).
+func subtreeReservedMessage(input CheckInput, tenant, k string, files []string) string {
+	declared := input.DeclaredStateFilters
 	where := fmt.Sprintf("is set in the defaults of a subtree `_defaults.yaml` (%s) that this tenant inherits from", quoteJoin(files))
 	const tail = "From the next minor release the exporter stops applying these keys from a subtree " +
 		"`_defaults.yaml`, and this warning becomes an error (#2388)."
@@ -140,12 +142,64 @@ func subtreeReservedMessage(k string, files []string, declared map[string]bool, 
 	case shapeUnrecognised:
 		return fmt.Sprintf("Key `%s` %s. %s %s", k, where, subtreeRefusedKeyFix(k, declared), tail)
 	}
-	fix := reservedKeyIgnoredFix(k)
-	if applied {
-		fix = reservedKeyMove(k)
+	v := input.SubtreeRefusedVerdicts[tenant][k]
+	others := sharedApplied(input.SubtreeRefusedVerdicts, tenant, k, files)
+	var fix string
+	switch {
+	case v.Applied:
+		fix = reservedKeyMove(k, v, files, others)
+	case len(others) > 0:
+		fix = reservedKeyIgnoredShared(k, v, others)
+	default:
+		fix = reservedKeyIgnoredFix(k, v)
 	}
 	return fmt.Sprintf("Reserved key `%s` %s; subtree defaults do not support reserved keys. %s %s",
 		k, where, fix, tail)
+}
+
+// sharedApplied is, sorted, every OTHER tenant of the whole tree that gets
+// its value of k from one of files (config.SubtreeRefusedVerdict.Source):
+// deleting k from those files changes what is served for them.
+//
+// ⛔ WHOLE TREE, NOT --scope (#2388 A r2). A subtree file is shared: measured,
+// a/_defaults.yaml `_state_maintenance: disable` is applied for t1 and
+// ignored for t2 (which sets the key itself). t2's finding said "delete it
+// … to keep things as they are"; deleting it turned t1's filter on, and with
+// `--scope a/x` only t2's finding was shown at all. The verdicts are the
+// exporter's whole-tree load (ScopedTenants.SubtreeRefusedVerdicts).
+func sharedApplied(verdicts map[string]map[string]config.SubtreeRefusedVerdict, tenant, k string, files []string) []string {
+	in := make(map[string]bool, len(files))
+	for _, f := range files {
+		in[f] = true
+	}
+	var out []string
+	for id, byKey := range verdicts {
+		if id == tenant {
+			continue
+		}
+		if v := byKey[k]; v.Applied && in[v.Source] {
+			out = append(out, id)
+		}
+	}
+	sort.Strings(out)
+	return out
+}
+
+// tenantList renders ids as "`a`, `b`, `c` and 4 more" (at most 5 named).
+func tenantList(ids []string) string {
+	const shown = 5
+	q := make([]string, 0, shown)
+	for i, id := range ids {
+		if i == shown {
+			break
+		}
+		q = append(q, "`"+id+"`")
+	}
+	s := strings.Join(q, ", ")
+	if len(ids) > shown {
+		s += fmt.Sprintf(" and %d more", len(ids)-shown)
+	}
+	return s
 }
 
 // The three fix shapes of a key subtree defaults refuse.
@@ -189,12 +243,19 @@ func subtreeRefusedKeyFix(k string, declared map[string]bool) string {
 		return "It is not a recognised key: the exporter does not read it, " +
 			"in a subtree `_defaults.yaml` or in a tenant's own entry. Delete it from this file."
 	}
-	return reservedKeyIgnoredFix(k)
+	return "Today it has no effect here (the defaults merge leaves it out, so it is in neither /effective " +
+		"nor what the exporter serves); delete it from this file to keep things as they are. " + reservedKeyFix(k)
 }
 
 // reservedKeyIgnoredFix is the fix for a recognised key whose subtree value
-// has no effect today: deleting it keeps what is served; setting it in the
+// has no effect today, for this tenant AND every other tenant that inherits
+// these files: deleting it keeps what the exporter serves; setting it in the
 // tenant's entry would START applying it.
+//
+// ⚠️ "What the exporter serves", not "things": /effective does show the
+// ignored subtree value, and deleting it removes it from there (#2388 A r2).
+// When the tenant sets the key itself, its own entry is what is served and
+// there is nothing to "have take effect".
 //
 // ⛔ #2388 A. r5 told every such key "delete it" (wrong for an applied
 // `disable`: deleting it turned the filter back on); r6 told every one "move
@@ -202,24 +263,68 @@ func subtreeRefusedKeyFix(k string, declared map[string]bool) string {
 // ON — measured, served `{_silent_mode: [], _state_offd: false}` became
 // `{[warning], true}` with no finding left). Which one is right is the
 // overlay's own verdict, handed in as `applied`; neither text guesses.
-func reservedKeyIgnoredFix(k string) string {
-	return "Today the exporter ignores this value; delete it from this file to keep things as they are. " +
-		reservedKeyFix(k)
+func reservedKeyIgnoredFix(k string, v config.SubtreeRefusedVerdict) string {
+	if v.TenantSets {
+		return fmt.Sprintf("This tenant's own entry sets `%s`, and that is what the exporter serves; the subtree "+
+			"value is ignored for it. Delete it from this file: what the exporter serves stays the same.", k)
+	}
+	return "Today the exporter ignores this value; delete it from this file: what the exporter serves stays the " +
+		"same, and /effective stops showing the ignored value. " + reservedKeyFix(k)
 }
 
-// reservedKeyMove is the fix for a recognised key the overlay APPLIES today:
-// ONE action, moving it — deleting it alone changes what is served (measured:
-// subtree `_state_maintenance: disable` under a root default_state enable;
-// deleted, the filter came back on).
-func reservedKeyMove(k string) string {
-	const alone = " (Deleting it alone changes what is served today: the exporter applies this value now.)"
-	if f, isState := strings.CutPrefix(k, "_state_"); isState {
-		return fmt.Sprintf("Move it: set `%s` in each tenant's own entry under `tenants:` and delete it from this "+
-			"file — or instead set `state_filters.%s.default_state` in the conf.d root `_defaults.yaml`, which "+
-			"affects every tenant in the tree.%s", k, filterPath(f), alone)
+// reservedKeyIgnoredShared is the fix for a recognised key ignored for this
+// tenant but applied, from one of the same files, to other tenants: the file
+// must not just be deleted (sharedApplied says why).
+func reservedKeyIgnoredShared(k string, v config.SubtreeRefusedVerdict, others []string) string {
+	own := "Today the exporter ignores this value for this tenant"
+	if v.TenantSets {
+		own = fmt.Sprintf("This tenant's own entry sets `%s`, and that is what the exporter serves for it; "+
+			"the subtree value is ignored for this tenant", k)
 	}
-	return fmt.Sprintf("Move it: set `%s` in each tenant's own entry under `tenants:` and delete it from this "+
-		"file.%s", k, alone)
+	return fmt.Sprintf("%s — but it is applied to other tenants that inherit the same file: %s. Do not just "+
+		"delete it from the file: that changes what is served for them. Follow their findings (move the value "+
+		"into their own entries) first; then delete it.", own, tenantList(others))
+}
+
+// reservedKeyMove is the fix for a recognised key the overlay APPLIES for this
+// tenant today: ONE action, moving it — deleting it alone can change what is
+// served (measured: subtree `_state_maintenance: disable` under a root
+// default_state enable; deleted, the filter came back on).
+//
+// ⛔ IT NAMES THE VALUE (#2388 A r2). With several subtree levels writing the
+// key, "move it" did not say which: measured, a/ `_silent_mode: disable`
+// (applied) and a/us/ `warning` (dropped) served `[]`, and moving `warning`
+// served `["warning"]`. The value named is the one the tenant gets today
+// (SubtreeRefusedVerdict.Value, from .Source), and the key is to be deleted
+// from every listed file.
+//
+// ⚠️ "Can change", not "changes" (#2388 A r2, F3): Applied means the exporter
+// uses the subtree's value for this tenant; it is not judged whether that
+// value differs from what the tenant would get without it (a subtree
+// `disable` under a root default_state disable is applied and a no-op).
+// Judging that would need every reserved key's resolver re-run without the
+// value — a second model of those resolvers, which this check does not keep.
+func reservedKeyMove(k string, v config.SubtreeRefusedVerdict, files, others []string) string {
+	val := fmt.Sprintf("`%s: %s`", k, config.RenderYAMLFlow(v.Value))
+	from := fmt.Sprintf("the value this tenant gets today, from `%s`", v.Source)
+	del := "delete it from this file"
+	if len(files) > 1 {
+		del = fmt.Sprintf("delete `%s` from every subtree file listed above", k)
+	}
+	var b strings.Builder
+	if f, isState := strings.CutPrefix(k, "_state_"); isState {
+		fmt.Fprintf(&b, "Move it: set %s (%s) in this tenant's own entry under `tenants:` and %s — or instead "+
+			"set `state_filters.%s.default_state` in the conf.d root `_defaults.yaml`, which affects every tenant "+
+			"in the tree.", val, from, del, filterPath(f))
+	} else {
+		fmt.Fprintf(&b, "Move it: set %s (%s) in this tenant's own entry under `tenants:` and %s.", val, from, del)
+	}
+	b.WriteString(" (Deleting it alone can change what is served: the exporter uses this value for this tenant now.)")
+	if len(others) > 0 {
+		fmt.Fprintf(&b, " Other tenants get their value from the same file too: %s — move it into their entries "+
+			"as well before deleting it.", tenantList(others))
+	}
+	return b.String()
 }
 
 // filterName renders a state filter's name for a message; the empty name,

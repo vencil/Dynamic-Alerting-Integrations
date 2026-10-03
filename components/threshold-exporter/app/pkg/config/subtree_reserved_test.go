@@ -158,7 +158,70 @@ func TestScopeEffective_SubtreeReservedApplied(t *testing.T) {
 		"t4": {"_state_maintenance": true},
 		"t5": {"_state_maintenance": false},
 	}
-	if !reflect.DeepEqual(scoped.SubtreeReservedApplied, want) {
-		t.Errorf("SubtreeReservedApplied = %v, want %v", scoped.SubtreeReservedApplied, want)
+	got := map[string]map[string]bool{}
+	for id, byKey := range scoped.SubtreeRefusedVerdicts {
+		got[id] = map[string]bool{}
+		for k, v := range byKey {
+			got[id][k] = v.Applied
+		}
+	}
+	if !reflect.DeepEqual(got, want) {
+		t.Errorf("applied = %v, want %v", got, want)
+	}
+	// #2388 A r2: the verdict names the file and value the tenant gets, and
+	// whether the tenant sets the key itself.
+	for _, tc := range []struct {
+		id, key string
+		want    SubtreeRefusedVerdict
+	}{
+		{"t3", "_state_maintenance", SubtreeRefusedVerdict{Applied: true, Source: "m/_defaults.yaml", Value: "disable"}},
+		{"t4", "_state_maintenance", SubtreeRefusedVerdict{Applied: true, Source: "n/us/_defaults.yaml", Value: "disable"}},
+		{"t5", "_state_maintenance", SubtreeRefusedVerdict{}},
+		{"t2", "_severity_dedup", SubtreeRefusedVerdict{TenantSets: true}},
+	} {
+		if v := scoped.SubtreeRefusedVerdicts[tc.id][tc.key]; !reflect.DeepEqual(v, tc.want) {
+			t.Errorf("%s %s: verdict = %+v, want %+v", tc.id, tc.key, v, tc.want)
+		}
+	}
+}
+
+// #2388 A r2: SubtreeRefusedVerdicts covers the whole tree, also under a
+// --scope that lists only some tenants — a subtree file is shared.
+func TestScopeEffective_SubtreeRefusedVerdictsWholeTree(t *testing.T) {
+	t.Parallel()
+	dir := writeUndeliverableTree(t, map[string]string{
+		"_defaults.yaml": "defaults:\n  mysql_connections: 80\n" +
+			"state_filters:\n  maintenance:\n    reasons: []\n    severity: warning\n    default_state: enable\n",
+		"a/_defaults.yaml": "defaults:\n  _state_maintenance: disable\n",
+		"a/t1.yaml":        "tenants:\n  t1: {}\n",
+		"a/x/t2.yaml":      "tenants:\n  t2:\n    _state_maintenance: enable\n",
+	})
+	scoped, err := ScopeEffective(dir, "a/x")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, listed := scoped.SubtreeReserved["t1"]; listed {
+		t.Errorf("SubtreeReserved lists out-of-scope t1: %v", scoped.SubtreeReserved)
+	}
+	if v := scoped.SubtreeRefusedVerdicts["t1"]["_state_maintenance"]; !v.Applied || v.Source != "a/_defaults.yaml" {
+		t.Errorf("t1 verdict = %+v, want applied from a/_defaults.yaml", v)
+	}
+}
+
+func TestRenderYAMLFlow(t *testing.T) {
+	t.Parallel()
+	for _, tc := range []struct {
+		in   any
+		want string
+	}{
+		{"disable", "disable"},
+		{1, "1"},
+		{"70:critical", "70:critical"},
+		{map[string]any{"target": "warning", "expires": "2026-12-31"}, "{expires: \"2026-12-31\", target: warning}"},
+		{[]any{"a", "b"}, "[a, b]"},
+	} {
+		if got := RenderYAMLFlow(tc.in); got != tc.want {
+			t.Errorf("RenderYAMLFlow(%#v) = %q, want %q", tc.in, got, tc.want)
+		}
 	}
 }

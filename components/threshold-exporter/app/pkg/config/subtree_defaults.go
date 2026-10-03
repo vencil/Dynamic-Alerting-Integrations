@@ -31,6 +31,7 @@ package config
 // reads it as "this tenant customised the key".
 
 import (
+	"fmt"
 	"path/filepath"
 	"sort"
 	"strconv"
@@ -71,7 +72,7 @@ func applySubtreeDefaults(
 	root string,
 	tenantDefaults map[string][]string,
 	parsed map[string]map[string]any,
-) (int, map[string]map[string]ScheduledValue, map[string]map[string]bool) {
+) (int, map[string]map[string]ScheduledValue, map[string]map[string]SubtreeRefusedVerdict) {
 	if cfg == nil || len(cfg.Tenants) == 0 || len(tenantDefaults) == 0 {
 		return 0, nil, nil
 	}
@@ -104,7 +105,10 @@ func applySubtreeDefaults(
 	// on the existing branches only; it changes nothing this overlay writes.
 	// da-guard's subtree_default_reserved_key fix depends on it: moving an
 	// applied value keeps what is served, deleting an ignored one does.
-	var applied map[string]map[string]bool
+	// Each verdict also names the file and value the tenant gets (#2388 A r2:
+	// with several levels, "move it" must say WHICH value) and whether the
+	// tenant sets the key itself.
+	var applied map[string]map[string]SubtreeRefusedVerdict
 
 	filled := 0
 	for tenantID, overrides := range cfg.Tenants {
@@ -123,6 +127,8 @@ func applySubtreeDefaults(
 		// (CodeRabbit, #1569.)
 		var inherited map[string]struct{}
 		var refusedSeen map[string]struct{}
+		var refusedSource map[string]SubtreeRefusedVerdict // key → the written level (deepest wins)
+		var refusedTenantSets map[string]bool
 		for _, defaultsPath := range tenantDefaults[tenantID] {
 			if filepath.Dir(filepath.Clean(defaultsPath)) == rootDir {
 				continue // the global defaults file — already in cfg.Defaults
@@ -142,6 +148,12 @@ func applySubtreeDefaults(
 				// it, and resolve's canonical-wins dedup then served the
 				// subtree's number over the tenant's own.
 				if tenantAuthoredThreshold(overrides, inherited, key) {
+					if subtreeDefaultsRefusedKey(key) {
+						if refusedTenantSets == nil {
+							refusedTenantSets = map[string]bool{}
+						}
+						refusedTenantSets[key] = true
+					}
 					continue // the tenant authored it — never touched
 				}
 				value, ok := scheduledValueFromRaw(raw)
@@ -214,6 +226,14 @@ func applySubtreeDefaults(
 				}
 				inherited[key] = struct{}{}
 				overrides[key] = value
+				if subtreeDefaultsRefusedKey(key) {
+					if refusedSource == nil {
+						refusedSource = map[string]SubtreeRefusedVerdict{}
+					}
+					refusedSource[key] = SubtreeRefusedVerdict{
+						Applied: true, Source: subtreeRelPath(rootDir, defaultsPath), Value: raw,
+					}
+				}
 			}
 		}
 		// ⚠️ MANY LEVELS, ONE VERDICT: the value the tenant ends up with. The
@@ -227,19 +247,75 @@ func applySubtreeDefaults(
 		// deleting both levels would turn it on.
 		for key := range refusedSeen {
 			if applied == nil {
-				applied = map[string]map[string]bool{}
+				applied = map[string]map[string]SubtreeRefusedVerdict{}
 			}
 			if applied[tenantID] == nil {
-				applied[tenantID] = map[string]bool{}
+				applied[tenantID] = map[string]SubtreeRefusedVerdict{}
 			}
-			_, in := inherited[key]
-			applied[tenantID][key] = in
+			var v SubtreeRefusedVerdict
+			if _, in := inherited[key]; in {
+				v = refusedSource[key]
+			}
+			v.TenantSets = refusedTenantSets[key]
+			applied[tenantID][key] = v
 		}
 	}
 	if len(unreachable) == 0 {
 		return filled, nil, applied
 	}
 	return filled, unreachable, applied
+}
+
+// SubtreeRefusedVerdict is applySubtreeDefaults' own account of one key
+// subtree defaults refuse (subtreeDefaultsRefusedKey), for one tenant (#2388 A).
+type SubtreeRefusedVerdict struct {
+	// Applied: a subtree level's value of the key is in the tenant's map at
+	// the end of the overlay — the exporter uses it for this tenant. It says
+	// nothing about whether that value differs from what the tenant would get
+	// without it (a subtree `disable` under a root default_state disable is
+	// applied and changes nothing).
+	Applied bool
+	// Source is the root-relative slash path of the subtree file whose value
+	// the tenant gets ("" when not Applied): the deepest level that WROTE it.
+	Source string
+	// Value is that file's value of the key, as parsed (YAML-shaped).
+	Value any
+	// TenantSets: the tenant's own map sets the key, so no subtree value is
+	// written and the tenant's own value is what is served.
+	TenantSets bool
+}
+
+// subtreeRelPath is p relative to rootDir, slash-separated; p itself when Rel
+// fails. The same rendering as subtreeReservedKeys' file list.
+func subtreeRelPath(rootDir, p string) string {
+	if r, err := filepath.Rel(rootDir, p); err == nil {
+		return filepath.ToSlash(r)
+	}
+	return p
+}
+
+// RenderYAMLFlow renders v in single-line YAML flow style (a scalar as
+// itself, a mapping as `{a: 1}`), for messages that quote a config value.
+func RenderYAMLFlow(v any) string {
+	var n yaml.Node
+	if err := n.Encode(v); err != nil {
+		return fmt.Sprint(v)
+	}
+	var flow func(*yaml.Node)
+	flow = func(x *yaml.Node) {
+		if x.Kind == yaml.MappingNode || x.Kind == yaml.SequenceNode {
+			x.Style = yaml.FlowStyle
+		}
+		for _, c := range x.Content {
+			flow(c)
+		}
+	}
+	flow(&n)
+	b, err := yaml.Marshal(&n)
+	if err != nil {
+		return fmt.Sprint(v)
+	}
+	return strings.TrimSpace(string(b))
 }
 
 // levelWritesSpelling reports whether one defaults level WRITES spelling s:
