@@ -496,7 +496,8 @@ _EVAL_RULE = (
     "        findings.append(EvalProbeFinding(\n"
     "            path=path,\n"
     "            line=node.lineno,\n"
-    "            col=node.col_offset + 1,\n"
+    "            col=char_col_offset(source_lines[node.lineno - 1],\n"
+    "                                node.col_offset) + 1,\n"
     "            snippet=source_lines[node.lineno - 1].strip(),\n"
     "        ))\n"
 )
@@ -588,8 +589,10 @@ class TestGeneratedAstLintFailsClosed:
         )
         res = _run_cli(eval_lint, "--ci", str(target))
         assert res.returncode == 1, res.stderr
-        # Column not pinned: ast col_offset counts UTF-8 bytes, so "é" is 2.
-        assert f"{target}:2:" in res.stderr
+        # ast's col_offset counts the UTF-8 of the decoded text ("é" is 2
+        # bytes, byte column 9); the template's char_col_offset reports the
+        # character column, 8 (#2646).
+        assert f"{target}:2:8 café = eval('2')" in res.stderr
         assert "café = eval('2')" in res.stderr
 
     @pytest.mark.timeout(60)
