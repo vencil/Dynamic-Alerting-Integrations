@@ -79,7 +79,7 @@ type PutTenantResponse struct {
 // @Param       X-DA-Base-Hash header string false "Optimistic concurrency: the source_hash GET /tenants/{id} returned for the file this body was derived from. 409 if the file changed since. 16 lowercase hex chars; a malformed value is a 400, never ignored. Direct write-back mode only (501 in PR mode)."
 // @Success     200   {object} PutTenantResponse
 // @Failure     400   {object} ErrorResponse "Bad request. A receiver the body writes in _routing (receiver, overrides[].receiver, routes[].receiver) that Alertmanager could not load or the route generator would skip is code INVALID_BODY with one violations[] entry per problem (#2295; nothing written); so is a routes[].match value or overrides[].alertname / metric_group the body writes that the route generator does not read as a string, e.g. unquoted yes, 1:30 or ~ (#2431; quote it), and a group_by entry the body writes (group_by, overrides[].group_by, routes[].group_by) that is not a string as the route generator reads it (unquoted 8, on), is empty, repeats a label or is ... beside other labels (#2503; quote or remove it), and a _routing the body writes that is neither a mapping nor a disabling string (disable / disabled / off / false), e.g. "slack", a list, null or an unquoted false / off, which the route generator reads as a boolean (#2341; to turn routing off quote it, 'off'). Also 400 when the tenant id is not one the route generator renders: empty, or a character other than letters, digits, _ and - (#2341; nothing written). Also 400 when the current tenant file cannot be parsed and the caller lacks write permission on all tenants (#2405; nothing written)"
-// @Failure     403   {object} ErrorResponse
+// @Failure     403   {object} ErrorResponse "Forbidden: insufficient permissions, or the body breaks the domain policy (code POLICY_VIOLATION; nothing written). In PR write-back mode the body is judged again on the latest base branch, which this server's local copy may lag: a violation there, or a base whose _domain_policy.yaml / .yml cannot be loaded, is the same 403 with tenant_id, and no PR/MR or branch is left"
 // @Failure     409   {object} ErrorResponse "Conflict: base hash mismatch, pending PR, ambiguous tenant file, the tenant is already declared by another conf.d file (code TENANT_DECLARED_ELSEWHERE; nothing written), or the tenant's conf.d file is not a regular file (code TENANT_CONFIG_NOT_LOADABLE, config_error not_regular_file; nothing written)"
 // @Failure     500   {object} ErrorResponse
 // @Failure     501   {object} ErrorResponse
@@ -145,13 +145,12 @@ func PutTenant(d *Deps) http.HandlerFunc {
 		// key. A PUT replaces the whole file, so the whole body is judged.
 		// #2325: a `require_critical_escalation` leak does not block; it is
 		// returned with the successful write's warnings (advisories).
+		// #2486: the tenant block is laid over the root platform overlay
+		// first (judgeTenantBlock), and PR mode judges the body again on the
+		// fresh base (putTenantPRMode).
 		var advisories []string
 		if d.Policy != nil {
-			patch := extractPatchKeys(body, tenantID)
-			violations := d.Policy.CheckWrite(tenantID, patch)
-			routingViolations, adv := d.Policy.JudgeTenantRouting(
-				tenantID, extractTenantBlock(body, tenantID), loadRoutingLayers(d.ConfigDir))
-			violations = append(violations, routingViolations...)
+			violations, adv := judgePutBody(d.ConfigDir, d.Policy, tenantID, body)
 			advisories = adv
 			if len(violations) > 0 {
 				writePolicyViolation(rw, r, violations)
@@ -314,9 +313,29 @@ func putTenantPRMode(d *Deps, rw http.ResponseWriter, r *http.Request, tenantID,
 	// tenant for retry instead of leaving a zombie 409-until-pod-restart.
 	defer d.PRTracker.ReleaseClaim(tenantID)
 
-	// Create feature branch + commit
-	result, err := d.Writer.WritePR(r.Context(), tenantID, email, yamlContent)
+	// Create feature branch + commit. #2486: the domain-policy check above
+	// read the pod's local tree, which may lag the base the branch is cut
+	// from; the body is judged again there, under the writer lock, before it
+	// is written (freshBasePutPolicyCheck). A refusal drops the branch.
+	var check gitops.PRBaseCheck
+	if d.Policy != nil {
+		check = func(configDir string) error {
+			v, loadErr := freshBasePutPolicyCheck(configDir, tenantID, []byte(yamlContent))
+			if loadErr != nil || len(v) > 0 {
+				return &freshBasePolicyError{TenantID: tenantID, Put: true, Violations: v, LoadErr: loadErr}
+			}
+			return nil
+		}
+	}
+	result, err := d.Writer.WritePRChecked(r.Context(), tenantID, email, yamlContent, check)
 	if err != nil {
+		// #2486: the body breaks the domain policy on the fresh base (or
+		// the base's policy file cannot be loaded) — 403, as the pre-check's.
+		var freshPolicy *freshBasePolicyError
+		if errors.As(err, &freshPolicy) {
+			writeFreshBasePolicyViolation(rw, r, freshPolicy)
+			return
+		}
 		// The body matched the branch base, so no commit — and therefore no
 		// branch and no PR/MR. That is a success, not a forge error; mirrors
 		// the all-no-op batch's clean 200 (#1102). Carries the deprecation

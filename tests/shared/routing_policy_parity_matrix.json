@@ -39,8 +39,10 @@
     "tenant_api.put: '403' = PUT of the tenant's own file (files[<tenant>.yaml]) verbatim is refused",
     "with POLICY_VIOLATION; '400' = refused with INVALID_BODY because a receiver the body itself writes",
     "breaks the receiver contract (pkg/receiverspec, #2295) or the body's own _routing carries a values_not_string value (#2431; one from a routing layer is not judged; both checked after the policy, so a",
-    "forbidden type stays '403'); 'ok' = allowed. tenant-api reads only _domain_policy.yaml (not .yml),",
-    "and a PUT body carries no platform-file overlay. tenant_api.batch: null, or one patch applied",
+    "forbidden type stays '403'); 'ok' = allowed. tenant-api reads _domain_policy.yaml and .yml as the",
+    "generator does, and judges the body's block over the root platform overlay (Layers.TenantBlock,",
+    "#2486), so an overlay _routing / _routing_profile the body does not replace is judged too.",
+    "tenant_api.batch: null, or one patch applied",
     "to the tenant's block on disk: verdict 'policy_violation' when the op is refused for domain",
     "policy, 'ok' otherwise; a patch that touches neither _routing_profile nor _routing is never",
     "refused for the routing already on disk, and a batch op is never refused for a values_not_string value on disk (#2431).",
@@ -1142,7 +1144,7 @@
           "group_by_invalid": [],
           "unknown_profile": null,
           "tenant_api": {
-            "put": "ok",
+            "put": "403",
             "batch": null
           },
           "python_differs": null,
@@ -1381,7 +1383,7 @@
           "group_by_invalid": [],
           "unknown_profile": null,
           "tenant_api": {
-            "put": "ok",
+            "put": "403",
             "batch": null
           },
           "python_differs": null,
@@ -1427,7 +1429,7 @@
           "group_by_invalid": [],
           "unknown_profile": null,
           "tenant_api": {
-            "put": "ok",
+            "put": "403",
             "batch": null
           },
           "python_differs": null,
@@ -1468,7 +1470,7 @@
           "group_by_invalid": [],
           "unknown_profile": null,
           "tenant_api": {
-            "put": "ok",
+            "put": "403",
             "batch": null
           },
           "python_differs": null,
@@ -1514,7 +1516,7 @@
           "group_by_invalid": [],
           "unknown_profile": null,
           "tenant_api": {
-            "put": "ok",
+            "put": "403",
             "batch": null
           },
           "python_differs": null,
@@ -1780,7 +1782,7 @@
           "group_by_invalid": [],
           "unknown_profile": null,
           "tenant_api": {
-            "put": "ok",
+            "put": "403",
             "batch": null
           },
           "python_differs": null,
@@ -1806,7 +1808,7 @@
           "group_by_invalid": [],
           "unknown_profile": null,
           "tenant_api": {
-            "put": "ok",
+            "put": "403",
             "batch": null
           },
           "python_differs": null,

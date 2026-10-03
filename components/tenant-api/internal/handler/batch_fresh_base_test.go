@@ -275,7 +275,7 @@ func TestBatchTenants_PRMode_DomainPolicyReadFromFreshBase(t *testing.T) {
 		_ = json.Unmarshal(w.Body.Bytes(), &env)
 		msg, _ := env["error"].(string)
 		if w.Code != http.StatusForbidden || env["code"] != CodePolicyViolation || env["tenant_id"] != "t-off" ||
-			!strings.Contains(msg, "_domain_policy.yaml on the latest base branch cannot be loaded") || strings.Contains(msg, f.dir) {
+			!strings.Contains(msg, "(_domain_policy.yaml or .yml) on the latest base branch cannot be loaded") || strings.Contains(msg, f.dir) {
 			t.Errorf("status %d, body %s; want 403 %s naming the unloadable policy file (and no server path)", w.Code, w.Body.String(), CodePolicyViolation)
 		}
 		if f.prOpened || f.batchBranches(t) != "" || gitRev(t, f.bare, "main") != before {

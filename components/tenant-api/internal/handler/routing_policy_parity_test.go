@@ -201,8 +201,13 @@ func TestTenantAPI_RoutingPolicyParityMatrix(t *testing.T) {
 					t.Fatalf("unknown put verdict %q", want.TenantAPI.Put)
 				}
 				// #2325: the escalation cell, where tenant-api reads the
-				// policy at all (`_domain_policy.yaml` only).
-				if _, reads := tree.Files["_domain_policy.yaml"]; !reads {
+				// policy at all (a root `_domain_policy.yaml` / `.yml`, #2486).
+				reads := false
+				for _, name := range policy.FileNames {
+					_, has := tree.Files[name]
+					reads = reads || has
+				}
+				if !reads {
 					return
 				}
 				checkEscalationCell(t, tenantID, want.Escalation, want.TenantAPI.Put, resp)

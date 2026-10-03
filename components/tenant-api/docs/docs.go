@@ -724,7 +724,7 @@ const docTemplate = `{
                         }
                     },
                     "403": {
-                        "description": "PR write-back mode: the forge token lacks write scope to open the PR/MR, or a member's operation breaks the domain policy on the latest base branch, which this server's local copy lags, or the base's _domain_policy.yaml cannot be loaded (code POLICY_VIOLATION, with tenant_id and operation = the member's index); nothing written",
+                        "description": "PR write-back mode: the forge token lacks write scope to open the PR/MR, or a member's operation breaks the domain policy on the latest base branch, which this server's local copy lags, or the base's _domain_policy.yaml / .yml cannot be loaded (code POLICY_VIOLATION, with tenant_id and operation = the member's index); nothing written",
                         "schema": {
                             "$ref": "#/definitions/ErrorResponse"
                         }
@@ -896,7 +896,7 @@ const docTemplate = `{
                         }
                     },
                     "403": {
-                        "description": "PR write-back mode: the forge token lacks write scope to open the PR/MR, or an operation breaks the domain policy on the latest base branch, which this server's local copy lags, or the base's _domain_policy.yaml cannot be loaded (code POLICY_VIOLATION, with tenant_id and operation); nothing written. Direct mode and violations the local copy shows are reported per operation in results instead.",
+                        "description": "PR write-back mode: the forge token lacks write scope to open the PR/MR, or an operation breaks the domain policy on the latest base branch, which this server's local copy lags, or the base's _domain_policy.yaml / .yml cannot be loaded (code POLICY_VIOLATION, with tenant_id and operation); nothing written. Direct mode and violations the local copy shows are reported per operation in results instead.",
                         "schema": {
                             "$ref": "#/definitions/ErrorResponse"
                         }
@@ -1130,7 +1130,7 @@ const docTemplate = `{
                         }
                     },
                     "403": {
-                        "description": "Forbidden",
+                        "description": "Forbidden: insufficient permissions, or the body breaks the domain policy (code POLICY_VIOLATION; nothing written). In PR write-back mode the body is judged again on the latest base branch, which this server's local copy may lag: a violation there, or a base whose _domain_policy.yaml / .yml cannot be loaded, is the same 403 with tenant_id, and no PR/MR or branch is left",
                         "schema": {
                             "$ref": "#/definitions/ErrorResponse"
                         }
