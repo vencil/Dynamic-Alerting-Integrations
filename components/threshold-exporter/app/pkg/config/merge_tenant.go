@@ -473,10 +473,16 @@ func MergeTenantOverRootPlatform(root RootPlatform, tenantID string, tenantData 
 // So for a tenants-block body the two results are equal except that a body
 // key written as null (not `_`-prefixed) is in this merge's tenant map and
 // not in the byte entry point's — it then also keeps the platform entry's and
-// the profile's value for that key out of this merge. The gate reads only
-// ValidateTenantKeys from this result, which judges key names, so the
-// difference only means a null key is still validated there (an unknown key
-// written as null is still refused) — stricter than GET, never looser.
+// the profile's value for that key (under any spelling) out of this merge,
+// and with it any platform-file or profile Notice about it. The gate reads only
+// ValidateTenantKeys from this result, whose Errors come from the tenant's
+// own layer (key names, `expires:`, `_critical` bases, …) and whose
+// platform/profile entries are Notices that never block a write. So for
+// what the gate refuses, the difference only means a null key is still
+// validated there (an unknown key written as null is still refused) —
+// stricter than GET, never looser. Its Notices can differ both ways: fewer
+// platform/profile ones for that key, and the tenant layer's own Notices on
+// the null key itself (e.g. the rename notice for a legacy spelling).
 func MergeParsedTenantWithRootDefaults(configDir string, tenantCfg ThresholdConfig) TenantMerge {
 	merged := mergeTenantConfig(loadRootPlatform(configDir), tenantCfg)
 	merged.applyProfiles(nil) // silent, as in MergeTenantOverRootPlatform
