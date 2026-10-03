@@ -137,6 +137,72 @@ func TestServedValues_UndeliverableKeyIsUnserved(t *testing.T) {
 	}
 }
 
+// #1976 r2: reserved / `_` keys a subtree `_defaults.yaml` hands down are not
+// this finding's (#2388) — the exporter's build refuses them (its ERROR and
+// gauge are unchanged), but neither the finding nor `unserved` reports them.
+func TestUndeliverable_ReservedSubtreeKeysAreNotReported(t *testing.T) {
+	t.Parallel()
+	const stateFilters = "state_filters:\n  maintenance:\n    reasons: [\"x\"]\n    severity: warning\n"
+	const scheduled = "  _state_maintenance:\n    default: enable\n    overrides:\n" +
+		"      - window: \"00:00-23:59\"\n        value: disable\n"
+	for _, tc := range []struct {
+		name  string
+		files map[string]string
+	}{
+		{
+			// `_metadata`, a scheduled `_state_maintenance` and `_profile`,
+			// none declared in optional_overrides: all three are refused.
+			name: "reserved-keys",
+			files: map[string]string{
+				"_defaults.yaml":         "defaults:\n  mysql_connections: 80\n" + stateFilters,
+				"finance/_defaults.yaml": "defaults:\n  _metadata: 5\n" + scheduled + "  _profile: disable\n",
+				"finance/tenant-a.yaml":  "tenants:\n  tenant-a: {}\n",
+			},
+		},
+		{
+			// The same keys with `_state_maintenance` and `_metadata` in
+			// optional_overrides (the review's exB).
+			name: "reserved-keys-declared",
+			files: map[string]string{
+				"_defaults.yaml": "defaults:\n  mysql_connections: 80\n" + stateFilters +
+					"optional_overrides:\n  - _state_maintenance\n  - _metadata\n",
+				"finance/_defaults.yaml": "defaults:\n  _metadata: 5\n" + scheduled + "  _profile: disable\n",
+				"finance/tenant-a.yaml":  "tenants:\n  tenant-a: {}\n",
+			},
+		},
+		{
+			// A schedule at finance/ (refused), a scalar below (delivered):
+			// the shallow refusal stays in the exporter's set (the review's
+			// exC); it is not reported here.
+			name: "schedule-then-scalar-state",
+			files: map[string]string{
+				"_defaults.yaml":            "defaults:\n  mysql_connections: 80\n" + stateFilters,
+				"finance/_defaults.yaml":    "defaults:\n" + scheduled,
+				"finance/us/_defaults.yaml": "defaults:\n  _state_maintenance: disable\n",
+				"finance/us/tenant-a.yaml":  "tenants:\n  tenant-a: {}\n",
+			},
+		},
+	} {
+		tmp := t.TempDir()
+		tree := map[string]string{}
+		for k, v := range tc.files {
+			tree["conf.d/"+k] = v
+		}
+		testutil.WriteTree(t, tmp, tree)
+		dir := filepath.Join(tmp, "conf.d")
+
+		code, got := undeliverableFindings(t, "--config-dir", dir, "--warn-as-error")
+		if code != exitOK || len(got) != 0 {
+			t.Errorf("%s: exit = %d, findings = %+v; want exit 0 and none", tc.name, code, got)
+		}
+		code, doc, _, stderr := served(t, tc.files, "2026-10-01T00:00:00Z")
+		mustOK(t, code, stderr)
+		if u := doc.Tenants["tenant-a"].Unserved; len(u) != 0 {
+			t.Errorf("%s: tenant-a unserved = %v, want none", tc.name, u)
+		}
+	}
+}
+
 func TestServedValues_RootDeclaredKeyIsServed(t *testing.T) {
 	t.Parallel()
 	code, doc, _, stderr := served(t, undeliverableFiles(true), "2026-10-01T00:00:00Z")

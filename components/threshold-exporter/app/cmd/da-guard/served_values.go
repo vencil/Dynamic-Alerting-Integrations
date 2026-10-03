@@ -89,12 +89,14 @@ type servedTenantValues struct {
 	Severities map[string]string `json:"severities"`
 	// Unserved: keys of the tenant's merged config with no entry in Values
 	// (switched off, or served by nothing), keyed as the merged config spells
-	// them, value as written — plus the keys the tenant inherits from a
-	// subtree `_defaults.yaml` that the exporter's build cannot deliver
-	// (config.LoadReport.Undeliverable, #1976): the build leaves them out of
-	// the tenant's map, so the merged config does not carry them, but the
-	// tenant's effective config shows them. Keyed as that defaults file spells
-	// them, value as the deepest level naming the key writes it.
+	// them, value as written — plus the THRESHOLD keys (not starting with
+	// `_`) the tenant inherits from a subtree `_defaults.yaml` that the
+	// exporter's build cannot deliver (config.LoadReport.Undeliverable,
+	// #1976): the build leaves them out of the tenant's map, so the merged
+	// config does not carry them, but the tenant's effective config shows
+	// them. Keyed as that defaults file spells them; the value is NOT as
+	// written but the build's normalised rendering of the deepest level that
+	// writes the key in a threshold shape (a YAML `1e6` is "1e+06").
 	Unserved map[string]any `json:"unserved"`
 	// Dropped: keys the resolver produced a row for but whose series the
 	// exporter cannot build (client_golang rejects the label set), so
@@ -441,17 +443,20 @@ func servedValues(cfg *config.ThresholdConfig, at time.Time,
 			}
 			tv.Unserved[k] = rawScheduledValue(sv)
 		}
-		// #1976: the build's own verdict (FlatBuild.Unreachable), never
-		// re-judged here. A key the tenant authored is never in it (the build
-		// skips those before judging), so nothing above is overwritten; the
-		// two checks keep that so and keep Unserved disjoint from Values.
+		// #1976: the build's own verdict (LoadReport.Undeliverable: the
+		// threshold keys of FlatBuild.Unreachable), never re-judged here.
+		// Invariant, so no membership check: such a key is in neither
+		// Unserved nor Values. Not in Unserved — Unserved above comes from the
+		// tenant's merged map, and the build judges only keys the tenant's
+		// map lacks under every spelling (tenantAuthoredThreshold; a platform
+		// `tenants:` entry or a profile is already in that map) and writes no
+		// refused key into it. Not in Values — the key does not start with
+		// `_` (reserved keys are filtered out before it gets here), and a
+		// threshold key reaches Values only by owning a /metrics row, which
+		// needs the key, its canonical or its legacy spelling declared at the
+		// root or in `optional_overrides:` — exactly what made the build
+		// refuse it.
 		for k, sv := range undeliverable[tenant] {
-			if _, listed := tv.Unserved[k]; listed {
-				continue
-			}
-			if _, served := tv.Values[k]; served {
-				continue
-			}
 			tv.Unserved[k] = rawScheduledValue(sv)
 		}
 		out[tenant] = tv

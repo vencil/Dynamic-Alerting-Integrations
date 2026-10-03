@@ -99,13 +99,16 @@ type LoadReport struct {
 	// (#2627). The walk's own WARN for the root is not logged then: this
 	// error carries the same reason.
 	RootListErr error
-	// Undeliverable is the build's FlatBuild.UnreachableValues: tenantID →
-	// each key the tenant inherits from a subtree `_defaults.yaml` that the
-	// root `_defaults.yaml` and `optional_overrides:` do not declare, with
-	// the value that level hands down. The exporter serves no series for such
-	// a key, logs an ERROR and counts the tenant on
+	// Undeliverable is the threshold keys of the build's
+	// FlatBuild.UnreachableValues (undeliverableThresholds: keys not
+	// starting with `_`): tenantID → each threshold key the tenant inherits
+	// from a subtree `_defaults.yaml` that the root `_defaults.yaml` and
+	// `optional_overrides:` do not declare, with UnreachableValues' value
+	// (the deepest threshold-shaped one, normalised). The exporter serves no
+	// series for such a key, logs an ERROR and counts the tenant on
 	// da_config_subtree_undeliverable_tenants; the key is in no tenant map of
-	// the config. nil when there is none (#1976).
+	// the config. `_` keys are left out (#2388's). nil when there is none
+	// (#1976).
 	Undeliverable map[string]map[string]ScheduledValue
 }
 
@@ -159,7 +162,7 @@ func LoadDirReport(dir string, logger *log.Logger) (cfg *ThresholdConfig, rep Lo
 	}
 	rep.ParseFailed = built.ParseFailed
 	rep.Unreadable = scan.Unreadable
-	rep.Undeliverable = built.UnreachableValues
+	rep.Undeliverable = undeliverableThresholds(built.UnreachableValues)
 	for _, k := range scan.Keys { // sorted
 		f := scan.Files[k]
 		if !isPlatformKey(k) && !f.ParseFailed && len(f.TenantIDs) == 0 {

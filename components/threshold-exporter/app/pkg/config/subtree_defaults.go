@@ -89,9 +89,12 @@ func applySubtreeDefaults(
 	// ⛔ KEYS THIS OVERLAY CANNOT DELIVER, per tenant, reported rather than
 	// forced through. See the block above `unreachableKeys` for why writing
 	// them anyway was worse than not writing them. Each key keeps the value
-	// the deepest level naming it hands down (the chain is root-first, so a
-	// later level overwrites), rendered as a tenant's own map would hold it
-	// (#1976: `da-guard served-values` lists it in `unserved`).
+	// of the deepest level that writes it in a threshold shape (the chain is
+	// root-first, so a later level overwrites; a level whose value fails
+	// scheduledValueFromRaw / isThresholdShaped is skipped above and leaves
+	// the shallower value). The value is scheduledValueFromRaw's rendering —
+	// normalised (a YAML `1e6` becomes "1e+06"), not the file's text (#1976:
+	// `da-guard served-values` lists threshold keys in `unserved`).
 	unreachable := map[string]map[string]ScheduledValue{}
 
 	filled := 0
@@ -449,6 +452,46 @@ func declaredAnywhere(cfg *ThresholdConfig, key string) bool {
 		}
 	}
 	return false
+}
+
+// undeliverableThresholds is the part of the build's unreachable set that
+// #1976 reports to readers outside the exporter (LoadReport.Undeliverable,
+// ScopedTenants.Undeliverable — both go through here, so the two cannot
+// filter differently): the THRESHOLD keys only, i.e. keys that do not start
+// with `_`. nil when none is left.
+//
+// ⛔ RESERVED / `_` KEYS ARE LEFT OUT, NOT REPORTED. For those "declare it at
+// the root or in `optional_overrides:`" is the wrong fix — declaring
+// `_state_maintenance` in `optional_overrides:` silences the unreachable
+// verdict while the subtree value still does not take effect — and some of
+// them are listed although a deeper level delivers the key (`_state_<f>` as a
+// schedule at one level and a scalar below: the shallow refusal stays in the
+// set). Subtree defaults carrying `_` keys are #2388's, not this report's.
+// FlatBuild.Unreachable (the exporter's ERROR and gauge) is not filtered.
+//
+// ⚠️ The test is the `_` prefix, not IsReservedKey: IsReservedKey names only
+// the RECOGNISED reserved keys and prefixes, and the build also refuses
+// unrecognised `_` keys (`_silent_bogus: 5` — measured unreachable, and
+// IsReservedKey says false), for which the root-declaration advice is just as
+// wrong. Every key IsReservedKey accepts starts with `_`, so this is a
+// superset of it. A threshold key never starts with `_`.
+func undeliverableThresholds(byTenant map[string]map[string]ScheduledValue) map[string]map[string]ScheduledValue {
+	var out map[string]map[string]ScheduledValue
+	for tenantID, keys := range byTenant {
+		for k, v := range keys {
+			if strings.HasPrefix(k, "_") {
+				continue
+			}
+			if out == nil {
+				out = map[string]map[string]ScheduledValue{}
+			}
+			if out[tenantID] == nil {
+				out[tenantID] = map[string]ScheduledValue{}
+			}
+			out[tenantID][k] = v
+		}
+	}
+	return out
 }
 
 // unreachableKeys flattens the per-tenant sets into sorted slices.

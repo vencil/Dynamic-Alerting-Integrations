@@ -79,9 +79,10 @@
 //     against it (config.EffectiveConfig.MergedDefaults leaves it out).
 //
 //  7. Undeliverable subtree defaults (#1976; see subtree.go), warn for now:
-//     a tenant inherits a key only a subtree `_defaults.yaml` names, which
-//     the exporter serves no series for. The set is the exporter's build's
-//     own (CheckInput.UndeliverableInherited), not re-derived here.
+//     a tenant inherits a threshold key (not `_`-prefixed) only a subtree
+//     `_defaults.yaml` names, which the exporter serves no series for. The
+//     set is the exporter's build's own (CheckInput.UndeliverableInherited),
+//     not re-derived here; reserved keys there are #2388's.
 //
 // Future PRs in the C-12 family:
 //   - PR-4: CLI subcommand `da-tools guard defaults-impact` plus
@@ -435,7 +436,7 @@ type CheckInput struct {
 	// broken file is named once, by exit 3.
 	ParseFailed []string `json:"-"`
 
-	// UndeliverableInherited maps tenant ID → the keys it inherits from a
+	// UndeliverableInherited maps tenant ID → the threshold keys it inherits from a
 	// subtree `_defaults.yaml` that the exporter's build cannot deliver
 	// (config.ScopedTenants.Undeliverable, i.e. FlatBuild.Unreachable). Each
 	// becomes a subtree_default_undeliverable warning for a tenant in

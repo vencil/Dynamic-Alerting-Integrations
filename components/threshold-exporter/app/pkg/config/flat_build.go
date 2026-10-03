@@ -65,12 +65,15 @@ type FlatBuild struct {
 	// (keyCanReachTheOutputPlane): the key is in neither the root defaults
 	// nor `optional_overrides:`, so /metrics never carries it. The exporter
 	// logs it as an ERROR and counts the tenant on
-	// da_config_subtree_undeliverable_tenants; da-guard reports it as the
+	// da_config_subtree_undeliverable_tenants; da-guard reports its
+	// threshold keys (not the `_` ones, undeliverableThresholds) as the
 	// subtree_default_undeliverable finding (#1976). nil when there is none.
 	Unreachable map[string][]string
-	// UnreachableValues is Unreachable with each key's value: the one the
-	// deepest defaults level naming the key hands down, rendered as a
-	// tenant's own map would hold it. Same tenants and keys as Unreachable.
+	// UnreachableValues is Unreachable with each key's value: the one of the
+	// deepest defaults level that writes the key in a threshold shape (a
+	// deeper level writing it in another shape, e.g. a YAML bool, is skipped),
+	// normalised by scheduledValueFromRaw (a YAML `1e6` is "1e+06") — not the
+	// file's text. Same tenants and keys as Unreachable.
 	UnreachableValues map[string]map[string]ScheduledValue
 	// ParseFailed is the scan keys (root-relative slash paths, in scan.Keys
 	// order, which is sorted) of the files that contribute nothing to Config

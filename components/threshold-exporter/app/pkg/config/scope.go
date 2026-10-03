@@ -146,14 +146,16 @@ type ScopedTenants struct {
 	// route generator refuses (withGeneratorDuplicates).
 	NestedPlatformFiles []DefaultsFile
 
-	// Undeliverable is, for each tenant in Tenants, the sorted keys it
-	// inherits from a subtree `_defaults.yaml` that the exporter's own build
-	// of this tree cannot deliver (FlatBuild.Unreachable, the same map the
-	// exporter logs as an ERROR and counts on
-	// da_config_subtree_undeliverable_tenants): the root `_defaults.yaml`
-	// and `optional_overrides:` do not declare the key, so /metrics never
-	// carries it although the tenant's effective config shows it. Only
-	// in-scope tenants are listed; nil when there is none (#1976).
+	// Undeliverable is, for each tenant in Tenants, the sorted THRESHOLD keys
+	// (not starting with `_`; undeliverableThresholds, the same filter as
+	// LoadReport.Undeliverable) it inherits from a subtree `_defaults.yaml`
+	// that the exporter's own build of this tree cannot deliver
+	// (FlatBuild.Unreachable, the map the exporter logs as an ERROR and
+	// counts on da_config_subtree_undeliverable_tenants): the root
+	// `_defaults.yaml` and `optional_overrides:` do not declare the key, so
+	// /metrics never carries it although the tenant's effective config shows
+	// it. `_` keys are left out (#2388's). Only in-scope tenants are listed;
+	// nil when there is none (#1976).
 	Undeliverable map[string][]string
 }
 
@@ -431,8 +433,9 @@ func scopeEffective(configDir, scopeDir string, wholeTree bool) (*ScopedTenants,
 // is a `_` file in a directory above it (the root's platform files, a chain
 // `_defaults.yaml`) — those shape every tenant under the scope.
 //
-// unreachable is the same build's FlatBuild.Unreachable (tenantID → the
-// inherited subtree keys it cannot deliver), over the whole tree; the caller
+// unreachable is the threshold keys of the same build's unreachable set
+// (undeliverableThresholds over FlatBuild.UnreachableValues: tenantID → the
+// inherited subtree threshold keys it cannot deliver), over the whole tree; the caller
 // keeps the in-scope tenants (ScopedTenants.Undeliverable, #1976). One build
 // answers both, so the two cannot come from different readings of the tree.
 func scopeParseFailed(scan *TreeScan, scopeRel string) (parseFailed []string, unreachable map[string][]string, err error) {
@@ -453,7 +456,7 @@ func scopeParseFailed(scan *TreeScan, scopeRel string) (parseFailed []string, un
 		}
 	}
 	sort.Strings(parseFailed)
-	return parseFailed, built.Unreachable, nil
+	return parseFailed, unreachableKeys(undeliverableThresholds(built.UnreachableValues)), nil
 }
 
 // scopeDefaultsFiles is ScopedTenants.DefaultsFiles: the selected carrier of
