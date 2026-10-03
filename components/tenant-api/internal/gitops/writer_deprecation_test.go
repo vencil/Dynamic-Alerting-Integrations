@@ -34,9 +34,9 @@ func newNameDefaultsDir(t *testing.T) string {
 
 // assertDeprecationNotice pins the author-facing wording contract on the
 // surface handlers actually ship (#1231 c2): the notice must name BOTH
-// spellings, must NOT contain the substring "skipping" (the Python CI fatal
-// predicate is `"WARN" in w and "skipping" in w`), and must NOT start with
-// "ERROR:" (the second fatal predicate).
+// spellings, must NOT contain the substring "skipping" (the word of a dropped
+// entry; the Python CI predicate judges that by type, `SkippedEntryWarning`,
+// #2489), and must NOT start with "ERROR:" (a blocking prefix).
 func assertDeprecationNotice(t *testing.T, notices []string) {
 	t.Helper()
 	if len(notices) == 0 {
@@ -48,7 +48,7 @@ func assertDeprecationNotice(t *testing.T, notices []string) {
 	}
 	for _, n := range notices {
 		if strings.Contains(n, "skipping") {
-			t.Errorf("notice must not contain 'skipping' (Python CI fatal predicate), got: %q", n)
+			t.Errorf("notice must not contain 'skipping', got: %q", n)
 		}
 		if strings.HasPrefix(strings.TrimSpace(n), "ERROR:") {
 			t.Errorf("notice must not start with 'ERROR:' (blocking-prefix predicate), got: %q", n)

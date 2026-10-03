@@ -11,7 +11,7 @@ package config
 //   (3) dual-emit lifecycle contract — table-driven: alias targets twin, everything
 //       else (including canonical-prefix lookalikes) never does
 //   (5) deprecation signal pins — notices name BOTH keys; independent pins ban the
-//       "skipping" substring and the "ERROR:" prefix (Python CI fatal heuristics)
+//       "skipping" substring and the "ERROR:" prefix
 //   (6) adversarial pins — mysql_cpu_util typo stays an unknown-key Error;
 //       mysql_cpu{version=""} stays rejected; dangling mysql_cpu_critical still errors
 // plus the two consistency fixes that ride along: ResolveThresholdExpiriesAt keeps
@@ -330,9 +330,10 @@ func TestDeprecationNotices_NameBothKeysAndNeverBlock(t *testing.T) {
 }
 
 // TestDeprecationNotices_ForbiddenTokens is a standalone wording tripwire:
-// the Python CI fatal heuristic is substring-based, and the two tokens below
-// would flip a benign advisory into a build-breaking fatal. Pinned separately
-// from the content test so a future rewording PR trips THIS test by name.
+// "ERROR:" is a Python CI blocking prefix, matched as text; "skipping" is the
+// word of a dropped entry (Python CI judges that by type, SkippedEntryWarning,
+// #2489). Pinned separately from the content test so a future rewording PR
+// trips THIS test by name.
 func TestDeprecationNotices_ForbiddenTokens(t *testing.T) {
 	t.Parallel()
 	kv := noticeFixture().ValidateTenantKeys()
@@ -341,7 +342,7 @@ func TestDeprecationNotices_ForbiddenTokens(t *testing.T) {
 	}
 	for _, n := range kv.Notices {
 		if strings.Contains(n, "skipping") {
-			t.Errorf("notice must not contain the %q substring (Python CI fatal heuristic): %q", "skipping", n)
+			t.Errorf("notice must not contain the %q substring: %q", "skipping", n)
 		}
 		if strings.HasPrefix(n, "ERROR:") {
 			t.Errorf("notice must not start with %q (Python CI fatal heuristic): %q", "ERROR:", n)
