@@ -46,13 +46,6 @@ set -uo pipefail
 # puts this file under that helper's PATH-stripped contract. Rationale there.
 _prepush_dir="${BASH_SOURCE[0]%/*}"
 [ "$_prepush_dir" = "${BASH_SOURCE[0]}" ] && _prepush_dir="."
-# ⛔ Absolute BEFORE the cd below, or a relative invocation from a subdirectory
-# reports the helper missing while it is sitting right there.
-case "$_prepush_dir" in /* | ?:[/\\]*) ;; *) _prepush_dir="$PWD/$_prepush_dir" ;; esac
-# ⛔ Keep REPO_ROOT on its own line, without naming `_prepush_dir`: the
-# sourcing-form test refuses a `$(` on any line that mentions that variable.
-REPO_ROOT="$(git rev-parse --show-toplevel 2>/dev/null || pwd)"
-cd "$REPO_ROOT" || exit 1
 
 # --- Escape hatch ------------------------------------------------------------
 if [ "${MKDOCS_STRICT_BYPASS:-0}" = "1" ]; then
