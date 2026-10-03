@@ -449,7 +449,7 @@ _routing_enforced:
 
 **Mode B: Per-tenant Independent Channel **
 
-When the receiver field contains `{{tenant}}` placeholder, the system automatically creates an independent enforced route for each tenant. Platform can use this to establish tenant-specific notification channels that tenants cannot reject or override. ⚠️ Today only tenants with a routing configuration get this route — their own `_routing`, or one supplied by `_routing_defaults` or `_routing_profile`. Without platform `_routing_defaults`, a tenant that neither writes `_routing` nor references a profile is left out ([#2519](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/2519)):
+When the receiver field contains `{{tenant}}` placeholder, the system automatically creates an independent enforced route for each tenant. Platform can use this to establish tenant-specific notification channels that tenants cannot reject or override. "Each tenant" means every tenant the generator reads — the same set the severity-dedup inhibit rules cover: a tenant without `_routing` (thresholds only, only `_silent_mode`, or `_routing: disable`) gets one too; the exception is an invalid tenant id, for which the generator refuses the whole tree. Silent mode still applies to this route: it suppresses through inhibit rules, which do not depend on the route. The route count therefore grows linearly with the tenant count ([#2519](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/2519)):
 
 ```yaml
 # conf.d/_defaults.yaml
