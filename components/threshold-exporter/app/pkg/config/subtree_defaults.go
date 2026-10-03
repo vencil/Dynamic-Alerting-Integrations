@@ -457,29 +457,41 @@ func declaredAnywhere(cfg *ThresholdConfig, key string) bool {
 // undeliverableThresholds is the part of the build's unreachable set that
 // #1976 reports to readers outside the exporter (LoadReport.Undeliverable,
 // ScopedTenants.Undeliverable — both go through here, so the two cannot
-// filter differently): the THRESHOLD keys only, i.e. keys that do not start
-// with `_`. nil when none is left.
+// filter differently): the keys for which the finding's advice — "declare
+// the key in the root `_defaults.yaml` or `optional_overrides:`" — is the
+// fix. nil when none is left. FlatBuild.Unreachable (the exporter's ERROR and
+// gauge) is not filtered.
 //
-// ⛔ RESERVED / `_` KEYS ARE LEFT OUT, NOT REPORTED. For those "declare it at
-// the root or in `optional_overrides:`" is the wrong fix — declaring
-// `_state_maintenance` in `optional_overrides:` silences the unreachable
-// verdict while the subtree value still does not take effect — and some of
-// them are listed although a deeper level delivers the key (`_state_<f>` as a
-// schedule at one level and a scalar below: the shallow refusal stays in the
-// set). Subtree defaults carrying `_` keys are #2388's, not this report's.
-// FlatBuild.Unreachable (the exporter's ERROR and gauge) is not filtered.
+// Three exclusions, each taken from an existing authority rather than a
+// naming rule of its own:
 //
-// ⚠️ The test is the `_` prefix, not IsReservedKey: IsReservedKey names only
-// the RECOGNISED reserved keys and prefixes, and the build also refuses
-// unrecognised `_` keys (`_silent_bogus: 5` — measured unreachable, and
-// IsReservedKey says false), for which the root-declaration advice is just as
-// wrong. Every key IsReservedKey accepts starts with `_`, so this is a
-// superset of it. A threshold key never starts with `_`.
+//  1. IsReservedKey(k) — the reserved keys the config model recognises
+//     (`_metadata`, `_profile`, `_state_*`, `_routing*`, …). The root
+//     `defaults:` block is a float map and has no place for them, and
+//     declaring them in `optional_overrides:` silences the verdict while the
+//     subtree value still does not take effect (measured with a scheduled
+//     `_state_maintenance`). Some are even listed although a deeper level
+//     delivers the key (`_state_<f>` as a schedule at one level, a scalar
+//     below). Subtree defaults carrying reserved keys are #2388's.
+//  2. baseRowsSkipKey(k) — the keys resolveBaseRows itself never turns into a
+//     row (`_silent_*`, `_state_*`, `_severity_dedup`, `_routing*`), whether
+//     declared or not: `_silent_bogus` declared at the root still serves
+//     nothing (measured), so the advice cannot help. Also #2388's.
+//  3. disabledEverywhere(v) — a key the subtree switches OFF (isDisabled, the
+//     resolver's own disable test, on the default and every window). It is
+//     undelivered, but "that alert can never fire" is what the subtree asked
+//     for; declaring it at the root would instead start serving it for every
+//     tenant outside the subtree (measured). Not #2388's — just not reported.
+//
+// ⚠️ An unrecognised `_` key that is none of the above (`_myth: 5`) IS a
+// threshold to the exporter: a root `_myth` serves a user_threshold row, and
+// declaring a subtree's `_myth2` at the root makes the tenant serve the
+// subtree's value (both measured) — so it is reported, like any threshold.
 func undeliverableThresholds(byTenant map[string]map[string]ScheduledValue) map[string]map[string]ScheduledValue {
 	var out map[string]map[string]ScheduledValue
 	for tenantID, keys := range byTenant {
 		for k, v := range keys {
-			if strings.HasPrefix(k, "_") {
+			if IsReservedKey(k) || baseRowsSkipKey(k) || disabledEverywhere(v) {
 				continue
 			}
 			if out == nil {
@@ -492,6 +504,23 @@ func undeliverableThresholds(byTenant map[string]map[string]ScheduledValue) map[
 		}
 	}
 	return out
+}
+
+// disabledEverywhere reports whether every value sv can resolve to is a
+// disable by resolveBaseRows' own test (isDisabled on the trimmed, lowered
+// text): its default and each window's value. A schedule that is a number in
+// any window is not — it would serve a row then.
+func disabledEverywhere(sv ScheduledValue) bool {
+	off := func(s string) bool { return isDisabled(strings.ToLower(strings.TrimSpace(s))) }
+	if !off(sv.Default) {
+		return false
+	}
+	for _, w := range sv.Overrides {
+		if !off(w.Value) {
+			return false
+		}
+	}
+	return true
 }
 
 // unreachableKeys flattens the per-tenant sets into sorted slices.

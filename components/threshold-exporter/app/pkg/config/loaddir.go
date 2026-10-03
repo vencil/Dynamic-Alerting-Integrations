@@ -99,16 +99,15 @@ type LoadReport struct {
 	// (#2627). The walk's own WARN for the root is not logged then: this
 	// error carries the same reason.
 	RootListErr error
-	// Undeliverable is the threshold keys of the build's
-	// FlatBuild.UnreachableValues (undeliverableThresholds: keys not
-	// starting with `_`): tenantID → each threshold key the tenant inherits
+	// Undeliverable is the build's FlatBuild.UnreachableValues filtered by
+	// undeliverableThresholds (reserved keys, keys resolveBaseRows never
+	// serves and switched-off keys left out): tenantID → each key the tenant inherits
 	// from a subtree `_defaults.yaml` that the root `_defaults.yaml` and
 	// `optional_overrides:` do not declare, with UnreachableValues' value
 	// (the deepest threshold-shaped one, normalised). The exporter serves no
 	// series for such a key, logs an ERROR and counts the tenant on
 	// da_config_subtree_undeliverable_tenants; the key is in no tenant map of
-	// the config. `_` keys are left out (#2388's). nil when there is none
-	// (#1976).
+	// the config. nil when there is none (#1976).
 	Undeliverable map[string]map[string]ScheduledValue
 }
 

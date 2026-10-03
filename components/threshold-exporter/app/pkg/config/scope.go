@@ -146,15 +146,15 @@ type ScopedTenants struct {
 	// route generator refuses (withGeneratorDuplicates).
 	NestedPlatformFiles []DefaultsFile
 
-	// Undeliverable is, for each tenant in Tenants, the sorted THRESHOLD keys
-	// (not starting with `_`; undeliverableThresholds, the same filter as
+	// Undeliverable is, for each tenant in Tenants, the sorted keys
+	// (filtered by undeliverableThresholds, the same filter as
 	// LoadReport.Undeliverable) it inherits from a subtree `_defaults.yaml`
 	// that the exporter's own build of this tree cannot deliver
 	// (FlatBuild.Unreachable, the map the exporter logs as an ERROR and
 	// counts on da_config_subtree_undeliverable_tenants): the root
 	// `_defaults.yaml` and `optional_overrides:` do not declare the key, so
 	// /metrics never carries it although the tenant's effective config shows
-	// it. `_` keys are left out (#2388's). Only in-scope tenants are listed;
+	// it. Only in-scope tenants are listed;
 	// nil when there is none (#1976).
 	Undeliverable map[string][]string
 }

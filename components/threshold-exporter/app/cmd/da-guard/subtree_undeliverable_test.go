@@ -106,17 +106,20 @@ func TestGuard_UndeliverableFollowsScope(t *testing.T) {
 		{scope: "finance", want: 1},
 		{scope: "ops", want: 0}, // tenant-a is outside the scope
 	} {
-		code, got := undeliverableFindings(t, "--config-dir", dir, "--scope", tc.scope, "--warn-as-error")
-		if len(got) != tc.want {
-			t.Errorf("--scope %s: findings = %+v, want %d", tc.scope, got, tc.want)
-		}
-		wantCode := exitOK
-		if tc.want > 0 {
-			wantCode = exitFindings
-		}
-		if code != wantCode {
-			t.Errorf("--scope %s --warn-as-error: exit = %d, want %d", tc.scope, code, wantCode)
-		}
+		t.Run(tc.scope, func(t *testing.T) {
+			t.Parallel()
+			code, got := undeliverableFindings(t, "--config-dir", dir, "--scope", tc.scope, "--warn-as-error")
+			if len(got) != tc.want {
+				t.Errorf("--scope %s: findings = %+v, want %d", tc.scope, got, tc.want)
+			}
+			wantCode := exitOK
+			if tc.want > 0 {
+				wantCode = exitFindings
+			}
+			if code != wantCode {
+				t.Errorf("--scope %s --warn-as-error: exit = %d, want %d", tc.scope, code, wantCode)
+			}
+		})
 	}
 }
 
@@ -137,18 +140,59 @@ func TestServedValues_UndeliverableKeyIsUnserved(t *testing.T) {
 	}
 }
 
-// #1976 r2: reserved / `_` keys a subtree `_defaults.yaml` hands down are not
-// this finding's (#2388) — the exporter's build refuses them (its ERROR and
-// gauge are unchanged), but neither the finding nor `unserved` reports them.
-func TestUndeliverable_ReservedSubtreeKeysAreNotReported(t *testing.T) {
+// #1976 r2/r3: which refused keys the finding and `unserved` report. Reserved
+// keys and keys the exporter never serves as a row (#2388's) and keys the
+// subtree switches off are not reported — the exporter's build still refuses
+// them (its ERROR and gauge are unchanged). An unrecognised `_` key is a
+// threshold to the exporter and is reported; declared at the root (the
+// finding's fix), the tenant serves the subtree's value.
+func TestUndeliverable_SubtreeKeysReportedOrNot(t *testing.T) {
 	t.Parallel()
+	const root = "defaults:\n  mysql_connections: 80\n"
 	const stateFilters = "state_filters:\n  maintenance:\n    reasons: [\"x\"]\n    severity: warning\n"
 	const scheduled = "  _state_maintenance:\n    default: enable\n    overrides:\n" +
 		"      - window: \"00:00-23:59\"\n        value: disable\n"
+	subtree := func(rootBody, sub string) map[string]string {
+		return map[string]string{
+			"_defaults.yaml":         rootBody,
+			"finance/_defaults.yaml": sub,
+			"finance/tenant-a.yaml":  "tenants:\n  tenant-a: {}\n",
+		}
+	}
 	for _, tc := range []struct {
-		name  string
-		files map[string]string
+		name         string
+		files        map[string]string
+		wantFindings []string           // Fields of tenant-a's findings
+		wantUnserved map[string]any     // tenant-a's unserved; nil = none
+		wantValues   map[string]float64 // tenant-a values that must be served
 	}{
+		{
+			name:  "silent-bogus",
+			files: subtree(root, "defaults:\n  _silent_bogus: 5\n"),
+		},
+		{
+			// The review's t3: a subtree switching a key off.
+			name:  "switched-off",
+			files: subtree(root, "defaults:\n  redis_evicted_keys: disable\n"),
+		},
+		{
+			// The review's t6.
+			name:         "unrecognised-underscore-key",
+			files:        subtree(root+"  _myth: 5\n", "defaults:\n  _myth2: 7\n"),
+			wantFindings: []string{"_myth2"},
+			wantUnserved: map[string]any{"_myth2": "7"},
+		},
+		{
+			// The review's t7 without tenant-b: `_myth2` declared at the root
+			// is delivered (the subtree's 7). `_silent_bogus` declared at the
+			// root lands in the tenant's map but serves no row, so it is in
+			// `unserved` through the merged-map path that predates #1976 (no
+			// finding: it is not refused).
+			name:         "unrecognised-underscore-key-declared",
+			files:        subtree(root+"  _myth2: 1\n  _silent_bogus: 1\n", "defaults:\n  _myth2: 7\n  _silent_bogus: 7\n"),
+			wantUnserved: map[string]any{"_silent_bogus": "7"},
+			wantValues:   map[string]float64{"_myth2": 7},
+		},
 		{
 			// `_metadata`, a scheduled `_state_maintenance` and `_profile`,
 			// none declared in optional_overrides: all three are refused.
@@ -183,23 +227,48 @@ func TestUndeliverable_ReservedSubtreeKeysAreNotReported(t *testing.T) {
 			},
 		},
 	} {
-		tmp := t.TempDir()
-		tree := map[string]string{}
-		for k, v := range tc.files {
-			tree["conf.d/"+k] = v
-		}
-		testutil.WriteTree(t, tmp, tree)
-		dir := filepath.Join(tmp, "conf.d")
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			tmp := t.TempDir()
+			tree := map[string]string{}
+			for k, v := range tc.files {
+				tree["conf.d/"+k] = v
+			}
+			testutil.WriteTree(t, tmp, tree)
+			dir := filepath.Join(tmp, "conf.d")
 
-		code, got := undeliverableFindings(t, "--config-dir", dir, "--warn-as-error")
-		if code != exitOK || len(got) != 0 {
-			t.Errorf("%s: exit = %d, findings = %+v; want exit 0 and none", tc.name, code, got)
-		}
-		code, doc, _, stderr := served(t, tc.files, "2026-10-01T00:00:00Z")
-		mustOK(t, code, stderr)
-		if u := doc.Tenants["tenant-a"].Unserved; len(u) != 0 {
-			t.Errorf("%s: tenant-a unserved = %v, want none", tc.name, u)
-		}
+			code, got := undeliverableFindings(t, "--config-dir", dir, "--warn-as-error")
+			var fields []string
+			for _, f := range got {
+				if f.TenantID != "tenant-a" {
+					t.Errorf("finding for another tenant: %+v", f)
+				}
+				fields = append(fields, f.Field)
+			}
+			if !reflect.DeepEqual(fields, tc.wantFindings) {
+				t.Errorf("finding fields = %v, want %v", fields, tc.wantFindings)
+			}
+			wantCode := exitOK
+			if len(tc.wantFindings) > 0 {
+				wantCode = exitFindings
+			}
+			if code != wantCode {
+				t.Errorf("--warn-as-error: exit = %d, want %d", code, wantCode)
+			}
+
+			code, doc, _, stderr := served(t, tc.files, "2026-10-01T00:00:00Z")
+			mustOK(t, code, stderr)
+			u := doc.Tenants["tenant-a"].Unserved
+			if len(u) == 0 {
+				u = nil
+			}
+			if !reflect.DeepEqual(u, tc.wantUnserved) {
+				t.Errorf("tenant-a unserved = %v, want %v", u, tc.wantUnserved)
+			}
+			for k, v := range tc.wantValues {
+				wantValue(t, doc, "tenant-a", k, v)
+			}
+		})
 	}
 }
 

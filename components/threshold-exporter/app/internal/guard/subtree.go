@@ -7,15 +7,15 @@ package guard
 // effective config, but the exporter serves no series for it: the collector
 // iterates the root defaults and the declared surface, and a nested `_` file
 // feeds neither. The exporter logs that at load time (ERROR) and counts the
-// tenant on da_config_subtree_undeliverable_tenants. This check reports the
-// THRESHOLD keys of that set (not starting with `_`) before the change
-// merges. Reserved / `_` keys in a subtree `_defaults.yaml` are not this
-// finding's: its fix (declare the key at the root) is wrong for them; see
-// #2388.
+// tenant on da_config_subtree_undeliverable_tenants. This check reports, before
+// the change merges, the keys of that set for which "declare it at the root"
+// is the fix: not the reserved keys, not the keys the exporter never serves
+// as a threshold row (`_silent_*`, `_state_*`, …; both #2388's), and not keys
+// the subtree switches off (pkg/config undeliverableThresholds).
 //
 // ⛔ NO VERDICT OF ITS OWN. Which keys are undeliverable is the exporter's
 // build's answer (pkg/config FlatBuild.Unreachable, judged by
-// keyCanReachTheOutputPlane, filtered to threshold keys by pkg/config's
+// keyCanReachTheOutputPlane, filtered by pkg/config's
 // undeliverableThresholds), handed in by the caller as
 // CheckInput.UndeliverableInherited; nothing here re-derives it.
 //
@@ -27,7 +27,7 @@ import (
 )
 
 // FindingSubtreeDefaultUndeliverable (warn; #1976): the tenant inherits Field,
-// a threshold key a subtree `_defaults.yaml` names and the conf.d root `_defaults.yaml`
+// a threshold key (see undeliverableThresholds) a subtree `_defaults.yaml` names and the conf.d root `_defaults.yaml`
 // and `optional_overrides:` do not declare. The exporter serves no series for
 // it. Planned to become an error in the next minor release.
 const FindingSubtreeDefaultUndeliverable FindingKind = "subtree_default_undeliverable"
@@ -58,11 +58,12 @@ func checkSubtreeUndeliverable(input CheckInput) []Finding {
 				Field:    k,
 				Message: fmt.Sprintf("Threshold `%s` is inherited from a subtree `_defaults.yaml`, but neither the conf.d root "+
 					"`_defaults.yaml` nor `optional_overrides:` declares it, so the exporter serves no series for it "+
-					"and that alert can never fire (the tenant's effective config still shows the value; the exporter "+
-					"logs an ERROR and counts the tenant on da_config_subtree_undeliverable_tenants). Declare `%s` in "+
-					"the conf.d root `_defaults.yaml` or in `optional_overrides:`. This warning becomes an error in "+
-					"the next minor release (#1976). Only threshold keys are reported here; reserved (`_`) keys in "+
-					"a subtree `_defaults.yaml` are covered by #2388.", k, k),
+					"and that alert can never fire (the tenant's effective config still shows a value for it; the "+
+					"exporter logs an ERROR and counts the tenant on da_config_subtree_undeliverable_tenants). Declare "+
+					"`%s` in the conf.d root `_defaults.yaml` or in `optional_overrides:`. This warning becomes an "+
+					"error in the next minor release (#1976). Not reported here: reserved keys and keys the exporter "+
+					"never serves as a threshold row (`_silent_*`, `_state_*`, …; see #2388), and keys the subtree "+
+					"switches off.", k, k),
 			})
 		}
 	}

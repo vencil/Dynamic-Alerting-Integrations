@@ -406,6 +406,17 @@ func isThresholdExpired(sv ScheduledValue, now time.Time) bool {
 	return now.After(t)
 }
 
+// baseRowsSkipKey reports whether resolveBaseRows skips a defaults key
+// without producing a row: the _state_ / _silent_ / _severity_dedup /
+// _routing keys, handled by ResolveStateFilters() / ResolveSilentModes() /
+// ResolveSeverityDedup() / ResolveRouting() respectively. Named so the #1976
+// report (undeliverableThresholds) asks the row generator itself which keys
+// never become a base row.
+func baseRowsSkipKey(metricKey string) bool {
+	return strings.HasPrefix(metricKey, "_state_") || strings.HasPrefix(metricKey, "_silent_") ||
+		metricKey == "_severity_dedup" || strings.HasPrefix(metricKey, "_routing")
+}
+
 // resolveBaseRows resolves a tenant's base thresholds from the given defaults
 // view using the three-state contract (custom value / omitted→default /
 // disable) plus the inline "value:severity" suffix. Extracted verbatim from
@@ -424,11 +435,7 @@ func isThresholdExpired(sv ScheduledValue, now time.Time) bool {
 func (c *ThresholdConfig) resolveBaseRows(tenant string, defaults map[string]float64, overrides map[string]ScheduledValue, now time.Time, sink rowSink, logf func(format string, args ...any)) []ResolvedThreshold {
 	var rows []ResolvedThreshold
 	for metricKey, defaultValue := range defaults {
-		// Skip _state_ / _silent_ / _severity_dedup / _routing keys — handled
-		// by ResolveStateFilters() / ResolveSilentModes() / ResolveSeverityDedup()
-		// / ResolveRouting() respectively.
-		if strings.HasPrefix(metricKey, "_state_") || strings.HasPrefix(metricKey, "_silent_") ||
-			metricKey == "_severity_dedup" || strings.HasPrefix(metricKey, "_routing") {
+		if baseRowsSkipKey(metricKey) {
 			continue
 		}
 

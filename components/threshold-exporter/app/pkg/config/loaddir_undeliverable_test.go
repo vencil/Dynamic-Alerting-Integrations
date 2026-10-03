@@ -152,16 +152,18 @@ func TestScopeEffective_UndeliverableKeepsInScopeTenants(t *testing.T) {
 	}
 }
 
-// #1976 r2: reserved / `_` keys refused in a subtree are #2388's, not this
-// report's. The shapes below are measured in FlatBuild.Unreachable (the
-// exporter's ERROR and gauge, unchanged) and must not reach
-// LoadReport.Undeliverable or ScopedTenants.Undeliverable — both pass through
-// undeliverableThresholds.
+// #1976 r2/r3: the report keeps only keys for which "declare it at the
+// root or in optional_overrides:" is the fix (undeliverableThresholds). The
+// shapes below are measured in FlatBuild.Unreachable (the exporter's ERROR
+// and gauge, unchanged) first; then LoadReport.Undeliverable and
+// ScopedTenants.Undeliverable — both through the one filter — are checked.
+// Each exclusion has a case only it catches, so dropping any one of them
+// turns a case red: reserved-keys (IsReservedKey), silent-bogus
+// (baseRowsSkipKey), switched-off (disabledEverywhere).
 
-// reservedOnlyRoot / reservedOnlySubtree: a subtree `_defaults.yaml` holding
-// only `_` keys — `_metadata` and a scheduled `_state_maintenance` (both in
-// the root's optional_overrides), `_profile`, and `_silent_bogus`, which
-// IsReservedKey does not recognise but the build refuses too.
+// reservedOnlyRoot / reservedOnlySubtree: `_metadata` and a scheduled
+// `_state_maintenance` (both in the root's optional_overrides), `_profile`,
+// and `_silent_bogus`, which IsReservedKey does not recognise.
 const reservedOnlyRoot = "defaults:\n  mysql_connections: 80\n" +
 	"state_filters:\n  maintenance:\n    reasons: [\"x\"]\n    severity: warning\n" +
 	"optional_overrides:\n  - _state_maintenance\n  - _metadata\n"
@@ -171,20 +173,31 @@ const reservedOnlySubtree = "defaults:\n  _metadata: 5\n" +
 	"      - window: \"00:00-23:59\"\n        value: disable\n" +
 	"  _profile: disable\n  _silent_bogus: 5\n"
 
-// scheduleThenScalarStateTree: `_state_maintenance` as a schedule at
+const plainRoot = "defaults:\n  mysql_connections: 80\n"
+
+// scheduleThenScalarStateFiles: `_state_maintenance` as a schedule at
 // finance/ (refused) and a scalar `disable` at finance/us/ (delivered). The
 // shallow refusal stays in FlatBuild.Unreachable although the key is
 // delivered.
-func scheduleThenScalarStateTree(t *testing.T) string {
-	t.Helper()
-	return writeUndeliverableTree(t, map[string]string{
-		"_defaults.yaml": "defaults:\n  mysql_connections: 80\n" +
+func scheduleThenScalarStateFiles() map[string]string {
+	return map[string]string{
+		"_defaults.yaml": plainRoot +
 			"state_filters:\n  maintenance:\n    reasons: [\"x\"]\n    severity: warning\n",
 		"finance/_defaults.yaml": "defaults:\n  _state_maintenance:\n    default: enable\n" +
 			"    overrides:\n      - window: \"00:00-23:59\"\n        value: disable\n",
 		"finance/us/_defaults.yaml": "defaults:\n  _state_maintenance: disable\n",
 		"finance/us/tenant-a.yaml":  "tenants:\n  tenant-a: {}\n",
-	})
+	}
+}
+
+// subtreeTree is a root, one finance/ subtree defaults file and tenant-a
+// under it.
+func subtreeTree(root, subtree string) map[string]string {
+	return map[string]string{
+		"_defaults.yaml":         root,
+		"finance/_defaults.yaml": subtree,
+		"finance/tenant-a.yaml":  "tenants:\n  tenant-a: {}\n",
+	}
 }
 
 // buildUnreachable is the build's own, unfiltered set for dir.
@@ -201,64 +214,103 @@ func buildUnreachable(t *testing.T, dir string) map[string][]string {
 	return built.Unreachable
 }
 
-func TestUndeliverable_ReservedKeysAreLeftOut(t *testing.T) {
+func TestUndeliverable_ReportedKeys(t *testing.T) {
 	t.Parallel()
-	if IsReservedKey("_silent_bogus") {
-		t.Fatal("precondition: IsReservedKey(_silent_bogus) is true; the `_` prefix test is no longer the wider one")
+	if IsReservedKey("_silent_bogus") || IsReservedKey("_myth2") {
+		t.Fatal("precondition: IsReservedKey accepts _silent_bogus or _myth2; the cases below no longer separate the exclusions")
 	}
 	for _, tc := range []struct {
 		name         string
-		dir          string
+		files        map[string]string
 		wantUnreach  []string // tenant-a's FlatBuild.Unreachable (precondition)
-		wantReported map[string][]string
+		wantReported []string // tenant-a's reported keys; nil = tenant absent
 	}{
 		{
-			name: "reserved-only",
-			dir: writeUndeliverableTree(t, map[string]string{
-				"_defaults.yaml":         reservedOnlyRoot,
-				"finance/_defaults.yaml": reservedOnlySubtree,
-				"finance/tenant-a.yaml":  "tenants:\n  tenant-a: {}\n",
-			}),
 			// `_metadata` and `_state_maintenance` are in optional_overrides,
-			// which the build counts as declared — the shape in which the
-			// root-declaration advice would silence the verdict without making
-			// the subtree value take effect.
+			// which the build counts as declared.
+			name:        "reserved-declared",
+			files:       subtreeTree(reservedOnlyRoot, reservedOnlySubtree),
 			wantUnreach: []string{"_profile", "_silent_bogus"},
 		},
 		{
+			// Only IsReservedKey leaves these out (not skipped by the row
+			// generator, not disabled).
+			name:        "reserved-keys",
+			files:       subtreeTree(plainRoot, "defaults:\n  _metadata: 5\n  _namespaces: 3\n"),
+			wantUnreach: []string{"_metadata", "_namespaces"},
+		},
+		{
+			// Only baseRowsSkipKey leaves it out: IsReservedKey says false,
+			// and `_silent_bogus` declared at the root serves no row either.
+			name:        "silent-bogus",
+			files:       subtreeTree(plainRoot, "defaults:\n  _silent_bogus: 5\n"),
+			wantUnreach: []string{"_silent_bogus"},
+		},
+		{
 			name:        "schedule-then-scalar-state",
-			dir:         scheduleThenScalarStateTree(t),
+			files:       scheduleThenScalarStateFiles(),
 			wantUnreach: []string{"_state_maintenance"},
 		},
 		{
+			// Only disabledEverywhere leaves `redis_evicted_keys` out. A
+			// schedule disabled by default but numeric in a window serves a
+			// row then, so `redis_s` is reported; the other values are plain.
+			name: "switched-off",
+			files: subtreeTree(plainRoot, "defaults:\n  redis_evicted_keys: disable\n"+
+				"  redis_q: \"1e6\"\n  redis_r: 1e6\n"+
+				"  redis_s:\n    default: disable\n    overrides:\n"+
+				"      - window: \"01:00-02:00\"\n        value: 50\n"),
+			wantUnreach:  []string{"redis_evicted_keys", "redis_q", "redis_r", "redis_s"},
+			wantReported: []string{"redis_q", "redis_r", "redis_s"},
+		},
+		{
+			// An unrecognised `_` key is a threshold to the exporter (the
+			// root's `_myth` serves a row), so `_myth2` is reported.
+			name:         "unrecognised-underscore-key",
+			files:        subtreeTree(plainRoot+"  _myth: 5\n", "defaults:\n  _myth2: 7\n"),
+			wantUnreach:  []string{"_myth2"},
+			wantReported: []string{"_myth2"},
+		},
+		{
+			// The finding's fix applied: declared at the root, nothing is
+			// unreachable and nothing reported.
+			name: "unrecognised-underscore-key-declared",
+			files: subtreeTree(plainRoot+"  _myth2: 1\n  _silent_bogus: 1\n",
+				"defaults:\n  _myth2: 7\n  _silent_bogus: 7\n"),
+		},
+		{
 			// A threshold key beside the `_` ones: the filter is per key.
-			name: "mixed",
-			dir: writeUndeliverableTree(t, map[string]string{
-				"_defaults.yaml":         reservedOnlyRoot,
-				"finance/_defaults.yaml": reservedOnlySubtree + "  redis_evicted_keys: 100\n",
-				"finance/tenant-a.yaml":  "tenants:\n  tenant-a: {}\n",
-			}),
+			name:         "mixed",
+			files:        subtreeTree(reservedOnlyRoot, reservedOnlySubtree+"  redis_evicted_keys: 100\n"),
 			wantUnreach:  []string{"_profile", "_silent_bogus", "redis_evicted_keys"},
-			wantReported: map[string][]string{"tenant-a": {"redis_evicted_keys"}},
+			wantReported: []string{"redis_evicted_keys"},
 		},
 	} {
-		if got := buildUnreachable(t, tc.dir)["tenant-a"]; !reflect.DeepEqual(got, tc.wantUnreach) {
-			t.Fatalf("%s: precondition: FlatBuild.Unreachable[tenant-a] = %v, want %v", tc.name, got, tc.wantUnreach)
-		}
-		_, rep, err := LoadDirReport(tc.dir, nil)
-		if err != nil {
-			t.Fatal(err)
-		}
-		if got := unreachableKeys(rep.Undeliverable); !reflect.DeepEqual(got, tc.wantReported) {
-			t.Errorf("%s: LoadReport.Undeliverable keys = %v, want %v", tc.name, got, tc.wantReported)
-		}
-		scoped, err := ScopeEffective(tc.dir, "")
-		if err != nil {
-			t.Fatal(err)
-		}
-		if !reflect.DeepEqual(scoped.Undeliverable, tc.wantReported) {
-			t.Errorf("%s: ScopedTenants.Undeliverable = %v, want %v", tc.name, scoped.Undeliverable, tc.wantReported)
-		}
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			dir := writeUndeliverableTree(t, tc.files)
+			if got := buildUnreachable(t, dir)["tenant-a"]; !reflect.DeepEqual(got, tc.wantUnreach) {
+				t.Fatalf("precondition: FlatBuild.Unreachable[tenant-a] = %v, want %v", got, tc.wantUnreach)
+			}
+			var want map[string][]string
+			if tc.wantReported != nil {
+				want = map[string][]string{"tenant-a": tc.wantReported}
+			}
+			_, rep, err := LoadDirReport(dir, nil)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if got := unreachableKeys(rep.Undeliverable); !reflect.DeepEqual(got, want) {
+				t.Errorf("LoadReport.Undeliverable keys = %v, want %v", got, want)
+			}
+			scoped, err := ScopeEffective(dir, "")
+			if err != nil {
+				t.Fatal(err)
+			}
+			if !reflect.DeepEqual(scoped.Undeliverable, want) {
+				t.Errorf("ScopedTenants.Undeliverable = %v, want %v", scoped.Undeliverable, want)
+			}
+		})
 	}
 }
 

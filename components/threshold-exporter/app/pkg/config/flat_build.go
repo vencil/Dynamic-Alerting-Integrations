@@ -65,9 +65,9 @@ type FlatBuild struct {
 	// (keyCanReachTheOutputPlane): the key is in neither the root defaults
 	// nor `optional_overrides:`, so /metrics never carries it. The exporter
 	// logs it as an ERROR and counts the tenant on
-	// da_config_subtree_undeliverable_tenants; da-guard reports its
-	// threshold keys (not the `_` ones, undeliverableThresholds) as the
-	// subtree_default_undeliverable finding (#1976). nil when there is none.
+	// da_config_subtree_undeliverable_tenants; da-guard reports the part
+	// undeliverableThresholds keeps as the subtree_default_undeliverable
+	// finding (#1976). nil when there is none.
 	Unreachable map[string][]string
 	// UnreachableValues is Unreachable with each key's value: the one of the
 	// deepest defaults level that writes the key in a threshold shape (a
