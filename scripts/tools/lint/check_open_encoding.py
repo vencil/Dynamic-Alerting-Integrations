@@ -455,7 +455,13 @@ def _line_ending_verdict(call: ast.Call) -> str | None:
 class FileScan:
     """Everything one file contributes. Rows carry (lineno, col) so a call
     flagged by two rules can be reported once. ``error`` is set — and every
-    row list left empty — when the file could not be read or parsed."""
+    row list left empty — when the file could not be read or parsed.
+
+    ``col`` is ast's raw ``col_offset`` — UTF-8 BYTES, not characters. That
+    is fine as an identity key (distinct calls on a line have distinct byte
+    offsets and the order is the same as by character), and it is never
+    printed. ⛔ Before showing it to anyone, convert it with
+    ``_lint_helpers.char_col_offset`` (#2646)."""
     error: str | None = None
     open_encoding: list[tuple[int, int, str]] = field(default_factory=list)
     line_ending: list[tuple[int, int, str, str]] = field(default_factory=list)
