@@ -12,6 +12,7 @@ package main
 
 import (
 	"encoding/json"
+	"fmt"
 	"path/filepath"
 	"reflect"
 	"slices"
@@ -747,7 +748,7 @@ func TestGuard_SubtreeReservedSharedFile(t *testing.T) {
 					t2 = f.Message
 				}
 			}
-			for _, w := range []string{"This tenant's own entry sets `_state_maintenance`",
+			for _, w := range []string{"This tenant's `tenants:` entry in `" + tc.t2File + "` sets `_state_maintenance`",
 				"other tenants get their value from one of these files: `t1`", "Do not just delete it from the file"} {
 				if !strings.Contains(t2, w) {
 					t.Errorf("t2 message lacks %q: %s", w, t2)
@@ -850,7 +851,7 @@ func TestGuard_SubtreeReservedTenantSetsItself(t *testing.T) {
 		t.Fatalf("findings = %+v, want 1", got)
 	}
 	m := got[0].Message
-	if !strings.Contains(m, "This tenant's own entry sets `_silent_mode`, and that is what the exporter serves") ||
+	if !strings.Contains(m, "This tenant's `tenants:` entry in `finance/t1.yaml` sets `_silent_mode`, and that is what the exporter serves") ||
 		strings.Contains(m, "To have it take effect") {
 		t.Errorf("message = %s", m)
 	}
@@ -867,7 +868,7 @@ func TestGuard_SubtreeReservedSetByProfile(t *testing.T) {
 		{name: "profile", tenant: "\n    _profile: quiet",
 			want: "This tenant's profile `quiet` (its `_profile`) sets `_silent_mode`", deny: "own entry"},
 		{name: "entry", tenant: "\n    _profile: quiet\n    _silent_mode: critical",
-			want: "This tenant's own entry sets `_silent_mode`", deny: "profile `quiet`"},
+			want: "This tenant's `tenants:` entry in `finance/t1.yaml` sets `_silent_mode`", deny: "profile `quiet`"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()
@@ -882,5 +883,49 @@ func TestGuard_SubtreeReservedSetByProfile(t *testing.T) {
 				t.Errorf("message = %s; want %q, not %q", m, tc.want, tc.deny)
 			}
 		})
+	}
+}
+
+// #2388 A r4 (R3-2): a key set by a root platform file's `tenants:` block is
+// named with that file, not as "own entry" (a reader would look in the tenant
+// file and not find it).
+func TestGuard_SubtreeReservedSetByPlatformFile(t *testing.T) {
+	t.Parallel()
+	files := reservedCase{defaultState: "enable", tenant: "\n    _profile: quiet"}.files()
+	files["_profiles.yaml"] = "profiles:\n  quiet:\n    _silent_mode: warning\n"
+	files["_platform.yaml"] = "tenants:\n  t1:\n    _silent_mode: critical\n"
+	files["finance/_defaults.yaml"] = "defaults:\n  _silent_mode: warning\n"
+	_, got := reservedFindings(t, "--config-dir", writeReservedConfD(t, files))
+	if len(got) != 1 {
+		t.Fatalf("findings = %+v, want 1", got)
+	}
+	if m := got[0].Message; !strings.Contains(m, "This tenant's `tenants:` entry in `_platform.yaml` sets `_silent_mode`") ||
+		strings.Contains(m, "own entry sets") || strings.Contains(m, "profile `quiet`") {
+		t.Errorf("message = %s", m)
+	}
+}
+
+// #2388 A r4: the other-tenants list is capped at five names plus a count,
+// from one index built per check (not a walk of every tenant per finding).
+func TestGuard_SubtreeReservedSharedListCapped(t *testing.T) {
+	t.Parallel()
+	files := map[string]string{
+		"_defaults.yaml": "defaults:\n  mysql_connections: 80\n" +
+			"state_filters:\n  maintenance:\n    reasons: []\n    severity: warning\n    default_state: enable\n",
+		"a/_defaults.yaml": "defaults:\n  _state_maintenance: disable\n",
+		"a/x.yaml":         "tenants:\n  x:\n    _state_maintenance: enable\n",
+	}
+	for i := 0; i < 8; i++ {
+		files[fmt.Sprintf("a/t%d.yaml", i)] = fmt.Sprintf("tenants:\n  t%d: {}\n", i)
+	}
+	_, got := reservedFindings(t, "--config-dir", writeReservedConfD(t, files))
+	var m string
+	for _, f := range got {
+		if f.TenantID == "x" {
+			m = f.Message
+		}
+	}
+	if !strings.Contains(m, "`t0`, `t1`, `t2`, `t3`, `t4` and 3 more") {
+		t.Errorf("x message = %s", m)
 	}
 }

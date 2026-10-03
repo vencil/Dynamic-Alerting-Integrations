@@ -496,6 +496,9 @@ func scopeParseFailed(scan *TreeScan, scopeRel string) (
 	if err != nil {
 		return nil, nil, nil, nil, nil, err
 	}
+	// Where a tenant-set key is set: da-guard's message only, so here and not
+	// in BuildFlatConfig (the exporter's reload path; #2388 A r4).
+	markTenantSetSources(built.SubtreeRefusedVerdicts, built.FileConfigs, &built.Config)
 	for _, key := range built.ParseFailed {
 		if bearsOnScope(key, scopeRel) {
 			parseFailed = append(parseFailed, key)

@@ -31,7 +31,6 @@ package config
 // reads it as "this tenant customised the key".
 
 import (
-	"fmt"
 	"path/filepath"
 	"sort"
 	"strconv"
@@ -283,43 +282,78 @@ type SubtreeRefusedVerdict struct {
 	// TenantSets: the tenant's own map sets the key, so no subtree value is
 	// written and the tenant's own value is what is served.
 	TenantSets bool
-	// Profile is the tenant's `_profile` when TenantSets comes from that
-	// profile rather than from a `tenants:` entry in any file (profiles are
-	// applied before the overlay, so the overlay alone cannot tell); "" when
-	// an entry sets the key (#2388 A r3; markProfileSetKeys).
-	Profile string
+	// EntryFiles / Profile say WHERE a TenantSets key is set — filled by
+	// markTenantSetSources, on da-guard's path only (scopeParseFailed), never
+	// by BuildFlatConfig: the exporter's reload has no reader for them
+	// (#2388 A r4). EntryFiles: the root-relative files whose `tenants:`
+	// entry for the tenant holds the key (a tenant file, or a root platform
+	// file such as `_platform.yaml`), sorted. Profile: the tenant's
+	// `_profile`, when no entry holds the key and that profile does
+	// (profiles are applied before the overlay, so the overlay alone cannot
+	// tell).
+	EntryFiles []string
+	Profile    string
 }
 
-// markProfileSetKeys fills SubtreeRefusedVerdict.Profile: for a key the
-// tenant "sets itself", whether no file's `tenants:` entry for the tenant
-// (fileConfigs, the per-file decode before the merge) holds it while the
-// tenant's `_profile` does. Read off the build's own data; only verdicts
-// with TenantSets are visited.
-func markProfileSetKeys(verdicts map[string]map[string]SubtreeRefusedVerdict,
+// markTenantSetSources fills SubtreeRefusedVerdict.EntryFiles / .Profile for
+// every TenantSets verdict, from the build's own data: fileConfigs (the
+// per-file decode before the merge, keyed by root-relative scan key) and
+// cfg.Profiles.
+//
+// ⛔ LINEAR, AND OFF THE EXPORTER PATH (#2388 A r4). The first version ran in
+// BuildFlatConfig and scanned every file per TenantSets verdict —
+// O(verdicts × files), measured on 8000 tenants sharing one `_profile`: the
+// served-values load went from 0.83s to 10.4s. It now indexes the
+// `tenants:` entries once (only the keys some verdict asks about) and runs
+// only where da-guard assembles its report.
+func markTenantSetSources(verdicts map[string]map[string]SubtreeRefusedVerdict,
 	fileConfigs map[string]ThresholdConfig, cfg *ThresholdConfig) {
+	wanted := map[string]map[string]struct{}{} // tenant → keys with TenantSets
 	for tenantID, byKey := range verdicts {
 		for k, v := range byKey {
-			if !v.TenantSets || entrySetsKey(fileConfigs, tenantID, k) {
+			if v.TenantSets {
+				if wanted[tenantID] == nil {
+					wanted[tenantID] = map[string]struct{}{}
+				}
+				wanted[tenantID][k] = struct{}{}
+			}
+		}
+	}
+	if len(wanted) == 0 {
+		return
+	}
+	entryFiles := map[string]map[string][]string{} // tenant → key → files
+	for name, fc := range fileConfigs {
+		for tenantID, overrides := range fc.Tenants {
+			keys := wanted[tenantID]
+			if keys == nil {
 				continue
 			}
-			name := strings.TrimSpace(cfg.Tenants[tenantID]["_profile"].Default)
-			if _, inProfile := cfg.Profiles[name][k]; name != "" && inProfile {
-				v.Profile = name
-				byKey[k] = v
+			for k := range keys {
+				if _, ok := overrides[k]; !ok {
+					continue
+				}
+				if entryFiles[tenantID] == nil {
+					entryFiles[tenantID] = map[string][]string{}
+				}
+				entryFiles[tenantID][k] = append(entryFiles[tenantID][k], name)
 			}
 		}
 	}
-}
-
-// entrySetsKey reports whether any file's `tenants:` entry for tenantID
-// holds key k.
-func entrySetsKey(fileConfigs map[string]ThresholdConfig, tenantID, k string) bool {
-	for _, fc := range fileConfigs {
-		if _, ok := fc.Tenants[tenantID][k]; ok {
-			return true
+	for tenantID, keys := range wanted {
+		for k := range keys {
+			v := verdicts[tenantID][k]
+			if files := entryFiles[tenantID][k]; len(files) > 0 {
+				sort.Strings(files)
+				v.EntryFiles = files
+			} else if name := strings.TrimSpace(cfg.Tenants[tenantID]["_profile"].Default); name != "" {
+				if _, inProfile := cfg.Profiles[name][k]; inProfile {
+					v.Profile = name
+				}
+			}
+			verdicts[tenantID][k] = v
 		}
 	}
-	return false
 }
 
 // subtreeRelPath is p relative to rootDir, slash-separated; p itself when Rel
@@ -333,49 +367,48 @@ func subtreeRelPath(rootDir, p string) string {
 
 // RenderYAMLFlow renders v as ONE line of YAML (a scalar as itself, a mapping
 // as `{a: 1}`), for messages that quote a config value to paste as
-// `key: <rendered>`; the paste decodes to v.
+// `key: <rendered>`; the paste decodes to v. ok=false when v does not encode
+// or does not fit one line — the caller then omits the value rather than
+// quote something that would not paste back.
 //
-// ⛔ ONE LINE, ALWAYS (#2388 A r3). yaml.v3 renders a string holding a newline
-// as a block scalar (`|` + indented lines); pasted after `key:` inside a
-// tenant entry, that made the file fail to parse and the tenant vanish from
+// ⛔ ONE LINE (#2388 A r3). yaml.v3 renders a string holding a newline as a
+// block scalar (`|` + indented lines); pasted after `key:` inside a tenant
+// entry, that made the file fail to parse and the tenant vanish from
 // served-values. A string holding a control character or leading/trailing
-// whitespace is double-quoted (escapes, one line); and if the result still
-// spans lines, every string is double-quoted.
-func RenderYAMLFlow(v any) string {
+// whitespace is double-quoted (escapes, one line). yaml.v3 does not wrap long
+// lines (measured with a 300-character string), so no other path is kept
+// (#2388 A r4: an unreachable `%q` fallback, which would have changed a
+// mapping's type, was removed). A `<<` key inside a mapping value would be
+// re-read as a merge key; Move only quotes threshold-shaped values.
+func RenderYAMLFlow(v any) (string, bool) {
 	var n yaml.Node
 	if err := n.Encode(v); err != nil {
-		return fmt.Sprint(v)
+		return "", false
 	}
-	var walk func(*yaml.Node, bool)
-	walk = func(x *yaml.Node, quoteAll bool) {
+	var walk func(*yaml.Node)
+	walk = func(x *yaml.Node) {
 		switch x.Kind {
 		case yaml.MappingNode, yaml.SequenceNode:
 			x.Style = yaml.FlowStyle
 		case yaml.ScalarNode:
-			if x.Tag == "!!str" && (quoteAll || needsDoubleQuote(x.Value)) {
+			if x.Tag == "!!str" && needsDoubleQuote(x.Value) {
 				x.Style = yaml.DoubleQuotedStyle
 			}
 		}
 		for _, c := range x.Content {
-			walk(c, quoteAll)
+			walk(c)
 		}
 	}
-	render := func(quoteAll bool) (string, bool) {
-		walk(&n, quoteAll)
-		b, err := yaml.Marshal(&n)
-		if err != nil {
-			return "", false
-		}
-		return strings.TrimSpace(string(b)), true
+	walk(&n)
+	b, err := yaml.Marshal(&n)
+	if err != nil {
+		return "", false
 	}
-	out, ok := render(false)
-	if ok && strings.Contains(out, "\n") {
-		out, ok = render(true)
+	out := strings.TrimSpace(string(b))
+	if strings.Contains(out, "\n") {
+		return "", false
 	}
-	if !ok || strings.Contains(out, "\n") {
-		return fmt.Sprintf("%q", fmt.Sprint(v))
-	}
-	return out
+	return out, true
 }
 
 // needsDoubleQuote: s cannot sit in a plain or single-quoted one-line scalar

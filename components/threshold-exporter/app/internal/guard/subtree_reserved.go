@@ -49,6 +49,7 @@ func checkSubtreeReservedKeys(input CheckInput) []Finding {
 	}
 	sort.Strings(tenants)
 	unwrapped := unwrappedDefaultsFiles(input)
+	applied := indexAppliedBySource(input.SubtreeRefusedVerdicts)
 	var out []Finding
 	for _, id := range tenants {
 		byKey := input.SubtreeReservedKeys[id]
@@ -70,7 +71,7 @@ func checkSubtreeReservedKeys(input CheckInput) []Finding {
 				Kind:     FindingSubtreeDefaultReservedKey,
 				TenantID: id,
 				Field:    k,
-				Message:  subtreeReservedMessage(input, id, k, files),
+				Message:  subtreeReservedMessage(input, applied, id, k, files),
 			})
 		}
 	}
@@ -130,7 +131,7 @@ func writtenInsideDefaults(files []string, unwrapped map[string]bool) []string {
 // (input.SubtreeRefusedVerdicts, #2388 A): applied for this tenant → move the
 // value it gets; ignored → delete, unless another tenant gets its value from
 // one of these files (sharedApplied).
-func subtreeReservedMessage(input CheckInput, tenant, k string, files []string) string {
+func subtreeReservedMessage(input CheckInput, applied appliedBySource, tenant, k string, files []string) string {
 	declared := input.DeclaredStateFilters
 	where := fmt.Sprintf("is set in the defaults of a subtree `_defaults.yaml` (%s) that this tenant inherits from", quoteJoin(files))
 	const tail = "From the next minor release the exporter stops applying these keys from a subtree " +
@@ -143,12 +144,12 @@ func subtreeReservedMessage(input CheckInput, tenant, k string, files []string) 
 		return fmt.Sprintf("Key `%s` %s. %s %s", k, where, subtreeRefusedKeyFix(k, declared), tail)
 	}
 	v := input.SubtreeRefusedVerdicts[tenant][k]
-	others := sharedApplied(input.SubtreeRefusedVerdicts, tenant, k, files)
+	others := sharedApplied(applied, tenant, k, files)
 	var fix string
 	switch {
 	case v.Applied:
 		fix = reservedKeyMove(k, v, files, others)
-	case len(others) > 0:
+	case others.total > 0:
 		fix = reservedKeyIgnoredShared(k, v, others)
 	default:
 		fix = reservedKeyIgnoredFix(k, v)
@@ -157,9 +158,49 @@ func subtreeReservedMessage(input CheckInput, tenant, k string, files []string) 
 		k, where, fix, tail)
 }
 
-// sharedApplied is, sorted, every OTHER tenant of the whole tree that gets
-// its value of k from one of files (config.SubtreeRefusedVerdict.Source):
-// deleting k from those files changes what is served for them.
+// appliedBySource indexes the whole tree's applied verdicts: key → the
+// subtree file the value comes from → the tenants getting it, sorted.
+type appliedBySource map[string]map[string][]string
+
+// indexAppliedBySource builds appliedBySource once per check.
+//
+// ⛔ ONCE, NOT PER FINDING (#2388 A r4). The first sharedApplied walked every
+// tenant's verdicts for every finding — O(findings × tenants): measured on
+// 8000 tenants with three such keys, the default check went from 1.6s
+// (main) to 18.8s. With this index a finding costs its files' lists.
+func indexAppliedBySource(verdicts map[string]map[string]config.SubtreeRefusedVerdict) appliedBySource {
+	idx := appliedBySource{}
+	for id, byKey := range verdicts {
+		for k, v := range byKey {
+			if !v.Applied {
+				continue
+			}
+			if idx[k] == nil {
+				idx[k] = map[string][]string{}
+			}
+			idx[k][v.Source] = append(idx[k][v.Source], id)
+		}
+	}
+	for _, bySource := range idx {
+		for _, ids := range bySource {
+			sort.Strings(ids)
+		}
+	}
+	return idx
+}
+
+// sharedTenants is the other tenants a finding names: at most
+// sharedTenantsShown of them (sorted) and how many there are in all.
+type sharedTenants struct {
+	names []string
+	total int
+}
+
+const sharedTenantsShown = 5
+
+// sharedApplied is every OTHER tenant of the whole tree that gets its value
+// of k from one of files (config.SubtreeRefusedVerdict.Source): deleting k
+// from those files changes what is served for them.
 //
 // ⛔ WHOLE TREE, NOT --scope (#2388 A r2). A subtree file is shared: measured,
 // a/_defaults.yaml `_state_maintenance: disable` is applied for t1 and
@@ -167,39 +208,40 @@ func subtreeReservedMessage(input CheckInput, tenant, k string, files []string) 
 // … to keep things as they are"; deleting it turned t1's filter on, and with
 // `--scope a/x` only t2's finding was shown at all. The verdicts are the
 // exporter's whole-tree load (ScopedTenants.SubtreeRefusedVerdicts).
-func sharedApplied(verdicts map[string]map[string]config.SubtreeRefusedVerdict, tenant, k string, files []string) []string {
-	in := make(map[string]bool, len(files))
+func sharedApplied(applied appliedBySource, tenant, k string, files []string) sharedTenants {
+	var out sharedTenants
 	for _, f := range files {
-		in[f] = true
-	}
-	var out []string
-	for id, byKey := range verdicts {
-		if id == tenant {
-			continue
+		ids := applied[k][f]
+		taken := 0
+		for _, id := range ids {
+			if id == tenant {
+				continue
+			}
+			out.total++
+			if taken < sharedTenantsShown {
+				out.names = append(out.names, id)
+				taken++
+			}
 		}
-		if v := byKey[k]; v.Applied && in[v.Source] {
-			out = append(out, id)
-		}
 	}
-	sort.Strings(out)
+	sort.Strings(out.names)
+	if len(out.names) > sharedTenantsShown {
+		out.names = out.names[:sharedTenantsShown]
+	}
 	return out
 }
 
-// tenantList renders ids as "`a`, `b`, `c` and 4 more" (at most 5 named).
-func tenantList(ids []string) string {
-	const shown = 5
-	q := make([]string, 0, shown)
-	for i, id := range ids {
-		if i == shown {
-			break
-		}
+// tenantList renders s as "`a`, `b`, `c` and 4 more" (at most 5 named).
+func tenantList(s sharedTenants) string {
+	q := make([]string, 0, len(s.names))
+	for _, id := range s.names {
 		q = append(q, "`"+id+"`")
 	}
-	s := strings.Join(q, ", ")
-	if len(ids) > shown {
-		s += fmt.Sprintf(" and %d more", len(ids)-shown)
+	out := strings.Join(q, ", ")
+	if s.total > len(s.names) {
+		out += fmt.Sprintf(" and %d more", s.total-len(s.names))
 	}
-	return s
+	return out
 }
 
 // The three fix shapes of a key subtree defaults refuse.
@@ -275,7 +317,7 @@ func reservedKeyIgnoredFix(k string, v config.SubtreeRefusedVerdict) string {
 // reservedKeyIgnoredShared is the fix for a recognised key ignored for this
 // tenant but applied, from one of the same files, to other tenants: the file
 // must not just be deleted (sharedApplied says why).
-func reservedKeyIgnoredShared(k string, v config.SubtreeRefusedVerdict, others []string) string {
+func reservedKeyIgnoredShared(k string, v config.SubtreeRefusedVerdict, others sharedTenants) string {
 	own := "Today the exporter ignores this value for this tenant"
 	if v.TenantSets {
 		own = fmt.Sprintf("%s `%s`, and that is what the exporter serves for it; "+
@@ -291,6 +333,11 @@ func reservedKeyIgnoredShared(k string, v config.SubtreeRefusedVerdict, others [
 func setBy(v config.SubtreeRefusedVerdict) string {
 	if v.Profile != "" {
 		return fmt.Sprintf("This tenant's profile `%s` (its `_profile`) sets", v.Profile)
+	}
+	if len(v.EntryFiles) > 0 {
+		// Named, not "own entry": a root platform file's `tenants:` block sets
+		// it as well as a tenant file (#2388 A r4).
+		return fmt.Sprintf("This tenant's `tenants:` entry in %s sets", quoteJoin(v.EntryFiles))
 	}
 	return "This tenant's own entry sets"
 }
@@ -313,8 +360,11 @@ func setBy(v config.SubtreeRefusedVerdict) string {
 // `disable` under a root default_state disable is applied and a no-op).
 // Judging that would need every reserved key's resolver re-run without the
 // value — a second model of those resolvers, which this check does not keep.
-func reservedKeyMove(k string, v config.SubtreeRefusedVerdict, files, others []string) string {
-	val := fmt.Sprintf("`%s: %s`", k, config.RenderYAMLFlow(v.Value))
+func reservedKeyMove(k string, v config.SubtreeRefusedVerdict, files []string, others sharedTenants) string {
+	val := fmt.Sprintf("`%s`", k)
+	if r, ok := config.RenderYAMLFlow(v.Value); ok {
+		val = fmt.Sprintf("`%s: %s`", k, r)
+	}
 	from := fmt.Sprintf("the value this tenant gets today, from `%s`", v.Source)
 	del := "delete it from this file"
 	if len(files) > 1 {
@@ -329,7 +379,7 @@ func reservedKeyMove(k string, v config.SubtreeRefusedVerdict, files, others []s
 		fmt.Fprintf(&b, "Move it: set %s (%s) in this tenant's own entry under `tenants:` and %s.", val, from, del)
 	}
 	b.WriteString(" (Deleting it alone can change what is served: the exporter uses this value for this tenant now.)")
-	if len(others) > 0 {
+	if others.total > 0 {
 		fmt.Fprintf(&b, " Other tenants get their value from one of these files too: %s — move it into their "+
 			"entries as well before deleting it.", tenantList(others))
 	}

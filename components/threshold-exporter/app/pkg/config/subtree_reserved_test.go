@@ -9,9 +9,11 @@ package config
 // Seams: none — t.TempDir() trees.
 
 import (
+	"fmt"
 	"reflect"
 	"strings"
 	"testing"
+	"time"
 
 	"gopkg.in/yaml.v3"
 )
@@ -180,7 +182,7 @@ func TestScopeEffective_SubtreeReservedApplied(t *testing.T) {
 		{"t3", "_state_maintenance", SubtreeRefusedVerdict{Applied: true, Source: "m/_defaults.yaml", Value: "disable"}},
 		{"t4", "_state_maintenance", SubtreeRefusedVerdict{Applied: true, Source: "n/us/_defaults.yaml", Value: "disable"}},
 		{"t5", "_state_maintenance", SubtreeRefusedVerdict{}},
-		{"t2", "_severity_dedup", SubtreeRefusedVerdict{TenantSets: true}},
+		{"t2", "_severity_dedup", SubtreeRefusedVerdict{TenantSets: true, EntryFiles: []string{"a/t2.yaml"}}},
 	} {
 		if v := scoped.SubtreeRefusedVerdicts[tc.id][tc.key]; !reflect.DeepEqual(v, tc.want) {
 			t.Errorf("%s %s: verdict = %+v, want %+v", tc.id, tc.key, v, tc.want)
@@ -223,7 +225,7 @@ func TestRenderYAMLFlow(t *testing.T) {
 		{map[string]any{"target": "warning", "expires": "2026-12-31"}, "{expires: \"2026-12-31\", target: warning}"},
 		{[]any{"a", "b"}, "[a, b]"},
 	} {
-		if got := RenderYAMLFlow(tc.in); got != tc.want {
+		if got, ok := RenderYAMLFlow(tc.in); !ok || got != tc.want {
 			t.Errorf("RenderYAMLFlow(%#v) = %q, want %q", tc.in, got, tc.want)
 		}
 	}
@@ -237,9 +239,10 @@ func TestRenderYAMLFlowRoundTrips(t *testing.T) {
 		"disable\n", "a\nb", "a\tb", "\tlead", " lead", "trail ", "yes", "on", "no", "off", "007",
 		"5:critical", ":", "a: b", "#", "a #b", "", "~", "null", "true", "1e6", `"q"`, "'s'",
 		1, 1.5, true, map[string]any{"target": "a\nb", "k": "yes"}, []any{"x\n", 2},
+		strings.Repeat("long words ", 40) + "end", map[string]any{"a": strings.Repeat("x", 300)},
 	} {
-		r := RenderYAMLFlow(v)
-		if strings.Contains(r, "\n") {
+		r, ok := RenderYAMLFlow(v)
+		if !ok || strings.Contains(r, "\n") {
 			t.Errorf("RenderYAMLFlow(%#v) = %q: more than one line", v, r)
 			continue
 		}
@@ -251,5 +254,77 @@ func TestRenderYAMLFlowRoundTrips(t *testing.T) {
 		if !reflect.DeepEqual(got["k"], v) {
 			t.Errorf("RenderYAMLFlow(%#v) = %q decodes to %#v", v, r, got["k"])
 		}
+	}
+}
+
+// #2388 A r4 (R3-1): where a tenant-set key is set (EntryFiles / Profile) is
+// filled on da-guard's path (ScopeEffective), NOT by BuildFlatConfig — the
+// exporter's reload, which has no reader for it and where the first version
+// scanned every file per verdict.
+func TestTenantSetSourcesOnlyOnTheGuardPath(t *testing.T) {
+	t.Parallel()
+	dir := writeUndeliverableTree(t, map[string]string{
+		"_defaults.yaml": "defaults:\n  mysql_connections: 80\n",
+		"_profiles.yaml": "profiles:\n  quiet:\n    _silent_mode: warning\n",
+		"_platform.yaml": "tenants:\n  t2:\n    _severity_dedup: disable\n",
+		"a/_defaults.yaml": "defaults:\n  _silent_mode: warning\n  _severity_dedup: disable\n" +
+			"  _state_maintenance: disable\n",
+		"a/t1.yaml": "tenants:\n  t1:\n    _profile: quiet\n",
+		"a/t2.yaml": "tenants:\n  t2: {}\n",
+		"a/t3.yaml": "tenants:\n  t3:\n    _silent_mode: critical\n",
+	})
+	scan, err := ScanDirTree(dir, nil, nil, discardLogger)
+	if err != nil {
+		t.Fatal(err)
+	}
+	built, err := loadDirBuild(scan, scan.AbsRoot, discardLogger, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if v := built.SubtreeRefusedVerdicts["t1"]["_silent_mode"]; !v.TenantSets || v.Profile != "" || v.EntryFiles != nil {
+		t.Errorf("BuildFlatConfig filled the source: %+v", v)
+	}
+	scoped, err := ScopeEffective(dir, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, tc := range []struct {
+		id, key string
+		want    SubtreeRefusedVerdict
+	}{
+		{"t1", "_silent_mode", SubtreeRefusedVerdict{TenantSets: true, Profile: "quiet"}},
+		{"t2", "_severity_dedup", SubtreeRefusedVerdict{TenantSets: true, EntryFiles: []string{"_platform.yaml"}}},
+		{"t3", "_silent_mode", SubtreeRefusedVerdict{TenantSets: true, EntryFiles: []string{"a/t3.yaml"}}},
+	} {
+		if v := scoped.SubtreeRefusedVerdicts[tc.id][tc.key]; !reflect.DeepEqual(v, tc.want) {
+			t.Errorf("%s %s: verdict = %+v, want %+v", tc.id, tc.key, v, tc.want)
+		}
+	}
+}
+
+// #2388 A r4 (R3-1): markTenantSetSources is linear in the tree — one pass
+// over the `tenants:` entries, not one per verdict. 4000 tenants sharing a
+// profile must finish well inside a second (the quadratic first version took
+// seconds at this size).
+func TestTenantSetSourcesScales(t *testing.T) {
+	t.Parallel()
+	const n = 4000
+	verdicts := map[string]map[string]SubtreeRefusedVerdict{}
+	files := map[string]ThresholdConfig{}
+	cfg := &ThresholdConfig{Tenants: map[string]map[string]ScheduledValue{},
+		Profiles: map[string]map[string]ScheduledValue{"quiet": {"_silent_mode": {Default: "warning"}}}}
+	for i := 0; i < n; i++ {
+		id := fmt.Sprintf("t%d", i)
+		verdicts[id] = map[string]SubtreeRefusedVerdict{"_silent_mode": {TenantSets: true}}
+		files["fin/"+id+".yaml"] = ThresholdConfig{Tenants: map[string]map[string]ScheduledValue{id: {"_profile": {Default: "quiet"}}}}
+		cfg.Tenants[id] = map[string]ScheduledValue{"_profile": {Default: "quiet"}, "_silent_mode": {Default: "warning"}}
+	}
+	start := time.Now()
+	markTenantSetSources(verdicts, files, cfg)
+	if d := time.Since(start); d > time.Second {
+		t.Errorf("markTenantSetSources over %d tenants took %v", n, d)
+	}
+	if v := verdicts["t17"]["_silent_mode"]; v.Profile != "quiet" {
+		t.Errorf("t17 = %+v, want Profile quiet", v)
 	}
 }

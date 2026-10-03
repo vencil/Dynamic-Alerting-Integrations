@@ -221,7 +221,6 @@ func BuildFlatConfig(scan *TreeScan, in FlatBuildInput) (FlatBuild, error) {
 	merged.applyProfiles(profileLogf)
 
 	n, unreachable, applied := applySubtreeDefaults(&merged, in.Root, in.TenantDefaults, in.ParsedDefaults)
-	markProfileSetKeys(applied, fileConfigs, &merged)
 	return FlatBuild{
 		Config: merged, FileConfigs: fileConfigs, SubtreeFilled: n,
 		Unreachable: unreachableKeys(unreachable), UnreachableValues: unreachable,
