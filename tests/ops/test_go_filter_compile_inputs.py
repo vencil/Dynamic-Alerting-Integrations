@@ -26,6 +26,8 @@ from pathlib import Path
 import pytest
 import yaml
 
+from _vendored_go import VENDORED_GO_MODULES
+
 ROOT = Path(__file__).resolve().parents[2]
 CI = ROOT / ".github" / "workflows" / "ci.yml"
 
@@ -38,10 +40,14 @@ _SPEC.loader.exec_module(_READS)
 # Go modules no ci.yml leg tests, with the reason. The set of tested modules
 # plus this set must be every tracked go.mod — that equality, not a count, is
 # what stops the leg discovery below from quietly finding nothing.
+# Vendored modules are compiled by the legs that `replace` them in (so their
+# files are checked against those legs' gates above), but their own upstream
+# tests are run by no leg.
 UNTESTED_GO_MODULES = {
     "scripts/tools/ops/bench-canary":
         "the bench canary workload; built and run by the bench-* workflows, "
         "never by a ci.yml test leg",
+    **VENDORED_GO_MODULES,
 }
 
 

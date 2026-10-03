@@ -28,6 +28,7 @@ import pytest
 import yaml
 from _tree import REPO_ROOT as ROOT
 from _tree import repo_files
+from _vendored_go import VENDORED_GO_MODULES
 
 # The module whose go.mod is the platform-wide Go SSOT: the dev container and
 # every surface that builds no module of its own follow it. (The federation
@@ -99,8 +100,12 @@ def test_ssot_is_a_full_patch_version() -> None:
 
 def test_every_module_go_directive_equals_ssot() -> None:
     ssot = _ssot()
+    # A vendored module keeps upstream's go.mod byte for byte (yaml.v3's has no
+    # `go` line at all); it is compiled by the module that replaces it in, with
+    # that module's toolchain.
     skew = {m: _go_directive(m) for m in _modules()
-            if m not in GO_DIRECTIVE_FLOORS and _go_directive(m) != ssot}
+            if m not in GO_DIRECTIVE_FLOORS and m not in VENDORED_GO_MODULES
+            and _go_directive(m) != ssot}
     assert not skew, (
         f"go.mod `go` directive skew against the SSOT {SSOT_MODULE} (go {ssot}): "
         f"{skew}. Bump them together (`go mod edit -go={ssot}`), or — if one is "
@@ -109,6 +114,8 @@ def test_every_module_go_directive_equals_ssot() -> None:
 
 def test_floors_are_real_and_not_above_ssot() -> None:
     mods = _modules()
+    stale = sorted(set(VENDORED_GO_MODULES) - set(mods))
+    assert not stale, f"VENDORED_GO_MODULES names {stale}, which hold no go.mod"
     ssot = tuple(int(x) for x in _ssot().split("."))
     for m in GO_DIRECTIVE_FLOORS:
         assert m in mods, f"GO_DIRECTIVE_FLOORS names {m!r}, which has no go.mod"
