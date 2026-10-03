@@ -625,6 +625,26 @@ jobs:
           # script's functions and stay green with a timeout= removed. Pinned
           # by tests/lint/test_check_subprocess_timeout.py::TestHookWiring.
           pre-commit run subprocess-timeout-audit --all-files
+          # #2644: the sweep behind #2643. Of the auto-stage hooks this
+          # job did not name, these had NO CI entry point at all: no other
+          # job runs their script, and planting a violation the hook
+          # rejects left their pytest files green (they test functions,
+          # never the shipped tree). All are pure Python / pygrep in the
+          # hook's own venv, need nothing this job lacks, and each runs in
+          # about 2s or less on a clean tree. Pinned, one line each, by
+          # tests/lint/test_ci_lint_hook_entries.py.
+          pre-commit run file-hygiene --all-files
+          pre-commit run session-guard-liveness-check --all-files
+          pre-commit run env-bool-parser-guard --all-files
+          pre-commit run devrules-size-check --all-files
+          pre-commit run doc-k8s-refs --all-files
+          pre-commit run commit-scope-doc-drift --all-files
+          pre-commit run aria-references-check --all-files
+          pre-commit run md-yaml-crd-check --all-files
+          pre-commit run forbid-legacy-mariadb-threshold-name --all-files
+          pre-commit run forbid-legacy-mysql-cpu-key --all-files
+          pre-commit run forbid-legacy-mysql-cpu-selector --all-files
+          pre-commit run skip-a11y-justification-check --all-files
           # CI-ROI 6C blind-spot fix: these 4 lints' live-dogfood pytest
           # twins (tests/lint/*::TestLiveRepo*) had "Python Tests" as
           # their ONLY CI enforcement point — but their scan surfaces
