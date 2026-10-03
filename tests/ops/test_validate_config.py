@@ -2429,8 +2429,7 @@ class TestRootDefaultsRouting:
         r = vc.check_root_defaults(str(d))
         assert r["status"] == vc.FAIL, r
         detail = " ".join(r["details"])
-        assert "holds numbers only" in detail, detail
-        assert "da-guard served-values` before and after" in detail, detail
+        assert detail.endswith("has no value (null)."), detail
         # no claim about the line's effect: over a `<<:` merged value it
         # removes that default (r6 review, measured)
         assert "sets no platform default" not in detail, detail
@@ -2542,7 +2541,7 @@ class TestRootDefaultsValues:
         assert r["status"] == vc.FAIL, r
         detail = " ".join(r["details"])
         assert "`defaults.mysql_connections` has no value" in detail, detail
-        assert "holds numbers only" in detail, detail
+        assert detail.endswith("has no value (null)."), detail
         assert "0 threshold" not in detail, detail
         # Not the whole block: the exporter keeps the other thresholds.
         assert "drops ALL of it" not in detail, detail

@@ -1384,17 +1384,13 @@ def _root_defaults_value_detail(rel: str, key: str | None, raw: str,
     ``NULL_NOT_DECLARED`` rather than a blocking one.
     """
     if null:
-        # #2518: the value is null, the block takes numbers — and an
-        # instruction. Every claim about the line's effect, the key's
-        # declaration, a removal procedure or which finding names whom was
-        # measured wrong for some shape (a null over a `<<:` merged value
-        # removes that default; another spelling or `optional_overrides:`
-        # may still declare the key); served-values is the oracle.
-        return (f"{rel}: `defaults.{key}` has no value (null); the root "
-                f"`defaults:` holds numbers only. What this line changes "
-                f"depends on the rest of the tree (another spelling, "
-                f"`optional_overrides:`, a `<<:` merge), so compare "
-                f"`da-guard served-values` before and after you change it.")
+        # #2518: the fact and nothing else. Every added clause — the
+        # line's effect, the key's declaration, a removal procedure, which
+        # finding names whom, "numbers only", "compare served-values" — was
+        # measured false for some shape (`<<:` merges, the other spelling,
+        # `optional_overrides:`, `_critical` rows where served-values exits
+        # 2). What a null changes is the exporter's to say, not this mirror's.
+        return f"{rel}: `defaults.{key}` has no value (null)."
     if key is None:
         # ⚠️ *raw* (the mirror's reason) is not printed: `deprecate_rule`
         # words it in Chinese, this tool's operator strings are English, and
@@ -1652,10 +1648,9 @@ def check_root_defaults(config_dir: str) -> dict[str, object]:
       cannot decode (``"70"``, ``disable``, a mapping …) fails the decode and
       the exporter drops the root file's whole ``defaults:`` — every platform
       threshold, while the load is reported as successful; a null / empty
-      value is no write (#2518; before it, a 0 threshold): no platform
-      default, no declaration — whether the key is still declared, and how
-      to fix a tenant it leaves unserved, is da-guard's
-      ``root_default_null_undeclared``, not this row. Both FAIL. The verdict is
+      value is reported as having no value (#2518; before it, a 0
+      threshold) — what it changes depends on the rest of the tree and is
+      not judged here. Both FAIL. The verdict is
       ``deprecate_rule.exporter_verdicts`` — the yaml.v3 mirror whose truth
       table ``tests/golden/fixtures/defaults-carrier-oracle.json`` is judged
       by the Go test ``TestDefaultsCarrierOracle`` — called, not re-spelled.
