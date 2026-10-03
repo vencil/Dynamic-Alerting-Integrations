@@ -1391,13 +1391,15 @@ def _root_defaults_value_detail(rel: str, key: str | None, raw: str,
         # this mirror does not model (two predicates for it died in review).
         # A null that overrides a value merged in with `<<:` cancels that
         # value, so "delete it" is not offered unconditionally.
-        return (f"{rel}: `defaults.{key}` has no value — threshold-exporter "
-                f"treats a null here as not written: it sets no platform "
-                f"default and declares nothing. Delete it — unless it "
-                f"overrides a value merged in with `<<:`, which it cancels; "
-                f"then remove that value from the merge instead. "
-                f"da-guard `root_default_null_undeclared` names tenants whose "
-                f"own value a root null leaves unserved.")
+        return (f"{rel}: `defaults.{key}` has no value (null) — it sets "
+                f"no platform default and declares nothing; if it overrides a value "
+                f"merged in with `<<:`, it cancels that value. Before removing "
+                f"it, run da-guard: tenants it names as "
+                f"`root_default_null_undeclared` set their own value for this "
+                f"key and are not served — follow that finding's fix first "
+                f"(once the null is gone, nothing names them). Then remove "
+                f"the null — or, if it is there to cancel a merged value, "
+                f"remove that value from every `<<:` source instead.")
     if key is None:
         # ⚠️ *raw* (the mirror's reason) is not printed: `deprecate_rule`
         # words it in Chinese, this tool's operator strings are English, and

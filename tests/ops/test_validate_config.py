@@ -2431,7 +2431,9 @@ class TestRootDefaultsRouting:
         detail = " ".join(r["details"])
         assert "sets no platform default and declares nothing" in detail, detail
         assert "no tenant gets" not in detail, detail
-        assert "root_default_null_undeclared" in detail, detail
+        # da-guard comes BEFORE the removal advice: removing the null first
+        # silences both gates (measured) while the tenant stays unserved.
+        assert detail.index("root_default_null_undeclared") < detail.index("Then remove"), detail
 
     def test_a_null_over_a_merged_value_is_not_called_harmless(self, tmp_path):
         """A null that overrides a `<<:`-merged value cancels it (measured:
@@ -2443,7 +2445,7 @@ class TestRootDefaultsRouting:
         r = vc.check_root_defaults(str(d))
         assert r["status"] == vc.FAIL, r
         detail = " ".join(r["details"])
-        assert "unless it overrides a value merged in with `<<:`" in detail, detail
+        assert "if it overrides a value merged in with `<<:`, it cancels that value" in detail, detail
 
     def test_end_to_end_exits_1_and_names_the_fix(self, tmp_path, capsys,
                                                   cli_argv):
