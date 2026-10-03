@@ -226,23 +226,16 @@ jobs:
               # there, though ⚠️ LESS wall — reject it on compute and on its
               # hand-maintained list, not on wall.
               #
-              # ⚠️ The entries below are NOT uniformly enforced, and the two
-              # counts here are taken over DIFFERENT sets — subtracting one
-              # from the other is meaningless, so each names its own:
-              #   * of the 23 entries EXCLUDING the catch-all, 19 are pinned
-              #     (deleting any one reds this guard); the 4 that delete GREEN
-              #     are `operator-manifests/**`, `pyproject.toml`,
-              #     `.github/custom-rule-policy.yaml`, `flaky-tests.yaml`.
-              #   * of all 24 entries INCLUDING the catch-all, 7 sit outside
-              #     PYTHON_ENTRIES_THIS_SCANNER_JUSTIFIES and 3 of those are
-              #     still pinned — so being outside it is NOT the criterion.
-              # ⛔ Neither count has an assertion behind it: they come from
-              # deleting each entry in turn and running this guard (24 cells,
-              # `cefb5652`, baseline green, "delete every entry" reds as the
-              # must-fire control). Asserting them would mean running that
-              # module once PER ENTRY on every CI run, and its silent failure
-              # would not bring back the defect this list exists for — so the
-              # counts are measured and dated here, not asserted.
+              # ⚠️ The entries below are NOT uniformly enforced: deleting some
+              # of them leaves this guard green. Being outside
+              # PYTHON_ENTRIES_THIS_SCANNER_JUSTIFIES is NOT the criterion —
+              # some entries outside it are still pinned. To learn which ones
+              # delete green, delete each entry in turn and run this guard,
+              # with "delete every entry" as the must-red control.
+              # ⛔ No count or list of them is kept here: asserting one would
+              # mean running that module once PER ENTRY on every CI run, and
+              # its silent failure would not bring back the defect this list
+              # exists for; unasserted, it goes stale with the next entry.
               # The guard IGNORES the catch-all when asking coverage
               # questions, so the list itself stays machine-checked.
               - "**"
@@ -336,11 +329,9 @@ jobs:
               # `python`, and skipped the half written to catch exactly that —
               # and the always-run aggregate turned that skip into a PASS on
               # the required check. ⚠️ NOT every entry above is enforced by
-              # tests/ops/test_ci_path_filter_coverage.py — the count, the set
-              # that count is taken over, and the entries that delete GREEN are
-              # all in the catch-all comment at the top of this filter. ⛔ Kept
-              # as a pointer rather than a second copy of the number: two
-              # copies drift, and this one has no room for the set it counts.
+              # tests/ops/test_ci_path_filter_coverage.py — why, and how to
+              # find which, is in the catch-all comment at the top of this
+              # filter.
               - "tools/portal/src/**"
               # ⛔ The file that DEFINES which files above are Vitests. The
               # coverage guard hard-codes `tools/portal/tests` as the tree it
