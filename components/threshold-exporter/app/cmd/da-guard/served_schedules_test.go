@@ -6,11 +6,13 @@ package main
 import (
 	"encoding/json"
 	"fmt"
+	"path/filepath"
 	"reflect"
 	"strings"
 	"testing"
 	"time"
 
+	"github.com/vencil/threshold-exporter/internal/testutil"
 	"github.com/vencil/threshold-exporter/pkg/config"
 )
 
@@ -94,9 +96,29 @@ tenants:
 	"tenant-b.yaml": "tenants:\n  tenant-b:\n    _profile: gold\n",
 	"tenant-c.yaml": "tenants:\n  tenant-c:\n    _profile: gold\n    container_cpu: 50\n",
 	"tenant-p.yaml": "tenants:\n  tenant-p:\n    mysql_connections: 81\n",
+	// Same number all day, the severity alone changing in a window; and a
+	// key switched off all day with an `expires:` still ahead — served in no
+	// part of the day, yet listed for its time-box.
+	"tenant-d.yaml": `tenants:
+  tenant-d:
+    mysql_connections:
+      default: "700"
+      overrides:
+        - window: "10:00-11:00"
+          value: "700:critical"
+    redis_memory:
+      default: "disable"
+      expires: "2026-12-01T00:00:00Z"
+`,
 }
 
 const scheduleAt = "2026-07-01T03:00:00Z"
+
+// servedS is served with --schedules.
+func servedS(t *testing.T, files map[string]string, at string) (int, servedOut, string, string) {
+	t.Helper()
+	return servedWith(t, files, at, "--schedules")
+}
 
 type seg struct {
 	From, To string
@@ -122,7 +144,7 @@ func segsOf(t *testing.T, doc servedOut, tenant, key string) []seg {
 // a later window wins over an earlier one.
 func TestServedSchedules_Exact(t *testing.T) {
 	t.Parallel()
-	code, doc, _, stderr := served(t, scheduleTree, scheduleAt)
+	code, doc, _, stderr := servedS(t, scheduleTree, scheduleAt)
 	mustOK(t, code, stderr)
 	const w, c = "warning", "critical"
 	cases := []struct {
@@ -160,6 +182,12 @@ func TestServedSchedules_Exact(t *testing.T) {
 		// The tenant's scalar replaces the profile's schedule whole.
 		{"tenant-c", "container_cpu", []seg{{"00:00", "24:00", 50.0, w}}},
 		{"tenant-b", "mysql_connections", []seg{{"00:00", "24:00", 80.0, w}}},
+		// Same value, other severity: not merged.
+		{"tenant-d", "mysql_connections", []seg{
+			{"00:00", "10:00", 700.0, w}, {"10:00", "11:00", 700.0, c}, {"11:00", "24:00", 700.0, w},
+		}},
+		// Never served, listed for its expires.
+		{"tenant-d", "redis_memory", []seg{{"00:00", "24:00", nil, ""}}},
 	}
 	for _, tc := range cases {
 		if got := segsOf(t, doc, tc.tenant, tc.key); !reflect.DeepEqual(got, tc.want) {
@@ -178,7 +206,7 @@ func TestServedSchedules_Exact(t *testing.T) {
 // honours the time-box (a base key), the verdict at --at.
 func TestServedSchedules_Expiry(t *testing.T) {
 	t.Parallel()
-	code, doc, _, stderr := served(t, scheduleTree, scheduleAt)
+	code, doc, _, stderr := servedS(t, scheduleTree, scheduleAt)
 	mustOK(t, code, stderr)
 	sch := doc.Tenants["tenant-a"].Schedules
 	type exp struct {
@@ -198,6 +226,11 @@ func TestServedSchedules_Expiry(t *testing.T) {
 			t.Errorf("%s: expires %q expired %v, want %q %v", key, got.Expires, got.Expired, want.Expires, want.Expired)
 		}
 	}
+	// Switched off all day, time-boxed until December: listed, not expired.
+	if d, ok := doc.Tenants["tenant-d"].Schedules["redis_memory"]; !ok || d.Expires != "2026-12-01T00:00:00Z" ||
+		d.Expired == nil || *d.Expired {
+		t.Errorf("tenant-d redis_memory: %+v, want expires 2026-12-01T00:00:00Z, expired false", d)
+	}
 }
 
 // TestServedSchedules_AgreeWithServedValuesEveryMinute: for each of the 1440
@@ -207,7 +240,7 @@ func TestServedSchedules_Expiry(t *testing.T) {
 // value and severity, and no other key.
 func TestServedSchedules_AgreeWithServedValuesEveryMinute(t *testing.T) {
 	t.Parallel()
-	code, doc, dir, stderr := served(t, scheduleTree, scheduleAt)
+	code, doc, dir, stderr := servedS(t, scheduleTree, scheduleAt)
 	mustOK(t, code, stderr)
 	cfg, _, err := config.LoadDir(dir, nil)
 	if err != nil {
@@ -251,7 +284,7 @@ func TestServedSchedules_AgreeWithServedValuesEveryMinute(t *testing.T) {
 // 24:00 with no gap, and every threshold key of values has a schedule.
 func TestServedSchedules_CoverTheDay(t *testing.T) {
 	t.Parallel()
-	code, doc, _, stderr := served(t, scheduleTree, scheduleAt)
+	code, doc, _, stderr := servedS(t, scheduleTree, scheduleAt)
 	mustOK(t, code, stderr)
 	for tenant, tv := range doc.Tenants {
 		for key := range tv.Severities {
@@ -278,7 +311,7 @@ func TestServedSchedules_CoverTheDay(t *testing.T) {
 // each key one segment, the value at --at.
 func TestServedSchedules_ScalarTreeIsOneSegment(t *testing.T) {
 	t.Parallel()
-	code, doc, _, stderr := served(t, map[string]string{
+	code, doc, _, stderr := servedS(t, map[string]string{
 		"_defaults.yaml": defaultsOnly,
 		"tenant-a.yaml":  "tenants:\n  tenant-a:\n    mysql_connections: \"70:critical\"\n",
 	}, scheduleAt)
@@ -317,10 +350,10 @@ var ungatherableTree = map[string]string{
 // exits 2, as it always did.
 func TestServedSchedules_UngatherableSegmentCarriesTheError(t *testing.T) {
 	t.Parallel()
-	code, _, dir, stderr := served(t, ungatherableTree, scheduleAt)
+	code, _, dir, stderr := servedS(t, ungatherableTree, scheduleAt)
 	mustOK(t, code, stderr)
 	// Decoded loosely, so a field that is absent can be told from a null one.
-	code, stdout, stderr := runOnce(t, servedValuesCmd, "--config-dir", dir, "--at", scheduleAt)
+	code, stdout, stderr := runOnce(t, servedValuesCmd, "--config-dir", dir, "--at", scheduleAt, "--schedules")
 	mustOK(t, code, stderr)
 	var doc struct {
 		Tenants map[string]struct {
@@ -351,21 +384,73 @@ func TestServedSchedules_UngatherableSegmentCarriesTheError(t *testing.T) {
 			row("00:00", "15:00", 80, "warning"), errSeg, row("16:00", "24:00", 80, "warning")}},
 	} {
 		got := doc.Tenants[tc.tenant].Schedules[tc.key].Segments
-		for _, s := range got {
-			if e, ok := s["error"].(string); ok {
-				if !strings.Contains(e, "HTTP 500") || !strings.Contains(e, "was collected before with the same name and label values") {
-					t.Errorf("%s %s: error %q does not carry the Gather failure", tc.tenant, tc.key, e)
+		for i, s := range got {
+			e, has := s["error"]
+			if i < len(tc.want) && reflect.DeepEqual(tc.want[i], errSeg) {
+				text, _ := e.(string)
+				if !has || text == "" {
+					t.Errorf("%s %s: segment %v carries no error", tc.tenant, tc.key, s)
+				} else if !strings.Contains(text, "HTTP 500") || !strings.Contains(text, "was collected before with the same name and label values") {
+					t.Errorf("%s %s: error %q does not carry the Gather failure", tc.tenant, tc.key, text)
 				}
-				delete(s, "error")
+			} else if has {
+				t.Errorf("%s %s: segment %v carries an error", tc.tenant, tc.key, s)
 			}
+			delete(s, "error")
 		}
 		if !reflect.DeepEqual(got, tc.want) {
 			t.Errorf("%s %s (error text removed):\n got %v\nwant %v", tc.tenant, tc.key, got, tc.want)
 		}
 	}
 
-	code, _, _, stderr = served(t, ungatherableTree, "2026-07-01T15:30:00Z")
+	code, _, _, stderr = servedS(t, ungatherableTree, "2026-07-01T15:30:00Z")
 	if code != exitCallerErr || !strings.Contains(stderr, "HTTP 500") {
 		t.Errorf("--at inside the window: exit %d, stderr %q, want exit %d", code, stderr, exitCallerErr)
+	}
+}
+
+// TestServedValues_SchedulesAreOptIn: without --schedules there is no
+// `schedules` field at all and the rest of the document is what it is with
+// the flag (aliases included); with it, every tenant carries one.
+func TestServedValues_SchedulesAreOptIn(t *testing.T) {
+	t.Parallel()
+	dir := filepath.Join(t.TempDir(), "conf.d")
+	tree := map[string]string{}
+	for k, v := range scheduleTree {
+		tree["conf.d/"+k] = v
+	}
+	testutil.WriteTree(t, filepath.Dir(dir), tree)
+	decode := func(extra ...string) map[string]any {
+		t.Helper()
+		code, stdout, stderr := runOnce(t, append([]string{servedValuesCmd, "--config-dir", dir, "--at", scheduleAt}, extra...)...)
+		mustOK(t, code, stderr)
+		var doc map[string]any
+		if err := json.Unmarshal([]byte(stdout), &doc); err != nil {
+			t.Fatal(err)
+		}
+		return doc
+	}
+	without, with := decode(), decode("--schedules")
+	if _, ok := without["aliases"]; !ok {
+		t.Error("aliases missing without --schedules")
+	}
+	tenantsWith := with["tenants"].(map[string]any)
+	for name, tv := range without["tenants"].(map[string]any) {
+		if _, ok := tv.(map[string]any)["schedules"]; ok {
+			t.Errorf("tenant %s carries schedules without --schedules", name)
+		}
+		w := tenantsWith[name].(map[string]any)
+		if _, ok := w["schedules"]; !ok {
+			t.Errorf("tenant %s carries no schedules with --schedules", name)
+		}
+		delete(w, "schedules")
+		if !reflect.DeepEqual(tv, w) {
+			t.Errorf("tenant %s: the document differs beyond schedules:\n without %v\n with    %v", name, tv, w)
+		}
+	}
+	delete(with, "tenants")
+	delete(without, "tenants")
+	if !reflect.DeepEqual(with, without) {
+		t.Errorf("top level differs: %v vs %v", without, with)
 	}
 }

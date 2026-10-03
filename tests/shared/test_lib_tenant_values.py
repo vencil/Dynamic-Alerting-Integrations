@@ -427,7 +427,7 @@ _SCHEDULED = {
 
 def test_schedules_are_parsed_as_da_guard_writes_them(tmp_path, da_guard):
     conf_d = _tree(tmp_path, _SCHEDULED)
-    got = tv.load_served_values(conf_d, at="2026-07-01T03:00:00Z", binary=da_guard)["tenant-a"]
+    got = tv.load_served_values(conf_d, at="2026-07-01T03:00:00Z", binary=da_guard, schedules=True)["tenant-a"]
     S = tv.ScheduleSegment
     assert got.schedules["mysql_connections"] == tv.KeySchedule([
         S("00:00", "06:00", 1000.0, "warning"), S("06:00", "12:00", 70.0, "warning"),
@@ -453,7 +453,7 @@ def test_ungatherable_segment_is_parsed_with_its_error(tmp_path, da_guard):
             "    mysql_connections:\n      default: \"70\"\n      overrides:\n"
             "        - window: \"15:00-16:00\"\n          value: \"700:critical\"\n"),
     })
-    got = tv.load_served_values(conf_d, at="2026-07-01T03:00:00Z", binary=da_guard)["tenant-a"]
+    got = tv.load_served_values(conf_d, at="2026-07-01T03:00:00Z", binary=da_guard, schedules=True)["tenant-a"]
     segs = got.schedules["mysql_connections"].segments
     assert [s[:4] for s in segs] == [("00:00", "15:00", 70.0, "warning"), ("15:00", "16:00", None, None),
                                      ("16:00", "24:00", 70.0, "warning")]
@@ -464,7 +464,7 @@ def test_ungatherable_segment_is_parsed_with_its_error(tmp_path, da_guard):
 def test_aliases_are_the_exporters_table(tmp_path, da_guard):
     """舊拼法寫的 key 經 da-guard 給的別名表找得到；表不在 Python 端維護。"""
     conf_d = _tree(tmp_path, _SCHEDULED)
-    tree = tv.load_served_tree(conf_d, binary=da_guard)
+    tree = tv.load_served_tree(conf_d, binary=da_guard, schedules=True)
     assert "mysql_cpu" in tree.aliases
     canon = tree.aliases["mysql_cpu"]
     assert tree.tenants["tenant-a"].values[canon] == 44
@@ -494,6 +494,24 @@ def test_output_without_schedules_is_refused(tmp_path):
                                    '"aliases": {}, "tenants": {"t": {"values": {}, "severities": {}, '
                                    '"unserved": {}, "dropped": {}}}}')
     with pytest.raises(tv.ServedValuesError) as ei:
-        tv.load_served_tree(tmp_path, binary=fake)
+        tv.load_served_tree(tmp_path, binary=fake, schedules=True)
     assert "schedules" in str(ei.value)
     assert "older than this tool: upgrade or rebuild it" in str(ei.value)
+
+
+def test_schedules_are_asked_for_only_on_request(tmp_path, da_guard):
+    """不帶 schedules=True 時不傳 --schedules：schedules 為 None，其餘讀數與帶旗標時相同。"""
+    conf_d = _tree(tmp_path, _SCHEDULED)
+    plain = tv.load_served_tree(conf_d, at="2026-07-01T03:00:00Z", binary=da_guard)
+    full = tv.load_served_tree(conf_d, at="2026-07-01T03:00:00Z", binary=da_guard, schedules=True)
+    assert all(t.schedules is None for t in plain.tenants.values())
+    assert all(t.schedules for t in full.tenants.values())
+    assert plain.aliases == full.aliases and plain.aliases
+    assert {k: t._replace(schedules=None) for k, t in full.tenants.items()} == plain.tenants
+
+
+def test_output_without_schedules_is_fine_when_not_asked_for(tmp_path):
+    fake = _old_da_guard(tmp_path, '{"at": "x", "parse_failed": [], "skipped": [], "unreadable": [], '
+                                   '"aliases": {}, "tenants": {"t": {"values": {}, "severities": {}, '
+                                   '"unserved": {}, "dropped": {}}}}')
+    assert tv.load_served_values(tmp_path, binary=fake)["t"].schedules is None

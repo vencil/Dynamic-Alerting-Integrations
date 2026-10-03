@@ -112,13 +112,15 @@ type servedTenantValues struct {
 	// /metrics drops the row. Canonical key → the rejection of each dropped
 	// row. Such a key is in Values only if another of its rows was kept.
 	Dropped map[string][]string `json:"dropped"`
-	// Schedules (#2115 (c)): the whole UTC day of every threshold key that
+	// Schedules (#2115 (c)), only with --schedules (nil, and absent from
+	// the JSON, without it — the reading costs one resolve and Gather per
+	// piece of the day): the whole UTC day of every threshold key that
 	// /metrics serves at some minute of it, or whose time-boxed override the
 	// exporter honours (an `expires:` on a base key) — a superset of the
 	// threshold keys of Values. Canonical key → its segments, read from the
 	// exporter's own resolver, not from the schedule as written: see
 	// addSchedules. `_custom_alerts` is not included.
-	Schedules map[string]servedSchedule `json:"schedules"`
+	Schedules *map[string]servedSchedule `json:"schedules,omitempty"`
 }
 
 // servedSchedule is one key's day. Segments cover 00:00–24:00 UTC in order,
@@ -156,6 +158,7 @@ var jsonNull = json.RawMessage("null")
 type servedValuesFlags struct {
 	configDir string
 	at        string
+	schedules bool
 }
 
 func parseServedValuesFlags(args []string, errOut io.Writer) (*servedValuesFlags, error) {
@@ -166,8 +169,11 @@ func parseServedValuesFlags(args []string, errOut io.Writer) (*servedValuesFlags
 		"Path to the conf.d/ root. Required.")
 	fs.StringVar(&f.at, "at", "",
 		"Instant to resolve at, RFC3339 (e.g. 2026-07-01T03:00:00Z). Empty = now.")
+	fs.BoolVar(&f.schedules, "schedules", false,
+		"Also print each tenant's schedules: every threshold key over the whole UTC day.\n"+
+			"Resolves the tree once per part of the day in which some schedule changes.")
 	fs.Usage = func() {
-		fmt.Fprintf(errOut, "Usage: %s %s --config-dir <dir> [--at <RFC3339>]\n", programName, servedValuesCmd)
+		fmt.Fprintf(errOut, "Usage: %s %s --config-dir <dir> [--at <RFC3339>] [--schedules]\n", programName, servedValuesCmd)
 		fmt.Fprintf(errOut, "Print, as JSON, the values the exporter's /metrics serves per tenant.\n\n")
 		fs.PrintDefaults()
 		fmt.Fprintf(errOut, "\nExit codes:\n  0  ok\n  2  caller error, a tree the exporter rejects (e.g. a tenant declared twice),\n"+
@@ -234,7 +240,7 @@ func runServedValues(args []string, stdout, errOut io.Writer) int {
 			fmt.Fprintf(errOut, "%s %s: %v\n", programName, servedValuesCmd, err)
 			return exitCallerErr
 		}
-		tenants, err = servedValues(cfg, at, rep.Undeliverable)
+		tenants, err = servedValues(cfg, at, rep.Undeliverable, f.schedules)
 		if err != nil {
 			fmt.Fprintf(errOut, "%s %s: %v\n", programName, servedValuesCmd, err)
 			return exitCallerErr
@@ -376,9 +382,10 @@ func joinPath(path, name string) string {
 }
 
 // servedValues reads every tenant of cfg at `at`. undeliverable is the same
-// load's LoadReport.Undeliverable; its keys go to Unserved.
+// load's LoadReport.Undeliverable; its keys go to Unserved. withSchedules
+// also fills Schedules (--schedules).
 func servedValues(cfg *config.ThresholdConfig, at time.Time,
-	undeliverable map[string]map[string]config.ScheduledValue,
+	undeliverable map[string]map[string]config.ScheduledValue, withSchedules bool,
 ) (map[string]servedTenantValues, error) {
 	ownedBy, droppedBy, res, err := keyedRows(cfg, at)
 	if err != nil {
@@ -417,7 +424,6 @@ func servedValues(cfg *config.ThresholdConfig, at time.Time,
 			Severities: map[string]string{},
 			Unserved:   map[string]any{},
 			Dropped:    map[string][]string{},
-			Schedules:  map[string]servedSchedule{},
 		}
 		for name, errs := range droppedBy[tenant] {
 			tv.Dropped[name] = errs
@@ -507,8 +513,10 @@ func servedValues(cfg *config.ThresholdConfig, at time.Time,
 		}
 		out[tenant] = tv
 	}
-	if err := addSchedules(cfg, at, out, res.ThresholdExpiries); err != nil {
-		return nil, err
+	if withSchedules {
+		if err := addSchedules(cfg, at, out, res.ThresholdExpiries); err != nil {
+			return nil, err
+		}
 	}
 	return out, nil
 }

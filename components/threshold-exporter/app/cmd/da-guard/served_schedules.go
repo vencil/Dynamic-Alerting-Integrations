@@ -87,6 +87,7 @@ func addSchedules(cfg *config.ThresholdConfig, at time.Time, tenants map[string]
 	}
 
 	for tenant, tv := range tenants {
+		schedules := map[string]servedSchedule{}
 		keys := map[string]bool{}
 		for _, p := range passes {
 			for k := range p[tenant] {
@@ -107,8 +108,10 @@ func addSchedules(cfg *config.ThresholdConfig, at time.Time, tenants map[string]
 				sch.Expires = sv.Expiry.Expires
 				sch.Expired = &expired
 			}
-			tv.Schedules[k] = sch
+			schedules[k] = sch
 		}
+		tv.Schedules = &schedules
+		tenants[tenant] = tv
 	}
 	return nil
 }

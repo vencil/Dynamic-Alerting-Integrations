@@ -53,6 +53,12 @@ type servedOut struct {
 // served runs the subcommand over files (paths relative to conf.d) at `at`.
 func served(t *testing.T, files map[string]string, at string) (int, servedOut, string, string) {
 	t.Helper()
+	return servedWith(t, files, at)
+}
+
+// servedWith is served with extra arguments (e.g. --schedules).
+func servedWith(t *testing.T, files map[string]string, at string, extra ...string) (int, servedOut, string, string) {
+	t.Helper()
 	dir := filepath.Join(t.TempDir(), "conf.d")
 	tree := make(map[string]string, len(files))
 	for k, v := range files {
@@ -63,6 +69,7 @@ func served(t *testing.T, files map[string]string, at string) (int, servedOut, s
 	if at != "" {
 		args = append(args, "--at", at)
 	}
+	args = append(args, extra...)
 	code, stdout, stderr := runOnce(t, args...)
 	var doc servedOut
 	if stdout != "" {
