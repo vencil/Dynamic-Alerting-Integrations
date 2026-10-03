@@ -1374,6 +1374,13 @@ def _root_defaults_routing_detail(rel: str, key: str, value: object,
     return f"{rel}: `defaults.{key}` — {effect}; {move}."
 
 
+def _canonical_threshold_key(key: str) -> str:
+    """Canonical spelling of a root threshold key (#1231 alias table), so a
+    legacy and a canonical spelling of the same threshold compare equal."""
+    from _registry_lib import DEPRECATED_KEY_ALIASES
+    return DEPRECATED_KEY_ALIASES.get(key, key)
+
+
 def _root_defaults_value_detail(rel: str, key: str | None, raw: str,
                                 null: bool) -> str:
     """One FAIL line for a value the exporter drops or treats as unwritten
@@ -1668,10 +1675,19 @@ def check_root_defaults(config_dir: str) -> dict[str, object]:
     verdicts = dr.exporter_verdicts(carrier.read_bytes())
     dropped = {k: r for k, r, kind in verdicts
                if k is not None and kind in dr.BLOCKING_KINDS}
+    # #2518: a null default whose key `optional_overrides:` lists is still
+    # declared — the exporter serves tenant values for it — so the "not
+    # declared" verdict does not apply. Either spelling counts, as in Go.
+    optional = raw.get("optional_overrides")
+    optional_keys = ({_canonical_threshold_key(k) for k in optional
+                      if isinstance(k, str)}
+                     if isinstance(optional, list) else set())
     details = [_root_defaults_value_detail(rel, k, r,
                                            kind == dr.NULL_NOT_DECLARED)
                for k, r, kind in verdicts
                if not (k is not None and k.startswith("_routing"))
+               and not (kind == dr.NULL_NOT_DECLARED and k is not None
+                        and _canonical_threshold_key(k) in optional_keys)
                and (kind in dr.BLOCKING_KINDS or kind == dr.NULL_NOT_DECLARED)]
     if raw.get("defaults") is None:
         details += _root_defaults_unwrapped_detail(rel, raw)

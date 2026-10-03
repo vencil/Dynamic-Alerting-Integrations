@@ -2410,6 +2410,32 @@ class TestRootDefaultsRouting:
         r = vc.check_root_defaults(str(d))
         assert r["status"] == vc.PASS, r
 
+    @pytest.mark.parametrize("null_key,listed", [
+        ("mysql_connections", "mysql_connections"),
+        # either spelling declares it, as in Go (#1231 alias table)
+        ("mysql_threads_running", "mysql_cpu"),
+        ("mysql_cpu", "mysql_threads_running"),
+    ])
+    def test_null_default_listed_in_optional_overrides_passes(
+            self, tmp_path, null_key, listed):
+        """#2518: a null default is "not declared" only when nothing else
+        declares the key; `optional_overrides:` does, and the exporter then
+        serves tenant values for it, so this row must not FAIL."""
+        d = self._tree(tmp_path, f"defaults:\n  {null_key}: null\n"
+                       f"  mysql_slow_queries: 5\n"
+                       f"optional_overrides:\n  - {listed}\n")
+        r = vc.check_root_defaults(str(d))
+        assert r["status"] == vc.PASS, r
+
+    def test_null_default_not_listed_still_fails(self, tmp_path):
+        """Control for the test above: same tree, the list names another key."""
+        d = self._tree(tmp_path, "defaults:\n  mysql_connections: null\n"
+                       "  mysql_slow_queries: 5\n"
+                       "optional_overrides:\n  - mysql_slow_queries\n")
+        r = vc.check_root_defaults(str(d))
+        assert r["status"] == vc.FAIL, r
+        assert "defaults.mysql_connections" in " ".join(r["details"]), r
+
     def test_end_to_end_exits_1_and_names_the_fix(self, tmp_path, capsys,
                                                   cli_argv):
         """Wired into ``main()``: this exact tree printed PASS, rc 0."""
