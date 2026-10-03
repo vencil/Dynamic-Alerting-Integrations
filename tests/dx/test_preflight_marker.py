@@ -209,8 +209,15 @@ class TestPrepushWiring:
 
         assert self._precommit_install(tmp_path, "--hook-type", "pre-push") == 0
         hook = tmp_path / ".git" / "hooks" / "pre-push"
+        # Start from the LF template on every host: on Windows pre-commit has
+        # already written the `#!/bin/sh` + CRLF form, and converting that a
+        # second time gives a file (`\r\r\n`, two `#!/bin/sh`) no host produces.
+        lf = hook.read_bytes().replace(b"\r\n", b"\n").removeprefix(b"#!/bin/sh\n")
+        assert lf.startswith(b"#!/usr/bin/env "), lf[:60]
         if form == "windows":
-            hook.write_bytes(b"#!/bin/sh\r\n" + hook.read_bytes().replace(b"\n", b"\r\n"))
+            hook.write_bytes(b"#!/bin/sh\r\n" + lf.replace(b"\n", b"\r\n"))
+        else:
+            hook.write_bytes(lf)
         template = hook.read_bytes()
 
         for _ in range(2):
