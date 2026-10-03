@@ -1230,6 +1230,18 @@ repos:
         # #1820). Full scan of the tracked population; exit via an inline
         # `# pipestatus-ok: <why>` on the read line. Boundaries in the docstring.
 
+      # #2583: gofmt existed only in CI (each module's .golangci.yml → Go Lint).
+      # `\.go$` with no path anchor covers every go.mod module. Runs `gofmt -s`
+      # because golangci-lint's gofmt formatter defaults to simplify: true.
+      # Lists, never rewrites. No gofmt/go on PATH ⇒ rc 2 (fail-closed); the
+      # opt-out is `SKIP=go-fmt`, which pre-commit shows as Skipped, not Passed.
+      # The trailing `--` keeps a staged `-x.go` a path, not a flag.
+      - id: go-fmt
+        name: "gofmt -s -l on staged .go files (#2583)"
+        entry: python3 -X utf8 scripts/tools/lint/check_go_fmt.py --
+        language: python
+        files: \.go$
+
       - id: configmap-mount-completeness
         name: "Every configmap-rules-* must be mounted in Prometheus projected volume (#869 dead-rule guard)"
         entry: python3 -X utf8 scripts/tools/lint/check_configmap_mount_completeness.py --ci
