@@ -181,6 +181,25 @@ def parse_python_file(path: Path) -> Tuple[ast.Module, List[str]]:
     return tree, source.split("\n")
 
 
+def char_col_offset(line: str, col_offset: int) -> int:
+    """Turn an AST ``col_offset`` on *line* into a 0-based CHARACTER offset.
+
+    ``ast`` reports ``col_offset`` (and ``end_col_offset``) in UTF-8 BYTES of
+    the parsed ``str`` — whatever codec the file was decoded with — so on
+    ``名稱 = 1; f()`` the call sits at byte 13 but character 9 (#2646). The
+    first *col_offset* bytes of *line*'s UTF-8 encoding are decoded and
+    counted; callers that print a 1-based column add 1 themselves.
+
+    *line* must be the line the node's ``lineno`` names, as
+    ``parse_python_file`` returns it (BOM already stripped, so line 1 is not
+    shifted by it). A form feed or tab is one byte and one character. A
+    *col_offset* that falls inside a multi-byte character cannot come from
+    ``ast`` for that line and raises ``UnicodeDecodeError`` rather than
+    returning a guess.
+    """
+    return len(line.encode("utf-8")[:col_offset].decode("utf-8"))
+
+
 _COMMAND_MAP_ENTRY_RE = re.compile(r'"([a-z][a-z0-9-]+)":\s*"([^"]+)"')
 
 

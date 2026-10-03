@@ -132,6 +132,7 @@ from _lib_compat import try_utf8_stdout  # noqa: E402
 from _lib_exitcodes import EXIT_OK, EXIT_VIOLATION, EXIT_CALLER_ERROR  # noqa: E402
 from _lint_helpers import (  # noqa: E402
     PythonSourceError,
+    char_col_offset,
     decode_python_source,
     parse_python_file,
 )
@@ -165,7 +166,7 @@ class TimeoutViolation:
 
     path: Path
     line: int
-    col: int
+    col: int  # 1-based CHARACTER column, not ast's UTF-8 byte offset (#2646)
     rule: str  # "subprocess-fn" | "communicate"
     snippet: str
 
@@ -331,16 +332,17 @@ def scan_tree(path: Path, tree: ast.AST, source_lines: list[str]) -> list[Timeou
         fn_name = _is_subprocess_fn_call(node)
         if fn_name and not _has_meaningful_timeout(node):
             if not _line_has_ignore(source_lines, node.lineno):
-                snippet = (
-                    source_lines[node.lineno - 1].strip()
+                line_text = (
+                    source_lines[node.lineno - 1]
                     if 1 <= node.lineno <= len(source_lines)
                     else ""
                 )
+                snippet = line_text.strip()
                 violations.append(
                     TimeoutViolation(
                         path=path,
                         line=node.lineno,
-                        col=node.col_offset + 1,
+                        col=char_col_offset(line_text, node.col_offset) + 1,
                         rule=f"subprocess.{fn_name}-no-timeout",
                         snippet=snippet[:120],
                     )
@@ -350,16 +352,17 @@ def scan_tree(path: Path, tree: ast.AST, source_lines: list[str]) -> list[Timeou
         # Class B: x.communicate(...)
         if _is_communicate_call(node) and not _has_meaningful_timeout(node):
             if not _line_has_ignore(source_lines, node.lineno):
-                snippet = (
-                    source_lines[node.lineno - 1].strip()
+                line_text = (
+                    source_lines[node.lineno - 1]
                     if 1 <= node.lineno <= len(source_lines)
                     else ""
                 )
+                snippet = line_text.strip()
                 violations.append(
                     TimeoutViolation(
                         path=path,
                         line=node.lineno,
-                        col=node.col_offset + 1,
+                        col=char_col_offset(line_text, node.col_offset) + 1,
                         rule="communicate-no-timeout",
                         snippet=snippet[:120],
                     )

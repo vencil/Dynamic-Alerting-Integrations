@@ -341,7 +341,9 @@ def scan_tree(
         #   findings.append({finding_class}(
         #       path=path,
         #       line=node.lineno,
-        #       col=node.col_offset + 1,
+        #       # ast col_offset counts UTF-8 bytes; report characters (#2646)
+        #       col=char_col_offset(source_lines[node.lineno - 1],
+        #                           node.col_offset) + 1,
         #       snippet=source_lines[node.lineno - 1].strip(),
         #   ))
         del node  # placeholder
@@ -683,6 +685,7 @@ _KIND_HELPER_IMPORTS = {
     "ast": (
         "from _lint_helpers import (  # noqa: E402\n"
         "    PythonSourceError,\n"
+        "    char_col_offset,\n"
         "    decode_python_source,\n"
         "    parse_python_file,\n"
         ")\n"

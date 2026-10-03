@@ -598,6 +598,108 @@ class TestReportShape:
         assert "[subprocess.run-no-timeout]" in rendered
 
 
+class TestColumnIsACharacterColumn:
+    """The reported column counts characters, not UTF-8 bytes (#2646).
+
+    ``ast`` gives ``col_offset`` in UTF-8 bytes: on ``名稱 = 1; …`` the call
+    is at byte 13 but character 9, so an editor jumping to ``:2:13`` lands
+    four characters past it. Each expectation is derived independently of
+    the tool — ``str.index`` for the character column, ``ast`` itself for
+    what the column used to be — and both kinds of line share one file, so
+    a fix that breaks ASCII columns fails here too.
+    """
+
+    _SRC = (
+        "import subprocess\n"
+        "名稱 = 1; subprocess.run(['x'])\n"
+        "x = 1; subprocess.run(['y'])\n"
+        "p = 名稱; p.communicate()\n"
+    )
+
+    @staticmethod
+    def _byte_cols(src: str) -> dict[int, int]:
+        """lineno -> ``col_offset + 1`` of the first Call on it (old output)."""
+        import ast
+        cols: dict[int, int] = {}
+        for node in ast.walk(ast.parse(src)):
+            if isinstance(node, ast.Call):
+                cols.setdefault(node.lineno, node.col_offset + 1)
+        return cols
+
+    @pytest.mark.timeout(30)
+    def test_cjk_line_reports_character_column_ascii_line_unchanged(self):
+        lines = self._SRC.split("\n")
+        got = {v.line: v.col for v in _scan(self._SRC)}
+        old = self._byte_cols(self._SRC)
+
+        cjk_char_col = lines[1].index("subprocess.run") + 1
+        assert cjk_char_col == 9
+        assert old[2] == 13  # the probe really does diverge
+        assert got[2] == cjk_char_col
+
+        # communicate(): the Call node starts at its receiver ``p``.
+        assert got[4] == lines[3].index("p.communicate") + 1 == 9
+        assert old[4] == 13
+
+        # Pure-ASCII line: byte column == character column == what it was.
+        assert got[3] == old[3] == lines[2].index("subprocess.run") + 1 == 8
+
+    @pytest.mark.timeout(30)
+    def test_bom_and_latin1_cookie_files_report_character_columns(self, tmp_path):
+        """The BOM is stripped before parsing, so it is not counted on line 1;
+        a latin-1 file's é is ONE byte on disk but ``ast`` counts the UTF-8
+        of the decoded text (two bytes) — the character column is the same
+        in both."""
+        line1 = "import subprocess; 名 = 1; subprocess.run(['x'])"
+        bom = tmp_path / "bom.py"
+        bom.write_bytes(_BOM + (line1 + "\n").encode("utf-8"))
+        want = line1.index("subprocess.run") + 1
+        assert want == 27
+        assert [(v.line, v.col) for v in cst.scan_file(bom)] == [(1, want)]
+
+        cookie = tmp_path / "latin1.py"
+        cookie.write_bytes(
+            b"# -*- coding: latin-1 -*-\n"
+            b"import subprocess\n"
+            b"caf\xe9 = 1; subprocess.run(['x'])\n"
+        )
+        compile(cookie.read_bytes(), str(cookie), "exec")
+        assert [(v.line, v.col) for v in cst.scan_file(cookie)] == [
+            (3, len("café = 1; ") + 1)]  # 11; the byte column was 12
+
+    @pytest.mark.parametrize("line", [
+        "x = f()",
+        "名稱 = 1; f()",
+        "\x0c\tcafé = '😀'; f()",
+    ])
+    def test_helper_maps_every_byte_boundary_back_to_its_character(self, line):
+        from _lint_helpers import char_col_offset
+        for i in range(len(line) + 1):
+            assert char_col_offset(line, len(line[:i].encode("utf-8"))) == i
+
+    def test_helper_refuses_an_offset_inside_a_character(self):
+        from _lint_helpers import char_col_offset
+        with pytest.raises(UnicodeDecodeError):
+            char_col_offset("名稱", 1)
+
+    @pytest.mark.timeout(60)
+    def test_cli_output_carries_the_character_column(self, tmp_path):
+        probe = tmp_path / "col_probe.py"
+        probe.write_text(
+            "import subprocess\n名稱 = 1; subprocess.run([\"x\"])\n",
+            encoding="utf-8", newline="\n",
+        )
+        script = os.path.join(_TOOLS_DIR, "check_subprocess_timeout.py")
+        res = subprocess.run(
+            [sys.executable, script, "--ci", "--strict-subprocess-timeout", str(probe)],
+            capture_output=True, text=True, encoding="utf-8", timeout=60,
+        )
+        out = res.stdout + res.stderr
+        assert res.returncode == 1, out
+        assert f"{probe}:2:9 [subprocess.run-no-timeout]" in out, out
+        assert f"{probe}:2:13 " not in out, out
+
+
 # ---------------------------------------------------------------------------
 # #2601 — decode as the interpreter does; an unscanned file is never clean
 # ---------------------------------------------------------------------------
