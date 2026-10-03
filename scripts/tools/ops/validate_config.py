@@ -1375,10 +1375,11 @@ def _root_defaults_routing_detail(rel: str, key: str, value: object,
 
 
 def _canonical_threshold_key(key: str) -> str:
-    """Canonical spelling of a root threshold key (#1231 alias table), so a
-    legacy and a canonical spelling of the same threshold compare equal."""
-    from _registry_lib import DEPRECATED_KEY_ALIASES
-    return DEPRECATED_KEY_ALIASES.get(key, key)
+    """Canonical spelling of a root threshold key, so a legacy and a canonical
+    spelling of the same threshold compare equal — Go's ``canonicalKeyFor``
+    mirror (#1231), which also maps ``<base>_critical`` and ``<base>{...}``."""
+    from _grar_validate import _canonical_tenant_key
+    return _canonical_tenant_key(key)[0]
 
 
 def _root_defaults_value_detail(rel: str, key: str | None, raw: str,
@@ -1678,15 +1679,21 @@ def check_root_defaults(config_dir: str) -> dict[str, object]:
     # #2518: a null default whose key `optional_overrides:` lists is still
     # declared — the exporter serves tenant values for it — so the "not
     # declared" verdict does not apply. Either spelling counts, as in Go.
+    # Not for a `_` key: `optional_overrides:` does not serve those. Not when
+    # an entry is a mapping or a list: the exporter then fails the whole
+    # file, so nothing in it declares anything.
     optional = raw.get("optional_overrides")
-    optional_keys = ({_canonical_threshold_key(k) for k in optional
-                      if isinstance(k, str)}
-                     if isinstance(optional, list) else set())
+    optional_keys: set[str] = set()
+    if isinstance(optional, list) and not any(
+            isinstance(k, (dict, list)) for k in optional):
+        optional_keys = {_canonical_threshold_key(k) for k in optional
+                         if isinstance(k, str) and not k.startswith("_")}
     details = [_root_defaults_value_detail(rel, k, r,
                                            kind == dr.NULL_NOT_DECLARED)
                for k, r, kind in verdicts
                if not (k is not None and k.startswith("_routing"))
                and not (kind == dr.NULL_NOT_DECLARED and k is not None
+                        and not k.startswith("_")
                         and _canonical_threshold_key(k) in optional_keys)
                and (kind in dr.BLOCKING_KINDS or kind == dr.NULL_NOT_DECLARED)]
     if raw.get("defaults") is None:

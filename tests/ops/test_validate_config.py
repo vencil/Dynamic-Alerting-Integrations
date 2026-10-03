@@ -2427,6 +2427,39 @@ class TestRootDefaultsRouting:
         r = vc.check_root_defaults(str(d))
         assert r["status"] == vc.PASS, r
 
+    @pytest.mark.parametrize("null_key,listed", [
+        ('"mysql_cpu{queue=\\"a\\"}"', '"mysql_threads_running{queue=\\"a\\"}"'),
+        ("mysql_cpu_critical", "mysql_threads_running_critical"),
+    ])
+    def test_shapes_go_canonicalizes_also_match(self, tmp_path, null_key,
+                                               listed):
+        """The alias match is Go's canonicalKeyFor, which also maps the
+        dimensional and `_critical` shapes — not only bare table entries."""
+        d = self._tree(tmp_path, f"defaults:\n  {null_key}: null\n"
+                       f"  mysql_threads_running: 5\n"
+                       f"optional_overrides:\n  - {listed}\n")
+        r = vc.check_root_defaults(str(d))
+        assert r["status"] == vc.PASS, r
+
+    def test_underscore_key_listed_still_fails(self, tmp_path):
+        """`optional_overrides:` does not serve `_` keys, so listing one
+        there does not declare it (measured: tenant value unserved)."""
+        d = self._tree(tmp_path, "defaults:\n  _custom_x: null\n"
+                       "  mysql_slow_queries: 5\n"
+                       "optional_overrides:\n  - _custom_x\n")
+        r = vc.check_root_defaults(str(d))
+        assert r["status"] == vc.FAIL, r
+
+    def test_list_with_a_mapping_entry_declares_nothing(self, tmp_path):
+        """A mapping entry makes the exporter fail the whole file, so the
+        listed key is not declared either (measured: parse_failed)."""
+        d = self._tree(tmp_path, "defaults:\n  mysql_threads_running: null\n"
+                       "  mysql_slow_queries: 5\n"
+                       "optional_overrides:\n  - {a: b}\n"
+                       "  - mysql_threads_running\n")
+        r = vc.check_root_defaults(str(d))
+        assert r["status"] == vc.FAIL, r
+
     def test_null_default_not_listed_still_fails(self, tmp_path):
         """Control for the test above: same tree, the list names another key."""
         d = self._tree(tmp_path, "defaults:\n  mysql_connections: null\n"
