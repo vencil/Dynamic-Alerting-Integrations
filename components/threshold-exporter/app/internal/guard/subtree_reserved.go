@@ -132,12 +132,12 @@ func subtreeReservedMessage(k string, files []string, declared map[string]bool) 
 	switch reservedKeyShape(k, declared) {
 	case shapeUndeclaredState:
 		return fmt.Sprintf("Reserved key `%s` %s; subtree defaults do not support reserved keys. %s %s",
-			k, where, subtreeRefusedKeyFix(k, declared), tail)
+			k, where, subtreeRefusedKeyFix(k, declared, false), tail)
 	case shapeUnrecognised:
-		return fmt.Sprintf("Key `%s` %s. %s %s", k, where, subtreeRefusedKeyFix(k, declared), tail)
+		return fmt.Sprintf("Key `%s` %s. %s %s", k, where, subtreeRefusedKeyFix(k, declared, false), tail)
 	}
 	return fmt.Sprintf("Reserved key `%s` %s; subtree defaults do not support reserved keys. %s %s %s",
-		k, where, reservedKeyToday(k), subtreeRefusedKeyFix(k, declared), tail)
+		k, where, reservedKeyToday(k), subtreeRefusedKeyFix(k, declared, false), tail)
 }
 
 // The three fix shapes of a key subtree defaults refuse.
@@ -147,10 +147,10 @@ const (
 	shapeUnrecognised           // (b) read by nothing anywhere: delete
 )
 
-// reservedKeyShape picks k's fix shape. A bare `_state_` (empty filter name)
-// is (b): no filter can be named "" (config.IsRecognisedReservedKey).
+// reservedKeyShape picks k's fix shape. A bare `_state_` is the filter named
+// "", judged like any other (#2388 r5).
 func reservedKeyShape(k string, declared map[string]bool) int {
-	if f, isState := strings.CutPrefix(k, "_state_"); isState && f != "" && !declared[f] {
+	if f, isState := strings.CutPrefix(k, "_state_"); isState && !declared[f] {
 		return shapeUndeclaredState
 	}
 	if !config.IsRecognisedReservedKey(k) {
@@ -164,18 +164,30 @@ func reservedKeyShape(k string, declared map[string]bool) int {
 // `_defaults.yaml`: subtree_default_reserved_key, and defaults_toplevel_ignored
 // (#2388 r4), whose generic "move it under `defaults:`" would trade one
 // finding for the other.
-func subtreeRefusedKeyFix(k string, declared map[string]bool) string {
+//
+// topLevel is true for defaults_toplevel_ignored (the key sits beside a
+// `defaults:` mapping, so the merge leaves it out and it has no effect at
+// all today). For subtree_default_reserved_key it is false: there a key may
+// act today (reservedKeyToday says how), so the (c) text does not claim it
+// has no effect — but it still leads with deleting it (#2388 r5: the first
+// thing to do with a key the file must not carry is take it out of the file;
+// a tenant that already sets the key itself needs nothing else).
+func subtreeRefusedKeyFix(k string, declared map[string]bool, topLevel bool) string {
 	switch reservedKeyShape(k, declared) {
 	case shapeUndeclaredState:
 		f := strings.TrimPrefix(k, "_state_")
 		return fmt.Sprintf("The conf.d root `state_filters:` does not declare a filter `%s`, so nothing reads `%s` "+
 			"anywhere, a tenant's own entry included. Declare `%s` under `state_filters:` in the conf.d "+
-			"root `_defaults.yaml` (this applies to every tenant in the tree), or delete the key.", f, k, f)
+			"root `_defaults.yaml` (this applies to every tenant in the tree), or delete it from this file.", f, k, f)
 	case shapeUnrecognised:
 		return "It is not a recognised key: the exporter does not read it, " +
-			"in a subtree `_defaults.yaml` or in a tenant's own entry. Delete it."
+			"in a subtree `_defaults.yaml` or in a tenant's own entry. Delete it from this file."
 	}
-	return reservedKeyFix(k)
+	lead := "Delete it from this file."
+	if topLevel {
+		lead = "Today it has no effect; delete it from this file to keep things as they are."
+	}
+	return lead + " " + reservedKeyFix(k)
 }
 
 // reservedKeyToday is the finding's sentence on what the exporter does with
@@ -198,16 +210,16 @@ func reservedKeyToday(k string) string {
 // (No routing key reaches here: the routing checks own those.)
 func reservedKeyFix(k string) string {
 	if strings.HasPrefix(k, "_state_") {
-		return fmt.Sprintf("Set `%s` in each tenant's own entry under `tenants:`, or set "+
+		return fmt.Sprintf("To have it take effect, set `%s` in each tenant's own entry under `tenants:`, or set "+
 			"`state_filters.%s.default_state` in the conf.d root `_defaults.yaml` — that affects every "+
 			"tenant in the tree; to change only this subtree's tenants, set the key in each tenant's own entry.",
 			k, strings.TrimPrefix(k, "_state_"))
 	}
 	if readElsewhere[k] { // `_custom_alerts`: its reader takes it from the top level
-		return fmt.Sprintf("Move `%s` out of `defaults:` to the top level of the file, where it is read, "+
-			"or set it in each tenant's own entry under `tenants:`.", k)
+		return fmt.Sprintf("To have it take effect, move `%s` out of `defaults:` to the top level of the file, "+
+			"where it is read, or set it in each tenant's own entry under `tenants:`.", k)
 	}
-	return fmt.Sprintf("Set `%s` in each tenant's own entry under `tenants:`.", k)
+	return fmt.Sprintf("To have it take effect, set `%s` in each tenant's own entry under `tenants:`.", k)
 }
 
 // quoteJoin renders file paths as "`a`, `b`".

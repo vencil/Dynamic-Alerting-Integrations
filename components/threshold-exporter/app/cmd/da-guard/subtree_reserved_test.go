@@ -14,6 +14,7 @@ import (
 	"encoding/json"
 	"path/filepath"
 	"reflect"
+	"slices"
 	"strings"
 	"testing"
 
@@ -162,7 +163,7 @@ func TestGuard_SubtreeReservedKeyFix(t *testing.T) {
 	if m := msg["_state_maintenance"]; !strings.Contains(m, "`state_filters.maintenance.default_state`") {
 		t.Errorf("_state_maintenance fix = %q; want it to name state_filters.maintenance.default_state", m)
 	}
-	if m := msg["_silent_mode"]; !strings.Contains(m, "Set `_silent_mode` in each tenant's own entry under `tenants:`") ||
+	if m := msg["_silent_mode"]; !strings.Contains(m, "set `_silent_mode` in each tenant's own entry under `tenants:`") ||
 		strings.Contains(m, "state_filters") {
 		t.Errorf("_silent_mode fix = %q; want the tenant-entry fix only", m)
 	}
@@ -242,7 +243,7 @@ func TestGuard_SubtreeCustomAlertsTopLevelIsNotReserved(t *testing.T) {
 			if tc.want == 1 {
 				f := got[0]
 				if f.TenantID != "t1" || f.Field != "_custom_alerts" ||
-					!strings.Contains(f.Message, "Move `_custom_alerts` out of `defaults:` to the top level") {
+					!strings.Contains(f.Message, "move `_custom_alerts` out of `defaults:` to the top level") {
 					t.Errorf("finding = %+v", f)
 				}
 			}
@@ -347,19 +348,19 @@ func TestGuard_SubtreeReservedMessageShapes(t *testing.T) {
 	}{
 		{key: "_state_nope",
 			want: []string{"does not declare a filter `nope`", "Declare `nope` under `state_filters:`",
-				"every tenant in the tree", "or delete the key"},
+				"every tenant in the tree", "or delete it from this file"},
 			deny: []string{ownEntry + " under", "Set `_state_nope`"}},
 		{key: "_silent_x",
-			want: []string{"Key `_silent_x`", "not a recognised key", "Delete it."},
+			want: []string{"Key `_silent_x`", "not a recognised key", "Delete it from this file."},
 			deny: []string{"Reserved key", "Set `_silent_x`"}},
 		// #2388 r3: reserved by prefix alone; nothing reads it by name.
 		{key: "_routingProfile",
-			want: []string{"Key `_routingProfile`", "not a recognised key", "Delete it."},
+			want: []string{"Key `_routingProfile`", "not a recognised key", "Delete it from this file."},
 			deny: []string{"Reserved key", "Set `_routingProfile`"}},
 		{key: "_state_maintenance",
-			want: []string{"Set `_state_maintenance` " + ownEntry, "`state_filters.maintenance.default_state`",
+			want: []string{"Delete it from this file.", "set `_state_maintenance` " + ownEntry, "`state_filters.maintenance.default_state`",
 				"affects every tenant in the tree; to change only this subtree's tenants"}},
-		{key: "_silent_mode", want: []string{"Reserved key", "Set `_silent_mode` " + ownEntry}},
+		{key: "_silent_mode", want: []string{"Reserved key", "Delete it from this file.", "set `_silent_mode` " + ownEntry}},
 	} {
 		m, ok := msg[tc.key]
 		if !ok {
@@ -454,7 +455,7 @@ func TestGuard_SubtreeTopLevelReservedKeyFix(t *testing.T) {
 		t.Fatalf("before: findings = %q, want %q", got, want)
 	}
 	_, stdout, _ := runOnce(t, "--format", "json", "--config-dir", writeReservedConfD(t, before))
-	if !strings.Contains(stdout, "Set `_silent_mode` in each tenant's own entry under `tenants:`") ||
+	if !strings.Contains(stdout, "set `_silent_mode` in each tenant's own entry under `tenants:`") ||
 		strings.Contains(stdout, "Move them under") {
 		t.Errorf("before: the fix is not the tenant-entry one: %s", stdout)
 	}
@@ -474,18 +475,104 @@ func TestGuard_SubtreeTopLevelReservedKeyFix(t *testing.T) {
 	}
 }
 
-// #2388 r4 nit: a bare `_state_` names no filter: "not a recognised key; delete it".
+// #2388 r5: a bare `_state_` is the filter named "", judged like any other:
+// undeclared → (a) declare or delete; declared (a root `state_filters:` entry
+// named "") → (c), the recognised-key fix.
 func TestGuard_SubtreeReservedBareStatePrefix(t *testing.T) {
 	t.Parallel()
-	files := reservedCase{defaultState: "disable", tenant: "{}"}.files()
-	files["finance/_defaults.yaml"] = "defaults:\n  _state_: 1\n"
-	_, got := reservedFindings(t, "--config-dir", writeReservedConfD(t, files))
-	if len(got) != 1 || got[0].Field != "_state_" {
-		t.Fatalf("findings = %+v, want one for _state_", got)
+	for _, tc := range []struct {
+		name, root string
+		want, deny []string
+	}{
+		{name: "undeclared", root: reservedRoot("disable"),
+			want: []string{"Reserved key `_state_`", "does not declare a filter ``", "or delete it from this file"},
+			deny: []string{"not a recognised key", "To have it take effect"}},
+		{name: "declared", root: "defaults:\n  mysql_connections: 80\n" +
+			"state_filters:\n  \"\":\n    reasons: [x]\n    severity: warning\n    default_state: enable\n",
+			want: []string{"Reserved key `_state_`", "Delete it from this file.", "To have it take effect, set `_state_`"},
+			deny: []string{"does not declare", "not a recognised key"}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			files := reservedCase{defaultState: "disable", tenant: "{}"}.files()
+			files["_defaults.yaml"] = tc.root
+			files["finance/_defaults.yaml"] = "defaults:\n  _state_: disable\n"
+			_, got := reservedFindings(t, "--config-dir", writeReservedConfD(t, files))
+			if len(got) != 1 || got[0].Field != "_state_" {
+				t.Fatalf("findings = %+v, want one for _state_", got)
+			}
+			for _, w := range tc.want {
+				if !strings.Contains(got[0].Message, w) {
+					t.Errorf("message lacks %q: %s", w, got[0].Message)
+				}
+			}
+			for _, d := range tc.deny {
+				if strings.Contains(got[0].Message, d) {
+					t.Errorf("message has %q: %s", d, got[0].Message)
+				}
+			}
+		})
 	}
-	m := got[0].Message
-	if !strings.Contains(m, "Key `_state_`") || !strings.Contains(m, "Delete it.") ||
-		strings.Contains(m, "does not declare a filter") || strings.Contains(m, "Reserved key") {
-		t.Errorf("message = %s; want the delete branch", m)
+}
+
+// #2388 r5: the blind review's m4 shape — the tenant already sets `_silent_mode`
+// and the subtree file still carries it at the top level beside `defaults:` —
+// must be told to delete it from the file (it has no effect there today); and
+// its m2 shape (`defaults:` with no value, so the whole document is merged)
+// gets no "leave `defaults:` with no value" advice.
+func TestGuard_SubtreeRefusedKeyDeleteFirst(t *testing.T) {
+	t.Parallel()
+	m4 := map[string]string{
+		"_defaults.yaml":   "defaults:\n  mysql_connections: 80\n",
+		"a/_defaults.yaml": "defaults:\n  mysql_connections: 70\n_silent_mode: warning\n",
+		"a/t.yaml":         "tenants:\n  t1:\n    _silent_mode: warning\n",
+	}
+	_, stdout, _ := runOnce(t, "--format", "json", "--config-dir", writeReservedConfD(t, m4))
+	if !strings.Contains(stdout, "Today it has no effect; delete it from this file to keep things as they are.") {
+		t.Errorf("m4: no delete instruction: %s", stdout)
+	}
+	m2 := map[string]string{
+		"_defaults.yaml":   "defaults:\n  mysql_connections: 80\n",
+		"a/_defaults.yaml": "defaults:\nx: 1\nmysql_connections: 70\n_silent_mode: warning\n",
+		"a/t.yaml":         "tenants:\n  t1:\n    _silent_mode: warning\n",
+	}
+	_, stdout, _ = runOnce(t, "--format", "json", "--config-dir", writeReservedConfD(t, m2))
+	if strings.Contains(stdout, "leave `defaults:` with no value") {
+		t.Errorf("m2: advises leaving `defaults:` with no value: %s", stdout)
+	}
+}
+
+// #2388 r5: redundant_override does not tell a tenant to drop a key it
+// "inherits" from a subtree `_defaults.yaml` that subtree defaults refuse —
+// the exporter does not apply that inherited value, so the tenant's own key is
+// the one in effect (m2: served ["warning"] only because the tenant sets it).
+// The control inherits the same kind of key from the ROOT: still reported.
+func TestGuard_RedundantOverrideSkipsRefusedSubtreeKey(t *testing.T) {
+	t.Parallel()
+	m2 := map[string]string{
+		"_defaults.yaml":   "defaults:\n  mysql_connections: 80\n",
+		"a/_defaults.yaml": "defaults:\nx: 1\nmysql_connections: 70\n_silent_mode: warning\n",
+		"a/t.yaml":         "tenants:\n  t1:\n    _silent_mode: warning\n",
+	}
+	for _, f := range allFindings(t, "--config-dir", writeReservedConfD(t, m2)) {
+		if strings.Contains(f, "redundant_override") {
+			t.Errorf("m2: %s", f)
+		}
+	}
+	code, doc, _, stderr := served(t, m2, "2026-10-01T00:00:00Z")
+	mustOK(t, code, stderr)
+	if v := doc.Tenants["t1"].Values["_silent_mode"]; !reflect.DeepEqual(v, []any{"warning"}) {
+		t.Errorf("m2: served _silent_mode = %#v, want [warning]", v)
+	}
+
+	// Root control: `_severity_dedup` (a refused key) inherited from the ROOT
+	// defaults as a number, overridden by the tenant with the same number.
+	root := map[string]string{
+		"_defaults.yaml": "defaults:\n  mysql_connections: 80\n  _severity_dedup: 1\n",
+		"a/t.yaml":       "tenants:\n  t1:\n    _severity_dedup: 1\n",
+	}
+	want := "warn redundant_override t1 _severity_dedup"
+	if got := allFindings(t, "--config-dir", writeReservedConfD(t, root)); !slices.Contains(got, want) {
+		t.Errorf("root control: findings = %q, want %q among them", got, want)
 	}
 }

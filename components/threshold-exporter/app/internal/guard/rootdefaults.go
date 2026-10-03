@@ -172,12 +172,19 @@ func subtreeTopLevelFix(keys []string, declared map[string]bool) string {
 	}
 	var parts []string
 	if len(move) > 0 {
-		parts = append(parts, fmt.Sprintf("Move %s under `defaults:`, or leave `defaults:` with no value "+
-			"so the whole document is merged.", quoteKeys(move)))
+		// ⛔ "Or leave `defaults:` with no value" merges the WHOLE document,
+		// refused keys included — the same trade as moving them. Offered only
+		// when no refused key is in the file (#2388 r5).
+		if len(refused) == 0 {
+			parts = append(parts, fmt.Sprintf("Move %s under `defaults:`, or leave `defaults:` with no value "+
+				"so the whole document is merged.", quoteKeys(move)))
+		} else {
+			parts = append(parts, fmt.Sprintf("Move %s under `defaults:`.", quoteKeys(move)))
+		}
 	}
 	for _, k := range refused {
 		parts = append(parts, fmt.Sprintf("`%s`: subtree defaults do not support it, so do not move it under "+
-			"`defaults:` (subtree_default_reserved_key, #2388). %s", k, subtreeRefusedKeyFix(k, declared)))
+			"`defaults:` (subtree_default_reserved_key, #2388). %s", k, subtreeRefusedKeyFix(k, declared, true)))
 	}
 	return strings.Join(parts, " ")
 }

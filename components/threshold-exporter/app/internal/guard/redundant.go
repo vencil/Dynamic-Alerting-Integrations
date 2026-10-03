@@ -27,7 +27,12 @@ package guard
 //     and the false-positive risk on slice-order drift is real.
 //     PR-2 may extend if customer feedback warrants.
 
-import "fmt"
+import (
+	"fmt"
+	"strings"
+
+	"github.com/vencil/threshold-exporter/pkg/config"
+)
 
 // checkRedundantOverrides runs the reverse-warn pass.
 //
@@ -81,6 +86,9 @@ func checkRedundantOverrides(input CheckInput) []Finding {
 			if !scalarsEqual(tenantValue, defaultValue) {
 				continue
 			}
+			if inheritedFromRefusedSubtreeKey(input, tenantID, path) {
+				continue
+			}
 			out = append(out, Finding{
 				Severity: SeverityWarn,
 				Kind:     FindingRedundantOverride,
@@ -130,4 +138,27 @@ func scalarsEqual(a, b any) bool {
 		return false
 	}
 	return a == b
+}
+
+// inheritedFromRefusedSubtreeKey reports whether the leaf at path belongs to
+// a top-level key the tenant inherits from a SUBTREE `_defaults.yaml` and that
+// subtree defaults refuse (config.SubtreeDefaultsRefusedKey): the
+// subtree_default_reserved_key set, CheckInput.SubtreeReservedKeys — read off
+// the exporter's own chain, no YAML parsed here.
+//
+// ⛔ SUCH AN OVERRIDE IS NOT REDUNDANT (#2388 r5). The merged defaults show the
+// subtree's value, but the exporter does not apply it (`_silent_mode: warning`
+// from a subtree is dropped) and from the next minor release applies none of
+// them: the tenant's own key is the one that takes effect. Telling the tenant
+// to delete it and "rely on inheritance" would switch the setting off.
+// Measured: subtree `_silent_mode: warning` + the same in the tenant's entry
+// served ["warning"], and redundant_override said to remove the tenant's line.
+// A key inherited from the ROOT only is not in the set and is still judged.
+func inheritedFromRefusedSubtreeKey(input CheckInput, tenantID, path string) bool {
+	top, _, _ := strings.Cut(path, ".")
+	if !config.SubtreeDefaultsRefusedKey(top) {
+		return false
+	}
+	_, fromSubtree := input.SubtreeReservedKeys[tenantID][top]
+	return fromSubtree
 }

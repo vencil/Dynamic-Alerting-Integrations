@@ -1511,20 +1511,54 @@ def _defaults_toplevel_ignored_detail(rel: str, raw: dict,
     keys: ``_keys_acting_when_merged``. Measured on a subtree: wrapped this
     way, a top-level threshold and ``_severity_dedup`` were no longer served
     on /metrics; ``_silent_mode`` and ``_state_*`` changed /effective only.
+
+    ⛔ Below the root, a RESERVED key (``_is_reserved_key``) is not told to
+    move under ``defaults:`` (#2388): subtree defaults do not support reserved
+    keys, and moving one there — or leaving ``defaults:`` with no value, which
+    merges the whole document — only trades this line for da-guard's
+    ``subtree_default_reserved_key``. The per-key fix lives in da-guard; this
+    line names it rather than re-deriving it.
     """
     keys, found = _keys_acting_when_merged(raw)
     if not keys:
         return []
     shown = ", ".join(f"`{k}`" for k in keys)
-    fix = ("Move them under `defaults:`, or leave `defaults:` with no value "
-           "so the whole document is merged.")
     if root:
         fix = _ROOT_NUMBERS_ONLY
+    else:
+        fix = _subtree_toplevel_fix(keys)
     return [f"{rel}: `defaults:` is a mapping, so the defaults merge reads "
             f"only the keys under it; the top-level key(s) {shown} are left "
             f"out of every tenant's merged config (/effective), and a "
             f"threshold among them is not served on /metrics"
             f"{_schema_missing_note(found)}. {fix}"]
+
+
+def _subtree_toplevel_fix(keys: list[str]) -> str:
+    """The fix of a subtree carrier's `defaults_wrapper` line (#2388): the
+    generic "move them under `defaults:`" for the other keys — without "or
+    leave `defaults:` with no value" when a reserved key is present, since that
+    merges the reserved key too — and, for reserved keys, "delete or set it in
+    the tenant's own entry"."""
+    reserved = [k for k in keys if _is_reserved_key(k)]
+    other = [k for k in keys if k not in reserved]
+    parts = []
+    if other:
+        shown = ", ".join(f"`{k}`" for k in other)
+        if reserved:
+            parts.append(f"Move {shown} under `defaults:`.")
+        else:
+            parts.append(f"Move {shown} under `defaults:`, or leave "
+                         f"`defaults:` with no value so the whole document "
+                         f"is merged.")
+    if reserved:
+        shown = ", ".join(f"`{k}`" for k in reserved)
+        parts.append(
+            f"{shown}: reserved key(s), which subtree defaults do not support "
+            f"— do not move them under `defaults:`; delete them from this "
+            f"file, or set them in each tenant's own entry under `tenants:` "
+            f"(see da-guard's `subtree_default_reserved_key`, #2388).")
+    return " ".join(parts)
 
 
 def _is_yaml_mapping(value: object) -> bool:

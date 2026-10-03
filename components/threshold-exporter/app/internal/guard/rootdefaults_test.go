@@ -177,26 +177,30 @@ func TestDefaultsWrapperSubtreeRefusedKeyFix(t *testing.T) {
 	}{
 		{"recognised", "a/_defaults.yaml", "defaults:\n  mysql_connections: 70\n_silent_mode: warning\n",
 			[]string{"`_silent_mode`: subtree defaults do not support it, so do not move it under `defaults:`",
-				"Set `_silent_mode` in each tenant's own entry under `tenants:`"},
+				"Today it has no effect; delete it from this file to keep things as they are.",
+				"set `_silent_mode` in each tenant's own entry under `tenants:`"},
 			[]string{"Move them", "Move `_silent_mode`"}},
 		{"undeclared-state", "a/_defaults.yaml", "defaults:\n  x: 1\n_state_nope: enable\n",
-			[]string{"does not declare a filter `nope`", "or delete the key"},
+			[]string{"does not declare a filter `nope`", "or delete it from this file"},
 			[]string{"Move them", "Set `_state_nope`"}},
 		{"declared-state", "a/_defaults.yaml", "defaults:\n  x: 1\n_state_maintenance: enable\n",
-			[]string{"Set `_state_maintenance` in each tenant's own entry", "affects every tenant in the tree"},
+			[]string{"set `_state_maintenance` in each tenant's own entry", "affects every tenant in the tree"},
 			[]string{"Move them", "does not declare"}},
-		// (`_silent_x` is no case here: not IsReservedKey, so actsWhenMerged
-		// leaves it out and this finding never names it.)
-		{"unrecognised", "a/_defaults.yaml", "defaults:\n  x: 1\n_state_: 1\n",
-			[]string{"`_state_`: subtree defaults do not support it", "It is not a recognised key", "Delete it."},
-			[]string{"Move them", "Set `_state_`", "does not declare a filter ``"}},
+		// (No (b) key reaches this finding: actsWhenMerged needs IsReservedKey
+		// and leaves out the `_routing` prefix, and IsReservedKey minus that is
+		// recognised. A bare `_state_` is the filter "" — undeclared here, (a).)
+		{"bare-state", "a/_defaults.yaml", "defaults:\n  x: 1\n_state_: 1\n",
+			[]string{"`_state_`: subtree defaults do not support it", "does not declare a filter ``",
+				"or delete it from this file"},
+			[]string{"Move them", "not a recognised key"}},
 		{"mixed", "a/_defaults.yaml", "defaults:\n  x: 1\nmysql_connections: 70\n_silent_mode: warning\n",
-			[]string{moveUnder, "Set `_silent_mode` in each tenant's own entry"},
-			[]string{"Move them", "Move `_silent_mode`"}},
+			[]string{moveUnder + ".", "set `_silent_mode` in each tenant's own entry"},
+			// A refused key is in the file: no "leave `defaults:` with no value" (r5).
+			[]string{"Move them", "Move `_silent_mode`", "leave `defaults:` with no value"}},
 		// Root control: unchanged by #2388 r4.
 		{"root", "_defaults.yaml", "defaults:\n  a: 1\n_silent_mode: warning\n",
 			[]string{"the root `defaults:` holds numbers only"},
-			[]string{"subtree_default_reserved_key", "Set `_silent_mode`", "Move them"}},
+			[]string{"subtree_default_reserved_key", "set `_silent_mode`", "Move them"}},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
