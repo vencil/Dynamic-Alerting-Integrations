@@ -654,3 +654,44 @@ class TestGeneratedTextKindsFailClosed:
         rc = module.main([str(target)])
         assert rc == 2
         assert f"{target}: cannot read" in capsys.readouterr().err
+
+
+class TestGeneratedFreshnessLintFailsClosed:
+    """Front-matter the freshness lint cannot parse exits 2, not "fresh" (#2645).
+
+    ⛔ The template used to ``return []`` on ``yaml.YAMLError``: a file whose
+    dates were never looked at reported as clean, rc 0 even under ``--ci``.
+    """
+
+    @staticmethod
+    def _script(tmp_path: Path) -> Path:
+        script = tmp_path / "check_probe_freshness.py"
+        script.write_text(
+            sl.render_script(sl.derive_paths("probe", "freshness"), "probe"),
+            encoding="utf-8",
+            newline="\n",
+        )
+        return script
+
+    @pytest.mark.timeout(60)
+    @pytest.mark.parametrize("ci", [True, False])
+    def test_broken_front_matter_exits_2_naming_it(self, tmp_path, ci):
+        script = self._script(tmp_path)
+        target = tmp_path / "broken.md"
+        target.write_text(
+            "---\ndate: [2026-01-01\n---\nbody\n", encoding="utf-8", newline="\n",
+        )
+        res = _run_cli(script, *(["--ci"] if ci else []), str(target))
+        assert res.returncode == 2, (res.stdout, res.stderr)
+        assert f"{target}: front-matter is not valid YAML" in res.stderr
+
+    @pytest.mark.timeout(60)
+    def test_valid_front_matter_is_still_clean(self, tmp_path):
+        """Control: the raise must be confined to the parse failure."""
+        script = self._script(tmp_path)
+        target = tmp_path / "ok.md"
+        target.write_text(
+            "---\ndate: 2026-01-01\n---\nbody\n", encoding="utf-8", newline="\n",
+        )
+        res = _run_cli(script, "--ci", str(target))
+        assert res.returncode == 0, (res.stdout, res.stderr)

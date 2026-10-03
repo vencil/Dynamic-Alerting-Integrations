@@ -16,7 +16,8 @@ v2.8.0 shipped 4 lint scripts in one cycle (PR #154 / #162 / #166 /
   4. ``scan_source(path, source) -> list[Finding]`` pure scanner, plus
      ``scan_file(path)`` — the per-file entry ``main`` calls. A file it
      cannot read (or, for the ``ast`` kind, decode / parse via
-     ``_lint_helpers.parse_python_file``) is reported on stderr and the
+     ``_lint_helpers.parse_python_file``; for ``freshness``, whose
+     front-matter is not valid YAML) is reported on stderr and the
      run exits 2 in every mode; it is never skipped as clean (#2609)
   5. ``_iter_target_files()`` / ``_resolve_paths()`` for file discovery
   6. ``main(argv)`` argparse + scan + print + exit
@@ -528,6 +529,11 @@ _FRESHNESS_SCAN = '''def scan_source(path: Path, source: str) -> list[{finding_c
 
     Reads YAML front-matter (between leading ``---`` markers) and
     flags entries based on date / version fields per the rule.
+
+    Front-matter that is present but is not valid YAML raises
+    ``UnreadableFileError`` naming *path* — never an empty list, which
+    would read as "fresh" for a file whose dates were never looked at
+    (#2645, same contract as #2609).
     """
     if not source.startswith("---\\n"):
         return []  # No front-matter — skip silently.
@@ -538,8 +544,10 @@ _FRESHNESS_SCAN = '''def scan_source(path: Path, source: str) -> list[{finding_c
     fm_text = source[4:end]
     try:
         front_matter = yaml.safe_load(fm_text)
-    except yaml.YAMLError:
-        return []
+    except yaml.YAMLError as exc:
+        raise UnreadableFileError(
+            f"{{path}}: front-matter is not valid YAML: {{exc}}"
+        ) from exc
     if not isinstance(front_matter, dict):
         return []
 
