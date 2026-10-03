@@ -1374,14 +1374,6 @@ def _root_defaults_routing_detail(rel: str, key: str, value: object,
     return f"{rel}: `defaults.{key}` — {effect}; {move}."
 
 
-def _canonical_threshold_key(key: str) -> str:
-    """Canonical spelling of a root threshold key, so a legacy and a canonical
-    spelling of the same threshold compare equal — Go's ``canonicalKeyFor``
-    mirror (#1231), which also maps ``<base>_critical`` and ``<base>{...}``."""
-    from _grar_validate import _canonical_tenant_key
-    return _canonical_tenant_key(key)[0]
-
-
 def _root_defaults_value_detail(rel: str, key: str | None, raw: str,
                                 null: bool) -> str:
     """One FAIL line for a value the exporter drops or treats as unwritten
@@ -1392,12 +1384,18 @@ def _root_defaults_value_detail(rel: str, key: str | None, raw: str,
     ``NULL_NOT_DECLARED`` rather than a blocking one.
     """
     if null:
+        # #2518: this line has no effect whatever else the tree says — null
+        # is "not written" — so say only that, and not whether the key ends
+        # up declared: that depends on `optional_overrides:`, on the
+        # `_critical` base and on dimensional rules this mirror does not
+        # model (two predicates for it died in review).
         return (f"{rel}: `defaults.{key}` has no value — threshold-exporter "
-                f"treats it as not written, so the key is not declared: no "
-                f"tenant gets a threshold for this metric, not even one that "
-                f"sets its own value. Give it a number; to declare the key "
-                f"without a platform value, list it under "
-                f"`optional_overrides:` instead.")
+                f"treats a null here as not written, so this line does "
+                f"nothing: it sets no platform default and declares nothing. "
+                f"Delete it, or give it a number to set a platform default. "
+                f"If tenants set their own value for this key, check it is "
+                f"still declared elsewhere (da-guard reports the tenants "
+                f"whose value is not served as root_default_null_undeclared).")
     if key is None:
         # ⚠️ *raw* (the mirror's reason) is not printed: `deprecate_rule`
         # words it in Chinese, this tool's operator strings are English, and
@@ -1599,8 +1597,10 @@ def check_root_defaults(config_dir: str) -> dict[str, object]:
       cannot decode (``"70"``, ``disable``, a mapping …) fails the decode and
       the exporter drops the root file's whole ``defaults:`` — every platform
       threshold, while the load is reported as successful; a null / empty
-      value is no write (#2518; before it, a 0 threshold), so the key is not
-      declared and no tenant gets a threshold for it. Both FAIL. The verdict is
+      value is no write (#2518; before it, a 0 threshold), so the line does
+      nothing — whether the key is still declared is not judged here (da-guard
+      ``root_default_null_undeclared`` names the tenants it costs). Both
+      FAIL. The verdict is
       ``deprecate_rule.exporter_verdicts`` — the yaml.v3 mirror whose truth
       table ``tests/golden/fixtures/defaults-carrier-oracle.json`` is judged
       by the Go test ``TestDefaultsCarrierOracle`` — called, not re-spelled.
@@ -1676,25 +1676,10 @@ def check_root_defaults(config_dir: str) -> dict[str, object]:
     verdicts = dr.exporter_verdicts(carrier.read_bytes())
     dropped = {k: r for k, r, kind in verdicts
                if k is not None and kind in dr.BLOCKING_KINDS}
-    # #2518: a null default whose key `optional_overrides:` lists is still
-    # declared — the exporter serves tenant values for it — so the "not
-    # declared" verdict does not apply. Either spelling counts, as in Go.
-    # Not for a `_` key: `optional_overrides:` does not serve those. Not when
-    # an entry is a mapping or a list: the exporter then fails the whole
-    # file, so nothing in it declares anything.
-    optional = raw.get("optional_overrides")
-    optional_keys: set[str] = set()
-    if isinstance(optional, list) and not any(
-            isinstance(k, (dict, list)) for k in optional):
-        optional_keys = {_canonical_threshold_key(k) for k in optional
-                         if isinstance(k, str) and not k.startswith("_")}
     details = [_root_defaults_value_detail(rel, k, r,
                                            kind == dr.NULL_NOT_DECLARED)
                for k, r, kind in verdicts
                if not (k is not None and k.startswith("_routing"))
-               and not (kind == dr.NULL_NOT_DECLARED and k is not None
-                        and not k.startswith("_")
-                        and _canonical_threshold_key(k) in optional_keys)
                and (kind in dr.BLOCKING_KINDS or kind == dr.NULL_NOT_DECLARED)]
     if raw.get("defaults") is None:
         details += _root_defaults_unwrapped_detail(rel, raw)
