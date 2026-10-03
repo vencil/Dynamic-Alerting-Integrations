@@ -174,6 +174,7 @@ _KEY_LAYERS = frozenset({"defaults", "platform", "profile", "tenant"})
 DEFAULT_TIMEOUT = 600
 
 _EXIT_OK = 0
+_EXIT_CALLER_ERR = 2  # da-guard's own: caller error, e.g. a flag it does not know
 _EXIT_PARSE_FAILED = 3
 _NON_FINITE = {"+Inf": float("inf"), "-Inf": float("-inf"), "NaN": float("nan")}
 
@@ -419,12 +420,22 @@ def load_served_tree(
     extra = ["--at", at] if at is not None else []
     if schedules:
         extra.append("--schedules")
-    (tenants, skipped, aliases), returncode, stderr = _run_da_guard(
-        SUBCOMMAND, extra, conf_d, binary, timeout, ServedValuesError, schema=None,
-        read=lambda doc: (doc["tenants"],
-                          [SkippedFile(str(e["file"]), str(e["reason"])) for e in doc["skipped"]],
-                          doc.get("aliases")),
-        reads_unreadable=True)
+    try:
+        (tenants, skipped, aliases), returncode, stderr = _run_da_guard(
+            SUBCOMMAND, extra, conf_d, binary, timeout, ServedValuesError, schema=None,
+            read=lambda doc: (doc["tenants"],
+                              [SkippedFile(str(e["file"]), str(e["reason"])) for e in doc["skipped"]],
+                              doc.get("aliases")),
+            reads_unreadable=True)
+    except ServedValuesError as e:
+        # A da-guard from before --schedules refuses the flag (Go's flag
+        # package: exit 2, "flag provided but not defined: -schedules").
+        if (schedules and e.returncode == _EXIT_CALLER_ERR
+                and "flag provided but not defined: -schedules" in e.stderr):
+            raise ServedValuesError(
+                f"{e.message} (--schedules not known) — this da-guard is older than this tool: "
+                "upgrade or rebuild it", e.returncode, e.stderr) from e
+        raise
     # Read after the fields _run_da_guard checks, so an older da-guard is
     # named by the first field it lacks.
     if aliases is None:
