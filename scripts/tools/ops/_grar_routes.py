@@ -38,6 +38,7 @@ from _grar_merge import (  # noqa: E402
     _contains_tenant_placeholder,
     _substitute_tenant,
     build_receiver_config,
+    skipped_entry_warning,
 )
 from _grar_validate import (  # noqa: E402
     group_by_problem_text,
@@ -67,7 +68,7 @@ def _apply_group_by(route: dict, group_by: object, ctx: str) -> list[str]:
     kept, problems = group_by_problems(group_by)
     if kept:
         route["group_by"] = kept
-    return [f"  WARN: {ctx}: {group_by_problem_text(f'group_by[{idx}]', kind, value)}, skipping"
+    return [skipped_entry_warning(f"  WARN: {ctx}: {group_by_problem_text(f'group_by[{idx}]', kind, value)}, skipping")
             for idx, kind, value in problems]
 
 
@@ -123,14 +124,14 @@ def _validate_override_matcher(override: dict, idx: int, tenant: str) -> tuple[b
 
     if not has_alertname and not has_metric_group:
         warnings.append(
-            f"  WARN: {tenant}: override[{idx}] must have either "
-            "'alertname' or 'metric_group', skipping")
+            skipped_entry_warning(f"  WARN: {tenant}: override[{idx}] must have either "
+                                  "'alertname' or 'metric_group', skipping"))
         return False, warnings, has_alertname, has_metric_group
 
     if has_alertname and has_metric_group:
         warnings.append(
-            f"  WARN: {tenant}: override[{idx}] has both 'alertname' and "
-            "'metric_group' (exactly one required), skipping")
+            skipped_entry_warning(f"  WARN: {tenant}: override[{idx}] has both 'alertname' and "
+                                  "'metric_group' (exactly one required), skipping"))
         return False, warnings, has_alertname, has_metric_group
 
     return True, warnings, has_alertname, has_metric_group
@@ -163,7 +164,7 @@ def _process_override_receiver(override: dict, idx: int, tenant: str,
     warnings = []
     receiver_obj = override.get("receiver")
     if not receiver_obj:
-        warnings.append(f"  WARN: {tenant}: override[{idx}] missing 'receiver', skipping")
+        warnings.append(skipped_entry_warning(f"  WARN: {tenant}: override[{idx}] missing 'receiver', skipping"))
         return None, warnings
 
     am_config, recv_warnings = build_receiver_config(receiver_obj, f"{tenant}-override-{idx}")
@@ -242,12 +243,12 @@ def expand_routing_overrides(tenant: str, routing_config: dict, allowed_domains:
         return sub_routes, override_receivers, warnings
 
     if not isinstance(overrides, list):
-        warnings.append(f"  WARN: {tenant}: 'overrides' must be a list, skipping")
+        warnings.append(skipped_entry_warning(f"  WARN: {tenant}: 'overrides' must be a list, skipping"))
         return sub_routes, override_receivers, warnings
 
     for idx, override in enumerate(overrides):
         if not isinstance(override, dict):
-            warnings.append(f"  WARN: {tenant}: override[{idx}] must be a dict, skipping")
+            warnings.append(skipped_entry_warning(f"  WARN: {tenant}: override[{idx}] must be a dict, skipping"))
             continue
 
         # Validate exactly one of alertname or metric_group is set
@@ -319,7 +320,7 @@ def expand_routing_routes(tenant: str, routing_config: dict,
     if entries is None or entries == []:
         return sub_routes, receivers, warnings
     if not isinstance(entries, list):
-        warnings.append(f"  WARN: {tenant}: 'routes' must be a list, skipping")
+        warnings.append(skipped_entry_warning(f"  WARN: {tenant}: 'routes' must be a list, skipping"))
         return sub_routes, receivers, warnings
 
     for idx, entry in enumerate(entries):
@@ -334,8 +335,8 @@ def expand_routing_routes(tenant: str, routing_config: dict,
 
         receiver_obj = entry.get("receiver")
         if not receiver_obj:
-            warnings.append(f"  WARN: {tenant}: routes[{idx}] missing "
-                            "'receiver', skipping")
+            warnings.append(skipped_entry_warning(f"  WARN: {tenant}: routes[{idx}] missing "
+                                                  "'receiver', skipping"))
             continue
         am_config, recv_warnings = build_receiver_config(receiver_obj, ctx)
         warnings.extend(recv_warnings)
@@ -494,7 +495,7 @@ def _build_enforced_routes(enforced_routing: dict, routing_configs: dict[str, di
 
     enforced_receiver = enforced_routing.get("receiver")
     if not enforced_receiver:
-        warnings.append("  WARN: _routing_enforced: missing 'receiver', skipping enforced route")
+        warnings.append(skipped_entry_warning("  WARN: _routing_enforced: missing 'receiver', skipping enforced route"))
         return routes, receivers, warnings
 
     if _contains_tenant_placeholder(enforced_routing):
@@ -566,7 +567,7 @@ def _build_tenant_routes(routing_configs: dict[str, dict], allowed_domains: list
         # 驗證 receiver（必要欄位，須為含 type 的 dict）
         receiver_obj = cfg.get("receiver")
         if not receiver_obj:
-            warnings.append(f"  WARN: {tenant}: missing required 'receiver', skipping")
+            warnings.append(skipped_entry_warning(f"  WARN: {tenant}: missing required 'receiver', skipping"))
             continue
 
         # 從結構化物件建立 receiver config

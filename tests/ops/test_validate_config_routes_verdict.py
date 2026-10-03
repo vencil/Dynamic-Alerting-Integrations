@@ -125,9 +125,11 @@ class TestEvaluateGeneratedConfig:
 
     def test_extra_errors_block_and_keep_order(self, monkeypatch):
         calls = _fake_amtool(monkeypatch, 0, "SUCCESS")
+        # #2489: a dropped-entry line blocks by its type, not its words.
+        skipped = importlib.import_module("_grar_validate").skipped_entry_warning
         v = render.evaluate_generated_config(
             _ROUTES, _RECEIVERS, [_WATCHDOG_RULE],
-            ["  WARN: x — skipping"], extra_errors=["ERROR (policy): y"])
+            [skipped("  WARN: x — skipping")], extra_errors=["ERROR (policy): y"])
         assert v.errors[:2] == ["  WARN: x — skipping", "ERROR (policy): y"]
         assert "Watchdog heartbeat" in v.errors[2]
         assert calls == []

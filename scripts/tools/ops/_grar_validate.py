@@ -41,7 +41,9 @@ from _lib_python import (  # noqa: E402
 from _lib_validation import tenant_id_rule  # noqa: E402  (ADR-035)
 from _grar_merge import (  # noqa: E402  (#2326 directory scope)
     ROOT_LEVEL,
+    SkippedEntryWarning,
     level_contains,
+    skipped_entry_warning,
     visible_routing_profiles,
 )
 
@@ -88,13 +90,13 @@ def validate_receiver_domains(receiver_obj: dict, tenant: str, allowed_domains: 
         host = _extract_host(raw)
         if not host:
             warnings.append(
-                f"  WARN: {tenant}: cannot parse host from receiver "
-                f"{field}='{raw}', skipping domain check")
+                skipped_entry_warning(f"  WARN: {tenant}: cannot parse host from receiver "
+                                      f"{field}='{raw}', skipping domain check"))
             continue
         if not any(fnmatch.fnmatch(host, pat) for pat in allowed_domains):
             warnings.append(
-                f"  WARN: {tenant}: receiver {field} host '{host}' "
-                f"not in allowed_domains, skipping")
+                skipped_entry_warning(f"  WARN: {tenant}: receiver {field} host '{host}' "
+                                      f"not in allowed_domains, skipping"))
     return warnings
 
 
@@ -861,9 +863,11 @@ def _canonicalize_alias_keys(
 
     Wording contract (pinned by TestDeprecationNoticePin): NOTICE lines
     must not contain the substring "skipping" and must not start with the
-    blocking prefix — otherwise the --validate fatal predicates
-    (generate_alertmanager_routes._validate_mode / validate_config) would
-    misclassify an advisory as a blocking failure.
+    blocking prefix. The prefix is still matched as text (``--strict``
+    reads it); the word no longer decides anything for ``--validate`` since
+    #2489 — ``blocking_generation_errors`` tests the line's type, and a
+    NOTICE is a plain ``str``, not a ``SkippedEntryWarning`` — but it keeps
+    an advisory from reading like a dropped entry.
     """
     notices: list[str] = []
     keys_view: set[str] = set()
@@ -906,8 +910,9 @@ def validate_tenant_keys(tenant: str, keys: set[str], defaults_keys: set[str],
 
     ⚠️ Note which way that asymmetry runs. This function's output is
     ADVISORY: ``generate_alertmanager_routes._validate_mode`` only fails on
-    warnings containing ``"skipping"`` or on ``ERROR:``-prefixed policy lines,
-    and ``unknown key … not in defaults`` is neither. So a divergence never
+    dropped-entry lines (``SkippedEntryWarning``, #2489) or on
+    ``ERROR:``-prefixed policy lines, and ``unknown key … not in defaults``
+    is neither. So a divergence never
     shows up as a red build — it shows up as CI saying nothing at all about a
     config the tenant-api write gate then refuses (or, in the other
     direction, as a missing heads-up). Accepting something Go refuses is
@@ -1161,7 +1166,14 @@ def blocking_generation_errors(warnings: list[str]) -> list[str]:
     ``--validate`` failed); a new blocking category added to one copy only
     reopens exactly that. Three categories today:
 
-    * ``WARN … skipping`` — a config entry was dropped as unusable;
+    * a config entry was dropped as unusable — a ``SkippedEntryWarning``,
+      i.e. a line built by ``skipped_entry_warning`` (#2489). Decided by the
+      line's TYPE, never by its text: the text carries the operator's values,
+      and the substring test this replaced (``"WARN"`` and ``"skipping"``
+      anywhere in the line) blocked a plain clamp WARN whose value was
+      ``skipping``. ⛔ The type survives append / extend / list concatenation
+      only — a caller that re-formats a line before passing it here turns a
+      blocking line into a non-blocking one;
     * a duplicate generated receiver name (#2279);
     * a conf.d tree the routing plane refuses (#2326,
       ``ROUTING_TREE_ERROR_PREFIX``).
@@ -1171,7 +1183,7 @@ def blocking_generation_errors(warnings: list[str]) -> list[str]:
     ``POLICY_ERROR_PREFIX``.
     """
     return [w for w in warnings
-            if ("WARN" in w and "skipping" in w)
+            if isinstance(w, SkippedEntryWarning)
             or is_receiver_name_collision(w)
             or is_routing_tree_error(w)]
 
@@ -1360,34 +1372,34 @@ def route_entry_matchers(entry: object, idx: int,
     """
     ctx = f"{tenant}: routes[{idx}]"
     if not isinstance(entry, dict):
-        return None, [f"  WARN: {ctx} must be a dict, skipping"]
+        return None, [skipped_entry_warning(f"  WARN: {ctx} must be a dict, skipping")]
     unsupported = sorted(str(k) for k in entry if k not in ROUTE_ENTRY_KEYS)
     if unsupported:
         return None, [
-            f"  WARN: {ctx} has unsupported key(s) {unsupported} (supported: "
-            f"{sorted(ROUTE_ENTRY_KEYS)}; label equality only — no regex, no "
-            "continue), skipping"]
+            skipped_entry_warning(f"  WARN: {ctx} has unsupported key(s) {unsupported} (supported: "
+                                  f"{sorted(ROUTE_ENTRY_KEYS)}; label equality only — no regex, no "
+                                  "continue), skipping")]
     match = entry.get("match")
     if not isinstance(match, dict) or not match:
-        return None, [f"  WARN: {ctx} needs a non-empty 'match' mapping of "
-                      "label: value (an empty match would take every alert "
-                      "of the tenant), skipping"]
+        return None, [skipped_entry_warning(f"  WARN: {ctx} needs a non-empty 'match' mapping of "
+                                            "label: value (an empty match would take every alert "
+                                            "of the tenant), skipping")]
     matchers = []
     for label, value in match.items():
         if not isinstance(label, str) or not _LABEL_NAME_RE.fullmatch(label):
-            return None, [f"  WARN: {ctx}: match label {label!r} is not a "
-                          "valid label name, skipping"]
+            return None, [skipped_entry_warning(f"  WARN: {ctx}: match label {label!r} is not a "
+                                                "valid label name, skipping")]
         if not isinstance(value, str):
-            return None, [f"  WARN: {ctx}: match value for '{label}' must be "
-                          f"a string, got {type(value).__name__} {value!r} "
-                          "(quote it in YAML), skipping"]
+            return None, [skipped_entry_warning(f"  WARN: {ctx}: match value for '{label}' must be "
+                                                f"a string, got {type(value).__name__} {value!r} "
+                                                "(quote it in YAML), skipping")]
         if value == "":
             # AM reads label="" as "label absent", so this child would take
             # nearly every alert of the tenant — the same shadowing an empty
             # `match` causes.
-            return None, [f"  WARN: {ctx}: match value for '{label}' is "
-                          "empty (it would match every alert without that "
-                          "label), skipping"]
+            return None, [skipped_entry_warning(f"  WARN: {ctx}: match value for '{label}' is "
+                                                "empty (it would match every alert without that "
+                                                "label), skipping")]
         matchers.append(f"{label}={_quote_matcher_value(value)}")
     return matchers, []
 
@@ -1585,8 +1597,8 @@ def routing_not_mapping_text(value: object) -> str:
 
 def routing_not_mapping_warning(tenant: str, value: object) -> str:
     """The render-mode line (blocking under ``--validate``)."""
-    return (f"  WARN: {tenant}: {routing_not_mapping_text(value)} — no route "
-            "is rendered for this tenant, skipping")
+    return (skipped_entry_warning(f"  WARN: {tenant}: {routing_not_mapping_text(value)} — no route "
+                                  "is rendered for this tenant, skipping"))
 
 
 def invalid_tenant_id_text(tenant: object) -> str:
@@ -1853,8 +1865,8 @@ def _check_critical_escalation(messages: list[str], fmt, policy_name: str,
     Non-compliance goes through *fmt* (strict → blocking ERROR, else WARN).
     A non-escalation destination that can still receive a critical alert
     (``critical_escalation_findings().leaks``) is always a plain WARN — it
-    never blocks, and the text avoids the ``skipping`` word
-    ``_validate_mode`` fails on.
+    never blocks: it is a plain ``str``, not a ``SkippedEntryWarning``
+    (#2489), and the text still avoids the ``skipping`` word.
     """
     target, leaks = critical_escalation_findings(routing_config, tenant)
     escalation = sorted(ESCALATION_TYPES)
