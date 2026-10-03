@@ -655,6 +655,8 @@ bash scripts/session-guards/git_check_lock.sh --clean
 | `scripts/hooks/commit-msg` | Conventional Commits **本地驗證**（不依賴 PyYAML，手解 `.commitlintrc.yaml` 的 `type-enum` / `scope-enum`）。⚠️ `--no-verify` 會連它一起跳過，所以 Windows 側的 `commit-file` 不靠這支 hook，而是由 `commit_helper.py` 在 commit 前自己跑同一個驗證器（#1914） | `git commit -F _msg.txt`（hook 自動觸發；session-init hook 會 auto-install）|
 | `scripts/tools/dx/pr_preflight.py` | pre-push marker 寫 `.git/.preflight-ok.<SHA>`。**狀態感知在守衛側**（不在本工具）：`require_preflight_pass.sh` 走 `gh pr list --head <branch> --state open`——OPEN PR 才擋、WIP 放行，而 `gh` 缺席或查詢失敗 ⇒ **一律要 marker**（dev container 內沒有 `gh`，那是常態不是例外）。⛔ 不是 `gh pr view`，理由見 [`dev-rules.md`](dev-rules.md) #12 | 容器：`make pr-preflight`。Windows host（沒有 make）：`py scripts/tools/dx/pr_preflight.py --skip-hooks`——完整版的 `pre-commit run --all-files` 在 Windows host 會撞 1800 秒逾時。pre-push hook 自動 consume marker |
 
+> **Windows host 直接跑 pytest 時，`tests/federation-e2e` 不跑**：加 `--ignore=tests/federation-e2e`。它要 Docker、由自己的 runner（`scripts/ops/federation_e2e_run.sh`）起 compose 並裝 `tests/federation-e2e/requirements.txt`（PyJWT／cryptography），host 的 Python 沒有這兩個套件時連收集都會失敗。CI 的主測試（`ci.yml` 的 `pytest tests/ … --ignore=tests/federation-e2e`）本來就不含它，另有獨立的 `federation-e2e` job。
+
 **什麼時候用哪一條**（決策助記）：
 
 ```
