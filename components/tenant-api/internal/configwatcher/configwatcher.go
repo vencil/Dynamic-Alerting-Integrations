@@ -62,8 +62,8 @@ type ReadFunc func() (data []byte, exists bool, err error)
 // handler).
 //
 // Why it exists: a reload FAILURE keeps serving the LAST-GOOD snapshot (load()
-// returns the error without Store-ing), so a config an admin edited with a typo
-// silently stops taking effect. BOTH reload paths are silent:
+// returns the error without Store-ing; a NewWithReader partial snapshot aside),
+// so a config an admin edited with a typo silently stops taking effect. BOTH reload paths are silent:
 //   - WatchLoop (periodic tick) logs a WARN and moves on.
 //   - Reload (post-write refresh) returns the error, but every production
 //     caller discards it — `_ = mgr.Reload()` in handler/group.go, view.go and
@@ -273,9 +273,10 @@ func (w *Watcher[T]) WatchLoop(interval time.Duration, stopCh <-chan struct{}) {
 			return
 		case <-ticker.C:
 			if err := w.load(); err != nil {
-				// Reload failed → load() did NOT Store, so we keep serving the
-				// last-good snapshot; the edited (broken) config is silently not
-				// in effect. load() already records the outcome on the observer
+				// Reload failed → load() kept the last-good snapshot (for a New
+				// watcher), or stored the partial one a NewWithReader parse could
+				// still build; either way the edited (broken) config is silently
+				// not fully in effect. load() already records the outcome on the observer
 				// (failure counter + last-reload-successful gauge); the WARN log
 				// is for the operator (Gemini #1056 disposition 3a).
 				slog.Warn("config reload failed", "component", w.label, "error", err)
@@ -304,7 +305,10 @@ func (w *Watcher[T]) load() error {
 // config_reload_test.go TestLoad_DeletedFile (internal/rbac).
 //
 // SHA-256 dedup avoids re-parsing unchanged files on every WatchLoop
-// tick. On a parse failure lastHash is left untouched (holding the
+// tick. Invariant: a non-empty lastHash means the stored snapshot is
+// exactly the full, successful parse of those bytes; every other Store
+// (empty path, missing file, a partial snapshot) clears it. On a parse
+// failure that stores nothing lastHash is left untouched (holding the
 // last GOOD hash), so the next tick re-reads the still-broken file
 // and fails again rather than silently deduping the failure away —
 // which is what lets the reload-failure counter keep climbing while
@@ -329,6 +333,7 @@ func (w *Watcher[T]) loadLocked() (err error) {
 	}()
 	if w.path == "" {
 		w.value.Store(w.empty())
+		w.lastHash = ""
 		return nil
 	}
 	data, exists, err := w.readSource()
@@ -336,7 +341,11 @@ func (w *Watcher[T]) loadLocked() (err error) {
 		return fmt.Errorf("read %s: %w", w.path, err)
 	}
 	if !exists {
+		// empty() is not a parse of any bytes: forget the hash, or the same
+		// content put back (a revert of the delete) would be deduped away and
+		// the empty snapshot would stay.
 		w.value.Store(w.empty())
+		w.lastHash = ""
 		return nil
 	}
 
@@ -349,11 +358,16 @@ func (w *Watcher[T]) loadLocked() (err error) {
 	if err != nil {
 		// NewWithReader only: a parse that fails for PART of its sources
 		// returns the snapshot it could still build beside the error (see
-		// ReadFunc). It is stored, so the sound sources take effect; lastHash
-		// is left as is, so the next tick parses again and the failure keeps
-		// being reported. A New watcher never stores on an error.
+		// ReadFunc). It is stored, so the sound sources take effect, and
+		// lastHash is cleared: the stored snapshot is no longer the parse of
+		// the last good bytes, so those bytes coming back (a revert) must be
+		// parsed again, not deduped against a hash that now names nothing
+		// stored. The next tick re-parses these bytes too (hash != "") and
+		// the failure keeps being reported. A New watcher never stores on an
+		// error.
 		if w.read != nil && cfg != nil {
 			w.value.Store(cfg)
+			w.lastHash = ""
 		}
 		return fmt.Errorf("parse %s: %w", w.path, err)
 	}
@@ -382,8 +396,9 @@ func (w *Watcher[T]) readSource() (data []byte, exists bool, err error) {
 // Path returns the configured file path (for tests / diagnostics).
 func (w *Watcher[T]) Path() string { return w.path }
 
-// LastHash returns the SHA-256 of the most recently loaded file
-// content (empty string before any successful load). Intended for
+// LastHash returns the SHA-256 of the bytes the current snapshot is the
+// full parse of (empty string before any successful load, and after a
+// missing-file or partial-snapshot store). Intended for
 // observability and tests verifying the dedup-on-reload contract;
 // not part of the production hot-path.
 func (w *Watcher[T]) LastHash() string {

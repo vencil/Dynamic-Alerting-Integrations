@@ -13,6 +13,7 @@ import (
 	"reflect"
 	"sort"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -193,4 +194,138 @@ func TestPolicyFiles_WatchLoopFollowsBoth(t *testing.T) {
 		t.Fatal(err)
 	}
 	waitFor("both removed", nil)
+}
+
+// loadCounter is a ReloadObserver that counts the watcher's loads, so a test
+// driving the real WatchLoop can wait for a load that began after a write.
+type loadCounter struct {
+	mu sync.Mutex
+	n  int
+}
+
+func (c *loadCounter) RecordReload(string, bool) {
+	c.mu.Lock()
+	c.n++
+	c.mu.Unlock()
+}
+
+func (c *loadCounter) count() int {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	return c.n
+}
+
+// watchSteps starts dir's watcher on its own WatchLoop and returns a step
+// function: it puts the two policy files in the given state ("" = absent)
+// and returns once two more loads have run — the second began after the
+// write, so the watcher has seen it. Reload is not used: it clears the
+// dedup hash, which is exactly what these sequences must not get for free.
+func watchSteps(t *testing.T, dir string) (*Manager, func(yaml, yml string)) {
+	t.Helper()
+	m := NewManager(dir)
+	lc := &loadCounter{}
+	m.SetReloadObserver(lc)
+	stop := make(chan struct{})
+	t.Cleanup(func() { close(stop) })
+	go m.WatchLoop(5*time.Millisecond, stop)
+	put := func(name, content string) {
+		if content == "" {
+			if err := os.Remove(filepath.Join(dir, name)); err != nil && !os.IsNotExist(err) {
+				t.Fatal(err)
+			}
+			return
+		}
+		testutil.WriteYAML(t, dir, name, content)
+	}
+	step := func(yaml, yml string) {
+		t.Helper()
+		put("_domain_policy.yaml", yaml)
+		put("_domain_policy.yml", yml)
+		target := lc.count() + 2
+		deadline := time.Now().Add(3 * time.Second)
+		for lc.count() < target {
+			if time.Now().After(deadline) {
+				t.Fatalf("watcher ran %d loads in 3s, want %d", lc.count(), target)
+			}
+			time.Sleep(time.Millisecond)
+		}
+	}
+	return m, step
+}
+
+// #2486: lastHash may only name bytes the stored snapshot is the full parse
+// of. A partial snapshot (one file broken) or the empty one (both files
+// gone) left it on the last good bytes, so those bytes coming back — a git
+// revert — were deduped and the watcher stayed on the partial or empty
+// snapshot (fail-open). Driven through WatchLoop: Reload clears the hash.
+func TestPolicyFiles_RevertAfterNonFullStoreIsReparsed(t *testing.T) {
+	t.Parallel()
+	const broken = "domain_policies: [unclosed\n"
+	g1 := forbidding("da", "t-s", "slack")
+	g1b := forbidding("db", "t-w", "webhook")
+	g2 := forbidding("dc", "t-w", "email")
+	cases := []struct {
+		name  string
+		steps [][2]string // (.yaml, .yml); the first is the startup state
+		want  []string
+	}{
+		{"partial empty snapshot, then revert",
+			[][2]string{{g1, ""}, {"", broken}, {g1, ""}}, []string{"da"}},
+		{"partial snapshot, then revert",
+			[][2]string{{g1, g1b}, {broken, g2}, {g1, g1b}}, []string{"da", "db"}},
+		{"both removed, then revert",
+			[][2]string{{g1, ""}, {"", ""}, {g1, ""}}, []string{"da"}},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			dir := t.TempDir()
+			first := tc.steps[0]
+			for name, content := range map[string]string{"_domain_policy.yaml": first[0], "_domain_policy.yml": first[1]} {
+				if content != "" {
+					testutil.WriteYAML(t, dir, name, content)
+				}
+			}
+			m, step := watchSteps(t, dir)
+			for _, s := range tc.steps[1:] {
+				step(s[0], s[1])
+			}
+			if got := domainNames(m); !reflect.DeepEqual(got, tc.want) {
+				t.Errorf("watcher serves %v, want %v", got, tc.want)
+			}
+		})
+	}
+}
+
+// A removed file forgets its last good content: broken again later, it
+// contributes nothing (its last good is from before the removal). Both
+// forgetting paths: the other file still present (parse's delete) and
+// neither file present (the reader's clear).
+func TestPolicyFiles_RemovedFileForgetsLastGood(t *testing.T) {
+	t.Parallel()
+	const broken = "domain_policies: [unclosed\n"
+	g1 := forbidding("da", "t-s", "slack")
+	for _, tc := range []struct {
+		name  string
+		other string // the .yml throughout
+		want  []string
+	}{
+		{"other file absent", "", nil},
+		{"other file present", forbidding("db", "t-w", "webhook"), []string{"db"}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			dir := t.TempDir()
+			testutil.WriteYAML(t, dir, "_domain_policy.yaml", g1)
+			if tc.other != "" {
+				testutil.WriteYAML(t, dir, "_domain_policy.yml", tc.other)
+			}
+			m, step := watchSteps(t, dir)
+			step("", tc.other)
+			step(broken, tc.other)
+			if got := domainNames(m); !reflect.DeepEqual(got, tc.want) {
+				t.Errorf("watcher serves %v, want %v (the removed file's old content must not return)", got, tc.want)
+			}
+		})
+	}
 }
