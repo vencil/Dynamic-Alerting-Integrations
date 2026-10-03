@@ -13,11 +13,9 @@
 #   pre_commit/commands/hook_impl.py::_run_legacy) and then spawns every hook
 #   with stdin=PIPE that it never writes to, so the hook sees EOF immediately.
 #
-#   Measured on pre-commit 4.6.0 — same repo, same commit, same push:
-#       native .git/hooks/pre-push  -> hook stdin carries the refspec -> exits 1
-#       installed via pre-commit    -> hook stdin EMPTY -> exits 0, and
-#                                      pre-commit prints "Passed"
-#   Both guards that read stdin were therefore inert while reporting success.
+#   So the same push reaches a native .git/hooks/pre-push with the refspec on
+#   stdin, and a hook installed via pre-commit with stdin EMPTY: a guard that
+#   reads only stdin exits 0 there, and pre-commit prints "Passed".
 #
 #   pre-commit does hand the same information over — as environment variables.
 #   This helper reads whichever channel is actually carrying it, so the
@@ -33,13 +31,13 @@
 #   Checking the environment first would have made every stdin-fed caller
 #   depend on PRE_COMMIT being absent, which is not a property anyone controls.
 #
-# CALLER CHANNEL — the dispatcher says so, because nothing else can (#1846;
-# that issue and the commits closing it hold the measurements)
+# CALLER CHANNEL — the dispatcher says so, because nothing else can (#1846)
 #   With zero rows on stdin and no PRE_COMMIT_REMOTE_BRANCH, "git had nothing
 #   to feed" and "pre-commit ate the refspec" are indistinguishable here. An
-#   inherited PRE_COMMIT=1 was read as the second, so a push with nothing in it
-#   was refused. prepush_dispatch.sh — the one place that reads git's pre-push
-#   stdin — therefore says so, and under it zero rows means nothing to push.
+#   inherited PRE_COMMIT=1 would be read as the second, so a push with nothing
+#   in it would be refused. prepush_dispatch.sh — the one place that reads
+#   git's pre-push stdin — therefore says so, and under it zero rows means
+#   nothing to push.
 #
 #   ⛔ Consulted BEFORE the env channel: under the dispatcher a value in
 #   PRE_COMMIT_REMOTE_BRANCH can only have been inherited, so it names a ref
@@ -65,20 +63,18 @@
 #
 #   ⛔ Do not add a third column. Consumers parse with
 #   `read -r remote_ref local_sha`, which folds any extra field into
-#   `local_sha`, and two of them compare that against the 40-zero sha to skip
-#   deletions — widening it brings #1691 back.
+#   `local_sha`, and the ones that skip deletions compare that against the
+#   40-zero sha — widening it brings #1691 back.
 #
 #   ⛔ FIELD ORDER: remote_ref FIRST. That is not cosmetic. `local_sha` can
 #   legitimately be empty — hook_impl._pre_push_ns has an `all_files=True`
 #   path (pushing a branch whose first ancestor missing from the remote is the
 #   ROOT commit, i.e. the first push to an empty remote) that returns a
 #   namespace with `to_ref=None`, so pre-commit exports REMOTE_BRANCH without
-#   TO_REF. With the sha first the row began with a blank field, default-IFS
-#   `read` collapsed it, and `remote_ref` came out EMPTY — so both guards
-#   dropped the row and allowed the push. Measured before the fix, single
-#   refspec, real push: `Guard: block direct push to main ... Passed` and
-#   `refs/heads/main:refs/heads/main [new branch]`. The verdict-bearing field
-#   has to be the one that cannot be eaten.
+#   TO_REF. With the sha first the row would begin with a blank field,
+#   default-IFS `read` would collapse it, and `remote_ref` would come out
+#   EMPTY — so both guards would drop the row and allow a plain push to main.
+#   The verdict-bearing field has to be the one that cannot be eaten.
 #
 # EXIT STATUS
 #   0 — rows written to stdout. Zero rows is a legitimate answer: nothing is
@@ -87,38 +83,38 @@
 #       not invoked by the dispatcher (see CALLER CHANNEL).
 #       Callers MUST treat this as "I cannot see what I am guarding" and exit
 #       non-zero. Warning-and-allowing is not an option here: a PASSING hook's
-#       stdout and stderr are both swallowed by pre-commit (measured — a hook
-#       that wrote a marker to each and exited 0 produced zero visible bytes),
-#       so a warning would be byte-for-byte the same picture as the bug this
+#       stdout and stderr are both swallowed by pre-commit, so a warning
+#       would be byte-for-byte the same picture as the bug this
 #       file exists to remove.
 #
 # ⚠️ KNOWN RESIDUAL — the env channel carries at most ONE ref; a push carries N.
 #   hook_impl._pre_push_ns returns on the first PUSHABLE row (it skips rows
 #   whose local sha is all-zero, i.e. deletions), so under pre-commit a guard
-#   is shown one of N refs. Measured, with both branches already on the remote:
+#   is shown one of N refs. For example, with both branches already on the
+#   remote:
 #       git push origin main aaa-first
 #         native stdin   -> 2 rows (aaa-first, main)
 #         pre-commit env -> PRE_COMMIT_REMOTE_BRANCH=refs/heads/aaa-first
 #         result         -> main was updated by that same command
 #   ⛔ AT MOST one: when every row is a deletion, _pre_push_ns returns None and
-#   pre-commit runs NO hook at all (measured; must-ring control in the same
-#   test: an ordinary push does run them).
+#   pre-commit runs NO hook at all.
 #   ⛔ WHICH row is git's, not yours — writing `main` first does not protect
-#   it, and the answer differs per push shape (#1852 has the measurements).
+#   it, and the answer differs per push shape (#1852).
 #   Nothing in this repo may depend on it: the guards read stdin instead.
-#   A guard built on this helper does not see that main. The other rows cannot
+#   A guard reached via pre-commit does not see that main. The other rows cannot
 #   be recovered from inside the hook; only the stdin channel has full
 #   fidelity. This is disclosure, not coverage — tests/ops/test_prepush_hook_wiring.py
-#   pins the measurement so the gap cannot quietly change shape.
+#   pins the shape (N rows in, one out) so the gap cannot quietly change; the
+#   example above is one run, and which row survives is not pinned.
 #
 # ⛔ EXTERNAL COMMANDS — this file uses only bash builtins plus `cat`, and its
 #   callers must source it with parameter expansion, NOT `$(dirname …)`. That
 #   is a requirement, not a style choice: `test_gh_missing_*` in
 #   tests/dx/test_preflight_pass_gate.py runs require_preflight_pass.sh with
 #   PATH stripped to bash/git/basename/sh/cat, because "this gate still works
-#   when `gh` is absent" is one of its contracts. Measured: a `dirname` in the
+#   when `gh` is absent" is one of its contracts. A `dirname` in the
 #   sourcing line fails there with `command not found` and takes the whole gate
-#   down with it — on Linux only, so a Windows run reports the sourcing as fine.
+#   down with it — and only where those tests run, which is not Windows.
 
 prepush_refs() {
     local _local_ref local_sha remote_ref _remote_sha
@@ -180,7 +176,7 @@ To exercise the guards for real, push something:
 
     git push --dry-run origin HEAD:refs/heads/<branch>
 
-⛔ Measured: --dry-run runs the hooks and leaves the remote untouched, and an
+⛔ --dry-run runs the hooks and leaves the remote untouched, and an
 up-to-date push runs them with ZERO rows — "nothing to push" and "cannot see
 what is being pushed" are different answers and must stay that way.
 
