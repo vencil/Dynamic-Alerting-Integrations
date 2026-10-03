@@ -363,7 +363,7 @@ def test_multi_branch_all_no_pr_allows(tmp_path: Path):
 
 
 # ---------------------------------------------------------------------------
-# Orthogonal behavior preserved (bypass, main, deletes, tag pushes)
+# Orthogonal behavior preserved (bypass, main, deletes, non-branch pushes)
 # ---------------------------------------------------------------------------
 
 
@@ -1024,39 +1024,51 @@ def test_a_main_row_does_not_silence_the_other_branches(tmp_path: Path):
     )
 
 
-def test_tag_pushes_and_deletions_are_allowed_as_the_header_promises(
-    tmp_path: Path,
+@pytest.mark.parametrize("ref", ["refs/tags/v9.9.9", "refs/notes/commits"])
+def test_non_branch_pushes_are_allowed_without_hiding_a_branch(
+    tmp_path: Path, ref: str,
 ):
-    """Two promises the header makes that nothing was checking.
-
-    Both were measured SURVIVED under mutation: removing the `refs/tags/*`
-    skip, and removing the deletion skip, left the whole file green. The
-    six-line release tag push goes through here, and `gh` is absent in the
-    dev container, so a tag push landing in the marker branch blocks a
-    release.
+    """Only a branch has a PR to answer for. The six-line release tag push
+    goes through here, and `gh` is absent in the dev container, so a tag
+    gated on a marker blocks a release; a notes commit has no `scripts/` to
+    run preflight in at all (#2629). Skipping such a row must not skip the
+    rows after it: git hands rows over in refspec order, so a notes row can
+    come before a branch row.
     """
     sha = _init_git(tmp_path)
     shim = _make_fake_gh(tmp_path / "bin", state="OPEN")
     strict = {"GIT_PREFLIGHT_STRICT": "1"}
+    row = f"{ref} {sha} {ref} {ZERO_SHA}\n"
 
-    tag = _run_gate(
-        tmp_path, f"refs/tags/v9.9.9 {sha} refs/tags/v9.9.9 {ZERO_SHA}\n",
-        path_prepend=shim, env_extra=strict,
-    )
-    assert tag.returncode == 0, (
-        f"a tag push was gated on a branch marker. stderr={tag.stderr}"
+    alone = _run_gate(tmp_path, row, path_prepend=shim, env_extra=strict)
+    assert alone.returncode == 0, (
+        f"a {ref} push was gated on a branch marker. stderr={alone.stderr}"
     )
 
-    dele = _run_gate(
-        tmp_path, f"refs/heads/doomed {ZERO_SHA} refs/heads/doomed {sha}\n",
-        path_prepend=shim, env_extra=strict,
-    )
+    # CONTROL, and the masking case: the same row followed by an unmarked
+    # branch still blocks.
+    both = _run_gate(tmp_path, row + _refspec("feat/x", sha),
+                     path_prepend=shim, env_extra=strict)
+    assert both.returncode == 1, (
+        f"a {ref} row let the unmarked branch after it through. "
+        f"stderr={both.stderr}")
+
+
+def test_deleting_a_branch_is_allowed_without_hiding_a_branch(tmp_path: Path):
+    """Deleting a branch publishes no commit, so there is nothing a
+    preflight could have run against. `git push origin :old feat/x` hands the
+    deletion row over first; it must not skip the branch after it."""
+    sha = _init_git(tmp_path)
+    shim = _make_fake_gh(tmp_path / "bin", state="OPEN")
+    strict = {"GIT_PREFLIGHT_STRICT": "1"}
+    row = f"refs/heads/doomed {ZERO_SHA} refs/heads/doomed {sha}\n"
+
+    dele = _run_gate(tmp_path, row, path_prepend=shim, env_extra=strict)
     assert dele.returncode == 0, (
         f"deleting a branch was gated on a marker. stderr={dele.stderr}"
     )
-
-    # CONTROL: an ordinary branch row with no marker still blocks, so the two
-    # allowances above are not the whole gate standing down.
-    ctl = _run_gate(tmp_path, _refspec("feat/x", sha), path_prepend=shim,
-                    env_extra=strict)
-    assert ctl.returncode == 1, f"control did not fire. stderr={ctl.stderr}"
+    both = _run_gate(tmp_path, row + _refspec("feat/x", sha),
+                     path_prepend=shim, env_extra=strict)
+    assert both.returncode == 1, (
+        f"a deletion row let the unmarked branch after it through. "
+        f"stderr={both.stderr}")

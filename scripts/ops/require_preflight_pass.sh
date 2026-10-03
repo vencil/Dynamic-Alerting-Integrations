@@ -108,12 +108,10 @@ while read -r remote_ref local_sha; do
     if [ "$local_sha" = "$zero" ]; then
         continue
     fi
-    # ⛔ Tags before the `refs/heads/` strip below, which would leave
-    # `refs/tags/v1.2.3` intact and judge it as a branch name — that blocks the
-    # release tag push wherever `gh` cannot answer, e.g. the dev container.
-    case "$remote_ref" in
-        refs/tags/*) continue ;;
-    esac
+    # ⛔ Only branches have a PR to answer for. Anything else (tags, notes)
+    # would survive the `refs/heads/` strip below intact and be judged as a
+    # branch name. Same filter as pre_push_mkdocs_strict.sh.
+    case "$remote_ref" in refs/heads/*) ;; *) continue ;; esac
     pushing_any_commit=1
     remote_branch="${remote_ref##refs/heads/}"
     # ⛔ Skip THIS ROW, do not exit. protect_main_push owns main, so adding
@@ -134,7 +132,7 @@ while read -r remote_ref local_sha; do
     pushed_shas+=("${local_sha:-$head_sha}")
 done <<< "$_refs"
 
-# Nothing being pushed (empty stdin, all deletes, all tags) — allow.
+# Nothing being pushed (empty stdin, all deletes, no branch) — allow.
 if [ "$pushing_any_commit" = "0" ]; then
     exit 0
 fi
