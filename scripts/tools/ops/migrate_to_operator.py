@@ -43,10 +43,7 @@ from _lib_confd import (  # noqa: E402
     unusable_reason,
     warn_nested,
 )
-
-# Reuse patterns from operator_generate
-import re
-_TENANT_NAME_RE = re.compile(r"^[a-z0-9]([a-z0-9\-]{0,61}[a-z0-9])?$")
+from _lib_validation import is_valid_tenant_id  # noqa: E402  (ADR-035)
 
 _RECEIVER_TEMPLATES = ("slack", "pagerduty", "email", "teams", "opsgenie", "webhook")
 
@@ -88,8 +85,8 @@ _LANG = detect_cli_lang()
 
 def validate_tenant_name(name: str) -> bool:
     """Validate tenant name against K8s label value rules (RFC 1123)."""
-    # fullmatch, not match: `$` also succeeds before a trailing newline (#1779).
-    return bool(_TENANT_NAME_RE.fullmatch(name))
+    # ADR-035: the one tenant-id rule (full match, #1779).
+    return is_valid_tenant_id(name)
 
 
 def _scan_tenant_carriers(config_dir: Path) -> TenantCarriers:

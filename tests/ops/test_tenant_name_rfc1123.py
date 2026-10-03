@@ -23,11 +23,13 @@ disagreement someone has to bisect. `test_the_three_copies_agree_on_every_probe`
 is the same fact stated once more as an equality so a probe added to only one
 face is still checked across copies.
 
-⛔ `alert_quality._TENANT_NAME_RE` (`^[a-zA-Z0-9_-]+$`) shares the identifier
-and NOT the purpose: it is the PromQL/Alertmanager label-value injection
-whitelist for `--tenant`, not a K8s object-name gate — it takes `DB_A`, which
-every gate here rejects. It is deliberately left out of this matrix; whether
-it should be tightened is a question for that tool's owner, not a test.
+ADR-035: the three are no longer copies. Each calls
+`_lib_validation.is_valid_tenant_id`, which reads the one rule (the
+tenant-config schema's `definitions.tenantId`, a DNS-1123 label); the matrix
+now pins that every face still answers by that rule, the shared function
+itself included. `alert_quality`'s `--tenant` whitelist (formerly its own
+`^[a-zA-Z0-9_-]+$`, which took `DB_A`) calls it too and is pinned in
+test_alert_quality.py.
 """
 from __future__ import annotations
 
@@ -45,12 +47,14 @@ sys.path.insert(0, os.path.join(_OPS_DIR, '..'))
 import init_project  # noqa: E402
 import migrate_to_operator  # noqa: E402
 import operator_generate  # noqa: E402
+from _lib_validation import is_valid_tenant_id  # noqa: E402
 
 
 IMPLEMENTATIONS = [
     ("operator_generate", operator_generate.validate_tenant_name),
     ("migrate_to_operator", migrate_to_operator.validate_tenant_name),
     ("init_project", init_project._validate_tenant_name),
+    ("is_valid_tenant_id", is_valid_tenant_id),
 ]
 
 # 63 characters is the RFC 1123 label ceiling; the last ACCEPT row sits on it
@@ -101,7 +105,7 @@ def test_the_boundary_rows_sit_on_the_63_character_ceiling():
 
 
 def test_the_three_copies_agree_on_every_probe():
-    """Three copies, one answer per probe — a drifted copy shows up here too."""
+    """Every face, one answer per probe — a drifted face shows up here too."""
     disagreements = {}
     for probe in ACCEPT + REJECT:
         answers = {name: bool(fn(probe)) for name, fn in IMPLEMENTATIONS}

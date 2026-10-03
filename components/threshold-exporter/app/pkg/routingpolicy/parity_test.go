@@ -77,10 +77,14 @@ type parityTree struct {
 type parityMatrix struct {
 	Comment       []string `json:"_comment"`
 	BlockingKinds []string `json:"blocking_kinds"`
-	// TenantIDs (#2341 R8): the ids IsValidTenantID accepts and refuses.
+	// TenantIDs (#2341 R8, ADR-035): the ids IsValidTenantID accepts and
+	// refuses. SchemaSearchAccepts: ids the schema's propertyNames check lets
+	// through (a JSON Schema pattern is a search) that every decoded-key
+	// reader, this one included, refuses.
 	TenantIDs struct {
-		Valid   []string `json:"valid"`
-		Invalid []string `json:"invalid"`
+		Valid               []string `json:"valid"`
+		Invalid             []string `json:"invalid"`
+		SchemaSearchAccepts []string `json:"schema_search_accepts"`
 	} `json:"tenant_ids"`
 	Trees []parityTree `json:"trees"`
 }
@@ -280,7 +284,8 @@ func jsonEq(t *testing.T, what string, got, want any) {
 func TestTenantIDTable(t *testing.T) {
 	t.Parallel()
 	m := loadParityMatrix(t)
-	if len(m.TenantIDs.Valid) == 0 || len(m.TenantIDs.Invalid) == 0 {
+	if len(m.TenantIDs.Valid) == 0 || len(m.TenantIDs.Invalid) == 0 ||
+		len(m.TenantIDs.SchemaSearchAccepts) == 0 {
 		t.Fatal("tenant_ids table is empty")
 	}
 	for _, id := range m.TenantIDs.Valid {
@@ -288,7 +293,8 @@ func TestTenantIDTable(t *testing.T) {
 			t.Errorf("IsValidTenantID(%q) = false, table says valid", id)
 		}
 	}
-	for _, id := range m.TenantIDs.Invalid {
+	for _, id := range append(append([]string{}, m.TenantIDs.Invalid...),
+		m.TenantIDs.SchemaSearchAccepts...) {
 		if IsValidTenantID(id) {
 			t.Errorf("IsValidTenantID(%q) = true, table says invalid", id)
 		}

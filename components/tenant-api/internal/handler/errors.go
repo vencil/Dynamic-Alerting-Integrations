@@ -527,11 +527,15 @@ func WriteTreeNotOnBase(w http.ResponseWriter, r *http.Request, err error) {
 //     fine, the on-disk state is not, which is why this is not a 400)
 //   - gitops.ErrTenantDeclaredElsewhere / ErrTenantTreeScan → 409 / 500 via
 //     writeTenantPlacementError (#2078)
+//   - gitops.ErrInvalidTenantID   → 400 (ADR-035: the writer's own copy of the
+//     tenant-id rule; ValidateWritableTenantID normally refuses first)
 func writeWriteFlowError(w http.ResponseWriter, r *http.Request, err error) bool {
 	if writeTenantPlacementError(w, r, err) {
 		return true
 	}
 	switch {
+	case errors.Is(err, gitops.ErrInvalidTenantID):
+		WriteJSONError(w, r, http.StatusBadRequest, err.Error())
 	case errors.Is(err, gitops.ErrWriteOverloaded):
 		WriteOverloaded(w, r)
 	case errors.Is(err, gitops.ErrForgeDegraded):

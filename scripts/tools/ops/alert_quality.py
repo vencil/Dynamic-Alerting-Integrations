@@ -19,7 +19,6 @@ from __future__ import annotations
 
 import argparse
 import os
-import re
 import sys
 import time
 from dataclasses import dataclass, field, asdict
@@ -46,6 +45,7 @@ sys.path.insert(0, str(_THIS_DIR))
 sys.path.insert(0, os.path.join(str(_THIS_DIR), ".."))
 from _lib_compat import try_utf8_stdout  # noqa: E402
 from _lib_exitcodes import EXIT_VIOLATION, EXIT_CALLER_ERROR  # noqa: E402
+from _lib_validation import is_valid_tenant_id, tenant_id_rule  # noqa: E402  (ADR-035)
 
 # ---------------------------------------------------------------------------
 # Constants
@@ -61,8 +61,6 @@ GRADE_GOOD = "GOOD"
 GRADE_WARN = "WARN"
 GRADE_BAD = "BAD"
 
-# Tenant 名稱白名單 pattern（僅允許字母、數字、底線、連字號）
-_TENANT_NAME_RE = re.compile(r'^[a-zA-Z0-9_-]+$')
 
 
 # ---------------------------------------------------------------------------
@@ -146,7 +144,7 @@ def query_prometheus_alerts(
 
     label_filter = '{alertstate="firing"}'
     if tenant:
-        if not _TENANT_NAME_RE.fullmatch(tenant):
+        if not is_valid_tenant_id(tenant):
             return []
         label_filter = f'{{alertstate="firing",tenant="{tenant}"}}'
 
@@ -185,7 +183,7 @@ def query_alertmanager_alerts(
     if state:
         params.append(f"filter=alertstate%3D{quote(state)}")
     if tenant:
-        if not _TENANT_NAME_RE.fullmatch(tenant):
+        if not is_valid_tenant_id(tenant):
             return []
         params.append(f"filter=tenant%3D{quote(tenant)}")
 
@@ -693,9 +691,9 @@ def main() -> None:
         print(f"Error: invalid period '{args.period}'", file=sys.stderr)
         sys.exit(EXIT_CALLER_ERROR)
 
-    if args.tenant and not _TENANT_NAME_RE.fullmatch(args.tenant):
+    if args.tenant and not is_valid_tenant_id(args.tenant):
         print(f"Error: invalid tenant name '{args.tenant}' "
-              "(only alphanumeric, underscore, hyphen allowed)",
+              f"({tenant_id_rule()[1]})",
               file=sys.stderr)
         sys.exit(EXIT_CALLER_ERROR)
 

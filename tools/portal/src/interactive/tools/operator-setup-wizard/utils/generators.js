@@ -12,7 +12,7 @@ purpose: |
   pull from the same canonical implementation.
 
   Public API:
-    validateTenantName(name)               RFC 1123 char check
+    validateTenantName(name)               tenant-id rule (ADR-035, tenant-id.json)
     generateOperatorCommand(config)        build da-tools CLI
     generateMigrationCommand(config)       null unless dual-stack
     generateAlertmanagerConfigPreview(c,i) sample CRD for tenant i
@@ -21,9 +21,16 @@ purpose: |
   Closure deps: none. Pure functions; receive config as arg.
 ---
 
+// ADR-035: the tenant-id rule's one source is the tenant-config schema;
+// tenant-id.json is the copy generated from it (gen_tenant_id_json.py).
+import TENANT_ID_RULE from '../../_common/data/tenant-id.json';
+
+const TENANT_ID_RE = new RegExp(TENANT_ID_RULE.pattern);
+
 function validateTenantName(name) {
-  // RFC 1123: alphanumeric and hyphen, must start/end with alphanumeric
-  return /^[a-z0-9]([a-z0-9-]*[a-z0-9])?$/.test(name);
+  // A DNS-1123 label; the pattern is anchored with ^…$ (ECMAScript's `$`
+  // does not match before a trailing newline).
+  return TENANT_ID_RE.test(name);
 }
 
 function generateOperatorCommand(config) {

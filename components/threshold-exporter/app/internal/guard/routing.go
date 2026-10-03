@@ -104,7 +104,8 @@ package guard
 //     `_routing_defaults` that is not a mapping (routing_defaults_not_mapping,
 //     TenantID "").
 // 13. A tenant id the routing plane refuses (error, #2341, invalid_tenant_id,
-//     routingpolicy.IsValidTenantID): the generator renders nothing for it.
+//     routingpolicy.IsValidTenantID, ADR-035): the generator refuses the
+//     whole tree, in every mode.
 //
 // Why these and not more:
 //   - Field-by-field receiver validation against type-specific
@@ -125,6 +126,7 @@ import (
 
 	"github.com/vencil/threshold-exporter/pkg/receiverspec"
 	"github.com/vencil/threshold-exporter/pkg/routingpolicy"
+	"github.com/vencil/threshold-exporter/pkg/tenantid"
 )
 
 // matcherKeys is the EXACT set of override-block keys the routing
@@ -182,8 +184,9 @@ func checkRoutingGuardrails(input CheckInput) []Finding {
 			Kind:     FindingInvalidTenantID,
 			TenantID: tenantID,
 			Field:    input.InvalidTenantIDs[tenantID] + ":tenants." + tenantID,
-			Message: fmt.Sprintf("%s: tenant id %q is not a valid tenant id (non-empty; letters, digits, '_' and '-' only) — "+
-				"the route generator renders no route, receiver or inhibit rule for it", input.InvalidTenantIDs[tenantID], tenantID),
+			Message: fmt.Sprintf("%s: tenant id %q is not a valid tenant id (%s) — "+
+				"the route generator refuses the whole tree until it is renamed",
+				input.InvalidTenantIDs[tenantID], tenantID, tenantid.Description),
 		})
 	}
 	for _, tenantID := range sortedAnyKeys(input.RoutingNotMapping) {

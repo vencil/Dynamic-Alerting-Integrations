@@ -56,6 +56,7 @@ import sys
 from collections import Counter
 from pathlib import Path
 
+import jsonschema
 import pytest
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
@@ -166,14 +167,40 @@ def test_blocking_kinds_are_the_generators() -> None:
 
 
 def test_tenant_id_table() -> None:
-    """#2341 R8: the routing plane's tenant-id predicate, both columns."""
+    """#2341 R8 / ADR-035: the routing plane's tenant-id predicate, both columns."""
     table = MATRIX["tenant_ids"]
-    assert set(table) == {"valid", "invalid"} and table["valid"] and table["invalid"]
+    assert set(table) == {"valid", "invalid", "schema_search_accepts"}
+    assert table["valid"] and table["invalid"] and table["schema_search_accepts"]
     assert "" in table["invalid"]
     for tid in table["valid"]:
         assert is_valid_tenant_id(tid), repr(tid)
-    for tid in table["invalid"]:
+    for tid in table["invalid"] + table["schema_search_accepts"]:
         assert not is_valid_tenant_id(tid), repr(tid)
+
+
+def _schema_tenant_key_errors(tid: str) -> list:
+    """The `propertyNames` errors the tenant schema gives a `tenants` key."""
+    schema = json.loads((REPO_ROOT / "docs" / "schemas" / "tenant-config.schema.json")
+                        .read_text(encoding="utf-8"))
+    errors = jsonschema.Draft7Validator(schema).iter_errors({"tenants": {tid: {}}})
+    return [e for e in errors if "propertyNames" in e.schema_path]
+
+
+def test_schema_property_names_follow_the_table() -> None:
+    """ADR-035 D2: `check_confd_schema` judges tenant keys through the
+    schema's `propertyNames` with JSON Schema SEARCH semantics. It agrees with
+    the decoded-key readers on both columns, and lets `schema_search_accepts`
+    through (Python's `$` matches before a trailing newline) — the gap the ADR
+    accepts because every decoded-key reader refuses those ids."""
+    table = MATRIX["tenant_ids"]
+    for tid in table["valid"]:
+        assert not _schema_tenant_key_errors(tid), repr(tid)
+    for tid in table["invalid"]:
+        if tid.endswith("\n") and is_valid_tenant_id(tid[:-1]):
+            continue  # the search gap, as schema_search_accepts pins
+        assert _schema_tenant_key_errors(tid), repr(tid)
+    for tid in table["schema_search_accepts"]:
+        assert not _schema_tenant_key_errors(tid), repr(tid)
 
 
 def test_matrix_is_not_vacuous() -> None:

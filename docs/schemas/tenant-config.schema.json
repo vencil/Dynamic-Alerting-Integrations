@@ -12,6 +12,9 @@
       "type": "object",
       "title": "Tenant Configuration Map",
       "description": "Mapping of tenant-id (string) to per-tenant configuration (object). Each tenant can define thresholds, routing, metadata, and operational modes.",
+      "propertyNames": {
+        "$ref": "#/definitions/tenantId"
+      },
       "additionalProperties": {
         "$ref": "#/definitions/tenantConfig"
       }

@@ -1319,6 +1319,10 @@ class TenantTree:
     # #2315: {tenant_id: [file, ...]} — ids two tenant files declare
     # (`_lib_confd.tenant_declarations`, validate-config's own scan).
     duplicate_tenants: dict[str, list[str]] = field(default_factory=dict)
+    # ADR-035 D3: declared tenant ids `is_valid_tenant_id` refuses, sorted.
+    # Nothing is rendered for them here; the generator refuses the whole
+    # tree on them in every mode (`_refuse_invalid_tenant_ids`).
+    invalid_tenant_ids: list[str] = field(default_factory=list)
 
     def as_tuple(self) -> tuple[dict[str, dict], dict[str, str], list[str],
                                 dict | None, dict[str, dict]]:
@@ -1528,4 +1532,5 @@ def load_tenant_tree(
         files_skipped=list(parsed.get("files_skipped", [])),
         tenant_file_errors=list(parsed.get("tenant_file_errors", [])),
         routing_tree_problems=tree_problems,
-        duplicate_tenants=dict(parsed.get("duplicate_tenants", {})))
+        duplicate_tenants=dict(parsed.get("duplicate_tenants", {})),
+        invalid_tenant_ids=invalid_ids)

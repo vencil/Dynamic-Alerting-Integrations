@@ -32,6 +32,7 @@ import (
 	"github.com/vencil/tenant-api/internal/customalerts"
 	cfg "github.com/vencil/threshold-exporter/pkg/config"
 	"github.com/vencil/threshold-exporter/pkg/pyyamlcompat"
+	"github.com/vencil/threshold-exporter/pkg/tenantid"
 	"gopkg.in/yaml.v3"
 )
 
@@ -134,6 +135,16 @@ var ErrNoChanges = errors.New("no changes: batch produced no commits")
 // filepath.Base defense on the control-file write path. See internal/confd for
 // the single "what counts as a tenant file" predicate shared with the scanners.
 var ErrReservedTenantID = errors.New("reserved tenant id: names a conf.d control file")
+
+// ErrInvalidTenantID refuses a tenant write to an id the tenant-id rule
+// refuses (ADR-035: pkg/tenantid, a DNS-1123 label) — the route generator
+// refuses a conf.d tree that declares such an id, in every mode. Raised by
+// guardTenantID, so it covers every tenant write method and the dry-runs;
+// the handlers' ValidateWritableTenantID refuses the same ids first with an
+// early 400, and the handlers map this one to 400 too. Reads never call
+// guardTenantID's rule (confd.IsAddressableTenantID stays as it is), so an
+// existing tenant with such an id can still be read.
+var ErrInvalidTenantID = errors.New("invalid tenant id")
 
 // ErrTenantDeclaredElsewhere refuses a tenant write to `<configDir>/<id>.yaml`
 // (or its `.yml` spelling) when some OTHER conf.d file declares the id — a
@@ -342,9 +353,16 @@ func addedTenantKeys(baseRaw []byte, tcfg cfg.ThresholdConfig, tenantID string) 
 // the handler's ValidateTenantID uses — so no tenant write method can overwrite
 // a reserved control file even if a future caller forgets to validate first
 // (single-choke-point fragility is the exact bug class this change closes).
+//
+// It is also the one place every tenant write enforces the tenant-id rule
+// (ADR-035, ErrInvalidTenantID). The rule is NOT in confd.IsAddressableTenantID:
+// the read paths call that one too, and they keep accepting such ids.
 func guardTenantID(tenantID string) error {
 	if !confd.IsAddressableTenantID(tenantID) {
 		return fmt.Errorf("%w: %q", ErrReservedTenantID, tenantID)
+	}
+	if !tenantid.Valid(tenantID) {
+		return fmt.Errorf("%w %q: %s", ErrInvalidTenantID, tenantID, tenantid.Description)
 	}
 	return nil
 }

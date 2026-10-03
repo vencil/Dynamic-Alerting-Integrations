@@ -38,6 +38,7 @@ from _lib_python import (  # noqa: E402
     DOCS_INSTALL_URL, DOCS_SITE_BASE,
 )
 from _lib_exitcodes import EXIT_OK, EXIT_VIOLATION, EXIT_CALLER_ERROR  # noqa: E402
+from _lib_validation import is_valid_tenant_id, tenant_id_rule  # noqa: E402  (ADR-035)
 
 # #1641: every path this tool writes descends from -o/--output-dir, so every
 # writer names that flag; an unusable path is rc=2 + one line, not a
@@ -1202,6 +1203,7 @@ def run_interactive(output_dir: str) -> None:
     if not tenant_name:
         print("錯誤: Tenant name 不可為空")
         sys.exit(EXIT_CALLER_ERROR)
+    _refuse_invalid_tenant_id(tenant_name)
 
     # Step 2: Select DB types
     db_options = [(k, v["display"]) for k, v in RULE_PACKS.items() if k != "kubernetes"]
@@ -1257,6 +1259,15 @@ def run_interactive(output_dir: str) -> None:
 
     print("\n  所有核心 Rule Packs (包含自我監控) 已透過 Projected Volume 預載於平台，無需額外掛載。")
     print(f"\n詳見 {output_dir}/scaffold-report.txt")
+
+
+def _refuse_invalid_tenant_id(tenant_name: str) -> None:
+    """ADR-035: the id becomes a conf.d key and a file name — refuse what the
+    tenant-id rule refuses (rc 2, the caller's input), before writing."""
+    if not is_valid_tenant_id(tenant_name):
+        print(f"錯誤: 不合法的 tenant id {tenant_name!r}（{tenant_id_rule()[1]}）",
+              file=sys.stderr)
+        sys.exit(EXIT_CALLER_ERROR)
 
 
 def run_non_interactive(args: argparse.Namespace) -> None:
@@ -1446,6 +1457,8 @@ def main() -> None:
                         help=_h('tier'))
 
     args = parser.parse_args()
+    if args.tenant is not None:
+        _refuse_invalid_tenant_id(args.tenant)
 
     if args.catalog:
         print_catalog()

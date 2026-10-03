@@ -59,14 +59,15 @@ def test_route_generation_emits_the_ids_as_written(tmp_path):
     ``tenant="8"``, a tenant the exporter does not have."""
     d = _tree(tmp_path, {
         "_defaults.yaml": "defaults:\n  cpu: 80\n",
-        "t.yaml": ("tenants:\n  010:\n" + _ROUTING + "  0x1F:\n" + _ROUTING
+        "t.yaml": ("tenants:\n  010:\n" + _ROUTING + "  0x1f:\n" + _ROUTING
                    + "  yes:\n" + _ROUTING)})
     p = subprocess.run(
         [sys.executable, str(TOOLS / "ops" / "generate_alertmanager_routes.py"),
          "--config-dir", str(d), "--dry-run"],
         capture_output=True, text=True, encoding="utf-8", errors="replace", timeout=60)
     assert p.returncode == 0, p.stderr[-2000:]
-    for tid in ("010", "0x1F", "yes"):
+    # ADR-035: a DNS-1123 id (`0x1F` would refuse the whole tree).
+    for tid in ("010", "0x1f", "yes"):
         assert f'tenant="{tid}"' in p.stdout, (tid, p.stdout)
         assert f"https://hook.example/{tid}" in p.stdout, (tid, p.stdout)
     for wrong in ('tenant="8"', 'tenant="31"', 'tenant="True"'):

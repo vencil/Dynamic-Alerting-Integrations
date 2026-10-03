@@ -153,6 +153,8 @@ from _grar_validate import is_receiver_name_collision  # noqa: E402
 # #2315: the duplicate-tenant refusal, shared with validate-config's
 # tenant_uniqueness row through `_lib_confd.tenant_declarations`.
 from _grar_validate import duplicate_tenant_errors  # noqa: E402
+# ADR-035 D3: the invalid-tenant-id refusal cites the rule's own words.
+from _grar_validate import invalid_tenant_id_text  # noqa: E402
 import yaml  # noqa: E402
 
 
@@ -567,18 +569,53 @@ def routing_tree_errors_refusal(
             *(f"  {safe_label(msg)}" for _kind, _fname, _field, msg in errors)]
 
 
+def _refuse_invalid_tenant_ids(tree: TenantTree) -> None:
+    """ADR-035 D3: a declared tenant id the rule refuses — refused in EVERY mode.
+
+    Render, --dry-run, --apply, --output-configmap, --validate, with or
+    without --strict: rc 1 and nothing written or applied. ⛔ Deliberately
+    NOT the wave-2 1A rule (WARN, skip the entry, render rc 0): skipping a
+    whole tenant ships an Alertmanager config without its routes, and its
+    alerts fall through to the root receiver — the shipped `default` is an
+    empty receiver, so they are silently dropped. A red deploy keeps the
+    config already in the cluster instead. EXIT_VIOLATION like the duplicate
+    tenant refusal (#2315): a verdict on the config, not on the invocation.
+    """
+    refusal = invalid_tenant_ids_refusal(tree.invalid_tenant_ids)
+    if not refusal:
+        return
+    for msg in refusal:
+        print(msg, file=sys.stderr)
+    sys.exit(EXIT_VIOLATION)
+
+
+def invalid_tenant_ids_refusal(invalid_ids: list[str]) -> list[str]:
+    """The stderr lines of the ADR-035 D3 refusal; [] = not refused.
+
+    The judgment `_refuse_invalid_tenant_ids` acts on, as data (see
+    `unreadable_tenant_files_refusal`).
+    """
+    if not invalid_ids:
+        return []
+    return [f"FAIL: {len(invalid_ids)} invalid tenant id(s) — nothing was "
+            "generated, written or applied; rename the tenant(s):",
+            *(f"  {safe_label(invalid_tenant_id_text(t))}"
+              for t in invalid_ids)]
+
+
 def tree_refusal(files_read: int, tenant_file_errors: list[tuple[str, str]],
                  duplicates: dict[str, list[str]],
-                 routing_tree_problems: list[tuple[str, str, str, str]]
+                 routing_tree_problems: list[tuple[str, str, str, str]],
+                 invalid_tenant_ids: list[str] | None = None,
                  ) -> tuple[int, list[str]]:
     """What `main()` refuses a scanned tree for: ``(rc, stderr lines)``.
 
     ``(EXIT_OK, [])`` = not refused. The order is `main()`'s — unreadable
     tenant file (#1460, rc 1), duplicate tenant (#2315, rc 1), routing-tree
-    error (#2326, rc 2) — and `main()` exits on the first refusal, so only
-    that one's lines and rc. *routing_tree_problems* is every routing-tree
-    finding; only the blocking kinds refuse, the same filter as
-    `TenantTree.routing_tree_errors`.
+    error (#2326, rc 2), invalid tenant id (ADR-035 D3, rc 1) — and `main()`
+    exits on the first refusal, so only that one's lines and rc.
+    *routing_tree_problems* is every routing-tree finding; only the blocking
+    kinds refuse, the same filter as `TenantTree.routing_tree_errors`.
     """
     blocking = [p for p in routing_tree_problems
                 if p[0] in BLOCKING_TREE_KINDS]
@@ -586,7 +623,9 @@ def tree_refusal(files_read: int, tenant_file_errors: list[tuple[str, str]],
             (EXIT_VIOLATION, unreadable_tenant_files_refusal(
                 files_read, tenant_file_errors)),
             (EXIT_VIOLATION, duplicate_tenants_refusal(duplicates)),
-            (EXIT_CALLER_ERROR, routing_tree_errors_refusal(blocking))):
+            (EXIT_CALLER_ERROR, routing_tree_errors_refusal(blocking)),
+            (EXIT_VIOLATION, invalid_tenant_ids_refusal(
+                sorted(set(invalid_tenant_ids or []), key=str)))):
         if lines:
             return rc, lines
     return EXIT_OK, []
@@ -805,9 +844,7 @@ def _build_parser() -> argparse.ArgumentParser:
                              "repeats a label or mixes '...' with labels (#2503), "
                              "a tenant _routing that is neither a mapping nor a "
                              "disabling string, a _routing_defaults that is not "
-                             "a mapping, or a tenant id that is empty or has a "
-                             "character other than letters, digits, '_' and '-' "
-                             "(#2341) "
+                             "a mapping (#2341) "
                              "and, on the --apply/--output-configmap "
                              "merge, any inhibit rule with an ungated `equal:` label "
                              "(#1132). Without --strict these surface as WARN (an "
@@ -941,14 +978,15 @@ def main() -> None:
     _refuse_unreadable_tenant_files(tree)
     _refuse_duplicate_tenants(tree)
     _refuse_routing_tree_errors(tree)
+    _refuse_invalid_tenant_ids(tree)
 
     has_routing = bool(routing_configs)
     has_dedup = bool(dedup_configs)
 
     if not has_routing and not has_dedup and not enforced_routing:
         # #2341: "nothing to render" can be the result of refusing every
-        # tenant (an invalid tenant id, an unreadable `_routing`): those
-        # lines are blocking here as everywhere else — `--validate` and
+        # tenant (an unreadable `_routing`; an invalid tenant id is refused
+        # above, ADR-035 D3): those lines are blocking here as everywhere else — `--validate` and
         # `--strict` fail on them, render mode prints them and exits 0.
         for w in schema_warnings:
             print(safe_label(w), file=sys.stderr)
@@ -1009,7 +1047,7 @@ def main() -> None:
             print(f"FAIL: {len(policy_errors)} blocking error(s) under "
                   "--strict (domain policy, unquoted matcher value, "
                   "invalid group_by entry, unreadable _routing / "
-                  "_routing_defaults, invalid tenant id):",
+                  "_routing_defaults):",
                   file=sys.stderr)
             for e in policy_errors:
                 print(e, file=sys.stderr)

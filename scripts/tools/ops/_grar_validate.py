@@ -38,6 +38,7 @@ from _lib_python import (  # noqa: E402
     VALID_RESERVED_KEYS,
     VALID_RESERVED_PREFIXES,
 )
+from _lib_validation import tenant_id_rule  # noqa: E402  (ADR-035)
 from _grar_merge import (  # noqa: E402  (#2326 directory scope)
     ROOT_LEVEL,
     level_contains,
@@ -1591,12 +1592,14 @@ def routing_not_mapping_warning(tenant: str, value: object) -> str:
 def invalid_tenant_id_text(tenant: object) -> str:
     """#2341 R8: a tenant id the routing plane refuses (is_valid_tenant_id).
 
-    The id is shown as a repr so an empty or blank one is visible. ⚠️ Wording
+    The id is shown as a repr so an empty or blank one is visible. The rule
+    is cited from its one copy (ADR-035: the schema's
+    ``definitions.tenantId.description``), never restated here. ⚠️ Wording
     as ``routing_not_mapping_text``.
     """
-    return (f"tenant id {str(tenant)!r} is not a valid tenant id (non-empty; "
-            "letters, digits, '_' and '-' only) — no route, receiver or "
-            "inhibit rule is rendered for it")
+    return (f"tenant id {str(tenant)!r} is not a valid tenant id "
+            f"({tenant_id_rule()[1]}) — no route, receiver or inhibit rule is "
+            "rendered for it")
 
 
 def routing_defaults_not_mapping_text(fname: str, value: object) -> str:

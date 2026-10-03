@@ -1176,6 +1176,33 @@ class TestMainCLI:
             with pytest.raises(SystemExit):
                 scaffold_tenant.main()
 
+    # ADR-035: `--tenant` becomes a conf.d key and a file name, and was not
+    # checked at all — `Team_A.yaml` was written. Refused now, rc 2, nothing
+    # written; the message cites the rule's own description.
+    @pytest.mark.parametrize("tenant", ["Team_A", "UPPER", "bad tenant", "a" * 64, "x-"])
+    def test_invalid_tenant_id_is_refused(self, tenant, capsys):
+        import scaffold_tenant
+        with tempfile.TemporaryDirectory() as d:
+            with mock.patch("sys.argv", [
+                "scaffold_tenant.py", "--tenant", tenant, "--db", "mariadb",
+                "-o", d, "--non-interactive",
+            ]):
+                with pytest.raises(SystemExit) as exc_info:
+                    scaffold_tenant.main()
+            assert exc_info.value.code == EXIT_CALLER_ERROR
+            assert os.listdir(d) == [], os.listdir(d)
+        err = capsys.readouterr().err
+        assert repr(tenant) in err and "DNS-1123" in err, err
+
+    def test_interactive_tenant_id_is_refused(self, capsys):
+        import scaffold_tenant
+        with tempfile.TemporaryDirectory() as d:
+            with mock.patch("builtins.input", side_effect=["Team_A"]):
+                with pytest.raises(SystemExit) as exc_info:
+                    scaffold_tenant.run_interactive(d)
+            assert exc_info.value.code == EXIT_CALLER_ERROR
+            assert os.listdir(d) == [], os.listdir(d)
+
 
 # ============================================================
 # generate_tenant — 互動路徑 characterization（da-tools ROI 第六波）
