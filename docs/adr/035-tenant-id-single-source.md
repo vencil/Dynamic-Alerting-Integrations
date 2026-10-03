@@ -126,8 +126,8 @@ receiverspec 模式是 Go 端手抄常數，再用 `TestSpecs_MatchSchema` 讀 s
 - 比對語意依路徑不同：
   - `is_valid_tenant_id`：用 `re.fullmatch`，因為 Python 的 `$` 會吃掉結尾的 `\n`。
   - Go：以 `^…$` 錨定，RE2 的 `$` 不吃 `\n`。
-  - JSON Schema 的 `pattern` 是 **search** 語意，所以 `check_confd_schema` 與編輯器會放過結尾帶 `\n` 的 key（實測 jsonschema 4.26：`{"abc\n": 1}` 回 0 個錯誤）。
-- 結尾帶 `\n` 只會出現在 YAML block-scalar 形式的 key。這類 key 會由產生器、da-guard、tenant-api 擋下，所以接受 schema 路徑的這個差異。
+  - JSON Schema 的 `pattern` 是 **search** 語意，`$` 的行為依驗證器而定：`check_confd_schema`（Python jsonschema）會放過結尾帶 `\n` 的 key（實測 jsonschema 4.26：`{"abc\n": 1}` 回 0 個錯誤）；編輯器走 yaml-language-server，用 ECMAScript 的 `$`，會擋下（實測 `new RegExp(pattern).test("abc\n")` 為 false）。
+- 結尾帶 `\n` 的 key 來自 YAML block scalar，或雙引號 scalar 裡的 `\n` 跳脫（`"abc\n": 1`）。依本 ADR，產生器、da-guard 與 tenant-api 的寫入驗證都會擋下解碼後的這類 key，所以接受 schema 路徑的這個差異；tenant-api 的讀取驗證仍較寬，見待決問題 1。
 - parity matrix 的 `tenant_ids` 表要補一個直接跑 jsonschema 的案例，把這個差異釘住。
 
 - **換到的**：規則文字只有一份，四個讀者都從它取得規則：產生器（Python）、da-guard 與 tenant-api（Go）、portal、schema checker。

@@ -120,8 +120,8 @@ The receiverspec pattern hand-copies constants on the Go side and then compares 
 - Match semantics differ by path:
   - `is_valid_tenant_id`: uses `re.fullmatch`, because Python's `$` swallows a trailing `\n`.
   - Go: anchored with `^…$`; RE2's `$` does not swallow `\n`.
-  - JSON Schema's `pattern` has **search** semantics, so `check_confd_schema` and editors let a key with a trailing `\n` through (tested with jsonschema 4.26: `{"abc\n": 1}` returns 0 errors).
-- A trailing `\n` can only appear in keys written as YAML block scalars. Such keys are rejected by the generators, da-guard, and tenant-api, so we accept this difference on the schema path.
+  - JSON Schema's `pattern` has **search** semantics, and `$` behaves differently per validator: `check_confd_schema` (Python jsonschema) lets a key with a trailing `\n` through (tested with jsonschema 4.26: `{"abc\n": 1}` returns 0 errors); the editor path, yaml-language-server, uses ECMAScript's `$` and rejects it (`new RegExp(pattern).test("abc\n")` is false).
+- A key with a trailing `\n` comes from a YAML block scalar or from the `\n` escape in a double-quoted scalar (`"abc\n": 1`). Under this ADR, the generators, da-guard, and tenant-api write validation all reject such decoded keys, so we accept this difference on the schema path; tenant-api read validation stays broader, see open question 1.
 - The `tenant_ids` table in the parity matrix gets a case that runs jsonschema directly, to pin this difference down.
 
 - **What we gain**: there is only one copy of the rule text, and all four readers get the rule from it: the generators (Python), da-guard and tenant-api (Go), the portal, and the schema checker.
