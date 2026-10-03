@@ -1098,9 +1098,10 @@ def _prepush_guards_wired() -> Tuple[Optional[bool], str]:
     或 pre-commit 擁有該檔而 shim 住 `pre-push.legacy`（pre-commit 用**完整**
     refspec 呼叫它）。
 
-    ⛔ **可執行位元也是判定的一部分**：git 對沒有執行位元的 hook **完全不跑**，
-    只印一行 `advice.ignoredHook` 可關掉的 `hint:`。實測把位元拿掉之後，直推
-    main 成功、守衛橫幅一個字都沒有，而舊版的內容比對照樣回報「已接上」。
+    ⛔ **可執行位元也是判定的一部分，而且兩個檔都要有**：git 對沒有執行位元
+    的 `pre-push` **完全不跑**，只印一行 `advice.ignoredHook` 可關掉的
+    `hint:`；pre-commit 對沒有執行位元的 `pre-push.legacy` 也是一聲不吭地略過。
+    兩者的結果都是直推 main 成功、守衛橫幅一個字都沒有。
     ⚠️ Windows 沒有這個位元，`os.access(X_OK)` 對存在的檔一律回 True——所以這
     一格在 Windows 上是**不生效**而不是「通過」。
 
@@ -1120,16 +1121,22 @@ def _prepush_guards_wired() -> Tuple[Optional[bool], str]:
 
     hook_body = _hook_body(hook) if hook.is_file() else None
     legacy_body = _hook_body(legacy) if legacy.is_file() else None
+    is_shim = _has_line(hook_body, _PREPUSH_SHIM_HEADER)
+    is_precommit = _has_line(hook_body, _PRECOMMIT_HOOK_HEADER)
 
-    if _has_line(hook_body, _PREPUSH_SHIM_HEADER):
-        if not _ok(hook):
-            return False, (
-                f"{hook} 是守衛 shim，但**沒有執行位元** ⇒ git 完全不會跑它"
-                "（只印一行可關掉的 hint）。重跑 install_prepush_hook.sh。"
-            )
+    if (is_shim or is_precommit) and not _ok(hook):
+        # 安裝器只替它寫的那支補位元，pre-commit 的樣板它不碰 ⇒ 兩格處方不同。
+        kind, fix = (("守衛 shim", "重跑 install_prepush_hook.sh") if is_shim
+                     else ("pre-commit 的樣板", f"`chmod +x {hook}`"))
+        return False, (
+            f"{hook} 是{kind}，但**沒有執行位元** ⇒ git 完全不會跑它"
+            f"（只印一行可關掉的 hint）。{fix}。"
+        )
+
+    if is_shim:
         return True, f"OK：{hook} 就是守衛 shim"
 
-    if _has_line(hook_body, _PRECOMMIT_HOOK_HEADER):
+    if is_precommit:
         if _has_line(legacy_body, _PREPUSH_SHIM_HEADER):
             if not _ok(legacy):
                 return False, (

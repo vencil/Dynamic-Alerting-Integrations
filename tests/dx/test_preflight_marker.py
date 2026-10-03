@@ -326,6 +326,39 @@ class TestPrepushWiring:
         assert wired is False, "a non-executable shim was reported as wired"
         assert "執行位元" in why, why
 
+    @pytest.mark.skipif(
+        sys.platform == "win32",
+        reason="Windows has no executable bit; see the shim test above.",
+    )
+    @pytest.mark.parametrize("name", ["pre-push", "pre-push.legacy"])
+    def test_behind_pre_commit_both_files_need_the_executable_bit(
+        self, tmp_path, monkeypatch, name
+    ):
+        """#2671: when pre-commit owns pre-push, git skips its template without
+        the bit and pre-commit skips pre-push.legacy without it — either way
+        the guards never run. The message's remedy must bring it back."""
+        self._require_pre_commit()
+        mod = _load()
+        self._repo(tmp_path)
+        monkeypatch.chdir(tmp_path)
+        assert self._install_guards(tmp_path).returncode == 0
+        assert self._precommit_install(tmp_path, "--hook-type", "pre-push") == 0
+        wired, why = mod._prepush_guards_wired()
+        assert wired is True, f"CONTROL: pre-commit in front of the shim is wired: {why!r}"
+
+        p = tmp_path / ".git" / "hooks" / name
+        p.chmod(p.stat().st_mode & ~0o111)
+        wired, why = mod._prepush_guards_wired()
+        assert wired is False, f"a non-executable {name} was reported as wired"
+        assert "執行位元" in why and Path(why.split()[0]).name == name, why
+
+        if "chmod +x" in why:
+            p.chmod(p.stat().st_mode | 0o111)
+        else:
+            assert self._install_guards(tmp_path).returncode == 0
+        wired, why = mod._prepush_guards_wired()
+        assert wired is True, f"following the message's remedy did not fix it: {why!r}"
+
     def test_the_never_installed_case_is_not_diagnosed_as_a_force_reinstall(
         self, tmp_path, monkeypatch
     ):
