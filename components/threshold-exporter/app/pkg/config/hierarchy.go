@@ -452,9 +452,10 @@ func computeEffectiveConfigBytesDetailed(
 // implementation: the byte form above only parses and calls it.
 //
 // It does not know which chain entry is the conf.d root's `_defaults.yaml`,
-// so its mergedDefaults keeps a root-only dimensional key (see
-// computeEffectiveConfigDocAt); only ResolveEffective, which knows the
-// chain's paths, hands da-guard a mergedDefaults without it.
+// so its mergedDefaults keeps a root-only dimensional key (#2419) and a
+// root-only `_critical` key (#2544; see computeEffectiveConfigDocAt); only
+// ResolveEffective, which knows the chain's paths, hands da-guard a
+// mergedDefaults without them.
 func computeEffectiveConfigDocDetailed(
 	tenantDoc *TenantDoc,
 	tenantID string,
@@ -478,6 +479,14 @@ func computeEffectiveConfigDocDetailed(
 // a SUBTREE level fills (applySubtreeDefaults) and the root level does not.
 // Measured before the fix: root and tenant both at 30, da-guard called the
 // tenant's key redundant, and deleting it removed the `env="prod"` series.
+//
+// ⛔ #2544: a `<metric>_critical` key (either #1231 spelling) that only the
+// root level writes is the same shape. The root's key is served as a row of
+// its own (metric `connections_critical`, severity=warning), while the
+// metric's severity=critical row comes only from the tenant's override map
+// (resolveCriticalRows), which a subtree level fills and the root level does
+// not. Measured before the fix: root and tenant both at 60, da-guard called
+// the tenant's key redundant, and deleting it removed the critical row.
 func computeEffectiveConfigDocAt(
 	tenantDoc *TenantDoc,
 	tenantID string,
@@ -491,7 +500,7 @@ func computeEffectiveConfigDocAt(
 	// per re-merged tenant). A file after a broken one is never parsed.
 	var err error
 	var writers map[string]int      // #2414: deepest chain level per aliased spelling
-	var subtreeDims map[string]bool // #2419: dimensional keys a non-root level writes
+	var subtreeDims map[string]bool // #2419 / #2544: tenant-map-only keys a non-root level writes
 	merged := make(map[string]any)
 	for i, defBytes := range defaultsChainYAML {
 		pd := ParseChainDefaults(defBytes)
@@ -500,7 +509,7 @@ func computeEffectiveConfigDocAt(
 		}
 		writers = noteSpellingWriters(writers, i, pd.block)
 		if rootLevel >= 0 && i != rootLevel {
-			subtreeDims = noteDimensionalWriters(subtreeDims, pd.block)
+			subtreeDims = noteTenantMapOnlyWriters(subtreeDims, pd.block)
 		}
 	}
 
@@ -543,10 +552,12 @@ func computeEffectiveConfigDocAt(
 	// set, so that shallower spelling is no fallback either.
 	//
 	// And a dimensional key only the root level writes is dropped (#2419,
-	// dropRootOnlyDimensional): no labelled series falls back to it. The
-	// platform entry and the profile layered on below DO reach the tenant's
-	// override map, so a dimensional key they write stays a fallback.
-	chainD := dropRootOnlyDimensional(
+	// dropRootOnlyTenantMapKeys): no labelled series falls back to it. Same
+	// for a `_critical` key only the root level writes (#2544): no critical
+	// row falls back to it. The platform entry and the profile layered on
+	// below DO reach the tenant's override map, so a key of either shape they
+	// write stays a fallback.
+	chainD := dropRootOnlyTenantMapKeys(
 		dropShadowedSpellings(dropShallowerSpellings(chain, writers)), rootLevel, subtreeDims)
 	switch {
 	case pr == nil && pi == nil:
@@ -603,13 +614,29 @@ func isDimensionalKey(k string) bool {
 	return strings.Contains(k, "{") && !reservedShapeWins(k)
 }
 
-// noteDimensionalWriters records the dimensional keys one non-root chain
-// level writes — "writes" being levelWritesSpelling, the predicate
-// applySubtreeDefaults uses to decide what it hands the tenant's override
-// map. s stays nil until one is seen.
-func noteDimensionalWriters(s map[string]bool, block map[string]any) map[string]bool {
+// isCriticalRowKey is resolveCriticalRows' entry condition (the `_critical`
+// arm keyBypassesTheDeclaredSurface mirrors): a `<metric>_critical` key, in
+// either #1231 spelling, that is not a `_state_` / `_silent_` key.
+func isCriticalRowKey(k string) bool {
+	return strings.HasSuffix(k, criticalKeySuffix) &&
+		!strings.HasPrefix(k, "_state_") && !strings.HasPrefix(k, "_silent_")
+}
+
+// servedFromTenantMapOnly reports whether a key's rows come only from the
+// tenant's override map — a dimensional key (#2419) or a `_critical` key
+// (#2544) — so the root `_defaults.yaml`, which does not fill that map, is
+// no fallback for it.
+func servedFromTenantMapOnly(k string) bool {
+	return isDimensionalKey(k) || isCriticalRowKey(k)
+}
+
+// noteTenantMapOnlyWriters records the servedFromTenantMapOnly keys one
+// non-root chain level writes — "writes" being levelWritesSpelling, the
+// predicate applySubtreeDefaults uses to decide what it hands the tenant's
+// override map. s stays nil until one is seen.
+func noteTenantMapOnlyWriters(s map[string]bool, block map[string]any) map[string]bool {
 	for k := range block {
-		if !isDimensionalKey(k) || !levelWritesSpelling(block, k) {
+		if !servedFromTenantMapOnly(k) || !levelWritesSpelling(block, k) {
 			continue
 		}
 		if s == nil {
@@ -620,17 +647,17 @@ func noteDimensionalWriters(s map[string]bool, block map[string]any) map[string]
 	return s
 }
 
-// dropRootOnlyDimensional is the merged chain without the dimensional keys
-// no non-root level writes (#2419; see computeEffectiveConfigDocAt). With
-// rootLevel < 0 nothing is dropped. Returns m itself when nothing is
-// dropped.
-func dropRootOnlyDimensional(m map[string]any, rootLevel int, subtreeWrites map[string]bool) map[string]any {
+// dropRootOnlyTenantMapKeys is the merged chain without the
+// servedFromTenantMapOnly keys no non-root level writes (#2419, #2544; see
+// computeEffectiveConfigDocAt). With rootLevel < 0 nothing is dropped.
+// Returns m itself when nothing is dropped.
+func dropRootOnlyTenantMapKeys(m map[string]any, rootLevel int, subtreeWrites map[string]bool) map[string]any {
 	if rootLevel < 0 {
 		return m
 	}
 	var drop []string
 	for k := range m {
-		if isDimensionalKey(k) && !subtreeWrites[k] {
+		if servedFromTenantMapOnly(k) && !subtreeWrites[k] {
 			drop = append(drop, k)
 		}
 	}

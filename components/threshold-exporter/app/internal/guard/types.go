@@ -72,6 +72,12 @@
 //     any level whose `defaults:` mapping leaves top-level keys out of
 //     the defaults merge.
 //
+//  6. Root `_critical` keys (#2544; see rootdefaults.go), warn: a
+//     `<metric>_critical` key under the conf.d root `defaults:` is served
+//     as a threshold of its own, never as `<metric>`'s critical row, so it is
+//     no fallback for that row and check 2 does not judge a tenant's key
+//     against it (config.EffectiveConfig.MergedDefaults leaves it out).
+//
 // Future PRs in the C-12 family:
 //   - PR-4: CLI subcommand `da-tools guard defaults-impact` plus
 //     YAML parsing convenience layer that runs the actual merge
