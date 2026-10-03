@@ -616,6 +616,12 @@ jobs:
           # the rule had no CI entry point at all. Pinned by
           # tests/dx/test_line_ending_policy.py::TestHookScope.
           pre-commit run open-encoding-audit --all-files
+          # #2643: subprocess timeout= rule (FATAL hook since S#84). Same gap
+          # as #2539 — registered in .pre-commit-config.yaml but never named
+          # here, so it had no CI entry point; its pytest twins call the
+          # script's functions and stay green with a timeout= removed. Pinned
+          # by tests/lint/test_check_subprocess_timeout.py::TestHookWiring.
+          pre-commit run subprocess-timeout-audit --all-files
           # CI-ROI 6C blind-spot fix: these 4 lints' live-dogfood pytest
           # twins (tests/lint/*::TestLiveRepo*) had "Python Tests" as
           # their ONLY CI enforcement point — but their scan surfaces

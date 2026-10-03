@@ -155,6 +155,14 @@ CASES = [
                           'def f(p, s):\n    p.write_text(s, encoding="utf-8")\n'),
          lambda r: _write(r, "helm/zz_liveness_probe_nl.py",
                           'def f(p, s):\n    p.write_text(s, encoding="utf-8", newline="\\n")\n')),
+    # #2643: the CI Lint job runs this hook by name; this case proves the
+    # `entry` still fails on a violation (drop `--strict-subprocess-timeout`
+    # and it warns and exits 0).
+    Case("subprocess-timeout-audit",
+         lambda r: _write(r, "scripts/tools/zz_liveness_probe_timeout.py",
+                          'import subprocess\n\n\ndef f():\n    subprocess.run(["true"])\n'),
+         lambda r: _write(r, "scripts/tools/zz_liveness_probe_timeout.py",
+                          'import subprocess\n\n\ndef f():\n    subprocess.run(["true"], timeout=5)\n')),
     Case("aria-references-check",
          lambda r: _write(r, _ARIA_PROBE, '<p aria-describedby="zz-probe-missing">x</p>\n'),
          lambda r: _write(r, _ARIA_PROBE,
