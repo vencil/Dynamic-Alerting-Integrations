@@ -326,6 +326,10 @@ class TestPrepushWiring:
         assert wired is False, "a non-executable shim was reported as wired"
         assert "執行位元" in why, why
 
+        assert self._install_guards(tmp_path).returncode == 0
+        wired, why = mod._prepush_guards_wired()
+        assert wired is True, f"following the message's remedy did not fix it: {why!r}"
+
     @pytest.mark.skipif(
         sys.platform == "win32",
         reason="Windows has no executable bit; see the shim test above.",
