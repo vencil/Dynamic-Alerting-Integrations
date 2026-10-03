@@ -392,50 +392,60 @@ func policyViolationEnvelope(msg string, violations []policy.Violation) ErrorRes
 	}
 }
 
-// freshBasePolicyError is a PR-mode batch op the domain policy refuses on the
+// freshBasePolicyError is a PR-mode write the domain policy refuses on the
 // FRESH base the feature branch is cut from, after the pre-check on the pod's
-// local tree let it through (B2 F1, #2341). Op is the op's index in the
-// request (for /groups/{id}/batch, the member's index in the expansion).
+// local tree let it through: a batch op (B2 F1, #2341) or a PUT (Put, #2486).
+// Op is a batch op's index in the request (for /groups/{id}/batch, the
+// member's index in the expansion); a PUT has none.
 //
-// LoadErr set: the base's `_domain_policy.yaml` could not be read or parsed,
-// so the op could not be judged and the batch is refused (fail-closed).
+// LoadErr set: the base's domain policy file could not be read or parsed,
+// so the write could not be judged and is refused (fail-closed).
 type freshBasePolicyError struct {
 	TenantID   string
 	Op         int
+	Put        bool
 	Violations []policy.Violation
 	LoadErr    error
 }
 
 func (e *freshBasePolicyError) Error() string {
+	subject := fmt.Sprintf("operations[%d] (tenant %s)", e.Op, e.TenantID)
+	check, nothing := "the per-operation check", "Nothing in this batch was written and no PR/MR was opened"
+	if e.Put {
+		subject = fmt.Sprintf("the configuration of tenant %s", e.TenantID)
+		check, nothing = "the first check", "Nothing was written and no PR/MR was opened"
+	}
 	if e.LoadErr != nil {
 		// Fixed text: LoadErr names the server's conf.d path, which only the
 		// server log may see (writeFreshBasePolicyViolation logs it).
-		return fmt.Sprintf("the domain policy file _domain_policy.yaml on the latest base branch cannot be loaded, "+
-			"so operations[%d] (tenant %s) cannot be judged against it. "+
-			"Nothing in this batch was written and no PR/MR was opened; repair the policy file on the base branch.",
-			e.Op, e.TenantID)
+		return fmt.Sprintf("the domain policy file (_domain_policy.yaml or .yml) on the latest base branch cannot be loaded, "+
+			"so %s cannot be judged against it. %s; repair the policy file on the base branch.",
+			subject, nothing)
 	}
 	msgs := make([]string, len(e.Violations))
 	for i, v := range e.Violations {
 		msgs[i] = v.Message
 	}
-	return fmt.Sprintf("domain policy violation on the latest base branch: operations[%d] (tenant %s) would break it: %s. "+
-		"This server's local config is behind the base branch, so the per-operation check did not catch it. "+
-		"Nothing in this batch was written and no PR/MR was opened.",
-		e.Op, e.TenantID, strings.Join(msgs, "; "))
+	return fmt.Sprintf("domain policy violation on the latest base branch: %s would break it: %s. "+
+		"This server's local config is behind the base branch, so %s did not catch it. %s.",
+		subject, strings.Join(msgs, "; "), check, nothing)
 }
 
 func (e *freshBasePolicyError) Unwrap() error { return gitops.ErrMergePolicyRefused }
 
 // writeFreshBasePolicyViolation answers a freshBasePolicyError with the
-// same 403 POLICY_VIOLATION envelope as writePolicyViolation, naming the op.
+// same 403 POLICY_VIOLATION envelope as writePolicyViolation, naming the
+// tenant and, for a batch, the op.
 func writeFreshBasePolicyViolation(w http.ResponseWriter, r *http.Request, e *freshBasePolicyError) {
 	if e.LoadErr != nil {
-		slog.Error("PR batch refused: domain policy on the fresh base cannot be loaded",
+		slog.Error("PR write refused: domain policy on the fresh base cannot be loaded",
 			"tenant", e.TenantID, "error", e.LoadErr)
 	}
 	env := policyViolationEnvelope(e.Error(), e.Violations)
-	env.Extra = map[string]any{"tenant_id": e.TenantID, "operation": e.Op}
+	env.Extra = map[string]any{"tenant_id": e.TenantID}
+	if !e.Put {
+		env.Extra["operation"] = e.Op
+	}
 	WriteErrorEnvelope(w, r, http.StatusForbidden, env)
 }
 

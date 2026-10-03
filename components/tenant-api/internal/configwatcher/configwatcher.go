@@ -40,6 +40,14 @@ type ParseFunc[T any] func([]byte) (*T, error)
 // empty (open mode), the file doesn't exist, or initial load fails.
 type EmptyFunc[T any] func() *T
 
+// ReadFunc replaces the single-file read of a Watcher built by NewWithReader:
+// it returns the bytes to hash and hand to ParseFunc. exists=false is the
+// missing-file case (empty() is stored, no error); a non-nil err is a read
+// failure (the last-good snapshot is kept). It is how one Watcher follows a
+// config spread over several files (policy: `_domain_policy.yaml` and
+// `.yml`): the bytes encode all of them, so a change to any is a new hash.
+type ReadFunc func() (data []byte, exists bool, err error)
+
 // ReloadObserver is an optional sink for the outcome of EVERY reload attempt.
 // It is declared here (configwatcher is a leaf package importing only stdlib)
 // and implemented in the handler package, which owns /metrics exposition —
@@ -86,6 +94,9 @@ type Watcher[T any] struct {
 	label string // log tag, e.g. "rbac" / "policy" / "groups"
 	parse ParseFunc[T]
 	empty EmptyFunc[T]
+	// read, when set (NewWithReader), replaces os.ReadFile(path); path is
+	// then only the description in logs and Path().
+	read ReadFunc
 
 	value atomic.Value // stores *T
 
@@ -149,6 +160,30 @@ func New[T any](path, label string, parse ParseFunc[T], empty EmptyFunc[T]) (*Wa
 		slog.Info("config: no path provided, running with empty config", "component", label)
 		return w, nil
 	}
+	if err := w.load(); err != nil {
+		return w, err
+	}
+	return w, nil
+}
+
+// NewWithReader is New with read in place of the single-file read of path
+// (see ReadFunc). desc names the source in logs and Path() and must be
+// non-empty: there is no open mode. Everything else — SHA-256 dedup of
+// read's bytes, last-good on a failure, WatchLoop, Reload, the reload
+// observer — is New's.
+func NewWithReader[T any](desc, label string, read ReadFunc, parse ParseFunc[T], empty EmptyFunc[T]) (*Watcher[T], error) {
+	if desc == "" || read == nil {
+		return nil, fmt.Errorf("configwatcher: NewWithReader needs a description and a reader")
+	}
+	w := &Watcher[T]{
+		path:   desc,
+		label:  label,
+		parse:  parse,
+		empty:  empty,
+		read:   read,
+		lastOK: true,
+	}
+	w.value.Store(empty())
 	if err := w.load(); err != nil {
 		return w, err
 	}
@@ -290,13 +325,13 @@ func (w *Watcher[T]) loadLocked() (err error) {
 		w.value.Store(w.empty())
 		return nil
 	}
-	data, err := os.ReadFile(w.path)
+	data, exists, err := w.readSource()
 	if err != nil {
-		if os.IsNotExist(err) {
-			w.value.Store(w.empty())
-			return nil
-		}
 		return fmt.Errorf("read %s: %w", w.path, err)
+	}
+	if !exists {
+		w.value.Store(w.empty())
+		return nil
 	}
 
 	hash := fmt.Sprintf("%x", sha256.Sum256(data))
@@ -312,6 +347,22 @@ func (w *Watcher[T]) loadLocked() (err error) {
 	w.lastHash = hash
 	slog.Info("config loaded", "component", w.label, "path", w.path)
 	return nil
+}
+
+// readSource is one read of the watched source: read when set, else the file
+// at path (a missing file is exists=false, not an error).
+func (w *Watcher[T]) readSource() (data []byte, exists bool, err error) {
+	if w.read != nil {
+		return w.read()
+	}
+	data, err = os.ReadFile(w.path)
+	if err != nil {
+		if os.IsNotExist(err) {
+			return nil, false, nil
+		}
+		return nil, false, err
+	}
+	return data, true, nil
 }
 
 // Path returns the configured file path (for tests / diagnostics).

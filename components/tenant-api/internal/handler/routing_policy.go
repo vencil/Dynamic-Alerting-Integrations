@@ -171,13 +171,48 @@ func changesRouting(block map[string]any, op BatchOperation) bool {
 	return touchesRouting(BatchOperation{Patch: op.Patch}) || removesAny(block, op.Unset)
 }
 
-// judgeTenantBlock is the judging half shared by the pre-check
+// judgeTenantBlock is the judging half shared by every domain-policy check
+// of a tenant's routing — PUT (judgePutBody), the batch pre-check
 // (batchRoutingViolations: the block on disk with the prior ops stacked) and
-// PR mode's in-lock check (freshBasePolicyCheck: the block as merged on the
-// fresh base, judged by a policy snapshot read from it): block resolved over
-// the routing layers in configDir and judged by mgr.
+// PR mode's in-lock checks (freshBasePolicyCheck, freshBasePutPolicyCheck:
+// the block on the fresh base, judged by a policy snapshot read from it).
+// block is the tenant file's block; as the route generator does
+// (_lib_confd.overlay_platform_tenants), it is laid over the root platform
+// files' `tenants.<id>` entries (Layers.TenantBlock: the tenant's own
+// `_routing` / `_routing_profile` win whole), then resolved over the routing
+// layers in configDir and judged by mgr. So a tenant whose own file carries
+// no `_routing` is judged on the one the platform overlay gives it.
 func judgeTenantBlock(configDir string, mgr *policy.Manager, tenantID string, block map[string]any) ([]policy.Violation, []string) {
-	return mgr.JudgeTenantRouting(tenantID, block, loadRoutingLayers(configDir))
+	return mgr.JudgeTenantBlock(tenantID, block, loadRoutingLayers(configDir))
+}
+
+// judgePutBody is PUT's domain-policy check of the whole body (a PUT
+// replaces the whole file): CheckWrite on its flat keys and the routing its
+// tenant block resolves to (judgeTenantBlock). mgr and configDir are the
+// pod's (the pre-check) or the fresh base's (freshBasePutPolicyCheck).
+func judgePutBody(configDir string, mgr *policy.Manager, tenantID string, body []byte) ([]policy.Violation, []string) {
+	violations := mgr.CheckWrite(tenantID, extractPatchKeys(body, tenantID))
+	rv, advisories := judgeTenantBlock(configDir, mgr, tenantID, extractTenantBlock(body, tenantID))
+	return append(violations, rv...), advisories
+}
+
+// freshBasePutPolicyCheck is PUT's authoritative domain-policy check in PR
+// mode (#2486), the PUT twin of freshBasePolicyCheck: run by
+// Writer.WritePRChecked under the writer lock, with configDir checked out at
+// the feature branch cut from the FRESH origin base, before the body is
+// written. The pre-check judged the pod's local tree and the policy
+// watcher's copy, which may lag the base; here the routing layers, the
+// platform overlay and the domain policy (policy.LoadSnapshot) are the
+// base's. The whole body is judged, as by the pre-check. loadErr is non-nil
+// when the base's policy file cannot be read or parsed: the caller refuses
+// the write.
+func freshBasePutPolicyCheck(configDir, tenantID string, body []byte) (violations []policy.Violation, loadErr error) {
+	snap, err := policy.LoadSnapshot(configDir)
+	if err != nil {
+		return nil, err
+	}
+	violations, _ = judgePutBody(configDir, snap, tenantID, body)
+	return violations, nil
 }
 
 // freshBasePolicyCheck is PR mode's authoritative domain-policy check (B2

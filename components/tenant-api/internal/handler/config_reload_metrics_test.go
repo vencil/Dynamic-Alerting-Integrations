@@ -31,8 +31,10 @@ func TestConfigReloadComponents_CoversEveryWatcherLabel(t *testing.T) {
 	// `(\[[^]]*\])?` also matches explicit generic instantiation
 	// (`configwatcher.New[T](…)`), so a future call site written that way cannot
 	// slip past the calls==found invariant below with an unchecked label.
-	reCall := regexp.MustCompile(`configwatcher\.New(\[[^]]*\])?\(`)
-	reLabel := regexp.MustCompile(`configwatcher\.New(\[[^]]*\])?\(\s*[A-Za-z0-9_.]+\s*,\s*"([^"]+)"`)
+	// NewWithReader (#2486, policy's two files) takes the label in the same
+	// position and is a construction site like New.
+	reCall := regexp.MustCompile(`configwatcher\.New(?:WithReader)?(\[[^]]*\])?\(`)
+	reLabel := regexp.MustCompile(`configwatcher\.New(?:WithReader)?(\[[^]]*\])?\(\s*[A-Za-z0-9_.]+\s*,\s*"([^"]+)"`)
 
 	known := make(map[string]bool, len(configReloadComponents))
 	for _, c := range configReloadComponents {

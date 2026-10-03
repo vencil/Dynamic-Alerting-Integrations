@@ -93,6 +93,22 @@ func (w *Writer) restoreBase(base, branch string, pushed bool) error {
 //
 // The caller (handler) is responsible for creating the GitHub PR using the returned branch name.
 func (w *Writer) WritePR(ctx context.Context, tenantID, authorEmail, yamlContent string) (*PRWriteResult, error) {
+	return w.WritePRChecked(ctx, tenantID, authorEmail, yamlContent, nil)
+}
+
+// PRBaseCheck judges a PR-mode write against the FRESH base the feature
+// branch is cut from: configDir is the working tree, checked out at that
+// branch, before anything of the write is on it. A non-nil error refuses the
+// write — the branch is dropped, nothing is written, committed or pushed —
+// and is returned to the caller unchanged.
+type PRBaseCheck func(configDir string) error
+
+// WritePRChecked is WritePR plus check, run under the writer lock after the
+// branch is cut from the fresh origin base and the tenant's file is resolved
+// there, before the body is validated and written (Step 3b'). PUT passes the
+// domain-policy check here, because its pre-check read the pod's local tree,
+// which may lag the base (#2486). A nil check is WritePR.
+func (w *Writer) WritePRChecked(ctx context.Context, tenantID, authorEmail, yamlContent string, check PRBaseCheck) (*PRWriteResult, error) {
 	// Step 0: reserved-id backstop (defense-in-depth; see guardTenantID).
 	if err := guardTenantID(tenantID); err != nil {
 		return nil, err
@@ -171,6 +187,14 @@ func (w *Writer) WritePR(ctx context.Context, tenantID, authorEmail, yamlContent
 	if err != nil {
 		w.abortFeatureBranch(base, branchName)
 		return nil, err
+	}
+
+	// Step 3b': the caller's check, on the fresh base (WritePRChecked).
+	if check != nil {
+		if err := check(w.configDir); err != nil {
+			w.abortFeatureBranch(base, branchName)
+			return nil, err
+		}
 	}
 
 	// Step 3c: AUTHORITATIVE validate, against the tree the write actually lands

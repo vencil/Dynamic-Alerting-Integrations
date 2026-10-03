@@ -353,8 +353,8 @@ func TestRoutingPolicyParityMatrix(t *testing.T) {
 			for tenantID, want := range tree.Expect {
 				t.Run(tenantID, func(t *testing.T) {
 					// The generator's tenant layer: the tenant file's keys over
-					// the root platform overlay (#2291). tenant-api's PUT body
-					// carries no overlay, so its model below takes the file alone.
+					// the root platform overlay (#2291) — tenant-api's model
+					// below lays the PUT body over it too (#2486).
 					block, file := tenantBlock(t, tree.Files, tenantID)
 					if got := ltree.TenantLevel(tenantID); got != LevelOf(file) {
 						t.Errorf("tenant level = %q, want %q (%s)", got, LevelOf(file), file)
@@ -388,21 +388,40 @@ func TestRoutingPolicyParityMatrix(t *testing.T) {
 }
 
 // checkTenantAPIModel checks the tenant_api column against this package the
-// way DESIGN #2280 has tenant-api use it: policies from `_domain_policy.yaml`
-// only; PUT resolves the tenant's own file; a batch patch is laid over the
-// on-disk block and judged only when it touches `_routing_profile` /
-// `_routing`. It is a consistency check of the table — the handler's own
-// assertion lives in tenant-api (internal/handler/routing_policy_parity_test.go).
+// way DESIGN #2280 has tenant-api use it: policies from the root
+// `_domain_policy.yaml` and `.yml`, in that order, a domain in both being the
+// `.yml`'s (#2486); PUT judges the tenant's own file and a batch patch is
+// laid over the on-disk block — each over the root platform overlay
+// (Layers.TenantBlock, #2486) — and a patch is judged only when it touches
+// `_routing_profile` / `_routing`. It is a consistency check of the table —
+// the handler's own assertion lives in tenant-api
+// (internal/handler/routing_policy_parity_test.go).
 func checkTenantAPIModel(t *testing.T, files map[string]string, tenantID string, block map[string]any, layers Layers, want parityTenantAPI) {
 	t.Helper()
 	var pols []Policy
-	if src, ok := files["_domain_policy.yaml"]; ok {
-		var err error
-		if pols, _, err = ParseDomainPolicies([]byte(src)); err != nil {
-			t.Fatalf("_domain_policy.yaml: %v", err)
+	for _, name := range []string{"_domain_policy.yaml", "_domain_policy.yml"} {
+		src, ok := files[name]
+		if !ok {
+			continue
+		}
+		filePols, _, err := ParseDomainPolicies([]byte(src))
+		if err != nil {
+			t.Fatalf("%s: %v", name, err)
+		}
+		for _, p := range filePols {
+			replaced := false
+			for i := range pols {
+				if pols[i].Domain == p.Domain {
+					pols[i], replaced = p, true
+				}
+			}
+			if !replaced {
+				pols = append(pols, p)
+			}
 		}
 	}
-	verdict := func(b map[string]any) bool { // true = refused
+	verdict := func(own map[string]any) bool { // true = refused
+		b := layers.TenantBlock(tenantID, own)
 		resolved, ok, _, _ := Resolve(tenantID, b, layers)
 		if !ok {
 			return false
