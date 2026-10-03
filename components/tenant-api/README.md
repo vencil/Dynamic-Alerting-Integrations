@@ -81,7 +81,7 @@
 | `PUT` | `/api/v1/tenants/{id}` | write | 寫入(驗證 → policy → 寫入 → commit / PR;policy 判 body 解析後的**整份** routing,不含平台檔 `tenants:` overlay 提供的 `_routing_profile`);body 格式錯誤回 400;同一 id 兩種拼法並存回 409;租戶已由其他檔宣告回 409 `TENANT_DECLARED_ELSEWHERE`(見下方「單一租戶端點與 conf.d 範圍」) |
 | `POST` | `/api/v1/tenants/{id}/validate` | read | Dry-run 驗證,不寫入 |
 | `POST` | `/api/v1/tenants/{id}/diff` | read | 預覽 unified diff;同一 id 兩種拼法並存回 409;租戶已由其他檔宣告回 409 `TENANT_DECLARED_ELSEWHERE` |
-| `POST` | `/api/v1/tenants/batch` | read + 逐租戶 write | 批次**部分合併** patch(只改指定 key、保留其餘 key 與註解,非整檔取代;逐筆 RBAC + policy;`?async=true` 走 task 池)。patch 碰到 `_routing_profile` 或 `_routing` 時,把 patch 蓋上磁碟上的租戶 block(以及同一請求中同租戶前面已納入的 op)後判解析結果,違反的那筆被排除(PR 模式其餘照常開 PR);**只碰其他 key 的 patch 不判 routing**——磁碟上已違規的租戶,與 routing 無關的寫入不會因此被擋(與 PUT 不對稱) |
+| `POST` | `/api/v1/tenants/batch` | read + 逐租戶 write | 批次**部分合併** patch(只改指定 key、保留其餘 key 與註解,非整檔取代;逐筆 RBAC + policy;`?async=true` 走 task 池)。每筆 op 另可帶 `unset: ["_routing"]` 刪除 key(目前只接受 `_routing`;刪掉即回到 `_routing_defaults` + profile,重新啟用被停用的路由;key 或租戶不存在時為 no-op:不寫入、不開 PR、不建立租戶)。patch 碰到 `_routing_profile` 或 `_routing`、或 unset `_routing` 時,把 patch 蓋上磁碟上的租戶 block(以及同一請求中同租戶前面已納入的 op)後判解析結果,違反的那筆被排除(PR 模式其餘照常開 PR);**只碰其他 key 的 patch 不判 routing**——磁碟上已違規的租戶,與 routing 無關的寫入不會因此被擋(與 PUT 不對稱) |
 
 > **寫入回應**:`PUT /{id}` 回 `{"status","tenant_id"}`;PR 模式另含 `pr_url` / `pr_number`(CI 可據此取得待審 PR)。request body 直接送租戶 YAML,不需特定 `Content-Type`。
 
@@ -121,7 +121,7 @@
 | `GET` | `/api/v1/groups/{id}` | read | 取得群組 |
 | `PUT` | `/api/v1/groups/{id}` | write + 逐成員 write | 寫入;對所有 `members` 都需 write,否則回 403 + 不足清單 |
 | `DELETE` | `/api/v1/groups/{id}` | write + 逐成員 write | 刪除(同上權限) |
-| `POST` | `/api/v1/groups/{id}/batch` | read + 逐成員 write | 對群組全成員部分合併 patch(只改指定 key、保留其餘;同步 / 非同步)。每個成員展開成一筆 op、走與 `POST /tenants/batch` 同一條管線:patch 值檢查(違規 400)、逐成員 RBAC + domain policy;PR 模式整組合成**一支** PR(`status: pending_review`),不直接 commit 到 base branch(#2339) |
+| `POST` | `/api/v1/groups/{id}/batch` | read + 逐成員 write | 對群組全成員部分合併 patch(只改指定 key、保留其餘;同步 / 非同步);`unset` 與 `POST /tenants/batch` 同義。每個成員展開成一筆 op、走與 `POST /tenants/batch` 同一條管線:patch 值檢查(違規 400)、逐成員 RBAC + domain policy;PR 模式整組合成**一支** PR(`status: pending_review`),不直接 commit 到 base branch(#2339) |
 | `GET` | `/api/v1/views` | read | 列出 saved view |
 | `GET` `PUT` `DELETE` | `/api/v1/views/{id}` | read / write | Saved view CRUD |
 

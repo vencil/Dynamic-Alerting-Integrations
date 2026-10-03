@@ -33,12 +33,20 @@ type groupBatchFixture struct {
 	prCalls   int
 	title     string
 	labels    []string
+	head      string // the last CreatePR call's head branch
 }
 
 func newGroupBatchFixture(t *testing.T, mode WriteMode) *groupBatchFixture {
 	t.Helper()
 	files := batchTree()
 	files["_groups.yaml"] = finGroupsYAML
+	return newGroupBatchFixtureOver(t, mode, files)
+}
+
+// newGroupBatchFixtureOver is newGroupBatchFixture over files, which must
+// carry the g-fin group in `_groups.yaml`.
+func newGroupBatchFixtureOver(t *testing.T, mode WriteMode, files map[string]string) *groupBatchFixture {
+	t.Helper()
 	configDir := seedGitTree(t, files)
 	f := &groupBatchFixture{configDir: configDir}
 	f.deps = &Deps{Writer: newTestWriter(configDir), ConfigDir: configDir, RBAC: adminRBAC(t),
@@ -48,7 +56,7 @@ func newGroupBatchFixture(t *testing.T, mode WriteMode) *groupBatchFixture {
 			providerName: "github",
 			createPRFunc: func(title, body, head string, labels []string) (*platform.PRInfo, error) {
 				f.prCalls++
-				f.title, f.labels = title, labels
+				f.title, f.labels, f.head = title, labels, head
 				return &platform.PRInfo{Number: 9, WebURL: "https://example/pr/9", State: "open"}, nil
 			},
 		}

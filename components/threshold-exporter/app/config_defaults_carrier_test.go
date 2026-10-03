@@ -226,8 +226,9 @@ tenants:
 // It used to drive the removed `IncrementalLoad()` into incrementalLoadFrom's
 // root-carrier redirect (`anyRootCarrierKey`). The watch path never gets
 // there with a carrier in the tree — any carrier makes the reload
-// hierarchical — so the reload here is a full flat rebuild, and that redirect
-// is not reached by any test (nor, by the same argument, by production).
+// hierarchical — so the reload here is a full flat rebuild. #2593 deleted the
+// redirect, which neither a test nor production could reach, and made
+// incrementalLoadFrom refuse any scan holding a carrier instead.
 func TestRootCarrierSelectionMovesOnReload(t *testing.T) {
 	t.Parallel()
 	dir := t.TempDir()
@@ -255,18 +256,20 @@ func TestRootCarrierSelectionMovesOnReload(t *testing.T) {
 	}
 }
 
-// The other arm of the incremental guard: nothing was added or removed, but
-// the root holds two carriers and the UNSELECTED one changed. Without the
-// `Ambiguous > 1` arm the incremental path parses the `.yml` and merges it
-// over the `.yaml` (blind review of #1674 round 2: mutating the guard to
-// `anyRootCarrierKey(added, removed)` alone left the suite green).
+// Historical (the guard below no longer exists, see the ⚠️ paragraph): this
+// was written for the other arm of the incremental guard — nothing added or
+// removed, but the root held two carriers and the UNSELECTED one changed.
+// Without the `Ambiguous > 1` arm the incremental path parsed the `.yml` and
+// merged it over the `.yaml` (blind review of #1674 round 2: mutating the
+// guard to `anyRootCarrierKey(added, removed)` alone left the suite green).
 //
 // ⚠️ SINCE #1577 THIS PINS THE WATCH PATH, NOT THE GUARD IT WAS WRITTEN FOR.
 // It used to drive the removed `IncrementalLoad()` into incrementalLoadFrom's
 // root-carrier redirect (`anyRootCarrierKey`). The watch path never gets
 // there with a carrier in the tree — any carrier makes the reload
-// hierarchical — so the reload here is a full flat rebuild, and that redirect
-// is not reached by any test (nor, by the same argument, by production).
+// hierarchical — so the reload here is a full flat rebuild. #2593 deleted the
+// redirect, which neither a test nor production could reach, and made
+// incrementalLoadFrom refuse any scan holding a carrier instead.
 func TestEditingTheUnselectedRootCarrierChangesNothing(t *testing.T) {
 	t.Parallel()
 	dir := t.TempDir()

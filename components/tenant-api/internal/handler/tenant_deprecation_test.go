@@ -178,7 +178,7 @@ func TestBatchTenants_PRModeAllNoOp_200CarriesWarnings(t *testing.T) {
 	// Fixed-point seed: commit the EXACT bytes mergePatchYAML produces for
 	// this patch, so replaying the same patch is byte-identical (a true no-op).
 	patch := map[string]string{"mysql_cpu": "70"}
-	seed, err := mergePatchYAML([]byte("tenants:\n  db-a:\n    mysql_cpu: \"70\"\n"), "db-a", patch)
+	seed, err := mergePatchYAML([]byte("tenants:\n  db-a:\n    mysql_cpu: \"70\"\n"), "db-a", patch, nil)
 	if err != nil {
 		t.Fatalf("build fixed-point seed: %v", err)
 	}
