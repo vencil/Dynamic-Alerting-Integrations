@@ -358,9 +358,10 @@ func TestGuard_SubtreeReservedMessageShapes(t *testing.T) {
 			want: []string{"Key `_routingProfile`", "not a recognised key", "Delete it from this file."},
 			deny: []string{"Reserved key", "Set `_routingProfile`"}},
 		{key: "_state_maintenance",
-			want: []string{"Delete it from this file.", "set `_state_maintenance` " + ownEntry, "`state_filters.maintenance.default_state`",
-				"affects every tenant in the tree; to change only this subtree's tenants"}},
-		{key: "_silent_mode", want: []string{"Reserved key", "Delete it from this file.", "set `_silent_mode` " + ownEntry}},
+			want: []string{"Move it: set `_state_maintenance` " + ownEntry, "`state_filters.maintenance.default_state`",
+				"affects every tenant in the tree", "Deleting it alone changes"}},
+		{key: "_silent_mode", want: []string{"Reserved key", "Move it: set `_silent_mode` " + ownEntry,
+			"and delete it from this file", "Deleting it alone changes"}},
 	} {
 		m, ok := msg[tc.key]
 		if !ok {
@@ -485,11 +486,12 @@ func TestGuard_SubtreeReservedBareStatePrefix(t *testing.T) {
 		want, deny []string
 	}{
 		{name: "undeclared", root: reservedRoot("disable"),
-			want: []string{"Reserved key `_state_`", "does not declare a filter ``", "or delete it from this file"},
-			deny: []string{"not a recognised key", "To have it take effect"}},
+			want: []string{"Reserved key `_state_`", "does not declare a filter `\"\"`",
+				"Declare `\"\"` under `state_filters:`", "or delete it from this file"},
+			deny: []string{"not a recognised key", "Move it", "filter ``"}},
 		{name: "declared", root: "defaults:\n  mysql_connections: 80\n" +
 			"state_filters:\n  \"\":\n    reasons: [x]\n    severity: warning\n    default_state: enable\n",
-			want: []string{"Reserved key `_state_`", "Delete it from this file.", "To have it take effect, set `_state_`"},
+			want: []string{"Reserved key `_state_`", "Move it: set `_state_`", "`state_filters.\"\".default_state`"},
 			deny: []string{"does not declare", "not a recognised key"}},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
@@ -518,8 +520,11 @@ func TestGuard_SubtreeReservedBareStatePrefix(t *testing.T) {
 // #2388 r5: the blind review's m4 shape — the tenant already sets `_silent_mode`
 // and the subtree file still carries it at the top level beside `defaults:` —
 // must be told to delete it from the file (it has no effect there today); and
-// its m2 shape (`defaults:` with no value, so the whole document is merged)
-// gets no "leave `defaults:` with no value" advice.
+// a mixed tree (`defaults: {x: 1}` + top-level `mysql_connections` and
+// `_silent_mode`), which IS defaults_toplevel_ignored, gets the Move sentence
+// for the threshold without "leave `defaults:` with no value" (#2388 r6: the
+// r5 version of this half used an unwrapped file, which raises no such
+// finding, so it could not fail).
 func TestGuard_SubtreeRefusedKeyDeleteFirst(t *testing.T) {
 	t.Parallel()
 	m4 := map[string]string{
@@ -531,14 +536,66 @@ func TestGuard_SubtreeRefusedKeyDeleteFirst(t *testing.T) {
 	if !strings.Contains(stdout, "Today it has no effect; delete it from this file to keep things as they are.") {
 		t.Errorf("m4: no delete instruction: %s", stdout)
 	}
-	m2 := map[string]string{
+	mixed := map[string]string{
 		"_defaults.yaml":   "defaults:\n  mysql_connections: 80\n",
-		"a/_defaults.yaml": "defaults:\nx: 1\nmysql_connections: 70\n_silent_mode: warning\n",
+		"a/_defaults.yaml": "defaults: {x: 1}\nmysql_connections: 70\n_silent_mode: warning\n",
 		"a/t.yaml":         "tenants:\n  t1:\n    _silent_mode: warning\n",
 	}
-	_, stdout, _ = runOnce(t, "--format", "json", "--config-dir", writeReservedConfD(t, m2))
+	got := allFindings(t, "--config-dir", writeReservedConfD(t, mixed))
+	if !slices.Contains(got, "error defaults_toplevel_ignored  a/_defaults.yaml") {
+		t.Fatalf("mixed: findings = %q, want defaults_toplevel_ignored", got)
+	}
+	_, stdout, _ = runOnce(t, "--format", "json", "--config-dir", writeReservedConfD(t, mixed))
+	if !strings.Contains(stdout, "Move `mysql_connections` under `defaults:`.") {
+		t.Errorf("mixed: no Move sentence for the threshold: %s", stdout)
+	}
 	if strings.Contains(stdout, "leave `defaults:` with no value") {
-		t.Errorf("m2: advises leaving `defaults:` with no value: %s", stdout)
+		t.Errorf("mixed: advises leaving `defaults:` with no value: %s", stdout)
+	}
+}
+
+// #2388 r6: inside a subtree `defaults:`, a key the overlay applies today (a
+// plain `disable`) must not be told to be deleted on its own — that changes
+// what is served. The t2 shape: the message says "Move it" and warns that
+// deleting alone changes the served value; doing the Move (tenant entry +
+// delete from the file) keeps every served value and clears the findings.
+func TestGuard_SubtreeReservedMoveKeepsServedValues(t *testing.T) {
+	t.Parallel()
+	root := "defaults:\n  mysql_connections: 80\n" +
+		"state_filters:\n  maintenance:\n    reasons: [x]\n    severity: warning\n    default_state: enable\n"
+	before := map[string]string{
+		"_defaults.yaml": root,
+		"a/_defaults.yaml": "defaults:\n  mysql_connections: 70\n  _state_maintenance: disable\n" +
+			"  _severity_dedup: disable\n",
+		"a/t.yaml": "tenants:\n  t1:\n    mysql_connections: 60\n",
+	}
+	_, got := reservedFindings(t, "--config-dir", writeReservedConfD(t, before))
+	if len(got) != 2 {
+		t.Fatalf("before: findings = %+v, want 2", got)
+	}
+	for _, f := range got {
+		if !strings.Contains(f.Message, "Move it") || !strings.Contains(f.Message, "Deleting it alone changes") ||
+			strings.Contains(f.Message, "Delete it from this file.") {
+			t.Errorf("%s: message = %s", f.Field, f.Message)
+		}
+	}
+	after := map[string]string{
+		"_defaults.yaml":   root,
+		"a/_defaults.yaml": "defaults:\n  mysql_connections: 70\n",
+		"a/t.yaml": "tenants:\n  t1:\n    mysql_connections: 60\n    _state_maintenance: disable\n" +
+			"    _severity_dedup: disable\n",
+	}
+	if got := allFindings(t, "--config-dir", writeReservedConfD(t, after), "--warn-as-error"); len(got) != 0 {
+		t.Errorf("after: findings = %q, want none", got)
+	}
+	_, b, _, _ := served(t, before, "2026-10-01T00:00:00Z")
+	code, a, _, stderr := served(t, after, "2026-10-01T00:00:00Z")
+	mustOK(t, code, stderr)
+	if !reflect.DeepEqual(b.Tenants["t1"].Values, a.Tenants["t1"].Values) {
+		t.Errorf("served values changed:\n before %v\n after  %v", b.Tenants["t1"].Values, a.Tenants["t1"].Values)
+	}
+	if a.Tenants["t1"].Values["_state_maintenance"] != false || a.Tenants["t1"].Values["_severity_dedup"] != "disable" {
+		t.Errorf("after: values = %v; want _state_maintenance false, _severity_dedup disable", a.Tenants["t1"].Values)
 	}
 }
 

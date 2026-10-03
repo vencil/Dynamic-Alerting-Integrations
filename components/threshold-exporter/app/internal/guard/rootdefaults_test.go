@@ -190,7 +190,7 @@ func TestDefaultsWrapperSubtreeRefusedKeyFix(t *testing.T) {
 		// and leaves out the `_routing` prefix, and IsReservedKey minus that is
 		// recognised. A bare `_state_` is the filter "" — undeclared here, (a).)
 		{"bare-state", "a/_defaults.yaml", "defaults:\n  x: 1\n_state_: 1\n",
-			[]string{"`_state_`: subtree defaults do not support it", "does not declare a filter ``",
+			[]string{"`_state_`: subtree defaults do not support it", "does not declare a filter `\"\"`",
 				"or delete it from this file"},
 			[]string{"Move them", "not a recognised key"}},
 		{"mixed", "a/_defaults.yaml", "defaults:\n  x: 1\nmysql_connections: 70\n_silent_mode: warning\n",

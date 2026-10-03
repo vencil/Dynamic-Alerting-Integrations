@@ -175,7 +175,7 @@ func reservedKeyShape(k string, declared map[string]bool) int {
 func subtreeRefusedKeyFix(k string, declared map[string]bool, topLevel bool) string {
 	switch reservedKeyShape(k, declared) {
 	case shapeUndeclaredState:
-		f := strings.TrimPrefix(k, "_state_")
+		f := filterName(strings.TrimPrefix(k, "_state_"))
 		return fmt.Sprintf("The conf.d root `state_filters:` does not declare a filter `%s`, so nothing reads `%s` "+
 			"anywhere, a tenant's own entry included. Declare `%s` under `state_filters:` in the conf.d "+
 			"root `_defaults.yaml` (this applies to every tenant in the tree), or delete it from this file.", f, k, f)
@@ -183,12 +183,49 @@ func subtreeRefusedKeyFix(k string, declared map[string]bool, topLevel bool) str
 		return "It is not a recognised key: the exporter does not read it, " +
 			"in a subtree `_defaults.yaml` or in a tenant's own entry. Delete it from this file."
 	}
-	lead := "Delete it from this file."
 	if topLevel {
-		lead = "Today it has no effect; delete it from this file to keep things as they are."
+		return "Today it has no effect; delete it from this file to keep things as they are. " + reservedKeyFix(k)
 	}
-	return lead + " " + reservedKeyFix(k)
+	return reservedKeyMove(k)
 }
+
+// reservedKeyMove is the (c) fix inside a subtree `defaults:`, where the key
+// may be applied today (a plain `disable`): ONE action, moving it.
+//
+// ⛔ NOT "DELETE IT" ON ITS OWN (#2388 r6). The r5 text led with "Delete it
+// from this file." — and for a value the overlay applies today, deleting it
+// alone changes what is served (measured: subtree `_state_maintenance:
+// disable` under a root default_state enable; deleted, the filter came back
+// on). Setting it in the tenant's entry and deleting it from the file keeps
+// the served value; that is the one action this text names.
+func reservedKeyMove(k string) string {
+	const alone = " (Deleting it alone changes what is served today if the value is currently applied, " +
+		"e.g. a plain `disable`.)"
+	if f, isState := strings.CutPrefix(k, "_state_"); isState {
+		return fmt.Sprintf("Move it: set `%s` in each tenant's own entry under `tenants:` and delete it from this "+
+			"file — or instead set `state_filters.%s.default_state` in the conf.d root `_defaults.yaml`, which "+
+			"affects every tenant in the tree.%s", k, filterPath(f), alone)
+	}
+	if readElsewhere[k] { // `_custom_alerts`: its reader takes it from the top level
+		return fmt.Sprintf("Move it: move `%s` out of `defaults:` to the top level of the file, where it is read, "+
+			"or set it in each tenant's own entry under `tenants:` and delete it from this file.%s", k, alone)
+	}
+	return fmt.Sprintf("Move it: set `%s` in each tenant's own entry under `tenants:` and delete it from this "+
+		"file.%s", k, alone)
+}
+
+// filterName renders a state filter's name for a message; the empty name,
+// which `_state_` names and a root `state_filters:` can declare, as `""` (#2388 r6).
+func filterName(f string) string {
+	if f == "" {
+		return `""`
+	}
+	return f
+}
+
+// filterPath is f as a path segment under `state_filters.`: the empty name
+// quoted, so the path reads `state_filters."".default_state`.
+func filterPath(f string) string { return filterName(f) }
 
 // reservedKeyToday is the finding's sentence on what the exporter does with
 // key k from a subtree defaults file today. pkg/config's applySubtreeDefaults
@@ -213,7 +250,7 @@ func reservedKeyFix(k string) string {
 		return fmt.Sprintf("To have it take effect, set `%s` in each tenant's own entry under `tenants:`, or set "+
 			"`state_filters.%s.default_state` in the conf.d root `_defaults.yaml` — that affects every "+
 			"tenant in the tree; to change only this subtree's tenants, set the key in each tenant's own entry.",
-			k, strings.TrimPrefix(k, "_state_"))
+			k, filterPath(strings.TrimPrefix(k, "_state_")))
 	}
 	if readElsewhere[k] { // `_custom_alerts`: its reader takes it from the top level
 		return fmt.Sprintf("To have it take effect, move `%s` out of `defaults:` to the top level of the file, "+

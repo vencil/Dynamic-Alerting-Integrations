@@ -147,10 +147,12 @@ func scalarsEqual(a, b any) bool {
 // the exporter's own chain, no YAML parsed here.
 //
 // ⛔ SUCH AN OVERRIDE IS NOT REDUNDANT (#2388 r5). The merged defaults show the
-// subtree's value, but the exporter does not apply it (`_silent_mode: warning`
-// from a subtree is dropped) and from the next minor release applies none of
-// them: the tenant's own key is the one that takes effect. Telling the tenant
-// to delete it and "rely on inheritance" would switch the setting off.
+// subtree's value, but that value is to be moved out of the subtree file
+// (subtree_default_reserved_key) and from the next minor release is not
+// applied; some values are not applied today either (`_silent_mode: warning`
+// from a subtree is dropped). The tenant's own key is the one to keep;
+// telling the tenant to delete it and "rely on inheritance" points the wrong
+// way.
 // Measured: subtree `_silent_mode: warning` + the same in the tenant's entry
 // served ["warning"], and redundant_override said to remove the tenant's line.
 // A key inherited from the ROOT only is not in the set and is still judged.

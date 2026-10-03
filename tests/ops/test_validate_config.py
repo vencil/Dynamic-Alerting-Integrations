@@ -2716,6 +2716,11 @@ class TestDefaultsWrapperRow:
                 "not support") in line, line
         assert "delete them from this file" in line, line
         assert "subtree_default_reserved_key" in line, line
+        # #2388 r6: whether the tenant entry is a fix is da-guard's call.
+        assert "or set them in each tenant's own entry" not in line, line
+        assert r["hint"] == vc._DEFAULTS_WRAPPER_RESERVED_HINT, r
+        assert "no value" not in r["hint"], r
+        assert "reserved keys: see the detail" in r["hint"], r
         assert "Move `_severity_dedup`" not in line, line
         assert "leave `defaults:` with no value" not in line, line
 
@@ -2728,6 +2733,7 @@ class TestDefaultsWrapperRow:
         assert ("Move `mysql_connections` under `defaults:`, or leave "
                 "`defaults:` with no value") in line, line
         assert "subtree_default_reserved_key" not in line, line
+        assert r["hint"] is None, r  # the generic hint applies
 
     @pytest.mark.parametrize("sub", [
         _TOP,
@@ -2749,6 +2755,7 @@ class TestDefaultsWrapperRow:
         assert r["details"][0].startswith("_defaults.yaml: "), r
         assert "the root `defaults:` holds numbers only" in r["details"][0], r
         assert "subtree_default_reserved_key" not in r["details"][0], r
+        assert r["hint"] is None, r  # root: the generic hint applies
 
     def test_end_to_end_exits_1(self, tmp_path, capsys, cli_argv):
         d = self._tree(tmp_path, "defaults: {}\n" + self._TOP)
