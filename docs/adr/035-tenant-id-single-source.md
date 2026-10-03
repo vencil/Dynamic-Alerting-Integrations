@@ -6,7 +6,7 @@ version: v2.9.0
 lang: zh
 id: ADR-035
 tracking_kind: adr
-status: proposed
+status: accepted
 domain: platform
 created_at: 2026-10-03
 updated_at: 2026-10-03
@@ -18,11 +18,11 @@ updated_at: 2026-10-03
 
 ## 狀態
 
-🟡 **Proposed**（2026-10-03 起草）。
+✅ **Accepted**（2026-10-03 起草，2026-10-03 由 owner 核可）。
 
 - 決策內容已由 owner 在 [#2655](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/2655) 拍板，其中兩題是外審之後再拍板的。
 - 外審由不同模型以對抗方式進行，結論已併入本文。
-- 本文尚待 owner 核可。
+- owner 已核可本文。核可時一併修訂三處：原待決問題 1（tenant-api 讀取與刪除路徑）結案、補列 `init_project.py` 的第五份 DNS-1123 寫法、`definitions.tenantId` 加上 `description`。
 
 ## 摘要
 
@@ -48,6 +48,7 @@ updated_at: 2026-10-03
 |---|---|
 | `operator_generate.py:54`、`migrate_to_operator.py:49` | DNS-1123 label（`fullmatch`） |
 | portal `operator-setup-wizard/utils/generators.js:26` | DNS-1123 形狀，但**沒有 63 字元上限** |
+| `init_project.py` 的 `_validate_tenant_name` | DNS-1123 label（`fullmatch` 加 `len <= 63`；規則與第一列相同，但是另一份手寫副本） |
 | `alert_quality.py:65` | `^[a-zA-Z0-9_-]+$` |
 | 產生器、da-guard、tenant-api 寫入路徑（#2633 過渡規則；`_lib_validation.py:98`、`routingpolicy/tenantid.go`） | 擋下空字串，以及不符 `^[A-Za-z0-9_-]+$` 者 |
 | tenant-api 讀取路徑 `ValidateTenantID`（`handler/sanitize.go:14`） | 只擋路徑分隔符、`..`、非 base name、保留檔名 |
@@ -93,13 +94,14 @@ updated_at: 2026-10-03
 - 在 `properties.tenants` 加上 `propertyNames: {"$ref": "#/definitions/tenantId"}`。
 - schema 是 draft-07，支援 `propertyNames`，所以 `check_confd_schema` 不需改程式就會開始檢查。外審已用 schema 副本實測：`Team_A` 回 rc 1；repo 內 conf.d 回 rc 0。
 - 不另外寫 `maxLength`。pattern 已限制長度，重複寫只會讓違規時出現兩條錯誤。
+- `definitions.tenantId` 另帶一段英文 `description`，用白話說明規則。它會跟著產生的 JSON 副本一起出貨；產生器、da-guard、tenant-api 的錯誤訊息引用這段文字，不再各自描述規則。portal 介面保留自己的在地化提示文字。
 
 **Python**
 
 - `_lib_validation.is_valid_tenant_id` 在 runtime 讀這個 pattern，讀法沿用 `_find_tenant_schema()`：在 da-tools image 內讀扁平佈局，在 repo 內往上找專案根目錄。
 - build.sh 的 `REPO_DATA_FILES` 已經出貨這份 schema，`check_build_completeness` 也把它列為必要檔案。
 - 讀不到 schema 時 fail-closed，作法比照 #2180 的 receiver URL pattern。
-- 以下三支工具刪除各自的 regex 或不驗證的寫法，改呼叫這個函式：`operator_generate.py`、`migrate_to_operator.py`、`alert_quality.py`；`scaffold_tenant.py` 原本不驗證，也改為呼叫。
+- 以下四支工具刪除各自的 regex，改呼叫這個函式：`operator_generate.py`、`migrate_to_operator.py`、`alert_quality.py`、`init_project.py`（`_validate_tenant_name`）；`scaffold_tenant.py` 原本不驗證，也改為呼叫。
 
 **Go 與 portal**
 
@@ -127,7 +129,7 @@ receiverspec 模式是 Go 端手抄常數，再用 `TestSpecs_MatchSchema` 讀 s
   - `is_valid_tenant_id`：用 `re.fullmatch`，因為 Python 的 `$` 會吃掉結尾的 `\n`。
   - Go：以 `^…$` 錨定，RE2 的 `$` 不吃 `\n`。
   - JSON Schema 的 `pattern` 是 **search** 語意，`$` 的行為依驗證器而定：`check_confd_schema`（Python jsonschema）會放過結尾帶 `\n` 的 key（實測 jsonschema 4.26：`{"abc\n": 1}` 回 0 個錯誤）；編輯器走 yaml-language-server，用 ECMAScript 的 `$`，會擋下（實測 `new RegExp(pattern).test("abc\n")` 為 false）。
-- 結尾帶 `\n` 的 key 來自 YAML block scalar，或雙引號 scalar 裡的 `\n` 跳脫（`"abc\n": 1`）。依本 ADR，產生器、da-guard 與 tenant-api 的寫入驗證都會擋下解碼後的這類 key，所以接受 schema 路徑的這個差異；tenant-api 的讀取驗證仍較寬，見待決問題 1。
+- 結尾帶 `\n` 的 key 來自 YAML block scalar，或雙引號 scalar 裡的 `\n` 跳脫（`"abc\n": 1`）。依本 ADR，產生器、da-guard 與 tenant-api 的寫入驗證都會擋下解碼後的這類 key，所以接受 schema 路徑的這個差異；tenant-api 的讀取驗證仍較寬，見「已結案的問題」。
 - parity matrix 的 `tenant_ids` 表要補一個直接跑 jsonschema 的案例，把這個差異釘住。
 
 - **換到的**：規則文字只有一份，四個讀者都從它取得規則：產生器（Python）、da-guard 與 tenant-api（Go）、portal、schema checker。
@@ -137,7 +139,9 @@ receiverspec 模式是 Go 端手抄常數，再用 `TestSpecs_MatchSchema` 讀 s
 
 ### D3：直接全面阻擋，所有產生模式非零退出
 
-新規則上線後，所有讀者同時改用 DNS-1123 判定：產生器、da-guard、tenant-api 寫入路徑、schema、portal、`scaffold_tenant`。
+新規則上線後，所有讀者同時改用 DNS-1123 判定：產生器、da-guard、tenant-api 寫入路徑、schema、portal、`scaffold_tenant`、`init_project`。
+
+tenant-api 的新規則套用到**所有寫入路徑**，範圍與強制點見「已結案的問題」。
 
 產生器遇到不合法 id 時，**不論哪種模式都非零退出、不輸出設定**，包括一般產生、`--dry-run`、`--apply`、`--output-configmap`、`--validate`、`--strict`。
 
@@ -183,17 +187,23 @@ exporter 不拒收不合法 id 的租戶，每次 reload 時對每個不合法 i
 
 ## 已結案的問題
 
+- **tenant-api 的讀取與刪除路徑要不要套用新規則。** 只套用到寫入路徑，讀取路徑不變。核可時確認：
+  - tenant-api 沒有刪除租戶或改名的 route，改名一律在 git 裡進行，所以新規則不會擋住改名遷移。
+  - 新規則套用到所有寫入路徑。強制點放在 `gitops.guardTenantID`（`components/tenant-api/internal/gitops/writer.go`），它涵蓋 PUT、批次寫入、group 批次寫入、custom-alerts、federation subset 與 dry-run。
+  - handler 保留 `ValidateWritableTenantID`，用來提早回 400。
+  - 規則**不放進** `confd.IsAddressableTenantID`，因為讀取路徑也呼叫它。
 - **63 字元上限要不要扣掉前綴。** 不用扣。外審 grep 確認：operator 模式寫進 K8s label 的是**裸 id**（`metadata.labels: {"tenant": id}`，見 `operator_generate.py:461-466`、`migrate_to_operator.py:356-361`）。帶前綴的只有物件名稱（上限 253）與 Alertmanager receiver 名稱（沒有 63 的限制）。
 
 ## 待決問題
 
-1. **tenant-api 的讀取與刪除路徑要不要套用新規則。** 傾向不套用：讀取與刪除已存在但不合法的租戶，是改名遷移時必要的動作。批次寫入與 `ValidateWritableTenantID` 是否會擋住改名流程的某一步，實作時要追蹤。
-2. **root receiver 為空時要不要 WARN**（範圍外，但相關）。產生器偵測到 base config 的 root receiver 沒有任何 integration 時，可以印 WARN，提醒未被路由的告警會被靜默丟棄。這不屬於 tenant id 規則，另開票處理。
+1. **root receiver 為空時要不要 WARN**（範圍外，但相關）。產生器偵測到 base config 的 root receiver 沒有任何 integration 時，可以印 WARN，提醒未被路由的告警會被靜默丟棄。這不屬於 tenant id 規則，由 [#2660](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/2660) 追蹤。
 
 ## 實作時要同步修改的地方
 
 - `docs/cli-reference{,.en}.md` 的 `invalid_tenant_id` 一列，目前寫「大寫可用」。
 - `docs/integration/gitops-deployment*.md`、`byo-alertmanager-integration.md`、`tenant-federation.md` 中提到大寫 id 的段落，逐一確認。
+- `scripts/tools/ops/init_project.py` 的 `_validate_tenant_name`：刪掉手寫的 regex 與長度檢查，改呼叫 `_lib_validation`。
+- tenant-api 的 `gitops.guardTenantID`：加上新規則；`confd.IsAddressableTenantID` 不動。
 - `_grar_parse.py` 與 `_grar_validate.invalid_tenant_id_text` 的 WARN 文字，目前寫「letters, digits, '_' and '-' only」。
 - `tests/shared/routing_policy_parity_matrix.json` 的 `tenant_ids` 表：把 `UPPER`、`Mixed_Case-1`、`_x`、`-x`、`x_`、64 字元等案例移到 invalid，並更新說明文字。
 - `components/tenant-api/internal/handler/tenant_id_write_test.go`、`tests/ops/test_tenant_name_rfc1123.py`、`pkg/routingpolicy/parity_test.go` 等測試。
