@@ -409,3 +409,30 @@ def test_guard_scan_is_not_vacuous():
 ])
 def test_guard_catches_an_unmarked_producer(source, expected):
     assert len(unmarked_skip_literals(source)) == expected
+
+
+# ── 4. explain-route's "skipped by the generator" list ────────────────────
+
+def test_explain_route_lists_only_dropped_entries(tmp_path):
+    """#2489, same defect in explain-route: an override whose timing value is
+    `skipping` (a clamp WARN, the override IS rendered) was listed as "Not in
+    effect"; an override really dropped (no receiver) still is."""
+    explain_route = importlib.import_module("explain_route")
+    gar = importlib.import_module("generate_alertmanager_routes")
+    d = _write_tree(tmp_path, _with_receiver(
+        "      overrides:\n"
+        "        - alertname: A\n"
+        "          repeat_interval: skipping\n"
+        "          receiver:\n"
+        "            type: webhook\n"
+        "            url: https://hooks.example.com/b\n"
+        "        - alertname: B\n"))
+    exp = explain_route.explain_tenant_routing(
+        gar._parse_config_files(str(d)), "t1")
+    assert [s["source"] for s in exp["sub_routes"]] == ["overrides[0]"]
+    assert len(exp["skipped_sub_routes"]) == 1, exp["skipped_sub_routes"]
+    assert "override[1] missing 'receiver'" in exp["skipped_sub_routes"][0]
+    text = explain_route.format_explanation(exp)
+    not_in_effect = text.split("Not in effect (skipped by the generator):")[1]
+    assert "override[1] missing 'receiver'" in not_in_effect
+    assert "repeat_interval 'skipping'" not in not_in_effect
