@@ -84,7 +84,12 @@
 //     exporter's build's own (CheckInput.UndeliverableInherited), filtered
 //     by pkg/config's undeliverableThresholds, not re-derived here.
 //
-//  8. Root defaults written as null (#2518; see rootnull.go), warn: the
+//  8. Reserved keys in subtree defaults (#2388; see subtree_reserved.go), warn for
+//     now: a subtree `_defaults.yaml` in a tenant's chain carries a reserved
+//     key (`_state_*`, `_silent_mode`, …) in its defaults. The set is read
+//     off the exporter's build's chain (CheckInput.SubtreeReservedKeys).
+//
+//  9. Root defaults written as null (#2518; see rootnull.go), warn: the
 //     tenant's config sets a threshold the conf.d root `_defaults.yaml`
 //     writes as null, which declares nothing, so the exporter serves no
 //     series for it. The set is the build's (CheckInput.RootNullUndeclared).
@@ -448,6 +453,24 @@ type CheckInput struct {
 	// EffectiveConfigs (#1976); nil skips the check.
 	UndeliverableInherited map[string][]string `json:"-"`
 
+	// SubtreeReservedKeys maps tenant ID → reserved key → the subtree
+	// `_defaults.yaml` files (root-relative) in the tenant's defaults chain
+	// whose defaults carry that key (config.ScopedTenants.SubtreeReserved).
+	// Each (tenant, key) becomes a subtree_default_reserved_key warning for a
+	// tenant in EffectiveConfigs (#2388); nil skips the check.
+	SubtreeReservedKeys map[string]map[string][]string `json:"-"`
+
+	// DeclaredStateFilters is the root `state_filters:` names
+	// (config.ScopedTenants.DeclaredStateFilters); the
+	// subtree_default_reserved_key fix for `_state_<f>` depends on whether f
+	// is declared (#2388 r2). nil = none declared.
+	DeclaredStateFilters map[string]bool `json:"-"`
+
+	// SubtreeRefusedVerdicts is config.ScopedTenants.SubtreeRefusedVerdicts:
+	// for every tenant of the tree (not only EffectiveConfigs), key → the
+	// exporter subtree overlay's verdict. The subtree_default_reserved_key fix
+	// for a recognised key depends on it (#2388 A); absent = not applied.
+	SubtreeRefusedVerdicts map[string]map[string]config.SubtreeRefusedVerdict `json:"-"`
 	// RootNullUndeclared maps tenant ID → the threshold keys its config sets
 	// that are not served because the conf.d root `_defaults.yaml` writes
 	// them (or a `_critical` key's base) as null — not declared (config.ScopedTenants.RootNullUndeclared, i.e.

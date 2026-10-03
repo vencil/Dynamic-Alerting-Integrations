@@ -4,7 +4,6 @@ import (
 	"fmt"
 	"path"
 	"sort"
-	"strings"
 
 	"github.com/vencil/threshold-exporter/pkg/config"
 )
@@ -28,10 +27,6 @@ const ProblemRoutingInUnreadLocation = "routing_in_unread_location"
 var rootTopLevelRoutingKeys = map[string]bool{
 	"_routing_defaults": true,
 	"_routing_enforced": true,
-}
-
-func isRoutingKey(k string) bool {
-	return k == "_routing" || strings.HasPrefix(k, "_routing_")
 }
 
 // UnreadRouting reports the routing keys the route generator never reads
@@ -154,7 +149,7 @@ func unreadInProfiles(name string, data []byte) []Problem {
 func sortedRoutingKeys(m map[string]any) []string {
 	var out []string
 	for k := range m {
-		if isRoutingKey(k) {
+		if config.IsRoutingKey(k) {
 			out = append(out, k)
 		}
 	}

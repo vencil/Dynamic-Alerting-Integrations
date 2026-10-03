@@ -1519,20 +1519,58 @@ def _defaults_toplevel_ignored_detail(rel: str, raw: dict,
     keys: ``_keys_acting_when_merged``. Measured on a subtree: wrapped this
     way, a top-level threshold and ``_severity_dedup`` were no longer served
     on /metrics; ``_silent_mode`` and ``_state_*`` changed /effective only.
+
+    ⛔ Below the root, a RESERVED key (``_is_reserved_key``) is not told to
+    move under ``defaults:`` (#2388): subtree defaults do not support reserved
+    keys, and moving one there — or leaving ``defaults:`` with no value, which
+    merges the whole document — only trades this line for da-guard's
+    ``subtree_default_reserved_key``. The per-key fix lives in da-guard; this
+    line names it rather than re-deriving it.
     """
     keys, found = _keys_acting_when_merged(raw)
     if not keys:
         return []
     shown = ", ".join(f"`{k}`" for k in keys)
-    fix = ("Move them under `defaults:`, or leave `defaults:` with no value "
-           "so the whole document is merged.")
     if root:
         fix = _ROOT_NUMBERS_ONLY
+    else:
+        fix = _subtree_toplevel_fix(keys)
     return [f"{rel}: `defaults:` is a mapping, so the defaults merge reads "
             f"only the keys under it; the top-level key(s) {shown} are left "
             f"out of every tenant's merged config (/effective), and a "
             f"threshold among them is not served on /metrics"
             f"{_schema_missing_note(found)}. {fix}"]
+
+
+def _subtree_toplevel_fix(keys: list[str]) -> str:
+    """The fix of a subtree carrier's `defaults_wrapper` line (#2388): the
+    generic "move them under `defaults:`" for the other keys — without "or
+    leave `defaults:` with no value" when a reserved key is present, since that
+    merges the reserved key too — and, for reserved keys, "delete or set it in
+    the tenant's own entry"."""
+    reserved = [k for k in keys if _is_reserved_key(k)]
+    other = [k for k in keys if k not in reserved]
+    parts = []
+    if other:
+        shown = ", ".join(f"`{k}`" for k in other)
+        if reserved:
+            parts.append(f"Move {shown} under `defaults:`.")
+        else:
+            parts.append(f"Move {shown} under `defaults:`, or leave "
+                         f"`defaults:` with no value so the whole document "
+                         f"is merged.")
+    if reserved:
+        shown = ", ".join(f"`{k}`" for k in reserved)
+        # ⛔ Not "or set them in each tenant's own entry" (#2388 r6): whether
+        # that is the fix depends on the key (an undeclared `_state_<f>` is
+        # read nowhere), which needs the root's `state_filters:` — da-guard's
+        # verdict, not re-derived here.
+        parts.append(
+            f"{shown}: reserved key(s), which subtree defaults do not support "
+            f"— do not move them under `defaults:`; delete them from this "
+            f"file (see da-guard's `subtree_default_reserved_key` for whether "
+            f"to set them in each tenant's own entry instead, #2388).")
+    return " ".join(parts)
 
 
 def _is_yaml_mapping(value: object) -> bool:
@@ -1544,6 +1582,15 @@ def _is_yaml_mapping(value: object) -> bool:
     tests/shared/defaults_wrapper_matrix.json.
     """
     return isinstance(value, (dict, set, frozenset))
+
+
+#: `defaults_wrapper`'s hint when a SUBTREE carrier's listed keys include a
+#: reserved key (#2388 r6): the generic one's "or give `defaults:` no value"
+#: would merge that key into the subtree's defaults.
+_DEFAULTS_WRAPPER_RESERVED_HINT = (
+    "A `defaults:` mapping makes the defaults merge read only that mapping: "
+    "move the listed thresholds under `defaults:`; below the root, reserved "
+    "keys: see the detail.")
 
 
 def check_defaults_wrapper(config_dir: str) -> dict[str, object]:
@@ -1565,6 +1612,7 @@ def check_defaults_wrapper(config_dir: str) -> dict[str, object]:
             by_dir.setdefault(p.parent, []).append(p)
     details: list[str] = []
     checked = 0
+    subtree_reserved = False
     for d in sorted(by_dir):
         readable, _unreadable = readable_carriers(by_dir[d])
         carrier = select_defaults_carrier(readable)
@@ -1580,8 +1628,16 @@ def check_defaults_wrapper(config_dir: str) -> dict[str, object]:
         if _is_yaml_mapping(raw.get("defaults")):
             rel = carrier.relative_to(root).as_posix()
             details += _defaults_toplevel_ignored_detail(rel, raw, d == root)
+            if d != root and any(_is_reserved_key(k)
+                                 for k in _keys_acting_when_merged(raw)[0]):
+                subtree_reserved = True
     if details:
-        return _make_result("defaults_wrapper", FAIL, details)
+        # ⛔ The generic hint says "or give `defaults:` no value": below the
+        # root that merges a reserved key into the subtree's defaults, which
+        # da-guard reports as subtree_default_reserved_key (#2388 r6).
+        return _make_result("defaults_wrapper", FAIL, details,
+                            hint=_DEFAULTS_WRAPPER_RESERVED_HINT
+                            if subtree_reserved else None)
     return _make_result("defaults_wrapper", PASS, [
         f"{checked} defaults file(s): no top-level key left out by a "
         f"`defaults:` mapping"])

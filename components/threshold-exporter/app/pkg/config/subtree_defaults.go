@@ -71,9 +71,9 @@ func applySubtreeDefaults(
 	root string,
 	tenantDefaults map[string][]string,
 	parsed map[string]map[string]any,
-) (int, map[string]map[string]ScheduledValue) {
+) (int, map[string]map[string]ScheduledValue, map[string]map[string]SubtreeRefusedVerdict) {
 	if cfg == nil || len(cfg.Tenants) == 0 || len(tenantDefaults) == 0 {
-		return 0, nil
+		return 0, nil, nil
 	}
 	// ⛔ ABSOLUTE, because the chain is. `scanDirTree` stores every defaults
 	// path under the absolutised, cleaned AND symlink-resolved root
@@ -96,6 +96,18 @@ func applySubtreeDefaults(
 	// normalised (a YAML `1e6` becomes "1e+06"), not the file's text (#1976:
 	// `da-guard served-values` lists threshold keys in `unserved`).
 	unreachable := map[string]map[string]ScheduledValue{}
+	// ⛔ WHETHER A REFUSED KEY IS APPLIED TODAY, as this overlay's own action
+	// (#2388 A): tenant → key → true when the key is in the tenant's map at
+	// the end (some subtree level's value was written and not displaced),
+	// false when every subtree level's value was dropped (not threshold-
+	// shaped, unreachable, null, or the tenant sets the key itself). Recorded
+	// on the existing branches only; it changes nothing this overlay writes.
+	// da-guard's subtree_default_reserved_key fix depends on it: moving an
+	// applied value keeps what is served, deleting an ignored one does.
+	// Each verdict also names the file and value the tenant gets (#2388 A r2:
+	// with several levels, "move it" must say WHICH value) and whether the
+	// tenant sets the key itself.
+	var applied map[string]map[string]SubtreeRefusedVerdict
 
 	filled := 0
 	for tenantID, overrides := range cfg.Tenants {
@@ -113,12 +125,21 @@ func applySubtreeDefaults(
 		// one directory deeper. The single-level tests could not see it.
 		// (CodeRabbit, #1569.)
 		var inherited map[string]struct{}
+		var refusedSeen map[string]struct{}
+		var refusedSource map[string]SubtreeRefusedVerdict // key → the written level (deepest wins)
+		var refusedTenantSets map[string]bool
 		for _, defaultsPath := range tenantDefaults[tenantID] {
 			if filepath.Dir(filepath.Clean(defaultsPath)) == rootDir {
 				continue // the global defaults file — already in cfg.Defaults
 			}
 			level := parsed[defaultsPath]
 			for key, raw := range level {
+				if subtreeDefaultsRefusedKey(key) {
+					if refusedSeen == nil {
+						refusedSeen = map[string]struct{}{}
+					}
+					refusedSeen[key] = struct{}{}
+				}
 				// ⛔ "THE TENANT AUTHORED IT" IS ASKED PER THRESHOLD, NOT PER
 				// SPELLING (#2414). A tenant writing the retired spelling has
 				// set the same threshold a subtree file names canonically;
@@ -126,6 +147,12 @@ func applySubtreeDefaults(
 				// it, and resolve's canonical-wins dedup then served the
 				// subtree's number over the tenant's own.
 				if tenantAuthoredThreshold(overrides, inherited, key) {
+					if subtreeDefaultsRefusedKey(key) {
+						if refusedTenantSets == nil {
+							refusedTenantSets = map[string]bool{}
+						}
+						refusedTenantSets[key] = true
+					}
 					continue // the tenant authored it — never touched
 				}
 				value, ok := scheduledValueFromRaw(raw)
@@ -198,13 +225,213 @@ func applySubtreeDefaults(
 				}
 				inherited[key] = struct{}{}
 				overrides[key] = value
+				if subtreeDefaultsRefusedKey(key) {
+					if refusedSource == nil {
+						refusedSource = map[string]SubtreeRefusedVerdict{}
+					}
+					refusedSource[key] = SubtreeRefusedVerdict{
+						Applied: true, Source: subtreeRelPath(rootDir, defaultsPath), Value: raw,
+					}
+				}
 			}
+		}
+		// ⚠️ MANY LEVELS, ONE VERDICT: the value the tenant ends up with. The
+		// chain is walked root-first and a deeper level that WRITES the key
+		// overwrites a shallower one, while a deeper level whose value is
+		// dropped leaves the shallower written value in place — so "applied"
+		// is whether the key is in `inherited` after the whole chain, not the
+		// verdict on the deepest level alone. Measured shape: finance/
+		// `_state_maintenance: disable` + finance/us/ `enable` — the tenant's
+		// filter stays off (finance/'s disable), so the key is applied, and
+		// deleting both levels would turn it on.
+		for key := range refusedSeen {
+			if applied == nil {
+				applied = map[string]map[string]SubtreeRefusedVerdict{}
+			}
+			if applied[tenantID] == nil {
+				applied[tenantID] = map[string]SubtreeRefusedVerdict{}
+			}
+			var v SubtreeRefusedVerdict
+			if _, in := inherited[key]; in {
+				v = refusedSource[key]
+			}
+			v.TenantSets = refusedTenantSets[key]
+			applied[tenantID][key] = v
 		}
 	}
 	if len(unreachable) == 0 {
-		return filled, nil
+		return filled, nil, applied
 	}
-	return filled, unreachable
+	return filled, unreachable, applied
+}
+
+// SubtreeRefusedVerdict is applySubtreeDefaults' own account of one key
+// subtree defaults refuse (subtreeDefaultsRefusedKey), for one tenant (#2388 A).
+type SubtreeRefusedVerdict struct {
+	// Applied: a subtree level's value of the key is in the tenant's map at
+	// the end of the overlay — the exporter uses it for this tenant. It says
+	// nothing about whether that value differs from what the tenant would get
+	// without it (a subtree `disable` under a root default_state disable is
+	// applied and changes nothing).
+	Applied bool
+	// Source is the root-relative slash path of the subtree file whose value
+	// the tenant gets ("" when not Applied): the deepest level that WROTE it.
+	Source string
+	// Value is that file's value of the key, as parsed (YAML-shaped).
+	Value any
+	// TenantSets: the tenant's own map sets the key, so no subtree value is
+	// written and the tenant's own value is what is served.
+	TenantSets bool
+	// EntryFiles / Profile say WHERE a TenantSets key is set — filled by
+	// markTenantSetSources, on da-guard's path only (scopeParseFailed), never
+	// by BuildFlatConfig: the exporter's reload has no reader for them
+	// (#2388 A r4). EntryFiles: the root-relative files whose `tenants:`
+	// entry for the tenant holds the key (a tenant file, or a root platform
+	// file such as `_platform.yaml`), in the flat merge's order
+	// (sortFlatMergeOrder) — the last one's value is the one served. Profile: the tenant's
+	// `_profile`, when no entry holds the key and that profile does
+	// (profiles are applied before the overlay, so the overlay alone cannot
+	// tell).
+	EntryFiles []string
+	Profile    string
+}
+
+// markTenantSetSources fills SubtreeRefusedVerdict.EntryFiles / .Profile for
+// every TenantSets verdict, from the build's own data: fileConfigs (the
+// per-file decode before the merge, keyed by root-relative scan key) and
+// cfg.Profiles.
+//
+// ⛔ LINEAR, AND OFF THE EXPORTER PATH (#2388 A r4). The first version ran in
+// BuildFlatConfig and scanned every file per TenantSets verdict —
+// O(verdicts × files), measured on 8000 tenants sharing one `_profile`: the
+// served-values load went from 0.83s to 10.4s. It now indexes the
+// `tenants:` entries once (only the keys some verdict asks about) and runs
+// only where da-guard assembles its report.
+func markTenantSetSources(verdicts map[string]map[string]SubtreeRefusedVerdict,
+	fileConfigs map[string]ThresholdConfig, cfg *ThresholdConfig) {
+	wanted := map[string]map[string]struct{}{} // tenant → keys with TenantSets
+	for tenantID, byKey := range verdicts {
+		for k, v := range byKey {
+			if v.TenantSets {
+				if wanted[tenantID] == nil {
+					wanted[tenantID] = map[string]struct{}{}
+				}
+				wanted[tenantID][k] = struct{}{}
+			}
+		}
+	}
+	if len(wanted) == 0 {
+		return
+	}
+	entryFiles := map[string]map[string][]string{} // tenant → key → files
+	for name, fc := range fileConfigs {
+		for tenantID, overrides := range fc.Tenants {
+			keys := wanted[tenantID]
+			if keys == nil {
+				continue
+			}
+			for k := range keys {
+				if _, ok := overrides[k]; !ok {
+					continue
+				}
+				if entryFiles[tenantID] == nil {
+					entryFiles[tenantID] = map[string][]string{}
+				}
+				entryFiles[tenantID][k] = append(entryFiles[tenantID][k], name)
+			}
+		}
+	}
+	for tenantID, keys := range wanted {
+		for k := range keys {
+			v := verdicts[tenantID][k]
+			if files := entryFiles[tenantID][k]; len(files) > 0 {
+				// The flat merge's own order (mergePartialConfigs): root
+				// platform files first, then the tenant file; a later file's
+				// value for the key overwrites an earlier one
+				// (overlayAcrossSpellings), so the LAST is the one served
+				// (#2388 A r6).
+				sortFlatMergeOrder(files)
+				v.EntryFiles = files
+			} else if name := strings.TrimSpace(cfg.Tenants[tenantID]["_profile"].Default); name != "" {
+				if _, inProfile := cfg.Profiles[name][k]; inProfile {
+					v.Profile = name
+				}
+			}
+			verdicts[tenantID][k] = v
+		}
+	}
+}
+
+// subtreeRelPath is p relative to rootDir, slash-separated; p itself when Rel
+// fails. The same rendering as subtreeReservedKeys' file list.
+func subtreeRelPath(rootDir, p string) string {
+	if r, err := filepath.Rel(rootDir, p); err == nil {
+		return filepath.ToSlash(r)
+	}
+	return p
+}
+
+// RenderYAMLFlow renders v as ONE line of YAML (a scalar as itself, a mapping
+// as `{a: 1}`), for messages that quote a config value to paste as
+// `key: <rendered>`; the paste decodes to v. v is a value decoded from YAML
+// (yaml.Node.Encode panics on Go types YAML has no form for, e.g. a chan —
+// callers pass decoded values only). ok=false when it does not fit one line
+// (or the encode reports an error) — the caller then omits the value rather
+// than quote something that would not paste back.
+//
+// ⛔ ONE LINE (#2388 A r3). yaml.v3 renders a string holding a newline as a
+// block scalar (`|` + indented lines); pasted after `key:` inside a tenant
+// entry, that made the file fail to parse and the tenant vanish from
+// served-values. A string holding a control character or leading/trailing
+// whitespace is double-quoted (escapes, one line). yaml.v3 does not wrap long
+// lines (measured with a 300-character string), so no other path is kept
+// (#2388 A r4: an unreachable `%q` fallback, which would have changed a
+// mapping's type, was removed). A `<<` key inside a mapping value would be
+// re-read as a merge key; Move only quotes threshold-shaped values.
+func RenderYAMLFlow(v any) (string, bool) {
+	var n yaml.Node
+	if err := n.Encode(v); err != nil {
+		return "", false
+	}
+	var walk func(*yaml.Node)
+	walk = func(x *yaml.Node) {
+		switch x.Kind {
+		case yaml.MappingNode, yaml.SequenceNode:
+			x.Style = yaml.FlowStyle
+		case yaml.ScalarNode:
+			if x.Tag == "!!str" && needsDoubleQuote(x.Value) {
+				x.Style = yaml.DoubleQuotedStyle
+			}
+		}
+		for _, c := range x.Content {
+			walk(c)
+		}
+	}
+	walk(&n)
+	b, err := yaml.Marshal(&n)
+	if err != nil {
+		return "", false
+	}
+	out := strings.TrimSpace(string(b))
+	if strings.Contains(out, "\n") {
+		return "", false
+	}
+	return out, true
+}
+
+// needsDoubleQuote: s cannot sit in a plain or single-quoted one-line scalar
+// unchanged — it holds a control character, or leading/trailing whitespace a
+// plain scalar would lose.
+func needsDoubleQuote(s string) bool {
+	if s != strings.TrimSpace(s) {
+		return true
+	}
+	for _, r := range s {
+		if r < 0x20 || r == 0x7f {
+			return true
+		}
+	}
+	return false
 }
 
 // levelWritesSpelling reports whether one defaults level WRITES spelling s:
@@ -470,6 +697,10 @@ func declaredAnywhere(cfg *ThresholdConfig, key string) bool {
 // Three exclusions, each taken from an existing authority rather than a
 // naming rule of its own:
 //
+// The first two exclusions are subtreeDefaultsRefusedKey, the predicate
+// #2388's subtree_default_reserved_key finding reports on — one definition,
+// so a key is never in both findings nor in neither:
+//
 //  1. IsReservedKey(k) — the reserved keys the config model recognises
 //     (`_metadata`, `_profile`, `_state_*`, `_routing*`, …). Declaring one in
 //     the root `defaults:` is not a fix: it produces a meaningless or
@@ -479,11 +710,12 @@ func declaredAnywhere(cfg *ThresholdConfig, key string) bool {
 //     subtree value still does not take effect (measured with a scheduled
 //     `_state_maintenance`). Some are even listed although a deeper level
 //     delivers the key (`_state_<f>` as a schedule at one level, a scalar
-//     below). Subtree defaults carrying reserved keys are #2388's.
+//     below). Reported by subtreeReservedKeys instead (#2388).
 //  2. baseRowsSkipKey(k) — the keys resolveBaseRows itself never turns into a
 //     row (`_silent_*`, `_state_*`, `_severity_dedup`, `_routing*`), whether
 //     declared or not: `_silent_bogus` declared at the root still serves
-//     nothing (measured), so the advice cannot help. Also #2388's.
+//     nothing (measured), so the advice cannot help. Also reported by
+//     subtreeReservedKeys (#2388).
 //  3. disabledEverywhere(v) — a key the subtree switches OFF (isDisabled, the
 //     resolver's own disable test, on the default and every window). It is
 //     undelivered, but "that alert can never fire" is what the subtree asked
@@ -504,7 +736,7 @@ func undeliverableThresholds(byTenant map[string]map[string]ScheduledValue) map[
 	var out map[string]map[string]ScheduledValue
 	for tenantID, keys := range byTenant {
 		for k, v := range keys {
-			if IsReservedKey(k) || baseRowsSkipKey(k) || disabledEverywhere(v) {
+			if subtreeDefaultsRefusedKey(k) || disabledEverywhere(v) {
 				continue
 			}
 			if out == nil {
@@ -514,6 +746,92 @@ func undeliverableThresholds(byTenant map[string]map[string]ScheduledValue) map[
 				out[tenantID] = map[string]ScheduledValue{}
 			}
 			out[tenantID][k] = v
+		}
+	}
+	return out
+}
+
+// subtreeDefaultsRefusedKey reports whether k is a key a subtree
+// `_defaults.yaml` is not meant to carry in its defaults (#2388): a reserved
+// key (IsReservedKey) or one resolveBaseRows never turns into a row
+// (baseRowsSkipKey). The one definition both reports use: #1976's
+// undeliverableThresholds leaves these keys out (declaring them at the root
+// is not a fix), and subtreeReservedKeys reports exactly them.
+func subtreeDefaultsRefusedKey(k string) bool {
+	return IsReservedKey(k) || baseRowsSkipKey(k)
+}
+
+// subtreeReservedKeys is, per tenant, the subtreeDefaultsRefusedKey keys a
+// SUBTREE level of its defaults chain writes: tenantID → key → the
+// root-relative slash paths of the subtree defaults files writing it, in
+// chain order (root-first). nil when there is none (#2388).
+//
+// Same inputs and the same "is this the root's file" test as
+// applySubtreeDefaults (the conf.d root `_defaults.yaml` is skipped by path),
+// so it reads the chain the exporter's build reads. It asks nothing of the
+// value (beyond null, below) or of the tenant's own map: a key is listed whether the overlay
+// applies it (today a `disable` or number for a declared `_state_<filter>`,
+// `_silent_mode`, `_severity_dedup`), drops it (`enable`, a severity, a
+// mapping) or yields to the tenant's own key — the key does not belong in a
+// subtree defaults file in any of these cases. The overlay's behaviour is
+// not changed here; from the next minor release it stops applying these
+// keys and da-guard's finding becomes an error.
+//
+// ⚠️ ROUTING KEYS (IsRoutingKey: `_routing`, `_routing_<…>`) ARE LEFT OUT,
+// and only here (#1976's report leaves them out through the shared
+// predicate). da-guard's routing checks already own every such key in a
+// subtree defaults file, and IsRoutingKey is their own predicate
+// (routingpolicy.UnreadRouting), so the two cannot disagree on which keys
+// that is: one inside `defaults:` is
+// routing_in_unread_location (an error), `_routing_enforced` below the root
+// is routing_enforced_below_root (an error), and a top-level
+// `_routing_defaults` in a subtree `_defaults.yaml` with no `defaults:`
+// wrapper is the route generator's documented spelling (#2326) — which
+// `parsed` holds too, because the merge then reads the whole document.
+// Listing them here would repeat an error as a warning, or report a valid
+// file. A key under the `_routing` reserved prefix that is NOT a routing
+// key (`_routingProfile`, `_routings`) is listed: no routing check names it
+// (the first version excluded the whole prefix and so reported it nowhere —
+// #2388 r2). guard.TopLevelReadElsewhere is NOT used for this: it names only
+// the top-level `_routing_defaults` / `_routing_enforced`, and would leave a
+// `_routing` inside `defaults:` reported twice (warning here, error there).
+//
+// ⚠️ A NULL VALUE IS NOT LISTED (#2388 r1b): per the #2518 ruling a null in a
+// defaults level deletes that level's value and the next level's applies, so
+// a null reserved key writes nothing — it is treated as not written. A
+// shallower level writing the same key non-null is still listed.
+//
+// ⚠️ The `_custom_alerts` (and any other guard.TopLevelReadElsewhere) key at
+// the TOP level of an unwrapped subtree file is listed here — `parsed` cannot
+// tell top level from `defaults:` — and left out by da-guard, which can
+// (checkSubtreeReservedKeys); the custom-alert compiler reads it there.
+func subtreeReservedKeys(root string, tenantDefaults map[string][]string, parsed map[string]map[string]any) map[string]map[string][]string {
+	if len(tenantDefaults) == 0 {
+		return nil
+	}
+	rootDir := AbsScanRoot(root)
+	var out map[string]map[string][]string
+	for tenantID, chain := range tenantDefaults {
+		for _, defaultsPath := range chain {
+			if filepath.Dir(filepath.Clean(defaultsPath)) == rootDir {
+				continue // the global defaults file — not a subtree level
+			}
+			rel := defaultsPath
+			if r, err := filepath.Rel(rootDir, defaultsPath); err == nil {
+				rel = filepath.ToSlash(r)
+			}
+			for key, raw := range parsed[defaultsPath] {
+				if raw == nil || !subtreeDefaultsRefusedKey(key) || IsRoutingKey(key) {
+					continue
+				}
+				if out == nil {
+					out = map[string]map[string][]string{}
+				}
+				if out[tenantID] == nil {
+					out[tenantID] = map[string][]string{}
+				}
+				out[tenantID][key] = append(out[tenantID][key], rel)
+			}
 		}
 	}
 	return out
@@ -788,6 +1106,10 @@ func thresholdScalar(value string) bool {
 	_, err := strconv.ParseFloat(strings.TrimSpace(valuePart), 64)
 	return err == nil
 }
+
+// SubtreeDefaultsRefusedKey is subtreeDefaultsRefusedKey, for da-guard's
+// defaults_toplevel_ignored fix (#2388 r4): the same predicate, not a copy.
+func SubtreeDefaultsRefusedKey(k string) bool { return subtreeDefaultsRefusedKey(k) }
 
 // Exported forms of the functions above, for package main's forwarders
 // (config_subtree_defaults.go). Behavior pin: every one is `return x(args...)`.

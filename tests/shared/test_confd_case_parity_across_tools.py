@@ -75,7 +75,6 @@ import json
 import os
 import pathlib
 import re
-import shutil
 import subprocess
 import sys
 import time
@@ -240,9 +239,22 @@ def trees(tmp_path_factory) -> dict[str, pathlib.Path]:
     return out
 
 
+# What `_tool_env` adds for every tool run, filled by `sweep_base`.
+_HARNESS_ENV: dict[str, str] = {}
+
+
 @pytest.fixture(scope="session")
-def sweep_base(tmp_path_factory) -> pathlib.Path:
-    """One sandbox root per session for `_observed`'s per-tool runs."""
+def sweep_base(tmp_path_factory, da_guard_binary) -> pathlib.Path:
+    """One sandbox root per session for `_observed`'s per-tool runs.
+
+    Every consumer of `_observed` asks for this fixture, so it is also where
+    the sweep gets its da-guard: the one conftest builds from this repo's Go
+    source, handed to the tools as `$DA_GUARD_BINARY`. Without it, a tool
+    that reads the conf.d through da-guard stops at "binary not found" on
+    all three trees — on CI as much as on a laptop, since neither has one on
+    PATH — and the sweep files it as unmeasurable or, worse, as insensitive.
+    """
+    _HARNESS_ENV["DA_GUARD_BINARY"] = da_guard_binary
     return tmp_path_factory.mktemp("confd_case_parity_sweep")
 
 
@@ -300,7 +312,8 @@ _KUBECTL_STUB = (
 
 
 def _tool_env(sandbox: pathlib.Path) -> dict[str, str]:
-    """The environment every tool run gets: host env + the kubectl stub."""
+    """The environment every tool run gets: host env + the kubectl stub +
+    whatever `sweep_base` put in `_HARNESS_ENV` (the built da-guard)."""
     stub_dir = sandbox.parent / "_harness_bin"
     stub = stub_dir / "kubectl"
     if not stub.is_file():
@@ -309,7 +322,8 @@ def _tool_env(sandbox: pathlib.Path) -> dict[str, str]:
         stub.chmod(0o755)
     path = os.environ.get("PATH", "")
     return dict(os.environ, PYTHONIOENCODING="utf-8",
-                PATH=str(stub_dir) + (os.pathsep + path if path else ""))
+                PATH=str(stub_dir) + (os.pathsep + path if path else ""),
+                **_HARNESS_ENV)
 
 
 def _run(tool: pathlib.Path, flag: str, config_dir: pathlib.Path,
@@ -374,23 +388,9 @@ def _normalise(text: str, config_dir: pathlib.Path,
 # a skip. A tool belongs here only if the quoted line is a literal in its own
 # source (or in a helper it calls).
 #
-#   blind_spot_discovery.py   `_lib_tenant_values.exit_on_served_values_error`
-#                             prints `ERROR: ` + `MISSING_BINARY_MESSAGE` (or
-#                             its `$DA_GUARD_BINARY` variant); both start
-#                             with the words below.
-_STOPPED_ON: dict[str, str] = {
-    "blind_spot_discovery.py": "ERROR: da-guard binary not found:",
-}
-
-
-def _da_guard_resolvable() -> bool:
-    """Whether a tool run by `_run` would find da-guard — the order
-    `_lib_godispatch` resolves it in: `$DA_GUARD_BINARY` if set (and then
-    only that), else PATH."""
-    override = os.environ.get("DA_GUARD_BINARY", "").strip()
-    if override:
-        return os.path.isfile(override)
-    return shutil.which("da-guard") is not None
+# Empty today. `blind_spot_discovery.py` was here for `ERROR: da-guard binary
+# not found:` until the sweep started supplying a da-guard (`sweep_base`).
+_STOPPED_ON: dict[str, str] = {}
 
 
 def _why_unmeasurable(tool_name: str, stdout: str, stderr: str) -> str | None:
@@ -655,8 +655,10 @@ KNOWN_UNMEASURABLE: dict[str, str] = {
     # keys found." with the tenant files removed. It is measured now.
     #
     # `blind_spot_discovery` warns that Prometheus is unreachable, carries on
-    # with zero targets and reads the conf.d through da-guard. What stops it
-    # is da-guard — see `UNMEASURABLE_WITHOUT_DA_GUARD` below.
+    # with zero targets and reads the conf.d through da-guard. What stopped it
+    # was the missing da-guard; the sweep supplies one now (`sweep_base`) and
+    # it is measured: rc 0, "1 DB type(s) covered" on both casings and "0 DB
+    # type(s) covered" with the tenants removed.
     #
     # Requires arguments this file deliberately does not fabricate,
     # because inventing them would exercise a different code path than
@@ -674,28 +676,6 @@ KNOWN_UNMEASURABLE: dict[str, str] = {
     # not to "measured".
     "run_chaos_soak.py": "argparse: required argument",
 }
-
-# Unmeasurable on a host where da-guard cannot be resolved, MEASURED on one
-# where it can. ⛔ A capability, not a platform: `_da_guard_resolvable()`
-# asks the same question the tool does, so the pinned set is true on both.
-#
-# `blind_spot_discovery` reads the conf.d through `da-guard served-values`.
-# This harness sets no `$DA_GUARD_BINARY`, so without one on PATH every run
-# ends `ERROR: da-guard binary not found`, rc 2, on all three trees. Measured
-# with a da-guard supplied (and still no Prometheus): rc 0, "1 DB type(s)
-# covered" on both casings and "0 DB type(s) covered" with the tenants
-# removed — it has discriminating power, and the comparison runs.
-UNMEASURABLE_WITHOUT_DA_GUARD: dict[str, str] = {
-    "blind_spot_discovery.py": "external precondition",
-}
-
-
-def _expected_unmeasurable() -> dict[str, str]:
-    expected = dict(KNOWN_UNMEASURABLE)
-    if not _da_guard_resolvable():
-        expected.update(UNMEASURABLE_WITHOUT_DA_GUARD)
-    return expected
-
 
 # Tools that RUN but whose output does not change when the tenant files
 # are removed. ⚠️ This is not a clean bill of health — it says the A/B
@@ -823,10 +803,9 @@ def test_the_unmeasurable_set_is_named(_all_outcomes) -> None:
         name for name, o in _all_outcomes.items()
         if o.skip_reason and not o.insensitive
     }
-    expected = _expected_unmeasurable()
+    expected = KNOWN_UNMEASURABLE
     assert actual == set(expected), (
-        f"the set of tools that cannot be measured changed "
-        f"(da-guard resolvable here: {_da_guard_resolvable()}).\n"
+        f"the set of tools that cannot be measured changed.\n"
         f"  newly unmeasurable: {sorted(actual - set(expected))}\n"
         f"  now measurable    : {sorted(set(expected) - actual)}\n"
         f"A tool moving INTO this set is coverage lost — fix the "

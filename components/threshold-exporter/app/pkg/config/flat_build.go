@@ -75,6 +75,13 @@ type FlatBuild struct {
 	// normalised by scheduledValueFromRaw (a YAML `1e6` is "1e+06") — not the
 	// file's text. Same tenants and keys as Unreachable.
 	UnreachableValues map[string]map[string]ScheduledValue
+	// SubtreeRefusedVerdicts is, per tenant, each key subtree defaults refuse
+	// (subtreeDefaultsRefusedKey) that a subtree level of its chain writes →
+	// the overlay's own verdict on it (applied or not, from which file, with
+	// which value; whether the tenant sets it itself). Recorded by
+	// applySubtreeDefaults on its own branches; nil when no such key is
+	// written (#2388 A).
+	SubtreeRefusedVerdicts map[string]map[string]SubtreeRefusedVerdict
 	// ParseFailed is the scan keys (root-relative slash paths, in scan.Keys
 	// order, which is sorted) of the files that contribute nothing to Config
 	// because they failed to parse: a tenant file the walker rejected
@@ -229,12 +236,13 @@ func BuildFlatConfig(scan *TreeScan, in FlatBuildInput) (FlatBuild, error) {
 	}
 	merged.applyProfiles(profileLogf)
 
-	n, unreachable := applySubtreeDefaults(&merged, in.Root, in.TenantDefaults, in.ParsedDefaults)
+	n, unreachable, applied := applySubtreeDefaults(&merged, in.Root, in.TenantDefaults, in.ParsedDefaults)
 	return FlatBuild{
 		Config: merged, FileConfigs: fileConfigs, SubtreeFilled: n,
 		Unreachable: unreachableKeys(unreachable), UnreachableValues: unreachable,
-		ParseFailed:        parseFailed,
-		RootNullUndeclared: rootNullUndeclared(&merged, rootNull),
+		SubtreeRefusedVerdicts: applied,
+		ParseFailed:            parseFailed,
+		RootNullUndeclared:     rootNullUndeclared(&merged, rootNull),
 	}, nil
 }
 

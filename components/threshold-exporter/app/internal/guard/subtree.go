@@ -10,7 +10,8 @@ package guard
 // tenant on da_config_subtree_undeliverable_tenants. This check reports, before
 // the change merges, the keys of that set for which "declare it at the root"
 // is the fix: not the reserved keys, not the keys the exporter never serves
-// as a threshold row (`_silent_*`, `_state_*`, …; both #2388's), and not keys
+// as a threshold row (`_silent_*`, `_state_*`, …; both reported by
+// checkSubtreeReservedKeys, #2388), and not keys
 // the subtree switches off (pkg/config undeliverableThresholds).
 //
 // ⛔ NO VERDICT OF ITS OWN. Which keys are undeliverable is the exporter's
@@ -63,7 +64,8 @@ func checkSubtreeUndeliverable(input CheckInput) []Finding {
 					"exporter logs an ERROR and counts the tenant on da_config_subtree_undeliverable_tenants). %s "+
 					"This warning becomes an "+
 					"error in the next minor release (#1976). Not reported here: reserved keys and keys the exporter "+
-					"never serves as a threshold row (`_silent_*`, `_state_*`, …; see #2388), and keys the subtree "+
+					"never serves as a threshold row (`_silent_*`, `_state_*`, …; reported as subtree_default_reserved_key, #2388), "+
+					"and keys the subtree "+
 					"switches off.", k, undeliverableFix(k)),
 			})
 		}

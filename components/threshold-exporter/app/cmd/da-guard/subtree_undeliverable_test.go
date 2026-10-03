@@ -141,9 +141,11 @@ func TestServedValues_UndeliverableKeyIsUnserved(t *testing.T) {
 }
 
 // #1976 r2/r3: which refused keys the finding and `unserved` report. Reserved
-// keys and keys the exporter never serves as a row (#2388's) and keys the
-// subtree switches off are not reported — the exporter's build still refuses
-// them (its ERROR and gauge are unchanged). An unrecognised `_` key is a
+// keys and keys the exporter never serves as a row and keys the subtree
+// switches off are not reported — the exporter's build still refuses them
+// (its ERROR and gauge are unchanged). The first two kinds are reported as
+// subtree_default_reserved_key instead (#2388, wantReserved): one predicate
+// splits the two findings, so no key is in both. An unrecognised `_` key is a
 // threshold to the exporter and is reported; declared at the root (the
 // finding's fix), the tenant serves the subtree's value.
 func TestUndeliverable_SubtreeKeysReportedOrNot(t *testing.T) {
@@ -163,12 +165,14 @@ func TestUndeliverable_SubtreeKeysReportedOrNot(t *testing.T) {
 		name         string
 		files        map[string]string
 		wantFindings []string           // Fields of tenant-a's findings
+		wantReserved []string           // Fields of tenant-a's subtree_default_reserved_key findings
 		wantUnserved map[string]any     // tenant-a's unserved; nil = none
 		wantValues   map[string]float64 // tenant-a values that must be served
 	}{
 		{
-			name:  "silent-bogus",
-			files: subtree(root, "defaults:\n  _silent_bogus: 5\n"),
+			name:         "silent-bogus",
+			files:        subtree(root, "defaults:\n  _silent_bogus: 5\n"),
+			wantReserved: []string{"_silent_bogus"},
 		},
 		{
 			// The review's t3: a subtree switching a key off.
@@ -195,6 +199,7 @@ func TestUndeliverable_SubtreeKeysReportedOrNot(t *testing.T) {
 			files:        subtree(root+"  _myth2: 1\n  _silent_bogus: 1\n", "defaults:\n  _myth2: 7\n  _silent_bogus: 7\n"),
 			wantUnserved: map[string]any{"_silent_bogus": "7"},
 			wantValues:   map[string]float64{"_myth2": 7},
+			wantReserved: []string{"_silent_bogus"},
 		},
 		{
 			// ⚠️ KNOWN LIMITATION, pinned as it is (#1976 r4): a `_` key listed
@@ -218,6 +223,7 @@ func TestUndeliverable_SubtreeKeysReportedOrNot(t *testing.T) {
 				"finance/_defaults.yaml": "defaults:\n  _metadata: 5\n" + scheduled + "  _profile: disable\n",
 				"finance/tenant-a.yaml":  "tenants:\n  tenant-a: {}\n",
 			},
+			wantReserved: []string{"_metadata", "_profile", "_state_maintenance"},
 		},
 		{
 			// The same keys with `_state_maintenance` and `_metadata` in
@@ -229,6 +235,7 @@ func TestUndeliverable_SubtreeKeysReportedOrNot(t *testing.T) {
 				"finance/_defaults.yaml": "defaults:\n  _metadata: 5\n" + scheduled + "  _profile: disable\n",
 				"finance/tenant-a.yaml":  "tenants:\n  tenant-a: {}\n",
 			},
+			wantReserved: []string{"_metadata", "_profile", "_state_maintenance"},
 		},
 		{
 			// A schedule at finance/ (refused), a scalar below (delivered):
@@ -241,6 +248,7 @@ func TestUndeliverable_SubtreeKeysReportedOrNot(t *testing.T) {
 				"finance/us/_defaults.yaml": "defaults:\n  _state_maintenance: disable\n",
 				"finance/us/tenant-a.yaml":  "tenants:\n  tenant-a: {}\n",
 			},
+			wantReserved: []string{"_state_maintenance"},
 		},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
@@ -254,6 +262,14 @@ func TestUndeliverable_SubtreeKeysReportedOrNot(t *testing.T) {
 			dir := filepath.Join(tmp, "conf.d")
 
 			code, got := undeliverableFindings(t, "--config-dir", dir, "--warn-as-error")
+			_, reserved := reservedFindings(t, "--config-dir", dir)
+			var reservedFields []string
+			for _, f := range reserved {
+				reservedFields = append(reservedFields, f.Field)
+			}
+			if !reflect.DeepEqual(reservedFields, tc.wantReserved) {
+				t.Errorf("subtree_default_reserved_key fields = %v, want %v", reservedFields, tc.wantReserved)
+			}
 			var fields []string
 			for _, f := range got {
 				if f.TenantID != "tenant-a" {
@@ -265,7 +281,7 @@ func TestUndeliverable_SubtreeKeysReportedOrNot(t *testing.T) {
 				t.Errorf("finding fields = %v, want %v", fields, tc.wantFindings)
 			}
 			wantCode := exitOK
-			if len(tc.wantFindings) > 0 {
+			if len(tc.wantFindings)+len(tc.wantReserved) > 0 {
 				wantCode = exitFindings
 			}
 			if code != wantCode {
