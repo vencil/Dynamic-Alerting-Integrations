@@ -61,6 +61,11 @@ than as a default-fatal rule. The split:
   in a follow-up issue, like PR #162 did with --strict-static for
   static-pattern violations).
 
+The matrix above is about violations only. A scan path that does not
+exist (#2640) or a file that cannot be read or parsed (#2601) exits 2
+in every mode, before it is consulted: the run cannot vouch for what
+it never scanned.
+
 Usage
 -----
 ::
