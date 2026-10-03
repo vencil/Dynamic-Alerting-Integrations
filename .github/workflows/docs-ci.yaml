@@ -137,8 +137,7 @@ jobs:
               # read it?" review ever caught it. `mkdocs-build` installs the
               # pinned mkdocs-material / static-i18n / pymdown set from it and
               # is the ONLY pre-merge verification that the docs still build
-              # (the pre-push strict hook is scoped to docs/mkdocs paths, so a
-              # requirements-only push does not trigger it either). Without
+              # (the pre-push strict hook is local and optional). Without
               # this entry a bump of those pins touches no `docs` path, every
               # gated leg reports `skipped`, and the `*-gate` jobs accept a
               # skip whenever `docs_changed` is not 'true' — correctly, since
