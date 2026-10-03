@@ -2429,23 +2429,24 @@ class TestRootDefaultsRouting:
         r = vc.check_root_defaults(str(d))
         assert r["status"] == vc.FAIL, r
         detail = " ".join(r["details"])
-        assert "sets no platform default and declares nothing" in detail, detail
+        assert "sets no platform default for it and does not declare it" in detail, detail
         assert "no tenant gets" not in detail, detail
-        # da-guard comes BEFORE the removal advice: removing the null first
-        # silences both gates (measured) while the tenant stays unserved.
-        assert detail.index("root_default_null_undeclared") < detail.index("Then remove"), detail
+        assert "root_default_null_undeclared" in detail, detail
+        # #2518 r6: no removal procedure — each one was wrong for some shape.
+        for advice in ("Delete it", "remove the null", "instead", "<<:"):
+            assert advice not in detail, (advice, detail)
 
     def test_a_null_over_a_merged_value_is_not_called_harmless(self, tmp_path):
         """A null that overrides a `<<:`-merged value cancels it (measured:
         deleting the line made every tenant get the merged 5), so the row
-        must not just say "delete it"."""
+        must not tell anyone to delete it — it gives no removal advice."""
         d = self._tree(tmp_path, "tenants:\n  tx: &b\n    mysql_connections: 5\n"
                        "defaults:\n  <<: *b\n  container_cpu: 80\n"
                        "  mysql_connections: null\n")
         r = vc.check_root_defaults(str(d))
         assert r["status"] == vc.FAIL, r
         detail = " ".join(r["details"])
-        assert "if it overrides a value merged in with `<<:`, it cancels that value" in detail, detail
+        assert "Delete it" not in detail and "remove" not in detail, detail
 
     def test_end_to_end_exits_1_and_names_the_fix(self, tmp_path, capsys,
                                                   cli_argv):
@@ -2535,7 +2536,7 @@ class TestRootDefaultsValues:
         assert r["status"] == vc.FAIL, r
         detail = " ".join(r["details"])
         assert "`defaults.mysql_connections` has no value" in detail, detail
-        assert "sets no platform default and declares nothing" in detail, detail
+        assert "does not declare it" in detail, detail
         assert "0 threshold" not in detail, detail
         # Not the whole block: the exporter keeps the other thresholds.
         assert "drops ALL of it" not in detail, detail

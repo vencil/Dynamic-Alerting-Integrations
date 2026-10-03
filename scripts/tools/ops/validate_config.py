@@ -1384,22 +1384,18 @@ def _root_defaults_value_detail(rel: str, key: str | None, raw: str,
     ``NULL_NOT_DECLARED`` rather than a blocking one.
     """
     if null:
-        # #2518: say only what holds for every shape — null is "not
-        # written": no platform default, no declaration — and not whether the
-        # key ends up declared or served, which depends on
-        # `optional_overrides:`, the `_critical` base and dimensional rules
-        # this mirror does not model (two predicates for it died in review).
-        # A null that overrides a value merged in with `<<:` cancels that
-        # value, so "delete it" is not offered unconditionally.
-        return (f"{rel}: `defaults.{key}` has no value (null) — it sets "
-                f"no platform default and declares nothing; if it overrides a value "
-                f"merged in with `<<:`, it cancels that value. Before removing "
-                f"it, run da-guard: tenants it names as "
-                f"`root_default_null_undeclared` set their own value for this "
-                f"key and are not served — follow that finding's fix first "
-                f"(once the null is gone, nothing names them). Then remove "
-                f"the null — or, if it is there to cancel a merged value, "
-                f"remove that value from every `<<:` source instead.")
+        # #2518: two facts and a pointer, nothing more. Every removal
+        # procedure this message carried was measured wrong for some shape
+        # (`<<:` merges, `_critical` rows, the other spelling, a null that
+        # lives in a merge source), so the fix is left to da-guard's
+        # `root_default_null_undeclared`, whose own fix sentences are
+        # measured against what the exporter serves.
+        return (f"{rel}: `defaults.{key}` has no value (null): "
+                f"threshold-exporter sets no platform default for it and "
+                f"does not declare it. Before changing this line, run "
+                f"da-guard — tenants it names as "
+                f"`root_default_null_undeclared` are not served a value they "
+                f"set; that finding says how to fix it.")
     if key is None:
         # ⚠️ *raw* (the mirror's reason) is not printed: `deprecate_rule`
         # words it in Chinese, this tool's operator strings are English, and
@@ -1601,10 +1597,10 @@ def check_root_defaults(config_dir: str) -> dict[str, object]:
       cannot decode (``"70"``, ``disable``, a mapping …) fails the decode and
       the exporter drops the root file's whole ``defaults:`` — every platform
       threshold, while the load is reported as successful; a null / empty
-      value is no write (#2518; before it, a 0 threshold): it sets no
-      platform default and declares nothing — whether the key is still
-      declared is not judged here (da-guard ``root_default_null_undeclared``
-      names tenants it leaves unserved). Both FAIL. The verdict is
+      value is no write (#2518; before it, a 0 threshold): no platform
+      default, no declaration — whether the key is still declared, and how
+      to fix a tenant it leaves unserved, is da-guard's
+      ``root_default_null_undeclared``, not this row. Both FAIL. The verdict is
       ``deprecate_rule.exporter_verdicts`` — the yaml.v3 mirror whose truth
       table ``tests/golden/fixtures/defaults-carrier-oracle.json`` is judged
       by the Go test ``TestDefaultsCarrierOracle`` — called, not re-spelled.
