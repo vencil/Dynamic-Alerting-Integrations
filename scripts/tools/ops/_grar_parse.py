@@ -54,6 +54,7 @@ from _grar_merge import (  # noqa: E402
     merge_routing_with_defaults,
     policy_reaches,
     resolve_routing_defaults,
+    skipped_entry_warning,
     visible_routing_profiles,
 )
 from _grar_validate import (  # noqa: E402
@@ -293,9 +294,9 @@ def _parse_platform_config(data: dict, fname: str, result: dict) -> None:
             if isinstance(rd, dict) and "routes" in rd:
                 rd = {k: v for k, v in rd.items() if k != "routes"}
                 result.setdefault("routing_defaults_errors", []).append(
-                    f"  WARN: _routing_defaults in {fname}: 'routes' is not "
-                    "supported here (define it in a routing profile or the "
-                    "tenant's _routing), skipping")
+                    skipped_entry_warning(f"  WARN: _routing_defaults in {fname}: 'routes' is not "
+                                          "supported here (define it in a routing profile or the "
+                                          "tenant's _routing), skipping"))
             result["routing_defaults"] = rd
         else:
             print(f"  WARN: _routing_defaults in {_f} ignored "
@@ -318,10 +319,10 @@ def _parse_platform_config(data: dict, fname: str, result: dict) -> None:
                 pass  # explicitly disabled → None
             elif isinstance(raw, dict):
                 result.setdefault("enforced_errors", []).append(
-                    f"  WARN: _routing_enforced in {fname}: 'enabled' must be "
-                    f"a YAML boolean (true / false), got "
-                    f"{type(enabled).__name__} {enabled!r} — platform-enforced "
-                    f"(NOC) routing is NOT enabled, skipping")
+                    skipped_entry_warning(f"  WARN: _routing_enforced in {fname}: 'enabled' must be "
+                                          f"a YAML boolean (true / false), got "
+                                          f"{type(enabled).__name__} {enabled!r} — platform-enforced "
+                                          f"(NOC) routing is NOT enabled, skipping"))
             else:
                 print(f"  WARN: _routing_enforced in {_f} must be a dict "
                       "with 'enabled: true', ignoring", file=sys.stderr)
@@ -339,7 +340,7 @@ def _routing_defaults_not_mapping(fname: str, value: object,
     since #2412) and the finding is blocking: a ``WARN … skipping`` line in
     every mode, an ERROR under ``--strict`` (``load_tenant_tree``)."""
     result.setdefault("routing_defaults_errors", []).append(
-        f"  WARN: {routing_defaults_not_mapping_text(fname, value)}, skipping")
+        skipped_entry_warning(f"  WARN: {routing_defaults_not_mapping_text(fname, value)}, skipping"))
     result.setdefault("routing_defaults_not_mapping", []).append(
         (fname, value))
 
@@ -454,10 +455,10 @@ def _parse_nested_config(data: dict, fname: str, level: str,
             # `routing_in_unread_location` (error there): a `WARN … skipping`
             # line, blocking under `--validate` like `_routing_defaults.routes`.
             result.setdefault("routing_defaults_errors", []).append(
-                f"  WARN: _routing_defaults in {fname} is not read: below the "
-                f"conf.d root only the directory's defaults carrier "
-                f"(_defaults.yaml / _defaults.yml) carries it — move it there, "
-                f"skipping")
+                skipped_entry_warning(f"  WARN: _routing_defaults in {fname} is not read: below the "
+                                      f"conf.d root only the directory's defaults carrier "
+                                      f"(_defaults.yaml / _defaults.yml) carries it — move it there, "
+                                      f"skipping"))
             _tree_problem(
                 result, "routing_in_unread_location", fname,
                 "_routing_defaults",
@@ -476,9 +477,9 @@ def _parse_nested_config(data: dict, fname: str, level: str,
             if "routes" in rd:
                 rd = {k: v for k, v in rd.items() if k != "routes"}
                 result.setdefault("routing_defaults_errors", []).append(
-                    f"  WARN: _routing_defaults in {fname}: 'routes' is not "
-                    "supported here (define it in a routing profile or the "
-                    "tenant's _routing), skipping")
+                    skipped_entry_warning(f"  WARN: _routing_defaults in {fname}: 'routes' is not "
+                                          "supported here (define it in a routing profile or the "
+                                          "tenant's _routing), skipping"))
             for key in ("receiver", "overrides"):
                 if key in rd and rd[key] is None:
                     _tree_problem(
@@ -1444,7 +1445,7 @@ def load_tenant_tree(
     # #2341 R8: a tenant id the routing plane refuses — nothing rendered.
     invalid_ids = sorted(set(parsed.get("invalid_tenant_ids", [])), key=str)
     for tenant in invalid_ids:
-        schema_warnings.append(f"  WARN: {invalid_tenant_id_text(tenant)}, skipping")
+        schema_warnings.append(skipped_entry_warning(f"  WARN: {invalid_tenant_id_text(tenant)}, skipping"))
 
     # v2.1.0 ADR-007: Validate domain policies against resolved routing.
     # #2326 (d): a policy file below the root applies to the tenants of its

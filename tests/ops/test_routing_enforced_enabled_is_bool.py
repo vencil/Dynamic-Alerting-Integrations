@@ -6,7 +6,7 @@ platform-enforced (NOC) route ON — `generate-routes --validate` rc 0,
 `validate-config` rc 0. Same for a quoted `'yes'` / `'no'`.
 
 After: a non-boolean `enabled` is a configuration error. It is NOT enabled,
-`--validate` fails on it (the existing "WARN … skipping" predicate), render
+`--validate` fails on it, render
 mode prints the WARN and renders without the NOC route (the existing
 treatment of an entry dropped as unusable), and validate-config's schema row
 is FAIL. `true` / `false` (and YAML 1.1's `yes` / `no`, which PyYAML reads

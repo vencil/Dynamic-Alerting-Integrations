@@ -65,6 +65,7 @@ from _grar_parse import BLOCKING_TREE_KINDS, policy_level_source  # noqa: E402
 # #2326: the layer chain across conf.d directory levels — the generator's own.
 from _grar_merge import (  # noqa: E402
     ROOT_LEVEL,
+    SkippedEntryWarning,
     domain_policy_levels,
     policy_reaches,
     resolve_routing_defaults,
@@ -94,8 +95,8 @@ def effective_sub_routes(tenant: str, merged: dict) -> tuple[list[dict], list[st
     overrides first, then the ADR-007 label-match ``routes`` (#2245). Each
     entry is the rendered child route plus ``source`` (``overrides[i]`` /
     ``routes[i]``) and ``receiver_type``. Returns (sub_routes, skipped) —
-    ``skipped`` is every ``… skipping`` line the generator emitted for an
-    override / ``routes`` entry. No domain allowlist is applied here
+    ``skipped`` is every dropped-entry line (``SkippedEntryWarning``, #2489)
+    the generator emitted for an override / ``routes`` entry. No domain allowlist is applied here
     (explain has no ``--policy``).
     """
     if not isinstance(merged, dict) or not merged.get("receiver"):
@@ -118,11 +119,15 @@ def effective_sub_routes(tenant: str, merged: dict) -> tuple[list[dict], list[st
             entry["receiver_type"] = types.get(name, "")
             out.append(entry)
     # Skipped sub-route entries only: the main receiver's own problems are
-    # the tenant route's, and a timing clamp is not a skip.
+    # the tenant route's, and a timing clamp is not a skip. #2489: "skipped"
+    # is the line's TYPE, not the word — a clamp WARN whose value is
+    # `skipping` used to be listed here. `warnings` is the generator's own
+    # list, unreformatted, so the mark is intact.
     markers = ("override[", "routes[", "'overrides'", "'routes'",
                f"{tenant}-override-", f"{tenant}-route-")
     skipped = [w for w in warnings
-               if "skipping" in w and any(m in w for m in markers)]
+               if isinstance(w, SkippedEntryWarning)
+               and any(m in w for m in markers)]
     return out, skipped
 
 def explain_tenant_routing(

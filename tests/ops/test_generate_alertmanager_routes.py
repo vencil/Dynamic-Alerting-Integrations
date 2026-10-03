@@ -1047,10 +1047,9 @@ class TestDeprecatedKeyAliases:
 
 
 class TestDeprecationNoticePin:
-    """措辭 pin（仿 TestPolicyErrorPrefixPin 的鎖法）：NOTICE 行不得踩到
-    兩份 fatal 判定——generate_alertmanager_routes._validate_mode:136 的
-    `"WARN" in w and "skipping" in w` 與 validate_config.py:220 的手抄副本，
-    以及 _policy_errors 的 `ERROR:` 前綴。兩份判定都在此直接執行驗證。"""
+    """措辭 pin（仿 TestPolicyErrorPrefixPin 的鎖法）：NOTICE 行不得含
+    `WARN`／`skipping`（丟棄設定項的措辭；阻擋判定自 #2489 起依型別
+    `SkippedEntryWarning`），也不得以 _policy_errors 的 `ERROR:` 前綴開頭。"""
 
     def _all_notices(self):
         out = []
@@ -1065,7 +1064,7 @@ class TestDeprecationNoticePin:
         return out
 
     def test_notice_never_matches_legacy_fatal_predicate(self):
-        """直接執行 --validate 的 legacy fatal 述詞：必須全空。"""
+        """#2489 以前的文字述詞：必須全空。"""
         notices = self._all_notices()
         fatal = [w for w in notices if "WARN" in w and "skipping" in w]
         assert fatal == []

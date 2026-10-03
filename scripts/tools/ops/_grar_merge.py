@@ -10,6 +10,7 @@ Functions:
   _contains_tenant_placeholder(obj) → True if any string contains {{tenant}}
   merge_routing_with_defaults(...)  → shallow merge of defaults + tenant routing
   build_receiver_config(...)        → structured receiver dict → AM config dict
+  skipped_entry_warning(line)       → mark a dropped-entry WARN line (#2489)
 """
 from __future__ import annotations
 
@@ -28,6 +29,33 @@ from _lib_python import (  # noqa: E402
     receiver_required_problem,
     RECEIVER_TYPES,
 )
+
+
+# ── #2489: "a config entry was dropped as unusable" is a TYPE, not a word ──
+# The generation warning stream stays ``list[str]`` and every line reads
+# exactly as before; what marks a line blocking under ``--validate`` is that
+# it was built by ``skipped_entry_warning``. ``blocking_generation_errors``
+# (``_grar_validate``) tests ``isinstance``, never the text: the text carries
+# the operator's values, and the substring test it replaces blocked a plain
+# clamp WARN whose value happened to be ``skipping``.
+# Defined here, not in ``_grar_validate``, because this module is the leaf
+# every producer can import (``_grar_validate`` imports this one).
+# ⛔ The mark lives on the str OBJECT: any re-formatting between the producer
+# and the predicate (an f-string, ``"  " + w``, ``.strip()``, a join, a
+# round-trip through text) returns a plain ``str`` and the line silently
+# stops blocking. Append / extend / list concatenation keep it.
+# ``tests/ops/test_grar_skipped_entry_warning.py`` refuses a ``WARN …,
+# skipping`` literal under scripts/tools/ops/ that is not built here.
+class SkippedEntryWarning(str):
+    """A warning-stream line saying a config entry was dropped as unusable."""
+
+    __slots__ = ()
+
+
+def skipped_entry_warning(line: str) -> SkippedEntryWarning:
+    """Mark *line* (text unchanged) as a dropped-entry line — blocking under
+    ``--validate`` and validate-config's ``schema`` / ``routes`` rows."""
+    return SkippedEntryWarning(line)
 
 
 def _apply_timing_params(source_dict: dict, context_name: str) -> tuple[dict, list[str]]:
@@ -188,12 +216,12 @@ def build_receiver_config(receiver_obj: dict, tenant: str) -> tuple[dict | None,
     warnings = []
 
     if not isinstance(receiver_obj, dict):
-        warnings.append(f"  WARN: {tenant}: 'receiver' must be an object with 'type', skipping")
+        warnings.append(skipped_entry_warning(f"  WARN: {tenant}: 'receiver' must be an object with 'type', skipping"))
         return None, warnings
 
     rtype = receiver_obj.get("type")
     if not rtype or not isinstance(rtype, str):
-        warnings.append(f"  WARN: {tenant}: missing required 'receiver.type', skipping")
+        warnings.append(skipped_entry_warning(f"  WARN: {tenant}: missing required 'receiver.type', skipping"))
         return None, warnings
 
     # Exact match, no case folding or trimming (#2180): the schema (`const`)
@@ -201,8 +229,8 @@ def build_receiver_config(receiver_obj: dict, tenant: str) -> tuple[dict | None,
     # made the generator the only one of the three to accept them.
     if rtype not in RECEIVER_TYPES:
         supported = ", ".join(sorted(RECEIVER_TYPES.keys()))
-        warnings.append(f"  WARN: {tenant}: unknown receiver type '{rtype}' "
-                        f"(supported: {supported}), skipping")
+        warnings.append(skipped_entry_warning(f"  WARN: {tenant}: unknown receiver type '{rtype}' "
+                                              f"(supported: {supported}), skipping"))
         return None, warnings
 
     spec = RECEIVER_TYPES[rtype]
@@ -211,18 +239,18 @@ def build_receiver_config(receiver_obj: dict, tenant: str) -> tuple[dict | None,
     for field in spec["required"]:
         problem = receiver_required_problem(rtype, receiver_obj, field)
         if problem:
-            warnings.append(f"  WARN: {tenant}: receiver type '{rtype}' {problem}, skipping")
+            warnings.append(skipped_entry_warning(f"  WARN: {tenant}: receiver type '{rtype}' {problem}, skipping"))
             return None, warnings
     problem = receiver_exactly_one_problem(rtype, receiver_obj)
     if problem:
-        warnings.append(f"  WARN: {tenant}: receiver type '{rtype}' {problem}, skipping")
+        warnings.append(skipped_entry_warning(f"  WARN: {tenant}: receiver type '{rtype}' {problem}, skipping"))
         return None, warnings
     # #2295: optional values Alertmanager cannot load (non-boolean
     # send_resolved / require_tls, a malformed http_config) — without this the
     # receiver is written out and only amtool, when it is on PATH, stops it.
     problem = receiver_optional_problem(rtype, receiver_obj)
     if problem:
-        warnings.append(f"  WARN: {tenant}: receiver type '{rtype}' {problem}, skipping")
+        warnings.append(skipped_entry_warning(f"  WARN: {tenant}: receiver type '{rtype}' {problem}, skipping"))
         return None, warnings
 
     # Build AM config — include required + present optional fields
