@@ -29,10 +29,13 @@ package handler
 
 import (
 	"errors"
+	"log/slog"
 	"net/http"
 
 	"github.com/go-chi/chi/v5"
 	cfg "github.com/vencil/threshold-exporter/pkg/config"
+
+	"github.com/vencil/tenant-api/internal/confd"
 )
 
 // GetTenantEffective handles GET /api/v1/tenants/{id}/effective.
@@ -59,6 +62,7 @@ import (
 // @Success     200  {object} cfg.EffectiveConfig
 // @Failure     400  {object} ErrorResponse
 // @Failure     404  {object} ErrorResponse
+// @Failure     409  {object} ErrorResponse "Conflict: ambiguous tenant file, or the tenant is declared by more than one conf.d file"
 // @Failure     500  {object} ErrorResponse
 // @Router      /api/v1/tenants/{id}/effective [get]
 func GetTenantEffective(d *Deps) http.HandlerFunc {
@@ -69,13 +73,42 @@ func GetTenantEffective(d *Deps) http.HandlerFunc {
 			return
 		}
 
+		// #2511: `<id>.yaml` beside `<id>.yml` is answered exactly as
+		// GET /tenants/{id} answers it — the same resolver, the same sentinel,
+		// so 409 CONFLICT naming only the two base names. Before this, the
+		// shape reached ResolveEffective's walker, whose *DuplicateTenantError
+		// fell through to 500 with both ABSOLUTE paths in the body.
+		//
+		// Only the ambiguity verdict is taken from the resolver. Its other
+		// answers are not this endpoint's: a tenant declared only in a
+		// subdirectory or by a shared file's `tenants:` block has no top-level
+		// `<id>.yaml`, yet /effective resolves it — ResolveEffective below
+		// stays the authority for not-found and for every I/O failure.
+		if _, rerr := confd.ResolveTenantFile(d.ConfigDir, tenantID); errors.Is(rerr, confd.ErrAmbiguousTenantFile) {
+			WriteJSONError(w, r, http.StatusConflict, rerr.Error())
+			return
+		}
+
 		ec, err := cfg.ResolveEffective(d.ConfigDir, tenantID)
 		if err != nil {
-			if errors.Is(err, cfg.ErrTenantNotFound) {
+			var dup *cfg.DuplicateTenantError
+			switch {
+			case errors.Is(err, cfg.ErrTenantNotFound):
 				WriteJSONError(w, r, http.StatusNotFound, "tenant not found: "+tenantID)
-				return
+			case errors.As(err, &dup):
+				// #2511: the duplicates the top-level resolver cannot see (a
+				// subdirectory copy, another file's `tenants:` entry). The
+				// typed error carries both files' absolute paths, so it goes
+				// to the log only; the body is the fixed text the write plane
+				// already uses for this shape, which names no file — the
+				// other declaring file may sit under a path this caller has
+				// no business learning.
+				slog.Warn("tenant effective: tenant declared by more than one conf.d file",
+					"tenant", tenantID, "error", err)
+				WriteJSONError(w, r, http.StatusConflict, msgTenantDeclaredElsewhere)
+			default:
+				WriteJSONError(w, r, http.StatusInternalServerError, err.Error())
 			}
-			WriteJSONError(w, r, http.StatusInternalServerError, err.Error())
 			return
 		}
 

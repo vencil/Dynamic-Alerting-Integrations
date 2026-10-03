@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"path/filepath"
 	"strings"
 	"testing"
 )
@@ -160,4 +161,85 @@ func TestTenantFileSpelling_BrokenSiblingStillClaimsTheID(t *testing.T) {
 			t.Fatalf("GetTenant status = %d, want 409; body=%s", w.Code, w.Body.String())
 		}
 	})
+}
+
+// assertConflictWithoutDir requires a 409 CONFLICT envelope whose body does not
+// carry dir (the conf.d root as the server sees it).
+func assertConflictWithoutDir(t *testing.T, w *httptest.ResponseRecorder, dir string) map[string]any {
+	t.Helper()
+	if w.Code != http.StatusConflict {
+		t.Fatalf("status = %d, want 409; body=%s", w.Code, w.Body.String())
+	}
+	var env map[string]any
+	if err := json.Unmarshal(w.Body.Bytes(), &env); err != nil {
+		t.Fatalf("response is not JSON: %v (%s)", err, w.Body.String())
+	}
+	if env["code"] != CodeConflict {
+		t.Errorf("code = %v, want %s; body=%s", env["code"], CodeConflict, w.Body.String())
+	}
+	if strings.Contains(w.Body.String(), dir) {
+		t.Errorf("body leaks the conf.d absolute path %q: %s", dir, w.Body.String())
+	}
+	return env
+}
+
+// #2511: /effective answers the two-spellings shape as GET /tenants/{id} does —
+// 409 with the CONFLICT code — instead of a 500 whose body carried both files'
+// absolute server paths. The body may name the files only relative to conf.d.
+// PUT rides along: it maps the same sentinel and must not leak the path either.
+func TestTenantFileSpelling_AmbiguousConflictNamesNoServerPath(t *testing.T) {
+	t.Parallel()
+	dir := setupConfigDir(t, map[string]string{
+		spellingTenant + ".yaml": spellingBody("FROM-YAML"),
+		spellingTenant + ".yml":  spellingBody("FROM-YML"),
+	})
+	d := &Deps{ConfigDir: dir, Writer: newTestWriter(dir)}
+	base := "/api/v1/tenants/" + spellingTenant
+
+	cases := []struct {
+		name string
+		h    http.HandlerFunc
+		req  *http.Request
+	}{
+		{"effective", GetTenantEffective(d),
+			newRequestWithChiParam("GET", base+"/effective", "id", spellingTenant, nil)},
+		{"get", GetTenant(d),
+			newRequestWithChiParam("GET", base, "id", spellingTenant, nil)},
+		{"put", PutTenant(d),
+			newRequestWithChiParam("PUT", base, "id", spellingTenant, bytes.NewBufferString(spellingBody("NEW")))},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			w := httptest.NewRecorder()
+			tc.h(w, tc.req)
+			env := assertConflictWithoutDir(t, w, dir)
+			msg, _ := env["error"].(string)
+			for _, name := range []string{spellingTenant + ".yaml", spellingTenant + ".yml"} {
+				if !strings.Contains(msg, name) {
+					t.Errorf("error %q does not name %q", msg, name)
+				}
+			}
+		})
+	}
+}
+
+// #2511: a duplicate the top-level resolver cannot see — the same id declared
+// again in a subdirectory — reaches ResolveEffective's walker as a typed
+// *DuplicateTenantError. It is a 409 too, and its body names no file at all:
+// the error's text carries both absolute paths, which only the log may see.
+func TestGetTenantEffective_NestedDuplicateIsConflictWithoutPaths(t *testing.T) {
+	t.Parallel()
+	dir := setupConfigDir(t, map[string]string{
+		spellingTenant + ".yaml": spellingBody("FROM-ROOT"),
+	})
+	writeFile(t, filepath.Join(dir, "team", spellingTenant+".yaml"), spellingBody("FROM-TEAM"))
+
+	w := httptest.NewRecorder()
+	GetTenantEffective(&Deps{ConfigDir: dir})(w, newRequestWithChiParam("GET",
+		"/api/v1/tenants/"+spellingTenant+"/effective", "id", spellingTenant, nil))
+
+	env := assertConflictWithoutDir(t, w, dir)
+	if msg, _ := env["error"].(string); msg != msgTenantDeclaredElsewhere {
+		t.Errorf("error = %q, want the fixed text %q", msg, msgTenantDeclaredElsewhere)
+	}
 }
