@@ -1,0 +1,318 @@
+# Where CI runs each auto-stage pre-commit hook that no workflow names (#2694).
+#
+# The rule this ledger closes: every auto-stage hook in .pre-commit-config.yaml
+# must EITHER be called by id (`pre-commit run <id> ...`) in a `run:` script
+# under .github/workflows/, OR have an entry here saying where else CI enforces
+# it. Pinned by tests/lint/test_precommit_ci_ledger.py, which reds on a hook in
+# neither place, on an entry for a hook that is gone / not auto-stage / already
+# called by id, and on evidence that does not resolve.
+#
+# Categories (the #2644 inventory, plus tenant-id-json-check):
+#   a       another CI job runs the same check. evidence: workflow (repo path)
+#           + job (a key of that workflow's `jobs:`) + note.
+#   b       a pytest reds when a violation the hook rejects is planted in the
+#           tree. evidence: pytest (node ids: a file, or file::Name[::name]).
+#   exempt  the hook cannot mean anything in CI. evidence: reason.
+#
+# ⚠️ What the guard checks is that the evidence RESOLVES (file, job, test name
+# exist), not that it still catches a violation: that was measured once per
+# entry by planting one (#2644) and is not re-measured here. Nor does it check
+# that an (a) job is ungated — go-fmt's go-lint is path-gated on purpose.
+hooks:
+- id: sed-damage-guard
+  category: exempt
+  evidence:
+    reason: Compares the working tree with HEAD (NUL bytes added, file shrunk by more than
+      50%); a CI checkout IS HEAD, so it is green by construction. NUL bytes are gated in
+      CI by head-blob-hygiene (docs-ci) and file-hygiene (Lint).
+- id: secrets-scan-staged
+  category: exempt
+  evidence:
+    reason: Scans only the staged files pre-commit hands it (trufflehog filesystem); a clean
+      CI checkout has nothing staged. The server-side counterpart is secret-scan.yml (trufflehog
+      on the PR).
+- id: workload-closure-drift
+  category: b
+  evidence:
+    pytest:
+    - tests/lint/test_check_workload_closure_drift.py
+    - tests/dx/test_paired_trend_watch.py
+- id: adr-index-check
+  category: b
+  evidence:
+    pytest:
+    - tests/dx/test_generate_adr_index.py
+- id: planning-index-check
+  category: b
+  evidence:
+    pytest:
+    - tests/dx/test_generate_planning_index.py
+    - tests/lint/test_check_planning_status_sync.py
+- id: alert-reference-check
+  category: a
+  evidence:
+    workflow: .github/workflows/ci.yml
+    job: lint-docs
+    note: '`make lint-docs` -> validate_all.py runs generate_alert_reference.py --check.'
+- id: gen-agent-adapters-check
+  category: b
+  evidence:
+    pytest:
+    - tests/dx/test_gen_agent_adapters.py
+- id: verify-diff-check
+  category: b
+  evidence:
+    pytest:
+    - tests/dx/test_verify_diff.py
+    - tests/dx/test_paths_map.py
+- id: cli-contract-check
+  category: a
+  evidence:
+    workflow: .github/workflows/ci.yml
+    job: lint-docs
+    note: '`make lint-docs` -> validate_all.py runs the cli_contract check (--ci).'
+- id: axe-lite-static
+  category: b
+  evidence:
+    pytest:
+    - tests/dx/test_axe_lite_static.py
+    - tests/shared/test_tool_exit_codes.py
+- id: flaky-registry-check
+  category: b
+  evidence:
+    pytest:
+    - tests/lint/test_check_flaky_registry.py
+- id: property-coverage-check
+  category: b
+  evidence:
+    pytest:
+    - tests/lint/test_check_property_coverage.py
+    - tests/shared/test_property_tools.py
+- id: engagement-disclosure-check
+  category: b
+  evidence:
+    pytest:
+    - tests/lint/test_check_engagement_disclosure.py
+- id: image-caveat-check
+  category: b
+  evidence:
+    pytest:
+    - tests/lint/test_check_image_caveats.py
+- id: orphan-lint-check
+  category: b
+  evidence:
+    pytest:
+    - tests/lint/test_check_orphan_lint.py
+- id: lint-toolchain-fit
+  category: b
+  evidence:
+    pytest:
+    - tests/lint/test_check_lint_toolchain_fit.py
+- id: doc-links-check
+  category: a
+  evidence:
+    workflow: .github/workflows/docs-ci.yaml
+    job: check-links
+    note: Runs the same check_doc_links.py --ci; no job `if:`, no workflow paths.
+- id: html-doc-links-check
+  category: a
+  evidence:
+    workflow: .github/workflows/docs-ci.yaml
+    job: check-links
+    note: Runs the same lint_html_doc_links.py --ci; no job `if:`.
+- id: head-blob-hygiene
+  category: a
+  evidence:
+    workflow: .github/workflows/docs-ci.yaml
+    job: head-blob-hygiene
+    note: Runs the same check_head_blob_hygiene.py --ci; no job `if:`.
+- id: trk-index-coverage
+  category: b
+  evidence:
+    pytest:
+    - tests/lint/test_check_trk_index_coverage.py
+    - tests/dx/test_tool_in_process_entrypoints.py
+- id: cli-coverage-check
+  category: b
+  evidence:
+    pytest:
+    - tests/lint/test_check_cli_coverage.py
+- id: bilingual-structure-check
+  category: b
+  evidence:
+    pytest:
+    - tests/lint/test_check_bilingual_structure.py
+- id: jsx-i18n-check
+  category: b
+  evidence:
+    pytest:
+    - tests/lint/test_check_jsx_i18n.py
+- id: makefile-targets-check
+  category: b
+  evidence:
+    pytest:
+    - tests/lint/test_check_makefile_targets.py
+    - tests/ops/test_makefile_phony.py
+- id: jsx-babel-check
+  category: a
+  evidence:
+    workflow: .github/workflows/ci.yml
+    job: lint
+    note: 'Lint runs jsx-babel-check-strict-linecount by name: same script, same files:, a
+      superset of the flags.'
+- id: playwright-lint
+  category: a
+  evidence:
+    workflow: .github/workflows/playwright.yml
+    job: lint-specs
+    note: 'Runs the same e2e_spec_lint.sh; the workflow paths: cover every file the hook selects.'
+- id: hardcode-tenant-check
+  category: b
+  evidence:
+    pytest:
+    - tests/lint/test_check_hardcode_tenant.py
+    - tests/lint/test_parts_skipset_tripwire.py
+- id: ha-max-threshold-aggregation
+  category: b
+  evidence:
+    pytest:
+    - tests/lint/test_check_ha_threshold_aggregation.py
+- id: single-writer-invariant
+  category: b
+  evidence:
+    pytest:
+    - tests/lint/test_check_single_writer_invariant.py
+    - tests/helm/test_single_writer_guard.py
+- id: leftouterjoin-enrichment
+  category: b
+  evidence:
+    pytest:
+    - tests/lint/test_check_leftouterjoin_enrichment.py
+- id: pipestatus-errexit
+  category: b
+  evidence:
+    pytest:
+    - tests/lint/test_check_pipestatus_errexit.py
+- id: go-fmt
+  category: a
+  evidence:
+    workflow: .github/workflows/validate.yaml
+    job: go-lint
+    note: 'golangci-lint''s gofmt formatter (simplify on) over all six Go modules: a different
+      implementation of the same verdict, gated by validate_changed.'
+- id: configmap-mount-completeness
+  category: a
+  evidence:
+    workflow: .github/workflows/ci.yml
+    job: lint-rule-packs
+    note: Same command, same arguments; no job `if:`.
+- id: rulepack-configmap-drift
+  category: a
+  evidence:
+    workflow: .github/workflows/ci.yml
+    job: lint-rule-packs
+    note: Same command, same arguments; no job `if:`.
+- id: rulepack-3copy-drift
+  category: a
+  evidence:
+    workflow: .github/workflows/ci.yml
+    job: lint-rule-packs
+    note: Same command, same arguments; no job `if:`.
+- id: custom-alerts-compile-check
+  category: a
+  evidence:
+    workflow: .github/workflows/ci.yml
+    job: lint-rule-packs
+    note: Same command, same arguments; no job `if:`.
+- id: retire-drift-check
+  category: a
+  evidence:
+    workflow: .github/workflows/ci.yml
+    job: lint-rule-packs
+    note: Same command, same arguments; no job `if:`.
+- id: recipe-status-json-check
+  category: a
+  evidence:
+    workflow: .github/workflows/ci.yml
+    job: lint-rule-packs
+    note: Same command, same arguments; no job `if:`.
+- id: tenant-id-json-check
+  category: a
+  evidence:
+    workflow: .github/workflows/ci.yml
+    job: lint-rule-packs
+    note: Runs `python scripts/tools/dx/gen_tenant_id_json.py --check` (HARD gate, ADR-035).
+- id: ksm-version-allowlist
+  category: b
+  evidence:
+    pytest:
+    - tests/lint/test_check_ksm_version_allowlist.py
+- id: threshold-reachability-check
+  category: b
+  evidence:
+    pytest:
+    - tests/lint/test_check_threshold_reachability.py
+- id: threshold-registry-check
+  category: b
+  evidence:
+    pytest:
+    - tests/lint/test_check_threshold_registry.py
+    - tests/ops/test_registry_lib.py
+- id: threshold-unit-sanity-check
+  category: b
+  evidence:
+    pytest:
+    - tests/lint/test_check_threshold_unit_sanity.py
+- id: scrape-reachability-check
+  category: b
+  evidence:
+    pytest:
+    - tests/lint/test_check_scrape_reachability.py
+- id: chart-ship-surface
+  category: b
+  evidence:
+    pytest:
+    - tests/lint/test_check_chart_ship_surface.py
+    - tests/lint/test_check_chart_package_contents.py
+- id: chart-pull-surface
+  category: b
+  evidence:
+    pytest:
+    - tests/lint/test_check_chart_pull_surface.py
+- id: devcontainer-dep-parity
+  category: b
+  evidence:
+    pytest:
+    - tests/lint/test_check_devcontainer_dep_parity.py
+    - tests/shared/test_toolchain_pin_parity.py
+- id: maintenance-symmetry-check
+  category: b
+  evidence:
+    pytest:
+    - tests/lint/test_check_maintenance_symmetry.py
+- id: orphan-recordings-check
+  category: b
+  evidence:
+    pytest:
+    - tests/lint/test_check_orphan_recordings.py
+- id: metric-group-pairs-check
+  category: b
+  evidence:
+    pytest:
+    - tests/lint/test_check_metric_group_pairs.py
+- id: dist-source-consistency-check
+  category: exempt
+  evidence:
+    reason: Reads only `git diff --cached`; CI has nothing staged, so it is green by construction.
+      The stronger CI counterpart is the ci.yml portal step "Verify committed dist matches
+      fresh build".
+- id: playwright-rtl-drift-check
+  category: b
+  evidence:
+    pytest:
+    - tests/lint/test_check_playwright_rtl_drift.py
+- id: unpinned-deps-check
+  category: b
+  evidence:
+    pytest:
+    - tests/lint/test_check_unpinned_deps.py
