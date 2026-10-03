@@ -1389,6 +1389,12 @@ const docTemplate = `{
                             "$ref": "#/definitions/ErrorResponse"
                         }
                     },
+                    "409": {
+                        "description": "Conflict: ambiguous tenant file, or the tenant is declared by more than one conf.d file",
+                        "schema": {
+                            "$ref": "#/definitions/ErrorResponse"
+                        }
+                    },
                     "500": {
                         "description": "Internal Server Error",
                         "schema": {
