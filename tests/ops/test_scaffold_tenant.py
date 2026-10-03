@@ -896,6 +896,24 @@ class TestRunFromOnboard:
             with pytest.raises(SystemExit):
                 run_from_onboard(args)
 
+    # ADR-035 (blind review F1): every id in the hints is judged BEFORE the
+    # first file is written — `Team_A` used to produce Team_A.yaml at rc 0,
+    # a conf.d generate-routes then refuses in every mode.
+    @pytest.mark.parametrize("tenants", [["Team_A"], ["db-a", "Team_A"], ["db-a", "x" * 64]])
+    def test_invalid_tenant_id_refused_before_any_write(self, tenants, capsys):
+        with tempfile.TemporaryDirectory() as d:
+            hints_path = os.path.join(d, "hints.json")
+            with open(hints_path, "w", encoding="utf-8") as f:
+                json.dump({"tenants": tenants, "db_types": {}, "routing_hints": {}}, f)
+            out = os.path.join(d, "out")
+            args = argparse.Namespace(from_onboard=hints_path, output_dir=out)
+            with pytest.raises(SystemExit) as exc_info:
+                run_from_onboard(args)
+            assert exc_info.value.code == EXIT_CALLER_ERROR
+            assert not os.path.exists(out), os.listdir(out)
+        err = capsys.readouterr().err
+        assert "DNS-1123" in err and repr(tenants[-1]) in err, err
+
     def test_no_tenants_exits(self):
         with tempfile.TemporaryDirectory() as d:
             hints_path = os.path.join(d, "empty.json")
@@ -1175,6 +1193,33 @@ class TestMainCLI:
         ]):
             with pytest.raises(SystemExit):
                 scaffold_tenant.main()
+
+    # ADR-035: `--tenant` becomes a conf.d key and a file name, and was not
+    # checked at all — `Team_A.yaml` was written. Refused now, rc 2, nothing
+    # written; the message cites the rule's own description.
+    @pytest.mark.parametrize("tenant", ["Team_A", "UPPER", "bad tenant", "a" * 64, "x-"])
+    def test_invalid_tenant_id_is_refused(self, tenant, capsys):
+        import scaffold_tenant
+        with tempfile.TemporaryDirectory() as d:
+            with mock.patch("sys.argv", [
+                "scaffold_tenant.py", "--tenant", tenant, "--db", "mariadb",
+                "-o", d, "--non-interactive",
+            ]):
+                with pytest.raises(SystemExit) as exc_info:
+                    scaffold_tenant.main()
+            assert exc_info.value.code == EXIT_CALLER_ERROR
+            assert os.listdir(d) == [], os.listdir(d)
+        err = capsys.readouterr().err
+        assert repr(tenant) in err and "DNS-1123" in err, err
+
+    def test_interactive_tenant_id_is_refused(self, capsys):
+        import scaffold_tenant
+        with tempfile.TemporaryDirectory() as d:
+            with mock.patch("builtins.input", side_effect=["Team_A"]):
+                with pytest.raises(SystemExit) as exc_info:
+                    scaffold_tenant.run_interactive(d)
+            assert exc_info.value.code == EXIT_CALLER_ERROR
+            assert os.listdir(d) == [], os.listdir(d)
 
 
 # ============================================================

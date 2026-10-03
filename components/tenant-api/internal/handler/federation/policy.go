@@ -402,7 +402,8 @@ func GetTenantFederation(d *handler.Deps) http.HandlerFunc {
 func PutTenantFederation(d *handler.Deps) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		tenantID := chi.URLParam(r, "id")
-		if err := handler.ValidateTenantID(tenantID); err != nil {
+		// A write: the tenant-id rule too (ADR-035), as an early 400.
+		if err := handler.ValidateWritableTenantID(tenantID); err != nil {
 			handler.WriteJSONError(w, r, http.StatusBadRequest, err.Error())
 			return
 		}
@@ -455,6 +456,11 @@ func PutTenantFederation(d *handler.Deps) http.HandlerFunc {
 			// know which one to rewrite — 409, as tenant PUT does (#1673).
 			if errors.Is(err, confd.ErrAmbiguousTenantFile) {
 				handler.WriteJSONError(w, r, http.StatusConflict, err.Error())
+				return
+			}
+			// ADR-035: the writer's own copy of the tenant-id rule.
+			if errors.Is(err, gitops.ErrInvalidTenantID) {
+				handler.WriteJSONError(w, r, http.StatusBadRequest, err.Error())
 				return
 			}
 			handler.WriteJSONError(w, r, http.StatusInternalServerError, err.Error())

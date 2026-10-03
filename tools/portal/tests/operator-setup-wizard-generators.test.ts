@@ -44,6 +44,14 @@ describe('validateTenantName', () => {
     expect(validateTenantName('a_b')).toBe(false);
     expect(validateTenantName('')).toBe(false);
   });
+
+  // ADR-035: the rule is read from the generated tenant-id.json, which carries
+  // the 63-character limit the old local regex lacked.
+  it('enforces the 63-character limit of the shared tenant-id rule', () => {
+    expect(validateTenantName('a'.repeat(63))).toBe(true);
+    expect(validateTenantName('a'.repeat(64))).toBe(false);
+    expect(validateTenantName('abc\n')).toBe(false);
+  });
 });
 
 describe('generateOperatorCommand', () => {

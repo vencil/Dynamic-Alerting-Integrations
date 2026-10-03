@@ -934,7 +934,7 @@ class TestNoCheckCanKillTheReport:
             "defaults:\n  mysql_threads_running: 80\n", encoding="utf-8")
         # Quoted: a tenant threshold is a string field (#2164 yaml_quoting).
         (d / "db-a.yaml").write_text(
-            "tenants:\n  db_a:\n    mysql_threads_running: \"90\"\n",
+            "tenants:\n  db-a:\n    mysql_threads_running: \"90\"\n",
             encoding="utf-8")
         return str(d)
 
@@ -1479,7 +1479,7 @@ class TestEmptyPlatformDefaultsSaysSoInsteadOfAdvisingDeletion:
         d.mkdir()
         (d / "_defaults.yaml").write_text(defaults_body, encoding="utf-8")
         (d / "db-a.yaml").write_text(
-            "tenants:\n  db_a:\n    mysql_threads_running: 90\n",
+            "tenants:\n  db-a:\n    mysql_threads_running: 90\n",
             encoding="utf-8")
         return str(d)
 
@@ -1507,7 +1507,7 @@ class TestEmptyPlatformDefaultsSaysSoInsteadOfAdvisingDeletion:
         say. Without this, suppressing the hint unconditionally would pass."""
         d = self._tree(tmp_path, "defaults:\n  mysql_threads_running: 80\n")
         (pathlib.Path(d) / "db-b.yaml").write_text(
-            "tenants:\n  db_b:\n    mysql_thredas_running: 90\n",
+            "tenants:\n  db-b:\n    mysql_thredas_running: 90\n",
             encoding="utf-8")
         cli_argv("validate_config", "--config-dir", d)
         with pytest.raises(SystemExit):

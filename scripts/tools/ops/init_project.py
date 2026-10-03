@@ -46,6 +46,7 @@ sys.path.insert(0, str(_THIS_DIR))  # Docker flat layout
 sys.path.insert(0, str(_THIS_DIR.parent))  # Repo subdir layout
 from _lib_python import detect_cli_lang, ensure_dir_or_die, write_text_or_die  # noqa: E402
 from _lib_exitcodes import EXIT_OK, EXIT_VIOLATION, EXIT_CALLER_ERROR  # noqa: E402
+from _lib_validation import is_valid_tenant_id  # noqa: E402  (ADR-035)
 from _lib_confd import (  # noqa: E402
     WARN_LIMIT,
     configmap_key_problem,
@@ -3208,9 +3209,8 @@ def _prompt_text(prompt_text: str, default: str = '') -> str:
 
 
 def _validate_tenant_name(name: str) -> bool:
-    """Validate tenant name follows K8s naming conventions."""
-    # fullmatch, not match: `$` also succeeds before a trailing newline (#1779).
-    return bool(re.fullmatch(r'^[a-z0-9]([a-z0-9-]*[a-z0-9])?$', name)) and len(name) <= 63
+    """Validate tenant name against the one tenant-id rule (ADR-035)."""
+    return is_valid_tenant_id(name)
 
 
 def _interactive_flow() -> dict:

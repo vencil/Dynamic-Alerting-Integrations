@@ -1129,3 +1129,52 @@ class TestWriteOutputs:
         """無結果時產生空白報告。"""
         report = write_outputs("/tmp/test", dry_run=True)
         assert report["phases"] == {}
+
+
+# ---------------------------------------------------------------------------
+# ADR-035 (blind review F1): tenant ids taken from an Alertmanager config
+# ---------------------------------------------------------------------------
+
+class TestInvalidTenantIdFromAlertmanager:
+    """Phase 1 turns each `tenant` matcher value into a conf.d key and a file
+    name. `Team_A` used to be written as phase1-routing/Team_A.yaml (and into
+    onboard-hints.json) at rc 0 — a conf.d generate-routes refuses in every
+    mode. Now rc 2 and nothing written, in every output mode."""
+
+    @staticmethod
+    def _am(tmp_path, tenants):
+        routes = [{"matchers": [f'tenant="{t}"'], "receiver": f"r-{i}"}
+                  for i, t in enumerate(tenants)]
+        receivers = [{"name": "default"}] + [
+            {"name": f"r-{i}", "webhook_configs": [{"url": "https://hooks.example.com/x"}]}
+            for i in range(len(tenants))]
+        path = tmp_path / "am.yml"
+        path.write_text(yaml.safe_dump(make_am_config(routes=routes, receivers=receivers)),
+                        encoding="utf-8")
+        return str(path)
+
+    def _run(self, monkeypatch, argv):
+        import onboard_platform as op
+        monkeypatch.setattr("sys.argv", ["onboard_platform.py", *argv])
+        with pytest.raises(SystemExit) as exc_info:
+            op.main()
+        return exc_info.value.code
+
+    @pytest.mark.parametrize("extra", [[], ["--dry-run"], ["--json"]],
+                             ids=["write", "dry-run", "json"])
+    def test_refused_and_nothing_written(self, tmp_path, monkeypatch, capsys, extra):
+        out = tmp_path / "out"
+        rc = self._run(monkeypatch, ["--alertmanager-config",
+                                     self._am(tmp_path, ["db-a", "Team_A"]),
+                                     "-o", str(out), *extra])
+        assert rc == 2
+        assert not out.exists(), list(out.rglob("*"))
+        err = capsys.readouterr().err
+        assert "'Team_A'" in err and "DNS-1123" in err, err
+
+    def test_valid_ids_still_written(self, tmp_path, monkeypatch):
+        out = tmp_path / "out"
+        rc = self._run(monkeypatch, ["--alertmanager-config",
+                                     self._am(tmp_path, ["db-a"]), "-o", str(out)])
+        assert rc == 0
+        assert (out / "phase1-routing" / "db-a.yaml").exists()

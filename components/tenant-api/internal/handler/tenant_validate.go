@@ -89,12 +89,14 @@ const msgTenantFileUnresolved = "cannot resolve the tenant's config file in conf
 
 // dryRunRefusalMessage turns a refusal that would come BEFORE validation into
 // Warnings text. This route needs only read permission, so only two errors
-// pass through verbatim — the reserved-id refusal and ErrAmbiguousTenantFile,
+// pass through verbatim — the reserved-id and invalid-id refusals (the latter
+// names only the id and the rule) and ErrAmbiguousTenantFile,
 // whose text names only this tenant's own files and which PUT already returns
 // as is. Everything else gets fixed text; the full error goes to the log.
 func dryRunRefusalMessage(err error) string {
 	switch {
-	case errors.Is(err, gitops.ErrReservedTenantID), errors.Is(err, confd.ErrAmbiguousTenantFile):
+	case errors.Is(err, gitops.ErrReservedTenantID), errors.Is(err, gitops.ErrInvalidTenantID),
+		errors.Is(err, confd.ErrAmbiguousTenantFile):
 		return err.Error()
 	case errors.Is(err, gitops.ErrTenantDeclaredElsewhere):
 		slog.Warn("tenant dry-run: tenant declared by another conf.d file", "error", err)

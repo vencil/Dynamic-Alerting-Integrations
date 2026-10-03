@@ -581,6 +581,25 @@ class TestTenantWhitelistRejectsTrailingNewline:
         aq.query_alertmanager_alerts("http://am", tenant=tenant)
         assert bool(seen) is accepted, seen
 
+    # ADR-035: the whitelist is the one tenant-id rule now. `Team_A` passed
+    # the tool's own `^[a-zA-Z0-9_-]+$`; the shared DNS-1123 rule refuses it.
+    @pytest.mark.parametrize("tenant", ["Team_A", "UPPER", "a" * 64])
+    def test_gates_follow_the_shared_tenant_id_rule(self, monkeypatch, capsys, tenant):
+        seen = []
+        monkeypatch.setattr("_lib_prometheus.http_get_json",
+                            lambda url, timeout=30: (seen.append(url) or
+                                                     ({"status": "success", "data": {"result": []}}, None)))
+        aq.query_prometheus_alerts("http://prom", "ALERTS", 3600, tenant=tenant)
+        assert not seen, seen
+        monkeypatch.setattr("sys.argv", [
+            "alert_quality", "--prometheus", "http://prom", "--tenant", tenant,
+        ])
+        with pytest.raises(SystemExit) as exc_info:
+            aq.main()
+        assert exc_info.value.code == 2
+        err = capsys.readouterr().err
+        assert "invalid tenant name" in err and "DNS-1123" in err, err
+
     def test_cli_gate_rejects_trailing_newline(self, monkeypatch, capsys):
         monkeypatch.setattr("sys.argv", [
             "alert_quality", "--prometheus", "http://prom", "--tenant", "alpha\n",

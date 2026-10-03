@@ -86,21 +86,16 @@ def is_disabled(value: Any) -> bool:
     return value.strip().lower() in _DISABLED_VALUES
 
 
-# #2341 R8: the tenant ids the route generator, da-guard and tenant-api refuse.
-# ⛔ Not a new rule: the UNION of what the repo's three existing tenant-name
-# rules accept (operator_generate / migrate_to_operator: DNS-1123 label;
-# alert_quality: `^[a-zA-Z0-9_-]+$`) — the DNS-1123 set is a subset of the
-# other, so the union is the latter. An id every one of them refuses (the
-# empty string included) is refused here; one any of them accepts (`UPPER`)
-# is not, so a later single source of truth can only tighten this. Go copy:
-# routingpolicy.IsValidTenantID; pinned by the `tenant_ids` table of
-# tests/shared/routing_policy_parity_matrix.json.
-_TENANT_ID_RE = re.compile(r"[A-Za-z0-9_-]+")
-
-
 def is_valid_tenant_id(tenant: Any) -> bool:
-    """Whether *tenant* is an id the routing plane renders (#2341 R8)."""
-    return isinstance(tenant, str) and _TENANT_ID_RE.fullmatch(tenant) is not None
+    """Whether *tenant* is a valid tenant id (ADR-035; #2341 R8).
+
+    The rule is ``tenant_id_rule()`` — tenant-config.schema.json
+    ``definitions.tenantId``, a DNS-1123 label — matched with ``fullmatch``.
+    Go twin: routingpolicy.IsValidTenantID (pkg/tenantid). Pinned by the
+    ``tenant_ids`` table of tests/shared/routing_policy_parity_matrix.json.
+    Raises RuntimeError when the schema cannot be read (fail-closed).
+    """
+    return isinstance(tenant, str) and tenant_id_rule()[0].fullmatch(tenant) is not None
 
 
 def validate_and_clamp(

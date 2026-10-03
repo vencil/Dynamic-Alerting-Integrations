@@ -44,14 +44,11 @@ from _lib_confd import (  # noqa: E402
     tenant_carriers,
     unusable_reason,
 )
+from _lib_validation import is_valid_tenant_id  # noqa: E402  (ADR-035)
 
 # ---------------------------------------------------------------------------
 # Constants and Help Text
 # ---------------------------------------------------------------------------
-
-import re
-
-_TENANT_NAME_RE = re.compile(r"^[a-z0-9]([a-z0-9\-]{0,61}[a-z0-9])?$")
 
 _RECEIVER_TEMPLATES = ("slack", "pagerduty", "email", "teams", "opsgenie", "webhook")
 
@@ -521,9 +518,9 @@ def validate_tenant_name(name: str) -> bool:
     Returns:
         True if valid
     """
-    # fullmatch, not match: `$` also succeeds before a trailing newline, so
-    # `re.match` let a stem literally named `evil\n` through (#1779).
-    return bool(_TENANT_NAME_RE.fullmatch(name))
+    # ADR-035: the one tenant-id rule (a DNS-1123 label, full match — a
+    # stem literally named `evil\n` is refused, #1779).
+    return is_valid_tenant_id(name)
 
 
 def discover_tenant_configs(config_dir: Path) -> List[str]:

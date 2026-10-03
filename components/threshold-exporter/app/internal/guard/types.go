@@ -208,9 +208,9 @@ const (
 	// carrier) that is neither a mapping nor null; the level contributes
 	// nothing and the generator refuses it. Field `<file>:_routing_defaults`.
 	FindingRoutingDefaultsNotMapping FindingKind = "routing_defaults_not_mapping"
-	// FindingInvalidTenantID (error; #2341): a declared tenant id the route
-	// generator renders nothing for (routingpolicy.IsValidTenantID: empty,
-	// or a character outside letters, digits, `_`, `-`). TenantID is the id
+	// FindingInvalidTenantID (error; #2341, ADR-035): a declared tenant id
+	// the tenant-id rule refuses (routingpolicy.IsValidTenantID, a DNS-1123
+	// label); the route generator refuses the whole tree. TenantID is the id
 	// (it may be empty, so the finding is told from a platform one by its
 	// kind), Field `<tenant file>:tenants.<id>`.
 	FindingInvalidTenantID FindingKind = "invalid_tenant_id"
