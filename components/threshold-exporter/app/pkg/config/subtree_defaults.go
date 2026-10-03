@@ -287,7 +287,8 @@ type SubtreeRefusedVerdict struct {
 	// by BuildFlatConfig: the exporter's reload has no reader for them
 	// (#2388 A r4). EntryFiles: the root-relative files whose `tenants:`
 	// entry for the tenant holds the key (a tenant file, or a root platform
-	// file such as `_platform.yaml`), sorted. Profile: the tenant's
+	// file such as `_platform.yaml`), in the flat merge's order
+	// (sortFlatMergeOrder) — the last one's value is the one served. Profile: the tenant's
 	// `_profile`, when no entry holds the key and that profile does
 	// (profiles are applied before the overlay, so the overlay alone cannot
 	// tell).
@@ -344,7 +345,12 @@ func markTenantSetSources(verdicts map[string]map[string]SubtreeRefusedVerdict,
 		for k := range keys {
 			v := verdicts[tenantID][k]
 			if files := entryFiles[tenantID][k]; len(files) > 0 {
-				sort.Strings(files)
+				// The flat merge's own order (mergePartialConfigs): root
+				// platform files first, then the tenant file; a later file's
+				// value for the key overwrites an earlier one
+				// (overlayAcrossSpellings), so the LAST is the one served
+				// (#2388 A r6).
+				sortFlatMergeOrder(files)
 				v.EntryFiles = files
 			} else if name := strings.TrimSpace(cfg.Tenants[tenantID]["_profile"].Default); name != "" {
 				if _, inProfile := cfg.Profiles[name][k]; inProfile {

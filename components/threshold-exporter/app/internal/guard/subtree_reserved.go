@@ -321,8 +321,8 @@ func subtreeRefusedKeyFix(k string, declared map[string]bool) string {
 // overlay's own verdict, handed in as `applied`; neither text guesses.
 func reservedKeyIgnoredFix(k string, v config.SubtreeRefusedVerdict) string {
 	if v.TenantSets {
-		return fmt.Sprintf("%s `%s`, and that is what the exporter serves; the subtree "+
-			"value is ignored for it. Delete it from this file: what the exporter serves stays the same.", setBy(v), k)
+		return fmt.Sprintf("%s, and that is what the exporter serves; the subtree "+
+			"value is ignored for it. Delete it from this file: what the exporter serves stays the same.", setBy(v, k))
 	}
 	return "Today the exporter ignores this value; delete it from this file: what the exporter serves stays the " +
 		"same, and /effective stops showing the ignored value. " + reservedKeyFix(k)
@@ -334,8 +334,8 @@ func reservedKeyIgnoredFix(k string, v config.SubtreeRefusedVerdict) string {
 func reservedKeyIgnoredShared(k string, v config.SubtreeRefusedVerdict, others sharedTenants) string {
 	own := "Today the exporter ignores this value for this tenant"
 	if v.TenantSets {
-		own = fmt.Sprintf("%s `%s`, and that is what the exporter serves for it; "+
-			"the subtree value is ignored for this tenant", setBy(v), k)
+		own = fmt.Sprintf("%s, and that is what the exporter serves for it; "+
+			"the subtree value is ignored for this tenant", setBy(v, k))
 	}
 	return fmt.Sprintf("%s — but other tenants get their value from one of these files: %s. Do not just "+
 		"delete it from the file: that changes what is served for them. Follow their findings (move the value "+
@@ -344,22 +344,24 @@ func reservedKeyIgnoredShared(k string, v config.SubtreeRefusedVerdict, others s
 
 // setBy names what sets the key for a TenantSets tenant: its `tenants:`
 // entry, or its `_profile` (config.SubtreeRefusedVerdict.Profile, #2388 A r3).
-func setBy(v config.SubtreeRefusedVerdict) string {
+func setBy(v config.SubtreeRefusedVerdict, k string) string {
 	if v.Profile != "" {
-		return fmt.Sprintf("This tenant's profile `%s` (its `_profile`) sets", v.Profile)
+		return fmt.Sprintf("This tenant's profile `%s` (its `_profile`) sets `%s`", v.Profile, k)
 	}
-	if len(v.EntryFiles) > 1 {
-		// Several files' entries set it; which one wins is the merge's order,
-		// not modelled here (#2388 A r5).
-		return fmt.Sprintf("This tenant's `tenants:` entries in %s (the exporter serves the merged result) set",
-			quoteJoin(v.EntryFiles))
-	}
-	if len(v.EntryFiles) == 1 {
+	if n := len(v.EntryFiles); n > 0 {
 		// Named, not "own entry": a root platform file's `tenants:` block sets
-		// it as well as a tenant file (#2388 A r4).
-		return fmt.Sprintf("This tenant's `tenants:` entry in %s sets", quoteJoin(v.EntryFiles))
+		// it as well as a tenant file (#2388 A r4). With several, EntryFiles
+		// is in the flat merge's order and the LAST one's value is served
+		// (config.markTenantSetSources) — the winner is named, the others are
+		// what it overrides; "the merged result" was wrong for a scalar
+		// (#2388 A r6).
+		s := fmt.Sprintf("This tenant's `tenants:` entry in `%s` sets `%s`", v.EntryFiles[n-1], k)
+		if n > 1 {
+			s += fmt.Sprintf(" (it overrides the entry in %s)", quoteJoin(v.EntryFiles[:n-1]))
+		}
+		return s
 	}
-	return "This tenant's own entry sets"
+	return fmt.Sprintf("This tenant's own entry sets `%s`", k)
 }
 
 // reservedKeyMove is the fix for a recognised key the overlay APPLIES for this

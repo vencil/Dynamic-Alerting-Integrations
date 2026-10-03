@@ -962,19 +962,81 @@ func TestGuard_SubtreeReservedSharedCountTwoFiles(t *testing.T) {
 	}
 }
 
-// #2388 A r5 (R4-2): when several files' `tenants:` entries set the key, the
-// message names them all and says the exporter serves the merged result — not
-// "that one" value.
+// #2388 A r6 (R5-1): when several files' `tenants:` entries set the key, the
+// message names the one whose value is served — the flat merge applies root
+// platform files first and the tenant file last — and what it overrides. Both
+// value orders: the tenant file wins either way, and served-values agrees.
 func TestGuard_SubtreeReservedSetByTwoEntries(t *testing.T) {
+	t.Parallel()
+	for _, tc := range []struct {
+		name, platform, tenant string
+		wantServed             []any
+	}{
+		{name: "tenant-warning", platform: "critical", tenant: "warning", wantServed: []any{"warning"}},
+		{name: "tenant-critical", platform: "warning", tenant: "critical", wantServed: []any{"critical"}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			files := reservedCase{defaultState: "enable", tenant: "\n    _silent_mode: " + tc.tenant}.files()
+			files["_platform.yaml"] = "tenants:\n  t1:\n    _silent_mode: " + tc.platform + "\n"
+			files["finance/_defaults.yaml"] = "defaults:\n  _silent_mode: warning\n"
+			_, got := reservedFindings(t, "--config-dir", writeReservedConfD(t, files))
+			if len(got) != 1 {
+				t.Fatalf("findings = %+v, want 1", got)
+			}
+			want := "This tenant's `tenants:` entry in `finance/t1.yaml` sets `_silent_mode` " +
+				"(it overrides the entry in `_platform.yaml`), and that is what the exporter serves"
+			if m := got[0].Message; !strings.Contains(m, want) || strings.Contains(m, "merged result") {
+				t.Errorf("message = %s", m)
+			}
+			code, doc, _, stderr := served(t, files, "2026-10-01T00:00:00Z")
+			mustOK(t, code, stderr)
+			if v := doc.Tenants["t1"].Values["_silent_mode"]; !reflect.DeepEqual(v, tc.wantServed) {
+				t.Errorf("served _silent_mode = %#v, want %#v (the named file's value)", v, tc.wantServed)
+			}
+		})
+	}
+}
+
+// #2388 A r6: a tenant file whose path sorts BEFORE `_platform.yaml` in plain
+// byte order (`Fin/` < `_`): the tenant file still wins — the merge's order,
+// not the file names'.
+func TestGuard_SubtreeReservedSetByEntriesMergeOrder(t *testing.T) {
+	t.Parallel()
+	files := map[string]string{
+		"_defaults.yaml":     reservedRoot("enable"),
+		"_platform.yaml":     "tenants:\n  t1:\n    _silent_mode: critical\n",
+		"Fin/_defaults.yaml": "defaults:\n  _silent_mode: warning\n",
+		"Fin/t1.yaml":        "tenants:\n  t1:\n    _silent_mode: warning\n",
+	}
+	_, got := reservedFindings(t, "--config-dir", writeReservedConfD(t, files))
+	if len(got) != 1 {
+		t.Fatalf("findings = %+v, want 1", got)
+	}
+	want := "entry in `Fin/t1.yaml` sets `_silent_mode` (it overrides the entry in `_platform.yaml`)"
+	if !strings.Contains(got[0].Message, want) {
+		t.Errorf("message = %s", got[0].Message)
+	}
+	code, doc, _, stderr := served(t, files, "2026-10-01T00:00:00Z")
+	mustOK(t, code, stderr)
+	if v := doc.Tenants["t1"].Values["_silent_mode"]; !reflect.DeepEqual(v, []any{"warning"}) {
+		t.Errorf("served _silent_mode = %#v, want [warning] (Fin/t1.yaml's)", v)
+	}
+}
+
+// #2388 A r6: two root platform files and the tenant file: the order is the
+// merge's (platform files by name, then the tenant file).
+func TestGuard_SubtreeReservedSetByThreeEntries(t *testing.T) {
 	t.Parallel()
 	files := reservedCase{defaultState: "enable", tenant: "\n    _silent_mode: warning"}.files()
 	files["_platform.yaml"] = "tenants:\n  t1:\n    _silent_mode: critical\n"
+	files["_a_platform.yaml"] = "tenants:\n  t1:\n    _silent_mode: critical\n"
 	files["finance/_defaults.yaml"] = "defaults:\n  _silent_mode: warning\n"
 	_, got := reservedFindings(t, "--config-dir", writeReservedConfD(t, files))
 	if len(got) != 1 {
 		t.Fatalf("findings = %+v, want 1", got)
 	}
-	want := "This tenant's `tenants:` entries in `_platform.yaml`, `finance/t1.yaml` (the exporter serves the merged result) set `_silent_mode`"
+	want := "entry in `finance/t1.yaml` sets `_silent_mode` (it overrides the entry in `_a_platform.yaml`, `_platform.yaml`)"
 	if !strings.Contains(got[0].Message, want) {
 		t.Errorf("message = %s", got[0].Message)
 	}
