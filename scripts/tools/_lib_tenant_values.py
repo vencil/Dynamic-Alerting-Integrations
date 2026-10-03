@@ -32,7 +32,13 @@ is what keeps either of them off column 0.
   exporter's resolver for it reads at `at` (default: now).
 * `severities` — the severity label of each threshold key in `values`.
 * `unserved` — keys the tenant's merged config carries with no entry in
-  `values` (switched off included), value as written.
+  `values` (switched off included), value as written; plus the threshold
+  keys it inherits from a subtree `_defaults.yaml` that the exporter cannot
+  deliver (not declared at the root or in `optional_overrides:`; reserved
+  keys, keys the exporter never serves as a threshold row such as
+  `_silent_*` / `_state_*`, and switched-off keys excluded; #1976) — for
+  those the value is the exporter's
+  normalised rendering of the deepest threshold-shaped one, not as written.
 * `dropped` — keys whose row /metrics drops because the exporter cannot build
   its series; key → the reason for each dropped row. `dropped` is keyed by the
   canonical spelling, `unserved` by the spelling as written.

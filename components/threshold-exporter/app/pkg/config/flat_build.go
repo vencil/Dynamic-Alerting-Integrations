@@ -60,7 +60,21 @@ type FlatBuild struct {
 	Config        ThresholdConfig
 	FileConfigs   map[string]ThresholdConfig
 	SubtreeFilled int
-	Unreachable   map[string][]string
+	// Unreachable is tenantID → the sorted keys the tenant inherits from a
+	// subtree `_defaults.yaml` that nothing on the output plane iterates
+	// (keyCanReachTheOutputPlane): the key is in neither the root defaults
+	// nor `optional_overrides:`, so /metrics never carries it. The exporter
+	// logs it as an ERROR and counts the tenant on
+	// da_config_subtree_undeliverable_tenants; da-guard reports the part
+	// undeliverableThresholds keeps as the subtree_default_undeliverable
+	// finding (#1976). nil when there is none.
+	Unreachable map[string][]string
+	// UnreachableValues is Unreachable with each key's value: the one of the
+	// deepest defaults level that writes the key in a threshold shape (a
+	// deeper level writing it in another shape, e.g. a YAML bool, is skipped),
+	// normalised by scheduledValueFromRaw (a YAML `1e6` is "1e+06") — not the
+	// file's text. Same tenants and keys as Unreachable.
+	UnreachableValues map[string]map[string]ScheduledValue
 	// ParseFailed is the scan keys (root-relative slash paths, in scan.Keys
 	// order, which is sorted) of the files that contribute nothing to Config
 	// because they failed to parse: a tenant file the walker rejected
@@ -200,7 +214,11 @@ func BuildFlatConfig(scan *TreeScan, in FlatBuildInput) (FlatBuild, error) {
 	merged.applyProfiles(profileLogf)
 
 	n, unreachable := applySubtreeDefaults(&merged, in.Root, in.TenantDefaults, in.ParsedDefaults)
-	return FlatBuild{Config: merged, FileConfigs: fileConfigs, SubtreeFilled: n, Unreachable: unreachable, ParseFailed: parseFailed}, nil
+	return FlatBuild{
+		Config: merged, FileConfigs: fileConfigs, SubtreeFilled: n,
+		Unreachable: unreachableKeys(unreachable), UnreachableValues: unreachable,
+		ParseFailed: parseFailed,
+	}, nil
 }
 
 // scanKeyBase is the underscore convention's unit of judgement: the FILE NAME,

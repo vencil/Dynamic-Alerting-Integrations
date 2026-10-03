@@ -145,6 +145,18 @@ type ScopedTenants struct {
 	// one in ParseFailed; da-guard checks them for the repeated keys the
 	// route generator refuses (withGeneratorDuplicates).
 	NestedPlatformFiles []DefaultsFile
+
+	// Undeliverable is, for each tenant in Tenants, the sorted keys
+	// (filtered by undeliverableThresholds, the same filter as
+	// LoadReport.Undeliverable) it inherits from a subtree `_defaults.yaml`
+	// that the exporter's own build of this tree cannot deliver
+	// (FlatBuild.Unreachable, the map the exporter logs as an ERROR and
+	// counts on da_config_subtree_undeliverable_tenants): the root
+	// `_defaults.yaml` and `optional_overrides:` do not declare the key, so
+	// /metrics never carries it although the tenant's effective config shows
+	// it. Only in-scope tenants are listed;
+	// nil when there is none (#1976).
+	Undeliverable map[string][]string
 }
 
 // DefaultsFile is one defaults carrier of a scan: its root-relative slash
@@ -319,7 +331,7 @@ func scopeEffective(configDir, scopeDir string, wholeTree bool) (*ScopedTenants,
 			inScope[id] = struct{}{}
 		}
 	}
-	parseFailed, err := scopeParseFailed(scan, filepath.ToSlash(rel))
+	parseFailed, unreachable, err := scopeParseFailed(scan, filepath.ToSlash(rel))
 	if err != nil {
 		return nil, err
 	}
@@ -360,6 +372,15 @@ func scopeEffective(configDir, scopeDir string, wholeTree bool) (*ScopedTenants,
 		DefaultsFiles:       defaultsFiles,
 		Unreadable:          unreadable,
 		NestedPlatformFiles: nestedFiles,
+	}
+	// The build's verdict, kept for the in-scope tenants only (#1976).
+	for _, id := range tenantIDs {
+		if keys := unreachable[id]; len(keys) > 0 {
+			if out.Undeliverable == nil {
+				out.Undeliverable = map[string][]string{}
+			}
+			out.Undeliverable[id] = keys
+		}
 	}
 	seenFiles := make(map[string]struct{}, len(tenantIDs))
 	for _, id := range tenantIDs {
@@ -411,9 +432,15 @@ func scopeEffective(configDir, scopeDir string, wholeTree bool) (*ScopedTenants,
 // tree). A dropped file bears on the scope when it lies at-or-below it, or it
 // is a `_` file in a directory above it (the root's platform files, a chain
 // `_defaults.yaml`) — those shape every tenant under the scope.
-func scopeParseFailed(scan *TreeScan, scopeRel string) ([]string, error) {
+//
+// unreachable is the threshold keys of the same build's unreachable set
+// (undeliverableThresholds over FlatBuild.UnreachableValues: tenantID → the
+// inherited subtree threshold keys it cannot deliver), over the whole tree; the caller
+// keeps the in-scope tenants (ScopedTenants.Undeliverable, #1976). One build
+// answers both, so the two cannot come from different readings of the tree.
+func scopeParseFailed(scan *TreeScan, scopeRel string) (parseFailed []string, unreachable map[string][]string, err error) {
 	if len(scan.Files) == 0 {
-		return nil, nil // the exporter refuses an empty tree; nothing was dropped
+		return nil, nil, nil // the exporter refuses an empty tree; nothing was dropped
 	}
 	// ⚠️ log.Printf, not discardLogger, for the profile WARNs (#2513): they
 	// reached the process log here before the build took its logger for them,
@@ -421,16 +448,15 @@ func scopeParseFailed(scan *TreeScan, scopeRel string) ([]string, error) {
 	// an unknown profile is named (the report does not list it).
 	built, err := loadDirBuild(scan, scan.AbsRoot, discardLogger, log.Printf)
 	if err != nil {
-		return nil, err
+		return nil, nil, err
 	}
-	var out []string
 	for _, key := range built.ParseFailed {
 		if bearsOnScope(key, scopeRel) {
-			out = append(out, key)
+			parseFailed = append(parseFailed, key)
 		}
 	}
-	sort.Strings(out)
-	return out, nil
+	sort.Strings(parseFailed)
+	return parseFailed, unreachableKeys(undeliverableThresholds(built.UnreachableValues)), nil
 }
 
 // scopeDefaultsFiles is ScopedTenants.DefaultsFiles: the selected carrier of

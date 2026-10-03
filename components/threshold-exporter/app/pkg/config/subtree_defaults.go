@@ -71,7 +71,7 @@ func applySubtreeDefaults(
 	root string,
 	tenantDefaults map[string][]string,
 	parsed map[string]map[string]any,
-) (int, map[string][]string) {
+) (int, map[string]map[string]ScheduledValue) {
 	if cfg == nil || len(cfg.Tenants) == 0 || len(tenantDefaults) == 0 {
 		return 0, nil
 	}
@@ -88,8 +88,14 @@ func applySubtreeDefaults(
 	rootDir := AbsScanRoot(root)
 	// ⛔ KEYS THIS OVERLAY CANNOT DELIVER, per tenant, reported rather than
 	// forced through. See the block above `unreachableKeys` for why writing
-	// them anyway was worse than not writing them.
-	unreachable := map[string]map[string]struct{}{}
+	// them anyway was worse than not writing them. Each key keeps the value
+	// of the deepest level that writes it in a threshold shape (the chain is
+	// root-first, so a later level overwrites; a level whose value fails
+	// scheduledValueFromRaw / isThresholdShaped is skipped above and leaves
+	// the shallower value). The value is scheduledValueFromRaw's rendering —
+	// normalised (a YAML `1e6` becomes "1e+06"), not the file's text (#1976:
+	// `da-guard served-values` lists threshold keys in `unserved`).
+	unreachable := map[string]map[string]ScheduledValue{}
 
 	filled := 0
 	for tenantID, overrides := range cfg.Tenants {
@@ -158,9 +164,9 @@ func applySubtreeDefaults(
 				// never be again is silent. (#1569 blind review.)
 				if !keyCanReachTheOutputPlane(cfg, key, value) {
 					if unreachable[tenantID] == nil {
-						unreachable[tenantID] = map[string]struct{}{}
+						unreachable[tenantID] = map[string]ScheduledValue{}
 					}
-					unreachable[tenantID][key] = struct{}{}
+					unreachable[tenantID][key] = value
 					continue
 				}
 				if overrides == nil {
@@ -195,7 +201,10 @@ func applySubtreeDefaults(
 			}
 		}
 	}
-	return filled, unreachableKeys(unreachable)
+	if len(unreachable) == 0 {
+		return filled, nil
+	}
+	return filled, unreachable
 }
 
 // levelWritesSpelling reports whether one defaults level WRITES spelling s:
@@ -445,12 +454,89 @@ func declaredAnywhere(cfg *ThresholdConfig, key string) bool {
 	return false
 }
 
+// undeliverableThresholds is the part of the build's unreachable set that
+// #1976 reports to readers outside the exporter (LoadReport.Undeliverable,
+// ScopedTenants.Undeliverable — both go through here, so the two cannot
+// filter differently): the keys for which the finding's advice — declare the
+// key in the root `_defaults.yaml` (or, for a key not starting with `_`, in
+// `optional_overrides:`) — is the fix. nil when none is left.
+// FlatBuild.Unreachable (the exporter's ERROR and gauge) is not filtered.
+//
+// Three exclusions, each taken from an existing authority rather than a
+// naming rule of its own:
+//
+//  1. IsReservedKey(k) — the reserved keys the config model recognises
+//     (`_metadata`, `_profile`, `_state_*`, `_routing*`, …). Declaring one in
+//     the root `defaults:` is not a fix: it produces a meaningless or
+//     conflicting threshold row (measured: a root `_namespaces: 1` grows a
+//     user_threshold row, a root `_metadata` makes served-values fail), and
+//     declaring it in `optional_overrides:` silences the verdict while the
+//     subtree value still does not take effect (measured with a scheduled
+//     `_state_maintenance`). Some are even listed although a deeper level
+//     delivers the key (`_state_<f>` as a schedule at one level, a scalar
+//     below). Subtree defaults carrying reserved keys are #2388's.
+//  2. baseRowsSkipKey(k) — the keys resolveBaseRows itself never turns into a
+//     row (`_silent_*`, `_state_*`, `_severity_dedup`, `_routing*`), whether
+//     declared or not: `_silent_bogus` declared at the root still serves
+//     nothing (measured), so the advice cannot help. Also #2388's.
+//  3. disabledEverywhere(v) — a key the subtree switches OFF (isDisabled, the
+//     resolver's own disable test, on the default and every window). It is
+//     undelivered, but "that alert can never fire" is what the subtree asked
+//     for; declaring it at the root would instead start serving it for every
+//     tenant outside the subtree (measured). Not #2388's — just not reported.
+//
+// ⚠️ An unrecognised `_` key that is none of the above (`_myth: 5`) IS a
+// threshold to the exporter: a root `_myth` serves a user_threshold row, and
+// declaring a subtree's `_myth2` at the root makes the tenant serve the
+// subtree's value (both measured) — so it is reported, like any threshold.
+// For such a key only the ROOT is a fix: resolveDeclaredRows skips every `_`
+// key, yet keyCanReachTheOutputPlane counts `optional_overrides:` as declared,
+// so a `_myth2` listed there drops out of this set (and of the exporter's
+// ERROR and gauge) while its value is still not served. Known limitation of
+// the reachability test, left as is; the finding's message says so
+// (guard.undeliverableFix).
+func undeliverableThresholds(byTenant map[string]map[string]ScheduledValue) map[string]map[string]ScheduledValue {
+	var out map[string]map[string]ScheduledValue
+	for tenantID, keys := range byTenant {
+		for k, v := range keys {
+			if IsReservedKey(k) || baseRowsSkipKey(k) || disabledEverywhere(v) {
+				continue
+			}
+			if out == nil {
+				out = map[string]map[string]ScheduledValue{}
+			}
+			if out[tenantID] == nil {
+				out[tenantID] = map[string]ScheduledValue{}
+			}
+			out[tenantID][k] = v
+		}
+	}
+	return out
+}
+
+// disabledEverywhere reports whether every value sv can resolve to is a
+// disable by resolveBaseRows' own test (isDisabled on the trimmed, lowered
+// text): its default and each window's value. A schedule that is a number in
+// any window is not — it would serve a row then.
+func disabledEverywhere(sv ScheduledValue) bool {
+	off := func(s string) bool { return isDisabled(strings.ToLower(strings.TrimSpace(s))) }
+	if !off(sv.Default) {
+		return false
+	}
+	for _, w := range sv.Overrides {
+		if !off(w.Value) {
+			return false
+		}
+	}
+	return true
+}
+
 // unreachableKeys flattens the per-tenant sets into sorted slices.
 //
 // ⛔ SORTED because this feeds an operator-facing ERROR line and a gauge; Go
 // map iteration is random and a diagnostic that reorders itself every reload
 // reads as churn rather than as a stable fact.
-func unreachableKeys(byTenant map[string]map[string]struct{}) map[string][]string {
+func unreachableKeys[V any](byTenant map[string]map[string]V) map[string][]string {
 	if len(byTenant) == 0 {
 		return nil
 	}

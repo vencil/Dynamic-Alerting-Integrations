@@ -78,6 +78,12 @@
 //     no fallback for that row and check 2 does not judge a tenant's key
 //     against it (config.EffectiveConfig.MergedDefaults leaves it out).
 //
+//  7. Undeliverable subtree defaults (#1976; see subtree.go), warn for now:
+//     a tenant inherits a threshold key only a subtree `_defaults.yaml`
+//     names, which the exporter serves no series for. The set is the
+//     exporter's build's own (CheckInput.UndeliverableInherited), filtered
+//     by pkg/config's undeliverableThresholds, not re-derived here.
+//
 // Future PRs in the C-12 family:
 //   - PR-4: CLI subcommand `da-tools guard defaults-impact` plus
 //     YAML parsing convenience layer that runs the actual merge
@@ -429,4 +435,11 @@ type CheckInput struct {
 	// (config.ScopedTenants.ParseFailed); the wrapper check skips them, so a
 	// broken file is named once, by exit 3.
 	ParseFailed []string `json:"-"`
+
+	// UndeliverableInherited maps tenant ID → the threshold keys it inherits from a
+	// subtree `_defaults.yaml` that the exporter's build cannot deliver
+	// (config.ScopedTenants.Undeliverable, i.e. FlatBuild.Unreachable). Each
+	// becomes a subtree_default_undeliverable warning for a tenant in
+	// EffectiveConfigs (#1976); nil skips the check.
+	UndeliverableInherited map[string][]string `json:"-"`
 }
