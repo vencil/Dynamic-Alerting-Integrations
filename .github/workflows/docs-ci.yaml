@@ -124,13 +124,12 @@ jobs:
               # strace (subprocesses included); its per-leg results are there.
               - "scripts/tools/lint/mkdocs-anchor-debt.txt"
               - "components/threshold-exporter/README.md"
-              # The mkdocs hook `mkdocs.yml` loads (`hooks:`): `mkdocs-build`
-              # executes it on every build, so breaking it fails that required
-              # check — and nothing else pre-merge runs it (#2079 measured
-              # `tests/dx/test_generate_nav.py` still passing with the hook
-              # raising at import). ⚠️ Only this file is pinned: a new hook
-              # added to `hooks:` needs its own line here.
-              - "scripts/mkdocs/rule_packs_bridge.py"
+              # The mkdocs hooks `mkdocs.yml` loads (`hooks:`): `mkdocs-build`
+              # executes them on every build, so breaking one fails that
+              # required check. `test_docs_filter_covers_every_mkdocs_hook`
+              # derives the set from `hooks:`, so a hook no `docs` pattern
+              # covers reds it.
+              - "scripts/mkdocs/**"
               # ⛔ The pin SSOT most of this workflow's gated jobs INSTALL FROM
               # (`pip install … -c requirements/ci-constraints.txt`, #1158) —
               # not a file any doc check reads, which is why no "does a test
