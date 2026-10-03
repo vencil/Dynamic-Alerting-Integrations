@@ -99,12 +99,21 @@ type LoadReport struct {
 	// (#2627). The walk's own WARN for the root is not logged then: this
 	// error carries the same reason.
 	RootListErr error
+	// Undeliverable is the build's FlatBuild.UnreachableValues: tenantID →
+	// each key the tenant inherits from a subtree `_defaults.yaml` that the
+	// root `_defaults.yaml` and `optional_overrides:` do not declare, with
+	// the value that level hands down. The exporter serves no series for such
+	// a key, logs an ERROR and counts the tenant on
+	// da_config_subtree_undeliverable_tenants; the key is in no tenant map of
+	// the config. nil when there is none (#1976).
+	Undeliverable map[string]map[string]ScheduledValue
 }
 
 // LoadDirReport is LoadDir, also naming the files that contribute no tenant
-// (LoadReport.NoTenant) and the files the walk could not stat or read
-// (LoadReport.Unreadable). It adds no verdict of its own: both are read off
-// the walker's own result on the same cold scan.
+// (LoadReport.NoTenant), the files the walk could not stat or read
+// (LoadReport.Unreadable) and the inherited subtree keys the build could not
+// deliver (LoadReport.Undeliverable). It adds no verdict of its own: each is
+// read off the walker's or the build's own result on the same cold scan.
 //
 // A tree with no config file the walk could keep is refused (ErrNoYAMLFiles),
 // as the exporter refuses it; the report then carries only Unreadable — the
@@ -150,6 +159,7 @@ func LoadDirReport(dir string, logger *log.Logger) (cfg *ThresholdConfig, rep Lo
 	}
 	rep.ParseFailed = built.ParseFailed
 	rep.Unreadable = scan.Unreadable
+	rep.Undeliverable = built.UnreachableValues
 	for _, k := range scan.Keys { // sorted
 		f := scan.Files[k]
 		if !isPlatformKey(k) && !f.ParseFailed && len(f.TenantIDs) == 0 {

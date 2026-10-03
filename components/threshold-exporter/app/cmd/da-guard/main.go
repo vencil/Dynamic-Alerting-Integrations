@@ -559,6 +559,9 @@ func buildCheckInput(scoped *config.ScopedTenants, f *flags) guard.CheckInput {
 		CardinalityWarnRatio:   f.cardinalityWarnRatio,
 		DefaultsFiles:          scoped.DefaultsFiles,
 		ParseFailed:            scoped.ParseFailed,
+		// #1976: the exporter's own build's undeliverable set, in-scope
+		// tenants only (ScopeEffective filters it).
+		UndeliverableInherited: scoped.Undeliverable,
 	}
 }
 

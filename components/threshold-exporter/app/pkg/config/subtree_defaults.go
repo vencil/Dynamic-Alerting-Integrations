@@ -71,7 +71,7 @@ func applySubtreeDefaults(
 	root string,
 	tenantDefaults map[string][]string,
 	parsed map[string]map[string]any,
-) (int, map[string][]string) {
+) (int, map[string]map[string]ScheduledValue) {
 	if cfg == nil || len(cfg.Tenants) == 0 || len(tenantDefaults) == 0 {
 		return 0, nil
 	}
@@ -88,8 +88,11 @@ func applySubtreeDefaults(
 	rootDir := AbsScanRoot(root)
 	// ⛔ KEYS THIS OVERLAY CANNOT DELIVER, per tenant, reported rather than
 	// forced through. See the block above `unreachableKeys` for why writing
-	// them anyway was worse than not writing them.
-	unreachable := map[string]map[string]struct{}{}
+	// them anyway was worse than not writing them. Each key keeps the value
+	// the deepest level naming it hands down (the chain is root-first, so a
+	// later level overwrites), rendered as a tenant's own map would hold it
+	// (#1976: `da-guard served-values` lists it in `unserved`).
+	unreachable := map[string]map[string]ScheduledValue{}
 
 	filled := 0
 	for tenantID, overrides := range cfg.Tenants {
@@ -158,9 +161,9 @@ func applySubtreeDefaults(
 				// never be again is silent. (#1569 blind review.)
 				if !keyCanReachTheOutputPlane(cfg, key, value) {
 					if unreachable[tenantID] == nil {
-						unreachable[tenantID] = map[string]struct{}{}
+						unreachable[tenantID] = map[string]ScheduledValue{}
 					}
-					unreachable[tenantID][key] = struct{}{}
+					unreachable[tenantID][key] = value
 					continue
 				}
 				if overrides == nil {
@@ -195,7 +198,10 @@ func applySubtreeDefaults(
 			}
 		}
 	}
-	return filled, unreachableKeys(unreachable)
+	if len(unreachable) == 0 {
+		return filled, nil
+	}
+	return filled, unreachable
 }
 
 // levelWritesSpelling reports whether one defaults level WRITES spelling s:
@@ -450,7 +456,7 @@ func declaredAnywhere(cfg *ThresholdConfig, key string) bool {
 // ⛔ SORTED because this feeds an operator-facing ERROR line and a gauge; Go
 // map iteration is random and a diagnostic that reorders itself every reload
 // reads as churn rather than as a stable fact.
-func unreachableKeys(byTenant map[string]map[string]struct{}) map[string][]string {
+func unreachableKeys[V any](byTenant map[string]map[string]V) map[string][]string {
 	if len(byTenant) == 0 {
 		return nil
 	}

@@ -89,7 +89,12 @@ type servedTenantValues struct {
 	Severities map[string]string `json:"severities"`
 	// Unserved: keys of the tenant's merged config with no entry in Values
 	// (switched off, or served by nothing), keyed as the merged config spells
-	// them, value as written.
+	// them, value as written — plus the keys the tenant inherits from a
+	// subtree `_defaults.yaml` that the exporter's build cannot deliver
+	// (config.LoadReport.Undeliverable, #1976): the build leaves them out of
+	// the tenant's map, so the merged config does not carry them, but the
+	// tenant's effective config shows them. Keyed as that defaults file spells
+	// them, value as the deepest level naming the key writes it.
 	Unserved map[string]any `json:"unserved"`
 	// Dropped: keys the resolver produced a row for but whose series the
 	// exporter cannot build (client_golang rejects the label set), so
@@ -179,7 +184,7 @@ func runServedValues(args []string, stdout, errOut io.Writer) int {
 			fmt.Fprintf(errOut, "%s %s: %v\n", programName, servedValuesCmd, err)
 			return exitCallerErr
 		}
-		tenants, err = servedValues(cfg, at)
+		tenants, err = servedValues(cfg, at, rep.Undeliverable)
 		if err != nil {
 			fmt.Fprintf(errOut, "%s %s: %v\n", programName, servedValuesCmd, err)
 			return exitCallerErr
@@ -319,8 +324,11 @@ func joinPath(path, name string) string {
 	return path + "." + name
 }
 
-// servedValues reads every tenant of cfg at `at`.
-func servedValues(cfg *config.ThresholdConfig, at time.Time) (map[string]servedTenantValues, error) {
+// servedValues reads every tenant of cfg at `at`. undeliverable is the same
+// load's LoadReport.Undeliverable; its keys go to Unserved.
+func servedValues(cfg *config.ThresholdConfig, at time.Time,
+	undeliverable map[string]map[string]config.ScheduledValue,
+) (map[string]servedTenantValues, error) {
 	ownedBy, droppedBy, res, err := keyedRows(cfg, at)
 	if err != nil {
 		return nil, err
@@ -429,6 +437,19 @@ func servedValues(cfg *config.ThresholdConfig, at time.Time) (map[string]servedT
 			_, canonWritten := overrides[canon]
 			shadowed := isAlias && canonWritten
 			if _, served := tv.Values[canon]; served && !shadowed {
+				continue
+			}
+			tv.Unserved[k] = rawScheduledValue(sv)
+		}
+		// #1976: the build's own verdict (FlatBuild.Unreachable), never
+		// re-judged here. A key the tenant authored is never in it (the build
+		// skips those before judging), so nothing above is overwritten; the
+		// two checks keep that so and keep Unserved disjoint from Values.
+		for k, sv := range undeliverable[tenant] {
+			if _, listed := tv.Unserved[k]; listed {
+				continue
+			}
+			if _, served := tv.Values[k]; served {
 				continue
 			}
 			tv.Unserved[k] = rawScheduledValue(sv)
