@@ -364,8 +364,8 @@ func (m *ConfigManager) snapshotPriorState() reloadPriorState {
 // computeMergedHash with an empty chain is well-defined.
 func (m *ConfigManager) scanAndCheckHierarchical(prior reloadPriorState) (reloadScanState, bool, error) {
 	scan, scanErr := scanDirTree(m.path, prior.tree, m.getMetrics(), m.getLogger())
-	if scanErr == nil && scan.Conflict != nil {
-		scanErr = scan.Conflict
+	if scanErr == nil {
+		scanErr = scanVerdict(scan, m.path) // duplicate tenant, unlistable root, empty tree (#2592)
 	}
 	if scanErr != nil {
 		// #2587: the wording names no mode. This scan runs before the path

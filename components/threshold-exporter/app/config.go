@@ -497,6 +497,12 @@ func (m *ConfigManager) commitConfig(cfg *ThresholdConfig, hash string, flatScan
 	// maps (the merged cfg here would overstate a tenant's own mapping).
 	if flatScan != nil {
 		m.getMetrics().SetConfigShape(configShapeOfFiles(flatScan.configs))
+		// #2592: the `_defaults` files this commit could not parse — state,
+		// not an event, so a broken root `_defaults.yaml` stays visible for
+		// as long as its block is missing. The UNREADABLE ones are set per
+		// walk instead (scanDirTree → SetUnreadableFiles): a dropped file is
+		// not a change-detection input, so no commit follows its removal.
+		m.getMetrics().SetDefaultsParseFailures(flatScan.parseFailed)
 	}
 
 	// #1521: the flat scanner that produced `cfg` is not recursive while
@@ -1565,6 +1571,14 @@ func (m *ConfigManager) fullDirLoadFrom(scan *treeScan) error {
 	if len(scan.Files) == 0 {
 		return fmt.Errorf("no .yaml files found in %s", m.path)
 	}
+	// ⚠️ Deliberately NOT scanVerdict (#2592): a root listed only in part
+	// (TreeScan.RootWalkErr with some files kept) is committed here, where
+	// the watch path freezes on it as root_unreadable. On the watch path a
+	// previous config exists and keeping it is the fail-safe direction; a
+	// cold load has none to keep, so serving the part that could be read
+	// beats serving nothing. An unlistable root with NO file kept still
+	// fails just above (rc 1 at startup, as before). The watch-path callers
+	// of this function hand it a scan scanVerdict has already accepted.
 	m.populateHierarchyStateFrom(scan)
 	return m.commitFlatFrom(scan)
 }
@@ -2039,8 +2053,14 @@ func (m *ConfigManager) detectChange() (bool, string, error) {
 	// the debounce timer before it could fire, so that reload never ran and
 	// the duplicate was never counted. Failing here sends both modes down
 	// tickOnce's WARN + IncScanFailure path, once per tick.
-	if err == nil && scan.Conflict != nil {
-		err = scan.Conflict
+	//
+	// #2592: so is a root that cannot be listed, or a tree with no usable
+	// file (scanVerdict). Both used to read as "every file removed": the
+	// tree stayed frozen anyway (the commit refuses an empty tree), but the
+	// scan counted as clean and, in hierarchical mode, every tenant was
+	// counted as a delete on every tick.
+	if err == nil {
+		err = scanVerdict(scan, m.path)
 	}
 	if hierarchical {
 		if err != nil {
