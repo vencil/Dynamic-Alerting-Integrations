@@ -1391,7 +1391,7 @@ def test_the_helper_is_sourced_without_spawning_anything(script: str, var: str) 
     the whole gate down. That behavioural coverage exists for
     ``require_preflight_pass.sh`` only; ``protect_main_push.sh`` carries the same
     comment with nothing driving it (measured: rewriting its sourcing with
-    ``$(dirname …)`` left the whole suite green). This holds it for all three,
+    ``$(dirname …)`` left the whole suite green). This holds it for every file below,
     and it runs on every platform, which the PATH-stripping tests do not.
     """
     lines = (_OPS / script).read_text(encoding="utf-8").splitlines()
@@ -1622,6 +1622,26 @@ def test_a_stale_guard_copy_is_recognised_however_it_got_there(
     )
     assert r.returncode == 0, f"installer failed:\n{r.stdout}{r.stderr}"
     _assert_the_guards_are_back(work)
+
+
+@pytest.mark.parametrize("cwd,guard", [
+    ("scripts", "ops/pre_push_mkdocs_strict.sh"),
+    ("scripts/ops", "pre_push_mkdocs_strict.sh"),
+])
+def test_the_docs_guard_finds_its_helper_when_invoked_relatively(
+    tmp_path: Path, cwd: str, guard: str,
+) -> None:
+    """A path to the helper taken relative to where the guard was invoked must
+    resolve, from a subdirectory and with a bare file name alike (#2656)."""
+    work = _make_repo(tmp_path, _PROTECT_ONLY)
+    assert _BASH, "no bash resolved; the module-level skip should have fired"
+    env = {k: v for k, v in os.environ.items()
+           if k != "MKDOCS_STRICT_BYPASS" and not k.startswith("PRE_COMMIT")}
+    r = subprocess.run(  # subprocess-timeout: ignore
+        [_BASH, guard, "origin"], cwd=work / cwd, input="", env=env,
+        capture_output=True, text=True, encoding="utf-8", errors="replace",
+    )
+    assert r.returncode == 0, f"rc={r.returncode}\n{r.stdout}{r.stderr}"
 
 
 @pytest.mark.parametrize("missing", ["_prepush_refs.sh", "protect_main_push.sh"])
