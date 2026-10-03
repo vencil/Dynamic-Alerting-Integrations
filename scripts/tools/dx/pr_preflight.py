@@ -1125,12 +1125,9 @@ def _prepush_guards_wired() -> Tuple[Optional[bool], str]:
     is_precommit = _has_line(hook_body, _PRECOMMIT_HOOK_HEADER)
 
     if (is_shim or is_precommit) and not _ok(hook):
-        # 安裝器只替它寫的那支補位元，pre-commit 的樣板它不碰 ⇒ 兩格處方不同。
-        kind, fix = (("守衛 shim", "重跑 install_prepush_hook.sh") if is_shim
-                     else ("pre-commit 的樣板", f"`chmod +x {hook}`"))
         return False, (
-            f"{hook} 是{kind}，但**沒有執行位元** ⇒ git 完全不會跑它"
-            f"（只印一行可關掉的 hint）。{fix}。"
+            f"{hook} 是{'守衛 shim' if is_shim else ' pre-commit 的樣板'}，但**沒有執行位元**"
+            " ⇒ git 完全不會跑它（只印一行可關掉的 hint）。重跑 install_prepush_hook.sh。"
         )
 
     if is_shim:

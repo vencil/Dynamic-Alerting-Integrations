@@ -352,10 +352,7 @@ class TestPrepushWiring:
         assert wired is False, f"a non-executable {name} was reported as wired"
         assert "執行位元" in why and Path(why.split()[0]).name == name, why
 
-        if "chmod +x" in why:
-            p.chmod(p.stat().st_mode | 0o111)
-        else:
-            assert self._install_guards(tmp_path).returncode == 0
+        assert self._install_guards(tmp_path).returncode == 0
         wired, why = mod._prepush_guards_wired()
         assert wired is True, f"following the message's remedy did not fix it: {why!r}"
 
