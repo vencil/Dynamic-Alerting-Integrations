@@ -719,3 +719,65 @@ class TestUnscannableFileFailsTheRun:
                               text=True, encoding="utf-8", timeout=60)
         assert proc.returncode == 2, proc.stdout + proc.stderr
         assert "bom.py" in proc.stderr
+
+
+# ---------------------------------------------------------------------------
+# Wiring — the hook must actually run in CI (#2643)
+# ---------------------------------------------------------------------------
+
+_HOOK_ID = "subprocess-timeout-audit"
+_REPO_ROOT = Path(__file__).resolve().parents[2]
+
+
+def _precommit_config() -> dict:
+    import yaml
+
+    with open(_REPO_ROOT / ".pre-commit-config.yaml", encoding="utf-8") as fh:
+        return yaml.safe_load(fh)
+
+
+def _hook_config(config: dict) -> dict:
+    hooks = [h for repo in config["repos"] for h in repo.get("hooks", [])
+             if h.get("id") == _HOOK_ID]
+    assert len(hooks) == 1, f"expected exactly one {_HOOK_ID} hook, found {len(hooks)}"
+    return hooks[0]
+
+
+class TestHookWiring:
+    """Every test above calls the script's functions; none reads the hook or CI.
+
+    #2643 measured the gap: with one ``timeout=`` removed from a governed
+    file, this module and ``tests/shared/test_sast.py`` stayed rc 0 — only
+    ``pre-commit run subprocess-timeout-audit --all-files`` went red, and no
+    workflow ran that line. These two pins hold the line in place and keep
+    the hook on its files. (Whether the hook's ``entry`` still fails on a
+    violation is ``tests/lint/test_precommit_gate_liveness.py``'s case.)
+    """
+
+    def test_hook_is_not_filtered_off_its_files(self):
+        """The CI line runs through pre-commit's file selection.
+
+        A hook ``exclude:`` / ``types:`` narrowing / ``stages:`` without
+        ``pre-commit`` (or a top-level equivalent) makes it print
+        "(no files to check) Skipped" and exit 0 — CI green, nothing scanned.
+        The list of such keys is the shared ``tests/_precommit_selection.py``.
+        """
+        from _precommit_selection import silencing_keys
+
+        config = _precommit_config()
+        silenced = silencing_keys(_hook_config(config), config)
+        assert not silenced, (
+            f"{_HOOK_ID} is filtered off its files: {silenced}. The CI Lint job "
+            f"runs it through pre-commit, so it would report Skipped and exit 0.")
+
+    def test_ci_lint_job_runs_the_hook_over_the_whole_tree(self):
+        """Lint job runs ``pre-commit run subprocess-timeout-audit --all-files``.
+
+        ⛔ Parsed from the YAML by the shared ``tests/_ci_lint_wiring.py``
+        (also pinning ``open-encoding-audit``), never grepped: ``ci.yml``
+        comments name hook ids too.
+        """
+        from _ci_lint_wiring import assert_ci_lint_job_runs_hook
+
+        assert_ci_lint_job_runs_hook(
+            _HOOK_ID, guards="the subprocess timeout= rule (#2643)")

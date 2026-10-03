@@ -62,7 +62,6 @@ from __future__ import annotations
 import inspect
 import re
 import shlex
-import sys
 from pathlib import Path
 
 import pytest
@@ -73,16 +72,10 @@ import check_open_encoding as hook  # noqa: E402  (scripts/tools/lint on sys.pat
 
 REPO_ROOT = Path(bump_docs.__file__).resolve().parent.parent.parent.parent
 HOOK_ID = "open-encoding-audit"
-CI_WORKFLOW = REPO_ROOT / ".github" / "workflows" / "ci.yml"
 
-# The shared workflow loader and `run:` line splitter. ⛔ Imported, not
-# reimplemented: the splitter already knows that a `#` comment is not continued
-# by a trailing backslash, which a second copy would have to relearn.
-sys.path.insert(0, str(REPO_ROOT / "tests" / "ops"))
-from test_ci_path_filter_coverage import (  # noqa: E402
-    _load_workflow,
-    _logical_shell_lines,
-)
+# The CI-wiring pin is shared with `subprocess-timeout-audit` (#2643): one
+# reading of `ci.yml`, not a copy per hook.
+from _ci_lint_wiring import assert_ci_lint_job_runs_hook  # noqa: E402  (tests/ on sys.path)
 from _precommit_selection import silencing_keys  # noqa: E402  (tests/ on sys.path)
 
 # ⛔ 獨立於 hook `entry` 的硬編清單，用來釘住「範圍不得被無聲收窄」。
@@ -333,54 +326,13 @@ class TestHookScope:
         這裡釘的是「那一行在、而且真的會讓 job 紅」。
 
         ⛔ 解析 YAML，不 grep：`ci.yml` 的註解裡本來就會提到 hook 名稱。
-        `run:` 逐邏輯行比對（`_logical_shell_lines` 丟掉註解行、接續行併行），
-        且整行必須**恰好**是那條指令——`|| true`、`; true` 之類吞 rc 的寫法
-        因此比對不到。step 與 job 都不得帶 `if:` / `continue-on-error`，step
-        不得改 `shell:`、script 裡不得 `set +e`（預設 shell 是 `bash -e`，
-        一行失敗整個 step 就失敗）。
-
-        ⚠️ 量不到的形狀：包進 shell 函式或 `if` 區塊再呼叫、`trap`、在更早的
-        step 改寫 `pre-commit` 本身。這些不是吞 rc 的慣用寫法，未建模。
+        `run:` 逐邏輯行比對、整行必須**恰好**是那條指令，step 與 job 都不得
+        帶 `if:` / `continue-on-error`、不得改 shell、不得 `set +e`。判定與
+        「量不到的形狀」清單在共用的 `tests/_ci_lint_wiring.py`（#2643 起與
+        `subprocess-timeout-audit` 共用），不在這裡另寫一份。
         """
-        workflow = _load_workflow(CI_WORKFLOW)
-        assert "lint" in workflow.get("jobs", {}), (
-            f"job 'lint' is gone from {CI_WORKFLOW.name}; if it was renamed, "
-            f"update this pin — do not drop it.")
-        job = workflow["jobs"]["lint"]
-        for key in ("if", "continue-on-error"):
-            assert key not in job, (
-                f"{CI_WORKFLOW.name}::lint has job-level `{key}:` — the "
-                f"{HOOK_ID} line would no longer be an unconditional gate.")
-        for scope in (workflow, job):
-            shell = ((scope.get("defaults") or {}).get("run") or {}).get("shell")
-            assert shell is None, (
-                f"`defaults.run.shell: {shell}` overrides GitHub's `bash -e`; "
-                f"a failing {HOOK_ID} line might no longer fail its step.")
-
-        wanted = ["pre-commit", "run", HOOK_ID, "--all-files"]
-        hits = []
-        for step in job.get("steps") or []:
-            lines = _logical_shell_lines(str(step.get("run") or ""))
-            if any(line.split() == wanted for line in lines):
-                hits.append((step, lines))
-        assert hits, (
-            f"{CI_WORKFLOW.name}::lint no longer runs `{' '.join(wanted)}` as "
-            f"a bare, uncommented line. That line is the ONLY CI entry point "
-            f"for the encoding= / newline= rules (#2539); without it they "
-            f"only run where a contributor's local hook happens to.")
-        for step, lines in hits:
-            label = step.get("name") or "<unnamed step>"
-            for key in ("if", "continue-on-error", "shell"):
-                assert key not in step, (
-                    f"step {label!r} running {HOOK_ID} sets `{key}:` — it can "
-                    f"be skipped or its failure swallowed.")
-            disarmed = [ln for ln in lines
-                        if ln.split()[:1] == ["set"]
-                        and any(t.startswith("+") and "e" in t
-                                for t in ln.split()[1:])]
-            assert not disarmed, (
-                f"step {label!r} turns off errexit ({disarmed}); a failing "
-                f"{HOOK_ID} line would no longer fail the step.")
+        assert_ci_lint_job_runs_hook(
+            HOOK_ID, guards="the encoding= / newline= rules (#2539)")
 
 
 class TestSharedWriteHelpersPinLF:
