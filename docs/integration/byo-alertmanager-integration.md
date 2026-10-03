@@ -445,7 +445,7 @@ _routing_enforced:
 
 **模式 B：Per-tenant 獨立通道**
 
-當 receiver 欄位包含 `{{tenant}}` 佔位符，系統自動為每個 tenant 建立獨立的 enforced route。Platform 可藉此為各 tenant 建立專屬通知通道，tenant 無法拒絕也無法覆寫。「每個 tenant」指產生器讀到的每個租戶，與 severity dedup inhibit rule 涵蓋的是同一群：沒有 `_routing` 的租戶（只寫閾值、只設 `_silent_mode`，或 `_routing: disable`）也有；tenant id 不合法的租戶例外，產生器會整棵樹拒收。Silent mode 照常作用在這條 route 上：它靠 inhibit rule 壓制，與 route 無關。route 數因此隨租戶數線性增加（[#2519](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/2519)）：
+當 receiver 欄位包含 `{{tenant}}` 佔位符，系統自動為每個 tenant 建立獨立的 enforced route。Platform 可藉此為各 tenant 建立專屬通知通道，tenant 無法拒絕也無法覆寫。「每個 tenant」指產生器讀到的每個租戶，與 severity dedup inhibit rule 涵蓋的是同一群：沒有 `_routing` 的租戶（只寫閾值、只設 `_silent_mode`）也有，寫 `_routing: disable` 或 `_routing` 被拒收的租戶同樣有——租戶無法用它退出這條通道；tenant id 不合法的租戶例外，產生器會整棵樹拒收。Silent mode 照常作用在這條 route 上：它靠 inhibit rule 壓制，與 route 無關。route 數因此隨租戶數線性增加（[#2519](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/2519)）：
 
 ```yaml
 # conf.d/_defaults.yaml

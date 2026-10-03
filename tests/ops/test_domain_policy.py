@@ -225,7 +225,7 @@ class TestGenerateRoutesWithPolicy:
             }
         }
         _, _, warnings = generate_routes(
-            routing_configs, allowed_domains=["*.example.com"])
+            routing_configs, allowed_domains=["*.example.com"], tenants=())
         domain_warns = [w for w in warnings if "not in allowed_domains" in w]
         assert len(domain_warns) >= 1
 
@@ -237,6 +237,6 @@ class TestGenerateRoutesWithPolicy:
             }
         }
         _, _, warnings = generate_routes(
-            routing_configs, allowed_domains=["*.example.com"])
+            routing_configs, allowed_domains=["*.example.com"], tenants=())
         domain_warns = [w for w in warnings if "not in allowed_domains" in w]
         assert domain_warns == []

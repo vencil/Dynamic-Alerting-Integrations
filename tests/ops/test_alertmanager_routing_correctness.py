@@ -332,7 +332,7 @@ def _build_enforced_am_yml() -> str:
         "match": ['severity="critical"'],
     }
     routes, receivers, warnings = generate_routes(
-        routing_configs, enforced_routing=enforced)
+        routing_configs, enforced_routing=enforced, tenants=())
     # receiver 建置若被 WARN+skip，下面的路由斷言會驗到殘缺樹 → 前提先擋。
     blocking = [w for w in warnings if "skipping" in w or "blocked" in w]
     assert not blocking, f"synthetic config unexpectedly degraded: {blocking}"
@@ -467,7 +467,7 @@ def _build_profile_routes_am_yml(conf_d) -> str:
         }}}), encoding="utf-8")
     routing, dedup, _sw, enforced, _mc = load_tenant_configs(str(conf_d))
     routes, receivers, warnings = generate_routes(
-        routing, enforced_routing=enforced)
+        routing, enforced_routing=enforced, tenants=dedup)
     blocking = [w for w in warnings if "skipping" in w or "blocked" in w]
     assert not blocking, f"synthetic config unexpectedly degraded: {blocking}"
     inhibit_rules, _ = generate_inhibit_rules(dedup)

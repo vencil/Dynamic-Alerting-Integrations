@@ -26,7 +26,7 @@ sys.path.insert(0, str(REPO / "scripts" / "tools" / "ops"))
 import explain_route as er  # noqa: E402
 import validate_config as vc  # noqa: E402
 from _grar_parse import _parse_config_files, load_tenant_tree  # noqa: E402
-from _grar_routes import generate_routes  # noqa: E402
+from _grar_routes import _build_enforced_routes, generate_routes  # noqa: E402
 
 _GAR = REPO / "scripts" / "tools" / "ops" / "generate_alertmanager_routes.py"
 
@@ -128,13 +128,21 @@ def test_single_platform_route_is_unchanged(tmp_path):
     assert len(enforced) == 1 and "matchers" not in enforced[0]
 
 
-def test_without_tenants_the_routed_set_is_kept(tmp_path):
-    """A caller holding only the resolved routing keeps the routed set."""
+def test_tenants_is_required_and_keyword_only(tmp_path):
+    """Fail-closed: no default falls back to the routed set (how #2519
+    shipped) — leaving `tenants` out, or passing it by position, is a
+    TypeError on both entry points."""
     tree = load_tenant_tree(str(_tree(tmp_path, _PER_TENANT)))
-    _r, receivers, _w = generate_routes(
-        tree.routing_configs, enforced_routing=tree.enforced_routing)
-    assert _enforced_names(receivers) == [
-        f"platform-enforced-{t}" for t in sorted(tree.routing_configs)]
+    with pytest.raises(TypeError, match="tenants"):
+        generate_routes(tree.routing_configs, enforced_routing=tree.enforced_routing)
+    with pytest.raises(TypeError):
+        generate_routes(tree.routing_configs, None, tree.enforced_routing,
+                        tree.dedup_configs)
+    with pytest.raises(TypeError, match="tenants"):
+        _build_enforced_routes(tree.enforced_routing, tree.routing_configs)
+    with pytest.raises(TypeError):
+        _build_enforced_routes(tree.enforced_routing, tree.routing_configs, None,
+                               tree.dedup_configs)
 
 
 def test_validate_config_routes_row_counts_them(tmp_path):

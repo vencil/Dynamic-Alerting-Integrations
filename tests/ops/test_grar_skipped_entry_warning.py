@@ -183,7 +183,8 @@ def _stream(gar, config_dir: Path, allowed_domains) -> list[str]:
     tree = gar.load_tenant_tree(str(config_dir))
     routing, dedup, schema_warnings, enforced, _md = tree.as_tuple()
     _r, _rc, route_warnings = gar.generate_routes(
-        routing, allowed_domains=allowed_domains, enforced_routing=enforced)
+        routing, allowed_domains=allowed_domains, enforced_routing=enforced,
+        tenants=dedup)
     _i, dedup_warnings = gar.generate_inhibit_rules(dedup)
     return schema_warnings + route_warnings + dedup_warnings
 

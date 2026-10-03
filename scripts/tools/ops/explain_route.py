@@ -604,7 +604,7 @@ def run_amtool_trace(am_yml: str, root: dict, labels: dict[str, str], *,
 
 def _conf_receiver_types(routing_configs: dict[str, dict],
                          enforced: dict | None,
-                         tenants: Iterable[str] | None = None) -> dict[str, str]:
+                         tenants: Iterable[str]) -> dict[str, str]:
     """Receiver name → the ``receiver.type`` it was generated from (G1).
 
     *tenants* is the generator's tenant set (``dedup_configs`` keys): a

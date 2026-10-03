@@ -75,7 +75,7 @@ def _apply_group_by(route: dict, group_by: object, ctx: str) -> list[str]:
 
 
 def enforced_route_tenants(routing_configs: dict[str, dict],
-                           tenants: Iterable[str] | None = None) -> list[str]:
+                           tenants: Iterable[str]) -> list[str]:
     """The tenants a ``{{tenant}}`` ``_routing_enforced`` expands over, sorted.
 
     #2519: EVERY tenant the generator recognises — *tenants* is
@@ -84,10 +84,15 @@ def enforced_route_tenants(routing_configs: dict[str, dict],
     and refused ``_routing`` included; an id ``is_valid_tenant_id`` refuses
     is never in it) — not only the ones with a resolved routing. The route
     is the platform's, so a tenant leaving ``_routing`` out does not leave
-    the NOC channel. *routing_configs* is unioned in so a caller that only
-    has the resolved routing (``tenants=None``) keeps the routed set.
+    the NOC channel. *routing_configs* is unioned in: a routed tenant is
+    always a recognised one.
+
+    ⛔ *tenants* has no default anywhere on this path (``generate_routes`` /
+    ``_build_enforced_routes`` take it keyword-only, required): a default of
+    "the routed set" is how #2519 shipped — a caller that forgets it must
+    get a TypeError, not the narrower set.
     """
-    return sorted(set(routing_configs) | set(tenants or ()))
+    return sorted(set(routing_configs) | set(tenants))
 
 
 def enforced_group_by_problems(enforced_routing: object, tenants: list[str]
@@ -483,7 +488,7 @@ def _build_single_enforced_route(enforced_routing: dict,
 
 def _build_enforced_routes(enforced_routing: dict, routing_configs: dict[str, dict],
                            allowed_domains: list[str] | None = None,
-                           tenants: Iterable[str] | None = None,
+                           *, tenants: Iterable[str],
                            ) -> tuple[list[dict], list[dict], list[str]]:
     """Generate platform-enforced Alertmanager routes and receivers.
 
@@ -500,8 +505,9 @@ def _build_enforced_routes(enforced_routing: dict, routing_configs: dict[str, di
     Args:
         enforced_routing: _routing_enforced config dict or None
         routing_configs: {tenant_name: routing_config}
-        tenants: every tenant the generator recognises (``dedup_configs``
-            keys) for {{tenant}} expansion; see ``enforced_route_tenants``
+        tenants: keyword-only, required — every tenant the generator
+            recognises (``dedup_configs`` keys) for {{tenant}} expansion;
+            see ``enforced_route_tenants``
         allowed_domains: optional fnmatch domain patterns for webhook URL validation (SSRF protection)
 
     Returns:
@@ -863,7 +869,7 @@ def _build_sentinel_sinkhole_route() -> tuple[list[dict], list[dict]]:
 
 def generate_routes(routing_configs: dict[str, dict], allowed_domains: list[str] | None = None,
                     enforced_routing: dict | None = None,
-                    tenants: Iterable[str] | None = None,
+                    *, tenants: Iterable[str],
                     ) -> tuple[list[dict], list[dict], list[str]]:
     """Generate Alertmanager route tree + receivers from routing configs.
 
@@ -882,9 +888,11 @@ def generate_routes(routing_configs: dict[str, dict], allowed_domains: list[str]
         routing_configs: {tenant_name: routing_config_dict} resolved from defaults
         allowed_domains: optional list of fnmatch domain patterns for webhook URL validation
         enforced_routing: optional platform-wide routing rule (NOC fallback)
-        tenants: every tenant the generator recognises (``dedup_configs``
-            keys); a ``{{tenant}}`` enforced routing expands over them all,
-            routed or not (#2519, ``enforced_route_tenants``)
+        tenants: keyword-only, required — every tenant the generator
+            recognises (``dedup_configs`` keys); a ``{{tenant}}`` enforced
+            routing expands over them all, routed or not (#2519,
+            ``enforced_route_tenants``). No default: forgetting it is a
+            TypeError, not the routed-only set.
 
     Returns:
         (routes_list, receivers_list, warnings_list) where:
@@ -899,7 +907,7 @@ def generate_routes(routing_configs: dict[str, dict], allowed_domains: list[str]
 
     # Platform Enforced Routing — NOC 永遠收到通知
     enf_routes, enf_receivers, enf_warnings = _build_enforced_routes(
-        enforced_routing, routing_configs, allowed_domains, tenants)
+        enforced_routing, routing_configs, allowed_domains, tenants=tenants)
     routes.extend(enf_routes)
     receivers.extend(enf_receivers)
     all_warnings.extend(enf_warnings)

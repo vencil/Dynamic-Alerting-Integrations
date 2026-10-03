@@ -258,20 +258,20 @@ class TestValidateReceiverDomains:
     def test_blocked_domain_skips_route(self):
         """Domain not in allowlist → route not generated。"""
         cfg = {"db-a": {"receiver": {"type": "webhook", "url": "https://evil.com/x"}}}
-        routes, receivers, warnings = generate_routes(cfg, allowed_domains=["*.example.com"])
+        routes, receivers, warnings = generate_routes(cfg, allowed_domains=["*.example.com"], tenants=())
         assert len(routes) == 0
         assert any("not in allowed_domains" in w for w in warnings)
 
     def test_allowed_domain_generates_route(self):
         """允許的網域產生路由。"""
         cfg = {"db-a": {"receiver": {"type": "webhook", "url": "https://hook.example.com/x"}}}
-        routes, receivers, _ = generate_routes(cfg, allowed_domains=["*.example.com"])
+        routes, receivers, _ = generate_routes(cfg, allowed_domains=["*.example.com"], tenants=())
         assert len(routes) == 1
 
     def test_no_policy_no_filtering(self):
         """No allowed_domains → backward compatible, all pass。"""
         cfg = {"db-a": {"receiver": {"type": "webhook", "url": "https://any.com/x"}}}
-        routes, _, _ = generate_routes(cfg, allowed_domains=None)
+        routes, _, _ = generate_routes(cfg, allowed_domains=None, tenants=())
         assert len(routes) == 1
 
     def test_load_policy_from_file(self, config_dir):
@@ -1240,7 +1240,7 @@ class TestGenerateRoutes:
     def test_single_tenant_webhook(self):
         """單一 tenant 產生一組 route + receiver。"""
         configs = {"db-a": {**make_routing_config(), "group_wait": "30s"}}
-        routes, receivers, warnings = generate_routes(configs)
+        routes, receivers, warnings = generate_routes(configs, tenants=())
         assert len(routes) == 1
         assert routes[0]["receiver"] == "tenant-db-a"
         assert routes[0]["matchers"] == ['tenant="db-a"']
@@ -1254,7 +1254,7 @@ class TestGenerateRoutes:
             "db-b": make_routing_config(url="https://b.example.com"),
             "db-a": make_routing_config(url="https://a.example.com"),
         }
-        routes, receivers, warnings = generate_routes(configs)
+        routes, receivers, warnings = generate_routes(configs, tenants=())
         assert len(routes) == 2
         assert routes[0]["receiver"] == "tenant-db-a"
         assert routes[1]["receiver"] == "tenant-db-b"
@@ -1262,7 +1262,7 @@ class TestGenerateRoutes:
     def test_missing_receiver_skipped(self):
         """缺少 receiver 的 tenant 被跳過並產生警告。"""
         configs = {"db-a": {"group_wait": "30s"}}
-        routes, receivers, warnings = generate_routes(configs)
+        routes, receivers, warnings = generate_routes(configs, tenants=())
         assert len(routes) == 0
         assert any("missing required 'receiver'" in w for w in warnings)
 
@@ -1270,7 +1270,7 @@ class TestGenerateRoutes:
         """單一 enforced route 插入在 tenant route 之前。"""
         configs = {"db-a": make_routing_config(url="https://tenant.example.com")}
         enforced = make_enforced_routing()
-        routes, receivers, warnings = generate_routes(configs, enforced_routing=enforced)
+        routes, receivers, warnings = generate_routes(configs, enforced_routing=enforced, tenants=())
         assert len(routes) == 2
         assert routes[0]["receiver"] == "platform-enforced"
         assert routes[0].get("continue") is True
@@ -1283,7 +1283,7 @@ class TestGenerateRoutes:
             "db-b": make_routing_config(url="https://b.example.com"),
         }
         enforced = make_enforced_routing("slack", per_tenant=True)
-        routes, receivers, warnings = generate_routes(configs, enforced_routing=enforced)
+        routes, receivers, warnings = generate_routes(configs, enforced_routing=enforced, tenants=())
         assert len(routes) == 4  # 2 enforced + 2 tenant
         enforced_routes = [r for r in routes if r.get("continue")]
         assert len(enforced_routes) == 2
@@ -1292,7 +1292,7 @@ class TestGenerateRoutes:
         """Enforced routing 缺少 receiver 產生警告但不影響 tenant routes。"""
         configs = {"db-a": make_routing_config()}
         enforced = {"match": ['severity="critical"']}  # no receiver
-        routes, receivers, warnings = generate_routes(configs, enforced_routing=enforced)
+        routes, receivers, warnings = generate_routes(configs, enforced_routing=enforced, tenants=())
         assert any("missing 'receiver'" in w for w in warnings)
         assert len(routes) == 1
 
@@ -1300,7 +1300,7 @@ class TestGenerateRoutes:
         """Domain allowlist 阻擋 tenant receiver。"""
         configs = {"db-a": make_routing_config(url="https://evil.com/hook")}
         routes, receivers, warnings = generate_routes(
-            configs, allowed_domains=["*.example.com"])
+            configs, allowed_domains=["*.example.com"], tenants=())
         assert len(routes) == 0
         assert any("not in allowed_domains" in w for w in warnings)
 
@@ -1315,7 +1315,7 @@ class TestGenerateRoutes:
                 }],
             }
         }
-        routes, receivers, warnings = generate_routes(configs)
+        routes, receivers, warnings = generate_routes(configs, tenants=())
         assert len(routes) == 1
         assert routes[0]["receiver"] == "tenant-db-a"
         assert routes[0]["routes"][0]["receiver"] == "tenant-db-a-override-0"
@@ -1328,7 +1328,7 @@ class TestGenerateRoutes:
                 "group_wait": "30s", "group_interval": "5m", "repeat_interval": "4h",
             }
         }
-        routes, _, _ = generate_routes(configs)
+        routes, _, _ = generate_routes(configs, tenants=())
         assert routes[0]["group_wait"] == "30s"
         assert routes[0]["group_interval"] == "5m"
         assert routes[0]["repeat_interval"] == "4h"
@@ -1336,7 +1336,7 @@ class TestGenerateRoutes:
     def test_group_by_passed_through(self):
         """group_by 傳遞到路由。"""
         cfg = {"db-a": {"receiver": make_receiver(), "group_by": ["alertname", "severity"]}}
-        routes, _, _ = generate_routes(cfg)
+        routes, _, _ = generate_routes(cfg, tenants=())
         assert routes[0]["group_by"] == ["alertname", "severity"]
 
 
@@ -1455,14 +1455,14 @@ class TestBuildEnforcedRoutes:
 
     def test_none_enforced_returns_empty(self):
         """None enforced routing 回傳空結果。"""
-        routes, receivers, warnings = _build_enforced_routes(None, {})
+        routes, receivers, warnings = _build_enforced_routes(None, {}, tenants=())
         assert routes == []
         assert receivers == []
         assert warnings == []
 
     def test_empty_dict_returns_empty(self):
         """空 dict enforced routing 回傳空結果。"""
-        routes, receivers, warnings = _build_enforced_routes({}, {})
+        routes, receivers, warnings = _build_enforced_routes({}, {}, tenants=())
         assert routes == []
 
     def test_enforced_route_loaded_from_defaults(self, config_dir):
@@ -1525,7 +1525,7 @@ tenants:
             "db-a": {"receiver": {"type": "webhook", "url": "https://tenant.example.com/alerts"}},
         }
         routes, receivers, warnings = generate_routes(
-            tenant_cfg, enforced_routing=enforced)
+            tenant_cfg, enforced_routing=enforced, tenants=())
         assert len(routes) == 2
         # First route is platform enforced
         assert routes[0]["receiver"] == "platform-enforced"
@@ -1544,7 +1544,7 @@ tenants:
             "enabled": True,
             "receiver": {"type": "webhook", "url": "https://noc.example.com/alerts"},
         }
-        routes, _, _ = generate_routes({}, enforced_routing=enforced)
+        routes, _, _ = generate_routes({}, enforced_routing=enforced, tenants=())
         assert len(routes) == 1
         assert routes[0]["receiver"] == "platform-enforced"
         assert routes[0]["continue"]
@@ -1558,7 +1558,7 @@ tenants:
             "group_wait": "1s",       # below min → clamped to 5s
             "repeat_interval": "100h",  # above max → clamped to 72h
         }
-        routes, _, warnings = generate_routes({}, enforced_routing=enforced)
+        routes, _, warnings = generate_routes({}, enforced_routing=enforced, tenants=())
         assert routes[0]["group_wait"] == "5s"
         assert routes[0]["repeat_interval"] == "72h"
         assert len(warnings) >= 2
@@ -1566,7 +1566,7 @@ tenants:
     def test_enforced_missing_receiver_skipped(self):
         """Enforced without receiver → warning, no route."""
         enforced = {"enabled": True, "match": ['severity="critical"']}
-        routes, _, warnings = generate_routes({}, enforced_routing=enforced)
+        routes, _, warnings = generate_routes({}, enforced_routing=enforced, tenants=())
         assert len(routes) == 0
         assert any("missing 'receiver'" in w for w in warnings)
 
@@ -1577,7 +1577,7 @@ tenants:
             "receiver": {"type": "webhook", "url": "https://evil.com/alerts"},
         }
         routes, _, warnings = generate_routes(
-            {}, enforced_routing=enforced, allowed_domains=["*.example.com"])
+            {}, enforced_routing=enforced, allowed_domains=["*.example.com"], tenants=())
         assert len(routes) == 0
         assert any("blocked by domain policy" in w for w in warnings)
 
@@ -1586,7 +1586,7 @@ tenants:
         tenant_cfg = {
             "db-a": {"receiver": {"type": "webhook", "url": "https://a.example.com/alerts"}},
         }
-        routes, receivers, _ = generate_routes(tenant_cfg, enforced_routing=None)
+        routes, receivers, _ = generate_routes(tenant_cfg, enforced_routing=None, tenants=())
         assert len(routes) == 1
         assert routes[0]["receiver"] == "tenant-db-a"
 
@@ -1621,7 +1621,7 @@ tenants:
         routing, dedup, _sw, enforced, _mc = load_tenant_configs(config_dir)
         assert enforced is not None
         routes, receivers, _ = generate_routes(
-            routing, enforced_routing=enforced)
+            routing, enforced_routing=enforced, tenants=())
         # First route = platform enforced, then 2 tenant routes
         assert len(routes) == 3
         assert routes[0]["receiver"] == "platform-enforced"
@@ -1679,7 +1679,7 @@ class TestOverrideRoutesNestUnderTenantRoute:
     def test_overrides_are_children_of_the_tenant_route(self):
         routes, receivers, warnings = generate_routes(self._cfg(
             self._ov(alertname="DiskFull"),
-            self._ov(metric_group="cpu_metrics")))
+            self._ov(metric_group="cpu_metrics")), tenants=())
         assert warnings == []
         assert len(routes) == 1, routes
         parent = routes[0]
@@ -1701,7 +1701,7 @@ class TestOverrideRoutesNestUnderTenantRoute:
             **self._cfg(self._ov(alertname="A")),
             "demo-other": {"receiver": self._MAIN,
                            "overrides": [self._ov(metric_group="g")]},
-        })
+        }, tenants=())
         assert [r["receiver"] for r in routes] == [
             "tenant-demo-nest", "tenant-demo-other"]
         assert all("-override-" not in r["receiver"] for r in routes)
@@ -1711,7 +1711,7 @@ class TestOverrideRoutesNestUnderTenantRoute:
         timing / group_by 鍵（由 AM 從 tenant 主路由繼承 30m），父節點帶 30m。"""
         routes, _, _ = generate_routes(self._cfg(
             self._ov(alertname="A"),
-            repeat_interval="30m", group_wait="45s", group_by=["alertname"]))
+            repeat_interval="30m", group_wait="45s", group_by=["alertname"]), tenants=())
         parent = routes[0]
         assert parent["repeat_interval"] == "30m"
         child = parent["routes"][0]
@@ -1721,7 +1721,7 @@ class TestOverrideRoutesNestUnderTenantRoute:
         routes, _, _ = generate_routes(self._cfg(
             self._ov(alertname="A", repeat_interval="10m",
                      group_by=["alertname", "instance"]),
-            repeat_interval="30m"))
+            repeat_interval="30m"), tenants=())
         child = routes[0]["routes"][0]
         assert child["repeat_interval"] == "10m"
         assert child["group_by"] == ["alertname", "instance"]
@@ -1730,18 +1730,18 @@ class TestOverrideRoutesNestUnderTenantRoute:
     def test_override_order_is_preserved_first_match_wins(self):
         """AM 在子路由間取第一個命中者；list 順序必須照 overrides 原順序。"""
         routes, _, _ = generate_routes(self._cfg(
-            self._ov(alertname="Dup"), self._ov(alertname="Dup")))
+            self._ov(alertname="Dup"), self._ov(alertname="Dup")), tenants=())
         assert [c["receiver"] for c in routes[0]["routes"]] == [
             f"tenant-{self._T}-override-0", f"tenant-{self._T}-override-1"]
 
     def test_tenant_without_overrides_has_no_routes_key(self):
         """沒有 override 的 tenant 維持原形狀（不產生空的 routes）。"""
-        routes, _, _ = generate_routes(self._cfg(repeat_interval="30m"))
+        routes, _, _ = generate_routes(self._cfg(repeat_interval="30m"), tenants=())
         assert "routes" not in routes[0]
 
     def test_all_overrides_skipped_leaves_no_routes_key(self):
         routes, _, warnings = generate_routes(self._cfg(
-            {"alertname": "NoReceiver"}))
+            {"alertname": "NoReceiver"}), tenants=())
         assert any("missing 'receiver'" in w for w in warnings)
         assert "routes" not in routes[0]
 
@@ -1751,7 +1751,7 @@ class TestOverrideRoutesNestUnderTenantRoute:
                                  "url": "https://noc.example.com/x"},
                     "match": ['severity="critical"']}
         routes, _, _ = generate_routes(
-            self._cfg(self._ov(alertname="A")), enforced_routing=enforced)
+            self._cfg(self._ov(alertname="A")), enforced_routing=enforced, tenants=())
         assert [r["receiver"] for r in routes] == [
             "platform-enforced", f"tenant-{self._T}"]
         assert routes[0]["continue"] is True
@@ -1762,7 +1762,7 @@ class TestOverrideRoutesNestUnderTenantRoute:
         enforced = {"receiver": {"type": "webhook",
                                  "url": "https://noc.example.com/{{tenant}}"}}
         routes, _, _ = generate_routes(
-            self._cfg(self._ov(alertname="A")), enforced_routing=enforced)
+            self._cfg(self._ov(alertname="A")), enforced_routing=enforced, tenants=())
         assert [r["receiver"] for r in routes] == [
             f"platform-enforced-{self._T}", f"tenant-{self._T}"]
         assert "routes" not in routes[0]
@@ -1773,7 +1773,7 @@ class TestOverrideRoutesNestUnderTenantRoute:
         from generate_alertmanager_routes import (
             assemble_configmap, load_base_config)
         routes, receivers, _ = generate_routes(self._cfg(
-            self._ov(alertname="A")))
+            self._ov(alertname="A")), tenants=())
         cm = yaml.safe_load(assemble_configmap(
             load_base_config(None), routes, receivers, []))
         am = yaml.safe_load(cm["data"]["alertmanager.yml"])
@@ -2117,7 +2117,7 @@ tenants:
     def test_old_string_receiver_rejected(self):
         """v1.2.0 舊格式 (receiver: URL string) 在 generate_routes 應被跳過。"""
         cfg = {"db-a": {"receiver": "https://example.com", "group_wait": "30s"}}
-        routes, _, warnings = generate_routes(cfg)
+        routes, _, warnings = generate_routes(cfg, tenants=())
         assert len(routes) == 0
         assert any("must be an object" in w for w in warnings)
 
