@@ -157,6 +157,19 @@ type ScopedTenants struct {
 	// it. Only in-scope tenants are listed;
 	// nil when there is none (#1976).
 	Undeliverable map[string][]string
+
+	// SubtreeReserved is, for each tenant in Tenants, the keys of its
+	// defaults chain that a SUBTREE `_defaults.yaml` (not the conf.d root's)
+	// writes and that subtreeDefaultsRefusedKey refuses (reserved keys such
+	// as `_state_*`, `_silent_mode`, `_metadata`, and the keys
+	// resolveBaseRows never turns into a row; not `_routing*`, which
+	// da-guard's routing checks own), whatever their value and
+	// whether or not the exporter applies it: key → the root-relative slash
+	// paths of the subtree defaults files writing it, root-first. Read off
+	// the chain the exporter's own build of this tree is given
+	// (subtreeReservedKeys). Only in-scope tenants are listed; nil when there
+	// is none (#2388).
+	SubtreeReserved map[string]map[string][]string
 }
 
 // DefaultsFile is one defaults carrier of a scan: its root-relative slash
@@ -331,7 +344,7 @@ func scopeEffective(configDir, scopeDir string, wholeTree bool) (*ScopedTenants,
 			inScope[id] = struct{}{}
 		}
 	}
-	parseFailed, unreachable, err := scopeParseFailed(scan, filepath.ToSlash(rel))
+	parseFailed, unreachable, reserved, err := scopeParseFailed(scan, filepath.ToSlash(rel))
 	if err != nil {
 		return nil, err
 	}
@@ -373,13 +386,20 @@ func scopeEffective(configDir, scopeDir string, wholeTree bool) (*ScopedTenants,
 		Unreadable:          unreadable,
 		NestedPlatformFiles: nestedFiles,
 	}
-	// The build's verdict, kept for the in-scope tenants only (#1976).
+	// The build's verdict, kept for the in-scope tenants only (#1976), and
+	// the reserved keys of the same build's subtree chain (#2388).
 	for _, id := range tenantIDs {
 		if keys := unreachable[id]; len(keys) > 0 {
 			if out.Undeliverable == nil {
 				out.Undeliverable = map[string][]string{}
 			}
 			out.Undeliverable[id] = keys
+		}
+		if keys := reserved[id]; len(keys) > 0 {
+			if out.SubtreeReserved == nil {
+				out.SubtreeReserved = map[string]map[string][]string{}
+			}
+			out.SubtreeReserved[id] = keys
 		}
 	}
 	seenFiles := make(map[string]struct{}, len(tenantIDs))
@@ -438,17 +458,25 @@ func scopeEffective(configDir, scopeDir string, wholeTree bool) (*ScopedTenants,
 // inherited subtree threshold keys it cannot deliver), over the whole tree; the caller
 // keeps the in-scope tenants (ScopedTenants.Undeliverable, #1976). One build
 // answers both, so the two cannot come from different readings of the tree.
-func scopeParseFailed(scan *TreeScan, scopeRel string) (parseFailed []string, unreachable map[string][]string, err error) {
+//
+// reserved is subtreeReservedKeys over the chain that same build was given
+// (tenantID → reserved key → the subtree defaults files writing it), over the
+// whole tree; the caller keeps the in-scope tenants
+// (ScopedTenants.SubtreeReserved, #2388).
+func scopeParseFailed(scan *TreeScan, scopeRel string) (
+	parseFailed []string, unreachable map[string][]string, reserved map[string]map[string][]string, err error,
+) {
 	if len(scan.Files) == 0 {
-		return nil, nil, nil // the exporter refuses an empty tree; nothing was dropped
+		return nil, nil, nil, nil // the exporter refuses an empty tree; nothing was dropped
 	}
 	// ⚠️ log.Printf, not discardLogger, for the profile WARNs (#2513): they
 	// reached the process log here before the build took its logger for them,
 	// and on da-guard's stderr that line is the only place a tenant electing
 	// an unknown profile is named (the report does not list it).
-	built, err := loadDirBuild(scan, scan.AbsRoot, discardLogger, log.Printf)
+	in := loadDirBuildInput(scan, scan.AbsRoot, discardLogger, log.Printf)
+	built, err := BuildFlatConfig(scan, in)
 	if err != nil {
-		return nil, nil, err
+		return nil, nil, nil, err
 	}
 	for _, key := range built.ParseFailed {
 		if bearsOnScope(key, scopeRel) {
@@ -456,7 +484,8 @@ func scopeParseFailed(scan *TreeScan, scopeRel string) (parseFailed []string, un
 		}
 	}
 	sort.Strings(parseFailed)
-	return parseFailed, unreachableKeys(undeliverableThresholds(built.UnreachableValues)), nil
+	return parseFailed, unreachableKeys(undeliverableThresholds(built.UnreachableValues)),
+		subtreeReservedKeys(in.Root, in.TenantDefaults, in.ParsedDefaults), nil
 }
 
 // scopeDefaultsFiles is ScopedTenants.DefaultsFiles: the selected carrier of

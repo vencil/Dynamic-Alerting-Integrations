@@ -562,6 +562,9 @@ func buildCheckInput(scoped *config.ScopedTenants, f *flags) guard.CheckInput {
 		// #1976: the exporter's own build's undeliverable set, in-scope
 		// tenants only (ScopeEffective filters it).
 		UndeliverableInherited: scoped.Undeliverable,
+		// #2388: reserved keys in the tenants' subtree defaults, in-scope
+		// tenants only (ScopeEffective filters it).
+		SubtreeReservedKeys: scoped.SubtreeReserved,
 	}
 }
 

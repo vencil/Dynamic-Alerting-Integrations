@@ -465,6 +465,10 @@ func declaredAnywhere(cfg *ThresholdConfig, key string) bool {
 // Three exclusions, each taken from an existing authority rather than a
 // naming rule of its own:
 //
+// The first two exclusions are subtreeDefaultsRefusedKey, the predicate
+// #2388's subtree_default_reserved_key finding reports on — one definition,
+// so a key is never in both findings nor in neither:
+//
 //  1. IsReservedKey(k) — the reserved keys the config model recognises
 //     (`_metadata`, `_profile`, `_state_*`, `_routing*`, …). Declaring one in
 //     the root `defaults:` is not a fix: it produces a meaningless or
@@ -474,11 +478,12 @@ func declaredAnywhere(cfg *ThresholdConfig, key string) bool {
 //     subtree value still does not take effect (measured with a scheduled
 //     `_state_maintenance`). Some are even listed although a deeper level
 //     delivers the key (`_state_<f>` as a schedule at one level, a scalar
-//     below). Subtree defaults carrying reserved keys are #2388's.
+//     below). Reported by subtreeReservedKeys instead (#2388).
 //  2. baseRowsSkipKey(k) — the keys resolveBaseRows itself never turns into a
 //     row (`_silent_*`, `_state_*`, `_severity_dedup`, `_routing*`), whether
 //     declared or not: `_silent_bogus` declared at the root still serves
-//     nothing (measured), so the advice cannot help. Also #2388's.
+//     nothing (measured), so the advice cannot help. Also reported by
+//     subtreeReservedKeys (#2388).
 //  3. disabledEverywhere(v) — a key the subtree switches OFF (isDisabled, the
 //     resolver's own disable test, on the default and every window). It is
 //     undelivered, but "that alert can never fire" is what the subtree asked
@@ -499,7 +504,7 @@ func undeliverableThresholds(byTenant map[string]map[string]ScheduledValue) map[
 	var out map[string]map[string]ScheduledValue
 	for tenantID, keys := range byTenant {
 		for k, v := range keys {
-			if IsReservedKey(k) || baseRowsSkipKey(k) || disabledEverywhere(v) {
+			if subtreeDefaultsRefusedKey(k) || disabledEverywhere(v) {
 				continue
 			}
 			if out == nil {
@@ -509,6 +514,74 @@ func undeliverableThresholds(byTenant map[string]map[string]ScheduledValue) map[
 				out[tenantID] = map[string]ScheduledValue{}
 			}
 			out[tenantID][k] = v
+		}
+	}
+	return out
+}
+
+// subtreeDefaultsRefusedKey reports whether k is a key a subtree
+// `_defaults.yaml` is not meant to carry in its defaults (#2388): a reserved
+// key (IsReservedKey) or one resolveBaseRows never turns into a row
+// (baseRowsSkipKey). The one definition both reports use: #1976's
+// undeliverableThresholds leaves these keys out (declaring them at the root
+// is not a fix), and subtreeReservedKeys reports exactly them.
+func subtreeDefaultsRefusedKey(k string) bool {
+	return IsReservedKey(k) || baseRowsSkipKey(k)
+}
+
+// subtreeReservedKeys is, per tenant, the subtreeDefaultsRefusedKey keys a
+// SUBTREE level of its defaults chain writes: tenantID → key → the
+// root-relative slash paths of the subtree defaults files writing it, in
+// chain order (root-first). nil when there is none (#2388).
+//
+// Same inputs and the same "is this the root's file" test as
+// applySubtreeDefaults (the conf.d root `_defaults.yaml` is skipped by path),
+// so it reads the chain the exporter's build reads. It asks nothing of the
+// value or of the tenant's own map: a key is listed whether the overlay
+// applies it (today a `disable` or number for a declared `_state_<filter>`,
+// `_silent_mode`, `_severity_dedup`), drops it (`enable`, a severity, a
+// mapping) or yields to the tenant's own key — the key does not belong in a
+// subtree defaults file in any of these cases. The overlay's behaviour is
+// not changed here; from the next minor release it stops applying these
+// keys and da-guard's finding becomes an error.
+//
+// ⚠️ `_routing*` KEYS ARE LEFT OUT, and only here (#1976's report leaves
+// them out through the shared predicate). da-guard's routing checks already
+// own every such key in a subtree defaults file: one inside `defaults:` is
+// routing_in_unread_location (an error), `_routing_enforced` below the root
+// is routing_enforced_below_root (an error), and a top-level
+// `_routing_defaults` in a subtree `_defaults.yaml` with no `defaults:`
+// wrapper is the route generator's documented spelling (#2326) — which
+// `parsed` holds too, because the merge then reads the whole document.
+// Listing them here would repeat an error as a warning, or report a valid
+// file.
+func subtreeReservedKeys(root string, tenantDefaults map[string][]string, parsed map[string]map[string]any) map[string]map[string][]string {
+	if len(tenantDefaults) == 0 {
+		return nil
+	}
+	rootDir := AbsScanRoot(root)
+	var out map[string]map[string][]string
+	for tenantID, chain := range tenantDefaults {
+		for _, defaultsPath := range chain {
+			if filepath.Dir(filepath.Clean(defaultsPath)) == rootDir {
+				continue // the global defaults file — not a subtree level
+			}
+			rel := defaultsPath
+			if r, err := filepath.Rel(rootDir, defaultsPath); err == nil {
+				rel = filepath.ToSlash(r)
+			}
+			for key := range parsed[defaultsPath] {
+				if !subtreeDefaultsRefusedKey(key) || strings.HasPrefix(key, "_routing") {
+					continue
+				}
+				if out == nil {
+					out = map[string]map[string][]string{}
+				}
+				if out[tenantID] == nil {
+					out[tenantID] = map[string][]string{}
+				}
+				out[tenantID][key] = append(out[tenantID][key], rel)
+			}
 		}
 	}
 	return out

@@ -238,6 +238,14 @@ func (f *rootWarnFilter) release(drop bool) {
 //
 // profileLogf is FlatBuildInput.ProfileLogf (nil = logger.Printf).
 func loadDirBuild(scan *TreeScan, dir string, logger *log.Logger, profileLogf func(format string, args ...any)) (FlatBuild, error) {
+	return BuildFlatConfig(scan, loadDirBuildInput(scan, dir, logger, profileLogf))
+}
+
+// loadDirBuildInput is loadDirBuild's input: the subtree defaults chain and
+// ParseDefaultsFiles derived from the scan. Split out so ScopeEffective reads
+// the subtree chain the build was given (subtreeReservedKeys, #2388) rather
+// than deriving its own.
+func loadDirBuildInput(scan *TreeScan, dir string, logger *log.Logger, profileLogf func(format string, args ...any)) FlatBuildInput {
 	// Mirrors populateHierarchyStateFrom: a tree with neither a defaults file
 	// nor a tenant installs no hierarchy state, so no subtree chain applies.
 	var tenantDefaults map[string][]string
@@ -249,13 +257,13 @@ func loadDirBuild(scan *TreeScan, dir string, logger *log.Logger, profileLogf fu
 		parsedDefaults = ParseDefaultsFiles(scan.Defaults, scanDefaultsSource(scan), logger)
 	}
 
-	return BuildFlatConfig(scan, FlatBuildInput{
+	return FlatBuildInput{
 		Root:           dir,
 		TenantDefaults: tenantDefaults,
 		ParsedDefaults: parsedDefaults,
 		Logger:         logger,
 		ProfileLogf:    profileLogf,
-	})
+	}
 }
 
 // scanDefaultsSource serves ParseDefaultsFiles from the bytes this scan

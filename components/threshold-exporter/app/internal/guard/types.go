@@ -84,6 +84,11 @@
 //     exporter's build's own (CheckInput.UndeliverableInherited), filtered
 //     by pkg/config's undeliverableThresholds, not re-derived here.
 //
+//  8. Reserved keys in subtree defaults (#2388; see subtree.go), warn for
+//     now: a subtree `_defaults.yaml` in a tenant's chain carries a reserved
+//     key (`_state_*`, `_silent_mode`, …) in its defaults. The set is read
+//     off the exporter's build's chain (CheckInput.SubtreeReservedKeys).
+//
 // Future PRs in the C-12 family:
 //   - PR-4: CLI subcommand `da-tools guard defaults-impact` plus
 //     YAML parsing convenience layer that runs the actual merge
@@ -442,4 +447,11 @@ type CheckInput struct {
 	// becomes a subtree_default_undeliverable warning for a tenant in
 	// EffectiveConfigs (#1976); nil skips the check.
 	UndeliverableInherited map[string][]string `json:"-"`
+
+	// SubtreeReservedKeys maps tenant ID → reserved key → the subtree
+	// `_defaults.yaml` files (root-relative) in the tenant's defaults chain
+	// whose defaults carry that key (config.ScopedTenants.SubtreeReserved).
+	// Each (tenant, key) becomes a subtree_default_reserved_key warning for a
+	// tenant in EffectiveConfigs (#2388); nil skips the check.
+	SubtreeReservedKeys map[string]map[string][]string `json:"-"`
 }
