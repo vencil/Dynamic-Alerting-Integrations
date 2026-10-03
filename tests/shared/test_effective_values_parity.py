@@ -256,7 +256,7 @@ def test_unlistable_conf_d_raises_parse_failed_error_from_both_loaders(tmp_path,
     """#2627：conf.d 本身列不出內容（000）時，兩個 loader 都 raise ParseFailedError，
     `unreadable` 以 `.`（walk_error）點名根目錄；過去三個子命令都回 exit 2。"""
     conf_d = _tree(tmp_path, {"t.yaml": "tenants:\n  tenant-t:\n    mysql_connections: 70\n"})
-    conf_d.chmod(0)
+    _chmod(conf_d, ".", 0)
     try:
         for load in (tv.load_served_values, tv.load_effective):
             with pytest.raises(tv.ParseFailedError) as ei:

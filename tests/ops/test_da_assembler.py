@@ -12,7 +12,7 @@ from pathlib import Path
 from unittest import mock
 
 import pytest
-from _platform_fs import require_file_name  # noqa: E402
+from _platform_fs import require_file_name, require_shebang_scripts  # noqa: E402
 import yaml
 
 import da_assembler  # noqa: E402
@@ -1713,6 +1713,7 @@ class TestRenderCrDecoder:
     @staticmethod
     def _fake_binary(tmp_path, monkeypatch, body):
         """一支冒充 da-crdecode 的 Python 腳本，`$DA_CRDECODE_BINARY` 指向它。"""
+        require_shebang_scripts()  # 這支替身是 `#!` 腳本
         fake = tmp_path / "fake-crdecode"
         fake.write_text(f"#!{sys.executable}\nimport sys, time\n{body}\n",
                         encoding="utf-8")

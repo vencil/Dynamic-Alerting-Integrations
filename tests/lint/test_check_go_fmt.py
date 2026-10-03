@@ -25,6 +25,7 @@ _TOOLS_DIR = ROOT / "scripts" / "tools" / "lint"
 sys.path.insert(0, str(_TOOLS_DIR))
 
 import check_go_fmt as lint  # noqa: E402
+from _platform_fs import require_shebang_scripts  # noqa: E402
 
 SCRIPT = _TOOLS_DIR / "check_go_fmt.py"
 UNFORMATTED = "package x\nfunc  F( ){ }\n"
@@ -71,6 +72,7 @@ def _exe(path: Path, body: str) -> Path:
 @pytest.fixture
 def stub_path(tmp_path, monkeypatch):
     """PATH holding only a stub gofmt (and the python the stub needs)."""
+    require_shebang_scripts()  # the stub gofmt below is a `#!` script
     bindir = tmp_path / "bin"
     bindir.mkdir()
     _exe(bindir / "gofmt", _STUB_GOFMT.replace(
@@ -89,7 +91,9 @@ def empty_path(tmp_path, monkeypatch):
 
 def _go(tmp_path: Path, name: str, text: str) -> str:
     p = tmp_path / name
-    p.write_text(text, encoding="utf-8")
+    # LF, not text-mode default: on Windows that writes CRLF, and gofmt lists
+    # a CRLF file as unformatted (the repo checks .go out as LF on every host).
+    p.write_text(text, encoding="utf-8", newline="\n")
     return str(p)
 
 
@@ -177,6 +181,7 @@ def test_no_gofmt_and_no_go_fails_closed(empty_path, tmp_path, capsys):
 
 
 def test_falls_back_to_gofmt_under_go_env_goroot(tmp_path, monkeypatch):
+    require_shebang_scripts()  # the stand-in go and gofmt are `#!` scripts
     goroot = tmp_path / "goroot"
     (goroot / "bin").mkdir(parents=True)
     gofmt = _exe(goroot / "bin" / "gofmt", _STUB_GOFMT.replace(
@@ -191,6 +196,7 @@ def test_falls_back_to_gofmt_under_go_env_goroot(tmp_path, monkeypatch):
 
 
 def test_go_whose_goroot_has_no_gofmt_fails_closed(tmp_path, monkeypatch):
+    require_shebang_scripts()  # the stand-in go is a `#!` script
     bindir = tmp_path / "gobin"
     bindir.mkdir()
     _exe(bindir / "go", f"#!/bin/sh\necho '{tmp_path / 'nowhere'}'\n")
@@ -250,7 +256,7 @@ def _go_modules() -> list[str]:
         ["git", "ls-files", "--", "*go.mod"], cwd=ROOT, capture_output=True,
         text=True, encoding="utf-8", timeout=60, check=True,
     ).stdout.split()
-    return sorted(str(Path(p).parent) for p in out)
+    return sorted(Path(p).parent.as_posix() for p in out)
 
 
 def test_hook_runs_this_script_on_staged_files_at_commit():
