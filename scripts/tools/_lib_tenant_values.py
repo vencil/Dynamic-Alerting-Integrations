@@ -50,10 +50,13 @@ is what keeps either of them off column 0.
 * `schedules` — the whole UTC day of every threshold key /metrics serves at
   some minute of it (or whose `expires:` the exporter honours), canonical
   spelling → `KeySchedule` (#2115 (c)): `segments`, each a
-  `ScheduleSegment(start, end, value, severity)` — `"HH:MM"` to `"HH:MM"`
-  (the last ends `"24:00"`), in order with no gap; `value` a float as in
-  `values`, or None when the key has no /metrics row in that segment
-  (`severity` None too). The segments are the exporter's reading, so a
+  `ScheduleSegment(start, end, value, severity, error)` — `"HH:MM"` to
+  `"HH:MM"` (the last ends `"24:00"`), in order with no gap; `value` a float
+  as in `values`, or None when the key has no /metrics row in that segment
+  (`severity` None too). `error` is None except in a segment (never the one
+  holding `at`) in which the exporter's /metrics cannot be gathered at all:
+  then it is da-guard's text for that failure, and `value` / `severity` are
+  None — nothing is served then, for any key. The segments are the exporter's reading, so a
   caller checking "every part of the day" reads them as they are and never
   reads the `overrides:` of the config itself. `expires` (as written) and
   `expired` (the exporter's verdict at `at`) are None unless the exporter
@@ -177,6 +180,7 @@ class ScheduleSegment(NamedTuple):
     end: str                # "HH:MM", UTC; the day's last segment ends "24:00"
     value: float | None     # None: no /metrics row for the key in [start, end)
     severity: str | None    # None exactly when value is None
+    error: str | None = None  # da-guard's text when /metrics cannot be gathered in [start, end)
 
 
 class KeySchedule(NamedTuple):
@@ -459,6 +463,10 @@ def _key_schedule(s: dict[str, Any]) -> KeySchedule:
     of a non-finite number becomes a float, as in `values`."""
     segments = []
     for seg in s["segments"]:
+        if "error" in seg:
+            segments.append(ScheduleSegment(str(seg["from"]), str(seg["to"]), None, None,
+                                            str(seg["error"])))
+            continue
         value = seg["value"]
         segments.append(ScheduleSegment(
             str(seg["from"]), str(seg["to"]),

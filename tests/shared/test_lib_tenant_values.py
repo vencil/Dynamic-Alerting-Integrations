@@ -444,6 +444,23 @@ def test_schedules_are_parsed_as_da_guard_writes_them(tmp_path, da_guard):
     assert got.values["mysql_connections"] == 1000
 
 
+def test_ungatherable_segment_is_parsed_with_its_error(tmp_path, da_guard):
+    """--at 以外的時段 /metrics Gather 不起來：da-guard 不 exit 2，該段帶 error；這裡只照搬。"""
+    conf_d = _tree(tmp_path, {
+        "_defaults.yaml": "defaults:\n  mysql_connections: 80\n",
+        "tenant-a.yaml": (
+            "tenants:\n  tenant-a:\n    mysql_connections_critical: 95\n"
+            "    mysql_connections:\n      default: \"70\"\n      overrides:\n"
+            "        - window: \"15:00-16:00\"\n          value: \"700:critical\"\n"),
+    })
+    got = tv.load_served_values(conf_d, at="2026-07-01T03:00:00Z", binary=da_guard)["tenant-a"]
+    segs = got.schedules["mysql_connections"].segments
+    assert [s[:4] for s in segs] == [("00:00", "15:00", 70.0, "warning"), ("15:00", "16:00", None, None),
+                                     ("16:00", "24:00", 70.0, "warning")]
+    assert segs[0].error is None and segs[2].error is None
+    assert segs[1].error and "HTTP 500" in segs[1].error
+
+
 def test_aliases_are_the_exporters_table(tmp_path, da_guard):
     """舊拼法寫的 key 經 da-guard 給的別名表找得到；表不在 Python 端維護。"""
     conf_d = _tree(tmp_path, _SCHEDULED)

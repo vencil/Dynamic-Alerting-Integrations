@@ -36,7 +36,10 @@ import (
 // WARN lines are the ones the reading at `at` already wrote.
 //
 // A piece of the day in which the exporter's /metrics cannot be gathered
-// (its scrape fails as a whole) is an error, as it is at `at`.
+// (its scrape fails as a whole, HTTP 500) does not fail the run: every key
+// of every tenant carries that piece as a segment with Error set. At `at`
+// itself the run already failed (exit 2) before reaching here — servedValues'
+// Gather is that piece's.
 func addSchedules(cfg *config.ThresholdConfig, at time.Time, tenants map[string]servedTenantValues,
 	expiries []config.ResolvedThresholdExpiry,
 ) error {
@@ -48,18 +51,23 @@ func addSchedules(cfg *config.ThresholdConfig, at time.Time, tenants map[string]
 			ends[i] = cuts[i+1]
 		}
 	}
-	passes := make([]map[string]map[string]reading, len(cuts))
-	for i, m := range cuts {
-		r, err := readingsAt(cfg.AtMinuteOfDay(m), at)
-		if err != nil {
-			return fmt.Errorf("from %s to %s UTC: %w", hhmm(m), hhmm(ends[i]), err)
-		}
-		passes[i] = r
-	}
-
 	// The piece that holds `at` is the reading Values came from.
 	utc := at.UTC()
 	cur := sort.SearchInts(cuts, utc.Hour()*60+utc.Minute()+1) - 1
+
+	passes := make([]map[string]map[string]reading, len(cuts))
+	gatherErrs := make([]string, len(cuts))
+	for i, m := range cuts {
+		r, gerr, err := readingsAt(cfg.AtMinuteOfDay(m), at)
+		if err == nil && gerr != "" && i == cur {
+			err = fmt.Errorf("internal: the schedule reading at --at cannot be gathered, the served values could: %s", gerr)
+		}
+		if err != nil {
+			return fmt.Errorf("from %s to %s UTC: %w", hhmm(m), hhmm(ends[i]), err)
+		}
+		passes[i], gatherErrs[i] = r, gerr
+	}
+
 	for tenant, tv := range tenants {
 		if err := sameAsValues(tenant, tv, passes[cur][tenant]); err != nil {
 			return err
@@ -89,7 +97,7 @@ func addSchedules(cfg *config.ThresholdConfig, at time.Time, tenants map[string]
 			keys[k] = true
 		}
 		for k := range keys {
-			sch := servedSchedule{Segments: daySegments(cuts, ends, passes, tenant, k)}
+			sch := servedSchedule{Segments: daySegments(cuts, ends, passes, gatherErrs, tenant, k)}
 			if te, ok := expiryOf[tenant][k]; ok {
 				sv, written := cfg.Tenants[tenant][te.MetricKey]
 				if !written || sv.Expiry == nil {
@@ -106,25 +114,32 @@ func addSchedules(cfg *config.ThresholdConfig, at time.Time, tenants map[string]
 }
 
 // daySegments is key k's day over the pieces [cuts[i], ends[i]), adjacent
-// pieces with the same reading merged.
-func daySegments(cuts, ends []int, passes []map[string]map[string]reading, tenant, k string) []scheduleSegment {
+// pieces with the same reading (or the same Gather error) merged. A piece
+// whose gatherErrs entry is set is a segment carrying that error.
+func daySegments(cuts, ends []int, passes []map[string]map[string]reading, gatherErrs []string, tenant, k string) []scheduleSegment {
 	var segs []scheduleSegment
 	var last reading
-	lastServed := false
+	lastServed, lastErr := false, ""
 	for i, m := range cuts {
+		gerr := gatherErrs[i]
 		r, served := passes[i][tenant][k]
-		if n := len(segs); n > 0 && served == lastServed &&
+		if n := len(segs); n > 0 && gerr == lastErr && served == lastServed &&
 			(!served || (sameFloat(r.value, last.value) && r.severity == last.severity)) {
 			segs[n-1].To = hhmm(ends[i])
 			continue
 		}
 		seg := scheduleSegment{From: hhmm(m), To: hhmm(ends[i])}
-		if served {
+		switch {
+		case gerr != "":
+			seg.Error = gerr
+		case served:
 			seg.Value = jsonFloat(r.value)
 			seg.Severity = r.severity
+		default:
+			seg.Value = jsonNull
 		}
 		segs = append(segs, seg)
-		last, lastServed = r, served
+		last, lastServed, lastErr = r, served, gerr
 	}
 	return segs
 }
@@ -149,11 +164,13 @@ func sameAsValues(tenant string, tv servedTenantValues, piece map[string]reading
 // readingsAt is what /metrics serves of the user_threshold rows of cfg at
 // `at`, per tenant and threshold key: the exporter's resolver (silent), the
 // exporter's user_threshold builder, and a Gather over them. A row the
-// builder drops is not served.
-func readingsAt(cfg *config.ThresholdConfig, at time.Time) (map[string]map[string]reading, error) {
+// builder drops is not served. gatherErr, when not empty, says why the
+// Gather fails — /metrics then serves nothing, so readings is nil; err is
+// any other failure.
+func readingsAt(cfg *config.ThresholdConfig, at time.Time) (readings map[string]map[string]reading, gatherErr string, err error) {
 	keyed, _, err := cfg.ResolveAtWithKeysSilent(at)
 	if err != nil {
-		return nil, err
+		return nil, "", err
 	}
 	rows := make([]config.ResolvedThreshold, len(keyed))
 	for i, k := range keyed {
@@ -165,12 +182,12 @@ func readingsAt(cfg *config.ThresholdConfig, at time.Time) (map[string]map[strin
 		results[i] = emitResult{reported: true, metric: m, err: err}
 	}})
 	if _, gerr := reg.Gather(); gerr != nil {
-		return nil, fmt.Errorf("the exporter's /metrics cannot be gathered for this tree, so its scrape fails "+
-			"as a whole (HTTP 500) and nothing is served%s: %v", sameSeriesKeys(keyed, results), gerr)
+		return nil, fmt.Sprintf("the exporter's /metrics cannot be gathered, so its scrape fails "+
+			"as a whole (HTTP 500) and nothing is served%s: %v", sameSeriesKeys(keyed, results), gerr), nil
 	}
 	served, _, err := groupRows(keyed, results)
 	if err != nil {
-		return nil, err
+		return nil, "", err
 	}
 	out := make(map[string]map[string]reading, len(served))
 	for tenant, byKey := range served {
@@ -180,7 +197,7 @@ func readingsAt(cfg *config.ThresholdConfig, at time.Time) (map[string]map[strin
 			}
 			r, err := keyReading(tenant, name, rs)
 			if err != nil {
-				return nil, err
+				return nil, "", err
 			}
 			if out[tenant] == nil {
 				out[tenant] = map[string]reading{}
@@ -188,7 +205,7 @@ func readingsAt(cfg *config.ThresholdConfig, at time.Time) (map[string]map[strin
 			out[tenant][name] = r
 		}
 	}
-	return out, nil
+	return out, "", nil
 }
 
 // thresholdRows is a collector of the user_threshold rows alone, built by

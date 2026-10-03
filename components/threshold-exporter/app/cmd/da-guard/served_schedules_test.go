@@ -4,6 +4,7 @@ package main
 // (#2115 (c)).
 
 import (
+	"encoding/json"
 	"fmt"
 	"reflect"
 	"strings"
@@ -297,18 +298,74 @@ func TestServedValues_Aliases(t *testing.T) {
 	}
 }
 
-// TestServedSchedules_UngatherableSegmentExitsTwo: a part of the day in which
-// /metrics cannot be gathered (two keys give one series only inside a
-// window) fails the run as it would at an --at inside that window, naming
-// the part of the day.
-func TestServedSchedules_UngatherableSegmentExitsTwo(t *testing.T) {
+// ungatherableTree: tenant-a's two keys give one series (severity "critical"
+// for mysql_connections) only from 15:00 to 16:00, so /metrics cannot be
+// gathered then — for any tenant. redis_memory is switched off from 01:00
+// to 02:00, for a not-served segment beside the error one.
+var ungatherableTree = map[string]string{
+	"_defaults.yaml": defaultsOnly + "  redis_memory: 70\n",
+	"tenant-a.yaml": "tenants:\n  tenant-a:\n    mysql_connections_critical: 95\n    mysql_connections:\n" +
+		"      default: \"70\"\n      overrides:\n        - window: \"15:00-16:00\"\n          value: \"700:critical\"\n" +
+		"    redis_memory:\n      default: \"60\"\n      overrides:\n        - window: \"01:00-02:00\"\n          value: disable\n",
+	"tenant-b.yaml": "tenants:\n  tenant-b:\n    mysql_connections: 80\n",
+}
+
+// TestServedSchedules_UngatherableSegmentCarriesTheError: a part of the day
+// other than --at's in which /metrics cannot be gathered does not fail the
+// run; every key of every tenant carries that part as a segment with the
+// Gather error and no value or severity. At an --at inside that part the run
+// exits 2, as it always did.
+func TestServedSchedules_UngatherableSegmentCarriesTheError(t *testing.T) {
 	t.Parallel()
-	code, _, _, stderr := served(t, map[string]string{
-		"_defaults.yaml": defaultsOnly,
-		"tenant-a.yaml": "tenants:\n  tenant-a:\n    mysql_connections_critical: 95\n    mysql_connections:\n" +
-			"      default: \"70\"\n      overrides:\n        - window: \"15:00-16:00\"\n          value: \"700:critical\"\n",
-	}, scheduleAt)
-	if code != exitCallerErr || !strings.Contains(stderr, "from 15:00 to 16:00 UTC") || !strings.Contains(stderr, "HTTP 500") {
-		t.Errorf("exit %d, stderr %q: want exit %d naming 15:00 to 16:00", code, stderr, exitCallerErr)
+	code, _, dir, stderr := served(t, ungatherableTree, scheduleAt)
+	mustOK(t, code, stderr)
+	// Decoded loosely, so a field that is absent can be told from a null one.
+	code, stdout, stderr := runOnce(t, servedValuesCmd, "--config-dir", dir, "--at", scheduleAt)
+	mustOK(t, code, stderr)
+	var doc struct {
+		Tenants map[string]struct {
+			Schedules map[string]struct {
+				Segments []map[string]any `json:"segments"`
+			} `json:"schedules"`
+		} `json:"tenants"`
+	}
+	if err := json.Unmarshal([]byte(stdout), &doc); err != nil {
+		t.Fatal(err)
+	}
+	row := func(from, to string, v float64, sev string) map[string]any {
+		return map[string]any{"from": from, "to": to, "value": v, "severity": sev}
+	}
+	errSeg := map[string]any{"from": "15:00", "to": "16:00"}
+	for _, tc := range []struct {
+		tenant, key string
+		want        []map[string]any
+	}{
+		{"tenant-a", "mysql_connections", []map[string]any{
+			row("00:00", "15:00", 70, "warning"), errSeg, row("16:00", "24:00", 70, "warning")}},
+		{"tenant-a", "mysql_connections_critical", []map[string]any{
+			row("00:00", "15:00", 95, "critical"), errSeg, row("16:00", "24:00", 95, "critical")}},
+		{"tenant-a", "redis_memory", []map[string]any{
+			row("00:00", "01:00", 60, "warning"), {"from": "01:00", "to": "02:00", "value": nil},
+			row("02:00", "15:00", 60, "warning"), errSeg, row("16:00", "24:00", 60, "warning")}},
+		{"tenant-b", "mysql_connections", []map[string]any{
+			row("00:00", "15:00", 80, "warning"), errSeg, row("16:00", "24:00", 80, "warning")}},
+	} {
+		got := doc.Tenants[tc.tenant].Schedules[tc.key].Segments
+		for _, s := range got {
+			if e, ok := s["error"].(string); ok {
+				if !strings.Contains(e, "HTTP 500") || !strings.Contains(e, "was collected before with the same name and label values") {
+					t.Errorf("%s %s: error %q does not carry the Gather failure", tc.tenant, tc.key, e)
+				}
+				delete(s, "error")
+			}
+		}
+		if !reflect.DeepEqual(got, tc.want) {
+			t.Errorf("%s %s (error text removed):\n got %v\nwant %v", tc.tenant, tc.key, got, tc.want)
+		}
+	}
+
+	code, _, _, stderr = served(t, ungatherableTree, "2026-07-01T15:30:00Z")
+	if code != exitCallerErr || !strings.Contains(stderr, "HTTP 500") {
+		t.Errorf("--at inside the window: exit %d, stderr %q, want exit %d", code, stderr, exitCallerErr)
 	}
 }

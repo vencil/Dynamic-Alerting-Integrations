@@ -41,6 +41,7 @@ type servedOut struct {
 				To       string `json:"to"`
 				Value    any    `json:"value"`
 				Severity string `json:"severity"`
+				Error    string `json:"error"`
 			} `json:"segments"`
 			Expires string `json:"expires"`
 			Expired *bool  `json:"expired"`

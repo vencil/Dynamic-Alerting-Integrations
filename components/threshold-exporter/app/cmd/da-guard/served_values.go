@@ -135,15 +135,23 @@ type servedSchedule struct {
 }
 
 // scheduleSegment is [From, To) of the UTC day ("HH:MM"; To of the last is
-// "24:00"). Value is the served number (as in Values), or null: the key has
-// no /metrics row in that segment (switched off, dropped, or nothing to
-// serve). Severity is the row's severity label; absent when Value is null.
+// "24:00"). Value is the served number (as in Values), or null (jsonNull):
+// the key has no /metrics row in that segment (switched off, dropped, or
+// nothing to serve). Severity is the row's severity label; absent when Value
+// is null. Error, set only on a segment in which the exporter's /metrics
+// cannot be gathered at all (HTTP 500 — nothing is served, for any key), is
+// that Gather's failure; Value and Severity are then absent.
 type scheduleSegment struct {
 	From     string `json:"from"`
 	To       string `json:"to"`
-	Value    any    `json:"value"`
+	Value    any    `json:"value,omitempty"`
 	Severity string `json:"severity,omitempty"`
+	Error    string `json:"error,omitempty"`
 }
+
+// jsonNull is a segment's Value when the key is not served: an explicit JSON
+// null, where a nil Value (an Error segment) leaves the field out.
+var jsonNull = json.RawMessage("null")
 
 type servedValuesFlags struct {
 	configDir string
