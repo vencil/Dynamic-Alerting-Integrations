@@ -9,6 +9,7 @@ Coverage:
     always-run additive / full-run trigger / safe-ignore / fail-closed /
     suite 去重
   - --check：未映射 fail 與例外表、殭屍例外條目、語法壞的 test 檔
+  - test 檔解碼：BOM / PEP 263 cookie 依直譯器方式處理（#2641）
   - CLI：無輸入 → exit 2；--json 單一 JSON 文件；--check exit code
   - 真實 repo 煙霧測試：bump_docs.py → test_bump_docs.py 映射存在
 """
@@ -346,6 +347,64 @@ class TestCheck:
         _write(synth_repo / "tests" / "ops" / "test_bad.py", "def f(:\n")
         vmap = vd.build_map(synth_repo)
         assert "tests/ops/test_bad.py" in vmap["parse_errors"]
+
+
+# ============================================================
+# #2641 —— test 檔依直譯器方式解碼（BOM / PEP 263 cookie）
+# ============================================================
+
+_BOM = b"\xef\xbb\xbf"
+_IMPORTS_MYTOOL = b"import mytool\n\ndef test_x():\n    assert mytool.X == 1\n"
+
+
+class TestSourceDecoding:
+    """pytest 收得到的 test 檔，映射就要收得到（#2641）。
+
+    每個 fixture 都先過 compile(bytes)——oracle 是直譯器本身。舊寫法
+    read_text("utf-8") + ast.parse(str) 把 BOM 留成 U+FEFF 而解析失敗：
+    --dry-run 漏選、--check 誤報「AST 解析失敗」。
+    """
+
+    def _put(self, root: Path, data: bytes) -> str:
+        rel = "tests/dx/test_bom_tool.py"
+        path = root / rel
+        path.write_bytes(data)
+        compile(data, str(path), "exec")  # 直譯器接受
+        return rel
+
+    def test_bom_test_file_is_mapped(self, synth_repo):
+        rel = self._put(synth_repo, _BOM + _IMPORTS_MYTOOL)
+        vmap = vd.build_map(synth_repo)
+        assert rel not in vmap["parse_errors"]
+        assert rel in vmap["import_map"]["scripts/tools/dx/mytool.py"]
+
+    def test_bom_test_file_is_selected(self, synth_repo):
+        rel = self._put(synth_repo, _BOM + _IMPORTS_MYTOOL)
+        r = vd.select_tests(["scripts/tools/dx/mytool.py"],
+                            vd.build_map(synth_repo), _rules(), synth_repo)
+        assert rel in r["selected"]
+
+    def test_bom_test_file_is_no_parse_error_under_check(self, synth_repo):
+        rel = self._put(synth_repo, _BOM + _IMPORTS_MYTOOL)
+        problems, _ = vd.check_map(synth_repo, _rules())
+        assert not any("AST 解析失敗" in p for p in problems)
+        assert not any(rel in p for p in problems)
+
+    def test_latin1_cookie_test_file_is_mapped(self, synth_repo):
+        rel = self._put(synth_repo,
+                        b"# -*- coding: latin-1 -*-\n"
+                        b"S = '\xe9'\n"  # 單獨看不是合法 UTF-8
+                        + _IMPORTS_MYTOOL)
+        vmap = vd.build_map(synth_repo)
+        assert rel in vmap["import_map"]["scripts/tools/dx/mytool.py"]
+
+    def test_double_bom_is_a_parse_error_like_the_interpreter(self, synth_repo):
+        rel = "tests/dx/test_bom2.py"
+        data = _BOM + _BOM + _IMPORTS_MYTOOL
+        with pytest.raises(SyntaxError):
+            compile(data, rel, "exec")
+        (synth_repo / rel).write_bytes(data)
+        assert rel in vd.build_map(synth_repo)["parse_errors"]
 
 
 # ============================================================
