@@ -50,7 +50,9 @@ from generate_alertmanager_routes import (  # noqa: E402
     merge_routing_with_defaults,
     tree_refusal,
 )
-from _grar_render import _run_binary, assemble_configmap  # noqa: E402
+from _grar_render import (  # noqa: E402
+    _run_binary, assemble_configmap, receiver_integration_kinds,
+)
 from _grar_validate import (  # noqa: E402
     ROUTING_TREE_ERROR_PREFIX,
     check_policy_scope,
@@ -626,11 +628,12 @@ def _receiver_type(name: str, receivers: dict[str, dict],
                    conf_types: dict[str, str]) -> str:
     """conf.d ``receiver.type``; for a receiver not generated from conf.d (the
     base config's, the platform placeholders) the AM integration it carries,
-    or ``none`` for a name-only receiver."""
+    or ``none`` for a receiver that notifies no one — name-only, or with only
+    empty ``*_configs`` lists (#2660: the same predicate as the generator's
+    root-receiver WARN)."""
     if name in conf_types:
         return conf_types[name]
-    kinds = [k[:-len("_configs")] for k in receivers.get(name, {})
-             if k.endswith("_configs")]
+    kinds = receiver_integration_kinds(receivers.get(name, {}))
     return "+".join(kinds) if kinds else "none"
 
 

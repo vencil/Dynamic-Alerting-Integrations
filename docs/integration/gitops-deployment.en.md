@@ -239,7 +239,7 @@ When `amtool` is on PATH, the `alertmanager.yml` inside the ConfigMap is validat
 
 The resulting YAML can be directly `kubectl apply` or auto-synced by ArgoCD/Flux. Use together with Method A (threshold-config) to achieve complete GitOps closure for threshold-exporter and Alertmanager configuration.
 
-When `--base-config` is not provided, built-in defaults are used. If you need custom `global` settings (e.g., SMTP settings), default receiver, or base inhibit_rules, it's recommended to maintain a `base-alertmanager.yaml` as input. See [BYO Alertmanager Integration Guide Step 5](byo-alertmanager-integration.md#step-5-merge-into-alertmanager-configmap).
+When `--base-config` is not provided, built-in defaults are used. If you need custom `global` settings (e.g., SMTP settings), default receiver, or base inhibit_rules, it's recommended to maintain a `base-alertmanager.yaml` as input. See [BYO Alertmanager Integration Guide Step 5](byo-alertmanager-integration.md#step-5-merge-into-alertmanager-configmap). ⚠️ Give that base's root route receiver a real integration (a non-empty `*_configs`): every alert no child route claims, platform self-monitoring alerts included, ends there, and an empty receiver drops them; the generator prints a WARN for such a root receiver (#2660) — see [§11](byo-alertmanager-integration.en.md#11-delivering-platform-self-monitoring-alerts).
 
 ⚠️ **The failure mode of this step changed in v2.10.0 (BREAKING, [#1616](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/1616) / [#1617](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/1617))**. Both `--base-config` and `-o` above are relative paths; when they are mistyped, or the directory does not exist in your CI workdir:
 
