@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"os"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -241,5 +242,161 @@ func TestGetTenantEffective_NestedDuplicateIsConflictWithoutPaths(t *testing.T) 
 	env := assertConflictWithoutDir(t, w, dir)
 	if msg, _ := env["error"].(string); msg != msgTenantDeclaredElsewhere {
 		t.Errorf("error = %q, want the fixed text %q", msg, msgTenantDeclaredElsewhere)
+	}
+}
+
+// Both spellings inside one SUBDIRECTORY are a duplicate too, but not the
+// top-level shape: the body is the fixed text, so the subdirectory's name does
+// not reach the caller.
+func TestGetTenantEffective_SubdirSpellingPairIsFixedText(t *testing.T) {
+	t.Parallel()
+	dir := t.TempDir()
+	writeFile(t, filepath.Join(dir, "team", spellingTenant+".yaml"), spellingBody("FROM-YAML"))
+	writeFile(t, filepath.Join(dir, "team", spellingTenant+".yml"), spellingBody("FROM-YML"))
+
+	w := httptest.NewRecorder()
+	GetTenantEffective(&Deps{ConfigDir: dir})(w, newRequestWithChiParam("GET",
+		"/api/v1/tenants/"+spellingTenant+"/effective", "id", spellingTenant, nil))
+
+	env := assertConflictWithoutDir(t, w, dir)
+	if msg, _ := env["error"].(string); msg != msgTenantDeclaredElsewhere {
+		t.Errorf("error = %q, want the fixed text %q", msg, msgTenantDeclaredElsewhere)
+	}
+}
+
+// A top-level SHARED file whose `tenants:` also declares the id is a duplicate
+// at the conf.d root, but the shared file's name is not derivable from the id:
+// fixed text, not base names.
+func TestGetTenantEffective_TopLevelSharedFileIsFixedText(t *testing.T) {
+	t.Parallel()
+	dir := setupConfigDir(t, map[string]string{
+		spellingTenant + ".yaml": spellingBody("FROM-OWN"),
+		"shared.yaml":            spellingBody("FROM-SHARED"),
+	})
+
+	w := httptest.NewRecorder()
+	GetTenantEffective(&Deps{ConfigDir: dir})(w, newRequestWithChiParam("GET",
+		"/api/v1/tenants/"+spellingTenant+"/effective", "id", spellingTenant, nil))
+
+	env := assertConflictWithoutDir(t, w, dir)
+	if msg, _ := env["error"].(string); msg != msgTenantDeclaredElsewhere {
+		t.Errorf("error = %q, want the fixed text %q", msg, msgTenantDeclaredElsewhere)
+	}
+}
+
+// The walker reports paths under the symlink-RESOLVED root; a conf.d reached
+// through a symlink must still be recognised as top-level, or the two-spellings
+// message would silently degrade to the fixed text.
+func TestGetTenantEffective_AmbiguousSpellingThroughSymlinkedRoot(t *testing.T) {
+	t.Parallel()
+	real := setupConfigDir(t, map[string]string{
+		spellingTenant + ".yaml": spellingBody("FROM-YAML"),
+		spellingTenant + ".yml":  spellingBody("FROM-YML"),
+	})
+	link := filepath.Join(t.TempDir(), "confd-link")
+	if err := os.Symlink(real, link); err != nil {
+		t.Skipf("symlink unsupported: %v", err)
+	}
+
+	w := httptest.NewRecorder()
+	GetTenantEffective(&Deps{ConfigDir: link})(w, newRequestWithChiParam("GET",
+		"/api/v1/tenants/"+spellingTenant+"/effective", "id", spellingTenant, nil))
+
+	env := assertConflictWithoutDir(t, w, real)
+	msg, _ := env["error"].(string)
+	if strings.Contains(msg, link) || !strings.Contains(msg, spellingTenant+".yml") {
+		t.Errorf("error = %q, want the two base names and no path", msg)
+	}
+}
+
+// #2511 review: the conflict is the walker's verdict, not a filename match. A
+// sibling `<id>.yml` that declares nothing for the tenant — or cannot be read
+// as a tenant file at all — is not a second declaration: the exporter serves
+// the tenant from `<id>.yaml`, so /effective must stay 200. A name-only check
+// (confd.ResolveTenantFile) answered 409 for every one of these.
+func TestGetTenantEffective_NonDeclaringSiblingSpellingStays200(t *testing.T) {
+	t.Parallel()
+	shapes := []struct {
+		name  string
+		build func(t *testing.T, sibling string)
+	}{
+		{"empty tenants map", func(t *testing.T, p string) { writeFile(t, p, "tenants: {}\n") }},
+		{"malformed yaml", func(t *testing.T, p string) { writeFile(t, p, "tenants: [this is not: valid yaml\n") }},
+		{"declares another tenant only", func(t *testing.T, p string) {
+			writeFile(t, p, "tenants:\n  "+spellingTenant+"-other:\n    mysql_connections: \"70\"\n")
+		}},
+		{"symlink to a directory", func(t *testing.T, p string) {
+			target := filepath.Join(filepath.Dir(p), "_target_dir")
+			if err := os.Mkdir(target, 0o755); err != nil {
+				t.Fatal(err)
+			}
+			if err := os.Symlink(target, p); err != nil {
+				t.Skipf("symlink unsupported: %v", err)
+			}
+		}},
+		{"dangling symlink", func(t *testing.T, p string) {
+			if err := os.Symlink(filepath.Join(filepath.Dir(p), "missing.yaml"), p); err != nil {
+				t.Skipf("symlink unsupported: %v", err)
+			}
+		}},
+	}
+	for _, sh := range shapes {
+		t.Run(sh.name, func(t *testing.T) {
+			t.Parallel()
+			dir := setupConfigDir(t, map[string]string{
+				spellingTenant + ".yaml": spellingBody("FROM-YAML"),
+			})
+			sh.build(t, filepath.Join(dir, spellingTenant+".yml"))
+
+			w := httptest.NewRecorder()
+			GetTenantEffective(&Deps{ConfigDir: dir})(w, newRequestWithChiParam("GET",
+				"/api/v1/tenants/"+spellingTenant+"/effective", "id", spellingTenant, nil))
+			if w.Code != http.StatusOK {
+				t.Fatalf("status = %d, want 200; body=%s", w.Code, w.Body.String())
+			}
+		})
+	}
+}
+
+// #2511 review: an internal failure answers a fixed message; the error text
+// (here the walker's stat of the missing root) carries the server path.
+func TestGetTenantEffective_InternalErrorNamesNoServerPath(t *testing.T) {
+	t.Parallel()
+	dir := filepath.Join(t.TempDir(), "absent")
+
+	w := httptest.NewRecorder()
+	GetTenantEffective(&Deps{ConfigDir: dir})(w, newRequestWithChiParam("GET",
+		"/api/v1/tenants/"+spellingTenant+"/effective", "id", spellingTenant, nil))
+
+	if w.Code != http.StatusInternalServerError {
+		t.Fatalf("status = %d, want 500; body=%s", w.Code, w.Body.String())
+	}
+	if strings.Contains(w.Body.String(), dir) {
+		t.Errorf("body leaks the conf.d absolute path %q: %s", dir, w.Body.String())
+	}
+}
+
+// A *cfg.DecodeError keeps its own text in the body: it is the decoder's
+// message (`parse defaults[i]: …`), which names no path. Measured here so the
+// pass-through cannot start leaking if that text ever changes.
+func TestGetTenantEffective_DecodeErrorTextNamesNoServerPath(t *testing.T) {
+	t.Parallel()
+	dir := t.TempDir()
+	writeFile(t, filepath.Join(dir, "team", "_defaults.yaml"), "defaults: [this is not: valid yaml\n")
+	writeFile(t, filepath.Join(dir, "team", spellingTenant+".yaml"), spellingBody("FROM-TEAM"))
+
+	w := httptest.NewRecorder()
+	GetTenantEffective(&Deps{ConfigDir: dir})(w, newRequestWithChiParam("GET",
+		"/api/v1/tenants/"+spellingTenant+"/effective", "id", spellingTenant, nil))
+
+	if w.Code != http.StatusInternalServerError {
+		t.Fatalf("status = %d, want 500; body=%s", w.Code, w.Body.String())
+	}
+	body := w.Body.String()
+	if strings.Contains(body, dir) {
+		t.Errorf("body leaks the conf.d absolute path %q: %s", dir, body)
+	}
+	if !strings.Contains(body, "parse defaults") {
+		t.Errorf("body lost the decode error's own text: %s", body)
 	}
 }
