@@ -256,11 +256,14 @@ func TestUndeliverable_ReportedKeys(t *testing.T) {
 			// schedule disabled by default but numeric in a window serves a
 			// row then, so `redis_s` is reported; the other values are plain.
 			name: "switched-off",
+			// `redis_u` / `redis_v` pin the case / space normalisation the
+			// resolver applies before isDisabled.
 			files: subtreeTree(plainRoot, "defaults:\n  redis_evicted_keys: disable\n"+
 				"  redis_q: \"1e6\"\n  redis_r: 1e6\n"+
 				"  redis_s:\n    default: disable\n    overrides:\n"+
-				"      - window: \"01:00-02:00\"\n        value: 50\n"),
-			wantUnreach:  []string{"redis_evicted_keys", "redis_q", "redis_r", "redis_s"},
+				"      - window: \"01:00-02:00\"\n        value: 50\n"+
+				"  redis_u: Disable\n  redis_v: \" DISABLE \"\n"),
+			wantUnreach:  []string{"redis_evicted_keys", "redis_q", "redis_r", "redis_s", "redis_u", "redis_v"},
 			wantReported: []string{"redis_q", "redis_r", "redis_s"},
 		},
 		{

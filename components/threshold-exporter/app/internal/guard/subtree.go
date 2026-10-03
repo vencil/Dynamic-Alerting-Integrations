@@ -24,6 +24,7 @@ package guard
 import (
 	"fmt"
 	"sort"
+	"strings"
 )
 
 // FindingSubtreeDefaultUndeliverable (warn; #1976): the tenant inherits Field,
@@ -59,13 +60,31 @@ func checkSubtreeUndeliverable(input CheckInput) []Finding {
 				Message: fmt.Sprintf("Threshold `%s` is inherited from a subtree `_defaults.yaml`, but neither the conf.d root "+
 					"`_defaults.yaml` nor `optional_overrides:` declares it, so the exporter serves no series for it "+
 					"and that alert can never fire (the tenant's effective config still shows a value for it; the "+
-					"exporter logs an ERROR and counts the tenant on da_config_subtree_undeliverable_tenants). Declare "+
-					"`%s` in the conf.d root `_defaults.yaml` or in `optional_overrides:`. This warning becomes an "+
+					"exporter logs an ERROR and counts the tenant on da_config_subtree_undeliverable_tenants). %s "+
+					"This warning becomes an "+
 					"error in the next minor release (#1976). Not reported here: reserved keys and keys the exporter "+
 					"never serves as a threshold row (`_silent_*`, `_state_*`, …; see #2388), and keys the subtree "+
-					"switches off.", k, k),
+					"switches off.", k, undeliverableFix(k)),
 			})
 		}
 	}
 	return out
+}
+
+// undeliverableFix is the finding's fix sentence for key k.
+//
+// ⛔ A `_` KEY GETS THE ROOT ONLY. resolveDeclaredRows (the reader of
+// `optional_overrides:`) skips every `_`-prefixed key, while the build's
+// reachability test counts `optional_overrides:` as declared — so declaring a
+// `_` key there silences the exporter's ERROR, its gauge and this finding,
+// and the value is still not served (measured: `values` empty, the key in
+// `unserved`, no finding). Declared in the root `_defaults.yaml` it is served.
+// The `_` keys that reach this finding are the ones undeliverableThresholds
+// keeps (not reserved, not skipped by the row generator).
+func undeliverableFix(k string) string {
+	if strings.HasPrefix(k, "_") {
+		return fmt.Sprintf("Declare `%s` in the conf.d root `_defaults.yaml`; `optional_overrides:` does not "+
+			"serve keys starting with `_`, so declaring it there only hides this warning.", k)
+	}
+	return fmt.Sprintf("Declare `%s` in the conf.d root `_defaults.yaml` or in `optional_overrides:`.", k)
 }

@@ -457,18 +457,20 @@ func declaredAnywhere(cfg *ThresholdConfig, key string) bool {
 // undeliverableThresholds is the part of the build's unreachable set that
 // #1976 reports to readers outside the exporter (LoadReport.Undeliverable,
 // ScopedTenants.Undeliverable — both go through here, so the two cannot
-// filter differently): the keys for which the finding's advice — "declare
-// the key in the root `_defaults.yaml` or `optional_overrides:`" — is the
-// fix. nil when none is left. FlatBuild.Unreachable (the exporter's ERROR and
-// gauge) is not filtered.
+// filter differently): the keys for which the finding's advice — declare the
+// key in the root `_defaults.yaml` (or, for a key not starting with `_`, in
+// `optional_overrides:`) — is the fix. nil when none is left.
+// FlatBuild.Unreachable (the exporter's ERROR and gauge) is not filtered.
 //
 // Three exclusions, each taken from an existing authority rather than a
 // naming rule of its own:
 //
 //  1. IsReservedKey(k) — the reserved keys the config model recognises
-//     (`_metadata`, `_profile`, `_state_*`, `_routing*`, …). The root
-//     `defaults:` block is a float map and has no place for them, and
-//     declaring them in `optional_overrides:` silences the verdict while the
+//     (`_metadata`, `_profile`, `_state_*`, `_routing*`, …). Declaring one in
+//     the root `defaults:` is not a fix: it produces a meaningless or
+//     conflicting threshold row (measured: a root `_namespaces: 1` grows a
+//     user_threshold row, a root `_metadata` makes served-values fail), and
+//     declaring it in `optional_overrides:` silences the verdict while the
 //     subtree value still does not take effect (measured with a scheduled
 //     `_state_maintenance`). Some are even listed although a deeper level
 //     delivers the key (`_state_<f>` as a schedule at one level, a scalar
@@ -487,6 +489,12 @@ func declaredAnywhere(cfg *ThresholdConfig, key string) bool {
 // threshold to the exporter: a root `_myth` serves a user_threshold row, and
 // declaring a subtree's `_myth2` at the root makes the tenant serve the
 // subtree's value (both measured) — so it is reported, like any threshold.
+// For such a key only the ROOT is a fix: resolveDeclaredRows skips every `_`
+// key, yet keyCanReachTheOutputPlane counts `optional_overrides:` as declared,
+// so a `_myth2` listed there drops out of this set (and of the exporter's
+// ERROR and gauge) while its value is still not served. Known limitation of
+// the reachability test, left as is; the finding's message says so
+// (guard.undeliverableFix).
 func undeliverableThresholds(byTenant map[string]map[string]ScheduledValue) map[string]map[string]ScheduledValue {
 	var out map[string]map[string]ScheduledValue
 	for tenantID, keys := range byTenant {

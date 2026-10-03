@@ -172,8 +172,11 @@ func TestUndeliverable_SubtreeKeysReportedOrNot(t *testing.T) {
 		},
 		{
 			// The review's t3: a subtree switching a key off.
-			name:  "switched-off",
-			files: subtree(root, "defaults:\n  redis_evicted_keys: disable\n"),
+			// `Disable` / " DISABLE " pin the resolver's case / space
+			// normalisation.
+			name: "switched-off",
+			files: subtree(root, "defaults:\n  redis_evicted_keys: disable\n"+
+				"  redis_u: Disable\n  redis_v: \" DISABLE \"\n"),
 		},
 		{
 			// The review's t6.
@@ -192,6 +195,19 @@ func TestUndeliverable_SubtreeKeysReportedOrNot(t *testing.T) {
 			files:        subtree(root+"  _myth2: 1\n  _silent_bogus: 1\n", "defaults:\n  _myth2: 7\n  _silent_bogus: 7\n"),
 			wantUnserved: map[string]any{"_silent_bogus": "7"},
 			wantValues:   map[string]float64{"_myth2": 7},
+		},
+		{
+			// ⚠️ KNOWN LIMITATION, pinned as it is (#1976 r4): a `_` key listed
+			// in optional_overrides counts as declared for the build's
+			// reachability test, so it is not refused — no finding, no
+			// exporter ERROR — yet resolveDeclaredRows skips every `_` key, so
+			// its value is still not served: it sits in `unserved` through the
+			// merged-map path, and `values` lacks it. This is why the finding's
+			// message names only the root for a `_` key.
+			name: "unrecognised-underscore-key-in-optional-overrides",
+			files: subtree(root+"optional_overrides:\n  - _myth\n",
+				"defaults:\n  _myth: 7\n"),
+			wantUnserved: map[string]any{"_myth": "7"},
 		},
 		{
 			// `_metadata`, a scheduled `_state_maintenance` and `_profile`,
@@ -267,6 +283,11 @@ func TestUndeliverable_SubtreeKeysReportedOrNot(t *testing.T) {
 			}
 			for k, v := range tc.wantValues {
 				wantValue(t, doc, "tenant-a", k, v)
+			}
+			for k := range tc.wantUnserved {
+				if v, served := doc.Tenants["tenant-a"].Values[k]; served {
+					t.Errorf("unserved key %q is also served: %v", k, v)
+				}
 			}
 		})
 	}
