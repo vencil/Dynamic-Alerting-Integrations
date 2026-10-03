@@ -23,9 +23,10 @@
 # ⛔ MIGRATION-AWARE: pre-commit writes this file too, and BOTH orders happen.
 #   Installer first -> pre-commit migrates our shim to pre-push.legacy and calls
 #   it with the full stdin. pre-commit first -> the shim goes to pre-push.legacy
-#   and we do NOT touch pre-commit's file (that would drop every pre-commit-stage
-#   hook). Never blindly overwrite: an unconditional write was measured faithful
-#   in only one of the two orders.
+#   and we do NOT rewrite pre-commit's file (that would drop every
+#   pre-commit-stage hook); we only restore its executable bit, without which
+#   git skips it and the shim behind it never runs. Never blindly overwrite: an
+#   unconditional write was measured faithful in only one of the two orders.
 #
 # ⚠️ It cannot stop `pre-commit install -f --hook-type pre-push`, which DELETES
 #   pre-push.legacy silently (rc=0, no mention). That is what preflight is for.
@@ -248,6 +249,14 @@ if [ "$out" != "$target" ]; then
 fi
 
 if [ "$target" = "$legacy" ]; then
+    if [ ! -x "$hook" ]; then
+        chmod +x "$hook" || {
+            warn "⛔ could not make $hook executable. git ignores non-executable hooks"
+            warn "   with only a hint, so pre-commit would never call the shim behind it."
+            exit 1
+        }
+        say "made $hook executable: git was skipping it, and the shim behind it with it"
+    fi
     say "installed guard shim at $target$replaced (pre-commit owns $hook and calls it with the full refspec)"
 else
     say "installed guard shim at $target$replaced"

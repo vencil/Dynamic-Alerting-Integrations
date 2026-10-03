@@ -1,5 +1,5 @@
 {
-  "$comment": "Truth table for `deprecate_rule`'s carrier health check: `exporter` is what threshold-exporter's parsePartialConfig does with `doc` as a root `_defaults.yaml` (Go test TestDefaultsCarrierOracle is the authority; tests/ops/test_deprecate_rule_carriers.py::test_carrier_health_matches_the_exporter must reach the same verdict from the bytes). `dropped` = the whole file is rejected; `accepted` = it loads and `key` (when non-null) is present with `value` (when given); `zero` = it loads and `key` decodes to 0.",
+  "$comment": "Truth table for `deprecate_rule`'s carrier health check: `exporter` is what threshold-exporter's parsePartialConfig does with `doc` as a root `_defaults.yaml` (Go test TestDefaultsCarrierOracle is the authority; tests/ops/test_deprecate_rule_carriers.py::test_carrier_health_matches_the_exporter must reach the same verdict from the bytes). `dropped` = the whole file is rejected; `accepted` = it loads and `key` (when non-null) is present with `value` (when given); `absent` = it loads and `key` is not in its defaults: a value written as null is no write (#2518; before it, such a key decoded to 0).",
   "cases": [
     {
       "name": "plain-int",
@@ -273,7 +273,7 @@
     {
       "name": "tagged-null-tilde",
       "doc": "defaults:\n  k: !!null ~\n  neighbour: 90\n",
-      "exporter": "zero",
+      "exporter": "absent",
       "key": "k"
     },
     {
@@ -345,31 +345,31 @@
     {
       "name": "empty",
       "doc": "defaults:\n  k:\n  neighbour: 90\n",
-      "exporter": "zero",
+      "exporter": "absent",
       "key": "k"
     },
     {
       "name": "tilde",
       "doc": "defaults:\n  k: ~\n  neighbour: 90\n",
-      "exporter": "zero",
+      "exporter": "absent",
       "key": "k"
     },
     {
       "name": "null",
       "doc": "defaults:\n  k: null\n  neighbour: 90\n",
-      "exporter": "zero",
+      "exporter": "absent",
       "key": "k"
     },
     {
       "name": "Null",
       "doc": "defaults:\n  k: Null\n  neighbour: 90\n",
-      "exporter": "zero",
+      "exporter": "absent",
       "key": "k"
     },
     {
       "name": "NULL",
       "doc": "defaults:\n  k: NULL\n  neighbour: 90\n",
-      "exporter": "zero",
+      "exporter": "absent",
       "key": "k"
     },
     {

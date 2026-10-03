@@ -997,7 +997,10 @@ func (d *TenantDoc) tenantRaw(tenantID string) (map[string]any, error) {
 	if err != nil {
 		return nil, err
 	}
-	return deepCopyMap(raw), nil
+	// A threshold written as null is no write (#2518): taken out here, so
+	// the platform overlay and the profile fill see the key as absent and
+	// the layer below shows through, as on /metrics (ParseConfigFile).
+	return withoutNullThresholds(deepCopyMap(raw)), nil
 }
 
 // tenantMerge is mergeTenantOver's result: the effective parts it fills
@@ -1066,15 +1069,16 @@ func deepMerge(base, override map[string]any) map[string]any {
 			// (`_`-prefixed) keys only.
 			//
 			// It must not apply to a threshold key, because the emitting
-			// path does not honour it: collector.go →
-			// ThresholdConfig.ResolveAtWithStats decodes a YAML null into
-			// ScheduledValue.Default == "", logs `unknown value ""...
-			// using default` and falls back to the PLATFORM DEFAULT. The
-			// inherited value is still being emitted. A diagnostic path
-			// that deleted the key here would tell the operator the
-			// threshold is gone while /metrics still carries it — and
-			// /effective is an endpoint customers call precisely when they
-			// are asking "why is this alert still firing?" (#1339 P0).
+			// path does not honour it: on /metrics a threshold written as
+			// null is no write (ParseConfigFile drops it, #2518), so the
+			// layer below is still being emitted. A diagnostic path that
+			// deleted the key here would tell the operator the threshold
+			// is gone while /metrics still carries it — and /effective is
+			// an endpoint customers call precisely when they are asking
+			// "why is this alert still firing?" (#1339 P0). The walker's
+			// own layer readers drop such a null too (tenantRaw, the
+			// platform entries, the profiles — null_threshold.go), so this
+			// branch only sees one from a caller-built override.
 			//
 			// Threshold keys are exactly the non-`_` keys: in
 			// tenant-config.schema.json the tenant body has `_`-prefixed

@@ -44,7 +44,10 @@ import (
 //
 // Semantics are a plain yaml.Unmarshal into ThresholdConfig — the flat
 // plane's historical decode — pinned against that oracle over a variant
-// corpus by config_file_test.go, with ONE post-decode step on `defaults:`
+// corpus by config_file_test.go, with TWO post-decode steps: a value written
+// as null is no write (dropNullThresholds, #2518 — a `defaults:` key, and a
+// threshold key of a `tenants:` / `profiles:` body), and inside `defaults:`
+// a spelling that writes nothing beside one that does is dropped
 // (dropNullShadowingSpellings, #2418). The tenant set of a file is the key
 // set of the returned Tenants.
 //
@@ -55,6 +58,7 @@ func ParseConfigFile(data []byte) (ThresholdConfig, error) {
 	var cfg ThresholdConfig
 	err := yaml.Unmarshal(data, &cfg)
 	if err == nil {
+		dropNullThresholds(&cfg, data)
 		dropNullShadowingSpellings(cfg.Defaults, data)
 	}
 	return cfg, err
@@ -65,8 +69,10 @@ func ParseConfigFile(data []byte) (ThresholdConfig, error) {
 // levelWritesSpelling) while it writes another spelling of the same
 // threshold (#2418).
 //
-// ⛔ WHY. `Defaults` is map[string]float64, so a null decodes to a PRESENT 0.
-// With the canonical spelling written as null beside the retired spelling
+// ⛔ WHY. `Defaults` is map[string]float64, so a null decodes to a PRESENT 0
+// (since #2518 dropNullThresholds takes every null out first; the ±Inf /
+// NaN half below is what still reaches here). With the canonical spelling
+// written as null beside the retired spelling
 // at 30 in the root `_defaults.yaml`, resolve's canonical-wins dedup
 // (canonicalizeDefaults) then served the null's 0 over the 30, while the
 // walker's defaults fold — which da-guard and /effective read — drops the
@@ -88,9 +94,10 @@ func ParseConfigFile(data []byte) (ThresholdConfig, error) {
 //   - every caller of this decode gets it — the conf.d root carrier AND
 //     file mode's single config file (loadFile → ParseTenantFile).
 //
-// What stays: a spelling that writes nothing with NO written twin decodes
-// as before (null → 0, a separate question, not this one's), and a file
-// writing both spellings with values is untouched (canonical wins).
+// What stays: a non-finite spelling with NO written twin decodes as before,
+// and a file writing both spellings with values is untouched (canonical
+// wins). A null never reaches here: dropNullThresholds runs first and takes
+// every null out of `defaults:` (#2518), twin or not.
 //
 // Fast path: the raw re-decode happens only when the map holds two
 // spellings of one threshold — never for a file without aliased keys.

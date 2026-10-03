@@ -409,8 +409,12 @@ func MergeTenantOverRootPlatform(root RootPlatform, tenantID string, tenantData 
 	// Decode the tenant body into the typed config. A decode error contributes
 	// no overrides (the historical behavior: the merge loop was guarded by
 	// `err == nil`); YAML validity is the caller's gate.
-	var tenantCfg ThresholdConfig
-	if err := yaml.Unmarshal(tenantData, &tenantCfg); err != nil {
+	//
+	// ParseConfigFile, not a bare yaml.Unmarshal (#2518): a threshold the
+	// body writes as null is no write, so the platform layer (supplyFor) and
+	// the profile fill supply it — as on /metrics, which decodes the same way.
+	tenantCfg, err := ParseConfigFile(tenantData)
+	if err != nil {
 		tenantCfg = ThresholdConfig{}
 	}
 
@@ -461,8 +465,24 @@ func MergeTenantOverRootPlatform(root RootPlatform, tenantID string, tenantData 
 // It deliberately omits the byte variant's flat-KV fallback (that path serves
 // the GET read path's legacy flat on-disk files; a parsed caller has already
 // asserted a `tenants.<id>` block is present). The root merge, tenant merge,
-// and ApplyProfiles are otherwise identical, so for a tenants-block body this
-// returns the same result as the byte entry point.
+// and ApplyProfiles are otherwise identical, with ONE difference that comes
+// from the caller's decode, not from this function: the byte entry point
+// decodes through ParseConfigFile, which drops a threshold key the body writes
+// as null (#2518), while the write gate (gitops.validate) hands in a plain
+// yaml.Unmarshal of the body, where such a key is present with an empty value.
+// So for a tenants-block body the two results are equal except that a body
+// key written as null (not `_`-prefixed) is in this merge's tenant map and
+// not in the byte entry point's — it then also keeps the platform entry's and
+// the profile's value for that key (under any spelling) out of this merge,
+// and with it any platform-file or profile Notice about it. The gate reads only
+// ValidateTenantKeys from this result, whose Errors come from the tenant's
+// own layer (key names, `expires:`, `_critical` bases, …) and whose
+// platform/profile entries are Notices that never block a write. So for
+// what the gate refuses, the difference only means a null key is still
+// validated there (an unknown key written as null is still refused) —
+// stricter than GET, never looser. Its Notices can differ both ways: fewer
+// platform/profile ones for that key, and the tenant layer's own Notices on
+// the null key itself (e.g. the rename notice for a legacy spelling).
 func MergeParsedTenantWithRootDefaults(configDir string, tenantCfg ThresholdConfig) TenantMerge {
 	merged := mergeTenantConfig(loadRootPlatform(configDir), tenantCfg)
 	merged.applyProfiles(nil) // silent, as in MergeTenantOverRootPlatform
@@ -488,7 +508,9 @@ func MergeParsedTenantWithRootDefaults(configDir string, tenantCfg ThresholdConf
 //     create a tenant here, as it cannot on /metrics.
 //   - PRECEDENCE: per top-level key, a later platform file (sort order) over
 //     an earlier one, the tenant body over all of them — mergePartialInto's
-//     map overwrite. A key the body writes, even as null, is the body's.
+//     map overwrite. A reserved key the body writes, even as null, is the
+//     body's; a threshold key written as null is not written at all (#2518,
+//     MergeTenantOverRootPlatform decodes through ParseConfigFile).
 //   - ⚠️ `_metadata` is NOT inherited — the walker plane's rule (/effective,
 //     overlayTenant), deliberately NOT /metrics': the flat merge carries a
 //     platform entry's `_metadata` into ResolveMetadata. GET serves no

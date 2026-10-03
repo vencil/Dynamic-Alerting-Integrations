@@ -236,3 +236,21 @@ func TestServedValues_RootAndTenantCriticalExits2(t *testing.T) {
 		})
 	}
 }
+
+// #2518: a root `_critical` key written as null is no write — the exporter
+// serves no series for it — so root_defaults_critical_key, which describes
+// "a threshold of its own (severity=warning)", must not fire for it.
+func TestGuard_RootNullCriticalKeyIsNotReported(t *testing.T) {
+	t.Parallel()
+	dir := t.TempDir()
+	testutil.WriteFile(t, filepath.Join(dir, "_defaults.yaml"),
+		"defaults:\n  container_cpu: 70\n  mysql_connections_critical: null\n  mysql_threads_running_critical: 90\n")
+	testutil.WriteFile(t, filepath.Join(dir, "tb.yaml"), "tenants:\n  tb:\n    container_cpu: \"1\"\n")
+	got := rootCriticalFields(t, dir)
+	if got["_defaults.yaml:defaults.mysql_connections_critical"] {
+		t.Errorf("null root _critical key reported: %v", got)
+	}
+	if !got["_defaults.yaml:defaults.mysql_threads_running_critical"] {
+		t.Errorf("numeric root _critical key not reported (control): %v", got)
+	}
+}

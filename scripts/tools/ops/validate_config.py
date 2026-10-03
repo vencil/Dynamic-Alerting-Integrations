@@ -1375,19 +1375,22 @@ def _root_defaults_routing_detail(rel: str, key: str, value: object,
 
 
 def _root_defaults_value_detail(rel: str, key: str | None, raw: str,
-                                zero: bool) -> str:
-    """One FAIL line for a value the exporter drops or decodes to 0 (#1414).
+                                null: bool) -> str:
+    """One FAIL line for a value the exporter drops or treats as unwritten
+    (#1414, #2518).
 
     *key* and *raw* are one item of ``deprecate_rule.exporter_verdicts`` (key
-    None = the whole document); *zero* is whether its kind is
-    ``DECODES_TO_ZERO`` rather than a blocking one.
+    None = the whole document); *null* is whether its kind is
+    ``NULL_NOT_DECLARED`` rather than a blocking one.
     """
-    if zero:
-        return (f"{rel}: `defaults.{key}` has no value — threshold-exporter "
-                f"decodes it as 0 and sends a 0 threshold for this metric to "
-                f"every tenant that does not set its own value. Give it a "
-                f"number; to declare the key without a platform value, list "
-                f"it under `optional_overrides:` instead.")
+    if null:
+        # #2518: the fact and nothing else. Every added clause — the
+        # line's effect, the key's declaration, a removal procedure, which
+        # finding names whom, "numbers only", "compare served-values" — was
+        # measured false for some shape (`<<:` merges, the other spelling,
+        # `optional_overrides:`, `_critical` rows where served-values exits
+        # 2). What a null changes is the exporter's to say, not this mirror's.
+        return f"{rel}: `defaults.{key}` has no value (null)."
     if key is None:
         # ⚠️ *raw* (the mirror's reason) is not printed: `deprecate_rule`
         # words it in Chinese, this tool's operator strings are English, and
@@ -1645,8 +1648,9 @@ def check_root_defaults(config_dir: str) -> dict[str, object]:
       cannot decode (``"70"``, ``disable``, a mapping …) fails the decode and
       the exporter drops the root file's whole ``defaults:`` — every platform
       threshold, while the load is reported as successful; a null / empty
-      value decodes as 0 and becomes a 0 threshold for every tenant that does
-      not override it. Both FAIL. The verdict is
+      value is reported as having no value (#2518; before it, a 0
+      threshold) — what it changes depends on the rest of the tree and is
+      not judged here. Both FAIL. The verdict is
       ``deprecate_rule.exporter_verdicts`` — the yaml.v3 mirror whose truth
       table ``tests/golden/fixtures/defaults-carrier-oracle.json`` is judged
       by the Go test ``TestDefaultsCarrierOracle`` — called, not re-spelled.
@@ -1723,10 +1727,10 @@ def check_root_defaults(config_dir: str) -> dict[str, object]:
     dropped = {k: r for k, r, kind in verdicts
                if k is not None and kind in dr.BLOCKING_KINDS}
     details = [_root_defaults_value_detail(rel, k, r,
-                                           kind == dr.DECODES_TO_ZERO)
+                                           kind == dr.NULL_NOT_DECLARED)
                for k, r, kind in verdicts
                if not (k is not None and k.startswith("_routing"))
-               and (kind in dr.BLOCKING_KINDS or kind == dr.DECODES_TO_ZERO)]
+               and (kind in dr.BLOCKING_KINDS or kind == dr.NULL_NOT_DECLARED)]
     if raw.get("defaults") is None:
         details += _root_defaults_unwrapped_detail(rel, raw)
     block = raw.get("defaults")

@@ -29,10 +29,16 @@ package handler
 
 import (
 	"errors"
+	"fmt"
+	"log/slog"
 	"net/http"
+	"path/filepath"
+	"sort"
 
 	"github.com/go-chi/chi/v5"
 	cfg "github.com/vencil/threshold-exporter/pkg/config"
+
+	"github.com/vencil/tenant-api/internal/confd"
 )
 
 // GetTenantEffective handles GET /api/v1/tenants/{id}/effective.
@@ -59,6 +65,7 @@ import (
 // @Success     200  {object} cfg.EffectiveConfig
 // @Failure     400  {object} ErrorResponse
 // @Failure     404  {object} ErrorResponse
+// @Failure     409  {object} ErrorResponse "Conflict: ambiguous tenant file, or the tenant is declared by more than one conf.d file"
 // @Failure     500  {object} ErrorResponse
 // @Router      /api/v1/tenants/{id}/effective [get]
 func GetTenantEffective(d *Deps) http.HandlerFunc {
@@ -69,13 +76,36 @@ func GetTenantEffective(d *Deps) http.HandlerFunc {
 			return
 		}
 
+		// ⛔ The walker's verdict decides, not a filename match (#2511
+		// review): a sibling `<id>.yml` that declares nothing for the tenant
+		// (`tenants: {}`, another tenant only, unparseable, a dangling
+		// symlink, a symlink to a directory) is no second declaration — the
+		// exporter serves the tenant — so only ResolveEffective's typed
+		// *DuplicateTenantError turns a request into a 409.
 		ec, err := cfg.ResolveEffective(d.ConfigDir, tenantID)
 		if err != nil {
-			if errors.Is(err, cfg.ErrTenantNotFound) {
+			var dup *cfg.DuplicateTenantError
+			var decodeErr *cfg.DecodeError
+			switch {
+			case errors.Is(err, cfg.ErrTenantNotFound):
 				WriteJSONError(w, r, http.StatusNotFound, "tenant not found: "+tenantID)
-				return
+			case errors.As(err, &dup):
+				// The typed error carries both files' ABSOLUTE paths; they go
+				// to the log only (#2511: they used to reach the body as a 500).
+				slog.Warn("tenant effective: tenant declared by more than one conf.d file",
+					"tenant", tenantID, "error", err)
+				WriteJSONError(w, r, http.StatusConflict, effectiveDuplicateMessage(d.ConfigDir, tenantID, dup))
+			case errors.As(err, &decodeErr):
+				// Its text is the decoder's own (`parse defaults[i]: …` /
+				// `parse tenant: …`) and names no path — pinned by
+				// TestGetTenantEffective_DecodeErrorTextNamesNoServerPath.
+				WriteJSONError(w, r, http.StatusInternalServerError, err.Error())
+			default:
+				// Walker and read failures carry server paths (a missing root
+				// answers `stat "/…/conf.d": …`): fixed text, full error logged.
+				slog.Error("tenant effective: cannot resolve", "tenant", tenantID, "error", err)
+				WriteJSONError(w, r, http.StatusInternalServerError, msgEffectiveUnresolved)
 			}
-			WriteJSONError(w, r, http.StatusInternalServerError, err.Error())
 			return
 		}
 
@@ -86,4 +116,56 @@ func GetTenantEffective(d *Deps) http.HandlerFunc {
 		out.EffectiveConfig = cfg.NonFiniteAsText(ec.EffectiveConfig)
 		writeJSON(w, http.StatusOK, out)
 	}
+}
+
+// msgEffectiveUnresolved is the fixed client-facing text for a resolve
+// failure other than not-found, a duplicate or a decode error: those errors
+// carry server paths, which only the log may see.
+const msgEffectiveUnresolved = "cannot resolve the tenant's effective config from conf.d; see the server log"
+
+// effectiveDuplicateMessage is the 409 text for a *DuplicateTenantError.
+//
+// When both declaring files are the tenant's own top-level spellings
+// (`<id>.yaml` beside `<id>.yml`, directly in conf.d), the text is
+// GET /tenants/{id}'s ambiguity message — the same sentinel wording, base
+// names only — since both names follow from the id the caller already holds.
+// Any other pair (a subdirectory copy, including both spellings inside a
+// subdirectory, or a shared file's `tenants:` entry) gets the fixed text the
+// write plane uses: the other file's name or location is not this caller's
+// to learn.
+func effectiveDuplicateMessage(configDir, tenantID string, dup *cfg.DuplicateTenantError) string {
+	a, okA := topLevelTenantFileName(configDir, tenantID, dup.PathA)
+	b, okB := topLevelTenantFileName(configDir, tenantID, dup.PathB)
+	if !okA || !okB {
+		return msgTenantDeclaredElsewhere
+	}
+	names := []string{a, b}
+	sort.Strings(names)
+	return fmt.Errorf("%w: %q is claimed by %v", confd.ErrAmbiguousTenantFile, tenantID, names).Error()
+}
+
+// topLevelTenantFileName returns path's base name when path sits directly in
+// configDir and that name classifies as tenantID's own file. The walker
+// reports paths under its absolute, symlink-resolved root, so both forms of
+// configDir are tried; anything that matches neither is not top-level here.
+func topLevelTenantFileName(configDir, tenantID, path string) (string, bool) {
+	parent := filepath.Dir(filepath.Clean(path))
+	roots := []string{}
+	if abs, err := filepath.Abs(configDir); err == nil {
+		roots = append(roots, abs)
+		if real, err := filepath.EvalSymlinks(abs); err == nil {
+			roots = append(roots, real)
+		}
+	}
+	for _, root := range roots {
+		if parent != filepath.Clean(root) {
+			continue
+		}
+		name := filepath.Base(path)
+		if id, ok := confd.TenantIDFromFile(name); ok && id == tenantID {
+			return name, true
+		}
+		return "", false
+	}
+	return "", false
 }

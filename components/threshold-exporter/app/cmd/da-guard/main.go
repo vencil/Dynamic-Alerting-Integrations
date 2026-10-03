@@ -568,6 +568,7 @@ func buildCheckInput(scoped *config.ScopedTenants, f *flags) guard.CheckInput {
 		DeclaredStateFilters: scoped.DeclaredStateFilters,
 		// #2388 A: the overlay's own verdict on each such key.
 		SubtreeRefusedVerdicts: scoped.SubtreeRefusedVerdicts,
+		RootNullUndeclared:     scoped.RootNullUndeclared,
 	}
 }
 

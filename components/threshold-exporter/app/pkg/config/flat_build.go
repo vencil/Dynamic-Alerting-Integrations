@@ -93,6 +93,18 @@ type FlatBuild struct {
 	// LoadDir) would otherwise see a broken tenant file as a tenant that
 	// does not exist.
 	ParseFailed []string
+	// RootNullUndeclared is tenantID → each threshold key the tenant's
+	// config sets (its own file, a root platform `tenants:` entry or a
+	// profile) that /metrics does not serve because the root
+	// `_defaults.yaml` writes it — or, for a `<base>_critical` key, its base
+	// — as null, which is no write (#2518; rootNullUndeclared). da-guard reports it as
+	// root_default_null_undeclared. nil when there is none.
+	//
+	// ⚠️ Filled only when this build decoded the root carrier's bytes —
+	// every cold build (LoadDir, ScopeEffective). A warm exporter reload
+	// that reuses the carrier's prior partial leaves it nil; the exporter
+	// does not read it.
+	RootNullUndeclared map[string][]RootNullKey
 }
 
 // BuildFlatConfig builds the merged ThresholdConfig from a scan: parse each
@@ -125,6 +137,7 @@ func BuildFlatConfig(scan *TreeScan, in FlatBuildInput) (FlatBuild, error) {
 
 	fileConfigs := make(map[string]ThresholdConfig, len(scan.Files))
 	var parseFailed []string
+	var rootNull []string // the root carrier's null `defaults:` keys (#2518)
 	for _, name := range scan.Keys {
 		if isUnselectedRootCarrier(name, rootCarrier) {
 			continue
@@ -200,6 +213,9 @@ func BuildFlatConfig(scan *TreeScan, in FlatBuildInput) (FlatBuild, error) {
 			parseFailed = append(parseFailed, name)
 			continue
 		}
+		if name == rootCarrier {
+			rootNull = rootNullDefaults(data)
+		}
 		applyBoundaryRules(name, &partial, logger)
 		fileConfigs[name] = partial
 	}
@@ -226,6 +242,7 @@ func BuildFlatConfig(scan *TreeScan, in FlatBuildInput) (FlatBuild, error) {
 		Unreachable: unreachableKeys(unreachable), UnreachableValues: unreachable,
 		SubtreeRefusedVerdicts: applied,
 		ParseFailed:            parseFailed,
+		RootNullUndeclared:     rootNullUndeclared(&merged, rootNull),
 	}, nil
 }
 

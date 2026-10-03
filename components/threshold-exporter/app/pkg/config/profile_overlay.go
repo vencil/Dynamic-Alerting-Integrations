@@ -136,6 +136,12 @@ func newPlatformProfiles(files []profileSourceFile) *PlatformProfiles {
 			// accepted the file, so any other body is a mapping).
 			m, _ := normalizeYAMLToJSON(body).(map[string]any)
 			for k, v := range m {
+				// A threshold written as null is no write (#2518): it
+				// neither fills the tenant nor replaces an earlier file's
+				// value — as on /metrics (ParseConfigFile).
+				if nullThreshold(k, v) {
+					continue
+				}
 				pp.byName[name][k] = profileEntry{file: f.key, value: v}
 			}
 		}

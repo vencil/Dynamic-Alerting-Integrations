@@ -110,9 +110,11 @@ func platformMergeTrees() []struct {
 		{"platform null on a threshold key", withDefaults(map[string]string{
 			"_platform.yaml": "tenants:\n  tx:\n    redis_memory: null\n    pg_connections: \"63\"\n",
 			"tx.yaml":        tenant}), true},
+		// #2518: a threshold written as null is no write, so the platform's
+		// 62 shows through (main, with no platform layer, serves the root's).
 		{"tenant null over a platform value", withDefaults(map[string]string{
 			"_platform.yaml": "tenants:\n  tx:\n    redis_memory: \"62\"\n",
-			"tx.yaml":        "tenants:\n  tx:\n    redis_memory: null\n"}), false},
+			"tx.yaml":        "tenants:\n  tx:\n    redis_memory: null\n"}), true},
 		{"two platform files: the later one wins key by key", withDefaults(map[string]string{
 			"_a.yaml": "tenants:\n  tx:\n    redis_memory: \"61\"\n    pg_connections: \"160\"\n",
 			"_b.yaml": "tenants:\n  tx:\n    redis_memory: \"60\"\n",

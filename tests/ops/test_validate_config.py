@@ -2410,6 +2410,50 @@ class TestRootDefaultsRouting:
         r = vc.check_root_defaults(str(d))
         assert r["status"] == vc.PASS, r
 
+    @pytest.mark.parametrize("null_key,optional", [
+        ("mysql_connections", ""),
+        ("mysql_connections", "optional_overrides:\n  - mysql_connections\n"),
+        ("mysql_threads_running", "optional_overrides:\n  - mysql_cpu\n"),
+        ("mysql_cpu_critical", ""),
+        ('"mysql_cpu{queue=\\"a\\"}"', ""),
+        ("_custom_x", "optional_overrides:\n  - _custom_x\n"),
+    ])
+    def test_a_null_line_is_reported_as_the_fact_only(self, tmp_path,
+                                                      null_key, optional):
+        """#2518: the row reports only that the value is null — no claim
+        about what the line changes (that depends on the rest of the tree:
+        another spelling, `optional_overrides:`, a `<<:` merge) and no
+        removal procedure; every such clause was measured false for some
+        shape."""
+        d = self._tree(tmp_path, f"defaults:\n  {null_key}: null\n"
+                       f"  mysql_slow_queries: 5\n" + optional)
+        r = vc.check_root_defaults(str(d))
+        assert r["status"] == vc.FAIL, r
+        detail = " ".join(r["details"])
+        assert detail.endswith("has no value (null)."), detail
+        # no claim about the line's effect: over a `<<:` merged value it
+        # removes that default (r6 review, measured)
+        assert "sets no platform default" not in detail, detail
+        assert "no tenant gets" not in detail, detail
+        # no claim about the key (another spelling or optional_overrides:
+        # may still declare it) and no named finding (r6 review).
+        assert "does not declare it" not in detail, detail
+        # #2518 r6: no removal procedure — each one was wrong for some shape.
+        for advice in ("Delete it", "remove the null", "instead"):
+            assert advice not in detail, (advice, detail)
+
+    def test_a_null_over_a_merged_value_is_not_called_harmless(self, tmp_path):
+        """A null that overrides a `<<:`-merged value cancels it (measured:
+        deleting the line made every tenant get the merged 5), so the row
+        must not tell anyone to delete it — it gives no removal advice."""
+        d = self._tree(tmp_path, "tenants:\n  tx: &b\n    mysql_connections: 5\n"
+                       "defaults:\n  <<: *b\n  container_cpu: 80\n"
+                       "  mysql_connections: null\n")
+        r = vc.check_root_defaults(str(d))
+        assert r["status"] == vc.FAIL, r
+        detail = " ".join(r["details"])
+        assert "Delete it" not in detail and "remove" not in detail, detail
+
     def test_end_to_end_exits_1_and_names_the_fix(self, tmp_path, capsys,
                                                   cli_argv):
         """Wired into ``main()``: this exact tree printed PASS, rc 0."""
@@ -2451,12 +2495,13 @@ _ORACLE_ROW_DEVIATIONS = {
 
 class TestRootDefaultsValues:
     """Check 10 (#1414): a root `defaults:` value the exporter drops the whole
-    block over, or decodes to 0, is a FAIL.
+    block over, or treats as unwritten (#2518), is a FAIL.
 
     Measured before this rule: `"70"`, `disable`, `{default: 30}` and an empty
     value under the root `defaults:` each printed `Result: PASS`, rc 0 — while
     the exporter dropped every platform threshold for the first three and
-    served a 0 threshold to every tenant for the fourth.
+    served a 0 threshold to every tenant for the fourth (since #2518 the
+    fourth leaves the key undeclared instead).
     """
 
     _TENANT = "tenants:\n  tenant-x:\n    mysql_connections: \"70\"\n"
@@ -2490,15 +2535,15 @@ class TestRootDefaultsValues:
         assert "drops ALL of it" in detail, detail
 
     @pytest.mark.parametrize("value", ["", " ~", " null"])
-    def test_an_empty_value_fails_as_a_zero_threshold(self, tmp_path, value):
+    def test_an_empty_value_fails_as_having_no_value(self, tmp_path, value):
         d = self._tree(tmp_path, "defaults:\n  container_cpu: 80\n"
                        f"  mysql_connections:{value}\n")
         r = vc.check_root_defaults(str(d))
         assert r["status"] == vc.FAIL, r
         detail = " ".join(r["details"])
         assert "`defaults.mysql_connections` has no value" in detail, detail
-        assert "0 threshold" in detail, detail
-        assert "optional_overrides" in detail, detail
+        assert detail.endswith("has no value (null)."), detail
+        assert "0 threshold" not in detail, detail
         # Not the whole block: the exporter keeps the other thresholds.
         assert "drops ALL of it" not in detail, detail
 

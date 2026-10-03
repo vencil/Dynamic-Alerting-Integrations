@@ -548,7 +548,7 @@ _LIBYAML_ONLY = {"trailing-tab", "tab-after-key-colon", "tab-in-flow"}
 def test_carrier_health_matches_the_exporter(case_name):
     """產線的 `exporter_verdicts`（鏡射那一層）對每一格給出 Go
     `TestDefaultsCarrierOracle` 量到的判定：accepted ⇒ 無項；dropped ⇒ 恰一個
-    UNPARSEABLE（結構性的 key 為 None）；zero ⇒ 恰一個 DECODES_TO_ZERO。帶
+    UNPARSEABLE（結構性的 key 為 None）；absent ⇒ 恰一個 NULL_NOT_DECLARED。帶
     `python` 覆寫欄位的格是刻意的 fail-closed 近似（Go 接受、本工具整檔擋），以
     覆寫為準。`carrier_health` 在這一層之上再加本工具自己讀不讀得了。"""
     case = _ORACLE_BY_NAME[case_name]
@@ -566,7 +566,7 @@ def test_carrier_health_matches_the_exporter(case_name):
     got_key, _raw, kind = got[0]
     assert got_key == key, f"{case_name}: {got}"
     assert kind == (deprecate_rule.UNPARSEABLE if want == "dropped"
-                    else deprecate_rule.DECODES_TO_ZERO), f"{case_name}: {got}"
+                    else deprecate_rule.NULL_NOT_DECLARED), f"{case_name}: {got}"
 
 
 def test_carrier_health_invalid_utf8_bytes():
@@ -953,7 +953,7 @@ def test_under_plane_subtree_an_unparseable_own_carrier_degrades_the_run(tmp_pat
 
 
 def test_an_empty_value_only_warns_and_the_run_still_writes(tmp_path):
-    """`key:`（空值）不是 exporter 讀不進去：只警告（講 0 閾值），照寫、rc 0。
+    """`key:`（空值）不是 exporter 讀不進去：只警告（講沒宣告，#2518），照寫、rc 0。
     成對反例：同一位置換成字串就是 blocking——整輪降級、零寫入、rc 1。"""
     root = tmp_path / "conf.d"
     root.mkdir()
@@ -964,7 +964,8 @@ def test_an_empty_value_only_warns_and_the_run_still_writes(tmp_path):
 
     assert r.returncode == 0, r.stdout + r.stderr
     assert "下架未完成" not in r.stdout, r.stdout
-    assert "⚠️" in r.stdout and "legacy_key" in r.stdout and "解成 0" in r.stdout, r.stdout
+    assert "⚠️" in r.stdout and "legacy_key" in r.stdout and "當作沒寫" in r.stdout, r.stdout
+    assert "解成 0" not in r.stdout, r.stdout
     assert "永遠觸發" not in r.stdout, r.stdout
     assert "cpu_usage" not in (root / "_defaults.yaml").read_text(encoding="utf-8")
     assert "cpu_usage" not in (root / "alpha.yaml").read_text(encoding="utf-8")

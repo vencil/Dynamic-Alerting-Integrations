@@ -184,6 +184,14 @@ type ScopedTenants struct {
 	// depends on tenants a `--scope` may not list (#2388 A r2). The load is
 	// the whole tree either way.
 	SubtreeRefusedVerdicts map[string]map[string]SubtreeRefusedVerdict
+
+	// RootNullUndeclared is, for each tenant in Tenants, the sorted
+	// threshold keys its config sets that /metrics does not serve because
+	// the root `_defaults.yaml` writes them (or a `_critical` key's base) as
+	// null — not declared (#2518)
+	// (the same build's FlatBuild.RootNullUndeclared). Only in-scope tenants
+	// are listed; nil when there is none.
+	RootNullUndeclared map[string][]RootNullKey
 }
 
 // DefaultsFile is one defaults carrier of a scan: its root-relative slash
@@ -358,7 +366,7 @@ func scopeEffective(configDir, scopeDir string, wholeTree bool) (*ScopedTenants,
 			inScope[id] = struct{}{}
 		}
 	}
-	parseFailed, unreachable, reserved, stateFilters, applied, err := scopeParseFailed(scan, filepath.ToSlash(rel))
+	parseFailed, unreachable, reserved, stateFilters, applied, rootNull, err := scopeParseFailed(scan, filepath.ToSlash(rel))
 	if err != nil {
 		return nil, err
 	}
@@ -402,8 +410,8 @@ func scopeEffective(configDir, scopeDir string, wholeTree bool) (*ScopedTenants,
 		DeclaredStateFilters:   stateFilters,
 		SubtreeRefusedVerdicts: applied,
 	}
-	// The build's verdict, kept for the in-scope tenants only (#1976), and
-	// the reserved keys of the same build's subtree chain (#2388).
+	// The build's verdicts, kept for the in-scope tenants only (#1976,
+	// #2518), and the reserved keys of the same build's subtree chain (#2388).
 	for _, id := range tenantIDs {
 		if keys := unreachable[id]; len(keys) > 0 {
 			if out.Undeliverable == nil {
@@ -416,6 +424,12 @@ func scopeEffective(configDir, scopeDir string, wholeTree bool) (*ScopedTenants,
 				out.SubtreeReserved = map[string]map[string][]string{}
 			}
 			out.SubtreeReserved[id] = keys
+		}
+		if keys := rootNull[id]; len(keys) > 0 {
+			if out.RootNullUndeclared == nil {
+				out.RootNullUndeclared = map[string][]RootNullKey{}
+			}
+			out.RootNullUndeclared[id] = keys
 		}
 	}
 	seenFiles := make(map[string]struct{}, len(tenantIDs))
@@ -482,10 +496,11 @@ func scopeEffective(configDir, scopeDir string, wholeTree bool) (*ScopedTenants,
 // root `state_filters:` names (ScopedTenants.DeclaredStateFilters).
 func scopeParseFailed(scan *TreeScan, scopeRel string) (
 	parseFailed []string, unreachable map[string][]string, reserved map[string]map[string][]string,
-	stateFilters map[string]bool, applied map[string]map[string]SubtreeRefusedVerdict, err error,
+	stateFilters map[string]bool, applied map[string]map[string]SubtreeRefusedVerdict,
+	rootNull map[string][]RootNullKey, err error,
 ) {
 	if len(scan.Files) == 0 {
-		return nil, nil, nil, nil, nil, nil // the exporter refuses an empty tree; nothing was dropped
+		return nil, nil, nil, nil, nil, nil, nil // the exporter refuses an empty tree; nothing was dropped
 	}
 	// ⚠️ log.Printf, not discardLogger, for the profile WARNs (#2513): they
 	// reached the process log here before the build took its logger for them,
@@ -494,7 +509,7 @@ func scopeParseFailed(scan *TreeScan, scopeRel string) (
 	in := loadDirBuildInput(scan, scan.AbsRoot, discardLogger, log.Printf)
 	built, err := BuildFlatConfig(scan, in)
 	if err != nil {
-		return nil, nil, nil, nil, nil, err
+		return nil, nil, nil, nil, nil, nil, err
 	}
 	// Where a tenant-set key is set: da-guard's message only, so here and not
 	// in BuildFlatConfig (the exporter's reload path; #2388 A r4).
@@ -513,7 +528,7 @@ func scopeParseFailed(scan *TreeScan, scopeRel string) (
 	}
 	return parseFailed, unreachableKeys(undeliverableThresholds(built.UnreachableValues)),
 		subtreeReservedKeys(in.Root, in.TenantDefaults, in.ParsedDefaults), stateFilters,
-		built.SubtreeRefusedVerdicts, nil
+		built.SubtreeRefusedVerdicts, built.RootNullUndeclared, nil
 }
 
 // scopeDefaultsFiles is ScopedTenants.DefaultsFiles: the selected carrier of

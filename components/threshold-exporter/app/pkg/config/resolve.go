@@ -653,6 +653,17 @@ func (c *ThresholdConfig) resolveDeclaredRows(tenant string, defaults map[string
 	return rows
 }
 
+// criticalRowBase is resolveCriticalRows' entry test: whether an override
+// key is one it serves as a critical row, and that row's base metric key
+// ("mysql_connections_critical" → "mysql_connections"). The build's
+// root-null report (rootNullUndeclared, #2518) asks the same function.
+func criticalRowBase(key string) (string, bool) {
+	if !strings.HasSuffix(key, "_critical") || strings.HasPrefix(key, "_state_") || strings.HasPrefix(key, "_silent_") {
+		return "", false
+	}
+	return strings.TrimSuffix(key, "_critical"), true
+}
+
 // resolveCriticalRows resolves a tenant's <metric>_critical override variants,
 // each producing an additional severity=critical threshold for an existing
 // default metric. Extracted verbatim from the ResolveAtWithStats per-tenant
@@ -665,7 +676,8 @@ func (c *ThresholdConfig) resolveDeclaredRows(tenant string, defaults map[string
 func (c *ThresholdConfig) resolveCriticalRows(tenant string, defaults map[string]float64, overrides map[string]ScheduledValue, now time.Time, sink rowSink, logf func(format string, args ...any)) []ResolvedThreshold {
 	var rows []ResolvedThreshold
 	for key, sv := range overrides {
-		if !strings.HasSuffix(key, "_critical") || strings.HasPrefix(key, "_state_") || strings.HasPrefix(key, "_silent_") {
+		baseKey, critical := criticalRowBase(key)
+		if !critical {
 			continue
 		}
 
@@ -679,8 +691,6 @@ func (c *ThresholdConfig) resolveCriticalRows(tenant string, defaults map[string
 			continue
 		}
 
-		// Derive the base metric key: "mysql_connections_critical" → "mysql_connections"
-		baseKey := strings.TrimSuffix(key, "_critical")
 		// Verify that the base metric exists in defaults (otherwise ignore)
 		if _, exists := defaults[baseKey]; !exists {
 			logf("WARN: _critical key %q has no matching default %q, skipping", key, baseKey)

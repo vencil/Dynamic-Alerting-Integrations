@@ -568,7 +568,18 @@ def test_critical_tier_entry_condition_is_still_defaults_of_the_base():
     `defaults[base]`, the three-way split below is measuring the wrong thing and
     this fails FIRST, naming the reason."""
     body = _resolve_critical_rows_body()
-    assert 'baseKey := strings.TrimSuffix(key, "_critical")' in body
+    # #2518: the base derivation lives in criticalRowBase, shared with the
+    # build's root-null check, so read it there.
+    assert "baseKey, critical := criticalRowBase(key)" in body
+    src = _RESOLVE_GO.read_text(encoding="utf-8")
+    helper_sig = "func criticalRowBase(key string) (string, bool) {"
+    h_start = src.find(helper_sig)
+    assert h_start != -1, (
+        f"{_RESOLVE_GO} no longer defines {helper_sig!r}, which "
+        "resolveCriticalRows uses to derive the base key; repoint this reader")
+    h_end = src.find("\nfunc ", h_start + 1)
+    helper = src[h_start:h_end if h_end != -1 else len(src)]
+    assert 'return strings.TrimSuffix(key, "_critical"), true' in helper
     assert "if _, exists := defaults[baseKey]; !exists {" in body
     # ...and it never consults the declared list, which is why `_critical` keys
     # are deliberately off it (#1311)

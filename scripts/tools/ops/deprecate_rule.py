@@ -163,7 +163,7 @@ def tenant_key_belongs_to_metric(key, metric_key):
 
 # ── 載體體檢：鏡射 yaml.v3 對 `map[string]float64` 的判定 ─────────────────
 UNPARSEABLE = "unparseable"            # exporter 整份丟掉這個檔
-DECODES_TO_ZERO = "decodes_to_zero"    # 這一個 key 變成 0 閾值（只警告）
+NULL_NOT_DECLARED = "null_not_declared"  # 這一個 key 寫成 null：exporter 當作沒宣告（只警告，#2518）
 UNREADABLE = "unreadable"              # 本工具讀不到，無法判定
 UNPARSED_BY_TOOL = "unparsed_by_tool"  # pure-Python parser 讀不了；exporter 未必
 BLOCKING_KINDS = frozenset({UNPARSEABLE, UNREADABLE, UNPARSED_BY_TOOL})
@@ -334,7 +334,10 @@ def _explicit_tag(node, lines):
 
 
 def _scalar_verdict(node, lines):
-    """decode.go `scalar()` 對 float64 目標的下場: accepted / zero / dropped。"""
+    """decode.go `scalar()` 對 float64 目標的下場: accepted / null / dropped。
+
+    null：yaml.v3 解成 0，但 exporter 的 ParseConfigFile 接著把寫成 null 的
+    key 拿掉（#2518）——這個 key 等於沒寫，不是 0 閾值。"""
     if not isinstance(node, yaml.ScalarNode):
         return "dropped"
     tag = _explicit_tag(node, lines)
@@ -350,7 +353,7 @@ def _scalar_verdict(node, lines):
     if final in (_T_INT, _T_FLOAT):
         return "accepted"
     if final == _T_NULL:
-        return "zero"
+        return "null"
     return "dropped"
 
 
@@ -470,7 +473,7 @@ def exporter_verdicts(data):
         if defaults is None:
             return []
         if isinstance(defaults, yaml.ScalarNode):
-            if _scalar_verdict(defaults, lines) == "zero":
+            if _scalar_verdict(defaults, lines) == "null":
                 return []                      # `defaults:` 空值＝nil map
             raise _Dropped("defaults 不是 mapping（scalar）")
         if not isinstance(defaults, yaml.MappingNode):
@@ -481,7 +484,7 @@ def exporter_verdicts(data):
             if verdict == "accepted":
                 continue
             out.append((key_node.value, _raw_of(val_node, lines),
-                        DECODES_TO_ZERO if verdict == "zero" else UNPARSEABLE))
+                        NULL_NOT_DECLARED if verdict == "null" else UNPARSEABLE))
         return out
     except _Dropped as e:
         return [(None, str(e), UNPARSEABLE)]
@@ -959,11 +962,11 @@ def main():
             if is_defaults_name(e.name):
                 items = [i for i in items if i[0] not in planned]
             for key, _raw, kind in items:
-                if kind == DECODES_TO_ZERO:
+                if kind == NULL_NOT_DECLARED:
                     print(f"  ⚠️  {name} 的 `defaults:` 的 {safe_label(key)} 是空值"
-                          f"（`{safe_label(key)}:`）——exporter 會把它解成 0，每個租戶"
-                          f"因此多一條 0 閾值，不是「沒有這個 key」；請刪掉這一行或"
-                          f"補一個數字")
+                          f"（`{safe_label(key)}:`）——exporter 當作沒寫這個 key："
+                          f"平台沒有宣告它，任何租戶都不會送出它的閾值，自己設了值"
+                          f"的租戶也一樣（#2518）；請刪掉這一行或補一個數字")
             items = [i for i in items if i[2] in BLOCKING_KINDS]
             if items:
                 health[e.name] = items

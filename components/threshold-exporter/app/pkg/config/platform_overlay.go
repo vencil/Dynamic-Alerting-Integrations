@@ -95,6 +95,10 @@ func parsePlatformTenants(key string, f *TreeFile, data []byte) PlatformTenants 
 	var texts map[string]string // a scalar `_profile` is its text (#2433)
 	for tid, body := range doc.Tenants {
 		m, ok := normalizeYAMLToJSON(body).(map[string]any)
+		// A threshold written as null is no write (#2518): the entry does
+		// not own the key, so an earlier file's or the profile's value, or
+		// the chain's, shows through — as on /metrics (ParseConfigFile).
+		m = withoutNullThresholds(m)
 		if !ok || len(m) == 0 {
 			continue
 		}

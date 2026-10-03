@@ -242,7 +242,7 @@ func TestDeprecatedMetricTerminalShape_WholeTreeReload(t *testing.T) {
 type carrierOracleCase struct {
 	Name     string   `json:"name"`
 	Doc      string   `json:"doc"`
-	Exporter string   `json:"exporter"` // accepted | dropped | zero
+	Exporter string   `json:"exporter"` // accepted | dropped | absent
 	Key      *string  `json:"key"`      // nil for document-level rows
 	Value    *float64 `json:"value"`    // only for finite accepted values
 }
@@ -273,7 +273,7 @@ func assertCarrierVerdict(t *testing.T, name string, doc []byte, want string, ke
 		if ok {
 			t.Fatalf("%s: loaded (defaults=%v), want the carrier dropped", name, cfg.Defaults)
 		}
-	case "accepted", "zero":
+	case "accepted", "absent":
 		if !ok {
 			t.Fatalf("%s: dropped, want %s (log: %s)", name, want, logBuf.String())
 		}
@@ -281,11 +281,15 @@ func assertCarrierVerdict(t *testing.T, name string, doc []byte, want string, ke
 			return
 		}
 		got, present := cfg.Defaults[*key]
+		if want == "absent" {
+			// #2518: a null is no write — not a 0 threshold.
+			if present {
+				t.Fatalf("%s: defaults[%q] = %v, want the key absent", name, *key, got)
+			}
+			return
+		}
 		if !present {
 			t.Fatalf("%s: loaded but %q is not in defaults: %v", name, *key, cfg.Defaults)
-		}
-		if want == "zero" && got != 0 {
-			t.Fatalf("%s: defaults[%q] = %v, want 0", name, *key, got)
 		}
 		if value != nil && got != *value {
 			t.Fatalf("%s: defaults[%q] = %v, want %v", name, *key, got, *value)
