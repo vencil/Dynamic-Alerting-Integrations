@@ -12,6 +12,7 @@ import (
 	"os"
 	"path/filepath"
 	"sort"
+	"strings"
 	"testing"
 	"time"
 )
@@ -933,6 +934,108 @@ tenants:
 	}
 	if want.Tenants["db-a"]["mysql_connections"].Default != "75" {
 		t.Errorf("sanity: expected moved db-a=75 from pool-2, got %q", want.Tenants["db-a"]["mysql_connections"].Default)
+	}
+}
+
+// TestTheIncrementalReloadRefusesACarrierScan pins the invariant #2593 put at
+// the top of incrementalLoadFrom: a scan holding a `_defaults` carrier is
+// refused and the previous config stays live. The watch path never hands it
+// one (a carrier sends the reload down the hierarchical path), and the code
+// that used to cope with one — the root-carrier redirect, the refused-set
+// recomputation — was deleted on that strength, so a caller that breaks the
+// precondition must fail loudly rather than merge a carrier the function no
+// longer knows how to select. The scan is built by hand because no production
+// caller can produce it; the second half is the control that the same tree
+// reloads fine through the watch path.
+func TestTheIncrementalReloadRefusesACarrierScan(t *testing.T) {
+	t.Parallel()
+	dir := t.TempDir()
+	writeTestFile(t, dir, "tenant-a.yaml", "tenants:\n  t-a:\n    mysql_connections: \"70\"\n")
+	m := NewConfigManager(dir)
+	m.SetLogger(log.New(io.Discard, "", 0))
+	if err := watchReload(m); err != nil {
+		t.Fatalf("cold reload: %v", err)
+	}
+	requireFlatWatchPath(t, m)
+	before := m.GetConfig()
+
+	writeTestFile(t, dir, "_defaults.yaml", "defaults:\n  mysql_connections: 80\n")
+	writeTestFile(t, dir, "tenant-a.yaml", "tenants:\n  t-a:\n    mysql_connections: \"71\"\n")
+	m.mu.RLock()
+	prior := m.flat.tree
+	m.mu.RUnlock()
+	scan, err := scanDirTree(m.path, prior, m.getMetrics(), m.getLogger())
+	if err != nil {
+		t.Fatalf("scan: %v", err)
+	}
+	if len(scan.Defaults) == 0 {
+		t.Fatal("fixture precondition: the scan holds no carrier, so it tests nothing")
+	}
+	m.reloadMu.Lock()
+	err = m.incrementalLoadFrom(scan)
+	m.reloadMu.Unlock()
+	if err == nil || !strings.Contains(err.Error(), "`_defaults` carrier") {
+		t.Fatalf("incrementalLoadFrom accepted a carrier scan (err=%v)", err)
+	}
+	if got := m.GetConfig(); got != before {
+		t.Fatalf("a refused reload replaced the config: t-a=%q, Defaults=%v",
+			got.Tenants["t-a"]["mysql_connections"].Default, got.Defaults)
+	}
+
+	// Control: the watch path takes the same tree hierarchically.
+	if err := watchReload(m); err != nil {
+		t.Fatalf("watch reload of the carrier tree: %v", err)
+	}
+	cfg := m.GetConfig()
+	if got := cfg.Tenants["t-a"]["mysql_connections"].Default; got != "71" {
+		t.Errorf("after the watch reload t-a = %q, want 71", got)
+	}
+	if got := cfg.Defaults["mysql_connections"]; got != 80 {
+		t.Errorf("after the watch reload Defaults[mysql_connections] = %v, want 80", got)
+	}
+}
+
+// TestTheIncrementalReloadRefusesACarrierMissingFromTheCarrierSet: the
+// refusal asks the file names too, not only `scan.Defaults`. The scan is a
+// walker that filed a carrier in `Files` but not in `Defaults` — a state no
+// walker produces today, built by emptying `Defaults` by hand. The deleted
+// root-carrier redirect would have caught that file by name; the refusal must
+// as well, or removing the redirect lost a defence.
+func TestTheIncrementalReloadRefusesACarrierMissingFromTheCarrierSet(t *testing.T) {
+	t.Parallel()
+	dir := t.TempDir()
+	writeTestFile(t, dir, "tenant-a.yaml", "tenants:\n  t-a:\n    mysql_connections: \"70\"\n")
+	m := NewConfigManager(dir)
+	m.SetLogger(log.New(io.Discard, "", 0))
+	if err := watchReload(m); err != nil {
+		t.Fatalf("cold reload: %v", err)
+	}
+	requireFlatWatchPath(t, m)
+	before := m.GetConfig()
+
+	writeTestFile(t, dir, "_defaults.yaml", "defaults:\n  mysql_connections: 80\n")
+	writeTestFile(t, dir, "tenant-a.yaml", "tenants:\n  t-a:\n    mysql_connections: \"71\"\n")
+	m.mu.RLock()
+	prior := m.flat.tree
+	m.mu.RUnlock()
+	scan, err := scanDirTree(m.path, prior, m.getMetrics(), m.getLogger())
+	if err != nil {
+		t.Fatalf("scan: %v", err)
+	}
+	if scan.Files["_defaults.yaml"] == nil {
+		t.Fatal("fixture precondition: the carrier is not in scan.Files, so it tests nothing")
+	}
+	scan.Defaults = map[string]bool{} // the walker defect this guards against
+
+	m.reloadMu.Lock()
+	err = m.incrementalLoadFrom(scan)
+	m.reloadMu.Unlock()
+	if err == nil || !strings.Contains(err.Error(), "_defaults.yaml") {
+		t.Fatalf("incrementalLoadFrom accepted a scan whose files hold a carrier (err=%v)", err)
+	}
+	if got := m.GetConfig(); got != before {
+		t.Fatalf("a refused reload replaced the config: t-a=%q, Defaults=%v",
+			got.Tenants["t-a"]["mysql_connections"].Default, got.Defaults)
 	}
 }
 

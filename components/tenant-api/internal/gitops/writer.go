@@ -805,6 +805,26 @@ func (w *Writer) write(ctx context.Context, tenantID, authorEmail, yamlContent, 
 // between the read and the write.
 type MergeFunc func(existing []byte) (string, error)
 
+// ErrMergeNoOp is what a MergeFunc returns (errors.Is) when the edit it was
+// given changes nothing in the file — e.g. a batch op that only removes keys
+// from a tenant that does not exist, or that does not carry them (B2, #2341).
+// It is NOT a failure: WriteMerged returns success without writing,
+// WritePRBatch skips the op like a byte-identical merge (an all-no-op batch is
+// ErrNoChanges), and the pre-flight passes it. Needed because the existing
+// byte-compare cannot express "nothing to write" for a file that does not
+// exist: any content written there creates the tenant. The existing file is
+// still validated for its notices, as a byte-identical merge is (#1231 F5).
+var ErrMergeNoOp = errors.New("merge changes nothing")
+
+// ErrMergePolicyRefused is what a MergeFunc's error wraps (errors.Is) when the
+// merged content would break the domain policy (B2, #2341). Like
+// ErrMergeBaseNotLoadable it is a verdict on the tree it was read from, so
+// WritePRBatch's pre-flight (the local tree, before checkout) tolerates it
+// and the post-checkout pass — the fresh base the branch is cut from —
+// decides: there it aborts the feature branch and returns the error, and
+// nothing of the batch is written.
+var ErrMergePolicyRefused = errors.New("merged content breaks the domain policy")
+
 // ErrMergeBaseNotLoadable is what a MergeFunc's error wraps (errors.Is) when it
 // refuses the EXISTING file as its base because the file cannot be loaded as
 // a tenant config (#2373). It is a verdict on the file's content, so like
@@ -1117,6 +1137,9 @@ func (w *Writer) readMerge(tenantID, filePath string, merge MergeFunc) (content 
 // out structurally (it takes no path and no configDir).
 func (w *Writer) readMergeBodyOnly(tenantID, filePath string, merge MergeFunc) error {
 	content, _, err := w.readMerge(tenantID, filePath, merge)
+	if errors.Is(err, ErrMergeNoOp) {
+		return nil // nothing to write, nothing to validate
+	}
 	if err != nil {
 		return err
 	}
@@ -1140,6 +1163,16 @@ func (w *Writer) readMergeBodyOnly(tenantID, filePath string, merge MergeFunc) e
 // advisory deprecation channel (#1231 1b), meaningful only when err is nil.
 func (w *Writer) readMergeValidate(tenantID, filePath string, merge MergeFunc) (content string, existing []byte, notices []string, err error) {
 	content, existing, err = w.readMerge(tenantID, filePath, merge)
+	if errors.Is(err, ErrMergeNoOp) && len(bytes.TrimSpace(existing)) > 0 {
+		// The file stays as it is: nothing is written, so nothing is refused
+		// for what the file already holds (B2 round 3 — a file with no
+		// section for this tenant, or a key validate rejects, used to turn
+		// a successful no-op into a 400). Only the file's notices are taken
+		// from validate (#1231 F5); its errors are deliberately dropped. The
+		// caller sees ErrMergeNoOp with the notices.
+		_, notices := validate(w.configDir, tenantID, filePath, string(existing))
+		return "", existing, notices, err
+	}
 	if err != nil {
 		return "", existing, nil, err
 	}
@@ -1188,6 +1221,9 @@ func (w *Writer) WriteMerged(ctx context.Context, tenantID, authorEmail string, 
 		return nil, err
 	}
 	content, existing, notices, err := w.readMergeValidate(tenantID, filePath, merge)
+	if errors.Is(err, ErrMergeNoOp) {
+		return notices, nil // B2: the merge changes nothing — success, nothing written, notices kept
+	}
 	if err != nil {
 		return nil, err
 	}

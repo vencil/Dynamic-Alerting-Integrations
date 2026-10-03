@@ -25,6 +25,7 @@ package policy
 import (
 	"fmt"
 	"log/slog"
+	"os"
 	"path/filepath"
 	"sort"
 	"strings"
@@ -96,6 +97,32 @@ func NewManager(configDir string) *Manager {
 		slog.Warn("policy: initial load failed", "error", err)
 	}
 	return &Manager{Watcher: w}
+}
+
+// LoadSnapshot reads configDir's domain policy ONCE, with no watcher: the
+// same file NewManager watches (`<configDir>/_domain_policy.yaml`, nothing
+// else), the same parser (parseConfig), and the same missing-file answer
+// (emptyConfig). Unlike the watcher, which keeps its last good snapshot when
+// the file breaks, an unreadable or unparseable file is an error here: the
+// caller (PR-mode batch, judging the fresh base the branch is cut from,
+// B2 #2341) refuses the write rather than judge it on a policy it cannot
+// read.
+func LoadSnapshot(configDir string) (*Manager, error) {
+	path := filepath.Join(configDir, "_domain_policy.yaml")
+	data, err := os.ReadFile(path)
+	if err != nil {
+		if os.IsNotExist(err) {
+			return &Manager{Watcher: configwatcher.NewForTest("policy", emptyConfig())}, nil
+		}
+		return nil, fmt.Errorf("read %s: %w", path, err)
+	}
+	cfg, err := parseConfig(data)
+	if err != nil {
+		return nil, fmt.Errorf("parse %s: %w", path, err)
+	}
+	// configwatcher.NewForTest is also the production in-memory constructor
+	// (see rbac.NewCandidate): no path, no watch loop.
+	return &Manager{Watcher: configwatcher.NewForTest("policy", cfg)}, nil
 }
 
 // NewForTest returns a Manager pre-populated with cfg and no file

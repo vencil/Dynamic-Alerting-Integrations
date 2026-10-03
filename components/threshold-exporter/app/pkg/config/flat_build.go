@@ -710,24 +710,11 @@ func isRootCarrierKey(key string) bool {
 // version that dropped only the three carrier sections left an unselected
 // `_defaults.yml` still adding a `profiles:` entry and a `tenants:` entry to
 // /metrics (blind review). It is therefore never parsed or cached here
-// (BuildFlatConfig skips it), and any change to a root carrier sends the
-// incremental path to the full load (anyRootCarrierKey), so a cached partial
-// cannot outlive a selection that moved.
+// (BuildFlatConfig skips it). A cached partial cannot outlive a selection
+// that moved: any tree holding a carrier reloads hierarchically, through a
+// full flat build, never through the exporter's incremental path (#2593).
 func isUnselectedRootCarrier(key, rootCarrier string) bool {
 	return isRootCarrierKey(key) && key != rootCarrier
-}
-
-// anyRootCarrierKey reports whether a reload touched a root defaults carrier,
-// which can move the root selection.
-func anyRootCarrierKey(groups ...[]string) bool {
-	for _, g := range groups {
-		for _, k := range g {
-			if isRootCarrierKey(k) {
-				return true
-			}
-		}
-	}
-	return false
 }
 
 // rootCarrierKey returns the scan key of the root directory's selected
@@ -854,4 +841,3 @@ func MergePartialConfigs(configs map[string]ThresholdConfig, exists map[string]s
 func MergePartialInto(merged *ThresholdConfig, partial ThresholdConfig) {
 	mergePartialInto(merged, partial)
 }
-func AnyRootCarrierKey(groups ...[]string) bool { return anyRootCarrierKey(groups...) }

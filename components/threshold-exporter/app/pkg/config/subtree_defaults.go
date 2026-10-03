@@ -701,13 +701,4 @@ func thresholdScalar(value string) bool {
 // Exported forms of the functions above, for package main's forwarders
 // (config_subtree_defaults.go). Behavior pin: every one is `return x(args...)`.
 
-func ApplySubtreeDefaults(
-	cfg *ThresholdConfig,
-	root string,
-	tenantDefaults map[string][]string,
-	parsed map[string]map[string]any,
-) (int, map[string][]string) {
-	return applySubtreeDefaults(cfg, root, tenantDefaults, parsed)
-}
-
 func ScheduledValueFromRaw(raw any) (ScheduledValue, bool) { return scheduledValueFromRaw(raw) }

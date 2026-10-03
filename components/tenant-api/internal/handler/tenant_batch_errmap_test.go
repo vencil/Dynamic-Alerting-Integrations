@@ -190,7 +190,7 @@ func TestMergePatchYAML_StructuralErrorBranches(t *testing.T) {
 		tc := tc
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()
-			_, err := mergePatchYAML([]byte(tc.existing), "db-a", patch)
+			_, err := mergePatchYAML([]byte(tc.existing), "db-a", patch, nil)
 			if err == nil {
 				t.Fatal("expected a structural error, got nil (would clobber)")
 			}
@@ -203,7 +203,7 @@ func TestMergePatchYAML_StructuralErrorBranches(t *testing.T) {
 	t.Run("tenant section absent → added, siblings preserved", func(t *testing.T) {
 		t.Parallel()
 		existing := "tenants:\n  other-db:\n    mysql_threads_running: \"40\"\n"
-		out, err := mergePatchYAML([]byte(existing), "db-a", patch)
+		out, err := mergePatchYAML([]byte(existing), "db-a", patch, nil)
 		if err != nil {
 			t.Fatalf("mergePatchYAML: %v", err)
 		}
