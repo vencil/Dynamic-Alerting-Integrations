@@ -12,11 +12,11 @@ lang: en
 
 ## Status
 
-🟡 **Proposed** (drafted 2026-10-03).
+✅ **Accepted** (drafted 2026-10-03, approved by the owner 2026-10-03).
 
 - The decisions were settled by the owner in [#2655](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/2655); two of them were settled after the external review.
 - The external review was carried out adversarially by a different model, and its conclusions have been merged into this document.
-- This document still awaits owner approval.
+- The owner has approved this document. Three revisions were made at approval time: former open question 1 (the tenant-api read and delete paths) is resolved, another DNS-1123 copy, in `init_project.py`, is now listed, and `definitions.tenantId` gains a `description`.
 
 ## Summary
 
@@ -42,6 +42,7 @@ This ADR only defines the rule; the implementation goes in a separate PR.
 |---|---|
 | `operator_generate.py:54`, `migrate_to_operator.py:49` | DNS-1123 label (`fullmatch`) |
 | portal `operator-setup-wizard/utils/generators.js:26` | DNS-1123 shape, but **no 63-character limit** |
+| `_validate_tenant_name` in `init_project.py` | DNS-1123 label (`fullmatch` plus `len <= 63`; same rule as the first row, but another hand-written copy) |
 | `alert_quality.py:65` | `^[a-zA-Z0-9_-]+$` |
 | Generators, da-guard, tenant-api write path (#2633 transitional rule; `_lib_validation.py:98`, `routingpolicy/tenantid.go`) | Rejects the empty string and anything not matching `^[A-Za-z0-9_-]+$` |
 | tenant-api read path `ValidateTenantID` (`handler/sanitize.go:14`) | Only rejects path separators, `..`, non-base names, and reserved file names |
@@ -87,13 +88,14 @@ Lowercase alphanumerics and `-`, length 1–63, must start and end with an alpha
 - Add `propertyNames: {"$ref": "#/definitions/tenantId"}` to `properties.tenants`.
 - The schema is draft-07, which supports `propertyNames`, so `check_confd_schema` starts checking without any code change. The external review tested this on a copy of the schema: `Team_A` returns rc 1; the repo's conf.d returns rc 0.
 - No separate `maxLength`. The pattern already bounds the length; stating it twice would only produce two errors per violation.
+- `definitions.tenantId` also carries an English `description` that explains the rule in plain words. It ships inside the generated JSON copies; the error messages of the generators, da-guard, and tenant-api cite this text instead of each describing the rule on their own. The portal UI keeps its own localized hint text.
 
 **Python**
 
 - `_lib_validation.is_valid_tenant_id` reads this pattern at runtime, reusing the `_find_tenant_schema()` lookup: inside the da-tools image it reads the flat layout; inside the repo it walks up to the project root.
 - build.sh's `REPO_DATA_FILES` already ships this schema, and `check_build_completeness` already lists it as a required file.
 - If the schema cannot be read, fail closed, following the #2180 receiver URL pattern.
-- The following three tools drop their own regex or non-validating code and call this function instead: `operator_generate.py`, `migrate_to_operator.py`, `alert_quality.py`; `scaffold_tenant.py`, which did no validation before, also calls it.
+- The following four tools drop their own regex and call this function instead: `operator_generate.py`, `migrate_to_operator.py`, `alert_quality.py`, `init_project.py` (`_validate_tenant_name`); `scaffold_tenant.py`, which did no validation before, also calls it.
 
 **Go and the portal**
 
@@ -121,7 +123,7 @@ The receiverspec pattern hand-copies constants on the Go side and then compares 
   - `is_valid_tenant_id`: uses `re.fullmatch`, because Python's `$` swallows a trailing `\n`.
   - Go: anchored with `^…$`; RE2's `$` does not swallow `\n`.
   - JSON Schema's `pattern` has **search** semantics, and `$` behaves differently per validator: `check_confd_schema` (Python jsonschema) lets a key with a trailing `\n` through (tested with jsonschema 4.26: `{"abc\n": 1}` returns 0 errors); the editor path, yaml-language-server, uses ECMAScript's `$` and rejects it (`new RegExp(pattern).test("abc\n")` is false).
-- A key with a trailing `\n` comes from a YAML block scalar or from the `\n` escape in a double-quoted scalar (`"abc\n": 1`). Under this ADR, the generators, da-guard, and tenant-api write validation all reject such decoded keys, so we accept this difference on the schema path; tenant-api read validation stays broader, see open question 1.
+- A key with a trailing `\n` comes from a YAML block scalar or from the `\n` escape in a double-quoted scalar (`"abc\n": 1`). Under this ADR, the generators, da-guard, and tenant-api write validation all reject such decoded keys, so we accept this difference on the schema path; tenant-api read validation stays broader, see "Resolved questions".
 - The `tenant_ids` table in the parity matrix gets a case that runs jsonschema directly, to pin this difference down.
 
 - **What we gain**: there is only one copy of the rule text, and all four readers get the rule from it: the generators (Python), da-guard and tenant-api (Go), the portal, and the schema checker.
@@ -131,7 +133,9 @@ The receiverspec pattern hand-copies constants on the Go side and then compares 
 
 ### D3: Block outright, everywhere — every generation mode exits non-zero
 
-Once the new rule ships, every reader switches to the DNS-1123 verdict at the same time: generators, da-guard, the tenant-api write path, the schema, the portal, and `scaffold_tenant`.
+Once the new rule ships, every reader switches to the DNS-1123 verdict at the same time: generators, da-guard, the tenant-api write path, the schema, the portal, `scaffold_tenant`, and `init_project`.
+
+In tenant-api the new rule applies to **every write path**; for the scope and the enforcement point see "Resolved questions".
 
 When a generator hits an illegal id, it **exits non-zero and emits no config in every mode**, including plain generation, `--dry-run`, `--apply`, `--output-configmap`, `--validate`, and `--strict`.
 
@@ -177,17 +181,23 @@ The exporter does not reject tenants with illegal ids; on every reload it prints
 
 ## Resolved questions
 
+- **Whether the tenant-api read and delete paths should apply the new rule.** Only the write paths apply it; the read paths are unchanged. Confirmed at approval time:
+  - tenant-api has no route that deletes or renames a tenant; renames always happen in git, so the new rule does not block a rename migration.
+  - The new rule applies to every write path. The enforcement point is `gitops.guardTenantID` (`components/tenant-api/internal/gitops/writer.go`), which covers PUT, batch writes, group batch writes, custom-alerts, the federation subset, and dry-run.
+  - The handlers keep `ValidateWritableTenantID` to return 400 early.
+  - The rule is **not** put into `confd.IsAddressableTenantID`, because the read paths call it too.
 - **Whether the 63-character limit should subtract the prefix.** It should not. The external review confirmed by grep: what operator mode writes into K8s labels is the **bare id** (`metadata.labels: {"tenant": id}`, see `operator_generate.py:461-466`, `migrate_to_operator.py:356-361`). Only object names (limit 253) and Alertmanager receiver names (no 63 limit) carry the prefix.
 
 ## Open questions
 
-1. **Whether the tenant-api read and delete paths should apply the new rule.** Leaning no: reading and deleting existing tenants with illegal ids is a necessary step in a rename migration. Whether batch writes and `ValidateWritableTenantID` would block some step of the rename flow must be tracked during implementation.
-2. **Whether to WARN when the root receiver is empty** (out of scope, but related). When the generator detects that the base config's root receiver has no integration, it could print a WARN reminding that unrouted alerts will be silently dropped. This is not part of the tenant-id rule and gets its own ticket.
+1. **Whether to WARN when the root receiver is empty** (out of scope, but related). When the generator detects that the base config's root receiver has no integration, it could print a WARN reminding that unrouted alerts will be silently dropped. This is not part of the tenant-id rule and is tracked in [#2660](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/2660).
 
 ## Places to update during implementation
 
 - The `invalid_tenant_id` row in `docs/cli-reference{,.en}.md`, which currently says "uppercase is allowed".
 - Passages mentioning uppercase ids in `docs/integration/gitops-deployment*.md`, `byo-alertmanager-integration.md`, and `tenant-federation.md`; check each one.
+- `_validate_tenant_name` in `scripts/tools/ops/init_project.py`: drop the hand-written regex and length check and call `_lib_validation` instead.
+- tenant-api's `gitops.guardTenantID`: add the new rule; leave `confd.IsAddressableTenantID` unchanged.
 - The WARN text in `_grar_parse.py` and `_grar_validate.invalid_tenant_id_text`, which currently says "letters, digits, '_' and '-' only".
 - The `tenant_ids` table in `tests/shared/routing_policy_parity_matrix.json`: move cases such as `UPPER`, `Mixed_Case-1`, `_x`, `-x`, `x_`, and 64 characters to invalid, and update the description text.
 - Tests such as `components/tenant-api/internal/handler/tenant_id_write_test.go`, `tests/ops/test_tenant_name_rfc1123.py`, and `pkg/routingpolicy/parity_test.go`.

@@ -93,6 +93,7 @@ lang: en
 | `doc_coverage.py` | 文件覆蓋率 Dashboard |
 | `gen_agent_adapters.py` | Generate the per-vendor agent adapters from the neutral .agents/ SSOT (TRK-361). |
 | `gen_recipe_status_json.py` | Generate recipe-status.json from the compiler SSOT (ADR-024 §8, #741 #6 / A1). |
+| `gen_tenant_id_json.py` | Generate tenant-id.json from the tenant-config schema (ADR-035 D2). |
 | `generate_alert_reference.py` | Auto-generate ALERT-REFERENCE.md from Rule Pack YAML files. |
 | `generate_byo_rulepack_table.py` | BYO Prometheus 規則包表產生器（#1267） |
 | `generate_changelog.py` | Generate CHANGELOG draft entries from conventional commits. |

@@ -1330,6 +1330,18 @@ repos:
         # recipe's status but forget to regenerate → this fails before CI. Fix:
         # `make recipe-status-json`.
 
+      - id: tenant-id-json-check
+        name: "ADR-035: tenant-id.json copies must match the schema's definitions.tenantId"
+        entry: python3 -X utf8 scripts/tools/dx/gen_tenant_id_json.py --check
+        language: python
+        pass_filenames: false
+        files: ^(docs/schemas/tenant-config\.schema\.json|components/threshold-exporter/app/pkg/tenantid/tenant_id\.json|tools/portal/src/interactive/tools/_common/data/tenant-id\.json|scripts/tools/dx/gen_tenant_id_json\.py)$
+        # tenant-id.json is DERIVED from tenant-config.schema.json
+        # definitions.tenantId (the one authored copy of the tenant-id rule) and
+        # consumed by Go (pkg/tenantid, go:embed) + the portal (import). Edit the
+        # rule but forget to regenerate → this fails before CI. Fix:
+        # `make tenant-id-json`.
+
       - id: forbid-legacy-mariadb-threshold-name
         name: "#731: forbid legacy bare mariadb threshold recording-rule names (use mysql_ prefix)"
         entry: 'tenant:alert_threshold:(connections|cpu)(_critical)?\b'

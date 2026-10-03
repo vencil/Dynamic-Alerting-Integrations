@@ -65,6 +65,7 @@ modules:
       _yaml_bool_true: "#2295 value of a YAML boolean word; table-covered by the proxy_from_environment rows"
       receiver_bool_fields: "#2295 schema lookup (properties referencing yamlBool); pinned by test_pipeline_writes_yaml_bool_words_as_booleans"
       coerce_yaml_bool: "#2295 word → boolean at emission; covered by test_pipeline_writes_yaml_bool_words_as_booleans"
+      tenant_id_rule: "ADR-035 schema reader (definitions.tenantId pattern + description, cached, fail-closed); pinned against the schema and the Go copy's case table by tests/shared/test_tenant_id_rule.py"
       is_valid_tenant_id: "#2341 R8 membership in one fixed regex (no numeric/string law beyond it); table-pinned against the Go copy by the tenant_ids table of tests/shared/routing_policy_parity_matrix.json"
 
   scripts/tools/_lib_io.py:

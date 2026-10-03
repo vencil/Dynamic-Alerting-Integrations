@@ -417,6 +417,9 @@ jobs:
               # The glossary's default cardinality cap is checked against
               # DefaultMaxMetricsPerTenant here (glossary-facts.test.ts).
               - "components/threshold-exporter/app/pkg/config/types.go"
+              # ADR-035: tenant-id-rule.test.ts asserts the portal copy's
+              # RegExp on the case table Go and pytest assert too.
+              - "components/threshold-exporter/app/pkg/tenantid/testdata/tenant_id_cases.json"
               # The Deployment Profile Wizard's Vitest resolves every emitted
               # values key against the target chart's templates (and lists
               # helm/ to prove each target chart exists), so a chart-only PR
@@ -1137,6 +1140,12 @@ jobs:
       # Edit a recipe status but forget `make recipe-status-json` → fail here.
       - name: "recipe-status.json matches RECIPE_STATUS SSOT (HARD gate — #741 #6)"
         run: python scripts/tools/dx/gen_recipe_status_json.py --check
+
+      # ADR-035 D2: tenant-id.json (Go go:embed + portal import) is DERIVED from
+      # tenant-config.schema.json definitions.tenantId. Edit the rule but forget
+      # `make tenant-id-json` → fail here.
+      - name: "tenant-id.json copies match the schema's definitions.tenantId (HARD gate — ADR-035)"
+        run: python scripts/tools/dx/gen_tenant_id_json.py --check
 
   iac-helm-sast:
     # Container/k8s SAST Layers 2 + 4 (#448 / TRK-312 + TRK-314).
