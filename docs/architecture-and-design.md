@@ -385,6 +385,7 @@ spec:
 | ADR-032 | [夜跑效能監測改用成對交錯量測，取代跨夜滑動錨點](adr/032-paired-interleaved-bench-measurement.md) | ✅ Accepted | — |
 | ADR-033 | [與運維執行平面的協同介面 — MariaDB 計畫性作業](adr/033-ops-execution-plane-interface.md) | ✅ Accepted | — |
 | ADR-034 | [合法值不得同時當作無法辨識時的 fallback](adr/034-legal-value-as-fallback.md) | ✅ Accepted | — |
+| ADR-035 | [tenant id 合法字元集的單一來源](adr/035-tenant-id-single-source.md) | 🟡 Proposed | — |
 
 <!-- ADR_INDEX_END -->
 
