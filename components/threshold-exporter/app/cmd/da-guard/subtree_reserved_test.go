@@ -358,10 +358,13 @@ func TestGuard_SubtreeReservedMessageShapes(t *testing.T) {
 			want: []string{"Key `_routingProfile`", "not a recognised key", "Delete it from this file."},
 			deny: []string{"Reserved key", "Set `_routingProfile`"}},
 		{key: "_state_maintenance",
-			want: []string{"Move it: set `_state_maintenance` " + ownEntry, "`state_filters.maintenance.default_state`",
-				"affects every tenant in the tree", "Deleting it alone changes"}},
-		{key: "_silent_mode", want: []string{"Reserved key", "Move it: set `_silent_mode` " + ownEntry,
-			"and delete it from this file", "Deleting it alone changes"}},
+			// `enable` and `warning` are ignored by the overlay today (#2388 A).
+			want: []string{"Today the exporter ignores this value; delete it from this file",
+				"To have it take effect, set `_state_maintenance` " + ownEntry,
+				"`state_filters.maintenance.default_state`", "affects every tenant in the tree"},
+			deny: []string{"Move it"}},
+		{key: "_silent_mode", want: []string{"Reserved key", "Today the exporter ignores this value",
+			"To have it take effect, set `_silent_mode` " + ownEntry}, deny: []string{"Move it"}},
 	} {
 		m, ok := msg[tc.key]
 		if !ok {
@@ -533,7 +536,7 @@ func TestGuard_SubtreeRefusedKeyDeleteFirst(t *testing.T) {
 		"a/t.yaml":         "tenants:\n  t1:\n    _silent_mode: warning\n",
 	}
 	_, stdout, _ := runOnce(t, "--format", "json", "--config-dir", writeReservedConfD(t, m4))
-	if !strings.Contains(stdout, "Today it has no effect; delete it from this file to keep things as they are.") {
+	if !strings.Contains(stdout, "Today the exporter ignores this value; delete it from this file to keep things as they are.") {
 		t.Errorf("m4: no delete instruction: %s", stdout)
 	}
 	mixed := map[string]string{
@@ -631,5 +634,83 @@ func TestGuard_RedundantOverrideSkipsRefusedSubtreeKey(t *testing.T) {
 	want := "warn redundant_override t1 _severity_dedup"
 	if got := allFindings(t, "--config-dir", writeReservedConfD(t, root)); !slices.Contains(got, want) {
 		t.Errorf("root control: findings = %q, want %q among them", got, want)
+	}
+}
+
+// #2388 A: the fix for a recognised key follows the exporter overlay's own
+// verdict. The blind review's r5f1 shape: both subtree values are IGNORED
+// today (`_silent_mode: warning` is not threshold-shaped; `_state_offd:
+// enable` neither), so the message says so and says "delete it". Deleting
+// keeps every served value and clears the findings; following "To have it
+// take effect" instead does change them — that is what it says it does.
+func TestGuard_SubtreeReservedIgnoredValueDelete(t *testing.T) {
+	t.Parallel()
+	root := "defaults:\n  mysql_connections: 80\n" +
+		"state_filters:\n  offd:\n    reasons: []\n    severity: warning\n    default_state: disable\n"
+	before := map[string]string{
+		"_defaults.yaml":   root,
+		"a/_defaults.yaml": "defaults:\n  mysql_connections: 70\n  _silent_mode: warning\n  _state_offd: enable\n",
+		"a/t.yaml":         "tenants:\n  t1: {}\n",
+	}
+	_, got := reservedFindings(t, "--config-dir", writeReservedConfD(t, before))
+	if len(got) != 2 {
+		t.Fatalf("before: findings = %+v, want 2", got)
+	}
+	for _, f := range got {
+		if !strings.Contains(f.Message, "Today the exporter ignores this value; delete it from this file to keep things as they are.") ||
+			strings.Contains(f.Message, "Move it") {
+			t.Errorf("%s: message = %s", f.Field, f.Message)
+		}
+	}
+	deleted := map[string]string{
+		"_defaults.yaml":   root,
+		"a/_defaults.yaml": "defaults:\n  mysql_connections: 70\n",
+		"a/t.yaml":         "tenants:\n  t1: {}\n",
+	}
+	if got := allFindings(t, "--config-dir", writeReservedConfD(t, deleted), "--warn-as-error"); len(got) != 0 {
+		t.Errorf("deleted: findings = %q, want none", got)
+	}
+	_, b, _, _ := served(t, before, "2026-10-01T00:00:00Z")
+	code, d, _, stderr := served(t, deleted, "2026-10-01T00:00:00Z")
+	mustOK(t, code, stderr)
+	if !reflect.DeepEqual(b.Tenants["t1"].Values, d.Tenants["t1"].Values) {
+		t.Errorf("deleting changed served values:\n before %v\n after  %v", b.Tenants["t1"].Values, d.Tenants["t1"].Values)
+	}
+	// "To have it take effect": the values start to apply — expected, and why
+	// it is not the keep-things-as-they-are action.
+	effect := map[string]string{
+		"_defaults.yaml":   root,
+		"a/_defaults.yaml": "defaults:\n  mysql_connections: 70\n",
+		"a/t.yaml":         "tenants:\n  t1:\n    _silent_mode: warning\n    _state_offd: enable\n",
+	}
+	code, e, _, stderr := served(t, effect, "2026-10-01T00:00:00Z")
+	mustOK(t, code, stderr)
+	if v := e.Tenants["t1"].Values; !reflect.DeepEqual(v["_silent_mode"], []any{"warning"}) || v["_state_offd"] != true {
+		t.Errorf("take effect: values = %v; want _silent_mode [warning], _state_offd true", v)
+	}
+	if v := b.Tenants["t1"].Values; !reflect.DeepEqual(v["_silent_mode"], []any{}) || v["_state_offd"] != false {
+		t.Errorf("before: values = %v; want _silent_mode [], _state_offd false", v)
+	}
+}
+
+// #2388 A: one subtree file with an applied value (`_state_maintenance:
+// disable`, root default_state enable) and an ignored one (`_silent_mode:
+// warning`): each key gets its own sentence.
+func TestGuard_SubtreeReservedMixedAppliedAndIgnored(t *testing.T) {
+	t.Parallel()
+	files := reservedCase{defaultState: "enable", tenant: "{}"}.files()
+	files["finance/_defaults.yaml"] = "defaults:\n  _state_maintenance: disable\n  _silent_mode: warning\n"
+	_, got := reservedFindings(t, "--config-dir", writeReservedConfD(t, files))
+	msg := map[string]string{}
+	for _, f := range got {
+		msg[f.Field] = f.Message
+	}
+	if m := msg["_state_maintenance"]; !strings.Contains(m, "Move it: set `_state_maintenance`") ||
+		!strings.Contains(m, "Deleting it alone changes what is served today") || strings.Contains(m, "ignores this value") {
+		t.Errorf("_state_maintenance (applied): %s", m)
+	}
+	if m := msg["_silent_mode"]; !strings.Contains(m, "Today the exporter ignores this value") ||
+		strings.Contains(m, "Move it") {
+		t.Errorf("_silent_mode (ignored): %s", m)
 	}
 }

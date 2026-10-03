@@ -566,6 +566,8 @@ func buildCheckInput(scoped *config.ScopedTenants, f *flags) guard.CheckInput {
 		// tenants only (ScopeEffective filters it).
 		SubtreeReservedKeys:  scoped.SubtreeReserved,
 		DeclaredStateFilters: scoped.DeclaredStateFilters,
+		// #2388 A: the overlay's own verdict on each such key.
+		SubtreeReservedApplied: scoped.SubtreeReservedApplied,
 	}
 }
 

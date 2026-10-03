@@ -116,3 +116,49 @@ func TestScopeEffective_SubtreeReservedNullIsNotWritten(t *testing.T) {
 		})
 	}
 }
+
+// #2388 A: SubtreeReservedApplied is the overlay's own verdict on each refused
+// key a subtree writes — applied when the key ends up in the tenant's map,
+// dropped otherwise — and with many levels, what the tenant ends up with.
+func TestScopeEffective_SubtreeReservedApplied(t *testing.T) {
+	t.Parallel()
+	root := "defaults:\n  mysql_connections: 80\n" +
+		"state_filters:\n  maintenance:\n    reasons: []\n    severity: warning\n    default_state: enable\n"
+	dir := writeUndeliverableTree(t, map[string]string{
+		"_defaults.yaml": root,
+		// applied: a plain disable for a declared filter, and _severity_dedup
+		// disable; dropped: enable for _silent_mode (not threshold-shaped), an
+		// undeclared filter (no reader), and a key the tenant sets itself.
+		"a/_defaults.yaml": "defaults:\n  _state_maintenance: disable\n  _severity_dedup: disable\n" +
+			"  _silent_mode: warning\n  _state_nope: disable\n",
+		"a/t1.yaml": "tenants:\n  t1: {}\n",
+		"a/t2.yaml": "tenants:\n  t2:\n    _severity_dedup: enable\n",
+		// many levels: the shallower disable is written, the deeper enable is
+		// dropped — the tenant keeps the disable, so applied. And the reverse:
+		// shallower enable dropped, deeper disable written → applied.
+		"m/_defaults.yaml":    "defaults:\n  _state_maintenance: disable\n",
+		"m/us/_defaults.yaml": "defaults:\n  _state_maintenance: enable\n",
+		"m/us/t3.yaml":        "tenants:\n  t3: {}\n",
+		"n/_defaults.yaml":    "defaults:\n  _state_maintenance: enable\n",
+		"n/us/_defaults.yaml": "defaults:\n  _state_maintenance: disable\n",
+		"n/us/t4.yaml":        "tenants:\n  t4: {}\n",
+		// only an ignored value at every level → not applied.
+		"o/_defaults.yaml":    "defaults:\n  _state_maintenance: enable\n",
+		"o/us/_defaults.yaml": "defaults:\n  _state_maintenance: enable\n",
+		"o/us/t5.yaml":        "tenants:\n  t5: {}\n",
+	})
+	scoped, err := ScopeEffective(dir, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := map[string]map[string]bool{
+		"t1": {"_state_maintenance": true, "_severity_dedup": true, "_silent_mode": false, "_state_nope": false},
+		"t2": {"_state_maintenance": true, "_severity_dedup": false, "_silent_mode": false, "_state_nope": false},
+		"t3": {"_state_maintenance": true},
+		"t4": {"_state_maintenance": true},
+		"t5": {"_state_maintenance": false},
+	}
+	if !reflect.DeepEqual(scoped.SubtreeReservedApplied, want) {
+		t.Errorf("SubtreeReservedApplied = %v, want %v", scoped.SubtreeReservedApplied, want)
+	}
+}

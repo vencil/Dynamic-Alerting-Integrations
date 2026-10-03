@@ -460,4 +460,10 @@ type CheckInput struct {
 	// subtree_default_reserved_key fix for `_state_<f>` depends on whether f
 	// is declared (#2388 r2). nil = none declared.
 	DeclaredStateFilters map[string]bool `json:"-"`
+
+	// SubtreeReservedApplied is config.ScopedTenants.SubtreeReservedApplied:
+	// tenant → key of SubtreeReservedKeys → whether the exporter's subtree
+	// overlay applies it today. The subtree_default_reserved_key fix for a
+	// recognised key depends on it (#2388 A); absent = not applied.
+	SubtreeReservedApplied map[string]map[string]bool `json:"-"`
 }

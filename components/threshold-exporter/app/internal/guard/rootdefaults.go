@@ -184,7 +184,7 @@ func subtreeTopLevelFix(keys []string, declared map[string]bool) string {
 	}
 	for _, k := range refused {
 		parts = append(parts, fmt.Sprintf("`%s`: subtree defaults do not support it, so do not move it under "+
-			"`defaults:` (subtree_default_reserved_key, #2388). %s", k, subtreeRefusedKeyFix(k, declared, true)))
+			"`defaults:` (subtree_default_reserved_key, #2388). %s", k, subtreeRefusedKeyFix(k, declared)))
 	}
 	return strings.Join(parts, " ")
 }

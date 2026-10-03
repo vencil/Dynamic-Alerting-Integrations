@@ -70,7 +70,7 @@ func checkSubtreeReservedKeys(input CheckInput) []Finding {
 				Kind:     FindingSubtreeDefaultReservedKey,
 				TenantID: id,
 				Field:    k,
-				Message:  subtreeReservedMessage(k, files, input.DeclaredStateFilters),
+				Message:  subtreeReservedMessage(k, files, input.DeclaredStateFilters, input.SubtreeReservedApplied[id][k]),
 			})
 		}
 	}
@@ -125,19 +125,27 @@ func writtenInsideDefaults(files []string, unwrapped map[string]bool) []string {
 // nothing in a tenant's entry either — moving them there made this finding go
 // away while the value was still not served, and nothing said so. Those get
 // "declare the filter or delete it" / "delete it" instead.
-func subtreeReservedMessage(k string, files []string, declared map[string]bool) string {
+//
+// applied is the exporter overlay's own verdict (config FlatBuild.
+// SubtreeRefusedApplied): whether the subtree's value of k is in effect for
+// this tenant today. It picks the recognised key's fix (#2388 A).
+func subtreeReservedMessage(k string, files []string, declared map[string]bool, applied bool) string {
 	where := fmt.Sprintf("is set in the defaults of a subtree `_defaults.yaml` (%s) that this tenant inherits from", quoteJoin(files))
 	const tail = "From the next minor release the exporter stops applying these keys from a subtree " +
 		"`_defaults.yaml`, and this warning becomes an error (#2388)."
 	switch reservedKeyShape(k, declared) {
 	case shapeUndeclaredState:
 		return fmt.Sprintf("Reserved key `%s` %s; subtree defaults do not support reserved keys. %s %s",
-			k, where, subtreeRefusedKeyFix(k, declared, false), tail)
+			k, where, subtreeRefusedKeyFix(k, declared), tail)
 	case shapeUnrecognised:
-		return fmt.Sprintf("Key `%s` %s. %s %s", k, where, subtreeRefusedKeyFix(k, declared, false), tail)
+		return fmt.Sprintf("Key `%s` %s. %s %s", k, where, subtreeRefusedKeyFix(k, declared), tail)
 	}
-	return fmt.Sprintf("Reserved key `%s` %s; subtree defaults do not support reserved keys. %s %s %s",
-		k, where, reservedKeyToday(k), subtreeRefusedKeyFix(k, declared, false), tail)
+	fix := reservedKeyIgnoredFix(k)
+	if applied {
+		fix = reservedKeyMove(k)
+	}
+	return fmt.Sprintf("Reserved key `%s` %s; subtree defaults do not support reserved keys. %s %s",
+		k, where, fix, tail)
 }
 
 // The three fix shapes of a key subtree defaults refuse.
@@ -165,14 +173,12 @@ func reservedKeyShape(k string, declared map[string]bool) int {
 // (#2388 r4), whose generic "move it under `defaults:`" would trade one
 // finding for the other.
 //
-// topLevel is true for defaults_toplevel_ignored (the key sits beside a
-// `defaults:` mapping, so the merge leaves it out and it has no effect at
-// all today). For subtree_default_reserved_key it is false: there a key may
-// act today (reservedKeyToday says how), so the (c) text does not claim it
-// has no effect — but it still leads with deleting it (#2388 r5: the first
-// thing to do with a key the file must not carry is take it out of the file;
-// a tenant that already sets the key itself needs nothing else).
-func subtreeRefusedKeyFix(k string, declared map[string]bool, topLevel bool) string {
+// It is defaults_toplevel_ignored's fix: the key sits beside a `defaults:`
+// mapping, so the merge leaves it out and it has no effect today — a
+// recognised key gets reservedKeyIgnoredFix. subtree_default_reserved_key
+// routes a recognised key itself (subtreeReservedMessage), by whether the
+// overlay applies it (#2388 A).
+func subtreeRefusedKeyFix(k string, declared map[string]bool) string {
 	switch reservedKeyShape(k, declared) {
 	case shapeUndeclaredState:
 		f := filterName(strings.TrimPrefix(k, "_state_"))
@@ -183,32 +189,34 @@ func subtreeRefusedKeyFix(k string, declared map[string]bool, topLevel bool) str
 		return "It is not a recognised key: the exporter does not read it, " +
 			"in a subtree `_defaults.yaml` or in a tenant's own entry. Delete it from this file."
 	}
-	if topLevel {
-		return "Today it has no effect; delete it from this file to keep things as they are. " + reservedKeyFix(k)
-	}
-	return reservedKeyMove(k)
+	return reservedKeyIgnoredFix(k)
 }
 
-// reservedKeyMove is the (c) fix inside a subtree `defaults:`, where the key
-// may be applied today (a plain `disable`): ONE action, moving it.
+// reservedKeyIgnoredFix is the fix for a recognised key whose subtree value
+// has no effect today: deleting it keeps what is served; setting it in the
+// tenant's entry would START applying it.
 //
-// ⛔ NOT "DELETE IT" ON ITS OWN (#2388 r6). The r5 text led with "Delete it
-// from this file." — and for a value the overlay applies today, deleting it
-// alone changes what is served (measured: subtree `_state_maintenance:
-// disable` under a root default_state enable; deleted, the filter came back
-// on). Setting it in the tenant's entry and deleting it from the file keeps
-// the served value; that is the one action this text names.
+// ⛔ #2388 A. r5 told every such key "delete it" (wrong for an applied
+// `disable`: deleting it turned the filter back on); r6 told every one "move
+// it" (wrong for an ignored `enable` / severity name: moving it turned them
+// ON — measured, served `{_silent_mode: [], _state_offd: false}` became
+// `{[warning], true}` with no finding left). Which one is right is the
+// overlay's own verdict, handed in as `applied`; neither text guesses.
+func reservedKeyIgnoredFix(k string) string {
+	return "Today the exporter ignores this value; delete it from this file to keep things as they are. " +
+		reservedKeyFix(k)
+}
+
+// reservedKeyMove is the fix for a recognised key the overlay APPLIES today:
+// ONE action, moving it — deleting it alone changes what is served (measured:
+// subtree `_state_maintenance: disable` under a root default_state enable;
+// deleted, the filter came back on).
 func reservedKeyMove(k string) string {
-	const alone = " (Deleting it alone changes what is served today if the value is currently applied, " +
-		"e.g. a plain `disable`.)"
+	const alone = " (Deleting it alone changes what is served today: the exporter applies this value now.)"
 	if f, isState := strings.CutPrefix(k, "_state_"); isState {
 		return fmt.Sprintf("Move it: set `%s` in each tenant's own entry under `tenants:` and delete it from this "+
 			"file — or instead set `state_filters.%s.default_state` in the conf.d root `_defaults.yaml`, which "+
 			"affects every tenant in the tree.%s", k, filterPath(f), alone)
-	}
-	if readElsewhere[k] { // `_custom_alerts`: its reader takes it from the top level
-		return fmt.Sprintf("Move it: move `%s` out of `defaults:` to the top level of the file, where it is read, "+
-			"or set it in each tenant's own entry under `tenants:` and delete it from this file.%s", k, alone)
 	}
 	return fmt.Sprintf("Move it: set `%s` in each tenant's own entry under `tenants:` and delete it from this "+
 		"file.%s", k, alone)
@@ -226,21 +234,6 @@ func filterName(f string) string {
 // filterPath is f as a path segment under `state_filters.`: the empty name
 // quoted, so the path reads `state_filters."".default_state`.
 func filterPath(f string) string { return filterName(f) }
-
-// reservedKeyToday is the finding's sentence on what the exporter does with
-// key k from a subtree defaults file today. pkg/config's applySubtreeDefaults
-// applies a value only when it is threshold-shaped (`disable` or a number),
-// the tenant does not set the key itself and a resolver reads the key; any
-// other value is dropped.
-func reservedKeyToday(k string) string {
-	if strings.HasPrefix(k, "_state_") {
-		return "Today the exporter applies a plain `disable` from there (for a filter the root " +
-			"`state_filters:` declares) and ignores `enable`, " +
-			"so the subtree can switch the filter off but not on."
-	}
-	return "Today the exporter applies at most a `disable` or numeric value of it from there " +
-		"and ignores any other value (for example a severity name or a mapping)."
-}
 
 // reservedKeyFix is the finding's fix sentence for a recognised reserved key
 // k, `_state_<f>` with f declared (subtreeReservedMessage routes the rest).

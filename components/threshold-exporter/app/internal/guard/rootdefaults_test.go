@@ -177,7 +177,7 @@ func TestDefaultsWrapperSubtreeRefusedKeyFix(t *testing.T) {
 	}{
 		{"recognised", "a/_defaults.yaml", "defaults:\n  mysql_connections: 70\n_silent_mode: warning\n",
 			[]string{"`_silent_mode`: subtree defaults do not support it, so do not move it under `defaults:`",
-				"Today it has no effect; delete it from this file to keep things as they are.",
+				"Today the exporter ignores this value; delete it from this file to keep things as they are.",
 				"set `_silent_mode` in each tenant's own entry under `tenants:`"},
 			[]string{"Move them", "Move `_silent_mode`"}},
 		{"undeclared-state", "a/_defaults.yaml", "defaults:\n  x: 1\n_state_nope: enable\n",

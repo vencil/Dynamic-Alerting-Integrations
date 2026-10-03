@@ -71,9 +71,9 @@ func applySubtreeDefaults(
 	root string,
 	tenantDefaults map[string][]string,
 	parsed map[string]map[string]any,
-) (int, map[string]map[string]ScheduledValue) {
+) (int, map[string]map[string]ScheduledValue, map[string]map[string]bool) {
 	if cfg == nil || len(cfg.Tenants) == 0 || len(tenantDefaults) == 0 {
-		return 0, nil
+		return 0, nil, nil
 	}
 	// ⛔ ABSOLUTE, because the chain is. `scanDirTree` stores every defaults
 	// path under the absolutised, cleaned AND symlink-resolved root
@@ -96,6 +96,15 @@ func applySubtreeDefaults(
 	// normalised (a YAML `1e6` becomes "1e+06"), not the file's text (#1976:
 	// `da-guard served-values` lists threshold keys in `unserved`).
 	unreachable := map[string]map[string]ScheduledValue{}
+	// ⛔ WHETHER A REFUSED KEY IS APPLIED TODAY, as this overlay's own action
+	// (#2388 A): tenant → key → true when the key is in the tenant's map at
+	// the end (some subtree level's value was written and not displaced),
+	// false when every subtree level's value was dropped (not threshold-
+	// shaped, unreachable, null, or the tenant sets the key itself). Recorded
+	// on the existing branches only; it changes nothing this overlay writes.
+	// da-guard's subtree_default_reserved_key fix depends on it: moving an
+	// applied value keeps what is served, deleting an ignored one does.
+	var applied map[string]map[string]bool
 
 	filled := 0
 	for tenantID, overrides := range cfg.Tenants {
@@ -113,12 +122,19 @@ func applySubtreeDefaults(
 		// one directory deeper. The single-level tests could not see it.
 		// (CodeRabbit, #1569.)
 		var inherited map[string]struct{}
+		var refusedSeen map[string]struct{}
 		for _, defaultsPath := range tenantDefaults[tenantID] {
 			if filepath.Dir(filepath.Clean(defaultsPath)) == rootDir {
 				continue // the global defaults file — already in cfg.Defaults
 			}
 			level := parsed[defaultsPath]
 			for key, raw := range level {
+				if subtreeDefaultsRefusedKey(key) {
+					if refusedSeen == nil {
+						refusedSeen = map[string]struct{}{}
+					}
+					refusedSeen[key] = struct{}{}
+				}
 				// ⛔ "THE TENANT AUTHORED IT" IS ASKED PER THRESHOLD, NOT PER
 				// SPELLING (#2414). A tenant writing the retired spelling has
 				// set the same threshold a subtree file names canonically;
@@ -200,11 +216,30 @@ func applySubtreeDefaults(
 				overrides[key] = value
 			}
 		}
+		// ⚠️ MANY LEVELS, ONE VERDICT: the value the tenant ends up with. The
+		// chain is walked root-first and a deeper level that WRITES the key
+		// overwrites a shallower one, while a deeper level whose value is
+		// dropped leaves the shallower written value in place — so "applied"
+		// is whether the key is in `inherited` after the whole chain, not the
+		// verdict on the deepest level alone. Measured shape: finance/
+		// `_state_maintenance: disable` + finance/us/ `enable` — the tenant's
+		// filter stays off (finance/'s disable), so the key is applied, and
+		// deleting both levels would turn it on.
+		for key := range refusedSeen {
+			if applied == nil {
+				applied = map[string]map[string]bool{}
+			}
+			if applied[tenantID] == nil {
+				applied[tenantID] = map[string]bool{}
+			}
+			_, in := inherited[key]
+			applied[tenantID][key] = in
+		}
 	}
 	if len(unreachable) == 0 {
-		return filled, nil
+		return filled, nil, applied
 	}
-	return filled, unreachable
+	return filled, unreachable, applied
 }
 
 // levelWritesSpelling reports whether one defaults level WRITES spelling s:

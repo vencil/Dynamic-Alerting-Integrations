@@ -177,6 +177,12 @@ type ScopedTenants struct {
 	// tree reads them (ThresholdConfig.StateFilters): `_state_<f>` is read
 	// by nobody unless f is in it (#2388 r2). nil when none is declared.
 	DeclaredStateFilters map[string]bool
+
+	// SubtreeReservedApplied is FlatBuild.SubtreeRefusedApplied for the
+	// in-scope tenants: tenant → key of SubtreeReserved → whether the
+	// exporter's subtree overlay applies that key today (#2388 A). A key of
+	// SubtreeReserved absent here was not applied.
+	SubtreeReservedApplied map[string]map[string]bool
 }
 
 // DefaultsFile is one defaults carrier of a scan: its root-relative slash
@@ -351,7 +357,7 @@ func scopeEffective(configDir, scopeDir string, wholeTree bool) (*ScopedTenants,
 			inScope[id] = struct{}{}
 		}
 	}
-	parseFailed, unreachable, reserved, stateFilters, err := scopeParseFailed(scan, filepath.ToSlash(rel))
+	parseFailed, unreachable, reserved, stateFilters, applied, err := scopeParseFailed(scan, filepath.ToSlash(rel))
 	if err != nil {
 		return nil, err
 	}
@@ -408,6 +414,12 @@ func scopeEffective(configDir, scopeDir string, wholeTree bool) (*ScopedTenants,
 				out.SubtreeReserved = map[string]map[string][]string{}
 			}
 			out.SubtreeReserved[id] = keys
+			if a := applied[id]; len(a) > 0 {
+				if out.SubtreeReservedApplied == nil {
+					out.SubtreeReservedApplied = map[string]map[string]bool{}
+				}
+				out.SubtreeReservedApplied[id] = a
+			}
 		}
 	}
 	seenFiles := make(map[string]struct{}, len(tenantIDs))
@@ -474,10 +486,10 @@ func scopeEffective(configDir, scopeDir string, wholeTree bool) (*ScopedTenants,
 // root `state_filters:` names (ScopedTenants.DeclaredStateFilters).
 func scopeParseFailed(scan *TreeScan, scopeRel string) (
 	parseFailed []string, unreachable map[string][]string, reserved map[string]map[string][]string,
-	stateFilters map[string]bool, err error,
+	stateFilters map[string]bool, applied map[string]map[string]bool, err error,
 ) {
 	if len(scan.Files) == 0 {
-		return nil, nil, nil, nil, nil // the exporter refuses an empty tree; nothing was dropped
+		return nil, nil, nil, nil, nil, nil // the exporter refuses an empty tree; nothing was dropped
 	}
 	// ⚠️ log.Printf, not discardLogger, for the profile WARNs (#2513): they
 	// reached the process log here before the build took its logger for them,
@@ -486,7 +498,7 @@ func scopeParseFailed(scan *TreeScan, scopeRel string) (
 	in := loadDirBuildInput(scan, scan.AbsRoot, discardLogger, log.Printf)
 	built, err := BuildFlatConfig(scan, in)
 	if err != nil {
-		return nil, nil, nil, nil, err
+		return nil, nil, nil, nil, nil, err
 	}
 	for _, key := range built.ParseFailed {
 		if bearsOnScope(key, scopeRel) {
@@ -501,7 +513,8 @@ func scopeParseFailed(scan *TreeScan, scopeRel string) (
 		stateFilters[name] = true
 	}
 	return parseFailed, unreachableKeys(undeliverableThresholds(built.UnreachableValues)),
-		subtreeReservedKeys(in.Root, in.TenantDefaults, in.ParsedDefaults), stateFilters, nil
+		subtreeReservedKeys(in.Root, in.TenantDefaults, in.ParsedDefaults), stateFilters,
+		built.SubtreeRefusedApplied, nil
 }
 
 // scopeDefaultsFiles is ScopedTenants.DefaultsFiles: the selected carrier of
