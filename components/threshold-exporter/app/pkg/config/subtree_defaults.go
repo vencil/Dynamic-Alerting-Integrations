@@ -875,6 +875,10 @@ func thresholdScalar(value string) bool {
 	return err == nil
 }
 
+// SubtreeDefaultsRefusedKey is subtreeDefaultsRefusedKey, for da-guard's
+// defaults_toplevel_ignored fix (#2388 r4): the same predicate, not a copy.
+func SubtreeDefaultsRefusedKey(k string) bool { return subtreeDefaultsRefusedKey(k) }
+
 // Exported forms of the functions above, for package main's forwarders
 // (config_subtree_defaults.go). Behavior pin: every one is `return x(args...)`.
 

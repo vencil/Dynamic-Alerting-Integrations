@@ -106,6 +106,9 @@ func actsWhenMerged(k string) bool {
 	if !strings.HasPrefix(k, "_") {
 		return true
 	}
+	// ⚠️ Refs #2388: this `_routing` PREFIX is wider than config.IsRoutingKey
+	// (`_routing`, `_routing_<…>`), so `_routingProfile` is left out here; left
+	// as is for a follow-up.
 	return config.IsReservedKey(k) && !strings.HasPrefix(k, "_routing")
 }
 
@@ -148,6 +151,37 @@ func quoteKeys(keys []string) string { return "`" + strings.Join(keys, "`, `") +
 const rootNumbersOnly = "A threshold among them goes under `defaults:`; the root `defaults:` holds numbers only " +
 	"(a non-numeric value there drops the whole block), so another key has no place in this file."
 
+// subtreeTopLevelFix is defaults_toplevel_ignored's fix for a SUBTREE file.
+//
+// ⛔ A KEY SUBTREE DEFAULTS REFUSE IS NOT MOVED UNDER `defaults:` (#2388 r4).
+// Doing that — or leaving `defaults:` with no value — puts it in the subtree's
+// defaults, which subtree_default_reserved_key then reports: the advice traded
+// one finding for the other. Measured: `a/_defaults.yaml` with
+// `defaults: {mysql_connections: 70}` and a top-level `_silent_mode: warning`.
+// Such keys (config.SubtreeDefaultsRefusedKey, the predicate that finding
+// reports on) get that finding's own fix (subtreeRefusedKeyFix), key by key;
+// the other keys keep the generic fix.
+func subtreeTopLevelFix(keys []string, declared map[string]bool) string {
+	var move, refused []string
+	for _, k := range keys {
+		if config.SubtreeDefaultsRefusedKey(k) {
+			refused = append(refused, k)
+		} else {
+			move = append(move, k)
+		}
+	}
+	var parts []string
+	if len(move) > 0 {
+		parts = append(parts, fmt.Sprintf("Move %s under `defaults:`, or leave `defaults:` with no value "+
+			"so the whole document is merged.", quoteKeys(move)))
+	}
+	for _, k := range refused {
+		parts = append(parts, fmt.Sprintf("`%s`: subtree defaults do not support it, so do not move it under "+
+			"`defaults:` (subtree_default_reserved_key, #2388). %s", k, subtreeRefusedKeyFix(k, declared)))
+	}
+	return strings.Join(parts, " ")
+}
+
 // checkDefaultsWrapper reports both shapes over input.DefaultsFiles. The root
 // carrier is the one whose root-relative path has no directory part.
 func checkDefaultsWrapper(input CheckInput) []Finding {
@@ -174,9 +208,11 @@ func checkDefaultsWrapper(input CheckInput) []Finding {
 			continue
 		}
 		if wrapped {
-			fix := "Move them under `defaults:`, or leave `defaults:` with no value so the whole document is merged."
-			if root {
-				fix = rootNumbersOnly
+			// Below the root, subtreeTopLevelFix keeps the generic "move them
+			// under `defaults:`" for the keys that may go there (#2388 r4).
+			fix := rootNumbersOnly
+			if !root {
+				fix = subtreeTopLevelFix(keys, input.DeclaredStateFilters)
 			}
 			out = append(out, Finding{
 				Severity: SeverityError,

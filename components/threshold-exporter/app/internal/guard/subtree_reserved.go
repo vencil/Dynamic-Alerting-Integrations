@@ -129,19 +129,53 @@ func subtreeReservedMessage(k string, files []string, declared map[string]bool) 
 	where := fmt.Sprintf("is set in the defaults of a subtree `_defaults.yaml` (%s) that this tenant inherits from", quoteJoin(files))
 	const tail = "From the next minor release the exporter stops applying these keys from a subtree " +
 		"`_defaults.yaml`, and this warning becomes an error (#2388)."
-	if f, isState := strings.CutPrefix(k, "_state_"); isState && !declared[f] {
-		return fmt.Sprintf("Reserved key `%s` %s; subtree defaults do not support reserved keys. "+
-			"The conf.d root `state_filters:` does not declare a filter `%s`, so nothing reads `%s` "+
-			"anywhere, a tenant's own entry included. Declare `%s` under `state_filters:` in the conf.d "+
-			"root `_defaults.yaml` (this applies to every tenant in the tree), or delete the key. %s",
-			k, where, f, k, f, tail)
-	}
-	if !config.IsRecognisedReservedKey(k) {
-		return fmt.Sprintf("Key `%s` %s. It is not a recognised key: the exporter does not read it, "+
-			"in a subtree `_defaults.yaml` or in a tenant's own entry. Delete it. %s", k, where, tail)
+	switch reservedKeyShape(k, declared) {
+	case shapeUndeclaredState:
+		return fmt.Sprintf("Reserved key `%s` %s; subtree defaults do not support reserved keys. %s %s",
+			k, where, subtreeRefusedKeyFix(k, declared), tail)
+	case shapeUnrecognised:
+		return fmt.Sprintf("Key `%s` %s. %s %s", k, where, subtreeRefusedKeyFix(k, declared), tail)
 	}
 	return fmt.Sprintf("Reserved key `%s` %s; subtree defaults do not support reserved keys. %s %s %s",
-		k, where, reservedKeyToday(k), reservedKeyFix(k), tail)
+		k, where, reservedKeyToday(k), subtreeRefusedKeyFix(k, declared), tail)
+}
+
+// The three fix shapes of a key subtree defaults refuse.
+const (
+	shapeRecognised      = iota // (c) a recognised reserved key: set it in each tenant's entry
+	shapeUndeclaredState        // (a) `_state_<f>`, f not declared: declare f or delete
+	shapeUnrecognised           // (b) read by nothing anywhere: delete
+)
+
+// reservedKeyShape picks k's fix shape. A bare `_state_` (empty filter name)
+// is (b): no filter can be named "" (config.IsRecognisedReservedKey).
+func reservedKeyShape(k string, declared map[string]bool) int {
+	if f, isState := strings.CutPrefix(k, "_state_"); isState && f != "" && !declared[f] {
+		return shapeUndeclaredState
+	}
+	if !config.IsRecognisedReservedKey(k) {
+		return shapeUnrecognised
+	}
+	return shapeRecognised
+}
+
+// subtreeRefusedKeyFix is the fix for a key subtree defaults refuse, by its
+// shape. One text for both findings that name such a key in a subtree
+// `_defaults.yaml`: subtree_default_reserved_key, and defaults_toplevel_ignored
+// (#2388 r4), whose generic "move it under `defaults:`" would trade one
+// finding for the other.
+func subtreeRefusedKeyFix(k string, declared map[string]bool) string {
+	switch reservedKeyShape(k, declared) {
+	case shapeUndeclaredState:
+		f := strings.TrimPrefix(k, "_state_")
+		return fmt.Sprintf("The conf.d root `state_filters:` does not declare a filter `%s`, so nothing reads `%s` "+
+			"anywhere, a tenant's own entry included. Declare `%s` under `state_filters:` in the conf.d "+
+			"root `_defaults.yaml` (this applies to every tenant in the tree), or delete the key.", f, k, f)
+	case shapeUnrecognised:
+		return "It is not a recognised key: the exporter does not read it, " +
+			"in a subtree `_defaults.yaml` or in a tenant's own entry. Delete it."
+	}
+	return reservedKeyFix(k)
 }
 
 // reservedKeyToday is the finding's sentence on what the exporter does with

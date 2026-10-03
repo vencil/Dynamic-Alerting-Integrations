@@ -330,12 +330,15 @@ func IsRoutingKey(k string) bool {
 
 // IsRecognisedReservedKey reports whether k is a reserved key something
 // reads by name: one of validReservedKeys, a routing key (IsRoutingKey), or a
-// `_state_<filter>` key (read for each declared filter). Narrower than
+// `_state_<filter>` key with a non-empty filter (read for each declared filter). Narrower than
 // IsReservedKey, which also accepts anything under a reserved PREFIX —
 // `_routingProfile` and `_routings` pass IsReservedKey, yet no reader looks
 // them up (#2388 r3).
+//
+// A bare `_state_` names no filter (an empty name is never declared) and is
+// not recognised.
 func IsRecognisedReservedKey(k string) bool {
-	return validReservedKeys[k] || IsRoutingKey(k) || strings.HasPrefix(k, "_state_")
+	return validReservedKeys[k] || IsRoutingKey(k) || (strings.HasPrefix(k, "_state_") && k != "_state_")
 }
 
 // RoutingConfig represents a tenant's alert routing preferences.

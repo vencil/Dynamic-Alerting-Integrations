@@ -436,3 +436,56 @@ func TestGuard_SubtreeReservedRoutingProfileDeleted(t *testing.T) {
 		})
 	}
 }
+
+// #2388 r4: a top-level `_silent_mode` beside a `defaults:` mapping in a
+// subtree file is defaults_toplevel_ignored. Its fix used to be "move it under
+// `defaults:`", which only turned it into subtree_default_reserved_key. Now it
+// is that finding's fix — set it in the tenant's own entry — and doing so
+// clears both findings and serves the value.
+func TestGuard_SubtreeTopLevelReservedKeyFix(t *testing.T) {
+	t.Parallel()
+	before := map[string]string{
+		"_defaults.yaml":   "defaults:\n  mysql_connections: 80\n",
+		"a/_defaults.yaml": "defaults:\n  mysql_connections: 70\n_silent_mode: warning\n",
+		"a/t.yaml":         "tenants:\n  t1: {}\n",
+	}
+	got := allFindings(t, "--config-dir", writeReservedConfD(t, before))
+	if want := []string{"error defaults_toplevel_ignored  a/_defaults.yaml"}; !reflect.DeepEqual(got, want) {
+		t.Fatalf("before: findings = %q, want %q", got, want)
+	}
+	_, stdout, _ := runOnce(t, "--format", "json", "--config-dir", writeReservedConfD(t, before))
+	if !strings.Contains(stdout, "Set `_silent_mode` in each tenant's own entry under `tenants:`") ||
+		strings.Contains(stdout, "Move them under") {
+		t.Errorf("before: the fix is not the tenant-entry one: %s", stdout)
+	}
+
+	after := map[string]string{
+		"_defaults.yaml":   before["_defaults.yaml"],
+		"a/_defaults.yaml": "defaults:\n  mysql_connections: 70\n",
+		"a/t.yaml":         "tenants:\n  t1:\n    _silent_mode: warning\n",
+	}
+	if got := allFindings(t, "--config-dir", writeReservedConfD(t, after), "--warn-as-error"); len(got) != 0 {
+		t.Errorf("after: findings = %q, want none", got)
+	}
+	code, doc, _, stderr := served(t, after, "2026-10-01T00:00:00Z")
+	mustOK(t, code, stderr)
+	if v := doc.Tenants["t1"].Values["_silent_mode"]; !reflect.DeepEqual(v, []any{"warning"}) {
+		t.Errorf("after: served _silent_mode = %#v, want [warning]", v)
+	}
+}
+
+// #2388 r4 nit: a bare `_state_` names no filter: "not a recognised key; delete it".
+func TestGuard_SubtreeReservedBareStatePrefix(t *testing.T) {
+	t.Parallel()
+	files := reservedCase{defaultState: "disable", tenant: "{}"}.files()
+	files["finance/_defaults.yaml"] = "defaults:\n  _state_: 1\n"
+	_, got := reservedFindings(t, "--config-dir", writeReservedConfD(t, files))
+	if len(got) != 1 || got[0].Field != "_state_" {
+		t.Fatalf("findings = %+v, want one for _state_", got)
+	}
+	m := got[0].Message
+	if !strings.Contains(m, "Key `_state_`") || !strings.Contains(m, "Delete it.") ||
+		strings.Contains(m, "does not declare a filter") || strings.Contains(m, "Reserved key") {
+		t.Errorf("message = %s; want the delete branch", m)
+	}
+}

@@ -82,7 +82,7 @@ func TestDefaultsWrapperMessagesNameTheKeys(t *testing.T) {
 			"key(s) `_severity_dedup`, `container_cpu`, `mysql_connections`, but", "state_filters"},
 		{"subtree-trap", "team/_defaults.yaml", "defaults: {}\n_severity_dedup: disable\nmysql_connections: 70\n_routing_defaults: {}\n_metadata: {}\n",
 			"key(s) `_severity_dedup`, `mysql_connections` are left out of every tenant's merged config (/effective), " +
-				"and a threshold among them is not served on /metrics. Move them under `defaults:`", "_metadata"},
+				"and a threshold among them is not served on /metrics. Move `mysql_connections` under `defaults:`", "_metadata"},
 		{"root-trap", "_defaults.yaml", "defaults:\n  a: 1\n_severity_dedup: disable\n",
 			"the root `defaults:` holds numbers only", "Move them"},
 	}
@@ -158,5 +158,66 @@ func TestRootDecodedKeysMatchSchema(t *testing.T) {
 	sort.Strings(fromStruct)
 	if strings.Join(fromSchema, ",") != strings.Join(fromStruct, ",") {
 		t.Fatalf("schema non-`_` properties %q != ThresholdConfig yaml keys %q", fromSchema, fromStruct)
+	}
+}
+
+// #2388 r4: in a SUBTREE file, a top-level key subtree defaults refuse
+// (config.SubtreeDefaultsRefusedKey) is not told to move under `defaults:` —
+// that is subtree_default_reserved_key's finding — but gets that finding's
+// own fix, by shape: (c) recognised → each tenant's entry, (a) `_state_<f>`
+// with f undeclared → declare or delete, (b) unrecognised (`_silent_x`, a bare
+// `_state_`) → delete. Other keys keep the generic fix; the ROOT file keeps
+// its own (rootNumbersOnly) whatever the key.
+func TestDefaultsWrapperSubtreeRefusedKeyFix(t *testing.T) {
+	t.Parallel()
+	const moveUnder = "Move `mysql_connections` under `defaults:`"
+	cases := []struct {
+		name, file, body string
+		want, notWant    []string
+	}{
+		{"recognised", "a/_defaults.yaml", "defaults:\n  mysql_connections: 70\n_silent_mode: warning\n",
+			[]string{"`_silent_mode`: subtree defaults do not support it, so do not move it under `defaults:`",
+				"Set `_silent_mode` in each tenant's own entry under `tenants:`"},
+			[]string{"Move them", "Move `_silent_mode`"}},
+		{"undeclared-state", "a/_defaults.yaml", "defaults:\n  x: 1\n_state_nope: enable\n",
+			[]string{"does not declare a filter `nope`", "or delete the key"},
+			[]string{"Move them", "Set `_state_nope`"}},
+		{"declared-state", "a/_defaults.yaml", "defaults:\n  x: 1\n_state_maintenance: enable\n",
+			[]string{"Set `_state_maintenance` in each tenant's own entry", "affects every tenant in the tree"},
+			[]string{"Move them", "does not declare"}},
+		// (`_silent_x` is no case here: not IsReservedKey, so actsWhenMerged
+		// leaves it out and this finding never names it.)
+		{"unrecognised", "a/_defaults.yaml", "defaults:\n  x: 1\n_state_: 1\n",
+			[]string{"`_state_`: subtree defaults do not support it", "It is not a recognised key", "Delete it."},
+			[]string{"Move them", "Set `_state_`", "does not declare a filter ``"}},
+		{"mixed", "a/_defaults.yaml", "defaults:\n  x: 1\nmysql_connections: 70\n_silent_mode: warning\n",
+			[]string{moveUnder, "Set `_silent_mode` in each tenant's own entry"},
+			[]string{"Move them", "Move `_silent_mode`"}},
+		// Root control: unchanged by #2388 r4.
+		{"root", "_defaults.yaml", "defaults:\n  a: 1\n_silent_mode: warning\n",
+			[]string{"the root `defaults:` holds numbers only"},
+			[]string{"subtree_default_reserved_key", "Set `_silent_mode`", "Move them"}},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			got := checkDefaultsWrapper(CheckInput{
+				DefaultsFiles:        []config.DefaultsFile{{Name: tc.file, Data: []byte(tc.body)}},
+				DeclaredStateFilters: map[string]bool{"maintenance": true},
+			})
+			if len(got) != 1 || got[0].Kind != FindingDefaultsTopLevelIgnored {
+				t.Fatalf("findings %+v, want one defaults_toplevel_ignored", got)
+			}
+			for _, w := range tc.want {
+				if !strings.Contains(got[0].Message, w) {
+					t.Errorf("message lacks %q: %s", w, got[0].Message)
+				}
+			}
+			for _, d := range tc.notWant {
+				if strings.Contains(got[0].Message, d) {
+					t.Errorf("message has %q: %s", d, got[0].Message)
+				}
+			}
+		})
 	}
 }
