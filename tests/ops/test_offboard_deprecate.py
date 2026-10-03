@@ -323,7 +323,7 @@ def test_carrier_health_separates_the_three_ways_a_carrier_goes_wrong():
     `TestDefaultsCarrierOracle` 裁判）；這裡只釘形狀與三個 kind 常數。
     """
     fn = deprecate_rule.carrier_health
-    UNP, ZERO = deprecate_rule.UNPARSEABLE, deprecate_rule.DECODES_TO_ZERO
+    UNP, NULL = deprecate_rule.UNPARSEABLE, deprecate_rule.NULL_NOT_DECLARED
 
     assert fn(b"defaults:\n  a: 80\n  b: 1.5\n  c: -3\n") == []
     # 整份載體被丟的那一類，key 具名。
@@ -331,8 +331,8 @@ def test_carrier_health_separates_the_three_ways_a_carrier_goes_wrong():
         ("old", "disable", UNP)]
     assert fn(b"defaults:\n  m:\n    x: 1\n") == [("m", "<mapping>", UNP)]
     assert fn(b"defaults:\n  l:\n  - 1\n") == [("l", "<list>", UNP)]
-    # 武裝一條 0 閾值的那一類。
-    assert fn(b"defaults:\n  k:\n") == [("k", "(空)", ZERO)]
+    # 寫成 null、exporter 當作沒宣告的那一類（#2518；之前是 0 閾值）。
+    assert fn(b"defaults:\n  k:\n") == [("k", "(空)", NULL)]
     # 文件層級的那一類，key 是 None。
     assert fn(b"defaults:\n- a\n") == [(None, "defaults 不是 mapping（list）", UNP)]
     got = fn(b"defaults: [\n")

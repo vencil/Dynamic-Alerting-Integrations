@@ -231,9 +231,9 @@ type ThresholdConfig struct {
 	// no platform fallback because there is no platform value to fall back to.
 	//
 	// ⚠️ A list, not a map: membership is the entire payload. Putting these in
-	// Defaults with a null value would not work — `key:` decodes into
-	// map[string]float64 as 0, which emits a threshold of zero for every
-	// tenant.
+	// Defaults with a null value would not work — a null there is no write
+	// (ParseConfigFile, #2518; before it, a threshold of zero for every
+	// tenant), so the key would not be declared at all.
 	//
 	// ⛔ This field is PLATFORM-scoped. applyBoundaryRules strips it from
 	// tenant-owned files for the same reason it strips Defaults: a tenant that

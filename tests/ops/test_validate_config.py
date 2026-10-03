@@ -2451,12 +2451,13 @@ _ORACLE_ROW_DEVIATIONS = {
 
 class TestRootDefaultsValues:
     """Check 10 (#1414): a root `defaults:` value the exporter drops the whole
-    block over, or decodes to 0, is a FAIL.
+    block over, or treats as unwritten (#2518), is a FAIL.
 
     Measured before this rule: `"70"`, `disable`, `{default: 30}` and an empty
     value under the root `defaults:` each printed `Result: PASS`, rc 0 — while
     the exporter dropped every platform threshold for the first three and
-    served a 0 threshold to every tenant for the fourth.
+    served a 0 threshold to every tenant for the fourth (since #2518 the
+    fourth leaves the key undeclared instead).
     """
 
     _TENANT = "tenants:\n  tenant-x:\n    mysql_connections: \"70\"\n"
@@ -2490,14 +2491,15 @@ class TestRootDefaultsValues:
         assert "drops ALL of it" in detail, detail
 
     @pytest.mark.parametrize("value", ["", " ~", " null"])
-    def test_an_empty_value_fails_as_a_zero_threshold(self, tmp_path, value):
+    def test_an_empty_value_fails_as_an_undeclared_key(self, tmp_path, value):
         d = self._tree(tmp_path, "defaults:\n  container_cpu: 80\n"
                        f"  mysql_connections:{value}\n")
         r = vc.check_root_defaults(str(d))
         assert r["status"] == vc.FAIL, r
         detail = " ".join(r["details"])
         assert "`defaults.mysql_connections` has no value" in detail, detail
-        assert "0 threshold" in detail, detail
+        assert "not declared" in detail, detail
+        assert "0 threshold" not in detail, detail
         assert "optional_overrides" in detail, detail
         # Not the whole block: the exporter keeps the other thresholds.
         assert "drops ALL of it" not in detail, detail

@@ -7,12 +7,14 @@ package config
 //
 //  1. ParseConfigFile is a plain yaml.Unmarshal into ThresholdConfig — the
 //     flat plane's historical decode — for accept/reject AND for the decoded
-//     content, with ONE listed exception (#2418): a `defaults:` spelling that
-//     the file does not write (null, ±Inf, NaN) beside another spelling of
-//     the same threshold that it does write is dropped. The oracle is written
-//     out here rather than calling ParseConfigFile twice, so the SSOT cannot
-//     drift from it quietly; the exception is the explicit per-row key list
-//     nullShadowDrops, not a call into the code under test.
+//     content, with TWO listed exceptions: a value written as null is no
+//     write (#2518 — a `defaults:` key, and a threshold key of a `tenants:` /
+//     `profiles:` body), and a `defaults:` spelling that the file does not
+//     write (±Inf, NaN) beside another spelling of the same threshold that
+//     it does write is dropped (#2418). The oracle is written out here rather
+//     than calling ParseConfigFile twice, so the SSOT cannot drift from it
+//     quietly; the exceptions are the explicit per-row list decodeDrops, not
+//     a call into the code under test.
 //  2. The walker (ScanDirTree) judges each file by that decode: ParseFailed
 //     iff the oracle errors, TenantIDs == the sorted keys of the oracle's
 //     Tenants, and TreeScan.Partials holds exactly the oracle's value.
@@ -30,6 +32,7 @@ import (
 	"path/filepath"
 	"reflect"
 	"sort"
+	"strings"
 	"testing"
 	"time"
 
@@ -74,21 +77,57 @@ var configFileCorpus = map[string]string{
 	"duplicate tenant key":                "tenants:\n  tx:\n    cpu: \"80\"\n  tx:\n    cpu: \"90\"\n",
 	"duplicate metric key":                "tenants:\n  tx:\n    cpu: \"80\"\n    cpu: \"90\"\n",
 	"integer tenant key":                  "tenants:\n  123:\n    cpu: \"80\"\n",
-	// #2418: the one exception to "plain decode" (nullShadowDrops).
+	// The exceptions to "plain decode" (decodeDrops): #2418 …
 	"defaults canonical null beside legacy value": "defaults:\n  mysql_threads_running: null\n  " + legacyThreadsRunning + ": 30\ntenants:\n  tx: {}\n",
 	"defaults canonical .inf beside legacy value": "defaults:\n  mysql_threads_running: .inf\n  " + legacyThreadsRunning + ": 30\ntenants:\n  tx: {}\n",
-	// Not the exception: neither spelling is written, so both decode as-is.
+	// … and #2518: a null is no write, with or without a twin, at every layer.
 	"defaults both spellings null": "defaults:\n  mysql_threads_running: null\n  " + legacyThreadsRunning + ": null\ntenants:\n  tx: {}\n",
+	"defaults null alone":          "defaults:\n  cpu: ~\n  mem: 80\ntenants:\n  tx: {}\n",
+	"tenant threshold null":        "tenants:\n  tx:\n    cpu: null\n    cpu{env=\"a\"}: ~\n    cpu_critical:\n    mem: \"80\"\n",
+	"profile threshold null":       "profiles:\n  std:\n    cpu: null\n    mem: \"70\"\ntenants:\n  tx: {}\n",
+	// Not exceptions: a reserved key's null deletes an inherited value
+	// (ADR-017), and an empty string is a written value.
+	"tenant reserved key null":   "tenants:\n  tx:\n    _state_maintenance: null\n    cpu: \"80\"\n",
+	"tenant threshold empty str": "tenants:\n  tx:\n    cpu: \"\"\n",
 }
 
 // legacyThreadsRunning is the retired spelling of mysql_threads_running.
 const legacyThreadsRunning = "mysql_cpu"
 
-// nullShadowDrops is the ONE place the oracle departs from yaml.Unmarshal
-// (#2418): per corpus row, the `defaults:` keys ParseConfigFile drops.
-var nullShadowDrops = map[string][]string{
-	"defaults canonical null beside legacy value": {"mysql_threads_running"},
-	"defaults canonical .inf beside legacy value": {"mysql_threads_running"},
+// decodeDrops is the ONE place the oracle departs from yaml.Unmarshal: per
+// corpus row, the entries ParseConfigFile drops, as "defaults/<key>" or
+// "<tenants|profiles>/<id>/<key>" (#2418, #2518).
+var decodeDrops = map[string][]string{
+	"defaults canonical null beside legacy value": {"defaults/mysql_threads_running"},
+	"defaults canonical .inf beside legacy value": {"defaults/mysql_threads_running"},
+	"defaults both spellings null":                {"defaults/mysql_threads_running", "defaults/" + legacyThreadsRunning},
+	"defaults null alone":                         {"defaults/cpu"},
+	"tenant threshold null":                       {"tenants/tx/cpu", "tenants/tx/cpu{env=\"a\"}", "tenants/tx/cpu_critical"},
+	"profile threshold null":                      {"profiles/std/cpu"},
+}
+
+// dropRef applies (drop=true) or checks the presence of one decodeDrops
+// entry in cfg.
+func dropRef(cfg *ThresholdConfig, ref string, drop bool) bool {
+	parts := strings.SplitN(ref, "/", 3)
+	var present bool
+	switch parts[0] {
+	case "defaults":
+		_, present = cfg.Defaults[parts[1]]
+		if drop {
+			delete(cfg.Defaults, parts[1])
+		}
+	case "tenants", "profiles":
+		m := cfg.Tenants
+		if parts[0] == "profiles" {
+			m = cfg.Profiles
+		}
+		_, present = m[parts[1]][parts[2]]
+		if drop {
+			delete(m[parts[1]], parts[2])
+		}
+	}
+	return present
 }
 
 // lighterDecodeWouldAccept is the set of rows the walker's PRE-#1957 decode
@@ -116,35 +155,35 @@ var lighterDecodeWouldAccept = []string{
 }
 
 // oracleDecode is the flat plane's historical decode, spelled out, plus the
-// listed #2418 drops for corpus row name.
+// listed drops (decodeDrops) for corpus row name.
 func oracleDecode(name string, data []byte) (ThresholdConfig, error) {
 	var cfg ThresholdConfig
 	err := yaml.Unmarshal(data, &cfg)
 	if err == nil {
-		for _, k := range nullShadowDrops[name] {
-			delete(cfg.Defaults, k)
+		for _, ref := range decodeDrops[name] {
+			dropRef(&cfg, ref, true)
 		}
 	}
 	return cfg, err
 }
 
 // TestConfigFileCorpus_ExceptionRowsDifferFromThePlainDecode keeps the
-// exception honest: every nullShadowDrops row names a key the plain decode
+// exceptions honest: every decodeDrops row names an entry the plain decode
 // DOES produce, so the list cannot hide a row where nothing is dropped.
 func TestConfigFileCorpus_ExceptionRowsDifferFromThePlainDecode(t *testing.T) {
 	t.Parallel()
-	for name, keys := range nullShadowDrops {
+	for name, refs := range decodeDrops {
 		body, ok := configFileCorpus[name]
 		if !ok {
-			t.Fatalf("nullShadowDrops row %q is not in the corpus", name)
+			t.Fatalf("decodeDrops row %q is not in the corpus", name)
 		}
 		var plain ThresholdConfig
 		if err := yaml.Unmarshal([]byte(body), &plain); err != nil {
 			t.Fatalf("%s: %v", name, err)
 		}
-		for _, k := range keys {
-			if _, in := plain.Defaults[k]; !in {
-				t.Errorf("%s: the plain decode has no %q to drop", name, k)
+		for _, ref := range refs {
+			if !dropRef(&plain, ref, false) {
+				t.Errorf("%s: the plain decode has no %q to drop", name, ref)
 			}
 		}
 	}
@@ -321,8 +360,9 @@ func TestTreeScan_PartialsAreLazyAndReleased(t *testing.T) {
 // TestParseConfigFile_NullDoesNotShadowTheOtherSpelling pins #2418 at the
 // decode: inside one `defaults:` block the canonical-wins dedup is among the
 // spellings the file WRITES (levelWritesSpelling). A null beside the other
-// spelling's value is dropped so that value is served; every other shape
-// decodes exactly as a plain yaml.Unmarshal does.
+// spelling's value is dropped so that value is served; since #2518 a null is
+// dropped with no twin too (it is no write, not a 0 threshold); every other
+// shape decodes exactly as a plain yaml.Unmarshal does.
 func TestParseConfigFile_NullDoesNotShadowTheOtherSpelling(t *testing.T) {
 	t.Parallel()
 	C, L := "mysql_threads_running", "mysql_cpu"
@@ -337,11 +377,13 @@ func TestParseConfigFile_NullDoesNotShadowTheOtherSpelling(t *testing.T) {
 		{"canonical .inf, legacy value", C + ": .inf\n  " + L + ": 30", map[string]float64{L: 30}},
 		{"canonical -.inf, legacy value", C + ": -.inf\n  " + L + ": 30", map[string]float64{L: 30}},
 		{"canonical .nan, legacy value", C + ": .nan\n  " + L + ": 30", map[string]float64{L: 30}},
+		// #2518: a null is no write, twin or not.
+		{"both null", C + ": null\n  " + L + ": null", map[string]float64{}},
+		{"canonical null alone", C + ": null", map[string]float64{}},
+		{"non-aliased null", "pg_connections: null", map[string]float64{}},
 		// Unchanged shapes: plain yaml.Unmarshal.
-		{"both null", C + ": null\n  " + L + ": null", map[string]float64{C: 0, L: 0}},
-		{"canonical null alone", C + ": null", map[string]float64{C: 0}},
 		{"both values", C + ": 40\n  " + L + ": 30", map[string]float64{C: 40, L: 30}},
-		{"non-aliased null", "pg_connections: null", map[string]float64{"pg_connections": 0}},
+		{"zero is a value", C + ": 0", map[string]float64{C: 0}},
 	}
 	for _, tc := range cases {
 		got, err := ParseConfigFile([]byte("defaults:\n  " + tc.body + "\n"))
