@@ -367,9 +367,11 @@ func subtreeRelPath(rootDir, p string) string {
 
 // RenderYAMLFlow renders v as ONE line of YAML (a scalar as itself, a mapping
 // as `{a: 1}`), for messages that quote a config value to paste as
-// `key: <rendered>`; the paste decodes to v. ok=false when v does not encode
-// or does not fit one line — the caller then omits the value rather than
-// quote something that would not paste back.
+// `key: <rendered>`; the paste decodes to v. v is a value decoded from YAML
+// (yaml.Node.Encode panics on Go types YAML has no form for, e.g. a chan —
+// callers pass decoded values only). ok=false when it does not fit one line
+// (or the encode reports an error) — the caller then omits the value rather
+// than quote something that would not paste back.
 //
 // ⛔ ONE LINE (#2388 A r3). yaml.v3 renders a string holding a newline as a
 // block scalar (`|` + indented lines); pasted after `key:` inside a tenant

@@ -929,3 +929,53 @@ func TestGuard_SubtreeReservedSharedListCapped(t *testing.T) {
 		t.Errorf("x message = %s", m)
 	}
 }
+
+// #2388 A r5 (R4-1): the other-tenants count over two listed files — each
+// tenant has one source file, so per-file counts add up — and this tenant is
+// excluded from its own file's list by binary search.
+func TestGuard_SubtreeReservedSharedCountTwoFiles(t *testing.T) {
+	t.Parallel()
+	files := map[string]string{
+		"_defaults.yaml": "defaults:\n  mysql_connections: 80\n" +
+			"state_filters:\n  maintenance:\n    reasons: []\n    severity: warning\n    default_state: enable\n",
+		"a/_defaults.yaml":   "defaults:\n  _state_maintenance: disable\n",
+		"a/b/_defaults.yaml": "defaults:\n  _state_maintenance: disable\n",
+		// x sets the key itself; it inherits both files.
+		"a/b/x.yaml": "tenants:\n  x:\n    _state_maintenance: enable\n",
+	}
+	for i := 0; i < 4; i++ {
+		files[fmt.Sprintf("a/p%d.yaml", i)] = fmt.Sprintf("tenants:\n  p%d: {}\n", i)   // source a/_defaults.yaml
+		files[fmt.Sprintf("a/b/q%d.yaml", i)] = fmt.Sprintf("tenants:\n  q%d: {}\n", i) // source a/b/_defaults.yaml
+	}
+	_, got := reservedFindings(t, "--config-dir", writeReservedConfD(t, files))
+	msg := map[string]string{}
+	for _, f := range got {
+		msg[f.TenantID] = f.Message
+	}
+	if m := msg["x"]; !strings.Contains(m, "`p0`, `p1`, `p2`, `p3`, `q0` and 3 more") {
+		t.Errorf("x message = %s", m)
+	}
+	// q0 gets its value from a/b/ and its chain lists both files: the others
+	// are p0–p3 (from a/) and q1–q3 (from a/b/) — 7, never q0 itself.
+	if m := msg["q0"]; !strings.Contains(m, "`p0`, `p1`, `p2`, `p3`, `q1` and 2 more") || strings.Contains(m, "`q0`") {
+		t.Errorf("q0 message = %s", m)
+	}
+}
+
+// #2388 A r5 (R4-2): when several files' `tenants:` entries set the key, the
+// message names them all and says the exporter serves the merged result — not
+// "that one" value.
+func TestGuard_SubtreeReservedSetByTwoEntries(t *testing.T) {
+	t.Parallel()
+	files := reservedCase{defaultState: "enable", tenant: "\n    _silent_mode: warning"}.files()
+	files["_platform.yaml"] = "tenants:\n  t1:\n    _silent_mode: critical\n"
+	files["finance/_defaults.yaml"] = "defaults:\n  _silent_mode: warning\n"
+	_, got := reservedFindings(t, "--config-dir", writeReservedConfD(t, files))
+	if len(got) != 1 {
+		t.Fatalf("findings = %+v, want 1", got)
+	}
+	want := "This tenant's `tenants:` entries in `_platform.yaml`, `finance/t1.yaml` (the exporter serves the merged result) set `_silent_mode`"
+	if !strings.Contains(got[0].Message, want) {
+		t.Errorf("message = %s", got[0].Message)
+	}
+}

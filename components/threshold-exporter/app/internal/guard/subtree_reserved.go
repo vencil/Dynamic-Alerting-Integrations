@@ -20,6 +20,7 @@ package guard
 
 import (
 	"fmt"
+	"slices"
 	"sort"
 	"strings"
 
@@ -208,20 +209,33 @@ const sharedTenantsShown = 5
 // … to keep things as they are"; deleting it turned t1's filter on, and with
 // `--scope a/x` only t2's finding was shown at all. The verdicts are the
 // exporter's whole-tree load (ScopedTenants.SubtreeRefusedVerdicts).
+//
+// ⛔ O(files × log n) PER FINDING, not O(tenants) (#2388 A r5): the count is
+// each list's length minus this tenant (binary search; the lists are sorted),
+// and names stop at sharedTenantsShown per list — the sorted first names of
+// each list contain the overall first ones. Walking every list in full made
+// 16000 tenants sharing one file 7.5s against 4.7s. A tenant has ONE source
+// file per key (SubtreeRefusedVerdict.Source), so no id is in two lists and
+// the per-list counts add up without double counting.
 func sharedApplied(applied appliedBySource, tenant, k string, files []string) sharedTenants {
 	var out sharedTenants
 	for _, f := range files {
 		ids := applied[k][f]
+		n := len(ids)
+		if _, found := slices.BinarySearch(ids, tenant); found {
+			n--
+		}
+		out.total += n
 		taken := 0
 		for _, id := range ids {
+			if taken == sharedTenantsShown {
+				break
+			}
 			if id == tenant {
 				continue
 			}
-			out.total++
-			if taken < sharedTenantsShown {
-				out.names = append(out.names, id)
-				taken++
-			}
+			out.names = append(out.names, id)
+			taken++
 		}
 	}
 	sort.Strings(out.names)
@@ -334,7 +348,13 @@ func setBy(v config.SubtreeRefusedVerdict) string {
 	if v.Profile != "" {
 		return fmt.Sprintf("This tenant's profile `%s` (its `_profile`) sets", v.Profile)
 	}
-	if len(v.EntryFiles) > 0 {
+	if len(v.EntryFiles) > 1 {
+		// Several files' entries set it; which one wins is the merge's order,
+		// not modelled here (#2388 A r5).
+		return fmt.Sprintf("This tenant's `tenants:` entries in %s (the exporter serves the merged result) set",
+			quoteJoin(v.EntryFiles))
+	}
+	if len(v.EntryFiles) == 1 {
 		// Named, not "own entry": a root platform file's `tenants:` block sets
 		// it as well as a tenant file (#2388 A r4).
 		return fmt.Sprintf("This tenant's `tenants:` entry in %s sets", quoteJoin(v.EntryFiles))
