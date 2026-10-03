@@ -89,6 +89,11 @@
 //     key (`_state_*`, `_silent_mode`, …) in its defaults. The set is read
 //     off the exporter's build's chain (CheckInput.SubtreeReservedKeys).
 //
+//  9. Root defaults written as null (#2518; see rootnull.go), warn: the
+//     tenant's config sets a threshold the conf.d root `_defaults.yaml`
+//     writes as null, which declares nothing, so the exporter serves no
+//     series for it. The set is the build's (CheckInput.RootNullUndeclared).
+//
 // Future PRs in the C-12 family:
 //   - PR-4: CLI subcommand `da-tools guard defaults-impact` plus
 //     YAML parsing convenience layer that runs the actual merge
@@ -466,4 +471,11 @@ type CheckInput struct {
 	// exporter subtree overlay's verdict. The subtree_default_reserved_key fix
 	// for a recognised key depends on it (#2388 A); absent = not applied.
 	SubtreeRefusedVerdicts map[string]map[string]config.SubtreeRefusedVerdict `json:"-"`
+	// RootNullUndeclared maps tenant ID → the threshold keys its config sets
+	// that are not served because the conf.d root `_defaults.yaml` writes
+	// them (or a `_critical` key's base) as null — not declared (config.ScopedTenants.RootNullUndeclared, i.e.
+	// FlatBuild.RootNullUndeclared). Each becomes a
+	// root_default_null_undeclared warning for a tenant in EffectiveConfigs
+	// (#2518); nil skips the check.
+	RootNullUndeclared map[string][]config.RootNullKey `json:"-"`
 }

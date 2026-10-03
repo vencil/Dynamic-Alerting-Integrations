@@ -458,6 +458,11 @@ func levelWritesSpelling(level map[string]any, s string) bool {
 // tenantAuthoredThreshold reports whether the tenant's own map (overrides
 // minus what this overlay put there, `inherited`) sets key's threshold under
 // ANY spelling — hasAliasEquivalent, with the overlay's own writes excluded.
+//
+// ⚠️ A threshold the tenant (or a platform entry, or a profile) wrote as
+// null is not in overrides at all: ParseConfigFile drops it (#2518,
+// null_threshold.go), so presence here already means "wrote a value" and
+// the subtree value fills a null exactly as it fills an absent key.
 func tenantAuthoredThreshold(overrides map[string]ScheduledValue, inherited map[string]struct{}, key string) bool {
 	authored := func(s string) bool {
 		if _, present := overrides[s]; !present {

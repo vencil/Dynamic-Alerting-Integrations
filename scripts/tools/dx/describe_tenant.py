@@ -1034,15 +1034,34 @@ def _overlay_tenant(tenant_raw: Any, blocks: "list[tuple[str, dict]]",
     return combined, sources
 
 
+def _without_null_thresholds(body: Any) -> Any:
+    """Go `withoutNullThresholds` (#2518): a threshold key (no `_` prefix)
+    written as null is no write, so a layer carrying one does not own the
+    key and the layer below shows through. A reserved key's null stays (it
+    deletes the inherited value, ADR-017). Non-dict bodies pass through."""
+    if not isinstance(body, dict):
+        return body
+    if not any(v is None and not (isinstance(k, str) and k.startswith("_"))
+               for k, v in body.items()):
+        return body
+    return {k: v for k, v in body.items()
+            if not (v is None and not (isinstance(k, str) and k.startswith("_")))}
+
+
 def _platform_tenant_blocks(doc: Any) -> dict:
     """`{tenant: body}` of a root platform file's `tenants:` block, keeping
-    only bodies that are non-empty mappings (anything else supplies no key).
-    Ids go through `_tenant_id` like the tenant files' do."""
+    only bodies that are non-empty mappings (anything else supplies no key),
+    each without its null thresholds (#2518). Ids go through `_tenant_id`
+    like the tenant files' do."""
     tenants = doc.get("tenants") if isinstance(doc, dict) else None
     if not isinstance(tenants, dict):
         return {}
-    return {_tenant_id(tid): body for tid, body in tenants.items()
-            if isinstance(body, dict) and body}
+    out = {}
+    for tid, body in tenants.items():
+        body = _without_null_thresholds(body)
+        if isinstance(body, dict) and body:
+            out[_tenant_id(tid)] = body
+    return out
 
 
 def _tenant_id(tid: Any) -> str:
@@ -1066,8 +1085,9 @@ def _tenant_body(tconfig: Any) -> Any:
     (#1677 F2) — so this oracle does too. Before, deep_merge(merged, None)
     crashed the whole run with AttributeError. Any other non-dict body is
     passed through unchanged (the Go side rejects it; out of scope here).
+    A threshold written as null is dropped (#2518, Go TenantDoc.tenantRaw).
     """
-    return {} if tconfig is None else tconfig
+    return {} if tconfig is None else _without_null_thresholds(tconfig)
 
 
 # ---------------------------------------------------------------------------
@@ -1150,6 +1170,8 @@ def _read_profiles(files: "list[tuple[str, Any]]") -> dict:
         for pname, body in profiles.items():
             entries = by_name.setdefault(_tenant_id(pname), {})
             for k, v in (body if isinstance(body, dict) else {}).items():
+                if v is None and not (isinstance(k, str) and k.startswith("_")):
+                    continue  # #2518: a null threshold is no write
                 entries[k] = (fname, v)
     return {"by_name": by_name, "files": order, "declared": declared}
 
