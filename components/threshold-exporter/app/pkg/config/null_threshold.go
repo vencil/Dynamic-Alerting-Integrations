@@ -136,9 +136,15 @@ func rootNullDefaults(data []byte) []string {
 type RootNullKey struct {
 	// Key is the tenant-side key as the tenant's config spells it.
 	Key string
-	// NullKey is the root key whose null leaves Key unserved: Key itself
-	// for a base threshold; the (canonical) base for a critical row.
+	// NullKey is the threshold whose missing root value leaves Key
+	// unserved, as the fix names it: Key itself for a base threshold; the
+	// (canonical) base for a critical row.
 	NullKey string
+	// RootSpellings is how the root `_defaults.yaml` spells what it writes
+	// as null — NullKey's spelling(s) in the file, sorted — so the report
+	// names text the root actually holds even when the tenant uses the
+	// other #1231 spelling.
+	RootSpellings []string
 	// CriticalRow: Key is a `<base>_critical` key, which resolveCriticalRows
 	// serves only when the root defaults hold <base> — `optional_overrides:`
 	// does not stand in for it.
@@ -179,17 +185,21 @@ func rootNullUndeclared(cfg *ThresholdConfig, rootNull []string) map[string][]Ro
 	for _, k := range rootNull {
 		isNull[k] = struct{}{}
 	}
-	hit := func(k string) bool {
+	// spelled is the root's null spellings of k's threshold, sorted; empty
+	// when the root writes none of them as null.
+	spelled := func(k string) []string {
+		var out []string
 		if _, ok := isNull[k]; ok {
-			return true
+			out = append(out, k)
 		}
 		var buf [2]string
 		for _, s := range otherSpellings(k, &buf) {
 			if _, ok := isNull[s]; ok {
-				return true
+				out = append(out, s)
 			}
 		}
-		return false
+		sort.Strings(out)
+		return out
 	}
 	canonDefaults := canonicalizeDefaults(cfg.Defaults)
 	var out map[string][]RootNullKey
@@ -203,18 +213,21 @@ func rootNullUndeclared(cfg *ThresholdConfig, rootNull []string) map[string][]Ro
 		for k, v := range overrides {
 			canon, _ := canonicalKeyFor(k)
 			if base, critical := criticalRowBase(canon); critical {
-				if _, declared := canonDefaults[base]; !declared && hit(base) && !disabledEverywhere(v) {
-					add(tenantID, RootNullKey{Key: k, NullKey: base, CriticalRow: true})
+				if _, declared := canonDefaults[base]; !declared && !disabledEverywhere(v) {
+					if rs := spelled(base); len(rs) > 0 {
+						add(tenantID, RootNullKey{Key: k, NullKey: base, RootSpellings: rs, CriticalRow: true})
+					}
 				}
 				continue
 			}
-			if !hit(k) || keyCanReachTheOutputPlane(cfg, k, v) {
+			rs := spelled(k)
+			if len(rs) == 0 || keyCanReachTheOutputPlane(cfg, k, v) {
 				continue
 			}
 			if IsReservedKey(k) || baseRowsSkipKey(k) || disabledEverywhere(v) {
 				continue // undeliverableThresholds' rules
 			}
-			add(tenantID, RootNullKey{Key: k, NullKey: k})
+			add(tenantID, RootNullKey{Key: k, NullKey: k, RootSpellings: rs})
 		}
 	}
 	for _, keys := range out {

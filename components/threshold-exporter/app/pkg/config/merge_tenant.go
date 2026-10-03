@@ -465,8 +465,18 @@ func MergeTenantOverRootPlatform(root RootPlatform, tenantID string, tenantData 
 // It deliberately omits the byte variant's flat-KV fallback (that path serves
 // the GET read path's legacy flat on-disk files; a parsed caller has already
 // asserted a `tenants.<id>` block is present). The root merge, tenant merge,
-// and ApplyProfiles are otherwise identical, so for a tenants-block body this
-// returns the same result as the byte entry point.
+// and ApplyProfiles are otherwise identical, with ONE difference that comes
+// from the caller's decode, not from this function: the byte entry point
+// decodes through ParseConfigFile, which drops a threshold key the body writes
+// as null (#2518), while the write gate (gitops.validate) hands in a plain
+// yaml.Unmarshal of the body, where such a key is present with an empty value.
+// So for a tenants-block body the two results are equal except that a body
+// key written as null (not `_`-prefixed) is in this merge's tenant map and
+// not in the byte entry point's — it then also keeps the platform entry's and
+// the profile's value for that key out of this merge. The gate reads only
+// ValidateTenantKeys from this result, which judges key names, so the
+// difference only means a null key is still validated there (an unknown key
+// written as null is still refused) — stricter than GET, never looser.
 func MergeParsedTenantWithRootDefaults(configDir string, tenantCfg ThresholdConfig) TenantMerge {
 	merged := mergeTenantConfig(loadRootPlatform(configDir), tenantCfg)
 	merged.applyProfiles(nil) // silent, as in MergeTenantOverRootPlatform

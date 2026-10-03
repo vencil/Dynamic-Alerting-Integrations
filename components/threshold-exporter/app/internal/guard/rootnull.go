@@ -73,20 +73,44 @@ func checkRootNullUndeclared(input CheckInput) []Finding {
 // answer (config.RootNullKey.CriticalRow), not judged here.
 func rootNullMessage(rk config.RootNullKey) string {
 	const was = "(before #2518 the null was a threshold of 0 and the tenant's value was served)"
+	written := rootSpellings(rk)
 	if rk.CriticalRow {
 		return fmt.Sprintf("The tenant sets `%s` (in its own file, a root platform file's `tenants:` entry or a "+
-			"profile), the critical tier of `%s`, but the conf.d root `_defaults.yaml` writes `%s` as null. A null "+
+			"profile), the critical tier of `%s`, but the conf.d root `_defaults.yaml` writes %s as null. A null "+
 			"is no value, so the root does not declare `%s`, and the exporter serves a critical row only for a base "+
 			"the root `_defaults.yaml` holds: no series is served for `%s` and that critical alert can never fire %s. "+
 			"Write a number for `%s` in the conf.d root `_defaults.yaml` instead of null (that also serves `%s` at "+
 			"warning severity to every tenant that does not set it); listing `%s` under `optional_overrides:` does "+
 			"not serve the critical row.",
-			rk.Key, rk.NullKey, rk.NullKey, rk.NullKey, rk.Key, was, rk.NullKey, rk.NullKey, rk.NullKey)
+			rk.Key, rk.NullKey, written, rk.NullKey, rk.Key, was, rk.NullKey, rk.NullKey, rk.NullKey)
 	}
 	return fmt.Sprintf("The tenant sets threshold `%s` (in its own file, a root platform file's `tenants:` "+
-		"entry or a profile), but the conf.d root `_defaults.yaml` writes it as null. A null is no value, so "+
+		"entry or a profile), but the conf.d root `_defaults.yaml` writes %s as null. A null is no value, so "+
 		"the root does not declare `%s` and the exporter serves no series for it: that alert can never fire "+
-		"%s. %s", rk.Key, rk.Key, was, rootNullFix(rk.Key))
+		"%s. %s", rk.Key, written, rk.Key, was, rootNullFix(rk.Key))
+}
+
+// rootSpellings is how the message names what the root writes as null: the
+// spelling(s) the build found in the root file (config.RootNullKey
+// .RootSpellings), with a note when none of them is the threshold the
+// message is about — so the text it quotes is text the root holds.
+func rootSpellings(rk config.RootNullKey) string {
+	if len(rk.RootSpellings) == 0 {
+		return fmt.Sprintf("`%s`", rk.NullKey) // a caller-built input without spellings
+	}
+	quoted := make([]string, len(rk.RootSpellings))
+	same := false
+	for i, s := range rk.RootSpellings {
+		quoted[i] = "`" + s + "`"
+		if s == rk.NullKey {
+			same = true
+		}
+	}
+	out := strings.Join(quoted, " and ")
+	if !same {
+		out += fmt.Sprintf(" (the other spelling of `%s`)", rk.NullKey)
+	}
+	return out
 }
 
 // rootNullFix is the finding's fix sentence for key k. Both were measured to

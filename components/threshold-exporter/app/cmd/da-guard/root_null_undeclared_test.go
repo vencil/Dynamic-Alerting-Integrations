@@ -68,7 +68,7 @@ func TestGuard_RootNullTenantValueIsNamed(t *testing.T) {
 		f.TenantID != "tx" || f.Field != "mysql_connections" {
 		t.Errorf("finding = %+v, want warn root_default_null_undeclared / tx / mysql_connections", f)
 	}
-	for _, want := range []string{"writes it as null", "optional_overrides:"} {
+	for _, want := range []string{"writes `mysql_connections` as null", "optional_overrides:"} {
 		if !strings.Contains(f.Message, want) {
 			t.Errorf("message lacks %q: %s", want, f.Message)
 		}
@@ -272,5 +272,39 @@ func TestGuard_RootNullCriticalFixServesTheRow(t *testing.T) {
 	wantValue(t, doc, "tx", "mysql_connections_critical", 90)
 	if s := doc.Tenants["tx"].Severities["mysql_connections_critical"]; s != "critical" {
 		t.Errorf("severity = %q, want critical", s)
+	}
+}
+
+// The message quotes what the root file holds (blind review B2): with the
+// root writing one spelling as null and the tenant the other, it names the
+// root's spelling — a grep of the root for the quoted text finds it.
+func TestGuard_RootNullMessageNamesTheRootSpelling(t *testing.T) {
+	t.Parallel()
+	for _, tc := range []struct {
+		name, root, tenant, field, want, deny string
+	}{
+		{"root canonical, tenant legacy",
+			"  " + aliasCanon + ": null\n", "    " + aliasLegacy + ": 70\n", aliasLegacy,
+			"writes `" + aliasCanon + "` (the other spelling of `" + aliasLegacy + "`) as null", "writes `" + aliasLegacy + "`"},
+		{"root legacy, tenant canonical critical",
+			"  " + aliasLegacy + ": null\n", "    " + aliasCanon + "_critical: 90\n", aliasCanon + "_critical",
+			"writes `" + aliasLegacy + "` (the other spelling of `" + aliasCanon + "`) as null", "writes `" + aliasCanon + "` as null"},
+		{"same spelling",
+			"  " + aliasCanon + ": null\n", "    " + aliasCanon + ": 70\n", aliasCanon,
+			"writes `" + aliasCanon + "` as null", "other spelling"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			_, got := guardFindingsOf(t, map[string]string{
+				"_defaults.yaml": "defaults:\n  mysql_slow_queries: 5\n" + tc.root,
+				"sub/tx.yaml":    "tenants:\n  tx:\n" + tc.tenant,
+			})
+			if len(got) != 1 || got[0].Kind != guard.FindingRootDefaultNullUndeclared || got[0].Field != tc.field {
+				t.Fatalf("findings = %+v, want one root_default_null_undeclared for %s", got, tc.field)
+			}
+			if m := got[0].Message; !strings.Contains(m, tc.want) || strings.Contains(m, tc.deny) {
+				t.Errorf("message = %q; want it to contain %q and not %q", m, tc.want, tc.deny)
+			}
+		})
 	}
 }
