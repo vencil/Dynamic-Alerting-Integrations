@@ -163,7 +163,7 @@ conf.d/
 
 合併語義：**deep merge**（map 遞迴）+ **array 整包替換**（不串接）+ **null 即刪除**（下層設 `null` 等同顯式否決）+ **前綴保留**（`_state_*` / `_routing*` / `_metadata` 等只允許在 `_` 前綴檔）。
 
-⚠️ **子目錄 `_defaults.yaml` 的 defaults 不支援保留鍵**（`_state_*`、`_silent_mode`、`_severity_dedup`、`_metadata` 等）：目前 exporter 對它們只套用 `disable` 或數值、其他值丟掉（`_state_*` 在子目錄關得掉、開不了），`da-guard` 以 `subtree_default_reserved_key` warning 報出。**下一個 minor 版起 exporter 不再套用子目錄 defaults 中的這些鍵，該 finding 改為 error**——請改寫在租戶自己的 `tenants:` 條目，`_state_<filter>` 也可改根目錄 `state_filters.<filter>.default_state`（[#2388](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/2388)）。
+⚠️ **子目錄 `_defaults.yaml` 的 defaults 不支援保留鍵**（`_state_*`、`_silent_mode`、`_severity_dedup`、`_metadata` 等）：目前 exporter 對它們只套用 `disable` 或數值、其他值丟掉（`_state_*` 在子目錄關得掉、開不了），`da-guard` 以 `subtree_default_reserved_key` warning 報出（值為 null 視為沒寫、不報；`_custom_alerts` 寫在檔案頂層是 custom-alert 編譯器的合法寫法、不報）。**下一個 minor 版起 exporter 不再套用子目錄 defaults 中的這些鍵，該 finding 改為 error**——請改寫在租戶自己的 `tenants:` 條目，`_state_<filter>` 也可改根目錄 `state_filters.<filter>.default_state`（[#2388](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/2388)）。
 
 ### 4.3 三態 + 嚴重度
 

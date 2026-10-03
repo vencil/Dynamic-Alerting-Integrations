@@ -25,7 +25,8 @@ import (
 
 // FindingSubtreeDefaultReservedKey (warn; #2388): a subtree `_defaults.yaml`
 // in the tenant's defaults chain carries Field, a reserved key, in its
-// defaults, whatever the value and whether or not the exporter applies it.
+// defaults, whatever its non-null value and whether or not the exporter
+// applies it.
 // Planned to become an error in the next minor release, when the exporter
 // stops applying such keys.
 const FindingSubtreeDefaultReservedKey FindingKind = "subtree_default_reserved_key"
@@ -44,6 +45,7 @@ func checkSubtreeReservedKeys(input CheckInput) []Finding {
 		}
 	}
 	sort.Strings(tenants)
+	unwrapped := unwrappedDefaultsFiles(input)
 	var out []Finding
 	for _, id := range tenants {
 		byKey := input.SubtreeReservedKeys[id]
@@ -53,6 +55,13 @@ func checkSubtreeReservedKeys(input CheckInput) []Finding {
 		}
 		sort.Strings(keys)
 		for _, k := range keys {
+			files := byKey[k]
+			if readElsewhere[k] {
+				files = writtenInsideDefaults(files, unwrapped)
+				if len(files) == 0 {
+					continue
+				}
+			}
 			out = append(out, Finding{
 				Severity: SeverityWarn,
 				Kind:     FindingSubtreeDefaultReservedKey,
@@ -62,8 +71,45 @@ func checkSubtreeReservedKeys(input CheckInput) []Finding {
 					"that this tenant inherits from; subtree defaults do not support reserved keys. %s %s "+
 					"From the next minor release the exporter stops applying these keys from a subtree "+
 					"`_defaults.yaml`, and this warning becomes an error (#2388).",
-					k, quoteJoin(byKey[k]), reservedKeyToday(k), reservedKeyFix(k)),
+					k, quoteJoin(files), reservedKeyToday(k), reservedKeyFix(k)),
 			})
+		}
+	}
+	return out
+}
+
+// unwrappedDefaultsFiles is the set of input.DefaultsFiles (root-relative
+// names) with no `defaults:` mapping: the defaults merge reads the whole
+// document, so a key in pkg/config's chain view of such a file sits at its
+// TOP level.
+func unwrappedDefaultsFiles(input CheckInput) map[string]bool {
+	out := map[string]bool{}
+	for _, f := range input.DefaultsFiles {
+		if doc := decodeDefaultsDoc(f.Data); doc != nil && !wrappedInMapping(doc) {
+			out[f.Name] = true
+		}
+	}
+	return out
+}
+
+// writtenInsideDefaults drops from files the unwrapped ones.
+//
+// ⛔ ONLY FOR TopLevelReadElsewhere KEYS (#2388 r1b). Another reader takes
+// such a key from the TOP level of a defaults file, at every level: measured
+// with the repo's own rule-packs/recipes/examples/conf.d, whose
+// `finance/_defaults.yaml` carries `_custom_alerts` at the top level with no
+// `defaults:` wrapper — compile_custom_alerts.py compiled 12 shapes (pay-a: 2
+// recipes); the same list moved under `defaults:` compiled 11 (pay-a: 1),
+// and no other finding named either. pkg/config's chain view
+// (subtreeReservedKeys) cannot tell the top level from `defaults:` in an
+// unwrapped file, so this check, which holds the files' bytes, does. A key
+// under a `defaults:` mapping is still reported: nothing reads it there.
+// A file not in DefaultsFiles is kept (reported), not guessed.
+func writtenInsideDefaults(files []string, unwrapped map[string]bool) []string {
+	var out []string
+	for _, f := range files {
+		if !unwrapped[f] {
+			out = append(out, f)
 		}
 	}
 	return out
@@ -91,6 +137,10 @@ func reservedKeyFix(k string) string {
 		return fmt.Sprintf("Set `%s` in each tenant's own entry under `tenants:`, or set "+
 			"`state_filters.%s.default_state` in the conf.d root `_defaults.yaml`.",
 			k, strings.TrimPrefix(k, "_state_"))
+	}
+	if readElsewhere[k] { // `_custom_alerts`: its reader takes it from the top level
+		return fmt.Sprintf("Move `%s` out of `defaults:` to the top level of the file, where it is read, "+
+			"or set it in each tenant's own entry under `tenants:`.", k)
 	}
 	return fmt.Sprintf("Set `%s` in each tenant's own entry under `tenants:`.", k)
 }

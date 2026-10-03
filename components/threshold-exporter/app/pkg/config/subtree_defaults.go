@@ -537,7 +537,7 @@ func subtreeDefaultsRefusedKey(k string) bool {
 // Same inputs and the same "is this the root's file" test as
 // applySubtreeDefaults (the conf.d root `_defaults.yaml` is skipped by path),
 // so it reads the chain the exporter's build reads. It asks nothing of the
-// value or of the tenant's own map: a key is listed whether the overlay
+// value (beyond null, below) or of the tenant's own map: a key is listed whether the overlay
 // applies it (today a `disable` or number for a declared `_state_<filter>`,
 // `_silent_mode`, `_severity_dedup`), drops it (`enable`, a severity, a
 // mapping) or yields to the tenant's own key — the key does not belong in a
@@ -554,7 +554,19 @@ func subtreeDefaultsRefusedKey(k string) bool {
 // wrapper is the route generator's documented spelling (#2326) — which
 // `parsed` holds too, because the merge then reads the whole document.
 // Listing them here would repeat an error as a warning, or report a valid
-// file.
+// file. guard.TopLevelReadElsewhere is NOT used for this: it names only the
+// top-level `_routing_defaults` / `_routing_enforced`, and would leave a
+// `_routing` inside `defaults:` reported twice (warning here, error there).
+//
+// ⚠️ A NULL VALUE IS NOT LISTED (#2388 r1b): per the #2518 ruling a null in a
+// defaults level deletes that level's value and the next level's applies, so
+// a null reserved key writes nothing — it is treated as not written. A
+// shallower level writing the same key non-null is still listed.
+//
+// ⚠️ The `_custom_alerts` (and any other guard.TopLevelReadElsewhere) key at
+// the TOP level of an unwrapped subtree file is listed here — `parsed` cannot
+// tell top level from `defaults:` — and left out by da-guard, which can
+// (checkSubtreeReservedKeys); the custom-alert compiler reads it there.
 func subtreeReservedKeys(root string, tenantDefaults map[string][]string, parsed map[string]map[string]any) map[string]map[string][]string {
 	if len(tenantDefaults) == 0 {
 		return nil
@@ -570,8 +582,8 @@ func subtreeReservedKeys(root string, tenantDefaults map[string][]string, parsed
 			if r, err := filepath.Rel(rootDir, defaultsPath); err == nil {
 				rel = filepath.ToSlash(r)
 			}
-			for key := range parsed[defaultsPath] {
-				if !subtreeDefaultsRefusedKey(key) || strings.HasPrefix(key, "_routing") {
+			for key, raw := range parsed[defaultsPath] {
+				if raw == nil || !subtreeDefaultsRefusedKey(key) || strings.HasPrefix(key, "_routing") {
 					continue
 				}
 				if out == nil {

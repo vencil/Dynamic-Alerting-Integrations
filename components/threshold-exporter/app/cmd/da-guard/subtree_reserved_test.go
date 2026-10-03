@@ -207,3 +207,69 @@ func TestGuard_SubtreeReservedKeyFollowsScope(t *testing.T) {
 		})
 	}
 }
+
+// #2388 r1b: `_custom_alerts` (guard.TopLevelReadElsewhere) at the TOP level
+// of an unwrapped subtree `_defaults.yaml` is the custom-alert compiler's
+// documented spelling (it reads every level's top-level list; the repo's own
+// rule-packs/recipes/examples/conf.d/finance/_defaults.yaml is written so) and
+// is not reported; the same list under a `defaults:` mapping is read by
+// nothing and is reported. Measured with compile_custom_alerts.py: 12 shapes
+// unwrapped, 11 wrapped (the subtree's recipe dropped).
+func TestGuard_SubtreeCustomAlertsTopLevelIsNotReserved(t *testing.T) {
+	t.Parallel()
+	const recipe = "_custom_alerts:\n  - recipe: ratio\n    name: payment_failure_ratio\n" +
+		"    metric: payment_failed_total\n    denominator_metric: payment_attempts_total\n" +
+		"    op: \">\"\n    window: 5m\n    threshold: \"0.01:critical\"\n"
+	indented := "defaults:\n" + "  " + strings.ReplaceAll(strings.TrimSuffix(recipe, "\n"), "\n", "\n  ") + "\n"
+	for _, tc := range []struct {
+		name, subtree string
+		want          int
+	}{
+		{name: "top-level-unwrapped", subtree: recipe, want: 0},
+		{name: "inside-defaults", subtree: indented, want: 1},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			files := reservedCase{defaultState: "disable", tenant: "{}"}.files()
+			files["finance/_defaults.yaml"] = tc.subtree
+			code, got := reservedFindings(t, "--config-dir", writeReservedConfD(t, files))
+			if len(got) != tc.want {
+				t.Fatalf("findings = %+v, want %d", got, tc.want)
+			}
+			if code != exitOK {
+				t.Errorf("exit = %d, want %d", code, exitOK)
+			}
+			if tc.want == 1 {
+				f := got[0]
+				if f.TenantID != "t1" || f.Field != "_custom_alerts" ||
+					!strings.Contains(f.Message, "Move `_custom_alerts` out of `defaults:` to the top level") {
+					t.Errorf("finding = %+v", f)
+				}
+			}
+		})
+	}
+}
+
+// #2388 r1b: the golden fixture tree mixed-mode/conf.d, whose
+// reserved-null/child/_defaults.yaml nulls `_severity_dedup`: the null level is
+// not named (the parent's non-null one still is).
+func TestGuard_SubtreeReservedGoldenMixedMode(t *testing.T) {
+	t.Parallel()
+	dir := filepath.Join(goldenDir(t), "fixtures", "mixed-mode", "conf.d")
+	_, got := reservedFindings(t, "--config-dir", dir)
+	var rows []string
+	for _, f := range got {
+		rows = append(rows, f.TenantID+" "+f.Field)
+		if strings.Contains(f.Message, "child/_defaults.yaml") {
+			t.Errorf("a null level is named: %s", f.Message)
+		}
+	}
+	want := []string{
+		"tenant-date _silent_mode",
+		"tenant-reserved _severity_dedup",
+		"tenant-reserved _silent_mode",
+	}
+	if !reflect.DeepEqual(rows, want) {
+		t.Errorf("findings = %v, want %v", rows, want)
+	}
+}

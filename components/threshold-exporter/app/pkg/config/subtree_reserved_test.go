@@ -46,7 +46,7 @@ func TestScopeEffective_SubtreeReservedKeys(t *testing.T) {
 			"_silent_mode":       {"finance/_defaults.yaml"},
 			"_severity_dedup":    {"finance/_defaults.yaml"},
 			"_state_bogus":       {"finance/_defaults.yaml"},
-			"_metadata":          {"finance/_defaults.yaml"},
+			// `_metadata: null` is not listed: a null writes nothing (#2388 r1b).
 		},
 	}
 	if !reflect.DeepEqual(scoped.SubtreeReserved, wantReserved) {
@@ -66,5 +66,53 @@ func TestScopeEffective_SubtreeReservedKeys(t *testing.T) {
 	}
 	if ops.SubtreeReserved != nil {
 		t.Errorf("--scope ops: SubtreeReserved = %v, want nil", ops.SubtreeReserved)
+	}
+}
+
+// #2388 r1b: a null reserved key in a subtree level is treated as not written
+// (the #2518 ruling: null deletes that level's value, the next level's
+// applies). The shape of the golden fixture mixed-mode/conf.d/reserved-null:
+// the parent writes `_severity_dedup` and `_silent_mode`, the child nulls
+// `_severity_dedup` — only the parent is listed. A tree whose only subtree
+// mention of the key is the null lists nothing.
+func TestScopeEffective_SubtreeReservedNullIsNotWritten(t *testing.T) {
+	t.Parallel()
+	for _, tc := range []struct {
+		name  string
+		files map[string]string
+		want  map[string]map[string][]string
+	}{
+		{
+			name: "reserved-null",
+			files: map[string]string{
+				"_defaults.yaml":                     "defaults:\n  mysql_connections: 80\n",
+				"reserved-null/_defaults.yaml":       "defaults:\n  _severity_dedup: \"disable\"\n  _silent_mode: \"warning\"\n",
+				"reserved-null/child/_defaults.yaml": "defaults:\n  _severity_dedup: ~\n",
+				"reserved-null/child/tenants.yaml":   "tenants:\n  tenant-reserved: {}\n",
+			},
+			want: map[string]map[string][]string{"tenant-reserved": {
+				"_severity_dedup": {"reserved-null/_defaults.yaml"},
+				"_silent_mode":    {"reserved-null/_defaults.yaml"},
+			}},
+		},
+		{
+			name: "null-only",
+			files: map[string]string{
+				"_defaults.yaml":         "defaults:\n  mysql_connections: 80\n",
+				"finance/_defaults.yaml": "defaults:\n  _severity_dedup: ~\n  _silent_mode: null\n",
+				"finance/tenant-a.yaml":  "tenants:\n  tenant-a: {}\n",
+			},
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			scoped, err := ScopeEffective(writeUndeliverableTree(t, tc.files), "")
+			if err != nil {
+				t.Fatal(err)
+			}
+			if !reflect.DeepEqual(scoped.SubtreeReserved, tc.want) {
+				t.Errorf("SubtreeReserved = %v, want %v", scoped.SubtreeReserved, tc.want)
+			}
+		})
 	}
 }
