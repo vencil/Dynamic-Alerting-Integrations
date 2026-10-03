@@ -2429,9 +2429,21 @@ class TestRootDefaultsRouting:
         r = vc.check_root_defaults(str(d))
         assert r["status"] == vc.FAIL, r
         detail = " ".join(r["details"])
-        assert "this line does nothing" in detail, detail
+        assert "sets no platform default and declares nothing" in detail, detail
         assert "no tenant gets" not in detail, detail
         assert "root_default_null_undeclared" in detail, detail
+
+    def test_a_null_over_a_merged_value_is_not_called_harmless(self, tmp_path):
+        """A null that overrides a `<<:`-merged value cancels it (measured:
+        deleting the line made every tenant get the merged 5), so the row
+        must not just say "delete it"."""
+        d = self._tree(tmp_path, "tenants:\n  tx: &b\n    mysql_connections: 5\n"
+                       "defaults:\n  <<: *b\n  container_cpu: 80\n"
+                       "  mysql_connections: null\n")
+        r = vc.check_root_defaults(str(d))
+        assert r["status"] == vc.FAIL, r
+        detail = " ".join(r["details"])
+        assert "unless it overrides a value merged in with `<<:`" in detail, detail
 
     def test_end_to_end_exits_1_and_names_the_fix(self, tmp_path, capsys,
                                                   cli_argv):
@@ -2521,7 +2533,7 @@ class TestRootDefaultsValues:
         assert r["status"] == vc.FAIL, r
         detail = " ".join(r["details"])
         assert "`defaults.mysql_connections` has no value" in detail, detail
-        assert "this line does nothing" in detail, detail
+        assert "sets no platform default and declares nothing" in detail, detail
         assert "0 threshold" not in detail, detail
         # Not the whole block: the exporter keeps the other thresholds.
         assert "drops ALL of it" not in detail, detail

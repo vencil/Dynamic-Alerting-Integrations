@@ -1384,18 +1384,20 @@ def _root_defaults_value_detail(rel: str, key: str | None, raw: str,
     ``NULL_NOT_DECLARED`` rather than a blocking one.
     """
     if null:
-        # #2518: this line has no effect whatever else the tree says — null
-        # is "not written" — so say only that, and not whether the key ends
-        # up declared: that depends on `optional_overrides:`, on the
-        # `_critical` base and on dimensional rules this mirror does not
-        # model (two predicates for it died in review).
+        # #2518: say only what holds for every shape — null is "not
+        # written": no platform default, no declaration — and not whether the
+        # key ends up declared or served, which depends on
+        # `optional_overrides:`, the `_critical` base and dimensional rules
+        # this mirror does not model (two predicates for it died in review).
+        # A null that overrides a value merged in with `<<:` cancels that
+        # value, so "delete it" is not offered unconditionally.
         return (f"{rel}: `defaults.{key}` has no value — threshold-exporter "
-                f"treats a null here as not written, so this line does "
-                f"nothing: it sets no platform default and declares nothing. "
-                f"Delete it, or give it a number to set a platform default. "
-                f"If tenants set their own value for this key, check it is "
-                f"still declared elsewhere (da-guard reports the tenants "
-                f"whose value is not served as root_default_null_undeclared).")
+                f"treats a null here as not written: it sets no platform "
+                f"default and declares nothing. Delete it — unless it "
+                f"overrides a value merged in with `<<:`, which it cancels; "
+                f"then remove that value from the merge instead. "
+                f"da-guard `root_default_null_undeclared` names tenants whose "
+                f"own value a root null leaves unserved.")
     if key is None:
         # ⚠️ *raw* (the mirror's reason) is not printed: `deprecate_rule`
         # words it in Chinese, this tool's operator strings are English, and
@@ -1597,10 +1599,10 @@ def check_root_defaults(config_dir: str) -> dict[str, object]:
       cannot decode (``"70"``, ``disable``, a mapping …) fails the decode and
       the exporter drops the root file's whole ``defaults:`` — every platform
       threshold, while the load is reported as successful; a null / empty
-      value is no write (#2518; before it, a 0 threshold), so the line does
-      nothing — whether the key is still declared is not judged here (da-guard
-      ``root_default_null_undeclared`` names the tenants it costs). Both
-      FAIL. The verdict is
+      value is no write (#2518; before it, a 0 threshold): it sets no
+      platform default and declares nothing — whether the key is still
+      declared is not judged here (da-guard ``root_default_null_undeclared``
+      names tenants it leaves unserved). Both FAIL. The verdict is
       ``deprecate_rule.exporter_verdicts`` — the yaml.v3 mirror whose truth
       table ``tests/golden/fixtures/defaults-carrier-oracle.json`` is judged
       by the Go test ``TestDefaultsCarrierOracle`` — called, not re-spelled.
