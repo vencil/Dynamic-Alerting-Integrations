@@ -29,7 +29,7 @@ lang: zh
 | Gate | Trigger | 涵蓋 | 失敗代價 | Reference |
 |---|---|---|---|---|
 | 擋直推 main | 每次 `git push` | dev-rule #12 | push 被拒 | `scripts/ops/protect_main_push.sh` |
-| 要求 preflight marker | 每次 `git push`（main/master 直接放行） | `make pr-preflight` 跑過 | push 被拒 | `scripts/ops/require_preflight_pass.sh` |
+| 要求 preflight marker | 每個被推的 branch（main/master 交給擋直推 main；刪除、tag、notes 不判） | `make pr-preflight` 跑過 | push 被拒 | `scripts/ops/require_preflight_pass.sh` |
 | mkdocs strict | 每個被推的 branch 的 tip（不判斷是否改到文件；刪除、tag、notes 不建） | dev-rule #4 site-root 語意 | push 被拒（Tier 1）/ CI backstop（Tier 2） | `scripts/ops/pre_push_mkdocs_strict.sh` |
 
 - 不是 pre-commit hook。安裝配方只有一條：`bash scripts/ops/install_prepush_hook.sh`（冪等，串接既有 lfs hook 為 `pre-push.chained`）；⛔ 別假設有人替你跑過：自動呼叫端是 `session-init.py` 與 `.claude/hooks/session-start.sh`，而事後才 `add_repo` 進來的 web session 兩個都不跑（[#1719](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/1719)）。「接上了沒」由 `make pr-preflight` 的 `Local hooks` 回答，`--skip-hooks` 略不過（[#1689](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/1689)、[#1664](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/1664)、[#1811](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/1811)）。`pre-commit install --hook-type pre-push` 不是替代方案。

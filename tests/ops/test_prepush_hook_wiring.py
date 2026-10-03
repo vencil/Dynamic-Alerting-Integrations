@@ -1660,12 +1660,10 @@ def test_a_file_gone_from_scripts_ops_is_named_and_restorable_from_head(
     _assert_the_guards_are_back(work)
 
 
-def test_tag_pushes_are_allowed_as_the_header_promises(tmp_path: Path) -> None:
-    """``require_preflight_pass.sh``'s header has promised "tag push → allow"
-    since it was written; the code never did it.
-
-    ``${remote_ref##refs/heads/}`` leaves ``refs/tags/v1.2.3`` intact, so a tag
-    looked like a branch name and the marker was demanded. Harmless while the
+def test_tag_pushes_are_allowed(tmp_path: Path) -> None:
+    """``${remote_ref##refs/heads/}`` leaves ``refs/tags/v1.2.3`` intact, so
+    without its ref filter ``require_preflight_pass.sh`` would take a tag for
+    a branch name and demand the marker. Harmless while the
     guard was inert — #1664 made it live, and the six-line release tag push runs
     from a dev container that has no ``gh``, which is exactly the state that
     forces the marker. STRICT mode is used here so the verdict does not depend
