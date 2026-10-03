@@ -937,9 +937,9 @@ func TestAChangedUnreachableSetRePrintsTheReport(t *testing.T) {
 // `_defaults` carrier makes the reload hierarchical (sticky), so the watch
 // path never reaches incrementalLoadFrom with a refused set to refresh: the
 // reload here is a full flat rebuild. MEASURED: dropping incrementalLoadFrom's
-// `refreshRefused(&merged)` call leaves this test green. That branch is
-// unreachable from the watch path and has no test; its clean-up is tracked in
-// #2593.
+// `refreshRefused(&merged)` call left this test green. #2593 removed that
+// call: incrementalLoadFrom now refuses any scan holding a carrier, so the
+// refused set it would recompute is always empty there.
 func TestTheRefusedSetIsRefreshedWhenTheTreeIsRepaired(t *testing.T) {
 	dir := t.TempDir()
 	writeTestYAML(t, filepath.Join(dir, "_defaults.yaml"), "defaults:\n  mysql_connections: 80\n")

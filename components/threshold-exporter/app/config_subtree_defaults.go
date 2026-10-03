@@ -8,15 +8,6 @@ package main
 
 import "github.com/vencil/threshold-exporter/pkg/config"
 
-func applySubtreeDefaults(
-	cfg *ThresholdConfig,
-	root string,
-	tenantDefaults map[string][]string,
-	parsed map[string]map[string]any,
-) (int, map[string][]string) {
-	return config.ApplySubtreeDefaults(cfg, root, tenantDefaults, parsed)
-}
-
 func scheduledValueFromRaw(raw any) (ScheduledValue, bool) {
 	return config.ScheduledValueFromRaw(raw)
 }

@@ -28,6 +28,7 @@ type parityTarget struct {
 
 type parityBatch struct {
 	Patch   map[string]string `json:"patch"`
+	Unset   []string          `json:"unset"` // B2 (#2341): keys the op removes
 	Verdict string            `json:"verdict"`
 }
 
@@ -437,6 +438,12 @@ func checkTenantAPIModel(t *testing.T, files map[string]string, tenantID string,
 	touches := false
 	for k, v := range want.Batch.Patch {
 		patched[k] = v
+		touches = touches || k == "_routing_profile" || k == "_routing"
+	}
+	// B2: an unset key is removed after the patch; removing `_routing`
+	// re-enables a disabled tenant, so it is judged like writing it.
+	for _, k := range want.Batch.Unset {
+		delete(patched, k)
 		touches = touches || k == "_routing_profile" || k == "_routing"
 	}
 	got := "ok"
