@@ -45,6 +45,7 @@ func CheckDefaultsImpact(input CheckInput) (*GuardReport, error) {
 	findings = append(findings, checkDefaultsWrapper(input)...)
 	findings = append(findings, checkRootCriticalKeys(input)...)
 	findings = append(findings, checkSubtreeUndeliverable(input)...)
+	findings = append(findings, checkRootNullUndeclared(input)...)
 
 	// Stable sort: errors before warnings, then by tenant id, then
 	// by field path. Within the same (severity, tenant, field) we

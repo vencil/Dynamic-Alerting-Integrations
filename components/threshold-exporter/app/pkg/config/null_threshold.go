@@ -40,6 +40,7 @@ package config
 // different shape and is left as is.
 
 import (
+	"sort"
 	"strings"
 
 	"gopkg.in/yaml.v3"
@@ -94,13 +95,90 @@ func dropNullThresholds(cfg *ThresholdConfig, data []byte) {
 	if yaml.Unmarshal(data, &raw) != nil {
 		return // cannot happen: the typed decode of the same bytes succeeded
 	}
-	for k, v := range raw.Defaults {
-		if v == nil {
-			delete(cfg.Defaults, k)
-		}
+	for _, k := range nullDefaultKeys(raw.Defaults) {
+		delete(cfg.Defaults, k)
 	}
 	dropNullBodies(cfg.Tenants, raw.Tenants)
 	dropNullBodies(cfg.Profiles, raw.Profiles)
+}
+
+// nullDefaultKeys is the keys of a generic `defaults:` decode written as
+// null, sorted — the keys dropNullThresholds drops from `defaults:`.
+func nullDefaultKeys(defaults map[string]any) []string {
+	var out []string
+	for k, v := range defaults {
+		if v == nil {
+			out = append(out, k)
+		}
+	}
+	sort.Strings(out)
+	return out
+}
+
+// rootNullDefaults is nullDefaultKeys over a file's bytes: the `defaults:`
+// keys ParseConfigFile dropped from it because they are written as null. For
+// the conf.d root carrier those keys are not declared at all (#2518), so a
+// tenant that sets one gets no series (rootNullUndeclared). Call it only on
+// bytes ParseConfigFile accepted.
+func rootNullDefaults(data []byte) []string {
+	var raw struct {
+		Defaults map[string]any `yaml:"defaults"`
+	}
+	if yaml.Unmarshal(data, &raw) != nil {
+		return nil
+	}
+	return nullDefaultKeys(raw.Defaults)
+}
+
+// rootNullUndeclared is, per tenant of cfg (the built config: tenant files,
+// platform entries, profiles and the subtree overlay applied), each key of
+// the tenant's map that is a spelling of a key the root carrier wrote as null
+// (rootNull, rootNullDefaults) and that nothing on the output plane serves
+// (keyCanReachTheOutputPlane, the subtree overlay's own test), with its
+// value — filtered by undeliverableThresholds, the filter #1976's report
+// uses (reserved keys, keys resolveBaseRows never serves, switched-off keys).
+// nil when there is none.
+//
+// ⛔ ONE CAUSE, ONE REPORT. A key a subtree `_defaults.yaml` hands down is
+// never in a tenant's map when it cannot be delivered — the overlay records
+// it in Unreachable instead (subtree_default_undeliverable) — so the two
+// sets cannot share a (tenant, key).
+func rootNullUndeclared(cfg *ThresholdConfig, rootNull []string) map[string]map[string]ScheduledValue {
+	if len(rootNull) == 0 {
+		return nil
+	}
+	isNull := make(map[string]struct{}, len(rootNull))
+	for _, k := range rootNull {
+		isNull[k] = struct{}{}
+	}
+	hit := func(k string) bool {
+		if _, ok := isNull[k]; ok {
+			return true
+		}
+		var buf [2]string
+		for _, s := range otherSpellings(k, &buf) {
+			if _, ok := isNull[s]; ok {
+				return true
+			}
+		}
+		return false
+	}
+	var out map[string]map[string]ScheduledValue
+	for tenantID, overrides := range cfg.Tenants {
+		for k, v := range overrides {
+			if !hit(k) || keyCanReachTheOutputPlane(cfg, k, v) {
+				continue
+			}
+			if out == nil {
+				out = map[string]map[string]ScheduledValue{}
+			}
+			if out[tenantID] == nil {
+				out[tenantID] = map[string]ScheduledValue{}
+			}
+			out[tenantID][k] = v
+		}
+	}
+	return undeliverableThresholds(out)
 }
 
 func dropNullBodies(typed map[string]map[string]ScheduledValue, raw map[string]map[string]any) {

@@ -157,6 +157,13 @@ type ScopedTenants struct {
 	// it. Only in-scope tenants are listed;
 	// nil when there is none (#1976).
 	Undeliverable map[string][]string
+
+	// RootNullUndeclared is, for each tenant in Tenants, the sorted
+	// threshold keys its config sets that the root `_defaults.yaml` writes
+	// as null — not declared (#2518), so /metrics serves no series for them
+	// (the same build's FlatBuild.RootNullUndeclared). Only in-scope tenants
+	// are listed; nil when there is none.
+	RootNullUndeclared map[string][]string
 }
 
 // DefaultsFile is one defaults carrier of a scan: its root-relative slash
@@ -331,7 +338,7 @@ func scopeEffective(configDir, scopeDir string, wholeTree bool) (*ScopedTenants,
 			inScope[id] = struct{}{}
 		}
 	}
-	parseFailed, unreachable, err := scopeParseFailed(scan, filepath.ToSlash(rel))
+	parseFailed, unreachable, rootNull, err := scopeParseFailed(scan, filepath.ToSlash(rel))
 	if err != nil {
 		return nil, err
 	}
@@ -373,13 +380,20 @@ func scopeEffective(configDir, scopeDir string, wholeTree bool) (*ScopedTenants,
 		Unreadable:          unreadable,
 		NestedPlatformFiles: nestedFiles,
 	}
-	// The build's verdict, kept for the in-scope tenants only (#1976).
+	// The build's verdicts, kept for the in-scope tenants only (#1976,
+	// #2518).
 	for _, id := range tenantIDs {
 		if keys := unreachable[id]; len(keys) > 0 {
 			if out.Undeliverable == nil {
 				out.Undeliverable = map[string][]string{}
 			}
 			out.Undeliverable[id] = keys
+		}
+		if keys := rootNull[id]; len(keys) > 0 {
+			if out.RootNullUndeclared == nil {
+				out.RootNullUndeclared = map[string][]string{}
+			}
+			out.RootNullUndeclared[id] = keys
 		}
 	}
 	seenFiles := make(map[string]struct{}, len(tenantIDs))
@@ -438,9 +452,9 @@ func scopeEffective(configDir, scopeDir string, wholeTree bool) (*ScopedTenants,
 // inherited subtree threshold keys it cannot deliver), over the whole tree; the caller
 // keeps the in-scope tenants (ScopedTenants.Undeliverable, #1976). One build
 // answers both, so the two cannot come from different readings of the tree.
-func scopeParseFailed(scan *TreeScan, scopeRel string) (parseFailed []string, unreachable map[string][]string, err error) {
+func scopeParseFailed(scan *TreeScan, scopeRel string) (parseFailed []string, unreachable, rootNull map[string][]string, err error) {
 	if len(scan.Files) == 0 {
-		return nil, nil, nil // the exporter refuses an empty tree; nothing was dropped
+		return nil, nil, nil, nil // the exporter refuses an empty tree; nothing was dropped
 	}
 	// ⚠️ log.Printf, not discardLogger, for the profile WARNs (#2513): they
 	// reached the process log here before the build took its logger for them,
@@ -448,7 +462,7 @@ func scopeParseFailed(scan *TreeScan, scopeRel string) (parseFailed []string, un
 	// an unknown profile is named (the report does not list it).
 	built, err := loadDirBuild(scan, scan.AbsRoot, discardLogger, log.Printf)
 	if err != nil {
-		return nil, nil, err
+		return nil, nil, nil, err
 	}
 	for _, key := range built.ParseFailed {
 		if bearsOnScope(key, scopeRel) {
@@ -456,7 +470,8 @@ func scopeParseFailed(scan *TreeScan, scopeRel string) (parseFailed []string, un
 		}
 	}
 	sort.Strings(parseFailed)
-	return parseFailed, unreachableKeys(undeliverableThresholds(built.UnreachableValues)), nil
+	return parseFailed, unreachableKeys(undeliverableThresholds(built.UnreachableValues)),
+		unreachableKeys(built.RootNullUndeclared), nil
 }
 
 // scopeDefaultsFiles is ScopedTenants.DefaultsFiles: the selected carrier of

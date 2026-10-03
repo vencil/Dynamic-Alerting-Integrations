@@ -18,7 +18,10 @@ package main
 //     when the root declares the threshold. When the root does not (absent,
 //     or — the #2518 root cell — null), nothing is served, and a value the
 //     tenant's effective config still shows must be NAMED: by the
-//     subtree_default_undeliverable finding, or in served-values `unserved`;
+//     subtree_default_undeliverable finding, or in served-values `unserved`
+//     — and, when the root writes null, by exactly one da-guard finding
+//     (subtree_default_undeliverable for a subtree-only value,
+//     root_default_null_undeclared for a tenant-side one);
 //  3. no wrong advice: when da-guard calls the tenant's key
 //     redundant_override, deleting it (the same cell with no tenant key)
 //     serves the same.
@@ -86,6 +89,7 @@ func nullLayerStates(v string) []nullCell {
 type nullMatrixObs struct {
 	served, walker string // the value, or noRow
 	named          bool   // an unserved effective value is named (rule 2)
+	findings       int    // subtree_default_undeliverable + root_default_null_undeclared for the key
 	redundant      bool   // da-guard calls the tenant's key redundant
 }
 
@@ -99,7 +103,7 @@ func nullMatrixObserve(t *testing.T, files map[string]string, tenantKey string) 
 	if err != nil {
 		t.Fatalf("LoadDirReport: %v", err)
 	}
-	sv, err := servedValues(cfg, time.Date(2026, 10, 3, 12, 0, 0, 0, time.UTC), rep.Undeliverable)
+	sv, err := servedValues(cfg, time.Date(2026, 10, 3, 12, 0, 0, 0, time.UTC), rep.Undeliverable, false)
 	if err != nil {
 		t.Fatalf("servedValues: %v", err)
 	}
@@ -150,8 +154,10 @@ func nullMatrixObserve(t *testing.T, files map[string]string, tenantKey string) 
 		switch {
 		case f.Kind == guard.FindingRedundantOverride && f.Field == tenantKey && tenantKey != "":
 			o.redundant = true
-		case f.Kind == guard.FindingSubtreeDefaultUndeliverable && (f.Field == aliasCanon || f.Field == aliasLegacy):
+		case (f.Kind == guard.FindingSubtreeDefaultUndeliverable || f.Kind == guard.FindingRootDefaultNullUndeclared) &&
+			(f.Field == aliasCanon || f.Field == aliasLegacy):
 			o.named = true
+			o.findings++
 		}
 	}
 	return o
@@ -235,6 +241,12 @@ func TestGuard_NullOverrideIsNoWriteOnEveryLayer(t *testing.T) {
 							case !rootDeclares && want != noRow && !o.named:
 								bad = true
 								t.Errorf("%s: effective shows %s, /metrics serves nothing, and nothing names it", name, want)
+							case root.value == "null" && want != noRow && o.findings != 1:
+								// The root null is the cause: exactly one finding names it
+								// (subtree_default_undeliverable for a subtree-only value,
+								// root_default_null_undeclared for a tenant-side one).
+								bad = true
+								t.Errorf("%s: root null with effective %s: %d findings name it, want exactly 1", name, want, o.findings)
 							}
 							if o.redundant && o.served != without {
 								bad = true

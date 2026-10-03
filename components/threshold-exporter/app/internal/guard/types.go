@@ -84,6 +84,11 @@
 //     exporter's build's own (CheckInput.UndeliverableInherited), filtered
 //     by pkg/config's undeliverableThresholds, not re-derived here.
 //
+//  8. Root defaults written as null (#2518; see rootnull.go), warn: the
+//     tenant's config sets a threshold the conf.d root `_defaults.yaml`
+//     writes as null, which declares nothing, so the exporter serves no
+//     series for it. The set is the build's (CheckInput.RootNullUndeclared).
+//
 // Future PRs in the C-12 family:
 //   - PR-4: CLI subcommand `da-tools guard defaults-impact` plus
 //     YAML parsing convenience layer that runs the actual merge
@@ -442,4 +447,12 @@ type CheckInput struct {
 	// becomes a subtree_default_undeliverable warning for a tenant in
 	// EffectiveConfigs (#1976); nil skips the check.
 	UndeliverableInherited map[string][]string `json:"-"`
+
+	// RootNullUndeclared maps tenant ID → the threshold keys its config sets
+	// that the conf.d root `_defaults.yaml` writes as null — not declared,
+	// so not served (config.ScopedTenants.RootNullUndeclared, i.e.
+	// FlatBuild.RootNullUndeclared). Each becomes a
+	// root_default_null_undeclared warning for a tenant in EffectiveConfigs
+	// (#2518); nil skips the check.
+	RootNullUndeclared map[string][]string `json:"-"`
 }
