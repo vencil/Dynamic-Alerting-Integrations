@@ -1018,7 +1018,7 @@ def main() -> None:
     # Generate routes + receivers (enforced route inserted first)
     routes, receivers, route_warnings = generate_routes(
         routing_configs, allowed_domains=allowed_domains,
-        enforced_routing=enforced_routing)
+        enforced_routing=enforced_routing, tenants=dedup_configs)
 
     # Generate per-tenant severity dedup inhibit rules
     inhibit_rules, dedup_warnings = generate_inhibit_rules(dedup_configs)

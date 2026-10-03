@@ -340,19 +340,18 @@ func TestRoutingPolicyParityMatrix(t *testing.T) {
 				gotPlatform = append(gotPlatform, [3]string{p.Kind, p.File, p.Field})
 			}
 			jsonEq(t, "platform", sortRows(gotPlatform), sortRows(append([][3]string{}, tree.Platform...)))
-			// #2503: the enforced route(s)' group_by, over the tenants with a
-			// resolved routing (every routed tenant is in expect: the Python
-			// half asserts it), in EnforcedGroupByInvalid's order.
-			var routed []string
+			// #2503: the enforced route(s)' group_by, over every valid tenant
+			// id — routed or not, as the generator expands it (#2519; every
+			// tenant of an enforced tree is in expect: the Python half asserts
+			// it), in EnforcedGroupByInvalid's order.
+			var tenants []string
 			for tenantID := range tree.Expect {
-				block, file := tenantBlock(t, tree.Files, tenantID)
-				layers := ltree.LayersFor(LevelOf(file))
-				if _, ok, _, _ := Resolve(tenantID, layers.TenantBlock(tenantID, block), layers); ok && IsValidTenantID(tenantID) {
-					routed = append(routed, tenantID)
+				if IsValidTenantID(tenantID) {
+					tenants = append(tenants, tenantID)
 				}
 			}
 			gotEnforced := [][3]string{}
-			for _, p := range EnforcedGroupByInvalid(ltree.Enforced, routed) {
+			for _, p := range EnforcedGroupByInvalid(ltree.Enforced, tenants) {
 				gotEnforced = append(gotEnforced, [3]string{p.File, p.Path(), p.Kind})
 			}
 			jsonEq(t, "enforced_group_by_invalid", gotEnforced, append([][3]string{}, tree.EnforcedGroupBy...))

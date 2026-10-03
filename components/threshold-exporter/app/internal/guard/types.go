@@ -414,7 +414,9 @@ type CheckInput struct {
 
 	// RoutingEnforced is the root's `_routing_enforced` block the route
 	// generator renders from (routingpolicy.Tree.Enforced; nil: none). Only
-	// its group_by is judged (#2503), over the tenants in RoutingByTenant.
+	// its group_by is judged (#2503), the `{{tenant}}` shape over every
+	// valid tenant id of EffectiveConfigs and RoutingByTenant — routed or not,
+	// as the generator expands it (#2519).
 	RoutingEnforced *routingpolicy.Enforced `json:"-"`
 
 	// CardinalityLimit is the per-tenant ceiling the cardinality

@@ -420,6 +420,10 @@ def test_python_reader_matches_the_table(tree, tmp_path: Path) -> None:
     # Nothing the table does not name: every routed tenant and every policy
     # line belongs to a listed tenant, and the line count is the table's.
     assert set(got.routing_configs) <= set(tree["expect"]), (tree["name"], set(got.routing_configs))
+    # #2519: a `{{tenant}}` enforced route expands over every tenant, routed
+    # or not — the Go halves judge expect's tenants, so expect lists them all.
+    if got.enforced_routing:
+        assert set(got.dedup_configs) <= set(tree["expect"]), (tree["name"], set(got.dedup_configs))
     expected_total = sum(len(_want(w, "policy")) for w in tree["expect"].values())
     assert len(rows) == expected_total, (tree["name"], rows)
     assert Counter(t for t, *_ in rows).keys() <= set(tree["expect"]), (tree["name"], rows)
