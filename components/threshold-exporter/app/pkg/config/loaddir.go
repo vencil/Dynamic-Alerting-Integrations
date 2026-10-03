@@ -1,9 +1,11 @@
 package config
 
 import (
+	"errors"
 	"fmt"
 	"log"
 	"os"
+	"strings"
 )
 
 // RejectDuplicateTenant is the issue-#127 hard reject shared by every full
@@ -57,6 +59,14 @@ func LoadDir(dir string, logger *log.Logger) (cfg *ThresholdConfig, parseFailed 
 	return cfg, rep.ParseFailed, err
 }
 
+// ErrNoYAMLFiles is LoadDirReport's refusal of a tree the walk kept no
+// config file from: the exporter refuses to load it. When the walk dropped
+// files it could not read (every config file of the tree is unreadable), the
+// error comes with a LoadReport whose Unreadable names them, so a caller can
+// tell that tree from one with no config file at all (#2627). A root the walk
+// cannot list is refused with it too, Unreadable holding RootUnreadable.
+var ErrNoYAMLFiles = errors.New("no .yaml files found")
+
 // NoTenantReason is why a file in LoadReport.NoTenant contributes no tenant.
 const NoTenantReason = "declares no tenant: a file whose name does not start with `_` " +
 	"is read only through its `tenants:` mapping, and this one has none (or an empty one)"
@@ -82,25 +92,68 @@ type LoadReport struct {
 	// load still succeeds (#2115). A symlink to a directory is not listed.
 	// nil when there is none.
 	Unreadable []UnreadableFile
+	// RootListErr is set only beside ErrNoYAMLFiles, when the root itself
+	// cannot be read: `cannot list configDir` with the walk's reason
+	// (Unreadable is then RootUnreadable), or `stat configDir` when the
+	// process may not stat it (RootStatUnreadable), for the caller to print
+	// (#2627). The walk's own WARN for the root is not logged then: this
+	// error carries the same reason.
+	RootListErr error
+	// Undeliverable is the build's FlatBuild.UnreachableValues filtered by
+	// undeliverableThresholds (reserved keys, keys resolveBaseRows never
+	// serves and switched-off keys left out): tenantID → each key the tenant inherits
+	// from a subtree `_defaults.yaml` that the root `_defaults.yaml` and
+	// `optional_overrides:` do not declare, with UnreachableValues' value
+	// (the deepest threshold-shaped one, normalised). The exporter serves no
+	// series for such a key, logs an ERROR and counts the tenant on
+	// da_config_subtree_undeliverable_tenants; the key is in no tenant map of
+	// the config. nil when there is none (#1976).
+	Undeliverable map[string]map[string]ScheduledValue
 }
 
 // LoadDirReport is LoadDir, also naming the files that contribute no tenant
-// (LoadReport.NoTenant) and the files the walk could not stat or read
-// (LoadReport.Unreadable). It adds no verdict of its own: both are read off
-// the walker's own result on the same cold scan.
+// (LoadReport.NoTenant), the files the walk could not stat or read
+// (LoadReport.Unreadable) and the inherited subtree keys the build could not
+// deliver (LoadReport.Undeliverable). It adds no verdict of its own: each is
+// read off the walker's or the build's own result on the same cold scan.
+//
+// A tree with no config file the walk could keep is refused (ErrNoYAMLFiles),
+// as the exporter refuses it; the report then carries only Unreadable — the
+// files the walk dropped, when every config file is unreadable, or
+// RootUnreadable alone when the walk could not list the root at all, the
+// error then reading `cannot list configDir` with the walk's reason, or
+// RootStatUnreadable when the root cannot even be stat'ed for a reason other
+// than a wrong path (StatErrIsWrongPath) (#2627).
 func LoadDirReport(dir string, logger *log.Logger) (cfg *ThresholdConfig, rep LoadReport, err error) {
 	if logger == nil {
 		logger = discardLogger
 	}
-	scan, err := ScanDirTree(dir, nil, nil, logger)
+	absRoot := AbsScanRoot(dir)
+	if _, serr := os.Stat(absRoot); serr != nil && !StatErrIsWrongPath(serr) {
+		statErr := fmt.Errorf("stat configDir %q: %w", dir, serr)
+		return nil, LoadReport{Unreadable: []UnreadableFile{RootStatUnreadable}, RootListErr: statErr},
+			fmt.Errorf("%w: %w", statErr, ErrNoYAMLFiles)
+	}
+	scanLogger, rootWarn := withRootWalkWarnHeld(logger, absRoot)
+	scan, err := ScanDirTree(dir, nil, nil, scanLogger)
+	// The root's walk WARN is dropped only when RootListErr carries it below
+	// (the caller prints that); otherwise — e.g. the root's listing failed
+	// part-way, so the walk kept files — it is logged as the walker wrote it.
+	reported := rootListReported(scan, err)
+	rootWarn.release(reported)
 	if err != nil {
 		return nil, LoadReport{}, err
 	}
 	if err := RejectDuplicateTenant(scan); err != nil {
 		return nil, LoadReport{}, err
 	}
+	if reported {
+		listErr := fmt.Errorf("cannot list configDir %q: %w", dir, scan.RootWalkErr)
+		return nil, LoadReport{Unreadable: []UnreadableFile{RootUnreadable}, RootListErr: listErr},
+			fmt.Errorf("%w: %w", listErr, ErrNoYAMLFiles)
+	}
 	if len(scan.Files) == 0 {
-		return nil, LoadReport{}, fmt.Errorf("no .yaml files found in %s", dir)
+		return nil, LoadReport{Unreadable: scan.Unreadable}, fmt.Errorf("%w in %s", ErrNoYAMLFiles, dir)
 	}
 	built, err := loadDirBuild(scan, dir, logger, nil)
 	if err != nil {
@@ -108,6 +161,7 @@ func LoadDirReport(dir string, logger *log.Logger) (cfg *ThresholdConfig, rep Lo
 	}
 	rep.ParseFailed = built.ParseFailed
 	rep.Unreadable = scan.Unreadable
+	rep.Undeliverable = undeliverableThresholds(built.UnreachableValues)
 	for _, k := range scan.Keys { // sorted
 		f := scan.Files[k]
 		if !isPlatformKey(k) && !f.ParseFailed && len(f.TenantIDs) == 0 {
@@ -115,6 +169,60 @@ func LoadDirReport(dir string, logger *log.Logger) (cfg *ThresholdConfig, rep Lo
 		}
 	}
 	return &built.Config, rep, nil
+}
+
+// rootListReported is LoadDirReport's one condition for "the root could not
+// be listed, and RootListErr reports it": the scan succeeded, kept no file,
+// and the walk failed on the root itself. It decides both that RootListErr is
+// set and that the walker's root WARN is dropped, so the two cannot drift: a
+// root whose listing failed part-way (files kept) is not reported this way,
+// and its WARN is logged (#2627).
+func rootListReported(scan *TreeScan, scanErr error) bool {
+	return scanErr == nil && scan != nil && len(scan.Files) == 0 && scan.RootWalkErr != nil
+}
+
+// withRootWalkWarnHeld is logger with the walker's WARN for the root
+// directory itself (`WARN: walk error at <absRoot>: …`) held back until the
+// caller knows whether RootListErr will carry the same reason (#2627): the
+// returned filter's release(true) drops it (the caller prints RootListErr),
+// release(false) logs it — after the walk's other lines. Every other line
+// goes to logger at once, unchanged, through its own prefix and flags.
+func withRootWalkWarnHeld(logger *log.Logger, absRoot string) (*log.Logger, *rootWarnFilter) {
+	f := &rootWarnFilter{dst: logger, hold: "WARN: walk error at " + absRoot + ": "}
+	if logger == discardLogger {
+		return logger, f
+	}
+	return log.New(f, "", 0), f
+}
+
+// rootWarnFilter is withRootWalkWarnHeld's writer.
+type rootWarnFilter struct {
+	dst  *log.Logger
+	hold string
+	held []string
+}
+
+func (f *rootWarnFilter) Write(p []byte) (int, error) {
+	line := strings.TrimSuffix(string(p), "\n")
+	if strings.HasPrefix(line, f.hold) {
+		f.held = append(f.held, line)
+		return len(p), nil
+	}
+	if err := f.dst.Output(2, line); err != nil {
+		return 0, err
+	}
+	return len(p), nil
+}
+
+// release ends the hold: drop discards the held lines (the reason is
+// reported another way), otherwise they are logged.
+func (f *rootWarnFilter) release(drop bool) {
+	if !drop {
+		for _, line := range f.held {
+			_ = f.dst.Output(2, line)
+		}
+	}
+	f.held = nil
 }
 
 // loadDirBuild is LoadDir's build step over a scan it already has: the

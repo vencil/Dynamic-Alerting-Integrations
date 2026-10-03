@@ -61,6 +61,11 @@ than as a default-fatal rule. The split:
   in a follow-up issue, like PR #162 did with --strict-static for
   static-pattern violations).
 
+The matrix above is about violations only. A scan path that does not
+exist (#2640) or a file that cannot be read or parsed (#2601) exits 2
+in every mode, before it is consulted: the run cannot vouch for what
+it never scanned.
+
 Usage
 -----
 ::
@@ -88,12 +93,21 @@ skipped silently (an empty result, on the theory that "other lints" catch
 parse errors — no lint here parses every file), so a BOM was enough to
 hide a missing ``timeout=`` from the gate.
 
+Missing scan paths fail closed (#2640)
+--------------------------------------
+A path that does not exist — given on the command line, or one of the
+default roots when none is given — is named on stderr and exits 2 in every
+mode. It used to be skipped silently: a typo or a renamed directory scanned
+zero files and exited 0, indistinguishable from a clean tree. Same rule as
+``check_open_encoding.py`` (#1984).
+
 Exit codes
 ----------
 - ``0``  — no violations OR --ci without --strict-subprocess-timeout
 - ``1``  — violations found AND (--ci AND --strict-subprocess-timeout)
-- ``2``  — bad arguments, OR a scanned file could not be read / decoded /
-  parsed (any mode)
+- ``2``  — bad arguments, OR a scan path (given, or a default root) does
+  not exist, OR a scanned file could not be read / decoded / parsed (any
+  mode)
 
 S#74 reference: ``docs/internal/testing-playbook.md`` v2.8.0
 Lessons §4. PR #164 / PR #165 establish the underlying pattern.
@@ -364,10 +378,15 @@ def _iter_python_files(roots: Iterable[Path]) -> Iterator[Path]:
 
 
 def _resolve_scan_paths(args: argparse.Namespace) -> list[Path]:
-    """Resolve CLI-arg paths or fall back to default roots."""
+    """Resolve CLI-arg paths or fall back to default roots.
+
+    Nothing is filtered here: a path that does not exist is returned as is,
+    so ``main()`` can refuse it by name (#2640) instead of scanning zero
+    files and reading as clean.
+    """
     if args.paths:
         return [Path(p) if Path(p).is_absolute() else PROJECT_ROOT / p for p in args.paths]
-    return [PROJECT_ROOT / r for r in _DEFAULT_SCAN_ROOTS if (PROJECT_ROOT / r).exists()]
+    return [PROJECT_ROOT / r for r in _DEFAULT_SCAN_ROOTS]
 
 
 def _compute_exit_code(*, ci: bool, strict_subprocess_timeout: bool, n_violations: int,
@@ -428,6 +447,13 @@ def main() -> int:
     scan_paths = _resolve_scan_paths(args)
     if not scan_paths:
         print("No paths to scan.", file=sys.stderr)
+        return EXIT_CALLER_ERROR
+    # A missing path scans zero files and would exit 0 — indistinguishable
+    # from a clean tree. Same rule as check_open_encoding.py (#1984, #2640).
+    missing = [p for p in dict.fromkeys(scan_paths) if not p.exists()]
+    if missing:
+        for p in missing:
+            print(f"ERROR: scan path does not exist: {p}", file=sys.stderr)
         return EXIT_CALLER_ERROR
 
     all_violations: list[TimeoutViolation] = []

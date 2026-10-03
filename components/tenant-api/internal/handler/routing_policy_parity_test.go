@@ -11,7 +11,7 @@ package handler
 //     matcher value the body writes that is not a YAML string, #2431, or a
 //     bad group_by element the body writes, #2503) and nothing written,
 //     "ok" = 200 and written.
-//   - batch: the patch as one op through executeBatchOps (direct mode) over
+//   - batch: the patch (and its unset, B2) as one op through executeBatchOps (direct mode) over
 //     the whole tree — "policy_violation" = the op is refused for domain
 //     policy, "ok" = it is not.
 //   - escalation (#2325), on the same PUT: a `violation` cell is refused
@@ -39,6 +39,7 @@ type tenantAPIParityCell struct {
 	Put   string `json:"put"`
 	Batch *struct {
 		Patch   map[string]string `json:"patch"`
+		Unset   []string          `json:"unset"` // B2 (#2341): the op's unset, when set
 		Verdict string            `json:"verdict"`
 	} `json:"batch"`
 }
@@ -200,8 +201,13 @@ func TestTenantAPI_RoutingPolicyParityMatrix(t *testing.T) {
 					t.Fatalf("unknown put verdict %q", want.TenantAPI.Put)
 				}
 				// #2325: the escalation cell, where tenant-api reads the
-				// policy at all (`_domain_policy.yaml` only).
-				if _, reads := tree.Files["_domain_policy.yaml"]; !reads {
+				// policy at all (a root `_domain_policy.yaml` / `.yml`, #2486).
+				reads := false
+				for _, name := range policy.FileNames {
+					_, has := tree.Files[name]
+					reads = reads || has
+				}
+				if !reads {
 					return
 				}
 				checkEscalationCell(t, tenantID, want.Escalation, want.TenantAPI.Put, resp)
@@ -215,14 +221,14 @@ func TestTenantAPI_RoutingPolicyParityMatrix(t *testing.T) {
 				configDir := seedGitTree(t, tree.Files)
 				d := &Deps{Writer: newTestWriter(configDir), ConfigDir: configDir, RBAC: adminRBAC(t),
 					Policy: policy.NewManager(configDir), WriteMode: WriteModeDirect}
-				patch, _ := json.Marshal(batch.Patch)
+				op, _ := json.Marshal(BatchOperation{TenantID: tenantID, Patch: batch.Patch, Unset: batch.Unset})
 				if batch.Verdict == "400" { // #2341: refused as an invalid patch value
-					if w := postTenantBatch(t, d, `[{"tenant_id":"`+tenantID+`","patch":`+string(patch)+`}]`); w.Code != http.StatusBadRequest {
+					if w := postTenantBatch(t, d, `[`+string(op)+`]`); w.Code != http.StatusBadRequest {
 						t.Errorf("status = %d, table says 400; body: %s", w.Code, w.Body.String())
 					}
 					return
 				}
-				resp := runBatch(t, configDir, d, `[{"tenant_id":"`+tenantID+`","patch":`+string(patch)+`}]`)
+				resp := runBatch(t, configDir, d, `[`+string(op)+`]`)
 				if len(resp.Results) != 1 {
 					t.Fatalf("results = %+v", resp.Results)
 				}

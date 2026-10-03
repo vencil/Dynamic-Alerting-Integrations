@@ -6,7 +6,8 @@
 在下面第 4 節。其餘六條在本檔各有一個 Test* class。
 
 涵蓋範圍: scripts/tools/ 全部 Python 檔案；⚠️ BOM 那一條例外，它掃全部 tracked
-`.py`（理由見下方 `_tracked_py` 上方的註解）。
+`.py`（理由見下方 `_tracked_py` 上方的註解），以及 `.md` / `.yaml` / `.yml` /
+`.json`（#2645，見 `_BOM_DATA_SUFFIXES` 上方；`.ps1` / `.bat` / `.cmd` 刻意不掃）。
 """
 
 import ast
@@ -15,6 +16,8 @@ import re
 import subprocess
 
 import pytest
+
+from _tree import repo_files
 
 # ── 掃描範圍 ──────────────────────────────────────────────────────────
 
@@ -56,6 +59,28 @@ _TRACKED_PY = _tracked_py()
 assert len(_TRACKED_PY) >= 400, (
     f"`git ls-files '*.py'` 只回了 {len(_TRACKED_PY)} 個檔，不像這個 repo 的清單；"
     "掃描面被截斷時，下面的『沒有檔案帶 BOM』會自己同意自己。"
+)
+
+
+# ── BOM 檢查的第二份語料：資料／文件檔（#2645）──────────────────────────
+# ⛔ 這幾種檔被「以 `startswith(...)` 判斷開頭」的掃描器讀：front-matter 偵測
+# 寫成 `source.startswith("---\n")`，帶 BOM 的檔在那一步就被當成「沒有
+# front-matter」整檔跳過，rc 0、不出聲（#2645 實測 scaffold_lint freshness 樣板
+# 產出的 lint：BOM 檔 rc 0、同內容無 BOM rc 1）。
+# ⛔ `.ps1` / `.bat` / `.cmd` **刻意不在這裡**：Windows 軌的編碼另有規範與守衛
+# （Windows PowerShell 5.1 讀非 ASCII 腳本需要 BOM），本規則不得替它們下判斷。
+# ⚠️ 用 `tests/_tree.py` 的 `repo_files()` 而不是 rglob：`.claude/worktrees`、
+# `node_modules` 裡的副本不是這棵樹（理由見該模組 docstring）。
+_BOM_DATA_SUFFIXES = (".md", ".yaml", ".yml", ".json")
+_BOM_EXEMPT_SUFFIXES = (".ps1", ".bat", ".cmd")
+_TRACKED_DATA = sorted(str(p) for p in repo_files(*_BOM_DATA_SUFFIXES))
+
+# ⛔ 下限寫成字面量，理由同 `_TRACKED_PY`。2026-10 實測 1247 個。
+_TRACKED_DATA_FLOOR = 1000
+assert len(_TRACKED_DATA) >= _TRACKED_DATA_FLOOR, (
+    f"`repo_files{_BOM_DATA_SUFFIXES}` 只回了 {len(_TRACKED_DATA)} 個檔"
+    f"（下限 {_TRACKED_DATA_FLOOR}），不像這個 repo 的清單；掃描面被截斷時，"
+    "下面的『沒有檔案帶 BOM』會自己同意自己。"
 )
 
 
@@ -110,7 +135,8 @@ def _short_path(path):
 
 
 class TestOpenEncoding:
-    """SAST 規則 1：原始碼不得帶 BOM（掃 `_TRACKED_PY`，理由見 `_tracked_py` 上方）。
+    """SAST 規則 1：原始碼不得帶 BOM（掃 `_TRACKED_PY`，理由見 `_tracked_py` 上方；
+    文件／資料檔掃 `_TRACKED_DATA`，理由見 `_BOM_DATA_SUFFIXES` 上方）。
 
     ⛔ 規則 1 的另一半「open() 必須帶 encoding」**不在本檔**：由 pre-commit
     `open-encoding-audit`（`scripts/tools/lint/check_open_encoding.py`）強制，
@@ -186,6 +212,32 @@ class TestOpenEncoding:
             "掃描器已不會因此靜默跳過：本模組其餘規則經 `_read_source` 剝掉"
             "它，`check_open_encoding` 與 `check_subprocess_timeout` 照直譯器"
             "的方式解碼（#2601）。修法：把它存成不帶 BOM 的 UTF-8。"
+        )
+
+
+    def test_data_and_doc_files_have_no_bom(self):
+        """`.md` / `.yaml` / `.yml` / `.json` 不得以 UTF-8 BOM 開頭（#2645）。
+
+        ⛔ 上面那條只管 `.py`。給 tracked `README.md` 加 BOM ⇒ 本模組整組
+        `-k bom` 照樣全綠——對文件與資料檔，BOM 原本完全沒有人管。
+        ⛔ 而它在這些檔上的症狀比 `.py` 更安靜：以 `startswith("---\\n")` 偵測
+        front-matter 的掃描器會把帶 BOM 的檔當成「沒有 front-matter」整檔跳過。
+        ⚠️ 一條測試收集全部違規一次報，而不是每檔一格 parametrize：一千多個
+        檔各一格只換來更長的收集時間，違規時要的資訊（哪幾個檔）一次就給齊。
+        ⚠️ `.ps1` / `.bat` / `.cmd` 不在範圍內，見 `_BOM_EXEMPT_SUFFIXES` 上方。
+        """
+        assert not any(p.endswith(_BOM_EXEMPT_SUFFIXES) for p in _TRACKED_DATA)
+        offenders = []
+        for path in _TRACKED_DATA:
+            with open(path, "rb") as handle:
+                if _starts_with_bom(handle.read(3)):
+                    offenders.append(_short_path(path))
+        assert not offenders, (
+            f"{len(offenders)} 個文件／資料檔以 UTF-8 BOM 開頭：\n  "
+            + "\n  ".join(offenders)
+            + "\n以 `startswith(...)` 判斷檔頭的掃描器（例如 front-matter 的 "
+            "`---` 偵測）會把這些檔當成沒有檔頭而整檔跳過，不出聲（#2645）。"
+            "修法：把它們存成不帶 BOM 的 UTF-8。"
         )
 
 

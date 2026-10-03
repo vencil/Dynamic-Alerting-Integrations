@@ -30,11 +30,8 @@
 # ⚠️ It cannot stop `pre-commit install -f --hook-type pre-push`, which DELETES
 #   pre-push.legacy silently (rc=0, no mention). That is what preflight is for.
 #
-# Measurements behind all of the above: #1689 and this commit's message.
-
 set -uo pipefail
 
-MARKER="vibe-prepush-shim"
 CHAINED_NAME="pre-push.chained"
 
 say()  { printf '[install_prepush_hook] %s\n' "$1"; }
@@ -70,94 +67,6 @@ hooks="$(git rev-parse --git-path hooks 2>/dev/null)" || {
 hook="$hooks/pre-push"
 legacy="$hooks/pre-push.legacy"
 chained="$hooks/$CHAINED_NAME"
-
-# ⛔ Bash builtins only — no `grep`. `$(<file)` is a redirection, not a command,
-# so these keep working when PATH carries nothing but the interpreter.
-contains() {   # $1 = file, $2 = needle
-    [ -f "$1" ] || return 1
-    local body
-    body="$(<"$1")" || return 1
-    case "$body" in (*"$2"*) return 0 ;; esac
-    return 1
-}
-is_ours()      { contains "$1" "$MARKER"; }
-is_precommit() { contains "$1" "--hook-type=pre-push"; }
-# ⛔ A hook byte-identical to a committed version of one of our guards is a
-# single-file install from before #1689. It cannot run outside scripts/ops/, so
-# chaining it keeps every push failing; the dispatcher already runs what it
-# duplicates. Identity, not content: a hook of the user's own that happens to
-# source the helper must still be chained. Removing an identical copy loses
-# nothing, since git holds the same blob.
-guard_blobs="$(git -C "$root" log --all --no-renames --format= --raw --no-abbrev -- \
-    scripts/ops/protect_main_push.sh scripts/ops/require_preflight_pass.sh \
-    scripts/ops/pre_push_mkdocs_strict.sh 2>/dev/null)"
-is_guard_copy() {
-    [ -f "$1" ] || return 1
-    local id
-    id="$(git hash-object -- "$1" 2>/dev/null)" || return 1
-    case "$guard_blobs" in (*" $id "*) return 0 ;; esac
-    return 1
-}
-
-# Move a foreign hook into the chained slot. Fails loudly: a silent failure here
-# means either that hook stops running or ours never installs.
-stash_foreign() {   # $1 = path to the foreign hook
-    if [ -e "$chained" ]; then
-        warn "⛔ refusing: $1 is not ours and $chained is already occupied."
-        warn "   Two different hooks want the chained slot. Resolve by hand:"
-        warn "   inspect both, keep one at $chained, then re-run."
-        return 1
-    fi
-    command -v mv >/dev/null 2>&1 || {
-        warn "⛔ \`mv\` is not on PATH, so the existing hook at $1 cannot be"
-        warn "   moved aside. Refusing rather than deleting it."
-        return 1
-    }
-    mv "$1" "$chained" || {
-        warn "⛔ could not move $1 to $chained"
-        return 1
-    }
-    say "moved the existing pre-push hook to $CHAINED_NAME; the dispatcher will keep running it"
-    return 0
-}
-
-# An earlier install chained a guard copy (this installer did, before it knew
-# better). Take it out of the slot, or the dispatcher keeps running it.
-if is_guard_copy "$chained"; then
-    command -v rm >/dev/null 2>&1 || {
-        warn "⛔ \`rm\` is not on PATH, so $chained, a copy of a pre-push guard"
-        warn "   that cannot run there, stays. Delete it by hand (git holds the same"
-        warn "   content), then re-run."
-        exit 1
-    }
-    rm -f "$chained" || {
-        warn "⛔ could not remove $chained, a copy of a pre-push guard that"
-        warn "   cannot run there. Delete it by hand, then re-run."
-        exit 1
-    }
-    say "removed $CHAINED_NAME: identical to a committed version of a guard, which only runs from scripts/ops/"
-fi
-
-target="$hook"
-replaced=""
-if is_ours "$hook" || is_guard_copy "$hook"; then
-    target="$hook"                       # refresh, or replace a guard copy
-elif is_precommit "$hook"; then
-    # pre-commit keeps the hook file; we take the slot it calls with the full
-    # stdin. If something else is already in that slot it is a real hook that
-    # pre-commit migrated — chain it rather than destroy it.
-    if [ -e "$legacy" ] && ! is_ours "$legacy" && ! is_guard_copy "$legacy"; then
-        stash_foreign "$legacy" || exit 1
-    fi
-    target="$legacy"
-elif [ -e "$hook" ]; then
-    stash_foreign "$hook" || exit 1
-fi
-
-if [ ! -d "$hooks" ]; then
-    command -v mkdir >/dev/null 2>&1 || { warn "⛔ no \`mkdir\` and $hooks does not exist"; exit 1; }
-    mkdir -p "$hooks" || exit 1
-fi
 
 # ⛔ `#!/usr/bin/env bash`, never an absolute interpreter path: when pre-commit
 # owns the hook it resolves this shebang itself, and an absolute one is not a
@@ -210,6 +119,103 @@ if [ ! -r "$_dispatch" ]; then
 fi
 exec bash "$_dispatch" "$@"
 VIBE_SHIM_EOF
+
+# ⛔ Identity by a WHOLE LINE equal to the generated header, never a substring:
+# a user's hook that mentions the shim or pre-commit's `--hook-type=pre-push`
+# in a comment is still a user's hook (#2617). Taken for pre-commit's, the shim
+# lands in pre-push.legacy, which that hook never calls; taken for ours, it is
+# overwritten. Any line, not a fixed one, and a trailing CR dropped: on Windows
+# pre-commit puts `#!/bin/sh` above its template and writes it CRLF.
+# Bash builtins only — `read` is one, so these keep working when PATH carries
+# nothing but the interpreter.
+has_line() {   # $1 = file, $2 = the line
+    [ -f "$1" ] || return 1
+    local line
+    while IFS= read -r line || [ -n "$line" ]; do
+        [ "${line%$'\r'}" = "$2" ] && return 0
+    done < "$1"
+    return 1
+}
+shim_header="${SHIM_BODY#*$'\n'}"
+shim_header="${shim_header%%$'\n'*}"
+is_ours()      { has_line "$1" "$shim_header"; }
+is_precommit() { has_line "$1" "# File generated by pre-commit: https://pre-commit.com"; }
+# ⛔ A hook byte-identical to a committed version of one of our guards is a
+# single-file install from before #1689. It cannot run outside scripts/ops/, so
+# chaining it keeps every push failing; the dispatcher already runs what it
+# duplicates. Identity, not content: a hook of the user's own that happens to
+# source the helper must still be chained. Removing an identical copy loses
+# nothing, since git holds the same blob.
+guard_blobs="$(git -C "$root" log --all --no-renames --format= --raw --no-abbrev -- \
+    scripts/ops/protect_main_push.sh scripts/ops/require_preflight_pass.sh \
+    scripts/ops/pre_push_mkdocs_strict.sh 2>/dev/null)"
+is_guard_copy() {
+    [ -f "$1" ] || return 1
+    local id
+    id="$(git hash-object -- "$1" 2>/dev/null)" || return 1
+    case "$guard_blobs" in (*" $id "*) return 0 ;; esac
+    return 1
+}
+
+# Move a foreign hook into the chained slot. Fails loudly: a silent failure here
+# means either that hook stops running or ours never installs.
+stash_foreign() {   # $1 = path to the foreign hook
+    if [ -e "$chained" ]; then
+        warn "⛔ refusing: $1 is not ours and $chained is already occupied."
+        warn "   Two different hooks want the chained slot. Resolve by hand:"
+        warn "   inspect both, keep one at $chained, then re-run."
+        return 1
+    fi
+    command -v mv >/dev/null 2>&1 || {
+        warn "⛔ \`mv\` is not on PATH, so the existing hook at $1 cannot be"
+        warn "   moved aside. Refusing rather than deleting it."
+        return 1
+    }
+    mv "$1" "$chained" || {
+        warn "⛔ could not move $1 to $chained"
+        return 1
+    }
+    say "moved $1 to $CHAINED_NAME; the dispatcher will keep running it"
+    return 0
+}
+
+# An earlier install chained a guard copy (this installer did, before it knew
+# better). Take it out of the slot, or the dispatcher keeps running it.
+if is_guard_copy "$chained"; then
+    command -v rm >/dev/null 2>&1 || {
+        warn "⛔ \`rm\` is not on PATH, so $chained, a copy of a pre-push guard"
+        warn "   that cannot run there, stays. Delete it by hand (git holds the same"
+        warn "   content), then re-run."
+        exit 1
+    }
+    rm -f "$chained" || {
+        warn "⛔ could not remove $chained, a copy of a pre-push guard that"
+        warn "   cannot run there. Delete it by hand, then re-run."
+        exit 1
+    }
+    say "removed $CHAINED_NAME: identical to a committed version of a guard, which only runs from scripts/ops/"
+fi
+
+target="$hook"
+replaced=""
+if is_ours "$hook" || is_guard_copy "$hook"; then
+    target="$hook"                       # refresh, or replace a guard copy
+elif is_precommit "$hook"; then
+    # pre-commit keeps the hook file; we take the slot it calls with the full
+    # stdin. If something else is already in that slot it is a real hook that
+    # pre-commit migrated — chain it rather than destroy it.
+    if [ -e "$legacy" ] && ! is_ours "$legacy" && ! is_guard_copy "$legacy"; then
+        stash_foreign "$legacy" || exit 1
+    fi
+    target="$legacy"
+elif [ -e "$hook" ]; then
+    stash_foreign "$hook" || exit 1
+fi
+
+if [ ! -d "$hooks" ]; then
+    command -v mkdir >/dev/null 2>&1 || { warn "⛔ no \`mkdir\` and $hooks does not exist"; exit 1; }
+    mkdir -p "$hooks" || exit 1
+fi
 
 # ⛔ A guard copy is replaced by `mv`, never written into: a hook symlinked or
 # hard-linked to a guard in scripts/ops is identical to it, and `>` would go

@@ -1,0 +1,5 @@
+{
+  "_generated": "GENERATED from docs/schemas/tenant-config.schema.json definitions.tenantId by gen_tenant_id_json.py \u2014 DO NOT EDIT. Run `make tenant-id-json`.",
+  "pattern": "^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?$",
+  "description": "Tenant id (ADR-035): a DNS-1123 label \u2014 1-63 characters of lowercase letters, digits and '-', starting and ending with a letter or digit."
+}

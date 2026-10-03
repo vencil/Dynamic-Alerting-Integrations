@@ -301,9 +301,10 @@ type TreeScan struct {
 
 	// RootWalkErr is the walk's error on the root directory itself (it could
 	// not be listed), nil otherwise. Not an Unreadable entry: the tree then
-	// holds no file, and LoadDir's "no .yaml files" already stops the load.
-	// A caller that accepts an empty tree (ScopeEffective's scoped mode)
-	// reads it to tell "empty" from "could not be listed" (#2588).
+	// holds no file, and the exporter's load stops on "no .yaml files". The
+	// readers that name unreadable paths (LoadDirReport, ScopeEffective) read
+	// it to tell "empty" from "could not be listed" and name the root as
+	// RootUnreadable (#2588, #2627).
 	RootWalkErr error
 
 	// attrib is every tenant's FIRST declaring file in walk order, recorded

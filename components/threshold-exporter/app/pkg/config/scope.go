@@ -113,6 +113,12 @@ type ScopedTenants struct {
 	// (LoadReport.Unreadable) over the whole tree; nil when there are none
 	// (#2588). A symlink to a directory is not listed.
 	//
+	// A scope ScopeEffective may not stat (permission denied — e.g. under a
+	// directory the process may not search) is listed here too, as its own
+	// root-relative path with UnreadableStatError, beside the walk_error of
+	// the directory that hides it when the walk recorded one (#2627). A
+	// scope that does not exist is still an error.
+	//
 	// ⛔ Not an error, like ParseFailed and for the same reason: the walker
 	// skips the entry and serves the rest. Tenants silently omits the tenants
 	// such a file declares, and an effective config silently lacks what an
@@ -125,6 +131,13 @@ type ScopedTenants struct {
 	// ones. Every other error returns a nil result.
 	Unreadable []UnreadableFile
 
+	// RootListErr is set when configDir itself cannot be read (#2627): the
+	// walk could not list it (Unreadable then holds RootUnreadable) or the
+	// process may not stat it (RootStatUnreadable). The error names
+	// configDir and the reason (e.g. permission denied), for the caller to
+	// print. Tenants is then empty. nil otherwise.
+	RootListErr error
+
 	// NestedPlatformFiles is every `_` file below the root that is not a
 	// defaults carrier spelling (confdname.IsDefaults) and bears on the
 	// scope, with the bytes the scan read, sorted by Name (#2439). The
@@ -132,6 +145,18 @@ type ScopedTenants struct {
 	// one in ParseFailed; da-guard checks them for the repeated keys the
 	// route generator refuses (withGeneratorDuplicates).
 	NestedPlatformFiles []DefaultsFile
+
+	// Undeliverable is, for each tenant in Tenants, the sorted keys
+	// (filtered by undeliverableThresholds, the same filter as
+	// LoadReport.Undeliverable) it inherits from a subtree `_defaults.yaml`
+	// that the exporter's own build of this tree cannot deliver
+	// (FlatBuild.Unreachable, the map the exporter logs as an ERROR and
+	// counts on da_config_subtree_undeliverable_tenants): the root
+	// `_defaults.yaml` and `optional_overrides:` do not declare the key, so
+	// /metrics never carries it although the tenant's effective config shows
+	// it. Only in-scope tenants are listed;
+	// nil when there is none (#1976).
+	Undeliverable map[string][]string
 }
 
 // DefaultsFile is one defaults carrier of a scan: its root-relative slash
@@ -152,7 +177,12 @@ type DefaultsFile struct {
 // defaults to configDir (whole tree).
 //
 // Errors:
-//   - configDir doesn't exist or isn't a directory.
+//   - configDir or scopeDir is a wrong path (StatErrIsWrongPath: does not
+//     exist, a component is not a directory, a symlink loop) or isn't a
+//     directory. A configDir or scopeDir whose stat fails otherwise (e.g.
+//     permission denied) is NOT an error: it is listed in
+//     ScopedTenants.Unreadable ("." for configDir) and holds no tenant
+//     (#2627) — a path that cannot be read, not a path that is wrong.
 //   - scopeDir lies outside configDir (security guard against
 //     `--scope ../etc/passwd`).
 //   - a tenant ID under the scope is defined in two different files
@@ -206,7 +236,14 @@ func scopeEffective(configDir, scopeDir string, wholeTree bool) (*ScopedTenants,
 	absRoot := AbsScanRoot(configDir)
 	info, err := os.Stat(absRoot)
 	if err != nil {
-		return nil, fmt.Errorf("stat configDir %q: %w", absRoot, err)
+		statErr := fmt.Errorf("stat configDir %q: %w", absRoot, err)
+		if StatErrIsWrongPath(err) {
+			return nil, statErr
+		}
+		// A configDir the process may not stat (e.g. under a directory it
+		// may not search) is a path it cannot read, not a wrong one (#2627):
+		// no tenant, the root named in Unreadable (the caller's exit 3).
+		return &ScopedTenants{Unreadable: []UnreadableFile{RootStatUnreadable}, RootListErr: statErr}, nil
 	}
 	if !info.IsDir() {
 		return nil, fmt.Errorf("configDir %q is not a directory", absRoot)
@@ -224,20 +261,18 @@ func scopeEffective(configDir, scopeDir string, wholeTree bool) (*ScopedTenants,
 	// ⛔ A root the walk cannot list is not an empty tree (#2588). The walker
 	// records no Unreadable entry for the root itself (TreeScan.RootWalkErr),
 	// so the scoped mode — where an empty tree is a valid, vacuously-safe
-	// scope — would read it as "nothing in scope". Refuse it, as the
-	// exporter's load does. Checked BEFORE the whole-tree "no .yaml files"
-	// refusal, so an unlistable root is reported with the walk's error
-	// (e.g. permission denied) in the scoped and the whole-tree mode alike.
-	if len(scan.Files) == 0 && scan.RootWalkErr != nil {
-		return nil, fmt.Errorf("cannot list configDir %q: %w", absRoot, scan.RootWalkErr)
-	}
+	// scope — would read it as "nothing in scope". It is a path that cannot
+	// be read (#2627): it goes on with no tenant, the root named in
+	// Unreadable as RootUnreadable (the caller's exit 3) and the walk's error
+	// in RootListErr, in the scoped and the whole-tree mode alike.
+	rootUnlistable := len(scan.Files) == 0 && scan.RootWalkErr != nil
 	// A tree the walk kept no file from because every config file is
 	// unreadable, or because its only entries are directories it cannot list,
 	// is not "no .yaml files" either: it goes on with no tenant and its
 	// Unreadable entries named (the caller's exit 3), as when one readable
 	// file is beside them (#2588).
-	if wholeTree && len(scan.Files) == 0 && len(scan.Unreadable) == 0 {
-		return nil, fmt.Errorf("no .yaml files found in %s", configDir)
+	if wholeTree && !rootUnlistable && len(scan.Files) == 0 && len(scan.Unreadable) == 0 {
+		return nil, fmt.Errorf("%w in %s", ErrNoYAMLFiles, configDir)
 	}
 
 	// ⛔ The scope is symlink-resolved exactly like the root. Comparing a
@@ -253,7 +288,7 @@ func scopeEffective(configDir, scopeDir string, wholeTree bool) (*ScopedTenants,
 		if !filepath.IsAbs(s) {
 			s = filepath.Join(configDir, s)
 		}
-		absScope = AbsScanRoot(s)
+		absScope = resolveScopePath(s)
 	}
 
 	// Containment check. filepath.Rel produces "../" when scope
@@ -266,8 +301,17 @@ func scopeEffective(configDir, scopeDir string, wholeTree bool) (*ScopedTenants,
 		return nil, fmt.Errorf(
 			"scopeDir %q is outside configDir %q", absScope, absRoot)
 	}
+	// A scope the process may not stat is unreadable, not wrong (#2627): it
+	// goes on with no tenant and is named in Unreadable (the caller's exit 3),
+	// as a scope the walk could not list already is. The split is
+	// StatErrIsWrongPath's: a scope that does not exist (or names a file on
+	// the way, or loops) stays the caller's error.
+	var scopeStatDenied bool
 	if scopeInfo, err := os.Stat(absScope); err != nil {
-		return nil, fmt.Errorf("stat scopeDir %q: %w", absScope, err)
+		if StatErrIsWrongPath(err) {
+			return nil, fmt.Errorf("stat scopeDir %q: %w", absScope, err)
+		}
+		scopeStatDenied = true
 	} else if !scopeInfo.IsDir() {
 		return nil, fmt.Errorf("scopeDir %q is not a directory", absScope)
 	}
@@ -287,15 +331,24 @@ func scopeEffective(configDir, scopeDir string, wholeTree bool) (*ScopedTenants,
 			inScope[id] = struct{}{}
 		}
 	}
-	parseFailed, err := scopeParseFailed(scan, filepath.ToSlash(rel))
+	parseFailed, unreachable, err := scopeParseFailed(scan, filepath.ToSlash(rel))
 	if err != nil {
 		return nil, err
 	}
 	defaultsFiles := scopeDefaultsFiles(scan, filepath.ToSlash(rel))
 	unreadable := scopeUnreadable(scan, filepath.ToSlash(rel))
+	if scopeStatDenied {
+		unreadable = withUnreadable(unreadable, UnreadableFile{RelKey: filepath.ToSlash(rel), Reason: UnreadableStatError})
+	}
+	var rootListErr error
+	if rootUnlistable {
+		unreadable = withUnreadable(unreadable, RootUnreadable)
+		rootListErr = fmt.Errorf("cannot list configDir %q: %w", absRoot, scan.RootWalkErr)
+	}
 	nestedFiles := scopeNestedPlatformFiles(scan, filepath.ToSlash(rel))
 	if len(inScope) == 0 {
-		return &ScopedTenants{ParseFailed: parseFailed, DefaultsFiles: defaultsFiles, Unreadable: unreadable, NestedPlatformFiles: nestedFiles}, nil
+		return &ScopedTenants{ParseFailed: parseFailed, DefaultsFiles: defaultsFiles, Unreadable: unreadable,
+			NestedPlatformFiles: nestedFiles, RootListErr: rootListErr}, nil
 	}
 
 	// Sort tenant IDs for deterministic output. The CLI's exit-code
@@ -319,6 +372,15 @@ func scopeEffective(configDir, scopeDir string, wholeTree bool) (*ScopedTenants,
 		DefaultsFiles:       defaultsFiles,
 		Unreadable:          unreadable,
 		NestedPlatformFiles: nestedFiles,
+	}
+	// The build's verdict, kept for the in-scope tenants only (#1976).
+	for _, id := range tenantIDs {
+		if keys := unreachable[id]; len(keys) > 0 {
+			if out.Undeliverable == nil {
+				out.Undeliverable = map[string][]string{}
+			}
+			out.Undeliverable[id] = keys
+		}
 	}
 	seenFiles := make(map[string]struct{}, len(tenantIDs))
 	for _, id := range tenantIDs {
@@ -370,9 +432,15 @@ func scopeEffective(configDir, scopeDir string, wholeTree bool) (*ScopedTenants,
 // tree). A dropped file bears on the scope when it lies at-or-below it, or it
 // is a `_` file in a directory above it (the root's platform files, a chain
 // `_defaults.yaml`) — those shape every tenant under the scope.
-func scopeParseFailed(scan *TreeScan, scopeRel string) ([]string, error) {
+//
+// unreachable is the threshold keys of the same build's unreachable set
+// (undeliverableThresholds over FlatBuild.UnreachableValues: tenantID → the
+// inherited subtree threshold keys it cannot deliver), over the whole tree; the caller
+// keeps the in-scope tenants (ScopedTenants.Undeliverable, #1976). One build
+// answers both, so the two cannot come from different readings of the tree.
+func scopeParseFailed(scan *TreeScan, scopeRel string) (parseFailed []string, unreachable map[string][]string, err error) {
 	if len(scan.Files) == 0 {
-		return nil, nil // the exporter refuses an empty tree; nothing was dropped
+		return nil, nil, nil // the exporter refuses an empty tree; nothing was dropped
 	}
 	// ⚠️ log.Printf, not discardLogger, for the profile WARNs (#2513): they
 	// reached the process log here before the build took its logger for them,
@@ -380,16 +448,15 @@ func scopeParseFailed(scan *TreeScan, scopeRel string) ([]string, error) {
 	// an unknown profile is named (the report does not list it).
 	built, err := loadDirBuild(scan, scan.AbsRoot, discardLogger, log.Printf)
 	if err != nil {
-		return nil, err
+		return nil, nil, err
 	}
-	var out []string
 	for _, key := range built.ParseFailed {
 		if bearsOnScope(key, scopeRel) {
-			out = append(out, key)
+			parseFailed = append(parseFailed, key)
 		}
 	}
-	sort.Strings(out)
-	return out, nil
+	sort.Strings(parseFailed)
+	return parseFailed, unreachableKeys(undeliverableThresholds(built.UnreachableValues)), nil
 }
 
 // scopeDefaultsFiles is ScopedTenants.DefaultsFiles: the selected carrier of
@@ -433,6 +500,57 @@ func scopeUnreadable(scan *TreeScan, scopeRel string) []UnreadableFile {
 			out = append(out, u)
 		}
 	}
+	return out
+}
+
+// RootUnreadable is the Unreadable entry for a configDir the walk could not
+// list at all (TreeScan.RootWalkErr): the root's own root-relative path "."
+// with UnreadableWalkError — everything under it is lost (#2627).
+var RootUnreadable = UnreadableFile{RelKey: ".", Reason: UnreadableWalkError}
+
+// RootStatUnreadable is the Unreadable entry for a configDir the process may
+// not even stat (e.g. under a directory it may not search): "." with
+// UnreadableStatError (#2627).
+var RootStatUnreadable = UnreadableFile{RelKey: ".", Reason: UnreadableStatError}
+
+// resolveScopePath is AbsScanRoot for --scope, resolving symlinks as far as
+// the path can be resolved: the longest leading part EvalSymlinks resolves,
+// with the rest joined to it as written. AbsScanRoot falls back to the path
+// as given when resolution fails (e.g. EACCES below a symlink), and the
+// containment check then compares only the spelling: `a -> <outside>/locked`
+// made `--scope a/b` read as an unreadable path inside the tree, while the
+// exporter never follows a directory symlink (#2627). Resolving the leading
+// part puts such a scope outside configDir, as `--scope a` already is. A path
+// that resolves whole is AbsScanRoot's answer.
+func resolveScopePath(s string) string {
+	p := filepath.Clean(s)
+	if abs, err := filepath.Abs(s); err == nil {
+		p = filepath.Clean(abs)
+	}
+	rest := ""
+	for {
+		if r, err := filepath.EvalSymlinks(p); err == nil {
+			return filepath.Join(r, rest)
+		}
+		parent := filepath.Dir(p)
+		if parent == p {
+			return filepath.Join(p, rest)
+		}
+		rest = filepath.Join(filepath.Base(p), rest)
+		p = parent
+	}
+}
+
+// withUnreadable is us plus u, kept sorted by RelKey (the walk's order); u is
+// not added again when us already names its path.
+func withUnreadable(us []UnreadableFile, u UnreadableFile) []UnreadableFile {
+	for _, have := range us {
+		if have.RelKey == u.RelKey {
+			return us
+		}
+	}
+	out := append(append([]UnreadableFile(nil), us...), u)
+	sort.SliceStable(out, func(i, j int) bool { return out[i].RelKey < out[j].RelKey })
 	return out
 }
 

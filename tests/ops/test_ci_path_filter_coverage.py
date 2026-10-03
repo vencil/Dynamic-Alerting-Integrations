@@ -2187,10 +2187,6 @@ TRACED_INDIRECT_INPUTS = {
     # deleting a line is as fatal as adding one.
     ("docs-ci.yaml", "docs", "scripts/tools/lint/mkdocs-anchor-debt.txt"),
     ("docs-ci.yaml", "docs", "components/threshold-exporter/README.md"),
-    # mkdocs-build: the `hooks:` entry in mkdocs.yml runs this on every build.
-    # Found by the #2079 strace sweep, the one uncovered direct read no other
-    # pre-merge check backs up.
-    ("docs-ci.yaml", "docs", "scripts/mkdocs/rule_packs_bridge.py"),
     # drift-checks → check_cli_contract.py: its contract source (entrypoint.py's
     # COMMAND_MAP / PROMETHEUS_COMMANDS), its ledger, and the three landing
     # pages it scans outside docs/ — all reached through validate_all.py's
@@ -2273,6 +2269,33 @@ def test_traced_indirect_inputs_remain_covered() -> None:
         "re-derive them — they exist only because someone measured what those "
         "scripts read. Losing one restores the exact skip-as-green gap this "
         "file is about, silently:\n  " + "\n  ".join(problems))
+
+
+def test_docs_filter_covers_every_mkdocs_hook() -> None:
+    """`mkdocs-build` executes every `hooks:` entry on every build. A hook the
+    `docs` filter misses lets a PR that breaks only that hook pass with the
+    build skipped (#2632). DERIVED from `hooks:`, so a new hook is checked
+    without anyone adding a line here.
+
+    `BaseLoader`: `mkdocs.yml` carries tags (`!!python/name:`, mkdocs' `!ENV`)
+    `safe_load` refuses; read as plain strings, `hooks:` is unaffected.
+    """
+    config = yaml.load((ROOT / "mkdocs.yml").read_text(encoding="utf-8"),
+                       Loader=yaml.BaseLoader)
+    hooks = config.get("hooks")
+    assert hooks, (
+        "mkdocs.yml declares no `hooks:`, so this loop checks nothing. If the "
+        "hooks were genuinely removed, delete this test with them.")
+    patterns = _workflow_filters(
+        ROOT / ".github" / "workflows" / "docs-ci.yaml")["docs"]
+    problems = []
+    for hook in hooks:
+        if not _is_tracked_file(hook):
+            problems.append(f"{hook} is not a tracked file")
+        elif not any(_covers(p, hook) for p in patterns):
+            problems.append(f"docs-ci.yaml `docs` does not cover {hook}")
+    assert not problems, "\n  ".join(["mkdocs hooks a PR could break with "
+                                       "`mkdocs-build` skipped:", *problems])
 
 
 def _all_gated_legs() -> dict[tuple[str, str], Path]:
@@ -3435,6 +3458,7 @@ PORTAL_ENTRIES_THIS_SCANNER_JUSTIFIES = {
     "rule-packs/threshold-registry.yaml", "rule-packs/ALERT-REFERENCE.md",
     "components/tenant-api/internal/rbac/testdata/wizard/**",
     "helm/**", "components/threshold-exporter/app/pkg/config/types.go",
+    "components/threshold-exporter/app/pkg/tenantid/testdata/tenant_id_cases.json",
 }
 GATED_ENTRIES_THIS_SCANNER_JUSTIFIES = {
     # ⛔ Keyed by (FILTER, pattern), and note which filter each falls under —

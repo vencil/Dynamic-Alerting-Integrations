@@ -66,6 +66,10 @@ sys.path.insert(0, _THIS_DIR)  # Docker flat layout
 sys.path.insert(0, os.path.join(_THIS_DIR, ".."))  # Repo subdir layout
 from _lib_exitcodes import EXIT_OK, EXIT_VIOLATION, EXIT_CALLER_ERROR  # noqa: E402
 from _lib_compat import try_utf8_stdout  # noqa: E402
+# `../lint` 取 decode_python_source——依直譯器方式解碼（BOM / PEP 263
+# cookie），與 AST lint 共用同一份，不另抄第三份（#2641）。
+sys.path.insert(0, os.path.join(_THIS_DIR, "..", "lint"))
+from _lint_helpers import decode_python_source  # noqa: E402
 
 REPO_ROOT = Path(_THIS_DIR).resolve().parents[2]
 DEFAULT_RULES_PATH = Path(_THIS_DIR) / "verify_diff_rules.yaml"
@@ -414,10 +418,13 @@ def build_map(repo_root: Path) -> dict:
     parse_errors = []
 
     for rel in tests_scanned:
-        src = (repo_root / rel).read_text(encoding="utf-8", errors="replace")
+        # 依直譯器方式解碼（#2641）：read_text("utf-8") 會把開頭 BOM 留成
+        # U+FEFF，ast.parse(str) 拒收，於是一支 pytest 收得到的測試檔從映射
+        # 消失——--dry-run/--run 下不被選中、--check 下誤報解析失敗。
         try:
+            src = decode_python_source((repo_root / rel).read_bytes())
             tree = ast.parse(src, filename=rel)
-        except SyntaxError:
+        except (SyntaxError, UnicodeDecodeError, ValueError):
             parse_errors.append(rel)
             continue
         for name in _extract_imports(tree):

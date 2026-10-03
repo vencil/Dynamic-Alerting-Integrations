@@ -67,7 +67,8 @@ type servedValuesDoc struct {
 	// the tenants they hold are absent from Tenants; the exit code is 3, as
 	// for ParseFailed, so a caller that does not know this field fails too
 	// (#2115). A symlink to a directory is not listed. Always present ([]
-	// when none).
+	// when none). When every config file of the tree is unreadable, the
+	// document still comes out, with no tenant and those files here (#2627).
 	Unreadable []skippedFile                 `json:"unreadable"`
 	Tenants    map[string]servedTenantValues `json:"tenants"`
 }
@@ -88,7 +89,15 @@ type servedTenantValues struct {
 	Severities map[string]string `json:"severities"`
 	// Unserved: keys of the tenant's merged config with no entry in Values
 	// (switched off, or served by nothing), keyed as the merged config spells
-	// them, value as written.
+	// them, value as written — plus the threshold keys the tenant inherits
+	// from a subtree `_defaults.yaml` that the exporter's build cannot
+	// deliver (config.LoadReport.Undeliverable, #1976; reserved keys, keys
+	// the exporter never serves as a row and switched-off keys are not
+	// included): the build leaves them out of the tenant's map, so the merged
+	// config does not carry them, but the tenant's effective config shows
+	// them. Keyed as that defaults file spells them; the value is NOT as
+	// written but the build's normalised rendering of the deepest level that
+	// writes the key in a threshold shape (a YAML `1e6` is "1e+06").
 	Unserved map[string]any `json:"unserved"`
 	// Dropped: keys the resolver produced a row for but whose series the
 	// exporter cannot build (client_golang rejects the label set), so
@@ -157,18 +166,32 @@ func runServedValues(args []string, stdout, errOut io.Writer) int {
 	}
 
 	cfg, rep, err := config.LoadDirReport(f.configDir, log.New(errOut, "", 0))
-	if err != nil {
+	// A tree whose every config file is unreadable is not "no .yaml files"
+	// (#2627): the exporter serves nothing from it, so the document carries
+	// no tenant and names the files in unreadable (exit 3), as effective and
+	// the guard do on the same tree — a --config-dir the walk cannot list
+	// too, named as "." (walk_error). Only a tree with no config file at all
+	// keeps the refusal (exit 2).
+	allUnreadable := errors.Is(err, config.ErrNoYAMLFiles) && len(rep.Unreadable) > 0
+	if err != nil && !allUnreadable {
 		fmt.Fprintf(errOut, "%s %s: %v\n", programName, servedValuesCmd, err)
 		return exitCallerErr
 	}
-	if err := checkUTF8(cfg); err != nil {
-		fmt.Fprintf(errOut, "%s %s: %v\n", programName, servedValuesCmd, err)
-		return exitCallerErr
+	if rep.RootListErr != nil {
+		// The reason; the root itself is named in unreadable as "." (#2627).
+		fmt.Fprintf(errOut, "%s %s: %v\n", programName, servedValuesCmd, rep.RootListErr)
 	}
-	tenants, err := servedValues(cfg, at)
-	if err != nil {
-		fmt.Fprintf(errOut, "%s %s: %v\n", programName, servedValuesCmd, err)
-		return exitCallerErr
+	tenants := map[string]servedTenantValues{}
+	if !allUnreadable {
+		if err := checkUTF8(cfg); err != nil {
+			fmt.Fprintf(errOut, "%s %s: %v\n", programName, servedValuesCmd, err)
+			return exitCallerErr
+		}
+		tenants, err = servedValues(cfg, at, rep.Undeliverable)
+		if err != nil {
+			fmt.Fprintf(errOut, "%s %s: %v\n", programName, servedValuesCmd, err)
+			return exitCallerErr
+		}
 	}
 	parseFailed := rep.ParseFailed
 	if parseFailed == nil {
@@ -304,8 +327,11 @@ func joinPath(path, name string) string {
 	return path + "." + name
 }
 
-// servedValues reads every tenant of cfg at `at`.
-func servedValues(cfg *config.ThresholdConfig, at time.Time) (map[string]servedTenantValues, error) {
+// servedValues reads every tenant of cfg at `at`. undeliverable is the same
+// load's LoadReport.Undeliverable; its keys go to Unserved.
+func servedValues(cfg *config.ThresholdConfig, at time.Time,
+	undeliverable map[string]map[string]config.ScheduledValue,
+) (map[string]servedTenantValues, error) {
 	ownedBy, droppedBy, res, err := keyedRows(cfg, at)
 	if err != nil {
 		return nil, err
@@ -416,6 +442,23 @@ func servedValues(cfg *config.ThresholdConfig, at time.Time) (map[string]servedT
 			if _, served := tv.Values[canon]; served && !shadowed {
 				continue
 			}
+			tv.Unserved[k] = rawScheduledValue(sv)
+		}
+		// #1976: the build's own verdict (LoadReport.Undeliverable:
+		// FlatBuild.Unreachable minus what undeliverableThresholds leaves
+		// out), never re-judged here. Invariant, so no membership check: such
+		// a key is in neither Unserved nor Values. Not in Unserved — Unserved
+		// above comes from the tenant's merged map, and the build judges only
+		// keys the tenant's map lacks under every spelling
+		// (tenantAuthoredThreshold; a platform `tenants:` entry or a profile
+		// is already in that map) and writes no refused key into it. Not in
+		// Values — the non-row entries of Values are reserved keys
+		// (`_metadata`, `_state_<filter>`, `_silent_mode`, …), all of which
+		// IsReservedKey accepts and the filter removes; and a key reaches
+		// Values as a threshold only by owning a /metrics row, which needs the
+		// key, its canonical or its legacy spelling declared at the root or in
+		// `optional_overrides:` — exactly what made the build refuse it.
+		for k, sv := range undeliverable[tenant] {
 			tv.Unserved[k] = rawScheduledValue(sv)
 		}
 		out[tenant] = tv

@@ -39,6 +39,7 @@ import (
 	"log/slog"
 	"net/http"
 	"strconv"
+	"strings"
 
 	"github.com/go-chi/chi/v5/middleware"
 	"github.com/vencil/tenant-api/internal/confd"
@@ -376,13 +377,76 @@ func WriteValidationErrors(w http.ResponseWriter, r *http.Request, violations []
 // violations. The pre-PR-9 shape included a `help` URL and an
 // actionable `action` string; both preserved.
 func writePolicyViolation(w http.ResponseWriter, r *http.Request, violations []policy.Violation) {
-	WriteErrorEnvelope(w, r, http.StatusForbidden, ErrorResponse{
-		Error:   "domain policy violation",
+	WriteErrorEnvelope(w, r, http.StatusForbidden, policyViolationEnvelope("domain policy violation", violations))
+}
+
+// policyViolationEnvelope is the 403 POLICY_VIOLATION body shared by
+// writePolicyViolation and writeFreshBasePolicyViolation.
+func policyViolationEnvelope(msg string, violations []policy.Violation) ErrorResponse {
+	return ErrorResponse{
+		Error:   msg,
 		Code:    CodePolicyViolation,
 		PolicyV: violations,
 		Help:    "https://github.com/vencil/vibe-k8s-lab/blob/main/docs/internal/test-coverage-matrix.md",
 		Action:  "Review the _domain_policy.yaml constraints for this tenant's domain. Contact a platform admin to update the policy if this change is necessary.",
-	})
+	}
+}
+
+// freshBasePolicyError is a PR-mode write the domain policy refuses on the
+// FRESH base the feature branch is cut from, after the pre-check on the pod's
+// local tree let it through: a batch op (B2 F1, #2341) or a PUT (Put, #2486).
+// Op is a batch op's index in the request (for /groups/{id}/batch, the
+// member's index in the expansion); a PUT has none.
+//
+// LoadErr set: the base's domain policy file could not be read or parsed,
+// so the write could not be judged and is refused (fail-closed).
+type freshBasePolicyError struct {
+	TenantID   string
+	Op         int
+	Put        bool
+	Violations []policy.Violation
+	LoadErr    error
+}
+
+func (e *freshBasePolicyError) Error() string {
+	subject := fmt.Sprintf("operations[%d] (tenant %s)", e.Op, e.TenantID)
+	check, nothing := "the per-operation check", "Nothing in this batch was written and no PR/MR was opened"
+	if e.Put {
+		subject = fmt.Sprintf("the configuration of tenant %s", e.TenantID)
+		check, nothing = "the first check", "Nothing was written and no PR/MR was opened"
+	}
+	if e.LoadErr != nil {
+		// Fixed text: LoadErr names the server's conf.d path, which only the
+		// server log may see (writeFreshBasePolicyViolation logs it).
+		return fmt.Sprintf("the domain policy file (_domain_policy.yaml or .yml) on the latest base branch cannot be loaded, "+
+			"so %s cannot be judged against it. %s; repair the policy file on the base branch.",
+			subject, nothing)
+	}
+	msgs := make([]string, len(e.Violations))
+	for i, v := range e.Violations {
+		msgs[i] = v.Message
+	}
+	return fmt.Sprintf("domain policy violation on the latest base branch: %s would break it: %s. "+
+		"This server's local config is behind the base branch, so %s did not catch it. %s.",
+		subject, strings.Join(msgs, "; "), check, nothing)
+}
+
+func (e *freshBasePolicyError) Unwrap() error { return gitops.ErrMergePolicyRefused }
+
+// writeFreshBasePolicyViolation answers a freshBasePolicyError with the
+// same 403 POLICY_VIOLATION envelope as writePolicyViolation, naming the
+// tenant and, for a batch, the op.
+func writeFreshBasePolicyViolation(w http.ResponseWriter, r *http.Request, e *freshBasePolicyError) {
+	if e.LoadErr != nil {
+		slog.Error("PR write refused: domain policy on the fresh base cannot be loaded",
+			"tenant", e.TenantID, "error", e.LoadErr)
+	}
+	env := policyViolationEnvelope(e.Error(), e.Violations)
+	env.Extra = map[string]any{"tenant_id": e.TenantID}
+	if !e.Put {
+		env.Extra["operation"] = e.Op
+	}
+	WriteErrorEnvelope(w, r, http.StatusForbidden, env)
 }
 
 // forgeDegradedRetryAfterS is the coarse Retry-After hint (seconds) on the 503

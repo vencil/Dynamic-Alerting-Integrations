@@ -47,7 +47,7 @@ Renovate（repo 根目錄 `renovate.json`，由 `.github/workflows/renovate.yaml
 | Runner OS | 各 workflow job 的 `runs-on`（全部同值） | `.devcontainer/devcontainer.json` 的 base `image` tag | `tests/shared/test_toolchain_pin_parity.py`（runner） |
 | Node.js | `.devcontainer/devcontainer.json` node feature `version`（major） | 每個 `actions/setup-node` 的 `node-version`（ci.yml portal、playwright.yml ×2、visual-baseline.yaml、commitlint.yaml、docs-ci.yaml）；Makefile `test-e2e` 說明 | 同上（node） |
 | Python | `.devcontainer/devcontainer.json` python feature `version` | 每個 `actions/setup-python` 的 `python-version`（含 `${{ matrix.python }}` 展開後的值）；`requirements/ci-constraints.txt` 的版本是對這個 Python 解的 | 同上（python） |
-| Go | 各 module 的 `go.mod` | Dockerfile builder、devcontainer go feature、CI `setup-go`（`go-version-file`）皆從它對齊 | 另一支 PR 補守衛 |
+| Go | 各 module 的 `go.mod` | Dockerfile builder、devcontainer go feature、CI `setup-go`（`go-version-file`）皆從它對齊；pre-commit `go-fmt` hook 用 PATH 上的 `gofmt`，不另釘版：在 devcontainer 內即 go feature 那一版；在主機上是主機裝的任意版本（PATH 上沒有 `gofmt` 時改用 `go env GOROOT` 底下那支），不保證與 go.mod 同版 | 另一支 PR 補守衛 |
 | golangci-lint | `.github/workflows/validate.yaml` `GOLANGCI_VERSION` | devcontainer go feature `golangciLintVersion`（⛔ 不帶 `v`） | `tests/ops/test_go_lint_module_coverage.py` |
 | Trivy | `Makefile` `TRIVY_VERSION` | 每個 `aquasecurity/trivy-action` 步驟的 `version:`（release.yaml、component-docker-build.yaml、nightly-image-scan.yaml）；`.devcontainer/install-trivy.sh`（`TRIVY_VERSION` + `TRIVY_SHA256`） | `test_toolchain_pin_parity.py`（trivy） |
 | Helm（全 repo） | devcontainer kubectl-helm-minikube feature `helm` | 每個 `azure/setup-helm` 的 `version:`（ci.yml Python Tests／Coverage／federation-e2e、release.yaml ×4） | `test_toolchain_pin_parity.py`（helm） |

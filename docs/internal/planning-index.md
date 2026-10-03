@@ -27,7 +27,7 @@ lang: zh
 | `TRK-010` | dx | TRK-010: Flake 自動重試 CI Policy（不是盲目全域 retry） | ci | — | [docs/internal/dx-tooling-backlog.md](../internal/dx-tooling-backlog.md) |
 | `TRK-336` | dx | TRK-336: 補齊本地 gate 覆蓋（CI-only / 單邊 gate 執行點判準） | ci | — | [docs/internal/dx-tooling-backlog.md](../internal/dx-tooling-backlog.md) |
 
-### accepted (32)
+### accepted (33)
 
 | ID | Kind | Title | Domain | PR | Source |
 |----|------|-------|--------|------|--------|
@@ -63,6 +63,7 @@ lang: zh
 | `ADR-032` | adr | ADR-032: 夜跑效能監測改用成對交錯量測，取代跨夜滑動錨點 | dx | — | [docs/adr/032-paired-interleaved-bench-measurement.md](../adr/032-paired-interleaved-bench-measurement.md) |
 | `ADR-033` | adr | ADR-033: 與運維執行平面的協同介面 — MariaDB 計畫性作業 | integration | — | [docs/adr/033-ops-execution-plane-interface.md](../adr/033-ops-execution-plane-interface.md) |
 | `ADR-034` | adr | ADR-034: 合法值不得同時當作無法辨識時的 fallback | platform | — | [docs/adr/034-legal-value-as-fallback.md](../adr/034-legal-value-as-fallback.md) |
+| `ADR-035` | adr | ADR-035: tenant id 合法字元集的單一來源 | platform | — | [docs/adr/035-tenant-id-single-source.md](../adr/035-tenant-id-single-source.md) |
 
 ### proposed (16)
 

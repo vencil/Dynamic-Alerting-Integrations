@@ -1,6 +1,8 @@
 package configwatcher
 
 import (
+	"errors"
+	"os"
 	"path/filepath"
 	"sync"
 	"testing"
@@ -213,5 +215,62 @@ func TestWatchLoop_PicksUpChangeOnTick(t *testing.T) {
 
 	if got := w.Get().Items["foo"]; got != "v2" {
 		t.Errorf("WatchLoop did not pick up change: foo = %q, want v2", got)
+	}
+}
+
+// lastHash names only bytes the stored snapshot is the full parse of: a
+// missing file stores empty() and must forget the hash, or the same content
+// put back (a revert of the delete) is deduped and empty() stays. load(),
+// not Reload: Reload clears the hash itself.
+func TestLoad_FileRestoredAfterDeleteIsReparsed(t *testing.T) {
+	t.Parallel()
+	dir := t.TempDir()
+	path := writeYAML(t, dir, "foo: bar\n")
+	w, err := New(path, "test", parseTestConfig, emptyTestConfig)
+	if err != nil {
+		t.Fatalf("New: %v", err)
+	}
+	if err := os.Remove(path); err != nil {
+		t.Fatal(err)
+	}
+	if err := w.load(); err != nil {
+		t.Fatalf("load after delete: %v", err)
+	}
+	if got := len(w.Get().Items); got != 0 {
+		t.Fatalf("after delete Items = %v, want empty", w.Get().Items)
+	}
+	writeYAML(t, dir, "foo: bar\n")
+	if err := w.load(); err != nil {
+		t.Fatalf("load after restore: %v", err)
+	}
+	if got := w.Get().Items["foo"]; got != "bar" {
+		t.Errorf("after restore foo = %q, want bar (the restored bytes were deduped)", got)
+	}
+}
+
+// A NewWithReader parse that fails for part of its sources stores the
+// partial snapshot and clears lastHash; the same bytes on the next load are
+// parsed again and fail again, so the failure is reported on every tick.
+func TestLoad_PartialStoreKeepsReportingFailure(t *testing.T) {
+	t.Parallel()
+	read := func() ([]byte, bool, error) { return []byte("ok: yes\nbad\n"), true, nil }
+	parse := func(data []byte) (*testConfig, error) {
+		cfg, _ := parseTestConfig(data)
+		return cfg, errors.New("one source broken")
+	}
+	w, err := NewWithReader("synthetic", "test", read, parse, emptyTestConfig)
+	if err == nil {
+		t.Fatal("initial load: want the partial failure")
+	}
+	if got := w.Get().Items["ok"]; got != "yes" {
+		t.Fatalf("partial snapshot not stored: Items = %v", w.Get().Items)
+	}
+	for i := 0; i < 2; i++ {
+		if err := w.load(); err == nil {
+			t.Errorf("load %d of unchanged partial bytes: failure deduped away", i+1)
+		}
+	}
+	if h := w.LastHash(); h != "" {
+		t.Errorf("LastHash = %q after a partial store, want empty", h)
 	}
 }

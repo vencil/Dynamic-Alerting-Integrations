@@ -387,11 +387,6 @@ class TestIterPythonFiles:
         names = [p.name for p in results]
         assert names == sorted(names)
 
-    def test_nonexistent_root_silently_skipped(self, tmp_path):
-        bogus = tmp_path / "does-not-exist"
-        # Not is_file and not is_dir → falls through; no crash.
-        assert list(cst._iter_python_files([bogus])) == []
-
 
 # ---------------------------------------------------------------------------
 # Path resolution — _resolve_scan_paths
@@ -493,6 +488,82 @@ class TestMain:
         cli_argv("check_subprocess_timeout.py", str(dirty))
         rc = cst.main()
         assert rc == 0  # audit mode never fails
+
+
+# ---------------------------------------------------------------------------
+# #2640 — a scan path that does not exist exits 2, it is never "clean"
+# ---------------------------------------------------------------------------
+_DIRTY = "import subprocess\nsubprocess.run(['ls'])\n"
+
+
+class TestMissingScanPathFailsTheRun:
+    """A missing path scans zero files; exit 0 would read as a clean tree.
+
+    Every mode, including the plain audit run (no --ci): the rc reports
+    that the run could not do what it was asked, not a severity.
+    """
+
+    _MODES = [[], ["--ci"], ["--ci", "--strict-subprocess-timeout"]]
+
+    @pytest.mark.timeout(30)
+    @pytest.mark.parametrize("flags", _MODES)
+    def test_missing_directory_exits_2(self, tmp_path, capsys, cli_argv, flags):
+        bogus = tmp_path / "no-such-dir"
+        cli_argv("check_subprocess_timeout.py", *flags, str(bogus))
+        assert cst.main() == 2
+        assert str(bogus) in capsys.readouterr().err
+
+    @pytest.mark.timeout(30)
+    @pytest.mark.parametrize("flags", _MODES)
+    def test_missing_py_file_exits_2(self, tmp_path, capsys, cli_argv, flags):
+        bogus = tmp_path / "no_such.py"
+        cli_argv("check_subprocess_timeout.py", *flags, str(bogus))
+        assert cst.main() == 2
+        assert str(bogus) in capsys.readouterr().err
+
+    @pytest.mark.timeout(30)
+    def test_missing_path_beside_a_dirty_one_is_not_dropped(self, tmp_path, capsys, cli_argv):
+        """Was rc 1: the violation in the real file was reported and the
+        missing path vanished without a word."""
+        dirty = tmp_path / "dirty.py"
+        dirty.write_text(_DIRTY, encoding="utf-8")
+        bogus = tmp_path / "no-such-dir"
+        cli_argv("check_subprocess_timeout.py", "--ci", "--strict-subprocess-timeout",
+                 str(dirty), str(bogus))
+        assert cst.main() == 2
+        err = capsys.readouterr().err
+        assert str(bogus) in err
+        assert str(dirty) not in err
+
+    @pytest.mark.timeout(30)
+    def test_missing_default_root_exits_2(self, tmp_path, capsys, cli_argv, monkeypatch):
+        """No paths given: every default root must exist, or the run says
+        which one is gone (a rename would otherwise shrink the gate)."""
+        present = cst._DEFAULT_SCAN_ROOTS[0]
+        (tmp_path / present).mkdir(parents=True)
+        monkeypatch.setattr(cst, "PROJECT_ROOT", tmp_path)
+        cli_argv("check_subprocess_timeout.py", "--ci", "--strict-subprocess-timeout")
+        assert cst.main() == 2
+        err = capsys.readouterr().err
+        for root in cst._DEFAULT_SCAN_ROOTS[1:]:
+            assert str(tmp_path / root) in err
+        assert f"{tmp_path / present}\n" not in err
+
+    @pytest.mark.timeout(30)
+    def test_all_default_roots_present_scan_normally(self, tmp_path, capsys, cli_argv,
+                                                     monkeypatch):
+        for root in cst._DEFAULT_SCAN_ROOTS:
+            (tmp_path / root).mkdir(parents=True)
+        monkeypatch.setattr(cst, "PROJECT_ROOT", tmp_path)
+        cli_argv("check_subprocess_timeout.py", "--ci", "--strict-subprocess-timeout")
+        assert cst.main() == 0
+        assert capsys.readouterr().err == ""
+
+    def test_resolve_does_not_filter_missing_default_roots(self, tmp_path, monkeypatch):
+        import argparse
+        monkeypatch.setattr(cst, "PROJECT_ROOT", tmp_path)
+        resolved = cst._resolve_scan_paths(argparse.Namespace(paths=[]))
+        assert resolved == [tmp_path / r for r in cst._DEFAULT_SCAN_ROOTS]
 
 
 # ---------------------------------------------------------------------------
@@ -648,3 +719,65 @@ class TestUnscannableFileFailsTheRun:
                               text=True, encoding="utf-8", timeout=60)
         assert proc.returncode == 2, proc.stdout + proc.stderr
         assert "bom.py" in proc.stderr
+
+
+# ---------------------------------------------------------------------------
+# Wiring — the hook must actually run in CI (#2643)
+# ---------------------------------------------------------------------------
+
+_HOOK_ID = "subprocess-timeout-audit"
+_REPO_ROOT = Path(__file__).resolve().parents[2]
+
+
+def _precommit_config() -> dict:
+    import yaml
+
+    with open(_REPO_ROOT / ".pre-commit-config.yaml", encoding="utf-8") as fh:
+        return yaml.safe_load(fh)
+
+
+def _hook_config(config: dict) -> dict:
+    hooks = [h for repo in config["repos"] for h in repo.get("hooks", [])
+             if h.get("id") == _HOOK_ID]
+    assert len(hooks) == 1, f"expected exactly one {_HOOK_ID} hook, found {len(hooks)}"
+    return hooks[0]
+
+
+class TestHookWiring:
+    """Every test above calls the script's functions; none reads the hook or CI.
+
+    #2643 measured the gap: with one ``timeout=`` removed from a governed
+    file, this module and ``tests/shared/test_sast.py`` stayed rc 0 — only
+    ``pre-commit run subprocess-timeout-audit --all-files`` went red, and no
+    workflow ran that line. These two pins hold the line in place and keep
+    the hook on its files. (Whether the hook's ``entry`` still fails on a
+    violation is ``tests/lint/test_precommit_gate_liveness.py``'s case.)
+    """
+
+    def test_hook_is_not_filtered_off_its_files(self):
+        """The CI line runs through pre-commit's file selection.
+
+        A hook ``exclude:`` / ``types:`` narrowing / ``stages:`` without
+        ``pre-commit`` (or a top-level equivalent) makes it print
+        "(no files to check) Skipped" and exit 0 — CI green, nothing scanned.
+        The list of such keys is the shared ``tests/_precommit_selection.py``.
+        """
+        from _precommit_selection import silencing_keys
+
+        config = _precommit_config()
+        silenced = silencing_keys(_hook_config(config), config)
+        assert not silenced, (
+            f"{_HOOK_ID} is filtered off its files: {silenced}. The CI Lint job "
+            f"runs it through pre-commit, so it would report Skipped and exit 0.")
+
+    def test_ci_lint_job_runs_the_hook_over_the_whole_tree(self):
+        """Lint job runs ``pre-commit run subprocess-timeout-audit --all-files``.
+
+        ⛔ Parsed from the YAML by the shared ``tests/_ci_lint_wiring.py``
+        (also pinning ``open-encoding-audit``), never grepped: ``ci.yml``
+        comments name hook ids too.
+        """
+        from _ci_lint_wiring import assert_ci_lint_job_runs_hook
+
+        assert_ci_lint_job_runs_hook(
+            _HOOK_ID, guards="the subprocess timeout= rule (#2643)")

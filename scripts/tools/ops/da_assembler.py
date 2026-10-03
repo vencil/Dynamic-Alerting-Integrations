@@ -75,7 +75,13 @@ CRD_GROUP = "dynamicalerting.io"
 CRD_VERSION = "v1alpha1"
 CRD_PLURAL = "thresholdconfigs"
 
-# Graceful shutdown
+# Signals. ⛔ Nothing is installed at import (#2529): `main` installs the
+# handler its mode needs. Installed at import, the controller's flag handler
+# also took over SIGINT / SIGTERM in every process that imports this module
+# (the test suite included), and under `--render-cr` it only set a flag
+# nothing read: the run went on waiting for da-crdecode.
+
+# Controller modes (`--once` / watch): the watch loop stops at the next event.
 _shutdown = False
 
 
@@ -85,8 +91,84 @@ def _signal_handler(signum, frame):
     _shutdown = True
 
 
-signal.signal(signal.SIGTERM, _signal_handler)
-signal.signal(signal.SIGINT, _signal_handler)
+class _Interrupted(BaseException):
+    """SIGINT / SIGTERM under ``--render-cr``. A BaseException, so the
+    ``except Exception`` handlers on the render path do not swallow it;
+    raised while da-crdecode runs, ``subprocess.run`` kills the child."""
+
+    def __init__(self, signum: int) -> None:
+        super().__init__(signum)
+        self.signum = signum
+
+
+#: `--render-cr`: the signal that arrived while `_signals_deferred` held it.
+_pending_signal: int | None = None
+_deferring = False
+
+
+def _render_signal_handler(signum, frame):
+    global _pending_signal
+    if _deferring:
+        _pending_signal = signum
+        return
+    raise _Interrupted(signum)
+
+
+class _signals_deferred:
+    """Around the write: a signal that arrives inside is raised when the
+    block ends, so the rendered file is never left half-written."""
+
+    def __enter__(self):
+        global _deferring, _pending_signal
+        _pending_signal = None
+        _deferring = True
+
+    def __exit__(self, *exc):
+        global _deferring
+        _deferring = False
+        if _pending_signal is not None:
+            raise _Interrupted(_pending_signal)
+        return False
+
+
+class _handling_signals:
+    """SIGINT / SIGTERM go to *handler* inside the block; the previous
+    handlers come back after it (`main` is also called in-process)."""
+
+    def __init__(self, handler) -> None:
+        self.handler = handler
+        self.previous: dict = {}
+
+    def __enter__(self):
+        for sig in (signal.SIGINT, signal.SIGTERM):
+            self.previous[sig] = signal.signal(sig, self.handler)
+
+    def __exit__(self, *exc):
+        # Both handlers come back even when a signal arrives in between:
+        # `_render_signal_handler` holds it until both are restored, then
+        # it is raised (#2529 review). One that arrives before this point
+        # is raised here and is the caller's to catch.
+        with _signals_deferred():
+            for sig, handler in self.previous.items():
+                signal.signal(sig, handler)
+        return False
+
+
+def _ignore_signals() -> None:
+    """SIGINT / SIGTERM do nothing from here on (a second Ctrl-C while the
+    process is already stopping would otherwise raise again)."""
+    for sig in (signal.SIGINT, signal.SIGTERM):
+        signal.signal(sig, signal.SIG_IGN)
+
+
+def _die_by_signal(signum: int) -> int:
+    """End the process the way *signum* would have ended it (rc 128+N in a
+    shell), as `ops/patch_config` does before its write. Returns only where
+    the signal does not end the process."""
+    _ignore_signals()
+    signal.signal(signum, signal.SIG_DFL)
+    os.kill(os.getpid(), signum)
+    return EXIT_CALLER_ERROR
 
 
 # ── CR → YAML rendering ─────────────────────────────────────────────
@@ -1004,8 +1086,11 @@ def render_cr_file(
     # only when the file was written (or, under --dry-run, would be) and
     # nothing raised. ⚠️ A failure BEFORE the write leaves no file; one after
     # it (e.g. in the log line that follows) is rc 2 with the file on disk.
+    # #2529: a signal during the render / write is held until it is done
+    # (see `_signals_deferred`); one before it leaves no file.
     try:
-        reconcile_one(cr, config_dir, dry_run=dry_run, cli=True)
+        with _signals_deferred():
+            reconcile_one(cr, config_dir, dry_run=dry_run, cli=True)
     except OutputWriteError:
         raise
     except RecursionError:
@@ -1310,9 +1395,27 @@ def main() -> int:
 
     # Offline render mode (no K8s client needed)
     if args.render_cr:
-        return render_cr_file(
-            Path(args.render_cr), config_dir, dry_run=args.dry_run)
+        # #2529: SIGINT / SIGTERM stop the render — da-crdecode included —
+        # and end the process as the signal would. Before the write nothing
+        # is written; during it the write completes first.
+        # ⛔ The try is OUTSIDE the with: a signal that arrives as the
+        # handlers are being restored is raised from `__exit__`.
+        try:
+            with _handling_signals(_render_signal_handler):
+                return render_cr_file(
+                    Path(args.render_cr), config_dir, dry_run=args.dry_run)
+        except _Interrupted as e:
+            _ignore_signals()  # before the log line: a second signal waits
+            log.error("Received signal %d, stopped rendering %s",
+                      e.signum, args.render_cr)
+            return _die_by_signal(e.signum)
 
+    with _handling_signals(_signal_handler):
+        return _controller_main(args, config_dir)
+
+
+def _controller_main(args: argparse.Namespace, config_dir: Path) -> int:
+    """``--once`` and watch mode (both need a Kubernetes client)."""
     # K8s client required for watch/once modes
     if not HAS_K8S:
         log.error("kubernetes Python client is required.  "

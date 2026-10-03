@@ -200,3 +200,58 @@ func checkDefaultsWrapper(input CheckInput) []Finding {
 	}
 	return out
 }
+
+// FindingRootDefaultsCriticalKey (warn, TenantID ""; #2544): a
+// `<metric>_critical` key (either #1231 spelling) under the conf.d root
+// carrier's `defaults:` mapping. The exporter serves it as a threshold of its
+// own (metric `<metric>_critical`, severity=warning); it does not become
+// `<metric>`'s severity=critical row, which only a tenant's override map
+// carries (the tenant's own key, or one a subtree `_defaults.yaml`, a root
+// platform `tenants:` entry or a profile hands it). Field is
+// `<file>:defaults.<key>`. Not blocking (owner decision on #2544, option b).
+const FindingRootDefaultsCriticalKey FindingKind = "root_defaults_critical_key"
+
+// checkRootCriticalKeys reports FindingRootDefaultsCriticalKey for the
+// `_critical` keys under the root carrier's `defaults:` mapping. A root with
+// no `defaults:` mapping is root_defaults_unwrapped's (its keys are not
+// served at all); a file in ParseFailed is skipped like checkDefaultsWrapper
+// does.
+func checkRootCriticalKeys(input CheckInput) []Finding {
+	failed := make(map[string]bool, len(input.ParseFailed))
+	for _, pf := range input.ParseFailed {
+		failed[pf] = true
+	}
+	var out []Finding
+	for _, f := range input.DefaultsFiles {
+		if failed[f.Name] || strings.Contains(f.Name, "/") {
+			continue
+		}
+		doc := decodeDefaultsDoc(f.Data)
+		if doc == nil || !wrappedInMapping(doc) {
+			continue
+		}
+		block := config.ExtractDefaultsBlock(doc)
+		keys := make([]string, 0, len(block))
+		for k := range block {
+			if strings.HasSuffix(k, "_critical") && !strings.HasPrefix(k, "_state_") && !strings.HasPrefix(k, "_silent_") {
+				keys = append(keys, k)
+			}
+		}
+		sort.Strings(keys)
+		for _, k := range keys {
+			base := strings.TrimSuffix(k, "_critical")
+			out = append(out, Finding{
+				Severity: SeverityWarn,
+				Kind:     FindingRootDefaultsCriticalKey,
+				Field:    f.Name + ":defaults." + k,
+				Message: fmt.Sprintf("%s: `%s` under the conf.d root `defaults:` is served as a threshold of its own "+
+					"(severity=warning), not as the severity=critical row of `%s`: only a tenant's own `%s` "+
+					"(or one a subtree `_defaults.yaml`, a root platform `tenants:` entry or a profile supplies) "+
+					"produces that row. A tenant deleting its own `%s` falls back to this root value only on that "+
+					"separate warning series, never on the critical row, so the tenant's key is not reported "+
+					"redundant against it.", f.Name, k, base, k, k),
+			})
+		}
+	}
+	return out
+}
