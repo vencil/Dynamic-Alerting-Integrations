@@ -12,6 +12,7 @@ import (
 	"path/filepath"
 	"reflect"
 	"sort"
+	"strings"
 	"testing"
 	"time"
 
@@ -102,6 +103,58 @@ func TestPolicyFiles_OneBroken(t *testing.T) {
 	}
 	if got := domainNames(m); !reflect.DeepEqual(got, []string{"da", "db"}) {
 		t.Errorf("after a failed reload the watcher serves %v, want the last good [da db]", got)
+	}
+}
+
+// #2486 review B1: each file is parsed on its own. A file broken at startup
+// is skipped and the other applies — as the route generator, which drops
+// the broken file and enforces the other (`--strict` rc 1). A whole-read
+// failure left the watcher empty: the sound `.yaml` unenforced.
+func TestPolicyFiles_BrokenAtStartupIsSkipped(t *testing.T) {
+	t.Parallel()
+	dir := t.TempDir()
+	testutil.WriteYAML(t, dir, "_domain_policy.yaml", forbidding("da", "t-s", "slack"))
+	testutil.WriteYAML(t, dir, "_domain_policy.yml", "domain_policies: [unclosed\n")
+	m := NewManager(dir)
+	if got := forbiddenByDomain(m); !reflect.DeepEqual(got, map[string][]string{"da": {"slack"}}) {
+		t.Errorf("watcher serves %v, want the .yaml alone", got)
+	}
+	if err := m.Reload(); err == nil || !strings.Contains(err.Error(), "_domain_policy.yml") {
+		t.Errorf("Reload err = %v, want a failure naming _domain_policy.yml", err)
+	}
+	// Repaired: the two merge again.
+	testutil.WriteYAML(t, dir, "_domain_policy.yml", forbidding("db", "t-w", "webhook"))
+	if err := m.Reload(); err != nil {
+		t.Fatalf("Reload after repair: %v", err)
+	}
+	if got := domainNames(m); !reflect.DeepEqual(got, []string{"da", "db"}) {
+		t.Errorf("after repair the watcher serves %v, want [da db]", got)
+	}
+}
+
+// On a hot reload only the broken file keeps its last good content; the
+// other file's update still takes effect.
+func TestPolicyFiles_BrokenOnReloadKeepsOnlyItsOwnLastGood(t *testing.T) {
+	t.Parallel()
+	dir := t.TempDir()
+	testutil.WriteYAML(t, dir, "_domain_policy.yaml", forbidding("da", "t-s", "slack"))
+	testutil.WriteYAML(t, dir, "_domain_policy.yml", forbidding("db", "t-w", "webhook"))
+	m := NewManager(dir)
+	testutil.WriteYAML(t, dir, "_domain_policy.yaml", "domain_policies: [unclosed\n")
+	testutil.WriteYAML(t, dir, "_domain_policy.yml", forbidding("dc", "t-w", "email"))
+	if err := m.Reload(); err == nil || !strings.Contains(err.Error(), "_domain_policy.yaml") {
+		t.Errorf("Reload err = %v, want a failure naming _domain_policy.yaml", err)
+	}
+	want := map[string][]string{"da": {"slack"}, "dc": {"email"}}
+	if got := forbiddenByDomain(m); !reflect.DeepEqual(got, want) {
+		t.Errorf("watcher serves %v, want %v (.yaml's last good + the .yml's update)", got, want)
+	}
+	testutil.WriteYAML(t, dir, "_domain_policy.yaml", forbidding("dz", "t-s", "slack"))
+	if err := m.Reload(); err != nil {
+		t.Fatalf("Reload after repair: %v", err)
+	}
+	if got := domainNames(m); !reflect.DeepEqual(got, []string{"dc", "dz"}) {
+		t.Errorf("after repair the watcher serves %v, want [dc dz]", got)
 	}
 }
 

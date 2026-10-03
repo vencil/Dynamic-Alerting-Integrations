@@ -46,6 +46,12 @@ type EmptyFunc[T any] func() *T
 // failure (the last-good snapshot is kept). It is how one Watcher follows a
 // config spread over several files (policy: `_domain_policy.yaml` and
 // `.yml`): the bytes encode all of them, so a change to any is a new hash.
+//
+// The ParseFunc of such a watcher may return a non-nil snapshot WITH its
+// error: some sources failed and the snapshot is what the others (and the
+// failed ones' own last good content) still give. The watcher stores it and
+// reports the load as failed; a nil snapshot with an error keeps the last
+// good one, as for New.
 type ReadFunc func() (data []byte, exists bool, err error)
 
 // ReloadObserver is an optional sink for the outcome of EVERY reload attempt.
@@ -341,6 +347,14 @@ func (w *Watcher[T]) loadLocked() (err error) {
 
 	cfg, err := w.parse(data)
 	if err != nil {
+		// NewWithReader only: a parse that fails for PART of its sources
+		// returns the snapshot it could still build beside the error (see
+		// ReadFunc). It is stored, so the sound sources take effect; lastHash
+		// is left as is, so the next tick parses again and the failure keeps
+		// being reported. A New watcher never stores on an error.
+		if w.read != nil && cfg != nil {
+			w.value.Store(cfg)
+		}
 		return fmt.Errorf("parse %s: %w", w.path, err)
 	}
 	w.value.Store(cfg)

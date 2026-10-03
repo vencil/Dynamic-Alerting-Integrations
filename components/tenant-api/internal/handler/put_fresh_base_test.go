@@ -20,6 +20,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/vencil/tenant-api/internal/policy"
 	"github.com/vencil/tenant-api/internal/rbac"
 )
 
@@ -169,6 +170,29 @@ func TestPutTenant_PRMode_InSyncUnchanged(t *testing.T) {
 		w := putStale(t, f, "t-off", "tenants:\n  t-off:\n    _routing_profile: team-chat\n")
 		if w.Code != http.StatusForbidden || f.prOpened {
 			t.Fatalf("status %d (PR %v), want the local pre-check's 403; body %s", w.Code, f.prOpened, w.Body.String())
+		}
+	})
+}
+
+// #2486 review B1: a `_domain_policy.yml` broken when the pod starts is
+// skipped, and the sound `.yaml` beside it is enforced — direct-mode PUT and
+// batch alike (the route generator drops the broken file, `--strict` rc 1).
+func TestDirectMode_BrokenYmlAtStartupKeepsYamlEnforced(t *testing.T) {
+	files := staleTree("    _routing_profile: domain-ok\n")
+	files["_domain_policy.yml"] = "domain_policies: [unclosed\n"
+	t.Run("put", func(t *testing.T) {
+		code, resp, _ := putRoutingTenant(t, files, "t-off", "tenants:\n  t-off:\n    _routing_profile: team-chat\n")
+		if code != http.StatusForbidden || !strings.Contains(resp, CodePolicyViolation) {
+			t.Fatalf("status %d, body %s; want 403 from the .yaml policy", code, resp)
+		}
+	})
+	t.Run("batch", func(t *testing.T) {
+		configDir := seedGitTree(t, files)
+		d := &Deps{Writer: newTestWriter(configDir), ConfigDir: configDir, RBAC: adminRBAC(t),
+			Policy: policy.NewManager(configDir), WriteMode: WriteModeDirect}
+		resp := runBatch(t, configDir, d, `[{"tenant_id":"t-off","patch":{"_routing_profile":"team-chat"}}]`)
+		if len(resp.Results) != 1 || !strings.Contains(resp.Results[0].Message, "domain policy violation") {
+			t.Errorf("results = %+v, want the op refused by the .yaml policy", resp.Results)
 		}
 	})
 }

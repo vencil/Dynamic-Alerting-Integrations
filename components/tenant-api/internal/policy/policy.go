@@ -124,11 +124,10 @@ func readSources(configDir string) ([]policySource, error) {
 	return out, nil
 }
 
-// parseSources parses each file (parseConfig) and lays them over each other
-// in order, a later file's domain replacing an earlier one's of the same
-// name. One file that does not parse fails the whole read: the watcher then
-// keeps its last good snapshot, LoadSnapshot refuses — the single-file
-// answers, kept for the pair.
+// parseSources is LoadSnapshot's parse: each file (parseConfig), laid over
+// each other in order, a later file's domain replacing an earlier one's of
+// the same name. One file that does not parse fails the whole read
+// (fail-closed: PR mode refuses rather than judge on a partial policy).
 func parseSources(configDir string, srcs []policySource) (*DomainPolicyConfig, error) {
 	merged := emptyConfig()
 	for _, s := range srcs {
@@ -136,21 +135,80 @@ func parseSources(configDir string, srcs []policySource) (*DomainPolicyConfig, e
 		if err != nil {
 			return nil, fmt.Errorf("parse %s: %w", filepath.Join(configDir, s.Name), err)
 		}
-		for name, dp := range cfg.DomainPolicies {
-			merged.DomainPolicies[name] = dp
+		mergeDomains(merged, cfg)
+	}
+	return merged, nil
+}
+
+func mergeDomains(dst, src *DomainPolicyConfig) {
+	for name, dp := range src.DomainPolicies {
+		dst.DomainPolicies[name] = dp
+	}
+}
+
+// fileWiseParser is the watcher's parse (#2486 review B1): each file on its
+// own. A file that does not parse contributes its OWN last good content —
+// none if it never parsed, i.e. it is skipped, as the route generator skips
+// it — and the others apply; then the files are merged in FileNames order.
+// So a broken `.yml` beside a sound `.yaml` at startup leaves the `.yaml`
+// enforced (whole-read failure left the watcher empty: fail-open), and on a
+// hot reload one broken file does not hold back the other's update. A
+// removed file forgets its last good content. Called under the watcher's
+// load lock, so lastGood needs no lock of its own.
+type fileWiseParser struct {
+	configDir string
+	lastGood  map[string]*DomainPolicyConfig
+}
+
+// parse returns the merged snapshot and, when a file failed, an error naming
+// it beside that snapshot (configwatcher stores it and reports the failure).
+func (p *fileWiseParser) parse(srcs []policySource) (*DomainPolicyConfig, error) {
+	present := map[string]bool{}
+	merged := emptyConfig()
+	var failed []string
+	for _, s := range srcs {
+		present[s.Name] = true
+		cfg, err := parseConfig(s.Data)
+		if err != nil {
+			path := filepath.Join(p.configDir, s.Name)
+			slog.Warn("policy: file does not parse; its last good content (none if it never parsed) applies, the other policy file is unaffected",
+				"file", path, "error", err)
+			failed = append(failed, fmt.Sprintf("%s: %v", path, err))
+			cfg = p.lastGood[s.Name]
+		} else {
+			p.lastGood[s.Name] = cfg
 		}
+		if cfg != nil {
+			mergeDomains(merged, cfg)
+		}
+	}
+	for name := range p.lastGood {
+		if !present[name] {
+			delete(p.lastGood, name)
+		}
+	}
+	if len(failed) > 0 {
+		return merged, fmt.Errorf("%s", strings.Join(failed, "; "))
 	}
 	return merged, nil
 }
 
 // NewManager creates a Manager that reads the domain policies of configDir
 // (FileNames) and hot-reloads them: one watcher over both files, so a change
-// to either is picked up (their bytes are hashed together).
+// to either is picked up (their bytes are hashed together), each file parsed
+// on its own (fileWiseParser).
 func NewManager(configDir string) *Manager {
+	fw := &fileWiseParser{configDir: configDir, lastGood: map[string]*DomainPolicyConfig{}}
 	read := func() ([]byte, bool, error) {
 		srcs, err := readSources(configDir)
-		if err != nil || len(srcs) == 0 {
+		if err != nil {
 			return nil, false, err
+		}
+		if len(srcs) == 0 {
+			// Neither file: the watcher stores empty without parsing, so
+			// the removed files forget their last good content here.
+			clear(fw.lastGood)
+			return nil, false, nil
 		}
 		data, err := json.Marshal(srcs)
 		return data, true, err
@@ -160,7 +218,7 @@ func NewManager(configDir string) *Manager {
 		if err := json.Unmarshal(data, &srcs); err != nil {
 			return nil, err
 		}
-		return parseSources(configDir, srcs)
+		return fw.parse(srcs)
 	}
 	desc := filepath.Join(configDir, "_domain_policy.{yaml,yml}")
 	w, err := configwatcher.NewWithReader(desc, "policy", read, parse, emptyConfig)
