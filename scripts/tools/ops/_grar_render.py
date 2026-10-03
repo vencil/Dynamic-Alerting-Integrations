@@ -767,6 +767,18 @@ class AlertmanagerConfigRejected(Exception):
         self.exit_code = exit_code
 
 
+class AlertmanagerConfigInvariantViolated(ValueError):
+    """#2506: merging the generated fragment into the CLUSTER's config broke a
+    platform invariant (ADR-025: an inhibit rule that would suppress the
+    Watchdog heartbeat or let a tenant silence a platform alert; #1132 under
+    ``strict``). Raised by ``apply_to_configmap`` before amtool or kubectl
+    apply runs, so nothing reached the cluster. A verdict on the config (rc
+    1), like ``assemble_configmap``'s ``ValueError`` on the other write paths
+    (#2260) — a ``ValueError`` subclass for that reason, and a class of its
+    own so the caller catches the merge step only, not every ``ValueError``
+    the apply path could raise."""
+
+
 def _read_existing_configmap(namespace: str, configmap_name: str) -> tuple[dict | None, list[str]]:
     """Read existing Alertmanager ConfigMap from K8s cluster.
 
@@ -1010,6 +1022,8 @@ def apply_to_configmap(routes: list[dict], receivers: list[dict], inhibit_rules:
     Raises:
         AlertmanagerConfigRejected: amtool refused the merged config (or could
         not run); nothing was sent to the cluster. #2219.
+        AlertmanagerConfigInvariantViolated: the merged config breaks a
+        platform invariant; nothing was sent to the cluster. #2506.
     """
     # 1. Read existing ConfigMap
     existing, read_warnings = _read_existing_configmap(namespace, configmap_name)
@@ -1018,8 +1032,15 @@ def apply_to_configmap(routes: list[dict], receivers: list[dict], inhibit_rules:
             print(w, file=sys.stderr)
         return False
 
-    # 2. Merge fragment into existing config
-    existing = _merge_routes_receivers_inhibits(existing, routes, receivers, inhibit_rules, strict=strict)
+    # 2. Merge fragment into existing config. #2506: its `ValueError`s are the
+    # merged-set invariant asserts — the cluster's own inhibit rules are kept
+    # by the merge, so this is where an existing Watchdog-suppressing rule
+    # surfaces. Only this step is wrapped.
+    try:
+        existing = _merge_routes_receivers_inhibits(existing, routes, receivers,
+                                                    inhibit_rules, strict=strict)
+    except ValueError as exc:
+        raise AlertmanagerConfigInvariantViolated(str(exc)) from exc
     merged_yml = yaml.dump(existing, default_flow_style=False,
                            allow_unicode=True, sort_keys=False)
 

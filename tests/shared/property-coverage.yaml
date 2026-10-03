@@ -244,6 +244,7 @@ modules:
       policy_reaches: "#2435 one-line composition of level_contains with the tenant's directory (unplaced tenant = root); example-covered by test_explain_route_trace.py::TestSubtreePolicyScopeNoAmtool (in-scope / out-of-scope rows)"
       resolve_routing_defaults: "#2326 shallow per-key merge along the chain; example-covered by test_generate_routes_nested_tree.py (deeper wins, receiver replaced whole) and the hier-a parity trees"
       visible_routing_profiles: "#2326 union of the profiles on the chain; example-covered by test_generate_routes_nested_tree.py and the hier-c parity trees"
+      skipped_entry_warning: "#2489 one-line constructor marking a dropped-entry line as SkippedEntryWarning (text unchanged), the type blocking_generation_errors tests; per-producer equivalence, mark-survives-to-every-caller and the unwrapped-literal guard pinned by test_grar_skipped_entry_warning.py"
 
   scripts/tools/ops/_grar_validate.py:
     covered:
