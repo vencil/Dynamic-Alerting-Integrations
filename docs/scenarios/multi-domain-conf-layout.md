@@ -163,10 +163,12 @@ tenants:
         url: "https://hooks.tenant-a.example.com/alerts"
 ```
 
-> ℹ️ **顯式 `null` 退出繼承是分欄位的**（#1339 已釐清並實作）：schema 只允許 `_routing`
-> 底下的 `group_by` / `group_wait` / `group_interval` / `repeat_interval` 四個
-> 欄位寫 `null`，效果是產出的 route 省略該欄位（產生器目前也收 `overrides: ~`，
-> 與 schema 不一致，見 #2521）。`_routing.receiver: ~`
+> ℹ️ **顯式 `null` 退出繼承是分欄位的**（#1339、#2521）：schema 只允許 `_routing`
+> 底下的 `group_by` / `group_wait` / `group_interval` / `repeat_interval` /
+> `overrides` / `routes` 六個欄位寫 `null`。前四個的效果是產出的 route 省略該欄位；
+> `overrides: ~`／`routes: ~` 等同 `[]`，清掉從 `_routing_defaults`／routing profile
+> 繼承來的整串子路由。⚠️ 這是租戶層的寫法：子目錄層 `_routing_defaults` 的
+> `overrides` 寫成 null，產生器照舊拒收（結束碼 2）。`_routing.receiver: ~`
 > **仍被拒絕**——它會讓該租戶整條 route 消失、告警落到 catch-all。
 > **閾值 key 一律用 `"disable"`**，不要用 `null`：`mysql_connections: ~` 與打到
 > 一半的 `mysql_connections:` 對 YAML 完全相同，所以 schema 擋掉它。詳見

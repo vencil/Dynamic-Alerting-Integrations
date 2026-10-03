@@ -412,7 +412,7 @@
       "type": "object",
       "title": "Alert Routing Configuration",
       "description": "Per-tenant alert routing to custom receivers. Supports one primary receiver, per-alertname/metric_group overrides and label-match sub-routes (routes). Replaces _routing_defaults. Also the shape of one routing profile in _routing_profiles.yaml (routing-profiles.schema.json $refs this definition, ADR-007). See architecture-and-design.md §2.9 and cli-reference.md.",
-      "$comment": "#1339 P1 — explicit null is accepted on exactly four fields (group_by, group_wait, group_interval, repeat_interval) and nowhere else in this definition. Rationale, all measured against generate_alertmanager_routes.py with identical fixtures: on those four a null suppresses the inherited _routing_defaults value and the generated route simply omits the field, and there is no other way to express 'do not inherit this one' because the timing fields have no 'disable' sentinel. 'receiver: ~' is deliberately still rejected — it makes the tenant's ENTIRE route disappear ('WARN: missing required receiver, skipping'), so a one-character typo would silently reroute every alert for that tenant to the catch-all. 'overrides: ~' is rejected because it is a no-op (nothing above a tenant supplies overrides to opt out of) and accepting it would teach a gesture that does nothing. 'routes: ~' is rejected too (#2245): a tenant opts out of its routing profile's routes with 'routes: []', which replaces them (shallow merge).",
+      "$comment": "#1339 P1 / #2521 — explicit null is accepted on six fields (group_by, group_wait, group_interval, repeat_interval, overrides, routes) and nowhere else in this definition. Rationale, all measured against generate_alertmanager_routes.py with identical fixtures: the routing layers (_routing_defaults → routing profile → this) merge one top-level key at a time (shallow), so a null on one of these replaces the inherited value with nothing — the timing fields and group_by are then omitted from the route, and null overrides / routes render no override / label-match sub-route, exactly like []. The generator, validate-config, da-guard and tenant-api all accept it (#2521 pinned each). 'receiver: ~' is deliberately still rejected — it makes the tenant's ENTIRE route disappear ('WARN: missing required receiver, skipping'), so a one-character typo would silently reroute every alert for that tenant to the catch-all. ⚠️ This definition is the tenant's _routing (and a routing profile); a null in a SUBDIRECTORY level's _routing_defaults is a different thing — the generator refuses it (exit 2, routing_defaults_null_below_root), and definitions.routingDefaults keeps refusing it.",
       "properties": {
         "receiver": {
           "$ref": "#/definitions/receiver",
@@ -447,17 +447,17 @@
           "examples": ["1h", "4h", "24h"]
         },
         "overrides": {
-          "type": "array",
+          "type": ["array", "null"],
           "title": "Per-Alertname/Metric-Group Overrides",
-          "description": "List of routing overrides for specific alert names or metric groups. First matching override wins. See architecture-and-design.md §2.9.",
+          "description": "List of routing overrides for specific alert names or metric groups. First matching override wins. Replaces the inherited _routing_defaults / profile overrides wholesale (shallow merge). Explicit null opts out of the inherited value (same as []). See architecture-and-design.md §2.9.",
           "items": {
             "$ref": "#/definitions/routingOverride"
           }
         },
         "routes": {
-          "type": "array",
+          "type": ["array", "null"],
           "title": "Label-Match Sub-Routes (ADR-007)",
-          "description": "Sub-routes selected by label equality (e.g. escalate severity=critical to PagerDuty). Rendered as children of the tenant's main route AFTER the overrides, so the order is overrides → routes → the main route's own receiver; the first matching child wins. A tenant _routing.routes replaces a routing profile's routes wholesale (shallow merge, same as overrides). Not accepted in _routing_defaults.",
+          "description": "Sub-routes selected by label equality (e.g. escalate severity=critical to PagerDuty). Rendered as children of the tenant's main route AFTER the overrides, so the order is overrides → routes → the main route's own receiver; the first matching child wins. A tenant _routing.routes replaces a routing profile's routes wholesale (shallow merge, same as overrides). Explicit null opts out of the inherited value (same as []). Not accepted in _routing_defaults.",
           "items": {
             "$ref": "#/definitions/routingRoute"
           }
@@ -1018,9 +1018,18 @@
         "repeat_interval": {
           "$ref": "#/definitions/duration",
           "title": "Default Repeat Interval"
+        },
+        "overrides": {
+          "type": "array",
+          "title": "Default Per-Alertname/Metric-Group Overrides",
+          "description": "Overrides every tenant under this level inherits unless its profile or _routing writes overrides (shallow merge; a tenant opts out with overrides: ~ or []). Same entries as the tenant's _routing.overrides. Null is not accepted here: in a subdirectory level the generator refuses it (exit 2).",
+          "items": {
+            "$ref": "#/definitions/routingOverride"
+          }
         }
       },
-      "additionalProperties": false
+      "additionalProperties": false,
+      "$comment": "#2521: overrides was missing although the generator merges _routing_defaults.overrides into every tenant and cli-reference documents it. routes is deliberately NOT here: the generator drops _routing_defaults.routes before any merge with a blocking WARN, and da-guard reports routing_defaults_routes_ignored (#2245) — label-match routes belong in a routing profile or the tenant's _routing."
     },
     "defaultsConfig": {
       "type": "object",
