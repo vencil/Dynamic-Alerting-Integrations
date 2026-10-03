@@ -181,7 +181,7 @@ PATH 上有 `amtool` 時會自動用它驗證 ConfigMap 裡的 `alertmanager.yml
 
 產出的 YAML 可直接 `kubectl apply` 或由 ArgoCD/Flux 自動 sync。與方式 A（threshold-config）搭配使用，實現 threshold-exporter 和 Alertmanager 配置的完整 GitOps 閉環。
 
-不提供 `--base-config` 時使用內建預設值。需要自訂 `global`（如 SMTP 設定）、default receiver、或 inhibit_rules 基礎規則時，建議維護一份 `base-alertmanager.yaml` 作為輸入。詳見 [BYO Alertmanager 整合指南 Step 5](byo-alertmanager-integration.md#step-5-merge-into-alertmanager-configmap)。
+不提供 `--base-config` 時使用內建預設值。需要自訂 `global`（如 SMTP 設定）、default receiver、或 inhibit_rules 基礎規則時，建議維護一份 `base-alertmanager.yaml` 作為輸入。詳見 [BYO Alertmanager 整合指南 Step 5](byo-alertmanager-integration.md#step-5-merge-into-alertmanager-configmap)。⚠️ 這份 base 的 root route receiver 要接上真的 integration（非空的 `*_configs`）：沒被子 route 接走的告警（含平台自監控告警）都落到它，空 receiver 等於丟掉；generator 遇到這種 root receiver 會印一行 WARN（#2660），接法見 [§11](byo-alertmanager-integration.md#11-平台自監控告警的投遞)。
 
 ⚠️ **v2.10.0 起這一格的失敗模式改了（BREAKING，[#1616](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/1616) / [#1617](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/1617)）**：上面範例裡的 `--base-config` 與 `-o` 都是相對路徑，在 CI 的 workdir 打錯或目錄不存在時——
 

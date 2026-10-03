@@ -219,6 +219,62 @@ def render_output(routes: list[dict], receivers: list[dict], inhibit_rules: list
     return yaml.dump(fragment, default_flow_style=False, allow_unicode=True, sort_keys=False)
 
 
+# ── Root receiver with no integration (#2660) ──────────────────────
+
+def receiver_integration_kinds(receiver: object) -> list[str]:
+    """The Alertmanager integration kinds a receiver entry actually carries.
+
+    One per ``<kind>_configs`` key whose value is a NON-EMPTY list —
+    ``webhook_configs: []`` notifies no one, exactly like a name-only
+    receiver, so it is not a kind. Shared by the generator's root-receiver
+    WARN and ``explain_route``'s ``receiver_type`` (#2660), so the two cannot
+    disagree about whether a receiver delivers anywhere.
+    """
+    if not isinstance(receiver, dict):
+        return []
+    return [k[:-len("_configs")] for k, v in receiver.items()
+            if isinstance(k, str) and k.endswith("_configs")
+            and isinstance(v, list) and v]
+
+
+ROOT_RECEIVER_DOC = ("docs/integration/byo-alertmanager-integration.en.md "
+                     "§11 \"Delivering Platform Self-Monitoring Alerts\"")
+
+
+def root_receiver_without_integration_warning(am: object) -> str | None:
+    """The WARN for an Alertmanager config whose root route's receiver has no
+    integration, or None when it has one (#2660).
+
+    Every alert no child route claims ends at the root receiver — that
+    includes the platform's own self-monitoring alerts unless conf.d routes
+    them (``_routing_enforced``). A root receiver with no non-empty
+    ``*_configs`` (the built-in base's ``default``, and the shipped
+    ``k8s/03-monitoring`` one) drops them silently. Not an error: the
+    shipped posture is deliberate, so this never changes the exit code and
+    ``--strict`` does not escalate it. A root receiver name that no receiver
+    entry defines counts as no integration too (amtool rejects that anyway).
+    """
+    route = am.get("route") if isinstance(am, dict) else None
+    name = route.get("receiver") if isinstance(route, dict) else None
+    receivers = am.get("receivers") if isinstance(am, dict) else None
+    entry = next((r for r in (receivers if isinstance(receivers, list) else [])
+                  if isinstance(r, dict) and r.get("name") == name), None)
+    if entry is not None and receiver_integration_kinds(entry):
+        return None
+    return (f"WARN: the root route's receiver {safe_label(name)!r} has no "
+            "integration (no non-empty *_configs) — every alert no child "
+            "route matches, including the platform's own self-monitoring "
+            "alerts, ends there and notifies no one. Not an error; to deliver "
+            f"platform alerts see {ROOT_RECEIVER_DOC}.")
+
+
+def warn_if_root_receiver_without_integration(am: object) -> None:
+    """Print :func:`root_receiver_without_integration_warning` to stderr."""
+    warning = root_receiver_without_integration_warning(am)
+    if warning:
+        print(warning, file=sys.stderr)
+
+
 # ── §11.3 AM GitOps: --output-configmap ────────────────────────────
 
 # Minimal inline defaults when --base-config is not provided
@@ -975,6 +1031,9 @@ def apply_to_configmap(routes: list[dict], receivers: list[dict], inhibit_rules:
                      refusing="apply it to the cluster (nothing was applied)")
     if rc is not None:
         raise AlertmanagerConfigRejected(rc)
+    # #2660: the root route + receivers here are the CLUSTER's, kept by the
+    # merge — the config about to be applied, so warn on it.
+    warn_if_root_receiver_without_integration(yaml.safe_load(merged_yml))
 
     # 4. Apply updated ConfigMap
     if not _apply_merged_configmap(merged_yml, namespace, configmap_name):
