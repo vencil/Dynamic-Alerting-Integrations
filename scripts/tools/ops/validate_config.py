@@ -1384,14 +1384,17 @@ def _root_defaults_value_detail(rel: str, key: str | None, raw: str,
     ``NULL_NOT_DECLARED`` rather than a blocking one.
     """
     if null:
-        # #2518: one fact about THIS LINE and one instruction, nothing more.
-        # Every removal procedure, every claim about the key (the other
-        # spelling or `optional_overrides:` may still declare it) and every
-        # claim about which da-guard finding names whom was measured wrong
-        # for some shape; da-guard's findings carry measured fixes.
-        return (f"{rel}: `defaults.{key}` has no value (null): this line "
-                f"sets no platform default and declares nothing. Run "
-                f"da-guard to see which tenants' values are not served.")
+        # #2518: the value is null, the block takes numbers — and an
+        # instruction. Every claim about the line's effect, the key's
+        # declaration, a removal procedure or which finding names whom was
+        # measured wrong for some shape (a null over a `<<:` merged value
+        # removes that default; another spelling or `optional_overrides:`
+        # may still declare the key); served-values is the oracle.
+        return (f"{rel}: `defaults.{key}` has no value (null); the root "
+                f"`defaults:` holds numbers only. What this line changes "
+                f"depends on the rest of the tree (another spelling, "
+                f"`optional_overrides:`, a `<<:` merge), so compare "
+                f"`da-guard served-values` before and after you change it.")
     if key is None:
         # ⚠️ *raw* (the mirror's reason) is not printed: `deprecate_rule`
         # words it in Chinese, this tool's operator strings are English, and
