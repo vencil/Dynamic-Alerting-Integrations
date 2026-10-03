@@ -275,6 +275,39 @@ def _receiver_field_schemas() -> dict[str, dict[str, dict[str, Any]]]:
     return table
 
 
+_TENANT_ID_RULE: Optional[tuple[re.Pattern[str], str]] = None
+
+
+def tenant_id_rule() -> tuple[re.Pattern[str], str]:
+    """``(compiled pattern, description)`` of the tenant-id rule (ADR-035).
+
+    Read from tenant-config.schema.json ``definitions.tenantId``, the one
+    authored copy; Go and the portal read copies generated from it by
+    scripts/tools/dx/gen_tenant_id_json.py. Match with ``fullmatch``: Python's
+    ``$`` also matches before a trailing newline. Fails closed like
+    ``_receiver_field_schemas`` (#2180): a missing schema or definition raises
+    instead of letting every id through.
+    """
+    global _TENANT_ID_RULE
+    if _TENANT_ID_RULE is not None:
+        return _TENANT_ID_RULE
+    path = _find_tenant_schema()
+    if path is None:
+        raise RuntimeError(
+            f"{_TENANT_SCHEMA_BASENAME} not found beside {__file__} or under "
+            "docs/schemas/ of the project root; tenant ids cannot be checked")
+    with open(path, encoding="utf-8") as f:
+        definition = json.load(f).get("definitions", {}).get("tenantId")
+    if (not isinstance(definition, dict)
+            or not isinstance(definition.get("pattern"), str)
+            or not isinstance(definition.get("description"), str)):
+        raise RuntimeError(
+            f"{path}: definitions.tenantId with a string pattern and description "
+            "is missing; tenant ids cannot be checked")
+    _TENANT_ID_RULE = (re.compile(definition["pattern"]), definition["description"])
+    return _TENANT_ID_RULE
+
+
 _YAML_BOOL_REF = "#/definitions/yamlBool"
 _HTTP_CONFIG_REF = "#/definitions/httpConfigOrNull"
 _YAML_BOOL_LITERALS: dict[str, bool] = {}

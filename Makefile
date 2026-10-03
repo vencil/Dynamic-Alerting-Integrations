@@ -888,6 +888,14 @@ recipe-status-json: ## 從 shape.py RECIPE_STATUS 生成 recipe-status.json（AD
 recipe-status-json-check: ## 驗證 committed recipe-status.json 與 shape.py RECIPE_STATUS 同步（#741 #6 drift gate）
 	@python3 ./scripts/tools/dx/gen_recipe_status_json.py --check
 
+.PHONY: tenant-id-json
+tenant-id-json: ## 從 tenant-config schema 的 definitions.tenantId 生成 tenant-id.json（ADR-035 D2；committed artifact，Go go:embed 與 portal 各一份）
+	@python3 ./scripts/tools/dx/gen_tenant_id_json.py
+
+.PHONY: tenant-id-json-check
+tenant-id-json-check: ## 驗證兩份 committed tenant-id.json 與 schema 的 definitions.tenantId 同步（ADR-035 drift gate）
+	@python3 ./scripts/tools/dx/gen_tenant_id_json.py --check
+
 .PHONY: lint-extract
 lint-extract: ## 拆新 lint script（PR #154/#162/#166/#169/#170 共通 boilerplate codified）— 用法：make lint-extract NAME=foo_bar KIND=text DESCRIPTION="..." FILES='^docs/.*\.md$$' [DRY_RUN=1] [FORCE=1] [NO_HOOK=1]
 	@if [ -z "$(NAME)" ] || [ -z "$(KIND)" ] || [ -z "$(DESCRIPTION)" ]; then \

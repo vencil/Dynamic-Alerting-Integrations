@@ -1,0 +1,24 @@
+{
+  "_comment": "ADR-035 tenant-id rule cases. Asserted by pkg/tenantid (Go), tests/shared/test_tenant_id_rule.py (Python) and tools/portal/tests/tenant-id-rule.test.ts (portal), so the three readers of the schema's definitions.tenantId agree.",
+  "valid": [
+    "a",
+    "abc",
+    "a-b",
+    "0",
+    "123",
+    "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+  ],
+  "invalid": [
+    "",
+    "A",
+    "Team_A",
+    "_x",
+    "-x",
+    "x-",
+    "a_b",
+    "abc\n",
+    "é",
+    "a.b",
+    "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+  ]
+}
