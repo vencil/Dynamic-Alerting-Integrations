@@ -100,7 +100,8 @@
     "#2504 - a null key in a routes match (~, null, an empty `? ` key) is no label name: the entry is rejected in every reader, alone or beside a valid label. The generator keeps that key (as None) instead of dropping it as its loader drops null keys elsewhere, so it no longer renders the route on the other labels alone; a critical -> pagerduty route that carries one is no escalation.",
     "enforced_group_by_invalid (#2503, per tree): [file, field, kind] per bad group_by element of the `_routing_enforced` route(s) the generator renders - read from the root `_` files in name order, a later one with `enabled: true` (as PyYAML reads it: `yes` / `on` too) replacing an earlier; judged only with a truthy receiver that the receiver contract accepts (pkg/receiverspec, _grar_merge.build_receiver_config) and a non-empty group_by list, the `{{tenant}}` shape once per routed tenant AFTER substitution. field is `_routing_enforced.group_by[i]`, or `_routing_enforced (<tenant>).group_by[i]` for the `{{tenant}}` shape; file is the root file the enforced block came from. The generator's --strict ERROR (it names no file, so the Python half compares field and kind), da-guard's routing_group_by_invalid with an empty tenant and Field <file>:<field>. The --policy domain allowlist is not applied (load_tenant_tree does not know it).",
     "refused (#2341): null, or why the generator renders NOTHING for the tenant although it is declared - 'invalid_tenant_id' = its id is refused (tenant_ids, below; checked first); 'routing_not_mapping' = its `_routing` (tenant file over the root platform overlay), as PyYAML reads it, is neither a mapping nor a disabling string (disable / disabled / off / false, a YAML string): `slack`, a list, null, an unquoted false / off / no (a YAML boolean; a quoted 'off' disables). targets is then null. The generator's blocking `WARN ... skipping` (--strict: ERROR), da-guard's routing_not_mapping, tenant-api's 400 for a PUT body that writes it.",
-    "#2341 - tenant_api.batch verdict '400' = the whole batch request is refused with INVALID_BODY before any write: a `_routing` patch value that is no disabling string (`on`, `slack`, '', a JSON null) - a flat patch cannot write a `_routing` mapping, so re-enabling routing is a PUT.",
+    "#2341 - tenant_api.batch verdict '400' = the whole batch request is refused with INVALID_BODY before any write: a `_routing` patch value that is no disabling string (`on`, `slack`, '', a JSON null) - a flat patch cannot write a `_routing` mapping, so a batch re-enables routing with `unset`.",
+    "B2 (#2341) - tenant_api.batch may carry `unset` (a list; only '_routing'): the keys the op removes from the tenant's block on disk after its patch is laid over it. Removing `_routing` turns routing back on for a disabled tenant, so the op is judged like one that writes `_routing`: 'policy_violation' when the routing it re-enables breaks the domain policy, 'ok' otherwise.",
     "tenant_ids (#2341 R8): the ids every reader refuses (Python _lib_validation.is_valid_tenant_id, Go routingpolicy.IsValidTenantID) and accepts. Refused = the empty id plus every id that ALL three existing tenant-name rules refuse (operator_generate.py / migrate_to_operator.py: DNS-1123 label; alert_quality.py: ^[a-zA-Z0-9_-]+$) - i.e. not ^[A-Za-z0-9_-]+$; an id any of them accepts (UPPER) stays valid. A declared tenant with a refused id renders NOTHING (no route, receiver or inhibit rule): refused 'invalid_tenant_id', targets null - the generator's blocking `WARN ... skipping` (--strict: ERROR), da-guard's invalid_tenant_id (Field <file>:tenants.<id>), tenant-api's 400 on a write to that id.",
     "#2341 - a disabling string is decided as _lib_validation.is_disabled decides it: Python str.strip() (U+001C-U+001F are whitespace too) then lower() on the remaining text, which must be ASCII (U+0130 'I with dot' never lowers to 'i'): `\"\\x1coff\"` disables, `\"d\\u0130sable\"` is routing_not_mapping."
   ],
@@ -700,6 +701,62 @@
               "patch": {
                 "_routing": "disable"
               },
+              "verdict": "ok"
+            }
+          },
+          "python_differs": null,
+          "escalation": null,
+          "refused": null
+        }
+      },
+      "enforced_group_by_invalid": []
+    },
+    {
+      "name": "routing-unset-reenable",
+      "files": {
+        "_defaults.yaml": "defaults:\n  cpu_usage_percent: 80\n",
+        "_routing_profiles.yaml": "routing_profiles:\n  team-chat:\n    receiver:\n      type: slack\n      api_url: https://hooks.slack.com/services/T/B/x\n  domain-ok:\n    receiver:\n      type: pagerduty\n      service_key: ok-key\n",
+        "_domain_policy.yaml": "domain_policies:\n  finance:\n    tenants:\n    - t-un-chat\n    - t-un-ok\n    constraints:\n      forbidden_receiver_types:\n      - slack\n",
+        "t-un-chat.yaml": "tenants:\n  t-un-chat:\n    cpu_usage_percent: '85'\n    _routing_profile: team-chat\n    _routing: disable\n",
+        "t-un-ok.yaml": "tenants:\n  t-un-ok:\n    cpu_usage_percent: '85'\n    _routing_profile: domain-ok\n    _routing: disable\n"
+      },
+      "platform": [],
+      "expect": {
+        "t-un-chat": {
+          "targets": null,
+          "policy": [],
+          "rejected_routes": [],
+          "values_not_string": [],
+          "group_by_invalid": [],
+          "unknown_profile": null,
+          "tenant_api": {
+            "put": "ok",
+            "batch": {
+              "patch": {},
+              "unset": [
+                "_routing"
+              ],
+              "verdict": "policy_violation"
+            }
+          },
+          "python_differs": null,
+          "escalation": null,
+          "refused": null
+        },
+        "t-un-ok": {
+          "targets": null,
+          "policy": [],
+          "rejected_routes": [],
+          "values_not_string": [],
+          "group_by_invalid": [],
+          "unknown_profile": null,
+          "tenant_api": {
+            "put": "ok",
+            "batch": {
+              "patch": {},
+              "unset": [
+                "_routing"
+              ],
               "verdict": "ok"
             }
           },

@@ -23,11 +23,20 @@ import (
 // BatchOperation describes a single operation in a batch request.
 //
 // `Patch` map shape can't be expressed in struct-tag rules; per-key
-// validation lives in `body_validator.go::validatePatchMap`.
+// validation lives in `body_validator.go::validateBatchEdit` (patch keys via
+// validatePatchMap, unset keys against unsetAllowedKeys).
 type BatchOperation struct {
 	TenantID string `json:"tenant_id" validate:"required,min=1,max=256"`
 	// key → value to set (e.g., "_silent_mode": "warning"); at most 1000 entries.
+	// May be omitted; an operation with neither patch nor unset changes nothing.
 	Patch map[string]string `json:"patch" validate:"max=1000"`
+	// keys to remove from the tenant's config block; at most 1000 entries. Only "_routing" is
+	// accepted: removing it resets the tenant to `_routing_defaults` and its routing profile,
+	// which turns routing back on for a tenant a disabling `_routing` turned off (the change is
+	// judged by domain policy like a `_routing` patch). A key the tenant does not carry, or a
+	// tenant that does not exist, makes it a no-op: with no patch nothing is written and no
+	// tenant is created. A key must not appear twice, nor in both patch and unset.
+	Unset []string `json:"unset,omitempty" validate:"max=1000"`
 }
 
 // BatchRequest is the body for POST /api/v1/tenants/batch.
@@ -85,6 +94,7 @@ type BatchResponse struct {
 //
 // @Summary     Batch tenant operations
 // @Description Apply patch operations to multiple tenants in one call.
+// @Description An operation may also remove keys with unset (only "_routing"): unset ["_routing"] turns routing back on for a tenant a disabling _routing turned off, judged by domain policy.
 // @Description Direct mode: an operation whose tenant config file cannot be loaded as a tenant config (config_error malformed_yaml | invalid_config)
 // @Description is not applied: its result carries status error and code TENANT_CONFIG_NOT_LOADABLE; repair the tenant file itself first.
 // @Tags        tenants
@@ -95,6 +105,7 @@ type BatchResponse struct {
 // @Success     200  {object} BatchResponse
 // @Success     202  {object} map[string]interface{}
 // @Failure     400  {object} ErrorResponse
+// @Failure     403  {object} ErrorResponse "PR write-back mode: the forge token lacks write scope to open the PR/MR, or an operation breaks the domain policy on the latest base branch, which this server's local copy lags, or the base's _domain_policy.yaml cannot be loaded (code POLICY_VIOLATION, with tenant_id and operation); nothing written. Direct mode and violations the local copy shows are reported per operation in results instead."
 // @Failure     409  {object} ErrorResponse "PR write-back mode: a tenant in the batch is already declared by another conf.d file (code TENANT_DECLARED_ELSEWHERE), or its config file cannot be loaded as a tenant config (code TENANT_CONFIG_NOT_LOADABLE, with tenant_id and config_error; repair the tenant file itself first); nothing written. Direct mode reports these per op in results[].code instead."
 // @Failure     413  {object} ErrorResponse
 // @Failure     500  {object} ErrorResponse
@@ -137,8 +148,8 @@ func BatchTenants(d *Deps) http.HandlerFunc {
 		// for the operator to fix everything, not retry-and-discover).
 		violations := ValidateStructTags(&req)
 		for i, op := range req.Operations {
-			fieldPrefix := fmt.Sprintf("operations[%d].patch", i)
-			violations = append(violations, validatePatchMap(op.Patch, fieldPrefix)...)
+			fieldPrefix := fmt.Sprintf("operations[%d]", i)
+			violations = append(violations, validateBatchEdit(op.Patch, op.Unset, fieldPrefix)...)
 		}
 		if len(violations) > 0 {
 			WriteValidationErrors(rw, r, violations)
@@ -216,10 +227,13 @@ func runBatchPR(d *Deps, rw http.ResponseWriter, r *http.Request, ops []BatchOpe
 	// Pre-validate all ops (RBAC + policy) before creating any branch
 	var batchOps []gitops.PRBatchOp
 	var batchResults []BatchResult
-	// included[t]: the patches of t's ops already taken into this PR, in
-	// order. WritePRBatch merges them all onto one base in that order, so a
-	// routing check must see them stacked (batchRoutingViolations).
-	included := map[string][]map[string]string{}
+	// included[t]: t's ops already taken into this PR, in order — each with
+	// its patch AND its unset, since removing `_routing` changes the routing
+	// as much as setting it. WritePRBatch merges them all onto one base in
+	// that order, so a routing check must see them stacked
+	// (batchRoutingViolations). A refused op is never appended: nothing of it
+	// lands.
+	included := map[string][]BatchOperation{}
 	// advisoriesByTenant: the non-blocking #2325 domain-policy notes of each
 	// tenant's LAST routing op taken into the PR. An earlier op of the same
 	// tenant is judged on an intermediate routing the later ops are stacked
@@ -232,7 +246,7 @@ func runBatchPR(d *Deps, rw http.ResponseWriter, r *http.Request, ops []BatchOpe
 	// advisories below flattens them.
 	advisoriesByTenant := map[string][]string{}
 	var advisoryTenants []string
-	for _, op := range ops {
+	for i, op := range ops {
 		if err := ValidateWritableTenantID(op.TenantID); err != nil {
 			batchResults = append(batchResults, BatchResult{TenantID: op.TenantID, Status: "error", Message: err.Error()})
 			continue
@@ -242,12 +256,13 @@ func runBatchPR(d *Deps, rw http.ResponseWriter, r *http.Request, ops []BatchOpe
 			continue
 		}
 		if d.Policy != nil {
-			// #2280: an op that sets `_routing_profile` / `_routing` is judged
-			// on the routing it produces; see batchRoutingViolations. Checked
-			// here, not inside the merge closure, so one refused op is left out
-			// instead of aborting the whole PR.
+			// #2280: an op that sets `_routing_profile` / `_routing`, or
+			// unsets `_routing`, is judged on the routing it produces; see
+			// batchRoutingViolations. Checked here, not inside the merge
+			// closure, so one refused op is left out instead of aborting the
+			// whole PR.
 			violations := d.Policy.CheckWrite(op.TenantID, op.Patch)
-			routingViolations, adv := batchRoutingViolations(d.ConfigDir, d.Policy, op.TenantID, included[op.TenantID], op.Patch)
+			routingViolations, adv, judged := batchRoutingViolations(d.ConfigDir, d.Policy, included[op.TenantID], op)
 			violations = append(violations, routingViolations...)
 			if len(violations) > 0 {
 				msgs := make([]string, len(violations))
@@ -258,7 +273,7 @@ func runBatchPR(d *Deps, rw http.ResponseWriter, r *http.Request, ops []BatchOpe
 				continue
 			}
 			// #2325: batch-level, like the notices (each names its tenant).
-			if touchesRouting(op.Patch) {
+			if judged {
 				if _, seen := advisoriesByTenant[op.TenantID]; !seen {
 					advisoryTenants = append(advisoryTenants, op.TenantID)
 				}
@@ -268,16 +283,29 @@ func runBatchPR(d *Deps, rw http.ResponseWriter, r *http.Request, ops []BatchOpe
 		// #1097: carry a merge closure, not pre-built content, so the
 		// authoritative partial merge runs under the writer lock against
 		// the fresh base (preserving untouched keys). op is per-iteration
-		// (Go 1.22+), so the closure binds this op's TenantID/Patch.
+		// (Go 1.22+), so the closure binds this op's TenantID/Patch/Unset.
 		op := op
 		batchOps = append(batchOps, gitops.PRBatchOp{
 			TenantID: op.TenantID,
 			Merge: func(existing []byte) (string, error) {
-				return mergePatchYAML(existing, op.TenantID, op.Patch)
+				merged, err := mergePatchYAML(existing, op.TenantID, op.Patch, op.Unset)
+				if err != nil {
+					return "", err
+				}
+				// B2 F1: the check above read the pod's local tree; this one
+				// reads the fresh base the branch is cut from. A refusal here
+				// aborts the whole batch (WritePRBatch), nothing written.
+				if d.Policy != nil {
+					v, loadErr := freshBasePolicyCheck(d.ConfigDir, op, existing, merged)
+					if loadErr != nil || len(v) > 0 {
+						return "", &freshBasePolicyError{TenantID: op.TenantID, Op: i, Violations: v, LoadErr: loadErr}
+					}
+				}
+				return merged, nil
 			},
 		})
 		batchResults = append(batchResults, BatchResult{TenantID: op.TenantID, Status: "included"})
-		included[op.TenantID] = append(included[op.TenantID], op.Patch)
+		included[op.TenantID] = append(included[op.TenantID], op)
 	}
 
 	var advisories []string
@@ -307,6 +335,15 @@ func runBatchPR(d *Deps, rw http.ResponseWriter, r *http.Request, ops []BatchOpe
 		var notLoadable *tenantFileNotLoadableError
 		if errors.As(err, &notLoadable) {
 			writeTenantFileNotLoadable(rw, r, notLoadable)
+			return BatchResponse{}, false
+		}
+		// B2 F1: an op breaks the domain policy on the fresh base although
+		// the pre-check (the pod's local tree) let it through. The whole PR
+		// is refused, like the refusals above; same 403 POLICY_VIOLATION as
+		// PUT (writePolicyViolation).
+		var freshPolicy *freshBasePolicyError
+		if errors.As(err, &freshPolicy) {
+			writeFreshBasePolicyViolation(rw, r, freshPolicy)
 			return BatchResponse{}, false
 		}
 		// #1102: an all-no-op batch (idempotent patch / retry) produced no
@@ -394,7 +431,7 @@ func executeBatchOps(ctx context.Context, w *gitops.Writer, configDir string, op
 			violations := policyMgr.CheckWrite(op.TenantID, op.Patch)
 			// nil prior: each op is written before the next one is judged,
 			// and the next one reads the file back.
-			routingViolations, adv := batchRoutingViolations(configDir, policyMgr, op.TenantID, nil, op.Patch)
+			routingViolations, adv, _ := batchRoutingViolations(configDir, policyMgr, nil, op)
 			violations = append(violations, routingViolations...)
 			if len(violations) > 0 {
 				msgs := make([]string, len(violations))
@@ -425,7 +462,7 @@ func executeBatchOps(ctx context.Context, w *gitops.Writer, configDir string, op
 // them.
 func applyPatch(ctx context.Context, w *gitops.Writer, configDir string, op BatchOperation, authorEmail string) BatchResult {
 	merge := func(existing []byte) (string, error) {
-		return mergePatchYAML(existing, op.TenantID, op.Patch)
+		return mergePatchYAML(existing, op.TenantID, op.Patch, op.Unset)
 	}
 	notices, err := w.WriteMerged(ctx, op.TenantID, authorEmail, merge)
 	if err != nil {
@@ -483,8 +520,30 @@ func applyPatch(ctx context.Context, w *gitops.Writer, configDir string, op Batc
 // ⚠️ The rationale lives HERE and not on the struct field because swag turns a
 // field's doc comment into the published OpenAPI description — internal cost
 // notes do not belong in the API contract.
-func mergePatchYAML(existing []byte, tenantID string, patch map[string]string) (string, error) {
+//
+// unset (B2, #2341) names keys to REMOVE from `tenants.<tenantID>` after the
+// patch is set; a key the block does not carry is a no-op. Unlike the patch,
+// unset MAY remove a structured (mapping / sequence) value: removing a
+// `_routing` mapping is exactly how a batch resets the tenant to
+// `_routing_defaults` + its profile, and nothing nested is clobbered by a
+// scalar — the key goes away whole, as a PUT without it would leave it. A
+// comment attached to the removed key goes with it. Which keys may be
+// removed is decided before this runs (validateBatchEdit); a brand-new
+// tenant (existing empty) has nothing to remove, so buildPatchYAML ignores
+// unset.
+//
+// An edit that changes nothing returns gitops.ErrMergeNoOp, which the writer
+// treats as success without writing (as RFC 7396 treats removing an absent
+// member): an empty patch whose unset removes nothing — the tenant has no
+// file, no section in its file, or none of the keys. Without it, an
+// unset-only op would CREATE the tenant (`<id>: {}`) or re-encode an
+// unchanged file into a reformatting commit. An empty patch with an empty
+// unset is the same no-op (the pre-B2 tenant batch accepted it with 200).
+func mergePatchYAML(existing []byte, tenantID string, patch map[string]string, unset []string) (string, error) {
 	if len(bytes.TrimSpace(existing)) == 0 {
+		if len(patch) == 0 {
+			return "", gitops.ErrMergeNoOp
+		}
 		return buildPatchYAML(tenantID, patch), nil
 	}
 	// #2373 review F1: refuse a file threshold-exporter rejects. The patch
@@ -511,6 +570,11 @@ func mergePatchYAML(existing []byte, tenantID string, patch map[string]string) (
 		return "", fmt.Errorf("current tenant yaml has no `tenants:` mapping")
 	}
 	tenantVal := yamlMapValue(tenantsVal, tenantID)
+	if len(patch) == 0 && (tenantVal == nil || (tenantVal.Kind == yaml.MappingNode && !carriesAny(tenantVal, unset))) {
+		// Nothing to set and nothing there to remove. A section that is not
+		// a mapping still gets the structural error below.
+		return "", gitops.ErrMergeNoOp
+	}
 	if tenantVal == nil {
 		// File exists (perhaps other content) but not this tenant's section: add it.
 		tenantVal = &yaml.Node{Kind: yaml.MappingNode, Tag: "!!map"}
@@ -543,6 +607,9 @@ func mergePatchYAML(existing []byte, tenantID string, patch map[string]string) (
 			return "", fmt.Errorf("encode patch value for %q: %w", k, err)
 		}
 		yamlSetMapValue(tenantVal, k, &vn)
+	}
+	for _, k := range unset {
+		yamlDeleteMapValue(tenantVal, k)
 	}
 
 	var buf bytes.Buffer
@@ -603,4 +670,25 @@ func yamlSetMapValue(m *yaml.Node, key string, val *yaml.Node) {
 	}
 	m.Content = append(m.Content,
 		&yaml.Node{Kind: yaml.ScalarNode, Tag: "!!str", Value: key}, val)
+}
+
+// carriesAny reports whether mapping m carries at least one of keys.
+func carriesAny(m *yaml.Node, keys []string) bool {
+	for _, k := range keys {
+		if yamlMapValue(m, k) != nil {
+			return true
+		}
+	}
+	return false
+}
+
+// yamlDeleteMapValue removes key and its value from a mapping node; a key the
+// mapping does not carry is a no-op.
+func yamlDeleteMapValue(m *yaml.Node, key string) {
+	for i := 0; i+1 < len(m.Content); i += 2 {
+		if m.Content[i].Value == key {
+			m.Content = append(m.Content[:i], m.Content[i+2:]...)
+			return
+		}
+	}
 }

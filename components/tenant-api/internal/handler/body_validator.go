@@ -37,6 +37,7 @@ import (
 	"errors"
 	"fmt"
 	"reflect"
+	"sort"
 	"strconv"
 	"strings"
 
@@ -245,7 +246,7 @@ func validateRoutingPatch(value string) string {
 	}
 	return fmt.Sprintf("a batch patch can only turn routing off: _routing must be a disabling string "+
 		"(disable, disabled, off, false), got %q; to turn routing back on, PUT the tenant with a _routing "+
-		"mapping, or remove _routing", value)
+		"mapping, or remove _routing with unset: [\"_routing\"] in the batch", value)
 }
 
 // validateProfileReference enforces the length cap on a profile-name
@@ -309,6 +310,73 @@ func validatePatchMap(patch map[string]string, fieldPrefix string) []Violation {
 					Reason: reason,
 				})
 			}
+		}
+	}
+	return violations
+}
+
+// ─────────────────────────────────────────────────────────────────
+// Batch `unset` ([]string) validation — B2 (#2341)
+// ─────────────────────────────────────────────────────────────────
+
+// unsetAllowedKeys are the keys a batch op's `unset` may remove. A strict
+// allowlist, unlike the patch's soft one: removing a key is not judged by any
+// value rule, so each key admitted here must be one whose removal the write
+// path is known to handle — `_routing`, whose removal resets the tenant to
+// `_routing_defaults` + its profile and is judged by domain policy
+// (touchesRouting). Widening it is one entry here plus the docs.
+var unsetAllowedKeys = map[string]bool{
+	"_routing": true,
+}
+
+// unsetAllowedList is unsetAllowedKeys sorted, for the violation text.
+func unsetAllowedList() string {
+	keys := make([]string, 0, len(unsetAllowedKeys))
+	for k := range unsetAllowedKeys {
+		keys = append(keys, strconv.Quote(k))
+	}
+	sort.Strings(keys)
+	return strings.Join(keys, ", ")
+}
+
+// validateBatchEdit validates one batch op's patch and unset together:
+// validatePatchMap on the patch (field `<prefix>.patch[...]`), then each
+// unset key (field `<prefix>.unset[i]`) — in unsetAllowedKeys, not repeated,
+// not also in the patch. prefix is "operations[i]" for /tenants/batch and ""
+// for /groups/{id}/batch. Returns every violation, like validatePatchMap.
+// An op with neither patch nor unset is NOT refused here: /tenants/batch
+// keeps its pre-B2 no-op for it, and /groups/{id}/batch keeps its own
+// earlier 400.
+func validateBatchEdit(patch map[string]string, unset []string, prefix string) []Violation {
+	field := func(name string) string {
+		if prefix == "" {
+			return name
+		}
+		return prefix + "." + name
+	}
+	violations := validatePatchMap(patch, field("patch"))
+	seen := make(map[string]int, len(unset))
+	for i, k := range unset {
+		at := fmt.Sprintf("%s[%d]", field("unset"), i)
+		if len(k) > maxPatchKeyLen {
+			violations = append(violations, Violation{Field: at,
+				Reason: fmt.Sprintf("key length must not exceed %d characters; got %d", maxPatchKeyLen, len(k))})
+			continue
+		}
+		if !unsetAllowedKeys[k] {
+			violations = append(violations, Violation{Field: at,
+				Reason: fmt.Sprintf("unset can only remove %s; got %q", unsetAllowedList(), k)})
+			continue
+		}
+		if j, dup := seen[k]; dup {
+			violations = append(violations, Violation{Field: at,
+				Reason: fmt.Sprintf("%q is already listed at %s[%d]", k, field("unset"), j)})
+			continue
+		}
+		seen[k] = i
+		if _, set := patch[k]; set {
+			violations = append(violations, Violation{Field: at,
+				Reason: fmt.Sprintf("%q is also in patch: a key cannot be both set and removed", k)})
 		}
 	}
 	return violations

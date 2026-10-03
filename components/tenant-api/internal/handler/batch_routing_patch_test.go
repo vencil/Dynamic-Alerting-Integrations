@@ -5,8 +5,10 @@ package handler
 // `on`, `slack`, an empty or blank string, and JSON null (which decodes to
 // "") — is refused with 400 INVALID_BODY by validatePatchMap, before any
 // write, on /tenants/batch and /groups/{id}/batch, in both write modes.
-// (A later RFC 7396 change is to make null mean "delete the key"; until then
-// null is refused like "".)
+// A JSON null is refused like "": removing `_routing` is the op's `unset`
+// (B2, batch_unset_test.go), not RFC 7396 null — the spec is Swagger 2.0,
+// which cannot express a nullable value, so a generated client could not
+// send one.
 
 import (
 	"bytes"
@@ -46,8 +48,8 @@ func assertRoutingPatchRefused(t *testing.T, w *httptest.ResponseRecorder, field
 		t.Fatalf("unmarshal: %v", err)
 	}
 	if bad.Code != CodeInvalidBody || len(bad.Violations) != 1 || bad.Violations[0].Field != field ||
-		!strings.Contains(bad.Violations[0].Reason, "PUT the tenant with a _routing mapping, or remove _routing") {
-		t.Errorf("response = %+v, want one %s violation on %s naming PUT / removal", bad, CodeInvalidBody, field)
+		!strings.Contains(bad.Violations[0].Reason, `PUT the tenant with a _routing mapping, or remove _routing with unset: ["_routing"]`) {
+		t.Errorf("response = %+v, want one %s violation on %s naming PUT / unset", bad, CodeInvalidBody, field)
 	}
 }
 

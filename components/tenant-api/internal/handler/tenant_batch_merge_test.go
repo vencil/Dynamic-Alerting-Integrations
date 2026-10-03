@@ -36,7 +36,7 @@ func TestMergePatchYAML_PreservesKeysAndComments(t *testing.T) {
 	t.Parallel()
 	out, err := mergePatchYAML([]byte(existingTenantYAML), "db-a", map[string]string{
 		"_silent_mode": "warning",
-	})
+	}, nil)
 	if err != nil {
 		t.Fatalf("mergePatchYAML: %v", err)
 	}
@@ -73,7 +73,7 @@ func TestMergePatchYAML_PreservesKeysAndComments(t *testing.T) {
 func TestMergePatchYAML_NewTenantFallback(t *testing.T) {
 	t.Parallel()
 	// Empty existing → brand-new tenant → minimal doc (no error).
-	out, err := mergePatchYAML(nil, "new-db", map[string]string{"_silent_mode": "critical"})
+	out, err := mergePatchYAML(nil, "new-db", map[string]string{"_silent_mode": "critical"}, nil)
 	if err != nil {
 		t.Fatalf("mergePatchYAML(nil): %v", err)
 	}
@@ -88,11 +88,11 @@ func TestMergePatchYAML_MalformedExistingErrors(t *testing.T) {
 	t.Parallel()
 	// A non-empty but unparseable existing file must ERROR, never silently
 	// overwrite — overwriting is the exact data loss this fix prevents.
-	if _, err := mergePatchYAML([]byte("{{not yaml"), "db-a", map[string]string{"_silent_mode": "warning"}); err == nil {
+	if _, err := mergePatchYAML([]byte("{{not yaml"), "db-a", map[string]string{"_silent_mode": "warning"}, nil); err == nil {
 		t.Error("expected error for unparseable existing file, got nil (would clobber)")
 	}
 	// Existing file whose tenants.<id> is a scalar, not a mapping → error.
-	if _, err := mergePatchYAML([]byte("tenants:\n  db-a: oops\n"), "db-a", map[string]string{"_silent_mode": "warning"}); err == nil {
+	if _, err := mergePatchYAML([]byte("tenants:\n  db-a: oops\n"), "db-a", map[string]string{"_silent_mode": "warning"}, nil); err == nil {
 		t.Error("expected error when tenants.db-a is not a mapping, got nil")
 	}
 }
@@ -103,7 +103,7 @@ func TestMergePatchYAML_RefusesStructuredClobber(t *testing.T) {
 	// with a scalar must be REJECTED, not silently clobber the nested data — and
 	// as an ErrValidation (client error), symmetric with the `_custom_alerts`
 	// downstream rejection.
-	_, err := mergePatchYAML([]byte(existingTenantYAML), "db-a", map[string]string{"_metadata": "oops"})
+	_, err := mergePatchYAML([]byte(existingTenantYAML), "db-a", map[string]string{"_metadata": "oops"}, nil)
 	if err == nil {
 		t.Fatal("expected error clobbering structured _metadata with a scalar, got nil")
 	}
@@ -111,7 +111,7 @@ func TestMergePatchYAML_RefusesStructuredClobber(t *testing.T) {
 		t.Errorf("structured-clobber error should wrap ErrValidation (→400), got: %v", err)
 	}
 	// A normal scalar key is still patchable.
-	if _, err := mergePatchYAML([]byte(existingTenantYAML), "db-a", map[string]string{"mysql_threads_running": "75"}); err != nil {
+	if _, err := mergePatchYAML([]byte(existingTenantYAML), "db-a", map[string]string{"mysql_threads_running": "75"}, nil); err != nil {
 		t.Errorf("scalar key patch should succeed, got: %v", err)
 	}
 }
@@ -122,7 +122,7 @@ func TestMergePatchYAML_ValueStaysQuotedString(t *testing.T) {
 	// leak into the file as a bare int that changes type on the next read.
 	out, err := mergePatchYAML([]byte(existingTenantYAML), "db-a", map[string]string{
 		"mysql_threads_running": "75",
-	})
+	}, nil)
 	if err != nil {
 		t.Fatalf("mergePatchYAML: %v", err)
 	}
