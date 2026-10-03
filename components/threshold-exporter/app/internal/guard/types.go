@@ -84,7 +84,7 @@
 //     exporter's build's own (CheckInput.UndeliverableInherited), filtered
 //     by pkg/config's undeliverableThresholds, not re-derived here.
 //
-//  8. Reserved keys in subtree defaults (#2388; see subtree.go), warn for
+//  8. Reserved keys in subtree defaults (#2388; see subtree_reserved.go), warn for
 //     now: a subtree `_defaults.yaml` in a tenant's chain carries a reserved
 //     key (`_state_*`, `_silent_mode`, …) in its defaults. The set is read
 //     off the exporter's build's chain (CheckInput.SubtreeReservedKeys).
@@ -454,4 +454,10 @@ type CheckInput struct {
 	// Each (tenant, key) becomes a subtree_default_reserved_key warning for a
 	// tenant in EffectiveConfigs (#2388); nil skips the check.
 	SubtreeReservedKeys map[string]map[string][]string `json:"-"`
+
+	// DeclaredStateFilters is the root `state_filters:` names
+	// (config.ScopedTenants.DeclaredStateFilters); the
+	// subtree_default_reserved_key fix for `_state_<f>` depends on whether f
+	// is declared (#2388 r2). nil = none declared.
+	DeclaredStateFilters map[string]bool `json:"-"`
 }

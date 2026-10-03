@@ -4,7 +4,8 @@ package guard
 //
 // A subtree `_defaults.yaml` (not the conf.d root's) whose defaults carry a
 // reserved key — `_state_*`, `_silent_mode`, `_severity_dedup`, `_metadata`,
-// … (not `_routing*`, which the routing checks report) — is an operator
+// … (not the routing keys `_routing` / `_routing_<…>`, which the routing
+// checks report) — or a `_silent_*` / `_state_*` key nothing reads is an operator
 // configuration error: subtree defaults do
 // not support these keys. Today the exporter's subtree overlay applies some
 // values of them (a `disable`, a number) and drops the rest, so for example a
@@ -21,6 +22,8 @@ import (
 	"fmt"
 	"sort"
 	"strings"
+
+	"github.com/vencil/threshold-exporter/pkg/config"
 )
 
 // FindingSubtreeDefaultReservedKey (warn; #2388): a subtree `_defaults.yaml`
@@ -67,11 +70,7 @@ func checkSubtreeReservedKeys(input CheckInput) []Finding {
 				Kind:     FindingSubtreeDefaultReservedKey,
 				TenantID: id,
 				Field:    k,
-				Message: fmt.Sprintf("Reserved key `%s` is set in the defaults of a subtree `_defaults.yaml` (%s) "+
-					"that this tenant inherits from; subtree defaults do not support reserved keys. %s %s "+
-					"From the next minor release the exporter stops applying these keys from a subtree "+
-					"`_defaults.yaml`, and this warning becomes an error (#2388).",
-					k, quoteJoin(files), reservedKeyToday(k), reservedKeyFix(k)),
+				Message:  subtreeReservedMessage(k, files, input.DeclaredStateFilters),
 			})
 		}
 	}
@@ -115,6 +114,34 @@ func writtenInsideDefaults(files []string, unwrapped map[string]bool) []string {
 	return out
 }
 
+// subtreeReservedMessage is the finding's message for key k written by files.
+//
+// ⛔ THREE SHAPES, because "set it in each tenant's own entry" is only a fix
+// where a tenant's own entry is read (#2388 r2, measured): a `_state_<f>` whose
+// f the root `state_filters:` does not declare, and a `_silent_*` key that is
+// not a recognised key (baseRowsSkipKey, not IsReservedKey: `_silent_x`), are
+// read by nothing in a tenant's entry either — moving them there made this
+// finding go away while the value was still not served, and nothing said so.
+// Those two get "declare the filter or delete it" / "delete it" instead.
+func subtreeReservedMessage(k string, files []string, declared map[string]bool) string {
+	where := fmt.Sprintf("is set in the defaults of a subtree `_defaults.yaml` (%s) that this tenant inherits from", quoteJoin(files))
+	const tail = "From the next minor release the exporter stops applying these keys from a subtree " +
+		"`_defaults.yaml`, and this warning becomes an error (#2388)."
+	if f, isState := strings.CutPrefix(k, "_state_"); isState && !declared[f] {
+		return fmt.Sprintf("Reserved key `%s` %s; subtree defaults do not support reserved keys. "+
+			"The conf.d root `state_filters:` does not declare a filter `%s`, so nothing reads `%s` "+
+			"anywhere, a tenant's own entry included. Declare `%s` under `state_filters:` in the conf.d "+
+			"root `_defaults.yaml` (this applies to every tenant in the tree), or delete the key. %s",
+			k, where, f, k, f, tail)
+	}
+	if !config.IsReservedKey(k) {
+		return fmt.Sprintf("Key `%s` %s. It is not a recognised key: the exporter does not read it, "+
+			"in a subtree `_defaults.yaml` or in a tenant's own entry. Delete it. %s", k, where, tail)
+	}
+	return fmt.Sprintf("Reserved key `%s` %s; subtree defaults do not support reserved keys. %s %s %s",
+		k, where, reservedKeyToday(k), reservedKeyFix(k), tail)
+}
+
 // reservedKeyToday is the finding's sentence on what the exporter does with
 // key k from a subtree defaults file today. pkg/config's applySubtreeDefaults
 // applies a value only when it is threshold-shaped (`disable` or a number),
@@ -130,12 +157,14 @@ func reservedKeyToday(k string) string {
 		"and ignores any other value (for example a severity name or a mapping)."
 }
 
-// reservedKeyFix is the finding's fix sentence for reserved key k. (No
-// `_routing*` key reaches here: the routing checks own those.)
+// reservedKeyFix is the finding's fix sentence for a recognised reserved key
+// k, `_state_<f>` with f declared (subtreeReservedMessage routes the rest).
+// (No routing key reaches here: the routing checks own those.)
 func reservedKeyFix(k string) string {
 	if strings.HasPrefix(k, "_state_") {
 		return fmt.Sprintf("Set `%s` in each tenant's own entry under `tenants:`, or set "+
-			"`state_filters.%s.default_state` in the conf.d root `_defaults.yaml`.",
+			"`state_filters.%s.default_state` in the conf.d root `_defaults.yaml` — that affects every "+
+			"tenant in the tree; to change only this subtree's tenants, set the key in each tenant's own entry.",
 			k, strings.TrimPrefix(k, "_state_"))
 	}
 	if readElsewhere[k] { // `_custom_alerts`: its reader takes it from the top level

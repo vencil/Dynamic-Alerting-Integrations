@@ -317,6 +317,17 @@ func IsReservedKey(k string) bool {
 	return false
 }
 
+// IsRoutingKey reports whether k is a routing key: `_routing` or
+// `_routing_<…>` — the keys the route generator reads, and the ones
+// routingpolicy.UnreadRouting reports where it does not (#2291). Narrower
+// than the `_routing` reserved PREFIX: `_routingProfile` / `_routings` are
+// reserved keys (IsReservedKey) but not routing keys. Lives here, not in
+// pkg/routingpolicy, because that package imports this one; the #2388 report
+// (subtreeReservedKeys) and UnreadRouting both call it.
+func IsRoutingKey(k string) bool {
+	return k == "_routing" || strings.HasPrefix(k, "_routing_")
+}
+
 // RoutingConfig represents a tenant's alert routing preferences.
 // Used by generate_alertmanager_routes.py to produce Alertmanager route/receiver fragments.
 //

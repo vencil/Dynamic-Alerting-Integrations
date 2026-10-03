@@ -273,3 +273,137 @@ func TestGuard_SubtreeReservedGoldenMixedMode(t *testing.T) {
 		t.Errorf("findings = %v, want %v", rows, want)
 	}
 }
+
+// allFindings runs the guard with --format json and returns every finding as
+// "severity kind tenant field".
+func allFindings(t *testing.T, args ...string) []string {
+	t.Helper()
+	code, stdout, stderr := runOnce(t, append([]string{"--format", "json"}, args...)...)
+	var doc struct {
+		Report *guard.GuardReport `json:"report"`
+	}
+	if err := json.Unmarshal([]byte(stdout), &doc); err != nil {
+		t.Fatalf("stdout is not JSON (exit %d): %v\nstderr=%s", code, err, stderr)
+	}
+	var out []string
+	for _, f := range doc.Report.Findings {
+		out = append(out, string(f.Severity)+" "+string(f.Kind)+" "+f.TenantID+" "+f.Field)
+	}
+	return out
+}
+
+// #2388 r2 (F1): the routing exclusion is the routing checks' own predicate
+// (config.IsRoutingKey: `_routing`, `_routing_<…>`), not the `_routing`
+// reserved prefix. `_routingProfile` is a reserved key no routing check names:
+// reported here. `_routing_xyz` inside `defaults:` is routing_in_unread_location
+// (an error) and not repeated here. A top-level `_routing_defaults` in an
+// unwrapped subtree file is the generator's spelling (#2326): neither reports.
+func TestGuard_SubtreeReservedRoutingKeys(t *testing.T) {
+	t.Parallel()
+	for _, tc := range []struct {
+		name, subtree string
+		want          []string
+	}{
+		{name: "routingProfile", subtree: "defaults:\n  _routingProfile: p1\n",
+			want: []string{"warn subtree_default_reserved_key t1 _routingProfile"}},
+		{name: "routing-key-in-defaults", subtree: "defaults:\n  _routing_xyz: p1\n",
+			want: []string{"error routing_in_unread_location  finance/_defaults.yaml:defaults._routing_xyz"}},
+		{name: "top-level-routing-defaults", subtree: "_routing_defaults:\n  receiver:\n    type: webhook\n" +
+			"    url: https://hooks.example.com/a\n",
+			want: nil},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			files := reservedCase{defaultState: "disable", tenant: "{}"}.files()
+			files["finance/_defaults.yaml"] = tc.subtree
+			got := allFindings(t, "--config-dir", writeReservedConfD(t, files))
+			if !reflect.DeepEqual(got, tc.want) {
+				t.Errorf("findings = %q, want %q", got, tc.want)
+			}
+		})
+	}
+}
+
+// #2388 r2 (F2, F3): the fix depends on the key. The blind review's f8 shape:
+// a subtree writing `_state_nope` (no such filter declared), `_silent_x` (not a
+// recognised key), and the recognised `_silent_mode` / `_severity_dedup`.
+func TestGuard_SubtreeReservedMessageShapes(t *testing.T) {
+	t.Parallel()
+	files := map[string]string{
+		"_defaults.yaml": reservedRoot("disable"),
+		"a/_defaults.yaml": "defaults:\n  _silent_mode: warning\n  _state_nope: enable\n  _silent_x: 3\n" +
+			"  _severity_dedup: disable\n  _state_maintenance: enable\n",
+		"a/b/t.yaml": "tenants:\n  t1: {}\n",
+	}
+	_, got := reservedFindings(t, "--config-dir", writeReservedConfD(t, files))
+	msg := map[string]string{}
+	for _, f := range got {
+		msg[f.Field] = f.Message
+	}
+	const ownEntry = "in each tenant's own entry"
+	for _, tc := range []struct {
+		key        string
+		want, deny []string
+	}{
+		{key: "_state_nope",
+			want: []string{"does not declare a filter `nope`", "Declare `nope` under `state_filters:`",
+				"every tenant in the tree", "or delete the key"},
+			deny: []string{ownEntry + " under", "Set `_state_nope`"}},
+		{key: "_silent_x",
+			want: []string{"Key `_silent_x`", "not a recognised key", "Delete it."},
+			deny: []string{"Reserved key", "Set `_silent_x`"}},
+		{key: "_state_maintenance",
+			want: []string{"Set `_state_maintenance` " + ownEntry, "`state_filters.maintenance.default_state`",
+				"affects every tenant in the tree; to change only this subtree's tenants"}},
+		{key: "_silent_mode", want: []string{"Reserved key", "Set `_silent_mode` " + ownEntry}},
+	} {
+		m, ok := msg[tc.key]
+		if !ok {
+			t.Errorf("no finding for %s; got %v", tc.key, got)
+			continue
+		}
+		for _, w := range tc.want {
+			if !strings.Contains(m, w) {
+				t.Errorf("%s: message lacks %q: %s", tc.key, w, m)
+			}
+		}
+		for _, d := range tc.deny {
+			if strings.Contains(m, d) {
+				t.Errorf("%s: message has %q: %s", tc.key, d, m)
+			}
+		}
+	}
+	if len(got) != 5 {
+		t.Errorf("findings = %d, want 5: %v", len(got), got)
+	}
+}
+
+// #2388 r2 (F2): following each message's advice on the f8 shape — declare the
+// filter at the root, delete `_silent_x`, move the recognised keys into the
+// tenant's entry — leaves no finding AND serves the values. The declared
+// filter applies to every tenant in the tree (t2 in c/ too), which is why the
+// message says so (F3).
+func TestGuard_SubtreeReservedAdviceIsAFix(t *testing.T) {
+	t.Parallel()
+	files := map[string]string{
+		"_defaults.yaml": "defaults:\n  mysql_connections: 80\n" +
+			"state_filters:\n  nope:\n    reasons: []\n    severity: warning\n    default_state: enable\n",
+		"a/_defaults.yaml": "defaults:\n  mysql_connections: 70\n",
+		"a/b/t.yaml":       "tenants:\n  t1:\n    _silent_mode: warning\n    _severity_dedup: disable\n",
+		"c/t.yaml":         "tenants:\n  t2: {}\n",
+	}
+	code, got := reservedFindings(t, "--config-dir", writeReservedConfD(t, files), "--warn-as-error")
+	if code != exitOK || len(got) != 0 {
+		t.Errorf("exit = %d, findings = %+v; want 0 and none", code, got)
+	}
+	code, doc, _, stderr := served(t, files, "2026-10-01T00:00:00Z")
+	mustOK(t, code, stderr)
+	t1 := doc.Tenants["t1"].Values
+	if t1["_state_nope"] != true || !reflect.DeepEqual(t1["_silent_mode"], []any{"warning"}) ||
+		t1["_severity_dedup"] != "disable" {
+		t.Errorf("t1 values = %v; want _state_nope true, _silent_mode [warning], _severity_dedup disable", t1)
+	}
+	if v := doc.Tenants["t2"].Values["_state_nope"]; v != true {
+		t.Errorf("t2 _state_nope = %v, want true (the root filter covers the whole tree)", v)
+	}
+}

@@ -545,17 +545,23 @@ func subtreeDefaultsRefusedKey(k string) bool {
 // not changed here; from the next minor release it stops applying these
 // keys and da-guard's finding becomes an error.
 //
-// ⚠️ `_routing*` KEYS ARE LEFT OUT, and only here (#1976's report leaves
-// them out through the shared predicate). da-guard's routing checks already
-// own every such key in a subtree defaults file: one inside `defaults:` is
+// ⚠️ ROUTING KEYS (IsRoutingKey: `_routing`, `_routing_<…>`) ARE LEFT OUT,
+// and only here (#1976's report leaves them out through the shared
+// predicate). da-guard's routing checks already own every such key in a
+// subtree defaults file, and IsRoutingKey is their own predicate
+// (routingpolicy.UnreadRouting), so the two cannot disagree on which keys
+// that is: one inside `defaults:` is
 // routing_in_unread_location (an error), `_routing_enforced` below the root
 // is routing_enforced_below_root (an error), and a top-level
 // `_routing_defaults` in a subtree `_defaults.yaml` with no `defaults:`
 // wrapper is the route generator's documented spelling (#2326) — which
 // `parsed` holds too, because the merge then reads the whole document.
 // Listing them here would repeat an error as a warning, or report a valid
-// file. guard.TopLevelReadElsewhere is NOT used for this: it names only the
-// top-level `_routing_defaults` / `_routing_enforced`, and would leave a
+// file. A key under the `_routing` reserved prefix that is NOT a routing
+// key (`_routingProfile`, `_routings`) is listed: no routing check names it
+// (the first version excluded the whole prefix and so reported it nowhere —
+// #2388 r2). guard.TopLevelReadElsewhere is NOT used for this: it names only
+// the top-level `_routing_defaults` / `_routing_enforced`, and would leave a
 // `_routing` inside `defaults:` reported twice (warning here, error there).
 //
 // ⚠️ A NULL VALUE IS NOT LISTED (#2388 r1b): per the #2518 ruling a null in a
@@ -583,7 +589,7 @@ func subtreeReservedKeys(root string, tenantDefaults map[string][]string, parsed
 				rel = filepath.ToSlash(r)
 			}
 			for key, raw := range parsed[defaultsPath] {
-				if raw == nil || !subtreeDefaultsRefusedKey(key) || strings.HasPrefix(key, "_routing") {
+				if raw == nil || !subtreeDefaultsRefusedKey(key) || IsRoutingKey(key) {
 					continue
 				}
 				if out == nil {

@@ -162,14 +162,21 @@ type ScopedTenants struct {
 	// defaults chain that a SUBTREE `_defaults.yaml` (not the conf.d root's)
 	// writes and that subtreeDefaultsRefusedKey refuses (reserved keys such
 	// as `_state_*`, `_silent_mode`, `_metadata`, and the keys
-	// resolveBaseRows never turns into a row; not `_routing*`, which
-	// da-guard's routing checks own), whatever their non-null value and
+	// resolveBaseRows never turns into a row; not the routing keys
+	// (IsRoutingKey), which da-guard's routing checks own), whatever their
+	// non-null value and
 	// whether or not the exporter applies it: key → the root-relative slash
 	// paths of the subtree defaults files writing it, root-first. Read off
 	// the chain the exporter's own build of this tree is given
 	// (subtreeReservedKeys). Only in-scope tenants are listed; nil when there
 	// is none (#2388).
 	SubtreeReserved map[string]map[string][]string
+
+	// DeclaredStateFilters is the set of filter names the conf.d root
+	// declares under `state_filters:`, as the exporter's own build of this
+	// tree reads them (ThresholdConfig.StateFilters): `_state_<f>` is read
+	// by nobody unless f is in it (#2388 r2). nil when none is declared.
+	DeclaredStateFilters map[string]bool
 }
 
 // DefaultsFile is one defaults carrier of a scan: its root-relative slash
@@ -344,7 +351,7 @@ func scopeEffective(configDir, scopeDir string, wholeTree bool) (*ScopedTenants,
 			inScope[id] = struct{}{}
 		}
 	}
-	parseFailed, unreachable, reserved, err := scopeParseFailed(scan, filepath.ToSlash(rel))
+	parseFailed, unreachable, reserved, stateFilters, err := scopeParseFailed(scan, filepath.ToSlash(rel))
 	if err != nil {
 		return nil, err
 	}
@@ -361,7 +368,7 @@ func scopeEffective(configDir, scopeDir string, wholeTree bool) (*ScopedTenants,
 	nestedFiles := scopeNestedPlatformFiles(scan, filepath.ToSlash(rel))
 	if len(inScope) == 0 {
 		return &ScopedTenants{ParseFailed: parseFailed, DefaultsFiles: defaultsFiles, Unreadable: unreadable,
-			NestedPlatformFiles: nestedFiles, RootListErr: rootListErr}, nil
+			NestedPlatformFiles: nestedFiles, RootListErr: rootListErr, DeclaredStateFilters: stateFilters}, nil
 	}
 
 	// Sort tenant IDs for deterministic output. The CLI's exit-code
@@ -380,11 +387,12 @@ func scopeEffective(configDir, scopeDir string, wholeTree bool) (*ScopedTenants,
 	resolver := newEffectiveResolver(scan)
 	resolver.withSources = wholeTree
 	out := &ScopedTenants{
-		Tenants:             make([]*EffectiveConfig, 0, len(tenantIDs)),
-		ParseFailed:         parseFailed,
-		DefaultsFiles:       defaultsFiles,
-		Unreadable:          unreadable,
-		NestedPlatformFiles: nestedFiles,
+		Tenants:              make([]*EffectiveConfig, 0, len(tenantIDs)),
+		ParseFailed:          parseFailed,
+		DefaultsFiles:        defaultsFiles,
+		Unreadable:           unreadable,
+		NestedPlatformFiles:  nestedFiles,
+		DeclaredStateFilters: stateFilters,
 	}
 	// The build's verdict, kept for the in-scope tenants only (#1976), and
 	// the reserved keys of the same build's subtree chain (#2388).
@@ -462,12 +470,14 @@ func scopeEffective(configDir, scopeDir string, wholeTree bool) (*ScopedTenants,
 // reserved is subtreeReservedKeys over the chain that same build was given
 // (tenantID → reserved key → the subtree defaults files writing it), over the
 // whole tree; the caller keeps the in-scope tenants
-// (ScopedTenants.SubtreeReserved, #2388).
+// (ScopedTenants.SubtreeReserved, #2388). stateFilters is the same build's
+// root `state_filters:` names (ScopedTenants.DeclaredStateFilters).
 func scopeParseFailed(scan *TreeScan, scopeRel string) (
-	parseFailed []string, unreachable map[string][]string, reserved map[string]map[string][]string, err error,
+	parseFailed []string, unreachable map[string][]string, reserved map[string]map[string][]string,
+	stateFilters map[string]bool, err error,
 ) {
 	if len(scan.Files) == 0 {
-		return nil, nil, nil, nil // the exporter refuses an empty tree; nothing was dropped
+		return nil, nil, nil, nil, nil // the exporter refuses an empty tree; nothing was dropped
 	}
 	// ⚠️ log.Printf, not discardLogger, for the profile WARNs (#2513): they
 	// reached the process log here before the build took its logger for them,
@@ -476,7 +486,7 @@ func scopeParseFailed(scan *TreeScan, scopeRel string) (
 	in := loadDirBuildInput(scan, scan.AbsRoot, discardLogger, log.Printf)
 	built, err := BuildFlatConfig(scan, in)
 	if err != nil {
-		return nil, nil, nil, err
+		return nil, nil, nil, nil, err
 	}
 	for _, key := range built.ParseFailed {
 		if bearsOnScope(key, scopeRel) {
@@ -484,8 +494,14 @@ func scopeParseFailed(scan *TreeScan, scopeRel string) (
 		}
 	}
 	sort.Strings(parseFailed)
+	for name := range built.Config.StateFilters {
+		if stateFilters == nil {
+			stateFilters = map[string]bool{}
+		}
+		stateFilters[name] = true
+	}
 	return parseFailed, unreachableKeys(undeliverableThresholds(built.UnreachableValues)),
-		subtreeReservedKeys(in.Root, in.TenantDefaults, in.ParsedDefaults), nil
+		subtreeReservedKeys(in.Root, in.TenantDefaults, in.ParsedDefaults), stateFilters, nil
 }
 
 // scopeDefaultsFiles is ScopedTenants.DefaultsFiles: the selected carrier of
