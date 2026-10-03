@@ -99,7 +99,7 @@ tests:
         alertname: ConfigFilesUnreadable
         exp_alerts:
           - exp_labels:
-              severity: warning
+              severity: critical
               alert_source: platform
               reason: walk_error
               job: threshold-exporter
@@ -147,7 +147,7 @@ tests:
         alertname: ConfigFilesUnreadable
         exp_alerts:
           - exp_labels:
-              severity: warning
+              severity: critical
               alert_source: platform
               reason: read_error
               job: threshold-exporter

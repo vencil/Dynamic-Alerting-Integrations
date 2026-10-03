@@ -13,7 +13,7 @@ groups:
         expr: da_config_unreadable_files > 0
         for: 10m
         labels:
-          severity: warning
+          severity: critical
           alert_source: platform
         annotations:
           summary: "Threshold-exporter cannot read conf.d entries ({{ $labels.reason }}) — tenants in them are not served"

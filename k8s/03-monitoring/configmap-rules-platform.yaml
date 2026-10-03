@@ -636,14 +636,18 @@ data:
           # walk that itself fails (root missing) keeps the previous value;
           # ConfigScanFailing (walk_error) fires for that state.
           # `for: 10m` rides out a deploy that writes a file before fixing its
-          # mode. warning, like ConfigParseFailure: the per-file loss of a
-          # tenant. promtool:
+          # mode. critical, NOT warning like ConfigParseFailure: an
+          # unreadable tenant file drops that tenant from /metrics entirely,
+          # so every threshold alert of it stops; a directory that cannot be
+          # listed (walk_error) drops every tenant under it at once. A parse
+          # failure instead keeps the last good values (incremental reload,
+          # #1980). promtool:
           # tests/rulepacks/platform-config-unusable-files_test.yaml.
           - alert: ConfigFilesUnreadable
             expr: da_config_unreadable_files > 0
             for: 10m
             labels:
-              severity: warning
+              severity: critical
               alert_source: platform
             annotations:
               summary: "Threshold-exporter cannot read conf.d entries ({{ $labels.reason }}) — tenants in them are not served"
