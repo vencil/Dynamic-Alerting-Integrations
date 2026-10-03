@@ -483,7 +483,8 @@ jobs:
           set -uo pipefail
           MAIN_APP=components/threshold-exporter/app
           MIN_APP=.refmin/components/threshold-exporter/app
-          # app/ 是自足的 module（go.mod 就在裡面、無 replace），所以最小樹只複製
+          # app/ 是自足的 module（go.mod 就在裡面；唯一的 replace 指向 app/ 內的
+          # third_party/yaml.v3，#2681），所以最小樹只複製
           # 這個目錄就夠，不必再 cp -a 一份完整 checkout。
           mkdir -p .refmin/components/threshold-exporter
           cp -a .ref/components/threshold-exporter/app "$MIN_APP"
