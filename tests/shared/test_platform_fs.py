@@ -191,3 +191,71 @@ def test_tests_create_symlinks_only_through_the_helper():
     assert not offenders, (
         "create symlinks with symlink_or_skip(target, link) from _platform_fs, "
         f"not directly: {offenders}")
+
+
+def _bare_bash_argvs(tree: ast.AST) -> list[int]:
+    """Line numbers of list literals whose first element is the constant
+    ``"bash"`` — an argv, whether passed straight to ``subprocess.run``, to a
+    wrapper, or kept in a variable first. A list that is itself an operand of
+    a comparison is expected data (``assert tokens(...) == [["bash", "x.sh"]]``),
+    not an argv, and is not counted; a list passed to a call inside the
+    comparison (``assert run(["bash", ...]).returncode == 0``) is an argv again.
+    Tuples are not counted either: in this tree every tuple starting with
+    ``"bash"`` is a list of names (tools to look up, a workflow ``shell:``
+    value), never an argv."""
+    lines: list[int] = []
+
+    def visit(node: ast.AST, compared: bool) -> None:
+        if isinstance(node, ast.Compare):
+            compared = True
+        elif isinstance(node, ast.Call):
+            compared = False
+        elif (isinstance(node, ast.List) and node.elts and not compared
+              and isinstance(node.elts[0], ast.Constant) and node.elts[0].value == "bash"):
+            lines.append(node.lineno)
+        for child in ast.iter_child_nodes(node):
+            visit(child, compared)
+
+    visit(tree, False)
+    return sorted(lines)
+
+
+def test_the_bash_scanner_sees_argvs_and_skips_compared_data():
+    """The guard below is only as good as this predicate: a direct call, a
+    wrapper call, an argv kept in a variable and a concatenation are caught;
+    a resolved path, expected data under ``==`` and a tuple of names are not;
+    a call inside a comparison still is."""
+    src = "\n".join([
+        "subprocess.run(['bash', 'x.sh'])",
+        "_run(['bash', '-c', 'true'], cwd=d)",
+        "cmd = ['bash', str(script)]",
+        "cmd = ['bash'] + args",
+        "subprocess.run([_BASH, 'x.sh'])",
+        "subprocess.run([shutil.which('bash'), 'x.sh'])",
+        "assert tokens(s) == [['bash', 'x.sh']]",
+        "subprocess.run(['sh', '-c', 'true'])",
+        "for tool in ('bash', 'git'): pass",
+        "assert subprocess.run(['bash', '-c', 'true']).returncode == 0",
+        "assert out == sorted(run(['bash', 'x.sh']).stdout.split())",
+    ])
+    assert _bare_bash_argvs(ast.parse(src)) == [1, 2, 3, 4, 10, 11]
+
+
+def test_tests_do_not_start_bash_by_bare_name():
+    """⛔ ``["bash", ...]`` as an argv is not Git Bash on Windows: CreateProcess
+    looks in System32 before PATH and finds the WSL launcher there, so the
+    script runs in another OS (or fails with a WSL error) instead of on the
+    host under test (#2560 fixed 23 of these). Resolve it first:
+    ``shutil.which("bash")`` searches PATH and returns the full path."""
+    tests_dir = REPO_ROOT / "tests"
+    scanned, offenders = 0, []
+    for path in repo_files(".py"):
+        if tests_dir not in path.parents:
+            continue
+        scanned += 1
+        offenders += [f"{path.relative_to(REPO_ROOT).as_posix()}:{n}"
+                      for n in _bare_bash_argvs(parse_py(path))]
+    assert scanned > 100, f"scanned only {scanned} test files: the listing is wrong"
+    assert not offenders, (
+        'start bash through shutil.which("bash"), not the bare name '
+        f"(on Windows that is WSL): {offenders}")
