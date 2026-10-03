@@ -84,7 +84,7 @@ func checkSubtreeUndeliverable(input CheckInput) []Finding {
 func undeliverableFix(k string) string {
 	if strings.HasPrefix(k, "_") {
 		return fmt.Sprintf("Declare `%s` in the conf.d root `_defaults.yaml`; `optional_overrides:` does not "+
-			"serve keys starting with `_`, so declaring it there only hides this warning and the exporter's ERROR.", k)
+			"serve keys starting with `_`, so declaring it there only hides this warning and the exporter's ERROR and gauge.", k)
 	}
 	return fmt.Sprintf("Declare `%s` in the conf.d root `_defaults.yaml` or in `optional_overrides:`.", k)
 }
