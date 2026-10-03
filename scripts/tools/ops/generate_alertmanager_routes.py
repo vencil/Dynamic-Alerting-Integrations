@@ -135,6 +135,9 @@ from _grar_render import (  # noqa: E402, F401
 from _grar_render import (  # noqa: E402
     AlertmanagerConfigRejected, amtool_gate,
 )
+# #2660: the root-receiver-has-no-integration WARN (--output-configmap here;
+# --apply emits it inside apply_to_configmap). Used, so no F401 marker.
+from _grar_render import warn_if_root_receiver_without_integration  # noqa: E402
 # #2311: the whole --validate verdict, shared with validate-config's routes
 # row (it calls `gen.evaluate_generated_config`). Used, so no F401 marker.
 from _grar_render import evaluate_generated_config  # noqa: E402
@@ -375,6 +378,9 @@ def _output_configmap_mode(routes: list[dict], receivers: list[dict], inhibit_ru
                      refusing=f"write it to {target} (nothing was written)")
     if rc is not None:
         sys.exit(rc)
+    # #2660: on the same emitted text amtool checked, so a --base-config's
+    # own root receiver is what is judged, not the built-in one.
+    warn_if_root_receiver_without_integration(yaml.safe_load(am_yml))
 
     route_count = len(routes)
     inhibit_count = len(inhibit_rules)
