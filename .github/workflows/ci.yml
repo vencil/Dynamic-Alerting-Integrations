@@ -235,8 +235,6 @@ jobs:
               # none must stay green, deleting every entry must red).
               # ⛔ No count or list of them is kept here: nothing asserts one,
               # so it would go stale with the next entry.
-              # Its coverage questions strip the catch-all, so `**` never
-              # answers them.
               - "**"
               - "**/*.py"
               - "tests/**"
