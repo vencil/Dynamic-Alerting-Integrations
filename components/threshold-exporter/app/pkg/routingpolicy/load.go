@@ -465,7 +465,32 @@ func ParseDomainPolicies(data []byte) ([]Policy, []Problem, error) {
 	return pols, probs, nil
 }
 
-func policyNodesFrom(top *yaml.Node) (map[string]*yaml.Node, error) {
+// DomainPoliciesShapeError is the shape check da-guard applies to a
+// `_domain_policy.yaml` / `.yml` (#2659): `domain_policies` present and not
+// a mapping — null, `~`, bare, a list, a scalar — is the error da-guard
+// reports as domain_policy_unusable (the generator's --strict drops the
+// block too). It is the SAME predicate as ParseDomainPolicies' (both call
+// domainPoliciesNode), on a node parse only: nothing is decoded, so no alias
+// is expanded. A document that does not parse, an empty one, or one whose
+// top level is not a mapping is nil here — those are the caller's own
+// decode's to judge. tenant-api's policy loader calls it first.
+func DomainPoliciesShapeError(data []byte) error {
+	var doc yaml.Node
+	if err := yaml.Unmarshal(data, &doc); err != nil || len(doc.Content) == 0 {
+		return nil
+	}
+	top := doc.Content[0]
+	if top.Kind != yaml.MappingNode {
+		return nil
+	}
+	_, err := domainPoliciesNode(top)
+	return err
+}
+
+// domainPoliciesNode is the `domain_policies` mapping of a document's top
+// mapping (nil: no such key), found with lookup (`<<:` expanded as da-guard
+// expands it), or the error that it is not a mapping.
+func domainPoliciesNode(top *yaml.Node) (*yaml.Node, error) {
 	n := lookup(top, "domain_policies")
 	if n == nil {
 		return nil, nil
@@ -473,6 +498,14 @@ func policyNodesFrom(top *yaml.Node) (map[string]*yaml.Node, error) {
 	if n.Kind != yaml.MappingNode {
 		return nil, fmt.Errorf("'domain_policies:' must be a mapping of domain name to policy, got %s — "+
 			"the whole block is ignored: %w", kindName(n), errUnusable)
+	}
+	return n, nil
+}
+
+func policyNodesFrom(top *yaml.Node) (map[string]*yaml.Node, error) {
+	n, err := domainPoliciesNode(top)
+	if n == nil || err != nil {
+		return nil, err
 	}
 	// As in profilesFromNode: `<<:` expanded (#2438), alias keys by text (#2437).
 	entries := mappingEntries(n)
@@ -766,7 +799,37 @@ type mapEntry struct {
 // sequence of them, earlier sources winning) supplies the keys the mapping
 // does not write itself; an explicit key replaces a merged one whole.
 // Keys keep their source text, which a decode into a map would lose.
+//
+// #2659: DomainPoliciesShapeError looks a key up in a document no decode has
+// vetted (a node parse only), so a merge source is listed once per call
+// (memoized: a merge fan-out costs O(nodes), not a product) and one already
+// being listed contributes nothing (`&x {<<: *x}` ends instead of recursing
+// without bound). On a document parseDoc accepted — no alias cycle, no
+// excessive aliasing — the result is the same as listing it naively.
 func mappingEntries(m *yaml.Node) []mapEntry {
+	return (&entryLister{memo: map[*yaml.Node][]mapEntry{}, active: map[*yaml.Node]bool{}}).entries(m)
+}
+
+type entryLister struct {
+	memo   map[*yaml.Node][]mapEntry
+	active map[*yaml.Node]bool
+}
+
+func (l *entryLister) entries(m *yaml.Node) []mapEntry {
+	if out, ok := l.memo[m]; ok {
+		return out
+	}
+	if l.active[m] {
+		return nil
+	}
+	l.active[m] = true
+	out := l.list(m)
+	delete(l.active, m)
+	l.memo[m] = out
+	return out
+}
+
+func (l *entryLister) list(m *yaml.Node) []mapEntry {
 	var merged, own []mapEntry
 	for i := 0; i+1 < len(m.Content); i += 2 {
 		k, v := m.Content[i], deref(m.Content[i+1])
@@ -784,7 +847,7 @@ func mappingEntries(m *yaml.Node) []mapEntry {
 				if s == nil || s.Kind != yaml.MappingNode {
 					continue
 				}
-				for _, e := range mappingEntries(s) {
+				for _, e := range l.entries(s) {
 					if !seen[e.key] {
 						seen[e.key] = true
 						merged = append(merged, e)
