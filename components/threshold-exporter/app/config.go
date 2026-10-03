@@ -14,6 +14,7 @@ import (
 
 	"github.com/vencil/threshold-exporter/internal/confdname"
 	"github.com/vencil/threshold-exporter/pkg/config"
+	"github.com/vencil/threshold-exporter/pkg/tenantid"
 )
 
 // ============================================================
@@ -490,6 +491,7 @@ func (m *ConfigManager) commitConfig(cfg *ThresholdConfig, hash string, flatScan
 	}
 
 	logConfigStats(m.getLogger(), cfg, logHeader)
+	warnInvalidTenantIDs(m.getLogger(), cfg)
 
 	// #2153: the size maxima of what was just committed. Directory mode
 	// measures the per-file partials; single-file Load measures its one
@@ -1907,6 +1909,41 @@ func logConfigStats(logger *log.Logger, cfg *ThresholdConfig, prefix string) {
 	}
 	for _, n := range kv.Notices {
 		logger.Printf("%s", n)
+	}
+}
+
+// warnInvalidTenantIDs logs one WARN per tenant id of cfg that breaks the
+// tenant-id rule (ADR-035 D4), citing the rule's own wording.
+//
+// The exporter does NOT reject such a tenant: it stays loaded and its series
+// are still exported, because the gate is CI and the write side, and dropping
+// a tenant at runtime would make its thresholds vanish. The WARN is the only
+// trace — no metric, no alert, by decision.
+//
+// Called from commitConfig, the single site that assigns m.config, so every
+// committed load (single-file Load, fullDirLoadFrom, incrementalLoadFrom, and
+// diffAndReload via installNewHierarchyState → commitFlatFrom) warns once per
+// invalid id. A tick whose content did not change commits nothing and so
+// warns nothing. O(#tenants) per commit, never per scrape. A config with no
+// invalid id allocates nothing per tenant; what remains is tenantid.Valid's
+// regexp re-allocating its pooled match state once after a GC empties the
+// pool — measured ~4 allocs / ~22 KB per commit, independent of tenant
+// count (bench gate: DiffAndReload_Hierarchical_1000_* +0.5% B/op). Ids are
+// sorted so the log order does not follow map iteration.
+func warnInvalidTenantIDs(logger *log.Logger, cfg *ThresholdConfig) {
+	var invalid []string
+	for tid := range cfg.Tenants {
+		if !tenantid.Valid(tid) {
+			invalid = append(invalid, tid)
+		}
+	}
+	if len(invalid) == 0 {
+		return
+	}
+	sort.Strings(invalid)
+	for _, tid := range invalid {
+		logger.Printf("WARN: tenant id %q breaks the tenant-id rule; loaded and exported anyway, "+
+			"rename it. %s", tid, tenantid.Description)
 	}
 }
 
