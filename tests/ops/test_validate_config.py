@@ -2429,9 +2429,12 @@ class TestRootDefaultsRouting:
         r = vc.check_root_defaults(str(d))
         assert r["status"] == vc.FAIL, r
         detail = " ".join(r["details"])
-        assert "sets no platform default for it and does not declare it" in detail, detail
+        assert "this line sets no platform default and declares nothing" in detail, detail
         assert "no tenant gets" not in detail, detail
-        assert "root_default_null_undeclared" in detail, detail
+        assert "Run da-guard" in detail, detail
+        # no claim about the key (another spelling or optional_overrides:
+        # may still declare it) and no named finding (r6 review).
+        assert "does not declare it" not in detail, detail
         # #2518 r6: no removal procedure — each one was wrong for some shape.
         for advice in ("Delete it", "remove the null", "instead", "<<:"):
             assert advice not in detail, (advice, detail)
@@ -2536,7 +2539,7 @@ class TestRootDefaultsValues:
         assert r["status"] == vc.FAIL, r
         detail = " ".join(r["details"])
         assert "`defaults.mysql_connections` has no value" in detail, detail
-        assert "does not declare it" in detail, detail
+        assert "declares nothing" in detail, detail
         assert "0 threshold" not in detail, detail
         # Not the whole block: the exporter keeps the other thresholds.
         assert "drops ALL of it" not in detail, detail

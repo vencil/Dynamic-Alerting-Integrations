@@ -1384,18 +1384,14 @@ def _root_defaults_value_detail(rel: str, key: str | None, raw: str,
     ``NULL_NOT_DECLARED`` rather than a blocking one.
     """
     if null:
-        # #2518: two facts and a pointer, nothing more. Every removal
-        # procedure this message carried was measured wrong for some shape
-        # (`<<:` merges, `_critical` rows, the other spelling, a null that
-        # lives in a merge source), so the fix is left to da-guard's
-        # `root_default_null_undeclared`, whose own fix sentences are
-        # measured against what the exporter serves.
-        return (f"{rel}: `defaults.{key}` has no value (null): "
-                f"threshold-exporter sets no platform default for it and "
-                f"does not declare it. Before changing this line, run "
-                f"da-guard — tenants it names as "
-                f"`root_default_null_undeclared` are not served a value they "
-                f"set; that finding says how to fix it.")
+        # #2518: one fact about THIS LINE and one instruction, nothing more.
+        # Every removal procedure, every claim about the key (the other
+        # spelling or `optional_overrides:` may still declare it) and every
+        # claim about which da-guard finding names whom was measured wrong
+        # for some shape; da-guard's findings carry measured fixes.
+        return (f"{rel}: `defaults.{key}` has no value (null): this line "
+                f"sets no platform default and declares nothing. Run "
+                f"da-guard to see which tenants' values are not served.")
     if key is None:
         # ⚠️ *raw* (the mirror's reason) is not printed: `deprecate_rule`
         # words it in Chinese, this tool's operator strings are English, and

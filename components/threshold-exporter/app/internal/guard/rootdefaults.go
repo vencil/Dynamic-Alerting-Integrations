@@ -275,7 +275,12 @@ func checkRootCriticalKeys(input CheckInput) []Finding {
 		}
 		block := config.ExtractDefaultsBlock(doc)
 		keys := make([]string, 0, len(block))
-		for k := range block {
+		for k, v := range block {
+			// #2518: a null is no write — the exporter serves no series for
+			// it, so there is no "threshold of its own" to describe.
+			if v == nil {
+				continue
+			}
 			if strings.HasSuffix(k, "_critical") && !strings.HasPrefix(k, "_state_") && !strings.HasPrefix(k, "_silent_") {
 				keys = append(keys, k)
 			}
