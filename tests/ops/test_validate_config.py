@@ -2418,12 +2418,13 @@ class TestRootDefaultsRouting:
         ('"mysql_cpu{queue=\\"a\\"}"', ""),
         ("_custom_x", "optional_overrides:\n  - _custom_x\n"),
     ])
-    def test_a_null_line_is_reported_as_doing_nothing(self, tmp_path,
+    def test_a_null_line_is_reported_as_the_fact_only(self, tmp_path,
                                                       null_key, optional):
-        """#2518: the row says only what holds for every shape — the null
-        line has no effect — and never whether the key ends up declared or
-        served, which depends on rules this mirror does not model (two
-        predicates for that were measured wrong against served-values)."""
+        """#2518: the row reports only that the value is null — no claim
+        about what the line changes (that depends on the rest of the tree:
+        another spelling, `optional_overrides:`, a `<<:` merge) and no
+        removal procedure; every such clause was measured false for some
+        shape."""
         d = self._tree(tmp_path, f"defaults:\n  {null_key}: null\n"
                        f"  mysql_slow_queries: 5\n" + optional)
         r = vc.check_root_defaults(str(d))
@@ -2534,7 +2535,7 @@ class TestRootDefaultsValues:
         assert "drops ALL of it" in detail, detail
 
     @pytest.mark.parametrize("value", ["", " ~", " null"])
-    def test_an_empty_value_fails_as_an_undeclared_key(self, tmp_path, value):
+    def test_an_empty_value_fails_as_having_no_value(self, tmp_path, value):
         d = self._tree(tmp_path, "defaults:\n  container_cpu: 80\n"
                        f"  mysql_connections:{value}\n")
         r = vc.check_root_defaults(str(d))
