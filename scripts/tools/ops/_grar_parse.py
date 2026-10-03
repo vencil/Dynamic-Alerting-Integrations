@@ -1210,6 +1210,15 @@ def _apply_tenant_entries(config_dir: str, entries: list, result: dict) -> None:
             f"tenant in two files (DuplicateTenantError), and routes built "
             f"from a blend of both would match neither; keep the tenant in "
             f"one file ({', '.join(files)})")
+    # ADR-035 D3: an invalid id is judged on the DECLARATIONS — every key a
+    # tenant file puts under `tenants:`, a body that is not a mapping (null,
+    # a scalar) included — not on the loaded set: such a body is never
+    # loaded, and judging only what loaded let `Team_D:` (null) through to
+    # rc 0 in every mode. Shared with validate-config through the
+    # `invalid_tenant_ids` record below.
+    for tenant in declared:
+        if not is_valid_tenant_id(tenant):
+            result.setdefault("invalid_tenant_ids", []).append(tenant)
     # First-appearance order, as the per-file loop produced it.
     for tenant in dict.fromkeys(t for _f, t, _o in entries):
         if tenant not in merged:

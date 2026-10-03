@@ -70,6 +70,7 @@ from _lib_python import (  # noqa: E402
 from _lib_exitcodes import EXIT_OK, EXIT_VIOLATION, EXIT_CALLER_ERROR  # noqa: E402
 from _lib_io import load_yaml_file_exporter_keys  # noqa: E402  (#2216 tenant id as text)
 from _lib_yaml_keys import load_exporter_keys  # noqa: E402  (#2216 tenant id as text)
+from _lib_validation import is_valid_tenant_id, tenant_id_rule  # noqa: E402  (ADR-035)
 
 # #1641: every path this tool writes descends from -o/--output-dir, so every
 # writer names that flag; an unusable path is rc=2 + one line, not a
@@ -1308,6 +1309,20 @@ def main():
             sys.exit(EXIT_CALLER_ERROR)
 
         tenant_routings, summary = analyze_alertmanager(am_config, args.tenant_label)
+        # ADR-035: every tenant here becomes a conf.d key and a file name, and
+        # generate-routes refuses a conf.d that declares an invalid id in
+        # every mode — so refuse it here, before anything is written (rc 2:
+        # the input config cannot be onboarded as it is).
+        invalid = sorted((t for t in tenant_routings if not is_valid_tenant_id(t)), key=str)
+        if invalid:
+            for t in invalid:
+                print(f"ERROR: tenant id {safe_label(repr(t))} from the Alertmanager "
+                      f"config is not a valid tenant id ({tenant_id_rule()[1]})",
+                      file=sys.stderr)
+            print(f"ERROR: {len(invalid)} invalid tenant id(s) — nothing was written; "
+                  "rename the tenant label values (or map them) and re-run",
+                  file=sys.stderr)
+            sys.exit(EXIT_CALLER_ERROR)
         phase1_results = (tenant_routings, summary)
 
         print(f"  Found {summary['tenant_routes']} tenant route(s) "

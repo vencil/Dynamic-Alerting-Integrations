@@ -1920,7 +1920,7 @@ da-tools scaffold --non-interactive --tenant db-c --db mariadb,redis
 |------|-------------|
 | `0` | Success |
 | `1` | Only an uncaught exception (traceback on stderr). Most invalid input is 2, but a broken or wrongly shaped `--from-onboard` JSON currently also ends in a traceback at 1 | <!-- datools-cmd-ignore: only a traceback gives 1, no exit to trace -->
-| `2` | Caller error: bad arguments, an unsupported `--db` type, `--non-interactive` without `--tenant` or `--db`, or the output path given to `-o/--output-dir` cannot be written (#1641) |
+| `2` | Caller error: bad arguments, an unsupported `--db` type, `--non-interactive` without `--tenant` or `--db`, or the output path given to `-o/--output-dir` cannot be written (#1641); a tenant id that is not a DNS-1123 label (`--tenant`, the interactive prompt, or any id in the `--from-onboard` list; [ADR-035](adr/035-tenant-id-single-source.en.md)) — nothing is written. ⚠️ The v2.9.0 image does not check tenant ids <!-- image-caveat: v2.9.0 --> |
 
 ---
 
@@ -2288,7 +2288,7 @@ da-tools onboard --alertmanager-config ./alertmanager.yaml \
 |------|-------------|
 | `0` | At least one phase produced results (Phase 1 with no tenant route counts; it just writes no `onboard-hints.json`) |
 | `1` | No phase produced results, e.g. the `--rule-files` glob matched no file, or `--scrape-config` has no `scrape_configs`. ⚠️ A `--scrape-config` file that does not exist is 1 too (a missing `--alertmanager-config` is 2) |
-| `2` | Caller error: none of the three inputs given, bad arguments, or the output path given to `-o/--output-dir` cannot be written (#1641); an input file cannot be read or parsed (content not UTF-8 or not valid YAML; the message names the file, #1654). ⚠️ Exception: broken YAML embedded in a ConfigMap wrapper is a traceback and returns 1 |
+| `2` | Caller error: none of the three inputs given, bad arguments, or the output path given to `-o/--output-dir` cannot be written (#1641); an input file cannot be read or parsed (content not UTF-8 or not valid YAML; the message names the file, #1654); a tenant label value in the Alertmanager config that is not a DNS-1123 label ([ADR-035](adr/035-tenant-id-single-source.en.md); `--dry-run` / `--json` too, nothing is written). ⚠️ Exception: broken YAML embedded in a ConfigMap wrapper is a traceback and returns 1. ⚠️ The v2.9.0 image does not check tenant ids <!-- image-caveat: v2.9.0 --> |
 
 ---
 

@@ -42,14 +42,13 @@ _ALWAYS_INVALID = ["", " ", "bad tenant", "Bad_Tenant!", "a.b"]
 _NEWLY_INVALID = ["UPPER", "Mixed_Case-1", "Team_A", "_x", "x_", "-x", "a" * 64]
 
 
-def _tree(tmp_path: Path, tid: str) -> Path:
+def _tree(tmp_path: Path, tid: str, body: str = "\n    cpu_usage_percent: '85'") -> Path:
     d = tmp_path / "conf.d"
     d.mkdir(parents=True)
     (d / "_defaults.yaml").write_text(_DEFAULTS, encoding="utf-8")
     (d / "t-ok.yaml").write_text("tenants:\n  t-ok:\n    cpu_usage_percent: '85'\n",
                                  encoding="utf-8")
-    (d / "x.yaml").write_text(f"tenants:\n  \"{tid}\":\n    cpu_usage_percent: '85'\n",
-                              encoding="utf-8")
+    (d / "x.yaml").write_text(f"tenants:\n  \"{tid}\":{body}\n", encoding="utf-8")
     return d
 
 
@@ -74,9 +73,17 @@ def _gar(d: Path, *args: str, path: str | None = None) -> subprocess.CompletedPr
         timeout=300, env=env)
 
 
+# A tenant body that is not a mapping is never LOADED, but it is declared:
+# the id is judged all the same (blind review F2 — `Team_D:` null used to
+# exit 0 in every mode with only the "must be a mapping" WARN).
+_BODIES = {"mapping": "\n    cpu_usage_percent: '85'", "null": "", "scalar": " x",
+           "list": "\n    - a"}
+
+
+@pytest.mark.parametrize("body", sorted(_BODIES))
 @pytest.mark.parametrize("tid", _ALWAYS_INVALID + _NEWLY_INVALID)
-def test_every_mode_refuses_and_writes_nothing(tmp_path, tid):
-    d = _tree(tmp_path, tid)
+def test_every_mode_refuses_and_writes_nothing(tmp_path, tid, body):
+    d = _tree(tmp_path, tid, _BODIES[body])
     out = tmp_path / "out.yaml"
     bindir, calls = _fake_kubectl(tmp_path)
     modes = {
@@ -114,12 +121,14 @@ def test_a_valid_id_still_renders(tmp_path, tid):
     assert tid in load_tenant_tree(str(d)).routing_configs
 
 
+@pytest.mark.parametrize("body", sorted(_BODIES))
 @pytest.mark.parametrize("tid", ["UPPER", "bad tenant"])
-def test_the_tree_skips_it_and_validate_config_lists_it(tmp_path, tid):
+def test_the_tree_skips_it_and_validate_config_lists_it(tmp_path, tid, body):
     """The library still renders nothing for the id (the generator's refusal
     is main()'s), and validate-config reports it through the blocking
-    `WARN … skipping` line it already FAILs on."""
-    d = _tree(tmp_path, tid)
+    `WARN … skipping` line it already FAILs on — from the same record, for a
+    body that is not a mapping too."""
+    d = _tree(tmp_path, tid, _BODIES[body])
     tree = load_tenant_tree(str(d))
     assert tid not in tree.routing_configs and tid not in tree.dedup_configs
     assert tree.invalid_tenant_ids == [tid]

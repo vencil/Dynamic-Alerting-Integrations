@@ -1261,13 +1261,18 @@ def run_interactive(output_dir: str) -> None:
     print(f"\n詳見 {output_dir}/scaffold-report.txt")
 
 
-def _refuse_invalid_tenant_id(tenant_name: str) -> None:
+def _refuse_invalid_tenant_id(*tenant_names: object) -> None:
     """ADR-035: the id becomes a conf.d key and a file name — refuse what the
-    tenant-id rule refuses (rc 2, the caller's input), before writing."""
-    if not is_valid_tenant_id(tenant_name):
-        print(f"錯誤: 不合法的 tenant id {tenant_name!r}（{tenant_id_rule()[1]}）",
+    tenant-id rule refuses (rc 2, the caller's input), before writing ANY
+    file: every invalid id is named, and nothing is written for the valid
+    ones either (a partial conf.d is not what the caller asked for)."""
+    invalid = [t for t in tenant_names if not is_valid_tenant_id(t)]
+    if not invalid:
+        return
+    for t in invalid:
+        print(f"錯誤: 不合法的 tenant id {t!r}（{tenant_id_rule()[1]}）",
               file=sys.stderr)
-        sys.exit(EXIT_CALLER_ERROR)
+    sys.exit(EXIT_CALLER_ERROR)
 
 
 def run_non_interactive(args: argparse.Namespace) -> None:
@@ -1384,6 +1389,9 @@ def run_from_onboard(args: argparse.Namespace) -> None:
         # consistent with the "cannot read hints" sibling above.
         print("No tenants found in onboard hints.", file=sys.stderr)
         sys.exit(EXIT_CALLER_ERROR)
+
+    # ADR-035: judged before the first file is written.
+    _refuse_invalid_tenant_id(*tenants)
 
     output_dir = args.output_dir
     print(f"Auto-scaffolding {len(tenants)} tenant(s) from onboard hints...")
