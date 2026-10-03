@@ -133,7 +133,7 @@ from _grar_render import (  # noqa: E402, F401
 # #2219: used here, not re-exported — hence no `# noqa: F401` (see the
 # `_lib_io` block above for why that marker must stay off used imports).
 from _grar_render import (  # noqa: E402
-    AlertmanagerConfigRejected, amtool_gate,
+    AlertmanagerConfigInvariantViolated, AlertmanagerConfigRejected, amtool_gate,
 )
 # #2660: the root-receiver-has-no-integration WARN (--output-configmap here;
 # --apply emits it inside apply_to_configmap). Used, so no F401 marker.
@@ -184,7 +184,9 @@ def _assembly_failed(exc: ValueError, refusing: str) -> None:
     ship — a base receiver shadowing a generated one, an inhibit rule that
     would silence a platform alert, … That is a verdict on the config (rc 1),
     and it must read as one: before this it escaped as a traceback, which
-    reads as the tool having crashed.
+    reads as the tool having crashed. ``--apply`` reaches it too (#2506), with
+    ``AlertmanagerConfigInvariantViolated`` from the merge into the cluster's
+    config.
     """
     print(f"FAIL: the assembled Alertmanager config was refused — {refusing}:"
           f"\n  {safe_label(str(exc))}", file=sys.stderr)
@@ -330,6 +332,10 @@ def _apply_mode(routes: list[dict], receivers: list[dict], inhibit_rules: list[d
     except AlertmanagerConfigRejected as exc:
         # #2219: amtool refused the merged config BEFORE kubectl was called.
         sys.exit(exc.exit_code)
+    except AlertmanagerConfigInvariantViolated as exc:
+        # #2506: the same `FAIL:` verdict #2260 gave --output-configmap and
+        # --validate, instead of a traceback at rc 1.
+        _assembly_failed(exc, "nothing was applied to the cluster")
     # #1617: this was EXIT_VIOLATION (1) while docs/cli-reference.{md,en.md}
     # documented 2 — the code and the shipped table said opposite things.
     # `_lib_exitcodes` settles it: "cannot reach Prometheus / API" is
