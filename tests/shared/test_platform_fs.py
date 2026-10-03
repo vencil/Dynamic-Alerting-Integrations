@@ -196,24 +196,35 @@ def test_tests_create_symlinks_only_through_the_helper():
 def _bare_bash_argvs(tree: ast.AST) -> list[int]:
     """Line numbers of list literals whose first element is the constant
     ``"bash"`` — an argv, whether passed straight to ``subprocess.run``, to a
-    wrapper, or kept in a variable first. A list under a comparison is
-    expected data (``assert tokens(...) == [["bash", "x.sh"]]``), not an argv,
-    and is not counted. Tuples are not counted either: in this tree every
-    tuple starting with ``"bash"`` is a list of names (tools to look up, a
-    workflow ``shell:`` value), never an argv."""
-    compared = {id(sub) for node in ast.walk(tree) if isinstance(node, ast.Compare)
-                for sub in ast.walk(node)}
-    return sorted(
-        node.lineno for node in ast.walk(tree)
-        if isinstance(node, ast.List) and node.elts
-        and isinstance(node.elts[0], ast.Constant) and node.elts[0].value == "bash"
-        and id(node) not in compared)
+    wrapper, or kept in a variable first. A list that is itself an operand of
+    a comparison is expected data (``assert tokens(...) == [["bash", "x.sh"]]``),
+    not an argv, and is not counted; a list passed to a call inside the
+    comparison (``assert run(["bash", ...]).returncode == 0``) is an argv again.
+    Tuples are not counted either: in this tree every tuple starting with
+    ``"bash"`` is a list of names (tools to look up, a workflow ``shell:``
+    value), never an argv."""
+    lines: list[int] = []
+
+    def visit(node: ast.AST, compared: bool) -> None:
+        if isinstance(node, ast.Compare):
+            compared = True
+        elif isinstance(node, ast.Call):
+            compared = False
+        elif (isinstance(node, ast.List) and node.elts and not compared
+              and isinstance(node.elts[0], ast.Constant) and node.elts[0].value == "bash"):
+            lines.append(node.lineno)
+        for child in ast.iter_child_nodes(node):
+            visit(child, compared)
+
+    visit(tree, False)
+    return sorted(lines)
 
 
 def test_the_bash_scanner_sees_argvs_and_skips_compared_data():
     """The guard below is only as good as this predicate: a direct call, a
     wrapper call, an argv kept in a variable and a concatenation are caught;
-    a resolved path, expected data under ``==`` and a tuple of names are not."""
+    a resolved path, expected data under ``==`` and a tuple of names are not;
+    a call inside a comparison still is."""
     src = "\n".join([
         "subprocess.run(['bash', 'x.sh'])",
         "_run(['bash', '-c', 'true'], cwd=d)",
@@ -224,8 +235,10 @@ def test_the_bash_scanner_sees_argvs_and_skips_compared_data():
         "assert tokens(s) == [['bash', 'x.sh']]",
         "subprocess.run(['sh', '-c', 'true'])",
         "for tool in ('bash', 'git'): pass",
+        "assert subprocess.run(['bash', '-c', 'true']).returncode == 0",
+        "assert out == sorted(run(['bash', 'x.sh']).stdout.split())",
     ])
-    assert _bare_bash_argvs(ast.parse(src)) == [1, 2, 3, 4]
+    assert _bare_bash_argvs(ast.parse(src)) == [1, 2, 3, 4, 10, 11]
 
 
 def test_tests_do_not_start_bash_by_bare_name():
