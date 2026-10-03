@@ -265,8 +265,8 @@ func subtreeRefusedKeyFix(k string, declared map[string]bool) string {
 // overlay's own verdict, handed in as `applied`; neither text guesses.
 func reservedKeyIgnoredFix(k string, v config.SubtreeRefusedVerdict) string {
 	if v.TenantSets {
-		return fmt.Sprintf("This tenant's own entry sets `%s`, and that is what the exporter serves; the subtree "+
-			"value is ignored for it. Delete it from this file: what the exporter serves stays the same.", k)
+		return fmt.Sprintf("%s `%s`, and that is what the exporter serves; the subtree "+
+			"value is ignored for it. Delete it from this file: what the exporter serves stays the same.", setBy(v), k)
 	}
 	return "Today the exporter ignores this value; delete it from this file: what the exporter serves stays the " +
 		"same, and /effective stops showing the ignored value. " + reservedKeyFix(k)
@@ -278,12 +278,21 @@ func reservedKeyIgnoredFix(k string, v config.SubtreeRefusedVerdict) string {
 func reservedKeyIgnoredShared(k string, v config.SubtreeRefusedVerdict, others []string) string {
 	own := "Today the exporter ignores this value for this tenant"
 	if v.TenantSets {
-		own = fmt.Sprintf("This tenant's own entry sets `%s`, and that is what the exporter serves for it; "+
-			"the subtree value is ignored for this tenant", k)
+		own = fmt.Sprintf("%s `%s`, and that is what the exporter serves for it; "+
+			"the subtree value is ignored for this tenant", setBy(v), k)
 	}
-	return fmt.Sprintf("%s — but it is applied to other tenants that inherit the same file: %s. Do not just "+
+	return fmt.Sprintf("%s — but other tenants get their value from one of these files: %s. Do not just "+
 		"delete it from the file: that changes what is served for them. Follow their findings (move the value "+
 		"into their own entries) first; then delete it.", own, tenantList(others))
+}
+
+// setBy names what sets the key for a TenantSets tenant: its `tenants:`
+// entry, or its `_profile` (config.SubtreeRefusedVerdict.Profile, #2388 A r3).
+func setBy(v config.SubtreeRefusedVerdict) string {
+	if v.Profile != "" {
+		return fmt.Sprintf("This tenant's profile `%s` (its `_profile`) sets", v.Profile)
+	}
+	return "This tenant's own entry sets"
 }
 
 // reservedKeyMove is the fix for a recognised key the overlay APPLIES for this
@@ -321,8 +330,8 @@ func reservedKeyMove(k string, v config.SubtreeRefusedVerdict, files, others []s
 	}
 	b.WriteString(" (Deleting it alone can change what is served: the exporter uses this value for this tenant now.)")
 	if len(others) > 0 {
-		fmt.Fprintf(&b, " Other tenants get their value from the same file too: %s — move it into their entries "+
-			"as well before deleting it.", tenantList(others))
+		fmt.Fprintf(&b, " Other tenants get their value from one of these files too: %s — move it into their "+
+			"entries as well before deleting it.", tenantList(others))
 	}
 	return b.String()
 }

@@ -283,6 +283,43 @@ type SubtreeRefusedVerdict struct {
 	// TenantSets: the tenant's own map sets the key, so no subtree value is
 	// written and the tenant's own value is what is served.
 	TenantSets bool
+	// Profile is the tenant's `_profile` when TenantSets comes from that
+	// profile rather than from a `tenants:` entry in any file (profiles are
+	// applied before the overlay, so the overlay alone cannot tell); "" when
+	// an entry sets the key (#2388 A r3; markProfileSetKeys).
+	Profile string
+}
+
+// markProfileSetKeys fills SubtreeRefusedVerdict.Profile: for a key the
+// tenant "sets itself", whether no file's `tenants:` entry for the tenant
+// (fileConfigs, the per-file decode before the merge) holds it while the
+// tenant's `_profile` does. Read off the build's own data; only verdicts
+// with TenantSets are visited.
+func markProfileSetKeys(verdicts map[string]map[string]SubtreeRefusedVerdict,
+	fileConfigs map[string]ThresholdConfig, cfg *ThresholdConfig) {
+	for tenantID, byKey := range verdicts {
+		for k, v := range byKey {
+			if !v.TenantSets || entrySetsKey(fileConfigs, tenantID, k) {
+				continue
+			}
+			name := strings.TrimSpace(cfg.Tenants[tenantID]["_profile"].Default)
+			if _, inProfile := cfg.Profiles[name][k]; name != "" && inProfile {
+				v.Profile = name
+				byKey[k] = v
+			}
+		}
+	}
+}
+
+// entrySetsKey reports whether any file's `tenants:` entry for tenantID
+// holds key k.
+func entrySetsKey(fileConfigs map[string]ThresholdConfig, tenantID, k string) bool {
+	for _, fc := range fileConfigs {
+		if _, ok := fc.Tenants[tenantID][k]; ok {
+			return true
+		}
+	}
+	return false
 }
 
 // subtreeRelPath is p relative to rootDir, slash-separated; p itself when Rel
@@ -294,28 +331,66 @@ func subtreeRelPath(rootDir, p string) string {
 	return p
 }
 
-// RenderYAMLFlow renders v in single-line YAML flow style (a scalar as
-// itself, a mapping as `{a: 1}`), for messages that quote a config value.
+// RenderYAMLFlow renders v as ONE line of YAML (a scalar as itself, a mapping
+// as `{a: 1}`), for messages that quote a config value to paste as
+// `key: <rendered>`; the paste decodes to v.
+//
+// ⛔ ONE LINE, ALWAYS (#2388 A r3). yaml.v3 renders a string holding a newline
+// as a block scalar (`|` + indented lines); pasted after `key:` inside a
+// tenant entry, that made the file fail to parse and the tenant vanish from
+// served-values. A string holding a control character or leading/trailing
+// whitespace is double-quoted (escapes, one line); and if the result still
+// spans lines, every string is double-quoted.
 func RenderYAMLFlow(v any) string {
 	var n yaml.Node
 	if err := n.Encode(v); err != nil {
 		return fmt.Sprint(v)
 	}
-	var flow func(*yaml.Node)
-	flow = func(x *yaml.Node) {
-		if x.Kind == yaml.MappingNode || x.Kind == yaml.SequenceNode {
+	var walk func(*yaml.Node, bool)
+	walk = func(x *yaml.Node, quoteAll bool) {
+		switch x.Kind {
+		case yaml.MappingNode, yaml.SequenceNode:
 			x.Style = yaml.FlowStyle
+		case yaml.ScalarNode:
+			if x.Tag == "!!str" && (quoteAll || needsDoubleQuote(x.Value)) {
+				x.Style = yaml.DoubleQuotedStyle
+			}
 		}
 		for _, c := range x.Content {
-			flow(c)
+			walk(c, quoteAll)
 		}
 	}
-	flow(&n)
-	b, err := yaml.Marshal(&n)
-	if err != nil {
-		return fmt.Sprint(v)
+	render := func(quoteAll bool) (string, bool) {
+		walk(&n, quoteAll)
+		b, err := yaml.Marshal(&n)
+		if err != nil {
+			return "", false
+		}
+		return strings.TrimSpace(string(b)), true
 	}
-	return strings.TrimSpace(string(b))
+	out, ok := render(false)
+	if ok && strings.Contains(out, "\n") {
+		out, ok = render(true)
+	}
+	if !ok || strings.Contains(out, "\n") {
+		return fmt.Sprintf("%q", fmt.Sprint(v))
+	}
+	return out
+}
+
+// needsDoubleQuote: s cannot sit in a plain or single-quoted one-line scalar
+// unchanged — it holds a control character, or leading/trailing whitespace a
+// plain scalar would lose.
+func needsDoubleQuote(s string) bool {
+	if s != strings.TrimSpace(s) {
+		return true
+	}
+	for _, r := range s {
+		if r < 0x20 || r == 0x7f {
+			return true
+		}
+	}
+	return false
 }
 
 // levelWritesSpelling reports whether one defaults level WRITES spelling s:

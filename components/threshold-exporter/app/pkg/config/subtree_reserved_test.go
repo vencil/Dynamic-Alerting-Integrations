@@ -10,7 +10,10 @@ package config
 
 import (
 	"reflect"
+	"strings"
 	"testing"
+
+	"gopkg.in/yaml.v3"
 )
 
 func TestScopeEffective_SubtreeReservedKeys(t *testing.T) {
@@ -222,6 +225,31 @@ func TestRenderYAMLFlow(t *testing.T) {
 	} {
 		if got := RenderYAMLFlow(tc.in); got != tc.want {
 			t.Errorf("RenderYAMLFlow(%#v) = %q, want %q", tc.in, got, tc.want)
+		}
+	}
+}
+
+// #2388 A r3 (R2-1): RenderYAMLFlow is one line, and pasted as `k: <it>` it
+// decodes back to the same value — a block scalar there broke the file.
+func TestRenderYAMLFlowRoundTrips(t *testing.T) {
+	t.Parallel()
+	for _, v := range []any{
+		"disable\n", "a\nb", "a\tb", "\tlead", " lead", "trail ", "yes", "on", "no", "off", "007",
+		"5:critical", ":", "a: b", "#", "a #b", "", "~", "null", "true", "1e6", `"q"`, "'s'",
+		1, 1.5, true, map[string]any{"target": "a\nb", "k": "yes"}, []any{"x\n", 2},
+	} {
+		r := RenderYAMLFlow(v)
+		if strings.Contains(r, "\n") {
+			t.Errorf("RenderYAMLFlow(%#v) = %q: more than one line", v, r)
+			continue
+		}
+		var got map[string]any
+		if err := yaml.Unmarshal([]byte("k: "+r+"\n"), &got); err != nil {
+			t.Errorf("RenderYAMLFlow(%#v) = %q: `k: …` does not decode: %v", v, r, err)
+			continue
+		}
+		if !reflect.DeepEqual(got["k"], v) {
+			t.Errorf("RenderYAMLFlow(%#v) = %q decodes to %#v", v, r, got["k"])
 		}
 	}
 }

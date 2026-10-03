@@ -748,7 +748,7 @@ func TestGuard_SubtreeReservedSharedFile(t *testing.T) {
 				}
 			}
 			for _, w := range []string{"This tenant's own entry sets `_state_maintenance`",
-				"applied to other tenants that inherit the same file: `t1`", "Do not just delete it from the file"} {
+				"other tenants get their value from one of these files: `t1`", "Do not just delete it from the file"} {
 				if !strings.Contains(t2, w) {
 					t.Errorf("t2 message lacks %q: %s", w, t2)
 				}
@@ -853,5 +853,34 @@ func TestGuard_SubtreeReservedTenantSetsItself(t *testing.T) {
 	if !strings.Contains(m, "This tenant's own entry sets `_silent_mode`, and that is what the exporter serves") ||
 		strings.Contains(m, "To have it take effect") {
 		t.Errorf("message = %s", m)
+	}
+}
+
+// #2388 A r3 (R2-2): a key the tenant "sets itself" through its `_profile`
+// (profiles are applied before the overlay) is named as the profile's, not as
+// the tenant's own entry; a key in the entry still is.
+func TestGuard_SubtreeReservedSetByProfile(t *testing.T) {
+	t.Parallel()
+	for _, tc := range []struct {
+		name, tenant, want, deny string
+	}{
+		{name: "profile", tenant: "\n    _profile: quiet",
+			want: "This tenant's profile `quiet` (its `_profile`) sets `_silent_mode`", deny: "own entry"},
+		{name: "entry", tenant: "\n    _profile: quiet\n    _silent_mode: critical",
+			want: "This tenant's own entry sets `_silent_mode`", deny: "profile `quiet`"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			files := reservedCase{defaultState: "enable", tenant: tc.tenant}.files()
+			files["_profiles.yaml"] = "profiles:\n  quiet:\n    _silent_mode: warning\n"
+			files["finance/_defaults.yaml"] = "defaults:\n  _silent_mode: warning\n"
+			_, got := reservedFindings(t, "--config-dir", writeReservedConfD(t, files))
+			if len(got) != 1 {
+				t.Fatalf("findings = %+v, want 1", got)
+			}
+			if m := got[0].Message; !strings.Contains(m, tc.want) || strings.Contains(m, tc.deny) {
+				t.Errorf("message = %s; want %q, not %q", m, tc.want, tc.deny)
+			}
+		})
 	}
 }
