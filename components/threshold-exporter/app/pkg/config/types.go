@@ -328,6 +328,16 @@ func IsRoutingKey(k string) bool {
 	return k == "_routing" || strings.HasPrefix(k, "_routing_")
 }
 
+// IsRecognisedReservedKey reports whether k is a reserved key something
+// reads by name: one of validReservedKeys, a routing key (IsRoutingKey), or a
+// `_state_<filter>` key (read for each declared filter). Narrower than
+// IsReservedKey, which also accepts anything under a reserved PREFIX —
+// `_routingProfile` and `_routings` pass IsReservedKey, yet no reader looks
+// them up (#2388 r3).
+func IsRecognisedReservedKey(k string) bool {
+	return validReservedKeys[k] || IsRoutingKey(k) || strings.HasPrefix(k, "_state_")
+}
+
 // RoutingConfig represents a tenant's alert routing preferences.
 // Used by generate_alertmanager_routes.py to produce Alertmanager route/receiver fragments.
 //

@@ -118,11 +118,13 @@ func writtenInsideDefaults(files []string, unwrapped map[string]bool) []string {
 //
 // ⛔ THREE SHAPES, because "set it in each tenant's own entry" is only a fix
 // where a tenant's own entry is read (#2388 r2, measured): a `_state_<f>` whose
-// f the root `state_filters:` does not declare, and a `_silent_*` key that is
-// not a recognised key (baseRowsSkipKey, not IsReservedKey: `_silent_x`), are
-// read by nothing in a tenant's entry either — moving them there made this
-// finding go away while the value was still not served, and nothing said so.
-// Those two get "declare the filter or delete it" / "delete it" instead.
+// f the root `state_filters:` does not declare, and a key that is not a
+// recognised reserved key (config.IsRecognisedReservedKey: `_silent_x`, which
+// only baseRowsSkipKey accepts, and — #2388 r3 — `_routingProfile` /
+// `_routings`, which IsReservedKey accepts by prefix alone), are read by
+// nothing in a tenant's entry either — moving them there made this finding go
+// away while the value was still not served, and nothing said so. Those get
+// "declare the filter or delete it" / "delete it" instead.
 func subtreeReservedMessage(k string, files []string, declared map[string]bool) string {
 	where := fmt.Sprintf("is set in the defaults of a subtree `_defaults.yaml` (%s) that this tenant inherits from", quoteJoin(files))
 	const tail = "From the next minor release the exporter stops applying these keys from a subtree " +
@@ -134,7 +136,7 @@ func subtreeReservedMessage(k string, files []string, declared map[string]bool) 
 			"root `_defaults.yaml` (this applies to every tenant in the tree), or delete the key. %s",
 			k, where, f, k, f, tail)
 	}
-	if !config.IsReservedKey(k) {
+	if !config.IsRecognisedReservedKey(k) {
 		return fmt.Sprintf("Key `%s` %s. It is not a recognised key: the exporter does not read it, "+
 			"in a subtree `_defaults.yaml` or in a tenant's own entry. Delete it. %s", k, where, tail)
 	}

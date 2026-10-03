@@ -332,7 +332,7 @@ func TestGuard_SubtreeReservedMessageShapes(t *testing.T) {
 	files := map[string]string{
 		"_defaults.yaml": reservedRoot("disable"),
 		"a/_defaults.yaml": "defaults:\n  _silent_mode: warning\n  _state_nope: enable\n  _silent_x: 3\n" +
-			"  _severity_dedup: disable\n  _state_maintenance: enable\n",
+			"  _severity_dedup: disable\n  _state_maintenance: enable\n  _routingProfile: p1\n",
 		"a/b/t.yaml": "tenants:\n  t1: {}\n",
 	}
 	_, got := reservedFindings(t, "--config-dir", writeReservedConfD(t, files))
@@ -352,6 +352,10 @@ func TestGuard_SubtreeReservedMessageShapes(t *testing.T) {
 		{key: "_silent_x",
 			want: []string{"Key `_silent_x`", "not a recognised key", "Delete it."},
 			deny: []string{"Reserved key", "Set `_silent_x`"}},
+		// #2388 r3: reserved by prefix alone; nothing reads it by name.
+		{key: "_routingProfile",
+			want: []string{"Key `_routingProfile`", "not a recognised key", "Delete it."},
+			deny: []string{"Reserved key", "Set `_routingProfile`"}},
 		{key: "_state_maintenance",
 			want: []string{"Set `_state_maintenance` " + ownEntry, "`state_filters.maintenance.default_state`",
 				"affects every tenant in the tree; to change only this subtree's tenants"}},
@@ -373,14 +377,15 @@ func TestGuard_SubtreeReservedMessageShapes(t *testing.T) {
 			}
 		}
 	}
-	if len(got) != 5 {
-		t.Errorf("findings = %d, want 5: %v", len(got), got)
+	if len(got) != 6 {
+		t.Errorf("findings = %d, want 6: %v", len(got), got)
 	}
 }
 
 // #2388 r2 (F2): following each message's advice on the f8 shape — declare the
-// filter at the root, delete `_silent_x`, move the recognised keys into the
-// tenant's entry — leaves no finding AND serves the values. The declared
+// filter at the root, delete `_silent_x` and `_routingProfile` (r3), move the
+// recognised keys into the tenant's entry — leaves no finding AND serves the
+// values. The declared
 // filter applies to every tenant in the tree (t2 in c/ too), which is why the
 // message says so (F3).
 func TestGuard_SubtreeReservedAdviceIsAFix(t *testing.T) {
@@ -405,5 +410,29 @@ func TestGuard_SubtreeReservedAdviceIsAFix(t *testing.T) {
 	}
 	if v := doc.Tenants["t2"].Values["_state_nope"]; v != true {
 		t.Errorf("t2 _state_nope = %v, want true (the root filter covers the whole tree)", v)
+	}
+}
+
+// #2388 r3: `_routingProfile` gets "delete it", and deleting it is the fix —
+// the finding goes; the routing checks name it nowhere either way.
+func TestGuard_SubtreeReservedRoutingProfileDeleted(t *testing.T) {
+	t.Parallel()
+	for _, tc := range []struct {
+		name, subtree string
+		want          []string
+	}{
+		{name: "written", subtree: "defaults:\n  mysql_connections: 70\n  _routingProfile: p1\n",
+			want: []string{"warn subtree_default_reserved_key t1 _routingProfile"}},
+		{name: "deleted", subtree: "defaults:\n  mysql_connections: 70\n", want: nil},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			files := reservedCase{defaultState: "disable", tenant: "{}"}.files()
+			files["finance/_defaults.yaml"] = tc.subtree
+			got := allFindings(t, "--config-dir", writeReservedConfD(t, files), "--warn-as-error")
+			if !reflect.DeepEqual(got, tc.want) {
+				t.Errorf("findings = %q, want %q", got, tc.want)
+			}
+		})
 	}
 }
