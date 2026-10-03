@@ -48,6 +48,9 @@ type Reserved struct {
 	Metadata      []config.ResolvedMetadata
 	SeverityDedup []config.ResolvedSeverityDedup
 	Ops           config.OperationalStates
+	// ThresholdExpiries is the time-boxed threshold reading
+	// da_config_event{event="threshold_expired"} is emitted from.
+	ThresholdExpiries []config.ResolvedThresholdExpiry
 }
 
 // NewCollector is the exporter's collector over src.
@@ -124,7 +127,8 @@ func (c *Collector) Collect(ch chan<- prometheus.Metric) {
 	c.collectStateFilters(ch, ops.StateFilters)
 	c.collectSilentModes(ch, ops)
 	c.collectMaintenanceExpiries(ch, cfg, now)
-	c.collectThresholdExpiries(ch, cfg, now)
+	expiries := cfg.ResolveThresholdExpiriesAt(now)
+	c.collectThresholdExpiries(ch, expiries)
 	dedup := cfg.ResolveSeverityDedup()
 	c.collectSeverityDedup(ch, dedup)
 	c.collectConfigInfo(ch)
@@ -137,7 +141,7 @@ func (c *Collector) Collect(ch chan<- prometheus.Metric) {
 	c.collectTenantExpectedExporter(ch, metadata)
 
 	if c.observe != nil {
-		c.observe(Reserved{Metadata: metadata, SeverityDedup: dedup, Ops: ops})
+		c.observe(Reserved{Metadata: metadata, SeverityDedup: dedup, Ops: ops, ThresholdExpiries: expiries})
 	}
 }
 
@@ -384,8 +388,8 @@ func (c *Collector) collectMaintenanceExpiries(ch chan<- prometheus.Metric, cfg 
 // distinct da_config_event series (target_severity is "" here, so reason is the
 // only label that tells two metrics apart; a shared user reason on two metrics
 // would otherwise collide and fail the Gather — see configEventDesc).
-func (c *Collector) collectThresholdExpiries(ch chan<- prometheus.Metric, cfg *config.ThresholdConfig, now time.Time) {
-	for _, te := range cfg.ResolveThresholdExpiriesAt(now) {
+func (c *Collector) collectThresholdExpiries(ch chan<- prometheus.Metric, expiries []config.ResolvedThresholdExpiry) {
+	for _, te := range expiries {
 		if !te.Expired {
 			continue // not yet past its TTL — the override is still active
 		}

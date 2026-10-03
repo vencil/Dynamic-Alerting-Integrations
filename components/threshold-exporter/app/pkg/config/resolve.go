@@ -331,6 +331,19 @@ func (c *ThresholdConfig) ResolveAtWithKeys(now time.Time) ([]KeyedThreshold, Re
 	return keyed, stats, nil
 }
 
+// ResolveAtWithKeysSilent is ResolveAtWithKeys with the resolver's ERROR /
+// WARN lines discarded (logf nil). `da-guard served-values` reads the day's
+// other schedule segments with it (#2115 (c)): those readings repeat the one
+// at `--at`, which already wrote every line once.
+func (c *ThresholdConfig) ResolveAtWithKeysSilent(now time.Time) ([]KeyedThreshold, ResolveStats, error) {
+	var keyed []KeyedThreshold
+	rows, stats := c.resolveAtWithStats(now, &keyed, nil)
+	if err := checkKeyed(rows, keyed); err != nil {
+		return nil, stats, err
+	}
+	return keyed, stats, nil
+}
+
 // checkKeyed is ResolveAtWithKeys' guard, and it checks the COUNT only: one
 // pair per returned row. The rows themselves are the pairs' rows by
 // construction (segmentPairs rewrites the segment from them), so comparing

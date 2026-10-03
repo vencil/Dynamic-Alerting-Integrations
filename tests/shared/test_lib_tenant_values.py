@@ -407,3 +407,150 @@ def test_served_values_error_stderr_is_printed_line_by_line(capsys):
     assert capsys.readouterr().err.splitlines() == [
         "ERROR: da-guard served-values exited 2",
         tv.DA_GUARD_PREFIX + "first", tv.DA_GUARD_PREFIX + "second ?[31m"]
+
+
+# --- schedules / aliases（#2115 (c)）：只解析 da-guard 給的，不解讀排程 ---
+
+_SCHEDULED = {
+    "_defaults.yaml": "defaults:\n  mysql_connections: 80\n  mysql_threads_running: 30\n  redis_memory: 90\n",
+    "tenant-a.yaml": (
+        "tenants:\n  tenant-a:\n"
+        "    mysql_connections:\n      default: \"70\"\n      overrides:\n"
+        "        - window: \"22:00-06:00\"\n          value: \"1000\"\n"
+        "        - window: \"12:00-13:00\"\n          value: \"disable\"\n"
+        "        - window: \"15:00-16:00\"\n          value: \"700:critical\"\n"
+        "    mysql_cpu: 44\n"
+        "    redis_memory:\n      default: \"95\"\n      expires: \"2026-01-01T00:00:00Z\"\n"
+    ),
+}
+
+
+def test_schedules_are_parsed_as_da_guard_writes_them(tmp_path, da_guard):
+    conf_d = _tree(tmp_path, _SCHEDULED)
+    got = tv.load_served_values(conf_d, at="2026-07-01T03:00:00Z", binary=da_guard, schedules=True)["tenant-a"]
+    S = tv.ScheduleSegment
+    assert got.schedules["mysql_connections"] == tv.KeySchedule([
+        S("00:00", "06:00", 1000.0, "warning"), S("06:00", "12:00", 70.0, "warning"),
+        S("12:00", "13:00", None, None), S("13:00", "15:00", 70.0, "warning"),
+        S("15:00", "16:00", 700.0, "critical"), S("16:00", "22:00", 70.0, "warning"),
+        S("22:00", "24:00", 1000.0, "warning"),
+    ], None, None)
+    segs = got.schedules["mysql_connections"].segments
+    assert all(isinstance(s.value, float) for s in segs if s.value is not None)
+    # 過期：整天是平台預設；expires 照寫、expired 是 Go 在 --at 的判定。
+    assert got.schedules["redis_memory"] == tv.KeySchedule(
+        [S("00:00", "24:00", 90.0, "warning")], "2026-01-01T00:00:00Z", True)
+    # --at 那一刻的 values 與 schedules 對應段一致（同一份 Go 讀數）。
+    assert got.values["mysql_connections"] == 1000
+
+
+def test_ungatherable_segment_is_parsed_with_its_error(tmp_path, da_guard):
+    """--at 以外的時段 /metrics Gather 不起來：da-guard 不 exit 2，該段帶 error；這裡只照搬。"""
+    conf_d = _tree(tmp_path, {
+        "_defaults.yaml": "defaults:\n  mysql_connections: 80\n",
+        "tenant-a.yaml": (
+            "tenants:\n  tenant-a:\n    mysql_connections_critical: 95\n"
+            "    mysql_connections:\n      default: \"70\"\n      overrides:\n"
+            "        - window: \"15:00-16:00\"\n          value: \"700:critical\"\n"),
+    })
+    got = tv.load_served_values(conf_d, at="2026-07-01T03:00:00Z", binary=da_guard, schedules=True)["tenant-a"]
+    segs = got.schedules["mysql_connections"].segments
+    assert [s[:4] for s in segs] == [("00:00", "15:00", 70.0, "warning"), ("15:00", "16:00", None, None),
+                                     ("16:00", "24:00", 70.0, "warning")]
+    assert segs[0].error is None and segs[2].error is None
+    assert segs[1].error and "HTTP 500" in segs[1].error
+
+
+def test_aliases_are_the_exporters_table(tmp_path, da_guard):
+    """舊拼法寫的 key 經 da-guard 給的別名表找得到；表不在 Python 端維護。"""
+    conf_d = _tree(tmp_path, _SCHEDULED)
+    tree = tv.load_served_tree(conf_d, binary=da_guard, schedules=True)
+    assert "mysql_cpu" in tree.aliases
+    canon = tree.aliases["mysql_cpu"]
+    assert tree.tenants["tenant-a"].values[canon] == 44
+    assert "mysql_cpu" not in tree.tenants["tenant-a"].schedules
+    assert canon in tree.tenants["tenant-a"].schedules
+
+
+def _old_da_guard(tmp_path: Path, doc: str) -> str:
+    require_shebang_scripts()  # the stand-in da-guard is a `#!` script
+    fake = tmp_path / "old-da-guard"
+    fake.write_text(f"#!/bin/sh\necho '{doc}'\n", encoding="utf-8")
+    fake.chmod(0o755)
+    return str(fake)
+
+
+def test_output_without_aliases_is_refused(tmp_path):
+    fake = _old_da_guard(tmp_path, '{"at": "x", "parse_failed": [], "skipped": [], '
+                                   '"unreadable": [], "tenants": {}}')
+    with pytest.raises(tv.ServedValuesError) as ei:
+        tv.load_served_tree(tmp_path, binary=fake)
+    assert "aliases" in str(ei.value)
+    assert "older than this tool: upgrade or rebuild it" in str(ei.value)
+
+
+def test_output_without_schedules_is_refused(tmp_path):
+    fake = _old_da_guard(tmp_path, '{"at": "x", "parse_failed": [], "skipped": [], "unreadable": [], '
+                                   '"aliases": {}, "tenants": {"t": {"values": {}, "severities": {}, '
+                                   '"unserved": {}, "dropped": {}}}}')
+    with pytest.raises(tv.ServedValuesError) as ei:
+        tv.load_served_tree(tmp_path, binary=fake, schedules=True)
+    assert "schedules" in str(ei.value)
+    assert "older than this tool: upgrade or rebuild it" in str(ei.value)
+
+
+def test_schedules_are_asked_for_only_on_request(tmp_path, da_guard):
+    """不帶 schedules=True 時不傳 --schedules：schedules 為 None，其餘讀數與帶旗標時相同。"""
+    conf_d = _tree(tmp_path, _SCHEDULED)
+    plain = tv.load_served_tree(conf_d, at="2026-07-01T03:00:00Z", binary=da_guard)
+    full = tv.load_served_tree(conf_d, at="2026-07-01T03:00:00Z", binary=da_guard, schedules=True)
+    assert all(t.schedules is None for t in plain.tenants.values())
+    assert all(t.schedules for t in full.tenants.values())
+    assert plain.aliases == full.aliases and plain.aliases
+    assert {k: t._replace(schedules=None) for k, t in full.tenants.items()} == plain.tenants
+
+
+def test_output_without_schedules_is_fine_when_not_asked_for(tmp_path):
+    fake = _old_da_guard(tmp_path, '{"at": "x", "parse_failed": [], "skipped": [], "unreadable": [], '
+                                   '"aliases": {}, "tenants": {"t": {"values": {}, "severities": {}, '
+                                   '"unserved": {}, "dropped": {}}}}')
+    assert tv.load_served_values(tmp_path, binary=fake)["t"].schedules is None
+
+
+_ARGV_DOC = ('{"at": "x", "parse_failed": [], "skipped": [], "unreadable": [], "aliases": {}, '
+             '"tenants": {"t": {"values": {}, "severities": {}, "unserved": {}, "dropped": {}, '
+             '"schedules": {}}}}')
+
+
+@pytest.mark.parametrize("asked", [False, True])
+def test_schedules_flag_is_passed_only_when_asked_for(tmp_path, asked):
+    """假 da-guard 把 argv 逐行寫進檔案：schedules=False 時不帶 --schedules，True 時帶。"""
+    require_shebang_scripts()  # the stand-in da-guard is a `#!` script
+    argv = tmp_path / "argv"
+    fake = tmp_path / "argv-da-guard"
+    fake.write_text(f"#!/bin/sh\nprintf '%s\\n' \"$@\" > '{argv}'\necho '{_ARGV_DOC}'\n", encoding="utf-8")
+    fake.chmod(0o755)
+    tv.load_served_tree(tmp_path, at="2026-07-01T03:00:00Z", binary=str(fake), schedules=asked)
+    got = argv.read_text(encoding="utf-8").splitlines()
+    assert got[0] == tv.SUBCOMMAND and "--config-dir" in got  # 確定讀到的是這次的 argv
+    assert ("--schedules" in got) is asked
+
+
+def test_da_guard_without_the_schedules_flag_is_named_as_too_old(tmp_path):
+    """舊版 da-guard 不認得 --schedules（Go flag：exit 2）：錯誤訊息與其他缺欄位時一樣指出要升級。"""
+    require_shebang_scripts()  # the stand-in da-guard is a `#!` script
+    fake = tmp_path / "pre-schedules-da-guard"
+    fake.write_text("#!/bin/sh\necho 'flag provided but not defined: -schedules' >&2\nexit 2\n",
+                    encoding="utf-8")
+    fake.chmod(0o755)
+    with pytest.raises(tv.ServedValuesError) as ei:
+        tv.load_served_tree(tmp_path, binary=str(fake), schedules=True)
+    assert ei.value.returncode == 2
+    assert "older than this tool: upgrade or rebuild it" in str(ei.value)
+    # 其他 exit 2 不被說成「太舊」。
+    other = tmp_path / "other-da-guard"
+    other.write_text("#!/bin/sh\necho 'boom' >&2\nexit 2\n", encoding="utf-8")
+    other.chmod(0o755)
+    with pytest.raises(tv.ServedValuesError) as ei:
+        tv.load_served_tree(tmp_path, binary=str(other), schedules=True)
+    assert "older than this tool" not in str(ei.value)

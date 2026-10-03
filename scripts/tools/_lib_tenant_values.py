@@ -7,13 +7,18 @@ Semantics: `da-guard served-values` = /metrics, `da-guard effective` =
 /effective. This module runs those subcommands and parses their JSON; it
 decides nothing about the values itself.
 
-`load_served_tree(conf_d, at=None, binary=None)` returns a `ServedTree`:
+`load_served_tree(conf_d, at=None, binary=None, schedules=False)` returns a `ServedTree`:
 `tenants` is `load_served_values`'s answer, `skipped` the files the exporter's
 load read but serves no tenant from (a file outside the `_` files with no
 `tenants:` mapping, #2115 R3), each a `SkippedFile(file, reason)` in the words
 of the load; `stderr_lines` every non-empty line da-guard wrote to stderr on
 a run that succeeded (a successful run would otherwise swallow them), split on
-"\n" only. They are not sorted into kinds here. `print_load_warnings` prints
+"\n" only. They are not sorted into kinds here. `aliases` is the exporter's
+own alias table, retired base key -> canonical base key (#2115): the keys of
+`values` / `severities` / `schedules` / `dropped` are canonical, and a key a
+caller holds in a retired spelling is looked up through this table, not
+through one kept here. The exporter canonicalizes the `<base>_critical` and
+`<base>{...}` spellings of a retired base the same way. `print_load_warnings` prints
 both: each of those lines behind `DA_GUARD_PREFIX` and escaped with
 `safe_label`, then one named WARN line per skipped file. A file the load
 cannot stat or read (da-guard's `unreadable`) is not a warning: it raises
@@ -24,7 +29,7 @@ what the exporter meant: a file name holding a real "\n" is printed by Go as
 two lines, and nothing here can tell those two from two messages. The prefix
 is what keeps either of them off column 0.
 
-`load_served_values(conf_d, at=None, binary=None)` returns
+`load_served_values(conf_d, at=None, binary=None, schedules=False)` returns
 `{tenant_id: TenantValues}`:
 
 * `values` — every key /metrics serves for the tenant, canonical spelling; a
@@ -42,6 +47,24 @@ is what keeps either of them off column 0.
 * `dropped` — keys whose row /metrics drops because the exporter cannot build
   its series; key → the reason for each dropped row. `dropped` is keyed by the
   canonical spelling, `unserved` by the spelling as written.
+* `schedules` — None unless `schedules=True` (da-guard `--schedules`: it
+  resolves the tree once per part of the day in which some schedule changes,
+  so it is asked for only by a caller that reads it). Then: the whole UTC day
+  of every threshold key /metrics serves at
+  some minute of it (or whose `expires:` the exporter honours), canonical
+  spelling → `KeySchedule` (#2115 (c)): `segments`, each a
+  `ScheduleSegment(start, end, value, severity, error)` — `"HH:MM"` to
+  `"HH:MM"` (the last ends `"24:00"`), in order with no gap; `value` a float
+  as in `values`, or None when the key has no /metrics row in that segment
+  (`severity` None too). `error` is None except in a segment (never the one
+  holding `at`) in which the exporter's /metrics cannot be gathered at all:
+  then it is da-guard's text for that failure, and `value` / `severity` are
+  None — nothing is served then, for any key. The segments are the exporter's reading, so a
+  caller checking "every part of the day" reads them as they are and never
+  reads the `overrides:` of the config itself. `expires` (as written) and
+  `expired` (the exporter's verdict at `at`) are None unless the exporter
+  honours a time-box on the key (base keys only); the segments already
+  follow that verdict.
 
 Whether /metrics serves at all follows Gather over the same collectors
 production /metrics serves. A tree whose output would carry any string that
@@ -122,7 +145,9 @@ __all__ = [
     "DaGuardError",
     "DaGuardNotFoundError",
     "EffectiveError",
+    "KeySchedule",
     "KeySource",
+    "ScheduleSegment",
     "ServedTree",
     "ServedValuesError",
     "SkippedFile",
@@ -149,8 +174,23 @@ _KEY_LAYERS = frozenset({"defaults", "platform", "profile", "tenant"})
 DEFAULT_TIMEOUT = 600
 
 _EXIT_OK = 0
+_EXIT_CALLER_ERR = 2  # da-guard's own: caller error, e.g. a flag it does not know
 _EXIT_PARSE_FAILED = 3
 _NON_FINITE = {"+Inf": float("inf"), "-Inf": float("-inf"), "NaN": float("nan")}
+
+
+class ScheduleSegment(NamedTuple):
+    start: str              # "HH:MM", UTC
+    end: str                # "HH:MM", UTC; the day's last segment ends "24:00"
+    value: float | None     # None: no /metrics row for the key in [start, end)
+    severity: str | None    # None exactly when value is None
+    error: str | None = None  # da-guard's text when /metrics cannot be gathered in [start, end)
+
+
+class KeySchedule(NamedTuple):
+    segments: list[ScheduleSegment]
+    expires: str | None     # the time-box as written, when the exporter honours one
+    expired: bool | None    # the exporter's verdict at `at`; None without a time-box
 
 
 class TenantValues(NamedTuple):
@@ -159,6 +199,7 @@ class TenantValues(NamedTuple):
     severities: dict[str, str]
     unserved: dict[str, Any]
     dropped: dict[str, list[str]]
+    schedules: dict[str, KeySchedule] | None  # None unless asked for (schedules=True)
 
 
 class SkippedFile(NamedTuple):
@@ -170,6 +211,7 @@ class ServedTree(NamedTuple):
     tenants: dict[str, TenantValues]
     skipped: list[SkippedFile]
     stderr_lines: list[str]  # every non-empty line of da-guard's stderr, as written
+    aliases: dict[str, str]  # the exporter's table: retired base key -> canonical base key
 
 
 class UnreadableFile(NamedTuple):
@@ -357,11 +399,13 @@ def load_served_values(
     at: str | None = None,
     binary: str | None = None,
     timeout: float = DEFAULT_TIMEOUT,
+    schedules: bool = False,
 ) -> dict[str, TenantValues]:
     """`{tenant_id: TenantValues}` for the conf.d tree at `conf_d`, as
-    /metrics serves it at `at` (RFC3339; None = now). See the module
-    docstring for the contract and the exceptions."""
-    return load_served_tree(conf_d, at=at, binary=binary, timeout=timeout).tenants
+    /metrics serves it at `at` (RFC3339; None = now); with `schedules`, each
+    tenant's whole day too. See the module docstring for the contract and
+    the exceptions."""
+    return load_served_tree(conf_d, at=at, binary=binary, timeout=timeout, schedules=schedules).tenants
 
 
 def load_served_tree(
@@ -369,15 +413,41 @@ def load_served_tree(
     at: str | None = None,
     binary: str | None = None,
     timeout: float = DEFAULT_TIMEOUT,
+    schedules: bool = False,
 ) -> ServedTree:
     """`load_served_values`'s tenants plus the files the load serves no
     tenant from. Same arguments and exceptions."""
     extra = ["--at", at] if at is not None else []
-    (tenants, skipped), returncode, stderr = _run_da_guard(
-        SUBCOMMAND, extra, conf_d, binary, timeout, ServedValuesError, schema=None,
-        read=lambda doc: (doc["tenants"],
-                          [SkippedFile(str(e["file"]), str(e["reason"])) for e in doc["skipped"]]),
-        reads_unreadable=True)
+    if schedules:
+        extra.append("--schedules")
+    try:
+        (tenants, skipped, aliases), returncode, stderr = _run_da_guard(
+            SUBCOMMAND, extra, conf_d, binary, timeout, ServedValuesError, schema=None,
+            read=lambda doc: (doc["tenants"],
+                              [SkippedFile(str(e["file"]), str(e["reason"])) for e in doc["skipped"]],
+                              doc.get("aliases")),
+            reads_unreadable=True)
+    except ServedValuesError as e:
+        # A da-guard from before --schedules refuses the flag (Go's flag
+        # package: exit 2, "flag provided but not defined: -schedules").
+        if (schedules and e.returncode == _EXIT_CALLER_ERR
+                and "flag provided but not defined: -schedules" in e.stderr):
+            raise ServedValuesError(
+                f"{e.message} (--schedules not known) — this da-guard is older than this tool: "
+                "upgrade or rebuild it", e.returncode, e.stderr) from e
+        raise
+    # Read after the fields _run_da_guard checks, so an older da-guard is
+    # named by the first field it lacks.
+    if aliases is None:
+        raise ServedValuesError(
+            f"da-guard {SUBCOMMAND} exited {returncode} without the expected JSON ('aliases') — this "
+            "da-guard is older than this tool: upgrade or rebuild it", returncode, stderr)
+    try:
+        aliases = {str(k): str(v) for k, v in aliases.items()}
+    except AttributeError as e:
+        raise ServedValuesError(
+            f"da-guard {SUBCOMMAND} exited {returncode} without the expected JSON (aliases: {e})",
+            returncode, stderr) from e
 
     out: dict[str, TenantValues] = {}
     for tenant_id, tv in tenants.items():
@@ -392,9 +462,42 @@ def load_served_tree(
             raise ServedValuesError(
                 f"da-guard {SUBCOMMAND}: tenant {tenant_id!r} carries a value that is not a threshold ({e})",
                 returncode, stderr) from e
+        days: dict[str, KeySchedule] | None = None
+        if schedules:
+            if "schedules" not in tv:
+                raise ServedValuesError(
+                    f"da-guard {SUBCOMMAND}: tenant {tenant_id!r} has no schedules — this da-guard is "
+                    "older than this tool: upgrade or rebuild it", returncode, stderr)
+            try:
+                days = {k: _key_schedule(s) for k, s in tv["schedules"].items()}
+            except (ValueError, KeyError, TypeError, AttributeError) as e:
+                raise ServedValuesError(
+                    f"da-guard {SUBCOMMAND}: tenant {tenant_id!r} carries a schedule that is not of its shape ({e})",
+                    returncode, stderr) from e
         out[tenant_id] = TenantValues(tenant_id, values, severities, dict(tv["unserved"]),
-                                     {k: list(v) for k, v in tv["dropped"].items()})
-    return ServedTree(out, skipped, _nonempty_lines(stderr))
+                                     {k: list(v) for k, v in tv["dropped"].items()}, days)
+    return ServedTree(out, skipped, _nonempty_lines(stderr), aliases)
+
+
+def _key_schedule(s: dict[str, Any]) -> KeySchedule:
+    """One key's `schedules` entry, as da-guard wrote it; only the value text
+    of a non-finite number becomes a float, as in `values`."""
+    segments = []
+    for seg in s["segments"]:
+        if "error" in seg:
+            segments.append(ScheduleSegment(str(seg["from"]), str(seg["to"]), None, None,
+                                            str(seg["error"])))
+            continue
+        value = seg["value"]
+        segments.append(ScheduleSegment(
+            str(seg["from"]), str(seg["to"]),
+            None if value is None else _threshold(value),
+            None if value is None else str(seg["severity"])))
+    expired = s.get("expired")
+    if expired is not None and not isinstance(expired, bool):
+        raise ValueError(f"expired is not a boolean: {expired!r}")
+    expires = s.get("expires")
+    return KeySchedule(segments, None if expires is None else str(expires), expired)
 
 
 def print_load_warnings(tree: ServedTree, stream: TextIO | None = None) -> None:

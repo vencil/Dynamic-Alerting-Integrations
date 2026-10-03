@@ -33,7 +33,7 @@ Targets
 
 MODULE "exporter" — `pkg/config/parse.go`
   - parseHHMM         — pure HH:MM parser, range-checked (6 muts)
-  - matchTimeWindow   — same/cross-midnight branch (3 muts)
+  - windowContains    — same/cross-midnight branch (3 muts; was matchTimeWindow)
   - parsePromDuration — Prometheus-style "5m" / "4h" / "2d" parser (2 muts)
 
 MODULE "exporter" — `pkg/config/hierarchy.go`
@@ -263,30 +263,32 @@ MUTATIONS: list[Mutation] = [
         # outer TrimSpace is redundant for any whitespace-padded input.
         known_equivalent=True,
     ),
-    # ── matchTimeWindow (parse.go) ───────────────────────────────────
+    # ── matchTimeWindow → windowContains (parse.go) ──────────────────
+    # The window test moved into windowContains (#2115 (c)), which the
+    # at-instant reading and ScheduledValue.DaySegments share.
     Mutation(
         target_file="pkg/config/parse.go",
         test_target="./...",
-        label="matchTimeWindow: invert same-day end-bound (< → <=)",
-        fn_name="matchTimeWindow",
-        old="return nowMinutes >= startMinutes && nowMinutes < endMinutes",
-        new="return nowMinutes >= startMinutes && nowMinutes <= endMinutes",
+        label="windowContains: invert same-day end-bound (< → <=)",
+        fn_name="windowContains",
+        old="return minute >= start && minute < end",
+        new="return minute >= start && minute <= end",
     ),
     Mutation(
         target_file="pkg/config/parse.go",
         test_target="./...",
-        label="matchTimeWindow: invert cross-midnight branch (or → and)",
-        fn_name="matchTimeWindow",
-        old="return nowMinutes >= startMinutes || nowMinutes < endMinutes",
-        new="return nowMinutes >= startMinutes && nowMinutes < endMinutes",
+        label="windowContains: invert cross-midnight branch (or → and)",
+        fn_name="windowContains",
+        old="return minute >= start || minute < end",
+        new="return minute >= start && minute < end",
     ),
     Mutation(
         target_file="pkg/config/parse.go",
         test_target="./...",
-        label="matchTimeWindow: swap branch condition (always cross-midnight)",
-        fn_name="matchTimeWindow",
-        old="if startMinutes <= endMinutes {",
-        new="if startMinutes > endMinutes {",
+        label="windowContains: swap branch condition (always cross-midnight)",
+        fn_name="windowContains",
+        old="if start <= end {",
+        new="if start > end {",
     ),
     # ── parsePromDuration (parse.go) ─────────────────────────────────
     Mutation(
