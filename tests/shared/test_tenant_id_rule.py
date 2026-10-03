@@ -92,6 +92,9 @@ def test_missing_schema_fails_closed(fresh_rule, monkeypatch):
     {"tenantId": {"type": "string"}},
     {"tenantId": {"type": "string", "pattern": "^[a-z]+$"}},
     {"tenantId": {"type": "string", "description": "no pattern"}},
+    # Empty strings: the generator refuses them, so must this reader.
+    {"tenantId": {"type": "string", "pattern": "", "description": "empty pattern"}},
+    {"tenantId": {"type": "string", "pattern": "^[a-z]+$", "description": ""}},
 ])
 def test_missing_definition_fails_closed(fresh_rule, monkeypatch, tmp_path, definitions):
     schema = tmp_path / "tenant-config.schema.json"

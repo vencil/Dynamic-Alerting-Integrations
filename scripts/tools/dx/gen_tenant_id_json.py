@@ -94,7 +94,8 @@ def main() -> int:
             if not path.exists():
                 print(f"DRIFT: {rel} is missing; run `make tenant-id-json`", file=sys.stderr)
                 drift = True
-            elif path.read_text(encoding="utf-8") != generated:
+            # Bytes, not read_text(): that would normalize a CRLF copy away.
+            elif path.read_bytes() != generated.encode("utf-8"):
                 print(f"DRIFT: {rel} is stale vs {SCHEMA_REL} definitions.tenantId; "
                       "run `make tenant-id-json`", file=sys.stderr)
                 drift = True

@@ -300,7 +300,8 @@ def tenant_id_rule() -> tuple[re.Pattern[str], str]:
         definition = json.load(f).get("definitions", {}).get("tenantId")
     if (not isinstance(definition, dict)
             or not isinstance(definition.get("pattern"), str)
-            or not isinstance(definition.get("description"), str)):
+            or not isinstance(definition.get("description"), str)
+            or not definition["pattern"] or not definition["description"]):
         raise RuntimeError(
             f"{path}: definitions.tenantId with a string pattern and description "
             "is missing; tenant ids cannot be checked")

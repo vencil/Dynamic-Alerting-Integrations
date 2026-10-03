@@ -16,7 +16,7 @@ lang: en
 
 - The decisions were settled by the owner in [#2655](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/2655); two of them were settled after the external review.
 - The external review was carried out adversarially by a different model, and its conclusions have been merged into this document.
-- The owner has approved this document. Three revisions were made at approval time: former open question 1 (the tenant-api read and delete paths) is resolved, the fifth DNS-1123 copy in `init_project.py` is now listed, and `definitions.tenantId` gains a `description`.
+- The owner has approved this document. Three revisions were made at approval time: former open question 1 (the tenant-api read and delete paths) is resolved, another DNS-1123 copy, in `init_project.py`, is now listed, and `definitions.tenantId` gains a `description`.
 
 ## Summary
 

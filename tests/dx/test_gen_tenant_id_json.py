@@ -86,6 +86,19 @@ def test_check_reports_drift(monkeypatch, tmp_path, capsys):
     assert "stale" in capsys.readouterr().err
 
 
+def test_check_reports_a_crlf_copy(monkeypatch, tmp_path, capsys):
+    (tmp_path / "docs" / "schemas").mkdir(parents=True)
+    (tmp_path / gen.SCHEMA_REL).write_text(json.dumps(_schema()), encoding="utf-8")
+    monkeypatch.setattr(gen, "_repo_root", lambda: tmp_path)
+    monkeypatch.setattr(sys, "argv", ["gen_tenant_id_json.py"])
+    assert gen.main() == 0
+    copy = tmp_path / gen.OUT_RELS[1]
+    copy.write_bytes(copy.read_bytes().replace(b"\n", b"\r\n"))
+    monkeypatch.setattr(sys, "argv", ["gen_tenant_id_json.py", "--check"])
+    assert gen.main() == 1
+    assert "stale" in capsys.readouterr().err
+
+
 def test_unusable_schema_is_a_caller_error(monkeypatch, tmp_path):
     monkeypatch.setattr(gen, "_repo_root", lambda: tmp_path)
     monkeypatch.setattr(sys, "argv", ["gen_tenant_id_json.py", "--check"])

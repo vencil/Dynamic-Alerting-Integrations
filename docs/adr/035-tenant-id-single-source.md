@@ -22,7 +22,7 @@ updated_at: 2026-10-03
 
 - 決策內容已由 owner 在 [#2655](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/2655) 拍板，其中兩題是外審之後再拍板的。
 - 外審由不同模型以對抗方式進行，結論已併入本文。
-- owner 已核可本文。核可時一併修訂三處：原待決問題 1（tenant-api 讀取與刪除路徑）結案、補列 `init_project.py` 的第五份 DNS-1123 寫法、`definitions.tenantId` 加上 `description`。
+- owner 已核可本文。核可時一併修訂三處：原待決問題 1（tenant-api 讀取與刪除路徑）結案、補列 `init_project.py` 另一份 DNS-1123 寫法、`definitions.tenantId` 加上 `description`。
 
 ## 摘要
 
