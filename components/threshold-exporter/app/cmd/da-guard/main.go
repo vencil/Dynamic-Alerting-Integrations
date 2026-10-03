@@ -52,7 +52,16 @@
 // empty scope — a scope whose only tenant file is broken has no
 // tenants to check, and that is not "safe" — nor is a scope with paths the
 // walk cannot stat, read or list (3, #2588). A --config-dir the walk cannot
-// list at all is a caller error (2), as for served-values and effective.
+// list at all is a path it cannot read too: 3, the root named in unreadable
+// as "." (walk_error) and the walk's reason on stderr, as for served-values
+// and effective (#2627; it was 2 before — never the vacuously-safe 0).
+// A --config-dir or --scope whose stat fails is split by
+// config.StatErrIsWrongPath (#2627): ENOENT, ENOTDIR or ELOOP is a wrong
+// path, a caller error (2); any other failure (permission denied, EIO, a
+// name too long, …) is a path that cannot be read: 3, named in unreadable
+// as stat_error ("." for --config-dir), as the walker records any failed
+// stat of an entry. A --scope that resolves, through a symlink, outside
+// --config-dir is a caller error (2) even when the target cannot be read.
 //
 // Warnings never affect exit code (`--warn-as-error` flips this if
 // a customer wants strict mode).
@@ -249,6 +258,10 @@ func run(args []string, stdout, errOut io.Writer) int {
 			return exitParseFailed
 		}
 		return exitCallerErr
+	}
+	if scoped.RootListErr != nil {
+		// The reason; the root itself is named in unreadable (exit 3, #2627).
+		fmt.Fprintf(errOut, "%s: %v\n", programName, scoped.RootListErr)
 	}
 	withGeneratorDuplicates(f.configDir, scoped, errOut)
 

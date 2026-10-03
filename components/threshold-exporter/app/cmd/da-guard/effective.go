@@ -107,6 +107,10 @@ func runEffective(args []string, stdout, errOut io.Writer) int {
 	doc := effectiveDoc{Schema: effectiveSchema, ParseFailed: []string{}, Unreadable: []skippedFile{},
 		Tenants: map[string]effectiveTenant{}}
 	tree, err := config.EffectiveTree(configDir)
+	if tree != nil && tree.RootListErr != nil {
+		// The reason; the root itself is named in unreadable (exit 3, #2627).
+		fmt.Fprintf(errOut, "%s %s: %v\n", programName, effectiveCmd, tree.RootListErr)
+	}
 	if tree != nil {
 		// Set on success and on a DecodeError stop alike (#2588): a run
 		// stopped by one undecodable file still names the unreadable ones.

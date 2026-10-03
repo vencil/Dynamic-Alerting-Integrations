@@ -233,6 +233,39 @@ def test_unreadable_raises_parse_failed_error_with_unreadable(break_it, want, tm
     assert f"cannot read 1 path(s): {want[0]} ({want[1]})" in str(ei.value)
 
 
+def test_every_file_unreadable_raises_parse_failed_error_from_both_loaders(tmp_path, da_guard):
+    """#2627：連 `_defaults.yaml` 在內每個設定檔都讀不到時，served-values 不再當成「沒有 .yaml」
+    回 exit 2；兩個 loader 都 raise ParseFailedError 並帶同一份 `unreadable`。懸空 symlink，
+    任何身分都會跑。"""
+    conf_d = _tree(tmp_path, {
+        "_defaults.yaml": "defaults:\n  mysql_connections: 80\n",
+        "t.yaml": "tenants:\n  tenant-t:\n    mysql_connections: 70\n",
+    })
+    _dangling(conf_d, "_defaults.yaml")
+    _dangling(conf_d, "t.yaml")
+    want = [tv.UnreadableFile("_defaults.yaml", "stat_error"), tv.UnreadableFile("t.yaml", "stat_error")]
+    for load in (tv.load_served_values, tv.load_effective):
+        with pytest.raises(tv.ParseFailedError) as ei:
+            load(conf_d, binary=da_guard)
+        assert ei.value.unreadable == want, load.__name__
+        assert "no .yaml files found" not in "\n".join(ei.value.stderr_lines), load.__name__
+
+
+@_NON_ROOT
+def test_unlistable_conf_d_raises_parse_failed_error_from_both_loaders(tmp_path, da_guard):
+    """#2627：conf.d 本身列不出內容（000）時，兩個 loader 都 raise ParseFailedError，
+    `unreadable` 以 `.`（walk_error）點名根目錄；過去三個子命令都回 exit 2。"""
+    conf_d = _tree(tmp_path, {"t.yaml": "tenants:\n  tenant-t:\n    mysql_connections: 70\n"})
+    conf_d.chmod(0)
+    try:
+        for load in (tv.load_served_values, tv.load_effective):
+            with pytest.raises(tv.ParseFailedError) as ei:
+                load(conf_d, binary=da_guard)
+            assert ei.value.unreadable == [tv.UnreadableFile(".", "walk_error")], load.__name__
+    finally:
+        conf_d.chmod(0o755)
+
+
 def test_directory_symlink_is_not_unreadable(tmp_path, da_guard):
     """指向目錄的 symlink 只跳過（與 served-values 相同的例外）：照常回傳。"""
     conf_d = _tree(tmp_path, _UNREADABLE_BASE)

@@ -93,7 +93,7 @@ type FlatBuild struct {
 // logged and counted a failure on this scan (TreeFile.ParseFailed).
 func BuildFlatConfig(scan *TreeScan, in FlatBuildInput) (FlatBuild, error) {
 	if len(scan.Files) == 0 {
-		return FlatBuild{}, fmt.Errorf("no .yaml files found in %s", in.Root)
+		return FlatBuild{}, fmt.Errorf("%w in %s", ErrNoYAMLFiles, in.Root)
 	}
 	logger := in.Logger
 
