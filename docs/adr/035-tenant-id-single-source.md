@@ -14,6 +14,8 @@ updated_at: 2026-10-03
 
 # ADR-035: tenant id 合法字元集的單一來源
 
+> **Language / 語言：** **中文 (Current)** | [English](./035-tenant-id-single-source.en.md)
+
 ## 狀態
 
 🟡 **Proposed**（2026-10-03 起草）。
@@ -21,8 +23,6 @@ updated_at: 2026-10-03
 - 決策內容已由 owner 在 [#2655](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/2655) 拍板，其中兩題是外審之後再拍板的。
 - 外審由不同模型以對抗方式進行，結論已併入本文。
 - 本文尚待 owner 核可。
-
-> 依語言政策（自 ADR-019 起預設 ZH-only），本 ADR 不另製 `.en.md`。
 
 ## 摘要
 
