@@ -7,7 +7,7 @@ package main
 //   - writeTestFile — directory-mode YAML helper, ditto
 //   - ConfigManagerBasics — single-file Load + state-filter Load
 //   - UtilityFunctionsAndHelpers — duration parsing, IsDisabled,
-//     ClampDuration, ParsePromDuration, FormatDuration_NoDay,
+//     ClampDuration, FormatDuration_NoDay,
 //     LogConfigStats_Format, WatchLoop_Integration
 //   - ConfigSourceDetectionAndReload — DetectConfigSource +
 //     FailSafeReload_InvalidYAML
@@ -153,39 +153,6 @@ func TestLogConfigStats_Format(t *testing.T) {
 }
 
 // ============================================================
-// parsePromDuration — direct unit tests
-// ============================================================
-
-func TestParsePromDuration(t *testing.T) {
-	tests := []struct {
-		input   string
-		wantDur time.Duration
-		wantErr bool
-	}{
-		{"30s", 30 * time.Second, false},
-		{"5m", 5 * time.Minute, false},
-		{"2h", 2 * time.Hour, false},
-		{"1d", 24 * time.Hour, false},
-		{"0s", 0, false},
-		{"", 0, true},
-		{"abc", 0, true},
-		{"5x", 0, true},
-		{"-1m", -1 * time.Minute, false},
-	}
-	for _, tt := range tests {
-		t.Run(tt.input, func(t *testing.T) {
-			got, err := parsePromDuration(tt.input)
-			if (err != nil) != tt.wantErr {
-				t.Errorf("parsePromDuration(%q): err=%v, wantErr=%v", tt.input, err, tt.wantErr)
-			}
-			if !tt.wantErr && got != tt.wantDur {
-				t.Errorf("parsePromDuration(%q) = %v, want %v", tt.input, got, tt.wantDur)
-			}
-		})
-	}
-}
-
-// ============================================================
 // isDisabled — direct unit tests
 // ============================================================
 
@@ -227,6 +194,14 @@ func TestClampDuration(t *testing.T) {
 		{"above_max_repeat_interval", "100h", "repeat_interval", "72h"},
 		// Invalid value — returns empty (logged as warning, value ignored)
 		{"invalid_value", "abc", "group_wait", ""},
+		// #2490: Alertmanager's syntax — multi-unit in order, d/w/y, no
+		// fractions, no sub-millisecond units (am_duration_matrix.json has more)
+		{"multi_unit_kept", "1h30m", "repeat_interval", "1h30m"},
+		{"day_unit_kept", "1d", "repeat_interval", "1d"},
+		{"day_unit_clamped", "4d", "repeat_interval", "72h"},
+		{"fraction_dropped", "1.5h", "repeat_interval", ""},
+		{"units_out_of_order_dropped", "30m1h", "repeat_interval", ""},
+		{"nanoseconds_dropped", "1ns", "group_wait", ""},
 		// Unknown param — return as-is (no guardrails defined)
 		{"unknown_param", "30s", "unknown_param", "30s"},
 	}

@@ -241,6 +241,8 @@ Platform-enforced timing ranges, automatically clamped when exceeded:
 | `group_interval` | 5s | 5m | 5m |
 | `repeat_interval` | 1m | 72h | 4h |
 
+Durations are written the way Alertmanager reads them (`definitions.duration` of `tenant-config.schema.json`): whole numbers with units, largest unit first, each unit at most once (`y`, `w`, `d`, `h`, `m`, `s`, `ms`), or a bare `0` — `1h30m`, `90m` and `1d` all work. A spelling Alertmanager refuses (`1.5h`, `30m1h`, `1ns`) is replaced by the platform default with a WARN, and `generate-routes --validate` and `validate-config` exit 1; the exporter ignores the value ([#2490](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/2490)).
+
 ---
 
 ## 4. Dynamic Reload

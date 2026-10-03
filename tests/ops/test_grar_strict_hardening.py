@@ -364,9 +364,15 @@ class TestStrictBypassScenariosCLI:
             strict = self._run(d, "--strict")
             assert strict.returncode == 1, strict.stdout + strict.stderr
             assert expect in strict.stderr
-            # 非 strict：同一 config 照舊通過（向後相容）
+            # 非 strict：同一 config 照舊通過（向後相容）——除了 #2490：
+            # `-1h` 是 Alertmanager 拒收的時長，產生器自己的阻擋行（不是
+            # policy ERROR）讓 --validate 回 1。
             lenient = self._run(d)
-            assert lenient.returncode == 0, lenient.stdout + lenient.stderr
+            refused = defaults_patch.get("repeat_interval") == "-1h"
+            assert lenient.returncode == (1 if refused else 0), (
+                lenient.stdout + lenient.stderr)
+            if refused:
+                assert "invalid repeat_interval '-1h'" in lenient.stderr
             assert "ERROR" not in lenient.stderr
 
 

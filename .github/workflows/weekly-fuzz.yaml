@@ -88,7 +88,7 @@ jobs:
         run: |
           set +e
           rc=0
-          for fn in FuzzParseHHMM FuzzParsePromDuration FuzzClampDuration FuzzIsDisabled FuzzParseMetricKey FuzzDeepMerge; do
+          for fn in FuzzParseHHMM FuzzClampDuration FuzzIsDisabled FuzzParseMetricKey FuzzDeepMerge; do
             echo "::group::$fn"
             go test ./pkg/config/ -run=^$ -fuzz="^${fn}$" -fuzztime=5m 2>&1 | tee "fuzz-${fn}.log"
             this_rc=${PIPESTATUS[0]}
@@ -111,7 +111,7 @@ jobs:
             echo ""
             echo "Aggregate result: \`rc=${{ steps.fuzz.outputs.rc }}\` (0 = no findings, 1 = at least one fuzz function found a failing input — see per-function logs below for the failing seed corpus path)."
             echo ""
-            for fn in FuzzParseHHMM FuzzParsePromDuration FuzzClampDuration FuzzIsDisabled FuzzParseMetricKey FuzzDeepMerge; do
+            for fn in FuzzParseHHMM FuzzClampDuration FuzzIsDisabled FuzzParseMetricKey FuzzDeepMerge; do
               echo "### $fn"
               echo ''
               echo '```'

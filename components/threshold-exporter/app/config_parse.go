@@ -33,10 +33,6 @@ func clampDuration(value, param, tenant string) string {
 	return config.ClampDuration(value, param, tenant)
 }
 
-func parsePromDuration(s string) (time.Duration, error) {
-	return config.ParsePromDuration(s)
-}
-
 func formatDuration(d time.Duration) string {
 	return config.FormatDuration(d)
 }

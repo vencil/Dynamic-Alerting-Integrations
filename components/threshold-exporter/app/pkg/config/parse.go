@@ -8,6 +8,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/prometheus/common/model"
 	"gopkg.in/yaml.v3"
 )
 
@@ -200,21 +201,25 @@ func ClampDuration(value, param, tenant string) string { return clampDuration(va
 
 // clampDuration validates a duration string against guardrails.
 // Returns the original string if within bounds, or the clamped value with a warning.
+//
+// #2490: the value is read the way Alertmanager reads it —
+// prometheus/common model.ParseDuration, ordered integer units
+// y/w/d/h/m/s/ms plus the bare "0" — so a value Alertmanager refuses (1.5h,
+// 30m1h, 1ns, " 1h") is dropped here instead of being clamped or passed
+// through. tests/shared/am_duration_matrix.json pins it
+// (am_duration_parity_test.go).
 func clampDuration(value, param, tenant string) string {
 	bounds, ok := routingGuardrails[param]
 	if !ok {
 		return value
 	}
 
-	d, err := time.ParseDuration(value)
+	md, err := model.ParseDuration(value)
 	if err != nil {
-		// Try Prometheus-style duration (e.g., "30s", "5m", "4h")
-		d, err = parsePromDuration(value)
-		if err != nil {
-			log.Printf("WARN: invalid %s %q for tenant=%s, ignoring", param, value, tenant)
-			return ""
-		}
+		log.Printf("WARN: invalid %s %q for tenant=%s (not an Alertmanager duration: %v), ignoring", param, value, tenant, err)
+		return ""
 	}
+	d := time.Duration(md)
 
 	if d < bounds[0] {
 		clamped := formatDuration(bounds[0])
@@ -228,37 +233,6 @@ func clampDuration(value, param, tenant string) string {
 	}
 
 	return value
-}
-
-// ParsePromDuration parses Prometheus-style duration strings (exported for testing).
-func ParsePromDuration(s string) (time.Duration, error) { return parsePromDuration(s) }
-
-// parsePromDuration parses Prometheus-style duration strings like "30s", "5m", "4h".
-func parsePromDuration(s string) (time.Duration, error) {
-	s = strings.TrimSpace(s)
-	if len(s) < 2 {
-		return 0, fmt.Errorf("duration too short: %q", s)
-	}
-
-	unit := s[len(s)-1]
-	numStr := s[:len(s)-1]
-	num, err := strconv.ParseFloat(numStr, 64)
-	if err != nil {
-		return 0, fmt.Errorf("invalid number in duration %q: %w", s, err)
-	}
-
-	switch unit {
-	case 's':
-		return time.Duration(num * float64(time.Second)), nil
-	case 'm':
-		return time.Duration(num * float64(time.Minute)), nil
-	case 'h':
-		return time.Duration(num * float64(time.Hour)), nil
-	case 'd':
-		return time.Duration(num * 24 * float64(time.Hour)), nil
-	default:
-		return 0, fmt.Errorf("unknown duration unit %q in %q", string(unit), s)
-	}
 }
 
 // FormatDuration formats a duration as a Prometheus-style string (exported for testing).

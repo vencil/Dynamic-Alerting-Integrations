@@ -40,10 +40,13 @@ from _lib_python import (  # noqa: E402
     VALID_RESERVED_PREFIXES,
 )
 from _lib_validation import tenant_id_rule  # noqa: E402  (ADR-035)
+from _lib_validation import am_duration_seconds  # noqa: E402  (#2490)
 from _grar_merge import (  # noqa: E402  (#2326 directory scope)
     ROOT_LEVEL,
+    ReplacedValueWarning,
     SkippedEntryWarning,
     level_contains,
+    replaced_value_warning,
     skipped_entry_warning,
     visible_routing_profiles,
 )
@@ -1220,7 +1223,7 @@ def blocking_generation_errors(warnings: list[str]) -> list[str]:
     ``schema`` / ``routes`` rows. #2164 was two spellings of this predicate
     drifting apart (validate-config showed a WARN row at exit 0 while
     ``--validate`` failed); a new blocking category added to one copy only
-    reopens exactly that. Three categories today:
+    reopens exactly that. Four categories today:
 
     * a config entry was dropped as unusable — a ``SkippedEntryWarning``,
       i.e. a line built by ``skipped_entry_warning`` (#2489). Decided by the
@@ -1230,6 +1233,11 @@ def blocking_generation_errors(warnings: list[str]) -> list[str]:
       ``skipping``. ⛔ The type survives append / extend / list concatenation
       only — a caller that re-formats a line before passing it here turns a
       blocking line into a non-blocking one;
+    * a config value was replaced as unusable — a ``ReplacedValueWarning``
+      (#2490): a timing value Alertmanager cannot read, rendered as the
+      platform default. Its own type, not ``SkippedEntryWarning``, because
+      the entry is still rendered (explain-route must not list it as "not in
+      effect"); decided by type, with the same caveat;
     * a duplicate generated receiver name (#2279);
     * a conf.d tree the routing plane refuses (#2326,
       ``ROUTING_TREE_ERROR_PREFIX``).
@@ -1239,7 +1247,7 @@ def blocking_generation_errors(warnings: list[str]) -> list[str]:
     ``POLICY_ERROR_PREFIX``.
     """
     return [w for w in warnings
-            if isinstance(w, SkippedEntryWarning)
+            if isinstance(w, (SkippedEntryWarning, ReplacedValueWarning))
             or is_receiver_name_collision(w)
             or is_routing_tree_error(w)]
 
@@ -1358,14 +1366,17 @@ _POLICY_DURATION_TOKEN_RE = re.compile(
 
 
 def _parse_policy_duration(value: object) -> float | None:
-    """Parse a duration for domain-policy checks; None if invalid.
+    """Parse a domain policy's OWN bound (``max_repeat_interval`` /
+    ``min_group_wait``); None if invalid.
 
     Unlike the shared single-unit ``parse_duration_seconds`` (deliberately
-    left untouched — it backs the timing-guardrail clamps and other
-    consumers), this parser accepts Prometheus/Go multi-unit forms
-    ("1h30m") and fractional units ("1.5h"), and explicitly rejects
-    negative values. Bare non-negative numbers are treated as seconds
-    (matching the legacy parser's int/float handling).
+    left untouched — other tools' CLI arguments use it), this parser accepts
+    Prometheus/Go multi-unit forms ("1h30m") and fractional units ("1.5h"),
+    and explicitly rejects negative values. Bare non-negative numbers are
+    treated as seconds (matching the legacy parser's int/float handling).
+    #2490: the TENANT's value it is compared with is read by
+    ``am_duration_seconds`` instead — that value goes to Alertmanager, a
+    policy bound never does (domain-policy.schema.json).
     """
     if isinstance(value, bool):
         return None
@@ -1380,6 +1391,16 @@ def _parse_policy_duration(value: object) -> float | None:
         return None
     return sum(float(num) * _POLICY_DURATION_UNITS[unit]
                for num, unit in _POLICY_DURATION_TOKEN_RE.findall(s))
+
+
+def _rendered_duration(value: object) -> float | None:
+    """Seconds Alertmanager reads from a tenant timing value; None if it
+    refuses it (#2490). Read the way ``_grar_merge._apply_timing_params``
+    reads it — its ``str()`` — so a bare ``0`` is ``"0"`` and a bare ``30``
+    has no unit; the strict domain-policy check judges the value the
+    generator hands Alertmanager, not a more lenient reading of it.
+    """
+    return am_duration_seconds(value if isinstance(value, str) else str(value))
 
 
 # ── ADR-007 label-match `routes` entries (#2245) ──
@@ -2164,15 +2185,19 @@ def check_domain_policies(
                     if max_sec is not None:
                         tenant_repeat = rc.get("repeat_interval")
                         if tenant_repeat is not None:
-                            tenant_sec = _parse_policy_duration(tenant_repeat)
+                            # #2490: the tenant's value goes to Alertmanager,
+                            # so it is read as Alertmanager reads it; the
+                            # policy's own bound keeps _parse_policy_duration.
+                            tenant_sec = _rendered_duration(tenant_repeat)
                             if tenant_sec is None:
                                 messages.append(_fmt(
                                     f"domain_policy '{policy_name}', "
                                     f"{subject}: repeat_interval "
                                     f"'{tenant_repeat}'{_src('repeat_interval')} is not a valid duration "
                                     f"— cannot check against max '{max_repeat}'",
-                                    "use duration syntax such as '30m' or "
-                                    "'1h30m'; negative values are not allowed"))
+                                    "use Alertmanager duration syntax such as "
+                                    "'30m' or '1h30m' (whole numbers, units "
+                                    "largest first)"))
                             elif tenant_sec > max_sec:
                                 messages.append(_fmt(
                                     f"domain_policy '{policy_name}', "
@@ -2185,7 +2210,9 @@ def check_domain_policies(
                 elif max_repeat:
                     # Legacy lenient path — deliberately verbatim (truthiness
                     # skips and single-unit parser included) so non-strict
-                    # output stays byte-identical.
+                    # output stays byte-identical. #2490 left it so: a value
+                    # Alertmanager refuses is the generator's own blocking
+                    # line now, whatever this path says about it.
                     tenant_repeat = rc.get("repeat_interval")
                     if tenant_repeat:
                         legacy_max = parse_duration_seconds(max_repeat)
@@ -2204,7 +2231,7 @@ def check_domain_policies(
                     if min_sec is not None:
                         tenant_gw = rc.get("group_wait")
                         if tenant_gw is not None:
-                            tenant_sec = _parse_policy_duration(tenant_gw)
+                            tenant_sec = _rendered_duration(tenant_gw)  # #2490
                             if tenant_sec is None:
                                 messages.append(_fmt(
                                     f"domain_policy '{policy_name}', "
@@ -2212,8 +2239,9 @@ def check_domain_policies(
                                     f"'{tenant_gw}'{_src('group_wait')} is not a valid duration "
                                     f"— cannot check against minimum "
                                     f"'{min_group_wait}'",
-                                    "use duration syntax such as '30s' or "
-                                    "'1m30s'; negative values are not allowed"))
+                                    "use Alertmanager duration syntax such as "
+                                    "'30s' or '1m30s' (whole numbers, units "
+                                    "largest first)"))
                             elif tenant_sec < min_sec:
                                 messages.append(_fmt(
                                     f"domain_policy '{policy_name}', "

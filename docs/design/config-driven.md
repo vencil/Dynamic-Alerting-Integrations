@@ -646,6 +646,8 @@ tenants:
 | `group_interval` | 5s | 5m | 5m |
 | `repeat_interval` | 1m | 72h | 4h |
 
+時長的寫法以 Alertmanager 為準（`tenant-config.schema.json` 的 `definitions.duration`）：整數加單位、由大到小、每個單位最多一次（`y`、`w`、`d`、`h`、`m`、`s`、`ms`），或單獨一個 `0`——`1h30m`、`90m`、`1d` 都可以。Alertmanager 不接受的寫法（`1.5h`、`30m1h`、`1ns`）由產生器換成平台預設值並印 WARN，`generate-routes --validate` 與 `validate-config` 回 1；exporter 忽略該值（[#2490](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/2490)）。
+
 **與 Silent Mode 的交互**
 
 Silent Mode 天然 bypass routing：Alertmanager 的 inhibit_rules 在 route evaluation 之前攔截通知。因此即使 tenant 配置了自訂 routing，silent 的 alert 仍不會送出通知。
