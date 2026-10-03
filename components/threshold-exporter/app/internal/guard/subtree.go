@@ -76,17 +76,16 @@ func checkSubtreeUndeliverable(input CheckInput) []Finding {
 // undeliverableFix is the finding's fix sentence for key k.
 //
 // ⛔ A `_` KEY GETS THE ROOT ONLY. resolveDeclaredRows (the reader of
-// `optional_overrides:`) skips every `_`-prefixed key, while the build's
-// reachability test counts `optional_overrides:` as declared — so declaring a
-// `_` key there silences the exporter's ERROR, its gauge and this finding,
-// and the value is still not served (measured: `values` empty, the key in
-// `unserved`, no finding). Declared in the root `_defaults.yaml` it is served.
-// The `_` keys that reach this finding are the ones undeliverableThresholds
-// keeps (not reserved, not skipped by the row generator).
+// `optional_overrides:`) skips every `_`-prefixed key, so declaring a `_` key
+// there serves nothing and leaves this finding standing (the build's
+// reachability test asks the same skip, #2707). Declared in the root
+// `_defaults.yaml` it is served. The `_` keys that reach this finding are
+// the ones undeliverableThresholds keeps (not reserved, not skipped by the
+// row generator).
 func undeliverableFix(k string) string {
 	if strings.HasPrefix(k, "_") {
 		return fmt.Sprintf("Declare `%s` in the conf.d root `_defaults.yaml`; `optional_overrides:` does not "+
-			"serve keys starting with `_`, so declaring it there only hides this warning and the exporter's ERROR and gauge.", k)
+			"serve keys starting with `_`.", k)
 	}
 	return fmt.Sprintf("Declare `%s` in the conf.d root `_defaults.yaml` or in `optional_overrides:`.", k)
 }

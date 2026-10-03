@@ -645,8 +645,35 @@ func declaredAnywhere(cfg *ThresholdConfig, key string) bool {
 	if _, global := cfg.Defaults[key]; global {
 		return true
 	}
+	// ⛔ FOR THIS REACHABILITY TEST, `optional_overrides:` DOES NOT DECLARE A
+	// NON-RESERVED `_` KEY. For a threshold key the consumer of that list is
+	// resolveDeclaredRows, and its leading-underscore net skips every key
+	// starting with `_` before reading the tenant's value. Counting such a
+	// listing as declared made this test claim the key reaches the plane when
+	// nothing reads it. (ValidateTenantKeys still accepts the listed key; not
+	// changed here.) Measured before #2707: root `_foo_x: null` plus
+	// `optional_overrides: [_foo_x]`, tenant `_foo_x: 50` — no
+	// root_default_null_undeclared, while served-values listed the 50 in
+	// `unserved`; the same listing silenced subtree_default_undeliverable and
+	// the exporter's ERROR for a subtree `_myth`. A root NUMBER for the key
+	// is served (resolveBaseRows), so the defaults arm above is unchanged.
+	//
+	// ⛔ RESERVED KEYS ARE NOT GATED — resolveDeclaredRows is not their
+	// consumer. Some reserved keys are read straight from the tenant map by
+	// their own resolvers, so gating them could change served output; they
+	// keep the pre-#2707 rule. Measured: a subtree `_state_maintenance` schedule
+	// (default disable, window enable) with the root listing the key served
+	// False at 12:00 (the overlay applies it and the resolver reads its
+	// default); gating it served True, the same as a tree with no subtree
+	// value — a maintenance filter flipped with no finding. Stopping reserved
+	// subtree keys is #2388's, behind a warning first. (#2707.)
+	//
+	// The gate is on `key`, the spelling resolveDeclaredRows sees: the
+	// declared set is canonicalized, so it gates the legacy listing below
+	// too; the legacy DEFAULTS arm is not gated.
+	listable := optionalOverridesCanDeclare(key)
 	for _, d := range cfg.OptionalOverrides {
-		if d == key {
+		if listable && d == key {
 			return true
 		}
 	}
@@ -678,12 +705,24 @@ func declaredAnywhere(cfg *ThresholdConfig, key string) bool {
 			return true
 		}
 		for _, d := range cfg.OptionalOverrides {
-			if d == legacy {
+			if listable && d == legacy {
 				return true
 			}
 		}
 	}
 	return false
+}
+
+// optionalOverridesCanDeclare reports whether listing key under
+// `optional_overrides:` counts as declaring it for declaredAnywhere: false
+// only for a non-reserved key starting with `_`, the threshold keys
+// resolveDeclaredRows' leading-underscore net skips. Reserved keys keep
+// counting (see the ⛔ in declaredAnywhere). resolveDeclaredRows' other
+// skips (a valued default, `{`, `_critical`) hand the key to a sibling
+// resolver that declaredAnywhere's defaults arm or
+// keyBypassesTheDeclaredSurface already asks, so they are not repeated here.
+func optionalOverridesCanDeclare(key string) bool {
+	return !strings.HasPrefix(key, "_") || IsReservedKey(key)
 }
 
 // undeliverableThresholds is the part of the build's unreachable set that
@@ -727,10 +766,10 @@ func declaredAnywhere(cfg *ThresholdConfig, key string) bool {
 // declaring a subtree's `_myth2` at the root makes the tenant serve the
 // subtree's value (both measured) — so it is reported, like any threshold.
 // For such a key only the ROOT is a fix: resolveDeclaredRows skips every `_`
-// key, yet keyCanReachTheOutputPlane counts `optional_overrides:` as declared,
-// so a `_myth2` listed there drops out of this set (and of the exporter's
-// ERROR and gauge) while its value is still not served. Known limitation of
-// the reachability test, left as is; the finding's message says so
+// key, so a `_myth2` listed under `optional_overrides:` is still not served —
+// and, since declaredAnywhere asks that same skip (optionalOverridesCanDeclare),
+// still in this set and the exporter's ERROR and gauge (#2707). The
+// finding's message names only the root for such a key
 // (guard.undeliverableFix).
 func undeliverableThresholds(byTenant map[string]map[string]ScheduledValue) map[string]map[string]ScheduledValue {
 	var out map[string]map[string]ScheduledValue
