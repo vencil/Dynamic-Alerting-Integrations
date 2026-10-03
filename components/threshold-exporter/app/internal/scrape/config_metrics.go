@@ -47,6 +47,18 @@ type ConfigMetrics struct {
 	// last good config still served) had no series to alert on. reason is a
 	// closed set — see package main's ScanFailureReason* constants.
 	ScanFailures *prometheus.CounterVec
+	// #2592: state-coded gauges, re-Set rather than incremented, so a fixed
+	// tree reads 0 again. UnreadableFiles is the conf.d entries the most
+	// recent walk could not stat, read or list (TreeScan.Unreadable), by
+	// that list's closed reason set; DefaultsUnusable is the `_defaults`
+	// files the exporter cannot use (parse_failure per commit, unreadable
+	// per walk), by reason (package main's
+	// DefaultsUnusableReason* constants). Before them an unreadable tenant
+	// file, or an unreadable root `_defaults.yaml`, left no series at all,
+	// and a broken one left only a counter that stops rising after the one
+	// reload that read it.
+	UnreadableFiles  *prometheus.GaugeVec
+	DefaultsUnusable *prometheus.GaugeVec
 }
 
 // NewConfigMetrics builds a fresh set without registering it.
@@ -143,7 +155,15 @@ func NewConfigMetrics() *ConfigMetrics {
 		}),
 		ScanFailures: prometheus.NewCounterVec(prometheus.CounterOpts{
 			Name: "da_config_scan_failures_total",
-			Help: "Count of conf.d tree scans that failed on the watch path (#2452): the per-tick change check and the debounced reload's scan, directory mode only. A failed scan applies nothing: the exporter keeps serving the last good config, /ready stays 200 and da_config_reload_trigger_total does not move, so while this keeps rising every later edit is ignored. reason is a closed set: duplicate_tenant (one tenant id declared in two files; both directory modes) or walk_error (the config directory cannot be walked: missing, not a directory). One increment per failed scan, i.e. about one per watch tick while the condition lasts. Alert: ConfigScanFailing (failures, and da_config_last_scan_complete_unixtime_seconds older than 5m).",
+			Help: "Count of conf.d tree scans that failed on the watch path (#2452): the per-tick change check and the debounced reload's scan, directory mode only. A failed scan applies nothing: the exporter keeps serving the last good config, /ready stays 200 and da_config_reload_trigger_total does not move, so while this keeps rising every later edit is ignored. reason is a closed set: duplicate_tenant (one tenant id declared in two files; both directory modes), walk_error (the config directory is missing or not a directory), root_unreadable (the config directory exists but cannot be listed, e.g. permission denied) or empty_tree (the walk kept no config file: all deleted, or none readable); all four exist at 0 from the first scrape. One increment per failed scan, i.e. about one per watch tick while the condition lasts. Alert: ConfigScanFailing (failures, and da_config_last_scan_complete_unixtime_seconds older than 5m).",
+		}, []string{"reason"}),
+		UnreadableFiles: prometheus.NewGaugeVec(prometheus.GaugeOpts{
+			Name: "da_config_unreadable_files",
+			Help: "Number of config-named conf.d entries the most recent tree walk dropped because it could not use them (#2592), by reason: stat_error (the entry, or a symlink's target, cannot be statted), read_error (statted, but the bytes cannot be read, e.g. permission denied) or walk_error (a directory below the root cannot be listed; one per directory, whatever it holds). The tenants of a dropped file are not served, while every other tenant keeps reloading. Re-Set by every walk that completes, so it returns to 0 once the files are readable again; a walk that itself fails (the config directory is missing or not a directory) keeps the previous value, and ConfigScanFailing fires for that state (da_config_scan_failures_total{reason=\"walk_error\"}). All three reasons exist at 0 from the first scrape. The root directory is not counted here: an unlistable root fails the scan instead (da_config_scan_failures_total{reason=\"root_unreadable\"}). Alert: ConfigFilesUnreadable (> 0 for 10m).",
+		}, []string{"reason"}),
+		DefaultsUnusable: prometheus.NewGaugeVec(prometheus.GaugeOpts{
+			Name: "da_config_defaults_unusable",
+			Help: "Number of _defaults.yaml files (either spelling, any level) the exporter cannot use (#2592), by reason: parse_failure (the file does not parse, so its whole defaults block is dropped, ADR-017; re-Set by every config commit) or unreadable (it cannot be statted or read; re-Set by every walk that completes, like da_config_unreadable_files — a walk that itself fails keeps the previous value while ConfigScanFailing fires). A root one drops every tenant's inherited defaults, and every user_threshold series that comes only from them disappears. A _defaults.yaml inside a directory that cannot be listed is not counted (the walk never sees it); that directory is da_config_unreadable_files{reason=\"walk_error\"} (alert ConfigFilesUnreadable, critical). Unlike da_config_parse_failure_total, which moves only when a reload reads the file, this keeps its value for as long as the file stays unusable and returns to 0 once it is usable again; both reasons exist at 0 from the first scrape. Alert: ConfigDefaultsUnusable (> 0 for 10m).",
 		}, []string{"reason"}),
 	}
 }
@@ -167,5 +187,7 @@ func (s *ConfigMetrics) Collectors() []prometheus.Collector {
 		s.MaxMappingKeys,
 		s.InitialLoadDuration,
 		s.ScanFailures,
+		s.UnreadableFiles,
+		s.DefaultsUnusable,
 	}
 }

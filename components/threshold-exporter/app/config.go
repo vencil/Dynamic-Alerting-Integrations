@@ -14,6 +14,7 @@ import (
 
 	"github.com/vencil/threshold-exporter/internal/confdname"
 	"github.com/vencil/threshold-exporter/pkg/config"
+	"github.com/vencil/threshold-exporter/pkg/tenantid"
 )
 
 // ============================================================
@@ -490,6 +491,7 @@ func (m *ConfigManager) commitConfig(cfg *ThresholdConfig, hash string, flatScan
 	}
 
 	logConfigStats(m.getLogger(), cfg, logHeader)
+	warnInvalidTenantIDs(m.getLogger(), cfg)
 
 	// #2153: the size maxima of what was just committed. Directory mode
 	// measures the per-file partials; single-file Load measures its one
@@ -497,6 +499,12 @@ func (m *ConfigManager) commitConfig(cfg *ThresholdConfig, hash string, flatScan
 	// maps (the merged cfg here would overstate a tenant's own mapping).
 	if flatScan != nil {
 		m.getMetrics().SetConfigShape(configShapeOfFiles(flatScan.configs))
+		// #2592: the `_defaults` files this commit could not parse — state,
+		// not an event, so a broken root `_defaults.yaml` stays visible for
+		// as long as its block is missing. The UNREADABLE ones are set per
+		// walk instead (scanDirTree → SetUnreadableFiles): a dropped file is
+		// not a change-detection input, so no commit follows its removal.
+		m.getMetrics().SetDefaultsParseFailures(flatScan.parseFailed)
 	}
 
 	// #1521: the flat scanner that produced `cfg` is not recursive while
@@ -1565,6 +1573,14 @@ func (m *ConfigManager) fullDirLoadFrom(scan *treeScan) error {
 	if len(scan.Files) == 0 {
 		return fmt.Errorf("no .yaml files found in %s", m.path)
 	}
+	// ⚠️ Deliberately NOT scanVerdict (#2592): a root listed only in part
+	// (TreeScan.RootWalkErr with some files kept) is committed here, where
+	// the watch path freezes on it as root_unreadable. On the watch path a
+	// previous config exists and keeping it is the fail-safe direction; a
+	// cold load has none to keep, so serving the part that could be read
+	// beats serving nothing. An unlistable root with NO file kept still
+	// fails just above (rc 1 at startup, as before). The watch-path callers
+	// of this function hand it a scan scanVerdict has already accepted.
 	m.populateHierarchyStateFrom(scan)
 	return m.commitFlatFrom(scan)
 }
@@ -1896,6 +1912,41 @@ func logConfigStats(logger *log.Logger, cfg *ThresholdConfig, prefix string) {
 	}
 }
 
+// warnInvalidTenantIDs logs one WARN per tenant id of cfg that breaks the
+// tenant-id rule (ADR-035 D4), citing the rule's own wording.
+//
+// The exporter does NOT reject such a tenant: it stays loaded and its series
+// are still exported, because the gate is CI and the write side, and dropping
+// a tenant at runtime would make its thresholds vanish. The WARN is the only
+// trace — no metric, no alert, by decision.
+//
+// Called from commitConfig, the single site that assigns m.config, so every
+// committed load (single-file Load, fullDirLoadFrom, incrementalLoadFrom, and
+// diffAndReload via installNewHierarchyState → commitFlatFrom) warns once per
+// invalid id. A tick whose content did not change commits nothing and so
+// warns nothing. O(#tenants) per commit, never per scrape. A config with no
+// invalid id allocates nothing per tenant; what remains is tenantid.Valid's
+// regexp re-allocating its pooled match state once after a GC empties the
+// pool — measured ~4 allocs / ~22 KB per commit, independent of tenant
+// count (bench gate: DiffAndReload_Hierarchical_1000_* +0.5% B/op). Ids are
+// sorted so the log order does not follow map iteration.
+func warnInvalidTenantIDs(logger *log.Logger, cfg *ThresholdConfig) {
+	var invalid []string
+	for tid := range cfg.Tenants {
+		if !tenantid.Valid(tid) {
+			invalid = append(invalid, tid)
+		}
+	}
+	if len(invalid) == 0 {
+		return
+	}
+	sort.Strings(invalid)
+	for _, tid := range invalid {
+		logger.Printf("WARN: tenant id %q breaks the tenant-id rule; loaded and exported anyway, "+
+			"rename it. %s", tid, tenantid.Description)
+	}
+}
+
 // WatchLoop periodically checks for config changes and reloads.
 // Change detection compares content hashes, but in directory mode a file's
 // hash is only recomputed when the walker's mtime fast-path lets it through
@@ -2039,8 +2090,14 @@ func (m *ConfigManager) detectChange() (bool, string, error) {
 	// the debounce timer before it could fire, so that reload never ran and
 	// the duplicate was never counted. Failing here sends both modes down
 	// tickOnce's WARN + IncScanFailure path, once per tick.
-	if err == nil && scan.Conflict != nil {
-		err = scan.Conflict
+	//
+	// #2592: so is a root that cannot be listed, or a tree with no usable
+	// file (scanVerdict). Both used to read as "every file removed": the
+	// tree stayed frozen anyway (the commit refuses an empty tree), but the
+	// scan counted as clean and, in hierarchical mode, every tenant was
+	// counted as a delete on every tick.
+	if err == nil {
+		err = scanVerdict(scan, m.path)
 	}
 	if hierarchical {
 		if err != nil {

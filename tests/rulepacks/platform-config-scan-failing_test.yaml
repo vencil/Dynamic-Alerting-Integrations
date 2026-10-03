@@ -128,6 +128,60 @@ tests:
             exp_annotations:
               summary: "Threshold-exporter conf.d unscannable for >5m (walk_error) — config frozen at last good state"
 
+  # 1e) #2592's two reasons ride through the same way: an unlistable root
+  #     (root_unreadable) and a tree emptied of config files (empty_tree) no
+  #     longer stamp the gauge, so each fires under its own reason only.
+  - interval: 30s
+    name: root-unreadable-fires-with-its-own-reason-only
+    input_series:
+      - series: 'da_config_scan_failures_total{reason="duplicate_tenant", job="threshold-exporter", instance="10.0.0.9:8080"}'
+        values: '0x40'
+      - series: 'da_config_scan_failures_total{reason="walk_error", job="threshold-exporter", instance="10.0.0.9:8080"}'
+        values: '0x40'
+      - series: 'da_config_scan_failures_total{reason="root_unreadable", job="threshold-exporter", instance="10.0.0.9:8080"}'
+        values: '0 0 0 0 1+1x36'
+      - series: 'da_config_scan_failures_total{reason="empty_tree", job="threshold-exporter", instance="10.0.0.9:8080"}'
+        values: '0x40'
+      - series: 'da_config_last_scan_complete_unixtime_seconds{job="threshold-exporter", instance="10.0.0.9:8080"}'
+        values: '0+30x3 90x36'
+    alert_rule_test:
+      - eval_time: 11m
+        alertname: ConfigScanFailing
+        exp_alerts:
+          - exp_labels:
+              severity: critical
+              alert_source: platform
+              reason: root_unreadable
+              job: threshold-exporter
+              instance: 10.0.0.9:8080
+            exp_annotations:
+              summary: "Threshold-exporter conf.d unscannable for >5m (root_unreadable) — config frozen at last good state"
+
+  - interval: 30s
+    name: empty-tree-fires-with-its-own-reason-and-resolves
+    input_series:
+      - series: 'da_config_scan_failures_total{reason="root_unreadable", job="threshold-exporter", instance="10.0.0.9:8080"}'
+        values: '0x40'
+      - series: 'da_config_scan_failures_total{reason="empty_tree", job="threshold-exporter", instance="10.0.0.9:8080"}'
+        values: '0 0 0 0 1+1x16 17x19'
+      - series: 'da_config_last_scan_complete_unixtime_seconds{job="threshold-exporter", instance="10.0.0.9:8080"}'
+        values: '0+30x3 90x16 630+30x19'
+    alert_rule_test:
+      - eval_time: 10m
+        alertname: ConfigScanFailing
+        exp_alerts:
+          - exp_labels:
+              severity: critical
+              alert_source: platform
+              reason: empty_tree
+              job: threshold-exporter
+              instance: 10.0.0.9:8080
+            exp_annotations:
+              summary: "Threshold-exporter conf.d unscannable for >5m (empty_tree) — config frozen at last good state"
+      - eval_time: 11m
+        alertname: ConfigScanFailing
+        exp_alerts: []
+
   # 2) R=30s, ONE failed tick at 120s (a tenant moved between two files, the
   #    new one written first); the 150s tick is clean again. Never fires.
   #    ⚠️ Short intervals only: the gauge's age peaks at about 2R around a

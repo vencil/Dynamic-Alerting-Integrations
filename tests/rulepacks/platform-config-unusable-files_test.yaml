@@ -1,0 +1,159 @@
+# promtool behavioural test for ConfigFilesUnreadable and ConfigDefaultsUnusable
+# (#2592). Both alerts read a STATE gauge the exporter re-Sets on every walk /
+# commit (da_config_unreadable_files{reason}, da_config_defaults_unusable{reason};
+# every reason pre-initialised at 0), so a series is 1 for as long as the file
+# stays unusable and drops to 0 on the first tick after the fix. Scrape 30s.
+#
+# Contract:
+#   1) a broken root _defaults.yaml FIRES ConfigDefaultsUnusable within 10m and
+#      KEEPS firing for as long as it stays broken (here 28 minutes) — the gap
+#      the event alert ConfigDefaultsParseFailure leaves: its counter moves once
+#      and its increase()[5m] decays to 0 while the defaults are still dropped;
+#   2) it RESOLVES on the first scrape after the fix;
+#   3) an unreadable _defaults.yaml fires with its own reason only;
+#   4) an unreadable tenant file / directory FIRES ConfigFilesUnreadable with
+#      the failing reason only, and resolves once readable;
+#   5) a blip shorter than `for: 10m` (a deploy that writes a file before
+#      fixing its mode) fires neither;
+#   6) a healthy exporter (every series 0) fires nothing, and a healthy
+#      neighbour of a failing target is not alerted.
+# Run: promtool test rules tests/rulepacks/platform-config-unusable-files_test.yaml
+rule_files:
+  - platform-config-unusable-files.rules.yaml
+
+evaluation_interval: 30s
+
+tests:
+  # 1) + 2) Broken from 2m30s through 30m30s; fixed at 31m. for: 10m ⇒ pending
+  #    at 12m, firing from 12m30s, still firing at 20m and 30m, resolved at 31m.
+  - interval: 30s
+    name: broken-defaults-fires-and-holds-until-fixed
+    input_series:
+      - series: 'da_config_defaults_unusable{reason="parse_failure", job="threshold-exporter", instance="10.0.0.9:8080"}'
+        values: '0x4 1x56 0x20'
+      - series: 'da_config_defaults_unusable{reason="unreadable", job="threshold-exporter", instance="10.0.0.9:8080"}'
+        values: '0x80'
+    alert_rule_test:
+      - eval_time: 12m
+        alertname: ConfigDefaultsUnusable
+        exp_alerts: []
+      - eval_time: 13m
+        alertname: ConfigDefaultsUnusable
+        exp_alerts: &defaults_parse_failure
+          - exp_labels:
+              severity: critical
+              alert_source: platform
+              reason: parse_failure
+              job: threshold-exporter
+              instance: 10.0.0.9:8080
+            exp_annotations:
+              summary: "Threshold-exporter cannot use a _defaults.yaml (parse_failure) — inherited thresholds dropped"
+      - eval_time: 20m
+        alertname: ConfigDefaultsUnusable
+        exp_alerts: *defaults_parse_failure
+      - eval_time: 30m
+        alertname: ConfigDefaultsUnusable
+        exp_alerts: *defaults_parse_failure
+      - eval_time: 31m
+        alertname: ConfigDefaultsUnusable
+        exp_alerts: []
+
+  # 3) An unreadable root _defaults.yaml (no parse-failure counter moves at all
+  #    in this shape) fires under reason=unreadable only.
+  - interval: 30s
+    name: unreadable-defaults-fires-with-its-own-reason-only
+    input_series:
+      - series: 'da_config_defaults_unusable{reason="parse_failure", job="threshold-exporter", instance="10.0.0.9:8080"}'
+        values: '0x40'
+      - series: 'da_config_defaults_unusable{reason="unreadable", job="threshold-exporter", instance="10.0.0.9:8080"}'
+        values: '0 1x39'
+    alert_rule_test:
+      - eval_time: 15m
+        alertname: ConfigDefaultsUnusable
+        exp_alerts:
+          - exp_labels:
+              severity: critical
+              alert_source: platform
+              reason: unreadable
+              job: threshold-exporter
+              instance: 10.0.0.9:8080
+            exp_annotations:
+              summary: "Threshold-exporter cannot use a _defaults.yaml (unreadable) — inherited thresholds dropped"
+
+  # 4) A subdirectory that cannot be listed from 1m to 20m30s: fires from
+  #    11m, walk_error only (the zero series stay quiet), resolved at 21m.
+  - interval: 30s
+    name: unreadable-dir-fires-with-its-reason-and-resolves
+    input_series:
+      - series: 'da_config_unreadable_files{reason="walk_error", job="threshold-exporter", instance="10.0.0.9:8080"}'
+        values: '0 0 1x38 0x10'
+      - series: 'da_config_unreadable_files{reason="read_error", job="threshold-exporter", instance="10.0.0.9:8080"}'
+        values: '0x50'
+      - series: 'da_config_unreadable_files{reason="stat_error", job="threshold-exporter", instance="10.0.0.9:8080"}'
+        values: '0x50'
+    alert_rule_test:
+      - eval_time: 10m
+        alertname: ConfigFilesUnreadable
+        exp_alerts: []
+      - eval_time: 15m
+        alertname: ConfigFilesUnreadable
+        exp_alerts:
+          - exp_labels:
+              severity: critical
+              alert_source: platform
+              reason: walk_error
+              job: threshold-exporter
+              instance: 10.0.0.9:8080
+            exp_annotations:
+              summary: "Threshold-exporter cannot read conf.d entries (walk_error) — tenants in them are not served"
+      - eval_time: 21m
+        alertname: ConfigFilesUnreadable
+        exp_alerts: []
+
+  # 5) A 5-minute blip on both gauges fires neither alert.
+  - interval: 30s
+    name: short-blip-does-not-fire
+    input_series:
+      - series: 'da_config_unreadable_files{reason="read_error", job="threshold-exporter", instance="10.0.0.9:8080"}'
+        values: '0x3 2x10 0x30'
+      - series: 'da_config_defaults_unusable{reason="unreadable", job="threshold-exporter", instance="10.0.0.9:8080"}'
+        values: '0x3 1x10 0x30'
+    alert_rule_test:
+      - eval_time: 8m
+        alertname: ConfigFilesUnreadable
+        exp_alerts: []
+      - eval_time: 20m
+        alertname: ConfigFilesUnreadable
+        exp_alerts: []
+      - eval_time: 8m
+        alertname: ConfigDefaultsUnusable
+        exp_alerts: []
+      - eval_time: 20m
+        alertname: ConfigDefaultsUnusable
+        exp_alerts: []
+
+  # 6) .9 cannot read a tenant file, .10 is healthy (every series 0): only .9.
+  - interval: 30s
+    name: healthy-neighbour-target-not-alerted
+    input_series:
+      - series: 'da_config_unreadable_files{reason="read_error", job="threshold-exporter", instance="10.0.0.9:8080"}'
+        values: '1x40'
+      - series: 'da_config_unreadable_files{reason="read_error", job="threshold-exporter", instance="10.0.0.10:8080"}'
+        values: '0x40'
+      - series: 'da_config_defaults_unusable{reason="parse_failure", job="threshold-exporter", instance="10.0.0.10:8080"}'
+        values: '0x40'
+    alert_rule_test:
+      - eval_time: 15m
+        alertname: ConfigFilesUnreadable
+        exp_alerts:
+          - exp_labels:
+              severity: critical
+              alert_source: platform
+              reason: read_error
+              job: threshold-exporter
+              instance: 10.0.0.9:8080
+            exp_annotations:
+              summary: "Threshold-exporter cannot read conf.d entries (read_error) — tenants in them are not served"
+      - eval_time: 15m
+        alertname: ConfigDefaultsUnusable
+        exp_alerts: []

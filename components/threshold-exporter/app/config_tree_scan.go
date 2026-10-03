@@ -42,8 +42,16 @@ func resolveScanRoot(dir string) string { return config.ResolveScanRoot(dir) }
 // observed on every call including errors; last-scan-complete stamped only
 // on a clean, conflict-free success). metrics may be nil (no metric
 // touched); logger nil falls back to log.Default().
+//
+// #2592: every walk that returns a scan also re-Sets
+// da_config_unreadable_files from its TreeScan.Unreadable — here, at the one
+// entry every manager walk takes, so no load or reload path can skip it.
 func scanDirTree(root string, prior *treeScan, metrics *configMetrics, logger *log.Logger) (*treeScan, error) {
-	return config.ScanDirTree(root, prior, scanObserverFor(metrics), logger)
+	scan, err := config.ScanDirTree(root, prior, scanObserverFor(metrics), logger)
+	if err == nil {
+		metrics.SetUnreadableFiles(scan.Unreadable)
+	}
+	return scan, err
 }
 
 // scanObserverFor converts a possibly-nil *configMetrics into a
