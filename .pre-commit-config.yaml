@@ -26,6 +26,11 @@
 # These hooks run the lightweight CI checks locally before each commit,
 # catching drift issues early (tool-map, rule-pack stats, glossary, etc.).
 #
+# ⛔ A NEW auto-stage hook must declare its CI execution point (#2694): call it
+# by id (`pre-commit run <id> --all-files`) in a workflow, or register it in
+# tests/lint/precommit-ci-ledger.yaml. tests/lint/test_precommit_ci_ledger.py
+# reds on a hook that is in neither.
+#
 # Stage policy: default to pre-commit only. pre-commit v3 without
 # `default_stages` runs every hook at ALL git stages (pre-commit, pre-push,
 # pre-merge-commit, ...), which meant `git push` triggered full drift checks
