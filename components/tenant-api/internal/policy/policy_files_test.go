@@ -329,3 +329,54 @@ func TestPolicyFiles_RemovedFileForgetsLastGood(t *testing.T) {
 		})
 	}
 }
+
+// #2659: `domain_policies:` null, `~` or bare read as an empty policy here
+// while da-guard and the generator's --strict report domain_policy_unusable;
+// it is an error now (routingpolicy.DomainPoliciesShapeError — a list or a
+// scalar there already was). An empty mapping, an empty document and a file
+// without the key stay usable.
+func TestParseConfig_DomainPoliciesNotAMapping(t *testing.T) {
+	t.Parallel()
+	for _, src := range []string{"domain_policies: null\n", "domain_policies: ~\n", "domain_policies:\n",
+		"domain_policies: []\n", "domain_policies: x\n"} {
+		if cfg, err := parseConfig([]byte(src)); err == nil {
+			t.Errorf("parseConfig(%q) = %+v, nil; want the file refused", src, cfg)
+		}
+	}
+	for _, src := range []string{"domain_policies: {}\n", "", "# nothing\n", "other: 1\n"} {
+		if cfg, err := parseConfig([]byte(src)); err != nil || len(cfg.DomainPolicies) != 0 {
+			t.Errorf("parseConfig(%q) = %+v, %v; want an empty policy", src, cfg, err)
+		}
+	}
+}
+
+// #2659: a policy file rewritten to `domain_policies: null` (or `~`, or a
+// bare key) keeps the last good policy on a hot reload (the watcher reports
+// the failure); before, it replaced the policy with an empty one — every
+// forbidden type allowed. LoadSnapshot (PR mode's fresh base) refuses it.
+func TestPolicyFiles_NullDomainPoliciesKeepsLastGood(t *testing.T) {
+	t.Parallel()
+	dir := t.TempDir()
+	testutil.WriteYAML(t, dir, "_domain_policy.yaml", forbidding("fin", "t1", "slack"))
+	m := NewManager(dir)
+	for _, bad := range []string{"domain_policies: null\n", "domain_policies: ~\n", "domain_policies:\n"} {
+		testutil.WriteYAML(t, dir, "_domain_policy.yaml", bad)
+		if err := m.Reload(); err == nil || !strings.Contains(err.Error(), "_domain_policy.yaml") {
+			t.Errorf("%q: Reload err = %v, want a failure naming _domain_policy.yaml", bad, err)
+		}
+		if got := forbiddenByDomain(m); !reflect.DeepEqual(got, map[string][]string{"fin": {"slack"}}) {
+			t.Errorf("%q: watcher serves %v, want the last good (slack forbidden)", bad, got)
+		}
+		if v := m.CheckWrite("t1", map[string]string{"_routing_receiver_type": "slack"}); len(v) == 0 {
+			t.Errorf("%q: a slack write for t1 is allowed, want the last good policy to refuse it", bad)
+		}
+		if _, err := LoadSnapshot(dir); err == nil {
+			t.Errorf("%q: LoadSnapshot accepted the file, want it refused", bad)
+		}
+	}
+	// At startup there is no last good: the file is skipped, as the
+	// generator drops the block.
+	if got := forbiddenByDomain(NewManager(dir)); len(got) != 0 {
+		t.Errorf("startup on a null policy serves %v, want nothing", got)
+	}
+}

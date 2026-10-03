@@ -260,7 +260,17 @@ func emptyConfig() *DomainPolicyConfig {
 	return &DomainPolicyConfig{DomainPolicies: make(map[string]DomainPolicy)}
 }
 
+// parseConfig parses one policy file. `domain_policies:` present and not a
+// mapping is an error — the shape check da-guard reports as
+// domain_policy_unusable (routingpolicy.DomainPoliciesShapeError, #2659):
+// null, `~` and a bare key read as an empty policy before, so a hot reload
+// to one of them dropped every constraint while da-guard and the
+// generator's --strict called the file unusable. Now the watcher keeps the
+// file's last good content and LoadSnapshot (PR mode) refuses.
 func parseConfig(data []byte) (*DomainPolicyConfig, error) {
+	if err := routingpolicy.DomainPoliciesShapeError(data); err != nil {
+		return nil, err
+	}
 	var cfg DomainPolicyConfig
 	// UnmarshalPolicy, not yaml.Unmarshal: a `!!null`-tagged
 	// require_critical_escalation is read as PyYAML reads it (#2325).
