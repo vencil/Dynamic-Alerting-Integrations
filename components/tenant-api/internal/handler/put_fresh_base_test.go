@@ -121,6 +121,10 @@ func TestPutTenant_PRMode_PolicyJudgedOnFreshBase(t *testing.T) {
 			origin: map[string]string{"_domain_policy.yml": policyListing("t-off")}},
 		{name: "_domain_policy.yml broken on origin", body: putOKProfileBody, loadErr: true,
 			origin: map[string]string{"_domain_policy.yml": "domain_policies: [unclosed\n"}},
+		// #2659: YAML that parses but whose domain_policies is null — the
+		// shape da-guard reports as domain_policy_unusable — is refused too.
+		{name: "domain_policies null on origin", body: putOKProfileBody, loadErr: true,
+			origin: map[string]string{"_domain_policy.yaml": "domain_policies: null\n"}},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {

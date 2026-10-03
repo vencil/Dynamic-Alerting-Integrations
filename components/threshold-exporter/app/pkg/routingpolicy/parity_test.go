@@ -410,6 +410,11 @@ func checkTenantAPIModel(t *testing.T, files map[string]string, tenantID string,
 		if !ok {
 			continue
 		}
+		if DomainPoliciesShapeError([]byte(src)) != nil {
+			// #2659: tenant-api refuses the file (parseConfig), and its
+			// watcher, reading the tree at startup, has no last good.
+			continue
+		}
 		filePols, _, err := ParseDomainPolicies([]byte(src))
 		if err != nil {
 			t.Fatalf("%s: %v", name, err)

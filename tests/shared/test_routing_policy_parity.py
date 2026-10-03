@@ -39,7 +39,10 @@ What this half measures, per tree written to a tmp dir:
 * `platform` — the generator's blocking `_routing_defaults.routes` WARN, its
   blocking non-mapping `_routing_defaults` WARN (#2341), its
   strict non-boolean `require_critical_escalation` line (#2325,
-  `domain_policy_unusable`, kind and field only: the line names no file) and
+  `domain_policy_unusable`, kind and field only: the line names no file), its
+  strict "domain policy file could not be used" line (#2659: the whole file
+  dropped — field `domain_policies` when that block is not a mapping, `""`
+  when the file does not load, as da-guard names them) and
   (#2326) its routing-tree findings, `TenantTree.routing_tree_problems`; the
   Go-only `routing_in_unread_location` rows (#2291) are left out here, their
   `targets` column pins that the generator renders nothing from those bytes.
@@ -115,6 +118,10 @@ _DEFAULTS_ROUTES = re.compile(
 # compared on kind and field only.
 _ESC_NOT_BOOL = re.compile(
     r"domain_policy '(?P<domain>[^']*)': constraint 'require_critical_escalation' must be a boolean")
+# #2659: the strict line for a policy file the generator dropped whole.
+_POLICY_FILE_DROPPED = re.compile(
+    r"domain policy file could not be used — every domain policy is silently dropped: "
+    r"(?P<file>[^:]+): (?P<reason>.*)")
 # #2431: the strict line for a matcher value PyYAML does not read as a string.
 _NOT_STRING = re.compile(
     r"ERROR: tenant '(?P<tenant>[^']*)': (?P<field>\S+) must be a string, got ")
@@ -396,8 +403,10 @@ def test_python_reader_matches_the_table(tree, tmp_path: Path) -> None:
                            and r[0] != "domain_policy_unusable")
     assert got_platform == want_platform, (tree["name"], got_platform)
     got_unusable = sorted(
-        f"domain_policies.{m['domain']}.constraints.require_critical_escalation"
-        for m in map(_ESC_NOT_BOOL.search, got.schema_warnings) if m)
+        [f"domain_policies.{m['domain']}.constraints.require_critical_escalation"
+         for m in map(_ESC_NOT_BOOL.search, got.schema_warnings) if m]
+        + ["domain_policies" if m["reason"].startswith("'domain_policies:' must be a mapping") else ""
+           for m in map(_POLICY_FILE_DROPPED.search, got.schema_warnings) if m])
     want_unusable = sorted(r[2] for r in tree["platform"] if r[0] == "domain_policy_unusable")
     assert got_unusable == want_unusable, (tree["name"], got_unusable)
 

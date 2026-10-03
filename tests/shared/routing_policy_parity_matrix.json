@@ -105,7 +105,8 @@
     "#2341 - tenant_api.batch verdict '400' = the whole batch request is refused with INVALID_BODY before any write: a `_routing` patch value that is no disabling string (`on`, `slack`, '', a JSON null) - a flat patch cannot write a `_routing` mapping, so a batch re-enables routing with `unset`.",
     "B2 (#2341) - tenant_api.batch may carry `unset` (a list; only '_routing'): the keys the op removes from the tenant's block on disk after its patch is laid over it. Removing `_routing` turns routing back on for a disabled tenant, so the op is judged like one that writes `_routing`: 'policy_violation' when the routing it re-enables breaks the domain policy, 'ok' otherwise.",
     "tenant_ids (#2341 R8, ADR-035): the ids every reader refuses (Python _lib_validation.is_valid_tenant_id, Go routingpolicy.IsValidTenantID) and accepts. The rule is the tenant-config schema's definitions.tenantId, a DNS-1123 label: 1-63 characters of [a-z0-9-], starting and ending with [a-z0-9] - so UPPER, `_`, a leading or trailing `-` and 64 characters are refused. A declared tenant with a refused id makes the generator refuse the WHOLE tree in every mode (ADR-035 D3: rc 1, nothing written); within the tree it renders NOTHING (no route, receiver or inhibit rule): refused 'invalid_tenant_id', targets null - load_tenant_tree's blocking `WARN ... skipping` (--strict: ERROR), da-guard's invalid_tenant_id (Field <file>:tenants.<id>), tenant-api's 400 on a write to that id. schema_search_accepts: ids the schema's `propertyNames` check (Python jsonschema; JSON Schema `pattern` is a SEARCH and Python's `$` matches before a trailing newline) lets through although every decoded-key reader refuses them - the accepted gap ADR-035 D2 names; Python asserts both halves, Go the refusal.",
-    "#2341 - a disabling string is decided as _lib_validation.is_disabled decides it: Python str.strip() (U+001C-U+001F are whitespace too) then lower() on the remaining text, which must be ASCII (U+0130 'I with dot' never lowers to 'i'): `\"\\x1coff\"` disables, `\"d\\u0130sable\"` is routing_not_mapping."
+    "#2341 - a disabling string is decided as _lib_validation.is_disabled decides it: Python str.strip() (U+001C-U+001F are whitespace too) then lower() on the remaining text, which must be ASCII (U+0130 'I with dot' never lowers to 'i'): `\"\\x1coff\"` disables, `\"d\\u0130sable\"` is routing_not_mapping.",
+    "#2659 - `domain_policies: null` (`~`, a bare key) in a _domain_policy.yaml is unusable in every reader: the generator's --strict drops the block (\"domain policy file could not be used\"), da-guard reports domain_policy_unusable (field domain_policies), and tenant-api refuses the file (routingpolicy.DomainPoliciesShapeError, the shape check da-guard applies) - it enforces nothing of it, as before, where it read the block as an empty policy; the difference is on a hot reload, where it now keeps the last good policy (tested in tenant-api, not expressible here)."
   ],
   "blocking_kinds": [
     "routing_defaults_null_below_root",
@@ -5121,6 +5122,44 @@
           "python_differs": null,
           "escalation": null,
           "refused": "invalid_tenant_id"
+        }
+      },
+      "enforced_group_by_invalid": []
+    },
+    {
+      "name": "domain-policy-null",
+      "files": {
+        "_defaults.yaml": "defaults:\n  cpu_usage_percent: 80\n",
+        "_domain_policy.yaml": "domain_policies: null\n",
+        "t-null.yaml": "tenants:\n  t-null:\n    _routing:\n      receiver:\n        type: slack\n        api_url: https://hooks.slack.com/services/T00/B00/x\n      group_by:\n      - tenant\n      - alertname\n      - severity\n      group_wait: 30s\n      repeat_interval: 1h\n    cpu_usage_percent: '85'\n"
+      },
+      "platform": [
+        [
+          "domain_policy_unusable",
+          "_domain_policy.yaml",
+          "domain_policies"
+        ]
+      ],
+      "expect": {
+        "t-null": {
+          "targets": [
+            {
+              "ref": "receiver",
+              "type": "slack"
+            }
+          ],
+          "policy": [],
+          "rejected_routes": [],
+          "values_not_string": [],
+          "group_by_invalid": [],
+          "unknown_profile": null,
+          "tenant_api": {
+            "put": "ok",
+            "batch": null
+          },
+          "python_differs": null,
+          "escalation": null,
+          "refused": null
         }
       },
       "enforced_group_by_invalid": []

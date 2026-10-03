@@ -165,6 +165,64 @@ func lookup(m *yaml.Node, key string) *yaml.Node {
 	return nil
 }
 
+// lookupOne is lookup for one key without listing any mapping's entries
+// (#2659 round 4): lookup flattens every merge chain it passes, which costs
+// O(n²) time and memory on a chain of n mappings each merging the previous
+// one — and DomainPoliciesShapeError runs on files no decode has bounded
+// yet (tenant-api: startup, every reload, every PR-mode PUT). Same answer as
+// lookup, in the same precedence (entryLister.list): a key the mapping
+// writes itself (its first such pair) wins; else the merge sources, each
+// merge pair in order and a merge sequence's sources in order, each
+// searched the same way, the first hit winning. Each mapping is visited at
+// most once per call — one already visited (or being visited: a merge
+// cycle) holds no hit, as lookup's memoized or cut-off listing of it holds
+// none at that point — so the cost is O(nodes).
+func lookupOne(m *yaml.Node, key string) *yaml.Node {
+	if m == nil || m.Kind != yaml.MappingNode {
+		return nil
+	}
+	return findKey(m, key, map[*yaml.Node]bool{})
+}
+
+func findKey(m *yaml.Node, key string, visited map[*yaml.Node]bool) *yaml.Node {
+	if visited[m] {
+		return nil
+	}
+	visited[m] = true
+	for i := 0; i+1 < len(m.Content); i += 2 {
+		if k := m.Content[i]; !isMergeKey(k) && deref(k).Value == key {
+			return deref(m.Content[i+1])
+		}
+	}
+	for i := 0; i+1 < len(m.Content); i += 2 {
+		if !isMergeKey(m.Content[i]) {
+			continue
+		}
+		for _, s := range mergeSources(deref(m.Content[i+1])) {
+			if s = deref(s); s != nil && s.Kind == yaml.MappingNode {
+				if v := findKey(s, key, visited); v != nil {
+					return v
+				}
+			}
+		}
+	}
+	return nil
+}
+
+// isMergeKey is the merge-key test mappingEntries applies to a key node.
+func isMergeKey(k *yaml.Node) bool {
+	return k.Tag == "!!merge" || (k.Tag == "" && k.Value == "<<")
+}
+
+// mergeSources is the merge value v's sources: v itself, or a sequence's
+// items (as mappingEntries reads them).
+func mergeSources(v *yaml.Node) []*yaml.Node {
+	if v != nil && v.Kind == yaml.SequenceNode {
+		return v.Content
+	}
+	return []*yaml.Node{v}
+}
+
 func deref(n *yaml.Node) *yaml.Node {
 	for n != nil && n.Kind == yaml.AliasNode {
 		n = n.Alias
@@ -465,14 +523,47 @@ func ParseDomainPolicies(data []byte) ([]Policy, []Problem, error) {
 	return pols, probs, nil
 }
 
-func policyNodesFrom(top *yaml.Node) (map[string]*yaml.Node, error) {
-	n := lookup(top, "domain_policies")
+// DomainPoliciesShapeError is the shape check da-guard applies to a
+// `_domain_policy.yaml` / `.yml` (#2659): `domain_policies` present and not
+// a mapping — null, `~`, bare, a list, a scalar — is the error da-guard
+// reports as domain_policy_unusable (the generator's --strict drops the
+// block too). It is the SAME predicate as ParseDomainPolicies' (both call
+// domainPoliciesNode), on a node parse only: nothing is decoded, so no alias
+// is expanded. A document that does not parse, an empty one, or one whose
+// top level is not a mapping is nil here — those are the caller's own
+// decode's to judge. tenant-api's policy loader calls it first.
+func DomainPoliciesShapeError(data []byte) error {
+	var doc yaml.Node
+	if err := yaml.Unmarshal(data, &doc); err != nil || len(doc.Content) == 0 {
+		return nil
+	}
+	top := doc.Content[0]
+	if top.Kind != yaml.MappingNode {
+		return nil
+	}
+	_, err := domainPoliciesNode(top)
+	return err
+}
+
+// domainPoliciesNode is the `domain_policies` mapping of a document's top
+// mapping (nil: no such key), found with lookup (`<<:` expanded as da-guard
+// expands it), or the error that it is not a mapping.
+func domainPoliciesNode(top *yaml.Node) (*yaml.Node, error) {
+	n := lookupOne(top, "domain_policies") // bounded: DomainPoliciesShapeError's input is unvetted
 	if n == nil {
 		return nil, nil
 	}
 	if n.Kind != yaml.MappingNode {
 		return nil, fmt.Errorf("'domain_policies:' must be a mapping of domain name to policy, got %s — "+
 			"the whole block is ignored: %w", kindName(n), errUnusable)
+	}
+	return n, nil
+}
+
+func policyNodesFrom(top *yaml.Node) (map[string]*yaml.Node, error) {
+	n, err := domainPoliciesNode(top)
+	if n == nil || err != nil {
+		return nil, err
 	}
 	// As in profilesFromNode: `<<:` expanded (#2438), alias keys by text (#2437).
 	entries := mappingEntries(n)
@@ -766,15 +857,42 @@ type mapEntry struct {
 // sequence of them, earlier sources winning) supplies the keys the mapping
 // does not write itself; an explicit key replaces a merged one whole.
 // Keys keep their source text, which a decode into a map would lose.
+//
+// #2659: DomainPoliciesShapeError looks a key up in a document no decode has
+// vetted (a node parse only), so a merge source is listed once per call
+// (memoized: a merge fan-out costs O(nodes), not a product) and one already
+// being listed contributes nothing (`&x {<<: *x}` ends instead of recursing
+// without bound). On a document parseDoc accepted — no alias cycle, no
+// excessive aliasing — the result is the same as listing it naively.
 func mappingEntries(m *yaml.Node) []mapEntry {
+	return (&entryLister{memo: map[*yaml.Node][]mapEntry{}, active: map[*yaml.Node]bool{}}).entries(m)
+}
+
+type entryLister struct {
+	memo   map[*yaml.Node][]mapEntry
+	active map[*yaml.Node]bool
+}
+
+func (l *entryLister) entries(m *yaml.Node) []mapEntry {
+	if out, ok := l.memo[m]; ok {
+		return out
+	}
+	if l.active[m] {
+		return nil
+	}
+	l.active[m] = true
+	out := l.list(m)
+	delete(l.active, m)
+	l.memo[m] = out
+	return out
+}
+
+func (l *entryLister) list(m *yaml.Node) []mapEntry {
 	var merged, own []mapEntry
 	for i := 0; i+1 < len(m.Content); i += 2 {
 		k, v := m.Content[i], deref(m.Content[i+1])
-		if k.Tag == "!!merge" || (k.Tag == "" && k.Value == "<<") {
-			sources := []*yaml.Node{v}
-			if v != nil && v.Kind == yaml.SequenceNode {
-				sources = v.Content
-			}
+		if isMergeKey(k) {
+			sources := mergeSources(v)
 			seen := map[string]bool{}
 			for _, e := range merged {
 				seen[e.key] = true
@@ -784,7 +902,7 @@ func mappingEntries(m *yaml.Node) []mapEntry {
 				if s == nil || s.Kind != yaml.MappingNode {
 					continue
 				}
-				for _, e := range mappingEntries(s) {
+				for _, e := range l.entries(s) {
 					if !seen[e.key] {
 						seen[e.key] = true
 						merged = append(merged, e)
