@@ -71,6 +71,14 @@ type servedValuesDoc struct {
 	// document still comes out, with no tenant and those files here (#2627).
 	Unreadable []skippedFile                 `json:"unreadable"`
 	Tenants    map[string]servedTenantValues `json:"tenants"`
+	// Aliases: the exporter's alias table (config.DeprecatedKeyAliases),
+	// retired base key → canonical base key, so a reader holding a key in
+	// its retired spelling finds it in Values, Severities, Schedules and
+	// Dropped, which are keyed by the canonical spelling. The exporter
+	// canonicalizes the `<base>_critical` and `<base>{…}` spellings of a
+	// retired base the same way (config.CanonicalKeyFor). Always present
+	// ({} when the table is empty).
+	Aliases map[string]string `json:"aliases"`
 }
 
 // skippedFile is one entry of servedValuesDoc.Skipped or .Unreadable.
@@ -104,6 +112,37 @@ type servedTenantValues struct {
 	// /metrics drops the row. Canonical key → the rejection of each dropped
 	// row. Such a key is in Values only if another of its rows was kept.
 	Dropped map[string][]string `json:"dropped"`
+	// Schedules (#2115 (c)): the whole UTC day of every threshold key that
+	// /metrics serves at some minute of it, or whose time-boxed override the
+	// exporter honours (an `expires:` on a base key) — a superset of the
+	// threshold keys of Values. Canonical key → its segments, read from the
+	// exporter's own resolver, not from the schedule as written: see
+	// addSchedules. `_custom_alerts` is not included.
+	Schedules map[string]servedSchedule `json:"schedules"`
+}
+
+// servedSchedule is one key's day. Segments cover 00:00–24:00 UTC in order,
+// with no gap, adjacent segments with the same value and severity merged.
+// Expires / Expired are there only when the exporter honours an `expires:`
+// on the key (config.ResolveThresholdExpiriesAt — base keys only): Expires
+// as written, Expired the exporter's verdict at `at`. The segments already
+// follow that verdict (an expired override serves the platform default);
+// they do not follow `expires:` passing later.
+type servedSchedule struct {
+	Segments []scheduleSegment `json:"segments"`
+	Expires  string            `json:"expires,omitempty"`
+	Expired  *bool             `json:"expired,omitempty"`
+}
+
+// scheduleSegment is [From, To) of the UTC day ("HH:MM"; To of the last is
+// "24:00"). Value is the served number (as in Values), or null: the key has
+// no /metrics row in that segment (switched off, dropped, or nothing to
+// serve). Severity is the row's severity label; absent when Value is null.
+type scheduleSegment struct {
+	From     string `json:"from"`
+	To       string `json:"to"`
+	Value    any    `json:"value"`
+	Severity string `json:"severity,omitempty"`
 }
 
 type servedValuesFlags struct {
@@ -208,6 +247,7 @@ func runServedValues(args []string, stdout, errOut io.Writer) int {
 		Skipped:     skipped,
 		Unreadable:  unreadable,
 		Tenants:     tenants,
+		Aliases:     config.DeprecatedKeyAliases(),
 	}
 	if err := checkOutputUTF8("", reflect.ValueOf(doc)); err != nil {
 		fmt.Fprintf(errOut, "%s %s: %v\n", programName, servedValuesCmd, err)
@@ -369,6 +409,7 @@ func servedValues(cfg *config.ThresholdConfig, at time.Time,
 			Severities: map[string]string{},
 			Unserved:   map[string]any{},
 			Dropped:    map[string][]string{},
+			Schedules:  map[string]servedSchedule{},
 		}
 		for name, errs := range droppedBy[tenant] {
 			tv.Dropped[name] = errs
@@ -379,17 +420,12 @@ func servedValues(cfg *config.ThresholdConfig, at time.Time,
 				tv.Values[name] = customAlertRows(rows)
 				continue
 			}
-			// A key owns one row, or a row and its #1231 legacy twin, which
-			// carries the same value and severity under the old metric name.
-			first := rows[0]
-			for _, r := range rows[1:] {
-				if !sameFloat(r.Value, first.Value) || r.Severity != first.Severity {
-					return nil, fmt.Errorf("tenant %s: key %q owns rows with different values (%v %s, %v %s)",
-						tenant, name, first.Value, first.Severity, r.Value, r.Severity)
-				}
+			r, err := keyReading(tenant, name, rows)
+			if err != nil {
+				return nil, err
 			}
-			tv.Values[name] = jsonFloat(first.Value)
-			tv.Severities[name] = first.Severity
+			tv.Values[name] = jsonFloat(r.value)
+			tv.Severities[name] = r.severity
 		}
 
 		// Reserved keys, as the exporter's own resolvers read them.
@@ -463,6 +499,9 @@ func servedValues(cfg *config.ThresholdConfig, at time.Time,
 		}
 		out[tenant] = tv
 	}
+	if err := addSchedules(cfg, at, out, res.ThresholdExpiries); err != nil {
+		return nil, err
+	}
 	return out, nil
 }
 
@@ -526,16 +565,27 @@ func keyedRows(cfg *config.ThresholdConfig, at time.Time) (
 	if observed != 1 {
 		return nil, nil, scrape.Reserved{}, fmt.Errorf("internal: the collector reported its reserved-key readings %d times, want 1", observed)
 	}
-	if len(results) != len(keyed) {
-		return nil, nil, scrape.Reserved{}, fmt.Errorf("internal: the collector resolved %d rows, %d have a verdict", len(keyed), len(results))
+	served, dropped, err = groupRows(keyed, results)
+	if err != nil {
+		return nil, nil, scrape.Reserved{}, err
 	}
+	return served, dropped, reserved, nil
+}
 
+// groupRows groups the rows of one Gather by tenant and key: those the
+// collector kept, and apart, the rejection of each it dropped.
+func groupRows(keyed []config.KeyedThreshold, results []emitResult) (
+	served map[string]map[string][]config.ResolvedThreshold, dropped map[string]map[string][]string, err error,
+) {
+	if len(results) != len(keyed) {
+		return nil, nil, fmt.Errorf("internal: the collector resolved %d rows, %d have a verdict", len(keyed), len(results))
+	}
 	served = map[string]map[string][]config.ResolvedThreshold{}
 	dropped = map[string]map[string][]string{}
 	for i, k := range keyed {
 		switch r := results[i]; {
 		case !r.reported:
-			return nil, nil, scrape.Reserved{}, fmt.Errorf("internal: the collector gave no verdict on row %d (key %q)", i, k.Key)
+			return nil, nil, fmt.Errorf("internal: the collector gave no verdict on row %d (key %q)", i, k.Key)
 		case r.err != nil:
 			if dropped[k.Tenant] == nil {
 				dropped[k.Tenant] = map[string][]string{}
@@ -548,7 +598,27 @@ func keyedRows(cfg *config.ThresholdConfig, at time.Time) (
 			served[k.Tenant][k.Key] = append(served[k.Tenant][k.Key], k.ResolvedThreshold)
 		}
 	}
-	return served, dropped, reserved, nil
+	return served, dropped, nil
+}
+
+// reading is what one threshold key serves: its rows' value and severity.
+type reading struct {
+	value    float64
+	severity string
+}
+
+// keyReading is the value and severity of the rows a key owns: one row, or a
+// row and its #1231 legacy twin, which carries the same value and severity
+// under the old metric name.
+func keyReading(tenant, name string, rows []config.ResolvedThreshold) (reading, error) {
+	first := rows[0]
+	for _, r := range rows[1:] {
+		if !sameFloat(r.Value, first.Value) || r.Severity != first.Severity {
+			return reading{}, fmt.Errorf("tenant %s: key %q owns rows with different values (%v %s, %v %s)",
+				tenant, name, first.Value, first.Severity, r.Value, r.Severity)
+		}
+	}
+	return reading{value: first.Value, severity: first.Severity}, nil
 }
 
 // staticSource serves one loaded config to the collector. ConfigInfo is the

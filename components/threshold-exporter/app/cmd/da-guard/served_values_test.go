@@ -35,7 +35,18 @@ type servedOut struct {
 		Severities map[string]string   `json:"severities"`
 		Unserved   map[string]any      `json:"unserved"`
 		Dropped    map[string][]string `json:"dropped"`
+		Schedules  map[string]struct {
+			Segments []struct {
+				From     string `json:"from"`
+				To       string `json:"to"`
+				Value    any    `json:"value"`
+				Severity string `json:"severity"`
+			} `json:"segments"`
+			Expires string `json:"expires"`
+			Expired *bool  `json:"expired"`
+		} `json:"schedules"`
 	} `json:"tenants"`
+	Aliases map[string]string `json:"aliases"`
 }
 
 // served runs the subcommand over files (paths relative to conf.d) at `at`.

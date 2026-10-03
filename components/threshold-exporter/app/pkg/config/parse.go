@@ -97,8 +97,18 @@ func (sv ScheduledValue) ResolveValue(now time.Time) string {
 // resolveValue is ResolveValue with the invalid-window WARN sink as a
 // parameter (#2397; nil = silent) — see resolveAtWithStats.
 func (sv ScheduledValue) resolveValue(now time.Time, logf func(format string, args ...any)) string {
+	utcNow := now.UTC()
+	return sv.valueAtMinute(utcNow.Hour()*60+utcNow.Minute(), logf)
+}
+
+// valueAtMinute is the value sv resolves to at minute (0..1439) of the UTC
+// day: the FIRST override whose window contains the minute, else the
+// default. A window that does not parse matches no minute (logf, nil =
+// silent, is told). resolveValue and DaySegments both read a schedule
+// through it.
+func (sv ScheduledValue) valueAtMinute(minute int, logf func(format string, args ...any)) string {
 	for _, o := range sv.Overrides {
-		if matchTimeWindowLogf(o.Window, now, logf) {
+		if start, end, ok := parseTimeWindow(o.Window, logf); ok && windowContains(start, end, minute) {
 			return o.Value
 		}
 	}
@@ -117,33 +127,51 @@ func matchTimeWindow(window string, now time.Time) bool {
 
 // matchTimeWindowLogf is matchTimeWindow with its WARN sink as a parameter
 // (#2397); nil = silent.
+//
+// ⛔ It is parseTimeWindow + windowContains, the same two functions
+// ScheduledValue.DaySegments (schedule.go) cuts the day with, so the
+// at-instant reading and the whole-day reading cannot disagree on what a
+// window means (TestDaySegments_AgreeWithResolveValueEveryMinute).
 func matchTimeWindowLogf(window string, now time.Time, logf func(format string, args ...any)) bool {
+	start, end, ok := parseTimeWindow(window, logf)
+	if !ok {
+		return false
+	}
+	utcNow := now.UTC()
+	return windowContains(start, end, utcNow.Hour()*60+utcNow.Minute())
+}
+
+// parseTimeWindow parses a UTC "HH:MM-HH:MM" window into its start and end
+// minute of the day. ok is false for a window that is not of that form; logf
+// (nil = silent) is told why, in the words matchTimeWindow always used.
+func parseTimeWindow(window string, logf func(format string, args ...any)) (start, end int, ok bool) {
 	if logf == nil {
 		logf = func(string, ...any) {}
 	}
 	parts := strings.SplitN(window, "-", 2)
 	if len(parts) != 2 {
 		logf("WARN: invalid time window format %q", window)
-		return false
+		return 0, 0, false
 	}
 	startH, startM, err1 := parseHHMM(parts[0])
 	endH, endM, err2 := parseHHMM(parts[1])
 	if err1 != nil || err2 != nil {
 		logf("WARN: invalid time window %q: start=%v end=%v", window, err1, err2)
-		return false
+		return 0, 0, false
 	}
+	return startH*60 + startM, endH*60 + endM, true
+}
 
-	utcNow := now.UTC()
-	nowMinutes := utcNow.Hour()*60 + utcNow.Minute()
-	startMinutes := startH*60 + startM
-	endMinutes := endH*60 + endM
-
-	if startMinutes <= endMinutes {
+// windowContains reports whether minute (of the UTC day) falls in the window
+// [start, end); a window whose start is after its end crosses midnight, and
+// one whose start equals its end contains no minute.
+func windowContains(start, end, minute int) bool {
+	if start <= end {
 		// Same day: e.g., 01:00-09:00
-		return nowMinutes >= startMinutes && nowMinutes < endMinutes
+		return minute >= start && minute < end
 	}
 	// Cross midnight: e.g., 22:00-06:00
-	return nowMinutes >= startMinutes || nowMinutes < endMinutes
+	return minute >= start || minute < end
 }
 
 // ParseHHMM parses "HH:MM" into hour and minute (exported for testing).
