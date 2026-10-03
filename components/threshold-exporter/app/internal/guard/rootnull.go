@@ -26,11 +26,15 @@ import (
 	"fmt"
 	"sort"
 	"strings"
+
+	"github.com/vencil/threshold-exporter/pkg/config"
 )
 
 // FindingRootDefaultNullUndeclared (warn; #2518): the tenant's config sets
 // Field, which the conf.d root `_defaults.yaml` writes as null — not
-// declared — so the exporter serves no series for it.
+// declared — so the exporter serves no series for it. Field may also be a
+// `<base>_critical` key whose base the root writes as null: the critical row
+// needs the base in the root defaults.
 const FindingRootDefaultNullUndeclared FindingKind = "root_default_null_undeclared"
 
 // checkRootNullUndeclared reports one FindingRootDefaultNullUndeclared per
@@ -49,22 +53,40 @@ func checkRootNullUndeclared(input CheckInput) []Finding {
 	sort.Strings(tenants)
 	var out []Finding
 	for _, id := range tenants {
-		keys := append([]string(nil), input.RootNullUndeclared[id]...)
-		sort.Strings(keys)
-		for _, k := range keys {
+		keys := append([]config.RootNullKey(nil), input.RootNullUndeclared[id]...)
+		sort.Slice(keys, func(i, j int) bool { return keys[i].Key < keys[j].Key })
+		for _, rk := range keys {
 			out = append(out, Finding{
 				Severity: SeverityWarn,
 				Kind:     FindingRootDefaultNullUndeclared,
 				TenantID: id,
-				Field:    k,
-				Message: fmt.Sprintf("The tenant sets threshold `%s` (in its own file, a root platform file's `tenants:` "+
-					"entry or a profile), but the conf.d root `_defaults.yaml` writes it as null. A null is no value, so "+
-					"the root does not declare `%s` and the exporter serves no series for it: that alert can never fire "+
-					"(before #2518 the null was a threshold of 0 and the tenant's value was served). %s", k, k, rootNullFix(k)),
+				Field:    rk.Key,
+				Message:  rootNullMessage(rk),
 			})
 		}
 	}
 	return out
+}
+
+// rootNullMessage is the finding's message for one key; which shape it has
+// (a base threshold, or a critical row whose base is null) is the build's
+// answer (config.RootNullKey.CriticalRow), not judged here.
+func rootNullMessage(rk config.RootNullKey) string {
+	const was = "(before #2518 the null was a threshold of 0 and the tenant's value was served)"
+	if rk.CriticalRow {
+		return fmt.Sprintf("The tenant sets `%s` (in its own file, a root platform file's `tenants:` entry or a "+
+			"profile), the critical tier of `%s`, but the conf.d root `_defaults.yaml` writes `%s` as null. A null "+
+			"is no value, so the root does not declare `%s`, and the exporter serves a critical row only for a base "+
+			"the root `_defaults.yaml` holds: no series is served for `%s` and that critical alert can never fire %s. "+
+			"Write a number for `%s` in the conf.d root `_defaults.yaml` instead of null (that also serves `%s` at "+
+			"warning severity to every tenant that does not set it); listing `%s` under `optional_overrides:` does "+
+			"not serve the critical row.",
+			rk.Key, rk.NullKey, rk.NullKey, rk.NullKey, rk.Key, was, rk.NullKey, rk.NullKey, rk.NullKey)
+	}
+	return fmt.Sprintf("The tenant sets threshold `%s` (in its own file, a root platform file's `tenants:` "+
+		"entry or a profile), but the conf.d root `_defaults.yaml` writes it as null. A null is no value, so "+
+		"the root does not declare `%s` and the exporter serves no series for it: that alert can never fire "+
+		"%s. %s", rk.Key, rk.Key, was, rootNullFix(rk.Key))
 }
 
 // rootNullFix is the finding's fix sentence for key k. Both were measured to

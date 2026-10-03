@@ -449,10 +449,10 @@ type CheckInput struct {
 	UndeliverableInherited map[string][]string `json:"-"`
 
 	// RootNullUndeclared maps tenant ID → the threshold keys its config sets
-	// that the conf.d root `_defaults.yaml` writes as null — not declared,
-	// so not served (config.ScopedTenants.RootNullUndeclared, i.e.
+	// that are not served because the conf.d root `_defaults.yaml` writes
+	// them (or a `_critical` key's base) as null — not declared (config.ScopedTenants.RootNullUndeclared, i.e.
 	// FlatBuild.RootNullUndeclared). Each becomes a
 	// root_default_null_undeclared warning for a tenant in EffectiveConfigs
 	// (#2518); nil skips the check.
-	RootNullUndeclared map[string][]string `json:"-"`
+	RootNullUndeclared map[string][]config.RootNullKey `json:"-"`
 }

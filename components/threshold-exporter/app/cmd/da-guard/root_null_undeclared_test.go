@@ -164,3 +164,113 @@ func TestGuard_RootNullOneFindingPerCause(t *testing.T) {
 		})
 	}
 }
+
+// The critical tier (#2518): a tenant-side `<base>_critical` is served as
+// <base>'s critical row only when the root `_defaults.yaml` holds <base>. A
+// root null on the base (either spelling) therefore drops it, and the finding
+// names it — from the resolver's own entry test and base lookup, not a guard
+// string rule. The fix is a number for the base at the root (that also serves
+// the base at warning severity); optional_overrides does not serve the row.
+// A `_critical` whose base the root never wrote is not root-null-caused and
+// is not reported. The product: root base state × the tenant key's spelling
+// × where the tenant side gets it (tenant file, platform entry, profile).
+func TestGuard_RootNullCriticalRow(t *testing.T) {
+	t.Parallel()
+	C, L := aliasCanon, aliasLegacy
+	roots := []struct {
+		name, line string
+		null       bool // the root writes the base as null
+		serves     bool // the critical row is served
+	}{
+		{"rC30", "  " + C + ": 30\n", false, true},
+		{"rL30", "  " + L + ": 30\n", false, true},
+		{"rCnull", "  " + C + ": null\n", true, false},
+		{"rLnull", "  " + L + ": null\n", true, false},
+		{"r-", "", false, false},
+		{"rCnull+oo", "  " + C + ": null\noptional_overrides: [" + C + "]\n", true, false},
+	}
+	for _, r := range roots {
+		for _, key := range []string{C + "_critical", L + "_critical"} {
+			for _, src := range []string{"tenant", "platform", "profile"} {
+				name := r.name + "/" + key + "/" + src
+				t.Run(name, func(t *testing.T) {
+					t.Parallel()
+					files := map[string]string{
+						"_defaults.yaml": "defaults:\n  mysql_slow_queries: 5\n" + r.line,
+						"sub/tx.yaml":    "tenants:\n  tx:\n    _profile: std\n",
+						"_profiles.yaml": "profiles:\n  std:\n    mysql_slow_queries: 5\n",
+					}
+					switch src {
+					case "tenant":
+						files["sub/tx.yaml"] += "    " + key + ": 90\n"
+					case "platform":
+						files["_platform.yaml"] = "tenants:\n  tx:\n    " + key + ": 90\n"
+					case "profile":
+						files["_profiles.yaml"] += "    " + key + ": 90\n"
+					}
+					code, doc, _, stderr := served(t, files, "2026-10-01T00:00:00Z")
+					mustOK(t, code, stderr)
+					tv := doc.Tenants["tx"]
+					got, has := tv.Values[C+"_critical"]
+					if r.serves {
+						if !has || got != float64(90) || tv.Severities[C+"_critical"] != "critical" {
+							t.Errorf("critical row = %v (%v, %q), want 90 critical; values=%v", got, has, tv.Severities[C+"_critical"], tv.Values)
+						}
+					} else if has {
+						t.Errorf("critical row served %v, want none", got)
+					}
+					_, findings := guardFindingsOf(t, files)
+					var named []guard.Finding
+					for _, f := range findings {
+						if f.Kind == guard.FindingRootDefaultNullUndeclared {
+							named = append(named, f)
+						}
+					}
+					// A profile's keys reach the tenant canonicalized (profileFor),
+					// so the finding names the key as the merged config spells it.
+					field := key
+					if src == "profile" {
+						field = C + "_critical"
+					}
+					if r.null {
+						if len(named) != 1 || named[0].Field != field || named[0].TenantID != "tx" {
+							t.Errorf("root_default_null_undeclared = %+v, want one for tx / %s", named, field)
+						}
+					} else if len(named) != 0 {
+						t.Errorf("root_default_null_undeclared = %+v, want none (no root null)", named)
+					}
+				})
+			}
+		}
+	}
+}
+
+// RNC, followed through: the measured shape is named, and the finding's fix
+// (a number for the base at the root) serves 90 at critical with no finding.
+func TestGuard_RootNullCriticalFixServesTheRow(t *testing.T) {
+	t.Parallel()
+	rnc := map[string]string{
+		"_defaults.yaml": rootNullDefaults,
+		"sub/tx.yaml":    "tenants:\n  tx:\n    mysql_connections_critical: 90\n",
+	}
+	_, got := guardFindingsOf(t, rnc)
+	if len(got) != 1 || got[0].Kind != guard.FindingRootDefaultNullUndeclared || got[0].Field != "mysql_connections_critical" {
+		t.Fatalf("findings = %+v, want one root_default_null_undeclared for mysql_connections_critical", got)
+	}
+	if !strings.Contains(got[0].Message, "Write a number for `mysql_connections`") {
+		t.Errorf("fix sentence does not name the base: %s", got[0].Message)
+	}
+	fixed := map[string]string{
+		"_defaults.yaml": "defaults:\n  mysql_connections: 30\n  mysql_slow_queries: 5\n",
+		"sub/tx.yaml":    rnc["sub/tx.yaml"],
+	}
+	if code, got := guardFindingsOf(t, fixed, "--warn-as-error"); code != exitOK || len(got) != 0 {
+		t.Errorf("after the fix: exit = %d, findings = %+v; want 0 and none", code, got)
+	}
+	code, doc, _, stderr := served(t, fixed, "2026-10-01T00:00:00Z")
+	mustOK(t, code, stderr)
+	wantValue(t, doc, "tx", "mysql_connections_critical", 90)
+	if s := doc.Tenants["tx"].Severities["mysql_connections_critical"]; s != "critical" {
+		t.Errorf("severity = %q, want critical", s)
+	}
+}

@@ -130,20 +130,48 @@ func rootNullDefaults(data []byte) []string {
 	return nullDefaultKeys(raw.Defaults)
 }
 
+// RootNullKey is one key a tenant's config sets that is not served because
+// the conf.d root `_defaults.yaml` writes the key it depends on as null
+// (#2518): FlatBuild.RootNullUndeclared, ScopedTenants.RootNullUndeclared.
+type RootNullKey struct {
+	// Key is the tenant-side key as the tenant's config spells it.
+	Key string
+	// NullKey is the root key whose null leaves Key unserved: Key itself
+	// for a base threshold; the (canonical) base for a critical row.
+	NullKey string
+	// CriticalRow: Key is a `<base>_critical` key, which resolveCriticalRows
+	// serves only when the root defaults hold <base> — `optional_overrides:`
+	// does not stand in for it.
+	CriticalRow bool
+}
+
 // rootNullUndeclared is, per tenant of cfg (the built config: tenant files,
-// platform entries, profiles and the subtree overlay applied), each key of
-// the tenant's map that is a spelling of a key the root carrier wrote as null
-// (rootNull, rootNullDefaults) and that nothing on the output plane serves
-// (keyCanReachTheOutputPlane, the subtree overlay's own test), with its
-// value — filtered by undeliverableThresholds, the filter #1976's report
-// uses (reserved keys, keys resolveBaseRows never serves, switched-off keys).
+// platform entries, profiles and the subtree overlay applied), sorted by Key,
+// each key of the tenant's map that no row will serve because of a root
+// null (rootNull, rootNullDefaults). Two ways, each judged by the predicate
+// of the code that would serve the key:
+//
+//   - a base threshold that is a spelling of a root-null key and that
+//     nothing on the output plane iterates (keyCanReachTheOutputPlane, the
+//     subtree overlay's own test), filtered by undeliverableThresholds'
+//     rules (reserved keys, keys resolveBaseRows never serves, switched-off
+//     keys) — the filter #1976's report uses;
+//   - a critical-row key (criticalRowBase, resolveCriticalRows' own entry
+//     test) whose base, under either spelling, is root-null and absent from
+//     the canonical root defaults — the lookup resolveCriticalRows drops
+//     the row on. keyCanReachTheOutputPlane passes every `_critical` key
+//     (the resolver WARNs on its own), so it cannot answer this one. A
+//     `_critical` whose base no root ever declared is not root-null-caused
+//     and is left out. A switched-off key is left out, as the resolver
+//     skips it before the lookup.
+//
 // nil when there is none.
 //
 // ⛔ ONE CAUSE, ONE REPORT. A key a subtree `_defaults.yaml` hands down is
 // never in a tenant's map when it cannot be delivered — the overlay records
 // it in Unreachable instead (subtree_default_undeliverable) — so the two
 // sets cannot share a (tenant, key).
-func rootNullUndeclared(cfg *ThresholdConfig, rootNull []string) map[string]map[string]ScheduledValue {
+func rootNullUndeclared(cfg *ThresholdConfig, rootNull []string) map[string][]RootNullKey {
 	if len(rootNull) == 0 {
 		return nil
 	}
@@ -163,22 +191,36 @@ func rootNullUndeclared(cfg *ThresholdConfig, rootNull []string) map[string]map[
 		}
 		return false
 	}
-	var out map[string]map[string]ScheduledValue
+	canonDefaults := canonicalizeDefaults(cfg.Defaults)
+	var out map[string][]RootNullKey
+	add := func(tenantID string, rk RootNullKey) {
+		if out == nil {
+			out = map[string][]RootNullKey{}
+		}
+		out[tenantID] = append(out[tenantID], rk)
+	}
 	for tenantID, overrides := range cfg.Tenants {
 		for k, v := range overrides {
+			canon, _ := canonicalKeyFor(k)
+			if base, critical := criticalRowBase(canon); critical {
+				if _, declared := canonDefaults[base]; !declared && hit(base) && !disabledEverywhere(v) {
+					add(tenantID, RootNullKey{Key: k, NullKey: base, CriticalRow: true})
+				}
+				continue
+			}
 			if !hit(k) || keyCanReachTheOutputPlane(cfg, k, v) {
 				continue
 			}
-			if out == nil {
-				out = map[string]map[string]ScheduledValue{}
+			if IsReservedKey(k) || baseRowsSkipKey(k) || disabledEverywhere(v) {
+				continue // undeliverableThresholds' rules
 			}
-			if out[tenantID] == nil {
-				out[tenantID] = map[string]ScheduledValue{}
-			}
-			out[tenantID][k] = v
+			add(tenantID, RootNullKey{Key: k, NullKey: k})
 		}
 	}
-	return undeliverableThresholds(out)
+	for _, keys := range out {
+		sort.Slice(keys, func(i, j int) bool { return keys[i].Key < keys[j].Key })
+	}
+	return out
 }
 
 func dropNullBodies(typed map[string]map[string]ScheduledValue, raw map[string]map[string]any) {

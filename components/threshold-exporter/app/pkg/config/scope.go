@@ -159,11 +159,12 @@ type ScopedTenants struct {
 	Undeliverable map[string][]string
 
 	// RootNullUndeclared is, for each tenant in Tenants, the sorted
-	// threshold keys its config sets that the root `_defaults.yaml` writes
-	// as null — not declared (#2518), so /metrics serves no series for them
+	// threshold keys its config sets that /metrics does not serve because
+	// the root `_defaults.yaml` writes them (or a `_critical` key's base) as
+	// null — not declared (#2518)
 	// (the same build's FlatBuild.RootNullUndeclared). Only in-scope tenants
 	// are listed; nil when there is none.
-	RootNullUndeclared map[string][]string
+	RootNullUndeclared map[string][]RootNullKey
 }
 
 // DefaultsFile is one defaults carrier of a scan: its root-relative slash
@@ -391,7 +392,7 @@ func scopeEffective(configDir, scopeDir string, wholeTree bool) (*ScopedTenants,
 		}
 		if keys := rootNull[id]; len(keys) > 0 {
 			if out.RootNullUndeclared == nil {
-				out.RootNullUndeclared = map[string][]string{}
+				out.RootNullUndeclared = map[string][]RootNullKey{}
 			}
 			out.RootNullUndeclared[id] = keys
 		}
@@ -452,7 +453,7 @@ func scopeEffective(configDir, scopeDir string, wholeTree bool) (*ScopedTenants,
 // inherited subtree threshold keys it cannot deliver), over the whole tree; the caller
 // keeps the in-scope tenants (ScopedTenants.Undeliverable, #1976). One build
 // answers both, so the two cannot come from different readings of the tree.
-func scopeParseFailed(scan *TreeScan, scopeRel string) (parseFailed []string, unreachable, rootNull map[string][]string, err error) {
+func scopeParseFailed(scan *TreeScan, scopeRel string) (parseFailed []string, unreachable map[string][]string, rootNull map[string][]RootNullKey, err error) {
 	if len(scan.Files) == 0 {
 		return nil, nil, nil, nil // the exporter refuses an empty tree; nothing was dropped
 	}
@@ -471,7 +472,7 @@ func scopeParseFailed(scan *TreeScan, scopeRel string) (parseFailed []string, un
 	}
 	sort.Strings(parseFailed)
 	return parseFailed, unreachableKeys(undeliverableThresholds(built.UnreachableValues)),
-		unreachableKeys(built.RootNullUndeclared), nil
+		built.RootNullUndeclared, nil
 }
 
 // scopeDefaultsFiles is ScopedTenants.DefaultsFiles: the selected carrier of

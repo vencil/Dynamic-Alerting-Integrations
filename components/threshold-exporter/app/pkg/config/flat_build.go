@@ -88,16 +88,16 @@ type FlatBuild struct {
 	ParseFailed []string
 	// RootNullUndeclared is tenantID → each threshold key the tenant's
 	// config sets (its own file, a root platform `tenants:` entry or a
-	// profile) whose root `_defaults.yaml` entry is written as null — which
-	// is no write (#2518), so the key is not declared and /metrics serves no
-	// series for it (rootNullUndeclared). da-guard reports it as
+	// profile) that /metrics does not serve because the root
+	// `_defaults.yaml` writes it — or, for a `<base>_critical` key, its base
+	// — as null, which is no write (#2518; rootNullUndeclared). da-guard reports it as
 	// root_default_null_undeclared. nil when there is none.
 	//
 	// ⚠️ Filled only when this build decoded the root carrier's bytes —
 	// every cold build (LoadDir, ScopeEffective). A warm exporter reload
 	// that reuses the carrier's prior partial leaves it nil; the exporter
 	// does not read it.
-	RootNullUndeclared map[string]map[string]ScheduledValue
+	RootNullUndeclared map[string][]RootNullKey
 }
 
 // BuildFlatConfig builds the merged ThresholdConfig from a scan: parse each
