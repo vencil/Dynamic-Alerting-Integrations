@@ -223,8 +223,7 @@ POLICY_ONLY_SCHEMA_WARN_HINT = (
     "The findings above are ADR-007 domain-policy warnings, not tenant key "
     "problems: no unknown key was reported in this run. \u26d4 Ignore the "
     "generic advice about removing keys: change the value each warning "
-    "names or amend the domain policy. With --strict these are blocking "
-    "errors.")
+    "names or amend the domain policy.")
 SKIPPED_ENTRY_SCHEMA_HINT = (
     "A line above ends in 'skipping': that setting was dropped as unusable, "
     "not merely flagged. Fix the value it names — e.g. "

@@ -2054,10 +2054,14 @@ def check_domain_policies(
             non-mapping policy or constraints blocks, and a non-list
             tenant group_by. The CLI (`generate_alertmanager_routes.py
             --strict`) treats these ERROR lines as blocking (exit 1).
-            Non-strict (WARN) message text and skip behavior are
-            unchanged for backward compatibility — including the legacy
-            quirks (a falsy parsed duration like "0s" or a multi-unit
-            "1h30m" is silently skipped there).
+            #2490: the timing bounds (max_repeat_interval /
+            min_group_wait) are compared by ONE function in both modes,
+            ``_timing_bound_violations`` — same parsing, same skips, same
+            findings (a tenant value Alertmanager refuses included); only
+            the level differs (lenient: WARN, no hint, exit code
+            unchanged). A policy bound that is itself unreadable is
+            reported in strict mode only. The other lenient skips listed
+            above are unchanged.
 
     ``require_critical_escalation: true`` (#2244) is judged by
     ``critical_escalation_findings``; a compliant tenant's non-escalation
