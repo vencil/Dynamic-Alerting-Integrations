@@ -260,8 +260,9 @@ func checkGroupByInvalid(tenantID string, routing map[string]any) []Finding {
 // enforcedRouteTenants is _grar_routes.enforced_route_tenants: the tenants
 // a `{{tenant}}` `_routing_enforced` expands over — every tenant the
 // generator recognises (#2519), routed or not: those of EffectiveConfigs and
-// RoutingByTenant, less the ids routingpolicy.IsValidTenantID refuses (the
-// generator renders nothing for them). A tenant with `_routing: disable`, a
+// RoutingByTenant, less the ids routingpolicy.IsValidTenantID refuses and
+// the UnloadedTenants (a null body the generator does not load) — the
+// generator renders nothing for either. A tenant with `_routing: disable`, a
 // refused `_routing` or no routing layer at all is in it, as in the
 // generator's dedup_configs.
 func enforcedRouteTenants(input CheckInput) []string {
@@ -275,6 +276,9 @@ func enforcedRouteTenants(input CheckInput) []string {
 	out := make([]string, 0, len(seen))
 	for t := range seen {
 		if _, invalid := input.InvalidTenantIDs[t]; invalid || !routingpolicy.IsValidTenantID(t) {
+			continue
+		}
+		if _, unloaded := input.UnloadedTenants[t]; unloaded {
 			continue
 		}
 		out = append(out, t)

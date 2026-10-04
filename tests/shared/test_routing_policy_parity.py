@@ -424,6 +424,11 @@ def test_python_reader_matches_the_table(tree, tmp_path: Path) -> None:
     # or not — the Go halves judge expect's tenants, so expect lists them all.
     if got.enforced_routing:
         assert set(got.dedup_configs) <= set(tree["expect"]), (tree["name"], set(got.dedup_configs))
+        # And the other way (#2519 F2): every valid tenant of expect is one the
+        # generator loads — a null body it skips must not be listed, or the Go
+        # halves (which judge expect's tenants) would judge a route never rendered.
+        valid = {t for t in tree["expect"] if is_valid_tenant_id(t)}
+        assert valid <= set(got.dedup_configs), (tree["name"], valid - set(got.dedup_configs))
     expected_total = sum(len(_want(w, "policy")) for w in tree["expect"].values())
     assert len(rows) == expected_total, (tree["name"], rows)
     assert Counter(t for t, *_ in rows).keys() <= set(tree["expect"]), (tree["name"], rows)

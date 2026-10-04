@@ -119,7 +119,7 @@ func (t Tree) TenantLevel(tenantID string) string {
 // included); the profiles of the root and of those levels; the root overlay.
 // The result shares its maps' values with t but not the maps themselves.
 func (t Tree) LayersFor(level string) Layers {
-	out := Layers{Overlay: t.Root.Overlay}
+	out := Layers{Overlay: t.Root.Overlay, PlatformBodies: t.Root.PlatformBodies}
 	chain := ChainLevels(level)
 	var defaults map[string]any
 	if t.Root.Defaults != nil {

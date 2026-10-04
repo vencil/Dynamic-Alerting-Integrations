@@ -1,6 +1,9 @@
 package routingpolicy
 
 import (
+	"os"
+	"path/filepath"
+	"reflect"
 	"strings"
 	"testing"
 
@@ -72,5 +75,39 @@ func TestRoutingDefaultsNotMapping(t *testing.T) {
 		if want && d != nil {
 			t.Errorf("_routing_defaults: %s: contributes %v, want nothing", value, d)
 		}
+	}
+}
+
+// TestPyYAMLTenantBodyNotMapping (#2519 F2): the tenant entries the route
+// generator does not load — a body PyYAML does not read as a mapping (its
+// isinstance(overrides, dict) test) — and the root platform entries that give
+// a tenant a mapping body all the same (Layers.PlatformBodies).
+func TestPyYAMLTenantBodyNotMapping(t *testing.T) {
+	t.Parallel()
+	doc := "base: &b {cpu: 1}\ntenants:\n  t-null:\n  t-tilde: ~\n  t-empty: {}\n" +
+		"  t-map: {cpu: 2}\n  t-merge: {<<: *b}\n  t-str: ''\n  t-list: [1]\n  010:\n"
+	got := PyYAMLTenantBodyNotMapping([]byte(doc))
+	want := map[string]bool{"t-null": true, "t-tilde": true, "t-str": true, "t-list": true, "010": true}
+	if !reflect.DeepEqual(got, want) {
+		t.Errorf("PyYAMLTenantBodyNotMapping = %v, want %v", got, want)
+	}
+	if got := PyYAMLTenantBodyNotMapping([]byte("tenants:\n  t-a: {cpu: 1}\n")); got != nil {
+		t.Errorf("all mappings: got %v, want nil", got)
+	}
+	if got := PyYAMLTenantBodyNotMapping([]byte("tenants: [")); got != nil {
+		t.Errorf("unparseable: got %v, want nil", got)
+	}
+
+	dir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(dir, "_tenants.yaml"),
+		[]byte("tenants:\n  t-null: {cpu: 3}\n  t-empty: {}\n  t-none:\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	tree, _, _ := LoadTree(dir, nil)
+	if want := map[string]bool{"t-null": true, "t-empty": true}; !reflect.DeepEqual(tree.Root.PlatformBodies, want) {
+		t.Errorf("PlatformBodies = %v, want %v", tree.Root.PlatformBodies, want)
+	}
+	if got := tree.LayersFor("").PlatformBodies; !reflect.DeepEqual(got, tree.Root.PlatformBodies) {
+		t.Errorf("LayersFor drops PlatformBodies: %v", got)
 	}
 }
