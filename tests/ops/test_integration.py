@@ -98,7 +98,7 @@ class TestScaffoldToGeneratePipeline:
         write_outputs(config_dir, "db-a", defaults, tenant_data, "report")
 
         routing_configs, dedup_configs, *_ = load_tenant_configs(config_dir)
-        routes, receivers, warnings = generate_routes(routing_configs)
+        routes, receivers, warnings = generate_routes(routing_configs, tenants=())
 
         assert len(routes) >= 1
         assert routes[0]["receiver"] == "tenant-db-a"
@@ -121,7 +121,7 @@ class TestScaffoldToGeneratePipeline:
             write_outputs(config_dir, tenant, defaults, td, "report")
 
         routing_configs, _, *_ = load_tenant_configs(config_dir)
-        routes, receivers, _ = generate_routes(routing_configs)
+        routes, receivers, _ = generate_routes(routing_configs, tenants=())
 
         tenant_names = {r["receiver"].replace("tenant-", "") for r in routes}
         assert "db-a" in tenant_names
@@ -181,7 +181,7 @@ class TestOnboardToGeneratePipeline:
             write_yaml(config_dir, f"{tenant}.yaml", content)
 
         routing_configs, dedup_configs, *_ = load_tenant_configs(config_dir)
-        routes, receivers, _ = generate_routes(routing_configs)
+        routes, receivers, _ = generate_routes(routing_configs, tenants=())
         inhibit = generate_inhibit_rules(dedup_configs)
 
         assert len(routes) >= 1
@@ -259,7 +259,7 @@ class TestRoutingDirFixture:
     def test_generate_routes_from_preloaded(self, routing_dir):
         """預載 configs 產生合法 routes + receivers + inhibit。"""
         routing_configs, dedup_configs, *_ = load_tenant_configs(routing_dir)
-        routes, receivers, _ = generate_routes(routing_configs)
+        routes, receivers, _ = generate_routes(routing_configs, tenants=())
         inhibit, _ = generate_inhibit_rules(dedup_configs)
 
         assert len(routes) == 2
@@ -273,7 +273,7 @@ class TestRoutingDirFixture:
         routing_configs, _, *_ = load_tenant_configs(routing_dir)
         enforced = make_enforced_routing()
         routes, receivers, _ = generate_routes(
-            routing_configs, enforced_routing=enforced)
+            routing_configs, enforced_routing=enforced, tenants=())
 
         enforced_routes = [r for r in routes if r.get("continue")]
         assert len(enforced_routes) >= 1
@@ -300,7 +300,7 @@ class TestPipelineBuilder:
         assert result.routing_configs["db-a"]["receiver"]["type"] == "webhook"
         assert result.dedup_configs["db-a"] == "enable"
 
-        routes, receivers, _ = generate_routes(result.routing_configs)
+        routes, receivers, _ = generate_routes(result.routing_configs, tenants=())
         assert len(routes) == 1
         assert routes[0]["receiver"] == "tenant-db-a"
 
@@ -316,7 +316,7 @@ class TestPipelineBuilder:
         assert len(result.routing_configs) == 3
         assert result.routing_configs["db-b"]["receiver"]["type"] == "slack"
 
-        routes, _, _ = generate_routes(result.routing_configs)
+        routes, _, _ = generate_routes(result.routing_configs, tenants=())
         tenant_names = sorted(r["receiver"].replace("tenant-", "") for r in routes)
         assert tenant_names == ["db-a", "db-b", "db-c"]
 

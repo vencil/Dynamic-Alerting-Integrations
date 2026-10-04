@@ -107,7 +107,7 @@ class TestGeneratedNameCollision:
         d, kind = clash
         routing, _dedup, _sw, enforced, _md = gar.load_tenant_configs(str(d))
         _routes, receivers, warnings = gar.generate_routes(
-            routing, enforced_routing=enforced)
+            routing, enforced_routing=enforced, tenants=_dedup)
         other, src = _KINDS[kind]
         names = [r["name"] for r in receivers]
         assert names.count(f"tenant-{other}") == 2, names

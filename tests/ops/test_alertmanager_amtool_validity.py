@@ -69,7 +69,8 @@ def _render_live_alertmanager_yml(tmp_path):
 
     routing_configs, dedup_configs, _sw, enforced_routing, _mc = load_tenant_configs(_CONF_D)
     routes, receivers, _rw = generate_routes(
-        routing_configs, allowed_domains=None, enforced_routing=enforced_routing)
+        routing_configs, allowed_domains=None, enforced_routing=enforced_routing,
+        tenants=dedup_configs)
     inhibit_rules, _dw = generate_inhibit_rules(dedup_configs)
     base = load_base_config(str(base_file))
     cm_yaml = assemble_configmap(base, routes, receivers, inhibit_rules)

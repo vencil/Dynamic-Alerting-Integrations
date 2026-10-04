@@ -211,3 +211,67 @@ func TestRoutingGroupByInvalid(t *testing.T) {
 		t.Errorf("routing_group_by_invalid fields = %v, want %v", got, want)
 	}
 }
+
+// #2519: a `{{tenant}}` `_routing_enforced` expands over every tenant the
+// generator recognises, routed or not, so its group_by is judged for a
+// tenant with no routing layer at all — and never for an invalid id, which
+// the generator renders nothing for.
+func TestRouting_EnforcedGroupByJudgedForUnroutedTenants(t *testing.T) {
+	enforced := &routingpolicy.Enforced{File: "_platform.yaml", Value: map[string]any{
+		"enabled":  true,
+		"receiver": map[string]any{"type": "webhook", "url": "https://noc.example.com/hook"},
+		"group_by": []any{"alertname", "{{tenant}}"},
+	}}
+	r, err := CheckDefaultsImpact(CheckInput{
+		EffectiveConfigs: map[string]map[string]any{
+			"alertname": {"placeholder": 1}, // threshold only: no routing
+			"Bad_Id":    {"placeholder": 1},
+		},
+		InvalidTenantIDs: map[string]string{"Bad_Id": "bad.yaml"},
+		RoutingEnforced:  enforced,
+	})
+	if err != nil {
+		t.Fatalf("CheckDefaultsImpact: %v", err)
+	}
+	var got []string
+	for _, f := range r.Findings {
+		if f.Kind == FindingRoutingGroupByInvalid {
+			got = append(got, f.Field)
+		}
+	}
+	if want := []string{"_platform.yaml:_routing_enforced (alertname).group_by[1]"}; !reflect.DeepEqual(got, want) {
+		t.Errorf("enforced routing_group_by_invalid fields = %v, want %v", got, want)
+	}
+}
+
+// #2519 F2: a tenant the generator does not load (its file body is null as
+// PyYAML reads it, no platform entry makes it a mapping) is served by the
+// exporter — so it is in EffectiveConfigs — but gets no enforced route, so
+// the enforced group_by is not judged for it.
+func TestRouting_EnforcedGroupBySkipsUnloadedTenants(t *testing.T) {
+	enforced := &routingpolicy.Enforced{File: "_platform.yaml", Value: map[string]any{
+		"enabled":  true,
+		"receiver": map[string]any{"type": "webhook", "url": "https://noc.example.com/hook"},
+		"group_by": []any{"alertname", "severity", "{{tenant}}"},
+	}}
+	r, err := CheckDefaultsImpact(CheckInput{
+		EffectiveConfigs: map[string]map[string]any{
+			"alertname": {},                 // null body: not loaded
+			"severity":  {"placeholder": 1}, // loaded
+		},
+		UnloadedTenants: map[string]string{"alertname": "alertname.yaml"},
+		RoutingEnforced: enforced,
+	})
+	if err != nil {
+		t.Fatalf("CheckDefaultsImpact: %v", err)
+	}
+	var got []string
+	for _, f := range r.Findings {
+		if f.Kind == FindingRoutingGroupByInvalid {
+			got = append(got, f.Field)
+		}
+	}
+	if want := []string{"_platform.yaml:_routing_enforced (severity).group_by[2]"}; !reflect.DeepEqual(got, want) {
+		t.Errorf("enforced routing_group_by_invalid fields = %v, want %v", got, want)
+	}
+}

@@ -30,6 +30,14 @@ type Layers struct {
 	// earlier one set. Tenant ids are the keys' source TEXT. nil = none.
 	// TenantBlock lays a tenant's own keys over it.
 	Overlay map[string]map[string]any
+
+	// PlatformBodies is the set of tenant ids a root platform file's
+	// `tenants:` entry gives a body PyYAML reads as a mapping (any keys, none
+	// included). The route generator loads such a tenant whatever its own
+	// file's body is (_lib_confd.overlay_platform_tenants merges the platform
+	// entry first), so a tenant file's null body does not keep it out of the
+	// generator's tenant set (PyYAMLTenantBodyNotMapping, #2519). nil = none.
+	PlatformBodies map[string]bool
 }
 
 // routingBlockKeys are the tenant-block keys Resolve reads.
@@ -813,6 +821,12 @@ func overlayFrom(top *yaml.Node, layers *Layers) {
 		return
 	}
 	for _, e := range mappingEntries(t) {
+		if pyyamlMapping(e.value) {
+			if layers.PlatformBodies == nil {
+				layers.PlatformBodies = map[string]bool{}
+			}
+			layers.PlatformBodies[e.key] = true
+		}
 		// ⛔ The body is DECODED, not looked up node by node: a YAML merge
 		// key (`ta: {<<: *base}`) is expanded only by the decoder, and the
 		// Python reader and the exporter both see the merged keys (#2291

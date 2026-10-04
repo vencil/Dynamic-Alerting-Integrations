@@ -103,7 +103,7 @@ class TestColdParsePerformance:
         from generate_alertmanager_routes import load_tenant_configs, generate_routes
         routing_configs, dedup, warnings, enforced, metadata = load_tenant_configs(config_dir)
         start = time.monotonic()
-        generate_routes(routing_configs)
+        generate_routes(routing_configs, tenants=())
         elapsed_ms = (time.monotonic() - start) * 1000
         assert elapsed_ms < 500 * _SCALE, f"50 tenant routes generation took {elapsed_ms:.0f}ms (limit: {500 * _SCALE}ms)"
 

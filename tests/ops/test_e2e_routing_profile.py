@@ -154,7 +154,7 @@ class TestProfileToRouteGeneration:
     def test_generate_routes_includes_profile_tenants(self, full_pipeline_dir):
         """generate_routes produces routes for tenants using profiles."""
         routing_configs, *_ = load_tenant_configs(full_pipeline_dir)
-        routes, receivers, warnings = generate_routes(routing_configs)
+        routes, receivers, warnings = generate_routes(routing_configs, tenants=())
 
         route_names = {r["receiver"] for r in routes}
         assert "tenant-db-finance" in route_names

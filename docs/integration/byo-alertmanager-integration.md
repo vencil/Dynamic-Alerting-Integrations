@@ -148,6 +148,8 @@ da-tools generate-routes --config-dir conf.d/ --validate --policy .github/custom
 - `receivers[]`: Per-tenant receiver（webhook/email/slack/teams/rocketchat/pagerduty）
 - `inhibit_rules[]`: Per-tenant severity dedup rules
 
+⚠️ 手動合併 fragment 時，fragment 的 `route.routes` 必須放在 root 子 route 的**最後**。若接在你自己的子 route 之前，沒有 tenant route 的租戶的告警會被 fragment 裡的尾端 route（只帶 `tenant="<id>"`、不帶 `continue`）交回 root receiver，到不了後面你自己的子 route（[#2519](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/2519)）。
+
 ### Step 5: Merge into Alertmanager ConfigMap
 
 將產出的 fragment 合併至 Alertmanager 主配置。**兩種模式根據部署流程選擇：**
@@ -445,7 +447,7 @@ _routing_enforced:
 
 **模式 B：Per-tenant 獨立通道**
 
-當 receiver 欄位包含 `{{tenant}}` 佔位符，系統自動為每個 tenant 建立獨立的 enforced route。Platform 可藉此為各 tenant 建立專屬通知通道，tenant 無法拒絕也無法覆寫。⚠️ 目前只有具備路由設定的租戶會拿到這條 route：自己寫了 `_routing`，或由 `_routing_defaults`、`_routing_profile` 帶來的都算。平台沒設 `_routing_defaults` 時，既沒寫 `_routing` 也沒引用 profile 的租戶不在範圍內（[#2519](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/2519)）：
+當 receiver 欄位包含 `{{tenant}}` 佔位符，系統自動為每個 tenant 建立獨立的 enforced route。Platform 可藉此為各 tenant 建立專屬通知通道，tenant 無法拒絕也無法覆寫。「每個 tenant」指產生器讀到的每個租戶，與 severity dedup inhibit rule 涵蓋的是同一群：沒有 `_routing` 的租戶（只寫閾值、只設 `_silent_mode`）也有，寫 `_routing: disable` 或 `_routing` 被拒收的租戶同樣有——租戶無法用它退出這條通道；tenant id 不合法的租戶例外，產生器會整棵樹拒收。沒有 tenant route 的租戶另有一條尾端 route（只帶 `tenant="<id>"`）把告警交回 root receiver，所以 root 照收，enforced 通道是額外多送的一份。Silent mode 由 base config 的 TenantSilent inhibit rule 壓制（內建 base 不含，需以 `--base-config` 帶入），與 route 無關。route 數因此隨租戶數線性增加（[#2519](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/2519)）：
 
 ```yaml
 # conf.d/_defaults.yaml

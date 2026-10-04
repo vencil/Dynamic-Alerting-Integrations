@@ -725,7 +725,7 @@ def check_routes(
     try:
         routes, receivers, route_warnings = gen.generate_routes(
             routing, allowed_domains=allowed_domains,
-            enforced_routing=enforced_routing)
+            enforced_routing=enforced_routing, tenants=dedup)
         inhibit_rules, dedup_warnings = gen.generate_inhibit_rules(dedup)
     finally:
         sys.stderr = old_stderr
@@ -841,7 +841,7 @@ def check_policy(config_dir: str, policy_file: str | None) -> dict[str, object]:
         return _make_result("policy", PASS,
                             ["No allowed_domains in policy — no restrictions"])
 
-    routing, _dedup, _sw, enforced_routing, _mc = gen.load_tenant_configs(config_dir)
+    routing, dedup, _sw, enforced_routing, _mc = gen.load_tenant_configs(config_dir)
 
     import io
     old_stderr = sys.stderr
@@ -850,7 +850,7 @@ def check_policy(config_dir: str, policy_file: str | None) -> dict[str, object]:
     try:
         _r, _recv, warnings = gen.generate_routes(
             routing, allowed_domains=allowed_domains,
-            enforced_routing=enforced_routing)
+            enforced_routing=enforced_routing, tenants=dedup)
     finally:
         sys.stderr = old_stderr
 

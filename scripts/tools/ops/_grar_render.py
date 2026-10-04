@@ -53,7 +53,7 @@ sys.path.insert(0, os.path.join(_THIS_DIR, '..'))  # Repo subdir layout
 
 from _grar_routes import (  # noqa: E402
     _build_custom_alert_routes, _build_watchdog_route, _build_synthetic_probe_route,
-    _build_sentinel_sinkhole_route)
+    _build_sentinel_sinkhole_route, pin_root_fallthrough_receiver)
 from _lib_exitcodes import EXIT_CALLER_ERROR, EXIT_VIOLATION  # noqa: E402
 from _lib_io import safe_label  # noqa: E402
 from _grar_validate import (  # noqa: E402
@@ -451,9 +451,11 @@ def assemble_configmap(base: dict, routes: list[dict], receivers: list[dict], in
     # are present and FIRST, regardless of what generate_routes produced.
     routes, receivers = _inject_custom_alert_isolation(routes, receivers)
 
-    # Merge routes into base route
+    # Merge routes into base route. #2519: the root fallthrough routes name
+    # THIS base's root receiver (built-in or --base-config).
     merged_route = dict(merged.get("route", {}))
-    merged_route["routes"] = routes
+    merged_route["routes"] = pin_root_fallthrough_receiver(
+        routes, merged_route.get("receiver"))
     merged["route"] = merged_route
 
     # Merge receivers: keep base receivers, append tenant receivers
@@ -890,7 +892,10 @@ def _merge_routes_receivers_inhibits(existing: dict, routes: list[dict],
     if routes:
         if "route" not in existing:
             existing["route"] = {}
-        existing["route"]["routes"] = routes
+        # #2519: the root fallthrough routes name the CLUSTER config's root
+        # receiver — the root they fall through to on this path.
+        existing["route"]["routes"] = pin_root_fallthrough_receiver(
+            routes, existing["route"].get("receiver"))
 
     if receivers:
         # Generated tenant receivers REPLACE the existing same-named ones (they

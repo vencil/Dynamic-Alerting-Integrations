@@ -74,7 +74,7 @@ from _grar_validate import (  # noqa: E402
     value_not_string_message,
 )
 # #2503: the strict twin of the enforced routes' group_by render.
-from _grar_routes import enforced_group_by_problems  # noqa: E402
+from _grar_routes import enforced_group_by_problems, enforced_route_tenants  # noqa: E402
 
 # ADR-007 --strict fail-open closure: filenames whose content carries the
 # domain policies. If such a file is unparseable, or a domain_policies
@@ -1371,7 +1371,9 @@ def load_tenant_configs(
     Returns:
         (routing_configs, dedup_configs, schema_warnings, enforced_routing, metadata_configs):
         - routing_configs: {tenant_name: routing_config_dict} for tenants with _routing
-        - dedup_configs: {tenant_name: "enable"|"disable"} for ALL tenants (default: "enable")
+        - dedup_configs: {tenant_name: "enable"|"disable"} for ALL tenants (default: "enable");
+          its keys are the generator's tenant set — what a `{{tenant}}`
+          `_routing_enforced` expands over (#2519) — every valid id loaded
         - schema_warnings: list of validation warning strings
         - enforced_routing: dict or None — platform enforced routing config (v1.7.0+)
         - metadata_configs: {tenant_name: {runbook_url, owner, tier, ...}} (v1.11.0+)
@@ -1516,9 +1518,11 @@ def load_tenant_tree(
                     f"  {POLICY_ERROR_PREFIX} tenant '{tenant}': "
                     f"{group_by_problem_text(fld, kind, value)}")
         # Only the enforced routes the generator renders, the `{{tenant}}`
-        # shape per tenant after substitution (#2503 round 2, F1 / F4).
+        # shape per tenant after substitution (#2503 round 2, F1 / F4) — over
+        # every tenant it recognises, routed or not (#2519).
         for ctx, idx, kind, value in enforced_group_by_problems(
-                parsed["enforced_routing"], list(routing_configs)):
+                parsed["enforced_routing"], enforced_route_tenants(
+                    routing_configs, parsed["dedup_configs"])):
             schema_warnings.append(
                 f"  {POLICY_ERROR_PREFIX} {ctx}: "
                 f"{group_by_problem_text(f'group_by[{idx}]', kind, value)}")

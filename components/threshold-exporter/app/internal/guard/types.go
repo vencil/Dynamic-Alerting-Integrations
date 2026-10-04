@@ -404,6 +404,16 @@ type CheckInput struct {
 	// absent from RoutingByTenant.
 	InvalidTenantIDs map[string]string `json:"-"`
 
+	// UnloadedTenants maps each tenant id the route generator does not load
+	// to the tenant file that declares it (#2519): its body there is not a
+	// mapping as PyYAML reads it (a null body — the exporter still serves the
+	// tenant, so it is in EffectiveConfigs; routingpolicy.
+	// PyYAMLTenantBodyNotMapping) and no root platform file's entry gives it
+	// one (routingpolicy.Layers.PlatformBodies). Such a tenant is not in the
+	// generator's tenant set, so a `{{tenant}}` `_routing_enforced` renders no
+	// route for it and its group_by is not judged for it.
+	UnloadedTenants map[string]string `json:"-"`
+
 	// UnknownRoutingProfiles maps tenant ID → the `_routing_profile` it
 	// references that no profile file defines (warn finding).
 	UnknownRoutingProfiles map[string]string `json:"-"`
@@ -419,7 +429,9 @@ type CheckInput struct {
 
 	// RoutingEnforced is the root's `_routing_enforced` block the route
 	// generator renders from (routingpolicy.Tree.Enforced; nil: none). Only
-	// its group_by is judged (#2503), over the tenants in RoutingByTenant.
+	// its group_by is judged (#2503), the `{{tenant}}` shape over every
+	// valid tenant id of EffectiveConfigs and RoutingByTenant — routed or not,
+	// as the generator expands it (#2519) — less UnloadedTenants.
 	RoutingEnforced *routingpolicy.Enforced `json:"-"`
 
 	// CardinalityLimit is the per-tenant ceiling the cardinality

@@ -23,6 +23,7 @@ import re
 import shutil
 import sys
 import tempfile
+from collections.abc import Iterable
 from pathlib import Path
 
 import yaml
@@ -62,6 +63,7 @@ from _grar_validate import (  # noqa: E402
     routing_not_mapping_warning,
 )
 from _grar_parse import BLOCKING_TREE_KINDS, policy_level_source  # noqa: E402
+from _grar_routes import enforced_route_tenants  # noqa: E402
 # #2326: the layer chain across conf.d directory levels — the generator's own.
 from _grar_merge import (  # noqa: E402
     ROOT_LEVEL,
@@ -601,8 +603,12 @@ def run_amtool_trace(am_yml: str, root: dict, labels: dict[str, str], *,
 
 
 def _conf_receiver_types(routing_configs: dict[str, dict],
-                         enforced: dict | None) -> dict[str, str]:
+                         enforced: dict | None,
+                         tenants: Iterable[str]) -> dict[str, str]:
     """Receiver name → the ``receiver.type`` it was generated from (G1).
+
+    *tenants* is the generator's tenant set (``dedup_configs`` keys): a
+    ``{{tenant}}`` enforced routing renders a receiver for each (#2519).
 
     The rendered ``*_configs`` key cannot stand in for it: ``rocketchat``
     renders to ``webhook_configs``, ``teams`` to ``msteams_configs``.
@@ -621,7 +627,7 @@ def _conf_receiver_types(routing_configs: dict[str, dict],
                     types[f"tenant-{tenant}-{kind}-{idx}"] = _t(entry.get("receiver"))
     if enforced:
         if _contains_tenant_placeholder(enforced):
-            for tenant in routing_configs:
+            for tenant in enforced_route_tenants(routing_configs, tenants):
                 sub = _substitute_tenant(enforced, tenant)
                 types[f"platform-enforced-{tenant}"] = _t(sub.get("receiver"))
         else:
@@ -672,10 +678,10 @@ def build_trace_tree(parsed: dict, base: dict | None = None
     enforced = parsed.get("enforced_routing")
     if not (isinstance(enforced, dict) and enforced.get("enabled") is not False):
         enforced = None
+    tenants = parsed.get("dedup_configs") or {}
     routes, receivers, _warnings = generate_routes(
-        routing_configs, None, enforced_routing=enforced)
-    inhibit_rules, _warnings = generate_inhibit_rules(
-        parsed.get("dedup_configs") or {})
+        routing_configs, None, enforced_routing=enforced, tenants=tenants)
+    inhibit_rules, _warnings = generate_inhibit_rules(tenants)
     try:
         cm_yaml = assemble_configmap(
             base if base is not None else load_base_config(None),
@@ -689,7 +695,7 @@ def build_trace_tree(parsed: dict, base: dict | None = None
     am = yaml.safe_load(am_yml)
     by_name = {r["name"]: r for r in am.get("receivers") or []}
     return am_yml, am["route"], by_name, _conf_receiver_types(
-        routing_configs, enforced)
+        routing_configs, enforced, tenants)
 
 
 def summarize_tree(root: dict) -> list[str]:

@@ -110,15 +110,15 @@ class TestGenerateRoutesScaling:
 
     def test_10_tenants(self, benchmark):
         configs = _make_routing_configs(10)
-        benchmark(generate_routes, configs)
+        benchmark(generate_routes, configs, tenants=configs)
 
     def test_50_tenants(self, benchmark):
         configs = _make_routing_configs(50)
-        benchmark(generate_routes, configs)
+        benchmark(generate_routes, configs, tenants=configs)
 
     def test_100_tenants(self, benchmark):
         configs = _make_routing_configs(100)
-        benchmark(generate_routes, configs)
+        benchmark(generate_routes, configs, tenants=configs)
 
 
 # ── generate_inhibit_rules scaling ────────────────────────────

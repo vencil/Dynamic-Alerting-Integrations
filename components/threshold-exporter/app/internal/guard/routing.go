@@ -204,7 +204,7 @@ func checkRoutingGuardrails(input CheckInput) []Finding {
 		tenants = append(tenants, t)
 	}
 	sort.Strings(tenants)
-	out = append(out, checkEnforcedGroupBy(input.RoutingEnforced, input.RoutingByTenant, tenants)...)
+	out = append(out, checkEnforcedGroupBy(input.RoutingEnforced, enforcedRouteTenants(input))...)
 	if len(input.RoutingByTenant) == 0 {
 		return out
 	}
@@ -257,21 +257,45 @@ func checkGroupByInvalid(tenantID string, routing map[string]any) []Finding {
 	return out
 }
 
+// enforcedRouteTenants is _grar_routes.enforced_route_tenants: the tenants
+// a `{{tenant}}` `_routing_enforced` expands over — every tenant the
+// generator recognises (#2519), routed or not: those of EffectiveConfigs and
+// RoutingByTenant, less the ids routingpolicy.IsValidTenantID refuses and
+// the UnloadedTenants (a null body the generator does not load) — the
+// generator renders nothing for either. A tenant with `_routing: disable`, a
+// refused `_routing` or no routing layer at all is in it, as in the
+// generator's dedup_configs.
+func enforcedRouteTenants(input CheckInput) []string {
+	seen := make(map[string]bool, len(input.EffectiveConfigs)+len(input.RoutingByTenant))
+	for t := range input.EffectiveConfigs {
+		seen[t] = true
+	}
+	for t := range input.RoutingByTenant {
+		seen[t] = true
+	}
+	out := make([]string, 0, len(seen))
+	for t := range seen {
+		if _, invalid := input.InvalidTenantIDs[t]; invalid || !routingpolicy.IsValidTenantID(t) {
+			continue
+		}
+		if _, unloaded := input.UnloadedTenants[t]; unloaded {
+			continue
+		}
+		out = append(out, t)
+	}
+	sort.Strings(out)
+	return out
+}
+
 // checkEnforcedGroupBy reports each bad group_by element of the
 // `_routing_enforced` route(s) the generator renders (#2503,
 // routingpolicy.EnforcedGroupByInvalid — the generator's --strict ERROR),
-// the `{{tenant}}` shape once per tenant with a resolved routing (the
-// generator expands it over its routing_configs). A platform-file finding:
-// empty TenantID, Field `<file>:<path>`, as platformProblemFindings spells it.
-func checkEnforcedGroupBy(enforced *routingpolicy.Enforced, routing map[string]map[string]any, tenants []string) []Finding {
-	routed := make([]string, 0, len(tenants))
-	for _, t := range tenants {
-		if routing[t] != nil {
-			routed = append(routed, t)
-		}
-	}
+// the `{{tenant}}` shape once per tenant of tenants (enforcedRouteTenants:
+// every tenant, routed or not, #2519). A platform-file finding: empty
+// TenantID, Field `<file>:<path>`, as platformProblemFindings spells it.
+func checkEnforcedGroupBy(enforced *routingpolicy.Enforced, tenants []string) []Finding {
 	var out []Finding
-	for _, p := range routingpolicy.EnforcedGroupByInvalid(enforced, routed) {
+	for _, p := range routingpolicy.EnforcedGroupByInvalid(enforced, tenants) {
 		out = append(out, Finding{
 			Severity: SeverityError,
 			Kind:     FindingRoutingGroupByInvalid,
