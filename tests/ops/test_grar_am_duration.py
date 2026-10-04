@@ -169,3 +169,59 @@ def test_strict_policy_reads_alertmanager_units():
     msgs = check_domain_policies({"tenant-x": {"repeat_interval": "1d"}},
                                  _policy({"max_repeat_interval": "12h"}), strict=True)
     assert any("exceeds max" in m for m in msgs), msgs
+
+
+# ── explain-route says which values were replaced ─────────────────────────
+
+def _explain_tree(tmp_path: Path) -> Path:
+    return _tree(tmp_path,
+                 "      group_wait: \"1.5m\"\n"
+                 "      overrides:\n        - alertname: A\n"
+                 "          repeat_interval: \"30m1h\"\n"
+                 "          receiver:\n            type: webhook\n"
+                 "            url: https://hooks.example.com/b\n"
+                 "        - alertname: B\n")
+
+
+def test_explain_lists_replaced_values_apart_from_skipped(tmp_path):
+    """The main route's group_wait 1.5m renders as 30s (and --validate
+    fails); explain-route used to show only the merged 1.5m."""
+    explain_route = importlib.import_module("explain_route")
+    gar = importlib.import_module("generate_alertmanager_routes")
+    exp = explain_route.explain_tenant_routing(
+        gar._parse_config_files(str(_explain_tree(tmp_path))), "t1")
+    replaced = exp["replaced_values"]
+    assert len(replaced) == 2, replaced
+    assert any("invalid group_wait '1.5m'" in w and "30s" in w for w in replaced)
+    assert any("t1-override-0" in w and "'30m1h'" in w for w in replaced)
+    # Kept apart: the skipped list still holds only the dropped override.
+    assert len(exp["skipped_sub_routes"]) == 1
+    assert "override[1] missing 'receiver'" in exp["skipped_sub_routes"][0]
+    text = explain_route.format_explanation(exp)
+    assert "Replaced by the generator" in text
+    block = text.split("Replaced by the generator")[1]
+    assert "invalid group_wait '1.5m'" in block
+    zh = explain_route.format_explanation(exp, lang="zh")
+    assert "產生器以平台預設值頂替" in zh
+
+
+def test_explain_json_carries_replaced_values(tmp_path):
+    import json
+    d = _explain_tree(tmp_path)
+    r = subprocess.run(
+        [sys.executable, str(OPS_DIR / "explain_route.py"), "--config-dir", str(d),
+         "--tenant", "t1", "--json"],
+        capture_output=True, text=True, encoding="utf-8", timeout=120)
+    assert r.returncode == 0, r.stdout + r.stderr
+    [doc] = json.loads(r.stdout)
+    assert len(doc["replaced_values"]) == 2, doc
+    assert len(doc["skipped_sub_routes"]) == 1
+
+
+def test_explain_clean_tenant_has_empty_replaced_values(tmp_path):
+    explain_route = importlib.import_module("explain_route")
+    gar = importlib.import_module("generate_alertmanager_routes")
+    d = _tree(tmp_path, "      group_wait: \"30s\"\n")
+    exp = explain_route.explain_tenant_routing(gar._parse_config_files(str(d)), "t1")
+    assert exp["replaced_values"] == []
+    assert "Replaced by the generator" not in explain_route.format_explanation(exp)

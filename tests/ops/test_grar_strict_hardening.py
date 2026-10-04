@@ -120,6 +120,26 @@ class TestStrictFailOpenClosures:
         policies = self._one_policy({"max_repeat_interval": "1h"})
         strict = check_domain_policies(routing, policies, strict=True)
         assert any("exceeds max" in m for m in strict), strict
+        # #2490: 非 strict 原本鎖成 []（舊單一單位 parser 讀不出 1h30m → 靜默
+        # 跳過）。那時產生器也把 1h30m 換成 4h，靜默不算漏報；現在產生器把
+        # 1h30m 原樣交給 Alertmanager，verbatim 保留就會漏報一個實際送出、
+        # 且超過上限的值。故租戶端改讀 AM 語法，非 strict 印 WARN（exit code 不變）。
+        lenient = check_domain_policies(routing, policies)
+        assert len(lenient) == 1, lenient
+        assert lenient[0].startswith("  WARN: ") and "exceeds max '1h'" in lenient[0]
+
+    def test_multiunit_tenant_group_wait_lenient_warns(self):
+        """#2490: 同上，min_group_wait 那一側。"""
+        routing = {"tenant-x": {"group_wait": "0m4s"}}
+        policies = self._one_policy({"min_group_wait": "5s"})
+        lenient = check_domain_policies(routing, policies)
+        assert len(lenient) == 1, lenient
+        assert lenient[0].startswith("  WARN: ") and "below minimum '5s'" in lenient[0]
+
+    def test_lenient_does_not_report_a_value_alertmanager_refuses(self):
+        """讀不出的租戶值不在這裡報：產生器自己的 ReplacedValueWarning 會擋。"""
+        routing = {"tenant-x": {"repeat_interval": "1.5h"}}
+        policies = self._one_policy({"max_repeat_interval": "1h"})
         assert check_domain_policies(routing, policies) == []
 
     def test_multiunit_constraint_value_strict_enforced(self):

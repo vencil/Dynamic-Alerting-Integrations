@@ -2208,15 +2208,19 @@ def check_domain_policies(
                                     f"'{max_repeat}' or less, or raise the "
                                     f"policy's max_repeat_interval"))
                 elif max_repeat:
-                    # Legacy lenient path — deliberately verbatim (truthiness
-                    # skips and single-unit parser included) so non-strict
-                    # output stays byte-identical. #2490 left it so: a value
-                    # Alertmanager refuses is the generator's own blocking
-                    # line now, whatever this path says about it.
+                    # Legacy lenient path — truthiness skips and the policy
+                    # bound's single-unit parser kept verbatim. #2490: the
+                    # TENANT's value is read as Alertmanager reads it
+                    # (_rendered_duration). Verbatim kept, the widened value
+                    # range would be under-reported: the generator now hands
+                    # 1h30m to Alertmanager as written, and the old parser
+                    # could not read it, so a value over the ceiling went
+                    # unmentioned. A value Alertmanager refuses (None) is not
+                    # reported here — the generator's own blocking line is.
                     tenant_repeat = rc.get("repeat_interval")
                     if tenant_repeat:
                         legacy_max = parse_duration_seconds(max_repeat)
-                        legacy_val = parse_duration_seconds(tenant_repeat)
+                        legacy_val = _rendered_duration(tenant_repeat)
                         if legacy_max and legacy_val and legacy_val > legacy_max:
                             messages.append(_fmt(
                                 f"domain_policy '{policy_name}', "
@@ -2252,11 +2256,11 @@ def check_domain_policies(
                                     f"'{min_group_wait}' or more, or lower the "
                                     f"policy's min_group_wait"))
                 elif min_group_wait:
-                    # Legacy lenient path — deliberately verbatim (see above).
+                    # Legacy lenient path (see above; tenant side #2490).
                     tenant_gw = rc.get("group_wait")
                     if tenant_gw:
                         legacy_min = parse_duration_seconds(min_group_wait)
-                        legacy_val = parse_duration_seconds(tenant_gw)
+                        legacy_val = _rendered_duration(tenant_gw)
                         if legacy_min and legacy_val and legacy_val < legacy_min:
                             messages.append(_fmt(
                                 f"domain_policy '{policy_name}', "

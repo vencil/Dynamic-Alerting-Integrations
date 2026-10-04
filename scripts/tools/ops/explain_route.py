@@ -67,6 +67,7 @@ from _grar_routes import enforced_route_tenants  # noqa: E402
 # #2326: the layer chain across conf.d directory levels — the generator's own.
 from _grar_merge import (  # noqa: E402
     ROOT_LEVEL,
+    ReplacedValueWarning,
     SkippedEntryWarning,
     domain_policy_levels,
     policy_reaches,
@@ -90,6 +91,13 @@ SUB_ROUTE_SOURCE_KEYS = ("overrides", "routes")
 
 
 def effective_sub_routes(tenant: str, merged: dict) -> tuple[list[dict], list[str]]:
+    """``(sub_routes, skipped)`` of :func:`rendered_tenant_routes`."""
+    sub_routes, skipped, _replaced = rendered_tenant_routes(tenant, merged)
+    return sub_routes, skipped
+
+
+def rendered_tenant_routes(tenant: str, merged: dict
+                           ) -> tuple[list[dict], list[str], list[str]]:
     """The child routes the generator renders under the tenant's main route.
 
     Computed by the generator itself (``_build_tenant_routes``) from the
@@ -100,9 +108,14 @@ def effective_sub_routes(tenant: str, merged: dict) -> tuple[list[dict], list[st
     ``skipped`` is every dropped-entry line (``SkippedEntryWarning``, #2489)
     the generator emitted for an override / ``routes`` entry. No domain allowlist is applied here
     (explain has no ``--policy``).
+
+    #2490: also returns ``replaced`` — every ``ReplacedValueWarning`` line
+    (a timing value Alertmanager refuses, rendered as the platform default;
+    ``--validate`` fails on it) for the main route and its sub-routes. Kept
+    apart from ``skipped``: those entries ARE rendered, with another value.
     """
     if not isinstance(merged, dict) or not merged.get("receiver"):
-        return [], []
+        return [], [], []
     routes, receivers, warnings = _build_tenant_routes({tenant: merged})
     types: dict[str, str] = {}
     for recv in receivers:
@@ -130,7 +143,8 @@ def effective_sub_routes(tenant: str, merged: dict) -> tuple[list[dict], list[st
     skipped = [w for w in warnings
                if isinstance(w, SkippedEntryWarning)
                and any(m in w for m in markers)]
-    return out, skipped
+    replaced = [w for w in warnings if isinstance(w, ReplacedValueWarning)]
+    return out, skipped, replaced
 
 def explain_tenant_routing(
     parsed: dict,
@@ -139,7 +153,8 @@ def explain_tenant_routing(
     """Build a layer-by-layer explanation of a tenant's routing merge.
 
     Returns dict with keys:
-        tenant, profile_ref, layers, final
+        tenant, profile_ref, layers, final, sub_routes, skipped_sub_routes,
+        replaced_values (#2490)
     Each layer is {name, source, config}.
     """
     layers: list[dict] = []
@@ -205,7 +220,7 @@ def explain_tenant_routing(
     final = dict(merged)
 
     # #2245: what the generator actually renders from `overrides` / `routes`.
-    sub_routes, skipped = effective_sub_routes(tenant, merged)
+    sub_routes, skipped, replaced = rendered_tenant_routes(tenant, merged)
 
     return {
         "tenant": tenant,
@@ -214,6 +229,8 @@ def explain_tenant_routing(
         "final": final,
         "sub_routes": sub_routes,
         "skipped_sub_routes": skipped,
+        # #2490: values the generator replaced (blocking under --validate).
+        "replaced_values": [str(w) for w in replaced],
     }
 
 
@@ -296,6 +313,19 @@ def format_explanation(explanation: dict, *, lang: str = "en") -> str:
     for line in _fmt_yaml(final).splitlines():
         lines.append(f"   {line}")
     lines.append("")
+
+    # #2490: the merged value above is what was WRITTEN; these are rendered
+    # as the platform default instead, and --validate refuses the config.
+    replaced = explanation.get("replaced_values", [])
+    if replaced:
+        header = ("產生器以平台預設值頂替（Alertmanager 不接受原值；--validate 會擋）:"
+                  if lang == "zh" else
+                  "Replaced by the generator (Alertmanager refuses the value as "
+                  "written; --validate fails):")
+        lines.append(f"── {header} ──")
+        for w in replaced:
+            lines.append(f"   {safe_label(w.strip())}")
+        lines.append("")
 
     sub_routes = explanation.get("sub_routes", [])
     skipped = explanation.get("skipped_sub_routes", [])
