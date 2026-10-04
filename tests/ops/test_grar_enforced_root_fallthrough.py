@@ -52,18 +52,23 @@ _TENANTS = {
     "t-silent": ("    _silent_mode: warning\n", False),         # _silent_mode only
     "t-off": ("    _routing: disable\n", False),               # routing opted out
     "t-refused": ("    _routing: [1, 2]\n", False),            # _routing refused
+    # main receiver skipped (unsupported type): no tenant route is rendered
+    "t-skipped": ("    _routing:\n      receiver: {type: carrier-pigeon}\n", False),
     "t-routed": ("    _routing:\n      receiver: {type: webhook, "
                  "url: \"https://r.example.com/hook\"}\n", True),
 }
 _UNROUTED = sorted(t for t, (_b, routed) in _TENANTS.items() if not routed)
 
 
-def _tree(tmp_path: Path, enforced: str, name: str = "conf.d") -> Path:
+def _tree(tmp_path: Path, enforced: str, name: str = "conf.d",
+          exclude: tuple[str, ...] = ()) -> Path:
     d = tmp_path / name
     d.mkdir()
     (d / "_defaults.yaml").write_text(
         "defaults:\n  cpu_usage_percent: 80\n" + enforced, encoding="utf-8")
     for tid, (body, _routed) in _TENANTS.items():
+        if tid in exclude:
+            continue
         (d / f"{tid}.yaml").write_text(f"tenants:\n  {tid}:\n{body}", encoding="utf-8")
     return d
 
@@ -181,9 +186,10 @@ def test_apply_merge_pins_the_cluster_root(tmp_path):
 
 
 def test_validate_config_routes_row_counts_the_fallthroughs(tmp_path):
-    row = vc.check_routes(str(_tree(tmp_path, _PER_TENANT)))
-    n_recv = len(_TENANTS) + 1
-    n_routes = n_recv + len(_UNROUTED)
+    # t-skipped is a skipped entry, which fails the row before it counts.
+    row = vc.check_routes(str(_tree(tmp_path, _PER_TENANT, exclude=("t-skipped",))))
+    n_recv = len(_TENANTS) - 1 + 1
+    n_routes = n_recv + len(_UNROUTED) - 1
     assert row["details"][0].startswith(
         f"{n_routes} routes, {n_recv} receivers, "), row
 
@@ -208,3 +214,18 @@ def test_amtool_agrees_with_the_model(tmp_path, base_name):
             + [f"{k}={v}" for k, v in sorted(_labels(tid).items())],
             capture_output=True, text=True, encoding="utf-8", check=False, timeout=60)
         assert p.returncode == 0, (tid, want, p.stdout, p.stderr)
+
+
+def test_skipped_main_receiver_gets_root_back(tmp_path):
+    """A tenant whose `_routing` main receiver the generator skips (an
+    unsupported type here; a domain policy refusal is the same branch) renders
+    no tenant route, so it is an unrouted tenant: the base delivery (the root)
+    plus its enforced route."""
+    base = load_base_config(None)
+    without = _assembled(_tree(tmp_path, "", "plain"), base)
+    with_enf = _assembled(_tree(tmp_path, _PER_TENANT), base)
+    assert _deliver(without["route"], _labels("t-skipped")) == ["default"]
+    assert _deliver(with_enf["route"], _labels("t-skipped")) == [
+        "platform-enforced-t-skipped", "default"]
+    routes, _r, warnings, _i = _generate(_tree(tmp_path, _PER_TENANT, "again"))
+    assert any("t-skipped" in w for w in warnings), warnings

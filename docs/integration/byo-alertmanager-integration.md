@@ -148,6 +148,8 @@ da-tools generate-routes --config-dir conf.d/ --validate --policy .github/custom
 - `receivers[]`: Per-tenant receiver（webhook/email/slack/teams/rocketchat/pagerduty）
 - `inhibit_rules[]`: Per-tenant severity dedup rules
 
+⚠️ 手動合併 fragment 時，fragment 的 `route.routes` 必須放在 root 子 route 的**最後**。若接在你自己的子 route 之前，沒有 tenant route 的租戶的告警會被 fragment 裡的尾端 route（只帶 `tenant="<id>"`、不帶 `continue`）交回 root receiver，到不了後面你自己的子 route（[#2519](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/2519)）。
+
 ### Step 5: Merge into Alertmanager ConfigMap
 
 將產出的 fragment 合併至 Alertmanager 主配置。**兩種模式根據部署流程選擇：**

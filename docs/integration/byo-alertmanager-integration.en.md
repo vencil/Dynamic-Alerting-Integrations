@@ -154,6 +154,8 @@ Generated output includes:
 - `receivers[]`: Per-tenant receiver (webhook/email/slack/teams/rocketchat/pagerduty)
 - `inhibit_rules[]`: Per-tenant severity dedup rules
 
+⚠️ When merging the fragment by hand, put the fragment's `route.routes` **last** among the root's child routes. Placed before your own child routes, the alerts of a tenant without a tenant route are handed back to the root receiver by the fragment's trailing route (matching only `tenant="<id>"`, no `continue`) and never reach your later child routes ([#2519](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/2519)).
+
 ### Step 5: Merge into Alertmanager ConfigMap
 
 Merge the generated fragment into the Alertmanager main configuration. **Choose one of two modes based on your deployment flow:**
