@@ -25,7 +25,10 @@ name: Nightly Image CVE Scan
 # Scope honesty: da-tools is built with STUBBED Go binaries (zero-byte, mirroring
 # component-docker-build.yaml's COPY-path stub) — its OS/base-image CVEs ARE
 # scanned, but its FIRST-PARTY Go binaries' module CVEs are NOT here (covered by
-# release.yaml's real-build scan + Go CI / CodeQL govulncheck). The exception is
+# release.yaml's real-build scan only — no govulncheck runs anywhere in this
+# repo, and CodeQL's default setup analyses code, not module advisories; the
+# vendored gopkg.in/yaml.v3 is invisible to every scan, see
+# components/threshold-exporter/app/third_party/README.md). The exception is
 # the bundled upstream amtool (#2294): it is COPYed --from the real Alertmanager
 # image, not stubbed, so its module CVEs ARE scanned here. The other images build
 # real, so their full image surface is scanned.

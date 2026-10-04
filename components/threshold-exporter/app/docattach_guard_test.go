@@ -207,7 +207,10 @@ func scanDocAttachment(root string) ([]docAttachFinding, int, error) {
 		}
 		if d.IsDir() {
 			switch d.Name() {
-			case "vendor", "testdata", "node_modules", ".git":
+			// third_party holds vendored upstream source (#2681), pinned
+			// byte for byte by tests/ops/test_vendored_yaml_v3.py: a finding
+			// there could not be fixed without breaking that pin.
+			case "vendor", "third_party", "testdata", "node_modules", ".git":
 				return filepath.SkipDir
 			}
 			return nil

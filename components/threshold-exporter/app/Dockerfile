@@ -12,6 +12,9 @@ FROM --platform=$BUILDPLATFORM golang:1.26.8-alpine3.23 AS builder
 
 WORKDIR /app
 COPY go.mod go.sum ./
+# go.mod replaces gopkg.in/yaml.v3 with this in-context directory (#2681);
+# `go mod download` reads the replacement's go.mod, so it must be here first.
+COPY third_party ./third_party
 RUN go mod download
 
 # main package files live at app root; pkg/ holds the config library the

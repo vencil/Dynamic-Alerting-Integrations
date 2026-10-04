@@ -29,6 +29,10 @@ COPY components/tenant-api/go.mod components/tenant-api/go.sum \
      components/tenant-api/
 COPY components/threshold-exporter/app/go.mod components/threshold-exporter/app/go.sum \
      components/threshold-exporter/app/
+# Both go.mod files replace gopkg.in/yaml.v3 with this directory (#2681), and
+# `go mod download` reads the replacement's go.mod.
+COPY components/threshold-exporter/app/third_party/ \
+     components/threshold-exporter/app/third_party/
 
 WORKDIR /src/components/tenant-api
 RUN go mod download

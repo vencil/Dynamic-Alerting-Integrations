@@ -65,3 +65,7 @@ require (
 )
 
 replace github.com/vencil/threshold-exporter => ../threshold-exporter/app
+
+// #2681: v3.0.1 plus a linear duplicate-key check; see
+// ../threshold-exporter/app/third_party/README.md.
+replace gopkg.in/yaml.v3 => ../threshold-exporter/app/third_party/yaml.v3
