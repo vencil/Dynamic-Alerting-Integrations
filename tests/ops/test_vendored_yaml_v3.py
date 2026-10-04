@@ -145,32 +145,95 @@ def test_vendored_tree_is_v3_0_1_plus_only_the_hunk() -> None:
         "never edit these files by hand.")
 
 
-def _go() -> str:
-    go = shutil.which("go") or ("/usr/local/go/bin/go" if Path("/usr/local/go/bin/go").is_file() else None)
-    if go is None:
-        pytest.skip("no `go` on PATH: the replace check asks `go mod edit -json`, which "
-                    "is Go's own parser — a regex here was bypassable (#2681 review)")
-    return go
+def _tokens(line: str) -> list[str]:
+    """One go.mod line as Go's lexer splits it: `//` comments dropped, "…"
+    strings unquoted, `(` `)` `=>` as their own tokens.
 
-
-def _yaml_v3_replaces(gomod: Path) -> list[dict]:
-    """Every `replace` of gopkg.in/yaml.v3 in gomod, as Go itself parses it.
-
-    `go mod edit -json` reads both the one-line and the `replace ( … )` block
-    forms, with or without a version on either side. GOTOOLCHAIN=local: this
-    parses, it builds nothing, so no toolchain download is wanted.
+    Only double quotes: Go rejects a backquoted path in go.mod ("invalid quoted
+    string", measured with go mod edit), so a backquote fails closed here too.
     """
-    proc = subprocess.run(
-        [_go(), "mod", "edit", "-json", str(gomod)],
-        capture_output=True, text=True, encoding="utf-8", timeout=60,
-        env={**os.environ, "GOTOOLCHAIN": "local", "GOFLAGS": ""})
-    assert proc.returncode == 0, f"go mod edit -json {gomod}: rc={proc.returncode} {proc.stderr}"
-    return [r for r in (json.loads(proc.stdout).get("Replace") or [])
-            if r["Old"]["Path"] == _MODULE]
+    out: list[str] = []
+    i, n = 0, len(line)
+    while i < n:
+        c = line[i]
+        if c.isspace():
+            i += 1
+        elif line.startswith("//", i):
+            break
+        elif line.startswith("=>", i):
+            out.append("=>")
+            i += 2
+        elif c in "()":
+            out.append(c)
+            i += 1
+        elif c == '"':
+            j = i + 1
+            while j < n and line[j] != '"':
+                j += 2 if line[j] == "\\" else 1
+            if j >= n:
+                raise AssertionError(f"unterminated string in go.mod line {line!r}")
+            try:
+                out.append(json.loads(line[i:j + 1]))
+            except ValueError as e:
+                raise AssertionError(f"unreadable string in go.mod line {line!r}: {e}") from e
+            i = j + 1
+        elif c == "`":
+            raise AssertionError(f"backquoted string in go.mod line {line!r} (Go rejects it)")
+        else:
+            j = i
+            while (j < n and not line[j].isspace() and line[j] not in '()"`'
+                   and not line.startswith("//", j) and not line.startswith("=>", j)):
+                j += 1
+            out.append(line[i:j])
+            i = j
+    return out
 
 
-def _replace_problems(gomod: Path, target: str, base: Path | None = None) -> list[str]:
-    found = _yaml_v3_replaces(gomod)
+def _parse_replaces(text: str) -> list[dict]:
+    """Every `replace` directive in a go.mod, in `go mod edit -json` shape.
+
+    Pure Python on purpose: the guard must run where no Go toolchain is
+    installed (CI's Python Tests job has no setup-go), or it is a check that
+    never runs. Handles the one-line and `replace ( … )` block forms, optional
+    versions on either side, trailing `//` comments and quoted paths.
+    """
+    out: list[dict] = []
+    in_block = False
+    for lineno, line in enumerate(text.splitlines(), 1):
+        toks = _tokens(line)
+        if not toks:
+            continue
+        if in_block:
+            if toks == [")"]:
+                in_block = False
+                continue
+            spec = toks
+        elif toks[0] == "replace":
+            if toks[1:] == ["("]:
+                in_block = True
+                continue
+            spec = toks[1:]
+        else:
+            continue
+        if "=>" not in spec:
+            raise AssertionError(f"go.mod:{lineno}: replace without `=>`: {line!r}")
+        k = spec.index("=>")
+        old, new = spec[:k], spec[k + 1:]
+        if len(old) not in (1, 2) or len(new) not in (1, 2):
+            raise AssertionError(f"go.mod:{lineno}: malformed replace: {line!r}")
+        entry: dict = {"Old": {"Path": old[0]}, "New": {"Path": new[0]}}
+        if len(old) == 2:
+            entry["Old"]["Version"] = old[1]
+        if len(new) == 2:
+            entry["New"]["Version"] = new[1]
+        out.append(entry)
+    if in_block:
+        raise AssertionError("go.mod: unterminated `replace (` block")
+    return out
+
+
+def _replace_problems(text: str, target: str, base: Path) -> list[str]:
+    found = [r for r in _parse_replaces(text) if r["Old"]["Path"] == _MODULE]
     if len(found) != 1:
         return [f"{len(found)} replace(s) of {_MODULE}, want exactly 1: {found}"]
     (r,) = found
@@ -180,14 +243,29 @@ def _replace_problems(gomod: Path, target: str, base: Path | None = None) -> lis
                         "cover every version")
     if r["New"]["Path"] != target or r["New"].get("Version"):
         problems.append(f"New is {r['New']}, want the directory {target!r}")
-    elif ((base or gomod.parent) / target).resolve() != _VENDORED.resolve():
-        problems.append(f"{target!r} does not resolve to {_VENDORED}")
+    elif (not (base / target / "go.mod").is_file()
+          or (base / target).resolve() != _VENDORED.resolve()):
+        problems.append(f"{target!r} is not the vendored module {_VENDORED}")
     return problems
+
+
+_EXPORTER_GOMOD = ROOT / "components" / "threshold-exporter" / "app" / "go.mod"
+_LINE = "replace gopkg.in/yaml.v3 => ./third_party/yaml.v3"
+
+
+def _exporter_with(old: str, new: str) -> str:
+    text = _EXPORTER_GOMOD.read_text(encoding="utf-8")
+    assert text.count(old) == 1, f"the exporter go.mod no longer has {old!r}"
+    return text.replace(old, new)
+
+
+def _exporter_problems(text: str) -> list[str]:
+    return _replace_problems(text, _REPLACES[_EXPORTER_GOMOD], _EXPORTER_GOMOD.parent)
 
 
 def test_both_modules_build_with_the_vendored_copy() -> None:
     for gomod, target in _REPLACES.items():
-        problems = _replace_problems(gomod, target)
+        problems = _replace_problems(gomod.read_text(encoding="utf-8"), target, gomod.parent)
         assert not problems, f"{gomod.relative_to(ROOT)}: {problems}"
 
 
@@ -195,27 +273,55 @@ def test_both_modules_build_with_the_vendored_copy() -> None:
     "replace gopkg.in/yaml.v3 v3.0.1 => ../elsewhere\n",
     "replace (\n\tgopkg.in/yaml.v3 v3.0.1 => ../elsewhere\n)\n",
 ])
-def test_an_extra_versioned_replace_is_caught(tmp_path: Path, extra: str) -> None:
+def test_an_extra_versioned_replace_is_caught(extra: str) -> None:
     """Go prefers a versioned replace over the unversioned one, so this line
     would silently swap the vendored copy out; the check must count it."""
-    gomod = ROOT / "components" / "threshold-exporter" / "app" / "go.mod"
-    target = _REPLACES[gomod]
-    fake = tmp_path / "app" / "go.mod"
-    fake.parent.mkdir()
-    fake.write_text(gomod.read_text(encoding="utf-8") + extra, encoding="utf-8")
-    assert _replace_problems(fake, target, base=gomod.parent) != []
+    text = _EXPORTER_GOMOD.read_text(encoding="utf-8") + extra
+    assert _exporter_problems(text) != []
 
 
-def test_a_block_form_replace_is_read(tmp_path: Path) -> None:
-    gomod = ROOT / "components" / "threshold-exporter" / "app" / "go.mod"
-    text = gomod.read_text(encoding="utf-8").replace(
-        "replace gopkg.in/yaml.v3 => ./third_party/yaml.v3",
-        "replace (\n\tgopkg.in/yaml.v3 => ./third_party/yaml.v3\n)")
-    assert "replace (" in text
-    fake = tmp_path / "app" / "go.mod"
-    fake.parent.mkdir()
-    fake.write_text(text, encoding="utf-8")
-    assert _replace_problems(fake, "./third_party/yaml.v3", base=gomod.parent) == []
+def test_a_block_form_replace_is_read() -> None:
+    text = _exporter_with(_LINE, "replace (\n\tgopkg.in/yaml.v3 => ./third_party/yaml.v3\n)")
+    assert _exporter_problems(text) == []
+
+
+def test_a_trailing_comment_is_ignored() -> None:
+    assert _exporter_problems(_exporter_with(_LINE, _LINE + " // => ../elsewhere")) == []
+    # A commented-out directive is no directive: zero replaces, so red.
+    assert _exporter_problems(_exporter_with(_LINE, "// " + _LINE)) != []
+
+
+def test_quoted_paths_are_unquoted() -> None:
+    quoted = 'replace "gopkg.in/yaml.v3" => "./third_party/yaml.v3"'
+    assert _exporter_problems(_exporter_with(_LINE, quoted)) == []
+    extra = '\nreplace "gopkg.in/yaml.v3" v3.0.1 => "../elsewhere"\n'
+    assert _exporter_problems(_EXPORTER_GOMOD.read_text(encoding="utf-8") + extra) != []
+    with pytest.raises(AssertionError, match="backquoted"):
+        _parse_replaces('replace gopkg.in/yaml.v3 => `./third_party/yaml.v3`\n')
+
+
+@pytest.mark.parametrize("gomod", sorted(_REPLACES), ids=lambda p: p.parent.name)
+def test_python_parser_agrees_with_go(gomod: Path, tmp_path: Path) -> None:
+    """Cross-check only: the guard above never needs Go, this one does."""
+    go = shutil.which("go")
+    if go is None:
+        pytest.skip("no `go` on PATH; the pure-Python replace guard still ran")
+    samples = {
+        "real": gomod.read_text(encoding="utf-8"),
+        "tricky": gomod.read_text(encoding="utf-8") + (
+            'replace(\n\t"gopkg.in/yaml.v3" v3.0.1 => "../elsewhere" // c\n'
+            "\texample.com/a => example.com/b v1.2.3\n)\n"
+            'replace "example.com/c" => ./d // "quoted" => in a comment\n'),
+    }
+    for name, text in samples.items():
+        f = tmp_path / f"{name}.mod"
+        f.write_text(text, encoding="utf-8")
+        proc = subprocess.run(
+            [go, "mod", "edit", "-json", str(f)], capture_output=True, text=True,
+            encoding="utf-8", timeout=60,
+            env={**os.environ, "GOTOOLCHAIN": "local", "GOFLAGS": ""})
+        assert proc.returncode == 0, f"go mod edit -json {name}: {proc.stderr}"
+        assert _parse_replaces(text) == (json.loads(proc.stdout).get("Replace") or []), name
 
 
 # ── the guard catches what it exists to catch ──────────────────────────────
