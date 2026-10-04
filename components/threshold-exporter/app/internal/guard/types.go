@@ -94,6 +94,11 @@
 //     writes as null, which declares nothing, so the exporter serves no
 //     series for it. The set is the build's (CheckInput.RootNullUndeclared).
 //
+//  10. Nulls inside a schedule with override windows (#2708; see
+//     schedule_null.go), error: a window's `value: null`, or a null
+//     `default:` beside windows. The set is pkg/config's
+//     (CheckInput.ScheduleNulls).
+//
 // Future PRs in the C-12 family:
 //   - PR-4: CLI subcommand `da-tools guard defaults-impact` plus
 //     YAML parsing convenience layer that runs the actual merge
@@ -478,4 +483,10 @@ type CheckInput struct {
 	// root_default_null_undeclared warning for a tenant in EffectiveConfigs
 	// (#2518); nil skips the check.
 	RootNullUndeclared map[string][]config.RootNullKey `json:"-"`
+
+	// ScheduleNulls are the thresholds, in the files the exporter reads that
+	// bear on the scope, written as a schedule with override windows and a
+	// null in it (config.ScopedTenants.ScheduleNulls). Each becomes a
+	// schedule_null_value error (#2708); nil skips the check.
+	ScheduleNulls []config.ScheduleNull `json:"-"`
 }

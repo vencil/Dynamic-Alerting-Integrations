@@ -47,9 +47,50 @@ import (
 )
 
 // nullThreshold reports whether (key, raw) is a threshold written as null —
-// a write of nothing. raw is the generic YAML decode of the value.
+// a write of nothing. raw is the generic YAML decode of the value: a null, or
+// a schedule that writes nothing (nullSchedule, #2708).
 func nullThreshold(key string, raw any) bool {
-	return raw == nil && !strings.HasPrefix(key, "_")
+	return (raw == nil || nullSchedule(raw)) && !strings.HasPrefix(key, "_")
+}
+
+// nullSchedule reports whether raw (a generic YAML decode) is a schedule that
+// writes nothing: a mapping whose `default:` is null and that has no override
+// window — `{default: null}`, `{default: null, overrides: []}` or
+// `{default: null, overrides: null}` (#2708).
+//
+// ⛔ EXACTLY PLAIN NULL, BY THE OWNER'S RULING. Before, the planes answered
+// three ways again: /metrics kept the empty ScheduledValue as a PRESENT key
+// (so the subtree overlay, the profile fill and the platform supply counted
+// it as written and resolve fell back to the ROOT default), while the walker
+// rendered `{default: null}` as the tenant's own value. Treating it as the
+// null it means puts it through every #2518 reader above unchanged.
+//
+// ⚠️ ONLY THOSE KEYS. `expires:` / `reason:` beside a null default, or any
+// other key, is a different shape and is left as it was. A schedule WITH a
+// window and a null anywhere in it is not a write of nothing either: da-guard
+// refuses it (scheduleNullProblems, schedule_null.go) and its runtime
+// reading is unchanged.
+func nullSchedule(raw any) bool {
+	m, ok := raw.(map[string]any)
+	if !ok {
+		return false
+	}
+	d, has := m["default"]
+	if !has || d != nil {
+		return false
+	}
+	for k, v := range m {
+		switch k {
+		case "default":
+		case "overrides":
+			if l, isList := v.([]any); v != nil && (!isList || len(l) > 0) {
+				return false
+			}
+		default:
+			return false
+		}
+	}
+	return true
 }
 
 // withoutNullThresholds returns m without its nullThreshold entries — m

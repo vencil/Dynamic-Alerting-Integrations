@@ -19,6 +19,7 @@ from __future__ import annotations
 import base64
 import binascii
 import fnmatch
+import json
 import os
 import re
 import sys
@@ -822,6 +823,54 @@ def _validate_version_label(tenant: str, key: str, base: str) -> list[str]:
             f"  WARN: {tenant}: version '{value}' in key '{key}' violates "
             f"{VERSION_LABEL_PATTERN} (ADR-024 OQ-6; pilot-calibratable)")
 
+    return out
+
+
+def is_null_schedule(value: object) -> bool:
+    """Go ``nullSchedule`` (pkg/config/null_threshold.go, #2708): a schedule
+    that writes nothing — a mapping whose ``default`` is null with no
+    override window (``{default: null}``, ``overrides: []`` or
+    ``overrides: null``) and no other key. It means exactly what a plain
+    null means."""
+    if not isinstance(value, dict) or "default" not in value \
+            or value["default"] is not None:
+        return False
+    for k, v in value.items():
+        if k == "default":
+            continue
+        if k == "overrides" and (v is None or (isinstance(v, list) and not v)):
+            continue
+        return False
+    return True
+
+
+def writes_nothing(key: object, value: object) -> bool:
+    """Go ``nullThreshold`` (#2518, #2708): a threshold key (no ``_``
+    prefix) written as null or as a null schedule (``is_null_schedule``) is
+    no write. A reserved key's null is ADR-017's delete, not this."""
+    if isinstance(key, str) and key.startswith("_"):
+        return False
+    return value is None or is_null_schedule(value)
+
+
+def schedule_null_problems(value: object) -> list[str]:
+    """Go ``scheduleNullProblems`` (pkg/config/schedule_null.go, #2708):
+    each null inside a schedule (a mapping with a ``default`` key) that has
+    override windows — a null ``default`` beside them, or a window's
+    ``value: null``. Empty for anything else. The wording is Go's."""
+    if not isinstance(value, dict) or "default" not in value:
+        return []
+    windows = value.get("overrides")
+    if not isinstance(windows, list) or not windows:
+        return []
+    out = []
+    if value["default"] is None:
+        out.append(f"`default:` is null beside {len(windows)} override window(s)")
+    for i, w in enumerate(windows):
+        if isinstance(w, dict) and "value" in w and w["value"] is None:
+            win = w.get("window")
+            win_text = json.dumps(win) if isinstance(win, str) else str(win)
+            out.append(f"`overrides[{i}]` (window {win_text}) has `value: null`")
     return out
 
 

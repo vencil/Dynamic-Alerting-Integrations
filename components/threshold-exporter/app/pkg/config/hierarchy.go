@@ -1094,6 +1094,12 @@ func deepMerge(base, override map[string]any) map[string]any {
 			}
 			continue
 		}
+		if nullThreshold(k, v) {
+			// A schedule that writes nothing (`{default: null}`, #2708) is
+			// the null above: the defaults chain reaches here with one, and
+			// /metrics' subtree overlay skips it (not threshold-shaped).
+			continue
+		}
 		if overrideMap, ok := v.(map[string]any); ok {
 			if baseMap, ok2 := result[k].(map[string]any); ok2 {
 				result[k] = deepMerge(baseMap, overrideMap)

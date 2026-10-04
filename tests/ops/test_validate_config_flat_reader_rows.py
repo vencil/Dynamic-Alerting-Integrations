@@ -123,6 +123,12 @@ _CORPUS = [
                            "    severity: error\n")}, {
         "db-a.yaml": "tenants:\n  db-a:\n    mysql_connections: \"70\"\n"},
      [], True),
+    # #2708: a null inside a schedule with override windows — the
+    # schedule_null row, which reads the tenant files at every level.
+    ("null-inside-a-schedule-with-windows", {}, {
+        "db-a.yaml": ("tenants:\n  db-a:\n    mysql_connections: {default: \"70\", "
+                      "overrides: [{window: \"00:00-01:00\", value: null}]}\n")},
+     [], False),
 ]
 
 

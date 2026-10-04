@@ -1638,6 +1638,96 @@ def check_defaults_wrapper(config_dir: str) -> dict[str, object]:
         f"`defaults:` mapping"])
 
 
+def _schedule_null_lines(rel: str, where: str, body: object) -> list[str]:
+    """One FAIL line per threshold key of *body* (a mapping) written as a
+    schedule with override windows and a null in it (#2708). Reserved
+    (``_``-prefixed) keys are not thresholds and are not judged."""
+    if not isinstance(body, dict):
+        return []
+    tools_dir = os.path.dirname(os.path.abspath(__file__))
+    if tools_dir not in sys.path:
+        sys.path.insert(0, tools_dir)
+    from _grar_validate import schedule_null_problems
+    out = []
+    for key in sorted(k for k in body if isinstance(k, str)):
+        if key.startswith("_"):
+            continue
+        problems = schedule_null_problems(body[key])
+        if problems:
+            out.append(f"{rel}: `{where}{key}`: {'; '.join(problems)}")
+    return out
+
+
+def check_schedule_null(config_dir: str) -> dict[str, object]:
+    """A null inside a threshold schedule that has override windows (#2708).
+
+    A window's ``value: null``, or a null ``default:`` beside one or more
+    windows, has no defined meaning and is refused — the same set da-guard
+    reports as ``schedule_null_value``, judged by the same predicate
+    (``_grar_validate.schedule_null_problems``, Go ``scheduleNullProblems``).
+    ``{default: null}`` with no window is plain null (no write) and is not
+    this row's (a null in a tenant file is ``yaml_quoting``'s).
+
+    Files read, as the exporter reads them: every tenant file's
+    ``tenants:`` entries; each directory's selected ``_defaults.yaml``
+    carrier's defaults block (its ``defaults:`` mapping, else the whole
+    document, as the chain merge reads it); and every ``_`` file at the root
+    other than an unselected carrier — its ``tenants:`` entries and
+    ``profiles:``. A ``_`` file below the root that is not the selected
+    carrier is read by no plane. A file that does not load is left to
+    ``yaml_syntax``.
+    """
+    root = Path(config_dir)
+    by_dir: dict[Path, list[Path]] = {}
+    files = list(iter_config_files(root))
+    for p in files:
+        if is_defaults_name(p.name):
+            by_dir.setdefault(p.parent, []).append(p)
+    selected = set()
+    for d, carriers in by_dir.items():
+        readable, _unreadable = readable_carriers(carriers)
+        chosen = select_defaults_carrier(readable)
+        if chosen is not None:
+            selected.add(chosen)
+    details: list[str] = []
+    checked = 0
+    for p in sorted(files):
+        reserved = is_reserved_name(p.name)
+        at_root = p.parent == root
+        carrier = p in selected
+        if reserved and is_defaults_name(p.name) and not carrier:
+            continue  # an unselected carrier: no plane reads it (#1674)
+        if reserved and not at_root and not carrier:
+            continue  # a nested `_` file: read by no plane
+        try:
+            raw = load_yaml_file_strict_exporter_keys(str(p), default={})
+        except YamlFileError:
+            continue
+        if not isinstance(raw, dict):
+            continue
+        checked += 1
+        rel = p.relative_to(root).as_posix()
+        if carrier:
+            block = raw.get("defaults")
+            details += _schedule_null_lines(
+                rel, "defaults.", block if isinstance(block, dict) else raw)
+        if not reserved or at_root:
+            tenants = raw.get("tenants")
+            if isinstance(tenants, dict):
+                for tid, body in tenants.items():
+                    details += _schedule_null_lines(rel, f"tenants.{tid}.", body)
+        if reserved and at_root:
+            profiles = raw.get("profiles")
+            if isinstance(profiles, dict):
+                for name, body in profiles.items():
+                    details += _schedule_null_lines(rel, f"profiles.{name}.", body)
+    if details:
+        return _make_result("schedule_null", FAIL, details)
+    return _make_result("schedule_null", PASS, [
+        f"{checked} file(s): no null inside a threshold schedule with "
+        f"override windows"])
+
+
 def check_root_defaults(config_dir: str) -> dict[str, object]:
     """The ROOT `_defaults.yaml`'s `defaults:` as the exporter decodes it.
 
@@ -1870,6 +1960,14 @@ _CHECK_HINTS: dict[str, tuple[str, str]] = {
         "empty; and move routing settings to a top-level "
         "`_routing_defaults:` block (the only place platform routing "
         "defaults are read from).",
+        "docs/cli-reference.md#validate-config",
+    ),
+    # #2708: the row names the file, the key and where the null is.
+    "schedule_null": (
+        "Give each listed schedule's default and every override window a "
+        "value. To leave that layer without a value for the key, remove the "
+        "key or write it as plain null — `{default: null}` with no "
+        "`overrides:` means the same.",
         "docs/cli-reference.md#validate-config",
     ),
     # #2386: the row names the file and keys; where they go depends on level.
@@ -2428,6 +2526,11 @@ def main() -> None:
     # 11. `defaults:` mapping beside ignored top-level keys (#2386), every
     # level — unconditional: it changes what is served.
     results.append(_run_check("defaults_wrapper", check_defaults_wrapper,
+                              args.config_dir, _config_dir=args.config_dir))
+
+    # 12. A null inside a threshold schedule with override windows (#2708),
+    # every layer — unconditional: da-guard refuses the same set.
+    results.append(_run_check("schedule_null", check_schedule_null,
                               args.config_dir, _config_dir=args.config_dir))
 
     # Report
