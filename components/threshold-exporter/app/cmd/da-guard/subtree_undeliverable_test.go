@@ -202,16 +202,15 @@ func TestUndeliverable_SubtreeKeysReportedOrNot(t *testing.T) {
 			wantReserved: []string{"_silent_bogus"},
 		},
 		{
-			// ⚠️ KNOWN LIMITATION, pinned as it is (#1976 r4): a `_` key listed
-			// in optional_overrides counts as declared for the build's
-			// reachability test, so it is not refused — no finding, no
-			// exporter ERROR — yet resolveDeclaredRows skips every `_` key, so
-			// its value is still not served: it sits in `unserved` through the
-			// merged-map path, and `values` lacks it. This is why the finding's
-			// message names only the root for a `_` key.
+			// A non-reserved `_` key listed in optional_overrides does not
+			// count for the build's reachability test (#2707):
+			// resolveDeclaredRows skips every `_` key, so the subtree's value
+			// is refused and reported like an undeclared one. This is also
+			// why the finding's message names only the root for a `_` key.
 			name: "unrecognised-underscore-key-in-optional-overrides",
 			files: subtree(root+"optional_overrides:\n  - _myth\n",
 				"defaults:\n  _myth: 7\n"),
+			wantFindings: []string{"_myth"},
 			wantUnserved: map[string]any{"_myth": "7"},
 		},
 		{
@@ -304,6 +303,42 @@ func TestUndeliverable_SubtreeKeysReportedOrNot(t *testing.T) {
 				if v, served := doc.Tenants["tenant-a"].Values[k]; served {
 					t.Errorf("unserved key %q is also served: %v", k, v)
 				}
+			}
+		})
+	}
+}
+
+// A RESERVED key listed in optional_overrides keeps counting as declared
+// (#2707 gates non-reserved `_` keys only): this key's consumer
+// is not resolveDeclaredRows but ResolveStateFiltersAt, which reads the
+// tenant map directly. So a subtree `_state_maintenance` schedule whose
+// default is disable is applied and served as false at 12:00; the control
+// with no subtree value serves true. Pinned so a later change to the gate
+// cannot flip a maintenance filter silently — stopping reserved subtree
+// keys is #2388's, behind a warning first.
+func TestServedValues_ReservedKeyListedInOptionalOverridesKeepsSubtreeValue(t *testing.T) {
+	t.Parallel()
+	root := "defaults:\n  mysql_connections: 80\n" +
+		"state_filters:\n  maintenance:\n    reasons: [\"x\"]\n    severity: warning\n" +
+		"optional_overrides:\n  - _state_maintenance\n  - _metadata\n"
+	for _, tc := range []struct {
+		name, subtree string
+		want          bool
+	}{
+		{"subtree schedule, default disable", "defaults:\n  _state_maintenance:\n    default: disable\n" +
+			"    overrides:\n      - window: \"00:00-23:59\"\n        value: enable\n", false},
+		{"control: no subtree value", "defaults: {}\n", true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			code, doc, _, stderr := served(t, map[string]string{
+				"_defaults.yaml":         root,
+				"finance/_defaults.yaml": tc.subtree,
+				"finance/tenant-a.yaml":  "tenants:\n  tenant-a: {}\n",
+			}, "2026-10-01T12:00:00Z")
+			mustOK(t, code, stderr)
+			if got := doc.Tenants["tenant-a"].Values["_state_maintenance"]; got != tc.want {
+				t.Errorf("_state_maintenance = %v, want %v", got, tc.want)
 			}
 		})
 	}
