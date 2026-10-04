@@ -154,6 +154,8 @@ Generated output includes:
 - `receivers[]`: Per-tenant receiver (webhook/email/slack/teams/rocketchat/pagerduty)
 - `inhibit_rules[]`: Per-tenant severity dedup rules
 
+⚠️ When merging the fragment by hand, put the fragment's `route.routes` **last** among the root's child routes. Placed before your own child routes, the alerts of a tenant without a tenant route are handed back to the root receiver by the fragment's trailing route (matching only `tenant="<id>"`, no `continue`) and never reach your later child routes ([#2519](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/2519)).
+
 ### Step 5: Merge into Alertmanager ConfigMap
 
 Merge the generated fragment into the Alertmanager main configuration. **Choose one of two modes based on your deployment flow:**
@@ -449,7 +451,7 @@ _routing_enforced:
 
 **Mode B: Per-tenant Independent Channel **
 
-When the receiver field contains `{{tenant}}` placeholder, the system automatically creates an independent enforced route for each tenant. Platform can use this to establish tenant-specific notification channels that tenants cannot reject or override. ⚠️ Today only tenants with a routing configuration get this route — their own `_routing`, or one supplied by `_routing_defaults` or `_routing_profile`. Without platform `_routing_defaults`, a tenant that neither writes `_routing` nor references a profile is left out ([#2519](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/2519)):
+When the receiver field contains `{{tenant}}` placeholder, the system automatically creates an independent enforced route for each tenant. Platform can use this to establish tenant-specific notification channels that tenants cannot reject or override. "Each tenant" means every tenant the generator reads — the same set the severity-dedup inhibit rules cover: a tenant without `_routing` (thresholds only, or only `_silent_mode`) gets one too, and so does a tenant with `_routing: disable` or a refused `_routing` — a tenant cannot use either to leave this channel; the exception is an invalid tenant id, for which the generator refuses the whole tree. A tenant without a tenant route also gets a trailing route (matching only `tenant="<id>"`) that hands its alerts back to the root receiver, so the root still receives them and the enforced channel is an extra copy. Silent mode is suppressed by the base config's TenantSilent inhibit rules (the built-in base has none; bring them in with `--base-config`), which do not depend on the route. The route count therefore grows linearly with the tenant count ([#2519](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/2519)):
 
 ```yaml
 # conf.d/_defaults.yaml

@@ -684,6 +684,53 @@ func PyYAMLRoutingByTenant(data []byte) map[string]any {
 	return out
 }
 
+// PyYAMLTenantBodyNotMapping returns, per tenant id of one tenant file's
+// `tenants:` entries, true when PyYAML does not read the entry's body as a
+// mapping — a null body (`tenants:\n  t:\n`) above all, which the exporter
+// serves with the inherited defaults but the route generator does not load
+// (_grar_parse: "tenant ... must be a mapping ... that tenant is not
+// loaded"), so it is not in the generator's tenant set (dedup_configs, #2519)
+// unless a root platform file's entry gives it a mapping body
+// (Layers.PlatformBodies). Tenant ids are matched by source text, merge keys
+// expanded, as in PyYAMLRoutingByTenant. nil when the document does not parse
+// or has no such entries.
+func PyYAMLTenantBodyNotMapping(data []byte) map[string]bool {
+	top, err := parseDoc(data, false) // a tenant file, never a domain policy
+	if err != nil || top == nil {
+		return nil
+	}
+	t := lookup(top, "tenants")
+	if t == nil || t.Kind != yaml.MappingNode {
+		return nil
+	}
+	var out map[string]bool
+	for _, e := range mappingEntries(t) {
+		if !pyyamlMapping(e.value) {
+			if out == nil {
+				out = map[string]bool{}
+			}
+			out[e.key] = true
+		}
+	}
+	return out
+}
+
+// pyyamlMapping reports whether PyYAML's SafeLoader builds a mapping (Python
+// `dict`, the reader's isinstance test) from n. A value pyyamlcompat cannot
+// model is judged by the node's kind.
+func pyyamlMapping(n *yaml.Node) bool {
+	switch pyyamlcompat.Decode(n).(type) {
+	case map[string]any, map[any]any:
+		return true
+	case pyyamlcompat.Unsupported:
+		for n != nil && n.Kind == yaml.AliasNode {
+			n = n.Alias
+		}
+		return n != nil && n.Kind == yaml.MappingNode
+	}
+	return false
+}
+
 // routingNode is the `_routing` value node of a tenant entry body (the last
 // one, merge keys expanded), or nil.
 func routingNode(body *yaml.Node) *yaml.Node {

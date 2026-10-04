@@ -470,7 +470,11 @@ func buildCheckInput(scoped *config.ScopedTenants, f *flags) guard.CheckInput {
 
 	// #2295 / #2431: each tenant file's `_routing` blocks as PyYAML reads
 	// them, read once per file (a file declares many tenants, #2153); see pyyamlOwn.
+	// #2519: and which of its tenants' bodies PyYAML does not read as a
+	// mapping — the generator does not load those (a read error: none, so the
+	// tenant stays in the enforced set, as before).
 	pyRouting := map[string]map[string]any{}
+	pyNotMapping := map[string]map[string]bool{}
 	for _, ec := range scoped.Tenants {
 		if _, done := pyRouting[ec.SourceFile]; !done {
 			// A read error leaves nil: every receiver of the file's tenants
@@ -479,14 +483,19 @@ func buildCheckInput(scoped *config.ScopedTenants, f *flags) guard.CheckInput {
 			data, err := os.ReadFile(filepath.Join(config.AbsScanRoot(f.configDir), filepath.FromSlash(ec.SourceFile)))
 			if err == nil {
 				pyRouting[ec.SourceFile] = routingpolicy.PyYAMLRoutingByTenant(data)
+				pyNotMapping[ec.SourceFile] = routingpolicy.PyYAMLTenantBodyNotMapping(data)
 			} else {
 				pyRouting[ec.SourceFile] = nil
 			}
 		}
 	}
 
+	unloaded := make(map[string]string)
 	for _, ec := range scoped.Tenants {
 		effective[ec.TenantID] = ec.EffectiveConfig
+		if pyNotMapping[ec.SourceFile][ec.TenantID] && !tree.Root.PlatformBodies[ec.TenantID] {
+			unloaded[ec.TenantID] = ec.SourceFile
+		}
 		// The tenant's routing as the generator renders it: its own
 		// `_routing` laid over the referenced profile over
 		// `_routing_defaults`, `{{tenant}}` substituted. Tenants with no
@@ -549,6 +558,7 @@ func buildCheckInput(scoped *config.ScopedTenants, f *flags) guard.CheckInput {
 		RoutingDisabled:        disabled,
 		RoutingNotMapping:      notMapping,
 		InvalidTenantIDs:       invalidIDs,
+		UnloadedTenants:        unloaded,
 		UnknownRoutingProfiles: unknownProfiles,
 		DomainPolicies:         policies,
 		PlatformProblems:       problems,

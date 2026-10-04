@@ -32,6 +32,7 @@
     "body writes (a routing profile's is not judged there; a batch op cannot write a group_by). A repeated '...' alone is not a duplicate (Alertmanager loads ['...', '...']); python_differs",
     "may carry group_by_invalid for the non-specific `!` tag pyyamlcompat cannot see.",
     "group_by is judged after {{tenant}} substitution in every reader (tenant `alertname`: [alertname, \"{{tenant}}\"] repeats).",
+    "The {{tenant}} shape of _routing_enforced expands over EVERY valid tenant id, routed or not (#2519): a threshold-only or _silent_mode-only tenant is judged too, so every tenant of a tree with one is listed in expect. A tenant whose file body PyYAML does not read as a mapping (a null body) is not loaded by the generator unless a root platform file's entry gives it one, so it is not in that set and not listed.",
     "unknown_profile: the referenced routing profile no profile file defines (WARN), else null.",
     "A reference is any non-empty string, trimmed: '   ' references the unknown profile ''.",
     "An allowed_receiver_types list with entries but no string among them allows no receiver type",
@@ -4560,6 +4561,118 @@
               "type": "pagerduty"
             }
           ],
+          "policy": [],
+          "rejected_routes": [],
+          "values_not_string": [],
+          "group_by_invalid": [],
+          "unknown_profile": null,
+          "tenant_api": null,
+          "python_differs": null,
+          "escalation": null,
+          "refused": null
+        }
+      },
+      "enforced_group_by_invalid": [
+        [
+          "_platform.yaml",
+          "_routing_enforced (alertname).group_by[1]",
+          "duplicate"
+        ]
+      ]
+    },
+    {
+      "name": "routing-enforced-group-by-per-tenant-unrouted",
+      "files": {
+        "_defaults.yaml": "defaults:\n  cpu_usage_percent: 80\n",
+        "_platform.yaml": "_routing_enforced:\n  enabled: true\n  receiver:\n    type: webhook\n    url: https://noc.example.com/hook\n  group_by: [alertname, \"{{tenant}}\"]\n",
+        "alertname.yaml": "tenants:\n  alertname:\n    cpu_usage_percent: '85'\n",
+        "t-b.yaml": "tenants:\n  t-b:\n    _silent_mode: warning\n"
+      },
+      "platform": [],
+      "expect": {
+        "alertname": {
+          "targets": null,
+          "policy": [],
+          "rejected_routes": [],
+          "values_not_string": [],
+          "group_by_invalid": [],
+          "unknown_profile": null,
+          "tenant_api": null,
+          "python_differs": null,
+          "escalation": null,
+          "refused": null
+        },
+        "t-b": {
+          "targets": null,
+          "policy": [],
+          "rejected_routes": [],
+          "values_not_string": [],
+          "group_by_invalid": [],
+          "unknown_profile": null,
+          "tenant_api": null,
+          "python_differs": null,
+          "escalation": null,
+          "refused": null
+        }
+      },
+      "enforced_group_by_invalid": [
+        [
+          "_platform.yaml",
+          "_routing_enforced (alertname).group_by[1]",
+          "duplicate"
+        ]
+      ]
+    },
+    {
+      "name": "routing-enforced-group-by-per-tenant-null-body",
+      "files": {
+        "_defaults.yaml": "defaults:\n  cpu_usage_percent: 80\n",
+        "_platform.yaml": "_routing_enforced:\n  enabled: true\n  receiver:\n    type: webhook\n    url: https://noc.example.com/hook\n  group_by: [alertname, \"{{tenant}}\"]\n",
+        "alertname.yaml": "tenants:\n  alertname:\n",
+        "t-b.yaml": "tenants:\n  t-b:\n    cpu_usage_percent: '85'\n"
+      },
+      "platform": [],
+      "expect": {
+        "t-b": {
+          "targets": null,
+          "policy": [],
+          "rejected_routes": [],
+          "values_not_string": [],
+          "group_by_invalid": [],
+          "unknown_profile": null,
+          "tenant_api": null,
+          "python_differs": null,
+          "escalation": null,
+          "refused": null
+        }
+      },
+      "enforced_group_by_invalid": []
+    },
+    {
+      "name": "routing-enforced-group-by-per-tenant-null-body-platform-entry",
+      "files": {
+        "_defaults.yaml": "defaults:\n  cpu_usage_percent: 80\n",
+        "_platform.yaml": "_routing_enforced:\n  enabled: true\n  receiver:\n    type: webhook\n    url: https://noc.example.com/hook\n  group_by: [alertname, \"{{tenant}}\"]\n",
+        "alertname.yaml": "tenants:\n  alertname:\n",
+        "t-b.yaml": "tenants:\n  t-b:\n    cpu_usage_percent: '85'\n",
+        "_tenants.yaml": "tenants:\n  alertname:\n    cpu_usage_percent: '70'\n"
+      },
+      "platform": [],
+      "expect": {
+        "alertname": {
+          "targets": null,
+          "policy": [],
+          "rejected_routes": [],
+          "values_not_string": [],
+          "group_by_invalid": [],
+          "unknown_profile": null,
+          "tenant_api": null,
+          "python_differs": null,
+          "escalation": null,
+          "refused": null
+        },
+        "t-b": {
+          "targets": null,
           "policy": [],
           "rejected_routes": [],
           "values_not_string": [],

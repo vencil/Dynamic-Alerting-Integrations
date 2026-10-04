@@ -95,7 +95,7 @@ class TestRoutesRenderAsChildren:
         d = _profiles_tree(tmp_path, {"overrides": [
             {"alertname": "DiskFull", "receiver": _HOOK}]})
         tree = load_tenant_tree(str(d))
-        routes, receivers, warnings = generate_routes(tree.routing_configs)
+        routes, receivers, warnings = generate_routes(tree.routing_configs, tenants=())
         assert warnings == []
         parent = routes[0]
         assert parent["matchers"] == [f'tenant="{_T}"']
@@ -112,13 +112,13 @@ class TestRoutesRenderAsChildren:
 
     def test_undeclared_timing_and_group_by_are_left_to_the_parent(self):
         routes, _, _ = generate_routes(_cfg(
-            _route(), repeat_interval="30m", group_by=["alertname"]))
+            _route(), repeat_interval="30m", group_by=["alertname"]), tenants=())
         child = routes[0]["routes"][0]
         assert set(child) == {"matchers", "receiver"}, child
 
     def test_declared_timing_goes_through_the_guardrails(self):
         routes, _, warnings = generate_routes(_cfg(
-            _route(group_wait="1s", group_by=["alertname", "instance"])))
+            _route(group_wait="1s", group_by=["alertname", "instance"])), tenants=())
         child = routes[0]["routes"][0]
         assert child["group_wait"] == "5s"
         assert child["group_by"] == ["alertname", "instance"]
@@ -127,14 +127,14 @@ class TestRoutesRenderAsChildren:
 
     def test_multi_label_match_and_value_escaping(self):
         routes, _, warnings = generate_routes(_cfg(
-            _route(match={"severity": "critical", "team": 'a"b\\c'})))
+            _route(match={"severity": "critical", "team": 'a"b\\c'})), tenants=())
         assert warnings == []
         assert routes[0]["routes"][0]["matchers"] == [
             'severity="critical"', 'team="a\\"b\\\\c"']
 
     def test_override_and_route_receivers_do_not_collide(self):
         routes, receivers, _ = generate_routes(_cfg(
-            _route(), overrides=[{"alertname": "A", "receiver": _HOOK}]))
+            _route(), overrides=[{"alertname": "A", "receiver": _HOOK}]), tenants=())
         names = [r["name"] for r in receivers]
         assert len(names) == len(set(names)), names
         assert [c["receiver"] for c in routes[0]["routes"]] == [
@@ -142,7 +142,7 @@ class TestRoutesRenderAsChildren:
 
     def test_empty_routes_list_renders_nothing(self):
         routes, _, warnings = generate_routes({_T: {"receiver": _MAIN,
-                                                    "routes": []}})
+                                                    "routes": []}}, tenants=())
         assert warnings == []
         assert "routes" not in routes[0]
 
@@ -163,7 +163,7 @@ class TestRoutesRenderAsChildren:
         ("not-a-mapping", "must be a dict"),
     ])
     def test_invalid_entry_is_skipped_loudly(self, entry, needle):
-        routes, receivers, warnings = generate_routes(_cfg(entry))
+        routes, receivers, warnings = generate_routes(_cfg(entry), tenants=())
         assert "routes" not in routes[0]
         assert [r["name"] for r in receivers] == [f"tenant-{_T}"]
         hits = [w for w in warnings if needle in w]
@@ -171,14 +171,14 @@ class TestRoutesRenderAsChildren:
 
     def test_non_list_routes_is_skipped_loudly(self):
         _, _, warnings = generate_routes({_T: {"receiver": _MAIN,
-                                               "routes": {"severity": "x"}}})
+                                               "routes": {"severity": "x"}}}, tenants=())
         assert warnings == [f"  WARN: {_T}: 'routes' must be a list, skipping"]
 
     def test_allowed_domains_blocks_a_routes_webhook(self):
         bad = {"type": "webhook", "url": "https://evil.example.net/x"}
         routes, receivers, warnings = generate_routes(
             _cfg(_route(receiver=bad)),
-            allowed_domains=["hooks.slack.com"])
+            allowed_domains=["hooks.slack.com"], tenants=())
         assert "routes" not in routes[0]
         assert f"tenant-{_T}-route-0" not in [r["name"] for r in receivers]
         assert any("not in allowed_domains" in w and f"{_T}-route-0" in w
@@ -212,12 +212,12 @@ class TestMergeSemantics:
     def test_tenant_routes_replace_profile_routes_wholesale(self, tmp_path):
         d = _profiles_tree(tmp_path, {"routes": [
             _route(match={"team": "db"}, receiver=_HOOK)]})
-        routes, _, _ = generate_routes(load_tenant_tree(str(d)).routing_configs)
+        routes, _, _ = generate_routes(load_tenant_tree(str(d)).routing_configs, tenants=())
         assert [c["matchers"] for c in routes[0]["routes"]] == [['team="db"']]
 
     def test_tenant_empty_routes_drops_profile_routes(self, tmp_path):
         d = _profiles_tree(tmp_path, {"routes": []})
-        routes, _, _ = generate_routes(load_tenant_tree(str(d)).routing_configs)
+        routes, _, _ = generate_routes(load_tenant_tree(str(d)).routing_configs, tenants=())
         assert "routes" not in routes[0]
 
     def test_routing_defaults_routes_is_dropped_and_blocking(self, tmp_path):
@@ -231,7 +231,7 @@ class TestMergeSemantics:
         hits = [w for w in tree.schema_warnings if "_routing_defaults" in w]
         assert len(hits) == 1 and "'routes' is not supported" in hits[0]
         assert "skipping" in hits[0]
-        routes, _, _ = generate_routes(tree.routing_configs)
+        routes, _, _ = generate_routes(tree.routing_configs, tenants=())
         assert "routes" not in routes[0]
         r = subprocess.run([sys.executable, str(_GAR), "--config-dir", str(d),
                             "--validate"], capture_output=True, text=True, encoding="utf-8", errors="replace", timeout=300)

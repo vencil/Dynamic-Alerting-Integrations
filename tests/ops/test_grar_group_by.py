@@ -78,7 +78,8 @@ def _strict_errors(d: Path) -> list[str]:
 def _render(d: Path) -> tuple[list[dict], list[str]]:
     tree = load_tenant_tree(str(d))
     routes, _receivers, warnings = generate_routes(
-        tree.routing_configs, enforced_routing=tree.enforced_routing)
+        tree.routing_configs, enforced_routing=tree.enforced_routing,
+        tenants=tree.dedup_configs)
     return routes, warnings
 
 

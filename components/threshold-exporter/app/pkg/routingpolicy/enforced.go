@@ -79,8 +79,9 @@ func (p EnforcedGroupByProblem) Message() string {
 // repeat a listed label — and the single shape once. A route is judged only
 // when it is rendered: group_by a non-empty list and the (substituted)
 // receiver accepted by the receiver contract (pkg/receiverspec, the Go copy
-// of build_receiver_config's checks). tenants are the tenants with a
-// resolved routing (the generator's routing_configs).
+// of build_receiver_config's checks). tenants are every tenant the
+// generator recognises, routed or not (#2519, its dedup_configs keys —
+// _grar_routes.enforced_route_tenants).
 func EnforcedGroupByInvalid(e *Enforced, tenants []string) []EnforcedGroupByProblem {
 	if e == nil {
 		return nil

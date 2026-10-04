@@ -1354,7 +1354,7 @@ class TestCustomSubtreeTenantDelivery:
             make_tenant_yaml("db-b", routing="disable"), encoding="utf-8")
         routing_configs, _dedup, _sw, enforced, _mc = load_tenant_configs(str(d))
         routes, receivers, _rw = generate_routes(
-            routing_configs, enforced_routing=enforced)
+            routing_configs, enforced_routing=enforced, tenants=())
         cm_yaml = assemble_configmap(load_base_config(None), routes, receivers, [])
         custom = self._custom_route_of(cm_yaml)
         assert custom["routes"] == [
@@ -1380,7 +1380,7 @@ class TestCustomSubtreeTenantDelivery:
 
     def _generated_custom_route(self, routing_configs=None):
         routes, receivers, warnings = generate_routes(
-            routing_configs or self._split_routing_configs())
+            routing_configs or self._split_routing_configs(), tenants=())
         assert not [w for w in warnings if "skipping" in w], warnings
         cm_yaml = assemble_configmap(load_base_config(None), routes, receivers, [])
         am = yaml.safe_load(yaml.safe_load(cm_yaml)["data"]["alertmanager.yml"])
@@ -1423,7 +1423,7 @@ class TestCustomSubtreeTenantDelivery:
         assert subs[0]["receiver"] == "tenant-db-a-route-0"
 
     def test_reinjection_does_not_accumulate_sub_routes(self):
-        routes, receivers, _w = generate_routes(self._split_routing_configs())
+        routes, receivers, _w = generate_routes(self._split_routing_configs(), tenants=())
         existing = {"route": {"receiver": "default", "routes": []},
                     "receivers": [{"name": "default"}], "inhibit_rules": []}
         merged = _merge_routes_receivers_inhibits(existing, routes, receivers, [])

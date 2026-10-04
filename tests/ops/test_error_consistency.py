@@ -51,7 +51,7 @@ class TestGenerateRoutesWarningFormat:
     ], ids=["unknown_type", "missing_receiver", "invalid_object", "missing_type"])
     def test_warning_format(self, routing_configs, desc):
         """各種 malformed routing config 產生格式正確的 warning。"""
-        _, _, warnings = generate_routes(routing_configs)
+        _, _, warnings = generate_routes(routing_configs, tenants=())
         assert len(warnings) >= 1, f"{desc}: expected warnings"
         for w in warnings:
             assert _WARN_RE.match(w), f"{desc} 格式不符: {w!r}"
@@ -64,7 +64,7 @@ class TestGenerateRoutesWarningFormat:
                 "overrides": "not-a-list",
             }
         }
-        _, _, warnings = generate_routes(routing_configs)
+        _, _, warnings = generate_routes(routing_configs, tenants=())
         override_warns = [w for w in warnings if "overrides" in w.lower()]
         assert len(override_warns) >= 1
         for w in override_warns:
@@ -122,7 +122,7 @@ class TestWarningDeduplication:
             "db-a": {"receiver": "not-a-dict"},
             "db-b": {"receiver": "also-not-dict"},
         }
-        _, _, warnings = generate_routes(routing_configs)
+        _, _, warnings = generate_routes(routing_configs, tenants=())
         # 每個 warning 應含不同 tenant
         assert len(warnings) == len(set(warnings)), \
             f"有重複 warnings: {warnings}"
@@ -138,7 +138,7 @@ class TestEnforcedRoutingWarningFormat:
         """enforced routing 缺 receiver 產生 WARN。"""
         enforced = {"no_receiver": True}  # 缺少 "receiver" key
         routing_configs = {"db-a": make_routing_config("db-a")}
-        _, _, warnings = _build_enforced_routes(enforced, routing_configs, None)
+        _, _, warnings = _build_enforced_routes(enforced, routing_configs, None, tenants=())
         assert len(warnings) >= 1
         for w in warnings:
             assert "WARN" in w

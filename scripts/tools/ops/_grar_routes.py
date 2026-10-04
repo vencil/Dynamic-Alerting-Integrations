@@ -14,11 +14,16 @@ Functions:
     expand_routing_routes (entry predicate: _grar_validate.route_entry_matchers)
 
   Platform enforced routing (v1.7.0 / v1.10.0 per-tenant {{tenant}} expansion):
+    enforced_route_tenants (the tenant set the {{tenant}} shape expands over)
     _build_per_tenant_enforced_route / _build_single_enforced_route
     _build_enforced_routes
 
   Main route generation:
     _build_tenant_routes / generate_routes
+
+  Root fallthrough for enforced-only tenants (#2519):
+    _build_root_fallthrough_routes / is_root_fallthrough_route
+    pin_root_fallthrough_receiver (called where the root receiver is known)
 
   Severity-dedup inhibit rules:
     _build_inhibit_rules / generate_inhibit_rules
@@ -28,6 +33,7 @@ from __future__ import annotations
 import copy
 import os
 import sys
+from collections.abc import Iterable
 
 _THIS_DIR = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, _THIS_DIR)  # Docker flat layout
@@ -70,6 +76,27 @@ def _apply_group_by(route: dict, group_by: object, ctx: str) -> list[str]:
         route["group_by"] = kept
     return [skipped_entry_warning(f"  WARN: {ctx}: {group_by_problem_text(f'group_by[{idx}]', kind, value)}, skipping")
             for idx, kind, value in problems]
+
+
+def enforced_route_tenants(routing_configs: dict[str, dict],
+                           tenants: Iterable[str]) -> list[str]:
+    """The tenants a ``{{tenant}}`` ``_routing_enforced`` expands over, sorted.
+
+    #2519: EVERY tenant the generator recognises — *tenants* is
+    ``load_tenant_configs``'s ``dedup_configs`` keys (every valid tenant id
+    it loaded: threshold-only, ``_silent_mode``-only, ``_routing: disable``
+    and refused ``_routing`` included; an id ``is_valid_tenant_id`` refuses
+    is never in it) — not only the ones with a resolved routing. The route
+    is the platform's, so a tenant leaving ``_routing`` out does not leave
+    the NOC channel. *routing_configs* is unioned in: a routed tenant is
+    always a recognised one.
+
+    ⛔ *tenants* has no default anywhere on this path (``generate_routes`` /
+    ``_build_enforced_routes`` take it keyword-only, required): a default of
+    "the routed set" is how #2519 shipped — a caller that forgets it must
+    get a TypeError, not the narrower set.
+    """
+    return sorted(set(routing_configs) | set(tenants))
 
 
 def enforced_group_by_problems(enforced_routing: object, tenants: list[str]
@@ -463,7 +490,10 @@ def _build_single_enforced_route(enforced_routing: dict,
     return route, receiver, warnings
 
 
-def _build_enforced_routes(enforced_routing: dict, routing_configs: dict[str, dict], allowed_domains: list[str] | None = None) -> tuple[list[dict], list[dict], list[str]]:
+def _build_enforced_routes(enforced_routing: dict, routing_configs: dict[str, dict],
+                           allowed_domains: list[str] | None = None,
+                           *, tenants: Iterable[str],
+                           ) -> tuple[list[dict], list[dict], list[str]]:
     """Generate platform-enforced Alertmanager routes and receivers.
 
     Implements platform-wide Enforced Routing with continue: true to ensure
@@ -474,10 +504,14 @@ def _build_enforced_routes(enforced_routing: dict, routing_configs: dict[str, di
       - v1.7.0: Single enforced route (continue: true) applies to all alerts
       - v1.10.0: Per-tenant expansion when _routing_enforced contains {{tenant}}
         placeholder — each tenant gets a separate enforced route with tenant=<name> matcher
+        (#2519: every tenant of ``enforced_route_tenants``, routed or not)
 
     Args:
         enforced_routing: _routing_enforced config dict or None
-        routing_configs: {tenant_name: routing_config} for {{tenant}} expansion
+        routing_configs: {tenant_name: routing_config}
+        tenants: keyword-only, required — every tenant the generator
+            recognises (``dedup_configs`` keys) for {{tenant}} expansion;
+            see ``enforced_route_tenants``
         allowed_domains: optional fnmatch domain patterns for webhook URL validation (SSRF protection)
 
     Returns:
@@ -500,7 +534,7 @@ def _build_enforced_routes(enforced_routing: dict, routing_configs: dict[str, di
 
     if _contains_tenant_placeholder(enforced_routing):
         # Per-tenant enforced routes: expand {{tenant}} for each tenant
-        for tenant in sorted(routing_configs.keys()):
+        for tenant in enforced_route_tenants(routing_configs, tenants):
             route, receiver, route_warnings = _build_per_tenant_enforced_route(
                 tenant, enforced_routing, allowed_domains)
             warnings.extend(route_warnings)
@@ -837,7 +871,10 @@ def _build_sentinel_sinkhole_route() -> tuple[list[dict], list[dict]]:
     return [route], [{"name": "sentinel-sinkhole"}]
 
 
-def generate_routes(routing_configs: dict[str, dict], allowed_domains: list[str] | None = None, enforced_routing: dict | None = None) -> tuple[list[dict], list[dict], list[str]]:
+def generate_routes(routing_configs: dict[str, dict], allowed_domains: list[str] | None = None,
+                    enforced_routing: dict | None = None,
+                    *, tenants: Iterable[str],
+                    ) -> tuple[list[dict], list[dict], list[str]]:
     """Generate Alertmanager route tree + receivers from routing configs.
 
     Delegates to _build_enforced_routes() and _build_tenant_routes() to produce
@@ -855,6 +892,11 @@ def generate_routes(routing_configs: dict[str, dict], allowed_domains: list[str]
         routing_configs: {tenant_name: routing_config_dict} resolved from defaults
         allowed_domains: optional list of fnmatch domain patterns for webhook URL validation
         enforced_routing: optional platform-wide routing rule (NOC fallback)
+        tenants: keyword-only, required — every tenant the generator
+            recognises (``dedup_configs`` keys); a ``{{tenant}}`` enforced
+            routing expands over them all, routed or not (#2519,
+            ``enforced_route_tenants``). No default: forgetting it is a
+            TypeError, not the routed-only set.
 
     Returns:
         (routes_list, receivers_list, warnings_list) where:
@@ -869,7 +911,7 @@ def generate_routes(routing_configs: dict[str, dict], allowed_domains: list[str]
 
     # Platform Enforced Routing — NOC 永遠收到通知
     enf_routes, enf_receivers, enf_warnings = _build_enforced_routes(
-        enforced_routing, routing_configs, allowed_domains)
+        enforced_routing, routing_configs, allowed_domains, tenants=tenants)
     routes.extend(enf_routes)
     receivers.extend(enf_receivers)
     all_warnings.extend(enf_warnings)
@@ -891,7 +933,78 @@ def generate_routes(routing_configs: dict[str, dict], allowed_domains: list[str]
     # _grar_validate.blocking_generation_errors。
     all_warnings.extend(receiver_name_collisions(sources))
 
+    # #2519: the root fallthrough of every tenant whose only top-level route is
+    # its continue:true enforced one — LAST, after every tenant route.
+    routes.extend(_build_root_fallthrough_routes(
+        [r["name"][len("platform-enforced-"):] for r in enf_receivers
+         if r["name"] != "platform-enforced"],
+        t_routes))
+
     return routes, receivers, all_warnings
+
+
+def _build_root_fallthrough_routes(enforced_tenants: list[str],
+                                   tenant_routes: list[dict]) -> list[dict]:
+    """One ``tenant="<t>"`` route per tenant of *enforced_tenants* that owns
+    no main tenant route in *tenant_routes* — so the root receiver still gets
+    its alerts (#2519).
+
+    Alertmanager's ``Route.Match`` adds the root only when NO child matched,
+    and a matched ``continue: true`` child counts. Before #2519 such a tenant
+    (threshold-only, ``_silent_mode``-only, ``_routing: disable``, a refused
+    ``_routing``) matched no child and its alerts reached the root receiver;
+    its per-tenant enforced route alone would take them off the root
+    (amtool-measured: ``default`` → ``platform-enforced-<t>``). This route is
+    matched next and delivers to the root's receiver, so the result is the
+    pre-#2519 delivery plus the enforced one.
+
+    A tenant WITH a main tenant route gets none: that route (no
+    ``continue``, matcher ``tenant="<t>"`` only) already took its alerts off
+    the root before #2519. The single, matcher-less enforced route
+    (``platform-enforced``) gets none either: it took every alert off the
+    root before #2519 too, so adding one would change that behaviour, not
+    restore one.
+
+    Emitted with ``matchers`` ONLY: no ``receiver`` (the root's is not known
+    here — Alertmanager inherits it, so the render-mode fragment is right
+    under whatever root it is merged into; ``pin_root_fallthrough_receiver``
+    writes the name where the root is known), no ``continue`` (nothing after
+    it can match this tenant), no ``group_by`` / timings (inherited from the
+    root as the root delivery did). It adds no receiver, so
+    ``receiver_name_collisions`` never sees it.
+    """
+    owned = {t for t in enforced_tenants
+             if any(r.get("receiver") == f"tenant-{t}"
+                    and f'tenant="{t}"' in (r.get("matchers") or [])
+                    for r in tenant_routes)}
+    return [{"matchers": [f'tenant="{t}"']}
+            for t in enforced_tenants if t not in owned]
+
+
+def is_root_fallthrough_route(route: object) -> bool:
+    """Whether *route* is one ``_build_root_fallthrough_routes`` emitted and
+    no receiver has been pinned on yet: a top-level route whose only key is
+    ``matchers``, holding exactly one ``tenant="..."``. No other generated
+    top-level route lacks a receiver."""
+    if not isinstance(route, dict) or set(route) != {"matchers"}:
+        return False
+    m = route["matchers"]
+    return (isinstance(m, list) and len(m) == 1 and isinstance(m[0], str)
+            and m[0].startswith('tenant="') and m[0].endswith('"'))
+
+
+def pin_root_fallthrough_receiver(routes: list[dict],
+                                  root_receiver: object) -> list[dict]:
+    """*routes* with the root's receiver name written on each root
+    fallthrough route (#2519) — the base config's ``route.receiver`` (built-in
+    base, ``--base-config``, or the cluster's on ``--apply``). Alertmanager
+    would inherit the same receiver; the name is written so the assembled
+    config says where the alert goes. A root without a usable receiver name
+    leaves the routes as they are (inheritance still applies)."""
+    if not isinstance(root_receiver, str) or not root_receiver:
+        return routes
+    return [dict(r, receiver=root_receiver) if is_root_fallthrough_route(r)
+            else r for r in routes]
 
 
 def _build_inhibit_rules(tenant: str) -> dict:
