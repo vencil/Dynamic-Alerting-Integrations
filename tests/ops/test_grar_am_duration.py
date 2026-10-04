@@ -39,9 +39,9 @@ def _tree(tmp_path: Path, routing_extra: str) -> Path:
 
 def _generate(d: Path):
     gar = importlib.import_module("generate_alertmanager_routes")
-    routing, _dedup, schema_warnings, enforced, _mc = gar.load_tenant_configs(str(d))
+    routing, dedup, schema_warnings, enforced, _mc = gar.load_tenant_configs(str(d))
     routes, _receivers, warnings = gar.generate_routes(
-        routing, enforced_routing=enforced)
+        routing, enforced_routing=enforced, tenants=dedup)
     return gar, routes, schema_warnings + warnings
 
 

@@ -930,19 +930,23 @@ MUTATIONS: list[Mutation] = [
     Mutation(
         target_file="scripts/tools/ops/_grar_validate.py",
         test_file="tests/ops/test_grar_strict_hardening.py",
-        label="domain_policies: strict max_repeat comparison flipped (violators pass, compliant flagged)",
-        fn_name="check_domain_policies",
-        old="                        elif tenant_sec > max_sec:",
-        new="                        elif tenant_sec < max_sec:",
+        # #2490: the comparison moved into _timing_bound_violations, which
+        # strict AND lenient both call — one mutation covers both modes.
+        label="domain_policies: max_repeat comparison flipped (violators pass, compliant flagged)",
+        fn_name="_timing_bound_violations",
+        old="         lambda v, b: v > b,",
+        new="         lambda v, b: v < b,",
         kill_test="test_zero_repeat_interval_not_skipped",
     ),
     Mutation(
         target_file="scripts/tools/ops/_grar_validate.py",
         test_file="tests/ops/test_grar_strict_hardening.py",
-        label="domain_policies: strict group_wait is-not-None regressed to truthiness (bare 0 skipped)",
-        fn_name="check_domain_policies",
-        old='                        tenant_gw = rc.get("group_wait")\n                        if tenant_gw is not None:',
-        new='                        tenant_gw = rc.get("group_wait")\n                        if tenant_gw:',
+        # #2490: re-anchored to the shared comparison's None check (both
+        # timing keys, both modes); bare 0 must still be judged.
+        label="domain_policies: timing is-not-None regressed to truthiness (bare 0 skipped)",
+        fn_name="_timing_bound_violations",
+        old="        if value is None:\n            continue",
+        new="        if not value:\n            continue",
         # Round-5 SURVIVOR turned finding: the hardening suite only covered
         # "0s" (truthy string); bare int 0 slipped the truthiness branch.
         # Killed by the test added for it (asserts correct behavior).
