@@ -284,6 +284,7 @@ modules:
       _subroute_receiver_type: "#2244 two-branch accessor (dict receiver → type, else ''); exercised through test_critical_escalation.py"
       _renders_on_route: "#2252 two-branch emit predicate (truthy timing / non-empty list group_by) mirroring _apply_timing_params + _grar_routes; example-pinned via list_tenant_subroutes in test_generate_alertmanager_routes.py::TestDomainPolicyOverrideSubroutes"
       _parse_policy_duration: "Pure duration parser (multi-unit/fractional/negative-reject); table-covered by test_grar_strict_hardening.py::TestParsePolicyDuration (23 example cases)"
+      _timing_bound_violations: "#2490 the one max_repeat_interval / min_group_wait comparison both check_domain_policies modes call; table-pinned strict == lenient (only the level differs) by test_grar_policy_duration_strict_lenient_parity.py"
       _rendered_duration: "#2490 str() then _lib_validation.am_duration_seconds (pinned row by row against Go by test_am_duration_parity.py); strict-policy use pinned by test_grar_am_duration.py and test_grar_strict_hardening.py"
       _validate_version_label: "ADR-024 OQ-6 version-label guard; fully branch-covered by test_generate_alertmanager_routes.py::TestValidateVersionLabel (8 example cases)"
       find_watchdog_suppressing_inhibits: "ADR-025 D1 inhibit-immunity validator; fully covered by test_generate_routes_orchestration.py::TestWatchdogInhibitImmunity (exact/regex/match-all/empty/severity/legacy-map cases)"

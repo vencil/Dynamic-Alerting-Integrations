@@ -1150,6 +1150,10 @@ def check_policy_scope(
 # in tests/ops/test_generate_alertmanager_routes.py asserts no other
 # _grar_* source can emit this prefix into the validate warning stream.
 POLICY_ERROR_PREFIX = "ERROR:"
+# #2490: the same findings without --strict. check_domain_policies starts
+# every finding with "domain_policy '<name>'", so a lenient one is this.
+# Non-blocking; validate-config uses it only to pick the advice line.
+POLICY_WARN_PREFIX = "WARN: domain_policy "
 
 # ── #2279: two generated receivers with one name (blocking in EVERY mode) ──
 # Alertmanager refuses a config whose receivers repeat a name, and the tenant
@@ -1401,6 +1405,61 @@ def _rendered_duration(value: object) -> float | None:
     generator hands Alertmanager, not a more lenient reading of it.
     """
     return am_duration_seconds(value if isinstance(value, str) else str(value))
+
+
+def _timing_bound_violations(
+        policy_name: str, subject: str, rc: dict,
+        max_repeat: object, max_sec: float | None,
+        min_group_wait: object, min_sec: float | None,
+        src, who) -> list[tuple[str, str]]:
+    """``(finding, fix hint)`` per timing bound one route breaks (#2490).
+
+    The ONE comparison behind a domain policy's ``max_repeat_interval`` /
+    ``min_group_wait``, called by ``check_domain_policies`` in BOTH modes —
+    the caller only picks the level (strict: ``ERROR`` + hint, blocking;
+    lenient: ``WARN``). The policy bound is ``_parse_policy_duration``'s
+    (*max_sec* / *min_sec*; None = not constrained or unreadable, which strict
+    reports on its own), the route's value ``_rendered_duration`` — what the
+    generator hands Alertmanager. A key that is absent or null is not
+    checked; a present value Alertmanager refuses (``True``, a bare
+    ``90000``, ``1.5h``) is reported as not a valid duration. *src* / *who*
+    are the caller's value-origin and fix-target texts for a key.
+    """
+    out: list[tuple[str, str]] = []
+    checks = (
+        ("repeat_interval", max_repeat, max_sec, "max", "exceeds max",
+         lambda v, b: v > b,
+         "'30m' or '1h30m'",
+         lambda raw: (f"lower {who('repeat_interval')} repeat_interval to "
+                      f"'{raw}' or less, or raise the policy's "
+                      f"max_repeat_interval")),
+        ("group_wait", min_group_wait, min_sec, "minimum", "below minimum",
+         lambda v, b: v < b,
+         "'30s' or '1m30s'",
+         lambda raw: (f"raise {who('group_wait')} group_wait to "
+                      f"'{raw}' or more, or lower the policy's "
+                      f"min_group_wait")),
+    )
+    for key, raw, bound, noun, verb, breaks, example, fix in checks:
+        if bound is None:
+            continue
+        value = rc.get(key)
+        if value is None:
+            continue
+        sec = _rendered_duration(value)
+        if sec is None:
+            out.append((
+                f"domain_policy '{policy_name}', {subject}: {key} "
+                f"'{value}'{src(key)} is not a valid duration "
+                f"— cannot check against {noun} '{raw}'",
+                f"use Alertmanager duration syntax such as {example} "
+                "(whole numbers, units largest first)"))
+        elif breaks(sec, bound):
+            out.append((
+                f"domain_policy '{policy_name}', {subject}: {key} "
+                f"'{value}'{src(key)} {verb} '{raw}'",
+                fix(raw)))
+    return out
 
 
 # ── ADR-007 label-match `routes` entries (#2245) ──
@@ -2096,8 +2155,12 @@ def check_domain_policies(
         # Strict: validate constraint-side durations once per policy —
         # an unparseable bound (e.g. "banana", "-1h") means the constraint
         # would never fire, which must be loud, not silent.
-        max_sec: float | None = None
-        min_sec: float | None = None
+        # #2490: the bounds are parsed the same way in both modes (the
+        # lenient path used to have its own single-unit reading).
+        max_sec: float | None = (None if max_repeat is None
+                                 else _parse_policy_duration(max_repeat))
+        min_sec: float | None = (None if min_group_wait is None
+                                 else _parse_policy_duration(min_group_wait))
         if strict:
             for field, raw in (("max_repeat_interval", max_repeat),
                                ("min_group_wait", min_group_wait)):
@@ -2108,10 +2171,6 @@ def check_domain_policies(
                         f"— the constraint cannot be enforced",
                         "use Prometheus/Go duration syntax such as '30s', "
                         "'1h' or '1h30m'; negative values are not allowed"))
-            if max_repeat is not None:
-                max_sec = _parse_policy_duration(max_repeat)
-            if min_group_wait is not None:
-                min_sec = _parse_policy_duration(min_group_wait)
 
         for tenant in tenants:
             # #2326 review F4: a `tenants:` entry that is not a scalar id (a
@@ -2180,95 +2239,14 @@ def check_domain_policies(
                             f"switch {whose} receiver.type to one of "
                             f"{sorted(allowed_types)} or amend the domain policy"))
 
-                # Check max_repeat_interval
-                if strict:
-                    if max_sec is not None:
-                        tenant_repeat = rc.get("repeat_interval")
-                        if tenant_repeat is not None:
-                            # #2490: the tenant's value goes to Alertmanager,
-                            # so it is read as Alertmanager reads it; the
-                            # policy's own bound keeps _parse_policy_duration.
-                            tenant_sec = _rendered_duration(tenant_repeat)
-                            if tenant_sec is None:
-                                messages.append(_fmt(
-                                    f"domain_policy '{policy_name}', "
-                                    f"{subject}: repeat_interval "
-                                    f"'{tenant_repeat}'{_src('repeat_interval')} is not a valid duration "
-                                    f"— cannot check against max '{max_repeat}'",
-                                    "use Alertmanager duration syntax such as "
-                                    "'30m' or '1h30m' (whole numbers, units "
-                                    "largest first)"))
-                            elif tenant_sec > max_sec:
-                                messages.append(_fmt(
-                                    f"domain_policy '{policy_name}', "
-                                    f"{subject}: repeat_interval "
-                                    f"'{tenant_repeat}'{_src('repeat_interval')} exceeds max "
-                                    f"'{max_repeat}'",
-                                    f"lower {_who('repeat_interval')} repeat_interval to "
-                                    f"'{max_repeat}' or less, or raise the "
-                                    f"policy's max_repeat_interval"))
-                elif max_repeat:
-                    # Legacy lenient path — truthiness skips and the policy
-                    # bound's single-unit parser kept verbatim. #2490: the
-                    # TENANT's value is read as Alertmanager reads it
-                    # (_rendered_duration). Verbatim kept, the widened value
-                    # range would be under-reported: the generator now hands
-                    # 1h30m to Alertmanager as written, and the old parser
-                    # could not read it, so a value over the ceiling went
-                    # unmentioned. A value Alertmanager refuses (None) is not
-                    # reported here — the generator's own blocking line is.
-                    tenant_repeat = rc.get("repeat_interval")
-                    if tenant_repeat:
-                        legacy_max = parse_duration_seconds(max_repeat)
-                        legacy_val = _rendered_duration(tenant_repeat)
-                        if legacy_max and legacy_val and legacy_val > legacy_max:
-                            messages.append(_fmt(
-                                f"domain_policy '{policy_name}', "
-                                f"{subject}: repeat_interval "
-                                f"'{tenant_repeat}'{_src('repeat_interval')} exceeds max '{max_repeat}'",
-                                f"lower {_who('repeat_interval')} repeat_interval to "
-                                f"'{max_repeat}' or less, or raise the policy's "
-                                f"max_repeat_interval"))
-
-                # Check min_group_wait
-                if strict:
-                    if min_sec is not None:
-                        tenant_gw = rc.get("group_wait")
-                        if tenant_gw is not None:
-                            tenant_sec = _rendered_duration(tenant_gw)  # #2490
-                            if tenant_sec is None:
-                                messages.append(_fmt(
-                                    f"domain_policy '{policy_name}', "
-                                    f"{subject}: group_wait "
-                                    f"'{tenant_gw}'{_src('group_wait')} is not a valid duration "
-                                    f"— cannot check against minimum "
-                                    f"'{min_group_wait}'",
-                                    "use Alertmanager duration syntax such as "
-                                    "'30s' or '1m30s' (whole numbers, units "
-                                    "largest first)"))
-                            elif tenant_sec < min_sec:
-                                messages.append(_fmt(
-                                    f"domain_policy '{policy_name}', "
-                                    f"{subject}: group_wait "
-                                    f"'{tenant_gw}'{_src('group_wait')} below minimum "
-                                    f"'{min_group_wait}'",
-                                    f"raise {_who('group_wait')} group_wait to "
-                                    f"'{min_group_wait}' or more, or lower the "
-                                    f"policy's min_group_wait"))
-                elif min_group_wait:
-                    # Legacy lenient path (see above; tenant side #2490).
-                    tenant_gw = rc.get("group_wait")
-                    if tenant_gw:
-                        legacy_min = parse_duration_seconds(min_group_wait)
-                        legacy_val = _rendered_duration(tenant_gw)
-                        if legacy_min and legacy_val and legacy_val < legacy_min:
-                            messages.append(_fmt(
-                                f"domain_policy '{policy_name}', "
-                                f"{subject}: group_wait "
-                                f"'{tenant_gw}'{_src('group_wait')} below minimum '{min_group_wait}'",
-                                f"raise {_who('group_wait')} group_wait to "
-                                f"'{min_group_wait}' or more, or lower the "
-                                f"policy's min_group_wait"))
+                # Check max_repeat_interval / min_group_wait — #2490: ONE
+                # comparison for both modes; only the level differs (strict
+                # ERROR + hint via _fmt, lenient WARN, exit code unchanged).
+                for base, hint in _timing_bound_violations(
+                        policy_name, subject, rc,
+                        max_repeat, max_sec, min_group_wait, min_sec,
+                        _src, _who):
+                    messages.append(_fmt(base, hint))
 
                 # Check enforce_group_by
                 if enforce_group_by:

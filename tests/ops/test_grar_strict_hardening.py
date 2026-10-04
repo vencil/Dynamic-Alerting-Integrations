@@ -93,7 +93,10 @@ class TestStrictFailOpenClosures:
         policies = self._one_policy({"min_group_wait": "30s"})
         strict = check_domain_policies(routing, policies, strict=True)
         assert any("below minimum" in m for m in strict), strict
-        assert check_domain_policies(routing, policies) == []  # 非 strict 不變
+        # #2490: 非 strict 與 strict 呼叫同一個比對，只差等級（WARN）。
+        lenient = check_domain_policies(routing, policies)
+        assert [m.replace("  WARN: ", "", 1) for m in lenient] == [
+            m.replace("  ERROR: ", "", 1).split(" — fix: ")[0] for m in strict]
 
     def test_bare_zero_group_wait_strict_violates(self):
         """裸 int 0 的 group_wait（falsy 但可 parse）不得被 truthiness 跳過。
@@ -105,7 +108,10 @@ class TestStrictFailOpenClosures:
         policies = self._one_policy({"min_group_wait": "30s"})
         strict = check_domain_policies(routing, policies, strict=True)
         assert any("below minimum" in m for m in strict), strict
-        assert check_domain_policies(routing, policies) == []  # 非 strict 不變
+        # #2490: 非 strict 與 strict 呼叫同一個比對，只差等級（WARN）。
+        lenient = check_domain_policies(routing, policies)
+        assert [m.replace("  WARN: ", "", 1) for m in lenient] == [
+            m.replace("  ERROR: ", "", 1).split(" — fix: ")[0] for m in strict]
 
     def test_zero_repeat_interval_not_skipped(self):
         """0（裸 int）repeat_interval：parse 得出來、對 max 合規＝零訊息。"""
@@ -136,11 +142,15 @@ class TestStrictFailOpenClosures:
         assert len(lenient) == 1, lenient
         assert lenient[0].startswith("  WARN: ") and "below minimum '5s'" in lenient[0]
 
-    def test_lenient_does_not_report_a_value_alertmanager_refuses(self):
-        """讀不出的租戶值不在這裡報：產生器自己的 ReplacedValueWarning 會擋。"""
+    def test_lenient_reports_a_value_alertmanager_refuses_as_warn(self):
+        """#2490: 結論同 strict（not a valid duration），只是等級為 WARN。
+        ⚠️ 同一個值產生器也會印 ReplacedValueWarning（阻擋 --validate），
+        所以非 strict 下這個問題有兩行訊息——已回報設計者，未自行合併。"""
         routing = {"tenant-x": {"repeat_interval": "1.5h"}}
         policies = self._one_policy({"max_repeat_interval": "1h"})
-        assert check_domain_policies(routing, policies) == []
+        lenient = check_domain_policies(routing, policies)
+        assert len(lenient) == 1 and lenient[0].startswith("  WARN: ")
+        assert "not a valid duration" in lenient[0]
 
     def test_multiunit_constraint_value_strict_enforced(self):
         routing = {"tenant-x": {"repeat_interval": "2h"}}
@@ -153,7 +163,10 @@ class TestStrictFailOpenClosures:
         policies = self._one_policy({"max_repeat_interval": "1h"})
         strict = check_domain_policies(routing, policies, strict=True)
         assert any("not a valid duration" in m for m in strict), strict
-        assert check_domain_policies(routing, policies) == []
+        # #2490: 非 strict 與 strict 呼叫同一個比對，只差等級（WARN）。
+        lenient = check_domain_policies(routing, policies)
+        assert [m.replace("  WARN: ", "", 1) for m in lenient] == [
+            m.replace("  ERROR: ", "", 1).split(" — fix: ")[0] for m in strict]
 
     def test_garbage_constraint_value_strict_fails_loud(self):
         routing = {"tenant-x": {"repeat_interval": "4h"}}
