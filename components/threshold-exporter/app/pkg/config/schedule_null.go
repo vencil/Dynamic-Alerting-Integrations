@@ -11,8 +11,7 @@ package config
 // meaning is defined for it: what /metrics and the walker do with such a
 // value is left exactly as it was.
 //
-// "A schedule" here is a mapping written in place with a `default:` key; a
-// YAML `<<:` merge key is not resolved, so a merged spelling is not covered.
+// "A schedule" here is a mapping with a `default:` key.
 
 import (
 	"fmt"
@@ -76,17 +75,14 @@ func scheduleNullProblems(raw any) []string {
 			out = append(out, fmt.Sprintf("`overrides[%d]` has `window: null`", i))
 		}
 		if v, has := wm["value"]; has && v == nil {
-			out = append(out, fmt.Sprintf("`overrides[%d]` (window %s) has `value: null`", i, windowText(wm["window"])))
+			if win, ok := wm["window"].(string); ok {
+				out = append(out, fmt.Sprintf("`overrides[%d]` (window %q) has `value: null`", i, win))
+			} else {
+				out = append(out, fmt.Sprintf("`overrides[%d]` has `value: null`", i))
+			}
 		}
 	}
 	return out
-}
-
-func windowText(w any) string {
-	if s, ok := w.(string); ok {
-		return fmt.Sprintf("%q", s)
-	}
-	return fmt.Sprintf("%v", w)
 }
 
 // thresholdScheduleNulls appends to out one ScheduleNull per threshold key of

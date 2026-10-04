@@ -830,7 +830,7 @@ def is_null_schedule(value: object) -> bool:
     """Go ``nullSchedule`` (pkg/config/null_threshold.go, #2708): a mapping
     whose ``default`` is null, with no override window (``overrides``
     absent, ``[]`` or null) and no key other than ``expires`` / ``reason``.
-    It means what a plain null means. A YAML ``<<:`` merge is not covered."""
+    It means what a plain null means."""
     if not isinstance(value, dict) or "default" not in value \
             or value["default"] is not None:
         return False
@@ -874,8 +874,10 @@ def schedule_null_problems(value: object) -> list[str]:
             out.append(f"`overrides[{i}]` has `window: null`")
         if isinstance(w, dict) and "value" in w and w["value"] is None:
             win = w.get("window")
-            win_text = json.dumps(win) if isinstance(win, str) else str(win)
-            out.append(f"`overrides[{i}]` (window {win_text}) has `value: null`")
+            if isinstance(win, str):
+                out.append(f"`overrides[{i}]` (window {json.dumps(win)}) has `value: null`")
+            else:
+                out.append(f"`overrides[{i}]` has `value: null`")
     return out
 
 

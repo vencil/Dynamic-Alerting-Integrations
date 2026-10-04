@@ -2907,7 +2907,8 @@ class TestScheduleNull:
 
     @pytest.mark.parametrize("layer", ["subtree", "platform", "profile"])
     def test_end_to_end_exits_1(self, tmp_path, capsys, cli_argv, layer):
-        """Wired into ``main()``: these trees printed PASS, rc 0."""
+        """Wired into ``main()``: on main these trees printed
+        ``Result: WARN (pass with warnings)``, rc 0."""
         d, (rel, _where) = self._tree(tmp_path, layer, self._WINDOW_NULL)
         cli_argv("validate_config", "--config-dir", str(d))
         with pytest.raises(SystemExit) as exc:
@@ -2959,3 +2960,19 @@ class TestScheduleNull:
         assert is_null_schedule(value) is null
         assert writes_nothing("mysql_connections", value) is (value is None or null)
         assert writes_nothing("_state_x", value) is False
+
+    def test_schedule_null_problems_messages(self):
+        """#2708 r2: a null `window:` is not printed as a window; the same
+        strings as Go's TestScheduleNullProblems_Messages."""
+        from _grar_validate import schedule_null_problems
+        assert schedule_null_problems({
+            "default": None,
+            "overrides": [{"window": None, "value": None},
+                          {"window": "00:00-01:00", "value": None}, None],
+        }) == [
+            "`default:` is null beside 3 override window(s)",
+            "`overrides[0]` has `window: null`",
+            "`overrides[0]` has `value: null`",
+            '`overrides[1]` (window "00:00-01:00") has `value: null`',
+            "`overrides[2]` is null",
+        ]

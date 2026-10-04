@@ -60,8 +60,6 @@ func nullThreshold(key string, raw any) bool {
 // Before, /metrics kept it as a present empty value (resolve fell back to the
 // ROOT default) while the walker showed it as that layer's own value.
 //
-// ⚠️ A mapping written in place. A YAML `<<:` merge key is not resolved here
-// (nor by ScheduledValue.UnmarshalYAML), so such a spelling is not covered.
 // Any other extra key is left as it was. A schedule WITH a window and a null
 // in it is refused instead (scheduleNullProblems, schedule_null.go).
 func nullSchedule(raw any) bool {
