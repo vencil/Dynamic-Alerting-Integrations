@@ -65,7 +65,9 @@ sys.path.append(os.path.join(str(_THIS_DIR), "..", "ops"))
 from _grar_validate import (  # noqa: E402
     _canonical_tenant_key,
     _legacy_tenant_key,
+    is_null_schedule,
     overlay_across_spellings,
+    writes_nothing,
 )
 
 try:
@@ -102,6 +104,8 @@ def deep_merge(base: dict, override: dict) -> dict:
       the platform default, so a diagnostic that deleted the key would
       contradict what /metrics is actually emitting (#1339 P0). Use "disable"
       to stop alerting on a threshold key.
+    - `{default: null}` with no override window on a threshold key is that
+      same null (#2708, Go `nullSchedule`).
     - _metadata: never inherited (skipped in merge)
 
     MUST stay in lockstep with pkg/config/hierarchy.go deepMerge — the golden
@@ -116,6 +120,8 @@ def deep_merge(base: dict, override: dict) -> dict:
                 result.pop(k, None)  # explicit null = opt-out (reserved keys)
             # threshold key: null is NOT an opt-out — keep the inherited value
             continue
+        if is_null_schedule(v) and not (isinstance(k, str) and k.startswith("_")):
+            continue  # #2708: `{default: null}` is the null above
         if isinstance(v, dict) and isinstance(result.get(k), dict):
             result[k] = deep_merge(result[k], v)
         else:
@@ -1036,16 +1042,16 @@ def _overlay_tenant(tenant_raw: Any, blocks: "list[tuple[str, dict]]",
 
 def _without_null_thresholds(body: Any) -> Any:
     """Go `withoutNullThresholds` (#2518): a threshold key (no `_` prefix)
-    written as null is no write, so a layer carrying one does not own the
-    key and the layer below shows through. A reserved key's null stays (it
-    deletes the inherited value, ADR-017). Non-dict bodies pass through."""
+    written as null — or as `{default: null}` with no window (#2708,
+    `writes_nothing`) — is no write, so a layer carrying one does not own
+    the key and the layer below shows through. A reserved key's null stays
+    (it deletes the inherited value, ADR-017). Non-dict bodies pass
+    through."""
     if not isinstance(body, dict):
         return body
-    if not any(v is None and not (isinstance(k, str) and k.startswith("_"))
-               for k, v in body.items()):
+    if not any(writes_nothing(k, v) for k, v in body.items()):
         return body
-    return {k: v for k, v in body.items()
-            if not (v is None and not (isinstance(k, str) and k.startswith("_")))}
+    return {k: v for k, v in body.items() if not writes_nothing(k, v)}
 
 
 def _platform_tenant_blocks(doc: Any) -> dict:
@@ -1170,8 +1176,8 @@ def _read_profiles(files: "list[tuple[str, Any]]") -> dict:
         for pname, body in profiles.items():
             entries = by_name.setdefault(_tenant_id(pname), {})
             for k, v in (body if isinstance(body, dict) else {}).items():
-                if v is None and not (isinstance(k, str) and k.startswith("_")):
-                    continue  # #2518: a null threshold is no write
+                if writes_nothing(k, v):
+                    continue  # #2518 / #2708: a null threshold is no write
                 entries[k] = (fname, v)
     return {"by_name": by_name, "files": order, "declared": declared}
 

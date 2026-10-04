@@ -192,6 +192,13 @@ type ScopedTenants struct {
 	// (the same build's FlatBuild.RootNullUndeclared). Only in-scope tenants
 	// are listed; nil when there is none.
 	RootNullUndeclared map[string][]RootNullKey
+
+	// ScheduleNulls is every threshold, in a file the exporter reads that
+	// bears on the scope, written as a schedule with override windows and a
+	// null in it — refused at validation time (#2708, scopeScheduleNulls).
+	// Tenant entries of out-of-scope tenants are left out; nil when there is
+	// none.
+	ScheduleNulls []ScheduleNull
 }
 
 // DefaultsFile is one defaults carrier of a scan: its root-relative slash
@@ -409,6 +416,7 @@ func scopeEffective(configDir, scopeDir string, wholeTree bool) (*ScopedTenants,
 		NestedPlatformFiles:    nestedFiles,
 		DeclaredStateFilters:   stateFilters,
 		SubtreeRefusedVerdicts: applied,
+		ScheduleNulls:          scopeScheduleNulls(scan, filepath.ToSlash(rel), inScope, parseFailed),
 	}
 	// The build's verdicts, kept for the in-scope tenants only (#1976,
 	// #2518), and the reserved keys of the same build's subtree chain (#2388).

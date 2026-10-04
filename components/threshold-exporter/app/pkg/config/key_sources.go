@@ -74,8 +74,8 @@ func keySources(
 	// Lowest precedence first; each later layer overwrites.
 	for i, block := range chainBlocks {
 		for k, v := range block {
-			if v == nil {
-				continue
+			if v == nil || nullThreshold(k, v) {
+				continue // writes nothing (deepMerge skips it; #2708)
 			}
 			if _, in := merged[k]; in {
 				level := i

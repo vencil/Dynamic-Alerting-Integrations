@@ -1862,6 +1862,9 @@ class TestTheJsonDocumentCarriesNoInternalBookkeeping:
             # #2291. Reads the root `_defaults.yaml` under `--config-dir`.
             "root_defaults",
             "routes",
+            # #2708. Reads every file the exporter reads under `--config-dir`
+            # and skips the ones it cannot parse.
+            "schedule_null",
             "schema",
             # #1577. It reads `--config-dir` and skips what it cannot parse,
             # so the caveat belongs on its row for the same reason as the
@@ -2845,3 +2848,131 @@ class TestDefaultsWrapperMatrix:
             got += [["defaults_toplevel_ignored", x.split(": ", 1)[0]]
                     for x in wrap["details"]]
         assert sorted(got) == sorted(case["expect"]), (root, wrap)
+
+
+class TestScheduleNull:
+    """Check 12 (#2708): a null inside a threshold schedule that has override
+    windows — a window's `value: null`, or a null `default:` beside windows —
+    FAILs at every layer the exporter reads a threshold from: a tenant file,
+    a subtree `_defaults.yaml`, a root platform file's `tenants:` entry and a
+    profile. `{default: null}` with no window is plain null and is not this
+    row's. Measured on main 990f112f: the subtree, platform and profile
+    layers printed `Result: WARN (pass with warnings)`, rc 0 (only the tenant
+    file FAILed, through `yaml_quoting`)."""
+
+    _WINDOW_NULL = '{default: "50", overrides: [{window: "00:00-23:59", value: null}]}'
+    _DEFAULT_NULL = '{default: null, overrides: [{window: "00:00-01:00", value: "60"}]}'
+
+    @staticmethod
+    def _tree(tmp_path, layer, value):
+        files = {
+            "_defaults.yaml": "defaults:\n  mysql_connections: 30\n",
+            "_profiles.yaml": "profiles:\n  std:\n    other: \"1\"\n",
+            "sub/_defaults.yaml": "defaults:\n  mysql_connections: 40\n",
+            "sub/tx.yaml": "tenants:\n  tx:\n    _profile: std\n",
+        }
+        line = f"    mysql_connections: {value}\n"
+        if layer == "tenant":
+            files["sub/tx.yaml"] += line
+            where = ("sub/tx.yaml", "tenants.tx.mysql_connections")
+        elif layer == "subtree":
+            files["sub/_defaults.yaml"] = f"defaults:\n  mysql_connections: {value}\n"
+            where = ("sub/_defaults.yaml", "defaults.mysql_connections")
+        elif layer == "platform":
+            files["_platform.yaml"] = "tenants:\n  tx:\n" + line
+            where = ("_platform.yaml", "tenants.tx.mysql_connections")
+        else:
+            files["_profiles.yaml"] = "profiles:\n  std:\n" + line
+            where = ("_profiles.yaml", "profiles.std.mysql_connections")
+        d = tmp_path / "conf.d"
+        for rel, body in files.items():
+            (d / rel).parent.mkdir(parents=True, exist_ok=True)
+            (d / rel).write_text(body, encoding="utf-8")
+        return d, where
+
+    @pytest.mark.parametrize("layer", ["tenant", "subtree", "platform", "profile"])
+    @pytest.mark.parametrize("value,problem", [
+        (_WINDOW_NULL, '`overrides[0]` (window "00:00-23:59") has `value: null`'),
+        (_DEFAULT_NULL, "`default:` is null beside 1 override window(s)"),
+        ('{default: "50", overrides: [{window: null, value: "60"}]}',
+         "`overrides[0]` has `window: null`"),
+        ('{default: "50", overrides: [~]}', "`overrides[0]` is null"),
+    ])
+    def test_a_null_beside_windows_fails_and_is_named(self, tmp_path, layer,
+                                                       value, problem):
+        d, (rel, where) = self._tree(tmp_path, layer, value)
+        r = vc.check_schedule_null(str(d))
+        assert r["status"] == vc.FAIL, r
+        assert r["details"] == [f"{rel}: `{where}`: {problem}"], r
+
+    @pytest.mark.parametrize("layer", ["subtree", "platform", "profile"])
+    def test_end_to_end_exits_1(self, tmp_path, capsys, cli_argv, layer):
+        """Wired into ``main()``: on main these trees printed
+        ``Result: WARN (pass with warnings)``, rc 0."""
+        d, (rel, _where) = self._tree(tmp_path, layer, self._WINDOW_NULL)
+        cli_argv("validate_config", "--config-dir", str(d))
+        with pytest.raises(SystemExit) as exc:
+            vc.main()
+        out = capsys.readouterr().out
+        assert exc.value.code == 1, out
+        assert "[FAIL] schedule_null" in out, out
+        assert rel in out, out
+
+    @pytest.mark.parametrize("layer", ["tenant", "subtree", "platform", "profile"])
+    @pytest.mark.parametrize("value", [
+        "null", "{default: null}", "{default: null, overrides: []}",
+        '{default: null, expires: "2099-01-01T00:00:00Z", reason: incident}',
+        '{default: "50", overrides: [{window: "00:00-23:59", value: "70"}]}',
+    ])
+    def test_no_window_null_and_numeric_schedules_pass(self, tmp_path, layer,
+                                                       value):
+        d, _ = self._tree(tmp_path, layer, value)
+        r = vc.check_schedule_null(str(d))
+        assert r["status"] == vc.PASS, r
+
+    def test_files_no_plane_reads_are_not_judged(self, tmp_path):
+        """A nested `_` file that is not the carrier, and an unselected root
+        carrier, are read by no plane (#1674): their nulls are not reported."""
+        d, _ = self._tree(tmp_path, "tenant", '"55"')
+        bad = f"tenants:\n  tx:\n    mysql_connections: {self._WINDOW_NULL}\n"
+        (d / "sub" / "_extra.yaml").write_text(bad, encoding="utf-8")
+        (d / "_defaults.yml").write_text(
+            f"defaults:\n  mysql_connections: {self._WINDOW_NULL}\n", encoding="utf-8")
+        r = vc.check_schedule_null(str(d))
+        assert r["status"] == vc.PASS, r
+
+    @pytest.mark.parametrize("value,null", [
+        ({"default": None}, True),
+        ({"default": None, "overrides": []}, True),
+        ({"default": None, "overrides": None}, True),
+        ({"default": None, "expires": "2099-01-01T00:00:00Z", "reason": "x"}, True),
+        ({"default": None, "owner": "team-a"}, False),
+        ({"default": None, "overrides": [{"window": "00:00-01:00", "value": "60"}]}, False),
+        ({"default": "50"}, False),
+        ({"overrides": []}, False),
+        (None, False),
+    ])
+    def test_is_null_schedule_shapes(self, value, null):
+        """#2708 r1: the predicate describe_tenant and this row share (Go
+        nullSchedule): only ScheduledValue's own `expires` / `reason` may sit
+        beside a null default with no window; any other key is not null."""
+        from _grar_validate import is_null_schedule, writes_nothing
+        assert is_null_schedule(value) is null
+        assert writes_nothing("mysql_connections", value) is (value is None or null)
+        assert writes_nothing("_state_x", value) is False
+
+    def test_schedule_null_problems_messages(self):
+        """#2708 r2: a null `window:` is not printed as a window; the same
+        strings as Go's TestScheduleNullProblems_Messages."""
+        from _grar_validate import schedule_null_problems
+        assert schedule_null_problems({
+            "default": None,
+            "overrides": [{"window": None, "value": None},
+                          {"window": "00:00-01:00", "value": None}, None],
+        }) == [
+            "`default:` is null beside 3 override window(s)",
+            "`overrides[0]` has `window: null`",
+            "`overrides[0]` has `value: null`",
+            '`overrides[1]` (window "00:00-01:00") has `value: null`',
+            "`overrides[2]` is null",
+        ]

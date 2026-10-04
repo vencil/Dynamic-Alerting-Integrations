@@ -579,6 +579,8 @@ func buildCheckInput(scoped *config.ScopedTenants, f *flags) guard.CheckInput {
 		// #2388 A: the overlay's own verdict on each such key.
 		SubtreeRefusedVerdicts: scoped.SubtreeRefusedVerdicts,
 		RootNullUndeclared:     scoped.RootNullUndeclared,
+		// #2708: nulls inside a schedule with windows, in-scope only.
+		ScheduleNulls: scoped.ScheduleNulls,
 	}
 }
 

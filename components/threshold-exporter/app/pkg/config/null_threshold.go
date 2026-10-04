@@ -47,9 +47,42 @@ import (
 )
 
 // nullThreshold reports whether (key, raw) is a threshold written as null —
-// a write of nothing. raw is the generic YAML decode of the value.
+// a write of nothing. raw is the generic YAML decode of the value: a null, or
+// a schedule that writes nothing (nullSchedule, #2708).
 func nullThreshold(key string, raw any) bool {
-	return raw == nil && !strings.HasPrefix(key, "_")
+	return (raw == nil || nullSchedule(raw)) && !strings.HasPrefix(key, "_")
+}
+
+// nullSchedule reports whether raw (a generic YAML decode) is a schedule that
+// writes nothing: a mapping whose `default:` is null, with no override window
+// (`overrides:` absent, `[]` or null) and no key other than ScheduledValue's
+// own `expires:` / `reason:` (#2708). By the owner's ruling it is plain null.
+// Before, /metrics kept it as a present empty value (resolve fell back to the
+// ROOT default) while the walker showed it as that layer's own value.
+//
+// Any other extra key is left as it was. A schedule WITH a window and a null
+// in it is refused instead (scheduleNullProblems, schedule_null.go).
+func nullSchedule(raw any) bool {
+	m, ok := raw.(map[string]any)
+	if !ok {
+		return false
+	}
+	d, has := m["default"]
+	if !has || d != nil {
+		return false
+	}
+	for k, v := range m {
+		switch k {
+		case "default", "expires", "reason":
+		case "overrides":
+			if l, isList := v.([]any); v != nil && (!isList || len(l) > 0) {
+				return false
+			}
+		default:
+			return false
+		}
+	}
+	return true
 }
 
 // withoutNullThresholds returns m without its nullThreshold entries — m
@@ -247,7 +280,9 @@ func dropNullBodies(typed map[string]map[string]ScheduledValue, raw map[string]m
 }
 
 // hasNullCandidate reports whether the typed decode holds a value a null
-// decodes to: a 0 default, or an empty ScheduledValue under a threshold key.
+// decodes to: a 0 default, or a ScheduledValue with no default and no window
+// under a threshold key (its expiry is not asked: `{default: null, expires:
+// …}` is null too, #2708).
 func hasNullCandidate(cfg *ThresholdConfig) bool {
 	for _, v := range cfg.Defaults {
 		if v == 0 {
@@ -260,7 +295,7 @@ func hasNullCandidate(cfg *ThresholdConfig) bool {
 func hasEmptyThreshold(bodies map[string]map[string]ScheduledValue) bool {
 	for _, body := range bodies {
 		for k, sv := range body {
-			if sv.Default == "" && len(sv.Overrides) == 0 && sv.Expiry == nil && !strings.HasPrefix(k, "_") {
+			if sv.Default == "" && len(sv.Overrides) == 0 && !strings.HasPrefix(k, "_") {
 				return true
 			}
 		}
