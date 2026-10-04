@@ -53,9 +53,29 @@ python3 -m pytest -q tests/ops/test_vendored_yaml_v3.py
 ### 上游安全修補要手動 backport
 
 這份原碼不會跟著上游動：上游（或 `go.yaml.in/yaml/v3`）發布的安全修補**不會**自動進來，
-本 repo 的 Renovate 也沒有開 `gomod` manager。而 binary 的 buildinfo 記的是
-`gopkg.in/yaml.v3 v3.0.1 => ./third_party/yaml.v3 (devel)`，以版本比對公告的掃描器
-（例如 image 掃描的 trivy）未必還會把它當成 v3.0.1 報出來——不要拿「掃描沒報」當成沒事。
+本 repo 的 Renovate 也沒有開 `gomod` manager。
+
+⛔ **掃描器確定看不到它。** binary 的 buildinfo 記的是
+`gopkg.in/yaml.v3 v3.0.1 => ./third_party/yaml.v3 (devel)`。#2681 盲審用有漏洞的
+v3.0.0-2021… 實測：不 replace 時 trivy 0.74.0 報 CVE-2022-28948、govulncheck v1.8.0 報
+GO-2022-0603；改成目錄 replace 後兩者都**不報**（trivy 把套件記成路徑、沒有版本）。
+所以 release.yaml 與 nightly-image-scan.yaml 的 image 掃描不會替這份原碼報任何公告。
+
+**這是沒有機器守住的風險。** 本 repo 沒有 trivy fs、dependabot 設定檔、govulncheck 或 osv
+查詢可以接手（CodeQL default setup 分析的是程式碼，不查 module 公告）。GitHub 的
+dependency graph 仍可能從 `require gopkg.in/yaml.v3 v3.0.1` 列出它，但 Dependabot alerts
+有沒有開、replace 後是否照列，都未查證，不能當成補償控制。
+
+人工檢查（每次發版前，或看到 YAML 相關公告時）：
+
+```bash
+curl -sS -X POST https://api.osv.dev/v1/query \
+  -d '{"package":{"name":"gopkg.in/yaml.v3","ecosystem":"Go"},"version":"3.0.1"}'
+```
+
+回 `{}` 代表 OSV 對 v3.0.1 沒有公告。把版本換成 `3.0.0` 會回 `GHSA-hp87-p4gw-j4gq`，
+可用來確認查詢本身有效。`go.yaml.in/yaml/v3` 的公告也要看：同一段程式的修補可能只發在
+那條線上。
 
 - 看到 yaml.v3 的安全公告時，要人工判斷是否影響 v3.0.1，必要時把修補做成第二份 patch
   一起套用，並同步更新守衛（`_PATCH_SHA256` 與允許的 hunk）。

@@ -29,8 +29,11 @@ from __future__ import annotations
 
 import base64
 import hashlib
+import json
+import os
 import re
 import shutil
+import subprocess
 from pathlib import Path
 
 import pytest
@@ -142,15 +145,77 @@ def test_vendored_tree_is_v3_0_1_plus_only_the_hunk() -> None:
         "never edit these files by hand.")
 
 
+def _go() -> str:
+    go = shutil.which("go") or ("/usr/local/go/bin/go" if Path("/usr/local/go/bin/go").is_file() else None)
+    if go is None:
+        pytest.skip("no `go` on PATH: the replace check asks `go mod edit -json`, which "
+                    "is Go's own parser — a regex here was bypassable (#2681 review)")
+    return go
+
+
+def _yaml_v3_replaces(gomod: Path) -> list[dict]:
+    """Every `replace` of gopkg.in/yaml.v3 in gomod, as Go itself parses it.
+
+    `go mod edit -json` reads both the one-line and the `replace ( … )` block
+    forms, with or without a version on either side. GOTOOLCHAIN=local: this
+    parses, it builds nothing, so no toolchain download is wanted.
+    """
+    proc = subprocess.run(
+        [_go(), "mod", "edit", "-json", str(gomod)],
+        capture_output=True, text=True, encoding="utf-8", timeout=60,
+        env={**os.environ, "GOTOOLCHAIN": "local", "GOFLAGS": ""})
+    assert proc.returncode == 0, f"go mod edit -json {gomod}: rc={proc.returncode} {proc.stderr}"
+    return [r for r in (json.loads(proc.stdout).get("Replace") or [])
+            if r["Old"]["Path"] == _MODULE]
+
+
+def _replace_problems(gomod: Path, target: str, base: Path | None = None) -> list[str]:
+    found = _yaml_v3_replaces(gomod)
+    if len(found) != 1:
+        return [f"{len(found)} replace(s) of {_MODULE}, want exactly 1: {found}"]
+    (r,) = found
+    problems = []
+    if r["Old"].get("Version"):
+        problems.append(f"the replace pins Old.Version {r['Old']['Version']!r}; it must "
+                        "cover every version")
+    if r["New"]["Path"] != target or r["New"].get("Version"):
+        problems.append(f"New is {r['New']}, want the directory {target!r}")
+    elif ((base or gomod.parent) / target).resolve() != _VENDORED.resolve():
+        problems.append(f"{target!r} does not resolve to {_VENDORED}")
+    return problems
+
+
 def test_both_modules_build_with_the_vendored_copy() -> None:
     for gomod, target in _REPLACES.items():
-        found = re.findall(
-            r"^replace\s+gopkg\.in/yaml\.v3\s+=>\s+(\S+)\s*$",
-            gomod.read_text(encoding="utf-8"), re.MULTILINE)
-        assert found == [target], (
-            f"{gomod.relative_to(ROOT)} replaces gopkg.in/yaml.v3 with {found}, "
-            f"expected exactly [{target!r}].")
-        assert (gomod.parent / target).resolve() == _VENDORED.resolve()
+        problems = _replace_problems(gomod, target)
+        assert not problems, f"{gomod.relative_to(ROOT)}: {problems}"
+
+
+@pytest.mark.parametrize("extra", [
+    "replace gopkg.in/yaml.v3 v3.0.1 => ../elsewhere\n",
+    "replace (\n\tgopkg.in/yaml.v3 v3.0.1 => ../elsewhere\n)\n",
+])
+def test_an_extra_versioned_replace_is_caught(tmp_path: Path, extra: str) -> None:
+    """Go prefers a versioned replace over the unversioned one, so this line
+    would silently swap the vendored copy out; the check must count it."""
+    gomod = ROOT / "components" / "threshold-exporter" / "app" / "go.mod"
+    target = _REPLACES[gomod]
+    fake = tmp_path / "app" / "go.mod"
+    fake.parent.mkdir()
+    fake.write_text(gomod.read_text(encoding="utf-8") + extra, encoding="utf-8")
+    assert _replace_problems(fake, target, base=gomod.parent) != []
+
+
+def test_a_block_form_replace_is_read(tmp_path: Path) -> None:
+    gomod = ROOT / "components" / "threshold-exporter" / "app" / "go.mod"
+    text = gomod.read_text(encoding="utf-8").replace(
+        "replace gopkg.in/yaml.v3 => ./third_party/yaml.v3",
+        "replace (\n\tgopkg.in/yaml.v3 => ./third_party/yaml.v3\n)")
+    assert "replace (" in text
+    fake = tmp_path / "app" / "go.mod"
+    fake.parent.mkdir()
+    fake.write_text(text, encoding="utf-8")
+    assert _replace_problems(fake, "./third_party/yaml.v3", base=gomod.parent) == []
 
 
 # ── the guard catches what it exists to catch ──────────────────────────────

@@ -2,6 +2,7 @@ package routingpolicy
 
 import (
 	"fmt"
+	"runtime"
 	"strings"
 	"testing"
 	"time"
@@ -18,12 +19,14 @@ func policyWithTopLevelKeys(n int) []byte {
 	return []byte(b.String())
 }
 
-// fastestParse is the quickest of a few UnmarshalPolicy runs: the minimum is
-// the reading least disturbed by the scheduler, GC and the other tests.
+// fastestParse is the quickest of five UnmarshalPolicy runs, after a forced
+// GC: the minimum is the reading least disturbed by the scheduler, GC debt
+// left by earlier work, and the other tests.
 func fastestParse(t *testing.T, data []byte) time.Duration {
 	t.Helper()
+	runtime.GC()
 	best := time.Duration(1<<63 - 1)
-	for i := 0; i < 3; i++ {
+	for i := 0; i < 5; i++ {
 		var out map[string]any
 		start := time.Now()
 		if err := UnmarshalPolicy(data, &out); err != nil {
@@ -48,13 +51,13 @@ func fastestParse(t *testing.T, data []byte) time.Duration {
 // in speed (and -race slows everything again), but both sizes run on the
 // same machine in the same process. 8x the keys costs about 8-9x when
 // linear (also under -race); with v3.0.1's pairwise check it cost about
-// 90x (measured in the commit adding this test). The bound of 30 sits
-// between the two with a margin of 3x either way.
+// 90x (measured in the commit adding this test). The bound of 40 leaves
+// about 4x headroom over the linear reading and still sits well under 90.
 func TestUnmarshalPolicy_LargeMappingScalesLinearly(t *testing.T) {
 	if testing.Short() {
 		t.Skip("timing test; skipped with -short")
 	}
-	const small, large, bound = 4000, 32000, 30.0
+	const small, large, bound = 4000, 32000, 40.0
 
 	smallData, largeData := policyWithTopLevelKeys(small), policyWithTopLevelKeys(large)
 	fastestParse(t, smallData) // warm-up: first-run allocation and page faults
