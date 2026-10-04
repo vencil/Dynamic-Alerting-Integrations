@@ -526,3 +526,61 @@ class TestProfileRoutesRouting:
             "alertname": _PROFILE_OVERRIDE_ALERTNAME, "component": "custom",
             "tenant": _PROFILE_TENANT, "severity": "critical",
         }, f"tenant-{_PROFILE_TENANT}-override-0")
+
+
+# ============================================================
+# 4. Per-tenant enforced route + 沒有 tenant route 的租戶（#2519；synthetic）
+# ============================================================
+
+_FT_ROUTED = "demo-routed"
+_FT_UNROUTED = "demo-unrouted"
+
+
+def _build_fallthrough_am_yml() -> str:
+    """`{{tenant}}` enforced route 對每個認得的租戶展開；沒有 tenant route 的
+    租戶另有一條尾端 route 把告警交回 root receiver（內建 base 的 ``default``）。"""
+    routing_configs = {_FT_ROUTED: {"receiver": {
+        "type": "webhook", "url": f"https://hooks.example.com/{_FT_ROUTED}"}}}
+    enforced = {"receiver": {"type": "webhook",
+                             "url": "https://noc.example.com/{{tenant}}"}}
+    tenants = {_FT_ROUTED: "enable", _FT_UNROUTED: "enable"}
+    routes, receivers, warnings = generate_routes(
+        routing_configs, enforced_routing=enforced, tenants=tenants)
+    blocking = [w for w in warnings if "skipping" in w or "blocked" in w]
+    assert not blocking, f"synthetic config unexpectedly degraded: {blocking}"
+    inhibit_rules, _ = generate_inhibit_rules(tenants)
+    cm_yaml = assemble_configmap(
+        load_base_config(None), routes, receivers, inhibit_rules)
+    return yaml.safe_load(cm_yaml)["data"]["alertmanager.yml"]
+
+
+@pytest.fixture(scope="module")
+def fallthrough_etc(tmp_path_factory):
+    ensure_am_image()
+    return _write_etc(tmp_path_factory, "am-fallthrough-etc",
+                      _build_fallthrough_am_yml())
+
+
+@_needs_docker
+class TestEnforcedRootFallthrough:
+    """Alertmanager 的 `Route.Match`：子 route 都沒命中才加入 root，而
+    continue:true 的子 route 命中也算命中——所以只有 enforced route 的租戶若
+    沒有尾端 route，root 就再也收不到它的告警。"""
+
+    def test_unrouted_tenant_reaches_enforced_and_root(self, fallthrough_etc):
+        _assert_routed(fallthrough_etc, {
+            "alertname": "DemoCoreAlert", "tenant": _FT_UNROUTED,
+            "severity": "warning",
+        }, f"platform-enforced-{_FT_UNROUTED},default")
+
+    def test_routed_tenant_is_unchanged(self, fallthrough_etc):
+        _assert_routed(fallthrough_etc, {
+            "alertname": "DemoCoreAlert", "tenant": _FT_ROUTED,
+            "severity": "warning",
+        }, f"platform-enforced-{_FT_ROUTED},tenant-{_FT_ROUTED}")
+
+    def test_sentinel_is_still_sunk(self, fallthrough_etc):
+        _assert_routed(fallthrough_etc, {
+            "alertname": "TenantSilentWarning", "component": "sentinel",
+            "tenant": _FT_UNROUTED, "severity": "none",
+        }, "sentinel-sinkhole")

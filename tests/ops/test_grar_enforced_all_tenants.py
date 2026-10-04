@@ -85,7 +85,7 @@ def test_every_recognised_tenant_gets_its_enforced_route(tmp_path):
     frag = _render(_tree(tmp_path, _PER_TENANT))
     names = _enforced_names(frag["receivers"])
     assert names == [f"platform-enforced-{t}" for t in _EVERY]
-    by_receiver = {r["receiver"]: r for r in frag["route"]["routes"]}
+    by_receiver = {r["receiver"]: r for r in frag["route"]["routes"] if "receiver" in r}
     for tid in _EVERY:
         route = by_receiver[f"platform-enforced-{tid}"]
         assert route["matchers"] == [f'tenant="{tid}"']
@@ -149,9 +149,12 @@ def test_validate_config_routes_row_counts_them(tmp_path):
     row = vc.check_routes(str(_tree(tmp_path, _PER_TENANT)))
     assert row["status"] in (vc.PASS, vc.WARN), row
     # One enforced route + receiver per tenant, one tenant route + receiver
-    # per routed tenant (t-routed, t-dflt); one dedup inhibit rule each.
+    # per routed tenant (t-routed, t-dflt), one root fallthrough route (no
+    # receiver) per unrouted tenant; one dedup inhibit rule each.
     n = len(_EVERY) + 2
-    assert row["details"][0] == f"{n} routes, {n} receivers, {len(_EVERY)} inhibit_rules", row
+    unrouted = sum(1 for _b, routed in _TENANTS.values() if not routed)
+    assert row["details"][0] == (
+        f"{n + unrouted} routes, {n} receivers, {len(_EVERY)} inhibit_rules"), row
 
 
 def test_explain_route_trace_tree_and_types_follow(tmp_path):

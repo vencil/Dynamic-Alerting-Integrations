@@ -21,6 +21,10 @@ Functions:
   Main route generation:
     _build_tenant_routes / generate_routes
 
+  Root fallthrough for enforced-only tenants (#2519):
+    _build_root_fallthrough_routes / is_root_fallthrough_route
+    pin_root_fallthrough_receiver (called where the root receiver is known)
+
   Severity-dedup inhibit rules:
     _build_inhibit_rules / generate_inhibit_rules
 """
@@ -929,7 +933,78 @@ def generate_routes(routing_configs: dict[str, dict], allowed_domains: list[str]
     # _grar_validate.blocking_generation_errors。
     all_warnings.extend(receiver_name_collisions(sources))
 
+    # #2519: the root fallthrough of every tenant whose only top-level route is
+    # its continue:true enforced one — LAST, after every tenant route.
+    routes.extend(_build_root_fallthrough_routes(
+        [r["name"][len("platform-enforced-"):] for r in enf_receivers
+         if r["name"] != "platform-enforced"],
+        t_routes))
+
     return routes, receivers, all_warnings
+
+
+def _build_root_fallthrough_routes(enforced_tenants: list[str],
+                                   tenant_routes: list[dict]) -> list[dict]:
+    """One ``tenant="<t>"`` route per tenant of *enforced_tenants* that owns
+    no main tenant route in *tenant_routes* — so the root receiver still gets
+    its alerts (#2519).
+
+    Alertmanager's ``Route.Match`` adds the root only when NO child matched,
+    and a matched ``continue: true`` child counts. Before #2519 such a tenant
+    (threshold-only, ``_silent_mode``-only, ``_routing: disable``, a refused
+    ``_routing``) matched no child and its alerts reached the root receiver;
+    its per-tenant enforced route alone would take them off the root
+    (amtool-measured: ``default`` → ``platform-enforced-<t>``). This route is
+    matched next and delivers to the root's receiver, so the result is the
+    pre-#2519 delivery plus the enforced one.
+
+    A tenant WITH a main tenant route gets none: that route (no
+    ``continue``, matcher ``tenant="<t>"`` only) already took its alerts off
+    the root before #2519. The single, matcher-less enforced route
+    (``platform-enforced``) gets none either: it took every alert off the
+    root before #2519 too, so adding one would change that behaviour, not
+    restore one.
+
+    Emitted with ``matchers`` ONLY: no ``receiver`` (the root's is not known
+    here — Alertmanager inherits it, so the render-mode fragment is right
+    under whatever root it is merged into; ``pin_root_fallthrough_receiver``
+    writes the name where the root is known), no ``continue`` (nothing after
+    it can match this tenant), no ``group_by`` / timings (inherited from the
+    root as the root delivery did). It adds no receiver, so
+    ``receiver_name_collisions`` never sees it.
+    """
+    owned = {t for t in enforced_tenants
+             if any(r.get("receiver") == f"tenant-{t}"
+                    and f'tenant="{t}"' in (r.get("matchers") or [])
+                    for r in tenant_routes)}
+    return [{"matchers": [f'tenant="{t}"']}
+            for t in enforced_tenants if t not in owned]
+
+
+def is_root_fallthrough_route(route: object) -> bool:
+    """Whether *route* is one ``_build_root_fallthrough_routes`` emitted and
+    no receiver has been pinned on yet: a top-level route whose only key is
+    ``matchers``, holding exactly one ``tenant="..."``. No other generated
+    top-level route lacks a receiver."""
+    if not isinstance(route, dict) or set(route) != {"matchers"}:
+        return False
+    m = route["matchers"]
+    return (isinstance(m, list) and len(m) == 1 and isinstance(m[0], str)
+            and m[0].startswith('tenant="') and m[0].endswith('"'))
+
+
+def pin_root_fallthrough_receiver(routes: list[dict],
+                                  root_receiver: object) -> list[dict]:
+    """*routes* with the root's receiver name written on each root
+    fallthrough route (#2519) — the base config's ``route.receiver`` (built-in
+    base, ``--base-config``, or the cluster's on ``--apply``). Alertmanager
+    would inherit the same receiver; the name is written so the assembled
+    config says where the alert goes. A root without a usable receiver name
+    leaves the routes as they are (inheritance still applies)."""
+    if not isinstance(root_receiver, str) or not root_receiver:
+        return routes
+    return [dict(r, receiver=root_receiver) if is_root_fallthrough_route(r)
+            else r for r in routes]
 
 
 def _build_inhibit_rules(tenant: str) -> dict:
