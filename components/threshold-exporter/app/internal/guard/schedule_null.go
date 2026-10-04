@@ -4,8 +4,8 @@ package guard
 //
 // Owner's ruling: `{default: null}` with no window is plain null — no write
 // at that layer (pkg/config nullSchedule). A null anywhere in a schedule
-// that HAS windows — a window's `value: null`, or a null `default:` beside
-// windows — has no defined meaning and is refused here, as an error. Which
+// that HAS windows — a null window entry, a window's `window:` / `value:`
+// null, or a null `default:` beside windows — has no defined meaning and is refused here, as an error. Which
 // values are such schedules is pkg/config's answer
 // (config.ScopedTenants.ScheduleNulls, handed in as CheckInput.ScheduleNulls),
 // not re-judged here.
@@ -42,8 +42,7 @@ func checkScheduleNullValues(input CheckInput) []Finding {
 			Field:    sn.File + ":" + where,
 			Message: fmt.Sprintf("%s: `%s` is a schedule with override windows and a null in it: %s. A null inside "+
 				"a schedule that has windows is not accepted (#2708). Give the default and every window a value. To "+
-				"leave this layer without a value for `%s`, remove the key or write it as plain null — `{default: "+
-				"null}` with no `overrides:` means the same.",
+				"leave this layer without a value for `%s`, remove the key or write it as plain `null`.",
 				sn.File, where, strings.Join(sn.Problems, "; "), sn.Key),
 		})
 	}

@@ -79,7 +79,8 @@
     "#2518 n-rows: a threshold written as null (tenant file, root platform `tenants:`",
     "entry or profile) is no write on every plane: the layer below shows through.",
     "#2708 n5-n9: `{default: null}` (also with `overrides: []`) and no window is that same",
-    "null on every layer, a subtree `_defaults.yaml` included: the layer below shows through."
+    "null on every layer, a subtree `_defaults.yaml` included: the layer below shows through.",
+    "n10-n13: the same with `expires:` / `reason:` beside the null default (no window)."
   ],
   "trees": [
     {
@@ -1024,6 +1025,125 @@
       "files": {
         "_defaults.yaml": "defaults:\n  mysql_connections: 80\n",
         "sub/_defaults.yaml": "defaults:\n  mysql_connections: {default: null}\n",
+        "sub/tx.yaml": "tenants:\n  tx: {}\n"
+      },
+      "expect": {
+        "tx": {
+          "metric": 80,
+          "tenant_api": null,
+          "dedup": "enable",
+          "group_wait": null,
+          "exporter_dedup": "enable",
+          "silent_mode": "",
+          "walker": {
+            "effective_config": {
+              "mysql_connections": 80
+            },
+            "platform_overlay": null,
+            "profile_overlay": null
+          }
+        }
+      }
+    },
+    {
+      "name": "n10-tenant-default-null-with-expires-shows-the-platform-value",
+      "files": {
+        "_defaults.yaml": "defaults:\n  mysql_connections: 80\n",
+        "_platform.yaml": "tenants:\n  tx:\n    mysql_connections: 70\n",
+        "tx.yaml": "tenants:\n  tx:\n    mysql_connections: {default: null, expires: \"2099-01-01T00:00:00Z\", reason: incident}\n"
+      },
+      "expect": {
+        "tx": {
+          "metric": 70,
+          "tenant_api": 70,
+          "dedup": "enable",
+          "group_wait": null,
+          "exporter_dedup": "enable",
+          "silent_mode": "",
+          "walker": {
+            "effective_config": {
+              "mysql_connections": 70
+            },
+            "platform_overlay": [
+              {
+                "file": "_platform.yaml",
+                "keys": [
+                  "mysql_connections"
+                ]
+              }
+            ],
+            "profile_overlay": null
+          }
+        }
+      }
+    },
+    {
+      "name": "n11-platform-default-null-with-reason-shows-the-profile-value",
+      "files": {
+        "_defaults.yaml": "defaults:\n  mysql_connections: 80\n",
+        "_profiles.yaml": "profiles:\n  std:\n    mysql_connections: 60\n",
+        "_platform.yaml": "tenants:\n  tx:\n    mysql_connections: {default: ~, reason: load test}\n",
+        "tx.yaml": "tenants:\n  tx:\n    _profile: std\n"
+      },
+      "expect": {
+        "tx": {
+          "metric": 60,
+          "tenant_api": 60,
+          "dedup": "enable",
+          "group_wait": null,
+          "exporter_dedup": "enable",
+          "silent_mode": "",
+          "walker": {
+            "effective_config": {
+              "_profile": "std",
+              "mysql_connections": 60
+            },
+            "platform_overlay": null,
+            "profile_overlay": [
+              {
+                "profile": "std",
+                "file": "_profiles.yaml",
+                "keys": [
+                  "mysql_connections"
+                ]
+              }
+            ]
+          }
+        }
+      }
+    },
+    {
+      "name": "n12-profile-default-null-with-expires-shows-the-subtree-value",
+      "files": {
+        "_defaults.yaml": "defaults:\n  mysql_connections: 80\n",
+        "_profiles.yaml": "profiles:\n  std:\n    mysql_connections: {default: null, expires: \"2099-01-01T00:00:00Z\", reason: incident}\n",
+        "sub/_defaults.yaml": "defaults:\n  mysql_connections: 40\n",
+        "sub/tx.yaml": "tenants:\n  tx:\n    _profile: std\n"
+      },
+      "expect": {
+        "tx": {
+          "metric": 40,
+          "tenant_api": null,
+          "dedup": "enable",
+          "group_wait": null,
+          "exporter_dedup": "enable",
+          "silent_mode": "",
+          "walker": {
+            "effective_config": {
+              "_profile": "std",
+              "mysql_connections": 40
+            },
+            "platform_overlay": null,
+            "profile_overlay": null
+          }
+        }
+      }
+    },
+    {
+      "name": "n13-subtree-default-null-with-reason-shows-the-root-value",
+      "files": {
+        "_defaults.yaml": "defaults:\n  mysql_connections: 80\n",
+        "sub/_defaults.yaml": "defaults:\n  mysql_connections: {default: ~, reason: load test}\n",
         "sub/tx.yaml": "tenants:\n  tx: {}\n"
       },
       "expect": {

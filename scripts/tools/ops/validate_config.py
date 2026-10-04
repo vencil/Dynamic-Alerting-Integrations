@@ -1661,14 +1661,14 @@ def _schedule_null_lines(rel: str, where: str, body: object) -> list[str]:
 def check_schedule_null(config_dir: str) -> dict[str, object]:
     """A null inside a threshold schedule that has override windows (#2708).
 
-    A window's ``value: null``, or a null ``default:`` beside one or more
-    windows, has no defined meaning and is refused — the same set da-guard
-    reports as ``schedule_null_value``, judged by the same predicate
+    A null window entry, a window's ``window: null`` / ``value: null``, or a
+    null ``default:`` beside windows has no defined meaning and is refused
     (``_grar_validate.schedule_null_problems``, Go ``scheduleNullProblems``).
-    ``{default: null}`` with no window is plain null (no write) and is not
-    this row's (a null in a tenant file is ``yaml_quoting``'s).
+    A schedule with no window and a null ``default:`` is plain null (no
+    write) and is not this row's (a null in a tenant file is
+    ``yaml_quoting``'s).
 
-    Files read, as the exporter reads them: every tenant file's
+    Files read: every tenant file's
     ``tenants:`` entries; each directory's selected ``_defaults.yaml``
     carrier's defaults block (its ``defaults:`` mapping, else the whole
     document, as the chain merge reads it); and every ``_`` file at the root
@@ -1966,8 +1966,7 @@ _CHECK_HINTS: dict[str, tuple[str, str]] = {
     "schedule_null": (
         "Give each listed schedule's default and every override window a "
         "value. To leave that layer without a value for the key, remove the "
-        "key or write it as plain null — `{default: null}` with no "
-        "`overrides:` means the same.",
+        "key or write it as plain `null`.",
         "docs/cli-reference.md#validate-config",
     ),
     # #2386: the row names the file and keys; where they go depends on level.

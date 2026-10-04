@@ -142,7 +142,12 @@ func scheduleNullFindings(fs []guard.Finding) []guard.Finding {
 func TestGuard_ScheduleDefaultNullIsPlainNull(t *testing.T) {
 	t.Parallel()
 	for _, layer := range scheduleNullLayers() {
-		for _, v := range []string{"null", "{default: null}", "{default: null, overrides: []}", "{default: ~, overrides: ~}"} {
+		for _, v := range []string{
+			"null", "{default: null}", "{default: null, overrides: []}", "{default: ~, overrides: ~}",
+			// ScheduledValue's own `expires:` / `reason:` do not make it a write (#2708 r1).
+			`{default: null, expires: "2099-01-01T00:00:00Z", reason: incident}`,
+			"{default: ~, reason: load test, overrides: []}",
+		} {
 			t.Run(layer.name+"/"+v, func(t *testing.T) {
 				t.Parallel()
 				files := layer.files(v)
@@ -178,6 +183,14 @@ func TestGuard_ScheduleNullWithWindowsIsRefused(t *testing.T) {
 		"default null beside a window": {
 			`{default: null, overrides: [{window: "00:00-01:00", value: 60}]}`,
 			"`default:` is null beside 1 override window(s)",
+		},
+		"window null": {
+			`{default: 50, overrides: [{window: null, value: 60}]}`,
+			"`overrides[0]` has `window: null`",
+		},
+		"null window entry": {
+			`{default: 50, overrides: [~]}`,
+			"`overrides[0]` is null",
 		},
 	}
 	for _, layer := range scheduleNullLayers() {
@@ -231,5 +244,35 @@ func TestGuard_ScheduleNullControls(t *testing.T) {
 	}
 	if code, fs := guardFindingsOf(t, outside); code != exitFindings || len(scheduleNullFindings(fs)) != 1 {
 		t.Errorf("whole tree: exit %d, findings %+v; want 1 and one schedule_null_value", code, fs)
+	}
+}
+
+// A no-window null default with a key that is not ScheduledValue's, and a
+// null default beside a window, are NOT plain null: the walker keeps them as
+// the layer's own value, attributed to that layer, as before #2708 (the
+// second is refused by schedule_null_value, its reading left unchanged).
+func TestGuard_ScheduleNullOtherShapesKeepTheirLayer(t *testing.T) {
+	t.Parallel()
+	own := map[string]struct{ layer, file string }{
+		"tenant":   {config.KeyLayerTenant, "sub/tx.yaml"},
+		"platform": {config.KeyLayerPlatform, "_platform.yaml"},
+		"profile":  {config.KeyLayerProfile, "_profiles.yaml"},
+		"subtree":  {config.KeyLayerDefaults, "sub/_defaults.yaml"},
+	}
+	for _, layer := range scheduleNullLayers() {
+		for _, v := range []string{
+			"{default: null, owner: team-a}",
+			`{default: null, overrides: [{window: "00:00-01:00", value: 60}]}`,
+		} {
+			t.Run(layer.name+"/"+v, func(t *testing.T) {
+				t.Parallel()
+				got, src := walkerValue(t, layer.files(v))
+				want := own[layer.name]
+				if _, isMap := got.(map[string]any); !isMap || src.Layer != want.layer || src.File != want.file {
+					t.Errorf("walker: mysql_connections = %v from %s %s, want the schedule itself from %s %s",
+						got, src.Layer, src.File, want.layer, want.file)
+				}
+			})
+		}
 	}
 }

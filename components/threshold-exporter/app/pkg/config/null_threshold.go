@@ -54,22 +54,16 @@ func nullThreshold(key string, raw any) bool {
 }
 
 // nullSchedule reports whether raw (a generic YAML decode) is a schedule that
-// writes nothing: a mapping whose `default:` is null and that has no override
-// window — `{default: null}`, `{default: null, overrides: []}` or
-// `{default: null, overrides: null}` (#2708).
+// writes nothing: a mapping whose `default:` is null, with no override window
+// (`overrides:` absent, `[]` or null) and no key other than ScheduledValue's
+// own `expires:` / `reason:` (#2708). By the owner's ruling it is plain null.
+// Before, /metrics kept it as a present empty value (resolve fell back to the
+// ROOT default) while the walker showed it as that layer's own value.
 //
-// ⛔ EXACTLY PLAIN NULL, BY THE OWNER'S RULING. Before, the planes answered
-// three ways again: /metrics kept the empty ScheduledValue as a PRESENT key
-// (so the subtree overlay, the profile fill and the platform supply counted
-// it as written and resolve fell back to the ROOT default), while the walker
-// rendered `{default: null}` as the tenant's own value. Treating it as the
-// null it means puts it through every #2518 reader above unchanged.
-//
-// ⚠️ ONLY THOSE KEYS. `expires:` / `reason:` beside a null default, or any
-// other key, is a different shape and is left as it was. A schedule WITH a
-// window and a null anywhere in it is not a write of nothing either: da-guard
-// refuses it (scheduleNullProblems, schedule_null.go) and its runtime
-// reading is unchanged.
+// ⚠️ A mapping written in place. A YAML `<<:` merge key is not resolved here
+// (nor by ScheduledValue.UnmarshalYAML), so such a spelling is not covered.
+// Any other extra key is left as it was. A schedule WITH a window and a null
+// in it is refused instead (scheduleNullProblems, schedule_null.go).
 func nullSchedule(raw any) bool {
 	m, ok := raw.(map[string]any)
 	if !ok {
@@ -81,7 +75,7 @@ func nullSchedule(raw any) bool {
 	}
 	for k, v := range m {
 		switch k {
-		case "default":
+		case "default", "expires", "reason":
 		case "overrides":
 			if l, isList := v.([]any); v != nil && (!isList || len(l) > 0) {
 				return false
@@ -288,7 +282,9 @@ func dropNullBodies(typed map[string]map[string]ScheduledValue, raw map[string]m
 }
 
 // hasNullCandidate reports whether the typed decode holds a value a null
-// decodes to: a 0 default, or an empty ScheduledValue under a threshold key.
+// decodes to: a 0 default, or a ScheduledValue with no default and no window
+// under a threshold key (its expiry is not asked: `{default: null, expires:
+// …}` is null too, #2708).
 func hasNullCandidate(cfg *ThresholdConfig) bool {
 	for _, v := range cfg.Defaults {
 		if v == 0 {
@@ -301,7 +297,7 @@ func hasNullCandidate(cfg *ThresholdConfig) bool {
 func hasEmptyThreshold(bodies map[string]map[string]ScheduledValue) bool {
 	for _, body := range bodies {
 		for k, sv := range body {
-			if sv.Default == "" && len(sv.Overrides) == 0 && sv.Expiry == nil && !strings.HasPrefix(k, "_") {
+			if sv.Default == "" && len(sv.Overrides) == 0 && !strings.HasPrefix(k, "_") {
 				return true
 			}
 		}

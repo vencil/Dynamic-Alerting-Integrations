@@ -827,16 +827,15 @@ def _validate_version_label(tenant: str, key: str, base: str) -> list[str]:
 
 
 def is_null_schedule(value: object) -> bool:
-    """Go ``nullSchedule`` (pkg/config/null_threshold.go, #2708): a schedule
-    that writes nothing — a mapping whose ``default`` is null with no
-    override window (``{default: null}``, ``overrides: []`` or
-    ``overrides: null``) and no other key. It means exactly what a plain
-    null means."""
+    """Go ``nullSchedule`` (pkg/config/null_threshold.go, #2708): a mapping
+    whose ``default`` is null, with no override window (``overrides``
+    absent, ``[]`` or null) and no key other than ``expires`` / ``reason``.
+    It means what a plain null means. A YAML ``<<:`` merge is not covered."""
     if not isinstance(value, dict) or "default" not in value \
             or value["default"] is not None:
         return False
     for k, v in value.items():
-        if k == "default":
+        if k in ("default", "expires", "reason"):
             continue
         if k == "overrides" and (v is None or (isinstance(v, list) and not v)):
             continue
@@ -856,8 +855,9 @@ def writes_nothing(key: object, value: object) -> bool:
 def schedule_null_problems(value: object) -> list[str]:
     """Go ``scheduleNullProblems`` (pkg/config/schedule_null.go, #2708):
     each null inside a schedule (a mapping with a ``default`` key) that has
-    override windows — a null ``default`` beside them, or a window's
-    ``value: null``. Empty for anything else. The wording is Go's."""
+    override windows — a null ``default`` beside them, a null window entry,
+    or a window's ``window: null`` / ``value: null``. Empty for anything
+    else."""
     if not isinstance(value, dict) or "default" not in value:
         return []
     windows = value.get("overrides")
@@ -867,6 +867,11 @@ def schedule_null_problems(value: object) -> list[str]:
     if value["default"] is None:
         out.append(f"`default:` is null beside {len(windows)} override window(s)")
     for i, w in enumerate(windows):
+        if w is None:
+            out.append(f"`overrides[{i}]` is null")
+            continue
+        if isinstance(w, dict) and "window" in w and w["window"] is None:
+            out.append(f"`overrides[{i}]` has `window: null`")
         if isinstance(w, dict) and "value" in w and w["value"] is None:
             win = w.get("window")
             win_text = json.dumps(win) if isinstance(win, str) else str(win)

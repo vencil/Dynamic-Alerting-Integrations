@@ -4,15 +4,15 @@ package config
 //
 // Owner's ruling: a schedule with no window and a null `default:` writes
 // nothing — exactly plain null (nullSchedule, null_threshold.go). A null
-// anywhere in a schedule that HAS windows — a window's `value: null`, or a
-// null `default:` beside one or more windows — is refused at validation time
+// anywhere in a schedule that HAS windows — a window's `value: null` or
+// `window: null`, a null window entry, or a null `default:` beside windows —
+// is refused at validation time
 // (da-guard schedule_null_value, validate-config schedule_null). No runtime
 // meaning is defined for it: what /metrics and the walker do with such a
 // value is left exactly as it was.
 //
-// "A schedule" is the shape ScheduledValue.UnmarshalYAML decodes as one: a
-// mapping with a `default:` key. An `overrides:`-only mapping is not one (the
-// decoder takes its arbitrary-mapping branch, see isThresholdShaped).
+// "A schedule" here is a mapping written in place with a `default:` key; a
+// YAML `<<:` merge key is not resolved, so a merged spelling is not covered.
 
 import (
 	"fmt"
@@ -64,9 +64,16 @@ func scheduleNullProblems(raw any) []string {
 		out = append(out, fmt.Sprintf("`default:` is null beside %d override window(s)", len(windows)))
 	}
 	for i, w := range windows {
+		if w == nil {
+			out = append(out, fmt.Sprintf("`overrides[%d]` is null", i))
+			continue
+		}
 		wm, ok := w.(map[string]any)
 		if !ok {
 			continue
+		}
+		if win, has := wm["window"]; has && win == nil {
+			out = append(out, fmt.Sprintf("`overrides[%d]` has `window: null`", i))
 		}
 		if v, has := wm["value"]; has && v == nil {
 			out = append(out, fmt.Sprintf("`overrides[%d]` (window %s) has `value: null`", i, windowText(wm["window"])))

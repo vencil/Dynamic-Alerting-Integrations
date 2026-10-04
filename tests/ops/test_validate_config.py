@@ -2857,8 +2857,8 @@ class TestScheduleNull:
     a subtree `_defaults.yaml`, a root platform file's `tenants:` entry and a
     profile. `{default: null}` with no window is plain null and is not this
     row's. Measured on main 990f112f: the subtree, platform and profile
-    layers printed `Result: PASS`, rc 0 (only the tenant file FAILed, through
-    `yaml_quoting`)."""
+    layers printed `Result: WARN (pass with warnings)`, rc 0 (only the tenant
+    file FAILed, through `yaml_quoting`)."""
 
     _WINDOW_NULL = '{default: "50", overrides: [{window: "00:00-23:59", value: null}]}'
     _DEFAULT_NULL = '{default: null, overrides: [{window: "00:00-01:00", value: "60"}]}'
@@ -2894,6 +2894,9 @@ class TestScheduleNull:
     @pytest.mark.parametrize("value,problem", [
         (_WINDOW_NULL, '`overrides[0]` (window "00:00-23:59") has `value: null`'),
         (_DEFAULT_NULL, "`default:` is null beside 1 override window(s)"),
+        ('{default: "50", overrides: [{window: null, value: "60"}]}',
+         "`overrides[0]` has `window: null`"),
+        ('{default: "50", overrides: [~]}', "`overrides[0]` is null"),
     ])
     def test_a_null_beside_windows_fails_and_is_named(self, tmp_path, layer,
                                                        value, problem):
@@ -2917,6 +2920,7 @@ class TestScheduleNull:
     @pytest.mark.parametrize("layer", ["tenant", "subtree", "platform", "profile"])
     @pytest.mark.parametrize("value", [
         "null", "{default: null}", "{default: null, overrides: []}",
+        '{default: null, expires: "2099-01-01T00:00:00Z", reason: incident}',
         '{default: "50", overrides: [{window: "00:00-23:59", value: "70"}]}',
     ])
     def test_no_window_null_and_numeric_schedules_pass(self, tmp_path, layer,
@@ -2935,3 +2939,23 @@ class TestScheduleNull:
             f"defaults:\n  mysql_connections: {self._WINDOW_NULL}\n", encoding="utf-8")
         r = vc.check_schedule_null(str(d))
         assert r["status"] == vc.PASS, r
+
+    @pytest.mark.parametrize("value,null", [
+        ({"default": None}, True),
+        ({"default": None, "overrides": []}, True),
+        ({"default": None, "overrides": None}, True),
+        ({"default": None, "expires": "2099-01-01T00:00:00Z", "reason": "x"}, True),
+        ({"default": None, "owner": "team-a"}, False),
+        ({"default": None, "overrides": [{"window": "00:00-01:00", "value": "60"}]}, False),
+        ({"default": "50"}, False),
+        ({"overrides": []}, False),
+        (None, False),
+    ])
+    def test_is_null_schedule_shapes(self, value, null):
+        """#2708 r1: the predicate describe_tenant and this row share (Go
+        nullSchedule): only ScheduledValue's own `expires` / `reason` may sit
+        beside a null default with no window; any other key is not null."""
+        from _grar_validate import is_null_schedule, writes_nothing
+        assert is_null_schedule(value) is null
+        assert writes_nothing("mysql_connections", value) is (value is None or null)
+        assert writes_nothing("_state_x", value) is False
