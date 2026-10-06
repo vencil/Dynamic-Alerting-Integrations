@@ -139,6 +139,9 @@ if (_HERE / "ops").is_dir() and str(_HERE / "ops") not in sys.path:
 
 from _lib_io import YamlFileError, safe_label  # noqa: E402
 from _lib_exitcodes import EXIT_CALLER_ERROR  # noqa: E402
+from _lib_constants import (  # noqa: E402
+    TOP_LEVEL_READ_ELSEWHERE, VALID_RESERVED_KEYS, VALID_RESERVED_PREFIXES,
+)
 import guard_dispatch  # noqa: E402
 
 __all__ = [
@@ -159,11 +162,13 @@ __all__ = [
     "MISSING_BINARY_MESSAGE",
     "ParseFailedError",
     "exit_on_served_values_error",
+    "is_tenant_reserved_key",
     "load_effective",
     "load_served_tree",
     "load_served_values",
     "print_load_error",
     "print_load_warnings",
+    "written_config",
 ]
 
 SUBCOMMAND = "served-values"
@@ -627,4 +632,48 @@ def load_effective(
         raise EffectiveError(
             f"da-guard {EFFECTIVE_SUBCOMMAND}: an entry is not the shape this reader reads ({e})",
             returncode, stderr) from e
+    return out
+
+
+def is_tenant_reserved_key(key: str) -> bool:
+    """A reserved key a tenant may carry: `VALID_RESERVED_KEYS` or a
+    `VALID_RESERVED_PREFIXES` key (the Python copy of the exporter's list,
+    pinned to Go by tests/shared/test_reserved_key_py_go_parity.py), minus
+    the platform-level keys another reader takes from the top of a defaults
+    file (`TOP_LEVEL_READ_ELSEWHERE`: `_routing_defaults`,
+    `_routing_enforced`) that are not themselves tenant keys. `_policies`
+    and any other root-only `_` key is not one."""
+    if key in VALID_RESERVED_KEYS:
+        return True
+    return key.startswith(VALID_RESERVED_PREFIXES) and key not in TOP_LEVEL_READ_ELSEWHERE
+
+
+_EMPTY_FILL = ("", [], {}, None)
+
+
+def written_config(effective: TenantEffective, served: TenantValues) -> dict[str, Any]:
+    """A tenant's config as written plus inherited, for a reader that judges
+    what was WRITTEN (#2115 (c), the policy readers): `effective_config`
+    (`da-guard effective`) with
+
+    * only the reserved keys a tenant may carry (`is_tenant_reserved_key`):
+      a root `_defaults.yaml` without a `defaults:` mapping is merged whole,
+      so its `_policies` / `_routing_defaults` would otherwise read as the
+      tenant's own;
+    * `_metadata` from /metrics (`served.values["_metadata"]`), not from
+      /effective, which drops `_metadata` at every level: /metrics inherits
+      it shallowly (#2115 R4). The fields the exporter fills in empty (`""`,
+      `[]`) are not written, and with none left there is no `_metadata`.
+
+    Threshold keys are as written (a retired spelling stays retired)."""
+    out: dict[str, Any] = {}
+    for key, value in effective.effective_config.items():
+        if not key.startswith("_") or (key != "_metadata" and is_tenant_reserved_key(key)):
+            out[key] = value
+    meta = served.values.get("_metadata")
+    if isinstance(meta, dict):
+        written = {k: v for k, v in meta.items()
+                   if not any(type(v) is type(e) and v == e for e in _EMPTY_FILL)}
+        if written:
+            out["_metadata"] = written
     return out

@@ -2426,8 +2426,8 @@ da-tools evaluate-policy --config-dir <PATH> [--policy <FILE>] [--json] [--ci]
 
 **規則讀的是哪一個值**（[#2115](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/2115)）：`--config-dir` 讀生效值，不是租戶檔的字面內容；`target` 與 `when` 依 key 種類讀：
 
-- **閾值**（不以 `_` 開頭）：exporter 在 `/metrics` 實際發出的數字（經 `da-guard served-values --schedules`）。值寫在根 `defaults:`、平台檔 `tenants:`、租戶檔或子目錄 `_defaults.yaml` 都一樣，子目錄裡的租戶也會評估。排程閾值逐時段比對，任一時段違規即違規（訊息附 UTC 時段）；某時段 `disable` 時該段只有 `required` 算違規。整天都不發出的鍵（`disable`、沒有預設值）視同沒有。數字以數值比較（`equals: 80` 等於發出的 `80.0`）。`target` 寫舊拼法（例如 `mysql_cpu`）時以 exporter 的別名表換成現行拼法；`<key>_critical` 是 critical 那一列。`when` 對排程閾值：任一時段成立即成立。
-- **保留鍵**（`_` 開頭，`_routing` 除外）：寫法＋繼承（經 `da-guard effective`）；exporter 自動補的預設值（`_severity_dedup: enable`、`_metadata` 空欄位等）不算有寫。
+- **閾值**（不以 `_` 開頭）：exporter 在 `/metrics` 實際發出的數字（經 `da-guard served-values --schedules`）。值寫在根 `defaults:`、平台檔 `tenants:`、租戶檔或子目錄 `_defaults.yaml` 都一樣，子目錄裡的租戶也會評估。排程閾值逐時段比對，任一時段違規即違規（訊息附 UTC 時段）；某時段 `disable` 時該段只有 `required` 算違規。整天都不發出的鍵（`disable`、沒有預設值）視同沒有。數字以數值比較（`equals: 80` 等於發出的 `80.0`）。`target` 寫舊拼法（例如 `mysql_cpu`）時以 exporter 的別名表換成現行拼法；寫成 `<key>_critical` 鍵的 critical 列以 `<key>_critical` 比對，寫成 `"95:critical"` 的值仍以 `<key>` 比對（該列 severity 為 critical）。`when` 對排程閾值：任一時段成立即成立。
+- **保留鍵**（`_` 開頭，`_routing` 除外）：寫法＋繼承（經 `da-guard effective`），只收租戶可寫的保留鍵（根層專用的 `_policies`、`_routing_defaults` 等不算租戶的）；exporter 自動補的預設值（`_severity_dedup: enable` 等）不算有寫。`_metadata` 例外：`/effective` 不帶它，改取 `/metrics` 的 `_metadata`（照 exporter 淺層繼承），去掉 exporter 補的空欄位（空字串、空 list）後才算有寫。
 - **`_routing`**：路由產生器解析後的結果（`_routing_defaults` 逐層、routing profile、租戶 `_routing` 合併，`{{tenant}}` 已代換）。
 
 沒有 `tenants:` 的檔不是租戶，stderr 逐檔印 `WARN`；da-guard 的 stderr 逐行轉印（前綴 `da-guard|`）。需要 da-guard（映像內建；repo 裡直接跑時用 `$DA_GUARD_BINARY` 或 `$PATH`）。⚠️ 已知限制：根 `defaults:` 與租戶同時寫 `X_critical` 的樹，da-guard 拒收（結束碼 2），本工具不評估任何規則。
@@ -2451,7 +2451,7 @@ da-tools evaluate-policy --config-dir conf.d/ --ci
 |------|------|
 | `0` | 無 error 違規 |
 | `1` | CI 模式：有 error 級別違規 |
-| `2` | 呼叫端錯誤：參數錯誤（含沒給 `--config-dir`）／`--policy` 供了但不是檔案（含空字串）／`--config-dir` 不存在／`--policy` 檔或 `_defaults.yaml` 內容讀不到（不是 UTF-8、不是合法 YAML；訊息指名哪一檔，#1654）／（只在有 policy 規則時才讀租戶，沒有規則時回 0）exporter 解析失敗而整份跳過的檔、讀不到的檔或子目錄（`ERROR` 行指名，da-guard 的 stderr 附在下面）、整棵樹被 da-guard 拒收、規則讀 `_routing` 而路由產生器拒收這棵樹、找不到 da-guard（`--json` 時 `reason` 為 `yaml_file_unreadable`／`da_guard_failed`／`routing_tree_refused`，#2115）。⛔ 不要靠拿掉 `--policy` 轉綠——那等於不帶你的策略檔評估（#1651） |
+| `2` | 呼叫端錯誤：參數錯誤（含沒給 `--config-dir`）／`--policy` 供了但不是檔案（含空字串）／`--config-dir` 不存在／`--policy` 檔或 `_defaults.yaml` 內容讀不到（不是 UTF-8、不是合法 YAML；訊息指名哪一檔，#1654）／（只在有 policy 規則時才讀租戶，沒有規則時回 0）沒有任何設定檔的目錄（例如空目錄配 `--policy`；原本回 0）、exporter 解析失敗而整份跳過的檔、讀不到的檔或子目錄（`ERROR` 行指名，da-guard 的 stderr 附在下面）、整棵樹被 da-guard 拒收、規則讀 `_routing` 而路由產生器拒收這棵樹、找不到 da-guard（`--json` 時 `reason` 為 `yaml_file_unreadable`／`da_guard_failed`／`routing_tree_refused`，#2115）。⛔ 不要靠拿掉 `--policy` 轉綠——那等於不帶你的策略檔評估（#1651） |
 
 #### opa-evaluate
 
@@ -2484,7 +2484,7 @@ da-tools opa-evaluate --config-dir conf.d/ --opa-url http://localhost:8181
 da-tools opa-evaluate --config-dir conf.d/ --dry-run
 ```
 
-**OPA input**（[#2115](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/2115)）：`input.tenants` 形狀不變（每個租戶一份「key → 寫法」），內容是寫法＋繼承（經 `da-guard effective`：`defaults:`、平台檔 `tenants:`、profile、子目錄 `_defaults.yaml`），子目錄裡的租戶也在；key 照寫法（舊拼法不換）。新增 `input.served`：每個租戶此刻在 `/metrics` 發出的閾值數字，key 為現行拼法（別名已正規化；`<key>_critical` 是 critical 那一列）。對閾值的值下判斷的 rego 請讀 `input.served`。沒有 `tenants:` 的檔不是租戶（stderr `WARN`）；exporter 解析失敗或讀不到的檔、被 da-guard 拒收的樹、找不到 da-guard 時以結束碼 2 結束（`ERROR` 行指名），沒有任何設定檔的目錄也是 2。
+**OPA input**（[#2115](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/2115)）：`input.tenants` 形狀不變（每個租戶一份「key → 寫法」），內容是寫法＋繼承（經 `da-guard effective`：`defaults:`、平台檔 `tenants:`、profile、子目錄 `_defaults.yaml`；保留鍵與 `_metadata` 的取法同 `evaluate-policy`），子目錄裡的租戶也在；key 照寫法（舊拼法不換）。新增 `input.served`：每個租戶此刻在 `/metrics` 發出的閾值數字，key 為現行拼法（別名已正規化；寫成 `<key>_critical` 鍵的 critical 列在 `<key>_critical` 之下，寫成 `"95:critical"` 的值仍在 `<key>` 之下）。對閾值的值下判斷的 rego 請讀 `input.served`。沒有 `tenants:` 的檔不是租戶（stderr `WARN`）；exporter 解析失敗或讀不到的檔、被 da-guard 拒收的樹、找不到 da-guard 時以結束碼 2 結束（`ERROR` 行指名），沒有任何設定檔的目錄也是 2。
 
 ---
 

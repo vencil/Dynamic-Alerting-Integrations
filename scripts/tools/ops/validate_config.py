@@ -1078,6 +1078,21 @@ def check_profiles(config_dir: str) -> dict[str, object]:
 # ============================================================
 # Check 8: Policy-as-Code (DSL evaluation)
 # ============================================================
+# #2115 0-B: when policy_dsl cannot read the tenants, the generic "check the
+# DSL syntax" advice points at the wrong thing — the policy file is fine.
+_POLICY_DSL_TREE_UNREADABLE_HINT = (
+    "threshold-exporter cannot load this tree as the lines above say: repair "
+    "or remove the file they name (or the shape da-guard refuses), then re-run. "
+    "No policy was evaluated.")
+_POLICY_DSL_NO_DA_GUARD_HINT = (
+    "Put da-guard on $PATH or set $DA_GUARD_BINARY to it (the da-tools image "
+    "ships it as /usr/local/bin/da-guard), then re-run. No policy was evaluated.")
+_POLICY_DSL_ROUTING_REFUSED_HINT = (
+    "A rule reads `_routing`, and the route generator refuses this tree for the "
+    "reasons above (`da-tools generate-routes --validate` shows the same): fix "
+    "them, then re-run. No policy was evaluated.")
+
+
 def check_policy_dsl(config_dir: str, policy_dsl_file: str | None = None) -> dict[str, object]:
     """Evaluate declarative policies from _defaults.yaml _policies or standalone file.
 
@@ -1166,11 +1181,15 @@ def check_policy_dsl(config_dir: str, policy_dsl_file: str | None = None) -> dic
                              # "\n" only: `splitlines` also cuts at U+2028 etc.,
                              # which can sit in a file name (_lib_tenant_values).
                              *(ln for ln in buf.getvalue().split("\n") if ln)],
-                            caller_error=isinstance(exc, pe.DaGuardNotFoundError))
+                            caller_error=isinstance(exc, pe.DaGuardNotFoundError),
+                            hint=_POLICY_DSL_NO_DA_GUARD_HINT
+                            if isinstance(exc, pe.DaGuardNotFoundError)
+                            else _POLICY_DSL_TREE_UNREADABLE_HINT)
     except pe.RoutingTreeRefused as exc:
         return _make_result("policy_dsl", FAIL,
                             ["the route generator refuses this tree, so `_routing` cannot "
-                             "be resolved:", *exc.lines])
+                             "be resolved:", *exc.lines],
+                            hint=_POLICY_DSL_ROUTING_REFUSED_HINT)
     tenant_configs = inputs.views
     if not tenant_configs:
         return _make_result("policy_dsl", PASS,
@@ -1446,12 +1465,9 @@ def _root_defaults_value_detail(rel: str, key: str | None, raw: str,
 
 
 #: `_`-prefixed keys another reader takes from the TOP level of a defaults
-#: file — the route generator's `_routing_defaults` / `_routing_enforced`, the
-#: custom-alert compiler's `_custom_alerts` — so they are never reported
-#: (#2386). da-guard's `TopLevelReadElsewhere` is the same list;
-#: tests/shared/defaults_wrapper_matrix.json pins both.
-TOP_LEVEL_READ_ELSEWHERE = frozenset(
-    {"_custom_alerts", "_routing_defaults", "_routing_enforced"})
+#: file (#2386); the list lives in _lib_constants (shared with the policy
+#: readers since #2115 0-B).
+from _lib_constants import TOP_LEVEL_READ_ELSEWHERE  # noqa: E402
 
 #: Keys the defaults-chain merge drops at every level, so they act in no
 #: shape (#2386): Go's ``config.MergeDroppedKeys``, pinned by

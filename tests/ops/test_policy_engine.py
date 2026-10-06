@@ -576,7 +576,7 @@ class TestLoadPolicyInputs:
 
     取代原本的 TestLoadTenantConfigs（守的是舊契約：只讀根目錄租戶檔、平面檔以檔名當租戶、
     空檔登記成 `{}` 租戶）。新契約下平面檔與空檔都不是租戶（Go 列進 `skipped`、印 WARN），
-    子目錄裡的租戶照常出現；四個位置的值一致性在 tests/shared/test_served_values_readers_matrix.py。
+    子目錄裡的租戶照常出現；四個位置的值一致性在 tests/shared/test_served_values_policy_readers_matrix.py。
     """
 
     def test_thresholds_are_served_and_reserved_keys_are_written_plus_inherited(self, tmp_path):

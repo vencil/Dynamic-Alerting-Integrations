@@ -30,8 +30,11 @@ OPA Input JSON format:
 each the config as written PLUS what it inherits (`da-guard effective`'s
 `effective_config`: `defaults:`, platform `tenants:`, profile, subtree
 `_defaults.yaml`), in the same shape as before: values and keys as written
-(a retired spelling stays retired). A default the exporter fills in by
-itself is not there.
+(a retired spelling stays retired). Only the reserved keys a tenant may
+carry (a root-only key such as `_policies` / `_routing_defaults` is not the
+tenant's), and `_metadata` as /metrics inherits it (/effective drops it)
+minus the fields the exporter fills in empty. A default the exporter fills
+in by itself is not there (`_lib_tenant_values.written_config`).
 
 `served` (#2115 0-B): per tenant, every threshold /metrics serves at this
 moment, as a number, keyed by the exporter's canonical spelling (aliases
@@ -94,6 +97,7 @@ from _lib_tenant_values import (  # noqa: E402  (#2115 0-B)
     load_effective,
     load_served_tree,
     print_load_warnings,
+    written_config,
 )
 # #2123: `_defaults.yaml` is read strictly — a key written twice in one
 # mapping raises YamlFileError (rc 2 via exit_on_yaml_file_error, the path a
@@ -148,13 +152,13 @@ def load_tenant_inputs(config_dir: str) -> tuple[dict[str, dict], dict[str, dict
     tree = load_served_tree(config_dir)
     print_load_warnings(tree)
     effective = load_effective(config_dir)
-    tenants = {t: e.effective_config for t, e in sorted(effective.items())}
-    served = {t: {k: v.values[k] for k in sorted(v.severities)}
-              for t, v in sorted(tree.tenants.items())}
-    if set(tenants) != set(served):
+    if set(effective) != set(tree.tenants):
         raise ServedValuesError(
             "da-guard served-values and da-guard effective disagree on the tenants of this tree: "
-            f"{sorted(set(tenants) ^ set(served))}", None, "")
+            f"{sorted(set(effective) ^ set(tree.tenants))}", None, "")
+    tenants = {t: written_config(e, tree.tenants[t]) for t, e in sorted(effective.items())}
+    served = {t: {k: v.values[k] for k in sorted(v.severities)}
+              for t, v in sorted(tree.tenants.items())}
     return tenants, served
 
 

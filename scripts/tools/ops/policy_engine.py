@@ -113,6 +113,7 @@ from _lib_tenant_values import (  # noqa: E402
     load_served_tree,
     print_load_error,
     print_load_warnings,
+    written_config,
 )
 
 # ---------------------------------------------------------------------------
@@ -274,6 +275,15 @@ class ServedThreshold(NamedTuple):
     segments: tuple[tuple[str, str, Optional[float]], ...]
 
 
+class Unserved(NamedTuple):
+    """A threshold key the tenant's config carries (written or inherited)
+    that /metrics does not serve at all (served-values `unserved`: switched
+    off, or no row to inherit into). `raw` is the value as written. A rule
+    finds the key but has no served number to check: `required` is violated
+    with a message saying it IS configured; every other operator skips it."""
+    raw: Any
+
+
 class PolicyInputs(NamedTuple):
     """What `load_policy_inputs` reads: `views` is `{tenant: {key: value}}`
     in the shape `evaluate_policies` takes, `aliases` the exporter's alias
@@ -336,9 +346,13 @@ def load_policy_inputs(config_dir: str, *, routing: bool = False) -> PolicyInput
     * a threshold (no `_` prefix) — `ServedThreshold`, what /metrics serves
       over the whole day (`da-guard served-values --schedules`), canonical
       spelling; a key /metrics serves at no minute of the day is absent;
+      a threshold key the config carries but /metrics never serves is an
+      `Unserved` (its value as written);
     * a reserved key (`_` prefix) other than `_routing` — as written plus
-      inherited (`da-guard effective`'s `effective_config`): a default the
-      exporter fills in itself is not there;
+      inherited (`_lib_tenant_values.written_config`: `da-guard effective`'s
+      `effective_config`, only the reserved keys a tenant may carry, and
+      `_metadata` as /metrics inherits it minus the exporter's empty fill):
+      a default the exporter fills in itself is not there;
     * `_routing` — only with `routing=True`: the route generator's resolved
       routing (`_resolved_routing`); absent otherwise.
 
@@ -358,8 +372,12 @@ def load_policy_inputs(config_dir: str, *, routing: bool = False) -> PolicyInput
 
     views: dict[str, dict[str, Any]] = {}
     for tenant, served in tree.tenants.items():
-        view = {k: v for k, v in effective[tenant].effective_config.items()
-                if k.startswith("_") and k != _ROUTING}
+        view: dict[str, Any] = {
+            k: v for k, v in written_config(effective[tenant], served).items()
+            if k.startswith("_") and k != _ROUTING}
+        for key, raw in served.unserved.items():
+            if not str(key).startswith("_"):
+                view[_canonical_key(str(key), tree.aliases)] = Unserved(raw)
         if tenant in routed:
             view[_ROUTING] = routed[tenant]
         for key, day in (served.schedules or {}).items():
@@ -601,9 +619,13 @@ def _failures(operator: str, actual: Any, expected: Any) -> list[tuple[Any, Opti
     A `ServedThreshold` is checked segment by segment (#2115 (c): every part
     of the day must pass); `window` names the UTC segment unless the key has
     only one. In a segment with no /metrics row `required` is violated and
-    every other operator has nothing to check. Any other value is checked
+    every other operator has nothing to check. `required` / `forbidden` give
+    at most one finding per key, its `window` listing every failing segment.
+    An `Unserved` key violates `required` only. Any other value is checked
     once, `window` None.
     """
+    if isinstance(actual, Unserved):
+        return [(actual, None)] if operator == "required" else []
     if isinstance(actual, ServedThreshold):
         whole_day = len(actual.segments) == 1
         out: list[tuple[Any, Optional[str]]] = []
@@ -614,6 +636,11 @@ def _failures(operator: str, actual: Any, expected: Any) -> list[tuple[Any, Opti
                     out.append((None, window))
             elif not _evaluate_threshold(operator, value, expected):
                 out.append((_threshold_text(value), window))
+        if operator in ("required", "forbidden") and len(out) > 1:
+            # A presence rule is one finding per key: the windows it fails in
+            # are listed in that one message.
+            values = list(dict.fromkeys(str(a) for a, _w in out if a is not None))
+            out = [(" / ".join(values) if values else None, "、".join(w for _a, w in out if w))]
         return out
     return [] if _evaluate_operator(operator, actual, expected) else [(actual, None)]
 
@@ -621,6 +648,8 @@ def _failures(operator: str, actual: Any, expected: Any) -> list[tuple[Any, Opti
 def _holds(operator: str, actual: Any, expected: Any) -> bool:
     """A `when` condition on a found value: on a `ServedThreshold`, true when
     it holds in some segment that has a /metrics row."""
+    if isinstance(actual, Unserved):
+        return False
     if isinstance(actual, ServedThreshold):
         return any(v is not None and _evaluate_threshold(operator, v, expected)
                    for _s, _e, v in actual.segments)
@@ -652,6 +681,8 @@ def _evaluate_when(config: dict, when: dict,
         return True
 
     found, actual = _resolve_target(config, target, aliases)
+    if isinstance(actual, Unserved):   # carried, but nothing is served
+        found, actual = False, None
     if operator == "required":
         return found and actual is not None
     if operator == "forbidden":
@@ -689,7 +720,11 @@ def evaluate_rule(rule: PolicyRule, tenant: str, config: dict,
         return []
 
     def violation(target: str, actual: Any, window: Optional[str]) -> Violation:
-        message = _format_violation_msg(rule.operator, target, actual, rule.value)
+        if isinstance(actual, Unserved):
+            message = (f"'{target}' 已配置（值: {actual.raw}）但 exporter 不發出"
+                       "（/metrics 沒有這一列，例如 disable 或沒有可繼承的預設值）")
+        else:
+            message = _format_violation_msg(rule.operator, target, actual, rule.value)
         if window is not None:
             message += f"（UTC {window}）"
         return Violation(tenant=tenant, rule_name=rule.name, description=rule.description,
@@ -1015,7 +1050,15 @@ def main(argv: Optional[list[str]] = None) -> int:
     rules: list[PolicyRule] = []
 
     # From _defaults.yaml in config-dir
-    defaults_path = str(resolve_defaults_file(Path(args.config_dir)))
+    # #2115 0-B: name only the nested `_defaults.yaml` files whose `_policies`
+    # this lookup skips; tenants in subdirectories ARE evaluated (their values
+    # come from the exporter's own load), so the generic FLAT/SKIPPED warning
+    # would contradict the report.
+    defaults_path = str(resolve_defaults_file(
+        Path(args.config_dir),
+        skipped_note=("`_policies` are read from the root defaults carrier only "
+                      "(tenants in subdirectories are evaluated); not read for "
+                      "`_policies`:")))
     if Path(defaults_path).is_file():
         try:
             rules.extend(load_policies(defaults_path))

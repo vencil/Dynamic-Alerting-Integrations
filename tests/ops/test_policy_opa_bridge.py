@@ -57,7 +57,7 @@ class TestPolicyResult:
 # 取代原本的 TestLoadTenantConfigs：它守的是舊契約（`_lib_io.load_tenant_configs`：
 # 只讀根目錄租戶檔、平面檔以檔名當租戶、不存在的目錄回 {}）。現在 `tenants` 來自
 # `da-guard effective`、`served` 來自 `da-guard served-values`；平面檔不是租戶（WARN），
-# 子目錄的租戶在，值寫在哪一層都一樣（tests/shared/test_served_values_readers_matrix.py）。
+# 子目錄的租戶在，值寫在哪一層都一樣（tests/shared/test_served_values_policy_readers_matrix.py）。
 def _write_tree(root, files):
     for rel, body in files.items():
         f = root / rel

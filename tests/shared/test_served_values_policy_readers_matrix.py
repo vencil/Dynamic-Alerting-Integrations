@@ -329,3 +329,143 @@ def test_flat_file_is_named_from_skipped_and_is_not_a_tenant(tmp_path):
         assert p.returncode == 0, (script, p.stderr)
         assert "WARN: flat-a.yaml: declares no tenant" in p.stderr, p.stderr
         assert "flat-a" not in p.stdout, p.stdout
+
+
+# ── 第 2 輪（盲審 B1／S1／S2／S4／N3／N4）────────────────────────────────────
+
+SEED_CONF_D = REPO_ROOT / "try-local" / "seed" / "conf.d"
+
+_OWNER_REQUIRED = ("policies:\n  - name: owner\n    target: _metadata.owner\n"
+                   "    operator: required\n    severity: error\n")
+
+
+def test_metadata_written_in_the_seed_passes(tmp_path, capsys):
+    """B1：/effective 不帶 `_metadata`，所以 8a7f408b 對 try-local seed 的兩個租戶都報
+    「`_metadata.owner` 為必填欄位但未配置」（rc 1）。`_metadata` 改取 /metrics 的值後，
+    有寫的租戶通過——與 main 的結論一致（main 也是 rc 0）。"""
+    rc, doc = _engine(SEED_CONF_D, _policy(tmp_path, _OWNER_REQUIRED), capsys, "--ci")
+    assert (rc, doc["violations"]) == (0, []), doc
+    assert doc["tenants_evaluated"] == 2, doc
+
+
+_META_TREE = {
+    "_defaults.yaml": "defaults:\n  custom_mysql_slow: 1\n",
+    "tenant-a.yaml": ("tenants:\n  tenant-a:\n    custom_mysql_slow: 5\n"
+                      "    _metadata:\n      owner: dba\n      tier: gold\n"),
+    "tenant-b.yaml": "tenants:\n  tenant-b:\n    custom_mysql_slow: 7\n",
+}
+_META_RULES = _OWNER_REQUIRED + """  - name: gold-slow-lte-3
+    target: custom_mysql_slow
+    operator: lte
+    value: 3
+    when:
+      target: _metadata.tier
+      operator: equals
+      value: gold
+"""
+
+
+def test_metadata_written_passes_unwritten_fails_and_when_gates(tmp_path, capsys):
+    """B1 對照組：有寫 owner 的通過、沒寫的違規（exporter 補的空 owner 不算有寫）；
+    `when: _metadata.tier equals gold` 只讓 gold 租戶接受檢查。值都寫在租戶檔，
+    所以 main（只讀租戶檔）的結論相同；8a7f408b 上 tenant-a 兩條都錯。"""
+    conf_d = _tree(tmp_path, _META_TREE)
+    assert tv.load_served_values(conf_d)["tenant-b"].values["_metadata"]["owner"] == ""  # 前提
+    rc, doc = _engine(conf_d, _policy(tmp_path, _META_RULES), capsys, "--ci")
+    assert sorted((v["tenant"], v["rule_name"]) for v in doc["violations"]) == [
+        ("tenant-a", "gold-slow-lte-3"), ("tenant-b", "owner")], doc
+    row = vc.check_policy_dsl(str(conf_d), str(_policy(tmp_path, _META_RULES)))
+    assert {d.split(" — ")[0] for d in row["details"] if d.startswith("[ERROR] ")} == {
+        "[ERROR] tenant-a: gold-slow-lte-3", "[ERROR] tenant-b: owner"}, row
+    assert pob.main(["--config-dir", str(conf_d), "--dry-run"]) == 0
+    tenants = json.loads(capsys.readouterr().out)["tenants"]
+    assert tenants["tenant-a"]["_metadata"] == {"owner": "dba", "tier": "gold"}, tenants
+    assert "_metadata" not in tenants["tenant-b"], tenants
+
+
+def test_metadata_inherited_from_the_platform_block_counts(tmp_path, capsys):
+    """R4：`_metadata` 比照 /metrics 淺層繼承——寫在平台 `tenants:` 的 owner 算有寫。"""
+    conf_d = _tree(tmp_path, {
+        "_defaults.yaml": ("defaults:\n  custom_mysql_slow: 1\ntenants:\n  tenant-a:\n"
+                           "    _metadata:\n      owner: platform-team\n"),
+        "tenant-a.yaml": "tenants:\n  tenant-a:\n    custom_mysql_slow: 5\n",
+    })
+    rc, doc = _engine(conf_d, _policy(tmp_path, _OWNER_REQUIRED), capsys, "--ci")
+    assert (rc, doc["violations"]) == (0, []), doc
+
+
+def test_root_only_keys_are_not_the_tenants_reserved_keys(tmp_path, capsys):
+    """S1：根 `_defaults.yaml` 沒有 `defaults:` 包裝時，/effective 把整份文件併進租戶，
+    `_policies`、`_routing_defaults` 也在 effective_config 裡。它們不是租戶可寫的保留鍵
+    （`_lib_constants` 的 VALID_RESERVED_KEYS／PREFIXES，扣掉 TOP_LEVEL_READ_ELSEWHERE）。"""
+    conf_d = _tree(tmp_path, {
+        "_defaults.yaml": ("_policies:\n  - name: no-rd\n    target: _routing_defaults\n"
+                           "    operator: forbidden\n  - name: no-pol\n    target: _policies\n"
+                           "    operator: forbidden\n_routing_defaults:\n  receiver:\n"
+                           "    type: webhook\n    url: https://hooks.example.com/x\n"),
+        "tenant-a.yaml": "tenants:\n  tenant-a:\n    mysql_connections: \"70\"\n",
+    })
+    assert {"_policies", "_routing_defaults"} <= set(
+        tv.load_effective(conf_d)["tenant-a"].effective_config)   # 前提
+    view = pe.load_policy_inputs(str(conf_d)).views["tenant-a"]
+    assert "_policies" not in view and "_routing_defaults" not in view, view
+    assert pe.main(["--config-dir", str(conf_d), "--json", "--ci"]) == 0
+    assert json.loads(capsys.readouterr().out)["violations"] == []
+    assert pob.main(["--config-dir", str(conf_d), "--dry-run"]) == 0
+    tenants = json.loads(capsys.readouterr().out)["tenants"]
+    assert set(tenants["tenant-a"]) == {"mysql_connections"}, tenants
+
+
+def test_policies_lookup_does_not_call_evaluated_tenants_skipped(tmp_path):
+    """S2：`_policies` 只從根目錄載體讀；說明只點名沒讀到 `_policies` 的子目錄
+    `_defaults.yaml`，不再把（照樣被評估的）子目錄租戶檔列為 SKIPPED。"""
+    conf_d = _tree(tmp_path, POSITIONS["subtree"])
+    p = _cli("policy_engine.py", conf_d, "--policy", str(_policy(tmp_path)), "--json")
+    assert p.returncode == 0, p.stderr
+    assert "SKIPPED" not in p.stderr and "team/tenant-a.yaml" not in p.stderr, p.stderr
+    assert "team/_defaults.yaml" in p.stderr and "tenants in subdirectories are evaluated" in p.stderr
+    assert {v["tenant"] for v in json.loads(p.stdout)["violations"]} == {"tenant-a", "tenant-b"}
+
+
+def test_configured_but_unserved_key_says_so(tmp_path, capsys):
+    """S4：鍵有寫但 exporter 不發（served 的 `unserved`）——`required` 的訊息說「已配置但
+    不發出」並附原值，不說「未配置」；`when` 視同沒有；其他運算子略過。"""
+    conf_d = _tree(tmp_path, {
+        "_defaults.yaml": "defaults:\n  redis_memory: 1024\n",
+        "tenant-a.yaml": "tenants:\n  tenant-a:\n    redis_memory: disable\n    mysql_slow_queries: 5\n",
+    })
+    served = tv.load_served_values(conf_d)["tenant-a"]
+    assert {"redis_memory", "mysql_slow_queries"} <= set(served.unserved), served  # 前提
+    rules = ("policies:\n  - name: req-mem\n    target: redis_memory\n    operator: required\n"
+             "  - name: req-slow\n    target: mysql_slow_queries\n    operator: required\n"
+             "  - name: lte-slow\n    target: mysql_slow_queries\n    operator: lte\n    value: 1\n"
+             "  - name: when-slow\n    target: redis_memory\n    operator: forbidden\n"
+             "    when:\n      target: mysql_slow_queries\n      operator: required\n")
+    rc, doc = _engine(conf_d, _policy(tmp_path, rules), capsys)
+    assert sorted((v["rule_name"], v["message"]) for v in doc["violations"]) == [
+        ("req-mem", "'redis_memory' 已配置（值: disable）但 exporter 不發出"
+                    "（/metrics 沒有這一列，例如 disable 或沒有可繼承的預設值）"),
+        ("req-slow", "'mysql_slow_queries' 已配置（值: 5）但 exporter 不發出"
+                     "（/metrics 沒有這一列，例如 disable 或沒有可繼承的預設值）")], doc
+
+
+def test_forbidden_on_a_scheduled_key_is_one_finding(tmp_path, capsys):
+    """N3：排程鍵的 `forbidden` 同一鍵同一規則只報一筆，訊息列出時段。"""
+    conf_d = _tree(tmp_path, _scheduled('        - window: "22:00-06:00"\n          value: "9"\n'
+                                        '        - window: "12:00-13:00"\n          value: disable\n'))
+    rc, doc = _engine(conf_d, _policy(tmp_path, "policies:\n  - name: nf\n    target: custom_mysql_slow\n"
+                                                "    operator: forbidden\n"), capsys)
+    assert [v["message"] for v in doc["violations"]] == [
+        "'custom_mysql_slow' 為禁止欄位但已配置（值: 9 / 2）（UTC 00:00-06:00、06:00-12:00、"
+        "13:00-22:00、22:00-24:00）"], doc
+
+
+def test_unreadable_tree_hint_matches_the_cause(tmp_path):
+    """N4：讀不到樹時 validate-config 的 Suggested action 不再叫人檢查 DSL 語法。"""
+    conf_d = _tree(tmp_path, {
+        "_defaults.yaml": "defaults:\n  custom_mysql_slow: 1\n",
+        "_platform.yaml": "tenants:\n  tenant-b: 3\n",
+    })
+    row = vc.check_policy_dsl(str(conf_d), str(_policy(tmp_path)))
+    assert row["status"] == vc.FAIL and row["hint"] == vc._POLICY_DSL_TREE_UNREADABLE_HINT, row
+    assert "DSL syntax" not in row["hint"]

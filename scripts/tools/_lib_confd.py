@@ -455,7 +455,8 @@ def defaults_files_in(root: str | os.PathLike[str],
 
 
 def resolve_defaults_file(
-    base: str | os.PathLike[str], *, tool: str | None = None
+    base: str | os.PathLike[str], *, tool: str | None = None,
+    skipped_note: str | None = None,
 ) -> Path:
     """The platform-defaults carrier directly in `base`, in ANY casing.
 
@@ -476,6 +477,14 @@ def resolve_defaults_file(
     what `warn_nested` records (#1652, see the comment in the body). `tool`
     is left to `nested_yaml_warning`'s own default so the message names the
     command the operator ran rather than this helper.
+
+    `skipped_note` replaces that warning with one naming only what THIS
+    lookup skips — the nested `_defaults.yaml` carriers — introduced by the
+    note (the `observe_flat_reads` record is unchanged): for a caller that
+    reads every other file of the tree some other way. policy_engine
+    (#2115 0-B) takes its tenants from the exporter's own load and would
+    otherwise be told its subdirectory tenants were SKIPPED while it
+    evaluates them. Nothing is printed when there is no nested carrier.
 
     A directory carrying two spellings resolves to the one the exporter
     reads (`select_defaults_carrier`, #1674) — before that it was the first
@@ -500,7 +509,10 @@ def resolve_defaults_file(
     if _FLAT_READ_SINKS.get():
         _record_flat_read(root, [p for p in nested_yaml_files(root)
                                  if is_defaults_name(p.name)])
-    _print_nested_once(root, tool=tool)
+    if skipped_note is None:
+        _print_nested_once(root, tool=tool)
+    else:
+        _print_skipped_carriers(root, tool=tool, note=skipped_note)
     try:
         readable, _unreadable = readable_carriers(
             entry for entry in root.iterdir()
@@ -1233,6 +1245,19 @@ def warn_nested(config_dir: str | os.PathLike[str], *, tool: str | None = None) 
     if _FLAT_READ_SINKS.get():
         _record_flat_read(config_dir, nested_yaml_files(config_dir))
     return _print_nested_once(config_dir, tool=tool)
+
+
+def _print_skipped_carriers(root: Path, *, tool: str | None, note: str) -> None:
+    """`resolve_defaults_file(skipped_note=...)`'s stderr line: the nested
+    defaults carriers the root lookup does not read, behind `note`."""
+    missed = [p for p in nested_yaml_files(root) if is_defaults_name(p.name)]
+    if not missed:
+        return
+    shown = ", ".join(printable_name(p.relative_to(root).as_posix())
+                      for p in missed[:WARN_LIMIT])
+    more = f" (+{len(missed) - WARN_LIMIT} more)" if len(missed) > WARN_LIMIT else ""
+    print(f"WARN: {tool or _running_tool()}: {note} {len(missed)} defaults file(s) "
+          f"in subdirectories: {shown}{more}", file=sys.stderr)
 
 
 def _print_nested_once(config_dir: str | os.PathLike[str], *,

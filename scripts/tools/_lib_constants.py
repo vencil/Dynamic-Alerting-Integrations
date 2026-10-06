@@ -58,6 +58,16 @@ VALID_RESERVED_KEYS: Final[set[str]] = {
 }
 VALID_RESERVED_PREFIXES: Final[tuple[str, ...]] = ("_state_", "_routing")
 
+#: `_`-prefixed keys another reader takes from the TOP level of a defaults
+#: file — the route generator's `_routing_defaults` / `_routing_enforced`, the
+#: custom-alert compiler's `_custom_alerts` — so validate_config never reports
+#: them (#2386). da-guard's `TopLevelReadElsewhere` is the same list;
+#: tests/shared/defaults_wrapper_matrix.json pins both. Moved here from
+#: validate_config (#2115 0-B): the policy readers use it too, to keep
+#: platform-level keys out of a tenant's reserved keys.
+TOP_LEVEL_READ_ELSEWHERE: Final[frozenset[str]] = frozenset(
+    {"_custom_alerts", "_routing_defaults", "_routing_enforced"})
+
 # ============================================================
 # Timing Guardrails
 # ============================================================
