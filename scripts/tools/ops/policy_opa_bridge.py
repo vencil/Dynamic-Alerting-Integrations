@@ -170,7 +170,13 @@ def load_defaults(config_dir: str) -> dict[str, Any]:
     holding only `_defaults.yml` or `_DEFAULTS.YAML` used to give OPA no
     defaults at all.
     """
-    defaults_path = resolve_defaults_file(config_dir, tool="policy_opa_bridge")
+    # #2115 0-B: the tenants come from the whole tree (`load_tenant_inputs`),
+    # so only the nested carriers `input.defaults` leaves out are named.
+    defaults_path = resolve_defaults_file(
+        config_dir, tool="policy_opa_bridge",
+        skipped_note=("`input.defaults` comes from the root defaults carrier only "
+                      "(tenants in subdirectories are in `input.tenants` / "
+                      "`input.served`), so it leaves out these"))
     if not defaults_path.is_file():
         return {}
     data = load_yaml_file_strict(str(defaults_path))

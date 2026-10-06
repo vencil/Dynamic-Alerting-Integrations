@@ -259,6 +259,13 @@ def rules_from_policy_data(data: Any) -> list[PolicyRule]:
     return rules
 
 
+#: `resolve_defaults_file(skipped_note=...)` for a reader that takes
+#: `_policies` from the root carrier and its tenants from the exporter's own
+#: load (#2115 0-B): the nested carriers are named, the tenants are not.
+POLICIES_SKIPPED_NOTE = (
+    "`_policies` are read from the root defaults carrier only (tenants in "
+    "subdirectories are evaluated), so a `_policies` list would not be read from these")
+
 # ---------------------------------------------------------------------------
 # What a rule reads (#2115 0-B)
 # ---------------------------------------------------------------------------
@@ -669,6 +676,7 @@ def _evaluate_when(config: dict, when: dict,
         value: Any — 期望值（可選）
 
     讀值的規則與主規則相同（`_resolve_target`）。排程閾值：任一有發出值的時段成立即成立。
+    有寫但 exporter 不發的鍵（`Unserved`）視同沒有：精確 target 與萬用字元展開的每個鍵皆然。
 
     Returns:
         True 表示條件成立（主規則應該評估），False 表示條件不成立（跳過）。
@@ -680,9 +688,15 @@ def _evaluate_when(config: dict, when: dict,
     if not target:
         return True
 
+    # A key carried but not served (`Unserved`) is absent to a condition —
+    # for an exact target and for every key a wildcard target expands to.
     found, actual = _resolve_target(config, target, aliases)
-    if isinstance(actual, Unserved):   # carried, but nothing is served
+    if isinstance(actual, Unserved):
         found, actual = False, None
+    elif _is_wildcard(target) and isinstance(actual, dict):
+        actual = {k: v for k, v in actual.items() if not isinstance(v, Unserved)}
+        if not actual:
+            found, actual = False, None
     if operator == "required":
         return found and actual is not None
     if operator == "forbidden":
@@ -1055,10 +1069,7 @@ def main(argv: Optional[list[str]] = None) -> int:
     # come from the exporter's own load), so the generic FLAT/SKIPPED warning
     # would contradict the report.
     defaults_path = str(resolve_defaults_file(
-        Path(args.config_dir),
-        skipped_note=("`_policies` are read from the root defaults carrier only "
-                      "(tenants in subdirectories are evaluated); not read for "
-                      "`_policies`:")))
+        Path(args.config_dir), skipped_note=POLICIES_SKIPPED_NOTE))
     if Path(defaults_path).is_file():
         try:
             rules.extend(load_policies(defaults_path))

@@ -423,7 +423,8 @@ def test_policies_lookup_does_not_call_evaluated_tenants_skipped(tmp_path):
     p = _cli("policy_engine.py", conf_d, "--policy", str(_policy(tmp_path)), "--json")
     assert p.returncode == 0, p.stderr
     assert "SKIPPED" not in p.stderr and "team/tenant-a.yaml" not in p.stderr, p.stderr
-    assert "team/_defaults.yaml" in p.stderr and "tenants in subdirectories are evaluated" in p.stderr
+    assert ("so a `_policies` list would not be read from these 1 defaults file(s) in "
+            "subdirectories: team/_defaults.yaml") in p.stderr, p.stderr
     assert {v["tenant"] for v in json.loads(p.stdout)["violations"]} == {"tenant-a", "tenant-b"}
 
 
@@ -439,7 +440,9 @@ def test_configured_but_unserved_key_says_so(tmp_path, capsys):
     rules = ("policies:\n  - name: req-mem\n    target: redis_memory\n    operator: required\n"
              "  - name: req-slow\n    target: mysql_slow_queries\n    operator: required\n"
              "  - name: lte-slow\n    target: mysql_slow_queries\n    operator: lte\n    value: 1\n"
-             "  - name: when-slow\n    target: redis_memory\n    operator: forbidden\n"
+             # `required` on the Unserved redis_memory WOULD be a finding (req-mem);
+             # when-slow is silent only because its condition (an Unserved key) fails.
+             "  - name: when-slow\n    target: redis_memory\n    operator: required\n"
              "    when:\n      target: mysql_slow_queries\n      operator: required\n")
     rc, doc = _engine(conf_d, _policy(tmp_path, rules), capsys)
     assert sorted((v["rule_name"], v["message"]) for v in doc["violations"]) == [
@@ -469,3 +472,58 @@ def test_unreadable_tree_hint_matches_the_cause(tmp_path):
     row = vc.check_policy_dsl(str(conf_d), str(_policy(tmp_path)))
     assert row["status"] == vc.FAIL and row["hint"] == vc._POLICY_DSL_TREE_UNREADABLE_HINT, row
     assert "DSL syntax" not in row["hint"]
+
+
+# ── 第 3 輪（盲審 S-1／S-2／S-3／N-4）────────────────────────────────────────
+
+_WHEN_RULES = "policies:\n" + "".join(
+    f"  - name: {name}\n    target: mysql_connections\n    operator: lte\n    value: 1\n"
+    f"    when:\n      target: \"{target}\"\n      operator: {op}\n"
+    for name, target, op in [
+        ("exact-req", "redis_memory", "required"),
+        ("wild-req", "redis_*", "required"),
+        ("exact-forb", "redis_memory", "forbidden"),
+        ("wild-forb", "redis_*", "forbidden"),
+        ("slow-req", "mysql_slow_queries", "required"),
+        ("control", "mysql_connections", "required"),
+    ])
+
+
+def test_unserved_key_is_absent_to_when_for_exact_and_wildcard_targets(tmp_path, capsys):
+    """S-1／S-2：`when` 的 target 是有寫但 exporter 不發的鍵時，精確與萬用字元兩種寫法
+    結論相同（視同沒有）：`required` 不成立、`forbidden` 成立。主規則 `mysql_connections lte 1`
+    （served 100）只在條件成立時違規，所以結論隨條件改變；control 證明主規則會響。"""
+    conf_d = _tree(tmp_path, {
+        "_defaults.yaml": "defaults:\n  redis_memory: 1024\n  mysql_connections: 100\n",
+        "tenant-a.yaml": "tenants:\n  tenant-a:\n    redis_memory: disable\n    mysql_slow_queries: 5\n",
+    })
+    served = tv.load_served_values(conf_d)["tenant-a"]
+    assert {"redis_memory", "mysql_slow_queries"} <= set(served.unserved), served  # 前提
+    rc, doc = _engine(conf_d, _policy(tmp_path, _WHEN_RULES), capsys)
+    assert sorted(v["rule_name"] for v in doc["violations"]) == [
+        "control", "exact-forb", "wild-forb"], doc
+
+
+def test_opa_and_validate_config_do_not_call_evaluated_tenants_skipped(tmp_path, capsys):
+    """S-3：opa-evaluate 與 validate-config 的 policy_dsl 列也從整棵樹讀租戶；根載體查找
+    只點名它略過的子目錄 `_defaults.yaml`，不再把子目錄租戶檔列為 SKIPPED。"""
+    conf_d = _tree(tmp_path, POSITIONS["subtree"])
+    p = _cli("policy_opa_bridge.py", conf_d, "--dry-run")
+    assert p.returncode == 0, p.stderr
+    assert "SKIPPED" not in p.stderr and "team/tenant-a.yaml" not in p.stderr, p.stderr
+    assert "leaves out these 1 defaults file(s) in subdirectories: team/_defaults.yaml" in p.stderr
+    assert "tenant-a" in json.loads(p.stdout)["tenants"]
+    capsys.readouterr()
+    row = vc.check_policy_dsl(str(conf_d), str(_policy(tmp_path)))
+    err = capsys.readouterr().err
+    assert row["status"] == vc.FAIL, row   # tenant-a=5 violates lte 3
+    assert "SKIPPED" not in err and "team/tenant-a.yaml" not in err, err
+    assert "team/_defaults.yaml" in err, err
+
+
+def test_empty_config_dir_hint_says_there_is_no_config_file(tmp_path):
+    """N-4(b)：空目錄配 --policy-dsl——提示說沒有設定檔，不叫人修「上面點名的檔」。"""
+    empty = tmp_path / "empty"
+    empty.mkdir()
+    row = vc.check_policy_dsl(str(empty), str(_policy(tmp_path)))
+    assert row["status"] == vc.FAIL and row["hint"] == vc._POLICY_DSL_NO_CONFIG_FILE_HINT, row

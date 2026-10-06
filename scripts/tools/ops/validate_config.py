@@ -1084,6 +1084,9 @@ _POLICY_DSL_TREE_UNREADABLE_HINT = (
     "threshold-exporter cannot load this tree as the lines above say: repair "
     "or remove the file they name (or the shape da-guard refuses), then re-run. "
     "No policy was evaluated.")
+_POLICY_DSL_NO_CONFIG_FILE_HINT = (
+    "There is no config file under --config-dir at all: point it at your conf.d "
+    "tree, then re-run. No policy was evaluated.")
 _POLICY_DSL_NO_DA_GUARD_HINT = (
     "Put da-guard on $PATH or set $DA_GUARD_BINARY to it (the da-tools image "
     "ships it as /usr/local/bin/da-guard), then re-run. No policy was evaluated.")
@@ -1108,7 +1111,10 @@ def check_policy_dsl(config_dir: str, policy_dsl_file: str | None = None) -> dic
     rules = []
 
     # From _defaults.yaml
-    defaults_path = str(resolve_defaults_file(Path(config_dir)))
+    # #2115 0-B: the tenants are read from the whole tree (below), so only
+    # the nested carriers whose `_policies` this lookup skips are named.
+    defaults_path = str(resolve_defaults_file(
+        Path(config_dir), skipped_note=pe.POLICIES_SKIPPED_NOTE))
     if os.path.isfile(defaults_path):
         rules.extend(pe.load_policies(defaults_path))
 
@@ -1176,15 +1182,19 @@ def check_policy_dsl(config_dir: str, policy_dsl_file: str | None = None) -> dic
     except (pe.DaGuardNotFoundError, pe.DaGuardError, pe.ParseFailedError) as exc:
         buf = io.StringIO()
         pe.print_load_error(exc, buf)
+        if isinstance(exc, pe.DaGuardNotFoundError):
+            hint = _POLICY_DSL_NO_DA_GUARD_HINT
+        elif next(iter_config_files(config_dir), None) is None:
+            hint = _POLICY_DSL_NO_CONFIG_FILE_HINT   # only picks the advice
+        else:
+            hint = _POLICY_DSL_TREE_UNREADABLE_HINT
         return _make_result("policy_dsl", FAIL,
                             ["the tenants cannot be read as threshold-exporter reads them:",
                              # "\n" only: `splitlines` also cuts at U+2028 etc.,
                              # which can sit in a file name (_lib_tenant_values).
                              *(ln for ln in buf.getvalue().split("\n") if ln)],
                             caller_error=isinstance(exc, pe.DaGuardNotFoundError),
-                            hint=_POLICY_DSL_NO_DA_GUARD_HINT
-                            if isinstance(exc, pe.DaGuardNotFoundError)
-                            else _POLICY_DSL_TREE_UNREADABLE_HINT)
+                            hint=hint)
     except pe.RoutingTreeRefused as exc:
         return _make_result("policy_dsl", FAIL,
                             ["the route generator refuses this tree, so `_routing` cannot "
