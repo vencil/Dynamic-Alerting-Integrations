@@ -326,7 +326,7 @@ def rules_read_routing(rules: list[PolicyRule]) -> bool:
     return False
 
 
-def resolved_routing(config_dir: str) -> dict[str, dict]:
+def _resolved_routing(config_dir: str) -> dict[str, dict]:
     """`{tenant: routing}` as the route generator resolves it: the
     `_routing_defaults` chain, the routing profile and the tenant's own
     `_routing`, merged, `{{tenant}}` substituted. A tenant with nothing to
@@ -361,7 +361,7 @@ def load_policy_inputs(config_dir: str, *, routing: bool = False) -> PolicyInput
       `_metadata` as /metrics inherits it minus the exporter's empty fill):
       a default the exporter fills in itself is not there;
     * `_routing` — only with `routing=True`: the route generator's resolved
-      routing (`resolved_routing`); absent otherwise.
+      routing (`_resolved_routing`); absent otherwise.
 
     Prints da-guard's stderr and one WARN per file the load serves no tenant
     from (`print_load_warnings`). Raises what `load_served_tree` /
@@ -375,7 +375,7 @@ def load_policy_inputs(config_dir: str, *, routing: bool = False) -> PolicyInput
         raise ServedValuesError(
             "da-guard served-values and da-guard effective disagree on the tenants of this tree: "
             f"{sorted(set(effective) ^ set(tree.tenants))}", None, "")
-    routed = resolved_routing(config_dir) if routing else {}
+    routed = _resolved_routing(config_dir) if routing else {}
 
     views: dict[str, dict[str, Any]] = {}
     for tenant, served in tree.tenants.items():
