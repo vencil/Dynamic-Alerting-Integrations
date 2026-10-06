@@ -139,6 +139,9 @@ if (_HERE / "ops").is_dir() and str(_HERE / "ops") not in sys.path:
 
 from _lib_io import YamlFileError, safe_label  # noqa: E402
 from _lib_exitcodes import EXIT_CALLER_ERROR  # noqa: E402
+from _lib_constants import (  # noqa: E402
+    TOP_LEVEL_READ_ELSEWHERE, VALID_RESERVED_KEYS, VALID_RESERVED_PREFIXES,
+)
 import guard_dispatch  # noqa: E402
 
 __all__ = [
@@ -159,10 +162,13 @@ __all__ = [
     "MISSING_BINARY_MESSAGE",
     "ParseFailedError",
     "exit_on_served_values_error",
+    "is_tenant_reserved_key",
     "load_effective",
     "load_served_tree",
     "load_served_values",
+    "print_load_error",
     "print_load_warnings",
+    "written_config",
 ]
 
 SUBCOMMAND = "served-values"
@@ -525,7 +531,8 @@ def exit_on_served_values_error(fn: _F) -> _F:
     (`ERROR: cannot read <path>: <message>`) with da-guard's stderr below it:
     that decorator prints `str()` only, which is one line by contract, so the
     exporter's reasons would be lost there. Any other `YamlFileError` is left
-    to that decorator (or the tool's own handler).
+    to that decorator (or the tool's own handler). `EffectiveError` (a tool
+    that also calls `load_effective`) is handled as `ServedValuesError` is.
 
     A missing binary gets this module's own text, not the dispatcher's: that
     one names `da-tools guard`'s `--da-guard-binary` flag, which the tools
@@ -534,21 +541,31 @@ def exit_on_served_values_error(fn: _F) -> _F:
     def _wrapped(*args: Any, **kwargs: Any) -> Any:
         try:
             return fn(*args, **kwargs)
-        except DaGuardNotFoundError:
-            print(f"ERROR: {_missing_binary_message()}", file=sys.stderr)
+        except (DaGuardNotFoundError, ParseFailedError, DaGuardError) as exc:
+            print_load_error(exc)
             sys.exit(EXIT_CALLER_ERROR)
-        except ParseFailedError as exc:
-            _print_error_with_stderr(f"cannot read {exc}", exc.stderr_lines)
-        except ServedValuesError as exc:
-            _print_error_with_stderr(exc.message, _nonempty_lines(exc.stderr))
     return _wrapped  # type: ignore[return-value]
 
 
-def _print_error_with_stderr(head: str, stderr_lines: list[str]) -> None:
-    print(f"ERROR: {safe_label(head)}", file=sys.stderr)
-    for line in stderr_lines:
-        print(f"{DA_GUARD_PREFIX}{safe_label(line)}", file=sys.stderr)
-    sys.exit(EXIT_CALLER_ERROR)
+def print_load_error(exc: DaGuardNotFoundError | ParseFailedError | DaGuardError,
+                     stream: TextIO | None = None) -> None:
+    """The lines `exit_on_served_values_error` prints for `exc`, without the
+    exit — for a tool that owes something more on that path (a `--json`
+    envelope): one `ERROR:` line, then da-guard's stderr, every non-empty
+    line escaped and behind `DA_GUARD_PREFIX`."""
+    stream = sys.stderr if stream is None else stream
+    if isinstance(exc, DaGuardNotFoundError):
+        head, lines = _missing_binary_message(), []
+    elif isinstance(exc, ParseFailedError):
+        head, lines = f"cannot read {exc}", exc.stderr_lines
+    else:
+        head, lines = exc.message, _nonempty_lines(exc.stderr)
+    # stderr unless the caller collects the lines itself (validate-config
+    # puts them in its report row).
+    error_line = f"ERROR: {safe_label(head)}"
+    print(error_line, file=stream)
+    for line in lines:
+        print(f"{DA_GUARD_PREFIX}{safe_label(line)}", file=stream)
 
 
 def _missing_binary_message() -> str:
@@ -615,4 +632,48 @@ def load_effective(
         raise EffectiveError(
             f"da-guard {EFFECTIVE_SUBCOMMAND}: an entry is not the shape this reader reads ({e})",
             returncode, stderr) from e
+    return out
+
+
+def is_tenant_reserved_key(key: str) -> bool:
+    """A reserved key a tenant may carry: `VALID_RESERVED_KEYS` or a
+    `VALID_RESERVED_PREFIXES` key (the Python copy of the exporter's list,
+    pinned to Go by tests/shared/test_reserved_key_py_go_parity.py), minus
+    the platform-level keys another reader takes from the top of a defaults
+    file (`TOP_LEVEL_READ_ELSEWHERE`: `_routing_defaults`,
+    `_routing_enforced`) that are not themselves tenant keys. `_policies`
+    and any other root-only `_` key is not one."""
+    if key in VALID_RESERVED_KEYS:
+        return True
+    return key.startswith(VALID_RESERVED_PREFIXES) and key not in TOP_LEVEL_READ_ELSEWHERE
+
+
+_EMPTY_FILL = ("", [], {}, None)
+
+
+def written_config(effective: TenantEffective, served: TenantValues) -> dict[str, Any]:
+    """A tenant's config as written plus inherited, for a reader that judges
+    what was WRITTEN (#2115 (c), the policy readers): `effective_config`
+    (`da-guard effective`) with
+
+    * only the reserved keys a tenant may carry (`is_tenant_reserved_key`):
+      a root `_defaults.yaml` without a `defaults:` mapping is merged whole,
+      so its `_policies` / `_routing_defaults` would otherwise read as the
+      tenant's own;
+    * `_metadata` from /metrics (`served.values["_metadata"]`), not from
+      /effective, which drops `_metadata` at every level: /metrics inherits
+      it shallowly (#2115 R4). The fields the exporter fills in empty (`""`,
+      `[]`) are not written, and with none left there is no `_metadata`.
+
+    Threshold keys are as written (a retired spelling stays retired)."""
+    out: dict[str, Any] = {}
+    for key, value in effective.effective_config.items():
+        if not key.startswith("_") or (key != "_metadata" and is_tenant_reserved_key(key)):
+            out[key] = value
+    meta = served.values.get("_metadata")
+    if isinstance(meta, dict):
+        written = {k: v for k, v in meta.items()
+                   if not any(type(v) is type(e) and v == e for e in _EMPTY_FILL)}
+        if written:
+            out["_metadata"] = written
     return out

@@ -20,7 +20,6 @@ _TOOLS_DIR = os.path.join(os.path.dirname(__file__), '..', '..', 'scripts', 'too
 sys.path.insert(0, _TOOLS_DIR)
 
 import policy_opa_bridge as pob  # noqa: E402
-import _lib_io  # noqa: E402  # load_tenant_configs 的實作宿主（r3 W2 de-shadow 後 stub 縫在此）
 from _lib_exitcodes import EXIT_CALLER_ERROR  # noqa: E402
 
 
@@ -53,83 +52,46 @@ class TestPolicyResult:
 
 
 # ---------------------------------------------------------------------------
-# load_tenant_configs
+# load_tenant_inputs (#2115 0-B)
 # ---------------------------------------------------------------------------
-# r3 W2 de-shadow：pob.load_tenant_configs 現為 `_lib_io.load_tenant_configs`
-# 的 import。stub 縫隨實作搬家——#2123 起 lib 內部讀檔走 load_yaml_file_strict
-# （重複 key 即錯），所以 stub 打在 _lib_io.load_yaml_file_strict 上
-# （patch pob 模組屬性不再被 lib 內部呼叫看見）；lib 以 `default=` kwarg
-# 呼叫，stub 簽名同步承接。斷言逐字不動。
-# #2114：lib 讀租戶檔改走 `load_yaml_file_strict_exporter_keys`（同樣嚴格、
-# key 取原始文字），stub 目標跟著搬過去。
-class TestLoadTenantConfigs:
-    def test_missing_dir_returns_empty(self, tmp_path):
-        ghost = tmp_path / "ghost"
-        assert pob.load_tenant_configs(str(ghost)) == {}
+# 取代原本的 TestLoadTenantConfigs：它守的是舊契約（`_lib_io.load_tenant_configs`：
+# 只讀根目錄租戶檔、平面檔以檔名當租戶、不存在的目錄回 {}）。現在 `tenants` 來自
+# `da-guard effective`、`served` 來自 `da-guard served-values`；平面檔不是租戶（WARN），
+# 子目錄的租戶在，值寫在哪一層都一樣（tests/shared/test_served_values_policy_readers_matrix.py）。
+def _write_tree(root, files):
+    for rel, body in files.items():
+        f = root / rel
+        f.parent.mkdir(parents=True, exist_ok=True)
+        f.write_text(body, encoding="utf-8")
+    return root
 
-    def test_flat_format_uses_filename_as_tenant(self, tmp_path, monkeypatch):
-        # Stub load_yaml_file so we don't need PyYAML available.
-        files = {
-            str(tmp_path / "db-a.yaml"): {"mysql_connections": "70"},
-            str(tmp_path / "db-b.yml"): {"redis_memory": "1024"},
-        }
-        for p in files:
-            Path(p).write_text("x", encoding="utf-8")
-        monkeypatch.setattr(_lib_io, "load_yaml_file_strict_exporter_keys",
-                            lambda p, default=None: files.get(p, default))
-        configs = pob.load_tenant_configs(str(tmp_path))
-        assert configs["db-a"] == {"mysql_connections": "70"}
-        assert configs["db-b"] == {"redis_memory": "1024"}
 
-    def test_multi_tenant_wrapper_format(self, tmp_path, monkeypatch):
-        # File contains {tenants: {db-a: {...}, db-b: {...}}}.
-        f = tmp_path / "all.yaml"
-        f.write_text("x", encoding="utf-8")
-        monkeypatch.setattr(_lib_io, "load_yaml_file_strict_exporter_keys", lambda p, default=None: {
-            "tenants": {
-                "db-a": {"mysql_connections": "70"},
-                "db-b": {"redis_memory": "1024"},
-            },
+@pytest.mark.usefixtures("da_guard_env")
+class TestLoadTenantInputs:
+    def test_tenants_are_written_plus_inherited_and_served_is_the_metrics_numbers(self, tmp_path):
+        d = _write_tree(tmp_path, {
+            "_defaults.yaml": "defaults:\n  mysql_connections: 80\n  mysql_threads_running: 50\n",
+            "tenant-a.yaml": "tenants:\n  tenant-a:\n    mysql_cpu: '500'\n    _silent_mode: disable\n",
+            "team/tenant-b.yaml": "tenants:\n  tenant-b: {}\n",
         })
-        configs = pob.load_tenant_configs(str(tmp_path))
-        assert "db-a" in configs and "db-b" in configs
+        tenants, served = pob.load_tenant_inputs(str(d))
+        # tenants: 原形狀（寫法，舊拼法照寫），加上繼承；Go 自動補的不在。
+        # #2720 之後 effective 是逐閾值 view：同一閾值跨層新舊拼法只留勝出那一層，
+        # 所以租戶的 `mysql_cpu: '500'` 蓋掉根的 `mysql_threads_running: 50`，不再並列。
+        assert tenants["tenant-a"] == {"mysql_cpu": "500", "_silent_mode": "disable",
+                                       "mysql_connections": 80}
+        assert tenants["tenant-b"] == {"mysql_connections": 80, "mysql_threads_running": 50}
+        # served: /metrics 的數字，現行拼法
+        assert served["tenant-a"] == {"mysql_connections": 80.0, "mysql_threads_running": 500.0}
+        assert served["tenant-b"] == {"mysql_connections": 80.0, "mysql_threads_running": 50.0}
 
-    def test_underscore_prefix_files_skipped(self, tmp_path, monkeypatch):
-        (tmp_path / "_defaults.yaml").write_text("x", encoding="utf-8")
-        (tmp_path / "db-a.yaml").write_text("x", encoding="utf-8")
-        monkeypatch.setattr(_lib_io, "load_yaml_file_strict_exporter_keys",
-                            lambda p, default=None: {"k": "v"})
-        configs = pob.load_tenant_configs(str(tmp_path))
-        assert "db-a" in configs
-        assert "_defaults" not in configs
-
-    def test_non_yaml_extensions_ignored(self, tmp_path, monkeypatch):
-        (tmp_path / "readme.md").write_text("x", encoding="utf-8")
-        (tmp_path / "db-a.yaml").write_text("x", encoding="utf-8")
-        monkeypatch.setattr(_lib_io, "load_yaml_file_strict_exporter_keys",
-                            lambda p, default=None: {"k": "v"})
-        configs = pob.load_tenant_configs(str(tmp_path))
-        assert "readme" not in configs
-        assert "db-a" in configs
-
-    def test_non_dict_yaml_skipped(self, tmp_path, monkeypatch):
-        (tmp_path / "weird.yaml").write_text("x", encoding="utf-8")
-        monkeypatch.setattr(_lib_io, "load_yaml_file_strict_exporter_keys",
-                            lambda p, default=None: ["a list", "not a dict"])
-        configs = pob.load_tenant_configs(str(tmp_path))
-        assert configs == {}
-
-    def test_wrapper_with_non_dict_tenant_value_skipped(self, tmp_path, monkeypatch):
-        (tmp_path / "x.yaml").write_text("x", encoding="utf-8")
-        monkeypatch.setattr(_lib_io, "load_yaml_file_strict_exporter_keys", lambda p, default=None: {
-            "tenants": {
-                "db-a": {"mysql_connections": "70"},
-                "db-b": "not a dict",  # skipped
-            },
+    def test_flat_file_is_not_a_tenant(self, tmp_path, capsys):
+        d = _write_tree(tmp_path, {
+            "_defaults.yaml": "defaults:\n  mysql_connections: 80\n",
+            "flat-a.yaml": "mysql_connections: '70'\n",
         })
-        configs = pob.load_tenant_configs(str(tmp_path))
-        assert "db-a" in configs
-        assert "db-b" not in configs
+        assert pob.load_tenant_inputs(str(d)) == ({}, {})
+        assert "WARN: flat-a.yaml: declares no tenant" in capsys.readouterr().err
 
 
 # ---------------------------------------------------------------------------
@@ -326,7 +288,7 @@ class TestConvertOpaViolations:
     def test_warning_severity_normalised(self):
         result = pob.convert_opa_violations([{
             "msg": "soft", "severity": "warning",
-            "tenant": "db-a", "field": "x",
+            "tenant": "tenant-a", "field": "x",
         }], 1)
         assert result.violations[0].level == "WARNING"
 
@@ -451,11 +413,32 @@ class TestBuildParser:
 # ---------------------------------------------------------------------------
 # main — CLI orchestrator
 # ---------------------------------------------------------------------------
+def _no_tenant_tree(root):
+    """A tree the exporter loads with no tenant in it (#2115 0-B: a directory
+    with no config file at all is not a tree — da-guard exits 2 on it, see
+    `test_dir_without_config_files_is_caller_error`)."""
+    (root / "_defaults.yaml").write_text("defaults:\n  mysql_connections: 80\n", encoding="utf-8")
+    return root
+
+
+@pytest.mark.usefixtures("da_guard_env")
 class TestMain:
+    def test_dir_without_config_files_is_caller_error(self, monkeypatch, tmp_path, capsys):
+        """#2115 0-B 行為變更：沒有任何設定檔的目錄（原本 rc 0「No tenant configs」）
+        現在照 da-guard 的判定 rc 2、一行 ERROR、沒有 traceback。"""
+        monkeypatch.setattr(pob, "detect_cli_lang", lambda: "en")
+        with pytest.raises(SystemExit) as exc:
+            pob.main(["--config-dir", str(tmp_path), "--dry-run"])
+        assert exc.value.code == EXIT_CALLER_ERROR
+        captured = capsys.readouterr()
+        assert captured.err.startswith("ERROR: da-guard served-values exited 2"), captured.err
+        assert captured.out == ""
+
     def test_no_tenant_configs_returns_zero(self, monkeypatch, tmp_path, capsys):
         # Empty config-dir → no tenant configs → return 0 with informational msg.
         # #1112: the message is prose → stderr; stdout stays clean for the JSON
         # document (see the two envelope tests below).
+        _no_tenant_tree(tmp_path)
         monkeypatch.setattr(pob, "detect_cli_lang", lambda: "en")
         rc = pob.main(["--config-dir", str(tmp_path)])
         assert rc == 0
@@ -465,6 +448,7 @@ class TestMain:
 
     def test_no_tenant_configs_json_envelope(self, monkeypatch, tmp_path, capsys):
         """#1112: --json + 空 config-dir → 一份歸零的 report（可被同一 consumer 消費）。"""
+        _no_tenant_tree(tmp_path)
         monkeypatch.setattr(pob, "detect_cli_lang", lambda: "en")
         rc = pob.main(["--config-dir", str(tmp_path), "--json"])
         assert rc == 0
@@ -480,30 +464,33 @@ class TestMain:
         故此路徑吐的是 opa_input（與有租戶時同 schema），不是 report envelope —
         dry-run 的輸出是要餵給 `opa eval` 的，不是給人讀的報告。
         """
+        _no_tenant_tree(tmp_path)
         monkeypatch.setattr(pob, "detect_cli_lang", lambda: "en")
         rc = pob.main(["--config-dir", str(tmp_path), "--dry-run", "--json"])
         assert rc == 0
         doc = json.loads(capsys.readouterr().out)
         assert doc["tenants"] == {}
+        assert doc["served"] == {}
         assert "platform_version" in doc
 
     def test_dry_run_prints_input_json(self, monkeypatch, tmp_path, capsys):
         monkeypatch.setattr(pob, "detect_cli_lang", lambda: "en")
         # Stub load_tenant_configs to return one tenant.
-        monkeypatch.setattr(pob, "load_tenant_configs",
-                            lambda d: {"db-a": {"x": 1}})
+        monkeypatch.setattr(pob, "load_tenant_inputs",
+                            lambda d: ({"tenant-a": {"x": 1}}, {}))
         monkeypatch.setattr(pob, "load_defaults", lambda d: {"y": 2})
         rc = pob.main(["--config-dir", str(tmp_path), "--dry-run"])
         assert rc == 0
         out = capsys.readouterr().out
         payload = json.loads(out)
         assert "tenants" in payload
-        assert payload["tenants"]["db-a"] == {"x": 1}
+        assert payload["tenants"]["tenant-a"] == {"x": 1}
+        assert payload["served"] == {}
 
     def test_no_url_no_path_returns_caller_error(self, monkeypatch, tmp_path, capsys):
         monkeypatch.setattr(pob, "detect_cli_lang", lambda: "en")
-        monkeypatch.setattr(pob, "load_tenant_configs",
-                            lambda d: {"db-a": {"x": 1}})
+        monkeypatch.setattr(pob, "load_tenant_inputs",
+                            lambda d: ({"tenant-a": {"x": 1}}, {}))
         monkeypatch.setattr(pob, "load_defaults", lambda d: {})
         rc = pob.main(["--config-dir", str(tmp_path)])
         assert rc == EXIT_CALLER_ERROR
@@ -512,8 +499,8 @@ class TestMain:
 
     def test_opa_url_path_evaluates_via_rest(self, monkeypatch, tmp_path):
         monkeypatch.setattr(pob, "detect_cli_lang", lambda: "en")
-        monkeypatch.setattr(pob, "load_tenant_configs",
-                            lambda d: {"db-a": {"x": 1}})
+        monkeypatch.setattr(pob, "load_tenant_inputs",
+                            lambda d: ({"tenant-a": {"x": 1}}, {}))
         monkeypatch.setattr(pob, "load_defaults", lambda d: {})
 
         called = {}
@@ -538,8 +525,8 @@ class TestMain:
 
     def test_policy_path_evaluates_via_binary(self, monkeypatch, tmp_path):
         monkeypatch.setattr(pob, "detect_cli_lang", lambda: "en")
-        monkeypatch.setattr(pob, "load_tenant_configs",
-                            lambda d: {"db-a": {"x": 1}})
+        monkeypatch.setattr(pob, "load_tenant_inputs",
+                            lambda d: ({"tenant-a": {"x": 1}}, {}))
         monkeypatch.setattr(pob, "load_defaults", lambda d: {})
 
         called = {}
@@ -562,12 +549,12 @@ class TestMain:
 
     def test_ci_with_errors_returns_one(self, monkeypatch, tmp_path):
         monkeypatch.setattr(pob, "detect_cli_lang", lambda: "en")
-        monkeypatch.setattr(pob, "load_tenant_configs",
-                            lambda d: {"db-a": {"x": 1}})
+        monkeypatch.setattr(pob, "load_tenant_inputs",
+                            lambda d: ({"tenant-a": {"x": 1}}, {}))
         monkeypatch.setattr(pob, "load_defaults", lambda d: {})
         monkeypatch.setattr(pob, "call_opa_rest", lambda *a, **kw: [{
             "msg": "bad", "severity": "error",
-            "tenant": "db-a", "field": "x",
+            "tenant": "tenant-a", "field": "x",
         }])
         rc = pob.main([
             "--config-dir", str(tmp_path),
@@ -578,12 +565,12 @@ class TestMain:
 
     def test_ci_with_only_warnings_returns_zero(self, monkeypatch, tmp_path):
         monkeypatch.setattr(pob, "detect_cli_lang", lambda: "en")
-        monkeypatch.setattr(pob, "load_tenant_configs",
-                            lambda d: {"db-a": {"x": 1}})
+        monkeypatch.setattr(pob, "load_tenant_inputs",
+                            lambda d: ({"tenant-a": {"x": 1}}, {}))
         monkeypatch.setattr(pob, "load_defaults", lambda d: {})
         monkeypatch.setattr(pob, "call_opa_rest", lambda *a, **kw: [{
             "msg": "soft", "severity": "warning",
-            "tenant": "db-a", "field": "x",
+            "tenant": "tenant-a", "field": "x",
         }])
         rc = pob.main([
             "--config-dir", str(tmp_path),
@@ -594,8 +581,8 @@ class TestMain:
 
     def test_json_output_emits_json(self, monkeypatch, tmp_path, capsys):
         monkeypatch.setattr(pob, "detect_cli_lang", lambda: "en")
-        monkeypatch.setattr(pob, "load_tenant_configs",
-                            lambda d: {"db-a": {"x": 1}})
+        monkeypatch.setattr(pob, "load_tenant_inputs",
+                            lambda d: ({"tenant-a": {"x": 1}}, {}))
         monkeypatch.setattr(pob, "load_defaults", lambda d: {})
         monkeypatch.setattr(pob, "call_opa_rest", lambda *a, **kw: [])
         rc = pob.main([
@@ -610,6 +597,7 @@ class TestMain:
 
     def test_zh_no_tenants_message(self, monkeypatch, tmp_path, capsys):
         # #1112: prose → stderr (see TestMain::test_no_tenant_configs_returns_zero).
+        _no_tenant_tree(tmp_path)
         monkeypatch.setattr(pob, "detect_cli_lang", lambda: "zh")
         rc = pob.main(["--config-dir", str(tmp_path)])
         assert rc == 0
@@ -617,8 +605,8 @@ class TestMain:
 
     def test_zh_no_url_no_path_error_message(self, monkeypatch, tmp_path, capsys):
         monkeypatch.setattr(pob, "detect_cli_lang", lambda: "zh")
-        monkeypatch.setattr(pob, "load_tenant_configs",
-                            lambda d: {"db-a": {"x": 1}})
+        monkeypatch.setattr(pob, "load_tenant_inputs",
+                            lambda d: ({"tenant-a": {"x": 1}}, {}))
         monkeypatch.setattr(pob, "load_defaults", lambda d: {})
         rc = pob.main(["--config-dir", str(tmp_path)])
         assert rc == EXIT_CALLER_ERROR

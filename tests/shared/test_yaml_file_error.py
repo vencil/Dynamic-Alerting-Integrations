@@ -422,7 +422,10 @@ _ROWS = [
 _ROW_IDS = [r[0] for r in _ROWS]
 # Rows whose tool reads the tree through `da-guard served-values` (#2115): the
 # file is named and the rc is 2, but the cause is the exporter's verdict.
-_SERVED_VALUES_ROWS = {"blind_spot_discovery"}
+# #2115 0-B: policy_engine's tenants and policy_opa_bridge's whole tree too
+# (policy_engine's own `_policies` read of `_defaults.yaml` stays Python's).
+_SERVED_VALUES_ROWS = {"blind_spot_discovery", "policy_engine tenant",
+                       "policy_opa_bridge --dry-run", "policy_opa_bridge _defaults"}
 assert _SERVED_VALUES_ROWS <= set(_ROW_IDS), _SERVED_VALUES_ROWS - set(_ROW_IDS)
 
 def _expected_bad_rc(script: Path) -> int:

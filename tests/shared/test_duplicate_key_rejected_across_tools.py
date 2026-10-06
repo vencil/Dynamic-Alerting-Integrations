@@ -31,6 +31,11 @@ import pytest
 REPO = pathlib.Path(__file__).resolve().parents[2]
 TOOLS = REPO / "scripts" / "tools"
 
+# #2115 0-B: policy_engine / policy_opa_bridge read the tree through da-guard
+# (the exporter's own load); the subprocess finds this repo's build via
+# `$DA_GUARD_BINARY`.
+pytestmark = pytest.mark.usefixtures("da_guard_env")
+
 _DEFAULTS = "defaults:\n  mysql_connections: 80\n"
 # policy_engine only reads tenant files when a policy exists to evaluate.
 _POLICY = ("_policies:\n  - name: mc\n    target: mysql_connections\n"

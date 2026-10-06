@@ -1078,12 +1078,45 @@ def check_profiles(config_dir: str) -> dict[str, object]:
 # ============================================================
 # Check 8: Policy-as-Code (DSL evaluation)
 # ============================================================
+# #2115 0-B: when policy_dsl cannot read the tenants, the generic "check the
+# DSL syntax" advice points at the wrong thing — the policy file is fine.
+_POLICY_DSL_TREE_UNREADABLE_HINT = (
+    "threshold-exporter cannot load this tree as the lines above say: repair "
+    "or remove the file they name (or the shape da-guard refuses), then re-run. "
+    "No policy was evaluated.")
+_POLICY_DSL_NO_CONFIG_FILE_HINT = (
+    "There is no config file under --config-dir at all: point it at your conf.d "
+    "tree, then re-run. No policy was evaluated.")
+_POLICY_DSL_NO_DA_GUARD_HINT = (
+    "Put da-guard on $PATH or set $DA_GUARD_BINARY to it (the da-tools image "
+    "ships it as /usr/local/bin/da-guard), then re-run. No policy was evaluated.")
+_POLICY_DSL_ROUTING_REFUSED_HINT = (
+    "A rule reads `_routing`, and the route generator refuses this tree for the "
+    "reasons above (`da-tools generate-routes --validate` shows the same): fix "
+    "them, then re-run. No policy was evaluated.")
+
+
 def check_policy_dsl(config_dir: str, policy_dsl_file: str | None = None) -> dict[str, object]:
     """Evaluate declarative policies from _defaults.yaml _policies or standalone file.
 
     Loads policy rules from _defaults.yaml ``_policies`` section and/or
     a standalone policy DSL file, then evaluates against all tenant configs.
+
+    The row carries ``_policy_scope`` (``root_carrier``: whether --config-dir
+    has a root defaults carrier; ``policy_dsl``: whether --policy-dsl was
+    given; ``evaluated``: whether tenants were evaluated) for ``_flag_flat_reads`` to word its line by, and only for it:
+    it pops the key, so it never reaches the report (#2115 0-B).
     """
+    scope: dict[str, object] = {"root_carrier": None, "evaluated": False,
+                                "policy_dsl": policy_dsl_file is not None}
+    row = _policy_dsl_row(config_dir, policy_dsl_file, scope)
+    row["_policy_scope"] = scope
+    return row
+
+
+def _policy_dsl_row(config_dir: str, policy_dsl_file: str | None,
+                    scope: dict[str, object]) -> dict[str, object]:
+    """`check_policy_dsl`'s body; records into `scope` what it did."""
     try:
         import policy_engine as pe
     except ImportError:
@@ -1093,7 +1126,11 @@ def check_policy_dsl(config_dir: str, policy_dsl_file: str | None = None) -> dic
     rules = []
 
     # From _defaults.yaml
-    defaults_path = str(resolve_defaults_file(Path(config_dir)))
+    # #2115 0-B: the tenants are read from the whole tree (below), so only
+    # the nested carriers whose `_policies` this lookup skips are named.
+    defaults_path = str(resolve_defaults_file(
+        Path(config_dir), skipped_note=pe.POLICIES_SKIPPED_NOTE))
+    scope["root_carrier"] = os.path.isfile(defaults_path)
     if os.path.isfile(defaults_path):
         rules.extend(pe.load_policies(defaults_path))
 
@@ -1150,12 +1187,46 @@ def check_policy_dsl(config_dir: str, policy_dsl_file: str | None = None) -> dic
         return _make_result("policy_dsl", PASS,
                             ["No _policies defined — skipped"])
 
-    tenant_configs = pe.load_tenant_configs(config_dir)
+    # #2115 0-B: the tenants as the exporter reads them (thresholds as
+    # /metrics serves them, every part of the day; reserved keys as written
+    # plus inherited; `_routing` as the route generator resolves it) — the
+    # same reader as `policy-engine --config-dir`. A tree it cannot read that
+    # way is a FAIL naming the file / da-guard's words, never a pass over the
+    # tenants that happened to be readable; da-guard missing is a caller error.
+    try:
+        inputs = pe.load_policy_inputs(config_dir, routing=pe.rules_read_routing(rules))
+    except (pe.DaGuardNotFoundError, pe.DaGuardError, pe.ParseFailedError) as exc:
+        buf = io.StringIO()
+        pe.print_load_error(exc, buf)
+        if isinstance(exc, pe.DaGuardNotFoundError):
+            hint = _POLICY_DSL_NO_DA_GUARD_HINT
+        elif isinstance(exc, pe.ParseFailedError):
+            # da-guard named the paths it dropped or could not read (its
+            # `parse_failed` / `unreadable`) — a dangling symlink included.
+            hint = _POLICY_DSL_TREE_UNREADABLE_HINT
+        elif next(iter_config_files(config_dir), None) is None:
+            hint = _POLICY_DSL_NO_CONFIG_FILE_HINT   # no path at all; only picks the advice
+        else:
+            hint = _POLICY_DSL_TREE_UNREADABLE_HINT
+        return _make_result("policy_dsl", FAIL,
+                            ["the tenants cannot be read as threshold-exporter reads them:",
+                             # "\n" only: `splitlines` also cuts at U+2028 etc.,
+                             # which can sit in a file name (_lib_tenant_values).
+                             *(ln for ln in buf.getvalue().split("\n") if ln)],
+                            caller_error=isinstance(exc, pe.DaGuardNotFoundError),
+                            hint=hint)
+    except pe.RoutingTreeRefused as exc:
+        return _make_result("policy_dsl", FAIL,
+                            ["the route generator refuses this tree, so `_routing` cannot "
+                             "be resolved:", *exc.lines],
+                            hint=_POLICY_DSL_ROUTING_REFUSED_HINT)
+    tenant_configs = inputs.views
     if not tenant_configs:
         return _make_result("policy_dsl", PASS,
                             ["No tenant configs found — skipped"])
 
-    result = pe.evaluate_policies(rules, tenant_configs)
+    result = pe.evaluate_policies(rules, tenant_configs, inputs.aliases)
+    scope["evaluated"] = True
 
     details = []
     for v in result.violations:
@@ -1425,12 +1496,9 @@ def _root_defaults_value_detail(rel: str, key: str | None, raw: str,
 
 
 #: `_`-prefixed keys another reader takes from the TOP level of a defaults
-#: file — the route generator's `_routing_defaults` / `_routing_enforced`, the
-#: custom-alert compiler's `_custom_alerts` — so they are never reported
-#: (#2386). da-guard's `TopLevelReadElsewhere` is the same list;
-#: tests/shared/defaults_wrapper_matrix.json pins both.
-TOP_LEVEL_READ_ELSEWHERE = frozenset(
-    {"_custom_alerts", "_routing_defaults", "_routing_enforced"})
+#: file (#2386); the list lives in _lib_constants (shared with the policy
+#: readers since #2115 0-B).
+from _lib_constants import TOP_LEVEL_READ_ELSEWHERE  # noqa: E402
 
 #: Keys the defaults-chain merge drops at every level, so they act in no
 #: shape (#2386): Go's ``config.MergeDroppedKeys``, pinned by
@@ -2206,6 +2274,25 @@ FLAT_READER_HINT = (
     "pointed at each subdirectory listed, or flatten the tree. Neither "
     "reproduces the exporter's per-level _defaults.yaml inheritance.")
 
+#: policy_dsl's version of `FLAT_READER_HINT` (#2115 0-B): its tenants come
+#: from the whole tree, so the only thing not read is `_policies` in nested
+#: carriers — and flattening or a sub-`--config-dir` would drop the root
+#: defaults the tenants inherit.
+POLICY_DSL_NESTED_HINT = (
+    "Policy-as-Code takes `_policies` only from the root defaults carrier; the "
+    "`_defaults.yaml` files named above are not read for `_policies`. If any of "
+    "them holds `_policies`, move those rules to the root carrier or pass them "
+    "with --policy-dsl. Do not flatten the tree or point --config-dir at a "
+    "subdirectory: that drops the root defaults.")
+#: The same, for a --config-dir with no root defaults carrier (#2115 0-B):
+#: there is no root default to drop, and the carrier has to be created.
+POLICY_DSL_NESTED_NO_ROOT_HINT = (
+    "Policy-as-Code takes `_policies` only from the root defaults carrier, and "
+    "--config-dir has none; the `_defaults.yaml` files named above are not read "
+    "for `_policies`. If any of them holds `_policies`, create a `_defaults.yaml` "
+    "at the root of --config-dir holding those rules, or pass them with "
+    "--policy-dsl.")
+
 #: Where `FLAT_READER_HINT` points. A row carrying that hint gets THIS link
 #: instead of its check's `_CHECK_HINTS` page: the advice and the page it
 #: sends the reader to have to be about the same thing.
@@ -2248,6 +2335,7 @@ def _flag_flat_reads(row: dict[str, object], flat_reads: list[FlatRead],
     the detail line, because "3 findings" on a tree where the reader
     skipped part of the files is not the whole count either.
     """
+    scope = row.pop("_policy_scope", None) or {}
     by_dir: dict[str, tuple[str, dict[str, None]]] = {}
     for rec in flat_reads:
         d_abs = os.path.abspath(rec.directory)
@@ -2264,10 +2352,27 @@ def _flag_flat_reads(row: dict[str, object], flat_reads: list[FlatRead],
         more = (f" (+{len(rels) - WARN_LIMIT} more)"
                 if len(rels) > WARN_LIMIT else "")
         where = "--config-dir" if d_abs == root_abs else printable_name(d)
-        row["details"] = list(row.get("details") or []) + [
-            f"{len(rels)} config file(s) in subdirectories of {where} were "
-            f"SKIPPED by this check (its reader is flat — top level only): "
-            f"{', '.join(shown)}{more}"]
+        if row.get("check") == "policy_dsl":
+            # #2115 0-B: policy_dsl reads its tenants from the whole tree; the
+            # one flat read left is the root-carrier lookup of `_policies`.
+            # Only a row that evaluated tenants says so (#2115 0-B).
+            if scope.get("root_carrier") is False:
+                source = "there is no root defaults carrier"
+                if scope.get("policy_dsl"):
+                    source += "; rules come from --policy-dsl"
+            else:
+                source = "`_policies` come from the root defaults carrier only"
+                if scope.get("policy_dsl"):
+                    source += "; rules also come from --policy-dsl"
+            if scope.get("evaluated"):
+                source += "; tenants are evaluated from the whole tree"
+            line = (f"{len(rels)} defaults file(s) in subdirectories of {where} "
+                    f"are not read for `_policies` ({source}): {', '.join(shown)}{more}")
+        else:
+            line = (f"{len(rels)} config file(s) in subdirectories of {where} were "
+                    f"SKIPPED by this check (its reader is flat — top level only): "
+                    f"{', '.join(shown)}{more}")
+        row["details"] = list(row.get("details") or []) + [line]
         skipped.extend(rels if d_abs == root_abs
                        else [Path(d, r).as_posix() for r in rels])
     if skipped:
@@ -2275,7 +2380,12 @@ def _flag_flat_reads(row: dict[str, object], flat_reads: list[FlatRead],
         if row["status"] == PASS:
             row["status"] = WARN
             if not row.get("hint"):
-                row["hint"] = FLAT_READER_HINT
+                if row.get("check") != "policy_dsl":
+                    row["hint"] = FLAT_READER_HINT
+                elif scope.get("root_carrier") is False:
+                    row["hint"] = POLICY_DSL_NESTED_NO_ROOT_HINT
+                else:
+                    row["hint"] = POLICY_DSL_NESTED_HINT
                 row["hint_docs"] = FLAT_READER_DOCS
     return row
 

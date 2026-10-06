@@ -21,17 +21,36 @@ DSL 運算子：
 嚴重度：
   error   — 違規視為失敗（CI exit 1）
   warning — 違規視為警告（僅報告）
+
+`--config-dir` 讀的是生效值，不是租戶檔的字面內容（#2115 0-B；`load_policy_inputs`）。
+規則 target 依 key 種類讀不同來源，`when` 同一套：
+
+  閾值（不以 `_` 開頭）— exporter 在 /metrics 實際發出的數字（`da-guard served-values
+      --schedules`）。值寫在根 `defaults:`、平台檔 `tenants:`、租戶檔或子目錄
+      `_defaults.yaml` 都一樣；排程閾值逐時段比對，任一時段違規即違規（訊息帶 UTC 時段）。
+      某時段 `disable`（served 在該段沒有列）：`required` 算違規，`forbidden` 不算，
+      其他運算子略過該段；整天都不發的鍵視同沒有（`required` 違規、其他略過）。
+      target 用舊拼法（別名）時，以 served-values 的 `aliases` 表換成現行拼法。
+  保留鍵（`_` 開頭，`_routing` 除外）— 寫法＋繼承（`da-guard effective` 的
+      `effective_config`）；Go 自動補的預設值（`_severity_dedup`、`_metadata` 空欄位等）不算有寫。
+  `_routing` — 路由產生器解析後的結果（`_routing_defaults` 逐層、routing profile、
+      租戶 `_routing` 合併後，`{{tenant}}` 已代換）；只在有規則讀到它時才載入。
+
+exporter 丟掉或讀不到的檔、da-guard 拒收的樹（例如根 `defaults:` 與租戶都寫 `X_critical`，
+#2115 F0）、路由產生器拒收的樹，一律 exit 2，不評估任何規則。
 """
 from __future__ import annotations
 
 import argparse
+import contextlib
 import fnmatch
+import math
 import os
 import re
 import sys
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Any, Optional, Union
+from typing import Any, NamedTuple, Optional, Union
 
 import yaml
 
@@ -56,7 +75,6 @@ try:
         YamlFileError,
         detect_cli_lang,
         format_json_report,
-        load_tenant_configs,
         load_yaml_file,
         parse_duration_seconds,
         safe_label,
@@ -66,7 +84,6 @@ except ImportError:
         YamlFileError,
         detect_cli_lang,
         format_json_report,
-        load_tenant_configs,
         load_yaml_file,
         parse_duration_seconds,
         safe_label,
@@ -85,6 +102,19 @@ except ImportError:
         load_yaml_file_strict, load_yaml_file_strict_exporter_keys,
         strict_load_exporter_keys, strict_safe_load,
     )
+
+# #2115 0-B: the values a rule reads come from Go (served-values / effective).
+from _lib_tenant_values import (  # noqa: E402
+    DaGuardError,
+    DaGuardNotFoundError,
+    ParseFailedError,
+    ServedValuesError,
+    load_effective,
+    load_served_tree,
+    print_load_error,
+    print_load_warnings,
+    written_config,
+)
 
 # ---------------------------------------------------------------------------
 # Constants
@@ -229,10 +259,184 @@ def rules_from_policy_data(data: Any) -> list[PolicyRule]:
     return rules
 
 
+#: `resolve_defaults_file(skipped_note=...)` for a reader that takes
+#: `_policies` from the root carrier and its tenants from the exporter's own
+#: load (#2115 0-B): the nested carriers are named, the tenants are not.
+POLICIES_SKIPPED_NOTE = (
+    "`_policies` are read from the root defaults carrier only (tenants in "
+    "subdirectories are evaluated), so a `_policies` list would not be read from these")
+
+# ---------------------------------------------------------------------------
+# What a rule reads (#2115 0-B)
+# ---------------------------------------------------------------------------
+class ServedThreshold(NamedTuple):
+    """One threshold key as /metrics serves it over the whole UTC day.
+
+    `segments` are da-guard served-values `--schedules`' segments for the
+    key, `(start, end, value)` with `"HH:MM"` bounds; `value` is None in a
+    segment in which the key has no /metrics row (a `disable` window). The
+    segments are the exporter's reading of the schedule; nothing here reads
+    `overrides:` itself. A key without a schedule is one segment,
+    `00:00`-`24:00`.
+    """
+    segments: tuple[tuple[str, str, Optional[float]], ...]
+
+
+class Unserved(NamedTuple):
+    """A threshold key the tenant's config carries (written or inherited)
+    that /metrics does not serve at all (served-values `unserved`: switched
+    off, or no row to inherit into). `raw` is the value as written. A rule
+    finds the key but has no served number to check: `required` is violated
+    with a message saying it IS configured; every other operator skips it."""
+    raw: Any
+
+
+class PolicyInputs(NamedTuple):
+    """What `load_policy_inputs` reads: `views` is `{tenant: {key: value}}`
+    in the shape `evaluate_policies` takes, `aliases` the exporter's alias
+    table (retired base key -> canonical base key) rule targets are read
+    through."""
+    views: dict[str, dict[str, Any]]
+    aliases: dict[str, str]
+
+
+class RoutingTreeRefused(Exception):
+    """The route generator refuses the tree (an unreadable tenant file, a
+    tenant in two files, a routing-tree error, an invalid tenant id), so
+    there is no resolved `_routing` to read. `lines` are its own words."""
+
+    def __init__(self, lines: list[str]) -> None:
+        self.lines = list(lines)
+        super().__init__(self.lines[0] if self.lines else "the route generator refuses this tree")
+
+
+_ROUTING = "_routing"
+
+
+def rules_read_routing(rules: list[PolicyRule]) -> bool:
+    """Does any rule (its target or its `when` target) read `_routing`?
+    Only then is the route generator's reader run (`load_policy_inputs`)."""
+    for rule in rules:
+        targets = [rule.target]
+        if rule.when:
+            targets.append(str(rule.when.get("target", "")))
+        for target in targets:
+            if target and fnmatch.fnmatch(_ROUTING, target.split(".", 1)[0]):
+                return True
+    return False
+
+
+def _resolved_routing(config_dir: str) -> dict[str, dict]:
+    """`{tenant: routing}` as the route generator resolves it: the
+    `_routing_defaults` chain, the routing profile and the tenant's own
+    `_routing`, merged, `{{tenant}}` substituted. A tenant with nothing to
+    route is absent. Raises `RoutingTreeRefused` for a tree the generator
+    refuses in every mode."""
+    import generate_alertmanager_routes as gar  # the generator's own reader
+
+    # The generator's reader prints its WARN lines to stdout; this tool's
+    # stdout is the report (one JSON document under --json).
+    with contextlib.redirect_stdout(sys.stderr):
+        tree = gar.load_tenant_tree(config_dir)
+    _rc, lines = gar.tree_refusal(tree.files_read, tree.tenant_file_errors,
+                                  tree.duplicate_tenants, tree.routing_tree_problems,
+                                  tree.invalid_tenant_ids)
+    if lines:
+        raise RoutingTreeRefused(lines)
+    return tree.routing_configs
+
+
+def load_policy_inputs(config_dir: str, *, routing: bool = False) -> PolicyInputs:
+    """Every tenant of the conf.d tree at `config_dir`, as the rules read it
+    (#2115 (c), by kind of key):
+
+    * a threshold (no `_` prefix) — `ServedThreshold`, what /metrics serves
+      over the whole day (`da-guard served-values --schedules`), canonical
+      spelling; a key /metrics serves at no minute of the day is absent;
+      a threshold key the config carries but /metrics never serves is an
+      `Unserved` (its value as written);
+    * a reserved key (`_` prefix) other than `_routing` — as written plus
+      inherited (`_lib_tenant_values.written_config`: `da-guard effective`'s
+      `effective_config`, only the reserved keys a tenant may carry, and
+      `_metadata` as /metrics inherits it minus the exporter's empty fill):
+      a default the exporter fills in itself is not there;
+    * `_routing` — only with `routing=True`: the route generator's resolved
+      routing (`_resolved_routing`); absent otherwise.
+
+    Prints da-guard's stderr and one WARN per file the load serves no tenant
+    from (`print_load_warnings`). Raises what `load_served_tree` /
+    `load_effective` raise; `ServedValuesError` when the two disagree on the
+    tenants or a segment of the day cannot be gathered; `RoutingTreeRefused`.
+    """
+    tree = load_served_tree(config_dir, schedules=True)
+    print_load_warnings(tree)
+    effective = load_effective(config_dir)
+    if set(effective) != set(tree.tenants):
+        raise ServedValuesError(
+            "da-guard served-values and da-guard effective disagree on the tenants of this tree: "
+            f"{sorted(set(effective) ^ set(tree.tenants))}", None, "")
+    routed = _resolved_routing(config_dir) if routing else {}
+
+    views: dict[str, dict[str, Any]] = {}
+    for tenant, served in tree.tenants.items():
+        view: dict[str, Any] = {
+            k: v for k, v in written_config(effective[tenant], served).items()
+            if k.startswith("_") and k != _ROUTING}
+        for key, raw in served.unserved.items():
+            if not str(key).startswith("_"):
+                view[_canonical_key(str(key), tree.aliases)] = Unserved(raw)
+        if tenant in routed:
+            view[_ROUTING] = routed[tenant]
+        for key, day in (served.schedules or {}).items():
+            for seg in day.segments:
+                if seg.error is not None:
+                    raise ServedValuesError(
+                        f"da-guard served-values: tenant {tenant!r}: /metrics cannot be gathered "
+                        f"in {seg.start}-{seg.end} UTC, so no rule can be checked there ({seg.error})",
+                        None, "")
+            segments = tuple((seg.start, seg.end, seg.value) for seg in day.segments)
+            if any(v is not None for _s, _e, v in segments):
+                view[key] = ServedThreshold(segments)
+        views[tenant] = view
+    return PolicyInputs(views, dict(tree.aliases))
+
+
 # ---------------------------------------------------------------------------
 # Target resolution
 # ---------------------------------------------------------------------------
-def _resolve_target(config: dict, target: str) -> tuple[bool, Any]:
+_CRITICAL = "_critical"
+
+
+def _canonical_key(key: str, aliases: Optional[dict[str, str]]) -> str:
+    """A threshold key in the exporter's canonical spelling: a retired base
+    key (also as `<base>_critical` / `<base>{...}`) through `aliases`.
+    Reserved keys and keys not in the table are returned as they are."""
+    if not aliases or key.startswith("_"):
+        return key
+    base, brace, dims = key.partition("{")
+    if base in aliases:
+        return aliases[base] + brace + dims
+    if base.endswith(_CRITICAL) and base[:-len(_CRITICAL)] in aliases:
+        return aliases[base[:-len(_CRITICAL)]] + _CRITICAL + brace + dims
+    return key
+
+
+def _is_wildcard(target: str) -> bool:
+    return "*" in target and "." not in target
+
+
+def _canonical_target(target: str, aliases: Optional[dict[str, str]]) -> str:
+    """`target` with its first path element in canonical spelling (a
+    wildcard is matched against both spellings instead, see
+    `_resolve_wildcard_values`)."""
+    if _is_wildcard(target):
+        return target
+    head, dot, rest = target.partition(".")
+    return _canonical_key(head, aliases) + dot + rest
+
+
+def _resolve_target(config: dict, target: str,
+                    aliases: Optional[dict[str, str]] = None) -> tuple[bool, Any]:
     """解析 dot-path 目標，從 tenant 配置中取值。
 
     支援：
@@ -242,23 +446,21 @@ def _resolve_target(config: dict, target: str) -> tuple[bool, Any]:
     Args:
         config: tenant 配置 dict。
         target: dot-separated path 或含萬用字元的 pattern。
+        aliases: exporter 的別名表；給了的話，舊拼法的閾值 key 換成現行拼法再找（#2115）。
 
     Returns:
         (found, value) — found 表示是否找到，value 是解析到的值。
-        萬用字元模式回傳所有匹配值的 list。
+        萬用字元模式回傳所有匹配值的 dict。
     """
     # Wildcard pattern — match at top level
-    if "*" in target and "." not in target:
-        matches = {}
-        for k, v in config.items():
-            if fnmatch.fnmatch(k, target):
-                matches[k] = v
+    if _is_wildcard(target):
+        matches = dict(_resolve_wildcard_values(config, target, aliases))
         if matches:
             return True, matches
         return False, None
 
     # Dot-path navigation
-    parts = target.split(".")
+    parts = _canonical_target(target, aliases).split(".")
     current: Any = config
     for part in parts:
         if isinstance(current, dict):
@@ -271,11 +473,21 @@ def _resolve_target(config: dict, target: str) -> tuple[bool, Any]:
     return True, current
 
 
-def _resolve_wildcard_values(config: dict, target: str) -> list[tuple[str, Any]]:
-    """解析萬用字元目標，回傳 (key, value) 清單。"""
+def _resolve_wildcard_values(config: dict, target: str,
+                             aliases: Optional[dict[str, str]] = None) -> list[tuple[str, Any]]:
+    """解析萬用字元目標，回傳 (key, value) 清單。
+
+    閾值 key 以現行拼法回傳；pattern 對現行拼法或任一舊拼法（別名）相符即算（#2115）。
+    """
+    retired: dict[str, list[str]] = {}
+    for old, new in (aliases or {}).items():
+        retired.setdefault(new, []).append(old)
     results = []
     for k, v in config.items():
-        if fnmatch.fnmatch(k, target):
+        names = [k, *retired.get(k, [])]
+        if k.endswith(_CRITICAL):
+            names += [old + _CRITICAL for old in retired.get(k[:-len(_CRITICAL)], [])]
+        if any(fnmatch.fnmatch(n, target) for n in names):
             results.append((k, v))
     return results
 
@@ -373,16 +585,96 @@ def _evaluate_operator(operator: str, actual: Any, expected: Any) -> bool:
     return True  # Unknown operator — pass (should not reach due to validation)
 
 
+def _threshold_text(value: float) -> str:
+    """A served threshold as text: `900` for 900.0, `0.5`, `+Inf` / `-Inf` / `NaN`."""
+    if math.isnan(value):
+        return "NaN"
+    if math.isinf(value):
+        return "+Inf" if value > 0 else "-Inf"
+    return str(int(value)) if value.is_integer() else repr(value)
+
+
+def _threshold_equals(value: float, expected: Any) -> bool:
+    """A served threshold against a rule's value: as numbers when the rule's
+    value is one (`900` / `"900"` / `900.0` all equal a served 900.0), as
+    text otherwise."""
+    e = _to_comparable(expected)
+    if isinstance(e, float):
+        return value == e
+    return _threshold_text(value) == str(expected)
+
+
+def _evaluate_threshold(operator: str, value: float, expected: Any) -> bool:
+    """`_evaluate_operator` for one served threshold value (a float)."""
+    if operator == "required":
+        return True
+    if operator == "forbidden":
+        return False
+    if operator in ("equals", "not_equals"):
+        same = _threshold_equals(value, expected)
+        return same if operator == "equals" else not same
+    if operator == "one_of":
+        return isinstance(expected, list) and any(_threshold_equals(value, e) for e in expected)
+    if operator in ("gte", "lte", "gt", "lt"):
+        return _evaluate_operator(operator, value, expected)
+    return _evaluate_operator(operator, _threshold_text(value), expected)
+
+
+def _failures(operator: str, actual: Any, expected: Any) -> list[tuple[Any, Optional[str]]]:
+    """`(actual, window)` for every part of `actual` that violates the rule.
+
+    A `ServedThreshold` is checked segment by segment (#2115 (c): every part
+    of the day must pass); `window` names the UTC segment unless the key has
+    only one. In a segment with no /metrics row `required` is violated and
+    every other operator has nothing to check. `required` / `forbidden` give
+    at most one finding per key, its `window` listing every failing segment.
+    An `Unserved` key violates `required` only. Any other value is checked
+    once, `window` None.
+    """
+    if isinstance(actual, Unserved):
+        return [(actual, None)] if operator == "required" else []
+    if isinstance(actual, ServedThreshold):
+        whole_day = len(actual.segments) == 1
+        out: list[tuple[Any, Optional[str]]] = []
+        for start, end, value in actual.segments:
+            window = None if whole_day else f"{start}-{end}"
+            if value is None:
+                if operator == "required":
+                    out.append((None, window))
+            elif not _evaluate_threshold(operator, value, expected):
+                out.append((_threshold_text(value), window))
+        if operator in ("required", "forbidden") and len(out) > 1:
+            # A presence rule is one finding per key: the windows it fails in
+            # are listed in that one message.
+            values = list(dict.fromkeys(str(a) for a, _w in out if a is not None))
+            out = [(" / ".join(values) if values else None, "、".join(w for _a, w in out if w))]
+        return out
+    return [] if _evaluate_operator(operator, actual, expected) else [(actual, None)]
+
+
+def _holds(operator: str, actual: Any, expected: Any) -> bool:
+    """A `when` condition on a found value: on a `ServedThreshold`, true when
+    it holds in some segment that has a /metrics row."""
+    if isinstance(actual, ServedThreshold):
+        return any(v is not None and _evaluate_threshold(operator, v, expected)
+                   for _s, _e, v in actual.segments)
+    return _evaluate_operator(operator, actual, expected)
+
+
 # ---------------------------------------------------------------------------
 # Condition evaluation (when clause)
 # ---------------------------------------------------------------------------
-def _evaluate_when(config: dict, when: dict) -> bool:
+def _evaluate_when(config: dict, when: dict,
+                   aliases: Optional[dict[str, str]] = None) -> bool:
     """評估 when 條件子句。
 
     when 結構：
         target: str — 要檢查的欄位
         operator: str — 運算子
         value: Any — 期望值（可選）
+
+    讀值的規則與主規則相同（`_resolve_target`）。排程閾值：任一有發出值的時段成立即成立。
+    有寫但 exporter 不發的鍵（`Unserved`）視同沒有：精確 target 與萬用字元展開的每個鍵皆然。
 
     Returns:
         True 表示條件成立（主規則應該評估），False 表示條件不成立（跳過）。
@@ -394,7 +686,15 @@ def _evaluate_when(config: dict, when: dict) -> bool:
     if not target:
         return True
 
-    found, actual = _resolve_target(config, target)
+    # A key carried but not served (`Unserved`) is absent to a condition —
+    # for an exact target and for every key a wildcard target expands to.
+    found, actual = _resolve_target(config, target, aliases)
+    if isinstance(actual, Unserved):
+        found, actual = False, None
+    elif _is_wildcard(target) and isinstance(actual, dict):
+        actual = {k: v for k, v in actual.items() if not isinstance(v, Unserved)}
+        if not actual:
+            found, actual = False, None
     if operator == "required":
         return found and actual is not None
     if operator == "forbidden":
@@ -403,19 +703,21 @@ def _evaluate_when(config: dict, when: dict) -> bool:
     if not found:
         return False
 
-    return _evaluate_operator(operator, actual, value)
+    return _holds(operator, actual, value)
 
 
 # ---------------------------------------------------------------------------
 # Core evaluation
 # ---------------------------------------------------------------------------
-def evaluate_rule(rule: PolicyRule, tenant: str, config: dict) -> list[Violation]:
+def evaluate_rule(rule: PolicyRule, tenant: str, config: dict,
+                  aliases: Optional[dict[str, str]] = None) -> list[Violation]:
     """對單一 tenant 評估單一策略規則。
 
     Args:
         rule: 策略規則。
         tenant: tenant 名稱。
-        config: tenant 配置 dict。
+        config: tenant 配置 dict（`load_policy_inputs` 的 view，或一般 dict）。
+        aliases: exporter 的別名表（`PolicyInputs.aliases`）。
 
     Returns:
         違規清單（空 = 通過）。
@@ -426,72 +728,49 @@ def evaluate_rule(rule: PolicyRule, tenant: str, config: dict) -> list[Violation
         return []
 
     # Evaluate when condition
-    if rule.when and not _evaluate_when(config, rule.when):
+    if rule.when and not _evaluate_when(config, rule.when, aliases):
         return []
 
-    violations: list[Violation] = []
+    def violation(target: str, actual: Any, window: Optional[str]) -> Violation:
+        if isinstance(actual, Unserved):
+            message = (f"'{target}' 已配置（值: {actual.raw}）但 exporter 不發出"
+                       "（/metrics 沒有這一列，例如 disable 或沒有可繼承的預設值）")
+        else:
+            message = _format_violation_msg(rule.operator, target, actual, rule.value)
+        if window is not None:
+            message += f"（UTC {window}）"
+        return Violation(tenant=tenant, rule_name=rule.name, description=rule.description,
+                         severity=rule.severity, target=target, message=message)
 
     # Wildcard target — evaluate against all matching keys
-    if "*" in rule.target and "." not in rule.target:
-        matched = _resolve_wildcard_values(config, rule.target)
+    if _is_wildcard(rule.target):
+        matched = _resolve_wildcard_values(config, rule.target, aliases)
         if rule.operator == "required" and not matched:
-            violations.append(Violation(
+            return [Violation(
                 tenant=tenant,
                 rule_name=rule.name,
                 description=rule.description,
                 severity=rule.severity,
                 target=rule.target,
                 message=f"未找到匹配 '{rule.target}' 的配置項",
-            ))
-        else:
-            for key, val in matched:
-                if not _evaluate_operator(rule.operator, val, rule.value):
-                    violations.append(Violation(
-                        tenant=tenant,
-                        rule_name=rule.name,
-                        description=rule.description,
-                        severity=rule.severity,
-                        target=key,
-                        message=_format_violation_msg(
-                            rule.operator, key, val, rule.value
-                        ),
-                    ))
-        return violations
+            )]
+        return [violation(key, actual, window)
+                for key, val in matched
+                for actual, window in _failures(rule.operator, val, rule.value)]
 
     # Standard dot-path target
-    found, actual = _resolve_target(config, rule.target)
+    found, actual = _resolve_target(config, rule.target, aliases)
 
     if rule.operator in ("required", "forbidden"):
-        if not _evaluate_operator(rule.operator, actual if found else None, None):
-            violations.append(Violation(
-                tenant=tenant,
-                rule_name=rule.name,
-                description=rule.description,
-                severity=rule.severity,
-                target=rule.target,
-                message=_format_violation_msg(
-                    rule.operator, rule.target, actual if found else None, None
-                ),
-            ))
-        return violations
+        return [violation(rule.target, a, window)
+                for a, window in _failures(rule.operator, actual if found else None, None)]
 
     if not found:
         # Non-existence operators other than required/forbidden — skip silently
         return []
 
-    if not _evaluate_operator(rule.operator, actual, rule.value):
-        violations.append(Violation(
-            tenant=tenant,
-            rule_name=rule.name,
-            description=rule.description,
-            severity=rule.severity,
-            target=rule.target,
-            message=_format_violation_msg(
-                rule.operator, rule.target, actual, rule.value
-            ),
-        ))
-
-    return violations
+    return [violation(rule.target, a, window)
+            for a, window in _failures(rule.operator, actual, rule.value)]
 
 
 def _format_violation_msg(operator: str, target: str, actual: Any, expected: Any) -> str:
@@ -516,15 +795,18 @@ def _format_violation_msg(operator: str, target: str, actual: Any, expected: Any
     return f"'{target}': 策略違規（{operator}）"
 
 
+
 def evaluate_policies(
     rules: list[PolicyRule],
     tenant_configs: dict[str, dict],
+    aliases: Optional[dict[str, str]] = None,
 ) -> PolicyResult:
     """對所有 tenant 評估所有策略規則。
 
     Args:
         rules: 策略規則清單。
-        tenant_configs: {tenant_name: config_dict}。
+        tenant_configs: {tenant_name: config_dict}（`load_policy_inputs(...).views`）。
+        aliases: exporter 的別名表（`load_policy_inputs(...).aliases`）。
 
     Returns:
         PolicyResult 包含所有違規及統計。
@@ -536,21 +818,12 @@ def evaluate_policies(
 
     for tenant, config in sorted(tenant_configs.items()):
         for rule in rules:
-            violations = evaluate_rule(rule, tenant, config)
+            violations = evaluate_rule(rule, tenant, config, aliases)
             result.violations.extend(violations)
 
     return result
 
 
-# ---------------------------------------------------------------------------
-# Tenant config loading — delegated to the shared `_lib_io.load_tenant_configs`
-# (imported via the `_lib_python` facade above; da-tools ROI r3 W2 de-shadow).
-# Behaviour deltas vs the former local copy (both handled wrapper + flat):
-#   - lib additionally skips dotfiles and non-files (stricter);
-#   - an EMPTY/comment-only yaml now registers the tenant as `{}` (lib loads
-#     with default={}, local copy skipped None) — so `required`-style policies
-#     evaluate placeholder files instead of silently ignoring them (pinned in
-#     tests/ops/test_policy_engine.py::TestLoadTenantConfigs).
 # ---------------------------------------------------------------------------
 # Report generation
 # ---------------------------------------------------------------------------
@@ -696,6 +969,36 @@ def _unreadable_yaml_exit(exc: YamlFileError, args, lang: str) -> int:
     return EXIT_CALLER_ERROR
 
 
+def _load_error_exit(exc: Exception, args, rules_evaluated: int) -> int:
+    """#2115: the tenants could not be read the way the exporter reads them
+    → rc 2, nothing evaluated. da-guard missing or failing, a file the
+    exporter drops or cannot read (named, with da-guard's stderr below), a
+    tree da-guard refuses, or one the route generator refuses (its own
+    lines). The ``--json`` envelope as on every other caller-error path."""
+    if isinstance(exc, RoutingTreeRefused):
+        print("ERROR: the route generator refuses this tree, so `_routing` "
+              "cannot be resolved:", file=sys.stderr)
+        for line in exc.lines:
+            print(safe_label(line), file=sys.stderr)
+        reason = "routing_tree_refused"
+    else:
+        print_load_error(exc)
+        reason = ("yaml_file_unreadable" if isinstance(exc, ParseFailedError)
+                  else "da_guard_failed")
+    if args.json_output:
+        print(format_json_report({
+            "status": "caller_error",
+            "reason": reason,
+            "tenants_evaluated": 0,
+            "rules_evaluated": rules_evaluated,
+            "error_count": 0,
+            "warning_count": 0,
+            "passed": False,
+            "violations": [],
+        }))
+    return EXIT_CALLER_ERROR
+
+
 def main(argv: Optional[list[str]] = None) -> int:
     """CLI 進入點。"""
     try_utf8_stdout()
@@ -759,7 +1062,12 @@ def main(argv: Optional[list[str]] = None) -> int:
     rules: list[PolicyRule] = []
 
     # From _defaults.yaml in config-dir
-    defaults_path = str(resolve_defaults_file(Path(args.config_dir)))
+    # #2115 0-B: name only the nested `_defaults.yaml` files whose `_policies`
+    # this lookup skips; tenants in subdirectories ARE evaluated (their values
+    # come from the exporter's own load), so the generic FLAT/SKIPPED warning
+    # would contradict the report.
+    defaults_path = str(resolve_defaults_file(
+        Path(args.config_dir), skipped_note=POLICIES_SKIPPED_NOTE))
     if Path(defaults_path).is_file():
         try:
             rules.extend(load_policies(defaults_path))
@@ -881,11 +1189,13 @@ def main(argv: Optional[list[str]] = None) -> int:
             print(format_json_report(_empty_report("no_policies", "no_policy_rules_found")))
         return EXIT_OK
 
-    # Load tenant configs
+    # Load tenants as the exporter (and, for `_routing`, the route
+    # generator) reads them — #2115 0-B; see the module docstring.
     try:
-        tenant_configs = load_tenant_configs(args.config_dir)
-    except YamlFileError as exc:
-        return _unreadable_yaml_exit(exc, args, lang)
+        inputs = load_policy_inputs(args.config_dir, routing=rules_read_routing(rules))
+    except (DaGuardNotFoundError, DaGuardError, ParseFailedError, RoutingTreeRefused) as exc:
+        return _load_error_exit(exc, args, len(rules))
+    tenant_configs = inputs.views
     if not tenant_configs:
         if lang == "zh":
             print(f"未找到 tenant 配置於 {args.config_dir}", file=sys.stderr)
@@ -898,7 +1208,7 @@ def main(argv: Optional[list[str]] = None) -> int:
         return EXIT_OK
 
     # Evaluate
-    result = evaluate_policies(rules, tenant_configs)
+    result = evaluate_policies(rules, tenant_configs, inputs.aliases)
 
     # Output
     if args.json_output:

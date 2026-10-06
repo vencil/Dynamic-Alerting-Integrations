@@ -105,6 +105,7 @@ _POLICY = ("_policies:\n  - name: need-cpu\n    target: cpu\n"
            "    operator: required\n    exclude_tenants: {exclude}\n")
 
 
+@pytest.mark.usefixtures("da_guard_env")
 @pytest.mark.parametrize("tenant_key,exclude,excluded", [
     ("123", "[123]", True),
     ('"123"', "[123]", True),
@@ -121,11 +122,12 @@ def test_exclude_tenants_matches_by_text(tmp_path, tenant_key, exclude, excluded
         "_defaults.yaml": "defaults:\n  mem: 1\n" + _POLICY.format(exclude=exclude),
         "t.yaml": f"tenants:\n  {tenant_key}:\n    mem: 2\n"})
     rules = pe.load_policies(str(d / "_defaults.yaml"))
-    configs = pe.load_tenant_configs(str(d))
-    result = pe.evaluate_policies(rules, configs)
+    inputs = pe.load_policy_inputs(str(d))   # #2115 0-B: the tenants as the exporter reads them
+    result = pe.evaluate_policies(rules, inputs.views, inputs.aliases)
     assert (result.violations == []) is excluded, result.violations
 
 
+@pytest.mark.usefixtures("da_guard_env")
 def test_exclude_tenants_from_a_standalone_policy_file(tmp_path, capsys):
     """The ``--policy`` path reads its file itself (not through
     ``load_policies``); it must read the list the same way."""
@@ -214,6 +216,7 @@ def test_a_python_object_tag_in_a_tenant_file_is_still_refused(tmp_path):
 
 # ── #2114 review: error shape and parser are what the readers had ────
 
+@pytest.mark.usefixtures("da_guard_env")
 def test_a_map_tag_on_a_sequence_keeps_policy_engine_at_rc_2(tmp_path, capsys):
     """`tenants: !!map [a, b]` — the loader leaked TypeError, which escaped
     every `except yaml.YAMLError` and turned policy-engine's rc 2
