@@ -14,15 +14,16 @@ package config
 // what ResolveEffective reads for them from disk — that contract is
 // asserted by TestSimulate_VsCommitted_ParityHash.
 //
-// ⚠️ "Same merged_hash" is NOT "same path as the exported metric". This
-// merge is the DIAGNOSTIC path; the series
-// `user_threshold` is produced by collector.go →
+// ⚠️ "Same merged_hash" is NOT "same path as the exported metric". The
+// returned config is the per-threshold view /effective reports
+// (effectiveView, #2115), while the hash is still that of the leaf-by-leaf
+// merge; the series `user_threshold` is produced by collector.go →
 // ThresholdConfig.ResolveAtWithStats, a different resolver that decodes
-// into typed ScheduledValue rather than merging `map[string]any`. The two
-// agree on every shape the schema admits — deepMerge was aligned to the
-// emitting path for threshold nulls in #1339 — but they are separate
-// implementations, so read a simulate result as "what the config would
-// merge to", not as "what /metrics will emit".
+// into typed ScheduledValue rather than merging `map[string]any`. The view
+// follows /metrics for scalar, list and schedule thresholds; other shapes
+// (mappings without `default`, values /metrics drops — #2296) still differ,
+// so read a simulate result as "what /effective would report", not as
+// "what /metrics will emit".
 //
 // ⚠️ NO PLATFORM PER-TENANT LAYER (#2019). /effective, da-guard and the
 // exporter's merged_hash also apply the root platform files' `tenants:`
@@ -175,12 +176,22 @@ func SimulateEffective(req SimulateRequest) (*SimulateResponse, error) {
 		return nil, fmt.Errorf("simulate hash: %w", err)
 	}
 
+	// #2115: effective_config is the per-threshold view /effective
+	// reports (effectiveView), merged_hash the merge's — as ResolveEffective
+	// builds them, so a simulate response stays the /effective answer for
+	// the same tree. The merge succeeded over these bytes, so every chain
+	// entry parses here.
+	blocks := make([]map[string]any, len(chainBytes))
+	for i, b := range chainBytes {
+		blocks[i] = ParseChainDefaults(b).block
+	}
+
 	return &SimulateResponse{
 		TenantID:      req.TenantID,
 		SourceHash:    ComputeSourceHash(req.TenantYAML),
 		MergedHash:    mergedHash,
 		DefaultsChain: append([]string(nil), chain...),
-		Config:        merged,
+		Config:        effectiveView(blocks, parts.override),
 	}, nil
 }
 

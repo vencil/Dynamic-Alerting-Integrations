@@ -410,7 +410,9 @@ func pyyamlOwn(ec *config.EffectiveConfig, pyRouting map[string]map[string]any) 
 // buildCheckInput assembles a guard.CheckInput from the scoped
 // resolution. It's where the YAML-shape → guard-input mapping lives:
 //
-//   - EffectiveConfigs[id]      ← ec.EffectiveConfig
+//   - EffectiveConfigs[id]      ← ec.MergedConfig (the merge, not the
+//     per-threshold view /effective reports: #2115 changed that view and
+//     must not change this gate's findings)
 //   - RoutingByTenant[id]       ← the tenant's RESOLVED routing (#2280):
 //     routingpolicy.Resolve over the tenant file's `_routing` /
 //     `_routing_profile` laid over the root platform overlay's (#2291,
@@ -492,7 +494,7 @@ func buildCheckInput(scoped *config.ScopedTenants, f *flags) guard.CheckInput {
 
 	unloaded := make(map[string]string)
 	for _, ec := range scoped.Tenants {
-		effective[ec.TenantID] = ec.EffectiveConfig
+		effective[ec.TenantID] = ec.MergedConfig
 		if pyNotMapping[ec.SourceFile][ec.TenantID] && !tree.Root.PlatformBodies[ec.TenantID] {
 			unloaded[ec.TenantID] = ec.SourceFile
 		}

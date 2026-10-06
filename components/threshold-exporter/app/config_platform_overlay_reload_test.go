@@ -112,10 +112,23 @@ func TestCommittedMergedHash_AgreesWithResolveEffective(t *testing.T) {
 		if err != nil || h != got.MergedHash {
 			t.Errorf("%s: committed merged_hash(%s) %s is not the merge of its committed chain (%s, %v)", where, tid, got.MergedHash, h, err)
 		}
-		wantCfg, _ := json.Marshal(pe.EffectiveConfig)
+		// The committed chain merges to the same map /effective resolved —
+		// its MergedConfig, the leaf-by-leaf merge merged_hash hashes (the
+		// view /effective reports is built from the same layers, #2115).
+		// Compared as a map, so a merge that differs only where the view
+		// hides it (a shadowed spelling, a lower schedule's window) is
+		// still caught.
+		wantCfg, werr := json.Marshal(pe.MergedConfig)
+		if werr != nil {
+			t.Fatalf("%s: marshal /effective's merge of %s: %v", where, tid, werr)
+		}
 		gotCfg, err := config.ComputeEffectiveConfig(readAll(t, got.SourceFile)[0], tid, readAll(t, got.DefaultsChain...), cachedLayers(m, tid))
-		if gotJSON, _ := json.Marshal(gotCfg); err != nil || string(gotJSON) != string(wantCfg) {
-			t.Errorf("%s: the committed chain of %s merges to %s, /effective = %s (%v)", where, tid, gotJSON, wantCfg, err)
+		gotJSON, gerr := json.Marshal(gotCfg)
+		if gerr != nil {
+			t.Fatalf("%s: marshal the committed merge of %s: %v", where, tid, gerr)
+		}
+		if err != nil || string(gotJSON) != string(wantCfg) {
+			t.Errorf("%s: the committed chain of %s merges to %s, /effective's merge = %s (%v)", where, tid, gotJSON, wantCfg, err)
 		}
 	}
 	mx := loadOverlayMatrix(t)

@@ -75,6 +75,10 @@ type overlayWalker struct {
 	EffectiveConfig map[string]any                 `json:"effective_config"`
 	PlatformOverlay []config.PlatformOverlaySource `json:"platform_overlay"`
 	ProfileOverlay  []config.ProfileOverlaySource  `json:"profile_overlay"` // #2117
+	// DescribeTenantEffectiveConfig is the Python half's column where
+	// describe_tenant.py still differs from /effective (#2115); Go only
+	// checks that it does differ, so a stale entry cannot linger.
+	DescribeTenantEffectiveConfig map[string]any `json:"describe_tenant_effective_config"`
 }
 
 func loadOverlayMatrix(t *testing.T) overlayMatrix {
@@ -365,6 +369,11 @@ func assertWalkerRow(t *testing.T, dir, tree, tenant string, want *overlayWalker
 	if !bytes.Equal(gotCfg, wantCfg) {
 		t.Errorf("%s: /effective %s effective_config = %s, want %s", tree, tenant, gotCfg, wantCfg)
 	}
+	if want.DescribeTenantEffectiveConfig != nil {
+		if py, _ := json.Marshal(want.DescribeTenantEffectiveConfig); bytes.Equal(py, wantCfg) {
+			t.Errorf("%s: %s describe_tenant_effective_config equals effective_config; drop it", tree, tenant)
+		}
+	}
 	if !reflect.DeepEqual(ec.PlatformOverlay, want.PlatformOverlay) {
 		t.Errorf("%s: /effective %s platform_overlay = %+v, want %+v", tree, tenant, ec.PlatformOverlay, want.PlatformOverlay)
 	}
@@ -417,11 +426,12 @@ func assertWalkerCriticalRowsServed(t *testing.T, m *ConfigManager, tree, tenant
 // the /metrics columns say the exporter resolves (absent `_severity_dedup` =
 // "enable", absent `_silent_mode` = "").
 //
-// For an alias target key (#2368 rows) the walker's effective config keeps
-// each layer's own spelling, so the tenant layer's legacy spelling sits
-// beside the chain's canonical one; the legacy spelling is read first. That
-// is sound only because no row sets a legacy spelling in the defaults chain
-// — the matrix comment says so.
+// For an alias target key (#2368 rows) the walker's effective config carries
+// the threshold under exactly ONE spelling — the winning layer's (#2115):
+// both spellings present is a failure on its own, whatever their values.
+// A schedule value is compared by its `default:` and only when it has no
+// window (the metric column is read at the wall clock, so a window would
+// make the row time-dependent).
 func assertWalkerAgreesWithMetrics(t *testing.T, tree, tenant, key string, w *overlayWalker, metric *float64, silent, dedup *string) {
 	t.Helper()
 	if (w == nil) != (metric == nil) {
@@ -433,11 +443,23 @@ func assertWalkerAgreesWithMetrics(t *testing.T, tree, tenant, key string, w *ov
 	}
 	wk := key
 	if legacy, ok := config.LegacySpellingFor(key); ok {
-		if _, set := w.EffectiveConfig[legacy]; set {
+		_, canonSet := w.EffectiveConfig[key]
+		_, legacySet := w.EffectiveConfig[legacy]
+		if canonSet && legacySet {
+			t.Errorf("%s: %s walker carries both %s and %s; /metrics serves one threshold", tree, tenant, key, legacy)
+		}
+		if legacySet {
 			wk = legacy
 		}
 	}
-	v, err := strconv.ParseFloat(fmt.Sprint(w.EffectiveConfig[wk]), 64)
+	wv := w.EffectiveConfig[wk]
+	if sched, isMap := wv.(map[string]any); isMap {
+		if ov, has := sched["overrides"]; has && ov != nil {
+			t.Errorf("%s: %s walker %s=%v carries windows; the row's metric column cannot check them", tree, tenant, wk, wv)
+		}
+		wv = sched["default"]
+	}
+	v, err := strconv.ParseFloat(fmt.Sprint(wv), 64)
 	if err != nil || v != *metric {
 		t.Errorf("%s: %s walker %s=%v, metric column %v", tree, tenant, wk, w.EffectiveConfig[wk], *metric)
 	}

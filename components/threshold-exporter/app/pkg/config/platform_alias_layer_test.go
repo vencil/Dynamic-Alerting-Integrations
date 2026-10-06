@@ -30,7 +30,8 @@ func TestPlatformTenantsLayerStacksAcrossAliasSpellings(t *testing.T) {
 		// rows is every mysql row /metrics must serve for tx (canonical and
 		// legacy twin carry the same value).
 		rows []string
-		// effective is the walker's mysql_* keys; overlay its attribution.
+		// effective is the walker's mysql_* keys — one per threshold, in the
+		// winning layer's spelling (#2115); overlay its attribution.
 		effective map[string]any
 		overlay   []PlatformOverlaySource
 	}{
@@ -41,7 +42,7 @@ func TestPlatformTenantsLayerStacksAcrossAliasSpellings(t *testing.T) {
 				"tx.yaml":        "tenants:\n  tx:\n    mysql_cpu: \"90\"\n",
 			},
 			rows:      []string{"mysql_threads_running{}=90/warning", "mysql_cpu{}=90/warning"},
-			effective: map[string]any{"mysql_cpu": "90", "mysql_threads_running": 30.0},
+			effective: map[string]any{"mysql_cpu": "90"}, // #2115: one threshold, one key
 		},
 		{
 			name: "tenant-canonical-over-platform-legacy",
@@ -70,7 +71,7 @@ func TestPlatformTenantsLayerStacksAcrossAliasSpellings(t *testing.T) {
 				"tx.yaml":        "tenants:\n  tx:\n    redis_x: \"1\"\n",
 			},
 			rows:      []string{"mysql_threads_running{}=70/warning", "mysql_cpu{}=70/warning"},
-			effective: map[string]any{"mysql_cpu": 70.0, "mysql_threads_running": 30.0},
+			effective: map[string]any{"mysql_cpu": 70.0},
 			overlay:   []PlatformOverlaySource{{File: "_defaults.yaml", Keys: []string{"mysql_threads_running"}}},
 		},
 		{
@@ -84,7 +85,7 @@ func TestPlatformTenantsLayerStacksAcrossAliasSpellings(t *testing.T) {
 				"tx.yaml":        "tenants:\n  tx:\n    redis_x: \"1\"\n",
 			},
 			rows:      []string{"mysql_threads_running{}=70/warning", "mysql_cpu{}=70/warning"},
-			effective: map[string]any{"mysql_cpu": 70.0, "mysql_threads_running": 30.0},
+			effective: map[string]any{"mysql_cpu": 70.0},
 			overlay:   []PlatformOverlaySource{{File: "_b.yaml", Keys: []string{"mysql_threads_running"}}},
 		},
 		{

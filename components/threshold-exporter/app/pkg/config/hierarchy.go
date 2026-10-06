@@ -132,6 +132,14 @@ type EffectiveConfig struct {
 	// EffectiveTree (#2564) — nil from ResolveEffective and ScopeEffective,
 	// which do not pay for it. Not serialized, like BoundProfile.
 	KeySources map[string]KeySource `json:"-"`
+
+	// MergedConfig is the leaf-by-leaf merge merged_hash hashes — each
+	// layer's own spelling side by side, a schedule merged with the one
+	// below — where EffectiveConfig is built per threshold from the same
+	// layers as /metrics serves it (effectiveView, #2115). da-guard's main gate
+	// (schema / required fields / cardinality) judges this one: its
+	// findings are not changed by #2115. Not serialized.
+	MergedConfig map[string]any `json:"-"`
 }
 
 // ResolveEffective locates the tenant file that defines `tenantID` in ONE
@@ -208,11 +216,12 @@ type effectiveResolver struct {
 	onTenantParse func(absPath string)
 
 	// withSources makes resolve fill EffectiveConfig.KeySources (#2564).
-	// Off for ResolveEffective / ScopeEffective: the attribution re-reads
-	// every chain level's parsed block, a cost only EffectiveTree pays.
+	// Off for ResolveEffective / ScopeEffective: only EffectiveTree's
+	// callers read the attribution.
 	withSources bool
 	// chainBlocks is each chain file's defaults block parsed once per
-	// resolver (keyed by absolute path), for the attribution only.
+	// resolver (keyed by absolute path), for the reported view
+	// (effectiveView, #2115) and the attribution.
 	chainBlocks map[string]map[string]any
 }
 
@@ -346,6 +355,14 @@ func (r *effectiveResolver) resolve(tenantID string) (*EffectiveConfig, error) {
 		relChain[i] = r.rel(p)
 	}
 
+	// #2115: the reported config is laid per threshold, as /metrics serves
+	// it (effectiveView); merged_hash above stays the merge's own.
+	blocks := make([]map[string]any, len(chain))
+	for i, p := range chain {
+		blocks[i] = r.chainBlock(p, defaultsYAML[i])
+	}
+	view := effectiveView(blocks, parts.override)
+
 	ec := &EffectiveConfig{
 		TenantID:           tenantID,
 		SourceFile:         r.rel(tenantFile),
@@ -354,17 +371,14 @@ func (r *effectiveResolver) resolve(tenantID string) (*EffectiveConfig, error) {
 		DefaultsChain:      relChain,
 		PlatformOverlay:    parts.platformSources,
 		ProfileOverlay:     parts.profileSources,
-		EffectiveConfig:    parts.merged,
+		EffectiveConfig:    view,
+		MergedConfig:       parts.merged,
 		TenantOverridesRaw: parts.tenantRaw,
 		MergedDefaults:     parts.mergedDefaults,
 		BoundProfile:       parts.profile,
 	}
 	if r.withSources {
-		blocks := make([]map[string]any, len(chain))
-		for i, p := range chain {
-			blocks[i] = r.chainBlock(p, defaultsYAML[i])
-		}
-		ks, err := keySources(parts.merged, parts.tenantRaw, ec.SourceFile, relChain, blocks,
+		ks, err := keySources(view, parts.tenantRaw, ec.SourceFile, relChain, blocks,
 			overlay, parts.platformSources, parts.profileSources)
 		if err != nil {
 			return nil, err
@@ -414,6 +428,11 @@ type effectiveParts struct {
 	platformSources                   []PlatformOverlaySource
 	profileSources                    []ProfileOverlaySource
 	profile                           string // EffectiveConfig.BoundProfile
+	// override is the tenant side as ONE layer — the tenant file's block
+	// with the platform overlay and the profile filled in — exactly what
+	// `merged` laid over the chain. effectiveView lays it per threshold
+	// (#2115). Shared with nothing that writes it.
+	override map[string]any
 }
 
 // computeEffectiveConfigBytesDetailed extends the legacy helper with
@@ -742,9 +761,9 @@ func dropShallowerSpellings(m map[string]any, writers map[string]int) map[string
 // `mysql_cpu` at 30, platform entry `mysql_threads_running` at 70, tenant
 // `mysql_cpu` at 30 → MergedDefaults held both spellings, the guard compared
 // the tenant's `mysql_cpu` with the chain's 30 and advised deleting it, and
-// deleting it moved /metrics from 30 to 70. The effective config is NOT
-// built with it: that map keeps each layer's own spelling (see
-// docs/design/config-driven.md), and changing it would move every merged_hash.
+// deleting it moved /metrics from 30 to 70. The merge merged_hash hashes is
+// NOT built with it (that would move every merged_hash); the effective config
+// /effective reports is laid per threshold by effectiveView (#2115) instead.
 //
 // A null in `over` drops nothing: on a threshold key deepMerge ignores it,
 // so the base value is still the fallback.
@@ -1030,6 +1049,7 @@ func mergeTenantOver(merged map[string]any, tenantDoc *TenantDoc, tenantID strin
 	return tenantMerge{
 		effectiveParts: effectiveParts{
 			merged:          deepMerge(merged, override),
+			override:        override,
 			tenantRaw:       tenantRaw,
 			platformSources: platformSources,
 			profileSources:  profileSources,

@@ -12,7 +12,10 @@ asserts the same table on /metrics.
 The `walker` column (#2019) is the walker plane: describe_tenant.py's
 `--show-sources` view here, `pkg/config.ResolveEffective` (/effective) on the
 Go side — the same effective config and the same `platform_overlay` and
-`profile_overlay` (#2117) fields.
+`profile_overlay` (#2117) fields. Except where the row carries
+`describe_tenant_effective_config` (#2115): /effective lays the config per
+threshold as /metrics serves it, describe_tenant.py does not yet, and this
+half asserts that column instead.
 """
 from __future__ import annotations
 
@@ -46,6 +49,8 @@ OPTIONAL_TREE_KEYS = {"metric_key"}
 # rest.
 EXPECT_KEYS = {"metric", "tenant_api", "dedup", "group_wait", "exporter_dedup", "silent_mode", "walker"}
 WALKER_KEYS = {"effective_config", "platform_overlay", "profile_overlay"}
+# #2115: where describe_tenant.py still differs from /effective.
+OPTIONAL_WALKER_KEYS = {"describe_tenant_effective_config"}
 
 
 def test_matrix_is_not_vacuous() -> None:
@@ -77,8 +82,12 @@ def test_matrix_keys_are_exactly_the_known_ones() -> None:
             assert set(want) == EXPECT_KEYS, (tree["name"], tenant, set(want) ^ EXPECT_KEYS)
             walker = want["walker"]
             if walker is not None:
-                assert set(walker) == WALKER_KEYS, (tree["name"], tenant, set(walker) ^ WALKER_KEYS)
+                assert WALKER_KEYS <= set(walker) <= WALKER_KEYS | OPTIONAL_WALKER_KEYS, (
+                    tree["name"], tenant, set(walker) ^ WALKER_KEYS)
                 assert isinstance(walker["effective_config"], dict), (tree["name"], tenant)
+                py = walker.get("describe_tenant_effective_config")
+                assert py is None or (isinstance(py, dict) and py != walker["effective_config"]), (
+                    tree["name"], tenant)
                 overlay = walker["platform_overlay"]
                 # null = omitted; an empty list would be a shape neither side emits.
                 assert overlay is None or (
@@ -126,7 +135,8 @@ def test_walker_plane_matches_the_table(tree, tmp_path: Path) -> None:
             assert tenant not in scanner.tenants, (tree["name"], tenant)
             continue
         info = scanner.source_info(tenant)
-        assert info["effective_config"] == want["walker"]["effective_config"], (
+        want_cfg = want["walker"].get("describe_tenant_effective_config", want["walker"]["effective_config"])
+        assert info["effective_config"] == want_cfg, (
             tree["name"], tenant, info["effective_config"])
         assert info.get("platform_overlay") == want["walker"]["platform_overlay"], (
             tree["name"], tenant, info.get("platform_overlay"))
