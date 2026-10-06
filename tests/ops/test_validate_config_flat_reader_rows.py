@@ -323,8 +323,10 @@ def test_the_flat_reader_hint_points_at_its_own_docs(tmp_path, cli_argv,
     d = _tree(tmp_path, {"_defaults.yaml": _DEFAULTS},
               {"db-a.yaml": _GOOD_TENANT}, "prod", move_top=True)
     _rc, rows = _run(d, [], tmp_path, cli_argv, capsys)
+    # #2115 0-B: policy_dsl carries its own wording of that hint.
     flagged = [r for r in rows.values() if r.get("skipped_nested_files")
-               and r["suggested_action"] == vc.FLAT_READER_HINT]
+               and r["suggested_action"] in (vc.FLAT_READER_HINT,
+                                             vc.POLICY_DSL_NESTED_HINT)]
     assert flagged, rows
     for r in flagged:
         assert r["docs_link"] == vc._docs_url(vc.FLAT_READER_DOCS), r

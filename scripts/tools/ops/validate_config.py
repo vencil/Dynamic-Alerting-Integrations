@@ -1184,8 +1184,12 @@ def check_policy_dsl(config_dir: str, policy_dsl_file: str | None = None) -> dic
         pe.print_load_error(exc, buf)
         if isinstance(exc, pe.DaGuardNotFoundError):
             hint = _POLICY_DSL_NO_DA_GUARD_HINT
+        elif isinstance(exc, pe.ParseFailedError):
+            # da-guard named the paths it dropped or could not read (its
+            # `parse_failed` / `unreadable`) — a dangling symlink included.
+            hint = _POLICY_DSL_TREE_UNREADABLE_HINT
         elif next(iter_config_files(config_dir), None) is None:
-            hint = _POLICY_DSL_NO_CONFIG_FILE_HINT   # only picks the advice
+            hint = _POLICY_DSL_NO_CONFIG_FILE_HINT   # no path at all; only picks the advice
         else:
             hint = _POLICY_DSL_TREE_UNREADABLE_HINT
         return _make_result("policy_dsl", FAIL,
@@ -2253,6 +2257,18 @@ FLAT_READER_HINT = (
     "pointed at each subdirectory listed, or flatten the tree. Neither "
     "reproduces the exporter's per-level _defaults.yaml inheritance.")
 
+#: policy_dsl's version of `FLAT_READER_HINT` (#2115 0-B): its tenants come
+#: from the whole tree, so the only thing not read is `_policies` in nested
+#: carriers — and flattening or a sub-`--config-dir` would drop the root
+#: defaults the tenants inherit.
+POLICY_DSL_NESTED_HINT = (
+    "Policy-as-Code takes `_policies` only from the root defaults carrier; the "
+    "`_defaults.yaml` files named above are not read for `_policies` (the "
+    "tenants under them ARE evaluated). If any of them holds `_policies`, move "
+    "those rules to the root carrier or pass them with --policy-dsl. Do not "
+    "flatten the tree or point --config-dir at a subdirectory: that drops the "
+    "root defaults.")
+
 #: Where `FLAT_READER_HINT` points. A row carrying that hint gets THIS link
 #: instead of its check's `_CHECK_HINTS` page: the advice and the page it
 #: sends the reader to have to be about the same thing.
@@ -2311,10 +2327,18 @@ def _flag_flat_reads(row: dict[str, object], flat_reads: list[FlatRead],
         more = (f" (+{len(rels) - WARN_LIMIT} more)"
                 if len(rels) > WARN_LIMIT else "")
         where = "--config-dir" if d_abs == root_abs else printable_name(d)
-        row["details"] = list(row.get("details") or []) + [
-            f"{len(rels)} config file(s) in subdirectories of {where} were "
-            f"SKIPPED by this check (its reader is flat — top level only): "
-            f"{', '.join(shown)}{more}"]
+        if row.get("check") == "policy_dsl":
+            # #2115 0-B: policy_dsl reads its tenants from the whole tree; the
+            # one flat read left is the root-carrier lookup of `_policies`.
+            line = (f"{len(rels)} defaults file(s) in subdirectories of {where} "
+                    f"are not read for `_policies` (rules come from the root "
+                    f"defaults carrier; tenants are evaluated from the whole "
+                    f"tree): {', '.join(shown)}{more}")
+        else:
+            line = (f"{len(rels)} config file(s) in subdirectories of {where} were "
+                    f"SKIPPED by this check (its reader is flat — top level only): "
+                    f"{', '.join(shown)}{more}")
+        row["details"] = list(row.get("details") or []) + [line]
         skipped.extend(rels if d_abs == root_abs
                        else [Path(d, r).as_posix() for r in rels])
     if skipped:
@@ -2322,7 +2346,8 @@ def _flag_flat_reads(row: dict[str, object], flat_reads: list[FlatRead],
         if row["status"] == PASS:
             row["status"] = WARN
             if not row.get("hint"):
-                row["hint"] = FLAT_READER_HINT
+                row["hint"] = (POLICY_DSL_NESTED_HINT if row.get("check") == "policy_dsl"
+                               else FLAT_READER_HINT)
                 row["hint_docs"] = FLAT_READER_DOCS
     return row
 

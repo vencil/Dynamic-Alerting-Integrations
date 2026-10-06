@@ -655,8 +655,6 @@ def _failures(operator: str, actual: Any, expected: Any) -> list[tuple[Any, Opti
 def _holds(operator: str, actual: Any, expected: Any) -> bool:
     """A `when` condition on a found value: on a `ServedThreshold`, true when
     it holds in some segment that has a /metrics row."""
-    if isinstance(actual, Unserved):
-        return False
     if isinstance(actual, ServedThreshold):
         return any(v is not None and _evaluate_threshold(operator, v, expected)
                    for _s, _e, v in actual.segments)

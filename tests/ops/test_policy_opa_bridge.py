@@ -75,9 +75,11 @@ class TestLoadTenantInputs:
             "team/tenant-b.yaml": "tenants:\n  tenant-b: {}\n",
         })
         tenants, served = pob.load_tenant_inputs(str(d))
-        # tenants: 原形狀（寫法，舊拼法照寫），加上繼承；Go 自動補的不在
+        # tenants: 原形狀（寫法，舊拼法照寫），加上繼承；Go 自動補的不在。
+        # #2720 之後 effective 是逐閾值 view：同一閾值跨層新舊拼法只留勝出那一層，
+        # 所以租戶的 `mysql_cpu: '500'` 蓋掉根的 `mysql_threads_running: 50`，不再並列。
         assert tenants["tenant-a"] == {"mysql_cpu": "500", "_silent_mode": "disable",
-                                       "mysql_connections": 80, "mysql_threads_running": 50}
+                                       "mysql_connections": 80}
         assert tenants["tenant-b"] == {"mysql_connections": 80, "mysql_threads_running": 50}
         # served: /metrics 的數字，現行拼法
         assert served["tenant-a"] == {"mysql_connections": 80.0, "mysql_threads_running": 500.0}

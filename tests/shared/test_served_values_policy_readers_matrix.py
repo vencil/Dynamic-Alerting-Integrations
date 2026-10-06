@@ -527,3 +527,60 @@ def test_empty_config_dir_hint_says_there_is_no_config_file(tmp_path):
     empty.mkdir()
     row = vc.check_policy_dsl(str(empty), str(_policy(tmp_path)))
     assert row["status"] == vc.FAIL and row["hint"] == vc._POLICY_DSL_NO_CONFIG_FILE_HINT, row
+
+
+# ── 第 4 輪（盲審 S-1／S-2／N-1）────────────────────────────────────────────
+
+_LTE_10 = "policies:\n  - name: lte10\n    target: mysql_connections\n    operator: lte\n    value: 10\n"
+
+
+@pytest.mark.parametrize("nested_defaults", [True, False], ids=["s5-nested-defaults", "s6-tenant-only"])
+def test_policy_dsl_row_names_only_the_unread_policies(nested_defaults, tmp_path):
+    """S-1：policy_dsl 列的租戶從整棵樹評估；附加的那一行與提示只說子目錄 `_defaults.yaml`
+    的 `_policies` 不被讀，不再說「reader is flat — top level only」、不再建議攤平樹或把
+    --config-dir 指向子目錄（那會丟掉根預設）。WARN 保留；沒有子目錄載體時維持 PASS。"""
+    files = {"_defaults.yaml": "defaults:\n  mysql_connections: 100\n",
+             "team/tenant-a.yaml": "tenants:\n  tenant-a:\n    mysql_connections: \"5\"\n"}
+    if nested_defaults:
+        files["team/_defaults.yaml"] = "defaults:\n  mysql_connections: 90\n"
+    conf_d = str(_tree(tmp_path, files))
+    row = vc._run_check("policy_dsl", vc.check_policy_dsl, conf_d, str(_policy(tmp_path, _LTE_10)),
+                        _config_dir=conf_d)
+    text = " ".join(row["details"]) + " " + str(row.get("hint"))
+    assert "top level only" not in text and "SKIPPED" not in text, row
+    if not nested_defaults:
+        assert row["status"] == vc.PASS and "skipped_nested_files" not in row, row
+        return
+    assert row["status"] == vc.WARN and row["skipped_nested_files"] == ["team/_defaults.yaml"], row
+    assert ("1 defaults file(s) in subdirectories of --config-dir are not read for `_policies` "
+            "(rules come from the root defaults carrier; tenants are evaluated from the whole "
+            "tree): team/_defaults.yaml") in row["details"], row
+    assert row["hint"] == vc.POLICY_DSL_NESTED_HINT, row
+
+
+def test_wildcard_when_with_some_keys_unserved_uses_the_served_ones(tmp_path, capsys):
+    """S-2：`redis_*` 展開成一個 Unserved（redis_memory: disable）與一個有發出的
+    （redis_clients）——只濾掉 Unserved 那個，所以 required 成立、forbidden 不成立。
+    「只要有一個 Unserved 就整組視為不存在」的寫法會讓兩條結論對調。"""
+    conf_d = _tree(tmp_path, {
+        "_defaults.yaml": "defaults:\n  redis_memory: 1024\n  redis_clients: 50\n  mysql_connections: 100\n",
+        "tenant-a.yaml": "tenants:\n  tenant-a:\n    redis_memory: disable\n    redis_clients: 10\n",
+    })
+    rules = "policies:\n" + "".join(
+        f"  - name: {name}\n    target: mysql_connections\n    operator: lte\n    value: 1\n"
+        f"    when:\n      target: \"redis_*\"\n      operator: {op}\n"
+        for name, op in [("w-req", "required"), ("w-forb", "forbidden")])
+    rc, doc = _engine(conf_d, _policy(tmp_path, rules), capsys)
+    assert [v["rule_name"] for v in doc["violations"]] == ["w-req"], doc
+
+
+def test_dangling_symlink_hint_is_tree_unreadable(tmp_path):
+    """N-1：da-guard 點名了讀不到的路徑（懸空 symlink，`unreadable`）時給 TREE_UNREADABLE
+    提示，不是「沒有設定檔」——即使 Python 的列舉看不到任何檔。"""
+    from _platform_fs import symlink_or_skip
+    conf_d = tmp_path / "conf.d"
+    conf_d.mkdir()
+    symlink_or_skip("/nonexistent/x.yaml", conf_d / "t.yaml")
+    row = vc.check_policy_dsl(str(conf_d), str(_policy(tmp_path)))
+    assert row["status"] == vc.FAIL and row["hint"] == vc._POLICY_DSL_TREE_UNREADABLE_HINT, row
+    assert any("t.yaml (stat_error)" in d for d in row["details"]), row
