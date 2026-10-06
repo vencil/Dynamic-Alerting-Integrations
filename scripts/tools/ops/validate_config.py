@@ -179,11 +179,21 @@ from _lib_io import (  # noqa: E402
     load_yaml_file_strict, strict_safe_load,
 )
 # #1577 / #2114: tenant declarations are scanned by
-# `_lib_confd.tenant_declarations` since #2315. `check_profiles` still reads
-# `_profile` refs and `_profiles.yaml` through the exporter-key loader itself
-# (#2297: the ref kept as source text).
-from _lib_io import strict_load_exporter_keys  # noqa: E402
+# `_lib_confd.tenant_declarations` since #2315. `check_profiles` reads
+# `_profiles.yaml` through the exporter-key loader (#2297: a profile name is
+# its source text); the tenants' `_profile` refs come from da-guard (#2115).
 from _lib_io import YamlFileError, load_yaml_file_strict_exporter_keys  # noqa: E402  (#2297)
+# #2115 0-B: the tenants as threshold-exporter reads them (`check_profiles`,
+# and the error row `check_policy_dsl` shares with it).
+from _lib_tenant_values import (  # noqa: E402
+    DaGuardError,
+    DaGuardNotFoundError,
+    ParseFailedError,
+    load_effective,
+    load_served_tree,
+    print_load_error,
+    print_load_warnings,
+)
 
 # ============================================================
 # Check results
@@ -961,35 +971,77 @@ def _is_reserved_key(key: str) -> bool:
     return False
 
 
-def _load_tenant_file_profile_text(path: str) -> object:
-    """A tenant file for the `_profile` check (#2297): ``load_yaml_file_strict``'s
-    contract ({} for a missing / empty file, :class:`YamlFileError` for bad
-    syntax, a duplicate key or non-UTF-8), with the exporter's reading —
-    mapping keys and every `_profile:` value are their source TEXT, so
-    `_profile: 010` names profile "010" (PyYAML's 8 was skipped as a non-str
-    and a reference to no profile passed).
+# #2115 0-B: when a row cannot read the tenants as threshold-exporter reads
+# them, the generic advice points at the wrong thing. One hint per cause; the
+# row names what it did not do.
+_PROFILES_TREE_UNREADABLE_HINT = (
+    "threshold-exporter cannot load this tree as the lines above say: repair "
+    "or remove the file they name (or the shape da-guard refuses), then re-run. "
+    "No _profile reference was checked.")
+_PROFILES_NO_CONFIG_FILE_HINT = (
+    "There is no config file under --config-dir at all: point it at your conf.d "
+    "tree, then re-run. No _profile reference was checked.")
+_PROFILES_NO_DA_GUARD_HINT = (
+    "Put da-guard on $PATH or set $DA_GUARD_BINARY to it (the da-tools image "
+    "ships it as /usr/local/bin/da-guard), then re-run. No _profile reference "
+    "was checked.")
 
-    Local rather than a flag on ``_lib_io``'s path loaders: those are being
-    reworked under #2115, and the other callers must not change here."""
-    if not (path and Path(path).is_file()):
-        return {}
-    try:
-        stream = io.StringIO(Path(path).read_bytes().decode("utf-8"))
-        stream.name = str(path)
-        data = strict_load_exporter_keys(stream, raw_text_scalars=("_profile",))
-    except (UnicodeDecodeError, yaml.YAMLError) as exc:
-        raise YamlFileError(str(path), exc) from exc
-    return {} if data is None else data
+
+def _tenant_load_failure_row(check: str, exc: Exception, config_dir: str,
+                             hints: tuple[str, str, str]) -> dict[str, object]:
+    """The FAIL row of a check that reads the tenants through da-guard
+    (`_lib_tenant_values`) and could not (#2115 0-B): da-guard's own words
+    below one line, and the hint for the cause — `hints` is (tree
+    unreadable, no config file, no da-guard). da-guard missing is a caller
+    error; everything else is the tree's."""
+    unreadable_hint, no_config_hint, no_da_guard_hint = hints
+    buf = io.StringIO()
+    print_load_error(exc, buf)
+    if isinstance(exc, DaGuardNotFoundError):
+        hint = no_da_guard_hint
+    elif isinstance(exc, ParseFailedError):
+        # da-guard named the paths it dropped or could not read (its
+        # `parse_failed` / `unreadable`) — a dangling symlink included.
+        hint = unreadable_hint
+    elif next(iter_config_files(config_dir), None) is None:
+        hint = no_config_hint   # no path at all; only picks the advice
+    else:
+        hint = unreadable_hint
+    return _make_result(check, FAIL,
+                        ["the tenants cannot be read as threshold-exporter reads them:",
+                         # "\n" only: `splitlines` also cuts at U+2028 etc.,
+                         # which can sit in a file name (_lib_tenant_values).
+                         *(ln for ln in buf.getvalue().split("\n") if ln)],
+                        caller_error=isinstance(exc, DaGuardNotFoundError),
+                        hint=hint)
 
 
 def check_profiles(config_dir: str) -> dict[str, object]:
     """Validate tenant _profile references and profile structure.
 
     Checks:
-      - Tenant _profile references point to defined profiles
-      - Profile keys don't use reserved prefixes (_, _routing, _state_)
+      - Each tenant's `_profile` binds the profile it names (#2115 0-B: the
+        exporter's answer, `da-guard effective`'s `profile`, not a Python
+        reading of the files)
+      - Profile keys in `_profiles.yaml` don't use reserved prefixes (_, _routing, _state_)
       - Profile values are valid types (numeric, string, dict for scheduled)
       - Profiles have at least one metric key
+
+    The tenants are the exporter's: the whole tree (a tenant in a
+    sub-directory included — this row has read recursively since PR #1343),
+    a file with no `tenants:` mapping is not one (it is named on stderr from
+    served-values' `skipped`, #2115 R3), and the ids are the exporter's text.
+    A `_profile` is read as written plus inherited (#2115 (c)): one that
+    binds no profile is reported — as an unknown profile when the tenant's
+    own entry names it, and as binding nothing when it comes from a defaults
+    file, where the exporter does not read it. A file the exporter's load
+    drops or cannot read is a FAIL naming it (#2115 R5: fail-closed), as is
+    a missing da-guard (a caller error).
+
+    ⚠️ The profile STRUCTURE checks still read `_profiles.yaml` only. The
+    exporter reads `profiles:` from every root platform file; a profile
+    defined in another one is bound (and its references pass) but its body
+    is not linted here.
 
     ⚠️ Profile keys are NOT cross-checked against `defaults:` in
     `_defaults.yaml`, and this check does not read that file at all. It
@@ -1001,6 +1053,16 @@ def check_profiles(config_dir: str) -> dict[str, object]:
     trap with it: `defaults:` written as a bare key parses to None, so
     read it as `raw.get("defaults") or {}`, never `.get("defaults", {})`.
     """
+    try:
+        tree = load_served_tree(config_dir)
+        effective = load_effective(config_dir)
+    except (DaGuardNotFoundError, DaGuardError, ParseFailedError) as exc:
+        return _tenant_load_failure_row(
+            "profiles", exc, config_dir,
+            (_PROFILES_TREE_UNREADABLE_HINT, _PROFILES_NO_CONFIG_FILE_HINT,
+             _PROFILES_NO_DA_GUARD_HINT))
+    print_load_warnings(tree)
+
     cfg = Path(config_dir)
     profiles_path = str(cfg / "_profiles.yaml")
     # #2297: profile names are the keys' source text, as the exporter keys
@@ -1009,7 +1071,6 @@ def check_profiles(config_dir: str) -> dict[str, object]:
     profiles = profiles_raw.get("profiles", {}) if isinstance(profiles_raw, dict) else {}
 
     warnings = []
-    tenant_count = 0
     profile_ref_count = 0
 
     # ── Profile structure validation ──
@@ -1033,47 +1094,33 @@ def check_profiles(config_dir: str) -> dict[str, object]:
                     warnings.append(
                         f"profile={p_name}: contains unknown reserved key \"{key}\"")
 
-    # ── Tenant _profile reference validation ──
-    # Recursive since PR #1343 (see check_yaml_syntax; conf.d family #1911). `_`/`.`-prefixed files
-    # are level defaults / meta, not tenant files — skipped at every depth.
-    for fpath_p in iter_config_files(config_dir):
-        fname = fpath_p.name
-        if fname.startswith("_") or fname.startswith("."):
+    # ── Tenant _profile reference validation (#2115 0-B) ──
+    # `effective_config["_profile"]` is the name as written (source text) plus
+    # inherited; `profile` is the one the exporter binds, None for none.
+    for t_name, te in sorted(effective.items()):
+        written = te.effective_config.get("_profile")
+        if not isinstance(written, str) or not written.strip():
             continue
-        fpath = str(fpath_p)
-        raw = _load_tenant_file_profile_text(fpath)
-        if not isinstance(raw, dict):
+        profile_ref_count += 1
+        if te.profile is not None:
             continue
-
-        tenants = {}
-        if "tenants" in raw and isinstance(raw.get("tenants"), dict):
-            tenants = raw["tenants"]
+        name = written.strip()
+        source = te.key_sources.get("_profile")
+        if source is not None and source.layer == "defaults":
+            warnings.append(
+                f"tenant={t_name}: _profile \"{name}\" comes from {source.file}, "
+                f"and the exporter binds no profile from a defaults file (only from "
+                f"the tenant's own entry or a root platform file's `tenants:` entry)")
         else:
-            tenant = fname.rsplit(".", 1)[0]
-            tenants = {tenant: raw}
-
-        for t_name, t_data in tenants.items():
-            if not isinstance(t_data, dict):
-                continue
-            tenant_count += 1
-            # A str whenever written as a scalar (#2297): a plain `123` is
-            # the name "123" and is checked, not skipped as an int.
-            profile = t_data.get("_profile")
-            if not profile or not isinstance(profile, str):
-                continue
-            profile_ref_count += 1
-            profile = profile.strip()
-            if profile and profile not in profiles:
-                warnings.append(
-                    f"tenant={t_name}: _profile references unknown profile "
-                    f"\"{profile}\"")
+            warnings.append(
+                f"tenant={t_name}: _profile references unknown profile "
+                f"\"{name}\"")
 
     if warnings:
         return _make_result("profiles", WARN, warnings)
-    details = [f"{tenant_count} tenants scanned, {profile_ref_count} profile refs, "
+    details = [f"{len(effective)} tenants scanned, {profile_ref_count} profile refs, "
                f"{len(profiles)} profiles defined"]
     return _make_result("profiles", PASS, details)
-
 
 # ============================================================
 # Check 8: Policy-as-Code (DSL evaluation)
@@ -1195,26 +1242,11 @@ def _policy_dsl_row(config_dir: str, policy_dsl_file: str | None,
     # tenants that happened to be readable; da-guard missing is a caller error.
     try:
         inputs = pe.load_policy_inputs(config_dir, routing=pe.rules_read_routing(rules))
-    except (pe.DaGuardNotFoundError, pe.DaGuardError, pe.ParseFailedError) as exc:
-        buf = io.StringIO()
-        pe.print_load_error(exc, buf)
-        if isinstance(exc, pe.DaGuardNotFoundError):
-            hint = _POLICY_DSL_NO_DA_GUARD_HINT
-        elif isinstance(exc, pe.ParseFailedError):
-            # da-guard named the paths it dropped or could not read (its
-            # `parse_failed` / `unreadable`) — a dangling symlink included.
-            hint = _POLICY_DSL_TREE_UNREADABLE_HINT
-        elif next(iter_config_files(config_dir), None) is None:
-            hint = _POLICY_DSL_NO_CONFIG_FILE_HINT   # no path at all; only picks the advice
-        else:
-            hint = _POLICY_DSL_TREE_UNREADABLE_HINT
-        return _make_result("policy_dsl", FAIL,
-                            ["the tenants cannot be read as threshold-exporter reads them:",
-                             # "\n" only: `splitlines` also cuts at U+2028 etc.,
-                             # which can sit in a file name (_lib_tenant_values).
-                             *(ln for ln in buf.getvalue().split("\n") if ln)],
-                            caller_error=isinstance(exc, pe.DaGuardNotFoundError),
-                            hint=hint)
+    except (DaGuardNotFoundError, DaGuardError, ParseFailedError) as exc:
+        return _tenant_load_failure_row(
+            "policy_dsl", exc, config_dir,
+            (_POLICY_DSL_TREE_UNREADABLE_HINT, _POLICY_DSL_NO_CONFIG_FILE_HINT,
+             _POLICY_DSL_NO_DA_GUARD_HINT))
     except pe.RoutingTreeRefused as exc:
         return _make_result("policy_dsl", FAIL,
                             ["the route generator refuses this tree, so `_routing` cannot "

@@ -21,6 +21,10 @@ import yaml
 import validate_config as vc
 from _lib_exitcodes import EXIT_CALLER_ERROR  # noqa: E402
 
+# #2115 0-B／B3: validate-config 的 profiles 列經 da-guard 讀租戶，每次都需要 da-guard
+# （conftest 以 `go build` 建出；建不起來就 fail、不 skip）。
+pytestmark = pytest.mark.usefixtures("da_guard_env")
+
 
 class TestYAMLSyntax:
     """Check 1: YAML syntax validation."""
@@ -514,15 +518,17 @@ class TestProfilesExtended:
     """Extended profile validation tests."""
 
     def test_profile_not_a_mapping(self):
-        """Profile value that's not a dict should warn."""
+        """A profile value that's not a dict: the exporter drops the whole
+        `_profiles.yaml` (#2115 0-B: fail-closed, the file named — was WARN)."""
         with tempfile.TemporaryDirectory() as d:
             with open(os.path.join(d, "_profiles.yaml"), "w", encoding="utf-8") as f:
                 yaml.dump({"profiles": {"bad": "not-a-dict"}}, f)
             with open(os.path.join(d, "_defaults.yaml"), "w", encoding="utf-8") as f:
                 yaml.dump({"defaults": {}}, f)
             result = vc.check_profiles(d)
-            assert result["status"] == vc.WARN
-            assert any("not a mapping" in detail for detail in result["details"])
+            assert result["status"] == vc.FAIL, result
+            assert any("_profiles.yaml" in detail and "do not decode" in detail
+                       for detail in result["details"]), result
 
     def test_unknown_reserved_key_in_profile(self):
         """Profile with unknown reserved key should warn."""

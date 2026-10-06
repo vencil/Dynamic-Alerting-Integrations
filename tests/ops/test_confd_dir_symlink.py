@@ -48,9 +48,13 @@ SYMLINK_REASON = ("is a symlink to a directory — threshold-exporter does not "
 TENANT = 'tenants:\n  t-sym:\n    cpu_pct: "70"\n'
 DEFAULTS = "defaults:\n  cpu_pct: 50\n"
 
-pytestmark = pytest.mark.skipif(
-    not hasattr(os, "symlink") or sys.platform == "win32",
-    reason="symlink fixtures need a POSIX runner; CI measures them on ubuntu-latest")
+pytestmark = [
+    pytest.mark.skipif(
+        not hasattr(os, "symlink") or sys.platform == "win32",
+        reason="symlink fixtures need a POSIX runner; CI measures them on ubuntu-latest"),
+    # #2115 0-B／B3: validate-config 的 profiles 列經 da-guard 讀租戶。
+    pytest.mark.usefixtures("da_guard_env"),
+]
 
 
 def _kubelet_tree(root: Path, *, nested: bool) -> Path:
