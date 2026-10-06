@@ -211,6 +211,10 @@ repos:
         entry: python3 -X utf8 scripts/tools/lint/check_env_bool_parsers.py --ci
         language: python
         files: '\.go$'
+        # Vendored upstream gopkg.in/yaml.v3 (#2681) is not this repo's code: it
+        # must stay byte-identical to v3.0.1 + one pinned hunk
+        # (tests/ops/test_vendored_yaml_v3.py), so a finding there has no fix.
+        exclude: ^components/threshold-exporter/app/third_party/yaml\.v3/
 
       # --- Container/k8s IaC SAST Layer 4 (#448 / TRK-314) ---
       # Raw k8s manifest security: `kube-linter lint k8s/` (no helm render —
@@ -1246,6 +1250,10 @@ repos:
         entry: python3 -X utf8 scripts/tools/lint/check_go_fmt.py --
         language: python
         files: \.go$
+        # Vendored upstream gopkg.in/yaml.v3 (#2681) is not this repo's code: it
+        # must stay byte-identical to v3.0.1 + one pinned hunk
+        # (tests/ops/test_vendored_yaml_v3.py), so a finding there has no fix.
+        exclude: ^components/threshold-exporter/app/third_party/yaml\.v3/
 
       - id: configmap-mount-completeness
         name: "Every configmap-rules-* must be mounted in Prometheus projected volume (#869 dead-rule guard)"

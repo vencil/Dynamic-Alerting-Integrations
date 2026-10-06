@@ -6,7 +6,10 @@ whole-repo coverage.
 
 ⛔ `_EXEMPT_GO_FILES` names any tracked .go no lint step reads — outside
 every linted module, or where `./...` never descends. Read it as the list of
-holes; empty (since #1816) means the goal is fully asserted.
+holes; empty (since #1816) means the goal is fully asserted for this repo's
+own code. The one other hole is declared, by module, in
+`tests/_vendored_go.py`: vendored upstream source (#2681), pinned byte for
+byte instead of linted.
 
 ⛔ Nothing here runs golangci-lint; the executable control is the `Go Lint` job.
 A probe inside pytest was measured and rejected: `ci.yml::python-tests-run` has
@@ -47,6 +50,7 @@ from test_ci_path_filter_coverage import (  # noqa: E402
     _tracked_files,
     _workflow_filters,
 )
+from _vendored_go import VENDORED_GO_MODULES  # noqa: E402
 
 # Anti-vacuity pins: an empty derivation would pass every negative assertion
 # below. ⛔ When one of these fires, fix the derivation — do not move the anchor
@@ -291,7 +295,16 @@ def test_every_go_file_is_under_a_linted_module() -> None:
     linted = set(_lint_steps().values())
     orphans = _unlinted(go_files, modules, linted)
 
-    undisclosed = sorted(set(orphans) - set(_EXEMPT_GO_FILES))
+    missing = sorted(set(VENDORED_GO_MODULES) - modules)
+    assert not missing, (
+        f"VENDORED_GO_MODULES names {missing}, which hold no tracked go.mod. "
+        "Drop the entry.")
+    # Owned by a vendored module (a go.mod of its own), so not a file "no
+    # module owns": that module is pinned to upstream instead of linted.
+    vendored = {f for f in orphans
+                if _owning_module(f, modules) in VENDORED_GO_MODULES}
+
+    undisclosed = sorted(set(orphans) - set(_EXEMPT_GO_FILES) - vendored)
     assert not undisclosed, (
         f"tracked .go read by no lint step: {undisclosed}. The step prints "
         "`0 issues` either way; the two causes have different fixes. No linted "

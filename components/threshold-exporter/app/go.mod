@@ -31,3 +31,6 @@ require (
 	golang.org/x/text v0.42.0 // indirect
 	google.golang.org/protobuf v1.36.11 // indirect
 )
+
+// #2681: v3.0.1 plus a linear duplicate-key check; see third_party/README.md.
+replace gopkg.in/yaml.v3 => ./third_party/yaml.v3
