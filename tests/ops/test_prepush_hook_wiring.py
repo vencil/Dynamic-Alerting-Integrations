@@ -440,6 +440,28 @@ def test_an_existing_foreign_hook_is_chained_not_refused(tmp_path: Path) -> None
     assert blocked.returncode != 0 and _BANNER in blocked_out, blocked_out
 
 
+@pytest.mark.parametrize("pre_commit_again", [False, True])
+def test_pre_commit_first_then_the_installer_guards_without_recursing(
+    tmp_path: Path, pre_commit_again: bool
+) -> None:
+    """pre-commit's template is replaced, not chained. Chained, the next
+    `pre-commit install --hook-type pre-push` puts the shim behind a second
+    template, the dispatcher calls the chained one, and pre-commit's recursion
+    check fails every push — feature branches included. No pre-push stage in
+    the config, so the banner below can only come from the dispatcher.
+    """
+    work = _make_repo(tmp_path, "repos: []\n")
+    _install_precommit(work)
+    assert _install_guards(work).returncode == 0
+    if pre_commit_again:
+        _install_precommit(work)
+
+    feat, feat_out = _push(work, "HEAD:refs/heads/feat/x", env_extra=_SIBLINGS_OFF)
+    assert feat.returncode == 0, f"a feature-branch push was blocked:\n{feat_out}"
+    main, main_out = _push(work, "HEAD:refs/heads/main", env_extra=_SIBLINGS_OFF)
+    assert main.returncode != 0 and _BANNER in main_out, main_out
+
+
 def test_an_occupied_chained_slot_is_never_overwritten(tmp_path: Path) -> None:
     """Chaining must refuse rather than destroy whatever already sits there.
 
@@ -448,11 +470,8 @@ def test_an_occupied_chained_slot_is_never_overwritten(tmp_path: Path) -> None:
     test the refusal is unheld: mutating `[ -e "$chained" ]` to `false` would
     leave the suite green.
 
-    Reachable through the disarm path the header of
-    ``scripts/ops/install_prepush_hook.sh`` documents: install once
-    (git-lfs moves to the chained slot), then `pre-commit install -f
-    --hook-type pre-push` retakes pre-push, then the installer runs again and
-    finds a foreign hook in front of an occupied slot.
+    Reachable whenever a second hook is written to pre-push after an install
+    has already chained the first (git-lfs, on a fresh clone of this repo).
     """
     work = _make_repo(tmp_path, _PROTECT_ONLY)
     hooks = work / ".git" / "hooks"
@@ -1485,7 +1504,9 @@ def test_a_stale_guard_copy_is_replaced_by_the_installer(
 
     r = _install_guards(work)
     assert r.returncode == 0, f"installer failed:\n{r.stdout}{r.stderr}"
-    said = "removed pre-push.chained" if slot == "pre-push.chained" else "replacing a copy of a guard"
+    said = {"pre-push": "replacing a copy of a guard",
+            "pre-push.chained": "removed pre-push.chained",
+            "pre-push.legacy": "removed .git/hooks/pre-push.legacy"}[slot]
     assert said in r.stdout, f"the installer did not say it replaced the copy:\n{r.stdout}"
     _assert_the_guards_are_back(work)
 

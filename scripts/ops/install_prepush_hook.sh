@@ -20,16 +20,19 @@
 #   push dies on `/bin/sh not found`. The foreign hook is moved to
 #   pre-push.chained and run by prepush_dispatch.sh with the same argv and stdin.
 #
-# ⛔ MIGRATION-AWARE: pre-commit writes this file too, and BOTH orders happen.
-#   Installer first -> pre-commit migrates our shim to pre-push.legacy and calls
-#   it with the full stdin. pre-commit first -> the shim goes to pre-push.legacy
-#   and we do NOT rewrite pre-commit's file (that would drop every
-#   pre-commit-stage hook); we only restore its executable bit, without which
-#   git skips it and the shim behind it never runs. Never blindly overwrite: an
-#   unconditional write was measured faithful in only one of the two orders.
+# ⛔ ONE WIRED STATE: the shim, byte for byte, at .git/hooks/pre-push.
+#   `pre-commit install --hook-type pre-push` writes a template there and moves
+#   what it found to pre-push.legacy. This repo's config declares no pre-push
+#   stage, so that template does nothing but call pre-push.legacy: the
+#   installer writes the shim over it, removes our own shim or a guard copy
+#   from pre-push.legacy, and chains anything else found there (git-lfs, on a
+#   clone where pre-commit ran first). ⛔ Not chaining the template instead:
+#   after the next `pre-commit install` it calls the shim through
+#   pre-push.legacy from inside the dispatcher, and pre-commit's own recursion
+#   check then fails every push, feature branches included.
 #
-# ⚠️ It cannot stop `pre-commit install -f --hook-type pre-push`, which DELETES
-#   pre-push.legacy silently (rc=0, no mention). That is what preflight is for.
+# ⚠️ It cannot stop a later `pre-commit install --hook-type pre-push` (with or
+#   without -f) from taking the slot back. That is what preflight is for.
 #
 set -uo pipefail
 
@@ -123,10 +126,10 @@ VIBE_SHIM_EOF
 
 # ⛔ Identity by a WHOLE LINE equal to the generated header, never a substring:
 # a user's hook that mentions the shim or pre-commit's `--hook-type=pre-push`
-# in a comment is still a user's hook (#2617). Taken for pre-commit's, the shim
-# lands in pre-push.legacy, which that hook never calls; taken for ours, it is
-# overwritten. Any line, not a fixed one, and a trailing CR dropped: on Windows
-# pre-commit puts `#!/bin/sh` above its template and writes it CRLF.
+# in a comment is still a user's hook (#2617). Taken for either, it is
+# overwritten instead of chained. Any line, not a fixed one, and a trailing CR
+# dropped: on Windows pre-commit puts `#!/bin/sh` above its template and writes
+# it CRLF.
 # Bash builtins only — `read` is one, so these keep working when PATH carries
 # nothing but the interpreter.
 has_line() {   # $1 = file, $2 = the line
@@ -199,16 +202,19 @@ fi
 
 target="$hook"
 replaced=""
+drop_legacy=""
 if is_ours "$hook" || is_guard_copy "$hook"; then
-    target="$hook"                       # refresh, or replace a guard copy
+    :                                    # refresh, or replace a guard copy
 elif is_precommit "$hook"; then
-    # pre-commit keeps the hook file; we take the slot it calls with the full
-    # stdin. If something else is already in that slot it is a real hook that
-    # pre-commit migrated — chain it rather than destroy it.
-    if [ -e "$legacy" ] && ! is_ours "$legacy" && ! is_guard_copy "$legacy"; then
+    # The template is overwritten below. What it was calling is a hook
+    # pre-commit migrated (chain it rather than destroy it) or ours (removed
+    # once the shim is in place, since nothing calls it after that).
+    if is_ours "$legacy" || is_guard_copy "$legacy"; then
+        drop_legacy=1
+    elif [ -e "$legacy" ]; then
         stash_foreign "$legacy" || exit 1
     fi
-    target="$legacy"
+    replaced=" (replacing pre-commit's template, which only called pre-push.legacy)"
 elif [ -e "$hook" ]; then
     stash_foreign "$hook" || exit 1
 fi
@@ -248,17 +254,12 @@ if [ "$out" != "$target" ]; then
     }
 fi
 
-if [ "$target" = "$legacy" ]; then
-    if [ ! -x "$hook" ]; then
-        chmod +x "$hook" || {
-            warn "⛔ could not make $hook executable. git ignores non-executable hooks"
-            warn "   with only a hint, so pre-commit would never call the shim behind it."
-            exit 1
-        }
-        say "made $hook executable: git was skipping it, and the shim behind it with it"
+say "installed guard shim at $target$replaced"
+if [ -n "$drop_legacy" ]; then
+    if rm -f "$legacy"; then
+        say "removed $legacy: an older install of the guards, which nothing calls now"
+    else
+        warn "could not remove $legacy, an older install of the guards; nothing calls it now"
     fi
-    say "installed guard shim at $target$replaced (pre-commit owns $hook and calls it with the full refspec)"
-else
-    say "installed guard shim at $target$replaced"
 fi
 exit 0
