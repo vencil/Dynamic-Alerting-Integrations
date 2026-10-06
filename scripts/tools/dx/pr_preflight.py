@@ -1154,7 +1154,7 @@ def _prepush_guards_wired() -> Tuple[Optional[bool], str]:
 
 
 def check_local_hooks(*, run_precommit: bool = True) -> CheckResult:
-    """確認 pre-push 守衛真的在 push 路徑上，並（可選）跑 pre-commit run --all-files。"""
+    """確認 pre-push 守衛照安裝器的方式接上，並（可選）跑 pre-commit run --all-files。"""
     wired, why = _prepush_guards_wired()
     if wired is None:
         return CheckResult(

@@ -126,10 +126,11 @@ VIBE_SHIM_EOF
 
 # ⛔ Identity by a WHOLE LINE equal to the generated header, never a substring:
 # a user's hook that mentions the shim or pre-commit's `--hook-type=pre-push`
-# in a comment is still a user's hook (#2617). Taken for either, it is
-# overwritten (in pre-push.legacy, removed) instead of chained. Any line, not
-# a fixed one, and a trailing CR dropped: on Windows pre-commit puts `#!/bin/sh`
-# above its template and writes it CRLF.
+# in a comment is still a user's hook (#2617). Taken for ours, it is
+# overwritten, or removed from pre-push.legacy; taken for pre-commit's (judged
+# at pre-push only), it is overwritten. Either way it is not chained. Any line,
+# not a fixed one, and a trailing CR dropped: on Windows pre-commit puts
+# `#!/bin/sh` above its template and writes it CRLF.
 # Bash builtins only — `read` is one, so these keep working when PATH carries
 # nothing but the interpreter.
 has_line() {   # $1 = file, $2 = the line
@@ -206,9 +207,10 @@ drop_legacy=""
 if is_ours "$hook" || is_guard_copy "$hook"; then
     :                                    # refresh, or replace a guard copy
 elif is_precommit "$hook"; then
-    # The template is overwritten below. What it was calling is a hook
-    # pre-commit migrated (chain it rather than destroy it) or ours (removed
-    # once the shim is in place, since nothing calls it after that).
+    # The template is overwritten below. pre-push.legacy, which a pre-push
+    # template calls, holds a hook pre-commit migrated (chain it rather than
+    # destroy it) or ours (removed once the shim is in place, since nothing
+    # calls it after that).
     if is_ours "$legacy" || is_guard_copy "$legacy"; then
         drop_legacy=1
     elif [ -e "$legacy" ]; then
@@ -239,8 +241,9 @@ printf '%s' "$SHIM_BODY" > "$out" || { warn "⛔ could not write $out"; exit 1; 
 # prints one `hint:` line that `advice.ignoredHook=false` turns off — so a
 # swallowed chmod failure leaves a hook file that looks installed and never
 # runs. Measured: with the bit cleared, a direct push to main succeeded with the
-# guard banner absent.
-if ! chmod +x "$out"; then
+# guard banner absent. A file written over pre-commit's template keeps its bit,
+# so `chmod` is needed only when the bit is missing.
+if [ ! -x "$out" ] && ! chmod +x "$out"; then
     warn "⛔ could not make $out executable. git ignores non-executable hooks"
     warn "   with only a hint, so the guards would look installed and never run."
     exit 1

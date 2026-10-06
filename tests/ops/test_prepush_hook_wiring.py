@@ -462,6 +462,26 @@ def test_pre_commit_first_then_the_installer_guards_without_recursing(
     assert main.returncode != 0 and _BANNER in main_out, main_out
 
 
+def test_replacing_pre_commits_template_does_not_need_chmod(tmp_path: Path) -> None:
+    """The shim written over pre-commit's template keeps the template's bit.
+    Without `chmod` on PATH the installer must not report that the guards
+    would never run while they do."""
+    work = _make_repo(tmp_path, "repos: []\n")
+    _install_precommit(work)
+    bindir = tmp_path / "bin"
+    bindir.mkdir()
+    for tool in ("bash", "git"):
+        symlink_or_skip(shutil.which(tool), bindir / tool)
+    r = subprocess.run(  # subprocess-timeout: ignore
+        [_BASH, "scripts/ops/install_prepush_hook.sh"], cwd=work,
+        env={**os.environ, "PATH": str(bindir)},
+        capture_output=True, text=True, encoding="utf-8", errors="replace",
+    )
+    assert r.returncode == 0, f"{r.stdout}{r.stderr}"
+    pushed, out = _push(work, "HEAD:refs/heads/main", env_extra=_SIBLINGS_OFF)
+    assert pushed.returncode != 0 and _BANNER in out, out
+
+
 def test_an_occupied_chained_slot_is_never_overwritten(tmp_path: Path) -> None:
     """Chaining must refuse rather than destroy whatever already sits there.
 
