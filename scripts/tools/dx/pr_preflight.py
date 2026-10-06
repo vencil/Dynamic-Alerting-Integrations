@@ -1093,7 +1093,8 @@ def _shim_body() -> Optional[str]:
 
 
 def _prepush_guards_wired() -> Tuple[Optional[bool], str]:
-    """三支 pre-push 守衛在這個 clone 上真的在 push 路徑上嗎？
+    """三支 pre-push 守衛是照安裝器的方式接上的嗎？只有這種狀態，才保證它們在
+    push 路徑上。
 
     ⛔ #1664 續辦，#1689 改寫。**這裡是這個判定的唯一實作**。⛔ 不要改回
     shell out 到 `install_prepush_hook.sh --check`：理由見該檔檔頭。

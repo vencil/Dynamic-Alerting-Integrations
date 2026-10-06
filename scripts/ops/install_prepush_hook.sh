@@ -127,9 +127,9 @@ VIBE_SHIM_EOF
 # ⛔ Identity by a WHOLE LINE equal to the generated header, never a substring:
 # a user's hook that mentions the shim or pre-commit's `--hook-type=pre-push`
 # in a comment is still a user's hook (#2617). Taken for either, it is
-# overwritten instead of chained. Any line, not a fixed one, and a trailing CR
-# dropped: on Windows pre-commit puts `#!/bin/sh` above its template and writes
-# it CRLF.
+# overwritten (in pre-push.legacy, removed) instead of chained. Any line, not
+# a fixed one, and a trailing CR dropped: on Windows pre-commit puts `#!/bin/sh`
+# above its template and writes it CRLF.
 # Bash builtins only — `read` is one, so these keep working when PATH carries
 # nothing but the interpreter.
 has_line() {   # $1 = file, $2 = the line
@@ -214,7 +214,7 @@ elif is_precommit "$hook"; then
     elif [ -e "$legacy" ]; then
         stash_foreign "$legacy" || exit 1
     fi
-    replaced=" (replacing pre-commit's template, which only called pre-push.legacy)"
+    replaced=" (replacing pre-commit's template)"
 elif [ -e "$hook" ]; then
     stash_foreign "$hook" || exit 1
 fi
@@ -257,9 +257,9 @@ fi
 say "installed guard shim at $target$replaced"
 if [ -n "$drop_legacy" ]; then
     if rm -f "$legacy"; then
-        say "removed $legacy: an older install of the guards, which nothing calls now"
+        say "removed $legacy: it carried the shim's header or a guard's content, and nothing calls it now"
     else
-        warn "could not remove $legacy, an older install of the guards; nothing calls it now"
+        warn "could not remove $legacy (the shim's header or a guard's content); nothing calls it now"
     fi
 fi
 exit 0

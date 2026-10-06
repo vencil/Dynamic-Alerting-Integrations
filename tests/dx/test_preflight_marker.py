@@ -295,6 +295,10 @@ class TestPrepushWiring:
                         encoding="utf-8", newline="")
 
     @staticmethod
+    def _leading_blank_line(hook, tmp_path):
+        hook.write_bytes(b"\n" + hook.read_bytes())
+
+    @staticmethod
     def _older_version(hook, tmp_path):
         # Every line is still one the shim has; one is gone, as when the
         # installer's SHIM_BODY changed after this copy was written.
@@ -311,7 +315,8 @@ class TestPrepushWiring:
         hook.write_bytes((hook.parent / "pre-rebase").read_bytes())
 
     @pytest.mark.parametrize("change", [
-        "_insert_exit_0", "_truncate", "_older_version", "_another_hook_types_template"])
+        "_insert_exit_0", "_truncate", "_leading_blank_line", "_older_version",
+        "_another_hook_types_template"])
     def test_a_pre_push_hook_that_is_not_the_installers_shim_is_not_wired(
         self, tmp_path, monkeypatch, change
     ):
@@ -338,8 +343,35 @@ class TestPrepushWiring:
         wired, why = mod._prepush_guards_wired()
         assert wired is True, f"following the message's remedy did not fix it: {why!r}"
 
+    def test_the_hook_is_found_where_git_looks_for_it(self, tmp_path, monkeypatch):
+        """core.hooksPath moves the hooks directory: a shim left at
+        .git/hooks/pre-push is then never run, and one in the configured
+        directory is."""
+        mod = _load()
+        self._repo(tmp_path)
+        monkeypatch.chdir(tmp_path)
+        assert subprocess.run(  # subprocess-timeout: ignore
+            ["git", "config", "core.hooksPath", "hooks-dir"], cwd=tmp_path).returncode == 0
+        assert self._install_guards(tmp_path).returncode == 0
+        moved = tmp_path / "hooks-dir" / "pre-push"
+        wired, why = mod._prepush_guards_wired()
+        assert wired is True and moved.is_file(), why
+
+        default = tmp_path / ".git" / "hooks" / "pre-push"
+        default.parent.mkdir(parents=True, exist_ok=True)
+        default.write_bytes(moved.read_bytes())
+        default.chmod(0o755)
+        moved.unlink()
+        wired, why = mod._prepush_guards_wired()
+        assert wired is False, f"a shim git never runs was reported as wired: {why!r}"
+
+    @pytest.mark.parametrize("installer", [
+        "#!/usr/bin/env bash\n",
+        "x <<'VIBE_SHIM_EOF'\na\nVIBE_SHIM_EOF\ny <<'VIBE_SHIM_EOF'\nb\nVIBE_SHIM_EOF\n",
+        "VIBE_SHIM_EOF\nx <<'VIBE_SHIM_EOF'\na\n",
+    ], ids=["no-heredoc", "two-heredocs", "end-before-start"])
     def test_an_installer_without_the_shim_is_unmeasurable_not_unwired(
-        self, tmp_path, monkeypatch
+        self, tmp_path, monkeypatch, installer
     ):
         """The shim is read out of the installer. If that fails the verdict is
         None — "not installed" would prescribe an installer that cannot be
@@ -352,7 +384,7 @@ class TestPrepushWiring:
         assert wired is True, "CONTROL: it must be wired with the real installer"
 
         broken = tmp_path / "installer.sh"
-        broken.write_text("#!/usr/bin/env bash\n", encoding="utf-8")
+        broken.write_text(installer, encoding="utf-8", newline="\n")
         monkeypatch.setattr(mod, "_INSTALLER", broken)
         wired, why = mod._prepush_guards_wired()
         assert wired is None, why

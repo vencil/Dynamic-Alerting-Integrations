@@ -38,8 +38,8 @@
 # Locking default to `[pre-commit]` keeps CI parity (CI invokes hooks by name)
 # while keeping `git push` fast and non-blocking. Hooks that legitimately
 # need a different stage must opt in explicitly via `stages: [manual]`.
-# ⛔ Not `stages: [pre-push]`: it would never run, since the installer
-# replaces pre-commit's pre-push template with the guard shim.
+# ⛔ Not `stages: [pre-push]`: the installer replaces pre-commit's pre-push
+# template with the guard shim, so such a hook runs only until the next install.
 
 # Python UTF-8 mode: all python3 entries below use -X utf8 (PEP 540) to
 # prevent UnicodeEncodeError on Windows consoles (cp950/cp932/cp1252).

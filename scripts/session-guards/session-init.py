@@ -323,9 +323,8 @@ def _install_prepush_hook(repo_root: Path) -> str:
     """Put the pre-push guards on the push path (#1689).
 
     ⛔ Shells out to scripts/ops/install_prepush_hook.sh instead of writing
-    .git/hooks/pre-push here. That script owns the whole decision — including
-    the part that matters, which is that it must NOT clobber pre-commit's hook
-    file when pre-commit got there first. A second opinion living in this file
+    .git/hooks/pre-push here. That script owns the whole decision — what to
+    replace, what to chain and what to remove. A second opinion living in this file
     is how the two drift into disagreeing about whether the guards are wired.
 
     ⛔ `shutil.which("bash")`, never a bare "bash" in the argv. On Windows,
