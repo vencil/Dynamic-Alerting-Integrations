@@ -135,8 +135,8 @@ type EffectiveConfig struct {
 
 	// MergedConfig is the leaf-by-leaf merge merged_hash hashes — each
 	// layer's own spelling side by side, a schedule merged with the one
-	// below — where EffectiveConfig is that merge laid per threshold as
-	// /metrics serves it (effectiveView, #2115). da-guard's main gate
+	// below — where EffectiveConfig is built per threshold from the same
+	// layers as /metrics serves it (effectiveView, #2115). da-guard's main gate
 	// (schema / required fields / cardinality) judges this one: its
 	// findings are not changed by #2115. Not serialized.
 	MergedConfig map[string]any `json:"-"`
