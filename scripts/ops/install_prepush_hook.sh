@@ -127,10 +127,10 @@ VIBE_SHIM_EOF
 # ⛔ Identity by a WHOLE LINE equal to the generated header, never a substring:
 # a user's hook that mentions the shim or pre-commit's `--hook-type=pre-push`
 # in a comment is still a user's hook (#2617). Taken for ours, it is
-# overwritten, or removed from pre-push.legacy; taken for pre-commit's (judged
-# at pre-push only), it is overwritten. Either way it is not chained. Any line,
-# not a fixed one, and a trailing CR dropped: on Windows pre-commit puts
-# `#!/bin/sh` above its template and writes it CRLF.
+# overwritten (as pre-push.legacy behind a pre-commit template, deleted); taken
+# for pre-commit's (judged at pre-push only), it is overwritten. Either way it
+# is not chained. Any line, not a fixed one, and a trailing CR dropped: on
+# Windows pre-commit puts `#!/bin/sh` above its template and writes it CRLF.
 # Bash builtins only — `read` is one, so these keep working when PATH carries
 # nothing but the interpreter.
 has_line() {   # $1 = file, $2 = the line
@@ -209,8 +209,8 @@ if is_ours "$hook" || is_guard_copy "$hook"; then
 elif is_precommit "$hook"; then
     # The template is overwritten below. pre-push.legacy, which a pre-push
     # template calls, holds a hook pre-commit migrated (chain it rather than
-    # destroy it) or ours (removed once the shim is in place, since nothing
-    # calls it after that).
+    # destroy it), or ours or a guard copy (deleted once the shim is in place,
+    # since nothing calls it after that).
     if is_ours "$legacy" || is_guard_copy "$legacy"; then
         drop_legacy=1
     elif [ -e "$legacy" ]; then
