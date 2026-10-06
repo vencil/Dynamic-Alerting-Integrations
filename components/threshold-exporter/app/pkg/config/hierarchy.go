@@ -132,6 +132,14 @@ type EffectiveConfig struct {
 	// EffectiveTree (#2564) — nil from ResolveEffective and ScopeEffective,
 	// which do not pay for it. Not serialized, like BoundProfile.
 	KeySources map[string]KeySource `json:"-"`
+
+	// MergedConfig is the leaf-by-leaf merge merged_hash hashes — each
+	// layer's own spelling side by side, a schedule merged with the one
+	// below — where EffectiveConfig is that merge laid per threshold as
+	// /metrics serves it (effectiveView, #2115). da-guard's main gate
+	// (schema / required fields / cardinality) judges this one: its
+	// findings are not changed by #2115. Not serialized.
+	MergedConfig map[string]any `json:"-"`
 }
 
 // ResolveEffective locates the tenant file that defines `tenantID` in ONE
@@ -364,6 +372,7 @@ func (r *effectiveResolver) resolve(tenantID string) (*EffectiveConfig, error) {
 		PlatformOverlay:    parts.platformSources,
 		ProfileOverlay:     parts.profileSources,
 		EffectiveConfig:    view,
+		MergedConfig:       parts.merged,
 		TenantOverridesRaw: parts.tenantRaw,
 		MergedDefaults:     parts.mergedDefaults,
 		BoundProfile:       parts.profile,

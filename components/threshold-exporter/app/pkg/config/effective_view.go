@@ -3,7 +3,8 @@ package config
 import "strings"
 
 // The effective config the walker REPORTS (#2115 F1 / F4): /effective and
-// `da-guard effective` print EffectiveConfig.EffectiveConfig, and since
+// `da-guard effective` print EffectiveConfig.EffectiveConfig, /simulate
+// returns the same for its request tree (SimulateEffective), and since
 // #2414 / #2433 the walker's answer is meant to be what /metrics serves.
 // The merge that feeds merged_hash (deepMerge over every layer) is not that
 // in two shapes, both measured on main fc5438c4:
@@ -42,7 +43,10 @@ import "strings"
 // re-hash every tenant of these shapes on the exporter for no change in
 // what /metrics serves. The same split as the non-finite rendering
 // (NonFiniteAsText): effective_config is what is served, merged_hash the
-// reload identity.
+// reload identity. da-guard's main gate (schema / required fields,
+// cardinality) also keeps judging the merge (EffectiveConfig.MergedConfig):
+// resolvePath reads no alias, so the view would report a required canonical
+// key missing where the subtree writes the retired spelling.
 //
 // A threshold written as null, or as a schedule that writes nothing
 // (`{default: null}`, nullThreshold), writes nothing here either, as in

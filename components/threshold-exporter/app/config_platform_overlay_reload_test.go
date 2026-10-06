@@ -15,8 +15,7 @@ package main
 // Seams: metrics via freshMetrics + SetMetrics, logger via SetLogger.
 
 import (
-	"crypto/sha256"
-	"fmt"
+	"encoding/json"
 	"io"
 	"log"
 	"os"
@@ -113,14 +112,15 @@ func TestCommittedMergedHash_AgreesWithResolveEffective(t *testing.T) {
 		if err != nil || h != got.MergedHash {
 			t.Errorf("%s: committed merged_hash(%s) %s is not the merge of its committed chain (%s, %v)", where, tid, got.MergedHash, h, err)
 		}
-		// ⚠️ The merge, not /effective's effective_config: since #2115 that
-		// is laid per threshold (one spelling per threshold, a schedule
-		// whole), while merged_hash stays the merge's. So the committed
-		// chain's merge is pinned by its hash, which must be /effective's.
+		// The committed chain merges to the same map /effective resolved —
+		// its MergedConfig, the leaf-by-leaf merge merged_hash hashes and
+		// the view /effective reports is laid from (#2115). Compared as a
+		// map, so a merge that differs only where the view hides it (a
+		// shadowed spelling, a lower schedule's window) is still caught.
+		wantCfg, _ := json.Marshal(pe.MergedConfig)
 		gotCfg, err := config.ComputeEffectiveConfig(readAll(t, got.SourceFile)[0], tid, readAll(t, got.DefaultsChain...), cachedLayers(m, tid))
-		cj, cerr := config.CanonicalJSON(gotCfg)
-		if sum := sha256.Sum256(cj); err != nil || cerr != nil || fmt.Sprintf("%x", sum)[:16] != pe.MergedHash {
-			t.Errorf("%s: the committed chain of %s merges to %s, whose hash is not /effective's %s (%v, %v)", where, tid, cj, pe.MergedHash, err, cerr)
+		if gotJSON, _ := json.Marshal(gotCfg); err != nil || string(gotJSON) != string(wantCfg) {
+			t.Errorf("%s: the committed chain of %s merges to %s, /effective's merge = %s (%v)", where, tid, gotJSON, wantCfg, err)
 		}
 	}
 	mx := loadOverlayMatrix(t)

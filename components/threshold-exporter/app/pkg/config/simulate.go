@@ -175,12 +175,22 @@ func SimulateEffective(req SimulateRequest) (*SimulateResponse, error) {
 		return nil, fmt.Errorf("simulate hash: %w", err)
 	}
 
+	// #2115: effective_config is the per-threshold view /effective
+	// reports (effectiveView), merged_hash the merge's — as ResolveEffective
+	// builds them, so a simulate response stays the /effective answer for
+	// the same tree. The merge succeeded over these bytes, so every chain
+	// entry parses here.
+	blocks := make([]map[string]any, len(chainBytes))
+	for i, b := range chainBytes {
+		blocks[i] = ParseChainDefaults(b).block
+	}
+
 	return &SimulateResponse{
 		TenantID:      req.TenantID,
 		SourceHash:    ComputeSourceHash(req.TenantYAML),
 		MergedHash:    mergedHash,
 		DefaultsChain: append([]string(nil), chain...),
-		Config:        merged,
+		Config:        effectiveView(blocks, parts.override),
 	}, nil
 }
 

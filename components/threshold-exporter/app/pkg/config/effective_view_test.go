@@ -301,3 +301,78 @@ func thresholdKeysJSON(t *testing.T, m map[string]any) string {
 	}
 	return string(b)
 }
+
+// TestEffectiveView_SimulateIsTheEffectiveAnswer (#2115 round 2, E2): the
+// /simulate contract is "the config and hashes /effective would produce for
+// the same tree", so its effective_config is the per-threshold view too.
+// Measured on 26229806 (simulate still returned the merge): the alias tree
+// carried mysql_threads_running: 30 beside the subtree's retired spelling,
+// the schedule tree the subtree's window inside the tenant's schedule.
+func TestEffectiveView_SimulateIsTheEffectiveAnswer(t *testing.T) {
+	t.Parallel()
+	const subtreeSchedule = "defaults:\n  pg_connections:\n    default: \"150\"\n" +
+		"    overrides:\n      - window: \"22:00-06:00\"\n        value: \"300\"\n"
+	cases := []struct {
+		name   string
+		chain  []string // L0 first; on disk L0 at the root, Li under lvl1/…/lvli
+		tenant string
+		want   string // threshold keys of effective_config, JSON
+	}{
+		{
+			name:   "alias-subtree-legacy-tenant-legacy-critical",
+			chain:  []string{"defaults:\n  mysql_threads_running: 30\n", "defaults:\n  mysql_cpu: 40\n"},
+			tenant: "tenants:\n  tx:\n    mysql_cpu_critical: \"90\"\n",
+			want:   `{"mysql_cpu":40,"mysql_cpu_critical":"90"}`,
+		},
+		{
+			name:   "schedule-tenant-default-over-subtree-schedule",
+			chain:  []string{"defaults:\n  pg_connections: 100\n", subtreeSchedule},
+			tenant: "tenants:\n  tx:\n    pg_connections:\n      default: \"160\"\n",
+			want:   `{"pg_connections":{"default":"160"}}`,
+		},
+		{
+			name:   "control-same-spelling-scalar",
+			chain:  []string{"defaults:\n  pg_connections: 100\n", "defaults:\n  pg_connections: 120\n"},
+			tenant: "tenants:\n  tx:\n    _silent_mode: disable\n",
+			want:   `{"pg_connections":120}`,
+		},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			files := map[string]string{}
+			chainBytes := make([][]byte, len(tc.chain))
+			dir := ""
+			for i, c := range tc.chain {
+				if i > 0 {
+					dir += fmt.Sprintf("lvl%d/", i)
+				}
+				files[dir+"_defaults.yaml"] = c
+				chainBytes[i] = []byte(c)
+			}
+			files[dir+"tx.yaml"] = tc.tenant
+			root := t.TempDir()
+			writeMergeTree(t, root, files)
+
+			sim, err := SimulateEffective(SimulateRequest{TenantID: "tx", TenantYAML: []byte(tc.tenant), DefaultsChainYAML: chainBytes})
+			if err != nil {
+				t.Fatal(err)
+			}
+			ec, err := ResolveEffective(root, "tx")
+			if err != nil {
+				t.Fatal(err)
+			}
+			if got := thresholdKeysJSON(t, sim.Config); got != tc.want {
+				t.Errorf("simulate effective_config = %s, want %s", got, tc.want)
+			}
+			simJSON, _ := json.Marshal(sim.Config)
+			effJSON, _ := json.Marshal(ec.EffectiveConfig)
+			if string(simJSON) != string(effJSON) {
+				t.Errorf("simulate vs /effective effective_config:\nsim=%s\neff=%s", simJSON, effJSON)
+			}
+			if sim.MergedHash != ec.MergedHash {
+				t.Errorf("simulate merged_hash %s, /effective %s", sim.MergedHash, ec.MergedHash)
+			}
+		})
+	}
+}
