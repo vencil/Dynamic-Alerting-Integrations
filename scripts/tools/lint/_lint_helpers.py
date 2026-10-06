@@ -63,8 +63,9 @@ BUILD_EXEMPT = frozenset({
     # _lib_confd and the conf.d readers. Library, not CLI.
     "_lib_yaml_keys.py",
     # #2115 — per-tenant values as /metrics serves them (runs `da-guard
-    # served-values`). Imported by blind_spot_discovery and
-    # analyze_rule_pack_gaps. Library, not CLI.
+    # served-values`). Imported by blind_spot_discovery,
+    # analyze_rule_pack_gaps, policy_engine and policy_opa_bridge.
+    # Library, not CLI.
     "_lib_tenant_values.py",
     # v2.8.0 PR-3a — generate_alertmanager_routes.py split into 5 helpers.
     # These are library modules consumed by the main file via re-export,

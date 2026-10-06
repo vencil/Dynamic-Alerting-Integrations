@@ -559,64 +559,79 @@ policies:
 
 
 # ═══════════════════════════════════════════════════════════════════
-# TestLoadTenantConfigs
+# TestLoadPolicyInputs（#2115 0-B：讀 Go 的答案，不讀租戶檔字面）
 # ═══════════════════════════════════════════════════════════════════
 
-class TestLoadTenantConfigs:
-    """Tenant 配置載入測試。"""
+def _write_tree(root, files):
+    for rel, body in files.items():
+        f = root / rel
+        f.parent.mkdir(parents=True, exist_ok=True)
+        f.write_text(body, encoding="utf-8")
+    return root
 
-    def test_flat_format(self, tmp_path):
-        """Flat 格式 YAML — 檔名即 tenant。"""
-        (tmp_path / "db-a.yaml").write_text(
-            "mysql_threads_running: '80'\n_routing:\n  receiver:\n    type: webhook\n",
-            encoding="utf-8",
-        )
-        configs = pe.load_tenant_configs(str(tmp_path))
-        assert "db-a" in configs
-        assert configs["db-a"]["mysql_threads_running"] == "80"
 
-    def test_multi_tenant_wrapper(self, tmp_path):
-        """Multi-tenant wrapper 格式。"""
-        (tmp_path / "cluster.yaml").write_text("""
-tenants:
-  prod-db:
-    mysql_threads_running: '90'
-  prod-cache:
-    redis_memory: '80'
-""", encoding="utf-8")
-        configs = pe.load_tenant_configs(str(tmp_path))
-        assert "prod-db" in configs
-        assert "prod-cache" in configs
+@pytest.mark.usefixtures("da_guard_env")
+class TestLoadPolicyInputs:
+    """`load_policy_inputs`：閾值看 served-values，保留鍵看 effective，`_routing` 看路由產生器。
 
-    def test_skip_defaults(self, tmp_path):
-        """跳過 _ 開頭的檔案。"""
-        (tmp_path / "_defaults.yaml").write_text(
-            "defaults:\n  mysql_threads_running: 80\n", encoding="utf-8"
-        )
-        (tmp_path / "db-a.yaml").write_text(
-            "mysql_threads_running: '70'\n", encoding="utf-8"
-        )
-        configs = pe.load_tenant_configs(str(tmp_path))
-        assert "db-a" in configs
-        assert "_defaults" not in configs
+    取代原本的 TestLoadTenantConfigs（守的是舊契約：只讀根目錄租戶檔、平面檔以檔名當租戶、
+    空檔登記成 `{}` 租戶）。新契約下平面檔與空檔都不是租戶（Go 列進 `skipped`、印 WARN），
+    子目錄裡的租戶照常出現；四個位置的值一致性在 tests/shared/test_served_values_readers_matrix.py。
+    """
 
-    def test_empty_yaml_registers_empty_tenant(self, tmp_path):
-        """Pin（r3 W2 de-shadow 行為差）：空/純註解 yaml 以 {} 進入評估。
+    def test_thresholds_are_served_and_reserved_keys_are_written_plus_inherited(self, tmp_path):
+        d = _write_tree(tmp_path, {
+            "_defaults.yaml": "defaults:\n  mysql_connections: 80\n",
+            "tenant-a.yaml": "tenants:\n  tenant-a:\n    _silent_mode: disable\n",
+            "team/tenant-b.yaml": "tenants:\n  tenant-b:\n    mysql_connections: '70'\n",
+        })
+        inputs = pe.load_policy_inputs(str(d))
+        assert sorted(inputs.views) == ["tenant-a", "tenant-b"]   # 子目錄的租戶在
+        a, b = inputs.views["tenant-a"], inputs.views["tenant-b"]
+        assert a["mysql_connections"] == pe.ServedThreshold((("00:00", "24:00", 80.0),))
+        assert b["mysql_connections"] == pe.ServedThreshold((("00:00", "24:00", 70.0),))
+        assert a["_silent_mode"] == "disable"          # 寫法
+        # Go 自動補的預設值不算有寫
+        assert "_severity_dedup" not in a and "_metadata" not in a and "_silent_mode" not in b
+        assert "_routing" not in a                     # 沒有規則讀它就不載入
+        assert inputs.aliases.get("mysql_cpu") == "mysql_threads_running"
 
-        舊 local 版對空檔載入得 None → 跳過（租戶對 policy 隱形）；
-        lib 版以 default={} 載入 → placeholder 空檔開始被 `required`
-        類策略評估。此測試釘住新語意，回退到「隱形」即紅。
-        """
-        (tmp_path / "placeholder.yaml").write_text(
-            "# tenant placeholder, no keys yet\n", encoding="utf-8"
-        )
-        configs = pe.load_tenant_configs(str(tmp_path))
-        assert configs == {"placeholder": {}}
+    def test_flat_and_empty_files_are_not_tenants(self, tmp_path, capsys):
+        """行為變更：沒有 `tenants:` 的檔（含空檔）不再以檔名當租戶，stderr 逐檔 WARN。"""
+        d = _write_tree(tmp_path, {
+            "_defaults.yaml": "defaults:\n  mysql_connections: 80\n",
+            "flat-a.yaml": "mysql_connections: '70'\n",
+            "placeholder.yaml": "# tenant placeholder, no keys yet\n",
+            "tenant-b.yaml": "tenants:\n  tenant-b: {}\n",
+        })
+        inputs = pe.load_policy_inputs(str(d))
+        assert sorted(inputs.views) == ["tenant-b"]
+        err = capsys.readouterr().err
+        assert "WARN: flat-a.yaml: declares no tenant" in err, err
+        assert "WARN: placeholder.yaml:" in err, err
 
-    def test_nonexistent_dir(self):
-        """不存在的目錄回傳空 dict。"""
-        configs = pe.load_tenant_configs("/nonexistent/dir")
-        assert configs == {}
+    def test_routing_is_the_route_generators_resolution(self, tmp_path):
+        """`_routing`：`_routing_defaults` 與租戶 `_routing` 合併、`{{tenant}}` 代換後的結果。"""
+        d = _write_tree(tmp_path, {
+            "_defaults.yaml": ("defaults:\n  mysql_connections: 80\n_routing_defaults:\n"
+                               "  receiver:\n    type: webhook\n"
+                               "    url: https://hooks.example.com/{{tenant}}\n"
+                               "  group_wait: 30s\n"),
+            "tenant-a.yaml": "tenants:\n  tenant-a:\n    _routing:\n      group_wait: 10s\n",
+            "tenant-b.yaml": "tenants:\n  tenant-b: {}\n",
+        })
+        views = pe.load_policy_inputs(str(d), routing=True).views
+        assert views["tenant-a"]["_routing"]["receiver"]["url"] == "https://hooks.example.com/tenant-a"
+        assert views["tenant-a"]["_routing"]["group_wait"] == "10s"
+        assert views["tenant-b"]["_routing"]["group_wait"] == "30s"   # 只靠繼承
+
+    def test_rules_read_routing(self, make_rule):
+        assert pe.rules_read_routing([make_rule(target="_routing.receiver.url")])
+        assert pe.rules_read_routing([make_rule(target="_rout*")])
+        assert pe.rules_read_routing([make_rule(target="mysql_connections", operator="lte", value=1,
+                                                when={"target": "_routing", "operator": "required"})])
+        assert not pe.rules_read_routing([make_rule(target="_routing_profile"),
+                                          make_rule(target="mysql_connections")])
 
 
 # ═══════════════════════════════════════════════════════════════════
@@ -693,12 +708,20 @@ class TestReports:
 # TestCLI
 # ═══════════════════════════════════════════════════════════════════
 
+# #2115 0-B: `--config-dir` reads tenants through da-guard, so a tenant is a
+# `tenants:` entry (a flat file is not one) and a threshold is what /metrics
+# serves — a key with no declared default is not served, hence the defaults.
+_THRESHOLD_DEFAULTS = "defaults:\n  mysql_threads_running: 70\n"
+_TENANT_A = "tenants:\n  tenant-a:\n    mysql_threads_running: '80'\n"
+
+
+@pytest.mark.usefixtures("da_guard_env")
 class TestCLI:
     """CLI 整合測試。"""
 
     def test_main_no_policies(self, tmp_path, capsys):
         """無策略規則（目錄存在但空）→ 正常退出（訊息走 stderr，#1112）。"""
-        (tmp_path / "db-a.yaml").write_text("mysql_threads_running: '80'\n", encoding="utf-8")
+        (tmp_path / "tenant-a.yaml").write_text(_TENANT_A, encoding="utf-8")
         exit_code = pe.main(["--config-dir", str(tmp_path)])
         assert exit_code == 0
         assert "No policy rules found" in capsys.readouterr().err
@@ -732,7 +755,7 @@ class TestCLI:
         ⛔ 之前 `if args.policy:` 把 '' 送進「省略」分支 → "No policy rules
         found" + exit 0。'' 是 SUPPLIED（未設定的 shell 變數展開就是它）。
         """
-        (tmp_path / "db-a.yaml").write_text("mysql_threads_running: '80'\n", encoding="utf-8")
+        (tmp_path / "tenant-a.yaml").write_text(_TENANT_A, encoding="utf-8")
         exit_code = pe.main(["--config-dir", str(tmp_path), "--policy", ""])
         assert exit_code == 2
         err = capsys.readouterr().err
@@ -741,7 +764,7 @@ class TestCLI:
 
     def test_main_policy_missing_file_is_caller_error(self, tmp_path, capsys):
         """`--policy <typo>` → 2 並指名路徑（之前 load_yaml_file → None → [] → 0）。"""
-        (tmp_path / "db-a.yaml").write_text("mysql_threads_running: '80'\n", encoding="utf-8")
+        (tmp_path / "tenant-a.yaml").write_text(_TENANT_A, encoding="utf-8")
         missing = tmp_path / "nope.yaml"
         exit_code = pe.main(["--config-dir", str(tmp_path), "--policy", str(missing)])
         assert exit_code == 2
@@ -751,7 +774,7 @@ class TestCLI:
 
     def test_main_policy_missing_file_json_envelope(self, tmp_path, capsys):
         """同上 + --json → stdout 恰一份 JSON，caller_error / policy_file_not_found。"""
-        (tmp_path / "db-a.yaml").write_text("mysql_threads_running: '80'\n", encoding="utf-8")
+        (tmp_path / "tenant-a.yaml").write_text(_TENANT_A, encoding="utf-8")
         missing = tmp_path / "nope.yaml"
         exit_code = pe.main(["--config-dir", str(tmp_path),
                              "--policy", str(missing), "--json"])
@@ -775,7 +798,8 @@ class TestCLI:
     def _tenant_dir(tmp_path):
         cfg = tmp_path / "cfg"
         cfg.mkdir()
-        (cfg / "db-a.yaml").write_text("mysql_threads_running: '80'\n", encoding="utf-8")
+        (cfg / "_defaults.yaml").write_text(_THRESHOLD_DEFAULTS, encoding="utf-8")
+        (cfg / "tenant-a.yaml").write_text(_TENANT_A, encoding="utf-8")
         return cfg
 
     def test_main_policy_invalid_yaml_is_caller_error(self, tmp_path, capsys):
@@ -894,7 +918,7 @@ class TestCLI:
 
     def test_main_policy_omitted_says_specify_policy(self, tmp_path, capsys):
         """control：省略 --policy、目錄存在但無 _defaults.yaml → 0，訊息建議 --policy。"""
-        (tmp_path / "db-a.yaml").write_text("mysql_threads_running: '80'\n", encoding="utf-8")
+        (tmp_path / "tenant-a.yaml").write_text(_TENANT_A, encoding="utf-8")
         exit_code = pe.main(["--config-dir", str(tmp_path)])
         assert exit_code == 0
         err = capsys.readouterr().err
@@ -902,7 +926,7 @@ class TestCLI:
 
     def test_main_policy_file_without_rules_names_it(self, tmp_path, capsys):
         """control：--policy 存在但沒有 policies: → 仍 0（#1649），但訊息不再叫人「指定 --policy」。"""
-        (tmp_path / "db-a.yaml").write_text("mysql_threads_running: '80'\n", encoding="utf-8")
+        (tmp_path / "tenant-a.yaml").write_text(_TENANT_A, encoding="utf-8")
         pol = tmp_path / "empty-policy.yaml"
         pol.write_text("something_else: 1\n", encoding="utf-8")
         exit_code = pe.main(["--config-dir", str(tmp_path), "--policy", str(pol)])
@@ -915,7 +939,7 @@ class TestCLI:
 
     def test_main_no_policies_json_envelope(self, tmp_path, capsys):
         """#1112: 無策略規則 + --json → stdout 仍是恰好一份 JSON（report schema 歸零）。"""
-        (tmp_path / "db-a.yaml").write_text("mysql_threads_running: '80'\n", encoding="utf-8")
+        (tmp_path / "tenant-a.yaml").write_text(_TENANT_A, encoding="utf-8")
         exit_code = pe.main(["--config-dir", str(tmp_path), "--json"])
         assert exit_code == 0
         doc = json.loads(capsys.readouterr().out)
@@ -926,14 +950,14 @@ class TestCLI:
 
     def test_main_all_pass(self, tmp_path, capsys):
         """所有策略通過 → exit 0。"""
-        (tmp_path / "_defaults.yaml").write_text("""
+        (tmp_path / "_defaults.yaml").write_text(_THRESHOLD_DEFAULTS + """
 _policies:
   - name: cpu-exists
     description: "CPU threshold must exist"
     target: mysql_threads_running
     operator: required
 """, encoding="utf-8")
-        (tmp_path / "db-a.yaml").write_text("mysql_threads_running: '80'\n", encoding="utf-8")
+        (tmp_path / "tenant-a.yaml").write_text(_TENANT_A, encoding="utf-8")
         exit_code = pe.main(["--config-dir", str(tmp_path)])
         assert exit_code == 0
 
@@ -947,7 +971,7 @@ _policies:
     operator: required
     severity: error
 """, encoding="utf-8")
-        (tmp_path / "db-a.yaml").write_text("mysql_threads_running: '80'\n", encoding="utf-8")
+        (tmp_path / "tenant-a.yaml").write_text(_TENANT_A, encoding="utf-8")
         exit_code = pe.main(["--config-dir", str(tmp_path), "--ci"])
         assert exit_code == 1
 
@@ -961,20 +985,20 @@ _policies:
     operator: required
     severity: warning
 """, encoding="utf-8")
-        (tmp_path / "db-a.yaml").write_text("mysql_threads_running: '80'\n", encoding="utf-8")
+        (tmp_path / "tenant-a.yaml").write_text(_TENANT_A, encoding="utf-8")
         exit_code = pe.main(["--config-dir", str(tmp_path), "--ci"])
         assert exit_code == 0
 
     def test_main_json_output(self, tmp_path, capsys):
         """JSON 輸出格式。"""
-        (tmp_path / "_defaults.yaml").write_text("""
+        (tmp_path / "_defaults.yaml").write_text(_THRESHOLD_DEFAULTS + """
 _policies:
   - name: test
     description: test
     target: mysql_threads_running
     operator: required
 """, encoding="utf-8")
-        (tmp_path / "db-a.yaml").write_text("mysql_threads_running: '80'\n", encoding="utf-8")
+        (tmp_path / "tenant-a.yaml").write_text(_TENANT_A, encoding="utf-8")
         exit_code = pe.main(["--config-dir", str(tmp_path), "--json"])
         assert exit_code == 0
         output = capsys.readouterr().out
@@ -1004,7 +1028,7 @@ policies:
 
     def test_main_no_tenants(self, tmp_path, capsys):
         """無 tenant 配置 → 正常退出。"""
-        (tmp_path / "_defaults.yaml").write_text("""
+        (tmp_path / "_defaults.yaml").write_text(_THRESHOLD_DEFAULTS + """
 _policies:
   - name: test
     description: test

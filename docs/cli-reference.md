@@ -2019,7 +2019,7 @@ da-tools validate-config --config-dir <path> [options]
 - 自訂規則 lint（`rule-packs/` 的 deny-list）——**只在給了 `--rule-packs` 時**
 - Profile 參照（租戶的 `_profile` 指向的 profile 有沒有定義）
 - 版號一致性——**只在給了 `--version-check` 時**
-- Policy-as-Code DSL 評估（`_defaults.yaml` 的 `_policies`，或 `--policy-dsl`）
+- Policy-as-Code DSL 評估（`_defaults.yaml` 的 `_policies`，或 `--policy-dsl`）；規則讀的值與 `evaluate-policy` 相同（閾值看 `/metrics` 發出的數字，見該節，#2115），租戶讀不到時這一列 FAIL 並附 da-guard 的原因
 - **租戶宣告唯一性**：同一個租戶 id 被**兩個檔案**同時宣告時 FAIL。⚠️ exporter 對這個狀態的回應是**拒載整個 config dir**（`DuplicateTenantError`），所以後果不是「那一個租戶失去告警」，而是**這棵樹裡每一個租戶都失去告警**，而且發生在部署／重啟當下、CI 通過之後。最常見的成因是編輯器在 `db-a.yaml` 旁邊留下一份 `db-a.yml`，但判準是「一個 id、兩個檔」——換成 `archive/db-a.yaml` 一樣會擋（#1577）。⚠️ **v2.9.0 映像沒有這一項**：同一棵樹在那顆映像上回報 `Result: PASS`、exit 0 <!-- image-caveat: v2.9.0 -->
 - **根目錄 defaults**（`root_defaults`）：依 exporter 的解法檢查**根目錄** `_defaults.yaml` 的 `defaults:`，三類 FAIL。其一是值：exporter 把根目錄 `defaults:` 當 `map[string]float64` 解，**解不成數字的值**（`"70"`、`disable`、mapping、list、布林、日期等）會讓 exporter **丟掉整個 `defaults:` 區塊**、所有平台閾值一起失效，而載入照樣回報成功；**空值**（`k:`、`~`、`null`）會被指出沒有值。[#2518](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/2518) 之前它被當成 0 閾值送出；現在它實際改變什麼，取決於樹的其他部分（另一種拼法、`optional_overrides:`、`<<:` 合併），這一列不下判斷。判定與 `deprecate` 的載體體檢共用同一個 yaml.v3 鏡射（#1414）。其二是路由：`defaults:` 底下出現 `_routing` 或任何 `_routing` 前綴的鍵，不論值為何都 FAIL。`defaults:` 只放數值閾值；路由預設值寫在頂層的 `_routing_defaults:`。⚠️ 在這裡放一個 `_routing` mapping，損失的不只是路由：exporter 把根目錄的 `defaults:` 當成純數值讀取，解不進去就**整個區塊丟棄——所有平台閾值一起失效**，而載入本身照樣回報成功；路由產生器也從不讀 `defaults:`。其三是包裝（[#2386](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/2386)）：根目錄 `_defaults.yaml` 的 `defaults:` 不是 mapping（沒有這個鍵，或有鍵沒有值）時，defaults 合併讀整份文件，`/effective` 顯示頂層的鍵，而 exporter 的根目錄解析只從 `defaults:` mapping 讀閾值、其他頂層鍵沒有對應欄位，`/metrics` 不會從這個檔帶出它們；頂層有下列鍵就 FAIL 並列出：閾值（不以 `_` 開頭的鍵）與 `_routing` 開頭以外的保留鍵（例如 `_severity_dedup`、`_silent_mode`、`_state_*`）。不列入：exporter 根目錄設定結構的欄位（例如 `state_filters`、`max_metrics_per_tenant`）、其他工具從頂層讀的 `_routing_defaults`／`_routing_enforced`／`_custom_alerts`、defaults 合併在每一層都丟掉的 `_metadata`、`_routing` 開頭的鍵（route generator 不從 defaults 檔讀 routing，寫錯位置由 `routing_in_unread_location` 報）、其他 `_` 開頭的鍵（例如只用來掛 YAML anchor 的 `_x: &x`）。實測：頂層閾值不出現在 `/metrics`；頂層 `_severity_dedup: disable` 在 `/effective` 顯示 `disable`、`/metrics` 送 `enable`。子目錄的 `_defaults.yaml` 不在這一列的判定範圍（#2291）。⚠️ **v2.9.0 映像沒有這一項** <!-- image-caveat: v2.9.0 -->
 - **defaults 包裝**（`defaults_wrapper`，[#2386](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/2386)）：每一層的 `_defaults.yaml`（每個目錄取 exporter 選用的那一份）中，`defaults:` 是 mapping（`{}` 也算，YAML `!!set` 也算：exporter 把它解成 mapping）、頂層又有會進入 `/effective` 合併結果的鍵就 FAIL，列出檔案與鍵。這些鍵是：閾值（不以 `_` 開頭的鍵）與 `_routing` 開頭以外的保留鍵（例如 `_severity_dedup`、`_silent_mode`、`_state_*`）。不列入：exporter 根目錄設定結構的欄位（例如 `state_filters`、`max_metrics_per_tenant`）、其他工具從頂層讀的 `_routing_defaults`／`_routing_enforced`／`_custom_alerts`、defaults 合併在每一層都丟掉的 `_metadata`、`_routing` 開頭的鍵（route generator 不從 defaults 檔讀 routing，寫錯位置由 `routing_in_unread_location` 報）、其他 `_` 開頭的鍵（例如只用來掛 YAML anchor 的 `_x: &x`）。`defaults:` 是 mapping 時，defaults 合併只讀這個 mapping，頂層這些鍵不會出現在任何租戶的 `/effective`；沒有 `defaults:`、或 `defaults:` 沒有值時，合併讀整份文件，不報。實測（子目錄）：包成 mapping 後，頂層的閾值與 `_severity_dedup` 不再出現在 `/metrics`；`_silent_mode`、`_state_*` 只影響 `/effective`，任何寫法都不出現在 `/metrics`。子目錄檔的保留鍵不建議移進 `defaults:`（子目錄 defaults 不支援保留鍵），訊息改請你從該檔刪掉，是否改寫在租戶條目由 da-guard 的 `subtree_default_reserved_key` 依鍵判斷（此時 Suggested action 也不再建議「讓 `defaults:` 不給值」）（[#2388](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/2388)）。⚠️ **v2.9.0 映像沒有這一項** <!-- image-caveat: v2.9.0 -->
@@ -2424,6 +2424,14 @@ da-tools evaluate-policy --config-dir <PATH> [--policy <FILE>] [--json] [--ci]
 
 `required`、`forbidden`、`equals`、`not_equals`、`gte`、`lte`、`gt`、`lt`、`matches`、`one_of`、`contains`
 
+**規則讀的是哪一個值**（[#2115](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/2115)）：`--config-dir` 讀生效值，不是租戶檔的字面內容；`target` 與 `when` 依 key 種類讀：
+
+- **閾值**（不以 `_` 開頭）：exporter 在 `/metrics` 實際發出的數字（經 `da-guard served-values --schedules`）。值寫在根 `defaults:`、平台檔 `tenants:`、租戶檔或子目錄 `_defaults.yaml` 都一樣，子目錄裡的租戶也會評估。排程閾值逐時段比對，任一時段違規即違規（訊息附 UTC 時段）；某時段 `disable` 時該段只有 `required` 算違規。整天都不發出的鍵（`disable`、沒有預設值）視同沒有。數字以數值比較（`equals: 80` 等於發出的 `80.0`）。`target` 寫舊拼法（例如 `mysql_cpu`）時以 exporter 的別名表換成現行拼法；`<key>_critical` 是 critical 那一列。`when` 對排程閾值：任一時段成立即成立。
+- **保留鍵**（`_` 開頭，`_routing` 除外）：寫法＋繼承（經 `da-guard effective`）；exporter 自動補的預設值（`_severity_dedup: enable`、`_metadata` 空欄位等）不算有寫。
+- **`_routing`**：路由產生器解析後的結果（`_routing_defaults` 逐層、routing profile、租戶 `_routing` 合併，`{{tenant}}` 已代換）。
+
+沒有 `tenants:` 的檔不是租戶，stderr 逐檔印 `WARN`；da-guard 的 stderr 逐行轉印（前綴 `da-guard|`）。需要 da-guard（映像內建；repo 裡直接跑時用 `$DA_GUARD_BINARY` 或 `$PATH`）。⚠️ 已知限制：根 `defaults:` 與租戶同時寫 `X_critical` 的樹，da-guard 拒收（結束碼 2），本工具不評估任何規則。
+
 **範例**
 
 ```bash
@@ -2443,7 +2451,7 @@ da-tools evaluate-policy --config-dir conf.d/ --ci
 |------|------|
 | `0` | 無 error 違規 |
 | `1` | CI 模式：有 error 級別違規 |
-| `2` | 呼叫端錯誤：參數錯誤（含沒給 `--config-dir`）／`--policy` 供了但不是檔案（含空字串）／`--config-dir` 不存在／`--policy` 檔或 `_defaults.yaml` 內容讀不到（不是 UTF-8、不是合法 YAML；訊息指名哪一檔，#1654）／租戶檔內容讀不到（只在有 policy 規則時才讀租戶檔，沒有規則時回 0）。⛔ 不要靠拿掉 `--policy` 轉綠——那等於不帶你的策略檔評估（#1651） |
+| `2` | 呼叫端錯誤：參數錯誤（含沒給 `--config-dir`）／`--policy` 供了但不是檔案（含空字串）／`--config-dir` 不存在／`--policy` 檔或 `_defaults.yaml` 內容讀不到（不是 UTF-8、不是合法 YAML；訊息指名哪一檔，#1654）／（只在有 policy 規則時才讀租戶，沒有規則時回 0）exporter 解析失敗而整份跳過的檔、讀不到的檔或子目錄（`ERROR` 行指名，da-guard 的 stderr 附在下面）、整棵樹被 da-guard 拒收、規則讀 `_routing` 而路由產生器拒收這棵樹、找不到 da-guard（`--json` 時 `reason` 為 `yaml_file_unreadable`／`da_guard_failed`／`routing_tree_refused`，#2115）。⛔ 不要靠拿掉 `--policy` 轉綠——那等於不帶你的策略檔評估（#1651） |
 
 #### opa-evaluate
 
@@ -2475,6 +2483,8 @@ da-tools opa-evaluate --config-dir conf.d/ --opa-url http://localhost:8181
 # Dry-run：僅顯示 OPA input JSON
 da-tools opa-evaluate --config-dir conf.d/ --dry-run
 ```
+
+**OPA input**（[#2115](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/2115)）：`input.tenants` 形狀不變（每個租戶一份「key → 寫法」），內容是寫法＋繼承（經 `da-guard effective`：`defaults:`、平台檔 `tenants:`、profile、子目錄 `_defaults.yaml`），子目錄裡的租戶也在；key 照寫法（舊拼法不換）。新增 `input.served`：每個租戶此刻在 `/metrics` 發出的閾值數字，key 為現行拼法（別名已正規化；`<key>_critical` 是 critical 那一列）。對閾值的值下判斷的 rego 請讀 `input.served`。沒有 `tenants:` 的檔不是租戶（stderr `WARN`）；exporter 解析失敗或讀不到的檔、被 da-guard 拒收的樹、找不到 da-guard 時以結束碼 2 結束（`ERROR` 行指名），沒有任何設定檔的目錄也是 2。
 
 ---
 

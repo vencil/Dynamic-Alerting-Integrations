@@ -1150,12 +1150,33 @@ def check_policy_dsl(config_dir: str, policy_dsl_file: str | None = None) -> dic
         return _make_result("policy_dsl", PASS,
                             ["No _policies defined — skipped"])
 
-    tenant_configs = pe.load_tenant_configs(config_dir)
+    # #2115 0-B: the tenants as the exporter reads them (thresholds as
+    # /metrics serves them, every part of the day; reserved keys as written
+    # plus inherited; `_routing` as the route generator resolves it) — the
+    # same reader as `policy-engine --config-dir`. A tree it cannot read that
+    # way is a FAIL naming the file / da-guard's words, never a pass over the
+    # tenants that happened to be readable; da-guard missing is a caller error.
+    try:
+        inputs = pe.load_policy_inputs(config_dir, routing=pe.rules_read_routing(rules))
+    except (pe.DaGuardNotFoundError, pe.DaGuardError, pe.ParseFailedError) as exc:
+        buf = io.StringIO()
+        pe.print_load_error(exc, buf)
+        return _make_result("policy_dsl", FAIL,
+                            ["the tenants cannot be read as threshold-exporter reads them:",
+                             # "\n" only: `splitlines` also cuts at U+2028 etc.,
+                             # which can sit in a file name (_lib_tenant_values).
+                             *(ln for ln in buf.getvalue().split("\n") if ln)],
+                            caller_error=isinstance(exc, pe.DaGuardNotFoundError))
+    except pe.RoutingTreeRefused as exc:
+        return _make_result("policy_dsl", FAIL,
+                            ["the route generator refuses this tree, so `_routing` cannot "
+                             "be resolved:", *exc.lines])
+    tenant_configs = inputs.views
     if not tenant_configs:
         return _make_result("policy_dsl", PASS,
                             ["No tenant configs found — skipped"])
 
-    result = pe.evaluate_policies(rules, tenant_configs)
+    result = pe.evaluate_policies(rules, tenant_configs, inputs.aliases)
 
     details = []
     for v in result.violations:

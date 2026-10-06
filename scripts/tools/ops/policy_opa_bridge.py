@@ -14,13 +14,32 @@ Modes:
 OPA Input JSON format:
   {
     "tenants": {
-      "db-a": { "mysql_connections": "70", "_routing": {...} },
+      "tenant-a": { "mysql_connections": "70", "_routing": {...} },
+      ...
+    },
+    "served": {
+      "tenant-a": { "mysql_connections": 70, "mysql_connections_critical": 95 },
       ...
     },
     "defaults": { "mysql_connections": 80 },
     "rule_packs": ["mariadb", "kubernetes"],
     "platform_version": "v2.3.0"
   }
+
+`tenants` (#2115 0-B): every tenant of the tree, subdirectories included,
+each the config as written PLUS what it inherits (`da-guard effective`'s
+`effective_config`: `defaults:`, platform `tenants:`, profile, subtree
+`_defaults.yaml`), in the same shape as before: values and keys as written
+(a retired spelling stays retired). A default the exporter fills in by
+itself is not there.
+
+`served` (#2115 0-B): per tenant, every threshold /metrics serves at this
+moment, as a number, keyed by the exporter's canonical spelling (aliases
+resolved; `<key>_critical` for the critical row). A key switched off, or
+with no /metrics row now, is absent. A policy on a threshold's VALUE reads
+it here: it is the number that alerts. A file the exporter drops or cannot
+read is exit 2, as is a tree da-guard refuses; a file it reads but serves no
+tenant from is a WARN line.
 
 OPA Response format:
   { "result": [{"msg": "...", "severity": "error|warning", "tenant": "...", "field": "..."}] }
@@ -62,15 +81,20 @@ try:
         detect_cli_lang,
         exit_on_yaml_file_error,
         format_json_report,
-        load_tenant_configs,
     )
 except ImportError:
     from scripts.tools._lib_python import (  # type: ignore[no-redef]
         detect_cli_lang,
         exit_on_yaml_file_error,
         format_json_report,
-        load_tenant_configs,
     )
+from _lib_tenant_values import (  # noqa: E402  (#2115 0-B)
+    ServedValuesError,
+    exit_on_served_values_error,
+    load_effective,
+    load_served_tree,
+    print_load_warnings,
+)
 # #2123: `_defaults.yaml` is read strictly — a key written twice in one
 # mapping raises YamlFileError (rc 2 via exit_on_yaml_file_error, the path a
 # syntax error already takes) instead of sending OPA PyYAML's last value.
@@ -112,13 +136,28 @@ class PolicyResult:
 
 
 # ---------------------------------------------------------------------------
-# Config loading — tenant-config loading is delegated to the shared
-# `_lib_io.load_tenant_configs` (imported via the `_lib_python` facade above;
-# da-tools ROI r3 W2 de-shadow). Behaviour deltas vs the former local copy
-# (both handled wrapper + flat): lib additionally skips dotfiles/non-files,
-# and an EMPTY/comment-only yaml now enters the OPA input as a `{}` tenant
-# (lib loads with default={}, local copy skipped None).
+# Config loading
 # ---------------------------------------------------------------------------
+def load_tenant_inputs(config_dir: str) -> tuple[dict[str, dict], dict[str, dict]]:
+    """`(tenants, served)` for the OPA input (#2115 0-B; see the module
+    docstring): `tenants` from `da-guard effective`, `served` from
+    `da-guard served-values`. Prints da-guard's stderr and one WARN per file
+    the load serves no tenant from. Raises what `load_served_tree` /
+    `load_effective` raise, and `ServedValuesError` when the two disagree on
+    the tenants; `main` turns each into exit 2 (`exit_on_served_values_error`)."""
+    tree = load_served_tree(config_dir)
+    print_load_warnings(tree)
+    effective = load_effective(config_dir)
+    tenants = {t: e.effective_config for t, e in sorted(effective.items())}
+    served = {t: {k: v.values[k] for k in sorted(v.severities)}
+              for t, v in sorted(tree.tenants.items())}
+    if set(tenants) != set(served):
+        raise ServedValuesError(
+            "da-guard served-values and da-guard effective disagree on the tenants of this tree: "
+            f"{sorted(set(tenants) ^ set(served))}", None, "")
+    return tenants, served
+
+
 def load_defaults(config_dir: str) -> dict[str, Any]:
     """Load the root defaults carrier.
 
@@ -145,6 +184,7 @@ def build_opa_input(
     defaults: dict,
     rule_packs: Optional[list[str]] = None,
     platform_version: str = "v2.3.0",
+    served: Optional[dict[str, dict]] = None,
 ) -> dict[str, Any]:
     """Build OPA input JSON from tenant configs.
 
@@ -154,6 +194,8 @@ def build_opa_input(
         defaults: defaults dict (usually from _defaults.yaml)
         rule_packs: list of rule pack names
         platform_version: platform version string
+        served: {tenant_name: {threshold_key: value}}, what /metrics serves
+            (`load_tenant_inputs`); `{}` when omitted
 
     Returns:
         OPA input dict ready for JSON serialization
@@ -170,6 +212,7 @@ def build_opa_input(
 
     return {
         "tenants": tenant_configs,
+        "served": served if served is not None else {},
         "defaults": defaults_thresholds,
         "rule_packs": rule_packs,
         "platform_version": platform_version,
@@ -460,6 +503,7 @@ def build_parser(lang: str = "en") -> argparse.ArgumentParser:
 
 
 @exit_on_yaml_file_error  # #1654: unreadable tenant / _defaults file → rc 2, named
+@exit_on_served_values_error  # #2115: da-guard missing or failing, a dropped file → rc 2, named
 def main(argv: Optional[list[str]] = None) -> int:
     """CLI entry point."""
     try_utf8_stdout()
@@ -468,7 +512,7 @@ def main(argv: Optional[list[str]] = None) -> int:
     args = parser.parse_args(argv)
 
     # Load configs
-    tenant_configs = load_tenant_configs(args.config_dir)
+    tenant_configs, served = load_tenant_inputs(args.config_dir)
     defaults = load_defaults(args.config_dir)
 
     if not tenant_configs:
@@ -506,6 +550,7 @@ def main(argv: Optional[list[str]] = None) -> int:
         defaults,
         rule_packs=None,
         platform_version="v2.3.0",
+        served=served,
     )
 
     # Dry-run mode

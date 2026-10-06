@@ -162,6 +162,7 @@ __all__ = [
     "load_effective",
     "load_served_tree",
     "load_served_values",
+    "print_load_error",
     "print_load_warnings",
 ]
 
@@ -525,7 +526,8 @@ def exit_on_served_values_error(fn: _F) -> _F:
     (`ERROR: cannot read <path>: <message>`) with da-guard's stderr below it:
     that decorator prints `str()` only, which is one line by contract, so the
     exporter's reasons would be lost there. Any other `YamlFileError` is left
-    to that decorator (or the tool's own handler).
+    to that decorator (or the tool's own handler). `EffectiveError` (a tool
+    that also calls `load_effective`) is handled as `ServedValuesError` is.
 
     A missing binary gets this module's own text, not the dispatcher's: that
     one names `da-tools guard`'s `--da-guard-binary` flag, which the tools
@@ -534,21 +536,31 @@ def exit_on_served_values_error(fn: _F) -> _F:
     def _wrapped(*args: Any, **kwargs: Any) -> Any:
         try:
             return fn(*args, **kwargs)
-        except DaGuardNotFoundError:
-            print(f"ERROR: {_missing_binary_message()}", file=sys.stderr)
+        except (DaGuardNotFoundError, ParseFailedError, DaGuardError) as exc:
+            print_load_error(exc)
             sys.exit(EXIT_CALLER_ERROR)
-        except ParseFailedError as exc:
-            _print_error_with_stderr(f"cannot read {exc}", exc.stderr_lines)
-        except ServedValuesError as exc:
-            _print_error_with_stderr(exc.message, _nonempty_lines(exc.stderr))
     return _wrapped  # type: ignore[return-value]
 
 
-def _print_error_with_stderr(head: str, stderr_lines: list[str]) -> None:
-    print(f"ERROR: {safe_label(head)}", file=sys.stderr)
-    for line in stderr_lines:
-        print(f"{DA_GUARD_PREFIX}{safe_label(line)}", file=sys.stderr)
-    sys.exit(EXIT_CALLER_ERROR)
+def print_load_error(exc: DaGuardNotFoundError | ParseFailedError | DaGuardError,
+                     stream: TextIO | None = None) -> None:
+    """The lines `exit_on_served_values_error` prints for `exc`, without the
+    exit — for a tool that owes something more on that path (a `--json`
+    envelope): one `ERROR:` line, then da-guard's stderr, every non-empty
+    line escaped and behind `DA_GUARD_PREFIX`."""
+    stream = sys.stderr if stream is None else stream
+    if isinstance(exc, DaGuardNotFoundError):
+        head, lines = _missing_binary_message(), []
+    elif isinstance(exc, ParseFailedError):
+        head, lines = f"cannot read {exc}", exc.stderr_lines
+    else:
+        head, lines = exc.message, _nonempty_lines(exc.stderr)
+    # stderr unless the caller collects the lines itself (validate-config
+    # puts them in its report row).
+    error_line = f"ERROR: {safe_label(head)}"
+    print(error_line, file=stream)
+    for line in lines:
+        print(f"{DA_GUARD_PREFIX}{safe_label(line)}", file=stream)
 
 
 def _missing_binary_message() -> str:

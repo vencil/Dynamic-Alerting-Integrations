@@ -587,6 +587,18 @@ def _empty_dir(tmp: Path, name: str) -> str:
     return str(d)
 
 
+def _no_tenant_confd(tmp: Path) -> str:
+    d = Path(_empty_dir(tmp, "no_tenant_confd"))
+    (d / "_defaults.yaml").write_text("defaults:\n  mysql_connections: 80\n", encoding="utf-8")
+    return str(d)
+
+
+def _confd_the_exporter_drops(tmp: Path) -> str:
+    d = Path(_no_tenant_confd(tmp))
+    (d / "_platform.yaml").write_text("tenants:\n  tenant-b: 3\n", encoding="utf-8")
+    return str(d)
+
+
 def _out(tmp: Path, name: str) -> str:
     return str(tmp / name)
 
@@ -1129,15 +1141,24 @@ RECIPES: list[Recipe] = [
     R("policy_engine", "with-policy-file",
       lambda t, s: ["--config-dir", str(SEED_CONF_D),
                     "--policy", _policy_file(t), "--json"]),
+    # #2115 0-B: a file the exporter drops — rc 2 before any rule is checked,
+    # with the caller-error envelope.
+    R("policy_engine", "exporter-drops-a-file",
+      lambda t, s: ["--config-dir", _confd_the_exporter_drops(t),
+                    "--policy", _policy_file(t), "--json"],
+      expect_caller_error=True,
+      doc_check=_caller_error_doc("yaml_file_unreadable")),
 
     # ── policy_opa_bridge ──────────────────────────────────────────────────
     R("policy_opa_bridge", "dry-run",
       lambda t, s: ["--config-dir", str(SEED_CONF_D), "--dry-run", "--json"]),
     R("policy_opa_bridge", "opa-url",
       lambda t, s: ["--config-dir", str(SEED_CONF_D), "--opa-url", s, "--json"]),
-    R("policy_opa_bridge", "empty-config-dir",
-      lambda t, s: ["--config-dir", _empty_dir(t, "empty_confd"),
-                    "--dry-run", "--json"]),
+    # #2115 0-B: the tenants come from da-guard, which refuses a directory
+    # with no config file at all (rc 2) — so the zero-tenant path is a tree
+    # the exporter loads with no tenant in it.
+    R("policy_opa_bridge", "no-tenant-config-dir",
+      lambda t, s: ["--config-dir", _no_tenant_confd(t), "--dry-run", "--json"]),
     # COMBINATION recipe (#1112 flag-matrix sweep): `--dry-run` + `--opa-url`.
     # Two payload selectors accepted together — exactly the shape that bit
     # migrate_to_operator. Here dry-run correctly wins (no query is sent), but

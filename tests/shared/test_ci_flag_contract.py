@@ -127,6 +127,10 @@ import pytest
 
 import test_json_stdout_contract as _jsc
 
+# #2115 0-B: policy_engine / policy_opa_bridge read the tenants through
+# da-guard; the subprocess finds this repo's build via `$DA_GUARD_BINARY`.
+pytestmark = pytest.mark.usefixtures("da_guard_env")
+
 REPO_ROOT = Path(__file__).resolve().parents[2]
 OPS_DIR = REPO_ROOT / "scripts" / "tools" / "ops"
 DEV_RULES_MD = REPO_ROOT / "docs" / "internal" / "dev-rules.md"
@@ -293,7 +297,10 @@ def _ownerless_confd(tmp: Path) -> str:
     """A conf.d whose tenant declares NO _metadata.owner => the
     metadata-owner-required policy (severity error) must fire."""
     d = tmp / "ownerless-confd"
-    _write(d / "_defaults.yaml", "defaults:\n  max_connections: '100'\n")
+    # A number, not '100': the exporter drops a root `_defaults.yaml` whose
+    # `defaults:` carries a string (#1414), and since #2115 0-B policy_engine
+    # reads the tree as the exporter does — that would be exit 2, not a finding.
+    _write(d / "_defaults.yaml", "defaults:\n  max_connections: 100\n")
     _write(d / "tenant-one.yaml", "tenants:\n  tenant-one:\n    max_connections: '50'\n")
     return str(d)
 
