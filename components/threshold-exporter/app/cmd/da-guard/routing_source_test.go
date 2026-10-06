@@ -62,6 +62,9 @@ const (
 	rsTenant   = "tenants:\n  tx:\n    mysql_connections: \"50\"\n"
 	rsBadRoute = "\n      receiver:\n        type: bogus\n"
 	rsOKRoute  = "\n      receiver:\n        type: webhook\n        url: https://t.example/h\n"
+	// rsBadOverride continues an rsOKRoute block: one override whose
+	// receiver type is unknown (#2521).
+	rsBadOverride = "      overrides:\n        - alertname: X\n          receiver:\n            type: bogus\n"
 )
 
 func TestRun_RoutingSource(t *testing.T) {
@@ -205,6 +208,39 @@ func TestRun_RoutingSource(t *testing.T) {
 				// (not served on /metrics), a different finding.
 				"_defaults.yaml": "_routing_defaults:" + rsOKRoute,
 				"tx.yaml":        rsTenant,
+			},
+			wantCode: exitOK,
+			want:     []string{},
+		},
+		{
+			// #2521: an inherited override is the tenant's routing and is
+			// judged as such ...
+			name: "routing-defaults-overrides-are-inherited-and-judged",
+			files: map[string]string{
+				"_defaults.yaml": rsDefaults + "_routing_defaults:" + rsOKRoute + rsBadOverride,
+				"tx.yaml":        rsTenant,
+			},
+			wantCode: exitFindings,
+			want:     []string{"error unknown_receiver_type tx overrides[0].receiver.type"},
+		},
+		{
+			// ... and `overrides: ~` in the tenant's _routing clears it,
+			// the same as `[]` (shallow merge, as the generator renders).
+			name: "tenant-overrides-null-clears-the-inherited-overrides",
+			files: map[string]string{
+				"_defaults.yaml": rsDefaults + "_routing_defaults:" + rsOKRoute + rsBadOverride,
+				"tx.yaml":        rsTenant + "    _routing:\n      overrides: ~\n",
+			},
+			wantCode: exitOK,
+			want:     []string{},
+		},
+		{
+			name: "tenant-routes-null-clears-the-profile-routes",
+			files: map[string]string{
+				"_defaults.yaml": rsDefaults + "_routing_defaults:" + rsOKRoute,
+				"_routing_profiles.yaml": "routing_profiles:\n  team:\n    routes:\n" +
+					"      - match: {severity: critical}\n        receiver:\n          type: bogus\n",
+				"tx.yaml": rsTenant + "    _routing_profile: team\n    _routing:\n      routes: ~\n",
 			},
 			wantCode: exitOK,
 			want:     []string{},

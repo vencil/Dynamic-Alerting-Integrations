@@ -172,11 +172,14 @@ tenants:
         url: "https://hooks.tenant-a.example.com/alerts"   # destination)
 ```
 
-> ℹ️ **The explicit-`null` opt-out is per-field** (settled and implemented in
-> \#1339): the schema allows `null` only on `group_by` / `group_wait` /
-> `group_interval` / `repeat_interval` under `_routing`, and the effect is that
-> the generated route omits that field (the generator currently also accepts
-> `overrides: ~`, which the schema does not — see #2521). `_routing.receiver: ~` is **still rejected** — it would make
+> ℹ️ **The explicit-`null` opt-out is per-field** (\#1339, \#2521): the schema
+> allows `null` only on `group_by` / `group_wait` / `group_interval` /
+> `repeat_interval` / `overrides` / `routes` under `_routing`. On the first four
+> the generated route omits that field; `overrides: ~` / `routes: ~` mean the same
+> as `[]` and clear the whole list inherited from `_routing_defaults` / the routing
+> profile. ⚠️ That is the tenant-level spelling: a null `overrides` in a
+> subdirectory level's `_routing_defaults` is still refused by the generator
+> (exit 2). `_routing.receiver: ~` is **still rejected** — it would make
 > the tenant's entire route disappear and drop its alerts to the catch-all.
 > **For threshold keys always use `"disable"`**, never `null`:
 > `mysql_connections: ~` and a half-typed `mysql_connections:` are identical to

@@ -55,36 +55,13 @@ func FuzzParseHHMM(f *testing.F) {
 	})
 }
 
-// FuzzParsePromDuration — never panics; on success the parsed duration is
-// non-negative for non-negative inputs (sign-preserving documented behavior),
-// and the function tolerates whitespace + invalid units gracefully.
-func FuzzParsePromDuration(f *testing.F) {
-	for _, seed := range []string{
-		"30s", "5m", "4h", "1d",
-		"0s", "1.5h",
-		"  10s  ",
-		"", "x", "10x", "abc",
-		"-5m",
-		"99999999999999999999d", // very large
-	} {
-		f.Add(seed)
-	}
-
-	f.Fuzz(func(t *testing.T, s string) {
-		// Test guarantees: must not panic. If it returns no error, the
-		// output is some time.Duration value (no further invariant claimed
-		// — overflow behavior is platform-specific for huge inputs).
-		_, _ = parsePromDuration(s)
-	})
-}
-
 // FuzzClampDuration — never panics; returns a string. param/tenant labels
 // are loop-invariant strings used in log output; we vary the value only.
 func FuzzClampDuration(f *testing.F) {
 	for _, seed := range []string{
 		"30s", "5m", "4h",
 		"", "abc", "0", "-1m",
-		"99h",
+		"99h", "1h30m", "1.5h", "30m1h", "1ns",
 	} {
 		f.Add(seed)
 	}

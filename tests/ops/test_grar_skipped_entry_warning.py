@@ -5,10 +5,13 @@ TYPE (``SkippedEntryWarning``), not by the words in it.
 w``. A WARN line carries the operator's values, so a plain clamp WARN whose
 value was ``skipping`` (``repeat_interval: "skipping"``) failed
 validate-config and ``--validate`` at rc 1, while ``"banana"`` passed at
-rc 0. Pinned here:
+rc 0. (#2490 since made both of those values block for a reason of their own
+— Alertmanager refuses them, a ``ReplacedValueWarning`` — so the regression
+below is pinned with a tenant NAMED ``skipping`` whose value is only
+clamped.) Pinned here:
 
-1. the regression: a value spelled ``skipping`` no longer blocks, through
-   both CLIs;
+1. the regression: a clamp WARN that says ``skipping`` no longer blocks,
+   through both CLIs;
 2. equivalence: for every producer of a dropped-entry line (one trigger per
    producer), the new predicate blocks exactly the lines the old one did on
    non-adversarial values — and the mark survives from the producer to EVERY
@@ -191,10 +194,10 @@ def _stream(gar, config_dir: Path, allowed_domains) -> list[str]:
 
 # ── 1. the regression ─────────────────────────────────────────────────────
 
-@pytest.mark.parametrize("value", ["banana", "skipping", "WARN skipping"])
-def test_value_spelled_skipping_does_not_block(tmp_path, value):
-    d = _write_tree(tmp_path, _with_receiver(
-        f"      repeat_interval: \"{value}\"\n"))
+@pytest.mark.parametrize("value", ["100h", "1s"])
+def test_clamp_warn_naming_skipping_does_not_block(tmp_path, value):
+    d = _write_tree(tmp_path, {"skipping.yaml": _TENANT_HEAD.replace(
+        "t1", "skipping") + _RECEIVER + f"      repeat_interval: \"{value}\"\n"})
     # No amtool on PATH → WARN, not FAIL; the children write UTF-8.
     env = {**os.environ, "PATH": str(tmp_path), "PYTHONIOENCODING": "utf-8"}
     vc = subprocess.run(
@@ -207,15 +210,28 @@ def test_value_spelled_skipping_does_not_block(tmp_path, value):
          "--config-dir", str(d), "--validate"],
         capture_output=True, text=True, encoding="utf-8", timeout=120,
         env=env)
-    assert f"invalid repeat_interval '{value}'" in vc.stdout, vc.stdout
+    assert f"skipping: repeat_interval '{value}'" in vc.stdout, vc.stdout
     assert vc.returncode == 0, vc.stdout + vc.stderr
     assert gen.returncode == 0, gen.stdout + gen.stderr
 
 
+@pytest.mark.parametrize("value", ["banana", "skipping"])
+def test_value_alertmanager_refuses_blocks_by_its_own_type(tmp_path, mods, value):
+    """#2490: the text is still not what decides — the line's type is a
+    ReplacedValueWarning, whatever the value spells."""
+    gv, gar = mods[0], mods[1]
+    stream = _stream(gar, _write_tree(tmp_path, _with_receiver(
+        f"      repeat_interval: \"{value}\"\n")), None)
+    hits = [w for w in stream if f"invalid repeat_interval '{value}'" in w]
+    assert len(hits) == 1 and isinstance(hits[0], gv.ReplacedValueWarning), stream
+    assert not isinstance(hits[0], gv.SkippedEntryWarning)
+    assert gv.blocking_generation_errors(stream) == hits
+
+
 def test_clamp_warn_with_skipping_value_is_not_blocking(mods):
     gv = mods[0]
-    line = ("  WARN: t1: invalid repeat_interval 'skipping', using platform "
-            "default")
+    line = ("  WARN: skipping: repeat_interval '100h' above maximum (1m–72h), "
+            "clamped to 72h")
     assert _legacy_blocking([line]) == [line]   # what #2489 reported
     assert gv.blocking_generation_errors([line]) == []
 

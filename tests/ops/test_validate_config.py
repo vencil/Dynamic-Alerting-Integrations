@@ -2037,6 +2037,30 @@ class TestTheSchemaRowDoesNotAdviseDeletingKeysItNeverReported:
         assert "quote the matcher value in YAML" in vc.POLICY_ONLY_SCHEMA_HINT
         assert _generic_schema_hint() not in out, out
 
+    def test_a_policy_only_warn_gets_policy_advice(self, tmp_path, capsys,
+                                                   cli_argv):
+        """#2490: without --strict a domain-policy timing breach is a WARN
+        in this row (it used to be PASS when the old parser could not read
+        the value). The same set-difference as the FAIL branch picks the
+        advice: no key was reported, so no "Remove unknown keys"."""
+        d = self._tree(
+            tmp_path,
+            "domain_policies:\n  fin:\n    tenants: [db-a]\n"
+            "    constraints:\n      max_repeat_interval: \"1h\"\n")
+        (pathlib.Path(d) / "db-a.yaml").write_text(
+            "tenants:\n  db-a:\n    mysql_threads_running: \"90\"\n"
+            "    _routing:\n      receiver:\n        type: webhook\n"
+            "        url: https://hooks.example.com/a\n"
+            "      repeat_interval: \"1h30m\"\n", encoding="utf-8")
+        cli_argv("validate_config", "--config-dir", d)
+        with pytest.raises(SystemExit):
+            vc.main()
+        out = capsys.readouterr().out
+        assert "[WARN] schema" in out, out
+        assert "exceeds max '1h'" in out, out
+        assert _generic_schema_hint() not in out, out
+        assert vc.POLICY_ONLY_SCHEMA_WARN_HINT in out, out
+
     def test_an_unknown_key_still_gets_key_advice(self, tmp_path, capsys,
                                                   cli_argv):
         """Must-still-fire control: when the row DOES report keys, the

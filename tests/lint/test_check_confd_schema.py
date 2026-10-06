@@ -438,6 +438,61 @@ class TestQuotingAndDefaultsRouting:
         assert "_defaults.yaml:6: /_routing_enforced/receiver/channel" in result.stderr
 
 
+_WEBHOOK = "    type: webhook\n    url: \"https://a.example.com/h\"\n"
+
+
+class TestRoutingNullAndDefaultsOverrides:
+    """#2521: the schema says what the generator does with these."""
+
+    @pytest.mark.parametrize("keyword", ["overrides", "routes"])
+    def test_tenant_null_list_clears_inheritance_and_validates(
+            self, confd, schema, platform_schema, keyword):
+        _write(confd, "t1.yaml",
+               "tenants:\n  t1:\n    _routing:\n      receiver:\n"
+               "        type: webhook\n        url: \"https://a.example.com/h\"\n"
+               f"      {keyword}: ~\n")
+        _c, viol, _s = validate_dir(confd, schema, jsonschema, platform_schema)
+        assert viol == []
+
+    @pytest.mark.parametrize("keyword", ["overrides", "routes"])
+    def test_profile_null_list_validates(self, confd, keyword):
+        _write(confd, "_routing_profiles.yaml",
+               "routing_profiles:\n  p:\n    receiver:\n      type: webhook\n"
+               "      url: \"https://a.example.com/h\"\n"
+               f"    {keyword}: ~\n")
+        result = _run(confd)
+        assert result.returncode == EXIT_OK, result.stdout + result.stderr
+
+    def test_routing_defaults_overrides_validates(self, confd):
+        """The generator lets tenants inherit `_routing_defaults.overrides`
+        and cli-reference documents it; the schema used to refuse it."""
+        _write(confd, "_defaults.yaml",
+               "_routing_defaults:\n  receiver:\n" + _WEBHOOK
+               + "  repeat_interval: \"1h30m\"\n"
+               "  overrides:\n    - alertname: X\n      group_wait: \"1m\"\n"
+               "      receiver:\n        type: webhook\n"
+               "        url: \"https://b.example.com/h\"\n")
+        _write(confd, "t1.yaml", "tenants:\n  t1: {}\n")
+        result = _run(confd)
+        assert result.returncode == EXIT_OK, result.stdout + result.stderr
+
+    @pytest.mark.parametrize("body,expect", [
+        # The generator drops `_routing_defaults.routes` (blocking under
+        # --validate; da-guard routing_defaults_routes_ignored) — still refused.
+        ("  routes:\n    - match: {severity: critical}\n      receiver:\n"
+         "        type: webhook\n        url: \"https://b.example.com/h\"\n",
+         "'routes' was unexpected"),
+        # A null overrides in _routing_defaults is not the tenant gesture: in a
+        # subdirectory the generator refuses it (routing_defaults_null_below_root).
+        ("  overrides: ~\n", "'overrides' has no value (YAML null); expected array"),
+        ("  group_wait: \"1.5m\"\n", "group_wait"),
+    ], ids=["routes", "null-overrides", "fraction"])
+    def test_routing_defaults_still_refuses(self, confd, schema, platform_schema, body, expect):
+        _write(confd, "_defaults.yaml", "_routing_defaults:\n  receiver:\n" + _WEBHOOK + body)
+        _c, viol, _s = validate_dir(confd, schema, jsonschema, platform_schema)
+        assert len(viol) == 1 and expect in viol[0], viol
+
+
 class TestPlatformSchemaDriftGuard:
     """platform-defaults.schema.json's enumerated _* keys must stay a superset of
     the reserved-key SSOT (_lib_constants.py) — else a newly added reserved key

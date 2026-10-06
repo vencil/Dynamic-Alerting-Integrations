@@ -90,6 +90,10 @@ func TestPutTenant_ReceiverShape(t *testing.T) {
 		// override either: the route generator skips it and da-guard reports
 		// it. This row pins only that tenant-api lets it through.
 		{"override without a receiver is not judged here", webhookOK + "      overrides:\n      - alertname: X\n        group_wait: 1m\n", nil},
+		// #2521: an explicit null list clears what the tenant inherits
+		// (≡ []); the route generator and da-guard read it the same way.
+		{"overrides null", webhookOK + "      overrides: ~\n", nil},
+		{"routes null", webhookOK + "      routes: ~\n", nil},
 		{"unknown main type", "      receiver:\n        type: bogus\n",
 			[]string{"tenants.rs-t._routing.receiver.type"}},
 		{"webhook without url", "      receiver:\n        type: webhook\n",

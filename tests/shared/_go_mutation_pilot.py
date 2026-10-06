@@ -34,7 +34,8 @@ Targets
 MODULE "exporter" — `pkg/config/parse.go`
   - parseHHMM         — pure HH:MM parser, range-checked (6 muts)
   - windowContains    — same/cross-midnight branch (3 muts; was matchTimeWindow)
-  - parsePromDuration — Prometheus-style "5m" / "4h" / "2d" parser (2 muts)
+  - clampDuration     — routing timing guardrail over Alertmanager's
+                        model.ParseDuration (#2490; 2 muts)
 
 MODULE "exporter" — `pkg/config/hierarchy.go`
   - deepMerge         — ADR-017 inheritance, _metadata skip, nil-delete (3 muts)
@@ -290,22 +291,24 @@ MUTATIONS: list[Mutation] = [
         old="if start <= end {",
         new="if start > end {",
     ),
-    # ── parsePromDuration (parse.go) ─────────────────────────────────
+    # ── clampDuration (parse.go) ─────────────────────────────────────
+    # #2490: parsePromDuration (and its two mutations) went with the switch
+    # to Alertmanager's own parser.
     Mutation(
         target_file="pkg/config/parse.go",
         test_target="./...",
-        label="parsePromDuration: 'd' unit returns hours instead of days",
-        fn_name="parsePromDuration",
-        old="return time.Duration(num * 24 * float64(time.Hour)), nil",
-        new="return time.Duration(num * float64(time.Hour)), nil",
+        label="clampDuration: keep an invalid value instead of dropping it",
+        fn_name="clampDuration",
+        old="ignoring\", param, value, tenant, err)\n\t\treturn \"\"",
+        new="ignoring\", param, value, tenant, err)\n\t\treturn value",
     ),
     Mutation(
         target_file="pkg/config/parse.go",
         test_target="./...",
-        label="parsePromDuration: drop length check (1-char input crashes)",
-        fn_name="parsePromDuration",
-        old="if len(s) < 2 {\n\t\treturn 0, fmt.Errorf(\"duration too short: %q\", s)\n\t}",
-        new="if false {\n\t\treturn 0, fmt.Errorf(\"duration too short: %q\", s)\n\t}",
+        label="clampDuration: drop the lower-bound clamp",
+        fn_name="clampDuration",
+        old="if d < bounds[0] {",
+        new="if false {",
     ),
     # ── deepMerge (hierarchy.go) ─────────────────────────────────────
     Mutation(

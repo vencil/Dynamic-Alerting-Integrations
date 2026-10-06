@@ -218,6 +218,12 @@ POLICY_ONLY_SCHEMA_HINT = (
     "each error names (the domain policy file, quote the matcher value in "
     "YAML, e.g. team: \"yes\", or quote / remove the group_by entry), then "
     "re-run.")
+# #2490: the non-strict twin — the same findings as WARNs (non-blocking).
+POLICY_ONLY_SCHEMA_WARN_HINT = (
+    "The findings above are ADR-007 domain-policy warnings, not tenant key "
+    "problems: no unknown key was reported in this run. \u26d4 Ignore the "
+    "generic advice about removing keys: change the value each warning "
+    "names or amend the domain policy.")
 SKIPPED_ENTRY_SCHEMA_HINT = (
     "A line above ends in 'skipping': that setting was dropped as unusable, "
     "not merely flagged. Fix the value it names — e.g. "
@@ -686,6 +692,15 @@ def check_schema(config_dir: str, strict: bool = False) -> dict[str, object]:
     if skipped:
         return _make_result("schema", FAIL, schema_warnings,
                             hint=hint or SKIPPED_ENTRY_SCHEMA_HINT)
+    # #2490: the same set difference as the FAIL branch above — a row whose
+    # only findings are (lenient) domain-policy WARNs reports no key, so
+    # "Remove unknown keys" would be the destructive advice again.
+    from _grar_validate import POLICY_WARN_PREFIX
+    policy_warnings = [w for w in schema_warnings
+                       if w.lstrip().startswith(POLICY_WARN_PREFIX)]
+    if policy_warnings and not [w for w in schema_warnings
+                                if w not in policy_warnings]:
+        hint = POLICY_ONLY_SCHEMA_WARN_HINT
     return _make_result("schema", WARN, schema_warnings, hint=hint)
 
 

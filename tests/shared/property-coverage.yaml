@@ -66,6 +66,8 @@ modules:
       receiver_bool_fields: "#2295 schema lookup (properties referencing yamlBool); pinned by test_pipeline_writes_yaml_bool_words_as_booleans"
       coerce_yaml_bool: "#2295 word → boolean at emission; covered by test_pipeline_writes_yaml_bool_words_as_booleans"
       tenant_id_rule: "ADR-035 schema reader (definitions.tenantId pattern + description, cached, fail-closed); pinned against the schema and the Go copy's case table by tests/shared/test_tenant_id_rule.py"
+      duration_rule: "#2490 schema reader (definitions.duration pattern + minLength + description, cached, fail-closed); pinned against Go model.ParseDuration by tests/shared/test_am_duration_parity.py"
+      am_duration_seconds: "#2490 Alertmanager duration parser; its law is Go model.ParseDuration, so it is table-pinned row by row against tests/shared/am_duration_matrix.json (written by Go) in tests/shared/test_am_duration_parity.py rather than re-derived by a generator"
       is_valid_tenant_id: "#2341 R8 membership in one fixed regex (no numeric/string law beyond it); table-pinned against the Go copy by the tenant_ids table of tests/shared/routing_policy_parity_matrix.json"
 
   scripts/tools/_lib_io.py:
@@ -245,6 +247,7 @@ modules:
       resolve_routing_defaults: "#2326 shallow per-key merge along the chain; example-covered by test_generate_routes_nested_tree.py (deeper wins, receiver replaced whole) and the hier-a parity trees"
       visible_routing_profiles: "#2326 union of the profiles on the chain; example-covered by test_generate_routes_nested_tree.py and the hier-c parity trees"
       skipped_entry_warning: "#2489 one-line constructor marking a dropped-entry line as SkippedEntryWarning (text unchanged), the type blocking_generation_errors tests; per-producer equivalence, mark-survives-to-every-caller and the unwrapped-literal guard pinned by test_grar_skipped_entry_warning.py"
+      replaced_value_warning: "#2490 one-line constructor marking a replaced-value line as ReplacedValueWarning (text unchanged), blocking_generation_errors' fourth category; pinned by test_grar_am_duration.py and test_grar_skipped_entry_warning.py::test_value_alertmanager_refuses_blocks_by_its_own_type"
 
   scripts/tools/ops/_grar_validate.py:
     covered:
@@ -281,6 +284,8 @@ modules:
       _subroute_receiver_type: "#2244 two-branch accessor (dict receiver → type, else ''); exercised through test_critical_escalation.py"
       _renders_on_route: "#2252 two-branch emit predicate (truthy timing / non-empty list group_by) mirroring _apply_timing_params + _grar_routes; example-pinned via list_tenant_subroutes in test_generate_alertmanager_routes.py::TestDomainPolicyOverrideSubroutes"
       _parse_policy_duration: "Pure duration parser (multi-unit/fractional/negative-reject); table-covered by test_grar_strict_hardening.py::TestParsePolicyDuration (23 example cases)"
+      _timing_bound_violations: "#2490 the one max_repeat_interval / min_group_wait comparison both check_domain_policies modes call; table-pinned strict == lenient (only the level differs) by test_grar_policy_duration_strict_lenient_parity.py"
+      _rendered_duration: "#2490 str() then _lib_validation.am_duration_seconds (pinned row by row against Go by test_am_duration_parity.py); strict-policy use pinned by test_grar_am_duration.py and test_grar_strict_hardening.py"
       _validate_version_label: "ADR-024 OQ-6 version-label guard; fully branch-covered by test_generate_alertmanager_routes.py::TestValidateVersionLabel (8 example cases)"
       find_watchdog_suppressing_inhibits: "ADR-025 D1 inhibit-immunity validator; fully covered by test_generate_routes_orchestration.py::TestWatchdogInhibitImmunity (exact/regex/match-all/empty/severity/legacy-map cases)"
       assert_watchdog_inhibit_immunity: "Raises-wrapper over find_watchdog_suppressing_inhibits; covered by TestWatchdogInhibitImmunity + the assemble fail-closed test"

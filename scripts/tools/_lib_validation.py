@@ -105,10 +105,17 @@ def validate_and_clamp(
 ) -> tuple[Union[str, int, float], list[str]]:
     """Validate a timing parameter against guardrails and clamp if needed.
 
+    #2490: *value* is read as Alertmanager reads it (``am_duration_seconds``):
+    ``1h30m`` and ``1d`` are durations, ``1.5h`` / ``30m1h`` / ``1ns`` are
+    not. A clamped value is written by ``format_duration`` (h / m / s only),
+    which Alertmanager reads; a value within bounds is returned unchanged.
+
     Args:
         param: Parameter name (``group_wait``, ``group_interval``,
                ``repeat_interval``).
-        value: Duration string (e.g. ``"30s"``) or numeric seconds.
+        value: Duration string (e.g. ``"30s"``), or numeric seconds (kept
+               for direct callers; the route generator always passes the
+               YAML value's ``str()``, where a bare number has no unit).
         tenant: Tenant identifier (used in warning messages).
 
     Returns:
@@ -121,10 +128,15 @@ def validate_and_clamp(
         return value, warnings
 
     min_sec, max_sec, desc = GUARDRAILS[param]
-    seconds = parse_duration_seconds(value)
+    if isinstance(value, (int, float)) and not isinstance(value, bool):
+        seconds: Optional[float] = float(value)
+    else:
+        seconds = am_duration_seconds(value if isinstance(value, str) else str(value))
 
     if seconds is None:
-        warnings.append(f"  WARN: {tenant}: invalid {param} '{value}', using platform default")
+        warnings.append(f"  WARN: {tenant}: invalid {param} '{value}' "
+                        f"({INVALID_DURATION_HINT}), using platform default "
+                        f"{PLATFORM_DEFAULTS.get(param, value)}")
         return PLATFORM_DEFAULTS.get(param, value), warnings
 
     if seconds < min_sec:
@@ -302,6 +314,87 @@ def tenant_id_rule() -> tuple[re.Pattern[str], str]:
             "is missing; tenant ids cannot be checked")
     _TENANT_ID_RULE = (re.compile(definition["pattern"]), definition["description"])
     return _TENANT_ID_RULE
+
+
+_DURATION_RULE: Optional[tuple[re.Pattern[str], int, str]] = None
+
+# Operator-facing summary of definitions.duration, for invalid-value lines.
+INVALID_DURATION_HINT = ("not an Alertmanager duration: whole numbers with units "
+                         "largest first, e.g. 30s, 5m, 1h30m, 1d")
+
+# prometheus/common model.ParseDuration's units (time.go unitMap), in the
+# order a value must give them. Nanoseconds per unit.
+_AM_DURATION_UNIT_NS: dict[str, int] = {
+    "y": 365 * 86400 * 10**9, "w": 7 * 86400 * 10**9, "d": 86400 * 10**9,
+    "h": 3600 * 10**9, "m": 60 * 10**9, "s": 10**9, "ms": 10**6,
+}
+_AM_DURATION_TOKEN_RE = re.compile(r"([0-9]+)(ms|y|w|d|h|m|s)")
+_INT64_MAX = (1 << 63) - 1
+
+
+def duration_rule() -> tuple[re.Pattern[str], int, str]:
+    """``(compiled pattern, minLength, description)`` of the routing timing
+    syntax (#2490) — tenant-config.schema.json ``definitions.duration``, the
+    one authored copy, which states Alertmanager's ``model.ParseDuration``.
+
+    Match with ``fullmatch`` (Python's ``$`` also matches before a trailing
+    newline). Fails closed like ``tenant_id_rule``: a missing schema or
+    definition raises instead of letting every value through.
+    """
+    global _DURATION_RULE
+    if _DURATION_RULE is not None:
+        return _DURATION_RULE
+    path = _find_tenant_schema()
+    if path is None:
+        raise RuntimeError(
+            f"{_TENANT_SCHEMA_BASENAME} not found beside {__file__} or under "
+            "docs/schemas/ of the project root; durations cannot be checked")
+    with open(path, encoding="utf-8") as f:
+        definition = json.load(f).get("definitions", {}).get("duration")
+    if (not isinstance(definition, dict)
+            or not isinstance(definition.get("pattern"), str)
+            or not definition["pattern"]
+            or not isinstance(definition.get("minLength"), int)
+            or not isinstance(definition.get("description"), str)):
+        raise RuntimeError(
+            f"{path}: definitions.duration with a string pattern, an integer "
+            "minLength and a description is missing; durations cannot be checked")
+    _DURATION_RULE = (re.compile(definition["pattern"]), definition["minLength"],
+                      definition["description"])
+    return _DURATION_RULE
+
+
+def am_duration_seconds(value: Any) -> Optional[float]:
+    """Seconds Alertmanager reads from a routing timing *value*, or ``None``
+    when Alertmanager refuses it (#2490).
+
+    The syntax is ``duration_rule()`` (the schema's ``definitions.duration``);
+    on top of it, the one check a pattern cannot state — prometheus/common
+    ``ParseDuration``'s int64-nanosecond overflow (``"duration out of
+    range"``), computed the way it does: per unit ``v > 2**63 // unit``, then
+    the running sum ``> 2**63 - 1``. Only a ``str`` is a duration: Alertmanager
+    reads the YAML text, and an unquoted ``30`` has no unit.
+
+    ⛔ Not ``parse_duration_seconds``: that one serves the CLI arguments of
+    other tools (``7d``, ``1.5h``, bare numbers) and stays as it is.
+    tests/shared/am_duration_matrix.json (written by Go) pins this function.
+    """
+    if not isinstance(value, str):
+        return None
+    pattern, min_len, _desc = duration_rule()
+    if len(value) < min_len or pattern.fullmatch(value) is None:
+        return None
+    if value == "0":
+        return 0.0
+    total = 0
+    for digits, unit in _AM_DURATION_TOKEN_RE.findall(value):
+        v, mult = int(digits), _AM_DURATION_UNIT_NS[unit]
+        if v > (1 << 63) // mult:
+            return None
+        total += v * mult
+        if total > _INT64_MAX:
+            return None
+    return total / 1e9
 
 
 _YAML_BOOL_REF = "#/definitions/yamlBool"

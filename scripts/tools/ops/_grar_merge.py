@@ -11,6 +11,7 @@ Functions:
   merge_routing_with_defaults(...)  → shallow merge of defaults + tenant routing
   build_receiver_config(...)        → structured receiver dict → AM config dict
   skipped_entry_warning(line)       → mark a dropped-entry WARN line (#2489)
+  replaced_value_warning(line)      → mark a replaced-value WARN line (#2490)
 """
 from __future__ import annotations
 
@@ -21,6 +22,7 @@ _THIS_DIR = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, _THIS_DIR)  # Docker flat layout
 sys.path.insert(0, os.path.join(_THIS_DIR, '..'))  # Repo subdir layout
 from _lib_python import (  # noqa: E402
+    PLATFORM_DEFAULTS,
     validate_and_clamp,
     receiver_exactly_one_problem,
     receiver_optional_problem,
@@ -29,6 +31,7 @@ from _lib_python import (  # noqa: E402
     receiver_required_problem,
     RECEIVER_TYPES,
 )
+from _lib_validation import INVALID_DURATION_HINT, am_duration_seconds  # noqa: E402
 
 
 # ── #2489: "a config entry was dropped as unusable" is a TYPE, not a word ──
@@ -58,11 +61,38 @@ def skipped_entry_warning(line: str) -> SkippedEntryWarning:
     return SkippedEntryWarning(line)
 
 
+# ── #2490: "a config value was replaced as unusable" is a type too ────────
+# A timing value Alertmanager cannot read (``1.5h``, ``30m1h``, ``1ns``) is
+# not dropped with its entry — the route still renders, with the platform
+# default in its place — so it is not a ``SkippedEntryWarning``: explain-route
+# lists those as sub-routes "not in effect", and this route IS in effect.
+# But the config as written cannot be used either, so ``--validate`` and
+# validate-config refuse it: ``blocking_generation_errors`` counts this type
+# as its own category. Same rules as ``SkippedEntryWarning`` — the mark lives
+# on the str object and is lost by any re-formatting.
+class ReplacedValueWarning(str):
+    """A warning-stream line saying a config value was replaced as unusable."""
+
+    __slots__ = ()
+
+
+def replaced_value_warning(line: str) -> ReplacedValueWarning:
+    """Mark *line* (text unchanged) as a replaced-value line — blocking under
+    ``--validate`` and validate-config's ``schema`` / ``routes`` rows."""
+    return ReplacedValueWarning(line)
+
+
 def _apply_timing_params(source_dict: dict, context_name: str) -> tuple[dict, list[str]]:
     """Apply timing parameters with guardrails to a route dict.
 
     Reads group_wait, group_interval, repeat_interval from source_dict,
     validates each against GUARDRAILS, and returns applied values + warnings.
+
+    #2490: a value Alertmanager cannot read (``am_duration_seconds`` is None;
+    the syntax is tenant-config.schema.json ``definitions.duration``) is
+    rendered as the platform default, and its line is a
+    ``ReplacedValueWarning``: rendering continues, ``--validate`` and
+    validate-config refuse the config.
 
     Returns:
         (timing_dict, warnings_list) — timing_dict has clamped param values.
@@ -72,6 +102,15 @@ def _apply_timing_params(source_dict: dict, context_name: str) -> tuple[dict, li
     for param in ("group_wait", "group_interval", "repeat_interval"):
         val = source_dict.get(param)
         if val:
+            if am_duration_seconds(str(val)) is None:
+                default = PLATFORM_DEFAULTS[param]
+                warnings.append(replaced_value_warning(
+                    f"  WARN: {context_name}: invalid {param} '{val}' "
+                    f"({INVALID_DURATION_HINT}), rendering the platform default "
+                    f"{default} in its place; generate-routes --validate and "
+                    "validate-config refuse this config"))
+                timing[param] = default
+                continue
             clamped, param_warnings = validate_and_clamp(param, str(val), context_name)
             warnings.extend(param_warnings)
             if clamped:
