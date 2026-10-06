@@ -74,7 +74,7 @@ class TestLoadTenantInputs:
             "tenant-a.yaml": "tenants:\n  tenant-a:\n    mysql_cpu: '500'\n    _silent_mode: disable\n",
             "team/tenant-b.yaml": "tenants:\n  tenant-b: {}\n",
         })
-        tenants, served = pob.load_tenant_inputs(str(d))
+        tenants, served, routing = pob.load_tenant_inputs(str(d))
         # tenants: 原形狀（寫法，舊拼法照寫），加上繼承；Go 自動補的不在。
         # #2720 之後 effective 是逐閾值 view：同一閾值跨層新舊拼法只留勝出那一層，
         # 所以租戶的 `mysql_cpu: '500'` 蓋掉根的 `mysql_threads_running: 50`，不再並列。
@@ -90,7 +90,7 @@ class TestLoadTenantInputs:
             "_defaults.yaml": "defaults:\n  mysql_connections: 80\n",
             "flat-a.yaml": "mysql_connections: '70'\n",
         })
-        assert pob.load_tenant_inputs(str(d)) == ({}, {})
+        assert pob.load_tenant_inputs(str(d)) == ({}, {}, {})
         assert "WARN: flat-a.yaml: declares no tenant" in capsys.readouterr().err
 
 
@@ -477,7 +477,7 @@ class TestMain:
         monkeypatch.setattr(pob, "detect_cli_lang", lambda: "en")
         # Stub load_tenant_configs to return one tenant.
         monkeypatch.setattr(pob, "load_tenant_inputs",
-                            lambda d: ({"tenant-a": {"x": 1}}, {}))
+                            lambda d: ({"tenant-a": {"x": 1}}, {}, {}))
         monkeypatch.setattr(pob, "load_defaults", lambda d: {"y": 2})
         rc = pob.main(["--config-dir", str(tmp_path), "--dry-run"])
         assert rc == 0
@@ -490,7 +490,7 @@ class TestMain:
     def test_no_url_no_path_returns_caller_error(self, monkeypatch, tmp_path, capsys):
         monkeypatch.setattr(pob, "detect_cli_lang", lambda: "en")
         monkeypatch.setattr(pob, "load_tenant_inputs",
-                            lambda d: ({"tenant-a": {"x": 1}}, {}))
+                            lambda d: ({"tenant-a": {"x": 1}}, {}, {}))
         monkeypatch.setattr(pob, "load_defaults", lambda d: {})
         rc = pob.main(["--config-dir", str(tmp_path)])
         assert rc == EXIT_CALLER_ERROR
@@ -500,7 +500,7 @@ class TestMain:
     def test_opa_url_path_evaluates_via_rest(self, monkeypatch, tmp_path):
         monkeypatch.setattr(pob, "detect_cli_lang", lambda: "en")
         monkeypatch.setattr(pob, "load_tenant_inputs",
-                            lambda d: ({"tenant-a": {"x": 1}}, {}))
+                            lambda d: ({"tenant-a": {"x": 1}}, {}, {}))
         monkeypatch.setattr(pob, "load_defaults", lambda d: {})
 
         called = {}
@@ -526,7 +526,7 @@ class TestMain:
     def test_policy_path_evaluates_via_binary(self, monkeypatch, tmp_path):
         monkeypatch.setattr(pob, "detect_cli_lang", lambda: "en")
         monkeypatch.setattr(pob, "load_tenant_inputs",
-                            lambda d: ({"tenant-a": {"x": 1}}, {}))
+                            lambda d: ({"tenant-a": {"x": 1}}, {}, {}))
         monkeypatch.setattr(pob, "load_defaults", lambda d: {})
 
         called = {}
@@ -550,7 +550,7 @@ class TestMain:
     def test_ci_with_errors_returns_one(self, monkeypatch, tmp_path):
         monkeypatch.setattr(pob, "detect_cli_lang", lambda: "en")
         monkeypatch.setattr(pob, "load_tenant_inputs",
-                            lambda d: ({"tenant-a": {"x": 1}}, {}))
+                            lambda d: ({"tenant-a": {"x": 1}}, {}, {}))
         monkeypatch.setattr(pob, "load_defaults", lambda d: {})
         monkeypatch.setattr(pob, "call_opa_rest", lambda *a, **kw: [{
             "msg": "bad", "severity": "error",
@@ -566,7 +566,7 @@ class TestMain:
     def test_ci_with_only_warnings_returns_zero(self, monkeypatch, tmp_path):
         monkeypatch.setattr(pob, "detect_cli_lang", lambda: "en")
         monkeypatch.setattr(pob, "load_tenant_inputs",
-                            lambda d: ({"tenant-a": {"x": 1}}, {}))
+                            lambda d: ({"tenant-a": {"x": 1}}, {}, {}))
         monkeypatch.setattr(pob, "load_defaults", lambda d: {})
         monkeypatch.setattr(pob, "call_opa_rest", lambda *a, **kw: [{
             "msg": "soft", "severity": "warning",
@@ -582,7 +582,7 @@ class TestMain:
     def test_json_output_emits_json(self, monkeypatch, tmp_path, capsys):
         monkeypatch.setattr(pob, "detect_cli_lang", lambda: "en")
         monkeypatch.setattr(pob, "load_tenant_inputs",
-                            lambda d: ({"tenant-a": {"x": 1}}, {}))
+                            lambda d: ({"tenant-a": {"x": 1}}, {}, {}))
         monkeypatch.setattr(pob, "load_defaults", lambda d: {})
         monkeypatch.setattr(pob, "call_opa_rest", lambda *a, **kw: [])
         rc = pob.main([
@@ -606,7 +606,7 @@ class TestMain:
     def test_zh_no_url_no_path_error_message(self, monkeypatch, tmp_path, capsys):
         monkeypatch.setattr(pob, "detect_cli_lang", lambda: "zh")
         monkeypatch.setattr(pob, "load_tenant_inputs",
-                            lambda d: ({"tenant-a": {"x": 1}}, {}))
+                            lambda d: ({"tenant-a": {"x": 1}}, {}, {}))
         monkeypatch.setattr(pob, "load_defaults", lambda d: {})
         rc = pob.main(["--config-dir", str(tmp_path)])
         assert rc == EXIT_CALLER_ERROR

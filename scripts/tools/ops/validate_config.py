@@ -1090,6 +1090,12 @@ _POLICY_DSL_NO_CONFIG_FILE_HINT = (
 _POLICY_DSL_NO_DA_GUARD_HINT = (
     "Put da-guard on $PATH or set $DA_GUARD_BINARY to it (the da-tools image "
     "ships it as /usr/local/bin/da-guard), then re-run. No policy was evaluated.")
+_POLICY_DSL_DA_GUARD_UNUSABLE_HINT = (
+    "da-guard could not be used: it is not executable, failed to run or timed "
+    "out, or it is too old for `served-values` / `effective` (it fails on a "
+    "minimal tree too). Point $DA_GUARD_BINARY at a current da-guard (the "
+    "da-tools image ships it as /usr/local/bin/da-guard), then re-run. No "
+    "policy was evaluated.")
 _POLICY_DSL_ROUTING_REFUSED_HINT = (
     "A rule reads `_routing`, and the route generator refuses this tree for the "
     "reasons above (`da-tools generate-routes --validate` shows the same): fix "
@@ -1101,7 +1107,21 @@ def check_policy_dsl(config_dir: str, policy_dsl_file: str | None = None) -> dic
 
     Loads policy rules from _defaults.yaml ``_policies`` section and/or
     a standalone policy DSL file, then evaluates against all tenant configs.
+
+    The row carries ``_policy_scope`` (``root_carrier``: whether --config-dir
+    has a root defaults carrier; ``evaluated``: whether tenants were
+    evaluated) for ``_flag_flat_reads`` to word its line by, and only for it:
+    it pops the key, so it never reaches the report (#2115 0-B).
     """
+    scope: dict[str, object] = {"root_carrier": None, "evaluated": False}
+    row = _policy_dsl_row(config_dir, policy_dsl_file, scope)
+    row["_policy_scope"] = scope
+    return row
+
+
+def _policy_dsl_row(config_dir: str, policy_dsl_file: str | None,
+                    scope: dict[str, object]) -> dict[str, object]:
+    """`check_policy_dsl`'s body; records into `scope` what it did."""
     try:
         import policy_engine as pe
     except ImportError:
@@ -1115,6 +1135,7 @@ def check_policy_dsl(config_dir: str, policy_dsl_file: str | None = None) -> dic
     # the nested carriers whose `_policies` this lookup skips are named.
     defaults_path = str(resolve_defaults_file(
         Path(config_dir), skipped_note=pe.POLICIES_SKIPPED_NOTE))
+    scope["root_carrier"] = os.path.isfile(defaults_path)
     if os.path.isfile(defaults_path):
         rules.extend(pe.load_policies(defaults_path))
 
@@ -1182,12 +1203,19 @@ def check_policy_dsl(config_dir: str, policy_dsl_file: str | None = None) -> dic
     except (pe.DaGuardNotFoundError, pe.DaGuardError, pe.ParseFailedError) as exc:
         buf = io.StringIO()
         pe.print_load_error(exc, buf)
+        # By exception type, exit code and a probe — never by da-guard's text.
+        da_guard_at_fault = False
         if isinstance(exc, pe.DaGuardNotFoundError):
-            hint = _POLICY_DSL_NO_DA_GUARD_HINT
+            hint, da_guard_at_fault = _POLICY_DSL_NO_DA_GUARD_HINT, True
         elif isinstance(exc, pe.ParseFailedError):
             # da-guard named the paths it dropped or could not read (its
             # `parse_failed` / `unreadable`) — a dangling symlink included.
             hint = _POLICY_DSL_TREE_UNREADABLE_HINT
+        elif exc.returncode is None or not da_guard_usable():
+            # It could not be run at all (not executable, timed out), or it
+            # fails on a minimal tree too (too old, wrong binary): da-guard
+            # is the problem, not the tree.
+            hint, da_guard_at_fault = _POLICY_DSL_DA_GUARD_UNUSABLE_HINT, True
         elif next(iter_config_files(config_dir), None) is None:
             hint = _POLICY_DSL_NO_CONFIG_FILE_HINT   # no path at all; only picks the advice
         else:
@@ -1197,7 +1225,7 @@ def check_policy_dsl(config_dir: str, policy_dsl_file: str | None = None) -> dic
                              # "\n" only: `splitlines` also cuts at U+2028 etc.,
                              # which can sit in a file name (_lib_tenant_values).
                              *(ln for ln in buf.getvalue().split("\n") if ln)],
-                            caller_error=isinstance(exc, pe.DaGuardNotFoundError),
+                            caller_error=da_guard_at_fault,
                             hint=hint)
     except pe.RoutingTreeRefused as exc:
         return _make_result("policy_dsl", FAIL,
@@ -1210,6 +1238,7 @@ def check_policy_dsl(config_dir: str, policy_dsl_file: str | None = None) -> dic
                             ["No tenant configs found — skipped"])
 
     result = pe.evaluate_policies(rules, tenant_configs, inputs.aliases)
+    scope["evaluated"] = True
 
     details = []
     for v in result.violations:
@@ -1482,6 +1511,7 @@ def _root_defaults_value_detail(rel: str, key: str | None, raw: str,
 #: file (#2386); the list lives in _lib_constants (shared with the policy
 #: readers since #2115 0-B).
 from _lib_constants import TOP_LEVEL_READ_ELSEWHERE  # noqa: E402
+from _lib_tenant_values import da_guard_usable  # noqa: E402  (#2115 0-B)
 
 #: Keys the defaults-chain merge drops at every level, so they act in no
 #: shape (#2386): Go's ``config.MergeDroppedKeys``, pinned by
@@ -2263,11 +2293,18 @@ FLAT_READER_HINT = (
 #: defaults the tenants inherit.
 POLICY_DSL_NESTED_HINT = (
     "Policy-as-Code takes `_policies` only from the root defaults carrier; the "
-    "`_defaults.yaml` files named above are not read for `_policies` (the "
-    "tenants under them ARE evaluated). If any of them holds `_policies`, move "
-    "those rules to the root carrier or pass them with --policy-dsl. Do not "
-    "flatten the tree or point --config-dir at a subdirectory: that drops the "
-    "root defaults.")
+    "`_defaults.yaml` files named above are not read for `_policies`. If any of "
+    "them holds `_policies`, move those rules to the root carrier or pass them "
+    "with --policy-dsl. Do not flatten the tree or point --config-dir at a "
+    "subdirectory: that drops the root defaults.")
+#: The same, for a --config-dir with no root defaults carrier (#2115 0-B):
+#: there is no root default to drop, and the carrier has to be created.
+POLICY_DSL_NESTED_NO_ROOT_HINT = (
+    "Policy-as-Code takes `_policies` only from the root defaults carrier, and "
+    "--config-dir has none; the `_defaults.yaml` files named above are not read "
+    "for `_policies`. If any of them holds `_policies`, create a `_defaults.yaml` "
+    "at the root of --config-dir holding those rules, or pass them with "
+    "--policy-dsl.")
 
 #: Where `FLAT_READER_HINT` points. A row carrying that hint gets THIS link
 #: instead of its check's `_CHECK_HINTS` page: the advice and the page it
@@ -2311,6 +2348,7 @@ def _flag_flat_reads(row: dict[str, object], flat_reads: list[FlatRead],
     the detail line, because "3 findings" on a tree where the reader
     skipped part of the files is not the whole count either.
     """
+    scope = row.pop("_policy_scope", None) or {}
     by_dir: dict[str, tuple[str, dict[str, None]]] = {}
     for rec in flat_reads:
         d_abs = os.path.abspath(rec.directory)
@@ -2330,10 +2368,12 @@ def _flag_flat_reads(row: dict[str, object], flat_reads: list[FlatRead],
         if row.get("check") == "policy_dsl":
             # #2115 0-B: policy_dsl reads its tenants from the whole tree; the
             # one flat read left is the root-carrier lookup of `_policies`.
+            # Only a row that evaluated tenants says so (#2115 0-B).
+            evaluated = ("; tenants are evaluated from the whole tree"
+                         if scope.get("evaluated") else "")
             line = (f"{len(rels)} defaults file(s) in subdirectories of {where} "
                     f"are not read for `_policies` (rules come from the root "
-                    f"defaults carrier; tenants are evaluated from the whole "
-                    f"tree): {', '.join(shown)}{more}")
+                    f"defaults carrier only{evaluated}): {', '.join(shown)}{more}")
         else:
             line = (f"{len(rels)} config file(s) in subdirectories of {where} were "
                     f"SKIPPED by this check (its reader is flat — top level only): "
@@ -2346,8 +2386,12 @@ def _flag_flat_reads(row: dict[str, object], flat_reads: list[FlatRead],
         if row["status"] == PASS:
             row["status"] = WARN
             if not row.get("hint"):
-                row["hint"] = (POLICY_DSL_NESTED_HINT if row.get("check") == "policy_dsl"
-                               else FLAT_READER_HINT)
+                if row.get("check") != "policy_dsl":
+                    row["hint"] = FLAT_READER_HINT
+                elif scope.get("root_carrier") is False:
+                    row["hint"] = POLICY_DSL_NESTED_NO_ROOT_HINT
+                else:
+                    row["hint"] = POLICY_DSL_NESTED_HINT
                 row["hint_docs"] = FLAT_READER_DOCS
     return row
 

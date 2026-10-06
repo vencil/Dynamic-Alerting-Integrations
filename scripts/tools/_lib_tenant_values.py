@@ -162,6 +162,7 @@ __all__ = [
     "MISSING_BINARY_MESSAGE",
     "ParseFailedError",
     "exit_on_served_values_error",
+    "da_guard_usable",
     "is_tenant_reserved_key",
     "load_effective",
     "load_served_tree",
@@ -677,3 +678,25 @@ def written_config(effective: TenantEffective, served: TenantValues) -> dict[str
         if written:
             out["_metadata"] = written
     return out
+
+
+def da_guard_usable(binary: str | None = None, timeout: float = 60) -> bool:
+    """Does da-guard answer `served-values --schedules` and `effective` on a
+    minimal tree (one file that declares no tenant)? For a caller that
+    must tell "da-guard is broken or too old" from "this tree is refused"
+    after a `DaGuardError`: the answer comes from exit codes and the JSON
+    alone, never from da-guard's text."""
+    import tempfile
+    with tempfile.TemporaryDirectory(prefix="da-guard-probe-") as d:
+        # A file that declares no tenant: rc 0 from a working da-guard
+        # (listed in `skipped`), nothing for the load to merge.
+        probe = Path(d, "probe.yaml")
+        with open(probe, "w", encoding="utf-8", newline="\n") as fh:
+            fh.write("tenants: {}\n")
+        os.chmod(probe, 0o600)   # a temp file only this process reads
+        try:
+            load_served_tree(d, binary=binary, timeout=timeout, schedules=True)
+            load_effective(d, binary=binary, timeout=timeout)
+        except (DaGuardError, DaGuardNotFoundError, ParseFailedError):
+            return False
+    return True

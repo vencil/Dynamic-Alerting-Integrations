@@ -553,7 +553,7 @@ def test_policy_dsl_row_names_only_the_unread_policies(nested_defaults, tmp_path
         return
     assert row["status"] == vc.WARN and row["skipped_nested_files"] == ["team/_defaults.yaml"], row
     assert ("1 defaults file(s) in subdirectories of --config-dir are not read for `_policies` "
-            "(rules come from the root defaults carrier; tenants are evaluated from the whole "
+            "(rules come from the root defaults carrier only; tenants are evaluated from the whole "
             "tree): team/_defaults.yaml") in row["details"], row
     assert row["hint"] == vc.POLICY_DSL_NESTED_HINT, row
 
@@ -584,3 +584,107 @@ def test_dangling_symlink_hint_is_tree_unreadable(tmp_path):
     row = vc.check_policy_dsl(str(conf_d), str(_policy(tmp_path)))
     assert row["status"] == vc.FAIL and row["hint"] == vc._POLICY_DSL_TREE_UNREADABLE_HINT, row
     assert any("t.yaml (stat_error)" in d for d in row["details"]), row
+
+
+# ── 第 5 輪（盲審 F1／F3／F4）──────────────────────────────────────────────
+
+_NESTED_TREE = {
+    "_defaults.yaml": "defaults:\n  mysql_connections: 100\n",
+    "team/_defaults.yaml": "defaults:\n  mysql_connections: 90\n",
+    "team/tenant-a.yaml": "tenants:\n  tenant-a:\n    mysql_connections: \"5\"\n",
+}
+
+
+def _fake_da_guard(tmp_path: Path, kind: str) -> Path:
+    exe = tmp_path / f"da-guard-{kind}"
+    if kind == "not-executable":   # rv6/fakedg: a file, mode 644
+        exe.write_text("#!/bin/sh\nexit 0\n", encoding="utf-8")
+        exe.chmod(0o644)
+    else:                          # rv6/olddg: does not know the subcommand
+        exe.write_text('#!/bin/sh\necho "unknown command $1" >&2; exit 2\n', encoding="utf-8")
+        exe.chmod(0o755)
+    return exe
+
+
+@pytest.mark.skipif(sys.platform == "win32", reason="POSIX shell stub and file modes")
+@pytest.mark.parametrize("kind", ["not-executable", "unknown-subcommand"])
+def test_unusable_da_guard_is_a_caller_error_not_a_tree_finding(kind, tmp_path, monkeypatch):
+    """F1：da-guard 存在但不能執行，或太舊不認得 `served-values`——不是樹的問題，是 da-guard
+    的問題：caller_error、提示指向 da-guard。分類靠例外型別、結束碼與對最小樹的探測，
+    不看 da-guard 印了什麼。"""
+    conf_d = _tree(tmp_path, _NESTED_TREE)
+    monkeypatch.setenv("DA_GUARD_BINARY", str(_fake_da_guard(tmp_path, kind)))
+    row = vc.check_policy_dsl(str(conf_d), str(_policy(tmp_path, _LTE_10)))
+    assert row["status"] == vc.FAIL and row["caller_error"] is True, row
+    assert row["hint"] == vc._POLICY_DSL_DA_GUARD_UNUSABLE_HINT, row
+
+
+def test_tree_refused_by_a_working_da_guard_is_not_blamed_on_da_guard(tmp_path):
+    """F1 對照組：da-guard 正常、但拒收這棵樹（F0：根 defaults 與租戶都寫 `X_critical`）
+    ——仍是樹的問題：caller_error 為 False，提示是 TREE_UNREADABLE。"""
+    conf_d = _tree(tmp_path, {
+        "_defaults.yaml": "defaults:\n  mysql_connections: 80\n  mysql_connections_critical: 95\n",
+        "tenant-a.yaml": "tenants:\n  tenant-a:\n    mysql_connections_critical: 95\n",
+    })
+    row = vc.check_policy_dsl(str(conf_d), str(_policy(tmp_path, _LTE_10)))
+    assert row["status"] == vc.FAIL and row["caller_error"] is False, row
+    assert row["hint"] == vc._POLICY_DSL_TREE_UNREADABLE_HINT, row
+
+
+def test_nested_hint_without_a_root_carrier_says_to_create_one(tmp_path):
+    """F3（rv6/c4）：根目錄沒有 `_defaults.yaml` 時，提示不說「drops the root defaults」，
+    改說在根目錄建立 `_defaults.yaml` 放 `_policies`。"""
+    files = {k: v for k, v in _NESTED_TREE.items() if k != "_defaults.yaml"}
+    conf_d = str(_tree(tmp_path, files))
+    row = vc._run_check("policy_dsl", vc.check_policy_dsl, conf_d, str(_policy(tmp_path, _LTE_10)),
+                        _config_dir=conf_d)
+    assert row["status"] == vc.WARN and row["hint"] == vc.POLICY_DSL_NESTED_NO_ROOT_HINT, row
+    assert "drops the root defaults" not in row["hint"], row
+    assert "_policy_scope" not in row, row   # internal; never reaches the report
+
+
+@pytest.mark.parametrize("case", ["no-policies", "bad-policy-dsl"])
+def test_row_that_evaluated_no_tenant_does_not_say_it_did(case, tmp_path):
+    """F4（rv6/c1、c6）：沒有評估任何租戶的列（No _policies defined、--policy-dsl 參數錯誤）
+    不說「tenants are evaluated」，只說子目錄的 `_policies` 不被讀。"""
+    conf_d = str(_tree(tmp_path, _NESTED_TREE))
+    dsl = None if case == "no-policies" else str(tmp_path / "missing.yaml")
+    row = vc._run_check("policy_dsl", vc.check_policy_dsl, conf_d, dsl, _config_dir=conf_d)
+    line = [d for d in row["details"] if "not read for `_policies`" in d]
+    assert line and "tenants are evaluated" not in line[0], row
+
+
+def test_row_that_evaluated_tenants_says_so(tmp_path):
+    """F4 對照組：真的評估了租戶的列才附加那半句。"""
+    conf_d = str(_tree(tmp_path, _NESTED_TREE))
+    row = vc._run_check("policy_dsl", vc.check_policy_dsl, conf_d, str(_policy(tmp_path, _LTE_10)),
+                        _config_dir=conf_d)
+    assert any("tenants are evaluated from the whole tree" in d for d in row["details"]), row
+
+
+def test_opa_input_routing_is_what_policy_engine_reads(tmp_path, capsys):
+    """CodeRabbit（PR #2722）：OPA 另加 `input.routing`——路由產生器解析後的結果，與
+    policy_engine 讀 `_routing` 時相同；`input.tenants` 的 `_routing` 維持寫法（owner 裁決）。"""
+    conf_d = _tree(tmp_path, {
+        "_defaults.yaml": ("defaults:\n  mysql_connections: 80\n_routing_defaults:\n  receiver:\n"
+                           "    type: webhook\n    url: https://hooks.example.com/{{tenant}}\n"
+                           "  group_wait: 30s\n"),
+        "tenant-a.yaml": "tenants:\n  tenant-a:\n    _routing:\n      group_wait: 10s\n",
+        "team/tenant-b.yaml": "tenants:\n  tenant-b: {}\n",
+    })
+    views = pe.load_policy_inputs(str(conf_d), routing=True).views
+    assert pob.main(["--config-dir", str(conf_d), "--dry-run"]) == 0
+    doc = json.loads(capsys.readouterr().out)
+    assert doc["routing"] == {t: v["_routing"] for t, v in views.items()}, doc["routing"]
+    assert doc["routing"]["tenant-b"]["receiver"]["url"] == "https://hooks.example.com/tenant-b"
+    assert doc["routing"]["tenant-a"]["group_wait"] == "10s"
+    assert doc["tenants"]["tenant-a"]["_routing"] == {"group_wait": "10s"}   # 寫法
+    assert "_routing" not in doc["tenants"]["tenant-b"]
+
+
+def test_opa_input_routing_key_is_always_there(tmp_path, capsys):
+    """沒有任何路由設定的樹：`input.routing` 照樣在，每個租戶一份 `{}`。"""
+    conf_d = _tree(tmp_path, {"_defaults.yaml": "defaults:\n  mysql_connections: 80\n",
+                              "tenant-a.yaml": "tenants:\n  tenant-a: {}\n"})
+    assert pob.main(["--config-dir", str(conf_d), "--dry-run"]) == 0
+    assert json.loads(capsys.readouterr().out)["routing"] == {"tenant-a": {}}

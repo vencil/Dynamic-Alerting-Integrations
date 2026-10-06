@@ -44,6 +44,14 @@ it here: it is the number that alerts. A file the exporter drops or cannot
 read is exit 2, as is a tree da-guard refuses; a file it reads but serves no
 tenant from is a WARN line.
 
+`routing` (#2115 0-B): per tenant, `_routing` as the route generator
+resolves it (`_routing_defaults` level by level, routing profile, the
+tenant's `_routing`, merged; `{{tenant}}` substituted) — what policy_engine
+reads for a `_routing` target. The key is always there; a tenant with
+nothing to route has `{}`. A rego rule judging routing reads it here
+(`input.tenants[t]._routing` stays as written). A tree the route generator
+refuses is exit 2.
+
 OPA Response format:
   { "result": [{"msg": "...", "severity": "error|warning", "tenant": "...", "field": "..."}] }
 
@@ -91,6 +99,9 @@ except ImportError:
         exit_on_yaml_file_error,
         format_json_report,
     )
+# #2115 0-B: `input.routing` is the route generator's resolution, read the
+# way policy_engine reads `_routing`.
+from policy_engine import RoutingTreeRefused, resolved_routing  # noqa: E402
 from _lib_tenant_values import (  # noqa: E402  (#2115 0-B)
     ServedValuesError,
     exit_on_served_values_error,
@@ -142,13 +153,15 @@ class PolicyResult:
 # ---------------------------------------------------------------------------
 # Config loading
 # ---------------------------------------------------------------------------
-def load_tenant_inputs(config_dir: str) -> tuple[dict[str, dict], dict[str, dict]]:
-    """`(tenants, served)` for the OPA input (#2115 0-B; see the module
-    docstring): `tenants` from `da-guard effective`, `served` from
-    `da-guard served-values`. Prints da-guard's stderr and one WARN per file
-    the load serves no tenant from. Raises what `load_served_tree` /
-    `load_effective` raise, and `ServedValuesError` when the two disagree on
-    the tenants; `main` turns each into exit 2 (`exit_on_served_values_error`)."""
+def load_tenant_inputs(config_dir: str) -> tuple[dict[str, dict], dict[str, dict], dict[str, dict]]:
+    """`(tenants, served, routing)` for the OPA input (#2115 0-B; see the
+    module docstring): `tenants` from `da-guard effective`, `served` from
+    `da-guard served-values`, `routing` from the route generator
+    (`policy_engine.resolved_routing`; `{}` for a tenant with nothing to
+    route). Prints da-guard's stderr and one WARN per file the load serves no
+    tenant from. Raises what `load_served_tree` / `load_effective` raise,
+    `ServedValuesError` when the two disagree on the tenants, and
+    `RoutingTreeRefused`; `main` turns each into exit 2."""
     tree = load_served_tree(config_dir)
     print_load_warnings(tree)
     effective = load_effective(config_dir)
@@ -159,7 +172,9 @@ def load_tenant_inputs(config_dir: str) -> tuple[dict[str, dict], dict[str, dict
     tenants = {t: written_config(e, tree.tenants[t]) for t, e in sorted(effective.items())}
     served = {t: {k: v.values[k] for k in sorted(v.severities)}
               for t, v in sorted(tree.tenants.items())}
-    return tenants, served
+    routed = resolved_routing(config_dir) if tenants else {}
+    routing = {t: routed.get(t, {}) for t in tenants}
+    return tenants, served, routing
 
 
 def load_defaults(config_dir: str) -> dict[str, Any]:
@@ -195,6 +210,7 @@ def build_opa_input(
     rule_packs: Optional[list[str]] = None,
     platform_version: str = "v2.3.0",
     served: Optional[dict[str, dict]] = None,
+    routing: Optional[dict[str, dict]] = None,
 ) -> dict[str, Any]:
     """Build OPA input JSON from tenant configs.
 
@@ -206,6 +222,8 @@ def build_opa_input(
         platform_version: platform version string
         served: {tenant_name: {threshold_key: value}}, what /metrics serves
             (`load_tenant_inputs`); `{}` when omitted
+        routing: {tenant_name: routing_config}, the route generator's
+            resolution (`load_tenant_inputs`); `{}` when omitted
 
     Returns:
         OPA input dict ready for JSON serialization
@@ -223,6 +241,7 @@ def build_opa_input(
     return {
         "tenants": tenant_configs,
         "served": served if served is not None else {},
+        "routing": routing if routing is not None else {},
         "defaults": defaults_thresholds,
         "rule_packs": rule_packs,
         "platform_version": platform_version,
@@ -522,7 +541,14 @@ def main(argv: Optional[list[str]] = None) -> int:
     args = parser.parse_args(argv)
 
     # Load configs
-    tenant_configs, served = load_tenant_inputs(args.config_dir)
+    try:
+        tenant_configs, served, routing = load_tenant_inputs(args.config_dir)
+    except RoutingTreeRefused as exc:
+        print("ERROR: the route generator refuses this tree, so `input.routing` "
+              "cannot be built:", file=sys.stderr)
+        for line in exc.lines:
+            print(safe_label(line), file=sys.stderr)
+        return EXIT_CALLER_ERROR
     defaults = load_defaults(args.config_dir)
 
     if not tenant_configs:
@@ -561,6 +587,7 @@ def main(argv: Optional[list[str]] = None) -> int:
         rule_packs=None,
         platform_version="v2.3.0",
         served=served,
+        routing=routing,
     )
 
     # Dry-run mode
