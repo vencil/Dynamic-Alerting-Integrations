@@ -6,17 +6,17 @@ package config
 // re-deriving "where does this value come from" with their own walker.
 //
 // ⛔ NOT A SECOND MERGE. The value of every key is the resolver's own
-// (computeEffectiveConfigDocDetailed); this file only names, per key of that
-// result, the highest-precedence layer that wrote it, reading each layer as
-// the merge read it:
+// (effectiveView, #2115: one spelling per threshold, the winning layer's);
+// this file only names, per key of that result, the highest-precedence layer
+// that wrote it, reading each layer as the merge read it:
 //
 //   - the defaults chain: each level's block as ParseChainDefaults parsed it
 //     (the parse the merge folds), deepest level writing the key non-null;
 //   - the profile layer: the merge's own attribution (ProfileOverlay);
 //   - the platform layer: the merge's own attribution (PlatformOverlay),
 //     which names the CANONICAL spelling — mapped back to the spelling the
-//     platform block wrote, since the effective config keeps each layer's
-//     own spelling;
+//     platform block wrote, since the effective config keeps the winning
+//     layer's own spelling;
 //   - the tenant file: its raw block (TenantOverridesRaw), key written
 //     non-null.
 //
@@ -26,9 +26,9 @@ package config
 // deletes the value, so the key is not in the effective config at all.
 //
 // ⚠️ Granularity is the TOP-LEVEL key, like PlatformOverlay / ProfileOverlay.
-// A mapping value is merged leaf by leaf across layers; its source names the
-// highest layer that wrote any part of it, and lower layers may have
-// supplied other leaves.
+// A schedule is one layer's value, whole (#2115). Any other mapping value is
+// merged leaf by leaf across layers; its source names the highest layer that
+// wrote any part of it, and lower layers may have supplied other leaves.
 
 import (
 	"fmt"

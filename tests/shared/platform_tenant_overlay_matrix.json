@@ -19,7 +19,8 @@
     "severities joined by ',', '' = none); null = tenant absent from the exporter.",
     "walker = the walker plane (#2019): /effective (pkg/config ResolveEffective,",
     "also da-guard and the exporter's merged_hash) and describe_tenant.py --show-sources:",
-    "{effective_config, platform_overlay}; platform_overlay null = the field is omitted;",
+    "{effective_config, platform_overlay} (describe_tenant: see #2115 below for the rows where",
+    "it differs); platform_overlay null = the field is omitted;",
     "walker null = tenant not found. Go asserts metric/exporter_dedup/silent_mode and",
     "walker (and that walker agrees with those three); Python dedup/group_wait and walker.",
     "A tenant file whose FIRST document does not parse declares nothing on either",
@@ -62,20 +63,22 @@
     "mysql_threads_running Go also requires the legacy twin (metric=\"cpu\") to carry",
     "the same value. The tenant file wins per THRESHOLD, not per spelling: a tenant",
     "mysql_cpu beats a platform mysql_threads_running and vice versa, and",
-    "platform_overlay names the canonical spelling. The walker effective_config keeps",
-    "each layer's own spelling (not canonicalized), so Go reads the legacy spelling",
-    "first when checking it against /metrics - sound only because no a-row sets a",
-    "legacy spelling in the defaults chain. Measured on main f806e092 before the fix:",
+    "platform_overlay names the canonical spelling. Measured on main f806e092 before the fix:",
     "a1 served 70 on /metrics and the tenant-api core, walker attributed",
     "mysql_threads_running to _defaults.yaml.",
     "#2414 s-rows (subtree `_defaults.yaml` x the #1231 alias spellings): a tenant writing",
     "either spelling keeps its own value on /metrics whatever spelling a subtree level uses,",
     "and with no tenant key the DEEPEST level writing the threshold is served (canonical wins",
-    "only inside one level). The walker column keeps each layer's own spelling on both sides",
-    "(merged_hash is unchanged). Measured on main ca7adc10 before the fix: s1 served 40, s3 40.",
-    "The mirror of s1 (subtree legacy, tenant canonical) is pinned by da-guard's",
-    "subtree_alias_guard_test.go only: the walker column keeps both spellings there and",
-    "assertWalkerAgreesWithMetrics reads the legacy one, which is not what /metrics serves.",
+    "only inside one level). Measured on main ca7adc10 before the fix: s1 served 40, s3 40.",
+    "#2115: walker.effective_config (/effective, da-guard effective) carries ONE key per",
+    "threshold, in the spelling of the layer that wins on /metrics, and a schedule the winning",
+    "layer writes whole (w1: a tenant `{default: ...}` is not merged with a subtree schedule's",
+    "windows). Go requires exactly one spelling of metric_key there and that its value is the",
+    "metric column. merged_hash is unchanged: it stays the hash of the leaf-by-leaf merge.",
+    "describe_tenant.py does not follow yet: walker.describe_tenant_effective_config (optional)",
+    "is what it reports where it differs - each layer's own spelling side by side, the windows",
+    "merged; Python asserts it in place of effective_config. Measured on main fc5438c4 before",
+    "the fix: a1/a4/a5/s1/s2/s3/s4 /effective carried both spellings, w1 the subtree's window.",
     "#2518 n-rows: a threshold written as null (tenant file, root platform `tenants:`",
     "entry or profile) is no write on every plane: the layer below shows through.",
     "#2708 n5-n9: `{default: null}` (also with `overrides: []`) and no window is that same",
@@ -1595,6 +1598,9 @@
           "silent_mode": "",
           "walker": {
             "effective_config": {
+              "mysql_cpu": "90"
+            },
+            "describe_tenant_effective_config": {
               "mysql_cpu": "90",
               "mysql_threads_running": 30
             },
@@ -1671,6 +1677,9 @@
           "silent_mode": "",
           "walker": {
             "effective_config": {
+              "mysql_cpu": "90"
+            },
+            "describe_tenant_effective_config": {
               "mysql_cpu": "90",
               "mysql_threads_running": 30
             },
@@ -1697,6 +1706,9 @@
           "silent_mode": "",
           "walker": {
             "effective_config": {
+              "mysql_cpu": 70
+            },
+            "describe_tenant_effective_config": {
               "mysql_cpu": 70,
               "mysql_threads_running": 30
             },
@@ -1731,6 +1743,9 @@
           "silent_mode": "",
           "walker": {
             "effective_config": {
+              "mysql_cpu": "35"
+            },
+            "describe_tenant_effective_config": {
               "mysql_cpu": "35",
               "mysql_threads_running": 40
             },
@@ -1758,6 +1773,9 @@
           "silent_mode": "",
           "walker": {
             "effective_config": {
+              "mysql_cpu": 40
+            },
+            "describe_tenant_effective_config": {
               "mysql_threads_running": 30,
               "mysql_cpu": 40
             },
@@ -1786,8 +1804,79 @@
           "silent_mode": "",
           "walker": {
             "effective_config": {
+              "mysql_cpu": 50
+            },
+            "describe_tenant_effective_config": {
               "mysql_threads_running": 40,
               "mysql_cpu": 50
+            },
+            "platform_overlay": null,
+            "profile_overlay": null
+          }
+        }
+      }
+    },
+    {
+      "name": "s4-alias-tenant-canonical-beats-subtree-legacy",
+      "metric_key": "mysql_threads_running",
+      "files": {
+        "_defaults.yaml": "defaults:\n  mysql_threads_running: 30\n",
+        "sub/_defaults.yaml": "defaults:\n  mysql_cpu: 40\n",
+        "sub/tx.yaml": "tenants:\n  tx:\n    mysql_threads_running: \"50\"\n"
+      },
+      "expect": {
+        "tx": {
+          "metric": 50,
+          "tenant_api": null,
+          "dedup": "enable",
+          "group_wait": null,
+          "exporter_dedup": "enable",
+          "silent_mode": "",
+          "walker": {
+            "effective_config": {
+              "mysql_threads_running": "50"
+            },
+            "describe_tenant_effective_config": {
+              "mysql_cpu": 40,
+              "mysql_threads_running": "50"
+            },
+            "platform_overlay": null,
+            "profile_overlay": null
+          }
+        }
+      }
+    },
+    {
+      "name": "w1-tenant-schedule-replaces-subtree-schedule-whole",
+      "files": {
+        "_defaults.yaml": "defaults:\n  mysql_connections: 100\n",
+        "sub/_defaults.yaml": "defaults:\n  mysql_connections:\n    default: \"150\"\n    overrides:\n      - window: \"22:00-06:00\"\n        value: \"300\"\n",
+        "sub/tx.yaml": "tenants:\n  tx:\n    mysql_connections:\n      default: \"160\"\n"
+      },
+      "expect": {
+        "tx": {
+          "metric": 160,
+          "tenant_api": null,
+          "dedup": "enable",
+          "group_wait": null,
+          "exporter_dedup": "enable",
+          "silent_mode": "",
+          "walker": {
+            "effective_config": {
+              "mysql_connections": {
+                "default": "160"
+              }
+            },
+            "describe_tenant_effective_config": {
+              "mysql_connections": {
+                "default": "160",
+                "overrides": [
+                  {
+                    "window": "22:00-06:00",
+                    "value": "300"
+                  }
+                ]
+              }
             },
             "platform_overlay": null,
             "profile_overlay": null
