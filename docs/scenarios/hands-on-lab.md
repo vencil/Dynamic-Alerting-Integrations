@@ -258,7 +258,7 @@ docker run --rm \
        5 routes, 5 receivers, 5 inhibit_rules
 
 [PASS] profiles
-       5 tenants scanned, 0 profile refs, 0 profiles defined
+       5 tenants scanned, 0 profile refs, 0 profiles defined in _profiles.yaml
 
 [PASS] policy_dsl
        No _policies defined — skipped
@@ -275,7 +275,7 @@ docker run --rm \
 結束碼是 `0`：只有任一檢查項為 `fail` 時才會非零（`1`），WARN 不會讓它失敗，所以 CI 直接呼叫即可，不需要另加旗標。
 
 - `schema` 這一列也檢查 `_routing_profile` 的引用與 domain policy：少了 `_routing_profiles.yaml`，這裡會出現 `_routing_profile references unknown profile`；少了 `_domain_policy.yaml`，finance 的約束就不存在，不會有任何提示。
-- `profiles` 這一列管的是閾值 profile（`_profiles.yaml` 與租戶檔的 `_profile`），不是 routing profile，所以練習 2 做完它仍是 `0 profiles defined`。
+- `profiles` 這一列管的是閾值 profile（`_profiles.yaml` 與租戶檔的 `_profile`），不是 routing profile，所以練習 2 做完它仍是 `0 profiles defined in _profiles.yaml`。
 
 ⚠️ 如果 `tenant_uniqueness` 顯示 `0 tenant(s)`、`routes` 顯示 `0 routes`，代表你把練習 2 的片段貼成檔案時漏掉了 `tenants:` 與 `<租戶名稱>:` 兩層外框。這時每一項都是 PASS，但其實什麼都沒驗到。
 

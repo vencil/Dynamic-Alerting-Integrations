@@ -10,6 +10,9 @@
 一個沒有定義的 profile）只寫在根 `defaults:`、平台檔 `tenants:`、租戶檔、子樹
 `_defaults.yaml` 其中之一；tenant-b 是對照組（`_profile: nope` 永遠寫在自己的租戶檔）。
 
+profiles 列只跑 `da-guard effective`（不跑 served-values）：沒有租戶的檔取自 effective 的
+`skipped`，進列的明細。
+
 舊讀取端（33d56451 以前）只讀各租戶檔本身的 `_profile`、只認 `_profiles.yaml` 裡的
 profile、把平面格式檔當租戶、對 exporter 丟掉的檔照樣回報：所以只有「租戶檔」那格答對。
 
@@ -123,7 +126,7 @@ def test_profile_defined_outside_profiles_yaml_is_bound(tmp_path):
     assert tv.load_effective(conf_d)["tenant-a"].profile == "gold"   # 前提
     row = vc.check_profiles(str(conf_d))
     assert row["status"] == vc.PASS, row
-    assert row["details"] == ["1 tenants scanned, 1 profile refs, 0 profiles defined"], row
+    assert row["details"] == ["1 tenants scanned, 1 profile refs, 0 profiles defined in _profiles.yaml"], row
 
 
 # ── 遞迴保留：子目錄的租戶照樣被檢查與計數 ───────────────────────────────
@@ -137,25 +140,69 @@ def test_nested_tenant_is_checked_and_counted(tmp_path):
     })
     row = vc.check_profiles(str(conf_d))
     assert row["status"] == vc.PASS, row
-    assert row["details"] == ["2 tenants scanned, 1 profile refs, 1 profiles defined"], row
+    assert row["details"] == ["2 tenants scanned, 1 profile refs, 1 profiles defined in _profiles.yaml"], row
     (conf_d / "team" / "deep" / "tenant-a.yaml").write_text(
         "tenants:\n  tenant-a:\n    _profile: nope\n", encoding="utf-8")
     assert _named(vc.check_profiles(str(conf_d))) == {"tenant-a"}
 
 
-# ── 平面格式檔（R3）：不是租戶，照 served 的 skipped 具名 WARN ───────────────
+# ── 平面格式檔（R3）：不是租戶，照 effective 的 skipped 在列的明細具名（F4）──────
 
-def test_flat_file_is_not_a_tenant_and_is_named(tmp_path, capsys):
-    conf_d = _tree(tmp_path, {
-        "_defaults.yaml": _BASE,
-        "_profiles.yaml": _PROFILES,
-        "flat-a.yaml": "_profile: nope\nmysql_connections: 5\n",
-        "tenant-b.yaml": "tenants:\n  tenant-b: {}\n",
-    })
+_FLAT_TREE = {
+    "_defaults.yaml": _BASE,
+    "_profiles.yaml": _PROFILES,
+    "flat-a.yaml": "_profile: nope\nmysql_connections: 5\n",
+    "tenant-b.yaml": "tenants:\n  tenant-b: {}\n",
+}
+_FLAT_LINE = ("not a tenant: flat-a.yaml: declares no tenant: a file whose name does not start "
+              "with `_` is read only through its `tenants:` mapping, and this one has none (or an "
+              "empty one)")
+
+
+def test_flat_file_is_not_a_tenant_and_is_named_in_the_row(tmp_path, capsys):
+    """skipped 進列的 details（因而進 --json），不再只印 stderr；狀態不因它改變。"""
+    conf_d = _tree(tmp_path, _FLAT_TREE)
     row = vc.check_profiles(str(conf_d))
     assert row["status"] == vc.PASS, row
-    assert row["details"] == ["1 tenants scanned, 0 profile refs, 1 profiles defined"], row
-    assert "WARN: flat-a.yaml: declares no tenant" in capsys.readouterr().err
+    assert row["details"] == ["1 tenants scanned, 0 profile refs, 1 profiles defined in _profiles.yaml",
+                              _FLAT_LINE], row
+    assert "flat-a.yaml" not in capsys.readouterr().err   # 這一列自己不再印 stderr
+
+
+def test_flat_file_reaches_json_and_is_warned_once_with_policy_dsl(tmp_path):
+    """--json 帶到 skipped；加 --policy-dsl（policy 列也載入租戶）時 stderr 只 WARN 一次。
+    修前：profiles 列與 policy 列各印一次 `WARN: flat-a.yaml: …`，--json 裡沒有。"""
+    conf_d = _tree(tmp_path, _FLAT_TREE)
+    dsl = tmp_path / "policy.yaml"
+    dsl.write_text("policies:\n  - name: mc\n    target: mysql_connections\n"
+                   "    operator: required\n    severity: warning\n", encoding="utf-8")
+    p = subprocess.run([sys.executable, str(OPS / "validate_config.py"), "--config-dir", str(conf_d),
+                        "--policy-dsl", str(dsl), "--json"], capture_output=True, text=True,
+                       encoding="utf-8", errors="replace", timeout=300)
+    rows = {r["check"]: r for r in json.loads(p.stdout)}
+    assert rows["policy_dsl"]["status"] != vc.FAIL, rows["policy_dsl"]   # 前提：policy 列真的載入了租戶
+    assert _FLAT_LINE in rows["profiles"]["details"], rows["profiles"]
+    assert p.stderr.count("WARN: flat-a.yaml:") == 1, p.stderr
+
+
+# ── F2：profiles 列只跑 effective；served-values 拒收的樹（/metrics 的事）不關它 ──
+
+def test_root_and_tenant_critical_tree_passes_like_main(tmp_path):
+    """根層與租戶都寫 `X_critical`：served-values rc 2（同一 key 兩列不同值），effective
+    rc 0。profiles 列只需要 effective，main（33d56451）上這棵樹 PASS，現在也要 PASS。"""
+    conf_d = _tree(tmp_path, {
+        "_defaults.yaml": ("defaults:\n  mysql_connections: 80\n"
+                           "  mysql_connections_critical: 95\n"),
+        "_profiles.yaml": _PROFILES,
+        "t1.yaml": ("tenants:\n  t1:\n    _profile: gold\n    mysql_connections: 70\n"
+                    "    mysql_connections_critical: 90\n"),
+    })
+    with pytest.raises(tv.ServedValuesError):   # 前提：served-values 拒收這棵樹
+        tv.load_served_tree(conf_d)
+    assert tv.load_effective(conf_d)["t1"].profile == "gold"   # 前提：effective 照答
+    row = vc.check_profiles(str(conf_d))
+    assert row["status"] == vc.PASS, row
+    assert row["details"] == ["1 tenants scanned, 1 profile refs, 1 profiles defined in _profiles.yaml"], row
 
 
 # ── fail-closed：exporter 丟掉／讀不到的檔、沒有 da-guard ──────────────────
@@ -179,9 +226,28 @@ def test_file_the_exporter_drops_fails_closed(tmp_path):
     assert "Traceback" not in p.stderr, p.stderr
 
 
+def test_empty_config_dir_fails_with_the_no_config_hint(tmp_path):
+    """空 conf.d（F3）：exporter 對它拒絕啟動（"no .yaml files found"），所以這一列 FAIL、
+    給 NO_CONFIG 的建議，不是「0 tenants」的 PASS。main 是 PASS／rc 0：行為變更，已揭露於
+    changelog.d。"""
+    conf_d = tmp_path / "conf.d"
+    conf_d.mkdir()
+    row = vc.check_profiles(str(conf_d))
+    assert row["status"] == vc.FAIL and row["caller_error"] is False, row
+    assert row["hint"] == vc._PROFILES_NO_CONFIG_FILE_HINT, row
+    assert any("no .yaml files found" in d for d in row["details"]), row
+    p = subprocess.run([sys.executable, str(OPS / "validate_config.py"), "--config-dir", str(conf_d),
+                        "--json"], capture_output=True, text=True, encoding="utf-8",
+                       errors="replace", timeout=300)
+    rows = {r["check"]: r for r in json.loads(p.stdout)}
+    assert p.returncode == 1, (p.returncode, rows["profiles"])
+    assert rows["profiles"]["suggested_action"] == vc._PROFILES_NO_CONFIG_FILE_HINT, rows["profiles"]
+
+
 def test_missing_da_guard_is_a_caller_error(tmp_path, monkeypatch):
     conf_d = _tree(tmp_path, POSITIONS["tenant-file"])
     monkeypatch.setenv("DA_GUARD_BINARY", str(tmp_path / "no-such-da-guard"))
     row = vc.check_profiles(str(conf_d))
     assert row["status"] == vc.FAIL and row["caller_error"] is True, row
     assert row["hint"] == vc._PROFILES_NO_DA_GUARD_HINT, row
+    assert "make da-guard-build" in row["hint"], row   # 指向 repo 內建出它的 target

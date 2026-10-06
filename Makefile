@@ -622,9 +622,28 @@ validate-routes: ## 驗證 Alertmanager route config (CI lint 用；--strict 同
 	@python3 ./scripts/tools/ops/generate_alertmanager_routes.py \
 		--config-dir components/threshold-exporter/config/conf.d/ --validate --strict
 
+# da-guard（#2115）：validate-config 的 profiles／policy_dsl 列經 da-guard 讀
+# exporter 的答案，沒有它這兩列 FAIL、結束碼 2。repo 內從本 checkout 的 Go 原始碼
+# 建（與 tests/conftest.py 的 da_guard_binary 同一條 go build），輸出在 gitignore
+# 的 .build/。每次都重建：go 的 build cache 讓沒改動時只花一秒左右，而「沿用上次
+# 建的」會在 Go 原始碼改過之後悄悄驗舊的語意。
+DA_GUARD_BUILD := $(CURDIR)/.build/da-guard
+
+.PHONY: da-guard-build
+da-guard-build: ## 從本 repo Go 原始碼建 da-guard 到 .build/da-guard（validate-config 等讀取端需要；da-tools 映像已內建）
+	@command -v go >/dev/null 2>&1 || { \
+		echo "ERROR: go is not on PATH, so da-guard cannot be built from this checkout." >&2; \
+		echo "       Install Go (version: components/threshold-exporter/app/go.mod), or set" >&2; \
+		echo "       DA_GUARD_BINARY to a da-guard binary (the da-tools image ships one)." >&2; \
+		exit 2; }
+	@mkdir -p $(dir $(DA_GUARD_BUILD))
+	@cd components/threshold-exporter/app && go build -buildvcs=false -o $(DA_GUARD_BUILD) ./cmd/da-guard
+
+# $DA_GUARD_BINARY 已設就沿用（不建）；未設才建 .build/da-guard 並指向它。
 .PHONY: validate-config
-validate-config: ## 一站式配置驗證 (YAML + schema + routes + policy + custom rules + versions)
-	@python3 ./scripts/tools/ops/validate_config.py \
+validate-config: ## 一站式配置驗證 (YAML + schema + routes + policy + custom rules + versions；需要 da-guard，未設 DA_GUARD_BINARY 時自動建)
+	@if [ -z "$${DA_GUARD_BINARY:-}" ]; then $(MAKE) --no-print-directory da-guard-build; fi
+	@DA_GUARD_BINARY="$${DA_GUARD_BINARY:-$(DA_GUARD_BUILD)}" python3 ./scripts/tools/ops/validate_config.py \
 		--config-dir components/threshold-exporter/config/conf.d/ \
 		--rule-packs rule-packs/ \
 		--version-check

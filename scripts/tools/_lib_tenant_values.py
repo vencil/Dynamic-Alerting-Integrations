@@ -87,6 +87,12 @@ for that tenant (`effective_config`, `merged_hash`, `source_file`,
 `effective_config` is the JSON as /effective sends it: a YAML `.inf` / `.nan`
 arrives as the text `"Infinity"` / `"-Infinity"` / `"NaN"`.
 
+`load_effective_tree(conf_d, binary=None)` returns an `EffectiveTree`:
+`tenants` is `load_effective`'s answer, `skipped` the files the walk takes no
+tenant from — the same `SkippedFile` list, in the same words, as
+`load_served_tree`'s (da-guard effective's `skipped`, #2115 R3), for a
+caller that needs only /effective and so does not run served-values at all.
+
 `binary` is the da-guard path; without it, `$DA_GUARD_BINARY`, then
 `da-guard` on `$PATH` (the resolution `da-tools guard` uses).
 
@@ -158,12 +164,14 @@ __all__ = [
     "TenantValues",
     "UnreadableFile",
     "YamlFileError",
+    "EffectiveTree",
     "DA_GUARD_PREFIX",
     "MISSING_BINARY_MESSAGE",
     "ParseFailedError",
     "exit_on_served_values_error",
     "is_tenant_reserved_key",
     "load_effective",
+    "load_effective_tree",
     "load_served_tree",
     "load_served_values",
     "print_load_error",
@@ -258,6 +266,11 @@ class TenantEffective(NamedTuple):
     platform_overlay: list[dict[str, Any]]
     profile_overlay: list[dict[str, Any]]
     warnings: list[str]
+
+
+class EffectiveTree(NamedTuple):
+    tenants: dict[str, TenantEffective]
+    skipped: list[SkippedFile]  # as ServedTree.skipped: files the walk takes no tenant from
 
 
 class DaGuardNotFoundError(FileNotFoundError):
@@ -577,14 +590,16 @@ def _missing_binary_message() -> str:
         return (f"da-guard binary not found: ${env_var} is set to '{safe_label(set_to)}', "
                 f"and no file exists at that path. Point it at the da-guard binary, or unset "
                 f"it to use da-guard on $PATH (the da-tools image ships it as "
-                f"/usr/local/bin/da-guard).")
+                f"/usr/local/bin/da-guard; in a checkout of this repo, `make da-guard-build` "
+                f"builds it to .build/da-guard).")
     return MISSING_BINARY_MESSAGE
 
 
 MISSING_BINARY_MESSAGE = (
     "da-guard binary not found: this tool reads the values through "
     "`da-guard served-values`. Set $DA_GUARD_BINARY to its path, or put "
-    "da-guard on $PATH (the da-tools image ships it as /usr/local/bin/da-guard).")
+    "da-guard on $PATH (the da-tools image ships it as /usr/local/bin/da-guard; "
+    "in a checkout of this repo, `make da-guard-build` builds it to .build/da-guard).")
 
 
 def load_effective(
@@ -595,9 +610,29 @@ def load_effective(
     """`{tenant_id: TenantEffective}` for every tenant of the conf.d tree at
     `conf_d`, as tenant-api's /effective resolves it. See the module docstring
     for the contract and the exceptions."""
-    tenants, returncode, stderr = _run_da_guard(
+    return _load_effective(conf_d, binary, timeout, reads_skipped=False).tenants
+
+
+def load_effective_tree(
+    conf_d: str | Path,
+    binary: str | None = None,
+    timeout: float = DEFAULT_TIMEOUT,
+) -> EffectiveTree:
+    """`load_effective`'s tenants plus the files the walk takes no tenant
+    from. Same arguments and exceptions; a da-guard without `skipped` in its
+    effective document is named as older than this tool (`load_effective`
+    does not read the field, so it does not require it)."""
+    return _load_effective(conf_d, binary, timeout, reads_skipped=True)
+
+
+def _load_effective(conf_d: str | Path, binary: str | None, timeout: float,
+                    reads_skipped: bool) -> EffectiveTree:
+    (tenants, skipped), returncode, stderr = _run_da_guard(
         EFFECTIVE_SUBCOMMAND, [], conf_d, binary, timeout, EffectiveError, schema=EFFECTIVE_SCHEMA,
-        read=lambda doc: doc["tenants"], reads_unreadable=True)
+        read=lambda doc: (doc["tenants"],
+                          [SkippedFile(str(e["file"]), str(e["reason"])) for e in doc["skipped"]]
+                          if reads_skipped else []),
+        reads_unreadable=True)
     out: dict[str, TenantEffective] = {}
     try:
         for tenant_id, t in tenants.items():
@@ -632,7 +667,7 @@ def load_effective(
         raise EffectiveError(
             f"da-guard {EFFECTIVE_SUBCOMMAND}: an entry is not the shape this reader reads ({e})",
             returncode, stderr) from e
-    return out
+    return EffectiveTree(out, skipped)
 
 
 def is_tenant_reserved_key(key: str) -> bool:

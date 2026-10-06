@@ -52,7 +52,7 @@ Next steps:
        2 routes, 2 receivers, 2 inhibit_rules
 
 [PASS] profiles
-       2 tenants scanned, 0 profile refs, 0 profiles defined
+       2 tenants scanned, 0 profile refs, 0 profiles defined in _profiles.yaml
 
 [PASS] policy_dsl
        No _policies defined \u2014 skipped

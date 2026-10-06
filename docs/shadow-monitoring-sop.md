@@ -37,6 +37,8 @@ da-tools validate-config --config-dir /data/conf.d
 python3 scripts/tools/ops/validate_config.py --config-dir components/threshold-exporter/config/conf.d
 ```
 
+> 直接跑 `validate_config.py` 需要 da-guard：先 `make da-guard-build` 並設 `DA_GUARD_BINARY=.build/da-guard`（da-tools 映像已內建）；詳見 [validate-config 的前置需求](cli-reference.md#validate-config)。
+
 ### 2.2 確認新規則已載入
 
 ```bash

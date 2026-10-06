@@ -143,6 +143,8 @@ tenants:
 python3 scripts/tools/ops/validate_config.py --config-dir conf.d/
 ```
 
+> 直接跑 `validate_config.py` 需要 da-guard：先 `make da-guard-build` 並設 `DA_GUARD_BINARY=.build/da-guard`（da-tools 映像已內建）；詳見 [validate-config 的前置需求](../cli-reference.md#validate-config)。
+
 ### 新增指標到現有 Rule Pack
 
 一個新告警要三部分一起加，外加閾值 key 的宣告：

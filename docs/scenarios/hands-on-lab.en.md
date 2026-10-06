@@ -263,7 +263,7 @@ Expected output (measured after doing Exercises 1 and 2 as written):
        5 routes, 5 receivers, 5 inhibit_rules
 
 [PASS] profiles
-       5 tenants scanned, 0 profile refs, 0 profiles defined
+       5 tenants scanned, 0 profile refs, 0 profiles defined in _profiles.yaml
 
 [PASS] policy_dsl
        No _policies defined — skipped
@@ -280,7 +280,7 @@ Expected output (measured after doing Exercises 1 and 2 as written):
 The exit code is `0`: it is non-zero (`1`) only when a check is `fail`, and a WARN does not fail the run — so CI can call it as-is, no extra flag needed.
 
 - The `schema` row also checks `_routing_profile` references and domain policies: without `_routing_profiles.yaml` it shows `_routing_profile references unknown profile`; without `_domain_policy.yaml` the finance constraints simply do not exist, and nothing says so.
-- The `profiles` row is about threshold profiles (`_profiles.yaml` and a tenant's `_profile`), not routing profiles, so it still reads `0 profiles defined` after Exercise 2.
+- The `profiles` row is about threshold profiles (`_profiles.yaml` and a tenant's `_profile`), not routing profiles, so it still reads `0 profiles defined in _profiles.yaml` after Exercise 2.
 
 ⚠️ If `tenant_uniqueness` says `0 tenant(s)` and `routes` says `0 routes`, you dropped the two outer levels (`tenants:` and `<tenant name>:`) when pasting the Exercise 2 snippets. Every check then reads PASS while nothing was validated.
 

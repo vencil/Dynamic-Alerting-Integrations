@@ -50,8 +50,15 @@ type effectiveDoc struct {
 	// as for ParseFailed. Added without a schema bump: a reader that does not
 	// know the field still fails on the exit code. A symlink to a directory
 	// is not listed. Always present ([] when none).
-	Unreadable []skippedFile              `json:"unreadable"`
-	Tenants    map[string]effectiveTenant `json:"tenants"`
+	Unreadable []skippedFile `json:"unreadable"`
+	// Skipped: the files the walk read but takes no tenant from
+	// (ScopedTenants.NoTenant), each with the load's reason — the same list,
+	// in the same words, as served-values' `skipped`, so a reader that needs
+	// only this document can name them (#2115 R3). Not a failure: the exit
+	// code is unchanged. Added without a schema bump, as Unreadable was.
+	// Always present ([] when none).
+	Skipped []skippedFile              `json:"skipped"`
+	Tenants map[string]effectiveTenant `json:"tenants"`
 }
 
 // effectiveTenant is one tenant: the /effective body (the embedded
@@ -105,7 +112,7 @@ func runEffective(args []string, stdout, errOut io.Writer) int {
 	}
 
 	doc := effectiveDoc{Schema: effectiveSchema, ParseFailed: []string{}, Unreadable: []skippedFile{},
-		Tenants: map[string]effectiveTenant{}}
+		Skipped: []skippedFile{}, Tenants: map[string]effectiveTenant{}}
 	tree, err := config.EffectiveTree(configDir)
 	if tree != nil && tree.RootListErr != nil {
 		// The reason; the root itself is named in unreadable (exit 3, #2627).
@@ -130,6 +137,9 @@ func runEffective(args []string, stdout, errOut io.Writer) int {
 	} else {
 		if tree.ParseFailed != nil {
 			doc.ParseFailed = tree.ParseFailed
+		}
+		for _, name := range tree.NoTenant {
+			doc.Skipped = append(doc.Skipped, skippedFile{File: name, Reason: config.NoTenantReason})
 		}
 		for _, ec := range tree.Tenants {
 			t := effectiveTenant{EffectiveConfig: *ec, KeySources: ec.KeySources}

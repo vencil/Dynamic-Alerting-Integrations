@@ -29,6 +29,12 @@
 #                                  exits 0. Installing the guards while leaving
 #                                  this one inert is worse than not installing
 #                                  them: it LOOKS wired.
+#   6. da-guard missing          → `validate_config.py` (and every reader of
+#                                  `_lib_tenant_values`) reads the tenants
+#                                  through it (#2115); without it the profiles
+#                                  row FAILs and the run exits 2. Built from
+#                                  this checkout's Go source into .build/ by
+#                                  `make da-guard-build` (step 7 below).
 #
 #   Items 2 and 3 have been misfiled as "pre-existing debt / BLOCKED hooks" in a
 #   handoff note before. They are neither — they are this list.
@@ -73,14 +79,15 @@ note() { printf '%s\n' "$1" >> "$MARKER"; }
 # SessionStart fires for more than a cold start (a resumed or compacted session
 # reuses the SAME container, where everything below is already in place). Doing
 # the work again is not free: `npm ci` DELETES tests/e2e/node_modules and
-# reinstalls it every time. So re-verify the four things this script exists to
+# reinstalls it every time. So re-verify the things this script exists to
 # guarantee and no-op when they all hold. This is a state check, not a matcher —
 # it stays correct whichever sources the harness fires on, and a container that
 # genuinely lost one of them still gets repaired.
 if [ -f "$MARKER" ] && grep -q '^RESULT=ok$' "$MARKER" 2>/dev/null \
   && command -v pre-commit >/dev/null 2>&1 \
   && [ -f .git/hooks/pre-commit ] && [ -f .git/hooks/pre-push ] \
-  && { [ ! -f tests/e2e/package.json ] || [ -d tests/e2e/node_modules ]; }; then
+  && { [ ! -f tests/e2e/package.json ] || [ -d tests/e2e/node_modules ]; } \
+  && [ -x .build/da-guard ]; then
   note "re-run at $(date -u +%Y-%m-%dT%H:%M:%SZ): already bootstrapped, no-op"
   say "already bootstrapped (marker: $MARKER) — nothing to do"
   exit 0
@@ -232,9 +239,27 @@ fi
 say "pre-building pre-commit hook environments (cached into the container image)"
 pre-commit install-hooks >/dev/null 2>&1 || say "  install-hooks incomplete — first run will build the rest"
 
+# --- 7. da-guard (validate-config and the policy readers need it, #2115) ---
+# Built from THIS checkout's Go source by the same target `make validate-config`
+# runs, so the two cannot disagree on how. ⛔ Go missing is not a warning: the
+# readers then exit 2 and pytest's da_guard_binary fixture fails every test
+# that uses it, so it reaches RESULT like a missing Python dep does.
+if ! command -v go >/dev/null 2>&1; then
+  say "⛔ go is NOT on PATH — da-guard cannot be built; validate-config will exit 2"
+  say "   install Go (version: components/threshold-exporter/app/go.mod) or set DA_GUARD_BINARY"
+  note "da-guard=MISSING (go not on PATH)"
+  bootstrap_incomplete="${bootstrap_incomplete:-} da-guard(go missing)"
+elif make --no-print-directory da-guard-build; then
+  note "da-guard=built (.build/da-guard)"
+else
+  say "⛔ make da-guard-build FAILED (output above) — validate-config will exit 2"
+  note "da-guard=FAILED (make da-guard-build)"
+  bootstrap_incomplete="${bootstrap_incomplete:-} da-guard(build failed)"
+fi
+
 if [ -n "${bootstrap_incomplete:-}" ]; then
-  note "RESULT=failed (not importable:$bootstrap_incomplete)"
-  say "⛔ bootstrap INCOMPLETE — not importable:$bootstrap_incomplete (marker: $MARKER)"
+  note "RESULT=failed (missing:$bootstrap_incomplete)"
+  say "⛔ bootstrap INCOMPLETE — missing:$bootstrap_incomplete (marker: $MARKER)"
   say "   the next session start will retry rather than no-op"
   exit 1
 fi

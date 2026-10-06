@@ -143,6 +143,8 @@ _routing_defaults:
 python3 scripts/tools/ops/validate_config.py --config-dir conf.d/
 ```
 
+> 直接跑 `validate_config.py` 需要 da-guard：先 `make da-guard-build` 並設 `DA_GUARD_BINARY=.build/da-guard`（da-tools 映像已內建）；詳見 [validate-config 的前置需求](../cli-reference.md#validate-config)。
+
 ### 管理 Rule Pack
 
 檢視已掛載的 Rule Pack：
@@ -291,6 +293,8 @@ python3 scripts/tools/ops/generate_alertmanager_routes.py \
 python3 scripts/tools/ops/validate_config.py \
   --config-dir conf.d/
 ```
+
+> 直接跑 `validate_config.py` 需要 da-guard：先 `make da-guard-build` 並設 `DA_GUARD_BINARY=.build/da-guard`（da-tools 映像已內建）；詳見 [validate-config 的前置需求](../cli-reference.md#validate-config)。
 
 檢查項目（schema validation 預設啟用，無需額外 flag）：
 - YAML 語法正確性

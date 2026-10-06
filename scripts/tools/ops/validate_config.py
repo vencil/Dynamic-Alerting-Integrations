@@ -189,10 +189,9 @@ from _lib_tenant_values import (  # noqa: E402
     DaGuardError,
     DaGuardNotFoundError,
     ParseFailedError,
-    load_effective,
+    load_effective_tree,
     load_served_tree,
     print_load_error,
-    print_load_warnings,
 )
 
 # ============================================================
@@ -981,10 +980,13 @@ _PROFILES_TREE_UNREADABLE_HINT = (
 _PROFILES_NO_CONFIG_FILE_HINT = (
     "There is no config file under --config-dir at all: point it at your conf.d "
     "tree, then re-run. No _profile reference was checked.")
-_PROFILES_NO_DA_GUARD_HINT = (
+# Shared by both rows' no-da-guard hints: where a da-guard comes from.
+_DA_GUARD_SOURCES = (
     "Put da-guard on $PATH or set $DA_GUARD_BINARY to it (the da-tools image "
-    "ships it as /usr/local/bin/da-guard), then re-run. No _profile reference "
-    "was checked.")
+    "ships it as /usr/local/bin/da-guard; in a checkout of this repo, `make "
+    "da-guard-build` builds it to .build/da-guard, and `make validate-config` "
+    "builds and uses it by itself), then re-run.")
+_PROFILES_NO_DA_GUARD_HINT = _DA_GUARD_SOURCES + " No _profile reference was checked."
 
 
 def _tenant_load_failure_row(check: str, exc: Exception, config_dir: str,
@@ -1016,6 +1018,24 @@ def _tenant_load_failure_row(check: str, exc: Exception, config_dir: str,
                         hint=hint)
 
 
+def _with_exporter_reasons(exc: ParseFailedError, config_dir: str) -> ParseFailedError:
+    """`da-guard effective` names the files the exporter's load drops but not
+    WHY (its walk logs nothing); served-values runs the exporter's own load,
+    whose log says it (e.g. "cannot unmarshal !!int ..."). On this failure
+    path only, ask served-values for the same verdict and keep its error when
+    it names the same first file; otherwise — it fails another way (e.g. it
+    refuses the tree's /metrics, #2115 F2), or names another file — keep
+    effective's. The row's verdict never depends on served-values."""
+    try:
+        load_served_tree(config_dir)
+    except ParseFailedError as served:
+        if served.path == exc.path:
+            return served
+    except (DaGuardNotFoundError, DaGuardError):
+        pass
+    return exc
+
+
 def check_profiles(config_dir: str) -> dict[str, object]:
     """Validate tenant _profile references and profile structure.
 
@@ -1027,24 +1047,36 @@ def check_profiles(config_dir: str) -> dict[str, object]:
       - Profile values are valid types (numeric, string, dict for scheduled)
       - Profiles have at least one metric key
 
+    One da-guard run, `effective`: its `skipped` names the files with no
+    tenant, so served-values (/metrics) is not needed — a tree whose /metrics
+    da-guard refuses (e.g. `X_critical` written at the root and in a tenant,
+    #2115 F2) is not this row's business. served-values runs only after
+    effective has already failed the row on a dropped file, for the
+    exporter's reason (`_with_exporter_reasons`).
+
     The tenants are the exporter's: the whole tree (a tenant in a
     sub-directory included — this row has read recursively since PR #1343),
-    a file with no `tenants:` mapping is not one (it is named on stderr from
-    served-values' `skipped`, #2115 R3), and the ids are the exporter's text.
+    a file with no `tenants:` mapping is not one (it is named in the row's
+    details, from effective's `skipped`, #2115 R3; the row's status does not
+    change for it), and the ids are the exporter's text.
     A `_profile` is read as written plus inherited (#2115 (c)): one that
     binds no profile is reported — as an unknown profile when the tenant's
     own entry names it, and as binding nothing when it comes from a defaults
     file, where the exporter does not read it. A file the exporter's load
     drops or cannot read is a FAIL naming it (#2115 R5: fail-closed), as is
-    a missing da-guard (a caller error).
+    a missing da-guard (a caller error) and a --config-dir with no config
+    file at all (the exporter refuses to start on it; it is not "0 tenants").
 
-    ⚠️ The profile STRUCTURE checks still read `_profiles.yaml` only. The
-    exporter reads `profiles:` from every root platform file; a profile
-    defined in another one is bound (and its references pass) but its body
-    is not linted here.
+    ⚠️ The profile STRUCTURE checks still read `_profiles.yaml` only, and
+    "N profiles defined" counts only that file. The exporter reads
+    `profiles:` from every root platform file; a profile defined in another
+    one is bound (and its references pass) but its body is not linted or
+    counted here.
 
     ⚠️ Profile keys are NOT cross-checked against `defaults:` in
-    `_defaults.yaml`, and this check does not read that file at all. It
+    `_defaults.yaml`. This function's Python does not read that file; da-guard
+    effective does, as the exporter's load reads it (a `_defaults.yaml` that
+    load drops fails the row, above), and nothing more. It
     used to read it into a `known_defaults` set that nothing consumed —
     no verdict depended on it — and that dead read went through the flat
     root-carrier lookup, so on an ADR-017 tree with a nested
@@ -1054,14 +1086,18 @@ def check_profiles(config_dir: str) -> dict[str, object]:
     read it as `raw.get("defaults") or {}`, never `.get("defaults", {})`.
     """
     try:
-        tree = load_served_tree(config_dir)
-        effective = load_effective(config_dir)
+        tree = load_effective_tree(config_dir)
     except (DaGuardNotFoundError, DaGuardError, ParseFailedError) as exc:
+        if isinstance(exc, ParseFailedError):
+            exc = _with_exporter_reasons(exc, config_dir)
         return _tenant_load_failure_row(
             "profiles", exc, config_dir,
             (_PROFILES_TREE_UNREADABLE_HINT, _PROFILES_NO_CONFIG_FILE_HINT,
              _PROFILES_NO_DA_GUARD_HINT))
-    print_load_warnings(tree)
+    effective = tree.tenants
+    # In the row, not on stderr (#2115 F4): `--json` carries them, and with
+    # `--policy-dsl` the policy row's own load already prints them once.
+    skipped_lines = [f"not a tenant: {s.file}: {s.reason}" for s in tree.skipped]
 
     cfg = Path(config_dir)
     profiles_path = str(cfg / "_profiles.yaml")
@@ -1117,10 +1153,10 @@ def check_profiles(config_dir: str) -> dict[str, object]:
                 f"\"{name}\"")
 
     if warnings:
-        return _make_result("profiles", WARN, warnings)
+        return _make_result("profiles", WARN, warnings + skipped_lines)
     details = [f"{len(effective)} tenants scanned, {profile_ref_count} profile refs, "
-               f"{len(profiles)} profiles defined"]
-    return _make_result("profiles", PASS, details)
+               f"{len(profiles)} profiles defined in _profiles.yaml"]
+    return _make_result("profiles", PASS, details + skipped_lines)
 
 # ============================================================
 # Check 8: Policy-as-Code (DSL evaluation)
@@ -1134,9 +1170,7 @@ _POLICY_DSL_TREE_UNREADABLE_HINT = (
 _POLICY_DSL_NO_CONFIG_FILE_HINT = (
     "There is no config file under --config-dir at all: point it at your conf.d "
     "tree, then re-run. No policy was evaluated.")
-_POLICY_DSL_NO_DA_GUARD_HINT = (
-    "Put da-guard on $PATH or set $DA_GUARD_BINARY to it (the da-tools image "
-    "ships it as /usr/local/bin/da-guard), then re-run. No policy was evaluated.")
+_POLICY_DSL_NO_DA_GUARD_HINT = _DA_GUARD_SOURCES + " No policy was evaluated."
 _POLICY_DSL_ROUTING_REFUSED_HINT = (
     "A rule reads `_routing`, and the route generator refuses this tree for the "
     "reasons above (`da-tools generate-routes --validate` shows the same): fix "
@@ -2040,8 +2074,11 @@ _CHECK_HINTS: dict[str, tuple[str, str]] = {
         "docs/internal/test-coverage-matrix.md",
     ),
     "profiles": (
-        "Ensure all _profile references in tenant configs match a defined profile "
-        "in _defaults.yaml or the profiles section.",
+        "Write each `_profile` in the tenant's own entry (its tenant file, or a "
+        "root `_` file's `tenants:`), naming a profile defined under `profiles:` "
+        "in a `_` file at the conf.d ROOT (e.g. `_profiles.yaml`): the exporter "
+        "ignores `profiles:` in a sub-directory file and binds no `_profile` "
+        "inherited from a `_defaults.yaml`.",
         "docs/architecture-and-design.md",
     ),
     "versions": (

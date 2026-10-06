@@ -162,13 +162,24 @@ func LoadDirReport(dir string, logger *log.Logger) (cfg *ThresholdConfig, rep Lo
 	rep.ParseFailed = built.ParseFailed
 	rep.Unreadable = scan.Unreadable
 	rep.Undeliverable = undeliverableThresholds(built.UnreachableValues)
+	rep.NoTenant = noTenantKeys(scan)
+	return &built.Config, rep, nil
+}
+
+// noTenantKeys is LoadReport.NoTenant read off a scan: the keys (sorted) of
+// the files whose name does not start with `_` that the walker parsed and
+// found no tenant in. One function for LoadDirReport and EffectiveTree
+// (ScopedTenants.NoTenant), so `da-guard served-values` and `da-guard
+// effective` name the same files (#2115). nil when there is none.
+func noTenantKeys(scan *TreeScan) []string {
+	var out []string
 	for _, k := range scan.Keys { // sorted
 		f := scan.Files[k]
 		if !isPlatformKey(k) && !f.ParseFailed && len(f.TenantIDs) == 0 {
-			rep.NoTenant = append(rep.NoTenant, k)
+			out = append(out, k)
 		}
 	}
-	return &built.Config, rep, nil
+	return out
 }
 
 // rootListReported is LoadDirReport's one condition for "the root could not

@@ -1418,7 +1418,9 @@ def _gen_github_actions(
               # ⛔ The same guard the config-diff step carries, and for the same
               # reason: `docker -v` CREATES a missing host path instead of
               # failing, so a wrong or moved CONFIG_DIR mounts an EMPTY
-              # directory, `validate-config` parses zero files and exits 0.
+              # directory. `validate-config` up to the v2.9.0 image parses zero
+              # files and exits 0 on it (later ones FAIL the profiles row, exit
+              # 1, naming no file); either way it is not "CONFIG_DIR is wrong".
               # Stage 2 refuses to compare in that case; Stage 1 went green and
               # silent — the worse half, because nothing on the PR hints at it.
               if [ ! -d "${{{{ env.CONFIG_DIR }}}}" ]; then
