@@ -424,8 +424,15 @@ _ROW_IDS = [r[0] for r in _ROWS]
 # file is named and the rc is 2, but the cause is the exporter's verdict.
 # #2115 0-B: policy_engine's tenants and policy_opa_bridge's whole tree too
 # (policy_engine's own `_policies` read of `_defaults.yaml` stays Python's).
+# #2116: threshold_recommend reads served-values (then effective) too.
 _SERVED_VALUES_ROWS = {"blind_spot_discovery", "policy_engine tenant",
-                       "policy_opa_bridge --dry-run", "policy_opa_bridge _defaults"}
+                       "policy_opa_bridge --dry-run", "policy_opa_bridge _defaults",
+                       "threshold_recommend"}
+# #2116: config_diff's metric diff reads `da-guard effective` only — same load,
+# same verdict, but effective's stderr names the file without the exporter's
+# parse reason.
+_EFFECTIVE_ROWS = {"config_diff"}
+assert _EFFECTIVE_ROWS <= set(_ROW_IDS), _EFFECTIVE_ROWS - set(_ROW_IDS)
 assert _SERVED_VALUES_ROWS <= set(_ROW_IDS), _SERVED_VALUES_ROWS - set(_ROW_IDS)
 
 def _expected_bad_rc(script: Path) -> int:
@@ -458,6 +465,10 @@ def test_tool_names_the_unreadable_file_with_its_class_rc(fx, label, script, bad
         # reason — here the byte that is not UTF-8 — is carried along.
         assert "the exporter's load skips" in p.stderr, p.stderr[-500:]
         assert "invalid leading UTF-8 octet" in p.stderr, "the exporter's parse reason must reach the operator"
+    elif label in _EFFECTIVE_ROWS:
+        assert "the exporter's load skips" in p.stderr, p.stderr[-500:]
+        assert "da-guard| da-guard: 1 file(s) cannot be decoded" in p.stderr, (
+            "da-guard's stderr must be passed on whole")
     else:
         assert "UnicodeDecodeError" in p.stderr, "the cause class tells apart bad bytes from bad syntax"
 

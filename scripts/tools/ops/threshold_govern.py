@@ -31,6 +31,11 @@ GET 當前完整租戶 YAML → 只 surgical 取代被推薦的 threshold 值行
 其餘行 byte-identical）→ parse-before/after 驗證「只有目標 keys 變動」→ 才 PUT。
 產出的 PR diff 因此就是那幾行值的變化，乾淨可批准。
 
+只治理租戶檔自己寫的 key（#2116）：歸屬取自 ``da-guard effective`` 的逐 key 來源；
+繼承自 defaults／平台／profile 的 key 只列參考（``inherited``），不進計畫、不查
+Prometheus；寫回用檔案裡的拼法（舊別名照舊）。租戶檔在子目錄時 tenant-api 讀不到，
+不送 GET、記 ``skipped_nested``，不計入斷路器與 ``--max-prs``。
+
 領域邊界：本工具是 recommender 的**主動層**，推薦邏輯/資料源完全沿用
 ``threshold_recommend``（Day-N，查 observed recording rule）。冷啟動粗估請用
 ``baseline_discovery``（Day-0，查 raw exporter）——⛔ 三者勿混用。
@@ -75,9 +80,11 @@ sys.path.insert(0, os.path.join(_THIS_DIR, '..'))
 from _lib_python import (  # noqa: E402
     add_prometheus_arg,
     detect_cli_lang,
+    exit_on_yaml_file_error,
     http_get_json,
     parse_duration_seconds,
 )
+from _lib_tenant_values import exit_on_served_values_error  # noqa: E402  (#2116)
 # Aliased: the local format_json_report() below (domain report builder,
 # exercised directly by tests) delegates its final dump to the shared helper.
 from _lib_python import format_json_report as _dump_json  # noqa: E402
@@ -137,6 +144,8 @@ class TenantPlan:
 
     tenant: str
     changes: list[PlannedChange] = field(default_factory=list)
+    # The tenant's own file, relative to --config-dir (#2116); "" when unknown.
+    source_file: str = ""
 
 
 @dataclass
@@ -144,7 +153,10 @@ class TenantOutcome:
     """The result of attempting (or simulating) a governance PR for one tenant."""
 
     tenant: str
-    status: str             # planned | pr_opened | already_pending | no_changes | error | skipped
+    # planned | pr_opened | already_pending | no_changes | error | skipped |
+    # skipped_nested (#2116: the tenant's file is in a sub-directory, which
+    # tenant-api's tenant read does not cover — no request was sent)
+    status: str
     keys: list[str] = field(default_factory=list)
     pr_url: str = ""
     pr_number: int = 0
@@ -201,6 +213,19 @@ class ForceManualKey:
 
 
 @dataclass
+class InheritedKey:
+    """A threshold a tenant inherits from a defaults / platform / profile file
+    (#2116): its value is not in the tenant's file, so a governance PR on that
+    file cannot change it and must not pin it. Listed for reference only; the
+    recommender (threshold-recommend) shows its recommendation."""
+
+    tenant: str
+    key: str
+    source_layer: str
+    source_file: str
+
+
+@dataclass
 class GovernanceResult:
     """One run's full result — a named container (not a positional tuple) so a new
     surfaced category (#916 not_applicable / force_manual) is an added field, not a
@@ -212,6 +237,7 @@ class GovernanceResult:
     ungoverned: list[UngovernedKey]
     not_applicable: list[NotApplicableKey] = field(default_factory=list)
     force_manual: list[ForceManualKey] = field(default_factory=list)
+    inherited: list[InheritedKey] = field(default_factory=list)
 
 
 # ---------------------------------------------------------------------------
@@ -250,7 +276,11 @@ def _quoted_value(rec: "recommend.KeyRecommendation") -> str:
 def build_governance_plan(
     reports: list["recommend.TenantRecommendation"], min_delta_pct: float
 ) -> list[TenantPlan]:
-    """Filter the engine's reports down to per-tenant actionable change sets."""
+    """Filter the engine's reports down to per-tenant actionable change sets.
+
+    Only `report.keys` — the keys the tenant's own file writes — can enter a
+    plan (#2116): an inherited key (`report.inherited`) is not in the file the
+    PR edits, and writing it there would pin the tenant."""
     plans: list[TenantPlan] = []
     for report in reports:
         changes = [
@@ -269,9 +299,29 @@ def build_governance_plan(
         ]
         if changes:
             changes.sort(key=lambda c: c.key)
-            plans.append(TenantPlan(tenant=report.tenant, changes=changes))
+            plans.append(TenantPlan(tenant=report.tenant, changes=changes,
+                                    source_file=getattr(report, "source_file", "")))
     plans.sort(key=lambda p: p.tenant)
     return plans
+
+
+def collect_inherited(
+    reports: list["recommend.TenantRecommendation"],
+) -> list[InheritedKey]:
+    """The threshold keys each tenant inherits (#2116), for reference only."""
+    out = [
+        InheritedKey(report.tenant, r.key, r.source_layer, r.source_file)
+        for report in reports for r in getattr(report, "inherited", [])
+    ]
+    out.sort(key=lambda u: (u.tenant, u.key))
+    return out
+
+
+def _is_nested(plan: TenantPlan) -> bool:
+    """The tenant's file sits in a sub-directory of --config-dir (#2116).
+    tenant-api reads a tenant's file at the top level of its config dir only,
+    so a GET for this tenant cannot return the file the change belongs in."""
+    return "/" in plan.source_file
 
 
 # The recommender marks lower-bound ``<`` thresholds (hit-ratio / availability —
@@ -744,6 +794,7 @@ def format_text_report(
     ungoverned: Optional[list["UngovernedKey"]] = None,
     not_applicable: Optional[list["NotApplicableKey"]] = None,
     force_manual: Optional[list["ForceManualKey"]] = None,
+    inherited: Optional[list["InheritedKey"]] = None,
 ) -> str:
     lines: list[str] = []
     mode = "APPLY" if applied else "DRY-RUN (no writes — pass --apply to open PRs)"
@@ -798,6 +849,24 @@ def format_text_report(
         )
         return ["", "-" * 78, head]
 
+    def _inherited_lines() -> list[str]:
+        inh = inherited or []
+        if not inh:
+            return []
+        n_tenants = len({k.tenant for k in inh})
+        files = sorted({k.source_file for k in inh})
+        shown = ", ".join(safe_label(f) for f in files[:5]) + (
+            f" (+{len(files) - 5} more)" if len(files) > 5 else "")
+        head = (
+            f"ℹ {n_tenants} 個租戶的 {len(inh)} 個閾值繼承自平台／defaults／profile 檔"
+            f"（{shown}），只列參考、不治理：PR 只改租戶自己的檔（#2116；建議見 threshold-recommend）。"
+            if _LANG == "zh" else
+            f"ℹ {len(inh)} threshold(s) across {n_tenants} tenant(s) are inherited from a "
+            f"defaults / platform / profile file ({shown}) — reference only, not governed: "
+            "a PR edits the tenant's own file only (#2116; threshold-recommend shows them)."
+        )
+        return ["", "-" * 78, head]
+
     def _deferred_note() -> str:
         # Fold the two review-worthy counts into Summary so a tail-scan catches
         # them even when the per-tenant output is long; N/A is complete (INFO), so
@@ -816,8 +885,9 @@ def format_text_report(
         return "".join(parts)
 
     def _deferred_block() -> list[str]:
-        # All three surfaced-but-no-auto-PR categories, above the bottom line.
-        return _force_manual_lines() + _ungoverned_lines() + _not_applicable_lines()
+        # All surfaced-but-no-auto-PR categories, above the bottom line.
+        return (_force_manual_lines() + _ungoverned_lines() + _not_applicable_lines()
+                + _inherited_lines())
 
     if not plans:
         lines.append(
@@ -829,8 +899,10 @@ def format_text_report(
         return "\n".join(lines)
 
     for plan in plans:
+        nested = (f" — {safe_label(plan.source_file)} is in a sub-directory: no PR via "
+                  "tenant-api, change it by hand") if _is_nested(plan) else ""
         lines.append(f"\nTenant: {safe_label(plan.tenant)} "
-                     f"({len(plan.changes)} change(s))")
+                     f"({len(plan.changes)} change(s)){nested}")
         lines.append(f"  {'Key':<26s} {'Current':>10s} {'→':^3s} {'Recommend':>10s} {'Delta':>13s} {'Conf':<8s}")
         lines.append(f"  {'-' * 26} {'-' * 10} {'-' * 3} {'-' * 10} {'-' * 13} {'-' * 8}")
         for c in plan.changes:
@@ -855,6 +927,7 @@ def format_text_report(
                 "already_pending": "• skip (already open)",
                 "no_changes": "• no-op (already at base)",
                 "error": "✗ error",
+                "skipped_nested": "• skip (file in a sub-directory)",
             }.get(o.status, o.status)
             detail = o.pr_url or o.message
             lines.append(f"  [{tag}] {safe_label(o.tenant)}: {safe_label(detail)}")
@@ -868,18 +941,22 @@ def format_text_report(
     pending = sum(1 for o in outcomes if o.status == "already_pending")
     nochange = sum(1 for o in outcomes if o.status == "no_changes")
     errors = sum(1 for o in outcomes if o.status == "error")
+    n_nested = sum(1 for p in plans if _is_nested(p))
+    nested_note = (f" {n_nested} tenant(s) with a file in a sub-directory get no PR "
+                   "(change by hand)." if n_nested else "")
     lines.append("\n" + "=" * 78)
     if applied:
         lines.append(
             f"Summary: {opened} PR(s) opened, {pending} already-pending (skipped), "
             f"{nochange} no-op, {errors} error(s); {len(plans)} tenant(s) actionable."
-            + _deferred_note()
+            + nested_note + _deferred_note()
         )
     else:
-        total_changes = sum(len(p.changes) for p in plans)
+        prable = [p for p in plans if not _is_nested(p)]
+        total_changes = sum(len(p.changes) for p in prable)
         lines.append(
-            f"Summary: {len(plans)} tenant(s) / {total_changes} change(s) would get a PR. "
-            "Re-run with --apply to open them." + _deferred_note()
+            f"Summary: {len(prable)} tenant(s) / {total_changes} change(s) would get a PR. "
+            "Re-run with --apply to open them." + nested_note + _deferred_note()
         )
     return "\n".join(lines)
 
@@ -889,10 +966,12 @@ def format_json_report(
     ungoverned: Optional[list["UngovernedKey"]] = None,
     not_applicable: Optional[list["NotApplicableKey"]] = None,
     force_manual: Optional[list["ForceManualKey"]] = None,
+    inherited: Optional[list["InheritedKey"]] = None,
 ) -> str:
     ung = ungoverned or []
     na = not_applicable or []
     fm = force_manual or []
+    inh = inherited or []
     out = {
         "tool": "threshold-govern",
         "applied": applied,
@@ -901,6 +980,7 @@ def format_json_report(
         "ungoverned_lower_bound": [asdict(u) for u in ung],
         "not_applicable": [asdict(u) for u in na],
         "force_manual": [asdict(u) for u in fm],
+        "inherited": [asdict(u) for u in inh],
         "summary": {
             "tenants_actionable": len(plans),
             "changes": sum(len(p.changes) for p in plans),
@@ -908,9 +988,11 @@ def format_json_report(
             "already_pending": sum(1 for o in outcomes if o.status == "already_pending"),
             "no_changes": sum(1 for o in outcomes if o.status == "no_changes"),
             "errors": sum(1 for o in outcomes if o.status == "error"),
+            "skipped_nested": sum(1 for o in outcomes if o.status == "skipped_nested"),
             "ungoverned_lower_bound": len(ung),
             "not_applicable": len(na),
             "force_manual": len(fm),
+            "inherited": len(inh),
         },
     }
     return _dump_json(out)
@@ -935,20 +1017,35 @@ def run(args: argparse.Namespace) -> GovernanceResult:
         lookback=args.lookback,
         min_samples=args.min_samples,
         dry_run=False,
+        # #2116: inherited keys are listed, not governed — querying them would
+        # only add Prometheus load to a run that cannot act on them.
+        query_inherited=False,
     )
     plans = build_governance_plan(reports, args.min_delta_pct)
     ungoverned = collect_ungoverned_lower_bound(reports)
     not_applicable = collect_not_applicable(reports)
     force_manual = collect_force_manual(reports)
+    inherited = collect_inherited(reports)
 
     outcomes: list[TenantOutcome] = []
     if not args.apply:
-        return GovernanceResult(plans, outcomes, ungoverned, not_applicable, force_manual)
+        return GovernanceResult(plans, outcomes, ungoverned, not_applicable, force_manual,
+                                inherited)
 
     opened = 0
     attempted = 0
     consecutive_errors = 0
     for plan in plans:
+        if _is_nested(plan):
+            # #2116: no request is sent, so this is neither an error for the
+            # circuit breaker nor a PR against --max-prs.
+            outcomes.append(TenantOutcome(
+                plan.tenant, "skipped_nested", [c.key for c in plan.changes],
+                message=(f"tenant file {plan.source_file} is in a sub-directory; tenant-api "
+                         "reads tenant files at the top level of its config dir only, so no "
+                         "PR is opened — apply the change to that file by hand"),
+            ))
+            continue
         if opened >= args.max_prs:
             outcomes.append(TenantOutcome(
                 plan.tenant, "skipped", [c.key for c in plan.changes],
@@ -979,7 +1076,8 @@ def run(args: argparse.Namespace) -> GovernanceResult:
             consecutive_errors += 1
         else:
             consecutive_errors = 0
-    return GovernanceResult(plans, outcomes, ungoverned, not_applicable, force_manual)
+    return GovernanceResult(plans, outcomes, ungoverned, not_applicable, force_manual,
+                            inherited)
 
 
 def _is_systemic_failure(outcomes: list[TenantOutcome], applied: bool) -> bool:
@@ -1012,7 +1110,11 @@ def _is_systemic_failure(outcomes: list[TenantOutcome], applied: bool) -> bool:
         outage (Gemini review). A genuinely half-degraded run (errors ~= pending) and
         an all-already-pending run (healthy, nothing new to do) both stay exit 0;
         dry-run never fails -- it issues no writes.
+
+    A ``skipped_nested`` outcome (#2116) sent no request: it says nothing about
+    the write plane, so it is left out of the attempted set altogether.
     """
+    outcomes = [o for o in outcomes if o.status != "skipped_nested"]
     if not applied or not outcomes:
         return False
     opened = sum(1 for o in outcomes if o.status == "pr_opened")
@@ -1023,6 +1125,8 @@ def _is_systemic_failure(outcomes: list[TenantOutcome], applied: bool) -> bool:
     return (errors + skipped) / len(outcomes) >= _SYSTEMIC_FAILURE_RATIO
 
 
+@exit_on_yaml_file_error  # a config file the load cannot read → rc 2, named
+@exit_on_served_values_error  # #2116: da-guard missing or failing → rc 2, named
 def main() -> None:
     parser = argparse.ArgumentParser(
         description=(
@@ -1137,11 +1241,11 @@ def main() -> None:
     if args.json_output:
         print(format_json_report(
             result.plans, result.outcomes, args.apply, result.ungoverned,
-            result.not_applicable, result.force_manual))
+            result.not_applicable, result.force_manual, result.inherited))
     else:
         print(format_text_report(
             result.plans, result.outcomes, args.apply, result.ungoverned,
-            result.not_applicable, result.force_manual))
+            result.not_applicable, result.force_manual, result.inherited))
 
     # #656: surface a governance run where EVERY write failed as a non-zero exit
     # (-> Job Failed + a frozen last_successful_time so ThresholdGovernanceStale can

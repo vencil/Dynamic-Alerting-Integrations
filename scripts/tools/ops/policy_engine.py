@@ -109,6 +109,7 @@ from _lib_tenant_values import (  # noqa: E402
     DaGuardNotFoundError,
     ParseFailedError,
     ServedValuesError,
+    canonical_key,
     load_effective,
     load_served_tree,
     print_load_error,
@@ -405,20 +406,9 @@ def load_policy_inputs(config_dir: str, *, routing: bool = False) -> PolicyInput
 # Target resolution
 # ---------------------------------------------------------------------------
 _CRITICAL = "_critical"
-
-
-def _canonical_key(key: str, aliases: Optional[dict[str, str]]) -> str:
-    """A threshold key in the exporter's canonical spelling: a retired base
-    key (also as `<base>_critical` / `<base>{...}`) through `aliases`.
-    Reserved keys and keys not in the table are returned as they are."""
-    if not aliases or key.startswith("_"):
-        return key
-    base, brace, dims = key.partition("{")
-    if base in aliases:
-        return aliases[base] + brace + dims
-    if base.endswith(_CRITICAL) and base[:-len(_CRITICAL)] in aliases:
-        return aliases[base[:-len(_CRITICAL)]] + _CRITICAL + brace + dims
-    return key
+# A threshold key in the exporter's canonical spelling (#2115); shared with
+# threshold_recommend (#2116), so it lives in _lib_tenant_values.
+_canonical_key = canonical_key
 
 
 def _is_wildcard(target: str) -> bool:

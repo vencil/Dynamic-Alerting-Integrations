@@ -309,6 +309,10 @@ NOT_A_CELL: dict[str, str] = {
         "lists only through `_lib_confd.iter_config_files` (library cell)",
     "ops/diagnose.py":
         "lists only through `_lib_confd.iter_config_files` (library cell)",
+    "ops/config_diff.py":
+        "its metric diff reads the tree through `da-guard effective` (the "
+        "exporter's walk); it lists only through `_lib_confd.iter_config_files` "
+        "(library cell), to confirm a tree da-guard refused has no config file (#2116)",
     "ops/validate_config.py":
         "lists only through `_lib_confd.iter_config_files` (library cell)",
     "ops/init_project.py":

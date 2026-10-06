@@ -55,6 +55,8 @@ from test_generated_ci_artifacts import (  # noqa: E402
     _synthetic_repo,
 )
 
+pytestmark = pytest.mark.usefixtures("da_guard_env")
+
 _SH = shutil.which("sh")
 _needs_tools = pytest.mark.skipif(
     _SH is None or shutil.which("git") is None,
@@ -133,6 +135,9 @@ def _run_job(pipeline: dict, work: Path, *, base_sha: str | None,
         "CI_PROJECT_DIR": str(work),
         "CONFIG_DIR": variables["CONFIG_DIR"],
         "DA_TOOLS_IMAGE": variables["DA_TOOLS_IMAGE"],
+        # #2116: config-diff reads both trees through da-guard, which the
+        # image ships; here it is this repo's build (`da_guard_env`).
+        "DA_GUARD_BINARY": os.environ["DA_GUARD_BINARY"],
     }
     if base_sha is not None:
         env["CI_MERGE_REQUEST_DIFF_BASE_SHA"] = base_sha

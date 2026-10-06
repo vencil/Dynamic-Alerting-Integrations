@@ -5371,8 +5371,10 @@ _BASE_CPU = "70"
 _HEAD_CPU = "90"
 
 
-def _tenant_yaml(cpu: str) -> str:
-    return f'tenants:\n  db-a:\n    container_cpu: "{cpu}"\n'
+def _tenant_yaml(cpu: str, tenant: str = "db-a") -> str:
+    # One tenant per file: the exporter refuses a tree that defines a tenant
+    # in two files, and config-diff reads the tree as it does (#2116).
+    return f'tenants:\n  {tenant}:\n    container_cpu: "{cpu}"\n'
 
 
 def _symlinks_usable(tmp: Path) -> bool:
@@ -5416,7 +5418,7 @@ def _synthetic_repo(root: Path, *, base_has_config: bool,
         (root / "conf.d" / "db-a.yaml").write_text(
             _tenant_yaml(_BASE_CPU), encoding="utf-8", newline="\n")
         (root / "conf.d" / "db-b.yaml").write_text(
-            _tenant_yaml(_BASE_CPU), encoding="utf-8", newline="\n")
+            _tenant_yaml(_BASE_CPU, "db-b"), encoding="utf-8", newline="\n")
         if symlink:
             # A reverse control. `git ls-tree` lists a symlink; `find -type f`
             # does not, so a count-based post-condition failed a perfectly

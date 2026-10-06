@@ -930,7 +930,7 @@ class TestPrometheusEnvFallback:
         def fake_run(args):
             captured["url"] = args.prometheus
             return SimpleNamespace(plans=[], outcomes=[], ungoverned=[],
-                                   not_applicable=[], force_manual=[])
+                                   not_applicable=[], force_manual=[], inherited=[])
 
         monkeypatch.setattr(tg, "run", fake_run)
         monkeypatch.setattr(tg, "format_text_report", lambda *a, **k: "")
