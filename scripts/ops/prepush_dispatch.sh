@@ -11,6 +11,26 @@
 
 set -uo pipefail
 
+# Set only on the chained hook's environment (see the bottom of this file), so
+# seeing it here means the chained hook called back into this dispatcher. Left
+# alone that recursion never returns (#2728); refusing turns it into a failure
+# that names the file.
+if [ -n "${VIBE_PREPUSH_DISPATCHING:-}" ]; then
+    cat >&2 <<REENTERED
+
+[prepush_dispatch] ⛔ pre-push.chained ran this dispatcher again, so every push
+would recurse forever. Stopping here.
+
+pre-push.chained (in the directory \`git rev-parse --git-path hooks\` prints) is
+meant to hold someone else's hook, such as git-lfs's. If it is a copy of the
+guard shim, or pre-commit's hook template, delete it.
+
+If you exported VIBE_PREPUSH_DISPATCHING yourself, unset it instead.
+
+REENTERED
+    exit 1
+fi
+
 _dispatch_dir="${BASH_SOURCE[0]%/*}"
 [ "$_dispatch_dir" = "${BASH_SOURCE[0]}" ] && _dispatch_dir="."
 
@@ -106,7 +126,7 @@ done
 # hook gives `import: command not found`, rc=2.
 _hooks_dir="$(git rev-parse --git-path hooks 2>/dev/null)"
 if [ -n "${_hooks_dir:-}" ] && [ -x "$_hooks_dir/$_CHAINED_NAME" ]; then
-    "$_hooks_dir/$_CHAINED_NAME" "$@" < <(_feed)
+    VIBE_PREPUSH_DISPATCHING=1 "$_hooks_dir/$_CHAINED_NAME" "$@" < <(_feed)
     _chained_rc=$?
     if [ "$_chained_rc" -ne 0 ]; then
         _rc="$_chained_rc"

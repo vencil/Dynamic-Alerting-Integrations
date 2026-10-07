@@ -345,7 +345,9 @@ def test_an_existing_foreign_hook_is_chained_not_refused(tmp_path: Path) -> None
     Windows).
 
     So the foreign hook is moved aside and still runs — with the same argv and
-    the same stdin, which git-lfs needs.
+    every row of the same stdin, which git-lfs needs. Two refs are pushed so
+    that dropping a row cannot pass, and the rows are compared as a set because
+    git's row order depends on the push shape.
     """
     work = _make_repo(tmp_path, _PROTECT_ONLY)
     hooks = work / ".git" / "hooks"
@@ -353,10 +355,9 @@ def test_an_existing_foreign_hook_is_chained_not_refused(tmp_path: Path) -> None
     # shaped like git-lfs's: /bin/sh, takes <remote> <url>, reads stdin
     (hooks / "pre-push").write_text(
         "#!/bin/sh\n"
-        'n=0\n'
-        'while read -r a b c d; do n=$((n+1)); done\n'
-        'printf "FOREIGN argv=%s rows=%s\\n" "$*" "$n" '
-        '>> "$(git rev-parse --show-toplevel)/foreign.log"\n'
+        'log="$(git rev-parse --show-toplevel)/foreign.log"\n'
+        'printf "FOREIGN argv=%s\\n" "$*" >> "$log"\n'
+        'while read -r a b c d; do printf "ROW %s\\n" "$c" >> "$log"; done\n'
         "exit 0\n",
         encoding="utf-8", newline="\n",
     )
@@ -369,14 +370,17 @@ def test_an_existing_foreign_hook_is_chained_not_refused(tmp_path: Path) -> None
         "the shim did not take the pre-push slot"
     )
 
-    # it must still run, and still see the refspec
+    # it must still run, and still see every row
     _commit(work, "third")
-    pushed, out = _push(work, "HEAD:refs/heads/feat/chained", env_extra=_SIBLINGS_OFF)
+    pushed, out = _push(work, "HEAD:refs/heads/feat/a", "HEAD:refs/heads/feat/b",
+                        env_extra=_SIBLINGS_OFF)
     assert pushed.returncode == 0, out
     log = work / "foreign.log"
     assert log.is_file(), f"the chained hook never ran:\n{out}"
     body = log.read_text(encoding="utf-8")
-    assert "rows=1" in body, f"the chained hook ran but got no refspec: {body!r}"
+    rows = [ln.split(" ", 1)[1] for ln in body.splitlines() if ln.startswith("ROW ")]
+    assert sorted(rows) == ["refs/heads/feat/a", "refs/heads/feat/b"], (
+        f"the chained hook did not get every row git fed the push: {body!r}")
     assert "argv=origin" in body, f"the chained hook lost its argv: {body!r}"
 
     # ⛔ CONTROL: the guards still guard. Without this, a dispatcher that ran
@@ -385,6 +389,64 @@ def test_an_existing_foreign_hook_is_chained_not_refused(tmp_path: Path) -> None
         work, "HEAD:refs/heads/main", env_extra=_SIBLINGS_OFF
     )
     assert blocked.returncode != 0 and _BANNER in blocked_out, blocked_out
+
+
+def _push_or_kill(work: Path, *refspecs: str, timeout: int = 30):
+    """`_push`, but a push still running after ``timeout`` is killed with its
+    whole process group and reported as ``None`` — a recursing hook spawns
+    without end, so killing only git would leave the recursion running."""
+    env = {**os.environ, **_SIBLINGS_OFF}
+    p = subprocess.Popen(  # subprocess-timeout: ignore
+        ["git", "push", "--dry-run", "origin", *refspecs], cwd=work, env=env,
+        stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True,
+        encoding="utf-8", errors="replace", start_new_session=True,
+    )
+    try:
+        out, _ = p.communicate(timeout=timeout)
+    except subprocess.TimeoutExpired:
+        os.killpg(p.pid, signal.SIGKILL)
+        out, _ = p.communicate(timeout=10)
+        return None, out
+    return p.returncode, out
+
+
+@pytest.mark.skipif(not hasattr(os, "killpg"),
+                    reason="a recursing push is stopped by killing its process group")
+@pytest.mark.parametrize("header", ["edited", "deleted"])
+def test_a_chained_hook_that_calls_back_into_the_dispatcher_fails_instead_of_recursing(
+    tmp_path: Path, header: str
+) -> None:
+    """#2728: the installer recognises its shim by the header line, so a shim
+    whose header was edited or deleted is taken for someone else's hook and
+    moved to pre-push.chained. The dispatcher then runs it, it runs the
+    dispatcher, and every push — feature branches included — never returns.
+
+    The second half follows the remedy the refusal prints, once.
+    """
+    work = _make_repo(tmp_path, _PROTECT_ONLY)
+    assert _install_guards(work).returncode == 0
+    hook = work / ".git" / "hooks" / "pre-push"
+    lines = hook.read_text(encoding="utf-8").split("\n")
+    if header == "edited":
+        lines[1] = "# header edited by hand"
+    else:
+        del lines[1]
+    hook.write_text("\n".join(lines), encoding="utf-8", newline="\n")
+    r = _install_guards(work)
+    assert r.returncode == 0, f"{r.stdout}{r.stderr}"
+    chained = hook.with_name("pre-push.chained")
+    assert chained.is_file(), "precondition: the edited shim was not chained"
+
+    rc, out = _push_or_kill(work, "HEAD:refs/heads/feat/x")
+    assert rc is not None, f"the push recursed until it was killed:\n{out}"
+    assert rc != 0, f"the recursion was not refused:\n{out}"
+    assert "pre-push.chained ran this dispatcher again" in out, out
+
+    chained.unlink()
+    feat, feat_out = _push(work, "HEAD:refs/heads/feat/x", env_extra=_SIBLINGS_OFF)
+    assert feat.returncode == 0, f"deleting pre-push.chained did not fix it:\n{feat_out}"
+    main, main_out = _push(work, "HEAD:refs/heads/main", env_extra=_SIBLINGS_OFF)
+    assert main.returncode != 0 and _BANNER in main_out, main_out
 
 
 @pytest.mark.parametrize("pre_commit_again", [False, True])
