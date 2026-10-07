@@ -719,11 +719,99 @@ def find_misread_scalars(root: Optional["yaml.Node"], schema: dict,
     cross-document ``$ref``; *schema_name* is *schema*'s own basename in it.
     See the block comment above for what is (and is not) a string field.
     """
+    found: list[MisreadScalar] = []
+    for node, cands, path in _plain_scalars_with_schema(root, schema, schemas, schema_name):
+        if node.tag == _YAML_STR_TAG:
+            continue
+        types = schema_scalar_types(cands)
+        if types is None or types - {"null"} != {"string"}:
+            continue
+        if node.tag == _YAML_NULL_TAG and "null" in types:
+            continue
+        found.append(MisreadScalar(
+            node.start_mark.line + 1, node.start_mark.column + 1,
+            path or "/", node.value, node.tag.rsplit(":", 1)[-1]))
+    found.sort(key=lambda m: (m.line, m.column))
+    return found
+
+
+# ── #2509: an UNQUOTED YAML 1.1 boolean word in a field that takes a boolean
+#
+# `send_resolved: on` / `_routing_enforced: {enabled: yes}` is True to
+# PyYAML (YAML 1.1), so the schema passes it, but the Go readers (yaml.v3)
+# read the STRING "on" / "yes": `da-guard effective` serves that string and
+# its merged_hash differs from describe_tenant's. Nothing on the READ side
+# changes (#2509 owner decision ②) — the author is told to write true /
+# false. A WARN, not an ERROR: the receiver fields (`definitions.yamlBool`)
+# accept the word on both sides and generate the same Alertmanager config.
+#
+# ⛔ As for #2164, no word list here: a word counts when PyYAML's resolver
+# tagged the plain scalar `bool` (exactly the YAML 1.1 words, the schema's
+# `yamlBool` enum and Go's receiverspec.YAML11BoolLiterals — pinned by
+# tests/shared/test_yaml11_bool_word_warning.py) and yaml.v3 does NOT read it
+# as a boolean (only true / True / TRUE / false / False / FALSE). A field
+# takes a boolean when any schema branch that can describe it allows one.
+_YAML_BOOL_TAG = "tag:yaml.org,2002:bool"
+_YAML12_BOOL_TEXTS = frozenset(("true", "True", "TRUE", "false", "False", "FALSE"))
+
+
+class YamlBoolWord:
+    """One unquoted YAML 1.1 boolean word in a boolean field (#2509).
+
+    ``line`` / ``column`` are 1-based; ``path`` as for :class:`MisreadScalar`;
+    ``text`` the word as written."""
+
+    __slots__ = ("line", "column", "path", "text")
+
+    def __init__(self, line: int, column: int, path: str, text: str) -> None:
+        self.line, self.column, self.path, self.text = line, column, path, text
+
+    def message(self) -> str:
+        field = self.path.rsplit("/", 1)[-1]
+        value = "true" if self.text.lower() in ("yes", "on") else "false"
+        written = (f"- {value}" if field.isdigit() or not field else f"{field}: {value}")
+        return (f"{self.path}: unquoted {self.text!r} is a YAML 1.1 boolean — PyYAML "
+                f"and this schema read it as {value}, but the Go readers (yaml.v3, "
+                f"da-guard / the exporter) read the string {self.text!r}, so the two "
+                f"sides see different values (and a different merged_hash) — "
+                f"write it as: {written}")
+
+    def __repr__(self) -> str:  # pragma: no cover - debugging aid
+        return f"YamlBoolWord({self.line}:{self.column} {self.path} {self.text!r})"
+
+
+def find_yaml11_bool_words(root: Optional["yaml.Node"], schema: dict,
+                           schemas: Optional[dict[str, Any]] = None,
+                           schema_name: str = "") -> list[YamlBoolWord]:
+    """Every plain scalar under *root* in a field of *schema* that takes a
+    boolean, written as a YAML 1.1 boolean word yaml.v3 reads as a string
+    (`yes` / `no` / `on` / `off`, three spellings each) — #2509. Arguments
+    as for :func:`find_misread_scalars`."""
+    found: list[YamlBoolWord] = []
+    for node, cands, path in _plain_scalars_with_schema(root, schema, schemas, schema_name):
+        if node.tag != _YAML_BOOL_TAG or node.value in _YAML12_BOOL_TEXTS:
+            continue
+        types = schema_scalar_types(cands)
+        if types is None or "boolean" not in types:
+            continue
+        found.append(YamlBoolWord(node.start_mark.line + 1, node.start_mark.column + 1,
+                                  path or "/", node.value))
+    found.sort(key=lambda m: (m.line, m.column))
+    return found
+
+
+def _plain_scalars_with_schema(root: Optional["yaml.Node"], schema: dict,
+                               schemas: Optional[dict[str, Any]],
+                               schema_name: str):
+    """Each plain (unquoted, not block) scalar under *root*, with the schema
+    branches that can describe its position and its JSON-pointer-like path —
+    the walk `find_misread_scalars` and `find_yaml11_bool_words` share.
+    Merge keys put the merged keys in the mapping holding them; an alias
+    re-entering the same schema position is walked once."""
     if root is None:
-        return []
+        return
     schemas = dict(schemas or {})
     schemas.setdefault(schema_name, schema)
-    found: list[MisreadScalar] = []
     seen: set[tuple[int, tuple[int, ...]]] = set()
     stack: list[tuple["yaml.Node", list[tuple[dict, str]], str]] = [
         (root, _schema_expand(schema, schema_name, schemas), "")]
@@ -755,18 +843,7 @@ def find_misread_scalars(root: Optional["yaml.Node"], schema: dict,
                               _schema_item_children(cands, idx, schemas),
                               f"{path}/{idx}"))
         elif isinstance(node, yaml.ScalarNode) and node.style is None:
-            if node.tag == _YAML_STR_TAG:
-                continue
-            types = schema_scalar_types(cands)
-            if types is None or types - {"null"} != {"string"}:
-                continue
-            if node.tag == _YAML_NULL_TAG and "null" in types:
-                continue
-            found.append(MisreadScalar(
-                node.start_mark.line + 1, node.start_mark.column + 1,
-                path or "/", node.value, node.tag.rsplit(":", 1)[-1]))
-    found.sort(key=lambda m: (m.line, m.column))
-    return found
+            yield node, cands, path
 
 
 def exit_on_yaml_file_error(fn: _F) -> _F:

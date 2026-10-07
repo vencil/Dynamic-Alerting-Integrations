@@ -24,6 +24,11 @@ SCOPE:
   validators; they are SKIPPED and listed explicitly so coverage is never silently
   capped.
 
+WARN (#2509, never changes the exit code): an unquoted YAML 1.1 boolean word
+  (`yes` / `no` / `on` / `off`, three spellings each) in a field that takes a
+  boolean — PyYAML, and so this schema check, reads a boolean; the Go readers
+  (yaml.v3) read the string. Each one is printed as `WARN: <file>:<line>: …`.
+
 Exit codes (scripts/tools/_lib_exitcodes.py):
   0  all tenant files valid
   1  >=1 schema violation (user fixes the YAML or the schema)
@@ -52,7 +57,8 @@ sys.path.insert(0, os.path.join(_THIS_DIR, ".."))
 from _lib_exitcodes import EXIT_OK, EXIT_VIOLATION, EXIT_CALLER_ERROR  # noqa: E402
 from _lib_io import safe_label  # noqa: E402  (#1538 output-layer escaping)
 from _lib_io import strict_safe_load_all  # noqa: E402  (#2123 duplicate key = YAML error)
-from _lib_io import compose_all_nodes, find_misread_scalars  # noqa: E402  (#2164)
+from _lib_io import (  # noqa: E402  (#2164, #2509)
+    compose_all_nodes, find_misread_scalars, find_yaml11_bool_words)
 from _lib_confd import (  # noqa: E402  (#1588 shared name predicates)
     has_yaml_extension,
     is_defaults_document_name,
@@ -304,10 +310,29 @@ def misread_scalar_violations(rel: str, text: str, schema: dict,
     return out
 
 
+def yaml11_bool_word_warnings(rel: str, text: str, schema: dict,
+                              schemas: dict, schema_name: str) -> list[str]:
+    """#2509: one WARN per unquoted YAML 1.1 boolean word (`yes` / `no` /
+    `on` / `off`, three spellings each) in a field that takes a boolean —
+    PyYAML (and so this schema check) reads a boolean, the Go readers read
+    the string. `_lib_io.find_yaml11_bool_words` decides; WARN, not ERROR:
+    nothing on the read side changed (owner decision ②)."""
+    out: list[str] = []
+    for root in compose_all_nodes(io.StringIO(text)):
+        for hit in find_yaml11_bool_words(root, schema, schemas, schema_name):
+            out.append(f"WARN: {rel}:{hit.line}: {hit.message()}")
+    return out
+
+
 def validate_dir(config_dir: str, schema: dict, validator,
                  platform_schema: dict | None = None,
-                 profiles_schema: dict | None = None) -> tuple[int, list[str], list[str]]:
+                 profiles_schema: dict | None = None,
+                 warnings: list[str] | None = None) -> tuple[int, list[str], list[str]]:
     """Return (checked_count, violation_messages, skipped_relpaths).
+
+    `warnings`, when given, collects the `WARN:` lines (#2509: a YAML 1.1
+    boolean word in a boolean field) — findings that do not fail the gate,
+    kept out of the violations so a caller counting them is unchanged.
 
     `validator` is the jsonschema module (injected so the import stays lazy — the
     CI exit-code gate runs `--help` in an env that may not have jsonschema, so a
@@ -359,6 +384,9 @@ def validate_dir(config_dir: str, schema: dict, validator,
             file_schema, file_schema_name = schema, TENANT_SCHEMA_NAME
         violations.extend(misread_scalar_violations(
             rel, text, file_schema, schemas, file_schema_name))
+        if warnings is not None:
+            warnings.extend(yaml11_bool_word_warnings(
+                rel, text, file_schema, schemas, file_schema_name))
         for doc in docs:
             if is_profiles:
                 # #2245: an empty / comment-only `_routing_profiles.yaml` is a
@@ -494,24 +522,32 @@ def main() -> int:
     # which tree to go fix.
     checked = 0
     violations: list[str] = []
+    warnings: list[str] = []
     skipped: list[str] = []
     multi = len(args.config_dir) > 1
     for config_dir in args.config_dir:
+        d_warnings: list[str] = []
         try:
             d_checked, d_violations, d_skipped = validate_dir(
-                config_dir, schema, jsonschema, platform_schema, profiles_schema)
+                config_dir, schema, jsonschema, platform_schema, profiles_schema,
+                warnings=d_warnings)
         except _CallerError as exc:
             print(f"ERROR: {safe_label(exc)}", file=sys.stderr)
             return EXIT_CALLER_ERROR
         prefix = f"{config_dir.replace(os.sep, '/')}/" if multi else ""
         checked += d_checked
         violations.extend(v.replace("ERROR: ", f"ERROR: {prefix}", 1) for v in d_violations)
+        warnings.extend(w.replace("WARN: ", f"WARN: {prefix}", 1) for w in d_warnings)
         skipped.extend(f"{prefix}{s}" for s in d_skipped)
 
     if skipped:
         print(f"skipped {len(skipped)} meta-file(s) not modelled by the tenant-config, "
               f"platform-defaults or routing-profiles schema (own shape/validator): "
               f"{safe_label(', '.join(skipped))}")
+    # #2509: printed whatever the verdict, and never a failure on their own
+    # (the hook runs `verbose: true` so pre-commit shows them on a pass).
+    for msg in warnings:
+        print(safe_label(msg), file=sys.stderr)
     if violations:
         for msg in violations:
             print(safe_label(msg), file=sys.stderr)
@@ -521,7 +557,8 @@ def main() -> int:
               f"schema is wrong.", file=sys.stderr)
         return EXIT_VIOLATION
 
-    print(f"OK: {checked} tenant conf.d file(s) valid against tenant-config.schema.json")
+    tail = f" ({len(warnings)} warning(s) above)" if warnings else ""
+    print(f"OK: {checked} tenant conf.d file(s) valid against tenant-config.schema.json{tail}")
     return EXIT_OK
 
 

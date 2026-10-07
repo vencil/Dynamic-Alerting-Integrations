@@ -20,6 +20,7 @@ import copy
 import datetime
 import decimal
 import hashlib
+import io
 import json
 import math
 import os
@@ -955,9 +956,368 @@ class _GoKeyProfileTextLoader(_GoKeyLoader):
     the `--what-if` file — the reads #2297 changed. `ExporterKeyLoader.construct_mapping` takes that value
     before any constructor runs, so neither the timestamp nor the `!!binary`
     rendering (#2371) reaches it: `_profile: 2026-12-31` names profile
-    "2026-12-31", as the exporter's `ScheduledValue` keeps `value.Value`."""
+    "2026-12-31", as the exporter's `ScheduledValue` keeps `value.Value`.
+
+    A `_profile:` MAPPING is read as Go `withProfileText` reads it (#2515),
+    through `ScheduledValue.UnmarshalYAML` (pkg/config/parse.go):
+      - a WRITTEN `default:` key (the scheduled-value form, e.g.
+        `{default: '010'}`): the default's text — as yaml.v3 decodes a scalar
+        into a Go string: its source text (`010` is "010", `1.50` is "1.50",
+        `2026-12-31` is "2026-12-31"), a null is "", `!!binary` is the decoded
+        bytes. The mapping's other keys elect nothing.
+      - no written `default:` but one reached through a merge key
+        (`{<<: {default: x}}`): ScheduledValue sees `<<`, takes its
+        arbitrary-mapping branch and keeps the yaml.v3 `Marshal` text of the
+        merged mapping (`default: x\\n`) — `_go_yaml_marshal`.
+      - any other mapping (no `default` at all) stays the generic mapping;
+        it elects no profile (`_profile_name`).
+    ⚠️ Not mirrored: a `default:` that is a sequence or a mapping. yaml.v3
+    cannot decode it into a string, so the exporter rejects the WHOLE file
+    (the `_read_profiles` precedent); here `_profile` stays that mapping and
+    elects nothing."""
 
     raw_text_scalars = frozenset(_PROFILE_AS_TEXT)
+
+    def flatten_mapping(self, node):
+        """Remember the keys a mapping WRITES before `<<` is merged into it
+        (#2515): `ScheduledValue` tests the written keys for `default`, and
+        PyYAML's flattening rewrites `node.value` in place. Recorded once, so
+        a node an alias reaches again keeps its written keys."""
+        if not hasattr(node, "go_written_keys"):
+            node.go_written_keys = frozenset(
+                k.value for k, _ in node.value if isinstance(k, yaml.ScalarNode))
+        super().flatten_mapping(node)
+
+    def construct_mapping(self, node, deep=False):  # noqa: D102 — see class
+        mapping = super().construct_mapping(node, deep=deep)
+        for key_node, value_node in node.value:
+            if (isinstance(key_node, yaml.ScalarNode) and isinstance(value_node, yaml.MappingNode)
+                    and key_node.value in self.raw_text_scalars):
+                text = self._scheduled_value_text(value_node)
+                if text is not None:
+                    mapping[key_node.value] = text  # the dict keeps its `_GoKey`
+        return mapping
+
+    def _scheduled_value_text(self, node) -> "str | None":
+        """`ScheduledValue.Default` of a mapping `node`, as `withProfileText`
+        takes it; None where it leaves the generic value (see the class)."""
+        written = getattr(node, "go_written_keys", None)
+        if written is None:
+            written = frozenset(k.value for k, _ in node.value if isinstance(k, yaml.ScalarNode))
+        self.flatten_mapping(node)
+        if "default" in written:
+            default = None
+            for key_node, value_node in node.value:  # merged first, so the written one wins
+                if isinstance(key_node, yaml.ScalarNode) and key_node.value == "default":
+                    default = value_node
+            if not isinstance(default, yaml.ScalarNode):
+                return None  # yaml.v3 rejects the file; not mirrored (see the class)
+            if default.tag == _YAML_NULL_TAG and default.style is None:
+                return ""
+            if default.tag == _YAML_BINARY_TAG:
+                return self._construct_binary(default).decode(
+                    "utf-8", "describe_tenant.go_invalid_utf8")
+            return _reject_surrogates(default.value, default)
+        merged = _go_generic(self, node)
+        if any(k == ("str", "default") for k in merged[1]):
+            return _go_yaml_marshal(merged)
+        return None
+
+
+# ── yaml.v3 generic decode + Marshal (#2515: the merge-key `_profile`) ────
+# Values are `(kind, payload)`: kind "str" / "int" / "float" / "bool" /
+# "null" / "time" (payload: `_go_parse_timestamp`'s tuple), "map" (payload:
+# {key value: value}, insertion order) or "seq" (payload: a list).
+_YAML_NULL_TAG = "tag:yaml.org,2002:null"
+_GO_NULL_TEXTS = ("", "~", "null", "Null", "NULL")
+_GO_OLD_BOOLS = frozenset(("y", "Y", "yes", "Yes", "YES", "on", "On", "ON",
+                           "n", "N", "no", "No", "NO", "off", "Off", "OFF"))
+_GO_BASE60_FLOAT = re.compile(r"[-+]?[0-9][0-9_]*(?::[0-5]?[0-9])+(?:\.[0-9_]*)?")
+
+
+def _go_resolve_plain(text: str) -> tuple:
+    """yaml.v3 `resolve("", text)` of an untagged plain scalar, as decoded
+    into an `interface{}` (a timestamp is a time.Time there)."""
+    if text in _GO_NULL_TEXTS:
+        return ("null", None)
+    if text in _GO_BOOL_TEXTS:
+        return ("bool", _GO_BOOL_TEXTS[text])
+    if text in _GO_NONFINITE:
+        return ("float", _GO_NONFINITE[text])
+    if text[0] in "0123456789+-":
+        stamp = _go_parse_timestamp(text)
+        if stamp is not None:
+            return ("time", stamp)
+    if text[0] in "0123456789+-.":
+        number = _go_plain_number(text)
+        if number is not None:
+            return ("int", number) if isinstance(number, int) else ("float", number)
+    return ("str", text)
+
+
+def _go_generic(loader: Any, node: Any) -> tuple:
+    """yaml.v3's decode of `node` into an `interface{}` (merge keys resolved
+    as PyYAML's flattening resolves them: a written key over a merged one)."""
+    if isinstance(node, yaml.SequenceNode):
+        return ("seq", [_go_generic(loader, item) for item in node.value])
+    if isinstance(node, yaml.MappingNode):
+        loader.flatten_mapping(node)
+        out: dict = {}
+        for key_node, value_node in node.value:
+            out[_go_generic(loader, key_node)] = _go_generic(loader, value_node)
+        return ("map", out)
+    if node.style is not None or (getattr(node, "go_explicit_tag", False)
+                                  and node.tag == _YAML_STR_TAG):
+        return ("str", _reject_surrogates(node.value, node))
+    if node.tag == _YAML_BINARY_TAG:
+        return ("str", loader._construct_binary(node).decode(
+            "utf-8", "describe_tenant.go_invalid_utf8"))
+    return _go_resolve_plain(_reject_surrogates(node.value, node))
+
+
+# reflect.Kind order, as yaml.v3's keyList.Less compares unlike kinds.
+_GO_KIND_RANK = {"bool": 1, "int": 2, "float": 14, "str": 24, "null": 20,
+                 "map": 21, "seq": 23, "time": 25}
+
+
+def _go_key_float(key: tuple) -> "float | None":
+    kind, payload = key
+    if kind in ("int", "float"):
+        return float(payload)
+    if kind == "bool":
+        return 1.0 if payload else 0.0
+    return None
+
+
+def _go_key_less(a: tuple, b: tuple) -> bool:
+    """yaml.v3 `keyList.Less` (sorter.go) — the order Marshal writes a
+    map's keys in: numbers by value, strings "naturally" (digit runs by
+    number), unlike kinds by reflect.Kind."""
+    af, bf = _go_key_float(a), _go_key_float(b)
+    if af is not None and bf is not None:
+        if af != bf:
+            return af < bf
+        if a[0] != b[0]:
+            return _GO_KIND_RANK[a[0]] < _GO_KIND_RANK[b[0]]
+        return a[1] < b[1]
+    if a[0] != "str" or b[0] != "str":
+        return _GO_KIND_RANK[a[0]] < _GO_KIND_RANK[b[0]]
+    ar, br = a[1], b[1]
+    digits = False
+    for i in range(min(len(ar), len(br))):
+        if ar[i] == br[i]:
+            digits = ar[i].isdigit()
+            continue
+        al, bl = ar[i].isalpha(), br[i].isalpha()
+        if al and bl:
+            return ar[i] < br[i]
+        if al or bl:
+            return al if digits else bl
+        an = bn = 0
+        if ar[i] == "0" or br[i] == "0":
+            j = i - 1
+            while j >= 0 and ar[j].isdigit():
+                if ar[j] != "0":
+                    an = bn = 1
+                    break
+                j -= 1
+        ai = i
+        while ai < len(ar) and ar[ai].isdigit():
+            an = an * 10 + ord(ar[ai]) - 48
+            ai += 1
+        bi = i
+        while bi < len(br) and br[bi].isdigit():
+            bn = bn * 10 + ord(br[bi]) - 48
+            bi += 1
+        if an != bn:
+            return an < bn
+        if ai != bi:
+            return ai < bi
+        return ar[i] < br[i]
+    return len(ar) < len(br)
+
+
+class _GoV3Emitter(yaml.emitter.Emitter):
+    """PyYAML's emitter (a libyaml port, as yaml.v3's is) with yaml.v3's
+    layout change (emitterc.go `yaml_emitter_increase_indent`, "[Go] This was
+    changed so that indentations are more regular"): a block sequence under
+    a mapping key is indented, a collection inside a sequence item starts
+    right after its `- `, everything else aligns to a multiple of the
+    indent."""
+
+    def expect_block_sequence(self):  # noqa: D102 — see class
+        self.increase_indent(flow=False, indentless=False)
+        self.state = self.expect_first_block_sequence_item
+
+    def increase_indent(self, flow=False, indentless=False):  # noqa: D102 — see class
+        self.indents.append(self.indent)
+        if self.indent is None:
+            self.indent = self.best_indent if flow else 0
+        elif not indentless:
+            if self.states and self.states[-1] == self.expect_block_sequence_item:
+                self.indent += 2
+            else:
+                self.indent = self.best_indent * ((self.indent + self.best_indent)
+                                                  // self.best_indent)
+
+    def check_simple_key(self):
+        """emitterc.go `yaml_emitter_check_simple_key`: up to 128 BYTES, an
+        empty scalar included (`"": 4`, where PyYAML writes `? ""`)."""
+        if isinstance(self.event, yaml.ScalarEvent):
+            if self.analysis is None:
+                self.analysis = self.analyze_scalar(self.event.value)
+            return (not self.analysis.multiline
+                    and len(self.event.value.encode("utf-8", "surrogatepass")) <= 128)
+        return super().check_simple_key()
+
+    def write_literal(self, text):  # noqa: D102 — yaml.v3 writes no `...` after `|+`
+        super().write_literal(text)
+        self.open_ended = False
+
+    def analyze_scalar(self, scalar):
+        """emitterc.go `yaml_emitter_analyze_scalar`. Where it differs from
+        PyYAML's: a tab rules out plain and single-quoted only (a block
+        scalar may hold it), and a character outside libyaml's printable
+        set — a 4-byte one too — forces double quotes."""
+        if not scalar:
+            return yaml.emitter.ScalarAnalysis(
+                scalar=scalar, empty=True, multiline=False, allow_flow_plain=False,
+                allow_block_plain=True, allow_single_quoted=True,
+                allow_double_quoted=True, allow_block=False)
+        breaks, blanks = "\r\n\x85  ", " \t"
+        block_ind = flow_ind = line_breaks = special = tabs = False
+        lead_space = lead_break = trail_space = trail_break = False
+        break_space = space_break = prev_space = prev_break = False
+        if scalar.startswith(("---", "...")):
+            block_ind = flow_ind = True
+        preceded = True
+        last = len(scalar) - 1
+        for i, ch in enumerate(scalar):
+            followed = i == last or scalar[i + 1] in blanks
+            if i == 0:
+                if ch in "#,[]{}&*!|>'\"%@`":
+                    flow_ind = block_ind = True
+                elif ch in "?:":
+                    flow_ind = True
+                    block_ind = block_ind or followed
+                elif ch == "-" and followed:
+                    flow_ind = block_ind = True
+            elif ch in ",?[]{}":
+                flow_ind = True
+            elif ch == ":":
+                flow_ind = True
+                block_ind = block_ind or followed
+            elif ch == "#" and preceded:
+                flow_ind = block_ind = True
+            if ch == "\t":
+                tabs = True
+            elif not (ch == "\n" or " " <= ch <= "~" or "\xa0" <= ch <= "퟿"
+                      or ("" <= ch <= "�" and ch != "﻿")):
+                special = True
+            if ch == " ":
+                lead_space = lead_space or i == 0
+                trail_space = trail_space or i == last
+                break_space = break_space or prev_break
+                prev_space, prev_break = True, False
+            elif ch in breaks:
+                line_breaks = True
+                lead_break = lead_break or i == 0
+                trail_break = trail_break or i == last
+                space_break = space_break or prev_space
+                prev_space, prev_break = False, True
+            else:
+                prev_space = prev_break = False
+            preceded = ch in blanks or ch in breaks or ch == "\0"
+        flow_plain = block_plain = single = block = True
+        if lead_space or lead_break or trail_space or trail_break:
+            flow_plain = block_plain = False
+        if trail_space:
+            block = False
+        if break_space:
+            flow_plain = block_plain = single = False
+        if space_break or tabs or special:
+            flow_plain = block_plain = single = False
+        if space_break or special:
+            block = False
+        if line_breaks:
+            flow_plain = block_plain = False
+        if flow_ind:
+            flow_plain = False
+        if block_ind:
+            block_plain = False
+        return yaml.emitter.ScalarAnalysis(
+            scalar=scalar, empty=False, multiline=line_breaks, allow_flow_plain=flow_plain,
+            allow_block_plain=block_plain, allow_single_quoted=single,
+            allow_double_quoted=True, allow_block=block)
+
+
+def _go_scalar_event(value: tuple) -> Any:
+    """The scalar event yaml.v3's encoder emits for `value` (encode.go)."""
+    kind, payload = value
+    style = None
+    if kind == "str":
+        text = payload
+        # `<<` is a string here: yaml.v3 consults its resolve map only for
+        # a text whose first character has a hint, and `<` has none.
+        plain_ok = (bool(text) and _go_resolve_plain(text)[0] == "str"
+                    and not _GO_BASE60_FLOAT.fullmatch(text) and text not in _GO_OLD_BOOLS)
+        if "\n" in text:
+            style = "|"
+        elif not plain_ok:
+            style = '"'
+    elif kind == "int":
+        text = str(payload)
+    elif kind == "bool":
+        text = "true" if payload else "false"
+    elif kind == "null":
+        text = "null"
+    elif kind == "time":
+        text = _go_time_json(*payload)
+    else:  # float: strconv 'g', shortest
+        text = {"+Inf": ".inf", "-Inf": "-.inf", "NaN": ".nan"}.get(
+            _go_float_v(payload), _go_float_v(payload))
+    return yaml.ScalarEvent(None, None, (True, True), text, style=style)
+
+
+def _go_marshal_events(value: tuple, events: list) -> None:
+    kind, payload = value
+    if kind == "map":
+        events.append(yaml.MappingStartEvent(None, None, True, flow_style=not payload))
+        keys = list(payload)
+        for i in range(1, len(keys)):  # insertion sort: Less is not a total key
+            j = i
+            while j > 0 and _go_key_less(keys[j], keys[j - 1]):
+                keys[j - 1], keys[j] = keys[j], keys[j - 1]
+                j -= 1
+        for key in keys:
+            _go_marshal_events(key, events)
+            _go_marshal_events(payload[key], events)
+        events.append(yaml.MappingEndEvent())
+    elif kind == "seq":
+        events.append(yaml.SequenceStartEvent(None, None, True, flow_style=not payload))
+        for item in payload:
+            _go_marshal_events(item, events)
+        events.append(yaml.SequenceEndEvent())
+    else:
+        events.append(_go_scalar_event(value))
+
+
+def _go_yaml_marshal(value: tuple) -> str:
+    """yaml.v3 `Marshal` of a `_go_generic` value: block style, indent 4, no
+    line wrapping, keys in `keyList` order, a string quoted where yaml.v3
+    would read it back as something else (`"010"`, `"yes"`, `""`).
+
+    ⚠️ Known divergence: a multi-line string that STARTS with a line break.
+    yaml.v3 writes it as a `|4-` block and drops that first break (its own
+    round-trip loss); this writes the break."""
+    events: list = [yaml.StreamStartEvent(), yaml.DocumentStartEvent(explicit=False)]
+    _go_marshal_events(value, events)
+    events += [yaml.DocumentEndEvent(explicit=False), yaml.StreamEndEvent()]
+    out = io.StringIO()
+    emitter = _GoV3Emitter(out, indent=4, width=(1 << 31) - 1, allow_unicode=True)
+    for event in events:
+        emitter.emit(event)
+    return out.getvalue()
 
 
 def _load_first_document(path: Path) -> Any:
@@ -1370,6 +1730,9 @@ class ConfDScanner:
             by_dir[d] = [(chosen, resolved)]
         self._defaults_by_dir = by_dir
         self.defaults_data = defaults_files
+        # #2097: the resolved files of this listing — `--what-if` substitutes
+        # the file at its path when it is one of them.
+        self.listed_files = frozenset(p.resolve() for p in entries)
         self._platform_files = self._read_platform_files(entries)
 
         # Collect all tenant files.
@@ -1528,11 +1891,9 @@ class ConfDScanner:
         """`tenant_id`'s entries in the root platform files, merge order.
 
         `replace` maps a resolved path to a document that stands in for that
-        file's `tenants:` block (`--what-if` on the root defaults carrier,
-        which it substitutes in the chain). ⚠️ `--what-if` on a root
-        platform file OUTSIDE the chain (`_profiles.yaml`) is not a faithful
-        simulation: the what-if path also inserts it as a chain level, which
-        predates #2019 and is not addressed here.
+        file's `tenants:` block (`--what-if` on a root platform file — the
+        defaults carrier, or one off the chain such as `_profiles.yaml`,
+        which `what_if_result` substitutes in place since #2097).
         """
         out: list[tuple[str, dict]] = []
         for name, resolved, blocks in self._platform_files:
@@ -1576,8 +1937,8 @@ class ConfDScanner:
         """The chain level of conf.d entry `entry`, or None outside conf.d.
 
         ⛔ #1967: ONE rule for the levels this tool computes — the chain's
-        carriers, and the `--what-if` file WHEN IT IS NOT an existing chain
-        carrier. The level is that of the directory HOLDING the entry,
+        carriers, and the `--what-if` file WHEN IT IS NOT a file of the
+        scanned tree (#2097: such a file is substituted in place). The level is that of the directory HOLDING the entry,
         resolved (the same key `_scan` groups carriers by,
         `dp.parent.resolve()`), so a linked conf.d or a `..` in the spelling
         lands on the real directory; the entry's own name is never followed.
@@ -1588,8 +1949,9 @@ class ConfDScanner:
 
         ⚠️ Not covered by this rule (pre-existing, unchanged): `--what-if`
         decides `substitute` by comparing the RESOLVED what-if path with the
-        chain, so a what-if link pointing at an existing chain carrier
-        replaces that carrier rather than being placed at its own level.
+        scanned files (`listed_files`, resolved), so a what-if link pointing
+        at a file of the tree replaces that file rather than being placed at
+        its own level.
         """
         holder = Path(os.path.realpath(entry.absolute().parent))
         try:
@@ -1694,13 +2056,17 @@ class ConfDScanner:
         return self._tenant_layer(tenant_id, self._chain_merged(tenant_id))[2]
 
     def _tenant_layer(self, tenant_id: str, chain: dict,
-                      replace: "dict[str, Any] | None" = None
+                      replace: "dict[str, Any] | None" = None,
+                      tenant_raw: Any = None
                       ) -> "tuple[Any, list[dict], list[dict]]":
         """The override merged over `chain`: the tenant block, the platform
         overlay (#2019) under it, the elected profile (#2117) under both —
-        and the two attributions. `replace` as for `platform_blocks`."""
+        and the two attributions. `replace` as for `platform_blocks`;
+        `tenant_raw`, when given, stands in for the tenant's own block
+        (`--what-if` on its tenant file)."""
         own, platform_sources = _overlay_tenant(
-            self.tenants[tenant_id], self.platform_blocks(tenant_id, replace=replace), chain)
+            self.tenants[tenant_id] if tenant_raw is None else tenant_raw,
+            self.platform_blocks(tenant_id, replace=replace), chain)
         layer, profile_sources = _expand_profile(own, self.profiles(replace=replace), chain)
         return layer, platform_sources, profile_sources
 
@@ -1771,6 +2137,135 @@ class ConfDScanner:
 # ---------------------------------------------------------------------------
 # CLI
 # ---------------------------------------------------------------------------
+
+class WhatIfError(Exception):
+    """A `--what-if` the simulation cannot answer (a caller error)."""
+
+
+def what_if_result(scanner: "ConfDScanner", tid: str, what_if_path: Path,
+                   what_if_entry: Path, what_if_data: Any,
+                   what_if_platform_doc: Any) -> dict:
+    """`--what-if`: `tid`'s effective config with `what_if_path`'s content
+    (`what_if_data` as a defaults carrier reads it, `what_if_platform_doc`
+    as a platform / tenant file reads it) in the place it names, diffed
+    against the tree `scanner` read.
+
+    `substitution_type`:
+      - "substitute": `what_if_path` (resolved) is a file of the scanned
+        tree. Its content stands in for that file and the tree is evaluated
+        again (#2097): as a carrier on `tid`'s chain, as a root platform
+        file (its `tenants:` / `profiles:` blocks), as `tid`'s own tenant
+        file — and as nothing at all where no plane reads it for `tid`
+        (`_profiles.yaml` is not a chain level; a carrier on another
+        branch is not on this chain). Unchanged bytes therefore never
+        report a reload. Before #2097 a file off the chain was always
+        inserted as a chain level, its whole document merged as defaults.
+      - "insert": a path inside conf.d that is not a scanned file — placed
+        in the chain at its entry's level (`entry_level`).
+      - "append-external": a path outside conf.d — the highest chain level.
+
+    ⚠️ Not simulated in "substitute": a tenant file whose new content
+    declares `tid` when `tid` lives in another file (the exporter would see
+    a duplicate), and any OTHER tenant the new content adds or drops.
+
+    Raises WhatIfError when `what_if_path` is `tid`'s own tenant file and
+    the new content no longer declares `tid`."""
+    # Baseline: current effective config. #772: use the RAW (deep_merge)
+    # `_custom_alerts` here so it matches the simulated side below (which is
+    # built from an in-memory modified chain the compiler walker cannot
+    # resolve) — otherwise an unrelated what-if edit would falsely diff the
+    # UNION baseline against the REPLACE simulation. The union view is the
+    # normal-mode / blast_radius contract, not what-if's.
+    baseline_effective = scanner.effective_config(tid, resolve_custom_alerts=False)
+    baseline_merged_hash = _canonical_hash(baseline_effective)
+
+    chain = scanner.defaults_chain[tid]
+    chain_entries = scanner._defaults_chain_entries[tid]
+    simulated_defaults_data = dict(scanner.defaults_data)
+    simulated_defaults_data[str(what_if_path)] = what_if_data
+    tenant_raw = None
+
+    if what_if_path in scanner.listed_files:
+        # ⛔ Same-path substitution, on or off the chain (#2097): the chain
+        # is unchanged, so a file off it changes the chain merge in nothing
+        # (`simulated_defaults_data` is read only for chain levels).
+        simulated_chain = list(chain)
+        substitution_type = "substitute"
+        if what_if_path == scanner.tenant_files.get(tid):
+            block = what_if_platform_doc.get("tenants") if isinstance(what_if_platform_doc, dict) else None
+            bodies = {_tenant_id(k): v for k, v in block.items()} if isinstance(block, dict) else {}
+            if tid not in bodies:
+                raise WhatIfError(f"--what-if file {what_if_path} is tenant '{tid}''s own file, "
+                                  f"and its new content does not declare '{tid}'")
+            tenant_raw = _tenant_body(bodies[tid])
+    else:
+        # Insert according to directory depth if the ENTRY is inside
+        # conf.d/, else append. #1967: both depths come from
+        # `entry_level` — the directory holding the entry, never the
+        # resolved target (a carrier or what-if link may point elsewhere
+        # in conf.d, or outside it). Before, the chain side raised into a
+        # `except ValueError` here and silently misfiled the what-if as
+        # append-external, and the what-if side took its link's target's
+        # level.
+        what_if_depth = scanner.entry_level(what_if_entry)
+        if what_if_depth is not None:
+            # Insert sorted by depth so that outer (L0) precedes inner (L3)
+            inserted = False
+            simulated_chain = []
+            for dp, entry in zip(chain, chain_entries):
+                if not inserted and what_if_depth < scanner.entry_level(entry):
+                    simulated_chain.append(what_if_path)
+                    inserted = True
+                simulated_chain.append(dp)
+            if not inserted:
+                simulated_chain.append(what_if_path)
+            substitution_type = "insert"
+        else:
+            # what-if entry outside conf.d/ → append at end (highest override)
+            simulated_chain = list(chain) + [what_if_path]
+            substitution_type = "append-external"
+
+    # Recompute effective config with simulated chain
+    simulated: dict = {}
+    for dp in simulated_chain:
+        ddata = simulated_defaults_data.get(str(dp), {})
+        simulated = deep_merge(simulated, _defaults_block(ddata))
+    # #2019 / #2117: the same platform per-tenant layer and profile
+    # expansion as the baseline — taken from the what-if document when
+    # it stands in for a root platform file, so an edit to its
+    # `tenants:` or `profiles:` block is simulated too.
+    sim_tenant = scanner._tenant_layer(
+        tid, simulated, replace={str(what_if_path): what_if_platform_doc},
+        tenant_raw=tenant_raw)[0]
+    simulated = deep_merge(simulated, sim_tenant)
+    what_if_merged_hash = _canonical_hash(simulated)
+
+    # Compute per-key diff
+    only_baseline: dict = {}
+    only_what_if: dict = {}
+    changed: dict = {}
+    for k in sorted(set(baseline_effective) | set(simulated)):
+        if k not in simulated:
+            only_baseline[k] = baseline_effective[k]
+        elif k not in baseline_effective:
+            only_what_if[k] = simulated[k]
+        elif baseline_effective[k] != simulated[k]:
+            changed[k] = {"baseline": baseline_effective[k], "what_if": simulated[k]}
+
+    hash_changed = baseline_merged_hash != what_if_merged_hash
+    return {
+        "tenant_id": tid,
+        "what_if_file": str(what_if_path),
+        "substitution_type": substitution_type,
+        "baseline_merged_hash": baseline_merged_hash,
+        "what_if_merged_hash": what_if_merged_hash,
+        "merged_hash_changed": hash_changed,
+        "would_trigger_reload": hash_changed,  # per ADR-017 dual-hash logic
+        "removed_keys": only_baseline,
+        "added_keys": only_what_if,
+        "changed_keys": changed,
+    }
+
 
 @exit_on_output_write_error
 def main() -> None:
@@ -1961,15 +2456,6 @@ def main() -> None:
             print(f"❌ --what-if file not found: {what_if_path}", file=sys.stderr)
             sys.exit(EXIT_CALLER_ERROR)
 
-        # Baseline: current effective config. #772: use the RAW (deep_merge)
-        # `_custom_alerts` here so it matches the simulated side below (which is
-        # built from an in-memory modified chain the compiler walker cannot
-        # resolve) — otherwise an unrelated what-if edit would falsely diff the
-        # UNION baseline against the REPLACE simulation. The union view is the
-        # normal-mode / blast_radius contract, not what-if's.
-        baseline_effective = scanner.effective_config(tid, resolve_custom_alerts=False)
-        baseline_merged_hash = _canonical_hash(baseline_effective)
-
         # Load the simulated defaults content
         try:
             what_if_data = _load_yaml(what_if_path)
@@ -1985,83 +2471,12 @@ def main() -> None:
             print(f"❌ Failed to parse --what-if file {what_if_path}: {e}", file=sys.stderr)
             sys.exit(EXIT_CALLER_ERROR)
 
-        # Simulate: substitute if path matches existing chain entry; else append as lowest-priority override
-        chain = scanner.defaults_chain[tid]
-        chain_entries = scanner._defaults_chain_entries[tid]
-        chain_strs = [str(p) for p in chain]
-        simulated_defaults_data = dict(scanner.defaults_data)
-        simulated_defaults_data[str(what_if_path)] = what_if_data
-
-        if str(what_if_path) in chain_strs:
-            simulated_chain = list(chain)
-            substitution_type = "substitute"  # Override existing defaults at same path
-        else:
-            # Insert according to directory depth if the ENTRY is inside
-            # conf.d/, else append. #1967: both depths come from
-            # `entry_level` — the directory holding the entry, never the
-            # resolved target (a carrier or what-if link may point elsewhere
-            # in conf.d, or outside it). Before, the chain side raised into a
-            # `except ValueError` here and silently misfiled the what-if as
-            # append-external, and the what-if side took its link's target's
-            # level.
-            what_if_depth = scanner.entry_level(Path(args.what_if))
-            if what_if_depth is not None:
-                # Insert sorted by depth so that outer (L0) precedes inner (L3)
-                inserted = False
-                simulated_chain = []
-                for dp, entry in zip(chain, chain_entries):
-                    if not inserted and what_if_depth < scanner.entry_level(entry):
-                        simulated_chain.append(what_if_path)
-                        inserted = True
-                    simulated_chain.append(dp)
-                if not inserted:
-                    simulated_chain.append(what_if_path)
-                substitution_type = "insert"
-            else:
-                # what-if entry outside conf.d/ → append at end (highest override)
-                simulated_chain = list(chain) + [what_if_path]
-                substitution_type = "append-external"
-
-        # Recompute effective config with simulated chain
-        simulated = {}
-        for dp in simulated_chain:
-            ddata = simulated_defaults_data.get(str(dp), {})
-            simulated = deep_merge(simulated, _defaults_block(ddata))
-        # #2019 / #2117: the same platform per-tenant layer and profile
-        # expansion as the baseline — taken from the what-if document when
-        # it stands in for a root platform file, so an edit to its
-        # `tenants:` or `profiles:` block is simulated too.
-        sim_tenant = scanner._tenant_layer(
-            tid, simulated, replace={str(what_if_path): what_if_platform_doc})[0]
-        simulated = deep_merge(simulated, sim_tenant)
-        what_if_merged_hash = _canonical_hash(simulated)
-
-        # Compute per-key diff
-        only_baseline: dict = {}
-        only_what_if: dict = {}
-        changed: dict = {}
-        all_keys = set(baseline_effective.keys()) | set(simulated.keys())
-        for k in sorted(all_keys):
-            if k not in simulated:
-                only_baseline[k] = baseline_effective[k]
-            elif k not in baseline_effective:
-                only_what_if[k] = simulated[k]
-            elif baseline_effective[k] != simulated[k]:
-                changed[k] = {"baseline": baseline_effective[k], "what_if": simulated[k]}
-
-        hash_changed = baseline_merged_hash != what_if_merged_hash
-        result = {
-            "tenant_id": tid,
-            "what_if_file": str(what_if_path),
-            "substitution_type": substitution_type,
-            "baseline_merged_hash": baseline_merged_hash,
-            "what_if_merged_hash": what_if_merged_hash,
-            "merged_hash_changed": hash_changed,
-            "would_trigger_reload": hash_changed,  # per ADR-017 dual-hash logic
-            "removed_keys": only_baseline,
-            "added_keys": only_what_if,
-            "changed_keys": changed,
-        }
+        try:
+            result = what_if_result(scanner, tid, what_if_path, Path(args.what_if),
+                                    what_if_data, what_if_platform_doc)
+        except WhatIfError as e:
+            print(f"❌ {e}", file=sys.stderr)
+            sys.exit(EXIT_CALLER_ERROR)
         print(_output(result))
         return
 

@@ -757,6 +757,10 @@ repos:
         pass_filenames: false
         files: ^(components/threshold-exporter/config/|scripts/tools/lint/check_confd_schema|docs/schemas/(tenant-config|platform-defaults|routing-profiles)\.schema\.json)
         additional_dependencies: ['pyyaml', 'jsonschema']
+        # #2509: WARN lines (a YAML 1.1 boolean word in a boolean field) do not
+        # fail the hook, and pre-commit prints a passing hook's output only when
+        # it is verbose.
+        verbose: true
 
       # Same gate, every OTHER shipped conf.d tree. The hook above is pinned to the
       # exporter's conf.d and its `files:` filter matches nothing else, so every
@@ -792,6 +796,10 @@ repos:
         pass_filenames: false
         files: ^(try-local/seed/conf\.d/|rule-packs/recipes/examples/conf\.d/|components/da-tools/app/examples/cardinality-demo/conf\.d/|scripts/tools/lint/check_confd_schema|docs/schemas/(tenant-config|platform-defaults|routing-profiles)\.schema\.json)
         additional_dependencies: ['pyyaml', 'jsonschema']
+        # #2509: WARN lines (a YAML 1.1 boolean word in a boolean field) do not
+        # fail the hook, and pre-commit prints a passing hook's output only when
+        # it is verbose.
+        verbose: true
 
       # Gemini #1056 disposition 3b: pre-merge structural validation for the
       # tenant-api ADMIN meta-config files (_rbac / _domain_policy / _tenant_orgs).

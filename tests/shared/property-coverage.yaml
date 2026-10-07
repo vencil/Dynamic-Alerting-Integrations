@@ -129,6 +129,11 @@ modules:
       _schema_item_children: "items / additionalItems child lookup (#2164); sequence-item pin in tests/shared/test_yaml_misread_scalars.py"
       _schema_pointer: "JSON-pointer fragment lookup (#2164); exercised through every $ref in the shipped schemas"
       _json_type_of: "Python value → JSON type name for const/enum (#2164); enum pin (_severity_dedup) in tests/shared/test_yaml_misread_scalars.py"
+      _plain_scalars_with_schema: "The node-tree × schema walk find_misread_scalars and find_yaml11_bool_words share (#2164 / #2509); exercised through both finders' pins"
+      # #2509: YAML 1.1 boolean words in boolean fields. Same rationale as #2164:
+      # the verdict is PyYAML's resolver × the schema, so it is example-pinned.
+      find_yaml11_bool_words: "Node-tree × schema walk (#2509); word set pinned to the schema's yamlBool enum (Go YAML11BoolLiterals), must-ring and quiet controls (true/false, string field, quoted) and the Go reading (da-guard effective) in tests/shared/test_yaml11_bool_word_warning.py"
+      YamlBoolWord.message: "Operator-facing text (#2509); suggestion shapes pinned in tests/shared/test_yaml11_bool_word_warning.py"
 
   scripts/tools/_lib_yaml.py:
     excluded:

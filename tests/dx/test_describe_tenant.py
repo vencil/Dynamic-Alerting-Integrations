@@ -763,7 +763,9 @@ class TestLinkTargetOutsideConfD:
         (tmp_path / "shared" / "base.yaml").write_text("defaults:\n  cpu_pct: 50\n", encoding="utf-8")
         (conf_d / "tk.yaml").write_text("tenants:\n  tk: {}\n", encoding="utf-8")
         self._link(conf_d / "_defaults.yaml", "../shared/base.yaml")
-        whatif = conf_d / "sub" / "_whatif.yaml"
+        # #2097: a `.`-prefixed draft — a file of the scanned tree would be
+        # substituted in place, not inserted as a level.
+        whatif = conf_d / "sub" / ".whatif.yaml"
         whatif.write_text("defaults:\n  mem_pct: 1\n", encoding="utf-8")
         r = self._run(conf_d, "tk", "--what-if", str(whatif))
         assert r.returncode == 0, r.stderr
@@ -784,10 +786,12 @@ class TestLinkTargetOutsideConfD:
         conf_d = self._whatif_tree(tmp_path)
         (tmp_path / "o").mkdir()
         (tmp_path / "o" / "w.yaml").write_text("defaults:\n  cpu_pct: 10\n", encoding="utf-8")
-        (conf_d / "_whatif_real.yaml").write_text("defaults:\n  cpu_pct: 10\n", encoding="utf-8")
-        self._link(conf_d / "_whatif.yaml", "../o/w.yaml")
+        # #2097: `.`-prefixed drafts the walker does not list — a file of the
+        # scanned tree would be substituted in place, not inserted as a level.
+        (conf_d / ".whatif_real.yaml").write_text("defaults:\n  cpu_pct: 10\n", encoding="utf-8")
+        self._link(conf_d / ".whatif.yaml", "../o/w.yaml")
         outs = []
-        for name in ("_whatif.yaml", "_whatif_real.yaml"):
+        for name in (".whatif.yaml", ".whatif_real.yaml"):
             r = self._run(conf_d, "tw", "--what-if", str(conf_d / name))
             assert r.returncode == 0, r.stderr
             out = json.loads(r.stdout)
@@ -800,11 +804,14 @@ class TestLinkTargetOutsideConfD:
         # `sub/_defaults.yaml`, so its cpu_pct is overridden by 70 and the
         # merged_hash does not move. At the target's level (2) it would be
         # the nearest level and win with 10.
+        # #2097: link and target both outside the walker's listing (a
+        # `.`-prefixed entry, a pruned `.`-prefixed directory) — a file of the
+        # scanned tree would be substituted in place, not inserted as a level.
         conf_d = self._whatif_tree(tmp_path)
-        (conf_d / "sub" / "deep").mkdir()
-        (conf_d / "sub" / "deep" / "_y.yaml").write_text("defaults:\n  cpu_pct: 10\n", encoding="utf-8")
-        self._link(conf_d / "_x.yaml", "sub/deep/_y.yaml")
-        r = self._run(conf_d, "tw", "--what-if", str(conf_d / "_x.yaml"))
+        (conf_d / "sub" / ".deep").mkdir()
+        (conf_d / "sub" / ".deep" / "_y.yaml").write_text("defaults:\n  cpu_pct: 10\n", encoding="utf-8")
+        self._link(conf_d / ".x.yaml", "sub/.deep/_y.yaml")
+        r = self._run(conf_d, "tw", "--what-if", str(conf_d / ".x.yaml"))
         assert r.returncode == 0, r.stderr
         out = json.loads(r.stdout)
         assert out["substitution_type"] == "insert"
@@ -819,12 +826,14 @@ class TestLinkTargetOutsideConfD:
         (real / "_defaults.yaml").write_text("defaults:\n  cpu_pct: 50\n", encoding="utf-8")
         (real / "sub" / "_defaults.yaml").write_text("defaults:\n  cpu_pct: 70\n", encoding="utf-8")
         (real / "sub" / "tw.yaml").write_text("tenants:\n  tw: {}\n", encoding="utf-8")
-        (real / "_w.yaml").write_text("defaults:\n  cpu_pct: 10\n", encoding="utf-8")
+        # #2097: a `.`-prefixed draft the walker does not list (a file of the
+        # scanned tree would be substituted in place, not inserted).
+        (real / ".w.yaml").write_text("defaults:\n  cpu_pct: 10\n", encoding="utf-8")
         self._link(tmp_path / "c", "real")
         return tmp_path / "c"
 
     def _assert_root_level_insert(self, conf_d, whatif):
-        # `_w.yaml` is at the ROOT level, below `sub/_defaults.yaml` (70), so
+        # `.w.yaml` is at the ROOT level, below `sub/_defaults.yaml` (70), so
         # its 10 is overridden and the merged_hash does not move.
         r = self._run(conf_d, "tw", "--what-if", whatif)
         assert r.returncode == 0, r.stderr
@@ -835,13 +844,13 @@ class TestLinkTargetOutsideConfD:
         # Without resolving the holder, `c/` is not under the resolved conf.d
         # (`real/`) and the what-if was misfiled as append-external.
         conf_d = self._linked_conf_d_tree(tmp_path)
-        self._assert_root_level_insert(conf_d, str(conf_d / "_w.yaml"))
+        self._assert_root_level_insert(conf_d, str(conf_d / ".w.yaml"))
 
     def test_what_if_level_of_a_path_spelled_with_dotdot(self, tmp_path):
-        # `real/sub/../_w.yaml` is the root-level file; counted lexically its
+        # `real/sub/../.w.yaml` is the root-level file; counted lexically its
         # holder is two levels deep and it was inserted as the nearest level.
         conf_d = self._linked_conf_d_tree(tmp_path)
-        self._assert_root_level_insert(conf_d, os.path.join(str(tmp_path), "real", "sub", "..", "_w.yaml"))
+        self._assert_root_level_insert(conf_d, os.path.join(str(tmp_path), "real", "sub", "..", ".w.yaml"))
 
     def test_link_target_inside_conf_d_keeps_the_resolved_path(self, tmp_path):
         (tmp_path / "sub").mkdir()
