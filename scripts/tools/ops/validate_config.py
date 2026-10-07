@@ -985,15 +985,18 @@ _DA_GUARD_SOURCES = (
     "Put da-guard on $PATH or set $DA_GUARD_BINARY to it (the da-tools image "
     "ships it as /usr/local/bin/da-guard; in a checkout of this repo, `make "
     "da-guard-build` builds it to .build/da-guard, and `make validate-config` "
-    "builds and uses it by itself), then re-run.")
+    "builds and uses it when $DA_GUARD_BINARY is unset), then re-run.")
 _PROFILES_NO_DA_GUARD_HINT = _DA_GUARD_SOURCES + " No _profile reference was checked."
-# Shared by both rows: a da-guard older than this tool (its output lacks a
-# field this tool reads) is the binary's fault, not the tree's.
+# Shared by both rows: a da-guard named as older than this tool (its output
+# lacks a field this tool reads, e.g. effective's `skipped`) is the binary's
+# fault, not the tree's. ⚠️ Only that case: a da-guard with no `effective`
+# subcommand at all (the released v2.9.x) exits 2 with a usage error and is
+# still reported as a tree that cannot be read.
 _DA_GUARD_TOO_OLD_HINT = (
-    "This da-guard is older than this tool: rebuild it (in a checkout of this "
-    "repo, `make da-guard-build`; `make validate-config` runs it by itself) or "
-    "point $DA_GUARD_BINARY at a current one / upgrade the da-tools image, then "
-    "re-run. The config tree was not checked; do not edit it for this.")
+    "This da-guard is older than this tool: point $DA_GUARD_BINARY at a current "
+    "one, rebuild it (in a checkout of this repo, `make da-guard-build`) or "
+    "upgrade the da-tools image, then re-run. The config tree was not checked; "
+    "do not edit it for this.")
 
 
 def _tenant_load_failure_row(check: str, exc: Exception, config_dir: str,
