@@ -22,6 +22,10 @@ import yaml
 _REPO_ROOT = Path(__file__).resolve().parents[2]
 _DX_DIR = _REPO_ROOT / "scripts" / "tools" / "dx"
 
+# #2115 0-B/B4: the embedded tenant metadata is read through da-guard
+# served-values, so every build of the platform data needs one.
+pytestmark = pytest.mark.usefixtures("da_guard_env")
+
 
 def _load_module():
     """每次載入一份新的 module（避免測試間 monkeypatch 互相污染）。"""
@@ -48,7 +52,7 @@ class TestRealFailureIsFatal:
         mod = _load_module()
         stub = tmp_path / "generate_tenant_metadata.py"
         stub.write_text(
-            "def build_tenant_metadata(config_dir):\n"
+            "def build_tenant_metadata(config_dir, at=None):\n"
             "    raise ValueError('bad yaml')\n",
             encoding="utf-8")
         monkeypatch.setattr(mod, "SCRIPT_DIR", tmp_path)
@@ -61,7 +65,7 @@ class TestRealFailureIsFatal:
         """main() 把 TenantMetadataError 轉成乾淨的非 0 exit，不寫殘缺檔案。"""
         mod = _load_module()
 
-        def _boom():
+        def _boom(at=None):
             raise mod.TenantMetadataError("tenant metadata generation failed: boom")
 
         monkeypatch.setattr(mod, "build_platform_data", _boom)
@@ -72,6 +76,50 @@ class TestRealFailureIsFatal:
 
         assert excinfo.value.code != 0
         assert "boom" in capsys.readouterr().err
+
+
+class TestDaGuardFailureIsFatal:
+    """#2115 0-B/B4：租戶來自 da-guard served-values。da-guard 不在、失敗、
+    exporter 丟檔都是「真正的失敗」，不是「刻意缺席」：不得回 ({}, {})、
+    不得寫出缺 tenant metadata 的 platform-data.json；CLI 以 rc 2 收場、
+    da-guard 的 stderr 整份轉出。"""
+
+    def test_missing_da_guard_raises_instead_of_falling_back(
+            self, monkeypatch, tmp_path):
+        mod = _load_module()
+        monkeypatch.setenv("DA_GUARD_BINARY", str(tmp_path / "no-such-da-guard"))
+        with pytest.raises(mod.TenantMetadataError, match="da-guard"):
+            mod._load_tenant_metadata()
+
+    def test_missing_da_guard_exits_2_and_names_it(
+            self, monkeypatch, tmp_path, capsys):
+        mod = _load_module()
+        monkeypatch.setenv("DA_GUARD_BINARY", str(tmp_path / "no-such-da-guard"))
+        monkeypatch.setattr(sys, "argv", ["generate_platform_data.py", "--check"])
+        with pytest.raises(SystemExit) as excinfo:
+            mod.main()
+        assert excinfo.value.code == 2
+        err = capsys.readouterr().err
+        assert "da-guard binary not found" in err and "make da-guard-build" in err, err
+
+    def test_a_file_the_exporter_drops_exits_2_with_its_reason(
+            self, monkeypatch, tmp_path, capsys):
+        conf_d = tmp_path / "components" / "threshold-exporter" / "config" / "conf.d"
+        conf_d.mkdir(parents=True)
+        (conf_d / "_defaults.yaml").write_text(
+            "defaults:\n  mysql_connections: 80\n", encoding="utf-8")
+        (conf_d / "db-a.yaml").write_text(
+            "tenants:\n  db-a:\n    mysql_connections: 5\n    mysql_connections: 6\n",
+            encoding="utf-8")
+        mod = _load_module()
+        monkeypatch.setattr(mod, "REPO_ROOT", tmp_path)
+        monkeypatch.setattr(sys, "argv", ["generate_platform_data.py", "--dry-run"])
+        with pytest.raises(SystemExit) as excinfo:
+            mod.main()
+        assert excinfo.value.code == 2
+        captured = capsys.readouterr()
+        assert captured.out == "", "nothing may be printed as the platform data"
+        assert "db-a.yaml" in captured.err and "  da-guard| " in captured.err, captured.err
 
 
 class TestIntentionalAbsenceStillFallsBack:
@@ -319,13 +367,26 @@ class TestThePortalOfflineFallbackIsGenerated:
         # pre-commit run skipped the very check that would have caught the
         # output going stale. CI's `--all-files` run covers it; this is the
         # local red, at commit time.
+        # #2115 0-B/B4: the embedded tenants are the exporter's answer for
+        # conf.d, read by generate_tenant_metadata through _lib_tenant_values;
+        # changing how Go resolves the tree changes that answer too.
         for rel in ("docs/assets/platform-data.json", self._FALLBACK_REL,
-                    "scripts/tools/dx/generate_platform_data.py"):
+                    "scripts/tools/dx/generate_platform_data.py",
+                    "scripts/tools/dx/generate_tenant_metadata.py",
+                    "scripts/tools/_lib_tenant_values.py",
+                    "scripts/tools/ops/guard_dispatch.py",
+                    "components/threshold-exporter/app/pkg/config/resolve.go",
+                    "components/threshold-exporter/app/cmd/da-guard/served_values.go",
+                    "components/threshold-exporter/app/internal/scrape/collector.go",
+                    "components/threshold-exporter/config/conf.d/db-a.yaml"):
             assert pattern.match(rel), (
                 f"the platform-data-check hook does not watch {rel}, so editing "
                 f"it alone stages no file the hook reacts to and the local "
                 f"pre-commit run passes over the change"
             )
+        # #2115 0-B/B4: the hook gets its da-guard from the wrapper — $DA_GUARD_BINARY
+        # or a fresh `make da-guard-build` — and from nowhere else.
+        assert hooks[0]["entry"].startswith("bash scripts/ops/with_da_guard.sh "), hooks[0]["entry"]
 
     def test_check_passes_on_the_real_pair(self, monkeypatch, capsys):
         """The must-not-fire control: `--check` is not simply always red.
@@ -340,6 +401,51 @@ class TestThePortalOfflineFallbackIsGenerated:
         mod.main()  # returns instead of raising SystemExit
         out = capsys.readouterr().out
         assert "rule-packs-fallback.json is up to date" in out
+
+    @pytest.mark.parametrize("argv, recorded, want", [
+        (["--check"], "2019-12-31T00:00:00Z", "2019-12-31T00:00:00Z"),
+        (["--check"], "not a time", None),
+        ([], "2019-12-31T00:00:00Z", None),
+    ])
+    def test_check_builds_at_the_instant_the_file_recorded(
+            self, tmp_path, monkeypatch, argv, recorded, want):
+        """#2115 B4: the tenants are the exporter's answer at a time, so
+        `--check` re-evaluates at the file's `generated`, not now (a
+        maintenance expiry in between must not turn the gate red). A write
+        evaluates at now; an unreadable `generated` falls back to now."""
+        mod = _load_module()
+        existing = tmp_path / "platform-data.json"
+        existing.write_text('{"generated": "%s"}' % recorded, encoding="utf-8")
+        monkeypatch.setattr(mod, "OUTPUT_PATH", existing)
+        seen = []
+
+        def spy(at=None):
+            seen.append(at)
+            raise RuntimeError("stop")
+        monkeypatch.setattr(mod, "build_platform_data", spy)
+        monkeypatch.setattr(sys, "argv", ["generate_platform_data.py", *argv])
+        with pytest.raises(RuntimeError, match="stop"):
+            mod.main()
+        assert seen == [want]
+
+    def test_the_instant_reaches_the_tenant_metadata_build(self, tmp_path, monkeypatch):
+        """`at` is passed all the way down: build_platform_data → the loader →
+        generate_tenant_metadata.build_tenant_metadata. Dropping it at either
+        hop records one instant and evaluates the tenants at another."""
+        mod = _load_module()
+        record = tmp_path / "at.txt"
+        stub = tmp_path / "generate_tenant_metadata.py"
+        stub.write_text(
+            "from pathlib import Path\n"
+            "def build_tenant_metadata(config_dir, at=None):\n"
+            f"    Path({str(record)!r}).write_text(repr(at), encoding='utf-8')\n"
+            "    return {'tenant_groups': {}, 'tenant_metadata': {}}\n",
+            encoding="utf-8")
+        monkeypatch.setattr(mod, "SCRIPT_DIR", tmp_path)
+
+        data = mod.build_platform_data(at="2019-12-31T00:00:00Z")
+        assert data["generated"] == "2019-12-31T00:00:00Z"
+        assert record.read_text(encoding="utf-8") == repr("2019-12-31T00:00:00Z")
 
     def test_a_packorder_that_disagrees_with_the_packs_is_refused(self):
         """`build_fallback`'s own fail-closed arms, run rather than described.

@@ -12,18 +12,12 @@ trees whose contents are byte-identical and differ only in the extension:
     db-a.yml  -> 0 tenants, rc=0, stderr 0 bytes    <- before
     db-a.yml  -> 1 tenant,  rc=0, stderr 0 bytes    <- after
 
-⚠️ SCOPE. These pin the extension-SPELLING axis only. The module's other
-divergences are not covered here, and no ticket names them specifically EITHER —
-read the per-axis notes below rather than the ticket numbers:
-
-  * Recursion: this reader is flat (`config_dir.iterdir()`) and says so out
-    loud — `warn_nested` prints the nested files it cannot see. That is
-    `test_confd_enumeration_contract.py`'s axis.
-  * Hidden names: closed by #2055 — dot-prefixed carriers are now skipped
-    as the exporter's walker skips them. Pinned by `TestHiddenEntriesAxis`
-    below, not by the spelling tests.
-  * Entries `is_file()` drops are named on stderr here — that half of #1607
-    IS wired up in this module, unlike `gitops_check`.
+⚠️ SCOPE. Since #2115 0-B/B4 the tenants come from `da-guard served-values`,
+so the walk (spelling, hidden names, recursion, unusable entries) is the
+exporter's own; these tests keep pinning that the answer agrees with it on
+the spelling and hidden-name axes. The four-position semantics (defaults,
+platform `tenants:`, tenant file, subtree) are
+`tests/shared/test_served_values_tenant_metadata_matrix.py`'s.
 """
 
 from __future__ import annotations
@@ -31,7 +25,12 @@ from __future__ import annotations
 import json
 from pathlib import Path
 
+import pytest
+
 import generate_tenant_metadata as gtm  # noqa: E402
+
+# #2115 0-B/B4: the tool reads the tenants through da-guard served-values.
+pytestmark = pytest.mark.usefixtures("da_guard_env")
 
 _DEFAULTS = "defaults:\n  mysql_connections: 100\n"
 
@@ -136,49 +135,22 @@ class TestExtensionSpellingAxis:
             f"  .yaml: {_comparable(a)}\n  .yml : {_comparable(b)}"
         )
 
-    def test_an_unreadable_yml_carrier_is_named_not_skipped(
+    def test_a_directory_named_like_a_carrier_is_what_the_exporter_makes_of_it(
             self, tmp_path, capsys):
-        """FLOOR, second site: `unusable_config_entries` must see `.yml` too.
+        """A directory named `db-broken.yaml`: the exporter's walk descends
+        into it (a sub-directory, here empty) and serves no tenant from it.
+        Before #2115 0-B/B4 this tool named it on stderr from its own scan;
+        now the walk is da-guard's, so the answer is pinned against it, for
+        both spellings."""
+        import _lib_tenant_values as tv  # noqa: PLC0415
 
-        The equality above only exercises the `has_yaml_extension` site. This
-        one covers the other one — reverting it alone leaves the equality
-        green, which is how the same gap survived the first round of the
-        sibling fix (#1663).
-
-        ⛔ The unreadable carrier is a DIRECTORY named like a config file,
-        not a broken symlink: symlink creation needs administrator rights on
-        Windows, so a symlink fixture would be skipped on the very host most
-        of this repo's maintainers use.
-
-        ⛔ The assertion names the REASON, not just the filename, and that is
-        load-bearing. This module has a SECOND stderr station that prints the
-        same basename — the `except Exception` around `yaml.safe_load` in the
-        loop below. Blind review combined "revert this site" with "drop the
-        `is_file()` filter" and the filename-only assertion stayed green: the
-        directory reached `open()`, raised `OSError`, and the parse-failure
-        handler printed the very string being asserted on. Pinning
-        `unusable_reason`'s own words tells the two stations apart.
-
-        ⚠️ Only the REASON fragment is pinned, not the whole line: the
-        surrounding wording is deliberately not pinned anywhere (measured —
-        rewording it turns nothing red), and pinning a prefix here would
-        quietly make this the module's message-format test as well.
-        """
         for ext in (".yaml", ".yml"):
             root = _seed(tmp_path / ext.lstrip("."), ext)
             (root / f"db-broken{ext}").mkdir()
 
-            gtm.build_tenant_metadata(root)
-            err = capsys.readouterr().err
-
-            named = [ln for ln in err.splitlines()
-                     if f"db-broken{ext}" in ln
-                     and "is a directory, not a config file" in ln]
-            assert len(named) == 1, (
-                f"the `unusable` report must name `db-broken{ext}` exactly "
-                f"once, with the reason it could not be used; stderr was "
-                f"{err!r}"
-            )
+            meta = gtm.build_tenant_metadata(root)
+            assert sorted(meta["tenant_metadata"]) == sorted(tv.load_served_values(root)) == [
+                "db-a", "db-b"], meta["tenant_metadata"]
 
     def test_a_json_carrier_is_not_a_tenant(self, tmp_path):
         """CEILING, by counterexample — that is all a ceiling can be.
@@ -306,21 +278,20 @@ class TestHiddenEntriesAxis:
 
     def test_a_later_sorting_hidden_file_cannot_overwrite_a_tenant(
             self, tmp_path):
-        # `-` (0x2d) sorts before `.` (0x2e), so `.zz.yaml` is read LAST and
-        # `tenant_configs.update` would let it win.
+        # `-` (0x2d) sorts before `.` (0x2e), so `.zz.yaml` would be read LAST.
         assert sorted(["-acme.yaml", ".zz.yaml"]) == ["-acme.yaml", ".zz.yaml"]
+        import _lib_tenant_values as tv  # noqa: PLC0415
 
+        # Control: the same tenant in two files the exporter reads is a tree
+        # it refuses (#2115 0-B/B4: fail-closed, no "last file wins").
         control = tmp_path / "control"
         control.mkdir()
         (control / "-acme.yaml").write_text(
             _owned("acme", "real-team"), encoding="utf-8")
         (control / "zz.yaml").write_text(
             _owned("acme", "ghost-team"), encoding="utf-8")
-        got = gtm.build_tenant_metadata(control)["tenant_metadata"]
-        assert got["acme"]["owner"] == "ghost-team", (
-            "control: a non-hidden later file must still overwrite, or the "
-            "hidden case below proves nothing"
-        )
+        with pytest.raises(tv.ServedValuesError, match="duplicate tenant"):
+            gtm.build_tenant_metadata(control)
 
         root = tmp_path / "confd"
         root.mkdir()
@@ -335,23 +306,17 @@ class TestHiddenEntriesAxis:
         )
 
     def test_hidden_broken_entries_raise_no_warning(self, tmp_path, capsys):
-        """Both stderr stations: the `unusable` report (a directory named
-        like a config file) and the parse-failure handler (bad YAML).
-
-        ⚠️ The first station's hidden skip lives in `unusable_config_entries`
-        itself, not in this module; the second is this module's loop filter.
-        """
+        """A broken file the exporter reads fails the run (rc 2 at the CLI);
+        the same bytes under a hidden name are never read: no error, no
+        warning, the tenants as before."""
+        import _lib_tenant_values as tv  # noqa: PLC0415
         bad_yaml = "tenants: [unclosed\n"
 
         control = _seed(tmp_path / "control", ".yaml")
-        (control / "broken-dir.yaml").mkdir()
         (control / "broken.yaml").write_text(bad_yaml, encoding="utf-8")
-        gtm.build_tenant_metadata(control)
-        err = capsys.readouterr().err
-        assert "broken-dir.yaml" in err and "broken.yaml:" in err, (
-            f"control: the non-hidden twins must be reported, or silence "
-            f"below proves nothing; stderr was {err!r}"
-        )
+        with pytest.raises(tv.ParseFailedError, match="broken.yaml"):
+            gtm.build_tenant_metadata(control)
+        capsys.readouterr()
 
         root = _seed(tmp_path / "confd", ".yaml")
         (root / ".broken-dir.yaml").mkdir()
@@ -359,7 +324,7 @@ class TestHiddenEntriesAxis:
         meta = gtm.build_tenant_metadata(root)
         err = capsys.readouterr().err
 
-        assert "WARNING" not in err, (
+        assert "WARN" not in err and "broken" not in err, (
             f"a hidden entry the exporter never reads produced a warning: "
             f"{err!r}"
         )

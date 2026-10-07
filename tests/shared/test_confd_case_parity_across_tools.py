@@ -1159,8 +1159,6 @@ def _argv_for(tool_rel: str, tree: pathlib.Path,
                                      "--output-dir", str(out)],
         "ops/deprecate_rule.py": ["pg_connections", "--config-dir", str(tree)],
         "ops/offboard_tenant.py": ["alpha", "--config-dir", str(tree)],
-        "dx/generate_tenant_metadata.py": ["--config-dir", str(tree),
-                                           "--dry-run"],
         "dx/describe_tenant.py": ["--all", "--conf-d", str(tree)],
         "lint/check_path_metadata_consistency.py": ["--config-dir",
                                                     str(tree)],
@@ -1169,15 +1167,18 @@ def _argv_for(tool_rel: str, tree: pathlib.Path,
 
 # tool -> (stream the warning belongs on, a landmark proving the tool still
 # did its real work after warning). ⛔ The channel is part of the contract,
-# not an implementation detail: five of these have a machine-readable stdout
+# not an implementation detail: four of these have a machine-readable stdout
 # (`--json`, or the lint's `path:0: warning:` annotations) that a warning on
 # stdout makes unparseable. `offboard_tenant`'s stdout IS its human report —
 # same channel as its own "無法讀取" warning — so stdout is correct there.
+# `generate_tenant_metadata` left this table in #2115 0-B/B4: it no longer
+# scans the directory itself; the walk is da-guard's, and an entry the
+# exporter cannot read fails the run (rc 2) instead of being warned about
+# (tests/shared/test_served_values_tenant_metadata_matrix.py).
 _WARNING_CONTRACT = {
     "ops/operator_generate.py": ("stderr", "CRDs"),
     "ops/deprecate_rule.py": ("stderr", "Processing:"),
     "ops/offboard_tenant.py": ("stdout", "Pre-check"),
-    "dx/generate_tenant_metadata.py": ("stderr", "alpha"),
     "dx/describe_tenant.py": ("stderr", "alpha"),
     "lint/check_path_metadata_consistency.py": ("stderr", "tenant file(s)"),
 }
@@ -1359,7 +1360,6 @@ def test_each_reader_names_an_unusable_entry_exactly_once(
                                       str(tree)]}
     for tool_rel in ("ops/operator_generate.py", "ops/deprecate_rule.py",
                      "ops/offboard_tenant.py",
-                     "dx/generate_tenant_metadata.py",
                      "dx/describe_tenant.py",
                      "lint/check_path_metadata_consistency.py"):
         r = subprocess.run(
@@ -1395,7 +1395,6 @@ def _reserved_unusable_tree(root: pathlib.Path) -> pathlib.Path:
 
 @pytest.mark.parametrize("tool_rel", [
     "ops/operator_generate.py",
-    "dx/generate_tenant_metadata.py",
     "lint/check_path_metadata_consistency.py",
 ])
 def test_reader_does_not_name_a_reserved_entry_it_never_reads(

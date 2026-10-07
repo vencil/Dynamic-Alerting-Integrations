@@ -1,5 +1,11 @@
 #!/usr/bin/env python3
-"""租戶元資料產生器 — 從 conf.d/ 解析 YAML，推斷 rule_packs、owner、tier、routing_channel。
+"""租戶元資料產生器 — 讀 exporter 實際發出的值（da-guard served-values），推斷 rule_packs、owner、tier、routing_channel；db_type 只取 `_metadata` 宣告值。
+
+The tenants and every value read here come from `da-guard served-values`
+(#2115 0-B/B4), so the tool needs da-guard: `$DA_GUARD_BINARY`, else
+`da-guard` on `$PATH` (in a checkout, `make da-guard-build` builds it to
+.build/da-guard). da-guard missing or failing, or a file the exporter's load
+drops, exits 2 with da-guard's stderr below the ERROR line.
 
 Usage:
     python3 scripts/tools/dx/generate_tenant_metadata.py              # 產生 JSON
@@ -13,11 +19,8 @@ import json
 import os
 import subprocess
 import sys
-from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
-
-import yaml
 
 # Pull `try_utf8_stdout` from the shared compat lib at scripts/tools/.
 # Migrated in #489 Phase B (was missing encoding setup → would crash on
@@ -32,19 +35,18 @@ from _lib_validation import (  # noqa: E402  (#2137 one presence rule)
     FIELD_SET,
     receiver_field_state,
 )
-from _lib_confd import (  # noqa: E402
-    has_yaml_extension,
-    is_hidden_name,
-    is_reserved_name,
-    unusable_config_entries,
-    unusable_reason,
-    warn_nested,
-)
 from _lib_io import safe_label  # noqa: E402  (#1538 output-layer escaping)
-from _lib_io import strict_load_exporter_keys  # noqa: E402  (#2231 duplicate key = YAML error; #2216 tenant id as text)
 from _lib_yaml_keys import load_exporter_keys  # noqa: E402  (#2216 tenant id as text)
+from _lib_tenant_values import (  # noqa: E402  (#2115 0-B/B4: the exporter's answer)
+    exit_on_served_values_error,
+    load_served_tree,
+    now_at,
+    print_load_warnings,
+    recorded_at,
+)
 from _lib_io import (  # noqa: E402  (#1789)
     exit_on_output_write_error,
+    exit_on_yaml_file_error,
     output_write,
 )
 from _atomic_write import atomic_write_text  # noqa: E402  (#2082 → #2128)
@@ -89,7 +91,12 @@ RESERVED_PACKS = {"operational", "platform"}
 # Helper functions
 # ---------------------------------------------------------------------------
 def infer_rule_packs(tenant_config: dict) -> list[str]:
-    """Infer rule packs from metric key prefixes."""
+    """Infer rule packs from metric key prefixes.
+
+    `tenant_config` is the tenant's served values (`TenantValues.values`), so
+    a key inherited from `defaults:` counts as if the tenant had written it
+    (#2115 0-B/B4); a key /metrics does not serve (switched off, no default)
+    is not there."""
     packs = set(RESERVED_PACKS)
 
     for key in tenant_config.keys():
@@ -143,35 +150,19 @@ def extract_environment(tenant_name: str, metadata: dict) -> str:
     return ""
 
 
-def extract_db_type(tenant_config: dict, metadata: dict) -> str:
-    """Extract db_type from _metadata or infer from metric prefixes."""
+def extract_db_type(metadata: dict) -> str:
+    """Return the db_type the tenant declares in `_metadata`, or "".
+
+    Not inferred from metric keys (#2115 B4): Go has exactly one db_type --
+    the declared one. The exporter's tenant_expected_exporter liveness series
+    and tenant-api's list/search read only that, and the portal falls back to
+    this file when tenant-api is down, so an inferred value here would show
+    the same tenant with two different db_types. "" means "not declared",
+    which is also "not liveness-monitored"."""
     if isinstance(metadata, dict):
         db_type = metadata.get("db_type", "")
-        if db_type:
+        if isinstance(db_type, str):
             return db_type
-
-    # Infer from metric key prefixes
-    db_prefixes = {
-        "mysql_": "mariadb",
-        "mariadb_": "mariadb",
-        "pg_": "postgresql",
-        "postgres_": "postgresql",
-        "redis_": "redis",
-        "mongo_": "mongodb",
-        "mongodb_": "mongodb",
-        "kafka_": "kafka",
-        "rabbitmq_": "rabbitmq",
-        "elasticsearch_": "elasticsearch",
-        "oracle_": "oracle",
-        "clickhouse_": "clickhouse",
-    }
-    for key in tenant_config.keys():
-        if key.startswith("_"):
-            continue
-        metric = key.split("[")[0] if "[" in key else key
-        for prefix, db in db_prefixes.items():
-            if metric.startswith(prefix):
-                return db
     return ""
 
 
@@ -240,23 +231,22 @@ def extract_routing_channel(tenant_config: dict) -> str:
 
 
 def detect_operational_mode(tenant_config: dict) -> str:
-    """Detect operational mode: normal (default), silent, or maintenance."""
-    # Check for maintenance state
-    if "_state_maintenance" in tenant_config:
-        state_val = tenant_config["_state_maintenance"]
-        if state_val != "disable":
-            return "maintenance"
+    """Detect operational mode: normal (default), silent, or maintenance.
 
-    # Check for silent mode
-    silent_mode = tenant_config.get("_silent_mode", "")
-    if silent_mode and silent_mode != "disable":
+    Reads the served values (#2115 0-B/B4): `_state_maintenance` is the
+    exporter's verdict, `true` while maintenance is on (an expired time-box
+    already reads `false`); `_silent_mode` is the list of severities it
+    silences, empty when off."""
+    if tenant_config.get("_state_maintenance") is True:
+        return "maintenance"
+    if tenant_config.get("_silent_mode"):
         return "silent"
-
     return "normal"
 
 
 def count_metrics(tenant_config: dict) -> int:
-    """Count non-reserved metric keys."""
+    """Count non-reserved metric keys: the threshold keys /metrics serves
+    for the tenant, inherited ones included (#2115 0-B/B4)."""
     count = 0
     for key in tenant_config.keys():
         if not key.startswith("_"):
@@ -284,68 +274,30 @@ def get_git_head_commit() -> str:
 # ---------------------------------------------------------------------------
 # Build tenant metadata
 # ---------------------------------------------------------------------------
-def build_tenant_metadata(config_dir: Path) -> dict[str, Any]:
-    """Parse tenant YAML files and build metadata structure."""
+def build_tenant_metadata(config_dir: Path, at: str | None = None) -> dict[str, Any]:
+    """Build the metadata structure from what the exporter serves at `at`
+    (RFC3339; None = now). `generated` records that instant, so `--check`
+    can re-evaluate at it (`recorded_at`).
+
+    #2115 0-B/B4: the tenants, their `_metadata` and every key the inference
+    reads are `da-guard served-values` (/metrics), not this tool's own read
+    of the YAML: tenants in sub-directories and in a root platform file's
+    `tenants:`, `_metadata` inherited there, threshold keys inherited from
+    `defaults:` — all as the exporter resolves them. Nothing is merged here.
+
+    Raises what `load_served_tree` raises (da-guard missing or failing, a file
+    the exporter's load drops); a caller must not turn that into an empty
+    result. Files the load serves no tenant from, and every line da-guard
+    wrote to stderr, are printed to stderr (`print_load_warnings`).
+    """
     tenant_groups = {}
     tenant_metadata = {}
-    tenant_configs = {}
 
-    # Load all tenant YAML files
-    # #1911: flat by design here — but a hierarchical conf.d must not
-    # look like an empty one. Name the files this scan cannot see.
-    warn_nested(config_dir, tool="generate_tenant_metadata")
-    entries = sorted(config_dir.iterdir())
-    # #1607: `is_file()` below is a THIRD axis and it was silent. This tool
-    # feeds the portal's tenant list, so an entry it drops is a tenant that
-    # does not appear — the same shape as the `.YAML` bug above, one axis
-    # over. Same stderr channel as the parse failure below.
-    # ⛔ `_`-prefixed entries excluded — the loop below skips them whatever
-    # their shape, so naming one would report a loss that did not happen.
-    # ⛔ `.yml` IS A TENANT CARRIER HERE NOW (#1603). Both sites below used to
-    # pass `(".yaml",)`, so a tenant declared in `db-a.yml` produced NO entry
-    # in `tenant_metadata` and NO line on stderr — and this file feeds
-    # `generate_platform_data`, i.e. the portal's tenant list. Measured on two
-    # trees whose contents are byte-identical and differ only in the
-    # extension:
-    #
-    #     db-a.yaml -> 1 tenant,  rc=0, stderr 0 bytes   <- control
-    #     db-a.yml  -> 0 tenants, rc=0, stderr 0 bytes   <- before
-    #     db-a.yml  -> 1 tenant,  rc=0, stderr 0 bytes   <- after
-    #
-    # The exporter (`scanDirHierarchical`, `config_hierarchy.go`) lowercases the entry name and
-    # accepts both spellings, so it was serving a tenant the portal could not
-    # name. Omitting the argument takes `CONFIG_SUFFIXES`, the exporter's set.
-    # ⚠️ No `is_hidden_name` filter needed here (#2055): the helper itself
-    # already skips `.`-prefixed entries, mirroring the exporter's walker.
-    for bad in unusable_config_entries(
-        [p for p in entries if not is_reserved_name(p.name)],
-    ):
-        print(f"WARNING: {safe_label(bad.name)}: {unusable_reason(bad)}",
-              file=sys.stderr)
-    for yaml_file in (
-        p for p in entries
-        if p.is_file() and has_yaml_extension(p.name)   # both spellings (#1603)
-    ):
-        # ⛔ #2055: skip what the exporter skips — `_` control files AND
-        # `.`-prefixed names. Reading a hidden file here minted portal
-        # tenants the exporter never serves, and `tenant_configs.update`
-        # let a hidden file replace a real tenant's WHOLE body whenever the
-        # real carrier sorts before `.` (0x2e), e.g. `-acme.yaml`.
-        if is_reserved_name(yaml_file.name) or is_hidden_name(yaml_file.name):
-            continue
-        try:
-            # Strict (#2231): a file holding a key twice is one the exporter
-            # drops whole, so it is warned about and skipped like bad syntax
-            # instead of listing whichever value PyYAML kept last.
-            # #2216: tenant ids are the keys' source text, as the exporter
-            # reads them — `010:` is tenant "010", not 8.
-            data = strict_load_exporter_keys(
-                yaml_file.read_text(encoding="utf-8"))
-            if data and "tenants" in data and isinstance(data["tenants"], dict):
-                tenant_configs.update(data["tenants"])
-        except Exception as e:
-            print(f"WARNING: {safe_label(yaml_file.name)}: {safe_label(e)}",
-                  file=sys.stderr)
+    if at is None:
+        at = now_at()
+    tree = load_served_tree(config_dir, at=at)
+    print_load_warnings(tree)
+    tenant_configs = {tid: tv.values for tid, tv in tree.tenants.items()}
 
     # Process each tenant
     for tenant_name, tenant_config in sorted(tenant_configs.items()):
@@ -359,7 +311,7 @@ def build_tenant_metadata(config_dir: Path) -> dict[str, Any]:
         domain = metadata.get("domain", "") if isinstance(metadata, dict) else ""
 
         # v2.5.0: extract extended metadata fields
-        db_type = extract_db_type(tenant_config, metadata)
+        db_type = extract_db_type(metadata)
         tags = extract_tags(metadata)
         group_memberships = extract_groups(metadata)
 
@@ -404,7 +356,7 @@ def build_tenant_metadata(config_dir: Path) -> dict[str, Any]:
 
     return {
         "_comment": "Auto-generated by generate_tenant_metadata.py — DO NOT EDIT",
-        "generated": datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
+        "generated": at,
         "generator": "scripts/tools/dx/generate_tenant_metadata.py",
         "tenant_groups": tenant_groups,
         "custom_groups": custom_groups,
@@ -510,6 +462,20 @@ def _read_existing_for_check(out: Path) -> tuple[dict | None, str | None]:
     return existing, None
 
 
+def _strip_volatile(data: dict) -> None:
+    """Drop what changes with no input changed: the timestamp and the HEAD
+    commit (as generate_platform_data's --check does)."""
+    data.pop("generated", None)
+    tenants = data.get("tenant_metadata")
+    if not isinstance(tenants, dict):
+        return  # left as is: the comparison reports the file as outdated
+    for tenant in tenants.values():
+        if isinstance(tenant, dict):
+            tenant.pop("last_config_commit", None)
+
+
+@exit_on_yaml_file_error  # #1654: any other unreadable YAML → rc 2, named
+@exit_on_served_values_error  # #2115 0-B/B4: da-guard missing or failing, a dropped file → rc 2, named
 @exit_on_output_write_error
 def main():
     """CLI entry point: 租戶元資料產生器."""
@@ -554,12 +520,16 @@ def main():
         )
         sys.exit(EXIT_CALLER_ERROR)
 
-    # Build metadata
-    data = build_tenant_metadata(args.config_dir)
+    # Build metadata. --check evaluates at the instant the existing file
+    # recorded, not now: the exporter's answer moves with the clock.
+    at = None
+    if args.check and args.output and args.output.exists():
+        at = recorded_at(_read_existing_for_check(args.output)[0])
+    data = build_tenant_metadata(args.config_dir, at=at)
 
     # Format output
     if args.check:
-        data.pop("generated", None)
+        _strip_volatile(data)
 
     content = json.dumps(data, indent=2, ensure_ascii=False) + "\n"
 
@@ -588,7 +558,7 @@ def main():
                 file=sys.stderr,
             )
             sys.exit(EXIT_CALLER_ERROR)
-        existing.pop("generated", None)
+        _strip_volatile(existing)
         existing_str = json.dumps(existing, indent=2, ensure_ascii=False) + "\n"
 
         if existing_str != content:

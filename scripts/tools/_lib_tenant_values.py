@@ -136,6 +136,7 @@ from __future__ import annotations
 import functools
 import json
 import os
+import re
 import subprocess
 import sys
 from pathlib import Path
@@ -421,6 +422,45 @@ def _run_da_guard(
             f"da-guard {subcommand} exited {proc.returncode} with no file in {fields}",
             proc.returncode, stderr)
     return got, proc.returncode, stderr
+
+
+GENERATED_AT_FORMAT = "%Y-%m-%dT%H:%M:%SZ"
+# strptime alone takes "2019-1-1T0:0:0Z" and a lower-case "z"; Go's RFC3339 does not.
+_GENERATED_AT_RE = re.compile(r"[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}Z")
+
+
+def now_at() -> str:
+    """The current instant as `served-values --at` takes it (RFC3339, UTC)."""
+    from datetime import datetime, timezone
+    return datetime.now(timezone.utc).strftime(GENERATED_AT_FORMAT)
+
+
+def recorded_at(artifact: object) -> str | None:
+    """The `generated` instant a generated JSON artifact recorded, or None.
+
+    A `--check` re-reads served values at this instant rather than now: the
+    exporter's answer depends on the time (maintenance expiry, scheduled
+    thresholds), and a gate evaluated at "now" would turn red with no file
+    changed (#2115 B4). The file is a snapshot as of that instant, so a
+    conf.d edit that changes nothing at that instant does not turn it red.
+
+    None (the caller falls back to now) when absent, not exactly
+    GENERATED_AT_FORMAT as `served-values --at` parses it, or later than now:
+    a `generated` moved into the future would otherwise pick the instant a
+    stale file is checked at."""
+    from datetime import datetime, timezone
+    if not isinstance(artifact, dict):
+        return None
+    at = artifact.get("generated")
+    if not isinstance(at, str) or not _GENERATED_AT_RE.fullmatch(at):
+        return None
+    try:
+        when = datetime.strptime(at, GENERATED_AT_FORMAT).replace(tzinfo=timezone.utc)
+    except ValueError:
+        return None
+    if when > datetime.now(timezone.utc):
+        return None
+    return at
 
 
 def load_served_values(
