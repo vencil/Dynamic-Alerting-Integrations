@@ -31,6 +31,10 @@ import threshold_recommend as tr  # noqa: E402
 from _lib_exitcodes import EXIT_CALLER_ERROR  # noqa: E402
 from factories import write_yaml, make_tenant_yaml  # noqa: E402
 
+# #2116: run_analysis reads the tree through da-guard (effective + served-values);
+# the in-process calls find this repo's build via `$DA_GUARD_BINARY`.
+pytestmark = pytest.mark.usefixtures("da_guard_env")
+
 
 # ═══════════════════════════════════════════════════════════════════════
 # percentile + compute_percentiles
@@ -385,9 +389,15 @@ class TestRunAnalysis:
     """完整管線測試。"""
 
     def test_empty_config_dir(self, tmp_path):
-        """空配置目錄應返回空結果。"""
-        reports = tr.run_analysis(str(tmp_path), dry_run=True)
-        assert reports == []
+        """空配置目錄：da-guard 拒收（沒有任何設定檔），fail-closed 而非回空結果（#2116）。"""
+        import _lib_tenant_values as tv
+        with pytest.raises(tv.DaGuardError):
+            tr.run_analysis(str(tmp_path), dry_run=True)
+
+    def test_no_tenant_config_dir(self, tmp_path):
+        """只有 `_defaults.yaml`、沒有租戶的樹應返回空結果。"""
+        write_yaml(str(tmp_path), "_defaults.yaml", "defaults:\n  mysql_connections: 80\n")
+        assert tr.run_analysis(str(tmp_path), dry_run=True) == []
 
     def test_tenant_filter(self, tmp_path):
         """--tenant 過濾器正確運作。"""

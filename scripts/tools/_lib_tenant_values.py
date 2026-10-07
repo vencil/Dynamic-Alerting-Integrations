@@ -82,7 +82,11 @@ for that tenant (`effective_config`, `merged_hash`, `source_file`,
   `layer` (`defaults` / `platform` / `profile` / `tenant`), `file` (relative
   to `conf_d`) and `level` (the index in `defaults_chain`, 0 = root; None
   outside the defaults layer). A mapping merged across layers names the
-  highest layer that wrote any part of it.
+  highest layer that wrote any part of it. A key whose layer is `tenant` is
+  one the tenant's own file writes (`file` is then `source_file`): the
+  readers that act on a tenant's file (threshold-govern, #2116) act on
+  those keys only, in the spelling `effective_config` keys them by, which
+  is the one written.
 
 `effective_config` is the JSON as /effective sends it: a YAML `.inf` / `.nan`
 arrives as the text `"Infinity"` / `"-Infinity"` / `"NaN"`.
@@ -168,6 +172,7 @@ __all__ = [
     "DA_GUARD_PREFIX",
     "MISSING_BINARY_MESSAGE",
     "ParseFailedError",
+    "canonical_key",
     "exit_on_served_values_error",
     "is_tenant_reserved_key",
     "load_effective",
@@ -686,6 +691,24 @@ def is_tenant_reserved_key(key: str) -> bool:
     if key in VALID_RESERVED_KEYS:
         return True
     return key.startswith(VALID_RESERVED_PREFIXES) and key not in TOP_LEVEL_READ_ELSEWHERE
+
+
+_CRITICAL = "_critical"
+
+
+def canonical_key(key: str, aliases: dict[str, str] | None) -> str:
+    """A threshold key in the exporter's canonical spelling: a retired base
+    key (also as `<base>_critical` / `<base>{...}`) through `aliases`
+    (`ServedTree.aliases`, the exporter's own table). Reserved keys and keys
+    not in the table are returned as they are."""
+    if not aliases or key.startswith("_"):
+        return key
+    base, brace, dims = key.partition("{")
+    if base in aliases:
+        return aliases[base] + brace + dims
+    if base.endswith(_CRITICAL) and base[:-len(_CRITICAL)] in aliases:
+        return aliases[base[:-len(_CRITICAL)]] + _CRITICAL + brace + dims
+    return key
 
 
 _EMPTY_FILL = ("", [], {}, None)

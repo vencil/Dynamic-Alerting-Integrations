@@ -49,6 +49,7 @@ import argparse
 import json
 import math
 import os
+import re
 import sys
 from dataclasses import asdict, dataclass, field
 from datetime import datetime, timezone
@@ -65,9 +66,18 @@ from _lib_python import (  # noqa: E402
     add_prometheus_arg,
     detect_cli_lang,
     exit_on_yaml_file_error,
-    load_tenant_configs,
     parse_duration_seconds,
     query_prometheus_instant,
+)
+# #2116: the tenants, their values and who owns each key come from Go
+# (`da-guard effective`); the alias table from `da-guard served-values`.
+from _lib_tenant_values import (  # noqa: E402
+    KeySource,
+    canonical_key,
+    exit_on_served_values_error,
+    load_effective,
+    load_served_tree,
+    print_load_warnings,
 )
 # Aliased: the local format_json_report() below (domain report builder,
 # exercised directly by tests) delegates its final dump to the shared helper.
@@ -124,6 +134,9 @@ _HELP = {
 CONFIDENCE_HIGH = "HIGH"
 CONFIDENCE_MEDIUM = "MEDIUM"
 CONFIDENCE_LOW = "LOW"
+# An inherited key (#2116): not queried, so no confidence at all — not LOW,
+# which would read as "too few samples".
+CONFIDENCE_NOT_QUERIED = "n/a"
 
 # Percentile queries via Prometheus quantile_over_time
 PERCENTILES = {
@@ -186,16 +199,34 @@ class KeyRecommendation:
     # manual-review section keyed on guardrail_reason.
     force_manual: bool = False
     guardrail_reason: str = ""
+    # #2116: who owns the value, as `da-guard effective` reports it. `key` is
+    # the spelling the config writes (the one a write-back must match);
+    # `canonical_key` is set only when that spelling is a retired one.
+    # `source_layer` is "tenant" for a key the tenant's own file writes, else
+    # "defaults" / "platform" / "profile" (the value is inherited);
+    # `source_file` is relative to --config-dir.
+    source_layer: str = "tenant"
+    source_file: str = ""
+    canonical_key: str = ""
 
 
 @dataclass
 class TenantRecommendation:
-    """Recommendation report for one tenant."""
+    """Recommendation report for one tenant.
+
+    `keys` are the threshold keys the tenant's own file writes (the ones a
+    tenant change can act on); `inherited` the ones it inherits from a
+    defaults / platform / profile file — listed for reference only, never
+    exported as a tenant patch or governed (#2116). `total_keys` /
+    `recommended_changes` count `keys` only. `source_file` is the tenant's
+    own file, relative to --config-dir."""
 
     tenant: str
     keys: list[KeyRecommendation] = field(default_factory=list)
     total_keys: int = 0
     recommended_changes: int = 0
+    source_file: str = ""
+    inherited: list[KeyRecommendation] = field(default_factory=list)
 
 
 # ---------------------------------------------------------------------------
@@ -703,6 +734,9 @@ def analyze_tenant(
     min_samples: int = 100,
     dry_run: bool = False,
     observed_map: Optional[dict[str, Any]] = None,
+    key_sources: Optional[dict[str, KeySource]] = None,
+    aliases: Optional[dict[str, str]] = None,
+    source_file: str = "",
 ) -> TenantRecommendation:
     """Analyze one tenant and generate threshold recommendations.
 
@@ -712,14 +746,26 @@ def analyze_tenant(
     explicit reason (fail-loud) rather than producing a bogus or echo-chamber
     recommendation.
 
+    #2116: a key whose `key_sources` layer is not "tenant" is inherited and
+    goes to `inherited`: listed with its current value and source file only —
+    no Prometheus query, no recommended value (a change to it belongs in the
+    file that owns it, not in this tenant's). A key written in a retired spelling
+    is looked up in the observed-map by its canonical spelling (`aliases`,
+    the exporter's table) and keeps the written one in `key`.
+
     Args:
         tenant_name: Tenant identifier.
-        tenant_config: Tenant config dict from YAML.
+        tenant_config: The tenant's config, written plus inherited
+            (`da-guard effective`'s `effective_config`).
         prometheus_url: Prometheus base URL (required unless dry_run).
         lookback: Lookback period for historical data.
         min_samples: Minimum sample count for confidence.
         dry_run: Only generate PromQL queries, don't execute.
         observed_map: conf.d-key -> observed-series map (loads default if None).
+        key_sources: `{key: KeySource}` from `da-guard effective`; None reads
+            every key as the tenant's own.
+        aliases: retired base key -> canonical base key (served-values).
+        source_file: the tenant's own file, relative to the config dir.
 
     Returns:
         TenantRecommendation with per-key results.
@@ -727,116 +773,139 @@ def analyze_tenant(
     if observed_map is None:
         observed_map = observed_map_lib.load_observed_map()
 
-    report = TenantRecommendation(tenant=tenant_name)
+    report = TenantRecommendation(tenant=tenant_name, source_file=source_file)
 
-    # Extract metric keys (skip reserved keys)
-    metric_keys = {
-        k: v for k, v in tenant_config.items()
-        if not is_reserved_key(k)
-    }
-
-    report.total_keys = len(metric_keys)
-
-    for key, current_value in sorted(metric_keys.items()):
-        # #719: resolve the observed-workload series this threshold is compared
-        # against. fail-loud skip when there is no usable mapping.
-        entry = observed_map.get(key)
-        if entry is None:
-            report.keys.append(KeyRecommendation(
-                key=key,
-                current_value=current_value,
-                reason="no observed-load mapping for this key — not in observed-map (skipped)",
-            ))
+    for key, current_value in sorted(tenant_config.items()):
+        src = (key_sources or {}).get(key)
+        layer = src.layer if src is not None else "tenant"
+        # Reserved keys are not thresholds; an inherited `_` key may also be a
+        # platform-level one merged from a root file (e.g. `_policies`).
+        if is_reserved_key(key) or (layer != "tenant" and key.startswith("_")):
             continue
-        observed_series, skip_reason = observed_map_lib.resolve_observed(entry)
-        if skip_reason:
-            report.keys.append(KeyRecommendation(
-                key=key,
-                current_value=current_value,
-                reason=f"skipped: {skip_reason}",
-            ))
+        canonical = canonical_key(key, aliases)
+        if layer != "tenant":
+            report.inherited.append(KeyRecommendation(
+                key=key, current_value=current_value, reason=_INHERITED_REASON,
+                confidence=CONFIDENCE_NOT_QUERIED,
+                source_layer=layer, source_file=src.file if src is not None else "",
+                canonical_key=canonical if canonical != key else ""))
             continue
-
-        promql = build_metric_query(observed_series, tenant_name, lookback)
-
-        if dry_run:
-            rec = KeyRecommendation(
-                key=key,
-                current_value=current_value,
-                reason="dry-run: query not executed",
-                promql=promql,
-            )
-            report.keys.append(rec)
-            continue
-
-        # #916 Item A: route by comparison direction. A per-key try/except keeps
-        # one tenant's bad value (e.g. a Decimal/parse blow-up) from sinking the
-        # whole run — that key degrades to force_manual, the rest continue.
-        direction = entry.get("direction")
-        try:
-            if direction == "<":
-                # Lower-bound floor path: timestamped samples → daily-bucket P5
-                # engine (never the upper-bound percentile logic).
-                pairs, err = query_prometheus_range_ts(prometheus_url, promql)
-                if err:
-                    report.keys.append(KeyRecommendation(
-                        key=key, current_value=current_value,
-                        reason=f"query error: {err[:60]}", promql=promql,
-                    ))
-                    continue
-                if not pairs:
-                    report.keys.append(KeyRecommendation(
-                        key=key, current_value=current_value,
-                        confidence=CONFIDENCE_LOW, sample_count=0,
-                        reason="no data points found", promql=promql,
-                    ))
-                    continue
-                rec = recommend_threshold_lower(
-                    key, current_value, pairs, min_samples
-                )
-            else:
-                # Upper-bound path (unchanged).
-                values, err = query_prometheus_range(prometheus_url, promql)
-                if err:
-                    report.keys.append(KeyRecommendation(
-                        key=key, current_value=current_value,
-                        reason=f"query error: {err[:60]}", promql=promql,
-                    ))
-                    continue
-                if not values:
-                    report.keys.append(KeyRecommendation(
-                        key=key, current_value=current_value,
-                        confidence=CONFIDENCE_LOW, sample_count=0,
-                        reason="no data points found", promql=promql,
-                    ))
-                    continue
-                pcts = compute_percentiles(values)
-                rec = recommend_threshold(
-                    key=key, current_value=current_value, pcts=pcts,
-                    sample_count=len(values), min_samples=min_samples,
-                )
-        except Exception as exc:  # noqa: BLE001 — one bad value must not sink the run
-            # Reason phrasing follows the key's own direction (an upper-bound key
-            # blowing up must not be mislabelled "lower-bound floor").
-            what = "lower-bound floor" if direction == "<" else "recommendation"
-            report.keys.append(KeyRecommendation(
-                key=key, current_value=current_value,
-                reason=f"{what} → manual review: {str(exc)[:80]}",
-                force_manual=True, guardrail_reason=str(exc)[:100], promql=promql,
-            ))
-            continue
-
-        rec.promql = promql
-
+        rec = _recommend_key(
+            tenant_name, key, current_value,
+            observed_map.get(canonical),
+            prometheus_url=prometheus_url, lookback=lookback,
+            min_samples=min_samples,
+            dry_run=dry_run,
+        )
+        rec.source_file = src.file if src is not None else source_file
+        rec.canonical_key = canonical if canonical != key else ""
         # An actionable recommendation (upper or lower) counts as a change; a
         # within-margin / force_manual / skipped key does not (_exportable is the
         # single source of truth — a lower within-margin has recommended=None).
         if _exportable(rec):
             report.recommended_changes += 1
-
         report.keys.append(rec)
 
+    report.total_keys = len(report.keys)
     return report
+
+
+_INHERITED_REASON = ("inherited — listed only, not queried: change it in the file that "
+                     "owns it")
+
+
+def _recommend_key(
+    tenant_name: str,
+    key: str,
+    current_value: Any,
+    entry: Optional[dict[str, Any]],
+    *,
+    prometheus_url: Optional[str],
+    lookback: str,
+    min_samples: int,
+    dry_run: bool,
+) -> KeyRecommendation:
+    """One key's recommendation (`entry` is its observed-map entry, None when
+    unmapped)."""
+    # #719: resolve the observed-workload series this threshold is compared
+    # against. fail-loud skip when there is no usable mapping.
+    if entry is None:
+        return KeyRecommendation(
+            key=key,
+            current_value=current_value,
+            reason="no observed-load mapping for this key — not in observed-map (skipped)",
+        )
+    observed_series, skip_reason = observed_map_lib.resolve_observed(entry)
+    if skip_reason:
+        return KeyRecommendation(
+            key=key,
+            current_value=current_value,
+            reason=f"skipped: {skip_reason}",
+        )
+    promql = build_metric_query(observed_series, tenant_name, lookback)
+
+    if dry_run:
+        return KeyRecommendation(
+            key=key,
+            current_value=current_value,
+            reason="dry-run: query not executed",
+            promql=promql,
+        )
+
+    # #916 Item A: route by comparison direction. A per-key try/except keeps
+    # one tenant's bad value (e.g. a Decimal/parse blow-up) from sinking the
+    # whole run — that key degrades to force_manual, the rest continue.
+    direction = entry.get("direction")
+    try:
+        if direction == "<":
+            # Lower-bound floor path: timestamped samples → daily-bucket P5
+            # engine (never the upper-bound percentile logic).
+            pairs, err = query_prometheus_range_ts(prometheus_url, promql)
+            if err:
+                return KeyRecommendation(
+                    key=key, current_value=current_value,
+                    reason=f"query error: {err[:60]}", promql=promql,
+                )
+            if not pairs:
+                return KeyRecommendation(
+                    key=key, current_value=current_value,
+                    confidence=CONFIDENCE_LOW, sample_count=0,
+                    reason="no data points found", promql=promql,
+                )
+            rec = recommend_threshold_lower(
+                key, current_value, pairs, min_samples
+            )
+        else:
+            # Upper-bound path (unchanged).
+            values, err = query_prometheus_range(prometheus_url, promql)
+            if err:
+                return KeyRecommendation(
+                    key=key, current_value=current_value,
+                    reason=f"query error: {err[:60]}", promql=promql,
+                )
+            if not values:
+                return KeyRecommendation(
+                    key=key, current_value=current_value,
+                    confidence=CONFIDENCE_LOW, sample_count=0,
+                    reason="no data points found", promql=promql,
+                )
+            pcts = compute_percentiles(values)
+            rec = recommend_threshold(
+                key=key, current_value=current_value, pcts=pcts,
+                sample_count=len(values), min_samples=min_samples,
+            )
+    except Exception as exc:  # noqa: BLE001 — one bad value must not sink the run
+        # Reason phrasing follows the key's own direction (an upper-bound key
+        # blowing up must not be mislabelled "lower-bound floor").
+        what = "lower-bound floor" if direction == "<" else "recommendation"
+        return KeyRecommendation(
+            key=key, current_value=current_value,
+            reason=f"{what} → manual review: {str(exc)[:80]}",
+            force_manual=True, guardrail_reason=str(exc)[:100], promql=promql,
+        )
+
+    rec.promql = promql
+    return rec
 
 
 def run_analysis(
@@ -850,6 +919,15 @@ def run_analysis(
 ) -> list[TenantRecommendation]:
     """Run threshold analysis for all (or filtered) tenants.
 
+    The tenants, each tenant's values (written plus inherited) and which file
+    owns each key are `da-guard effective`'s (#2116): the config as tenant-api's
+    /effective resolves it, so a key a tenant inherits is seen, and is told
+    apart from a key its own file writes. The alias table comes from
+    `da-guard served-values`; its stderr and the files it serves no tenant
+    from are printed to stderr (`print_load_warnings`). A tree served-values
+    refuses (e.g. the root `defaults:` and a tenant both writing an
+    `X_critical` key, deferred under #2115) therefore fails this tool too.
+
     Args:
         config_dir: Path to tenant config directory.
         prometheus_url: Prometheus base URL.
@@ -860,29 +938,41 @@ def run_analysis(
 
     Returns:
         List of TenantRecommendation.
+
+    Raises:
+        What `load_effective` / `load_served_tree` raise (da-guard missing,
+        failing, or a file the exporter cannot load): fail-closed.
     """
-    all_configs = load_tenant_configs(config_dir)
+    # served-values first: on a file the load cannot decode, its stderr carries
+    # the exporter's parse reason, which `da-guard effective`'s does not.
+    tree = load_served_tree(config_dir)
+    print_load_warnings(tree)
+    effective = load_effective(config_dir)
 
     if tenant_filter:
-        if tenant_filter not in all_configs:
+        if tenant_filter not in effective:
             return []
-        all_configs = {tenant_filter: all_configs[tenant_filter]}
+        effective = {tenant_filter: effective[tenant_filter]}
 
     # Load the observed-map once and share across tenants (#719).
     observed_map = observed_map_lib.load_observed_map()
 
     reports: list[TenantRecommendation] = []
-    for tenant_name in sorted(all_configs):
+    for tenant_name in sorted(effective):
+        eff = effective[tenant_name]
         report = analyze_tenant(
             tenant_name,
-            all_configs[tenant_name],
+            eff.effective_config,
             prometheus_url=prometheus_url,
             lookback=lookback,
             min_samples=min_samples,
             dry_run=dry_run,
             observed_map=observed_map,
+            key_sources=eff.key_sources,
+            aliases=tree.aliases,
+            source_file=eff.source_file,
         )
-        if report.keys:
+        if report.keys or report.inherited:
             reports.append(report)
 
     return reports
@@ -891,11 +981,32 @@ def run_analysis(
 # ---------------------------------------------------------------------------
 # Output formatting
 # ---------------------------------------------------------------------------
+def _source_note(r: KeyRecommendation) -> str:
+    """Where an inherited key's value comes from, for the reports (#2116)."""
+    return f"{r.source_layer}: {r.source_file}" if r.source_file else r.source_layer
+
+
 def format_text_report(reports: list[TenantRecommendation]) -> str:
     """Format reports as human-readable text table."""
     if not reports:
         msg = "未發現可分析的租戶 metric key。" if _LANG == 'zh' else "No analyzable tenant metric keys found."
         return msg
+
+    def _rows(keys: list[KeyRecommendation], inherited: bool) -> list[str]:
+        out: list[str] = []
+        for r in keys:
+            current = str(r.current_value) if r.current_value is not None else "—"
+            p95 = f"{r.p95:.1f}" if r.p95 is not None else "—"
+            rec = f"{r.recommended}" if r.recommended is not None else "—"
+            delta = f"{r.delta_pct:+.1f}%" if r.delta_pct is not None else "—"
+            out.append(
+                f"  {r.key:<22s} {current:>8s} {p95:>8s} {rec:>10s} {delta:>8s} {r.confidence:<10s}"
+            )
+            if inherited:
+                out.append(f"    └─ from {safe_label(_source_note(r))}")
+            if r.reason and ("no change" not in r.reason):
+                out.append(f"    └─ {safe_label(r.reason)}")
+        return out
 
     lines: list[str] = []
     for report in reports:
@@ -905,22 +1016,22 @@ def format_text_report(reports: list[TenantRecommendation]) -> str:
         header = f"  {'Key':<22s} {'Current':>8s} {'P95':>8s} {'Recommend':>10s} {'Delta':>8s} {'Confidence':<10s}"
         lines.append(header)
         lines.append(f"  {'─' * 22} {'─' * 8} {'─' * 8} {'─' * 10} {'─' * 8} {'─' * 10}")
-
-        for r in report.keys:
-            current = str(r.current_value) if r.current_value is not None else "—"
-            p95 = f"{r.p95:.1f}" if r.p95 is not None else "—"
-            rec = f"{r.recommended}" if r.recommended is not None else "—"
-            delta = f"{r.delta_pct:+.1f}%" if r.delta_pct is not None else "—"
+        lines += _rows(report.keys, inherited=False)
+        if report.inherited:
+            # #2116: values this tenant inherits. Writing one into the
+            # tenant's file would pin it; the owning file is where it changes.
             lines.append(
-                f"  {r.key:<22s} {current:>8s} {p95:>8s} {rec:>10s} {delta:>8s} {r.confidence:<10s}"
-            )
-            if r.reason and ("no change" not in r.reason):
-                lines.append(f"    └─ {safe_label(r.reason)}")
+                f"  Inherited, reference only ({len(report.inherited)} key(s)): the value "
+                "belongs to the file named; setting it in this tenant's file would pin it.")
+            lines += _rows(report.inherited, inherited=True)
 
     total_changes = sum(r.recommended_changes for r in reports)
     total_keys = sum(r.total_keys for r in reports)
+    total_inherited = sum(len(r.inherited) for r in reports)
     lines.append(f"\n{'=' * 90}")
-    lines.append(f"  Total: {total_changes}/{total_keys} keys with recommended changes")
+    lines.append(f"  Total: {total_changes}/{total_keys} keys with recommended changes"
+                 + (f"; {total_inherited} inherited key(s) listed for reference"
+                    if total_inherited else ""))
     lines.append(f"{'=' * 90}")
 
     return "\n".join(lines)
@@ -935,6 +1046,7 @@ def format_json_report(reports: list[TenantRecommendation]) -> str:
             "total_tenants": len(reports),
             "total_keys": sum(r.total_keys for r in reports),
             "recommended_changes": sum(r.recommended_changes for r in reports),
+            "inherited_keys": sum(len(r.inherited) for r in reports),
         },
     }
     return _dump_json(output)
@@ -950,12 +1062,16 @@ def format_markdown_report(reports: list[TenantRecommendation]) -> str:
         lines.append(f"## Tenant: {report.tenant}\n")
         lines.append(f"| Key | Current | P95 | Recommend | Delta | Confidence | Reason |")
         lines.append(f"|-----|---------|-----|-----------|-------|------------|--------|")
-        for r in report.keys:
+        for r in report.keys + report.inherited:
             current = str(r.current_value) if r.current_value is not None else "—"
             p95 = f"{r.p95:.1f}" if r.p95 is not None else "—"
             rec = f"{r.recommended}" if r.recommended is not None else "—"
             delta = f"{r.delta_pct:+.1f}%" if r.delta_pct is not None else "—"
-            lines.append(f"| {r.key} | {current} | {p95} | {rec} | {delta} | {r.confidence} | {r.reason} |")
+            reason = r.reason
+            if r.source_layer != "tenant":
+                # #2116: inherited — reference only, not this tenant's to change.
+                reason = f"inherited from {_source_note(r)} (reference only); {reason}"
+            lines.append(f"| {r.key} | {current} | {p95} | {rec} | {delta} | {r.confidence} | {reason} |")
         lines.append("")
 
     return "\n".join(lines)
@@ -1027,59 +1143,145 @@ def _exportable(r: KeyRecommendation) -> bool:
     )
 
 
+def _one_line(text: Any) -> str:
+    """`text` as one line, safe inside a `#` comment: `safe_label` first turns
+    each control character (`\n`, `\r`, `\x85` among them) into `?`, then
+    `.split()` collapses every whitespace run — U+2028 / U+2029 included — to
+    one space. Nothing in the result can end the comment line."""
+    return " ".join(safe_label(str(text)).split())
+
+
+_PLAIN_NAME = re.compile(r"[A-Za-z0-9][A-Za-z0-9._-]*", re.ASCII)
+# The one plain spelling the exporter does not read back as that text: it
+# decodes an unquoted `null` key as no key at all; `010`, `true`, `2024-01-01`
+# it keeps as written, as `_lib_yaml_keys` reads them (#2116; measured in
+# tests/shared/tenant_id_yaml_spelling_matrix.json).
+_NULL_WORDS = frozenset({"null", "Null", "NULL"})
+
+
+def _plain_name(name: str) -> bool:
+    """True iff `name` can go on a value line as is: a plain ASCII identifier
+    the exporter reads back as that same text (it keys tenants by the source
+    text, so `010` stays `010`; only `null` does not). PyYAML may read some of
+    these as numbers or booleans; the exporter's reading is the one that
+    counts. Any other tenant name or key is never written on a value line —
+    not quoted either: a quoted key's escapes are not read alike by every
+    reader (a JSON surrogate pair breaks the exporter's whole file). The patch
+    then carries a comment asking for a hand edit (#2116)."""
+    return _PLAIN_NAME.fullmatch(name) is not None and name not in _NULL_WORDS
+
+
+def _from(r: KeyRecommendation) -> str:
+    """` (from <file>)` for a value whose source file is known (#2116)."""
+    return f" (from {_one_line(r.source_file)})" if r.source_file else ""
+
+
+def _inherited_line(r: KeyRecommendation) -> str:
+    """An inherited key as a comment, never a value line: its current value
+    and the file that owns it, no recommended value (it is not queried).
+    Merging it into the tenant's file would pin the tenant to its own copy of
+    a value another file owns (#2116). Neither the key nor the value was
+    checked by a parse here (the value is never float-parsed), so a mapping
+    is shown as `(scheduled)` and the key and any other value are collapsed
+    to one escaped line — a raw newline would break out of the comment."""
+    cur = r.current_value
+    shown = ("(scheduled)" if isinstance(cur, dict)
+             else "?" if cur is None else _one_line(cur))
+    return (f"{_one_line(r.key)}: inherited, is {shown}{_from(r)} — change it in that file; "
+            "setting it in this tenant's file pins the tenant")
+
+
+def _not_written_line(r: KeyRecommendation, what: str) -> str:
+    """An exportable key whose tenant name or key (`what`) is not a plain
+    name (`_plain_name`): its recommendation as a comment for a hand edit,
+    never a value line (#2116)."""
+    cur = r.current_value if r.current_value is not None else "?"
+    return (f"(not written) {_one_line(r.key)}: recommended "
+            f"{_format_threshold_value(r.recommended)}, was {_one_line(cur)}{_from(r)}, "
+            f"{_delta_str(r)} — the {what} is not a plain YAML name, so this patch does not "
+            "write it; set it in the tenant's file by hand")
+
+
 def format_export_patch(reports: list[TenantRecommendation]) -> str:
     """Format reports as an applyable conf.d override fragment (#720 STAGE-1).
 
     Emits a ``tenants:``-rooted YAML block carrying ONLY the keys with an
-    actionable recommendation (see ``_exportable``). The operator reviews it,
-    merges/applies it into the matching ``conf.d/<tenant>.yaml``, and opens a
-    PR — at which point the existing ``backtest.yaml`` CI posts the
-    old-vs-new firing-count risk report (the STAGE-1 value basis). Skipped /
-    within-margin keys are listed as comments so the output is self-explaining
-    without re-running in another mode.
+    actionable recommendation (see ``_exportable``) that the tenant's own file
+    writes. The operator reviews it, merges/applies it into the tenant's file
+    (named on each line), and opens a PR — at which point the existing
+    ``backtest.yaml`` CI posts the old-vs-new firing-count risk report (the
+    STAGE-1 value basis). Skipped / within-margin keys are listed as comments
+    so the output is self-explaining without re-running in another mode.
+
+    #2116: every value line names the file its current value comes from, and
+    every name, key, value and reason that goes into a `#` comment is made one
+    line (`_one_line`), so no input can turn a comment into a value line. A
+    tenant name or key that is not a plain name (`_plain_name`) is never put
+    on a value line: its recommendation is a `(not written)` comment. A
+    key the tenant inherits (defaults / platform / profile) is never a value
+    line: it is listed as a comment with its current value and the owning
+    file (no recommended value — it is not queried), because merging it into
+    the tenant's file would pin the tenant to that number.
 
     T1 (advisory fragment, 0 new deps): the operator applies it; the tool does
     NOT edit conf.d in place (that heavier ruamel round-trip is deferred —
     #457 R0 §5 / #721).
     """
     exportable = [
-        (rep, [r for r in rep.keys if _exportable(r)]) for rep in reports
+        (rep, [r for r in rep.keys if _exportable(r)],
+         sorted(rep.inherited, key=lambda x: x.key))
+        for rep in reports
     ]
-    total = sum(len(ks) for _, ks in exportable)
+    total = sum(len(ks) for _, ks, _i in exportable)
+    # A value line needs a plain tenant name and a plain key (`_plain_name`);
+    # the other exportable keys become `(not written)` comments.
+    plan = []
+    for rep, ks, inh in exportable:
+        written = [r for r in ks if _plain_name(rep.tenant) and _plain_name(r.key)]
+        blocked = sorted((r for r in ks if r not in written), key=lambda x: x.key)
+        skipped = sorted((r for r in rep.keys if not _exportable(r)), key=lambda x: x.key)
+        plan.append((rep, written, blocked, skipped, inh))
 
     lines: list[str] = [
         "# threshold-recommend --export-patch (#720 STAGE-1)",
-        "# Review, then merge each tenant block into the matching conf.d/<tenant>.yaml",
+        "# Review, then merge each tenant block into the tenant's file (each line names it)",
         "# and open a PR — backtest.yaml CI will post the old-vs-new firing-count risk report.",
         "# Only keys with an actionable recommendation (|delta| >= 5%, mapped, upper-bound",
         "# or an opted-in percentile-lower floor) appear; lower-bound deltas are miss-rate.",
+        "# A value the tenant inherits appears only as a comment naming the file that owns it.",
     ]
-    if total == 0:
-        lines.append("# (no actionable recommendations)")
+
+    def comments_only(rep, blocked, skipped, inh) -> None:
+        # A tenant with no value line → no YAML block, but keep the per-key
+        # context as top-level comments (don't drop it).
+        tag = f"# [{_one_line(rep.tenant)}]"
+        what = "key" if _plain_name(rep.tenant) else "tenant name"
+        for r in blocked:
+            lines.append(f"{tag} {_not_written_line(r, what)}")
+        for r in skipped:
+            label, detail = _skip_comment_body(r)
+            lines.append(f"{tag} ({label}) {_one_line(r.key)}: {_one_line(detail)}")
+        for r in inh:
+            lines.append(f"{tag} (inherited) {_inherited_line(r)}")
+
+    if not any(written for _rep, written, *_rest in plan):
+        lines.append("# (no actionable recommendations)" if total == 0 else
+                     "# (no value line: every actionable key is listed as (not written))")
         # Still surface why every key was skipped — the transparency this mode
         # documents must not vanish just because nothing is actionable. These
         # are top-level comments (no `tenants:` block, so the output stays an
         # empty/None YAML doc that applies to nothing).
-        for rep in reports:
-            for r in sorted(rep.keys, key=lambda x: x.key):
-                label, detail = _skip_comment_body(r)
-                lines.append(f"# [{rep.tenant}] ({label}) {r.key}: {detail}")
+        for rep, _written, blocked, skipped, inh in plan:
+            comments_only(rep, blocked, skipped, inh)
         return "\n".join(lines) + "\n"
 
     lines.append("tenants:")
-    for rep, ks in exportable:
-        skipped = sorted(
-            (r for r in rep.keys if not _exportable(r)), key=lambda x: x.key
-        )
-        if not ks:
-            # tenant has only non-actionable keys → no YAML block, but keep the
-            # per-key skip context as top-level comments (don't drop it).
-            for r in skipped:
-                label, detail = _skip_comment_body(r)
-                lines.append(f"# [{rep.tenant}] ({label}) {r.key}: {detail}")
+    for rep, written, blocked, skipped, inh in plan:
+        if not written:
+            comments_only(rep, blocked, skipped, inh)
             continue
         lines.append(f"  {rep.tenant}:")
-        for r in sorted(ks, key=lambda x: x.key):
+        for r in sorted(written, key=lambda x: x.key):
             val = _format_threshold_value(r.recommended)
             # `cur` goes only into the trailing `#` comment. Safe to interpolate
             # raw: an exportable key has recommended != None, i.e.
@@ -1091,12 +1293,17 @@ def format_export_patch(reports: list[TenantRecommendation]) -> str:
             cur = r.current_value if r.current_value is not None else "?"
             delta = _delta_str(r)
             lines.append(
-                f'    {r.key}: "{val}"   # was {cur}, {delta}, {r.confidence} — {r.reason}'
+                f'    {r.key}: "{val}"   # was {_one_line(cur)}{_from(r)}, {delta}, '
+                f'{r.confidence} — {_one_line(r.reason)}'
             )
+        for r in blocked:
+            lines.append(f"    # {_not_written_line(r, 'key')}")
         # surface this tenant's skipped keys as in-block comments
         for r in skipped:
             label, detail = _skip_comment_body(r)
-            lines.append(f"    # ({label}) {r.key}: {detail}")
+            lines.append(f"    # ({label}) {_one_line(r.key)}: {_one_line(detail)}")
+        for r in inh:
+            lines.append(f"    # (inherited) {_inherited_line(r)}")
     return "\n".join(lines) + "\n"
 
 
@@ -1104,6 +1311,7 @@ def format_export_patch(reports: list[TenantRecommendation]) -> str:
 # CLI entry point
 # ---------------------------------------------------------------------------
 @exit_on_yaml_file_error  # #1654: unreadable tenant file → rc 2, named
+@exit_on_served_values_error  # #2116: da-guard missing or failing → rc 2, named
 def main() -> None:
     """CLI entry point: threshold recommendation engine."""
     parser = argparse.ArgumentParser(
