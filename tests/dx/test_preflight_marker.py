@@ -77,18 +77,12 @@ class TestPrepushWiring:
     printed Passed while main moved on the remote. The old assertion was a test
     holding a defect in place.
 
-    There are now TWO wired states, because there are two install orders and
-    both really happen:
-
-        shim at .git/hooks/pre-push                     (installer ran alone)
-        pre-commit's template + shim at pre-push.legacy (pre-commit ran after,
-                                                         or before, the installer)
-
-    and one state that looks wired and is not: pre-commit's template with
-    nothing behind it. `pre-commit install -f --hook-type pre-push` produces it
-    by DELETING pre-push.legacy — measured: rc=0, and the output says only
-    "pre-commit installed at …", not one word about the removal. That is the
-    case the last test pins.
+    There is ONE wired state: the shim, byte for byte what the installer
+    writes, executable, at .git/hooks/pre-push. Recognising it by its header
+    alone reported a shim with an `exit 0` inserted, a truncated one, or another
+    hook type's pre-commit template as wired while a direct push to main went
+    through (#2669, #2701). pre-commit's pre-push template is never wired: the
+    installer replaces it (why: the installer's header).
     """
 
     _COPY = (
@@ -171,37 +165,51 @@ class TestPrepushWiring:
             f"it is handed one refspec. why={why!r}"
         )
 
-    def test_the_installer_wires_it_in_either_order(self, tmp_path, monkeypatch):
+    @pytest.mark.parametrize("steps", [
+        ("installer", "pre-commit"),
+        ("installer", "pre-commit", "pre-commit -f"),
+    ])
+    def test_pre_commit_taking_the_slot_back_is_caught_and_undone(
+        self, tmp_path, monkeypatch, steps
+    ):
+        """A later `pre-commit install --hook-type pre-push` moves the shim to
+        pre-push.legacy; with -f it deletes it, saying nothing (rc=0). Either
+        way pre-push is pre-commit's template, which is not wired, and the
+        remedy the message gives must bring it back."""
         self._require_pre_commit()
         mod = _load()
         self._repo(tmp_path)
         monkeypatch.chdir(tmp_path)
+        hooks = tmp_path / ".git" / "hooks"
+
+        assert self._install_guards(tmp_path).returncode == 0
+        wired, why = mod._prepush_guards_wired()
+        assert wired is True, f"CONTROL: the installer alone must be wired: {why!r}"
+        for step in steps[1:]:
+            force = ["-f"] if step.endswith("-f") else []
+            assert self._precommit_install(tmp_path, *force, "--hook-type", "pre-push") == 0
+        wired, why = mod._prepush_guards_wired()
+        assert wired is False, why
+        assert "pre-commit 的樣板" in why, why
 
         r = self._install_guards(tmp_path)
         assert r.returncode == 0, f"{r.stdout}{r.stderr}"
         wired, why = mod._prepush_guards_wired()
-        assert wired is True, why
-        assert (tmp_path / ".git" / "hooks" / "pre-push").exists()
-
-        # …and pre-commit arriving afterwards must not break it: it migrates the
-        # shim to pre-push.legacy and calls it with the FULL stdin.
-        assert self._precommit_install(tmp_path, "--hook-type", "pre-push") == 0
-        assert (tmp_path / ".git" / "hooks" / "pre-push.legacy").exists()
-        wired, why = mod._prepush_guards_wired()
-        assert wired is True, f"the migrated state must count as wired: {why!r}"
+        assert wired is True, f"following the message's remedy did not fix it: {why!r}"
+        assert not (hooks / "pre-push.legacy").exists(), "the old shim was left behind"
+        assert not (hooks / "pre-push.chained").exists(), (
+            f"the shim was chained behind itself:\n{r.stdout}")
 
     @pytest.mark.parametrize("form", ["linux", "windows"])
-    def test_installer_after_precommit_does_not_clobber_the_template(
+    def test_the_installer_replaces_pre_commits_template(
         self, tmp_path, monkeypatch, form
     ):
-        """The other order. ⛔ The installer must not overwrite
-        .git/hooks/pre-push here — doing so would silently drop every
-        pre-commit-stage hook, trading one silent gap for another.
+        """pre-commit first, then the installer: the template is replaced by
+        the shim, and running the installer again changes nothing.
 
         Windows: pre-commit puts `#!/bin/sh` above its template and writes
-        the file CRLF; the installer and this probe must still agree it is
-        pre-commit's (#2617). Running the installer again must leave the shim
-        where it is, not chain it behind itself."""
+        the file CRLF; the installer must still know it for pre-commit's
+        (#2617), or it would chain it behind the shim."""
         self._require_pre_commit()
         mod = _load()
         self._repo(tmp_path)
@@ -218,46 +226,16 @@ class TestPrepushWiring:
             hook.write_bytes(b"#!/bin/sh\r\n" + lf.replace(b"\n", b"\r\n"))
         else:
             hook.write_bytes(lf)
-        template = hook.read_bytes()
 
         for _ in range(2):
             r = self._install_guards(tmp_path)
             assert r.returncode == 0, f"{r.stdout}{r.stderr}"
-        assert hook.read_bytes() == template, (
-            "the installer overwrote pre-commit's hook file"
-        )
-        assert (tmp_path / ".git" / "hooks" / "pre-push.legacy").exists()
+        assert hook.read_bytes() == mod._shim_body().encode(), (
+            f"pre-push is not the shim:\n{r.stdout}")
         assert not (tmp_path / ".git" / "hooks" / "pre-push.chained").exists(), (
             f"something was chained behind the shim:\n{r.stdout}")
         wired, why = mod._prepush_guards_wired()
         assert wired is True, why
-
-    def test_force_reinstall_disarms_it_and_the_probe_says_so(
-        self, tmp_path, monkeypatch
-    ):
-        """`pre-commit install -f` deletes pre-push.legacy without saying so.
-
-        This is the one failure mode the installer cannot prevent, which is
-        exactly why the probe has to catch it: after -f the picture is a
-        perfectly normal pre-commit hook, and every guard is gone.
-        """
-        self._require_pre_commit()
-        mod = _load()
-        self._repo(tmp_path)
-        monkeypatch.chdir(tmp_path)
-
-        assert self._install_guards(tmp_path).returncode == 0
-        assert self._precommit_install(tmp_path, "--hook-type", "pre-push") == 0
-        wired, _ = mod._prepush_guards_wired()
-        assert wired is True, "CONTROL: it must be wired before -f, or this proves nothing"
-
-        assert self._precommit_install(tmp_path, "-f", "--hook-type", "pre-push") == 0
-        assert not (tmp_path / ".git" / "hooks" / "pre-push.legacy").exists()
-        wired, why = mod._prepush_guards_wired()
-        assert wired is False, "a -f reinstall left the probe reporting wired"
-        assert "pre-push.legacy" in why, (
-            f"the explanation must name what went missing; got {why!r}"
-        )
 
     def test_a_hand_written_prepush_hook_does_not_count(self, tmp_path, monkeypatch):
         mod = _load()
@@ -271,31 +249,6 @@ class TestPrepushWiring:
         assert "chained" in why, (
             f"the message must say what the installer will do with it: {why!r}"
         )
-
-    @pytest.mark.parametrize("names", [
-        "--hook-type=pre-push", "vibe-prepush-shim",
-        "echo '# File generated by pre-commit: https://pre-commit.com'"])
-    def test_a_hand_written_hook_naming_a_marker_does_not_count(
-        self, tmp_path, monkeypatch, names
-    ):
-        """Naming pre-commit's flag or the shim in a comment does not make a
-        hook either of them (#2617). The shim is real and sits in
-        pre-push.legacy, but the hook in front of it never calls it."""
-        self._require_pre_commit()
-        mod = _load()
-        self._repo(tmp_path)
-        monkeypatch.chdir(tmp_path)
-        assert self._install_guards(tmp_path).returncode == 0
-        assert self._precommit_install(tmp_path, "--hook-type", "pre-push") == 0
-        wired, why = mod._prepush_guards_wired()
-        assert wired is True, f"CONTROL: pre-commit in front of the shim is wired: {why!r}"
-
-        hooks = tmp_path / ".git" / "hooks"
-        (hooks / "pre-push").write_text(
-            f"#!/bin/sh\n# {names}\nexit 0\n", encoding="utf-8", newline="\n")
-        (hooks / "pre-push").chmod(0o755)
-        wired, why = mod._prepush_guards_wired()
-        assert wired is False, why
 
     @pytest.mark.skipif(
         sys.platform == "win32",
@@ -330,57 +283,112 @@ class TestPrepushWiring:
         wired, why = mod._prepush_guards_wired()
         assert wired is True, f"following the message's remedy did not fix it: {why!r}"
 
-    @pytest.mark.skipif(
-        sys.platform == "win32",
-        reason="Windows has no executable bit; see the shim test above.",
-    )
-    @pytest.mark.parametrize("name", ["pre-push", "pre-push.legacy"])
-    def test_behind_pre_commit_both_files_need_the_executable_bit(
-        self, tmp_path, monkeypatch, name
+    @staticmethod
+    def _insert_exit_0(hook, tmp_path):
+        lines = hook.read_text(encoding="utf-8").split("\n")
+        lines.insert(3, "exit 0")
+        hook.write_text("\n".join(lines), encoding="utf-8", newline="")
+
+    @staticmethod
+    def _truncate(hook, tmp_path):
+        hook.write_text("".join(hook.read_text(encoding="utf-8").splitlines(True)[:5]),
+                        encoding="utf-8", newline="")
+
+    @staticmethod
+    def _leading_blank_line(hook, tmp_path):
+        hook.write_bytes(b"\n" + hook.read_bytes())
+
+    @staticmethod
+    def _older_version(hook, tmp_path):
+        # Every line is still one the shim has; one is gone, as when the
+        # installer's SHIM_BODY changed after this copy was written.
+        lines = hook.read_text(encoding="utf-8").splitlines(True)
+        drop = next(i for i, x in enumerate(lines) if "Work tree looked in" in x)
+        hook.write_text("".join(lines[:drop] + lines[drop + 1:]), encoding="utf-8", newline="")
+
+    @staticmethod
+    def _another_hook_types_template(hook, tmp_path):
+        # The shim sits in pre-push.legacy, and that template never calls it.
+        for hook_type in ("pre-push", "pre-rebase"):
+            assert TestPrepushWiring._precommit_install(
+                tmp_path, "--hook-type", hook_type) == 0
+        hook.write_bytes((hook.parent / "pre-rebase").read_bytes())
+
+    @pytest.mark.parametrize("change", [
+        "_insert_exit_0", "_truncate", "_leading_blank_line", "_older_version",
+        "_another_hook_types_template"])
+    def test_a_pre_push_hook_that_is_not_the_installers_shim_is_not_wired(
+        self, tmp_path, monkeypatch, change
     ):
-        """#2671: when pre-commit owns pre-push, git skips its template without
-        the bit and pre-commit skips pre-push.legacy without it — either way
-        the guards never run. The message's remedy must bring it back."""
-        self._require_pre_commit()
+        """#2669, #2701: each of these keeps the line the old judgement went
+        by, and with each a direct push to main went through while preflight
+        said wired. The bit stays set, so only the content can tell."""
+        if change == "_another_hook_types_template":
+            self._require_pre_commit()
         mod = _load()
         self._repo(tmp_path)
         monkeypatch.chdir(tmp_path)
         assert self._install_guards(tmp_path).returncode == 0
-        assert self._precommit_install(tmp_path, "--hook-type", "pre-push") == 0
         wired, why = mod._prepush_guards_wired()
-        assert wired is True, f"CONTROL: pre-commit in front of the shim is wired: {why!r}"
+        assert wired is True, f"CONTROL: it must be wired before the change: {why!r}"
 
-        p = tmp_path / ".git" / "hooks" / name
-        p.chmod(p.stat().st_mode & ~0o111)
+        hook = tmp_path / ".git" / "hooks" / "pre-push"
+        getattr(self, change)(hook, tmp_path)
+        assert os.access(hook, os.X_OK)
         wired, why = mod._prepush_guards_wired()
-        assert wired is False, f"a non-executable {name} was reported as wired"
-        assert "執行位元" in why and Path(why.split()[0]).name == name, why
+        assert wired is False, why
 
-        assert self._install_guards(tmp_path).returncode == 0
+        r = self._install_guards(tmp_path)
+        assert r.returncode == 0, f"{r.stdout}{r.stderr}"
         wired, why = mod._prepush_guards_wired()
         assert wired is True, f"following the message's remedy did not fix it: {why!r}"
 
-    def test_the_never_installed_case_is_not_diagnosed_as_a_force_reinstall(
-        self, tmp_path, monkeypatch
-    ):
-        """⛔ Two different causes land in the same state and they are NOT
-        distinguishable — so the message must not pick one.
-
-        `pre-commit install -f` deletes pre-push.legacy silently, and "never
-        installed" looks identical. The first version of this message asserted
-        the -f story outright, which misdiagnosed every fresh clone — including
-        the maintainer's own repo, which had simply never run the installer.
-        """
-        self._require_pre_commit()
+    def test_the_hook_is_found_where_git_looks_for_it(self, tmp_path, monkeypatch):
+        """core.hooksPath moves the hooks directory: a shim left at
+        .git/hooks/pre-push is then never run, and one in the configured
+        directory is."""
         mod = _load()
         self._repo(tmp_path)
         monkeypatch.chdir(tmp_path)
-        assert self._precommit_install(tmp_path, "--hook-type", "pre-push") == 0
-
+        assert subprocess.run(  # subprocess-timeout: ignore
+            ["git", "config", "core.hooksPath", "hooks-dir"], cwd=tmp_path).returncode == 0
+        assert self._install_guards(tmp_path).returncode == 0
+        moved = tmp_path / "hooks-dir" / "pre-push"
         wired, why = mod._prepush_guards_wired()
-        assert wired is False
-        assert "從來沒安裝過" in why, f"the never-installed cause is missing: {why!r}"
-        assert "-f" in why, f"the silent-delete cause is missing: {why!r}"
+        assert wired is True and moved.is_file(), why
+
+        default = tmp_path / ".git" / "hooks" / "pre-push"
+        default.parent.mkdir(parents=True, exist_ok=True)
+        default.write_bytes(moved.read_bytes())
+        default.chmod(0o755)
+        moved.unlink()
+        wired, why = mod._prepush_guards_wired()
+        assert wired is False, f"a shim git never runs was reported as wired: {why!r}"
+
+    @pytest.mark.parametrize("installer", [
+        "#!/usr/bin/env bash\n",
+        "x <<'VIBE_SHIM_EOF'\na\nVIBE_SHIM_EOF\ny <<'VIBE_SHIM_EOF'\nb\nVIBE_SHIM_EOF\n",
+        "VIBE_SHIM_EOF\nx <<'VIBE_SHIM_EOF'\na\n",
+    ], ids=["no-heredoc", "two-heredocs", "end-before-start"])
+    def test_an_installer_without_the_shim_is_unmeasurable_not_unwired(
+        self, tmp_path, monkeypatch, installer
+    ):
+        """The shim is read out of the installer. If that fails the verdict is
+        None — "not installed" would prescribe an installer that cannot be
+        read either."""
+        mod = _load()
+        self._repo(tmp_path)
+        monkeypatch.chdir(tmp_path)
+        assert self._install_guards(tmp_path).returncode == 0
+        wired, _ = mod._prepush_guards_wired()
+        assert wired is True, "CONTROL: it must be wired with the real installer"
+
+        broken = tmp_path / "installer.sh"
+        broken.write_text(installer, encoding="utf-8", newline="\n")
+        monkeypatch.setattr(mod, "_INSTALLER", broken)
+        wired, why = mod._prepush_guards_wired()
+        assert wired is None, why
+        assert "VIBE_SHIM_EOF" in why, why
 
 
 class TestMarkerPython:

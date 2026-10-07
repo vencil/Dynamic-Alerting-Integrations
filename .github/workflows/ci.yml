@@ -1332,8 +1332,9 @@ jobs:
       # hand-feeds the stdin production never delivers; `protect_main_push.sh`
       # had none at all. pre-commit is still required here: since #1689 the
       # guards are NOT pre-commit hooks, and the tests drive `pre-commit install
-      # --hook-type pre-push` to prove BOTH install orders stay faithful —
-      # including the `-f` case, which deletes the shim without saying so.
+      # --hook-type pre-push` to prove the installer takes the slot back from
+      # it in either order — including after `-f`, which deletes the shim
+      # without saying so.
       # pre-commit comes from this job's pip step below; without this var a
       # regressed install turns the whole file into skips, which is the failure
       # mode it exists to detect.
@@ -1548,9 +1549,9 @@ jobs:
         # pre-commit: since #1689 it is NOT the runner for the pre-push guards
         # (a hook it runs is handed one refspec). tests/ops/test_prepush_hook_wiring.py
         # and tests/dx/test_preflight_marker.py still need it installed, to
-        # drive `pre-commit install --hook-type pre-push` and prove the two
-        # install orders — and the `-f` disarm — behave. The Lint job already
-        # installs it, but this job did not, and the wiring assertions live
+        # drive `pre-commit install --hook-type pre-push` and prove the
+        # installer takes the slot back from it, `-f` included. The Lint job
+        # already installs it, but this job did not, and the wiring assertions live
         # here. VIBE_REQUIRE_PRE_COMMIT above makes its absence a failure
         # rather than a silent skip.
         run: pip install pyyaml croniter pytest pytest-cov pytest-timeout pytest-xdist promql-parser hypothesis pathspec jsonschema check-jsonschema pre-commit markdown -c requirements/ci-constraints.txt
@@ -1714,8 +1715,9 @@ jobs:
       # hand-feeds the stdin production never delivers; `protect_main_push.sh`
       # had none at all. pre-commit is still required here: since #1689 the
       # guards are NOT pre-commit hooks, and the tests drive `pre-commit install
-      # --hook-type pre-push` to prove BOTH install orders stay faithful —
-      # including the `-f` case, which deletes the shim without saying so.
+      # --hook-type pre-push` to prove the installer takes the slot back from
+      # it in either order — including after `-f`, which deletes the shim
+      # without saying so.
       # pre-commit comes from this job's pip step below; without this var a
       # regressed install turns the whole file into skips, which is the failure
       # mode it exists to detect.
@@ -1922,9 +1924,9 @@ jobs:
         # pre-commit: since #1689 it is NOT the runner for the pre-push guards
         # (a hook it runs is handed one refspec). tests/ops/test_prepush_hook_wiring.py
         # and tests/dx/test_preflight_marker.py still need it installed, to
-        # drive `pre-commit install --hook-type pre-push` and prove the two
-        # install orders — and the `-f` disarm — behave. The Lint job already
-        # installs it, but this job did not, and the wiring assertions live
+        # drive `pre-commit install --hook-type pre-push` and prove the
+        # installer takes the slot back from it, `-f` included. The Lint job
+        # already installs it, but this job did not, and the wiring assertions live
         # here. VIBE_REQUIRE_PRE_COMMIT above makes its absence a failure
         # rather than a silent skip.
         run: pip install pyyaml croniter pytest pytest-cov pytest-timeout pytest-xdist promql-parser hypothesis pathspec jsonschema check-jsonschema pre-commit markdown -c requirements/ci-constraints.txt

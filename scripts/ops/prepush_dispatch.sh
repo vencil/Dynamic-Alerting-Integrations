@@ -2,8 +2,8 @@
 # prepush_dispatch.sh — the single pre-push entry point, and the only thing in
 # this repo that reads git's pre-push stdin. #1689 has the measurements.
 #
-# ⛔ Not run directly. Reached through .git/hooks/pre-push (or pre-push.legacy
-#   when pre-commit owns that file); both are written by install_prepush_hook.sh.
+# ⛔ Not run directly. Reached through the shim install_prepush_hook.sh writes
+#   to .git/hooks/pre-push.
 #
 # ⛔ SHEBANG: `#!/usr/bin/env bash`, never an absolute one. When pre-commit owns
 #   the hook it resolves this shebang itself, and `/bin/sh` is not a Windows
