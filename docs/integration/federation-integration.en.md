@@ -345,6 +345,8 @@ python3 scripts/tools/ops/validate_config.py \
   --version-check
 ```
 
+> Running `validate_config.py` directly needs da-guard: run `make da-guard-build` and set `DA_GUARD_BINARY=.build/da-guard` first (the da-tools image ships it); see [validate-config's prerequisite](../cli-reference.en.md#validate-config).
+
 ### 6.3 End-to-End Testing
 
 ```bash

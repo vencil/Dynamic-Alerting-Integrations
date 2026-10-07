@@ -284,6 +284,34 @@ def test_output_without_unreadable_is_refused(tmp_path):
     assert "older than this tool: upgrade or rebuild it" in str(ei.value)
 
 
+def test_effective_tree_reads_skipped_and_refuses_output_without_it(tmp_path):
+    """`load_effective_tree` 讀 effective 的 `skipped`（#2115 F2：profiles 列不再跑
+    served-values 取它）；沒有這個欄位的 da-guard 點名為比本工具舊，不當成「沒有檔被跳過」。
+    `load_effective` 不讀它，所以不要求它（舊 da-guard 對那些讀取端照常可用）。"""
+    with_skipped = {**_doc(), "skipped": [{"file": "flat.yaml", "reason": "declares no tenant"}]}
+    got = tv.load_effective_tree(tmp_path, binary=_fake_da_guard(tmp_path, json.dumps(with_skipped)))
+    assert got.skipped == [tv.SkippedFile("flat.yaml", "declares no tenant")]
+    assert set(got.tenants) == {"t"}
+    with pytest.raises(tv.EffectiveError) as ei:
+        tv.load_effective_tree(tmp_path, binary=_fake_da_guard(tmp_path, json.dumps(_doc())))
+    assert "older than this tool: upgrade or rebuild it" in str(ei.value)
+    assert set(tv.load_effective(tmp_path, binary=_fake_da_guard(tmp_path, json.dumps(_doc())))) == {"t"}
+
+
+def test_effective_tree_skipped_matches_served_tree(tmp_path, da_guard):
+    """真 da-guard，exit 0 的樹：effective 的 skipped 與 served-values 的 skipped 一致（Go 端同一函式）。
+    有檔無法 decode（exit 3）時 effective 的 skipped 可能是空的，不在此保證範圍。"""
+    conf_d = tmp_path / "conf.d"
+    (conf_d / "team").mkdir(parents=True)
+    (conf_d / "_defaults.yaml").write_text("defaults:\n  mysql_connections: 80\n", encoding="utf-8")
+    (conf_d / "t.yaml").write_text("tenants:\n  t:\n    mysql_connections: 70\n", encoding="utf-8")
+    (conf_d / "flat.yaml").write_text("mysql_connections: 5\n", encoding="utf-8")
+    (conf_d / "team" / "flat-u.yml").write_text("mysql_connections: 6\n", encoding="utf-8")
+    eff = tv.load_effective_tree(conf_d, binary=da_guard)
+    assert [s.file for s in eff.skipped] == ["flat.yaml", "team/flat-u.yml"]
+    assert eff.skipped == tv.load_served_tree(conf_d, binary=da_guard).skipped
+
+
 def _fake_da_guard(tmp_path: Path, stdout: str, rc: int = 0) -> str:
     require_shebang_scripts()  # the stand-in below is a `#!` script
     script = tmp_path / "fake-da-guard"

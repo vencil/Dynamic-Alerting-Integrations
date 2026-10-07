@@ -268,7 +268,7 @@ docker run --rm \
 
 Lint 工具同時會對缺少 `expiry` 或 `owner` label 的 Custom Rule 產出 WARN（不阻擋 CI，但提醒補齊）。
 
-> **一站式驗證**：`make validate-config` 或 `validate_config.py --rule-packs rule-packs/` 會自動將 deny-list linting 納入整體驗證報告，與 YAML syntax、schema、route 檢查一併執行。
+> **一站式驗證**：`make validate-config` 或 `validate_config.py --rule-packs rule-packs/` 會自動將 deny-list linting 納入整體驗證報告，與 YAML syntax、schema、route 檢查一併執行。直接跑 `validate_config.py` 需要 da-guard（`make validate-config` 會自己建），見 [validate-config 的前置需求](cli-reference.md#validate-config)。
 >
 > **變更影響分析**：閾值或配置變更時，可用 `da-tools config-diff --old-dir <base> --new-dir <pr>` 產出 blast radius 報告（每筆變更標記 tighter/looser/added/removed），適合作為 PR review 的輔助決策資訊。詳見 [GitOps 部署指南](integration/gitops-deployment.md)。
 

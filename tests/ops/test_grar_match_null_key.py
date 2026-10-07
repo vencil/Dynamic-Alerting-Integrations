@@ -41,6 +41,10 @@ from _lib_confd import declared_tenant_ids
 from _lib_io import strict_load_exporter_keys
 from _lib_yaml_keys import load_exporter_keys
 
+# #2115 0-B／B3: validate-config 的 profiles 列經 da-guard 讀租戶，每次都需要 da-guard
+# （conftest 以 `go build` 建出；建不起來就 fail、不 skip）。
+pytestmark = pytest.mark.usefixtures("da_guard_env")
+
 REPO = Path(__file__).resolve().parents[2]
 _GAR = REPO / "scripts" / "tools" / "ops" / "generate_alertmanager_routes.py"
 _VC = REPO / "scripts" / "tools" / "ops" / "validate_config.py"

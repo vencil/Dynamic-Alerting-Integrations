@@ -234,6 +234,8 @@ The schema is referenced by `validate_config.py` for comprehensive validation:
 python3 scripts/tools/ops/validate_config.py --config-dir conf.d/
 ```
 
+> Running `validate_config.py` directly needs da-guard: run `make da-guard-build` and set `DA_GUARD_BINARY=.build/da-guard` first (the da-tools image ships it); see [validate-config's prerequisite](../cli-reference.md#validate-config).
+
 ### IDE Linting
 
 在編輯器之外對整棵 conf.d 跑同一組 schema，用 CI 那支閘門本身——它的選檔規則（兩種副檔名拼法、`_defaults*` 改驗 `platform-defaults.schema.json`、`_routing_profiles.yaml` 改驗 `routing-profiles.schema.json`、其餘 `_*` 略過並列出）就是編輯器綁定要對齊的那一份（編輯器目前沒有綁 `_routing_profiles.yaml`）：

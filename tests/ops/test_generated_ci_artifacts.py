@@ -5862,10 +5862,12 @@ def test_declared_variable_values_match_their_source(tmp_path, ci, deploy) -> No
     `conf.d/`. The GitHub leg mounts
     ``-v ${{ github.workspace }}/${{ env.CONFIG_DIR }}:/data/conf.d:ro`` and
     docker CREATES a missing bind source as an empty directory, so Stage 1 then
-    validates nothing and says so approvingly — measured directly:
-    `validate-config --config-dir <empty dir>` exits 0 with `Result: PASS`,
-    while a genuinely absent directory exits 2. The customer's only gate goes
-    green having read zero files.
+    validates nothing and says so approvingly — measured directly on the
+    v2.9.0 image: `validate-config --config-dir <empty dir>` exits 0 with
+    `Result: PASS`, while a genuinely absent directory exits 2. The customer's
+    only gate goes green having read zero files. (From #2115 the source FAILs
+    the profiles row on an empty dir, exit 1 — still not a message that says
+    CONFIG_DIR is wrong, and the image a customer pins may be older.)
 
     Both expectations are DERIVED, not transcribed: the config directory comes
     from walking what `run_init` actually wrote, and the namespace from the

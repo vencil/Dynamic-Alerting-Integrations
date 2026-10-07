@@ -49,6 +49,10 @@ sys.path.insert(0, str(REPO / "scripts" / "tools" / "ops"))
 from _grar_merge import chain_levels, level_contains  # noqa: E402
 from _grar_parse import load_tenant_tree  # noqa: E402
 
+# #2115 0-B／B3: validate-config 的 profiles 列經 da-guard 讀租戶，每次都需要 da-guard
+# （conftest 以 `go build` 建出；建不起來就 fail、不 skip）。
+pytestmark = pytest.mark.usefixtures("da_guard_env")
+
 EXIT_OK, EXIT_VIOLATION, EXIT_CALLER_ERROR = 0, 1, 2
 _TREE_ERROR = "routing-tree error(s) — nothing was generated, written or applied"
 

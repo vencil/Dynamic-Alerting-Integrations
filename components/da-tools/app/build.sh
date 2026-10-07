@@ -207,8 +207,8 @@ TOOL_FILES=(
     _lib_godispatch.py
     # #2115 — per-tenant values as /metrics serves them (runs `da-guard
     # served-values`, shipped in this image). Imported by
-    # blind_spot_discovery, analyze_rule_pack_gaps, policy_engine and
-    # policy_opa_bridge (#2115 0-B); without it the
+    # blind_spot_discovery, analyze_rule_pack_gaps, policy_engine,
+    # policy_opa_bridge and validate_config (#2115 0-B); without it the
     # flat-layout image ImportErrors on startup. Imports _lib_io,
     # _lib_exitcodes and ops/guard_dispatch (all above).
     _lib_tenant_values.py

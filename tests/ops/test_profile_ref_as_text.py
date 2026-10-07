@@ -33,6 +33,10 @@ import config_diff  # noqa: E402
 import diagnose  # noqa: E402
 import validate_config  # noqa: E402
 
+# #2115 0-B／B3: validate-config 的 profiles 列經 da-guard 讀租戶，每次都需要 da-guard
+# （conftest 以 `go build` 建出；建不起來就 fail、不 skip）。
+pytestmark = pytest.mark.usefixtures("da_guard_env")
+
 _PROFILE_CPU = 55.0
 _DEFAULT_CPU = 80.0
 

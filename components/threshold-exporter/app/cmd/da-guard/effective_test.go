@@ -332,6 +332,57 @@ func TestEffective_CleanTree_ParseFailedIsEmptyList(t *testing.T) {
 	}
 }
 
+// #2115 R3: effective's `skipped` names the files the walk takes no tenant
+// from — the same list, in the same words, as served-values' `skipped`, so a
+// reader that needs only effective (validate-config's profiles row) loses
+// nothing. Covers a tree with no tenant at all (the early return) and a
+// [] (never null) on a tree with none.
+func TestEffective_SkippedIsServedValuesSkipped(t *testing.T) {
+	t.Parallel()
+	for name, files := range map[string]map[string]string{
+		"mixed": {
+			"_defaults.yaml":      "defaults:\n  mysql_connections: 80\n",
+			"tenant-a.yaml":       "tenants:\n  tenant-a:\n    mysql_connections: 70\n",
+			"flat-t.yaml":         "mysql_connections: 5\n",
+			"empty-wrapper.yaml":  "tenants: {}\n",
+			"team/flat-u.yml":     "mysql_connections: 6\n",
+			"team/_defaults.yaml": "defaults:\n  mysql_connections: 80\n",
+		},
+		"no tenant at all": {
+			"_defaults.yaml": "defaults:\n  mysql_connections: 80\n",
+			"flat-t.yaml":    "mysql_connections: 5\n",
+		},
+		"none skipped": {
+			"tenant-a.yaml": "tenants:\n  tenant-a:\n    mysql_connections: 70\n",
+		},
+	} {
+		dir := writeParityTree(t, files)
+		code, stdout, stderr := runOnce(t, effectiveCmd, "--config-dir", dir)
+		mustOK(t, code, stderr)
+		sCode, sOut, sErr := runOnce(t, servedValuesCmd, "--config-dir", dir)
+		mustOK(t, sCode, sErr)
+		type skipped struct {
+			Skipped *[]skippedFile `json:"skipped"`
+		}
+		var eff, srv skipped
+		if err := json.Unmarshal([]byte(stdout), &eff); err != nil {
+			t.Fatalf("%s: effective stdout is not JSON: %v", name, err)
+		}
+		if err := json.Unmarshal([]byte(sOut), &srv); err != nil {
+			t.Fatalf("%s: served-values stdout is not JSON: %v", name, err)
+		}
+		if eff.Skipped == nil || srv.Skipped == nil {
+			t.Fatalf("%s: skipped missing or null (effective %v, served-values %v)", name, eff.Skipped, srv.Skipped)
+		}
+		if !reflect.DeepEqual(*eff.Skipped, *srv.Skipped) {
+			t.Errorf("%s: effective skipped %v, served-values %v", name, *eff.Skipped, *srv.Skipped)
+		}
+		if name != "none skipped" && len(*eff.Skipped) == 0 {
+			t.Errorf("%s: nothing skipped — the shape no longer exercises the field", name)
+		}
+	}
+}
+
 func TestEffective_DuplicateTenant_ExitsTwo(t *testing.T) {
 	t.Parallel()
 	dir := writeParityTree(t, map[string]string{

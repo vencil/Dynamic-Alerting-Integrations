@@ -622,9 +622,33 @@ validate-routes: ## 驗證 Alertmanager route config (CI lint 用；--strict 同
 	@python3 ./scripts/tools/ops/generate_alertmanager_routes.py \
 		--config-dir components/threshold-exporter/config/conf.d/ --validate --strict
 
+# da-guard（#2115）：validate-config 的 profiles 列經 da-guard 讀 exporter 的答案，
+# 沒有它該列 FAIL、結束碼 2；policy_dsl 列只在有 policy 規則時才讀租戶，那時才同樣
+# FAIL。repo 內從本 checkout 的 Go 原始碼建（與 tests/conftest.py 的
+# da_guard_binary 同一條 go build），輸出在 gitignore 的 .build/。每次都重建：
+# go 的 build cache 讓沒改動時只花一秒左右，而「沿用上次建的」會在 Go 原始碼改過
+# 之後悄悄驗舊的語意。
+DA_GUARD_BUILD := $(CURDIR)/.build/da-guard
+
+.PHONY: da-guard-build
+da-guard-build: ## 從本 repo Go 原始碼建 da-guard 到 .build/da-guard（validate-config 等讀取端需要；da-tools 映像已內建）
+	@command -v go >/dev/null 2>&1 || { \
+		echo "ERROR: go is not on PATH, so da-guard cannot be built from this checkout." >&2; \
+		echo "       Install Go (version: components/threshold-exporter/app/go.mod), or set" >&2; \
+		echo "       DA_GUARD_BINARY to a da-guard binary (the da-tools image ships one)." >&2; \
+		exit 2; }
+	@mkdir -p "$(dir $(DA_GUARD_BUILD))"
+	@cd components/threshold-exporter/app && go build -buildvcs=false -o "$(DA_GUARD_BUILD)" ./cmd/da-guard
+
+# 用哪支 da-guard 只有兩種來源：$DA_GUARD_BINARY 已設（非空白）就用它、不建；
+# 否則經 prerequisite 建 .build/da-guard 並用它（沒有 go 時 da-guard-build 印
+# ERROR、非零退出）。用 prerequisite 而不是在 recipe 裡呼叫 $(MAKE)，`make -n`
+# 才只印指令、不真的建。
+VALIDATE_CONFIG_DA_GUARD := $(if $(strip $(DA_GUARD_BINARY)),,da-guard-build)
+
 .PHONY: validate-config
-validate-config: ## 一站式配置驗證 (YAML + schema + routes + policy + custom rules + versions)
-	@python3 ./scripts/tools/ops/validate_config.py \
+validate-config: $(VALIDATE_CONFIG_DA_GUARD) ## 一站式配置驗證 (YAML + schema + routes + policy + custom rules + versions；需要 da-guard：DA_GUARD_BINARY，未設就建 .build/da-guard)
+	@DA_GUARD_BINARY="$(if $(strip $(DA_GUARD_BINARY)),$$DA_GUARD_BINARY,$(DA_GUARD_BUILD))" python3 ./scripts/tools/ops/validate_config.py \
 		--config-dir components/threshold-exporter/config/conf.d/ \
 		--rule-packs rule-packs/ \
 		--version-check

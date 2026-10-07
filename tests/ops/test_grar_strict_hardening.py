@@ -26,6 +26,10 @@ from generate_alertmanager_routes import (  # noqa: E402
 from _grar_validate import _parse_policy_duration  # noqa: E402
 from _lib_compat import PROJECT_ROOT_MARKERS  # noqa: E402
 
+# #2115 0-B／B3: validate-config 的 profiles 列經 da-guard 讀租戶，每次都需要 da-guard
+# （conftest 以 `go build` 建出；建不起來就 fail、不 skip）。
+pytestmark = pytest.mark.usefixtures("da_guard_env")
+
 TESTS_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 REPO_ROOT = os.path.dirname(TESTS_DIR)
 _OPS_DIR = os.path.join(REPO_ROOT, "scripts", "tools", "ops")

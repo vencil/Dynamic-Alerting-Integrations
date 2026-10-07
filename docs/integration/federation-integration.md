@@ -349,6 +349,8 @@ python3 scripts/tools/ops/validate_config.py \
   --version-check
 ```
 
+> 直接跑 `validate_config.py` 需要 da-guard：先 `make da-guard-build` 並設 `DA_GUARD_BINARY=.build/da-guard`（da-tools 映像已內建）；詳見 [validate-config 的前置需求](../cli-reference.md#validate-config)。
+
 ### 6.3 端對端測試
 
 ```bash

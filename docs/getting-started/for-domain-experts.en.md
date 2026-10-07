@@ -143,6 +143,8 @@ No Rule Pack change is needed: set the key in the tenant file (see the previous 
 python3 scripts/tools/ops/validate_config.py --config-dir conf.d/
 ```
 
+> Running `validate_config.py` directly needs da-guard: run `make da-guard-build` and set `DA_GUARD_BINARY=.build/da-guard` first (the da-tools image ships it); see [validate-config's prerequisite](../cli-reference.en.md#validate-config).
+
 ### Add a metric to an existing Rule Pack
 
 A new alert needs all three parts plus a declaration of its threshold key:

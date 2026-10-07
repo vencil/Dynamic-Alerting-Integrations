@@ -87,6 +87,12 @@ for that tenant (`effective_config`, `merged_hash`, `source_file`,
 `effective_config` is the JSON as /effective sends it: a YAML `.inf` / `.nan`
 arrives as the text `"Infinity"` / `"-Infinity"` / `"NaN"`.
 
+`load_effective_tree(conf_d, binary=None)` returns an `EffectiveTree`:
+`tenants` is `load_effective`'s answer, `skipped` the files the walk takes no
+tenant from — the same `SkippedFile` list, in the same words, as
+`load_served_tree`'s (da-guard effective's `skipped`, #2115 R3), for a
+caller that needs only /effective and so does not run served-values at all.
+
 `binary` is the da-guard path; without it, `$DA_GUARD_BINARY`, then
 `da-guard` on `$PATH` (the resolution `da-tools guard` uses).
 
@@ -158,12 +164,14 @@ __all__ = [
     "TenantValues",
     "UnreadableFile",
     "YamlFileError",
+    "EffectiveTree",
     "DA_GUARD_PREFIX",
     "MISSING_BINARY_MESSAGE",
     "ParseFailedError",
     "exit_on_served_values_error",
     "is_tenant_reserved_key",
     "load_effective",
+    "load_effective_tree",
     "load_served_tree",
     "load_served_values",
     "print_load_error",
@@ -260,17 +268,27 @@ class TenantEffective(NamedTuple):
     warnings: list[str]
 
 
+class EffectiveTree(NamedTuple):
+    tenants: dict[str, TenantEffective]
+    skipped: list[SkippedFile]  # as ServedTree.skipped: files the walk takes no tenant from
+
+
 class DaGuardNotFoundError(FileNotFoundError):
     """No da-guard binary at the explicit path, `$DA_GUARD_BINARY` or `$PATH`."""
 
 
 class DaGuardError(RuntimeError):
-    """A da-guard subcommand failed. `returncode` and `stderr` are its own."""
+    """A da-guard subcommand failed. `returncode` and `stderr` are its own.
+    `stale` is True when the failure is named as a da-guard older than this
+    tool (its output lacks a field or flag this tool reads) — the binary's
+    fault, not the config tree's."""
 
-    def __init__(self, message: str, returncode: int | None, stderr: str) -> None:
+    def __init__(self, message: str, returncode: int | None, stderr: str,
+                 stale: bool = False) -> None:
         self.message = message
         self.returncode = returncode
         self.stderr = stderr
+        self.stale = stale
         detail = stderr.strip()
         super().__init__(f"{message}: {detail}" if detail else message)
 
@@ -379,7 +397,7 @@ def _run_da_guard(
                  if isinstance(e, KeyError) and e.args in (("skipped",), ("unreadable",)) else "")
         raise error(
             f"da-guard {subcommand} exited {proc.returncode} without the expected JSON ({e}){stale}",
-            proc.returncode, stderr) from e
+            proc.returncode, stderr, stale=bool(stale)) from e
 
     if parse_failed or unreadable:
         clauses = []
@@ -440,14 +458,14 @@ def load_served_tree(
                 and "flag provided but not defined: -schedules" in e.stderr):
             raise ServedValuesError(
                 f"{e.message} (--schedules not known) — this da-guard is older than this tool: "
-                "upgrade or rebuild it", e.returncode, e.stderr) from e
+                "upgrade or rebuild it", e.returncode, e.stderr, stale=True) from e
         raise
     # Read after the fields _run_da_guard checks, so an older da-guard is
     # named by the first field it lacks.
     if aliases is None:
         raise ServedValuesError(
             f"da-guard {SUBCOMMAND} exited {returncode} without the expected JSON ('aliases') — this "
-            "da-guard is older than this tool: upgrade or rebuild it", returncode, stderr)
+            "da-guard is older than this tool: upgrade or rebuild it", returncode, stderr, stale=True)
     try:
         aliases = {str(k): str(v) for k, v in aliases.items()}
     except AttributeError as e:
@@ -473,7 +491,7 @@ def load_served_tree(
             if "schedules" not in tv:
                 raise ServedValuesError(
                     f"da-guard {SUBCOMMAND}: tenant {tenant_id!r} has no schedules — this da-guard is "
-                    "older than this tool: upgrade or rebuild it", returncode, stderr)
+                    "older than this tool: upgrade or rebuild it", returncode, stderr, stale=True)
             try:
                 days = {k: _key_schedule(s) for k, s in tv["schedules"].items()}
             except (ValueError, KeyError, TypeError, AttributeError) as e:
@@ -577,14 +595,16 @@ def _missing_binary_message() -> str:
         return (f"da-guard binary not found: ${env_var} is set to '{safe_label(set_to)}', "
                 f"and no file exists at that path. Point it at the da-guard binary, or unset "
                 f"it to use da-guard on $PATH (the da-tools image ships it as "
-                f"/usr/local/bin/da-guard).")
+                f"/usr/local/bin/da-guard; in a checkout of this repo, `make da-guard-build` "
+                f"builds it to .build/da-guard).")
     return MISSING_BINARY_MESSAGE
 
 
 MISSING_BINARY_MESSAGE = (
-    "da-guard binary not found: this tool reads the values through "
-    "`da-guard served-values`. Set $DA_GUARD_BINARY to its path, or put "
-    "da-guard on $PATH (the da-tools image ships it as /usr/local/bin/da-guard).")
+    "da-guard binary not found: this tool reads the tenants through da-guard "
+    "(`da-guard effective` / `da-guard served-values`). Set $DA_GUARD_BINARY to its path, or put "
+    "da-guard on $PATH (the da-tools image ships it as /usr/local/bin/da-guard; "
+    "in a checkout of this repo, `make da-guard-build` builds it to .build/da-guard).")
 
 
 def load_effective(
@@ -595,9 +615,29 @@ def load_effective(
     """`{tenant_id: TenantEffective}` for every tenant of the conf.d tree at
     `conf_d`, as tenant-api's /effective resolves it. See the module docstring
     for the contract and the exceptions."""
-    tenants, returncode, stderr = _run_da_guard(
+    return _load_effective(conf_d, binary, timeout, reads_skipped=False).tenants
+
+
+def load_effective_tree(
+    conf_d: str | Path,
+    binary: str | None = None,
+    timeout: float = DEFAULT_TIMEOUT,
+) -> EffectiveTree:
+    """`load_effective`'s tenants plus the files the walk takes no tenant
+    from. Same arguments and exceptions; a da-guard without `skipped` in its
+    effective document is named as older than this tool (`load_effective`
+    does not read the field, so it does not require it)."""
+    return _load_effective(conf_d, binary, timeout, reads_skipped=True)
+
+
+def _load_effective(conf_d: str | Path, binary: str | None, timeout: float,
+                    reads_skipped: bool) -> EffectiveTree:
+    (tenants, skipped), returncode, stderr = _run_da_guard(
         EFFECTIVE_SUBCOMMAND, [], conf_d, binary, timeout, EffectiveError, schema=EFFECTIVE_SCHEMA,
-        read=lambda doc: doc["tenants"], reads_unreadable=True)
+        read=lambda doc: (doc["tenants"],
+                          [SkippedFile(str(e["file"]), str(e["reason"])) for e in doc["skipped"]]
+                          if reads_skipped else []),
+        reads_unreadable=True)
     out: dict[str, TenantEffective] = {}
     try:
         for tenant_id, t in tenants.items():
@@ -632,7 +672,7 @@ def load_effective(
         raise EffectiveError(
             f"da-guard {EFFECTIVE_SUBCOMMAND}: an entry is not the shape this reader reads ({e})",
             returncode, stderr) from e
-    return out
+    return EffectiveTree(out, skipped)
 
 
 def is_tenant_reserved_key(key: str) -> bool:

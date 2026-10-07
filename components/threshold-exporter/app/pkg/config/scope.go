@@ -131,6 +131,13 @@ type ScopedTenants struct {
 	// ones. Every other error returns a nil result.
 	Unreadable []UnreadableFile
 
+	// NoTenant is LoadReport.NoTenant over the same scan (noTenantKeys): the
+	// files whose name does not start with `_` that the walker parsed and
+	// found no tenant in — the exporter serves no tenant from them (#2115
+	// R3). Filled by EffectiveTree only (the whole tree); nil for a scoped
+	// call and when there is none.
+	NoTenant []string
+
 	// RootListErr is set when configDir itself cannot be read (#2627): the
 	// walk could not list it (Unreadable then holds RootUnreadable) or the
 	// process may not stat it (RootStatUnreadable). The error names
@@ -388,9 +395,14 @@ func scopeEffective(configDir, scopeDir string, wholeTree bool) (*ScopedTenants,
 		rootListErr = fmt.Errorf("cannot list configDir %q: %w", absRoot, scan.RootWalkErr)
 	}
 	nestedFiles := scopeNestedPlatformFiles(scan, filepath.ToSlash(rel))
+	var noTenant []string
+	if wholeTree {
+		noTenant = noTenantKeys(scan)
+	}
 	if len(inScope) == 0 {
 		return &ScopedTenants{ParseFailed: parseFailed, DefaultsFiles: defaultsFiles, Unreadable: unreadable,
-			NestedPlatformFiles: nestedFiles, RootListErr: rootListErr, DeclaredStateFilters: stateFilters}, nil
+			NestedPlatformFiles: nestedFiles, RootListErr: rootListErr, DeclaredStateFilters: stateFilters,
+			NoTenant: noTenant}, nil
 	}
 
 	// Sort tenant IDs for deterministic output. The CLI's exit-code
@@ -414,6 +426,7 @@ func scopeEffective(configDir, scopeDir string, wholeTree bool) (*ScopedTenants,
 		DefaultsFiles:          defaultsFiles,
 		Unreadable:             unreadable,
 		NestedPlatformFiles:    nestedFiles,
+		NoTenant:               noTenant,
 		DeclaredStateFilters:   stateFilters,
 		SubtreeRefusedVerdicts: applied,
 		ScheduleNulls:          scopeScheduleNulls(scan, filepath.ToSlash(rel), inScope, parseFailed),

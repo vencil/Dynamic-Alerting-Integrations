@@ -196,6 +196,8 @@ Alert 通知中的 `summary` 和 `description` 是為你（Tenant）撰寫的，
 python3 scripts/tools/ops/validate_config.py --config-dir conf.d/
 ```
 
+> 直接跑 `validate_config.py` 需要 da-guard：先 `make da-guard-build` 並設 `DA_GUARD_BINARY=.build/da-guard`（da-tools 映像已內建）；詳見 [validate-config 的前置需求](../cli-reference.md#validate-config)。
+
 ### 檢視繼承鏈
 
 ```bash
