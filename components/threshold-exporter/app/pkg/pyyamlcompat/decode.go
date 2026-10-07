@@ -188,8 +188,12 @@ func (d *decoder) sequence(n *yaml.Node) any {
 	return out
 }
 
-// isMergeKey: a plain `<<` or an explicit `!!merge`.
-func isMergeKey(k *yaml.Node) bool {
+// IsMergeKey reports whether PyYAML's SafeLoader takes the key node k as a
+// merge key: a plain `<<` or an explicit `!!merge` (any spelling of the tag),
+// k an alias judged by the node it names. The one blind spot is the
+// non-specific tag `!` on a quoted `<<` (PyYAML merges `! "<<"`; a yaml.Node
+// keeps a quoted string), as for scalars (pyyaml.go in routingpolicy).
+func IsMergeKey(k *yaml.Node) bool {
 	k = deref(k)
 	if k == nil || k.Kind != yaml.ScalarNode {
 		return false
@@ -228,7 +232,7 @@ func (d *decoder) pairs(n *yaml.Node, seen map[*yaml.Node]bool) (out []pair, ok 
 	var merged, own []pair
 	for i := 0; i+1 < len(n.Content); i += 2 {
 		k, v := n.Content[i], n.Content[i+1]
-		if !isMergeKey(k) {
+		if !IsMergeKey(k) {
 			own = append(own, pair{k, v})
 			continue
 		}

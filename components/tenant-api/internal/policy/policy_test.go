@@ -639,7 +639,10 @@ func TestLoad_RefusedEscalationValueTurnsOnlyItOff(t *testing.T) {
 		// Collections PyYAML refuses for their own tag or direct children.
 		"!!omap [1]", "!!pairs [a]", "{<<: 1}", "!!bool [true]", "!!bool {a: 1}", "!!str [1]",
 		"!!int {a: 1}", "!foo [1]", "!!seq {a: 1}", "!!map [1]", "{[1]: 2}", "!!timestamp [1]",
-		"!!binary [1]", "{? [1] : 2}"} {
+		"!!binary [1]", "{? [1] : 2}",
+		// #2677: what the generator drops the whole file for, here only
+		// under constraints.require_critical_escalation (dropEscalationValues).
+		"{a: 1, a: 2}", "!!merge x", "<<", "{x: [<<]}"} {
 		want := func(what string, m *Manager) {
 			t.Helper()
 			pols := m.RoutingPolicies()

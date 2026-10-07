@@ -116,7 +116,9 @@ var errUnusable = errors.New("unusable")
 // (two `<<` in one mapping included: the decode refuses that) — and so does a
 // key only the route generator counts as written twice (an alias key beside
 // its anchor): its StrictLoader refuses the whole file (#2295,
-// pyyamlcompat.FindDuplicateKey), so nothing in it is read.
+// pyyamlcompat.FindDuplicateKey), so nothing in it is read. So does a merge
+// key whose value PyYAML refuses to merge (mergeKeyShape, #2677: `<<: 5`,
+// `!!merge q: ~`).
 //
 // policy is true only for a `_domain_policy.yaml` / `.yml` document: only
 // there does `require_critical_escalation` go through
@@ -132,6 +134,9 @@ func parseDoc(data []byte, policy bool) (*yaml.Node, error) {
 		return nil, nil
 	}
 	top := doc.Content[0]
+	if err := mergeKeyShape(top); err != nil {
+		return nil, err
+	}
 	normalizeTaggedBools(top)
 	if policy {
 		if err := normalizeTaggedNullEscalation(top, false); err != nil {
@@ -155,9 +160,10 @@ func parseDoc(data []byte, policy bool) (*yaml.Node, error) {
 }
 
 // lookup returns the value node of key in a mapping node, or nil. YAML merge
-// keys are expanded (mappingEntries): a key supplied through `<<:` is found,
-// one the mapping writes itself wins, and an alias key names its anchor's
-// text. PyYAML's safe_load expands `<<` in EVERY mapping, the document's top
+// keys are expanded (mappingEntries, in mergeSourceOrder's precedence): a key
+// supplied through `<<:` is found, one the mapping writes itself wins, and an
+// alias key names its anchor's text (one naming an anchored merge key is a
+// merge key: classifyKey). PyYAML's safe_load expands `<<` in EVERY mapping, the document's top
 // level included (#2438: a top-level `<<: *x` supplying `domain_policies`,
 // `routing_profiles`, `_routing_defaults` or `tenants`), so there is no
 // raw-pairs variant: one would miss what the route generator reads.
@@ -178,10 +184,10 @@ func lookup(m *yaml.Node, key string) *yaml.Node {
 // O(n²) time and memory on a chain of n mappings each merging the previous
 // one — and DomainPoliciesShapeError runs on files no decode has bounded
 // yet (tenant-api: startup, every reload, every PR-mode PUT). Same answer as
-// lookup, in the same precedence (entryLister.list): a key the mapping
-// writes itself (its first such pair) wins; else the merge sources, each
-// merge pair in order and a merge sequence's sources in order, each
-// searched the same way, the first hit winning. Each mapping is visited at
+// lookup, in the same precedence (mergeSourceOrder): a key the mapping
+// writes itself (its first such pair) wins; else the merge sources in
+// mergeSourceOrder, each searched the same way, the first hit winning — the
+// order changes nothing in the bound (#2677). Each mapping is visited at
 // most once per call — one already visited (or being visited: a merge
 // cycle) holds no hit, as lookup's memoized or cut-off listing of it holds
 // none at that point — so the cost is O(nodes).
@@ -202,28 +208,78 @@ func findKey(m *yaml.Node, key string, visited map[*yaml.Node]bool) *yaml.Node {
 			return deref(m.Content[i+1])
 		}
 	}
-	for i := 0; i+1 < len(m.Content); i += 2 {
-		if !isMergeKey(m.Content[i]) {
-			continue
-		}
-		for _, s := range mergeSources(deref(m.Content[i+1])) {
-			if s = deref(s); s != nil && s.Kind == yaml.MappingNode {
-				if v := findKey(s, key, visited); v != nil {
-					return v
-				}
-			}
+	for _, s := range mergeSourceOrder(m) {
+		if v := findKey(s, key, visited); v != nil {
+			return v
 		}
 	}
 	return nil
 }
 
-// isMergeKey is the merge-key test mappingEntries applies to a key node.
+// mergeSourceOrder lists m's merge sources (deref'd mappings only) in the
+// order a first-hit search must take them to resolve a key as PyYAML does
+// (#2677). The precedence is PyYAML 6.0.x's: SafeConstructor.flatten_mapping
+// then construct_mapping. flatten_mapping removes every merge pair
+// from the mapping and builds `merge`: for each merge pair in document order
+// it appends the source's pairs (the source flattened first, recursively),
+// and for a merge SEQUENCE it flattens each item and appends their pairs
+// LAST item first (`submerge.reverse()`); then the mapping's pairs become
+// merge + own. construct_mapping assigns them in that order, so the LAST
+// pair for a key wins. Read back as a first-hit search, a key resolves to:
+//
+//  1. a pair the mapping writes itself (not a merge key) — always wins (its
+//     first such pair here, its last in PyYAML: a key written twice is a
+//     duplicate every reader refuses before either reading matters);
+//  2. else the merge keys LAST to first: a later merge pair beats an earlier
+//     one (`!!merge q: {...}` then `<<: {...}`: the `<<` source wins);
+//  3. within one merge sequence, its items FIRST to last (`<<: [*a, *b]`:
+//     *a wins);
+//  4. each source resolving the key by these same rules (a nested merge is
+//     flattened first, so its own pairs beat its merges, and so on down).
+//
+// mappingEntries, lookup and lookupOne all take the sources in this order
+// through this function. pyyamlcompat.Decode builds flatten_mapping's list
+// literally and lands on the same values. A source that is not a mapping
+// supplies nothing (the decode refuses that file; this keeps a node walk
+// total).
+func mergeSourceOrder(m *yaml.Node) []*yaml.Node {
+	var out []*yaml.Node
+	for i := len(m.Content) - 2; i >= 0; i -= 2 {
+		if !isMergeKey(m.Content[i]) {
+			continue
+		}
+		for _, s := range mergeSources(deref(m.Content[i+1])) {
+			if s = deref(s); s != nil && s.Kind == yaml.MappingNode {
+				out = append(out, s)
+			}
+		}
+	}
+	return out
+}
+
+// classifyKey is the one place a key node is judged a merge key (#2677):
+// pyyaml is the route generator's reading (pyyamlcompat.IsMergeKey — an
+// alias key judged by the node it names, `!!merge` under any spelling), the
+// one every reader in this package follows; yamlv3 is yaml.v3's own decode's
+// (its isMerge: the key node itself, a scalar whose text is `<<`, untagged
+// or tagged merge — never an alias, never a tagged `!!merge q`). Where the
+// two differ, a struct decode of the file (tenant-api) reads a plain key
+// where the generator merges.
+func classifyKey(k *yaml.Node) (pyyaml, yamlv3 bool) {
+	pyyaml = pyyamlcompat.IsMergeKey(k)
+	yamlv3 = k != nil && k.Kind == yaml.ScalarNode && k.Value == "<<" &&
+		(k.Tag == "" || k.Tag == "!" || k.ShortTag() == "!!merge")
+	return pyyaml, yamlv3
+}
+
+// isMergeKey is classifyKey's PyYAML reading.
 func isMergeKey(k *yaml.Node) bool {
-	return k.Tag == "!!merge" || (k.Tag == "" && k.Value == "<<")
+	pyyaml, _ := classifyKey(k)
+	return pyyaml
 }
 
 // mergeSources is the merge value v's sources: v itself, or a sequence's
-// items (as mappingEntries reads them).
+// items in document order.
 func mergeSources(v *yaml.Node) []*yaml.Node {
 	if v != nil && v.Kind == yaml.SequenceNode {
 		return v.Content
@@ -353,6 +409,197 @@ func UnmarshalPolicy(data []byte, out any) error {
 		return err
 	}
 	return doc.Decode(out)
+}
+
+// mergeKeyShape refuses a merge key in the tree under n whose value PyYAML refuses to merge — SafeConstructor
+// .flatten_mapping's check: a mapping, or a sequence of mappings (an alias
+// judged by the node it names), else "expected a mapping or list of
+// mappings for merging" and the generator drops the whole file. yaml.v3
+// refuses some of these (`<<: 5`) and reads the tagged spelling
+// (`!!merge q: 5`) as a plain key, so the check is made here, for both,
+// before any decode. It refuses only: what it passes, yaml.v3's decode may
+// still refuse — an alias to a sequence as the whole merge value
+// (`<<: *seq`, even `*seq` naming `[]`) PyYAML merges and yaml.v3 does not,
+// so parseDoc refuses that file (a gap kept: it errs on the refusing side).
+// Every node is written once in the tree, so a walk of it (aliases not
+// entered) sees every mapping PyYAML constructs. A merge value is checked
+// once however many merge keys alias it, so the cost is linear in the
+// nodes. It also refuses a merge-tagged scalar (`<<`, `!!merge x`) PyYAML
+// would construct as a value — it has no constructor for one, so the
+// generator drops the whole file. The generator's loader builds a mapping
+// value (any key but a null one), and a sequence's items — except a
+// sequence under a `tenants` key (_lib_yaml_keys.ExporterKeyLoader,
+// raw_text_sequences): its scalar items are read as their source text, never
+// constructed. A sequence is constructed when it is reached anywhere else
+// too (written in place or through an alias): as another key's value, or as
+// an item of a sequence.
+func mergeKeyShape(n *yaml.Node) error {
+	_, err := mergeKeyShapeWork(n)
+	return err
+}
+
+// mergeKeyShapeWork is mergeKeyShape, also returning how many merge-value
+// nodes (a value and a sequence value's items) it looked at.
+func mergeKeyShapeWork(n *yaml.Node) (int, error) {
+	checked := map[*yaml.Node]bool{}
+	var built []*yaml.Node // sequences PyYAML constructs (items and all)
+	isBuilt := map[*yaml.Node]bool{}
+	build := func(s *yaml.Node) {
+		if s != nil && s.Kind == yaml.SequenceNode && !isBuilt[s] {
+			isBuilt[s] = true
+			built = append(built, s)
+		}
+	}
+	work := 0
+	stack := []*yaml.Node{n}
+	for len(stack) > 0 {
+		n := stack[len(stack)-1]
+		stack = stack[:len(stack)-1]
+		switch n.Kind {
+		case yaml.DocumentNode:
+			for _, c := range n.Content {
+				build(deref(c))
+			}
+		case yaml.SequenceNode:
+			for _, c := range n.Content {
+				build(deref(c))
+			}
+		case yaml.MappingNode:
+			for i := 0; i+1 < len(n.Content); i += 2 {
+				k, v := deref(n.Content[i]), deref(n.Content[i+1])
+				if isMergeKey(n.Content[i]) || k == nil || k.ShortTag() == "!!null" {
+					continue // a merge value is merged, a null key's value never built
+				}
+				if mergeTaggedScalar(v) {
+					return work, fmt.Errorf("line %d: PyYAML cannot build a merge key (%s) as a value", v.Line, keySpelling(v))
+				}
+				if k.Kind != yaml.ScalarNode || k.Value != "tenants" {
+					build(v)
+				}
+			}
+		}
+		if n.Kind == yaml.MappingNode {
+			for i := 0; i+1 < len(n.Content); i += 2 {
+				if !isMergeKey(n.Content[i]) {
+					continue
+				}
+				v := deref(n.Content[i+1])
+				if checked[v] {
+					continue
+				}
+				checked[v] = true
+				work++
+				if v != nil && v.Kind == yaml.SequenceNode {
+					work += len(v.Content)
+				}
+				if err := mergeValueShape(v); err != nil {
+					return work, fmt.Errorf("line %d: %w", n.Content[i].Line, err)
+				}
+			}
+		}
+		if n.Kind != yaml.AliasNode {
+			stack = append(stack, n.Content...)
+		}
+	}
+	for _, s := range built {
+		for _, c := range s.Content {
+			if d := deref(c); mergeTaggedScalar(d) {
+				return work, fmt.Errorf("line %d: PyYAML cannot build a merge key (%s) as a value", d.Line, keySpelling(d))
+			}
+		}
+	}
+	return work, nil
+}
+
+// mergeTaggedScalar reports whether n is a merge-tagged scalar (`<<`,
+// `!!merge x`).
+func mergeTaggedScalar(n *yaml.Node) bool {
+	return n != nil && n.Kind == yaml.ScalarNode && n.ShortTag() == "!!merge"
+}
+
+// dropEscalationValues replaces, in DomainPoliciesShapeError's own parse,
+// the value tenant-api reads leniently (#2325 — one PyYAML refuses turns only
+// that constraint off) by a null, so what is written there is not a reason
+// to refuse the file: `domain_policies.<domain>.constraints
+// .require_critical_escalation`, each step a key written in place (not
+// through a merge or an alias), and only a value with no anchor in it
+// (aliased elsewhere, PyYAML builds it there too). Anywhere else that key is
+// looked at like any other.
+func dropEscalationValues(top *yaml.Node) {
+	dp := ownValue(top, "domain_policies")
+	if dp == nil || dp.Kind != yaml.MappingNode {
+		return
+	}
+	for i := 1; i < len(dp.Content); i += 2 {
+		c := ownValue(dp.Content[i], "constraints")
+		if c == nil || c.Kind != yaml.MappingNode {
+			continue
+		}
+		for j := 0; j+1 < len(c.Content); j += 2 {
+			if k := c.Content[j]; k.Kind == yaml.ScalarNode && k.Value == "require_critical_escalation" &&
+				!isMergeKey(k) && !hasAnchor(c.Content[j+1]) {
+				c.Content[j+1] = &yaml.Node{Kind: yaml.ScalarNode, Tag: "!!null", Line: c.Content[j+1].Line}
+			}
+		}
+	}
+}
+
+// ownValue is the value m (a mapping written in place) writes itself under
+// key, as written (an alias stays one), or nil.
+func ownValue(m *yaml.Node, key string) *yaml.Node {
+	if m == nil || m.Kind != yaml.MappingNode {
+		return nil
+	}
+	for i := 0; i+1 < len(m.Content); i += 2 {
+		if k := m.Content[i]; k.Kind == yaml.ScalarNode && k.Value == key && !isMergeKey(k) {
+			return m.Content[i+1]
+		}
+	}
+	return nil
+}
+
+// hasAnchor reports whether any node under n (aliases not entered) has an
+// anchor.
+func hasAnchor(n *yaml.Node) bool {
+	stack := []*yaml.Node{n}
+	for len(stack) > 0 {
+		n := stack[len(stack)-1]
+		stack = stack[:len(stack)-1]
+		if n.Anchor != "" {
+			return true
+		}
+		if n.Kind != yaml.AliasNode {
+			stack = append(stack, n.Content...)
+		}
+	}
+	return false
+}
+
+// MergeShapeError is mergeKeyShape's refusal for one YAML file, nil when it
+// passes or does not parse (its reader's decode reports that). da-guard
+// names such a file in parse_failed, as for a key the generator counts as
+// repeated (#2677).
+func MergeShapeError(data []byte) error {
+	var doc yaml.Node
+	if yaml.Unmarshal(data, &doc) != nil {
+		return nil
+	}
+	return mergeKeyShape(&doc)
+}
+
+func mergeValueShape(v *yaml.Node) error {
+	if v != nil && v.Kind == yaml.MappingNode {
+		return nil
+	}
+	if v != nil && v.Kind == yaml.SequenceNode {
+		for _, c := range v.Content {
+			if c = deref(c); c == nil || c.Kind != yaml.MappingNode {
+				return fmt.Errorf("PyYAML expects a mapping for merging, but found %s", kindName(c))
+			}
+		}
+		return nil
+	}
+	return fmt.Errorf("PyYAML expects a mapping or list of mappings for merging, but found %s", kindName(v))
 }
 
 // DecodePyYAML decodes n as PyYAML's safe_load reads it (#2325), for where
@@ -540,6 +787,17 @@ func ParseDomainPolicies(data []byte) ([]Policy, []Problem, error) {
 // is expanded. A document that does not parse, an empty one, or one whose
 // top level is not a mapping is nil here — those are the caller's own
 // decode's to judge. tenant-api's policy loader calls it first.
+//
+// It refuses more (#2677), since tenant-api then decodes the file with
+// yaml.v3 — which never reads a part its struct does not name — so the
+// policy it reads could differ from the one the generator reads: a file
+// the generator drops whole for mergeKeyShape's reasons or a key it counts
+// as written twice (a value PyYAML refuses under require_critical_escalation
+// stays tenant-api's to read leniently, #2325: dropEscalationValues),
+// and a key the generator and yaml.v3 do not both read as
+// a merge key, or both as a plain one (classifyKey: `!!merge q:`, an alias
+// naming an anchored `<<`), anywhere in it. One literal `<<` per mapping
+// (yaml.v3 refuses two) yaml.v3 merges as PyYAML does.
 func DomainPoliciesShapeError(data []byte) error {
 	var doc yaml.Node
 	if err := yaml.Unmarshal(data, &doc); err != nil || len(doc.Content) == 0 {
@@ -549,8 +807,56 @@ func DomainPoliciesShapeError(data []byte) error {
 	if top.Kind != yaml.MappingNode {
 		return nil
 	}
+	dropEscalationValues(top)
+	if err := mergeKeyShape(top); err != nil {
+		return fmt.Errorf("%w — the route generator drops this file: %w", err, errUnusable)
+	}
+	if d := pyyamlcompat.FindDuplicateKey(&doc); d != nil {
+		return fmt.Errorf("%w: %w", d, errUnusable)
+	}
+	if k := divergentMergeKey(top); k != nil {
+		return fmt.Errorf("line %d: a merge key spelled %q in the file — "+
+			"tenant-api cannot read this file as the route generator does: %w", k.Line, keySpelling(k), errUnusable)
+	}
 	_, err := domainPoliciesNode(top)
 	return err
+}
+
+// divergentMergeKey returns a key in the tree under n (an alias's target
+// included) that classifyKey's two readings disagree on, or nil. Each node
+// is visited once.
+func divergentMergeKey(n *yaml.Node) *yaml.Node {
+	visited := map[*yaml.Node]bool{}
+	stack := []*yaml.Node{n}
+	for len(stack) > 0 {
+		n := stack[len(stack)-1]
+		stack = stack[:len(stack)-1]
+		if n == nil || visited[n] {
+			continue
+		}
+		visited[n] = true
+		if n.Kind == yaml.MappingNode {
+			for i := 0; i+1 < len(n.Content); i += 2 {
+				if py, v3 := classifyKey(n.Content[i]); py != v3 {
+					return n.Content[i]
+				}
+			}
+		}
+		stack = append(stack, n.Content...)
+		if n.Kind == yaml.AliasNode {
+			stack = append(stack, n.Alias)
+		}
+	}
+	return nil
+}
+
+// keySpelling is how a key node is written, for an error message: `*m`
+// for an alias, else its tag and text.
+func keySpelling(k *yaml.Node) string {
+	if k.Kind == yaml.AliasNode {
+		return "*" + k.Value
+	}
+	return strings.TrimSpace(k.Tag + " " + k.Value)
 }
 
 // domainPoliciesNode is the `domain_policies` mapping of a document's top
@@ -867,9 +1173,11 @@ type mapEntry struct {
 }
 
 // mappingEntries lists a mapping node's entries with YAML merge keys
-// expanded the decoder's way: a `<<:` source (an alias to a mapping, or a
-// sequence of them, earlier sources winning) supplies the keys the mapping
-// does not write itself; an explicit key replaces a merged one whole.
+// expanded PyYAML's way (mergeSourceOrder): a merge source (an alias to a
+// mapping, or a sequence of them) supplies the keys the mapping does not
+// write itself — a later merge key beating an earlier one, an earlier item of
+// one merge sequence beating a later one; an explicit key replaces a merged
+// one whole.
 // Keys keep their source text, which a decode into a map would lose.
 //
 // #2659: DomainPoliciesShapeError looks a key up in a document no decode has
@@ -903,29 +1211,19 @@ func (l *entryLister) entries(m *yaml.Node) []mapEntry {
 
 func (l *entryLister) list(m *yaml.Node) []mapEntry {
 	var merged, own []mapEntry
-	for i := 0; i+1 < len(m.Content); i += 2 {
-		k, v := m.Content[i], deref(m.Content[i+1])
-		if isMergeKey(k) {
-			sources := mergeSources(v)
-			seen := map[string]bool{}
-			for _, e := range merged {
+	seen := map[string]bool{}
+	for _, s := range mergeSourceOrder(m) { // first hit wins, as in findKey
+		for _, e := range l.entries(s) {
+			if !seen[e.key] {
 				seen[e.key] = true
+				merged = append(merged, e)
 			}
-			for _, s := range sources {
-				s = deref(s)
-				if s == nil || s.Kind != yaml.MappingNode {
-					continue
-				}
-				for _, e := range l.entries(s) {
-					if !seen[e.key] {
-						seen[e.key] = true
-						merged = append(merged, e)
-					}
-				}
-			}
-			continue
 		}
-		own = append(own, mapEntry{key: deref(k).Value, value: v}) // an alias key: its anchor's text, as a decode reads it
+	}
+	for i := 0; i+1 < len(m.Content); i += 2 {
+		if k := m.Content[i]; !isMergeKey(k) {
+			own = append(own, mapEntry{key: deref(k).Value, value: deref(m.Content[i+1])}) // an alias key: its anchor's text, as a decode reads it
+		}
 	}
 	written := map[string]bool{}
 	for _, e := range own {

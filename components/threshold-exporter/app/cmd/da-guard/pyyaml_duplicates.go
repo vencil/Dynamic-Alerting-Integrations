@@ -23,7 +23,10 @@ import (
 // (pyyamlcompat.FindDuplicateKey), so such a file takes the path a plain
 // repeated key takes — the exporter's decode rejects that one and the file
 // lands in ParseFailed, exit 3 — and its tenants are dropped as the walker
-// drops a file it cannot decode.
+// drops a file it cannot decode. So does a merge value the generator will
+// not merge (#2677: not a mapping nor a list of mappings, e.g. `!!merge q: ~`,
+// which the exporter's decode reads as a plain key) —
+// routingpolicy.MergeShapeError, the check parseDoc makes.
 //
 // Files: the tenant files that declared in-scope tenants, the defaults
 // carriers bearing on the scope, the root platform files and the other `_`
@@ -50,6 +53,9 @@ func withGeneratorDuplicates(configDir string, scoped *config.ScopedTenants, err
 		if d := pyyamlcompat.FindDuplicateKeyIn(data); d != nil {
 			dup[name] = true
 			fmt.Fprintf(errOut, "%s: %s: %v\n", programName, name, d)
+		} else if err := routingpolicy.MergeShapeError(data); err != nil {
+			dup[name] = true
+			fmt.Fprintf(errOut, "%s: %s: the route generator refuses the whole file: %v\n", programName, name, err)
 		}
 	}
 

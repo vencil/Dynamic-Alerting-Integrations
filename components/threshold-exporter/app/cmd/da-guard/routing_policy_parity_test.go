@@ -168,6 +168,10 @@ func TestDaGuard_RoutingPolicyParityMatrix(t *testing.T) {
 				}
 			}
 			for _, row := range tree.Platform {
+				if row[2] == "" { // the whole file (#2677 R1): the finding names the file alone
+					wantPlatform = append(wantPlatform, row[0]+" "+row[1])
+					continue
+				}
 				wantPlatform = append(wantPlatform, row[0]+" "+row[1]+":"+row[2])
 			}
 			sort.Strings(gotPlatform)

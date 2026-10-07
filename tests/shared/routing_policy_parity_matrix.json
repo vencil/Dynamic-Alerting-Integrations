@@ -62,6 +62,8 @@
     "so the Python reader leaves that kind out of its platform comparison (its targets pin it).",
     "A YAML merge key (`<<:`) in a platform tenants.<id> entry is expanded before the keys are read, as every reader's decoder does (#2291); an explicit key wins, earlier sources first.",
     "#2437/#2438 - the same holds in domain_policies, a domain policy, its constraints and routing_profiles, and at a file's top level (a `<<:` there supplies domain_policies / routing_profiles / _routing_defaults / tenants; an explicit key replaces a merged one whole); an alias key names its anchor's text.",
+    "#2677 - merge precedence is PyYAML's SafeConstructor.flatten_mapping in the generator and da-guard: a key the mapping writes itself wins; among several merge keys in one mapping (`<<:` beside a tagged `!!merge x:`) the LATER one wins; within one merge sequence (`<<: [*a, *b]`) the EARLIER source wins; a merge source is itself flattened by the same rules first. The trees domain-policy-merge-key-order(-top) pin it; their policy cells are the generator's own --strict lines.",
+    "#2677 R1 - a merge value PyYAML refuses to merge - not a mapping nor a list of mappings (`!!merge q: 5`; `<<: 5` alike, but the exporter's own decode refuses that file, so it is no tree here) - drops the whole file in the generator (its strict \"could not be used\" line) and in da-guard (domain_policy_unusable, field \"\", the finding naming the file alone). tenant-api reads a merge key with yaml.v3's own merge, which differs from the generator's (#2663), and refuses a file with a merge key spelled other than `<<` anywhere in it (DomainPoliciesShapeError; domain-policy-tagged-merge-value-scalar, and domain-policy-merge-key-order t-mo-earlier and t-mo-seq-key, where the generator's verdict is the same). tenant_api is null where its verdict differs from the generator's - domain-policy-merge-key-order-top, domain-policy-merge-anchor-aliased and the other domain-policy-merge-key-order tenants (tenant-api refuses the file: ok).",
     "escalation (#2325): the ADR-007 require_critical_escalation verdict. null = no domain policy with",
     "`require_critical_escalation: true` lists the tenant, or it has no resolved routing / main receiver",
     "(nothing is judged). Else {verdict, leaks}: verdict 'violation' = severity=critical alerts reach no",
@@ -1651,6 +1653,263 @@
           "refused": null
         },
         "t-mk-explicit": {
+          "targets": [
+            {
+              "ref": "receiver",
+              "type": "slack"
+            }
+          ],
+          "policy": [],
+          "rejected_routes": [],
+          "values_not_string": [],
+          "group_by_invalid": [],
+          "unknown_profile": null,
+          "tenant_api": {
+            "put": "ok",
+            "batch": null
+          },
+          "python_differs": null,
+          "escalation": null,
+          "refused": null
+        }
+      },
+      "enforced_group_by_invalid": []
+    },
+    {
+      "name": "domain-policy-merge-key-order-top",
+      "files": {
+        "_defaults.yaml": "defaults:\n  cpu_usage_percent: 80\n",
+        "_domain_policy.yaml": "!!merge q: {domain_policies: null}\n<<: {domain_policies: {fin: {tenants: [t-mo-top], constraints: {forbidden_receiver_types: [slack]}}}}\n",
+        "t-mo-top.yaml": "tenants:\n  t-mo-top:\n    cpu_usage_percent: '85'\n    _routing:\n      receiver:\n        type: slack\n        api_url: https://hooks.slack.com/services/T/B/x\n"
+      },
+      "platform": [],
+      "expect": {
+        "t-mo-top": {
+          "targets": [
+            {
+              "ref": "receiver",
+              "type": "slack"
+            }
+          ],
+          "policy": [
+            [
+              "fin",
+              "receiver",
+              "forbidden_receiver_types"
+            ]
+          ],
+          "rejected_routes": [],
+          "values_not_string": [],
+          "group_by_invalid": [],
+          "unknown_profile": null,
+          "tenant_api": null,
+          "python_differs": null,
+          "escalation": null,
+          "refused": null
+        }
+      },
+      "enforced_group_by_invalid": []
+    },
+    {
+      "name": "domain-policy-merge-key-order",
+      "files": {
+        "_defaults.yaml": "defaults:\n  cpu_usage_percent: 80\n",
+        "_domain_policy.yaml": "domain_policies:\n  mo-later-key:\n    tenants: [t-mo-later]\n    !!merge a: {constraints: {forbidden_receiver_types: [webhook]}}\n    <<: {constraints: {forbidden_receiver_types: [slack]}}\n  mo-earlier-key:\n    tenants: [t-mo-earlier]\n    <<: {constraints: {forbidden_receiver_types: [slack]}}\n    !!merge a: {constraints: {forbidden_receiver_types: [webhook]}}\n  mo-key-then-seq:\n    tenants: [t-mo-seq]\n    !!merge a: {constraints: {forbidden_receiver_types: [webhook]}}\n    <<: [{constraints: {forbidden_receiver_types: [slack]}}, {constraints: {forbidden_receiver_types: [email]}}]\n  mo-seq-then-key:\n    tenants: [t-mo-seq-key]\n    <<: [{constraints: {forbidden_receiver_types: [slack]}}, {constraints: {forbidden_receiver_types: [email]}}]\n    !!merge a: {constraints: {forbidden_receiver_types: [webhook]}}\n  mo-nested:\n    tenants: [t-mo-nested]\n    <<: [{!!merge a: {constraints: {forbidden_receiver_types: [webhook]}}, <<: {constraints: {forbidden_receiver_types: [slack]}}}, {constraints: {forbidden_receiver_types: [email]}}]\n  mo-own-key:\n    tenants: [t-mo-own]\n    !!merge a: {constraints: {forbidden_receiver_types: [webhook]}}\n    <<: {constraints: {forbidden_receiver_types: [email]}}\n    constraints: {forbidden_receiver_types: [slack]}\n",
+        "t-mo-later.yaml": "tenants:\n  t-mo-later:\n    cpu_usage_percent: '85'\n    _routing:\n      receiver:\n        type: slack\n        api_url: https://hooks.slack.com/services/T/B/x\n",
+        "t-mo-earlier.yaml": "tenants:\n  t-mo-earlier:\n    cpu_usage_percent: '85'\n    _routing:\n      receiver:\n        type: slack\n        api_url: https://hooks.slack.com/services/T/B/x\n",
+        "t-mo-seq.yaml": "tenants:\n  t-mo-seq:\n    cpu_usage_percent: '85'\n    _routing:\n      receiver:\n        type: slack\n        api_url: https://hooks.slack.com/services/T/B/x\n",
+        "t-mo-seq-key.yaml": "tenants:\n  t-mo-seq-key:\n    cpu_usage_percent: '85'\n    _routing:\n      receiver:\n        type: slack\n        api_url: https://hooks.slack.com/services/T/B/x\n",
+        "t-mo-nested.yaml": "tenants:\n  t-mo-nested:\n    cpu_usage_percent: '85'\n    _routing:\n      receiver:\n        type: slack\n        api_url: https://hooks.slack.com/services/T/B/x\n",
+        "t-mo-own.yaml": "tenants:\n  t-mo-own:\n    cpu_usage_percent: '85'\n    _routing:\n      receiver:\n        type: slack\n        api_url: https://hooks.slack.com/services/T/B/x\n"
+      },
+      "platform": [],
+      "expect": {
+        "t-mo-earlier": {
+          "targets": [
+            {
+              "ref": "receiver",
+              "type": "slack"
+            }
+          ],
+          "policy": [],
+          "rejected_routes": [],
+          "values_not_string": [],
+          "group_by_invalid": [],
+          "unknown_profile": null,
+          "tenant_api": {
+            "put": "ok",
+            "batch": null
+          },
+          "python_differs": null,
+          "escalation": null,
+          "refused": null
+        },
+        "t-mo-later": {
+          "targets": [
+            {
+              "ref": "receiver",
+              "type": "slack"
+            }
+          ],
+          "policy": [
+            [
+              "mo-later-key",
+              "receiver",
+              "forbidden_receiver_types"
+            ]
+          ],
+          "rejected_routes": [],
+          "values_not_string": [],
+          "group_by_invalid": [],
+          "unknown_profile": null,
+          "tenant_api": null,
+          "python_differs": null,
+          "escalation": null,
+          "refused": null
+        },
+        "t-mo-nested": {
+          "targets": [
+            {
+              "ref": "receiver",
+              "type": "slack"
+            }
+          ],
+          "policy": [
+            [
+              "mo-nested",
+              "receiver",
+              "forbidden_receiver_types"
+            ]
+          ],
+          "rejected_routes": [],
+          "values_not_string": [],
+          "group_by_invalid": [],
+          "unknown_profile": null,
+          "tenant_api": null,
+          "python_differs": null,
+          "escalation": null,
+          "refused": null
+        },
+        "t-mo-own": {
+          "targets": [
+            {
+              "ref": "receiver",
+              "type": "slack"
+            }
+          ],
+          "policy": [
+            [
+              "mo-own-key",
+              "receiver",
+              "forbidden_receiver_types"
+            ]
+          ],
+          "rejected_routes": [],
+          "values_not_string": [],
+          "group_by_invalid": [],
+          "unknown_profile": null,
+          "tenant_api": null,
+          "python_differs": null,
+          "escalation": null,
+          "refused": null
+        },
+        "t-mo-seq": {
+          "targets": [
+            {
+              "ref": "receiver",
+              "type": "slack"
+            }
+          ],
+          "policy": [
+            [
+              "mo-key-then-seq",
+              "receiver",
+              "forbidden_receiver_types"
+            ]
+          ],
+          "rejected_routes": [],
+          "values_not_string": [],
+          "group_by_invalid": [],
+          "unknown_profile": null,
+          "tenant_api": null,
+          "python_differs": null,
+          "escalation": null,
+          "refused": null
+        },
+        "t-mo-seq-key": {
+          "targets": [
+            {
+              "ref": "receiver",
+              "type": "slack"
+            }
+          ],
+          "policy": [],
+          "rejected_routes": [],
+          "values_not_string": [],
+          "group_by_invalid": [],
+          "unknown_profile": null,
+          "tenant_api": {
+            "put": "ok",
+            "batch": null
+          },
+          "python_differs": null,
+          "escalation": null,
+          "refused": null
+        }
+      },
+      "enforced_group_by_invalid": []
+    },
+    {
+      "name": "domain-policy-merge-anchor-aliased",
+      "files": {
+        "_defaults.yaml": "defaults:\n  cpu_usage_percent: 80\n",
+        "_domain_policy.yaml": "!!merge m: &A {!!merge r: {forbidden_receiver_types: [slack]}}\ndomain_policies:\n  fin:\n    tenants: [t-ma-alias]\n    constraints: *A\n",
+        "t-ma-alias.yaml": "tenants:\n  t-ma-alias:\n    cpu_usage_percent: '85'\n    _routing:\n      receiver:\n        type: slack\n        api_url: https://hooks.slack.com/services/T/B/x\n"
+      },
+      "platform": [],
+      "expect": {
+        "t-ma-alias": {
+          "targets": [
+            {
+              "ref": "receiver",
+              "type": "slack"
+            }
+          ],
+          "policy": [
+            [
+              "fin",
+              "receiver",
+              "forbidden_receiver_types"
+            ]
+          ],
+          "rejected_routes": [],
+          "values_not_string": [],
+          "group_by_invalid": [],
+          "unknown_profile": null,
+          "tenant_api": null,
+          "python_differs": null,
+          "escalation": null,
+          "refused": null
+        }
+      },
+      "enforced_group_by_invalid": []
+    },
+    {
+      "name": "domain-policy-tagged-merge-value-scalar",
+      "files": {
+        "_defaults.yaml": "defaults:\n  cpu_usage_percent: 80\n",
+        "_domain_policy.yaml": "!!merge q: 5\ndomain_policies:\n  fin:\n    tenants: [t-mv-tagged]\n    constraints: {forbidden_receiver_types: [slack]}\n",
+        "t-mv-tagged.yaml": "tenants:\n  t-mv-tagged:\n    cpu_usage_percent: '85'\n    _routing:\n      receiver:\n        type: slack\n        api_url: https://hooks.slack.com/services/T/B/x\n"
+      },
+      "platform": [
+        [
+          "domain_policy_unusable",
+          "_domain_policy.yaml",
+          ""
+        ]
+      ],
+      "expect": {
+        "t-mv-tagged": {
           "targets": [
             {
               "ref": "receiver",
