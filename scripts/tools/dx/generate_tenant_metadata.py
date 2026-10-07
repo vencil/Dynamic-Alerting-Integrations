@@ -462,6 +462,15 @@ def _read_existing_for_check(out: Path) -> tuple[dict | None, str | None]:
     return existing, None
 
 
+def _strip_volatile(data: dict) -> None:
+    """Drop what changes with no input changed: the timestamp and the HEAD
+    commit (as generate_platform_data's --check does)."""
+    data.pop("generated", None)
+    for tenant in (data.get("tenant_metadata") or {}).values():
+        if isinstance(tenant, dict):
+            tenant.pop("last_config_commit", None)
+
+
 @exit_on_yaml_file_error  # #1654: any other unreadable YAML → rc 2, named
 @exit_on_served_values_error  # #2115 0-B/B4: da-guard missing or failing, a dropped file → rc 2, named
 @exit_on_output_write_error
@@ -517,7 +526,7 @@ def main():
 
     # Format output
     if args.check:
-        data.pop("generated", None)
+        _strip_volatile(data)
 
     content = json.dumps(data, indent=2, ensure_ascii=False) + "\n"
 
@@ -546,7 +555,7 @@ def main():
                 file=sys.stderr,
             )
             sys.exit(EXIT_CALLER_ERROR)
-        existing.pop("generated", None)
+        _strip_volatile(existing)
         existing_str = json.dumps(existing, indent=2, ensure_ascii=False) + "\n"
 
         if existing_str != content:

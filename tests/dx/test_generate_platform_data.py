@@ -428,6 +428,25 @@ class TestThePortalOfflineFallbackIsGenerated:
             mod.main()
         assert seen == [want]
 
+    def test_the_instant_reaches_the_tenant_metadata_build(self, tmp_path, monkeypatch):
+        """`at` is passed all the way down: build_platform_data → the loader →
+        generate_tenant_metadata.build_tenant_metadata. Dropping it at either
+        hop records one instant and evaluates the tenants at another."""
+        mod = _load_module()
+        record = tmp_path / "at.txt"
+        stub = tmp_path / "generate_tenant_metadata.py"
+        stub.write_text(
+            "from pathlib import Path\n"
+            "def build_tenant_metadata(config_dir, at=None):\n"
+            f"    Path({str(record)!r}).write_text(repr(at), encoding='utf-8')\n"
+            "    return {'tenant_groups': {}, 'tenant_metadata': {}}\n",
+            encoding="utf-8")
+        monkeypatch.setattr(mod, "SCRIPT_DIR", tmp_path)
+
+        data = mod.build_platform_data(at="2019-12-31T00:00:00Z")
+        assert data["generated"] == "2019-12-31T00:00:00Z"
+        assert record.read_text(encoding="utf-8") == repr("2019-12-31T00:00:00Z")
+
     def test_a_packorder_that_disagrees_with_the_packs_is_refused(self):
         """`build_fallback`'s own fail-closed arms, run rather than described.
 

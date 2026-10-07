@@ -288,10 +288,37 @@ def test_check_evaluates_at_the_recorded_instant(tmp_path):
     proc = _cli(conf_d, "--output", str(out), "--check")
     assert proc.returncode == 0, proc.stderr
 
+    # HEAD commit 不是輸入：換了 commit、檔案沒變，--check 不轉紅。
+    data["tenant_metadata"]["tenant-a"]["last_config_commit"] = "0000000"
+    out.write_text(json.dumps(data, indent=2, ensure_ascii=False) + "\n", encoding="utf-8")
+    proc = _cli(conf_d, "--output", str(out), "--check")
+    assert proc.returncode == 0, proc.stderr
+
     # 必響對照：記下的時刻之後改了值，--check 仍要轉紅。
     data["tenant_metadata"]["tenant-a"]["owner"] = "someone-else"
     out.write_text(json.dumps(data, indent=2, ensure_ascii=False) + "\n", encoding="utf-8")
     assert _cli(conf_d, "--output", str(out), "--check").returncode == 1
+
+    # 把 generated 挪到未來，不能挑中一個讓過期檔過關的時刻：退回現在 → 紅。
+    data = gtm.build_tenant_metadata(conf_d, at=before)
+    data["generated"] = "2100-01-01T00:00:00Z"
+    out.write_text(json.dumps(data, indent=2, ensure_ascii=False) + "\n", encoding="utf-8")
+    assert _cli(conf_d, "--output", str(out), "--check").returncode == 1
+
+
+@pytest.mark.parametrize("generated, want", [
+    ("2019-12-31T00:00:00Z", "2019-12-31T00:00:00Z"),
+    ("2100-01-01T00:00:00Z", None),          # 未來
+    ("2019-1-1T0:0:0Z", None),               # Go 的 RFC3339 不收
+    ("2019-12-31T00:00:00z", None),
+    ("2019-12-31 00:00:00Z", None),
+    ("2019-12-31T00:00:00+00:00", None),     # 不是本工具寫的格式
+    (20191231, None),
+])
+def test_recorded_at_takes_only_a_past_instant_in_the_written_format(generated, want):
+    assert tv.recorded_at({"generated": generated}) == want
+    assert tv.recorded_at({}) is None
+    assert tv.recorded_at(None) is None
 
 
 def test_no_value_is_read_from_the_yaml_itself():
