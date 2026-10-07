@@ -1151,14 +1151,27 @@ def _one_line(text: Any) -> str:
     return " ".join(safe_label(str(text)).split())
 
 
-_PLAIN_YAML_KEY = re.compile(r"[A-Za-z0-9][A-Za-z0-9._-]*")
+_PLAIN_NAME = re.compile(r"[A-Za-z0-9][A-Za-z0-9._-]*", re.ASCII)
+# Plain names a YAML 1.1 or 1.2 reader takes as something other than that
+# string: null, booleans, numbers (octal, hex, binary, floats, `1_000`) and
+# dates. Over-broad on purpose (`y`, `tRUE`, `1.2.3`): a name held back here
+# only loses its patch line (#2116).
+_NON_STRING_WORDS = frozenset({"null", "true", "false", "yes", "no", "on", "off", "y", "n"})
+_NUMBER_LIKE = re.compile(
+    r"[0-9][0-9._-]*|0[xob][0-9a-f_]*|[0-9][0-9_]*(\.[0-9_]*)?e[0-9]+",
+    re.ASCII | re.IGNORECASE)
 
 
-def _yaml_key(name: str) -> str:
-    """`name` as a mapping key on a YAML value line: as is when it is a plain
-    identifier, else a double-quoted scalar (JSON's escaping is YAML's), so a
-    tenant name or key holding a line break cannot start another line (#2116)."""
-    return name if _PLAIN_YAML_KEY.fullmatch(name) else json.dumps(name)
+def _plain_name(name: str) -> bool:
+    """True iff `name` can go on a value line as is: a plain identifier that
+    YAML 1.1 and 1.2 readers (PyYAML, the exporter's yaml.v3) both read back as
+    that same string. Any other tenant name or key is never written on a value
+    line — not quoted either: a quoted key's escapes are not read alike by
+    every reader (a JSON surrogate pair breaks the exporter's whole file).
+    The patch then carries a comment asking for a hand edit (#2116)."""
+    return (_PLAIN_NAME.fullmatch(name) is not None
+            and name.lower() not in _NON_STRING_WORDS
+            and _NUMBER_LIKE.fullmatch(name) is None)
 
 
 def _from(r: KeyRecommendation) -> str:
@@ -1181,6 +1194,17 @@ def _inherited_line(r: KeyRecommendation) -> str:
             "setting it in this tenant's file pins the tenant")
 
 
+def _not_written_line(r: KeyRecommendation, what: str) -> str:
+    """An exportable key whose tenant name or key (`what`) is not a plain
+    name (`_plain_name`): its recommendation as a comment for a hand edit,
+    never a value line (#2116)."""
+    cur = r.current_value if r.current_value is not None else "?"
+    return (f"(not written) {_one_line(r.key)}: recommended "
+            f"{_format_threshold_value(r.recommended)}, was {_one_line(cur)}{_from(r)}, "
+            f"{_delta_str(r)} — the {what} is not a plain YAML name, so this patch does not "
+            "write it; set it in the tenant's file by hand")
+
+
 def format_export_patch(reports: list[TenantRecommendation]) -> str:
     """Format reports as an applyable conf.d override fragment (#720 STAGE-1).
 
@@ -1195,6 +1219,8 @@ def format_export_patch(reports: list[TenantRecommendation]) -> str:
     #2116: every value line names the file its current value comes from, and
     every name, key, value and reason that goes into a `#` comment is made one
     line (`_one_line`), so no input can turn a comment into a value line. A
+    tenant name or key that is not a plain name (`_plain_name`) is never put
+    on a value line: its recommendation is a `(not written)` comment. A
     key the tenant inherits (defaults / platform / profile) is never a value
     line: it is listed as a comment with its current value and the owning
     file (no recommended value — it is not queried), because merging it into
@@ -1210,6 +1236,14 @@ def format_export_patch(reports: list[TenantRecommendation]) -> str:
         for rep in reports
     ]
     total = sum(len(ks) for _, ks, _i in exportable)
+    # A value line needs a plain tenant name and a plain key (`_plain_name`);
+    # the other exportable keys become `(not written)` comments.
+    plan = []
+    for rep, ks, inh in exportable:
+        written = [r for r in ks if _plain_name(rep.tenant) and _plain_name(r.key)]
+        blocked = sorted((r for r in ks if r not in written), key=lambda x: x.key)
+        skipped = sorted((r for r in rep.keys if not _exportable(r)), key=lambda x: x.key)
+        plan.append((rep, written, blocked, skipped, inh))
 
     lines: list[str] = [
         "# threshold-recommend --export-patch (#720 STAGE-1)",
@@ -1219,38 +1253,38 @@ def format_export_patch(reports: list[TenantRecommendation]) -> str:
         "# or an opted-in percentile-lower floor) appear; lower-bound deltas are miss-rate.",
         "# A value the tenant inherits appears only as a comment naming the file that owns it.",
     ]
-    if total == 0:
-        lines.append("# (no actionable recommendations)")
+
+    def comments_only(rep, blocked, skipped, inh) -> None:
+        # A tenant with no value line → no YAML block, but keep the per-key
+        # context as top-level comments (don't drop it).
+        tag = f"# [{_one_line(rep.tenant)}]"
+        what = "key" if _plain_name(rep.tenant) else "tenant name"
+        for r in blocked:
+            lines.append(f"{tag} {_not_written_line(r, what)}")
+        for r in skipped:
+            label, detail = _skip_comment_body(r)
+            lines.append(f"{tag} ({label}) {_one_line(r.key)}: {_one_line(detail)}")
+        for r in inh:
+            lines.append(f"{tag} (inherited) {_inherited_line(r)}")
+
+    if not any(written for _rep, written, *_rest in plan):
+        lines.append("# (no actionable recommendations)" if total == 0 else
+                     "# (no value line: every actionable key is listed as (not written))")
         # Still surface why every key was skipped — the transparency this mode
         # documents must not vanish just because nothing is actionable. These
         # are top-level comments (no `tenants:` block, so the output stays an
         # empty/None YAML doc that applies to nothing).
-        for rep, _ks, inh in exportable:
-            for r in sorted(rep.keys, key=lambda x: x.key):
-                label, detail = _skip_comment_body(r)
-                lines.append(f"# [{_one_line(rep.tenant)}] ({label}) {_one_line(r.key)}: "
-                             f"{_one_line(detail)}")
-            for r in inh:
-                lines.append(f"# [{_one_line(rep.tenant)}] (inherited) {_inherited_line(r)}")
+        for rep, _written, blocked, skipped, inh in plan:
+            comments_only(rep, blocked, skipped, inh)
         return "\n".join(lines) + "\n"
 
     lines.append("tenants:")
-    for rep, ks, inh in exportable:
-        skipped = sorted(
-            (r for r in rep.keys if not _exportable(r)), key=lambda x: x.key
-        )
-        if not ks:
-            # tenant has only non-actionable keys → no YAML block, but keep the
-            # per-key skip context as top-level comments (don't drop it).
-            for r in skipped:
-                label, detail = _skip_comment_body(r)
-                lines.append(f"# [{_one_line(rep.tenant)}] ({label}) {_one_line(r.key)}: "
-                             f"{_one_line(detail)}")
-            for r in inh:
-                lines.append(f"# [{_one_line(rep.tenant)}] (inherited) {_inherited_line(r)}")
+    for rep, written, blocked, skipped, inh in plan:
+        if not written:
+            comments_only(rep, blocked, skipped, inh)
             continue
-        lines.append(f"  {_yaml_key(rep.tenant)}:")
-        for r in sorted(ks, key=lambda x: x.key):
+        lines.append(f"  {rep.tenant}:")
+        for r in sorted(written, key=lambda x: x.key):
             val = _format_threshold_value(r.recommended)
             # `cur` goes only into the trailing `#` comment. Safe to interpolate
             # raw: an exportable key has recommended != None, i.e.
@@ -1262,9 +1296,11 @@ def format_export_patch(reports: list[TenantRecommendation]) -> str:
             cur = r.current_value if r.current_value is not None else "?"
             delta = _delta_str(r)
             lines.append(
-                f'    {_yaml_key(r.key)}: "{val}"   # was {_one_line(cur)}{_from(r)}, {delta}, '
+                f'    {r.key}: "{val}"   # was {_one_line(cur)}{_from(r)}, {delta}, '
                 f'{r.confidence} — {_one_line(r.reason)}'
             )
+        for r in blocked:
+            lines.append(f"    # {_not_written_line(r, 'key')}")
         # surface this tenant's skipped keys as in-block comments
         for r in skipped:
             label, detail = _skip_comment_body(r)

@@ -321,38 +321,96 @@ def test_json_summary_counts_nested_as_the_text_does(apply, tmp_path, stubs):
 
 
 
-# ── export-patch: no tenant name / key / detail can turn a comment into a value line
-# The line breaks `str.splitlines` (and YAML) honour that a careless join keeps.
-_BREAKS = {"lf": "\n", "u2028": "\u2028", "nel": "\x85"}
+# ── export-patch: a name that is not a plain YAML name gets no value line ──
+# The line breaks `str.splitlines` (and YAML) honour that a careless join keeps,
+# a non-BMP character (a JSON-quoted key spells it as a surrogate pair, which
+# the exporter's yaml.v3 refuses) and words YAML reads as null / bool / int.
 _INJECT = '{brk}  z:{brk}    mysql_connections: "1" #'
+_ODD = {"lf": "zz" + _INJECT.format(brk="\n"),
+        "u2028": "zz" + _INJECT.format(brk="\u2028"),
+        "nel": "zz" + _INJECT.format(brk="\x85"),
+        "emoji": "x\U0001F600", "null": "null", "true": "true", "octal": "010"}
 
 
 def _q(name: str) -> str:
-    """A YAML double-quoted key (JSON's escapes are YAML's)."""
-    return json.dumps(name)
+    """`name` as a YAML double-quoted key the exporter reads back as is:
+    printable ASCII as is, everything else as a backslash-u / backslash-U
+    escape (never a surrogate pair)."""
+    out = []
+    for c in name:
+        o = ord(c)
+        out.append(c if 0x20 <= o < 0x7F and c not in '"\\'
+                   else f"\\u{o:04x}" if o < 0x10000 else f"\\U{o:08x}")
+    return '"' + "".join(out) + '"'
 
 
-@pytest.mark.parametrize("brk", sorted(_BREAKS))
+@pytest.mark.parametrize("odd", sorted(_ODD))
 @pytest.mark.parametrize("where", ["tenant-name-comment", "tenant-name-block", "own-skipped-key"])
-def test_no_name_or_key_breaks_out_of_the_patch(where, brk, tmp_path, stubs):
-    """A tenant name or a tenant-own key holding a line break must not add a
-    value line — not even one that lands under another tenant (control `z`:
-    its recommendation, 20, must survive)."""
-    sep = _BREAKS[brk]
-    evil = "zz" + _INJECT.format(brk=sep)
+def test_no_name_or_key_breaks_out_of_the_patch(where, odd, tmp_path, stubs):
+    """A tenant name or tenant-own key that is not a plain YAML name never
+    reaches a value line: the patch says so in a comment, still parses, and
+    keeps the control tenant `z`'s recommendation (20) — read back both by
+    PyYAML and, as a tenant file, by the exporter's own load (da-guard)."""
+    name = _ODD[odd]
     files = {"_defaults.yaml": _BASE,
              "z.yaml": 'tenants:\n  z:\n    mysql_connections: "60"\n'}
-    want = {"z": {"mysql_connections": "20"}}
     if where == "tenant-name-comment":   # tenant with no exportable key: comment lines only
-        files["a.yaml"] = f'tenants:\n  {_q(evil)}:\n    foo_unmapped_key: "3"\n'
-    elif where == "tenant-name-block":   # tenant with an exportable key: a block header
-        files["a.yaml"] = f'tenants:\n  {_q(evil)}:\n    mysql_connections: "60"\n'
-        want[evil] = {"mysql_connections": "20"}
+        files["a.yaml"] = f'tenants:\n  {_q(name)}:\n    foo_unmapped_key: "3"\n'
+    elif where == "tenant-name-block":   # tenant with an exportable key
+        files["a.yaml"] = f'tenants:\n  {_q(name)}:\n    mysql_connections: "60"\n'
     else:                                # tenant-own unmapped key, in z's own block
-        files["z.yaml"] = ('tenants:\n  z:\n    mysql_connections: "60"\n'
-                           f'    {_q("zz" + _INJECT.format(brk=sep))}: "3"\n')
+        files["z.yaml"] += f'    {_q(name)}: "3"\n'
     conf_d = _tree(tmp_path, files)
     tenants = set(tv.load_effective(conf_d))
-    assert "z" in tenants and len(tenants) == (1 if where == "own-skipped-key" else 2)  # premise
+    assert tenants == ({"z"} if where == "own-skipped-key" else {"z", name})  # premise
     patch = tr.format_export_patch(tr.run_analysis(str(conf_d), prometheus_url="http://prom.stub"))
-    assert yaml.safe_load(patch) == {"tenants": want}, patch
+
+    assert yaml.safe_load(patch) == {"tenants": {"z": {"mysql_connections": "20"}}}, patch
+    values = [ln for ln in patch.splitlines() if ln.strip() and not ln.lstrip().startswith("#")]
+    assert values[:2] == ["tenants:", "  z:"] and len(values) == 3, patch
+    assert values[2].startswith('    mysql_connections: "20"'), patch
+    if where == "tenant-name-block":
+        said = [ln for ln in patch.splitlines() if "(not written) mysql_connections" in ln]
+        assert len(said) == 1 and said[0].startswith("# [") and "recommended 20" in said[0], patch
+        assert "the tenant name is not a plain YAML name" in said[0], patch
+    elif where == "tenant-name-comment":
+        said = [ln for ln in patch.splitlines() if "(skipped) foo_unmapped_key" in ln]
+        assert len(said) == 1 and said[0].startswith("# ["), patch
+    else:
+        said = [ln for ln in patch.splitlines() if ln.startswith("    # (skipped) ")]
+        assert len(said) == 1, patch
+
+    # merged as a tenant file, the patch decodes for the exporter's own load
+    back = _tree(tmp_path / "back", {"_defaults.yaml": _BASE, "z.yaml": patch})
+    eff = tv.load_effective(back)
+    assert set(eff) == {"z"}, patch
+    assert eff["z"].effective_config["mysql_connections"] == "20", eff["z"]
+
+
+def test_a_key_that_is_not_a_plain_name_is_not_written():
+    """The key-side gate (an exportable key is a mapped one, so a tree cannot
+    reach it today): a plain tenant keeps its plain key's value line and gets a
+    `(not written)` comment for the other."""
+    def key(k):
+        return tr.KeyRecommendation(key=k, current_value="60", recommended=20.0,
+                                    delta_pct=-66.7, confidence="HIGH", reason="r")
+    patch = tr.format_export_patch([tr.TenantRecommendation(
+        tenant="t", keys=[key("mysql_connections"), key("null"), key("010")])])
+    assert yaml.safe_load(patch) == {"tenants": {"t": {"mysql_connections": "20"}}}, patch
+    said = [ln for ln in patch.splitlines() if "(not written)" in ln]
+    assert [ln.split(":")[0] for ln in said] == ["    # (not written) 010",
+                                                "    # (not written) null"], patch
+    assert all("the key is not a plain YAML name" in ln for ln in said), patch
+
+
+@pytest.mark.parametrize("name", ["db-a", "tenant-a", "db.prod-1", "a1", "redis_0", "e5x"])
+def test_ordinary_names_are_plain(name):
+    assert tr._plain_name(name)
+
+
+@pytest.mark.parametrize("name", [
+    "null", "Null", "NULL", "~", "true", "False", "YES", "no", "On", "off", "y", "N",
+    "010", "0123", "123", "0x1F", "0o17", "0b101", "1.0", "1_000", "1e5", "1.5E10",
+    "2024-01-01", "-1", ".inf", ".nan", "", "a b", "é", "x\U0001F600", "a\nb"])
+def test_names_yaml_reads_otherwise_are_not_plain(name):
+    assert not tr._plain_name(name)
