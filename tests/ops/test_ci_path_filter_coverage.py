@@ -3459,6 +3459,7 @@ PORTAL_ENTRIES_THIS_SCANNER_JUSTIFIES = {
     "components/tenant-api/internal/rbac/testdata/wizard/**",
     "helm/**", "components/threshold-exporter/app/pkg/config/types.go",
     "components/threshold-exporter/app/pkg/tenantid/testdata/tenant_id_cases.json",
+    "tests/shared/am_duration_matrix.json",
 }
 GATED_ENTRIES_THIS_SCANNER_JUSTIFIES = {
     # ⛔ Keyed by (FILTER, pattern), and note which filter each falls under —

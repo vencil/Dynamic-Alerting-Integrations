@@ -230,16 +230,25 @@ function validateConfig(config, selectedPacks) {
     for (const [param, guard] of Object.entries(TIMING_GUARDRAILS)) {
       const val = routing[param];
       if (val) {
-        const secs = parseDuration(val);
-        if (secs !== null) {
-          if (secs < guard.min) {
-            issues.push({ level: 'warning', field: `_routing.${param}`,
-              msg: t(`${val} 低於下限 ${guard.min}s`, `${val} below minimum ${guard.min}s`) });
-          }
-          if (secs > guard.max) {
-            issues.push({ level: 'warning', field: `_routing.${param}`,
-              msg: t(`${val} 超過上限 ${guard.max}s`, `${val} exceeds maximum ${guard.max}s`) });
-          }
+        const ms = parseDuration(val);
+        if (ms === null) {
+          // #2711: a value Alertmanager cannot read is not skipped. The route
+          // generator renders the platform default in its place and
+          // `generate-routes --validate` / validate-config refuse the config
+          // (_grar_merge._apply_timing_params), so say so here.
+          issues.push({ level: 'error', field: `_routing.${param}`,
+            msg: t(`${val} 不是 Alertmanager 能讀的時長：整數加單位、大單位在前、每個單位最多一次（y w d h m s ms，或單獨的 0），例如 30s、5m、1h30m、1d；不接受小數（1.5h）。產生器會改用平台預設值，--validate 會拒收`,
+                   `${val} is not an Alertmanager duration: whole numbers with units, largest first, each unit at most once (y w d h m s ms, or a bare 0), e.g. 30s, 5m, 1h30m, 1d; no fractions (1.5h). The generator renders the platform default instead and --validate refuses the config`) });
+          continue;
+        }
+        const secs = ms / 1000;
+        if (secs < guard.min) {
+          issues.push({ level: 'warning', field: `_routing.${param}`,
+            msg: t(`${val} 低於下限 ${guard.min}s`, `${val} below minimum ${guard.min}s`) });
+        }
+        if (secs > guard.max) {
+          issues.push({ level: 'warning', field: `_routing.${param}`,
+            msg: t(`${val} 超過上限 ${guard.max}s`, `${val} exceeds maximum ${guard.max}s`) });
         }
       }
     }

@@ -9,9 +9,11 @@
  * Skipped (would need mocking several data modules, lower ROI):
  *   - generateSampleYaml: pulls RULE_PACK_DATA + window.__t
  *   - validateConfig: pulls 7+ data modules; coverage better via E2E spec
+ *     (except its routing timing checks, #2711, at the bottom of this file)
  */
 import { describe, it, expect, vi } from 'vitest';
 import {
+  validateConfig,
   isFiring,
   simulateAlerts,
   simulateWithDedup,
@@ -416,5 +418,40 @@ describe('simulateWithDedup', () => {
         }
       }
     }
+  });
+});
+
+// ─────────────────────────────────────────────────────────────────────
+// validateConfig — routing timing values (#2711)
+// ─────────────────────────────────────────────────────────────────────
+
+describe('validateConfig — routing timing values (#2711)', () => {
+  type Issue = { level: string; field: string; msg: string };
+  const timingIssues = (routing: Record<string, unknown>): Issue[] =>
+    validateConfig({ _routing: { receiver_type: 'webhook', ...routing } }, [])
+      .issues.filter((i: Issue) => /^_routing\.(group_wait|group_interval|repeat_interval)$/.test(i.field));
+
+  it('an unreadable value is an error, not skipped', () => {
+    for (const bad of ['1.5h', '30m1h', '1h1h', '1ns', 30]) {
+      const issues = timingIssues({ group_wait: bad });
+      expect(issues, String(bad)).toHaveLength(1);
+      expect(issues[0].level).toBe('error');
+      expect(issues[0].field).toBe('_routing.group_wait');
+      expect(issues[0].msg).toContain(String(bad));
+      expect(issues[0].msg).toContain('not an Alertmanager duration');
+    }
+  });
+
+  it('a compound value is read and checked against the guardrail', () => {
+    // 1h30m = 5400s: inside repeat_interval's bounds, above group_wait's 300s max.
+    expect(timingIssues({ repeat_interval: '1h30m' })).toEqual([]);
+    const over = timingIssues({ group_wait: '1h30m' });
+    expect(over).toHaveLength(1);
+    expect(over[0].level).toBe('warning');
+    expect(over[0].msg).toContain('exceeds maximum 300s');
+  });
+
+  it('an empty value is left to the platform default, as the generator does', () => {
+    expect(timingIssues({ group_wait: '' })).toEqual([]);
   });
 });

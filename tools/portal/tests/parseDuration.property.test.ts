@@ -1,79 +1,98 @@
 /**
- * Property-based tests for parseDuration — TRK-232b (#TBD).
+ * Property-based tests for parseDuration — TRK-232b, rewritten for #2711.
  *
- * The smoke test in parseDuration.test.ts pins point examples
- * ('30s' / '5m' / '2h' / '1d'). This file uses fast-check to fuzz
- * the input space and assert algebraic invariants:
+ * parseDuration returns milliseconds Alertmanager reads from a value, or
+ * null (see parseDuration.test.ts for the point cases and the shared Go
+ * verdict table). This file fuzzes the input space for invariants:
  *
- *   1. Unit-correctness: for any positive integer N and unit U in
- *      {s, m, h, d}, parseDuration(`${N}${U}`) === N * unitSeconds(U).
- *   2. Monotonicity: if A < B then parseDuration(`${A}s`) < parseDuration(`${B}s`).
- *   3. Round-trip: for any positive integer N, parseDuration(`${N}s`) === N.
- *   4. Reject-junk: any string with no recognized unit suffix returns null.
- *
- * Property-based testing complements the example-based smoke tests
- * by hitting boundary cases (large N, fractional N, leading zeros)
- * that were unlikely to be enumerated manually.
+ *   1. Unit-correctness: for any non-negative integer N and unit U in
+ *      {ms, s, m, h, d, w}, parseDuration(`${N}${U}`) === N * unitMs(U).
+ *   2. Additivity: a compound value in unit order is the sum of its parts.
+ *   3. Out-of-order: two units given smallest first are refused.
+ *   4. Fractions: `${A}.${B}${U}` is always refused.
+ *   5. Reject-junk: no trailing unit letter → null (except the bare `0`).
  */
 import { describe, it, expect } from 'vitest';
 import fc from 'fast-check';
 import { parseDuration } from '../src/interactive/tools/_common/validation/yaml-parser.js';
 
-const UNIT_TO_SECONDS: Record<string, number> = {
-  s: 1,
-  m: 60,
-  h: 3600,
-  d: 86400,
-};
+// Largest unit first, as Alertmanager requires.
+const UNITS: [string, number][] = [
+  ['w', 604_800_000],
+  ['d', 86_400_000],
+  ['h', 3_600_000],
+  ['m', 60_000],
+  ['s', 1_000],
+  ['ms', 1],
+];
+const UNIT_MS = Object.fromEntries(UNITS);
 
 describe('parseDuration — property-based', () => {
-  it('unit correctness: parseDuration(`${N}${U}`) === N * unitSeconds(U)', () => {
+  it('unit correctness: parseDuration(`${N}${U}`) === N * unitMs(U)', () => {
     fc.assert(
       fc.property(
-        fc.integer({ min: 1, max: 10_000 }),
-        fc.constantFrom('s', 'm', 'h', 'd'),
-        (n, unit) => {
-          const result = parseDuration(`${n}${unit}`);
-          return result === n * UNIT_TO_SECONDS[unit];
+        fc.integer({ min: 0, max: 10_000 }),
+        fc.constantFrom(...UNITS.map(([u]) => u)),
+        (n, unit) => parseDuration(`${n}${unit}`) === n * UNIT_MS[unit],
+      ),
+      { numRuns: 200 },
+    );
+  });
+
+  it('additivity: a compound value in unit order is the sum of its parts', () => {
+    fc.assert(
+      fc.property(
+        fc.array(fc.option(fc.integer({ min: 0, max: 999 }), { nil: undefined }),
+          { minLength: UNITS.length, maxLength: UNITS.length }),
+        (counts) => {
+          const parts = UNITS.map(([u, ms], i) => (counts[i] === undefined ? null : [`${counts[i]}${u}`, counts[i]! * ms] as const))
+            .filter((p): p is readonly [string, number] => p !== null);
+          fc.pre(parts.length > 0);
+          const text = parts.map(([s]) => s).join('');
+          return parseDuration(text) === parts.reduce((a, [, ms]) => a + ms, 0);
         },
       ),
       { numRuns: 200 },
     );
   });
 
-  it('monotonicity in seconds: A < B ⟹ parse(`${A}s`) < parse(`${B}s`)', () => {
+  it('out of order: smaller unit first is refused', () => {
     fc.assert(
       fc.property(
-        fc.integer({ min: 0, max: 1_000_000 }),
-        fc.integer({ min: 0, max: 1_000_000 }),
-        (a, b) => {
-          fc.pre(a !== b);
-          const [smaller, larger] = a < b ? [a, b] : [b, a];
-          const ps = parseDuration(`${smaller}s`);
-          const pl = parseDuration(`${larger}s`);
-          return ps !== null && pl !== null && ps < pl;
+        fc.integer({ min: 0, max: UNITS.length - 1 }),
+        fc.integer({ min: 0, max: UNITS.length - 1 }),
+        fc.integer({ min: 1, max: 99 }),
+        fc.integer({ min: 1, max: 99 }),
+        (i, j, a, b) => {
+          fc.pre(i < j);
+          // UNITS[j] is smaller than UNITS[i]; give it first.
+          return parseDuration(`${a}${UNITS[j][0]}${b}${UNITS[i][0]}`) === null;
         },
       ),
+      { numRuns: 200 },
     );
   });
 
-  it('seconds round-trip: parseDuration(`${N}s`) === N for all positive N', () => {
-    fc.assert(
-      fc.property(fc.integer({ min: 0, max: 1_000_000 }), (n) => {
-        return parseDuration(`${n}s`) === n;
-      }),
-    );
-  });
-
-  it('rejects any string whose final character is not a recognized unit', () => {
-    // "No recognized unit suffix → null" is the actual invariant. We fuzz
-    // strings whose LAST char is not one of s/m/h/d; the parser regex ends
-    // in [smhd], so every such string must return null. This asserts the
-    // result directly (no fc.pre discard) so a parser that ever accepted a
-    // unit-less string would fail the property instead of silently passing.
+  it('fractions are refused for every unit', () => {
     fc.assert(
       fc.property(
-        fc.string({ minLength: 1, maxLength: 20 }).filter((s) => !'smhd'.includes(s[s.length - 1])),
+        fc.integer({ min: 0, max: 1000 }),
+        fc.integer({ min: 0, max: 99 }),
+        fc.constantFrom(...UNITS.map(([u]) => u), 'y'),
+        (a, b, unit) => parseDuration(`${a}.${b}${unit}`) === null,
+      ),
+      { numRuns: 200 },
+    );
+  });
+
+  it('rejects any string whose final character is not a unit letter', () => {
+    // Every legal value but `0` ends in y/w/d/h/m/s; asserting the result
+    // directly (no fc.pre discard) so a parser that accepted a unit-less
+    // string would fail here instead of silently passing.
+    fc.assert(
+      fc.property(
+        fc.string({ minLength: 1, maxLength: 20 })
+          .filter((s) => !'ywdhms'.includes(s[s.length - 1]) && s !== '0'),
         (noUnit) => parseDuration(noUnit) === null,
       ),
       { numRuns: 200 },
@@ -81,10 +100,7 @@ describe('parseDuration — property-based', () => {
   });
 
   it('rejects a unit char that is not preceded by a number', () => {
-    // Bare/garbled unit strings ('s', 'xh', '-m') have a valid trailing unit
-    // but no leading number → null. This is the case the old fc.pre bypass
-    // could have masked; assert it directly.
-    for (const junk of ['s', 'm', 'h', 'd', 'xh', '-m', 'abcd', '..s']) {
+    for (const junk of ['s', 'm', 'h', 'd', 'ms', 'xh', '-m', 'abcd', '..s']) {
       expect(parseDuration(junk)).toBeNull();
     }
   });

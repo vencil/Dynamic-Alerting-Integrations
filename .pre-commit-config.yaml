@@ -1357,6 +1357,18 @@ repos:
         # rule but forget to regenerate → this fails before CI. Fix:
         # `make tenant-id-json`.
 
+      - id: am-duration-json-check
+        name: "#2711: portal am-duration.json must match the schema's definitions.duration"
+        entry: python3 -X utf8 scripts/tools/dx/gen_am_duration_json.py --check
+        language: python
+        pass_filenames: false
+        files: ^(docs/schemas/tenant-config\.schema\.json|tools/portal/src/interactive/tools/_common/data/am-duration\.json|scripts/tools/dx/gen_am_duration_json\.py)$
+        # am-duration.json is DERIVED from tenant-config.schema.json
+        # definitions.duration (the one authored copy of Alertmanager's
+        # duration syntax, #2490) and imported by the portal's parseDuration.
+        # Edit the rule but forget to regenerate → this fails before CI. Fix:
+        # `make am-duration-json`.
+
       - id: forbid-legacy-mariadb-threshold-name
         name: "#731: forbid legacy bare mariadb threshold recording-rule names (use mysql_ prefix)"
         entry: 'tenant:alert_threshold:(connections|cpu)(_critical)?\b'
