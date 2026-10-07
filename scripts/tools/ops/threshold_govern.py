@@ -324,6 +324,11 @@ def _is_nested(plan: TenantPlan) -> bool:
     return "/" in plan.source_file
 
 
+def _split_nested(plans: list[TenantPlan]) -> tuple[list[TenantPlan], list[TenantPlan]]:
+    """(plans a PR can be opened for, plans whose tenant file is nested)."""
+    return ([p for p in plans if not _is_nested(p)], [p for p in plans if _is_nested(p)])
+
+
 # The recommender marks lower-bound ``<`` thresholds (hit-ratio / availability —
 # where rot means LOWERING a floor) as skipped: a P95-upper recommendation would
 # REDUCE protection, so the engine emits ``recommended=None`` and never queries
@@ -941,18 +946,17 @@ def format_text_report(
     pending = sum(1 for o in outcomes if o.status == "already_pending")
     nochange = sum(1 for o in outcomes if o.status == "no_changes")
     errors = sum(1 for o in outcomes if o.status == "error")
-    n_nested = sum(1 for p in plans if _is_nested(p))
-    nested_note = (f" {n_nested} tenant(s) with a file in a sub-directory get no PR "
-                   "(change by hand)." if n_nested else "")
+    prable, nested = _split_nested(plans)
+    nested_note = (f" {len(nested)} tenant(s) with a file in a sub-directory get no PR "
+                   "(change by hand)." if nested else "")
     lines.append("\n" + "=" * 78)
     if applied:
         lines.append(
             f"Summary: {opened} PR(s) opened, {pending} already-pending (skipped), "
-            f"{nochange} no-op, {errors} error(s); {len(plans)} tenant(s) actionable."
+            f"{nochange} no-op, {errors} error(s); {len(prable)} tenant(s) actionable."
             + nested_note + _deferred_note()
         )
     else:
-        prable = [p for p in plans if not _is_nested(p)]
         total_changes = sum(len(p.changes) for p in prable)
         lines.append(
             f"Summary: {len(prable)} tenant(s) / {total_changes} change(s) would get a PR. "
@@ -972,6 +976,7 @@ def format_json_report(
     na = not_applicable or []
     fm = force_manual or []
     inh = inherited or []
+    prable, nested = _split_nested(plans)
     out = {
         "tool": "threshold-govern",
         "applied": applied,
@@ -982,13 +987,16 @@ def format_json_report(
         "force_manual": [asdict(u) for u in fm],
         "inherited": [asdict(u) for u in inh],
         "summary": {
-            "tenants_actionable": len(plans),
-            "changes": sum(len(p.changes) for p in plans),
+            # As the text Summary counts them (#2116): a tenant whose file is in
+            # a sub-directory gets no PR, in a dry run or with --apply, so it is
+            # counted under `skipped_nested`, not as actionable.
+            "tenants_actionable": len(prable),
+            "changes": sum(len(p.changes) for p in prable),
             "prs_opened": sum(1 for o in outcomes if o.status == "pr_opened"),
             "already_pending": sum(1 for o in outcomes if o.status == "already_pending"),
             "no_changes": sum(1 for o in outcomes if o.status == "no_changes"),
             "errors": sum(1 for o in outcomes if o.status == "error"),
-            "skipped_nested": sum(1 for o in outcomes if o.status == "skipped_nested"),
+            "skipped_nested": len(nested),
             "ungoverned_lower_bound": len(ung),
             "not_applicable": len(na),
             "force_manual": len(fm),

@@ -133,6 +133,9 @@ _HELP = {
 CONFIDENCE_HIGH = "HIGH"
 CONFIDENCE_MEDIUM = "MEDIUM"
 CONFIDENCE_LOW = "LOW"
+# An inherited key (#2116): not queried, so no confidence at all — not LOW,
+# which would read as "too few samples".
+CONFIDENCE_NOT_QUERIED = "n/a"
 
 # Percentile queries via Prometheus quantile_over_time
 PERCENTILES = {
@@ -782,6 +785,7 @@ def analyze_tenant(
         if layer != "tenant":
             report.inherited.append(KeyRecommendation(
                 key=key, current_value=current_value, reason=_INHERITED_REASON,
+                confidence=CONFIDENCE_NOT_QUERIED,
                 source_layer=layer, source_file=src.file if src is not None else "",
                 canonical_key=canonical if canonical != key else ""))
             continue
@@ -1138,22 +1142,29 @@ def _exportable(r: KeyRecommendation) -> bool:
     )
 
 
+def _one_line(text: Any) -> str:
+    """`text` escaped for the terminal (`safe_label`) with every whitespace run,
+    newlines included, collapsed to one space — safe inside a `#` comment line."""
+    return " ".join(safe_label(str(text)).split())
+
+
 def _from(r: KeyRecommendation) -> str:
     """` (from <file>)` for a value whose source file is known (#2116)."""
-    return f" (from {' '.join(safe_label(r.source_file).split())})" if r.source_file else ""
+    return f" (from {_one_line(r.source_file)})" if r.source_file else ""
 
 
 def _inherited_line(r: KeyRecommendation) -> str:
     """An inherited key as a comment, never a value line: its current value
     and the file that owns it, no recommended value (it is not queried).
     Merging it into the tenant's file would pin the tenant to its own copy of
-    a value another file owns (#2116). The value was never float-parsed, so
-    a mapping is shown as `(scheduled)` and any other value is collapsed to
-    one escaped line — a raw newline would break out of the comment."""
+    a value another file owns (#2116). Neither the key nor the value was
+    checked by a parse here (the value is never float-parsed), so a mapping
+    is shown as `(scheduled)` and the key and any other value are collapsed
+    to one escaped line — a raw newline would break out of the comment."""
     cur = r.current_value
     shown = ("(scheduled)" if isinstance(cur, dict)
-             else "?" if cur is None else " ".join(safe_label(str(cur)).split()))
-    return (f"{r.key}: inherited, is {shown}{_from(r)} — change it in that file; "
+             else "?" if cur is None else _one_line(cur))
+    return (f"{_one_line(r.key)}: inherited, is {shown}{_from(r)} — change it in that file; "
             "setting it in this tenant's file pins the tenant")
 
 

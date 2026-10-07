@@ -18,6 +18,7 @@ from __future__ import annotations
 
 import argparse
 import collections
+import json
 import urllib.parse
 from pathlib import Path
 
@@ -117,10 +118,10 @@ def stubs(monkeypatch):
     return install
 
 
-def _args(conf_d: Path) -> argparse.Namespace:
+def _args(conf_d: Path, max_prs: int = 100, apply: bool = True) -> argparse.Namespace:
     return argparse.Namespace(
         config_dir=str(conf_d), prometheus="http://prom.stub", tenant=None, lookback="7d",
-        min_samples=100, min_delta_pct=25.0, max_prs=100, apply=True,
+        min_samples=100, min_delta_pct=25.0, max_prs=max_prs, apply=apply,
         tenant_api_url="http://tenant-api.stub", identity_email="g@x", identity_groups="g",
         auth_token=None, auth_token_file=None, throttle_seconds=0, timeout=5)
 
@@ -225,3 +226,95 @@ def test_export_patch_never_writes_an_inherited_value(tmp_path, stubs):
     assert len(inh) == 1 and inh[0].lstrip().startswith("#")
     assert "mysql_connections: inherited, is 60 (from _defaults.yaml)" in inh[0]
     assert '"' not in inh[0], "an inherited key carries no recommended value"
+
+
+
+# ── export-patch: an inherited line can never become a value line ────────
+_OWN_60 = 'tenants:\n  t:\n    mysql_connections: "60"\n'
+
+
+def _patch_of(conf_d: Path) -> tuple[str, dict]:
+    patch = tr.format_export_patch(
+        tr.run_analysis(str(conf_d), prometheus_url="http://prom.stub", tenant_filter="t"))
+    return patch, yaml.safe_load(patch)
+
+
+@pytest.mark.parametrize("files", [
+    # a key holding a newline (F1): written raw, it splits the comment into a value line
+    {"_defaults.yaml": 'defaults:\n  mysql_connections: 80\n'
+                       '  "zz\\n    mysql_connections: \\"1\\" #": 5\n',
+     "t.yaml": _OWN_60},
+    # a value holding a newline (F2)
+    {"_defaults.yaml": "defaults:\n  mysql_connections: 80\n  mysql_threads_running: 80\n",
+     "_platform.yaml": 'tenants:\n  t:\n    mysql_threads_running: "80\\n    mysql_threads_running: 1 #"\n',
+     "t.yaml": _OWN_60},
+], ids=["newline-in-key", "newline-in-value"])
+def test_an_inherited_comment_cannot_become_a_value_line(files, tmp_path, stubs):
+    conf_d = _tree(tmp_path, files)
+    patch, doc = _patch_of(conf_d)
+    # only the tenant's own key, with its recommended value (control: 20)
+    assert doc["tenants"]["t"] == {"mysql_connections": "20"}, patch
+    values = [ln for ln in patch.splitlines() if ln.strip() and not ln.lstrip().startswith("#")]
+    assert len(values) == 3 and values[:2] == ["tenants:", "  t:"], patch
+    assert values[2].lstrip().startswith('mysql_connections: "20"'), patch
+
+
+def test_inherited_reserved_keys_are_not_listed(tmp_path, stubs):
+    """F9: a `_` key a tenant inherits is not a threshold — `_policies` from a
+    root `_defaults.yaml` without `defaults:` (merged whole) and a non-reserved
+    `_foo` from a platform `tenants:` block."""
+    conf_d = _tree(tmp_path, {
+        "_defaults.yaml": "_policies:\n  - name: x\nmysql_connections: 80\n",
+        "_platform.yaml": "tenants:\n  t:\n    _foo: 3\n",
+        "t.yaml": _OWN_60})
+    eff = tv.load_effective(conf_d)["t"]
+    assert {"_policies", "_foo"} <= set(eff.effective_config)  # premise: Go carries them
+    [rep] = tr.run_analysis(str(conf_d), prometheus_url="http://prom.stub")
+    assert [r.key for r in rep.inherited] == [], [r.key for r in rep.inherited]
+    assert [r.key for r in rep.keys] == ["mysql_connections"]
+
+
+def test_an_inherited_key_reports_no_confidence(tmp_path, stubs):
+    """F8: not queried is not "too few samples" — no LOW, in text or JSON."""
+    conf_d = _tree(tmp_path, MATRIX["mixed"][0])
+    reports = tr.run_analysis(str(conf_d), prometheus_url="http://prom.stub", tenant_filter="tenant-a")
+    [inh] = json.loads(tr.format_json_report(reports))["tenants"][0]["inherited"]
+    assert (inh["key"], inh["confidence"]) == ("mysql_connections", tr.CONFIDENCE_NOT_QUERIED)
+    row = next(ln for ln in tr.format_text_report(reports).splitlines()
+               if ln.strip().startswith("mysql_connections"))
+    assert "LOW" not in row and tr.CONFIDENCE_NOT_QUERIED in row, row
+
+
+# ── govern: nested tenants and the PR budget / the summary ───────────────
+def _nested_first_tree(tmp_path: Path, n_nested: int, n_root: int) -> Path:
+    files = {"_defaults.yaml": _BASE}
+    for i in range(n_nested):  # "a…" sorts before "z…": these come first in the loop
+        files[f"team/a{i}.yaml"] = f'tenants:\n  a{i}:\n    mysql_connections: "60"\n'
+    for i in range(n_root):
+        files[f"z{i}.yaml"] = f'tenants:\n  z{i}:\n    mysql_connections: "60"\n'
+    return _tree(tmp_path, files)
+
+
+def test_a_nested_tenant_does_not_use_up_max_prs(tmp_path, stubs):
+    """F3: --max-prs counts opened PRs; a nested tenant opens none and must not
+    take a slot from the root tenants after it."""
+    conf_d = _nested_first_tree(tmp_path, n_nested=3, n_root=3)
+    stubs(conf_d)
+    res = tg.run(_args(conf_d, max_prs=2))
+    got = [(o.tenant, o.status) for o in res.outcomes]
+    assert got == [("a0", "skipped_nested"), ("a1", "skipped_nested"), ("a2", "skipped_nested"),
+                   ("z0", "pr_opened"), ("z1", "pr_opened"), ("z2", "skipped")], got
+
+
+@pytest.mark.parametrize("apply", [False, True], ids=["dry-run", "apply"])
+def test_json_summary_counts_nested_as_the_text_does(apply, tmp_path, stubs):
+    """F7: a nested tenant gets no PR in either mode — JSON and text agree."""
+    conf_d = _nested_first_tree(tmp_path, n_nested=2, n_root=1)
+    stubs(conf_d)
+    res = tg.run(_args(conf_d, apply=apply))
+    summary = json.loads(tg.format_json_report(res.plans, res.outcomes, apply))["summary"]
+    assert (summary["tenants_actionable"], summary["changes"], summary["skipped_nested"]) == (1, 1, 2)
+    text = tg.format_text_report(res.plans, res.outcomes, apply).splitlines()[-1]
+    assert "2 tenant(s) with a file in a sub-directory get no PR" in text, text
+    want = "1 tenant(s) actionable" if apply else "1 tenant(s) / 1 change(s) would get a PR"
+    assert want in text, text
