@@ -9,9 +9,9 @@
 #   守衛，並把 git 的完整 stdin 各餵一份。
 #
 # ⛔ 舊檔頭教過兩條，兩條現在都是錯的：
-#   1. `pre-commit install --hook-type pre-push` —— pre-commit 只會餵 hook **一個**
-#      refspec，於是「同時推 feat/x 和 main」可能讓 main 對本守衛隱形（#1689 實測：
-#      印 Passed 且 main 真的推上去了）。而且設了 core.hooksPath 時它直接 rc=1。
+#   1. `pre-commit install --hook-type pre-push` —— pre-commit 先讀走 git 的 stdin，
+#      本守衛只讀 stdin，於是什麼都看不到而印 Passed（#1664）。而且設了
+#      core.hooksPath 時它直接 rc=1。
 #   2. 自己 `printf … > .git/hooks/pre-push` 只掛本檔 —— 那會把
 #      require_preflight_pass 與 mkdocs strict **靜默拆掉**，而畫面上這一支還在。
 #      ⛔ 兩支守衛的檔頭都曾各自教過「只裝自己」的配方，照任一份做都會少兩支。
@@ -25,9 +25,7 @@
 #   - 直接報錯並提示正確做法（開 branch + PR）
 #   - 不阻擋 push 到其他 branch
 #
-# ⛔ refspec 從哪一個通道來，交給 _prepush_refs.sh 判斷，本檔不自己讀 stdin。
-#   經 pre-commit 安裝時 stdin 是空的（pre-commit 先讀走了），而本檔在 #1664
-#   之前正因如此對每一次直推 main 印 "Passed"。殘差與量測見該 helper 檔頭。
+# ⛔ stdin 由 _prepush_refs.sh 解析，本檔不自己讀。
 
 set -euo pipefail
 
@@ -67,14 +65,9 @@ fi
 # shellcheck source=scripts/ops/_prepush_refs.sh
 . "$_prepush_dir/_prepush_refs.sh"
 
-if ! _refs="$(prepush_refs)"; then
-    prepush_refs_unavailable_message >&2
-    exit 1
-fi
+_refs="$(prepush_refs)"
 
-# 每列: <remote_ref> <local_sha>。remote_ref 在前是承重的——local_sha 可以合法為空
-# （第一次把分支推到空 remote 時 pre-commit 不匯出 PRE_COMMIT_TO_REF），而前導空欄會被
-# 預設 IFS 的 read 吃掉、讓 remote_ref 變空、整列被丟掉 ⇒ 靜默放行。詳見 helper 檔頭。
+# 每列: <remote_ref> <local_sha>
 while read -r remote_ref local_sha; do
     [ -n "${remote_ref:-}" ] || continue
     # 提取 remote branch name

@@ -3,113 +3,29 @@
 #
 # ⛔ Sourced, not executed. See EXTERNAL COMMANDS at the bottom for how.
 #
-# WHY THIS EXISTS (#1664)
-#   A pre-push hook learns what is being pushed from git's stdin protocol —
-#   one line per ref:
+# WHAT IT READS — git's pre-push stdin, one line per ref it is going to update:
 #       <local_ref> <local_sha> <remote_ref> <remote_sha>
-#   That works when the hook IS .git/hooks/pre-push. It does NOT work when the
-#   hook runs under pre-commit: pre-commit's own hook-impl reads the whole
-#   stdin itself (`stdin = sys.stdin.buffer.read()` in
-#   pre_commit/commands/hook_impl.py::_run_legacy) and then spawns every hook
-#   with stdin=PIPE that it never writes to, so the hook sees EOF immediately.
+#   prepush_dispatch.sh reads that once and hands each guard its own copy.
+#   Zero rows means nothing is being pushed: git feeds no line for a ref that
+#   is already up to date.
 #
-#   So the same push reaches a native .git/hooks/pre-push with the refspec on
-#   stdin, and a hook installed via pre-commit with stdin EMPTY: a guard that
-#   reads only stdin exits 0 there, and pre-commit prints "Passed".
-#
-#   pre-commit does hand the same information over — as environment variables.
-#   This helper reads whichever channel is actually carrying it, so the
-#   decision lives in one place instead of once per guard.
-#
-# CHANNEL ORDER — stdin first, env second. That order is load-bearing:
-#   * Under pre-commit, stdin is an already-closed pipe, so reading it costs
-#     nothing and yields nothing; the env channel then answers.
-#   * Invoked directly with a piped refspec (how the gate's own unit tests and
-#     a native hook drive it), stdin answers and the env channel is never
-#     consulted — so a stray PRE_COMMIT=1 inherited from an unrelated parent
-#     process cannot change the verdict.
-#   Checking the environment first would have made every stdin-fed caller
-#   depend on PRE_COMMIT being absent, which is not a property anyone controls.
-#
-# CALLER CHANNEL — the dispatcher says so, because nothing else can (#1846)
-#   With zero rows on stdin and no PRE_COMMIT_REMOTE_BRANCH, "git had nothing
-#   to feed" and "pre-commit ate the refspec" are indistinguishable here. An
-#   inherited PRE_COMMIT=1 would be read as the second, so a push with nothing
-#   in it would be refused. prepush_dispatch.sh — the one place that reads
-#   git's pre-push stdin — therefore says so, and under it zero rows means
-#   nothing to push.
-#
-#   ⛔ Consulted BEFORE the env channel: under the dispatcher a value in
-#   PRE_COMMIT_REMOTE_BRANCH can only have been inherited, so it names a ref
-#   this push is not touching.
-#
-#   ⛔ Only the dispatcher may export it — not a wrapper, not the installer,
-#   not CI; anywhere else a guard reached through the env channel gets the same
-#   licence with a real refspec in hand. Enforced by
-#   test_only_the_dispatcher_exports_the_caller_flag, not by this comment.
-#
-#   ⛔ Do NOT generalise to "zero rows always passes" — that is the #1664
-#   defect. "Nothing to push" and "cannot see what is being pushed" stay two
-#   different answers; this only says who may give the first.
-#
-#   ⚠️ Silent by design, unlike the two sibling bypass flags: this branch is
-#   taken on every up-to-date push, which is ordinary, not an override.
+#   ⛔ stdin is the ONLY channel. A guard that pre-commit runs as a pre-push
+#   stage hook gets an empty stdin (pre-commit reads it first, #1664), so it
+#   judges nothing and passes. That is why the guards are not pre-commit hooks
+#   (#1689): .pre-commit-config.yaml declares none, pinned by
+#   test_the_shipped_wiring_runs_exactly_the_three_guards.
 #
 # OUTPUT
 #   prepush_refs   <remote_ref> <local_sha>
-#
-#   ⛔ `local_sha` is EMPTY when unknown. A consumer must read that as "I do
-#   not know what is pushed", never as "nothing to push".
 #
 #   ⛔ Do not add a third column. Consumers parse with
 #   `read -r remote_ref local_sha`, which folds any extra field into
 #   `local_sha`, and the ones that skip deletions compare that against the
 #   40-zero sha — widening it brings #1691 back.
 #
-#   ⛔ FIELD ORDER: remote_ref FIRST. That is not cosmetic. `local_sha` can
-#   legitimately be empty — hook_impl._pre_push_ns has an `all_files=True`
-#   path (pushing a branch whose first ancestor missing from the remote is the
-#   ROOT commit, i.e. the first push to an empty remote) that returns a
-#   namespace with `to_ref=None`, so pre-commit exports REMOTE_BRANCH without
-#   TO_REF. With the sha first the row would begin with a blank field,
-#   default-IFS `read` would collapse it, and `remote_ref` would come out
-#   EMPTY — so both guards would drop the row and allow a plain push to main.
-#   The verdict-bearing field has to be the one that cannot be eaten.
-#
-# EXIT STATUS
-#   0 — rows written to stdout. Zero rows is a legitimate answer: nothing is
-#       being pushed (git only feeds lines for refs it is going to update).
-#   3 — running under pre-commit with neither channel carrying a refspec, AND
-#       not invoked by the dispatcher (see CALLER CHANNEL).
-#       Callers MUST treat this as "I cannot see what I am guarding" and exit
-#       non-zero. Warning-and-allowing is not an option here: a PASSING hook's
-#       stdout and stderr are both swallowed by pre-commit, so a warning
-#       would be byte-for-byte the same picture as the bug this
-#       file exists to remove.
-#
-# ⚠️ KNOWN RESIDUAL — the env channel carries at most ONE ref; a push carries N.
-#   hook_impl._pre_push_ns returns on the first PUSHABLE row (it skips rows
-#   whose local sha is all-zero, i.e. deletions), so under pre-commit a guard
-#   is shown one of N refs. For example, with both branches already on the
-#   remote:
-#       git push origin main aaa-first
-#         native stdin   -> 2 rows (aaa-first, main)
-#         pre-commit env -> PRE_COMMIT_REMOTE_BRANCH=refs/heads/aaa-first
-#         result         -> main was updated by that same command
-#   ⛔ AT MOST one: when every row is a deletion, _pre_push_ns returns None and
-#   pre-commit runs NO hook at all.
-#   ⛔ WHICH row is git's, not yours — writing `main` first does not protect
-#   it, and the answer differs per push shape (#1852).
-#   Nothing in this repo may depend on it: the guards read stdin instead.
-#   A guard reached via pre-commit does not see that main. The other rows cannot
-#   be recovered from inside the hook; only the stdin channel has full
-#   fidelity. This is disclosure, not coverage — tests/ops/test_prepush_hook_wiring.py
-#   pins the shape (N rows in, one out) so the gap cannot quietly change; the
-#   example above is one run, and which row survives is not pinned.
-#
-# ⛔ EXTERNAL COMMANDS — this file uses only bash builtins plus `cat`, and its
-#   callers must source it with parameter expansion, NOT `$(dirname …)`. That
-#   is a requirement, not a style choice: `test_gh_missing_*` in
+# ⛔ EXTERNAL COMMANDS — this file uses only bash builtins, and its callers
+#   must source it with parameter expansion, NOT `$(dirname …)`. That is a
+#   requirement, not a style choice: `test_gh_missing_*` in
 #   tests/dx/test_preflight_pass_gate.py runs require_preflight_pass.sh with
 #   PATH stripped to bash/git/basename/sh/cat, because "this gate still works
 #   when `gh` is absent" is one of its contracts. A `dirname` in the
@@ -118,78 +34,9 @@
 
 prepush_refs() {
     local _local_ref local_sha remote_ref _remote_sha
-    local _rows=()
 
     while read -r _local_ref local_sha remote_ref _remote_sha; do
         [ -n "${remote_ref:-}" ] || continue
-        _rows+=("$remote_ref $local_sha")
+        printf '%s %s\n' "$remote_ref" "$local_sha"
     done
-
-    if [ "${#_rows[@]}" -gt 0 ]; then
-        printf '%s\n' "${_rows[@]}"
-        return 0
-    fi
-
-    # Zero rows, dispatcher calling — see CALLER CHANNEL in the header.
-    # ⛔ ABOVE the env channel, and an exact value, not a presence test: the
-    # dispatcher writes `1`, so every other inherited value belongs in the
-    # conservative branch below.
-    if [ "${VIBE_PREPUSH_FROM_DISPATCH:-0}" = "1" ]; then
-        return 0
-    fi
-
-    if [ -n "${PRE_COMMIT_REMOTE_BRANCH:-}" ]; then
-        printf '%s %s\n' "${PRE_COMMIT_REMOTE_BRANCH}" "${PRE_COMMIT_TO_REF:-}"
-        return 0
-    fi
-
-    if [ -n "${PRE_COMMIT:-}" ]; then
-        return 3
-    fi
-
-    return 0
-}
-
-prepush_refs_unavailable_message() {
-    cat <<'PREPUSH_MSG'
-
-[prepush] ⛔ This guard cannot see what is being pushed, so it is refusing.
-
-It is running under pre-commit, but neither channel carried a refspec: git's
-stdin was empty (pre-commit consumes it before the hook runs, #1664) and
-PRE_COMMIT_REMOTE_BRANCH is unset.
-
-Common ways to reach this message:
-
-  * you invoked a guard by hand (`bash scripts/ops/protect_main_push.sh`, say)
-    while PRE_COMMIT was set in your environment, in which case there is
-    genuinely nothing to judge;
-  * something exported PRE_COMMIT before `git push`, and the guard was reached
-    WITHOUT scripts/ops/prepush_dispatch.sh (a hand-wired .git/hooks/pre-push,
-    for instance). See CALLER CHANNEL in scripts/ops/_prepush_refs.sh.
-
-⛔ A `stages: [pre-push]` entry re-added to .pre-commit-config.yaml does NOT
-print this — that copy is handed one refspec and looks green while shadowing
-the dispatcher. Remove it anyway.
-
-To exercise the guards for real, push something:
-
-    git push --dry-run origin HEAD:refs/heads/<branch>
-
-⛔ --dry-run runs the hooks and leaves the remote untouched, and an
-up-to-date push runs them with ZERO rows — "nothing to push" and "cannot see
-what is being pushed" are different answers and must stay that way.
-
-⛔ Do not reach for --no-verify, and do not "fix" this by allowing the empty
-case: that is exactly the defect #1664 removed. To ask whether the guards are
-on the push path at all:
-
-    make pr-preflight          (its `Local hooks` row answers exactly that)
-    make pr-preflight-quick    (same answer, without the --all-files run)
-
-    Without make, run the tool itself (on Windows, python instead of python3):
-    python3 scripts/tools/dx/pr_preflight.py                 (full)
-    python3 scripts/tools/dx/pr_preflight.py --skip-hooks    (quick)
-
-PREPUSH_MSG
 }
