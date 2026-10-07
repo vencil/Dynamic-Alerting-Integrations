@@ -466,7 +466,10 @@ def _strip_volatile(data: dict) -> None:
     """Drop what changes with no input changed: the timestamp and the HEAD
     commit (as generate_platform_data's --check does)."""
     data.pop("generated", None)
-    for tenant in (data.get("tenant_metadata") or {}).values():
+    tenants = data.get("tenant_metadata")
+    if not isinstance(tenants, dict):
+        return  # left as is: the comparison reports the file as outdated
+    for tenant in tenants.values():
         if isinstance(tenant, dict):
             tenant.pop("last_config_commit", None)
 

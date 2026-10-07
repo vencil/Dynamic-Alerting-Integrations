@@ -299,11 +299,11 @@ def test_check_evaluates_at_the_recorded_instant(tmp_path):
     out.write_text(json.dumps(data, indent=2, ensure_ascii=False) + "\n", encoding="utf-8")
     assert _cli(conf_d, "--output", str(out), "--check").returncode == 1
 
-    # 把 generated 挪到未來，不能挑中一個讓過期檔過關的時刻：退回現在 → 紅。
-    data = gtm.build_tenant_metadata(conf_d, at=before)
-    data["generated"] = "2100-01-01T00:00:00Z"
-    out.write_text(json.dumps(data, indent=2, ensure_ascii=False) + "\n", encoding="utf-8")
-    assert _cli(conf_d, "--output", str(out), "--check").returncode == 1
+    # tenant_metadata 不是物件：照舊判為 outdated（rc 1、具名），不丟 traceback。
+    out.write_text('{"tenant_metadata": [1]}\n', encoding="utf-8")
+    proc = _cli(conf_d, "--output", str(out), "--check")
+    assert proc.returncode == 1 and "is outdated" in proc.stderr, proc.stderr
+    assert "Traceback" not in proc.stderr, proc.stderr
 
 
 @pytest.mark.parametrize("generated, want", [
