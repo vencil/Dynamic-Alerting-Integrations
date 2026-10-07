@@ -677,7 +677,8 @@ def test_an_up_to_date_push_is_allowed_with_pre_commit_in_the_environment(
 
     ⛔ The whole set, not ``PRE_COMMIT=1`` alone: a helper that read the
     environment only when every variable pre-commit exports is present would
-    pass a partial set.
+    pass a partial set. The set is what ``pre_commit/commands/run.py`` exports
+    at the pre-push stage.
 
     ⛔ The zero-row rows silence only the mkdocs sibling, never
     ``require_preflight_pass``: bypassing that one here lets a break in its own
@@ -706,8 +707,14 @@ def test_an_up_to_date_push_is_allowed_with_pre_commit_in_the_environment(
     )
 
     head = _git(work, "rev-parse", "HEAD").stdout.strip()
-    stale = {**inherited, "PRE_COMMIT_REMOTE_BRANCH": "refs/heads/main",
-             "PRE_COMMIT_FROM_REF": head, "PRE_COMMIT_TO_REF": head}
+    def _exported(branch: str) -> dict:
+        return {"PRE_COMMIT": "1", "PRE_COMMIT_FROM_REF": head, "PRE_COMMIT_TO_REF": head,
+                "PRE_COMMIT_ORIGIN": head, "PRE_COMMIT_SOURCE": head,
+                "PRE_COMMIT_LOCAL_BRANCH": "refs/heads/main",
+                "PRE_COMMIT_REMOTE_BRANCH": branch, "PRE_COMMIT_REMOTE_NAME": "origin",
+                "PRE_COMMIT_REMOTE_URL": str(tmp_path / "remote.git")}
+
+    stale = {**inherited, **_exported("refs/heads/main")}
     ghost, ghost_out = _push(work, "HEAD:refs/heads/feat/x", env_extra=stale)
     assert ghost.returncode == 0, (
         f"an inherited PRE_COMMIT_REMOTE_BRANCH turned an up-to-date push into "
@@ -715,9 +722,7 @@ def test_an_up_to_date_push_is_allowed_with_pre_commit_in_the_environment(
     )
     assert _BANNER not in ghost_out, ghost_out
 
-    elsewhere = {"PRE_COMMIT": "1", "PRE_COMMIT_REMOTE_BRANCH": "refs/heads/feat/x",
-                 "PRE_COMMIT_FROM_REF": head, "PRE_COMMIT_TO_REF": head,
-                 "VIBE_PREPUSH_FROM_DISPATCH": "1"}
+    elsewhere = {**_exported("refs/heads/feat/x"), "VIBE_PREPUSH_FROM_DISPATCH": "1"}
     blocked, blocked_out = _push(work, "HEAD:refs/heads/main",
                                  env_extra={**_SIBLINGS_OFF, **elsewhere})
     assert blocked.returncode != 0, (
