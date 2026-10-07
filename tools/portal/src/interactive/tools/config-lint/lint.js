@@ -17,8 +17,11 @@ purpose: |
     parseYaml(text)      (exposed for testing)
 
   Closure deps: window.__t for bilingual rule categories/messages (falls back
-  to English).
+  to English). parseDuration (Alertmanager duration syntax, #2711) is
+  ESM-imported from ../_common/validation/yaml-parser.js.
 ---
+
+import { parseDuration } from '../_common/validation/yaml-parser.js';
 
 // i18n fallback — rule categories + finding messages are bilingual.
 // Evaluated at module load (LINT_RULES category fields call t()); the host page
@@ -80,6 +83,15 @@ function parseValue(raw) {
   if (!isNaN(num) && raw !== '') return num;
   return raw;
 }
+
+// #2711: the routing timing rules below read a value as Alertmanager reads it
+// (parseDuration, the schema's definitions.duration) and judge only what they
+// can read. An unreadable value is SKIPPED, not reported: this lenient parser
+// keeps quotes and trailing `# comments` (`'30s'`, `"30s"   # ...`), so from
+// its raw string a valid value and an invalid one look the same. Invalid
+// durations are reported by the Self-Service Portal's validateConfig, which
+// reads the YAML with js-yaml. ⛔ Do not grow a second YAML lexer here to
+// tell them apart.
 const LINT_RULES = [
   {
     id: 'threshold-too-high',
@@ -183,7 +195,11 @@ const LINT_RULES = [
         const routing = keys['_routing'];
         if (routing && typeof routing === 'object') {
           const gw = routing.group_wait;
-          if (gw && (gw === '1s' || gw === '2s' || gw === '3s' || gw === '4s')) {
+          if (!gw) continue;
+          // #2711: the old literal match ('1s'..'4s') missed 500ms, 0s,
+          // 1s500ms and 3000ms.
+          const ms = parseDuration(gw);
+          if (ms !== null && ms < 5000) {
             findings.push({ tenant, key: '_routing.group_wait', message: t(`group_wait = ${gw} 太短，建議 ≥ 5s 避免告警碎片化`, `group_wait = ${gw} is too short — recommend ≥ 5s to avoid alert fragmentation`) });
           }
         }
@@ -201,8 +217,14 @@ const LINT_RULES = [
         const routing = keys['_routing'];
         if (routing && typeof routing === 'object') {
           const ri = routing.repeat_interval;
-          if (ri && ri.endsWith('h')) {
-            const hours = parseInt(ri);
+          if (ri) {
+            // #2711: read as Alertmanager reads it (1d1h = 25h, 4d = 96h);
+            // the old endsWith('h') + parseInt read 1d1h as 1h, skipped 4d
+            // and took 1.5h for 1h, and threw on an unquoted number. An
+            // unreadable value (incl. a non-string) is skipped; see above.
+            const ms = parseDuration(ri);
+            if (ms === null) continue;
+            const hours = ms / 3_600_000;
             if (hours > 72) {
               findings.push({ tenant, key: '_routing.repeat_interval', message: t(`repeat_interval = ${ri} 超過上限 72h`, `repeat_interval = ${ri} exceeds maximum of 72h`) });
             } else if (hours > 24) {

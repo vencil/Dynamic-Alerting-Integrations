@@ -920,6 +920,14 @@ tenant-id-json: ## 從 tenant-config schema 的 definitions.tenantId 生成 tena
 tenant-id-json-check: ## 驗證兩份 committed tenant-id.json 與 schema 的 definitions.tenantId 同步（ADR-035 drift gate）
 	@python3 ./scripts/tools/dx/gen_tenant_id_json.py --check
 
+.PHONY: am-duration-json
+am-duration-json: ## 從 tenant-config schema 的 definitions.duration 生成 portal 的 am-duration.json（#2711；committed artifact，比照 ADR-035）
+	@python3 ./scripts/tools/dx/gen_am_duration_json.py
+
+.PHONY: am-duration-json-check
+am-duration-json-check: ## 驗證 committed am-duration.json 與 schema 的 definitions.duration 同步（#2711 drift gate）
+	@python3 ./scripts/tools/dx/gen_am_duration_json.py --check
+
 .PHONY: lint-extract
 lint-extract: ## 拆新 lint script（PR #154/#162/#166/#169/#170 共通 boilerplate codified）— 用法：make lint-extract NAME=foo_bar KIND=text DESCRIPTION="..." FILES='^docs/.*\.md$$' [DRY_RUN=1] [FORCE=1] [NO_HOOK=1]
 	@if [ -z "$(NAME)" ] || [ -z "$(KIND)" ] || [ -z "$(DESCRIPTION)" ]; then \

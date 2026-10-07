@@ -2,7 +2,8 @@
 title: "_common — YAML parser + duration helper"
 purpose: |
   Tenant-config YAML parsing on top of js-yaml, plus a parseDuration helper
-  that turns "30s" / "5m" / "2h" / "1d" into seconds.
+  that reads an Alertmanager duration ("30s" / "5m" / "1h30m" / "1d") into
+  milliseconds.
 
   Why js-yaml (#2033): the previous hand-rolled line parser disagreed with
   the exporter's decoder (Go gopkg.in/yaml.v3) — duplicate keys silently
@@ -29,7 +30,18 @@ purpose: |
   exporter is the authority.
 
   Public API:
-    parseDuration(str)     parse '30s' / '5m' / '2h' / '1d' to seconds (or null)
+    parseDuration(str)     milliseconds Alertmanager reads from a routing
+                           timing value ('30s', '1h30m', '500ms', '0'), or
+                           null when Alertmanager refuses it ('1.5h',
+                           '30m1h', '1h1h', '1ns', '', a non-string). The
+                           syntax is tenant-config.schema.json
+                           definitions.duration (#2490), read from the
+                           generated ../data/am-duration.json (#2711;
+                           gen_am_duration_json.py, drift-gated). On top of
+                           it, the one check a pattern cannot state:
+                           model.ParseDuration's int64-nanosecond overflow
+                           (about 292y) is refused too, so every value
+                           returned is far below 2^53 ms and exact.
     loadYamlDocument(text) -> { doc, error } — first document of a js-yaml
                            loadAll with the schema above + size guard +
                            cycle check. `error` is { message, line, column }
@@ -54,22 +66,57 @@ purpose: |
     A non-mapping document root yields an error and config = {}.
 
   Closure deps: window.__t (host-page i18n thunk, per-call). UNSAFE_KEYS
-  + MAX_YAML_SIZE are ESM-imported from ./constants.js.
+  + MAX_YAML_SIZE are ESM-imported from ./constants.js; the duration rule
+  from ../data/am-duration.json.
 
   Consumers import these directly via ESM (dev-rules §S6).
 ---
 
 import { loadAll, CORE_SCHEMA, types } from 'js-yaml';
 import { UNSAFE_KEYS, MAX_YAML_SIZE } from './constants.js';
+// #2711: generated from the schema's definitions.duration. Do not write a
+// second duration regex here; run `make am-duration-json` after a schema change.
+import AM_DURATION_RULE from '../data/am-duration.json';
 
 const YAML_SCHEMA = CORE_SCHEMA.extend({ implicit: [types.merge] });
 
+const AM_DURATION_RE = new RegExp(AM_DURATION_RULE.pattern);
+// prometheus/common model.ParseDuration's units (time.go unitMap), in
+// nanoseconds. Which units are legal, and in what order, is the schema
+// pattern's call; this table only prices them. A unit the pattern admits but
+// this table lacks makes the value unreadable (null), never a guess;
+// tests/parseDuration.test.ts pins that the table covers the pattern.
+const AM_DURATION_UNIT_NS = {
+  y: 365n * 86400n * 1000000000n,
+  w: 7n * 86400n * 1000000000n,
+  d: 86400n * 1000000000n,
+  h: 3600n * 1000000000n,
+  m: 60n * 1000000000n,
+  s: 1000000000n,
+  ms: 1000000n,
+};
+const INT64_MAX = (1n << 63n) - 1n;
+const NS_PER_MS = 1000000n;
+
 function parseDuration(str) {
-  if (!str) return null;
-  const m = String(str).match(/^(\d+\.?\d*)([smhd])$/);
-  if (!m) return null;
-  const multi = { s: 1, m: 60, h: 3600, d: 86400 };
-  return parseFloat(m[1]) * (multi[m[2]] || 1);
+  // Only a string is a duration: Alertmanager reads the YAML text, and an
+  // unquoted `30` has no unit (as in the route generator's am_duration_seconds).
+  if (typeof str !== 'string') return null;
+  if (str.length < AM_DURATION_RULE.minLength || !AM_DURATION_RE.test(str)) return null;
+  if (str === '0') return 0;
+  // The pattern has already fixed the shape; this only splits the value into
+  // <digits><unit> tokens.
+  let totalNs = 0n;
+  for (const [, digits, unit] of str.matchAll(/([0-9]+)([^0-9]+)/g)) {
+    if (!Object.prototype.hasOwnProperty.call(AM_DURATION_UNIT_NS, unit)) return null;
+    const mult = AM_DURATION_UNIT_NS[unit];
+    const v = BigInt(digits);
+    // ParseDuration's overflow check: per unit, then the running sum.
+    if (v > (1n << 63n) / mult) return null;
+    totalNs += v * mult;
+    if (totalNs > INT64_MAX) return null;
+  }
+  return Number(totalNs / NS_PER_MS);
 }
 
 function isPlainMap(v) {
