@@ -318,3 +318,41 @@ def test_json_summary_counts_nested_as_the_text_does(apply, tmp_path, stubs):
     assert "2 tenant(s) with a file in a sub-directory get no PR" in text, text
     want = "1 tenant(s) actionable" if apply else "1 tenant(s) / 1 change(s) would get a PR"
     assert want in text, text
+
+
+
+# ── export-patch: no tenant name / key / detail can turn a comment into a value line
+# The line breaks `str.splitlines` (and YAML) honour that a careless join keeps.
+_BREAKS = {"lf": "\n", "u2028": "\u2028", "nel": "\x85"}
+_INJECT = '{brk}  z:{brk}    mysql_connections: "1" #'
+
+
+def _q(name: str) -> str:
+    """A YAML double-quoted key (JSON's escapes are YAML's)."""
+    return json.dumps(name)
+
+
+@pytest.mark.parametrize("brk", sorted(_BREAKS))
+@pytest.mark.parametrize("where", ["tenant-name-comment", "tenant-name-block", "own-skipped-key"])
+def test_no_name_or_key_breaks_out_of_the_patch(where, brk, tmp_path, stubs):
+    """A tenant name or a tenant-own key holding a line break must not add a
+    value line — not even one that lands under another tenant (control `z`:
+    its recommendation, 20, must survive)."""
+    sep = _BREAKS[brk]
+    evil = "zz" + _INJECT.format(brk=sep)
+    files = {"_defaults.yaml": _BASE,
+             "z.yaml": 'tenants:\n  z:\n    mysql_connections: "60"\n'}
+    want = {"z": {"mysql_connections": "20"}}
+    if where == "tenant-name-comment":   # tenant with no exportable key: comment lines only
+        files["a.yaml"] = f'tenants:\n  {_q(evil)}:\n    foo_unmapped_key: "3"\n'
+    elif where == "tenant-name-block":   # tenant with an exportable key: a block header
+        files["a.yaml"] = f'tenants:\n  {_q(evil)}:\n    mysql_connections: "60"\n'
+        want[evil] = {"mysql_connections": "20"}
+    else:                                # tenant-own unmapped key, in z's own block
+        files["z.yaml"] = ('tenants:\n  z:\n    mysql_connections: "60"\n'
+                           f'    {_q("zz" + _INJECT.format(brk=sep))}: "3"\n')
+    conf_d = _tree(tmp_path, files)
+    tenants = set(tv.load_effective(conf_d))
+    assert "z" in tenants and len(tenants) == (1 if where == "own-skipped-key" else 2)  # premise
+    patch = tr.format_export_patch(tr.run_analysis(str(conf_d), prometheus_url="http://prom.stub"))
+    assert yaml.safe_load(patch) == {"tenants": want}, patch

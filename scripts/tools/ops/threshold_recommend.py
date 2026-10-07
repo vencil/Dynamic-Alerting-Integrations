@@ -49,6 +49,7 @@ import argparse
 import json
 import math
 import os
+import re
 import sys
 from dataclasses import asdict, dataclass, field
 from datetime import datetime, timezone
@@ -1143,9 +1144,21 @@ def _exportable(r: KeyRecommendation) -> bool:
 
 
 def _one_line(text: Any) -> str:
-    """`text` escaped for the terminal (`safe_label`) with every whitespace run,
-    newlines included, collapsed to one space — safe inside a `#` comment line."""
+    """`text` as one line, safe inside a `#` comment: `safe_label` first turns
+    each control character (`\n`, `\r`, `\x85` among them) into `?`, then
+    `.split()` collapses every whitespace run — U+2028 / U+2029 included — to
+    one space. Nothing in the result can end the comment line."""
     return " ".join(safe_label(str(text)).split())
+
+
+_PLAIN_YAML_KEY = re.compile(r"[A-Za-z0-9][A-Za-z0-9._-]*")
+
+
+def _yaml_key(name: str) -> str:
+    """`name` as a mapping key on a YAML value line: as is when it is a plain
+    identifier, else a double-quoted scalar (JSON's escaping is YAML's), so a
+    tenant name or key holding a line break cannot start another line (#2116)."""
+    return name if _PLAIN_YAML_KEY.fullmatch(name) else json.dumps(name)
 
 
 def _from(r: KeyRecommendation) -> str:
@@ -1179,7 +1192,9 @@ def format_export_patch(reports: list[TenantRecommendation]) -> str:
     STAGE-1 value basis). Skipped / within-margin keys are listed as comments
     so the output is self-explaining without re-running in another mode.
 
-    #2116: every value line names the file its current value comes from. A
+    #2116: every value line names the file its current value comes from, and
+    every name, key, value and reason that goes into a `#` comment is made one
+    line (`_one_line`), so no input can turn a comment into a value line. A
     key the tenant inherits (defaults / platform / profile) is never a value
     line: it is listed as a comment with its current value and the owning
     file (no recommended value — it is not queried), because merging it into
@@ -1213,9 +1228,10 @@ def format_export_patch(reports: list[TenantRecommendation]) -> str:
         for rep, _ks, inh in exportable:
             for r in sorted(rep.keys, key=lambda x: x.key):
                 label, detail = _skip_comment_body(r)
-                lines.append(f"# [{rep.tenant}] ({label}) {r.key}: {detail}")
+                lines.append(f"# [{_one_line(rep.tenant)}] ({label}) {_one_line(r.key)}: "
+                             f"{_one_line(detail)}")
             for r in inh:
-                lines.append(f"# [{rep.tenant}] (inherited) {_inherited_line(r)}")
+                lines.append(f"# [{_one_line(rep.tenant)}] (inherited) {_inherited_line(r)}")
         return "\n".join(lines) + "\n"
 
     lines.append("tenants:")
@@ -1228,11 +1244,12 @@ def format_export_patch(reports: list[TenantRecommendation]) -> str:
             # per-key skip context as top-level comments (don't drop it).
             for r in skipped:
                 label, detail = _skip_comment_body(r)
-                lines.append(f"# [{rep.tenant}] ({label}) {r.key}: {detail}")
+                lines.append(f"# [{_one_line(rep.tenant)}] ({label}) {_one_line(r.key)}: "
+                             f"{_one_line(detail)}")
             for r in inh:
-                lines.append(f"# [{rep.tenant}] (inherited) {_inherited_line(r)}")
+                lines.append(f"# [{_one_line(rep.tenant)}] (inherited) {_inherited_line(r)}")
             continue
-        lines.append(f"  {rep.tenant}:")
+        lines.append(f"  {_yaml_key(rep.tenant)}:")
         for r in sorted(ks, key=lambda x: x.key):
             val = _format_threshold_value(r.recommended)
             # `cur` goes only into the trailing `#` comment. Safe to interpolate
@@ -1245,12 +1262,13 @@ def format_export_patch(reports: list[TenantRecommendation]) -> str:
             cur = r.current_value if r.current_value is not None else "?"
             delta = _delta_str(r)
             lines.append(
-                f'    {r.key}: "{val}"   # was {cur}{_from(r)}, {delta}, {r.confidence} — {r.reason}'
+                f'    {_yaml_key(r.key)}: "{val}"   # was {_one_line(cur)}{_from(r)}, {delta}, '
+                f'{r.confidence} — {_one_line(r.reason)}'
             )
         # surface this tenant's skipped keys as in-block comments
         for r in skipped:
             label, detail = _skip_comment_body(r)
-            lines.append(f"    # ({label}) {r.key}: {detail}")
+            lines.append(f"    # ({label}) {_one_line(r.key)}: {_one_line(detail)}")
         for r in inh:
             lines.append(f"    # (inherited) {_inherited_line(r)}")
     return "\n".join(lines) + "\n"
