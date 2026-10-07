@@ -4,15 +4,7 @@ config_diff.py — Directory-level Config Diff for GitOps PR review.
 
 Compares two conf.d/ directories and produces a per-tenant blast radius report
 showing which tenants, metrics, and alert thresholds changed (tighter / looser /
-added / removed / toggled / moved).
-
-The metric diff compares each tenant's threshold values written plus
-inherited, each with the file it comes from (`da-guard effective`, #2116): a
-`_defaults.yaml` / platform / profile change shows on every tenant it reaches,
-and a value that keeps its number but changes the file it comes from (moved
-from a platform file into the tenant's own, or back) is reported as `moved`.
-The `_` settings and custom-alert sections still read each tenant file's own
-declarations.
+added / removed / toggled).
 
 Complements patch_config.py --diff (single-metric live ConfigMap preview).
 config_diff compares entire directory snapshots for PR review.
@@ -48,13 +40,6 @@ from _lib_io import (  # noqa: E402  (#2297 `_profile` as source text)
 )
 from _lib_exitcodes import EXIT_OK, EXIT_VIOLATION, EXIT_CALLER_ERROR  # noqa: E402
 from _threshold_alerts import alerts_for_key  # noqa: E402
-# #2116: the metric diff compares (value, source file) as `da-guard effective`
-# resolves them.
-from _lib_tenant_values import (  # noqa: E402
-    DaGuardError, DaGuardNotFoundError, EffectiveError, ParseFailedError, load_effective,
-    print_load_error,
-)
-from _lib_confd import iter_config_files  # noqa: E402  (#2116: empty-tree check only)
 
 # GitHub silently rejects (422 Unprocessable Entity) issue/PR comments over
 # 65,536 chars. The config-diff bot posts render_markdown() output verbatim, so
@@ -65,51 +50,22 @@ GITHUB_COMMENT_HARD_LIMIT = 65_536
 COMMENT_SAFETY_LIMIT = 60_000
 
 
-def load_effective_from_dir(dir_path):
-    """Every tenant's threshold values in a conf.d/ tree, written plus
-    inherited, with the file each value comes from (#2116).
+def load_configs_from_dir(dir_path):
+    """Load all tenant configs from a conf.d/ directory.
 
-    Returns ``(values, sources)``: ``{tenant: {metric_key: value}}`` and
-    ``{tenant: {metric_key: {"layer": ..., "file": ...}}}``. Both are
-    ``da-guard effective``'s answer (tenant-api's /effective): the tree is
-    read as the exporter reads it — sub-directories, `_defaults.yaml`
-    chains, platform `tenants:` blocks and profiles included; `layer` is
-    ``tenant`` for a value the tenant's own file writes, else ``defaults`` /
-    ``platform`` / ``profile``, and `file` is relative to `dir_path`.
-    Reserved (`_`) keys are left out (`flatten_tenant_config`).
+    Returns {tenant_name: {metric_key: value, ...}}.
+    Skips files starting with '_' or '.'.
 
-    A missing directory is ``({}, {})`` with a WARN. A tree with no config
-    file at all (the CI baseline of a first import) is ``({}, {})`` too: da-guard
-    refuses it with exit 2, and that one refusal is read as "no tenants" only
-    when `_lib_confd.iter_config_files` finds no config file there either.
-    da-guard missing or failing otherwise, or a file the exporter cannot load,
-    raises (`_lib_tenant_values`): fail-closed.
+    Supports both YAML formats:
+      - Wrapped: {tenants: {name: {metric: value}}}  (actual conf.d/ format)
+      - Flat: {metric: value}  (simplified / legacy)
     """
     if not Path(dir_path).is_dir():
         print(f"WARN: directory not found: {dir_path}", file=sys.stderr)
-        return {}, {}
+        return {}
 
-    try:
-        effective = load_effective(dir_path)
-    except EffectiveError as exc:
-        # 2: da-guard's own caller-error exit ("no .yaml files found" among them)
-        if exc.returncode == 2 and next(iter_config_files(dir_path), None) is None:
-            return {}, {}
-        raise
-    values, sources = {}, {}
-    for tenant, eff in effective.items():
-        flat = flatten_tenant_config(eff.effective_config)
-        values[tenant] = flat
-        sources[tenant] = {k: {"layer": eff.key_sources[k].layer,
-                               "file": eff.key_sources[k].file} for k in flat}
-    return values, sources
-
-
-def load_configs_from_dir(dir_path):
-    """``{tenant_name: {metric_key: value}}`` of a conf.d/ tree: the values
-    half of :func:`load_effective_from_dir` (written plus inherited, #2116).
-    """
-    return load_effective_from_dir(dir_path)[0]
+    raw_configs = _load_tenant_configs_raw(dir_path)
+    return {t: flatten_tenant_config(d) for t, d in raw_configs.items()}
 
 
 def load_profiles_from_dir(dir_path):
@@ -299,22 +255,13 @@ def classify_change(old_val, new_val):
     return "modified"
 
 
-def compute_diff(old_configs, new_configs, old_sources=None, new_sources=None):
+def compute_diff(old_configs, new_configs):
     """Compare two sets of tenant configs.
 
     Returns {tenant: [{"key", "old", "new", "change"}]}.
     Only tenants with actual changes are included.
-
-    With `old_sources` / `new_sources` (`load_effective_from_dir`'s second
-    half, #2116) the comparison is of (value, source file): a key whose value
-    is unchanged but whose file differs is a change of type `moved` — the
-    number did not move, the ownership did (a tenant file now pins what it
-    used to inherit, or stops pinning it). Every entry then also carries
-    `old_source` / `new_source` (`{"layer", "file"}`, or None where the key
-    is absent on that side).
     """
     all_tenants = set(old_configs.keys()) | set(new_configs.keys())
-    with_sources = old_sources is not None or new_sources is not None
     diffs = {}
 
     for tenant in sorted(all_tenants):
@@ -326,28 +273,19 @@ def compute_diff(old_configs, new_configs, old_sources=None, new_sources=None):
         for key in sorted(all_keys):
             old_val = old_metrics.get(key)
             new_val = new_metrics.get(key)
-            old_src = ((old_sources or {}).get(tenant) or {}).get(key)
-            new_src = ((new_sources or {}).get(tenant) or {}).get(key)
-            moved = (old_src is not None and new_src is not None
-                     and old_src.get("file") != new_src.get("file"))
+            if old_val == new_val:
+                continue
 
-            change_type = ("unchanged" if old_val == new_val
-                           else classify_change(old_val, new_val))
+            change_type = classify_change(old_val, new_val)
             if change_type == "unchanged":
-                if not moved:
-                    continue
-                change_type = "moved"
+                continue
 
-            entry = {
+            changes.append({
                 "key": key,
                 "old": old_val,
                 "new": new_val,
                 "change": change_type,
-            }
-            if with_sources:
-                entry["old_source"] = old_src
-                entry["new_source"] = new_src
-            changes.append(entry)
+            })
 
         if changes:
             diffs[tenant] = changes
@@ -361,11 +299,10 @@ def load_custom_alerts_from_dir(dir_path):
     Returns {tenant_name: {recipe_name: recipe_dict}}. Only tenants declaring
     at least one named recipe are included.
 
-    Scope note: UNLIKE the metric diff above (which compares values written
-    plus inherited, with their source file — #2116), this reads each top-level
-    tenant file's own declarations and does NOT resolve `_defaults.yaml`
-    inheritance — `_defaults` files and sub-directories are skipped by the
-    loader. Inherited platform/domain policy recipes are out of scope here.
+    Scope note: like the metric diff above, this reads each tenant file's own
+    declarations and does NOT resolve `_defaults.yaml` inheritance — `_defaults`
+    files are skipped by the loader. Inherited platform/domain policy recipes
+    are out of scope here (consistent with how metric diffs ignore `_defaults`).
     The ADR-024 (#741) compiler in scripts/tools/dx/custom_alerts/ owns the full
     inheritance-resolved view.
     """
@@ -424,8 +361,8 @@ def load_settings_from_dir(dir_path):
     known ones — so a reserved key added later is reported without touching
     this tool. `_custom_alerts` is left out: it has its own section.
 
-    Not the metric diff's scope (#2116): the top-level tenant files' own
-    declarations, not `_defaults.yaml` inheritance or sub-directories.
+    Same scope as the metric diff: the tenant file's own declarations, not
+    `_defaults.yaml` inheritance.
     """
     if not Path(dir_path).is_dir():
         return {}
@@ -662,17 +599,6 @@ def _format_value(val):
     return str(val)
 
 
-def _value_cell(val, source, moved):
-    """A Before / After cell: the value, plus the file it comes from when it
-    is inherited (not the tenant's own file) or when the change is a `moved`
-    (#2116). The file name goes in a code span (F5: rendered from the PR's
-    tree, i.e. untrusted)."""
-    cell = _format_value(val)
-    if source and (moved or source.get("layer") != "tenant"):
-        cell += f" (from {_code_span(source.get('file'))})"
-    return cell
-
-
 def render_markdown(diffs, old_dir, new_dir, profile_diffs=None,
                     custom_alert_diffs=None, setting_diffs=None):
     """Render a Markdown blast radius report."""
@@ -813,11 +739,9 @@ def render_markdown(diffs, old_dir, new_dir, profile_diffs=None,
 
         for c in changes:
             alert = estimate_affected_alerts(c["key"])
-            moved = c["change"] == "moved"
             lines.append(
-                f"| {c['key']} | {_value_cell(c['old'], c.get('old_source'), moved)} "
-                f"| {_value_cell(c['new'], c.get('new_source'), moved)} "
-                f"| {c['change']} | {alert} |"
+                f"| {c['key']} | {_format_value(c['old'])} "
+                f"| {_format_value(c['new'])} | {c['change']} | {alert} |"
             )
         lines.append("")
         total_changes += len(changes)
@@ -915,10 +839,7 @@ def main():
       * ``ValueError: Circular reference detected`` — a self-referencing YAML
         anchor (``tenants: &a {t: *a}``). ``yaml.safe_load`` accepts it
         happily; the raise comes from ``json.dumps`` under ``--format json``,
-        i.e. AFTER loading and rendering. (Since #2116 the metric diff's
-        ``da-guard effective`` load refuses such a file first, named, through
-        the da-guard handler below; the broad catch stays for the readers
-        that still parse with PyYAML.)
+        i.e. AFTER loading and rendering.
 
     An enumerated tuple was tried and provably misses the last two, so this is
     anchored on "the run did not complete" rather than on a list of spellings.
@@ -935,14 +856,6 @@ def main():
     args = build_parser().parse_args()
     try:
         return _run(args)
-    except (DaGuardNotFoundError, ParseFailedError, DaGuardError) as exc:
-        # #2116: the metric diff reads both trees through `da-guard effective`.
-        # Its failure keeps the 2 below, but with da-guard's own stderr whole
-        # (the exporter's reasons), not the one line `str(exc)` would give.
-        print_load_error(exc)
-        print(f"  while comparing --old-dir {args.old_dir} --new-dir {args.new_dir}",
-              file=sys.stderr)
-        sys.exit(EXIT_CALLER_ERROR)
     except Exception as exc:  # noqa: BLE001 — deliberate; see docstring
         # ``sys.exit`` inside ``_run`` raises SystemExit, which derives from
         # BaseException, so the tool's own 0/1/2 exits pass through untouched.
@@ -981,10 +894,10 @@ def _run(args):
         print(f"ERROR: new-dir not found: {args.new_dir}", file=sys.stderr)
         sys.exit(EXIT_CALLER_ERROR)
 
-    old_configs, old_sources = load_effective_from_dir(args.old_dir)
-    new_configs, new_sources = load_effective_from_dir(args.new_dir)
+    old_configs = load_configs_from_dir(args.old_dir)
+    new_configs = load_configs_from_dir(args.new_dir)
 
-    diffs = compute_diff(old_configs, new_configs, old_sources, new_sources)
+    diffs = compute_diff(old_configs, new_configs)
     profile_diffs = compute_profile_diff(args.old_dir, args.new_dir)
     custom_alert_diffs = compute_custom_alert_diff(
         load_custom_alerts_from_dir(args.old_dir),

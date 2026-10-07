@@ -17,11 +17,6 @@ import config_diff as cd  # noqa: E402
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
 
-# #2116: the metric diff reads both trees through `da-guard effective`; the
-# tool (in-process or as a subprocess) finds this repo's build via
-# `$DA_GUARD_BINARY`.
-pytestmark = pytest.mark.usefixtures("da_guard_env")
-
 
 # ── 1. Flatten Tenant Config ────────────────────────────────────────
 
@@ -114,20 +109,15 @@ class TestComputeDiff:
 
 class TestLoadConfigsFromDir:
 
-    def test_flat_file_is_no_tenant(self):
-        """Flat format (legacy): {metric: value} without a tenants: wrapper.
-
-        #2116: the tree is read as the exporter reads it (`da-guard
-        effective`), and the exporter serves no tenant from such a file
-        (#2115 R3) — so it is not a tenant here either. The wrapped file
-        beside it is the control."""
+    def test_basic_loading_flat(self):
+        """Flat format (legacy): {metric: value} without tenants: wrapper."""
         with tempfile.TemporaryDirectory() as d:
             with open(os.path.join(d, "db-a.yaml"), "w", encoding="utf-8") as f:
                 yaml.dump({"mysql_connections": 50, "_routing": {}}, f)
-            with open(os.path.join(d, "db-b.yaml"), "w", encoding="utf-8") as f:
-                yaml.dump({"tenants": {"db-b": {"mysql_connections": 50}}}, f)
             result = cd.load_configs_from_dir(d)
-            assert result == {"db-b": {"mysql_connections": 50}}
+            assert "db-a" in result
+            assert "mysql_connections" in result["db-a"]
+            assert "_routing" not in result["db-a"]
 
     def test_basic_loading_wrapped(self):
         """Wrapped format (actual conf.d/): {tenants: {name: {metric: value}}}."""
@@ -282,25 +272,23 @@ class TestCLI:
 
 class TestEndToEnd:
 
-    def test_directory_comparison_inherited(self):
-        """#2116: a `_defaults.yaml` change reaches the tenant that inherits it
-        (it used to be outside the comparison: "No changes")."""
+    def test_directory_comparison_flat(self):
         with tempfile.TemporaryDirectory() as old_dir, \
              tempfile.TemporaryDirectory() as new_dir:
-            for d, v in ((old_dir, 80), (new_dir, 50)):
-                with open(os.path.join(d, "_defaults.yaml"), "w", encoding="utf-8") as f:
-                    yaml.dump({"defaults": {"mysql_connections": v, "redis_memory": 1024}}, f)
-                with open(os.path.join(d, "db-a.yaml"), "w", encoding="utf-8") as f:
-                    yaml.dump({"tenants": {"db-a": {"redis_memory": "1024"}}}, f)
+            # Old config (flat)
+            with open(os.path.join(old_dir, "db-a.yaml"), "w", encoding="utf-8") as f:
+                yaml.dump({"mysql_connections": 80, "redis_memory": 1024}, f)
+            # New config — tighter mysql, same redis
+            with open(os.path.join(new_dir, "db-a.yaml"), "w", encoding="utf-8") as f:
+                yaml.dump({"mysql_connections": 50, "redis_memory": 1024}, f)
 
-            old, old_src = cd.load_effective_from_dir(old_dir)
-            new, new_src = cd.load_effective_from_dir(new_dir)
-            diffs = cd.compute_diff(old, new, old_src, new_src)
+            old = cd.load_configs_from_dir(old_dir)
+            new = cd.load_configs_from_dir(new_dir)
+            diffs = cd.compute_diff(old, new)
 
-            assert list(diffs) == ["db-a"]
-            [c] = diffs["db-a"]
-            assert (c["key"], c["change"]) == ("mysql_connections", "tighter")
-            assert c["new_source"] == {"layer": "defaults", "file": "_defaults.yaml"}
+            assert len(diffs) == 1
+            assert diffs["db-a"][0]["key"] == "mysql_connections"
+            assert diffs["db-a"][0]["change"] == "tighter"
 
     def test_directory_comparison_wrapped(self):
         """End-to-end test with actual conf.d/ format (tenants: wrapper)."""
@@ -403,13 +391,12 @@ class TestExitCode:
          lambda p: Path(p).write_bytes(b"tenants:\n  db-a:\n    note: caf\xe9\n"),
          (), True),
         # A self-referencing anchor: yaml.safe_load ACCEPTS it, and json.dumps
-        # used to be what raised — downstream of every loader. Since #2116 the
-        # metric diff reads the tree through `da-guard effective`, whose load
-        # (the exporter's) refuses the file first and names it.
+        # is what raises — downstream of every loader, so no try/except placed
+        # around the loading step can reach it.
         ("anchor_cycle_json",
          lambda p: Path(p).write_text("tenants: &a\n  db-a:\n    self: *a\n",
                                       encoding="utf-8", newline="\n"),
-         ("--format", "json"), True),
+         ("--format", "json"), False),
     ])
     def test_exit_2_when_the_run_cannot_complete(self, label, writer, extra,
                                                  names_file):
@@ -418,8 +405,7 @@ class TestExitCode:
         The three cases sit in three different layers (decode / parse /
         serialize) on purpose: that spread is the argument for catching
         broadly rather than naming exception types, and the third case is the
-        one that made a loader-level handler structurally insufficient (since
-        #2116 da-guard's load refuses it first; the row still pins rc 2).
+        one that makes a loader-level handler structurally insufficient.
         """
         with tempfile.TemporaryDirectory() as old_dir, \
              tempfile.TemporaryDirectory() as new_dir:

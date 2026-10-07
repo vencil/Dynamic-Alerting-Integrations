@@ -1,4 +1,4 @@
-"""「值屬於哪個檔」語意矩陣：threshold-recommend／threshold-govern／config-diff（#2116）。
+"""「值屬於哪個檔」語意矩陣：threshold-recommend／threshold-govern（#2116）。
 
 同一個值（tenant-a 的 `mysql_connections` = 60）依序放在：根 `defaults:`、平台檔
 `tenants:`、租戶檔、子樹 `_defaults.yaml`、profile；外加三個形狀——租戶檔寫舊拼法
@@ -18,8 +18,6 @@ from __future__ import annotations
 
 import argparse
 import collections
-import subprocess
-import sys
 import urllib.parse
 from pathlib import Path
 
@@ -29,9 +27,6 @@ import yaml
 import _lib_tenant_values as tv
 import threshold_govern as tg
 import threshold_recommend as tr
-
-REPO_ROOT = Path(__file__).resolve().parents[2]
-OPS = REPO_ROOT / "scripts" / "tools" / "ops"
 
 pytestmark = pytest.mark.usefixtures("da_guard_env")
 
@@ -148,7 +143,8 @@ def test_recommend_splits_own_from_inherited(where, tmp_path, stubs):
     if inherited_src is not None:
         r = by_key["mysql_connections"]
         assert (r.source_layer, r.source_file) == inherited_src, where
-        assert r.recommended is not None, where  # recommend queries inherited keys (reference)
+        # listed only: not queried, no recommended value (#2116)
+        assert (r.recommended, r.promql) == (None, ""), where
     assert all(r.source_layer == "tenant" for r in a.keys), where
     # control
     b = reports["tenant-b"]
@@ -227,72 +223,5 @@ def test_export_patch_never_writes_an_inherited_value(tmp_path, stubs):
     assert "# was 60 (from tenant-a.yaml)" in own
     inh = [ln for ln in patch.splitlines() if "(inherited) mysql_connections" in ln]
     assert len(inh) == 1 and inh[0].lstrip().startswith("#")
-    assert "was 60 (from _defaults.yaml)" in inh[0]
-
-
-# ── config-diff: (value, source file) ────────────────────────────────────
-_T0_OTHER = 'tenants:\n  t0:\n    foo_unmapped_key: "3"\n'
-_T0_OWN = 'tenants:\n  t0:\n    foo_unmapped_key: "3"\n    mysql_connections: "60"\n'
-_D60 = "defaults:\n  mysql_connections: 60\n"
-_D80 = "defaults:\n  mysql_connections: 80\n"
-_PLAT60 = "tenants:\n  t0:\n    mysql_connections: 60\n"
-
-DIFF_CASES = {
-    # control: a tenant-own value changes
-    "tenant-value": ({"_defaults.yaml": _D80, "t0.yaml": _T0_OWN},
-                     {"_defaults.yaml": _D80, "t0.yaml": _T0_OWN.replace('"60"', '"70"')},
-                     1, "looser", None),
-    "defaults->tenant": ({"_defaults.yaml": _D60, "t0.yaml": _T0_OTHER},
-                         {"_defaults.yaml": _D60, "t0.yaml": _T0_OWN},
-                         1, "moved", ("_defaults.yaml", "t0.yaml")),
-    "platform->tenant": ({"_defaults.yaml": _D80, "_platform.yaml": _PLAT60, "t0.yaml": _T0_OTHER},
-                         {"_defaults.yaml": _D80, "t0.yaml": _T0_OWN},
-                         1, "moved", ("_platform.yaml", "t0.yaml")),
-    "tenant->platform": ({"_defaults.yaml": _D80, "t0.yaml": _T0_OWN},
-                         {"_defaults.yaml": _D80, "_platform.yaml": _PLAT60, "t0.yaml": _T0_OTHER},
-                         1, "moved", ("t0.yaml", "_platform.yaml")),
-    "defaults-value": ({"_defaults.yaml": _D60, "t0.yaml": _T0_OTHER},
-                       {"_defaults.yaml": _D80, "t0.yaml": _T0_OTHER},
-                       1, "looser", ("_defaults.yaml", "_defaults.yaml")),
-    # control: nothing changes
-    "unchanged": ({"_defaults.yaml": _D60, "t0.yaml": _T0_OTHER},
-                  {"_defaults.yaml": _D60, "t0.yaml": _T0_OTHER}, 0, None, None),
-}
-
-
-def _config_diff(old_d: Path, new_d: Path, *extra: str) -> subprocess.CompletedProcess:
-    return subprocess.run(
-        [sys.executable, str(OPS / "config_diff.py"), "--old-dir", str(old_d),
-         "--new-dir", str(new_d), *extra],
-        capture_output=True, text=True, encoding="utf-8", check=False, timeout=120)
-
-
-@pytest.mark.parametrize("case", sorted(DIFF_CASES))
-def test_config_diff_reports_value_and_source(case, tmp_path):
-    old, new, want_rc, want_change, want_files = DIFF_CASES[case]
-    old_d, new_d = _tree(tmp_path / "old", old), _tree(tmp_path / "new", new)
-    p = _config_diff(old_d, new_d, "--format", "json")
-    assert p.returncode == want_rc, (case, p.stdout, p.stderr)
-    diffs = yaml.safe_load(p.stdout)["metric_diffs"]
-    if want_change is None:
-        assert diffs == {}, case
-        return
-    [c] = diffs["t0"]
-    assert (c["key"], c["change"]) == ("mysql_connections", want_change), case
-    if want_files:
-        assert (c["old_source"]["file"], c["new_source"]["file"]) == want_files, case
-    md = _config_diff(old_d, new_d)
-    assert "No changes detected." not in md.stdout, case
-    if want_change == "moved":
-        row = next(ln for ln in md.stdout.splitlines() if ln.startswith("| mysql_connections"))
-        assert f"(from `{want_files[0]}`)" in row and f"(from `{want_files[1]}`)" in row, row
-
-
-def test_config_diff_da_guard_failure_is_rc2_with_its_stderr(tmp_path):
-    """fail-closed: a file the exporter drops is rc 2, named, da-guard's stderr passed on."""
-    old_d = _tree(tmp_path / "old", {"_defaults.yaml": _D60, "t0.yaml": _T0_OTHER})
-    new_d = _tree(tmp_path / "new", {"_defaults.yaml": _D60, "t0.yaml": "tenants: [unclosed\n"})
-    p = _config_diff(old_d, new_d)
-    assert p.returncode == 2, p.stderr
-    assert p.stdout == ""
-    assert "t0.yaml" in p.stderr and tv.DA_GUARD_PREFIX in p.stderr, p.stderr
+    assert "mysql_connections: inherited, is 60 (from _defaults.yaml)" in inh[0]
+    assert '"' not in inh[0], "an inherited key carries no recommended value"

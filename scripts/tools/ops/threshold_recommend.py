@@ -733,7 +733,6 @@ def analyze_tenant(
     key_sources: Optional[dict[str, KeySource]] = None,
     aliases: Optional[dict[str, str]] = None,
     source_file: str = "",
-    query_inherited: bool = True,
 ) -> TenantRecommendation:
     """Analyze one tenant and generate threshold recommendations.
 
@@ -744,8 +743,9 @@ def analyze_tenant(
     recommendation.
 
     #2116: a key whose `key_sources` layer is not "tenant" is inherited and
-    goes to `inherited` (reference only); with `query_inherited=False` it is
-    listed without querying Prometheus. A key written in a retired spelling
+    goes to `inherited`: listed with its current value and source file only —
+    no Prometheus query, no recommended value (a change to it belongs in the
+    file that owns it, not in this tenant's). A key written in a retired spelling
     is looked up in the observed-map by its canonical spelling (`aliases`,
     the exporter's table) and keeps the written one in `key`.
 
@@ -762,7 +762,6 @@ def analyze_tenant(
             every key as the tenant's own.
         aliases: retired base key -> canonical base key (served-values).
         source_file: the tenant's own file, relative to the config dir.
-        query_inherited: query Prometheus for inherited keys too.
 
     Returns:
         TenantRecommendation with per-key results.
@@ -780,20 +779,21 @@ def analyze_tenant(
         if is_reserved_key(key) or (layer != "tenant" and key.startswith("_")):
             continue
         canonical = canonical_key(key, aliases)
+        if layer != "tenant":
+            report.inherited.append(KeyRecommendation(
+                key=key, current_value=current_value, reason=_INHERITED_REASON,
+                source_layer=layer, source_file=src.file if src is not None else "",
+                canonical_key=canonical if canonical != key else ""))
+            continue
         rec = _recommend_key(
             tenant_name, key, current_value,
             observed_map.get(canonical),
             prometheus_url=prometheus_url, lookback=lookback,
             min_samples=min_samples,
             dry_run=dry_run,
-            query=(layer == "tenant" or query_inherited),
         )
-        rec.source_layer = layer
         rec.source_file = src.file if src is not None else source_file
         rec.canonical_key = canonical if canonical != key else ""
-        if layer != "tenant":
-            report.inherited.append(rec)
-            continue
         # An actionable recommendation (upper or lower) counts as a change; a
         # within-margin / force_manual / skipped key does not (_exportable is the
         # single source of truth — a lower within-margin has recommended=None).
@@ -805,8 +805,8 @@ def analyze_tenant(
     return report
 
 
-_NOT_QUERIED_REASON = ("inherited — not queried (threshold-govern governs only the keys "
-                       "a tenant's own file writes; threshold-recommend shows these)")
+_INHERITED_REASON = ("inherited — listed only, not queried: change it in the file that "
+                     "owns it")
 
 
 def _recommend_key(
@@ -819,10 +819,9 @@ def _recommend_key(
     lookback: str,
     min_samples: int,
     dry_run: bool,
-    query: bool,
 ) -> KeyRecommendation:
     """One key's recommendation (`entry` is its observed-map entry, None when
-    unmapped). `query=False` lists the key without querying Prometheus."""
+    unmapped)."""
     # #719: resolve the observed-workload series this threshold is compared
     # against. fail-loud skip when there is no usable mapping.
     if entry is None:
@@ -838,10 +837,6 @@ def _recommend_key(
             current_value=current_value,
             reason=f"skipped: {skip_reason}",
         )
-    if not query:
-        return KeyRecommendation(key=key, current_value=current_value,
-                                 reason=_NOT_QUERIED_REASON)
-
     promql = build_metric_query(observed_series, tenant_name, lookback)
 
     if dry_run:
@@ -916,7 +911,6 @@ def run_analysis(
     lookback: str = "7d",
     min_samples: int = 100,
     dry_run: bool = False,
-    query_inherited: bool = True,
 ) -> list[TenantRecommendation]:
     """Run threshold analysis for all (or filtered) tenants.
 
@@ -925,7 +919,9 @@ def run_analysis(
     /effective resolves it, so a key a tenant inherits is seen, and is told
     apart from a key its own file writes. The alias table comes from
     `da-guard served-values`; its stderr and the files it serves no tenant
-    from are printed to stderr (`print_load_warnings`).
+    from are printed to stderr (`print_load_warnings`). A tree served-values
+    refuses (e.g. the root `defaults:` and a tenant both writing an
+    `X_critical` key, deferred under #2115) therefore fails this tool too.
 
     Args:
         config_dir: Path to tenant config directory.
@@ -934,7 +930,6 @@ def run_analysis(
         lookback: Lookback period.
         min_samples: Minimum sample threshold.
         dry_run: Only generate queries.
-        query_inherited: also query Prometheus for inherited keys.
 
     Returns:
         List of TenantRecommendation.
@@ -971,7 +966,6 @@ def run_analysis(
             key_sources=eff.key_sources,
             aliases=tree.aliases,
             source_file=eff.source_file,
-            query_inherited=query_inherited,
         )
         if report.keys or report.inherited:
             reports.append(report)
@@ -1150,14 +1144,17 @@ def _from(r: KeyRecommendation) -> str:
 
 
 def _inherited_line(r: KeyRecommendation) -> str:
-    """An inherited key's recommendation as a comment, never a value line:
-    merging it into the tenant's file would pin the tenant to its own copy of
-    a value another file owns (#2116). `cur` is safe on one line for the
-    reason given in `format_export_patch`."""
-    val = _format_threshold_value(r.recommended)
-    cur = r.current_value if r.current_value is not None else "?"
-    return (f'{r.key}: "{val}" — inherited, was {cur}{_from(r)}, {_delta_str(r)}; '
-            "change it in that file — setting it in this tenant's file pins the tenant")
+    """An inherited key as a comment, never a value line: its current value
+    and the file that owns it, no recommended value (it is not queried).
+    Merging it into the tenant's file would pin the tenant to its own copy of
+    a value another file owns (#2116). The value was never float-parsed, so
+    a mapping is shown as `(scheduled)` and any other value is collapsed to
+    one escaped line — a raw newline would break out of the comment."""
+    cur = r.current_value
+    shown = ("(scheduled)" if isinstance(cur, dict)
+             else "?" if cur is None else " ".join(safe_label(str(cur)).split()))
+    return (f"{r.key}: inherited, is {shown}{_from(r)} — change it in that file; "
+            "setting it in this tenant's file pins the tenant")
 
 
 def format_export_patch(reports: list[TenantRecommendation]) -> str:
@@ -1173,8 +1170,9 @@ def format_export_patch(reports: list[TenantRecommendation]) -> str:
 
     #2116: every value line names the file its current value comes from. A
     key the tenant inherits (defaults / platform / profile) is never a value
-    line: its recommendation is a comment naming the owning file, because
-    merging it into the tenant's file would pin the tenant to that number.
+    line: it is listed as a comment with its current value and the owning
+    file (no recommended value — it is not queried), because merging it into
+    the tenant's file would pin the tenant to that number.
 
     T1 (advisory fragment, 0 new deps): the operator applies it; the tool does
     NOT edit conf.d in place (that heavier ruamel round-trip is deferred —
@@ -1182,7 +1180,7 @@ def format_export_patch(reports: list[TenantRecommendation]) -> str:
     """
     exportable = [
         (rep, [r for r in rep.keys if _exportable(r)],
-         sorted((r for r in rep.inherited if _exportable(r)), key=lambda x: x.key))
+         sorted(rep.inherited, key=lambda x: x.key))
         for rep in reports
     ]
     total = sum(len(ks) for _, ks, _i in exportable)

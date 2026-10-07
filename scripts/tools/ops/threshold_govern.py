@@ -216,8 +216,8 @@ class ForceManualKey:
 class InheritedKey:
     """A threshold a tenant inherits from a defaults / platform / profile file
     (#2116): its value is not in the tenant's file, so a governance PR on that
-    file cannot change it and must not pin it. Listed for reference only; the
-    recommender (threshold-recommend) shows its recommendation."""
+    file cannot change it and must not pin it. Listed for reference only (not
+    queried; threshold-recommend lists it the same way)."""
 
     tenant: str
     key: str
@@ -859,11 +859,11 @@ def format_text_report(
             f" (+{len(files) - 5} more)" if len(files) > 5 else "")
         head = (
             f"ℹ {n_tenants} 個租戶的 {len(inh)} 個閾值繼承自平台／defaults／profile 檔"
-            f"（{shown}），只列參考、不治理：PR 只改租戶自己的檔（#2116；建議見 threshold-recommend）。"
+            f"（{shown}），只列參考、不治理：PR 只改租戶自己的檔（#2116）。"
             if _LANG == "zh" else
             f"ℹ {len(inh)} threshold(s) across {n_tenants} tenant(s) are inherited from a "
             f"defaults / platform / profile file ({shown}) — reference only, not governed: "
-            "a PR edits the tenant's own file only (#2116; threshold-recommend shows them)."
+            "a PR edits the tenant's own file only (#2116)."
         )
         return ["", "-" * 78, head]
 
@@ -1017,9 +1017,6 @@ def run(args: argparse.Namespace) -> GovernanceResult:
         lookback=args.lookback,
         min_samples=args.min_samples,
         dry_run=False,
-        # #2116: inherited keys are listed, not governed — querying them would
-        # only add Prometheus load to a run that cannot act on them.
-        query_inherited=False,
     )
     plans = build_governance_plan(reports, args.min_delta_pct)
     ungoverned = collect_ungoverned_lower_bound(reports)

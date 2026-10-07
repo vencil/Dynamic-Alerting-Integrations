@@ -2376,9 +2376,6 @@ da-tools config-diff --old-dir <path> --new-dir <path> [options]
 | `removed` | 移除 metric key | 失去 alert 覆蓋 |
 | `toggled` | enable ↔ disable | 開啟或關閉 alert |
 | `modified` | 複雜值變更 | 需人工審閱 |
-| `moved` | 值不變，但來源檔換了（例如從 `_defaults.yaml` 或平台檔搬進租戶檔） | 所有權轉移：之後改平台值不再影響這個租戶，或反之 |
-
-閾值比對的是每個租戶的**生效值與來源檔**（`da-guard effective`，含 `_defaults.yaml`、平台檔 `tenants:`、profile 與子目錄的租戶）：改 `_defaults.yaml` 會列在每個繼承它的租戶下，繼承來的值在 Before／After 欄註明來源檔。`_` 開頭設定與 `_custom_alerts` 兩節仍只讀根目錄租戶檔自己寫的內容。需要 da-guard（da-tools image 內附；或以 `$DA_GUARD_BINARY` 指定）；da-guard 失敗或有檔 exporter 載不進來時回 2，並轉出 da-guard 的 stderr。
 
 **輸出**
 
@@ -2871,7 +2868,7 @@ da-tools threshold-recommend --generate-observed-map
 
 > **#720 STAGE-1（`--export-patch`）**：輸出一段 `tenants:`-rooted 的 conf.d override（只含有實際建議的 key，within-margin / 略過的 key 以註解列出）。operator review 後 merge 進對應 `conf.d/<tenant>.yaml` 並自開 PR → 既有 `backtest.yaml` CI 自動貼 old-vs-new 觸發次數風險報告（STAGE-1 價值基石）。本工具**不就地改檔**（in-place ruamel round-trip 為 defer，見 #721）。
 >
-> **#2116 值的來源**：租戶、目前值與每個 key 屬於哪個檔取自 `da-guard effective`（與 tenant-api `/effective` 同一套解析，含 `_defaults.yaml`、平台檔 `tenants:`、profile 與子目錄的租戶）。租戶檔自己寫的 key 是一般推薦；繼承自 defaults／平台／profile 的 key 另列「Inherited, reference only」，只供參考。`--export-patch` 每行標出目前值的來源檔（`# was 60 (from tenant-a.yaml)`），繼承的 key 只以註解列出並指名擁有它的檔——寫進租戶檔會把租戶釘在那個值。租戶檔用舊拼法（如 `mysql_cpu`）時以 exporter 的別名表查 observed-map，輸出保留檔案裡的拼法。需要 da-guard（da-tools image 內附；或以 `$DA_GUARD_BINARY` 指定），失敗時回 2 並轉出 da-guard 的 stderr。
+> **#2116 值的來源**：租戶、目前值與每個 key 屬於哪個檔取自 `da-guard effective`（與 tenant-api `/effective` 同一套解析，含 `_defaults.yaml`、平台檔 `tenants:`、profile 與子目錄的租戶）。租戶檔自己寫的 key 是一般推薦；繼承自 defaults／平台／profile 的 key 另列「Inherited, reference only」，只列目前值與來源檔，不查 Prometheus、不產生推薦值。`--export-patch` 每行標出目前值的來源檔（`# was 60 (from tenant-a.yaml)`），繼承的 key 只以註解列出目前值與擁有它的檔——寫進租戶檔會把租戶釘在那個值。租戶檔用舊拼法（如 `mysql_cpu`）時以 exporter 的別名表查 observed-map，輸出保留檔案裡的拼法。需要 da-guard（da-tools image 內附；或以 `$DA_GUARD_BINARY` 指定），失敗時回 2 並轉出 da-guard 的 stderr。別名表取自 `da-guard served-values`，所以 served-values 拒收的樹（例如根 `defaults:` 與租戶同時寫 `X_critical`）上本工具與 `threshold-govern` 都會回 2。
 >
 > **#719 資料源**：推薦值取自每個閾值 key 在 rule-pack alert 中**實際比對**的觀測 recording rule（透過 `scripts/tools/ops/metric_observed_map.yaml`），而非已設定的 `user_threshold`。無對映 / version-aware / 待人工解析的 key 會 fail-loud 略過並附原因。observed-map 由 `--generate-observed-map` 產生、CI drift-guard 把關。重新產生時採 **merge-preserve**（#916）：仍有效的人工 resolved `observed_series` 會跨 rule-pack 變更保留（pick 失效則降回 needs_review、已移除的 key 則 drop），摘要列出 preserved/demoted/dropped 計數、細節走 stderr WARN。
 >
