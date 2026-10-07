@@ -8,18 +8,13 @@
 # check are wired by scripts/ops/install_prepush_hook.sh, which puts a shim on
 # .git/hooks/pre-push in place of pre-commit's template.
 #
-# They had to leave: pre-commit reads git's pre-push stdin itself and hands a
-# hook at most ONE ref (hook_impl._pre_push_ns returns on the first pushable
-# line), so a push carrying several refs showed the guards one row — and none
-# at all when every row is a deletion (#1852). Measured with this repo's own
-# guards on git 2.55.0 / pre-commit 4.6.0: `git push origin aaa main` printed
-# "Guard: block direct push to main ... Passed" and main really moved on the
-# remote, while `git push origin main` alone was blocked. Every branch prefix
-# dev-rules #12 asks for — feat/ fix/ chore/ — sorts before `main`.
+# They had to leave: pre-commit reads git's pre-push stdin itself before its
+# hooks run (#1664), and the guards read only stdin, so a copy pre-commit runs
+# sees nothing being pushed and passes.
 #
 # ⛔ Do not add them back here, and do not "simplify" the install line back to
-# `pre-commit install --hook-type pre-push`: that reintroduces the one-ref
-# blindness, and it exits 1 outright while core.hooksPath is set (any value).
+# `pre-commit install --hook-type pre-push`: that does not install the guards,
+# and it exits 1 outright while core.hooksPath is set (any value).
 # `make pr-preflight` fails when the guards are not on the push path.
 #
 # These hooks run the lightweight CI checks locally before each commit,
@@ -71,10 +66,7 @@ repos:
       # --- The three pre-push guards used to be here (#1689) ---
       # protect-main-push / require-preflight-pass / mkdocs-strict-pre-push are
       # now run by scripts/ops/prepush_dispatch.sh, installed by
-      # scripts/ops/install_prepush_hook.sh. See this file's header for the
-      # measurement; the short version is that a hook run by pre-commit is shown
-      # at most one refspec, so a push carrying `feat/x` and `main` together
-      # could hide `main` from the guard that exists to block it.
+      # scripts/ops/install_prepush_hook.sh. See this file's header for why.
       #
       # ⛔ Adding a `stages: [pre-push]` entry here does not just duplicate the
       # dispatcher — the copy that pre-commit runs is the BLIND one.

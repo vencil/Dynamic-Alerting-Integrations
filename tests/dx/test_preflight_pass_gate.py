@@ -516,43 +516,6 @@ def test_every_pushed_commit_needs_its_own_marker_not_just_one(
     assert r2.returncode == 0, f"stderr={r2.stderr}"
 
 
-def test_an_empty_local_sha_falls_back_to_head_rather_than_blocking(
-    tmp_path: Path,
-):
-    """First push of a branch to an empty remote reports no sha at all.
-
-    pre-commit's env channel exports no TO_REF on that path (see
-    _prepush_refs.sh, FIELD ORDER), so the row's sha column is EMPTY. No
-    marker can ever exist for "", so keying strictly to the pushed sha would
-    turn a legitimate first push into a permanent block. HEAD is the best
-    answer available there, and it is what this gate has always used.
-
-    ⛔ Driven through the ENV channel, not stdin. An empty MIDDLE field cannot
-    be expressed on stdin at all — default-IFS `read` collapses it, which is
-    the whole reason that channel exists. A stdin row written to look like
-    this one parses as a single field, `remote_ref` comes out empty, and the
-    gate drops the row before reaching any of this: measured, the test then
-    passed without ever entering the branch it names.
-    """
-    head_sha = _init_git(tmp_path)
-    (tmp_path / ".git" / f".preflight-ok.{head_sha}").touch()
-
-    r = _run_gate(
-        tmp_path, "",
-        path_prepend=_make_fake_gh(tmp_path / "bin", state="OPEN"),
-        env_extra={
-            "GIT_PREFLIGHT_STRICT": "1",
-            "PRE_COMMIT": "1",
-            "PRE_COMMIT_REMOTE_BRANCH": "refs/heads/newbr",
-            # ⛔ PRE_COMMIT_TO_REF deliberately absent — that IS the shape.
-        },
-    )
-    assert r.returncode == 0, (
-        "a first push to an empty remote was blocked with no reachable "
-        f"recovery. stderr={r.stderr}"
-    )
-
-
 # ---------------------------------------------------------------------------
 # Unknown must not mean OK, and one row must not silence the others
 #

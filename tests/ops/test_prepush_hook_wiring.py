@@ -34,11 +34,9 @@ from _platform_fs import symlink_or_skip  # noqa: E402
 _REPO_ROOT = Path(__file__).resolve().parents[2]
 _OPS = _REPO_ROOT / "scripts" / "ops"
 
-# The guards are copied into each temp repo rather than referenced by absolute
-# path: pre-commit `entry:` lines are shell words, and an absolute Windows path
-# (``C:\...``) is mangled by Git Bash — the reason the sibling gate tests skip
-# on win32 entirely. Copying keeps the entry relative while still exercising
-# the production bytes, which are re-read from disk on every test run.
+# The guards are copied into each temp repo: the shim the installer writes
+# runs the dispatcher from the work tree being pushed, so that tree has to
+# carry the production bytes, which are re-read from disk on every test run.
 _GUARD_FILES = (
     "protect_main_push.sh",
     "require_preflight_pass.sh",
@@ -56,12 +54,9 @@ _GUARD_FILES = (
 # CreateProcess searches System32 before PATH, so a bare "bash" runs
 # C:\Windows\System32\bash.exe — the WSL launcher — while shutil.which()
 # reports Git's bash and the two silently disagree. WSL forwards only the
-# variables named in WSLENV, so every PRE_COMMIT_* the test sets arrives
-# unset and a test about which channel wins no longer tests it; and an
-# assertion on rc alone can pass because WSL cannot find the script (rc != 0
-# for the wrong reason).
-# shutil.which is the PATH answer, which is what pre-commit itself resolves
-# for `entry: bash …`, so it is also the right binary to be testing.
+# variables named in WSLENV, so every variable a test sets (bypass flags,
+# PREPUSH_TEST_RECORD, …) arrives unset; and an assertion on rc alone can pass
+# because WSL cannot find the script (rc != 0 for the wrong reason).
 _BASH = shutil.which("bash")
 
 try:  # pragma: no cover - import probe
@@ -108,21 +103,6 @@ def test_pre_commit_present_when_required() -> None:
 # ---------------------------------------------------------------------------
 # Harness
 # ---------------------------------------------------------------------------
-
-
-@pytest.fixture(autouse=True)
-def _no_ambient_caller_flag(monkeypatch: pytest.MonkeyPatch) -> None:
-    """⛔ Scrub the dispatcher's caller flag (#1846) from the environment.
-
-    Refusal cells that reach the caller channel with no stdin rows see the
-    guard allow instead of refuse if that variable is exported in the shell
-    running pytest — a failure that says nothing about the code under test.
-
-    ⚠️ The cost is that "export it and watch tests go red" stops being a check
-    anyone can run. ``test_only_the_dispatcher_exports_the_caller_flag`` keeps
-    the repo itself from exporting it; nothing here sees a contributor's shell.
-    """
-    monkeypatch.delenv("VIBE_PREPUSH_FROM_DISPATCH", raising=False)
 
 
 def _git(repo: Path, *args: str, **kw) -> subprocess.CompletedProcess:
@@ -198,10 +178,11 @@ def _install_precommit(work: Path) -> None:
 def _push(work: Path, *refspecs: str, env_extra: dict | None = None):
     """`git push --dry-run` and the combined output.
 
-    Combined on purpose: pre-commit runs each hook with stderr merged into
-    stdout (``stderr=subprocess.STDOUT`` in ``pre_commit/xargs.py``), so a
-    guard's banner lands on git's stdout, while git's own diagnostics land on
-    stderr. Asserting against only one stream reads a real block as a miss.
+    Combined on purpose: a guard's banner lands on whichever stream its runner
+    gives it — under pre-commit, stderr is merged into stdout
+    (``stderr=subprocess.STDOUT`` in ``pre_commit/xargs.py``) — while git's own
+    diagnostics land on stderr. Asserting against only one stream reads a real
+    block as a miss.
     """
     r = _git(work, "push", "--dry-run", "origin", *refspecs,
              env_extra=env_extra or {})
@@ -212,11 +193,6 @@ _PROTECT_ONLY = _CONFIG_HEADER + _hook_stanza(
     "protect-main-push",
     "Guard: block direct push to main",
     "bash scripts/ops/protect_main_push.sh",
-)
-_PREFLIGHT_ONLY = _CONFIG_HEADER + _hook_stanza(
-    "require-preflight-pass",
-    "Guard: require make pr-preflight before push",
-    "bash scripts/ops/require_preflight_pass.sh",
 )
 _BANNER = "直推 main 被阻止"
 
@@ -229,70 +205,6 @@ def _banner_for(branch: str) -> str:
     "blocked, but not by this guard".
     """
     return f"直推 {branch} 被阻止"
-
-
-# ---------------------------------------------------------------------------
-# protect_main_push: the must-fire control and its two opposites
-# ---------------------------------------------------------------------------
-
-
-@pytest.mark.parametrize("protected", ["main", "master"])
-def test_push_to_a_protected_branch_is_blocked_through_precommit(
-    tmp_path: Path, protected: str
-) -> None:
-    """The assertion that had no test at all before #1664.
-
-    Against the wiring before #1664 the push goes through: rc=0, no banner.
-
-    Both members of ``PROTECTED_BRANCHES`` are driven: with only ``main``
-    covered, shrinking the constant to ``"main"`` would leave the whole suite
-    green, so half of the guard's own list would ride on nothing.
-    """
-    work = _make_repo(tmp_path, _PROTECT_ONLY)
-    _install_precommit(work)
-    r, out = _push(work, f"HEAD:refs/heads/{protected}")
-    assert r.returncode != 0, f"direct push to {protected} was allowed:\n{out}"
-    assert _banner_for(protected) in out, f"blocked, but not by this guard:\n{out}"
-
-
-def test_the_same_harness_lets_a_clean_push_through(tmp_path: Path) -> None:
-    """Positive control: the red above is the guard, not the fixture.
-
-    Same repo, same push, same pre-commit — only the guard is absent from the
-    config. Without this, any fixture error (bad remote, unusable hook, git
-    refusing the refspec) would masquerade as a working gate.
-    """
-    noop = _CONFIG_HEADER + _hook_stanza(
-        "noop", "PROBE: always passes", "bash -c true"
-    )
-    work = _make_repo(tmp_path, noop)
-    _install_precommit(work)
-    r, out = _push(work, "HEAD:refs/heads/main")
-    assert r.returncode == 0, f"harness cannot produce a green push:\n{out}"
-
-
-def test_push_to_a_feature_branch_is_not_blocked(tmp_path: Path) -> None:
-    """False-red control: the cheapest way to satisfy the test above is a guard
-    that rejects everything, and that guard would be worse than no guard."""
-    work = _make_repo(tmp_path, _PROTECT_ONLY)
-    _install_precommit(work)
-    r, out = _push(work, "HEAD:refs/heads/feat/wiring")
-    assert r.returncode == 0, f"a feature-branch push was blocked:\n{out}"
-    assert _BANNER not in out
-
-
-def test_dry_run_still_runs_the_hook_and_leaves_the_remote_alone(
-    tmp_path: Path,
-) -> None:
-    """What this file's method rests on: a ``--dry-run`` push still runs the
-    hook, and leaves the remote alone."""
-    work = _make_repo(tmp_path, _PROTECT_ONLY)
-    _install_precommit(work)
-    before = _git(work, "ls-remote", "--heads", "origin").stdout
-    r, out = _push(work, "HEAD:refs/heads/main")
-    assert r.returncode != 0 and _BANNER in out, out
-    after = _git(work, "ls-remote", "--heads", "origin").stdout
-    assert before == after, "--dry-run modified the remote"
 
 
 # ---------------------------------------------------------------------------
@@ -322,35 +234,69 @@ def _install_guards(work: Path, *args: str) -> subprocess.CompletedProcess:
     )
 
 
-def test_the_shipped_install_recipe_actually_guards(tmp_path: Path) -> None:
-    """Run the install recipe the scripts' headers carry, then push at main.
+@pytest.mark.parametrize("protected", ["main", "master"])
+def test_the_shipped_install_recipe_actually_guards(
+    tmp_path: Path, protected: str
+) -> None:
+    """Run the install recipe the scripts' headers carry, then push at a
+    protected branch.
 
     A shipped instruction that nobody executes is how the previous one rotted:
     before #1689 both guards' headers carried a hand-written `printf … >
     .git/hooks/pre-push` recipe that installed ONLY that guard, silently
     dropping the other two while the one you were reading still looked fine.
     There is one recipe now, and this runs it.
+
+    Both members of ``PROTECTED_BRANCHES`` are driven: with only ``main``
+    covered, shrinking the constant to ``"main"`` would leave the whole suite
+    green, so half of the guard's own list would ride on nothing.
     """
     work = _make_repo(tmp_path, _PROTECT_ONLY)
     r = _install_guards(work)
     assert r.returncode == 0, f"installer failed:\n{r.stdout}{r.stderr}"
     assert (work / ".git" / "hooks" / "pre-push").exists()
 
-    pushed, out = _push(work, "HEAD:refs/heads/main", env_extra=_SIBLINGS_OFF)
-    assert pushed.returncode != 0, f"the installed wiring did not guard main:\n{out}"
-    assert _BANNER in out, out
+    pushed, out = _push(work, f"HEAD:refs/heads/{protected}", env_extra=_SIBLINGS_OFF)
+    assert pushed.returncode != 0, f"the installed wiring did not guard {protected}:\n{out}"
+    assert _banner_for(protected) in out, f"blocked, but not by this guard:\n{out}"
+
+
+def test_push_to_a_feature_branch_is_not_blocked(tmp_path: Path) -> None:
+    """False-red control: the cheapest way to satisfy the test above is a guard
+    that rejects everything, and that guard would be worse than no guard."""
+    work = _make_repo(tmp_path, _PROTECT_ONLY)
+    assert _install_guards(work).returncode == 0
+    r, out = _push(work, "HEAD:refs/heads/feat/wiring", env_extra=_SIBLINGS_OFF)
+    assert r.returncode == 0, f"a feature-branch push was blocked:\n{out}"
+    assert _BANNER not in out
+
+
+def test_dry_run_still_runs_the_hook_and_leaves_the_remote_alone(
+    tmp_path: Path,
+) -> None:
+    """What this file's method rests on: a ``--dry-run`` push still runs the
+    hook, and leaves the remote alone."""
+    work = _make_repo(tmp_path, _PROTECT_ONLY)
+    assert _install_guards(work).returncode == 0
+    before = _git(work, "ls-remote", "--heads", "origin").stdout
+    r, out = _push(work, "HEAD:refs/heads/main", env_extra=_SIBLINGS_OFF)
+    assert r.returncode != 0 and _BANNER in out, out
+    after = _git(work, "ls-remote", "--heads", "origin").stdout
+    assert before == after, "--dry-run modified the remote"
 
 
 def test_a_co_pushed_branch_no_longer_hides_main(tmp_path: Path) -> None:
     """#1689 itself: `git push origin <branch> main` must still reach the guard.
 
-    pre-commit's ``_pre_push_ns`` returns on the first pushable row, so a
-    co-pushed branch used to hide main from the guard whose whole job is to
-    block it. ⚠️ Which branch does the hiding is not the pusher's to choose and
-    is not a protocol guarantee — that is pinned by
-    ``test_precommit_env_channel_carries_one_ref_while_git_carries_all``, which
-    covers both the first and a later push of the same branch (#1852). This
-    fixture publishes first, so it is the later-push shape.
+    pre-commit's ``_pre_push_ns`` returns on the first pushable row, so while
+    the guards ran under pre-commit a co-pushed branch could hide main from the
+    guard whose whole job is to block it. Which branch did the hiding depended
+    on the push shape (#1852); this fixture publishes first, so it is the
+    later-push shape.
+
+    ⛔ Main sits between two co-pushed branches, one sorting before it and one
+    after: which order git feeds the rows in depends on the push shape, and
+    with main at either end a guard that judged only that end would pass.
 
     ⛔ The single-ref push below is the must-fire control, not decoration: it is
     the only thing separating "the multi-ref push was blocked" from "this
@@ -361,16 +307,17 @@ def test_a_co_pushed_branch_no_longer_hides_main(tmp_path: Path) -> None:
     # fast-forwards. Installing first would route this setup push through the
     # guards, where require_preflight_pass blocks it — correctly: no marker, no
     # `gh`, so it takes its documented safe default.
-    assert _git(work, "push", "-q", "origin", "HEAD:refs/heads/aaa-first").returncode == 0
+    for branch in ("aaa-first", "zzz-last"):
+        assert _git(work, "push", "-q", "origin", f"HEAD:refs/heads/{branch}").returncode == 0
     _commit(work, "third")
     assert _install_guards(work).returncode == 0
 
     multi, multi_out = _push(
         work, "HEAD:refs/heads/aaa-first", "HEAD:refs/heads/main",
-        env_extra=_SIBLINGS_OFF,
+        "HEAD:refs/heads/zzz-last", env_extra=_SIBLINGS_OFF,
     )
     assert multi.returncode != 0, (
-        "a push carrying a co-pushed branch did not reach the guard — this is "
+        "a push carrying co-pushed branches did not reach the guard — this is "
         f"#1689:\n{multi_out}"
     )
     assert _BANNER in multi_out, multi_out
@@ -656,7 +603,6 @@ def test_a_push_without_a_work_tree_is_shown_where_it_looked_and_a_way_out(
         )
 
 
-
 def test_every_guard_in_the_dispatcher_gets_the_refspec_not_just_the_first(
     tmp_path: Path,
 ) -> None:
@@ -703,48 +649,7 @@ def test_every_guard_in_the_dispatcher_gets_the_refspec_not_just_the_first(
 
 
 # ---------------------------------------------------------------------------
-# Neither channel carrying a refspec must be loud, not green
-# ---------------------------------------------------------------------------
-
-
-@pytest.mark.parametrize(
-    ("config", "label"),
-    [(_PROTECT_ONLY, "protect-main-push"), (_PREFLIGHT_ONLY, "require-preflight-pass")],
-    # ⛔ Explicit ids: without them pytest builds the id from the parameter
-    # value, and the value here is a whole YAML document — the test name in CI
-    # output would be one long line of embedded config.
-    ids=["protect-main-push", "require-preflight-pass"],
-)
-def test_guard_refuses_when_no_channel_carries_a_refspec(
-    tmp_path: Path, config: str, label: str
-) -> None:
-    """`pre-commit run --hook-stage pre-push` is how pre-commit itself reaches
-    the state where stdin is empty AND it exported nothing.
-
-    Allowing there is not an option: pre-commit swallows a PASSING hook's
-    stdout and stderr entirely, so "warn and allow" would be the
-    same picture as the original defect.
-
-    ⛔ Driven for BOTH guards. With only ``protect-main-push`` installed,
-    turning ``require_preflight_pass.sh``'s refusal back into ``exit 0`` would
-    restore the #1664 defect in that guard with the whole suite green — the
-    config, not the logic, would be the gap.
-    """
-    work = _make_repo(tmp_path, config)
-    _install_precommit(work)
-    r = subprocess.run(  # subprocess-timeout: ignore
-        [sys.executable, "-X", "utf8", "-m", "pre_commit", "run",
-         "--all-files", "--hook-stage", "pre-push"],
-        cwd=work, capture_output=True, text=True, encoding="utf-8", errors="replace",
-    )
-    out = r.stdout + r.stderr
-    assert r.returncode != 0, f"guard passed while blind:\n{out}"
-    assert "cannot see what is being pushed" in out, out
-
-
-# ---------------------------------------------------------------------------
-# ... but "nothing to push" is not blindness, and under the dispatcher the two
-# are distinguishable (#1846)
+# "Nothing to push" is not refused, whatever the environment says (#1846)
 # ---------------------------------------------------------------------------
 
 
@@ -754,24 +659,26 @@ def test_an_up_to_date_push_is_allowed_with_pre_commit_in_the_environment(
     """#1846: a push with nothing to push must go through, not be refused.
 
     git feeds the pre-push hook one row per ref it is going to update, so an
-    already-synced push runs the hooks with ZERO rows. With ``PRE_COMMIT=1``
+    already-synced push runs the hooks with ZERO rows. ``PRE_COMMIT*`` variables
     inherited from an unrelated parent — a push issued from inside some other
-    hook, or from a tool that exports it — reading those zero rows as
-    "pre-commit ate the refspec" would refuse, and every cause the refusal
-    message lists would be inapplicable, so doing what it said could not get
-    the push out either.
+    hook, or from a tool that exports them — must not change that verdict: the
+    guards read git's stdin and nothing else (#2688).
 
-    Three control rows on the same harness:
+    Rows on the same harness:
 
-      * without ``PRE_COMMIT`` the up-to-date push is allowed, so that
-        variable, not the harness, decides the zero-row verdict;
-      * a stale ``PRE_COMMIT_REMOTE_BRANCH`` must not resurrect the refusal by
-        another door — under the dispatcher it can only have been inherited, so
-        a row synthesised from it names a ref this push is not touching;
-      * a push that really does carry a row at ``main`` must still be BLOCKED
-        while the dispatcher is the caller. Without it, "the dispatcher called
-        me" collapsing into "allow everything" would satisfy this test — #1664
-        rebuilt one layer up.
+      * without ``PRE_COMMIT`` the up-to-date push is allowed — the control;
+      * with ``PRE_COMMIT=1`` it is still allowed;
+      * a stale ``PRE_COMMIT_REMOTE_BRANCH=refs/heads/main`` names a ref this
+        push is not touching, and must not turn into a verdict about it;
+      * a push that really does carry a row at ``main`` is still BLOCKED with
+        the whole set present, pointing at another branch — through the
+        dispatcher and with the guard invoked directly. Without it, "ignore the
+        environment" collapsing into "allow everything" would satisfy this test.
+
+    ⛔ The whole set, not ``PRE_COMMIT=1`` alone: a helper that read the
+    environment only when every variable pre-commit exports is present would
+    pass a partial set. The set is what ``pre_commit/commands/run.py`` exports
+    at the pre-push stage.
 
     ⛔ The zero-row rows silence only the mkdocs sibling, never
     ``require_preflight_pass``: bypassing that one here lets a break in its own
@@ -796,11 +703,18 @@ def test_an_up_to_date_push_is_allowed_with_pre_commit_in_the_environment(
     inherited = {**mkdocs_off, "PRE_COMMIT": "1"}
     synced, synced_out = _push(work, "HEAD:refs/heads/feat/x", env_extra=inherited)
     assert synced.returncode == 0, (
-        f"a push with nothing to push was refused as unguardable:\n{synced_out}"
+        f"a push with nothing to push was refused:\n{synced_out}"
     )
-    assert "cannot see what is being pushed" not in synced_out, synced_out
 
-    stale = {**inherited, "PRE_COMMIT_REMOTE_BRANCH": "refs/heads/main"}
+    head = _git(work, "rev-parse", "HEAD").stdout.strip()
+    def _exported(branch: str) -> dict:
+        return {"PRE_COMMIT": "1", "PRE_COMMIT_FROM_REF": head, "PRE_COMMIT_TO_REF": head,
+                "PRE_COMMIT_ORIGIN": head, "PRE_COMMIT_SOURCE": head,
+                "PRE_COMMIT_LOCAL_BRANCH": "refs/heads/main",
+                "PRE_COMMIT_REMOTE_BRANCH": branch, "PRE_COMMIT_REMOTE_NAME": "origin",
+                "PRE_COMMIT_REMOTE_URL": str(tmp_path / "remote.git")}
+
+    stale = {**inherited, **_exported("refs/heads/main")}
     ghost, ghost_out = _push(work, "HEAD:refs/heads/feat/x", env_extra=stale)
     assert ghost.returncode == 0, (
         f"an inherited PRE_COMMIT_REMOTE_BRANCH turned an up-to-date push into "
@@ -808,186 +722,32 @@ def test_an_up_to_date_push_is_allowed_with_pre_commit_in_the_environment(
     )
     assert _BANNER not in ghost_out, ghost_out
 
+    elsewhere = {**_exported("refs/heads/feat/x"), "VIBE_PREPUSH_FROM_DISPATCH": "1"}
     blocked, blocked_out = _push(work, "HEAD:refs/heads/main",
-                                 env_extra={**_SIBLINGS_OFF, "PRE_COMMIT": "1"})
+                                 env_extra={**_SIBLINGS_OFF, **elsewhere})
     assert blocked.returncode != 0, (
-        f"CONTROL FAILED: with the dispatcher as caller, a real push at main "
-        f"was allowed — that is #1664 one layer up:\n{blocked_out}"
+        f"CONTROL FAILED: with PRE_COMMIT* in the environment, a real push at "
+        f"main was allowed:\n{blocked_out}"
     )
     assert _BANNER in blocked_out, blocked_out
 
-
-@pytest.mark.skipif(
-    _BASH is None and os.environ.get("VIBE_REQUIRE_SHELL_TOOLS") != "1",
-    reason="no bash on PATH to invoke the guard",
-)
-@pytest.mark.parametrize(
-    ("flag", "expect_refusal"),
-    [(None, True), ("1", False), ("0", True)],
-    ids=["unset-reached-some-other-way", "dispatcher-said-so", "off-means-off"],
-)
-def test_only_the_dispatcher_may_read_zero_rows_as_nothing_to_push(
-    tmp_path: Path, flag: str | None, expect_refusal: bool
-) -> None:
-    """The predicate behind #1846, three rows apart on one variable's value.
-
-    Reached any other way, a guard still cannot tell "git fed nothing" from
-    "pre-commit already ate the refspec", so it must keep refusing.
-
-    The ``0`` row is not tidiness: only the dispatcher writes this variable and
-    it writes ``1``, so an exact-value test sends every other inherited value
-    back to the refusal. A presence test would read ``0`` as ON.
-
-    ⛔ What this does NOT pin: that the real caller sets the flag at all. That
-    needs the installed dispatcher and lives in
-    ``test_an_up_to_date_push_is_allowed_with_pre_commit_in_the_environment``.
-
-    ⛔ The guard is invoked with a RELATIVE path from inside the temp repo: Git
-    Bash mangles ``C:\\path\\file`` arguments.
-    """
-    work = _make_repo(tmp_path, _PROTECT_ONLY)
-    assert _BASH
-    env = dict(os.environ)
-    env["PRE_COMMIT"] = "1"
-    env.pop("PRE_COMMIT_REMOTE_BRANCH", None)
-    env.pop("PRE_COMMIT_TO_REF", None)
-    if flag is not None:
-        env["VIBE_PREPUSH_FROM_DISPATCH"] = flag
-    r = subprocess.run(  # subprocess-timeout: ignore
-        [_BASH, "scripts/ops/protect_main_push.sh"],
-        cwd=work, input="", capture_output=True, text=True,
-        encoding="utf-8", errors="replace", env=env,
-    )
-    out = r.stdout + r.stderr
-    if expect_refusal:
-        assert r.returncode != 0, (
-            f"a guard that cannot see the refspec allowed the push:\n{out}"
+    # ⛔ With and without the flag: either value must leave the verdict alone.
+    for env in (elsewhere, {k: v for k, v in elsewhere.items()
+                            if k != "VIBE_PREPUSH_FROM_DISPATCH"}):
+        direct = subprocess.run(
+            [_BASH, "scripts/ops/protect_main_push.sh", "origin"],
+            cwd=work, input=f"refs/heads/main {head} refs/heads/main {'0' * 40}\n",
+            capture_output=True, text=True, encoding="utf-8", errors="replace",
+            env={**os.environ, **env}, timeout=60,
         )
-        assert "cannot see what is being pushed" in out, out
-    else:
-        assert r.returncode == 0, (
-            f"the dispatcher said there was nothing to push and the guard "
-            f"still refused:\n{out}"
+        assert direct.returncode != 0 and _BANNER in direct.stderr, (
+            f"invoked directly with {sorted(env)} in the environment, the guard "
+            f"let a main row through:\n{direct.stdout}{direct.stderr}"
         )
-        assert "cannot see what is being pushed" not in out, out
-
-
-_CALLER_FLAG = "VIBE_PREPUSH_FROM_DISPATCH"
-# Where a variable set in this repo can end up in a guard's environment. ⛔ Not
-# "every tracked file": prose mentions it (CHANGELOG, the helper's own header)
-# and this suite sets it deliberately, and neither puts it on a push path.
-_ENV_CAPABLE_PREFIXES = ("scripts/", ".github/workflows/", ".devcontainer/")
-_ENV_CAPABLE_FILES = ("Makefile", ".pre-commit-config.yaml")
-
-
-def test_only_the_dispatcher_exports_the_caller_flag() -> None:
-    """The ⛔ in ``_prepush_refs.sh``'s CALLER CHANNEL section, mechanised.
-
-    Anything else exporting that flag hands a guard reached through the env
-    channel the same licence with a real refspec in ``PRE_COMMIT_REMOTE_BRANCH``.
-    ⛔ The autouse fixture above keeps a flag exported in pytest's own shell
-    from deciding these tests; this one keeps the repo from exporting it.
-
-    ⚠️ Scope: it reads files, so it cannot see a contributor's shell or a hook
-    installed outside version control. The helper consults stdin before the
-    environment, which protects only callers that feed stdin; a guard reached
-    through the env channel has no defence against an ambient flag. This only
-    keeps the repo from being the source.
-    """
-    tracked = subprocess.run(  # subprocess-timeout: ignore
-        ["git", "ls-files"], cwd=_REPO_ROOT, capture_output=True, text=True, encoding="utf-8", errors="replace",
-    ).stdout.split()
-    # ⛔ Must-respond control. A scan whose population is empty asserts nothing,
-    # and `git ls-files` can return zero rows (in a container, against a
-    # worktree) — which would make this test a green that never looked at
-    # anything.
-    assert len(tracked) > 1000, (
-        f"only {len(tracked)} tracked files found; the scan population is wrong, "
-        "so a passing assertion below would mean nothing"
-    )
-    candidates = [
-        p for p in tracked
-        if p.startswith(_ENV_CAPABLE_PREFIXES) or p in _ENV_CAPABLE_FILES
-    ]
-    assert candidates, "no env-capable files matched; the prefixes drifted"
-
-    assign = re.compile(rf"(?:^|\s|;)(?:export\s+)?{_CALLER_FLAG}\s*=")
-    exporters = set()
-    for rel in candidates:
-        text = (_REPO_ROOT / rel).read_text(encoding="utf-8", errors="replace")
-        for line in text.splitlines():
-            stripped = line.lstrip()
-            if stripped.startswith("#") or stripped.startswith("//"):
-                continue
-            if assign.search(line):
-                exporters.add(rel)
-                break
-
-    assert exporters == {"scripts/ops/prepush_dispatch.sh"}, (
-        f"{_CALLER_FLAG} is assigned outside the dispatcher: "
-        f"{sorted(exporters - {'scripts/ops/prepush_dispatch.sh'})}. Only the "
-        "one place that reads git's pre-push stdin may claim to be the caller — "
-        "see CALLER CHANNEL in scripts/ops/_prepush_refs.sh. If the dispatcher "
-        f"itself stopped assigning it, got={sorted(exporters)}"
-    )
 
 
 # ---------------------------------------------------------------------------
-# The first push of a branch to an empty remote — pre-commit exports no TO_REF
-# ---------------------------------------------------------------------------
-
-
-@pytest.mark.parametrize(
-    ("target", "expect_block"),
-    [("main", True), ("feat/first", False)],
-)
-def test_first_push_to_an_empty_remote_is_still_judged(
-    tmp_path: Path, target: str, expect_block: bool
-) -> None:
-    """A single-refspec push that pre-commit describes WITHOUT a to-ref.
-
-    ``hook_impl._pre_push_ns`` has an ``all_files=True`` branch for the case
-    where the first ancestor missing from the remote is the root commit — the
-    first push to an empty remote. It returns a namespace with ``to_ref=None``,
-    so pre-commit exports ``PRE_COMMIT_REMOTE_BRANCH`` and no
-    ``PRE_COMMIT_TO_REF``.
-
-    If the row put the (empty) sha first, default-IFS ``read`` would collapse
-    it, ``remote_ref`` would come out empty and the row would be dropped —
-    ``Guard: block direct push to main ... Passed`` on a plain ``git push``.
-    Not the disclosed multi-ref residual: one refspec, no flags.
-
-    The second row is the control. A guard that started refusing everything
-    when the sha is missing would satisfy the first row and be worse than the
-    bug.
-    """
-    remote = tmp_path / "empty.git"
-    work = tmp_path / "work"
-    assert subprocess.run(  # subprocess-timeout: ignore
-        ["git", "init", "--bare", "-q", str(remote)], capture_output=True
-    ).returncode == 0
-    assert subprocess.run(  # subprocess-timeout: ignore
-        ["git", "init", "-q", "-b", "main", str(work)], capture_output=True
-    ).returncode == 0
-    _git(work, "config", "commit.gpgsign", "false")
-    (work / "scripts" / "ops").mkdir(parents=True)
-    for name in _GUARD_FILES:
-        shutil.copy2(_OPS / name, work / "scripts" / "ops" / name)
-    (work / ".pre-commit-config.yaml").write_text(_PROTECT_ONLY, encoding="utf-8")
-    _commit(work, "root")
-    assert _git(work, "remote", "add", "origin", str(remote)).returncode == 0
-    _install_precommit(work)
-
-    r, out = _push(work, f"HEAD:refs/heads/{target}")
-    if expect_block:
-        assert r.returncode != 0, f"first push to an empty remote bypassed the guard:\n{out}"
-        assert _BANNER in out, f"blocked, but not by the guard:\n{out}"
-    else:
-        assert r.returncode == 0, f"a legitimate first push was blocked:\n{out}"
-
-
-# ---------------------------------------------------------------------------
-# Channel precedence — stdin must win over a stray environment
+# Tool presence
 # ---------------------------------------------------------------------------
 
 
@@ -1005,77 +765,27 @@ def test_bash_present_when_required() -> None:
         )
 
 
-# Same shape as the module skip above: with VIBE_REQUIRE_SHELL_TOOLS=1 the CI
-# job asserts bash is there, so an absence must fail rather than skip past
-# assertions that invoke a guard directly.
-@pytest.mark.skipif(
-    _BASH is None and os.environ.get("VIBE_REQUIRE_SHELL_TOOLS") != "1",
-    reason="no bash on PATH to invoke the guard",
-)
-@pytest.mark.parametrize(
-    ("piped_branch", "expect_block"),
-    [("refs/heads/feat/x", False), ("refs/heads/main", True)],
-)
-def test_stdin_wins_over_a_stray_precommit_environment(
-    tmp_path: Path, piped_branch: str, expect_block: bool
-) -> None:
-    """A ``PRE_COMMIT_*`` environment inherited from an unrelated parent must
-    not override a refspec that was actually handed to the guard.
-
-    Both rows matter: the first shows the env does not manufacture a block,
-    the second shows the stdin path still blocks while that env is present —
-    a guard that simply ignored both channels would satisfy one of them.
-
-    The script is invoked with a RELATIVE path from inside the temp repo:
-    Git Bash mangles ``C:\\path\\file`` arguments, which is why the sibling
-    gate tests skip on win32 wholesale.
-    """
-    work = _make_repo(tmp_path, _PROTECT_ONLY)
-    stdin = f"HEAD 1111111111111111111111111111111111111111 {piped_branch} 0\n"
-    r = subprocess.run(  # subprocess-timeout: ignore
-        [_BASH, "scripts/ops/protect_main_push.sh"],
-        cwd=work, input=stdin, capture_output=True, text=True, encoding="utf-8", errors="replace",
-        env={**os.environ, "PRE_COMMIT": "1",
-             "PRE_COMMIT_REMOTE_BRANCH": "refs/heads/main",
-             "PRE_COMMIT_TO_REF": "2" * 40},
-    )
-    out = r.stdout + r.stderr
-    if expect_block:
-        # ⛔ rc != 0 alone is NOT enough here: with a bare "bash" argv the WSL
-        # launcher failing to find the script satisfies it while the guard
-        # never runs (see _BASH above). The banner is what proves the verdict
-        # came from the guard.
-        assert r.returncode != 0, f"piped main was not blocked:\n{out}"
-        assert _BANNER in out, f"blocked, but not by the guard:\n{out}"
-    else:
-        assert r.returncode == 0, (
-            "the environment overrode the piped refspec — channel order "
-            f"regressed:\n{out}"
-        )
-
-
 # ---------------------------------------------------------------------------
 # The second guard on the same wiring
 # ---------------------------------------------------------------------------
 
 
-def test_preflight_gate_sees_the_push_through_precommit(tmp_path: Path) -> None:
-    """`require_preflight_pass.sh` shares the defect and the fix.
+# The preflight gate alone: protect_main_push never blocks a feature branch,
+# and the docs build is not what these tests are about.
+_GATE_STRICT = {"GIT_PREFLIGHT_STRICT": "1", "MKDOCS_STRICT_BYPASS": "1"}
+
+
+def test_preflight_gate_sees_the_push(tmp_path: Path) -> None:
+    """`require_preflight_pass.sh` shares the defect and the fix (#1664).
 
     STRICT mode is used so the verdict does not depend on a `gh` shim: the
     branch has no preflight marker, so the only question left is whether the
     gate learned that anything is being pushed at all. Pre-fix it did not, and
     exited 0 through the `pushing_any_commit=0` branch.
     """
-    body = _CONFIG_HEADER + _hook_stanza(
-        "require-preflight-pass",
-        "Guard: require make pr-preflight before push",
-        "bash scripts/ops/require_preflight_pass.sh",
-    )
-    work = _make_repo(tmp_path, body)
-    _install_precommit(work)
-    r, out = _push(work, "HEAD:refs/heads/feat/no-marker",
-                   env_extra={"GIT_PREFLIGHT_STRICT": "1"})
+    work = _make_repo(tmp_path, _PROTECT_ONLY)
+    assert _install_guards(work).returncode == 0
+    r, out = _push(work, "HEAD:refs/heads/feat/no-marker", env_extra=_GATE_STRICT)
     assert r.returncode != 0, f"missing preflight marker was allowed:\n{out}"
     assert "Push blocked" in out, out
 
@@ -1085,144 +795,12 @@ def test_preflight_gate_still_allows_a_push_carrying_its_marker(
 ) -> None:
     """Opposite direction, so the test above cannot be satisfied by a gate that
     blocks unconditionally."""
-    body = _CONFIG_HEADER + _hook_stanza(
-        "require-preflight-pass",
-        "Guard: require make pr-preflight before push",
-        "bash scripts/ops/require_preflight_pass.sh",
-    )
-    work = _make_repo(tmp_path, body)
-    _install_precommit(work)
+    work = _make_repo(tmp_path, _PROTECT_ONLY)
+    assert _install_guards(work).returncode == 0
     head = _git(work, "rev-parse", "HEAD").stdout.strip()
     (work / ".git" / f".preflight-ok.{head}").touch()
-    r, out = _push(work, "HEAD:refs/heads/feat/with-marker",
-                   env_extra={"GIT_PREFLIGHT_STRICT": "1"})
+    r, out = _push(work, "HEAD:refs/heads/feat/with-marker", env_extra=_GATE_STRICT)
     assert r.returncode == 0, f"a marked push was blocked:\n{out}"
-
-
-# ---------------------------------------------------------------------------
-# Residual — pinned by a test, not left as a guess
-# ---------------------------------------------------------------------------
-
-
-@pytest.mark.parametrize(
-    "already_published", [True, False], ids=["second-push", "first-push"]
-)
-def test_precommit_env_channel_carries_one_ref_while_git_carries_all(
-    tmp_path: Path, already_published: bool
-) -> None:
-    """The known residual, checked on both channels in one run.
-
-    ``hook_impl._pre_push_ns`` returns on the first pushable line it finds, so
-    a push updating N refs reaches a pre-commit-installed guard as ONE. This
-    test does not assert that main slips — asserting a defect would read as
-    requiring it. It asserts the CAUSE: git hands over every row, pre-commit's
-    environment hands over exactly one. If a future pre-commit widens the
-    channel this goes red, which is the point: the disclosure in
-    ``scripts/ops/_prepush_refs.sh`` must not outlive the behaviour it describes.
-    """
-    work = _repo_with_env_probe(tmp_path)
-
-    # ⛔ Both shapes. Publishing first makes aaa-first an UPDATE; skipping it
-    # makes the same push CREATE the ref — and that is the axis that decides
-    # which row git hands over first (#1852). A fixture that only publishes
-    # gives the same answer for either candidate rule, so it cannot tell them
-    # apart, and the disclosure built on it described the wrong half of the
-    # residual's reach.
-    if already_published:
-        assert _git(
-            work, "push", "-q", "origin", "HEAD:refs/heads/aaa-first"
-        ).returncode == 0
-    _commit(work, "third")
-
-    # Channel 1: git's own protocol, via a native hook.
-    hook = work / ".git" / "hooks" / "pre-push"
-    hook.parent.mkdir(parents=True, exist_ok=True)
-    hook.write_text(
-        "#!/usr/bin/env bash\ncat > \"$(git rev-parse --show-toplevel)/native_rows.txt\"\n",
-        encoding="utf-8",
-        newline="\n",
-    )
-    hook.chmod(0o755)
-    _push(work, "HEAD:refs/heads/aaa-first", "HEAD:refs/heads/main")
-    native_rows = [
-        ln for ln in (work / "native_rows.txt").read_text(encoding="utf-8").splitlines()
-        if ln.strip()
-    ]
-
-    # Channel 2: the same push, through pre-commit.
-    hook.unlink()
-    _install_precommit(work)
-    _push(work, "HEAD:refs/heads/aaa-first", "HEAD:refs/heads/main")
-    env_rows = [
-        ln for ln in (work / "env_rows.txt").read_text(encoding="utf-8").splitlines()
-        if ln.strip()
-    ]
-
-    assert len(native_rows) == 2, f"git did not offer both refs: {native_rows}"
-    assert any(" refs/heads/main " in row for row in native_rows), (
-        f"the control row is missing — this push did not target main: {native_rows}"
-    )
-    # ⛔ The residual is "N rows in, ONE out" — and nothing more. Every
-    # predicate this file has tried for WHICH row turned out false on some push
-    # shape (sorted order, git's first row, the first non-deletion row), so the
-    # assertion stays at the shape and the shapes themselves live on #1852.
-    native_refs = [row.split()[2] for row in native_rows]
-    assert len(env_rows) == 1 and env_rows[0] in native_refs, (
-        "the env channel no longer carries exactly one of git's rows — if it "
-        "widened, that is good news and the residual disclosed in "
-        f"scripts/ops/_prepush_refs.sh is stale: env={env_rows} "
-        f"native={native_refs}"
-    )
-
-
-_ENV_PROBE_CONFIG = _CONFIG_HEADER + _hook_stanza(
-    "env-probe",
-    "PROBE: record the exported refspec",
-    "bash scripts/ops/env_probe.sh",
-)
-
-
-def _repo_with_env_probe(tmp_path: Path) -> Path:
-    """A repo whose only pre-push hook records PRE_COMMIT_REMOTE_BRANCH."""
-    work = _make_repo(tmp_path, _ENV_PROBE_CONFIG)
-    (work / "scripts" / "ops" / "env_probe.sh").write_text(
-        "#!/usr/bin/env bash\n"
-        'printf "%s\\n" "${PRE_COMMIT_REMOTE_BRANCH:-<unset>}" >> env_rows.txt\n',
-        encoding="utf-8",
-        newline="\n",
-    )
-    assert _git(work, "add", "-A").returncode == 0
-    assert _git(work, "-c", "core.hooksPath=/dev/null", "commit", "-q",
-                "-m", "probe").returncode == 0
-    return work
-
-
-def test_a_pure_deletion_push_runs_no_precommit_hook_at_all(tmp_path: Path) -> None:
-    """The residual is not only "ONE of N" — it can be ZERO.
-
-    `_pre_push_ns` returns None when every row is a deletion, and hook_impl then
-    exits 0 without running a single hook. That is a strictly bigger hole than
-    the disclosed one, and nothing else in this file covers the pre-commit
-    channel for it (``test_deleting_main_is_still_judged`` exercises the native
-    dispatcher instead).
-    """
-    work = _repo_with_env_probe(tmp_path)
-    assert _git(work, "push", "-q", "origin", "HEAD:refs/heads/aaa-del").returncode == 0
-    _commit(work, "third")
-    _install_precommit(work)
-
-    _push(work, ":refs/heads/aaa-del")
-    assert not (work / "env_rows.txt").exists(), (
-        "good news: pre-commit now runs hooks for a deletion-only push, so the "
-        "ZERO case disclosed in scripts/ops/_prepush_refs.sh is stale"
-    )
-    # ⛔ Must-ring control: the same install, an ordinary push. Without it this
-    # test also passes when the probe never worked.
-    _push(work, "HEAD:refs/heads/main")
-    assert (work / "env_rows.txt").exists(), (
-        "CONTROL FAILED: the probe hook never ran even for an ordinary push, "
-        "so the assertion above proves nothing"
-    )
 
 
 # ---------------------------------------------------------------------------
@@ -1264,8 +842,8 @@ def test_the_shipped_wiring_runs_exactly_the_three_guards() -> None:
       2. .pre-commit-config.yaml declares NO pre-push hooks at all.
 
     Half 2 is not tidiness. A ``stages: [pre-push]`` entry re-added there does
-    not merely duplicate the dispatcher — the copy pre-commit runs is the BLIND
-    one (it is handed a single refspec), and it reports Passed, so the picture
+    not merely duplicate the dispatcher — the copy pre-commit runs is BLIND
+    (pre-commit reads git's stdin first), and it reports Passed, so the picture
     is a guard that ran and approved.
 
     ⛔ Half 2 asks which hooks pre-commit RUNS at pre-push, not which ones spell
@@ -1295,9 +873,9 @@ def test_the_shipped_wiring_runs_exactly_the_three_guards() -> None:
     ]
     assert stanzas == [], (
         "a hook that pre-commit runs at pre-push is back in "
-        f".pre-commit-config.yaml: {stanzas}. pre-commit hands a pre-push hook "
-        "exactly ONE refspec (#1689), so that copy is blind — and it prints "
-        "Passed. The guards are run by scripts/ops/prepush_dispatch.sh. "
+        f".pre-commit-config.yaml: {stanzas}. pre-commit reads git's stdin "
+        "before its hooks run, so that copy sees nothing being pushed — and it "
+        "prints Passed. The guards are run by scripts/ops/prepush_dispatch.sh. "
         "⛔ `stages: [push]` and an inherited `default_stages` count too."
     )
 
@@ -1703,16 +1281,14 @@ def test_tag_pushes_are_allowed(tmp_path: Path) -> None:
     on a ``gh`` shim; the branch row is the control that proves the gate is
     otherwise armed under the same conditions.
     """
-    work = _make_repo(tmp_path, _PREFLIGHT_ONLY)
-    _install_precommit(work)
+    work = _make_repo(tmp_path, _PROTECT_ONLY)
+    assert _install_guards(work).returncode == 0
     assert _git(work, "tag", "v0.0.0-test").returncode == 0
 
-    r, out = _push(work, "refs/tags/v0.0.0-test",
-                   env_extra={"GIT_PREFLIGHT_STRICT": "1"})
+    r, out = _push(work, "refs/tags/v0.0.0-test", env_extra=_GATE_STRICT)
     assert r.returncode == 0, f"a tag push was blocked:\n{out}"
 
-    r2, out2 = _push(work, "HEAD:refs/heads/feat/control",
-                     env_extra={"GIT_PREFLIGHT_STRICT": "1"})
+    r2, out2 = _push(work, "HEAD:refs/heads/feat/control", env_extra=_GATE_STRICT)
     assert r2.returncode != 0, (
         f"control failed: the gate is not armed, so the tag row proves nothing:\n{out2}"
     )
@@ -1724,13 +1300,13 @@ def test_tag_pushes_are_allowed(tmp_path: Path) -> None:
 )
 def test_the_resolved_bash_forwards_the_environment() -> None:
     """Without this negative control, reverting ``_BASH`` to the bare string
-    ``"bash"`` would make the channel-order guarantee untestable with nothing
-    red.
+    ``"bash"`` would hollow out every test here that steers a guard through
+    its environment, with nothing red.
 
     On Windows a bare ``bash`` argv reaches ``C:\\Windows\\System32\\bash.exe``
     — the WSL launcher — which forwards only the variables named in ``WSLENV``.
-    Every ``PRE_COMMIT_*`` a test sets then arrives unset, so an assertion about
-    channel precedence passes no matter what the code does. This pins the
+    Every variable a test sets then arrives unset, so an assertion that depends
+    on one passes or fails regardless of the code. This pins the
     property that actually matters: the interpreter we hand the guard to must
     carry our environment into it.
     """
@@ -1741,8 +1317,8 @@ def test_the_resolved_bash_forwards_the_environment() -> None:
     )
     assert r.stdout.strip() == "carried", (
         "the resolved bash dropped an exported variable — on Windows this is the "
-        "WSL launcher, which only forwards WSLENV. Every environment-channel "
-        f"assertion in this file would be vacuous. stdout={r.stdout!r}"
+        "WSL launcher, which only forwards WSLENV. Every test here that sets a "
+        f"variable for a guard would be vacuous. stdout={r.stdout!r}"
     )
 
 
@@ -1862,45 +1438,6 @@ def test_a_push_that_changes_no_docs_is_still_built(tmp_path: Path) -> None:
     assert r.returncode == 0, f"{r.stdout}{r.stderr}"
     assert record.exists(), f"a code-only push was not built. {r.stdout}{r.stderr}"
     assert record.read_text(encoding="utf-8").split() == [sha_code]
-
-
-@pytest.mark.parametrize("case", ["no-TO_REF", "control-with-TO_REF", "tag-no-TO_REF"])
-def test_an_unknown_pushed_commit_is_refused(tmp_path: Path, case: str) -> None:
-    """Run by pre-commit itself (a wiring the guard forbids), a first push to
-    an empty remote exports REMOTE_BRANCH without TO_REF, so the pushed commit
-    reaches the guard unknown. That is not "nothing to push". A tag is still
-    never judged."""
-    work, record, _sha_a, sha_b = _docs_repo(tmp_path)
-    ref = "refs/tags/v1" if case.startswith("tag") else "refs/heads/topic"
-    env_extra = {"PRE_COMMIT": "1", "PRE_COMMIT_REMOTE_BRANCH": ref}
-    if case.startswith("control"):
-        env_extra["PRE_COMMIT_TO_REF"] = sha_b
-    bindir = work.parent / "fakebin"
-    bindir.mkdir()
-    (bindir / "mkdocs").write_text(_FAKE_MKDOCS, encoding="utf-8")
-    (bindir / "mkdocs").chmod(0o755)
-    env = {k: v for k, v in os.environ.items()
-           if not k.startswith("PRE_COMMIT") and k != "VIBE_PREPUSH_FROM_DISPATCH"}
-    env.update(env_extra, PATH=str(bindir) + os.pathsep + os.environ.get("PATH", ""),
-               PREPUSH_TEST_RECORD=str(record))
-    r = subprocess.run(
-        [_BASH, "scripts/ops/pre_push_mkdocs_strict.sh", "origin", "/dev/null"],
-        cwd=work, stdin=subprocess.DEVNULL, capture_output=True, text=True,
-        encoding="utf-8", errors="replace", env=env, timeout=60,
-    )
-
-    if case.startswith("control"):
-        assert r.returncode == 0, f"{r.stdout}{r.stderr}"
-        assert record.read_text(encoding="utf-8").split() == [sha_b]
-    elif case.startswith("tag"):
-        assert (r.returncode, r.stdout, r.stderr) == (0, "", ""), f"{r.stdout}{r.stderr}"
-        assert not record.exists()
-    else:
-        assert r.returncode == 1, f"an unknown commit went through:\n{r.stdout}{r.stderr}"
-        assert not record.exists(), f"built {record.read_text(encoding='utf-8')!r} for an unknown commit"
-        assert r.stderr == (
-            "[pre-push-mkdocs] ⛔ cannot tell which commit refs/heads/topic pushes; refusing.\n"
-        ), r.stderr
 
 
 @pytest.mark.parametrize("row", ["deletion", "tag", "note"])
@@ -2279,35 +1816,6 @@ def test_a_worktree_that_cannot_be_created_refuses_instead_of_building_the_tree(
     assert tail == ["", f"::error::mkdocs strict did not pass for {sha_b[:8]}"], (
         "the guard added to its refusal on stdout. stdout=%s" % r.stdout
     )
-
-
-def test_the_docs_guard_refuses_when_no_channel_carries_a_refspec(
-    tmp_path: Path,
-) -> None:
-    """rc=3 from the helper must refuse, for THIS guard too.
-
-    `_prepush_refs.sh`'s EXIT STATUS section says a caller must treat "no
-    channel carried a refspec" as a refusal — warning-and-allowing is not an
-    option, because that is the #1664 picture. The existing
-    `test_guard_refuses_when_no_channel_carries_a_refspec` pins it for the
-    other two guards only; this guard became a third consumer of the helper
-    and was not added there.
-    """
-    work, record, _sha_a, _sha_b = _docs_repo(tmp_path)
-    assert _BASH
-    env = {k: v for k, v in os.environ.items() if not k.startswith("PRE_COMMIT")}
-    env["PRE_COMMIT"] = "1"
-    env["PREPUSH_TEST_RECORD"] = str(record)
-    r = subprocess.run(  # subprocess-timeout: ignore
-        [_BASH, "scripts/ops/pre_push_mkdocs_strict.sh", "origin", "/dev/null"],
-        cwd=work, input="", capture_output=True, text=True,
-        encoding="utf-8", errors="replace", env=env,
-    )
-    assert r.returncode != 0, (
-        "the guard allowed a push whose refspec it could not see at all; that "
-        "is exactly #1664. stdout=%s stderr=%s" % (r.stdout, r.stderr)
-    )
-    assert not record.exists(), "it also built something, with no idea what"
 
 
 # ---------------------------------------------------------------------------

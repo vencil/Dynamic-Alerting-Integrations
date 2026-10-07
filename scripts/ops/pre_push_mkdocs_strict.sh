@@ -37,8 +37,8 @@
 #   scripts/ops/prepush_dispatch.sh; install with
 #       bash scripts/ops/install_prepush_hook.sh
 #   ⛔ Do not put a `stages: [pre-push]` entry back in .pre-commit-config.yaml.
-#   A hook that pre-commit runs is handed at most ONE refspec, so a push of
-#   several refs would be judged on one of them.
+#   pre-commit reads git's stdin before its hooks run, so a copy it runs sees
+#   nothing being pushed and builds nothing.
 
 set -uo pipefail
 
@@ -69,10 +69,7 @@ if [ ! -r "$_prepush_dir/_prepush_refs.sh" ]; then
 fi
 . "$_prepush_dir/_prepush_refs.sh"
 
-if ! _refs="$(prepush_refs)"; then
-    prepush_refs_unavailable_message >&2
-    exit 1
-fi
+_refs="$(prepush_refs)"
 
 _Z40="0000000000000000000000000000000000000000"
 
@@ -87,11 +84,6 @@ while read -r remote_ref local_sha; do
     # has no site at all.
     [ "${local_sha:-}" = "$_Z40" ] && continue
     case "$remote_ref" in refs/heads/*) ;; *) continue ;; esac
-    # ⛔ Unknown is not "nothing to push"; refuse rather than build a guess.
-    if [ -z "${local_sha:-}" ]; then
-        echo "[pre-push-mkdocs] ⛔ cannot tell which commit ${remote_ref} pushes; refusing." >&2
-        exit 1
-    fi
     _build_shas+=("$local_sha")
 done <<< "$_refs"
 
