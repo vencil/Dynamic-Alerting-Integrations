@@ -13,8 +13,8 @@
 # sees nothing being pushed and passes.
 #
 # ⛔ Do not add them back here, and do not "simplify" the install line back to
-# `pre-commit install --hook-type pre-push`: that makes the guards blind, and
-# it exits 1 outright while core.hooksPath is set (any value).
+# `pre-commit install --hook-type pre-push`: that does not install the guards,
+# and it exits 1 outright while core.hooksPath is set (any value).
 # `make pr-preflight` fails when the guards are not on the push path.
 #
 # These hooks run the lightweight CI checks locally before each commit,

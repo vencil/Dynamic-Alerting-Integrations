@@ -48,7 +48,7 @@ if [ -z "$head_sha" ]; then
     exit 0
 fi
 
-# Which refs is this push updating? One implementation, two channels.
+# Which refs is this push updating? Parsed by _prepush_refs.sh.
 # ⛔ Pure parameter expansion, no `$(dirname …)`. Rationale in _prepush_refs.sh.
 _prepush_dir="${BASH_SOURCE[0]%/*}"
 [ "$_prepush_dir" = "${BASH_SOURCE[0]}" ] && _prepush_dir="."
@@ -195,23 +195,17 @@ fi
 # on A while pushing B" is ordinary here, and keying the check to HEAD both
 # let an unverified B through when A happened to be marked, and blocked a
 # verified B when A was not.
-# ⛔ A separate flag, not `-z "$_missing_sha"`. An empty sha is a real row
-# shape here (see the fallback above), and the empty-string sentinel made it
-# indistinguishable from "nothing is missing" — so a row whose sha we could
-# not determine would have been silently ALLOWED. Unknown must not mean OK.
-_missing_found=0
 _missing_sha=""
 _missing_branch=""
 for _i in "${!pushed_shas[@]}"; do
     if [ ! -f "$git_dir/$MARKER_PREFIX.${pushed_shas[$_i]}" ]; then
-        _missing_found=1
         _missing_sha="${pushed_shas[$_i]}"
         _missing_branch="${pushed_branches[$_i]}"
         break
     fi
 done
 
-if [ "$_missing_found" = "0" ]; then
+if [ -z "$_missing_sha" ]; then
     # Every pushed commit has a marker — preflight passed for all of them.
     exit 0
 fi
