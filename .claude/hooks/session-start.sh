@@ -76,6 +76,42 @@ MARKER="/tmp/vibe-session-start-hook.ran"
 say() { printf '  [session-start] %s\n' "$1"; }
 note() { printf '%s\n' "$1" >> "$MARKER"; }
 
+# da-guard (validate-config and the policy readers need it, #2115). Which one
+# is used follows `make validate-config`: $DA_GUARD_BINARY when set; else build
+# .build/da-guard when go is on PATH; else the da-guard on PATH.
+# da_guard_present: is one already there (for the no-op check below)?
+da_guard_present() {
+  if [ -n "${DA_GUARD_BINARY:-}" ]; then [ -x "$DA_GUARD_BINARY" ]; return; fi
+  [ -x .build/da-guard ] || command -v da-guard >/dev/null 2>&1
+}
+# da_guard_step: step 7. Returns non-zero only when no da-guard can be had.
+da_guard_step() {
+  if [ -n "${DA_GUARD_BINARY:-}" ]; then
+    if [ -x "$DA_GUARD_BINARY" ]; then
+      note "da-guard=DA_GUARD_BINARY ($DA_GUARD_BINARY)"
+      return 0
+    fi
+    say "⛔ DA_GUARD_BINARY is set to '$DA_GUARD_BINARY', which is not an executable — validate-config will exit 2"
+    note "da-guard=MISSING (DA_GUARD_BINARY not executable)"
+    return 1
+  elif command -v go >/dev/null 2>&1; then
+    if make --no-print-directory da-guard-build; then
+      note "da-guard=built (.build/da-guard)"
+      return 0
+    fi
+    say "⛔ make da-guard-build FAILED (output above) — validate-config will exit 2"
+    note "da-guard=FAILED (make da-guard-build)"
+    return 1
+  elif command -v da-guard >/dev/null 2>&1; then
+    note "da-guard=PATH ($(command -v da-guard))"
+    return 0
+  fi
+  say "⛔ no da-guard: go is NOT on PATH (cannot build it), DA_GUARD_BINARY is unset and no da-guard is on PATH"
+  say "   install Go (version: components/threshold-exporter/app/go.mod), set DA_GUARD_BINARY, or put da-guard on PATH"
+  note "da-guard=MISSING (no go, no DA_GUARD_BINARY, none on PATH)"
+  return 1
+}
+
 # SessionStart fires for more than a cold start (a resumed or compacted session
 # reuses the SAME container, where everything below is already in place). Doing
 # the work again is not free: `npm ci` DELETES tests/e2e/node_modules and
@@ -87,7 +123,7 @@ if [ -f "$MARKER" ] && grep -q '^RESULT=ok$' "$MARKER" 2>/dev/null \
   && command -v pre-commit >/dev/null 2>&1 \
   && [ -f .git/hooks/pre-commit ] && [ -f .git/hooks/pre-push ] \
   && { [ ! -f tests/e2e/package.json ] || [ -d tests/e2e/node_modules ]; } \
-  && [ -x .build/da-guard ]; then
+  && da_guard_present; then
   note "re-run at $(date -u +%Y-%m-%dT%H:%M:%SZ): already bootstrapped, no-op"
   say "already bootstrapped (marker: $MARKER) — nothing to do"
   exit 0
@@ -240,21 +276,14 @@ say "pre-building pre-commit hook environments (cached into the container image)
 pre-commit install-hooks >/dev/null 2>&1 || say "  install-hooks incomplete — first run will build the rest"
 
 # --- 7. da-guard (validate-config and the policy readers need it, #2115) ---
-# Built from THIS checkout's Go source by the same target `make validate-config`
-# runs, so the two cannot disagree on how. ⛔ Go missing is not a warning: the
-# readers then exit 2 and pytest's da_guard_binary fixture fails every test
-# that uses it, so it reaches RESULT like a missing Python dep does.
-if ! command -v go >/dev/null 2>&1; then
-  say "⛔ go is NOT on PATH — da-guard cannot be built; validate-config will exit 2"
-  say "   install Go (version: components/threshold-exporter/app/go.mod) or set DA_GUARD_BINARY"
-  note "da-guard=MISSING (go not on PATH)"
-  bootstrap_incomplete="${bootstrap_incomplete:-} da-guard(go missing)"
-elif make --no-print-directory da-guard-build; then
-  note "da-guard=built (.build/da-guard)"
-else
-  say "⛔ make da-guard-build FAILED (output above) — validate-config will exit 2"
-  note "da-guard=FAILED (make da-guard-build)"
-  bootstrap_incomplete="${bootstrap_incomplete:-} da-guard(build failed)"
+# Resolved in `make validate-config`'s order (da_guard_step, above); with go it
+# is built from THIS checkout's Go source by the same target, so the two cannot
+# disagree on how. ⛔ No da-guard at all is not a warning: the readers then exit
+# 2, so it reaches RESULT like a missing Python dep does. (pytest's
+# da_guard_binary fixture builds with go itself; without go those tests fail
+# whatever this step finds.)
+if ! da_guard_step; then
+  bootstrap_incomplete="${bootstrap_incomplete:-} da-guard"
 fi
 
 if [ -n "${bootstrap_incomplete:-}" ]; then

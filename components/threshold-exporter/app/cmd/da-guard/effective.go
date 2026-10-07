@@ -52,9 +52,11 @@ type effectiveDoc struct {
 	// is not listed. Always present ([] when none).
 	Unreadable []skippedFile `json:"unreadable"`
 	// Skipped: the files the walk read but takes no tenant from
-	// (ScopedTenants.NoTenant), each with the load's reason — the same list,
-	// in the same words, as served-values' `skipped`, so a reader that needs
-	// only this document can name them (#2115 R3). Not a failure: the exit
+	// (ScopedTenants.NoTenant), each with the load's reason, so a reader
+	// that needs only this document can name them (#2115 R3). On a run that
+	// exits 0 it matches served-values' `skipped` (tested); when a file does
+	// not decode (exit 3) it can be empty where served-values still lists
+	// files, so it is not a complete list there. Not a failure: the exit
 	// code is unchanged. Added without a schema bump, as Unreadable was.
 	// Always present ([] when none).
 	Skipped []skippedFile              `json:"skipped"`

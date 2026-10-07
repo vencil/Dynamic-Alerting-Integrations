@@ -987,6 +987,13 @@ _DA_GUARD_SOURCES = (
     "da-guard-build` builds it to .build/da-guard, and `make validate-config` "
     "builds and uses it by itself), then re-run.")
 _PROFILES_NO_DA_GUARD_HINT = _DA_GUARD_SOURCES + " No _profile reference was checked."
+# Shared by both rows: a da-guard older than this tool (its output lacks a
+# field this tool reads) is the binary's fault, not the tree's.
+_DA_GUARD_TOO_OLD_HINT = (
+    "This da-guard is older than this tool: rebuild it (in a checkout of this "
+    "repo, `make da-guard-build`; `make validate-config` runs it by itself) or "
+    "point $DA_GUARD_BINARY at a current one / upgrade the da-tools image, then "
+    "re-run. The config tree was not checked; do not edit it for this.")
 
 
 def _tenant_load_failure_row(check: str, exc: Exception, config_dir: str,
@@ -994,13 +1001,16 @@ def _tenant_load_failure_row(check: str, exc: Exception, config_dir: str,
     """The FAIL row of a check that reads the tenants through da-guard
     (`_lib_tenant_values`) and could not (#2115 0-B): da-guard's own words
     below one line, and the hint for the cause — `hints` is (tree
-    unreadable, no config file, no da-guard). da-guard missing is a caller
-    error; everything else is the tree's."""
+    unreadable, no config file, no da-guard). da-guard missing or older than
+    this tool is a caller error; everything else is the tree's."""
     unreadable_hint, no_config_hint, no_da_guard_hint = hints
     buf = io.StringIO()
     print_load_error(exc, buf)
+    stale = isinstance(exc, DaGuardError) and exc.stale
     if isinstance(exc, DaGuardNotFoundError):
         hint = no_da_guard_hint
+    elif stale:
+        hint = _DA_GUARD_TOO_OLD_HINT
     elif isinstance(exc, ParseFailedError):
         # da-guard named the paths it dropped or could not read (its
         # `parse_failed` / `unreadable`) — a dangling symlink included.
@@ -1014,7 +1024,7 @@ def _tenant_load_failure_row(check: str, exc: Exception, config_dir: str,
                          # "\n" only: `splitlines` also cuts at U+2028 etc.,
                          # which can sit in a file name (_lib_tenant_values).
                          *(ln for ln in buf.getvalue().split("\n") if ln)],
-                        caller_error=isinstance(exc, DaGuardNotFoundError),
+                        caller_error=isinstance(exc, DaGuardNotFoundError) or stale,
                         hint=hint)
 
 

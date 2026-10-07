@@ -29,6 +29,7 @@ import pytest
 
 import _lib_tenant_values as tv
 import validate_config as vc
+from test_effective_values_parity import _doc, _fake_da_guard
 from test_served_values_readers_matrix import _tree
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
@@ -251,3 +252,60 @@ def test_missing_da_guard_is_a_caller_error(tmp_path, monkeypatch):
     assert row["status"] == vc.FAIL and row["caller_error"] is True, row
     assert row["hint"] == vc._PROFILES_NO_DA_GUARD_HINT, row
     assert "make da-guard-build" in row["hint"], row   # 指向 repo 內建出它的 target
+
+
+def test_da_guard_older_than_this_tool_is_a_caller_error(tmp_path, monkeypatch):
+    """effective 的輸出沒有 `skipped`（本工具之前建的 da-guard）：是 binary 太舊，不是設定檔
+    壞了——caller error（rc 2），建議重建／升級 da-guard（指向 make da-guard-build），
+    不叫人去修或刪設定檔。"""
+    conf_d = _tree(tmp_path / "t", POSITIONS["tenant-file"])
+    fake = _fake_da_guard(tmp_path, json.dumps(_doc()))   # 沒有 skipped 欄位
+    monkeypatch.setenv("DA_GUARD_BINARY", fake)
+    row = vc.check_profiles(str(conf_d))
+    assert row["status"] == vc.FAIL and row["caller_error"] is True, row
+    assert row["hint"] == vc._DA_GUARD_TOO_OLD_HINT, row
+    assert "make da-guard-build" in row["hint"], row
+    assert any("older than this tool" in d for d in row["details"]), row
+    p = subprocess.run([sys.executable, str(OPS / "validate_config.py"), "--config-dir", str(conf_d),
+                        "--json"], capture_output=True, text=True, encoding="utf-8",
+                       errors="replace", timeout=300)
+    rows = {r["check"]: r for r in json.loads(p.stdout)}
+    assert p.returncode == 2, (p.returncode, rows["profiles"])
+    assert rows["profiles"]["suggested_action"] == vc._DA_GUARD_TOO_OLD_HINT, rows["profiles"]
+
+
+# ── _with_exporter_reasons：只有「served-values 點名同一個檔」才換成它的錯 ─────
+
+def _parse_failed(path: str, reason: str) -> tv.ParseFailedError:
+    return tv.ParseFailedError(path, ValueError(reason), [])
+
+
+@pytest.mark.parametrize("served", [
+    pytest.param(tv.ServedValuesError("da-guard served-values exited 2", 2, "refused"),
+                 id="served-fails-another-way"),
+    pytest.param(_parse_failed("conf.d/other.yaml", "served: other file"),
+                 id="served-names-another-file"),
+    pytest.param(None, id="served-succeeds"),
+])
+def test_with_exporter_reasons_keeps_effectives_error(served, monkeypatch):
+    effective = _parse_failed("conf.d/_platform.yaml", "effective")
+
+    def fake_load_served_tree(_config_dir):
+        if served is not None:
+            raise served
+        return None
+
+    monkeypatch.setattr(vc, "load_served_tree", fake_load_served_tree)
+    assert vc._with_exporter_reasons(effective, "conf.d") is effective
+
+
+def test_with_exporter_reasons_takes_served_error_for_the_same_file(monkeypatch):
+    """對照組：同一支 helper 在 served-values 點名同一個檔時確實換成 served 的錯。"""
+    effective = _parse_failed("conf.d/_platform.yaml", "effective")
+    served = _parse_failed("conf.d/_platform.yaml", "served")
+
+    def fake_load_served_tree(_config_dir):
+        raise served
+
+    monkeypatch.setattr(vc, "load_served_tree", fake_load_served_tree)
+    assert vc._with_exporter_reasons(effective, "conf.d") is served

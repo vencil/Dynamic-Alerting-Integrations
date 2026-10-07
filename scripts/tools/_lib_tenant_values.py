@@ -278,12 +278,17 @@ class DaGuardNotFoundError(FileNotFoundError):
 
 
 class DaGuardError(RuntimeError):
-    """A da-guard subcommand failed. `returncode` and `stderr` are its own."""
+    """A da-guard subcommand failed. `returncode` and `stderr` are its own.
+    `stale` is True when the failure is named as a da-guard older than this
+    tool (its output lacks a field or flag this tool reads) — the binary's
+    fault, not the config tree's."""
 
-    def __init__(self, message: str, returncode: int | None, stderr: str) -> None:
+    def __init__(self, message: str, returncode: int | None, stderr: str,
+                 stale: bool = False) -> None:
         self.message = message
         self.returncode = returncode
         self.stderr = stderr
+        self.stale = stale
         detail = stderr.strip()
         super().__init__(f"{message}: {detail}" if detail else message)
 
@@ -392,7 +397,7 @@ def _run_da_guard(
                  if isinstance(e, KeyError) and e.args in (("skipped",), ("unreadable",)) else "")
         raise error(
             f"da-guard {subcommand} exited {proc.returncode} without the expected JSON ({e}){stale}",
-            proc.returncode, stderr) from e
+            proc.returncode, stderr, stale=bool(stale)) from e
 
     if parse_failed or unreadable:
         clauses = []
@@ -453,14 +458,14 @@ def load_served_tree(
                 and "flag provided but not defined: -schedules" in e.stderr):
             raise ServedValuesError(
                 f"{e.message} (--schedules not known) — this da-guard is older than this tool: "
-                "upgrade or rebuild it", e.returncode, e.stderr) from e
+                "upgrade or rebuild it", e.returncode, e.stderr, stale=True) from e
         raise
     # Read after the fields _run_da_guard checks, so an older da-guard is
     # named by the first field it lacks.
     if aliases is None:
         raise ServedValuesError(
             f"da-guard {SUBCOMMAND} exited {returncode} without the expected JSON ('aliases') — this "
-            "da-guard is older than this tool: upgrade or rebuild it", returncode, stderr)
+            "da-guard is older than this tool: upgrade or rebuild it", returncode, stderr, stale=True)
     try:
         aliases = {str(k): str(v) for k, v in aliases.items()}
     except AttributeError as e:
@@ -486,7 +491,7 @@ def load_served_tree(
             if "schedules" not in tv:
                 raise ServedValuesError(
                     f"da-guard {SUBCOMMAND}: tenant {tenant_id!r} has no schedules — this da-guard is "
-                    "older than this tool: upgrade or rebuild it", returncode, stderr)
+                    "older than this tool: upgrade or rebuild it", returncode, stderr, stale=True)
             try:
                 days = {k: _key_schedule(s) for k, s in tv["schedules"].items()}
             except (ValueError, KeyError, TypeError, AttributeError) as e:
@@ -596,8 +601,8 @@ def _missing_binary_message() -> str:
 
 
 MISSING_BINARY_MESSAGE = (
-    "da-guard binary not found: this tool reads the values through "
-    "`da-guard served-values`. Set $DA_GUARD_BINARY to its path, or put "
+    "da-guard binary not found: this tool reads the tenants through da-guard "
+    "(`da-guard effective` / `da-guard served-values`). Set $DA_GUARD_BINARY to its path, or put "
     "da-guard on $PATH (the da-tools image ships it as /usr/local/bin/da-guard; "
     "in a checkout of this repo, `make da-guard-build` builds it to .build/da-guard).")
 

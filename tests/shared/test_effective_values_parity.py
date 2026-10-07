@@ -299,7 +299,8 @@ def test_effective_tree_reads_skipped_and_refuses_output_without_it(tmp_path):
 
 
 def test_effective_tree_skipped_matches_served_tree(tmp_path, da_guard):
-    """真 da-guard：effective 的 skipped 與 served-values 的 skipped 同一份（Go 端同一函式）。"""
+    """真 da-guard，exit 0 的樹：effective 的 skipped 與 served-values 的 skipped 一致（Go 端同一函式）。
+    有檔無法 decode（exit 3）時 effective 的 skipped 可能是空的，不在此保證範圍。"""
     conf_d = tmp_path / "conf.d"
     (conf_d / "team").mkdir(parents=True)
     (conf_d / "_defaults.yaml").write_text("defaults:\n  mysql_connections: 80\n", encoding="utf-8")
