@@ -20,7 +20,6 @@ import copy
 import datetime
 import decimal
 import hashlib
-import io
 import json
 import math
 import os
@@ -965,12 +964,16 @@ class _GoKeyProfileTextLoader(_GoKeyLoader):
         into a Go string: its source text (`010` is "010", `1.50` is "1.50",
         `2026-12-31` is "2026-12-31"), a null is "", `!!binary` is the decoded
         bytes. The mapping's other keys elect nothing.
-      - no written `default:` but one reached through a merge key
-        (`{<<: {default: x}}`): ScheduledValue sees `<<`, takes its
-        arbitrary-mapping branch and keeps the yaml.v3 `Marshal` text of the
-        merged mapping (`default: x\\n`) — `_go_yaml_marshal`.
       - any other mapping (no `default` at all) stays the generic mapping;
         it elects no profile (`_profile_name`).
+    ⚠️ Not mirrored, named on stderr (`_warn_unmirrored_profiles`): no
+    written `default:` but one reached through a merge key
+    (`{<<: {default: x}}`). ScheduledValue sees `<<`, takes its
+    arbitrary-mapping branch and elects the yaml.v3 `Marshal` text of the
+    merged mapping (`default: x\\n`) as the profile NAME — normally an
+    unknown profile. Here it stays the generic mapping and elects nothing:
+    the served values agree unless a profile is named by that text, but
+    `_profile` and merged_hash differ from the exporter's.
     ⚠️ Not mirrored: a `default:` that is a sequence or a mapping. yaml.v3
     cannot decode it into a string, so the exporter rejects the WHOLE file
     (the `_read_profiles` precedent); here `_profile` stays that mapping and
@@ -996,6 +999,15 @@ class _GoKeyProfileTextLoader(_GoKeyLoader):
                 text = self._scheduled_value_text(value_node)
                 if text is not None:
                     mapping[key_node.value] = text  # the dict keeps its `_GoKey`
+                elif ("default" not in value_node.go_written_keys
+                      and any(isinstance(k, yaml.ScalarNode) and k.value == "default"
+                              for k, _ in value_node.value)):
+                    # Merge-key-only `default` (flattened above): not mirrored
+                    # — kept generic, tagged for `_warn_unmirrored_profiles`.
+                    # Built deep here: the lazily filled dict `super()` handed
+                    # out may still be empty.
+                    mapping[key_node.value] = _UnmirroredMergeProfile(
+                        self.construct_mapping(value_node, deep=True))
         return mapping
 
     def _scheduled_value_text(self, node) -> "str | None":
@@ -1018,306 +1030,41 @@ class _GoKeyProfileTextLoader(_GoKeyLoader):
                 return self._construct_binary(default).decode(
                     "utf-8", "describe_tenant.go_invalid_utf8")
             return _reject_surrogates(default.value, default)
-        merged = _go_generic(self, node)
-        if any(k == ("str", "default") for k in merged[1]):
-            return _go_yaml_marshal(merged)
         return None
 
 
-# ── yaml.v3 generic decode + Marshal (#2515: the merge-key `_profile`) ────
-# Values are `(kind, payload)`: kind "str" / "int" / "float" / "bool" /
-# "null" / "time" (payload: `_go_parse_timestamp`'s tuple), "map" (payload:
-# {key value: value}, insertion order) or "seq" (payload: a list).
 _YAML_NULL_TAG = "tag:yaml.org,2002:null"
-_GO_NULL_TEXTS = ("", "~", "null", "Null", "NULL")
-_GO_OLD_BOOLS = frozenset(("y", "Y", "yes", "Yes", "YES", "on", "On", "ON",
-                           "n", "N", "no", "No", "NO", "off", "Off", "OFF"))
-_GO_BASE60_FLOAT = re.compile(r"[-+]?[0-9][0-9_]*(?::[0-5]?[0-9])+(?:\.[0-9_]*)?")
 
 
-def _go_resolve_plain(text: str) -> tuple:
-    """yaml.v3 `resolve("", text)` of an untagged plain scalar, as decoded
-    into an `interface{}` (a timestamp is a time.Time there)."""
-    if text in _GO_NULL_TEXTS:
-        return ("null", None)
-    if text in _GO_BOOL_TEXTS:
-        return ("bool", _GO_BOOL_TEXTS[text])
-    if text in _GO_NONFINITE:
-        return ("float", _GO_NONFINITE[text])
-    if text[0] in "0123456789+-":
-        stamp = _go_parse_timestamp(text)
-        if stamp is not None:
-            return ("time", stamp)
-    if text[0] in "0123456789+-.":
-        number = _go_plain_number(text)
-        if number is not None:
-            return ("int", number) if isinstance(number, int) else ("float", number)
-    return ("str", text)
+class _UnmirroredMergeProfile(dict):
+    """A `_profile:` mapping whose `default` comes only through a merge key
+    (#2515): kept as the generic mapping, which the exporter does not do
+    (see `_GoKeyProfileTextLoader`). A plain dict otherwise."""
 
 
-def _go_generic(loader: Any, node: Any) -> tuple:
-    """yaml.v3's decode of `node` into an `interface{}` (merge keys resolved
-    as PyYAML's flattening resolves them: a written key over a merged one)."""
-    if isinstance(node, yaml.SequenceNode):
-        return ("seq", [_go_generic(loader, item) for item in node.value])
-    if isinstance(node, yaml.MappingNode):
-        loader.flatten_mapping(node)
-        out: dict = {}
-        for key_node, value_node in node.value:
-            out[_go_generic(loader, key_node)] = _go_generic(loader, value_node)
-        return ("map", out)
-    if node.style is not None or (getattr(node, "go_explicit_tag", False)
-                                  and node.tag == _YAML_STR_TAG):
-        return ("str", _reject_surrogates(node.value, node))
-    if node.tag == _YAML_BINARY_TAG:
-        return ("str", loader._construct_binary(node).decode(
-            "utf-8", "describe_tenant.go_invalid_utf8"))
-    return _go_resolve_plain(_reject_surrogates(node.value, node))
+# (resolved file, tenant id) already named — one line per file read, not per
+# construct (the platform files and the --what-if file are read again).
+_UNMIRRORED_PROFILE_WARNED: set = set()
 
 
-# reflect.Kind order, as yaml.v3's keyList.Less compares unlike kinds.
-_GO_KIND_RANK = {"bool": 1, "int": 2, "float": 14, "str": 24, "null": 20,
-                 "map": 21, "seq": 23, "time": 25}
-
-
-def _go_key_float(key: tuple) -> "float | None":
-    kind, payload = key
-    if kind in ("int", "float"):
-        return float(payload)
-    if kind == "bool":
-        return 1.0 if payload else 0.0
-    return None
-
-
-def _go_key_less(a: tuple, b: tuple) -> bool:
-    """yaml.v3 `keyList.Less` (sorter.go) — the order Marshal writes a
-    map's keys in: numbers by value, strings "naturally" (digit runs by
-    number), unlike kinds by reflect.Kind."""
-    af, bf = _go_key_float(a), _go_key_float(b)
-    if af is not None and bf is not None:
-        if af != bf:
-            return af < bf
-        if a[0] != b[0]:
-            return _GO_KIND_RANK[a[0]] < _GO_KIND_RANK[b[0]]
-        return a[1] < b[1]
-    if a[0] != "str" or b[0] != "str":
-        return _GO_KIND_RANK[a[0]] < _GO_KIND_RANK[b[0]]
-    ar, br = a[1], b[1]
-    digits = False
-    for i in range(min(len(ar), len(br))):
-        if ar[i] == br[i]:
-            digits = ar[i].isdigit()
+def _warn_unmirrored_profiles(path: Path, doc: Any) -> None:
+    """Name each tenant in `doc`'s `tenants:` whose `_profile` is an
+    `_UnmirroredMergeProfile`, once per file and tenant."""
+    block = doc.get("tenants") if isinstance(doc, dict) else None
+    if not isinstance(block, dict):
+        return
+    for tid, body in block.items():
+        if not (isinstance(body, dict) and isinstance(body.get("_profile"), _UnmirroredMergeProfile)):
             continue
-        al, bl = ar[i].isalpha(), br[i].isalpha()
-        if al and bl:
-            return ar[i] < br[i]
-        if al or bl:
-            return al if digits else bl
-        an = bn = 0
-        if ar[i] == "0" or br[i] == "0":
-            j = i - 1
-            while j >= 0 and ar[j].isdigit():
-                if ar[j] != "0":
-                    an = bn = 1
-                    break
-                j -= 1
-        ai = i
-        while ai < len(ar) and ar[ai].isdigit():
-            an = an * 10 + ord(ar[ai]) - 48
-            ai += 1
-        bi = i
-        while bi < len(br) and br[bi].isdigit():
-            bn = bn * 10 + ord(br[bi]) - 48
-            bi += 1
-        if an != bn:
-            return an < bn
-        if ai != bi:
-            return ai < bi
-        return ar[i] < br[i]
-    return len(ar) < len(br)
-
-
-class _GoV3Emitter(yaml.emitter.Emitter):
-    """PyYAML's emitter (a libyaml port, as yaml.v3's is) with yaml.v3's
-    layout change (emitterc.go `yaml_emitter_increase_indent`, "[Go] This was
-    changed so that indentations are more regular"): a block sequence under
-    a mapping key is indented, a collection inside a sequence item starts
-    right after its `- `, everything else aligns to a multiple of the
-    indent."""
-
-    def expect_block_sequence(self):  # noqa: D102 — see class
-        self.increase_indent(flow=False, indentless=False)
-        self.state = self.expect_first_block_sequence_item
-
-    def increase_indent(self, flow=False, indentless=False):  # noqa: D102 — see class
-        self.indents.append(self.indent)
-        if self.indent is None:
-            self.indent = self.best_indent if flow else 0
-        elif not indentless:
-            if self.states and self.states[-1] == self.expect_block_sequence_item:
-                self.indent += 2
-            else:
-                self.indent = self.best_indent * ((self.indent + self.best_indent)
-                                                  // self.best_indent)
-
-    def check_simple_key(self):
-        """emitterc.go `yaml_emitter_check_simple_key`: up to 128 BYTES, an
-        empty scalar included (`"": 4`, where PyYAML writes `? ""`)."""
-        if isinstance(self.event, yaml.ScalarEvent):
-            if self.analysis is None:
-                self.analysis = self.analyze_scalar(self.event.value)
-            return (not self.analysis.multiline
-                    and len(self.event.value.encode("utf-8", "surrogatepass")) <= 128)
-        return super().check_simple_key()
-
-    def write_literal(self, text):  # noqa: D102 — yaml.v3 writes no `...` after `|+`
-        super().write_literal(text)
-        self.open_ended = False
-
-    def analyze_scalar(self, scalar):
-        """emitterc.go `yaml_emitter_analyze_scalar`. Where it differs from
-        PyYAML's: a tab rules out plain and single-quoted only (a block
-        scalar may hold it), and a character outside libyaml's printable
-        set — a 4-byte one too — forces double quotes."""
-        if not scalar:
-            return yaml.emitter.ScalarAnalysis(
-                scalar=scalar, empty=True, multiline=False, allow_flow_plain=False,
-                allow_block_plain=True, allow_single_quoted=True,
-                allow_double_quoted=True, allow_block=False)
-        breaks, blanks = "\r\n\x85  ", " \t"
-        block_ind = flow_ind = line_breaks = special = tabs = False
-        lead_space = lead_break = trail_space = trail_break = False
-        break_space = space_break = prev_space = prev_break = False
-        if scalar.startswith(("---", "...")):
-            block_ind = flow_ind = True
-        preceded = True
-        last = len(scalar) - 1
-        for i, ch in enumerate(scalar):
-            followed = i == last or scalar[i + 1] in blanks
-            if i == 0:
-                if ch in "#,[]{}&*!|>'\"%@`":
-                    flow_ind = block_ind = True
-                elif ch in "?:":
-                    flow_ind = True
-                    block_ind = block_ind or followed
-                elif ch == "-" and followed:
-                    flow_ind = block_ind = True
-            elif ch in ",?[]{}":
-                flow_ind = True
-            elif ch == ":":
-                flow_ind = True
-                block_ind = block_ind or followed
-            elif ch == "#" and preceded:
-                flow_ind = block_ind = True
-            if ch == "\t":
-                tabs = True
-            elif not (ch == "\n" or " " <= ch <= "~" or "\xa0" <= ch <= "퟿"
-                      or ("" <= ch <= "�" and ch != "﻿")):
-                special = True
-            if ch == " ":
-                lead_space = lead_space or i == 0
-                trail_space = trail_space or i == last
-                break_space = break_space or prev_break
-                prev_space, prev_break = True, False
-            elif ch in breaks:
-                line_breaks = True
-                lead_break = lead_break or i == 0
-                trail_break = trail_break or i == last
-                space_break = space_break or prev_space
-                prev_space, prev_break = False, True
-            else:
-                prev_space = prev_break = False
-            preceded = ch in blanks or ch in breaks or ch == "\0"
-        flow_plain = block_plain = single = block = True
-        if lead_space or lead_break or trail_space or trail_break:
-            flow_plain = block_plain = False
-        if trail_space:
-            block = False
-        if break_space:
-            flow_plain = block_plain = single = False
-        if space_break or tabs or special:
-            flow_plain = block_plain = single = False
-        if space_break or special:
-            block = False
-        if line_breaks:
-            flow_plain = block_plain = False
-        if flow_ind:
-            flow_plain = False
-        if block_ind:
-            block_plain = False
-        return yaml.emitter.ScalarAnalysis(
-            scalar=scalar, empty=False, multiline=line_breaks, allow_flow_plain=flow_plain,
-            allow_block_plain=block_plain, allow_single_quoted=single,
-            allow_double_quoted=True, allow_block=block)
-
-
-def _go_scalar_event(value: tuple) -> Any:
-    """The scalar event yaml.v3's encoder emits for `value` (encode.go)."""
-    kind, payload = value
-    style = None
-    if kind == "str":
-        text = payload
-        # `<<` is a string here: yaml.v3 consults its resolve map only for
-        # a text whose first character has a hint, and `<` has none.
-        plain_ok = (bool(text) and _go_resolve_plain(text)[0] == "str"
-                    and not _GO_BASE60_FLOAT.fullmatch(text) and text not in _GO_OLD_BOOLS)
-        if "\n" in text:
-            style = "|"
-        elif not plain_ok:
-            style = '"'
-    elif kind == "int":
-        text = str(payload)
-    elif kind == "bool":
-        text = "true" if payload else "false"
-    elif kind == "null":
-        text = "null"
-    elif kind == "time":
-        text = _go_time_json(*payload)
-    else:  # float: strconv 'g', shortest
-        text = {"+Inf": ".inf", "-Inf": "-.inf", "NaN": ".nan"}.get(
-            _go_float_v(payload), _go_float_v(payload))
-    return yaml.ScalarEvent(None, None, (True, True), text, style=style)
-
-
-def _go_marshal_events(value: tuple, events: list) -> None:
-    kind, payload = value
-    if kind == "map":
-        events.append(yaml.MappingStartEvent(None, None, True, flow_style=not payload))
-        keys = list(payload)
-        for i in range(1, len(keys)):  # insertion sort: Less is not a total key
-            j = i
-            while j > 0 and _go_key_less(keys[j], keys[j - 1]):
-                keys[j - 1], keys[j] = keys[j], keys[j - 1]
-                j -= 1
-        for key in keys:
-            _go_marshal_events(key, events)
-            _go_marshal_events(payload[key], events)
-        events.append(yaml.MappingEndEvent())
-    elif kind == "seq":
-        events.append(yaml.SequenceStartEvent(None, None, True, flow_style=not payload))
-        for item in payload:
-            _go_marshal_events(item, events)
-        events.append(yaml.SequenceEndEvent())
-    else:
-        events.append(_go_scalar_event(value))
-
-
-def _go_yaml_marshal(value: tuple) -> str:
-    """yaml.v3 `Marshal` of a `_go_generic` value: block style, indent 4, no
-    line wrapping, keys in `keyList` order, a string quoted where yaml.v3
-    would read it back as something else (`"010"`, `"yes"`, `""`).
-
-    ⚠️ Known divergence: a multi-line string that STARTS with a line break.
-    yaml.v3 writes it as a `|4-` block and drops that first break (its own
-    round-trip loss); this writes the break."""
-    events: list = [yaml.StreamStartEvent(), yaml.DocumentStartEvent(explicit=False)]
-    _go_marshal_events(value, events)
-    events += [yaml.DocumentEndEvent(explicit=False), yaml.StreamEndEvent()]
-    out = io.StringIO()
-    emitter = _GoV3Emitter(out, indent=4, width=(1 << 31) - 1, allow_unicode=True)
-    for event in events:
-        emitter.emit(event)
-    return out.getvalue()
+        key = (str(Path(path).resolve()), str(tid))
+        if key in _UNMIRRORED_PROFILE_WARNED:
+            continue
+        _UNMIRRORED_PROFILE_WARNED.add(key)
+        print(f"WARNING: {path}: tenant '{tid}': `_profile` takes `default` only through a "
+              f"merge key (`<<`) — not mirrored here. The exporter elects the YAML text of "
+              f"the merged mapping as the profile name; this tool keeps the mapping and "
+              f"elects no profile, so `_profile` and merged_hash differ from the "
+              f"exporter's (#2515).", file=sys.stderr)
 
 
 def _load_first_document(path: Path) -> Any:
@@ -1346,7 +1093,9 @@ def _load_first_document(path: Path) -> Any:
         # #2123 strict + #2114 exporter keys, composed in `_lib_io`; each key
         # also carries the exporter's spelling (#2371), and `_profile:` is
         # source text (#2297).
-        return next(strict_safe_load_all(f, loader=_GoKeyProfileTextLoader), None)
+        doc = next(strict_safe_load_all(f, loader=_GoKeyProfileTextLoader), None)
+    _warn_unmirrored_profiles(path, doc)
+    return doc
 
 
 def _load_platform_doc(path: Path) -> Any:

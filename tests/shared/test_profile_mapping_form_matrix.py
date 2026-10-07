@@ -6,8 +6,11 @@ Go 的讀法（pkg/config `withProfileText` ← `ScheduledValue.UnmarshalYAML`�
   yaml.v3 把純量解進 Go string 時保留原文（`010` 是 "010"、`1.50` 是 "1.50"），null 是 ""，
   `!!binary` 是解碼後的位元組；其餘鍵不選 profile。
 - 沒寫 `default:`、但經 merge key 帶進來（`{<<: {default: x}}`）：ScheduledValue 看到 `<<`，
-  走任意 mapping 的分支，留下 merged mapping 的 yaml.v3 `Marshal` 文字（`default: x\\n`）；
-  那段文字恰好是某個 profile 的名字時，就綁到它。
+  走任意 mapping 的分支，以 merged mapping 的 yaml.v3 `Marshal` 文字（`default: x\\n`）當
+  profile 名稱。**describe 刻意不鏡像**（減法裁決：不移植 yaml.v3 Marshal）：`_profile`
+  留成 generic mapping、不選 profile，並在 stderr 印 WARNING 點名檔案與租戶。fixture 不定義
+  以 Marshal 文字命名的 profile，所以兩邊的「值」相同；`_profile` 與 merged_hash 允許不同
+  ——見 `MERGE_KEY_SHAPES` 那組已知分歧列。
 - 其他 mapping（完全沒有 `default`）、sequence、null：原樣保留，不選 profile。
 
 每格在租戶檔與根平台檔 `tenants:` 兩個位置各量一次，比對三樣東西：effective_config 的
@@ -15,7 +18,7 @@ Go 的讀法（pkg/config `withProfileText` ← `ScheduledValue.UnmarshalYAML`�
 describe 對 mapping 一律不綁 profile、`_profile` 原樣留成 dict，除了「沒有 default」與
 對照組之外每格都分歧。
 
-`{default: [..]}` / `{default: {..}}` 是刻意**不**鏡像的一格：yaml.v3 無法把它解成字串，
+`{default: [..]}` / `{default: {..}}` 也是刻意**不**鏡像的一格：yaml.v3 無法把它解成字串，
 exporter 拒收整份檔（rc 3）；describe 不鏡像整檔拒收（`_read_profiles` 的先例），本檔把
 這個已知分歧釘住，免得哪天被當成「一致」。
 
@@ -39,11 +42,10 @@ DESCRIBE = REPO_ROOT / "scripts" / "tools" / "dx" / "describe_tenant.py"
 pytestmark = pytest.mark.usefixtures("da_guard_env")
 
 _DEFAULTS = "defaults:\n  mysql_connections: 80\n"
-# Three profiles: `010`, and the two yaml.v3 Marshal texts the merge-key
-# shapes produce — so a reader that elects the wrong text binds the wrong value.
-_PROFILES = ('profiles:\n  "010":\n    mysql_connections: 10\n'
-             '  "default: 010":\n    mysql_connections: 11\n'
-             '  "default: \\"010\\"":\n    mysql_connections: 12\n')
+# One profile, `010`. No profile is named by a yaml.v3 Marshal text
+# (`default: "010"`): the merge-key rows are a known divergence on `_profile`
+# and merged_hash only, so their served value must still agree.
+_PROFILES = 'profiles:\n  "010":\n    mysql_connections: 10\n'
 
 # (name, `_profile:` as written, the value Go serves for mysql_connections)
 SHAPES = [
@@ -61,16 +63,20 @@ SHAPES = [
     ("map-float-default", "{default: 1.50}", 80),
     ("map-quoted-key", "{\"default\": '010'}", 10),
     ("map-no-default-CONTROL", "{foo: '010'}", 80),
-    ("merge-key", "{<<: {default: '010'}}", 12),
-    ("merge-key-bare", "{<<: {default: 010}}", 80),
-    ("merge-key-plus", "{<<: {default: '010'}, reason: x}", 80),
-    ("merge-key-nested", "{<<: {default: '010', n: [1, {x: yes}], s: 'a: b', e: '', "
-                         "t: 2026-12-31, k: {b: 1, a10: 2, a9: 3}}}", 80),
     ("merge-under-written-default", "{<<: {default: 'zzz'}, default: '010'}", 10),
     ("sequence-CONTROL", "['010']", 80),
     ("null-CONTROL", "~", 80),
 ]
 WHERE = ("tenant-file", "platform-tenants")
+# Known divergence (#2515 減法): `default` only through a merge key. Go elects
+# the merged mapping's yaml.v3 Marshal text (an unknown profile here); describe
+# keeps the generic mapping and elects nothing, and says so on stderr.
+MERGE_KEY_SHAPES = [
+    ("merge-key", "{<<: {default: '010'}}"),
+    ("merge-key-bare", "{<<: {default: 010}}"),
+    ("merge-key-plus", "{<<: {default: '010'}, reason: x}"),
+    ("merge-key-nested", "{<<: {default: '010', n: [1, {x: yes}], s: 'a: b'}}"),
+]
 
 
 def _tree(root: Path, profile: str, where: str) -> Path:
@@ -89,12 +95,16 @@ def _tree(root: Path, profile: str, where: str) -> Path:
 
 
 def _describe(conf_d: Path, *extra: str) -> dict:
+    return json.loads(_describe_proc(conf_d, *extra).stdout)
+
+
+def _describe_proc(conf_d: Path, *extra: str) -> subprocess.CompletedProcess:
     p = subprocess.run([sys.executable, str(DESCRIBE), "-c", str(conf_d), "t1",
                         "--format", "json", *extra],
                        capture_output=True, text=True, encoding="utf-8", errors="replace",
                        timeout=120, env={**os.environ, "PYTHONIOENCODING": "utf-8"})
     assert p.returncode == 0, p.stderr
-    return json.loads(p.stdout)
+    return p
 
 
 def _reading(conf_d: Path) -> dict:
@@ -123,9 +133,9 @@ def test_matrix_is_not_vacuous() -> None:
     assert len(names) == len(set(names))
     # Both answers occur — bound and unbound — so equal readings mean
     # something, and every Go branch named in the docstring has a row.
-    assert {v for _, _, v in SHAPES} == {10, 12, 80}
-    for row in ("map-quoted", "map-null-default", "merge-key", "map-no-default-CONTROL",
-                "scalar-CONTROL"):
+    assert {v for _, _, v in SHAPES} == {10, 80}
+    for row in ("map-quoted", "map-null-default", "merge-under-written-default",
+                "map-no-default-CONTROL", "scalar-CONTROL"):
         assert row in names, row
 
 
@@ -157,3 +167,34 @@ def test_a_non_scalar_default_is_a_known_divergence(tmp_path, profile):
         tv.load_effective(conf_d)
     got = _reading(conf_d)
     assert isinstance(got["_profile"], dict) and got["bound"] == [] and got["value"] == 80, got
+
+
+@pytest.mark.parametrize("where", WHERE)
+@pytest.mark.parametrize("name,profile", MERGE_KEY_SHAPES, ids=[s[0] for s in MERGE_KEY_SHAPES])
+def test_merge_key_only_default_is_a_named_known_divergence(tmp_path, name, profile, where):
+    """已知分歧列：值與 Go 相同（兩邊都沒綁 profile）；`_profile` 與 merged_hash 允許不同
+    （Go 的 `_profile` 是 Marshal 文字，describe 是 generic mapping，不斷言相等）；stderr 有
+    WARNING，點名檔案與租戶，每個檔、每個租戶只印一次。"""
+    conf_d = _tree(tmp_path, profile, where)
+    oracle = _oracle(conf_d)
+    assert isinstance(oracle["_profile"], str) and oracle["_profile"].startswith("default: ")
+    assert oracle["bound"] == []                         # 前提：Marshal 文字不是任何 profile
+    got = _reading(conf_d)
+    assert got["value"] == oracle["value"] == 80, got
+    assert got["bound"] == [] and isinstance(got["_profile"], dict), got
+    assert "default" in got["_profile"], got
+    err = _describe_proc(conf_d, "-s").stderr
+    fname = "t1.yaml" if where == "tenant-file" else "_defaults.yaml"
+    lines = [l for l in err.splitlines() if "only through a merge key" in l]
+    assert len(lines) == 1, err
+    assert lines[0].startswith("WARNING: ") and fname in lines[0] and "tenant 't1'" in lines[0]
+    assert "merged_hash differ" in lines[0], lines[0]
+
+
+def test_written_default_and_plain_mappings_do_not_warn(tmp_path):
+    """必不響：直接寫出 `default:`（含 merge 下的直接寫出）與沒有 default 的 mapping 不印 WARNING。"""
+    for i, profile in enumerate(["{default: '010'}", "{<<: {default: 'zzz'}, default: '010'}",
+                                 "{foo: '010'}"]):
+        (tmp_path / str(i)).mkdir()
+        err = _describe_proc(_tree(tmp_path / str(i), profile, "tenant-file")).stderr
+        assert "merge key" not in err, (profile, err)
