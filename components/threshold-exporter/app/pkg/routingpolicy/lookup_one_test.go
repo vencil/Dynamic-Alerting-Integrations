@@ -6,11 +6,13 @@ import (
 	"math/rand"
 	"os"
 	"path/filepath"
+	"reflect"
 	"runtime"
 	"strings"
 	"testing"
 	"time"
 
+	"github.com/vencil/threshold-exporter/pkg/pyyamlcompat"
 	"gopkg.in/yaml.v3"
 )
 
@@ -101,6 +103,10 @@ func TestLookupOne_EquivalentToLookup(t *testing.T) {
 		"a: &a {b: &b {<<: *a, k: 1}, j: 2}\nc: {<<: [*b, *a]}\n",
 		"a: &a {!!merge x: {k: 1}, k: 2}\nb: {<<: *a}\n",
 		"a: {x: 1, x: 2, <<: {x: 3}}\n",
+		// #2677: several merge keys in one mapping, the later one winning
+		"!!merge q: {domain_policies: null}\n<<: {domain_policies: {fin: {}}}\n",
+		"a: &a {x: 1}\nb: {!!merge p: *a, <<: [{x: 2}, {x: 3}], !!merge r: {y: 1}}\n",
+		"a: &a {x: 1}\nb: {<<: [{!!merge p: {x: 2}, <<: *a}, {x: 4}], !!merge r: {y: 1}}\n",
 	)
 	checked := 0
 	for i, doc := range corpus {
@@ -124,12 +130,195 @@ func TestLookupOne_EquivalentToLookup(t *testing.T) {
 	t.Logf("%d matrix documents, %d (mapping, key) pairs compared", fromMatrix, checked)
 }
 
+// TestLookup_MergePrecedenceIsPyYAMLs (#2677): which merge source supplies a
+// key, judged against pyyamlcompat.Decode — a separate port that builds
+// SafeConstructor.flatten_mapping's pair list literally, so it is not this
+// package's first-hit search restated. Corpus: the hand-written #2677 shapes
+// and the random merge graphs (several `<<` per mapping, sequences, nested
+// sources). A document whose own keys repeat is skipped: there PyYAML keeps
+// the last pair and lookup the first, and every reader refuses the file.
+func TestLookup_MergePrecedenceIsPyYAMLs(t *testing.T) {
+	t.Parallel()
+	corpus := []string{
+		"!!merge q: {domain_policies: null}\n<<: {domain_policies: {fin: {}}}\n",
+		"<<: {domain_policies: {fin: {}}}\n!!merge q: {domain_policies: null}\n",
+		"!!merge p: {x: 1}\n<<: [{x: 2}, {x: 3}]\n",
+		"<<: [{x: 2}, {x: 3}]\n!!merge p: {x: 1}\n",
+		"<<: [{!!merge p: {x: 1}, <<: {x: 2}}, {x: 3}]\n",
+		"!!merge p: {x: 1}\n<<: {x: 2}\nx: 3\n",
+	}
+	for seed := int64(1); seed <= 2000; seed++ { // most repeat an own key: skipped below
+		corpus = append(corpus, randomMergeDoc(rand.New(rand.NewSource(seed))))
+	}
+	compared, multi := 0, 0
+	for i, doc := range corpus {
+		var root yaml.Node
+		if err := yaml.Unmarshal([]byte(doc), &root); err != nil || len(root.Content) == 0 {
+			t.Fatalf("corpus[%d] does not parse: %v\n%s", i, err, doc)
+		}
+		maps, ownDup := mappingsOf(&root)
+		if ownDup {
+			continue
+		}
+		for _, m := range maps {
+			py, ok := pyyamlcompat.Decode(m).(map[string]any)
+			if !ok {
+				continue // a key PyYAML does not build as a string (none here)
+			}
+			merges := 0
+			for j := 0; j+1 < len(m.Content); j += 2 {
+				if isMergeKey(m.Content[j]) {
+					merges++
+				}
+			}
+			if merges > 1 {
+				multi++
+			}
+			for _, k := range []string{"a", "b", "c", "x", "y", "domain_policies"} {
+				want, wantOK := py[k]
+				got := lookup(m, k)
+				if !wantOK {
+					if got != nil {
+						t.Errorf("corpus[%d] line %d key %q: PyYAML has no such key, lookup = %v", i, m.Line, k, nodeAt(got))
+					}
+					continue
+				}
+				if got == nil || !reflect.DeepEqual(pyyamlcompat.Decode(got), want) {
+					t.Errorf("corpus[%d] line %d key %q: lookup = %v, PyYAML = %#v\n%s", i, m.Line, k, nodeAt(got), want, doc)
+				}
+				compared++
+			}
+		}
+	}
+	if compared < 1000 || multi < 100 {
+		t.Errorf("only %d keys compared, %d mappings with several merge keys", compared, multi)
+	}
+	t.Logf("%d keys compared, %d mappings with several merge keys", compared, multi)
+}
+
+// hasUnsupported reports whether v holds a value pyyamlcompat marks as one
+// PyYAML does not build (there: the whole safe_load fails).
+func hasUnsupported(v any) bool {
+	switch v := v.(type) {
+	case pyyamlcompat.Unsupported:
+		return true
+	case map[string]any:
+		for _, c := range v {
+			if hasUnsupported(c) {
+				return true
+			}
+		}
+	case []any:
+		for _, c := range v {
+			if hasUnsupported(c) {
+				return true
+			}
+		}
+	}
+	return false
+}
+
+// TestMergeKeyShape (#2677 R1): a merge value PyYAML's flatten_mapping
+// refuses (not a mapping, nor a sequence of mappings) makes PyYAML refuse the
+// whole document — the generator drops the file. parseDoc (da-guard)
+// refuses it, `<<` and the tagged spelling alike; pyyamlcompat.Decode marks
+// the same mapping Unsupported. What PyYAML
+// merges (an empty sequence, an alias to a mapping) passes.
+func TestMergeKeyShape(t *testing.T) {
+	t.Parallel()
+	const pol = "domain_policies: {fin: {tenants: [t1], constraints: {forbidden_receiver_types: [slack]}}}\n"
+	for src, refused := range map[string]bool{
+		"!!merge q: 5\n" + pol:           true,
+		"!!merge q: ~\n" + pol:           true,
+		"!!merge q: [1]\n" + pol:         true,
+		"<<: 5\n" + pol:                  true,
+		"<<: [{x: 1}, [2]]\n" + pol:      true,
+		"x: {<<: null}\n" + pol:          true,
+		"<<: []\n" + pol:                 false,
+		"a: &a {x: 1}\n<<: [*a]\n" + pol: false,
+		"!!merge q: {x: 1}\n" + pol:      false,
+	} {
+		var root yaml.Node
+		if err := yaml.Unmarshal([]byte(src), &root); err != nil {
+			t.Fatalf("%q: %v", src, err)
+		}
+		if py := hasUnsupported(pyyamlcompat.Decode(&root)); py != refused {
+			t.Errorf("%q: pyyamlcompat refuses = %v, table says %v", src, py, refused)
+		}
+		if _, perr := parseDoc([]byte(src), true); (perr != nil) != refused {
+			t.Errorf("%q: parseDoc err = %v, want refused %v", src, perr, refused)
+		}
+	}
+}
+
+// TestMergeKeyShape_AliasedSequenceIsLinear (#2677): one sequence of n
+// mappings aliased as the merge value of n mappings is checked once, not
+// once per merge key — mergeKeyShape runs on every LoadRoot (tenant-api:
+// every request). Judged by the nodes looked at against the input's size,
+// not a clock: a check per merge key looks at n*(n+1).
+func TestMergeKeyShape_AliasedSequenceIsLinear(t *testing.T) {
+	t.Parallel()
+	const n = 2000
+	var b strings.Builder
+	b.WriteString("s: &S [")
+	for i := 0; i < n; i++ {
+		b.WriteString("{}, ")
+	}
+	b.WriteString("{}]\nm:\n")
+	for i := 0; i < n; i++ {
+		b.WriteString("  - {<<: *S}\n")
+	}
+	var doc yaml.Node
+	if err := yaml.Unmarshal([]byte(b.String()), &doc); err != nil {
+		t.Fatal(err)
+	}
+	work, err := mergeKeyShapeWork(&doc)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if work > 2*(n+1) {
+		t.Errorf("%d merge-value nodes looked at for a document of %d mappings: the aliased sequence is rescanned", work, 2*n+2)
+	}
+}
+
+// mappingsOf lists doc's mapping nodes (aliases not entered) and whether any
+// of them writes one key twice (by source text, an alias key by its anchor's).
+func mappingsOf(doc *yaml.Node) (maps []*yaml.Node, ownDup bool) {
+	stack := []*yaml.Node{doc}
+	for len(stack) > 0 {
+		n := stack[len(stack)-1]
+		stack = stack[:len(stack)-1]
+		if n.Kind == yaml.MappingNode {
+			maps = append(maps, n)
+			seen := map[string]bool{}
+			for i := 0; i+1 < len(n.Content); i += 2 {
+				if k := n.Content[i]; !isMergeKey(k) {
+					ownDup = ownDup || seen[deref(k).Value]
+					seen[deref(k).Value] = true
+				}
+			}
+		}
+		if n.Kind != yaml.AliasNode {
+			stack = append(stack, n.Content...)
+		}
+	}
+	return maps, ownDup
+}
+
 // randomMergeDoc writes a document of anchored mappings that merge earlier
 // ones (an alias, a sequence of aliases, or an inline mapping), with own
 // keys that repeat merged ones, null and mapping values, and alias keys.
 func randomMergeDoc(r *rand.Rand) string {
 	keys := []string{"a", "b", "c", "domain_policies"}
+	// inline: anchors written on an inline merge value (`<<: &i3 {...}`);
+	// usable: how many of them a body may alias — those of earlier bodies
+	// only, so every alias follows its anchor (#2677 R1: an anchor inside a
+	// merge value that a mapping without merge keys aliases).
+	inline, usable := 0, 0
 	val := func() string {
+		if usable > 0 && r.Intn(5) == 0 {
+			return fmt.Sprintf("*i%d", r.Intn(usable))
+		}
 		switch r.Intn(4) {
 		case 0:
 			return "null"
@@ -144,6 +333,7 @@ func randomMergeDoc(r *rand.Rand) string {
 	b.WriteString("s0: &s0 a\ns1: &s1 domain_policies\n")
 	n := 3 + r.Intn(12)
 	body := func(i int) string {
+		usable = inline
 		var parts []string
 		for j := r.Intn(4); j > 0; j-- {
 			if i > 0 && r.Intn(3) == 0 {
@@ -159,11 +349,16 @@ func randomMergeDoc(r *rand.Rand) string {
 			case 1:
 				var srcs []string
 				for k := 1 + r.Intn(3); k > 0; k-- {
+					if usable > 0 && r.Intn(4) == 0 {
+						srcs = append(srcs, fmt.Sprintf("*i%d", r.Intn(usable)))
+						continue
+					}
 					srcs = append(srcs, fmt.Sprintf("*m%d", r.Intn(i)))
 				}
 				parts = append(parts, "<<: ["+strings.Join(srcs, ", ")+"]")
 			default:
-				parts = append(parts, fmt.Sprintf("<<: {%s: %s, <<: *m%d}", keys[r.Intn(len(keys))], val(), r.Intn(i)))
+				parts = append(parts, fmt.Sprintf("<<: &i%d {%s: %s, <<: *m%d}", inline, keys[r.Intn(len(keys))], val(), r.Intn(i)))
+				inline++
 			}
 		}
 		r.Shuffle(len(parts), func(x, y int) { parts[x], parts[y] = parts[y], parts[x] })

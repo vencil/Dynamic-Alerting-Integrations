@@ -215,3 +215,55 @@ func containsPrefix(list []string, prefix string) bool {
 	}
 	return false
 }
+
+// TestRun_UnmergeableMergeValueIsExitThree (#2677 R2): a merge value the
+// route generator will not merge (not a mapping, nor a list of mappings —
+// `!!merge q: ~`, which the exporter's decode reads as a plain key) makes it
+// refuse the whole file, as for a repeated key: withGeneratorDuplicates names
+// the file in parse_failed (exit 3) with the merge value's shape, and drops
+// its tenants. Before, a defaults carrier so refused left da-guard at exit 0
+// (its `_routing_defaults` silently unread), and a tenant file so refused
+// was judged on a routing nobody read (missing_receiver_field).
+func TestRun_UnmergeableMergeValueIsExitThree(t *testing.T) {
+	t.Parallel()
+	const slack = "{type: slack, api_url: 'https://hooks.slack.com/services/T/B/x'}"
+	for _, tc := range []struct {
+		name, file string
+		files      map[string]string
+	}{
+		{"defaults carrier", "_defaults.yaml", map[string]string{
+			"_defaults.yaml": rsDefaults + "_routing_defaults:\n  !!merge q: ~\n  receiver: " + slack + "\n",
+			"_domain_policy.yaml": "domain_policies:\n  fin:\n    tenants: [tx]\n" +
+				"    constraints: {forbidden_receiver_types: [slack]}\n",
+			"tx.yaml": rsTenant,
+		}},
+		{"tenant file", "tx.yaml", map[string]string{
+			"tx.yaml": "!!merge q: 5\n" + rsTenant + "    _routing:" + rsOKRoute,
+		}},
+	} {
+		tc := tc
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			tmp := t.TempDir()
+			tree := map[string]string{}
+			for k, v := range tc.files {
+				tree["conf.d/"+k] = v
+			}
+			testutil.WriteTree(t, tmp, tree)
+			code, stdout, stderr := runOnce(t, "--config-dir", filepath.Join(tmp, "conf.d"), "--format", "json")
+			var doc struct {
+				ParseFailed []string `json:"parse_failed"`
+			}
+			if err := json.Unmarshal([]byte(stdout), &doc); err != nil {
+				t.Fatalf("exit %d, report is not JSON: %v\nstdout=%s\nstderr=%s", code, err, stdout, stderr)
+			}
+			if code != exitParseFailed || !reflect.DeepEqual(doc.ParseFailed, []string{tc.file}) {
+				t.Errorf("exit %d, parse_failed %v; want exit %d, parse_failed [%s]\nstdout=%s",
+					code, doc.ParseFailed, exitParseFailed, tc.file, stdout)
+			}
+			if !strings.Contains(stderr, tc.file) || !strings.Contains(stderr, "for merging") {
+				t.Errorf("stderr %q, want %s named with the merge value's shape", stderr, tc.file)
+			}
+		})
+	}
+}

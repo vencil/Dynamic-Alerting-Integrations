@@ -350,6 +350,84 @@ func TestParseConfig_DomainPoliciesNotAMapping(t *testing.T) {
 	}
 }
 
+// #2677: a key the route generator merges and this package's yaml.v3 decode
+// reads as a plain key — `!!merge q:`, an alias naming an anchored `<<` —
+// anywhere in the file, so the two can read different policies (here: none
+// at all, or none for fin, while the generator forbids slack for t1). The
+// file is refused, whichever way the generator reads it; so is one the
+// generator drops whole (a `<<` written as a value).
+func TestParseConfig_TaggedMergeKeyIsRefused(t *testing.T) {
+	t.Parallel()
+	const fin = "{domain_policies: {fin: {tenants: [t1], constraints: {forbidden_receiver_types: [slack]}}}}"
+	for _, src := range []string{
+		"!!merge q: {domain_policies: null}\n<<: " + fin + "\n", // generator: fin
+		"<<: {domain_policies: null}\n!!merge q: " + fin + "\n", // generator: fin
+		"<<: " + fin + "\n!!merge q: {domain_policies: null}\n", // generator: unusable
+		// under domain_policies, in a domain, in its constraints, an alias value
+		"domain_policies:\n  !!merge q: {fin: {tenants: [t1], constraints: {forbidden_receiver_types: [slack]}}}\n",
+		"domain_policies: {fin: {!!merge q: {tenants: [t1], constraints: {forbidden_receiver_types: [slack]}}}}\n",
+		"domain_policies: {fin: {tenants: [t1], constraints: {!!merge q: {forbidden_receiver_types: [slack]}}}}\n",
+		"x: &b {tenants: [t1], constraints: {forbidden_receiver_types: [slack]}}\n" +
+			"domain_policies: {fin: {!!merge q: *b}}\n",
+		// B1c: an alias key naming an anchored `<<` — a merge to the
+		// generator, a plain "<<" key to yaml.v3 (in a domain, at the top,
+		// in constraints, under domain_policies)
+		"x: {&m <<: {}}\ndomain_policies:\n  fin:\n    tenants: [t1]\n    *m : {constraints: {forbidden_receiver_types: [slack]}}\n",
+		"x: {&m <<: {}}\n*m : {domain_policies: {fin: {tenants: [t1], constraints: {forbidden_receiver_types: [slack]}}}}\n",
+		"x: {&m <<: {}}\ndomain_policies:\n  fin:\n    tenants: [t1]\n    constraints:\n      *m : {forbidden_receiver_types: [slack]}\n",
+		"x: {&m !!merge <<: {}}\ndomain_policies:\n  *m : {fin: {tenants: [t1], constraints: {forbidden_receiver_types: [slack]}}}\n",
+		// `<<` written as a value: the generator has no constructor for it
+		// and drops the file; yaml.v3 reads the string "<<"
+		"x: [<<]\ndomain_policies: {fin: {tenants: [t1], constraints: {forbidden_receiver_types: [slack]}}}\n",
+		// so is a merge value it will not merge, or a key it counts twice,
+		// under a key the policy struct never reads
+		"x: {<<: 5}\ndomain_policies: {fin: {tenants: [t1], constraints: {forbidden_receiver_types: [slack]}}}\n",
+		"x: {a: 1, a: 2}\ndomain_policies: {fin: {tenants: [t1], constraints: {forbidden_receiver_types: [slack]}}}\n",
+		// require_critical_escalation anywhere but domain_policies.<d>
+		// .constraints, or anchored there and aliased (N1): only that one
+		// place is read leniently (#2325)
+		"x: {require_critical_escalation: <<}\ndomain_policies: {fin: {tenants: [t1], constraints: {forbidden_receiver_types: [slack]}}}\n",
+		"require_critical_escalation: {<<: 5}\ndomain_policies: {fin: {tenants: [t1], constraints: {forbidden_receiver_types: [slack]}}}\n",
+		"domain_policies: {fin: {tenants: [t1], require_critical_escalation: <<, constraints: {forbidden_receiver_types: [slack]}}}\n",
+		"domain_policies:\n  ops: {tenants: [t2], constraints: {require_critical_escalation: &e {x: [<<]}, forbidden_receiver_types: [email]}}\n" +
+			"  fin: {tenants: [t1], constraints: *e}\n",
+		// ... or brought in through a merge: the generator drops the file
+		"_d: &d {tenants: [t1], constraints: {require_critical_escalation: <<, forbidden_receiver_types: [slack]}}\n" +
+			"domain_policies:\n  fin: {<<: *d}\n",
+	} {
+		cfg, err := parseConfig([]byte(src))
+		if err == nil || !strings.Contains(err.Error(), "unusable") {
+			t.Errorf("parseConfig(%q) = %+v, %v; want the file refused as unusable", src, cfg, err)
+		}
+	}
+	// One literal `<<` per mapping, at any depth, yaml.v3 merges as the
+	// generator does.
+	for _, src := range []string{
+		"<<: " + fin + "\n",
+		"x: &b {tenants: [t1], constraints: {forbidden_receiver_types: [slack]}}\n" +
+			"domain_policies: {fin: {<<: *b, constraints: {<<: {forbidden_receiver_types: [slack]}}}}\n",
+	} {
+		cfg, err := parseConfig([]byte(src))
+		if err != nil || len(cfg.DomainPolicies) != 1 ||
+			!reflect.DeepEqual(cfg.DomainPolicies["fin"].Constraints.ForbiddenReceiverTypes, []string{"slack"}) {
+			t.Errorf("parseConfig(%q) = %+v, %v; want fin forbidding slack", src, cfg, err)
+		}
+	}
+	// B1d: the generator reads a `tenants` list's scalar items as their
+	// source text, a merge-tagged one included; read the same here.
+	for src, want := range map[string][]string{
+		"domain_policies: {fin: {tenants: [t1, <<], constraints: {forbidden_receiver_types: [slack]}}}\n":                    {"t1", "<<"},
+		"domain_policies: {fin: {tenants: [t1, !!merge x], constraints: {forbidden_receiver_types: [slack]}}}\n":             {"t1", "x"},
+		"x: {&v <<: {}}\ndomain_policies: {fin: {tenants: [t1, *v], constraints: {forbidden_receiver_types: [slack]}}}\n":    {"t1", "<<"},
+		"domain_policies:\n  fin:\n    tenants:\n    - t1\n    - <<\n    constraints: {forbidden_receiver_types: [slack]}\n": {"t1", "<<"},
+	} {
+		cfg, err := parseConfig([]byte(src))
+		if err != nil || !reflect.DeepEqual(cfg.DomainPolicies["fin"].Tenants, want) {
+			t.Errorf("parseConfig(%q) = %+v, %v; want fin for %v", src, cfg, err, want)
+		}
+	}
+}
+
 // #2659: a policy file rewritten to `domain_policies: null` (or `~`, or a
 // bare key) keeps the last good policy on a hot reload (the watcher reports
 // the failure); before, it replaced the policy with an empty one — every
