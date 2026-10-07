@@ -72,10 +72,9 @@ class TestPrepushWiring:
 
     ⛔ This class used to assert that `pre-commit install --hook-type pre-push`
     counts as installed. #1689 made that FALSE and this is where the flip is
-    recorded: a hook run by pre-commit is handed exactly one refspec, so a push
-    carrying `feat/x` and `main` reached the direct-push guard as `feat/x` and
-    printed Passed while main moved on the remote. The old assertion was a test
-    holding a defect in place.
+    recorded: a hook run by pre-commit gets an empty stdin, and since #2688 the
+    guards read nothing else, so a guard run that way sees nothing being pushed
+    and prints Passed. The old assertion was a test holding a defect in place.
 
     There is ONE wired state: the shim, byte for byte what the installer
     writes, executable, at .git/hooks/pre-push. Recognising it by its header
@@ -162,7 +161,7 @@ class TestPrepushWiring:
         wired, why = mod._prepush_guards_wired()
         assert wired is False, (
             "pre-commit's own pre-push hook is NOT the wiring any more (#1689): "
-            f"it is handed one refspec. why={why!r}"
+            f"a guard it runs sees nothing being pushed. why={why!r}"
         )
 
     @pytest.mark.parametrize("steps", [

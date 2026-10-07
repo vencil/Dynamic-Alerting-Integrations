@@ -14,9 +14,8 @@
 #   quantifier and the commit are both load-bearing, and both directions of
 #   getting them wrong are pinned in tests/dx/test_preflight_pass_gate.py.
 #
-#   ⛔ The marker lives in the SHARED git dir. Which channel carries the
-#   refspec is _prepush_refs.sh's problem, not this file's; its header has the
-#   measurements and the known residuals.
+#   ⛔ The marker lives in the SHARED git dir. Parsing the refspec is
+#   _prepush_refs.sh's job, not this file's.
 set -euo pipefail
 
 MARKER_PREFIX=".preflight-ok"
@@ -49,7 +48,7 @@ if [ -z "$head_sha" ]; then
     exit 0
 fi
 
-# Which refs is this push updating? One implementation, two channels.
+# Which refs is this push updating? Parsed by _prepush_refs.sh.
 # ⛔ Pure parameter expansion, no `$(dirname …)`. Rationale in _prepush_refs.sh.
 _prepush_dir="${BASH_SOURCE[0]%/*}"
 [ "$_prepush_dir" = "${BASH_SOURCE[0]}" ] && _prepush_dir="."
@@ -75,7 +74,7 @@ too shallow to hold that version), delete the copy by hand.
 ⛔ Do not hand-write a hook that runs only this script: that silently drops
 protect_main_push and the mkdocs strict check while this one still looks fine.
 ⛔ Do not use `pre-commit install --hook-type pre-push` either: a hook run by
-pre-commit sees only one refspec (#1689).
+pre-commit sees no refspec at all (#1664).
 
 ⛔ Do not reach for --no-verify and do not delete .git/hooks/pre-push: both
 turn off the direct-push-to-main guard for good, which is what #1664 fixed.
@@ -86,10 +85,7 @@ fi
 # shellcheck source=scripts/ops/_prepush_refs.sh
 . "$_prepush_dir/_prepush_refs.sh"
 
-if ! _refs="$(prepush_refs)"; then
-    prepush_refs_unavailable_message >&2
-    exit 1
-fi
+_refs="$(prepush_refs)"
 
 pushing_to_protected=0
 pushing_any_commit=0
@@ -97,11 +93,7 @@ pushed_branches=()
 pushed_shas=()
 zero="0000000000000000000000000000000000000000"
 
-# Each row: <remote_ref> <local_sha>. remote_ref comes FIRST on purpose:
-# local_sha is legitimately empty on the first push of a branch to an empty
-# remote (pre-commit exports no PRE_COMMIT_TO_REF there), and a leading empty
-# field is collapsed by default-IFS `read`, which used to leave remote_ref
-# empty and drop the row entirely — a silent allow. See the helper's header.
+# Each row: <remote_ref> <local_sha>
 while read -r remote_ref local_sha; do
     [ -n "${remote_ref:-}" ] || continue
     # Deleting a ref (local_sha = zeros) — not a commit push, skip.
@@ -125,11 +117,8 @@ while read -r remote_ref local_sha; do
     pushed_branches+=("$remote_branch")
     # ⛔ The marker belongs to the COMMIT being published, not to the tree the
     # pusher happens to be standing in — the same axis #1690 fixed in the
-    # mkdocs guard. `local_sha` is legitimately EMPTY on the first push of a
-    # branch to an empty remote (the env channel exports no TO_REF there), and
-    # no marker can ever exist for "" — so that row falls back to HEAD, which
-    # is the best answer available and is what this gate has always done.
-    pushed_shas+=("${local_sha:-$head_sha}")
+    # mkdocs guard.
+    pushed_shas+=("$local_sha")
 done <<< "$_refs"
 
 # Nothing being pushed (empty stdin, all deletes, no branch) — allow.
@@ -206,23 +195,17 @@ fi
 # on A while pushing B" is ordinary here, and keying the check to HEAD both
 # let an unverified B through when A happened to be marked, and blocked a
 # verified B when A was not.
-# ⛔ A separate flag, not `-z "$_missing_sha"`. An empty sha is a real row
-# shape here (see the fallback above), and the empty-string sentinel made it
-# indistinguishable from "nothing is missing" — so a row whose sha we could
-# not determine would have been silently ALLOWED. Unknown must not mean OK.
-_missing_found=0
 _missing_sha=""
 _missing_branch=""
 for _i in "${!pushed_shas[@]}"; do
     if [ ! -f "$git_dir/$MARKER_PREFIX.${pushed_shas[$_i]}" ]; then
-        _missing_found=1
         _missing_sha="${pushed_shas[$_i]}"
         _missing_branch="${pushed_branches[$_i]}"
         break
     fi
 done
 
-if [ "$_missing_found" = "0" ]; then
+if [ -z "$_missing_sha" ]; then
     # Every pushed commit has a marker — preflight passed for all of them.
     exit 0
 fi
