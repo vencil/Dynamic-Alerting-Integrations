@@ -637,8 +637,8 @@ da-guard-build: ## 從本 repo Go 原始碼建 da-guard 到 .build/da-guard（va
 		echo "       Install Go (version: components/threshold-exporter/app/go.mod), or set" >&2; \
 		echo "       DA_GUARD_BINARY to a da-guard binary (the da-tools image ships one)." >&2; \
 		exit 2; }
-	@mkdir -p $(dir $(DA_GUARD_BUILD))
-	@cd components/threshold-exporter/app && go build -buildvcs=false -o $(DA_GUARD_BUILD) ./cmd/da-guard
+	@mkdir -p "$(dir $(DA_GUARD_BUILD))"
+	@cd components/threshold-exporter/app && go build -buildvcs=false -o "$(DA_GUARD_BUILD)" ./cmd/da-guard
 
 # 用哪支 da-guard 只有兩種來源：$DA_GUARD_BINARY 已設（非空白）就用它、不建；
 # 否則經 prerequisite 建 .build/da-guard 並用它（沒有 go 時 da-guard-build 印

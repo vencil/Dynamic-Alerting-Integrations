@@ -221,11 +221,12 @@ step "Validate all tenant configs"
 # issue 1380: this step used to pass --ci and swallow the rc=2 with `|| true`,
 # then announce success — so the rc is read here, not discarded.
 # #2115: the profiles / policy_dsl rows read the tenants through da-guard, and
-# without one validate-config exits 2. Use $DA_GUARD_BINARY or da-guard on
-# $PATH when there is one; otherwise build it from this checkout (the same
-# `make da-guard-build` that `make validate-config` runs). A failed build stops
-# the demo here, by name, rather than as an rc=2 from validate-config below.
-if [ -z "${DA_GUARD_BINARY:-}" ] && ! command -v da-guard >/dev/null 2>&1; then
+# without one validate-config exits 2. Use $DA_GUARD_BINARY when it is set;
+# otherwise build it from this checkout (the same `make da-guard-build` that
+# `make validate-config` runs) rather than trust a da-guard on $PATH, which may
+# be older than these tools. A failed build stops the demo here, by name,
+# rather than as an rc=2 from validate-config below.
+if [ -z "${DA_GUARD_BINARY:-}" ]; then
   info "Building da-guard (make da-guard-build) — validate-config reads the tenants through it"
   if ! make -C "$PROJECT_DIR" --no-print-directory da-guard-build; then
     warn "could not build da-guard (see above) — set DA_GUARD_BINARY to one, or install Go"

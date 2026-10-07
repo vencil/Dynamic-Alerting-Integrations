@@ -982,10 +982,12 @@ _PROFILES_NO_CONFIG_FILE_HINT = (
     "tree, then re-run. No _profile reference was checked.")
 # Shared by both rows' no-da-guard hints: where a da-guard comes from.
 _DA_GUARD_SOURCES = (
-    "Put da-guard on $PATH or set $DA_GUARD_BINARY to it (the da-tools image "
-    "ships it as /usr/local/bin/da-guard; in a checkout of this repo, `make "
-    "da-guard-build` builds it to .build/da-guard, and `make validate-config` "
-    "builds and uses it when $DA_GUARD_BINARY is unset), then re-run.")
+    "Set $DA_GUARD_BINARY to a da-guard binary, or, when running this script "
+    "directly, put da-guard on $PATH (the da-tools image ships it as "
+    "/usr/local/bin/da-guard; in a checkout of this repo, `make da-guard-build` "
+    "builds it to .build/da-guard). `make validate-config` never looks at "
+    "$PATH: it uses $DA_GUARD_BINARY, or builds .build/da-guard when that is "
+    "unset. Then re-run.")
 _PROFILES_NO_DA_GUARD_HINT = _DA_GUARD_SOURCES + " No _profile reference was checked."
 # Shared by both rows: a da-guard named as older than this tool (its output
 # lacks a field this tool reads, e.g. effective's `skipped`) is the binary's
