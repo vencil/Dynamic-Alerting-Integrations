@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""租戶元資料產生器 — 讀 exporter 實際發出的值（da-guard served-values），推斷 rule_packs、owner、tier、routing_channel。
+"""租戶元資料產生器 — 讀 exporter 實際發出的值（da-guard served-values），推斷 rule_packs、owner、tier、routing_channel；db_type 只取 `_metadata` 宣告值。
 
 The tenants and every value read here come from `da-guard served-values`
 (#2115 0-B/B4), so the tool needs da-guard: `$DA_GUARD_BINARY`, else
@@ -149,39 +149,19 @@ def extract_environment(tenant_name: str, metadata: dict) -> str:
     return ""
 
 
-def extract_db_type(tenant_config: dict, metadata: dict) -> str:
-    """Extract db_type from _metadata or infer from metric prefixes.
+def extract_db_type(metadata: dict) -> str:
+    """Return the db_type the tenant declares in `_metadata`, or "".
 
-    The inference takes the first served key, in sorted order, whose prefix
-    names a database (#2115 0-B/B4: served keys include inherited ones, and
-    sorting keeps the answer independent of the JSON's key order)."""
+    Not inferred from metric keys (#2115 B4): Go has exactly one db_type --
+    the declared one. The exporter's tenant_expected_exporter liveness series
+    and tenant-api's list/search read only that, and the portal falls back to
+    this file when tenant-api is down, so an inferred value here would show
+    the same tenant with two different db_types. "" means "not declared",
+    which is also "not liveness-monitored"."""
     if isinstance(metadata, dict):
         db_type = metadata.get("db_type", "")
-        if db_type:
+        if isinstance(db_type, str):
             return db_type
-
-    # Infer from metric key prefixes
-    db_prefixes = {
-        "mysql_": "mariadb",
-        "mariadb_": "mariadb",
-        "pg_": "postgresql",
-        "postgres_": "postgresql",
-        "redis_": "redis",
-        "mongo_": "mongodb",
-        "mongodb_": "mongodb",
-        "kafka_": "kafka",
-        "rabbitmq_": "rabbitmq",
-        "elasticsearch_": "elasticsearch",
-        "oracle_": "oracle",
-        "clickhouse_": "clickhouse",
-    }
-    for key in sorted(tenant_config.keys()):
-        if key.startswith("_"):
-            continue
-        metric = key.split("[")[0] if "[" in key else key
-        for prefix, db in db_prefixes.items():
-            if metric.startswith(prefix):
-                return db
     return ""
 
 
@@ -326,7 +306,7 @@ def build_tenant_metadata(config_dir: Path) -> dict[str, Any]:
         domain = metadata.get("domain", "") if isinstance(metadata, dict) else ""
 
         # v2.5.0: extract extended metadata fields
-        db_type = extract_db_type(tenant_config, metadata)
+        db_type = extract_db_type(metadata)
         tags = extract_tags(metadata)
         group_memberships = extract_groups(metadata)
 

@@ -1,7 +1,7 @@
 """租戶元資料語意矩陣：值寫在哪裡，generate_tenant_metadata 的答案都要與 Go 的 served-values 一致（#2115 0-B／B4）。
 
 讀取端：`generate_tenant_metadata.build_tenant_metadata`（platform-data.json 內嵌的
-租戶清單與 `_metadata`、rule_packs／db_type 推斷）與其 CLI。
+租戶清單與 `_metadata`、rule_packs 推斷、db_type）與其 CLI。
 
 同一組值（`_metadata.owner` 與 `redis_connected_clients: 5`）寫在四個位置之一：根
 `defaults:`、平台檔 `tenants:`、租戶檔、子目錄（子樹 `_defaults.yaml` 的
@@ -12,8 +12,9 @@ tenant-b 是對照組，值永遠寫在自己的租戶檔，四個位置下答�
 fail-closed 的測試），所以「defaults」那格只放閾值鍵，owner 依 Go 為空。
 
 根 `defaults:` 宣告的鍵（`mysql_connections`、`redis_connected_clients`）每個租戶都會
-收到：rule_packs 與 db_type 的推斷看 Go 實際發出的鍵（含繼承），不看租戶檔自己寫了
-什麼——這是 owner 接受的行為變更（changelog.d）。
+收到：rule_packs 的推斷看 Go 實際發出的鍵（含繼承），不看租戶檔自己寫了什麼——這是
+owner 接受的行為變更（changelog.d）。db_type 不推斷，只取 Go 的 `_metadata.db_type`：
+tenant-a 沒宣告，鍵再像 mysql 也是空字串；tenant-b 宣告 redis，就是 redis。
 
 舊讀取端（ee778a42 以前）只平鋪讀根目錄租戶檔本身：平台 `tenants:` 的 owner 讀成空字串、
 子目錄的租戶整個消失、繼承的鍵不進推斷、exporter 丟掉的檔照讀（fail-open）。
@@ -45,7 +46,7 @@ pytestmark = pytest.mark.usefixtures("da_guard_env")
 _BASE = "defaults:\n  mysql_connections: 80\n  redis_connected_clients: 100\n"
 _A_PLAIN = "tenants:\n  tenant-a:\n    _silent_mode: disable\n"
 _B = ("tenants:\n  tenant-b:\n    redis_connected_clients: 7\n"
-      "    _metadata:\n      owner: team-b\n")
+      "    _metadata:\n      owner: team-b\n      db_type: redis\n")
 
 POSITIONS = {
     "defaults": {
@@ -118,17 +119,19 @@ def test_matches_served_values(where, tmp_path):
     assert sorted(meta) == sorted(served) == ["tenant-a", "tenant-b"], (where, sorted(meta))
     for tenant, t in served.items():
         got, md = meta[tenant], t.values["_metadata"]
-        for field in ("owner", "tier", "region", "domain"):
+        for field in ("owner", "tier", "region", "domain", "db_type"):
             assert got[field] == md[field], (where, tenant, field)
         assert got["metric_count"] == len(t.severities), (where, tenant)
 
     assert meta["tenant-a"]["owner"] == _OWNER_A[where], where
     assert meta["tenant-b"]["owner"] == "team-b", where              # 對照組不變
+    # db_type 只認宣告值：tenant-a 繼承了 mysql_connections 也不推成 mariadb。
+    assert meta["tenant-a"]["db_type"] == "", where
+    assert meta["tenant-b"]["db_type"] == "redis", where
     for tenant in ("tenant-a", "tenant-b"):
         # 繼承的 mysql_connections 與 redis_connected_clients 都算數。
         assert meta[tenant]["rule_packs"] == ["mariadb", "operational", "platform", "redis"], (
             where, tenant, meta[tenant]["rule_packs"])
-        assert meta[tenant]["db_type"] == "mariadb", (where, tenant)
         assert meta[tenant]["metric_count"] == 2, (where, tenant)
 
 
