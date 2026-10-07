@@ -1,0 +1,6 @@
+{
+  "_generated": "GENERATED from docs/schemas/tenant-config.schema.json definitions.duration by gen_am_duration_json.py \u2014 DO NOT EDIT. Run `make am-duration-json`.",
+  "pattern": "^(0|([0-9]+y)?([0-9]+w)?([0-9]+d)?([0-9]+h)?([0-9]+m)?([0-9]+s)?([0-9]+ms)?)$",
+  "minLength": 1,
+  "description": "A duration as Alertmanager reads it: whole numbers with units, largest unit first, each unit at most once \u2014 y (365d), w, d, h, m, s, ms \u2014 or a bare 0. Examples: 30s, 5m, 1h30m, 1d. Not accepted: fractions (1.5h), units out of order (30m1h) or repeated (1h1h), ns / us / \u00b5s, signs, spaces."
+}

@@ -242,6 +242,12 @@ hooks:
     workflow: .github/workflows/ci.yml
     job: lint-rule-packs
     note: Runs `python scripts/tools/dx/gen_tenant_id_json.py --check` (HARD gate, ADR-035).
+- id: am-duration-json-check
+  category: a
+  evidence:
+    workflow: .github/workflows/ci.yml
+    job: lint-rule-packs
+    note: Runs `python scripts/tools/dx/gen_am_duration_json.py --check` (HARD gate, #2711).
 - id: ksm-version-allowlist
   category: b
   evidence:
