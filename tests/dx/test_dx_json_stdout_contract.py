@@ -367,6 +367,7 @@ class Recipe:
     needs_gh: bool = False                     # relies on the fake-gh shim
     skip_if: bool = False                      # env-gated skip
     skip_reason: str = ""
+    needs_da_guard: bool = False               # reads the tenants via da-guard (#2115)
 
     @property
     def id(self) -> str:
@@ -443,7 +444,12 @@ RECIPES: list[Recipe] = [
 
     # ── generate_tenant_metadata ───────────────────────────────────────────
     R("generate_tenant_metadata", "json",
-      lambda t: ["--config-dir", str(SEED_CONF_D), "--json"], expect_exit=EXIT_OK),
+      lambda t: ["--config-dir", str(SEED_CONF_D), "--json"], expect_exit=EXIT_OK,
+      needs_da_guard=True),
+    # #2115 0-B/B4: a file the exporter drops — rc 2, nothing on stdout.
+    R("generate_tenant_metadata", "exporter-drops-a-file",
+      lambda t: ["--config-dir", _confd_the_exporter_drops(t), "--json"],
+      expect_caller_error=True, needs_da_guard=True),
 
     # ── inject_waveform — JSON path needs the VM replay harness (exempt) ───
     R("inject_waveform", "json",
@@ -508,6 +514,16 @@ def test_recipe_table_covers_every_json_tool():
 # ═══════════════════════════════════════════════════════════════════════════
 # The gate
 # ═══════════════════════════════════════════════════════════════════════════
+def _confd_the_exporter_drops(tmp: Path) -> str:
+    """A conf.d whose tenant file holds a key twice: the exporter drops it."""
+    d = tmp / "confd_dropped"
+    d.mkdir()
+    _write(d / "_defaults.yaml", "defaults:\n  mysql_connections: 80\n")
+    _write(d / "db-a.yaml",
+           "tenants:\n  db-a:\n    mysql_connections: 5\n    mysql_connections: 6\n")
+    return str(d)
+
+
 def _run(recipe: Recipe, tmp_path: Path, fake_gh: Path) -> subprocess.CompletedProcess:
     script = DX_DIR / f"{recipe.tool}.py"
     env = dict(os.environ)
@@ -525,10 +541,12 @@ def _run(recipe: Recipe, tmp_path: Path, fake_gh: Path) -> subprocess.CompletedP
 
 @pytest.mark.parametrize("recipe", RECIPES, ids=[r.id for r in RECIPES])
 def test_json_mode_emits_exactly_one_json_document(recipe: Recipe, tmp_path: Path,
-                                                   fake_gh_dir: Path):
+                                                   fake_gh_dir: Path, request):
     """JSON-output flag ⇒ stdout is exactly one JSON document, on every terminal path."""
     if recipe.skip_if:
         pytest.skip(f"{recipe.id}: {recipe.skip_reason}")
+    if recipe.needs_da_guard:
+        request.getfixturevalue("da_guard_env")   # $DA_GUARD_BINARY for the subprocess
     if recipe.needs_gh and os.name == "nt":
         pytest.skip(
             f"{recipe.id}: the fake-gh shim cannot intercept on Windows — Python "

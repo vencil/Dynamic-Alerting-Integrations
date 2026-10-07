@@ -177,8 +177,23 @@ def _describe_tenant(root):
 
 
 def _generate_tenant_metadata(root):
+    # #2115 0-B/B4: the tenants are da-guard served-values' (the exporter's
+    # own walk), so this cell needs a da-guard: `_da_guard_for_served_cells`.
     import generate_tenant_metadata as gtm
     return sorted(gtm.build_tenant_metadata(root)["tenant_metadata"])
+
+
+# Cells whose reader takes the tenants from da-guard (#2115 0-B).
+_SERVED_VALUES_CELLS = frozenset({"generate_tenant_metadata"})
+
+
+@pytest.fixture(autouse=True)
+def _da_guard_for_served_cells(request):
+    """`$DA_GUARD_BINARY` for a cell in `_SERVED_VALUES_CELLS` only, so the
+    other readers keep running exactly as before (no da-guard in sight)."""
+    callspec = getattr(request.node, "callspec", None)
+    if callspec is not None and set(callspec.params.values()) & _SERVED_VALUES_CELLS:
+        request.getfixturevalue("da_guard_env")
 
 
 def _gitops_check(root):
@@ -424,6 +439,8 @@ def test_the_derivation_did_not_collapse() -> None:
     """A derived set of 0 would make the reconciliation above vacuous."""
     derived = _own_enumerators()
     assert len(derived) >= 20, sorted(derived)
+    # `generate_tenant_metadata` was the third until #2115 0-B/B4: it no
+    # longer lists a directory (the walk is da-guard's), so it left the set.
     for must in ("dx/describe_tenant.py", "ops/gitops_check.py",
-                 "dx/generate_tenant_metadata.py"):
+                 "ops/offboard_tenant.py"):
         assert must in derived, (must, sorted(derived))

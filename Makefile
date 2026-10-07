@@ -644,11 +644,15 @@ da-guard-build: ## 從本 repo Go 原始碼建 da-guard 到 .build/da-guard（va
 # 否則經 prerequisite 建 .build/da-guard 並用它（沒有 go 時 da-guard-build 印
 # ERROR、非零退出）。用 prerequisite 而不是在 recipe 裡呼叫 $(MAKE)，`make -n`
 # 才只印指令、不真的建。
-VALIDATE_CONFIG_DA_GUARD := $(if $(strip $(DA_GUARD_BINARY)),,da-guard-build)
+# 需要 da-guard 的目標（validate-config；#2115 0-B／B4 起 platform-data 與
+# lint-docs 也是：platform-data.json 內嵌的租戶元資料讀 da-guard served-values）
+# 一律掛 $(DA_GUARD_PREREQ)、在指令前加 $(DA_GUARD_ENV)。
+DA_GUARD_PREREQ := $(if $(strip $(DA_GUARD_BINARY)),,da-guard-build)
+DA_GUARD_ENV = DA_GUARD_BINARY="$(if $(strip $(DA_GUARD_BINARY)),$$DA_GUARD_BINARY,$(DA_GUARD_BUILD))"
 
 .PHONY: validate-config
-validate-config: $(VALIDATE_CONFIG_DA_GUARD) ## 一站式配置驗證 (YAML + schema + routes + policy + custom rules + versions；需要 da-guard：DA_GUARD_BINARY，未設就建 .build/da-guard)
-	@DA_GUARD_BINARY="$(if $(strip $(DA_GUARD_BINARY)),$$DA_GUARD_BINARY,$(DA_GUARD_BUILD))" python3 ./scripts/tools/ops/validate_config.py \
+validate-config: $(DA_GUARD_PREREQ) ## 一站式配置驗證 (YAML + schema + routes + policy + custom rules + versions；需要 da-guard：DA_GUARD_BINARY，未設就建 .build/da-guard)
+	@$(DA_GUARD_ENV) python3 ./scripts/tools/ops/validate_config.py \
 		--config-dir components/threshold-exporter/config/conf.d/ \
 		--rule-packs rule-packs/ \
 		--version-check
@@ -865,8 +869,8 @@ byo-rulepack-table: ## 重新產生 BYO Prometheus 文件內的規則包表（#1
 	@python3 ./scripts/tools/dx/generate_byo_rulepack_table.py --generate --lang all
 
 .PHONY: platform-data
-platform-data: ## 產生 docs/assets/platform-data.json（含嵌入的 Tenant Metadata）
-	@python3 ./scripts/tools/dx/generate_platform_data.py
+platform-data: $(DA_GUARD_PREREQ) ## 產生 docs/assets/platform-data.json（含嵌入的 Tenant Metadata；需要 da-guard：DA_GUARD_BINARY，未設就建 .build/da-guard）
+	@$(DA_GUARD_ENV) python3 ./scripts/tools/dx/generate_platform_data.py
 
 .PHONY: rulepack-configmaps
 rulepack-configmaps: ## 從 rule-packs/ 重生 k8s/03-monitoring/configmap-rules-*.yaml（ADR-024 PR3-pre-2）
@@ -947,8 +951,8 @@ lint-extract: ## 拆新 lint script（PR #154/#162/#166/#169/#170 共通 boilerp
 # rc 0，而 validate_all 一次都不跑——required check `Lint Documentation` 跑的正是這條。
 # 實測：無 .PHONY + 同名檔 → rc 0；補上 .PHONY 的對照組 → rc 2。
 .PHONY: lint-docs
-lint-docs: ## 一站式文件 lint（versions + drift + tool consistency，支援 ARGS="--parallel"）
-	@python3 ./scripts/tools/validate_all.py \
+lint-docs: $(DA_GUARD_PREREQ) ## 一站式文件 lint（versions + drift + tool consistency，支援 ARGS="--parallel"；platform_data 需要 da-guard：DA_GUARD_BINARY，未設就建 .build/da-guard）
+	@$(DA_GUARD_ENV) python3 ./scripts/tools/validate_all.py \
 		--only versions,tool_map,doc_map,rule_pack_stats,byo_rulepack_table,rule_packs,changelog,changelog_format,glossary,includes,platform_data,tool_consistency,alerts,cli_default_drift,cli_contract,frontmatter_versions \
 		$(ARGS)
 

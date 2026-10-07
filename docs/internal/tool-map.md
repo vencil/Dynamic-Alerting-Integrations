@@ -105,7 +105,7 @@ lang: zh
 | `generate_rule_pack_stats.py` | Rule Pack 統計單一來源產生器 |
 | `generate_rulepack_configmaps.py` | Generate k8s/03-monitoring/configmap-rules-<pack>.yaml from rule-packs/. |
 | `generate_tenant_fixture.py` | Synthetic tenant fixture generator — produce N-tenant conf.d/ for benchmark & integration testing. |
-| `generate_tenant_metadata.py` | 租戶元資料產生器 — 從 conf.d/ 解析 YAML，推斷 rule_packs、owner、tier、routing_channel。 |
+| `generate_tenant_metadata.py` | 租戶元資料產生器 — 讀 exporter 實際發出的值（da-guard served-values），推斷 rule_packs、owner、tier、routing_channel。 |
 | `generate_tool_map.py` | 工具導覽自動生成 |
 | `inject_waveform.py` | fault-waveform 注入執行器（ADR-030 決策層驗證 PR-2） |
 | `list_subprocess_only_modules.py` | 每個模組被哪一種進入點執行到（以 coverage 實測為準）。 |

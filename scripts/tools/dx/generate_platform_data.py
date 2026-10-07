@@ -29,7 +29,13 @@ _THIS_DIR = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, str(_THIS_DIR))
 sys.path.insert(0, os.path.join(str(_THIS_DIR), ".."))
 from _lib_compat import try_utf8_stdout  # noqa: E402
-from _lib_exitcodes import EXIT_VIOLATION  # noqa: E402
+from _lib_exitcodes import EXIT_CALLER_ERROR, EXIT_VIOLATION  # noqa: E402
+from _lib_tenant_values import (  # noqa: E402  (#2115 0-B/B4)
+    DaGuardError,
+    DaGuardNotFoundError,
+    ParseFailedError,
+    print_load_error,
+)
 
 # ---------------------------------------------------------------------------
 # Paths
@@ -337,7 +343,11 @@ PACK_ORDER = [
 # Tenant metadata integration (v2.3.0)
 # ---------------------------------------------------------------------------
 class TenantMetadataError(RuntimeError):
-    """Tenant metadata 真正載入/建構失敗（有別於「刻意缺席」的 fallback）。"""
+    """Tenant metadata 真正載入/建構失敗（有別於「刻意缺席」的 fallback）。
+
+    租戶清單與值來自 da-guard served-values（#2115 0-B／B4）：da-guard 不在、
+    失敗、或 exporter 丟掉某個檔，都是這一類——`__cause__` 是
+    `_lib_tenant_values` 的例外，main 以 rc 2 印出 da-guard 的 stderr。"""
 
 
 def _load_tenant_metadata() -> tuple:
@@ -350,8 +360,10 @@ def _load_tenant_metadata() -> tuple:
       - generate_tenant_metadata.py 不存在或取不到 loader
       - 該 module 沒有 build_tenant_metadata()
 
-    **真正的失敗**（import error、build_tenant_metadata 拋例外……）→ 丟
-    TenantMetadataError。dev-rules #5 fail-loud：不可靜默吞掉，否則
+    **真正的失敗**（import error、build_tenant_metadata 拋例外，含 da-guard
+    缺席／失敗／exporter 丟檔，#2115 0-B／B4）→ 丟 TenantMetadataError。
+    ⛔ da-guard 缺席**不是**刻意缺席：conf.d 在、卻讀不到 exporter 的答案時
+    回空 dict，就是靜默產出缺 tenant metadata 的 platform-data.json。dev-rules #5 fail-loud：不可靜默吞掉，否則
     build_platform_data() 會在 `if tenant_groups or tenant_metadata:` 下
     整個略過這兩個 key，產出「缺 tenant metadata 卻 exit 0」的
     platform-data.json——一旦這種產物被 commit 進來，drift gate 比對的
@@ -661,6 +673,15 @@ def main():
     except TenantMetadataError as exc:
         # fail-loud（dev-rules #5）：寧可讓 target / gate 紅，也不要靜默
         # 產出缺 tenant metadata 的 platform-data.json。
+        cause = exc.__cause__
+        if isinstance(cause, (DaGuardNotFoundError, ParseFailedError, DaGuardError)):
+            # #2115 0-B/B4: da-guard missing or failing is rc 2 with its
+            # stderr whole, as generate_tenant_metadata itself exits.
+            print("ERROR: tenant metadata generation failed: "
+                  "the tenants are read through da-guard served-values",
+                  file=sys.stderr)
+            print_load_error(cause)
+            sys.exit(EXIT_CALLER_ERROR)
         print(f"ERROR: {exc}", file=sys.stderr)
         sys.exit(EXIT_VIOLATION)
 

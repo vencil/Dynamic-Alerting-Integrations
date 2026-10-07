@@ -966,11 +966,17 @@ _READERS_2216 = {
 }
 
 
+# #2115 0-B/B4: these take the tenants from da-guard served-values (Go's id).
+_READERS_VIA_DA_GUARD = frozenset({"generate_tenant_metadata"})
+
+
 @pytest.mark.parametrize("variant", sorted(_ID_SPELLINGS))
 @pytest.mark.parametrize("reader", sorted(_READERS_2216))
-def test_reader_returns_the_tenant_id_as_written(tmp_path, capsys, reader, variant):
+def test_reader_returns_the_tenant_id_as_written(tmp_path, capsys, reader, variant, request):
     """Before (#2216): UNQ gave {8} — {"8"} where the reader stringified —
     and generate_tenant_metadata raised AttributeError on the int."""
+    if reader in _READERS_VIA_DA_GUARD:
+        request.getfixturevalue("da_guard_env")
     assert _READERS_2216[reader](tmp_path, _ID_SPELLINGS[variant]) == {"010"}
 
 

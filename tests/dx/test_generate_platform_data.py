@@ -22,6 +22,10 @@ import yaml
 _REPO_ROOT = Path(__file__).resolve().parents[2]
 _DX_DIR = _REPO_ROOT / "scripts" / "tools" / "dx"
 
+# #2115 0-B/B4: the embedded tenant metadata is read through da-guard
+# served-values, so every build of the platform data needs one.
+pytestmark = pytest.mark.usefixtures("da_guard_env")
+
 
 def _load_module():
     """每次載入一份新的 module（避免測試間 monkeypatch 互相污染）。"""
@@ -72,6 +76,50 @@ class TestRealFailureIsFatal:
 
         assert excinfo.value.code != 0
         assert "boom" in capsys.readouterr().err
+
+
+class TestDaGuardFailureIsFatal:
+    """#2115 0-B/B4：租戶來自 da-guard served-values。da-guard 不在、失敗、
+    exporter 丟檔都是「真正的失敗」，不是「刻意缺席」：不得回 ({}, {})、
+    不得寫出缺 tenant metadata 的 platform-data.json；CLI 以 rc 2 收場、
+    da-guard 的 stderr 整份轉出。"""
+
+    def test_missing_da_guard_raises_instead_of_falling_back(
+            self, monkeypatch, tmp_path):
+        mod = _load_module()
+        monkeypatch.setenv("DA_GUARD_BINARY", str(tmp_path / "no-such-da-guard"))
+        with pytest.raises(mod.TenantMetadataError, match="da-guard"):
+            mod._load_tenant_metadata()
+
+    def test_missing_da_guard_exits_2_and_names_it(
+            self, monkeypatch, tmp_path, capsys):
+        mod = _load_module()
+        monkeypatch.setenv("DA_GUARD_BINARY", str(tmp_path / "no-such-da-guard"))
+        monkeypatch.setattr(sys, "argv", ["generate_platform_data.py", "--check"])
+        with pytest.raises(SystemExit) as excinfo:
+            mod.main()
+        assert excinfo.value.code == 2
+        err = capsys.readouterr().err
+        assert "da-guard binary not found" in err and "make da-guard-build" in err, err
+
+    def test_a_file_the_exporter_drops_exits_2_with_its_reason(
+            self, monkeypatch, tmp_path, capsys):
+        conf_d = tmp_path / "components" / "threshold-exporter" / "config" / "conf.d"
+        conf_d.mkdir(parents=True)
+        (conf_d / "_defaults.yaml").write_text(
+            "defaults:\n  mysql_connections: 80\n", encoding="utf-8")
+        (conf_d / "db-a.yaml").write_text(
+            "tenants:\n  db-a:\n    mysql_connections: 5\n    mysql_connections: 6\n",
+            encoding="utf-8")
+        mod = _load_module()
+        monkeypatch.setattr(mod, "REPO_ROOT", tmp_path)
+        monkeypatch.setattr(sys, "argv", ["generate_platform_data.py", "--dry-run"])
+        with pytest.raises(SystemExit) as excinfo:
+            mod.main()
+        assert excinfo.value.code == 2
+        captured = capsys.readouterr()
+        assert captured.out == "", "nothing may be printed as the platform data"
+        assert "db-a.yaml" in captured.err and "  da-guard| " in captured.err, captured.err
 
 
 class TestIntentionalAbsenceStillFallsBack:
@@ -319,13 +367,21 @@ class TestThePortalOfflineFallbackIsGenerated:
         # pre-commit run skipped the very check that would have caught the
         # output going stale. CI's `--all-files` run covers it; this is the
         # local red, at commit time.
+        # #2115 0-B/B4: the embedded tenants are the exporter's answer for
+        # conf.d, read by generate_tenant_metadata through _lib_tenant_values.
         for rel in ("docs/assets/platform-data.json", self._FALLBACK_REL,
-                    "scripts/tools/dx/generate_platform_data.py"):
+                    "scripts/tools/dx/generate_platform_data.py",
+                    "scripts/tools/dx/generate_tenant_metadata.py",
+                    "scripts/tools/_lib_tenant_values.py",
+                    "components/threshold-exporter/config/conf.d/db-a.yaml"):
             assert pattern.match(rel), (
                 f"the platform-data-check hook does not watch {rel}, so editing "
                 f"it alone stages no file the hook reacts to and the local "
                 f"pre-commit run passes over the change"
             )
+        # #2115 0-B/B4: the hook gets its da-guard from the wrapper — $DA_GUARD_BINARY
+        # or a fresh `make da-guard-build` — and from nowhere else.
+        assert hooks[0]["entry"].startswith("bash scripts/ops/with_da_guard.sh "), hooks[0]["entry"]
 
     def test_check_passes_on_the_real_pair(self, monkeypatch, capsys):
         """The must-not-fire control: `--check` is not simply always red.

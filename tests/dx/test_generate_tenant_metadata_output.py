@@ -47,6 +47,9 @@ from _platform_fs import (  # noqa: E402
     symlink_or_skip,
 )
 
+# #2115 0-B/B4: the tool reads the tenants through da-guard served-values.
+pytestmark = pytest.mark.usefixtures("da_guard_env")
+
 _TENANT = (
     "tenants:\n"
     "  acme:\n"

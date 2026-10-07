@@ -555,7 +555,12 @@ repos:
 
       - id: platform-data-check
         name: Platform data drift (platform-data.json + portal offline fallback)
-        entry: python3 -X utf8 scripts/tools/dx/generate_platform_data.py --check
+        # #2115 0-B/B4: the embedded tenant metadata is read through `da-guard
+        # served-values`. The wrapper uses $DA_GUARD_BINARY when set, else builds
+        # .build/da-guard (`make da-guard-build`); without go that build fails
+        # by name and so does this hook. No other fallback: a run without
+        # da-guard must not pass.
+        entry: bash scripts/ops/with_da_guard.sh python3 -X utf8 scripts/tools/dx/generate_platform_data.py --check
         language: python
         pass_filenames: false
         # ⛔ The last entry is the portal's OFFLINE fallback, which this tool now
@@ -563,7 +568,10 @@ repos:
         # touches no file this hook watches, and the edit lands unseen — which is
         # the whole failure class here: the Vitest drift gate that compares the
         # two is path-gated on tools/portal/**, so it did not run for #1215.
-        files: ^(rule-packs/|k8s/03-monitoring/|docs/assets/platform-data\.json|scripts/tools/ops/scaffold_tenant\.py|scripts/tools/dx/generate_platform_data\.py|tools/portal/src/interactive/tools/_common/data/rule-packs-fallback\.json)
+        # conf.d and the tenant-metadata reader (#2115 0-B/B4): the tenants in
+        # the JSON are the exporter's answer for that tree, so editing a tenant
+        # alone must reach this hook too.
+        files: ^(rule-packs/|k8s/03-monitoring/|docs/assets/platform-data\.json|scripts/tools/ops/scaffold_tenant\.py|scripts/tools/dx/generate_platform_data\.py|scripts/tools/dx/generate_tenant_metadata\.py|scripts/tools/_lib_tenant_values\.py|scripts/ops/with_da_guard\.sh|components/threshold-exporter/config/conf\.d/|tools/portal/src/interactive/tools/_common/data/rule-packs-fallback\.json)
         additional_dependencies: ['pyyaml']
 
       - id: repo-name-check

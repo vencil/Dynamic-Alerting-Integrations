@@ -178,6 +178,7 @@ class TestTenantMetadataExemptionRationale:
     def test_generate_tenant_metadata_is_exempt(self):
         assert "generate_tenant_metadata.py" in cmt._EXEMPT
 
+    @pytest.mark.usefixtures("da_guard_env")  # #2115 0-B/B4: tenants via da-guard served-values
     def test_platform_data_output_actually_embeds_tenant_metadata(self):
         """行為性釘法：走 public 產生路徑 build_platform_data()，不是 grep 原始碼。
 

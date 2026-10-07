@@ -488,6 +488,17 @@ jobs:
       - name: Install dependencies
         run: pip install pre-commit pyyaml -c requirements/ci-constraints.txt
 
+      # #2115 0-B/B4: `platform-data-check` reads the tenants through
+      # `da-guard served-values`; its wrapper (scripts/ops/with_da_guard.sh)
+      # builds .build/da-guard with `make da-guard-build`, which needs go. Without
+      # this step the hook fails by name (go is not on PATH), never passes.
+      - name: Set up Go (da-guard for platform-data-check)
+        uses: actions/setup-go@v6
+        with:
+          go-version-file: components/threshold-exporter/app/go.mod
+          cache: true
+          cache-dependency-path: components/threshold-exporter/app/go.sum
+
       # Container SAST Layer 1 (#448 / TRK-311): the iac-sast-check hook drives
       # hadolint. Install the binary so the wrapper uses it directly (no docker
       # image pull on the runner). Pin matches HADOLINT_VERSION in
@@ -2693,6 +2704,22 @@ jobs:
 
       - name: Install dependencies
         run: pip install pyyaml -c requirements/ci-constraints.txt
+
+      # #2115 0-B/B4: platform-data.json embeds the tenant metadata, read
+      # through `da-guard served-values`. Built once from this checkout and
+      # exported, so both steps below (and validate_all's platform_data inside
+      # `make lint-docs`) use the same binary; a failed build fails the job.
+      - name: Set up Go (da-guard)
+        uses: actions/setup-go@v6
+        with:
+          go-version-file: components/threshold-exporter/app/go.mod
+          cache: true
+          cache-dependency-path: components/threshold-exporter/app/go.sum
+
+      - name: Build da-guard
+        run: |
+          make da-guard-build
+          echo "DA_GUARD_BINARY=$PWD/.build/da-guard" >> "$GITHUB_ENV"
 
       - name: Check platform-data integrity
         run: python3 scripts/tools/dx/generate_platform_data.py --check
