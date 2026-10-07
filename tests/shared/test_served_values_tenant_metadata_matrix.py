@@ -268,6 +268,32 @@ def test_operational_mode_follows_the_exporters_verdict(tmp_path):
         "tenant-a": "normal", "tenant-b": "silent", "tenant-c": "maintenance"}
 
 
+def test_check_evaluates_at_the_recorded_instant(tmp_path):
+    """`--check` 以檔案記下的 `generated` 時刻重讀，不以現在：維護時間盒在兩者之間
+    到期時，檔案沒變就不能轉紅（#2115 B4）。對照組：同一棵樹在兩個時刻答案不同。"""
+    conf_d = _tree(tmp_path, {
+        "_defaults.yaml": _BASE + _STATE_FILTERS,
+        "tenant-a.yaml": ("tenants:\n  tenant-a:\n    _state_maintenance:\n"
+                          "      target: enable\n      expires: \"2020-01-01T00:00:00Z\"\n"),
+    })
+    before = "2019-12-31T00:00:00Z"
+    data = gtm.build_tenant_metadata(conf_d, at=before)
+    assert data["generated"] == before
+    assert data["tenant_metadata"]["tenant-a"]["operational_mode"] == "maintenance"  # 前提
+    now = gtm.build_tenant_metadata(conf_d)["tenant_metadata"]["tenant-a"]
+    assert now["operational_mode"] == "normal"                                       # 前提
+
+    out = tmp_path / "meta.json"
+    out.write_text(json.dumps(data, indent=2, ensure_ascii=False) + "\n", encoding="utf-8")
+    proc = _cli(conf_d, "--output", str(out), "--check")
+    assert proc.returncode == 0, proc.stderr
+
+    # 必響對照：記下的時刻之後改了值，--check 仍要轉紅。
+    data["tenant_metadata"]["tenant-a"]["owner"] = "someone-else"
+    out.write_text(json.dumps(data, indent=2, ensure_ascii=False) + "\n", encoding="utf-8")
+    assert _cli(conf_d, "--output", str(out), "--check").returncode == 1
+
+
 def test_no_value_is_read_from_the_yaml_itself():
     """結構釘：本工具不再自己讀租戶 YAML（`_groups.yaml` 除外，那不是租戶值）。"""
     src = TOOL.read_text(encoding="utf-8")

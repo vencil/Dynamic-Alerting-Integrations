@@ -52,7 +52,7 @@ class TestRealFailureIsFatal:
         mod = _load_module()
         stub = tmp_path / "generate_tenant_metadata.py"
         stub.write_text(
-            "def build_tenant_metadata(config_dir):\n"
+            "def build_tenant_metadata(config_dir, at=None):\n"
             "    raise ValueError('bad yaml')\n",
             encoding="utf-8")
         monkeypatch.setattr(mod, "SCRIPT_DIR", tmp_path)
@@ -65,7 +65,7 @@ class TestRealFailureIsFatal:
         """main() 把 TenantMetadataError 轉成乾淨的非 0 exit，不寫殘缺檔案。"""
         mod = _load_module()
 
-        def _boom():
+        def _boom(at=None):
             raise mod.TenantMetadataError("tenant metadata generation failed: boom")
 
         monkeypatch.setattr(mod, "build_platform_data", _boom)
@@ -368,11 +368,16 @@ class TestThePortalOfflineFallbackIsGenerated:
         # output going stale. CI's `--all-files` run covers it; this is the
         # local red, at commit time.
         # #2115 0-B/B4: the embedded tenants are the exporter's answer for
-        # conf.d, read by generate_tenant_metadata through _lib_tenant_values.
+        # conf.d, read by generate_tenant_metadata through _lib_tenant_values;
+        # changing how Go resolves the tree changes that answer too.
         for rel in ("docs/assets/platform-data.json", self._FALLBACK_REL,
                     "scripts/tools/dx/generate_platform_data.py",
                     "scripts/tools/dx/generate_tenant_metadata.py",
                     "scripts/tools/_lib_tenant_values.py",
+                    "scripts/tools/ops/guard_dispatch.py",
+                    "components/threshold-exporter/app/pkg/config/resolve.go",
+                    "components/threshold-exporter/app/cmd/da-guard/served_values.go",
+                    "components/threshold-exporter/app/internal/scrape/collector.go",
                     "components/threshold-exporter/config/conf.d/db-a.yaml"):
             assert pattern.match(rel), (
                 f"the platform-data-check hook does not watch {rel}, so editing "
@@ -396,6 +401,32 @@ class TestThePortalOfflineFallbackIsGenerated:
         mod.main()  # returns instead of raising SystemExit
         out = capsys.readouterr().out
         assert "rule-packs-fallback.json is up to date" in out
+
+    @pytest.mark.parametrize("argv, recorded, want", [
+        (["--check"], "2019-12-31T00:00:00Z", "2019-12-31T00:00:00Z"),
+        (["--check"], "not a time", None),
+        ([], "2019-12-31T00:00:00Z", None),
+    ])
+    def test_check_builds_at_the_instant_the_file_recorded(
+            self, tmp_path, monkeypatch, argv, recorded, want):
+        """#2115 B4: the tenants are the exporter's answer at a time, so
+        `--check` re-evaluates at the file's `generated`, not now (a
+        maintenance expiry in between must not turn the gate red). A write
+        evaluates at now; an unreadable `generated` falls back to now."""
+        mod = _load_module()
+        existing = tmp_path / "platform-data.json"
+        existing.write_text('{"generated": "%s"}' % recorded, encoding="utf-8")
+        monkeypatch.setattr(mod, "OUTPUT_PATH", existing)
+        seen = []
+
+        def spy(at=None):
+            seen.append(at)
+            raise RuntimeError("stop")
+        monkeypatch.setattr(mod, "build_platform_data", spy)
+        monkeypatch.setattr(sys, "argv", ["generate_platform_data.py", *argv])
+        with pytest.raises(RuntimeError, match="stop"):
+            mod.main()
+        assert seen == [want]
 
     def test_a_packorder_that_disagrees_with_the_packs_is_refused(self):
         """`build_fallback`'s own fail-closed arms, run rather than described.

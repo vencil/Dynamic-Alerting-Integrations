@@ -423,6 +423,35 @@ def _run_da_guard(
     return got, proc.returncode, stderr
 
 
+GENERATED_AT_FORMAT = "%Y-%m-%dT%H:%M:%SZ"
+
+
+def now_at() -> str:
+    """The current instant as `served-values --at` takes it (RFC3339, UTC)."""
+    from datetime import datetime, timezone
+    return datetime.now(timezone.utc).strftime(GENERATED_AT_FORMAT)
+
+
+def recorded_at(artifact: object) -> str | None:
+    """The `generated` instant a generated JSON artifact recorded, or None.
+
+    A `--check` re-reads served values at this instant rather than now: the
+    exporter's answer depends on the time (maintenance expiry, scheduled
+    thresholds), and a gate evaluated at "now" would turn red with no file
+    changed (#2115 B4). None when absent or not in GENERATED_AT_FORMAT."""
+    from datetime import datetime
+    if not isinstance(artifact, dict):
+        return None
+    at = artifact.get("generated")
+    if not isinstance(at, str):
+        return None
+    try:
+        datetime.strptime(at, GENERATED_AT_FORMAT)
+    except ValueError:
+        return None
+    return at
+
+
 def load_served_values(
     conf_d: str | Path,
     at: str | None = None,

@@ -570,8 +570,10 @@ repos:
         # two is path-gated on tools/portal/**, so it did not run for #1215.
         # conf.d and the tenant-metadata reader (#2115 0-B/B4): the tenants in
         # the JSON are the exporter's answer for that tree, so editing a tenant
-        # alone must reach this hook too.
-        files: ^(rule-packs/|k8s/03-monitoring/|docs/assets/platform-data\.json|scripts/tools/ops/scaffold_tenant\.py|scripts/tools/dx/generate_platform_data\.py|scripts/tools/dx/generate_tenant_metadata\.py|scripts/tools/_lib_tenant_values\.py|scripts/ops/with_da_guard\.sh|components/threshold-exporter/config/conf\.d/|tools/portal/src/interactive/tools/_common/data/rule-packs-fallback\.json)
+        # alone must reach this hook too, and so must a change to how the
+        # exporter resolves that tree (the whole Go module: served-values reads
+        # what the collector's scrape resolved) or how da-guard is dispatched.
+        files: ^(rule-packs/|k8s/03-monitoring/|docs/assets/platform-data\.json|scripts/tools/ops/scaffold_tenant\.py|scripts/tools/dx/generate_platform_data\.py|scripts/tools/dx/generate_tenant_metadata\.py|scripts/tools/_lib_tenant_values\.py|scripts/tools/ops/guard_dispatch\.py|scripts/ops/with_da_guard\.sh|components/threshold-exporter/app/|components/threshold-exporter/config/conf\.d/|tools/portal/src/interactive/tools/_common/data/rule-packs-fallback\.json)
         additional_dependencies: ['pyyaml']
 
       - id: repo-name-check
