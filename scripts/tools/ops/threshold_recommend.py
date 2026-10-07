@@ -1152,26 +1152,23 @@ def _one_line(text: Any) -> str:
 
 
 _PLAIN_NAME = re.compile(r"[A-Za-z0-9][A-Za-z0-9._-]*", re.ASCII)
-# Plain names a YAML 1.1 or 1.2 reader takes as something other than that
-# string: null, booleans, numbers (octal, hex, binary, floats, `1_000`) and
-# dates. Over-broad on purpose (`y`, `tRUE`, `1.2.3`): a name held back here
-# only loses its patch line (#2116).
-_NON_STRING_WORDS = frozenset({"null", "true", "false", "yes", "no", "on", "off", "y", "n"})
-_NUMBER_LIKE = re.compile(
-    r"[0-9][0-9._-]*|0[xob][0-9a-f_]*|[0-9][0-9_]*(\.[0-9_]*)?e[0-9]+",
-    re.ASCII | re.IGNORECASE)
+# The one plain spelling the exporter does not read back as that text: it
+# decodes an unquoted `null` key as no key at all; `010`, `true`, `2024-01-01`
+# it keeps as written, as `_lib_yaml_keys` reads them (#2116; measured in
+# tests/shared/tenant_id_yaml_spelling_matrix.json).
+_NULL_WORDS = frozenset({"null", "Null", "NULL"})
 
 
 def _plain_name(name: str) -> bool:
-    """True iff `name` can go on a value line as is: a plain identifier that
-    YAML 1.1 and 1.2 readers (PyYAML, the exporter's yaml.v3) both read back as
-    that same string. Any other tenant name or key is never written on a value
-    line — not quoted either: a quoted key's escapes are not read alike by
-    every reader (a JSON surrogate pair breaks the exporter's whole file).
-    The patch then carries a comment asking for a hand edit (#2116)."""
-    return (_PLAIN_NAME.fullmatch(name) is not None
-            and name.lower() not in _NON_STRING_WORDS
-            and _NUMBER_LIKE.fullmatch(name) is None)
+    """True iff `name` can go on a value line as is: a plain ASCII identifier
+    the exporter reads back as that same text (it keys tenants by the source
+    text, so `010` stays `010`; only `null` does not). PyYAML may read some of
+    these as numbers or booleans; the exporter's reading is the one that
+    counts. Any other tenant name or key is never written on a value line —
+    not quoted either: a quoted key's escapes are not read alike by every
+    reader (a JSON surrogate pair breaks the exporter's whole file). The patch
+    then carries a comment asking for a hand edit (#2116)."""
+    return _PLAIN_NAME.fullmatch(name) is not None and name not in _NULL_WORDS
 
 
 def _from(r: KeyRecommendation) -> str:

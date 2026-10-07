@@ -324,12 +324,13 @@ def test_json_summary_counts_nested_as_the_text_does(apply, tmp_path, stubs):
 # ── export-patch: a name that is not a plain YAML name gets no value line ──
 # The line breaks `str.splitlines` (and YAML) honour that a careless join keeps,
 # a non-BMP character (a JSON-quoted key spells it as a surrogate pair, which
-# the exporter's yaml.v3 refuses) and words YAML reads as null / bool / int.
+# the exporter's yaml.v3 refuses) and `null`, the one plain word the exporter
+# does not read back as written.
 _INJECT = '{brk}  z:{brk}    mysql_connections: "1" #'
 _ODD = {"lf": "zz" + _INJECT.format(brk="\n"),
         "u2028": "zz" + _INJECT.format(brk="\u2028"),
         "nel": "zz" + _INJECT.format(brk="\x85"),
-        "emoji": "x\U0001F600", "null": "null", "true": "true", "octal": "010"}
+        "emoji": "x\U0001F600", "null": "null"}
 
 
 def _q(name: str) -> str:
@@ -395,22 +396,38 @@ def test_a_key_that_is_not_a_plain_name_is_not_written():
         return tr.KeyRecommendation(key=k, current_value="60", recommended=20.0,
                                     delta_pct=-66.7, confidence="HIGH", reason="r")
     patch = tr.format_export_patch([tr.TenantRecommendation(
-        tenant="t", keys=[key("mysql_connections"), key("null"), key("010")])])
+        tenant="t", keys=[key("mysql_connections"), key("null"), key("a\nb")])])
     assert yaml.safe_load(patch) == {"tenants": {"t": {"mysql_connections": "20"}}}, patch
     said = [ln for ln in patch.splitlines() if "(not written)" in ln]
-    assert [ln.split(":")[0] for ln in said] == ["    # (not written) 010",
+    assert [ln.split(":")[0] for ln in said] == ["    # (not written) a?b",
                                                 "    # (not written) null"], patch
     assert all("the key is not a plain YAML name" in ln for ln in said), patch
 
 
-@pytest.mark.parametrize("name", ["db-a", "tenant-a", "db.prod-1", "a1", "redis_0", "e5x"])
+@pytest.mark.parametrize("name", ["db-a", "tenant-a", "db.prod-1", "a1", "redis_0", "e5x",
+                                  "010", "123", "2024", "10-20", "true", "yes", "2024-01-01"])
 def test_ordinary_names_are_plain(name):
     assert tr._plain_name(name)
 
 
 @pytest.mark.parametrize("name", [
-    "null", "Null", "NULL", "~", "true", "False", "YES", "no", "On", "off", "y", "N",
-    "010", "0123", "123", "0x1F", "0o17", "0b101", "1.0", "1_000", "1e5", "1.5E10",
-    "2024-01-01", "-1", ".inf", ".nan", "", "a b", "é", "x\U0001F600", "a\nb"])
-def test_names_yaml_reads_otherwise_are_not_plain(name):
+    "null", "Null", "NULL", "~", "-1", ".inf", ".nan", "", "a b", "é", "x\U0001F600", "a\nb"])
+def test_names_the_exporter_reads_otherwise_are_not_plain(name):
     assert not tr._plain_name(name)
+
+
+@pytest.mark.parametrize("tid", ["010", "2024", "10-20", "true", "2024-01-01"])
+def test_a_numeric_or_boolean_looking_tenant_id_keeps_its_value_line(tid, tmp_path, stubs):
+    """Tenant ids such as store numbers or years are legal and the exporter
+    keys them by their text: the patch writes their value line bare, and that
+    line, merged as a tenant file, is read back by da-guard as the same id."""
+    conf_d = _tree(tmp_path, {"_defaults.yaml": _BASE,
+                              "a.yaml": f'tenants:\n  {_q(tid)}:\n    mysql_connections: "60"\n'})
+    assert set(tv.load_effective(conf_d)) == {tid}  # premise
+    patch = tr.format_export_patch(tr.run_analysis(str(conf_d), prometheus_url="http://prom.stub"))
+    values = [ln for ln in patch.splitlines() if ln.strip() and not ln.lstrip().startswith("#")]
+    assert values[:2] == ["tenants:", f"  {tid}:"], patch
+    assert values[2].startswith('    mysql_connections: "20"'), patch
+    back = tv.load_effective(_tree(tmp_path / "back", {"_defaults.yaml": _BASE, "a.yaml": patch}))
+    assert set(back) == {tid}, patch
+    assert back[tid].effective_config["mysql_connections"] == "20", patch
