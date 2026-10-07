@@ -306,6 +306,25 @@ def test_check_evaluates_at_the_recorded_instant(tmp_path):
     assert "Traceback" not in proc.stderr, proc.stderr
 
 
+def test_check_ignores_a_generated_in_the_future(tmp_path):
+    """檔案是在維護結束後的時刻產的（normal），`generated` 再挪到更遠的未來：
+    若 --check 照收那個時刻，答案仍是 normal、過關；應退回現在（還在維護中）→ 紅。"""
+    conf_d = _tree(tmp_path, {
+        "_defaults.yaml": _BASE + _STATE_FILTERS,
+        "tenant-a.yaml": ("tenants:\n  tenant-a:\n    _state_maintenance:\n"
+                          "      target: enable\n      expires: \"2099-01-01T00:00:00Z\"\n"),
+    })
+    data = gtm.build_tenant_metadata(conf_d, at="2099-06-01T00:00:00Z")
+    assert data["tenant_metadata"]["tenant-a"]["operational_mode"] == "normal"       # 前提
+    now = gtm.build_tenant_metadata(conf_d)["tenant_metadata"]["tenant-a"]
+    assert now["operational_mode"] == "maintenance"                                  # 前提
+    data["generated"] = "2100-01-01T00:00:00Z"
+    out = tmp_path / "meta.json"
+    out.write_text(json.dumps(data, indent=2, ensure_ascii=False) + "\n", encoding="utf-8")
+    proc = _cli(conf_d, "--output", str(out), "--check")
+    assert proc.returncode == 1 and "is outdated" in proc.stderr, proc.stderr
+
+
 @pytest.mark.parametrize("generated, want", [
     ("2019-12-31T00:00:00Z", "2019-12-31T00:00:00Z"),
     ("2100-01-01T00:00:00Z", None),          # 未來
