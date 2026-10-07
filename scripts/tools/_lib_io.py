@@ -597,13 +597,28 @@ class MisreadScalar:
         return f"MisreadScalar({self.line}:{self.column} {self.path} {self.text!r})"
 
 
+class _ExplicitTagStrictLoader(StrictSafeLoader):
+    """:class:`StrictSafeLoader` whose scalar nodes carry ``go_explicit_tag``:
+    whether the scalar was written with a tag of its own (``!!bool yes``).
+    The composed tag alone cannot tell — PyYAML's resolver stamps a plain
+    ``yes`` ``!!bool`` too — and yaml.v3 treats the two differently (#2509
+    review F4: ``find_go_rejected_bool_tags``)."""
+
+    def compose_scalar_node(self, anchor):  # noqa: D102 — see class
+        tag = self.peek_event().tag
+        node = super().compose_scalar_node(anchor)
+        node.go_explicit_tag = tag not in (None, "!")
+        return node
+
+
 def compose_all_nodes(stream: Any,
                       loader: Optional[type] = None) -> Iterator["yaml.Node"]:
     """The composed node tree of each document in *stream* (nothing is
-    constructed). *loader* defaults to :class:`StrictSafeLoader`, the pure
+    constructed). *loader* defaults to :class:`StrictSafeLoader` (the pure
     parser every strict entry point here uses, so line numbers and resolved
-    tags are the ones the reader of the file sees."""
-    ldr = (loader or StrictSafeLoader)(stream)
+    tags are the ones the reader of the file sees), with each scalar marked
+    ``go_explicit_tag`` (:class:`_ExplicitTagStrictLoader`)."""
+    ldr = (loader or _ExplicitTagStrictLoader)(stream)
     try:
         while ldr.check_node():
             yield ldr.get_node()
@@ -721,7 +736,7 @@ def find_misread_scalars(root: Optional["yaml.Node"], schema: dict,
     """
     found: list[MisreadScalar] = []
     for node, cands, path in _plain_scalars_with_schema(root, schema, schemas, schema_name):
-        if node.tag == _YAML_STR_TAG:
+        if node.style is not None or node.tag == _YAML_STR_TAG:
             continue
         types = schema_scalar_types(cands)
         if types is None or types - {"null"} != {"string"}:
@@ -738,9 +753,11 @@ def find_misread_scalars(root: Optional["yaml.Node"], schema: dict,
 # ── #2509: an UNQUOTED YAML 1.1 boolean word in a field that takes a boolean
 #
 # `send_resolved: on` / `_routing_enforced: {enabled: yes}` is True to
-# PyYAML (YAML 1.1), so the schema passes it, but the Go readers (yaml.v3)
-# read the STRING "on" / "yes": `da-guard effective` serves that string and
-# its merged_hash differs from describe_tenant's. Nothing on the READ side
+# PyYAML (YAML 1.1), so the schema passes it, but the exporter's generic
+# yaml.v3 decode reads the STRING "on" / "yes": `da-guard effective` serves
+# that string and its merged_hash differs from describe_tenant's. (Not every
+# Go reader: pkg/routingpolicy decodes `_routing_enforced` through
+# pyyamlcompat, which takes yes / on as true — #2509 review F5.) Nothing on the READ side
 # changes (#2509 owner decision ②) — the author is told to write true /
 # false. A WARN, not an ERROR: the receiver fields (`definitions.yamlBool`)
 # accept the word on both sides and generate the same Alertmanager config.
@@ -771,9 +788,9 @@ class YamlBoolWord:
         value = "true" if self.text.lower() in ("yes", "on") else "false"
         written = (f"- {value}" if field.isdigit() or not field else f"{field}: {value}")
         return (f"{self.path}: unquoted {self.text!r} is a YAML 1.1 boolean — PyYAML "
-                f"and this schema read it as {value}, but the Go readers (yaml.v3, "
-                f"da-guard / the exporter) read the string {self.text!r}, so the two "
-                f"sides see different values (and a different merged_hash) — "
+                f"and this schema read it as {value}, but the exporter's generic "
+                f"effective config (da-guard effective) carries the string "
+                f"{self.text!r}, and its merged_hash is computed from that string — "
                 f"write it as: {written}")
 
     def __repr__(self) -> str:  # pragma: no cover - debugging aid
@@ -789,7 +806,8 @@ def find_yaml11_bool_words(root: Optional["yaml.Node"], schema: dict,
     as for :func:`find_misread_scalars`."""
     found: list[YamlBoolWord] = []
     for node, cands, path in _plain_scalars_with_schema(root, schema, schemas, schema_name):
-        if node.tag != _YAML_BOOL_TAG or node.value in _YAML12_BOOL_TEXTS:
+        if (node.style is not None or node.tag != _YAML_BOOL_TAG
+                or node.value in _YAML12_BOOL_TEXTS or getattr(node, "go_explicit_tag", False)):
             continue
         types = schema_scalar_types(cands)
         if types is None or "boolean" not in types:
@@ -800,10 +818,58 @@ def find_yaml11_bool_words(root: Optional["yaml.Node"], schema: dict,
     return found
 
 
+class GoRejectedBoolTag:
+    """An explicit ``!!bool`` whose text yaml.v3 does not take (#2509 review
+    F4). ``line`` 1-based; ``path`` as for :class:`MisreadScalar`."""
+
+    __slots__ = ("line", "path", "text")
+
+    def __init__(self, line: int, path: str, text: str) -> None:
+        self.line, self.path, self.text = line, path, text
+
+    def message(self) -> str:
+        return (f"{self.path}: explicit `!!bool {self.text}` — yaml.v3 (the exporter) "
+                f"decodes only true / True / TRUE / false / False / FALSE under a "
+                f"`!!bool` tag, so it cannot decode this file and drops the WHOLE file "
+                f"(every tenant and default in it; da-guard exits 3) — write true or "
+                f"false without the tag")
+
+
+def find_go_rejected_bool_tags(root: Optional["yaml.Node"]) -> list[GoRejectedBoolTag]:
+    """Every scalar under *root* written with an explicit ``!!bool`` tag
+    (quoted or not) whose text is not one of yaml.v3's six boolean texts.
+    Field-independent: measured with da-guard, ``!!bool yes`` / ``on`` /
+    ``no`` / ``off`` (any case), ``!!bool 'yes'`` and ``!!bool y`` make the
+    exporter reject the file whatever field holds them; ``!!bool true`` /
+    ``True`` decode. Needs nodes from :func:`compose_all_nodes` (the
+    ``go_explicit_tag`` mark)."""
+    found: list[GoRejectedBoolTag] = []
+    seen: set[int] = set()
+    stack: list[tuple["yaml.Node", str]] = [(root, "")] if root is not None else []
+    while stack:
+        node, path = stack.pop()
+        if id(node) in seen:
+            continue
+        seen.add(id(node))
+        if isinstance(node, yaml.MappingNode):
+            for key_node, value_node in node.value:
+                label = key_node.value if isinstance(key_node, yaml.ScalarNode) else "?"
+                stack.append((key_node, f"{path}/{label}"))
+                stack.append((value_node, f"{path}/{label}"))
+        elif isinstance(node, yaml.SequenceNode):
+            stack.extend((item, f"{path}/{i}") for i, item in enumerate(node.value))
+        elif (isinstance(node, yaml.ScalarNode) and node.tag == _YAML_BOOL_TAG
+              and getattr(node, "go_explicit_tag", False)
+              and node.value not in _YAML12_BOOL_TEXTS):
+            found.append(GoRejectedBoolTag(node.start_mark.line + 1, path or "/", node.value))
+    found.sort(key=lambda m: m.line)
+    return found
+
+
 def _plain_scalars_with_schema(root: Optional["yaml.Node"], schema: dict,
                                schemas: Optional[dict[str, Any]],
                                schema_name: str):
-    """Each plain (unquoted, not block) scalar under *root*, with the schema
+    """Each scalar under *root* (callers filter on style), with the schema
     branches that can describe its position and its JSON-pointer-like path —
     the walk `find_misread_scalars` and `find_yaml11_bool_words` share.
     Merge keys put the merged keys in the mapping holding them; an alias
@@ -842,7 +908,7 @@ def _plain_scalars_with_schema(root: Optional["yaml.Node"], schema: dict,
                 stack.append((node.value[idx],
                               _schema_item_children(cands, idx, schemas),
                               f"{path}/{idx}"))
-        elif isinstance(node, yaml.ScalarNode) and node.style is None:
+        elif isinstance(node, yaml.ScalarNode):
             yield node, cands, path
 
 

@@ -607,10 +607,14 @@ def check_yaml_quoting(config_dir: str) -> dict[str, object]:
 
     #2509: an unquoted YAML 1.1 boolean word (`yes` / `no` / `on` / `off`)
     in a field that takes a boolean is listed too, as WARN (the row is WARN
-    when that is all it found): PyYAML reads a boolean, the Go readers the
-    string — `_lib_io.find_yaml11_bool_words`.
+    when that is all it found): PyYAML reads a boolean, the exporter's
+    generic effective config and merged_hash the string —
+    `_lib_io.find_yaml11_bool_words`. An explicit `!!bool yes` (the exporter
+    drops the whole file) is an error; a root `_defaults*` file's `tenants:`
+    block is held to the tenant schema too (#2509 review F3 / F4).
     """
-    from _lib_io import compose_all_nodes, find_misread_scalars, find_yaml11_bool_words
+    from _lib_io import (compose_all_nodes, find_go_rejected_bool_tags,
+                         find_misread_scalars, find_yaml11_bool_words)
     from _lib_confd import is_defaults_document_name
     schemas: dict[str, object] = {}
     for name in (_TENANT_SCHEMA, _PLATFORM_SCHEMA, _PROFILES_SCHEMA):
@@ -646,12 +650,18 @@ def check_yaml_quoting(config_dir: str) -> dict[str, object]:
             continue
         checked += 1
         for root in roots:
-            for hit in find_misread_scalars(root, schemas[schema_name],
-                                            schemas, schema_name):
-                errors.append(f"{label}:{hit.line}: {hit.message()}")
-            for word in find_yaml11_bool_words(root, schemas[schema_name],
-                                               schemas, schema_name):
-                warnings.append(f"WARN: {label}:{word.line}: {word.message()}")
+            # #2509 review F3: a ROOT `_defaults*` file's `tenants:` block
+            # is held to the tenant schema too (same rule as check_confd_schema).
+            names = [schema_name]
+            if schema_name == _PLATFORM_SCHEMA and "/" not in label:
+                names.append(_TENANT_SCHEMA)
+            for name_ in names:
+                for hit in find_misread_scalars(root, schemas[name_], schemas, name_):
+                    errors.append(f"{label}:{hit.line}: {hit.message()}")
+                for word in find_yaml11_bool_words(root, schemas[name_], schemas, name_):
+                    warnings.append(f"WARN: {label}:{word.line}: {word.message()}")
+            for tag in find_go_rejected_bool_tags(root):
+                errors.append(f"{label}:{tag.line}: {tag.message()}")
     if errors:
         return _make_result("yaml_quoting", FAIL, errors + warnings)
     if warnings:

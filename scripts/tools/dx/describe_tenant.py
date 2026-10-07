@@ -968,7 +968,7 @@ class _GoKeyProfileTextLoader(_GoKeyLoader):
         it elects no profile (`_profile_name`).
     ⚠️ Not mirrored, named on stderr (`_warn_unmirrored_profiles`): no
     written `default:` but one reached through a merge key
-    (`{<<: {default: x}}`). ScheduledValue sees `<<`, takes its
+    (`{<<: {default: x}}`) or an alias key (`{*k : x}` with `&k default`). ScheduledValue sees `<<`, takes its
     arbitrary-mapping branch and elects the yaml.v3 `Marshal` text of the
     merged mapping (`default: x\\n`) as the profile NAME — normally an
     unknown profile. Here it stays the generic mapping and elects nothing:
@@ -981,14 +981,28 @@ class _GoKeyProfileTextLoader(_GoKeyLoader):
 
     raw_text_scalars = frozenset(_PROFILE_AS_TEXT)
 
+    def compose_node(self, parent, index):
+        """Remember which keys of a mapping are ALIASES (#2515 review F2).
+        PyYAML hands back the anchored node itself, so `{*k : '010'}` with
+        `&k default` looks like a written `default` key; yaml.v3's
+        ScheduledValue compares the alias node's own Value (the alias
+        name) and does not. Recorded by pair position: an alias KEY is
+        composed while its mapping holds `len(parent.value)` pairs."""
+        if (index is None and isinstance(parent, yaml.MappingNode)
+                and self.check_event(yaml.AliasEvent)):
+            positions = getattr(parent, "go_alias_key_positions", None)
+            if positions is None:
+                positions = parent.go_alias_key_positions = set()
+            positions.add(len(parent.value))
+        return super().compose_node(parent, index)
+
     def flatten_mapping(self, node):
         """Remember the keys a mapping WRITES before `<<` is merged into it
         (#2515): `ScheduledValue` tests the written keys for `default`, and
         PyYAML's flattening rewrites `node.value` in place. Recorded once, so
         a node an alias reaches again keeps its written keys."""
         if not hasattr(node, "go_written_keys"):
-            node.go_written_keys = frozenset(
-                k.value for k, _ in node.value if isinstance(k, yaml.ScalarNode))
+            node.go_written_keys = _written_keys(node)
         super().flatten_mapping(node)
 
     def construct_mapping(self, node, deep=False):  # noqa: D102 — see class
@@ -1015,7 +1029,7 @@ class _GoKeyProfileTextLoader(_GoKeyLoader):
         takes it; None where it leaves the generic value (see the class)."""
         written = getattr(node, "go_written_keys", None)
         if written is None:
-            written = frozenset(k.value for k, _ in node.value if isinstance(k, yaml.ScalarNode))
+            written = _written_keys(node)
         self.flatten_mapping(node)
         if "default" in written:
             default = None
@@ -1036,9 +1050,18 @@ class _GoKeyProfileTextLoader(_GoKeyLoader):
 _YAML_NULL_TAG = "tag:yaml.org,2002:null"
 
 
+def _written_keys(node: Any) -> frozenset:
+    """The scalar keys `node` (a mapping, not yet flattened) WRITES: neither
+    merged in by `<<` nor an alias (`compose_node`'s positions) — the keys
+    yaml.v3's ScheduledValue sees by their Value."""
+    aliases = getattr(node, "go_alias_key_positions", ())
+    return frozenset(k.value for i, (k, _) in enumerate(node.value)
+                     if isinstance(k, yaml.ScalarNode) and i not in aliases)
+
+
 class _UnmirroredMergeProfile(dict):
     """A `_profile:` mapping whose `default` comes only through a merge key
-    (#2515): kept as the generic mapping, which the exporter does not do
+    or an alias key (#2515): kept as the generic mapping, which the exporter does not do
     (see `_GoKeyProfileTextLoader`). A plain dict otherwise."""
 
 
@@ -1061,7 +1084,7 @@ def _warn_unmirrored_profiles(path: Path, doc: Any) -> None:
             continue
         _UNMIRRORED_PROFILE_WARNED.add(key)
         print(f"WARNING: {path}: tenant '{tid}': `_profile` takes `default` only through a "
-              f"merge key (`<<`) — not mirrored here. The exporter elects the YAML text of "
+              f"merge key (`<<`) or an alias key — not mirrored here. The exporter elects the YAML text of "
               f"the merged mapping as the profile name; this tool keeps the mapping and "
               f"elects no profile, so `_profile` and merged_hash differ from the "
               f"exporter's (#2515).", file=sys.stderr)

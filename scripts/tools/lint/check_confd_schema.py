@@ -26,8 +26,12 @@ SCOPE:
 
 WARN (#2509, never changes the exit code): an unquoted YAML 1.1 boolean word
   (`yes` / `no` / `on` / `off`, three spellings each) in a field that takes a
-  boolean — PyYAML, and so this schema check, reads a boolean; the Go readers
-  (yaml.v3) read the string. Each one is printed as `WARN: <file>:<line>: …`.
+  boolean — PyYAML, and so this schema check, reads a boolean; the exporter's
+  generic effective config (da-guard effective) and merged_hash carry the
+  string. Each one is printed as `WARN: <file>:<line>: …`. A root `_defaults*`
+  file's `tenants:` block is held to the tenant schema for this and #2164.
+  An explicit `!!bool yes` (yaml.v3 refuses it, dropping the whole file) is
+  an ERROR.
 
 Exit codes (scripts/tools/_lib_exitcodes.py):
   0  all tenant files valid
@@ -58,7 +62,8 @@ from _lib_exitcodes import EXIT_OK, EXIT_VIOLATION, EXIT_CALLER_ERROR  # noqa: E
 from _lib_io import safe_label  # noqa: E402  (#1538 output-layer escaping)
 from _lib_io import strict_safe_load_all  # noqa: E402  (#2123 duplicate key = YAML error)
 from _lib_io import (  # noqa: E402  (#2164, #2509)
-    compose_all_nodes, find_misread_scalars, find_yaml11_bool_words)
+    compose_all_nodes, find_go_rejected_bool_tags, find_misread_scalars,
+    find_yaml11_bool_words)
 from _lib_confd import (  # noqa: E402  (#1588 shared name predicates)
     has_yaml_extension,
     is_defaults_document_name,
@@ -310,12 +315,23 @@ def misread_scalar_violations(rel: str, text: str, schema: dict,
     return out
 
 
+def go_rejected_bool_tag_violations(rel: str, text: str) -> list[str]:
+    """#2509 review F4: one ERROR per explicit `!!bool` whose text yaml.v3
+    refuses (`!!bool yes`) — the exporter drops the whole file. Any field:
+    `_lib_io.find_go_rejected_bool_tags`."""
+    out: list[str] = []
+    for root in compose_all_nodes(io.StringIO(text)):
+        for hit in find_go_rejected_bool_tags(root):
+            out.append(f"ERROR: {rel}:{hit.line}: {hit.message()}")
+    return out
+
+
 def yaml11_bool_word_warnings(rel: str, text: str, schema: dict,
                               schemas: dict, schema_name: str) -> list[str]:
     """#2509: one WARN per unquoted YAML 1.1 boolean word (`yes` / `no` /
     `on` / `off`, three spellings each) in a field that takes a boolean —
-    PyYAML (and so this schema check) reads a boolean, the Go readers read
-    the string. `_lib_io.find_yaml11_bool_words` decides; WARN, not ERROR:
+    PyYAML (and so this schema check) reads a boolean, the exporter's
+    generic effective config and merged_hash the string. `_lib_io.find_yaml11_bool_words` decides; WARN, not ERROR:
     nothing on the read side changed (owner decision ②)."""
     out: list[str] = []
     for root in compose_all_nodes(io.StringIO(text)):
@@ -382,11 +398,18 @@ def validate_dir(config_dir: str, schema: dict, validator,
             file_schema, file_schema_name = platform_schema, PLATFORM_SCHEMA_NAME
         else:
             file_schema, file_schema_name = schema, TENANT_SCHEMA_NAME
-        violations.extend(misread_scalar_violations(
-            rel, text, file_schema, schemas, file_schema_name))
-        if warnings is not None:
-            warnings.extend(yaml11_bool_word_warnings(
-                rel, text, file_schema, schemas, file_schema_name))
+        # #2509 review F3: a ROOT `_defaults*` file's `tenants:` block is a
+        # tenant's values to the exporter (platform overlay) — the platform
+        # schema leaves it loose, so it is held to the tenant schema too
+        # (whose only top-level key is `tenants`: nothing else is walked twice).
+        quoting = [(file_schema, file_schema_name)]
+        if is_defaults and "/" not in rel:
+            quoting.append((schema, TENANT_SCHEMA_NAME))
+        for q_schema, q_name in quoting:
+            violations.extend(misread_scalar_violations(rel, text, q_schema, schemas, q_name))
+            if warnings is not None:
+                warnings.extend(yaml11_bool_word_warnings(rel, text, q_schema, schemas, q_name))
+        violations.extend(go_rejected_bool_tag_violations(rel, text))
         for doc in docs:
             if is_profiles:
                 # #2245: an empty / comment-only `_routing_profiles.yaml` is a

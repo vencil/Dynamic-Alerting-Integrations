@@ -63,6 +63,8 @@ SHAPES = [
     ("map-float-default", "{default: 1.50}", 80),
     ("map-quoted-key", "{\"default\": '010'}", 10),
     ("map-no-default-CONTROL", "{foo: '010'}", 80),
+    # control for the alias row: an ANCHORED (written) `default` key counts.
+    ("anchored-written-key", "{&k default : '010'}", 10),
     ("merge-under-written-default", "{<<: {default: 'zzz'}, default: '010'}", 10),
     ("sequence-CONTROL", "['010']", 80),
     ("null-CONTROL", "~", 80),
@@ -76,6 +78,9 @@ MERGE_KEY_SHAPES = [
     ("merge-key-bare", "{<<: {default: 010}}"),
     ("merge-key-plus", "{<<: {default: '010'}, reason: x}"),
     ("merge-key-nested", "{<<: {default: '010', n: [1, {x: yes}], s: 'a: b'}}"),
+    # #2515 review F2: an ALIAS key is not a written `default` to yaml.v3
+    # (it compares the alias node's own Value) — same arbitrary-mapping branch.
+    ("alias-key", "{a: &k default, *k : '010'}"),
 ]
 
 
@@ -177,7 +182,7 @@ def test_merge_key_only_default_is_a_named_known_divergence(tmp_path, name, prof
     WARNING，點名檔案與租戶，每個檔、每個租戶只印一次。"""
     conf_d = _tree(tmp_path, profile, where)
     oracle = _oracle(conf_d)
-    assert isinstance(oracle["_profile"], str) and oracle["_profile"].startswith("default: ")
+    assert isinstance(oracle["_profile"], str) and "default: " in oracle["_profile"], oracle
     assert oracle["bound"] == []                         # 前提：Marshal 文字不是任何 profile
     got = _reading(conf_d)
     assert got["value"] == oracle["value"] == 80, got
@@ -198,3 +203,17 @@ def test_written_default_and_plain_mappings_do_not_warn(tmp_path):
         (tmp_path / str(i)).mkdir()
         err = _describe_proc(_tree(tmp_path / str(i), profile, "tenant-file")).stderr
         assert "merge key" not in err, (profile, err)
+
+
+
+def test_warning_is_printed_once_on_the_what_if_path(tmp_path):
+    """T1：`--what-if <conf.d>/_defaults.yaml` 會把同一個平台檔再讀一次；WARNING 仍恰好 1 行
+    （拿掉去重會變 2 行）。"""
+    conf_d = _tree(tmp_path, "{<<: {default: '010'}}", "platform-tenants")
+    p = subprocess.run([sys.executable, str(DESCRIBE), "t1", "--conf-d", str(conf_d),
+                        "--what-if", str(conf_d / "_defaults.yaml"), "--format", "json"],
+                       capture_output=True, text=True, encoding="utf-8", errors="replace",
+                       timeout=120, env={**os.environ, "PYTHONIOENCODING": "utf-8"})
+    assert p.returncode == 0, p.stderr
+    lines = [l for l in p.stderr.splitlines() if "only through a merge key" in l]
+    assert len(lines) == 1, p.stderr

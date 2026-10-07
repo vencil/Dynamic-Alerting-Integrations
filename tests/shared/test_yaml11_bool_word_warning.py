@@ -12,6 +12,10 @@ PyYAML（YAML 1.1）讀成布林，schema 因此放行；Go（yaml.v3）讀到�
 - 前提（必響）：每個欄位位置，Go 讀到的確實是字串、PyYAML 讀到的確實是布林——WARN 講的是真的。
 - 不響的對照組：`true` / `false`（各種大小寫）、字串欄位寫 `yes`（那是 #2164 的 ERROR，不是本 WARN）、
   加引號的 `"yes"`。
+- 盲審第 1 輪（F3／F4／F5／T2）：根 `_defaults*` 的 `tenants:` 區塊依 tenant schema 檢查，WARN 與
+  租戶檔一致（#2164 的 ERROR 同一修法一併補上；巢狀 `_defaults.yaml` 的 `tenants:` Go 不讀，不報）；
+  明確 `!!bool yes` 之類 yaml.v3 拒收整份檔，報 ERROR（da-guard exit 3 為前提）；訊息只陳述 generic
+  effective／merged_hash 讀到字串；`yaml_quoting` 的 FAIL 列附上 WARN 明細。
 
 修正前（main 59e58c81）兩條 lint 對 yes/on/no/off 都完全安靜（schema 讓它過、quoting 只看字串欄位）。
 
@@ -193,3 +197,120 @@ def test_platform_defaults_routing_enforced_is_covered(tmp_path):
     assert _warn_lines(p) and _warn_lines(p)[0].startswith(
         "WARN: _defaults.yaml:4: /_routing_enforced/enabled: unquoted 'on'"), p.stderr
     assert vc.check_yaml_quoting(str(conf_d))["status"] == vc.WARN
+
+
+
+# ── 盲審第 1 輪 ──────────────────────────────────────────────────────────
+
+def _platform_tree(tmp_path: Path, block: str, nested: bool = False) -> Path:
+    conf_d = tmp_path / "conf.d"
+    (conf_d / "sub").mkdir(parents=True)
+    carrier = conf_d / ("sub/_defaults.yaml" if nested else "_defaults.yaml")
+    (conf_d / "_defaults.yaml").write_text(_DEFAULTS + ("" if nested else block),
+                                           encoding="utf-8")
+    if nested:
+        carrier.write_text("defaults:\n  mysql_connections: 70\n" + block, encoding="utf-8")
+    (conf_d / "sub" / "t1.yaml").write_text("tenants:\n  t1: {}\n", encoding="utf-8")
+    return conf_d
+
+
+_BLOCK = ("tenants:\n  t1:\n    _state_maintenance: {enabled: on}\n"
+          "    _routing:\n      receiver: {type: webhook, url: 'https://h.example.com/x', "
+          "send_resolved: No}\n")
+
+
+def _strip_loc(line: str) -> str:
+    """`WARN: <file>:<line>: <rest>` -> `<rest>`."""
+    return line.split(": ", 2)[2]
+
+
+def test_root_platform_tenants_block_warns_like_a_tenant_file(tmp_path):
+    """F3：根 `_defaults.yaml` 的 `tenants:` 與同內容的租戶檔，WARN（去掉檔名與行號）完全相同；
+    Go 端出的確實是字串（前提）。"""
+    (tmp_path / "p").mkdir()
+    (tmp_path / "t").mkdir()
+    plat = _platform_tree(tmp_path / "p", _BLOCK)
+    eff = tv.load_effective(plat)["t1"].effective_config
+    assert eff["_state_maintenance"]["enabled"] == "on"
+    assert eff["_routing"]["receiver"]["send_resolved"] == "No"
+    tenant = tmp_path / "t" / "conf.d"
+    tenant.mkdir()
+    (tenant / "_defaults.yaml").write_text(_DEFAULTS, encoding="utf-8")
+    (tenant / "t1.yaml").write_text(_BLOCK, encoding="utf-8")
+    pw, tw = _warn_lines(_lint(plat)), _warn_lines(_lint(tenant))
+    assert len(pw) == 2 and all(l.startswith("WARN: _defaults.yaml:") for l in pw), pw
+    assert [_strip_loc(l) for l in pw] == [_strip_loc(l) for l in tw], (pw, tw)
+    assert vc.check_yaml_quoting(str(plat))["details"] == pw
+
+
+def test_root_platform_tenants_block_gets_2164s_error_too(tmp_path):
+    """F3 順手：同一修法讓 #2164（字串欄位的未加引號 yes）在平台 `tenants:` 也報 ERROR。"""
+    conf_d = _platform_tree(tmp_path, (
+        "tenants:\n  t1:\n    _routing:\n      receiver:\n        type: slack\n"
+        "        api_url: \"https://hooks.slack.com/services/x\"\n        channel: yes\n"))
+    p = _lint(conf_d)
+    assert p.returncode == 1, p.stderr
+    assert "ERROR: _defaults.yaml:" in p.stderr and "/tenants/t1/_routing/receiver/channel: " \
+        "unquoted 'yes'" in p.stderr, p.stderr
+    assert vc.check_yaml_quoting(str(conf_d))["status"] == vc.FAIL
+
+
+def test_nested_defaults_tenants_block_is_not_held_to_the_tenant_schema(tmp_path):
+    """對照：巢狀 `_defaults.yaml` 的 `tenants:` 區塊 Go 不讀（#1576），不報。"""
+    conf_d = _platform_tree(tmp_path, _BLOCK, nested=True)
+    assert _warn_lines(_lint(conf_d)) == []
+
+
+_EXPLICIT = ["!!bool yes", "!!bool on", "!!bool no", "!!bool off", "!!bool Yes", "!!bool OFF",
+             "!!bool 'yes'"]
+
+
+@pytest.mark.parametrize("field", sorted(FIELDS))
+@pytest.mark.parametrize("word", _EXPLICIT)
+def test_explicit_bool_tag_the_exporter_refuses_is_an_error(tmp_path, field, word):
+    """F4：da-guard 對這些寫法 exit 3（整份檔丟掉）——前提；lint 報 ERROR（rc 1）而不是 WARN。"""
+    conf_d, _ = _tree(tmp_path, field, word)
+    with pytest.raises(tv.ParseFailedError):
+        tv.load_effective(conf_d)
+    p = _lint(conf_d)
+    assert p.returncode == 1 and _warn_lines(p) == [], p.stderr
+    err = [l for l in p.stderr.splitlines() if "explicit `!!bool" in l]
+    assert len(err) == 1 and err[0].startswith(f"ERROR: {FIELDS[field][0]}:"), p.stderr
+    assert FIELDS[field][2] in err[0] and "drops the WHOLE file" in err[0], err
+    row = vc.check_yaml_quoting(str(conf_d))
+    assert row["status"] == vc.FAIL and any("drops the WHOLE file" in d for d in row["details"])
+
+
+@pytest.mark.parametrize("word", ["!!bool true", "!!bool True", "!!bool FALSE"])
+def test_explicit_bool_tag_yaml_v3_takes_is_quiet(tmp_path, word):
+    conf_d, _ = _tree(tmp_path, "send_resolved", word)
+    tv.load_effective(conf_d)                              # 前提：Go 讀得了
+    p = _lint(conf_d)
+    assert p.returncode == 0 and "explicit `!!bool" not in p.stderr, p.stderr
+
+
+def test_warn_message_states_only_the_generic_effective_reading(tmp_path):
+    """F5：不宣稱「Go readers」一律讀字串（routingpolicy 走 pyyamlcompat 讀成 true）。"""
+    conf_d, _ = _tree(tmp_path, "routing_enforced.enabled", "yes")
+    (w,) = _warn_lines(_lint(conf_d))
+    assert "generic effective config (da-guard effective)" in w and "merged_hash" in w, w
+    assert "Go readers" not in w, w
+
+
+def test_fail_row_carries_the_warnings_too(tmp_path):
+    """T2：同一列同時有 #2164 ERROR 與本 WARN 時，FAIL 列的明細是 errors + warnings。"""
+    conf_d = tmp_path / "conf.d"
+    conf_d.mkdir()
+    (conf_d / "_defaults.yaml").write_text(_DEFAULTS, encoding="utf-8")
+    (conf_d / "t1.yaml").write_text(
+        "tenants:\n  t1:\n    _state_maintenance: {enabled: on}\n    _routing:\n"
+        "      receiver:\n        type: slack\n"
+        "        api_url: \"https://hooks.slack.com/services/x\"\n        channel: yes\n",
+        encoding="utf-8")
+    row = vc.check_yaml_quoting(str(conf_d))
+    assert row["status"] == vc.FAIL, row
+    errs = [d for d in row["details"] if not d.startswith("WARN:")]
+    warns = [d for d in row["details"] if d.startswith("WARN:")]
+    assert len(errs) == 1 and "channel" in errs[0], row
+    assert len(warns) == 1 and "/_state_maintenance/enabled" in warns[0], row
+    assert row["details"] == errs + warns, row
