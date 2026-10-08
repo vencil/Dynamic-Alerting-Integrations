@@ -294,10 +294,10 @@ class TestPrepushWiring:
     ):
         """#2697: `is_file()` is False for a directory and for a symlink to
         nothing, and both used to be reported as "does not exist — never
-        installed". Running the installer straight away does not fix either:
-        it chains a directory (after which every push fails) and writes the
-        shim through a dangling link to wherever it points (#2702), so the
-        message says what is there and to move it aside first. The second half
+        installed". Running the installer straight away is wrong for both: it
+        chains a directory (after which every push fails) and writes the shim
+        through a dangling link to wherever the link points (#2702). So the
+        message says what is there and to move it aside first; the second half
         follows that remedy once."""
         mod = _load()
         self._repo(tmp_path)
@@ -354,7 +354,7 @@ class TestPrepushWiring:
         monkeypatch.setattr(Path, "read_bytes", read_bytes)
         wired, why = mod._prepush_guards_wired()
         assert wired is False, why
-        assert "讀不到" in why, why
+        assert "讀不到" in why and "install_prepush_hook.sh" in why, why
 
     @staticmethod
     def _insert_exit_0(hook, tmp_path):

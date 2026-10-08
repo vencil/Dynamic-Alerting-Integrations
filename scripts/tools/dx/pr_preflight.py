@@ -1125,7 +1125,7 @@ def _prepush_guards_wired() -> Tuple[Optional[bool], str]:
     try:
         raw = hook.read_bytes()
     except OSError as e:
-        return False, f"讀不到 {hook}（{e}）。"
+        return False, f"讀不到 {hook}（{e}）。先修好它的權限或擁有者，再重跑 install_prepush_hook.sh。"
     if raw == shim.encode("utf-8"):
         if not os.access(hook, os.X_OK):
             return False, (
