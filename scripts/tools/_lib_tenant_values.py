@@ -87,6 +87,14 @@ for that tenant (`effective_config`, `merged_hash`, `source_file`,
   readers that act on a tenant's file (threshold-govern, #2116) act on
   those keys only, in the spelling `effective_config` keys them by, which
   is the one written.
+* `not_served` — per key of `effective_config` whose value /metrics does not
+  serve as shown, a `NotServedKey`: `reason` (da-guard effective's
+  `not_served` reasons, e.g. `value_unparsed`, `window_invalid`) and `file`
+  (relative to `conf_d`; "" when no single file applies). Empty when /metrics
+  serves every key as shown. A da-guard whose effective document lacks the
+  field is named as older than this tool (#2065). The keys da-guard's
+  `value_not_served` refuses are those `value_not_served_as_written`
+  selects.
 
 `effective_config` is the JSON as /effective sends it: a YAML `.inf` / `.nan`
 arrives as the text `"Infinity"` / `"-Infinity"` / `"NaN"`.
@@ -161,6 +169,7 @@ __all__ = [
     "EffectiveError",
     "KeySchedule",
     "KeySource",
+    "NotServedKey",
     "ScheduleSegment",
     "ServedTree",
     "ServedValuesError",
@@ -172,6 +181,7 @@ __all__ = [
     "EffectiveTree",
     "DA_GUARD_PREFIX",
     "MISSING_BINARY_MESSAGE",
+    "VALUE_NOT_SERVED_REASONS",
     "ParseFailedError",
     "canonical_key",
     "exit_on_served_values_error",
@@ -182,6 +192,7 @@ __all__ = [
     "load_served_values",
     "print_load_error",
     "print_load_warnings",
+    "value_not_served_as_written",
     "written_config",
 ]
 
@@ -260,6 +271,25 @@ class KeySource(NamedTuple):
     level: int | None
 
 
+class NotServedKey(NamedTuple):
+    reason: str
+    file: str
+
+
+# The not_served reasons whose cause is a written threshold value (#2065) —
+# pkg/config ValueNotServedAsWritten's set.
+VALUE_NOT_SERVED_REASONS = ("value_unparsed", "value_unparsed_dropped", "window_invalid", "value_rejected")
+
+
+def value_not_served_as_written(key: str, reason: str) -> bool:
+    """Whether a not_served verdict on `key` is one da-guard's
+    `value_not_served` refuses (#2065): one of VALUE_NOT_SERVED_REASONS on a
+    threshold key (not `_`-prefixed). The Python copy of pkg/config
+    ValueNotServedAsWritten; tests/ops/test_validate_config_values_not_served.py
+    compares the two through da-guard."""
+    return not key.startswith("_") and reason in VALUE_NOT_SERVED_REASONS
+
+
 class TenantEffective(NamedTuple):
     tenant_id: str
     effective_config: dict[str, Any]
@@ -272,6 +302,7 @@ class TenantEffective(NamedTuple):
     platform_overlay: list[dict[str, Any]]
     profile_overlay: list[dict[str, Any]]
     warnings: list[str]
+    not_served: dict[str, NotServedKey]
 
 
 class EffectiveTree(NamedTuple):
@@ -697,6 +728,13 @@ def _load_effective(conf_d: str | Path, binary: str | None, timeout: float,
                     raise ValueError(f"tenant {tenant_id!r} key {key!r}: layer {layer!r} with level {level!r}")
                 sources[key] = KeySource(layer, ks["file"], level)
             effective = dict(t["effective_config"])
+            if "not_served" not in t:
+                raise EffectiveError(
+                    f"da-guard {EFFECTIVE_SUBCOMMAND}: tenant {tenant_id!r} has no `not_served` — "
+                    "this da-guard is older than this tool: upgrade or rebuild it",
+                    returncode, stderr, stale=True)
+            not_served = {str(k): NotServedKey(str(v["reason"]), str(v.get("file") or ""))
+                          for k, v in t["not_served"].items()}
             if set(sources) != set(effective):
                 raise ValueError(f"tenant {tenant_id!r}: key_sources and effective_config differ on "
                                  f"{sorted(set(sources) ^ set(effective))!r}")
@@ -712,6 +750,7 @@ def _load_effective(conf_d: str | Path, binary: str | None, timeout: float,
                 platform_overlay=list(t.get("platform_overlay") or []),
                 profile_overlay=list(t.get("profile_overlay") or []),
                 warnings=list(t.get("warnings") or []),
+                not_served=not_served,
             )
     except (ValueError, KeyError, TypeError, AttributeError) as e:
         raise EffectiveError(

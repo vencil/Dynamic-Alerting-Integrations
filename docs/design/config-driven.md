@@ -429,7 +429,7 @@ tenants:
 
 - **`ScheduledValue` 自訂 YAML 型別**：支援雙格式解析——純量字串（向後相容）和結構化 `{default, overrides[{window, value}]}`
 - **`ResolveAt(now time.Time)`**：根據當前 UTC 時間解析應使用的閾值，確保確定性與可測試性
-- **時間窗口格式**：`HH:MM-HH:MM` (UTC)，支援跨午夜（如 `22:00-06:00` 表示晚上十點到隔天早上六點）
+- **時間窗口格式**：`HH:MM-HH:MM` (UTC)，支援跨午夜（如 `22:00-06:00` 表示晚上十點到隔天早上六點）；起訖相同（如 `05:00-05:00`）不涵蓋任何一分鐘，與格式不符、缺 `window:` 一樣視為不合法：exporter 印 WARN、該時段不生效，載入時以 `da_config_values_not_served{reason="window_invalid"}` 與一行 WARN 點名，da-guard 以 `value_not_served` error 擋下（[#2065](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/2065)）
 - **測試案例**：覆蓋邊界條件——窗口重疊、跨午夜、純量退化、空 overrides
 
 ### 2.7 三態運營模式 (Operational Modes)

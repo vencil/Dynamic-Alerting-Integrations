@@ -448,7 +448,7 @@ tenants:
 
 - **`ScheduledValue` custom YAML type**: Supports dual-format parsing — scalar strings (backward compatible) and structured `{default, overrides[{window, value}]}`
 - **`ResolveAt(now time.Time)`**: Resolves the applicable threshold based on current UTC time, ensuring determinism and testability
-- **Time window format**: `HH:MM-HH:MM` (UTC), cross-midnight support (e.g., `22:00-06:00` means 10 PM to 6 AM next day)
+- **Time window format**: `HH:MM-HH:MM` (UTC), cross-midnight support (e.g., `22:00-06:00` means 10 PM to 6 AM next day); a window that starts where it ends (e.g. `05:00-05:00`) covers no minute and is invalid, like a malformed or missing `window:`: the exporter WARNs and the window never applies, the load names it with `da_config_values_not_served{reason="window_invalid"}` and one WARN line, and da-guard refuses it with a `value_not_served` error ([#2065](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/2065))
 - **Test cases**: Covering boundary conditions — window overlap, cross-midnight, scalar fallback, empty overrides
 
 ### 2.7 Three-State Operational Modes

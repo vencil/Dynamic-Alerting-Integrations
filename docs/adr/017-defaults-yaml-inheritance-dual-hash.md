@@ -515,7 +515,8 @@ profile。profile 名稱在**整棵樹唯一**：同一個名稱定義在兩個�
 1. **`effective` 是寫法上的逐字視圖。** `effective_config` 保留每一層的原文值，不刪、不改；
    下列來源裡 `/metrics` 不送的值，在每個租戶的 `not_served` 逐 key 標出原因（封閉集合：
    `parse_failed`、`root_defaults_unwrapped`、`value_rejected`、`value_unparsed`、
-   `value_unparsed_dropped`、`undeliverable`、`root_null_undeclared`）與所顯示那個值的來源檔：
+   `value_unparsed_dropped`、`undeliverable`、`root_null_undeclared`；[#2065](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/2065)
+   加 `window_invalid`：排程的時段 exporter 不接受、永遠不生效）與所顯示那個值的來源檔：
    defaults 鏈（exporter 整份丟掉的檔、子目錄 overlay 拒收的值、送不出去的子目錄 key、根目錄寫成
    null 的 key）、根目錄 `_defaults.yaml` 缺 `defaults:` 包裝（判定與 da-guard 的
    `root_defaults_unwrapped` 共用同一個述詞，`_routing_defaults` 等由其他工具從頂層讀的鍵不標），

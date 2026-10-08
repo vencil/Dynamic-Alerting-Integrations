@@ -198,6 +198,7 @@ from _lib_tenant_values import (  # noqa: E402
     load_effective_tree,
     load_served_tree,
     print_load_error,
+    value_not_served_as_written,
 )
 
 # ============================================================
@@ -2037,6 +2038,61 @@ def check_schedule_null(config_dir: str) -> dict[str, object]:
         f"override windows"])
 
 
+_VALUES_NOT_SERVED_TREE_UNREADABLE_HINT = (
+    "threshold-exporter cannot load this tree as the lines above say: repair "
+    "or remove the file they name (or the shape da-guard refuses), then re-run. "
+    "No threshold value was checked.")
+_VALUES_NOT_SERVED_NO_CONFIG_FILE_HINT = (
+    "There is no config file under --config-dir at all: point it at your conf.d "
+    "tree, then re-run. No threshold value was checked.")
+_VALUES_NOT_SERVED_NO_DA_GUARD_HINT = _DA_GUARD_SOURCES + " No threshold value was checked."
+
+# What /metrics does instead, per reason (the row's line names it).
+_VALUES_NOT_SERVED_EFFECT = {
+    "value_unparsed": "not a number the exporter reads; /metrics serves the platform default instead",
+    "value_unparsed_dropped": "not a number the exporter reads and no default to fall back to; "
+                              "/metrics serves no series for it",
+    "window_invalid": "a schedule `window:` that is not a UTC HH:MM-HH:MM with start different "
+                      "from end; that window never applies",
+    "value_rejected": "a subtree defaults value that is not threshold-shaped; the tenant keeps a "
+                      "shallower level's value",
+}
+
+
+def check_values_not_served(config_dir: str) -> dict[str, object]:
+    """Threshold values /metrics does not serve as written (#2065).
+
+    Reads `da-guard effective`'s `not_served` — the exporter's own record of
+    the values its resolver cannot parse, the schedule windows it cannot
+    read and the subtree defaults values its build refuses — and keeps the
+    verdicts da-guard's `value_not_served` refuses
+    (`value_not_served_as_written`). No YAML is judged here. A tree
+    da-guard cannot load is the load-failure row `profiles` also uses.
+    """
+    try:
+        tree = load_effective_tree(config_dir)
+    except (DaGuardNotFoundError, DaGuardError, ParseFailedError) as exc:
+        if isinstance(exc, ParseFailedError):
+            exc = _with_exporter_reasons(exc, config_dir)
+        return _tenant_load_failure_row(
+            "values_not_served", exc, config_dir,
+            (_VALUES_NOT_SERVED_TREE_UNREADABLE_HINT, _VALUES_NOT_SERVED_NO_CONFIG_FILE_HINT,
+             _VALUES_NOT_SERVED_NO_DA_GUARD_HINT))
+    details: list[str] = []
+    for tid in sorted(tree.tenants):
+        te = tree.tenants[tid]
+        for key in sorted(te.not_served):
+            ns = te.not_served[key]
+            if not value_not_served_as_written(key, ns.reason):
+                continue
+            details.append(f"{ns.file or te.source_file}: tenant {tid}: `{key}`: {ns.reason}: "
+                           f"{_VALUES_NOT_SERVED_EFFECT[ns.reason]}")
+    if details:
+        return _make_result("values_not_served", FAIL, details)
+    return _make_result("values_not_served", PASS, [
+        f"{len(tree.tenants)} tenant(s): /metrics serves every threshold value as written"])
+
+
 def check_root_defaults(config_dir: str) -> dict[str, object]:
     """The ROOT `_defaults.yaml`'s `defaults:` as the exporter decodes it.
 
@@ -2286,6 +2342,15 @@ _CHECK_HINTS: dict[str, tuple[str, str]] = {
         "Give each listed schedule's default and every override window a "
         "value. To leave that layer without a value for the key, remove the "
         "key or write it as plain `null`.",
+        "docs/cli-reference.md#validate-config",
+    ),
+    # #2065: the row names the file, tenant, key and reason.
+    "values_not_served": (
+        "Fix each listed value: write a number (optionally `:<severity>`) or "
+        "`disable`; give each schedule window a UTC `HH:MM-HH:MM` whose start "
+        "differs from its end; write a subtree default as a number or a "
+        "`{default, overrides: [{window, value}]}` schedule. "
+        "`da-guard effective --config-dir <dir>` lists each one under `not_served`.",
         "docs/cli-reference.md#validate-config",
     ),
     # #2386: the row names the file and keys; where they go depends on level.
@@ -2896,6 +2961,11 @@ def main() -> None:
     # 12. A null inside a threshold schedule with override windows (#2708),
     # every layer — unconditional: da-guard refuses the same set.
     results.append(_run_check("schedule_null", check_schedule_null,
+                              args.config_dir, _config_dir=args.config_dir))
+
+    # 13. Threshold values /metrics does not serve as written (#2065) —
+    # unconditional: da-guard refuses the same set (value_not_served).
+    results.append(_run_check("values_not_served", check_values_not_served,
                               args.config_dir, _config_dir=args.config_dir))
 
     # Report
