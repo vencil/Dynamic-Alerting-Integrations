@@ -58,6 +58,12 @@ SHAPES = [
     ("value-str-tag-on-sequence", {"_defaults.yaml": _DEFAULTS,
                                    "tx.yaml": "tenants:\n  tx:\n    mysql_connections: !!str [5]\n"
                                               "    mysql_slow: 60\n"}),
+    # expires: in the past — /metrics serves the default (#656), /effective
+    # still shows the mapping as written
+    ("value-expired", {"_defaults.yaml": _DEFAULTS,
+                       "tx.yaml": "tenants:\n  tx:\n    mysql_connections: "
+                                  "{default: 70, expires: '2020-01-01T00:00:00Z'}\n"
+                                  "    mysql_slow: 60\n"}),
     # #2547 item 1 — which tenant exists, and the profile it is bound to
     ("tenants-dict-CONTROL", {"_defaults.yaml": _DEFAULTS, "_platform.yaml": _PLATFORM_GOLD,
                               "_profiles.yaml": _GOLD, "tx.yaml": "tenants:\n  tx: {}\n"}),
@@ -150,12 +156,14 @@ def test_matrix_is_not_vacuous(tmp_path: Path) -> None:
         "defaults-key-null"]))["tx"].effective_config
 
 
-# The shapes whose written value the exporter cannot read as a number: it
-# logs `unknown value ... using default` and serves the defaults' 80.
+# The shapes whose written value /metrics does not serve (it cannot read it
+# as a number, or its `expires:` has passed): it serves the defaults' 80, and
+# the chain attributes the key to the defaults layer.
 FALLBACK = {
     "value-invalid-date": frozenset({"mysql_connections"}),
     "value-tab-timestamp": frozenset({"mysql_connections"}),
     "value-str-tag-on-sequence": frozenset({"mysql_connections"}),
+    "value-expired": frozenset({"mysql_connections"}),
 }
 
 
@@ -168,7 +176,7 @@ def test_diagnose_agrees_with_the_exporter(tmp_path: Path, name: str,
 
 @pytest.mark.parametrize("name,want", [
     ("value-date-CONTROL", 70), ("value-invalid-date", 80), ("value-unknown-tag", 70),
-    ("value-tab-timestamp", 80), ("value-str-tag-on-sequence", 80),
+    ("value-tab-timestamp", 80), ("value-str-tag-on-sequence", 80), ("value-expired", 80),
 ])
 def test_resolved_is_what_metrics_serves(tmp_path: Path, name: str, want: int) -> None:
     """Pinned numbers, so the oracle above cannot drift with the reader."""

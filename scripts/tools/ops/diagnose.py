@@ -26,6 +26,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import math
 import os
 import subprocess
 import sys
@@ -210,6 +211,19 @@ def _declared_keys(base: Path) -> list[str]:
     return []
 
 
+def _same_number(written: object, served: float) -> bool:
+    """`written` (/effective's value) is the number /metrics serves: compared
+    as numbers when it is a number or a text `float()` takes; anything else
+    (a `70:critical`, a scheduled mapping, a date text) is not the same."""
+    if isinstance(written, bool):
+        return False
+    try:
+        w = float(written)  # type: ignore[arg-type]
+    except (TypeError, ValueError):
+        return False
+    return w == served or (math.isnan(w) and math.isnan(served))
+
+
 def resolve_inheritance_chain(tenant: str, config_dir: str | None) -> dict[str, object] | None:
     """Resolve the inheritance chain for a tenant from threshold-exporter's own
     answers (#2526 / #2547): which keys the tenant has, its profile and each
@@ -233,9 +247,12 @@ def resolve_inheritance_chain(tenant: str, config_dir: str | None) -> dict[str, 
         (`optional_overrides:`, #1310; see `_declared_keys`)
 
     ⛔ `resolved` follows /metrics (#2421): a value the exporter cannot read
-    as a number (e.g. `2024-02-30`) falls back to the defaults, and the
-    chain then lists that key under the `defaults` layer — the exporter's
-    own log line (`unknown value ... using default`) is what says so.
+    as a number (e.g. `2024-02-30`) or whose `expires:` has passed falls back
+    to the defaults. Where the served value is not the number /effective
+    shows for a non-defaults layer (`_same_number`), the chain lists that key
+    under `defaults` (with the defaults file when the tenant has exactly
+    one, else no file) — a comparison of the two Go answers, not a reading
+    of da-guard's stderr.
     `chain` lists a key once, in the layer that supplies it, so a default
     the tenant overrides is not listed.
 
@@ -276,9 +293,6 @@ def resolve_inheritance_chain(tenant: str, config_dir: str | None) -> dict[str, 
 
     served_tree = load_served_tree(base)
     served = served_tree.tenants.get(tenant)
-    # The exporter's own verdict that it served the default for a key the
-    # tenant's merged config writes (resolve.go, State 2 after "unknown value").
-    fell_back = f" for tenant={tenant} metric={{}}, using default"
     resolved: dict[str, object] = {}
     groups: dict[tuple[str, str], dict[str, object]] = {}
     seen: set[str] = set()
@@ -293,12 +307,15 @@ def resolve_inheritance_chain(tenant: str, config_dir: str | None) -> dict[str, 
             value = served.values[canon]
             if isinstance(value, float) and value.is_integer():
                 value = int(value)   # the JSON number Go wrote
-            if layer != "defaults" and any(
-                    ln.endswith(fell_back.format(canon)) for ln in served_tree.stderr_lines):
-                print(f"  WARN: {safe_label(file)}: {safe_label(key)} "
-                      f"{safe_label(repr(te.effective_config[key]))} is not a value "
-                      f"/metrics can serve; it serves the default", file=sys.stderr)
-                layer, file = "defaults", ", ".join(te.defaults_chain)
+            if layer != "defaults" and not _same_number(te.effective_config[key], value):
+                # The two Go answers disagree: what /metrics serves is not the
+                # value this layer wrote, so it came from below — the default
+                # (an unparseable value, an expired `expires:`, ...).
+                print(f"  WARN: {safe_label(file)}: {safe_label(key)} as written is not "
+                      f"what /metrics serves ({safe_label(str(value))}); it serves the "
+                      f"default", file=sys.stderr)
+                layer = "defaults"
+                file = te.defaults_chain[0] if len(te.defaults_chain) == 1 else ""
         elif served is not None and served.unserved.get(key) is not None:
             value = served.unserved[key]
         else:
