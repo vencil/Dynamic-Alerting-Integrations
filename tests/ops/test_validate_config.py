@@ -1863,6 +1863,9 @@ class TestTheJsonDocumentCarriesNoInternalBookkeeping:
         assert carriers == {
             # #2386. Reads every level's `_defaults.yaml` under `--config-dir`.
             "defaults_wrapper",
+            # #2695. Reads every file under `--config-dir`; a file that does
+            # not parse stops it, and its row says no file was checked.
+            "json_schema",
             "policy_dsl",
             "profiles",
             # #2291. Reads the root `_defaults.yaml` under `--config-dir`.
@@ -3006,3 +3009,263 @@ class TestScheduleNull:
             '`overrides[1]` (window "00:00-01:00") has `value: null`',
             "`overrides[2]` is null",
         ]
+
+
+class TestJsonSchemaRow:
+    """Check 1c (#2695): conf.d against its JSON Schemas, by calling
+    `lint/check_confd_schema.py`'s verdict. Before it the only row with
+    "schema" in its name was the route generator's key check, so a tree that
+    lint rejects read `[PASS] schema` at rc 0. A misread scalar is
+    `yaml_quoting`'s finding and must not be reported a second time here."""
+
+    _DEFAULTS = "defaults:\n  mysql_connections: 80\n"
+    _RECEIVER = ("    _routing:\n      receiver:\n        type: webhook\n"
+                 "        url: https://hooks.example.com/a\n")
+
+    @staticmethod
+    def _tree(tmp_path, files):
+        d = tmp_path / "conf.d"
+        d.mkdir()
+        for name, text in files.items():
+            (d / name).write_text(text, encoding="utf-8")
+        return str(d)
+
+    @staticmethod
+    def _run(config_dir, capsys, cli_argv):
+        cli_argv("validate_config", "--config-dir", config_dir, "--json")
+        with pytest.raises(SystemExit) as exc:
+            vc.main()
+        rows = {r["check"]: r for r in json.loads(capsys.readouterr().out)}
+        return exc.value.code, rows
+
+    def test_group_by_string_fails_the_run(self, tmp_path, capsys, cli_argv):
+        """The #2695 shape: a value only the JSON Schema refuses."""
+        d = self._tree(tmp_path, {
+            "_defaults.yaml": self._DEFAULTS,
+            "ta.yaml": ("tenants:\n  ta:\n    mysql_connections: \"70\"\n"
+                        + self._RECEIVER + "      group_by: alertname\n"),
+        })
+        rc, rows = self._run(d, capsys, cli_argv)
+        row = rows["json_schema"]
+        assert row["status"] == "fail", row
+        assert row["caller_error"] is False, row
+        assert any("/tenants/ta/_routing/group_by" in x
+                   for x in row["details"]), row
+        assert rc == 1
+
+    def test_platform_schema_refusal_is_reported(self, tmp_path, capsys,
+                                                 cli_argv):
+        """A key platform-defaults.schema.json refuses (additionalProperties
+        under `_routing_defaults`) while the generator's key check passes —
+        the issue's own shape. ⚠️ Not `_routing_defaults.overrides` as filed:
+        #2723 (PR-6c) made the schema accept it, so a misspelt key stands in.
+        """
+        d = self._tree(tmp_path, {
+            "_defaults.yaml": (self._DEFAULTS + "_routing_defaults:\n"
+                               "  receiver:\n    type: webhook\n"
+                               "    url: https://hooks.example.com/d\n"
+                               "  overides: []\n"),
+            "ta.yaml": "tenants:\n  ta:\n    mysql_connections: \"70\"\n",
+        })
+        rc, rows = self._run(d, capsys, cli_argv)
+        assert rows["schema"]["status"] == "pass", rows["schema"]
+        row = rows["json_schema"]
+        assert row["status"] == "fail", row
+        assert any("'overides' was unexpected" in x and "/_routing_defaults" in x
+                   for x in row["details"]), row
+        assert rc == 1
+
+    def test_an_unquoted_threshold_is_reported_once(self, tmp_path, capsys,
+                                                    cli_argv):
+        """`mysql_connections: 70` is yaml_quoting's. ⛔ And it must not MASK
+        another violation in the same document: jsonschema's `validate`
+        raises one error per document, so dropping that one afterwards would
+        leave this tree reporting nothing about `group_by` — the misread
+        value is read as quoted BEFORE the document is validated."""
+        d = self._tree(tmp_path, {
+            "_defaults.yaml": self._DEFAULTS,
+            "ta.yaml": ("tenants:\n  ta:\n    mysql_connections: 70\n"
+                        + self._RECEIVER + "      group_by: alertname\n"),
+        })
+        rc, rows = self._run(d, capsys, cli_argv)
+        quoting = rows["yaml_quoting"]["details"]
+        schema = rows["json_schema"]["details"]
+        assert [x for x in quoting if "mysql_connections" in x], quoting
+        assert not [x for x in schema if "mysql_connections" in x], schema
+        assert [x for x in schema if "group_by" in x], schema
+        assert not [x for x in quoting if "group_by" in x], quoting
+        assert rc == 1
+
+    _SLACK = ("    _routing:\n      receiver:\n        type: slack\n"
+              "        api_url: https://hooks.slack.com/services/x\n"
+              "        channel: yes\n")
+
+    def test_a_misread_value_under_a_receiver_oneof_is_not_reported(
+            self, tmp_path, capsys, cli_argv):
+        """The receiver `oneOf` reports the misread field one level ABOVE it
+        (`@ /tenants/ta/_routing/receiver`, itself inside the `_routing`
+        object/null `oneOf`); judged as quoted, `"yes"` is a valid channel
+        and nothing is left to report."""
+        d = self._tree(tmp_path, {
+            "_defaults.yaml": self._DEFAULTS,
+            "ta.yaml": ("tenants:\n  ta:\n    mysql_connections: \"70\"\n"
+                        + self._SLACK),
+        })
+        _rc, rows = self._run(d, capsys, cli_argv)
+        assert rows["yaml_quoting"]["status"] == "fail", rows["yaml_quoting"]
+        assert rows["json_schema"]["status"] == "pass", rows["json_schema"]
+
+    # ⛔ Each shape pairs a misread value with a REAL violation in the same
+    # document. jsonschema reports one error per document and `best_match`
+    # descends into `oneOf` context, so any approach that leaves the misread
+    # value in the instance (or prunes the error tree around it) lets it win
+    # the ranking and hide the real one — the round-2 findings of #2695.
+    @pytest.mark.parametrize("body,named", [
+        (_SLACK + "      foo: 1\n", "'foo' was unexpected"),
+        (_RECEIVER + "      overrides:\n        - alertname: yes\n"
+                     "          group_by: alertname\n", "group_by"),
+        (_RECEIVER + "      overrides:\n        - alertname: yes\n"
+                     "          receiver:\n            type: webhok\n"
+                     "            url: https://hooks.example.com/b\n",
+         "webhok"),
+        (_RECEIVER + "      group_wait: 0\n      repeat_interval: \"abc\"\n",
+         "/tenants/ta/_routing/repeat_interval"),
+    ], ids=["oneof-sibling", "override-group-by", "override-receiver",
+            "duration-sibling"])
+    def test_a_misread_value_does_not_hide_a_real_violation(
+            self, body, named, tmp_path, capsys, cli_argv):
+        d = self._tree(tmp_path, {
+            "_defaults.yaml": self._DEFAULTS,
+            "ta.yaml": "tenants:\n  ta:\n    mysql_connections: \"70\"\n" + body,
+        })
+        _rc, rows = self._run(d, capsys, cli_argv)
+        assert rows["yaml_quoting"]["status"] == "fail", rows["yaml_quoting"]
+        details = rows["json_schema"]["details"]
+        assert rows["json_schema"]["status"] == "fail", details
+        assert any(named in x for x in details), details
+        assert not any("is not of type 'string'" in x for x in details), details
+
+    def test_a_key_with_a_slash_is_not_taken_for_a_misread_path(
+            self, tmp_path, capsys, cli_argv):
+        """`x: 70` is misread; `x/y` is a different key whose value the
+        schema refuses — a JSON-pointer prefix of `/…/x` must not cover it."""
+        d = self._tree(tmp_path, {
+            "_defaults.yaml": self._DEFAULTS,
+            "ta.yaml": "tenants:\n  ta:\n    x: 70\n    \"x/y\": [1]\n",
+        })
+        _rc, rows = self._run(d, capsys, cli_argv)
+        row = rows["json_schema"]
+        assert row["status"] == "fail", row
+        assert any("/tenants/ta/x/y" in x for x in row["details"]), row
+        assert not any(x.endswith("@ /tenants/ta/x") for x in row["details"]), row
+
+    @pytest.mark.parametrize("body,named", [
+        # `"30"` — the value as yaml_quoting asks it to be written — has no
+        # unit, so the duration pattern refuses it.
+        (_RECEIVER + "      group_wait: 30\n      repeat_interval: \"abc\"\n",
+         "'30' does not match"),
+        (_RECEIVER + "      group_wait: 30\n", "'30' does not match"),
+        # `"123"` is not a URL either; it outranks the sibling `foo`.
+        ("    _routing:\n      receiver:\n        type: webhook\n"
+         "        url: 123\n      foo: 1\n", "'123' does not match"),
+        # `"yes"` is not a silent mode.
+        ("    _silent_mode: yes\n", "'yes' is not one of"),
+        # An empty url, quoted, is still not a URL.
+        ("    _routing:\n      receiver:\n        type: webhook\n"
+         "        url:\n", "'' should be non-empty"),
+    ], ids=["duration-and-sibling", "duration", "url-and-sibling", "enum",
+            "null-url"])
+    def test_a_misread_value_that_is_wrong_even_quoted_is_reported(
+            self, body, named, tmp_path, capsys, cli_argv):
+        """Judged AS QUOTED, not skipped: a value that quoting would not fix
+        is a schema violation of its own, and json_schema names it — as the
+        quoted string, never as the YAML bool / int / null it was read as."""
+        d = self._tree(tmp_path, {
+            "_defaults.yaml": self._DEFAULTS,
+            "ta.yaml": "tenants:\n  ta:\n    mysql_connections: \"70\"\n" + body,
+        })
+        _rc, rows = self._run(d, capsys, cli_argv)
+        assert rows["yaml_quoting"]["status"] == "fail", rows["yaml_quoting"]
+        details = rows["json_schema"]["details"]
+        assert rows["json_schema"]["status"] == "fail", details
+        assert any(named in x for x in details), details
+        assert not any("is not of type" in x or "None" in x
+                       for x in details), details
+
+    def test_the_lint_itself_still_reports_both(self, tmp_path):
+        """The opt-out is the caller's: the lint's own run is unchanged."""
+        import jsonschema
+        lint_dir = os.path.join(_REPO_ROOT, "scripts", "tools", "lint")
+        if lint_dir not in sys.path:
+            sys.path.append(lint_dir)
+        import check_confd_schema as ccs
+        d = self._tree(tmp_path, {
+            "ta.yaml": "tenants:\n  ta:\n    mysql_connections: 70\n"})
+        schemas = []
+        for n in ("tenant-config.schema.json", "platform-defaults.schema.json",
+                  "routing-profiles.schema.json"):
+            with open(os.path.join(_REPO_ROOT, "docs", "schemas", n),
+                      encoding="utf-8") as fh:
+                schemas.append(json.load(fh))
+        _n, violations, _s = ccs.validate_dir(d, schemas[0], jsonschema,
+                                              schemas[1], schemas[2])
+        assert len([v for v in violations if "mysql_connections" in v]) == 2
+
+    def test_each_document_and_alias_is_read_as_quoted(self, tmp_path):
+        """Per document of a multi-document file, and through an alias: the
+        aliased node is one node, so marking it once covers every use."""
+        import jsonschema
+        lint_dir = os.path.join(_REPO_ROOT, "scripts", "tools", "lint")
+        if lint_dir not in sys.path:
+            sys.path.append(lint_dir)
+        import check_confd_schema as ccs
+        schemas = []
+        for n in ("tenant-config.schema.json", "platform-defaults.schema.json",
+                  "routing-profiles.schema.json"):
+            with open(os.path.join(_REPO_ROOT, "docs", "schemas", n),
+                      encoding="utf-8") as fh:
+                schemas.append(json.load(fh))
+        d = self._tree(tmp_path, {"ta.yaml": (
+            "tenants:\n  ta:\n    mysql_connections: 70\n"
+            "    _routing: &r\n      receiver:\n        type: slack\n"
+            "        api_url: https://hooks.slack.com/services/x\n"
+            "        channel: yes\n"
+            "  tb:\n    _routing: *r\n"
+            "---\n"
+            "tenants:\n  tc:\n    mysql_connections: 70\n"
+            + self._RECEIVER + "      group_by: alertname\n")})
+        _n, violations, _s = ccs.validate_dir(
+            d, schemas[0], jsonschema, schemas[1], schemas[2],
+            quoting_reported_for=frozenset({"ta.yaml"}))
+        assert len(violations) == 1, violations
+        assert "/tenants/tc/_routing/group_by" in violations[0], violations
+        # Unchanged without the caller's list: every misread value is a
+        # quoting line AND a type error.
+        _n, alone, _s = ccs.validate_dir(d, schemas[0], jsonschema,
+                                         schemas[1], schemas[2])
+        assert any("is not of type" in v for v in alone), alone
+
+    def test_without_jsonschema_the_row_says_it_did_not_check(
+            self, tmp_path, monkeypatch, capsys, cli_argv):
+        """WARN, not a caller error — `routes` without amtool is the
+        precedent. The exit code stays what the other rows make it."""
+        monkeypatch.setitem(sys.modules, "jsonschema", None)
+        d = self._tree(tmp_path, {
+            "_defaults.yaml": self._DEFAULTS,
+            "ta.yaml": ("tenants:\n  ta:\n    mysql_connections: \"70\"\n"
+                        + self._RECEIVER + "      group_by: alertname\n"),
+        })
+        rc, rows = self._run(d, capsys, cli_argv)
+        row = rows["json_schema"]
+        assert row["status"] == "warn", row
+        assert row["caller_error"] is False, row
+        assert row["details"][0].startswith(
+            "Not checked against the JSON Schema"), row
+        assert "jsonschema" in row["details"][0], row
+        assert row["suggested_action"] == vc.JSON_SCHEMA_NOT_CHECKED_HINT
+        assert rc != EXIT_CALLER_ERROR
+
+    def test_the_shipped_example_tree_passes(self):
+        row = vc.check_json_schema(os.path.join(
+            _REPO_ROOT, "components", "threshold-exporter", "config", "conf.d"))
+        assert row["status"] == vc.PASS, row

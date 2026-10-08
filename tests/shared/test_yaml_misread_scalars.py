@@ -21,6 +21,7 @@ _REPO = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__
 sys.path.insert(0, os.path.join(_REPO, "scripts", "tools"))
 
 from _lib_io import compose_all_nodes, find_misread_scalars  # noqa: E402
+from _lib_io import misread_scalar_nodes  # noqa: E402
 
 _TENANT = "tenant-config.schema.json"
 _PLATFORM = "platform-defaults.schema.json"
@@ -182,3 +183,21 @@ def test_an_alias_bomb_is_walked_once_per_schema_position(schemas):
         "/tenants/t1/_routing/group_by/0", "/tenants/t1/_routing/group_by/1",
         "/tenants/t1/_routing/overrides/0/group_by/0",
         "/tenants/t1/_routing/overrides/0/group_by/1"]
+
+
+def test_the_nodes_are_the_reported_scalars_each_once(schemas):
+    """#2695: `misread_scalar_nodes` is the same walk as
+    `find_misread_scalars`, handing back the scalar NODES — each once, an
+    aliased one reported at two schema positions included (the caller
+    re-tags it, and one node re-tagged covers every use)."""
+    text = ("tenants:\n  t1:\n    _routing:\n      group_by: &g [on, off]\n"
+            "      overrides:\n"
+            "        - alertname: A0\n          group_by: *g\n"
+            "          receiver: {type: webhook, url: \"https://a.example.com/h\"}\n")
+    root = next(compose_all_nodes(io.StringIO(text)))
+    hits = find_misread_scalars(root, schemas[_TENANT], schemas, _TENANT)
+    nodes = misread_scalar_nodes(root, schemas[_TENANT], schemas, _TENANT)
+    assert len(hits) == 4
+    assert [(n.start_mark.line + 1, n.start_mark.column + 1) for n in nodes] \
+        == sorted({(h.line, h.column) for h in hits})
+    assert [n.value for n in nodes] == ["on", "off"]

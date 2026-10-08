@@ -22,7 +22,13 @@ Checks:
                     (`channel: yes` → True, while the Go readers and
                     Alertmanager read "yes"). The resolver's verdict and the
                     schema's types decide; no word list (#2164)
-  2. Schema        — Tenant keys validated against known defaults + reserved keys
+  1c. JSON Schema  — conf.d against tenant-config / platform-defaults /
+                    routing-profiles JSON Schema, by calling
+                    `lint/check_confd_schema.py`'s verdict; a misread scalar
+                    is left to 1b. WARN "not checked" without jsonschema (#2695)
+  2. Schema        — The route generator's key check (tenant keys against the
+                    declared defaults + reserved keys, domain policy). NOT a
+                    JSON Schema check, despite the historical row name (#2695)
   3. Routes        — Alertmanager route generation with --validate semantics
   4. Policy        — Webhook domain allowlist (if --policy provided)
   5. Custom rules  — Deny-list linting on rule-packs/ (if --rule-packs provided)
@@ -592,6 +598,35 @@ def _find_schema(name: str) -> Path | None:
     return None
 
 
+def _quoting_scope(config_dir: str) -> list[tuple[Path, str, str]]:
+    """(file, label, schema name) for every file `yaml_quoting` reads.
+
+    #2695: `json_schema` leaves the misread scalars of exactly these files
+    to `yaml_quoting` — so the set is computed in ONE place. Were the two
+    rows to pick files differently, a value would be reported twice, or
+    (worse) read as quoted by `json_schema` in a file `yaml_quoting` never
+    read, so nobody reports it.
+    """
+    from _lib_confd import is_defaults_document_name
+    out: list[tuple[Path, str, str]] = []
+    for fpath in iter_config_files(config_dir):
+        name = fpath.name
+        if is_defaults_document_name(name):
+            schema_name = _PLATFORM_SCHEMA
+        elif name in _PROFILES_NAMES:
+            schema_name = _PROFILES_SCHEMA
+        elif is_reserved_name(name):
+            continue
+        else:
+            schema_name = _TENANT_SCHEMA
+        try:
+            label = fpath.relative_to(Path(config_dir)).as_posix()
+        except ValueError:
+            label = name
+        out.append((fpath, label, schema_name))
+    return out
+
+
 def check_yaml_quoting(config_dir: str) -> dict[str, object]:
     """An UNQUOTED scalar in a string-typed field that PyYAML reads as
     something else — `channel: yes` is True here, "yes" to the Go readers
@@ -619,7 +654,6 @@ def check_yaml_quoting(config_dir: str) -> dict[str, object]:
     """
     from _lib_io import (compose_all_nodes, find_go_rejected_bool_tags,
                          find_misread_scalars, find_yaml11_bool_words)
-    from _lib_confd import is_defaults_document_name
     schemas: dict[str, object] = {}
     for name in (_TENANT_SCHEMA, _PLATFORM_SCHEMA, _PROFILES_SCHEMA):
         path = _find_schema(name)
@@ -633,20 +667,7 @@ def check_yaml_quoting(config_dir: str) -> dict[str, object]:
     errors: list[str] = []
     warnings: list[str] = []
     checked = 0
-    for fpath in iter_config_files(config_dir):
-        name = fpath.name
-        if is_defaults_document_name(name):
-            schema_name = _PLATFORM_SCHEMA
-        elif name in _PROFILES_NAMES:
-            schema_name = _PROFILES_SCHEMA
-        elif is_reserved_name(name):
-            continue
-        else:
-            schema_name = _TENANT_SCHEMA
-        try:
-            label = fpath.relative_to(Path(config_dir)).as_posix()
-        except ValueError:
-            label = name
+    for fpath, label, schema_name in _quoting_scope(config_dir):
         try:
             text = fpath.read_text(encoding="utf-8")
             roots = list(compose_all_nodes(io.StringIO(text)))
@@ -680,10 +701,103 @@ def check_yaml_quoting(config_dir: str) -> dict[str, object]:
 
 
 # ============================================================
+# Check 1c: JSON Schema (#2695)
+# ============================================================
+JSON_SCHEMA_NOT_CHECKED_HINT = (
+    "Run validate-config where the Python package jsonschema is installed "
+    "and scripts/tools/lint/check_confd_schema.py is present (a repository "
+    "checkout; the da-tools image has neither) so this row can check "
+    "conf.d against its JSON Schemas — without them, a value of the "
+    "wrong shape (e.g. `group_by: alertname` where a list is required) is "
+    "not detected here.")
+
+
+def check_json_schema(config_dir: str) -> dict[str, object]:
+    """conf.d against its JSON Schemas — the verdict of
+    `scripts/tools/lint/check_confd_schema.py`, called, not re-implemented
+    (#2695): before this the only row with "schema" in its name was the
+    route generator's key check, and a tree that lint rejects read
+    `[PASS] schema` here.
+
+    A misread scalar (`mysql_connections: 70`) is `yaml_quoting`'s finding
+    and is not reported again here: `validate_dir` is told which files
+    that row reads (`_quoting_scope`) and validates them as if every such
+    value had been quoted, as that row asks — so the value is no type
+    error here and cannot mask another violation, while one that is wrong
+    even quoted (`group_wait: 30` → `"30"`, no unit) is still reported.
+
+    Without jsonschema (the da-tools image does not install it) or without
+    the lint module beside this tool, the row is WARN and says it did not
+    check — the `routes` row's precedent for a missing amtool, not a caller
+    error: every other row still gave its verdict.
+    """
+    schemas: dict[str, dict] = {}
+    for name in (_TENANT_SCHEMA, _PLATFORM_SCHEMA, _PROFILES_SCHEMA):
+        path = _find_schema(name)
+        if path is None:
+            return _make_result(
+                "json_schema", FAIL,
+                [f"{name} not found beside this tool or under docs/schemas/ "
+                 f"— the JSON Schema check cannot run"], caller_error=True)
+        with open(path, encoding="utf-8") as fh:
+            schemas[name] = json.load(fh)
+    lint_dir = str(Path(__file__).resolve().parent.parent / "lint")
+    if os.path.isdir(lint_dir) and lint_dir not in sys.path:
+        sys.path.append(lint_dir)
+    try:
+        import jsonschema
+        import check_confd_schema as ccs
+    except ImportError as exc:
+        missing = getattr(exc, "name", None) or str(exc)
+        return _make_result(
+            "json_schema", WARN,
+            [f"Not checked against the JSON Schema: {missing} could not be "
+             f"imported, so this row gave no verdict on the shape of any "
+             f"value"],
+            hint=JSON_SCHEMA_NOT_CHECKED_HINT)
+    tenant = schemas[_TENANT_SCHEMA]
+    platform = schemas[_PLATFORM_SCHEMA]
+    profiles = schemas[_PROFILES_SCHEMA]
+    try:
+        ccs.checked_schema_registry(tenant, platform, profiles)
+        checked, violations, skipped = ccs.validate_dir(
+            config_dir, tenant, jsonschema, platform, profiles,
+            quoting_reported_for=frozenset(
+                label for _p, label, _s in _quoting_scope(config_dir)))
+    except ccs.UnresolvableSchemaRef as exc:
+        return _make_result("json_schema", FAIL, [str(exc)],
+                            caller_error=True)
+    except ccs._CallerError as exc:
+        # A file that does not parse: `yaml_syntax` names it, and `main()`
+        # turns this caller error into exit 1 because of that.
+        return _make_result(
+            "json_schema", FAIL,
+            [f"could not read the config: {exc}",
+             "No file was checked against the JSON Schema."],
+            caller_error=True)
+    errors = [v[len("ERROR: "):] if v.startswith("ERROR: ") else v
+              for v in violations]
+    if errors:
+        return _make_result("json_schema", FAIL, errors)
+    note = (f"; {len(skipped)} other `_` file(s) have their own shape and "
+            f"are not read here" if skipped else "")
+    return _make_result(
+        "json_schema", PASS,
+        [f"{checked} document(s) valid against tenant-config / "
+         f"platform-defaults / routing-profiles JSON Schema{note}"])
+
+
+# ============================================================
 # Check 2: Schema validation
 # ============================================================
 def check_schema(config_dir: str, strict: bool = False) -> dict[str, object]:
-    """Validate tenant config keys against known defaults and reserved keys.
+    """The route generator's key check: tenant config keys against the
+    declared defaults and reserved keys (`load_tenant_configs`).
+
+    ⛔ Not a JSON Schema check — that is `json_schema` (#2695). The row keeps
+    its historical name `schema` because the name is a contract (`--json`
+    consumers, `skipped_nested_files` documented on it); what it says it
+    checked is in its PASS line instead.
 
     With strict=True, domain-policy (ADR-007) violations are escalated to
     blocking ERROR lines by load_tenant_configs and reported as FAIL here —
@@ -707,7 +821,10 @@ def check_schema(config_dir: str, strict: bool = False) -> dict[str, object]:
     # #2279: called, not re-spelled — the same function `_validate_mode` uses.
     skipped = gen.blocking_generation_errors(schema_warnings)
     if not schema_warnings:
-        return _make_result("schema", PASS, ["No schema warnings"])
+        return _make_result(
+            "schema", PASS,
+            ["No key warnings from the route generator (keys against the "
+             "declared defaults; the JSON Schema is the json_schema row)"])
     # ⛔ Computed once, for BOTH exits. The first version wired it only to
     # the WARN branch, so `--strict` plus an emptied `defaults:` plus any
     # domain-policy violation took the FAIL branch and printed "Remove
@@ -2095,6 +2212,13 @@ _CHECK_HINTS: dict[str, tuple[str, str]] = {
         "Alertmanager, so the tools disagree about your config.",
         "docs/cli-reference.md#validate-config",
     ),
+    # #2695: placed before `schema` — that row is the generator's key check.
+    "json_schema": (
+        "Fix each value listed above to the shape its JSON Schema requires "
+        "(the message names the field path after `@`). This is the same "
+        "verdict as scripts/tools/lint/check_confd_schema.py.",
+        "docs/cli-reference.md#validate-config",
+    ),
     "schema": (
         "Remove unknown keys or add them to the schema. "
         "Run: da-tools explain-route --tenant <id> to inspect resolved config.",
@@ -2702,7 +2826,12 @@ def main() -> None:
     results.append(_run_check("yaml_quoting", check_yaml_quoting,
                               args.config_dir, _config_dir=args.config_dir))
 
-    # 2. Schema validation (--strict: domain-policy violations → FAIL)
+    # 1c. JSON Schema (#2695) — after 1b, whose findings it leaves out.
+    results.append(_run_check("json_schema", check_json_schema,
+                              args.config_dir, _config_dir=args.config_dir))
+
+    # 2. Generator key check (--strict: domain-policy violations → FAIL).
+    # Not JSON Schema despite the name — that is 1c (#2695).
     results.append(_run_check("schema", check_schema, args.config_dir,
                               strict=args.strict, _config_dir=args.config_dir))
 

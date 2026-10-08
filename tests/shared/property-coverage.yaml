@@ -123,6 +123,8 @@ modules:
       # code under test, so the tokens and schema shapes are example-pinned.
       compose_all_nodes: "Thin driver over a strict loader's check_node/get_node (#2164); exercised by every pin in tests/shared/test_yaml_misread_scalars.py"
       find_misread_scalars: "Node-tree × schema walk (#2164); token matrix (quoted controls, y/n, bool field, nullable field, enum, sequence, cross-file $ref, alias memo, schema-only verdict flip) pinned in tests/shared/test_yaml_misread_scalars.py"
+      misread_scalar_nodes: "Node view of find_misread_scalars' walk, de-duplicated by node identity (#2695); alias-once pin in tests/shared/test_yaml_misread_scalars.py, re-tag behaviour in tests/ops/test_validate_config.py::TestJsonSchemaRow"
+      _walk_misread_scalars: "The one walk behind find_misread_scalars and misread_scalar_nodes (#2164, #2695); exercised through both"
       schema_scalar_types: "Scalar-type union over schema branches (#2164); string / boolean / mixed verdicts pinned in tests/shared/test_yaml_misread_scalars.py"
       MisreadScalar.message: "Operator-facing text (#2164); suggestion shapes (key / sequence item / null) pinned in tests/shared/test_yaml_misread_scalars.py"
       _schema_expand: "$ref / allOf / anyOf / oneOf expansion (#2164); cross-file $ref and unloaded-ref KeyError pinned in tests/shared/test_yaml_misread_scalars.py"
