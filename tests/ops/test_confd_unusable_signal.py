@@ -42,9 +42,13 @@ REPO = pathlib.Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(REPO / "scripts" / "tools"))
 
 import diagnose  # noqa: E402
+from _lib_tenant_values import ParseFailedError  # noqa: E402
 import validate_config as vc  # noqa: E402
 from _grar_parse import _parse_config_files  # noqa: E402
 from _lib_confd import iter_config_files  # noqa: E402
+
+# #2526: diagnose reads the tree through `da-guard effective`.
+pytestmark = pytest.mark.usefixtures("da_guard_env")
 
 
 @pytest.fixture()
@@ -139,268 +143,123 @@ def test_flat_reader_ordering_is_unchanged(tmp_path: pathlib.Path):
         f.name for f in root.iterdir())
 
 
-# ── #1468: diagnose returned a truncated chain in silence ───────────────
+# ── #1468 → #2526: diagnose never answers from a partial read ───────────
+#
+# #1468 made diagnose WARN about a file it could not read and still return
+# the chain without it (`skipped_unusable_files`). Since #2526 the chain is
+# `da-guard effective`'s, and a file the exporter's load drops fails the
+# read closed: ParseFailedError (the CLI exits 2 with da-guard's reason),
+# never a chain short of a layer.
 
 
-def _broken_confd(root: pathlib.Path) -> pathlib.Path:
+def _acme_confd(root: pathlib.Path, **files: str) -> pathlib.Path:
     root.mkdir(parents=True, exist_ok=True)
-    (root / "_defaults.yaml").write_text(
-        "defaults:\n  mysql_threads_running: 80\n", encoding="utf-8")
-    # one missing `]` — parses on the defaults file, not on this one
-    (root / "acme.yaml").write_text(
-        "tenants:\n  acme:\n    mysql_threads_running: [90\n", encoding="utf-8")
+    base = {"_defaults.yaml": "defaults:\n  mysql_threads_running: 80\n",
+            "acme.yaml": "tenants:\n  acme:\n    _profile: gold\n"
+                         "    mysql_threads_running: 90\n"}
+    base.update(files)
+    for name, body in base.items():
+        if body is not None:
+            (root / name).write_text(body, encoding="utf-8")
     return root
 
 
-def test_diagnose_reports_the_file_it_could_not_read(tmp_path: pathlib.Path):
-    root = _broken_confd(tmp_path / "conf.d")
+@pytest.mark.parametrize("fname,body", [
+    ("acme.yaml", "tenants:\n  acme:\n    mysql_threads_running: [90\n"),
+    ("acme.yaml", "- not\n- a\n- mapping\n"),
+    ("_profiles.yaml", "profiles:\n  gold: [unclosed\n"),
+    ("_profiles.yaml", "profiles:\n  - gold\n  - silver\n"),
+    ("_profiles.yaml", "[]\n"),
+], ids=["tenant-unclosed", "tenant-a-list", "profiles-unclosed",
+        "profiles-key-a-list", "profiles-doc-a-list"])
+def test_diagnose_fails_closed_on_a_file_the_exporter_drops(
+        tmp_path: pathlib.Path, fname: str, body: str):
+    root = _acme_confd(tmp_path / "conf.d", **{fname: body})
+    with pytest.raises(ParseFailedError, match=fname) as exc:
+        diagnose.resolve_inheritance_chain("acme", str(root))
+    assert any(fname in ln for ln in exc.value.stderr_lines), exc.value.stderr_lines
+
+
+@pytest.mark.parametrize("files", [
+    {},
+    {"_profiles.yaml": ""},
+    {"_profiles.yaml": "profiles:\n"},
+    {"_defaults.yaml": None},
+], ids=["healthy", "empty-profiles-doc", "null-profiles-key", "no-defaults"])
+def test_diagnose_legal_shapes_carry_no_caveat(tmp_path: pathlib.Path, files: dict):
+    """⛔ Control for the above: each of these loads on the exporter, so the
+    chain is answered and nothing is said about a file."""
+    root = _acme_confd(tmp_path / "conf.d", **files)
+    if not (root / "_profiles.yaml").exists():
+        (root / "_profiles.yaml").write_text("profiles:\n  gold:\n    pg_x: 1\n",
+                                             encoding="utf-8")
     err = io.StringIO()
     with contextlib.redirect_stderr(err):
         chain = diagnose.resolve_inheritance_chain("acme", str(root))
-    # The truncation itself is unchanged — the chain really is short.
-    assert [c["layer"] for c in chain["chain"]] == ["defaults"]
-    # L1: stderr names the file (0 bytes was the whole bug).
-    assert "WARN: skip acme.yaml" in err.getvalue()
-    # L2: and it is in the JSON, under validate-config's field name.
-    assert chain["skipped_unusable_files"] == ["acme.yaml"]
+    assert chain["resolved"]["mysql_threads_running"] == 90
+    assert "skipped_unusable_files" not in chain
+    assert "skipped_unusable_files" not in diagnose._format_chain_summary(chain)
+    assert all("binds no profile" in ln for ln in err.getvalue().splitlines()), err.getvalue()
 
 
-def test_diagnose_summary_carries_the_caveat(tmp_path: pathlib.Path):
-    """`check()` publishes the SUMMARY, so the caveat has to survive it.
-
-    `batch_diagnose.py` imports `check` in-process and reads its stdout;
-    a field that stops at `resolve_inheritance_chain` never reaches it.
-    """
-    root = _broken_confd(tmp_path / "conf.d")
-    with contextlib.redirect_stderr(io.StringIO()):
+def test_diagnose_names_a_profile_reference_that_binds_nothing(tmp_path: pathlib.Path):
+    """A referenced-but-absent profile is a missing chain layer: said on
+    stderr, and `profile_name` is None (the exporter binds none)."""
+    root = _acme_confd(tmp_path / "conf.d")
+    err = io.StringIO()
+    with contextlib.redirect_stderr(err):
         chain = diagnose.resolve_inheritance_chain("acme", str(root))
-    summary = diagnose._format_chain_summary(chain)
-    assert summary["skipped_unusable_files"] == ["acme.yaml"]
+    assert chain["profile_name"] is None
+    assert "_profile 'gold' binds no profile" in err.getvalue()
 
 
-def test_diagnose_healthy_config_carries_no_caveat(tmp_path: pathlib.Path):
-    """The other half: a caveat that shows up on clean runs is noise.
+def test_diagnose_reads_the_exporters_population(confd_with_dir_named_yaml):
+    """A directory named `beta.yaml` is a sub-directory to the exporter's
+    walk (empty here), not a config file: the chain is answered and
+    diagnose, which no longer selects files itself, says nothing about it."""
+    root = confd_with_dir_named_yaml
+    err = io.StringIO()
+    with contextlib.redirect_stderr(err):
+        chain = diagnose.resolve_inheritance_chain("acme", str(root))
+    assert chain["resolved"] == {"mysql_threads_running": 90}
+    assert "beta.yaml" not in err.getvalue()
 
-    Without this, "always emit the field" passes every test above.
-    """
+
+def test_diagnose_a_defaults_file_that_is_a_directory(tmp_path: pathlib.Path):
+    """The exporter walks into it; diagnose must not open it either (one
+    line with an absolute errno path was the #1469 shape)."""
     root = tmp_path / "conf.d"
-    root.mkdir()
-    (root / "_defaults.yaml").write_text(
-        "defaults:\n  mysql_threads_running: 80\n", encoding="utf-8")
+    (root / "_defaults.yaml").mkdir(parents=True)
     (root / "acme.yaml").write_text(
         "tenants:\n  acme:\n    mysql_threads_running: 90\n", encoding="utf-8")
     err = io.StringIO()
     with contextlib.redirect_stderr(err):
-        chain = diagnose.resolve_inheritance_chain("acme", str(root))
-    assert [c["layer"] for c in chain["chain"]] == ["defaults", "tenant"]
-    assert "skipped_unusable_files" not in chain
+        res = diagnose.resolve_inheritance_chain("acme", str(root))
+    assert res["resolved"] == {"mysql_threads_running": 90}
+    assert res["declared"] == []
     assert err.getvalue() == ""
-    assert "skipped_unusable_files" not in diagnose._format_chain_summary(chain)
 
 
-def test_all_three_readers_name_it_in_the_same_words(confd_with_dir_named_yaml):
-    """The third reader is `diagnose`, and it used to phrase this its own way.
-
-    #1469 unified the SELECTION predicate across `validate-config` and the
-    routing parser. `diagnose` kept a fourth hand-rolled copy
-    (`base.iterdir()` + inline suffix/hidden checks), so a config-named
-    directory reached its `open()` and surfaced as a raw
-    `IsADirectoryError: [Errno 21] Is a directory: /abs/path/...` — a
-    different sentence, carrying an absolute path, for the same condition
-    the other two now describe identically.
-
-    ⛔ That is the same defect class one layer up: not a wrong answer, but
-    three readers giving three accounts of one directory. Wording is the
-    part a reader actually sees, so it is pinned here — if someone reverts
-    `diagnose` to its own predicate, the raw exception text comes back and
-    this fails.
-    """
+def test_both_readers_name_it_in_the_same_words(confd_with_dir_named_yaml):
+    """#1469: `validate-config` and the routing parser phrase a config-named
+    directory identically. (`diagnose` was the third reader until #2526; it
+    now takes the exporter's walk and names no file itself.)"""
     root = confd_with_dir_named_yaml
 
     grar_err = io.StringIO()
     with contextlib.redirect_stderr(grar_err):
         _parse_config_files(str(root))
-
-    diag_err = io.StringIO()
-    with contextlib.redirect_stderr(diag_err):
-        chain = diagnose.resolve_inheritance_chain("acme", str(root))
-
     vc_report = vc.check_yaml_syntax(str(root))
 
     phrase = "is a directory, not a config file"
     grar_line = [ln for ln in grar_err.getvalue().splitlines() if "beta.yaml" in ln]
-    diag_line = [ln for ln in diag_err.getvalue().splitlines() if "beta.yaml" in ln]
     vc_line = [d for d in vc_report["details"] if "beta.yaml" in d]
-
     assert grar_line, "routing parser went silent about beta.yaml"
-    assert diag_line, "diagnose went silent about beta.yaml"
     assert vc_line, "validate-config went silent about beta.yaml"
-
-    for label, lines in (("grar", grar_line), ("diagnose", diag_line), ("validate-config", vc_line)):
+    for label, lines in (("grar", grar_line), ("validate-config", vc_line)):
         assert phrase in lines[0], f"{label} phrased it differently: {lines[0]!r}"
-        # The raw exception leaked an absolute path; the shared wording must not.
         assert "Errno" not in lines[0], f"{label} leaked the raw exception: {lines[0]!r}"
         assert str(root) not in lines[0], f"{label} leaked an absolute path: {lines[0]!r}"
-
-    # L2: the same entry is machine-readable, not just printed.
-    assert chain.get("skipped_unusable_files") == ["beta.yaml"]
-
-
-def test_diagnose_shares_the_selection_predicate(confd_with_dir_named_yaml):
-    """`diagnose` must not re-derive "what counts as a config file".
-
-    Pinned as a POPULATION equality rather than by reading the source: the
-    point is not which function is called, it is that a fourth predicate
-    cannot drift away from the shared one without this failing.
-    """
-    root = confd_with_dir_named_yaml
-    shared = sorted(p.name for p in iter_config_files(root, recursive=False))
-
-    with contextlib.redirect_stderr(io.StringIO()):
-        chain = diagnose.resolve_inheritance_chain("acme", str(root))
-
-    # Everything diagnose either used or explicitly dropped, together, must
-    # be exactly the shared population plus the unusable entries it named.
-    accounted = set(chain.get("skipped_unusable_files") or [])
-    assert "beta.yaml" in accounted
-    assert "beta.yaml" not in shared
-    assert shared == ["_defaults.yaml", "acme.yaml"]
-
-
-# ── the two remaining silent paths in `resolve_inheritance_chain` ────────
-#
-# Coverage showed these two `_skip` calls untested. They are not filler:
-# each is a distinct way for the chain to come back short, and #1468 is
-# precisely "the chain came back short and nothing said why". An untested
-# signal path is one refactor away from being silent again.
-
-
-def test_diagnose_names_a_tenant_file_that_is_not_a_mapping(tmp_path: pathlib.Path):
-    """A bare YAML list parses fine and then has no `tenants:` to read.
-
-    Distinct from the unparseable case: nothing raises, so an early version
-    of this loop would simply move on and hand back a chain missing its
-    tenant layer — the #1468 symptom exactly, reached by a different door.
-    """
-    root = tmp_path / "conf.d"
-    root.mkdir()
-    (root / "_defaults.yaml").write_text(
-        "defaults:\n  mysql_threads_running: 80\n", encoding="utf-8")
-    (root / "acme.yaml").write_text("- not\n- a\n- mapping\n", encoding="utf-8")
-
-    err = io.StringIO()
-    with contextlib.redirect_stderr(err):
-        chain = diagnose.resolve_inheritance_chain("acme", str(root))
-
-    assert "WARN: skip acme.yaml" in err.getvalue()
-    assert "top level must be a mapping" in err.getvalue()
-    assert "list" in err.getvalue()
-    assert chain["skipped_unusable_files"] == ["acme.yaml"]
-
-
-def test_diagnose_names_an_unreadable_profiles_file(tmp_path: pathlib.Path):
-    """`_profiles.yaml` is the profile layer's only source.
-
-    If it cannot be parsed the chain silently loses that layer, and the
-    tenant's `_profile` reference resolves to nothing. The tenant file here
-    is deliberately VALID so the only thing wrong is the profiles file —
-    otherwise this test would pass for the wrong reason.
-    """
-    root = tmp_path / "conf.d"
-    root.mkdir()
-    (root / "_defaults.yaml").write_text(
-        "defaults:\n  mysql_threads_running: 80\n", encoding="utf-8")
-    (root / "acme.yaml").write_text(
-        "tenants:\n  acme:\n    _profile: gold\n    mysql_threads_running: 90\n",
-        encoding="utf-8")
-    (root / "_profiles.yaml").write_text(
-        "profiles:\n  gold: [unclosed\n", encoding="utf-8")
-
-    err = io.StringIO()
-    with contextlib.redirect_stderr(err):
-        chain = diagnose.resolve_inheritance_chain("acme", str(root))
-
-    assert "WARN: skip _profiles.yaml" in err.getvalue()
-    assert chain["skipped_unusable_files"] == ["_profiles.yaml"]
-    # Control: the tenant layer is intact, so the caveat is about the
-    # profiles file alone and not a side effect of a broken tenant file.
-    assert "tenant" in [c["layer"] for c in chain["chain"]]
-
-
-# ── `_profiles.yaml` that parses but is the wrong shape ──────────────────
-#
-# Both of these were live defects in the first cut of this PR, found by
-# review. They are the #1447 death ("parses cleanly, is not a mapping,
-# reaches .get(), takes the run with it") and the #1468 death (a falsy
-# document coerced to {} and the layer vanishes) — reproduced INSIDE the
-# change that exists to fix that family. Pinned so they cannot come back.
-
-
-def _profile_ref_confd(root: pathlib.Path, profiles_body: str) -> pathlib.Path:
-    root.mkdir(parents=True)
-    (root / "_defaults.yaml").write_text(
-        "defaults:\n  mysql_threads_running: 80\n", encoding="utf-8")
-    (root / "acme.yaml").write_text(
-        "tenants:\n  acme:\n    _profile: gold\n    mysql_threads_running: 90\n",
-        encoding="utf-8")
-    (root / "_profiles.yaml").write_text(profiles_body, encoding="utf-8")
-    return root
-
-
-def test_diagnose_survives_profiles_key_that_is_a_list(tmp_path: pathlib.Path):
-    """`profiles:` as a list used to raise AttributeError from `.get()`.
-
-    ⛔ That exception is NOT in the `except (OSError, yaml.YAMLError)` around
-    this read, so it escaped and killed the whole call — a crash, not a
-    truncated answer.
-    """
-    root = _profile_ref_confd(tmp_path / "conf.d", "profiles:\n  - gold\n  - silver\n")
-
-    err = io.StringIO()
-    with contextlib.redirect_stderr(err):
-        chain = diagnose.resolve_inheritance_chain("acme", str(root))  # must not raise
-
-    assert "WARN: skip _profiles.yaml" in err.getvalue()
-    assert "'profiles' must be a mapping" in err.getvalue()
-    assert "list" in err.getvalue()
-    assert chain["skipped_unusable_files"] == ["_profiles.yaml"]
-    # The tenant layer is unaffected — only the profile layer is missing.
-    assert "tenant" in [c["layer"] for c in chain["chain"]]
-
-
-def test_diagnose_names_a_falsy_profiles_document(tmp_path: pathlib.Path):
-    """A whole-document `[]` is falsy, and `or {}` silently made it empty.
-
-    Nothing raised, nothing printed, and the profile layer was simply gone
-    — the shape this PR exists to eliminate.
-    """
-    root = _profile_ref_confd(tmp_path / "conf.d", "[]\n")
-
-    err = io.StringIO()
-    with contextlib.redirect_stderr(err):
-        chain = diagnose.resolve_inheritance_chain("acme", str(root))
-
-    assert "WARN: skip _profiles.yaml" in err.getvalue()
-    assert "top level must be a mapping" in err.getvalue()
-    assert chain["skipped_unusable_files"] == ["_profiles.yaml"]
-
-
-def test_diagnose_still_accepts_an_empty_profiles_document(tmp_path: pathlib.Path):
-    """⛔ Control for the two above: an EMPTY document is legal, not a fault.
-
-    Without this, the fix could over-trigger and start reporting every
-    `_profiles.yaml` that happens to be blank — trading a silent miss for a
-    false alarm, which is the failure mode this whole PR is trying not to
-    introduce.
-    """
-    root = _profile_ref_confd(tmp_path / "conf.d", "")
-
-    err = io.StringIO()
-    with contextlib.redirect_stderr(err):
-        chain = diagnose.resolve_inheritance_chain("acme", str(root))
-
-    assert "_profiles.yaml" not in err.getvalue()
-    assert "skipped_unusable_files" not in chain
 
 
 # ── the sentence the gate prints has to be true (#1469 follow-up) ────────
@@ -475,41 +334,6 @@ def test_an_untraversable_directory_says_the_report_is_incomplete(
     assert "INCOMPLETE" in res["details"][0]
 
 
-def test_diagnose_gives_one_answer_for_a_defaults_file_that_is_a_directory(
-    tmp_path: pathlib.Path,
-):
-    """⛔ Two lines, two vocabularies, one cause — from the guard against it.
-
-    `_defaults.yaml` is opened BY NAME in Layer 1, so it never met the
-    shared `unusable_config_paths` pass while that pass sat lower down.
-    Measured before the reorder:
-
-        WARN: skip _defaults.yaml: IsADirectoryError: [Errno 21] Is a
-              directory: '/abs/.../conf.d/_defaults.yaml'
-        WARN: skip _defaults.yaml: is a directory, not a config file
-
-    Note the absolute path in the first line — the raw errno leaks the
-    caller's filesystem layout into a report meant for a tenant operator.
-    `_skip` dedupes on (file, reason) and these are two different reasons,
-    so only ordering plus `_skip_read_failure` could collapse them.
-    """
-    root = tmp_path / "conf.d"
-    (root / "_defaults.yaml").mkdir(parents=True)
-    (root / "acme.yaml").write_text(
-        "tenants:\n  acme:\n    mysql_threads_running: 90\n", encoding="utf-8")
-
-    err = io.StringIO()
-    with contextlib.redirect_stderr(err):
-        res = diagnose.resolve_inheritance_chain("acme", str(root))
-
-    lines = [ln for ln in err.getvalue().splitlines() if "_defaults.yaml" in ln]
-    assert len(lines) == 1, f"one cause, one line — got {lines}"
-    assert "is a directory, not a config file" in lines[0]
-    assert "IsADirectoryError" not in lines[0]
-    assert str(tmp_path) not in lines[0], "no absolute path in operator output"
-    assert res["skipped_unusable_files"] == ["_defaults.yaml"]
-
-
 def test_routing_parsers_unusable_pass_covers_the_tree(tmp_path: pathlib.Path):
     """The pass covers exactly the population the reader reads.
 
@@ -555,75 +379,6 @@ def test_a_policy_file_that_is_a_directory_blocks_strict(tmp_path: pathlib.Path)
     assert errs, "a policy file that cannot be read must block --strict"
     assert "_domain_policy.yaml" in errs[0]
     assert "is a directory, not a config file" in errs[0]
-
-
-def test_a_conf_d_without_defaults_is_legal_not_a_read_failure(
-    tmp_path: pathlib.Path,
-):
-    """Control group for the `except FileNotFoundError: pass` in Layer 1.
-
-    Nothing covered it, so turning that branch into a `_skip` would have
-    been green — and every conf.d that simply declares no platform defaults
-    would start carrying an "unusable files" caveat.
-    """
-    root = tmp_path / "conf.d"
-    root.mkdir()
-    (root / "acme.yaml").write_text(
-        "tenants:\n  acme:\n    mysql_threads_running: 90\n", encoding="utf-8")
-
-    err = io.StringIO()
-    with contextlib.redirect_stderr(err):
-        res = diagnose.resolve_inheritance_chain("acme", str(root))
-
-    assert "skipped_unusable_files" not in res
-    assert err.getvalue() == ""
-
-
-def test_diagnose_names_a_missing_profiles_file_the_tenant_points_at(
-    tmp_path: pathlib.Path,
-):
-    """A referenced-but-absent `_profiles.yaml` is a MISSING CHAIN LAYER.
-
-    Absent `_defaults.yaml` is legal (nothing referenced it); absent
-    `_profiles.yaml` when a tenant carries `_profile: gold` is not the same
-    thing — the resolved chain is short by one layer and the numbers the
-    operator is reading are not the numbers they configured. #1468 is that
-    silence. Nothing covered this branch.
-    """
-    root = tmp_path / "conf.d"
-    root.mkdir()
-    (root / "_defaults.yaml").write_text(
-        "defaults:\n  mysql_threads_running: 80\n", encoding="utf-8")
-    (root / "acme.yaml").write_text(
-        "tenants:\n  acme:\n    _profile: gold\n"
-        "    mysql_threads_running: 90\n", encoding="utf-8")
-
-    err = io.StringIO()
-    with contextlib.redirect_stderr(err):
-        res = diagnose.resolve_inheritance_chain("acme", str(root))
-
-    assert res["skipped_unusable_files"] == ["_profiles.yaml"]
-    assert "references profile gold" in err.getvalue()
-
-
-def test_diagnose_treats_a_null_profiles_key_as_no_profiles(
-    tmp_path: pathlib.Path,
-):
-    """`profiles:` with nothing under it is empty, not broken.
-
-    The `is None -> {}` normalisation had no test, so replacing it with any
-    other value stayed green. It has to stay distinct from the `not a
-    mapping` branch below it: this shape is a legal empty document and must
-    NOT produce a skip entry.
-    """
-    root = _profile_ref_confd(tmp_path / "conf.d", "profiles:\n")
-
-    err = io.StringIO()
-    with contextlib.redirect_stderr(err):
-        res = diagnose.resolve_inheritance_chain("acme", str(root))
-
-    assert "skipped_unusable_files" not in res
-    assert "profiles" not in err.getvalue()
 
 
 def test_an_unreadable_conf_d_root_blocks_the_routing_reader(

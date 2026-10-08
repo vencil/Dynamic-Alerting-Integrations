@@ -322,8 +322,6 @@ NOT_A_CELL: dict[str, str] = {
         "pinned by test_confd_case_parity_across_tools's backtest tests",
     "ops/_grar_parse.py":
         "lists only through `_lib_confd.iter_config_files` (library cell)",
-    "ops/diagnose.py":
-        "lists only through `_lib_confd.iter_config_files` (library cell)",
     "ops/validate_config.py":
         "lists only through `_lib_confd.iter_config_files` (library cell)",
     "ops/init_project.py":

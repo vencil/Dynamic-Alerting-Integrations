@@ -25,11 +25,8 @@ Returns JSON: {"status": "healthy"|"error", "tenant", ...}
 from __future__ import annotations
 
 import argparse
-import datetime
 import json
-import math
 import os
-import re
 import subprocess
 import sys
 from pathlib import Path
@@ -43,30 +40,17 @@ sys.path.insert(0, _THIS_DIR)  # Docker flat layout
 sys.path.insert(0, os.path.join(_THIS_DIR, '..'))  # Repo subdir layout
 from _lib_python import detect_cli_lang, http_get_json, query_prometheus_instant, add_prometheus_arg  # noqa: E402
 from _lib_python import format_json_report  # noqa: E402
-from _lib_constants import _DISABLED_VALUES  # noqa: E402
 from _lib_exitcodes import EXIT_OK, EXIT_VIOLATION, EXIT_CALLER_ERROR  # noqa: E402
 from _lib_io import safe_label  # noqa: E402  (#1538 output-layer escaping)
-# #2231: STRICT — a file holding a key twice is one the exporter drops whole,
-# so every conf.d read here takes the same skip + WARN path as bad syntax
-# instead of resolving whichever value PyYAML kept last.
-from _lib_io import strict_safe_load  # noqa: E402  (#2114, #2231)
-from _lib_io import StrictExporterKeyLoader, StrictSafeLoader  # noqa: E402  (#1522)
-from _lib_confd import (  # noqa: E402
-    declared_tenant_ids,
-    iter_config_files,
-    overlay_platform_tenants,
-    resolve_defaults_file,
-    unselected_carriers,
-    unusable_config_paths,
-    unusable_reason,
-    warn_nested,
-)
-# #2368: threshold keys layer per THRESHOLD, not per spelling (the #1231
-# alias window), as the exporter's merge does.
-from _grar_validate import (  # noqa: E402
-    _other_tenant_key_spellings,
-    drop_shadowed_spellings,
-    overlay_across_spellings,
+from _lib_confd import resolve_defaults_file  # noqa: E402  (#1588)
+# #2526 / #2547: the tenant's resolution is threshold-exporter's own
+# (`da-guard effective`); see resolve_inheritance_chain.
+from _lib_tenant_values import (  # noqa: E402
+    DaGuardError,
+    DaGuardNotFoundError,
+    ParseFailedError,
+    load_effective_tree,
+    print_load_error,
 )
 
 # Language detection for bilingual help
@@ -167,260 +151,92 @@ def exit_code(result: dict) -> int:
 query_prometheus = query_prometheus_instant
 
 
-# #2297: a tenant's `_profile:` value is read as its source text, as the
-# exporter reads it (precedent: `deprecate_rule._read_yaml`, #2216).
-_PROFILE_AS_TEXT = ("_profile",)
-
-
-# #1522: `!!set` is read as the exporter reads it. yaml.v3 decodes a
-# `!!set`-tagged node by its KIND, so `gold: !!set {mysql_slow_queries: 55}`
-# is the mapping `{mysql_slow_queries: 55}` on /metrics (and `!!set {a}` is
-# `{a: null}`); PyYAML's own `!!set` constructor builds a Python `set` and
-# DROPS the values. These diagnose-only loaders build the tag as a mapping,
-# values kept. The strict duplicate-key check still runs first — it walks the
-# composed node tree, where a `!!set` is a mapping node like any other. Kept
-# out of `_lib_io` on purpose: every other reader keeps the shared loaders.
-_YAML_SET_TAG = "tag:yaml.org,2002:set"
-
-
-class _DiagnoseSafeLoader(StrictSafeLoader):
-    """`strict_safe_load`'s loader, with `!!set` read as a mapping."""
-
-
-class _DiagnoseExporterKeyLoader(StrictExporterKeyLoader):
-    """`strict_load_exporter_keys`' loader, with `!!set` read as a mapping."""
-
-
-class _DiagnoseTenantFileLoader(_DiagnoseExporterKeyLoader):
-    """The same, reading `_profile:` as source text (#2297)."""
-
-    raw_text_scalars = frozenset(_PROFILE_AS_TEXT)
-
-
-for _loader in (_DiagnoseSafeLoader, _DiagnoseExporterKeyLoader):
-    # SafeConstructor.construct_yaml_map calls `self.construct_mapping`, so
-    # the exporter-key loaders keep their raw-text keys inside a `!!set`.
-    _loader.add_constructor(_YAML_SET_TAG,
-                            yaml.constructor.SafeConstructor.construct_yaml_map)
-del _loader
-
-
-# #2421: Go `strconv.ParseFloat(s, 64)`'s accepted grammar. Python's
-# `float()` is NOT that grammar — it takes `+nan` and returns inf for
-# `1e400`, both of which Go refuses (syntax error / ErrRange), and it
-# refuses the hex form `0x1p3` Go accepts.
-_GO_FLOAT_SPECIAL = re.compile(r"[+-]?(?:inf|infinity)|nan", re.IGNORECASE)
-_GO_FLOAT_DEC = re.compile(r"[+-]?(?:[0-9]+\.?[0-9]*|\.[0-9]+)(?:[eE][+-]?[0-9]+)?")
-_GO_FLOAT_HEX = re.compile(
-    r"[+-]?0[xX](?:[0-9a-fA-F]+\.?[0-9a-fA-F]*|\.[0-9a-fA-F]+)[pP][+-]?[0-9]+")
-
-
-def _go_underscore_ok(s: str) -> bool:
-    """Go ``strconv.underscoreOK``: every ``_`` sits between digits (or
-    right after a base prefix)."""
-    if s[:1] in ("+", "-"):
-        s = s[1:]
-    saw, i, hexa = "^", 0, False
-    if len(s) >= 2 and s[0] == "0" and s[1] in "bBoOxX":
-        saw, i, hexa = "0", 2, s[1] in "xX"
-    for c in s[i:]:
-        if "0" <= c <= "9" or hexa and c in "abcdefABCDEF":
-            saw = "0"
-        elif c == "_":
-            if saw != "0":
-                return False
-            saw = "_"
-        elif saw == "_":
-            return False
-        else:
-            saw = "!"
-    return saw != "_"
-
-
-def _go_parse_float_ok(s: str) -> bool:
-    """Go ``strconv.ParseFloat(s, 64)`` returns no error. Overflow is an
-    error (ErrRange); inf/nan spelled out are not."""
-    if _GO_FLOAT_SPECIAL.fullmatch(s):
-        return True
-    if "_" in s and not _go_underscore_ok(s):
-        return False
-    plain = s.replace("_", "")
-    try:
-        if _GO_FLOAT_DEC.fullmatch(plain):
-            return not math.isinf(float(plain))
-        if _GO_FLOAT_HEX.fullmatch(plain):
-            return not math.isinf(float.fromhex(plain))
-    except OverflowError:
-        return False
-    return False
-
-
-def metrics_treats_as_unset(value: object) -> bool:
-    """/metrics serves a threshold written as *value* as if it were NOT
-    written: the exporter falls back to the layer below (#2421).
-
-    Oracle: `resolveBaseRows` in
-    components/threshold-exporter/app/pkg/config/resolve.go. It reads the YAML scalar's SOURCE TEXT; unless that text
-    means disable, it parses the part before `:` with `strconv.ParseFloat`,
-    and on failure logs `unknown value ... using default`. So for the value
-    PyYAML hands us:
-
-      * None (`null`, `~`, empty) — the text is not a number;
-      * a str — decided exactly as Go decides it (`''`, `'  '`, `abc`,
-        `7O:critical`, `+nan`, `1e400` are unset; `disable`, `70:critical`,
-        `0x1p3` are not);
-      * True — only `true` / `yes` / `on` load as True, and none of those
-        texts parse;
-      * a non-finite float — PyYAML makes one only from `.inf` / `.nan` or
-        an overflowing literal, all of which Go refuses;
-      * a date / datetime — a timestamp text never parses as a float;
-      * a list — a sequence is never a threshold value.
-
-    ⛔ Anything else counts as a value, including False: `false` / `off`
-    DISABLE on /metrics while `no` is unset, and the loaded False cannot
-    tell them apart. Ints are the same case (`0x10`, `017`, `12:30` do not
-    read on /metrics as the int PyYAML hands us). Guessing there would
-    trade a visible raw value for a wrong answer. A mapping is a scheduled
-    value whose answer depends on the time of day: also left alone.
-
-    Reserved (`_`-prefixed) keys are not thresholds; callers apply this to
-    threshold keys only.
-    """
-    if value is None or value is True:
-        return True
-    # datetime.datetime is a subclass of datetime.date.
-    if isinstance(value, (datetime.date, list)):
-        return True
-    if isinstance(value, float):
-        return not math.isfinite(value)
-    if not isinstance(value, str):
-        return False
-    if value.strip().lower() in _DISABLED_VALUES:
-        return False
-    return not _go_parse_float_ok(value.split(":", 1)[0].strip())
-
-
-def _file_shape_error(raw: dict) -> str | None:
-    """Why the exporter drops this whole config file, or None (#1522).
-
-    The exporter decodes every conf.d file into ONE typed struct, so a
-    `defaults:` that is not a mapping, an `optional_overrides:` that is not
-    a list (or holds a mapping or a list), or a profile body that is not a
-    mapping fails the decode and the FILE goes to parse_failed — every key
-    in it, its `tenants:` block and its other profiles included (measured
-    against LoadDir). ⛔ Absent or NULL is fine — `defaults: ~`,
-    `optional_overrides: ~`, `gold: ~` all load (measured; pinned by
-    test_a_null_value_is_not_a_wrong_type). Some of these shapes used to end
-    the run with a traceback; the rest were read as if valid.
-
-    `!!set` needs no case here: the diagnose loaders (`_DiagnoseSafeLoader`
-    and friends) already build it as the mapping the exporter sees, so in a
-    mapping position it passes and as an `optional_overrides` entry it is a
-    dict and fails the file, both as on /metrics.
-    """
-    shapes = (("defaults", dict, "a mapping"),
-              ("optional_overrides", list, "a list"),
-              ("profiles", dict, "a mapping"))
-    for key, want, noun in shapes:
-        v = raw.get(key)
-        if v is not None and not isinstance(v, want):
-            return f"'{key}' must be {noun}, got {type(v).__name__}"
-    # Each entry decodes as a string: a scalar of any kind (int, null,
-    # bool) loads, a mapping or a sequence fails the file.
-    for item in raw.get("optional_overrides") or []:
-        if isinstance(item, (dict, list)):
-            return (f"'optional_overrides' entries must be scalars, got "
-                    f"{type(item).__name__}")
-    for name, body in (raw.get("profiles") or {}).items():
-        if body is not None and not isinstance(body, dict):
-            return (f"'profiles.{name}' must be a mapping, got "
-                    f"{type(body).__name__}")
-    return None
-
-
-def _tenant_block(tenant, entries: list, base: Path) -> dict:
-    """The tenant's own block, read the way the exporter reads it (#1982).
-
-    *entries* is every ``(fname, tenant, block)`` a root file offered for
-    *tenant*, in read order. A root platform (`_`) file's `tenants:` entry is
-    the platform's per-tenant DEFAULT: applied first, then the tenant file's
-    keys win, whatever either file is called — this used to take the FIRST
-    file in name order and stop, so `tx.yaml` (sorting after `_defaults.yaml`)
-    got the platform's value and `_profile` while `TX.yaml` got its own. A
-    platform entry for a tenant no tenant file declares is dropped: a platform
-    file cannot create a tenant, and says so on stderr.
-    """
-    # #2368: per threshold, across the #1231 spellings — a tenant's legacy
-    # `mysql_cpu` beats a platform `mysql_threads_running`, as on /metrics.
-    merged, orphans = overlay_platform_tenants(
-        entries, lambda: declared_tenant_ids(base), merge=overlay_across_spellings)
-    for fname, t in orphans:
-        print(f"  WARN: {safe_label(fname)}: tenants.{safe_label(str(t))} "
-              f"ignored — no tenant file declares tenant "
-              f"'{safe_label(str(t))}'; a platform file can only provide "
-              f"defaults for a tenant that already exists", file=sys.stderr)
-    return merged.get(tenant, {})
+# #2526 / #2547 (step 0): the tenant's resolution — which tenants exist, the
+# profile each is bound to, every value and the layer that supplied it — is
+# Go's answer (`da-guard effective`, tenant-api's /effective), never a Python
+# reading of the YAML. This file used to re-read conf.d with its own PyYAML
+# loaders and so diverged from the exporter wherever PyYAML and yaml.v3
+# disagree: `2024-02-30` ended the run with a traceback, `!foo 70` dropped
+# the whole tenant file, `tenants: !!set {tx}` declared no tenant.
+#
+# The order in which `chain` lists the layers, lowest first.
+_LAYER_ORDER = ("defaults", "platform", "profile", "tenant")
 
 
 def lookup_tenant_profile(tenant: str, config_dir: str | None) -> str | None:
-    """Look up the _profile assignment for a tenant from config-dir YAML files.
+    """The profile `tenant` is bound to under `config_dir`, or None.
 
-    Returns profile name string or None.
-
-    #1522: a thin view over `resolve_inheritance_chain`, not a second reader.
-    This used to walk the same directory with its own copy of the tenant-file
-    loop and skip a file it could not read in SILENCE — its sibling WARNs and
-    records `skipped_unusable_files`, so a caller reaching this function on
-    its own got the profile answer with no trace that a file was left out.
-    Delegating gives every caller the sibling's signal, and one reader cannot
-    drift from the other. The WARN goes to stderr; a caller that needs the
-    skipped list as data calls `resolve_inheritance_chain` itself (as
-    `check()` does — once, not both).
+    A thin view over `resolve_inheritance_chain` (#1522: one reader, not
+    two); raises what it raises when da-guard is missing or fails.
     """
     inheritance = resolve_inheritance_chain(tenant, config_dir)
     return inheritance["profile_name"] if inheritance else None
 
 
-def resolve_inheritance_chain(tenant: str, config_dir: str) -> dict[str, object]:
-    """Resolve the inheritance chain for a tenant.
+def _declared_keys(base: Path) -> list[str]:
+    """`optional_overrides:` of the root defaults carrier: key NAMES the
+    platform recognises but assigns no value to (#1310).
 
-    Returns a dict with:
-      - chain: list of layers with source and keys
-      - resolved: final merged key→value after all layers
-      - profile_name: profile name or None
+    ⛔ The one thing still read from a file here, because `da-guard
+    effective` does not report it. Read as the exporter reads the list
+    (`[]string`): each entry's source text, from the composed node tree —
+    nothing is CONSTRUCTED, so no value is interpreted (a `2024-02-30`
+    elsewhere in the file does not end the run, an unknown tag is ignored).
+    Called only after `da-guard effective` loaded the tree, so the file
+    decodes for the exporter; a file PyYAML cannot compose still is
+    answered with [] and one WARN, never a traceback.
+    """
+    path = resolve_defaults_file(base)
+    if not path.is_file():
+        # Absent, or a directory the exporter walks into: no list.
+        return []
+    try:
+        with open(path, encoding="utf-8") as f:
+            root = yaml.compose(f, Loader=yaml.SafeLoader)
+    except (OSError, ValueError, yaml.YAMLError) as e:
+        print(f"  WARN: {safe_label(path.name)}: optional_overrides not read "
+              f"(declared left empty): {e.__class__.__name__}", file=sys.stderr)
+        return []
+    if not isinstance(root, yaml.MappingNode):
+        return []
+    for key, value in root.value:
+        if isinstance(key, yaml.ScalarNode) and key.value == "optional_overrides":
+            if not isinstance(value, yaml.SequenceNode):
+                return []
+            return [item.value for item in value.value
+                    if isinstance(item, yaml.ScalarNode)
+                    and item.tag != "tag:yaml.org,2002:null"]
+    return []
+
+
+def resolve_inheritance_chain(tenant: str, config_dir: str | None) -> dict[str, object] | None:
+    """Resolve the inheritance chain for a tenant, as tenant-api's /effective
+    resolves it (`da-guard effective`, #2526 / #2547).
+
+    Returns None when `config_dir` is not a directory or the tree has no
+    tenant `tenant` (a line on stderr says which), else a dict with:
+      - chain: one entry per layer file that supplies a value the tenant
+        ends up with, lowest first — `defaults` (each `_defaults.yaml` on the
+        tenant's path, root first), `platform` (a root platform file's
+        `tenants:` entry), `profile`, `tenant` (the tenant's own file); each
+        `{layer, source, keys}`, `keys` the values that layer WINS with
+      - resolved: every threshold (non-`_`) key of the tenant's
+        `effective_config`, with its value as /effective answers it
+      - profile_name: the profile the tenant is bound to, or None
       - declared: key NAMES the platform recognises but assigns no value to
-        (`_defaults.yaml` `optional_overrides:`, #1310)
+        (`optional_overrides:`, #1310; see `_declared_keys`)
 
-    THREE chain layers — the same three this function has always emitted:
-      1. Global Defaults (_defaults.yaml)
-      2. Profile Overlay (_profiles.yaml → profile keys fill-in)
-      3. Tenant Override (tenant-specific keys)
-
-    ⛔ Do NOT "correct" this back to four. The v1.12.0 model named four
-    (`ApplyProfiles` in
-    components/threshold-exporter/app/pkg/config/resolve.go), but its layer 2
-    is the Rule Pack Baseline, which is
-    "embedded in defaults" — the onboarding generator merges it into
-    `_defaults.yaml` before this function ever opens the file, so it is not
-    separately observable here and was never emitted as a chain entry. The
-    docstring said "four" over a list of three for exactly that reason;
-    counting what we actually return is the honest repair.
-
-    ⚠️ Separately, this reader is FLAT: it opens `<config-dir>/_defaults.yaml`
-    and non-recursively iterates `<config-dir>/*.yaml`, so the exporter's
-    directory hierarchy (platform → domain → region → tenant, see
-    components/threshold-exporter/README.md §4.2) collapses into layer 1 here.
-    A tenant configured through nested `_defaults.yaml` files gets a chain that
-    is correct about the merge RESULT of the top level only.
+    ⛔ `resolved` is /effective (written plus inherited), not /metrics: a
+    value /metrics cannot parse (e.g. `2024-02-30`) is shown as written, and
+    /metrics serves the default instead. `chain` lists a key once, in the
+    layer that supplies it, so a default the tenant overrides is not listed.
 
     ⛔ `declared` is deliberately NOT merged into `resolved`, and is not a chain
-    layer. The chain answers "what value does this tenant end up with"; a
-    declared key has no value until the tenant writes one, so folding it in
-    would invent a number the platform explicitly refuses to assert. It is
-    reported alongside because this function is what `--show-inheritance`
-    prints, and that command is the documented answer to "which metric keys can
-    I set?" — an answer that read `defaults:` alone was simply wrong about the
-    keys that need it most.
+    layer: a declared key has no value until the tenant writes one.
+
+    Raises `DaGuardNotFoundError`, `ParseFailedError` (a file the exporter's
+    load drops or cannot read) or `DaGuardError` (`_lib_tenant_values`):
+    the chain is never answered from a partial read.
     """
     if not config_dir:
         return None
@@ -428,317 +244,51 @@ def resolve_inheritance_chain(tenant: str, config_dir: str) -> dict[str, object]
     if not base.is_dir():
         return None
 
-    # #1468: every `except (OSError, yaml.YAMLError)` below used to `pass` /
-    # `continue` in silence, so a `conf.d/` this function could only half
-    # read produced a TRUNCATED chain at rc=0 with zero bytes on stderr —
-    # measured: `acme.yaml` missing one `]` turned `['defaults','tenant']`
-    # into `['defaults']`, and nothing said why. The skips are now recorded
-    # (L2, `skipped_unusable_files`, same field name and shape #1448 gave
-    # `validate-config`) and announced (L1, the `WARN: skip ...` line
-    # `_grar_parse` already prints).
-    #
-    # ⛔ The exit code is deliberately NOT changed: `batch_diagnose.py`
-    # imports `check` in-process and its aggregation semantics would have to
-    # be redefined first. Tracked separately — see #1468 L3.
-    skipped: list[str] = []
-    _said: set[tuple[str, str]] = set()
+    tree = load_effective_tree(base)
+    for s in tree.skipped:
+        print(f"  WARN: {safe_label(s.file)}: {safe_label(s.reason)}", file=sys.stderr)
+    te = tree.tenants.get(tenant)
+    if te is None:
+        print(f"  WARN: no tenant '{safe_label(tenant)}' in {safe_label(str(base))}: "
+              f"threshold-exporter reads {len(tree.tenants)} tenant(s) there",
+              file=sys.stderr)
+        return None
+    for w in te.warnings:
+        print(f"  WARN: {safe_label(w)}", file=sys.stderr)
+    # `profile_name` is the profile the exporter binds; a reference that
+    # binds none (an unknown name, or one the exporter does not read from a
+    # defaults file) used to be reported as if it did.
+    written = te.effective_config.get("_profile")
+    if te.profile is None and isinstance(written, str) and written.strip():
+        src = te.key_sources.get("_profile")
+        print(f"  WARN: {safe_label(src.file if src else te.source_file)}: _profile "
+              f"'{safe_label(written)}' binds no profile for tenant "
+              f"'{safe_label(tenant)}' (threshold-exporter applies none)", file=sys.stderr)
 
-    def _skip(label: str, reason: str) -> None:
-        """Record once per FILE, announce once per (file, reason).
+    resolved = {k: v for k, v in te.effective_config.items() if not k.startswith("_")}
+    groups: dict[tuple[str, str], dict[str, object]] = {}
+    for key in resolved:
+        src = te.key_sources[key]
+        groups.setdefault((src.layer, src.file), {})[key] = resolved[key]
 
-        ⛔ One file can reach here twice. `_profiles.yaml` is the case that
-        exists today: the tenant-file loop opens every `*.yaml` in the
-        directory — including it — and the Layer 2 profile read opens it
-        again by name. Appending blindly put the same path in
-        `skipped_unusable_files` twice, and that field is a list of FILES;
-        a consumer counting it (batch_diagnose reads this in-process) would
-        double-count one broken file. Caught by
-        test_diagnose_names_an_unreadable_profiles_file.
+    def _order(item: tuple[tuple[str, str], dict[str, object]]) -> tuple[int, int, str]:
+        (layer, file), _ = item
+        level = (te.defaults_chain.index(file)
+                 if layer == "defaults" and file in te.defaults_chain else 0)
+        return (_LAYER_ORDER.index(layer), level, file)
 
-        The two dedup keys differ on purpose. The list is per-file, because
-        that is what the field means. The WARN is per (file, reason),
-        because the second visit can fail for a DIFFERENT reason than the
-        first and an operator needs both — suppressing by file alone would
-        trade a duplicate line for a lost one.
-        """
-        if label not in skipped:
-            skipped.append(label)
-        if (label, reason) not in _said:
-            _said.add((label, reason))
-            # #1538: `label` is a tenant-controlled FILENAME and `reason` is the
-            # exception text derived from it. Escaped at the print, not in
-            # `skipped` above — that list is emitted under --json, whose bytes
-            # must not change (json.dumps already escapes control chars).
-            print(f"  WARN: skip {safe_label(label)}: {safe_label(reason)}",
-                  file=sys.stderr)
-
-    # #1469: same selection predicate as `validate-config` and the routing
-    # parser — `_lib_confd`, not a fourth hand-rolled copy. The paired
-    # `unusable_config_paths` pass names a config-named directory, a broken
-    # symlink or an untraversable directory in the SAME words the other two
-    # readers use (`unusable_reason`), instead of leaking a raw
-    # `IsADirectoryError` through the `except` clauses below. Unifying the
-    # predicate without this pass would make those paths silent here — the
-    # direction #1469 exists to reverse.
-    #
-    # ⛔ IT RUNS BEFORE LAYER 1, not before the tenant loop, and that is a
-    # fix rather than tidying: `_defaults.yaml` and `_profiles.yaml` are
-    # opened BY NAME, so with the pass sitting lower a `_defaults.yaml`
-    # that is a DIRECTORY produced two lines for one cause, in two
-    # different vocabularies, the first of them a bare errno carrying an
-    # absolute path —
-    #
-    #     WARN: skip _defaults.yaml: IsADirectoryError: [Errno 21] Is a
-    #           directory: '/abs/.../conf.d/_defaults.yaml'
-    #     WARN: skip _defaults.yaml: is a directory, not a config file
-    #
-    # — which is the two-answers-for-one-file shape this whole change set
-    # is against, produced by the guard against it. `_skip` dedupes on
-    # (file, reason) and these are two different reasons, so the dedupe
-    # could not collapse them; only the ORDER can. Running first means the
-    # shared wording is already recorded when Layer 1's `except` fires, and
-    # `_skip`'s own bookkeeping keeps `skipped_unusable_files` at one entry.
-    named_by_shared_pass: set[str] = set()
-    for bad in unusable_config_paths(base, recursive=False):
-        _skip(bad.name, unusable_reason(bad))
-        named_by_shared_pass.add(bad.name)
-
-    def _skip_read_failure(label: str, e: BaseException) -> None:
-        """Record a read failure UNLESS the shared pass already spoke.
-
-        Ordering alone does not collapse the duplicate — `_skip` dedupes on
-        (file, reason) and a bare errno is a different reason from
-        `unusable_reason`'s clause, so both would print. This is the half
-        that picks ONE vocabulary: if the shared enumerator already named
-        the path, its wording stands and the errno is dropped.
-        """
-        if label in named_by_shared_pass:
-            return
-        _skip(label, f"{e.__class__.__name__}: {' '.join(str(e).split())}")
-
-    # Layer 1: Global defaults
-    # #1588: resolved by the shared predicate, not by the literal name.
-    # ⚠️ FLAT and deliberately still flat — this reader has always looked
-    # only at `<config-dir>/_defaults.*` (the docstring above says so),
-    # and making it recurse is a different change with its own blast
-    # radius. Only the case axis moved.
-    defaults_path = resolve_defaults_file(base)
-    # ⛔ Report the name actually read, not the canonical spelling. A
-    # chain that says `_defaults.yaml` while `_DEFAULTS.YAML` supplied
-    # the values sends the operator to edit a file that does not exist.
-    defaults_source = defaults_path.name
-    defaults_raw = {}
-    declared = []
-    try:
-        with open(defaults_path, encoding="utf-8") as f:
-            raw = strict_safe_load(f, loader=_DiagnoseSafeLoader) or {}
-        if isinstance(raw, dict):
-            shape_error = _file_shape_error(raw)
-            if shape_error:
-                # The exporter drops the whole file: no defaults, no
-                # declared keys (and the tenant loop below drops its
-                # `tenants:` block for the same reason).
-                _skip(defaults_path.name, shape_error)
-            else:
-                defaults_raw = raw.get("defaults") or {}
-                listed = raw.get("optional_overrides") or []
-                declared = [k for k in listed if isinstance(k, str)]
-    except FileNotFoundError:
-        # Absent `_defaults.yaml` is a legal config, not a read failure.
-        pass
-    except (OSError, yaml.YAMLError) as e:
-        _skip_read_failure(defaults_path.name, e)
-
-    # Find tenant config
-    entries: list = []
-    # #1911: flat read — a hierarchical conf.d must not look empty.
-    warn_nested(base, tool="diagnose")
-    listed = list(iter_config_files(base, recursive=False))
-    # The unselected carrier spelling is read by no plane (#1674): its
-    # `tenants:` block must not reach the per-tenant merge either.
-    skip = unselected_carriers(listed)
-    for entry in listed:
-        fname = entry.name
-        if fname in skip:
-            continue
-        try:
-            with open(entry, encoding="utf-8") as f:
-                # #2114: tenant keys as source TEXT — the exporter's id, and
-                # what the CLI's `tenant` argument is. `123:` in a platform
-                # file used to be the int 123 and never matched "123".
-                # #2297: `_profile: 010` is profile "010" (PyYAML's 8 named
-                # none) — `_PROFILE_AS_TEXT`.
-                raw = strict_safe_load(
-                    f, loader=_DiagnoseTenantFileLoader) or {}
-        except (OSError, yaml.YAMLError) as e:
-            _skip_read_failure(fname, e)
-            continue
-        if not isinstance(raw, dict):
-            _skip(fname, f"top level must be a mapping, got "
-                         f"{type(raw).__name__}")
-            continue
-        shape_error = _file_shape_error(raw)
-        if shape_error:
-            _skip(fname, shape_error)
-            continue
-        tenants = {}
-        if "tenants" in raw and isinstance(raw.get("tenants"), dict):
-            tenants = raw["tenants"]
-        elif not fname.startswith("_"):
-            t_name = fname.rsplit(".", 1)[0]
-            tenants = {t_name: raw}
-        if tenant in tenants and isinstance(tenants[tenant], dict):
-            entries.append((fname, tenant, tenants[tenant]))
-    tenant_overrides = _tenant_block(tenant, entries, base)
-
-    # Layer 2: Profile overlay
-    profile_name = None
-    profile_keys = {}
-    p_ref = tenant_overrides.get("_profile")
-    if p_ref and isinstance(p_ref, str):
-        profile_name = p_ref.strip()
-        profiles_path = base / "_profiles.yaml"
-        try:
-            with open(profiles_path, encoding="utf-8") as f:
-                # #2297: profile names as source text, as the exporter keys
-                # them — `010:` is "010", the name `_profile: 010` reads as.
-                raw = strict_safe_load(f, loader=_DiagnoseExporterKeyLoader)
-            # ⛔ NOT `or {}`. That coerces every FALSY document — `[]`, `0`,
-            # `false` — into an empty mapping, so a `_profiles.yaml` whose
-            # whole body is `[]` loses the profile layer with zero signal:
-            # the exact defect #1468 is about, inside the fix for #1468.
-            # Only `None` (an empty document) is legitimately nothing.
-            #
-            # ⛔ And the VALUES need their own check (`_file_shape_error`).
-            # `raw` can be a fine mapping whose `profiles:` is a list, or
-            # whose profile body is a list, and `.get()` / `.items()` then
-            # raised AttributeError — which is NOT in the
-            # `except (OSError, yaml.YAMLError)` below, so it escaped and
-            # killed the whole call. That is #1447's death ("parses
-            # cleanly, is not a mapping, reaches .get(), takes the run with
-            # it") reproduced one directory over. Any such value makes the
-            # exporter drop the whole file, so the whole profile layer goes
-            # — even when the bad body is another profile's.
-            if raw is None:
-                raw = {}
-            if not isinstance(raw, dict):
-                _skip(profiles_path.name,
-                      f"top level must be a mapping, got {type(raw).__name__}")
-            else:
-                shape_error = _file_shape_error(raw)
-                if shape_error:
-                    _skip(profiles_path.name, shape_error)
-                else:
-                    all_profiles = raw.get("profiles") or {}
-                    profile_keys = all_profiles.get(profile_name) or {}
-        except FileNotFoundError:
-            # No `_profiles.yaml` at all: the tenant references a profile
-            # this directory does not define. Still a read the chain is
-            # missing a layer because of, so it is recorded.
-            _skip(profiles_path.name,
-                  f"not found, but {tenant} references profile "
-                  f"{profile_name}")
-        except (OSError, yaml.YAMLError) as e:
-            _skip_read_failure(profiles_path.name, e)
-
-    # Layer 3: Tenant-specific (non-reserved metric keys only)
-    tenant_metric_keys = {
-        k: v for k, v in tenant_overrides.items()
-        if not k.startswith("_")
-    }
-
-    # Build chain
     chain = []
+    for (layer, file), keys in sorted(groups.items(), key=_order):
+        source = f"{file} → {te.profile}" if layer == "profile" and te.profile else file
+        chain.append({"layer": layer, "source": source, "keys": keys})
 
-    # Layer 1: defaults
-    # `str(k)`: `defaults: {1: 5}` has an int key (this file is read with
-    # constructed keys); the exporter serves it as `default_1` rather than
-    # stopping, so it must not end the run here either (#1522).
-    default_only = {k: v for k, v in defaults_raw.items()
-                    if not str(k).startswith("_")}
-    if default_only:
-        chain.append({"layer": "defaults", "source": defaults_source,
-                       "keys": default_only})
-
-    def _tenant_sets(k: str) -> bool:
-        """The tenant writes threshold `k` under ANY spelling (#2368)."""
-        return k in tenant_metric_keys or any(
-            s in tenant_metric_keys for s in _other_tenant_key_spellings(k))
-
-    # Layer 2: profile (fill-in — keys NOT in tenant override)
-    if profile_name and profile_keys:
-        effective_profile = {
-            k: v for k, v in profile_keys.items()
-            if not k.startswith("_") and not _tenant_sets(k)
-        }
-        chain.append({"layer": "profile", "source": f"_profiles.yaml → {profile_name}",
-                       "keys": effective_profile})
-
-    # Layer 3: tenant override
-    if tenant_metric_keys:
-        chain.append({"layer": "tenant", "source": f"{tenant}.yaml",
-                       "keys": tenant_metric_keys})
-
-    # Resolved: merge all layers (later layers win) — per THRESHOLD, not per
-    # spelling (#2368): a later layer's `mysql_cpu` replaces an earlier
-    # layer's `mysql_threads_running`, so `resolved` carries the one value
-    # /metrics serves, under the spelling that supplied it.
-    #
-    # #2420 (CodeRabbit, checked against Go): each layer first takes
-    # resolve's canonical-wins dedup (drop_shadowed_spellings) — a layer
-    # writing BOTH spellings serves only the canonical one on /metrics — and
-    # a threshold /metrics treats as unset (null, `''`, any text that is
-    # neither a number nor disable — `metrics_treats_as_unset`, #2421) is
-    # NOT a value: /metrics logs `unknown value` and falls back to the
-    # defaults, so it is left out of its overlay. That holds for the tenant
-    # layer AND the profile layer (the profile fill-in copies the value into
-    # the tenant's overrides, where the same fallback applies). A tenant key
-    # so written still keeps the profile out, via _tenant_sets, and still
-    # displaced the platform's other spelling in _tenant_block, both as on
-    # /metrics.
-    #
-    # Dedup BEFORE dropping unset values: a canonical null still shadows the
-    # legacy spelling in the same layer (canonical wins, then "" → defaults
-    # on /metrics); filtering first would let the legacy value through
-    # (#2420 round 4).
-    def _set_only(m: dict) -> dict:
-        return {k: v for k, v in drop_shadowed_spellings(m).items()
-                if not metrics_treats_as_unset(v)}
-
-    # #2418: inside the defaults layer, canonical-wins is among the spellings
-    # the layer WRITES (Go `levelWritesSpelling`, applied at the root decode
-    # by `dropNullShadowingSpellings`): a spelling /metrics treats as unset
-    # beside another spelling written with a value is dropped first, so that
-    # value is served. With no written twin the key stays, as before.
-    def _written_twin(k: str) -> bool:
-        return metrics_treats_as_unset(default_only[k]) and any(
-            s in default_only and not metrics_treats_as_unset(default_only[s])
-            for s in _other_tenant_key_spellings(k))
-
-    resolved = {}
-    overlay_across_spellings(resolved, drop_shadowed_spellings(
-        {k: v for k, v in default_only.items() if not _written_twin(k)}))
-    if profile_keys:
-        # Profile fills in only where tenant hasn't overridden
-        overlay_across_spellings(resolved, _set_only({
-            k: v for k, v in profile_keys.items()
-            if not k.startswith("_") and not _tenant_sets(k)}))
-    overlay_across_spellings(resolved, _set_only(tenant_metric_keys))
-
-    out: dict[str, object] = {
+    return {
         "chain": chain,
         "resolved": resolved,
-        "profile_name": profile_name,
+        "profile_name": te.profile,
         # settable, but with no platform value — see the docstring
-        "declared": declared,
+        "declared": _declared_keys(base),
     }
-    # #1468: only when non-empty. An always-present empty list on a healthy
-    # run is the shape `validate_config.print_report` deliberately pops off
-    # its own rows; a caveat field that appears on clean output stops being
-    # read as a caveat.
-    if skipped:
-        out["skipped_unusable_files"] = skipped
-    return out
 
 
 def _format_chain_summary(inheritance):
@@ -761,13 +311,9 @@ def _format_chain_summary(inheritance):
         "declared_count": len(inheritance.get("declared", []) or []),
         "profile": inheritance.get("profile_name"),
     }
-    # #1468: the truncation caveat rides along with the summary, because the
-    # summary IS what `check()` puts in its JSON and what
-    # `batch_diagnose.py` reads back — a `layers` list short of a layer must
-    # not be the only trace that a file could not be read.
-    skipped = inheritance.get("skipped_unusable_files") or []
-    if skipped:
-        summary["skipped_unusable_files"] = list(skipped)
+    # #1468's `skipped_unusable_files` is gone (#2526): a file the exporter's
+    # load drops or cannot read now fails the run (resolve_inheritance_chain
+    # raises), so there is no truncated chain left to caveat.
     return summary
 
 
@@ -850,9 +396,9 @@ def check(tenant: str, prom_url: str, config_dir: str | None = None,
 
     # 4. Profile lookup + inheritance chain (v1.12.0, optional — requires --config-dir)
     # #1522: ONE read of config_dir. The profile is the chain's own
-    # `profile_name`, not a second walk of the same files by
-    # `lookup_tenant_profile` — two readers meant two chances to disagree
-    # and every skipped file announced from only one of them.
+    # `profile_name`. #2526: that read is `da-guard effective`; when it
+    # cannot be made, this raises (the CLI exits 2) rather than answer
+    # without the chain.
     inheritance = resolve_inheritance_chain(tenant, config_dir) if config_dir else None
     profile_name = inheritance["profile_name"] if inheritance else None
 
@@ -922,7 +468,12 @@ if __name__ == "__main__":
             print("ERROR: --show-inheritance requires --config-dir",
                   file=sys.stderr)
             sys.exit(EXIT_CALLER_ERROR)  # #452: missing required arg
-        inheritance = resolve_inheritance_chain(args.tenant, args.config_dir)
+        try:
+            inheritance = resolve_inheritance_chain(args.tenant, args.config_dir)
+        except (DaGuardNotFoundError, ParseFailedError, DaGuardError) as exc:
+            # #2526: fail closed — no chain from a partial or Python-side read.
+            print_load_error(exc)
+            sys.exit(EXIT_CALLER_ERROR)
         if inheritance:
             print(format_json_report(inheritance, default=str))
         else:
@@ -932,6 +483,9 @@ if __name__ == "__main__":
 
     try:
         result = check(args.tenant, args.prometheus, config_dir=args.config_dir)
+    except (DaGuardNotFoundError, ParseFailedError, DaGuardError) as exc:
+        print_load_error(exc)
+        sys.exit(EXIT_CALLER_ERROR)
     except CommandNotFoundError as exc:
         # issue 1513: this was a traceback at rc=1. The Pod check needs kubectl
         # and a cluster context; the da-tools image ships neither.

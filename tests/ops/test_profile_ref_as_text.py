@@ -132,8 +132,9 @@ def test_every_reader_binds_the_profile_the_exporter_applies(
     assert (name in config_diff.load_profiles_from_dir(str(d))) == bound
     assert config_diff.load_settings_from_dir(str(d)) == {"tx": {"_profile": name}}
 
-    # diagnose: the lookup names it; the chain has a profile layer iff bound.
-    assert diagnose.lookup_tenant_profile("tx", str(d)) == name
+    # diagnose: the lookup names the profile the exporter binds (#2526: None
+    # when it binds none); the chain has a profile layer iff bound.
+    assert diagnose.lookup_tenant_profile("tx", str(d)) == (name if bound else None)
     chain = diagnose.resolve_inheritance_chain("tx", str(d))
     layers = [layer["source"] for layer in chain["chain"]]
     assert (f"_profiles.yaml → {name}" in layers) == bound, chain

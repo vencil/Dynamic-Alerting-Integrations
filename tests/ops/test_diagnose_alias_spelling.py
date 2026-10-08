@@ -24,6 +24,9 @@ import diagnose  # noqa: E402
 from _grar_validate import DEPRECATED_KEY_ALIASES, _legacy_tenant_key  # noqa: E402
 from _lib_confd import overlay_platform_tenants  # noqa: E402
 
+# #2526: the chain is `da-guard effective`'s answer.
+pytestmark = pytest.mark.usefixtures("da_guard_env")
+
 MATRIX = json.loads((REPO_ROOT / "tests" / "shared" / "platform_tenant_overlay_matrix.json")
                     .read_text(encoding="utf-8"))
 # ⛔ Top-level trees only. diagnose's reader is FLAT by design (#1911,
@@ -77,22 +80,23 @@ def test_profile_layer_excludes_a_threshold_the_tenant_writes_in_the_other_spell
 
 def _cr_trees() -> "list[tuple[str, dict, dict]]":
     """#2420 (CodeRabbit) shapes: (name, files, resolved threshold keys
-    expected). Each expected value is what Go's /metrics serves for the tree
-    (measured with LoadDir + Resolve on the PR head): a layer writing BOTH
-    spellings serves only its canonical one, and a tenant-layer null falls
-    back to the defaults."""
+    expected). Measured against Go: since #2526 `resolved` is `da-guard
+    effective`'s answer (/effective); where /metrics serves otherwise the
+    row says so."""
     legacy, canon = next(iter(DEPRECATED_KEY_ALIASES.items()))
     return [
         ("tenant-null-legacy-over-chain-canonical",
          {"_defaults.yaml": f"defaults:\n  {canon}: 70\n",
           "tx.yaml": f"tenants:\n  tx:\n    {legacy}: null\n"},
          {canon: 70}),
-        # The null still displaces the platform entry's other spelling (as
-        # on /metrics), so the defaults' 30 is served, not the platform's 70.
+        # #2526: `resolved` is /effective's answer — the platform's 70.
+        # /metrics serves the defaults' 30 here (the null displaces the
+        # platform entry's other spelling there); that split is Go's, pinned
+        # by the overlay matrix, not re-decided in diagnose.
         ("tenant-null-legacy-over-platform-canonical",
          {"_defaults.yaml": f"defaults:\n  {canon}: 30\ntenants:\n  tx:\n    {canon}: 70\n",
           "tx.yaml": f"tenants:\n  tx:\n    {legacy}: null\n"},
-         {canon: 30}),
+         {canon: 70}),
         ("chain-writes-both-spellings",
          {"_defaults.yaml": f"defaults:\n  {legacy}: 40\n  {canon}: 30\n",
           "tx.yaml": "tenants:\n  tx:\n    redis_x: '1'\n"},
@@ -105,13 +109,14 @@ def _cr_trees() -> "list[tuple[str, dict, dict]]":
          {"_defaults.yaml": f"defaults:\n  {canon}: 30\ntenants:\n  tx:\n    {legacy}: 40\n    {canon}: 50\n",
           "tx.yaml": "tenants:\n  tx:\n    redis_x: '1'\n"},
          {canon: 50}),
-        # #2420 round 4: canonical null + legacy value in ONE tenant layer —
-        # the canonical null wins inside the layer, so /metrics falls back to
-        # the defaults (Go measured: 10), not the legacy 51.
+        # #2420 round 4: canonical null + legacy value in ONE tenant layer.
+        # /metrics falls back to the defaults (Go measured: 10); /effective,
+        # which `resolved` is since #2526, removes the canonical key and
+        # keeps the legacy 51 as written.
         ("tenant-writes-canonical-null-and-legacy-value",
          {"_defaults.yaml": f"defaults:\n  mysql_connections: 80\n  {canon}: 10\n",
           "tx.yaml": f"tenants:\n  tx:\n    redis_x: '1'\n    {canon}: null\n    {legacy}: '51'\n"},
-         {canon: 10, "mysql_connections": 80}),
+         {legacy: "51", "mysql_connections": 80}),
         # #2420 round 4: the elected profile writes both spellings — its
         # canonical value is filled (Go measured: 20), not the legacy 21.
         ("profile-writes-both-spellings",

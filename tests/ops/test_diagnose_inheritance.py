@@ -11,6 +11,10 @@ import yaml
 
 
 import diagnose  # noqa: E402
+import pytest  # noqa: E402
+
+# #2526: the chain is `da-guard effective`'s answer.
+pytestmark = pytest.mark.usefixtures("da_guard_env")
 
 
 class TestResolveInheritanceChain:
@@ -49,7 +53,9 @@ class TestResolveInheritanceChain:
                 defaults={"mysql_connections": 80},
                 tenants={"db-a": {"mysql_connections": "50"}})
             result = diagnose.resolve_inheritance_chain("db-a", d)
-            assert len(result["chain"]) == 2  # defaults + tenant
+            # #2526: each key is listed in the layer that supplies it, so the
+            # overridden default is not listed and the defaults layer is gone.
+            assert [c["layer"] for c in result["chain"]] == ["tenant"]
             assert result["resolved"]["mysql_connections"] == "50"
 
     def test_full_chain_with_profile(self):
@@ -95,15 +101,13 @@ class TestResolveInheritanceChain:
             assert "a" not in profile_layer[0]["keys"]
 
     def test_nonexistent_tenant(self):
-        """不存在的 tenant 應返回空鏈。"""
+        """不存在的 tenant 回 None（#2526：exporter 沒有這個租戶，不再只回 defaults）。"""
         with tempfile.TemporaryDirectory() as d:
             self._make_config_dir(d,
                 defaults={"x": 1},
                 tenants={"db-a": {}})
             result = diagnose.resolve_inheritance_chain("nonexistent", d)
-            # Should still resolve defaults
-            assert result is not None
-            assert len(result["chain"]) == 1
+            assert result is None
 
     def test_no_config_dir(self):
         """None config_dir 應返回 None。"""

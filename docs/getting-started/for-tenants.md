@@ -206,6 +206,8 @@ python3 scripts/tools/ops/diagnose.py my-tenant \
   --config-dir conf.d/ --show-inheritance
 ```
 
+> 同樣需要 da-guard（`DA_GUARD_BINARY`，同上）：值是 exporter 的答案（`/effective`），不是 Python 讀出來的；詳見 [diagnose](../cli-reference.md#diagnose)。
+
 輸出分兩段，對應上面〈30 秒快速配置〉講的三類 key：
 
 - **`resolved`** — 你這個 tenant **已經有值**的 key（不論值來自平台預設、profile 還是你自己填的）。

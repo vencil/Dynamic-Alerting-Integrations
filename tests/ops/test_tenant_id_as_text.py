@@ -179,11 +179,13 @@ def test_describe_tenant_overlays_the_platform_block_for_text_ids(tmp_path):
         assert out["effective_config"]["mysql_connections"] == want, (tid, out)
 
 
+@pytest.mark.usefixtures("da_guard_env")  # #2526: diagnose reads da-guard effective
 def test_diagnose_finds_a_platform_profile_for_a_text_id(tmp_path):
     """The CLI tenant is a str; ``123:`` in the platform file was the int
     123, so the platform's ``_profile`` never reached tenant "123"."""
     d = _tree(tmp_path, {
         "_defaults.yaml": "defaults:\n  cpu: 80\ntenants:\n  123:\n    _profile: gold\n",
+        "_profiles.yaml": "profiles:\n  gold:\n    cpu: 70\n",
         "t.yaml": 'tenants:\n  "123":\n    cpu: 90\n'})
     assert diagnose.lookup_tenant_profile("123", str(d)) == "gold"
 

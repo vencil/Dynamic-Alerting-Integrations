@@ -11,6 +11,10 @@ import yaml
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..', '..', 'scripts', 'tools', 'ops'))
 import diagnose  # noqa: E402
+from _lib_tenant_values import ParseFailedError  # noqa: E402
+
+# #2526: the chain is `da-guard effective`'s answer.
+pytestmark = pytest.mark.usefixtures("da_guard_env")
 
 
 # ---------------------------------------------------------------------------
@@ -77,7 +81,15 @@ class TestHelp:
 # ---------------------------------------------------------------------------
 
 class TestLookupTenantProfile:
-    """Tests for lookup_tenant_profile()."""
+    """Tests for lookup_tenant_profile(): the profile the exporter BINDS
+    (`da-guard effective`'s `profile`, #2526), None for none."""
+
+    @staticmethod
+    def _tree(tmp_path, **files):
+        (tmp_path / "_defaults.yaml").write_text("defaults:\n  cpu: 50\n", encoding="utf-8")
+        for name, body in files.items():
+            (tmp_path / name).write_text(body, encoding="utf-8")
+        return str(tmp_path)
 
     def test_no_config_dir(self):
         assert diagnose.lookup_tenant_profile("db-a", None) is None
@@ -86,54 +98,57 @@ class TestLookupTenantProfile:
         assert diagnose.lookup_tenant_profile("db-a", "/nonexistent/path") is None
 
     def test_finds_profile_in_tenants_block(self, tmp_path):
-        cfg = {"tenants": {"db-a": {"_profile": "high-load", "cpu": 90}}}
-        (tmp_path / "multi.yaml").write_text(yaml.safe_dump(cfg), encoding="utf-8")
-        result = diagnose.lookup_tenant_profile("db-a", str(tmp_path))
-        assert result == "high-load"
+        d = self._tree(tmp_path, **{
+            "_profiles.yaml": "profiles:\n  high-load:\n    cpu: 95\n",
+            "multi.yaml": "tenants:\n  db-a:\n    _profile: high-load\n    cpu: 90\n"})
+        assert diagnose.lookup_tenant_profile("db-a", d) == "high-load"
 
-    def test_finds_profile_in_single_tenant_file(self, tmp_path):
-        cfg = {"_profile": "low-load", "mem": 80}
-        (tmp_path / "db-b.yaml").write_text(yaml.safe_dump(cfg), encoding="utf-8")
-        result = diagnose.lookup_tenant_profile("db-b", str(tmp_path))
-        assert result == "low-load"
+    def test_a_file_without_tenants_declares_no_tenant(self, tmp_path, capsys):
+        """The exporter reads a non-`_` file only through its `tenants:`
+        mapping (the old flat reader took the file name as the tenant id)."""
+        d = self._tree(tmp_path, **{
+            "_profiles.yaml": "profiles:\n  low-load:\n    cpu: 10\n",
+            "db-b.yaml": "_profile: low-load\nmem: 80\n"})
+        assert diagnose.lookup_tenant_profile("db-b", d) is None
+        err = capsys.readouterr().err
+        assert "WARN: db-b.yaml: declares no tenant" in err, err
+        assert "no tenant 'db-b'" in err, err
+
+    def test_an_unknown_profile_binds_nothing_and_says_so(self, tmp_path, capsys):
+        d = self._tree(tmp_path, **{
+            "db-a.yaml": "tenants:\n  db-a:\n    _profile: nonexistent\n    mem: 80\n"})
+        assert diagnose.lookup_tenant_profile("db-a", d) is None
+        assert "_profile 'nonexistent' binds no profile" in capsys.readouterr().err
 
     def test_skips_hidden_files(self, tmp_path):
-        cfg = {"_profile": "hidden", "cpu": 50}
-        (tmp_path / ".hidden.yaml").write_text(yaml.safe_dump(cfg), encoding="utf-8")
-        result = diagnose.lookup_tenant_profile(".hidden", str(tmp_path))
-        assert result is None
+        d = self._tree(tmp_path, **{".hidden.yaml": "tenants:\n  .hidden:\n    _profile: x\n"})
+        assert diagnose.lookup_tenant_profile(".hidden", d) is None
 
     def test_skips_non_yaml_files(self, tmp_path):
-        (tmp_path / "readme.txt").write_text("not yaml", encoding="utf-8")
-        result = diagnose.lookup_tenant_profile("readme", str(tmp_path))
-        assert result is None
+        d = self._tree(tmp_path, **{"readme.txt": "not yaml"})
+        assert diagnose.lookup_tenant_profile("readme", d) is None
 
-    def test_skips_invalid_yaml(self, tmp_path):
-        (tmp_path / "bad.yaml").write_text(": : : invalid", encoding="utf-8")
-        result = diagnose.lookup_tenant_profile("bad", str(tmp_path))
-        assert result is None
-
-    def test_skips_non_dict_yaml(self, tmp_path):
-        (tmp_path / "list.yaml").write_text("- item1\n- item2\n", encoding="utf-8")
-        result = diagnose.lookup_tenant_profile("list", str(tmp_path))
-        assert result is None
+    @pytest.mark.parametrize("body", [": : : invalid", "- item1\n- item2\n"],
+                             ids=["bad-syntax", "not-a-mapping"])
+    def test_a_file_the_exporter_drops_fails_closed(self, tmp_path, body):
+        """#2526: no answer from a partial read — the exporter drops the
+        file, so the lookup raises (the CLI exits 2) instead of skipping it."""
+        d = self._tree(tmp_path, **{"bad.yaml": body})
+        with pytest.raises(ParseFailedError, match="bad.yaml"):
+            diagnose.lookup_tenant_profile("bad", d)
 
     def test_tenant_not_found(self, tmp_path):
-        cfg = {"tenants": {"db-a": {"cpu": 90}}}
-        (tmp_path / "multi.yaml").write_text(yaml.safe_dump(cfg), encoding="utf-8")
-        result = diagnose.lookup_tenant_profile("db-z", str(tmp_path))
-        assert result is None
+        d = self._tree(tmp_path, **{"multi.yaml": "tenants:\n  db-a:\n    cpu: 90\n"})
+        assert diagnose.lookup_tenant_profile("db-z", d) is None
 
     def test_no_profile_key(self, tmp_path):
-        cfg = {"cpu": 90, "mem": 80}
-        (tmp_path / "db-a.yaml").write_text(yaml.safe_dump(cfg), encoding="utf-8")
-        result = diagnose.lookup_tenant_profile("db-a", str(tmp_path))
-        assert result is None
+        d = self._tree(tmp_path, **{"db-a.yaml": "tenants:\n  db-a:\n    cpu: 90\n"})
+        assert diagnose.lookup_tenant_profile("db-a", d) is None
 
     def test_skips_directories(self, tmp_path):
         (tmp_path / "subdir.yaml").mkdir()
-        result = diagnose.lookup_tenant_profile("subdir", str(tmp_path))
-        assert result is None
+        d = self._tree(tmp_path, **{"a.yaml": "tenants:\n  db-a:\n    cpu: 1\n"})
+        assert diagnose.lookup_tenant_profile("subdir", d) is None
 
 
 # ---------------------------------------------------------------------------
@@ -152,12 +167,14 @@ class TestResolveInheritanceChain:
     def test_basic_defaults_only(self, tmp_path):
         defaults = {"defaults": {"cpu": 80, "mem": 70}}
         (tmp_path / "_defaults.yaml").write_text(yaml.safe_dump(defaults), encoding="utf-8")
-        (tmp_path / "db-a.yaml").write_text(yaml.safe_dump({}), encoding="utf-8")
+        (tmp_path / "db-a.yaml").write_text("tenants:\n  db-a: {}\n", encoding="utf-8")
 
         result = diagnose.resolve_inheritance_chain("db-a", str(tmp_path))
         assert result is not None
         assert result["profile_name"] is None
         assert result["resolved"]["cpu"] == 80
+        assert result["chain"] == [{"layer": "defaults", "source": "_defaults.yaml",
+                                    "keys": {"cpu": 80, "mem": 70}}]
 
     def test_full_three_layers(self, tmp_path):
         # Layer 1: defaults
@@ -172,7 +189,7 @@ class TestResolveInheritanceChain:
         )
         # Layer 3: tenant with profile ref
         (tmp_path / "db-a.yaml").write_text(
-            yaml.safe_dump({"_profile": "high-load", "cpu": 99}),
+            yaml.safe_dump({"tenants": {"db-a": {"_profile": "high-load", "cpu": 99}}}),
             encoding="utf-8",
         )
 
@@ -186,11 +203,12 @@ class TestResolveInheritanceChain:
         assert result["resolved"]["mem"] == 70
         assert result["resolved"]["disk"] == 90
 
-        # Chain has 3 layers
-        assert len(result["chain"]) == 3
-        assert result["chain"][0]["layer"] == "defaults"
-        assert result["chain"][1]["layer"] == "profile"
-        assert result["chain"][2]["layer"] == "tenant"
+        # Chain has 3 layers, each listing the keys it supplies
+        assert result["chain"] == [
+            {"layer": "defaults", "source": "_defaults.yaml", "keys": {"disk": 90, "mem": 70}},
+            {"layer": "profile", "source": "_profiles.yaml → high-load", "keys": {"net": 60}},
+            {"layer": "tenant", "source": "db-a.yaml", "keys": {"cpu": 99}},
+        ]
 
     def test_tenant_in_multi_tenant_file(self, tmp_path):
         (tmp_path / "_defaults.yaml").write_text(
@@ -202,24 +220,53 @@ class TestResolveInheritanceChain:
 
         result = diagnose.resolve_inheritance_chain("db-a", str(tmp_path))
         assert result["resolved"]["cpu"] == 75
+        assert result["chain"][-1]["source"] == "tenants.yaml"
 
-    def test_skips_invalid_yaml(self, tmp_path):
+    def test_invalid_defaults_fails_closed(self, tmp_path):
+        """#2526: was a WARN and a chain without the defaults layer; the
+        exporter drops the file, so the chain is not answered at all."""
         (tmp_path / "_defaults.yaml").write_text(": : bad", encoding="utf-8")
-        (tmp_path / "db-a.yaml").write_text(yaml.safe_dump({"cpu": 50}), encoding="utf-8")
-
-        result = diagnose.resolve_inheritance_chain("db-a", str(tmp_path))
-        assert result is not None
-        assert result["resolved"]["cpu"] == 50
+        (tmp_path / "db-a.yaml").write_text("tenants:\n  db-a:\n    cpu: 50\n",
+                                            encoding="utf-8")
+        with pytest.raises(ParseFailedError, match="_defaults.yaml"):
+            diagnose.resolve_inheritance_chain("db-a", str(tmp_path))
 
     def test_no_profiles_file(self, tmp_path):
         (tmp_path / "_defaults.yaml").write_text(
             yaml.safe_dump({"defaults": {"cpu": 50}}), encoding="utf-8")
         (tmp_path / "db-a.yaml").write_text(
-            yaml.safe_dump({"_profile": "nonexistent", "mem": 80}), encoding="utf-8")
+            yaml.safe_dump({"tenants": {"db-a": {"_profile": "nonexistent", "mem": 80}}}),
+            encoding="utf-8")
 
         result = diagnose.resolve_inheritance_chain("db-a", str(tmp_path))
-        assert result["profile_name"] == "nonexistent"
+        assert result["profile_name"] is None   # bound to none
         assert result["resolved"]["mem"] == 80
+        assert [c["layer"] for c in result["chain"]] == ["defaults", "tenant"]
+
+    def test_a_tenant_below_the_root_is_found(self, tmp_path):
+        """The exporter's tree is hierarchical; the old reader was flat."""
+        (tmp_path / "_defaults.yaml").write_text("defaults:\n  cpu: 50\n  mem: 1\n",
+                                                 encoding="utf-8")
+        (tmp_path / "eu").mkdir()
+        (tmp_path / "eu" / "_defaults.yaml").write_text("defaults:\n  cpu: 60\n",
+                                                        encoding="utf-8")
+        (tmp_path / "eu" / "db-a.yaml").write_text("tenants:\n  db-a:\n    mem: 2\n",
+                                                   encoding="utf-8")
+        result = diagnose.resolve_inheritance_chain("db-a", str(tmp_path))
+        assert result["resolved"] == {"cpu": 60, "mem": 2}
+        assert result["chain"] == [
+            {"layer": "defaults", "source": "eu/_defaults.yaml", "keys": {"cpu": 60}},
+            {"layer": "tenant", "source": "eu/db-a.yaml", "keys": {"mem": 2}},
+        ]
+
+    def test_declared_is_the_root_optional_overrides(self, tmp_path):
+        (tmp_path / "_defaults.yaml").write_text(
+            "defaults:\n  cpu: 50\noptional_overrides:\n  - oracle_x\n  - 123\n  - ~\n",
+            encoding="utf-8")
+        (tmp_path / "db-a.yaml").write_text("tenants:\n  db-a: {}\n", encoding="utf-8")
+        result = diagnose.resolve_inheritance_chain("db-a", str(tmp_path))
+        assert result["declared"] == ["oracle_x", "123"]
+        assert "oracle_x" not in result["resolved"]
 
 
 # ---------------------------------------------------------------------------
@@ -435,7 +482,8 @@ class TestCheck:
         (tmp_path / "_defaults.yaml").write_text(
             yaml.safe_dump({"defaults": {"cpu": 80}}), encoding="utf-8")
         (tmp_path / "db-a.yaml").write_text(
-            yaml.safe_dump({"_profile": "prod", "cpu": 95}), encoding="utf-8")
+            yaml.safe_dump({"tenants": {"db-a": {"_profile": "prod", "cpu": 95}}}),
+            encoding="utf-8")
         (tmp_path / "_profiles.yaml").write_text(
             yaml.safe_dump({"profiles": {"prod": {"mem": 90}}}), encoding="utf-8")
 
@@ -494,6 +542,13 @@ class TestPlatformTenantBlock:
     _PLATFORM = ("defaults:\n  mysql_connections: 80\n"
                  "tenants:\n  tx:\n    mysql_connections: '60'\n    _profile: p1\n")
 
+    @pytest.fixture(autouse=True)
+    def _profiles(self, tmp_path):
+        # #2526: `profile_name` is the profile the exporter BINDS.
+        (tmp_path / "_profiles.yaml").write_text(
+            "profiles:\n  p1: {k: 1}\n  p2: {k: 2}\n  good: {k: 3}\n  bad: {k: 4}\n",
+            encoding="utf-8")
+
     @pytest.mark.parametrize("fname", ["tx.yaml", "TX.yaml", "0tx.yaml"])
     def test_tenant_file_wins_whatever_its_name(self, tmp_path, fname):
         (tmp_path / "_defaults.yaml").write_text(self._PLATFORM, encoding="utf-8")
@@ -513,19 +568,16 @@ class TestPlatformTenantBlock:
 
     def test_platform_file_cannot_create_a_tenant(self, tmp_path, capsys):
         (tmp_path / "_defaults.yaml").write_text(self._PLATFORM, encoding="utf-8")
-        def _warns():
+        # #2526: the exporter has no tenant tx, so there is no chain (the
+        # old reader answered with the defaults alone).
+        def _not_found():
             return [ln for ln in capsys.readouterr().err.splitlines()
-                    if "tenants.tx" in ln]
+                    if "no tenant 'tx'" in ln]
 
-        chain = diagnose.resolve_inheritance_chain("tx", str(tmp_path))
-        assert chain["resolved"]["mysql_connections"] == 80
-        warns = _warns()
-        assert len(warns) == 1 and "_defaults.yaml" in warns[0], warns
-        # #1522: lookup_tenant_profile is a view over the chain now, so
-        # called on its own it says it too — once.
+        assert diagnose.resolve_inheritance_chain("tx", str(tmp_path)) is None
+        assert len(_not_found()) == 1
         assert diagnose.lookup_tenant_profile("tx", str(tmp_path)) is None
-        warns = _warns()
-        assert len(warns) == 1 and "_defaults.yaml" in warns[0], warns
+        assert len(_not_found()) == 1
 
     def test_unselected_carrier_spelling_is_not_read(self, tmp_path):
         """`_defaults.yaml` + `_defaults.yml`: only the selected `.yaml` is
@@ -550,13 +602,13 @@ class TestPlatformTenantBlock:
 # ---------------------------------------------------------------------------
 
 class TestProfileLookupSharesTheChainRead:
-    """`lookup_tenant_profile` used to be a second reader of the same
-    directory that skipped a file it could not read in silence, while
-    `resolve_inheritance_chain` WARNed about it. It is now a view over the
-    chain, and `check()` reads the directory once."""
+    """`lookup_tenant_profile` is a view over the chain, and `check()` reads
+    the directory once. #2526: a file the exporter's load drops is no longer
+    skipped with a WARN — the read fails closed (ParseFailedError; the CLI
+    exits 2), so no answer is given from a partial tree."""
 
     @staticmethod
-    def _confd(tmp_path):
+    def _confd(tmp_path, broken=False):
         (tmp_path / "_defaults.yaml").write_text(
             "defaults:\n  mysql_connections: 80\n"
             "tenants:\n  tx:\n    _profile: gold\n", encoding="utf-8")
@@ -564,23 +616,24 @@ class TestProfileLookupSharesTheChainRead:
             "tenants:\n  tx:\n    mysql_connections: 70\n", encoding="utf-8")
         (tmp_path / "_profiles.yaml").write_text(
             "profiles:\n  gold:\n    mysql_slow_queries: 60\n", encoding="utf-8")
-        # Another tenant's file that does not parse.
-        (tmp_path / "broken.yaml").write_text(
-            "tenants:\n  other:\n    _profile: [unclosed\n", encoding="utf-8")
+        if broken:
+            # Another tenant's file that does not parse.
+            (tmp_path / "broken.yaml").write_text(
+                "tenants:\n  other:\n    _profile: [unclosed\n", encoding="utf-8")
         return str(tmp_path)
 
-    def test_called_on_its_own_it_names_the_file_it_could_not_read(
-            self, tmp_path, capsys):
-        d = self._confd(tmp_path)
-        assert diagnose.lookup_tenant_profile("tx", d) == "gold"
-        err = capsys.readouterr().err
-        assert "WARN: skip broken.yaml" in err, err
+    def test_another_tenants_broken_file_fails_closed(self, tmp_path):
+        d = self._confd(tmp_path, broken=True)
+        with pytest.raises(ParseFailedError, match="broken.yaml"):
+            diagnose.lookup_tenant_profile("tx", d)
+        with pytest.raises(ParseFailedError, match="broken.yaml"):
+            self._check(d)
 
-    def test_answer_is_the_chains_profile_name(self, tmp_path, capsys):
+    def test_answer_is_the_chains_profile_name(self, tmp_path):
         d = self._confd(tmp_path)
         chain = diagnose.resolve_inheritance_chain("tx", d)
-        assert chain["skipped_unusable_files"] == ["broken.yaml"]
-        assert diagnose.lookup_tenant_profile("tx", d) == chain["profile_name"]
+        assert "skipped_unusable_files" not in chain
+        assert diagnose.lookup_tenant_profile("tx", d) == chain["profile_name"] == "gold"
 
     @staticmethod
     def _check(d):
@@ -591,8 +644,7 @@ class TestProfileLookupSharesTheChainRead:
             return diagnose.check("tx", "http://prom:9090",
                                   config_dir=d, out=io.StringIO())
 
-    def test_check_resolves_the_chain_once_and_warns_once(
-            self, tmp_path, capsys):
+    def test_check_resolves_the_chain_once(self, tmp_path):
         """Counts `resolve_inheritance_chain` CALLS from `check()` — the
         profile comes from that one call, not from a second
         `lookup_tenant_profile` call over the same files."""
@@ -603,11 +655,7 @@ class TestProfileLookupSharesTheChainRead:
             result = self._check(d)
         assert spy.call_count == 1
         assert result["profile"] == "gold"
-        assert result["inheritance_chain"]["skipped_unusable_files"] == [
-            "broken.yaml"]
-        skips = [ln for ln in capsys.readouterr().err.splitlines()
-                 if "WARN: skip broken.yaml" in ln]
-        assert len(skips) == 1, skips
+        assert "skipped_unusable_files" not in result["inheritance_chain"]
 
     # A value of the wrong type that the exporter's typed decode refuses:
     # it drops the WHOLE file (parse_failed), measured against LoadDir.
@@ -720,9 +768,10 @@ class TestProfileLookupSharesTheChainRead:
         assert "WARN" not in capsys.readouterr().err
 
     @pytest.mark.parametrize("case", sorted(_WRONG_TYPE))
-    def test_a_wrong_type_value_skips_its_file_instead_of_crashing(
-            self, tmp_path, capsys, case):
-        fname, body, reason, conn, slow = self._WRONG_TYPE[case]
+    def test_a_wrong_type_value_fails_closed(self, tmp_path, case):
+        """#2526: was a WARN and a chain without that file; the exporter
+        drops the file, so neither reader answers."""
+        fname, body, _reason, _conn, _slow = self._WRONG_TYPE[case]
         files = {
             "_defaults.yaml": "defaults:\n  mysql_connections: 80\n",
             "tx.yaml": "tenants:\n  tx:\n    _profile: gold\n"
@@ -733,28 +782,13 @@ class TestProfileLookupSharesTheChainRead:
         for name, text in files.items():
             (tmp_path / name).write_text(text, encoding="utf-8")
         d = str(tmp_path)
-        want = f"WARN: skip {fname}: {reason}"
+        with pytest.raises(ParseFailedError, match=fname):
+            diagnose.lookup_tenant_profile("tx", d)
+        with pytest.raises(ParseFailedError, match=fname):
+            self._check(d)
 
-        assert diagnose.lookup_tenant_profile("tx", d) == "gold"
-        assert want in capsys.readouterr().err
-
-        chain = diagnose.resolve_inheritance_chain("tx", d)
-        capsys.readouterr()
-        assert chain["skipped_unusable_files"] == [fname]
-        assert chain["resolved"].get("mysql_connections") == conn
-        assert chain["resolved"].get("mysql_slow_queries") == slow
-
-        result = self._check(d)
-        assert result["profile"] == "gold"
-        assert result["inheritance_chain"]["skipped_unusable_files"] == [fname]
-        lines = [ln for ln in capsys.readouterr().err.splitlines()
-                 if want in ln]
-        assert len(lines) == 1, lines
-
-    def test_a_platform_file_dropped_for_its_type_takes_its_tenants_block(
-            self, tmp_path, capsys):
-        """The exporter drops the whole file, so its `tenants:` entry
-        (here the profile assignment) is gone too."""
+    def test_a_platform_file_dropped_for_its_type_fails_closed(self, tmp_path):
+        """The exporter drops the whole file, `tenants:` entry and all."""
         (tmp_path / "_defaults.yaml").write_text(
             "defaults:\n  mysql_connections: 80\n", encoding="utf-8")
         (tmp_path / "_platform.yaml").write_text(
@@ -762,9 +796,8 @@ class TestProfileLookupSharesTheChainRead:
             encoding="utf-8")
         (tmp_path / "tx.yaml").write_text(
             "tenants:\n  tx:\n    mysql_connections: 70\n", encoding="utf-8")
-        assert diagnose.lookup_tenant_profile("tx", str(tmp_path)) is None
-        assert ("WARN: skip _platform.yaml: 'optional_overrides' must be a "
-                "list, got int") in capsys.readouterr().err
+        with pytest.raises(ParseFailedError, match="_platform.yaml"):
+            diagnose.lookup_tenant_profile("tx", str(tmp_path))
 
 
 class TestSetTagReadAsTheExporterReadsIt:
@@ -836,30 +869,27 @@ class TestSetTagReadAsTheExporterReadsIt:
         assert chain["resolved"] == {"mysql_connections": 80,
                                      "mysql_slow_queries": 90}
 
-    def test_a_repeated_key_in_a_set_still_skips_the_file(
-            self, tmp_path, capsys):
+    def test_a_repeated_key_in_a_set_fails_closed(self, tmp_path):
         d = self._tree(tmp_path, {
             "_profiles.yaml":
                 "profiles:\n  gold: !!set {mysql_slow_queries: 55, "
                 "mysql_slow_queries: 56}\n"}, "")
-        chain = diagnose.resolve_inheritance_chain("tx", d)
-        assert chain["skipped_unusable_files"] == ["_profiles.yaml"]
-        assert "WARN: skip _profiles.yaml" in capsys.readouterr().err
+        with pytest.raises(ParseFailedError, match="_profiles.yaml"):
+            diagnose.resolve_inheritance_chain("tx", d)
 
     @pytest.mark.parametrize("body", [
         "defaults: !!set {1, mysql_connections}\n",
         "defaults: {1: 5, mysql_connections: 80}\n"], ids=["set", "plain"])
     def test_a_non_string_defaults_key_does_not_end_the_run(
             self, tmp_path, capsys, body):
-        """/metrics serves the key as `default_1` (value 0 / 5); diagnose
-        shows it under the key PyYAML built, but must not raise."""
+        """/effective keys it by its text, `"1"` (#2547); must not raise."""
         d = self._tree(tmp_path, {
             "_defaults.yaml": body,
             "tx.yaml": "tenants:\n  tx:\n    mysql_connections: 70\n",
             "_profiles.yaml": None}, "")
         chain = diagnose.resolve_inheritance_chain("tx", d)
         assert chain["resolved"]["mysql_connections"] == 70
-        assert "skipped_unusable_files" not in chain
+        assert 1 not in chain["resolved"]
         with mock.patch.object(diagnose, "tenant_db_type",
                                return_value=(None, None)), \
                 mock.patch.object(diagnose, "query_prometheus",
