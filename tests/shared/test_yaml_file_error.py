@@ -425,9 +425,11 @@ _ROW_IDS = [r[0] for r in _ROWS]
 # #2115 0-B: policy_engine's tenants and policy_opa_bridge's whole tree too
 # (policy_engine's own `_policies` read of `_defaults.yaml` stays Python's).
 # #2116: threshold_recommend reads served-values (then effective) too.
+# #2751: maintenance_scheduler reads effective, and served-values for the
+# parse reason when effective refuses a file.
 _SERVED_VALUES_ROWS = {"blind_spot_discovery", "policy_engine tenant",
                        "policy_opa_bridge --dry-run", "policy_opa_bridge _defaults",
-                       "threshold_recommend"}
+                       "threshold_recommend", "maintenance_scheduler --dry-run"}
 assert _SERVED_VALUES_ROWS <= set(_ROW_IDS), _SERVED_VALUES_ROWS - set(_ROW_IDS)
 # Rows whose tool reads `_routing` through the route generator's own reader
 # (#2752, #2115 ruling (c)): the file is named and the rc is 2, but the words
@@ -724,8 +726,10 @@ def test_scan_sees_the_known_population():
         "config_diff.py", "deprecate_rule.py", "generate_tenant_mapping_rules.py",
         "migrate_to_operator.py", "onboard_platform.py", "operator_generate.py",
         "policy_engine.py", "policy_opa_bridge.py", "validate_config.py",
-        "blind_spot_discovery.py", "maintenance_scheduler.py",
+        "blind_spot_discovery.py",
         "threshold_recommend.py",
+        # maintenance_scheduler.py left in #2751: it reads the tree through
+        # `da-guard effective`, no `_lib_python` load site remains.
     }
     # ⛔ notification_tester.py left the population on purpose (#2752): it
     # reads `_routing` through the route generator's `load_tenant_tree`,

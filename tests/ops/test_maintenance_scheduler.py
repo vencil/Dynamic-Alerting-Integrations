@@ -27,6 +27,9 @@ requires_croniter = pytest.mark.skipif(
     not _has_croniter, reason="croniter not installed"
 )
 
+# #2751: the schedules are read through `da-guard effective`.
+pytestmark = pytest.mark.usefixtures("da_guard_env")
+
 
 # ── 1. parse_duration ─────────────────────────────────────────────
 
@@ -463,8 +466,17 @@ class TestEvaluateAndApply:
 
     def test_no_schedules(self):
         with tempfile.TemporaryDirectory() as d:
+            write_yaml(d, "db-a.yaml", "tenants:\n  db-a: {}\n")
             created, skipped, errors = ms.evaluate_and_apply(d, None)
             assert (created, skipped, errors) == (0, 0, 0)
+
+    def test_tree_da_guard_refuses_is_not_an_empty_schedule(self):
+        """#2751: a tree `da-guard effective` refuses (here: no .yaml at all)
+        raises instead of reading as "no schedules" — fail closed."""
+        import _lib_tenant_values as tv
+        with tempfile.TemporaryDirectory() as d:
+            with pytest.raises(tv.DaGuardError):
+                ms.evaluate_and_apply(d, None)
 
     def test_active_window_report_only(self):
         """Without --alertmanager, just report active windows."""
