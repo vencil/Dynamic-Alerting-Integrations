@@ -97,9 +97,9 @@ class TestPrepushWiring:
                "GIT_COMMITTER_NAME": "t", "GIT_COMMITTER_EMAIL": "t@e"}
         subprocess.run(["git", "init", "-q", "-b", "main", str(tmp_path)],  # subprocess-timeout: ignore
                        check=True, env=env)
-        # The probe shells out to the repo's own installer, so the temp repo has
-        # to carry it. Copied, not referenced by absolute path: that is the
-        # production file, re-read from disk on every run.
+        # `_install_guards` runs the installer by relative path from the temp
+        # repo, so the repo carries a copy of the production scripts, re-read
+        # from disk on every run.
         ops = tmp_path / "scripts" / "ops"
         ops.mkdir(parents=True)
         for name in cls._COPY:
@@ -149,8 +149,9 @@ class TestPrepushWiring:
         self._repo(tmp_path)
         monkeypatch.chdir(tmp_path)
 
-        wired, _ = mod._prepush_guards_wired()
+        wired, why = mod._prepush_guards_wired()
         assert wired is False, "no hooks at all"
+        assert "不存在" in why and "不是一般檔案" not in why, why
 
         assert self._precommit_install(tmp_path) == 0
         wired, _ = mod._prepush_guards_wired()
@@ -248,6 +249,7 @@ class TestPrepushWiring:
         assert wired is False
         # The message names the remedy, not what the installer will do with the
         # hook: that depends on state only the installer judges (#2697).
+        assert "與安裝器產生的守衛 shim 不同" in why, why
         assert "重跑 install_prepush_hook.sh" in why, why
         assert self._install_guards(tmp_path).returncode == 0
         wired, why = mod._prepush_guards_wired()
@@ -292,10 +294,11 @@ class TestPrepushWiring:
     ):
         """#2697: `is_file()` is False for a directory and for a symlink to
         nothing, and both used to be reported as "does not exist — never
-        installed". The installer cannot fix either from there: it chains a
-        directory (after which every push fails) and dies on a dangling link,
-        so the message has to say what is there. The second half follows its
-        remedy once."""
+        installed". Running the installer straight away does not fix either:
+        it chains a directory (after which every push fails) and writes the
+        shim through a dangling link to wherever it points (#2702), so the
+        message says what is there and to move it aside first. The second half
+        follows that remedy once."""
         mod = _load()
         self._repo(tmp_path)
         monkeypatch.chdir(tmp_path)
@@ -315,6 +318,43 @@ class TestPrepushWiring:
         assert self._install_guards(tmp_path).returncode == 0
         wired, why = mod._prepush_guards_wired()
         assert wired is True, f"following the message's remedy did not fix it: {why!r}"
+
+    def test_a_symlink_to_the_shim_is_wired(self, tmp_path, monkeypatch):
+        """`is_file()` follows the link, so a pre-push that is a symlink to an
+        executable copy of the shim is wired: git runs it and the guards fire.
+        Only a link to nothing (above) is "not a regular file"."""
+        mod = _load()
+        self._repo(tmp_path)
+        monkeypatch.chdir(tmp_path)
+        assert self._install_guards(tmp_path).returncode == 0
+        hook = tmp_path / ".git" / "hooks" / "pre-push"
+        target = tmp_path / "shim-elsewhere"
+        hook.rename(target)
+        symlink_or_skip(target, hook)
+
+        wired, why = mod._prepush_guards_wired()
+        assert wired is True, why
+
+    def test_an_unreadable_pre_push_is_not_wired(self, tmp_path, monkeypatch):
+        """A read error is reported as such and never as wired. Injected at
+        `read_bytes` for the hook alone: a mode bit cannot make root (CI's dev
+        container, this repo's cloud sessions) fail to read a file."""
+        mod = _load()
+        self._repo(tmp_path)
+        monkeypatch.chdir(tmp_path)
+        assert self._install_guards(tmp_path).returncode == 0
+        hook = (tmp_path / ".git" / "hooks" / "pre-push").resolve()
+        real = Path.read_bytes
+
+        def read_bytes(self):
+            if self.resolve() == hook:
+                raise PermissionError(13, "Permission denied", str(self))
+            return real(self)
+
+        monkeypatch.setattr(Path, "read_bytes", read_bytes)
+        wired, why = mod._prepush_guards_wired()
+        assert wired is False, why
+        assert "讀不到" in why, why
 
     @staticmethod
     def _insert_exit_0(hook, tmp_path):

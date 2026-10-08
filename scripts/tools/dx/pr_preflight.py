@@ -1094,7 +1094,7 @@ def _prepush_guards_wired() -> Tuple[Optional[bool], str]:
     （#2669、#2701）。pre-commit 的 pre-push 樣板一律不算：安裝器會換掉它，
     理由見該檔檔頭。
 
-    ⛔ git 對沒有執行位元的 `pre-push` **完全不跑**，只印一行
+    ⛔ git 對沒有執行位元的 `pre-push` **完全不跑**，只印
     `advice.ignoredHook` 可關掉的 `hint:`。⚠️ Windows 沒有這個位元，
     `os.access(X_OK)` 對存在的檔一律回 True——所以這一格在 Windows 上是
     **不生效**而不是「通過」。
@@ -1103,7 +1103,7 @@ def _prepush_guards_wired() -> Tuple[Optional[bool], str]:
     """
     r = run(["git", "rev-parse", "--git-path", "hooks/pre-push"], timeout=30)
     if r.returncode != 0:
-        # ⛔ None，不是 False：git 跑不了或不在 work tree，都量不到守衛在不在；
+        # ⛔ None，不是 False：git 跑不了或不在 git repository，都量不到守衛在不在；
         # 說成「沒裝」會開出安裝器這帖藥，而那兩種情況下它照做也回不到綠。
         reason = (r.stderr or "").strip() or f"rc={r.returncode}"
         return None, f"量不到：git rev-parse --git-path 失敗（{reason}）"
@@ -1112,13 +1112,14 @@ def _prepush_guards_wired() -> Tuple[Optional[bool], str]:
     if shim is None:
         return None, f"量不到：無法從 {_INSTALLER} 取出 shim 全文（VIBE_SHIM_EOF heredoc）"
 
-    # ⛔ 不是 shim 時，訊息只說是什麼、不預告安裝器會怎麼處置：它依 chained 有沒有
-    # 被佔、是不是守衛複本而拒絕、取代或串接，在這裡複製那些判定就是第二份（#2697）。
+    # ⛔ 不是 shim 時，訊息只說它和安裝器產生的 shim 不同並給處方，不預告安裝器會怎麼
+    # 處置：它依 chained 有沒有被佔、是不是守衛複本而拒絕、取代或串接，在這裡複製那些
+    # 判定就是第二份（#2697）。
     if not hook.is_file():
         if hook.exists() or hook.is_symlink():
             return False, (
-                f"{hook} 不是一般檔案（目錄，或指向不存在之處的連結）。先看清楚它是"
-                "什麼並移走，再跑 install_prepush_hook.sh。"
+                f"{hook} 不是一般檔案。先看清楚它是什麼並移走，再跑"
+                " install_prepush_hook.sh。"
             )
         return False, f"{hook} 不存在。跑 install_prepush_hook.sh 安裝守衛。"
     try:
@@ -1129,11 +1130,12 @@ def _prepush_guards_wired() -> Tuple[Optional[bool], str]:
         if not os.access(hook, os.X_OK):
             return False, (
                 f"{hook} 是守衛 shim，但**沒有執行位元** ⇒ git 完全不會跑它"
-                "（只印一行可關掉的 hint）。重跑 install_prepush_hook.sh。"
+                "（只印可關掉的 hint）。重跑 install_prepush_hook.sh。"
             )
         return True, f"OK：{hook} 就是守衛 shim"
     return False, (
-        f"{hook} 不是守衛 shim。重跑 install_prepush_hook.sh，並照它的輸出處理。"
+        f"{hook} 與安裝器產生的守衛 shim 不同。重跑 install_prepush_hook.sh，"
+        "並照它的輸出處理。"
     )
 
 
@@ -1147,7 +1149,7 @@ def check_local_hooks(*, run_precommit: bool = True) -> CheckResult:
             "量不到 pre-push 守衛在不在 push 路徑上",
             detail=(
                 f"{why}\n\n"
-                "這不代表守衛沒裝。請在 `git` 可執行、且位於 work tree 內的 shell 重跑"
+                "這不代表守衛沒裝。請在 `git` 可執行、且位於本 repo 內的 shell 重跑"
                 "（Windows：Git Bash）。"
             ),
         )
@@ -1158,8 +1160,9 @@ def check_local_hooks(*, run_precommit: bool = True) -> CheckResult:
             "pre-push 守衛沒有照安裝器的方式接上——無法確認擋直推 main 那道閘門還在",
             detail=(
                 f"{why}\n\n"
-                "修法（一次性、可重複跑；在 Git Bash 或 Linux shell 裡跑——Windows 的 "
-                "PowerShell／cmd 裡 `bash` 可能是 WSL，在 linked worktree 會失敗）：\n"
+                "修法：照上面那段做。其中的安裝指令（一次性、可重複跑；在 Git Bash 或 "
+                "Linux shell 裡跑——Windows 的 PowerShell／cmd 裡 `bash` 可能是 WSL，"
+                "在 linked worktree 會失敗）：\n"
                 "    bash scripts/ops/install_prepush_hook.sh\n"
                 "⛔ 不要改用 `pre-commit install --hook-type pre-push`：它不會把"
                 "守衛裝上，而且只要設了 core.hooksPath 就直接 rc=1 拒絕安裝。\n"
