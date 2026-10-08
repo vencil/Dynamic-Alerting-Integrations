@@ -3,9 +3,11 @@
 maintenance_scheduler.py — Evaluate recurring maintenance schedules and create
 Alertmanager silences.
 
-Reads tenant configs with _state_maintenance.recurring schedules, evaluates
-which maintenance windows are currently active, and creates/extends
-Alertmanager silences accordingly.
+Reads each tenant's _state_maintenance.recurring schedules as
+threshold-exporter resolves them (`da-guard effective`: platform-file
+`tenants:` overlays and subdirectory tenant files included, #2751),
+evaluates which maintenance windows are currently active, and
+creates/extends Alertmanager silences accordingly.
 
 Designed to run as a K8s CronJob every 5 minutes.
 
@@ -38,8 +40,16 @@ sys.path.insert(0, os.path.join(_THIS_DIR, '..'))  # Repo subdir layout
 from _lib_io import safe_label  # noqa: E402  (#1538 output-layer escaping)
 from _lib_python import (  # noqa: E402
     exit_on_yaml_file_error,
-    load_tenant_configs,
     http_request_with_retry,
+)
+# #2751: the tenants and their `_state_maintenance` are threshold-exporter's
+# own resolution (`da-guard effective`), not a Python re-read of the tree.
+from _lib_tenant_values import (  # noqa: E402
+    DaGuardError,
+    ParseFailedError,
+    exit_on_served_values_error,
+    load_effective_tree,
+    load_served_tree,
 )
 from _lib_exitcodes import EXIT_OK, EXIT_VIOLATION, EXIT_CALLER_ERROR  # noqa: E402
 
@@ -80,15 +90,45 @@ def load_recurring_schedules(config_dir):
     """Load all tenant recurring maintenance schedules from conf.d/.
 
     Returns {tenant: [{"cron": ..., "duration": ..., "reason": ...}]}.
+
+    The tenants and each one's ``_state_maintenance`` are what
+    ``da-guard effective`` resolves (#2751), so a schedule written in a
+    platform file's ``tenants:`` overlay or in a tenant file under a
+    subdirectory is read as threshold-exporter reads it; one written at the
+    top level of a ``_defaults`` file is not (the exporter does not inherit it
+    either).
+
+    Raises ``DaGuardNotFoundError``, ``ParseFailedError`` or ``DaGuardError``
+    (``_lib_tenant_values``) when da-guard is missing, fails, or a file the
+    exporter's load cannot read: fail-closed, never an empty schedule set.
     """
     if not Path(config_dir).is_dir():
         print(f"ERROR: config directory not found: {config_dir}", file=sys.stderr)
         return {}
 
+    try:
+        tree = load_effective_tree(config_dir)
+    except ParseFailedError as exc:
+        # `da-guard effective` names a file the load cannot decode but not
+        # why; served-values' stderr carries the exporter's parse reason
+        # (threshold_recommend reads it first for the same reason). Only on
+        # this path, so a tree served-values alone refuses does not stop
+        # the scheduler.
+        try:
+            load_served_tree(config_dir)
+        except ParseFailedError as with_reason:
+            raise with_reason from exc
+        except DaGuardError:
+            pass
+        raise
+    for s in tree.skipped:
+        print(f"  WARN: {safe_label(s.file)}: {safe_label(s.reason)} "
+              f"(threshold-exporter reads no tenant from it)", file=sys.stderr)
+
     schedules = {}
 
-    for tenant, overrides in load_tenant_configs(config_dir).items():
-        maint = overrides.get("_state_maintenance")
+    for tenant, te in tree.tenants.items():
+        maint = te.effective_config.get("_state_maintenance")
         if not isinstance(maint, dict):
             continue
 
@@ -100,8 +140,10 @@ def load_recurring_schedules(config_dir):
         for entry in recurring:
             if not isinstance(entry, dict):
                 continue
-            cron = entry.get("cron", "").strip()
-            duration = entry.get("duration", "").strip()
+            cron = entry.get("cron")
+            duration = entry.get("duration")
+            cron = cron.strip() if isinstance(cron, str) else ""
+            duration = duration.strip() if isinstance(duration, str) else ""
             if not cron or not duration:
                 print(f"  WARN: {safe_label(tenant)}: recurring entry missing "
                       f"cron/duration, skipping",
@@ -449,13 +491,15 @@ def build_parser():
 
 
 @exit_on_yaml_file_error  # #1654: unreadable tenant file → rc 2, named
+@exit_on_served_values_error  # #2751: da-guard missing or failing → rc 2, named
 def main():
     """Entry point.
 
     Exit codes:
       0 — success (silences created or none needed)
       1 — errors occurred
-      2 — fatal error (bad args, missing deps, a tenant file that cannot be read)
+      2 — fatal error (bad args, missing deps, a tenant file that cannot be read,
+          da-guard missing or failing)
     """
     try_utf8_stdout()
     parser = build_parser()
