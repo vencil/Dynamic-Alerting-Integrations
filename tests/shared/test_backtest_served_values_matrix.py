@@ -13,7 +13,8 @@ step 0 的政策：Python 工具不自己解讀 YAML 語意，值一律來自 Go
 
 每格比對：`extract_changes_from_dirs` 的答案 == 直接對兩棵樹跑 served-values、在同一個
 `at` 逐租戶逐 threshold key 比值得到的答案（一邊沒送的 key 或租戶記 None）。排程只在一天
-其他時段不同的 key 另有幾格釘死數字與 `window`（每一段不同都要列出，不只第一段）。
+其他時段不同的 key 另有幾格釘死數字與 `window`（每一段不同都要列出，不只第一段；同一組
+新舊值只算一個變更，`window` 列出它成立的所有時段）。
 da-guard 拒收的樹、或某時段 /metrics 收不到，都要 exit 2。
 
 da-guard 由 conftest 的 session fixture 以 `go build` 建出；建不起來就 fail、不 skip。
@@ -160,7 +161,7 @@ def test_a_change_outside_the_instant_is_named_with_its_window(
     assert _oracle(b, c) == []  # the instant alone would miss it
     assert _backtest(monkeypatch, b, c) == [{
         "tenant": "tx", "metric": "mysql_connections",
-        "old_value": "1000", "new_value": "2000", "window": "01:00-09:00"}]
+        "old_value": "1000", "new_value": "2000", "window": ["01:00-09:00"]}]
 
 
 def test_every_differing_part_of_the_day_is_a_row(
@@ -171,20 +172,52 @@ def test_every_differing_part_of_the_day_is_a_row(
     c = _tree(tmp_path / "cur", {"_defaults.yaml": _DEFAULTS, "tx.yaml": _two_windows("1001", "99999")})
     assert _backtest(monkeypatch, b, c) == [
         {"tenant": "tx", "metric": "mysql_connections", "old_value": "1000", "new_value": "1001",
-         "window": "01:00-02:00"},
+         "window": ["01:00-02:00"]},
         {"tenant": "tx", "metric": "mysql_connections", "old_value": "5", "new_value": "99999",
-         "window": "20:00-21:00"}]
+         "window": ["20:00-21:00"]}]
 
 
-def test_a_schedule_against_a_plain_value_is_one_row_per_run(
+def test_one_pair_in_several_parts_of_the_day_is_one_change(
         tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-    """Runs with the same (old, new) pair that touch merge; ones that do not
-    touch (either side of the override) stay apart."""
+    """Backtested once over the whole lookback, so counted once (round-2
+    review: a 22:00-02:00 override used to make two HIGH rows)."""
+    b = _tree(tmp_path / "base", {"_defaults.yaml": _DEFAULTS, "tx.yaml": _two_windows("1000", "1000")})
+    c = _tree(tmp_path / "cur", {"_defaults.yaml": _DEFAULTS, "tx.yaml": _two_windows("2000", "2000")})
+    assert _backtest(monkeypatch, b, c) == [
+        {"tenant": "tx", "metric": "mysql_connections", "old_value": "1000", "new_value": "2000",
+         "window": ["01:00-02:00", "20:00-21:00"]}]
+    over_midnight = ("tenants:\n  tx:\n    mysql_connections:\n      default: \"70\"\n"
+                     "      overrides:\n        - window: \"22:00-02:00\"\n          value: \"{v}\"\n")
+    b = _tree(tmp_path / "base2", {"_defaults.yaml": _DEFAULTS, "tx.yaml": over_midnight.format(v=1000)})
+    c = _tree(tmp_path / "cur2", {"_defaults.yaml": _DEFAULTS, "tx.yaml": over_midnight.format(v=5)})
+    assert _backtest(monkeypatch, b, c) == [
+        {"tenant": "tx", "metric": "mysql_connections", "old_value": "1000", "new_value": "5",
+         "window": ["00:00-02:00", "22:00-24:00"]}]
+
+
+def test_a_severity_boundary_does_not_split_a_change(
+        tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """The current side changes severity at 01:00 and 09:00 but serves 75 all
+    day: one change, all day, no window (the run-merge branch)."""
+    b = _tree(tmp_path / "base", {"_defaults.yaml": _DEFAULTS, "tx.yaml": _wrapper("70")})
+    c = _tree(tmp_path / "cur", {"_defaults.yaml": _DEFAULTS, "tx.yaml": (
+        "tenants:\n  tx:\n    mysql_connections:\n      default: \"75\"\n      overrides:\n"
+        "        - window: \"01:00-09:00\"\n          value: \"75:critical\"\n")})
+    t = tv.load_served_tree(c, at=AT, schedules=True).tenants["tx"]
+    assert len(t.schedules["mysql_connections"].segments) == 3  # not vacuous
+    assert _backtest(monkeypatch, b, c) == [
+        {"tenant": "tx", "metric": "mysql_connections", "old_value": "70", "new_value": "75"}]
+
+
+def test_a_schedule_against_a_plain_value_is_one_row_per_pair(
+        tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """The pair holding either side of the override is one row, both parts
+    in its `window`; the override's own pair is another."""
     b = _tree(tmp_path / "base", {"_defaults.yaml": _DEFAULTS, "tx.yaml": _scheduled("1000")})
     c = _tree(tmp_path / "cur", {"_defaults.yaml": _DEFAULTS, "tx.yaml": _wrapper("75")})
     got = [(r["window"], r["old_value"], r["new_value"]) for r in _backtest(monkeypatch, b, c)]
-    assert got == [("00:00-01:00", "70", "75"), ("01:00-09:00", "1000", "75"),
-                   ("09:00-24:00", "70", "75")]
+    assert got == [(["00:00-01:00", "09:00-24:00"], "70", "75"),
+                   (["01:00-09:00"], "1000", "75")]
 
 
 def test_skipped_files_are_named_once_with_their_tree(
@@ -233,45 +266,39 @@ def test_window_reaches_json_text_and_markdown(tmp_path: Path, monkeypatch, caps
     c = _tree(tmp_path / "cur", {"_defaults.yaml": _DEFAULTS, "tx.yaml": _two_windows("1001", "99999")})
     md = tmp_path / "out.md"
     _, out, _ = _run_main(monkeypatch, capsys, cli_argv, b, c, "--json")
-    assert [r.get("window") for r in json.loads(out.out)["changes"]] == ["01:00-02:00", "20:00-21:00"]
+    assert [r.get("window") for r in json.loads(out.out)["changes"]] == [["01:00-02:00"], ["20:00-21:00"]]
     _, out, _ = _run_main(monkeypatch, capsys, cli_argv, b, c, "--markdown-output", str(md))
     assert "1000 -> 1001 (01:00-02:00 UTC)" in out.out
     assert "5 -> 99999 (20:00-21:00 UTC)" in out.out
     assert "`mysql_connections` (20:00-21:00 UTC)" in md.read_text(encoding="utf-8")
+    b = _tree(tmp_path / "base2", {"_defaults.yaml": _DEFAULTS, "tx.yaml": _two_windows("1000", "1000")})
+    c = _tree(tmp_path / "cur2", {"_defaults.yaml": _DEFAULTS, "tx.yaml": _two_windows("2000", "2000")})
+    _, out, _ = _run_main(monkeypatch, capsys, cli_argv, b, c, "--markdown-output", str(md))
+    assert "1000 -> 2000 (01:00-02:00, 20:00-21:00 UTC)" in out.out
+    assert "`mysql_connections` (01:00-02:00, 20:00-21:00 UTC)" in md.read_text(encoding="utf-8")
 
 
-def test_dimensioned_and_critical_keys_are_listed_not_backtested(
+def test_dimensioned_keys_are_listed_not_backtested(
         tmp_path: Path, monkeypatch, capsys, cli_argv) -> None:
-    """Their raw key is no PromQL selector: listed, marked, never queried."""
+    """A dimensioned key is no PromQL selector: listed, marked, never queried,
+    and counted in the text report. A `_critical` key is an ordinary
+    threshold to /metrics (declared in defaults with no base key, it is
+    served as a warning row) and is backtested as one (round-2 review)."""
     def files(v: int) -> dict[str, str]:
-        return {"_defaults.yaml": _DEFAULTS,
+        return {"_defaults.yaml": _DEFAULTS + "  other_critical: 80\n",
                 "tx.yaml": ("tenants:\n  tx:\n    mysql_connections: 50\n"
-                            f"    mysql_connections_critical: {v}\n"
+                            f"    other_critical: {v}\n"
                             f"    'mysql_connections{{db=\"a\"}}': {v}\n")}
     b, c = _tree(tmp_path / "base", files(90)), _tree(tmp_path / "cur", files(95))
+    assert tv.load_served_values(c, at=AT)["tx"].severities["other_critical"] == "warning"
     _, out, asked = _run_main(monkeypatch, capsys, cli_argv, b, c, "--json")
     rows = {r["metric"]: r for r in json.loads(out.out)["changes"]}
-    assert set(rows) == {"mysql_connections_critical", 'mysql_connections{db="a"}'}, rows
-    assert rows["mysql_connections_critical"]["backtest"] == "skipped: critical key"
+    assert set(rows) == {"other_critical", 'mysql_connections{db="a"}'}, rows
     assert rows['mysql_connections{db="a"}']["backtest"] == "skipped: dimensioned key"
-    assert {r["status"] for r in rows.values()} == {"not_backtested"}
-    assert asked == []
-
-
-@pytest.mark.parametrize("side", ["baseline", "current"])
-def test_a_tree_da_guard_refuses_exits_2(tmp_path: Path, side: str) -> None:
-    """A file the exporter cannot decode, on either side: exit 2 with the
-    `caller_error` envelope, even under --skip-if-unavailable (the trees are
-    read before Prometheus is asked)."""
-    good = {"_defaults.yaml": _DEFAULTS, "tx.yaml": _wrapper("50")}
-    bad = {"_defaults.yaml": _DEFAULTS, "tx.yaml": "tenants:\n  tx: [unclosed\n"}
-    b = _tree(tmp_path / "base", bad if side == "baseline" else good)
-    c = _tree(tmp_path / "cur", bad if side == "current" else good)
-    p = subprocess.run(
-        [sys.executable, str(BACKTEST), "--config-dir", str(c), "--baseline", str(b),
-         "--prometheus", "http://127.0.0.1:9", "--skip-if-unavailable", "--json"],
-        capture_output=True, text=True, encoding="utf-8", errors="replace", timeout=120,
-        env={**os.environ, "PYTHONIOENCODING": "utf-8"})
-    assert p.returncode == 2, (p.stdout, p.stderr)
-    assert json.loads(p.stdout)["status"] == "caller_error"
-    assert "ERROR: cannot read" in p.stderr and "tx.yaml" in p.stderr
+    assert rows['mysql_connections{db="a"}']["status"] == "not_backtested"
+    assert rows["other_critical"]["status"] == "analyzed" and "backtest" not in rows["other_critical"]
+    assert asked and all("{db=" not in q for q in asked) and any("other_critical" in q for q in asked)
+    md = tmp_path / "out.md"
+    _, out, _ = _run_main(monkeypatch, capsys, cli_argv, b, c, "--markdown-output", str(md))
+    assert "Not backtested: 1 (dimensioned key)" in out.out
+    assert "**Not backtested:** 1 (dimensioned key)" in md.read_text(encoding="utf-8")

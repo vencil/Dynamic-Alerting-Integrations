@@ -588,7 +588,8 @@ def extract_changes_from_dirs(config_dir, baseline_dir):
     """Threshold changes between two conf.d trees, as /metrics serves them.
 
     Returns list of dicts: [{tenant, metric, old_value, new_value}, ...],
-    plus `window` on a change that holds in part of the day only.
+    plus `window` (a list of `"HH:MM-HH:MM"`, UTC) on a change that holds
+    in part of the day only.
 
     #2119: both trees are read by the exporter (`da-guard served-values`),
     never by re-reading YAML here, so a change written in `_platform.yaml`,
@@ -602,11 +603,11 @@ def extract_changes_from_dirs(config_dir, baseline_dir):
       tenant added / removed) has None on the other side — the shape
       `backtest_change` already reads as "enabled" / "disabled".
     * Values are compared over the whole UTC day (`schedules`, both trees
-      read at the same instant). A key that differs the same way all day is
-      one row with no `window`. Otherwise every part of the day over which
-      it differs one way is a row of its own, its `window`
-      (`"HH:MM-HH:MM"`, UTC) naming that part; a run is not joined across
-      midnight, so a window wrapping it is two rows.
+      read at the same instant). One row per (old, new) pair a key takes:
+      `window` lists every part of the day the pair holds in, and is absent
+      when it holds all day. A pair is backtested once, over the whole
+      lookback (the Prometheus query is not restricted to its windows), so
+      one change split across parts of the day is not counted twice.
 
     Raises what `load_served_tree` raises (da-guard missing, stale or
     failing; a file it cannot decode or read), and `ServedValuesError` for a
@@ -630,11 +631,14 @@ def extract_changes_from_dirs(config_dir, baseline_dir):
         for key in sorted(keys):
             runs = _differing_runs(_served_day(old_tv, key, "baseline"),
                                    _served_day(new_tv, key, "current"))
+            pairs = {}
             for start, end, old_v, new_v in runs:
+                pairs.setdefault((old_v, new_v), []).append((start, end))
+            for (old_v, new_v), spans in pairs.items():
                 change = {"tenant": tenant, "metric": key,
                           "old_value": old_v, "new_value": new_v}
-                if (start, end) != (0, _DAY_MINUTES):
-                    change["window"] = f"{_hhmm(start)}-{_hhmm(end)}"
+                if spans != [(0, _DAY_MINUTES)]:
+                    change["window"] = [f"{_hhmm(s)}-{_hhmm(e)}" for s, e in spans]
                 changes.append(change)
 
     return changes
@@ -982,13 +986,10 @@ def not_backtestable(metric):
 
     #2119: `backtest_change` asks Prometheus for `<key>{tenant="..."}`. A
     dimensioned key (`mysql_connections{db="a"}`) would make that selector
-    invalid, and a `<base>_critical` key names no series of its own, so
-    either is listed in the report as not backtested rather than queried
-    as a raw string. Building selectors for them is not done here."""
+    invalid, so it is listed in the report as not backtested rather than
+    queried as a raw string. Building selectors for it is not done here."""
     if "{" in metric:
         return "dimensioned key"
-    if metric.endswith("_critical"):
-        return "critical key"
     return None
 
 
@@ -1156,6 +1157,16 @@ def generate_report(results, lookback):
     }
 
 
+def _not_backtested_counts(changes):
+    """`"N (reason), ..."` for the changes listed but not backtested, or ""."""
+    reasons = {}
+    for c in changes:
+        if c.get("status") == "not_backtested":
+            reason = c["backtest"].removeprefix("skipped: ")
+            reasons[reason] = reasons.get(reason, 0) + 1
+    return ", ".join(f"{n} ({r})" for r, n in reasons.items())
+
+
 def print_text_report(report):
     """Print human-readable backtest report."""
     print()
@@ -1170,6 +1181,9 @@ def print_text_report(report):
     print(f"  Risk: {rs['HIGH']} HIGH, {rs['MEDIUM']} MEDIUM, {rs['LOW']} LOW")
     if report["no_data"] > 0:
         print(f"  No data: {report['no_data']} (metric not found in Prometheus)")
+    skipped = _not_backtested_counts(report["changes"])
+    if skipped:
+        print(f"  Not backtested: {skipped}")
     print()
 
     for change in report["changes"]:
@@ -1177,7 +1191,7 @@ def print_text_report(report):
         marker = "!!!" if risk == "HIGH" else " ! " if risk == "MEDIUM" else "   "
         old_v = change["old_value"] or "(none)"
         new_v = change["new_value"] or "(none)"
-        window = f" ({change['window']} UTC)" if change.get("window") else ""
+        window = f" ({', '.join(change['window'])} UTC)" if change.get("window") else ""
         print(f"  {marker} [{risk:6s}] {safe_label(change['tenant'])}/"
               f"{safe_label(change['metric'])}: "
               f"{old_v} -> {new_v}{window}")
@@ -1193,6 +1207,9 @@ def generate_markdown(report):
     lines.append("")
     lines.append(f"**Lookback:** {report['lookback']} | "
                  f"**Analyzed:** {report['analyzed']}/{report['total_changes']}")
+    skipped = _not_backtested_counts(report["changes"])
+    if skipped:
+        lines.append(f"\n**Not backtested:** {skipped}")
 
     rs = report["risk_summary"]
     if rs["HIGH"] > 0:
@@ -1205,7 +1222,7 @@ def generate_markdown(report):
     for c in sorted(report["changes"], key=lambda x: {"HIGH": 0, "MEDIUM": 1, "LOW": 2, "UNKNOWN": 3}.get(x["risk"], 9)):
         old_v = c["old_value"] or "—"
         new_v = c["new_value"] or "—"
-        window = f" ({c['window']} UTC)" if c.get("window") else ""
+        window = f" ({', '.join(c['window'])} UTC)" if c.get("window") else ""
         lines.append(f"| {c['risk']} | {c['tenant']} | `{c['metric']}`{window} | "
                      f"{old_v} | {new_v} | {c['message']} |")
 
