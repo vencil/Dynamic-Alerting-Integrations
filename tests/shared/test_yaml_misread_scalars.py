@@ -117,12 +117,19 @@ def test_explicit_tag_names_the_tag_not_quoting_alone(schemas):
     assert 'remove the tag and quote it: channel: "yes"' in msg, msg
 
 
-def test_explicit_local_tag_is_named_as_written(schemas):
-    """盲審續輪 1：本地 tag `!foo` 照原樣寫出，不寫成 `!!!foo`。"""
+@pytest.mark.parametrize("written, shown", [
+    ("!foo yes", "!foo yes"),
+    ("!foo:bar yes", "!foo:bar yes"),
+    ("!<tag:example.com,2000:x> yes", "!<tag:example.com,2000:x> yes"),
+    ("!<tag:yaml.org,2002:int> 5", "!!int 5"),
+    ("!!python/str yes", "!!python/str yes"),
+])
+def test_explicit_tag_is_named_as_written(schemas, written, shown):
+    """盲審續輪 1／2：tag 照作者寫法印出（本地 tag 不加 `!!`，含 `:` 的 tag 不被截斷）。"""
     text = ("tenants:\n  t1:\n    _routing:\n      receiver:\n        type: slack\n"
-            "        channel: !foo yes\n")
+            f"        channel: {written}\n")
     (hit,) = _hits(text, schemas)
-    assert "explicit `!foo yes`" in hit.message() and "!!!" not in hit.message(), hit.message()
+    assert f"explicit `{shown}`" in hit.message(), hit.message()
 
 def test_defaults_routing_blocks_follow_the_cross_file_ref(schemas):
     """`_routing_defaults` / `_routing_enforced` in `_defaults.yaml` are typed

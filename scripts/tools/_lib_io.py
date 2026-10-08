@@ -573,11 +573,12 @@ class MisreadScalar:
     __slots__ = ("line", "column", "path", "text", "resolved", "explicit")
 
     def __init__(self, line: int, column: int, path: str, text: str,
-                 resolved: str, explicit: bool = False) -> None:
+                 resolved: str, explicit: str = "") -> None:
         self.line, self.column = line, column
         self.path, self.text, self.resolved = path, text, resolved
-        #: written with an explicit tag (`!!bool yes`): quoting alone keeps it
-        #: a boolean, so the remedy names the tag too (#2509 blind review 5).
+        #: the explicit tag as written (`!!bool`, `!foo`, `!<tag:x.com,2000:y>`),
+        #: "" when there is none: quoting alone keeps such a value non-string,
+        #: so the remedy names the tag too (#2509 blind review 5).
         self.explicit = explicit
 
     def message(self) -> str:
@@ -592,11 +593,9 @@ class MisreadScalar:
                     f"no value — but the schema requires a string for this "
                     f"field: write the value, quoted, or remove the key")
         if self.explicit:
-            # A local tag (`!foo`) keeps its own `!`; a core tag is `!!name`.
-            tag = self.resolved if self.resolved.startswith("!") else f"!!{self.resolved}"
-            return (f"{self.path}: explicit `{tag} {self.text}` is a "
-                    f"YAML {self.resolved}, not the string the schema requires for "
-                    f"this field — remove the tag and quote it: {written}")
+            return (f"{self.path}: explicit `{self.explicit} {self.text}` is not "
+                    f"the string the schema requires for this field — remove the "
+                    f"tag and quote it: {written}")
         return (f"{self.path}: unquoted {self.text!r} is read by PyYAML as "
                 f"YAML {self.resolved}, not as the string the schema requires "
                 f"for this field (the Go readers and Alertmanager can read "
@@ -733,6 +732,17 @@ def schema_scalar_types(cands: list[tuple[dict, str]]) -> Optional[frozenset]:
     return frozenset(types & _JSON_SCALAR_TYPES) if constrained else None
 
 
+_YAML_CORE_TAG_PREFIX = "tag:yaml.org,2002:"
+
+
+def _tag_as_written(tag: str) -> str:
+    """A resolved tag in the shorthand an author writes: `!!bool` for a core
+    tag, `!foo` for a local one, `!<uri>` for any other global tag."""
+    if tag.startswith(_YAML_CORE_TAG_PREFIX):
+        return "!!" + tag[len(_YAML_CORE_TAG_PREFIX):]
+    return tag if tag.startswith("!") else f"!<{tag}>"
+
+
 def find_misread_scalars(root: Optional["yaml.Node"], schema: dict,
                          schemas: Optional[dict[str, Any]] = None,
                          schema_name: str = "") -> list[MisreadScalar]:
@@ -755,7 +765,7 @@ def find_misread_scalars(root: Optional["yaml.Node"], schema: dict,
         found.append(MisreadScalar(
             node.start_mark.line + 1, node.start_mark.column + 1,
             path or "/", node.value, node.tag.rsplit(":", 1)[-1],
-            bool(getattr(node, "go_explicit_tag", False))))
+            _tag_as_written(node.tag) if getattr(node, "go_explicit_tag", False) else ""))
     found.sort(key=lambda m: (m.line, m.column))
     return found
 
