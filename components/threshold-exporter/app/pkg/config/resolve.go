@@ -468,6 +468,9 @@ func (c *ThresholdConfig) resolveBaseRows(tenant string, defaults map[string]flo
 		// emits da_config_event so a cleanup PR removes the stale YAML.
 		if sv, exists := overrides[metricKey]; exists && !isThresholdExpired(sv, now) {
 			override := sv.resolveValue(now, logf)
+			if rec != nil {
+				rec.noteInvalidWindows(tenant, metricKey, sv)
+			}
 			lower := strings.TrimSpace(strings.ToLower(override))
 
 			// State 3: disable
@@ -624,6 +627,9 @@ func (c *ThresholdConfig) resolveDeclaredRows(tenant string, defaults map[string
 		}
 
 		override := sv.resolveValue(now, logf)
+		if rec != nil {
+			rec.noteInvalidWindows(tenant, metricKey, sv)
+		}
 		lower := strings.TrimSpace(strings.ToLower(override))
 		// State 3: disable. Note that for a declared key this is
 		// indistinguishable in OUTPUT from "never set" — both emit nothing.
@@ -696,6 +702,9 @@ func (c *ThresholdConfig) resolveCriticalRows(tenant string, defaults map[string
 		// would go SILENT, the very thing PREVENT avoids). expires here is a no-op;
 		// ValidateTenantKeys warns the author. Honored only in resolveBaseRows.
 		override := sv.resolveValue(now, logf)
+		if rec != nil {
+			rec.noteInvalidWindows(tenant, key, sv)
+		}
 		lower := strings.TrimSpace(strings.ToLower(override))
 		if isDisabled(lower) {
 			continue
@@ -762,6 +771,9 @@ func (c *ThresholdConfig) resolveDimensionalRows(tenant string, overrides map[st
 		// SILENT). expires here is a no-op; ValidateTenantKeys warns. See
 		// resolveBaseRows for the honored path.
 		valStr := sv.resolveValue(now, logf)
+		if rec != nil {
+			rec.noteInvalidWindows(tenant, key, sv)
+		}
 		lower := strings.TrimSpace(strings.ToLower(valStr))
 		if isDisabled(lower) {
 			continue

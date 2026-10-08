@@ -143,8 +143,15 @@ func matchTimeWindowLogf(window string, now time.Time, logf func(format string, 
 }
 
 // parseTimeWindow parses a UTC "HH:MM-HH:MM" window into its start and end
-// minute of the day. ok is false for a window that is not of that form; logf
-// (nil = silent) is told why, in the words matchTimeWindow always used.
+// minute of the day. ok is false for a window that is not of that form, and
+// for one whose start equals its end (#2065: such a window matches no minute,
+// so it was never what its author meant — it is refused, and told, like any
+// other window that never applies); logf (nil = silent) is told why, in the
+// words matchTimeWindow always used.
+//
+// ⛔ ok == false is also the not_served verdict window_invalid
+// (recordInvalidWindows): the exporter's load-time report, da-guard's
+// value_not_served and validate-config read this function's answer.
 func parseTimeWindow(window string, logf func(format string, args ...any)) (start, end int, ok bool) {
 	if logf == nil {
 		logf = func(string, ...any) {}
@@ -160,12 +167,18 @@ func parseTimeWindow(window string, logf func(format string, args ...any)) (star
 		logf("WARN: invalid time window %q: start=%v end=%v", window, err1, err2)
 		return 0, 0, false
 	}
-	return startH*60 + startM, endH*60 + endM, true
+	start, end = startH*60+startM, endH*60+endM
+	if start == end {
+		logf("WARN: invalid time window %q: start equals end, so it matches no minute", window)
+		return 0, 0, false
+	}
+	return start, end, true
 }
 
 // windowContains reports whether minute (of the UTC day) falls in the window
-// [start, end); a window whose start is after its end crosses midnight, and
-// one whose start equals its end contains no minute.
+// [start, end); a window whose start is after its end crosses midnight. One
+// whose start equals its end would contain no minute; parseTimeWindow refuses
+// it (#2065), so it never reaches here.
 func windowContains(start, end, minute int) bool {
 	if start <= end {
 		// Same day: e.g., 01:00-09:00

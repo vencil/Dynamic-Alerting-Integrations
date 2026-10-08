@@ -28,6 +28,10 @@ package config
 //     serves the platform default instead (rejectRecorder).
 //   - value_unparsed_dropped: the critical / dimensional / declared phase
 //     cannot parse the value and serves no row for it (rejectRecorder).
+//   - window_invalid: a `window:` of the value's schedule is one
+//     parseTimeWindow refuses — the window the resolver WARNs about and
+//     matches at no minute (#2065; rejectRecorder, at the phases' resolveValue
+//     call, the read that WARNs).
 //   - undeliverable: a subtree key the output plane never iterates (#1976,
 //     FlatBuild.UnreachableValues through undeliverableThresholds).
 //   - root_null_undeclared: the root writes the key as null (#2518,
@@ -60,6 +64,7 @@ const (
 	NotServedValueRejected         = "value_rejected"
 	NotServedValueUnparsed         = "value_unparsed"
 	NotServedValueUnparsedDropped  = "value_unparsed_dropped"
+	NotServedWindowInvalid         = "window_invalid"
 	NotServedUndeliverable         = "undeliverable"
 	NotServedRootNullUndeclared    = "root_null_undeclared"
 )
@@ -185,17 +190,33 @@ type UnreadKey struct {
 }
 
 // rejectRecorder collects, while the resolver runs, the tenant values it
-// cannot parse (#2296): tenant → canonical key → reason (NotServedValueUnparsed
-// or NotServedValueUnparsedDropped). nil = record nothing, which is what every
-// scrape passes: the record sites sit inside the resolver's existing WARN
-// branches, so the steady state pays one nil check per unparseable value.
+// cannot parse (#2296): tenant → canonical key → reason (NotServedValueUnparsed,
+// NotServedValueUnparsedDropped, or NotServedWindowInvalid from
+// recordInvalidWindows). nil = record nothing, which is what every scrape
+// passes: the record sites sit inside the resolver's existing WARN branches,
+// so the steady state pays one nil check per unparseable value.
 type rejectRecorder struct {
 	byTenant map[string]map[string]string
 }
 
-// note records key of tenant under reason; a dropped row outranks a value
-// the resolver fell back from (a key read at several minutes keeps the
-// stronger verdict).
+// recordedRank orders the reasons a recorder keeps for one key: a dropped
+// row outranks a value the resolver fell back from, which outranks a window
+// that never applies (#2065) — a key read at several minutes, or with both a
+// bad value and a bad window, keeps the strongest verdict.
+func recordedRank(reason string) int {
+	switch reason {
+	case NotServedValueUnparsedDropped:
+		return 3
+	case NotServedValueUnparsed:
+		return 2
+	case NotServedWindowInvalid:
+		return 1
+	}
+	return 0
+}
+
+// note records key of tenant under reason unless the key already holds a
+// verdict of the same or a higher rank (recordedRank).
 func (r *rejectRecorder) note(tenant, key, reason string) {
 	if r == nil {
 		return
@@ -208,21 +229,95 @@ func (r *rejectRecorder) note(tenant, key, reason string) {
 		m = map[string]string{}
 		r.byTenant[tenant] = m
 	}
-	if m[key] == NotServedValueUnparsedDropped {
+	if cur, ok := m[key]; ok && recordedRank(cur) >= recordedRank(reason) {
 		return
 	}
 	m[key] = reason
 }
 
-// recordUnparsed resolves cfg at every ScheduleCuts minute of the UTC day
-// with a recorder and returns what it recorded: the verdict does not depend
-// on the time of day the request is made. Silent (logf nil).
+// ValueNotServedAsWritten reports whether a NotServed verdict on key is about
+// a threshold value as written that /metrics does not serve as written
+// (#2065): reason is value_unparsed, value_unparsed_dropped, window_invalid
+// or value_rejected, and key is a threshold key — not `_`-prefixed
+// ("not reserved ⇒ is a threshold", the tenant schema's rule; a reserved
+// key a subtree `_defaults.yaml` writes is refused by the same overlay and
+// named by da-guard's subtree_default_reserved_key / routing checks). The
+// exporter's da_config_values_not_served and da-guard's value_not_served
+// both select with it.
+func ValueNotServedAsWritten(key, reason string) bool {
+	if strings.HasPrefix(key, "_") {
+		return false
+	}
+	switch reason {
+	case NotServedValueUnparsed, NotServedValueUnparsedDropped, NotServedWindowInvalid, NotServedValueRejected:
+		return true
+	}
+	return false
+}
+
+// ValuesNotServed is what the resolver behind /metrics records about the
+// tenant values of c it does not serve as written, over the whole UTC day:
+// tenant → canonical key → NotServedValueUnparsed,
+// NotServedValueUnparsedDropped or NotServedWindowInvalid (#2065). It is
+// recordUnparsed — the table `da-guard effective`'s not_served reads — so the
+// exporter's load-time report and da-guard cannot name different values.
+// Silent; c is not modified. nil when nothing is recorded.
+//
+// ⚠️ Tenant values only: a subtree `_defaults.yaml` value the build refused
+// is FlatBuild.RejectedChainValues, and the other NotServed reasons are the
+// build's, not the resolver's.
+func (c *ThresholdConfig) ValuesNotServed(now time.Time) map[string]map[string]string {
+	return recordUnparsed(c, now)
+}
+
+// recordUnparsed resolves cfg with a recorder over every minute of the UTC
+// day at which some tenant value may resolve differently, and returns what it
+// recorded, so the verdict does not depend on the time of day the request is
+// made. Silent (logf nil).
+//
+// A tenant's rows depend only on its own map and the config-wide settings,
+// so the day is read per tenant. The whole config is resolved once as
+// written, at now: that is every reading of a tenant without a schedule, and
+// where the phases read each scheduled value's windows (noteInvalidWindows;
+// AtMinuteOfDay drops the schedules). Each tenant with a schedule is then
+// resolved alone (a one-tenant copy) at the start of each segment of its own
+// day (tenantScheduleCuts). Resolving every tenant at the union of every
+// tenant's cuts records the same table
+// (TestRecordUnparsed_PerTenantCutsMatchUnionOfCuts) at the cost of
+// tenants × all cuts. (Grouping the tenants by their set of cuts was
+// measured on BenchmarkDiffAndReload_Hierarchical_1000_OneTenantChanged,
+// where every tenant shares one schedule: fewer allocations, more bytes and
+// time, so it is not done.)
 func recordUnparsed(cfg *ThresholdConfig, now time.Time) map[string]map[string]string {
 	rec := &rejectRecorder{}
-	for _, m := range cfg.ScheduleCuts() {
-		cfg.AtMinuteOfDay(m).resolveAtWithStats(now, nil, nil, rec)
+	cfg.resolveAtWithStats(now, nil, nil, rec)
+	var one ThresholdConfig
+	for tenant, overrides := range cfg.Tenants {
+		cuts := tenantScheduleCuts(overrides)
+		if cuts == nil {
+			continue
+		}
+		one = *cfg
+		one.Tenants = map[string]map[string]ScheduledValue{tenant: overrides}
+		for _, m := range cuts {
+			one.AtMinuteOfDay(m).resolveAtWithStats(now, nil, nil, rec)
+		}
 	}
 	return rec.byTenant
+}
+
+// noteInvalidWindows records NotServedWindowInvalid for key of tenant when a
+// `window:` of sv is one parseTimeWindow refuses — the window the resolver
+// WARNs about and matches at no minute. Called by the resolve phases right
+// where they read sv with resolveValue (the read that WARNs), only with a
+// recorder.
+func (r *rejectRecorder) noteInvalidWindows(tenant, key string, sv ScheduledValue) {
+	for _, o := range sv.Overrides {
+		if _, _, ok := parseTimeWindow(o.Window, nil); !ok {
+			r.note(tenant, key, NotServedWindowInvalid)
+			return
+		}
+	}
 }
 
 // servedVerdicts is one build's not-served tables, for the effective
@@ -242,6 +337,12 @@ type servedVerdicts struct {
 	all      bool
 	unparsed map[string]map[string]string
 	done     bool
+
+	// gate is set for ScopeEffective (da-guard's gate, #2065): the tables
+	// name what /metrics does not serve, but a chain file the build dropped
+	// is not read as an empty file — the gate keeps stopping on it
+	// (chainFileUnread).
+	gate bool
 }
 
 func newServedVerdicts(built *FlatBuild, all bool) *servedVerdicts {
@@ -302,7 +403,7 @@ func (v *servedVerdicts) unparsedOf(tenantID string) map[string]string {
 // read at all because it does not parse — the effective resolve then reads
 // it as an empty file and names it in ChainParseFailed.
 func (v *servedVerdicts) chainFileUnread(rel string) bool {
-	return v.parseFailed[rel]
+	return !v.gate && v.parseFailed[rel]
 }
 
 // candidates reports whether any table could name a key of this tenant, so
@@ -349,6 +450,8 @@ func (v *servedVerdicts) notServed(tenantID string, view map[string]any, ks map[
 			// At the root, the default /metrics falls back to IS the value
 			// the effective config shows.
 			reason = NotServedValueUnparsed
+		case unparsed[canon] == NotServedWindowInvalid:
+			reason = NotServedWindowInvalid
 		case v.undeliverable[tenantID][k]:
 			reason = NotServedUndeliverable
 		case v.rootNull[tenantID][k]:

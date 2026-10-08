@@ -63,7 +63,8 @@ import (
 // @Description names each key whose shown value /metrics does not serve,
 // @Description with the exporter's own reason (parse_failed,
 // @Description root_defaults_unwrapped, value_rejected, value_unparsed,
-// @Description value_unparsed_dropped, undeliverable, root_null_undeclared)
+// @Description value_unparsed_dropped, window_invalid, undeliverable,
+// @Description root_null_undeclared)
 // @Description and the file of the value shown. chain_parse_failed lists the
 // @Description defaults_chain files with a syntax error the exporter does not
 // @Description read; they are read as empty and the tenant is still answered

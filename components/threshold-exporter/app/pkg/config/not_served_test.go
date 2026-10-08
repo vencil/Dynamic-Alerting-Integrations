@@ -83,6 +83,43 @@ func TestNotServed_Table(t *testing.T) {
 			"tx.yaml": "tenants:\n  tx:\n    mysql_connections:\n      default: \"60\"\n" +
 				"      overrides:\n        - window: \"00:00-00:01\"\n          value: \"abc\"\n",
 		}, want: map[string]NotServedKey{"mysql_connections": ns(NotServedValueUnparsed, "tx.yaml")}},
+		// #2065: a window parseTimeWindow refuses never applies.
+		{name: "window separator not a dash", files: map[string]string{
+			"_defaults.yaml": "defaults:\n  mysql_connections: 30\n",
+			"tx.yaml": "tenants:\n  tx:\n    mysql_connections:\n      default: \"60\"\n" +
+				"      overrides:\n        - window: \"01:00~09:00\"\n          value: \"1000\"\n",
+		}, want: map[string]NotServedKey{"mysql_connections": ns(NotServedWindowInvalid, "tx.yaml")}},
+		{name: "window hour 24", files: map[string]string{
+			"_defaults.yaml": "defaults:\n  mysql_connections: 30\n",
+			"tx.yaml": "tenants:\n  tx:\n    mysql_connections:\n      default: \"60\"\n" +
+				"      overrides:\n        - window: \"01:00-24:00\"\n          value: \"1000\"\n",
+		}, want: map[string]NotServedKey{"mysql_connections": ns(NotServedWindowInvalid, "tx.yaml")}},
+		{name: "window missing", files: map[string]string{
+			"_defaults.yaml": "defaults:\n  mysql_connections: 30\n",
+			"tx.yaml": "tenants:\n  tx:\n    mysql_connections:\n      default: \"60\"\n" +
+				"      overrides:\n        - value: \"1000\"\n",
+		}, want: map[string]NotServedKey{"mysql_connections": ns(NotServedWindowInvalid, "tx.yaml")}},
+		{name: "window start equals end", files: map[string]string{
+			"_defaults.yaml": "defaults:\n  mysql_connections: 30\n",
+			"tx.yaml": "tenants:\n  tx:\n    mysql_connections:\n      default: \"60\"\n" +
+				"      overrides:\n        - window: \"05:00-05:00\"\n          value: \"1000\"\n",
+		}, want: map[string]NotServedKey{"mysql_connections": ns(NotServedWindowInvalid, "tx.yaml")}},
+		{name: "window valid", files: map[string]string{
+			"_defaults.yaml": "defaults:\n  mysql_connections: 30\n",
+			"tx.yaml": "tenants:\n  tx:\n    mysql_connections:\n      default: \"60\"\n" +
+				"      overrides:\n        - window: \"22:00-06:00\"\n          value: \"1000\"\n",
+		}},
+		{name: "bad window in a subtree schedule", files: map[string]string{
+			"_defaults.yaml": "defaults:\n  mysql_connections: 30\n",
+			"sub/_defaults.yaml": "defaults:\n  mysql_connections:\n    default: \"60\"\n" +
+				"    overrides:\n      - window: \"01:00~09:00\"\n        value: \"1000\"\n",
+			"sub/tx.yaml": "tenants:\n  tx: {}\n",
+		}, want: map[string]NotServedKey{"mysql_connections": ns(NotServedWindowInvalid, "sub/_defaults.yaml")}},
+		{name: "bad window and an unparseable value", files: map[string]string{
+			"_defaults.yaml": "defaults:\n  mysql_connections: 30\n",
+			"tx.yaml": "tenants:\n  tx:\n    mysql_connections:\n      default: \"abc\"\n" +
+				"      overrides:\n        - window: \"05:00-05:00\"\n          value: \"1000\"\n",
+		}, want: map[string]NotServedKey{"mysql_connections": ns(NotServedValueUnparsed, "tx.yaml")}},
 		{name: "critical row dropped", files: map[string]string{
 			"_defaults.yaml": "defaults:\n  mysql_connections: 30\n",
 			"tx.yaml":        "tenants:\n  tx:\n    mysql_connections_critical: \"abc\"\n",
@@ -191,22 +228,47 @@ func TestNotServed_Table(t *testing.T) {
 	}
 }
 
-// TestNotServed_ScopeEffectiveFillsNone: the gate (ScopeEffective) does not
-// pay for the tables, and keeps stopping on an undecodable chain file.
-func TestNotServed_ScopeEffectiveFillsNone(t *testing.T) {
+// TestNotServed_ScopeEffectiveFillsNotServed: the gate (ScopeEffective)
+// names what /metrics does not serve, as EffectiveTree does (#2065: da-guard's
+// value_not_served reads it), and keeps stopping on an undecodable chain
+// file where EffectiveTree reads it as empty.
+func TestNotServed_ScopeEffectiveFillsNotServed(t *testing.T) {
 	t.Parallel()
 	tmp := t.TempDir()
 	testutil.WriteTree(t, tmp, map[string]string{
 		"conf.d/_defaults.yaml":     "defaults:\n  mysql_connections: 80\n",
-		"conf.d/sub/_defaults.yaml": "defaults: {mysql_connections: abc}\n",
+		"conf.d/sub/_defaults.yaml": "defaults: {mysql_connections: [1, 2]}\n",
 		"conf.d/sub/tx.yaml":        "tenants:\n  tx: {}\n",
 	})
-	got, err := ScopeEffective(filepath.Join(tmp, "conf.d"), "")
+	root := filepath.Join(tmp, "conf.d")
+	got, err := ScopeEffective(root, "")
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(got.Tenants) != 1 || got.Tenants[0].NotServed != nil {
-		t.Fatalf("ScopeEffective tenants %v: want tx with no NotServed", got.Tenants)
+	want := map[string]NotServedKey{"mysql_connections": {Reason: NotServedValueRejected, File: "sub/_defaults.yaml"}}
+	if len(got.Tenants) != 1 || !reflect.DeepEqual(got.Tenants[0].NotServed, want) {
+		t.Fatalf("ScopeEffective tenants %+v: want tx with NotServed %v", got.Tenants, want)
+	}
+	tree, err := EffectiveTree(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !reflect.DeepEqual(tree.Tenants[0].NotServed, got.Tenants[0].NotServed) {
+		t.Errorf("EffectiveTree NotServed %v, gate %v: want the same", tree.Tenants[0].NotServed, got.Tenants[0].NotServed)
+	}
+
+	broken := t.TempDir()
+	testutil.WriteTree(t, broken, map[string]string{
+		"conf.d/_defaults.yaml":     "defaults:\n  mysql_connections: 80\n",
+		"conf.d/sub/_defaults.yaml": "defaults: [unclosed\n",
+		"conf.d/sub/tx.yaml":        "tenants:\n  tx: {}\n",
+	})
+	broot := filepath.Join(broken, "conf.d")
+	if _, err := ScopeEffective(broot, ""); err == nil {
+		t.Error("ScopeEffective over an undecodable chain file: nil error, want the gate to stop")
+	}
+	if tr, err := EffectiveTree(broot); err != nil || len(tr.Tenants) != 1 || len(tr.Tenants[0].ChainParseFailed) != 1 {
+		t.Errorf("EffectiveTree over an undecodable chain file: %+v, %v; want tx with ChainParseFailed", tr, err)
 	}
 }
 

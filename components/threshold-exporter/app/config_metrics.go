@@ -30,6 +30,10 @@ package main
 //     (SetDefaultsParseFailures), unreadable by every walk
 //     (SetUnreadableFiles).
 //
+//   da_config_values_not_served            (GaugeVec, labels=[reason])  [#2065]
+//     reason ∈ valuesNotServedReasons
+//     re-Set by every commit (auditValuesNotServed).
+//
 //   da_config_defaults_change_noop_total   (Counter)
 //     incremented when a defaults file changed but no dependent tenant's
 //     merged_hash moved (ADR-017 "quiet defaults edit"). v2.8.0 Issue #61
@@ -134,6 +138,9 @@ type configMetrics struct {
 	// lookup. Keyed by the reason constants below.
 	unreadableFiles  map[string]prometheus.Gauge
 	defaultsUnusable map[string]prometheus.Gauge
+	// #2065: da_config_values_not_served's children, keyed by
+	// valuesNotServedReasons.
+	valuesNotServed map[string]prometheus.Gauge
 }
 
 // da_config_scan_failures_total{reason} label values (#2452, #2592). ⛔ A
@@ -298,9 +305,15 @@ func newConfigMetrics() *configMetrics {
 	for _, r := range defaultsUnusableReasons {
 		defaultsUnusable[r] = s.DefaultsUnusable.WithLabelValues(r)
 	}
+	// #2065: and so does da_config_values_not_served.
+	valuesNotServed := make(map[string]prometheus.Gauge, len(valuesNotServedReasons))
+	for _, r := range valuesNotServedReasons {
+		valuesNotServed[r] = s.ValuesNotServed.WithLabelValues(r)
+	}
 	return &configMetrics{
 		unreadableFiles:             unreadable,
 		defaultsUnusable:            defaultsUnusable,
+		valuesNotServed:             valuesNotServed,
 		set:                         s,
 		scanDuration:                s.ScanDuration,
 		reloadTriggers:              s.ReloadTriggers,
@@ -566,6 +579,20 @@ func (cm *configMetrics) IncFreeOSMemory() {
 // counter, and why the condition does not fail the load.
 func (cm *configMetrics) SetSubtreeUndeliverableTenants(n int) {
 	cm.subtreeUndeliverableTenants.Set(float64(n))
+}
+
+// SetValuesNotServed publishes da_config_values_not_served{reason} (#2065):
+// counts holds every reason of valuesNotServedReasons (countValuesNotServed).
+// Called from ConfigManager.auditValuesNotServed on every config commit,
+// including the healthy one, so a fixed tree reads 0 again. A reason outside
+// the closed set is ignored. Nil-receiver safe (see IncParseFailure).
+func (cm *configMetrics) SetValuesNotServed(counts map[string]int) {
+	if cm == nil {
+		return
+	}
+	for r, g := range cm.valuesNotServed {
+		g.Set(float64(counts[r]))
+	}
 }
 
 // SetConfigShape publishes the two whole-tree size maxima of the config

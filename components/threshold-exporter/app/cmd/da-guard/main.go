@@ -446,6 +446,7 @@ func buildCheckInput(scoped *config.ScopedTenants, f *flags) guard.CheckInput {
 	invalidIDs := make(map[string]string)
 	tenantOverrides := make(map[string]map[string]any)
 	newDefaultsByTenant := make(map[string]map[string]any)
+	var notServed map[string]map[string]config.NotServedKey
 
 	// #2280: the routing layers and the domain policies come from the conf.d
 	// tree at --config-dir (never --scope), as the route generator reads them.
@@ -548,6 +549,14 @@ func buildCheckInput(scoped *config.ScopedTenants, f *flags) guard.CheckInput {
 		if ec.MergedDefaults != nil {
 			newDefaultsByTenant[ec.TenantID] = ec.MergedDefaults
 		}
+		// #2065: what /metrics does not serve as the effective config shows
+		// it — ScopeEffective fills it as `da-guard effective` does.
+		if len(ec.NotServed) > 0 {
+			if notServed == nil {
+				notServed = map[string]map[string]config.NotServedKey{}
+			}
+			notServed[ec.TenantID] = ec.NotServed
+		}
 	}
 
 	required := splitNonEmpty(f.requiredFields)
@@ -583,6 +592,8 @@ func buildCheckInput(scoped *config.ScopedTenants, f *flags) guard.CheckInput {
 		RootNullUndeclared:     scoped.RootNullUndeclared,
 		// #2708: nulls inside a schedule with windows, in-scope only.
 		ScheduleNulls: scoped.ScheduleNulls,
+		// #2065: the effective configs' not_served, in-scope tenants only.
+		ValuesNotServed: notServed,
 	}
 }
 
