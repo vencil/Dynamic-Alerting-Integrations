@@ -2145,9 +2145,12 @@ def main() -> None:
     )
     args = parser.parse_args()
     # #2097 blind review 2 (E): before any mode branch — `--all` / `--diff`
-    # returned rc 0 with `--replaces` silently ignored.
-    if args.replaces and not args.what_if:
+    # returned rc 0 with `--replaces` silently ignored. `is not None`, not
+    # truthiness: `--replaces ''` was taken as "not given" (#2509 blind review 3).
+    if args.replaces is not None and not args.what_if:
         parser.error("--replaces requires --what-if")
+    if args.replaces == "":
+        parser.error("--replaces needs a path (got an empty string)")
 
     # Resolve conf.d path
     if args.conf_d:
@@ -2315,7 +2318,7 @@ def main() -> None:
             result = what_if_result(
                 scanner, tid, what_if_path, Path(args.what_if), what_if_data,
                 what_if_platform_doc,
-                replaces=Path(args.replaces).resolve() if args.replaces else None)
+                replaces=Path(args.replaces).resolve() if args.replaces is not None else None)
         except WhatIfError as e:
             print(f"❌ {e}", file=sys.stderr)
             sys.exit(EXIT_CALLER_ERROR)

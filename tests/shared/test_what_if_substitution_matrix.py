@@ -237,6 +237,24 @@ def test_replaces_requires_what_if(tmp_path, mode):
     assert "--replaces requires --what-if" in p.stderr, p.stderr
 
 
+@pytest.mark.parametrize("mode", [["--what-if", "COPY"], ["--all"]], ids=["what-if", "all"])
+def test_empty_replaces_is_refused_not_taken_as_absent(tmp_path, mode):
+    """盲審第 3 輪 B3-8：`--replaces ''` 原本以 truthiness 判斷被當成「沒給」——`--all` rc 0、
+    `--what-if` 走 append-external rc 0。現在 rc 2。"""
+    conf_d = _tree(tmp_path, True)
+    copy = tmp_path / "copy.yaml"
+    copy.write_text("defaults:\n  pg_connections: 41\n", encoding="utf-8")
+    args = [str(copy) if a == "COPY" else a for a in mode]
+    tid = [] if mode == ["--all"] else ["t1"]
+    p = subprocess.run(
+        [sys.executable, str(DESCRIBE), *tid, "--conf-d", str(conf_d), *args, "--replaces", ""],
+        capture_output=True, text=True, encoding="utf-8", errors="replace", timeout=120)
+    assert p.returncode == 2, (p.returncode, p.stdout, p.stderr)
+    assert p.stdout == "", p.stdout
+    want = "--replaces requires --what-if" if mode == ["--all"] else "--replaces needs a path"
+    assert want in p.stderr, p.stderr
+
+
 def test_cli_outside_the_tree_still_appends(tmp_path):
     """對照組：樹外的檔維持 append-external（整份當最高層 defaults）。"""
     conf_d = _tree(tmp_path, False)

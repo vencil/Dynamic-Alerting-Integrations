@@ -818,33 +818,31 @@ def find_yaml11_bool_words(root: Optional["yaml.Node"], schema: dict,
 
 class GoRejectedBoolTag:
     """An explicit ``!!bool`` whose text yaml.v3 does not take (#2509 review
-    F4). ``line`` 1-based; ``path`` as for :class:`MisreadScalar`;
-    ``document`` the 0-based index of the YAML document holding it."""
+    F4). ``line`` 1-based; ``path`` as for :class:`MisreadScalar`."""
 
-    __slots__ = ("line", "path", "text", "document")
+    __slots__ = ("line", "path", "text")
 
-    def __init__(self, line: int, path: str, text: str, document: int = 0) -> None:
-        self.line, self.path, self.text, self.document = line, path, text, document
+    def __init__(self, line: int, path: str, text: str) -> None:
+        self.line, self.path, self.text = line, path, text
 
-    def message(self, fatal: bool) -> str:
-        """*fatal*: a position where the exporter is measured to refuse the
-        whole file (:func:`split_go_rejected_bool_tags`)."""
-        head = (f"{self.path}: explicit `!!bool {self.text}` — yaml.v3 (the exporter's "
-                f"YAML library) accepts only true / True / TRUE / false / False / FALSE "
-                f"under `!!bool`")
-        if fatal:
-            return (f"{head}, so the exporter cannot decode this file (da-guard lists it "
-                    f"under parse_failed and exits 3) — write true or false without the tag")
-        return f"{head} — write true or false without the tag"
+    def message(self) -> str:
+        """⛔ A WARN, and no claim about what the exporter does with the file:
+        three Python rebuilds of "which file, which document, which key" each
+        failed blind review (#2509 rounds 1-3). Whether the exporter can read
+        the file is da-guard's verdict (its parse_failed), which
+        `validate_config` already reports with the exporter's reason."""
+        return (f"{self.path}: explicit `!!bool {self.text}` — yaml.v3 (the exporter's "
+                f"YAML library) does not accept it (only true / True / TRUE / false / "
+                f"False / FALSE under `!!bool`); write true or false without the tag. "
+                f"Run `make validate-config`: it asks da-guard whether the exporter can "
+                f"read this file")
 
 
-def find_go_rejected_bool_tags(root: Optional["yaml.Node"],
-                               document: int = 0) -> list[GoRejectedBoolTag]:
+def find_go_rejected_bool_tags(root: Optional["yaml.Node"]) -> list[GoRejectedBoolTag]:
     """Every scalar under *root* written with an explicit ``!!bool`` tag
     (quoted or not) whose text is not one of yaml.v3's six boolean texts.
-    Field-independent. Needs nodes from :func:`compose_all_nodes` (the
-    ``go_explicit_tag`` mark); *document* is recorded on each hit. Whether
-    a hit is an ERROR depends on where it is: :func:`split_go_rejected_bool_tags`."""
+    Field- and position-independent; each hit is a WARN. Needs nodes from
+    :func:`compose_all_nodes` (the ``go_explicit_tag`` mark)."""
     found: list[GoRejectedBoolTag] = []
     seen: set[int] = set()
     stack: list[tuple["yaml.Node", str]] = [(root, "")] if root is not None else []
@@ -863,57 +861,9 @@ def find_go_rejected_bool_tags(root: Optional["yaml.Node"],
         elif (isinstance(node, yaml.ScalarNode) and node.tag == _YAML_BOOL_TAG
               and getattr(node, "go_explicit_tag", False)
               and node.value not in _YAML12_BOOL_TEXTS):
-            found.append(GoRejectedBoolTag(node.start_mark.line + 1, path or "/",
-                                           node.value, document))
+            found.append(GoRejectedBoolTag(node.start_mark.line + 1, path or "/", node.value))
     found.sort(key=lambda m: m.line)
     return found
-
-
-# #2509 blind review 2 (A / H): an explicit `!!bool yes` is an ERROR only in
-# the FIRST document of a file the exporter reads, where it is measured
-# (da-guard: exit 3, the file under parse_failed) to refuse the whole file:
-#   * a tenant file (no `_` prefix), any depth — anywhere in the document;
-#   * a defaults carrier (`_defaults.yaml` / `.yml`, `is_defaults_name`),
-#     any depth — anywhere in the document; except a ROOT carrier the chain
-#     does not select (a `_defaults.yml` beside `_defaults.yaml`: exit 0);
-#   * any other ROOT `_` file (`_defaults-multidb.yaml`, `_routing_profiles.yaml`
-#     …) — under `defaults:` / `tenants:` only (other keys: exit 0).
-# Everywhere else (a second document, a nested non-carrier `_` file, …) it
-# is a WARN, with no claim about what a reader does.
-FATAL_IN_DOCUMENT = "document"
-FATAL_IN_DEFAULTS = "defaults"
-_FATAL_DEFAULTS_KEYS = frozenset(("defaults", "tenants"))
-
-
-def go_rejected_bool_fatal_scope(rel: str, unselected_root_carriers: "set[str]") -> str:
-    """Where in the first document of *rel* (posix path relative to conf.d)
-    an explicit ``!!bool yes`` is fatal: :data:`FATAL_IN_DOCUMENT` (anywhere),
-    :data:`FATAL_IN_DEFAULTS` (under ``defaults:`` / ``tenants:``) or ``""``
-    (nowhere). *unselected_root_carriers* is ``_lib_confd.unselected_carriers``
-    of the conf.d root."""
-    from _lib_confd import is_defaults_name, is_reserved_name
-    name = rel.rsplit("/", 1)[-1]
-    root = "/" not in rel
-    if not is_reserved_name(name) or (
-            is_defaults_name(name) and not (root and name in unselected_root_carriers)):
-        return FATAL_IN_DOCUMENT
-    return FATAL_IN_DEFAULTS if root and name not in unselected_root_carriers else ""
-
-
-def split_go_rejected_bool_tags(roots: "list[yaml.Node]", scope: str
-                                ) -> "tuple[list[GoRejectedBoolTag], list[GoRejectedBoolTag]]":
-    """``(fatal, other)``: the explicit-``!!bool`` hits of one file's
-    document *roots*, split by *scope* (:func:`go_rejected_bool_fatal_scope`)."""
-    fatal: list[GoRejectedBoolTag] = []
-    other: list[GoRejectedBoolTag] = []
-    for index, root in enumerate(roots):
-        for hit in find_go_rejected_bool_tags(root, index):
-            top = hit.path.split("/")[1] if hit.path.startswith("/") else ""
-            is_fatal = index == 0 and (
-                scope == FATAL_IN_DOCUMENT
-                or (scope == FATAL_IN_DEFAULTS and top in _FATAL_DEFAULTS_KEYS))
-            (fatal if is_fatal else other).append(hit)
-    return fatal, other
 
 
 def _plain_scalars_with_schema(root: Optional["yaml.Node"], schema: dict,

@@ -30,13 +30,11 @@ WARN (#2509, never changes the exit code): an unquoted YAML 1.1 boolean word
   exporter's readers keep the string. Each one is printed as
   `WARN: <file>:<line>: …`. A root `_defaults*` file's `tenants:` block is
   held to the tenant schema for this and #2164. An explicit `!!bool yes`
-  (yaml.v3 refuses that tag on that text) is an ERROR only where the exporter
-  is measured to refuse the whole file — the first document of a tenant file
-  or a `_defaults.yaml` / `.yml` carrier (any depth, any key; not a root
-  carrier the chain does not select), and of any other root `_` file under
-  `defaults:` / `tenants:` — and a WARN elsewhere
-  (`_lib_io.go_rejected_bool_fatal_scope`). A value PyYAML cannot construct
-  (`!!bool y`) is named as an ERROR, not a traceback.
+  (yaml.v3 does not accept that tag on that text) is the same WARN, wherever
+  it is: whether the exporter can still read the file is da-guard's verdict,
+  which `make validate-config` reports — this lint makes no claim about it.
+  A value PyYAML cannot construct (`!!bool y`, `!!int x`) is a named ERROR
+  (not a traceback) saying this lint could not schema-check the file.
 
 Exit codes (scripts/tools/_lib_exitcodes.py):
   0  all tenant files valid
@@ -57,7 +55,6 @@ import io
 import json
 import os
 import sys
-from pathlib import Path
 
 import yaml
 
@@ -68,14 +65,13 @@ from _lib_exitcodes import EXIT_OK, EXIT_VIOLATION, EXIT_CALLER_ERROR  # noqa: E
 from _lib_io import safe_label  # noqa: E402  (#1538 output-layer escaping)
 from _lib_io import strict_safe_load_all  # noqa: E402  (#2123 duplicate key = YAML error)
 from _lib_io import (  # noqa: E402  (#2164, #2509)
-    compose_all_nodes, find_misread_scalars, find_yaml11_bool_words,
-    go_rejected_bool_fatal_scope, split_go_rejected_bool_tags)
+    compose_all_nodes, find_go_rejected_bool_tags, find_misread_scalars,
+    find_yaml11_bool_words)
 from _lib_confd import (  # noqa: E402  (#1588 shared name predicates)
     has_yaml_extension,
     is_defaults_document_name,
     is_defaults_name,
     is_hidden_name,
-    unselected_carriers,
 )
 
 # Repo-root-relative default: lint -> tools -> scripts -> <root>/docs/schemas/...
@@ -321,15 +317,12 @@ def misread_scalar_violations(rel: str, roots: list, schema: dict,
             for hit in find_misread_scalars(root, schema, schemas, schema_name)]
 
 
-def go_rejected_bool_tag_findings(rel: str, roots: list, scope: str
-                                  ) -> tuple[list[str], list[str]]:
-    """#2509: `(errors, warnings)` for each explicit `!!bool` whose text
-    yaml.v3 refuses (`!!bool yes`) — an ERROR only where the exporter is
-    measured to refuse the whole file (*scope*), a WARN elsewhere.
-    `_lib_io.split_go_rejected_bool_tags` decides."""
-    fatal, other = split_go_rejected_bool_tags(roots, scope)
-    return ([f"ERROR: {rel}:{h.line}: {h.message(True)}" for h in fatal],
-            [f"WARN: {rel}:{h.line}: {h.message(False)}" for h in other])
+def go_rejected_bool_tag_warnings(rel: str, roots: list) -> list[str]:
+    """#2509: one WARN per explicit `!!bool` whose text yaml.v3 does not
+    accept (`!!bool yes`), any file, any position
+    (`_lib_io.find_go_rejected_bool_tags`)."""
+    return [f"WARN: {rel}:{hit.line}: {hit.message()}"
+            for root in roots for hit in find_go_rejected_bool_tags(root)]
 
 
 def yaml11_bool_word_warnings(rel: str, roots: list, schema: dict,
@@ -372,13 +365,7 @@ def validate_dir(config_dir: str, schema: dict, validator,
         schemas[PROFILES_SCHEMA_NAME] = profiles_schema
     extra = [s for s in (platform_schema, profiles_schema) if s is not None]
     registry = schema_registry(schema, *extra) if extra else None
-    files = _iter_yaml_files(config_dir)
-    # #2509: a root `_defaults.yml` beside `_defaults.yaml` is never parsed
-    # by the exporter — its explicit `!!bool yes` is not a whole-file refusal.
-    unselected = unselected_carriers(
-        Path(f) for f in files
-        if os.path.dirname(os.path.relpath(f, config_dir)) == "")
-    for path in files:
+    for path in _iter_yaml_files(config_dir):
         rel = os.path.relpath(path, config_dir).replace(os.sep, "/")
         basename = os.path.basename(path)
         is_defaults = platform_schema is not None and _is_defaults_file(basename)
@@ -397,7 +384,8 @@ def validate_dir(config_dir: str, schema: dict, validator,
             except (KeyError, ValueError) as exc:
                 # #2509 blind review 2 (C): an explicit tag PyYAML cannot
                 # build (`!!bool y` → KeyError, `!!int x` → ValueError) was
-                # a traceback. Named below, after the node checks.
+                # a traceback. Named below, after the node checks — as this
+                # lint's own limit (it cannot schema-check the file).
                 docs, construct_error = [], exc
         except (OSError, yaml.YAMLError) as exc:
             # Unreadable file or malformed YAML is an environment/caller error, not
@@ -426,16 +414,14 @@ def validate_dir(config_dir: str, schema: dict, validator,
             violations.extend(misread_scalar_violations(rel, roots, q_schema, schemas, q_name))
             if warnings is not None:
                 warnings.extend(yaml11_bool_word_warnings(rel, roots, q_schema, schemas, q_name))
-        tag_errors, tag_warnings = go_rejected_bool_tag_findings(
-            rel, roots, go_rejected_bool_fatal_scope(rel, unselected))
-        violations.extend(tag_errors)
         if warnings is not None:
-            warnings.extend(tag_warnings)
+            warnings.extend(go_rejected_bool_tag_warnings(rel, roots))
         if construct_error is not None:
+            # A limit of THIS lint, not a verdict on the exporter's reading.
             violations.append(
                 f"ERROR: {rel}: PyYAML cannot construct a value in this file "
-                f"({type(construct_error).__name__}: {construct_error}) — an explicit "
-                f"tag on a text it does not take; the schema was not checked")
+                f"({type(construct_error).__name__}: {construct_error}); this file "
+                f"was not schema-checked")
             continue
         for doc in docs:
             if is_profiles:

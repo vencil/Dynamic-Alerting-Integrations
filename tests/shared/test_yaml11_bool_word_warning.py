@@ -16,12 +16,11 @@ PyYAML（YAML 1.1）讀成布林，schema 因此放行；yaml.v3 讀到的是字
 - 盲審第 1 輪（F3／F4／F5／T2）：根 `_defaults*` 的 `tenants:` 區塊依 tenant schema 檢查，WARN 與
   租戶檔一致（#2164 的 ERROR 同一修法一併補上；巢狀 `_defaults.yaml` 的 `tenants:` Go 不讀，兩條路徑
   都不報）；`yaml_quoting` 的 FAIL 列附上 WARN 明細。
-- 盲審第 2 輪（A／H／C）：明確 `!!bool yes` 只在 da-guard 實測整檔 decode 失敗（exit 3、
-  parse_failed）的位置報 ERROR——exporter 實際讀取之檔的第一份文件：租戶檔與 `_defaults.yaml/.yml`
-  carrier（根層或巢狀、任何鍵；根層未選用的 carrier 不讀）、其他根 `_` 檔的 `defaults:`／`tenants:`。
-  第 2 份文件、`routing_profiles:` 底下、巢狀非 carrier（`sub/_defaults-multidb.yaml`）等一律 WARN。
-  每格都以 da-guard 的 exit code 為前提。
-  `!!bool y` / `1` / `foo`（PyYAML 也建不出）具名報 ERROR，不出 traceback。
+- 盲審第 3 輪（換主體）：明確 `!!bool yes` 在任何位置都是同一則中性 WARN、rc 不變。「exporter
+  讀不讀得了這份檔」不再由 Python 重建（三版位置規則都被盲審打穿），交給 da-guard 的 parse_failed：
+  `validate_config` 的 da-guard 列會連同 exporter 的理由報 FAIL（本檔有一格釘住這條路徑）。
+  PyYAML 建不出的值（`!!bool y`、`!!int x`）由 `check_confd_schema` 具名報 ERROR、不出 traceback，
+  措辭只講 lint 自己的限制（這份檔沒做 schema 檢查）。
 
 修正前（main 59e58c81）兩條 lint 對 yes/on/no/off 都完全安靜（schema 讓它過、quoting 只看字串欄位）。
 
@@ -278,18 +277,21 @@ _EXPLICIT = ["!!bool yes", "!!bool on", "!!bool no", "!!bool off", "!!bool Yes",
 
 @pytest.mark.parametrize("field", sorted(FIELDS))
 @pytest.mark.parametrize("word", _EXPLICIT)
-def test_explicit_bool_tag_the_exporter_refuses_is_an_error(tmp_path, field, word):
-    """F4：da-guard 對這些寫法 exit 3（整份檔丟掉）——前提；lint 報 ERROR（rc 1）而不是 WARN。"""
-    conf_d, _ = _tree(tmp_path, field, word)
-    with pytest.raises(tv.ParseFailedError):
-        tv.load_effective(conf_d)
+def test_explicit_bool_tag_yaml_v3_refuses_is_a_neutral_warn(tmp_path, field, word):
+    """明確 `!!bool yes`：兩條 lint 路徑都給 WARN、rc 不變，指向 `make validate-config`，
+    不斷言 exporter 會怎麼處理這份檔。"""
+    conf_d, line = _tree(tmp_path, field, word)
     p = _lint(conf_d)
-    assert p.returncode == 1 and _warn_lines(p) == [], p.stderr
-    err = [l for l in p.stderr.splitlines() if "explicit `!!bool" in l]
-    assert len(err) == 1 and err[0].startswith(f"ERROR: {FIELDS[field][0]}:"), p.stderr
-    assert FIELDS[field][2] in err[0] and "cannot decode this file" in err[0], err
+    assert p.returncode == 0, p.stderr
+    (w,) = _warn_lines(p)
+    assert w.startswith(f"WARN: {FIELDS[field][0]}:{line}: {FIELDS[field][2]}: explicit "
+                        f"`!!bool {word.split(' ', 1)[1].strip(chr(39))}`"), w
+    assert w.endswith("Run `make validate-config`: it asks da-guard whether the exporter can "
+                      "read this file"), w
+    for claim in ("cannot decode", "drops", "parse_failed", "exits 3"):
+        assert claim not in w, (claim, w)
     row = vc.check_yaml_quoting(str(conf_d))
-    assert row["status"] == vc.FAIL and any("cannot decode this file" in d for d in row["details"])
+    assert row["status"] == vc.WARN and row["details"] == [w], row
 
 
 @pytest.mark.parametrize("word", ["!!bool true", "!!bool True", "!!bool FALSE"])
@@ -343,7 +345,7 @@ def test_fail_row_carries_the_warnings_too(tmp_path):
     assert row["details"] == errs + warns, row
 
 
-# ── 盲審第 2 輪：明確 `!!bool` 只在實測整檔 decode 失敗的位置報 ERROR ─────────
+# ── 盲審第 3 輪：位置不影響判斷；exporter 讀不讀得了交給 da-guard ─────────────
 
 def _explicit_tree(tmp_path: Path, files: dict[str, str]) -> Path:
     conf_d = tmp_path / "conf.d"
@@ -355,111 +357,56 @@ def _explicit_tree(tmp_path: Path, files: dict[str, str]) -> Path:
     return conf_d
 
 
-_RP = ("routing_profiles:\n  rp1:\n    receiver: {type: webhook, url: 'https://h.example.com/x', "
-       "send_resolved: !!bool yes}\n")
 _SM = "    _state_maintenance: {enabled: !!bool yes}\n"
-# (id, files, file the finding is in, its JSON path, exporter refuses the whole file)
-_RD = ("_routing_defaults:\n  receiver: {type: webhook, url: 'https://h.example.com/x', "
-       "send_resolved: !!bool yes}\n")
-_SF = ("state_filters:\n  f1:\n    reasons: [a]\n    severity: warning\n"
-       "    default_state: !!bool yes\n")
-_RDP = "/_routing_defaults/receiver/send_resolved"
-_DOC2 = "---\n"
-# (id, files, file the finding is in, its JSON path, exporter refuses the whole file)
-# ⛔ The verdict column is da-guard's, measured per cell by the test itself
-# (exit 3 + parse_failed ⇔ True): ERROR = the first document of a file the
-# exporter reads — a tenant file or a `_defaults.yaml/.yml` carrier, anywhere
-# in it (a ROOT carrier the chain does not select is not read); any other
-# ROOT `_` file under `defaults:` / `tenants:` only.
+# (id, files, file the finding is in) — file kinds both lints read; one WARN each, rc 0.
 _PLACES = [
-    ("tenant-doc1", {"sub/t1.yaml": "tenants:\n  t1:\n" + _SM}, "sub/t1.yaml",
-     "/tenants/t1/_state_maintenance/enabled", True),
-    ("root-defaults-defaults", {"_defaults.yaml": _DEFAULTS + "  container_cpu: !!bool yes\n"},
-     "_defaults.yaml", "/defaults/container_cpu", True),
-    ("root-defaults-tenants", {"_defaults.yaml": _DEFAULTS + "tenants:\n  t1:\n" + _SM},
-     "_defaults.yaml", "/tenants/t1/_state_maintenance/enabled", True),
-    ("root-defaults-routing-defaults", {"_defaults.yaml": _DEFAULTS + _RD}, "_defaults.yaml",
-     _RDP, True),
-    ("root-defaults-state-filters", {"_defaults.yaml": _DEFAULTS + _SF}, "_defaults.yaml",
-     "/state_filters/f1/default_state", True),
-    ("root-defaults-unknown-key", {"_defaults.yaml": _DEFAULTS + "foo: !!bool yes\n"},
-     "_defaults.yaml", "/foo", True),
-    ("nested-defaults-defaults", {"sub/_defaults.yaml": "defaults:\n  container_cpu: !!bool yes\n"},
-     "sub/_defaults.yaml", "/defaults/container_cpu", True),
-    ("nested-defaults-routing-defaults", {"sub/_defaults.yaml": _RD}, "sub/_defaults.yaml",
-     _RDP, True),
-    ("nested-unselected-defaults-yml", {"sub/_defaults.yaml": "defaults:\n  container_cpu: 1\n",
-                                        "sub/_defaults.yml": "defaults:\n  container_cpu: !!bool yes\n"},
-     "sub/_defaults.yml", "/defaults/container_cpu", True),
-    ("root-multidb-defaults", {"_defaults-multidb.yaml": "defaults:\n  container_cpu: !!bool yes\n"},
-     "_defaults-multidb.yaml", "/defaults/container_cpu", True),
+    ("tenant-doc2", {"sub/t1.yaml": "tenants:\n  t1:\n    mysql_connections: '5'\n---\n"
+                                    "tenants:\n  t1:\n" + _SM}, "sub/t1.yaml"),
+    ("root-defaults", {"_defaults.yaml": _DEFAULTS + "  container_cpu: !!bool yes\n"},
+     "_defaults.yaml"),
     ("root-multidb-tenants", {"_defaults-multidb.yaml": "tenants:\n  t1:\n" + _SM},
-     "_defaults-multidb.yaml", "/tenants/t1/_state_maintenance/enabled", True),
-    ("root-routing-profiles-tenants", {"_routing_profiles.yaml": "routing_profiles: {}\n"
-                                       "tenants:\n  t1:\n" + _SM},
-     "_routing_profiles.yaml", "/tenants/t1/_state_maintenance/enabled", True),
-    # ── WARN: da-guard reads the tree (exit 0) ──
-    ("routing-profiles", {"_routing_profiles.yaml": _RP,
-                          "sub/t1.yaml": "tenants:\n  t1:\n    _routing_profile: rp1\n"},
-     "_routing_profiles.yaml", "/routing_profiles/rp1/receiver/send_resolved", False),
-    ("tenant-doc2", {"sub/t1.yaml": "tenants:\n  t1:\n    mysql_connections: '5'\n" + _DOC2
-                                    + "tenants:\n  t1:\n" + _SM},
-     "sub/t1.yaml", "/tenants/t1/_state_maintenance/enabled", False),
-    ("root-defaults-doc2", {"_defaults.yaml": _DEFAULTS + _DOC2 + "defaults:\n  container_cpu: "
-                                              "!!bool yes\n"},
-     "_defaults.yaml", "/defaults/container_cpu", False),
-    ("nested-defaults-doc2", {"sub/_defaults.yaml": "defaults:\n  container_cpu: 1\n" + _DOC2
-                                                    + "defaults:\n  container_cpu: !!bool yes\n"},
-     "sub/_defaults.yaml", "/defaults/container_cpu", False),
-    ("unselected-defaults-yml", {"_defaults.yml": _DEFAULTS + "tenants:\n  t1:\n" + _SM},
-     "_defaults.yml", "/tenants/t1/_state_maintenance/enabled", False),
-    ("root-multidb-other-key", {"_defaults-multidb.yaml": _RD}, "_defaults-multidb.yaml",
-     _RDP, False),
-    ("nested-multidb", {"sub/_defaults-multidb.yaml": "defaults:\n  container_cpu: !!bool yes\n"},
-     "sub/_defaults-multidb.yaml", "/defaults/container_cpu", False),
+     "_defaults-multidb.yaml"),
+    ("routing-profiles", {"_routing_profiles.yaml": "routing_profiles:\n  rp1:\n    receiver: "
+                          "{type: webhook, url: 'https://h.example.com/x', send_resolved: !!bool yes}\n"},
+     "_routing_profiles.yaml"),
 ]
 
 
-@pytest.mark.parametrize("name,files,rel,path,fatal", _PLACES, ids=[c[0] for c in _PLACES])
-def test_explicit_bool_tag_is_an_error_only_where_the_exporter_refuses_the_file(
-        tmp_path, name, files, rel, path, fatal):
-    """A／H：ERROR ⇔ da-guard 實測整檔 decode 失敗（前提逐格量）；其餘位置 WARN、rc 0。
-    規則：exporter 實際讀取之檔的第一份文件（租戶檔、`_defaults.yaml/.yml` carrier 全文件；
-    其他根 `_` 檔只看 `defaults:`／`tenants:`）。"""
+@pytest.mark.parametrize("name,files,rel", _PLACES, ids=[c[0] for c in _PLACES])
+def test_explicit_bool_tag_is_the_same_warn_in_every_file_kind(tmp_path, name, files, rel):
     conf_d = _explicit_tree(tmp_path, files)
-    if fatal:
-        with pytest.raises(tv.ParseFailedError):
-            tv.load_effective(conf_d)
-    else:
-        tv.load_effective(conf_d)                          # 前提：Go 讀得了這棵樹
     p = _lint(conf_d)
     hits = [l for l in (p.stdout + p.stderr).splitlines() if "explicit `!!bool yes`" in l]
-    assert len(hits) == 1, p.stderr
-    level = "ERROR" if fatal else "WARN"
-    assert hits[0].startswith(f"{level}: {rel}:") and f": {path}: " in hits[0], hits
-    assert ("cannot decode this file" in hits[0]) is fatal, hits
-    assert p.returncode == (1 if fatal else 0), p.stderr
+    assert p.returncode == 0 and len(hits) == 1 and hits[0].startswith(f"WARN: {rel}:"), p.stderr
     row = vc.check_yaml_quoting(str(conf_d))
-    assert row["status"] == (vc.FAIL if fatal else vc.WARN), row
-    assert [d for d in row["details"] if "explicit `!!bool yes`" in d] == \
-        [hits[0].split(": ", 1)[1] if fatal else hits[0]], row
+    assert row["status"] == vc.WARN and row["details"] == hits, row
 
 
-@pytest.mark.parametrize("word", ["y", "1", "foo"])
-def test_explicit_bool_tag_pyyaml_cannot_build_is_named_not_a_traceback(tmp_path, word):
-    """C：`!!bool y` 之類 PyYAML 的 constructor 也建不出（KeyError）；check_confd_schema 原本在
-    strict_safe_load_all 拋 traceback（rc 1），validate_config 則具名報出。現在兩條路徑都具名。"""
+def test_a_file_the_exporter_drops_fails_validate_config_through_da_guard(tmp_path):
+    """換主體的前提：lint 只給 WARN，「exporter 丟掉整份檔」由 da-guard 判斷——`validate_config`
+    的 profiles 列（da-guard effective）FAIL，指名該檔與 exporter 自己的理由（served-values）。"""
+    conf_d = _explicit_tree(tmp_path, {"sub/t1.yaml": "tenants:\n  t1:\n" + _SM})
+    row = vc.check_profiles(str(conf_d))
+    assert row["status"] == vc.FAIL, row
+    text = "\n".join(row["details"])
+    assert "sub/t1.yaml" in text and "!!bool" in text, row
+
+
+@pytest.mark.parametrize("value,exc", [("!!bool y", "KeyError"), ("!!bool 1", "KeyError"),
+                                       ("!!bool foo", "KeyError"), ("!!int x", "ValueError")])
+def test_value_pyyaml_cannot_construct_is_named_not_a_traceback(tmp_path, value, exc):
+    """C／B3-7：PyYAML 的 constructor 建不出（`!!bool y` → KeyError、`!!int x` → ValueError）時，
+    check_confd_schema 原本丟 traceback。現在具名報 ERROR（rc 1），措辭只講 lint 自己的限制；
+    `!!bool` 那幾格另有中性 WARN。validate_config 的 quoting 列只做 compose，給 WARN 或 PASS。"""
     conf_d = _explicit_tree(tmp_path, {
-        "sub/t1.yaml": f"tenants:\n  t1:\n    _state_maintenance: {{enabled: !!bool {word}}}\n"})
-    with pytest.raises(tv.ParseFailedError):
-        tv.load_effective(conf_d)                          # 前提：Go 也拒收整檔
+        "sub/t1.yaml": f"tenants:\n  t1:\n    _state_maintenance: {{enabled: {value}}}\n"})
     p = _lint(conf_d)
     assert p.returncode == 1, p.stderr
     assert "Traceback" not in p.stderr, p.stderr
-    errs = [l for l in p.stderr.splitlines() if l.startswith("ERROR: sub/t1.yaml")]
-    assert any(f"/tenants/t1/_state_maintenance/enabled: explicit `!!bool {word}`" in l
-               for l in errs), p.stderr
-    assert any("PyYAML cannot construct a value in this file" in l for l in errs), p.stderr
-    row = vc.check_yaml_quoting(str(conf_d))
-    assert row["status"] == vc.FAIL and any(f"explicit `!!bool {word}`" in d
-                                            for d in row["details"]), row
+    (err,) = [l for l in p.stderr.splitlines() if l.startswith("ERROR: sub/t1.yaml")]
+    assert err.startswith(f"ERROR: sub/t1.yaml: PyYAML cannot construct a value in this file "
+                          f"({exc}: "), err
+    assert err.endswith("this file was not schema-checked"), err
+    assert "exporter" not in err, err
+    tag_warns = [l for l in _warn_lines(p) if "explicit `!!bool" in l]
+    assert len(tag_warns) == (1 if value.startswith("!!bool") else 0), p.stderr
