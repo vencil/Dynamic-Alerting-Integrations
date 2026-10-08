@@ -1,16 +1,19 @@
-"""`describe_tenant --what-if <檔>`：以這份內容取代 conf.d 裡同路徑的檔，再重新求值（#2097 項 1）。
+"""`describe_tenant --what-if <副本> --replaces <樹內檔>`：以副本內容取代 conf.d 裡那個檔，
+再重新求值（#2097 項 1；盲審 F1 依 owner 裁決採選項 (b)）。
 
-oracle 是 Go：`da-guard effective` 對「替換後的樹」求出的 merged_hash。做法是先讓
-`ConfDScanner` 讀原樹（baseline），再把新內容寫進樹裡同一個路徑、把 what-if 指向它
-——那正是「以這份內容取代該檔」——然後讓 da-guard 讀寫完的樹。所以：
+oracle 是 Go：`da-guard effective` 對「替換後的樹」求出的 merged_hash。每格先把新內容
+寫成樹外的副本、對原樹跑 CLI（`--what-if 副本 --replaces 樹內檔`），再把同一份內容寫進
+樹裡那個路徑讓 da-guard 讀。所以：
 
 - what_if_merged_hash 要等於 Go 對替換後的樹的 merged_hash；
 - baseline_merged_hash 要等於 Go 對原樹的 merged_hash；
 - would_trigger_reload 要等於兩個 Go hash 是否不同。
 
-修正前（main 59e58c81）：不在租戶 defaults chain 上的樹內檔（根 `_profiles.yaml`、別的分支的
-`_defaults.yaml`、租戶自己的檔）一律當成新插入的 chain 層、整份內容當 defaults 合併——
-內容不變也報 `insert` + reload。
+⛔ 為什麼不能再拿樹內檔本身當 `--what-if`（F1）：scanner 的 baseline 與 what-if 讀的是
+同一份 bytes，原地改值等於拿檔案跟自己比，一律報「不 reload」（fail-open）。舊版本檔
+`test_cli_unchanged_root_platform_file_reports_no_reload` 正是那個形狀——內容不變所以
+不 reload，是套套邏輯，什麼都抓不到；它已換成「副本未改 → 不 reload／副本改值 → reload」
+兩向都有的格子。現在沒帶 `--replaces` 卻指向樹內既有檔 → rc 2。
 
 樹外的檔（`append-external`）與樹內不存在於 listing 的路徑（`insert`）維持原行為，各有一格
 對照組。
@@ -28,6 +31,7 @@ from pathlib import Path
 import pytest
 
 import _lib_tenant_values as tv
+from _platform_fs import symlink_or_skip
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
 DESCRIBE = REPO_ROOT / "scripts" / "tools" / "dx" / "describe_tenant.py"
@@ -76,10 +80,10 @@ CASES = [
     ("own-tenant-file-unchanged", "sub/t1.yaml", None, True, "substitute", False),
     ("other-tenant-file-changed", "other/t2.yaml",
      "tenants:\n  t2:\n    mysql_connections: 3\n", True, "substitute", False),
-    # must-ring control: a chain carrier (the pre-#2097 `substitute` path).
-    ("CONTROL-chain-carrier-changed", "sub/_defaults.yaml",
+    # chain carriers: F1 fail-open 在 main 上就有（原地改值報 substitute、不 reload）。
+    ("chain-carrier-changed", "sub/_defaults.yaml",
      "defaults:\n  container_cpu: 66\n", False, "substitute", True),
-    ("CONTROL-root-carrier-unchanged", "_defaults.yaml", None, False, "substitute", False),
+    ("root-carrier-unchanged", "_defaults.yaml", None, False, "substitute", False),
 ]
 
 
@@ -92,42 +96,105 @@ def test_matrix_is_not_vacuous():
     assert len({c[0] for c in CASES}) == len(CASES)
 
 
+def _cli(conf_d: Path, what_if: Path, *extra: str, tid: str = "t1") -> subprocess.CompletedProcess:
+    return subprocess.run(
+        [sys.executable, str(DESCRIBE), tid, "--conf-d", str(conf_d), "--what-if", str(what_if),
+         *extra, "--format", "json"],
+        capture_output=True, text=True, encoding="utf-8", errors="replace", timeout=120,
+        env={**os.environ, "PYTHONIOENCODING": "utf-8"})
+
+
 @pytest.mark.parametrize("name,rel,new,elect,stype,reload", CASES, ids=[c[0] for c in CASES])
-def test_what_if_matches_go_on_the_substituted_tree(tmp_path, name, rel, new, elect, stype, reload):
+def test_replaces_matches_go_on_the_substituted_tree(tmp_path, name, rel, new, elect, stype, reload):
     conf_d = _tree(tmp_path, elect)
-    go_before = _go_hash(conf_d)
-    scanner = dt.ConfDScanner(conf_d)
     target = conf_d / rel
-    if new is not None:
-        target.write_text(new, encoding="utf-8")
+    copy = tmp_path / "edited" / Path(rel).name
+    copy.parent.mkdir()
+    copy.write_text(target.read_text(encoding="utf-8") if new is None else new, encoding="utf-8")
+    go_before = _go_hash(conf_d)
+    p = _cli(conf_d, copy, "--replaces", str(target))
+    assert p.returncode == 0, p.stderr
+    out = json.loads(p.stdout)
+    # 讓 Go 讀「替換後的樹」：把副本內容寫進樹裡那個路徑。
+    target.write_text(copy.read_text(encoding="utf-8"), encoding="utf-8")
     go_after = _go_hash(conf_d)
     assert (go_before != go_after) is reload, (name, "前提：Go 的答案")
-    out = dt.what_if_result(scanner, "t1", target.resolve(), target,
-                            dt._load_yaml(target), dt._load_platform_doc(target))
     assert out["substitution_type"] == stype, out
+    assert out["replaces"] == str(target.resolve()), out
+    assert out["what_if_file"] == str(copy.resolve()), out
     assert out["baseline_merged_hash"] == go_before, out
     assert out["what_if_merged_hash"] == go_after, out
     assert out["would_trigger_reload"] is reload and out["merged_hash_changed"] is reload, out
 
 
-def _cli(conf_d: Path, what_if: Path, tid: str = "t1") -> subprocess.CompletedProcess:
-    return subprocess.run(
-        [sys.executable, str(DESCRIBE), tid, "--conf-d", str(conf_d), "--what-if", str(what_if),
-         "--format", "json"],
-        capture_output=True, text=True, encoding="utf-8", errors="replace", timeout=120,
-        env={**os.environ, "PYTHONIOENCODING": "utf-8"})
+@pytest.mark.parametrize("rel", ["_profiles.yaml", "_defaults.yaml", "sub/_defaults.yaml",
+                                 "sub/t1.yaml"])
+def test_in_tree_file_without_replaces_is_refused(tmp_path, rel):
+    """F1：樹內既有檔（含 chain 檔）直接當 `--what-if` → rc 2，並示範 `--replaces` 的用法。
+    修正前 chain 檔回 `substitute`、根平台檔也是，原地改值都報不 reload。"""
+    conf_d = _tree(tmp_path, True)
+    target = conf_d / rel
+    p = _cli(conf_d, target)
+    assert p.returncode == 2, (p.returncode, p.stdout, p.stderr)
+    assert p.stdout == "", p.stdout
+    assert "compare the file with itself" in p.stderr, p.stderr
+    assert f"--what-if <copy> --replaces {target.resolve()}" in p.stderr, p.stderr
 
 
-@pytest.mark.parametrize("elect", [False, True])
-def test_cli_unchanged_root_platform_file_reports_no_reload(tmp_path, elect):
-    """issue 原文的那條指令：檔案內容不變，不得報 reload。"""
-    conf_d = _tree(tmp_path, elect)
-    p = _cli(conf_d, conf_d / "_profiles.yaml")
-    assert p.returncode == 0, p.stderr
-    out = json.loads(p.stdout)
-    assert (out["substitution_type"], out["would_trigger_reload"]) == ("substitute", False), out
-    assert out["what_if_merged_hash"] == _go_hash(conf_d)
-    assert (out["added_keys"], out["removed_keys"], out["changed_keys"]) == ({}, {}, {}), out
+def test_link_to_an_in_tree_file_without_replaces_is_refused(tmp_path):
+    """以解析後的路徑判斷：指向樹內檔的連結也是同一份 bytes。"""
+    conf_d = _tree(tmp_path, True)
+    link = tmp_path / "link.yaml"
+    symlink_or_skip(conf_d / "sub" / "_defaults.yaml", link)
+    p = _cli(conf_d, link)
+    assert p.returncode == 2, (p.returncode, p.stdout, p.stderr)
+    assert "--replaces" in p.stderr, p.stderr
+
+
+def test_replaces_with_the_same_file_is_refused(tmp_path):
+    conf_d = _tree(tmp_path, True)
+    target = conf_d / "_profiles.yaml"
+    p = _cli(conf_d, target, "--replaces", str(target))
+    assert p.returncode == 2, (p.returncode, p.stdout, p.stderr)
+    assert p.stdout == "", p.stdout
+    assert "same file" in p.stderr and "copy" in p.stderr, p.stderr
+
+
+def test_replaces_through_a_link_to_the_what_if_file_is_refused(tmp_path):
+    """同檔判斷用解析後的路徑：`--replaces` 經連結指回 `--what-if` 檔也一樣拒收。"""
+    conf_d = _tree(tmp_path, True)
+    target = conf_d / "_profiles.yaml"
+    link = tmp_path / "p.yaml"
+    symlink_or_skip(target, link)
+    p = _cli(conf_d, link, "--replaces", str(target))
+    assert p.returncode == 2, (p.returncode, p.stdout, p.stderr)
+    assert "same file" in p.stderr, p.stderr
+
+
+@pytest.mark.parametrize("where", ["outside", "missing", "hidden-in-tree"])
+def test_replaces_must_name_a_listed_file(tmp_path, where):
+    conf_d = _tree(tmp_path, True)
+    copy = tmp_path / "copy.yaml"
+    copy.write_text(_PROFILES, encoding="utf-8")
+    target = {"outside": tmp_path / "elsewhere.yaml",
+              "missing": conf_d / "nope.yaml",
+              "hidden-in-tree": conf_d / "sub" / ".draft.yaml"}[where]
+    if where != "missing":
+        target.write_text(_PROFILES, encoding="utf-8")
+    p = _cli(conf_d, copy, "--replaces", str(target))
+    assert p.returncode == 2, (p.returncode, p.stdout, p.stderr)
+    assert p.stdout == "", p.stdout
+    assert f"--replaces {target.resolve()} is not a file of the scanned tree" in p.stderr, p.stderr
+
+
+def test_replaces_requires_what_if(tmp_path):
+    conf_d = _tree(tmp_path, True)
+    p = subprocess.run(
+        [sys.executable, str(DESCRIBE), "t1", "--conf-d", str(conf_d),
+         "--replaces", str(conf_d / "_profiles.yaml")],
+        capture_output=True, text=True, encoding="utf-8", errors="replace", timeout=120)
+    assert p.returncode == 2, (p.returncode, p.stdout, p.stderr)
+    assert "--replaces requires --what-if" in p.stderr, p.stderr
 
 
 def test_cli_outside_the_tree_still_appends(tmp_path):
@@ -157,7 +224,11 @@ def test_own_tenant_file_that_no_longer_declares_the_tenant_is_refused(tmp_path)
     conf_d = _tree(tmp_path, False)
     scanner = dt.ConfDScanner(conf_d)
     target = conf_d / "sub" / "t1.yaml"
-    target.write_text("tenants:\n  t9: {}\n", encoding="utf-8")
+    copy = tmp_path / "t1.yaml"
+    copy.write_text("tenants:\n  t9: {}\n", encoding="utf-8")
     with pytest.raises(dt.WhatIfError, match="does not declare 't1'"):
-        dt.what_if_result(scanner, "t1", target.resolve(), target,
-                          dt._load_yaml(target), dt._load_platform_doc(target))
+        dt.what_if_result(scanner, "t1", copy.resolve(), copy,
+                          dt._load_yaml(copy), dt._load_platform_doc(copy),
+                          replaces=target.resolve())
+    p = _cli(conf_d, copy, "--replaces", str(target))
+    assert p.returncode == 2 and "does not declare 't1'" in p.stderr, (p.returncode, p.stderr)

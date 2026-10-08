@@ -210,7 +210,8 @@ def test_describe_what_if_on_the_unchanged_carrier_changes_nothing(tmp_path, da_
     `_load_platform_doc`. Read as PyYAML's 8 there (the baseline reads
     "010"), the simulation lost the profile and reported a change —
     `_profile` "010" → 8 and `container_cpu` 55 → 80 — for a file nobody
-    edited."""
+    edited. #2097 F1: the unchanged carrier goes in as a copy with
+    `--replaces` (the carrier itself as `--what-if` is now rc 2)."""
     d = tmp_path / "conf.d"
     d.mkdir()
     carrier = d / "_defaults.yaml"
@@ -221,7 +222,10 @@ def test_describe_what_if_on_the_unchanged_carrier_changes_nothing(tmp_path, da_
     (d / "tx.yaml").write_text("tenants:\n  tx:\n    mysql_connections: 5\n",
                                encoding="utf-8")
     assert _served_cpu(d, da_guard) == _PROFILE_CPU   # the fixture binds 010
-    got = _describe_json("tx", "-c", str(d), "--what-if", str(carrier))
+    copy = tmp_path / "copy.yaml"
+    copy.write_text(carrier.read_text(encoding="utf-8"), encoding="utf-8")
+    got = _describe_json("tx", "-c", str(d), "--what-if", str(copy),
+                         "--replaces", str(carrier))
     assert got["substitution_type"] == "substitute", got
     assert got["changed_keys"] == {}, got
     assert got["added_keys"] == {} and got["removed_keys"] == {}, got

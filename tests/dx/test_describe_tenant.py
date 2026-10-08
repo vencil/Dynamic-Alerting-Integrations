@@ -574,8 +574,8 @@ class TestWhatIf:
         )
         return conf_d
 
-    def _run_cli(self, conf_d, tenant_id, what_if_path):
-        """Run describe_tenant --what-if and return parsed JSON output."""
+    def _run_cli(self, conf_d, tenant_id, what_if_path, *extra):
+        """Run describe_tenant --what-if and return the completed process."""
         result = subprocess.run(
             [
                 sys.executable,
@@ -583,6 +583,7 @@ class TestWhatIf:
                 tenant_id,
                 "--conf-d", str(conf_d),
                 "--what-if", str(what_if_path),
+                *map(str, extra),
             ],
             capture_output=True,
             timeout=5,
@@ -590,8 +591,12 @@ class TestWhatIf:
         return result
 
     def test_what_if_substitute_changes_hash(self, tmp_path):
-        """Substituting an existing _defaults.yaml that modifies a tenant-visible field → hash changes."""
+        """--what-if <copy> --replaces <L0>: a copy that bumps a tenant-visible
+        field → substitute + hash changes; an unchanged copy → no change.
+        #2097 F1: the L0 file itself as --what-if compared it with itself
+        (an in-place edit always read "no reload") and is now rc 2."""
         conf_d = self._setup_conf_d(tmp_path)
+        l0_path = conf_d / "_defaults.yaml"
         # What-if: bump pg_replication_lag_seconds to 60 (tenant does NOT override)
         whatif = tmp_path / "whatif.yaml"
         whatif.write_text(
@@ -603,36 +608,31 @@ class TestWhatIf:
             }),
             encoding="utf-8",
         )
-        # Point the what-if at the L0 path to trigger "substitute"
-        l0_path = conf_d / "_defaults.yaml"
-        l0_path.write_text(
-            yaml.dump({
-                "defaults": {
-                    "pg_stat_activity_count": 500,
-                    "pg_replication_lag_seconds": 60,
-                }
-            }),
-            encoding="utf-8",
-        )
-        # Reset L0 back and use whatif as substitute path
-        l0_path.write_text(
-            yaml.dump({
-                "defaults": {
-                    "pg_stat_activity_count": 500,
-                    "pg_replication_lag_seconds": 30,
-                }
-            }),
-            encoding="utf-8",
-        )
-        result = self._run_cli(conf_d, "whatif-tenant", l0_path)
-        # l0_path content hasn't changed so hash should NOT change when using l0_path itself
+        result = self._run_cli(conf_d, "whatif-tenant", whatif, "--replaces", l0_path)
         assert result.returncode == 0, f"stderr: {result.stderr.decode()}"
         output = json.loads(result.stdout.decode())
         assert output["tenant_id"] == "whatif-tenant"
-        # L0 path substitution with same content → no change
+        assert output["substitution_type"] == "substitute"
+        assert output["replaces"] == str(l0_path.resolve())
+        assert output["merged_hash_changed"] is True
+        assert output["would_trigger_reload"] is True
+        assert output["changed_keys"] == {
+            "pg_replication_lag_seconds": {"baseline": 30, "what_if": 60}}
+
+        # Unchanged copy → substitute, no change
+        same = tmp_path / "same.yaml"
+        same.write_bytes(l0_path.read_bytes())
+        result = self._run_cli(conf_d, "whatif-tenant", same, "--replaces", l0_path)
+        assert result.returncode == 0, f"stderr: {result.stderr.decode()}"
+        output = json.loads(result.stdout.decode())
+        assert output["substitution_type"] == "substitute"
         assert output["merged_hash_changed"] is False
         assert output["would_trigger_reload"] is False
-        assert output["substitution_type"] == "substitute"
+
+        # The L0 file itself, without --replaces → rc 2 naming the remedy
+        result = self._run_cli(conf_d, "whatif-tenant", l0_path)
+        assert result.returncode == 2
+        assert b"--replaces" in result.stderr
 
     def test_what_if_append_adds_new_field(self, tmp_path):
         """Appending a what-if defaults that introduces a new field → merged_hash changes + added_keys populated."""
@@ -1079,10 +1079,13 @@ class TestPlatformOverlayCLI:
         assert "platform_overlay" not in json.loads(ty.stdout)
 
     def test_what_if_substituting_the_platform_file_keeps_the_layer(self, tmp_path):
-        """--what-if on the carrier itself (same bytes): the simulated side
+        """--what-if <copy of the carrier> --replaces <carrier> (same bytes): the simulated side
         applies the same platform layer as the baseline — no phantom diff."""
         conf_d = self._tree(tmp_path)
-        res = self._run("tx", "--conf-d", str(conf_d), "--what-if", str(conf_d / "_defaults.yaml"))
+        copy = tmp_path / "copy.yaml"
+        copy.write_bytes((conf_d / "_defaults.yaml").read_bytes())
+        res = self._run("tx", "--conf-d", str(conf_d), "--what-if", str(copy),
+                        "--replaces", str(conf_d / "_defaults.yaml"))
         assert res.returncode == 0, res.stderr
         out = json.loads(res.stdout)
         assert out["substitution_type"] == "substitute"
@@ -1159,10 +1162,13 @@ class TestProfileOverlayCLI:
         assert "profile_overlay" not in json.loads(ty.stdout)
 
     def test_what_if_on_the_carrier_keeps_the_profile(self, tmp_path):
-        """Same bytes substituted: the simulated side expands the profile as
+        """Same bytes substituted (a copy, `--replaces` the carrier): the simulated side expands the profile as
         the baseline does — no phantom `mysql_connections` diff."""
         conf_d = self._tree(tmp_path)
-        res = self._run("tx", "--conf-d", str(conf_d), "--what-if", str(conf_d / "_defaults.yaml"))
+        copy = tmp_path / "copy.yaml"
+        copy.write_bytes((conf_d / "_defaults.yaml").read_bytes())
+        res = self._run("tx", "--conf-d", str(conf_d), "--what-if", str(copy),
+                        "--replaces", str(conf_d / "_defaults.yaml"))
         assert res.returncode == 0, res.stderr
         out = json.loads(res.stdout)
         assert out["merged_hash_changed"] is False, out

@@ -207,13 +207,23 @@ def test_written_default_and_plain_mappings_do_not_warn(tmp_path):
 
 
 def test_warning_is_printed_once_on_the_what_if_path(tmp_path):
-    """T1：`--what-if <conf.d>/_defaults.yaml` 會把同一個平台檔再讀一次；WARNING 仍恰好 1 行
-    （拿掉去重會變 2 行）。"""
+    """T1：what-if 路徑上 WARNING 每檔恰好 1 行——樹內平台檔 1 行、`--what-if` 副本 1 行。
+
+    ⚠️ 原本這格量的是「同一個樹內檔被讀兩次（scanner 一次、`--what-if <conf.d>/_defaults.yaml`
+    一次）仍只印 1 行」，能殺「拿掉去重」的突變。#2097 F1 之後樹內檔不能再當 `--what-if`
+    （rc 2，見 test_what_if_substitution_matrix），同檔重讀的 CLI 路徑消失，這格因此**不再**
+    殺那個突變；它現在守的是「改走 `--replaces` 後兩個檔各被點名一次」。"""
     conf_d = _tree(tmp_path, "{<<: {default: '010'}}", "platform-tenants")
+    carrier = conf_d / "_defaults.yaml"
+    copy = tmp_path / "edit" / "_defaults.yaml"
+    copy.parent.mkdir()
+    copy.write_text(carrier.read_text(encoding="utf-8"), encoding="utf-8")
     p = subprocess.run([sys.executable, str(DESCRIBE), "t1", "--conf-d", str(conf_d),
-                        "--what-if", str(conf_d / "_defaults.yaml"), "--format", "json"],
+                        "--what-if", str(copy), "--replaces", str(carrier), "--format", "json"],
                        capture_output=True, text=True, encoding="utf-8", errors="replace",
                        timeout=120, env={**os.environ, "PYTHONIOENCODING": "utf-8"})
     assert p.returncode == 0, p.stderr
     lines = [l for l in p.stderr.splitlines() if "only through a merge key" in l]
-    assert len(lines) == 1, p.stderr
+    assert len(lines) == 2, p.stderr
+    assert sum(str(copy) in l for l in lines) == 1, p.stderr
+    assert sum(str(copy) not in l and "_defaults.yaml" in l for l in lines) == 1, p.stderr

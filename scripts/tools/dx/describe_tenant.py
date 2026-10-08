@@ -5,7 +5,8 @@ Usage:
     python3 scripts/tools/dx/describe_tenant.py <tenant-id> [--conf-d PATH]
     python3 scripts/tools/dx/describe_tenant.py <tenant-id> --show-sources
     python3 scripts/tools/dx/describe_tenant.py <tenant-id> --diff <tenant-id-2>
-    python3 scripts/tools/dx/describe_tenant.py <tenant-id> --what-if <path/to/_defaults.yaml>
+    python3 scripts/tools/dx/describe_tenant.py <tenant-id> --what-if <outside/draft.yaml>
+    python3 scripts/tools/dx/describe_tenant.py <tenant-id> --what-if <copy.yaml> --replaces <conf.d/team/_defaults.yaml>
     python3 scripts/tools/dx/describe_tenant.py --all --conf-d PATH --output effective.json
 
 Resolves the full inheritance chain (L0→L1→L2→L3→tenant) using deep merge
@@ -1502,8 +1503,8 @@ class ConfDScanner:
             by_dir[d] = [(chosen, resolved)]
         self._defaults_by_dir = by_dir
         self.defaults_data = defaults_files
-        # #2097: the resolved files of this listing — `--what-if` substitutes
-        # the file at its path when it is one of them.
+        # #2097: the resolved files of this listing — the files `--replaces`
+        # may name, and the ones `--what-if` alone refuses (F1).
         self.listed_files = frozenset(p.resolve() for p in entries)
         self._platform_files = self._read_platform_files(entries)
 
@@ -1665,7 +1666,7 @@ class ConfDScanner:
         `replace` maps a resolved path to a document that stands in for that
         file's `tenants:` block (`--what-if` on a root platform file — the
         defaults carrier, or one off the chain such as `_profiles.yaml`,
-        which `what_if_result` substitutes in place since #2097).
+        which `what_if_result` substitutes for `--replaces` since #2097).
         """
         out: list[tuple[str, dict]] = []
         for name, resolved, blocks in self._platform_files:
@@ -1710,7 +1711,8 @@ class ConfDScanner:
 
         ⛔ #1967: ONE rule for the levels this tool computes — the chain's
         carriers, and the `--what-if` file WHEN IT IS NOT a file of the
-        scanned tree (#2097: such a file is substituted in place). The level is that of the directory HOLDING the entry,
+        scanned tree (#2097: such a file is refused, or names a `--replaces`
+        target). The level is that of the directory HOLDING the entry,
         resolved (the same key `_scan` groups carriers by,
         `dp.parent.resolve()`), so a linked conf.d or a `..` in the spelling
         lands on the real directory; the entry's own name is never followed.
@@ -1719,11 +1721,11 @@ class ConfDScanner:
         while an identical regular file was inserted, and
         `_x.yaml -> sub/deep/y.yaml` counted as level 2 instead of 0.
 
-        ⚠️ Not covered by this rule (pre-existing, unchanged): `--what-if`
-        decides `substitute` by comparing the RESOLVED what-if path with the
-        scanned files (`listed_files`, resolved), so a what-if link pointing
-        at a file of the tree replaces that file rather than being placed at
-        its own level.
+        ⚠️ Not covered by this rule: whether the `--what-if` file IS a file
+        of the tree is decided on the RESOLVED path against the scanned
+        files (`listed_files`, resolved), so a what-if link pointing at a
+        file of the tree is refused (#2097 F1: it would compare that file
+        with itself) rather than being placed at its own level.
         """
         holder = Path(os.path.realpath(entry.absolute().parent))
         try:
@@ -1916,32 +1918,62 @@ class WhatIfError(Exception):
 
 def what_if_result(scanner: "ConfDScanner", tid: str, what_if_path: Path,
                    what_if_entry: Path, what_if_data: Any,
-                   what_if_platform_doc: Any) -> dict:
+                   what_if_platform_doc: Any,
+                   replaces: "Path | None" = None) -> dict:
     """`--what-if`: `tid`'s effective config with `what_if_path`'s content
     (`what_if_data` as a defaults carrier reads it, `what_if_platform_doc`
     as a platform / tenant file reads it) in the place it names, diffed
     against the tree `scanner` read.
 
     `substitution_type`:
-      - "substitute": `what_if_path` (resolved) is a file of the scanned
-        tree. Its content stands in for that file and the tree is evaluated
-        again (#2097): as a carrier on `tid`'s chain, as a root platform
-        file (its `tenants:` / `profiles:` blocks), as `tid`'s own tenant
-        file — and as nothing at all where no plane reads it for `tid`
-        (`_profiles.yaml` is not a chain level; a carrier on another
-        branch is not on this chain). Unchanged bytes therefore never
-        report a reload. Before #2097 a file off the chain was always
-        inserted as a chain level, its whole document merged as defaults.
-      - "insert": a path inside conf.d that is not a scanned file — placed
-        in the chain at its entry's level (`entry_level`).
-      - "append-external": a path outside conf.d — the highest chain level.
+      - "substitute": `replaces` (resolved) is given — a file of the scanned
+        tree. `what_if_path`'s content stands in for THAT file and the tree
+        is evaluated again (#2097): as a carrier on `tid`'s chain, as a root
+        platform file (its `tenants:` / `profiles:` blocks), as `tid`'s own
+        tenant file — and as nothing at all where no plane reads it for
+        `tid` (`_profiles.yaml` is not a chain level; a carrier on another
+        branch is not on this chain). The baseline is the tree as scanned,
+        so it holds `replaces`' current bytes; the simulation holds
+        `what_if_path`'s.
+      - "insert": no `replaces`, and `what_if_path` is inside conf.d but
+        not a scanned file (a `.`-prefixed draft) — placed in the chain at
+        its entry's level (`entry_level`).
+      - "append-external": no `replaces`, and `what_if_path` is outside
+        conf.d — the highest chain level.
+
+    ⛔ #2097 F1: `what_if_path` that IS a scanned file, given without
+    `replaces`, is refused. The scanner read that file's bytes for the
+    baseline and the simulation would read the same bytes again — an
+    in-place edit compared with itself, so every edit reported "no reload"
+    (fail-open; chain carriers had it before #2097 too). For the same
+    reason `replaces` resolving to `what_if_path` is refused, and so is a
+    `replaces` that is not a scanned file (nothing there to stand in for).
 
     ⚠️ Not simulated in "substitute": a tenant file whose new content
     declares `tid` when `tid` lives in another file (the exporter would see
     a duplicate), and any OTHER tenant the new content adds or drops.
 
-    Raises WhatIfError when `what_if_path` is `tid`'s own tenant file and
-    the new content no longer declares `tid`."""
+    Raises WhatIfError for the refusals above, and when `replaces` is
+    `tid`'s own tenant file and the new content no longer declares `tid`."""
+    if replaces is None:
+        if what_if_path in scanner.listed_files:
+            raise WhatIfError(
+                f"--what-if file {what_if_path} is a file of the scanned tree: the baseline "
+                f"already reads its current bytes, so the simulation would compare the file "
+                f"with itself and never report a reload. Save the modified content as a "
+                f"copy and run: --what-if <copy> --replaces {what_if_path}")
+        target = what_if_path
+    else:
+        if replaces not in scanner.listed_files:
+            raise WhatIfError(
+                f"--replaces {replaces} is not a file of the scanned tree {scanner.conf_d} "
+                f"(it must name an existing config file the scan lists)")
+        if replaces == what_if_path:
+            raise WhatIfError(
+                f"--what-if {what_if_path} and --replaces {replaces} are the same file: "
+                f"that compares the file with itself. Save the modified content as a "
+                f"separate copy and pass the copy to --what-if")
+        target = replaces
     # Baseline: current effective config. #772: use the RAW (deep_merge)
     # `_custom_alerts` here so it matches the simulated side below (which is
     # built from an in-memory modified chain the compiler walker cannot
@@ -1954,21 +1986,21 @@ def what_if_result(scanner: "ConfDScanner", tid: str, what_if_path: Path,
     chain = scanner.defaults_chain[tid]
     chain_entries = scanner._defaults_chain_entries[tid]
     simulated_defaults_data = dict(scanner.defaults_data)
-    simulated_defaults_data[str(what_if_path)] = what_if_data
+    simulated_defaults_data[str(target)] = what_if_data
     tenant_raw = None
 
-    if what_if_path in scanner.listed_files:
-        # ⛔ Same-path substitution, on or off the chain (#2097): the chain
-        # is unchanged, so a file off it changes the chain merge in nothing
-        # (`simulated_defaults_data` is read only for chain levels).
+    if replaces is not None:
+        # ⛔ Substitution of `replaces`, on or off the chain (#2097): the
+        # chain is unchanged, so a file off it changes the chain merge in
+        # nothing (`simulated_defaults_data` is read only for chain levels).
         simulated_chain = list(chain)
         substitution_type = "substitute"
-        if what_if_path == scanner.tenant_files.get(tid):
+        if replaces == scanner.tenant_files.get(tid):
             block = what_if_platform_doc.get("tenants") if isinstance(what_if_platform_doc, dict) else None
             bodies = {_tenant_id(k): v for k, v in block.items()} if isinstance(block, dict) else {}
             if tid not in bodies:
-                raise WhatIfError(f"--what-if file {what_if_path} is tenant '{tid}''s own file, "
-                                  f"and its new content does not declare '{tid}'")
+                raise WhatIfError(f"--replaces {replaces} is tenant '{tid}''s own file, and "
+                                  f"the --what-if content ({what_if_path}) does not declare '{tid}'")
             tenant_raw = _tenant_body(bodies[tid])
     else:
         # Insert according to directory depth if the ENTRY is inside
@@ -2007,7 +2039,7 @@ def what_if_result(scanner: "ConfDScanner", tid: str, what_if_path: Path,
     # it stands in for a root platform file, so an edit to its
     # `tenants:` or `profiles:` block is simulated too.
     sim_tenant = scanner._tenant_layer(
-        tid, simulated, replace={str(what_if_path): what_if_platform_doc},
+        tid, simulated, replace={str(target): what_if_platform_doc},
         tenant_raw=tenant_raw)[0]
     simulated = deep_merge(simulated, sim_tenant)
     what_if_merged_hash = _canonical_hash(simulated)
@@ -2029,6 +2061,9 @@ def what_if_result(scanner: "ConfDScanner", tid: str, what_if_path: Path,
         "tenant_id": tid,
         "what_if_file": str(what_if_path),
         "substitution_type": substitution_type,
+        # #2097 F1: the scanned file the what-if content stood in for
+        # (`substitute`); None for `insert` / `append-external`.
+        "replaces": None if replaces is None else str(replaces),
         "baseline_merged_hash": baseline_merged_hash,
         "what_if_merged_hash": what_if_merged_hash,
         "merged_hash_changed": hash_changed,
@@ -2064,8 +2099,19 @@ def main() -> None:
         help="Diff effective config against another tenant",
     )
     parser.add_argument(
-        "--what-if", "-w", type=str, default=None, metavar="DEFAULTS_PATH",
-        help="Simulate effect of a modified _defaults.yaml: diff baseline vs what-if effective config + merged_hash change",
+        "--what-if", "-w", type=str, default=None, metavar="PATH",
+        help="Simulate the effect of a modified conf.d file: diff baseline vs what-if "
+             "effective config + merged_hash change. Without --replaces, PATH must not be "
+             "a file of the scanned tree (that would compare the file with itself; rc 2): "
+             "a PATH outside conf.d is merged as the highest defaults level "
+             "(append-external), an unlisted path inside it (e.g. a '.'-prefixed draft) "
+             "is inserted at its directory's level",
+    )
+    parser.add_argument(
+        "--replaces", type=str, default=None, metavar="PATH",
+        help="With --what-if: the conf.d file the --what-if content stands in for "
+             "(substitute). The baseline reads PATH as it is now; PATH must be a file the "
+             "scan lists, and must not be the --what-if file itself (rc 2)",
     )
     parser.add_argument(
         "--all", action="store_true",
@@ -2221,7 +2267,10 @@ def main() -> None:
         print(_output(result))
         return
 
-    # --what-if mode: simulate modified _defaults.yaml
+    if args.replaces and not args.what_if:
+        parser.error("--replaces requires --what-if")
+
+    # --what-if mode: simulate a modified conf.d file
     if args.what_if:
         what_if_path = Path(args.what_if).resolve()
         if not what_if_path.exists():
@@ -2244,8 +2293,10 @@ def main() -> None:
             sys.exit(EXIT_CALLER_ERROR)
 
         try:
-            result = what_if_result(scanner, tid, what_if_path, Path(args.what_if),
-                                    what_if_data, what_if_platform_doc)
+            result = what_if_result(
+                scanner, tid, what_if_path, Path(args.what_if), what_if_data,
+                what_if_platform_doc,
+                replaces=Path(args.replaces).resolve() if args.replaces else None)
         except WhatIfError as e:
             print(f"❌ {e}", file=sys.stderr)
             sys.exit(EXIT_CALLER_ERROR)
