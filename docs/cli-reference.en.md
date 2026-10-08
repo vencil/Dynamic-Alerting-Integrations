@@ -675,6 +675,7 @@ Choose one mode:
 
 2. **Directory Comparison Mode**: `--config-dir <dir> --baseline <dir>`
    (Compare two config versions)
+   Both trees are read by the exporter (`da-guard served-values`, da-guard required; #2119), and the values `/metrics` actually serves are compared per tenant and per threshold key: a change in the platform file, a `_defaults.yaml`, a profile or a sub-directory counts; tenants come from each file's `tenants:`, and a file without `tenants:` serves nothing, so editing it is no change. A key or tenant served on one side only (switched off, added, removed) has no value on the other. Values are compared over the whole UTC day: a key that differs only in another part of the day is reported with that part's values and names it (`window`). A severity-only change is not a change.
 
 **Options**
 
@@ -707,7 +708,7 @@ da-tools backtest --config-dir ./conf.d-new --baseline ./conf.d-old --lookback 7
 |------|-------------|
 | `0` | Success |
 | `1` | At least one threshold change was rated HIGH risk (review before merging); an unreachable Prometheus or a git that cannot run is not 1, see below |
-| `2` | Caller error: Prometheus unreachable without `--skip-if-unavailable`; `--lookback` supplied but unusable (not `<number><d\|h\|m>`, #1625); `--git-diff` supplied but git cannot run (git not installed, not inside a git work tree, no HEAD~1) — ⛔ do not switch to `--config-dir` to go green, that compares two trees, not your PR; the output path given to `-o/--output` / `--markdown-output` cannot be written (#1641); a conf.d file whose content cannot be read (not UTF-8 or not valid YAML; the message names the file, #1654) |
+| `2` | Caller error: Prometheus unreachable without `--skip-if-unavailable`; `--lookback` supplied but unusable (not `<number><d\|h\|m>`, #1625); `--git-diff` supplied but git cannot run (git not installed, not inside a git work tree, no HEAD~1) — ⛔ do not switch to `--config-dir` to go green, that compares two trees, not your PR; the output path given to `-o/--output` / `--markdown-output` cannot be written (#1641); a conf.d file whose content cannot be read (not UTF-8 or not valid YAML; the message names the file, #1654); in directory comparison mode, da-guard missing, failing or stale, or a file in either tree the exporter cannot read (with `--skip-if-unavailable` too, #2119) |
 
 ---
 

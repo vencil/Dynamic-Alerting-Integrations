@@ -4,7 +4,7 @@
 驗證:
   1. parse_lookback() — 時間窗口解析
   2. count_threshold_breaches() — 超閾值計數
-  3. extract_changes_from_dirs() — 目錄比對
+  3. extract_changes_from_dirs() — 目錄比對（值來自 da-guard served-values，#2119）
   4. backtest_change() — 單一變更回測
   5. generate_report() — 報告彙整
   6. generate_markdown() — Markdown 格式
@@ -176,57 +176,58 @@ class TestCountThresholdBreaches:
         assert bt.count_threshold_breaches([], 70) == 0
 
 
+_DEFAULTS = "defaults:\n  mysql_connections: 80\n"
+
+
+def _confd(root, files):
+    """A conf.d tree at `root`: {relative name: body}."""
+    os.makedirs(root, exist_ok=True)
+    for name, body in files.items():
+        with open(os.path.join(root, name), "w", encoding="utf-8") as f:
+            f.write(body)
+    return root
+
+
+@pytest.mark.usefixtures("da_guard_env")
 class TestExtractChangesFromDirs:
-    """extract_changes_from_dirs() 測試。"""
+    """extract_changes_from_dirs() 測試：兩棵樹的值都來自 da-guard served-values（#2119）。
 
-    def test_detect_changes(self):
-        """應偵測到閾值變更。"""
-        with tempfile.TemporaryDirectory() as current, \
-             tempfile.TemporaryDirectory() as baseline:
-            # Current: mysql_connections = 50
-            with open(os.path.join(current, "db-a.yaml"), "w", encoding="utf-8") as f:
-                f.write("mysql_connections: 50\n")
-            # Baseline: mysql_connections = 70
-            with open(os.path.join(baseline, "db-a.yaml"), "w", encoding="utf-8") as f:
-                f.write("mysql_connections: 70\n")
+    完整的語意矩陣（平台層、defaults 層、profile、子目錄、排程）在
+    tests/shared/test_backtest_served_values_matrix.py。
+    """
 
-            changes = bt.extract_changes_from_dirs(current, baseline)
-            assert len(changes) == 1
-            assert changes[0]["tenant"] == "db-a"
-            assert changes[0]["metric"] == "mysql_connections"
-            assert changes[0]["old_value"] == "70"
-            assert changes[0]["new_value"] == "50"
+    def test_detect_changes(self, tmp_path):
+        """應偵測到閾值變更，metric 是門檻 key，不是 `tenants`。"""
+        cur = _confd(tmp_path / "cur", {"_defaults.yaml": _DEFAULTS,
+                                        "db-a.yaml": "tenants:\n  db-a:\n    mysql_connections: 50\n"})
+        base = _confd(tmp_path / "base", {"_defaults.yaml": _DEFAULTS,
+                                          "db-a.yaml": "tenants:\n  db-a:\n    mysql_connections: 70\n"})
+        changes = bt.extract_changes_from_dirs(str(cur), str(base))
+        assert changes == [{"tenant": "db-a", "metric": "mysql_connections",
+                            "old_value": "70", "new_value": "50"}]
 
-    def test_skip_underscore_keys(self):
-        """_ 前綴的 key 應被忽略。"""
-        with tempfile.TemporaryDirectory() as current, \
-             tempfile.TemporaryDirectory() as baseline:
-            with open(os.path.join(current, "db-a.yaml"), "w", encoding="utf-8") as f:
-                f.write("_silent_mode: warning\nmysql_connections: 50\n")
-            with open(os.path.join(baseline, "db-a.yaml"), "w", encoding="utf-8") as f:
-                f.write("mysql_connections: 50\n")
+    def test_skip_underscore_keys(self, tmp_path):
+        """_ 前綴的 key 不是門檻，改了不算門檻變更。"""
+        cur = _confd(tmp_path / "cur", {"_defaults.yaml": _DEFAULTS,
+                                        "db-a.yaml": "tenants:\n  db-a:\n    _silent_mode: warning\n"
+                                                     "    mysql_connections: 50\n"})
+        base = _confd(tmp_path / "base", {"_defaults.yaml": _DEFAULTS,
+                                          "db-a.yaml": "tenants:\n  db-a:\n    mysql_connections: 50\n"})
+        assert bt.extract_changes_from_dirs(str(cur), str(base)) == []
 
-            changes = bt.extract_changes_from_dirs(current, baseline)
-            assert len(changes) == 0
+    def test_defaults_file_change_is_a_change(self, tmp_path):
+        """`_defaults.yaml` 改了，沒覆寫該 key 的租戶送出的值就變了（#2119；以前略過 `_` 檔）。"""
+        tenant = {"db-a.yaml": "tenants:\n  db-a: {}\n"}
+        cur = _confd(tmp_path / "cur", {"_defaults.yaml": "defaults:\n  mysql_connections: 90\n", **tenant})
+        base = _confd(tmp_path / "base", {"_defaults.yaml": _DEFAULTS, **tenant})
+        assert bt.extract_changes_from_dirs(str(cur), str(base)) == [
+            {"tenant": "db-a", "metric": "mysql_connections", "old_value": "80", "new_value": "90"}]
 
-    def test_skip_underscore_files(self):
-        """_ 前綴的檔案應被忽略。"""
-        with tempfile.TemporaryDirectory() as current, \
-             tempfile.TemporaryDirectory() as baseline:
-            with open(os.path.join(current, "_defaults.yaml"), "w", encoding="utf-8") as f:
-                f.write("mysql_connections: 50\n")
-            changes = bt.extract_changes_from_dirs(current, baseline)
-            assert len(changes) == 0
-
-    def test_no_changes(self):
+    def test_no_changes(self, tmp_path):
         """相同配置不應有變更。"""
-        with tempfile.TemporaryDirectory() as current, \
-             tempfile.TemporaryDirectory() as baseline:
-            for d in [current, baseline]:
-                with open(os.path.join(d, "db-a.yaml"), "w", encoding="utf-8") as f:
-                    f.write("mysql_connections: 50\n")
-            changes = bt.extract_changes_from_dirs(current, baseline)
-            assert len(changes) == 0
+        files = {"_defaults.yaml": _DEFAULTS, "db-a.yaml": "tenants:\n  db-a:\n    mysql_connections: 50\n"}
+        cur, base = _confd(tmp_path / "cur", files), _confd(tmp_path / "base", files)
+        assert bt.extract_changes_from_dirs(str(cur), str(base)) == []
 
 
 class TestGenerateReport:
@@ -579,7 +580,7 @@ class TestJsonEnvelope:
         assert "Prometheus unavailable" in captured.err
         assert "Prometheus" not in captured.out
 
-    def test_no_changes_json_envelope(self, monkeypatch, tmp_path, capsys, cli_argv):
+    def test_no_changes_json_envelope(self, monkeypatch, tmp_path, capsys, cli_argv, da_guard_env):
         """Prometheus 可達但零變更 + --json → no_changes envelope、exit 0。"""
         monkeypatch.setattr(bt, "prometheus_available", lambda url, timeout=5: True)
         conf_d = tmp_path / "conf.d"
@@ -855,14 +856,18 @@ class TestConfdSpellingParityWithTheExporter:
     """
 
     # ── site 1 of 5: extract_changes_from_dirs ────────────────────────
-    def test_dir_comparison_sees_a_yml_carrier(self, tmp_path):
+    # #2119: the trees are read by da-guard, so the spelling rule is the
+    # exporter's own; these rows pin that it reaches this tool's answer.
+    def test_dir_comparison_sees_a_yml_carrier(self, tmp_path, da_guard_env):
         """LOWER + CONTROL: `.yml` and `.yaml` twins both yield a change."""
         cur, base = tmp_path / "cur", tmp_path / "base"
-        cur.mkdir()
-        base.mkdir()
-        for name in ("db-a.yaml", "db-b.yml"):
-            (cur / name).write_text("mysql_connections: 50\n", encoding="utf-8")
-            (base / name).write_text("mysql_connections: 70\n", encoding="utf-8")
+        for where, value in ((cur, 50), (base, 70)):
+            where.mkdir()
+            (where / "_defaults.yaml").write_text("defaults:\n  mysql_connections: 80\n",
+                                                  encoding="utf-8")
+            for name, tenant in (("db-a.yaml", "db-a"), ("db-b.yml", "db-b")):
+                (where / name).write_text(
+                    f"tenants:\n  {tenant}:\n    mysql_connections: {value}\n", encoding="utf-8")
 
         tenants = {c["tenant"] for c in bt.extract_changes_from_dirs(str(cur), str(base))}
         assert tenants == {"db-a", "db-b"}, (
@@ -870,15 +875,18 @@ class TestConfdSpellingParityWithTheExporter:
             "row and was missing before the widening"
         )
 
-    def test_dir_comparison_still_ignores_non_config_extensions(self, tmp_path):
+    def test_dir_comparison_still_ignores_non_config_extensions(self, tmp_path, da_guard_env):
         """UPPER: widened to CONFIG_SUFFIXES, not to 'any file'."""
         cur, base = tmp_path / "cur", tmp_path / "base"
-        cur.mkdir()
-        base.mkdir()
-        # CONTROL row proves the fixture can produce a change at all.
-        for name in ("db-a.yaml", "db-c.json", "db-d.yang", "db-e.txt"):
-            (cur / name).write_text("mysql_connections: 50\n", encoding="utf-8")
-            (base / name).write_text("mysql_connections: 70\n", encoding="utf-8")
+        for where, value in ((cur, 50), (base, 70)):
+            where.mkdir()
+            (where / "_defaults.yaml").write_text("defaults:\n  mysql_connections: 80\n",
+                                                  encoding="utf-8")
+            # CONTROL row proves the fixture can produce a change at all.
+            for name, tenant in (("db-a.yaml", "db-a"), ("db-c.json", "db-c"),
+                                 ("db-d.yang", "db-d"), ("db-e.txt", "db-e")):
+                (where / name).write_text(
+                    f"tenants:\n  {tenant}:\n    mysql_connections: {value}\n", encoding="utf-8")
 
         tenants = {c["tenant"] for c in bt.extract_changes_from_dirs(str(cur), str(base))}
         assert tenants == {"db-a"}

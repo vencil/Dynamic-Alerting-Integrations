@@ -558,15 +558,17 @@ def test_ls_tree_is_cwd_relative_while_diff_is_repo_root_relative(tmp_path):
     assert diff_out, "the diff arm produced nothing, so this fixture is vacuous"
 
 
-def test_both_change_sources_drop_an_unusable_name_the_same_way(
-        tmp_path, prom_url):
-    """⛔ The anti-#1911 assertion: one carrier, one answer, two enumerators.
+def test_both_change_sources_answer_an_unusable_name_without_a_traceback(
+        tmp_path, prom_url, da_guard_env):
+    """⛔ The anti-#1911 assertion: one carrier, two enumerators, neither
+    crashing and neither losing the tenant silently.
 
-    `--git-diff` and `--config-dir` reach tenant ids by different routes
-    (git, and `os.listdir`). Guarding only the first would leave them
-    disagreeing about the same file — which is the shape this entire family
-    exists to remove, and which this chain has already produced by fixing
-    one path of a pair.
+    `--git-diff` takes the tenant id from the carrier's NAME (git), so a name
+    that is not valid UTF-8 cannot be a PromQL label value: it is dropped and
+    named. `--config-dir` no longer takes it from the name at all (#2119:
+    da-guard served-values reads both trees, the tenant comes from the
+    file's `tenants:` mapping), so the same carrier's change reaches the
+    report under its tenant `acme`.
     """
     repo = _repo_with_removal(tmp_path / "src_git",
                               [(INVALID_UTF8_CARRIER, b"acme")])
@@ -575,6 +577,8 @@ def test_both_change_sources_drop_an_unusable_name_the_same_way(
     cur, base = tmp_path / "cur", tmp_path / "base"
     for directory, body in ((cur, _AFTER_REMOVED), (base, _BEFORE)):
         directory.mkdir(parents=True)
+        (directory / "_defaults.yaml").write_text(
+            "defaults:\n  cpu_usage: 90\n  mem_usage: 90\n", encoding="utf-8")
         with open(os.fsencode(str(directory)) + b"/" + INVALID_UTF8_CARRIER,
                   "wb") as handle:
             handle.write(body % b"acme")
@@ -586,6 +590,9 @@ def test_both_change_sources_drop_an_unusable_name_the_same_way(
     for label, result in (("--git-diff", from_git), ("--config-dir", from_dirs)):
         assert result.returncode == 0, f"[{label}] rc={result.returncode} {result.stderr!r}"
         assert "Traceback" not in result.stderr, f"[{label}] {result.stderr!r}"
-        assert "not valid UTF-8" in result.stderr, (
-            f"[{label}] the carrier was dropped without being named: "
-            f"{result.stderr!r}")
+    assert "not valid UTF-8" in from_git.stderr, (
+        f"[--git-diff] the carrier was dropped without being named: "
+        f"{from_git.stderr!r}")
+    # The removed override falls back to the default: 80 -> 90 on /metrics.
+    assert "acme/cpu_usage: 80 -> 90" in from_dirs.stdout, (
+        f"[--config-dir] {from_dirs.stdout!r} {from_dirs.stderr!r}")
