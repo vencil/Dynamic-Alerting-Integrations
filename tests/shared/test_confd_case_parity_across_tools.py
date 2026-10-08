@@ -2025,13 +2025,20 @@ def test_git_diff_path_reports_a_removal_under_either_casing(
 
 
 def test_config_dir_recipe_scan_sees_either_casing(
-        tmp_path: pathlib.Path) -> None:
+        tmp_path: pathlib.Path, da_guard_env) -> None:
     """The fourth site: `main()`'s own `--config-dir` scan, which feeds the
     custom-alert notice. It is a SEPARATE listing from
     `extract_changes_from_dirs`, so the tests above cannot reach it — and
     reverting it alone left the suite green.
 
     Driven through the CLI because that is the only way this site runs.
+
+    ⚠️ Run against a real da-guard (`da_guard_env`): without one the tool
+    takes its "da-guard unavailable" path, and the ghost check below passed
+    only on hosts where no da-guard was found. With one, da-guard's own
+    stderr is forwarded behind the `da-guard| ` prefix — including its
+    legitimate WARN about the `_defaults.yaml` `tenants:` block naming
+    `ghost_reserved` — so the ghost check reads only this tool's own lines.
     """
     def _recipe_body(tenant: str) -> str:
         return (f"tenants:\n  {tenant}:\n    cpu_usage: 80\n"
@@ -2074,7 +2081,9 @@ def test_config_dir_recipe_scan_sees_either_casing(
              "--skip-if-unavailable", "--json"],
             capture_output=True, timeout=180, cwd=str(tmp_path),
             env=dict(os.environ, PYTHONIOENCODING="utf-8"))
-        seen[arm] = r.stderr.decode("utf-8", "replace")
+        seen[arm] = "\n".join(
+            line for line in r.stderr.decode("utf-8", "replace").splitlines()
+            if not line.lstrip().startswith("da-guard| "))
     assert "_custom_alerts" in seen["lower"], (
         f"fixture is vacuous — the lower arm printed no recipe notice:\n"
         f"{seen['lower'][:400]}")
