@@ -834,8 +834,8 @@ class GoRejectedBoolTag:
         return (f"{self.path}: explicit `!!bool {self.text}` — yaml.v3 (the exporter's "
                 f"YAML library) does not accept it (only true / True / TRUE / false / "
                 f"False / FALSE under `!!bool`); write true or false without the tag. "
-                f"Run `make validate-config`: it asks da-guard whether the exporter can "
-                f"read this file")
+                f"Whether the exporter can still read this file is decided by da-guard — "
+                f"see validate-config's `profiles` row for this tree (`--config-dir`)")
 
 
 def find_go_rejected_bool_tags(root: Optional["yaml.Node"]) -> list[GoRejectedBoolTag]:

@@ -2146,8 +2146,11 @@ def main() -> None:
     args = parser.parse_args()
     # #2097 blind review 2 (E): before any mode branch — `--all` / `--diff`
     # returned rc 0 with `--replaces` silently ignored. `is not None`, not
-    # truthiness: `--replaces ''` was taken as "not given" (#2509 blind review 3).
-    if args.replaces is not None and not args.what_if:
+    # truthiness: `--replaces ''` was taken as "not given" (#2509 blind review 3),
+    # and so was `--what-if ''` (blind review 4).
+    if args.what_if == "":
+        parser.error("--what-if needs a path (got an empty string)")
+    if args.replaces is not None and args.what_if is None:
         parser.error("--replaces requires --what-if")
     if args.replaces == "":
         parser.error("--replaces needs a path (got an empty string)")
@@ -2293,7 +2296,7 @@ def main() -> None:
         return
 
     # --what-if mode: simulate a modified conf.d file
-    if args.what_if:
+    if args.what_if is not None:
         what_if_path = Path(args.what_if).resolve()
         if not what_if_path.exists():
             print(f"❌ --what-if file not found: {what_if_path}", file=sys.stderr)

@@ -32,7 +32,7 @@ WARN (#2509, never changes the exit code): an unquoted YAML 1.1 boolean word
   held to the tenant schema for this and #2164. An explicit `!!bool yes`
   (yaml.v3 does not accept that tag on that text) is the same WARN, wherever
   it is: whether the exporter can still read the file is da-guard's verdict,
-  which `make validate-config` reports — this lint makes no claim about it.
+  which validate-config's `profiles` row reports — this lint makes no claim about it.
   A value PyYAML cannot construct (`!!bool y`, `!!int x`) is a named ERROR
   (not a traceback) saying this lint could not schema-check the file.
 

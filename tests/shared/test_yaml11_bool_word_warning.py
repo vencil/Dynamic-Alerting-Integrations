@@ -163,6 +163,9 @@ def test_both_lint_paths_warn_naming_file_and_field(tmp_path, field, word):
     row = vc.check_yaml_quoting(str(conf_d))
     assert row["status"] == vc.WARN, row
     assert row["details"] == warns, row
+    # 盲審第 4 輪 R4-3：沒有明確 tag 時用通用 hint，且它要給得出「改寫成 true / false」。
+    assert row["hint"] is None, row
+    assert "write it as true / false" in vc._CHECK_HINTS["yaml_quoting"][0]
 
 
 @pytest.mark.parametrize("field", sorted(FIELDS))
@@ -278,20 +281,46 @@ _EXPLICIT = ["!!bool yes", "!!bool on", "!!bool no", "!!bool off", "!!bool Yes",
 @pytest.mark.parametrize("field", sorted(FIELDS))
 @pytest.mark.parametrize("word", _EXPLICIT)
 def test_explicit_bool_tag_yaml_v3_refuses_is_a_neutral_warn(tmp_path, field, word):
-    """明確 `!!bool yes`：兩條 lint 路徑都給 WARN、rc 不變，指向 `make validate-config`，
-    不斷言 exporter 會怎麼處理這份檔。"""
+    """明確 `!!bool yes`：兩條 lint 路徑都給 WARN、rc 不變，指向 da-guard 與 validate-config，
+    不斷言 exporter 會怎麼處理這份檔。不綁 `make` 入口（盲審第 4 輪 R4-1：Makefile 寫死
+    conf.d 路徑，對其他樹不成立；這句也會出現在 validate-config 自己的輸出裡）。"""
     conf_d, line = _tree(tmp_path, field, word)
     p = _lint(conf_d)
     assert p.returncode == 0, p.stderr
     (w,) = _warn_lines(p)
     assert w.startswith(f"WARN: {FIELDS[field][0]}:{line}: {FIELDS[field][2]}: explicit "
                         f"`!!bool {word.split(' ', 1)[1].strip(chr(39))}`"), w
-    assert w.endswith("Run `make validate-config`: it asks da-guard whether the exporter can "
-                      "read this file"), w
+    for point in ("da-guard", "validate-config"):
+        assert point in w, (point, w)
+    assert "make" not in w, w
     for claim in ("cannot decode", "drops", "parse_failed", "exits 3"):
         assert claim not in w, (claim, w)
     row = vc.check_yaml_quoting(str(conf_d))
     assert row["status"] == vc.WARN and row["details"] == [w], row
+    # 盲審第 4 輪 R4-3：hint 不得叫人加引號（`!!bool 'yes'` 一樣被拒），要叫人拿掉 tag。
+    assert "remove the tag" in row["hint"] and "Quote" not in row["hint"], row
+
+
+_SLACK_YES = ("    _routing:\n      receiver:\n        type: slack\n"
+              "        api_url: \"https://hooks.slack.com/services/x\"\n        channel: yes\n")
+
+
+@pytest.mark.parametrize("other, status", [(_WEBHOOK.format(v="on"), vc.WARN),
+                                           (_SLACK_YES, vc.FAIL)],
+                         ids=["bool-word-warn", "string-field-error"])
+def test_yaml_quoting_hint_names_both_remedies_when_both_kinds_are_listed(tmp_path, other, status):
+    """盲審第 4 輪 R4-3：未加引號的字眼（WARN 或 #2164 的 ERROR）與明確 `!!bool` 同列時，
+    hint 兩種建議都給。"""
+    conf_d = tmp_path / "conf.d"
+    conf_d.mkdir()
+    (conf_d / "_defaults.yaml").write_text(_DEFAULTS, encoding="utf-8")
+    (conf_d / "t1.yaml").write_text(
+        "tenants:\n  t1:\n" + other
+        + "    _state_maintenance:\n      enabled: !!bool yes\n", encoding="utf-8")
+    row = vc.check_yaml_quoting(str(conf_d))
+    assert row["status"] == status and len(row["details"]) == 2, row
+    assert row["hint"].startswith(vc._CHECK_HINTS["yaml_quoting"][0]), row
+    assert "remove the tag" in row["hint"], row
 
 
 @pytest.mark.parametrize("word", ["!!bool true", "!!bool True", "!!bool FALSE"])

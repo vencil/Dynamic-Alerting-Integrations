@@ -255,6 +255,20 @@ def test_empty_replaces_is_refused_not_taken_as_absent(tmp_path, mode):
     assert want in p.stderr, p.stderr
 
 
+@pytest.mark.parametrize("extra", [[], ["--replaces", "X"]], ids=["alone", "with-replaces"])
+def test_empty_what_if_is_refused_not_taken_as_absent(tmp_path, extra):
+    """盲審第 4 輪 R4-2：`--what-if ''` 原本以 truthiness 判斷——單獨給 rc 0 被靜默忽略，
+    配 `--replaces` 則被誤報成「--replaces requires --what-if」。現在具名 rc 2。"""
+    conf_d = _tree(tmp_path, True)
+    p = subprocess.run(
+        [sys.executable, str(DESCRIBE), "t1", "--conf-d", str(conf_d), "--what-if", "", *extra],
+        capture_output=True, text=True, encoding="utf-8", errors="replace", timeout=120)
+    assert p.returncode == 2, (p.returncode, p.stdout, p.stderr)
+    assert p.stdout == "", p.stdout
+    assert "--what-if needs a path (got an empty string)" in p.stderr, p.stderr
+    assert "--replaces requires --what-if" not in p.stderr, p.stderr
+
+
 def test_cli_outside_the_tree_still_appends(tmp_path):
     """對照組：樹外的檔維持 append-external（整份當最高層 defaults）。"""
     conf_d = _tree(tmp_path, False)
