@@ -77,6 +77,7 @@ modules:
       - format_json_report
       - safe_label
     excluded:
+      _tag_as_written: "Three-branch tag rendering for a message (#2509); its outputs are table-pinned per branch in tests/shared/test_yaml_misread_scalars.py::test_explicit_tag_is_named_as_written, not a numeric/string law"
       load_tenant_configs: "Orchestrator over iter_yaml_files + load_yaml_file_exporter_keys; composite contract is exercised by integration tests (text tenant ids: tests/ops/test_tenant_id_as_text.py, #2114)"
       load_yaml_file_exporter_keys: "load_yaml_file's I/O + error contract over _lib_yaml_keys' loader (#2114); the key rule is table-pinned against the exporter's decode in tests/shared/test_tenant_id_yaml_spelling_parity.py (22 spellings, Go half asserts the same table), not a value computation this function owns"
       load_yaml_file_for_rewrite: "load_yaml_file_exporter_keys' I/O + error contract over _lib_yaml_keys.RewriteLoader (#2220); the no-retype property is pinned end to end against the exporter's served values in tests/ops/test_rewrite_preserves_plain_scalars.py, not a value computation this function owns"
@@ -129,6 +130,14 @@ modules:
       _schema_item_children: "items / additionalItems child lookup (#2164); sequence-item pin in tests/shared/test_yaml_misread_scalars.py"
       _schema_pointer: "JSON-pointer fragment lookup (#2164); exercised through every $ref in the shipped schemas"
       _json_type_of: "Python value → JSON type name for const/enum (#2164); enum pin (_severity_dedup) in tests/shared/test_yaml_misread_scalars.py"
+      _plain_scalars_with_schema: "The node-tree × schema walk find_misread_scalars and find_yaml11_bool_words share (#2164 / #2509); exercised through both finders' pins"
+      # #2509: YAML 1.1 boolean words in boolean fields. Same rationale as #2164:
+      # the verdict is PyYAML's resolver × the schema, so it is example-pinned.
+      find_yaml11_bool_words: "Node-tree × schema walk (#2509); word set pinned to the schema's yamlBool enum (Go YAML11BoolLiterals), must-ring and quiet controls (true/false, string field, quoted) and the Go reading (da-guard effective) in tests/shared/test_yaml11_bool_word_warning.py"
+      YamlBoolWord.message: "Operator-facing text (#2509); suggestion shapes pinned in tests/shared/test_yaml11_bool_word_warning.py"
+      find_go_rejected_bool_tags: "Whole-tree walk for an explicit !!bool yaml.v3 does not accept (#2509); one neutral WARN per hit, every spelling and file kind, and the yaml.v3-accepted controls pinned in tests/shared/test_yaml11_bool_word_warning.py"
+      GoRejectedBoolTag.message: "Operator-facing text (#2509 review F4); pinned in tests/shared/test_yaml11_bool_word_warning.py"
+      _ExplicitTagStrictLoader.compose_scalar_node: "Composer hook marking an explicitly tagged scalar (#2509 review F4); exercised through find_go_rejected_bool_tags pins"
 
   scripts/tools/_lib_yaml.py:
     excluded:

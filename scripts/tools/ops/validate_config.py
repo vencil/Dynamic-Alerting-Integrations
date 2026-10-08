@@ -604,8 +604,21 @@ def check_yaml_quoting(config_dir: str) -> dict[str, object]:
     `_lib_io.find_misread_scalars`; nothing is listed here.
 
     A file that cannot be read is skipped: `yaml_syntax` already names it.
+
+    #2509: an unquoted YAML 1.1 boolean word (`yes` / `no` / `on` / `off`)
+    in a field that takes a boolean is listed too, as WARN (the row is WARN
+    when that is all it found): PyYAML reads a boolean, some of the
+    exporter's readers the string — `_lib_io.find_yaml11_bool_words`. An
+    explicit `!!bool yes` (yaml.v3 does not accept it) is the same WARN,
+    wherever it is; whether the exporter can still read that file is not
+    this row's verdict but da-guard's — a file its load drops FAILs the
+    rows that read the tree through it, with the exporter's reason
+    (`_with_exporter_reasons`). A root `_defaults*` file's
+    `tenants:` block is held to the tenant schema too (#2509 review F3), a
+    nested one is not (the exporter does not read it).
     """
-    from _lib_io import compose_all_nodes, find_misread_scalars
+    from _lib_io import (compose_all_nodes, find_go_rejected_bool_tags,
+                         find_misread_scalars, find_yaml11_bool_words)
     from _lib_confd import is_defaults_document_name
     schemas: dict[str, object] = {}
     for name in (_TENANT_SCHEMA, _PLATFORM_SCHEMA, _PROFILES_SCHEMA):
@@ -618,6 +631,7 @@ def check_yaml_quoting(config_dir: str) -> dict[str, object]:
         with open(path, encoding="utf-8") as fh:
             schemas[name] = json.load(fh)
     errors: list[str] = []
+    warnings: list[str] = []
     checked = 0
     for fpath in iter_config_files(config_dir):
         name = fpath.name
@@ -640,11 +654,25 @@ def check_yaml_quoting(config_dir: str) -> dict[str, object]:
             continue
         checked += 1
         for root in roots:
-            for hit in find_misread_scalars(root, schemas[schema_name],
-                                            schemas, schema_name):
-                errors.append(f"{label}:{hit.line}: {hit.message()}")
+            # #2509 review F3: a ROOT `_defaults*` file's `tenants:` block
+            # is held to the tenant schema too (same rule as check_confd_schema).
+            names = [schema_name]
+            if schema_name == _PLATFORM_SCHEMA and "/" not in label:
+                names.append(_TENANT_SCHEMA)
+            for name_ in names:
+                for hit in find_misread_scalars(root, schemas[name_], schemas, name_):
+                    errors.append(f"{label}:{hit.line}: {hit.message()}")
+                for word in find_yaml11_bool_words(root, schemas[name_], schemas, name_):
+                    warnings.append(f"WARN: {label}:{word.line}: {word.message()}")
+        # Same order as check_confd_schema: after the per-document findings.
+        warnings.extend(f"WARN: {label}:{tag.line}: {tag.message()}"
+                        for root in roots for tag in find_go_rejected_bool_tags(root))
+    # #2509 blind review 5: each line carries its own remedy; the row's hint
+    # only points back at them (a per-kind hint contradicted the lines).
     if errors:
-        return _make_result("yaml_quoting", FAIL, errors)
+        return _make_result("yaml_quoting", FAIL, errors + warnings)
+    if warnings:
+        return _make_result("yaml_quoting", WARN, warnings)
     return _make_result(
         "yaml_quoting", PASS,
         [f"{checked} files checked: no unquoted value in a string field "
@@ -2061,7 +2089,7 @@ _CHECK_HINTS: dict[str, tuple[str, str]] = {
         "docs/getting-started/for-platform-engineers.md",
     ),
     "yaml_quoting": (
-        "Quote each value listed above as it says. A plain yes / no / on / "
+        "Fix each value listed above as its own line says. A plain yes / no / on / "
         "off / true / 123 in a field the schema types as a string is read "
         "as a boolean or number by PyYAML but as text by the exporter and "
         "Alertmanager, so the tools disagree about your config.",

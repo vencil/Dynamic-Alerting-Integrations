@@ -5,7 +5,8 @@ Usage:
     python3 scripts/tools/dx/describe_tenant.py <tenant-id> [--conf-d PATH]
     python3 scripts/tools/dx/describe_tenant.py <tenant-id> --show-sources
     python3 scripts/tools/dx/describe_tenant.py <tenant-id> --diff <tenant-id-2>
-    python3 scripts/tools/dx/describe_tenant.py <tenant-id> --what-if <path/to/_defaults.yaml>
+    python3 scripts/tools/dx/describe_tenant.py <tenant-id> --what-if <outside/draft.yaml>
+    python3 scripts/tools/dx/describe_tenant.py <tenant-id> --what-if <copy.yaml> --replaces <conf.d/team/_defaults.yaml>
     python3 scripts/tools/dx/describe_tenant.py --all --conf-d PATH --output effective.json
 
 Resolves the full inheritance chain (L0→L1→L2→L3→tenant) using deep merge
@@ -955,9 +956,139 @@ class _GoKeyProfileTextLoader(_GoKeyLoader):
     the `--what-if` file — the reads #2297 changed. `ExporterKeyLoader.construct_mapping` takes that value
     before any constructor runs, so neither the timestamp nor the `!!binary`
     rendering (#2371) reaches it: `_profile: 2026-12-31` names profile
-    "2026-12-31", as the exporter's `ScheduledValue` keeps `value.Value`."""
+    "2026-12-31", as the exporter's `ScheduledValue` keeps `value.Value`.
+
+    A `_profile:` MAPPING is read as Go `withProfileText` reads it (#2515),
+    through `ScheduledValue.UnmarshalYAML` (pkg/config/parse.go):
+      - a WRITTEN `default:` key (the scheduled-value form, e.g.
+        `{default: '010'}`): the default's text — as yaml.v3 decodes a scalar
+        into a Go string: its source text (`010` is "010", `1.50` is "1.50",
+        `2026-12-31` is "2026-12-31"), a null is "", `!!binary` is the decoded
+        bytes. The mapping's other keys elect nothing.
+      - any other mapping (no `default` at all) stays the generic mapping;
+        it elects no profile (`_profile_name`).
+    ⚠️ Not mirrored, named on stderr (`_warn_unmirrored_profiles`): no
+    written `default:` but one reached through a merge key
+    (`{<<: {default: x}}`) or an alias key (`{*k : x}` with `&k default`). ScheduledValue sees `<<`, takes its
+    arbitrary-mapping branch and elects the yaml.v3 `Marshal` text of the
+    merged mapping (`default: x\\n`) as the profile NAME — normally an
+    unknown profile. Here it stays the generic mapping and elects nothing:
+    the served values agree unless a profile is named by that text, but
+    `_profile` and merged_hash differ from the exporter's.
+    ⚠️ Not mirrored: a `default:` that is a sequence or a mapping. yaml.v3
+    cannot decode it into a string, so the exporter rejects the WHOLE file
+    (the `_read_profiles` precedent); here `_profile` stays that mapping and
+    elects nothing."""
 
     raw_text_scalars = frozenset(_PROFILE_AS_TEXT)
+
+    def compose_node(self, parent, index):
+        """Remember which keys of a mapping are ALIASES (#2515 review F2).
+        PyYAML hands back the anchored node itself, so `{*k : '010'}` with
+        `&k default` looks like a written `default` key; yaml.v3's
+        ScheduledValue compares the alias node's own Value (the alias
+        name) and does not. Recorded by pair position: an alias KEY is
+        composed while its mapping holds `len(parent.value)` pairs."""
+        if (index is None and isinstance(parent, yaml.MappingNode)
+                and self.check_event(yaml.AliasEvent)):
+            positions = getattr(parent, "go_alias_key_positions", None)
+            if positions is None:
+                positions = parent.go_alias_key_positions = set()
+            positions.add(len(parent.value))
+        return super().compose_node(parent, index)
+
+    def flatten_mapping(self, node):
+        """Remember the keys a mapping WRITES before `<<` is merged into it
+        (#2515): `ScheduledValue` tests the written keys for `default`, and
+        PyYAML's flattening rewrites `node.value` in place. Recorded once, so
+        a node an alias reaches again keeps its written keys."""
+        if not hasattr(node, "go_written_keys"):
+            node.go_written_keys = _written_keys(node)
+        super().flatten_mapping(node)
+
+    def construct_mapping(self, node, deep=False):  # noqa: D102 — see class
+        mapping = super().construct_mapping(node, deep=deep)
+        for key_node, value_node in node.value:
+            if (isinstance(key_node, yaml.ScalarNode) and isinstance(value_node, yaml.MappingNode)
+                    and key_node.value in self.raw_text_scalars):
+                text = self._scheduled_value_text(value_node)
+                if text is not None:
+                    mapping[key_node.value] = text  # the dict keeps its `_GoKey`
+                elif ("default" not in value_node.go_written_keys
+                      and any(isinstance(k, yaml.ScalarNode) and k.value == "default"
+                              for k, _ in value_node.value)):
+                    # Merge-key-only `default` (flattened above): not mirrored
+                    # — kept generic, tagged for `_warn_unmirrored_profiles`.
+                    # Built deep here: the lazily filled dict `super()` handed
+                    # out may still be empty.
+                    mapping[key_node.value] = _UnmirroredMergeProfile(
+                        self.construct_mapping(value_node, deep=True))
+        return mapping
+
+    def _scheduled_value_text(self, node) -> "str | None":
+        """`ScheduledValue.Default` of a mapping `node`, as `withProfileText`
+        takes it; None where it leaves the generic value (see the class)."""
+        written = getattr(node, "go_written_keys", None)
+        if written is None:
+            written = _written_keys(node)
+        self.flatten_mapping(node)
+        if "default" in written:
+            default = None
+            for key_node, value_node in node.value:  # merged first, so the written one wins
+                if isinstance(key_node, yaml.ScalarNode) and key_node.value == "default":
+                    default = value_node
+            if not isinstance(default, yaml.ScalarNode):
+                return None  # yaml.v3 rejects the file; not mirrored (see the class)
+            if default.tag == _YAML_NULL_TAG and default.style is None:
+                return ""
+            if default.tag == _YAML_BINARY_TAG:
+                return self._construct_binary(default).decode(
+                    "utf-8", "describe_tenant.go_invalid_utf8")
+            return _reject_surrogates(default.value, default)
+        return None
+
+
+_YAML_NULL_TAG = "tag:yaml.org,2002:null"
+
+
+def _written_keys(node: Any) -> frozenset:
+    """The scalar keys `node` (a mapping, not yet flattened) WRITES: neither
+    merged in by `<<` nor an alias (`compose_node`'s positions) — the keys
+    yaml.v3's ScheduledValue sees by their Value."""
+    aliases = getattr(node, "go_alias_key_positions", ())
+    return frozenset(k.value for i, (k, _) in enumerate(node.value)
+                     if isinstance(k, yaml.ScalarNode) and i not in aliases)
+
+
+class _UnmirroredMergeProfile(dict):
+    """A `_profile:` mapping whose `default` comes only through a merge key
+    or an alias key (#2515): kept as the generic mapping, which the exporter does not do
+    (see `_GoKeyProfileTextLoader`). A plain dict otherwise."""
+
+
+# (resolved file, tenant id) already named — one line per file read, not per
+# construct (the platform files and the --what-if file are read again).
+_UNMIRRORED_PROFILE_WARNED: set = set()
+
+
+def _warn_unmirrored_profiles(path: Path, doc: Any) -> None:
+    """Name each tenant in `doc`'s `tenants:` whose `_profile` is an
+    `_UnmirroredMergeProfile`, once per file and tenant."""
+    block = doc.get("tenants") if isinstance(doc, dict) else None
+    if not isinstance(block, dict):
+        return
+    for tid, body in block.items():
+        if not (isinstance(body, dict) and isinstance(body.get("_profile"), _UnmirroredMergeProfile)):
+            continue
+        key = (str(Path(path).resolve()), str(tid))
+        if key in _UNMIRRORED_PROFILE_WARNED:
+            continue
+        _UNMIRRORED_PROFILE_WARNED.add(key)
+        print(f"WARNING: {path}: tenant '{tid}': `_profile` takes `default` only through a "
+              f"merge key (`<<`) or an alias key — not mirrored here. The exporter elects the YAML text of "
+              f"the merged mapping as the profile name; this tool keeps the mapping and "
+              f"elects no profile, so `_profile` and merged_hash differ from the "
+              f"exporter's (#2515).", file=sys.stderr)
 
 
 def _load_first_document(path: Path) -> Any:
@@ -986,7 +1117,9 @@ def _load_first_document(path: Path) -> Any:
         # #2123 strict + #2114 exporter keys, composed in `_lib_io`; each key
         # also carries the exporter's spelling (#2371), and `_profile:` is
         # source text (#2297).
-        return next(strict_safe_load_all(f, loader=_GoKeyProfileTextLoader), None)
+        doc = next(strict_safe_load_all(f, loader=_GoKeyProfileTextLoader), None)
+    _warn_unmirrored_profiles(path, doc)
+    return doc
 
 
 def _load_platform_doc(path: Path) -> Any:
@@ -1370,6 +1503,9 @@ class ConfDScanner:
             by_dir[d] = [(chosen, resolved)]
         self._defaults_by_dir = by_dir
         self.defaults_data = defaults_files
+        # #2097: the resolved files of this listing — the files `--replaces`
+        # may name, and the ones `--what-if` alone refuses (F1).
+        self.listed_files = frozenset(p.resolve() for p in entries)
         self._platform_files = self._read_platform_files(entries)
 
         # Collect all tenant files.
@@ -1528,11 +1664,9 @@ class ConfDScanner:
         """`tenant_id`'s entries in the root platform files, merge order.
 
         `replace` maps a resolved path to a document that stands in for that
-        file's `tenants:` block (`--what-if` on the root defaults carrier,
-        which it substitutes in the chain). ⚠️ `--what-if` on a root
-        platform file OUTSIDE the chain (`_profiles.yaml`) is not a faithful
-        simulation: the what-if path also inserts it as a chain level, which
-        predates #2019 and is not addressed here.
+        file's `tenants:` block (`--what-if` on a root platform file — the
+        defaults carrier, or one off the chain such as `_profiles.yaml`,
+        which `what_if_result` substitutes for `--replaces` since #2097).
         """
         out: list[tuple[str, dict]] = []
         for name, resolved, blocks in self._platform_files:
@@ -1576,8 +1710,9 @@ class ConfDScanner:
         """The chain level of conf.d entry `entry`, or None outside conf.d.
 
         ⛔ #1967: ONE rule for the levels this tool computes — the chain's
-        carriers, and the `--what-if` file WHEN IT IS NOT an existing chain
-        carrier. The level is that of the directory HOLDING the entry,
+        carriers, and the `--what-if` file WHEN IT IS NOT a file of the
+        scanned tree (#2097: such a file is refused, or names a `--replaces`
+        target). The level is that of the directory HOLDING the entry,
         resolved (the same key `_scan` groups carriers by,
         `dp.parent.resolve()`), so a linked conf.d or a `..` in the spelling
         lands on the real directory; the entry's own name is never followed.
@@ -1586,10 +1721,11 @@ class ConfDScanner:
         while an identical regular file was inserted, and
         `_x.yaml -> sub/deep/y.yaml` counted as level 2 instead of 0.
 
-        ⚠️ Not covered by this rule (pre-existing, unchanged): `--what-if`
-        decides `substitute` by comparing the RESOLVED what-if path with the
-        chain, so a what-if link pointing at an existing chain carrier
-        replaces that carrier rather than being placed at its own level.
+        ⚠️ Not covered by this rule: whether the `--what-if` file IS a file
+        of the tree is decided on the RESOLVED path against the scanned
+        files (`listed_files`, resolved), so a what-if link pointing at a
+        file of the tree is refused (#2097 F1: it would compare that file
+        with itself) rather than being placed at its own level.
         """
         holder = Path(os.path.realpath(entry.absolute().parent))
         try:
@@ -1694,13 +1830,17 @@ class ConfDScanner:
         return self._tenant_layer(tenant_id, self._chain_merged(tenant_id))[2]
 
     def _tenant_layer(self, tenant_id: str, chain: dict,
-                      replace: "dict[str, Any] | None" = None
+                      replace: "dict[str, Any] | None" = None,
+                      tenant_raw: Any = None
                       ) -> "tuple[Any, list[dict], list[dict]]":
         """The override merged over `chain`: the tenant block, the platform
         overlay (#2019) under it, the elected profile (#2117) under both —
-        and the two attributions. `replace` as for `platform_blocks`."""
+        and the two attributions. `replace` as for `platform_blocks`;
+        `tenant_raw`, when given, stands in for the tenant's own block
+        (`--what-if` on its tenant file)."""
         own, platform_sources = _overlay_tenant(
-            self.tenants[tenant_id], self.platform_blocks(tenant_id, replace=replace), chain)
+            self.tenants[tenant_id] if tenant_raw is None else tenant_raw,
+            self.platform_blocks(tenant_id, replace=replace), chain)
         layer, profile_sources = _expand_profile(own, self.profiles(replace=replace), chain)
         return layer, platform_sources, profile_sources
 
@@ -1772,6 +1912,186 @@ class ConfDScanner:
 # CLI
 # ---------------------------------------------------------------------------
 
+class WhatIfError(Exception):
+    """A `--what-if` the simulation cannot answer (a caller error)."""
+
+
+def _same_file(a: Path, b: Path) -> bool:
+    """One file on disk — a hard link is one too (#2097 blind review 2, D:
+    comparing resolved paths let a hard link to a scanned file through)."""
+    try:
+        return os.path.samefile(a, b)
+    except OSError:
+        return a == b
+
+
+def _listed_file_of(scanner: "ConfDScanner", path: Path) -> "Path | None":
+    """The scanned file *path* is (by path, else by inode), or None."""
+    if path in scanner.listed_files:
+        return path
+    return next((f for f in sorted(scanner.listed_files) if _same_file(f, path)), None)
+
+
+def what_if_result(scanner: "ConfDScanner", tid: str, what_if_path: Path,
+                   what_if_entry: Path, what_if_data: Any,
+                   what_if_platform_doc: Any,
+                   replaces: "Path | None" = None) -> dict:
+    """`--what-if`: `tid`'s effective config with `what_if_path`'s content
+    (`what_if_data` as a defaults carrier reads it, `what_if_platform_doc`
+    as a platform / tenant file reads it) in the place it names, diffed
+    against the tree `scanner` read.
+
+    `substitution_type`:
+      - "substitute": `replaces` (resolved) is given — a file of the scanned
+        tree. `what_if_path`'s content stands in for THAT file and the tree
+        is evaluated again (#2097): as a carrier on `tid`'s chain, as a root
+        platform file (its `tenants:` / `profiles:` blocks), as `tid`'s own
+        tenant file — and as nothing at all where no plane reads it for
+        `tid` (`_profiles.yaml` is not a chain level; a carrier on another
+        branch is not on this chain). The baseline is the tree as scanned,
+        so it holds `replaces`' current bytes; the simulation holds
+        `what_if_path`'s.
+      - "insert": no `replaces`, and `what_if_path` is inside conf.d but
+        not a scanned file (a `.`-prefixed draft) — placed in the chain at
+        its entry's level (`entry_level`).
+      - "append-external": no `replaces`, and `what_if_path` is outside
+        conf.d — the highest chain level.
+
+    ⛔ #2097 F1: `what_if_path` that IS a scanned file, given without
+    `replaces`, is refused. The scanner read that file's bytes for the
+    baseline and the simulation would read the same bytes again — an
+    in-place edit compared with itself, so every edit reported "no reload"
+    (fail-open; chain carriers had it before #2097 too). For the same
+    reason `replaces` resolving to `what_if_path` is refused, and so is a
+    `replaces` that is not a scanned file (nothing there to stand in for).
+
+    ⚠️ Not simulated in "substitute": a tenant file whose new content
+    declares `tid` when `tid` lives in another file (the exporter would see
+    a duplicate), and any OTHER tenant the new content adds or drops.
+
+    Raises WhatIfError for the refusals above, and when `replaces` is
+    `tid`'s own tenant file and the new content no longer declares `tid`."""
+    if replaces is None:
+        listed = _listed_file_of(scanner, what_if_path)
+        if listed is not None:
+            raise WhatIfError(
+                f"--what-if file {what_if_path} is a file of the scanned tree"
+                f"{'' if listed == what_if_path else f' ({listed}, through a hard link)'}: "
+                f"the baseline already reads its current bytes, so the simulation would "
+                f"compare the file with itself and never report a reload. Save the modified "
+                f"content as a copy and run: --what-if <copy> --replaces {listed}")
+        target = what_if_path
+    else:
+        if replaces not in scanner.listed_files:
+            raise WhatIfError(
+                f"--replaces {replaces} is not a file of the scanned tree {scanner.conf_d} "
+                f"(it must name an existing config file the scan lists)")
+        if _same_file(replaces, what_if_path):
+            raise WhatIfError(
+                f"--what-if {what_if_path} and --replaces {replaces} are the same file: "
+                f"that compares the file with itself. Save the modified content as a "
+                f"separate copy and pass the copy to --what-if")
+        target = replaces
+    # Baseline: current effective config. #772: use the RAW (deep_merge)
+    # `_custom_alerts` here so it matches the simulated side below (which is
+    # built from an in-memory modified chain the compiler walker cannot
+    # resolve) — otherwise an unrelated what-if edit would falsely diff the
+    # UNION baseline against the REPLACE simulation. The union view is the
+    # normal-mode / blast_radius contract, not what-if's.
+    baseline_effective = scanner.effective_config(tid, resolve_custom_alerts=False)
+    baseline_merged_hash = _canonical_hash(baseline_effective)
+
+    chain = scanner.defaults_chain[tid]
+    chain_entries = scanner._defaults_chain_entries[tid]
+    simulated_defaults_data = dict(scanner.defaults_data)
+    simulated_defaults_data[str(target)] = what_if_data
+    tenant_raw = None
+
+    if replaces is not None:
+        # ⛔ Substitution of `replaces`, on or off the chain (#2097): the
+        # chain is unchanged, so a file off it changes the chain merge in
+        # nothing (`simulated_defaults_data` is read only for chain levels).
+        simulated_chain = list(chain)
+        substitution_type = "substitute"
+        if replaces == scanner.tenant_files.get(tid):
+            block = what_if_platform_doc.get("tenants") if isinstance(what_if_platform_doc, dict) else None
+            bodies = {_tenant_id(k): v for k, v in block.items()} if isinstance(block, dict) else {}
+            if tid not in bodies:
+                raise WhatIfError(f"--replaces {replaces} is tenant '{tid}''s own file, and "
+                                  f"the --what-if content ({what_if_path}) does not declare '{tid}'")
+            tenant_raw = _tenant_body(bodies[tid])
+    else:
+        # Insert according to directory depth if the ENTRY is inside
+        # conf.d/, else append. #1967: both depths come from
+        # `entry_level` — the directory holding the entry, never the
+        # resolved target (a carrier or what-if link may point elsewhere
+        # in conf.d, or outside it). Before, the chain side raised into a
+        # `except ValueError` here and silently misfiled the what-if as
+        # append-external, and the what-if side took its link's target's
+        # level.
+        what_if_depth = scanner.entry_level(what_if_entry)
+        if what_if_depth is not None:
+            # Insert sorted by depth so that outer (L0) precedes inner (L3)
+            inserted = False
+            simulated_chain = []
+            for dp, entry in zip(chain, chain_entries):
+                if not inserted and what_if_depth < scanner.entry_level(entry):
+                    simulated_chain.append(what_if_path)
+                    inserted = True
+                simulated_chain.append(dp)
+            if not inserted:
+                simulated_chain.append(what_if_path)
+            substitution_type = "insert"
+        else:
+            # what-if entry outside conf.d/ → append at end (highest override)
+            simulated_chain = list(chain) + [what_if_path]
+            substitution_type = "append-external"
+
+    # Recompute effective config with simulated chain
+    simulated: dict = {}
+    for dp in simulated_chain:
+        ddata = simulated_defaults_data.get(str(dp), {})
+        simulated = deep_merge(simulated, _defaults_block(ddata))
+    # #2019 / #2117: the same platform per-tenant layer and profile
+    # expansion as the baseline — taken from the what-if document when
+    # it stands in for a root platform file, so an edit to its
+    # `tenants:` or `profiles:` block is simulated too.
+    sim_tenant = scanner._tenant_layer(
+        tid, simulated, replace={str(target): what_if_platform_doc},
+        tenant_raw=tenant_raw)[0]
+    simulated = deep_merge(simulated, sim_tenant)
+    what_if_merged_hash = _canonical_hash(simulated)
+
+    # Compute per-key diff
+    only_baseline: dict = {}
+    only_what_if: dict = {}
+    changed: dict = {}
+    for k in sorted(set(baseline_effective) | set(simulated)):
+        if k not in simulated:
+            only_baseline[k] = baseline_effective[k]
+        elif k not in baseline_effective:
+            only_what_if[k] = simulated[k]
+        elif baseline_effective[k] != simulated[k]:
+            changed[k] = {"baseline": baseline_effective[k], "what_if": simulated[k]}
+
+    hash_changed = baseline_merged_hash != what_if_merged_hash
+    return {
+        "tenant_id": tid,
+        "what_if_file": str(what_if_path),
+        "substitution_type": substitution_type,
+        # #2097 F1: the scanned file the what-if content stood in for
+        # (`substitute`); None for `insert` / `append-external`.
+        "replaces": None if replaces is None else str(replaces),
+        "baseline_merged_hash": baseline_merged_hash,
+        "what_if_merged_hash": what_if_merged_hash,
+        "merged_hash_changed": hash_changed,
+        "would_trigger_reload": hash_changed,  # per ADR-017 dual-hash logic
+        "removed_keys": only_baseline,
+        "added_keys": only_what_if,
+        "changed_keys": changed,
+    }
+
+
 @exit_on_output_write_error
 def main() -> None:
     try_utf8_stdout()
@@ -1797,8 +2117,19 @@ def main() -> None:
         help="Diff effective config against another tenant",
     )
     parser.add_argument(
-        "--what-if", "-w", type=str, default=None, metavar="DEFAULTS_PATH",
-        help="Simulate effect of a modified _defaults.yaml: diff baseline vs what-if effective config + merged_hash change",
+        "--what-if", "-w", type=str, default=None, metavar="PATH",
+        help="Simulate the effect of a modified conf.d file: diff baseline vs what-if "
+             "effective config + merged_hash change. Without --replaces, PATH must not be "
+             "a file of the scanned tree (that would compare the file with itself; rc 2): "
+             "a PATH outside conf.d is merged as the highest defaults level "
+             "(append-external), an unlisted path inside it (e.g. a '.'-prefixed draft) "
+             "is inserted at its directory's level",
+    )
+    parser.add_argument(
+        "--replaces", type=str, default=None, metavar="PATH",
+        help="With --what-if: the conf.d file the --what-if content stands in for "
+             "(substitute). The baseline reads PATH as it is now; PATH must be a file the "
+             "scan lists, and must not be the --what-if file itself (rc 2)",
     )
     parser.add_argument(
         "--all", action="store_true",
@@ -1813,6 +2144,16 @@ def main() -> None:
         help="Output format (default: json)",
     )
     args = parser.parse_args()
+    # #2097 blind review 2 (E): before any mode branch — `--all` / `--diff`
+    # returned rc 0 with `--replaces` silently ignored. `is not None`, not
+    # truthiness: `--replaces ''` was taken as "not given" (#2509 blind review 3),
+    # and so was `--what-if ''` (blind review 4).
+    if args.what_if == "":
+        parser.error("--what-if needs a path (got an empty string)")
+    if args.replaces is not None and args.what_if is None:
+        parser.error("--replaces requires --what-if")
+    if args.replaces == "":
+        parser.error("--replaces needs a path (got an empty string)")
 
     # Resolve conf.d path
     if args.conf_d:
@@ -1954,21 +2295,12 @@ def main() -> None:
         print(_output(result))
         return
 
-    # --what-if mode: simulate modified _defaults.yaml
-    if args.what_if:
+    # --what-if mode: simulate a modified conf.d file
+    if args.what_if is not None:
         what_if_path = Path(args.what_if).resolve()
         if not what_if_path.exists():
             print(f"❌ --what-if file not found: {what_if_path}", file=sys.stderr)
             sys.exit(EXIT_CALLER_ERROR)
-
-        # Baseline: current effective config. #772: use the RAW (deep_merge)
-        # `_custom_alerts` here so it matches the simulated side below (which is
-        # built from an in-memory modified chain the compiler walker cannot
-        # resolve) — otherwise an unrelated what-if edit would falsely diff the
-        # UNION baseline against the REPLACE simulation. The union view is the
-        # normal-mode / blast_radius contract, not what-if's.
-        baseline_effective = scanner.effective_config(tid, resolve_custom_alerts=False)
-        baseline_merged_hash = _canonical_hash(baseline_effective)
 
         # Load the simulated defaults content
         try:
@@ -1985,83 +2317,14 @@ def main() -> None:
             print(f"❌ Failed to parse --what-if file {what_if_path}: {e}", file=sys.stderr)
             sys.exit(EXIT_CALLER_ERROR)
 
-        # Simulate: substitute if path matches existing chain entry; else append as lowest-priority override
-        chain = scanner.defaults_chain[tid]
-        chain_entries = scanner._defaults_chain_entries[tid]
-        chain_strs = [str(p) for p in chain]
-        simulated_defaults_data = dict(scanner.defaults_data)
-        simulated_defaults_data[str(what_if_path)] = what_if_data
-
-        if str(what_if_path) in chain_strs:
-            simulated_chain = list(chain)
-            substitution_type = "substitute"  # Override existing defaults at same path
-        else:
-            # Insert according to directory depth if the ENTRY is inside
-            # conf.d/, else append. #1967: both depths come from
-            # `entry_level` — the directory holding the entry, never the
-            # resolved target (a carrier or what-if link may point elsewhere
-            # in conf.d, or outside it). Before, the chain side raised into a
-            # `except ValueError` here and silently misfiled the what-if as
-            # append-external, and the what-if side took its link's target's
-            # level.
-            what_if_depth = scanner.entry_level(Path(args.what_if))
-            if what_if_depth is not None:
-                # Insert sorted by depth so that outer (L0) precedes inner (L3)
-                inserted = False
-                simulated_chain = []
-                for dp, entry in zip(chain, chain_entries):
-                    if not inserted and what_if_depth < scanner.entry_level(entry):
-                        simulated_chain.append(what_if_path)
-                        inserted = True
-                    simulated_chain.append(dp)
-                if not inserted:
-                    simulated_chain.append(what_if_path)
-                substitution_type = "insert"
-            else:
-                # what-if entry outside conf.d/ → append at end (highest override)
-                simulated_chain = list(chain) + [what_if_path]
-                substitution_type = "append-external"
-
-        # Recompute effective config with simulated chain
-        simulated = {}
-        for dp in simulated_chain:
-            ddata = simulated_defaults_data.get(str(dp), {})
-            simulated = deep_merge(simulated, _defaults_block(ddata))
-        # #2019 / #2117: the same platform per-tenant layer and profile
-        # expansion as the baseline — taken from the what-if document when
-        # it stands in for a root platform file, so an edit to its
-        # `tenants:` or `profiles:` block is simulated too.
-        sim_tenant = scanner._tenant_layer(
-            tid, simulated, replace={str(what_if_path): what_if_platform_doc})[0]
-        simulated = deep_merge(simulated, sim_tenant)
-        what_if_merged_hash = _canonical_hash(simulated)
-
-        # Compute per-key diff
-        only_baseline: dict = {}
-        only_what_if: dict = {}
-        changed: dict = {}
-        all_keys = set(baseline_effective.keys()) | set(simulated.keys())
-        for k in sorted(all_keys):
-            if k not in simulated:
-                only_baseline[k] = baseline_effective[k]
-            elif k not in baseline_effective:
-                only_what_if[k] = simulated[k]
-            elif baseline_effective[k] != simulated[k]:
-                changed[k] = {"baseline": baseline_effective[k], "what_if": simulated[k]}
-
-        hash_changed = baseline_merged_hash != what_if_merged_hash
-        result = {
-            "tenant_id": tid,
-            "what_if_file": str(what_if_path),
-            "substitution_type": substitution_type,
-            "baseline_merged_hash": baseline_merged_hash,
-            "what_if_merged_hash": what_if_merged_hash,
-            "merged_hash_changed": hash_changed,
-            "would_trigger_reload": hash_changed,  # per ADR-017 dual-hash logic
-            "removed_keys": only_baseline,
-            "added_keys": only_what_if,
-            "changed_keys": changed,
-        }
+        try:
+            result = what_if_result(
+                scanner, tid, what_if_path, Path(args.what_if), what_if_data,
+                what_if_platform_doc,
+                replaces=Path(args.replaces).resolve() if args.replaces is not None else None)
+        except WhatIfError as e:
+            print(f"❌ {e}", file=sys.stderr)
+            sys.exit(EXIT_CALLER_ERROR)
         print(_output(result))
         return
 
