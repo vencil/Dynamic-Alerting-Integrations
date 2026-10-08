@@ -59,6 +59,15 @@ import (
 // @Description source_hash for raw file content and merged_hash for the
 // @Description canonical-JSON of the merged dict. Parity target:
 // @Description scripts/tools/dx/describe_tenant.py.
+// @Description effective_config keeps every value as written; not_served
+// @Description names each key whose shown value /metrics does not serve,
+// @Description with the exporter's own reason (parse_failed,
+// @Description root_defaults_unwrapped, value_rejected, value_unparsed,
+// @Description value_unparsed_dropped, undeliverable, root_null_undeclared)
+// @Description and the file of the value shown. chain_parse_failed lists the
+// @Description defaults_chain files with a syntax error the exporter does not
+// @Description read; they are read as empty and the tenant is still answered
+// @Description (200). Both are omitted when empty.
 // @Tags        tenants
 // @Produce     json
 // @Param       id   path     string true "Tenant ID"
@@ -98,7 +107,10 @@ func GetTenantEffective(d *Deps) http.HandlerFunc {
 			case errors.As(err, &decodeErr):
 				// Its text is the decoder's own (`parse defaults[i]: …` /
 				// `parse tenant: …`) and names no path — pinned by
-				// TestGetTenantEffective_DecodeErrorTextNamesNoServerPath.
+				// TestGetTenantEffective_DecodeErrorTextNamesNoServerPath. A
+				// chain file the exporter drops for a syntax error no longer
+				// lands here (#2296: read as empty, ChainParseFailed); one the
+				// exporter reads but the merge cannot decode still does.
 				WriteJSONError(w, r, http.StatusInternalServerError, err.Error())
 			default:
 				// Walker and read failures carry server paths (a missing root

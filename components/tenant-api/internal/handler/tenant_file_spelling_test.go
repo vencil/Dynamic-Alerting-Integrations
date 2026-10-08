@@ -379,10 +379,16 @@ func TestGetTenantEffective_InternalErrorNamesNoServerPath(t *testing.T) {
 // A *cfg.DecodeError keeps its own text in the body: it is the decoder's
 // message (`parse defaults[i]: …`), which names no path. Measured here so the
 // pass-through cannot start leaking if that text ever changes.
+//
+// The fixture is a root `_defaults.yaml` the exporter reads (its typed decode
+// skips the unknown top-level `x`) while the defaults-chain merge cannot
+// decode it (`!!int abc`). A chain file with a plain syntax error is no
+// longer one (#2296): the exporter drops it, and so does /effective — 200,
+// named in chain_parse_failed (TestGetTenantEffective_ChainSyntaxErrorIs200).
 func TestGetTenantEffective_DecodeErrorTextNamesNoServerPath(t *testing.T) {
 	t.Parallel()
 	dir := t.TempDir()
-	writeFile(t, filepath.Join(dir, "team", "_defaults.yaml"), "defaults: [this is not: valid yaml\n")
+	writeFile(t, filepath.Join(dir, "_defaults.yaml"), "defaults:\n  cpu: 70\nx: !!int abc\n")
 	writeFile(t, filepath.Join(dir, "team", spellingTenant+".yaml"), spellingBody("FROM-TEAM"))
 
 	w := httptest.NewRecorder()
@@ -398,5 +404,38 @@ func TestGetTenantEffective_DecodeErrorTextNamesNoServerPath(t *testing.T) {
 	}
 	if !strings.Contains(body, "parse defaults") {
 		t.Errorf("body lost the decode error's own text: %s", body)
+	}
+}
+
+// #2296: a chain `_defaults.yaml` with a syntax error is dropped by the
+// exporter, which serves the tenant from the rest of the chain; /effective
+// answers 200 the same way, naming the file in chain_parse_failed and no
+// server path anywhere in the body. It used to be a 500.
+func TestGetTenantEffective_ChainSyntaxErrorIs200(t *testing.T) {
+	t.Parallel()
+	dir := t.TempDir()
+	writeFile(t, filepath.Join(dir, "team", "_defaults.yaml"), "defaults: [this is not: valid yaml\n")
+	writeFile(t, filepath.Join(dir, "team", spellingTenant+".yaml"), spellingBody("FROM-TEAM"))
+
+	w := httptest.NewRecorder()
+	GetTenantEffective(&Deps{ConfigDir: dir})(w, newRequestWithChiParam("GET",
+		"/api/v1/tenants/"+spellingTenant+"/effective", "id", spellingTenant, nil))
+
+	if w.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200; body=%s", w.Code, w.Body.String())
+	}
+	body := w.Body.String()
+	if strings.Contains(body, dir) {
+		t.Errorf("body leaks the conf.d absolute path %q: %s", dir, body)
+	}
+	var got struct {
+		TenantID         string   `json:"tenant_id"`
+		ChainParseFailed []string `json:"chain_parse_failed"`
+	}
+	if err := json.Unmarshal(w.Body.Bytes(), &got); err != nil {
+		t.Fatalf("body is not JSON: %v: %s", err, body)
+	}
+	if got.TenantID != spellingTenant || len(got.ChainParseFailed) != 1 || got.ChainParseFailed[0] != "team/_defaults.yaml" {
+		t.Errorf("tenant_id %q chain_parse_failed %v, want %q [team/_defaults.yaml]", got.TenantID, got.ChainParseFailed, spellingTenant)
 	}
 }

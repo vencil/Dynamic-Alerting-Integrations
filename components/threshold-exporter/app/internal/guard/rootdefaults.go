@@ -53,34 +53,22 @@ const FindingRootDefaultsUnwrapped FindingKind = "root_defaults_unwrapped"
 // root-relative path.
 const FindingDefaultsTopLevelIgnored FindingKind = "defaults_toplevel_ignored"
 
-// rootDecodedKeys are the top-level keys the exporter's root decode reads:
-// the yaml tags of config.ThresholdConfig, taken from the struct so this set
-// cannot drift from it. TestRootDecodedKeysMatchSchema pins them to the
-// non-`_` properties of platform-defaults.schema.json, which validate-config
-// reads for the same judgement.
-var rootDecodedKeys = func() map[string]bool {
-	out := map[string]bool{}
-	t := reflect.TypeOf(config.ThresholdConfig{})
-	for i := 0; i < t.NumField(); i++ {
-		name, _, _ := strings.Cut(t.Field(i).Tag.Get("yaml"), ",")
-		if name != "" && name != "-" {
-			out[name] = true
-		}
-	}
-	return out
-}()
+// rootDecodedKeys are the top-level keys the exporter's root decode reads
+// (config.RootDecodedKeys: the yaml tags of config.ThresholdConfig, the set
+// the build's own FlatBuild.RootDefaultsUnread is judged by, #2296).
+// TestRootDecodedKeysMatchSchema pins them to the non-`_` properties of
+// platform-defaults.schema.json, which validate-config reads for the same
+// judgement.
+var rootDecodedKeys = config.RootDecodedKeys()
 
 // TopLevelReadElsewhere are the `_`-prefixed keys another reader takes from
-// the top level of a defaults file: the route generator's
-// `_routing_defaults` / `_routing_enforced`, and the custom-alert compiler's
-// `_custom_alerts`. They are never reported. The same list is
-// validate-config's (tests/shared/defaults_wrapper_matrix.json pins both).
-var TopLevelReadElsewhere = []string{"_custom_alerts", "_routing_defaults", "_routing_enforced"}
+// the top level of a defaults file (config.TopLevelReadElsewhere, the one
+// list; #2296 moved it so the exporter's build judges the same keys).
+// They are never reported. The same list is validate-config's
+// (tests/shared/defaults_wrapper_matrix.json pins both).
+var TopLevelReadElsewhere = config.TopLevelReadElsewhere()
 
-var (
-	readElsewhere = toSet(TopLevelReadElsewhere)
-	mergeDropped  = toSet(config.MergeDroppedKeys())
-)
+var readElsewhere = toSet(TopLevelReadElsewhere)
 
 func toSet(keys []string) map[string]bool {
 	out := make(map[string]bool, len(keys))
@@ -90,27 +78,9 @@ func toSet(keys []string) map[string]bool {
 	return out
 }
 
-// actsWhenMerged reports whether a top-level key of a defaults file is one
-// the defaults merge takes into a tenant's config when it reads the whole
-// document: a threshold (no `_` prefix) or a reserved tenant key
-// (config.IsReservedKey). Excluded: `defaults` itself; a
-// config.ThresholdConfig field; TopLevelReadElsewhere; a key the merge drops
-// at every level (config.MergeDroppedKeys — `_metadata`), which acts in no
-// shape; a `_routing*` key, which the route generator does not read from a
-// defaults file in any shape (routing_in_unread_location names it); and any
-// other `_` key (e.g. `_x: &x`, a key that only carries a YAML anchor).
-func actsWhenMerged(k string) bool {
-	if k == "defaults" || rootDecodedKeys[k] || readElsewhere[k] || mergeDropped[k] {
-		return false
-	}
-	if !strings.HasPrefix(k, "_") {
-		return true
-	}
-	// ⚠️ Refs #2388: this `_routing` PREFIX is wider than config.IsRoutingKey
-	// (`_routing`, `_routing_<…>`), so `_routingProfile` is left out here; left
-	// as is for a follow-up.
-	return config.IsReservedKey(k) && !strings.HasPrefix(k, "_routing")
-}
+// actsWhenMerged is config.ActsWhenMerged: the one predicate both this
+// check and the exporter's FlatBuild.RootDefaultsUnread (#2296) use.
+func actsWhenMerged(k string) bool { return config.ActsWhenMerged(k) }
 
 // decodeDefaultsDoc decodes one defaults file as the defaults-chain merge
 // does (config.ParseChainDefaults: yaml.v3, then NormalizeYAMLToJSON); nil

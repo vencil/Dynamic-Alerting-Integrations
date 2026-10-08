@@ -35,6 +35,7 @@ from pathlib import Path
 import pytest
 
 import _lib_tenant_values as tv
+from _platform_fs import symlink_or_skip
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
 DESCRIBE = REPO_ROOT / "scripts" / "tools" / "dx" / "describe_tenant.py"
@@ -207,14 +208,17 @@ def test_written_default_and_plain_mappings_do_not_warn(tmp_path):
 
 
 def test_warning_is_printed_once_on_the_what_if_path(tmp_path):
-    """T1：what-if 路徑上 WARNING 每檔恰好 1 行——樹內平台檔 1 行、`--what-if` 副本 1 行。
+    """T1：what-if 路徑上 WARNING 每檔恰好 1 行，**同一個檔被讀兩次也一樣**。
 
-    ⚠️ 原本這格量的是「同一個樹內檔被讀兩次（scanner 一次、`--what-if <conf.d>/_defaults.yaml`
-    一次）仍只印 1 行」，能殺「拿掉去重」的突變。#2097 F1 之後樹內檔不能再當 `--what-if`
-    （rc 2，見 test_what_if_substitution_matrix），同檔重讀的 CLI 路徑消失，這格因此**不再**
-    殺那個突變；它現在守的是「改走 `--replaces` 後兩個檔各被點名一次」。"""
+    樹內多一個 `_alias.yaml -> _defaults.yaml` symlink，scanner 把同一個檔（解析後路徑相同）
+    讀兩次；去重以解析後路徑為鍵，所以樹內那一側只印 1 行，`--what-if` 副本另印 1 行。
+
+    ⛔ 這格要殺的突變是「拿掉 `_UNMIRRORED_PROFILE_WARNED` 去重」（#2739 留言 B）：突變後樹內
+    那一側變 2 行。舊版只用「樹內檔 + 樹外副本」兩個不同的檔，每檔本來就只讀一次，突變下照樣
+    綠——#2097 F1 之後樹內檔不能再當 `--what-if`，原本的同檔重讀路徑消失，改由 symlink 觸發。"""
     conf_d = _tree(tmp_path, "{<<: {default: '010'}}", "platform-tenants")
     carrier = conf_d / "_defaults.yaml"
+    symlink_or_skip("_defaults.yaml", conf_d / "_alias.yaml")
     copy = tmp_path / "edit" / "_defaults.yaml"
     copy.parent.mkdir()
     copy.write_text(carrier.read_text(encoding="utf-8"), encoding="utf-8")
@@ -224,6 +228,7 @@ def test_warning_is_printed_once_on_the_what_if_path(tmp_path):
                        timeout=120, env={**os.environ, "PYTHONIOENCODING": "utf-8"})
     assert p.returncode == 0, p.stderr
     lines = [l for l in p.stderr.splitlines() if "only through a merge key" in l]
-    assert len(lines) == 2, p.stderr
+    tree_side = [l for l in lines if str(copy) not in l and str(conf_d) in l]
+    assert len(tree_side) == 1, p.stderr
     assert sum(str(copy) in l for l in lines) == 1, p.stderr
-    assert sum(str(copy) not in l and "_defaults.yaml" in l for l in lines) == 1, p.stderr
+    assert len(lines) == 2, p.stderr
