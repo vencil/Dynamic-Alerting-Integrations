@@ -269,6 +269,17 @@ class TestResolveInheritanceChain:
         assert result["declared"] == ["oracle_x", "123"]
         assert "oracle_x" not in result["resolved"]
 
+    def test_declared_ignores_a_nested_only_defaults_carrier(self, tmp_path):
+        """The exporter reads `optional_overrides` from the ROOT carrier only;
+        a tree whose only `_defaults.yaml` is in a subdirectory declares none."""
+        (tmp_path / "team").mkdir()
+        (tmp_path / "team" / "_defaults.yaml").write_text(
+            "defaults:\n  cpu: 50\noptional_overrides:\n  - zz\n", encoding="utf-8")
+        (tmp_path / "team" / "db-a.yaml").write_text("tenants:\n  db-a: {}\n",
+                                                     encoding="utf-8")
+        result = diagnose.resolve_inheritance_chain("db-a", str(tmp_path))
+        assert result["declared"] == []
+
 
 # ---------------------------------------------------------------------------
 # _format_chain_summary

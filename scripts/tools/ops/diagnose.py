@@ -251,7 +251,8 @@ def resolve_inheritance_chain(tenant: str, config_dir: str | None) -> dict[str, 
 
     Raises `DaGuardNotFoundError`, `ParseFailedError` (a file the exporter's
     load drops or cannot read) or `DaGuardError` (`_lib_tenant_values`;
-    served-values refusing the tree included): the chain is never answered
+    served-values refusing the tree, or having no entry for a tenant
+    effective resolves, included): the chain is never answered
     from a partial read.
     """
     if not config_dir:
