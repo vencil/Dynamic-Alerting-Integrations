@@ -592,7 +592,9 @@ class MisreadScalar:
                     f"no value — but the schema requires a string for this "
                     f"field: write the value, quoted, or remove the key")
         if self.explicit:
-            return (f"{self.path}: explicit `!!{self.resolved} {self.text}` is a "
+            # A local tag (`!foo`) keeps its own `!`; a core tag is `!!name`.
+            tag = self.resolved if self.resolved.startswith("!") else f"!!{self.resolved}"
+            return (f"{self.path}: explicit `{tag} {self.text}` is a "
                     f"YAML {self.resolved}, not the string the schema requires for "
                     f"this field — remove the tag and quote it: {written}")
         return (f"{self.path}: unquoted {self.text!r} is read by PyYAML as "

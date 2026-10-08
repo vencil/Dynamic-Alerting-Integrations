@@ -116,6 +116,14 @@ def test_explicit_tag_names_the_tag_not_quoting_alone(schemas):
     assert "explicit `!!bool yes`" in msg and "unquoted" not in msg, msg
     assert 'remove the tag and quote it: channel: "yes"' in msg, msg
 
+
+def test_explicit_local_tag_is_named_as_written(schemas):
+    """盲審續輪 1：本地 tag `!foo` 照原樣寫出，不寫成 `!!!foo`。"""
+    text = ("tenants:\n  t1:\n    _routing:\n      receiver:\n        type: slack\n"
+            "        channel: !foo yes\n")
+    (hit,) = _hits(text, schemas)
+    assert "explicit `!foo yes`" in hit.message() and "!!!" not in hit.message(), hit.message()
+
 def test_defaults_routing_blocks_follow_the_cross_file_ref(schemas):
     """`_routing_defaults` / `_routing_enforced` in `_defaults.yaml` are typed
     by `$ref` into tenant-config.schema.json (#2164)."""
