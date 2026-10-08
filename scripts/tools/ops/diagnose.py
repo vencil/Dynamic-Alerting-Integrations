@@ -42,10 +42,10 @@ from _lib_python import detect_cli_lang, http_get_json, query_prometheus_instant
 from _lib_python import format_json_report  # noqa: E402
 from _lib_exitcodes import EXIT_OK, EXIT_VIOLATION, EXIT_CALLER_ERROR  # noqa: E402
 from _lib_io import safe_label  # noqa: E402  (#1538 output-layer escaping)
-from _lib_confd import resolve_defaults_file  # noqa: E402  (#1588)
 # #2526 / #2547: the tenant's resolution is threshold-exporter's own
 # (`da-guard effective`); see resolve_inheritance_chain.
 from _lib_tenant_values import (  # noqa: E402
+    ServedValuesError,
     canonical_key,
     exit_on_served_values_error,
     load_effective_tree,
@@ -174,7 +174,7 @@ def lookup_tenant_profile(tenant: str, config_dir: str | None) -> str | None:
     return inheritance["profile_name"] if inheritance else None
 
 
-def _declared_keys(base: Path) -> list[str]:
+def _declared_keys(base: Path, defaults_chain: list[str]) -> list[str]:
     """`optional_overrides:` of the root defaults carrier: key NAMES the
     platform recognises but assigns no value to (#1310).
 
@@ -186,11 +186,14 @@ def _declared_keys(base: Path) -> list[str]:
     Called only after `da-guard effective` loaded the tree, so the file
     decodes for the exporter; a file PyYAML cannot compose still is
     answered with [] and one WARN, never a traceback.
+
+    WHICH file is the exporter's choice too: the root entry of the tenant's
+    `defaults_chain` (/effective), not a carrier this file selects — so no
+    Python walk of the tree (and no "read FLAT" warning) happens here.
     """
-    path = resolve_defaults_file(base)
-    if not path.is_file():
-        # Absent, or a directory the exporter walks into: no list.
-        return []
+    if not defaults_chain or "/" in defaults_chain[0]:
+        return []   # no root defaults carrier on this tenant's path
+    path = base / defaults_chain[0]
     try:
         with open(path, encoding="utf-8") as f:
             root = yaml.compose(f, Loader=yaml.SafeLoader)
@@ -226,9 +229,9 @@ def resolve_inheritance_chain(tenant: str, config_dir: str | None) -> dict[str, 
         (the winning layer per key)
       - resolved: every threshold (non-`_`) key of the tenant's
         `effective_config`, keyed as written, with the value /metrics serves
-        for it; a key /metrics serves no row for (switched off, or not
-        declared at the root) keeps its value as written (served-values'
-        `unserved`), and one with neither is left out
+        for it; a key /metrics serves no row for (served-values' `unserved`:
+        switched off, or not declared at the root) keeps /effective's value,
+        and one with neither is left out
       - profile_name: the profile the tenant is bound to, or None
       - declared: key NAMES the platform recognises but assigns no value to
         (`optional_overrides:`, #1310; see `_declared_keys`)
@@ -280,27 +283,32 @@ def resolve_inheritance_chain(tenant: str, config_dir: str | None) -> dict[str, 
 
     served_tree = load_served_tree(base)
     served = served_tree.tenants.get(tenant)
+    if served is None:
+        # The two Go answers disagree on which tenants exist: no answer.
+        raise ServedValuesError(
+            f"da-guard served-values has no tenant '{tenant}', which da-guard effective "
+            f"reports in {base}", 0, "")
     resolved: dict[str, object] = {}
     groups: dict[tuple[str, str], dict[str, object]] = {}
-    seen: set[str] = set()
+    # /effective keeps one spelling per threshold (it drops the shadowed
+    # one), so each key below maps to its own canonical row.
     for key, src in te.key_sources.items():
         if key.startswith("_"):
             continue
         canon = canonical_key(key, served_tree.aliases)
-        if canon in seen:
-            continue
-        layer, file = src.layer, src.file
-        if served is not None and canon in served.severities:
+        written = te.effective_config[key]
+        if canon in served.severities:
             value = served.values[canon]
             if isinstance(value, float) and value.is_integer():
                 value = int(value)   # the JSON number Go wrote
-        elif served is not None and served.unserved.get(key) is not None:
-            value = served.unserved[key]
+        elif key in served.unserved and written is not None:
+            # No /metrics row (switched off, not declared at the root): the
+            # value as /effective decodes it.
+            value = written
         else:
             continue
-        seen.add(canon)
         resolved[key] = value
-        groups.setdefault((layer, file), {})[key] = te.effective_config[key]
+        groups.setdefault((src.layer, src.file), {})[key] = written
 
     def _order(item: tuple[tuple[str, str], dict[str, object]]) -> tuple[int, int, str]:
         (layer, file), _ = item
@@ -318,7 +326,7 @@ def resolve_inheritance_chain(tenant: str, config_dir: str | None) -> dict[str, 
         "resolved": resolved,
         "profile_name": te.profile,
         # settable, but with no platform value — see the docstring
-        "declared": _declared_keys(base),
+        "declared": _declared_keys(base, te.defaults_chain),
     }
 
 

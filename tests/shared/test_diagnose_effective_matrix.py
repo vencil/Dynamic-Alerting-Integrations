@@ -129,16 +129,16 @@ def _oracle(conf_d: Path) -> dict:
     t = tv.load_effective(conf_d)["tx"]
     served = _served(conf_d)
     unserved = tv.load_served_tree(conf_d).tenants["tx"].unserved
-    # Keys as /effective has them; a key /metrics serves no row for keeps its
-    # value as written (`unserved`), one with neither is not shown.
+    # Keys as /effective has them; a key /metrics serves no row for (it is
+    # in `unserved`) keeps /effective's value, one with neither is not shown.
     resolved = {}
-    for k in t.effective_config:
+    for k, v in t.effective_config.items():
         if k.startswith("_"):
             continue
         if k in served:
             resolved[k] = served[k]
-        elif unserved.get(k) is not None:
-            resolved[k] = unserved[k]
+        elif k in unserved and v is not None:
+            resolved[k] = v
     keys = list(resolved)
     return {
         "rc": 0,

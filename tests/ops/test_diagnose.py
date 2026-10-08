@@ -11,7 +11,8 @@ import yaml
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..', '..', 'scripts', 'tools', 'ops'))
 import diagnose  # noqa: E402
-from _lib_tenant_values import ParseFailedError  # noqa: E402
+from _lib_tenant_values import ParseFailedError, ServedValuesError  # noqa: E402
+import subprocess  # noqa: E402
 
 # #2526: the chain is `da-guard effective`'s answer.
 pytestmark = pytest.mark.usefixtures("da_guard_env")
@@ -198,7 +199,7 @@ class TestResolveInheritanceChain:
         # cpu: tenant override wins (99), not profile (95) or default (80)
         assert result["resolved"]["cpu"] == 99
         # net: from profile (fill-in)
-        assert result["resolved"]["net"] == "60"  # not declared at the root: /metrics serves no row, the value as written
+        assert result["resolved"]["net"] == 60  # no /metrics row: /effective's value
         # mem, disk: from defaults
         assert result["resolved"]["mem"] == 70
         assert result["resolved"]["disk"] == 90
@@ -240,7 +241,7 @@ class TestResolveInheritanceChain:
 
         result = diagnose.resolve_inheritance_chain("db-a", str(tmp_path))
         assert result["profile_name"] is None   # bound to none
-        assert result["resolved"]["mem"] == "80"  # not declared at the root: /metrics serves no row, the value as written
+        assert result["resolved"]["mem"] == 80  # no /metrics row: /effective's value
         assert [c["layer"] for c in result["chain"]] == ["defaults", "tenant"]
 
     def test_a_tenant_below_the_root_is_found(self, tmp_path):
@@ -732,8 +733,8 @@ class TestProfileLookupSharesTheChainRead:
             "_defaults.yaml",
             "defaults: !!set {mysql_connections, mysql_slow_queries}\n", {
                 # every root default null: no row is served, so the values
-                # are the ones written (served-values' `unserved`)
-                "mysql_connections": "70", "mysql_slow_queries": "60"}),
+                # are /effective's
+                "mysql_connections": 70, "mysql_slow_queries": 60}),
         "profiles-a-set": (
             "_profiles.yaml", "profiles: !!set {gold}\n", {
                 "mysql_connections": 70, "mysql_slow_queries": 90}),
@@ -890,9 +891,8 @@ class TestSetTagReadAsTheExporterReadsIt:
             "tx.yaml": "tenants:\n  tx:\n    mysql_connections: 70\n",
             "_profiles.yaml": None}, "")
         chain = diagnose.resolve_inheritance_chain("tx", d)
-        # `!!set {1, mysql_connections}` gives the root default no value, so
-        # /metrics serves no row and the value is the one written.
-        assert chain["resolved"]["mysql_connections"] == ("70" if "!!set" in body else 70)
+        # with `!!set` /metrics serves no row: /effective's value, also 70
+        assert chain["resolved"]["mysql_connections"] == 70
         assert 1 not in chain["resolved"]
         with mock.patch.object(diagnose, "tenant_db_type",
                                return_value=(None, None)), \
@@ -901,3 +901,79 @@ class TestSetTagReadAsTheExporterReadsIt:
             result = diagnose.check("tx", "http://prom:9090", config_dir=d,
                                     out=io.StringIO())
         assert result["status"] == "unchecked"
+
+
+class TestRound1ReviewPins:
+    """#2526 blind review round 1: each pins one behaviour a mutant left
+    green."""
+
+    @staticmethod
+    def _tree(tmp_path, files):
+        for rel, body in files.items():
+            (tmp_path / rel).parent.mkdir(parents=True, exist_ok=True)
+            (tmp_path / rel).write_text(body, encoding="utf-8")
+        return str(tmp_path)
+
+    def test_defaults_layers_are_listed_root_first(self, tmp_path):
+        """Ordered by `defaults_chain` level, not by file name: `A/` sorts
+        before `_` (0x41 < 0x5F), so a name sort would put it first."""
+        d = self._tree(tmp_path, {
+            "_defaults.yaml": "defaults:\n  cpu: 50\n  mem: 60\n",
+            "A/_defaults.yaml": "defaults:\n  cpu: 51\n",
+            "A/ta.yaml": "tenants:\n  ta:\n    x: 1\n"})
+        chain = diagnose.resolve_inheritance_chain("ta", d)
+        assert [c["source"] for c in chain["chain"]] == [
+            "_defaults.yaml", "A/_defaults.yaml", "A/ta.yaml"]
+
+    def test_a_served_whole_number_is_printed_as_go_wrote_it(self, tmp_path):
+        d = self._tree(tmp_path, {"_defaults.yaml": "defaults:\n  cpu: 50\n",
+                                  "ta.yaml": "tenants:\n  ta:\n    cpu: 70\n"})
+        p = subprocess.run([sys.executable, diagnose.__file__, "ta", "--config-dir", d,
+                            "--show-inheritance"], capture_output=True, text=True,
+                           encoding="utf-8", timeout=120)
+        assert p.returncode == 0, p.stderr
+        assert '"cpu": 70' in p.stdout and "70.0" not in p.stdout, p.stdout
+        assert type(json.loads(p.stdout)["resolved"]["cpu"]) is int
+
+    def test_unserved_keys_keep_the_value_effective_decodes(self, tmp_path):
+        """No /metrics row: /effective's value (1, not served-values' text '1')."""
+        d = self._tree(tmp_path, {"_defaults.yaml": "defaults:\n  cpu: 50\n",
+                                  "ta.yaml": "tenants:\n  ta:\n    x: 1\n    cpu: disable\n"})
+        assert diagnose.resolve_inheritance_chain("ta", d)["resolved"] == {
+            "cpu": "disable", "x": 1}
+
+    def test_effective_warnings_are_printed(self, tmp_path, capsys, monkeypatch):
+        """Go fills no `warnings` today; when it does, they reach stderr."""
+        d = self._tree(tmp_path, {"_defaults.yaml": "defaults:\n  cpu: 50\n",
+                                  "ta.yaml": "tenants:\n  ta: {}\n"})
+        real = diagnose.load_effective_tree
+
+        def with_warning(base):
+            tree = real(base)
+            te = tree.tenants["ta"]
+            return tree._replace(tenants={"ta": te._replace(warnings=["two carriers here"])})
+
+        monkeypatch.setattr(diagnose, "load_effective_tree", with_warning)
+        diagnose.resolve_inheritance_chain("ta", d)
+        assert "WARN: two carriers here" in capsys.readouterr().err
+
+    def test_a_tenant_served_values_lacks_fails_closed(self, tmp_path, monkeypatch):
+        d = self._tree(tmp_path, {"_defaults.yaml": "defaults:\n  cpu: 50\n",
+                                  "ta.yaml": "tenants:\n  ta: {}\n"})
+        real = diagnose.load_served_tree
+        monkeypatch.setattr(diagnose, "load_served_tree",
+                            lambda base: real(base)._replace(tenants={}))
+        with pytest.raises(ServedValuesError, match="no tenant 'ta'"):
+            diagnose.resolve_inheritance_chain("ta", d)
+
+    def test_a_nested_tree_gets_no_flat_read_warning(self, tmp_path, capsys):
+        """`declared` comes from the root entry of /effective's defaults
+        chain, not from a Python carrier lookup that warned "read FLAT"."""
+        d = self._tree(tmp_path, {
+            "_defaults.yaml": "defaults:\n  cpu: 50\noptional_overrides: [extra_key]\n",
+            "team/_defaults.yaml": "defaults:\n  cpu: 51\n",
+            "team/ta.yaml": "tenants:\n  ta: {}\n"})
+        chain = diagnose.resolve_inheritance_chain("ta", d)
+        assert chain["declared"] == ["extra_key"]
+        err = capsys.readouterr().err
+        assert "FLAT" not in err and "SKIPPED" not in err, err

@@ -82,7 +82,7 @@ class TestResolveInheritanceChain:
             # Tenant override wins for mysql_connections
             assert result["resolved"]["mysql_connections"] == 50
             # Profile fills in redis_memory (tenant didn't set it)
-            assert result["resolved"]["redis_memory"] == "1024"  # no root default: not served, as written
+            assert result["resolved"]["redis_memory"] == 1024  # no /metrics row: /effective's value
             # Defaults provide container_cpu
             assert result["resolved"]["container_cpu"] == 70
 
