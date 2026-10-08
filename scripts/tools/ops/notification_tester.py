@@ -1,8 +1,11 @@
 #!/usr/bin/env python3
 """notification_tester.py — Multi-channel notification connectivity testing.
 
-Extracts all configured receivers from tenant YAML _routing sections,
+Extracts every tenant's receivers from its `_routing` as the route generator
+(generate_alertmanager_routes) resolves it — `_routing_defaults` chain,
+routing profile, platform `tenants:` overlay, subdirectory tenant files —
 sends test messages to each receiver, and reports connectivity status.
+A conf.d tree the route generator refuses is refused here too (rc 2).
 
 Usage:
   # Test all receivers for all tenants in config directory
@@ -40,6 +43,7 @@ Usage:
 from __future__ import annotations
 
 import argparse
+import contextlib
 import json
 import os
 import sys
@@ -62,7 +66,6 @@ from _lib_python import (  # noqa: E402
     receiver_field_state,
     FIELD_SET,
     exit_on_yaml_file_error,
-    load_tenant_configs,
 )
 # Aliased: the local format_json_report() below (domain report builder,
 # exercised directly by tests) delegates its final dump to the shared helper.
@@ -160,8 +163,10 @@ def extract_receivers(
     Handles:
       - _routing.receiver (single receiver)
       - _routing.overrides[].receiver (per-rule overrides)
-      - _routing.routes[].receiver (ADR-007 label-match sub-routes, #2245;
-        only the tenant's own — a routing profile's routes are not read here)
+      - _routing.routes[].receiver (ADR-007 label-match sub-routes, #2245)
+
+    ``run_all_tests`` hands this the routing the route generator resolved
+    (#2752), so a profile's or `_routing_defaults`' receivers are here too.
 
     Args:
         tenant_name: Tenant identifier (for labeling).
@@ -603,6 +608,44 @@ def test_tenant_receivers(
     return report
 
 
+class RoutingTreeRefused(Exception):
+    """The route generator refuses this conf.d tree (an unreadable tenant
+    file, a tenant in two files, a routing-tree error, an invalid tenant id),
+    so there is no resolved `_routing` to take receivers from. ``lines`` are
+    the generator's own words."""
+
+    def __init__(self, lines: list[str]) -> None:
+        self.lines = list(lines)
+        super().__init__(self.lines[0] if self.lines else
+                         "the route generator refuses this tree")
+
+
+def resolved_routing(config_dir: str) -> dict[str, dict]:
+    """``{tenant: routing}`` exactly as the route generator resolves it (#2752,
+    #2115 ruling (c): `_routing` is decided by the route generator).
+
+    The generator's own reader (``load_tenant_tree``): the `_routing_defaults`
+    chain, the routing profile, platform `tenants:` overlays and tenant files
+    in subdirectories, merged, `{{tenant}}` substituted. A tenant with nothing
+    to route is absent. Raises ``RoutingTreeRefused`` when the generator's
+    ``tree_refusal`` refuses the tree — it refuses it in every mode, so no
+    receiver list read from it describes what Alertmanager would run.
+    """
+    import generate_alertmanager_routes as gar  # the generator's own reader
+
+    # The generator's reader prints its summary/WARN lines to stdout; this
+    # tool's stdout is the report (one JSON document under --json).
+    with contextlib.redirect_stdout(sys.stderr):
+        tree = gar.load_tenant_tree(config_dir)
+    _rc, lines = gar.tree_refusal(tree.files_read, tree.tenant_file_errors,
+                                  tree.duplicate_tenants,
+                                  tree.routing_tree_problems,
+                                  tree.invalid_tenant_ids)
+    if lines:
+        raise RoutingTreeRefused(lines)
+    return tree.routing_configs
+
+
 def run_all_tests(
     config_dir: str,
     *,
@@ -622,8 +665,12 @@ def run_all_tests(
 
     Returns:
         List of TenantTestReport, one per tenant with receivers.
+
+    Raises:
+        RoutingTreeRefused: the route generator refuses the tree.
     """
-    all_configs = load_tenant_configs(config_dir)
+    all_configs = {tenant: {"_routing": routing}
+                   for tenant, routing in resolved_routing(config_dir).items()}
 
     if tenant_filter:
         if tenant_filter not in all_configs:
@@ -788,13 +835,31 @@ def main() -> None:
         print(msg, file=sys.stderr)
         sys.exit(EXIT_CALLER_ERROR)
 
-    reports = run_all_tests(
-        args.config_dir,
-        tenant_filter=args.tenant,
-        timeout=args.timeout,
-        dry_run=args.dry_run,
-        rate_limit=args.rate_limit,
-    )
+    try:
+        reports = run_all_tests(
+            args.config_dir,
+            tenant_filter=args.tenant,
+            timeout=args.timeout,
+            dry_run=args.dry_run,
+            rate_limit=args.rate_limit,
+        )
+    except RoutingTreeRefused as exc:
+        # #2752: not "no receivers" — the tree cannot be read the way the
+        # route generator reads it, so nothing was tested (rc 2).
+        print("ERROR: the route generator refuses this tree, so no receiver "
+              "can be resolved — nothing was tested:", file=sys.stderr)
+        for line in exc.lines:
+            print(safe_label(line), file=sys.stderr)
+        if args.json_output:
+            print(_dump_json({
+                "tool": "test-notification",
+                "status": "caller_error",
+                "reason": "routing_tree_refused",
+                "tenants": [],
+                "summary": {"total_receivers": 0, "passed": 0,
+                            "failed": 0, "skipped": 0},
+            }))
+        sys.exit(EXIT_CALLER_ERROR)
 
     if args.json_output:
         print(format_json_report(reports))

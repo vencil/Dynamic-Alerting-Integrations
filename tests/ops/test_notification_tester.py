@@ -511,6 +511,26 @@ class TestRunAllTests:
         reports = nt.run_all_tests(str(tmp_path), tenant_filter="db-z", dry_run=True)
         assert reports == []
 
+    def test_receiver_from_routing_defaults_and_tenant_placeholder(self, tmp_path):
+        """#2752：receiver 取自路由產生器解析後的 _routing（含 _routing_defaults 與 {{tenant}} 代換）。"""
+        write_yaml(str(tmp_path), "_defaults.yaml",
+                   "defaults:\n  mysql_connections: 80\n"
+                   "_routing_defaults:\n  receiver:\n    type: webhook\n"
+                   "    url: \"https://hooks.example.com/{{tenant}}\"\n")
+        write_yaml(str(tmp_path), "db-a.yaml", "tenants:\n  db-a:\n    mysql_connections: 5\n")
+        reports = nt.run_all_tests(str(tmp_path), dry_run=True, rate_limit=0)
+        assert [r.tenant for r in reports] == ["db-a"]
+        assert reports[0].receivers[0].url_tested == "https://hooks.example.com/db-a"
+
+    def test_refused_tree_raises(self, tmp_path):
+        """#2752：路由產生器拒收的樹（同一租戶宣告於兩檔）不得回空清單。"""
+        body = make_tenant_yaml("db-a", routing={"receiver": {"type": "webhook", "url": "https://a.com"}})
+        write_yaml(str(tmp_path), "db-a.yaml", body)
+        write_yaml(str(tmp_path), "db-a-copy.yaml", body)
+        with pytest.raises(nt.RoutingTreeRefused) as exc_info:
+            nt.run_all_tests(str(tmp_path), dry_run=True)
+        assert any("more than one file" in line for line in exc_info.value.lines)
+
 
 # ═══════════════════════════════════════════════════════════════════════
 # Output formatting
@@ -646,6 +666,23 @@ class TestCLI:
             captured = capsys.readouterr()
             data = json.loads(captured.out)
             assert data["tool"] == "test-notification"
+
+    def test_refused_tree_exits_caller_error(self, tmp_path, capsys):
+        """#2752：路由產生器拒收的樹 → rc 2，JSON 標 caller_error，不是「沒有 receiver」。"""
+        body = make_tenant_yaml("db-a", routing={"receiver": {"type": "webhook", "url": "https://a.com"}})
+        write_yaml(str(tmp_path), "db-a.yaml", body)
+        write_yaml(str(tmp_path), "db-a-copy.yaml", body)
+        with patch("sys.argv", ["notification_tester.py", "--config-dir", str(tmp_path),
+                                 "--json", "--dry-run"]):
+            with pytest.raises(SystemExit) as exc_info:
+                nt.main()
+        assert exc_info.value.code == EXIT_CALLER_ERROR
+        captured = capsys.readouterr()
+        data = json.loads(captured.out)
+        assert data["status"] == "caller_error"
+        assert data["reason"] == "routing_tree_refused"
+        assert data["summary"]["total_receivers"] == 0
+        assert "route generator refuses this tree" in captured.err
 
 
 # ═══════════════════════════════════════════════════════════════════════
