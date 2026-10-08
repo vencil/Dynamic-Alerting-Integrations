@@ -205,8 +205,10 @@ def test_a_severity_boundary_does_not_split_a_change(
         "        - window: \"01:00-09:00\"\n          value: \"75:critical\"\n")})
     t = tv.load_served_tree(c, at=AT, schedules=True).tenants["tx"]
     assert len(t.schedules["mysql_connections"].segments) == 3  # not vacuous
+    # 01:00-09:00 is served as a critical row, so the change says so.
     assert _backtest(monkeypatch, b, c) == [
-        {"tenant": "tx", "metric": "mysql_connections", "old_value": "70", "new_value": "75"}]
+        {"tenant": "tx", "metric": "mysql_connections", "old_value": "70", "new_value": "75",
+         "severity": "critical"}]
 
 
 def test_a_schedule_against_a_plain_value_is_one_row_per_pair(
@@ -302,3 +304,45 @@ def test_dimensioned_keys_are_listed_not_backtested(
     _, out, _ = _run_main(monkeypatch, capsys, cli_argv, b, c, "--markdown-output", str(md))
     assert "Not backtested: 1 (dimensioned key)" in out.out
     assert "**Not backtested:** 1 (dimensioned key)" in md.read_text(encoding="utf-8")
+
+
+def test_a_key_served_as_critical_is_listed_not_backtested(
+        tmp_path: Path, monkeypatch, capsys, cli_argv) -> None:
+    """`<base>_critical` whose base /metrics serves is a critical row (Go's
+    verdict, round-3 review): no series of its own, so listed and not
+    queried. The base-less `*_critical` above is a warning row and is."""
+    def files(v: int) -> dict[str, str]:
+        return {"_defaults.yaml": _DEFAULTS,
+                "tx.yaml": ("tenants:\n  tx:\n    mysql_connections: \"70\"\n"
+                            f"    mysql_connections_critical: \"{v}\"\n")}
+    b, c = _tree(tmp_path / "base", files(99)), _tree(tmp_path / "cur", files(95))
+    assert tv.load_served_values(c, at=AT)["tx"].severities["mysql_connections_critical"] == "critical"
+    _, out, asked = _run_main(monkeypatch, capsys, cli_argv, b, c, "--json")
+    rows = json.loads(out.out)["changes"]
+    assert [(r["metric"], r["status"], r["backtest"]) for r in rows] == [
+        ("mysql_connections_critical", "not_backtested", "skipped: critical-severity key")]
+    assert asked == []
+    _, out, _ = _run_main(monkeypatch, capsys, cli_argv, b, c)
+    assert "Not backtested: 1 (critical-severity key)" in out.out
+
+
+@pytest.mark.parametrize("side", ["baseline", "current", "both"])
+def test_a_tree_da_guard_refuses_exits_2(tmp_path: Path, side: str) -> None:
+    """A file the exporter cannot decode, on either side: exit 2 with the
+    `caller_error` envelope, even under --skip-if-unavailable (the trees are
+    read before Prometheus is asked)."""
+    good = {"_defaults.yaml": _DEFAULTS, "tx.yaml": _wrapper("50")}
+    bad = {"_defaults.yaml": _DEFAULTS, "tx.yaml": "tenants:\n  tx: [unclosed\n"}
+    b = _tree(tmp_path / "base", bad if side in ("baseline", "both") else good)
+    c = _tree(tmp_path / "cur", bad if side in ("current", "both") else good)
+    p = subprocess.run(
+        [sys.executable, str(BACKTEST), "--config-dir", str(c), "--baseline", str(b),
+         "--prometheus", "http://127.0.0.1:9", "--skip-if-unavailable", "--json"],
+        capture_output=True, text=True, encoding="utf-8", errors="replace", timeout=120,
+        env={**os.environ, "PYTHONIOENCODING": "utf-8"})
+    assert p.returncode == 2, (p.stdout, p.stderr)
+    doc = json.loads(p.stdout)
+    assert (doc["status"], doc["changes"]) == ("caller_error", [])
+    if side == "baseline":  # read by da-guard only (the recipe scan reads --config-dir)
+        assert doc["reason"] == "served_values_unavailable"
+    assert "ERROR: cannot read" in p.stderr and "tx.yaml" in p.stderr

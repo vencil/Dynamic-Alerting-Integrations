@@ -522,27 +522,33 @@ def _minute(hhmm):
 
 
 def _served_day(tenant_values, key, side):
-    """`[(start_minute, end_minute, rendered value)]` for one key's whole UTC
-    day as /metrics serves it (`schedules`); a key or tenant /metrics never
-    serves is one segment of None. A segment in which /metrics cannot be
+    """`[(start_minute, end_minute, rendered value, severity)]` for one key's
+    whole UTC day as /metrics serves it (`schedules`); a key or tenant
+    /metrics never serves is one segment of None. A segment in which /metrics cannot be
     gathered at all is refused: a diff across it would be a guess."""
     if tenant_values is None or key not in (tenant_values.schedules or {}):
-        return [(0, _DAY_MINUTES, None)]
+        return [(0, _DAY_MINUTES, None, None)]
     out = []
     for seg in tenant_values.schedules[key].segments:
         if seg.error is not None:
             raise ServedValuesError(
                 f"da-guard served-values: {side} /metrics cannot be gathered "
                 f"{seg.start}-{seg.end} UTC ({seg.error})", None, "")
-        out.append((_minute(seg.start), _minute(seg.end), _render_served(seg.value)))
+        out.append((_minute(seg.start), _minute(seg.end), _render_served(seg.value),
+                    seg.severity))
     return out
 
 
 def _value_in(day, minute):
-    for start, end, value in day:
+    for start, end, value, _severity in day:
         if start <= minute < end:
             return value
     return None
+
+
+def _severities_in(day, start, end):
+    """The severities /metrics serves the key with anywhere in [start, end)."""
+    return {sev for s, e, _v, sev in day if s < end and start < e and sev is not None}
 
 
 def _hhmm(minute):
@@ -553,7 +559,7 @@ def _differing_runs(old_day, new_day):
     """`[(start, end, old, new)]`: every maximal run of the day over which
     the two sides serve one same (old, new) pair and differ, in day order.
     A run is not joined across midnight."""
-    bounds = sorted({b for day in (old_day, new_day) for s, e, _ in day for b in (s, e)})
+    bounds = sorted({b for day in (old_day, new_day) for s, e, *_ in day for b in (s, e)})
     runs = []
     for start, end in zip(bounds, bounds[1:]):
         pair = (_value_in(old_day, start), _value_in(new_day, start))
@@ -599,6 +605,9 @@ def extract_changes_from_dirs(config_dir, baseline_dir):
     served value differs; a severity-only change is not one (the firing
     count this tool measures does not depend on it).
 
+    * `severity: "critical"` when /metrics serves the key as a critical row
+      on either side in any part of the day the pair holds in (the
+      exporter's verdict, not the key's name); absent otherwise.
     * A key /metrics serves on one side only (switched off, dropped, or the
       tenant added / removed) has None on the other side — the shape
       `backtest_change` already reads as "enabled" / "disabled".
@@ -629,16 +638,19 @@ def extract_changes_from_dirs(config_dir, baseline_dir):
             if tv_ is not None:
                 keys |= set(tv_.schedules or {})
         for key in sorted(keys):
-            runs = _differing_runs(_served_day(old_tv, key, "baseline"),
-                                   _served_day(new_tv, key, "current"))
+            old_day = _served_day(old_tv, key, "baseline")
+            new_day = _served_day(new_tv, key, "current")
             pairs = {}
-            for start, end, old_v, new_v in runs:
+            for start, end, old_v, new_v in _differing_runs(old_day, new_day):
                 pairs.setdefault((old_v, new_v), []).append((start, end))
             for (old_v, new_v), spans in pairs.items():
                 change = {"tenant": tenant, "metric": key,
                           "old_value": old_v, "new_value": new_v}
                 if spans != [(0, _DAY_MINUTES)]:
                     change["window"] = [f"{_hhmm(s)}-{_hhmm(e)}" for s, e in spans]
+                if any("critical" in _severities_in(day, s, e)
+                       for day in (old_day, new_day) for s, e in spans):
+                    change["severity"] = "critical"
                 changes.append(change)
 
     return changes
@@ -981,15 +993,21 @@ def custom_alert_markdown(tenants):
     )
 
 
-def not_backtestable(metric):
+def not_backtestable(change):
     """Why a threshold key cannot be backtested, or None.
 
     #2119: `backtest_change` asks Prometheus for `<key>{tenant="..."}`. A
     dimensioned key (`mysql_connections{db="a"}`) would make that selector
     invalid, so it is listed in the report as not backtested rather than
-    queried as a raw string. Building selectors for it is not done here."""
-    if "{" in metric:
+    queried as a raw string. Building selectors for it is not done here.
+    A key /metrics serves as a critical row (`severity: "critical"`, the
+    exporter's verdict: a `<base>_critical` key whose base it serves) names
+    no series of its own either; a `*_critical` key served as a warning row
+    is an ordinary threshold and is backtested."""
+    if "{" in change["metric"]:
         return "dimensioned key"
+    if change.get("severity") == "critical":
+        return "critical-severity key"
     return None
 
 
@@ -1486,7 +1504,7 @@ def main():
     lookback_seconds = parse_lookback(args.lookback)
     results = []
     for change in changes:
-        skip = not_backtestable(change["metric"])
+        skip = not_backtestable(change)
         if skip:
             result = {
                 "tenant": change["tenant"],
