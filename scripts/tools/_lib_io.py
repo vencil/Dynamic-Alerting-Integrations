@@ -753,7 +753,34 @@ def find_misread_scalars(root: Optional["yaml.Node"], schema: dict,
     cross-document ``$ref``; *schema_name* is *schema*'s own basename in it.
     See the block comment above for what is (and is not) a string field.
     """
-    found: list[MisreadScalar] = []
+    return [hit for _node, hit in
+            _walk_misread_scalars(root, schema, schemas, schema_name)]
+
+
+def misread_scalar_nodes(root: Optional["yaml.Node"], schema: dict,
+                         schemas: Optional[dict[str, Any]] = None,
+                         schema_name: str = "") -> list["yaml.ScalarNode"]:
+    """The NODES :func:`find_misread_scalars` reports, each once — same walk,
+    same verdict (#2695). A caller that must act on the scalar itself (read
+    it as the quoted string it was meant to be) holds the node, not a path:
+    a path is a string, and a key that contains ``/`` makes two paths look
+    nested. An aliased scalar is one node however many places use it."""
+    out: list["yaml.ScalarNode"] = []
+    seen: set[int] = set()
+    for node, _hit in _walk_misread_scalars(root, schema, schemas, schema_name):
+        if id(node) not in seen:
+            seen.add(id(node))
+            out.append(node)
+    return out
+
+
+def _walk_misread_scalars(root: Optional["yaml.Node"], schema: dict,
+                          schemas: Optional[dict[str, Any]],
+                          schema_name: str
+                          ) -> list[tuple["yaml.ScalarNode", MisreadScalar]]:
+    """The one judgement behind :func:`find_misread_scalars` and
+    :func:`misread_scalar_nodes`, sorted by position."""
+    found: list[tuple["yaml.ScalarNode", MisreadScalar]] = []
     for node, cands, path in _plain_scalars_with_schema(root, schema, schemas, schema_name):
         if node.style is not None or node.tag == _YAML_STR_TAG:
             continue
@@ -762,11 +789,11 @@ def find_misread_scalars(root: Optional["yaml.Node"], schema: dict,
             continue
         if node.tag == _YAML_NULL_TAG and "null" in types:
             continue
-        found.append(MisreadScalar(
+        found.append((node, MisreadScalar(
             node.start_mark.line + 1, node.start_mark.column + 1,
             path or "/", node.value, node.tag.rsplit(":", 1)[-1],
-            _tag_as_written(node.tag) if getattr(node, "go_explicit_tag", False) else ""))
-    found.sort(key=lambda m: (m.line, m.column))
+            _tag_as_written(node.tag) if getattr(node, "go_explicit_tag", False) else "")))
+    found.sort(key=lambda pair: (pair[1].line, pair[1].column))
     return found
 
 
@@ -892,7 +919,9 @@ def _plain_scalars_with_schema(root: Optional["yaml.Node"], schema: dict,
                                schema_name: str):
     """Each scalar under *root* (callers filter on style), with the schema
     branches that can describe its position and its JSON-pointer-like path —
-    the walk `find_misread_scalars` and `find_yaml11_bool_words` share.
+    the walk `_walk_misread_scalars` (the #2164 judgement behind
+    `find_misread_scalars` / `misread_scalar_nodes`) and
+    `find_yaml11_bool_words` share.
     Merge keys put the merged keys in the mapping holding them; an alias
     re-entering the same schema position is walked once."""
     if root is None:
