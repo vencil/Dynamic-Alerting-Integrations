@@ -569,6 +569,38 @@ blocking conditions become: `_routing_enforced` in a subdirectory file → rc 2;
 tenant id → rc 1 (see (e)); `receiver` or `overrides` written as `null` in a subdirectory level's
 `_routing_defaults` → rc 2 (see (a)); the (c) and (d) errors as stated above.
 
+### Amendment 2026-10-08 (#2296): `effective` is the verbatim view of what was written; what `/metrics` does not serve is named key by key
+
+Context: on one tree, `/effective` (tenant-api, `da-guard effective`) and `/metrics` gave different
+values — the exporter drops the whole root `_defaults.yaml` when its `defaults:` holds a non-number,
+falls back to a shallower level for a subtree value that is not threshold-shaped, and serves the
+default for a tenant value written with an inline merge key (`<<:`) it cannot parse, while
+`/effective` showed the written value ([#2296](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/2296)).
+
+Decision:
+
+1. **`effective` is the verbatim view of what was written.** `effective_config` keeps every layer's
+   value as written; a value `/metrics` does not serve is neither dropped nor rewritten but named,
+   per tenant, in `not_served` with its reason (a closed set: `parse_failed`,
+   `root_defaults_unwrapped`, `value_rejected`, `value_unparsed`, `value_unparsed_dropped`,
+   `undeliverable`, `root_null_undeclared`) and the file of the value shown.
+2. **Every reason is the `/metrics` path's own verdict**, recorded where the exporter's build
+   (`BuildFlatConfig`: a file dropped whole, a root top-level key not read, a value the subtree
+   overlay refuses) and its resolver (a value it cannot parse, in the branches that already WARN)
+   make it; `effective` only answers whose value it shows — which layer, which file — and looks
+   that up. It must **not** be inferred by comparing the two outputs: a legitimate `"60:critical"`
+   is written differently from what is served, so a value comparison misjudges it; nor by parsing
+   stderr.
+3. **A defaults chain file `/metrics` skips does not make the request or the tenant disappear.**
+   A chain file with a syntax error, which the exporter does not read at all, is read as empty;
+   the tenant is still answered and the file named in `chain_parse_failed`. tenant-api
+   `/effective` answers HTTP 200 (500 before) and `da-guard effective` exits 3 (the `parse_failed`
+   convention). `merged_hash` is computed over the chain without that file. `da-guard`'s main gate
+   (`ScopeEffective`) is unchanged and still stops on such a file as a decode error.
+4. **Keys keep the author's spelling.** A #1231 retired spelling (e.g. `mysql_cpu`) is not
+   `not_served`: `/metrics` serves the same threshold under the canonical name; `served-values`'
+   `aliases` maps one spelling to the other.
+
 ## Alternatives Considered
 
 ### A: Single-Hash (source_hash only)
