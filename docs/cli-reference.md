@@ -2960,7 +2960,7 @@ da-tools threshold-govern --config-dir <PATH> --prometheus <URL> --apply \
 
 多通道通知連通性測試 — 驗證所有已配置 receiver 的可達性，報告連通性狀態。
 
-受測的 receiver 取自路由產生器（`generate-routes`）解析出的每租戶 `_routing`——`_routing_defaults`（含子目錄層）、routing profile、平台檔 `tenants:` 覆蓋、子目錄裡的租戶檔都算，與產生器為各租戶產出的 receiver 一致；只測各租戶的 receiver，產生器另外產出的平台強制路由（`_routing_enforced`，NOC）receiver 不在測試範圍（[#2752](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/2752)）。路由產生器拒收的樹（檔案讀不到、同一租戶宣告於兩檔、routing-tree 錯誤、租戶 ID 不合法）不測任何 receiver，exit 2。
+受測的 receiver 取自路由產生器（`generate-routes`）解析出的每租戶 `_routing`——`_routing_defaults`（含子目錄層）、routing profile、平台檔 `tenants:` 覆蓋、子目錄裡的租戶檔都算，與產生器為各租戶產出的 receiver 一致；只測各租戶的 receiver，產生器另外產出的平台強制路由（`_routing_enforced`，NOC）receiver 不在測試範圍（[#2752](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/2752)）。路由產生器在讀取階段就拒收的樹（檔案讀不到、同一租戶宣告於兩檔、routing-tree 錯誤、租戶 ID 不合法）不測任何 receiver，exit 2。⚠️ 產生器要到產出 receiver 時才拒收的情況（例如兩個 receiver 產出同一個名稱）本工具不檢查，照常測試；要確認產生器收不收這份設定，跑 `generate-routes --validate`。
 
 **用法**
 
@@ -3006,7 +3006,7 @@ da-tools test-notification --config-dir conf.d/ --ci
 |------|------|
 | `0` | 所有 receiver 連通正常（或非 CI 模式） |
 | `1` | CI 模式：任一 receiver 連通失敗（receiver 設定無效或 URL 不合法也算，`--dry-run` 不連線時也一樣） |
-| `2` | 呼叫端錯誤：`--config-dir` 底下有檔案讀不到（內容不是 UTF-8 或不是合法 YAML；訊息指名哪一檔，#1654），或路由產生器拒收這棵樹（stderr 是產生器自己的拒收訊息；`--json` 印 `status: caller_error`、`reason: routing_tree_refused`，#2752） |
+| `2` | 呼叫端錯誤：`--config-dir` 底下有檔案讀不到（內容不是 UTF-8 或不是合法 YAML；訊息指名哪一檔，#1654），或路由產生器在讀取階段拒收這棵樹（stderr 是產生器自己的拒收訊息；`--json` 印 `status: caller_error`、`reason: routing_tree_refused`，#2752） |
 
 #### explain-route
 
