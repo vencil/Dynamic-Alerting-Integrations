@@ -753,14 +753,14 @@ def find_misread_scalars(root: Optional["yaml.Node"], schema: dict,
 # ── #2509: an UNQUOTED YAML 1.1 boolean word in a field that takes a boolean
 #
 # `send_resolved: on` / `_routing_enforced: {enabled: yes}` is True to
-# PyYAML (YAML 1.1), so the schema passes it, but the exporter's generic
-# yaml.v3 decode reads the STRING "on" / "yes": `da-guard effective` serves
-# that string and its merged_hash differs from describe_tenant's. (Not every
-# Go reader: pkg/routingpolicy decodes `_routing_enforced` through
-# pyyamlcompat, which takes yes / on as true — #2509 review F5.) Nothing on the READ side
-# changes (#2509 owner decision ②) — the author is told to write true /
-# false. A WARN, not an ERROR: the receiver fields (`definitions.yamlBool`)
-# accept the word on both sides and generate the same Alertmanager config.
+# PyYAML (YAML 1.1), so the schema passes it; yaml.v3 alone reads the STRING
+# "on" / "yes". ⛔ The message states only that, and no consequence: each
+# file kind is read by a different Go reader — the generic decode keeps the
+# string, pkg/routingpolicy (pyyamlcompat) and receiverspec take the word as
+# a boolean, and some readers never read the field at all (#2509 blind
+# review 2: a per-plane claim was wrong for at least one kind every round).
+# Nothing on the READ side changes (#2509 owner decision ②) — the author is
+# told to write true / false. A WARN, never an ERROR.
 #
 # ⛔ As for #2164, no word list here: a word counts when PyYAML's resolver
 # tagged the plain scalar `bool` (exactly the YAML 1.1 words, the schema's
@@ -787,11 +787,9 @@ class YamlBoolWord:
         field = self.path.rsplit("/", 1)[-1]
         value = "true" if self.text.lower() in ("yes", "on") else "false"
         written = (f"- {value}" if field.isdigit() or not field else f"{field}: {value}")
-        return (f"{self.path}: unquoted {self.text!r} is a YAML 1.1 boolean — PyYAML "
-                f"and this schema read it as {value}, but the exporter's generic "
-                f"effective config (da-guard effective) carries the string "
-                f"{self.text!r}, and its merged_hash is computed from that string — "
-                f"write it as: {written}")
+        return (f"{self.path}: unquoted YAML 1.1 boolean word {self.text!r} — write it as "
+                f"true / false ({written}). PyYAML reads it as a boolean; some of the "
+                f"exporter's readers keep it as a string")
 
     def __repr__(self) -> str:  # pragma: no cover - debugging aid
         return f"YamlBoolWord({self.line}:{self.column} {self.path} {self.text!r})"
@@ -820,29 +818,33 @@ def find_yaml11_bool_words(root: Optional["yaml.Node"], schema: dict,
 
 class GoRejectedBoolTag:
     """An explicit ``!!bool`` whose text yaml.v3 does not take (#2509 review
-    F4). ``line`` 1-based; ``path`` as for :class:`MisreadScalar`."""
+    F4). ``line`` 1-based; ``path`` as for :class:`MisreadScalar`;
+    ``document`` the 0-based index of the YAML document holding it."""
 
-    __slots__ = ("line", "path", "text")
+    __slots__ = ("line", "path", "text", "document")
 
-    def __init__(self, line: int, path: str, text: str) -> None:
-        self.line, self.path, self.text = line, path, text
+    def __init__(self, line: int, path: str, text: str, document: int = 0) -> None:
+        self.line, self.path, self.text, self.document = line, path, text, document
 
-    def message(self) -> str:
-        return (f"{self.path}: explicit `!!bool {self.text}` — yaml.v3 (the exporter) "
-                f"decodes only true / True / TRUE / false / False / FALSE under a "
-                f"`!!bool` tag, so it cannot decode this file and drops the WHOLE file "
-                f"(every tenant and default in it; da-guard exits 3) — write true or "
-                f"false without the tag")
+    def message(self, fatal: bool) -> str:
+        """*fatal*: a position where the exporter is measured to refuse the
+        whole file (:func:`split_go_rejected_bool_tags`)."""
+        head = (f"{self.path}: explicit `!!bool {self.text}` — yaml.v3 (the exporter's "
+                f"YAML library) accepts only true / True / TRUE / false / False / FALSE "
+                f"under `!!bool`")
+        if fatal:
+            return (f"{head}, so the exporter cannot decode this file (da-guard lists it "
+                    f"under parse_failed and exits 3) — write true or false without the tag")
+        return f"{head} — write true or false without the tag"
 
 
-def find_go_rejected_bool_tags(root: Optional["yaml.Node"]) -> list[GoRejectedBoolTag]:
+def find_go_rejected_bool_tags(root: Optional["yaml.Node"],
+                               document: int = 0) -> list[GoRejectedBoolTag]:
     """Every scalar under *root* written with an explicit ``!!bool`` tag
     (quoted or not) whose text is not one of yaml.v3's six boolean texts.
-    Field-independent: measured with da-guard, ``!!bool yes`` / ``on`` /
-    ``no`` / ``off`` (any case), ``!!bool 'yes'`` and ``!!bool y`` make the
-    exporter reject the file whatever field holds them; ``!!bool true`` /
-    ``True`` decode. Needs nodes from :func:`compose_all_nodes` (the
-    ``go_explicit_tag`` mark)."""
+    Field-independent. Needs nodes from :func:`compose_all_nodes` (the
+    ``go_explicit_tag`` mark); *document* is recorded on each hit. Whether
+    a hit is an ERROR depends on where it is: :func:`split_go_rejected_bool_tags`."""
     found: list[GoRejectedBoolTag] = []
     seen: set[int] = set()
     stack: list[tuple["yaml.Node", str]] = [(root, "")] if root is not None else []
@@ -861,9 +863,56 @@ def find_go_rejected_bool_tags(root: Optional["yaml.Node"]) -> list[GoRejectedBo
         elif (isinstance(node, yaml.ScalarNode) and node.tag == _YAML_BOOL_TAG
               and getattr(node, "go_explicit_tag", False)
               and node.value not in _YAML12_BOOL_TEXTS):
-            found.append(GoRejectedBoolTag(node.start_mark.line + 1, path or "/", node.value))
+            found.append(GoRejectedBoolTag(node.start_mark.line + 1, path or "/",
+                                           node.value, document))
     found.sort(key=lambda m: m.line)
     return found
+
+
+# #2509 blind review 2 (A / H): the positions where an explicit `!!bool yes`
+# is measured (da-guard: exit 3, the file under parse_failed) to make the
+# exporter refuse the WHOLE file — and ONLY these are an ERROR:
+#   * a tenant file's (no `_` prefix) FIRST document, anywhere in it;
+#   * a ROOT `_defaults*` file's first document, under `defaults:` or
+#     `tenants:` — unless it is a carrier the chain does not select (a
+#     `_defaults.yml` beside `_defaults.yaml`: measured exit 0).
+# Everywhere else (`_routing_profiles.yaml`, `_profiles.yaml`, a second
+# document, …) it is a WARN: each file kind has its own reader, and no
+# per-reader claim is made here.
+FATAL_IN_DOCUMENT = "document"
+FATAL_IN_DEFAULTS = "defaults"
+_FATAL_DEFAULTS_KEYS = frozenset(("defaults", "tenants"))
+
+
+def go_rejected_bool_fatal_scope(rel: str, unselected_root_carriers: "set[str]") -> str:
+    """Where in the file *rel* (posix path relative to conf.d) an explicit
+    ``!!bool yes`` is fatal: :data:`FATAL_IN_DOCUMENT`,
+    :data:`FATAL_IN_DEFAULTS` or ``""`` (nowhere). *unselected_root_carriers*
+    is ``_lib_confd.unselected_carriers`` of the conf.d root listing."""
+    from _lib_confd import is_defaults_document_name, is_reserved_name
+    name = rel.rsplit("/", 1)[-1]
+    if not is_reserved_name(name):
+        return FATAL_IN_DOCUMENT
+    if ("/" not in rel and is_defaults_document_name(name)
+            and name not in unselected_root_carriers):
+        return FATAL_IN_DEFAULTS
+    return ""
+
+
+def split_go_rejected_bool_tags(roots: "list[yaml.Node]", scope: str
+                                ) -> "tuple[list[GoRejectedBoolTag], list[GoRejectedBoolTag]]":
+    """``(fatal, other)``: the explicit-``!!bool`` hits of one file's
+    document *roots*, split by *scope* (:func:`go_rejected_bool_fatal_scope`)."""
+    fatal: list[GoRejectedBoolTag] = []
+    other: list[GoRejectedBoolTag] = []
+    for index, root in enumerate(roots):
+        for hit in find_go_rejected_bool_tags(root, index):
+            top = hit.path.split("/")[1] if hit.path.startswith("/") else ""
+            is_fatal = index == 0 and (
+                scope == FATAL_IN_DOCUMENT
+                or (scope == FATAL_IN_DEFAULTS and top in _FATAL_DEFAULTS_KEYS))
+            (fatal if is_fatal else other).append(hit)
+    return fatal, other
 
 
 def _plain_scalars_with_schema(root: Optional["yaml.Node"], schema: dict,

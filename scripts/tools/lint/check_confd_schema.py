@@ -26,12 +26,15 @@ SCOPE:
 
 WARN (#2509, never changes the exit code): an unquoted YAML 1.1 boolean word
   (`yes` / `no` / `on` / `off`, three spellings each) in a field that takes a
-  boolean — PyYAML, and so this schema check, reads a boolean; the exporter's
-  generic effective config (da-guard effective) and merged_hash carry the
-  string. Each one is printed as `WARN: <file>:<line>: …`. A root `_defaults*`
-  file's `tenants:` block is held to the tenant schema for this and #2164.
-  An explicit `!!bool yes` (yaml.v3 refuses it, dropping the whole file) is
-  an ERROR.
+  boolean — PyYAML, and so this schema check, reads a boolean; some of the
+  exporter's readers keep the string. Each one is printed as
+  `WARN: <file>:<line>: …`. A root `_defaults*` file's `tenants:` block is
+  held to the tenant schema for this and #2164. An explicit `!!bool yes`
+  (yaml.v3 refuses that tag on that text) is an ERROR only where the exporter
+  is measured to refuse the whole file — a tenant file's first document, a
+  root `_defaults*` file's `defaults:` / `tenants:` — and a WARN elsewhere
+  (`_lib_io.split_go_rejected_bool_tags`). A value PyYAML cannot construct
+  (`!!bool y`) is named as an ERROR, not a traceback.
 
 Exit codes (scripts/tools/_lib_exitcodes.py):
   0  all tenant files valid
@@ -52,6 +55,7 @@ import io
 import json
 import os
 import sys
+from pathlib import Path
 
 import yaml
 
@@ -62,13 +66,14 @@ from _lib_exitcodes import EXIT_OK, EXIT_VIOLATION, EXIT_CALLER_ERROR  # noqa: E
 from _lib_io import safe_label  # noqa: E402  (#1538 output-layer escaping)
 from _lib_io import strict_safe_load_all  # noqa: E402  (#2123 duplicate key = YAML error)
 from _lib_io import (  # noqa: E402  (#2164, #2509)
-    compose_all_nodes, find_go_rejected_bool_tags, find_misread_scalars,
-    find_yaml11_bool_words)
+    compose_all_nodes, find_misread_scalars, find_yaml11_bool_words,
+    go_rejected_bool_fatal_scope, split_go_rejected_bool_tags)
 from _lib_confd import (  # noqa: E402  (#1588 shared name predicates)
     has_yaml_extension,
     is_defaults_document_name,
     is_defaults_name,
     is_hidden_name,
+    unselected_carriers,
 )
 
 # Repo-root-relative default: lint -> tools -> scripts -> <root>/docs/schemas/...
@@ -302,42 +307,38 @@ def _iter_yaml_files(config_dir: str) -> list[str]:
     return sorted(out)
 
 
-def misread_scalar_violations(rel: str, text: str, schema: dict,
+def misread_scalar_violations(rel: str, roots: list, schema: dict,
                               schemas: dict, schema_name: str) -> list[str]:
     """#2164: one ERROR per unquoted scalar in a string-typed field that
     PyYAML reads as non-string (`channel: yes` → True). The judgement is
     `_lib_io.find_misread_scalars` — the resolver decides what the scalar
-    is, *schema* decides which fields are strings; nothing is listed here."""
-    out: list[str] = []
-    for root in compose_all_nodes(io.StringIO(text)):
-        for hit in find_misread_scalars(root, schema, schemas, schema_name):
-            out.append(f"ERROR: {rel}:{hit.line}: {hit.message()}")
-    return out
+    is, *schema* decides which fields are strings; nothing is listed here.
+    *roots*: the file's composed documents (`compose_all_nodes`)."""
+    return [f"ERROR: {rel}:{hit.line}: {hit.message()}"
+            for root in roots
+            for hit in find_misread_scalars(root, schema, schemas, schema_name)]
 
 
-def go_rejected_bool_tag_violations(rel: str, text: str) -> list[str]:
-    """#2509 review F4: one ERROR per explicit `!!bool` whose text yaml.v3
-    refuses (`!!bool yes`) — the exporter drops the whole file. Any field:
-    `_lib_io.find_go_rejected_bool_tags`."""
-    out: list[str] = []
-    for root in compose_all_nodes(io.StringIO(text)):
-        for hit in find_go_rejected_bool_tags(root):
-            out.append(f"ERROR: {rel}:{hit.line}: {hit.message()}")
-    return out
+def go_rejected_bool_tag_findings(rel: str, roots: list, scope: str
+                                  ) -> tuple[list[str], list[str]]:
+    """#2509: `(errors, warnings)` for each explicit `!!bool` whose text
+    yaml.v3 refuses (`!!bool yes`) — an ERROR only where the exporter is
+    measured to refuse the whole file (*scope*), a WARN elsewhere.
+    `_lib_io.split_go_rejected_bool_tags` decides."""
+    fatal, other = split_go_rejected_bool_tags(roots, scope)
+    return ([f"ERROR: {rel}:{h.line}: {h.message(True)}" for h in fatal],
+            [f"WARN: {rel}:{h.line}: {h.message(False)}" for h in other])
 
 
-def yaml11_bool_word_warnings(rel: str, text: str, schema: dict,
+def yaml11_bool_word_warnings(rel: str, roots: list, schema: dict,
                               schemas: dict, schema_name: str) -> list[str]:
     """#2509: one WARN per unquoted YAML 1.1 boolean word (`yes` / `no` /
-    `on` / `off`, three spellings each) in a field that takes a boolean —
-    PyYAML (and so this schema check) reads a boolean, the exporter's
-    generic effective config and merged_hash the string. `_lib_io.find_yaml11_bool_words` decides; WARN, not ERROR:
-    nothing on the read side changed (owner decision ②)."""
-    out: list[str] = []
-    for root in compose_all_nodes(io.StringIO(text)):
-        for hit in find_yaml11_bool_words(root, schema, schemas, schema_name):
-            out.append(f"WARN: {rel}:{hit.line}: {hit.message()}")
-    return out
+    `on` / `off`, three spellings each) in a field that takes a boolean.
+    `_lib_io.find_yaml11_bool_words` decides; WARN, not ERROR: nothing on
+    the read side changed (owner decision ②)."""
+    return [f"WARN: {rel}:{hit.line}: {hit.message()}"
+            for root in roots
+            for hit in find_yaml11_bool_words(root, schema, schemas, schema_name)]
 
 
 def validate_dir(config_dir: str, schema: dict, validator,
@@ -369,7 +370,13 @@ def validate_dir(config_dir: str, schema: dict, validator,
         schemas[PROFILES_SCHEMA_NAME] = profiles_schema
     extra = [s for s in (platform_schema, profiles_schema) if s is not None]
     registry = schema_registry(schema, *extra) if extra else None
-    for path in _iter_yaml_files(config_dir):
+    files = _iter_yaml_files(config_dir)
+    # #2509: a root `_defaults.yml` beside `_defaults.yaml` is never parsed
+    # by the exporter — its explicit `!!bool yes` is not a whole-file refusal.
+    unselected = unselected_carriers(
+        Path(f) for f in files
+        if os.path.dirname(os.path.relpath(f, config_dir)) == "")
+    for path in files:
         rel = os.path.relpath(path, config_dir).replace(os.sep, "/")
         basename = os.path.basename(path)
         is_defaults = platform_schema is not None and _is_defaults_file(basename)
@@ -381,7 +388,15 @@ def validate_dir(config_dir: str, schema: dict, validator,
         try:
             with open(path, encoding="utf-8") as fh:
                 text = fh.read()
-            docs = list(strict_safe_load_all(io.StringIO(text)))
+            roots = list(compose_all_nodes(io.StringIO(text)))
+            try:
+                docs = list(strict_safe_load_all(io.StringIO(text)))
+                construct_error = None
+            except (KeyError, ValueError) as exc:
+                # #2509 blind review 2 (C): an explicit tag PyYAML cannot
+                # build (`!!bool y` → KeyError, `!!int x` → ValueError) was
+                # a traceback. Named below, after the node checks.
+                docs, construct_error = [], exc
         except (OSError, yaml.YAMLError) as exc:
             # Unreadable file or malformed YAML is an environment/caller error, not
             # a schema violation — surface it as exit 2 (open() can raise OSError
@@ -406,10 +421,20 @@ def validate_dir(config_dir: str, schema: dict, validator,
         if is_defaults and "/" not in rel:
             quoting.append((schema, TENANT_SCHEMA_NAME))
         for q_schema, q_name in quoting:
-            violations.extend(misread_scalar_violations(rel, text, q_schema, schemas, q_name))
+            violations.extend(misread_scalar_violations(rel, roots, q_schema, schemas, q_name))
             if warnings is not None:
-                warnings.extend(yaml11_bool_word_warnings(rel, text, q_schema, schemas, q_name))
-        violations.extend(go_rejected_bool_tag_violations(rel, text))
+                warnings.extend(yaml11_bool_word_warnings(rel, roots, q_schema, schemas, q_name))
+        tag_errors, tag_warnings = go_rejected_bool_tag_findings(
+            rel, roots, go_rejected_bool_fatal_scope(rel, unselected))
+        violations.extend(tag_errors)
+        if warnings is not None:
+            warnings.extend(tag_warnings)
+        if construct_error is not None:
+            violations.append(
+                f"ERROR: {rel}: PyYAML cannot construct a value in this file "
+                f"({type(construct_error).__name__}: {construct_error}) — an explicit "
+                f"tag on a text it does not take; the schema was not checked")
+            continue
         for doc in docs:
             if is_profiles:
                 # #2245: an empty / comment-only `_routing_profiles.yaml` is a

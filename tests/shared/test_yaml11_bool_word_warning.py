@@ -1,8 +1,9 @@
 """#2509（owner 裁決 ②）：允許布林的欄位寫了未加引號的 YAML 1.1 字眼要給 WARN，讀取端不動。
 
 `send_resolved: on`、`_routing_enforced: {enabled: yes}`、`_state_maintenance: {enabled: off}`：
-PyYAML（YAML 1.1）讀成布林，schema 因此放行；Go（yaml.v3）讀到的是字串 "on" / "yes" / "off"——
-`da-guard effective` 端出字串、merged_hash 與 describe_tenant 不同。本檔釘住：
+PyYAML（YAML 1.1）讀成布林，schema 因此放行；yaml.v3 讀到的是字串 "on" / "yes" / "off"。
+各檔種由不同的 Go reader 讀（有的保留字串、有的讀成布林、有的根本不讀），所以訊息只陳述
+可驗證的事實，不斷言 merged_hash／effective 的值（盲審第 2 輪 G／F）。本檔釘住：
 
 - 字眼的集合：以 Go `receiverspec.YAML11BoolLiterals`（spec.go）為準——去掉 yaml.v3 自己也讀成
   布林的 true/false 三種拼法，剩下 yes/no/on/off 各三種拼法；schema 的 `yamlBool` enum 與它一致。
@@ -13,9 +14,12 @@ PyYAML（YAML 1.1）讀成布林，schema 因此放行；Go（yaml.v3）讀到�
 - 不響的對照組：`true` / `false`（各種大小寫）、字串欄位寫 `yes`（那是 #2164 的 ERROR，不是本 WARN）、
   加引號的 `"yes"`。
 - 盲審第 1 輪（F3／F4／F5／T2）：根 `_defaults*` 的 `tenants:` 區塊依 tenant schema 檢查，WARN 與
-  租戶檔一致（#2164 的 ERROR 同一修法一併補上；巢狀 `_defaults.yaml` 的 `tenants:` Go 不讀，不報）；
-  明確 `!!bool yes` 之類 yaml.v3 拒收整份檔，報 ERROR（da-guard exit 3 為前提）；訊息只陳述 generic
-  effective／merged_hash 讀到字串；`yaml_quoting` 的 FAIL 列附上 WARN 明細。
+  租戶檔一致（#2164 的 ERROR 同一修法一併補上；巢狀 `_defaults.yaml` 的 `tenants:` Go 不讀，兩條路徑
+  都不報）；`yaml_quoting` 的 FAIL 列附上 WARN 明細。
+- 盲審第 2 輪（A／H／C）：明確 `!!bool yes` 只在 da-guard 實測整檔 decode 失敗（exit 3、
+  parse_failed）的位置報 ERROR——租戶檔第一份文件、根 `_defaults*` 的 `defaults:`／`tenants:`；
+  `_routing_profiles.yaml`、第 2 份文件、未選用的 `_defaults.yml` 等一律 WARN（每格以 da-guard 為前提）。
+  `!!bool y` / `1` / `foo`（PyYAML 也建不出）具名報 ERROR，不出 traceback。
 
 修正前（main 59e58c81）兩條 lint 對 yes/on/no/off 都完全安靜（schema 讓它過、quoting 只看字串欄位）。
 
@@ -149,9 +153,10 @@ def test_both_lint_paths_warn_naming_file_and_field(tmp_path, field, word):
     assert p.returncode == 0, p.stderr                      # WARN 不改 rc
     warns = _warn_lines(p)
     assert len(warns) == 1, p.stderr
-    assert warns[0].startswith(f"WARN: {fname}:{line}: {path}: unquoted '{word}'"), warns
+    assert warns[0].startswith(
+        f"WARN: {fname}:{line}: {path}: unquoted YAML 1.1 boolean word '{word}'"), warns
     want = "true" if word.lower() in ("yes", "on") else "false"
-    assert warns[0].endswith(f"write it as: {path.rsplit('/', 1)[-1]}: {want}"), warns
+    assert f"write it as true / false ({path.rsplit('/', 1)[-1]}: {want})" in warns[0], warns
     assert "1 warning(s)" in p.stdout, p.stdout
 
     row = vc.check_yaml_quoting(str(conf_d))
@@ -195,7 +200,8 @@ def test_platform_defaults_routing_enforced_is_covered(tmp_path):
     p = _lint(conf_d)
     assert p.returncode == 0, p.stderr
     assert _warn_lines(p) and _warn_lines(p)[0].startswith(
-        "WARN: _defaults.yaml:4: /_routing_enforced/enabled: unquoted 'on'"), p.stderr
+        "WARN: _defaults.yaml:4: /_routing_enforced/enabled: unquoted YAML 1.1 boolean word "
+        "'on'"), p.stderr
     assert vc.check_yaml_quoting(str(conf_d))["status"] == vc.WARN
 
 
@@ -256,9 +262,12 @@ def test_root_platform_tenants_block_gets_2164s_error_too(tmp_path):
 
 
 def test_nested_defaults_tenants_block_is_not_held_to_the_tenant_schema(tmp_path):
-    """對照：巢狀 `_defaults.yaml` 的 `tenants:` 區塊 Go 不讀（#1576），不報。"""
+    """對照：巢狀 `_defaults.yaml` 的 `tenants:` 區塊 Go 不讀（#1576），兩條路徑都不報
+    （盲審第 2 輪 T1：validate_config 這半原本沒有斷言，對它套 tenant schema 的突變存活）。"""
     conf_d = _platform_tree(tmp_path, _BLOCK, nested=True)
     assert _warn_lines(_lint(conf_d)) == []
+    row = vc.check_yaml_quoting(str(conf_d))
+    assert row["status"] == vc.PASS, row
 
 
 _EXPLICIT = ["!!bool yes", "!!bool on", "!!bool no", "!!bool off", "!!bool Yes", "!!bool OFF",
@@ -276,9 +285,9 @@ def test_explicit_bool_tag_the_exporter_refuses_is_an_error(tmp_path, field, wor
     assert p.returncode == 1 and _warn_lines(p) == [], p.stderr
     err = [l for l in p.stderr.splitlines() if "explicit `!!bool" in l]
     assert len(err) == 1 and err[0].startswith(f"ERROR: {FIELDS[field][0]}:"), p.stderr
-    assert FIELDS[field][2] in err[0] and "drops the WHOLE file" in err[0], err
+    assert FIELDS[field][2] in err[0] and "cannot decode this file" in err[0], err
     row = vc.check_yaml_quoting(str(conf_d))
-    assert row["status"] == vc.FAIL and any("drops the WHOLE file" in d for d in row["details"])
+    assert row["status"] == vc.FAIL and any("cannot decode this file" in d for d in row["details"])
 
 
 @pytest.mark.parametrize("word", ["!!bool true", "!!bool True", "!!bool FALSE"])
@@ -289,12 +298,28 @@ def test_explicit_bool_tag_yaml_v3_takes_is_quiet(tmp_path, word):
     assert p.returncode == 0 and "explicit `!!bool" not in p.stderr, p.stderr
 
 
-def test_warn_message_states_only_the_generic_effective_reading(tmp_path):
-    """F5：不宣稱「Go readers」一律讀字串（routingpolicy 走 pyyamlcompat 讀成 true）。"""
-    conf_d, _ = _tree(tmp_path, "routing_enforced.enabled", "yes")
+def test_warn_message_states_only_verifiable_facts(tmp_path):
+    """盲審第 2 輪 G：`_routing_profiles.yaml` 的 `send_resolved: on`，da-guard 的 hash 與寫 true
+    時相同，舊訊息「effective／merged_hash 帶字串」不成立。訊息只說 PyYAML 讀成布林、exporter 的
+    部分 reader 保留字串，不再斷言 merged_hash 或 effective 的值。"""
+    conf_d = tmp_path / "conf.d"
+    (conf_d / "sub").mkdir(parents=True)
+    (conf_d / "_defaults.yaml").write_text(_DEFAULTS, encoding="utf-8")
+    profile = ("routing_profiles:\n  rp1:\n    receiver: {{type: webhook, "
+               "url: 'https://h.example.com/x', send_resolved: {v}}}\n")
+    (conf_d / "sub" / "t1.yaml").write_text("tenants:\n  t1:\n    _routing_profile: rp1\n",
+                                            encoding="utf-8")
+    (conf_d / "_routing_profiles.yaml").write_text(profile.format(v="true"), encoding="utf-8")
+    hash_true = tv.load_effective(conf_d)["t1"].merged_hash
+    (conf_d / "_routing_profiles.yaml").write_text(profile.format(v="on"), encoding="utf-8")
+    assert tv.load_effective(conf_d)["t1"].merged_hash == hash_true     # 前提
     (w,) = _warn_lines(_lint(conf_d))
-    assert "generic effective config (da-guard effective)" in w and "merged_hash" in w, w
-    assert "Go readers" not in w, w
+    assert w.startswith("WARN: _routing_profiles.yaml:3: "
+                        "/routing_profiles/rp1/receiver/send_resolved: unquoted"), w
+    assert w.endswith("PyYAML reads it as a boolean; some of the exporter's readers keep it "
+                      "as a string"), w
+    for claim in ("merged_hash", "effective", "da-guard", "Go readers"):
+        assert claim not in w, (claim, w)
 
 
 def test_fail_row_carries_the_warnings_too(tmp_path):
@@ -314,3 +339,98 @@ def test_fail_row_carries_the_warnings_too(tmp_path):
     assert len(errs) == 1 and "channel" in errs[0], row
     assert len(warns) == 1 and "/_state_maintenance/enabled" in warns[0], row
     assert row["details"] == errs + warns, row
+
+
+# ── 盲審第 2 輪：明確 `!!bool` 只在實測整檔 decode 失敗的位置報 ERROR ─────────
+
+def _explicit_tree(tmp_path: Path, files: dict[str, str]) -> Path:
+    conf_d = tmp_path / "conf.d"
+    (conf_d / "sub").mkdir(parents=True)
+    files = {"_defaults.yaml": _DEFAULTS, "sub/t1.yaml": "tenants:\n  t1:\n    mysql_connections: '5'\n",
+             **files}
+    for rel, body in files.items():
+        (conf_d / rel).write_text(body, encoding="utf-8")
+    return conf_d
+
+
+_RP = ("routing_profiles:\n  rp1:\n    receiver: {type: webhook, url: 'https://h.example.com/x', "
+       "send_resolved: !!bool yes}\n")
+_SM = "    _state_maintenance: {enabled: !!bool yes}\n"
+# (id, files, file the finding is in, its JSON path, exporter refuses the whole file)
+_PLACES = [
+    ("tenant-doc1", {"sub/t1.yaml": "tenants:\n  t1:\n" + _SM}, "sub/t1.yaml",
+     "/tenants/t1/_state_maintenance/enabled", True),
+    ("root-defaults-defaults", {"_defaults.yaml": _DEFAULTS + "  container_cpu: !!bool yes\n"},
+     "_defaults.yaml", "/defaults/container_cpu", True),
+    ("root-defaults-tenants", {"_defaults.yaml": _DEFAULTS + "tenants:\n  t1:\n" + _SM},
+     "_defaults.yaml", "/tenants/t1/_state_maintenance/enabled", True),
+    ("routing-profiles", {"_routing_profiles.yaml": _RP,
+                          "sub/t1.yaml": "tenants:\n  t1:\n    _routing_profile: rp1\n"},
+     "_routing_profiles.yaml", "/routing_profiles/rp1/receiver/send_resolved", False),
+    ("tenant-doc2", {"sub/t1.yaml": "tenants:\n  t1:\n    mysql_connections: '5'\n---\n"
+                                    "tenants:\n  t1:\n" + _SM},
+     "sub/t1.yaml", "/tenants/t1/_state_maintenance/enabled", False),
+    ("unselected-defaults-yml", {"_defaults.yml": _DEFAULTS + "tenants:\n  t1:\n" + _SM},
+     "_defaults.yml", "/tenants/t1/_state_maintenance/enabled", False),
+]
+
+
+@pytest.mark.parametrize("name,files,rel,path,fatal", _PLACES, ids=[c[0] for c in _PLACES])
+def test_explicit_bool_tag_is_an_error_only_where_the_exporter_refuses_the_file(
+        tmp_path, name, files, rel, path, fatal):
+    """A／H：ERROR ⇔ da-guard 實測整檔 decode 失敗（前提逐格量）；其餘位置 WARN、rc 0。"""
+    conf_d = _explicit_tree(tmp_path, files)
+    if fatal:
+        with pytest.raises(tv.ParseFailedError):
+            tv.load_effective(conf_d)
+    else:
+        tv.load_effective(conf_d)                          # 前提：Go 讀得了這棵樹
+    p = _lint(conf_d)
+    hits = [l for l in (p.stdout + p.stderr).splitlines() if "explicit `!!bool yes`" in l]
+    assert len(hits) == 1, p.stderr
+    level = "ERROR" if fatal else "WARN"
+    assert hits[0].startswith(f"{level}: {rel}:") and f": {path}: " in hits[0], hits
+    assert ("cannot decode this file" in hits[0]) is fatal, hits
+    assert p.returncode == (1 if fatal else 0), p.stderr
+    row = vc.check_yaml_quoting(str(conf_d))
+    assert row["status"] == (vc.FAIL if fatal else vc.WARN), row
+    assert [d for d in row["details"] if "explicit `!!bool yes`" in d] == \
+        [hits[0].split(": ", 1)[1] if fatal else hits[0]], row
+
+
+@pytest.mark.parametrize("files,rel", [
+    ({"_defaults.yaml": _DEFAULTS + "_routing_defaults:\n  receiver: {type: webhook, "
+      "url: 'https://h.example.com/x', send_resolved: !!bool yes}\n"}, "_defaults.yaml"),
+    ({"sub/_defaults.yaml": "defaults:\n  container_cpu: !!bool yes\n"}, "sub/_defaults.yaml"),
+], ids=["root-defaults-other-key", "nested-defaults"])
+def test_known_under_report_measured_fatal_but_warned(tmp_path, files, rel):
+    """已知低報（另開票）：這兩處 da-guard 也實測整檔 decode 失敗，但本輪範圍只把租戶檔第一份
+    文件與根 `_defaults*` 的 `defaults:`／`tenants:` 報 ERROR，其餘一律 WARN。改成 ERROR 時
+    連同本格一起改。"""
+    conf_d = _explicit_tree(tmp_path, files)
+    with pytest.raises(tv.ParseFailedError):
+        tv.load_effective(conf_d)
+    p = _lint(conf_d)
+    assert p.returncode == 0, p.stderr
+    assert any(l.startswith(f"WARN: {rel}:") and "explicit `!!bool yes`" in l
+               for l in _warn_lines(p)), p.stderr
+
+
+@pytest.mark.parametrize("word", ["y", "1", "foo"])
+def test_explicit_bool_tag_pyyaml_cannot_build_is_named_not_a_traceback(tmp_path, word):
+    """C：`!!bool y` 之類 PyYAML 的 constructor 也建不出（KeyError）；check_confd_schema 原本在
+    strict_safe_load_all 拋 traceback（rc 1），validate_config 則具名報出。現在兩條路徑都具名。"""
+    conf_d = _explicit_tree(tmp_path, {
+        "sub/t1.yaml": f"tenants:\n  t1:\n    _state_maintenance: {{enabled: !!bool {word}}}\n"})
+    with pytest.raises(tv.ParseFailedError):
+        tv.load_effective(conf_d)                          # 前提：Go 也拒收整檔
+    p = _lint(conf_d)
+    assert p.returncode == 1, p.stderr
+    assert "Traceback" not in p.stderr, p.stderr
+    errs = [l for l in p.stderr.splitlines() if l.startswith("ERROR: sub/t1.yaml")]
+    assert any(f"/tenants/t1/_state_maintenance/enabled: explicit `!!bool {word}`" in l
+               for l in errs), p.stderr
+    assert any("PyYAML cannot construct a value in this file" in l for l in errs), p.stderr
+    row = vc.check_yaml_quoting(str(conf_d))
+    assert row["status"] == vc.FAIL and any(f"explicit `!!bool {word}`" in d
+                                            for d in row["details"]), row

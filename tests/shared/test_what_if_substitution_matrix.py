@@ -14,6 +14,8 @@ oracle 是 Go：`da-guard effective` 對「替換後的樹」求出的 merged_ha
 `test_cli_unchanged_root_platform_file_reports_no_reload` 正是那個形狀——內容不變所以
 不 reload，是套套邏輯，什麼都抓不到；它已換成「副本未改 → 不 reload／副本改值 → reload」
 兩向都有的格子。現在沒帶 `--replaces` 卻指向樹內既有檔 → rc 2。
+同檔判斷以 inode 為準（`os.path.samefile`）：hard link 解析後路徑不同、卻是同一個檔
+（盲審第 2 輪 D）。`--replaces` 沒帶 `--what-if` 在任何模式（含 `--diff` / `--all`）都是 rc 2（E）。
 
 樹外的檔（`append-external`）與樹內不存在於 listing 的路徑（`insert`）維持原行為，各有一格
 對照組。
@@ -171,6 +173,39 @@ def test_replaces_through_a_link_to_the_what_if_file_is_refused(tmp_path):
     assert "same file" in p.stderr, p.stderr
 
 
+def _hard_link(src: Path, dst: Path) -> None:
+    try:
+        os.link(src, dst)
+    except (OSError, NotImplementedError) as exc:  # 不支援 hard link 的檔案系統
+        pytest.skip(f"hard link unavailable: {exc}")
+
+
+def test_hard_link_to_an_in_tree_file_without_replaces_is_refused(tmp_path):
+    """盲審第 2 輪 D：hard link 解析後的路徑不同、卻是同一個檔——以 inode 判斷，rc 2。
+    修正前回 append-external、would_trigger_reload=False，而 Go 的 hash 已經變了。"""
+    conf_d = _tree(tmp_path, True)
+    target = conf_d / "sub" / "_defaults.yaml"
+    link = tmp_path / "hard.yaml"
+    _hard_link(target, link)
+    p = _cli(conf_d, link)
+    assert p.returncode == 2, (p.returncode, p.stdout, p.stderr)
+    assert p.stdout == "", p.stdout
+    assert "through a hard link" in p.stderr, p.stderr
+    assert f"--replaces {target.resolve()}" in p.stderr, p.stderr
+
+
+def test_replaces_through_a_hard_link_to_the_what_if_file_is_refused(tmp_path):
+    """盲審第 2 輪 D：`--what-if` 是 `--replaces` 的 hard link → 同一個檔，rc 2。"""
+    conf_d = _tree(tmp_path, True)
+    target = conf_d / "sub" / "_defaults.yaml"
+    link = tmp_path / "hard.yaml"
+    _hard_link(target, link)
+    p = _cli(conf_d, link, "--replaces", str(target))
+    assert p.returncode == 2, (p.returncode, p.stdout, p.stderr)
+    assert p.stdout == "", p.stdout
+    assert "same file" in p.stderr, p.stderr
+
+
 @pytest.mark.parametrize("where", ["outside", "missing", "hidden-in-tree"])
 def test_replaces_must_name_a_listed_file(tmp_path, where):
     conf_d = _tree(tmp_path, True)
@@ -187,13 +222,18 @@ def test_replaces_must_name_a_listed_file(tmp_path, where):
     assert f"--replaces {target.resolve()} is not a file of the scanned tree" in p.stderr, p.stderr
 
 
-def test_replaces_requires_what_if(tmp_path):
+@pytest.mark.parametrize("mode", [[], ["--diff", "t2"], ["--all"]],
+                         ids=["default", "diff", "all"])
+def test_replaces_requires_what_if(tmp_path, mode):
+    """盲審第 2 輪 E：`--diff` / `--all` 分支先於這條檢查，修正前 rc 0 且 `--replaces` 被吞掉。"""
     conf_d = _tree(tmp_path, True)
+    tid = [] if mode == ["--all"] else ["t1"]
     p = subprocess.run(
-        [sys.executable, str(DESCRIBE), "t1", "--conf-d", str(conf_d),
+        [sys.executable, str(DESCRIBE), *tid, "--conf-d", str(conf_d), *mode,
          "--replaces", str(conf_d / "_profiles.yaml")],
         capture_output=True, text=True, encoding="utf-8", errors="replace", timeout=120)
     assert p.returncode == 2, (p.returncode, p.stdout, p.stderr)
+    assert p.stdout == "", p.stdout
     assert "--replaces requires --what-if" in p.stderr, p.stderr
 
 

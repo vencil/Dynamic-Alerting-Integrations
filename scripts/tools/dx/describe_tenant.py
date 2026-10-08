@@ -1916,6 +1916,22 @@ class WhatIfError(Exception):
     """A `--what-if` the simulation cannot answer (a caller error)."""
 
 
+def _same_file(a: Path, b: Path) -> bool:
+    """One file on disk — a hard link is one too (#2097 blind review 2, D:
+    comparing resolved paths let a hard link to a scanned file through)."""
+    try:
+        return os.path.samefile(a, b)
+    except OSError:
+        return a == b
+
+
+def _listed_file_of(scanner: "ConfDScanner", path: Path) -> "Path | None":
+    """The scanned file *path* is (by path, else by inode), or None."""
+    if path in scanner.listed_files:
+        return path
+    return next((f for f in sorted(scanner.listed_files) if _same_file(f, path)), None)
+
+
 def what_if_result(scanner: "ConfDScanner", tid: str, what_if_path: Path,
                    what_if_entry: Path, what_if_data: Any,
                    what_if_platform_doc: Any,
@@ -1956,19 +1972,21 @@ def what_if_result(scanner: "ConfDScanner", tid: str, what_if_path: Path,
     Raises WhatIfError for the refusals above, and when `replaces` is
     `tid`'s own tenant file and the new content no longer declares `tid`."""
     if replaces is None:
-        if what_if_path in scanner.listed_files:
+        listed = _listed_file_of(scanner, what_if_path)
+        if listed is not None:
             raise WhatIfError(
-                f"--what-if file {what_if_path} is a file of the scanned tree: the baseline "
-                f"already reads its current bytes, so the simulation would compare the file "
-                f"with itself and never report a reload. Save the modified content as a "
-                f"copy and run: --what-if <copy> --replaces {what_if_path}")
+                f"--what-if file {what_if_path} is a file of the scanned tree"
+                f"{'' if listed == what_if_path else f' ({listed}, through a hard link)'}: "
+                f"the baseline already reads its current bytes, so the simulation would "
+                f"compare the file with itself and never report a reload. Save the modified "
+                f"content as a copy and run: --what-if <copy> --replaces {listed}")
         target = what_if_path
     else:
         if replaces not in scanner.listed_files:
             raise WhatIfError(
                 f"--replaces {replaces} is not a file of the scanned tree {scanner.conf_d} "
                 f"(it must name an existing config file the scan lists)")
-        if replaces == what_if_path:
+        if _same_file(replaces, what_if_path):
             raise WhatIfError(
                 f"--what-if {what_if_path} and --replaces {replaces} are the same file: "
                 f"that compares the file with itself. Save the modified content as a "
@@ -2126,6 +2144,10 @@ def main() -> None:
         help="Output format (default: json)",
     )
     args = parser.parse_args()
+    # #2097 blind review 2 (E): before any mode branch — `--all` / `--diff`
+    # returned rc 0 with `--replaces` silently ignored.
+    if args.replaces and not args.what_if:
+        parser.error("--replaces requires --what-if")
 
     # Resolve conf.d path
     if args.conf_d:
@@ -2266,9 +2288,6 @@ def main() -> None:
         result = scanner.diff_tenants(tid, args.diff)
         print(_output(result))
         return
-
-    if args.replaces and not args.what_if:
-        parser.error("--replaces requires --what-if")
 
     # --what-if mode: simulate a modified conf.d file
     if args.what_if:

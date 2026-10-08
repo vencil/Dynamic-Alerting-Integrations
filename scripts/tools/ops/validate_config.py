@@ -607,15 +607,18 @@ def check_yaml_quoting(config_dir: str) -> dict[str, object]:
 
     #2509: an unquoted YAML 1.1 boolean word (`yes` / `no` / `on` / `off`)
     in a field that takes a boolean is listed too, as WARN (the row is WARN
-    when that is all it found): PyYAML reads a boolean, the exporter's
-    generic effective config and merged_hash the string —
-    `_lib_io.find_yaml11_bool_words`. An explicit `!!bool yes` (the exporter
-    drops the whole file) is an error; a root `_defaults*` file's `tenants:`
-    block is held to the tenant schema too (#2509 review F3 / F4).
+    when that is all it found): PyYAML reads a boolean, some of the
+    exporter's readers the string — `_lib_io.find_yaml11_bool_words`. An
+    explicit `!!bool yes` is an error only where the exporter is measured to
+    refuse the whole file, a WARN elsewhere (`_lib_io.split_go_rejected_bool_tags`,
+    the rule `check_confd_schema` applies); a root `_defaults*` file's
+    `tenants:` block is held to the tenant schema too (#2509 review F3), a
+    nested one is not (the exporter does not read it).
     """
-    from _lib_io import (compose_all_nodes, find_go_rejected_bool_tags,
-                         find_misread_scalars, find_yaml11_bool_words)
-    from _lib_confd import is_defaults_document_name
+    from _lib_io import (compose_all_nodes, find_misread_scalars,
+                         find_yaml11_bool_words, go_rejected_bool_fatal_scope,
+                         split_go_rejected_bool_tags)
+    from _lib_confd import is_defaults_document_name, unselected_carriers
     schemas: dict[str, object] = {}
     for name in (_TENANT_SCHEMA, _PLATFORM_SCHEMA, _PROFILES_SCHEMA):
         path = _find_schema(name)
@@ -629,6 +632,10 @@ def check_yaml_quoting(config_dir: str) -> dict[str, object]:
     errors: list[str] = []
     warnings: list[str] = []
     checked = 0
+    try:
+        unselected = unselected_carriers(Path(config_dir).iterdir())
+    except OSError:
+        unselected = set()
     for fpath in iter_config_files(config_dir):
         name = fpath.name
         if is_defaults_document_name(name):
@@ -660,8 +667,11 @@ def check_yaml_quoting(config_dir: str) -> dict[str, object]:
                     errors.append(f"{label}:{hit.line}: {hit.message()}")
                 for word in find_yaml11_bool_words(root, schemas[name_], schemas, name_):
                     warnings.append(f"WARN: {label}:{word.line}: {word.message()}")
-            for tag in find_go_rejected_bool_tags(root):
-                errors.append(f"{label}:{tag.line}: {tag.message()}")
+        # Same order as check_confd_schema: after the per-document findings.
+        fatal, other = split_go_rejected_bool_tags(
+            roots, go_rejected_bool_fatal_scope(label, unselected))
+        errors.extend(f"{label}:{tag.line}: {tag.message(True)}" for tag in fatal)
+        warnings.extend(f"WARN: {label}:{tag.line}: {tag.message(False)}" for tag in other)
     if errors:
         return _make_result("yaml_quoting", FAIL, errors + warnings)
     if warnings:

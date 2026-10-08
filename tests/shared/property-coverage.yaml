@@ -137,6 +137,8 @@ modules:
       find_go_rejected_bool_tags: "Whole-tree walk for an explicit !!bool yaml.v3 refuses (#2509 review F4); every spelling measured against da-guard (exit 3) and the yaml.v3-accepted controls pinned in tests/shared/test_yaml11_bool_word_warning.py"
       GoRejectedBoolTag.message: "Operator-facing text (#2509 review F4); pinned in tests/shared/test_yaml11_bool_word_warning.py"
       _ExplicitTagStrictLoader.compose_scalar_node: "Composer hook marking an explicitly tagged scalar (#2509 review F4); exercised through find_go_rejected_bool_tags pins"
+      go_rejected_bool_fatal_scope: "File kind → where an explicit !!bool is fatal (#2509 blind review 2); each position measured against da-guard (exit 3 vs 0) in tests/shared/test_yaml11_bool_word_warning.py"
+      split_go_rejected_bool_tags: "ERROR/WARN split by document and top-level key (#2509 blind review 2); position matrix with a da-guard precondition per cell in tests/shared/test_yaml11_bool_word_warning.py"
 
   scripts/tools/_lib_yaml.py:
     excluded:
