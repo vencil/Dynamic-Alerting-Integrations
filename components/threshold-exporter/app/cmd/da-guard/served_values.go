@@ -79,6 +79,21 @@ type servedValuesDoc struct {
 	// retired base the same way (config.CanonicalKeyFor). Always present
 	// ({} when the table is empty).
 	Aliases map[string]string `json:"aliases"`
+	// UnreadKeys: keys a config file writes that the exporter's load does
+	// not read (config.LoadReport.RootDefaultsUnread, #2296), each
+	// {file, key, reason}. Today one reason: root_defaults_unwrapped — the
+	// root `_defaults.yaml` has no `defaults:` mapping, so its top-level
+	// keys are not platform defaults to /metrics, while /effective shows
+	// them (and names them in its not_served). Not a failure: the exit code
+	// is unchanged. Always present ([] when none).
+	UnreadKeys []unreadKey `json:"unread_keys"`
+}
+
+// unreadKey is one entry of servedValuesDoc.UnreadKeys.
+type unreadKey struct {
+	File   string `json:"file"`
+	Key    string `json:"key"`
+	Reason string `json:"reason"`
 }
 
 // skippedFile is one entry of servedValuesDoc.Skipped or .Unreadable.
@@ -255,6 +270,10 @@ func runServedValues(args []string, stdout, errOut io.Writer) int {
 		skipped = append(skipped, skippedFile{File: name, Reason: config.NoTenantReason})
 	}
 	unreadable := unreadableEntries(rep.Unreadable)
+	unreadKeys := make([]unreadKey, 0, len(rep.RootDefaultsUnread))
+	for _, u := range rep.RootDefaultsUnread {
+		unreadKeys = append(unreadKeys, unreadKey{File: u.File, Key: u.Key, Reason: config.NotServedRootDefaultsUnwrapped})
+	}
 	doc := servedValuesDoc{
 		At:          at.Format(time.RFC3339),
 		ParseFailed: parseFailed,
@@ -262,6 +281,7 @@ func runServedValues(args []string, stdout, errOut io.Writer) int {
 		Unreadable:  unreadable,
 		Tenants:     tenants,
 		Aliases:     config.DeprecatedKeyAliases(),
+		UnreadKeys:  unreadKeys,
 	}
 	if err := checkOutputUTF8("", reflect.ValueOf(doc)); err != nil {
 		fmt.Fprintf(errOut, "%s %s: %v\n", programName, servedValuesCmd, err)

@@ -72,11 +72,27 @@ func TestScopeEffectiveSharedParseMatchesPerTenantResolve(t *testing.T) {
 			if len(scoped.Tenants) < 4 {
 				t.Fatalf("only %d tenants in scope — the comparison would be near-vacuous", len(scoped.Tenants))
 			}
+			tree, err := EffectiveTree(dir)
+			if err != nil {
+				t.Fatal(err)
+			}
+			whole := map[string]*EffectiveConfig{}
+			for _, ec := range tree.Tenants {
+				whole[ec.TenantID] = ec
+			}
 			for _, got := range scoped.Tenants {
 				want, err := ResolveEffective(dir, got.TenantID)
 				if err != nil {
 					t.Fatalf("ResolveEffective(%s): %v", got.TenantID, err)
 				}
+				// #2296: the not-served tables are ResolveEffective's and
+				// EffectiveTree's, not the gate's (ScopeEffective) — compared
+				// against the whole-tree answer, then left out below.
+				if w := whole[got.TenantID]; w == nil || !reflect.DeepEqual(w.NotServed, want.NotServed) ||
+					!reflect.DeepEqual(w.ChainParseFailed, want.ChainParseFailed) {
+					t.Errorf("tenant %s: EffectiveTree and ResolveEffective name different not-served keys", got.TenantID)
+				}
+				want.NotServed, want.ChainParseFailed = nil, nil
 				if !reflect.DeepEqual(got, want) {
 					t.Errorf("tenant %s: shared parse\n %+v\nper-tenant parse\n %+v", got.TenantID, got, want)
 				}

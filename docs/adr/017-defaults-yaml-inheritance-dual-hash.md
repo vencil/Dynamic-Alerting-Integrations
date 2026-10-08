@@ -503,6 +503,37 @@ profile。profile 名稱在**整棵樹唯一**：同一個名稱定義在兩個�
 → rc 1（見 (e)）；子目錄層的 `_routing_defaults` 把 `receiver` 或 `overrides` 寫成 `null` → rc 2
 （見 (a)）；以及上面 (c)、(d) 所列的錯誤。
 
+### Amendment 2026-10-08 (#2296)：`effective` 是寫法上的逐字視圖，範圍內 `/metrics` 不送的值逐 key 標出
+
+背景：同一棵樹上 `/effective`（tenant-api、`da-guard effective`）與 `/metrics` 會給出不同的值——
+根目錄 `_defaults.yaml` 的 `defaults:` 有非數值時 exporter 整份丟掉、子目錄的非閾值形狀值被退回
+上一層、租戶檔用 inline merge key（`<<:`）寫的值 exporter 解析不了而改送預設，`/effective` 卻照原文
+顯示（[#2296](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/2296)）。
+
+決策：
+
+1. **`effective` 是寫法上的逐字視圖。** `effective_config` 保留每一層的原文值，不刪、不改；
+   下列來源裡 `/metrics` 不送的值，在每個租戶的 `not_served` 逐 key 標出原因（封閉集合：
+   `parse_failed`、`root_defaults_unwrapped`、`value_rejected`、`value_unparsed`、
+   `value_unparsed_dropped`、`undeliverable`、`root_null_undeclared`）與所顯示那個值的來源檔：
+   defaults 鏈（exporter 整份丟掉的檔、子目錄 overlay 拒收的值、送不出去的子目錄 key、根目錄寫成
+   null 的 key）、根目錄 `_defaults.yaml` 缺 `defaults:` 包裝（判定與 da-guard 的
+   `root_defaults_unwrapped` 共用同一個述詞，`_routing_defaults` 等由其他工具從頂層讀的鍵不標），
+   以及平台檔 `tenants:`／租戶檔的值解析不了。⚠️ 不在範圍內、目前**不標**：profile 層的值被
+   exporter 丟掉（例如 `_profiles.yaml` 裡 `pg_connections: abc`，`effective_config` 顯示 `abc`、
+   `/metrics` 不送），以及已過期（`expires:`）的 override——`not_served` 為空不代表 `/metrics`
+   送的就是 `effective_config` 的值。
+2. **原因一律取自 `/metrics` 路徑自己的判定**——exporter 的建置（`BuildFlatConfig`：整檔丟掉、
+   根目錄沒讀的頂層鍵、子目錄 overlay 拒收的值）與 resolver（解析不了的值，在原本印 WARN 的分支記錄）
+   在做判定的地方記下，`effective` 只回答「顯示的是哪一層、哪個檔的值」再查表。**不得**以比對兩份
+   輸出推得：`"60:critical"` 這種合法寫法的原文與送出值本來就不同，值比對會誤判；也不得解析 stderr。
+3. **`/metrics` 略過的 defaults 鏈檔不讓請求或租戶消失。** 鏈上語法壞掉、exporter 整份不讀的檔，
+   resolve 當成空檔，租戶照常回傳並在 `chain_parse_failed` 點名；tenant-api `/effective` 回 HTTP 200
+   （先前為 500），`da-guard effective` 結束碼 3（沿用 `parse_failed` 慣例）。`merged_hash` 以略過該檔
+   後的鏈計算。`da-guard` 主 gate（`ScopeEffective`）不變，仍以該檔為 decode 錯誤停下。
+4. **鍵名保留撰寫者的拼法。** #1231 的舊拼法（例如 `mysql_cpu`）不算 `not_served`：`/metrics` 以正式名
+   送出同一個閾值；兩種拼法的對照用 `served-values` 的 `aliases`。
+
 ## 考量的替代方案
 
 ### A: Single-Hash（僅 source_hash）

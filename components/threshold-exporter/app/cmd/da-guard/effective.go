@@ -72,6 +72,15 @@ type effectiveTenant struct {
 	Profile *string `json:"profile"`
 	// KeySources: per top-level key of effective_config, its layer and file.
 	KeySources map[string]config.KeySource `json:"key_sources"`
+	// NotServed: each key of effective_config whose value /metrics does not
+	// serve as shown, with the exporter's own reason and the file of the
+	// value shown (EffectiveConfig.NotServed, #2296). Always present ({}
+	// when none); the /effective body omits it when empty.
+	NotServed map[string]config.NotServedKey `json:"not_served"`
+	// ChainParseFailed: the tenant's chain files the exporter does not read
+	// because they do not parse, read as empty here (#2296). Always present
+	// ([] when none). Such a file is in parse_failed too (exit 3).
+	ChainParseFailed []string `json:"chain_parse_failed"`
 }
 
 func parseEffectiveFlags(args []string, errOut io.Writer) (string, error) {
@@ -144,7 +153,8 @@ func runEffective(args []string, stdout, errOut io.Writer) int {
 			doc.Skipped = append(doc.Skipped, skippedFile{File: name, Reason: config.NoTenantReason})
 		}
 		for _, ec := range tree.Tenants {
-			t := effectiveTenant{EffectiveConfig: *ec, KeySources: ec.KeySources}
+			t := effectiveTenant{EffectiveConfig: *ec, KeySources: ec.KeySources,
+				NotServed: ec.NotServed, ChainParseFailed: ec.ChainParseFailed}
 			// A YAML `.inf` / `.nan` is sent as text, as tenant-api sends it.
 			t.EffectiveConfig.EffectiveConfig = config.NonFiniteAsText(ec.EffectiveConfig)
 			if ec.BoundProfile != "" {
@@ -153,6 +163,12 @@ func runEffective(args []string, stdout, errOut io.Writer) int {
 			}
 			if t.KeySources == nil {
 				t.KeySources = map[string]config.KeySource{}
+			}
+			if t.NotServed == nil {
+				t.NotServed = map[string]config.NotServedKey{}
+			}
+			if t.ChainParseFailed == nil {
+				t.ChainParseFailed = []string{}
 			}
 			doc.Tenants[ec.TenantID] = t
 		}

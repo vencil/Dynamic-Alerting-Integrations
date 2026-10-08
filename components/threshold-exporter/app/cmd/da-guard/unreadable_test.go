@@ -480,12 +480,16 @@ func TestUnreadable_CleanTree_EffectiveListsEmpty(t *testing.T) {
 	}
 }
 
-// A chain file that does not decode stops the resolve (no tenant); the path
-// the walk could not read is still named, by effective and the guard.
+// A chain file the resolve's decode rejects stops the resolve (no tenant);
+// the path the walk could not read is still named, by effective and the
+// guard. The root `_defaults.yaml` here is one the exporter reads (its typed
+// decode skips the unknown `x`) but the defaults-chain merge does not — a
+// chain file the exporter drops for a syntax error no longer stops effective
+// (#2296, TestEffective_ChainFileTheResolveRejects_ExitsThree).
 func TestUnreadable_DecodeStopStillNamesUnreadable(t *testing.T) {
 	t.Parallel()
 	files := unreadableBase()
-	files["sub/_defaults.yaml"] = "defaults: [\n"
+	files["_defaults.yaml"] = "defaults:\n  mysql_connections: 80\nx: !!int abc\n"
 	dir := writeParityTree(t, files)
 	symlinkOrSkipT(t, "missing.yaml", filepath.Join(dir, "tenant-c.yaml"))
 	want := []skippedFile{{"tenant-c.yaml", config.UnreadableStatError}}
@@ -494,8 +498,8 @@ func TestUnreadable_DecodeStopStillNamesUnreadable(t *testing.T) {
 	if code != exitParseFailed {
 		t.Fatalf("effective exit = %d, want %d; stderr=%q", code, exitParseFailed, stderr)
 	}
-	if !reflect.DeepEqual(doc.ParseFailed, []string{"sub/_defaults.yaml"}) || !reflect.DeepEqual(doc.Unreadable, want) {
-		t.Errorf("effective parse_failed = %v unreadable = %v, want [sub/_defaults.yaml] %v",
+	if !reflect.DeepEqual(doc.ParseFailed, []string{"_defaults.yaml"}) || !reflect.DeepEqual(doc.Unreadable, want) {
+		t.Errorf("effective parse_failed = %v unreadable = %v, want [_defaults.yaml] %v",
 			doc.ParseFailed, doc.Unreadable, want)
 	}
 	if len(doc.Tenants) != 0 {
@@ -506,7 +510,7 @@ func TestUnreadable_DecodeStopStillNamesUnreadable(t *testing.T) {
 	if gcode != exitParseFailed {
 		t.Fatalf("guard exit = %d, want %d; stderr=%q", gcode, exitParseFailed, gstderr)
 	}
-	if !reflect.DeepEqual(gdoc.ParseFailed, []string{"sub/_defaults.yaml"}) || !reflect.DeepEqual(gdoc.Unreadable, want) {
+	if !reflect.DeepEqual(gdoc.ParseFailed, []string{"_defaults.yaml"}) || !reflect.DeepEqual(gdoc.Unreadable, want) {
 		t.Errorf("guard parse_failed = %v unreadable = %v", gdoc.ParseFailed, gdoc.Unreadable)
 	}
 	if !strings.Contains(gstderr, "cannot be read: tenant-c.yaml (stat_error)") {
