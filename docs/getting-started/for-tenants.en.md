@@ -206,6 +206,8 @@ python3 scripts/tools/ops/diagnose.py my-tenant \
   --config-dir conf.d/ --show-inheritance
 ```
 
+> This needs da-guard too (`DA_GUARD_BINARY`, as above): the values are what the exporter serves (`/metrics`), not a Python reading; see [diagnose](../cli-reference.en.md#diagnose).
+
 The output has two sections, matching the three groups described under *30-Second Quick Setup*:
 
 - **`resolved`** — keys this tenant **already has a value for** (whether it came from a platform default, a profile, or your own file).

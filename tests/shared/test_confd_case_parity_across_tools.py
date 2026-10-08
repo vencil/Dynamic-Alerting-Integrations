@@ -493,17 +493,12 @@ def test_tool_reads_upper_case_names_the_same(
 # with reasons rather than fixed here, and the check above asserts each
 # entry is still WRONG — a stale exemption fails instead of rotting.
 #
-# Both need a path plumbed into a function that does not have one today,
-# and both hardcode their string on `18f18a0` as well, so neither is a
-# regression from this change; `diagnose`'s only became reachable because
-# this change let it read the tree at all. Filed separately rather than
-# widened into a case-folding PR.
+# It needs a path plumbed into a function that does not have one today,
+# and hardcodes its string on `18f18a0` as well, so it is not a regression
+# from this change. Filed separately rather than widened into a
+# case-folding PR. (`diagnose` was the other entry until #2526: its chain
+# sources are now the files `da-guard effective` names.)
 KNOWN_HARDCODED_NAMES: dict[str, str] = {
-    # diagnose.py:408 builds the tenant layer's source as
-    # f"{tenant}.yaml" from the tenant id. The carrier path is known one
-    # function earlier (the `iter_config_files` loop) but is not carried
-    # into `tenant_overrides`.
-    "diagnose.py": "tenant layer source is built from the tenant id, not the carrier",
     # explain_route.py:63,103 hardcode "_defaults.yaml / _routing_defaults
     # key". `explain_tenant_routing(parsed, tenant)` receives no config dir
     # at all, so resolving the real carrier is a signature change.

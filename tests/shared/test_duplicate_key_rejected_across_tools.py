@@ -140,9 +140,9 @@ _TOOLS = {
 # exits 1 on an unreadable file; the marker still pins which path it took.)
 _UNREADABLE_MARKER = {
     "offboard_tenant_precheck": "無法讀取",
-    # Names every layer's source file in the chain and exits 0 either way;
-    # an unreadable layer is its skip line.
-    "diagnose_show_inheritance": "WARN: skip",
+    # #2526: the chain is da-guard effective's; a file the exporter's load
+    # drops fails the run (exit 2) with this line.
+    "diagnose_show_inheritance": "ERROR: cannot read",
 }
 
 
