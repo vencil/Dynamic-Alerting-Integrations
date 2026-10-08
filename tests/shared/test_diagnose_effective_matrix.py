@@ -1,18 +1,21 @@
-"""`diagnose --show-inheritance` 的答案要與 Go 的 da-guard effective 一致（#2526、#2547）。
+"""`diagnose --show-inheritance` 的答案要與 Go 一致（#2526、#2547）：值是 exporter 送出的
+（da-guard served-values，/metrics），租戶、profile 與每個 key 的來源層是 da-guard effective。
 
 step 0 的政策：Python 工具不自己解讀 YAML 語意，值一律來自 Go。diagnose 原本用 PyYAML 重讀
 conf.d，於是 PyYAML 與 yaml.v3 讀法不同的地方都分歧。修正前（main 485ddf4d）實測：
 
-- 租戶值 `2024-02-30`（不存在的日期）：diagnose 整支 traceback、rc 1；Go 照原文給值。
-- 租戶值 `!foo 70`（未知 tag）：diagnose 整份租戶檔跳過、回 defaults；Go 忽略 tag 照讀。
-- 租戶值 `2001-12-14<TAB>01:02:03`、`!!str [5]`：diagnose 整份檔跳過；Go 照讀。
+- 租戶值 `2024-02-30`（不存在的日期）：diagnose 整支 traceback、rc 1；exporter 讀不成數字，
+  送 defaults 的 80，該 key 歸 defaults 層。（a817051b 曾照 /effective 原文顯示，也是錯的。）
+- 租戶值 `!foo 70`（未知 tag）：diagnose 整份租戶檔跳過、回 defaults；exporter 忽略 tag，送 70。
+- 租戶值 `2001-12-14<TAB>01:02:03`、`!!str [5]`：diagnose 整份檔跳過；exporter 只把那個值退回 defaults。
 - `tenants: !!set {tx}` 加平台檔 `_profile: gold`：diagnose 說「沒有租戶檔宣告 tx」、profile
   None；Go 認得 tx、綁 gold。帶值的 `!!set {tx: {...}}` 同樣。
 - `_defaults.yaml` 的鍵 `~: 5`：diagnose 印 `null`，Go 是 `<nil>`；`1: 5`、`true: 5` 同類。
 - 對照組（合法值、`tenants: {tx: {}}`、一般字串鍵）兩邊本來就一致。
 
-每格比對：結束碼為 0、`resolved`（effective_config 去掉 `_` 開頭的鍵）、`profile_name`
-（Go 綁到的 profile），以及 chain 把每個 key 歸在哪一層（Go 的 key_sources）。
+每格比對：結束碼為 0、`resolved`（served-values 對每個 key 送出的值）、`profile_name`
+（Go 綁到的 profile），以及 chain 把每個 key 歸在哪一層：effective 的 key_sources，但
+exporter 送 default 的 key 歸 defaults 層。
 
 da-guard 由 conftest 的 session fixture 以 `go build` 建出；建不起來就 fail、不 skip。
 """
@@ -97,14 +100,35 @@ def _diagnose(conf_d: Path) -> dict:
     }
 
 
-def _oracle(conf_d: Path) -> dict:
+def _served(conf_d: Path) -> dict:
+    """The tenant's threshold rows as /metrics serves them, Go's JSON number."""
+    t = tv.load_served_tree(conf_d).tenants["tx"]
+    return {k: (int(t.values[k]) if float(t.values[k]).is_integer() else t.values[k])
+            for k in t.severities}
+
+
+def _oracle(conf_d: Path, fallback: frozenset = frozenset()) -> dict:
+    """`fallback`: the keys whose written value /metrics cannot serve (it
+    serves the default) — stated per shape below, measured on the exporter."""
     t = tv.load_effective(conf_d)["tx"]
-    resolved = {k: v for k, v in t.effective_config.items() if not k.startswith("_")}
+    served = _served(conf_d)
+    unserved = tv.load_served_tree(conf_d).tenants["tx"].unserved
+    # Keys as /effective has them; a key /metrics serves no row for keeps its
+    # value as written (`unserved`), one with neither is not shown.
+    resolved = {}
+    for k in t.effective_config:
+        if k.startswith("_"):
+            continue
+        if k in served:
+            resolved[k] = served[k]
+        elif unserved.get(k) is not None:
+            resolved[k] = unserved[k]
+    keys = list(resolved)
     return {
         "rc": 0,
         "resolved": resolved,
         "profile": t.profile,
-        "layers": {k: t.key_sources[k].layer for k in resolved},
+        "layers": {k: "defaults" if k in fallback else t.key_sources[k].layer for k in keys},
     }
 
 
@@ -115,15 +139,39 @@ def test_matrix_is_not_vacuous(tmp_path: Path) -> None:
     assert len(names) == len(set(names))
     got = {}
     for name, files in SHAPES:
-        got[name] = _oracle(_tree(tmp_path / name, files))
+        got[name] = _oracle(_tree(tmp_path / name, files), FALLBACK.get(name, frozenset()))
     assert {g["profile"] for g in got.values()} == {None, "gold"}
-    assert got["value-invalid-date"]["resolved"]["mysql_connections"] == "2024-02-30"
+    assert got["value-invalid-date"]["layers"]["mysql_connections"] == "defaults"
+    assert got["value-date-CONTROL"]["layers"]["mysql_connections"] == "tenant"
     assert got["tenants-set"]["resolved"] == {"mysql_connections": 80, "mysql_slow": 60}
-    assert "<nil>" in got["defaults-key-null"]["resolved"]
+    # `~:` is a key /effective shows and /metrics does not serve.
+    assert "<nil>" not in got["defaults-key-null"]["resolved"]
+    assert "<nil>" in tv.load_effective(_tree(tmp_path / "nil-again", dict(SHAPES)[
+        "defaults-key-null"]))["tx"].effective_config
+
+
+# The shapes whose written value the exporter cannot read as a number: it
+# logs `unknown value ... using default` and serves the defaults' 80.
+FALLBACK = {
+    "value-invalid-date": frozenset({"mysql_connections"}),
+    "value-tab-timestamp": frozenset({"mysql_connections"}),
+    "value-str-tag-on-sequence": frozenset({"mysql_connections"}),
+}
 
 
 @pytest.mark.parametrize("name,files", SHAPES, ids=[n for n, _ in SHAPES])
-def test_diagnose_agrees_with_da_guard_effective(tmp_path: Path, name: str,
-                                                 files: dict[str, str]) -> None:
+def test_diagnose_agrees_with_the_exporter(tmp_path: Path, name: str,
+                                           files: dict[str, str]) -> None:
     conf_d = _tree(tmp_path, files)
-    assert _diagnose(conf_d) == _oracle(conf_d), name
+    assert _diagnose(conf_d) == _oracle(conf_d, FALLBACK.get(name, frozenset())), name
+
+
+@pytest.mark.parametrize("name,want", [
+    ("value-date-CONTROL", 70), ("value-invalid-date", 80), ("value-unknown-tag", 70),
+    ("value-tab-timestamp", 80), ("value-str-tag-on-sequence", 80),
+])
+def test_resolved_is_what_metrics_serves(tmp_path: Path, name: str, want: int) -> None:
+    """Pinned numbers, so the oracle above cannot drift with the reader."""
+    conf_d = _tree(tmp_path, dict(SHAPES)[name])
+    assert _served(conf_d)["mysql_connections"] == want
+    assert _diagnose(conf_d)["resolved"]["mysql_connections"] == want

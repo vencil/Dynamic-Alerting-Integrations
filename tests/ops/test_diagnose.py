@@ -198,7 +198,7 @@ class TestResolveInheritanceChain:
         # cpu: tenant override wins (99), not profile (95) or default (80)
         assert result["resolved"]["cpu"] == 99
         # net: from profile (fill-in)
-        assert result["resolved"]["net"] == 60
+        assert result["resolved"]["net"] == "60"  # not declared at the root: /metrics serves no row, the value as written
         # mem, disk: from defaults
         assert result["resolved"]["mem"] == 70
         assert result["resolved"]["disk"] == 90
@@ -206,7 +206,7 @@ class TestResolveInheritanceChain:
         # Chain has 3 layers, each listing the keys it supplies
         assert result["chain"] == [
             {"layer": "defaults", "source": "_defaults.yaml", "keys": {"disk": 90, "mem": 70}},
-            {"layer": "profile", "source": "_profiles.yaml → high-load", "keys": {"net": 60}},
+            {"layer": "profile", "source": "_profiles.yaml → high-load", "keys": {"net": "60"}},
             {"layer": "tenant", "source": "db-a.yaml", "keys": {"cpu": 99}},
         ]
 
@@ -240,7 +240,7 @@ class TestResolveInheritanceChain:
 
         result = diagnose.resolve_inheritance_chain("db-a", str(tmp_path))
         assert result["profile_name"] is None   # bound to none
-        assert result["resolved"]["mem"] == 80
+        assert result["resolved"]["mem"] == "80"  # not declared at the root: /metrics serves no row, the value as written
         assert [c["layer"] for c in result["chain"]] == ["defaults", "tenant"]
 
     def test_a_tenant_below_the_root_is_found(self, tmp_path):
@@ -556,14 +556,14 @@ class TestPlatformTenantBlock:
             "tenants:\n  tx:\n    mysql_connections: '70'\n    _profile: p2\n",
             encoding="utf-8")
         chain = diagnose.resolve_inheritance_chain("tx", str(tmp_path))
-        assert chain["resolved"]["mysql_connections"] == "70"
+        assert chain["resolved"]["mysql_connections"] == 70  # served (#2526)
         assert diagnose.lookup_tenant_profile("tx", str(tmp_path)) == "p2"
 
     def test_platform_value_kept_when_tenant_file_is_silent(self, tmp_path):
         (tmp_path / "_defaults.yaml").write_text(self._PLATFORM, encoding="utf-8")
         (tmp_path / "tx.yaml").write_text("tenants:\n  tx: {}\n", encoding="utf-8")
         chain = diagnose.resolve_inheritance_chain("tx", str(tmp_path))
-        assert chain["resolved"]["mysql_connections"] == "60"
+        assert chain["resolved"]["mysql_connections"] == 60
         assert diagnose.lookup_tenant_profile("tx", str(tmp_path)) == "p1"
 
     def test_platform_file_cannot_create_a_tenant(self, tmp_path, capsys):
@@ -593,7 +593,7 @@ class TestPlatformTenantBlock:
             encoding="utf-8")
         (tmp_path / "tx.yaml").write_text("tenants:\n  tx: {}\n", encoding="utf-8")
         chain = diagnose.resolve_inheritance_chain("tx", str(tmp_path))
-        assert chain["resolved"]["mysql_connections"] == "61"
+        assert chain["resolved"]["mysql_connections"] == 61
         assert diagnose.lookup_tenant_profile("tx", str(tmp_path)) == "good"
 
 
@@ -731,7 +731,9 @@ class TestProfileLookupSharesTheChainRead:
         "defaults-a-set": (
             "_defaults.yaml",
             "defaults: !!set {mysql_connections, mysql_slow_queries}\n", {
-                "mysql_connections": 70, "mysql_slow_queries": 60}),
+                # every root default null: no row is served, so the values
+                # are the ones written (served-values' `unserved`)
+                "mysql_connections": "70", "mysql_slow_queries": "60"}),
         "profiles-a-set": (
             "_profiles.yaml", "profiles: !!set {gold}\n", {
                 "mysql_connections": 70, "mysql_slow_queries": 90}),
@@ -888,7 +890,9 @@ class TestSetTagReadAsTheExporterReadsIt:
             "tx.yaml": "tenants:\n  tx:\n    mysql_connections: 70\n",
             "_profiles.yaml": None}, "")
         chain = diagnose.resolve_inheritance_chain("tx", d)
-        assert chain["resolved"]["mysql_connections"] == 70
+        # `!!set {1, mysql_connections}` gives the root default no value, so
+        # /metrics serves no row and the value is the one written.
+        assert chain["resolved"]["mysql_connections"] == ("70" if "!!set" in body else 70)
         assert 1 not in chain["resolved"]
         with mock.patch.object(diagnose, "tenant_db_type",
                                return_value=(None, None)), \

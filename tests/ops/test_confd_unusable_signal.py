@@ -196,7 +196,7 @@ def test_diagnose_legal_shapes_carry_no_caveat(tmp_path: pathlib.Path, files: di
     err = io.StringIO()
     with contextlib.redirect_stderr(err):
         chain = diagnose.resolve_inheritance_chain("acme", str(root))
-    assert chain["resolved"]["mysql_threads_running"] == 90
+    assert chain["resolved"]["mysql_threads_running"] in (90, "90")  # "90" as written where no root default declares it
     assert "skipped_unusable_files" not in chain
     assert "skipped_unusable_files" not in diagnose._format_chain_summary(chain)
     assert all("binds no profile" in ln for ln in err.getvalue().splitlines()), err.getvalue()
@@ -235,7 +235,7 @@ def test_diagnose_a_defaults_file_that_is_a_directory(tmp_path: pathlib.Path):
     err = io.StringIO()
     with contextlib.redirect_stderr(err):
         res = diagnose.resolve_inheritance_chain("acme", str(root))
-    assert res["resolved"] == {"mysql_threads_running": 90}
+    assert res["resolved"] == {"mysql_threads_running": "90"}  # no root default: not served
     assert res["declared"] == []
     assert err.getvalue() == ""
 

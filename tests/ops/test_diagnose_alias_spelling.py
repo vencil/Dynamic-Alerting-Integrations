@@ -74,25 +74,25 @@ def test_profile_layer_excludes_a_threshold_the_tenant_writes_in_the_other_spell
     profile = [layer for layer in chain["chain"] if layer["layer"] == "profile"]
     assert len(profile) == 1, chain["chain"]
     assert canon not in profile[0]["keys"], profile[0]
-    assert profile[0]["keys"] == {"pg_connections": 7}, profile[0]  # the fill-in still works
-    assert {k: v for k, v in chain["resolved"].items() if k in (canon, legacy)} == {legacy: "90"}
+    # the fill-in still works (no root default: /metrics serves no row, so
+    # the value is the one written, as served-values' `unserved` gives it)
+    assert profile[0]["keys"] == {"pg_connections": "7"}, profile[0]
+    assert {k: v for k, v in chain["resolved"].items() if k in (canon, legacy)} == {legacy: 90}
 
 
 def _cr_trees() -> "list[tuple[str, dict, dict]]":
     """#2420 (CodeRabbit) shapes: (name, files, resolved threshold keys
-    expected). Measured against Go: since #2526 `resolved` is `da-guard
-    effective`'s answer (/effective); where /metrics serves otherwise the
-    row says so."""
+    expected). Each expected value is what `da-guard served-values` (/metrics)
+    serves for the tree, which `resolved` is since #2526; the key is the
+    spelling /effective keeps."""
     legacy, canon = next(iter(DEPRECATED_KEY_ALIASES.items()))
     return [
         ("tenant-null-legacy-over-chain-canonical",
          {"_defaults.yaml": f"defaults:\n  {canon}: 70\n",
           "tx.yaml": f"tenants:\n  tx:\n    {legacy}: null\n"},
          {canon: 70}),
-        # #2526: `resolved` is /effective's answer — the platform's 70.
-        # /metrics serves the defaults' 30 here (the null displaces the
-        # platform entry's other spelling there); that split is Go's, pinned
-        # by the overlay matrix, not re-decided in diagnose.
+        # Served 70 (the platform's) by da-guard served-values on main
+        # 485ddf4d; the 30 measured for #2420 predates #2518's null rules.
         ("tenant-null-legacy-over-platform-canonical",
          {"_defaults.yaml": f"defaults:\n  {canon}: 30\ntenants:\n  tx:\n    {canon}: 70\n",
           "tx.yaml": f"tenants:\n  tx:\n    {legacy}: null\n"},
@@ -104,26 +104,25 @@ def _cr_trees() -> "list[tuple[str, dict, dict]]":
         ("tenant-writes-both-spellings",
          {"_defaults.yaml": f"defaults:\n  {canon}: 30\n",
           "tx.yaml": f"tenants:\n  tx:\n    {legacy}: '40'\n    {canon}: '50'\n"},
-         {canon: "50"}),
+         {canon: 50}),
         ("platform-entry-writes-both-spellings",
          {"_defaults.yaml": f"defaults:\n  {canon}: 30\ntenants:\n  tx:\n    {legacy}: 40\n    {canon}: 50\n",
           "tx.yaml": "tenants:\n  tx:\n    redis_x: '1'\n"},
          {canon: 50}),
         # #2420 round 4: canonical null + legacy value in ONE tenant layer.
-        # /metrics falls back to the defaults (Go measured: 10); /effective,
-        # which `resolved` is since #2526, removes the canonical key and
-        # keeps the legacy 51 as written.
+        # da-guard served-values on main 485ddf4d serves the legacy 51 (the
+        # 10 measured for #2420 predates #2518: a null is "not written").
         ("tenant-writes-canonical-null-and-legacy-value",
          {"_defaults.yaml": f"defaults:\n  mysql_connections: 80\n  {canon}: 10\n",
           "tx.yaml": f"tenants:\n  tx:\n    redis_x: '1'\n    {canon}: null\n    {legacy}: '51'\n"},
-         {legacy: "51", "mysql_connections": 80}),
+         {legacy: 51, "mysql_connections": 80}),
         # #2420 round 4: the elected profile writes both spellings — its
         # canonical value is filled (Go measured: 20), not the legacy 21.
         ("profile-writes-both-spellings",
          {"_defaults.yaml": f"defaults:\n  mysql_connections: 80\n  {canon}: 10\n",
           "_profiles.yaml": f"profiles:\n  p:\n    {canon}: '20'\n    {legacy}: '21'\n",
           "tx.yaml": "tenants:\n  tx:\n    redis_x: '1'\n    _profile: p\n"},
-         {canon: "20", "mysql_connections": 80}),
+         {canon: 20, "mysql_connections": 80}),
         # #2418: a canonical null beside a legacy value in the ROOT defaults
         # writes only the legacy one (Go `levelWritesSpelling`), so /metrics
         # serves the 30 (Go measured: 30), not the null's 0. `resolved` keeps

@@ -46,12 +46,12 @@ from _lib_confd import resolve_defaults_file  # noqa: E402  (#1588)
 # #2526 / #2547: the tenant's resolution is threshold-exporter's own
 # (`da-guard effective`); see resolve_inheritance_chain.
 from _lib_tenant_values import (  # noqa: E402
-    DaGuardError,
-    DaGuardNotFoundError,
-    ParseFailedError,
+    canonical_key,
+    exit_on_served_values_error,
     load_effective_tree,
-    print_load_error,
+    load_served_tree,
 )
+from _lib_io import exit_on_yaml_file_error  # noqa: E402  (#1654)
 
 # Language detection for bilingual help
 _LANG = detect_cli_lang()
@@ -152,9 +152,10 @@ query_prometheus = query_prometheus_instant
 
 
 # #2526 / #2547 (step 0): the tenant's resolution — which tenants exist, the
-# profile each is bound to, every value and the layer that supplied it — is
-# Go's answer (`da-guard effective`, tenant-api's /effective), never a Python
-# reading of the YAML. This file used to re-read conf.d with its own PyYAML
+# profile each is bound to, the layer that supplied each key — is Go's answer
+# (`da-guard effective`, tenant-api's /effective), and every value is what
+# /metrics serves (`da-guard served-values`), never a Python reading of the
+# YAML. This file used to re-read conf.d with its own PyYAML
 # loaders and so diverged from the exporter wherever PyYAML and yaml.v3
 # disagree: `2024-02-30` ended the run with a traceback, `!foo 70` dropped
 # the whole tenant file, `tenants: !!set {tx}` declared no tenant.
@@ -210,8 +211,10 @@ def _declared_keys(base: Path) -> list[str]:
 
 
 def resolve_inheritance_chain(tenant: str, config_dir: str | None) -> dict[str, object] | None:
-    """Resolve the inheritance chain for a tenant, as tenant-api's /effective
-    resolves it (`da-guard effective`, #2526 / #2547).
+    """Resolve the inheritance chain for a tenant from threshold-exporter's own
+    answers (#2526 / #2547): which keys the tenant has, its profile and each
+    key's layer from `da-guard effective` (/effective); each value from
+    `da-guard served-values` (/metrics).
 
     Returns None when `config_dir` is not a directory or the tree has no
     tenant `tenant` (a line on stderr says which), else a dict with:
@@ -221,22 +224,28 @@ def resolve_inheritance_chain(tenant: str, config_dir: str | None) -> dict[str, 
         `tenants:` entry), `profile`, `tenant` (the tenant's own file); each
         `{layer, source, keys}`, `keys` the values that layer WINS with
       - resolved: every threshold (non-`_`) key of the tenant's
-        `effective_config`, with its value as /effective answers it
+        `effective_config`, keyed as written, with the value /metrics serves
+        for it; a key /metrics serves no row for (switched off, or not
+        declared at the root) keeps its value as written (served-values'
+        `unserved`), and one with neither is left out
       - profile_name: the profile the tenant is bound to, or None
       - declared: key NAMES the platform recognises but assigns no value to
         (`optional_overrides:`, #1310; see `_declared_keys`)
 
-    ⛔ `resolved` is /effective (written plus inherited), not /metrics: a
-    value /metrics cannot parse (e.g. `2024-02-30`) is shown as written, and
-    /metrics serves the default instead. `chain` lists a key once, in the
-    layer that supplies it, so a default the tenant overrides is not listed.
+    ⛔ `resolved` follows /metrics (#2421): a value the exporter cannot read
+    as a number (e.g. `2024-02-30`) falls back to the defaults, and the
+    chain then lists that key under the `defaults` layer — the exporter's
+    own log line (`unknown value ... using default`) is what says so.
+    `chain` lists a key once, in the layer that supplies it, so a default
+    the tenant overrides is not listed.
 
     ⛔ `declared` is deliberately NOT merged into `resolved`, and is not a chain
     layer: a declared key has no value until the tenant writes one.
 
     Raises `DaGuardNotFoundError`, `ParseFailedError` (a file the exporter's
-    load drops or cannot read) or `DaGuardError` (`_lib_tenant_values`):
-    the chain is never answered from a partial read.
+    load drops or cannot read) or `DaGuardError` (`_lib_tenant_values`;
+    served-values refusing the tree included): the chain is never answered
+    from a partial read.
     """
     if not config_dir:
         return None
@@ -265,11 +274,38 @@ def resolve_inheritance_chain(tenant: str, config_dir: str | None) -> dict[str, 
               f"'{safe_label(written)}' binds no profile for tenant "
               f"'{safe_label(tenant)}' (threshold-exporter applies none)", file=sys.stderr)
 
-    resolved = {k: v for k, v in te.effective_config.items() if not k.startswith("_")}
+    served_tree = load_served_tree(base)
+    served = served_tree.tenants.get(tenant)
+    # The exporter's own verdict that it served the default for a key the
+    # tenant's merged config writes (resolve.go, State 2 after "unknown value").
+    fell_back = f" for tenant={tenant} metric={{}}, using default"
+    resolved: dict[str, object] = {}
     groups: dict[tuple[str, str], dict[str, object]] = {}
-    for key in resolved:
-        src = te.key_sources[key]
-        groups.setdefault((src.layer, src.file), {})[key] = resolved[key]
+    seen: set[str] = set()
+    for key, src in te.key_sources.items():
+        if key.startswith("_"):
+            continue
+        canon = canonical_key(key, served_tree.aliases)
+        if canon in seen:
+            continue
+        layer, file = src.layer, src.file
+        if served is not None and canon in served.severities:
+            value = served.values[canon]
+            if isinstance(value, float) and value.is_integer():
+                value = int(value)   # the JSON number Go wrote
+            if layer != "defaults" and any(
+                    ln.endswith(fell_back.format(canon)) for ln in served_tree.stderr_lines):
+                print(f"  WARN: {safe_label(file)}: {safe_label(key)} "
+                      f"{safe_label(repr(te.effective_config[key]))} is not a value "
+                      f"/metrics can serve; it serves the default", file=sys.stderr)
+                layer, file = "defaults", ", ".join(te.defaults_chain)
+        elif served is not None and served.unserved.get(key) is not None:
+            value = served.unserved[key]
+        else:
+            continue
+        seen.add(canon)
+        resolved[key] = value
+        groups.setdefault((layer, file), {})[key] = value
 
     def _order(item: tuple[tuple[str, str], dict[str, object]]) -> tuple[int, int, str]:
         (layer, file), _ = item
@@ -444,7 +480,9 @@ def check(tenant: str, prom_url: str, config_dir: str | None = None,
     return result
 
 
-if __name__ == "__main__":
+@exit_on_yaml_file_error  # #1654: a file that does not decode → rc 2, named
+@exit_on_served_values_error  # #2526: da-guard missing or failing → rc 2, named
+def main() -> None:
     parser = argparse.ArgumentParser(
         description=_h('description'),
     )
@@ -468,12 +506,9 @@ if __name__ == "__main__":
             print("ERROR: --show-inheritance requires --config-dir",
                   file=sys.stderr)
             sys.exit(EXIT_CALLER_ERROR)  # #452: missing required arg
-        try:
-            inheritance = resolve_inheritance_chain(args.tenant, args.config_dir)
-        except (DaGuardNotFoundError, ParseFailedError, DaGuardError) as exc:
-            # #2526: fail closed — no chain from a partial or Python-side read.
-            print_load_error(exc)
-            sys.exit(EXIT_CALLER_ERROR)
+        # #2526: fail closed — da-guard missing or failing, or a file the
+        # exporter's load drops, exits 2 through the decorators on main().
+        inheritance = resolve_inheritance_chain(args.tenant, args.config_dir)
         if inheritance:
             print(format_json_report(inheritance, default=str))
         else:
@@ -483,9 +518,6 @@ if __name__ == "__main__":
 
     try:
         result = check(args.tenant, args.prometheus, config_dir=args.config_dir)
-    except (DaGuardNotFoundError, ParseFailedError, DaGuardError) as exc:
-        print_load_error(exc)
-        sys.exit(EXIT_CALLER_ERROR)
     except CommandNotFoundError as exc:
         # issue 1513: this was a traceback at rc=1. The Pod check needs kubectl
         # and a cluster context; the da-tools image ships neither.
@@ -495,3 +527,7 @@ if __name__ == "__main__":
     # issue 1513: `status: error` used to exit 0, so `da-tools diagnose t && …`
     # passed on an unhealthy tenant.
     sys.exit(exit_code(result))
+
+
+if __name__ == "__main__":
+    main()

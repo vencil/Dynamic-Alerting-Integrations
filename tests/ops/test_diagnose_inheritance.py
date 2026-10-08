@@ -56,7 +56,7 @@ class TestResolveInheritanceChain:
             # #2526: each key is listed in the layer that supplies it, so the
             # overridden default is not listed and the defaults layer is gone.
             assert [c["layer"] for c in result["chain"]] == ["tenant"]
-            assert result["resolved"]["mysql_connections"] == "50"
+            assert result["resolved"]["mysql_connections"] == 50  # /metrics serves the number (#2526)
 
     def test_full_chain_with_profile(self):
         """完整四層鏈：defaults + profile + tenant。"""
@@ -80,9 +80,9 @@ class TestResolveInheritanceChain:
             assert layers == ["defaults", "profile", "tenant"]
 
             # Tenant override wins for mysql_connections
-            assert result["resolved"]["mysql_connections"] == "50"
+            assert result["resolved"]["mysql_connections"] == 50
             # Profile fills in redis_memory (tenant didn't set it)
-            assert result["resolved"]["redis_memory"] == 1024
+            assert result["resolved"]["redis_memory"] == "1024"  # no root default: not served, as written
             # Defaults provide container_cpu
             assert result["resolved"]["container_cpu"] == 70
 
