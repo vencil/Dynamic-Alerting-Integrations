@@ -74,9 +74,8 @@ def test_profile_layer_excludes_a_threshold_the_tenant_writes_in_the_other_spell
     profile = [layer for layer in chain["chain"] if layer["layer"] == "profile"]
     assert len(profile) == 1, chain["chain"]
     assert canon not in profile[0]["keys"], profile[0]
-    # the fill-in still works (no root default: /metrics serves no row, so
-    # the value is the one written, as served-values' `unserved` gives it)
-    assert profile[0]["keys"] == {"pg_connections": "7"}, profile[0]
+    # the fill-in still works (chain keys are the values as written)
+    assert profile[0]["keys"] == {"pg_connections": 7}, profile[0]
     assert {k: v for k, v in chain["resolved"].items() if k in (canon, legacy)} == {legacy: 90}
 
 

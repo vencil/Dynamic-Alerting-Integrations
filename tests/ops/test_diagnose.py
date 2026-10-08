@@ -206,7 +206,7 @@ class TestResolveInheritanceChain:
         # Chain has 3 layers, each listing the keys it supplies
         assert result["chain"] == [
             {"layer": "defaults", "source": "_defaults.yaml", "keys": {"disk": 90, "mem": 70}},
-            {"layer": "profile", "source": "_profiles.yaml → high-load", "keys": {"net": "60"}},
+            {"layer": "profile", "source": "_profiles.yaml → high-load", "keys": {"net": 60}},
             {"layer": "tenant", "source": "db-a.yaml", "keys": {"cpu": 99}},
         ]
 

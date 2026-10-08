@@ -26,7 +26,6 @@ from __future__ import annotations
 
 import argparse
 import json
-import math
 import os
 import subprocess
 import sys
@@ -211,19 +210,6 @@ def _declared_keys(base: Path) -> list[str]:
     return []
 
 
-def _same_number(written: object, served: float) -> bool:
-    """`written` (/effective's value) is the number /metrics serves: compared
-    as numbers when it is a number or a text `float()` takes; anything else
-    (a `70:critical`, a scheduled mapping, a date text) is not the same."""
-    if isinstance(written, bool):
-        return False
-    try:
-        w = float(written)  # type: ignore[arg-type]
-    except (TypeError, ValueError):
-        return False
-    return w == served or (math.isnan(w) and math.isnan(served))
-
-
 def resolve_inheritance_chain(tenant: str, config_dir: str | None) -> dict[str, object] | None:
     """Resolve the inheritance chain for a tenant from threshold-exporter's own
     answers (#2526 / #2547): which keys the tenant has, its profile and each
@@ -236,7 +222,8 @@ def resolve_inheritance_chain(tenant: str, config_dir: str | None) -> dict[str, 
         ends up with, lowest first — `defaults` (each `_defaults.yaml` on the
         tenant's path, root first), `platform` (a root platform file's
         `tenants:` entry), `profile`, `tenant` (the tenant's own file); each
-        `{layer, source, keys}`, `keys` the values that layer WINS with
+        `{layer, source, keys}`, `keys` the values as that layer wrote them
+        (the winning layer per key)
       - resolved: every threshold (non-`_`) key of the tenant's
         `effective_config`, keyed as written, with the value /metrics serves
         for it; a key /metrics serves no row for (switched off, or not
@@ -246,13 +233,13 @@ def resolve_inheritance_chain(tenant: str, config_dir: str | None) -> dict[str, 
       - declared: key NAMES the platform recognises but assigns no value to
         (`optional_overrides:`, #1310; see `_declared_keys`)
 
-    ⛔ `resolved` follows /metrics (#2421): a value the exporter cannot read
-    as a number (e.g. `2024-02-30`) or whose `expires:` has passed falls back
-    to the defaults. Where the served value is not the number /effective
-    shows for a non-defaults layer (`_same_number`), the chain lists that key
-    under `defaults` (with the defaults file when the tenant has exactly
-    one, else no file) — a comparison of the two Go answers, not a reading
-    of da-guard's stderr.
+    ⛔ Two answers, side by side, never reconciled here: `resolved` is what
+    /metrics serves (#2421 — a value it cannot read as a number, or whose
+    `expires:` has passed, is served as the default), `chain` is where each
+    value was WRITTEN and what was written (/effective). When they differ the
+    output does not say why — `da-guard served-values`' stderr does. Telling
+    "60:critical served as 60" from "unservable, default served" would need
+    Go's value parsing re-done in Python, which this tool does not do.
     `chain` lists a key once, in the layer that supplies it, so a default
     the tenant overrides is not listed.
 
@@ -307,22 +294,13 @@ def resolve_inheritance_chain(tenant: str, config_dir: str | None) -> dict[str, 
             value = served.values[canon]
             if isinstance(value, float) and value.is_integer():
                 value = int(value)   # the JSON number Go wrote
-            if layer != "defaults" and not _same_number(te.effective_config[key], value):
-                # The two Go answers disagree: what /metrics serves is not the
-                # value this layer wrote, so it came from below — the default
-                # (an unparseable value, an expired `expires:`, ...).
-                print(f"  WARN: {safe_label(file)}: {safe_label(key)} as written is not "
-                      f"what /metrics serves ({safe_label(str(value))}); it serves the "
-                      f"default", file=sys.stderr)
-                layer = "defaults"
-                file = te.defaults_chain[0] if len(te.defaults_chain) == 1 else ""
         elif served is not None and served.unserved.get(key) is not None:
             value = served.unserved[key]
         else:
             continue
         seen.add(canon)
         resolved[key] = value
-        groups.setdefault((layer, file), {})[key] = value
+        groups.setdefault((layer, file), {})[key] = te.effective_config[key]
 
     def _order(item: tuple[tuple[str, str], dict[str, object]]) -> tuple[int, int, str]:
         (layer, file), _ = item
