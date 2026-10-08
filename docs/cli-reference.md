@@ -672,6 +672,7 @@ da-tools backtest [--git-diff | --config-dir <dir> --baseline <dir>] [options]
 
 2. **目錄比對模式**：`--config-dir <dir> --baseline <dir>`
    （比對兩個配置版本）
+   兩棵樹都由 exporter 讀（`da-guard served-values`，需 da-guard；#2119），逐租戶、逐門檻 key 比 `/metrics` 實際送出的值：平台檔、`_defaults.yaml`、profile、子目錄裡的變更都算；租戶取自各檔的 `tenants:`，沒有 `tenants:` 的檔 exporter 不送、改它也不算。一邊沒送的 key 或租戶（關掉、新增、移除）那一邊記為無值。值比對整個 UTC 日：每個 key 的每一組新舊值報一列；不是整天都成立的，`window` 列出它成立的所有時段（UTC 的 `HH:MM-HH:MM` 清單）。Prometheus 回測不限於這些時段，一律跑整個 `--lookback`。只改 severity 不算。帶維度的 key（`metric{db="a"}`），以及 exporter 在該組新舊值成立的任一時段以 `critical` severity 送出的 key（例如基底有送的 `<base>_critical`；依 served-values 回報的 severity 判斷，不看 key 名稱）照列，但不查 Prometheus，標為 `not_backtested`（`backtest: skipped: dimensioned key`／`critical-severity key`），文字與 Markdown 報告列出未回測幾筆。
 
 **選項**
 
@@ -704,7 +705,7 @@ da-tools backtest --config-dir ./conf.d-new --baseline ./conf.d-old --lookback 7
 |------|------|
 | `0` | 成功 |
 | `1` | 至少一項門檻變更被評為 HIGH 風險（合併前先審閱）；Prometheus 連不上、git 跑不了都不是 1，見下列 |
-| `2` | 呼叫端錯誤：Prometheus 連不上且沒帶 `--skip-if-unavailable`；`--lookback` 供了但不可用（不符合 `<數字><d\|h\|m>`，#1625）；`--git-diff` 供了但 git 跑不了（沒裝 git、不在 git work tree 內、沒有 HEAD~1）——⛔ 不要改用 `--config-dir` 轉綠，那比的是兩棵樹、不是你的 PR；`-o/--output`／`--markdown-output` 指到的輸出路徑寫不進去（#1641）；conf.d 檔案內容讀不到（不是 UTF-8 或不是合法 YAML；訊息指名哪一檔，#1654） |
+| `2` | 呼叫端錯誤：Prometheus 連不上且沒帶 `--skip-if-unavailable`；`--lookback` 供了但不可用（不符合 `<數字><d\|h\|m>`，#1625）；`--git-diff` 供了但 git 跑不了（沒裝 git、不在 git work tree 內、沒有 HEAD~1）——⛔ 不要改用 `--config-dir` 轉綠，那比的是兩棵樹、不是你的 PR；`-o/--output`／`--markdown-output` 指到的輸出路徑寫不進去（#1641）；conf.d 檔案內容讀不到（不是 UTF-8 或不是合法 YAML；訊息指名哪一檔，#1654）；目錄比對模式下找不到 da-guard、da-guard 失敗或過舊、任一棵樹有 exporter 讀不了的檔（帶 `--skip-if-unavailable` 也一樣，#2119） |
 
 ---
 

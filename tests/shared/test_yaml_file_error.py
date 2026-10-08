@@ -517,11 +517,11 @@ def test_decorated_tools_leave_stdout_empty_under_json(fx, label, script, argv):
 
 
 def test_backtest_baseline_side_is_wrapped_too(fx, monkeypatch, capsys):
-    """``--baseline`` is read only inside ``extract_changes_from_dirs``, which
-    runs after the Prometheus gate — unreachable from a subprocess without a
-    Prometheus. In-process, with the gate answered True, the same file is
-    named and rc is 2 (the recipe scan reads ``--config-dir`` first, so the
-    bad byte sits on the baseline side here on purpose)."""
+    """``--baseline`` is read only inside ``extract_changes_from_dirs``
+    (da-guard served-values since #2119, which names the file the exporter
+    cannot decode): rc 2, the file named (the recipe scan reads
+    ``--config-dir`` first, so the bad byte sits on the baseline side here
+    on purpose)."""
     sys.path.insert(0, str(OPS))
     import backtest_threshold as bt
     monkeypatch.setattr(bt, "prometheus_available", lambda _url: True)

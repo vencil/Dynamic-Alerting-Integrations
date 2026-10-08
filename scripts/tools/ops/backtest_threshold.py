@@ -53,9 +53,19 @@ from _lib_python import format_json_report  # noqa: E402
 from _lib_io import safe_label  # noqa: E402  (#1538 output-layer escaping)
 # #2231: a conf.d file holding a key twice is one the exporter drops whole;
 # strict reads raise YamlFileError for it, the path bad syntax already takes.
-from _lib_io import load_yaml_file_strict, strict_safe_load  # noqa: E402
+from _lib_io import strict_safe_load  # noqa: E402
 from _lib_io import load_yaml_file_strict_exporter_keys  # noqa: E402  (#2216)
 from _lib_exitcodes import EXIT_OK, EXIT_VIOLATION, EXIT_CALLER_ERROR  # noqa: E402
+# #2119: `--config-dir` / `--baseline` are read by the exporter, not here.
+from _lib_tenant_values import (  # noqa: E402
+    DaGuardError,
+    DaGuardNotFoundError,
+    ServedValuesError,
+    DA_GUARD_PREFIX,
+    load_served_tree,
+    now_at,
+    print_load_error,
+)
 from _lib_confd import (  # noqa: E402
     config_stem,
     has_yaml_extension,
@@ -473,10 +483,10 @@ def _confd_entries(root: Path) -> list:
         # SECOND probe that may disagree with the failure actually caught
         # here (a FUSE mount going away, a transient EIO). Reporting what
         # was caught cannot drift from what happened.
-        # ⛔ Once per RUN, not once per scan. `--config-dir` calls this
+        # ⛔ Once per RUN, not once per scan. `--config-dir` called this
         # helper twice (`main` for the recipe scan, `extract_changes_from_dirs`
-        # for the comparison) and the first version printed the same line
-        # twice — measured. This file's own
+        # for the comparison, until #2119 moved the comparison to da-guard)
+        # and the first version printed the same line twice — measured. This file's own
         # `test_each_reader_names_an_unusable_entry_exactly_once` states the
         # rule for every other reader: "A repeated warning trains the
         # operator to skim past it, which costs the signal the report exists
@@ -490,71 +500,158 @@ def _confd_entries(root: Path) -> list:
         return []
 
 
+def _render_served(value):
+    """A served threshold as the text this report carries (`None` stays None:
+    no /metrics row). Go's text for a non-finite value, an integral value
+    without a fraction."""
+    if value is None:
+        return None
+    if value != value:
+        return "NaN"
+    if value in (float("inf"), float("-inf")):
+        return "+Inf" if value > 0 else "-Inf"
+    return str(int(value)) if float(value).is_integer() else repr(float(value))
+
+
+_DAY_MINUTES = 24 * 60
+
+
+def _minute(hhmm):
+    hours, _, minutes = hhmm.partition(":")
+    return int(hours) * 60 + int(minutes)
+
+
+def _served_day(tenant_values, key, side):
+    """`[(start_minute, end_minute, rendered value, severity)]` for one key's
+    whole UTC day as /metrics serves it (`schedules`); a key or tenant
+    /metrics never serves is one segment of None. A segment in which /metrics cannot be
+    gathered at all is refused: a diff across it would be a guess."""
+    if tenant_values is None or key not in (tenant_values.schedules or {}):
+        return [(0, _DAY_MINUTES, None, None)]
+    out = []
+    for seg in tenant_values.schedules[key].segments:
+        if seg.error is not None:
+            raise ServedValuesError(
+                f"da-guard served-values: {side} /metrics cannot be gathered "
+                f"{seg.start}-{seg.end} UTC ({seg.error})", None, "")
+        out.append((_minute(seg.start), _minute(seg.end), _render_served(seg.value),
+                    seg.severity))
+    return out
+
+
+def _value_in(day, minute):
+    for start, end, value, _severity in day:
+        if start <= minute < end:
+            return value
+    return None
+
+
+def _severities_in(day, start, end):
+    """The severities /metrics serves the key with anywhere in [start, end)."""
+    return {sev for s, e, _v, sev in day if s < end and start < e and sev is not None}
+
+
+def _hhmm(minute):
+    return f"{minute // 60:02d}:{minute % 60:02d}"
+
+
+def _differing_runs(old_day, new_day):
+    """`[(start, end, old, new)]`: every maximal run of the day over which
+    the two sides serve one same (old, new) pair and differ, in day order.
+    A run is not joined across midnight."""
+    bounds = sorted({b for day in (old_day, new_day) for s, e, *_ in day for b in (s, e)})
+    runs = []
+    for start, end in zip(bounds, bounds[1:]):
+        pair = (_value_in(old_day, start), _value_in(new_day, start))
+        if runs and runs[-1][1] == start and runs[-1][2:] == pair:
+            runs[-1] = (runs[-1][0], end) + pair
+        else:
+            runs.append((start, end) + pair)
+    return [r for r in runs if r[2] != r[3]]
+
+
+def _print_tree_warnings(trees):
+    """`print_load_warnings` for the two trees, each line named once: a line
+    both trees carry is printed once and says so, any other names its tree
+    by its flag. Every line escaped (`safe_label`); da-guard's own stderr
+    behind `DA_GUARD_PREFIX`."""
+    for kind in ("stderr", "skipped"):
+        lines = {}
+        for flag, tree in trees:
+            got = (tree.stderr_lines if kind == "stderr"
+                   else [f"{s.file}: {s.reason}" for s in tree.skipped])
+            for line in got:
+                lines.setdefault(line, []).append(flag)
+        for line, flags in lines.items():
+            where = "both trees" if len(set(flags)) > 1 else flags[0]
+            if kind == "stderr":
+                print(f"{DA_GUARD_PREFIX}[{where}] {safe_label(line)}", file=sys.stderr)
+            else:
+                print(f"WARN: [{where}] {safe_label(line)}", file=sys.stderr)
+
+
 def extract_changes_from_dirs(config_dir, baseline_dir):
-    """Compare two config directories to find threshold changes.
+    """Threshold changes between two conf.d trees, as /metrics serves them.
 
-    Returns list of dicts: [{tenant, metric, old_value, new_value}, ...]
+    Returns list of dicts: [{tenant, metric, old_value, new_value}, ...],
+    plus `window` (a list of `"HH:MM-HH:MM"`, UTC) on a change that holds
+    in part of the day only.
+
+    #2119: both trees are read by the exporter (`da-guard served-values`),
+    never by re-reading YAML here, so a change written in `_platform.yaml`,
+    a `_defaults.yaml`, a profile or a sub-directory is a change, and a
+    `tenants:` wrapper is a tenant, not a metric called `tenants`. Rows are
+    per tenant and threshold key (the exporter's canonical spelling) whose
+    served value differs; a severity-only change is not one (the firing
+    count this tool measures does not depend on it).
+
+    * `severity: "critical"` when /metrics serves the key as a critical row
+      on either side in any part of the day the pair holds in (the
+      exporter's verdict, not the key's name); absent otherwise.
+    * A key /metrics serves on one side only (switched off, dropped, or the
+      tenant added / removed) has None on the other side — the shape
+      `backtest_change` already reads as "enabled" / "disabled".
+    * Values are compared over the whole UTC day (`schedules`, both trees
+      read at the same instant). One row per (old, new) pair a key takes:
+      `window` lists every part of the day the pair holds in, and is absent
+      when it holds all day. A pair is backtested once, over the whole
+      lookback (the Prometheus query is not restricted to its windows), so
+      one change split across parts of the day is not counted twice.
+
+    Raises what `load_served_tree` raises (da-guard missing, stale or
+    failing; a file it cannot decode or read), and `ServedValuesError` for a
+    part of the day in which either tree's /metrics cannot be gathered: the
+    caller exits 2 rather than reporting a partial diff.
     """
+    at = now_at()
+    trees = []
+    for flag, conf_d in (("--baseline", baseline_dir), ("--config-dir", config_dir)):
+        trees.append((flag, load_served_tree(conf_d, at=at, schedules=True)))
+    _print_tree_warnings(trees)
+    old_tree, new_tree = trees[0][1].tenants, trees[1][1].tenants
+
     changes = []
-
-    config_base = Path(config_dir)
-    baseline_base = Path(baseline_dir)
-    # #1588 site 2 of 6. `glob("*.yaml")` is case-SENSITIVE on Linux, so a
-    # `DB-A.YAML` carrier produced 0 changes where the identical body under
-    # `db-a.yaml` produced 1 — a backtest that reports "no threshold changes"
-    # for a change that is really there. `iterdir()` + the shared predicate
-    # yields the SAME set as the glob did (directories included, exactly as
-    # `glob` returned them), only case-folded: adding an `is_file()` filter
-    # here would be the #1607 axis, which is not this commit's subject.
-    # ⚠️ The listing goes through `_confd_entries`, not a bare `iterdir()`:
-    # see its docstring for the unreadable-directory regression that a
-    # plain `is_dir()` guard does NOT cover.
-    # #1603: the extension argument is gone, so this takes `CONFIG_SUFFIXES`
-    # — both spellings, the set `config_hierarchy.go` accepts.
-    _entries = _confd_entries(config_base)
-    for path in (p for p in _entries
-                 if has_yaml_extension(p.name)):
-        basename = path.name
-        if is_reserved_name(basename):
-            continue
-
-        # ⛔ `removesuffix(".yaml")` is case-sensitive too, and letting the
-        # scan above see `DB-A.YAML` while this line failed to strip it
-        # produced a report naming a tenant called `DB-A.YAML` — the fix
-        # for a silent miss turned into a loud wrong answer. Measured.
-        tenant = config_stem(basename)
-        if not tenant:
-            # ⛔ `config_stem` answers "" for a `.`-prefixed name, and the
-            # first version of this fix used the answer WITHOUT checking
-            # it: blind review measured `.foo.yaml` producing a change
-            # whose tenant was the empty string, where `05d3136` at least
-            # said `.foo`. A silent miss turned into a loud wrong answer —
-            # and an empty id flows on into the report and into
-            # `_flat_keys_at_head1("")`.
-            #
-            # Skipped, not warned: hidden entries are skipped by every
-            # reader in this repo and by the exporter's own scanner, so
-            # naming one here would report a loss that did not happen
-            # (the #1607 round settled that wording).
-            continue
-        new_data = load_yaml_file_strict(str(path), default={})
-        baseline_path = str(baseline_base / basename)
-        old_data = load_yaml_file_strict(baseline_path, default={})
-
-        # Compare all metric keys
-        all_keys = set(list(new_data.keys()) + list(old_data.keys()))
-        for key in sorted(all_keys):
-            if key.startswith("_"):
-                continue
-            old_val = old_data.get(key)
-            new_val = new_data.get(key)
-            if str(old_val) != str(new_val):
-                changes.append({
-                    "tenant": tenant,
-                    "metric": key,
-                    "old_value": str(old_val) if old_val is not None else None,
-                    "new_value": str(new_val) if new_val is not None else None,
-                })
+    for tenant in sorted(set(old_tree) | set(new_tree)):
+        old_tv, new_tv = old_tree.get(tenant), new_tree.get(tenant)
+        keys = set()
+        for tv_ in (old_tv, new_tv):
+            if tv_ is not None:
+                keys |= set(tv_.schedules or {})
+        for key in sorted(keys):
+            old_day = _served_day(old_tv, key, "baseline")
+            new_day = _served_day(new_tv, key, "current")
+            pairs = {}
+            for start, end, old_v, new_v in _differing_runs(old_day, new_day):
+                pairs.setdefault((old_v, new_v), []).append((start, end))
+            for (old_v, new_v), spans in pairs.items():
+                change = {"tenant": tenant, "metric": key,
+                          "old_value": old_v, "new_value": new_v}
+                if spans != [(0, _DAY_MINUTES)]:
+                    change["window"] = [f"{_hhmm(s)}-{_hhmm(e)}" for s, e in spans]
+                if any("critical" in _severities_in(day, s, e)
+                       for day in (old_day, new_day) for s, e in spans):
+                    change["severity"] = "critical"
+                changes.append(change)
 
     return changes
 
@@ -896,6 +993,24 @@ def custom_alert_markdown(tenants):
     )
 
 
+def not_backtestable(change):
+    """Why a threshold key cannot be backtested, or None.
+
+    #2119: `backtest_change` asks Prometheus for `<key>{tenant="..."}`. A
+    dimensioned key (`mysql_connections{db="a"}`) would make that selector
+    invalid, so it is listed in the report as not backtested rather than
+    queried as a raw string. Building selectors for it is not done here.
+    A key /metrics serves as a critical row (`severity: "critical"`, the
+    exporter's verdict: a `<base>_critical` key whose base it serves) names
+    no series of its own either; a `*_critical` key served as a warning row
+    is an ordinary threshold and is backtested."""
+    if "{" in change["metric"]:
+        return "dimensioned key"
+    if change.get("severity") == "critical":
+        return "critical-severity key"
+    return None
+
+
 def backtest_change(prom_url, change, lookback_seconds):
     """Backtest a single threshold change against historical data.
 
@@ -1060,6 +1175,16 @@ def generate_report(results, lookback):
     }
 
 
+def _not_backtested_counts(changes):
+    """`"N (reason), ..."` for the changes listed but not backtested, or ""."""
+    reasons = {}
+    for c in changes:
+        if c.get("status") == "not_backtested":
+            reason = c["backtest"].removeprefix("skipped: ")
+            reasons[reason] = reasons.get(reason, 0) + 1
+    return ", ".join(f"{n} ({r})" for r, n in reasons.items())
+
+
 def print_text_report(report):
     """Print human-readable backtest report."""
     print()
@@ -1074,6 +1199,9 @@ def print_text_report(report):
     print(f"  Risk: {rs['HIGH']} HIGH, {rs['MEDIUM']} MEDIUM, {rs['LOW']} LOW")
     if report["no_data"] > 0:
         print(f"  No data: {report['no_data']} (metric not found in Prometheus)")
+    skipped = _not_backtested_counts(report["changes"])
+    if skipped:
+        print(f"  Not backtested: {skipped}")
     print()
 
     for change in report["changes"]:
@@ -1081,9 +1209,10 @@ def print_text_report(report):
         marker = "!!!" if risk == "HIGH" else " ! " if risk == "MEDIUM" else "   "
         old_v = change["old_value"] or "(none)"
         new_v = change["new_value"] or "(none)"
+        window = f" ({', '.join(change['window'])} UTC)" if change.get("window") else ""
         print(f"  {marker} [{risk:6s}] {safe_label(change['tenant'])}/"
               f"{safe_label(change['metric'])}: "
-              f"{old_v} -> {new_v}")
+              f"{old_v} -> {new_v}{window}")
         print(f"           {safe_label(change['message'])}")
 
     print()
@@ -1096,6 +1225,9 @@ def generate_markdown(report):
     lines.append("")
     lines.append(f"**Lookback:** {report['lookback']} | "
                  f"**Analyzed:** {report['analyzed']}/{report['total_changes']}")
+    skipped = _not_backtested_counts(report["changes"])
+    if skipped:
+        lines.append(f"\n**Not backtested:** {skipped}")
 
     rs = report["risk_summary"]
     if rs["HIGH"] > 0:
@@ -1108,7 +1240,8 @@ def generate_markdown(report):
     for c in sorted(report["changes"], key=lambda x: {"HIGH": 0, "MEDIUM": 1, "LOW": 2, "UNKNOWN": 3}.get(x["risk"], 9)):
         old_v = c["old_value"] or "—"
         new_v = c["new_value"] or "—"
-        lines.append(f"| {c['risk']} | {c['tenant']} | `{c['metric']}` | "
+        window = f" ({', '.join(c['window'])} UTC)" if c.get("window") else ""
+        lines.append(f"| {c['risk']} | {c['tenant']} | `{c['metric']}`{window} | "
                      f"{old_v} | {new_v} | {c['message']} |")
 
     lines.append("")
@@ -1132,6 +1265,20 @@ def _exit_unreadable_conf(exc, args):
     if args.json:
         print(format_json_report(empty_report(
             args.lookback, "caller_error", "conf_file_unreadable")))
+    sys.exit(EXIT_CALLER_ERROR)
+
+
+def _exit_served_values_error(exc, args):
+    """#2119: da-guard missing, stale or failing, or a file of either tree
+    the exporter cannot decode or read → rc 2, named (`print_load_error`, the
+    lines `exit_on_served_values_error` prints), never a partial diff. Not
+    that decorator, because this tool owes ``--json`` its ``caller_error``
+    envelope on every terminal path.
+    """
+    print_load_error(exc)
+    if args.json:
+        print(format_json_report(empty_report(
+            args.lookback, "caller_error", "served_values_unavailable")))
     sys.exit(EXIT_CALLER_ERROR)
 
 
@@ -1276,6 +1423,23 @@ def main():
                     args.lookback, "caller_error", "git_diff_unavailable")))
             sys.exit(EXIT_CALLER_ERROR)
 
+    # #2119: the two trees are read by da-guard, and this runs BEFORE the
+    # Prometheus check for the reason the git check above does:
+    # `--skip-if-unavailable` is about Prometheus, and must not turn "a tree
+    # the exporter refuses" into a green skip.
+    dir_changes = None
+    if args.config_dir:
+        if not args.baseline:
+            print("ERROR: --config-dir requires --baseline", file=sys.stderr)
+            if args.json:
+                print(format_json_report(empty_report(
+                    args.lookback, "caller_error", "baseline_missing")))
+            sys.exit(EXIT_CALLER_ERROR)
+        try:
+            dir_changes = extract_changes_from_dirs(args.config_dir, args.baseline)
+        except (DaGuardNotFoundError, DaGuardError, YamlFileError) as exc:
+            _exit_served_values_error(exc, args)
+
     # Check Prometheus availability
     if not prometheus_available(args.prometheus):
         if args.skip_if_unavailable:
@@ -1297,13 +1461,7 @@ def main():
     if args.git_diff:
         changes = keep_flat_threshold_changes(git_changes, parsed_conf)
     elif args.config_dir:
-        if not args.baseline:
-            print("ERROR: --config-dir requires --baseline", file=sys.stderr)
-            sys.exit(EXIT_CALLER_ERROR)
-        try:
-            changes = extract_changes_from_dirs(args.config_dir, args.baseline)
-        except YamlFileError as exc:   # the --baseline side is read only here
-            _exit_unreadable_conf(exc, args)
+        changes = dir_changes
     elif args.tenant:
         if not args.metric or (args.old_value is None and args.new_value is None):
             print("ERROR: --tenant requires --metric and at least one of --old-value/--new-value",
@@ -1346,7 +1504,22 @@ def main():
     lookback_seconds = parse_lookback(args.lookback)
     results = []
     for change in changes:
-        result = backtest_change(args.prometheus, change, lookback_seconds)
+        skip = not_backtestable(change)
+        if skip:
+            result = {
+                "tenant": change["tenant"],
+                "metric": change["metric"],
+                "old_value": change["old_value"],
+                "new_value": change["new_value"],
+                "status": "not_backtested",
+                "risk": "UNKNOWN",
+                "backtest": f"skipped: {skip}",
+                "message": f"Not backtested: {skip}",
+            }
+        else:
+            result = backtest_change(args.prometheus, change, lookback_seconds)
+        if change.get("window"):  # #2119: the part of the day the values hold in
+            result["window"] = change["window"]
         results.append(result)
 
     # Generate report

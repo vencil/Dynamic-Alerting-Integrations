@@ -1743,10 +1743,16 @@ def test_batch_diagnose_discovers_tenants_from_either_casing(
 
 
 def test_backtest_sees_threshold_changes_under_either_casing(
-        tmp_path: pathlib.Path) -> None:
+        tmp_path: pathlib.Path, da_guard_env) -> None:
     """⛔ This one fails in the direction that reads as good news: a
     backtest reporting "no threshold changes" for a change that IS there.
-    Measured before the fix: 1 change vs 0.
+    Measured before the #1588 fix: 1 change vs 0.
+
+    #2119: the comparison is now da-guard's (served-values on both trees),
+    so the carrier rule is the exporter's own and the tenant id comes from
+    each file's `tenants:` mapping, not its name. Each neighbour declares a
+    tenant of its own and carries the same edit, so a carrier wrongly taken
+    or wrongly skipped shows up as a tenant too many or too few.
     """
     mod = _import_tool("ops", "backtest_threshold")
     seen = {}
@@ -1754,47 +1760,24 @@ def test_backtest_sees_threshold_changes_under_either_casing(
         cur, old = tmp_path / arm / "cur", tmp_path / arm / "old"
         cur.mkdir(parents=True)
         old.mkdir(parents=True)
-        # ⛔ Every neighbour carries the SAME edit, so anything that stops
-        # filtering shows up as an extra change rather than as nothing —
-        # the one-file fixture this replaced went green when the extension
-        # filter was deleted outright (blind review measured it).
         for where, value in ((old, 80), (cur, 95)):
-            body = f"tenants:\n  acme:\n    cpu_usage: {value}\n"
-            (where / fname).write_text(body, encoding="utf-8")
-            (where / "neighbour.txt").write_text(body, encoding="utf-8")
-            (where / "db-c.yml").write_text(body, encoding="utf-8")
-            # ⛔ A `.`-prefixed carrier: `config_stem` answers "" for it,
-            # and the first version USED that answer without checking, so
-            # this file produced a change whose tenant was the empty
-            # string — worse than `05d3136`, which at least said `.foo`.
-            # A surviving mutant until this neighbour existed.
-            (where / ".hidden.yaml").write_text(body, encoding="utf-8")
+            for name, tenant in ((fname, "acme"), ("neighbour.txt", "ghost-txt"),
+                                 ("db-c.yml", "db-c"), (".hidden.yaml", "ghost-hidden")):
+                (where / name).write_text(
+                    f"tenants:\n  {tenant}:\n    cpu_usage: {value}\n", encoding="utf-8")
             (where / "_defaults.yaml").write_text(
-                f"defaults:\n  cpu_usage: {value}\n", encoding="utf-8")
+                "defaults:\n  cpu_usage: 70\n", encoding="utf-8")
         seen[arm] = mod.extract_changes_from_dirs(str(cur), str(old))
     assert seen["lower"], "fixture is vacuous — the lower arm found no change"
-    # ⛔ `db-c.yml` USED TO BE COUNTED AS A NEIGHBOUR THAT MUST BE SKIPPED,
-    # and this loop asserted `len(tenants) == 1`. That expectation was the
-    # spelling defect written down as a contract: the exporter's scanner
-    # takes both spellings, so `db-c.yml` is a tenant it is serving. #1603
-    # widened this site, and the two remaining skip-neighbours (`.txt`,
-    # `.hidden.yaml`, `_defaults.yaml`) still carry the same edit, so a
-    # filter that stops filtering STILL shows up as an extra tenant here.
-    for arm, carrier_stem in (("lower", "db-a"), ("UPPER", "DB-A")):
+    for arm in ("lower", "UPPER"):
         tenants = sorted({c["tenant"] for c in seen[arm]})
-        assert tenants == sorted([carrier_stem, "db-c"]), (
-            f"[{arm}] exactly the two CARRIERS are tenants here; the "
-            f"`.txt`, the `.`-prefixed and the reserved `_defaults.yaml` "
-            f"must all be skipped, and both spellings must be seen "
-            f"(#1603). Got {tenants}")
-    assert len(seen["UPPER"]) == len(seen["lower"]), (
-        f"upper-cased carrier yielded {len(seen['UPPER'])} change(s) against "
-        f"{len(seen['lower'])} for the same edit")
-    # The stem must be stripped in both arms: a report naming a tenant
-    # called `DB-A.YAML` is the silent miss turned into a loud wrong answer.
-    assert {c["tenant"] for c in seen["UPPER"]} == {"DB-A", "db-c"}, (
-        f"tenant id kept its extension: "
-        f"{sorted(c['tenant'] for c in seen['UPPER'])}")
+        assert tenants == ["acme", "db-c"], (
+            f"[{arm}] exactly the two CARRIERS are tenants here; the `.txt` and "
+            f"the `.`-prefixed file must be skipped, and both spellings and "
+            f"casings must be seen (#1588, #1603). Got {tenants}")
+    assert seen["UPPER"] == seen["lower"], (
+        f"upper-cased carrier yielded {seen['UPPER']} against {seen['lower']} "
+        f"for the same edit")
 
 
 def test_chaos_soak_perturbs_a_carrier_under_either_casing(
@@ -1881,8 +1864,6 @@ def test_backtest_names_an_unreadable_config_dir_instead_of_raising(
     confd = tmp_path / "conf.d"
     confd.mkdir()
     (confd / "db-a.yaml").write_text(_TENANT_BODY, encoding="utf-8")
-    baseline = tmp_path / "baseline"
-    baseline.mkdir()
 
     real_iterdir = pathlib.Path.iterdir
 
@@ -1899,12 +1880,14 @@ def test_backtest_names_an_unreadable_config_dir_instead_of_raising(
     import io  # noqa: PLC0415
     import contextlib  # noqa: PLC0415
     err = io.StringIO()
+    # #2119: the comparison no longer lists the tree (da-guard reads it);
+    # the recipe scan in `main` still does, through `_confd_entries`.
     with contextlib.redirect_stderr(err):
-        changes = mod.extract_changes_from_dirs(str(confd), str(baseline))
+        changes = mod._confd_entries(confd)
     captured.append(err.getvalue())
 
     assert changes == [], (
-        f"an unreadable config dir must not invent changes; got {changes}")
+        f"an unreadable config dir must not invent entries; got {changes}")
     assert str(confd) in captured[0], (
         f"the unreadable directory was skipped SILENTLY — that is the "
         f"green light this whole line of work exists to remove.\n"
