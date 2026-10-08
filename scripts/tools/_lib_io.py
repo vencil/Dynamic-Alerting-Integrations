@@ -869,34 +869,35 @@ def find_go_rejected_bool_tags(root: Optional["yaml.Node"],
     return found
 
 
-# #2509 blind review 2 (A / H): the positions where an explicit `!!bool yes`
-# is measured (da-guard: exit 3, the file under parse_failed) to make the
-# exporter refuse the WHOLE file — and ONLY these are an ERROR:
-#   * a tenant file's (no `_` prefix) FIRST document, anywhere in it;
-#   * a ROOT `_defaults*` file's first document, under `defaults:` or
-#     `tenants:` — unless it is a carrier the chain does not select (a
-#     `_defaults.yml` beside `_defaults.yaml`: measured exit 0).
-# Everywhere else (`_routing_profiles.yaml`, `_profiles.yaml`, a second
-# document, …) it is a WARN: each file kind has its own reader, and no
-# per-reader claim is made here.
+# #2509 blind review 2 (A / H): an explicit `!!bool yes` is an ERROR only in
+# the FIRST document of a file the exporter reads, where it is measured
+# (da-guard: exit 3, the file under parse_failed) to refuse the whole file:
+#   * a tenant file (no `_` prefix), any depth — anywhere in the document;
+#   * a defaults carrier (`_defaults.yaml` / `.yml`, `is_defaults_name`),
+#     any depth — anywhere in the document; except a ROOT carrier the chain
+#     does not select (a `_defaults.yml` beside `_defaults.yaml`: exit 0);
+#   * any other ROOT `_` file (`_defaults-multidb.yaml`, `_routing_profiles.yaml`
+#     …) — under `defaults:` / `tenants:` only (other keys: exit 0).
+# Everywhere else (a second document, a nested non-carrier `_` file, …) it
+# is a WARN, with no claim about what a reader does.
 FATAL_IN_DOCUMENT = "document"
 FATAL_IN_DEFAULTS = "defaults"
 _FATAL_DEFAULTS_KEYS = frozenset(("defaults", "tenants"))
 
 
 def go_rejected_bool_fatal_scope(rel: str, unselected_root_carriers: "set[str]") -> str:
-    """Where in the file *rel* (posix path relative to conf.d) an explicit
-    ``!!bool yes`` is fatal: :data:`FATAL_IN_DOCUMENT`,
-    :data:`FATAL_IN_DEFAULTS` or ``""`` (nowhere). *unselected_root_carriers*
-    is ``_lib_confd.unselected_carriers`` of the conf.d root listing."""
-    from _lib_confd import is_defaults_document_name, is_reserved_name
+    """Where in the first document of *rel* (posix path relative to conf.d)
+    an explicit ``!!bool yes`` is fatal: :data:`FATAL_IN_DOCUMENT` (anywhere),
+    :data:`FATAL_IN_DEFAULTS` (under ``defaults:`` / ``tenants:``) or ``""``
+    (nowhere). *unselected_root_carriers* is ``_lib_confd.unselected_carriers``
+    of the conf.d root."""
+    from _lib_confd import is_defaults_name, is_reserved_name
     name = rel.rsplit("/", 1)[-1]
-    if not is_reserved_name(name):
+    root = "/" not in rel
+    if not is_reserved_name(name) or (
+            is_defaults_name(name) and not (root and name in unselected_root_carriers)):
         return FATAL_IN_DOCUMENT
-    if ("/" not in rel and is_defaults_document_name(name)
-            and name not in unselected_root_carriers):
-        return FATAL_IN_DEFAULTS
-    return ""
+    return FATAL_IN_DEFAULTS if root and name not in unselected_root_carriers else ""
 
 
 def split_go_rejected_bool_tags(roots: "list[yaml.Node]", scope: str

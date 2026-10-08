@@ -609,8 +609,9 @@ def check_yaml_quoting(config_dir: str) -> dict[str, object]:
     in a field that takes a boolean is listed too, as WARN (the row is WARN
     when that is all it found): PyYAML reads a boolean, some of the
     exporter's readers the string — `_lib_io.find_yaml11_bool_words`. An
-    explicit `!!bool yes` is an error only where the exporter is measured to
-    refuse the whole file, a WARN elsewhere (`_lib_io.split_go_rejected_bool_tags`,
+    explicit `!!bool yes` is an error only in the first document of a file
+    the exporter reads, where it is measured to refuse the whole file, a
+    WARN elsewhere (`_lib_io.go_rejected_bool_fatal_scope`,
     the rule `check_confd_schema` applies); a root `_defaults*` file's
     `tenants:` block is held to the tenant schema too (#2509 review F3), a
     nested one is not (the exporter does not read it).

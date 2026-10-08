@@ -31,9 +31,11 @@ WARN (#2509, never changes the exit code): an unquoted YAML 1.1 boolean word
   `WARN: <file>:<line>: …`. A root `_defaults*` file's `tenants:` block is
   held to the tenant schema for this and #2164. An explicit `!!bool yes`
   (yaml.v3 refuses that tag on that text) is an ERROR only where the exporter
-  is measured to refuse the whole file — a tenant file's first document, a
-  root `_defaults*` file's `defaults:` / `tenants:` — and a WARN elsewhere
-  (`_lib_io.split_go_rejected_bool_tags`). A value PyYAML cannot construct
+  is measured to refuse the whole file — the first document of a tenant file
+  or a `_defaults.yaml` / `.yml` carrier (any depth, any key; not a root
+  carrier the chain does not select), and of any other root `_` file under
+  `defaults:` / `tenants:` — and a WARN elsewhere
+  (`_lib_io.go_rejected_bool_fatal_scope`). A value PyYAML cannot construct
   (`!!bool y`) is named as an ERROR, not a traceback.
 
 Exit codes (scripts/tools/_lib_exitcodes.py):

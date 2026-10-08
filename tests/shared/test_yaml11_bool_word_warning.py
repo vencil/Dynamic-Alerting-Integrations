@@ -17,8 +17,10 @@ PyYAML（YAML 1.1）讀成布林，schema 因此放行；yaml.v3 讀到的是字
   租戶檔一致（#2164 的 ERROR 同一修法一併補上；巢狀 `_defaults.yaml` 的 `tenants:` Go 不讀，兩條路徑
   都不報）；`yaml_quoting` 的 FAIL 列附上 WARN 明細。
 - 盲審第 2 輪（A／H／C）：明確 `!!bool yes` 只在 da-guard 實測整檔 decode 失敗（exit 3、
-  parse_failed）的位置報 ERROR——租戶檔第一份文件、根 `_defaults*` 的 `defaults:`／`tenants:`；
-  `_routing_profiles.yaml`、第 2 份文件、未選用的 `_defaults.yml` 等一律 WARN（每格以 da-guard 為前提）。
+  parse_failed）的位置報 ERROR——exporter 實際讀取之檔的第一份文件：租戶檔與 `_defaults.yaml/.yml`
+  carrier（根層或巢狀、任何鍵；根層未選用的 carrier 不讀）、其他根 `_` 檔的 `defaults:`／`tenants:`。
+  第 2 份文件、`routing_profiles:` 底下、巢狀非 carrier（`sub/_defaults-multidb.yaml`）等一律 WARN。
+  每格都以 da-guard 的 exit code 為前提。
   `!!bool y` / `1` / `foo`（PyYAML 也建不出）具名報 ERROR，不出 traceback。
 
 修正前（main 59e58c81）兩條 lint 對 yes/on/no/off 都完全安靜（schema 讓它過、quoting 只看字串欄位）。
@@ -357,6 +359,18 @@ _RP = ("routing_profiles:\n  rp1:\n    receiver: {type: webhook, url: 'https://h
        "send_resolved: !!bool yes}\n")
 _SM = "    _state_maintenance: {enabled: !!bool yes}\n"
 # (id, files, file the finding is in, its JSON path, exporter refuses the whole file)
+_RD = ("_routing_defaults:\n  receiver: {type: webhook, url: 'https://h.example.com/x', "
+       "send_resolved: !!bool yes}\n")
+_SF = ("state_filters:\n  f1:\n    reasons: [a]\n    severity: warning\n"
+       "    default_state: !!bool yes\n")
+_RDP = "/_routing_defaults/receiver/send_resolved"
+_DOC2 = "---\n"
+# (id, files, file the finding is in, its JSON path, exporter refuses the whole file)
+# ⛔ The verdict column is da-guard's, measured per cell by the test itself
+# (exit 3 + parse_failed ⇔ True): ERROR = the first document of a file the
+# exporter reads — a tenant file or a `_defaults.yaml/.yml` carrier, anywhere
+# in it (a ROOT carrier the chain does not select is not read); any other
+# ROOT `_` file under `defaults:` / `tenants:` only.
 _PLACES = [
     ("tenant-doc1", {"sub/t1.yaml": "tenants:\n  t1:\n" + _SM}, "sub/t1.yaml",
      "/tenants/t1/_state_maintenance/enabled", True),
@@ -364,21 +378,54 @@ _PLACES = [
      "_defaults.yaml", "/defaults/container_cpu", True),
     ("root-defaults-tenants", {"_defaults.yaml": _DEFAULTS + "tenants:\n  t1:\n" + _SM},
      "_defaults.yaml", "/tenants/t1/_state_maintenance/enabled", True),
+    ("root-defaults-routing-defaults", {"_defaults.yaml": _DEFAULTS + _RD}, "_defaults.yaml",
+     _RDP, True),
+    ("root-defaults-state-filters", {"_defaults.yaml": _DEFAULTS + _SF}, "_defaults.yaml",
+     "/state_filters/f1/default_state", True),
+    ("root-defaults-unknown-key", {"_defaults.yaml": _DEFAULTS + "foo: !!bool yes\n"},
+     "_defaults.yaml", "/foo", True),
+    ("nested-defaults-defaults", {"sub/_defaults.yaml": "defaults:\n  container_cpu: !!bool yes\n"},
+     "sub/_defaults.yaml", "/defaults/container_cpu", True),
+    ("nested-defaults-routing-defaults", {"sub/_defaults.yaml": _RD}, "sub/_defaults.yaml",
+     _RDP, True),
+    ("nested-unselected-defaults-yml", {"sub/_defaults.yaml": "defaults:\n  container_cpu: 1\n",
+                                        "sub/_defaults.yml": "defaults:\n  container_cpu: !!bool yes\n"},
+     "sub/_defaults.yml", "/defaults/container_cpu", True),
+    ("root-multidb-defaults", {"_defaults-multidb.yaml": "defaults:\n  container_cpu: !!bool yes\n"},
+     "_defaults-multidb.yaml", "/defaults/container_cpu", True),
+    ("root-multidb-tenants", {"_defaults-multidb.yaml": "tenants:\n  t1:\n" + _SM},
+     "_defaults-multidb.yaml", "/tenants/t1/_state_maintenance/enabled", True),
+    ("root-routing-profiles-tenants", {"_routing_profiles.yaml": "routing_profiles: {}\n"
+                                       "tenants:\n  t1:\n" + _SM},
+     "_routing_profiles.yaml", "/tenants/t1/_state_maintenance/enabled", True),
+    # ── WARN: da-guard reads the tree (exit 0) ──
     ("routing-profiles", {"_routing_profiles.yaml": _RP,
                           "sub/t1.yaml": "tenants:\n  t1:\n    _routing_profile: rp1\n"},
      "_routing_profiles.yaml", "/routing_profiles/rp1/receiver/send_resolved", False),
-    ("tenant-doc2", {"sub/t1.yaml": "tenants:\n  t1:\n    mysql_connections: '5'\n---\n"
-                                    "tenants:\n  t1:\n" + _SM},
+    ("tenant-doc2", {"sub/t1.yaml": "tenants:\n  t1:\n    mysql_connections: '5'\n" + _DOC2
+                                    + "tenants:\n  t1:\n" + _SM},
      "sub/t1.yaml", "/tenants/t1/_state_maintenance/enabled", False),
+    ("root-defaults-doc2", {"_defaults.yaml": _DEFAULTS + _DOC2 + "defaults:\n  container_cpu: "
+                                              "!!bool yes\n"},
+     "_defaults.yaml", "/defaults/container_cpu", False),
+    ("nested-defaults-doc2", {"sub/_defaults.yaml": "defaults:\n  container_cpu: 1\n" + _DOC2
+                                                    + "defaults:\n  container_cpu: !!bool yes\n"},
+     "sub/_defaults.yaml", "/defaults/container_cpu", False),
     ("unselected-defaults-yml", {"_defaults.yml": _DEFAULTS + "tenants:\n  t1:\n" + _SM},
      "_defaults.yml", "/tenants/t1/_state_maintenance/enabled", False),
+    ("root-multidb-other-key", {"_defaults-multidb.yaml": _RD}, "_defaults-multidb.yaml",
+     _RDP, False),
+    ("nested-multidb", {"sub/_defaults-multidb.yaml": "defaults:\n  container_cpu: !!bool yes\n"},
+     "sub/_defaults-multidb.yaml", "/defaults/container_cpu", False),
 ]
 
 
 @pytest.mark.parametrize("name,files,rel,path,fatal", _PLACES, ids=[c[0] for c in _PLACES])
 def test_explicit_bool_tag_is_an_error_only_where_the_exporter_refuses_the_file(
         tmp_path, name, files, rel, path, fatal):
-    """A／H：ERROR ⇔ da-guard 實測整檔 decode 失敗（前提逐格量）；其餘位置 WARN、rc 0。"""
+    """A／H：ERROR ⇔ da-guard 實測整檔 decode 失敗（前提逐格量）；其餘位置 WARN、rc 0。
+    規則：exporter 實際讀取之檔的第一份文件（租戶檔、`_defaults.yaml/.yml` carrier 全文件；
+    其他根 `_` 檔只看 `defaults:`／`tenants:`）。"""
     conf_d = _explicit_tree(tmp_path, files)
     if fatal:
         with pytest.raises(tv.ParseFailedError):
@@ -396,24 +443,6 @@ def test_explicit_bool_tag_is_an_error_only_where_the_exporter_refuses_the_file(
     assert row["status"] == (vc.FAIL if fatal else vc.WARN), row
     assert [d for d in row["details"] if "explicit `!!bool yes`" in d] == \
         [hits[0].split(": ", 1)[1] if fatal else hits[0]], row
-
-
-@pytest.mark.parametrize("files,rel", [
-    ({"_defaults.yaml": _DEFAULTS + "_routing_defaults:\n  receiver: {type: webhook, "
-      "url: 'https://h.example.com/x', send_resolved: !!bool yes}\n"}, "_defaults.yaml"),
-    ({"sub/_defaults.yaml": "defaults:\n  container_cpu: !!bool yes\n"}, "sub/_defaults.yaml"),
-], ids=["root-defaults-other-key", "nested-defaults"])
-def test_known_under_report_measured_fatal_but_warned(tmp_path, files, rel):
-    """已知低報（另開票）：這兩處 da-guard 也實測整檔 decode 失敗，但本輪範圍只把租戶檔第一份
-    文件與根 `_defaults*` 的 `defaults:`／`tenants:` 報 ERROR，其餘一律 WARN。改成 ERROR 時
-    連同本格一起改。"""
-    conf_d = _explicit_tree(tmp_path, files)
-    with pytest.raises(tv.ParseFailedError):
-        tv.load_effective(conf_d)
-    p = _lint(conf_d)
-    assert p.returncode == 0, p.stderr
-    assert any(l.startswith(f"WARN: {rel}:") and "explicit `!!bool yes`" in l
-               for l in _warn_lines(p)), p.stderr
 
 
 @pytest.mark.parametrize("word", ["y", "1", "foo"])
