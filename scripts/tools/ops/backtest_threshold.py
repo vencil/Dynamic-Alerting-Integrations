@@ -61,10 +61,10 @@ from _lib_tenant_values import (  # noqa: E402
     DaGuardError,
     DaGuardNotFoundError,
     ServedValuesError,
+    DA_GUARD_PREFIX,
     load_served_tree,
     now_at,
     print_load_error,
-    print_load_warnings,
 )
 from _lib_confd import (  # noqa: E402
     config_stem,
@@ -545,15 +545,55 @@ def _value_in(day, minute):
     return None
 
 
+def _hhmm(minute):
+    return f"{minute // 60:02d}:{minute % 60:02d}"
+
+
+def _differing_runs(old_day, new_day):
+    """`[(start, end, old, new)]`: every maximal run of the day over which
+    the two sides serve one same (old, new) pair and differ, in day order.
+    A run is not joined across midnight."""
+    bounds = sorted({b for day in (old_day, new_day) for s, e, _ in day for b in (s, e)})
+    runs = []
+    for start, end in zip(bounds, bounds[1:]):
+        pair = (_value_in(old_day, start), _value_in(new_day, start))
+        if runs and runs[-1][1] == start and runs[-1][2:] == pair:
+            runs[-1] = (runs[-1][0], end) + pair
+        else:
+            runs.append((start, end) + pair)
+    return [r for r in runs if r[2] != r[3]]
+
+
+def _print_tree_warnings(trees):
+    """`print_load_warnings` for the two trees, each line named once: a line
+    both trees carry is printed once and says so, any other names its tree
+    by its flag. Every line escaped (`safe_label`); da-guard's own stderr
+    behind `DA_GUARD_PREFIX`."""
+    for kind in ("stderr", "skipped"):
+        lines = {}
+        for flag, tree in trees:
+            got = (tree.stderr_lines if kind == "stderr"
+                   else [f"{s.file}: {s.reason}" for s in tree.skipped])
+            for line in got:
+                lines.setdefault(line, []).append(flag)
+        for line, flags in lines.items():
+            where = "both trees" if len(set(flags)) > 1 else flags[0]
+            if kind == "stderr":
+                print(f"{DA_GUARD_PREFIX}[{where}] {safe_label(line)}", file=sys.stderr)
+            else:
+                print(f"WARN: [{where}] {safe_label(line)}", file=sys.stderr)
+
+
 def extract_changes_from_dirs(config_dir, baseline_dir):
     """Threshold changes between two conf.d trees, as /metrics serves them.
 
-    Returns list of dicts: [{tenant, metric, old_value, new_value}, ...]
+    Returns list of dicts: [{tenant, metric, old_value, new_value}, ...],
+    plus `window` on a change that holds in part of the day only.
 
     #2119: both trees are read by the exporter (`da-guard served-values`),
     never by re-reading YAML here, so a change written in `_platform.yaml`,
     a `_defaults.yaml`, a profile or a sub-directory is a change, and a
-    `tenants:` wrapper is a tenant, not a metric called `tenants`. One row
+    `tenants:` wrapper is a tenant, not a metric called `tenants`. Rows are
     per tenant and threshold key (the exporter's canonical spelling) whose
     served value differs; a severity-only change is not one (the firing
     count this tool measures does not depend on it).
@@ -561,11 +601,12 @@ def extract_changes_from_dirs(config_dir, baseline_dir):
     * A key /metrics serves on one side only (switched off, dropped, or the
       tenant added / removed) has None on the other side — the shape
       `backtest_change` already reads as "enabled" / "disabled".
-    * Values are compared over the whole UTC day (`schedules`), both trees at
-      the same instant `at`. A key that differs at `at` carries the values at
-      `at`. One that differs only in another part of the day carries the
-      values of the first such part, and `window` (`"HH:MM-HH:MM"`, UTC)
-      names it.
+    * Values are compared over the whole UTC day (`schedules`, both trees
+      read at the same instant). A key that differs the same way all day is
+      one row with no `window`. Otherwise every part of the day over which
+      it differs one way is a row of its own, its `window`
+      (`"HH:MM-HH:MM"`, UTC) naming that part; a run is not joined across
+      midnight, so a window wrapping it is two rows.
 
     Raises what `load_served_tree` raises (da-guard missing, stale or
     failing; a file it cannot decode or read), and `ServedValuesError` for a
@@ -573,13 +614,11 @@ def extract_changes_from_dirs(config_dir, baseline_dir):
     caller exits 2 rather than reporting a partial diff.
     """
     at = now_at()
-    trees = {}
-    for side, conf_d in (("baseline", baseline_dir), ("current", config_dir)):
-        tree = load_served_tree(conf_d, at=at, schedules=True)
-        print_load_warnings(tree)
-        trees[side] = tree.tenants
-    old_tree, new_tree = trees["baseline"], trees["current"]
-    now_minute = _minute(at[11:16])
+    trees = []
+    for flag, conf_d in (("--baseline", baseline_dir), ("--config-dir", config_dir)):
+        trees.append((flag, load_served_tree(conf_d, at=at, schedules=True)))
+    _print_tree_warnings(trees)
+    old_tree, new_tree = trees[0][1].tenants, trees[1][1].tenants
 
     changes = []
     for tenant in sorted(set(old_tree) | set(new_tree)):
@@ -589,23 +628,14 @@ def extract_changes_from_dirs(config_dir, baseline_dir):
             if tv_ is not None:
                 keys |= set(tv_.schedules or {})
         for key in sorted(keys):
-            old_day = _served_day(old_tv, key, "baseline")
-            new_day = _served_day(new_tv, key, "current")
-            old_now, new_now = _value_in(old_day, now_minute), _value_in(new_day, now_minute)
-            if old_now != new_now:
-                changes.append({"tenant": tenant, "metric": key,
-                                "old_value": old_now, "new_value": new_now})
-                continue
-            bounds = sorted({b for day in (old_day, new_day) for s, e, _ in day for b in (s, e)})
-            for start, end in zip(bounds, bounds[1:]):
-                old_v, new_v = _value_in(old_day, start), _value_in(new_day, start)
-                if old_v != new_v:
-                    changes.append({
-                        "tenant": tenant, "metric": key,
-                        "old_value": old_v, "new_value": new_v,
-                        "window": f"{start // 60:02d}:{start % 60:02d}-{end // 60:02d}:{end % 60:02d}",
-                    })
-                    break
+            runs = _differing_runs(_served_day(old_tv, key, "baseline"),
+                                   _served_day(new_tv, key, "current"))
+            for start, end, old_v, new_v in runs:
+                change = {"tenant": tenant, "metric": key,
+                          "old_value": old_v, "new_value": new_v}
+                if (start, end) != (0, _DAY_MINUTES):
+                    change["window"] = f"{_hhmm(start)}-{_hhmm(end)}"
+                changes.append(change)
 
     return changes
 
@@ -945,6 +975,21 @@ def custom_alert_markdown(tenants):
         "not by this flat-threshold backtest. For a recipe would-fire preview "
         "see [#657](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/657)."
     )
+
+
+def not_backtestable(metric):
+    """Why a threshold key cannot be backtested, or None.
+
+    #2119: `backtest_change` asks Prometheus for `<key>{tenant="..."}`. A
+    dimensioned key (`mysql_connections{db="a"}`) would make that selector
+    invalid, and a `<base>_critical` key names no series of its own, so
+    either is listed in the report as not backtested rather than queried
+    as a raw string. Building selectors for them is not done here."""
+    if "{" in metric:
+        return "dimensioned key"
+    if metric.endswith("_critical"):
+        return "critical key"
+    return None
 
 
 def backtest_change(prom_url, change, lookback_seconds):
@@ -1424,7 +1469,20 @@ def main():
     lookback_seconds = parse_lookback(args.lookback)
     results = []
     for change in changes:
-        result = backtest_change(args.prometheus, change, lookback_seconds)
+        skip = not_backtestable(change["metric"])
+        if skip:
+            result = {
+                "tenant": change["tenant"],
+                "metric": change["metric"],
+                "old_value": change["old_value"],
+                "new_value": change["new_value"],
+                "status": "not_backtested",
+                "risk": "UNKNOWN",
+                "backtest": f"skipped: {skip}",
+                "message": f"Not backtested: {skip}",
+            }
+        else:
+            result = backtest_change(args.prometheus, change, lookback_seconds)
         if change.get("window"):  # #2119: the part of the day the values hold in
             result["window"] = change["window"]
         results.append(result)

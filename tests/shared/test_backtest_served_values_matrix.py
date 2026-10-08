@@ -13,7 +13,8 @@ step 0 的政策：Python 工具不自己解讀 YAML 語意，值一律來自 Go
 
 每格比對：`extract_changes_from_dirs` 的答案 == 直接對兩棵樹跑 served-values、在同一個
 `at` 逐租戶逐 threshold key 比值得到的答案（一邊沒送的 key 或租戶記 None）。排程只在一天
-其他時段不同的 key 另有一格釘死數字與 `window`。da-guard 拒收的樹走 CLI，要 exit 2。
+其他時段不同的 key 另有幾格釘死數字與 `window`（每一段不同都要列出，不只第一段）。
+da-guard 拒收的樹、或某時段 /metrics 收不到，都要 exit 2。
 
 da-guard 由 conftest 的 session fixture 以 `go build` 建出；建不起來就 fail、不 skip。
 """
@@ -86,9 +87,6 @@ SHAPES = [
     ("key-disabled",
      {"_defaults.yaml": _DEFAULTS, "tx.yaml": _wrapper("50")},
      {"_defaults.yaml": _DEFAULTS, "tx.yaml": _wrapper("disable")}),
-    ("scheduled-at-instant",
-     {"_defaults.yaml": _DEFAULTS, "tx.yaml": _scheduled("1000")},
-     {"_defaults.yaml": _DEFAULTS, "tx.yaml": _wrapper("75")}),
 ]
 
 
@@ -138,7 +136,6 @@ def test_matrix_is_not_vacuous(tmp_path: Path) -> None:
     assert {(c["tenant"], c["old_value"]) for c in got["tenant-added"]} == {("ty", None)}
     assert got["key-disabled"] == [{"tenant": "tx", "metric": "mysql_connections",
                                     "old_value": "50", "new_value": None}]
-    assert got["scheduled-at-instant"][0]["old_value"] == "70"
 
 
 @pytest.mark.parametrize("name,base,cur", SHAPES, ids=[n for n, _, _ in SHAPES])
@@ -146,6 +143,12 @@ def test_backtest_agrees_with_the_exporter(tmp_path: Path, monkeypatch: pytest.M
                                            name: str, base: dict, cur: dict) -> None:
     b, c = _tree(tmp_path / "base", base), _tree(tmp_path / "cur", cur)
     assert _backtest(monkeypatch, b, c) == _oracle(b, c), name
+
+
+def _two_windows(night: str, evening: str) -> str:
+    return ("tenants:\n  tx:\n    mysql_connections:\n      default: \"70\"\n      overrides:\n"
+            f"        - window: \"01:00-02:00\"\n          value: \"{night}\"\n"
+            f"        - window: \"20:00-21:00\"\n          value: \"{evening}\"\n")
 
 
 def test_a_change_outside_the_instant_is_named_with_its_window(
@@ -158,6 +161,101 @@ def test_a_change_outside_the_instant_is_named_with_its_window(
     assert _backtest(monkeypatch, b, c) == [{
         "tenant": "tx", "metric": "mysql_connections",
         "old_value": "1000", "new_value": "2000", "window": "01:00-09:00"}]
+
+
+def test_every_differing_part_of_the_day_is_a_row(
+        tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """Two overrides both changed: two rows, not the first one only (round-1
+    review: the 20:00 change used to be dropped)."""
+    b = _tree(tmp_path / "base", {"_defaults.yaml": _DEFAULTS, "tx.yaml": _two_windows("1000", "5")})
+    c = _tree(tmp_path / "cur", {"_defaults.yaml": _DEFAULTS, "tx.yaml": _two_windows("1001", "99999")})
+    assert _backtest(monkeypatch, b, c) == [
+        {"tenant": "tx", "metric": "mysql_connections", "old_value": "1000", "new_value": "1001",
+         "window": "01:00-02:00"},
+        {"tenant": "tx", "metric": "mysql_connections", "old_value": "5", "new_value": "99999",
+         "window": "20:00-21:00"}]
+
+
+def test_a_schedule_against_a_plain_value_is_one_row_per_run(
+        tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """Runs with the same (old, new) pair that touch merge; ones that do not
+    touch (either side of the override) stay apart."""
+    b = _tree(tmp_path / "base", {"_defaults.yaml": _DEFAULTS, "tx.yaml": _scheduled("1000")})
+    c = _tree(tmp_path / "cur", {"_defaults.yaml": _DEFAULTS, "tx.yaml": _wrapper("75")})
+    got = [(r["window"], r["old_value"], r["new_value"]) for r in _backtest(monkeypatch, b, c)]
+    assert got == [("00:00-01:00", "70", "75"), ("01:00-09:00", "1000", "75"),
+                   ("09:00-24:00", "70", "75")]
+
+
+def test_skipped_files_are_named_once_with_their_tree(
+        tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture) -> None:
+    """A file the load serves no tenant from is a WARN (#2115 R3): once when
+    both trees carry it, else with the flag of the tree that does."""
+    flat = "mysql_connections: \"50\"\n"
+    b = _tree(tmp_path / "base", {"_defaults.yaml": _DEFAULTS, "tx.yaml": _wrapper("50"),
+                                  "both.yaml": flat})
+    c = _tree(tmp_path / "cur", {"_defaults.yaml": _DEFAULTS, "tx.yaml": _wrapper("50"),
+                                 "both.yaml": flat, "new.yaml": flat})
+    _backtest(monkeypatch, b, c)
+    err = capsys.readouterr().err
+    assert err.count("both.yaml") == 1 and "WARN: [both trees] both.yaml" in err, err
+    assert err.count("new.yaml") == 1 and "WARN: [--config-dir] new.yaml" in err, err
+
+
+def test_a_part_of_the_day_metrics_cannot_gather_fails_closed() -> None:
+    """A segment carrying da-guard's error is refused, not read as "no row"."""
+    seg = tv.ScheduleSegment("00:00", "24:00", None, None, "gather failed")
+    values = tv.TenantValues("tx", {}, {}, {}, {}, {"k": tv.KeySchedule([seg], None, None)})
+    with pytest.raises(tv.ServedValuesError, match="gather failed"):
+        bt._served_day(values, "k", "current")
+
+
+def _run_main(monkeypatch, capsys, cli_argv, base: Path, cur: Path, *extra: str):
+    """`main` in-process with Prometheus answered by a stub series (50 then 2000)."""
+    monkeypatch.setattr(bt, "now_at", lambda: AT, raising=False)
+    monkeypatch.setattr(bt, "prometheus_available", lambda url, timeout=5: True)
+    asked = []
+
+    def query_range(url, q, lookback, step=bt.DEFAULT_STEP):
+        asked.append(q)
+        return [{"values": [[0, "50"], [1, "2000"]]}]
+    monkeypatch.setattr(bt, "query_range", query_range)
+    cli_argv("backtest_threshold", "--config-dir", str(cur), "--baseline", str(base),
+             "--prometheus", "http://prom:9090", *extra)
+    with pytest.raises(SystemExit) as ei:
+        bt.main()
+    return ei.value.code, capsys.readouterr(), asked
+
+
+def test_window_reaches_json_text_and_markdown(tmp_path: Path, monkeypatch, capsys,
+                                               cli_argv) -> None:
+    b = _tree(tmp_path / "base", {"_defaults.yaml": _DEFAULTS, "tx.yaml": _two_windows("1000", "5")})
+    c = _tree(tmp_path / "cur", {"_defaults.yaml": _DEFAULTS, "tx.yaml": _two_windows("1001", "99999")})
+    md = tmp_path / "out.md"
+    _, out, _ = _run_main(monkeypatch, capsys, cli_argv, b, c, "--json")
+    assert [r.get("window") for r in json.loads(out.out)["changes"]] == ["01:00-02:00", "20:00-21:00"]
+    _, out, _ = _run_main(monkeypatch, capsys, cli_argv, b, c, "--markdown-output", str(md))
+    assert "1000 -> 1001 (01:00-02:00 UTC)" in out.out
+    assert "5 -> 99999 (20:00-21:00 UTC)" in out.out
+    assert "`mysql_connections` (20:00-21:00 UTC)" in md.read_text(encoding="utf-8")
+
+
+def test_dimensioned_and_critical_keys_are_listed_not_backtested(
+        tmp_path: Path, monkeypatch, capsys, cli_argv) -> None:
+    """Their raw key is no PromQL selector: listed, marked, never queried."""
+    def files(v: int) -> dict[str, str]:
+        return {"_defaults.yaml": _DEFAULTS,
+                "tx.yaml": ("tenants:\n  tx:\n    mysql_connections: 50\n"
+                            f"    mysql_connections_critical: {v}\n"
+                            f"    'mysql_connections{{db=\"a\"}}': {v}\n")}
+    b, c = _tree(tmp_path / "base", files(90)), _tree(tmp_path / "cur", files(95))
+    _, out, asked = _run_main(monkeypatch, capsys, cli_argv, b, c, "--json")
+    rows = {r["metric"]: r for r in json.loads(out.out)["changes"]}
+    assert set(rows) == {"mysql_connections_critical", 'mysql_connections{db="a"}'}, rows
+    assert rows["mysql_connections_critical"]["backtest"] == "skipped: critical key"
+    assert rows['mysql_connections{db="a"}']["backtest"] == "skipped: dimensioned key"
+    assert {r["status"] for r in rows.values()} == {"not_backtested"}
+    assert asked == []
 
 
 @pytest.mark.parametrize("side", ["baseline", "current"])

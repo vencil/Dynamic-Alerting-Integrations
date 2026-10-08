@@ -672,7 +672,7 @@ da-tools backtest [--git-diff | --config-dir <dir> --baseline <dir>] [options]
 
 2. **目錄比對模式**：`--config-dir <dir> --baseline <dir>`
    （比對兩個配置版本）
-   兩棵樹都由 exporter 讀（`da-guard served-values`，需 da-guard；#2119），逐租戶、逐門檻 key 比 `/metrics` 實際送出的值：平台檔、`_defaults.yaml`、profile、子目錄裡的變更都算；租戶取自各檔的 `tenants:`，沒有 `tenants:` 的檔 exporter 不送、改它也不算。一邊沒送的 key 或租戶（關掉、新增、移除）那一邊記為無值。值比對整個 UTC 日：只在一天其他時段不同的 key，報那個時段的值並標出時段（`window`）。只改 severity 不算。
+   兩棵樹都由 exporter 讀（`da-guard served-values`，需 da-guard；#2119），逐租戶、逐門檻 key 比 `/metrics` 實際送出的值：平台檔、`_defaults.yaml`、profile、子目錄裡的變更都算；租戶取自各檔的 `tenants:`，沒有 `tenants:` 的檔 exporter 不送、改它也不算。一邊沒送的 key 或租戶（關掉、新增、移除）那一邊記為無值。值比對整個 UTC 日：整天都同樣不同的 key 報一列；否則每一段不同（同一組新舊值的連續時段）各報一列並標出時段（`window`，UTC，不跨午夜合併）。只改 severity 不算。帶維度的 key（`metric{db="a"}`）與 `_critical` key 照列，但不查 Prometheus，標為 `not_backtested`（`backtest: skipped: ...`）。
 
 **選項**
 
