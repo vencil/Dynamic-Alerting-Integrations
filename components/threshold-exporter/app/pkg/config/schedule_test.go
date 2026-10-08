@@ -154,19 +154,19 @@ func TestAtMinuteOfDay_ResolvesAsTheScheduleEveryMinute(t *testing.T) {
 	}
 	fixed := make([][]string, len(cuts))
 	for j, c := range cuts {
-		rows, _ := cfg.AtMinuteOfDay(c).resolveAtWithStats(scheduleDay, nil, nil)
+		rows, _ := cfg.AtMinuteOfDay(c).resolveAtWithStats(scheduleDay, nil, nil, nil)
 		fixed[j] = rowsText(rows)
 	}
 	for m := 0; m < MinutesPerDay; m++ {
 		at := scheduleDay.Add(time.Duration(m) * time.Minute)
-		rows, _ := cfg.resolveAtWithStats(at, nil, nil)
+		rows, _ := cfg.resolveAtWithStats(at, nil, nil, nil)
 		want := rowsText(rows)
 		j := sort.SearchInts(cuts, m+1) - 1
 		if !reflect.DeepEqual(fixed[j], want) {
 			t.Fatalf("minute %02d:%02d (cut %d): the fixed tree resolves\n%v\nthe tree resolves\n%v", m/60, m%60, cuts[j], fixed[j], want)
 		}
 		if got := rowsText(func() []ResolvedThreshold {
-			r, _ := cfg.AtMinuteOfDay(m).resolveAtWithStats(at, nil, nil)
+			r, _ := cfg.AtMinuteOfDay(m).resolveAtWithStats(at, nil, nil, nil)
 			return r
 		}()); m%37 == 0 && !reflect.DeepEqual(got, want) {
 			t.Fatalf("minute %02d:%02d: AtMinuteOfDay(m) resolves %v, want %v", m/60, m%60, got, want)

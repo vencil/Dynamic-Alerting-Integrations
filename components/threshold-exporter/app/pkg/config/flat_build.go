@@ -105,6 +105,21 @@ type FlatBuild struct {
 	// that reuses the carrier's prior partial leaves it nil; the exporter
 	// does not read it.
 	RootNullUndeclared map[string][]RootNullKey
+	// RootDefaultsUnread is, when the root carrier has no `defaults:`
+	// mapping, each of its top-level keys the root decode has no field for
+	// (RootDecodedKeys), sorted by key (#2296). The defaults-chain merge
+	// behind /effective reads the whole document then and shows them;
+	// /metrics does not carry them. nil when there is none, and when the
+	// root carrier failed to parse (it is in ParseFailed then).
+	//
+	// ⚠️ Filled only when this build decoded the root carrier's bytes, like
+	// RootNullUndeclared.
+	RootDefaultsUnread []UnreadKey
+	// RejectedChainValues is, per subtree defaults file (root-relative slash
+	// path), the keys whose value applySubtreeDefaults refused as not
+	// threshold-shaped for some tenant under it, so that tenant keeps a
+	// shallower level's value or none (#2296). nil when there is none.
+	RejectedChainValues map[string]map[string]bool
 }
 
 // BuildFlatConfig builds the merged ThresholdConfig from a scan: parse each
@@ -138,6 +153,7 @@ func BuildFlatConfig(scan *TreeScan, in FlatBuildInput) (FlatBuild, error) {
 	fileConfigs := make(map[string]ThresholdConfig, len(scan.Files))
 	var parseFailed []string
 	var rootNull []string // the root carrier's null `defaults:` keys (#2518)
+	var rootUnread []UnreadKey
 	for _, name := range scan.Keys {
 		if isUnselectedRootCarrier(name, rootCarrier) {
 			continue
@@ -215,6 +231,9 @@ func BuildFlatConfig(scan *TreeScan, in FlatBuildInput) (FlatBuild, error) {
 		}
 		if name == rootCarrier {
 			rootNull = rootNullDefaults(data)
+			for _, k := range rootDefaultsUnread(data, &partial) {
+				rootUnread = append(rootUnread, UnreadKey{File: name, Key: k})
+			}
 		}
 		applyBoundaryRules(name, &partial, logger)
 		fileConfigs[name] = partial
@@ -236,13 +255,15 @@ func BuildFlatConfig(scan *TreeScan, in FlatBuildInput) (FlatBuild, error) {
 	}
 	merged.applyProfiles(profileLogf)
 
-	n, unreachable, applied := applySubtreeDefaults(&merged, in.Root, in.TenantDefaults, in.ParsedDefaults)
+	n, unreachable, applied, rejected := applySubtreeDefaults(&merged, in.Root, in.TenantDefaults, in.ParsedDefaults)
 	return FlatBuild{
 		Config: merged, FileConfigs: fileConfigs, SubtreeFilled: n,
 		Unreachable: unreachableKeys(unreachable), UnreachableValues: unreachable,
 		SubtreeRefusedVerdicts: applied,
 		ParseFailed:            parseFailed,
 		RootNullUndeclared:     rootNullUndeclared(&merged, rootNull),
+		RootDefaultsUnread:     rootUnread,
+		RejectedChainValues:    rejected,
 	}, nil
 }
 

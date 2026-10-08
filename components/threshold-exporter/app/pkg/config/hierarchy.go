@@ -92,6 +92,19 @@ type EffectiveConfig struct {
 	ProfileOverlay  []ProfileOverlaySource `json:"profile_overlay,omitempty"`
 	EffectiveConfig map[string]any         `json:"effective_config"`
 	Warnings        []string               `json:"warnings,omitempty"`
+	// NotServed names each key of EffectiveConfig whose value, as shown,
+	// /metrics does not serve, with the reason the exporter's own build or
+	// resolver gives for it and the file of the value shown (#2296,
+	// not_served.go). EffectiveConfig keeps the value as written. Filled by
+	// ResolveEffective and EffectiveTree; nil from ScopeEffective, and
+	// omitted when no key is named.
+	NotServed map[string]NotServedKey `json:"not_served,omitempty"`
+	// ChainParseFailed is every file of DefaultsChain that does not parse
+	// and that /metrics therefore does not read at all (it is in the build's
+	// ParseFailed): the resolve reads it as an empty file, as the exporter
+	// does, instead of failing the tenant (#2296). Root-relative, chain
+	// order. Filled by ResolveEffective and EffectiveTree; omitted when none.
+	ChainParseFailed []string `json:"chain_parse_failed,omitempty"`
 
 	// TenantOverridesRaw is the tenant.yaml override block before any
 	// defaults-chain merge. Populated by ResolveEffective so the C-12
@@ -169,12 +182,26 @@ type EffectiveConfig struct {
 // every tenant file decoded in full — the unified parse that makes a tenant
 // the exporter rejects 404 here too. Reusing a prior scan across requests
 // would put this back on the mtime fast-path; that is #1977, not done here.
+//
+// NotServed / ChainParseFailed (#2296) come from the exporter's own build of
+// the same scan (loadDirBuild, its log discarded): a chain `_defaults.yaml`
+// the exporter drops for a syntax error is read as empty here too — the
+// tenant is answered, the file named in ChainParseFailed — where it used to
+// fail the request with a *DecodeError.
 func ResolveEffective(configDir, tenantID string) (*EffectiveConfig, error) {
 	scan, err := ScanDirTree(configDir, nil, nil, discardLogger)
 	if err != nil {
 		return nil, err
 	}
-	return newEffectiveResolver(scan).resolve(tenantID)
+	r := newEffectiveResolver(scan)
+	if _, lerr := scan.Locate(tenantID); lerr == nil {
+		built, berr := loadDirBuild(scan, scan.AbsRoot, discardLogger, discardLogger.Printf)
+		if berr != nil {
+			return nil, berr
+		}
+		r.served = newServedVerdicts(&built, false)
+	}
+	return r.resolve(tenantID)
 }
 
 // discardLogger silences the walker for the library readers. ⛔ Deliberate:
@@ -223,6 +250,12 @@ type effectiveResolver struct {
 	// resolver (keyed by absolute path), for the reported view
 	// (effectiveView, #2115) and the attribution.
 	chainBlocks map[string]map[string]any
+
+	// served is the exporter's build's not-served tables (#2296): with it,
+	// resolve fills NotServed and reads a chain file the build dropped for a
+	// syntax error as empty (ChainParseFailed). nil for ScopeEffective, whose
+	// gate keeps stopping on such a file (*DecodeError).
+	served *servedVerdicts
 }
 
 // newEffectiveResolver reads the chain rule off the scan — the SAME
@@ -315,6 +348,7 @@ func (r *effectiveResolver) resolve(tenantID string) (*EffectiveConfig, error) {
 	chain := r.chain(filepath.Dir(tenantFile))
 	defaultsYAML := make([][]byte, 0, len(chain))
 	rootLevel := -1 // #2419: the root's `_defaults.yaml`, by path (see applySubtreeDefaults)
+	var chainParseFailed []string
 	for i, p := range chain {
 		if filepath.Dir(filepath.Clean(p)) == r.scan.AbsRoot {
 			rootLevel = i
@@ -322,6 +356,14 @@ func (r *effectiveResolver) resolve(tenantID string) (*EffectiveConfig, error) {
 		b, berr := r.bytesOf(p)
 		if berr != nil {
 			return nil, fmt.Errorf("read defaults %q: %w", p, berr)
+		}
+		// #2296: a chain file /metrics does not read (the build dropped it)
+		// and the merge cannot parse is an empty file to this resolve, as
+		// to the exporter — not a failure of the tenant. Only a file the
+		// build dropped is parsed here, so a healthy chain is not.
+		if r.served != nil && r.served.chainFileUnread(r.rel(p)) && ParseChainDefaults(b).err != nil {
+			chainParseFailed = append(chainParseFailed, r.rel(p))
+			b = nil
 		}
 		defaultsYAML = append(defaultsYAML, b)
 	}
@@ -364,6 +406,7 @@ func (r *effectiveResolver) resolve(tenantID string) (*EffectiveConfig, error) {
 	view := effectiveView(blocks, parts.override)
 
 	ec := &EffectiveConfig{
+		ChainParseFailed:   chainParseFailed,
 		TenantID:           tenantID,
 		SourceFile:         r.rel(tenantFile),
 		SourceHash:         fmt.Sprintf("%x", sourceSum)[:16],
@@ -377,13 +420,22 @@ func (r *effectiveResolver) resolve(tenantID string) (*EffectiveConfig, error) {
 		MergedDefaults:     parts.mergedDefaults,
 		BoundProfile:       parts.profile,
 	}
-	if r.withSources {
+	var unparsed map[string]string
+	if r.served != nil {
+		unparsed = r.served.unparsedOf(tenantID)
+	}
+	if r.withSources || (r.served != nil && r.served.candidates(tenantID, relChain, unparsed)) {
 		ks, err := keySources(view, parts.tenantRaw, ec.SourceFile, relChain, blocks,
 			overlay, parts.platformSources, parts.profileSources)
 		if err != nil {
 			return nil, err
 		}
-		ec.KeySources = ks
+		if r.withSources {
+			ec.KeySources = ks
+		}
+		if r.served != nil {
+			ec.NotServed = r.served.notServed(tenantID, view, ks, rootLevel, unparsed)
+		}
 	}
 	return ec, nil
 }

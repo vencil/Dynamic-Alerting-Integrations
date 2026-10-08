@@ -13,6 +13,7 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
+	"reflect"
 	"runtime"
 	"strings"
 	"testing"
@@ -117,6 +118,47 @@ func TestScopeEffective_ResolveDecodeFailureIsADecodeError(t *testing.T) {
 				t.Errorf("error text changed: %v", err)
 			}
 		})
+	}
+}
+
+// #2296: the same two trees through EffectiveTree (the per-tenant /effective
+// answer). A chain file the exporter's build drops — the duplicate key makes
+// the nested carrier unparseable to it too — is read as empty: the tenant is
+// answered and the file named in ChainParseFailed. A tenant file the walker
+// accepted but the merge rejects still stops the call with a *DecodeError.
+func TestEffectiveTree_ResolveDecodeFailure(t *testing.T) {
+	tmp := t.TempDir()
+	testutil.WriteTree(t, tmp, map[string]string{
+		"conf.d/_defaults.yaml":     "defaults:\n  cpu: 70\n",
+		"conf.d/sub/_defaults.yaml": "defaults:\n  cpu: 1\n  cpu: 2\n",
+		"conf.d/sub/tenant-a.yaml":  "tenants:\n  tenant-a: {}\n",
+	})
+	got, err := EffectiveTree(filepath.Join(tmp, "conf.d"))
+	if err != nil {
+		t.Fatalf("EffectiveTree err = %v, want the tenant answered", err)
+	}
+	if len(got.Tenants) != 1 || got.Tenants[0].TenantID != "tenant-a" {
+		t.Fatalf("tenants = %v, want [tenant-a]", got.Tenants)
+	}
+	ec := got.Tenants[0]
+	if !reflect.DeepEqual(ec.ChainParseFailed, []string{"sub/_defaults.yaml"}) {
+		t.Errorf("ChainParseFailed = %v, want [sub/_defaults.yaml]", ec.ChainParseFailed)
+	}
+	if v := ec.EffectiveConfig["cpu"]; v != 70 {
+		t.Errorf("cpu = %v, want the root's 70 (the exporter serves the rest of the chain)", v)
+	}
+	if !reflect.DeepEqual(got.ParseFailed, []string{"sub/_defaults.yaml"}) {
+		t.Errorf("ParseFailed = %v, want [sub/_defaults.yaml]", got.ParseFailed)
+	}
+
+	tmp = t.TempDir()
+	testutil.WriteTree(t, tmp, map[string]string{
+		"conf.d/tenant-b.yaml": "extra:\n  k: 1\n  k: 2\ntenants:\n  tenant-b:\n    cpu: 80\n",
+	})
+	_, err = EffectiveTree(filepath.Join(tmp, "conf.d"))
+	var de *DecodeError
+	if !errors.As(err, &de) || de.Path != "tenant-b.yaml" {
+		t.Fatalf("err = %v, want a *DecodeError naming tenant-b.yaml", err)
 	}
 }
 

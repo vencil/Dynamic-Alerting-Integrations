@@ -109,6 +109,11 @@ type LoadReport struct {
 	// da_config_subtree_undeliverable_tenants; the key is in no tenant map of
 	// the config. nil when there is none (#1976).
 	Undeliverable map[string]map[string]ScheduledValue
+	// RootDefaultsUnread is the build's FlatBuild.RootDefaultsUnread: when
+	// the root `_defaults.yaml` has no `defaults:` mapping, its top-level
+	// keys the root decode has no field for, so /metrics does not carry
+	// them while /effective shows them (#2296). nil when there is none.
+	RootDefaultsUnread []UnreadKey
 }
 
 // LoadDirReport is LoadDir, also naming the files that contribute no tenant
@@ -162,6 +167,7 @@ func LoadDirReport(dir string, logger *log.Logger) (cfg *ThresholdConfig, rep Lo
 	rep.ParseFailed = built.ParseFailed
 	rep.Unreadable = scan.Unreadable
 	rep.Undeliverable = undeliverableThresholds(built.UnreachableValues)
+	rep.RootDefaultsUnread = built.RootDefaultsUnread
 	rep.NoTenant = noTenantKeys(scan)
 	return &built.Config, rep, nil
 }

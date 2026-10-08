@@ -111,6 +111,19 @@ func assertMatchesResolveEffective(t *testing.T, dir string, doc effectiveOut) {
 		}
 		delete(got, "profile")
 		delete(got, "key_sources")
+		// #2296: always present here, omitted from the /effective body when
+		// empty — so an empty one is dropped before the comparison, and a
+		// non-empty one must be the body's own.
+		for field, empty := range map[string]string{"not_served": "{}", "chain_parse_failed": "[]"} {
+			v, ok := got[field]
+			if !ok {
+				t.Errorf("tenant %q: %s missing — it is always present", id, field)
+				continue
+			}
+			if string(v) == empty {
+				delete(got, field)
+			}
+		}
 		gotBody, err := json.Marshal(got) // map keys sorted, like want's re-encode below
 		if err != nil {
 			t.Fatal(err)
@@ -317,9 +330,30 @@ func TestEffective_ChainFileTheResolveRejects_ExitsThree(t *testing.T) {
 	if !reflect.DeepEqual(doc.ParseFailed, []string{"sub/_defaults.yaml"}) {
 		t.Errorf("parse_failed = %v, want [sub/_defaults.yaml]", doc.ParseFailed)
 	}
-	if len(doc.Tenants) != 0 {
-		t.Errorf("tenants = %v, want none: the resolve stopped", keysOf(doc.Tenants))
+	// #2296: the exporter skips the file and serves tenant-a from the rest of
+	// its chain; so does effective, naming the file it read as empty.
+	var got struct {
+		EffectiveConfig  map[string]any `json:"effective_config"`
+		ChainParseFailed []string       `json:"chain_parse_failed"`
+		MergedHash       string         `json:"merged_hash"`
 	}
+	raw, ok := doc.Tenants["tenant-a"]
+	if !ok {
+		t.Fatalf("tenants = %v, want tenant-a: a chain file the exporter skips does not remove the tenant", keysOf(doc.Tenants))
+	}
+	if err := json.Unmarshal(raw, &got); err != nil {
+		t.Fatal(err)
+	}
+	if !reflect.DeepEqual(got.ChainParseFailed, []string{"sub/_defaults.yaml"}) {
+		t.Errorf("chain_parse_failed = %v, want [sub/_defaults.yaml]", got.ChainParseFailed)
+	}
+	if v := got.EffectiveConfig["mysql_connections"]; v != float64(70) {
+		t.Errorf("mysql_connections = %v, want 70", v)
+	}
+	if len(got.MergedHash) != 16 {
+		t.Errorf("merged_hash = %q, want 16 hex", got.MergedHash)
+	}
+	assertMatchesResolveEffective(t, dir, doc)
 }
 
 func TestEffective_CleanTree_ParseFailedIsEmptyList(t *testing.T) {
@@ -439,5 +473,63 @@ func TestEffective_NonFiniteSentAsText(t *testing.T) {
 	}
 	if got.EffectiveConfig["a"] != "Infinity" || got.EffectiveConfig["b"] != "NaN" {
 		t.Errorf("effective_config = %v, want a=Infinity b=NaN as text", got.EffectiveConfig)
+	}
+}
+
+// #2296: every tenant entry carries not_served ({} when none) and
+// chain_parse_failed ([] when none); a root `_defaults.yaml` with no
+// `defaults:` mapping names its unread key in both documents — effective's
+// not_served for the tenant, served-values' top-level unread_keys.
+func TestEffective_NotServedAndServedValuesUnreadKeys(t *testing.T) {
+	t.Parallel()
+	clean := writeParityTree(t, map[string]string{
+		"_defaults.yaml": "defaults:\n  pg_connections: 100\n",
+		"tx.yaml":        "tenants:\n  tx: {}\n",
+	})
+	code, stdout, stderr := runOnce(t, effectiveCmd, "--config-dir", clean)
+	mustOK(t, code, stderr)
+	for _, s := range []string{`"not_served": {}`, `"chain_parse_failed": []`} {
+		if !strings.Contains(stdout, s) {
+			t.Errorf("effective: %s must be present:\n%s", s, stdout)
+		}
+	}
+	code, stdout, stderr = runOnce(t, servedValuesCmd, "--config-dir", clean)
+	mustOK(t, code, stderr)
+	if !strings.Contains(stdout, `"unread_keys": []`) {
+		t.Errorf("served-values: unread_keys must be present as []:\n%s", stdout)
+	}
+
+	unwrapped := writeParityTree(t, map[string]string{
+		"_defaults.yaml": "pg_connections: 100\n",
+		"tx.yaml":        "tenants:\n  tx: {}\n",
+	})
+	code, doc, stderr := runEffectiveOn(t, unwrapped)
+	mustOK(t, code, stderr)
+	var tx struct {
+		EffectiveConfig map[string]any                 `json:"effective_config"`
+		NotServed       map[string]config.NotServedKey `json:"not_served"`
+	}
+	if err := json.Unmarshal(doc.Tenants["tx"], &tx); err != nil {
+		t.Fatal(err)
+	}
+	if tx.EffectiveConfig["pg_connections"] != float64(100) {
+		t.Errorf("effective_config = %v: the written value must stay", tx.EffectiveConfig)
+	}
+	want := map[string]config.NotServedKey{"pg_connections": {Reason: config.NotServedRootDefaultsUnwrapped, File: "_defaults.yaml"}}
+	if !reflect.DeepEqual(tx.NotServed, want) {
+		t.Errorf("not_served = %v, want %v", tx.NotServed, want)
+	}
+	assertMatchesResolveEffective(t, unwrapped, doc)
+
+	code, stdout, stderr = runOnce(t, servedValuesCmd, "--config-dir", unwrapped)
+	mustOK(t, code, stderr)
+	var sv struct {
+		UnreadKeys []unreadKey `json:"unread_keys"`
+	}
+	if err := json.Unmarshal([]byte(stdout), &sv); err != nil {
+		t.Fatal(err)
+	}
+	if wantU := []unreadKey{{File: "_defaults.yaml", Key: "pg_connections", Reason: "root_defaults_unwrapped"}}; !reflect.DeepEqual(sv.UnreadKeys, wantU) {
+		t.Errorf("unread_keys = %v, want %v", sv.UnreadKeys, wantU)
 	}
 }

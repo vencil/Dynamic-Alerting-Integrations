@@ -53,22 +53,13 @@ const FindingRootDefaultsUnwrapped FindingKind = "root_defaults_unwrapped"
 // root-relative path.
 const FindingDefaultsTopLevelIgnored FindingKind = "defaults_toplevel_ignored"
 
-// rootDecodedKeys are the top-level keys the exporter's root decode reads:
-// the yaml tags of config.ThresholdConfig, taken from the struct so this set
-// cannot drift from it. TestRootDecodedKeysMatchSchema pins them to the
-// non-`_` properties of platform-defaults.schema.json, which validate-config
-// reads for the same judgement.
-var rootDecodedKeys = func() map[string]bool {
-	out := map[string]bool{}
-	t := reflect.TypeOf(config.ThresholdConfig{})
-	for i := 0; i < t.NumField(); i++ {
-		name, _, _ := strings.Cut(t.Field(i).Tag.Get("yaml"), ",")
-		if name != "" && name != "-" {
-			out[name] = true
-		}
-	}
-	return out
-}()
+// rootDecodedKeys are the top-level keys the exporter's root decode reads
+// (config.RootDecodedKeys: the yaml tags of config.ThresholdConfig, the set
+// the build's own FlatBuild.RootDefaultsUnread is judged by, #2296).
+// TestRootDecodedKeysMatchSchema pins them to the non-`_` properties of
+// platform-defaults.schema.json, which validate-config reads for the same
+// judgement.
+var rootDecodedKeys = config.RootDecodedKeys()
 
 // TopLevelReadElsewhere are the `_`-prefixed keys another reader takes from
 // the top level of a defaults file: the route generator's

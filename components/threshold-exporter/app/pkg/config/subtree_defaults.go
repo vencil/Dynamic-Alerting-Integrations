@@ -71,9 +71,9 @@ func applySubtreeDefaults(
 	root string,
 	tenantDefaults map[string][]string,
 	parsed map[string]map[string]any,
-) (int, map[string]map[string]ScheduledValue, map[string]map[string]SubtreeRefusedVerdict) {
+) (int, map[string]map[string]ScheduledValue, map[string]map[string]SubtreeRefusedVerdict, map[string]map[string]bool) {
 	if cfg == nil || len(cfg.Tenants) == 0 || len(tenantDefaults) == 0 {
-		return 0, nil, nil
+		return 0, nil, nil, nil
 	}
 	// ⛔ ABSOLUTE, because the chain is. `scanDirTree` stores every defaults
 	// path under the absolutised, cleaned AND symlink-resolved root
@@ -108,6 +108,11 @@ func applySubtreeDefaults(
 	// with several levels, "move it" must say WHICH value) and whether the
 	// tenant sets the key itself.
 	var applied map[string]map[string]SubtreeRefusedVerdict
+	// ⛔ WHICH VALUES THIS OVERLAY REFUSED (#2296): defaults file (absolute)
+	// → the keys whose value is not threshold-shaped, recorded on the
+	// refusal branch below and nowhere else, so /effective can say why it
+	// shows a value /metrics does not serve (FlatBuild.RejectedChainValues).
+	var rejected map[string]map[string]bool
 
 	filled := 0
 	for tenantID, overrides := range cfg.Tenants {
@@ -157,6 +162,15 @@ func applySubtreeDefaults(
 				}
 				value, ok := scheduledValueFromRaw(raw)
 				if !ok || !isThresholdShaped(value) {
+					if raw != nil {
+						if rejected == nil {
+							rejected = map[string]map[string]bool{}
+						}
+						if rejected[defaultsPath] == nil {
+							rejected[defaultsPath] = map[string]bool{}
+						}
+						rejected[defaultsPath][key] = true
+					}
 					continue
 				}
 				// ⛔ A KEY NO EMITTER ITERATES IS NOT DELIVERED BY WRITING IT.
@@ -260,9 +274,9 @@ func applySubtreeDefaults(
 		}
 	}
 	if len(unreachable) == 0 {
-		return filled, nil, applied
+		return filled, nil, applied, relRejected(rootDir, rejected)
 	}
-	return filled, unreachable, applied
+	return filled, unreachable, applied, relRejected(rootDir, rejected)
 }
 
 // SubtreeRefusedVerdict is applySubtreeDefaults' own account of one key
