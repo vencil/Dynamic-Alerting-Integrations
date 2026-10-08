@@ -431,6 +431,11 @@ _SERVED_VALUES_ROWS = {"blind_spot_discovery", "policy_engine tenant",
                        "policy_opa_bridge --dry-run", "policy_opa_bridge _defaults",
                        "threshold_recommend", "maintenance_scheduler --dry-run"}
 assert _SERVED_VALUES_ROWS <= set(_ROW_IDS), _SERVED_VALUES_ROWS - set(_ROW_IDS)
+# Rows whose tool reads `_routing` through the route generator's own reader
+# (#2752, #2115 ruling (c)): the file is named and the rc is 2, but the words
+# are the generator's #1460 refusal (`tree_refusal`), not a Python cause class.
+_ROUTE_GENERATOR_ROWS = {"notification_tester --dry-run"}
+assert _ROUTE_GENERATOR_ROWS <= set(_ROW_IDS), _ROUTE_GENERATOR_ROWS - set(_ROW_IDS)
 
 def _expected_bad_rc(script: Path) -> int:
     """Derived from the tool's CLASS, not a per-label table (re-review).
@@ -455,6 +460,12 @@ def test_tool_names_the_unreadable_file_with_its_class_rc(fx, label, script, bad
         f"a lint finding from a crash.\nstderr={p.stderr[-500:]!r}")
     assert "Traceback" not in p.stderr, f"{label}: {p.stderr[-500:]!r}"
     assert named in p.stderr, f"{label}: stderr must name the file; got {p.stderr[-500:]!r}"
+    if label in _ROUTE_GENERATOR_ROWS:
+        # #2752: the route generator's own refusal of a tree with an
+        # unreadable file, carrying its decode reason.
+        assert "could not be read" in p.stderr, p.stderr[-500:]
+        assert "not valid UTF-8" in p.stderr, "the generator's parse reason must reach the operator"
+        return
     assert "cannot read" in p.stderr or "cannot compare" in p.stderr, p.stderr[-500:]
     if label in _SERVED_VALUES_ROWS:
         # #2115: the verdict is the exporter's (da-guard served-values
@@ -715,11 +726,15 @@ def test_scan_sees_the_known_population():
         "config_diff.py", "deprecate_rule.py", "generate_tenant_mapping_rules.py",
         "migrate_to_operator.py", "onboard_platform.py", "operator_generate.py",
         "policy_engine.py", "policy_opa_bridge.py", "validate_config.py",
-        "blind_spot_discovery.py", "notification_tester.py",
+        "blind_spot_discovery.py",
         "threshold_recommend.py",
         # maintenance_scheduler.py left in #2751: it reads the tree through
         # `da-guard effective`, no `_lib_python` load site remains.
     }
+    # ⛔ notification_tester.py left the population on purpose (#2752): it
+    # reads `_routing` through the route generator's `load_tenant_tree`,
+    # which records an unreadable file instead of raising — its refusal is
+    # pinned by the `_ROUTE_GENERATOR_ROWS` row above, not by this scan.
     assert expected <= found, sorted(expected - found)
 
 

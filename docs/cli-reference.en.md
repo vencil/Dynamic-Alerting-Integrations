@@ -2974,6 +2974,8 @@ da-tools threshold-govern --config-dir <PATH> --prometheus <URL> --apply \
 
 Multi-channel notification connectivity testing — verify reachability of all configured receivers and report status.
 
+The receivers tested are taken from each tenant's `_routing` as the route generator (`generate-routes`) resolves it — `_routing_defaults` (subdirectory levels included), routing profiles, the platform file's `tenants:` overlay and tenant files in subdirectories all count, matching the per-tenant receivers the generator renders; only per-tenant receivers are tested — the platform-enforced (`_routing_enforced`, NOC) receiver the generator also renders is not ([#2752](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/2752)). A tree the route generator refuses while reading it (an unreadable file, a tenant declared in two files, a routing-tree error, an invalid tenant id) has no receiver tested and exits 2. ⚠️ What the generator refuses only when it renders the receivers (for example, two receivers rendered with the same name) is not checked here and is tested as usual; to check whether the generator accepts the config, run `generate-routes --validate`.
+
 **Usage**
 
 ```bash
@@ -3018,7 +3020,7 @@ da-tools test-notification --config-dir conf.d/ --ci
 |------|-------------|
 | `0` | All receivers reachable (or non-CI mode) |
 | `1` | CI mode: one or more receivers unreachable (an invalid receiver config or URL counts too, even under `--dry-run`, which connects to nothing) |
-| `2` | Caller error: a file under `--config-dir` cannot be read (content not UTF-8 or not valid YAML; the message names the file, #1654) |
+| `2` | Caller error: a file under `--config-dir` cannot be read (content not UTF-8 or not valid YAML; the message names the file, #1654), or the route generator refuses the tree while reading it (stderr carries the generator's own refusal; `--json` prints `status: caller_error`, `reason: routing_tree_refused`, #2752) |
 
 #### explain-route
 
