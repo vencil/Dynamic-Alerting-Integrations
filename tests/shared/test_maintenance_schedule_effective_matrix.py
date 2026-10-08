@@ -62,6 +62,14 @@ SHAPES = [
         "tx.yaml": "tenants:\n  tx:\n    _state_maintenance:\n      recurring:\n"
                    "        - cron: \"0 2 * * *\"\n          duration: \"1h\"\n"
                    "          reason: patch\n        - cron: \"0 4 * * *\"\n"}),
+    # a root tenant file with no `tenants:`: main read its top-level
+    # `_state_maintenance` as tenant `tx`; the exporter reads no tenant from it
+    ("root-file-without-tenants", {"_defaults.yaml": _DEFAULTS, "tx.yaml": _MAINT}),
+    # a non-string duration (YAML int): skipped with the WARN, no traceback
+    ("duration-not-a-string", {
+        "_defaults.yaml": _DEFAULTS,
+        "tx.yaml": "tenants:\n  tx:\n    _state_maintenance:\n      recurring:\n"
+                   "        - cron: \"0 2 * * *\"\n          duration: 3600\n"}),
 ]
 
 
@@ -107,6 +115,8 @@ def test_matrix_is_not_vacuous(tmp_path: Path) -> None:
         assert got[name] == {"tx": [{"cron": "0 2 * * *", "duration": "1h",
                                      "reason": "Recurring maintenance"}]}, name
     assert got["defaults-top-level"] == {}
+    assert got["root-file-without-tenants"] == {}
+    assert got["duration-not-a-string"] == {}
     assert got["with-reason-and-invalid-entry"]["tx"][0]["reason"] == "patch"
 
 
@@ -144,4 +154,57 @@ def test_da_guard_failing_is_not_an_empty_schedule(tmp_path: Path, rc: int) -> N
     p = _run(conf_d, {"DA_GUARD_BINARY": str(fake)})
     assert p.returncode == 2, p.stderr
     assert "ERROR:" in p.stderr and "boom" in p.stderr, p.stderr
+    assert "No recurring maintenance schedules found" not in p.stderr
+
+
+def test_root_file_without_tenants_is_named(tmp_path: Path) -> None:
+    """#2751 behavior change: a root tenant file with a top-level
+    `_state_maintenance` and no `tenants:` yields no schedule (as the
+    exporter), and the file is named in a WARN rather than dropped silently."""
+    p = _run(_tree(tmp_path, dict(SHAPES)["root-file-without-tenants"]))
+    assert p.returncode == 0, p.stderr
+    warns = [ln for ln in p.stderr.splitlines() if "WARN" in ln and "tx.yaml" in ln]
+    assert warns, p.stderr
+    assert "threshold-exporter reads no tenant from it" in warns[0], warns
+
+
+def test_non_string_duration_is_skipped_with_a_warn(tmp_path: Path) -> None:
+    conf_d = _tree(tmp_path, dict(SHAPES)["duration-not-a-string"])
+    p = _run(conf_d)
+    assert p.returncode == 0, p.stderr
+    assert "Traceback" not in p.stderr, p.stderr
+    assert "WARN: tx: recurring entry missing cron/duration, skipping" in p.stderr, p.stderr
+    assert ms.load_recurring_schedules(conf_d) == {}
+
+
+def test_tenant_declared_twice_exits_2(tmp_path: Path) -> None:
+    """The exporter refuses a tenant id declared in two files; so does the
+    scheduler (main read one of them, rc 0)."""
+    conf_d = _tree(tmp_path, {"_defaults.yaml": _DEFAULTS, "a.yaml": _TENANT_MAINT,
+                              "b.yaml": _TENANT_MAINT})
+    p = _run(conf_d)
+    assert p.returncode == 2, p.stderr
+    assert "duplicate tenant ID" in p.stderr, p.stderr
+    assert "No recurring maintenance schedules found" not in p.stderr
+
+
+def test_parse_failure_survives_a_failing_served_values(tmp_path: Path) -> None:
+    """effective refuses a file (exit 3, parse_failed); the served-values
+    call made only for the parse reason fails on its own. The error reported
+    is effective's (the file named, rc 2), not served-values' failure."""
+    fake = tmp_path / "da-guard"
+    fake.write_text(
+        "#!/bin/sh\n"
+        "if [ \"$1\" = effective ]; then\n"
+        "  printf '%s' '{\"schema\": \"da-guard.effective/v1\", \"parse_failed\": [\"tx.yaml\"],"
+        " \"unreadable\": [], \"skipped\": [], \"tenants\": {}}'\n"
+        "  exit 3\n"
+        "fi\n"
+        "echo 'served-values-boom' >&2\nexit 2\n", encoding="utf-8")
+    fake.chmod(0o755)
+    conf_d = _tree(tmp_path, dict(SHAPES)["tenant-file-CONTROL"])
+    p = _run(conf_d, {"DA_GUARD_BINARY": str(fake)})
+    assert p.returncode == 2, p.stderr
+    assert "ERROR: cannot read" in p.stderr and "tx.yaml" in p.stderr, p.stderr
+    assert "served-values-boom" not in p.stderr, p.stderr
     assert "No recurring maintenance schedules found" not in p.stderr
