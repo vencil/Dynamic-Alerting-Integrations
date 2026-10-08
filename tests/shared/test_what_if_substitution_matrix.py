@@ -15,7 +15,8 @@ oracle 是 Go：`da-guard effective` 對「替換後的樹」求出的 merged_ha
 不 reload，是套套邏輯，什麼都抓不到；它已換成「副本未改 → 不 reload／副本改值 → reload」
 兩向都有的格子。現在沒帶 `--replaces` 卻指向樹內既有檔 → rc 2。
 同檔判斷以 inode 為準（`os.path.samefile`）：hard link 解析後路徑不同、卻是同一個檔
-（盲審第 2 輪 D）。`--replaces` 沒帶 `--what-if` 在任何模式（含 `--diff` / `--all`）都是 rc 2（E）。
+（盲審第 2 輪 D）。`--replaces` 沒帶 `--what-if` 在任何模式（含 `--diff` / `--all`）都是 rc 2（E）；
+`--what-if`（不論帶不帶 `--replaces`）搭 `--all` / `--diff` 也是 rc 2（#2739）。
 
 樹外的檔（`append-external`）與樹內不存在於 listing 的路徑（`insert`）維持原行為，各有一格
 對照組。
@@ -267,6 +268,45 @@ def test_empty_what_if_is_refused_not_taken_as_absent(tmp_path, extra):
     assert p.stdout == "", p.stdout
     assert "--what-if needs a path (got an empty string)" in p.stderr, p.stderr
     assert "--replaces requires --what-if" not in p.stderr, p.stderr
+
+
+@pytest.mark.parametrize("mode", [["--all"], ["--diff", "t2"]], ids=["all", "diff"])
+@pytest.mark.parametrize("extra", [[], ["--replaces", "TARGET"]], ids=["alone", "with-replaces"])
+def test_what_if_is_refused_with_all_or_diff(tmp_path, mode, extra):
+    """#2739：`--all` / `--diff` 分支先於 `--what-if`，修正前 rc 0、輸出與沒帶 `--what-if` 相同，
+    模擬沒執行卻看不出來（`--replaces` 一起被吞）。現在 rc 2，訊息點名兩邊的旗標。"""
+    conf_d = _tree(tmp_path, True)
+    copy = tmp_path / "copy.yaml"
+    copy.write_text("defaults:\n  pg_connections: 41\n", encoding="utf-8")
+    target = conf_d / "sub" / "_defaults.yaml"
+    args = [str(target) if a == "TARGET" else a for a in extra]
+    tid = [] if mode == ["--all"] else ["t1"]
+    p = subprocess.run(
+        [sys.executable, str(DESCRIBE), *tid, "--conf-d", str(conf_d), *mode,
+         "--what-if", str(copy), *args],
+        capture_output=True, text=True, encoding="utf-8", errors="replace", timeout=120)
+    assert p.returncode == 2, (p.returncode, p.stdout, p.stderr)
+    assert p.stdout == "", p.stdout
+    err = [l for l in p.stderr.splitlines() if "error:" in l]
+    assert len(err) == 1 and "cannot be used together with " + mode[0] in err[0], p.stderr
+    assert err[0].split("error: ", 1)[1].startswith(
+        "--what-if / --replaces " if extra else "--what-if cannot"), err
+
+
+@pytest.mark.parametrize("body", ["[a]", "a", "7"], ids=["list", "str", "int"])
+def test_own_tenant_file_with_a_non_mapping_body_is_refused(tmp_path, body):
+    """#2739 留言 A：`--replaces` 自己的租戶檔、副本裡租戶 body 不是 mapping——修正前 body 原樣
+    進 deep_merge，rc 1 + AttributeError traceback。現在與頂層 `- a` 一樣具名拒收 rc 2、點名副本。"""
+    conf_d = _tree(tmp_path, False)
+    target = conf_d / "sub" / "t1.yaml"
+    copy = tmp_path / "t1.yaml"
+    copy.write_text(f"tenants:\n  t1: {body}\n", encoding="utf-8")
+    p = _cli(conf_d, copy, "--replaces", str(target))
+    assert p.returncode == 2, (p.returncode, p.stdout, p.stderr)
+    assert p.stdout == "", p.stdout
+    assert "Traceback" not in p.stderr, p.stderr
+    assert f"--what-if file {copy.resolve()} has an unsupported shape" in p.stderr, p.stderr
+    assert "tenant 't1'" in p.stderr and "not a mapping" in p.stderr, p.stderr
 
 
 def test_cli_outside_the_tree_still_appends(tmp_path):
