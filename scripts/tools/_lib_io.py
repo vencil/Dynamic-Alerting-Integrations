@@ -570,12 +570,15 @@ class MisreadScalar:
     gave it (``bool``, ``int``, ``float``, ``null`` …).
     """
 
-    __slots__ = ("line", "column", "path", "text", "resolved")
+    __slots__ = ("line", "column", "path", "text", "resolved", "explicit")
 
     def __init__(self, line: int, column: int, path: str, text: str,
-                 resolved: str) -> None:
+                 resolved: str, explicit: bool = False) -> None:
         self.line, self.column = line, column
         self.path, self.text, self.resolved = path, text, resolved
+        #: written with an explicit tag (`!!bool yes`): quoting alone keeps it
+        #: a boolean, so the remedy names the tag too (#2509 blind review 5).
+        self.explicit = explicit
 
     def message(self) -> str:
         field = self.path.rsplit("/", 1)[-1]
@@ -588,6 +591,10 @@ class MisreadScalar:
             return (f"{self.path}: {self.text or '(empty)'!s} is YAML null — "
                     f"no value — but the schema requires a string for this "
                     f"field: write the value, quoted, or remove the key")
+        if self.explicit:
+            return (f"{self.path}: explicit `!!{self.resolved} {self.text}` is a "
+                    f"YAML {self.resolved}, not the string the schema requires for "
+                    f"this field — remove the tag and quote it: {written}")
         return (f"{self.path}: unquoted {self.text!r} is read by PyYAML as "
                 f"YAML {self.resolved}, not as the string the schema requires "
                 f"for this field (the Go readers and Alertmanager can read "
@@ -745,7 +752,8 @@ def find_misread_scalars(root: Optional["yaml.Node"], schema: dict,
             continue
         found.append(MisreadScalar(
             node.start_mark.line + 1, node.start_mark.column + 1,
-            path or "/", node.value, node.tag.rsplit(":", 1)[-1]))
+            path or "/", node.value, node.tag.rsplit(":", 1)[-1],
+            bool(getattr(node, "go_explicit_tag", False))))
     found.sort(key=lambda m: (m.line, m.column))
     return found
 
@@ -833,7 +841,8 @@ class GoRejectedBoolTag:
         `validate_config` already reports with the exporter's reason."""
         return (f"{self.path}: explicit `!!bool {self.text}` — yaml.v3 (the exporter's "
                 f"YAML library) does not accept it (only true / True / TRUE / false / "
-                f"False / FALSE under `!!bool`); write true or false without the tag. "
+                f"False / FALSE under `!!bool`); remove the tag and write the value this "
+                f"field takes (true / false for a boolean, a quoted string for a string). "
                 f"Whether the exporter can still read this file is decided by da-guard — "
                 f"see validate-config's `profiles` row for this tree (`--config-dir`)")
 

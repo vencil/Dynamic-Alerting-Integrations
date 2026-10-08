@@ -163,9 +163,9 @@ def test_both_lint_paths_warn_naming_file_and_field(tmp_path, field, word):
     row = vc.check_yaml_quoting(str(conf_d))
     assert row["status"] == vc.WARN, row
     assert row["details"] == warns, row
-    # 盲審第 4 輪 R4-3：沒有明確 tag 時用通用 hint，且它要給得出「改寫成 true / false」。
+    # 盲審第 5 輪：row 的 hint 只指回各行，補救方式寫在每一行自己身上。
     assert row["hint"] is None, row
-    assert "write it as true / false" in vc._CHECK_HINTS["yaml_quoting"][0]
+    assert "as its own line says" in vc._CHECK_HINTS["yaml_quoting"][0]
 
 
 @pytest.mark.parametrize("field", sorted(FIELDS))
@@ -297,30 +297,47 @@ def test_explicit_bool_tag_yaml_v3_refuses_is_a_neutral_warn(tmp_path, field, wo
         assert claim not in w, (claim, w)
     row = vc.check_yaml_quoting(str(conf_d))
     assert row["status"] == vc.WARN and row["details"] == [w], row
-    # 盲審第 4 輪 R4-3：hint 不得叫人加引號（`!!bool 'yes'` 一樣被拒），要叫人拿掉 tag。
-    assert "remove the tag" in row["hint"] and "Quote" not in row["hint"], row
+    # 盲審第 5 輪 R5-1／R5-4：補救寫在這一行自己身上（拿掉 tag、不叫人只加引號），
+    # 並指向 validate-config 的 `profiles` 列；row 沒有另一套依種類變化的 hint。
+    assert "remove the tag" in w and "quote it" not in w, w
+    assert "`profiles` row" in w, w
+    assert row["hint"] is None, row
 
 
-_SLACK_YES = ("    _routing:\n      receiver:\n        type: slack\n"
-              "        api_url: \"https://hooks.slack.com/services/x\"\n        channel: yes\n")
+_SLACK_TAGGED = ("    _routing:\n      receiver:\n        type: slack\n"
+                 "        api_url: \"https://hooks.slack.com/services/x\"\n"
+                 "        channel: !!bool yes\n")
 
 
-@pytest.mark.parametrize("other, status", [(_WEBHOOK.format(v="on"), vc.WARN),
-                                           (_SLACK_YES, vc.FAIL)],
-                         ids=["bool-word-warn", "string-field-error"])
-def test_yaml_quoting_hint_names_both_remedies_when_both_kinds_are_listed(tmp_path, other, status):
-    """盲審第 4 輪 R4-3：未加引號的字眼（WARN 或 #2164 的 ERROR）與明確 `!!bool` 同列時，
-    hint 兩種建議都給。"""
+def test_string_field_with_explicit_bool_tag_lines_agree(tmp_path):
+    """盲審第 5 輪 R5-1：字串欄位寫 `channel: !!bool yes`，ERROR 與 WARN 兩行的建議不得互相矛盾——
+    兩行都叫人拿掉 tag，沒有一行只叫人加引號，也沒有一行叫人改寫成 true / false。"""
     conf_d = tmp_path / "conf.d"
     conf_d.mkdir()
     (conf_d / "_defaults.yaml").write_text(_DEFAULTS, encoding="utf-8")
-    (conf_d / "t1.yaml").write_text(
-        "tenants:\n  t1:\n" + other
-        + "    _state_maintenance:\n      enabled: !!bool yes\n", encoding="utf-8")
+    (conf_d / "t1.yaml").write_text("tenants:\n  t1:\n" + _SLACK_TAGGED, encoding="utf-8")
     row = vc.check_yaml_quoting(str(conf_d))
-    assert row["status"] == status and len(row["details"]) == 2, row
-    assert row["hint"].startswith(vc._CHECK_HINTS["yaml_quoting"][0]), row
-    assert "remove the tag" in row["hint"], row
+    assert row["status"] == vc.FAIL and len(row["details"]) == 2, row
+    err, warn = row["details"]
+    assert "explicit `!!bool yes`" in err and "unquoted" not in err, err
+    assert 'remove the tag and quote it: channel: "yes"' in err, err
+    assert warn.startswith("WARN: ") and "remove the tag" in warn, warn
+    assert "a quoted string for a string" in warn, warn
+    assert row["hint"] is None, row
+
+
+def test_explicit_bool_tags_in_two_files_each_listed(tmp_path):
+    """盲審第 5 輪 R5-2：兩份檔各一個明確 `!!bool`，兩行都列出（不只最後一份）。"""
+    conf_d = tmp_path / "conf.d"
+    conf_d.mkdir()
+    (conf_d / "_defaults.yaml").write_text(_DEFAULTS, encoding="utf-8")
+    for t in ("t1", "t2"):
+        (conf_d / f"{t}.yaml").write_text(
+            f"tenants:\n  {t}:\n    _state_maintenance:\n      enabled: !!bool yes\n",
+            encoding="utf-8")
+    row = vc.check_yaml_quoting(str(conf_d))
+    assert row["status"] == vc.WARN, row
+    assert [d.split(":", 2)[1].strip() for d in row["details"]] == ["t1.yaml", "t2.yaml"], row
 
 
 @pytest.mark.parametrize("word", ["!!bool true", "!!bool True", "!!bool FALSE"])

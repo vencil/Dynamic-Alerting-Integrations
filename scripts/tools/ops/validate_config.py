@@ -632,7 +632,7 @@ def check_yaml_quoting(config_dir: str) -> dict[str, object]:
             schemas[name] = json.load(fh)
     errors: list[str] = []
     warnings: list[str] = []
-    checked = tagged = 0
+    checked = 0
     for fpath in iter_config_files(config_dir):
         name = fpath.name
         if is_defaults_document_name(name):
@@ -665,22 +665,14 @@ def check_yaml_quoting(config_dir: str) -> dict[str, object]:
                 for word in find_yaml11_bool_words(root, schemas[name_], schemas, name_):
                     warnings.append(f"WARN: {label}:{word.line}: {word.message()}")
         # Same order as check_confd_schema: after the per-document findings.
-        tags = [f"WARN: {label}:{tag.line}: {tag.message()}"
-                for root in roots for tag in find_go_rejected_bool_tags(root)]
-        tagged += len(tags)
-        warnings.extend(tags)
-    # #2509 blind review 4: "quote it" is wrong advice for an explicit `!!bool`
-    # (`!!bool 'yes'` is refused the same way), so name its own remedy, and keep
-    # the generic one only when something else is listed too.
-    hint = None
-    if tagged:
-        hint = _BOOL_TAG_HINT
-        if errors or len(warnings) > tagged:
-            hint = f"{_CHECK_HINTS['yaml_quoting'][0]} {hint}"
+        warnings.extend(f"WARN: {label}:{tag.line}: {tag.message()}"
+                        for root in roots for tag in find_go_rejected_bool_tags(root))
+    # #2509 blind review 5: each line carries its own remedy; the row's hint
+    # only points back at them (a per-kind hint contradicted the lines).
     if errors:
-        return _make_result("yaml_quoting", FAIL, errors + warnings, hint=hint)
+        return _make_result("yaml_quoting", FAIL, errors + warnings)
     if warnings:
-        return _make_result("yaml_quoting", WARN, warnings, hint=hint)
+        return _make_result("yaml_quoting", WARN, warnings)
     return _make_result(
         "yaml_quoting", PASS,
         [f"{checked} files checked: no unquoted value in a string field "
@@ -2080,12 +2072,6 @@ def _docs_url(rel_path: str) -> str:
     return f"{base}{sep}{anchor}" if sep else base
 
 
-#: `yaml_quoting`'s remedy for an explicit `!!bool` the exporter's YAML
-#: library refuses (#2509): quoting does not fix it, dropping the tag does.
-_BOOL_TAG_HINT = (
-    "For each explicit `!!bool` listed above, remove the tag and write true or "
-    "false — quoting the value does not help (`!!bool 'yes'` is refused too).")
-
 # v2.5.0 Phase C: Suggested actions for each check type.
 # Maps check name → (hint_message, docs_link).
 # ⛔ The link is stored as a repo-relative path and rendered through
@@ -2103,8 +2089,7 @@ _CHECK_HINTS: dict[str, tuple[str, str]] = {
         "docs/getting-started/for-platform-engineers.md",
     ),
     "yaml_quoting": (
-        "Quote each value listed above, or write it as true / false, as its "
-        "line says. A plain yes / no / on / "
+        "Fix each value listed above as its own line says. A plain yes / no / on / "
         "off / true / 123 in a field the schema types as a string is read "
         "as a boolean or number by PyYAML but as text by the exporter and "
         "Alertmanager, so the tools disagree about your config.",

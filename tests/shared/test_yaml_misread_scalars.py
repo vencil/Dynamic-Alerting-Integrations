@@ -105,6 +105,17 @@ def test_enum_and_sequence_items_are_string_fields(schemas):
     assert 'quote it: - "on"' in seq.message()
 
 
+
+def test_explicit_tag_names_the_tag_not_quoting_alone(schemas):
+    """#2509 盲審第 5 輪：`channel: !!bool yes` 只加引號仍是布林，建議要先拿掉 tag。"""
+    text = ("tenants:\n  t1:\n    _routing:\n      receiver:\n        type: slack\n"
+            "        channel: !!bool yes\n")
+    (hit,) = _hits(text, schemas)
+    assert hit.explicit, hit
+    msg = hit.message()
+    assert "explicit `!!bool yes`" in msg and "unquoted" not in msg, msg
+    assert 'remove the tag and quote it: channel: "yes"' in msg, msg
+
 def test_defaults_routing_blocks_follow_the_cross_file_ref(schemas):
     """`_routing_defaults` / `_routing_enforced` in `_defaults.yaml` are typed
     by `$ref` into tenant-config.schema.json (#2164)."""
