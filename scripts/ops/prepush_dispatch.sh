@@ -11,6 +11,34 @@
 
 set -uo pipefail
 
+# The hooks directories whose dispatcher is already running further up this
+# push, one per line; set only on the chained hook's environment (see the
+# bottom of this file). Finding our own there means a push started under
+# pre-push.chained came back into this repository: left alone that recursion
+# never returns (#2728). Other repositories' hooks on the list are no concern
+# of ours, so a chained hook may push somewhere else.
+_hooks_dir="$(git rev-parse --git-path hooks 2>/dev/null)"
+_own_hooks="$(cd "$_hooks_dir" 2>/dev/null && pwd -P)"
+_nl=$'\n'
+if [ -n "$_own_hooks" ]; then
+    case "$_nl${VIBE_PREPUSH_DISPATCHING:-}$_nl" in
+        *"$_nl$_own_hooks$_nl"*)
+            cat >&2 <<REENTERED
+
+[prepush_dispatch] ⛔ pre-push.chained started a push back into this repository,
+which runs these hooks again inside themselves. Stopping here.
+
+pre-push.chained (in the directory \`git rev-parse --git-path hooks\` prints) is
+meant to hold someone else's hook, such as git-lfs's. If it is a copy of the
+guard shim, delete it. If it is a hook of yours, it must not push into this
+repository.
+
+REENTERED
+            exit 1
+            ;;
+    esac
+fi
+
 _dispatch_dir="${BASH_SOURCE[0]%/*}"
 [ "$_dispatch_dir" = "${BASH_SOURCE[0]}" ] && _dispatch_dir="."
 
@@ -104,9 +132,9 @@ done
 # ⛔ Invoke the chained hook DIRECTLY — never `bash "$hook"`. It is not
 # necessarily a shell script, and bash ignores its shebang: measured, a python
 # hook gives `import: command not found`, rc=2.
-_hooks_dir="$(git rev-parse --git-path hooks 2>/dev/null)"
 if [ -n "${_hooks_dir:-}" ] && [ -x "$_hooks_dir/$_CHAINED_NAME" ]; then
-    "$_hooks_dir/$_CHAINED_NAME" "$@" < <(_feed)
+    VIBE_PREPUSH_DISPATCHING="${VIBE_PREPUSH_DISPATCHING:+$VIBE_PREPUSH_DISPATCHING$_nl}$_own_hooks" \
+        "$_hooks_dir/$_CHAINED_NAME" "$@" < <(_feed)
     _chained_rc=$?
     if [ "$_chained_rc" -ne 0 ]; then
         _rc="$_chained_rc"
