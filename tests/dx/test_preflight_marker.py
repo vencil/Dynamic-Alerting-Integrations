@@ -20,6 +20,7 @@ from pathlib import Path
 
 import pytest
 
+from _platform_fs import symlink_or_skip  # noqa: E402
 from _preflight_checks import stub_checks
 
 _REPO_ROOT = Path(__file__).resolve().parents[2]
@@ -189,7 +190,7 @@ class TestPrepushWiring:
             assert self._precommit_install(tmp_path, *force, "--hook-type", "pre-push") == 0
         wired, why = mod._prepush_guards_wired()
         assert wired is False, why
-        assert "pre-commit 的樣板" in why, why
+        assert "重跑 install_prepush_hook.sh" in why, why
 
         r = self._install_guards(tmp_path)
         assert r.returncode == 0, f"{r.stdout}{r.stderr}"
@@ -245,9 +246,12 @@ class TestPrepushWiring:
         hook.write_text("#!/bin/sh\nexit 0\n", encoding="utf-8", newline="\n")
         wired, why = mod._prepush_guards_wired()
         assert wired is False
-        assert "chained" in why, (
-            f"the message must say what the installer will do with it: {why!r}"
-        )
+        # The message names the remedy, not what the installer will do with the
+        # hook: that depends on state only the installer judges (#2697).
+        assert "重跑 install_prepush_hook.sh" in why, why
+        assert self._install_guards(tmp_path).returncode == 0
+        wired, why = mod._prepush_guards_wired()
+        assert wired is True, f"following the message's remedy did not fix it: {why!r}"
 
     @pytest.mark.skipif(
         sys.platform == "win32",
@@ -278,6 +282,36 @@ class TestPrepushWiring:
         assert wired is False, "a non-executable shim was reported as wired"
         assert "執行位元" in why, why
 
+        assert self._install_guards(tmp_path).returncode == 0
+        wired, why = mod._prepush_guards_wired()
+        assert wired is True, f"following the message's remedy did not fix it: {why!r}"
+
+    @pytest.mark.parametrize("shape", ["directory", "dangling-symlink"])
+    def test_a_pre_push_that_is_not_a_regular_file_is_not_called_missing(
+        self, tmp_path, monkeypatch, shape
+    ):
+        """#2697: `is_file()` is False for a directory and for a symlink to
+        nothing, and both used to be reported as "does not exist — never
+        installed". The installer cannot fix either from there: it chains a
+        directory (after which every push fails) and dies on a dangling link,
+        so the message has to say what is there. The second half follows its
+        remedy once."""
+        mod = _load()
+        self._repo(tmp_path)
+        monkeypatch.chdir(tmp_path)
+        hook = tmp_path / ".git" / "hooks" / "pre-push"
+        hook.parent.mkdir(parents=True, exist_ok=True)
+        if shape == "directory":
+            hook.mkdir()
+        else:
+            symlink_or_skip(tmp_path / "no-such-hook", hook)
+
+        wired, why = mod._prepush_guards_wired()
+        assert wired is False, why
+        assert "不是一般檔案" in why, why
+
+        moved = tmp_path / "moved-aside"
+        hook.rename(moved)
         assert self._install_guards(tmp_path).returncode == 0
         wired, why = mod._prepush_guards_wired()
         assert wired is True, f"following the message's remedy did not fix it: {why!r}"
