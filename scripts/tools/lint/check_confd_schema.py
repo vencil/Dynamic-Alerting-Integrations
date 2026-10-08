@@ -64,9 +64,11 @@ sys.path.insert(0, os.path.join(_THIS_DIR, ".."))
 from _lib_exitcodes import EXIT_OK, EXIT_VIOLATION, EXIT_CALLER_ERROR  # noqa: E402
 from _lib_io import safe_label  # noqa: E402  (#1538 output-layer escaping)
 from _lib_io import strict_safe_load_all  # noqa: E402  (#2123 duplicate key = YAML error)
+from _lib_io import StrictExporterKeyLoader  # noqa: E402  (#2695 keys as the exporter reads them)
 from _lib_io import (  # noqa: E402  (#2164, #2509)
     compose_all_nodes, find_go_rejected_bool_tags, find_misread_scalars,
     find_yaml11_bool_words)
+from _lib_io import misread_scalar_nodes  # noqa: E402  (#2695)
 from _lib_confd import (  # noqa: E402  (#1588 shared name predicates)
     has_yaml_extension,
     is_defaults_document_name,
@@ -336,10 +338,47 @@ def yaml11_bool_word_warnings(rel: str, roots: list, schema: dict,
             for hit in find_yaml11_bool_words(root, schema, schemas, schema_name)]
 
 
+def _load_all_reading_misread_as_quoted(text: str,
+                                        quoting: list[tuple[dict, str]],
+                                        schemas: dict) -> list:
+    """Every document of *text*, built by the same `StrictExporterKeyLoader`
+    as the plain read, except that each scalar `find_misread_scalars` names
+    is read as the string it would be QUOTED (#2695) — what a user who took
+    `yaml_quoting`'s advice would have written. The schema then judges that
+    document by the usual steps; no error is filtered afterwards.
+
+    *quoting*: the (schema, schema name) pairs the #2164 judgement applies
+    to this file — the same list `validate_dir` reports misread scalars for
+    (#2509 review F3 adds the tenant schema for a root `_defaults*` file),
+    so exactly the values `yaml_quoting` names are the ones read as quoted.
+
+    ⛔ Done on the node tree, before anything is constructed, and by node
+    identity (`misread_scalar_nodes`): not by filtering jsonschema's errors
+    by path. That was tried and failed (#2695 round 2) — `best_match`
+    descends into `oneOf` context and can surface the misread value over a
+    real violation, and a path prefix of `/x` swallows the key `x/y`. An
+    aliased scalar is one node, so one re-tag covers every use of it.
+    """
+    loader = StrictExporterKeyLoader(io.StringIO(text))
+    docs = []
+    try:
+        while loader.check_node():
+            root = loader.get_node()
+            for q_schema, q_name in quoting:
+                for node in misread_scalar_nodes(root, q_schema, schemas, q_name):
+                    node.tag = yaml.resolver.BaseResolver.DEFAULT_SCALAR_TAG
+            docs.append(loader.construct_document(root))
+    finally:
+        loader.dispose()
+    return docs
+
+
 def validate_dir(config_dir: str, schema: dict, validator,
                  platform_schema: dict | None = None,
                  profiles_schema: dict | None = None,
-                 warnings: list[str] | None = None) -> tuple[int, list[str], list[str]]:
+                 warnings: list[str] | None = None, *,
+                 quoting_reported_for: frozenset[str] | None = None,
+                 ) -> tuple[int, list[str], list[str]]:
     """Return (checked_count, violation_messages, skipped_relpaths).
 
     `warnings`, when given, collects the `WARN:` lines (#2509: a YAML 1.1
@@ -354,6 +393,15 @@ def validate_dir(config_dir: str, schema: dict, validator,
     validate against `platform_schema` (top-level-key guard, #658 fast-follow)
     when provided; `_routing_profiles.y(a)ml` against `profiles_schema` when
     provided (#2245); all other `_*` meta-files are skipped (own validators).
+
+    `quoting_reported_for` (#2695): relative paths (as the messages spell
+    them) whose misread scalars the CALLER reports in its own row —
+    `validate-config`'s `yaml_quoting`. Those files get no #2164 quoting
+    line here, and are validated as if each misread scalar had been quoted
+    (`_load_all_reading_misread_as_quoted`), so the value is not reported a
+    second time as a type error — while a value that is wrong even quoted
+    (`group_wait: 30` → `"30"`, no unit) still is. Every other file is
+    judged as without it; `None` (this lint's own run) changes nothing.
     """
     violations: list[str] = []
     skipped: list[str] = []
@@ -374,12 +422,37 @@ def validate_dir(config_dir: str, schema: dict, validator,
         if basename.startswith("_") and not is_defaults and not is_profiles:
             skipped.append(rel)
             continue
+        if is_profiles:
+            file_schema, file_schema_name = profiles_schema, PROFILES_SCHEMA_NAME
+        elif is_defaults:
+            file_schema, file_schema_name = platform_schema, PLATFORM_SCHEMA_NAME
+        else:
+            file_schema, file_schema_name = schema, TENANT_SCHEMA_NAME
+        # #2509 review F3: a ROOT `_defaults*` file's `tenants:` block is a
+        # tenant's values to the exporter (platform overlay) — the platform
+        # schema leaves it loose, so it is held to the tenant schema too
+        # (whose only top-level key is `tenants`: nothing else is walked twice).
+        quoting = [(file_schema, file_schema_name)]
+        if is_defaults and "/" not in rel:
+            quoting.append((schema, TENANT_SCHEMA_NAME))
+        as_quoted = (quoting_reported_for is not None
+                     and rel in quoting_reported_for)
         try:
             with open(path, encoding="utf-8") as fh:
                 text = fh.read()
             roots = list(compose_all_nodes(io.StringIO(text)))
             try:
-                docs = list(strict_safe_load_all(io.StringIO(text)))
+                # #2695: keys as the exporter reads them — raw text, a null
+                # key (`~:`) dropped at every level. JSON Schema judges string
+                # keys only: with PyYAML's `None` / int keys
+                # `patternProperties` raised TypeError, and the whole run died
+                # with a traceback.
+                if as_quoted:
+                    docs = _load_all_reading_misread_as_quoted(
+                        text, quoting, schemas)
+                else:
+                    docs = list(strict_safe_load_all(
+                        io.StringIO(text), loader=StrictExporterKeyLoader))
                 construct_error = None
             except (KeyError, ValueError) as exc:
                 # #2509 blind review 2 (C): an explicit tag PyYAML cannot
@@ -397,21 +470,10 @@ def validate_dir(config_dir: str, schema: dict, validator,
         # #2164: quoting, judged on the node tree (the only place a plain
         # `yes` and a quoted "yes" still differ). Tenant files AND
         # `_defaults*` — the latter is where `_routing_defaults` lives.
-        if is_profiles:
-            file_schema, file_schema_name = profiles_schema, PROFILES_SCHEMA_NAME
-        elif is_defaults:
-            file_schema, file_schema_name = platform_schema, PLATFORM_SCHEMA_NAME
-        else:
-            file_schema, file_schema_name = schema, TENANT_SCHEMA_NAME
-        # #2509 review F3: a ROOT `_defaults*` file's `tenants:` block is a
-        # tenant's values to the exporter (platform overlay) — the platform
-        # schema leaves it loose, so it is held to the tenant schema too
-        # (whose only top-level key is `tenants`: nothing else is walked twice).
-        quoting = [(file_schema, file_schema_name)]
-        if is_defaults and "/" not in rel:
-            quoting.append((schema, TENANT_SCHEMA_NAME))
         for q_schema, q_name in quoting:
-            violations.extend(misread_scalar_violations(rel, roots, q_schema, schemas, q_name))
+            if not as_quoted:
+                violations.extend(misread_scalar_violations(
+                    rel, roots, q_schema, schemas, q_name))
             if warnings is not None:
                 warnings.extend(yaml11_bool_word_warnings(rel, roots, q_schema, schemas, q_name))
         if warnings is not None:

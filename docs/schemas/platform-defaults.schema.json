@@ -58,6 +58,9 @@
         "type": "object",
         "required": ["recipe", "name", "metric", "threshold"]
       }
+    },
+    "_policies": {
+      "description": "Policy-as-Code rules read by `validate-config`'s policy_dsl row and `evaluate-policy` (policy_engine.load_policies) from the root _defaults.yaml. Listed so this schema does not refuse a documented key (#2695: validate-config's json_schema row applies this schema); the rule shape is policy_engine's to judge, so it is deliberately not modelled here."
     }
   },
   "patternProperties": {
