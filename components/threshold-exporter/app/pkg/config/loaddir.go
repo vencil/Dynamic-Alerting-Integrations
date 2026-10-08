@@ -111,7 +111,7 @@ type LoadReport struct {
 	Undeliverable map[string]map[string]ScheduledValue
 	// RootDefaultsUnread is the build's FlatBuild.RootDefaultsUnread: when
 	// the root `_defaults.yaml` has no `defaults:` mapping, its top-level
-	// keys the root decode has no field for, so /metrics does not carry
+	// keys that act when merged (ActsWhenMerged), so /metrics does not carry
 	// them while /effective shows them (#2296). nil when there is none.
 	RootDefaultsUnread []UnreadKey
 }

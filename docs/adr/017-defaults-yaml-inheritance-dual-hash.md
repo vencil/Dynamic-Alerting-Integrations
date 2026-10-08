@@ -503,7 +503,7 @@ profile。profile 名稱在**整棵樹唯一**：同一個名稱定義在兩個�
 → rc 1（見 (e)）；子目錄層的 `_routing_defaults` 把 `receiver` 或 `overrides` 寫成 `null` → rc 2
 （見 (a)）；以及上面 (c)、(d) 所列的錯誤。
 
-### Amendment 2026-10-08 (#2296)：`effective` 是寫法上的逐字視圖，`/metrics` 不送的值逐 key 標出
+### Amendment 2026-10-08 (#2296)：`effective` 是寫法上的逐字視圖，範圍內 `/metrics` 不送的值逐 key 標出
 
 背景：同一棵樹上 `/effective`（tenant-api、`da-guard effective`）與 `/metrics` 會給出不同的值——
 根目錄 `_defaults.yaml` 的 `defaults:` 有非數值時 exporter 整份丟掉、子目錄的非閾值形狀值被退回
@@ -512,10 +512,17 @@ profile。profile 名稱在**整棵樹唯一**：同一個名稱定義在兩個�
 
 決策：
 
-1. **`effective` 是寫法上的逐字視圖。** `effective_config` 保留每一層的原文值；`/metrics` 不送的值
-   不刪、不改，而是在每個租戶的 `not_served` 逐 key 標出原因（封閉集合：`parse_failed`、
-   `root_defaults_unwrapped`、`value_rejected`、`value_unparsed`、`value_unparsed_dropped`、
-   `undeliverable`、`root_null_undeclared`）與所顯示那個值的來源檔。
+1. **`effective` 是寫法上的逐字視圖。** `effective_config` 保留每一層的原文值，不刪、不改；
+   下列來源裡 `/metrics` 不送的值，在每個租戶的 `not_served` 逐 key 標出原因（封閉集合：
+   `parse_failed`、`root_defaults_unwrapped`、`value_rejected`、`value_unparsed`、
+   `value_unparsed_dropped`、`undeliverable`、`root_null_undeclared`）與所顯示那個值的來源檔：
+   defaults 鏈（exporter 整份丟掉的檔、子目錄 overlay 拒收的值、送不出去的子目錄 key、根目錄寫成
+   null 的 key）、根目錄 `_defaults.yaml` 缺 `defaults:` 包裝（判定與 da-guard 的
+   `root_defaults_unwrapped` 共用同一個述詞，`_routing_defaults` 等由其他工具從頂層讀的鍵不標），
+   以及平台檔 `tenants:`／租戶檔的值解析不了。⚠️ 不在範圍內、目前**不標**：profile 層的值被
+   exporter 丟掉（例如 `_profiles.yaml` 裡 `pg_connections: abc`，`effective_config` 顯示 `abc`、
+   `/metrics` 不送），以及已過期（`expires:`）的 override——`not_served` 為空不代表 `/metrics`
+   送的就是 `effective_config` 的值。
 2. **原因一律取自 `/metrics` 路徑自己的判定**——exporter 的建置（`BuildFlatConfig`：整檔丟掉、
    根目錄沒讀的頂層鍵、子目錄 overlay 拒收的值）與 resolver（解析不了的值，在原本印 WARN 的分支記錄）
    在做判定的地方記下，`effective` 只回答「顯示的是哪一層、哪個檔的值」再查表。**不得**以比對兩份

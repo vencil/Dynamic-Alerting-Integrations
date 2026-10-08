@@ -87,6 +87,14 @@ func TestNotServed_Table(t *testing.T) {
 			"_defaults.yaml": "defaults:\n  mysql_connections: 30\n",
 			"tx.yaml":        "tenants:\n  tx:\n    mysql_connections_critical: \"abc\"\n",
 		}, want: map[string]NotServedKey{"mysql_connections_critical": ns(NotServedValueUnparsedDropped, "tx.yaml")}},
+		{name: "dimensional row dropped", files: map[string]string{
+			"_defaults.yaml": "defaults:\n  mysql_connections: 30\n",
+			"tx.yaml":        "tenants:\n  tx:\n    'mysql_connections{db=\"x\"}': \"abc\"\n",
+		}, want: map[string]NotServedKey{`mysql_connections{db="x"}`: ns(NotServedValueUnparsedDropped, "tx.yaml")}},
+		{name: "declared row dropped", files: map[string]string{
+			"_defaults.yaml": "defaults:\n  mysql_connections: 30\noptional_overrides:\n  - redis_memory\n",
+			"tx.yaml":        "tenants:\n  tx:\n    redis_memory: \"abc\"\n",
+		}, want: map[string]NotServedKey{"redis_memory": ns(NotServedValueUnparsedDropped, "tx.yaml")}},
 		{name: "value with severity", files: map[string]string{
 			"_defaults.yaml": "defaults:\n  mysql_connections: 30\n",
 			"tx.yaml":        "tenants:\n  tx:\n    mysql_connections: \"60:critical\"\n",
@@ -120,6 +128,13 @@ func TestNotServed_Table(t *testing.T) {
 		}},
 		{name: "F2 root unwrapped", files: map[string]string{
 			"_defaults.yaml": "pg_connections: 100\n",
+			"tx.yaml":        "tenants:\n  tx: {}\n",
+		}, want: map[string]NotServedKey{"pg_connections": ns(NotServedRootDefaultsUnwrapped, "_defaults.yaml")}},
+		{name: "root unwrapped, key read elsewhere", files: map[string]string{
+			// `_routing_defaults` is the route generator's, read from the top
+			// level: da-guard's root_defaults_unwrapped does not name it, and
+			// neither does the build (one predicate, ActsWhenMerged).
+			"_defaults.yaml": "pg_connections: 100\n_routing_defaults:\n  receiver: {type: webhook, url: \"https://example.invalid/h\"}\n",
 			"tx.yaml":        "tenants:\n  tx: {}\n",
 		}, want: map[string]NotServedKey{"pg_connections": ns(NotServedRootDefaultsUnwrapped, "_defaults.yaml")}},
 	} {

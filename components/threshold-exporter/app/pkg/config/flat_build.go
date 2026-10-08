@@ -106,8 +106,10 @@ type FlatBuild struct {
 	// does not read it.
 	RootNullUndeclared map[string][]RootNullKey
 	// RootDefaultsUnread is, when the root carrier has no `defaults:`
-	// mapping, each of its top-level keys the root decode has no field for
-	// (RootDecodedKeys), sorted by key (#2296). The defaults-chain merge
+	// mapping, each of its top-level keys that act when merged
+	// (ActsWhenMerged — da-guard's root_defaults_unwrapped predicate: not a
+	// ThresholdConfig field, not a key another reader takes from the top
+	// level such as `_routing_defaults`), sorted by key (#2296). The defaults-chain merge
 	// behind /effective reads the whole document then and shows them;
 	// /metrics does not carry them. nil when there is none, and when the
 	// root carrier failed to parse (it is in ParseFailed then).

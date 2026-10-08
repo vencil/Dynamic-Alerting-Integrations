@@ -569,7 +569,7 @@ blocking conditions become: `_routing_enforced` in a subdirectory file → rc 2;
 tenant id → rc 1 (see (e)); `receiver` or `overrides` written as `null` in a subdirectory level's
 `_routing_defaults` → rc 2 (see (a)); the (c) and (d) errors as stated above.
 
-### Amendment 2026-10-08 (#2296): `effective` is the verbatim view of what was written; what `/metrics` does not serve is named key by key
+### Amendment 2026-10-08 (#2296): `effective` is the verbatim view of what was written; what `/metrics` does not serve, within scope, is named key by key
 
 Context: on one tree, `/effective` (tenant-api, `da-guard effective`) and `/metrics` gave different
 values — the exporter drops the whole root `_defaults.yaml` when its `defaults:` holds a non-number,
@@ -580,10 +580,19 @@ default for a tenant value written with an inline merge key (`<<:`) it cannot pa
 Decision:
 
 1. **`effective` is the verbatim view of what was written.** `effective_config` keeps every layer's
-   value as written; a value `/metrics` does not serve is neither dropped nor rewritten but named,
-   per tenant, in `not_served` with its reason (a closed set: `parse_failed`,
-   `root_defaults_unwrapped`, `value_rejected`, `value_unparsed`, `value_unparsed_dropped`,
-   `undeliverable`, `root_null_undeclared`) and the file of the value shown.
+   value as written, neither dropped nor rewritten; a value `/metrics` does not serve from the
+   sources below is named, per tenant, in `not_served` with its reason (a closed set:
+   `parse_failed`, `root_defaults_unwrapped`, `value_rejected`, `value_unparsed`,
+   `value_unparsed_dropped`, `undeliverable`, `root_null_undeclared`) and the file of the value
+   shown: the defaults chain (a file the exporter drops whole, a value the subtree overlay refuses,
+   a subtree key that cannot be delivered, a key the root writes as null), a root `_defaults.yaml`
+   without its `defaults:` wrapper (judged by the same predicate as da-guard's
+   `root_defaults_unwrapped`, so a key another tool reads from the top level, such as
+   `_routing_defaults`, is not named), and a value in a platform `tenants:` entry or the tenant
+   file that does not parse. ⚠️ Out of scope and **not** named today: a profile-layer value the
+   exporter discards (e.g. `pg_connections: abc` in `_profiles.yaml` — `effective_config` shows
+   `abc`, `/metrics` serves nothing), and an expired (`expires:`) override — an empty `not_served`
+   does not mean `/metrics` serves what `effective_config` shows.
 2. **Every reason is the `/metrics` path's own verdict**, recorded where the exporter's build
    (`BuildFlatConfig`: a file dropped whole, a root top-level key not read, a value the subtree
    overlay refuses) and its resolver (a value it cannot parse, in the branches that already WARN)

@@ -500,7 +500,9 @@ func TestEffective_NotServedAndServedValuesUnreadKeys(t *testing.T) {
 	}
 
 	unwrapped := writeParityTree(t, map[string]string{
-		"_defaults.yaml": "pg_connections: 100\n",
+		// `_routing_defaults` is read from the top level by the route
+		// generator: named by neither document (guard's predicate, shared).
+		"_defaults.yaml": "pg_connections: 100\n_routing_defaults:\n  receiver: {type: webhook, url: \"https://example.invalid/h\"}\n",
 		"tx.yaml":        "tenants:\n  tx: {}\n",
 	})
 	code, doc, stderr := runEffectiveOn(t, unwrapped)

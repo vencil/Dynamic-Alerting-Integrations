@@ -260,7 +260,7 @@ GitHub Actions 範本：[`guard-defaults-impact.yml`](../../.github/workflows/gu
 da-guard served-values --config-dir conf.d/ --at 2026-07-01T03:00:00Z
 ```
 
-子命令 `effective`（[#2564](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/2564)）以 JSON 印出每個租戶在 tenant-api `/effective` 的答案（同一個 `pkg/config` resolver），另加綁定的 profile 與每個 key 的來源層級與檔案，並一律輸出 `not_served`（`/metrics` 不送的 key 與 exporter 自己給的原因）與 `chain_parse_failed`（[#2296](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/2296)）；Python 讀取端經 `scripts/tools/_lib_tenant_values.py` 的 `load_effective()` 呼叫。輸出欄位與 exit code 見 [cli-reference §guard](../../docs/cli-reference.md#guard)。
+子命令 `effective`（[#2564](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/2564)）以 JSON 印出每個租戶在 tenant-api `/effective` 的答案（同一個 `pkg/config` resolver），另加綁定的 profile 與每個 key 的來源層級與檔案，並一律輸出 `not_served`（範圍內 `/metrics` 不送的 key 與 exporter 自己給的原因；profile 層被丟掉的值與過期 override 目前不標）與 `chain_parse_failed`（[#2296](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/2296)）；Python 讀取端經 `scripts/tools/_lib_tenant_values.py` 的 `load_effective()` 呼叫。輸出欄位與 exit code 見 [cli-reference §guard](../../docs/cli-reference.md#guard)。
 
 ```bash
 da-guard effective --config-dir conf.d/

@@ -19,7 +19,8 @@ package config
 //     the root `_defaults.yaml` with a non-number under `defaults:`, a chain
 //     file with a syntax error, a root platform file the decode rejects.
 //   - root_defaults_unwrapped: the root carrier has no `defaults:` mapping and
-//     the root decode has no field for the key (FlatBuild.RootDefaultsUnread).
+//     the key acts when merged (ActsWhenMerged) — /effective shows it, the
+//     root decode has no field for it (FlatBuild.RootDefaultsUnread).
 //   - value_rejected: applySubtreeDefaults refuses a subtree level's value
 //     (not threshold-shaped) and the tenant keeps a shallower one
 //     (FlatBuild.RejectedChainValues).
@@ -31,6 +32,11 @@ package config
 //     FlatBuild.UnreachableValues through undeliverableThresholds).
 //   - root_null_undeclared: the root writes the key as null (#2518,
 //     FlatBuild.RootNullUndeclared).
+//
+// ⚠️ NOT COVERED, stated so an empty NotServed is not read as "/metrics
+// serves what effective shows": a profile-layer value applyProfiles discards
+// (e.g. `pg_connections: abc` in `_profiles.yaml`) and an expired
+// (`expires:`) override. No recording point exists for either.
 //
 // The effective side only answers WHOSE value the effective config shows
 // (keySources, the winning layer and file) and looks that up in the tables
@@ -95,11 +101,54 @@ func RootDecodedKeys() map[string]bool {
 	return out
 }
 
+// topLevelReadElsewhere are the `_`-prefixed keys another reader takes from
+// the top level of a defaults file: the route generator's
+// `_routing_defaults` / `_routing_enforced`, and the custom-alert compiler's
+// `_custom_alerts` (moved from internal/guard, #2296).
+var topLevelReadElsewhere = []string{"_custom_alerts", "_routing_defaults", "_routing_enforced"}
+
+// TopLevelReadElsewhere is a copy of topLevelReadElsewhere, for da-guard.
+func TopLevelReadElsewhere() []string {
+	return append([]string(nil), topLevelReadElsewhere...)
+}
+
+// ActsWhenMerged reports whether a top-level key of a defaults file is one
+// the defaults merge takes into a tenant's config when it reads the whole
+// document: a threshold (no `_` prefix) or a reserved tenant key
+// (IsReservedKey). Excluded: `defaults` itself; a ThresholdConfig field
+// (RootDecodedKeys); TopLevelReadElsewhere; a key the merge drops at every
+// level (MergeDroppedKeys — `_metadata`), which acts in no shape; a
+// `_routing*` key, which the route generator does not read from a defaults
+// file in any shape (da-guard's routing_in_unread_location names it); and any
+// other `_` key (e.g. `_x: &x`, a key that only carries a YAML anchor).
+//
+// ONE predicate for da-guard's root_defaults_unwrapped /
+// defaults_toplevel_ignored findings and the build's RootDefaultsUnread
+// (#2296), so the two cannot name different keys.
+func ActsWhenMerged(k string) bool {
+	if k == "defaults" || rootDecodedKeySet[k] || mergeDroppedKeys[k] {
+		return false
+	}
+	for _, r := range topLevelReadElsewhere {
+		if k == r {
+			return false
+		}
+	}
+	if !strings.HasPrefix(k, "_") {
+		return true
+	}
+	// ⚠️ Refs #2388: this `_routing` PREFIX is wider than IsRoutingKey
+	// (`_routing`, `_routing_<…>`), so `_routingProfile` is left out here; left
+	// as is for a follow-up.
+	return IsReservedKey(k) && !strings.HasPrefix(k, "_routing")
+}
+
 // rootDefaultsUnread is FlatBuild.RootDefaultsUnread for the root carrier's
 // bytes, which the root decode accepted as partial: when the document has no
 // `defaults:` mapping — so the defaults-chain merge (ExtractDefaultsBlock)
-// takes the whole document as the block — its top-level keys the root decode
-// has no field for, sorted. nil otherwise.
+// takes the whole document as the block — its top-level keys that act when
+// merged (ActsWhenMerged, da-guard's root_defaults_unwrapped predicate; a
+// ThresholdConfig field is never one), sorted. nil otherwise.
 //
 // A non-empty partial.Defaults means the file HAS a `defaults:` mapping, so
 // the common tree pays no second decode.
@@ -120,7 +169,7 @@ func rootDefaultsUnread(data []byte, partial *ThresholdConfig) []string {
 	}
 	var out []string
 	for k := range doc {
-		if !rootDecodedKeySet[k] {
+		if ActsWhenMerged(k) {
 			out = append(out, k)
 		}
 	}
