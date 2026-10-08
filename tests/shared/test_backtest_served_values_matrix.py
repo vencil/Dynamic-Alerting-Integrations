@@ -211,6 +211,21 @@ def test_a_severity_boundary_does_not_split_a_change(
          "severity": "critical"}]
 
 
+def test_a_critical_segment_outside_the_changed_pair_does_not_skip_it(
+        tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """Severity is read only over the parts of the day the changed pair holds
+    in: an unchanged critical override elsewhere leaves the change backtested."""
+    override = ("      overrides:\n        - window: \"01:00-09:00\"\n"
+                "          value: \"70:critical\"\n")
+    b = _tree(tmp_path / "base", {"_defaults.yaml": _DEFAULTS, "tx.yaml": (
+        "tenants:\n  tx:\n    mysql_connections:\n      default: \"70\"\n" + override)})
+    c = _tree(tmp_path / "cur", {"_defaults.yaml": _DEFAULTS, "tx.yaml": (
+        "tenants:\n  tx:\n    mysql_connections:\n      default: \"75\"\n" + override)})
+    assert _backtest(monkeypatch, b, c) == [
+        {"tenant": "tx", "metric": "mysql_connections", "old_value": "70", "new_value": "75",
+         "window": ["00:00-01:00", "09:00-24:00"]}]
+
+
 def test_a_schedule_against_a_plain_value_is_one_row_per_pair(
         tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     """The pair holding either side of the override is one row, both parts

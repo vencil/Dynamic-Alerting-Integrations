@@ -672,7 +672,7 @@ da-tools backtest [--git-diff | --config-dir <dir> --baseline <dir>] [options]
 
 2. **目錄比對模式**：`--config-dir <dir> --baseline <dir>`
    （比對兩個配置版本）
-   兩棵樹都由 exporter 讀（`da-guard served-values`，需 da-guard；#2119），逐租戶、逐門檻 key 比 `/metrics` 實際送出的值：平台檔、`_defaults.yaml`、profile、子目錄裡的變更都算；租戶取自各檔的 `tenants:`，沒有 `tenants:` 的檔 exporter 不送、改它也不算。一邊沒送的 key 或租戶（關掉、新增、移除）那一邊記為無值。值比對整個 UTC 日：每個 key 的每一組新舊值報一列；不是整天都成立的，`window` 列出它成立的所有時段（UTC 的 `HH:MM-HH:MM` 清單）。Prometheus 回測不限於這些時段，一律跑整個 `--lookback`。只改 severity 不算。帶維度的 key（`metric{db="a"}`），以及 exporter 在該組新舊值成立的任一時段以 `critical` severity 送出的 key（例如基底有送的 `<base>_critical`；依 served-values 回報的 severity 判斷，不看 key 名稱；這類變更另帶 `severity: critical`）照列，但不查 Prometheus，標為 `not_backtested`（`backtest: skipped: dimensioned key`／`critical-severity key`），文字與 Markdown 報告列出未回測幾筆。
+   兩棵樹都由 exporter 讀（`da-guard served-values`，需 da-guard；#2119），逐租戶、逐門檻 key 比 `/metrics` 實際送出的值：平台檔、`_defaults.yaml`、profile、子目錄裡的變更都算；租戶取自各檔的 `tenants:`，沒有 `tenants:` 的檔 exporter 不送、改它也不算。一邊沒送的 key 或租戶（關掉、新增、移除）那一邊記為無值。值比對整個 UTC 日：每個 key 的每一組新舊值報一列；不是整天都成立的，`window` 列出它成立的所有時段（UTC 的 `HH:MM-HH:MM` 清單）。Prometheus 回測不限於這些時段，一律跑整個 `--lookback`。只改 severity 不算。帶維度的 key（`metric{db="a"}`），以及 exporter 在該組新舊值成立的任一時段以 `critical` severity 送出的 key（例如基底有送的 `<base>_critical`；依 served-values 回報的 severity 判斷，不看 key 名稱）照列，但不查 Prometheus，標為 `not_backtested`（`backtest: skipped: dimensioned key`／`critical-severity key`），文字與 Markdown 報告列出未回測幾筆。
 
 **選項**
 
