@@ -2019,7 +2019,14 @@ def what_if_result(scanner: "ConfDScanner", tid: str, what_if_path: Path,
             if tid not in bodies:
                 raise WhatIfError(f"--replaces {replaces} is tenant '{tid}''s own file, and "
                                   f"the --what-if content ({what_if_path}) does not declare '{tid}'")
-            tenant_raw = _tenant_body(bodies[tid])
+            # #2739: `_tenant_body` passes a non-mapping body through, and
+            # deep_merge then died on it (AttributeError traceback, rc 1).
+            # Refused by name like a non-mapping document (`_UnsupportedShape`).
+            body = bodies[tid]
+            if body is not None and not isinstance(body, dict):
+                raise WhatIfError(f"--what-if file {what_if_path} has an unsupported shape: "
+                                  f"tenant '{tid}' is a {type(body).__name__}, not a mapping")
+            tenant_raw = _tenant_body(body)
     else:
         # Insert according to directory depth if the ENTRY is inside
         # conf.d/, else append. #1967: both depths come from
@@ -2154,6 +2161,14 @@ def main() -> None:
         parser.error("--replaces requires --what-if")
     if args.replaces == "":
         parser.error("--replaces needs a path (got an empty string)")
+    # #2739: the same shape as (E) above, one flag over — the `--all` /
+    # `--diff` branches run before the what-if one, so `--what-if` (and its
+    # `--replaces`) returned rc 0 with output identical to a run without it.
+    if args.what_if is not None and (args.all or args.diff is not None):
+        flags = "--what-if" + (" / --replaces" if args.replaces is not None else "")
+        mode = "--all" if args.all else "--diff"
+        parser.error(f"{flags} cannot be used together with {mode}: the simulation "
+                     f"describes one tenant; drop {mode}, or run the two separately")
 
     # Resolve conf.d path
     if args.conf_d:
