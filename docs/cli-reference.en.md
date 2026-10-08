@@ -2972,7 +2972,7 @@ da-tools threshold-govern --config-dir <PATH> --prometheus <URL> --apply \
 
 Multi-channel notification connectivity testing — verify reachability of all configured receivers and report status.
 
-The receivers tested are taken from each tenant's `_routing` as the route generator (`generate-routes`) resolves it — `_routing_defaults` (subdirectory levels included), routing profiles, the platform file's `tenants:` overlay and tenant files in subdirectories all count, matching the receivers the generator renders ([#2752](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/2752)). A tree the route generator refuses (an unreadable file, a tenant declared in two files, a routing-tree error, an invalid tenant id) has no receiver tested and exits 2.
+The receivers tested are taken from each tenant's `_routing` as the route generator (`generate-routes`) resolves it — `_routing_defaults` (subdirectory levels included), routing profiles, the platform file's `tenants:` overlay and tenant files in subdirectories all count, matching the per-tenant receivers the generator renders; only per-tenant receivers are tested — the platform-enforced (`_routing_enforced`, NOC) receiver the generator also renders is not ([#2752](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/2752)). A tree the route generator refuses (an unreadable file, a tenant declared in two files, a routing-tree error, an invalid tenant id) has no receiver tested and exits 2.
 
 **Usage**
 

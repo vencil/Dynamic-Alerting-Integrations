@@ -5,7 +5,8 @@ Extracts every tenant's receivers from its `_routing` as the route generator
 (generate_alertmanager_routes) resolves it — `_routing_defaults` chain,
 routing profile, platform `tenants:` overlay, subdirectory tenant files —
 sends test messages to each receiver, and reports connectivity status.
-A conf.d tree the route generator refuses is refused here too (rc 2).
+Per-tenant receivers only: the platform-enforced (`_routing_enforced`, NOC)
+receiver the generator also renders is not tested. A conf.d tree the route generator refuses is refused here too (rc 2).
 
 Usage:
   # Test all receivers for all tenants in config directory
@@ -43,7 +44,6 @@ Usage:
 from __future__ import annotations
 
 import argparse
-import contextlib
 import json
 import os
 import sys
@@ -633,10 +633,7 @@ def resolved_routing(config_dir: str) -> dict[str, dict]:
     """
     import generate_alertmanager_routes as gar  # the generator's own reader
 
-    # The generator's reader prints its summary/WARN lines to stdout; this
-    # tool's stdout is the report (one JSON document under --json).
-    with contextlib.redirect_stdout(sys.stderr):
-        tree = gar.load_tenant_tree(config_dir)
+    tree = gar.load_tenant_tree(config_dir)
     _rc, lines = gar.tree_refusal(tree.files_read, tree.tenant_file_errors,
                                   tree.duplicate_tenants,
                                   tree.routing_tree_problems,

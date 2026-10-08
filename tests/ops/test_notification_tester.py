@@ -684,6 +684,18 @@ class TestCLI:
         assert data["summary"]["total_receivers"] == 0
         assert "route generator refuses this tree" in captured.err
 
+    def test_refusal_lines_are_escaped(self, tmp_path, capsys):
+        """#2752：轉述產生器拒收訊息時，控制字元須經 safe_label 中和。"""
+        with patch("sys.argv", ["notification_tester.py", "--config-dir", str(tmp_path), "--dry-run"]):
+            with patch.object(nt, "run_all_tests",
+                              side_effect=nt.RoutingTreeRefused(["FAIL: tenant \x1b[31mred"])):
+                with pytest.raises(SystemExit) as exc_info:
+                    nt.main()
+        assert exc_info.value.code == EXIT_CALLER_ERROR
+        err = capsys.readouterr().err
+        assert "\x1b" not in err
+        assert "FAIL: tenant" in err
+
 
 # ═══════════════════════════════════════════════════════════════════════
 # Payload builders

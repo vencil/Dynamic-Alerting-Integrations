@@ -86,6 +86,18 @@ _REFUSED_ROWS = [
         "tx.yaml": "tenants:\n  tx:\n" + _HOOK,
         "alpha.yaml": b"tenants:\n  ty:\n    a: \"\xff\"\n",
     }),
+    ("invalid_tenant_id", {
+        "_defaults.yaml": _DEFAULTS,
+        "t.yaml": "tenants:\n  Bad_ID!:\n" + _HOOK,
+    }),
+    # A routing-tree error (#2326): `_routing_enforced` below the root.
+    ("routing_tree_error", {
+        "_defaults.yaml": _DEFAULTS,
+        "team/_defaults.yaml": (
+            "_routing_enforced:\n  enabled: true\n  receiver:\n    type: webhook\n"
+            "    url: \"https://noc.example.com/h\"\n"),
+        "team/tx.yaml": "tenants:\n  tx:\n" + _HOOK,
+    }),
 ]
 
 
