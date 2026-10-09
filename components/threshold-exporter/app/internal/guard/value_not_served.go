@@ -97,8 +97,7 @@ func valueNotServedMessage(k string, ns config.NotServedKey) string {
 	case config.NotServedWindowInvalid:
 		return fmt.Sprintf("window_invalid: %s writes `%s` as a schedule with an override whose `window:` the "+
 			"exporter does not accept — not a UTC `HH:MM-HH:MM` (hours 00-23, minutes 00-59), missing, or a start "+
-			"equal to its end — so that window never applies and /metrics serves the value outside it at every "+
-			"minute. Fix the window (e.g. `01:00-09:00`; `22:00-06:00` crosses midnight) or remove the override.",
+			"equal to its end — so that override never applies. Fix the window (e.g. `01:00-09:00`; `22:00-06:00` crosses midnight) or remove the override.",
 			file, k)
 	default: // config.NotServedValueRejected
 		return fmt.Sprintf("value_rejected: %s writes `%s` with a value that is not threshold-shaped (e.g. "+
