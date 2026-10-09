@@ -12,11 +12,11 @@ lang: en
 
 ## Status
 
-🟡 **Proposed** (drafted 2026-10-09).
+✅ **Accepted** (drafted 2026-10-09, approved by the owner 2026-10-09).
 
 - The decisions were settled by the owner in [#2766](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/2766) and [#2486](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/2486).
 - The design and this document each went through one round of external adversarial review (by a different model); the verified points are merged.
-- Awaiting the owner's approval of this document.
+- The owner has approved this document.
 
 ## Summary
 

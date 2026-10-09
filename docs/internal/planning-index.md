@@ -27,7 +27,7 @@ lang: zh
 | `TRK-010` | dx | TRK-010: Flake 自動重試 CI Policy（不是盲目全域 retry） | ci | — | [docs/internal/dx-tooling-backlog.md](../internal/dx-tooling-backlog.md) |
 | `TRK-336` | dx | TRK-336: 補齊本地 gate 覆蓋（CI-only / 單邊 gate 執行點判準） | ci | — | [docs/internal/dx-tooling-backlog.md](../internal/dx-tooling-backlog.md) |
 
-### accepted (33)
+### accepted (34)
 
 | ID | Kind | Title | Domain | PR | Source |
 |----|------|-------|--------|------|--------|
@@ -64,13 +64,13 @@ lang: zh
 | `ADR-033` | adr | ADR-033: 與運維執行平面的協同介面 — MariaDB 計畫性作業 | integration | — | [docs/adr/033-ops-execution-plane-interface.md](../adr/033-ops-execution-plane-interface.md) |
 | `ADR-034` | adr | ADR-034: 合法值不得同時當作無法辨識時的 fallback | platform | — | [docs/adr/034-legal-value-as-fallback.md](../adr/034-legal-value-as-fallback.md) |
 | `ADR-035` | adr | ADR-035: tenant id 合法字元集的單一來源 | platform | — | [docs/adr/035-tenant-id-single-source.md](../adr/035-tenant-id-single-source.md) |
+| `ADR-036` | adr | ADR-036: 路由與 domain policy 設定只由產生器解析一次 | platform | — | [docs/adr/036-single-parser-effective-config.md](../adr/036-single-parser-effective-config.md) |
 
-### proposed (17)
+### proposed (16)
 
 | ID | Kind | Title | Domain | PR | Source |
 |----|------|-------|--------|------|--------|
 | `ADR-026` | adr | ADR-026: Node/Cluster 維護告警抑制 — 不需要子系統 | k8s | — | [docs/adr/026-node-maintenance-liveness-suppression.md](../adr/026-node-maintenance-liveness-suppression.md) |
-| `ADR-036` | adr | ADR-036: 路由與 domain policy 設定只由產生器解析一次 | platform | — | [docs/adr/036-single-parser-effective-config.md](../adr/036-single-parser-effective-config.md) |
 | `TRK-001` | dx | TRK-001: `check_noqa_hygiene.py` — noqa/nosec 必要性驗證 | ci | — | [docs/internal/dx-tooling-backlog.md](../internal/dx-tooling-backlog.md) |
 | `TRK-002` | dx | TRK-002: `make test-impact` — 變更影響測試自動縮減 | ci | — | [docs/internal/dx-tooling-backlog.md](../internal/dx-tooling-backlog.md) |
 | `TRK-003` | dx | TRK-003: Pre-commit hook CI gate | ci | — | [docs/internal/dx-tooling-backlog.md](../internal/dx-tooling-backlog.md) |
