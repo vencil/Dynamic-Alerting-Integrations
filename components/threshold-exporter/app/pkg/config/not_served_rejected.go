@@ -70,13 +70,13 @@ func (c *RejectedShownCache) Shown(scan *TreeScan, built *FlatBuild) map[string]
 		c.entries = nil
 		return nil
 	}
+	if len(built.RejectedChainValues) == 0 && !built.maySpell() {
+		c.entries = nil
+		return nil // the steady state: no resolver is built
+	}
 	r := newEffectiveResolver(scan)
 	r.readUncached = true
 	spelled := spellingCandidates(scan, built, r)
-	if len(built.RejectedChainValues) == 0 && len(spelled) == 0 {
-		c.entries = nil
-		return nil
-	}
 	var rootFiles []string
 	for _, k := range scan.Keys {
 		if !strings.Contains(k, "/") && isPlatformKey(k) {
@@ -189,6 +189,20 @@ func resolveRejected(r *effectiveResolver, id string) (map[string]string, error)
 		keys[k] = ns.Reason
 	}
 	return keys, nil
+}
+
+// maySpell reports whether some file of the build may have re-spelled a key
+// or written a threshold twice — whether spellingCandidates can name anyone.
+func (b *FlatBuild) maySpell() bool {
+	if len(b.respelledChain) > 0 {
+		return true
+	}
+	for _, fc := range b.FileConfigs {
+		if fc.spelled {
+			return true
+		}
+	}
+	return false
 }
 
 // spellingCandidates is the tenants of scan whose effective config reads a
