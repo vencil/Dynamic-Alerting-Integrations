@@ -2388,7 +2388,7 @@ da-tools config-diff --old-dir <path> --new-dir <path> [options]
 
 Markdown 格式報告，含 per-tenant 變更表格與摘要統計。
 
-**Profile 爆炸半徑**：`_profiles.yaml` 裡的 profile 有變更時，`affected_tenants` 列出 `--new-dir` 中 `_profile` 指名它的租戶。名稱經 `da-guard effective` 讀取，與 exporter 的讀法一致：`_profile: {default: std}` 指名 `std`；寫在根目錄平台檔 `tenants:` 裡的算；從子目錄 `_defaults.yaml` 繼承來的不算。所以有 profile 變更時需要 da-guard（映像內建；repo 內 `make da-guard-build`）；找不到 da-guard、da-guard 失敗，或 `--new-dir` 有 exporter 解不出來的檔時，結束碼 2，stderr 印 `ERROR:` 行說明原因；da-guard 有執行到時，下面接著轉印它的 stderr，非空行各加 `da-guard|` 前綴；找不到或無法執行 da-guard 時沒有這些行。⚠️ v2.9.0 映像仍只認字串寫法的 `_profile`。 <!-- image-caveat: v2.9.0 -->
+**Profile 爆炸半徑**：`_profiles.yaml` 裡的 profile 有變更時，`affected_tenants` 列出 `--new-dir` 中 `_profile` 指名它的租戶。名稱經 `da-guard effective` 讀取，與 exporter 的讀法一致：`_profile: {default: std}` 指名 `std`；寫在根目錄平台檔 `tenants:` 裡的算；從子目錄 `_defaults.yaml` 繼承來的不算。所以有 profile 變更時需要 da-guard（映像內建；repo 內 `make da-guard-build`）；找不到 da-guard、da-guard 失敗，或 `--new-dir` 有 exporter 解不出來的檔時，結束碼 2，stderr 印 `ERROR:` 行說明原因；da-guard 有執行到時，下面接著轉印它的 stderr，非空白行各加前綴 `da-guard|`（前有兩格縮排）；找不到或無法執行 da-guard 時沒有這些行。⚠️ v2.9.0 映像仍只認字串寫法的 `_profile`。 <!-- image-caveat: v2.9.0 -->
 
 **範例**
 
