@@ -1,6 +1,6 @@
 package config
 
-// RejectedValuesShown: which tenants are shown a subtree defaults value the
+// RejectedShownCache: which tenants are shown a subtree defaults value the
 // build refused (#2065, the exporter's value_rejected count).
 
 import (
@@ -11,27 +11,9 @@ import (
 	"sync"
 )
 
-// RejectedValuesShown is, per tenant, each key the tenant's effective config
-// names NotServedValueRejected, and the file of the value shown — the
-// verdict `/effective`, `da-guard effective` and da-guard's gate give, from
-// the same resolver (effectiveResolver.resolve → servedVerdicts.notServed,
-// keySources' winner attribution). Nothing is re-judged here: a tenant is
-// resolved when its defaults chain holds a file of built.RejectedChainValues
-// (no other tenant can be named value_rejected), and the reason is read off
-// the result. Keys are spelled as effective_config writes them.
-//
-// scan is the scan built came from; a file a warm scan did not cache is read
-// from disk and used only when its SHA-256 is the scan's, so a tenant whose
-// files moved since the scan is skipped. A tenant that does not resolve is
-// skipped too, as /effective fails for it. nil when there is none.
-func RejectedValuesShown(scan *TreeScan, built *FlatBuild) map[string]map[string]string {
-	var c RejectedShownCache
-	return c.Shown(scan, built)
-}
-
-// RejectedShownCache is RejectedValuesShown across commits: a candidate
-// tenant is resolved again only when an input of its resolve moved. The
-// input fingerprint is the scan's SHA-256 of every file the resolve reads
+// RejectedShownCache keeps Shown's answer across commits: a candidate tenant
+// is resolved again only when an input of its resolve moved. The input
+// fingerprint is the scan's SHA-256 of every file the resolve reads
 // for it — the tenant file, each file of its defaults chain (in order, by
 // path) and every `_` file at the root (platform `tenants:` entries,
 // profiles, the root carrier) — plus the tenant id. The build's tables the
@@ -53,12 +35,25 @@ type rejectedShownEntry struct {
 	keys  map[string]string // nil: resolved, nothing value_rejected (a failed resolve is not cached)
 }
 
-// Shown is RejectedValuesShown(scan, built), reusing the previous call's
-// answer for a candidate whose inputs did not move. A candidate whose
-// resolve failed (a file changed since the scan, or could not be read) is
-// not in the result and nothing is cached for it, so the next call resolves
-// it again (#2065 r4: a cached failure outlived the file changing back to
-// the scanned bytes).
+// Shown is, per tenant, each key the tenant's effective config
+// names NotServedValueRejected, and the file of the value shown — the
+// verdict `/effective`, `da-guard effective` and da-guard's gate give, from
+// the same resolver (effectiveResolver.resolve → servedVerdicts.notServed,
+// keySources' winner attribution). Nothing is re-judged here: a tenant is
+// resolved when its defaults chain holds a file of built.RejectedChainValues
+// (no other tenant can be named value_rejected), and the reason is read off
+// the result. Keys are spelled as effective_config writes them.
+//
+// scan is the scan built came from; a file a warm scan did not cache is read
+// from disk and used only when its SHA-256 is the scan's, so a tenant whose
+// files moved since the scan is skipped. A tenant that does not resolve is
+// skipped too, as /effective fails for it. nil when there is none.
+//
+// It reuses the previous call's answer for a candidate whose inputs did not
+// move. A candidate whose resolve failed (a file changed since the scan, or
+// could not be read) is not in the result and nothing is cached for it, so
+// the next call resolves it again (#2065 r4: a cached failure outlived the
+// file changing back to the scanned bytes).
 func (c *RejectedShownCache) Shown(scan *TreeScan, built *FlatBuild) map[string]map[string]string {
 	c.mu.Lock()
 	defer c.mu.Unlock()

@@ -260,7 +260,7 @@ type effectiveResolver struct {
 
 	// readUncached lets bytesOf read a file a warm scan did not cache from
 	// disk, refusing bytes whose SHA-256 is not the scan's (#2065: the
-	// exporter's commit, RejectedValuesShown). false: a missing byte cache
+	// exporter's commit, RejectedShownCache.Shown). false: a missing byte cache
 	// is an error, as for every cold-scan reader.
 	readUncached bool
 }

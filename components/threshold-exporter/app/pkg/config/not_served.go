@@ -279,15 +279,15 @@ func ValueNotServedAsWritten(key, reason string) bool {
 // day (addScheduleCuts) but the one now falls in (#2065 r1: the resolve
 // as written already read it). Resolving every tenant at the union of every
 // tenant's cuts records the same table
-// (TestRecordUnparsed_PerTenantCutsMatchUnionOfCuts) at the cost of
+// (TestValuesNotServed_PerTenantCutsMatchUnionOfCuts) at the cost of
 // tenants × all cuts.
-func (cfg *ThresholdConfig) ValuesNotServed(now time.Time) map[string]map[string]string {
+func (c *ThresholdConfig) ValuesNotServed(now time.Time) map[string]map[string]string {
 	rec := &rejectRecorder{}
-	cfg.resolveAtWithStats(now, nil, nil, rec)
+	c.resolveAtWithStats(now, nil, nil, rec)
 	utc := now.UTC()
 	nowMinute := utc.Hour()*60 + utc.Minute()
 	var one ThresholdConfig
-	for tenant, overrides := range cfg.Tenants {
+	for tenant, overrides := range c.Tenants {
 		seen := addScheduleCuts(nil, overrides)
 		if seen == nil {
 			continue
@@ -297,7 +297,7 @@ func (cfg *ThresholdConfig) ValuesNotServed(now time.Time) map[string]map[string
 		// no window of this tenant's starts or ends between its start and
 		// now, so the values there are the values at now.
 		current := sort.SearchInts(cuts, nowMinute+1) - 1
-		one = *cfg
+		one = *c
 		one.Tenants = map[string]map[string]ScheduledValue{tenant: overrides}
 		for i, m := range cuts {
 			if i == current {
@@ -343,7 +343,7 @@ type servedVerdicts struct {
 
 	// noUnparsed skips ValuesNotServed: the caller reads only verdicts the
 	// switch in notServed decides before the resolver's record
-	// (RejectedValuesShown reads value_rejected).
+	// (RejectedShownCache.Shown reads value_rejected).
 	noUnparsed bool
 
 	// gate is set for ScopeEffective (da-guard's gate, #2065): the tables

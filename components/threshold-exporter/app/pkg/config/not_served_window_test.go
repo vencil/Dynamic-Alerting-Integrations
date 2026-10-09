@@ -68,11 +68,11 @@ func TestRejectRecorder_KeepsTheStrongestVerdict(t *testing.T) {
 	}
 }
 
-// recordUnparsedUnionOfCuts is ValuesNotServed as #2296 shipped it: every
+// valuesNotServedUnionOfCuts is ValuesNotServed as #2296 shipped it: every
 // tenant resolved at every cut of every tenant (ScheduleCuts), plus the
 // whole config resolved as written (where the phases read the windows) —
 // the reference the per-tenant reading must agree with.
-func recordUnparsedUnionOfCuts(cfg *ThresholdConfig, now time.Time) map[string]map[string]string {
+func valuesNotServedUnionOfCuts(cfg *ThresholdConfig, now time.Time) map[string]map[string]string {
 	rec := &rejectRecorder{}
 	cfg.resolveAtWithStats(now, nil, nil, rec)
 	for _, m := range cfg.ScheduleCuts() {
@@ -81,12 +81,12 @@ func recordUnparsedUnionOfCuts(cfg *ThresholdConfig, now time.Time) map[string]m
 	return rec.byTenant
 }
 
-// TestRecordUnparsed_PerTenantCutsMatchUnionOfCuts: reading each tenant only
+// TestValuesNotServed_PerTenantCutsMatchUnionOfCuts: reading each tenant only
 // at its own cuts records exactly what reading every tenant at every
 // tenant's cuts records, on random trees whose tenants carry schedules with
 // different windows, unparseable values in some windows only, critical,
 // dimensional and declared keys, and invalid windows.
-func TestRecordUnparsed_PerTenantCutsMatchUnionOfCuts(t *testing.T) {
+func TestValuesNotServed_PerTenantCutsMatchUnionOfCuts(t *testing.T) {
 	t.Parallel()
 	values := []string{"70", "abc", "disable", "60:critical", "7O:critical", "", "5"}
 	windows := []string{"01:00-09:00", "22:00-06:00", "05:00-05:01", "12:30-13:00",
@@ -119,17 +119,17 @@ func TestRecordUnparsed_PerTenantCutsMatchUnionOfCuts(t *testing.T) {
 			edges := []int{60, 300, 301, 360, 750, 780, 1320, 1439}
 			now = scheduleDay.Add(time.Duration(edges[r.Intn(len(edges))]) * time.Minute)
 		}
-		got, want := cfg.ValuesNotServed(now), recordUnparsedUnionOfCuts(cfg, now)
+		got, want := cfg.ValuesNotServed(now), valuesNotServedUnionOfCuts(cfg, now)
 		if !reflect.DeepEqual(got, want) {
 			t.Fatalf("seed %d at %s: per-tenant cuts recorded\n %v\nunion of cuts\n %v\ncfg %+v", seed, now, got, want, cfg.Tenants)
 		}
 	}
 }
 
-// TestRecordUnparsed_ValueInOneWindowOfOneTenant: a value that does not
+// TestValuesNotServed_ValueInOneWindowOfOneTenant: a value that does not
 // parse only inside one tenant's window is found, whatever the other
 // tenants' schedules — the case the per-tenant reading must not lose.
-func TestRecordUnparsed_ValueInOneWindowOfOneTenant(t *testing.T) {
+func TestValuesNotServed_ValueInOneWindowOfOneTenant(t *testing.T) {
 	t.Parallel()
 	cfg := &ThresholdConfig{
 		Defaults: map[string]float64{"mysql_connections": 30},

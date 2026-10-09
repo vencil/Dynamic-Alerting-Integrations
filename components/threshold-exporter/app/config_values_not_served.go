@@ -14,7 +14,7 @@ package main
 //
 // ⛔ NO VERDICT OF ITS OWN. The tenant half is ThresholdConfig.ValuesNotServed
 // — the resolver's own record, the same table `da-guard effective` reports as
-// not_served — and the subtree half is config.RejectedValuesShown: the
+// not_served — and the subtree half is config.RejectedShownCache.Shown: the
 // effective resolver's own value_rejected verdict, for the tenants under a
 // value the build refused (FlatBuild.RejectedChainValues). Nothing here
 // reads YAML or attributes a key to a layer itself.
@@ -63,7 +63,7 @@ type valueNotServed struct {
 
 // collectValuesNotServed lists the (tenant, key) pairs of cfg /metrics does
 // not serve as written, sorted, one reason each: the build's refused subtree
-// values a tenant is shown (rejected: config.RejectedValuesShown), then
+// values a tenant is shown (rejected: config.RejectedShownCache.Shown), then
 // the resolver's record (verdicts: cfg.ValuesNotServed at the commit's now,
 // or valuesNotServedCache's copy of it) — in the order pkg/config's
 // notServed asks them, so a pair carries the reason `da-guard effective`

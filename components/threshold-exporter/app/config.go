@@ -69,7 +69,7 @@ type flatScanState struct {
 	// without any commit (#2132).
 	parseFailed []string
 
-	// rejected is config.RejectedValuesShown of the commit's scan and build
+	// rejected is config.RejectedShownCache.Shown of the commit's scan and build
 	// (#2065): tenant → key → the subtree defaults file whose refused value
 	// the tenant is shown — the effective resolver's value_rejected verdict. Read by the values-not-served audit
 	// (config_values_not_served.go); nil on the flat incremental path, whose
@@ -233,7 +233,7 @@ type ConfigManager struct {
 	// valuesNotServedCache keeps the audit's per-tenant verdicts between
 	// commits (#2065); see config_values_not_served.go.
 	valuesNotServedCache valuesNotServedCache
-	// rejectedShown is config.RejectedValuesShown kept across commits, so
+	// rejectedShown is the config.RejectedShownCache kept across commits, so
 	// a reload resolves only the tenants under a refused value whose files
 	// moved (#2065).
 	rejectedShown config.RejectedShownCache
