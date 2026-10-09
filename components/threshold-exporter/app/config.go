@@ -69,9 +69,9 @@ type flatScanState struct {
 	// without any commit (#2132).
 	parseFailed []string
 
-	// rejected is the commit's FlatBuild.RejectedChainWinners (#2065):
-	// tenant → key → the subtree defaults file whose refused value is the
-	// one the tenant is shown. Read by the values-not-served audit
+	// rejected is config.RejectedValuesShown of the commit's scan and build
+	// (#2065): tenant → key → the subtree defaults file whose refused value
+	// the tenant is shown — the effective resolver's value_rejected verdict. Read by the values-not-served audit
 	// (config_values_not_served.go); nil on the flat incremental path, whose
 	// tree holds no `_defaults` file.
 	rejected map[string]map[string]string
@@ -233,6 +233,10 @@ type ConfigManager struct {
 	// valuesNotServedCache keeps the audit's per-tenant verdicts between
 	// commits (#2065); see config_values_not_served.go.
 	valuesNotServedCache valuesNotServedCache
+	// rejectedShown is config.RejectedValuesShown kept across commits, so
+	// a reload resolves only the tenants under a refused value whose files
+	// moved (#2065).
+	rejectedShown config.RejectedShownCache
 
 	// onReloadTenantParse is a test seam, nil in production (#2153): called
 	// once per tenant-file parse a reload tick's merges make (classifyAndCount
@@ -1658,6 +1662,9 @@ func (m *ConfigManager) commitFlatFrom(scan *treeScan) error {
 	m.hierarchy.unreachableInherited = unreachable
 	m.mu.Unlock()
 
+	// #2065: before ReleaseData, so the files this scan read are not read
+	// again; it resolves only the tenants under a refused value.
+	rejectedShown := m.rejectedShown.Shown(scan, &built)
 	scan.ReleaseData()
 	m.commitConfig(&merged, scan.Composite, &flatScanState{
 		hashes:      scan.RelHashes(),
@@ -1665,7 +1672,7 @@ func (m *ConfigManager) commitFlatFrom(scan *treeScan) error {
 		mtimes:      scan.RelMtimes(),
 		tree:        scan,
 		parseFailed: built.ParseFailed,
-		rejected:    built.RejectedChainWinners,
+		rejected:    rejectedShown,
 	}, fmt.Sprintf("Config loaded (%s)", m.Mode()))
 	return nil
 }

@@ -53,6 +53,7 @@ import (
 	"io"
 	"log"
 	"math"
+	"os"
 	"path/filepath"
 	"sort"
 	"strings"
@@ -256,6 +257,12 @@ type effectiveResolver struct {
 	// syntax error as empty (ChainParseFailed). nil for ScopeEffective, whose
 	// gate keeps stopping on such a file (*DecodeError).
 	served *servedVerdicts
+
+	// readUncached lets bytesOf read a file a warm scan did not cache from
+	// disk, refusing bytes whose SHA-256 is not the scan's (#2065: the
+	// exporter's commit, RejectedValuesShown). false: a missing byte cache
+	// is an error, as for every cold-scan reader.
+	readUncached bool
 }
 
 // newEffectiveResolver reads the chain rule off the scan — the SAME
@@ -296,6 +303,16 @@ func (r *effectiveResolver) bytesOf(absPath string) ([]byte, error) {
 		return nil, fmt.Errorf("%q is not under %q: %w", absPath, r.scan.AbsRoot, err)
 	}
 	f, ok := r.scan.Files[filepath.ToSlash(rel)]
+	if ok && f.Data == nil && r.readUncached {
+		b, err := os.ReadFile(absPath)
+		if err != nil {
+			return nil, err
+		}
+		if fmt.Sprintf("%x", sha256.Sum256(b)) != f.Hash {
+			return nil, fmt.Errorf("read %q: the file changed since the scan", absPath)
+		}
+		return b, nil
+	}
 	if !ok || f.Data == nil {
 		// Unreachable for a prior-less scan; loud rather than an empty merge.
 		return nil, fmt.Errorf("read %q: no bytes cached by the scan", absPath)

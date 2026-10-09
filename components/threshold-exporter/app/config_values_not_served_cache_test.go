@@ -19,6 +19,8 @@ import (
 	"time"
 
 	"github.com/jonboulle/clockwork"
+
+	"github.com/vencil/threshold-exporter/pkg/config"
 )
 
 var cacheStart = time.Date(2026, 7, 1, 1, 30, 0, 0, time.UTC)
@@ -172,7 +174,7 @@ func (c *cacheTree) step(t *testing.T, fc *clockwork.FakeClock) string {
 
 func TestValuesNotServedCache_MatchesFullRecomputeOverReloads(t *testing.T) {
 	t.Parallel()
-	var full, partial int
+	var full, partial, resolves int
 	for seed := int64(1); seed <= 16; seed++ {
 		c := &cacheTree{dir: t.TempDir(), r: rand.New(rand.NewSource(seed)), where: map[string]string{}}
 		c.root(t)
@@ -198,13 +200,55 @@ func TestValuesNotServedCache_MatchesFullRecomputeOverReloads(t *testing.T) {
 			if !reflect.DeepEqual(got, want) {
 				t.Fatalf("seed %d step %d (%s) at %s:\ncached %v\nfull   %v", seed, i, what, now, got, want)
 			}
+			assertRejectedIsEffective(t, m, c.dir, fmt.Sprintf("seed %d step %d (%s)", seed, i, what))
 		}
+		resolves += m.rejectedShown.Resolves
 		full += m.valuesNotServedCache.fullPasses
 		partial += m.valuesNotServedCache.tenantPasses
 	}
 	// The property is only worth something if the cache was actually used.
-	if partial == 0 || full == 0 {
-		t.Errorf("full passes %d, per-tenant passes %d: want both paths taken", full, partial)
+	if partial == 0 || full == 0 || resolves == 0 {
+		t.Errorf("full passes %d, per-tenant passes %d, value_rejected resolves %d: want every path taken",
+			full, partial, resolves)
+	}
+}
+
+// assertRejectedIsEffective: the value_rejected pairs the last commit
+// published (config.RejectedShownCache, which re-resolves only the tenants
+// whose files moved) are the ones a cold effective resolve of the tree on
+// disk names — checked only when the commit is of that tree.
+func assertRejectedIsEffective(t *testing.T, m *ConfigManager, dir, step string) {
+	t.Helper()
+	scan, err := config.ScanDirTree(dir, nil, nil, log.New(io.Discard, "", 0))
+	if err != nil || scan.Conflict != nil {
+		return
+	}
+	m.mu.RLock()
+	committed, hash := m.flat.rejected, m.lastHash
+	m.mu.RUnlock()
+	if hash != scan.Composite {
+		t.Fatalf("%s: the commit is not of the tree on disk (a reload was missed)", step)
+	}
+	tree, err := config.EffectiveTree(dir)
+	if err != nil {
+		t.Fatalf("%s: EffectiveTree: %v", step, err)
+	}
+	want := map[string]string{}
+	for _, ec := range tree.Tenants {
+		for k, ns := range ec.NotServed {
+			if ns.Reason == config.NotServedValueRejected {
+				want[ec.TenantID+"/"+k] = ns.File
+			}
+		}
+	}
+	got := map[string]string{}
+	for id, keys := range committed {
+		for k, f := range keys {
+			got[id+"/"+k] = f
+		}
+	}
+	if !reflect.DeepEqual(got, want) {
+		t.Fatalf("%s: committed value_rejected %v, effective %v", step, got, want)
 	}
 }
 

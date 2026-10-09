@@ -423,3 +423,107 @@ func TestValuesNotServed_MatchesEffectiveOnEveryShape(t *testing.T) {
 		})
 	}
 }
+
+// TestValuesNotServed_RejectedIsTheEffectiveVerdictAndStable (#2065 r3): for
+// the two-spelling shapes of review r3 (A1–A9: refused and valid values of
+// a threshold under both #1231 spellings, across levels and within one), the
+// exporter's value_rejected pairs are the effective resolver's value_rejected
+// keys, and 30 Loads of the same tree give the same set.
+func TestValuesNotServed_RejectedIsTheEffectiveVerdictAndStable(t *testing.T) {
+	t.Parallel()
+	const refused = ":\n    default: \"33\"\n    overrides: \"01:00-09:00\"\n"
+	cur, old := "mysql_threads_running", retiredCPUKey
+	for name, files := range map[string]map[string]string{
+		"A1": {"team/_defaults.yaml": "defaults:\n  " + cur + refused, "team/sub/_defaults.yaml": "defaults:\n  " + old + ": 50\n"},
+		"A2": {"team/_defaults.yaml": "defaults:\n  " + old + refused, "team/sub/_defaults.yaml": "defaults:\n  " + cur + refused},
+		"A3": {"team/_defaults.yaml": "defaults:\n  " + old + refused, "team/sub/_defaults.yaml": "defaults:\n  " + cur + ": 50\n"},
+		"A4": {"team/_defaults.yaml": "defaults:\n  " + cur + ": 50\n", "team/sub/_defaults.yaml": "defaults:\n  " + cur + refused},
+		"A5": {"team/_defaults.yaml": "defaults:\n  " + old + refused + "  " + cur + ": 44\n"},
+		"A6": {"team/_defaults.yaml": "defaults:\n  " + old + refused + "  " + cur + refused},
+		"A7": {"team/_defaults.yaml": "defaults:\n  " + old + refused},
+		"A8": {"team/_defaults.yaml": "defaults:\n  " + cur + refused + "  " + old + ": 44\n"},
+		"A9": {"team/_defaults.yaml": "defaults:\n  " + cur + refused, "_profiles.yaml": "profiles:\n  gold:\n    " + old + ": \"66\"\n"},
+		// the refused value two levels up, a deeper level writing another key
+		"A10": {"team/_defaults.yaml": "defaults:\n  " + cur + refused, "team/sub/_defaults.yaml": "defaults:\n  mysql_connections: 75\n"},
+	} {
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+			dir := t.TempDir()
+			writeTestYAML(t, filepath.Join(dir, "_defaults.yaml"), "defaults:\n  mysql_connections: 80\n  "+cur+": 30\n")
+			tenant := "tenants:\n  tx:\n    mysql_connections: \"31\"\n"
+			if name == "A9" {
+				tenant = "tenants:\n  tx:\n    _profile: gold\n"
+			}
+			files["team/sub/t.yaml"] = tenant
+			for rel, body := range files {
+				if err := os.MkdirAll(filepath.Dir(filepath.Join(dir, rel)), 0o755); err != nil {
+					t.Fatal(err)
+				}
+				writeTestYAML(t, filepath.Join(dir, rel), body)
+			}
+			tree, err := config.EffectiveTree(dir)
+			if err != nil {
+				t.Fatal(err)
+			}
+			want := map[string]bool{}
+			for _, ec := range tree.Tenants {
+				for k, ns := range ec.NotServed {
+					if ns.Reason == config.NotServedValueRejected && config.ValueNotServedAsWritten(k, ns.Reason) {
+						want[ec.TenantID+"/"+k] = true
+					}
+				}
+			}
+			for i := 0; i < 30; i++ {
+				m, fresh, _ := newAuditedManager(t, dir)
+				if err := m.Load(); err != nil {
+					t.Fatalf("Load %d: %v", i, err)
+				}
+				m.mu.RLock()
+				flat := m.flat
+				m.mu.RUnlock()
+				got := map[string]bool{}
+				for _, v := range m.auditValuesNotServed(m.GetConfig(), &flat, "probe") {
+					if v.Reason == config.NotServedValueRejected {
+						got[v.Tenant+"/"+v.Key] = true
+					}
+				}
+				if !reflect.DeepEqual(got, want) {
+					t.Fatalf("Load %d: exporter value_rejected %v, effective %v", i, got, want)
+				}
+				if g := testutil.ToFloat64(fresh.valuesNotServed[config.NotServedValueRejected]); int(g) != len(want) {
+					t.Fatalf("Load %d: gauge value_rejected = %v, want %d", i, g, len(want))
+				}
+				m.Close()
+			}
+		})
+	}
+}
+
+// TestValuesNotServed_RejectedSurvivesAWarmReload: a reload whose scan did
+// not re-read the refused file (an unrelated tenant changed) still names the
+// value — the effective resolve reads the uncached files, checked against
+// the scan's hashes.
+func TestValuesNotServed_RejectedSurvivesAWarmReload(t *testing.T) {
+	t.Parallel()
+	dir := t.TempDir()
+	writeValuesTree(t, dir, "    mysql_threads_running: \"31\"\n",
+		"defaults:\n  mysql_connections:\n    default: \"70\"\n    overrides: \"01:00-09:00\"\n")
+	other := filepath.Join(dir, "team", "u.yaml")
+	writeTestYAML(t, other, "tenants:\n  ty:\n    mysql_threads_running: \"32\"\n")
+	m, fresh, _ := newAuditedManager(t, dir)
+	if err := m.Load(); err != nil {
+		t.Fatal(err)
+	}
+	gauge := func() float64 { return testutil.ToFloat64(fresh.valuesNotServed[config.NotServedValueRejected]) }
+	if g := gauge(); g != 2 {
+		t.Fatalf("after Load: value_rejected = %v, want 2 (tx and ty)", g)
+	}
+	writeTestYAML(t, other, "tenants:\n  ty:\n    mysql_threads_running: \"33\"\n")
+	m.tickOnce()
+	if v := m.GetConfig().Tenants["ty"]["mysql_threads_running"].Default; v != "33" {
+		t.Fatalf("precondition: the reload did not commit (got %q)", v)
+	}
+	if g := gauge(); g != 2 {
+		t.Errorf("after a warm reload: value_rejected = %v, want 2", g)
+	}
+}

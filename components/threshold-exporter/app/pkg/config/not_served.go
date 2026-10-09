@@ -348,6 +348,11 @@ type servedVerdicts struct {
 	unparsed map[string]map[string]string
 	done     bool
 
+	// noUnparsed skips recordUnparsed: the caller reads only verdicts the
+	// switch in notServed decides before the resolver's record
+	// (RejectedValuesShown reads value_rejected).
+	noUnparsed bool
+
 	// gate is set for ScopeEffective (da-guard's gate, #2065): the tables
 	// name what /metrics does not serve, but a chain file the build dropped
 	// is not read as an empty file — the gate keeps stopping on it
@@ -393,6 +398,9 @@ func newServedVerdicts(built *FlatBuild, all bool) *servedVerdicts {
 
 // unparsedOf is recordUnparsed's verdicts for tenantID.
 func (v *servedVerdicts) unparsedOf(tenantID string) map[string]string {
+	if v.noUnparsed {
+		return nil
+	}
 	if v.all {
 		if !v.done {
 			v.unparsed = recordUnparsed(v.cfg, time.Now())
