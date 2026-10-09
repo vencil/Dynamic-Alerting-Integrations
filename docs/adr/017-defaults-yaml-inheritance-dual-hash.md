@@ -101,8 +101,8 @@ conf.d/
   在 YAML 都解析成 null，與 `mysql_connections: null` 相同。租戶檔與子目錄 `_defaults.yaml`
   寫 null（含這兩種寫法）等於這一層沒寫；根目錄 `defaults:` 寫 null 等於根層沒有宣告這個閾值，
   不送 series（更深層給了值時的行為見上方「閾值 key」）。租戶檔與子目錄 `_defaults.yaml` 要停用
-  一個閾值請寫 `"disable"`；根目錄 `defaults:` 寫 `"disable"` 會讓整份根 `_defaults.yaml`
-  無法解析而被丟棄，根層要停用就刪掉該鍵。
+  一個閾值請寫 `"disable"`；根目錄 `defaults:` 寫 `"disable"` 會讓 /metrics 丟掉整份根
+  `_defaults.yaml`（da-guard 回 rc 3）。
 - **`_metadata` 欄位不繼承**：每個 tenant 的 `_metadata` 僅來自自身 YAML + 路徑推斷（ADR-016）
 
 ```yaml
