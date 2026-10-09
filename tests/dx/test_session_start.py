@@ -202,3 +202,19 @@ def test_a_failed_pre_commit_install_is_recorded(tmp_path):
 
     assert r.returncode == 1, r.stdout + r.stderr
     assert _result(marker) == ["RESULT=failed (pre-commit install)"]
+
+
+def test_an_earlier_stop_still_names_the_installer_failure(tmp_path):
+    """A run that stops early for another reason still says the guards failed."""
+    repo = _repo(tmp_path)
+    subprocess.run(["git", "-C", str(repo), "config", "core.hooksPath", ""],  # subprocess-timeout: ignore
+                   check=True)
+    (repo / "requirements" / "ci-constraints.txt").write_text(
+        "--index-url http://127.0.0.1:9/simple\n", encoding="utf-8")
+
+    r, marker, calls = _run(tmp_path, repo, None)
+
+    assert r.returncode == 1, r.stdout + r.stderr
+    assert _result(marker) == [
+        "RESULT=failed (install_prepush_hook; constraints file sets a package index)"]
+    assert calls["pip"] == []

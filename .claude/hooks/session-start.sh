@@ -79,8 +79,7 @@ note() { printf '%s\n' "$1" >> "$MARKER"; }
 # ⛔ Before `pre-commit install`, which is skipped when the installer fails
 # (it refuses core.hooksPath set, a symlinked hooks directory): run first,
 # pre-commit's hook would land wherever the link leads. A failure skips nothing
-# else — the
-# Python deps, tags and e2e deps below do not depend on .git/hooks.
+# else — the Python deps, tags and e2e deps below do not depend on .git/hooks.
 # ⛔ NOT `pre-commit install --hook-type pre-push` (#1689). Since the three
 # pre-push guards left .pre-commit-config.yaml that command installs a hook
 # which runs ZERO pre-push hooks — and a hook pre-commit runs is handed only one
@@ -199,7 +198,7 @@ fi
 # .git/hooks/pre-commit.legacy" — and its errors, on stdout, not stderr. Hiding
 # them is how a broken or surprising install becomes invisible.
 if [ -n "$guards_failed" ]; then
-  say "⛔ skipping pre-commit install: the pre-push installer failed on this hooks setup (above)"
+  say "⛔ skipping pre-commit install: the pre-push installer failed (its reason is above)"
   say "   whatever commit hook was already there is untouched; with none, commits are UNGATED"
   note "git-hooks=SKIPPED"
 else
