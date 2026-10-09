@@ -245,10 +245,10 @@ Verified: with a tenant file containing a duplicate key, the generator reports `
   - From phase 2, writes and reads must match.
   - Phase 1 asserts writes only: the side-by-side verdict always blocks what the generator blocks.
 - **Fixed corpus**: the existing `merge_key_policy_corpus.json` plus the examples from these issues:
-  - #2759: the remaining gaps in policy files.
-  - #2700: `!!merge` keys in tenant files.
-  - #2713: an unparsable value inside an overridden merge source.
-  - #2674: a self-referencing YAML alias.
+  - [#2759](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/2759): the remaining gaps in policy files.
+  - [#2700](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/2700): `!!merge` keys in tenant files.
+  - [#2713](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/2713): an unparsable value inside an overridden merge source.
+  - [#2674](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/2674): a self-referencing YAML alias.
 - Run in CI on the version pair the chart pins.
 
 ## Cost (measured 2026-10-09)

@@ -251,10 +251,10 @@ da-guard 不再判斷路由與 policy，交給產生器的 `--validate --strict`
   - 第二階段起，寫入與讀取都要相同。
   - 第一階段只斷言寫入：並行判定一定擋下產生器會擋的寫入。
 - **固定語料**：加上現有的 `merge_key_policy_corpus.json`，以及以下各票的範例：
-  - #2759：policy 檔的剩餘落差清單。
-  - #2700：租戶檔的 `!!merge` 鍵。
-  - #2713：被覆蓋的合併來源裡有無法解析的值。
-  - #2674：自我參照的 YAML 別名。
+  - [#2759](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/2759)：policy 檔的剩餘落差清單。
+  - [#2700](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/2700)：租戶檔的 `!!merge` 鍵。
+  - [#2713](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/2713)：被覆蓋的合併來源裡有無法解析的值。
+  - [#2674](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/2674)：自我參照的 YAML 別名。
 - 在 CI 裡，以 chart 固定的那一組版本執行。
 
 ## 成本（2026-10-09 實測）
