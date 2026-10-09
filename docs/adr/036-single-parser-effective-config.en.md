@@ -71,7 +71,7 @@ The thresholds row is the existing precedent in the other direction; this ADR do
 ### 2. Architecture
 
 - The tenant-api pod gains a **da-tools sidecar** running the existing da-tools image, which contains the generator.
-- It talks to tenant-api over a **Unix domain socket** in an emptyDir shared by the two containers. No TCP port is opened, so neither other containers in the pod nor network peers can reach it.
+- It talks to tenant-api over a **Unix domain socket** in a shared emptyDir. No TCP port is opened: only processes that have that volume mounted and pass the socket file's permissions can connect; containers in the pod without the mount, and network peers, cannot reach it.
 - How the sidecar reads the tree: for a given commit, it **materialises** the tree into a private directory with `git ls-tree -r` plus `git cat-file --batch`.
   - It does not read the shared working tree: PR mode switches branches in place in `/conf.d` with `git checkout -f`.
   - It does not use `git archive`, which applies `.gitattributes` such as `export-ignore`. This repo has no such marker, but if a customer's conf.d repo marked `_domain_policy.yaml` `export-ignore`, the export would silently drop it, and the sidecar would read more loosely than the customer's CI.
@@ -143,7 +143,9 @@ da-guard ships in the same da-tools image as the generator. It obtains routing a
 
 ## Mechanising the acceptance condition
 
-- **Fuzzing**: generate random conf.d trees → run the generator to get the effective-config JSON and structured findings → give the same tree to the Go readers → assert that the policies and tenants Go reads are **a subset of** the JSON, and that decoding the JSON either fully succeeds or refuses the whole document. The comparator itself does not parse YAML.
+- **Fuzzing**: generate random conf.d trees → run the generator to get the effective-config JSON and structured findings → give the same tree to the Go readers → assert in both directions that the policies and tenants Go enforces **equal** the JSON's (reading an extra one and missing one both fail), and that decoding the JSON either fully succeeds or refuses the whole document. The comparator itself does not parse YAML.
+  - From P1, this equality must hold for writes and reads.
+  - In P0 only the write side is asserted: the union verdict refuses every write the generator refuses. The read side's known divergences are the explicit exception listed under "Transition" and are not asserted until P1.
 - **Frozen regression corpus**: the shapes from #2759, #2700, #2713 and #2674, together with the existing `merge_key_policy_corpus.json`, as fixed cases.
 - It runs in CI on the image pair the chart pins, not ad hoc.
 
@@ -190,7 +192,7 @@ With a warm cache, a single write costs mainly one file's parse plus the checks.
 4. **P1 deletion scope**: of the three vendored yaml.v3 patches, whether those serving only the policy path (`SpacesOnly`, nonspecific-tag) are removed too, and whether `uniquekeys` still has exporter users.
 
 **Trade-offs decided and recorded here**:
-- The authorisation boundary of the Unix socket is the pod: any process in the pod can call the validation endpoint, which is accepted.
+- The authorisation boundary of the Unix socket is "processes that have the volume mounted and pass the socket file's permissions", meaning the processes in the tenant-api and sidecar containers can call the validation endpoint, which is accepted. A container without the mount cannot.
 - The sidecar reads git objects by rev with `cat-file` / `ls-tree` only and touches neither the index nor the working tree, so it does not contend with PR mode's `checkout -f` for `index.lock`.
 
 ## Implementation plan

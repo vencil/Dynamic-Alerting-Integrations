@@ -77,7 +77,7 @@ tenant-api 判 `require_critical_escalation` 等規則時，用的是租戶合�
 ### 2. 架構
 
 - tenant-api pod 加一個 **da-tools sidecar**，跑現成的 da-tools 映像（內含產生器）。
-- 與 tenant-api 之間以 **Unix domain socket** 溝通，socket 放在兩個容器共用的 emptyDir。不開 TCP 埠，同 pod 的其他容器與網路上的對端都碰不到。
+- 與 tenant-api 之間以 **Unix domain socket** 溝通，socket 放在共用的 emptyDir。不開 TCP 埠：只有掛載了該 volume、且符合 socket 檔案權限的程序能連線；沒有掛載該 volume 的同 pod 容器與網路上的對端都碰不到。
 - sidecar 讀樹的方式：依指定的 commit，以 `git ls-tree -r` 加 `git cat-file --batch` **物化**到私有目錄。
   - 不讀共用工作目錄：PR 模式會在 `/conf.d` 就地 `git checkout -f` 切分支。
   - 不用 `git archive`：它會套用 `.gitattributes` 的 `export-ignore` 等屬性。本 repo 沒有這種標記，但客戶的 conf.d repo 若把 `_domain_policy.yaml` 標成 `export-ignore`，匯出時它會直接消失，sidecar 因而讀得比客戶 CI 寬。
@@ -149,7 +149,9 @@ da-guard 與產生器在同一個 da-tools 映像裡。路由與 policy 的判�
 
 ## 驗收的機械化
 
-- **fuzz**：隨機產生 conf.d 樹 → 跑產生器得到有效設定 JSON 與結構化 finding → 同一棵樹給 Go 讀取端 → 斷言 Go 讀到的 policy 與租戶集合**包含於** JSON，且 JSON 解碼只有「完整成功」或「整份拒收」兩種結果。比較器本身不解析 YAML。
+- **fuzz**：隨機產生 conf.d 樹 → 跑產生器得到有效設定 JSON 與結構化 finding → 同一棵樹給 Go 讀取端 → 兩個方向都斷言：Go 執行的 policy 與租戶集合**等於** JSON 的（多讀與漏讀都算失敗），且 JSON 解碼只有「完整成功」或「整份拒收」兩種結果。比較器本身不解析 YAML。
+  - P1 起，這個等式對寫入與讀取都要成立。
+  - P0 只斷言寫入側：聯集判定拒收所有產生器拒收的寫入。讀取側的已知分歧是「過渡」一節列出的明示例外，不納入斷言，直到 P1。
 - **凍結回歸語料**：#2759、#2700、#2713、#2674 的形狀，連同現有的 `merge_key_policy_corpus.json`，做成固定案例。
 - 在 CI 對 chart 釘的那一對映像跑，不是臨時手動跑。
 
@@ -196,7 +198,7 @@ da-guard 與產生器在同一個 da-tools 映像裡。路由與 policy 的判�
 4. **P1 刪除範圍**：vendored yaml.v3 的三段 patch 中，只服務 policy 路徑的（`SpacesOnly`、nonspecific-tag）是否一併移除；`uniquekeys` 是否仍有 exporter 使用者。
 
 **已決定、在此記錄的取捨**：
-- Unix socket 的授權邊界是 pod：同一個 pod 內的程序都能呼叫驗證端點，視為可接受。
+- Unix socket 的授權邊界是「掛載了該 volume、且符合 socket 檔案權限的程序」，也就是 tenant-api 與 sidecar 這兩個容器裡的程序都能呼叫驗證端點，視為可接受。沒有掛載該 volume 的容器不能呼叫。
 - sidecar 只以 `cat-file`／`ls-tree` 依 rev 讀 git 物件，不碰 index 與工作目錄，不與 PR 模式的 `checkout -f` 搶 `index.lock`。
 
 ## 實作切分
