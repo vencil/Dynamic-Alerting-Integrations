@@ -415,7 +415,7 @@ data:
           # _defaults / _profiles file), but until this alert shipped the
           # failure was visible only in logs. Since #1980 every load path
           # (cold load, hierarchical reload, the flat tree's incremental
-          # reload) drops EVERY tenant the broken file declares from
+          # reload) drops EVERY tenant a broken tenant file declares from
           # /metrics, so their threshold alerts stop. Two thresholds capture
           # the two failure modes the exporter's own help text + RCA
           # comments distinguish:
@@ -432,11 +432,11 @@ data:
               severity: warning
               alert_source: platform
             annotations:
-              summary: "Tenant config YAML parse failures (file {{ $labels.file_basename }}) — its tenants are dropped from /metrics"
+              summary: "Config YAML parse failures (file {{ $labels.file_basename }})"
               description: |
                 The threshold-exporter has logged >5 YAML parse failures
-                for `{{ $labels.file_basename }}` in the last hour. Every
-                tenant declared in that file (all of them, if the file
+                for `{{ $labels.file_basename }}` in the last hour. If it is
+                a tenant file, every tenant declared in that file (all of them, if the file
                 declares several) is removed from /metrics, so their
                 threshold alerts stop firing (#1980). Fix the YAML (the
                 exporter logs `WARN: skip unparseable file` with the
