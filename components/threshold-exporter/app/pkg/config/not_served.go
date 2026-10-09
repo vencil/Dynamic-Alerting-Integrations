@@ -259,8 +259,7 @@ func ValueNotServedAsWritten(key, reason string) bool {
 // tenant values of c it does not serve as written, over the whole UTC day:
 // tenant → canonical key → NotServedValueUnparsed,
 // NotServedValueUnparsedDropped or NotServedWindowInvalid (#2065). It is
-// recordUnparsed — the table `da-guard effective`'s not_served reads — so the
-// exporter's load-time report and da-guard cannot name different values.
+// recordUnparsed — the table `da-guard effective`'s not_served reads.
 // Silent; c is not modified. nil when nothing is recorded.
 //
 // ⚠️ Tenant values only: a subtree `_defaults.yaml` value the build refused

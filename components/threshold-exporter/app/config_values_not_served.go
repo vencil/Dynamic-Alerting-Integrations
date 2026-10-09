@@ -188,8 +188,8 @@ func (m *ConfigManager) auditValuesNotServed(cfg *ThresholdConfig, flatScan *fla
 // formatRejectedSkippedLog is the WARN naming the tenants whose value_rejected
 // check this commit could not run (config.RejectedShownCache.Shown's skipped:
 // a file changed since the scan, or could not be read) — they are not
-// counted in da_config_values_not_served{reason="value_rejected"} until a
-// later commit checks them. "" when there is none.
+// counted in this commit's da_config_values_not_served{reason="value_rejected"}.
+// "" when there is none.
 func formatRejectedSkippedLog(skipped map[string]string, context string) string {
 	if len(skipped) == 0 {
 		return ""
@@ -201,7 +201,7 @@ func formatRejectedSkippedLog(skipped map[string]string, context string) string 
 	sort.Strings(ids)
 	var b strings.Builder
 	fmt.Fprintf(&b, "WARN: config values not served as written (%s): the value_rejected check of %d tenant(s) was "+
-		"skipped and is not counted until a later reload checks it:", context, len(ids))
+		"skipped; they are not counted in da_config_values_not_served{reason=\"value_rejected\"}:", context, len(ids))
 	shown := ids
 	if len(shown) > valuesNotServedLogSampleLimit {
 		shown = shown[:valuesNotServedLogSampleLimit]

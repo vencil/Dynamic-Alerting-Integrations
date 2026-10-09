@@ -22,8 +22,7 @@ import (
 //
 // scan is the scan built came from; a file a warm scan did not cache is read
 // from disk and used only when its SHA-256 is the scan's, so a tenant whose
-// files moved since the scan is skipped (the change schedules the next
-// reload, whose commit answers it). A tenant that does not resolve is
+// files moved since the scan is skipped. A tenant that does not resolve is
 // skipped too, as /effective fails for it (RejectedShownCache.Shown names
 // the skipped ones). nil when there is none.
 func RejectedValuesShown(scan *TreeScan, built *FlatBuild) map[string]map[string]string {
