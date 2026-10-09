@@ -1052,13 +1052,38 @@ def main() -> None:
         code = EXIT_OK
     except SystemExit as exc:
         code = _exit_code_of(exc)
+        _write_findings_if_asked(early, args, findings, code)
         raise
-    finally:
-        src = args if args is not None else early
-        if src.findings_json is not None:
-            write_findings_json(src.findings_json, findings_document(
-                findings, config_dir=src.config_dir, exit_code=code,
-                validate=src.validate, strict=src.strict))
+    except BaseException:
+        # An exception the run did not turn into an exit: write the failing
+        # document, but a PATH that cannot be written must not replace the
+        # exception (its traceback is the diagnosis) — the ERROR line is
+        # printed and the exception propagates.
+        _write_findings_if_asked(early, args, findings, code,
+                                 keep_exception=True)
+        raise
+    _write_findings_if_asked(early, args, findings, code)
+
+
+def _write_findings_if_asked(early: argparse.Namespace,
+                             args: argparse.Namespace | None,
+                             findings: list[str], code: int, *,
+                             keep_exception: bool = False) -> None:
+    """Write the --findings-json document, if one was asked for (#2766).
+
+    With *keep_exception* (an exception is propagating), a failed write
+    prints its ERROR line but does not exit, so the exception survives."""
+    src = args if args is not None else early
+    if src.findings_json is None:
+        return
+    doc = findings_document(findings, config_dir=src.config_dir,
+                            exit_code=code, validate=src.validate,
+                            strict=src.strict)
+    if not keep_exception:
+        write_findings_json(src.findings_json, doc)
+        return
+    with contextlib.suppress(SystemExit):
+        write_findings_json(src.findings_json, doc)
 
 
 def _early_findings_args(argv: list[str] | None = None) -> argparse.Namespace:
@@ -1077,7 +1102,8 @@ def _early_findings_args(argv: list[str] | None = None) -> argparse.Namespace:
             break
         for flag, dest in (("--findings-json", "findings_json"),
                            ("--config-dir", "config_dir")):
-            if tok == flag and i + 1 < len(argv):
+            if (tok == flag and i + 1 < len(argv)
+                    and not argv[i + 1].startswith("-")):
                 setattr(early, dest, argv[i + 1])
             elif tok.startswith(flag + "="):
                 setattr(early, dest, tok[len(flag) + 1:])

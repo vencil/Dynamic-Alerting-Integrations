@@ -614,7 +614,25 @@ def test_baseline_is_not_vacuous():
     (["--config-dir", "c", "--findings-json"], (None, "c", False, False)),
     (["--config-dir", "c", "--", "--findings-json", "f.json"],
      (None, "c", False, False)),
+    (["--findings-json", "--validate"], (None, None, True, False)),
 ])
 def test_early_findings_args(argv, expected):
     e = gar._early_findings_args(argv)
     assert (e.findings_json, e.config_dir, e.validate, e.strict) == expected
+
+
+def test_unwritable_path_keeps_the_exception(tmp_path, monkeypatch, capsys):
+    """A crash with an unwritable PATH: the ERROR line is printed and the
+    original exception (its traceback) still propagates — not SystemExit."""
+    out = tmp_path / "absent" / "f.json"
+    monkeypatch.setattr(sys, "argv", ["gar", "--config-dir", str(tmp_path),
+                                      "--dry-run", "--findings-json", str(out)])
+
+    def boom(_args, _findings):
+        raise RuntimeError("crash")
+
+    monkeypatch.setattr(gar, "_run", boom)
+    with pytest.raises(RuntimeError, match="crash"):
+        gar.main()
+    assert "--findings-json" in capsys.readouterr().err
+    assert not out.exists()
