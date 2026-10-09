@@ -1101,16 +1101,35 @@ def _prepush_guards_wired() -> Tuple[Optional[bool], str]:
 
     回傳 `(wired, message)`。⛔ **「量不到」與「量了沒事」要分得開**。
     """
-    r = run(["git", "rev-parse", "--git-path", "hooks/pre-push"], timeout=30)
-    if r.returncode != 0:
+    r = run(["git", "rev-parse", "--git-path", "hooks/pre-push", "--path-format=absolute",
+             "--git-path", "hooks", "--git-common-dir"], timeout=30)
+    lines = (r.stdout or "").splitlines()
+    if r.returncode != 0 or len(lines) != 3:
         # ⛔ None，不是 False：git 跑不了或不在 git repository，都量不到守衛在不在；
         # 說成「沒裝」會開出安裝器這帖藥，而那兩種情況下它照做也回不到綠。
         reason = (r.stderr or "").strip() or f"rc={r.returncode}"
-        return None, f"量不到：git rev-parse --git-path 失敗（{reason}）"
-    hook = Path((r.stdout or "").strip())
+        return None, (
+            f"量不到：git rev-parse --git-path 失敗（{reason}）。請在 `git` 可執行、"
+            "且位於本 repo 內的 shell 重跑（Windows：Git Bash）。"
+        )
+    hook = Path(lines[0])
+    # ⛔ 只認本 repo 的預設 hooks 目錄（#2696）。core.hooksPath 指到別處時，那裡可能
+    # 是許多 repo 共用的目錄，裝進去的 shim 會擋下其他 repo 的每一次 push；pre-commit
+    # 在 hooksPath 有設時也直接拒絕安裝。None：這裡量不到本 repo 的守衛。
+    if lines[1] != f"{lines[2]}/hooks":
+        return None, (
+            f"量不到：core.hooksPath 讓 git 到 {lines[1]} 找 hook，不是本 repo 的"
+            f" {lines[2]}/hooks；本 repo 的守衛只裝在後者。先移除 core.hooksPath"
+            "（`git config --show-origin --get core.hooksPath` 指出設在哪），"
+            "再跑 install_prepush_hook.sh。"
+        )
     shim = _shim_body()
     if shim is None:
-        return None, f"量不到：無法從 {_INSTALLER} 取出 shim 全文（VIBE_SHIM_EOF heredoc）"
+        return None, (
+            f"量不到：無法從 {_INSTALLER} 取出 shim 全文（VIBE_SHIM_EOF heredoc）。"
+            "它受版控，從 HEAD 還原："
+            "`git checkout HEAD -- :/scripts/ops/install_prepush_hook.sh`。"
+        )
 
     # ⛔ 不是 shim 時，訊息只說它和安裝器產生的 shim 不同並給處方，不預告安裝器會怎麼
     # 處置：它依那是不是 git-lfs 的 hook、pre-commit 樣板或守衛複本而取代或拒絕，在這裡
@@ -1149,8 +1168,7 @@ def check_local_hooks(*, run_precommit: bool = True) -> CheckResult:
             "量不到 pre-push 守衛在不在 push 路徑上",
             detail=(
                 f"{why}\n\n"
-                "這不代表守衛沒裝。請在 `git` 可執行、且位於本 repo 內的 shell 重跑"
-                "（Windows：Git Bash）。"
+                "這不代表守衛沒裝。"
             ),
         )
     if not wired:

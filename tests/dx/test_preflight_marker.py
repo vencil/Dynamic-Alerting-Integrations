@@ -419,27 +419,64 @@ class TestPrepushWiring:
         wired, why = mod._prepush_guards_wired()
         assert wired is True, f"following the message's remedy did not fix it: {why!r}"
 
-    def test_the_hook_is_found_where_git_looks_for_it(self, tmp_path, monkeypatch):
-        """core.hooksPath moves the hooks directory: a shim left at
-        .git/hooks/pre-push is then never run, and one in the configured
-        directory is."""
+    @pytest.mark.parametrize("hooks_path", ["shared", "/dev/null", "hooks-dir"])
+    def test_a_hooks_path_away_from_this_repository_is_unmeasurable(
+        self, tmp_path, monkeypatch, hooks_path
+    ):
+        """#2696: core.hooksPath can point git at a directory many repositories
+        share, where a shim refuses every push of every one of them. Neither the
+        judgement nor the installer goes there; the message names
+        core.hooksPath, and its remedy is followed once."""
+        mod = _load()
+        repo = tmp_path / "repo"
+        repo.mkdir()
+        self._repo(repo)
+        monkeypatch.chdir(repo)
+        target = str(tmp_path / "shared") if hooks_path == "shared" else hooks_path
+        assert subprocess.run(  # subprocess-timeout: ignore
+            ["git", "config", "core.hooksPath", target], cwd=repo).returncode == 0
+
+        wired, why = mod._prepush_guards_wired()
+        assert wired is None and "core.hooksPath" in why, why
+        r = self._install_guards(repo)
+        assert r.returncode == 1 and "core.hooksPath" in r.stderr, r.stderr
+        for place in (tmp_path / "shared", repo / "hooks-dir"):
+            assert not place.exists(), f"the installer wrote into {place}"
+
+        assert subprocess.run(  # subprocess-timeout: ignore
+            ["git", "config", "--unset", "core.hooksPath"], cwd=repo).returncode == 0
+        assert self._install_guards(repo).returncode == 0
+        wired, why = mod._prepush_guards_wired()
+        assert wired is True, f"following the message's remedy did not fix it: {why!r}"
+
+    @pytest.mark.parametrize("damage", ["missing", "not-utf8"])
+    def test_an_installer_that_cannot_be_read_is_unmeasurable_and_restorable(
+        self, tmp_path, monkeypatch, damage
+    ):
+        """#2760: reading the installer fails outright — it is gone, or it is
+        not UTF-8. The verdict is None, not a traceback, and the restore it
+        prints works."""
         mod = _load()
         self._repo(tmp_path)
         monkeypatch.chdir(tmp_path)
-        assert subprocess.run(  # subprocess-timeout: ignore
-            ["git", "config", "core.hooksPath", "hooks-dir"], cwd=tmp_path).returncode == 0
         assert self._install_guards(tmp_path).returncode == 0
-        moved = tmp_path / "hooks-dir" / "pre-push"
-        wired, why = mod._prepush_guards_wired()
-        assert wired is True and moved.is_file(), why
+        installer = tmp_path / "scripts" / "ops" / "install_prepush_hook.sh"
+        monkeypatch.setattr(mod, "_INSTALLER", installer)
+        wired, _ = mod._prepush_guards_wired()
+        assert wired is True, "CONTROL: it must be wired with the intact installer"
 
-        default = tmp_path / ".git" / "hooks" / "pre-push"
-        default.parent.mkdir(parents=True, exist_ok=True)
-        default.write_bytes(moved.read_bytes())
-        default.chmod(0o755)
-        moved.unlink()
+        if damage == "missing":
+            installer.unlink()
+        else:
+            installer.write_bytes(b"\xff\xfe" + installer.read_bytes())
         wired, why = mod._prepush_guards_wired()
-        assert wired is False, f"a shim git never runs was reported as wired: {why!r}"
+        assert wired is None, why
+        restore = "git checkout HEAD -- :/scripts/ops/install_prepush_hook.sh"
+        assert restore in why, why
+
+        assert subprocess.run(restore.split(), cwd=tmp_path / "scripts").returncode == 0  # subprocess-timeout: ignore
+        wired, why = mod._prepush_guards_wired()
+        assert wired is True, f"following the message's remedy did not fix it: {why!r}"
 
     @pytest.mark.parametrize("installer", [
         "#!/usr/bin/env bash\n",
