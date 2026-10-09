@@ -38,13 +38,12 @@ type GroupResponse struct {
 func ListGroups(d *Deps) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		p := rbac.RequestPrincipal(r)
-		rbacCfg := d.RBAC.Get()
 
 		list := d.Groups.ListGroups()
 		resp := make([]GroupResponse, 0, len(list))
 		for _, g := range list {
 			// v2.5.0: Skip groups where user has no accessible members
-			if len(rbacCfg.Groups) > 0 && !hasAccessibleMember(d.RBAC, d.TenantOrg, p, g.Members) {
+			if !groupVisible(d, p, g.Members) {
 				continue
 			}
 			resp = append(resp, GroupResponse{
@@ -71,6 +70,33 @@ func hasAccessibleMember(rbacMgr *rbac.Manager, tenantOrg *tenantorg.Manager, p 
 		}
 	}
 	return false
+}
+
+// groupVisible is the ONE predicate deciding whether a group exists for this
+// caller. GET, LIST, DELETE and the batch endpoint all answer an invisible
+// group exactly as they answer a missing one (#1530 / #1531): an endpoint that
+// tells the two apart — a 403 here, a 400 there — confirms a group the read
+// plane says is not there, and the denial can name the members the read plane
+// hid.
+//
+// A group with NO members is visible to every caller. hasAccessibleMember is
+// false for an empty list, so without this case an empty group was a 404 to
+// everyone once _rbac.yaml had rules, platform admins included, and moving that
+// 404 to DELETE would leave an empty group nobody could remove. An empty group
+// has no member to leak.
+//
+// Open mode (no RBAC rules) sees everything, as before.
+func groupVisible(d *Deps, p *rbac.VerifiedPrincipal, members []string) bool {
+	if len(d.RBAC.Get().Groups) == 0 || len(members) == 0 {
+		return true
+	}
+	return hasAccessibleMember(d.RBAC, d.TenantOrg, p, members)
+}
+
+// writeGroupNotFound is the one 404 body for a missing OR invisible group, so
+// the two stay byte-identical.
+func writeGroupNotFound(w http.ResponseWriter, r *http.Request, groupID string) {
+	WriteJSONError(w, r, http.StatusNotFound, "group not found: "+groupID)
 }
 
 // filterAccessibleMembers returns only the members the user has read
@@ -107,7 +133,7 @@ func GetGroup(d *Deps) http.HandlerFunc {
 
 		g, ok := d.Groups.GetGroup(groupID)
 		if !ok {
-			WriteJSONError(w, r, http.StatusNotFound, "group not found: "+groupID)
+			writeGroupNotFound(w, r, groupID)
 			return
 		}
 
@@ -125,9 +151,8 @@ func GetGroup(d *Deps) http.HandlerFunc {
 		// already does — labeled cross-org members drop in both shadow and
 		// enforce; the enforce flag only governs unlabeled-tenant leniency.
 		p := rbac.RequestPrincipal(r)
-		rbacCfg := d.RBAC.Get()
-		if len(rbacCfg.Groups) > 0 && !hasAccessibleMember(d.RBAC, d.TenantOrg, p, g.Members) {
-			WriteJSONError(w, r, http.StatusNotFound, "group not found: "+groupID)
+		if !groupVisible(d, p, g.Members) {
+			writeGroupNotFound(w, r, groupID)
 			return
 		}
 
@@ -166,6 +191,11 @@ type PutGroupRequest struct {
 // reveals the tenants' merged_hash). The check returns 403 with a
 // list of forbidden tenant IDs so the operator knows exactly what to
 // fix.
+//
+// #1529: an UPDATE also requires PermWrite on every member the group
+// already has, because replacing the list removes them — otherwise PUT
+// does what DELETE refuses. Stored members the caller cannot read are
+// not named in the 403 (writeGroupMemberForbidden).
 //
 // @Summary     Create or update a group
 // @Tags        groups
@@ -217,11 +247,10 @@ func PutGroup(d *Deps) http.HandlerFunc {
 		// Caller must have PermWrite on every member tenant; reject
 		// if any member is forbidden. List ALL forbidden ids in the
 		// error so the operator can fix in one round-trip rather
-		// than discovering them one-at-a-time.
+		// than discovering them one-at-a-time. These ids come from the
+		// request, so naming them tells the caller nothing they did not send.
 		if forbidden := tenantsLackingPermission(d.RBAC, d.TenantOrg, p, req.Members, rbac.PermWrite, WriteScopeMeta(d.ConfigDir)); len(forbidden) > 0 {
-			WriteJSONError(w, r, http.StatusForbidden,
-				"insufficient permission to write group with forbidden member tenants: "+
-					strings.Join(forbidden, ", "))
+			writeGroupMemberForbidden(w, r, d, p, "write", forbidden, nil)
 			return
 		}
 
@@ -236,11 +265,29 @@ func PutGroup(d *Deps) http.HandlerFunc {
 		// to different groups lose one the same way. Reading the base inside
 		// the lock removes both — the same fix WriteMerged made for the tenant
 		// batch path (#1097).
+		//
+		// #1529: a PUT REPLACES the stored member list, so it removes every
+		// stored member the request leaves out — the same outcome DELETE
+		// refuses unless the caller may write every stored member. The check
+		// above only covers the members the request brings; this one covers
+		// the members it would overwrite, and it runs on the copy on disk, in
+		// the lock, for the reason DeleteGroup's in-lock check gives. There is
+		// deliberately no snapshot pre-check: DeleteGroup's comment records
+		// how a stale snapshot makes that one refuse callers who are entitled.
+		// `members: []` takes the same path — it is the shortest way to strip
+		// a group, and the request-side check has nothing to check for it.
+		var forbiddenOnDisk []string
 		if err := d.Writer.MutateConfigFile(r.Context(), "_groups.yaml", "groups", email,
 			func(current []byte) ([]byte, error) {
 				cfg, perr := parseGroupsFile(current)
 				if perr != nil {
 					return nil, perr
+				}
+				if stored, present := cfg.Groups[groupID]; present {
+					if f := tenantsLackingPermission(d.RBAC, d.TenantOrg, p, stored.Members, rbac.PermWrite, WriteScopeMeta(d.ConfigDir)); len(f) > 0 {
+						forbiddenOnDisk = f
+						return nil, errGroupMemberForbidden
+					}
 				}
 				cfg.Groups[groupID] = groups.Group{
 					Label:       req.Label,
@@ -250,6 +297,10 @@ func PutGroup(d *Deps) http.HandlerFunc {
 				}
 				return groups.MarshalConfig(cfg)
 			}); err != nil {
+			if errors.Is(err, errGroupMemberForbidden) {
+				writeGroupMemberForbidden(w, r, d, p, "write", nil, forbiddenOnDisk)
+				return
+			}
 			writeConfigFileError(w, r, err)
 			return
 		}
@@ -293,8 +344,8 @@ func DeleteGroup(d *Deps) http.HandlerFunc {
 
 		cfg := d.Groups.Get()
 		existing, ok := cfg.Groups[groupID]
-		if !ok {
-			WriteJSONError(w, r, http.StatusNotFound, "group not found: "+groupID)
+		if !ok || !groupVisible(d, p, existing.Members) {
+			writeGroupNotFound(w, r, groupID)
 			return
 		}
 
@@ -323,7 +374,7 @@ func DeleteGroup(d *Deps) http.HandlerFunc {
 		// that trade is deliberately not made here — it is recorded so the
 		// next reader does not mistake the current shape for full coverage.
 		if forbidden := tenantsLackingPermission(d.RBAC, d.TenantOrg, p, existing.Members, rbac.PermWrite, WriteScopeMeta(d.ConfigDir)); len(forbidden) > 0 {
-			writeGroupMemberForbidden(w, r, "delete", forbidden)
+			writeGroupMemberForbidden(w, r, d, p, "delete", nil, forbidden)
 			return
 		}
 
@@ -355,6 +406,12 @@ func DeleteGroup(d *Deps) http.HandlerFunc {
 				if !present {
 					return nil, nil
 				}
+				// The snapshot said visible; the file may since have changed
+				// members. Re-judged here so the answer matches what a GET
+				// would now say about the group being destroyed.
+				if !groupVisible(d, p, stored.Members) {
+					return nil, errGroupNotVisible
+				}
 				if f := tenantsLackingPermission(d.RBAC, d.TenantOrg, p, stored.Members, rbac.PermWrite, WriteScopeMeta(d.ConfigDir)); len(f) > 0 {
 					forbiddenOnDisk = f
 					return nil, errGroupMemberForbidden
@@ -362,8 +419,12 @@ func DeleteGroup(d *Deps) http.HandlerFunc {
 				delete(cfg.Groups, groupID)
 				return groups.MarshalConfig(cfg)
 			}); err != nil {
+			if errors.Is(err, errGroupNotVisible) {
+				writeGroupNotFound(w, r, groupID)
+				return
+			}
 			if errors.Is(err, errGroupMemberForbidden) {
-				writeGroupMemberForbidden(w, r, "delete", forbiddenOnDisk)
+				writeGroupMemberForbidden(w, r, d, p, "delete", nil, forbiddenOnDisk)
 				return
 			}
 			writeConfigFileError(w, r, err)
@@ -433,8 +494,8 @@ func requireTopLevelKey(data []byte, key string) error {
 	return nil
 }
 
-// errGroupMemberForbidden is returned by DeleteGroup's transform when the
-// group AS STORED has member tenants the caller may not write. MutateConfigFile
+// errGroupMemberForbidden is returned by the PutGroup / DeleteGroup transforms
+// when the group AS STORED has member tenants the caller may not write. MutateConfigFile
 // returns a transform error unchanged, so it arrives here as-is, and is matched with
 // errors.Is so the handler can answer 403 instead of the generic 500 a
 // transform failure would otherwise produce. The offending ids ride alongside
@@ -442,10 +503,41 @@ func requireTopLevelKey(data []byte, key string) error {
 // under the writer lock and the handler renders the response after it returns.
 var errGroupMemberForbidden = errors.New("group has member tenants the caller may not write")
 
+// errGroupNotVisible is returned by DeleteGroup's transform when the group as
+// stored is one the caller cannot see (groupVisible); the handler answers it
+// with the same 404 as a missing group.
+var errGroupNotVisible = errors.New("group is not visible to the caller")
+
 // writeGroupMemberForbidden renders the 403 for both the pre-check and the
 // in-lock check, so a caller cannot tell which of the two rejected them.
-func writeGroupMemberForbidden(w http.ResponseWriter, r *http.Request, verb string, forbidden []string) {
-	WriteJSONError(w, r, http.StatusForbidden,
-		"insufficient permission to "+verb+" group with forbidden member tenants: "+
-			strings.Join(forbidden, ", "))
+//
+// The ids it names depend on where they came from (#1531). fromRequest are ids
+// the caller sent, and are always named: the caller knows them already, and
+// naming every one is what authz.go's "fix it in one round-trip" contract asks
+// for. fromStored are ids read off the group on disk; only those the caller
+// can READ are named. The rest would hand out exactly what GET /groups/{id}
+// filters away, so they are only acknowledged, without a count: the 403 itself
+// already says something was refused, and a count would tell how many members
+// the read plane hid.
+func writeGroupMemberForbidden(w http.ResponseWriter, r *http.Request, d *Deps, p *rbac.VerifiedPrincipal, verb string, fromRequest, fromStored []string) {
+	named := append([]string(nil), fromRequest...)
+	hidden := false
+	for _, id := range fromStored {
+		if OrgAllowedRead(d.RBAC, d.TenantOrg, p, id, rbac.PermRead) {
+			named = append(named, id)
+		} else {
+			hidden = true
+		}
+	}
+	msg := "insufficient permission to " + verb + " group"
+	switch {
+	case len(named) > 0 && hidden:
+		msg += " with forbidden member tenants: " + strings.Join(named, ", ") +
+			"; it also has member tenants you cannot view"
+	case len(named) > 0:
+		msg += " with forbidden member tenants: " + strings.Join(named, ", ")
+	default:
+		msg += ": it has member tenants you cannot view"
+	}
+	WriteJSONError(w, r, http.StatusForbidden, msg)
 }

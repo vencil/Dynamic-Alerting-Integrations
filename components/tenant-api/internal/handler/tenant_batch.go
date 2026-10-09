@@ -327,7 +327,7 @@ func runBatchPR(d *Deps, rw http.ResponseWriter, r *http.Request, ops []BatchOpe
 		return BatchResponse{
 			Status:  "completed",
 			Results: batchResults,
-			Summary: fmt.Sprintf("%d failed", len(batchResults)),
+			Summary: prBatchSummary("completed", batchResults),
 			Message: "No valid operations to create PR/MR.",
 		}, true
 	}
@@ -371,7 +371,7 @@ func runBatchPR(d *Deps, rw http.ResponseWriter, r *http.Request, ops []BatchOpe
 			return BatchResponse{
 				Status:   "completed",
 				Results:  batchResults,
-				Summary:  fmt.Sprintf("%d unchanged", len(batchOps)),
+				Summary:  prBatchSummary("completed", batchResults),
 				Message:  "No changes to apply; no PR/MR created.",
 				Warnings: append(warnings, advisories...),
 			}, true
@@ -415,10 +415,34 @@ func runBatchPR(d *Deps, rw http.ResponseWriter, r *http.Request, ops []BatchOpe
 		PRURL:    pr.WebURL,
 		PRNumber: pr.Number,
 		Results:  batchResults,
-		Summary:  fmt.Sprintf("%d included in PR/MR, %d failed", len(batchOps), len(batchResults)-len(batchOps)),
+		Summary:  prBatchSummary("pending_review", batchResults),
 		Message:  fmt.Sprintf("Batch PR/MR created with %d tenant changes.", len(batchOps)),
 		Warnings: append(result.Notices, advisories...),
 	}, true
+}
+
+// prBatchSummary renders runBatchPR's summary line from its status and the
+// per-op results, in which every op taken into the PR is "included" and every
+// other op is a failure. It reads only the results it is given, so the group
+// endpoint can re-render it over the results the caller may see (#1530) and
+// get the same wording as for a /tenants/batch response.
+func prBatchSummary(status string, results []BatchResult) string {
+	included := 0
+	for _, res := range results {
+		if res.Status == "included" {
+			included++
+		}
+	}
+	failed := len(results) - included
+	switch {
+	case included == 0:
+		return fmt.Sprintf("%d failed", failed)
+	case status == "pending_review":
+		return fmt.Sprintf("%d included in PR/MR, %d failed", included, failed)
+	default:
+		// "completed" with ops taken in: WritePRBatch found nothing to change.
+		return fmt.Sprintf("%d unchanged", included)
+	}
 }
 
 // executeBatchOps runs batch operations synchronously and returns results.

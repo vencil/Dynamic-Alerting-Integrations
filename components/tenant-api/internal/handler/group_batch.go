@@ -99,9 +99,13 @@ func GroupBatch(d *Deps) http.HandlerFunc {
 		// the immutable principal snapshot, not r / r.Context().
 		p := rbac.RequestPrincipal(r)
 
+		// #1530: a group the caller cannot see is answered exactly like a
+		// missing one, BEFORE the body is read or validated — the later 400s
+		// ("group has no members", a bad patch) would otherwise confirm it
+		// exists, and the batch would run and report its hidden members.
 		g, ok := d.Groups.GetGroup(groupID)
-		if !ok {
-			WriteJSONError(w, r, http.StatusNotFound, "group not found: "+groupID)
+		if !ok || !groupVisible(d, p, g.Members) {
+			writeGroupNotFound(w, r, groupID)
 			return
 		}
 
@@ -178,14 +182,15 @@ func GroupBatch(d *Deps) http.HandlerFunc {
 			if !ok {
 				return
 			}
+			visible := visibleGroupBatchResults(d, p, resp.Results)
 			writeJSON(w, http.StatusOK, GroupBatchResponse{
 				Status:   resp.Status,
 				TaskID:   taskID,
 				GroupID:  groupID,
 				PRURL:    resp.PRURL,
 				PRNumber: resp.PRNumber,
-				Results:  resp.Results,
-				Summary:  resp.Summary,
+				Results:  visible,
+				Summary:  prBatchSummary(resp.Status, visible),
 				Message:  resp.Message,
 				Warnings: resp.Warnings,
 			})
@@ -212,7 +217,8 @@ func GroupBatch(d *Deps) http.HandlerFunc {
 		}
 
 		// Synchronous mode (default, backward compatible)
-		results := executeBatchOps(r.Context(), d.Writer, d.ConfigDir, ops, email, p, d.RBAC, d.TenantOrg, d.Policy)
+		results := visibleGroupBatchResults(d, p,
+			executeBatchOps(r.Context(), d.Writer, d.ConfigDir, ops, email, p, d.RBAC, d.TenantOrg, d.Policy))
 
 		writeJSON(w, http.StatusOK, GroupBatchResponse{
 			Status:  "completed",
@@ -222,4 +228,16 @@ func GroupBatch(d *Deps) http.HandlerFunc {
 			Summary: summarizeBatchResults(results),
 		})
 	}
+}
+
+// visibleGroupBatchResults keeps the per-member results the caller may read
+// (#1530). Unlike POST /tenants/batch, where every result names a tenant the
+// caller put in the request, a group batch runs over the STORED member list,
+// so its results would name members GET /groups/{id} filters away. The
+// summary must be rendered from what this returns, not from the full list:
+// "1 succeeded, 1 failed" beside one visible result is the hidden member again,
+// as a count. GET /tasks/{id} applies the same filter to the async path.
+func visibleGroupBatchResults(d *Deps, p *rbac.VerifiedPrincipal, results []BatchResult) []BatchResult {
+	return filterByRBAC(d.RBAC, d.TenantOrg, p, results,
+		func(r BatchResult) string { return r.TenantID }, rbac.PermRead)
 }
