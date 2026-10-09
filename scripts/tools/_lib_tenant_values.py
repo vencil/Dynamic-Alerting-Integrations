@@ -134,7 +134,16 @@ Raises (both loaders):
 * `ServedValuesError` / `EffectiveError` (both `DaGuardError`) — da-guard
   failed, or its output is not the JSON it should be (for `effective`, a
   `schema` other than `da-guard.effective/v1` included); carries the exit
-  code and stderr.
+  code and stderr. `binary_fault` says whether the binary failed rather
+  than the tree (#2725): it could not be run, exited with a code the
+  subcommand never uses, wrote output that is not its JSON (`broken`), or
+  is older than this tool (`stale`) — a missing field, or exit 2 from a
+  da-guard that does not accept the subcommand and flags, which the same
+  argv plus `-h` asks it (no file is written, its stderr is not read).
+  Exit 2 from a da-guard that accepts them is the tree's (no config file,
+  a tree the exporter's load rejects). ⚠️ Known limitation: a timeout, a
+  da-guard killed by a signal (negative exit code) and a Go panic (exit 2,
+  `-h` still 0) are not classified as the binary's fault.
 
 #2115: https://github.com/vencil/Dynamic-Alerting-Integrations/issues/2115
 #2564: https://github.com/vencil/Dynamic-Alerting-Integrations/issues/2564
@@ -323,17 +332,26 @@ class DaGuardNotFoundError(FileNotFoundError):
 class DaGuardError(RuntimeError):
     """A da-guard subcommand failed. `returncode` and `stderr` are its own.
     `stale` is True when the failure is named as a da-guard older than this
-    tool (its output lacks a field or flag this tool reads) — the binary's
-    fault, not the config tree's."""
+    tool (its output lacks a field this tool reads, or it does not accept
+    the subcommand and flags this tool runs) — the binary's fault, not the
+    config tree's. `broken` is True when the binary cannot be run or does
+    not answer as da-guard does (an exit code the subcommand never uses,
+    output that is not its JSON) — the binary's fault too (#2725)."""
 
     def __init__(self, message: str, returncode: int | None, stderr: str,
-                 stale: bool = False) -> None:
+                 stale: bool = False, broken: bool = False) -> None:
         self.message = message
         self.returncode = returncode
         self.stderr = stderr
         self.stale = stale
+        self.broken = broken
         detail = stderr.strip()
         super().__init__(f"{message}: {detail}" if detail else message)
+
+    @property
+    def binary_fault(self) -> bool:
+        """The da-guard binary failed, not the config tree (#2725)."""
+        return self.stale or self.broken
 
 
 class ServedValuesError(DaGuardError):
@@ -422,11 +440,31 @@ def _run_da_guard(
         raise error(f"da-guard {subcommand} did not finish within {timeout}s", None,
                     _stderr_text(e.stderr)) from e
     except OSError as e:
-        raise error(f"da-guard {subcommand} could not be run ({exe}): {e}", None, "") from e
+        # #2725: not executable, not a program this system runs, … — the binary.
+        raise error(f"da-guard {subcommand} could not be run ({exe}): {e}", None, "",
+                    broken=True) from e
 
     stderr = _stderr_text(proc.stderr)
-    if proc.returncode not in (_EXIT_OK, _EXIT_PARSE_FAILED):
+    if proc.returncode == _EXIT_CALLER_ERR:
+        # Exit 2 is da-guard's caller error AND a tree the exporter's load
+        # rejects (no config file, a tenant declared twice, …). Which one is
+        # asked of the binary, not of its stderr (#2725): the same argv plus
+        # `-h` exits 0 only when it knows the subcommand and every flag.
+        if not _accepts(cmd, timeout):
+            raise error(
+                f"da-guard {subcommand} exited {proc.returncode}, and this da-guard does not accept "
+                f"`{subcommand}` with {' '.join(a for a in cmd[2:] if a.startswith('--'))} — it is "
+                "older than this tool: upgrade or rebuild it", proc.returncode, stderr, stale=True)
         raise error(f"da-guard {subcommand} exited {proc.returncode}", proc.returncode, stderr)
+    if proc.returncode < 0:
+        # Killed by a signal (OOM, a timeout of the CI job, …): not classified,
+        # like the timeout above — neither `broken` nor `stale` (#2725 known
+        # limitation; such a row is still advised as the tree's).
+        raise error(f"da-guard {subcommand} exited {proc.returncode}", proc.returncode, stderr)
+    if proc.returncode not in (_EXIT_OK, _EXIT_PARSE_FAILED):
+        raise error(f"da-guard {subcommand} exited {proc.returncode}, an exit code it never uses "
+                    "(0, 2 or 3): this binary does not run as da-guard does",
+                    proc.returncode, stderr, broken=True)
     try:
         doc = json.loads(proc.stdout.decode("utf-8"))
         if schema is not None and doc["schema"] != schema:
@@ -438,9 +476,11 @@ def _run_da_guard(
     except (ValueError, KeyError, TypeError) as e:  # UnicodeDecodeError is a ValueError
         stale = (" — this da-guard is older than this tool: upgrade or rebuild it"
                  if isinstance(e, KeyError) and e.args in (("skipped",), ("unreadable",)) else "")
+        # Not the tree's either way: da-guard writes this JSON whatever the
+        # tree holds (#2725).
         raise error(
             f"da-guard {subcommand} exited {proc.returncode} without the expected JSON ({e}){stale}",
-            proc.returncode, stderr, stale=bool(stale)) from e
+            proc.returncode, stderr, stale=bool(stale), broken=not stale) from e
 
     if parse_failed or unreadable:
         clauses = []
@@ -458,8 +498,22 @@ def _run_da_guard(
         fields = "parse_failed or unreadable" if reads_unreadable else "parse_failed"
         raise error(
             f"da-guard {subcommand} exited {proc.returncode} with no file in {fields}",
-            proc.returncode, stderr)
+            proc.returncode, stderr, broken=True)
     return got, proc.returncode, stderr
+
+
+def _accepts(cmd: list[str], timeout: float) -> bool:
+    """Whether the da-guard in `cmd[0]` knows the subcommand and every flag
+    of `cmd`: Go's flag package stops at the first flag it does not know
+    (exit 2), and `-h` after all of them is help (exit 0, in every
+    da-guard that has the subcommand). A da-guard without the subcommand never parses
+    `-h` (it reads the subcommand's name as a stray argument). Nothing is
+    written; stderr is not read (#2725)."""
+    try:
+        proc = subprocess.run([*cmd, "-h"], capture_output=True, check=False, timeout=timeout)
+    except (OSError, subprocess.TimeoutExpired):
+        return False
+    return proc.returncode == _EXIT_OK
 
 
 GENERATED_AT_FORMAT = "%Y-%m-%dT%H:%M:%SZ"
@@ -527,22 +581,15 @@ def load_served_tree(
     extra = ["--at", at] if at is not None else []
     if schedules:
         extra.append("--schedules")
-    try:
-        (tenants, skipped, aliases), returncode, stderr = _run_da_guard(
-            SUBCOMMAND, extra, conf_d, binary, timeout, ServedValuesError, schema=None,
-            read=lambda doc: (doc["tenants"],
-                              [SkippedFile(str(e["file"]), str(e["reason"])) for e in doc["skipped"]],
-                              doc.get("aliases")),
-            reads_unreadable=True)
-    except ServedValuesError as e:
-        # A da-guard from before --schedules refuses the flag (Go's flag
-        # package: exit 2, "flag provided but not defined: -schedules").
-        if (schedules and e.returncode == _EXIT_CALLER_ERR
-                and "flag provided but not defined: -schedules" in e.stderr):
-            raise ServedValuesError(
-                f"{e.message} (--schedules not known) — this da-guard is older than this tool: "
-                "upgrade or rebuild it", e.returncode, e.stderr, stale=True) from e
-        raise
+    # A da-guard from before --schedules refuses the flag with exit 2; that
+    # is named as older than this tool by `_run_da_guard`'s `-h` check, not
+    # by a phrase of its stderr (#2725).
+    (tenants, skipped, aliases), returncode, stderr = _run_da_guard(
+        SUBCOMMAND, extra, conf_d, binary, timeout, ServedValuesError, schema=None,
+        read=lambda doc: (doc["tenants"],
+                          [SkippedFile(str(e["file"]), str(e["reason"])) for e in doc["skipped"]],
+                          doc.get("aliases")),
+        reads_unreadable=True)
     # Read after the fields _run_da_guard checks, so an older da-guard is
     # named by the first field it lacks.
     if aliases is None:
@@ -554,7 +601,7 @@ def load_served_tree(
     except AttributeError as e:
         raise ServedValuesError(
             f"da-guard {SUBCOMMAND} exited {returncode} without the expected JSON (aliases: {e})",
-            returncode, stderr) from e
+            returncode, stderr, broken=True) from e
 
     out: dict[str, TenantValues] = {}
     for tenant_id, tv in tenants.items():
@@ -568,7 +615,7 @@ def load_served_tree(
         except (ValueError, KeyError, TypeError) as e:
             raise ServedValuesError(
                 f"da-guard {SUBCOMMAND}: tenant {tenant_id!r} carries a value that is not a threshold ({e})",
-                returncode, stderr) from e
+                returncode, stderr, broken=True) from e
         days: dict[str, KeySchedule] | None = None
         if schedules:
             if "schedules" not in tv:
@@ -580,7 +627,7 @@ def load_served_tree(
             except (ValueError, KeyError, TypeError, AttributeError) as e:
                 raise ServedValuesError(
                     f"da-guard {SUBCOMMAND}: tenant {tenant_id!r} carries a schedule that is not of its shape ({e})",
-                    returncode, stderr) from e
+                    returncode, stderr, broken=True) from e
         out[tenant_id] = TenantValues(tenant_id, values, severities, dict(tv["unserved"]),
                                      {k: list(v) for k, v in tv["dropped"].items()}, days)
     return ServedTree(out, skipped, _nonempty_lines(stderr), aliases)
@@ -762,7 +809,7 @@ def _load_effective(conf_d: str | Path, binary: str | None, timeout: float,
     except (ValueError, KeyError, TypeError, AttributeError) as e:
         raise EffectiveError(
             f"da-guard {EFFECTIVE_SUBCOMMAND}: an entry is not the shape this reader reads ({e})",
-            returncode, stderr) from e
+            returncode, stderr, broken=True) from e
     return EffectiveTree(out, skipped)
 
 

@@ -1165,16 +1165,23 @@ _DA_GUARD_SOURCES = (
     "$PATH: it uses $DA_GUARD_BINARY, or builds .build/da-guard when that is "
     "unset. Then re-run.")
 _PROFILES_NO_DA_GUARD_HINT = _DA_GUARD_SOURCES + " No _profile reference was checked."
-# Shared by both rows: a da-guard named as older than this tool (its output
-# lacks a field this tool reads, e.g. effective's `skipped`) is the binary's
-# fault, not the tree's. ⚠️ Only that case: a da-guard with no `effective`
-# subcommand at all (the released v2.9.x) exits 2 with a usage error and is
-# still reported as a tree that cannot be read.
+# Shared by every row that reads through da-guard: a da-guard named as older
+# than this tool (its output lacks a field this tool reads, e.g. effective's
+# `skipped`, or it does not accept the subcommand and flags — the released
+# v2.9.x has no `effective` at all) is the binary's fault, not the tree's.
 _DA_GUARD_TOO_OLD_HINT = (
     "This da-guard is older than this tool: point $DA_GUARD_BINARY at a current "
     "one, rebuild it (in a checkout of this repo, `make da-guard-build`) or "
     "upgrade the da-tools image, then re-run. The config tree was not checked; "
     "do not edit it for this.")
+# The same for a da-guard that cannot be run or does not answer as da-guard
+# does (not executable, an exit code it never uses, output that is not its
+# JSON) (#2725): before, all of it was advice to repair the tree.
+_DA_GUARD_BROKEN_HINT = (
+    "The da-guard binary itself failed, as the lines above say: point "
+    "$DA_GUARD_BINARY at a working da-guard (executable, built from this repo: "
+    "`make da-guard-build`) or use the da-tools image, then re-run. The config "
+    "tree was not checked; do not edit it for this.")
 
 
 def _tenant_load_failure_row(check: str, exc: Exception, config_dir: str,
@@ -1182,31 +1189,35 @@ def _tenant_load_failure_row(check: str, exc: Exception, config_dir: str,
     """The FAIL row of a check that reads the tenants through da-guard
     (`_lib_tenant_values`) and could not (#2115 0-B): da-guard's own words
     below one line, and the hint for the cause — `hints` is (tree
-    unreadable, no config file, no da-guard). da-guard missing or older than
-    this tool is a caller error; everything else is the tree's."""
+    unreadable, no config file, no da-guard). A caller error: da-guard
+    missing, failing itself (`binary_fault`: it cannot be run, does not
+    answer as da-guard does, or is older than this tool, #2725), and a
+    --config-dir with no config file at all (#2725); everything else is the
+    tree's."""
     unreadable_hint, no_config_hint, no_da_guard_hint = hints
     buf = io.StringIO()
     print_load_error(exc, buf)
-    stale = isinstance(exc, DaGuardError) and exc.stale
+    caller_error = True
     if isinstance(exc, DaGuardNotFoundError):
         hint = no_da_guard_hint
-    elif stale:
+    elif isinstance(exc, DaGuardError) and exc.stale:
         hint = _DA_GUARD_TOO_OLD_HINT
+    elif isinstance(exc, DaGuardError) and exc.broken:
+        hint = _DA_GUARD_BROKEN_HINT
     elif isinstance(exc, ParseFailedError):
         # da-guard named the paths it dropped or could not read (its
         # `parse_failed` / `unreadable`) — a dangling symlink included.
-        hint = unreadable_hint
+        hint, caller_error = unreadable_hint, False
     elif next(iter_config_files(config_dir), None) is None:
-        hint = no_config_hint   # no path at all; only picks the advice
+        hint = no_config_hint   # no path at all: the argv points at nothing
     else:
-        hint = unreadable_hint
+        hint, caller_error = unreadable_hint, False
     return _make_result(check, FAIL,
                         ["the tenants cannot be read as threshold-exporter reads them:",
                          # "\n" only: `splitlines` also cuts at U+2028 etc.,
                          # which can sit in a file name (_lib_tenant_values).
                          *(ln for ln in buf.getvalue().split("\n") if ln)],
-                        caller_error=isinstance(exc, DaGuardNotFoundError) or stale,
-                        hint=hint)
+                        caller_error=caller_error, hint=hint)
 
 
 def _with_exporter_reasons(exc: ParseFailedError, config_dir: str) -> ParseFailedError:
@@ -1401,12 +1412,15 @@ def check_policy_dsl(config_dir: str, policy_dsl_file: str | None = None) -> dic
     a standalone policy DSL file, then evaluates against all tenant configs.
 
     The row carries ``_policy_scope`` (``root_carrier``: whether --config-dir
-    has a root defaults carrier; ``policy_dsl``: whether --policy-dsl was
-    given; ``evaluated``: whether tenants were evaluated) for ``_flag_flat_reads`` to word its line by, and only for it:
-    it pops the key, so it never reaches the report (#2115 0-B).
+    has a root defaults carrier — True, False, or ``"unreadable"`` for a path
+    that exists but is not a file it can open, e.g. a dangling symlink;
+    ``policy_dsl``: whether --policy-dsl was loaded, not merely given;
+    ``evaluated``: whether tenants were evaluated) for ``_flag_flat_reads`` to
+    word its line by, and only for it: it pops the key, so it never reaches
+    the report (#2115 0-B, #2725).
     """
     scope: dict[str, object] = {"root_carrier": None, "evaluated": False,
-                                "policy_dsl": policy_dsl_file is not None}
+                                "policy_dsl": False}
     row = _policy_dsl_row(config_dir, policy_dsl_file, scope)
     row["_policy_scope"] = scope
     return row
@@ -1428,9 +1442,13 @@ def _policy_dsl_row(config_dir: str, policy_dsl_file: str | None,
     # the nested carriers whose `_policies` this lookup skips are named.
     defaults_path = str(resolve_defaults_file(
         Path(config_dir), skipped_note=pe.POLICIES_SKIPPED_NOTE))
-    scope["root_carrier"] = os.path.isfile(defaults_path)
+    # #2725: a carrier that is there but cannot be opened (a dangling
+    # symlink) is not "no carrier" — that line told the operator to create one.
     if os.path.isfile(defaults_path):
+        scope["root_carrier"] = True
         rules.extend(pe.load_policies(defaults_path))
+    else:
+        scope["root_carrier"] = "unreadable" if os.path.lexists(defaults_path) else False
 
     # From standalone policy DSL file.
     # ⛔ The same collapse as --policy, written in the mirror form
@@ -1480,6 +1498,8 @@ def _policy_dsl_row(config_dir: str, policy_dsl_file: str | None,
         # exit 0. That is the CONTENT axis, which this PR does not close for
         # any of the three flags; see the NOT COVERED list in _grar_validate.
         rules.extend(pe.load_policies(policy_dsl_file))
+        # Only now: a --policy-dsl that failed above supplied no rule (#2725).
+        scope["policy_dsl"] = True
 
     if not rules:
         return _make_result("policy_dsl", PASS,
@@ -1515,18 +1535,43 @@ def _policy_dsl_row(config_dir: str, policy_dsl_file: str | None,
     for v in result.violations:
         icon = "ERROR" if v.severity == "error" else "WARN"
         details.append(f"[{icon}] {v.tenant}: {v.rule_name} — {v.message}")
+    notes = _policy_dsl_threshold_notes(tenant_configs)
 
     if result.error_count > 0:
         details.append(f"{result.error_count} error(s), {result.warning_count} warning(s) "
                        f"across {result.tenants_evaluated} tenants")
-        return _make_result("policy_dsl", FAIL, details)
+        return _make_result("policy_dsl", FAIL, details + notes)
     if result.warning_count > 0:
         details.append(f"{result.warning_count} warning(s) "
                        f"across {result.tenants_evaluated} tenants")
-        return _make_result("policy_dsl", WARN, details)
+        return _make_result("policy_dsl", WARN, details + notes)
     return _make_result("policy_dsl", PASS,
                         [f"{len(rules)} rules evaluated across "
-                         f"{result.tenants_evaluated} tenants — all passed"])
+                         f"{result.tenants_evaluated} tenants — all passed", *notes])
+
+
+def _policy_dsl_threshold_notes(views: dict[str, dict[str, object]]) -> list[str]:
+    """What the threshold rules had to compare (#2725), from the same
+    `load_policy_inputs` views the rules read — da-guard's answer, no YAML
+    read here. "all passed" alone read the same on a tree whose /metrics
+    serves no threshold at all (no root `defaults:`), where no threshold
+    rule had a number to compare. The verdict is unchanged: thresholds are
+    what /metrics serves (#2115 (c))."""
+    import policy_engine as pe
+    served = sum(isinstance(v, pe.ServedThreshold) for view in views.values() for v in view.values())
+    unserved = [f"{t}: {k}" for t, view in sorted(views.items())
+                for k, v in sorted(view.items()) if isinstance(v, pe.Unserved)]
+    notes = []
+    if not served:
+        notes.append("/metrics serves no threshold value for any tenant, so no rule "
+                     "compared a threshold")
+    if unserved:
+        shown = ", ".join(printable_name(u) for u in unserved[:WARN_LIMIT])
+        more = f" (+{len(unserved) - WARN_LIMIT} more)" if len(unserved) > WARN_LIMIT else ""
+        notes.append(f"{len(unserved)} threshold value(s) are configured but not served by "
+                     f"/metrics (da-guard served-values `unserved`), so only `required` "
+                     f"rules see them: {shown}{more}")
+    return notes
 
 
 # ============================================================
@@ -2133,8 +2178,13 @@ def check_values_not_served(config_dir: str) -> dict[str, object]:
             details.append(f"{ns.file or te.source_file}: tenant {tid}: `{key}`: {ns.reason}")
     if details:
         return _make_result("values_not_served", FAIL, details)
+    # #2725: not "serves every threshold value as written" — a value no
+    # defaults file declares is not served at all (served-values `unserved`),
+    # and this row, by its predicate, does not name it.
     return _make_result("values_not_served", PASS, [
-        f"{len(tree.tenants)} tenant(s): /metrics serves every threshold value as written"])
+        f"{len(tree.tenants)} tenant(s): no threshold value the exporter refuses as written "
+        f"(a value /metrics does not serve for another reason, e.g. a key no defaults file "
+        f"declares, is not this row's finding)"])
 
 
 def check_root_defaults(config_dir: str) -> dict[str, object]:
@@ -2702,8 +2752,10 @@ def _flag_flat_reads(row: dict[str, object], flat_reads: list[FlatRead],
             # #2115 0-B: policy_dsl reads its tenants from the whole tree; the
             # one flat read left is the root-carrier lookup of `_policies`.
             # Only a row that evaluated tenants says so (#2115 0-B).
-            if scope.get("root_carrier") is False:
-                source = "there is no root defaults carrier"
+            if scope.get("root_carrier") in (False, "unreadable"):
+                source = ("the root defaults carrier cannot be opened, so no `_policies` "
+                          "were read from it" if scope["root_carrier"] == "unreadable"
+                          else "there is no root defaults carrier")
                 if scope.get("policy_dsl"):
                     source += "; rules come from --policy-dsl"
             else:

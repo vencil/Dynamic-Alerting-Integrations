@@ -230,18 +230,19 @@ def test_file_the_exporter_drops_fails_closed(tmp_path):
 def test_empty_config_dir_fails_with_the_no_config_hint(tmp_path):
     """空 conf.d（F3）：exporter 對它拒絕啟動（"no .yaml files found"），所以這一列 FAIL、
     給 NO_CONFIG 的建議，不是「0 tenants」的 PASS。main 是 PASS／rc 0：行為變更，已揭露於
-    changelog.d。"""
+    changelog.d。#2725：--config-dir 底下沒有任何設定檔是呼叫端的錯（caller error、rc 2），
+    不是樹裡某個檔的問題。"""
     conf_d = tmp_path / "conf.d"
     conf_d.mkdir()
     row = vc.check_profiles(str(conf_d))
-    assert row["status"] == vc.FAIL and row["caller_error"] is False, row
+    assert row["status"] == vc.FAIL and row["caller_error"] is True, row
     assert row["hint"] == vc._PROFILES_NO_CONFIG_FILE_HINT, row
     assert any("no .yaml files found" in d for d in row["details"]), row
     p = subprocess.run([sys.executable, str(OPS / "validate_config.py"), "--config-dir", str(conf_d),
                         "--json"], capture_output=True, text=True, encoding="utf-8",
                        errors="replace", timeout=300)
     rows = {r["check"]: r for r in json.loads(p.stdout)}
-    assert p.returncode == 1, (p.returncode, rows["profiles"])
+    assert p.returncode == 2, (p.returncode, rows["profiles"])
     assert rows["profiles"]["suggested_action"] == vc._PROFILES_NO_CONFIG_FILE_HINT, rows["profiles"]
 
 
