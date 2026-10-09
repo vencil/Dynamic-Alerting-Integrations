@@ -188,6 +188,19 @@ func IsScannedPath(rel string) bool {
 }
 
 // TreeFile is one YAML file the walk kept.
+//
+// ⛔ IMMUTABLE ONCE THE WALK RETURNS, AND SHARED ACROSS SCANS (#1939). A file
+// the mtime fast-path carries is the prior scan's *TreeFile itself, not a
+// copy: every field it would hold — path, stat, hash, declarations, nil Data —
+// is the prior's already, and a fresh struct per unchanged file was 1000
+// allocations on every quiet tick of a 1000-tenant tree. So a TreeFile may
+// sit in the retained prior AND in any number of later scans (a quiet tick's
+// scan is discarded while the prior it shares with stays), and a write to any
+// field reaches all of them. Nothing writes one after the walk: ReleaseData
+// writes only a non-nil Data, and a shared file's Data is always nil (a prior
+// file still holding bytes is never shared — see walkDirTree).
+// Per-scan facts about a file (was it read, was it parsed THIS scan) are
+// therefore not fields here but TreeScan.Reused / TreeScan.Parsed.
 type TreeFile struct {
 	AbsPath string // Clean absolute path under the RESOLVED root (hierarchy key)
 	RelKey  string // root-relative slash path (flat key)
@@ -211,16 +224,6 @@ type TreeFile struct {
 	// reorder it. Readers range over it or hand it to a sorting copy.
 	TenantIDs  []string
 	IsDefaults bool // confdname.IsDefaults(basename): lower-cases to `_defaults.yaml` / `.yml`
-	Reused     bool // Hash + TenantIDs came from prior (mtime fast-path)
-	// Parsed records that THIS scan ran parseTenantDecls on the file's
-	// bytes. False when the declarations were carried from the prior — by
-	// the mtime fast-path, or because the file was read (too young for the
-	// guard, or stat mismatch) and hashed IDENTICAL to the prior. That second
-	// carry is load-bearing for cost: a tree whose files are younger than
-	// TreeScanMtimeGuard is read on every tick, and re-parsing 1000 unchanged
-	// files each time is the parse cost the bench gate flagged. Declarations
-	// are a function of the bytes, and the hash is the bytes.
-	Parsed bool
 	// ParseFailed records that the tenant-declaration parse of this file's
 	// bytes failed. ⛔ A file in this state NEVER takes the mtime fast-path:
 	// reusing its prior would silence da_config_parse_failure_total after the
@@ -317,6 +320,15 @@ type TreeScan struct {
 	// walk returns.
 	attrib map[string]string
 	dups   map[string]*DuplicateTenantError
+
+	// walkOrder is every kept file in walk order and fileFlags its per-scan
+	// facts at the same index (fileReused / fileParsed). They live on the
+	// scan, not on TreeFile, because a carried TreeFile is shared with the
+	// prior (#1939): a flag on it would be one flag for two scans. One flat
+	// slice, not a map, so a cold or re-read scan pays one allocation for it.
+	// Read only through Reused / Parsed.
+	walkOrder []*TreeFile
+	fileFlags []uint8
 
 	// graph is built on first use (InheritanceGraph), not by the walk: the
 	// flat plane's paths (incrementalLoadFrom, the flat branch of detectChange)
@@ -453,6 +465,45 @@ func ScanDirTree(root string, prior *TreeScan, obs ScanObserver, logger *log.Log
 func (s *TreeScan) Usable() bool {
 	return s.Conflict == nil && s.RootWalkErr == nil && len(s.Files) > 0
 }
+
+// Per-scan file facts, bits of TreeScan.fileFlags.
+const (
+	// fileReused: the mtime fast-path decided the file — its Hash and
+	// TenantIDs came from the prior and THIS scan did not read it.
+	fileReused uint8 = 1 << iota
+	// fileParsed: THIS scan ran parseTenantDecls on the file's bytes. Not
+	// set when the declarations were carried from the prior — by the mtime
+	// fast-path, or because the file was read (too young for the guard, or
+	// stat mismatch) and hashed IDENTICAL to the prior. That second carry is
+	// load-bearing for cost: a tree whose files are younger than
+	// TreeScanMtimeGuard is read on every tick, and re-parsing 1000 unchanged
+	// files each time is the parse cost the bench gate flagged. Declarations
+	// are a function of the bytes, and the hash is the bytes.
+	fileParsed
+)
+
+// fileFlag reports whether bit is set for the kept file relKey on THIS scan.
+// A linear search: the only readers are tests and bench pre-checks, and an
+// index map would cost every scan an allocation per file.
+func (s *TreeScan) fileFlag(relKey string, bit uint8) bool {
+	for i, f := range s.walkOrder {
+		if f.RelKey == relKey {
+			return s.fileFlags[i]&bit != 0
+		}
+	}
+	return false
+}
+
+// Reused reports whether the mtime fast-path decided the kept file relKey on
+// this scan (Hash + TenantIDs from the prior, the file not read). False for
+// a key the scan did not keep. Per scan, not per TreeFile (#1939): the same
+// *TreeFile can be carried by one scan and have been read by the one before.
+func (s *TreeScan) Reused(relKey string) bool { return s.fileFlag(relKey, fileReused) }
+
+// Parsed reports whether this scan ran the tenant-declaration parse on the
+// kept file relKey (see fileParsed for when it does not). Unaffected by
+// ReleaseData.
+func (s *TreeScan) Parsed(relKey string) bool { return s.fileFlag(relKey, fileParsed) }
 
 // walkMode selects how much of the tree walkDirTree visits. Unexported on
 // purpose: the only non-full callers are scanRootDefaults and
@@ -740,33 +791,59 @@ func walkDirTree(root string, prior *TreeScan, obs ScanObserver, logger *log.Log
 
 	// Phase 2: hash + classify, in WALK order (the duplicate-tenant error
 	// names the first two files in that order, as it always has).
-	var walkOrder []*TreeFile
+	walkOrder := make([]*TreeFile, 0, len(entries))
+	fileFlags := make([]uint8, 0, len(entries))
 	for _, e := range entries {
 		name := e.rel[strings.LastIndexByte(e.rel, '/')+1:]
-		f := &TreeFile{
-			AbsPath:    e.abs,
-			RelKey:     e.rel,
-			Stat:       e.stat,
-			LinkStat:   e.link,
-			IsDefaults: confdname.IsDefaults(name),
-		}
+		isDefaults := confdname.IsDefaults(name)
 
 		var pf *TreeFile
 		if prior != nil {
 			pf = prior.Files[e.rel]
 		}
-		if pf != nil && pf.Hash != "" && !pf.ParseFailed && pf.Stat == f.Stat && sameLinkStat(pf.LinkStat, f.LinkStat) &&
-			time.Since(time.Unix(0, guardMtime(f.Stat, f.LinkStat))) > TreeScanMtimeGuard {
-			f.Hash = pf.Hash
+		var f *TreeFile
+		var flags uint8
+		if pf != nil && pf.Hash != "" && !pf.ParseFailed && pf.Stat == e.stat && sameLinkStat(pf.LinkStat, e.link) &&
+			time.Since(time.Unix(0, guardMtime(e.stat, e.link))) > TreeScanMtimeGuard {
+			flags = fileReused
 			// ⛔ THE CARRY. Reusing the hash without the declarations would
 			// make the tenant vanish from the hierarchy on every quiet tick.
-			// The slice is SHARED, not copied: TenantIDs is never mutated
-			// after parseTenantDecls builds it (see the field's doc), and a
-			// copy per file was 1000 allocs on every quiet tick of a
-			// 1000-tenant tree.
-			f.TenantIDs = pf.TenantIDs
-			f.Reused = true
+			//
+			// ⛔ THE PRIOR'S *TreeFile ITSELF, NOT A COPY (#1939), when it
+			// already holds exactly what a fresh one would: same RelKey (the
+			// map key), same Stat and LinkStat values (just compared), same
+			// Hash and TenantIDs (the carry), ParseFailed false (just
+			// checked). Two fields are not implied and are checked: AbsPath
+			// (the resolved root can move under the same relative key, e.g.
+			// a retargeted root symlink) and Data — a carried file holds no
+			// bytes, and a prior that was never ReleaseData'd still does.
+			// IsDefaults is a function of the name, compared anyway so a
+			// hand-built prior (tests) cannot leak a wrong one. Sharing makes TreeFile
+			// immutable for good; see its doc. A fresh struct per unchanged
+			// file was 1000 allocs on every quiet tick of a 1000-tenant tree.
+			if pf.AbsPath == e.abs && pf.Data == nil && pf.IsDefaults == isDefaults {
+				f = pf
+			} else {
+				// TenantIDs is SHARED, not copied: it is never mutated after
+				// parseTenantDecls builds it (see the field's doc).
+				f = &TreeFile{
+					AbsPath:    e.abs,
+					RelKey:     e.rel,
+					Hash:       pf.Hash,
+					Stat:       e.stat,
+					LinkStat:   e.link,
+					TenantIDs:  pf.TenantIDs,
+					IsDefaults: isDefaults,
+				}
+			}
 		} else {
+			f = &TreeFile{
+				AbsPath:    e.abs,
+				RelKey:     e.rel,
+				Stat:       e.stat,
+				LinkStat:   e.link,
+				IsDefaults: isDefaults,
+			}
 			data, rerr := os.ReadFile(e.abs)
 			if rerr != nil {
 				logger.Printf("WARN: cannot read %s: %v", e.abs, rerr)
@@ -796,7 +873,7 @@ func walkDirTree(root string, prior *TreeScan, obs ScanObserver, logger *log.Log
 			default:
 				var partial ThresholdConfig
 				f.TenantIDs, partial, f.ParseFailed = parseTenantDecls(e.abs, data, obs, logger)
-				f.Parsed = true
+				flags |= fileParsed
 				if !f.ParseFailed {
 					if scan.Partials == nil {
 						scan.Partials = make(map[string]ThresholdConfig)
@@ -809,6 +886,7 @@ func walkDirTree(root string, prior *TreeScan, obs ScanObserver, logger *log.Log
 		scan.Files[e.rel] = f
 		scan.Keys = append(scan.Keys, e.rel)
 		walkOrder = append(walkOrder, f)
+		fileFlags = append(fileFlags, flags)
 		if f.IsDefaults {
 			scan.Defaults[e.abs] = true
 		}
@@ -822,9 +900,14 @@ func walkDirTree(root string, prior *TreeScan, obs ScanObserver, logger *log.Log
 		scan.Unreadable = unreadable
 	}
 	scan.RootWalkErr = rootWalkErr
+	// One buffer for every per-file hash (#1939): `Write([]byte(h))` made a
+	// fresh copy per file, because Write is an interface call the conversion
+	// escapes through — 1000 allocations per tick on a 1000-file tree.
 	compositeHasher := sha256.New()
+	var hashBuf []byte
 	for _, k := range scan.Keys {
-		compositeHasher.Write([]byte(scan.Files[k].Hash))
+		hashBuf = append(hashBuf[:0], scan.Files[k].Hash...)
+		compositeHasher.Write(hashBuf)
 	}
 	scan.Composite = fmt.Sprintf("%x", compositeHasher.Sum(nil))
 
@@ -864,6 +947,8 @@ func walkDirTree(root string, prior *TreeScan, obs ScanObserver, logger *log.Log
 	}
 	scan.attrib = tenants
 	scan.dups = dups
+	scan.walkOrder = walkOrder
+	scan.fileFlags = fileFlags
 	if scan.Conflict == nil {
 		scan.Tenants = tenants
 	}
@@ -986,9 +1071,17 @@ func (s *TreeScan) DataCache() map[string][]byte {
 // next prior, and the prior reads only Hash, Stat, TenantIDs and
 // ParseFailed — keeping a cold load's bytes or decoded configs alive until
 // the first reload would be a silent retention the cache never had.
+//
+// ⛔ WRITES ONLY A NON-NIL Data (#1939). A file the fast-path carried is the
+// prior's *TreeFile, shared with the retained prior (and with whoever reads
+// it); its Data is nil by construction, and an unconditional `f.Data = nil`
+// would still be a write to an object another scan owns — a data race even
+// though the value does not change.
 func (s *TreeScan) ReleaseData() {
 	for _, f := range s.Files {
-		f.Data = nil
+		if f.Data != nil {
+			f.Data = nil
+		}
 	}
 	s.Partials = nil
 }

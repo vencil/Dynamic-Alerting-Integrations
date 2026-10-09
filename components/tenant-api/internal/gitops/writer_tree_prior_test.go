@@ -5,7 +5,7 @@ package gitops
 // parsed again — WritePRBatch's walk before each op included. These tests pin
 // both halves — the reuse actually happens, and
 // every verdict the #2078 guard derives from a walk stays what a cold walk
-// would say — through the walker's own TreeFile.Reused / Parsed flags and the
+// would say — through the walker's own TreeScan.Reused / Parsed flags and the
 // per-Writer onTreeScan seam, never through wall-clock timings.
 
 import (
@@ -92,8 +92,8 @@ func TestTreePrior_SecondScanReusesUnchangedFiles(t *testing.T) {
 	w := &Writer{configDir: dir}
 
 	first := mustScan(t, w)
-	for k, f := range first.Files {
-		if f.Reused {
+	for k := range first.Files {
+		if first.Reused(k) {
 			t.Errorf("cold walk: %s Reused", k)
 		}
 	}
@@ -101,9 +101,9 @@ func TestTreePrior_SecondScanReusesUnchangedFiles(t *testing.T) {
 	if len(second.Files) != 3 {
 		t.Fatalf("second walk kept %d files, want 3", len(second.Files))
 	}
-	for k, f := range second.Files {
-		if !f.Reused || f.Parsed {
-			t.Errorf("second walk: %s Reused=%v Parsed=%v, want reused and not parsed", k, f.Reused, f.Parsed)
+	for k := range second.Files {
+		if !second.Reused(k) || second.Parsed(k) {
+			t.Errorf("second walk: %s Reused=%v Parsed=%v, want reused and not parsed", k, second.Reused(k), second.Parsed(k))
 		}
 	}
 	wantLocated(t, second, "rp-a", "rp-a.yaml")
@@ -170,7 +170,7 @@ func TestTreePrior_BranchSwitchIsSeen(t *testing.T) {
 	onFeat := mustScan(t, w)
 	wantLocated(t, onFeat, "sw-jjj", "sw-host.yaml")
 	wantLocated(t, onFeat, "sw-kkk", "")
-	if f := onFeat.Files["sw-other.yaml"]; !f.Reused {
+	if !onFeat.Reused("sw-other.yaml") {
 		t.Errorf("sw-other.yaml was not taken from the prior: the walk was cold")
 	}
 	if err := w.ensureNotDeclaredElsewhere("sw-jjj", filepath.Join(dir, "sw-jjj.yaml")); !errors.Is(err, ErrTenantDeclaredElsewhere) {
@@ -206,8 +206,8 @@ func TestTreePrior_DeletedAndAddedFiles(t *testing.T) {
 	wantLocated(t, s, "da-gone", "")
 	wantLocated(t, s, "da-new", "sub/da-new.yaml")
 	wantLocated(t, s, "da-stay", "da-stay.yaml")
-	if f := s.Files["sub/da-new.yaml"]; f == nil || f.Reused || !f.Parsed {
-		t.Errorf("added file must be parsed, got %+v", f)
+	if f := s.Files["sub/da-new.yaml"]; f == nil || s.Reused("sub/da-new.yaml") || !s.Parsed("sub/da-new.yaml") {
+		t.Errorf("added file must be parsed, got %+v (Reused=%v Parsed=%v)", f, s.Reused("sub/da-new.yaml"), s.Parsed("sub/da-new.yaml"))
 	}
 }
 
@@ -228,10 +228,12 @@ func TestTreePrior_DeclaredElsewhereHoldsOnReusedWalk(t *testing.T) {
 		// checkout rewrote it with identical bytes — by the same-hash carry.
 		// Either way the file is not parsed again.
 		var f *cfg.TreeFile
+		parsed := false
 		if prior := w.treePrior.Load(); prior != nil {
 			f = prior.Files["team/de-host.yaml"]
+			parsed = prior.Parsed("team/de-host.yaml")
 		}
-		if i > 0 && (f == nil || f.Parsed) {
+		if i > 0 && (f == nil || parsed) {
 			t.Errorf("%s: de-host.yaml was parsed again (a cold walk)", mode)
 		}
 	}
@@ -342,8 +344,8 @@ func TestTreePriorBatch_LaterOpsWalkFromPrior(t *testing.T) {
 	var walks atomic.Int32
 	var parsedAgain []int32
 	bystanderParsed := func() bool {
-		f := w.treePrior.Load().Files["team/lo-bystander.yaml"]
-		return f == nil || f.Parsed
+		prior := w.treePrior.Load()
+		return prior.Files["team/lo-bystander.yaml"] == nil || prior.Parsed("team/lo-bystander.yaml")
 	}
 	w.onTreeScan = func() {
 		if n := walks.Add(1); n >= 3 && bystanderParsed() {

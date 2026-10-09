@@ -90,7 +90,7 @@ func TestScanDirTree_FastPathCarriesTenantDecls(t *testing.T) {
 		if f.Data == nil {
 			t.Errorf("cold scan must cache every file's bytes; %s has none", k)
 		}
-		if f.Reused {
+		if first.Reused(k) {
 			t.Errorf("cold scan cannot reuse anything; %s claims it did", k)
 		}
 	}
@@ -129,7 +129,7 @@ func TestScanDirTree_FastPathCarriesTenantDecls(t *testing.T) {
 		t.Errorf("composite moved on an unchanged-by-stat tree: %s → %s", first.Composite, second.Composite)
 	}
 	for k, f := range second.Files {
-		if !f.Reused {
+		if !second.Reused(k) {
 			t.Errorf("%s was read on the warm scan (stat unchanged, aged past the guard)", k)
 		}
 		if f.Data != nil {
@@ -178,10 +178,10 @@ func TestScanDirTree_YoungFileIsReadDespiteMatchingStat(t *testing.T) {
 	if err != nil {
 		t.Fatalf("second scan: %v", err)
 	}
-	if second.Files["t-alpha.yaml"].Reused {
+	if second.Reused("t-alpha.yaml") {
 		t.Errorf("a file younger than the guard must be read, not reused")
 	}
-	if second.Files["nested/t-beta.yaml"].Reused != true {
+	if !second.Reused("nested/t-beta.yaml") {
 		t.Errorf("an aged, unchanged sibling must still take the fast-path")
 	}
 	// Read, hash unchanged → not cached (the cache is "needs re-parse").
@@ -441,10 +441,10 @@ func TestManagerWalksTheTreeOncePerPath(t *testing.T) {
 			if tree2 == tree {
 				t.Errorf("the reload did not retain its own scan as the next prior")
 			}
-			if f := tree2.Files[betaKey]; f == nil || !f.Reused {
+			if f := tree2.Files[betaKey]; f == nil || !tree2.Reused(betaKey) {
 				t.Errorf("%s was read on a tick that did not touch it (fast-path lost)", betaKey)
 			}
-			if f := tree2.Files["t-alpha.yaml"]; f == nil || f.Reused {
+			if f := tree2.Files["t-alpha.yaml"]; f == nil || tree2.Reused("t-alpha.yaml") {
 				t.Errorf("the edited t-alpha.yaml took the fast-path; its bytes were never read")
 			}
 
@@ -549,8 +549,8 @@ func TestScanDirTree_UnchangedYoungFileIsNotReparsed(t *testing.T) {
 	if err != nil {
 		t.Fatalf("first scan: %v", err)
 	}
-	for k, f := range first.Files {
-		if !strings.HasPrefix(filepath.Base(k), "_") && !f.Parsed {
+	for k := range first.Files {
+		if !strings.HasPrefix(filepath.Base(k), "_") && !first.Parsed(k) {
 			t.Errorf("cold scan must parse every tenant carrier; %s was not", k)
 		}
 	}
@@ -572,17 +572,17 @@ func TestScanDirTree_UnchangedYoungFileIsNotReparsed(t *testing.T) {
 		t.Fatalf("second scan: %v", err)
 	}
 	alpha := second.Files["t-alpha.yaml"]
-	if alpha.Reused {
+	if second.Reused("t-alpha.yaml") {
 		t.Fatalf("t-alpha is younger than the guard; it must have been read")
 	}
-	if alpha.Parsed {
+	if second.Parsed("t-alpha.yaml") {
 		t.Errorf("t-alpha was read but its hash did not move: declarations must be carried, not re-parsed")
 	}
 	if got, want := alpha.TenantIDs, []string{"t-alpha"}; !reflect.DeepEqual(got, want) {
 		t.Errorf("carried declarations = %v, want %v", got, want)
 	}
 	beta := second.Files["nested/t-beta.yaml"]
-	if !beta.Parsed {
+	if !second.Parsed("nested/t-beta.yaml") {
 		t.Errorf("t-beta's bytes changed; it must be parsed")
 	}
 	if got, want := beta.TenantIDs, []string{"t-beta", "t-gamma"}; !reflect.DeepEqual(got, want) {

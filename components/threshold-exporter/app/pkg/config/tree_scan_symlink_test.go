@@ -111,7 +111,7 @@ func TestScanDirTree_ConfigMapDataSwapChangesHash(t *testing.T) {
 				t.Fatalf("_defaults.yaml missing after the swap; log:\n%s", logBuf.String())
 			}
 			if nf.Hash == pf.Hash {
-				t.Errorf("_defaults.yaml hash unchanged across the ..data swap (Reused=%v): the fast-path carried the old payload", nf.Reused)
+				t.Errorf("_defaults.yaml hash unchanged across the ..data swap (Reused=%v): the fast-path carried the old payload", next.Reused("_defaults.yaml"))
 			}
 			if string(nf.Data) != defaultsV2 {
 				t.Errorf("_defaults.yaml Data = %q, want the new payload %q", nf.Data, defaultsV2)
@@ -214,7 +214,7 @@ func TestScanDirTree_SymlinkRetargetToIdenticalStatTarget(t *testing.T) {
 				t.Fatalf("_defaults.yaml missing after the retarget; log:\n%s", logBuf.String())
 			}
 			if nf.Hash == prior.Files["_defaults.yaml"].Hash {
-				t.Errorf("_defaults.yaml hash unchanged across the retarget (Reused=%v): the fast-path carried the old target", nf.Reused)
+				t.Errorf("_defaults.yaml hash unchanged across the retarget (Reused=%v): the fast-path carried the old target", next.Reused("_defaults.yaml"))
 			}
 			if string(nf.Data) != v2 {
 				t.Errorf("_defaults.yaml Data = %q, want the new target's %q", nf.Data, v2)
@@ -300,8 +300,8 @@ func testDanglingSymlinkedCarrier(t *testing.T, collide bool) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if f, ok := next.Files["_defaults.yaml"]; ok {
-		t.Errorf("dangling _defaults.yaml kept (Reused=%v): it must be dropped, not carried from the prior", f.Reused)
+	if _, ok := next.Files["_defaults.yaml"]; ok {
+		t.Errorf("dangling _defaults.yaml kept (Reused=%v): it must be dropped, not carried from the prior", next.Reused("_defaults.yaml"))
 	}
 	if got := filepath.Base(next.DefaultsCarriers().ByDir[next.AbsRoot]); got != "_defaults.yml" {
 		t.Errorf("carrier after the target vanished = %q, want _defaults.yml", got)
