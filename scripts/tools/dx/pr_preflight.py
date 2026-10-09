@@ -1103,8 +1103,7 @@ def _prepush_guards_wired() -> Tuple[Optional[bool], str]:
 
     回傳 `(wired, message)`。⛔ **「量不到」與「量了沒事」要分得開**。
     """
-    # ⛔ core.hooksPath 有設（空字串也算）就不判（#2696），與 pre-commit 拒絕安裝的
-    # 判準相同。它指向的可能是許多 repo 共用的目錄，裝進去的 shim 會擋下其他 repo 的
+    # ⛔ core.hooksPath 有設（空字串也算）就不判（#2696）。它指向的可能是許多 repo 共用的目錄，裝進去的 shim 會擋下其他 repo 的
     # 每一次 push；空字串則讓 git 一支 hook 都不跑。None：這裡量不到本 repo 的守衛。
     # GIT_CONFIG 只改變 `git config` 讀哪個檔，git 跑 hook 時照樣讀原本的設定。
     env = {k: v for k, v in os.environ.items() if k != "GIT_CONFIG"}
@@ -1112,10 +1111,7 @@ def _prepush_guards_wired() -> Tuple[Optional[bool], str]:
     if hp.returncode == 0:
         return None, (
             f"量不到：core.hooksPath 設成 {(hp.stdout or '').strip()!r}；本 repo 的守衛"
-            "只在它沒設時判定與安裝（pre-commit 也一樣拒絕）。先移除 core.hooksPath"
-            "（`git config --show-origin --get core.hooksPath` 指出設在哪；"
-            "設在 global 或 system 的值其他 repo 也在用，移除前先想好它們），"
-            "再跑 install_prepush_hook.sh。"
+            "只在它沒設時判定與安裝。"
         )
     r = run(["git", "rev-parse", "--git-path", "hooks/pre-push"], timeout=30)
     if hp.returncode != 1 or r.returncode != 0:
@@ -1128,6 +1124,13 @@ def _prepush_guards_wired() -> Tuple[Optional[bool], str]:
             "請在 `git` 可執行、且位於本 repo 內的 shell 重跑（Windows：Git Bash）。"
         )
     hook = Path((r.stdout or "").strip())
+    # ⛔ hooks 目錄本身是 symlink 時也不判：它可能連到其他 repo 共用的目錄，
+    # 與共用的 core.hooksPath 同一種傷害（#2696）。
+    if hook.parent.is_symlink():
+        return None, (
+            f"量不到：{hook.parent} 是 symlink；本 repo 的守衛只在本 repo 自己的"
+            " hooks 目錄判定與安裝，不經過連結。"
+        )
     shim = _shim_body()
     if shim is None:
         return None, (

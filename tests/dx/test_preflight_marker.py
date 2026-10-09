@@ -428,9 +428,8 @@ class TestPrepushWiring:
         """#2696: core.hooksPath can point git at a directory many repositories
         share, where a shim refuses every push of every one of them, and ""
         makes git run no hook at all. While it is set, whatever its value,
-        neither the judgement nor the installer goes there — pre-commit refuses
-        on the same test. The message names core.hooksPath, and its remedy is
-        followed once."""
+        neither the judgement nor the installer goes there, and the message
+        names core.hooksPath; unsetting it brings the guards back."""
         mod = _load()
         repo = tmp_path / "repo"
         repo.mkdir()
@@ -462,24 +461,57 @@ class TestPrepushWiring:
             ["git", "config", *where, "--unset", "core.hooksPath"], cwd=repo).returncode == 0
         assert self._install_guards(repo).returncode == 0
         wired, why = mod._prepush_guards_wired()
-        assert wired is True, f"following the message's remedy did not fix it: {why!r}"
+        assert wired is True, f"unsetting core.hooksPath did not bring the guards back: {why!r}"
 
-    def test_a_symlinked_hooks_directory_is_where_the_guards_go(self, tmp_path, monkeypatch):
-        """Without core.hooksPath, .git/hooks itself may be a symlink (to a
-        dotfiles checkout, say). git runs the hooks through it, so the guards
-        install and are judged there as anywhere else."""
+    def test_git_config_failing_to_read_hooks_path_changes_nothing(self, tmp_path, monkeypatch):
+        """When git cannot say whether core.hooksPath is set, neither side
+        takes it for unset: the judgement is None and the installer stops
+        with nothing changed."""
         mod = _load()
-        self._repo(tmp_path)
-        monkeypatch.chdir(tmp_path)
-        hooks = tmp_path / ".git" / "hooks"
-        real = tmp_path / "real-hooks"
-        shutil.move(str(hooks), str(real))
-        symlink_or_skip(real, hooks)
-        r = self._install_guards(tmp_path)
-        assert r.returncode == 0, r.stderr
+        repo = tmp_path / "repo"
+        repo.mkdir()
+        self._repo(repo)
+        monkeypatch.chdir(repo)
+        real = shutil.which("git")
+        bindir = tmp_path / "bin"
+        bindir.mkdir()
+        (bindir / "git").write_text(
+            "#!/bin/sh\n"
+            'if [ "$1 $2 $3" = "config --get core.hooksPath" ]; then exit 5; fi\n'
+            f'exec "{real}" "$@"\n', encoding="utf-8", newline="\n")
+        (bindir / "git").chmod(0o755)
+        monkeypatch.setenv("PATH", f"{bindir}{os.pathsep}{os.environ['PATH']}")
+        before = sorted(p.name for p in (repo / ".git" / "hooks").iterdir())
+
         wired, why = mod._prepush_guards_wired()
-        assert wired is True, why
-        assert (real / "pre-push").is_file()
+        assert wired is None, why
+        r = self._install_guards(repo)
+        assert r.returncode == 2 and "cannot read core.hooksPath" in r.stderr, r.stderr
+        assert sorted(p.name for p in (repo / ".git" / "hooks").iterdir()) == before
+
+    @pytest.mark.parametrize("target", ["shared", "dangling"])
+    def test_a_symlinked_hooks_directory_is_unmeasurable(self, tmp_path, monkeypatch, target):
+        """#2696 by another road: .git/hooks itself may be a link to a directory
+        other repositories share, where the shim would refuse their every push.
+        Neither side goes through it, and nothing is written there."""
+        mod = _load()
+        repo = tmp_path / "repo"
+        repo.mkdir()
+        self._repo(repo)
+        monkeypatch.chdir(repo)
+        hooks = repo / ".git" / "hooks"
+        shutil.rmtree(hooks)
+        shared = tmp_path / "shared"
+        if target == "shared":
+            shared.mkdir()
+        symlink_or_skip(shared, hooks)
+
+        wired, why = mod._prepush_guards_wired()
+        assert wired is None and "symlink" in why, why
+        r = self._install_guards(repo)
+        assert r.returncode == 1 and "symlink" in r.stderr, r.stderr
+        assert (sorted(shared.iterdir()) if shared.exists() else None) == (
+            [] if target == "shared" else None), "the installer wrote through the link"
 
     @pytest.mark.parametrize("damage", ["missing", "not-utf8"])
     def test_an_installer_that_cannot_be_read_is_unmeasurable(

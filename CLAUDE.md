@@ -114,7 +114,7 @@ pre-commit run --all-files                       # auto stage
 pre-commit run --hook-stage manual --all-files   # manual stage（較重）
 ```
 
-⚠️ **pre-push 守衛不在那份清單裡**（[#1689](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/1689)）。擋直推 main／要求 preflight marker／mkdocs strict 由 [`prepush_dispatch.sh`](scripts/ops/prepush_dispatch.sh) 執行，安裝走 `bash scripts/ops/install_prepush_hook.sh`（冪等；全新 clone 上既有的 git-lfs hook 會被取代，`git lfs pre-push` 改由 dispatcher 執行；pre-commit 樣板與守衛複本也取代，其他既有的 pre-push hook 一律拒絕；`core.hooksPath` 有設時拒絕安裝）。「守衛在不在 push 路徑上」由 `make pr-preflight` 的 `Local hooks` 列回答。
+⚠️ **pre-push 守衛不在那份清單裡**（[#1689](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/1689)）。擋直推 main／要求 preflight marker／mkdocs strict 由 [`prepush_dispatch.sh`](scripts/ops/prepush_dispatch.sh) 執行，安裝走 `bash scripts/ops/install_prepush_hook.sh`（冪等；全新 clone 上既有的 git-lfs hook 會被取代，`git lfs pre-push` 改由 dispatcher 執行；pre-commit 樣板與守衛複本也取代，其他既有的 pre-push hook 一律拒絕；`core.hooksPath` 有設或 hooks 目錄是 symlink 時拒絕安裝）。「守衛在不在 push 路徑上」由 `make pr-preflight` 的 `Local hooks` 列回答。
 
 ⛔ 它們**不能**放回 `.pre-commit-config.yaml`：pre-commit 會先讀走 git 的 stdin，而守衛只讀 stdin，經 pre-commit 跑的守衛什麼都看不到、一律放行。
 
