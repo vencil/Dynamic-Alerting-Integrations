@@ -1,8 +1,8 @@
 package main
 
 // #2031: the main gate refuses a tree whose /metrics cannot be gathered —
-// the shapes the decode does not fold into one key — with the verdict
-// served-values gives, over the whole tree whatever --scope says.
+// the shapes the decode does not fold into one key — over the whole tree
+// whatever --scope says.
 
 import (
 	"strings"

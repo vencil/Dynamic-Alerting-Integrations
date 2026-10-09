@@ -113,8 +113,8 @@
 //
 //  13. A tree whose /metrics cannot be gathered (#2031; see
 //     metrics_not_gatherable.go), error: some series is produced twice, so
-//     the exporter's scrape fails as a whole. The verdict is served-values'
-//     (CheckInput.MetricsNotGatherable), over the whole tree.
+//     the exporter's scrape fails as a whole (CheckInput.MetricsNotGatherable),
+//     over the whole tree.
 //
 // Future PRs in the C-12 family:
 //   - PR-4: CLI subcommand `da-tools guard defaults-impact` plus
@@ -536,7 +536,7 @@ type CheckInput struct {
 	CustomAlertDuplicates map[string][]config.CustomAlertDuplicate `json:"-"`
 
 	// MetricsNotGatherable is why the exporter's /metrics cannot be gathered
-	// for the whole tree (served-values' verdict over the exporter's build):
+	// for the whole tree:
 	// two keys giving one series fail the scrape for every tenant (HTTP 500).
 	// Non-empty becomes one metrics_not_gatherable error (#2031); "" skips.
 	MetricsNotGatherable string `json:"-"`

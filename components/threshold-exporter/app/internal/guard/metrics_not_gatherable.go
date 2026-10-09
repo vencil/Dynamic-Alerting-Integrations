@@ -8,8 +8,8 @@ package guard
 // the whole Gather and the exporter's /metrics answers HTTP 500 for every
 // tenant. The main gate let such a tree through (rc 0).
 //
-// ⛔ NO VERDICT OF ITS OWN: it is served-values' Gather of the exporter's
-// own collectors over the exporter's build of the WHOLE tree, whatever
+// ⛔ NO VERDICT OF ITS OWN: it is a Gather of the exporter's own collectors
+// over the exporter's build of the WHOLE tree, whatever
 // --scope says (one such pair fails the scrape for every tenant), handed in
 // as CheckInput.MetricsNotGatherable.
 
