@@ -943,8 +943,10 @@ def run_analysis(
         What `load_effective` / `load_served_tree` raise (da-guard missing,
         failing, or a file the exporter cannot load): fail-closed.
     """
-    # served-values first: on a file the load cannot decode, its stderr carries
-    # the exporter's parse reason, which `da-guard effective`'s does not.
+    # served-values is needed for the alias table either way. On a file the
+    # load cannot decode, both subcommands' stderr carry the exporter's parse
+    # reason (`da-guard effective` too since #2115), so the order does not
+    # decide which reason is shown.
     tree = load_served_tree(config_dir)
     print_load_warnings(tree)
     effective = load_effective(config_dir)
