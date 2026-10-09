@@ -1,8 +1,8 @@
 """`.claude/hooks/session-start.sh` — the pre-push guards come first, every run.
 
 Each test runs the real script in a throwaway repo, with the marker redirected
-through `VIBE_SESSION_START_MARKER` and a `pre-commit` on PATH that only records
-that it was called. None of them reaches the pip / npm steps (see `_repo`).
+through `VIBE_SESSION_START_MARKER`. `pip`, `npm` and `pre-commit` on PATH are
+stand-ins that only record their arguments, so nothing is installed.
 """
 from __future__ import annotations
 
@@ -50,10 +50,7 @@ def _repo(root: Path) -> Path:
     shutil.copy2(_REPO_ROOT / ".claude" / "hooks" / "session-start.sh",
                  repo / ".claude" / "hooks" / "session-start.sh")
     (repo / "requirements").mkdir()
-    # The script refuses a constraints file that sets an index, before any pip
-    # run: a broken script under test stops there instead of installing.
-    (repo / "requirements" / "ci-constraints.txt").write_text(
-        "--index-url http://127.0.0.1:9/simple\n", encoding="utf-8")
+    (repo / "requirements" / "ci-constraints.txt").write_text("", encoding="utf-8")
     (repo / ".pre-commit-config.yaml").write_text("repos: []\n", encoding="utf-8")
     subprocess.run(["git", "-C", str(repo), "add", "-A"],  # subprocess-timeout: ignore
                    check=True, env=env)
@@ -63,17 +60,19 @@ def _repo(root: Path) -> Path:
     return repo
 
 
-def _run(root: Path, repo: Path, marker_text: str | None):
-    """Run the script; return (completed, marker text, whether pre-commit ran)."""
+def _run(root: Path, repo: Path, marker_text: str | None, pre_commit_install_rc: int = 0):
+    """Run the script; return (completed, marker text, {tool: [argument lines]})."""
     marker = root / "marker"
     if marker_text is not None:
         marker.write_text(marker_text, encoding="utf-8")
-    called = root / "pre-commit-called"
     bindir = root / "bin"
     bindir.mkdir(exist_ok=True)
-    fake = bindir / "pre-commit"
-    fake.write_text(f'#!/bin/sh\necho "$@" >> "{called}"\nexit 97\n', encoding="utf-8")
-    fake.chmod(0o755)
+    for tool in ("pip", "npm", "pre-commit"):
+        rc = f'[ "$1" = install ] && exit {pre_commit_install_rc}\n' if tool == "pre-commit" else ""
+        stub = bindir / tool
+        stub.write_text(f'#!/bin/sh\necho "$*" >> "{root / tool}.calls"\n{rc}exit 0\n',
+                        encoding="utf-8")
+        stub.chmod(0o755)
     env = {**os.environ, "CLAUDE_CODE_REMOTE": "true", "CLAUDE_PROJECT_DIR": str(repo),
            "VIBE_SESSION_START_MARKER": str(marker),
            "PATH": f"{bindir}{os.pathsep}{os.environ['PATH']}"}
@@ -81,8 +80,16 @@ def _run(root: Path, repo: Path, marker_text: str | None):
         [_BASH, ".claude/hooks/session-start.sh"], cwd=repo, env=env,
         capture_output=True, text=True, encoding="utf-8", errors="replace",
     )
-    text = marker.read_text(encoding="utf-8") if marker.exists() else None
-    return r, text, called.exists()
+    calls = {}
+    for tool in ("pip", "npm", "pre-commit"):
+        f = root / f"{tool}.calls"
+        calls[tool] = f.read_text(encoding="utf-8").splitlines() if f.exists() else []
+    text = marker.read_text(encoding="utf-8") if marker.exists() else ""
+    return r, text, calls
+
+
+def _result(marker: str) -> list[str]:
+    return [line for line in marker.splitlines() if line.startswith("RESULT=")]
 
 
 def _require_pre_commit():
@@ -107,35 +114,40 @@ def test_an_already_bootstrapped_container_gets_its_guards_back(tmp_path, monkey
     monkeypatch.chdir(repo)
     assert mod._prepush_guards_wired()[0] is False
 
-    r, marker, _ = _run(tmp_path, repo, "RESULT=ok\n")
+    r, marker, calls = _run(tmp_path, repo, "RESULT=ok\n")
 
     assert r.returncode == 0, r.stdout + r.stderr
-    assert "already bootstrapped" in r.stdout
+    assert "already bootstrapped" in r.stdout and calls["pip"] == []
     wired, why = mod._prepush_guards_wired()
     assert wired is True, why
-    assert marker.splitlines()[0] == "RESULT=ok"
+    assert _result(marker) == ["RESULT=ok"]
 
 
-def test_a_pre_push_hook_someone_wrote_is_reported_not_skipped(tmp_path):
-    """The no-op path no longer hides a hook the installer refuses."""
+def test_a_refusal_in_a_bootstrapped_container_reruns_everything_and_fails(tmp_path):
+    """A hook the installer refuses is reported, not skipped; the marker is
+    rewritten, so no RESULT=ok from the earlier run is left next to the failure."""
     repo = _repo(tmp_path)
     hooks = repo / ".git" / "hooks"
     (hooks / "pre-commit").write_text("#!/bin/sh\n", encoding="utf-8")
     mine = "#!/bin/sh\necho mine\n"
     (hooks / "pre-push").write_text(mine, encoding="utf-8")
 
-    r, marker, _ = _run(tmp_path, repo, "RESULT=ok\n")
+    r, marker, calls = _run(tmp_path, repo, "RESULT=ok\n")
 
     assert r.returncode == 1, r.stdout + r.stderr
     assert "already bootstrapped" not in r.stdout
-    assert "RESULT=failed (install_prepush_hook)" in marker
+    results = _result(marker)
+    assert len(results) == 1 and "install_prepush_hook" in results[0], marker
+    assert calls["pip"], "a refusal skipped the Python deps"
+    assert "install" not in calls["pre-commit"]
     assert (hooks / "pre-push").read_text(encoding="utf-8") == mine
 
 
 @pytest.mark.parametrize("setup", ["symlinked-hooks", "empty-hooks-path"])
-def test_an_installer_refusal_comes_before_pre_commit_writes_anything(tmp_path, setup):
-    """When the installer refuses, pre-commit has not run yet: nothing lands in a
-    directory the hooks link leads to, nor in the repo's own hooks directory."""
+def test_a_refusal_skips_pre_commit_install_and_nothing_else(tmp_path, setup):
+    """When the installer refuses, `pre-commit install` does not run, so nothing
+    is written through the link or into hooks git will not run. The Python deps
+    still are installed."""
     repo = _repo(tmp_path)
     hooks = repo / ".git" / "hooks"
     if setup == "symlinked-hooks":
@@ -150,9 +162,38 @@ def test_an_installer_refusal_comes_before_pre_commit_writes_anything(tmp_path, 
         watched = hooks
     before = sorted(p.name for p in watched.iterdir())
 
-    r, marker, pre_commit_ran = _run(tmp_path, repo, None)
+    r, marker, calls = _run(tmp_path, repo, None)
 
     assert r.returncode == 1, r.stdout + r.stderr
-    assert "RESULT=failed (install_prepush_hook)" in marker
-    assert not pre_commit_ran
+    results = _result(marker)
+    assert len(results) == 1 and "install_prepush_hook" in results[0], marker
+    assert "install" not in calls["pre-commit"]
+    assert calls["pip"], "a refusal skipped the Python deps"
     assert sorted(p.name for p in watched.iterdir()) == before
+
+
+@pytest.mark.parametrize("state", ["last-run-failed", "no-commit-hook"])
+def test_a_no_op_needs_every_condition(tmp_path, state):
+    """The no-op path is taken only after a RESULT=ok run with the commit hook
+    still in place; otherwise the whole script runs again."""
+    repo = _repo(tmp_path)
+    hooks = repo / ".git" / "hooks"
+    if state == "last-run-failed":
+        (hooks / "pre-commit").write_text("#!/bin/sh\n", encoding="utf-8")
+        marker_text = "RESULT=failed (not importable: mkdocs)\n"
+    else:
+        marker_text = "RESULT=ok\n"
+
+    r, _, calls = _run(tmp_path, repo, marker_text)
+
+    assert "already bootstrapped" not in r.stdout
+    assert calls["pip"] and "install" in calls["pre-commit"]
+
+
+def test_a_failed_pre_commit_install_is_recorded(tmp_path):
+    repo = _repo(tmp_path)
+
+    r, marker, _ = _run(tmp_path, repo, None, pre_commit_install_rc=97)
+
+    assert r.returncode == 1, r.stdout + r.stderr
+    assert _result(marker) == ["RESULT=failed (pre-commit install)"]
