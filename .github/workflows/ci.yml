@@ -294,6 +294,8 @@ jobs:
               # workload-closure SSOT to pin bench-workload-record.yaml's
               # literal trigger against it (#1471).
               - ".github/bench-reference.yaml"
+              # tests/dx/test_session_start.py copies and runs it (#2761).
+              - ".claude/hooks/session-start.sh"
               # tests/ops/test_ci_path_filter_coverage.py derives the `docs`
               # filter's required coverage from its `hooks:` (#2632).
               - "mkdocs.yml"
