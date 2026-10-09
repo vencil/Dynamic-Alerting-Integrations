@@ -62,14 +62,10 @@ if [ ! -r "$_prepush_dir/_prepush_refs.sh" ]; then
     cat >&2 <<'PREPUSH_MISSING'
 
 If that is in scripts/ops/, the helper is gone from your checkout. It is
-version-controlled: restore it from HEAD (the deletion may already be staged).
+version-controlled: restore it from HEAD (this works when the deletion is
+staged too):
+    git checkout HEAD -- :/scripts/ops/_prepush_refs.sh
 The installer cannot restore it.
-
-Anywhere else it is a stale copy of this gate. The installer replaces a copy
-identical to a committed version:
-    bash scripts/ops/install_prepush_hook.sh
-If it moves the copy to pre-push.chained instead (an edited copy, or history
-too shallow to hold that version), delete the copy by hand.
 
 ⛔ Do not hand-write a hook that runs only this script: that silently drops
 protect_main_push and the mkdocs strict check while this one still looks fine.

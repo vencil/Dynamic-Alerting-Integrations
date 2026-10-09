@@ -199,7 +199,7 @@ class TestPrepushWiring:
         assert wired is True, f"following the message's remedy did not fix it: {why!r}"
         assert not (hooks / "pre-push.legacy").exists(), "the old shim was left behind"
         assert not (hooks / "pre-push.chained").exists(), (
-            f"the shim was chained behind itself:\n{r.stdout}")
+            f"pre-push.chained was created:\n{r.stdout}")
 
     @pytest.mark.parametrize("form", ["linux", "windows"])
     def test_the_installer_replaces_pre_commits_template(
@@ -210,7 +210,7 @@ class TestPrepushWiring:
 
         Windows: pre-commit puts `#!/bin/sh` above its template and writes
         the file CRLF; the installer must still know it for pre-commit's
-        (#2617), or it would chain it behind the shim."""
+        (#2617), or it would refuse it as someone's hook."""
         self._require_pre_commit()
         mod = _load()
         self._repo(tmp_path)
@@ -234,7 +234,7 @@ class TestPrepushWiring:
         assert hook.read_bytes() == mod._shim_body().encode(), (
             f"pre-push is not the shim:\n{r.stdout}")
         assert not (tmp_path / ".git" / "hooks" / "pre-push.chained").exists(), (
-            f"something was chained behind the shim:\n{r.stdout}")
+            f"pre-push.chained was created:\n{r.stdout}")
         wired, why = mod._prepush_guards_wired()
         assert wired is True, why
 
@@ -251,6 +251,11 @@ class TestPrepushWiring:
         # hook: that depends on state only the installer judges (#2697).
         assert "與安裝器產生的守衛 shim 不同" in why, why
         assert "重跑 install_prepush_hook.sh" in why, why
+        # The installer refuses someone's hook and says to fold it elsewhere or
+        # delete it (#2746); following that output is the rest of the remedy.
+        r = self._install_guards(tmp_path)
+        assert r.returncode == 1 and "delete it, then re-run" in r.stderr, r.stderr
+        hook.unlink()
         assert self._install_guards(tmp_path).returncode == 0
         wired, why = mod._prepush_guards_wired()
         assert wired is True, f"following the message's remedy did not fix it: {why!r}"
@@ -294,11 +299,9 @@ class TestPrepushWiring:
     ):
         """#2697: `is_file()` is False for a directory and for a symlink to
         nothing, and both used to be reported as "does not exist — never
-        installed". Running the installer straight away is wrong for both: it
-        chains a directory (after which every push fails) and writes the shim
-        through a dangling link to wherever the link points (#2702). So the
-        message says what is there and to move it aside first; the second half
-        follows that remedy once."""
+        installed". The installer refuses both (#2702), so the message says what
+        is there and to move it aside first; the second half follows that
+        remedy once."""
         mod = _load()
         self._repo(tmp_path)
         monkeypatch.chdir(tmp_path)
