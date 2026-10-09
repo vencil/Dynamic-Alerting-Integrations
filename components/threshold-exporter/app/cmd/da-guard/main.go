@@ -89,6 +89,7 @@ import (
 	"path/filepath"
 	"strconv"
 	"strings"
+	"time"
 
 	"github.com/vencil/threshold-exporter/internal/guard"
 	"github.com/vencil/threshold-exporter/pkg/config"
@@ -598,6 +599,9 @@ func buildCheckInput(scoped *config.ScopedTenants, f *flags) guard.CheckInput {
 		ValuesNotServed: notServed,
 		// #2031: the exporter's own build drops these entries.
 		CustomAlertDuplicates: customAlertDuplicates(scoped),
+		// #2031: the whole tree, whatever the scope — one series two keys
+		// share fails the scrape for every tenant.
+		MetricsNotGatherable: gatherVerdict(scoped.Config, time.Now()),
 	}
 }
 

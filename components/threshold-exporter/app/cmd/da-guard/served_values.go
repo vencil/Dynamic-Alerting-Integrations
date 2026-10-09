@@ -592,7 +592,47 @@ func renamed[V any](m map[string]V, name func(string) string) map[string]V {
 // config, so no tree can make it fail. The config metrics are a fresh set,
 // registered so a name the collector emits that collides with one of them
 // fails here as it would on /metrics; the collector writes nothing to them.
+//
+// That failure is a *notGatherableError: the main gate's
+// metrics_not_gatherable reads this same verdict (gatherVerdict, #2031).
 func keyedRows(cfg *config.ThresholdConfig, at time.Time) (
+	served map[string]map[string][]config.ResolvedThreshold, dropped map[string]map[string][]string,
+	reserved scrape.Reserved, err error,
+) {
+	return keyedRowsWith(cfg, at, (*config.ThresholdConfig).ResolveAtWithKeys)
+}
+
+// notGatherableError is keyedRows' verdict that the exporter's /metrics
+// cannot be gathered for the tree: client_golang's error, with the config
+// keys behind it when they can be named (sameSeriesKeys).
+type notGatherableError struct{ detail string }
+
+func (e *notGatherableError) Error() string {
+	return "the exporter's /metrics cannot be gathered for this tree, so its scrape fails " +
+		"as a whole (HTTP 500) and nothing is served" + e.detail
+}
+
+// gatherVerdict is keyedRows' Gather verdict over cfg at `at`, read with the
+// resolver's WARN lines discarded: the error text when /metrics cannot be
+// gathered, "" when it can (or when the reading failed for another reason,
+// which served-values reports). For the main gate's metrics_not_gatherable
+// (#2031).
+func gatherVerdict(cfg *config.ThresholdConfig, at time.Time) string {
+	if cfg == nil {
+		return ""
+	}
+	_, _, _, err := keyedRowsWith(cfg, at, (*config.ThresholdConfig).ResolveAtWithKeysSilent)
+	var ng *notGatherableError
+	if errors.As(err, &ng) {
+		return ng.Error()
+	}
+	return ""
+}
+
+// keyedRowsWith is keyedRows with the user_threshold resolve as a parameter.
+func keyedRowsWith(cfg *config.ThresholdConfig, at time.Time,
+	resolve func(*config.ThresholdConfig, time.Time) ([]config.KeyedThreshold, config.ResolveStats, error),
+) (
 	served map[string]map[string][]config.ResolvedThreshold, dropped map[string]map[string][]string,
 	reserved scrape.Reserved, err error,
 ) {
@@ -605,7 +645,7 @@ func keyedRows(cfg *config.ThresholdConfig, at time.Time) (
 		Now: func() time.Time { return at },
 		Resolve: func(c *config.ThresholdConfig, now time.Time) ([]config.ResolvedThreshold, config.ResolveStats) {
 			var stats config.ResolveStats
-			keyed, stats, keyErr = c.ResolveAtWithKeys(now)
+			keyed, stats, keyErr = resolve(c, now)
 			rows := make([]config.ResolvedThreshold, len(keyed))
 			for i, k := range keyed {
 				rows[i] = k.ResolvedThreshold
@@ -628,8 +668,7 @@ func keyedRows(cfg *config.ThresholdConfig, at time.Time) (
 		return nil, nil, scrape.Reserved{}, keyErr
 	}
 	if gerr != nil {
-		return nil, nil, scrape.Reserved{}, fmt.Errorf("the exporter's /metrics cannot be gathered for this tree, so its scrape fails "+
-			"as a whole (HTTP 500) and nothing is served%s: %v", sameSeriesKeys(keyed, results), gerr)
+		return nil, nil, scrape.Reserved{}, &notGatherableError{detail: fmt.Sprintf("%s: %v", sameSeriesKeys(keyed, results), gerr)}
 	}
 	if observed != 1 {
 		return nil, nil, scrape.Reserved{}, fmt.Errorf("internal: the collector reported its reserved-key readings %d times, want 1", observed)
