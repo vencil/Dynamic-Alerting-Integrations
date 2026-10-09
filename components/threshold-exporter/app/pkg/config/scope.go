@@ -411,9 +411,13 @@ func scopeEffective(configDir, scopeDir string, wholeTree bool) (*ScopedTenants,
 		noTenant = noTenantKeys(scan)
 	}
 	if len(inScope) == 0 {
-		return &ScopedTenants{ParseFailed: parseFailed, DefaultsFiles: defaultsFiles, Unreadable: unreadable,
+		out := &ScopedTenants{ParseFailed: parseFailed, DefaultsFiles: defaultsFiles, Unreadable: unreadable,
 			NestedPlatformFiles: nestedFiles, RootListErr: rootListErr, DeclaredStateFilters: stateFilters,
-			NoTenant: noTenant}, nil
+			NoTenant: noTenant}
+		if built != nil { // #2031: the whole tree's /metrics, whatever the scope
+			out.Config, out.scan, out.built = &built.Config, scan, built
+		}
+		return out, nil
 	}
 
 	// Sort tenant IDs for deterministic output. The CLI's exit-code

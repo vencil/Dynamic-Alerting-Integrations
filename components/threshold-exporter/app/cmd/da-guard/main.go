@@ -312,7 +312,9 @@ func run(args []string, stdout, errOut io.Writer) int {
 	// could not be read at all (#2588): the walker skipped it, so "no
 	// tenants" may be exactly the tenants that file declares. That is exit
 	// 3, never the vacuous 0.
-	if len(scoped.Tenants) == 0 {
+	// #2031: not when the whole tree's /metrics cannot be gathered — that
+	// fails every tenant's scrape, whatever the scope (the report below).
+	if len(scoped.Tenants) == 0 && gatherVerdict(scoped.Config, time.Now(), writtenNamer(scoped.WrittenKeys)) == "" {
 		if err := writeEmptyReport(stdout, errOut, f, scoped.ParseFailed, scoped.Unreadable); err != nil {
 			fmt.Fprintf(errOut, "%s: %v\n", programName, err)
 			return exitCallerErr

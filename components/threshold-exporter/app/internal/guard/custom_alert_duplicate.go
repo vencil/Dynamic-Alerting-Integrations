@@ -44,8 +44,7 @@ func checkCustomAlertDuplicates(input CheckInput) []Finding {
 				Field:    fmt.Sprintf("_custom_alerts[%d]", d.Index),
 				Message: fmt.Sprintf("_custom_alerts[%d] (%q) puts on /metrics the series %s that _custom_alerts[%d] (%q) "+
 					"already puts there, so the exporter serves only the first and drops this entry (it counts on "+
-					"da_custom_alert_parse_errors). Delete one of the two, or change this one's name, metric, "+
-					"objective or shape.", d.Index, d.Name, d.Series, d.Of, d.OfName),
+					"da_custom_alert_parse_errors). Delete one of the two.", d.Index, d.Name, d.Series, d.Of, d.OfName),
 			})
 		}
 	}

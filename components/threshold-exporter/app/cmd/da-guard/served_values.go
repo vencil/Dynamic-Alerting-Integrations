@@ -657,19 +657,22 @@ func (e *notGatherableError) verdict() string {
 		"as a whole (HTTP 500) and nothing is served" + e.keys
 }
 
-// gatherVerdict is keyedRows' Gather verdict over cfg at `at`, read with the
-// resolver's WARN lines discarded: notGatherableError.verdict when /metrics
-// cannot be gathered, "" when it can (or when the reading failed for another reason,
-// which served-values reports). For the main gate's metrics_not_gatherable
-// (#2031).
+// gatherVerdict is keyedRows' Gather verdict over cfg at every schedule cut
+// of the day (ScheduleCuts; `at` only for expiry readings), read with the
+// resolver's WARN lines discarded: the first notGatherableError.verdict, ""
+// when /metrics can be gathered all day (or when the reading failed for
+// another reason, which served-values reports). For the main gate's
+// metrics_not_gatherable (#2031), whatever the time it runs at.
 func gatherVerdict(cfg *config.ThresholdConfig, at time.Time, name keyNamer) string {
 	if cfg == nil {
 		return ""
 	}
-	_, _, _, err := keyedRowsWith(cfg, at, (*config.ThresholdConfig).ResolveAtWithKeysSilent, name)
-	var ng *notGatherableError
-	if errors.As(err, &ng) {
-		return ng.verdict()
+	for _, m := range cfg.ScheduleCuts() {
+		_, _, _, err := keyedRowsWith(cfg.AtMinuteOfDay(m), at, (*config.ThresholdConfig).ResolveAtWithKeysSilent, name)
+		var ng *notGatherableError
+		if errors.As(err, &ng) {
+			return ng.verdict()
+		}
 	}
 	return ""
 }

@@ -27,13 +27,14 @@ import (
 //     purpose is to validate against tenants; running it against
 //     an empty tenant set is almost always a caller bug (the
 //     correct path for "no tenants in this scope" is to skip
-//     calling the guard entirely).
+//     calling the guard entirely). Except with MetricsNotGatherable
+//     set (#2031): that covers the whole tree, whatever the scope.
 //
 // Otherwise CheckDefaultsImpact never errors. A clean run is a
 // GuardReport with zero Findings and PassedTenantCount equal to
 // the number of tenants.
 func CheckDefaultsImpact(input CheckInput) (*GuardReport, error) {
-	if len(input.EffectiveConfigs) == 0 {
+	if len(input.EffectiveConfigs) == 0 && input.MetricsNotGatherable == "" {
 		return nil, fmt.Errorf("guard: no tenants supplied in EffectiveConfigs (caller should skip the guard entirely when scope is empty)")
 	}
 

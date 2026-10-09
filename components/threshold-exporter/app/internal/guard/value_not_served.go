@@ -101,8 +101,8 @@ func valueNotServedMessage(k string, ns config.NotServedKey) string {
 			file, k)
 	case config.NotServedSpellingDuplicate:
 		return fmt.Sprintf("spelling_duplicate: %s writes `%s` beside another spelling of the same threshold in the "+
-			"same mapping (dimensional labels in another order or quoted differently, or the retired #1231 name), "+
-			"so /metrics serves the other spelling's value and not this one. Keep one spelling and delete the other.",
+			"same mapping (dimensional labels in another order or quoted differently, or the retired #1231 name). "+
+			"Keep one spelling and delete the other.",
 			file, k)
 	default: // config.NotServedValueRejected
 		return fmt.Sprintf("value_rejected: %s writes `%s` with a value that is not threshold-shaped (e.g. "+
