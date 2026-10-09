@@ -1131,6 +1131,35 @@ class TestSubtreePolicyScopeNoAmtool:
         assert "NOT enforced" in note
 
 
+class TestCollectionReceiverTypeEntryNoAmtool:
+    """#2758: a receiver-type entry that is a collection is read as the
+    generator reads it — it names no type (no crash), the string entries are
+    enforced, and a non-empty allowed list of none still restricts."""
+
+    @staticmethod
+    def _step(constraints, types):
+        parsed = {"domain_policies": {"fin": {"tenants": ["t1"],
+                                              "constraints": constraints}}}
+        return er._policy_step(parsed, "t1", types)
+
+    def test_forbidden_string_entry_still_enforced(self):
+        step = self._step({"forbidden_receiver_types": ["email", {"a": 1}]},
+                          ["email"])
+        assert step["violations"] == [
+            "Domain 'fin' forbids receiver type 'email'"]
+
+    def test_allowed_of_only_collections_still_restricts(self):
+        step = self._step({"allowed_receiver_types": [["a"]]}, ["webhook"])
+        assert step["violations"] == [
+            "Domain 'fin' only allows [], got 'webhook'"]
+
+    def test_mixed_null_and_string_allowed_does_not_crash(self):
+        step = self._step({"allowed_receiver_types": [None, "email"]},
+                          ["slack"])
+        assert step["violations"] == [
+            "Domain 'fin' only allows ['email'], got 'slack'"]
+
+
 class TestPolicyStepIcon:
     """The step-5 heading's icon is the verdict (``passed``); the other
     steps keep their kind icon."""

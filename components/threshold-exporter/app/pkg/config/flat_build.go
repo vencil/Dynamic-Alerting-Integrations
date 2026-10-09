@@ -117,11 +117,19 @@ type FlatBuild struct {
 	// ⚠️ Filled only when this build decoded the root carrier's bytes, like
 	// RootNullUndeclared.
 	RootDefaultsUnread []UnreadKey
-	// RejectedChainValues is, per subtree defaults file (root-relative slash
-	// path), the keys whose value applySubtreeDefaults refused as not
-	// threshold-shaped for some tenant under it, so that tenant keeps a
-	// shallower level's value or none (#2296). nil when there is none.
+	// RejectedChainValues is, per subtree defaults file of some tenant's
+	// chain (root-relative slash path), the keys whose value
+	// applySubtreeDefaults refuses as not threshold-shaped, so a tenant under
+	// it that does not set the key itself keeps a shallower level's value or
+	// none (#2296). A property of the file's bytes alone: the tenants under
+	// it that do set the key, under any spelling, are rejectedTenantSets
+	// (#2065). nil when there is none.
 	RejectedChainValues map[string]map[string]bool
+	// rejectedTenantSets is, per tenant, the keys of RejectedChainValues
+	// (file → keys) the tenant sets itself, under any spelling — the
+	// overlay's own tenantAuthoredThreshold, so the value is not refused
+	// for it. nil when there is none.
+	rejectedTenantSets map[string]map[string]map[string]bool
 
 	// respelledChain is the defaults files (absolute, as ParsedDefaults keys
 	// them) whose parsed block holds a dimensional key, or both #1231
@@ -273,7 +281,8 @@ func BuildFlatConfig(scan *TreeScan, in FlatBuildInput) (FlatBuild, error) {
 		ParseFailed:            parseFailed,
 		RootNullUndeclared:     rootNullUndeclared(&merged, rootNull),
 		RootDefaultsUnread:     rootUnread,
-		RejectedChainValues:    rejected,
+		RejectedChainValues:    rejected.byFile,
+		rejectedTenantSets:     rejected.tenantSets,
 		respelledChain:         respelledChainFiles(in.ParsedDefaults),
 	}, nil
 }

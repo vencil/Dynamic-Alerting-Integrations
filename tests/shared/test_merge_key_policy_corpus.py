@@ -27,6 +27,8 @@ as values (#2730 §4), non-string `tenants` items (§2), the non-specific
 a top-level `tenants:` (§5), `<<: *previous` chains of 50 and 200, one
 anchored list aliased by a domain (#2715), and the PR-7c round 2 shapes:
 receiver-type items PyYAML cannot build or builds as no string (F1),
+receiver-type items it builds as a collection — a mapping, a list, a
+`!!set` / `!!omap` / `!!pairs`, an aliased list (#2758),
 require_critical_escalation in place (B1), values with no constructor
 wherever built, and shapes da-guard used to refuse that the generator reads
 (`!!null x`, a null domain key; not the directives it still refuses, #2759),
@@ -498,6 +500,27 @@ def _f1_allowed_not_a_string() -> list[str]:
     for forbidden in ("[slack, !!null webhook]", "[!!null slack]"):
         docs.append(_constraints(f"forbidden_receiver_types: {forbidden}"))
     return docs
+
+
+def _collection_receiver_types() -> list[str]:
+    """#2758: a receiver-type entry PyYAML builds as a collection (unhashable).
+
+    It names no receiver type: the generator skips it and still enforces the
+    string entries; a non-empty allowed list of none still restricts.
+    """
+    return [
+        _constraints("forbidden_receiver_types: [slack, {a: 1}]"),
+        _constraints("forbidden_receiver_types: [slack, [a]]"),
+        _constraints("forbidden_receiver_types: [{a: 1}]"),
+        _constraints("forbidden_receiver_types: [slack, !!set {a}]"),
+        _constraints("forbidden_receiver_types: [slack, !!omap [{a: 1}]]"),
+        _constraints("forbidden_receiver_types: [slack, !!pairs [{a: 1}]]"),
+        _constraints("forbidden_receiver_types:", "- slack", "- {a: 1}"),
+        _constraints("forbidden_receiver_types: [slack]", "allowed_receiver_types: [email, {a: 1}]"),
+        _constraints("allowed_receiver_types: [{a: 1}]"),
+        _constraints("allowed_receiver_types: [email, [a]]"),
+        _constraints("x: &l [a]", "forbidden_receiver_types: [slack, *l]"),
+    ]
 
 
 def _b1_escalation_in_place() -> list[str]:
@@ -980,6 +1003,7 @@ def _shapes() -> list[tuple[str, str]]:
                         ("s5-top-level-tenants", _s5_top_level_tenants()),
                         ("f1-receiver-type-unbuilt", _f1_receiver_type_items()),
                         ("f1-receiver-type-not-a-string", _f1_allowed_not_a_string()),
+                        ("2758-collection-receiver-type", _collection_receiver_types()),
                         ("b1-escalation-in-place", _b1_escalation_in_place()),
                         ("e-no-constructor", _e_no_constructor()),
                         # Directive shapes da-guard refuses but the generator reads: #2759.
@@ -1137,7 +1161,8 @@ def test_corpus_is_not_vacuous() -> None:
     shapes = {r.get("shape") for r in rows} - {None}
     for shape in ("s4-merge-tagged-collection", "s2-tenant-item-not-a-string", "s6-nonspecific-key",
                   "s6-nonspecific-value", "s1-multi-document", "s5-top-level-tenants",
-                  "f1-receiver-type-unbuilt", "f1-receiver-type-not-a-string", "b1-escalation-in-place",
+                  "f1-receiver-type-unbuilt", "f1-receiver-type-not-a-string",
+                  "2758-collection-receiver-type", "b1-escalation-in-place",
                   "e-no-constructor", "e-reader-stricter", "r3-directive-tab-start",
                   "n1-directive-tab", "n1-dash-tab", "n1-not-a-directive",
                   "tab-space", "tab-trailing", "tab-after-indicator", "line-break-nel-ls-ps",

@@ -769,8 +769,19 @@ def _level_policies_for_tenant(domain_policies: dict, tenant: str
             continue
 
         def _types(field: str) -> set:
+            # #2758: a collection entry (unhashable) names no type; it stays
+            # as None so a non-empty allowed list still restricts.
             raw = constraints.get(field)
-            return set(raw) if isinstance(raw, list) else set()
+            if not isinstance(raw, list):
+                return set()
+            out = set()
+            for entry in raw:
+                try:
+                    hash(entry)
+                except TypeError:
+                    entry = None
+                out.add(entry)
+            return out
 
         applicable.append((name, _types("forbidden_receiver_types"),
                            _types("allowed_receiver_types")))
@@ -846,7 +857,8 @@ def _policy_step(parsed: dict, tenant: str, tenant_types: list[str] | None
             if forbidden and rtype in forbidden:
                 issues.append(f"Domain '{name}' forbids receiver type '{rtype}'")
             if allowed and rtype not in allowed:
-                issues.append(f"Domain '{name}' only allows {sorted(allowed)}, "
+                issues.append(f"Domain '{name}' only allows "
+                              f"{sorted(t for t in allowed if isinstance(t, str))}, "
                               f"got '{rtype}'")
     if issues:
         step.update(detail="Receiver-type constraint violated",

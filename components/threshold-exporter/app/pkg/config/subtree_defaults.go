@@ -71,9 +71,9 @@ func applySubtreeDefaults(
 	root string,
 	tenantDefaults map[string][]string,
 	parsed map[string]map[string]any,
-) (int, map[string]map[string]ScheduledValue, map[string]map[string]SubtreeRefusedVerdict, map[string]map[string]bool) {
+) (int, map[string]map[string]ScheduledValue, map[string]map[string]SubtreeRefusedVerdict, chainRejections) {
 	if cfg == nil || len(cfg.Tenants) == 0 || len(tenantDefaults) == 0 {
-		return 0, nil, nil, nil
+		return 0, nil, nil, chainRejections{}
 	}
 	// ⛔ ABSOLUTE, because the chain is. `scanDirTree` stores every defaults
 	// path under the absolutised, cleaned AND symlink-resolved root
@@ -108,11 +108,19 @@ func applySubtreeDefaults(
 	// with several levels, "move it" must say WHICH value) and whether the
 	// tenant sets the key itself.
 	var applied map[string]map[string]SubtreeRefusedVerdict
-	// ⛔ WHICH VALUES THIS OVERLAY REFUSED (#2296): defaults file (absolute)
-	// → the keys whose value is not threshold-shaped, recorded on the
-	// refusal branch below and nowhere else, so /effective can say why it
-	// shows a value /metrics does not serve (FlatBuild.RejectedChainValues).
+	// ⛔ WHICH VALUES THIS OVERLAY REFUSES (#2296): defaults file (absolute)
+	// → the keys whose value is not threshold-shaped (refusedKeys), so
+	// /effective can say why it shows a value /metrics does not serve
+	// (FlatBuild.RejectedChainValues). A property of the file's bytes, read
+	// once per file of some tenant's chain (nil: read, nothing refused) —
+	// not "refused for some tenant under it", which moved one tenant's
+	// verdict with another tenant's file (#2065). The tenants it does not
+	// apply to are recorded apart, in tenantSets: tenant → file → the keys
+	// of that file it sets itself under any spelling (tenantAuthoredThreshold,
+	// asked where the overlay asks it). Rare, so a reload of a tree whose
+	// files refuse a key costs nothing per tenant that does not set it.
 	var rejected map[string]map[string]bool
+	var tenantSets map[string]map[string]map[string]bool
 
 	filled := 0
 	for tenantID, overrides := range cfg.Tenants {
@@ -138,6 +146,14 @@ func applySubtreeDefaults(
 				continue // the global defaults file — already in cfg.Defaults
 			}
 			level := parsed[defaultsPath]
+			refused, read := rejected[defaultsPath]
+			if !read {
+				if rejected == nil {
+					rejected = map[string]map[string]bool{}
+				}
+				refused = refusedKeys(level)
+				rejected[defaultsPath] = refused
+			}
 			for key, raw := range level {
 				if subtreeDefaultsRefusedKey(key) {
 					if refusedSeen == nil {
@@ -158,20 +174,23 @@ func applySubtreeDefaults(
 						}
 						refusedTenantSets[key] = true
 					}
+					if refused[key] {
+						if tenantSets == nil {
+							tenantSets = map[string]map[string]map[string]bool{}
+						}
+						if tenantSets[tenantID] == nil {
+							tenantSets[tenantID] = map[string]map[string]bool{}
+						}
+						if tenantSets[tenantID][defaultsPath] == nil {
+							tenantSets[tenantID][defaultsPath] = map[string]bool{}
+						}
+						tenantSets[tenantID][defaultsPath][key] = true
+					}
 					continue // the tenant authored it — never touched
 				}
 				value, ok := scheduledValueFromRaw(raw)
 				if !ok || !isThresholdShaped(value) {
-					if raw != nil {
-						if rejected == nil {
-							rejected = map[string]map[string]bool{}
-						}
-						if rejected[defaultsPath] == nil {
-							rejected[defaultsPath] = map[string]bool{}
-						}
-						rejected[defaultsPath][key] = true
-					}
-					continue
+					continue // in refused (unless null: it fills nothing)
 				}
 				// ⛔ A KEY NO EMITTER ITERATES IS NOT DELIVERED BY WRITING IT.
 				// `resolveBaseRows` walks `cfg.Defaults`; `resolveDeclaredRows`
@@ -273,10 +292,45 @@ func applySubtreeDefaults(
 			applied[tenantID][key] = v
 		}
 	}
-	if len(unreachable) == 0 {
-		return filled, nil, applied, relRejected(rootDir, rejected)
+	refusals := chainRejections{byFile: relRejected(rootDir, rejected)}
+	for tenantID, files := range tenantSets {
+		if refusals.tenantSets == nil {
+			refusals.tenantSets = make(map[string]map[string]map[string]bool, len(tenantSets))
+		}
+		refusals.tenantSets[tenantID] = relRejected(rootDir, files)
 	}
-	return filled, unreachable, applied, relRejected(rootDir, rejected)
+	if len(unreachable) == 0 {
+		return filled, nil, applied, refusals
+	}
+	return filled, unreachable, applied, refusals
+}
+
+// chainRejections is applySubtreeDefaults' account of the subtree values it
+// refuses (FlatBuild.RejectedChainValues, FlatBuild.rejectedTenantSets).
+type chainRejections struct {
+	byFile     map[string]map[string]bool
+	tenantSets map[string]map[string]map[string]bool
+}
+
+// refusedKeys is the keys of a subtree defaults level whose value
+// applySubtreeDefaults refuses as not threshold-shaped, for any tenant that
+// does not set the key itself. A null is not refused: it fills nothing. nil
+// when none.
+func refusedKeys(level map[string]any) map[string]bool {
+	var out map[string]bool
+	for key, raw := range level {
+		if raw == nil {
+			continue
+		}
+		if value, ok := scheduledValueFromRaw(raw); ok && isThresholdShaped(value) {
+			continue
+		}
+		if out == nil {
+			out = map[string]bool{}
+		}
+		out[key] = true
+	}
+	return out
 }
 
 // SubtreeRefusedVerdict is applySubtreeDefaults' own account of one key
