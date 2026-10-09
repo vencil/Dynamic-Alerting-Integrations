@@ -249,7 +249,7 @@ func (m *Manager) setCompleted(taskID string, results []TaskResult) {
 	if t, ok := m.tasks[taskID]; ok {
 		t.Status = TaskCompleted
 		t.Results = results
-		t.Summary = computeSummary(results)
+		t.Summary = SummarizeResults(results)
 		t.UpdatedAt = time.Now().UTC()
 	}
 }
@@ -296,10 +296,11 @@ func (m *Manager) cleanup() {
 	}
 }
 
-// computeSummary returns a human-readable summary of results,
+// SummarizeResults returns a human-readable summary of results,
 // mirroring the format used in handler/tenant_batch.go
-// (e.g., "5 succeeded, 1 failed" or "5 succeeded").
-func computeSummary(results []TaskResult) string {
+// (e.g., "5 succeeded, 1 failed" or "5 succeeded"). Exported so GET
+// /tasks/{id} can re-render it over the results a caller may see (#1530).
+func SummarizeResults(results []TaskResult) string {
 	successes := 0
 	failures := 0
 

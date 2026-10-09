@@ -581,7 +581,10 @@ const orgEnfGroupsYAML = `groups:
 
 func TestOrgWriteEnforce_DeleteGroup(t *testing.T) {
 	t.Parallel()
-	t.Run("outsider_member_denied_403_no_write", func(t *testing.T) {
+	// g-out's only member is other-org, so GET /groups/g-out is a 404 for this
+	// caller. DELETE answers the same 404 (#1531): the 403 it used to give
+	// confirmed the group the read plane hides and named its member.
+	t.Run("outsider_only_group_is_404_no_write", func(t *testing.T) {
 		t.Parallel()
 		f := newOrgEnfFixture(t, map[string]string{"_groups.yaml": orgEnfGroupsYAML})
 		req := newRequestWithChiParam("DELETE", "/api/v1/groups/g-out", "id", "g-out", nil)
@@ -589,8 +592,11 @@ func TestOrgWriteEnforce_DeleteGroup(t *testing.T) {
 		w := httptest.NewRecorder()
 		wrapWithRBACMiddleware(DeleteGroup(f.deps()), f.rbacMgr, rbac.PermWrite, nil).ServeHTTP(w, req)
 
-		if w.Code != http.StatusForbidden {
-			t.Fatalf("status = %d, want 403; body=%s", w.Code, w.Body.String())
+		if w.Code != http.StatusNotFound {
+			t.Fatalf("status = %d, want 404; body=%s", w.Code, w.Body.String())
+		}
+		if strings.Contains(w.Body.String(), orgEnfTenantOut) {
+			t.Errorf("404 body names the hidden member: %s", w.Body.String())
 		}
 		if n := f.writes.Load(); n != 0 {
 			t.Errorf("denied request committed %d time(s), want 0", n)
@@ -637,9 +643,28 @@ func TestOrgWriteEnforce_GroupBatch_Sync(t *testing.T) {
 	if err := json.Unmarshal(w.Body.Bytes(), &resp); err != nil {
 		t.Fatalf("unmarshal: %v", err)
 	}
-	orgEnfCheckBatchResults(t, resp.Results)
+	// The other-org member is still refused (one commit, below), but it no
+	// longer appears in the response (#1530): GET /groups/g-mixed hides it,
+	// and this endpoint runs over the stored member list rather than ids the
+	// caller sent. This used to pin its per-item error via
+	// orgEnfCheckBatchResults — a backward-compat pin from the org-enforce
+	// rollout, not a decision to disclose the member. The summary counts only
+	// what is shown, or it would disclose the member as a number.
+	orgEnfCheckGroupBatchVisible(t, resp.Results, resp.Summary)
 	if n := f.writes.Load(); n != 1 {
 		t.Errorf("writer commits = %d, want exactly 1 (the member-org member only)", n)
+	}
+}
+
+// orgEnfCheckGroupBatchVisible: a group batch over g-mixed, seen by the
+// member-org caller, shows only the member-org tenant — in results AND summary.
+func orgEnfCheckGroupBatchVisible(t *testing.T, results []BatchResult, summary string) {
+	t.Helper()
+	if len(results) != 1 || results[0].TenantID != orgEnfTenantIn || results[0].Status != "ok" {
+		t.Errorf("results = %+v, want only %s ok", results, orgEnfTenantIn)
+	}
+	if summary != "1 succeeded" {
+		t.Errorf("summary = %q, want %q (it must not count the hidden member)", summary, "1 succeeded")
 	}
 }
 
@@ -707,10 +732,31 @@ func TestOrgWriteEnforce_GroupBatch_Async(t *testing.T) {
 	for _, r := range final.Results {
 		results = append(results, BatchResult{TenantID: r.TenantID, Status: r.Status, Message: r.Message})
 	}
+	// The task manager keeps every result (both members, as executed)...
 	orgEnfCheckBatchResults(t, results)
 	if n := f.writes.Load(); n != 1 {
 		t.Errorf("writer commits = %d, want exactly 1 (the member-org member only)", n)
 	}
+
+	// ...but GET /tasks/{id} shows this caller only what the sync response
+	// shows — results AND summary (#1530). Before the fix the results were
+	// filtered here while the summary still said "1 succeeded, 1 failed".
+	greq := newRequestWithChiParam("GET", "/api/v1/tasks/"+taskID, "id", taskID, nil)
+	greq = orgEnfIdentity(greq, orgEnfMemberOrg)
+	gw := httptest.NewRecorder()
+	wrapWithRBACMiddleware(GetTask(d), f.rbacMgr, rbac.PermRead, nil).ServeHTTP(gw, greq)
+	if gw.Code != http.StatusOK {
+		t.Fatalf("GET task status = %d, want 200; body=%s", gw.Code, gw.Body.String())
+	}
+	var polled async.Task
+	if err := json.Unmarshal(gw.Body.Bytes(), &polled); err != nil {
+		t.Fatalf("unmarshal task: %v", err)
+	}
+	visible := make([]BatchResult, 0, len(polled.Results))
+	for _, r := range polled.Results {
+		visible = append(visible, BatchResult{TenantID: r.TenantID, Status: r.Status, Message: r.Message})
+	}
+	orgEnfCheckGroupBatchVisible(t, visible, polled.Summary)
 }
 
 // Saved views are NOT tenant data — no per-tenant write decision exists, so
