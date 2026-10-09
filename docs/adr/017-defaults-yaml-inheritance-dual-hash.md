@@ -183,7 +183,7 @@ tenants:
 
 讀取者只看文件頂層的鍵，縮排後對它們等於沒寫：
 
-- `_routing_defaults` 縮排後，沒有自己 `_routing` 的租戶整條 route 消失，路由產生器回 0、沒有錯誤也沒有警告。
+- `_routing_defaults` 縮排後，沒有自己 `_routing`、也沒有 routing profile 的租戶整條 route 消失，路由產生器回 0、沒有錯誤也沒有警告。
 - `_custom_alerts` 縮排後，`compile_custom_alerts.py --check` 回 1 並逐條列出消失的規則；但若接著重新編譯，檢查就轉綠，消失的規則只留在規則包的 diff 裡。
 
 ### 7. 雙雜湊與重新載入
@@ -232,7 +232,7 @@ $ printf '%s' '{"pg_locks_count":100,"pg_replication_lag_seconds":30,"pg_stat_ac
 
 ### 8. 有些頂層鍵的變更，最終設定看不到
 
-例如根目錄的 `_routing_defaults` 與 `state_filters` 不進最終設定，改了之後 `merged_hash` 不動，所以凡是以最終設定或 `merged_hash` 為輸入的工具都看不到這些變更：`/effective`、`describe_tenant`、da-guard、爆炸半徑報告、`tenant-verify`。這是為了決策 7 的歸類正確而刻意接受的代價（理由見替代方案 D），但有兩個後果要知道：
+例如根目錄的 `_routing_defaults` 與 `state_filters` 不進最終設定，改了之後 `merged_hash` 不動，所以凡是以最終設定或 `merged_hash` 為輸入的工具都看不到這些變更：`/effective`、`describe_tenant`、爆炸半徑報告、`tenant-verify`。這是為了決策 7 的歸類正確而刻意接受的代價（理由見替代方案 D），但有兩個後果要知道：
 
 - **`effect="cosmetic"` 不代表只改了註解。** 只改根目錄 `_defaults.yaml` 裡 `_routing_defaults` 的一次變更，與只加一行註解，exporter 都記成 `effect="cosmetic"`。
 - **`da-tools tenant-verify --expect-merged-hash` 在這裡不是證據。** 它在雜湊不符時回 2，但只改根目錄 `_routing_defaults` 之後它回 0：回 0 代表這一面沒被涵蓋，不代表回滾已經驗證。

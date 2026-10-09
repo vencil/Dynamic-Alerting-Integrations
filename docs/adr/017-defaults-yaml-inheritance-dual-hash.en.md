@@ -178,7 +178,7 @@ Indenting a top-level key into `defaults:` to make it "appear in the effective c
 
 The readers of these keys look only at the document's top level, so an indented key is not there for them:
 
-- With `_routing_defaults` indented, every tenant without its own `_routing` loses its whole route; the route generator exits 0 with no error and no warning.
+- With `_routing_defaults` indented, every tenant with neither its own `_routing` nor a routing profile loses its whole route; the route generator exits 0 with no error and no warning.
 - With `_custom_alerts` indented, `compile_custom_alerts.py --check` exits 1 and lists every rule that disappeared; but recompile afterwards and the check turns green, leaving the lost rules visible only in the rule pack's diff.
 
 ### 7. Dual hash and reload
@@ -227,7 +227,7 @@ Hashes are never used as metric labels, to keep the series count from exploding;
 
 ### 8. Changes to some top-level keys are invisible in the effective config
 
-For example, the root's `_routing_defaults` and `state_filters` do not enter the effective config and leave `merged_hash` unchanged, so no tool whose input is the effective config or `merged_hash` sees these changes: `/effective`, `describe_tenant`, da-guard, the blast-radius report, `tenant-verify`. This is a cost accepted deliberately so that Decision 7 records changes correctly (see Alternative D for why), but it has two consequences to know:
+For example, the root's `_routing_defaults` and `state_filters` do not enter the effective config and leave `merged_hash` unchanged, so no tool whose input is the effective config or `merged_hash` sees these changes: `/effective`, `describe_tenant`, the blast-radius report, `tenant-verify`. This is a cost accepted deliberately so that Decision 7 records changes correctly (see Alternative D for why), but it has two consequences to know:
 
 - **`effect="cosmetic"` does not mean only a comment changed.** A change that only edits the `_routing_defaults` in the root `_defaults.yaml` and one that only adds a comment are both recorded by the exporter as `effect="cosmetic"`.
 - **`da-tools tenant-verify --expect-merged-hash` is not evidence here.** It exits 2 when the hash differs, but after a change to only the root's `_routing_defaults` it exits 0: exit 0 means this face is not covered, not that a rollback was verified.
