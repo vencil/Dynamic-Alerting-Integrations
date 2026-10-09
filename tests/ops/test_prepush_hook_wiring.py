@@ -331,8 +331,8 @@ def test_a_co_pushed_branch_no_longer_hides_main(tmp_path: Path) -> None:
     )
 
 
-# What `git lfs install` writes (git-lfs 3.x), and the 2.x wording of its check.
-# The installer matches the frame of that check, not its wording.
+# git-lfs's pre-push hook as current git-lfs writes it and as two earlier
+# versions did; the installer knows them by their exact contents.
 _LFS_CHECK = (
     'command -v git-lfs >/dev/null 2>&1 || {{ echo >&2 "\\nThis repository is '
     "configured for Git LFS but 'git-lfs' was not found on your path. If you no "
@@ -340,6 +340,12 @@ _LFS_CHECK = (
     "exit 2; }}\n"
 )
 _LFS_HOOKS = {
+    # what current git-lfs writes (lfs/hook.go `hookBaseContent`)
+    "current": "#!/bin/sh\ncommand -v git-lfs >/dev/null 2>&1 || { printf >&2 "
+               '"\\n%s\\n\\n" "This repository is configured for Git LFS but \'git-lfs\' was '
+               "not found on your path. If you no longer wish to use Git LFS, remove this "
+               "hook by deleting the 'pre-push' file in the hooks directory (set by "
+               "'core.hookspath'; usually '.git/hooks').\"; exit 2; }\ngit lfs pre-push \"$@\"",
     "3.x": "#!/bin/sh\n" + _LFS_CHECK.format(
         where="the 'pre-push' file in the hooks directory (set by 'core.hookspath'; "
               "usually '.git/hooks')") + 'git lfs pre-push "$@"\n',
