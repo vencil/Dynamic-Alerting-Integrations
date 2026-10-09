@@ -22,8 +22,8 @@ if [ -n "$_hooks_dir" ] && { [ -e "$_hooks_dir/pre-push.chained" ] || [ -L "$_ho
 [prepush_dispatch] ⛔ $_hooks_dir/pre-push.chained is still there. An earlier
 installer moved a hook to it, and nothing runs it any more. Re-run:
     bash scripts/ops/install_prepush_hook.sh
-It removes git-lfs's hook or a copy of ours, and says what to do with
-anything else.
+It removes what the shim makes redundant (git-lfs's hook, a copy of ours,
+pre-commit's template) and says what to do with anything else.
 
 CHAINED
     exit 1
@@ -133,7 +133,7 @@ if git config --get-regexp '^filter\.lfs\.' >/dev/null 2>&1; then
 [prepush_dispatch] ⛔ Git LFS is configured (filter.lfs.* in git config) but
 git-lfs is not on PATH, so LFS objects in this push would not be uploaded.
 Install git-lfs. If you no longer use it, remove the filter.lfs section from
-the config that sets it; this shows which one:
+every config that sets it; this lists them:
     git config --show-origin --get-regexp '^filter\.lfs\.'
 
 NO_LFS

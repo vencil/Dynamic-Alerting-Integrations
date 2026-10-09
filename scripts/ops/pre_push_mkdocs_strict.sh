@@ -64,7 +64,7 @@ if [ ! -r "$_prepush_dir/_prepush_refs.sh" ]; then
     echo "  identical to a committed version:" >&2
     echo "    bash scripts/ops/install_prepush_hook.sh" >&2
     echo "  If it refuses the copy instead (an edited copy, or history too shallow to" >&2
-    echo "  hold that version), delete the copy by hand." >&2
+    echo "  hold that version), do what it prints." >&2
     exit 1
 fi
 . "$_prepush_dir/_prepush_refs.sh"

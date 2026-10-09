@@ -444,6 +444,40 @@ def test_pre_commit_first_then_the_installer_guards_without_recursing(
     assert main.returncode != 0 and _BANNER in main_out, main_out
 
 
+_SESSION_INIT = _REPO_ROOT / "scripts" / "session-guards" / "session-init.py"
+
+
+@pytest.mark.parametrize("state", ["pre-commit-over-lfs", "chained-lfs-left-behind"])
+def test_session_init_reports_a_successful_install_as_installed(
+    tmp_path: Path, state: str
+) -> None:
+    """session-init.py runs the installer at session start and tells the
+    session the guards are NOT installed unless the installer's last line of
+    stdout says "installed". A removal reported after that line reads as a
+    failed install while the guards are in place."""
+    import importlib.util
+    spec = importlib.util.spec_from_file_location("session_init_under_test", _SESSION_INIT)
+    mod = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(mod)
+
+    work = _make_repo(tmp_path, "repos: []\n")
+    hooks = work / ".git" / "hooks"
+    if state == "pre-commit-over-lfs":
+        (hooks / "pre-push").write_text(_LFS_HOOKS["3.x"], encoding="utf-8", newline="\n")
+        (hooks / "pre-push").chmod(0o755)
+        _install_precommit(work)
+        assert (hooks / "pre-push.legacy").is_file(), "precondition: lfs's hook migrated"
+    else:
+        assert _install_guards(work).returncode == 0
+        (hooks / "pre-push.chained").write_text(_LFS_HOOKS["3.x"], encoding="utf-8", newline="\n")
+        (hooks / "pre-push.chained").chmod(0o755)
+
+    status = mod._install_prepush_hook(work)
+    assert status.startswith("[install_prepush_hook] installed"), status
+    blocked, out = _push(work, "HEAD:refs/heads/main", env_extra=_SIBLINGS_OFF)
+    assert blocked.returncode != 0 and _BANNER in out, out
+
+
 def _path_of(tmp_path: Path, *tools: str) -> dict:
     bindir = tmp_path / "bin"
     bindir.mkdir()
@@ -477,19 +511,53 @@ def test_replacing_an_executable_hook_does_not_need_chmod(tmp_path: Path, over: 
     assert pushed.returncode != 0 and _BANNER in out, out
 
 
-def test_a_new_shim_without_chmod_is_refused_before_anything_is_written(
-    tmp_path: Path,
+@pytest.mark.parametrize("there", ["nothing", "lfs-not-executable"])
+def test_a_shim_that_would_need_chmod_without_it_is_refused_before_anything_is_written(
+    tmp_path: Path, there: str
 ) -> None:
     """#2702: a shim written without its bit is one git skips with only a hint.
-    The refusal names `chmod` and comes before anything is written."""
+    The refusal names `chmod` and comes before anything is written — also when
+    the hook it would replace has no bit to keep."""
     work = _make_repo(tmp_path, "repos: []\n")
     hook = work / ".git" / "hooks" / "pre-push"
     hook.unlink(missing_ok=True)
+    if there == "lfs-not-executable":
+        hook.write_text(_LFS_HOOKS["3.x"], encoding="utf-8", newline="\n")
+        hook.chmod(0o644)
     before = _hooks_snapshot(work)
     r = _run_installer(work, _path_of(tmp_path, "bash", "git"))
     assert r.returncode == 1, f"{r.stdout}{r.stderr}"
     assert "`chmod` is not on PATH" in r.stderr, r.stderr
     assert _hooks_snapshot(work) == before
+
+
+def test_a_failing_chmod_fails_the_install(tmp_path: Path) -> None:
+    """A swallowed chmod failure leaves a shim git never runs while the
+    installer reports success."""
+    work = _make_repo(tmp_path, "repos: []\n")
+    (work / ".git" / "hooks" / "pre-push").unlink(missing_ok=True)
+    env = _path_of(tmp_path, "bash", "git")
+    fake = Path(env["PATH"]) / "chmod"
+    fake.write_text("#!/bin/sh\nexit 1\n", encoding="utf-8", newline="\n")
+    fake.chmod(0o755)
+    r = _run_installer(work, env)
+    assert r.returncode == 1, f"{r.stdout}{r.stderr}"
+    assert "could not make" in r.stderr, r.stderr
+
+
+def test_a_refusal_after_a_redundant_chained_leaves_it_in_place(tmp_path: Path) -> None:
+    """Every check runs before anything changes: pre-push.chained, which the
+    shim would make redundant, is still there when pre-push itself is
+    refused."""
+    work = _make_repo(tmp_path, _PROTECT_ONLY)
+    hooks = work / ".git" / "hooks"
+    (hooks / "pre-push.chained").write_text(_LFS_HOOKS["3.x"], encoding="utf-8", newline="\n")
+    (hooks / "pre-push").write_text(_USER_HOOK, encoding="utf-8", newline="\n")
+    (hooks / "pre-push").chmod(0o755)
+    before = _hooks_snapshot(work)
+    r = _install_guards(work)
+    assert r.returncode == 1, f"{r.stdout}{r.stderr}"
+    assert _hooks_snapshot(work) == before, "something changed before the refusal"
 
 
 _ODD = ["directory", "symlink-to-nothing", "symlink-to-nothing-in-a-missing-dir",
@@ -1060,7 +1128,7 @@ def test_every_executed_pre_push_script_has_a_relative_shebang(script: str) -> N
     shebang ITSELF (``parse_shebang.normalize_cmd``), and an absolute POSIX path
     does not resolve on Windows: the push dies with ``ExecutableNotFoundError``
     before any guard runs. That is exactly how git-lfs's ``#!/bin/sh`` hook
-    breaks pushes under pre-commit — see this file's chaining test.
+    breaks pushes under pre-commit.
 
     ⛔ A text pin is the right instrument here because the failure it prevents is
     Windows-only, while this assertion holds on every platform.
@@ -1270,6 +1338,12 @@ def test_a_hook_linked_to_a_guard_is_replaced_without_touching_the_guard(
 _USER_HOOKS = {
     "sources-the-helper": _USER_HOOK,
     "lfs-and-more": _LFS_HOOKS["3.x"] + "echo USER-HOOK-RAN >&2\n",
+    "lfs-check-that-runs-more": _LFS_HOOKS["3.x"].replace(
+        'echo >&2 "', 'echo >&2 "x"; echo USER-HOOK-RAN >&2; echo "', 1),
+    "lfs-check-then-more-on-its-line": _LFS_HOOKS["3.x"].replace(
+        'exit 2; }\n', 'exit 2; }; echo USER-HOOK-RAN >&2 || { echo >&2 "x"; exit 2; }\n', 1),
+    "lfs-check-that-expands": _LFS_HOOKS["3.x"].replace(
+        'echo >&2 "', 'echo >&2 "$(echo USER-HOOK-RAN >&2)', 1),
     "names-the-pre-commit-flag": _USER_HOOK + "# unlike pre-commit's --hook-type=pre-push\n",
     "names-the-shim": _USER_HOOK + "# runs before vibe-prepush-shim\n",
     "echoes-the-pre-commit-header":

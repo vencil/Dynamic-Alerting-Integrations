@@ -189,8 +189,8 @@ pre-commit install
 # pre-push guards left .pre-commit-config.yaml that command installs a hook
 # which runs ZERO pre-push hooks — and a hook pre-commit runs is handed only one
 # refspec anyway, which is the defect #1689 removed. The installer below owns
-# .git/hooks/pre-push, chains whatever was already there (git-lfs, on a fresh
-# clone), and is idempotent. Without it a remote session pushes with no guards
+# .git/hooks/pre-push (replacing git-lfs's hook on a fresh clone; the
+# dispatcher runs git lfs itself), and is idempotent. Without it a remote session pushes with no guards
 # and `make pr-preflight` is the only thing that would ever say so.
 say "installing the pre-push guards"
 if ! bash scripts/ops/install_prepush_hook.sh; then

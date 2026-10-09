@@ -324,7 +324,7 @@ def _install_prepush_hook(repo_root: Path) -> str:
 
     ⛔ Shells out to scripts/ops/install_prepush_hook.sh instead of writing
     .git/hooks/pre-push here. That script owns the whole decision — what to
-    replace, what to chain and what to remove. A second opinion living in this file
+    replace, what to refuse and what to remove. A second opinion living in this file
     is how the two drift into disagreeing about whether the guards are wired.
 
     ⛔ `shutil.which("bash")`, never a bare "bash" in the argv. On Windows,
