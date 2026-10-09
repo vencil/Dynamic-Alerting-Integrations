@@ -23,12 +23,10 @@ import (
 // scan is the scan built came from; a file a warm scan did not cache is read
 // from disk and used only when its SHA-256 is the scan's, so a tenant whose
 // files moved since the scan is skipped. A tenant that does not resolve is
-// skipped too, as /effective fails for it (RejectedShownCache.Shown names
-// the skipped ones). nil when there is none.
+// skipped too, as /effective fails for it. nil when there is none.
 func RejectedValuesShown(scan *TreeScan, built *FlatBuild) map[string]map[string]string {
 	var c RejectedShownCache
-	out, _ := c.Shown(scan, built)
-	return out
+	return c.Shown(scan, built)
 }
 
 // RejectedShownCache is RejectedValuesShown across commits: a candidate
@@ -56,17 +54,17 @@ type rejectedShownEntry struct {
 }
 
 // Shown is RejectedValuesShown(scan, built), reusing the previous call's
-// answer for a candidate whose inputs did not move. skipped names each
-// candidate whose resolve failed (a file changed since the scan, or could
-// not be read) with the reason: it is in neither result, and nothing is
-// cached for it, so the next call resolves it again (#2065 r4: a cached
-// failure outlived the file changing back to the scanned bytes).
-func (c *RejectedShownCache) Shown(scan *TreeScan, built *FlatBuild) (shown map[string]map[string]string, skipped map[string]string) {
+// answer for a candidate whose inputs did not move. A candidate whose
+// resolve failed (a file changed since the scan, or could not be read) is
+// not in the result and nothing is cached for it, so the next call resolves
+// it again (#2065 r4: a cached failure outlived the file changing back to
+// the scanned bytes).
+func (c *RejectedShownCache) Shown(scan *TreeScan, built *FlatBuild) map[string]map[string]string {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	if scan == nil || built == nil || len(built.RejectedChainValues) == 0 || len(scan.Tenants) == 0 {
 		c.entries = nil
-		return nil, nil
+		return nil
 	}
 	r := newEffectiveResolver(scan)
 	var rootFiles []string
@@ -108,10 +106,6 @@ func (c *RejectedShownCache) Shown(scan *TreeScan, built *FlatBuild) (shown map[
 			keys, err := resolveRejected(r, id)
 			c.Resolves++
 			if err != nil {
-				if skipped == nil {
-					skipped = map[string]string{}
-				}
-				skipped[id] = err.Error()
 				continue
 			}
 			e = rejectedShownEntry{input: in, keys: keys}
@@ -125,7 +119,7 @@ func (c *RejectedShownCache) Shown(scan *TreeScan, built *FlatBuild) (shown map[
 		}
 	}
 	c.entries = next
-	return out, skipped
+	return out
 }
 
 // input is the fingerprint of tenant id's resolve inputs (see the type).

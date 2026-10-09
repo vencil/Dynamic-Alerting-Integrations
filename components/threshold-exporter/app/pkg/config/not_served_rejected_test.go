@@ -10,7 +10,7 @@ import (
 )
 
 // TestRejectedShownCache_FailedResolveIsNotCached (#2065 r4): a tenant whose
-// file changed after the scan is skipped and named; once the file is back to
+// file changed after the scan is skipped; once the file is back to
 // the scanned bytes (same composite, same fingerprint), the next call
 // resolves it again and names its value — a cached failure would hide it
 // for good.
@@ -45,9 +45,10 @@ func TestRejectedShownCache_FailedResolveIsNotCached(t *testing.T) {
 	if err := os.WriteFile(tfile, []byte(tenant+"    mysql_connections_critical: \"90\"\n"), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	got, skipped := c.Shown(scan, built)
-	if got != nil || len(skipped) != 1 || skipped["tx"] == "" {
-		t.Fatalf("file changed after the scan: shown %v skipped %v; want tx skipped", got, skipped)
+	before := c.Resolves
+	if got := c.Shown(scan, built); got != nil || c.Resolves != before+1 {
+		t.Fatalf("file changed after the scan: shown %v, resolves %d -> %d; want tx tried and not shown",
+			got, before, c.Resolves)
 	}
 	if err := os.WriteFile(tfile, []byte(tenant), 0o600); err != nil {
 		t.Fatal(err)
@@ -56,10 +57,9 @@ func TestRejectedShownCache_FailedResolveIsNotCached(t *testing.T) {
 	if scan2.Composite != scan.Composite {
 		t.Fatalf("precondition: the restored tree must scan to the same composite")
 	}
-	before := c.Resolves
-	got, skipped = c.Shown(scan2, built2)
-	if !reflect.DeepEqual(got, want) || skipped != nil {
-		t.Errorf("file back to the scanned bytes: shown %v skipped %v; want %v", got, skipped, want)
+	before = c.Resolves
+	if got := c.Shown(scan2, built2); !reflect.DeepEqual(got, want) {
+		t.Errorf("file back to the scanned bytes: shown %v; want %v", got, want)
 	}
 	if c.Resolves != before+1 {
 		t.Errorf("resolves %d -> %d: want the skipped tenant resolved again", before, c.Resolves)

@@ -174,68 +174,7 @@ func (m *ConfigManager) auditValuesNotServed(cfg *ThresholdConfig, flatScan *fla
 	if m.valuesNotServed.recordAndDecide(vs, metrics.SetValuesNotServed) {
 		m.getLogger().Print(formatValuesNotServedLog(vs, m.path, context))
 	}
-	var skipped map[string]string
-	if flatScan != nil {
-		skipped = flatScan.rejectedSkipped
-	}
-	// The memory keys on the set, not on the commit's banner.
-	if m.rejectedSkippedLog.changed(formatRejectedSkippedLog(skipped, "")) {
-		m.getLogger().Print(formatRejectedSkippedLog(skipped, context))
-	}
 	return vs
-}
-
-// formatRejectedSkippedLog is the WARN naming the tenants whose value_rejected
-// check this commit could not run (config.RejectedShownCache.Shown's skipped:
-// a file changed since the scan, or could not be read) — they are not
-// counted in this commit's da_config_values_not_served{reason="value_rejected"}.
-// "" when there is none.
-func formatRejectedSkippedLog(skipped map[string]string, context string) string {
-	if len(skipped) == 0 {
-		return ""
-	}
-	ids := make([]string, 0, len(skipped))
-	for id := range skipped {
-		ids = append(ids, id)
-	}
-	sort.Strings(ids)
-	var b strings.Builder
-	fmt.Fprintf(&b, "WARN: config values not served as written (%s): the value_rejected check of %d tenant(s) was "+
-		"skipped; they are not counted in da_config_values_not_served{reason=\"value_rejected\"}:", context, len(ids))
-	shown := ids
-	if len(shown) > valuesNotServedLogSampleLimit {
-		shown = shown[:valuesNotServedLogSampleLimit]
-	}
-	for i, id := range shown {
-		if i > 0 {
-			b.WriteString(";")
-		}
-		fmt.Fprintf(&b, " tenant=%s (%s)", id, skipped[id])
-	}
-	if len(ids) > len(shown) {
-		fmt.Fprintf(&b, "; +%d more", len(ids)-len(shown))
-	}
-	return b.String()
-}
-
-// skippedLogState writes a line once per change of it, as
-// valuesNotServedLogState does for the main WARN: "" (nothing skipped)
-// resets the memory, so a relapse is told again.
-type skippedLogState struct {
-	mu   sync.Mutex
-	last string
-}
-
-// changed records key (the line without its banner) and reports whether the
-// line should be written.
-func (d *skippedLogState) changed(line string) bool {
-	d.mu.Lock()
-	defer d.mu.Unlock()
-	if line == d.last {
-		return false
-	}
-	d.last = line
-	return line != ""
 }
 
 // now is the manager's clock (a test's fake one when set), else time.Now.
@@ -349,9 +288,7 @@ func (c *valuesNotServedCache) verdicts(cfg *ThresholdConfig, now time.Time) map
 			stale = append(stale, tenant)
 		}
 	}
-	// Recomputing tenants one by one pays the resolve's per-call setup each
-	// time; past half the tenants one whole-config pass is cheaper.
-	if !c.valid || c.global != global || 2*len(stale) > len(cfg.Tenants) {
+	if !c.valid || c.global != global {
 		all := cfg.ValuesNotServed(now)
 		c.tenants = make(map[string]valuesNotServedEntry, len(cfg.Tenants))
 		for tenant, overrides := range cfg.Tenants {

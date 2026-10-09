@@ -259,20 +259,16 @@ func ValueNotServedAsWritten(key, reason string) bool {
 // tenant values of c it does not serve as written, over the whole UTC day:
 // tenant → canonical key → NotServedValueUnparsed,
 // NotServedValueUnparsedDropped or NotServedWindowInvalid (#2065). It is
-// recordUnparsed — the table `da-guard effective`'s not_served reads.
-// Silent; c is not modified. nil when nothing is recorded.
+// the table `da-guard effective`'s not_served reads. Silent; cfg is not
+// modified. nil when nothing is recorded.
 //
 // ⚠️ Tenant values only: a subtree `_defaults.yaml` value the build refused
 // is FlatBuild.RejectedChainValues, and the other NotServed reasons are the
 // build's, not the resolver's.
-func (c *ThresholdConfig) ValuesNotServed(now time.Time) map[string]map[string]string {
-	return recordUnparsed(c, now)
-}
-
-// recordUnparsed resolves cfg with a recorder over every minute of the UTC
-// day at which some tenant value may resolve differently, and returns what it
-// recorded, so the verdict does not depend on the time of day the request is
-// made. Silent (logf nil).
+//
+// It resolves cfg with a recorder over every minute of the UTC day at which
+// some tenant value may resolve differently, so the verdict does not depend
+// on the time of day the request is made.
 //
 // A tenant's rows depend only on its own map and the config-wide settings,
 // so the day is read per tenant. The whole config is resolved once as
@@ -280,25 +276,23 @@ func (c *ThresholdConfig) ValuesNotServed(now time.Time) map[string]map[string]s
 // where the phases read each scheduled value's windows (noteInvalidWindows;
 // AtMinuteOfDay drops the schedules). Each tenant with a schedule is then
 // resolved alone (a one-tenant copy) at the start of each segment of its own
-// day (tenantScheduleCuts) but the one now falls in (#2065 r1: the resolve
+// day (addScheduleCuts) but the one now falls in (#2065 r1: the resolve
 // as written already read it). Resolving every tenant at the union of every
 // tenant's cuts records the same table
 // (TestRecordUnparsed_PerTenantCutsMatchUnionOfCuts) at the cost of
-// tenants × all cuts. (Grouping the tenants by their set of cuts was
-// measured on BenchmarkDiffAndReload_Hierarchical_1000_OneTenantChanged,
-// where every tenant shares one schedule: fewer allocations, more bytes and
-// time, so it is not done.)
-func recordUnparsed(cfg *ThresholdConfig, now time.Time) map[string]map[string]string {
+// tenants × all cuts.
+func (cfg *ThresholdConfig) ValuesNotServed(now time.Time) map[string]map[string]string {
 	rec := &rejectRecorder{}
 	cfg.resolveAtWithStats(now, nil, nil, rec)
 	utc := now.UTC()
 	nowMinute := utc.Hour()*60 + utc.Minute()
 	var one ThresholdConfig
 	for tenant, overrides := range cfg.Tenants {
-		cuts := tenantScheduleCuts(overrides)
-		if cuts == nil {
+		seen := addScheduleCuts(nil, overrides)
+		if seen == nil {
 			continue
 		}
+		cuts := sortedCuts(seen)
 		// The segment now's minute falls in was read by the resolve above:
 		// no window of this tenant's starts or ends between its start and
 		// now, so the values there are the values at now.
@@ -339,7 +333,7 @@ type servedVerdicts struct {
 	undeliverable map[string]map[string]bool // tenant → keys (undeliverableThresholds)
 	rootNull      map[string]map[string]bool // tenant → keys (FlatBuild.RootNullUndeclared)
 
-	// cfg is the build's config; unparsed is recordUnparsed over it,
+	// cfg is the build's config; unparsed is ValuesNotServed over it,
 	// computed on the first tenant that asks (all, when all is set — the
 	// whole-tree mode resolves every tenant — else only that tenant's copy).
 	cfg      *ThresholdConfig
@@ -347,7 +341,7 @@ type servedVerdicts struct {
 	unparsed map[string]map[string]string
 	done     bool
 
-	// noUnparsed skips recordUnparsed: the caller reads only verdicts the
+	// noUnparsed skips ValuesNotServed: the caller reads only verdicts the
 	// switch in notServed decides before the resolver's record
 	// (RejectedValuesShown reads value_rejected).
 	noUnparsed bool
@@ -395,25 +389,19 @@ func newServedVerdicts(built *FlatBuild, all bool) *servedVerdicts {
 	return v
 }
 
-// unparsedOf is recordUnparsed's verdicts for tenantID.
+// unparsedOf is ValuesNotServed's verdicts for tenantID.
 func (v *servedVerdicts) unparsedOf(tenantID string) map[string]string {
 	if v.noUnparsed {
 		return nil
 	}
 	if v.all {
 		if !v.done {
-			v.unparsed = recordUnparsed(v.cfg, time.Now())
+			v.unparsed = v.cfg.ValuesNotServed(time.Now())
 			v.done = true
 		}
 		return v.unparsed[tenantID]
 	}
-	overrides, ok := v.cfg.Tenants[tenantID]
-	if !ok {
-		return nil
-	}
-	one := *v.cfg
-	one.Tenants = map[string]map[string]ScheduledValue{tenantID: overrides}
-	return recordUnparsed(&one, time.Now())[tenantID]
+	return v.cfg.TenantValuesNotServed(tenantID, time.Now())
 }
 
 // chainFileUnread reports whether chain file rel is one /metrics does not

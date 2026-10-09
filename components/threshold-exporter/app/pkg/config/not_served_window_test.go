@@ -1,7 +1,7 @@
 package config
 
 // #2065: the window_invalid verdict, the rank a recorder keeps per key, and
-// recordUnparsed's per-tenant reading of the day.
+// ValuesNotServed's per-tenant reading of the day.
 
 import (
 	"fmt"
@@ -68,7 +68,7 @@ func TestRejectRecorder_KeepsTheStrongestVerdict(t *testing.T) {
 	}
 }
 
-// recordUnparsedUnionOfCuts is recordUnparsed as #2296 shipped it: every
+// recordUnparsedUnionOfCuts is ValuesNotServed as #2296 shipped it: every
 // tenant resolved at every cut of every tenant (ScheduleCuts), plus the
 // whole config resolved as written (where the phases read the windows) —
 // the reference the per-tenant reading must agree with.
@@ -119,12 +119,9 @@ func TestRecordUnparsed_PerTenantCutsMatchUnionOfCuts(t *testing.T) {
 			edges := []int{60, 300, 301, 360, 750, 780, 1320, 1439}
 			now = scheduleDay.Add(time.Duration(edges[r.Intn(len(edges))]) * time.Minute)
 		}
-		got, want := recordUnparsed(cfg, now), recordUnparsedUnionOfCuts(cfg, now)
+		got, want := cfg.ValuesNotServed(now), recordUnparsedUnionOfCuts(cfg, now)
 		if !reflect.DeepEqual(got, want) {
 			t.Fatalf("seed %d at %s: per-tenant cuts recorded\n %v\nunion of cuts\n %v\ncfg %+v", seed, now, got, want, cfg.Tenants)
-		}
-		if got2 := cfg.ValuesNotServed(now); !reflect.DeepEqual(got2, got) {
-			t.Fatalf("seed %d: ValuesNotServed %v, recordUnparsed %v", seed, got2, got)
 		}
 	}
 }

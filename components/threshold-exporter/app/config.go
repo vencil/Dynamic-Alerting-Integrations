@@ -75,9 +75,6 @@ type flatScanState struct {
 	// (config_values_not_served.go); nil on the flat incremental path, whose
 	// tree holds no `_defaults` file.
 	rejected map[string]map[string]string
-	// rejectedSkipped is the tenants config.RejectedShownCache.Shown could
-	// not check this commit (tenant → reason); nil when none.
-	rejectedSkipped map[string]string
 }
 
 // hierarchyState bundles the v2.7.0+ ADR-016/017 hierarchical-mode caches.
@@ -233,9 +230,6 @@ type ConfigManager struct {
 	// valuesNotServed tracks what the values-not-served audit last put in
 	// the log (#2065); see config_values_not_served.go.
 	valuesNotServed valuesNotServedLogState
-	// rejectedSkippedLog de-duplicates the WARN for tenants whose
-	// value_rejected check was skipped (#2065 r4).
-	rejectedSkippedLog skippedLogState
 	// valuesNotServedCache keeps the audit's per-tenant verdicts between
 	// commits (#2065); see config_values_not_served.go.
 	valuesNotServedCache valuesNotServedCache
@@ -1670,7 +1664,7 @@ func (m *ConfigManager) commitFlatFrom(scan *treeScan) error {
 
 	// #2065: before ReleaseData, so the files this scan read are not read
 	// again; it resolves only the tenants under a refused value.
-	rejectedShown, rejectedSkipped := m.rejectedShown.Shown(scan, &built)
+	rejectedShown := m.rejectedShown.Shown(scan, &built)
 	scan.ReleaseData()
 	m.commitConfig(&merged, scan.Composite, &flatScanState{
 		hashes:      scan.RelHashes(),
@@ -1679,9 +1673,6 @@ func (m *ConfigManager) commitFlatFrom(scan *treeScan) error {
 		tree:        scan,
 		parseFailed: built.ParseFailed,
 		rejected:    rejectedShown,
-		// #2065 r4: the tenants whose value_rejected check failed this
-		// commit; auditValuesNotServed names them.
-		rejectedSkipped: rejectedSkipped,
 	}, fmt.Sprintf("Config loaded (%s)", m.Mode()))
 	return nil
 }

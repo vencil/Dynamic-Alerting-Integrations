@@ -65,16 +65,16 @@ func (sv ScheduledValue) DaySegments() []ValueSegment {
 func (c *ThresholdConfig) ScheduleCuts() []int {
 	seen := map[int]bool{0: true}
 	for _, overrides := range c.Tenants {
-		addScheduleCuts(seen, overrides)
+		seen = addScheduleCuts(seen, overrides)
 	}
 	return sortedCuts(seen)
 }
 
-// tenantScheduleCuts is ScheduleCuts for one tenant's map: the minutes (0
-// first) at which one of its values may resolve differently than the minute
-// before. nil when no value of the map has a schedule.
-func tenantScheduleCuts(overrides map[string]ScheduledValue) []int {
-	var seen map[int]bool
+// addScheduleCuts adds to seen the start of every DaySegments segment of
+// every value of overrides that has a schedule, and returns it. A nil seen
+// is made (holding 0) on the first schedule, so addScheduleCuts(nil, m) is
+// nil when no value of one tenant's map m has a schedule.
+func addScheduleCuts(seen map[int]bool, overrides map[string]ScheduledValue) map[int]bool {
 	for _, sv := range overrides {
 		if len(sv.Overrides) == 0 {
 			continue
@@ -86,23 +86,7 @@ func tenantScheduleCuts(overrides map[string]ScheduledValue) []int {
 			seen[seg.From] = true
 		}
 	}
-	if seen == nil {
-		return nil
-	}
-	return sortedCuts(seen)
-}
-
-// addScheduleCuts adds to seen the start of every DaySegments segment of
-// every value of overrides that has a schedule.
-func addScheduleCuts(seen map[int]bool, overrides map[string]ScheduledValue) {
-	for _, sv := range overrides {
-		if len(sv.Overrides) == 0 {
-			continue
-		}
-		for _, seg := range sv.DaySegments() {
-			seen[seg.From] = true
-		}
-	}
+	return seen
 }
 
 func sortedCuts(seen map[int]bool) []int {

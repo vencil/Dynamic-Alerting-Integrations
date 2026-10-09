@@ -32,12 +32,6 @@ import (
 // with the not_served reason.
 const FindingValueNotServed FindingKind = "value_not_served"
 
-// IsValueNotServedReason reports whether value_not_served reports a
-// not_served verdict on key (config.ValueNotServedAsWritten).
-func IsValueNotServedReason(key, reason string) bool {
-	return config.ValueNotServedAsWritten(key, reason)
-}
-
 // checkValuesNotServed reports one FindingValueNotServed per (tenant, key) of
 // input.ValuesNotServed that config.ValueNotServedAsWritten selects (the four
 // written-value reasons, on a threshold key), for the tenants in

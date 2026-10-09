@@ -218,48 +218,6 @@ func TestValuesNotServed_SingleFileMode(t *testing.T) {
 	}
 }
 
-// TestValuesNotServed_MatchesEffectiveNotServed: the exporter's tenant
-// verdicts are the ones `da-guard effective` reports (EffectiveTree's
-// not_served), restricted to the four reasons — one record, two readers.
-func TestValuesNotServed_MatchesEffectiveNotServed(t *testing.T) {
-	t.Parallel()
-	dir := t.TempDir()
-	mkSub(t, dir, "team")
-	writeTestYAML(t, filepath.Join(dir, "_defaults.yaml"), "defaults:\n  mysql_connections: 80\n")
-	writeTestYAML(t, filepath.Join(dir, "team", "t.yaml"), "tenants:\n"+
-		"  tx:\n    mysql_connections: \"abc\"\n    mysql_connections_critical: \"x\"\n"+
-		"  ty:\n    mysql_connections:\n      default: \"70\"\n      overrides:\n        - window: \"05:00-05:00\"\n          value: \"1\"\n"+
-		"  tz:\n    mysql_connections: \"60\"\n")
-	m, _, _ := newAuditedManager(t, dir)
-	if err := m.Load(); err != nil {
-		t.Fatalf("Load: %v", err)
-	}
-	m.mu.RLock()
-	flat := m.flat
-	m.mu.RUnlock()
-	got := map[string]string{}
-	for _, v := range m.auditValuesNotServed(m.GetConfig(), &flat, "probe") {
-		got[v.Tenant+"/"+v.Key] = v.Reason
-	}
-	tree, err := config.EffectiveTree(dir)
-	if err != nil {
-		t.Fatal(err)
-	}
-	want := map[string]string{}
-	for _, ec := range tree.Tenants {
-		for k, ns := range ec.NotServed {
-			for _, r := range valuesNotServedReasons {
-				if ns.Reason == r {
-					want[ec.TenantID+"/"+k] = ns.Reason
-				}
-			}
-		}
-	}
-	if len(want) != 3 || !reflect.DeepEqual(got, want) {
-		t.Errorf("exporter %v, effective %v; want the same three", got, want)
-	}
-}
-
 // TestFormatValuesNotServedLog_CapsTheSample: one line, the first 20 values,
 // then "+N more".
 func TestFormatValuesNotServedLog_CapsTheSample(t *testing.T) {
@@ -358,6 +316,15 @@ func TestValuesNotServed_MatchesEffectiveOnEveryShape(t *testing.T) {
 			"team/_defaults.yaml": "defaults:\n  _routing_defaults:\n    receiver: {type: webhook}\n",
 			"team/t.yaml":         "tenants:\n  tx: {}\n",
 		}, nil},
+		{"tenant value not a number", map[string]string{
+			"team/t.yaml": "tenants:\n  tx:\n    mysql_connections: \"abc\"\n",
+		}, map[string]float64{config.NotServedValueUnparsed: 1}},
+		{"tenant critical row dropped", map[string]string{
+			"team/t.yaml": "tenants:\n  tx:\n    mysql_connections_critical: \"x\"\n",
+		}, map[string]float64{config.NotServedValueUnparsedDropped: 1}},
+		{"tenant window start equals end", map[string]string{
+			"team/t.yaml": "tenants:\n  tx:\n    mysql_connections:\n      default: \"70\"\n" + sameEnds,
+		}, map[string]float64{config.NotServedWindowInvalid: 1}},
 		{"G3 platform entry", map[string]string{
 			"_platform.yaml": "tenants:\n  tx:\n    mysql_connections: \"abc\"\n",
 			"team/t.yaml":    "tenants:\n  tx:\n    mysql_threads_running: \"31\"\n",
@@ -525,38 +492,5 @@ func TestValuesNotServed_RejectedSurvivesAWarmReload(t *testing.T) {
 	}
 	if g := gauge(); g != 2 {
 		t.Errorf("after a warm reload: value_rejected = %v, want 2", g)
-	}
-}
-
-// TestValuesNotServed_SkippedRejectedCheckIsWarnedOnce (#2065 r4): tenants
-// whose value_rejected check was skipped are named in one WARN, written once
-// per change of the set and again after a clean commit.
-func TestValuesNotServed_SkippedRejectedCheckIsWarnedOnce(t *testing.T) {
-	t.Parallel()
-	dir := t.TempDir()
-	writeValuesTree(t, dir, "    mysql_threads_running: \"31\"\n", "")
-	m, _, logBuf := newAuditedManager(t, dir)
-	if err := m.Load(); err != nil {
-		t.Fatal(err)
-	}
-	const anchor = "value_rejected check of"
-	count := func() int { return len(logLinesWith(logBuf.String(), anchor)) }
-	skipped := &flatScanState{rejectedSkipped: map[string]string{"tx": "read \"team/t.yaml\": the file changed since the scan"}}
-	m.auditValuesNotServed(m.GetConfig(), skipped, "commit-1")
-	if count() != 1 {
-		t.Fatalf("WARN lines = %d, want 1:\n%s", count(), logBuf.String())
-	}
-	if line := logLinesWith(logBuf.String(), anchor)[0]; !strings.Contains(line, "tenant=tx (") ||
-		!strings.Contains(line, "changed since the scan") {
-		t.Errorf("WARN does not name the tenant and the reason: %s", line)
-	}
-	m.auditValuesNotServed(m.GetConfig(), skipped, "commit-2")
-	if count() != 1 {
-		t.Errorf("an unchanged skipped set re-logged: %d lines", count())
-	}
-	m.auditValuesNotServed(m.GetConfig(), &flatScanState{}, "commit-3")
-	m.auditValuesNotServed(m.GetConfig(), skipped, "commit-4")
-	if count() != 2 {
-		t.Errorf("a relapse after a clean commit must log again: %d lines", count())
 	}
 }

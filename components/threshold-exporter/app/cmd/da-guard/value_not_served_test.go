@@ -86,7 +86,7 @@ func TestGuard_ValueNotServedMatchesEffective(t *testing.T) {
 			t.Fatalf("tenant %s: %v", id, err)
 		}
 		for k, ns := range ec.NotServed {
-			if guard.IsValueNotServedReason(k, ns.Reason) {
+			if config.ValueNotServedAsWritten(k, ns.Reason) {
 				want = append(want, id+"/"+k+"/"+ns.Reason)
 			}
 		}

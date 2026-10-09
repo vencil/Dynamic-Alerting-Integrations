@@ -2047,18 +2047,6 @@ _VALUES_NOT_SERVED_NO_CONFIG_FILE_HINT = (
     "tree, then re-run. No threshold value was checked.")
 _VALUES_NOT_SERVED_NO_DA_GUARD_HINT = _DA_GUARD_SOURCES + " No threshold value was checked."
 
-# What /metrics does instead, per reason (the row's line names it).
-_VALUES_NOT_SERVED_EFFECT = {
-    "value_unparsed": "not a number the exporter reads; /metrics serves the platform default instead",
-    "value_unparsed_dropped": "not a number the exporter reads and no default to fall back to; "
-                              "/metrics serves no series for it",
-    "window_invalid": "a schedule `window:` that is not a UTC HH:MM-HH:MM with start different "
-                      "from end; that window never applies",
-    "value_rejected": "a subtree defaults value that is not threshold-shaped; the tenant keeps a "
-                      "shallower level's value",
-}
-
-
 def check_values_not_served(config_dir: str) -> dict[str, object]:
     """Threshold values /metrics does not serve as written (#2065).
 
@@ -2085,8 +2073,7 @@ def check_values_not_served(config_dir: str) -> dict[str, object]:
             ns = te.not_served[key]
             if not value_not_served_as_written(key, ns.reason):
                 continue
-            details.append(f"{ns.file or te.source_file}: tenant {tid}: `{key}`: {ns.reason}: "
-                           f"{_VALUES_NOT_SERVED_EFFECT[ns.reason]}")
+            details.append(f"{ns.file or te.source_file}: tenant {tid}: `{key}`: {ns.reason}")
     if details:
         return _make_result("values_not_served", FAIL, details)
     return _make_result("values_not_served", PASS, [

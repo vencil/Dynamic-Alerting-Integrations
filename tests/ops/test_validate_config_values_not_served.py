@@ -59,7 +59,7 @@ def test_each_shape_fails_and_is_named(tmp_path, shape):
     r = vc.check_values_not_served(str(_tree(tmp_path, sub, body)))
     assert r["status"] == vc.FAIL, r
     assert len(r["details"]) == 1, r
-    assert r["details"][0].startswith(f"{rel}: tenant tx: `{key}`: {reason}: "), r
+    assert r["details"][0] == f"{rel}: tenant tx: `{key}`: {reason}", r
 
 
 @pytest.mark.parametrize("body", [
@@ -108,7 +108,7 @@ def test_row_matches_da_guard_value_not_served(tmp_path, da_guard_binary):
     assert r["status"] == vc.FAIL, r
     row = set()
     for line in r["details"]:
-        _file, tenant, key, reason, _ = line.split(": ", 4)
+        _file, tenant, key, reason = line.split(": ", 3)
         row.add((tenant.removeprefix("tenant "), key.strip("`"), reason))
     proc = subprocess.run([da_guard_binary, "--config-dir", str(d), "--format", "json"],
                           capture_output=True, check=False, timeout=600)

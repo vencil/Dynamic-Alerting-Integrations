@@ -43,7 +43,7 @@ func TestCheckValuesNotServed(t *testing.T) {
 		}
 		got = append(got, [2]string{f.TenantID, f.Field})
 		reason := strings.SplitN(f.Message, ":", 2)[0]
-		if !IsValueNotServedReason(f.Field, reason) {
+		if !config.ValueNotServedAsWritten(f.Field, reason) {
 			t.Errorf("message does not start with a reason: %s", f.Message)
 		}
 	}

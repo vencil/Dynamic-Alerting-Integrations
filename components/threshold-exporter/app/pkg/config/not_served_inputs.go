@@ -95,7 +95,7 @@ func (c *ThresholdConfig) TenantValuesNotServed(tenant string, now time.Time) ma
 	}
 	one := *c
 	one.Tenants = map[string]map[string]ScheduledValue{tenant: overrides}
-	return recordUnparsed(&one, now)[tenant]
+	return one.ValuesNotServed(now)[tenant]
 }
 
 // ValuesNotServedExpiryEdge is the earliest `expires:` instant of overrides
