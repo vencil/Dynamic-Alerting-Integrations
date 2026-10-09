@@ -164,6 +164,69 @@ func TestDeleteGroup_403DoesNotNameUnreadableMembers(t *testing.T) {
 	}
 }
 
+// #1531, both kinds of stored member in one 403: one the caller can read but
+// not write is named; one it cannot read is only acknowledged.
+func TestDeleteGroup_403NamesReadableAndAcknowledgesHidden(t *testing.T) {
+	t.Parallel()
+	const readOnlyTenant = "t-readonly"
+	f := newOrgEnfFixture(t, map[string]string{"_groups.yaml": "groups:\n  g3:\n    label: Three\n    members: [" +
+		orgEnfTenantIn + ", " + orgEnfTenantOut + ", " + readOnlyTenant + "]\n"})
+	// A second, non-org-scoped rule grants READ on t-readonly only. t-readonly
+	// carries no org label, so the org-scoped writer rule cannot write it under
+	// enforce: readable, not writable.
+	f.rbacMgr = newRBACManagerWithClaims(t, orgEnfRBACYAML+`  - name: ro-extra
+    tenants: ["`+readOnlyTenant+`"]
+    permissions: [read]
+`, map[string]string{"org": orgEnfClaimHeader})
+	f.rbacMgr.EnableOrgScopeEnforce()
+	d := f.deps()
+
+	req := newRequestWithChiParam("DELETE", "/api/v1/groups/g3", "id", "g3", nil)
+	req = orgEnfIdentity(req, orgEnfMemberOrg)
+	req.Header.Set("X-Forwarded-Groups", orgEnfGroup+",ro-extra")
+	w := httptest.NewRecorder()
+	wrapWithRBACMiddleware(DeleteGroup(d), f.rbacMgr, rbac.PermWrite, nil).ServeHTTP(w, req)
+
+	if w.Code != http.StatusForbidden {
+		t.Fatalf("status = %d, want 403; body=%s", w.Code, w.Body.String())
+	}
+	body := w.Body.String()
+	if !strings.Contains(body, "forbidden member tenants: "+readOnlyTenant+"; it also has member tenants you cannot view") {
+		t.Errorf("403 should name %s and acknowledge the hidden member: %s", readOnlyTenant, body)
+	}
+	if strings.Contains(body, orgEnfTenantOut) {
+		t.Errorf("403 names the member the caller cannot read: %s", body)
+	}
+}
+
+// DELETE re-judges visibility in the lock, on the group as stored: the snapshot
+// can be stale (groupMgr has no WatchLoop). Here the snapshot still has the
+// member-org tenant, while the file now has only the other-org one — DELETE
+// answers the 404 of a missing group, and writes nothing.
+func TestDeleteGroup_InLockVisibilityUsesTheFileNotTheSnapshot(t *testing.T) {
+	t.Parallel()
+	f := newOrgEnfFixture(t, map[string]string{"_groups.yaml": "groups:\n  g-mixed:\n    label: M\n    members: [" + orgEnfTenantIn + "]\n"})
+	d := f.deps() // the snapshot is loaded here: g-mixed = [in]
+	if err := os.WriteFile(filepath.Join(f.configDir, "_groups.yaml"),
+		[]byte("groups:\n  g-mixed:\n    label: M\n    members: ["+orgEnfTenantOut+"]\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	hidden := visCall(t, f, d, DeleteGroup(d), rbac.PermWrite, "DELETE", "g-mixed", "")
+	missing := visCall(t, f, d, DeleteGroup(d), rbac.PermWrite, "DELETE", "g-none", "")
+	if hidden.Code != http.StatusNotFound ||
+		strings.ReplaceAll(hidden.Body.String(), "g-mixed", "<id>") != strings.ReplaceAll(missing.Body.String(), "g-none", "<id>") {
+		t.Errorf("stale-snapshot DELETE = %d %s; missing group = %d %s — want the same 404",
+			hidden.Code, hidden.Body.String(), missing.Code, missing.Body.String())
+	}
+	if got := storedMembers(t, f, "g-mixed"); len(got) != 1 || got[0] != orgEnfTenantOut {
+		t.Errorf("g-mixed on disk = %v, want it untouched", got)
+	}
+	if n := f.writes.Load(); n != 0 {
+		t.Errorf("refused DELETE committed %d time(s), want 0", n)
+	}
+}
+
 // #1530 / #1531: a group the caller cannot see gets, from GET, DELETE and the
 // batch endpoint (well-formed body or not), the same answer as a group that
 // does not exist — so none of them confirms it.
