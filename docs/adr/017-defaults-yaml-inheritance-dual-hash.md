@@ -76,9 +76,9 @@ conf.d/
     route 消失（告警落到 catch-all），後者無上層可退。
   - **閾值 key**：顯式 `null` **不退出繼承**，請改用 `"disable"`。閾值寫成 `null` 等於
     這一層沒寫（[#2518](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/2518)）：
-    租戶檔寫 `null` 時，`/metrics`（`da-guard served-values`）、`/effective`（`da-guard effective`）、
-    `describe_tenant` 與 `/simulate` 都取下一層的值——子目錄 `_defaults.yaml` 有值就取它，
-    沒有才取根目錄 `_defaults.yaml` 的值；子目錄 `_defaults.yaml` 寫 `null` 時取根目錄的值。
+    租戶檔或子目錄 `_defaults.yaml` 寫 `null` 時，`/metrics`（`da-guard served-values`）、
+    `/effective`（`da-guard effective`）與 `describe_tenant` 都取繼承鏈上這個鍵下一個有值的層，
+    與這一層沒寫相同。
     根目錄 `_defaults.yaml` 的 `defaults:` 寫 `null` 時，根層沒有宣告這個閾值，`/metrics`
     不送出這個閾值的 series（不是門檻 0）：租戶給的值由 da-guard 的 `root_default_null_undeclared`
     指名，子目錄 `_defaults.yaml` 給的值由 `subtree_default_undeliverable` 指名；同一個鍵若列在
