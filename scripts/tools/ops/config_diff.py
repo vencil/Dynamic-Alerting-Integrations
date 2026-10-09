@@ -39,6 +39,9 @@ from _lib_io import (  # noqa: E402  (#2297 `_profile` as source text)
     YamlFileError, load_yaml_file_strict_exporter_keys, strict_load_exporter_keys,
 )
 from _lib_exitcodes import EXIT_OK, EXIT_VIOLATION, EXIT_CALLER_ERROR  # noqa: E402
+from _lib_tenant_values import (  # noqa: E402  (#2115 profile binding is Go's)
+    DaGuardError, DaGuardNotFoundError, ParseFailedError, load_effective, print_load_error,
+)
 from _threshold_alerts import alerts_for_key  # noqa: E402
 
 # GitHub silently rejects (422 Unprocessable Entity) issue/PR comments over
@@ -95,8 +98,9 @@ def _load_tenant_configs_profile_text(dir_path):
     ⚠️ A copy of that loader's walk (same ``iter_yaml_files`` listing, same
     strict read with source-text keys, same wrapper / flat split), not a
     flag on it: ``_lib_io``'s loaders are being reworked under #2115, and
-    their other callers must not change here. Only the two readers of
-    `_profile` below use it; tests/ops/test_profile_ref_as_text.py pins
+    their other callers must not change here. Only `load_settings_from_dir`
+    uses it (which profile a `_profile` binds is da-guard's answer,
+    `load_tenant_profile_refs`); tests/ops/test_profile_ref_as_text.py pins
     that it lists the same tenants as the shared loader.
     """
     configs = {}
@@ -121,17 +125,33 @@ def _load_tenant_configs_profile_text(dir_path):
 
 
 def load_tenant_profile_refs(dir_path):
-    """Scan all tenant files to build a mapping of profile_name → [tenant_names].
+    """{profile_name: [tenant, ...]}: the tenants of `dir_path` whose
+    `_profile` names each profile, as the exporter reads the name.
 
-    Returns {profile_name: [tenant1, tenant2, ...]}.
+    The name is `da-guard effective`'s, not a Python reading of the files
+    (#2115): each tenant's `effective_config._profile`, which the exporter
+    has already turned into the name it elects (Go `withProfileText`) — a
+    scalar's source text (`010` is "010"), the `default:` of the mapping
+    form (`_profile: {default: std}`, #2741; its other keys elect nothing).
+    A value that elects no name (a mapping without `default:`, a sequence)
+    is not a string there and is left out. Stripped, as Go's `profileNameOf`
+    (TrimSpace) names it: `'010 '` refers to profile 010. Only a `_profile`
+    the tenant's own layer writes (its file, or its entry in a root platform
+    file — `key_sources` layer `tenant` / `platform`): one inherited from a
+    sub-directory `_defaults.yaml` shows in effective_config but elects
+    nothing (measured: `profile` None for it).
+
+    By NAME, not by the bound profile (`profile`, None for a name no profile
+    defines): a tenant still naming a profile this change removes is in its
+    blast radius. Raises what `load_effective` raises (da-guard missing or
+    failing, a file the exporter cannot decode).
     """
     refs = {}
-    raw_configs = _load_tenant_configs_profile_text(dir_path)
-    for t_name, t_data in raw_configs.items():
-        profile = t_data.get("_profile")
-        # Stripped, as the exporter's `profileNameOf` (TrimSpace) and the
-        # other readers (describe_tenant / diagnose / validate_config) name
-        # it (#2297): `'010 '` and a block scalar `|` 010 bind profile 010.
+    for t_name, eff in sorted(load_effective(dir_path).items()):
+        profile = eff.effective_config.get("_profile")
+        source = eff.key_sources.get("_profile")
+        if source is None or source.layer not in ("tenant", "platform"):
+            continue
         if isinstance(profile, str) and profile.strip():
             refs.setdefault(profile.strip(), []).append(t_name)
     return refs
@@ -173,7 +193,9 @@ def compute_profile_diff(old_dir, new_dir):
     """
     old_profiles = load_profiles_from_dir(old_dir)
     new_profiles = load_profiles_from_dir(new_dir)
-    new_refs = load_tenant_profile_refs(new_dir)
+    # Asked of da-guard only when some profile changed (#2115): a run with
+    # no profile change needs no tenant's binding.
+    new_refs = None
 
     all_names = set(old_profiles.keys()) | set(new_profiles.keys())
     results = []
@@ -184,6 +206,8 @@ def compute_profile_diff(old_dir, new_dir):
         if old_p == new_p:
             continue
 
+        if new_refs is None:
+            new_refs = load_tenant_profile_refs(new_dir)
         affected = new_refs.get(name, [])
         if old_p is None:
             change = "added"
@@ -856,6 +880,16 @@ def main():
     args = build_parser().parse_args()
     try:
         return _run(args)
+    except (DaGuardNotFoundError, ParseFailedError, DaGuardError) as exc:
+        # The profile bindings (`load_tenant_profile_refs`, #2115): da-guard
+        # missing or failing, or a --new-dir file the exporter cannot
+        # decode. Same exit 2, with da-guard's own lines (its reason for a
+        # dropped file) below one ERROR line — `str()` alone loses them.
+        print(f"ERROR: cannot compare configs (--old-dir {args.old_dir} "
+              f"--new-dir {args.new_dir}): reading the --new-dir profile bindings "
+              f"through da-guard failed", file=sys.stderr)
+        print_load_error(exc)
+        sys.exit(EXIT_CALLER_ERROR)
     except Exception as exc:  # noqa: BLE001 — deliberate; see docstring
         # ``sys.exit`` inside ``_run`` raises SystemExit, which derives from
         # BaseException, so the tool's own 0/1/2 exits pass through untouched.

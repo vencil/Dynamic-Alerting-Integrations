@@ -271,7 +271,7 @@ type DefaultsFile struct {
 // will simply be nil. The caller (CLI) prints a friendly message
 // and exits success in that case (vacuously safe defaults change).
 func ScopeEffective(configDir, scopeDir string) (*ScopedTenants, error) {
-	return scopeEffective(configDir, scopeDir, false)
+	return scopeEffective(configDir, scopeDir, false, nil)
 }
 
 // EffectiveTree is ScopeEffective over the whole tree (scopeDir = configDir)
@@ -284,12 +284,27 @@ func ScopeEffective(configDir, scopeDir string) (*ScopedTenants, error) {
 // refused with the exporter's own load's message (LoadDir), since the
 // exporter refuses to serve it — an empty result would read as "no tenants".
 func EffectiveTree(configDir string) (*ScopedTenants, error) {
-	return scopeEffective(configDir, "", true)
+	return scopeEffective(configDir, "", true, nil)
+}
+
+// EffectiveTreeLogged is EffectiveTree with the exporter's own load logging
+// to logger, as LoadDirReport's does (#2115): the walk's lines (e.g. `WARN:
+// skip unparseable file …: yaml: unmarshal errors: …`) and the build's
+// (`ERROR: skip unparseable defaults/profiles file …`) — the reasons
+// ParseFailed alone does not carry. The walker's WARN for the root itself is
+// held back and dropped when RootListErr carries the same reason, as
+// LoadDirReport does (withRootWalkWarnHeld). nil logs nothing (EffectiveTree).
+func EffectiveTreeLogged(configDir string, logger *log.Logger) (*ScopedTenants, error) {
+	return scopeEffective(configDir, "", true, logger)
 }
 
 // scopeEffective is ScopeEffective; wholeTree is EffectiveTree's mode (key
-// attribution on, an empty tree refused).
-func scopeEffective(configDir, scopeDir string, wholeTree bool) (*ScopedTenants, error) {
+// attribution on, an empty tree refused). logger takes the walk's and the
+// build's log lines (EffectiveTreeLogged); nil discards them.
+func scopeEffective(configDir, scopeDir string, wholeTree bool, logger *log.Logger) (*ScopedTenants, error) {
+	if logger == nil {
+		logger = discardLogger
+	}
 	// The configDir checks keep their historical messages (callers and the
 	// CLI print them); ScanDirTree below repeats the same stat on the same
 	// resolved path, so the two cannot disagree.
@@ -313,7 +328,11 @@ func scopeEffective(configDir, scopeDir string, wholeTree bool) (*ScopedTenants,
 	// defaults set and the bytes all come from this scan. A cold scan (no
 	// prior) that decodes every tenant file in full since #1957; reusing a
 	// prior across runs is #1977.
-	scan, err := ScanDirTree(absRoot, nil, nil, discardLogger)
+	scanLogger, rootWarn := withRootWalkWarnHeld(logger, absRoot)
+	scan, err := ScanDirTree(absRoot, nil, nil, scanLogger)
+	// As loadDirReport: the root's walk WARN is dropped only when
+	// RootListErr carries it (rootUnlistable below), otherwise logged.
+	rootWarn.release(rootListReported(scan, err))
 	if err != nil {
 		return nil, err
 	}
@@ -391,7 +410,7 @@ func scopeEffective(configDir, scopeDir string, wholeTree bool) (*ScopedTenants,
 			inScope[id] = struct{}{}
 		}
 	}
-	parseFailed, unreachable, reserved, stateFilters, applied, rootNull, built, err := scopeParseFailed(scan, filepath.ToSlash(rel))
+	parseFailed, unreachable, reserved, stateFilters, applied, rootNull, built, err := scopeParseFailed(scan, filepath.ToSlash(rel), logger)
 	if err != nil {
 		return nil, err
 	}
@@ -542,8 +561,10 @@ func scopeEffective(configDir, scopeDir string, wholeTree bool) (*ScopedTenants,
 // whole tree; the caller keeps the in-scope tenants
 // (ScopedTenants.SubtreeReserved, #2388). stateFilters is the same build's
 // root `state_filters:` names (ScopedTenants.DeclaredStateFilters). built is
-// that build itself, for EffectiveTree's not-served tables (#2296).
-func scopeParseFailed(scan *TreeScan, scopeRel string) (
+// that build itself, for EffectiveTree's not-served tables (#2296). logger
+// takes the build's log lines — among them why a file is dropped
+// (EffectiveTreeLogged); discardLogger for none.
+func scopeParseFailed(scan *TreeScan, scopeRel string, logger *log.Logger) (
 	parseFailed []string, unreachable map[string][]string, reserved map[string]map[string][]string,
 	stateFilters map[string]bool, applied map[string]map[string]SubtreeRefusedVerdict,
 	rootNull map[string][]RootNullKey, built *FlatBuild, err error,
@@ -555,7 +576,7 @@ func scopeParseFailed(scan *TreeScan, scopeRel string) (
 	// reached the process log here before the build took its logger for them,
 	// and on da-guard's stderr that line is the only place a tenant electing
 	// an unknown profile is named (the report does not list it).
-	in := loadDirBuildInput(scan, scan.AbsRoot, discardLogger, log.Printf)
+	in := loadDirBuildInput(scan, scan.AbsRoot, logger, log.Printf)
 	b, err := BuildFlatConfig(scan, in)
 	if err != nil {
 		return nil, nil, nil, nil, nil, nil, nil, err
