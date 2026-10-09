@@ -21,6 +21,7 @@ import (
 	"flag"
 	"fmt"
 	"io"
+	"log"
 	"reflect"
 
 	"github.com/vencil/threshold-exporter/pkg/config"
@@ -124,7 +125,10 @@ func runEffective(args []string, stdout, errOut io.Writer) int {
 
 	doc := effectiveDoc{Schema: effectiveSchema, ParseFailed: []string{}, Unreadable: []skippedFile{},
 		Skipped: []skippedFile{}, Tenants: map[string]effectiveTenant{}}
-	tree, err := config.EffectiveTree(configDir)
+	// The load logs on errOut, as served-values' LoadDir does (#2115): a
+	// file in parse_failed is named with the exporter's reason, not only
+	// listed (`cannot unmarshal !!str ...`).
+	tree, err := config.EffectiveTreeLogged(configDir, log.New(errOut, "", 0))
 	if tree != nil && tree.RootListErr != nil {
 		// The reason; the root itself is named in unreadable (exit 3, #2627).
 		fmt.Fprintf(errOut, "%s %s: %v\n", programName, effectiveCmd, tree.RootListErr)

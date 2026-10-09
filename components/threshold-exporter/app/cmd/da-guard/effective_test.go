@@ -316,6 +316,62 @@ func TestEffective_ParseFailedIsServedValuesVerdict(t *testing.T) {
 	}
 }
 
+// TestEffective_ParseFailedStderrCarriesTheReason (#2115): a dropped file is
+// named on stderr WITH the exporter's reason, the lines served-values' load
+// writes — not only `N file(s) cannot be decoded`. Before, a reader of
+// effective alone had to run served-values again to learn why.
+func TestEffective_ParseFailedStderrCarriesTheReason(t *testing.T) {
+	t.Parallel()
+	for name, tc := range map[string]struct {
+		files  map[string]string
+		reason string
+	}{
+		"string in root defaults": {
+			files: map[string]string{
+				"_defaults.yaml": "defaults:\n  mysql_threads_running: \"abc\"\n",
+				"tenant-a.yaml":  "tenants:\n  tenant-a: {}\n",
+			},
+			reason: "cannot unmarshal !!str `abc` into float64",
+		},
+		"tenant file body a list": {
+			files: map[string]string{
+				"_defaults.yaml": "defaults:\n  mysql_connections: 80\n",
+				"tenant-a.yaml":  "tenants:\n  tenant-a: {}\n",
+				"tenant-b.yaml":  "tenants:\n  tenant-b: [1]\n",
+			},
+			reason: "cannot unmarshal !!seq into map[string]config.ScheduledValue",
+		},
+	} {
+		dir := writeParityTree(t, tc.files)
+		code, _, stderr := runEffectiveOn(t, dir)
+		sCode, _, sErr := runOnce(t, servedValuesCmd, "--config-dir", dir)
+		if sCode != exitParseFailed || !strings.Contains(sErr, tc.reason) {
+			t.Fatalf("%s: served-values exit %d stderr %q — the shape no longer carries the reason", name, sCode, sErr)
+		}
+		if code != exitParseFailed {
+			t.Errorf("%s: effective exit = %d, want %d", name, code, exitParseFailed)
+		}
+		if !strings.Contains(stderr, tc.reason) {
+			t.Errorf("%s: effective stderr lacks the reason %q:\n%s", name, tc.reason, stderr)
+		}
+		// Every line served-values' load wrote is effective's too. The root
+		// is spelled as given there and resolved here (AbsScanRoot), so
+		// both spellings are folded to one before comparing.
+		fold := func(s string) string {
+			if real, err := filepath.EvalSymlinks(dir); err == nil {
+				s = strings.ReplaceAll(s, real, "<root>")
+			}
+			return strings.ReplaceAll(s, dir, "<root>")
+		}
+		stderr, sErr = fold(stderr), fold(sErr)
+		for _, line := range strings.Split(strings.TrimSpace(sErr), "\n") {
+			if !strings.Contains(stderr, line) {
+				t.Errorf("%s: served-values line missing from effective stderr: %q\neffective:\n%s", name, line, stderr)
+			}
+		}
+	}
+}
+
 func TestEffective_ChainFileTheResolveRejects_ExitsThree(t *testing.T) {
 	t.Parallel()
 	dir := writeParityTree(t, map[string]string{
