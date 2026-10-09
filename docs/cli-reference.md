@@ -2485,8 +2485,12 @@ da-tools opa-evaluate --config-dir <PATH> [options]
 | `--opa-url` | OPA REST API 端點 | - |
 | `--opa-binary` | 本地 OPA 二進位檔路徑（da-tools 映像不含 `opa`，容器內請用 `--opa-url`） | `opa` |
 | `--policy-path` | .rego 策略檔路徑 | - |
+| `--policy-package` | rego 的 package；查 `<package>.violations`，`.` 與 `/` 分隔皆可 | `dynamic_alerting.policy` |
+| `--ci` | 有 error 級違規時以結束碼 1 結束 | - |
 | `--dry-run` | 僅顯示 input JSON，不呼叫 OPA | - |
 | `--json` | JSON 格式輸出 | - |
+
+**OPA 沒有真的評估時結束碼 2**（[#2724](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/2724)）：連不到 OPA server、回 HTTP 錯誤或轉址（不跟隨轉址；請把 `--opa-url` 指向 OPA 的最終位址）、HTTP 回應本身壞掉、找不到 `opa` 或它執行失敗／逾時（10 秒）、回應不是 JSON、`<package>.violations` 未定義（該 package 下沒有 `violations` 規則，例如 package 打錯或 policy 沒載入），一律以結束碼 2 結束，stderr 一行 `ERROR:` 指名原因，stdout 不輸出（含 `--json`）。`violations` 的每一項必須是物件 `{"msg", "severity", "tenant", "field"}`，`severity` 為字串（不分大小寫比對 `warning`（僅 ASCII）者算 warning 級，其餘字串與未寫 `severity` 都算 error 級）；不是物件的項目（例如 `violations contains msg if {...}` 的字串集合）或 `severity` 不是字串（例如 `null`）同樣結束碼 2。過去這些情形都印 `✓ All policies passed.` 並以 0 結束（含 `--ci`）。OPA 有評估時，所有項目都列入報告；沒有 error 級項目即通過——只有 warning 級項目時 `--ci` 仍以 0 結束（設計如此），空集合亦為通過。
 
 **範例**
 
@@ -2498,7 +2502,7 @@ da-tools opa-evaluate --config-dir conf.d/ --opa-url http://localhost:8181
 da-tools opa-evaluate --config-dir conf.d/ --dry-run
 ```
 
-**OPA input**（[#2115](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/2115)）：`input.tenants` 形狀不變（每個租戶一份「key → 寫法」），內容是寫法＋繼承（經 `da-guard effective`：`defaults:`、平台檔 `tenants:`、profile、子目錄 `_defaults.yaml`；保留鍵與 `_metadata` 的取法同 `evaluate-policy`），子目錄裡的租戶也在；key 照寫法（舊拼法不換）。⚠️ 同一閾值跨層用新舊兩種拼法寫時，`input.tenants` 只留勝出那一層的值與拼法（[#2720](https://github.com/vencil/Dynamic-Alerting-Integrations/pull/2720) 之後的逐閾值 view），所以用現行拼法讀可能撲空；對閾值下判斷請讀 `input.served`。新增 `input.served`：每個租戶此刻在 `/metrics` 發出的閾值數字，key 為現行拼法（別名已正規化；寫成 `<key>_critical` 鍵的 critical 列在 `<key>_critical` 之下，寫成 `"95:critical"` 的值仍在 `<key>` 之下）。對閾值的值下判斷的 rego 請讀 `input.served`。⚠️ 已知限制：`opa-evaluate` 的 `input.tenants` 裡的 `_routing` 是寫法＋繼承，不是路由產生器解析後的結果（`evaluate-policy` 讀的是解析結果）；兩者在有 `_routing_defaults`、`{{tenant}}` 代換等情形下可能不同。沒有 `tenants:` 的檔不是租戶（stderr `WARN`）；exporter 解析失敗或讀不到的檔、被 da-guard 拒收的樹、找不到 da-guard 時以結束碼 2 結束（`ERROR` 行指名），沒有任何設定檔的目錄也是 2。
+**OPA input**（[#2115](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/2115)）：`input.tenants` 形狀不變（每個租戶一份「key → 寫法」），內容是寫法＋繼承（經 `da-guard effective`：`defaults:`、平台檔 `tenants:`、profile、子目錄 `_defaults.yaml`；保留鍵與 `_metadata` 的取法同 `evaluate-policy`），子目錄裡的租戶也在；key 照寫法（舊拼法不換）。⚠️ 同一閾值跨層用新舊兩種拼法寫時，`input.tenants` 只留勝出那一層的值與拼法（[#2720](https://github.com/vencil/Dynamic-Alerting-Integrations/pull/2720) 之後的逐閾值 view），所以用現行拼法讀可能撲空；對閾值下判斷請讀 `input.served`。新增 `input.served`：每個租戶此刻在 `/metrics` 發出的閾值數字，key 為現行拼法（別名已正規化；寫成 `<key>_critical` 鍵的 critical 列在 `<key>_critical` 之下，寫成 `"95:critical"` 的值仍在 `<key>` 之下）。對閾值的值下判斷的 rego 請讀 `input.served`。⚠️ 已知限制：`opa-evaluate` 的 `input.tenants` 裡的 `_routing` 是寫法＋繼承，不是路由產生器解析後的結果——不套 `_routing_defaults`、不代換 `{{tenant}}`，只靠 `_routing_defaults` 的租戶沒有 `_routing`；要讀解析後的路由請用 `evaluate-policy`（[#2724](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/2724)）。`input.defaults` 是根 defaults 載體的頂層鍵（去掉 `_` 開頭者）照寫法、不拆包：一般的 `_defaults.yaml` 把閾值寫在 `defaults:` 底下，rego 要讀 `input.defaults.defaults.<key>`。沒有 `tenants:` 的檔不是租戶（stderr `WARN`）；exporter 解析失敗或讀不到的檔、被 da-guard 拒收的樹、找不到 da-guard 時以結束碼 2 結束（`ERROR` 行指名），沒有任何設定檔的目錄也是 2。
 
 ---
 
