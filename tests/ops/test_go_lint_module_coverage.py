@@ -399,7 +399,7 @@ def test_editing_a_module_wakes_the_lint_job() -> None:
     assert not unreachable, (
         f"these modules cannot trigger {LINT_JOB}: {unreachable}. The run leg is "
         "skipped and its always-run gate reports success on the required check — "
-        f"the step is real and never runs. Widen the `validate` filter in "
+        f"the step is real and never runs on the PR that breaks it. Widen the `validate` filter in "
         f"{VALIDATE.name} first.")
 
 
