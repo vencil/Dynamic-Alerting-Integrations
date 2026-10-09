@@ -1,0 +1,53 @@
+# promtool behavioural test for TenantApiPolicyUnavailable (hub #2486 Q7-2):
+#   1) FIRES when the domain policy stays unavailable (gauge == 0 sustained).
+#   2) does NOT fire while it is available (gauge == 1).
+#   3) does NOT fire on a one-tick dip (gauge 0 for < the 2m hold-down) — a
+#      non-atomic write the watcher caught mid-way.
+# Run: promtool test rules tests/rulepacks/platform-policy-unavailable_test.yaml
+rule_files:
+  - platform-policy-unavailable.rules.yaml
+
+evaluation_interval: 1m
+
+tests:
+  - interval: 1m
+    name: unavailable-fires
+    input_series:
+      - series: 'tenant_api_policy_available{job="tenant-api", instance="10.0.0.2:8080"}'
+        values: '0x30'
+    alert_rule_test:
+      - eval_time: 20m
+        alertname: TenantApiPolicyUnavailable
+        exp_alerts:
+          - exp_labels:
+              severity: warning
+              alert_source: platform
+              job: tenant-api
+              instance: 10.0.0.2:8080
+            exp_annotations:
+              summary: "tenant-api domain policy is unavailable — policy-judged writes answer 503"
+
+  - interval: 1m
+    name: available-no-fire
+    input_series:
+      - series: 'tenant_api_policy_available{job="tenant-api", instance="10.0.0.2:8080"}'
+        values: '1x30'
+    alert_rule_test:
+      - eval_time: 20m
+        alertname: TenantApiPolicyUnavailable
+        exp_alerts: []
+
+  # ⚠️ The eval at 6m is the DISCRIMINATOR for `for: 2m`: the gauge IS 0 there,
+  # so a rule without the hold-down would already fire.
+  - interval: 1m
+    name: one-tick-dip-no-fire
+    input_series:
+      - series: 'tenant_api_policy_available{job="tenant-api", instance="10.0.0.2:8080"}'
+        values: '1+0x5 0 1+0x24'
+    alert_rule_test:
+      - eval_time: 6m
+        alertname: TenantApiPolicyUnavailable
+        exp_alerts: []
+      - eval_time: 20m
+        alertname: TenantApiPolicyUnavailable
+        exp_alerts: []

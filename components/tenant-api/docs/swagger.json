@@ -747,7 +747,7 @@
                         }
                     },
                     "503": {
-                        "description": "Service Unavailable",
+                        "description": "Service unavailable: the write plane is busy (WRITE_OVERLOADED) or the forge is degraded (FORGE_UNAVAILABLE); or, in direct mode, the patch writes _routing_receiver_type or touches _routing / _routing_profile while a _domain_policy.yaml / .yml is present but cannot be read or parsed and has no last good version (code POLICY_UNAVAILABLE, Retry-After; nothing written). An async run is judged again per member when it runs (results[].code POLICY_UNAVAILABLE).",
                         "schema": {
                             "$ref": "#/definitions/ErrorResponse"
                         }
@@ -913,7 +913,7 @@
                         }
                     },
                     "503": {
-                        "description": "Service Unavailable",
+                        "description": "Service unavailable: the write plane is busy (WRITE_OVERLOADED) or the forge is degraded (FORGE_UNAVAILABLE); or, in direct mode, an operation writes _routing_receiver_type or touches _routing / _routing_profile while a _domain_policy.yaml / .yml is present but cannot be read or parsed and has no last good version (code POLICY_UNAVAILABLE, Retry-After; nothing written). An async batch is judged again per operation when it runs (results[].code POLICY_UNAVAILABLE).",
                         "schema": {
                             "$ref": "#/definitions/ErrorResponse"
                         }
@@ -1147,7 +1147,7 @@
                         }
                     },
                     "503": {
-                        "description": "Service Unavailable",
+                        "description": "Service unavailable: the write plane is busy (WRITE_OVERLOADED), the forge is degraded (FORGE_UNAVAILABLE) or the config worktree is not on the base branch (TREE_NOT_ON_BASE); or, in direct mode, a _domain_policy.yaml / .yml is present but cannot be read or parsed and has no last good version (code POLICY_UNAVAILABLE, Retry-After; nothing written)",
                         "schema": {
                             "$ref": "#/definitions/ErrorResponse"
                         }
@@ -2471,7 +2471,7 @@
             "type": "object",
             "properties": {
                 "code": {
-                    "description": "Code is a machine-readable error code for a FAILED op, set only for the\nfailure classes a client is expected to branch on: TENANT_DECLARED_ELSEWHERE\n(the per-op form of the 409 that PUT and the PR-mode batch return),\nTENANT_CONFIG_NOT_LOADABLE (the tenant file cannot be loaded as a tenant\nconfig, #2373; nothing written) and INTERNAL_ERROR (the conf.d walk behind that check could not run; nothing\nwritten). Empty for every other failure and for a successful op.",
+                    "description": "Code is a machine-readable error code for a FAILED op, set only for the\nfailure classes a client is expected to branch on: TENANT_DECLARED_ELSEWHERE\n(the per-op form of the 409 that PUT and the PR-mode batch return),\nTENANT_CONFIG_NOT_LOADABLE (the tenant file cannot be loaded as a tenant\nconfig, #2373; nothing written), INTERNAL_ERROR (the conf.d walk behind that check could not run; nothing\nwritten) and POLICY_UNAVAILABLE (direct mode: the op is one the domain policy judges and a policy file is\npresent but unusable with no last good version; nothing written). Empty for every other failure and for a\nsuccessful op.",
                     "type": "string"
                 },
                 "message": {

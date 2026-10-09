@@ -406,9 +406,10 @@ func TestDomainPoliciesShapeError_MergeChainIsLinear(t *testing.T) {
 	dLarge, bLarge := shapeErrorCost(t, large)
 	t.Logf("n=16000 (%d KB): %v, %d MB; n=32000: %v, %d MB", len(small)>>10, dSmall, bSmall>>20, dLarge, bLarge>>20)
 	// Wall clock is only a coarse ceiling (measured ~55ms at n=16000 alone,
-	// ~1.2s under -race beside the whole module's tests; the quadratic
-	// lookup took ~29s and 5.4GB at n=16000). Allocation is the signal.
-	if dSmall > 5*time.Second || dLarge > 10*time.Second {
+	// ~1s under -race beside the whole module's tests locally, 5.07s on a
+	// slow CI runner under -race and coverage, #2763; the quadratic lookup
+	// took ~29s and 5.4GB at n=16000). Allocation is the signal.
+	if dSmall > 15*time.Second || dLarge > 30*time.Second {
 		t.Errorf("took %v (n=16000) and %v (n=32000)", dSmall, dLarge)
 	}
 	if bSmall > 256<<20 {

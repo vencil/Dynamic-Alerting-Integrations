@@ -25,46 +25,154 @@ package policy
 
 import (
 	"encoding/json"
+	"errors"
 	"fmt"
 	"log/slog"
 	"os"
 	"path/filepath"
 	"sort"
 	"strings"
+	"sync"
+	"sync/atomic"
 
 	"github.com/vencil/tenant-api/internal/configwatcher"
 	"github.com/vencil/threshold-exporter/pkg/routingpolicy"
+	"gopkg.in/yaml.v3"
 )
 
 // Constraints defines the constraints for a domain policy.
 type Constraints struct {
-	AllowedReceiverTypes   []string `yaml:"allowed_receiver_types"`
-	ForbiddenReceiverTypes []string `yaml:"forbidden_receiver_types"`
-	EnforceGroupBy         []string `yaml:"enforce_group_by"`
-	MaxRepeatInterval      string   `yaml:"max_repeat_interval"`
-	MinGroupWait           string   `yaml:"min_group_wait"`
+	AllowedReceiverTypes   AllowedTypeList   `yaml:"allowed_receiver_types"`
+	ForbiddenReceiverTypes ForbiddenTypeList `yaml:"forbidden_receiver_types"`
+	EnforceGroupBy         []string          `yaml:"enforce_group_by"`
+	MaxRepeatInterval      string            `yaml:"max_repeat_interval"`
+	MinGroupWait           string            `yaml:"min_group_wait"`
 	// RequireCriticalEscalation is read as the generator's PyYAML reads it
 	// (routingpolicy.DecodePyYAML, #2325): a plain `yes` / `on` or a
 	// `!!bool yEs` is true and `no` / `off` false. Only a boolean `true` turns
 	// the constraint on (the generator's `is True`); any other value PyYAML
 	// reads (`"true"`, `1`, any mapping or list) is logged once per load and
-	// left off, and the rest of the file still applies. A `!!null`-tagged
-	// scalar (`!!null x`) is None, as for PyYAML: the constraint is off, the
-	// rest applies (parseConfig decodes via routingpolicy.UnmarshalPolicy).
-	// A value PyYAML refuses — `!!bool y`, `!!int abc`, `!!bool [true]`,
-	// `{<<: 1}`, `!!null {}`, or one refused only deeper (`[!!bool y]`) — makes
-	// the generator drop the whole file and da-guard refuse it; tenant-api
-	// treats every refused value as this constraint off (logged once per
-	// load), and the rest of the file applies, on a first load and a hot
-	// reload alike.
+	// left off, and the rest of the file still applies — the generator
+	// enforces nothing from it either (only --strict reports it). A
+	// `!!null`-tagged scalar (`!!null x`) is None, as for PyYAML: the
+	// constraint is off, the rest applies (parseConfig decodes via
+	// routingpolicy.UnmarshalPolicy). A value PyYAML refuses — `!!bool y`,
+	// `!!int abc`, `!!bool [true]`, `{<<: 1}`, `!!null {}` — makes the
+	// generator drop the whole file and da-guard refuse it, and tenant-api
+	// refuses the whole file too (hub #2486 PR-7c round 2, B1; #2325 read it
+	// as this constraint off): the watcher keeps the file's last good
+	// content, or with none the policy is unavailable (Manager.Unavailable).
 	RequireCriticalEscalation routingpolicy.PyYAMLValue `yaml:"require_critical_escalation"`
 }
 
 // DomainPolicy defines a single domain's compliance constraints.
 type DomainPolicy struct {
 	Description string      `yaml:"description"`
-	Tenants     []string    `yaml:"tenants"`
+	Tenants     TenantList  `yaml:"tenants"`
 	Constraints Constraints `yaml:"constraints"`
+}
+
+// TenantList is a domain policy's `tenants:` read as the route generator
+// reads it (#2730 §2): each scalar item is its source TEXT, never decoded —
+// `010` is "010", `~` is "~", `!!binary aGk=` is "aGk=", `!!null x` is "x",
+// `! "null"` is "null" (_lib_yaml_keys.ExporterKeyLoader,
+// raw_text_sequences). A value that is not a sequence, or an item that is
+// not a scalar, is an error: the generator enforces no tenant from it, and
+// tenant-api refuses the file rather than read it otherwise (stricter, never
+// looser). A null value is no tenants (yaml.v3 hands it no Unmarshaler).
+type TenantList []string
+
+// UnmarshalYAML implements yaml.Unmarshaler.
+func (l *TenantList) UnmarshalYAML(n *yaml.Node) error {
+	n = derefNode(n)
+	if n.Kind != yaml.SequenceNode {
+		return fmt.Errorf("line %d: 'tenants' must be a list of tenant ids", n.Line)
+	}
+	out := make(TenantList, 0, len(n.Content))
+	for _, item := range n.Content {
+		d := derefNode(item)
+		if d == nil || d.Kind != yaml.ScalarNode {
+			return fmt.Errorf("line %d: a 'tenants' entry must be a tenant id (a scalar)", item.Line)
+		}
+		out = append(out, d.Value)
+	}
+	*l = out
+	return nil
+}
+
+// ForbiddenTypeList is `forbidden_receiver_types` read as the route
+// generator reads it (#2730 §6): the entries PyYAML builds as a string
+// (routingpolicy.ReceiverTypeItem — `! "slack"` is "slack"). An entry PyYAML
+// builds as anything else (`! "null"` is None, `yes` True, `7` an int) equals
+// only a receiver type that is no string, which the generator refuses on its
+// own, so it forbids nothing and is left out. A value that is not a list, an
+// entry that is not a scalar, and an entry PyYAML cannot build (`!!int x`,
+// `!custom x`: the generator drops the file; or builds as a type not
+// modelled, `!!binary`) are errors: the file is refused (hub #2486 PR-7c
+// round 2, F1).
+type ForbiddenTypeList []string
+
+// UnmarshalYAML implements yaml.Unmarshaler.
+func (l *ForbiddenTypeList) UnmarshalYAML(n *yaml.Node) error {
+	out, err := receiverTypeEntries(n, false)
+	*l = out
+	return err
+}
+
+// AllowedTypeList is `allowed_receiver_types` read as the generator reads
+// it: a string entry is a type it allows. A non-string entry allows no
+// receiver type a usable config has, yet a list of only such entries still
+// restricts — the generator refuses every type not in the non-empty set — so
+// it is kept as NotAReceiverType, never as its source text (hub #2486 PR-7c
+// round 2, F1: `!!null webhook` is None to PyYAML, and its text "webhook"
+// allowed a webhook receiver the generator refuses). Errors as
+// ForbiddenTypeList's.
+type AllowedTypeList []string
+
+// NotAReceiverType stands in an AllowedTypeList for an entry PyYAML builds as
+// no string: it keeps the list non-empty and equals no receiver type. A
+// receiver type is a string yaml.v3 decoded, always valid UTF-8; this is not.
+const NotAReceiverType = "\xff<allowed_receiver_types entry that is not a string>"
+
+// UnmarshalYAML implements yaml.Unmarshaler.
+func (l *AllowedTypeList) UnmarshalYAML(n *yaml.Node) error {
+	out, err := receiverTypeEntries(n, true)
+	*l = out
+	return err
+}
+
+// receiverTypeEntries reads a receiver-type list node: string entries as
+// PyYAML reads them, non-string scalar entries kept as NotAReceiverType when
+// keepOther, else left out. An entry PyYAML cannot build is an error.
+func receiverTypeEntries(n *yaml.Node, keepOther bool) ([]string, error) {
+	n = derefNode(n)
+	if n.Kind != yaml.SequenceNode {
+		return nil, fmt.Errorf("line %d: a receiver-type constraint must be a list", n.Line)
+	}
+	out := make([]string, 0, len(n.Content))
+	for _, item := range n.Content {
+		d := derefNode(item)
+		if d == nil || d.Kind != yaml.ScalarNode {
+			return nil, fmt.Errorf("line %d: a receiver-type entry must be a scalar", item.Line)
+		}
+		s, ok, err := routingpolicy.ReceiverTypeItem(d)
+		switch {
+		case err != nil:
+			return nil, err
+		case ok:
+			out = append(out, s)
+		case keepOther:
+			out = append(out, NotAReceiverType)
+		}
+	}
+	return out, nil
+}
+
+func derefNode(n *yaml.Node) *yaml.Node {
+	for n != nil && n.Kind == yaml.AliasNode {
+		n = n.Alias
+	}
+	return n
 }
 
 // DomainPolicyConfig is the parsed _domain_policy.yaml structure.
@@ -89,6 +197,90 @@ type Violation struct {
 // the policy-specific check methods.
 type Manager struct {
 	*configwatcher.Watcher[DomainPolicyConfig]
+
+	// files is the watcher's per-file parser (NewManager); nil for a
+	// LoadSnapshot / NewForTest Manager, which is never unavailable.
+	files *fileWiseParser
+	// openOnUnavailable is the --policy-unavailable-open escape hatch
+	// (SetOpenOnUnavailable): CheckAvailable then lets a write through an
+	// unavailable policy, logging and counting each one (openPasses).
+	openOnUnavailable atomic.Bool
+	openPasses        atomic.Int64
+}
+
+// ErrUnavailable is CheckAvailable's error (wrapped): a policy file is there
+// but cannot be used and has no last good content of its own, so the
+// policy-reading writes are refused (hub #2486 Q7-2, direct mode).
+var ErrUnavailable = errors.New("domain policy unavailable")
+
+// Unavailable reports whether a domain policy file is present but unusable
+// with no last good content of its own (hub #2486 Q7-2 甲軸), judged file
+// by file: Lstat sees the file, and it cannot be read (a directory, a
+// dangling symlink, no permission) or does not parse (every refusal of
+// parseConfig, the generator-parity ones included), and it never parsed
+// since it last appeared. A file Lstat does not see is no policy (legal);
+// a broken file that has parsed before keeps serving that content. nil
+// when every present file is usable or served from its last good content,
+// and always for a Manager not built by NewManager.
+func (m *Manager) Unavailable() error {
+	if m == nil || m.files == nil {
+		return nil
+	}
+	bad := m.files.unavailableFiles()
+	if len(bad) == 0 {
+		return nil
+	}
+	return fmt.Errorf("%w: %s", ErrUnavailable, strings.Join(bad, "; "))
+}
+
+// SetOpenOnUnavailable installs the --policy-unavailable-open escape hatch:
+// CheckAvailable then lets a write through an unavailable policy (each one
+// logged and counted in OpenPasses) instead of refusing it.
+func (m *Manager) SetOpenOnUnavailable(on bool) { m.openOnUnavailable.Store(on) }
+
+// OpenPasses is how many writes CheckAvailable let through an unavailable
+// policy under --policy-unavailable-open (tenant_api_policy_unavailable_open_total).
+func (m *Manager) OpenPasses() int64 {
+	if m == nil {
+		return 0
+	}
+	return m.openPasses.Load()
+}
+
+// CheckAvailable is the one gate the direct-mode writes that read the
+// domain policy call before judging ONE write — a PUT /tenants/{id}, or one
+// routing-touching op of POST /tenants/batch or /groups/{id}/batch (at
+// execution time, sync or async): nil when the policy is available, else
+// an error wrapping ErrUnavailable (the handler answers 503). Under
+// --policy-unavailable-open it returns nil instead and logs and counts the
+// write it let through — once per write: a batch counts each op it lets
+// through, never the batch itself (RefusesWrites is the batch-level gate).
+// what names the write in that log line.
+func (m *Manager) CheckAvailable(what string) error {
+	err := m.Unavailable()
+	if err == nil {
+		return nil
+	}
+	if m.openOnUnavailable.Load() {
+		m.openPasses.Add(1)
+		slog.Warn("policy: domain policy unavailable, write let through (--policy-unavailable-open)",
+			"write", what, "reason", err.Error())
+		return nil
+	}
+	return err
+}
+
+// RefusesWrites is CheckAvailable's verdict without letting anything
+// through: the ErrUnavailable error when the policy is unavailable and
+// --policy-unavailable-open is off, else nil — nothing logged, nothing
+// counted. A batch request is gated with it before its ops run; each op
+// then goes through CheckAvailable, which counts the op it lets through.
+func (m *Manager) RefusesWrites() error {
+	err := m.Unavailable()
+	if err == nil || m.openOnUnavailable.Load() {
+		return nil
+	}
+	return err
 }
 
 // FileNames are the conf.d root files the domain policies are read from, in
@@ -100,37 +292,51 @@ type Manager struct {
 // pair as an error.
 var FileNames = []string{"_domain_policy.yaml", "_domain_policy.yml"}
 
-// policySource is one policy file as read: its name and bytes.
+// policySource is one policy file as read: its name and bytes, or (Err) why
+// a file Lstat sees could not be read.
 type policySource struct {
 	Name string `json:"name"`
 	Data []byte `json:"data"`
+	Err  string `json:"err,omitempty"`
 }
 
 // readSources reads every FileNames file present in configDir, in order. A
-// missing file is skipped; any other read failure is an error.
-func readSources(configDir string) ([]policySource, error) {
+// file Lstat does not see is skipped (no policy). One Lstat sees but that
+// cannot be read — a directory, a dangling symlink (os.ReadFile reports
+// "not exist" for it, which is why Lstat decides presence), no permission —
+// is returned with Err set: present, and unusable (hub #2486 Q7-2).
+func readSources(configDir string) []policySource {
 	var out []policySource
 	for _, name := range FileNames {
 		path := filepath.Join(configDir, name)
-		data, err := os.ReadFile(path)
-		if err != nil {
+		if _, err := os.Lstat(path); err != nil {
 			if os.IsNotExist(err) {
 				continue
 			}
-			return nil, fmt.Errorf("read %s: %w", path, err)
+			out = append(out, policySource{Name: name, Err: fmt.Sprintf("stat %s: %v", path, err)})
+			continue
+		}
+		data, err := os.ReadFile(path)
+		if err != nil {
+			out = append(out, policySource{Name: name, Err: fmt.Sprintf("read %s: %v", path, err)})
+			continue
 		}
 		out = append(out, policySource{Name: name, Data: data})
 	}
-	return out, nil
+	return out
 }
 
 // parseSources is LoadSnapshot's parse: each file (parseConfig), laid over
 // each other in order, a later file's domain replacing an earlier one's of
-// the same name. One file that does not parse fails the whole read
-// (fail-closed: PR mode refuses rather than judge on a partial policy).
+// the same name. One file that cannot be read or does not parse fails the
+// whole read (fail-closed: PR mode refuses rather than judge on a partial
+// policy).
 func parseSources(configDir string, srcs []policySource) (*DomainPolicyConfig, error) {
 	merged := emptyConfig()
 	for _, s := range srcs {
+		if s.Err != "" {
+			return nil, errors.New(s.Err)
+		}
 		cfg, err := parseConfig(s.Data)
 		if err != nil {
 			return nil, fmt.Errorf("parse %s: %w", filepath.Join(configDir, s.Name), err)
@@ -155,9 +361,29 @@ func mergeDomains(dst, src *DomainPolicyConfig) {
 // hot reload one broken file does not hold back the other's update. A
 // removed file forgets its last good content. Called under the watcher's
 // load lock, so lastGood needs no lock of its own.
+//
+// A file that is present but cannot be read (policySource.Err) is a failed
+// file like one that does not parse. A failed file with no last good content
+// is recorded in unavailable (hub #2486 Q7-2), which Manager.Unavailable
+// reads from request goroutines — hence its own lock.
 type fileWiseParser struct {
 	configDir string
 	lastGood  map[string]*DomainPolicyConfig
+
+	mu          sync.Mutex
+	unavailable []string // "<path>: <why>", one per failed file with no last good content
+}
+
+func (p *fileWiseParser) setUnavailable(files []string) {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	p.unavailable = files
+}
+
+func (p *fileWiseParser) unavailableFiles() []string {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	return append([]string(nil), p.unavailable...)
 }
 
 // parse returns the merged snapshot and, when a file failed, an error naming
@@ -165,16 +391,25 @@ type fileWiseParser struct {
 func (p *fileWiseParser) parse(srcs []policySource) (*DomainPolicyConfig, error) {
 	present := map[string]bool{}
 	merged := emptyConfig()
-	var failed []string
+	var failed, unavailable []string
 	for _, s := range srcs {
 		present[s.Name] = true
-		cfg, err := parseConfig(s.Data)
+		var cfg *DomainPolicyConfig
+		var err error
+		if s.Err != "" {
+			err = errors.New(s.Err)
+		} else {
+			cfg, err = parseConfig(s.Data)
+		}
 		if err != nil {
 			path := filepath.Join(p.configDir, s.Name)
-			slog.Warn("policy: file does not parse; its last good content (none if it never parsed) applies, the other policy file is unaffected",
+			slog.Warn("policy: file cannot be read or does not parse; its last good content (none if it never parsed) applies, the other policy file is unaffected",
 				"file", path, "error", err)
 			failed = append(failed, fmt.Sprintf("%s: %v", path, err))
 			cfg = p.lastGood[s.Name]
+			if cfg == nil {
+				unavailable = append(unavailable, fmt.Sprintf("%s: %v", path, err))
+			}
 		} else {
 			p.lastGood[s.Name] = cfg
 		}
@@ -187,6 +422,7 @@ func (p *fileWiseParser) parse(srcs []policySource) (*DomainPolicyConfig, error)
 			delete(p.lastGood, name)
 		}
 	}
+	p.setUnavailable(unavailable)
 	if len(failed) > 0 {
 		return merged, fmt.Errorf("%s", strings.Join(failed, "; "))
 	}
@@ -200,14 +436,13 @@ func (p *fileWiseParser) parse(srcs []policySource) (*DomainPolicyConfig, error)
 func NewManager(configDir string) *Manager {
 	fw := &fileWiseParser{configDir: configDir, lastGood: map[string]*DomainPolicyConfig{}}
 	read := func() ([]byte, bool, error) {
-		srcs, err := readSources(configDir)
-		if err != nil {
-			return nil, false, err
-		}
+		srcs := readSources(configDir)
 		if len(srcs) == 0 {
 			// Neither file: the watcher stores empty without parsing, so
-			// the removed files forget their last good content here.
+			// the removed files forget their last good content here, and
+			// no policy is no unavailable policy.
 			clear(fw.lastGood)
+			fw.setUnavailable(nil)
 			return nil, false, nil
 		}
 		data, err := json.Marshal(srcs)
@@ -225,21 +460,20 @@ func NewManager(configDir string) *Manager {
 	if err != nil {
 		slog.Warn("policy: initial load failed", "error", err)
 	}
-	return &Manager{Watcher: w}
+	return &Manager{Watcher: w, files: fw}
 }
 
 // LoadSnapshot reads configDir's domain policies ONCE, with no watcher: the
 // same files NewManager watches (FileNames), the same parser and merge
 // (parseSources), and the same answer when neither exists (emptyConfig).
 // Unlike the watcher, which keeps its last good snapshot when a file breaks,
-// an unreadable or unparseable file is an error here: the caller (PR mode,
-// judging the fresh base the branch is cut from — batch B2 #2341, PUT #2486)
-// refuses the write rather than judge it on a policy it cannot read.
+// an unreadable or unparseable file is an error here — a directory or a
+// dangling symlink included (hub #2486 Q7-2: Lstat decides presence): the
+// caller (PR mode, judging the fresh base the branch is cut from — batch B2
+// #2341, PUT #2486) refuses the write rather than judge it on a policy it
+// cannot read.
 func LoadSnapshot(configDir string) (*Manager, error) {
-	srcs, err := readSources(configDir)
-	if err != nil {
-		return nil, err
-	}
+	srcs := readSources(configDir)
 	cfg, err := parseSources(configDir, srcs)
 	if err != nil {
 		return nil, err
@@ -266,7 +500,9 @@ func emptyConfig() *DomainPolicyConfig {
 // null, `~` and a bare key read as an empty policy before, so a hot reload
 // to one of them dropped every constraint while da-guard and the
 // generator's --strict called the file unusable. Now the watcher keeps the
-// file's last good content and LoadSnapshot (PR mode) refuses.
+// file's last good content and LoadSnapshot (PR mode) refuses. So is a
+// require_critical_escalation PyYAML refuses (B1, hub #2486 PR-7c round 2):
+// the generator drops the whole file over it.
 func parseConfig(data []byte) (*DomainPolicyConfig, error) {
 	if err := routingpolicy.DomainPoliciesShapeError(data); err != nil {
 		return nil, err
@@ -283,9 +519,8 @@ func parseConfig(data []byte) (*DomainPolicyConfig, error) {
 	for _, name := range sortedDomains(&cfg) {
 		esc := cfg.DomainPolicies[name].Constraints.RequireCriticalEscalation
 		if esc.Refused != nil {
-			slog.Warn("policy: PyYAML refuses require_critical_escalation (the route generator drops this file); "+
-				"the constraint is not enforced", "domain", name, "reason", esc.Refused.Error())
-			continue
+			return nil, fmt.Errorf("domain policy %q: require_critical_escalation cannot be read by the route generator "+
+				"(%v), which drops this file; set it to true or false (unquoted)", name, esc.Refused)
 		}
 		v := esc.Value
 		if _, isBool := v.(bool); v != nil && !isBool {

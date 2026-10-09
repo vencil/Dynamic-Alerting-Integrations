@@ -88,6 +88,9 @@ func TestScalarTable_CoversEveryTag(t *testing.T) {
 		seen[r.PyYAML] = true
 	}
 	for _, r := range implicitResolvers {
+		if r.tag == TagYAML {
+			continue // no plain scalar resolves so: TestDecode_NonSpecificTagMatchesPyYAML
+		}
 		if !seen[r.tag] {
 			t.Errorf("no row resolves to %s", r.tag)
 		}
@@ -186,6 +189,91 @@ func TestDecode_NotAString(t *testing.T) {
 		v := decodeDoc(t, doc).(map[string]any)["v"]
 		if _, isString := v.(string); isString {
 			t.Errorf("%q: Decode gives the string %q", doc, v)
+		}
+	}
+}
+
+// TestDecode_NonSpecificTagMatchesPyYAML holds Decode to PyYAML on every
+// scalar written with the non-specific tag `!` in
+// tests/shared/pyyaml_tagged_scalar_matrix.json (#2730 §6): PyYAML resolves
+// `! "true"` as if plain, and the vendored yaml.v3 keeps the tag (Tag "!")
+// so Decode can. Refused rows must be Unsupported; the rest the type PyYAML
+// builds (bytes, which is not modelled, Unsupported).
+func TestDecode_NonSpecificTagMatchesPyYAML(t *testing.T) {
+	data, err := os.ReadFile(filepath.Join("..", "..", "..", "..", "..", "tests", "shared",
+		"pyyaml_tagged_scalar_matrix.json"))
+	if err != nil {
+		t.Fatalf("read matrix: %v", err)
+	}
+	var m struct {
+		Rows []struct {
+			Source  string `json:"source"`
+			Refused string `json:"refused"`
+			Type    string `json:"type"`
+			Bool    *bool  `json:"bool"`
+		} `json:"rows"`
+	}
+	if err := json.Unmarshal(data, &m); err != nil {
+		t.Fatalf("parse matrix: %v", err)
+	}
+	compared := 0
+	for _, r := range m.Rows {
+		if !strings.HasPrefix(r.Source, "! ") || !strings.ContainsAny(r.Source[2:3], `'"|>`) {
+			continue
+		}
+		n := valueNode(t, "v: "+r.Source+"\n")
+		if n == nil {
+			t.Errorf("%q: yaml.v3 rejects it", r.Source)
+			continue
+		}
+		if n.Tag != NonSpecificTag {
+			t.Errorf("%q: node Tag = %q, want %q (vendored yaml.v3 patch)", r.Source, n.Tag, NonSpecificTag)
+		}
+		compared++
+		got := Decode(n)
+		var ok bool
+		switch {
+		case r.Refused != "" || r.Type == "bytes":
+			_, ok = got.(Unsupported)
+		case r.Bool != nil:
+			ok = got == *r.Bool
+		case r.Type == "NoneType":
+			ok = got == nil
+		case r.Type == "int":
+			_, isInt := got.(int)
+			_, isBig := got.(*big.Int)
+			ok = isInt || isBig
+		case r.Type == "float":
+			_, ok = got.(float64)
+		case r.Type == "str":
+			_, ok = got.(string)
+		case r.Type == "date" || r.Type == "datetime":
+			_, ok = got.(time.Time)
+		default:
+			t.Fatalf("%q: matrix type %q not modelled by this test", r.Source, r.Type)
+		}
+		if !ok {
+			t.Errorf("%q: Decode = %T %v; PyYAML: refused=%q type=%q", r.Source, got, got, r.Refused, r.Type)
+		}
+	}
+	if compared < 200 {
+		t.Fatalf("only %d non-specific rows compared", compared)
+	}
+}
+
+// TestIsMergeKey_NonSpecificTag: `! "<<"` is a merge key to PyYAML (it
+// resolves the text as if plain, a final newline included); `! "x"` is not.
+func TestIsMergeKey_NonSpecificTag(t *testing.T) {
+	for doc, want := range map[string]bool{
+		`{! "<<": {a: 1}}`: true, `{! '<<': {a: 1}}`: true, `{! "<<\n": {a: 1}}`: true,
+		`{"<<": {a: 1}}`: false, `{! "x": {a: 1}}`: false, `{! "<< ": {a: 1}}`: false,
+	} {
+		var n yaml.Node
+		if err := yaml.Unmarshal([]byte(doc), &n); err != nil {
+			t.Fatalf("%s: %v", doc, err)
+		}
+		if got := IsMergeKey(n.Content[0].Content[0]); got != want {
+			t.Errorf("%s: IsMergeKey = %v, want %v", doc, got, want)
 		}
 	}
 }

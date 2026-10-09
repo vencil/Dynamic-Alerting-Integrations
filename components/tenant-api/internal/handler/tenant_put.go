@@ -83,7 +83,7 @@ type PutTenantResponse struct {
 // @Failure     409   {object} ErrorResponse "Conflict: base hash mismatch, pending PR, ambiguous tenant file, the tenant is already declared by another conf.d file (code TENANT_DECLARED_ELSEWHERE; nothing written), or the tenant's conf.d file is not a regular file (code TENANT_CONFIG_NOT_LOADABLE, config_error not_regular_file; nothing written)"
 // @Failure     500   {object} ErrorResponse
 // @Failure     501   {object} ErrorResponse
-// @Failure     503   {object} ErrorResponse
+// @Failure     503   {object} ErrorResponse "Service unavailable: the write plane is busy (WRITE_OVERLOADED), the forge is degraded (FORGE_UNAVAILABLE) or the config worktree is not on the base branch (TREE_NOT_ON_BASE); or, in direct mode, a _domain_policy.yaml / .yml is present but cannot be read or parsed and has no last good version (code POLICY_UNAVAILABLE, Retry-After; nothing written)"
 // @Router      /api/v1/tenants/{id} [put]
 func PutTenant(d *Deps) http.HandlerFunc {
 	return func(rw http.ResponseWriter, r *http.Request) {
@@ -150,6 +150,16 @@ func PutTenant(d *Deps) http.HandlerFunc {
 		// fresh base (putTenantPRMode).
 		var advisories []string
 		if d.Policy != nil {
+			// Hub #2486 Q7-2: in direct mode a policy file that is there but
+			// unusable (no last good content) refuses the write — 503 — rather
+			// than judge it on no policy. PR mode judges the fresh base's
+			// policy itself (LoadSnapshot refuses an unusable one).
+			if !d.prWritePath() {
+				if err := d.Policy.CheckAvailable("PUT /api/v1/tenants/" + tenantID); err != nil {
+					writePolicyUnavailable(rw, r, err)
+					return
+				}
+			}
 			violations, adv := judgePutBody(d.ConfigDir, d.Policy, tenantID, body)
 			advisories = adv
 			if len(violations) > 0 {

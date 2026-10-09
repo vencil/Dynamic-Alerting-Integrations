@@ -1,10 +1,13 @@
 package routingpolicy
 
 import (
+	"bytes"
 	"errors"
 	"fmt"
+	"io"
 	"sort"
 	"strings"
+	"unicode/utf8"
 
 	"github.com/vencil/threshold-exporter/pkg/config"
 	"github.com/vencil/threshold-exporter/pkg/pyyamlcompat"
@@ -122,29 +125,52 @@ var errUnusable = errors.New("unusable")
 //
 // policy is true only for a `_domain_policy.yaml` / `.yml` document: only
 // there does `require_critical_escalation` go through
-// normalizeTaggedNullEscalation (#2325). Every other platform file keeps
-// yaml.v3's reading of a `!!null`-tagged value — refusing one there would
-// drop a profiles / defaults file the policy check still needs.
+// normalizeTaggedNullEscalation (#2325), and only there are the generator's
+// whole-file refusals of a second document (firstDocument) and of a
+// top-level `tenants:` that is not a mapping (topTenantsShape) applied
+// (#2730 §1, §5; the other readers are PR-7d's), and only there is every
+// node the generator builds held to PyYAML's constructors (policyShape; hub
+// #2486 PR-7c round 2). Every other platform file
+// keeps yaml.v3's reading of a `!!null`-tagged value — refusing one there
+// would drop a profiles / defaults file the policy check still needs. A
+// policy document is also scanned as PyYAML scans it (policyDecoder: a TAB
+// separates nothing; no encoding but UTF-8).
 func parseDoc(data []byte, policy bool) (*yaml.Node, error) {
-	var doc yaml.Node
-	if err := yaml.Unmarshal(data, &doc); err != nil {
+	doc, more, err := firstDocument(data, policy)
+	if err != nil {
 		return nil, err
+	}
+	if policy && more {
+		return nil, errMoreDocuments
 	}
 	if doc.Kind == 0 || len(doc.Content) == 0 {
 		return nil, nil
 	}
 	top := doc.Content[0]
-	if err := mergeKeyShape(top); err != nil {
+	if policy {
+		// The document node itself: its root is built too (`--- !!merge`).
+		if err := policyShape(&doc); err != nil {
+			return nil, err
+		}
+	} else if err := mergeKeyShape(top); err != nil {
 		return nil, err
 	}
+	rawTextTenants(top)
 	normalizeTaggedBools(top)
 	if policy {
 		if err := normalizeTaggedNullEscalation(top, false); err != nil {
 			return nil, err
 		}
+		if err := topTenantsShape(top); err != nil {
+			return nil, err
+		}
 	}
 	var probe any
-	if err := top.Decode(&probe); err != nil {
+	decode := top.Decode
+	if policy {
+		decode = func(out any) error { return probeDecode(top, out) }
+	}
+	if err := decode(&probe); err != nil {
 		return nil, err
 	}
 	if d := pyyamlcompat.FindDuplicateKeyIn(data); d != nil {
@@ -157,6 +183,124 @@ func parseDoc(data []byte, policy bool) (*yaml.Node, error) {
 		return nil, fmt.Errorf("top level must be a mapping, got %s: %w", kindName(top), errUnusable)
 	}
 	return top, nil
+}
+
+// firstDocument is yaml.Unmarshal(data, &doc) — the first document, an
+// empty stream being an empty node and no error — plus more: whether the
+// stream holds anything after it (#2730 §1). The route generator reads a
+// file with get_single_data, which raises ("expected a single document in
+// the stream") on ANY second document — an empty one (`---` and nothing
+// after it) and one that does not parse included — and drops the whole
+// file; a document end marker (`...`) followed by nothing, or by comments
+// only, is still one document. yaml.v3's Unmarshal reads the first document
+// and ignores the rest. One parse of the first document, as Unmarshal's —
+// through policyDecoder when policy is true.
+func firstDocument(data []byte, policy bool) (doc yaml.Node, more bool, err error) {
+	var dec *yaml.Decoder
+	if policy {
+		if dec, err = policyDecoder(data); err != nil {
+			return yaml.Node{}, false, err
+		}
+	} else {
+		dec = yaml.NewDecoder(bytes.NewReader(data))
+	}
+	if err := dec.Decode(&doc); err != nil {
+		if errors.Is(err, io.EOF) {
+			return yaml.Node{}, false, nil
+		}
+		return yaml.Node{}, false, err
+	}
+	var second yaml.Node
+	return doc, !errors.Is(dec.Decode(&second), io.EOF), nil
+}
+
+// policyDecoder is the decoder every reader of a `_domain_policy.yaml` /
+// `.yml` parses it with (parseDoc, DomainPoliciesShapeError,
+// UnmarshalPolicy), so that it reads only what the route generator's PyYAML
+// reads (hub #2486 PR-7c round 6):
+//
+//   - The scanner takes only a space as a separator (the vendored yaml.v3's
+//     Decoder.SpacesOnly, third_party/yaml.v3-spaces-only.patch). PyYAML
+//     takes a TAB as one nowhere outside quotes, comments and block scalars
+//     — `key:<TAB>v`, a TAB at a line's end, `%YAML<TAB>1.1`, `---<TAB>`
+//     make it drop the file — where yaml.v3 skips a TAB in flow context and
+//     after a token on the line. A `%YAML` version must be followed by a
+//     space or a line break (`%YAML 1.1#c` is refused, as PyYAML refuses it).
+//   - Anything but UTF-8 is refused: the generator opens the file as UTF-8
+//     and drops it otherwise, where yaml.v3 decodes UTF-16 by its byte order
+//     mark.
+//
+// Every other platform file keeps yaml.v3's reading: the exporter's own
+// config contract accepts a TAB as a separator.
+func policyDecoder(data []byte) (*yaml.Decoder, error) {
+	if !utf8.Valid(data) {
+		return nil, errNotUTF8
+	}
+	dec := yaml.NewDecoder(bytes.NewReader(data))
+	dec.SpacesOnly(true)
+	return dec, nil
+}
+
+// errNotUTF8 is a policy file that is not UTF-8 (policyDecoder).
+var errNotUTF8 = fmt.Errorf("the file is not UTF-8 (UTF-16, or a byte that is no UTF-8); "+
+	"the route generator reads UTF-8 only and drops this file: %w", errUnusable)
+
+// errMoreDocuments is a policy file with more than one YAML document
+// (firstDocument).
+var errMoreDocuments = fmt.Errorf("the file holds more than one YAML document (a `---` after the first); "+
+	"the route generator reads exactly one and drops this file: %w", errUnusable)
+
+// topTenantsShape refuses a `_domain_policy.yaml` whose top-level `tenants:`
+// (`<<:` expanded) PyYAML reads as neither a mapping nor null (#2730 §5): the
+// generator reads every root file's `tenants:` as tenant entries and drops
+// the file ("'tenants' must be a mapping"). Null — `tenants:`, `~`,
+// `! "null"` — is only a warning there.
+func topTenantsShape(top *yaml.Node) error {
+	t := lookupOne(top, "tenants")
+	if t == nil || isNull(t) || (t.Kind == yaml.MappingNode && t.ShortTag() == "!!map") {
+		return nil
+	}
+	return fmt.Errorf("top-level 'tenants' must be a mapping, got %s — the route generator drops this file: %w",
+		kindName(t), errUnusable)
+}
+
+// rawTextTenants retags, in place, the explicitly tagged scalar items of
+// every sequence written as the value of a `tenants` key (`!!null x`,
+// `!!binary aGk=`, `!!int 7`) as `!!str`, keeping their text, so that the
+// probe decode does not refuse a file the route generator reads: its loader
+// reads such a sequence's scalar items as their source text and never
+// constructs them (_lib_yaml_keys.ExporterKeyLoader, raw_text_sequences;
+// #2730 §2). Only a sequence and an item with no anchor are touched — one
+// with an anchor may be aliased where PyYAML does construct it, and is left
+// to be judged there (mergeKeyShape for a merge tag). An explicitly tagged
+// sequence itself (`tenants: !!merge [a]`) is read as raw text too.
+func rawTextTenants(n *yaml.Node) {
+	stack := []*yaml.Node{n}
+	for len(stack) > 0 {
+		n := stack[len(stack)-1]
+		stack = stack[:len(stack)-1]
+		if n.Kind == yaml.MappingNode {
+			for i := 0; i+1 < len(n.Content); i += 2 {
+				k, v := deref(n.Content[i]), n.Content[i+1]
+				if isMergeKey(n.Content[i]) || k == nil || k.Kind != yaml.ScalarNode || k.Value != "tenants" ||
+					isNull(k) || v.Kind != yaml.SequenceNode || v.Anchor != "" {
+					continue
+				}
+				if v.Style&yaml.TaggedStyle != 0 {
+					v.Tag, v.Style = "!!seq", v.Style&^yaml.TaggedStyle
+				}
+				for _, item := range v.Content {
+					if item.Kind == yaml.ScalarNode && item.Anchor == "" &&
+						(item.Style&yaml.TaggedStyle != 0 || item.Tag == pyyamlcompat.NonSpecificTag) {
+						item.Tag, item.Style = "!!str", yaml.DoubleQuotedStyle
+					}
+				}
+			}
+		}
+		if n.Kind != yaml.AliasNode {
+			stack = append(stack, n.Content...)
+		}
+	}
 }
 
 // lookup returns the value node of key in a mapping node, or nil. YAML merge
@@ -294,8 +438,13 @@ func deref(n *yaml.Node) *yaml.Node {
 	return n
 }
 
+// isNull reports whether n is absent or a scalar PyYAML reads as None — a
+// plain `null` / `~`, `!!null x`, and (#2730 §6) `! "null"`, which PyYAML
+// resolves as if plain. (yaml.v3 tags every other scalar PyYAML reads as
+// None `!!null` itself: the two null sets of a plain scalar agree.)
 func isNull(n *yaml.Node) bool {
-	return n == nil || (n.Kind == yaml.ScalarNode && n.Tag == "!!null")
+	return n == nil || (n.Kind == yaml.ScalarNode && (n.Tag == "!!null" ||
+		n.Tag == pyyamlcompat.NonSpecificTag && pyResolve(n.Value) == "!!null"))
 }
 
 // yaml11Bools is PyYAML's YAML 1.1 boolean set for a PLAIN scalar
@@ -396,10 +545,16 @@ const refusedTag = "!routingpolicy-pyyaml-refused"
 // value reads as PyYAML reads it — None, or refused. A value PyYAML refuses
 // never fails the decode: it lands in that PyYAMLValue's Refused, and the
 // rest of the document decodes. An empty document leaves out untouched, as
-// yaml.Unmarshal does.
+// yaml.Unmarshal does. The first document is parsed by policyDecoder, as
+// yaml.Unmarshal would parse it but with PyYAML's separators, and a file that
+// is not UTF-8 is an error.
 func UnmarshalPolicy(data []byte, out any) error {
+	dec, err := policyDecoder(data)
+	if err != nil {
+		return err
+	}
 	var doc yaml.Node
-	if err := yaml.Unmarshal(data, &doc); err != nil {
+	if err := dec.Decode(&doc); err != nil && !errors.Is(err, io.EOF) {
 		return err
 	}
 	if doc.Kind == 0 || len(doc.Content) == 0 {
@@ -424,23 +579,43 @@ func UnmarshalPolicy(data []byte, out any) error {
 // Every node is written once in the tree, so a walk of it (aliases not
 // entered) sees every mapping PyYAML constructs. A merge value is checked
 // once however many merge keys alias it, so the cost is linear in the
-// nodes. It also refuses a merge-tagged scalar (`<<`, `!!merge x`) PyYAML
-// would construct as a value — it has no constructor for one, so the
-// generator drops the whole file. The generator's loader builds a mapping
-// value (any key but a null one), and a sequence's items — except a
-// sequence under a `tenants` key (_lib_yaml_keys.ExporterKeyLoader,
-// raw_text_sequences): its scalar items are read as their source text, never
-// constructed. A sequence is constructed when it is reached anywhere else
-// too (written in place or through an alias): as another key's value, or as
-// an item of a sequence.
+// nodes. It also refuses a merge-tagged node — a scalar (`<<`, `!!merge x`)
+// or, #2730 §4, a collection (`!!merge [a]`, `!!merge {a: 1}`) — PyYAML
+// would construct as a value: it has no constructor for one, so the
+// generator drops the whole file. The generator's loader builds the
+// document, a mapping value (any key but a null one), and a sequence's
+// items — except a sequence under a `tenants` key
+// (_lib_yaml_keys.ExporterKeyLoader, raw_text_sequences): the sequence node
+// itself is never constructed (`tenants: !!merge [a]` is read) and its scalar
+// items are read as their source text; its collection items are built. A
+// sequence is constructed when it is reached anywhere else too (written in
+// place or through an alias): as another key's value, or as an item of a
+// sequence.
 func mergeKeyShape(n *yaml.Node) error {
-	_, err := mergeKeyShapeWork(n)
+	_, err := shapeWork(n, false)
+	return err
+}
+
+// policyShape is mergeKeyShape for a `_domain_policy.yaml` / `.yml` (hub
+// #2486 PR-7c round 2): every node the generator's loader builds — the
+// document's root, a mapping value, a built sequence's item, as
+// mergeKeyShape finds them — is also held to pyBuildError, so a value PyYAML
+// has no constructor for (`=`, `! "*"`, `!custom x`, `!!value x`, a root
+// `!!merge {…}`) or cannot construct (`!!int x`, `!!bool [true]`,
+// `!!null {}`, `! |` text `true\n`) refuses the file, as the generator drops
+// it. Which nodes are built is mergeKeyShape's reading; nothing about the
+// ORDER PyYAML builds them in is modelled.
+func policyShape(n *yaml.Node) error {
+	_, err := shapeWork(n, true)
 	return err
 }
 
 // mergeKeyShapeWork is mergeKeyShape, also returning how many merge-value
 // nodes (a value and a sequence value's items) it looked at.
-func mergeKeyShapeWork(n *yaml.Node) (int, error) {
+func mergeKeyShapeWork(n *yaml.Node) (int, error) { return shapeWork(n, false) }
+
+// shapeWork is mergeKeyShapeWork; policy adds policyShape's check.
+func shapeWork(n *yaml.Node, policy bool) (int, error) {
 	checked := map[*yaml.Node]bool{}
 	var built []*yaml.Node // sequences PyYAML constructs (items and all)
 	isBuilt := map[*yaml.Node]bool{}
@@ -450,32 +625,124 @@ func mergeKeyShapeWork(n *yaml.Node) (int, error) {
 			built = append(built, s)
 		}
 	}
+	// unbuilt is policyShape's refusal of node d, built where it stands;
+	// each node is judged once however many aliases name it.
+	judged := map[*yaml.Node]bool{}
+	unbuilt := func(d *yaml.Node) error {
+		if !policy || d == nil || judged[d] {
+			return nil
+		}
+		judged[d] = true
+		if err := pyBuildError(d); err != nil {
+			return fmt.Errorf("line %d: PyYAML cannot build this value (%w)", d.Line, err)
+		}
+		return nil
+	}
 	work := 0
 	stack := []*yaml.Node{n}
+	// walked: policy walks a node once. A null key's value is never built
+	// (ExporterKeyLoader skips the pair, #2763 review), so policy does not
+	// walk it in place; a node in it an alias names is built through the
+	// alias, so the alias walks its target.
+	walked := map[*yaml.Node]bool{}
+	// raw: `tenants` sequences, read item by item (construct_object on a
+	// collection item, its own tag read; the sequence's tag never is).
+	var raw []*yaml.Node
+	isRaw := map[*yaml.Node]bool{}
+	// item judges item c of sequence (or document) n where n is built — or,
+	// asRaw, where n is a `tenants` sequence. Policy defers a sequence's
+	// items until it is known built or raw (#2763 round 3): a sequence only
+	// walked — a merge value, flattened with its tags unread — builds none.
+	item := func(n, c *yaml.Node, asRaw bool) error {
+		d := deref(c)
+		if d != nil && (n.Kind == yaml.DocumentNode || d.Kind != yaml.ScalarNode) && mergeTagged(d) {
+			return fmt.Errorf("line %d: PyYAML cannot build a merge-tagged %s", d.Line, kindName(d))
+		}
+		// An `!!omap` / `!!pairs` item is never built as a mapping:
+		// PyYAML takes its one pair apart (no merge, no hashing).
+		pairs := !asRaw && n.Kind == yaml.SequenceNode && (n.ShortTag() == "!!omap" || n.ShortTag() == "!!pairs")
+		if d != nil && (n.Kind == yaml.DocumentNode || d.Kind != yaml.ScalarNode) && !pairs {
+			if err := unbuilt(d); err != nil {
+				return err
+			}
+		}
+		build(d)
+		// ...but the pair's value is built, whatever its key: a null key
+		// is skipped only by construct_mapping (#2763).
+		if policy && pairs && d != nil && d.Kind == yaml.MappingNode {
+			for i := 1; i < len(d.Content); i += 2 {
+				// The pair's key is built too (construct_object): a `<<`
+				// there is no merge but a node PyYAML has no constructor for.
+				k := deref(d.Content[i-1])
+				if mergeTagged(k) {
+					return fmt.Errorf("line %d: PyYAML cannot build a merge key (%s) as an omap/pairs key", k.Line, keySpelling(k))
+				}
+				if err := unbuilt(k); err != nil {
+					return err
+				}
+				build(k)
+				stack = append(stack, d.Content[i-1])
+				v := deref(d.Content[i])
+				if mergeTagged(v) {
+					return fmt.Errorf("line %d: PyYAML cannot build a merge-tagged %s as a value", v.Line, kindName(v))
+				}
+				if err := unbuilt(v); err != nil {
+					return err
+				}
+				build(v)
+				stack = append(stack, d.Content[i])
+			}
+		}
+		return nil
+	}
+	nextBuilt, nextRaw := 0, 0
+walk:
 	for len(stack) > 0 {
 		n := stack[len(stack)-1]
 		stack = stack[:len(stack)-1]
-		switch n.Kind {
-		case yaml.DocumentNode:
-			for _, c := range n.Content {
-				build(deref(c))
+		if policy {
+			if walked[n] {
+				continue
 			}
-		case yaml.SequenceNode:
+			walked[n] = true
+			if n.Kind == yaml.AliasNode && n.Alias != nil {
+				stack = append(stack, n.Alias)
+				continue
+			}
+		}
+		switch n.Kind {
+		case yaml.DocumentNode, yaml.SequenceNode:
+			if policy && n.Kind == yaml.SequenceNode {
+				break // its items are judged once it is known built (below)
+			}
 			for _, c := range n.Content {
-				build(deref(c))
+				if err := item(n, c, false); err != nil {
+					return work, err
+				}
 			}
 		case yaml.MappingNode:
 			for i := 0; i+1 < len(n.Content); i += 2 {
 				k, v := deref(n.Content[i]), deref(n.Content[i+1])
-				if isMergeKey(n.Content[i]) || k == nil || k.ShortTag() == "!!null" {
+				if isMergeKey(n.Content[i]) || k == nil || k.ShortTag() == "!!null" || policy && isNull(k) {
 					continue // a merge value is merged, a null key's value never built
 				}
-				if mergeTaggedScalar(v) {
-					return work, fmt.Errorf("line %d: PyYAML cannot build a merge key (%s) as a value", v.Line, keySpelling(v))
+				if k.Kind == yaml.ScalarNode && k.Value == "tenants" && v != nil && v.Kind == yaml.SequenceNode {
+					if policy && !isRaw[v] {
+						isRaw[v] = true
+						raw = append(raw, v)
+					}
+					continue // read as raw text, not built (its items are seen as a sequence's below)
 				}
-				if k.Kind != yaml.ScalarNode || k.Value != "tenants" {
-					build(v)
+				if mergeTagged(v) {
+					if v.Kind == yaml.ScalarNode {
+						return work, fmt.Errorf("line %d: PyYAML cannot build a merge key (%s) as a value", v.Line, keySpelling(v))
+					}
+					return work, fmt.Errorf("line %d: PyYAML cannot build a merge-tagged %s as a value", v.Line, kindName(v))
 				}
+				if err := unbuilt(v); err != nil {
+					return work, err
+				}
+				build(v)
 			}
 		}
 		if n.Kind == yaml.MappingNode {
@@ -497,82 +764,95 @@ func mergeKeyShapeWork(n *yaml.Node) (int, error) {
 				}
 			}
 		}
-		if n.Kind != yaml.AliasNode {
+		if policy && n.Kind == yaml.MappingNode {
+			for i := 0; i+1 < len(n.Content); i += 2 {
+				if k := deref(n.Content[i]); k == nil || !isNull(k) || isMergeKey(n.Content[i]) {
+					stack = append(stack, n.Content[i+1])
+				}
+				stack = append(stack, n.Content[i])
+			}
+		} else if n.Kind != yaml.AliasNode {
 			stack = append(stack, n.Content...)
+		}
+	}
+	if policy {
+		for ; nextRaw < len(raw); nextRaw++ {
+			for _, c := range raw[nextRaw].Content {
+				if err := item(raw[nextRaw], c, true); err != nil {
+					return work, err
+				}
+			}
+		}
+		for ; nextBuilt < len(built); nextBuilt++ {
+			for _, c := range built[nextBuilt].Content {
+				if err := item(built[nextBuilt], c, false); err != nil {
+					return work, err
+				}
+			}
+		}
+		if len(stack) > 0 {
+			goto walk
 		}
 	}
 	for _, s := range built {
 		for _, c := range s.Content {
-			if d := deref(c); mergeTaggedScalar(d) {
+			if d := deref(c); d != nil && d.Kind == yaml.ScalarNode && mergeTagged(d) {
 				return work, fmt.Errorf("line %d: PyYAML cannot build a merge key (%s) as a value", d.Line, keySpelling(d))
+			}
+			if d := deref(c); d != nil && d.Kind == yaml.ScalarNode {
+				if err := unbuilt(d); err != nil {
+					return work, err
+				}
 			}
 		}
 	}
 	return work, nil
 }
 
-// mergeTaggedScalar reports whether n is a merge-tagged scalar (`<<`,
-// `!!merge x`).
-func mergeTaggedScalar(n *yaml.Node) bool {
-	return n != nil && n.Kind == yaml.ScalarNode && n.ShortTag() == "!!merge"
-}
-
-// dropEscalationValues replaces, in DomainPoliciesShapeError's own parse,
-// the value tenant-api reads leniently (#2325 — one PyYAML refuses turns only
-// that constraint off) by a null, so what is written there is not a reason
-// to refuse the file: `domain_policies.<domain>.constraints
-// .require_critical_escalation`, each step a key written in place (not
-// through a merge or an alias), and only a value with no anchor in it
-// (aliased elsewhere, PyYAML builds it there too). Anywhere else that key is
-// looked at like any other.
-func dropEscalationValues(top *yaml.Node) {
-	dp := ownValue(top, "domain_policies")
-	if dp == nil || dp.Kind != yaml.MappingNode {
-		return
+// probeDecode is top.Decode(out) with every scalar written with an explicit
+// `!!null` tag read as null for the decode only, its text restored after:
+// PyYAML builds None from `!!null x` whatever the text, where yaml.v3
+// refuses it — an anchored `tenants: &a [!!null x]` (read as its text
+// "x" there, rawTextTenants leaves it), a top-level `tenants: !!null x`, a
+// receiver type `[!!null webhook]` (None to PyYAML: ReceiverTypeEntry). The
+// text stays what the readers after the probe see (a tenants item's source
+// text). Aliases are not entered: each node is written once in the tree.
+func probeDecode(top *yaml.Node, out any) error {
+	type saved struct {
+		n     *yaml.Node
+		value string
 	}
-	for i := 1; i < len(dp.Content); i += 2 {
-		c := ownValue(dp.Content[i], "constraints")
-		if c == nil || c.Kind != yaml.MappingNode {
-			continue
-		}
-		for j := 0; j+1 < len(c.Content); j += 2 {
-			if k := c.Content[j]; k.Kind == yaml.ScalarNode && k.Value == "require_critical_escalation" &&
-				!isMergeKey(k) && !hasAnchor(c.Content[j+1]) {
-				c.Content[j+1] = &yaml.Node{Kind: yaml.ScalarNode, Tag: "!!null", Line: c.Content[j+1].Line}
-			}
-		}
-	}
-}
-
-// ownValue is the value m (a mapping written in place) writes itself under
-// key, as written (an alias stays one), or nil.
-func ownValue(m *yaml.Node, key string) *yaml.Node {
-	if m == nil || m.Kind != yaml.MappingNode {
-		return nil
-	}
-	for i := 0; i+1 < len(m.Content); i += 2 {
-		if k := m.Content[i]; k.Kind == yaml.ScalarNode && k.Value == key && !isMergeKey(k) {
-			return m.Content[i+1]
-		}
-	}
-	return nil
-}
-
-// hasAnchor reports whether any node under n (aliases not entered) has an
-// anchor.
-func hasAnchor(n *yaml.Node) bool {
-	stack := []*yaml.Node{n}
+	var restore []saved
+	stack := []*yaml.Node{top}
 	for len(stack) > 0 {
 		n := stack[len(stack)-1]
 		stack = stack[:len(stack)-1]
-		if n.Anchor != "" {
-			return true
+		if n.Kind == yaml.ScalarNode && n.Style&yaml.TaggedStyle != 0 && n.ShortTag() == "!!null" && n.Value != "" {
+			restore = append(restore, saved{n, n.Value})
+			n.Value = ""
 		}
 		if n.Kind != yaml.AliasNode {
 			stack = append(stack, n.Content...)
 		}
 	}
-	return false
+	err := top.Decode(out)
+	for _, r := range restore {
+		r.n.Value = r.value
+	}
+	return err
+}
+
+// mergeTagged reports whether PyYAML gives n the merge tag: a scalar it
+// resolves so (`<<`, `!!merge x`, `! "<<"`), or a collection tagged
+// `!!merge` (#2730 §4).
+func mergeTagged(n *yaml.Node) bool {
+	if n == nil {
+		return false
+	}
+	if n.Kind == yaml.ScalarNode && n.Tag == pyyamlcompat.NonSpecificTag {
+		return pyResolve(n.Value) == "!!merge"
+	}
+	return n.ShortTag() == "!!merge" // yaml.v3 tags a plain `<<` merge, as PyYAML resolves it
 }
 
 // MergeShapeError is mergeKeyShape's refusal for one YAML file, nil when it
@@ -611,17 +891,18 @@ func mergeValueShape(v *yaml.Node) error {
 // `!!bool yEs`; a quoted `"yes"` or `!!str yes` stays a string), and for
 // anything else a non-bool value — yaml.v3's decode where it has one, else
 // the scalar's text. Pinned against PyYAML by
-// tests/shared/pyyaml_tagged_scalar_matrix.json; the one blind spot (the
-// non-specific tag `!` on a quoted scalar) is in pyyaml.go.
+// tests/shared/pyyaml_tagged_scalar_matrix.json, the non-specific tag `!` on
+// a quoted scalar included (pyyaml.go, #2730 §6).
 //
 // A mapping or sequence (an alias is followed once) is never a bool. It is
 // an error when PyYAML refuses it for its own tag or its direct children
 // (`!!bool [true]`, `!!omap [1]`, `{<<: 1}`, `{[1]: 2}`; see pyCollection),
 // otherwise a non-bool. Nothing deeper is looked at: no recursion, so an
-// alias cycle (`&x [*x]`) or fan-out costs nothing. Accepted gap: where
-// PyYAML refuses something deeper (`[!!bool y]`) the generator drops the
-// whole file and da-guard refuses it, but this returns a non-bool; tenant-api
-// treats that as it treats every refused value — this constraint off.
+// alias cycle (`&x [*x]`) or fan-out costs nothing. Where PyYAML refuses
+// something deeper (`[!!bool y]`) this returns a non-bool, but the
+// generator drops the whole file and so do da-guard and tenant-api: the
+// policy documents' shape check (policyShape) holds every node PyYAML builds
+// to its constructors, so such a document never reaches this.
 func DecodePyYAML(n *yaml.Node) (any, error) {
 	if n = deref(n); n == nil {
 		return nil, nil
@@ -646,11 +927,11 @@ func DecodePyYAML(n *yaml.Node) (any, error) {
 
 // PyYAMLValue is a struct field decoded with DecodePyYAML (a null or absent
 // value leaves Value nil). A value PyYAML refuses does not fail the decode:
-// Value is nil and Refused says why (tenant-api: the constraint is off, the
-// rest of the file applies). yaml.v3 never hands a `!!null`-tagged node to an
-// Unmarshaler: decode through UnmarshalPolicy, or `!!null x` (None in PyYAML)
-// fails the enclosing decode and `!!null {}` (refused by PyYAML) reads as
-// null.
+// Value is nil and Refused says why (tenant-api's parseConfig then refuses
+// the file, as the generator drops it — hub #2486 PR-7c round 2, B1).
+// yaml.v3 never hands a `!!null`-tagged node to an Unmarshaler: decode
+// through UnmarshalPolicy, or `!!null x` (None in PyYAML) fails the
+// enclosing decode and `!!null {}` (refused by PyYAML) reads as null.
 type PyYAMLValue struct {
 	Value   any
 	Refused error
@@ -791,41 +1072,76 @@ func ParseDomainPolicies(data []byte) ([]Policy, []Problem, error) {
 // It refuses more (#2677), since tenant-api then decodes the file with
 // yaml.v3 — which never reads a part its struct does not name — so the
 // policy it reads could differ from the one the generator reads: a file
-// the generator drops whole for mergeKeyShape's reasons or a key it counts
-// as written twice (a value PyYAML refuses under require_critical_escalation
-// stays tenant-api's to read leniently, #2325: dropEscalationValues),
-// and a key the generator and yaml.v3 do not both read as
+// the generator drops whole for policyShape's reasons (a
+// require_critical_escalation PyYAML refuses included, wherever written:
+// hub #2486 PR-7c round 2, B1) or a key it counts as written twice, a
+// null domain key spelled `! "null"` (divergentKeys), and a key the
+// generator and yaml.v3 do not both read as
 // a merge key, or both as a plain one (classifyKey: `!!merge q:`, an alias
 // naming an anchored `<<`), anywhere in it. One literal `<<` per mapping
 // (yaml.v3 refuses two) yaml.v3 merges as PyYAML does.
+//
+// The document is parsed by policyDecoder (hub #2486 PR-7c round 6): a TAB
+// where PyYAML takes only a space, or a file that is not UTF-8, does not
+// parse, and is nil here like any other parse failure — UnmarshalPolicy,
+// the caller's decode, refuses it.
+//
+// It also refuses (#2730 §1, §5) a stream of more than one document
+// (firstDocument — even when the first is empty) and a top-level `tenants:`
+// PyYAML reads as neither a mapping nor null (topTenantsShape): the
+// generator drops such a file whole.
 func DomainPoliciesShapeError(data []byte) error {
-	var doc yaml.Node
-	if err := yaml.Unmarshal(data, &doc); err != nil || len(doc.Content) == 0 {
+	doc, more, err := firstDocument(data, true)
+	if err != nil {
+		return nil
+	}
+	if more {
+		return errMoreDocuments
+	}
+	if len(doc.Content) == 0 {
 		return nil
 	}
 	top := doc.Content[0]
 	if top.Kind != yaml.MappingNode {
 		return nil
 	}
-	dropEscalationValues(top)
-	if err := mergeKeyShape(top); err != nil {
+	if err := topTenantsShape(top); err != nil {
+		return err
+	}
+	if err := policyShape(&doc); err != nil {
 		return fmt.Errorf("%w — the route generator drops this file: %w", err, errUnusable)
 	}
 	if d := pyyamlcompat.FindDuplicateKey(&doc); d != nil {
 		return fmt.Errorf("%w: %w", d, errUnusable)
 	}
-	if k := divergentMergeKey(top); k != nil {
+	mergeKey, nullKey := divergentKeys(top)
+	if k := mergeKey; k != nil {
 		return fmt.Errorf("line %d: a merge key spelled %q in the file — "+
 			"tenant-api cannot read this file as the route generator does: %w", k.Line, keySpelling(k), errUnusable)
 	}
-	_, err := domainPoliciesNode(top)
+	if k := nullKey; k != nil {
+		return fmt.Errorf("line %d: a key spelled %q, which the route generator reads as null and drops — "+
+			"tenant-api cannot read this file as the route generator does: %w", k.Line, keySpelling(k)+` "`+k.Value+`"`, errUnusable)
+	}
+	_, err = domainPoliciesNode(top)
 	return err
 }
 
-// divergentMergeKey returns a key in the tree under n (an alias's target
-// included) that classifyKey's two readings disagree on, or nil. Each node
-// is visited once.
-func divergentMergeKey(n *yaml.Node) *yaml.Node {
+// divergentKeys walks the tree under n (an alias's target included, each
+// node visited once) for two kinds of key, returning the first of each it
+// meets (nil: none):
+//   - mergeKey: one classifyKey's two readings disagree on. The walk stops
+//     at the first, since it outranks nullKey.
+//   - nullKey: one written with the non-specific tag `!` on a quoted scalar
+//     PyYAML resolves as null (`! "null":`, `! '~':`; hub #2486 PR-7c round
+//     2). The generator's loader drops a null key's pair; yaml.v3 reads that
+//     key as the string "null", so a struct decode (tenant-api) would read a
+//     domain the generator does not. A plain `~:` / `null:` both read as null.
+//
+// One walk, not one per kind: a second visited map over the whole tree was
+// the merge-chain test's allocation beside the first (R3-F1). The order is
+// each separate walk's, so each kind's first key is the one it would find.
+func divergentKeys(n *yaml.Node) (mergeKey, nullKey *yaml.Node) {
 	visited := map[*yaml.Node]bool{}
 	stack := []*yaml.Node{n}
 	for len(stack) > 0 {
@@ -838,7 +1154,13 @@ func divergentMergeKey(n *yaml.Node) *yaml.Node {
 		if n.Kind == yaml.MappingNode {
 			for i := 0; i+1 < len(n.Content); i += 2 {
 				if py, v3 := classifyKey(n.Content[i]); py != v3 {
-					return n.Content[i]
+					return n.Content[i], nullKey
+				}
+			}
+			for i := 0; nullKey == nil && i+1 < len(n.Content); i += 2 {
+				if k := deref(n.Content[i]); k != nil && k.Kind == yaml.ScalarNode &&
+					k.Tag == pyyamlcompat.NonSpecificTag && isNull(k) {
+					nullKey = n.Content[i]
 				}
 			}
 		}
@@ -847,7 +1169,7 @@ func divergentMergeKey(n *yaml.Node) *yaml.Node {
 			stack = append(stack, n.Alias)
 		}
 	}
-	return nil
+	return nil, nullKey
 }
 
 // keySpelling is how a key node is written, for an error message: `*m`
@@ -880,10 +1202,14 @@ func policyNodesFrom(top *yaml.Node) (map[string]*yaml.Node, error) {
 		return nil, err
 	}
 	// As in profilesFromNode: `<<:` expanded (#2438), alias keys by text (#2437).
+	// A null key (`~:`, `null:`, `! "null":`) names no domain: the
+	// generator's loader drops the pair (ExporterKeyLoader).
 	entries := mappingEntries(n)
 	out := make(map[string]*yaml.Node, len(entries))
 	for _, e := range entries {
-		out[e.key] = e.value
+		if !e.null {
+			out[e.key] = e.value
+		}
 	}
 	return out, nil
 }
@@ -957,16 +1283,14 @@ func buildPolicies(nodes map[string]*yaml.Node, origin map[string]string) ([]Pol
 			}
 			// Only strings can equal a receiver type; the other entries are
 			// dropped, but a non-empty allowed list still restricts (see
-			// Policy.AllowedListNonEmpty).
+			// Policy.AllowedListNonEmpty). An entry is a string as PyYAML
+			// reads it (#2730 §6: `! "null"` is None there, `yes` True).
 			if cn.key == ConstraintAllowed && len(l.Content) > 0 {
 				p.AllowedListNonEmpty = true
 			}
 			for _, item := range l.Content {
-				var v any
-				if err := deref(item).Decode(&v); err == nil {
-					if s, ok := v.(string); ok {
-						*cn.dst = append(*cn.dst, s)
-					}
+				if s, ok := ReceiverTypeEntry(item); ok {
+					*cn.dst = append(*cn.dst, s)
 				}
 			}
 		}
@@ -992,6 +1316,40 @@ func buildPolicies(nodes map[string]*yaml.Node, origin map[string]string) ([]Pol
 		pols = append(pols, p)
 	}
 	return pols, probs
+}
+
+// ReceiverTypeEntry is one `forbidden_receiver_types` /
+// `allowed_receiver_types` entry as the route generator reads it: ok only for
+// a scalar PyYAML builds as a string (pyyamlcompat.Decode: `! "null"` is
+// None, a plain `yes` True — #2730 §6), whose text is returned. A collection
+// is never a string and is not decoded.
+func ReceiverTypeEntry(item *yaml.Node) (string, bool) {
+	s, ok, _ := ReceiverTypeItem(item)
+	return s, ok
+}
+
+// ReceiverTypeItem is ReceiverTypeEntry plus err: the item is a scalar
+// PyYAML does not build as a value pkg/pyyamlcompat models (hub #2486 PR-7c
+// round 2, F1) — one it refuses (`!!int x`, `!!timestamp 2001-13-01`,
+// `!custom x`, `! "="`), and so drops the whole file over, or one it builds
+// as a type not modelled (`!!binary`). tenant-api refuses the file on err
+// (stricter, never looser); da-guard's parse already refused the refused
+// ones (policyShape).
+func ReceiverTypeItem(item *yaml.Node) (s string, isString bool, err error) {
+	d := deref(item)
+	if d == nil || d.Kind != yaml.ScalarNode {
+		return "", false, nil
+	}
+	switch v := pyyamlcompat.Decode(d).(type) {
+	case string:
+		return v, true, nil
+	case pyyamlcompat.Unsupported:
+		return "", false, fmt.Errorf("line %d: receiver type entry %s cannot be read as the route generator reads it", d.Line, v)
+	}
+	if err := pyBuildError(d); err != nil {
+		return "", false, fmt.Errorf("line %d: receiver type entry: %w", d.Line, err)
+	}
+	return "", false, nil
 }
 
 // LoadRoot reads the routing layers and the domain policies from the conf.d
@@ -1170,6 +1528,9 @@ func overlayFrom(top *yaml.Node, layers *Layers) {
 type mapEntry struct {
 	key   string // the key's source text (tenant ids are text: `010` is "010")
 	value *yaml.Node
+	// null: PyYAML reads the key as None (`~`, `null`, `! "null"`, `!!null
+	// x`); the generator's loader drops such a pair (ExporterKeyLoader).
+	null bool
 }
 
 // mappingEntries lists a mapping node's entries with YAML merge keys
@@ -1222,7 +1583,7 @@ func (l *entryLister) list(m *yaml.Node) []mapEntry {
 	}
 	for i := 0; i+1 < len(m.Content); i += 2 {
 		if k := m.Content[i]; !isMergeKey(k) {
-			own = append(own, mapEntry{key: deref(k).Value, value: deref(m.Content[i+1])}) // an alias key: its anchor's text, as a decode reads it
+			own = append(own, mapEntry{key: deref(k).Value, value: deref(m.Content[i+1]), null: isNull(deref(k))}) // an alias key: its anchor's text, as a decode reads it
 		}
 	}
 	written := map[string]bool{}

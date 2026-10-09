@@ -1,0 +1,18 @@
+# Bare-rules promtool target for the TenantApiPolicyUnavailable alert. promtool
+# can't consume the deployed ConfigMap directly (it needs a top-level `groups:`
+# document, not `data: platform-alert.yml: |`), so this is an EXTRACTED COPY of
+# the alert from k8s/03-monitoring/configmap-rules-platform.yaml.
+#
+# ⚠️ KEEP IN SYNC with that ConfigMap — the expr/for/labels/summary here must match
+# byte-for-byte. tests/rulepacks/test_platform_rules_extract_sync.py enforces it.
+groups:
+  - name: platform-self-monitoring
+    rules:
+      - alert: TenantApiPolicyUnavailable
+        expr: tenant_api_policy_available{job="tenant-api"} == 0
+        for: 2m
+        labels:
+          severity: warning
+          alert_source: platform
+        annotations:
+          summary: "tenant-api domain policy is unavailable — policy-judged writes answer 503"

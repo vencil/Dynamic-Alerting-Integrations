@@ -143,6 +143,12 @@ spec:
             # _tenant_orgs.yaml before the org-scoped _rbac.yaml rules.
             - --rbac-org-scope-enforce
             {{- end }}
+            {{- if .Values.policy.unavailableOpen }}
+            # Hub #2486 Q7-2 escape hatch: direct-mode writes the domain policy
+            # judges go through while the policy file is unusable (logged,
+            # counted in tenant_api_policy_unavailable_open_total).
+            - --policy-unavailable-open
+            {{- end }}
             {{- if .Values.identity.claimHeaders }}
             # ADR-027 / LD-6 P2: named trusted-hop headers → principal claims
             # (identity.claimHeaders). Rendered as ONE flag, keys sorted (helm

@@ -612,6 +612,8 @@ type yaml_parser_t struct {
 
 	flow_level int // The number of unclosed '[' and '{' indicators.
 
+	spaces_only bool // Take only ' ' as a separator, as PyYAML does (Decoder.SpacesOnly).
+
 	tokens          []yaml_token_t // The tokens queue.
 	tokens_head     int            // The head of the tokens queue.
 	tokens_parsed   int            // The number of tokens fetched from the queue.

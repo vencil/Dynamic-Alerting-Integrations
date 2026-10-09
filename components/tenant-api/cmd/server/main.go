@@ -97,6 +97,8 @@ func main() {
 		"Path to _rbac.yaml (leave empty for open-read mode)")
 	rbacEmptyOpen := flag.Bool("rbac-empty-open", envBool("TA_RBAC_EMPTY_OPEN"),
 		"MED-8 escape hatch: allow open-read when a --rbac path parses to zero groups (default false = fail closed)")
+	policyUnavailableOpen := flag.Bool("policy-unavailable-open", envBool("TA_POLICY_UNAVAILABLE_OPEN"),
+		"Hub #2486 Q7-2 escape hatch: in direct write mode, let the writes the domain policy judges (PUT /tenants/{id}, routing ops of tenant/group batches) through while a _domain_policy.yaml / .yml is present but unusable with no last good version, instead of answering 503 POLICY_UNAVAILABLE. Each write let through is logged and counted (tenant_api_policy_unavailable_open_total). Default false = fail closed")
 	rbacMetadataScopeEnforce := flag.Bool("rbac-metadata-scope-enforce", envBool("TA_RBAC_METADATA_SCOPE_ENFORCE"),
 		"ADR-027/LD-6 P1: DENY an unlabeled tenant on an env/domain-restricted rule (fail-closed). Default false = shadow (still allow, but count tenant_api_scope_would_deny_total{axis=\"metadata\"}); flip only after that counter stops incrementing over the soak window (increase()==0 — it is a monotonic counter, not a gauge)")
 	rbacMetadataWriteScopeEnforce := flag.Bool("rbac-metadata-write-scope-enforce", envBool("TA_RBAC_METADATA_WRITE_SCOPE_ENFORCE"),
@@ -379,6 +381,14 @@ func main() {
 
 	// v2.5.0: Domain policy enforcement at API layer
 	policyMgr := policy.NewManager(*configDir)
+	// Hub #2486 Q7-2: a policy file that is present but unusable with no last
+	// good version refuses the policy-reading writes in direct mode (503);
+	// --policy-unavailable-open lets them through, logged and counted.
+	if *policyUnavailableOpen {
+		policyMgr.SetOpenOnUnavailable(true)
+		log.Printf("WARN: --policy-unavailable-open set: writes the domain policy judges are let through while the policy file is unusable (fail-closed disabled)")
+	}
+	handler.SetPolicyAvailabilitySource(policyMgr)
 
 	// ADR-027 / LD-6 P4: tenant→organization mapping (_tenant_orgs.yaml) backing
 	// the org-scope authorization axis. Admin-only (no write API) and strict-

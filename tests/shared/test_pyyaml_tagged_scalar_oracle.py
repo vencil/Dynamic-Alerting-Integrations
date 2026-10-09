@@ -67,6 +67,25 @@ OTHER_TAGS = ["!", "!foo", "!!foo", "!!merge", "!!value", "!!seq", "!!map",
 OTHER_VALUES = ["yes", "5", "abc", "'yes'", "'5'", "~"]
 
 
+def _nonspecific() -> list[str]:
+    """The non-specific tag `!` on non-plain scalars (#2730 §6): PyYAML
+    resolves the text as if plain — `! "true"` is True, `! "7\\n"` is 7 (its
+    `$` matches before a final newline), `! "*"` has no constructor. The
+    vendored yaml.v3 keeps the tag (third_party/yaml.v3-nonspecific-tag.patch),
+    so Go reads these rows like any other."""
+    out = []
+    for v in VALUES:
+        if v[:1] in ("'", '"', "|", ">"):
+            out.append(f"! {v}")  # already quoted or a block scalar
+            continue
+        out.append("! " + json.dumps(v))
+        out.append("! " + json.dumps(v + "\n"))
+        out.append("! '" + v.replace("'", "''") + "'")
+    out += ["! " + json.dumps(v) for v in ("", "\n", "*", "&", "!", " 5", "5 ", "a\nb")]
+    out += ["! |-\n  yes\n", "! >-\n  7\n", "! |\n  7\n", "! |\n  true\n"]
+    return out
+
+
 def _source(tag: str, value: str) -> str:
     return f"{tag} {value}" if tag else value
 
@@ -83,16 +102,13 @@ def _measure(source: str) -> dict:
         row["type"] = type(v).__name__
         if isinstance(v, bool):
             row["bool"] = v
-    # yaml.v3 drops the non-specific tag `!`: it hands Go a quoted `'yes'`
-    # where PyYAML resolved the text as if plain. Go cannot see these rows.
-    if source.startswith("! ") and source[2:3] in ("'", '"', "|", ">"):
-        row["go_blind"] = "yaml.v3 drops the non-specific tag on a non-plain scalar"
     return row
 
 
 def _rows() -> list[dict]:
     sources = [_source(t, v) for t in TAGS for v in VALUES]
     sources += [f"{t} {v}" for t in OTHER_TAGS for v in OTHER_VALUES]
+    sources += _nonspecific()
     seen: set = set()
     return [_measure(s) for s in sources if not (s in seen or seen.add(s))]
 
@@ -108,8 +124,8 @@ def _render(rows: list[dict]) -> str:
         "is a bool. The Go half (pkg/routingpolicy/tagged_scalar_oracle_test.go)",
         "asserts DecodePyYAML errors exactly on the refused rows, returns the",
         "same bool on bool rows, nil on NoneType rows and a non-bool otherwise.",
-        "`go_blind`: yaml.v3 hands Go nothing that tells the row apart from",
-        "another (the non-specific tag `!` on a quoted scalar); Go skips it.",
+        "Rows `! <quoted or block>` carry the non-specific tag, which PyYAML",
+        "resolves as if plain; the vendored yaml.v3 keeps it (#2730 §6).",
     ]
     body = ",\n".join("    " + json.dumps(r, ensure_ascii=False) for r in rows)
     return ("{\n  \"_comment\": " + json.dumps(comment, ensure_ascii=False, indent=4).replace("\n", "\n  ")
@@ -136,6 +152,9 @@ def test_matrix_is_not_vacuous() -> None:
     assert refused and bools and others, (len(refused), len(bools), len(others))
     for needle in ("!!bool y", "!!int abc", "!!float x", "!!timestamp nope", "!!bool 1"):
         assert any(r["source"] == needle and "refused" in r for r in rows), needle
-    # The rows Go skips are the non-specific tag on a non-plain scalar only.
-    blind = [r["source"] for r in rows if "go_blind" in r]
-    assert blind and all(b.startswith("! ") and b[2] in "'\"|>" for b in blind), blind
+    # The non-specific tag on a non-plain scalar is held like any other row
+    # (#2730 §6): all three outcomes occur among those rows too.
+    ns = [r for r in rows if r["source"].startswith("! ") and r["source"][2] in "'\"|>"]
+    assert any("refused" in r for r in ns) and any("bool" in r for r in ns), len(ns)
+    assert any(r.get("type") == "int" for r in ns) and any(r.get("type") == "NoneType" for r in ns)
+    assert not any("go_blind" in r for r in rows)

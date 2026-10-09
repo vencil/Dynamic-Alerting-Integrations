@@ -55,6 +55,12 @@ tenant_api_config_last_reload_successful{component="groups"} 1
 tenant_api_config_last_reload_successful{component="policy"} 1
 tenant_api_config_last_reload_successful{component="tenantorg"} 1
 tenant_api_config_last_reload_successful{component="views"} 1
+# HELP tenant_api_policy_available Whether every present domain policy file (_domain_policy.yaml / .yml) is usable or served from its last good version (1), or one is present but unusable with no last good version (0): direct-mode writes the policy judges then answer 503 POLICY_UNAVAILABLE. Alert on == 0.
+# TYPE tenant_api_policy_available gauge
+tenant_api_policy_available 1
+# HELP tenant_api_policy_unavailable_open_total Writes let through an unavailable domain policy under --policy-unavailable-open (fail-closed disabled). Should stay 0.
+# TYPE tenant_api_policy_unavailable_open_total counter
+tenant_api_policy_unavailable_open_total 0
 # HELP tenant_api_dev_auth_bypass_active 1 if --dev-bypass-auth is enabled (LOCAL DEV ONLY; must be 0 in production).
 # TYPE tenant_api_dev_auth_bypass_active gauge
 tenant_api_dev_auth_bypass_active 0

@@ -502,6 +502,24 @@ import (
 //      BLOCK-END
 //
 
+// is_separator is is_blank at buffer position i, but only a space when
+// parser.spaces_only is set (Decoder.SpacesOnly): PyYAML's scanner takes
+// a TAB as a separator nowhere outside quotes, comments and block scalars.
+func is_separator(parser *yaml_parser_t, i int) bool {
+	if parser.spaces_only {
+		return is_space(parser.buffer, i)
+	}
+	return is_blank(parser.buffer, i)
+}
+
+// is_separatorz is is_blankz, or is_spacez when parser.spaces_only is set.
+func is_separatorz(parser *yaml_parser_t, i int) bool {
+	if parser.spaces_only {
+		return is_spacez(parser.buffer, i)
+	}
+	return is_blankz(parser.buffer, i)
+}
+
 // Ensure that the buffer contains the required number of characters.
 // Return true on success, false on failure (reader error or memory error).
 func cache(parser *yaml_parser_t, length int) bool {
@@ -1555,7 +1573,7 @@ func yaml_parser_scan_to_next_token(parser *yaml_parser_t) bool {
 			return false
 		}
 
-		for parser.buffer[parser.buffer_pos] == ' ' || ((parser.flow_level > 0 || !parser.simple_key_allowed) && parser.buffer[parser.buffer_pos] == '\t') {
+		for parser.buffer[parser.buffer_pos] == ' ' || (!parser.spaces_only && (parser.flow_level > 0 || !parser.simple_key_allowed) && parser.buffer[parser.buffer_pos] == '\t') {
 			skip(parser)
 			if parser.unread < 1 && !yaml_parser_update_buffer(parser, 1) {
 				return false
@@ -1678,7 +1696,7 @@ func yaml_parser_scan_directive(parser *yaml_parser_t, token *yaml_token_t) bool
 		return false
 	}
 
-	for is_blank(parser.buffer, parser.buffer_pos) {
+	for is_separator(parser, parser.buffer_pos) {
 		skip(parser)
 		if parser.unread < 1 && !yaml_parser_update_buffer(parser, 1) {
 			return false
@@ -1746,7 +1764,7 @@ func yaml_parser_scan_directive_name(parser *yaml_parser_t, start_mark yaml_mark
 	}
 
 	// Check for an blank character after the name.
-	if !is_blankz(parser.buffer, parser.buffer_pos) {
+	if !is_separatorz(parser, parser.buffer_pos) {
 		yaml_parser_set_scanner_error(parser, "while scanning a directive",
 			start_mark, "found unexpected non-alphabetical character")
 		return false
@@ -1765,7 +1783,7 @@ func yaml_parser_scan_version_directive_value(parser *yaml_parser_t, start_mark 
 	if parser.unread < 1 && !yaml_parser_update_buffer(parser, 1) {
 		return false
 	}
-	for is_blank(parser.buffer, parser.buffer_pos) {
+	for is_separator(parser, parser.buffer_pos) {
 		skip(parser)
 		if parser.unread < 1 && !yaml_parser_update_buffer(parser, 1) {
 			return false
@@ -1788,6 +1806,10 @@ func yaml_parser_scan_version_directive_value(parser *yaml_parser_t, start_mark 
 	// Consume the minor version number.
 	if !yaml_parser_scan_version_directive_number(parser, start_mark, minor) {
 		return false
+	}
+	if parser.spaces_only && !is_spacez(parser.buffer, parser.buffer_pos) {
+		return yaml_parser_set_scanner_error(parser, "while scanning a %YAML directive",
+			start_mark, "did not find expected whitespace or line break")
 	}
 	return true
 }
@@ -1845,7 +1867,7 @@ func yaml_parser_scan_tag_directive_value(parser *yaml_parser_t, start_mark yaml
 		return false
 	}
 
-	for is_blank(parser.buffer, parser.buffer_pos) {
+	for is_separator(parser, parser.buffer_pos) {
 		skip(parser)
 		if parser.unread < 1 && !yaml_parser_update_buffer(parser, 1) {
 			return false
@@ -1861,14 +1883,14 @@ func yaml_parser_scan_tag_directive_value(parser *yaml_parser_t, start_mark yaml
 	if parser.unread < 1 && !yaml_parser_update_buffer(parser, 1) {
 		return false
 	}
-	if !is_blank(parser.buffer, parser.buffer_pos) {
+	if !is_separator(parser, parser.buffer_pos) {
 		yaml_parser_set_scanner_error(parser, "while scanning a %TAG directive",
 			start_mark, "did not find expected whitespace")
 		return false
 	}
 
 	// Eat whitespaces.
-	for is_blank(parser.buffer, parser.buffer_pos) {
+	for is_separator(parser, parser.buffer_pos) {
 		skip(parser)
 		if parser.unread < 1 && !yaml_parser_update_buffer(parser, 1) {
 			return false
@@ -1884,7 +1906,7 @@ func yaml_parser_scan_tag_directive_value(parser *yaml_parser_t, start_mark yaml
 	if parser.unread < 1 && !yaml_parser_update_buffer(parser, 1) {
 		return false
 	}
-	if !is_blankz(parser.buffer, parser.buffer_pos) {
+	if !is_separatorz(parser, parser.buffer_pos) {
 		yaml_parser_set_scanner_error(parser, "while scanning a %TAG directive",
 			start_mark, "did not find expected whitespace or line break")
 		return false
@@ -2018,7 +2040,7 @@ func yaml_parser_scan_tag(parser *yaml_parser_t, token *yaml_token_t) bool {
 	if parser.unread < 1 && !yaml_parser_update_buffer(parser, 1) {
 		return false
 	}
-	if !is_blankz(parser.buffer, parser.buffer_pos) {
+	if !is_separatorz(parser, parser.buffer_pos) {
 		yaml_parser_set_scanner_error(parser, "while scanning a tag",
 			start_mark, "did not find expected whitespace or line break")
 		return false
@@ -2253,7 +2275,7 @@ func yaml_parser_scan_block_scalar(parser *yaml_parser_t, token *yaml_token_t, l
 	if parser.unread < 1 && !yaml_parser_update_buffer(parser, 1) {
 		return false
 	}
-	for is_blank(parser.buffer, parser.buffer_pos) {
+	for is_separator(parser, parser.buffer_pos) {
 		skip(parser)
 		if parser.unread < 1 && !yaml_parser_update_buffer(parser, 1) {
 			return false
@@ -2400,6 +2422,9 @@ func yaml_parser_scan_block_scalar_breaks(parser *yaml_parser_t, indent *int, br
 
 		// Check for a tab character messing the indentation.
 		if (*indent == 0 || parser.mark.column < *indent) && is_tab(parser.buffer, parser.buffer_pos) {
+			if parser.spaces_only && *indent == 0 {
+				break // PyYAML: the TAB ends the indentation, which then decides if it is content
+			}
 			return yaml_parser_set_scanner_error(parser, "while scanning a block scalar",
 				start_mark, "found a tab character where an indentation space is expected")
 		}
@@ -2765,7 +2790,7 @@ func yaml_parser_scan_plain_scalar(parser *yaml_parser_t, token *yaml_token_t) b
 		}
 
 		// Is it the end?
-		if !(is_blank(parser.buffer, parser.buffer_pos) || is_break(parser.buffer, parser.buffer_pos)) {
+		if !(is_separator(parser, parser.buffer_pos) || is_break(parser.buffer, parser.buffer_pos)) {
 			break
 		}
 
@@ -2774,8 +2799,8 @@ func yaml_parser_scan_plain_scalar(parser *yaml_parser_t, token *yaml_token_t) b
 			return false
 		}
 
-		for is_blank(parser.buffer, parser.buffer_pos) || is_break(parser.buffer, parser.buffer_pos) {
-			if is_blank(parser.buffer, parser.buffer_pos) {
+		for is_separator(parser, parser.buffer_pos) || is_break(parser.buffer, parser.buffer_pos) {
+			if is_separator(parser, parser.buffer_pos) {
 
 				// Check for tab characters that abuse indentation.
 				if leading_blanks && parser.mark.column < indent && is_tab(parser.buffer, parser.buffer_pos) {
@@ -2843,7 +2868,7 @@ func yaml_parser_scan_line_comment(parser *yaml_parser_t, token_mark yaml_mark_t
 		if parser.unread < peek+1 && !yaml_parser_update_buffer(parser, peek+1) {
 			break
 		}
-		if is_blank(parser.buffer, parser.buffer_pos+peek) {
+		if is_separator(parser, parser.buffer_pos+peek) {
 			continue
 		}
 		if parser.buffer[parser.buffer_pos+peek] == '#' {
@@ -2922,7 +2947,7 @@ func yaml_parser_scan_comments(parser *yaml_parser_t, scan_mark yaml_mark_t) boo
 			break
 		}
 		column++
-		if is_blank(parser.buffer, parser.buffer_pos+peek) {
+		if is_separator(parser, parser.buffer_pos+peek) {
 			continue
 		}
 		c := parser.buffer[parser.buffer_pos+peek]

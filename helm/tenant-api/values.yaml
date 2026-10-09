@@ -170,6 +170,17 @@ confDir:
     size: 1Gi
     accessMode: ReadWriteOnce
 
+# Domain policy (_domain_policy.yaml / .yml in conf.d) — hub #2486 Q7-2.
+# A policy file that is present but cannot be read or parsed, with no last good
+# version, makes direct-mode writes the policy judges answer 503
+# POLICY_UNAVAILABLE (gauge tenant_api_policy_available, alert
+# TenantApiPolicyUnavailable); /ready stays 200.
+policy:
+  # Escape hatch (--policy-unavailable-open): let those writes through instead,
+  # each one logged and counted in tenant_api_policy_unavailable_open_total.
+  # Default false = fail closed. Turn it on only while repairing the file.
+  unavailableOpen: false
+
 # Git repository to clone on startup (optional).
 # Leave empty to skip the init container (use hostPath or pre-populated PVC instead).
 gitRepoUrl: ""
