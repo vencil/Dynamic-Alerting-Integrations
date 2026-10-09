@@ -2485,7 +2485,7 @@ da-tools opa-evaluate --config-dir <PATH> [options]
 | `--dry-run` | 僅顯示 input JSON，不呼叫 OPA | - |
 | `--json` | JSON 格式輸出 | - |
 
-**OPA 沒有真的評估時結束碼 2**（[#2724](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/2724)）：連不到 OPA server、回 HTTP 錯誤或轉址（不跟隨：轉址後的請求會丟掉 input）、HTTP 回應本身壞掉、找不到 `opa` 或它執行失敗／逾時（10 秒）、回應不是 JSON、`<package>.violations` 未定義（該 package 下沒有 `violations` 規則，例如 package 打錯或 policy 沒載入），一律以結束碼 2 結束，stderr 一行 `ERROR:` 指名原因，stdout 不輸出（含 `--json`）。`violations` 的每一項必須是物件 `{"msg", "severity", "tenant", "field"}`，`severity` 為字串（`error`／`warning`；未寫或其他字串視為 `error`）；不是物件的項目（例如 `violations contains msg if {...}` 的字串集合）或 `severity` 不是字串（例如 `null`）同樣結束碼 2。過去這些情形都印 `✓ All policies passed.` 並以 0 結束（含 `--ci`）。OPA 有評估時，所有項目都列入報告；沒有 error 級項目即通過——只有 warning 級項目時 `--ci` 仍以 0 結束（設計如此），空集合亦為通過。
+**OPA 沒有真的評估時結束碼 2**（[#2724](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/2724)）：連不到 OPA server、回 HTTP 錯誤或轉址（不跟隨轉址；請把 `--opa-url` 指向 OPA 的最終位址）、HTTP 回應本身壞掉、找不到 `opa` 或它執行失敗／逾時（10 秒）、回應不是 JSON、`<package>.violations` 未定義（該 package 下沒有 `violations` 規則，例如 package 打錯或 policy 沒載入），一律以結束碼 2 結束，stderr 一行 `ERROR:` 指名原因，stdout 不輸出（含 `--json`）。`violations` 的每一項必須是物件 `{"msg", "severity", "tenant", "field"}`，`severity` 為字串（不分大小寫比對 `warning` 者算 warning 級，其餘字串與未寫 `severity` 都算 error 級）；不是物件的項目（例如 `violations contains msg if {...}` 的字串集合）或 `severity` 不是字串（例如 `null`）同樣結束碼 2。過去這些情形都印 `✓ All policies passed.` 並以 0 結束（含 `--ci`）。OPA 有評估時，所有項目都列入報告；沒有 error 級項目即通過——只有 warning 級項目時 `--ci` 仍以 0 結束（設計如此），空集合亦為通過。
 
 **範例**
 

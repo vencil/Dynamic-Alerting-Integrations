@@ -788,7 +788,13 @@ class _Server:
 class _RawServer:
     """A socket that answers each connection with fixed raw bytes and closes —
     for responses http.server cannot produce (a bad status line, a body cut
-    short of its Content-Length)."""
+    short of its Content-Length).
+
+    It reads the WHOLE request (headers, then Content-Length bytes of body)
+    before answering, and after answering half-closes and drains until the
+    client hangs up. Closing with request bytes still unread makes the kernel
+    send RST, and the client then sees ConnectionResetError instead of the
+    malformed response under test — a flake under parallel load."""
 
     def __init__(self, raw: bytes):
         import socket
@@ -798,6 +804,25 @@ class _RawServer:
         self.sock.listen(4)
         self.url = f"http://127.0.0.1:{self.sock.getsockname()[1]}"
 
+        def read_request(conn):
+            buf = b""
+            while b"\r\n\r\n" not in buf:
+                chunk = conn.recv(65536)
+                if not chunk:
+                    return
+                buf += chunk
+            head, _, body = buf.partition(b"\r\n\r\n")
+            length = 0
+            for line in head.split(b"\r\n")[1:]:
+                name, _, value = line.partition(b":")
+                if name.strip().lower() == b"content-length":
+                    length = int(value.strip())
+            while len(body) < length:
+                chunk = conn.recv(65536)
+                if not chunk:
+                    return
+                body += chunk
+
         def serve():
             while True:
                 try:
@@ -805,10 +830,13 @@ class _RawServer:
                 except OSError:
                     return
                 with conn:
-                    conn.settimeout(2)
+                    conn.settimeout(5)
                     try:
-                        conn.recv(65536)
+                        read_request(conn)
                         conn.sendall(raw)
+                        conn.shutdown(socket.SHUT_WR)
+                        while conn.recv(65536):
+                            pass
                     except OSError:
                         pass
         threading.Thread(target=serve, daemon=True).start()
@@ -902,7 +930,11 @@ class TestOpaNotEvaluatedIsCallerError:
         (b"NOT-HTTP garbage\r\n\r\n", "BadStatusLine"),
         (b'HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: 100\r\n\r\n'
          b'{"result": [', "IncompleteRead"),
-    ], ids=["bad-status-line", "truncated-body"])
+        # An error status whose body is cut short: reading the body for the
+        # message fails too, and the message still names the status.
+        (b'HTTP/1.1 500 Internal Server Error\r\nContent-Length: 100\r\n\r\n{"code": "inte',
+         "HTTP 500"),
+    ], ids=["bad-status-line", "truncated-body", "http-500-truncated-body"])
     def test_rest_broken_http_exchange(self, monkeypatch, capsys, tree, raw, needle):
         srv = _RawServer(raw)
         try:

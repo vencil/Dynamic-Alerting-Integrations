@@ -13,8 +13,8 @@ Modes:
   --dry-run: Show input JSON without calling OPA
 
 When OPA does not evaluate (#2724) — the server cannot be reached, answers
-an HTTP error or a redirect (not followed: urllib would re-send the POST as
-a GET without the input), or breaks the HTTP exchange; `opa` is missing,
+an HTTP error or a redirect (redirects are not followed: point `--opa-url`
+at OPA's final address), or breaks the HTTP exchange; `opa` is missing,
 fails or times out; the answer is not JSON; `<package>.violations` is
 undefined (no policy under that package) — or when an item of `violations`
 is not a violation object (a set of strings, `"severity": null`), the tool
@@ -312,9 +312,11 @@ def _first_lines(text: str, limit: int = 5) -> str:
 
 
 class _NoRedirect(HTTPRedirectHandler):
-    """Refuse every redirect (#2724): urllib re-sends a redirected POST as a
-    GET without its body, so OPA would evaluate an empty input and answer
-    `[]` — a pass. Returning None makes urllib raise the 3xx as HTTPError."""
+    """Refuse every redirect (#2724). urllib re-sends a 301/302/303'd POST as
+    a GET without its body, so OPA would evaluate an empty input and answer
+    `[]` — a pass; it does not follow a POST's 307/308 at all. Refusing all
+    of them gives one behaviour: the 3xx is raised as HTTPError (returning
+    None makes urllib do that), which `call_opa_rest` reports as exit 2."""
 
     def redirect_request(self, req, fp, code, msg, headers, newurl):  # noqa: D102
         return None
@@ -376,13 +378,12 @@ def call_opa_rest(
             raw = response.read()
     except HTTPError as e:
         if 300 <= e.code < 400:
-            # `_NoRedirect`: a followed redirect would arrive as a GET without
-            # the input, and OPA would answer for an empty input.
+            # `_NoRedirect` refuses every redirect (see its docstring).
             location = e.headers.get("Location", "") if e.headers else ""
             raise OpaEvalError(
                 f"OPA API call failed: POST {endpoint}: HTTP {e.code} redirect"
                 + (f" to {location}" if location else "")
-                + " (not followed: it would drop the input; point --opa-url at OPA itself)"
+                + " (redirects are not followed; point --opa-url at OPA's final address)"
             ) from e
         detail = ""
         try:
@@ -505,9 +506,11 @@ def convert_opa_violations(
         OpaEvalError: an item is not a violation object, or its `severity`
             is not a string (#2724: such items used to be skipped, so a
             `violations contains msg if {...}` set of strings, or
-            `"severity": null`, reported a pass). A missing `severity` is
-            an error, an unknown severity string is an error; missing
-            `tenant` / `msg` / `field` get their defaults.
+            `"severity": null`, reported a pass).
+
+    A string `severity` is compared case-insensitively: `warning` (any
+    case) is warning-level; every other string, and a missing `severity`,
+    is error-level. Missing `tenant` / `msg` / `field` get their defaults.
     """
     result = PolicyResult(
         tenants_evaluated=tenants_count,
