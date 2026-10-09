@@ -18,8 +18,8 @@ jobs:
   # Validate Path Changes" job.
   # ⚠️ `python` is no longer in that scheme: its filter carries a
   # catch-all, so that leg runs on every PR (rationale in the filter's
-  # own comment). Only `go`, `portal` and `docs` are
-  # still path-scoped — read the rest of this banner as being about them.
+  # own comment). Only `go`, `portal` and `docs` are still path-scoped —
+  # read the rest of this banner as being about them.
   #
   # Required-check safety (the "required check skipped → Expected forever"
   # trap, see validate.yaml's banner + memory Trap 17): the two names
@@ -220,8 +220,8 @@ jobs:
               # no filter narrower than everything can express its input set
               # (#1383, #1402). The alternative, running the repo-wide guards
               # in an ungated job, was turned down for its compute cost and for
-              # the file list it would need kept by hand. It was not slower by
-              # the clock, so wall time is not the reason.
+              # the file list it would need kept by hand. It was faster by the
+              # clock, so wall time is not the reason.
               #
               # ⚠️ NOT every entry below is pinned by
               # tests/ops/test_ci_path_filter_coverage.py: deleting some of
