@@ -249,7 +249,7 @@ func TestServedSchedules_AgreeWithServedValuesEveryMinute(t *testing.T) {
 	day := time.Date(2026, 7, 1, 0, 0, 0, 0, time.UTC)
 	for m := 0; m < config.MinutesPerDay; m++ {
 		now := day.Add(time.Duration(m) * time.Minute)
-		served, _, _, err := keyedRows(cfg, now, nil)
+		served, _, _, err := keyedRows(cfg, now, func(_, k string) string { return k })
 		if err != nil {
 			t.Fatalf("%s: %v", hhmm(m), err)
 		}
@@ -390,7 +390,7 @@ func TestServedSchedules_UngatherableSegmentCarriesTheError(t *testing.T) {
 				text, _ := e.(string)
 				if !has || text == "" {
 					t.Errorf("%s %s: segment %v carries no error", tc.tenant, tc.key, s)
-				} else if !strings.Contains(text, "HTTP 500") || !strings.Contains(text, "was collected before with the same name and label values") {
+				} else if !strings.Contains(text, "HTTP 500") || !strings.Contains(text, "give one series user_threshold{") {
 					t.Errorf("%s %s: error %q does not carry the Gather failure", tc.tenant, tc.key, text)
 				}
 			} else if has {

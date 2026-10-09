@@ -184,39 +184,31 @@ func TestSpelling_KeysTheParserCutsAreNotMerged(t *testing.T) {
 }
 
 // A finding on a re-spelled key names it as written: the gate reads the
-// canonical spelling, the report does not.
+// canonical spelling, the report does not. Only a whole key is re-spelled: a
+// key holding that canonical spelling inside it keeps its own text.
 func TestSpelling_FindingNamesTheKeyAsWritten(t *testing.T) {
 	t.Parallel()
 	const written = `pg_connections{env="prod",r="x"}`
+	const other = `xpg_connections{env="prod", r="x"}`
 	_, fs := guardFindingsOf(t, map[string]string{
 		"_defaults.yaml":     spellingRoot,
 		"sub/_defaults.yaml": "defaults:\n  'pg_connections{r=\"x\",env=\"prod\"}': 30\n",
-		"sub/tx.yaml":        "tenants:\n  tx:\n    '" + written + "': 30\n",
+		"sub/tx.yaml":        "tenants:\n  tx:\n    '" + written + "': 30\n    '" + other + "': abc\n",
 	})
-	var got *guard.Finding
+	var got, ofOther *guard.Finding
 	for i, f := range fs {
-		if f.Kind == guard.FindingRedundantOverride {
+		switch {
+		case f.Kind == guard.FindingRedundantOverride:
 			got = &fs[i]
+		case f.Field == other:
+			ofOther = &fs[i]
 		}
 	}
 	if got == nil || got.Field != written || !strings.Contains(got.Message, strings.ReplaceAll(written, `"`, `\"`)) {
 		t.Errorf("redundant_override = %+v, want Field and message naming %s", got, written)
 	}
-}
-
-// Only a whole key is re-spelled in a message: a key holding another's
-// canonical spelling inside it keeps its own text.
-func TestSpelling_FindingKeepsAKeyThatContainsAnother(t *testing.T) {
-	t.Parallel()
-	const other = `xredis_queue_length{a="1", b="2"}`
-	_, fs := guardFindingsOf(t, map[string]string{
-		"_defaults.yaml": spellingRoot,
-		"tx.yaml":        "tenants:\n  tx:\n    'redis_queue_length{b=\"2\",a=\"1\"}': 5\n    '" + other + "': abc\n",
-	})
-	for _, f := range fs {
-		if f.Field == other && !strings.Contains(f.Message, "`"+other+"`") {
-			t.Errorf("message re-spells part of %s: %s", other, f.Message)
-		}
+	if ofOther == nil || !strings.Contains(ofOther.Message, "`"+other+"`") {
+		t.Errorf("finding on %s = %+v, want one naming it as written; findings %+v", other, ofOther, fs)
 	}
 }
 
@@ -229,18 +221,24 @@ func TestSpelling_NotGatherableNamesKeysAsWritten(t *testing.T) {
 		"tx.yaml":        "tenants:\n  tx:\n    'redis_queue_length{ q=~\"a\" }': 2\n    'redis_queue_length{q_re=\"a\"}': 3\n",
 	}
 	want := `keys "redis_queue_length{ q=~\"a\" }" and "redis_queue_length{q_re=\"a\"}"`
+	first := ""
 	for i := 0; i < 5; i++ {
 		code, _, _, stderr := served(t, files, "")
 		if code != exitCallerErr || !strings.Contains(stderr, want) {
 			t.Fatalf("served-values exit %d, stderr %q: want %s", code, stderr, want)
 		}
 		_, fs := guardFindingsOf(t, files)
-		found := false
+		msg := ""
 		for _, f := range fs {
-			found = found || (f.Kind == guard.FindingMetricsNotGatherable && strings.Contains(f.Message, want))
+			if f.Kind == guard.FindingMetricsNotGatherable && strings.Contains(f.Message, want) {
+				msg = f.Message
+			}
 		}
-		if !found {
-			t.Fatalf("no metrics_not_gatherable naming %s: %+v", want, fs)
+		// The finding is the same on every run: client_golang's error,
+		// which quotes the series' values, is not in it.
+		if msg == "" || strings.Contains(msg, "gauge") || (first != "" && msg != first) {
+			t.Fatalf("metrics_not_gatherable %q (first run %q), want one naming %s without client_golang's text: %+v", msg, first, want, fs)
 		}
+		first = msg
 	}
 }

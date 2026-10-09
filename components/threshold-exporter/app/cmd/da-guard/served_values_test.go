@@ -779,7 +779,7 @@ func TestServedValues_TwoKeysOneSeries_ExitsTwoNamingBothKeys(t *testing.T) {
 			if code != exitCallerErr {
 				t.Fatalf("exit = %d, want %d; tenants=%v stderr=%q", code, exitCallerErr, doc.Tenants, stderr)
 			}
-			if !strings.Contains(stderr, "was collected before with the same name and label values") || !strings.Contains(stderr, "HTTP 500") {
+			if !strings.Contains(stderr, "give one series user_threshold{") || !strings.Contains(stderr, "HTTP 500") {
 				t.Errorf("stderr should name the collision: %q", stderr)
 			}
 		})

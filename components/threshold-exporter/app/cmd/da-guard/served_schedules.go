@@ -185,8 +185,12 @@ func readingsAt(cfg *config.ThresholdConfig, at time.Time, name keyNamer) (readi
 		results[i] = emitResult{reported: true, metric: m, err: err}
 	}})
 	if _, gerr := reg.Gather(); gerr != nil {
-		return nil, fmt.Sprintf("the exporter's /metrics cannot be gathered, so its scrape fails "+
-			"as a whole (HTTP 500) and nothing is served%s: %v", sameSeriesKeys(keyed, results, name), gerr), nil
+		msg := "the exporter's /metrics cannot be gathered, so its scrape fails " +
+			"as a whole (HTTP 500) and nothing is served"
+		if keys := sameSeriesKeys(keyed, results, name); keys != "" {
+			return nil, msg + keys, nil // as notGatherableError.Error
+		}
+		return nil, msg + ": " + gerr.Error(), nil
 	}
 	served, _, err := groupRows(keyed, results)
 	if err != nil {

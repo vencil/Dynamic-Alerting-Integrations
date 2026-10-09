@@ -602,20 +602,22 @@ func computeEffectiveConfigDocAt(
 	profiles *PlatformProfiles,
 	rootLevel int,
 ) (effectiveParts, error) {
-	// Parse-and-fold one file at a time (no []ChainDefaults: this is the
-	// debounced path's per-tenant call, and a slice per call was +1 alloc
-	// per re-merged tenant). A file after a broken one is never parsed.
+	// Parse-and-fold one file at a time. A file after a broken one is never
+	// parsed. ⚠️ This is the debounced path's per-tenant call: a heap slice
+	// per call was +1 alloc per re-merged tenant, so the parses mergedAsWritten
+	// reads sit in a stack buffer for a chain of usual depth.
 	var err error
 	var writers map[string]int      // #2414: deepest chain level per aliased spelling
 	var subtreeDims map[string]bool // #2544: tenant-map-only keys a non-root level writes
-	chainSpelled := false           // #2031: a level re-spelled a key (mergedAsWritten)
+	var buf [8]ChainDefaults
+	parsed := buf[:0]
 	merged := make(map[string]any)
 	for i, defBytes := range defaultsChainYAML {
 		pd := ParseChainDefaults(defBytes)
 		if merged, err = foldDefaults(merged, i, pd); err != nil {
 			return effectiveParts{}, err
 		}
-		chainSpelled = chainSpelled || pd.spell != nil
+		parsed = append(parsed, pd)
 		writers = noteSpellingWriters(writers, i, pd.block)
 		if rootLevel >= 0 && i != rootLevel {
 			subtreeDims = noteTenantMapOnlyWriters(subtreeDims, pd.block)
@@ -627,13 +629,7 @@ func computeEffectiveConfigDocAt(
 	if err != nil {
 		return effectiveParts{}, err
 	}
-	if chainSpelled || tenantDoc.spell[tenantID] != nil || spelledLayers(overlay, profiles, p.profile) {
-		parsed := make([]ChainDefaults, len(defaultsChainYAML))
-		for i, b := range defaultsChainYAML {
-			parsed[i] = ParseChainDefaults(b)
-		}
-		p.merged = mergedAsWritten(p.merged, parsed, tenantDoc.spell[tenantID], p.effectiveParts, overlay, profiles)
-	}
+	p.merged = mergedAsWritten(p.merged, parsed, tenantDoc.spell[tenantID], p.effectiveParts, overlay, profiles)
 
 	// The merged-defaults state BEFORE the tenant override: `chain` is
 	// untouched by the merge above (deepMerge copies its base), and is

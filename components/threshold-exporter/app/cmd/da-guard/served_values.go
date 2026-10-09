@@ -409,7 +409,7 @@ func servedValues(cfg *config.ThresholdConfig, at time.Time,
 	undeliverable map[string]map[string]config.ScheduledValue, withSchedules bool,
 	written map[string]map[string]string,
 ) (map[string]servedTenantValues, error) {
-	name := writtenNamer(func() map[string]map[string]string { return written })
+	name := func(tenant, key string) string { return config.WrittenKey(written[tenant], key) }
 	ownedBy, droppedBy, res, err := keyedRows(cfg, at, name)
 	if err != nil {
 		return nil, err
@@ -605,7 +605,7 @@ func keyedRows(cfg *config.ThresholdConfig, at time.Time, name keyNamer) (
 }
 
 // keyNamer spells a key of the exporter's config for a message: as written
-// (#2031). nil leaves it as the config keys it.
+// (#2031).
 type keyNamer func(tenant, key string) string
 
 // writtenNamer is a keyNamer over the written-key table written returns
@@ -623,18 +623,33 @@ func writtenNamer(written func() map[string]map[string]string) keyNamer {
 }
 
 // notGatherableError is keyedRows' verdict that the exporter's /metrics
-// cannot be gathered for the tree: client_golang's error, with the config
-// keys behind it when they can be named (sameSeriesKeys).
-type notGatherableError struct{ detail string }
+// cannot be gathered for the tree: the config keys behind it when they can
+// be named (sameSeriesKeys), and client_golang's error.
+type notGatherableError struct {
+	keys string
+	err  error
+}
 
+// Error is verdict, with client_golang's text only when no key is named: that
+// text quotes the series' values in collection order, which differs between
+// runs of one tree.
 func (e *notGatherableError) Error() string {
+	if e.keys != "" {
+		return e.verdict()
+	}
+	return e.verdict() + ": " + e.err.Error()
+}
+
+// verdict is the error without client_golang's text: the main gate's finding
+// message, the same for one tree on every run.
+func (e *notGatherableError) verdict() string {
 	return "the exporter's /metrics cannot be gathered for this tree, so its scrape fails " +
-		"as a whole (HTTP 500) and nothing is served" + e.detail
+		"as a whole (HTTP 500) and nothing is served" + e.keys
 }
 
 // gatherVerdict is keyedRows' Gather verdict over cfg at `at`, read with the
-// resolver's WARN lines discarded: the error text when /metrics cannot be
-// gathered, "" when it can (or when the reading failed for another reason,
+// resolver's WARN lines discarded: notGatherableError.verdict when /metrics
+// cannot be gathered, "" when it can (or when the reading failed for another reason,
 // which served-values reports). For the main gate's metrics_not_gatherable
 // (#2031).
 func gatherVerdict(cfg *config.ThresholdConfig, at time.Time, name keyNamer) string {
@@ -644,7 +659,7 @@ func gatherVerdict(cfg *config.ThresholdConfig, at time.Time, name keyNamer) str
 	_, _, _, err := keyedRowsWith(cfg, at, (*config.ThresholdConfig).ResolveAtWithKeysSilent, name)
 	var ng *notGatherableError
 	if errors.As(err, &ng) {
-		return ng.Error()
+		return ng.verdict()
 	}
 	return ""
 }
@@ -689,7 +704,7 @@ func keyedRowsWith(cfg *config.ThresholdConfig, at time.Time,
 		return nil, nil, scrape.Reserved{}, keyErr
 	}
 	if gerr != nil {
-		return nil, nil, scrape.Reserved{}, &notGatherableError{detail: fmt.Sprintf("%s: %v", sameSeriesKeys(keyed, results, name), gerr)}
+		return nil, nil, scrape.Reserved{}, &notGatherableError{keys: sameSeriesKeys(keyed, results, name), err: gerr}
 	}
 	if observed != 1 {
 		return nil, nil, scrape.Reserved{}, fmt.Errorf("internal: the collector reported its reserved-key readings %d times, want 1", observed)
@@ -766,14 +781,10 @@ type emitResult struct {
 }
 
 // sameSeriesKeys names, for the Gather error message only, the keys of rows
-// whose built metrics carry the same label set, spelled by name (nil: as the
-// config keys them), each pair and the list sorted so the message does not
+// whose built metrics carry the same label set, spelled by name, each pair and the list sorted so the message does not
 // depend on map order. Gather has already decided the tree fails; this just
 // points at the config keys behind it.
 func sameSeriesKeys(keyed []config.KeyedThreshold, results []emitResult, name keyNamer) string {
-	if name == nil {
-		name = func(_, key string) string { return key }
-	}
 	seen := map[string]string{}
 	var named []string
 	for i, r := range results {

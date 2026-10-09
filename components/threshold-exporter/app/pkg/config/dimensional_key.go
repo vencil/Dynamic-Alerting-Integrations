@@ -453,17 +453,6 @@ func WrittenKey(spellings map[string]string, key string) string {
 	return key
 }
 
-// spelledLayers reports whether a platform entry of overlay, or the bound
-// profile's body in some file, re-spelled a key (#2031).
-func spelledLayers(overlay []PlatformBlock, profiles *PlatformProfiles, profile string) bool {
-	for _, pb := range overlay {
-		if pb.spell != nil {
-			return true
-		}
-	}
-	return profiles != nil && profile != "" && profiles.spell[profile] != nil
-}
-
 // mergedAsWritten is the tenant's merge with every key spelled as the layer
 // that supplied its value wrote it (#2031; the effective config's rule,
 // keySources' attribution) — what merged_hash hashes and da-guard's gate
