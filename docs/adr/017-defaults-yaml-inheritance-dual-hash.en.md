@@ -104,12 +104,14 @@ Inheritance order: **L0 → L1 → L2 → L3 → tenant YAML** (later overrides 
     of a wrapper-less file".
 - **⚠️ A blank value and an explicit `null` are the same thing**: `mysql_connections:` and
   `mysql_connections: ~` both parse to null in YAML, the same as `mysql_connections: null`. In a
-  tenant file or a subdirectory `_defaults.yaml`, a null (either spelling included) is the same as
-  this layer not writing the key; in the root `defaults:`, a null means the root does not declare
+  tenant file or a subdirectory `_defaults.yaml`, a null (either spelling included) is the same at runtime
+  as this layer not writing the key, but a null in a tenant file is rejected by
+  `check_confd_schema.py` — to keep the inherited value, a tenant deletes the key; in the root `defaults:`, a null means the root does not declare
   the threshold and no series is served (for a value a deeper layer gives, see "Threshold keys"
   above). To switch a threshold off in a tenant file or a subdirectory `_defaults.yaml`, write
   `"disable"`; written in the root `defaults:`, `"disable"` makes /metrics drop the whole root
-  `_defaults.yaml` (da-guard exits 3).
+  `_defaults.yaml`, and no threshold of any tenant is served, not even a value the tenant wrote
+  itself (da-guard exits 3).
 - **`_metadata` fields do not inherit**: each tenant's `_metadata` comes only from its own YAML + path inference (ADR-016)
 
 ```yaml
