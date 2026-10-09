@@ -32,6 +32,7 @@ package config
 
 import (
 	"sort"
+	"strconv"
 	"strings"
 	"unicode"
 )
@@ -450,6 +451,52 @@ func WrittenKey(spellings map[string]string, key string) string {
 		}
 	}
 	return key
+}
+
+// spelledLayers reports whether a platform entry of overlay, or the bound
+// profile's body in some file, re-spelled a key (#2031).
+func spelledLayers(overlay []PlatformBlock, profiles *PlatformProfiles, profile string) bool {
+	for _, pb := range overlay {
+		if pb.spell != nil {
+			return true
+		}
+	}
+	return profiles != nil && profile != "" && profiles.spell[profile] != nil
+}
+
+// mergedAsWritten is the tenant's merge with every key spelled as the layer
+// that supplied its value wrote it (#2031; the effective config's rule,
+// keySources' attribution) — what merged_hash hashes and da-guard's gate
+// reads, so a tree whose layers do not write one threshold under two
+// spellings hashes as before the decode re-spelled its keys (and as
+// describe_tenant does). merged itself when no layer re-spelled a key, or
+// when the attribution fails.
+func mergedAsWritten(merged map[string]any, chain []ChainDefaults, tenantSpell *keySpellings,
+	parts effectiveParts, overlay []PlatformBlock, profiles *PlatformProfiles,
+) map[string]any {
+	l := layerSpellings{tenant: tenantSpell}
+	for i, cd := range chain {
+		l.addChain(i, len(chain), cd.spell)
+	}
+	l.addPlatform(overlay)
+	l.addProfile(profiles, parts.profile)
+	if !l.any() {
+		return merged
+	}
+	files := make([]string, len(chain))
+	blocks := make([]map[string]any, len(chain))
+	for i, cd := range chain {
+		files[i], blocks[i] = strconv.Itoa(i), cd.block
+	}
+	ks, err := keySources(merged, parts.tenantRaw, "", files, blocks, overlay, parts.platformSources, parts.profileSources)
+	if err != nil {
+		return merged
+	}
+	written, _ := l.forView(merged, ks)
+	if len(written) == 0 {
+		return merged
+	}
+	return renamedKeys(merged, func(k string) string { return WrittenKey(written, k) })
 }
 
 func (ec *EffectiveConfig) writtenKey(key string) string { return WrittenKey(ec.KeySpellings, key) }

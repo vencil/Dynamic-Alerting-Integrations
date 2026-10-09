@@ -617,12 +617,14 @@ func computeEffectiveConfigDocAt(
 	var err error
 	var writers map[string]int      // #2414: deepest chain level per aliased spelling
 	var subtreeDims map[string]bool // #2419 / #2544: tenant-map-only keys a non-root level writes
+	chainSpelled := false           // #2031: a level re-spelled a key (mergedAsWritten)
 	merged := make(map[string]any)
 	for i, defBytes := range defaultsChainYAML {
 		pd := ParseChainDefaults(defBytes)
 		if merged, err = foldDefaults(merged, i, pd); err != nil {
 			return effectiveParts{}, err
 		}
+		chainSpelled = chainSpelled || pd.spell != nil
 		writers = noteSpellingWriters(writers, i, pd.block)
 		if rootLevel >= 0 && i != rootLevel {
 			subtreeDims = noteTenantMapOnlyWriters(subtreeDims, pd.block)
@@ -633,6 +635,13 @@ func computeEffectiveConfigDocAt(
 	p, err := mergeTenantOver(chain, tenantDoc, tenantID, overlay, profiles)
 	if err != nil {
 		return effectiveParts{}, err
+	}
+	if chainSpelled || tenantDoc.spell[tenantID] != nil || spelledLayers(overlay, profiles, p.profile) {
+		parsed := make([]ChainDefaults, len(defaultsChainYAML))
+		for i, b := range defaultsChainYAML {
+			parsed[i] = ParseChainDefaults(b)
+		}
+		p.merged = mergedAsWritten(p.merged, parsed, tenantDoc.spell[tenantID], p.effectiveParts, overlay, profiles)
 	}
 
 	// The merged-defaults state BEFORE the tenant override: `chain` is
@@ -1608,7 +1617,7 @@ func ComputeMergedHashFromChainDoc(
 	if err != nil {
 		return "", err
 	}
-	return mergedHashOf(tm.merged)
+	return mergedHashOf(mergedAsWritten(tm.merged, defaultsChain, tenantDoc.spell[tenantID], tm.effectiveParts, l.Overlay, l.Profiles))
 }
 
 // mergedHashOf is SHA-256 over CanonicalJSON(merged), truncated to 16 hex.

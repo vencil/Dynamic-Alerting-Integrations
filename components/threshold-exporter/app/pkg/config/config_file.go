@@ -65,15 +65,17 @@ func ParseConfigFile(data []byte) (ThresholdConfig, error) {
 	return cfg, err
 }
 
-// normalizeConfigKeys re-keys every threshold map of one file's decode to the
-// canonical dimensional spelling (normalizeKeys, #2031) — after the null
-// drops above, which look keys up by the text the file wrote. The maps keep
-// their identity when nothing is re-spelled.
+// normalizeConfigKeys re-keys the `tenants:` and `profiles:` bodies of one
+// file's decode to the canonical dimensional spelling (normalizeKeys, #2031)
+// — after the null drops above, which look keys up by the text the file
+// wrote. The maps keep their identity when nothing is re-spelled.
+//
+// ⚠️ Not `defaults:`: /metrics serves a root dimensional key as a base row
+// whose metric label is the key's text (a defect of its own), so re-spelling
+// it would change that label.
 func normalizeConfigKeys(cfg *ThresholdConfig) {
-	var s *keySpellings
-	cfg.Defaults, s = normalizeKeys(cfg.Defaults)
 	tenants, profiles := normalizeBodies(cfg.Tenants), normalizeBodies(cfg.Profiles)
-	cfg.spelled = s != nil || tenants || profiles
+	cfg.spelled = tenants || profiles
 }
 
 // normalizeBodies is normalizeKeys over each body of m, in place; it reports
