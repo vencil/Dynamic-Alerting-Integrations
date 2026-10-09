@@ -274,8 +274,9 @@ module: it reads the WHOLE tracked tree, so no filter NARROWER than everything
 can express its input set — any such filter is a guess that is wrong by
 construction. ci.yml's `python` filter now carries `**`, pinned by
 `test_python_tests_run_cannot_be_path_skipped`; the enumerated entries stay
-beside it and stay machine-checked, because the guard asks its coverage
-questions against the enumerated view only.
+beside it because tests/ops/test_ci_path_filter_coverage.py asks its coverage
+questions against the enumerated view only. Not every entry is pinned there
+(see the ⚠️ note above the catch-all in ci.yml).
 
 ⛔ COUNTS. This module does not say how many of anything the tree holds TODAY.
 A count that survives here is ANCHORED to the commit or ticket it was taken on
