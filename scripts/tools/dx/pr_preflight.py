@@ -1103,22 +1103,35 @@ def _prepush_guards_wired() -> Tuple[Optional[bool], str]:
 
     回傳 `(wired, message)`。⛔ **「量不到」與「量了沒事」要分得開**。
     """
-    # ⛔ core.hooksPath 有設（空字串也算）就不判（#2696）。它指向的可能是許多 repo
-    # 共用的目錄，裝進去的 shim 會擋下其他 repo 的每一次 push；空字串則讓 git 一支
-    # hook 都不跑。None：這裡量不到本 repo 的守衛。
+    # ⛔ 任何一棵 worktree 讀得到 core.hooksPath（空字串也算）就不判（#2696）。它指向
+    # 的可能是許多 repo 共用的目錄，裝進去的 shim 會擋下其他 repo 的每一次 push；
+    # 空字串則讓 git 一支 hook 都不跑。逐棵在那棵裡讀，不是只讀這一棵：
+    # `git config --worktree` 與 includeIf gitdir 都能讓它只在某一棵生效，從那棵
+    # push 就不經 .git/hooks（#2772）。目錄不存在的 worktree 推不了，不讀。
+    # None：這裡量不到本 repo 的守衛。
     # GIT_CONFIG 只改變 `git config` 讀哪個檔，git 跑 hook 時照樣讀原本的設定。
     env = {k: v for k, v in os.environ.items() if k != "GIT_CONFIG"}
-    hp = run(["git", "config", "--get", "core.hooksPath"], timeout=30, env=env)
-    if hp.returncode == 0:
-        return None, (
-            f"量不到：core.hooksPath 設成 {(hp.stdout or '').strip()!r}；本 repo 的守衛"
-            "只在它沒設時判定與安裝。"
-        )
+    wl = run(["git", "worktree", "list", "--porcelain", "-z"], timeout=30)
+    bad = wl if wl.returncode != 0 else None
+    trees = [f[len("worktree "):] for f in (wl.stdout or "").split("\0")
+             if f.startswith("worktree ")] if bad is None else []
+    for tree in (t for t in trees if os.path.isdir(t)):
+        hp = run(["git", "-C", tree, "config", "--get", "core.hooksPath"],
+                 timeout=30, env=env)
+        if hp.returncode == 0:
+            return None, (
+                f"量不到：worktree {tree} 的 core.hooksPath 設成 "
+                f"{(hp.stdout or '').strip()!r}；本 repo 的守衛只在每棵 worktree"
+                " 都沒設它時判定。"
+            )
+        if hp.returncode != 1:
+            bad = hp
+            break
     r = run(["git", "rev-parse", "--git-path", "hooks/pre-push"], timeout=30)
-    if hp.returncode != 1 or r.returncode != 0:
+    if bad is not None or r.returncode != 0:
         # ⛔ None，不是 False：git 跑不了或不在 git repository，都量不到守衛在不在；
         # 說成「沒裝」會開出安裝器這帖藥，而那兩種情況下它照做也回不到綠。
-        bad = r if r.returncode != 0 else hp
+        bad = bad or r
         reason = (bad.stderr or "").strip() or f"rc={bad.returncode}"
         return None, (
             f"量不到：git 失敗（{reason}）。這不代表守衛沒裝。"

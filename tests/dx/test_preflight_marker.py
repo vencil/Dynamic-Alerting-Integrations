@@ -463,6 +463,56 @@ class TestPrepushWiring:
         wired, why = mod._prepush_guards_wired()
         assert wired is True, f"unsetting core.hooksPath did not bring the guards back: {why!r}"
 
+    @pytest.mark.parametrize("how", ["worktree-config", "includeIf-gitdir"])
+    def test_a_hooks_path_set_for_one_worktree_only_is_unmeasurable(
+        self, tmp_path, monkeypatch, how
+    ):
+        """#2772: core.hooksPath can reach a single worktree, and a push from
+        there skips .git/hooks while the main checkout reads nothing set. The
+        judgement from the main checkout is None and names that worktree; a
+        worktree whose directory is gone is not read."""
+        mod = _load()
+        repo = tmp_path / "repo"
+        repo.mkdir()
+        self._repo(repo)
+        assert self._install_guards(repo).returncode == 0
+        gone = tmp_path / "gone"
+        for wt in (tmp_path / "only-this-tree", gone):
+            subprocess.run(  # subprocess-timeout: ignore
+                ["git", "-C", str(repo), "worktree", "add", "-q", "--detach", str(wt)],
+                check=True)
+        shutil.rmtree(gone)
+        empty = tmp_path / "empty"
+        empty.mkdir()
+        gcfg = tmp_path / "global.gitconfig"
+        monkeypatch.setenv("GIT_CONFIG_GLOBAL", str(gcfg))
+        monkeypatch.chdir(repo)
+        wired, why = mod._prepush_guards_wired()
+        assert wired is True, f"CONTROL: wired before the setting, gone tree included: {why!r}"
+
+        if how == "worktree-config":
+            subprocess.run(["git", "config", "extensions.worktreeConfig", "true"],  # subprocess-timeout: ignore
+                           check=True)
+            subprocess.run(  # subprocess-timeout: ignore
+                ["git", "-C", str(tmp_path / "only-this-tree"), "config", "--worktree",
+                 "core.hooksPath", str(empty)], check=True)
+        else:
+            inc = tmp_path / "inc.gitconfig"
+            inc.write_text(f"[core]\n\thooksPath = {empty.as_posix()}\n", encoding="utf-8")
+            gcfg.write_text(
+                f'[includeIf "gitdir:{(repo / ".git" / "worktrees").as_posix()}/"]\n'
+                f"\tpath = {inc.as_posix()}\n", encoding="utf-8")
+        bare = tmp_path / "bare.git"
+        subprocess.run(["git", "init", "-q", "--bare", str(bare)], check=True)  # subprocess-timeout: ignore
+        push = subprocess.run(  # subprocess-timeout: ignore
+            ["git", "-C", str(tmp_path / "only-this-tree"), "push", "-q", str(bare), "HEAD:refs/heads/main"],
+            capture_output=True, text=True, encoding="utf-8", errors="replace", timeout=60,
+            env={**os.environ, "GIT_PREFLIGHT_BYPASS": "1", "MKDOCS_STRICT_BYPASS": "1"})
+        assert push.returncode == 0, f"PREMISE: the push from that worktree skips the guards: {push.stderr}"
+
+        wired, why = mod._prepush_guards_wired()
+        assert wired is None and "core.hooksPath" in why and "only-this-tree" in why, why
+
     def test_git_config_failing_to_read_hooks_path_changes_nothing(self, tmp_path, monkeypatch):
         """When git cannot say whether core.hooksPath is set, neither side
         takes it for unset: the judgement is None and the installer stops
@@ -477,7 +527,7 @@ class TestPrepushWiring:
         bindir.mkdir()
         (bindir / "git").write_text(
             "#!/bin/sh\n"
-            'if [ "$1 $2 $3" = "config --get core.hooksPath" ]; then exit 5; fi\n'
+            'case " $* " in *" config --get core.hooksPath "*) exit 5 ;; esac\n'
             f'exec "{real}" "$@"\n', encoding="utf-8", newline="\n")
         (bindir / "git").chmod(0o755)
         monkeypatch.setenv("PATH", f"{bindir}{os.pathsep}{os.environ['PATH']}")
