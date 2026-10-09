@@ -420,11 +420,14 @@ func scopeEffective(configDir, scopeDir string, wholeTree bool) (*ScopedTenants,
 	// time — O(files × tenants)); the defaults selection is computed once.
 	resolver := newEffectiveResolver(scan)
 	resolver.withSources = wholeTree
-	if wholeTree && built != nil {
+	if built != nil {
 		// #2296: the per-tenant /effective answer names what /metrics does
-		// not serve, from the build above — not a second build. The gate
-		// (ScopeEffective) keeps stopping on an undecodable chain file.
+		// not serve, from the build above — not a second build. #2065: the
+		// gate (ScopeEffective) fills NotServed the same way, for da-guard's
+		// value_not_served, and keeps stopping on an undecodable chain file
+		// (servedVerdicts.gate).
 		resolver.served = newServedVerdicts(built, true)
+		resolver.served.gate = !wholeTree
 	}
 	out := &ScopedTenants{
 		Tenants:                make([]*EffectiveConfig, 0, len(tenantIDs)),

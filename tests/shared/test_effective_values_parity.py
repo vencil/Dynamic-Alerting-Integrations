@@ -323,7 +323,7 @@ def _fake_da_guard(tmp_path: Path, stdout: str, rc: int = 0) -> str:
 def _doc(**tenant_over) -> dict:
     tenant = {"tenant_id": "t", "source_file": "t.yaml", "source_hash": "a", "merged_hash": "b",
               "defaults_chain": [], "effective_config": {"k": 1}, "profile": None,
-              "key_sources": {"k": {"layer": "tenant", "file": "t.yaml"}}}
+              "key_sources": {"k": {"layer": "tenant", "file": "t.yaml"}}, "not_served": {}}
     tenant.update(tenant_over)
     return {"schema": tv.EFFECTIVE_SCHEMA, "parse_failed": [], "unreadable": [], "tenants": {"t": tenant}}
 
@@ -347,6 +347,42 @@ def test_fake_binary_baseline_reads(tmp_path):
 def test_output_not_in_the_expected_shape_raises(doc, tmp_path):
     with pytest.raises(tv.EffectiveError):
         tv.load_effective(tmp_path, binary=_fake_da_guard(tmp_path, json.dumps(doc)))
+
+
+def test_not_served_is_read(tmp_path):
+    """#2065: not_served 逐 key 讀成 NotServedKey；file 缺時是 ""。"""
+    doc = _doc(not_served={"k": {"reason": "window_invalid", "file": "t.yaml"},
+                           "j": {"reason": "parse_failed"}})
+    got = tv.load_effective(tmp_path, binary=_fake_da_guard(tmp_path, json.dumps(doc)))
+    assert got["t"].not_served == {"k": tv.NotServedKey("window_invalid", "t.yaml"),
+                                   "j": tv.NotServedKey("parse_failed", "")}
+
+
+def test_effective_without_not_served_is_named_too_old(tmp_path):
+    """#2065: effective 文件的租戶沒有 not_served（早於 #2296 的 da-guard）= da-guard 太舊。"""
+    doc = _doc()
+    del doc["tenants"]["t"]["not_served"]
+    with pytest.raises(tv.EffectiveError) as ei:
+        tv.load_effective(tmp_path, binary=_fake_da_guard(tmp_path, json.dumps(doc)))
+    assert ei.value.stale and "older than this tool" in str(ei.value)
+
+
+@pytest.mark.parametrize("key,reason,want", [
+    ("mysql_connections", "value_unparsed", True),
+    ("mysql_connections_critical", "value_unparsed_dropped", True),
+    ("mysql_connections", "window_invalid", True),
+    ("mysql_connections", "value_rejected", True),
+    ("_routing_defaults", "value_rejected", False),
+    ("_state_maintenance", "window_invalid", False),
+    ("mysql_connections", "undeliverable", False),
+    ("mysql_connections", "parse_failed", False),
+    ("mysql_connections", "root_null_undeclared", False),
+    ("pg_connections", "root_defaults_unwrapped", False),
+])
+def test_value_not_served_as_written(key, reason, want):
+    """Go ValueNotServedAsWritten 的 Python 副本；兩邊經 da-guard 的比對在
+    tests/ops/test_validate_config_values_not_served.py。"""
+    assert tv.value_not_served_as_written(key, reason) is want
 
 
 def test_missing_binary_raises_with_install_hint(tmp_path, monkeypatch):

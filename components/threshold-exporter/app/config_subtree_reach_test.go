@@ -481,9 +481,14 @@ func TestNonThresholdSubtreeKeysStayOutOfTheCollectorPlane(t *testing.T) {
 				t.Errorf("non-threshold key %q was added to the declared surface", key)
 			}
 		}
-		if strings.Contains(logBuf.String(), key) {
-			t.Errorf("non-threshold key %q was reported as an unreachable threshold; the "+
-				"audit must only name things that genuinely cannot fire", key)
+		// #2065: the values-not-served WARN names such a key as
+		// value_rejected (its value is not threshold-shaped), so the check
+		// reads the undeliverable ERROR lines only.
+		for _, line := range strings.Split(logBuf.String(), "\n") {
+			if strings.Contains(line, undeliverableAnchor) && strings.Contains(line, key) {
+				t.Errorf("non-threshold key %q was reported as an unreachable threshold; the "+
+					"audit must only name things that genuinely cannot fire", key)
+			}
 		}
 	}
 	// Control: a threshold-shaped key the ROOT declares still arrives.

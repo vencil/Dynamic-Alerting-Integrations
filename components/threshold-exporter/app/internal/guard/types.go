@@ -99,6 +99,13 @@
 //     `default:` beside windows. The set is pkg/config's
 //     (CheckInput.ScheduleNulls).
 //
+//  11. Values /metrics does not serve as written (#2065; see
+//     value_not_served.go), error: a tenant value that is not a number the
+//     exporter reads, a schedule window it does not accept, or a subtree
+//     defaults value it refuses. The set is the effective config's
+//     NotServed (CheckInput.ValuesNotServed), the table `da-guard
+//     effective` prints as not_served.
+//
 // Future PRs in the C-12 family:
 //   - PR-4: CLI subcommand `da-tools guard defaults-impact` plus
 //     YAML parsing convenience layer that runs the actual merge
@@ -501,4 +508,12 @@ type CheckInput struct {
 	// null in it (config.ScopedTenants.ScheduleNulls). Each becomes a
 	// schedule_null_value error (#2708); nil skips the check.
 	ScheduleNulls []config.ScheduleNull `json:"-"`
+
+	// ValuesNotServed maps tenant ID → key → why /metrics does not serve
+	// that key as the tenant's effective config shows it
+	// (config.EffectiveConfig.NotServed, filled by ScopeEffective). The
+	// reasons value_unparsed, value_unparsed_dropped, window_invalid and
+	// value_rejected become value_not_served errors for a tenant in
+	// EffectiveConfigs (#2065); nil skips the check.
+	ValuesNotServed map[string]map[string]config.NotServedKey `json:"-"`
 }

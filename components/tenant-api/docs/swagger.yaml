@@ -2129,7 +2129,8 @@ paths:
         names each key whose shown value /metrics does not serve,
         with the exporter's own reason (parse_failed,
         root_defaults_unwrapped, value_rejected, value_unparsed,
-        value_unparsed_dropped, undeliverable, root_null_undeclared)
+        value_unparsed_dropped, window_invalid, undeliverable,
+        root_null_undeclared)
         and the file of the value shown. chain_parse_failed lists the
         defaults_chain files with a syntax error the exporter does not
         read; they are read as empty and the tenant is still answered

@@ -583,7 +583,8 @@ Decision:
    value as written, neither dropped nor rewritten; a value `/metrics` does not serve from the
    sources below is named, per tenant, in `not_served` with its reason (a closed set:
    `parse_failed`, `root_defaults_unwrapped`, `value_rejected`, `value_unparsed`,
-   `value_unparsed_dropped`, `undeliverable`, `root_null_undeclared`) and the file of the value
+   `value_unparsed_dropped`, `undeliverable`, `root_null_undeclared`; [#2065](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/2065)
+   added `window_invalid`: a schedule window the exporter does not accept, which never applies) and the file of the value
    shown: the defaults chain (a file the exporter drops whole, a value the subtree overlay refuses,
    a subtree key that cannot be delivered, a key the root writes as null), a root `_defaults.yaml`
    without its `defaults:` wrapper (judged by the same predicate as da-guard's

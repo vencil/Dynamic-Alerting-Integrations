@@ -59,6 +59,10 @@ type ConfigMetrics struct {
 	// reload that read it.
 	UnreadableFiles  *prometheus.GaugeVec
 	DefaultsUnusable *prometheus.GaugeVec
+	// #2065: state-coded gauge, re-Set on every config commit: the values
+	// of the committed config /metrics does not serve as written, by the
+	// not_served reason (package main's valuesNotServedReasons).
+	ValuesNotServed *prometheus.GaugeVec
 }
 
 // NewConfigMetrics builds a fresh set without registering it.
@@ -165,6 +169,10 @@ func NewConfigMetrics() *ConfigMetrics {
 			Name: "da_config_defaults_unusable",
 			Help: "Number of _defaults.yaml files (either spelling, any level) the exporter cannot use (#2592), by reason: parse_failure (the file does not parse, so its whole defaults block is dropped, ADR-017; re-Set by every config commit) or unreadable (it cannot be statted or read; re-Set by every walk that completes, like da_config_unreadable_files — a walk that itself fails keeps the previous value while ConfigScanFailing fires). A root one drops every tenant's inherited defaults, and every user_threshold series that comes only from them disappears. A _defaults.yaml inside a directory that cannot be listed is not counted (the walk never sees it); that directory is da_config_unreadable_files{reason=\"walk_error\"} (alert ConfigFilesUnreadable, critical). Unlike da_config_parse_failure_total, which moves only when a reload reads the file, this keeps its value for as long as the file stays unusable and returns to 0 once it is usable again; both reasons exist at 0 from the first scrape. Alert: ConfigDefaultsUnusable (> 0 for 10m).",
 		}, []string{"reason"}),
+		ValuesNotServed: prometheus.NewGaugeVec(prometheus.GaugeOpts{
+			Name: "da_config_values_not_served",
+			Help: "Number of threshold values in the committed config that /metrics does not serve as written (#2065), by reason: value_unparsed (a tenant value that is not a number the exporter reads; the platform default is served instead), value_unparsed_dropped (the same for a `_critical`, dimensional or optional_overrides key, which has no default to fall back to: no series is served), window_invalid (a schedule override whose `window:` is not a UTC HH:MM-HH:MM with start different from end; that window never applies) and value_rejected (a subtree _defaults.yaml value that is not threshold-shaped and is the value the tenant is shown; the tenant keeps a shallower level's value). Counted per (tenant, key), for threshold keys only. The verdicts are the resolver's and the build's own, the same ones `da-guard effective` reports as not_served and `da-guard` as value_not_served. State-coded: re-Set on every config commit, so it returns to 0 once the values are fixed; all four reasons exist at 0 from the first scrape. The accompanying WARN (once per change of the set) names tenant, key and reason; `da-guard effective` names the file of each. SUGGESTED alert: > 0 for 10m — no PrometheusRule ships for it.",
+		}, []string{"reason"}),
 	}
 }
 
@@ -189,5 +197,6 @@ func (s *ConfigMetrics) Collectors() []prometheus.Collector {
 		s.ScanFailures,
 		s.UnreadableFiles,
 		s.DefaultsUnusable,
+		s.ValuesNotServed,
 	}
 }

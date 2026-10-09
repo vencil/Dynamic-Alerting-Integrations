@@ -1880,6 +1880,9 @@ class TestTheJsonDocumentCarriesNoInternalBookkeeping:
             # four above: without it the row asserts "no duplicate
             # declaration" about a tree it did not finish reading.
             "tenant_uniqueness",
+            # #2065. Reads the tree through `da-guard effective` under
+            # `--config-dir`, like `profiles`.
+            "values_not_served",
             # #2164. Reads every file under `--config-dir` and skips the
             # ones it cannot parse — same reason as the rows above.
             "yaml_quoting",
