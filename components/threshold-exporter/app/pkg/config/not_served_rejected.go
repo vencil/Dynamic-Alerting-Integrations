@@ -21,10 +21,11 @@ import (
 // profiles, the root carrier) — plus the tenant id. The build's tables the
 // value_rejected verdict reads (RejectedChainValues, ParseFailed of a chain
 // file) are functions of those files' bytes: a chain file's refused keys
-// are its values that are not threshold-shaped, recorded per tenant when
-// that tenant does not set the key itself (under any spelling), and the
-// verdict reads the tenant's own entry only where that file is its winning
-// layer. The zero value is ready; safe for concurrent use.
+// are its values that are not threshold-shaped, whichever tenants are under
+// it, and the verdict reads them only where that file is the tenant's
+// winning layer and the tenant does not set the key itself
+// (FlatBuild.rejectedTenantSets, from its own files). The zero value is
+// ready; safe for concurrent use.
 type RejectedShownCache struct {
 	mu      sync.Mutex
 	entries map[string]rejectedShownEntry
@@ -43,7 +44,7 @@ type rejectedShownEntry struct {
 // give, from the same resolver (effectiveResolver.resolve →
 // servedVerdicts.notServed, keySources' winner attribution). Nothing is
 // re-judged here: a tenant is resolved when its defaults chain holds a file
-// of its built.RejectedChainValues entry (no other tenant can be named
+// of built.RejectedChainValues (no other tenant can be named
 // value_rejected), or when a file its resolve reads re-spelled a key
 // (spellingCandidates; no other tenant can be named spelling_duplicate), and
 // the reason is read off the result. Keys are spelled as the resolver keys
@@ -92,7 +93,7 @@ func (c *RejectedShownCache) Shown(scan *TreeScan, built *FlatBuild) map[string]
 		chain := r.chain(filepath.Dir(abs))
 		candidate := spelled[id]
 		for _, p := range chain {
-			if len(built.RejectedChainValues[id][r.rel(p)]) > 0 {
+			if len(built.RejectedChainValues[r.rel(p)]) > 0 {
 				candidate = true
 				break
 			}
