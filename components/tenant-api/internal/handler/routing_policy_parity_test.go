@@ -190,6 +190,14 @@ func TestTenantAPI_RoutingPolicyParityMatrix(t *testing.T) {
 					if !os.IsNotExist(statErr) {
 						t.Errorf("refused PUT wrote %s (err=%v)", own, statErr)
 					}
+				case "503": // hub #2486 Q7-2: a policy file the server cannot use, no last good
+					if code != http.StatusServiceUnavailable || !strings.Contains(resp, CodePolicyUnavailable) {
+						t.Fatalf("status = %d, table says 503 POLICY_UNAVAILABLE; body: %s", code, resp)
+					}
+					if !os.IsNotExist(statErr) {
+						t.Errorf("refused PUT wrote %s (err=%v)", own, statErr)
+					}
+					return
 				case "ok":
 					if code != http.StatusOK {
 						t.Fatalf("status = %d, table says ok; body: %s", code, resp)

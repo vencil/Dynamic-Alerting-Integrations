@@ -4,7 +4,9 @@ package main
 // into `any` refuses; PyYAML and the route generator read it) in a nested
 // `_` file the exporter never reads is not exit 3. A subtree domain policy
 // or routing-profiles file is judged as the root one is — by the routing
-// loader, as `_unusable` — and a file no reader consumes is not reported.
+// loader: a routing-profiles file as `_unusable`, a domain policy read as
+// the generator reads it (None; hub #2486 PR-7c round 2: before, it too was
+// `_unusable`) — and a file no reader consumes is not reported.
 // The subtree defaults carrier, which the exporter does read, stays exit 3;
 // syntax damage stays exit 3 whatever the file. served-values takes the
 // same parse_failed list.
@@ -25,7 +27,7 @@ func TestRun_NestedFileTheExporterDoesNotReadIsNotExitThree(t *testing.T) {
 		failed           []string
 		finding          string // a "kind field" prefix that must be present; "" = no finding at all
 	}{
-		{"subtree domain policy", "team/_domain_policy.yaml", policy, exitFindings, nil, "domain_policy_unusable team/_domain_policy.yaml"},
+		{"subtree domain policy", "team/_domain_policy.yaml", policy, exitOK, nil, ""},
 		{"subtree routing profiles", "team/_routing_profiles.yaml", profiles, exitOK, nil, "routing_profiles_unusable team/_routing_profiles.yaml"},
 		{"subtree threshold profiles", "team/_profiles.yaml", "profiles:\n  gold:\n" + tag, exitOK, nil, ""},
 		{"subtree notes", "team/_notes.yaml", "note: !!null x\n", exitOK, nil, ""},
@@ -33,7 +35,7 @@ func TestRun_NestedFileTheExporterDoesNotReadIsNotExitThree(t *testing.T) {
 		{"subtree notes, syntax", "team/_notes.yaml", "note: [1,\n", exitParseFailed, []string{"team/_notes.yaml"}, ""},
 		{"subtree domain policy, syntax", "team/_domain_policy.yaml", "domain_policies: [1,\n", exitParseFailed, []string{"team/_domain_policy.yaml"}, ""},
 		// The root controls this file's behaviour is measured against.
-		{"root domain policy", "_domain_policy.yaml", policy, exitFindings, nil, "domain_policy_unusable _domain_policy.yaml"},
+		{"root domain policy", "_domain_policy.yaml", policy, exitOK, nil, ""},
 		{"root routing profiles", "_routing_profiles.yaml", profiles, exitOK, nil, "routing_profiles_unusable _routing_profiles.yaml"},
 	}
 	for _, tc := range cases {

@@ -79,7 +79,7 @@ func TestPolicyFiles_Spellings(t *testing.T) {
 			}
 			if tc.name == "both, one domain: the .yml's, whole" {
 				// Whole: the tenants list is the .yml's too.
-				if got := snap.Get().DomainPolicies["fin"].Tenants; !reflect.DeepEqual(got, []string{"t-w"}) {
+				if got := []string(snap.Get().DomainPolicies["fin"].Tenants); !reflect.DeepEqual(got, []string{"t-w"}) {
 					t.Errorf("fin tenants = %v, want the .yml's [t-w]", got)
 				}
 			}
@@ -383,9 +383,11 @@ func TestParseConfig_TaggedMergeKeyIsRefused(t *testing.T) {
 		// under a key the policy struct never reads
 		"x: {<<: 5}\ndomain_policies: {fin: {tenants: [t1], constraints: {forbidden_receiver_types: [slack]}}}\n",
 		"x: {a: 1, a: 2}\ndomain_policies: {fin: {tenants: [t1], constraints: {forbidden_receiver_types: [slack]}}}\n",
-		// require_critical_escalation anywhere but domain_policies.<d>
-		// .constraints, or anchored there and aliased (N1): only that one
-		// place is read leniently (#2325)
+		// require_critical_escalation anywhere, or anchored and aliased
+		// (N1); in place under domain_policies.<d>.constraints too (B1,
+		// hub #2486 PR-7c round 2: #2325 read only that place leniently)
+		"domain_policies: {fin: {tenants: [t1], constraints: {require_critical_escalation: <<, forbidden_receiver_types: [slack]}}}\n",
+		"domain_policies: {fin: {tenants: [t1], constraints: {require_critical_escalation: {<<: 5}, forbidden_receiver_types: [slack]}}}\n",
 		"x: {require_critical_escalation: <<}\ndomain_policies: {fin: {tenants: [t1], constraints: {forbidden_receiver_types: [slack]}}}\n",
 		"require_critical_escalation: {<<: 5}\ndomain_policies: {fin: {tenants: [t1], constraints: {forbidden_receiver_types: [slack]}}}\n",
 		"domain_policies: {fin: {tenants: [t1], require_critical_escalation: <<, constraints: {forbidden_receiver_types: [slack]}}}\n",
@@ -409,7 +411,7 @@ func TestParseConfig_TaggedMergeKeyIsRefused(t *testing.T) {
 	} {
 		cfg, err := parseConfig([]byte(src))
 		if err != nil || len(cfg.DomainPolicies) != 1 ||
-			!reflect.DeepEqual(cfg.DomainPolicies["fin"].Constraints.ForbiddenReceiverTypes, []string{"slack"}) {
+			!reflect.DeepEqual([]string(cfg.DomainPolicies["fin"].Constraints.ForbiddenReceiverTypes), []string{"slack"}) {
 			t.Errorf("parseConfig(%q) = %+v, %v; want fin forbidding slack", src, cfg, err)
 		}
 	}
@@ -422,7 +424,7 @@ func TestParseConfig_TaggedMergeKeyIsRefused(t *testing.T) {
 		"domain_policies:\n  fin:\n    tenants:\n    - t1\n    - <<\n    constraints: {forbidden_receiver_types: [slack]}\n": {"t1", "<<"},
 	} {
 		cfg, err := parseConfig([]byte(src))
-		if err != nil || !reflect.DeepEqual(cfg.DomainPolicies["fin"].Tenants, want) {
+		if err != nil || !reflect.DeepEqual([]string(cfg.DomainPolicies["fin"].Tenants), want) {
 			t.Errorf("parseConfig(%q) = %+v, %v; want fin for %v", src, cfg, err, want)
 		}
 	}

@@ -14,11 +14,13 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"regexp"
 	"runtime"
 	"strings"
 	"testing"
 	"time"
 
+	"github.com/vencil/threshold-exporter/pkg/pyyamlcompat"
 	"gopkg.in/yaml.v3"
 )
 
@@ -27,7 +29,6 @@ type taggedScalarRow struct {
 	Refused string `json:"refused"`
 	Type    string `json:"type"`
 	Bool    *bool  `json:"bool"`
-	GoBlind string `json:"go_blind"` // yaml.v3 cannot tell this row apart
 }
 
 func TestDecodePyYAML_MatchesPyYAMLOracle(t *testing.T) {
@@ -51,10 +52,9 @@ func TestDecodePyYAML_MatchesPyYAMLOracle(t *testing.T) {
 	if len(m.Rows) == 0 {
 		t.Fatal("matrix has no rows — a vacuous table passes nothing")
 	}
+	// No row is skipped: the non-specific tag `!` on a quoted or block
+	// scalar (`! "true"`) reaches Go as Tag "!" (vendored yaml.v3, #2730 §6).
 	for _, row := range m.Rows {
-		if row.GoBlind != "" {
-			continue // see the matrix _comment and pyyaml.go's header
-		}
 		var doc yaml.Node
 		var v any
 		err := yaml.Unmarshal([]byte("a: "+row.Source+"\n"), &doc)
@@ -161,4 +161,69 @@ func TestDecodePyYAML_CollectionRefusedOneLevel(t *testing.T) {
 			t.Errorf("%q: DecodePyYAML = %#v, %v; want a non-bool, no error", src, v, err)
 		}
 	}
+}
+
+// pyResolveEveryPattern is pyResolve before its first-character skip (R3-F1):
+// every pattern tried, in PyYAML's order.
+func pyResolveEveryPattern(v string) string {
+	if _, ok := yaml11Bools[v]; ok {
+		return "!!bool"
+	}
+	if cut, ok := strings.CutSuffix(v, "\n"); ok && cut != "" {
+		if _, ok := yaml11Bools[cut]; ok {
+			return "!!bool"
+		}
+	}
+	match := func(re *regexp.Regexp) bool { return pyyamlcompat.PyMatch(re, v) }
+	switch {
+	case match(pyFloatRe):
+		return "!!float"
+	case match(pyIntRe):
+		return "!!int"
+	case pyyamlcompat.Resolve(v) == pyyamlcompat.TagMerge:
+		return "!!merge"
+	case match(pyNullRe):
+		return "!!null"
+	case match(pyTimestampImplRe):
+		return "!!timestamp"
+	case pyyamlcompat.Resolve(v) == pyyamlcompat.TagValue:
+		return "!!value"
+	case pyyamlcompat.Resolve(v) == pyyamlcompat.TagYAML:
+		return "!!yaml"
+	}
+	return "!!str"
+}
+
+// TestPyResolveSkipsNoMatch (R3-F1): pyResolve's first-character skip and
+// decimal shortcut give every pattern's answer — on every string of up to
+// three characters over the patterns' own characters (each also with a
+// final "\n"), and on longer values each pattern matches.
+func TestPyResolveSkipsNoMatch(t *testing.T) {
+	t.Parallel()
+	alphabet := []string{"", "0", "1", "8", "-", ".", "_", ":", "e", "x", "n", "N", "~", "<", "=", "*", " "}
+	values := []string{"2001-12-14", "2001-12-14t21:59:43.10-05:00", "2001-12-14 21:59:43.10 Z",
+		"1_000", "0x1F", "0b101", "0o17", "017", "089", "190:20:30", "1:20.5", ".inf", "-.Inf", ".NaN",
+		"6.8523015e+5", "685_230.15", "null", "Null", "NULL", "nULL", "<<", "<<<", "==", "yes", "On",
+		"1234567890", "0123", "00", "12a", "1.", "+1", "-0", "\n", "~\n", "1\n", "1.0\n", "<<\n",
+		"!", "&", "*", "=", "~", "+.5", "+0b1", "-0x1"}
+	for _, a := range alphabet {
+		for _, b := range alphabet {
+			for _, c := range alphabet {
+				values = append(values, a+b+c)
+			}
+		}
+	}
+	seen := map[string]bool{}
+	for _, v := range values {
+		for _, v := range []string{v, v + "\n"} {
+			if seen[v] {
+				continue
+			}
+			seen[v] = true
+			if got, want := pyResolve(v), pyResolveEveryPattern(v); got != want {
+				t.Errorf("pyResolve(%q) = %s; every pattern tried: %s", v, got, want)
+			}
+		}
+	}
+	t.Logf("%d values", len(seen))
 }

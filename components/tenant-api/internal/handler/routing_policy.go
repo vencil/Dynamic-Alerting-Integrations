@@ -84,6 +84,34 @@ func touchesRouting(op BatchOperation) bool {
 	return false
 }
 
+// readsPolicy reports whether the domain policy judges batch op: it writes
+// the flat `_routing_receiver_type` (CheckWrite) or touches routing
+// (touchesRouting). Only such an op is refused while the policy is
+// unavailable (hub #2486 Q7-2); an unrelated write goes through.
+func readsPolicy(op BatchOperation) bool {
+	_, flat := op.Patch["_routing_receiver_type"]
+	return flat || touchesRouting(op)
+}
+
+// batchPolicyUnavailable is the direct-mode batch gate (hub #2486 Q7-2): the
+// error policy.Manager.RefusesWrites returns when some op reads the policy
+// and the policy is unavailable (and --policy-unavailable-open is off), else
+// nil. It lets nothing through on its own account and counts nothing: under
+// --policy-unavailable-open each op is let through, logged and counted once
+// by executeBatchOps' per-op gate (batchOpPolicyUnavailable), so
+// tenant_api_policy_unavailable_open_total counts writes, not requests.
+func batchPolicyUnavailable(mgr *policy.Manager, ops []BatchOperation) error {
+	if mgr == nil {
+		return nil
+	}
+	for _, op := range ops {
+		if readsPolicy(op) {
+			return mgr.RefusesWrites()
+		}
+	}
+	return nil
+}
+
 // applyBatchEdit lays one op over a tenant block as mergePatchYAML lays it
 // over the file: its patch keys set, then its unset keys removed (the two
 // are disjoint — validateBatchEdit).

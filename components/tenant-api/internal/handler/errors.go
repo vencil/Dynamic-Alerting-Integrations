@@ -116,7 +116,38 @@ const (
 	// neither reads nor replaces such an entry, so the answer is immediate
 	// and names the reason instead of waiting on the file.
 	CodeTenantConfigNotLoadable = "TENANT_CONFIG_NOT_LOADABLE"
+	// CodePolicyUnavailable marks an HTTP 503 from a direct-mode write that
+	// reads the domain policy (PUT /tenants/{id}, a routing op of a tenant or
+	// group batch) while a `_domain_policy.yaml` / `.yml` is present but
+	// cannot be used and has no last good content (hub #2486 Q7-2,
+	// policy.Manager.CheckAvailable). Nothing was written; the write succeeds
+	// once the file is repaired (or removed). Also carried per op on a
+	// direct-mode async batch (BatchResult.Code), judged at execution time.
+	CodePolicyUnavailable = "POLICY_UNAVAILABLE"
 )
+
+// policyUnavailableRetryAfterS is the Retry-After hint (seconds) on the
+// POLICY_UNAVAILABLE 503: the policy watcher re-reads the files on this
+// order of time (--reload-interval's default), so a repaired file is picked
+// up by then.
+const policyUnavailableRetryAfterS = 30
+
+// msgPolicyUnavailable is the fixed client text of a POLICY_UNAVAILABLE
+// refusal; the file and the reason go to the log only.
+const msgPolicyUnavailable = "the domain policy file cannot be read or parsed and has no last good version, " +
+	"so writes that the domain policy judges are refused; nothing was written — repair the policy file and retry"
+
+// writePolicyUnavailable renders the POLICY_UNAVAILABLE 503 (see
+// CodePolicyUnavailable).
+func writePolicyUnavailable(w http.ResponseWriter, r *http.Request, err error) {
+	slog.Warn("write refused: domain policy unavailable (hub #2486 Q7-2)", "error", err)
+	w.Header().Set("Retry-After", strconv.Itoa(policyUnavailableRetryAfterS))
+	WriteErrorEnvelope(w, r, http.StatusServiceUnavailable, ErrorResponse{
+		Error:       msgPolicyUnavailable,
+		Code:        CodePolicyUnavailable,
+		RetryAfterS: policyUnavailableRetryAfterS,
+	})
+}
 
 // writeTenantFileNotRegular answers a request about a tenant whose conf.d
 // entry is not a regular file (confd.ErrNotRegularFile, #2477). Same code and

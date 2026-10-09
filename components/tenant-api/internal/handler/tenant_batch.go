@@ -53,8 +53,10 @@ type BatchResult struct {
 	// failure classes a client is expected to branch on: TENANT_DECLARED_ELSEWHERE
 	// (the per-op form of the 409 that PUT and the PR-mode batch return),
 	// TENANT_CONFIG_NOT_LOADABLE (the tenant file cannot be loaded as a tenant
-	// config, #2373; nothing written) and INTERNAL_ERROR (the conf.d walk behind that check could not run; nothing
-	// written). Empty for every other failure and for a successful op.
+	// config, #2373; nothing written), INTERNAL_ERROR (the conf.d walk behind that check could not run; nothing
+	// written) and POLICY_UNAVAILABLE (direct mode: the op is one the domain policy judges and a policy file is
+	// present but unusable with no last good version; nothing written). Empty for every other failure and for a
+	// successful op.
 	Code string `json:"code,omitempty"`
 	// Warnings carries non-blocking advisories for an op that SUCCEEDED
 	// (#1231 deprecated-key alias notices from the direct WriteMerged path,
@@ -109,7 +111,7 @@ type BatchResponse struct {
 // @Failure     409  {object} ErrorResponse "PR write-back mode: a tenant in the batch is already declared by another conf.d file (code TENANT_DECLARED_ELSEWHERE), or its config file cannot be loaded as a tenant config (code TENANT_CONFIG_NOT_LOADABLE, with tenant_id and config_error; repair the tenant file itself first); nothing written. Direct mode reports these per op in results[].code instead."
 // @Failure     413  {object} ErrorResponse
 // @Failure     500  {object} ErrorResponse
-// @Failure     503  {object} ErrorResponse
+// @Failure     503  {object} ErrorResponse "Service unavailable: the write plane is busy (WRITE_OVERLOADED) or the forge is degraded (FORGE_UNAVAILABLE); or, in direct mode, an operation writes _routing_receiver_type or touches _routing / _routing_profile while a _domain_policy.yaml / .yml is present but cannot be read or parsed and has no last good version (code POLICY_UNAVAILABLE, Retry-After; nothing written). An async batch is judged again per operation when it runs (results[].code POLICY_UNAVAILABLE)."
 // @Router      /api/v1/tenants/batch [post]
 func BatchTenants(d *Deps) http.HandlerFunc {
 	return func(rw http.ResponseWriter, r *http.Request) {
@@ -164,6 +166,14 @@ func BatchTenants(d *Deps) http.HandlerFunc {
 		// Supports both GitHub PRs and GitLab MRs via platform interfaces.
 		if d.prWritePath() {
 			batchTenantsPRMode(d, rw, r, req, email, p)
+			return
+		}
+
+		// Hub #2486 Q7-2: a direct-mode batch with an op the domain policy
+		// judges is refused whole (503) while the policy is unavailable; an
+		// async one is judged again per op when it runs (executeBatchOps).
+		if err := batchPolicyUnavailable(d.Policy, req.Operations); err != nil {
+			writePolicyUnavailable(rw, r, err)
 			return
 		}
 
@@ -428,6 +438,13 @@ func executeBatchOps(ctx context.Context, w *gitops.Writer, configDir string, op
 		}
 		var advisories []string
 		if policyMgr != nil {
+			// Hub #2486 Q7-2: judged again here, at execution time — an async
+			// batch runs after the request's own check, and the policy file
+			// may have broken in between.
+			if res, refused := batchOpPolicyUnavailable(policyMgr, op); refused {
+				results = append(results, res)
+				continue
+			}
 			violations := policyMgr.CheckWrite(op.TenantID, op.Patch)
 			// nil prior: each op is written before the next one is judged,
 			// and the next one reads the file back.
@@ -451,6 +468,22 @@ func executeBatchOps(ctx context.Context, w *gitops.Writer, configDir string, op
 		results = append(results, result)
 	}
 	return results
+}
+
+// batchOpPolicyUnavailable is executeBatchOps' per-op availability gate (hub
+// #2486 Q7-2): an op the domain policy judges (readsPolicy) is refused with
+// POLICY_UNAVAILABLE while the policy is unavailable; refused reports it.
+func batchOpPolicyUnavailable(mgr *policy.Manager, op BatchOperation) (res BatchResult, refused bool) {
+	if mgr == nil || !readsPolicy(op) {
+		return BatchResult{}, false
+	}
+	err := mgr.CheckAvailable("batch op on tenant " + op.TenantID)
+	if err == nil {
+		return BatchResult{}, false
+	}
+	slog.Warn("batch op refused: domain policy unavailable", "tenant", op.TenantID, "error", err)
+	return BatchResult{TenantID: op.TenantID, Status: "error", Message: msgPolicyUnavailable,
+		Code: CodePolicyUnavailable}, true
 }
 
 // applyPatch applies a single patch operation to a tenant config file.

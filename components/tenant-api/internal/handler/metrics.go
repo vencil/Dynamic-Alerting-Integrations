@@ -155,6 +155,10 @@ func MetricsHandler(w http.ResponseWriter, r *http.Request) {
 	// counter's rate threshold cannot; alert on == 0.
 	writeConfigReloadStateMetrics(w)
 
+	// Hub #2486 Q7-2: domain policy availability (direct-mode writes the policy
+	// judges answer 503 while it is 0) and the escape hatch's pass-throughs.
+	writePolicyAvailabilityMetrics(w)
+
 	// ADR-022 Layer 2 tripwire: 1 ⇒ --dev-bypass-auth is ON (LOCAL DEV ONLY).
 	// MUST be 0 in production; alert if 1 outside a dev/compose environment.
 	devBypass := 0

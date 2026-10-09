@@ -8,9 +8,9 @@ package routingpolicy
 // pinned row by row against PyYAML itself by
 // tests/shared/pyyaml_tagged_scalar_matrix.json.
 //
-// The one thing a yaml.Node cannot tell apart is the non-specific tag `!` on
-// a quoted or block scalar: PyYAML resolves `! 'yes'` as if it were plain
-// (True), while yaml.v3 drops the tag and keeps a quoted string.
+// The non-specific tag `!` on a quoted or block scalar: PyYAML resolves
+// `! 'yes'` as if it were plain (True). The vendored yaml.v3 keeps that tag
+// on the node (Tag "!", #2730 §6), so pyTag resolves its text as PyYAML does.
 
 import (
 	"fmt"
@@ -44,33 +44,69 @@ var (
 		`(?:[ \t]*(?:Z|([-+])([0-9][0-9]?)(?::([0-9][0-9]))?))?)?\n?$`)
 )
 
-// pyResolve is the tag PyYAML's resolver gives a plain scalar.
+// pyResolve is the tag PyYAML's resolver gives a plain scalar — or one
+// written with the non-specific tag `!`, whose text may end in a newline:
+// Python's `$` matches before a final "\n" too (pyyamlcompat.PyMatch).
 func pyResolve(v string) string {
 	if _, ok := yaml11Bools[v]; ok {
 		return "!!bool"
 	}
+	if cut, ok := strings.CutSuffix(v, "\n"); ok && cut != "" {
+		if _, ok := yaml11Bools[cut]; ok {
+			return "!!bool" // and construct_yaml_bool then refuses the text
+		}
+	}
+	match := func(re *regexp.Regexp) bool { return pyyamlcompat.PyMatch(re, v) }
+	// Each pattern can only match a value starting with one of the
+	// characters it begins with (PyYAML indexes its resolvers by that first
+	// character too), and the "\n"-cut text PyMatch also tries starts with
+	// the same one; every float alternative has a ".". So a pattern whose
+	// first characters v does not start with is not run: the same answer
+	// (TestPyResolveSkipsNoMatch), without a regexp match per node — whose
+	// allocation -race magnifies past the merge-chain test's ceiling
+	// (R3-F1). A plain decimal like "1" is an int without one.
+	first := func(set string) bool { return v != "" && strings.IndexByte(set, v[0]) >= 0 }
 	switch {
-	case pyFloatRe.MatchString(v):
+	case first("-+.0123456789") && strings.IndexByte(v, '.') >= 0 && match(pyFloatRe):
 		return "!!float"
-	case pyIntRe.MatchString(v):
+	case pyDecimal(v) || first("-+0123456789") && match(pyIntRe):
 		return "!!int"
-	case v == "<<":
+	case first("<") && pyyamlcompat.Resolve(v) == pyyamlcompat.TagMerge:
 		return "!!merge"
-	case pyNullRe.MatchString(v):
+	case (v == "" || first("~nN")) && match(pyNullRe):
 		return "!!null"
-	case pyTimestampImplRe.MatchString(v):
+	case first("0123456789") && match(pyTimestampImplRe):
 		return "!!timestamp"
-	case v == "=":
+	case first("=") && pyyamlcompat.Resolve(v) == pyyamlcompat.TagValue:
 		return "!!value"
-	case v == "!" || v == "&" || v == "*":
+	case first("!&*") && pyyamlcompat.Resolve(v) == pyyamlcompat.TagYAML:
 		return "!!yaml"
 	}
 	return "!!str"
 }
 
+// pyDecimal reports whether v is "0" or a run of ASCII digits not starting
+// with 0: pyIntRe's `[-+]?(?:0|[1-9][0-9_]*)` matches it, and with no "."
+// pyFloatRe cannot — so pyResolve's answer is !!int, found without a regexp.
+func pyDecimal(v string) bool {
+	if v == "" || (v[0] == '0' && len(v) > 1) {
+		return false
+	}
+	for i := 0; i < len(v); i++ {
+		if v[i] < '0' || v[i] > '9' {
+			return false
+		}
+	}
+	return true
+}
+
 // pyTag is the tag PyYAML constructs scalar n with: the explicit one, else
+// the resolved one for a scalar written with the non-specific tag `!`, else
 // !!str for a quoted or block scalar, else the resolved one.
 func pyTag(n *yaml.Node) string {
+	if n.Tag == pyyamlcompat.NonSpecificTag {
+		return pyResolve(n.Value)
+	}
 	if n.Style&yaml.TaggedStyle != 0 {
 		return n.ShortTag()
 	}
@@ -110,6 +146,28 @@ func pyScalar(n *yaml.Node) (v any, other bool, err error) {
 		return nil, false, fmt.Errorf("PyYAML cannot read %q as %s", n.Value, tag)
 	}
 	return nil, true, nil
+}
+
+// pyBuildError is PyYAML's refusal, if any, to build node n itself where the
+// route generator's loader constructs it (hub #2486 PR-7c round 2): a scalar
+// by pyScalar (a tag with no constructor — `!!value`, `!!yaml`, `!custom`,
+// `!!merge`, a `! "="` — or one whose constructor rejects the text: `!!int
+// x`, `!!bool maybe`, a plain `2001-13-01`), a collection by pyCollection
+// (its own tag — `!!merge {…}`, `!!null {}`, `!!bool [true]` — and its
+// direct children's shape). nil for an alias's absent target. One node, no
+// recursion: the caller walks the nodes PyYAML builds.
+func pyBuildError(n *yaml.Node) error {
+	if n = deref(n); n == nil {
+		return nil
+	}
+	switch n.Kind {
+	case yaml.ScalarNode:
+		_, _, err := pyScalar(n)
+		return err
+	case yaml.MappingNode, yaml.SequenceNode:
+		return pyCollection(n)
+	}
+	return nil
 }
 
 // pyCollection is safe_load's refusal, if any, of collection n judged ONE

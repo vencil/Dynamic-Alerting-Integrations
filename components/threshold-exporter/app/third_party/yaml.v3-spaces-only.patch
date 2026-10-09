@@ -1,0 +1,273 @@
+--- a/yaml.go
++++ b/yaml.go
+@@ -109,10 +109,19 @@ func NewDecoder(r io.Reader) *Decoder {
+ // exist as fields in the struct being decoded into.
+ func (dec *Decoder) KnownFields(enable bool) {
+ 	dec.knownFields = enable
+ }
+ 
++// SpacesOnly makes the decoder scan as PyYAML's scanner does: a space is the
++// only separator between tokens, so a TAB outside a quoted scalar, a comment
++// or a block scalar is an error, a directive's parts must be separated by
++// spaces, and a %YAML directive's version must be followed by a space or a
++// line break. Off by default. Call it before the first Decode.
++func (dec *Decoder) SpacesOnly(enable bool) {
++	dec.parser.parser.spaces_only = enable
++}
++
+ // Decode reads the next YAML-encoded value from its input
+ // and stores it in the value pointed to by v.
+ //
+ // See the documentation for Unmarshal for details about the
+ // conversion of YAML into a Go value.
+--- a/yamlh.go
++++ b/yamlh.go
+@@ -610,10 +610,12 @@ func (ps yaml_parser_state_t) String() s
+ 	stream_start_produced bool // Have we started to scan the input stream?
+ 	stream_end_produced   bool // Have we reached the end of the input stream?
+ 
+ 	flow_level int // The number of unclosed '[' and '{' indicators.
+ 
++	spaces_only bool // Take only ' ' as a separator, as PyYAML does (Decoder.SpacesOnly).
++
+ 	tokens          []yaml_token_t // The tokens queue.
+ 	tokens_head     int            // The head of the tokens queue.
+ 	tokens_parsed   int            // The number of tokens fetched from the queue.
+ 	token_available bool           // Does the tokens queue contain a token ready for dequeueing.
+ 
+--- a/scannerc.go
++++ b/scannerc.go
+@@ -500,10 +500,28 @@
+ //      BLOCK-ENTRY
+ //      SCALAR("item 2",plain)
+ //      BLOCK-END
+ //
+ 
++// is_separator is is_blank at buffer position i, but only a space when
++// parser.spaces_only is set (Decoder.SpacesOnly): PyYAML's scanner takes
++// a TAB as a separator nowhere outside quotes, comments and block scalars.
++func is_separator(parser *yaml_parser_t, i int) bool {
++	if parser.spaces_only {
++		return is_space(parser.buffer, i)
++	}
++	return is_blank(parser.buffer, i)
++}
++
++// is_separatorz is is_blankz, or is_spacez when parser.spaces_only is set.
++func is_separatorz(parser *yaml_parser_t, i int) bool {
++	if parser.spaces_only {
++		return is_spacez(parser.buffer, i)
++	}
++	return is_blankz(parser.buffer, i)
++}
++
+ // Ensure that the buffer contains the required number of characters.
+ // Return true on success, false on failure (reader error or memory error).
+ func cache(parser *yaml_parser_t, length int) bool {
+ 	// [Go] This was inlined: !cache(A, B) -> unread < B && !update(A, B)
+ 	return parser.unread >= length || yaml_parser_update_buffer(parser, length)
+@@ -1553,11 +1571,11 @@ func yaml_parser_scan_to_next_token(pars
+ 		//  after '-', '?', or ':' (complex value).
+ 		if parser.unread < 1 && !yaml_parser_update_buffer(parser, 1) {
+ 			return false
+ 		}
+ 
+-		for parser.buffer[parser.buffer_pos] == ' ' || ((parser.flow_level > 0 || !parser.simple_key_allowed) && parser.buffer[parser.buffer_pos] == '\t') {
++		for parser.buffer[parser.buffer_pos] == ' ' || (!parser.spaces_only && (parser.flow_level > 0 || !parser.simple_key_allowed) && parser.buffer[parser.buffer_pos] == '\t') {
+ 			skip(parser)
+ 			if parser.unread < 1 && !yaml_parser_update_buffer(parser, 1) {
+ 				return false
+ 			}
+ 		}
+@@ -1676,11 +1694,11 @@ func yaml_parser_scan_directive(parser *
+ 	// Eat the rest of the line including any comments.
+ 	if parser.unread < 1 && !yaml_parser_update_buffer(parser, 1) {
+ 		return false
+ 	}
+ 
+-	for is_blank(parser.buffer, parser.buffer_pos) {
++	for is_separator(parser, parser.buffer_pos) {
+ 		skip(parser)
+ 		if parser.unread < 1 && !yaml_parser_update_buffer(parser, 1) {
+ 			return false
+ 		}
+ 	}
+@@ -1744,11 +1762,11 @@ func yaml_parser_scan_directive_name(par
+ 			start_mark, "could not find expected directive name")
+ 		return false
+ 	}
+ 
+ 	// Check for an blank character after the name.
+-	if !is_blankz(parser.buffer, parser.buffer_pos) {
++	if !is_separatorz(parser, parser.buffer_pos) {
+ 		yaml_parser_set_scanner_error(parser, "while scanning a directive",
+ 			start_mark, "found unexpected non-alphabetical character")
+ 		return false
+ 	}
+ 	*name = s
+@@ -1763,11 +1781,11 @@ func yaml_parser_scan_directive_name(par
+ func yaml_parser_scan_version_directive_value(parser *yaml_parser_t, start_mark yaml_mark_t, major, minor *int8) bool {
+ 	// Eat whitespaces.
+ 	if parser.unread < 1 && !yaml_parser_update_buffer(parser, 1) {
+ 		return false
+ 	}
+-	for is_blank(parser.buffer, parser.buffer_pos) {
++	for is_separator(parser, parser.buffer_pos) {
+ 		skip(parser)
+ 		if parser.unread < 1 && !yaml_parser_update_buffer(parser, 1) {
+ 			return false
+ 		}
+ 	}
+@@ -1787,10 +1805,14 @@ func yaml_parser_scan_version_directive_
+ 
+ 	// Consume the minor version number.
+ 	if !yaml_parser_scan_version_directive_number(parser, start_mark, minor) {
+ 		return false
+ 	}
++	if parser.spaces_only && !is_spacez(parser.buffer, parser.buffer_pos) {
++		return yaml_parser_set_scanner_error(parser, "while scanning a %YAML directive",
++			start_mark, "did not find expected whitespace or line break")
++	}
+ 	return true
+ }
+ 
+ const max_number_length = 2
+ 
+@@ -1843,11 +1865,11 @@ func yaml_parser_scan_tag_directive_valu
+ 	// Eat whitespaces.
+ 	if parser.unread < 1 && !yaml_parser_update_buffer(parser, 1) {
+ 		return false
+ 	}
+ 
+-	for is_blank(parser.buffer, parser.buffer_pos) {
++	for is_separator(parser, parser.buffer_pos) {
+ 		skip(parser)
+ 		if parser.unread < 1 && !yaml_parser_update_buffer(parser, 1) {
+ 			return false
+ 		}
+ 	}
+@@ -1859,18 +1881,18 @@ func yaml_parser_scan_tag_directive_valu
+ 
+ 	// Expect a whitespace.
+ 	if parser.unread < 1 && !yaml_parser_update_buffer(parser, 1) {
+ 		return false
+ 	}
+-	if !is_blank(parser.buffer, parser.buffer_pos) {
++	if !is_separator(parser, parser.buffer_pos) {
+ 		yaml_parser_set_scanner_error(parser, "while scanning a %TAG directive",
+ 			start_mark, "did not find expected whitespace")
+ 		return false
+ 	}
+ 
+ 	// Eat whitespaces.
+-	for is_blank(parser.buffer, parser.buffer_pos) {
++	for is_separator(parser, parser.buffer_pos) {
+ 		skip(parser)
+ 		if parser.unread < 1 && !yaml_parser_update_buffer(parser, 1) {
+ 			return false
+ 		}
+ 	}
+@@ -1882,11 +1904,11 @@ func yaml_parser_scan_tag_directive_valu
+ 
+ 	// Expect a whitespace or line break.
+ 	if parser.unread < 1 && !yaml_parser_update_buffer(parser, 1) {
+ 		return false
+ 	}
+-	if !is_blankz(parser.buffer, parser.buffer_pos) {
++	if !is_separatorz(parser, parser.buffer_pos) {
+ 		yaml_parser_set_scanner_error(parser, "while scanning a %TAG directive",
+ 			start_mark, "did not find expected whitespace or line break")
+ 		return false
+ 	}
+ 
+@@ -2016,11 +2038,11 @@ func yaml_parser_scan_tag(parser *yaml_p
+ 
+ 	// Check the character which ends the tag.
+ 	if parser.unread < 1 && !yaml_parser_update_buffer(parser, 1) {
+ 		return false
+ 	}
+-	if !is_blankz(parser.buffer, parser.buffer_pos) {
++	if !is_separatorz(parser, parser.buffer_pos) {
+ 		yaml_parser_set_scanner_error(parser, "while scanning a tag",
+ 			start_mark, "did not find expected whitespace or line break")
+ 		return false
+ 	}
+ 
+@@ -2251,11 +2273,11 @@ func yaml_parser_scan_block_scalar(parse
+ 
+ 	// Eat whitespaces and comments to the end of the line.
+ 	if parser.unread < 1 && !yaml_parser_update_buffer(parser, 1) {
+ 		return false
+ 	}
+-	for is_blank(parser.buffer, parser.buffer_pos) {
++	for is_separator(parser, parser.buffer_pos) {
+ 		skip(parser)
+ 		if parser.unread < 1 && !yaml_parser_update_buffer(parser, 1) {
+ 			return false
+ 		}
+ 	}
+@@ -2398,10 +2420,13 @@ func yaml_parser_scan_block_scalar_break
+ 			max_indent = parser.mark.column
+ 		}
+ 
+ 		// Check for a tab character messing the indentation.
+ 		if (*indent == 0 || parser.mark.column < *indent) && is_tab(parser.buffer, parser.buffer_pos) {
++			if parser.spaces_only && *indent == 0 {
++				break // PyYAML: the TAB ends the indentation, which then decides if it is content
++			}
+ 			return yaml_parser_set_scanner_error(parser, "while scanning a block scalar",
+ 				start_mark, "found a tab character where an indentation space is expected")
+ 		}
+ 
+ 		// Have we found a non-empty line?
+@@ -2763,21 +2788,21 @@ func yaml_parser_scan_plain_scalar(parse
+ 				return false
+ 			}
+ 		}
+ 
+ 		// Is it the end?
+-		if !(is_blank(parser.buffer, parser.buffer_pos) || is_break(parser.buffer, parser.buffer_pos)) {
++		if !(is_separator(parser, parser.buffer_pos) || is_break(parser.buffer, parser.buffer_pos)) {
+ 			break
+ 		}
+ 
+ 		// Consume blank characters.
+ 		if parser.unread < 1 && !yaml_parser_update_buffer(parser, 1) {
+ 			return false
+ 		}
+ 
+-		for is_blank(parser.buffer, parser.buffer_pos) || is_break(parser.buffer, parser.buffer_pos) {
+-			if is_blank(parser.buffer, parser.buffer_pos) {
++		for is_separator(parser, parser.buffer_pos) || is_break(parser.buffer, parser.buffer_pos) {
++			if is_separator(parser, parser.buffer_pos) {
+ 
+ 				// Check for tab characters that abuse indentation.
+ 				if leading_blanks && parser.mark.column < indent && is_tab(parser.buffer, parser.buffer_pos) {
+ 					yaml_parser_set_scanner_error(parser, "while scanning a plain scalar",
+ 						start_mark, "found a tab character that violates indentation")
+@@ -2841,11 +2866,11 @@ func yaml_parser_scan_line_comment(parse
+ 
+ 	for peek := 0; peek < 512; peek++ {
+ 		if parser.unread < peek+1 && !yaml_parser_update_buffer(parser, peek+1) {
+ 			break
+ 		}
+-		if is_blank(parser.buffer, parser.buffer_pos+peek) {
++		if is_separator(parser, parser.buffer_pos+peek) {
+ 			continue
+ 		}
+ 		if parser.buffer[parser.buffer_pos+peek] == '#' {
+ 			seen := parser.mark.index+peek
+ 			for {
+@@ -2920,11 +2945,11 @@ func yaml_parser_scan_comments(parser *y
+ 	for ; peek < 512; peek++ {
+ 		if parser.unread < peek+1 && !yaml_parser_update_buffer(parser, peek+1) {
+ 			break
+ 		}
+ 		column++
+-		if is_blank(parser.buffer, parser.buffer_pos+peek) {
++		if is_separator(parser, parser.buffer_pos+peek) {
+ 			continue
+ 		}
+ 		c := parser.buffer[parser.buffer_pos+peek]
+ 		var close_flow = parser.flow_level > 0 && (c == ']' || c == '}')
+ 		if close_flow || is_breakz(parser.buffer, parser.buffer_pos+peek) {

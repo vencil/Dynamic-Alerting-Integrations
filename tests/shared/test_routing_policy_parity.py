@@ -241,7 +241,7 @@ def test_matrix_keys_are_exactly_the_known_ones() -> None:
             api = want["tenant_api"]
             assert api is None or set(api) == TENANT_API_KEYS, (where, api)
             if api is not None:
-                assert api["put"] in ("403", "400", "ok"), where
+                assert api["put"] in ("403", "400", "503", "ok"), where
                 batch = api["batch"]
                 assert batch is None or (BATCH_KEYS <= set(batch) <= BATCH_KEYS | BATCH_OPTIONAL_KEYS
                                          and batch["verdict"] in ("ok", "policy_violation", "400")), where

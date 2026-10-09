@@ -82,7 +82,7 @@ type GroupBatchResponse struct {
 // @Failure     409   {object} ErrorResponse "PR write-back mode: a member is already declared by another conf.d file (code TENANT_DECLARED_ELSEWHERE), or its config file cannot be loaded as a tenant config (code TENANT_CONFIG_NOT_LOADABLE, with tenant_id and config_error; repair the tenant file itself first); nothing written. Direct mode reports these per member in results[].code instead."
 // @Failure     413   {object} ErrorResponse
 // @Failure     500   {object} ErrorResponse
-// @Failure     503   {object} ErrorResponse
+// @Failure     503   {object} ErrorResponse "Service unavailable: the write plane is busy (WRITE_OVERLOADED) or the forge is degraded (FORGE_UNAVAILABLE); or, in direct mode, the patch writes _routing_receiver_type or touches _routing / _routing_profile while a _domain_policy.yaml / .yml is present but cannot be read or parsed and has no last good version (code POLICY_UNAVAILABLE, Retry-After; nothing written). An async run is judged again per member when it runs (results[].code POLICY_UNAVAILABLE)."
 // @Router      /api/v1/groups/{id}/batch [post]
 func GroupBatch(d *Deps) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
@@ -189,6 +189,14 @@ func GroupBatch(d *Deps) http.HandlerFunc {
 				Message:  resp.Message,
 				Warnings: resp.Warnings,
 			})
+			return
+		}
+
+		// Hub #2486 Q7-2: as POST /tenants/batch — refused whole (503) in
+		// direct mode while the domain policy is unavailable, if the patch
+		// is one the policy judges; an async run is judged again per op.
+		if err := batchPolicyUnavailable(d.Policy, ops); err != nil {
+			writePolicyUnavailable(w, r, err)
 			return
 		}
 

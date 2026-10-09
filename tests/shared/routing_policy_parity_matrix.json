@@ -29,8 +29,8 @@
     "unquoted 8 / on / yes), empty (''), duplicate (a label already listed), wildcard_mixed ('...' beside",
     "other labels); a quoted \"8\" is a label name (Alertmanager v0.34.1 validates UTF-8 names). The",
     "generator's --strict ERROR, da-guard's routing_group_by_invalid, tenant-api's 400 for a value the PUT",
-    "body writes (a routing profile's is not judged there; a batch op cannot write a group_by). A repeated '...' alone is not a duplicate (Alertmanager loads ['...', '...']); python_differs",
-    "may carry group_by_invalid for the non-specific `!` tag pyyamlcompat cannot see.",
+    "body writes (a routing profile's is not judged there; a batch op cannot write a group_by). A repeated '...' alone is not a duplicate (Alertmanager loads ['...', '...']).",
+    "The non-specific `!` tag (`! 'yes'`) is read as PyYAML reads it in every reader (#2730 §6).",
     "group_by is judged after {{tenant}} substitution in every reader (tenant `alertname`: [alertname, \"{{tenant}}\"] repeats).",
     "The {{tenant}} shape of _routing_enforced expands over EVERY valid tenant id, routed or not (#2519): a threshold-only or _silent_mode-only tenant is judged too, so every tenant of a tree with one is listed in expect. A tenant whose file body PyYAML does not read as a mapping (a null body) is not loaded by the generator unless a root platform file's entry gives it one, so it is not in that set and not listed.",
     "unknown_profile: the referenced routing profile no profile file defines (WARN), else null.",
@@ -40,7 +40,7 @@
     "tenant_api.put: '403' = PUT of the tenant's own file (files[<tenant>.yaml]) verbatim is refused",
     "with POLICY_VIOLATION; '400' = refused with INVALID_BODY because a receiver the body itself writes",
     "breaks the receiver contract (pkg/receiverspec, #2295) or the body's own _routing carries a values_not_string value (#2431; one from a routing layer is not judged; both checked after the policy, so a",
-    "forbidden type stays '403'); 'ok' = allowed. tenant-api reads _domain_policy.yaml and .yml as the",
+    "forbidden type stays '403'); '503' = refused with POLICY_UNAVAILABLE: a root _domain_policy.yaml / .yml tenant-api cannot use, with no last good version (the server starts on the tree; hub #2486 Q7-2, direct mode); 'ok' = allowed. tenant-api reads _domain_policy.yaml and .yml as the",
     "generator does, and judges the body's block over the root platform overlay (Layers.TenantBlock,",
     "#2486), so an overlay _routing / _routing_profile the body does not replace is judged too.",
     "tenant_api.batch: null, or one patch applied",
@@ -63,7 +63,7 @@
     "A YAML merge key (`<<:`) in a platform tenants.<id> entry is expanded before the keys are read, as every reader's decoder does (#2291); an explicit key wins, earlier sources first.",
     "#2437/#2438 - the same holds in domain_policies, a domain policy, its constraints and routing_profiles, and at a file's top level (a `<<:` there supplies domain_policies / routing_profiles / _routing_defaults / tenants; an explicit key replaces a merged one whole); an alias key names its anchor's text.",
     "#2677 - merge precedence is PyYAML's SafeConstructor.flatten_mapping in the generator and da-guard: a key the mapping writes itself wins; among several merge keys in one mapping (`<<:` beside a tagged `!!merge x:`) the LATER one wins; within one merge sequence (`<<: [*a, *b]`) the EARLIER source wins; a merge source is itself flattened by the same rules first. The trees domain-policy-merge-key-order(-top) pin it; their policy cells are the generator's own --strict lines.",
-    "#2677 R1 - a merge value PyYAML refuses to merge - not a mapping nor a list of mappings (`!!merge q: 5`; `<<: 5` alike, but the exporter's own decode refuses that file, so it is no tree here) - drops the whole file in the generator (its strict \"could not be used\" line) and in da-guard (domain_policy_unusable, field \"\", the finding naming the file alone). tenant-api reads a merge key with yaml.v3's own merge, which differs from the generator's (#2663), and refuses a file with a merge key spelled other than `<<` anywhere in it (DomainPoliciesShapeError; domain-policy-tagged-merge-value-scalar, and domain-policy-merge-key-order t-mo-earlier and t-mo-seq-key, where the generator's verdict is the same). tenant_api is null where its verdict differs from the generator's - domain-policy-merge-key-order-top, domain-policy-merge-anchor-aliased and the other domain-policy-merge-key-order tenants (tenant-api refuses the file: ok).",
+    "#2677 R1 - a merge value PyYAML refuses to merge - not a mapping nor a list of mappings (`!!merge q: 5`; `<<: 5` alike, but the exporter's own decode refuses that file, so it is no tree here) - drops the whole file in the generator (its strict \"could not be used\" line) and in da-guard (domain_policy_unusable, field \"\", the finding naming the file alone). tenant-api reads a merge key with yaml.v3's own merge, which differs from the generator's (#2663), and refuses a file with a merge key spelled other than `<<` anywhere in it (DomainPoliciesShapeError; domain-policy-tagged-merge-value-scalar, and domain-policy-merge-key-order t-mo-earlier and t-mo-seq-key, where the generator's verdict is the same). tenant_api is null where its verdict differs from the generator's - domain-policy-merge-key-order-top, domain-policy-merge-anchor-aliased and the other domain-policy-merge-key-order tenants (tenant-api refuses the file: 503, POLICY_UNAVAILABLE, hub #2486 Q7-2).",
     "escalation (#2325): the ADR-007 require_critical_escalation verdict. null = no domain policy with",
     "`require_critical_escalation: true` lists the tenant, or it has no resolved routing / main receiver",
     "(nothing is judged). Else {verdict, leaks}: verdict 'violation' = severity=critical alerts reach no",
@@ -109,7 +109,7 @@
     "B2 (#2341) - tenant_api.batch may carry `unset` (a list; only '_routing'): the keys the op removes from the tenant's block on disk after its patch is laid over it. Removing `_routing` turns routing back on for a disabled tenant, so the op is judged like one that writes `_routing`: 'policy_violation' when the routing it re-enables breaks the domain policy, 'ok' otherwise.",
     "tenant_ids (#2341 R8, ADR-035): the ids every reader refuses (Python _lib_validation.is_valid_tenant_id, Go routingpolicy.IsValidTenantID) and accepts. The rule is the tenant-config schema's definitions.tenantId, a DNS-1123 label: 1-63 characters of [a-z0-9-], starting and ending with [a-z0-9] - so UPPER, `_`, a leading or trailing `-` and 64 characters are refused. A declared tenant with a refused id makes the generator refuse the WHOLE tree in every mode (ADR-035 D3: rc 1, nothing written); within the tree it renders NOTHING (no route, receiver or inhibit rule): refused 'invalid_tenant_id', targets null - load_tenant_tree's blocking `WARN ... skipping` (--strict: ERROR), da-guard's invalid_tenant_id (Field <file>:tenants.<id>), tenant-api's 400 on a write to that id. schema_search_accepts: ids the schema's `propertyNames` check (Python jsonschema; JSON Schema `pattern` is a SEARCH and Python's `$` matches before a trailing newline) lets through although every decoded-key reader refuses them - the accepted gap ADR-035 D2 names; Python asserts both halves, Go the refusal.",
     "#2341 - a disabling string is decided as _lib_validation.is_disabled decides it: Python str.strip() (U+001C-U+001F are whitespace too) then lower() on the remaining text, which must be ASCII (U+0130 'I with dot' never lowers to 'i'): `\"\\x1coff\"` disables, `\"d\\u0130sable\"` is routing_not_mapping.",
-    "#2659 - `domain_policies: null` (`~`, a bare key) in a _domain_policy.yaml is unusable in every reader: the generator's --strict drops the block (\"domain policy file could not be used\"), da-guard reports domain_policy_unusable (field domain_policies), and tenant-api refuses the file (routingpolicy.DomainPoliciesShapeError, the shape check da-guard applies) - it enforces nothing of it, as before, where it read the block as an empty policy; the difference is on a hot reload, where it now keeps the last good policy (tested in tenant-api, not expressible here)."
+    "#2659 - `domain_policies: null` (`~`, a bare key) in a _domain_policy.yaml is unusable in every reader: the generator's --strict drops the block (\"domain policy file could not be used\"), da-guard reports domain_policy_unusable (field domain_policies), and tenant-api refuses the file (routingpolicy.DomainPoliciesShapeError, the shape check da-guard applies): on a hot reload it keeps the last good policy (tested in tenant-api, not expressible here); with none, as here, direct-mode writes the policy judges answer 503 POLICY_UNAVAILABLE (hub #2486 Q7-2)."
   ],
   "blocking_kinds": [
     "routing_defaults_null_below_root",
@@ -1737,7 +1737,7 @@
           "group_by_invalid": [],
           "unknown_profile": null,
           "tenant_api": {
-            "put": "ok",
+            "put": "503",
             "batch": null
           },
           "python_differs": null,
@@ -1849,7 +1849,7 @@
           "group_by_invalid": [],
           "unknown_profile": null,
           "tenant_api": {
-            "put": "ok",
+            "put": "503",
             "batch": null
           },
           "python_differs": null,
@@ -1922,7 +1922,7 @@
           "group_by_invalid": [],
           "unknown_profile": null,
           "tenant_api": {
-            "put": "ok",
+            "put": "503",
             "batch": null
           },
           "python_differs": null,
@@ -4572,33 +4572,22 @@
           "policy": [],
           "rejected_routes": [],
           "values_not_string": [],
-          "group_by_invalid": [],
+          "group_by_invalid": [
+            [
+              "group_by[1]",
+              "not_string"
+            ],
+            [
+              "group_by[2]",
+              "not_string"
+            ]
+          ],
           "unknown_profile": null,
           "tenant_api": {
-            "put": "ok",
+            "put": "400",
             "batch": null
           },
-          "python_differs": {
-            "reason": "non-specific tag `!` on a quoted scalar: PyYAML resolves `! 'yes'` / `! '5'` as plain (True, 5), yaml.v3 drops the tag and keeps the strings (pyyamlcompat known limitation)",
-            "targets": [
-              {
-                "ref": "receiver",
-                "type": "pagerduty"
-              }
-            ],
-            "policy": [],
-            "rejected_routes": [],
-            "group_by_invalid": [
-              [
-                "group_by[1]",
-                "not_string"
-              ],
-              [
-                "group_by[2]",
-                "not_string"
-              ]
-            ]
-          },
+          "python_differs": null,
           "escalation": null,
           "refused": null
         },
@@ -5526,7 +5515,7 @@
           "group_by_invalid": [],
           "unknown_profile": null,
           "tenant_api": {
-            "put": "ok",
+            "put": "503",
             "batch": null
           },
           "python_differs": null,
