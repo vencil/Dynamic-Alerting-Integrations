@@ -322,7 +322,9 @@ def misread_scalar_violations(rel: str, roots: list, schema: dict,
 def go_rejected_bool_tag_warnings(rel: str, roots: list) -> list[str]:
     """#2509: one WARN per explicit `!!bool` whose text yaml.v3 does not
     accept (`!!bool yes`), any file, any position
-    (`_lib_io.find_go_rejected_bool_tags`)."""
+    (`_lib_io.find_go_rejected_bool_tags`). This lint has no da-guard, so
+    the line points at validate-config, not at a `profiles` row it cannot
+    promise (#2740: none names a `_routing_profiles.yaml`)."""
     return [f"WARN: {rel}:{hit.line}: {hit.message()}"
             for root in roots for hit in find_go_rejected_bool_tags(root)]
 
