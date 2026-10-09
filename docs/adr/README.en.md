@@ -66,7 +66,7 @@ New here? Pick based on your needs:
 | ADR-033 | [與運維執行平面的協同介面 — MariaDB 計畫性作業](./033-ops-execution-plane-interface.md) | ✅ Accepted | — |
 | ADR-034 | [合法值不得同時當作無法辨識時的 fallback](./034-legal-value-as-fallback.md) | ✅ Accepted | — |
 | ADR-035 | [Single Source for the Legal Tenant-ID Character Set](./035-tenant-id-single-source.en.md) | ✅ Accepted | — |
-| ADR-036 | [The Generator Parses conf.d Routing and Policy Once; Go Readers Consume Its Output](./036-single-parser-effective-config.en.md) | 🟡 Proposed | — |
+| ADR-036 | [Routing and Domain-Policy Config Is Parsed Once, by the Generator](./036-single-parser-effective-config.en.md) | 🟡 Proposed | — |
 
 <!-- ADR_INDEX_END -->
 
