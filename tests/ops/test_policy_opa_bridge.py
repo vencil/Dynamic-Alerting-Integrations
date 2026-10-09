@@ -411,13 +411,23 @@ class TestConvertOpaViolations:
         assert v.message == "Policy violation"
         assert v.field == ""
 
-    def test_non_dict_entries_skipped(self):
-        result = pob.convert_opa_violations(
-            ["string-not-dict", None, {"msg": "ok", "tenant": "t"}], 1,
-        )
-        # Only the dict survives.
-        assert len(result.violations) == 1
-        assert result.violations[0].message == "ok"
+    # #2724: these used to be skipped — a set of strings or `severity: null`
+    # reported a pass. An item that cannot be read as a violation is now an
+    # OpaEvalError (main: rc 2), never a guessed severity.
+    @pytest.mark.parametrize("items, needle, got", [
+        (["tenant-a too high"], 'item 0 is not an object', 'got JSON string "tenant-a too high"'),
+        ([{"msg": "ok", "tenant": "t"}, None], "item 1 is not an object", "got JSON null null"),
+        ([[1, 2]], "item 0 is not an object", "got JSON array [1, 2]"),
+        ([{"msg": "m", "severity": None}], "item 0 has a severity that is not a string",
+         "got JSON null null"),
+        ([{"msg": "m", "severity": 2}], "item 0 has a severity that is not a string",
+         "got JSON number 2"),
+    ], ids=["string", "null-item", "array", "severity-null", "severity-number"])
+    def test_item_that_is_not_a_violation_raises(self, items, needle, got):
+        with pytest.raises(pob.OpaEvalError) as ei:
+            pob.convert_opa_violations(items, 1)
+        assert needle in str(ei.value) and got in str(ei.value), str(ei.value)
+        assert '"severity": "error"|"warning"' in str(ei.value)
 
 
 # ---------------------------------------------------------------------------
@@ -745,9 +755,10 @@ def _closed_port() -> int:
 
 
 class _Server:
-    """A local HTTP server answering every POST with a fixed status + body."""
+    """A local HTTP server answering every POST (and GET) with a fixed status,
+    headers and body."""
 
-    def __init__(self, status: int, body: bytes):
+    def __init__(self, status: int, body: bytes, headers: dict | None = None):
         import http.server
         import threading
 
@@ -755,8 +766,12 @@ class _Server:
             def do_POST(self):  # noqa: N802
                 self.rfile.read(int(self.headers.get("Content-Length", 0)))
                 self.send_response(status)
+                for k, v in (headers or {}).items():
+                    self.send_header(k, v)
                 self.end_headers()
                 self.wfile.write(body)
+
+            do_GET = do_POST  # a followed redirect arrives as a GET  # noqa: N815
 
             def log_message(self, *a):
                 pass
@@ -768,6 +783,38 @@ class _Server:
     def close(self):
         self.httpd.shutdown()
         self.httpd.server_close()
+
+
+class _RawServer:
+    """A socket that answers each connection with fixed raw bytes and closes —
+    for responses http.server cannot produce (a bad status line, a body cut
+    short of its Content-Length)."""
+
+    def __init__(self, raw: bytes):
+        import socket
+        import threading
+        self.sock = socket.socket()
+        self.sock.bind(("127.0.0.1", 0))
+        self.sock.listen(4)
+        self.url = f"http://127.0.0.1:{self.sock.getsockname()[1]}"
+
+        def serve():
+            while True:
+                try:
+                    conn, _ = self.sock.accept()
+                except OSError:
+                    return
+                with conn:
+                    conn.settimeout(2)
+                    try:
+                        conn.recv(65536)
+                        conn.sendall(raw)
+                    except OSError:
+                        pass
+        threading.Thread(target=serve, daemon=True).start()
+
+    def close(self):
+        self.sock.close()
 
 
 @pytest.mark.usefixtures("da_guard_env")
@@ -788,16 +835,29 @@ class TestOpaNotEvaluatedIsCallerError:
         assert needle in err, err
         assert "Traceback" not in err
 
-    def test_unreachable_opa_url(self, monkeypatch, capsys, tree):
-        url = f"http://127.0.0.1:{_closed_port()}"
+    @pytest.fixture
+    def refused_url(self):
+        """A port bound but not listening, held for the whole test: a connect
+        is refused, and no other (xdist-parallel) test's server can take the
+        port in between — a port closed before use could be."""
+        import socket
+        s = socket.socket()
+        s.bind(("127.0.0.1", 0))
+        try:
+            yield f"http://127.0.0.1:{s.getsockname()[1]}"
+        finally:
+            s.close()
+
+    def test_unreachable_opa_url(self, monkeypatch, capsys, tree, refused_url):
         rc, out, err = self._run(monkeypatch, capsys,
-                                 ["--config-dir", tree, "--opa-url", url, "--ci"])
+                                 ["--config-dir", tree, "--opa-url", refused_url, "--ci"])
         self._assert_caller_error(rc, out, err, "OPA API call failed")
 
-    def test_unreachable_opa_url_json_leaves_stdout_empty(self, monkeypatch, capsys, tree):
+    def test_unreachable_opa_url_json_leaves_stdout_empty(self, monkeypatch, capsys, tree,
+                                                          refused_url):
         """This tool's caller-error convention: stderr only, no envelope
         (`test_yaml_file_error::test_decorated_tools_leave_stdout_empty_under_json`)."""
-        url = f"http://127.0.0.1:{_closed_port()}"
+        url = refused_url
         rc, out, err = self._run(monkeypatch, capsys,
                                  ["--config-dir", tree, "--opa-url", url, "--json"])
         self._assert_caller_error(rc, out, err, "OPA API call failed")
@@ -808,7 +868,11 @@ class TestOpaNotEvaluatedIsCallerError:
         (200, b"{}", "undefined"),
         (200, b'{"result": {"a": 1}}', "not a set or array"),
         (500, b'{"code": "internal_error"}', "HTTP 500"),
-    ], ids=["garbage", "undefined", "not-a-list", "http-500"])
+        # `violations contains msg if {...}`: a set of strings, not objects.
+        (200, b'{"result": ["tenant-a too high"]}', "violations item 0 is not an object"),
+        (200, b'{"result": [{"msg": "m", "tenant": "tenant-a", "severity": null}]}',
+         "has a severity that is not a string"),
+    ], ids=["garbage", "undefined", "not-a-list", "http-500", "string-set", "severity-null"])
     def test_rest_answer_that_is_not_an_evaluation(self, monkeypatch, capsys, tree,
                                                    status, body, needle):
         srv = _Server(status, body)
@@ -818,6 +882,46 @@ class TestOpaNotEvaluatedIsCallerError:
         finally:
             srv.close()
         self._assert_caller_error(rc, out, err, needle)
+
+    @pytest.mark.parametrize("status", [301, 302, 307])
+    def test_rest_redirect_is_not_followed(self, monkeypatch, capsys, tree, status):
+        """urllib re-sends a 301/302'd POST as a GET without the input; the
+        target here answers `{"result": []}` to anything, so following the
+        redirect would be a pass."""
+        target = _Server(200, b'{"result": []}')
+        hop = _Server(status, b"", {"Location": target.url + "/v1/data/x/violations"})
+        try:
+            rc, out, err = self._run(monkeypatch, capsys,
+                                     ["--config-dir", tree, "--opa-url", hop.url, "--ci"])
+        finally:
+            hop.close()
+            target.close()
+        self._assert_caller_error(rc, out, err, f"HTTP {status} redirect to {target.url}")
+
+    @pytest.mark.parametrize("raw, needle", [
+        (b"NOT-HTTP garbage\r\n\r\n", "BadStatusLine"),
+        (b'HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: 100\r\n\r\n'
+         b'{"result": [', "IncompleteRead"),
+    ], ids=["bad-status-line", "truncated-body"])
+    def test_rest_broken_http_exchange(self, monkeypatch, capsys, tree, raw, needle):
+        srv = _RawServer(raw)
+        try:
+            rc, out, err = self._run(monkeypatch, capsys,
+                                     ["--config-dir", tree, "--opa-url", srv.url, "--ci"])
+        finally:
+            srv.close()
+        self._assert_caller_error(rc, out, err, needle)
+
+    def test_rest_warning_only_is_a_pass_under_ci(self, monkeypatch, capsys, tree):
+        """By design: `--ci` fails on error-level items only."""
+        srv = _Server(200, b'{"result": [{"msg": "soft", "severity": "warning", '
+                           b'"tenant": "tenant-a", "field": "x"}]}')
+        try:
+            rc, out, _ = self._run(monkeypatch, capsys,
+                                   ["--config-dir", tree, "--opa-url", srv.url, "--ci"])
+        finally:
+            srv.close()
+        assert rc == 0 and "soft" in out and "Result: PASS" in out
 
     def test_rest_defined_empty_set_still_passes(self, monkeypatch, capsys, tree):
         srv = _Server(200, b'{"result": []}')
@@ -909,6 +1013,11 @@ def rego_file(tmp_path_factory):
     (d / "thr.rego").write_text(_REGO, encoding="utf-8")
     (d / "broken.rego").write_text("package dynamic_alerting.policy\nviolations contains v if {\n",
                                    encoding="utf-8")
+    # The common rego idiom: a set of message strings, not violation objects.
+    (d / "strings.rego").write_text(
+        "package dynamic_alerting.policy\nimport rego.v1\n"
+        "violations contains msg if {\n  some t\n  input.served[t].mysql_connections > 90\n"
+        '  msg := sprintf("%s too high", [t])\n}\n', encoding="utf-8")
     return d
 
 
@@ -986,6 +1095,17 @@ class TestRealOpa:
             "--config-dir", tree, "--opa-binary", real_opa,
             "--policy-path", str(rego_file / "broken.rego"), "--ci"])
         assert rc == EXIT_CALLER_ERROR and "rego_parse_error" in err, (out, err)
+
+    def test_binary_string_set_is_caller_error(self, monkeypatch, capsys, tmp_path, real_opa,
+                                               rego_file):
+        """`violations contains msg if {...}` evaluates fine in OPA, but its
+        items are strings: rc 2 naming the shape, not a pass (#2724)."""
+        tree = str(_write_tree(tmp_path / "conf.d", _TENANT_VIOLATES))
+        rc, out, err = self._run(monkeypatch, capsys, [
+            "--config-dir", tree, "--opa-binary", real_opa,
+            "--policy-path", str(rego_file / "strings.rego"), "--ci"])
+        assert rc == EXIT_CALLER_ERROR, (out, err)
+        assert 'got JSON string "tenant-a too high"' in err, err
 
     def test_defaults_shape_as_documented(self, monkeypatch, capsys, tmp_path, real_opa):
         """The module docstring: `input.defaults` is the carrier's top-level

@@ -12,12 +12,19 @@ Modes:
       input on stdin)
   --dry-run: Show input JSON without calling OPA
 
-When OPA does not evaluate (#2724) — the server cannot be reached or answers
-an HTTP error, `opa` is missing, fails or times out, the answer is not JSON,
-or `<package>.violations` is undefined (no policy under that package) — the
-tool exits 2 (EXIT_CALLER_ERROR) with one `ERROR:` line on stderr and nothing
-on stdout, `--json` included. It used to report `All policies passed.` rc 0.
-A defined empty `violations` set is a pass.
+When OPA does not evaluate (#2724) — the server cannot be reached, answers
+an HTTP error or a redirect (not followed: urllib would re-send the POST as
+a GET without the input), or breaks the HTTP exchange; `opa` is missing,
+fails or times out; the answer is not JSON; `<package>.violations` is
+undefined (no policy under that package) — or when an item of `violations`
+is not a violation object (a set of strings, `"severity": null`), the tool
+exits 2 (EXIT_CALLER_ERROR) with one `ERROR:` line on stderr and nothing on
+stdout, `--json` included. Each used to report `All policies passed.` rc 0.
+
+When OPA did evaluate, every item is listed in the report; the run passes
+when none is error-level. `--ci` exits 1 only on an error-level item, so a
+`violations` holding only warnings is still rc 0 — a pass with warnings, by
+design. An empty `violations` set is a pass.
 
 OPA Input JSON format:
   {
@@ -82,7 +89,8 @@ import sys
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Optional
-from urllib.request import Request, urlopen
+from http.client import HTTPException
+from urllib.request import HTTPRedirectHandler, Request, build_opener
 from urllib.error import HTTPError
 
 # Pull `try_utf8_stdout` from the shared compat lib at scripts/tools/.
@@ -303,6 +311,23 @@ def _first_lines(text: str, limit: int = 5) -> str:
     return " / ".join(lines[:limit]) + more
 
 
+class _NoRedirect(HTTPRedirectHandler):
+    """Refuse every redirect (#2724): urllib re-sends a redirected POST as a
+    GET without its body, so OPA would evaluate an empty input and answer
+    `[]` — a pass. Returning None makes urllib raise the 3xx as HTTPError."""
+
+    def redirect_request(self, req, fp, code, msg, headers, newurl):  # noqa: D102
+        return None
+
+
+_OPENER = build_opener(_NoRedirect)
+
+
+def urlopen(req: Request, timeout: float):
+    """`urllib.request.urlopen` without following redirects (`_NoRedirect`)."""
+    return _OPENER.open(req, timeout=timeout)  # nosec B310  #see call_opa_rest
+
+
 def _eval_errors(stdout: str, limit: int = 3) -> str:
     """`opa eval --format json`'s `{"errors": [...]}` as one line
     (`code: message (file:row)`); `""` when stdout is not that shape."""
@@ -350,16 +375,28 @@ def call_opa_rest(
         with urlopen(req, timeout=OPA_TIMEOUT_SECONDS) as response:  # nosec B310  #see Request line above
             raw = response.read()
     except HTTPError as e:
+        if 300 <= e.code < 400:
+            # `_NoRedirect`: a followed redirect would arrive as a GET without
+            # the input, and OPA would answer for an empty input.
+            location = e.headers.get("Location", "") if e.headers else ""
+            raise OpaEvalError(
+                f"OPA API call failed: POST {endpoint}: HTTP {e.code} redirect"
+                + (f" to {location}" if location else "")
+                + " (not followed: it would drop the input; point --opa-url at OPA itself)"
+            ) from e
         detail = ""
         try:
             detail = _first_lines(e.read().decode("utf-8", "replace"), 3)
-        except OSError:
+        except (OSError, HTTPException):
             pass
         raise OpaEvalError(
             f"OPA API call failed: POST {endpoint}: HTTP {e.code}"
             + (f": {detail}" if detail else "")) from e
-    except (OSError, ValueError) as e:  # URLError, refused, timeout, bad URL
-        raise OpaEvalError(f"OPA API call failed: POST {endpoint}: {e}") from e
+    except (OSError, ValueError, HTTPException) as e:
+        # URLError, refused, timeout, bad URL; HTTPException: a malformed
+        # status line (BadStatusLine), a body cut short (IncompleteRead), ...
+        raise OpaEvalError(
+            f"OPA API call failed: POST {endpoint}: {type(e).__name__}: {e}") from e
 
     where = f"OPA response from {endpoint}"
     try:
@@ -463,32 +500,59 @@ def convert_opa_violations(
 
     Returns:
         PolicyResult with converted violations
+
+    Raises:
+        OpaEvalError: an item is not a violation object, or its `severity`
+            is not a string (#2724: such items used to be skipped, so a
+            `violations contains msg if {...}` set of strings, or
+            `"severity": null`, reported a pass). A missing `severity` is
+            an error, an unknown severity string is an error; missing
+            `tenant` / `msg` / `field` get their defaults.
     """
     result = PolicyResult(
         tenants_evaluated=tenants_count,
         policy_package="dynamic_alerting.policy",
     )
 
-    for v in opa_violations:
+    expected = ('an object {"msg": ..., "severity": "error"|"warning", '
+                '"tenant": ..., "field": ...}')
+    for i, v in enumerate(opa_violations):
         if not isinstance(v, dict):
-            continue
-
-        try:
-            level = v.get("severity", "error").upper()
-            if level not in ("ERROR", "WARNING"):
-                level = "ERROR"
-
-            violation = Violation(
-                tenant=str(v.get("tenant", "unknown")),
-                level=level,
-                message=str(v.get("msg", "Policy violation")),
-                field=str(v.get("field", "")),
-            )
-            result.violations.append(violation)
-        except (KeyError, AttributeError):
-            continue
+            raise OpaEvalError(
+                f"violations item {i} is not {expected}: got JSON {_json_type(v)} "
+                f"{_preview(v)}")
+        severity = v.get("severity", "error")
+        if not isinstance(severity, str):
+            raise OpaEvalError(
+                f"violations item {i} has a severity that is not a string: got JSON "
+                f"{_json_type(severity)} {_preview(severity)}; expected {expected}")
+        level = severity.upper()
+        if level not in ("ERROR", "WARNING"):
+            level = "ERROR"
+        result.violations.append(Violation(
+            tenant=str(v.get("tenant", "unknown")),
+            level=level,
+            message=str(v.get("msg", "Policy violation")),
+            field=str(v.get("field", "")),
+        ))
 
     return result
+
+
+def _json_type(value: Any) -> str:
+    """The JSON name of `value`'s type, for an error message."""
+    if value is None:
+        return "null"
+    if isinstance(value, bool):
+        return "boolean"
+    if isinstance(value, (int, float)):
+        return "number"
+    return {str: "string", list: "array", dict: "object"}.get(type(value), type(value).__name__)
+
+
+def _preview(value: Any, limit: int = 60) -> str:
+    text = json.dumps(value, ensure_ascii=False, default=str)
+    return text if len(text) <= limit else text[:limit - 3] + "..."
 
 
 # ---------------------------------------------------------------------------
@@ -713,15 +777,14 @@ def main(argv: Optional[list[str]] = None) -> int:
                 args.policy_package,
                 opa_input,
             )
+        result = convert_opa_violations(opa_violations, len(tenant_configs))
     except OpaEvalError as e:
-        # #2724: no evaluation is not a pass. stderr only, stdout empty under
-        # --json too — this tool's caller-error convention (the da-guard and
-        # no-OPA-selected exits above print no envelope either).
+        # #2724: no evaluation (or an answer that is not violations) is not a
+        # pass. stderr only, stdout empty under --json too — this tool's
+        # caller-error convention (the da-guard and no-OPA-selected exits
+        # above print no envelope either).
         print(f"ERROR: {safe_label(str(e))}", file=sys.stderr)
         return EXIT_CALLER_ERROR
-
-    # Convert to PolicyResult
-    result = convert_opa_violations(opa_violations, len(tenant_configs))
 
     # Output
     if args.json_output:
