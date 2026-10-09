@@ -258,23 +258,22 @@ func checkRootCriticalKeys(input CheckInput) []Finding {
 		sort.Strings(keys)
 		for _, k := range keys {
 			base := strings.TrimSuffix(k, "_critical")
-			// A key with a label segment (`x{a="1"}_critical`) is no row at
-			// all (#2031): the two clauses about its own series do not hold.
-			served, fallback := "is served as a threshold of its own (severity=warning), not as", ""
+			// A key with a label segment (`x{a="1"}_critical`) is no row of
+			// its own (#2031): the clauses about its rows do not hold.
+			served, rest := "is not", "."
 			if !strings.Contains(k, "{") {
-				fallback = fmt.Sprintf(" A tenant deleting its own `%s` falls back to this root value only on that "+
-					"separate warning series, never on the critical row, so the tenant's key is not reported "+
-					"redundant against it.", k)
-			} else {
-				served = "is not"
+				served = "is served as a threshold of its own (severity=warning), not as"
+				rest = fmt.Sprintf(": only a tenant's own `%s` (or one a subtree `_defaults.yaml`, a root platform "+
+					"`tenants:` entry or a profile supplies) produces that row. A tenant deleting its own `%s` falls "+
+					"back to this root value only on that separate warning series, never on the critical row, so the "+
+					"tenant's key is not reported redundant against it.", k, k)
 			}
 			out = append(out, Finding{
 				Severity: SeverityWarn,
 				Kind:     FindingRootDefaultsCriticalKey,
 				Field:    f.Name + ":defaults." + k,
-				Message: fmt.Sprintf("%s: `%s` under the conf.d root `defaults:` %s the severity=critical row of `%s`: "+
-					"only a tenant's own `%s` (or one a subtree `_defaults.yaml`, a root platform `tenants:` entry or "+
-					"a profile supplies) produces that row.%s", f.Name, k, served, base, k, fallback),
+				Message: fmt.Sprintf("%s: `%s` under the conf.d root `defaults:` %s the severity=critical row of `%s`%s",
+					f.Name, k, served, base, rest),
 			})
 		}
 	}

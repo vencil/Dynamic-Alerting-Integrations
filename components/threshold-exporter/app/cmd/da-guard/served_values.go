@@ -518,7 +518,7 @@ func servedValues(cfg *config.ThresholdConfig, at time.Time,
 			tv.Unserved[k] = rawScheduledValue(sv)
 		}
 		// #2031: a root dimensional default the tenant does not write is the
-		// tenant's labelled series — unless the exporter cannot parse the key.
+		// tenant's labelled series; one with no row is unserved.
 		for k, v := range cfg.Defaults {
 			canon, _ := config.CanonicalKeyFor(k)
 			_, own := overrides[canon]
