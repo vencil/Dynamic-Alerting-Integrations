@@ -63,8 +63,8 @@ if [ ! -r "$_prepush_dir/_prepush_refs.sh" ]; then
     echo "  Anywhere else it is a stale copy of this guard. The installer replaces a copy" >&2
     echo "  identical to a committed version:" >&2
     echo "    bash scripts/ops/install_prepush_hook.sh" >&2
-    echo "  If it moves the copy to pre-push.chained instead (an edited copy, or history" >&2
-    echo "  too shallow to hold that version), delete the copy by hand." >&2
+    echo "  If it refuses the copy instead (an edited copy, or history too shallow to" >&2
+    echo "  hold that version), delete the copy by hand." >&2
     exit 1
 fi
 . "$_prepush_dir/_prepush_refs.sh"

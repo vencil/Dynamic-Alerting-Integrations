@@ -331,188 +331,110 @@ def test_a_co_pushed_branch_no_longer_hides_main(tmp_path: Path) -> None:
     )
 
 
-def test_an_existing_foreign_hook_is_chained_not_refused(tmp_path: Path) -> None:
+# What `git lfs install` writes (git-lfs 3.x), and the 2.x wording of its check.
+# The installer matches the frame of that check, not its wording.
+_LFS_CHECK = (
+    'command -v git-lfs >/dev/null 2>&1 || {{ echo >&2 "\\nThis repository is '
+    "configured for Git LFS but 'git-lfs' was not found on your path. If you no "
+    "longer wish to use Git LFS, remove this hook by deleting {where}.\\n\"; "
+    "exit 2; }}\n"
+)
+_LFS_HOOKS = {
+    "3.x": "#!/bin/sh\n" + _LFS_CHECK.format(
+        where="the 'pre-push' file in the hooks directory (set by 'core.hookspath'; "
+              "usually '.git/hooks')") + 'git lfs pre-push "$@"\n',
+    "2.x": "#!/bin/sh\n" + _LFS_CHECK.format(where=".git/hooks/pre-push")
+           + 'git lfs pre-push "$@"\n',
+}
+_GIT_LFS = shutil.which("git-lfs")
+
+
+def _hooks_snapshot(work: Path) -> dict:
+    hooks = work / ".git" / "hooks"
+    snap = {}
+    for p in sorted(hooks.iterdir()):
+        if p.is_symlink():
+            snap[p.name] = ("link", os.readlink(p))
+        elif p.is_dir():
+            snap[p.name] = ("dir", sorted(c.name for c in p.iterdir()))
+        elif p.is_file():
+            snap[p.name] = ("file", p.read_bytes(), p.stat().st_mode & 0o777)
+        else:
+            snap[p.name] = ("other",)
+    return snap
+
+
+@pytest.mark.skipif(_GIT_LFS is None, reason="needs git-lfs to upload LFS objects")
+def test_git_lfs_s_hook_is_replaced_and_lfs_objects_still_upload(tmp_path: Path) -> None:
     """A fresh clone of THIS repo already has a pre-push hook: git-lfs's.
 
     `.gitattributes` has `filter=lfs` paths and `git lfs install` is global, so
     `git clone` lands with `.git/hooks/pre-push` running `git lfs pre-push`.
-    An installer that refused to overwrite it would exit 1 — and
-    `make pr-preflight` tells you to run the installer, so the shipped remedy
-    would dead-end on every new clone. `pre-commit install --hook-type
-    pre-push` is no way out either: it migrates lfs's `#!/bin/sh` hook to
-    pre-push.legacy and then every push dies with
-    `ExecutableNotFoundError: /bin/sh` (pre-commit resolves shebangs itself on
-    Windows).
-
-    So the foreign hook is moved aside and still runs — with the same argv and
-    every row of the same stdin, which git-lfs needs. The push carries one row
-    of each kind (a branch the remote has, a new branch, a tag) so that a feed
-    dropping any kind cannot pass, and the rows are compared as a set because
-    git's row order depends on the push shape. The remote path has a space so
-    that an unquoted argv cannot pass either.
+    The installer replaces it and the dispatcher runs `git lfs pre-push`
+    itself (#2746). What matters is the consequence: the LFS object reaches the
+    remote. ⛔ A real push, not `--dry-run`: the object only moves on one.
     """
     work = _make_repo(tmp_path, _PROTECT_ONLY)
-    assert _git(work, "push", "-q", "origin", "HEAD:refs/heads/feat/a").returncode == 0
-    hooks = work / ".git" / "hooks"
-    hooks.mkdir(parents=True, exist_ok=True)
-    # shaped like git-lfs's: /bin/sh, takes <remote> <url>, reads stdin
-    (hooks / "pre-push").write_text(
-        "#!/bin/sh\n"
-        'log="$(git rev-parse --show-toplevel)/foreign.log"\n'
-        'for a; do printf "ARG %s\\n" "$a" >> "$log"; done\n'
-        'while read -r a b c d; do printf "ROW %s\\n" "$c" >> "$log"; done\n'
-        "exit 0\n",
-        encoding="utf-8", newline="\n",
-    )
-    (hooks / "pre-push").chmod(0o755)
-
-    r = _install_guards(work)
-    assert r.returncode == 0, f"installer refused a foreign hook:\n{r.stdout}{r.stderr}"
-    assert (hooks / "pre-push.chained").is_file(), "the foreign hook was not chained"
-    assert "FOREIGN" not in (hooks / "pre-push").read_text(encoding="utf-8"), (
-        "the shim did not take the pre-push slot"
-    )
-
-    # it must still run, and still see every row and its argv unchanged
-    _commit(work, "third")
-    spaced = tmp_path / "remote with space.git"
-    (tmp_path / "remote.git").rename(spaced)
-    assert _git(work, "remote", "set-url", "origin", str(spaced)).returncode == 0
-    assert _git(work, "tag", "v1").returncode == 0
-    pushed, out = _push(work, "HEAD:refs/heads/feat/a", "HEAD:refs/heads/feat/new",
-                        "refs/tags/v1", env_extra=_SIBLINGS_OFF)
-    assert pushed.returncode == 0, out
-    log = work / "foreign.log"
-    assert log.is_file(), f"the chained hook never ran:\n{out}"
-    body = log.read_text(encoding="utf-8")
-    rows = [ln.split(" ", 1)[1] for ln in body.splitlines() if ln.startswith("ROW ")]
-    assert sorted(rows) == ["refs/heads/feat/a", "refs/heads/feat/new", "refs/tags/v1"], (
-        f"the chained hook did not get every row git fed the push: {body!r}")
-    argv = [ln.split(" ", 1)[1] for ln in body.splitlines() if ln.startswith("ARG ")]
-    assert argv == ["origin", str(spaced)], f"the chained hook lost its argv: {body!r}"
-
-    # ⛔ CONTROL: the guards still guard. Without this, a dispatcher that ran
-    # ONLY the chained hook would satisfy everything above.
-    blocked, blocked_out = _push(
-        work, "HEAD:refs/heads/main", env_extra=_SIBLINGS_OFF
-    )
-    assert blocked.returncode != 0 and _BANNER in blocked_out, blocked_out
-
-
-def _push_or_kill(work: Path, *refspecs: str, timeout: int = 30):
-    """`_push`, but a push still running after ``timeout`` is killed with its
-    whole process group and reported as ``None`` — a recursing hook spawns
-    without end, so killing only git would leave the recursion running."""
-    env = {**os.environ, **_SIBLINGS_OFF}
-    p = subprocess.Popen(  # subprocess-timeout: ignore
-        ["git", "push", "--dry-run", "origin", *refspecs], cwd=work, env=env,
-        stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True,
-        encoding="utf-8", errors="replace", start_new_session=True,
-    )
-    try:
-        out, _ = p.communicate(timeout=timeout)
-    except subprocess.TimeoutExpired:
-        os.killpg(p.pid, signal.SIGKILL)
-        out, _ = p.communicate(timeout=10)
-        return None, out
-    return p.returncode, out
-
-
-@pytest.mark.skipif(not hasattr(os, "killpg"),
-                    reason="a recursing push is stopped by killing its process group")
-@pytest.mark.parametrize("header", ["edited", "deleted"])
-def test_a_chained_hook_that_calls_back_into_the_dispatcher_fails_instead_of_recursing(
-    tmp_path: Path, header: str
-) -> None:
-    """#2728: the installer recognises its shim by the header line, so a shim
-    whose header was edited or deleted is taken for someone else's hook and
-    moved to pre-push.chained. The dispatcher then runs it, it runs the
-    dispatcher, and every push — feature branches included — never returns.
-
-    The second half follows the remedy the refusal prints, once.
-    """
-    work = _make_repo(tmp_path, _PROTECT_ONLY)
-    assert _install_guards(work).returncode == 0
+    env = {"GIT_CONFIG_GLOBAL": os.devnull, "GIT_CONFIG_NOSYSTEM": "1"}
+    assert _git(work, "lfs", "install", "--local", env_extra=env).returncode == 0
     hook = work / ".git" / "hooks" / "pre-push"
-    lines = hook.read_text(encoding="utf-8").split("\n")
-    if header == "edited":
-        lines[1] = "# header edited by hand"
-    else:
-        del lines[1]
-    hook.write_text("\n".join(lines), encoding="utf-8", newline="\n")
+    assert "git lfs pre-push" in hook.read_text(encoding="utf-8"), "precondition"
+    assert _git(work, "lfs", "track", "*.bin", env_extra=env).returncode == 0
+    (work / "x.bin").write_bytes(os.urandom(2048))
+    assert _git(work, "add", ".gitattributes", "x.bin", env_extra=env).returncode == 0
+    assert _git(work, "-c", "core.hooksPath=/dev/null", "commit", "-qm", "lfs",
+                env_extra=env).returncode == 0
+    oid = _git(work, "lfs", "ls-files", "--long", env_extra=env).stdout.split()[0]
+
     r = _install_guards(work)
     assert r.returncode == 0, f"{r.stdout}{r.stderr}"
-    chained = hook.with_name("pre-push.chained")
-    assert chained.is_file(), "precondition: the edited shim was not chained"
+    assert "replacing git-lfs's hook" in r.stdout, r.stdout
+    assert not hook.with_name("pre-push.chained").exists()
 
-    rc, out = _push_or_kill(work, "HEAD:refs/heads/feat/x")
-    assert rc is not None, f"the push did not return and was killed:\n{out}"
-    assert rc != 0, f"the recursion was not refused:\n{out}"
-    assert _REENTERED in out, out
-    assert "If it is a copy of the guard shim, delete it." in " ".join(out.split()), out
+    pushed = _git(work, "push", "-q", "origin", "HEAD:refs/heads/feat/lfs",
+                  env_extra={**env, **_SIBLINGS_OFF})
+    assert pushed.returncode == 0, pushed.stdout + pushed.stderr
+    remote = tmp_path / "remote.git" / "lfs" / "objects"
+    uploaded = [p.name for p in remote.rglob("*") if p.is_file()] if remote.exists() else []
+    assert oid in uploaded, f"the LFS object never reached the remote: {uploaded}"
 
-    chained.unlink()
-    feat, feat_out = _push(work, "HEAD:refs/heads/feat/x", env_extra=_SIBLINGS_OFF)
-    assert feat.returncode == 0, f"deleting pre-push.chained did not fix it:\n{feat_out}"
-    main, main_out = _push(work, "HEAD:refs/heads/main", env_extra=_SIBLINGS_OFF)
-    assert main.returncode != 0 and _BANNER in main_out, main_out
-
-
-_REENTERED = "pre-push.chained started a push back into this repository"
+    # ⛔ CONTROL: the guards still guard.
+    blocked, out = _push(work, "HEAD:refs/heads/main", env_extra={**env, **_SIBLINGS_OFF})
+    assert blocked.returncode != 0 and _BANNER in out, out
 
 
-def _chain_a_push(src: Path, dst: Path) -> None:
-    """Make ``src``'s chained hook push ``dst`` — as a hook that publishes to a
-    second repository would."""
-    chained = src / ".git" / "hooks" / "pre-push.chained"
-    chained.write_text(
-        "#!/bin/sh\n"
-        "cat >/dev/null\n"
-        f'cd "{dst.as_posix()}" && git push -q --dry-run origin HEAD:refs/heads/feat/from-chained\n',
-        encoding="utf-8", newline="\n",
-    )
-    chained.chmod(0o755)
-
-
-@pytest.mark.skipif(not hasattr(os, "killpg"),
-                    reason="a recursing push is stopped by killing its process group")
-@pytest.mark.parametrize("back_into_a", [False, True], ids=["a-to-b", "a-to-b-to-a"])
-def test_only_a_push_back_into_the_same_repository_is_refused(
-    tmp_path: Path, back_into_a: bool
-) -> None:
-    """The refusal above must not fire on a chained hook that pushes some
-    OTHER repository guarded by the same dispatcher: that is not recursion.
-    And a push that comes back through that other repository is, so it must
-    still be refused rather than hang."""
-    a = _make_repo(tmp_path / "a", _PROTECT_ONLY)
-    b = _make_repo(tmp_path / "b", _PROTECT_ONLY)
-    for work in (a, b):
-        assert _install_guards(work).returncode == 0
-    _chain_a_push(a, b)
-    if back_into_a:
-        _chain_a_push(b, a)
-
-    rc, out = _push_or_kill(a, "HEAD:refs/heads/feat/x")
-    assert rc is not None, f"the push did not return and was killed:\n{out}"
-    if back_into_a:
-        assert rc != 0 and _REENTERED in out, out
-    else:
-        assert rc == 0 and _REENTERED not in out, out
+@pytest.mark.parametrize("version", sorted(_LFS_HOOKS))
+def test_git_lfs_s_hook_is_recognised_in_either_wording(tmp_path: Path, version: str) -> None:
+    work = _make_repo(tmp_path, _PROTECT_ONLY)
+    hook = work / ".git" / "hooks" / "pre-push"
+    hook.write_text(_LFS_HOOKS[version], encoding="utf-8", newline="\n")
+    hook.chmod(0o755)
+    r = _install_guards(work)
+    assert r.returncode == 0 and "replacing git-lfs's hook" in r.stdout, f"{r.stdout}{r.stderr}"
+    blocked, out = _push(work, "HEAD:refs/heads/main", env_extra=_SIBLINGS_OFF)
+    assert blocked.returncode != 0 and _BANNER in out, out
 
 
 @pytest.mark.parametrize("pre_commit_again", [False, True])
+@pytest.mark.parametrize("legacy", ["none", "template"])
 def test_pre_commit_first_then_the_installer_guards_without_recursing(
-    tmp_path: Path, pre_commit_again: bool
+    tmp_path: Path, pre_commit_again: bool, legacy: str
 ) -> None:
-    """pre-commit's template is replaced, not chained. Chained, the next
-    `pre-commit install --hook-type pre-push` puts the shim behind a second
-    template, the dispatcher calls the chained one, and pre-commit's recursion
-    check fails every push — feature branches included. No pre-push stage in
-    the config, so the banner below can only come from the dispatcher.
+    """pre-commit's template is replaced, never kept to be run later. Kept, the
+    next `pre-commit install --hook-type pre-push` puts the shim behind a
+    second template, and pre-commit's recursion check fails every push —
+    feature branches included. A template in pre-push.legacy is removed for
+    the same reason (#2746). No pre-push stage in the config, so the banner
+    below can only come from the dispatcher.
     """
     work = _make_repo(tmp_path, "repos: []\n")
     _install_precommit(work)
-    assert _install_guards(work).returncode == 0
+    hooks = work / ".git" / "hooks"
+    if legacy == "template":
+        shutil.copy2(hooks / "pre-push", hooks / "pre-push.legacy")
+    r = _install_guards(work)
+    assert r.returncode == 0, f"{r.stdout}{r.stderr}"
+    assert not (hooks / "pre-push.legacy").exists(), r.stdout
     if pre_commit_again:
         _install_precommit(work)
 
@@ -522,61 +444,158 @@ def test_pre_commit_first_then_the_installer_guards_without_recursing(
     assert main.returncode != 0 and _BANNER in main_out, main_out
 
 
-def test_replacing_pre_commits_template_does_not_need_chmod(tmp_path: Path) -> None:
-    """The shim written over pre-commit's template keeps the template's bit.
-    Without `chmod` on PATH the installer must not report that the guards
-    would never run while they do."""
-    work = _make_repo(tmp_path, "repos: []\n")
-    _install_precommit(work)
+def _path_of(tmp_path: Path, *tools: str) -> dict:
     bindir = tmp_path / "bin"
     bindir.mkdir()
-    for tool in ("bash", "git"):
+    for tool in tools:
         symlink_or_skip(shutil.which(tool), bindir / tool)
-    r = subprocess.run(  # subprocess-timeout: ignore
-        [_BASH, "scripts/ops/install_prepush_hook.sh"], cwd=work,
-        env={**os.environ, "PATH": str(bindir)},
+    return {**os.environ, "PATH": str(bindir)}
+
+
+def _run_installer(work: Path, env: dict) -> subprocess.CompletedProcess:
+    return subprocess.run(  # subprocess-timeout: ignore
+        [_BASH, "scripts/ops/install_prepush_hook.sh"], cwd=work, env=env,
         capture_output=True, text=True, encoding="utf-8", errors="replace",
     )
+
+
+@pytest.mark.parametrize("over", ["template", "lfs"])
+def test_replacing_an_executable_hook_does_not_need_chmod(tmp_path: Path, over: str) -> None:
+    """The shim written over pre-commit's template or lfs's hook keeps its bit.
+    Without `chmod` on PATH the installer must not refuse while the guards
+    would run."""
+    work = _make_repo(tmp_path, "repos: []\n")
+    if over == "template":
+        _install_precommit(work)
+    else:
+        hook = work / ".git" / "hooks" / "pre-push"
+        hook.write_text(_LFS_HOOKS["3.x"], encoding="utf-8", newline="\n")
+        hook.chmod(0o755)
+    r = _run_installer(work, _path_of(tmp_path, "bash", "git"))
     assert r.returncode == 0, f"{r.stdout}{r.stderr}"
     pushed, out = _push(work, "HEAD:refs/heads/main", env_extra=_SIBLINGS_OFF)
     assert pushed.returncode != 0 and _BANNER in out, out
 
 
-def test_an_occupied_chained_slot_is_never_overwritten(tmp_path: Path) -> None:
-    """Chaining must refuse rather than destroy whatever already sits there.
+def test_a_new_shim_without_chmod_is_refused_before_anything_is_written(
+    tmp_path: Path,
+) -> None:
+    """#2702: a shim written without its bit is one git skips with only a hint.
+    The refusal names `chmod` and comes before anything is written."""
+    work = _make_repo(tmp_path, "repos: []\n")
+    hook = work / ".git" / "hooks" / "pre-push"
+    hook.unlink(missing_ok=True)
+    before = _hooks_snapshot(work)
+    r = _run_installer(work, _path_of(tmp_path, "bash", "git"))
+    assert r.returncode == 1, f"{r.stdout}{r.stderr}"
+    assert "`chmod` is not on PATH" in r.stderr, r.stderr
+    assert _hooks_snapshot(work) == before
 
-    ⛔ The loss is permanent: `pre-push.chained` is outside version control, so
-    an overwrite drops someone else's hook with no copy anywhere. Without this
-    test the refusal is unheld: mutating `[ -e "$chained" ]` to `false` would
-    leave the suite green.
 
-    Reachable whenever a second hook is written to pre-push after an install
-    has already chained the first (git-lfs, on a fresh clone of this repo).
-    """
+_ODD = ["directory", "symlink-to-nothing", "symlink-to-nothing-in-a-missing-dir",
+        "symlink-to-a-file", "fifo"]
+
+
+@pytest.mark.parametrize("slot", ["pre-push", "pre-push.chained"])
+@pytest.mark.parametrize("odd", _ODD)
+def test_a_slot_that_is_not_a_regular_file_is_refused_and_left_alone(
+    tmp_path: Path, slot: str, odd: str
+) -> None:
+    """#2702: a directory at pre-push was moved aside and broke every push; a
+    symlink to nothing was written through, landing the shim outside the hooks
+    directory. Each is refused by name, nothing changes, and removing it — what
+    the refusal says to do — gets the guards installed."""
     work = _make_repo(tmp_path, _PROTECT_ONLY)
-    hooks = work / ".git" / "hooks"
-    hooks.mkdir(parents=True, exist_ok=True)
-    (hooks / "pre-push").write_text(
-        "#!/bin/sh\nexit 0\n", encoding="utf-8", newline="\n"
-    )
-    (hooks / "pre-push").chmod(0o755)
-    assert _install_guards(work).returncode == 0
-    first = (hooks / "pre-push.chained").read_text(encoding="utf-8")
-
-    # a second, different foreign hook takes the pre-push slot back
-    (hooks / "pre-push").write_text(
-        "#!/bin/sh\n# SECOND\nexit 0\n", encoding="utf-8", newline="\n"
-    )
-    (hooks / "pre-push").chmod(0o755)
+    path = work / ".git" / "hooks" / slot
+    path.unlink(missing_ok=True)
+    target = tmp_path / "elsewhere" / "hook"
+    said = "a symlink to nothing"
+    if odd == "directory":
+        path.mkdir()
+        said = "a directory"
+    elif odd == "symlink-to-nothing":
+        target.parent.mkdir()
+        symlink_or_skip(target, path)
+    elif odd == "symlink-to-nothing-in-a-missing-dir":
+        symlink_or_skip(target, path)
+    elif odd == "symlink-to-a-file":
+        target.parent.mkdir()
+        target.write_text("#!/bin/sh\nexit 0\n", encoding="utf-8")
+        symlink_or_skip(target, path)
+        said = "a symlink"
+    else:
+        if not hasattr(os, "mkfifo"):
+            pytest.skip("no FIFOs here")
+        os.mkfifo(path)
+        said = "not a regular file"
+    target_before = target.read_bytes() if target.exists() else None
+    before = _hooks_snapshot(work)
 
     r = _install_guards(work)
-    assert r.returncode != 0, (
-        "the installer overwrote an occupied chained slot instead of refusing:\n"
-        f"{r.stdout}{r.stderr}"
-    )
-    assert (hooks / "pre-push.chained").read_text(encoding="utf-8") == first, (
-        "the hook already in the chained slot was destroyed"
-    )
+    assert r.returncode == 1, f"{r.stdout}{r.stderr}"
+    assert f"{slot} is {said}." in r.stderr, r.stderr
+    assert _hooks_snapshot(work) == before
+    assert (target.read_bytes() if target.exists() else None) == target_before, (
+        "the installer wrote through the symlink")
+
+    if path.is_dir() and not path.is_symlink():
+        path.rmdir()
+    else:
+        path.unlink()
+    r = _install_guards(work)
+    assert r.returncode == 0, f"removing it, as the refusal says, did not fix it:\n{r.stderr}"
+    blocked, out = _push(work, "HEAD:refs/heads/main", env_extra=_SIBLINGS_OFF)
+    assert blocked.returncode != 0 and _BANNER in out, out
+
+
+_CHAINED_STILL_THERE = "pre-push.chained is still there"
+
+
+@pytest.mark.parametrize("left", ["lfs", "shim-with-edited-header", "shim", "template",
+                                  "lfs-not-executable", "users-own"])
+def test_a_hook_left_in_pre_push_chained_blocks_every_push_until_the_installer_runs(
+    tmp_path: Path, left: str
+) -> None:
+    """Earlier installers moved the hook they found to pre-push.chained and the
+    dispatcher ran it. Nothing runs it now, so a hook left there would stop
+    running without a word. Every push is refused instead, and the remedy
+    printed is followed here once: the installer removes what the shim makes
+    redundant and refuses, unchanged, anything else (#2745, #2746)."""
+    work = _make_repo(tmp_path, _PROTECT_ONLY)
+    assert _install_guards(work).returncode == 0
+    hooks = work / ".git" / "hooks"
+    chained = hooks / "pre-push.chained"
+    shim = (hooks / "pre-push").read_text(encoding="utf-8")
+    body = {
+        "lfs": _LFS_HOOKS["3.x"],
+        "lfs-not-executable": _LFS_HOOKS["3.x"],
+        "shim": shim,
+        "shim-with-edited-header": shim.replace("# vibe-prepush-shim", "# edited", 1),
+        "template": "#!/usr/bin/env bash\n# File generated by pre-commit: https://pre-commit.com\n",
+        "users-own": _USER_HOOK,
+    }[left]
+    chained.write_text(body, encoding="utf-8", newline="\n")
+    chained.chmod(0o644 if left == "lfs-not-executable" else 0o755)
+
+    feat, out = _push(work, "HEAD:refs/heads/feat/x", env_extra=_SIBLINGS_OFF)
+    assert feat.returncode != 0 and _CHAINED_STILL_THERE in out and _INSTALL in out, out
+
+    before = _hooks_snapshot(work)
+    r = _install_guards(work)
+    if left in ("users-own", "shim-with-edited-header"):
+        assert r.returncode == 1, f"{r.stdout}{r.stderr}"
+        assert "the dispatcher no longer runs it" in " ".join(r.stderr.split()), r.stderr
+        assert _hooks_snapshot(work) == before, "a refused hook was changed"
+        chained.unlink()   # what the refusal says to do, once folded elsewhere
+    else:
+        assert r.returncode == 0, f"{r.stdout}{r.stderr}"
+        assert "removed .git/hooks/pre-push.chained" in r.stdout, r.stdout
+    assert not chained.exists()
+
+    feat, out = _push(work, "HEAD:refs/heads/feat/x", env_extra=_SIBLINGS_OFF)
+    assert feat.returncode == 0, out
+    main, out = _push(work, "HEAD:refs/heads/main", env_extra=_SIBLINGS_OFF)
+    assert main.returncode != 0 and _BANNER in out, out
 
 
 def test_deleting_a_branch_does_not_require_a_green_docs_build(tmp_path: Path) -> None:
@@ -1183,6 +1202,7 @@ def _repo_with_a_shipped_old_guard(tmp_path: Path, guard: str) -> tuple[Path, by
 
 def _occupy(work: Path, slot: str, content: bytes) -> Path:
     if slot == "pre-push.chained":
+        # where installers before #2746 put it
         assert _install_guards(work).returncode == 0
     elif slot == "pre-push.legacy":
         _install_precommit(work)
@@ -1204,19 +1224,20 @@ def test_a_stale_guard_copy_is_replaced_by_the_installer(
     cannot find its helper, and its message says to run the installer. Copies
     already out there carry the bytes of the version they were taken from, so
     the installer must recognise them by that, and replace them rather than
-    chain them. ``pre-push.chained`` is where an earlier
-    installer put one; ``pre-push.legacy`` is where pre-commit migrates one."""
+    refuse them. ``pre-push.chained`` is where an earlier installer put one;
+    ``pre-push.legacy`` is where pre-commit migrates one."""
     work, old = _repo_with_a_shipped_old_guard(tmp_path, guard)
     _occupy(work, slot, old)
 
     r, out = _push(work, "HEAD:refs/heads/feat/legacy")
     assert r.returncode != 0, f"a broken install silently allowed the push:\n{out}"
-    assert _helper_missing_lines(out) and _INSTALL in out, out
+    said = _CHAINED_STILL_THERE in out if slot == "pre-push.chained" else _helper_missing_lines(out)
+    assert said and _INSTALL in out, out
 
     r = _install_guards(work)
     assert r.returncode == 0, f"installer failed:\n{r.stdout}{r.stderr}"
     said = {"pre-push": "replacing a copy of a guard",
-            "pre-push.chained": "removed pre-push.chained",
+            "pre-push.chained": "removed .git/hooks/pre-push.chained",
             "pre-push.legacy": "removed .git/hooks/pre-push.legacy"}[slot]
     assert said in r.stdout, f"the installer did not say it replaced the copy:\n{r.stdout}"
     _assert_the_guards_are_back(work)
@@ -1248,6 +1269,7 @@ def test_a_hook_linked_to_a_guard_is_replaced_without_touching_the_guard(
 # Lines naming what the installer identifies hooks by (#2617).
 _USER_HOOKS = {
     "sources-the-helper": _USER_HOOK,
+    "lfs-and-more": _LFS_HOOKS["3.x"] + "echo USER-HOOK-RAN >&2\n",
     "names-the-pre-commit-flag": _USER_HOOK + "# unlike pre-commit's --hook-type=pre-push\n",
     "names-the-shim": _USER_HOOK + "# runs before vibe-prepush-shim\n",
     "echoes-the-pre-commit-header":
@@ -1257,24 +1279,23 @@ _USER_HOOKS = {
 
 @pytest.mark.parametrize("user_hook", sorted(_USER_HOOKS))
 @pytest.mark.parametrize("slot", _SLOTS)
-def test_a_users_own_hook_is_kept(tmp_path: Path, slot: str, user_hook: str) -> None:
+def test_a_users_own_hook_is_refused_and_left_alone(
+    tmp_path: Path, slot: str, user_hook: str
+) -> None:
     """Mentioning, even sourcing, the helper does not make a hook a stale guard
-    copy, and naming the shim or pre-commit's flag does not make it either of
-    those. Anything else is someone's hook, which the installer chains and the
-    dispatcher keeps running."""
+    copy; naming the shim or pre-commit's flag, or calling git lfs among other
+    things, does not make it either of those or lfs's. Anything else is
+    someone's hook: the shim would stop it running, so the installer refuses
+    and changes nothing (#2746)."""
     body = _USER_HOOKS[user_hook]
     work, _ = _repo_with_a_shipped_old_guard(tmp_path, "protect_main_push.sh")
     _occupy(work, slot, body.encode())
+    before = _hooks_snapshot(work)
 
     r = _install_guards(work)
-    assert r.returncode == 0, f"installer failed:\n{r.stdout}{r.stderr}"
-    if slot != "pre-push.chained":
-        assert f"moved .git/hooks/{slot} to pre-push.chained" in r.stdout, r.stdout
-    chained = work / ".git" / "hooks" / "pre-push.chained"
-    assert chained.is_file() and chained.read_text(encoding="utf-8") == body, (
-        f"the user's hook is not in the chained slot:\n{r.stdout}")
-    r, out = _push(work, "HEAD:refs/heads/main")
-    assert "USER-HOOK-RAN" in out and _BANNER in out, out
+    assert r.returncode == 1, f"{r.stdout}{r.stderr}"
+    assert "Nothing was changed." in r.stderr, r.stderr
+    assert _hooks_snapshot(work) == before, "a refused hook was changed"
 
 
 _SHAPES = ["side-branch", "two-generations-back", "from-a-subdirectory", "minimal-path",
@@ -1974,45 +1995,81 @@ def test_the_dispatcher_runs_every_guard_even_after_one_fails(tmp_path: Path) ->
         "the dispatcher stopped early; guards that ran: %s" % ran)
 
 
-def test_a_failing_chained_hook_fails_the_push(tmp_path: Path) -> None:
-    """git-lfs owns this slot on a fresh clone and has real work to do.
+_FAKE_LFS = """#!/usr/bin/env bash
+printf 'ARGV %s\\n' "$*" >> "$FAKE_LFS_LOG"
+while read -r a b c d; do printf 'ROW %s\\n' "$c" >> "$FAKE_LFS_LOG"; done
+exit "${FAKE_LFS_RC:-0}"
+"""
 
-    Swallowing its exit status would let a push report success while the LFS
-    objects never left the machine. The dispatcher propagates it today; nothing
-    pinned that.
-    """
+
+def _dispatch_with_lfs(tmp_path: Path, *, configured: bool, git_lfs: bool, rc: int = 0):
+    """Run the dispatcher on a two-row push with every guard stubbed to pass, a
+    stand-in for git-lfs on PATH or none, and LFS configured or not. The real
+    config is shut out so that the host's own `git lfs install` decides
+    nothing."""
     work = _dispatch_repo(tmp_path)
-    hooks = work / ".git" / "hooks"
-    hooks.mkdir(parents=True, exist_ok=True)
-    chained = hooks / "pre-push.chained"
-    chained.write_text("#!/usr/bin/env bash\nexit 42\n", encoding="utf-8")
-    chained.chmod(0o755)
-    assert _BASH
+    ops = work / "scripts" / "ops"
+    for name in ("protect_main_push.sh", "require_preflight_pass.sh",
+                 "pre_push_mkdocs_strict.sh"):
+        ops.joinpath(name).write_text("cat >/dev/null\nexit 0\n", encoding="utf-8")
+    if configured:
+        assert _git(work, "config", "filter.lfs.process", "git-lfs filter-process").returncode == 0
+    env = _path_of(tmp_path, "bash", "git", "cat")
+    if git_lfs:
+        fake = Path(env["PATH"]) / "git-lfs"
+        fake.write_text(_FAKE_LFS, encoding="utf-8", newline="\n")
+        fake.chmod(0o755)
+    log = tmp_path / "lfs.log"
+    env.update(GIT_CONFIG_GLOBAL=os.devnull, GIT_CONFIG_NOSYSTEM="1",
+               FAKE_LFS_LOG=str(log), FAKE_LFS_RC=str(rc))
+    rows = ("refs/heads/x %s refs/heads/x %s\n" % ("a" * 40, "b" * 40)
+            + "refs/tags/t %s refs/tags/t %s\n" % ("c" * 40, "0" * 40))
     r = subprocess.run(  # subprocess-timeout: ignore
         [_BASH, "scripts/ops/prepush_dispatch.sh", "origin", "/dev/null"],
-        cwd=work, input="", capture_output=True, text=True,
-        encoding="utf-8", errors="replace",
+        cwd=work, input=rows, capture_output=True, text=True,
+        encoding="utf-8", errors="replace", env=env,
     )
-    assert r.returncode == 42, (
-        "the chained hook's failure was swallowed (rc=%d); a git-lfs failure "
-        "would report a successful push" % r.returncode)
+    return work, env, r, (log.read_text(encoding="utf-8") if log.exists() else "")
 
 
-def test_the_chained_hook_is_executed_directly_not_through_bash() -> None:
-    """⚠️ Structural pin, and honest about being one.
+def test_git_lfs_gets_the_push_s_argv_and_every_row(tmp_path: Path) -> None:
+    _, _, r, log = _dispatch_with_lfs(tmp_path, configured=True, git_lfs=True)
+    assert r.returncode == 0, r.stderr
+    assert "ARGV pre-push origin /dev/null" in log.splitlines(), log
+    rows = sorted(ln.split(" ", 1)[1] for ln in log.splitlines() if ln.startswith("ROW "))
+    assert rows == ["refs/heads/x", "refs/tags/t"], log
 
-    The chained hook need not be a shell script — the dispatcher's header
-    records `import: command not found`, rc=2, for a python hook run through
-    `bash`. A behavioural test needs an interpreter present on every platform
-    this repo runs on, and there is none we can rely on here (this host has no
-    usable `node`, and `python3` is not on Git Bash's PATH), so this pins the
-    call shape rather than the consequence.
-    """
-    src = (_OPS / "prepush_dispatch.sh").read_text(encoding="utf-8")
-    code = [ln for ln in src.splitlines() if not ln.lstrip().startswith("#")]
-    invocations = [ln for ln in code if "_CHAINED_NAME" in ln and "$@" in ln]
-    assert invocations, "no chained-hook invocation found at all"
-    for ln in invocations:
-        assert "bash " not in ln, (
-            "the chained hook is invoked through bash, which ignores its "
-            "shebang: %s" % ln.strip())
+
+def test_a_failing_git_lfs_fails_the_push(tmp_path: Path) -> None:
+    """Swallowing its exit status would let a push report success while the LFS
+    objects never left the machine."""
+    _, _, r, log = _dispatch_with_lfs(tmp_path, configured=True, git_lfs=True, rc=42)
+    assert log, "git-lfs never ran"
+    assert r.returncode == 42, f"git-lfs's failure was swallowed (rc={r.returncode})"
+
+
+def test_git_lfs_is_not_run_where_lfs_is_not_configured(tmp_path: Path) -> None:
+    _, _, r, log = _dispatch_with_lfs(tmp_path, configured=False, git_lfs=True)
+    assert r.returncode == 0, r.stderr
+    assert log == "", f"git-lfs ran in a repository without LFS: {log!r}"
+
+
+def test_lfs_configured_without_git_lfs_refuses_the_push(tmp_path: Path) -> None:
+    """lfs's own hook refuses here, and so must the dispatcher: skipping would
+    report a pushed branch whose LFS objects stayed behind. The remedy it
+    prints for "no longer used" is followed once."""
+    work, env, r, _ = _dispatch_with_lfs(tmp_path, configured=True, git_lfs=False)
+    assert r.returncode == 1, r.stderr
+    assert "git-lfs is not on PATH" in r.stderr, r.stderr
+    shown = subprocess.run(  # subprocess-timeout: ignore
+        ["git", "config", "--show-origin", "--get-regexp", "^filter\\.lfs\\."],
+        cwd=work, env=env, capture_output=True, text=True, encoding="utf-8",
+    )
+    assert "file:.git/config" in shown.stdout, shown.stdout + shown.stderr
+    assert _git(work, "config", "--remove-section", "filter.lfs").returncode == 0
+    again = subprocess.run(  # subprocess-timeout: ignore
+        [_BASH, "scripts/ops/prepush_dispatch.sh", "origin", "/dev/null"],
+        cwd=work, input="", capture_output=True, text=True,
+        encoding="utf-8", errors="replace", env=env,
+    )
+    assert again.returncode == 0, again.stderr

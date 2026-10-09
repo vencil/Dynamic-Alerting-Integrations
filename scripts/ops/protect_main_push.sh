@@ -49,8 +49,7 @@ if [ ! -r "$_prepush_dir/_prepush_refs.sh" ]; then
 
 在其他位置：那是本守衛的舊複本。與某個已 commit 版本完全相同的複本，安裝器會換掉：
     bash scripts/ops/install_prepush_hook.sh
-如果安裝器改把它搬到 pre-push.chained（複本被改過，或歷史太淺不含那個版本），
-就手動刪掉那個複本。
+如果安裝器拒絕它（複本被改過，或歷史太淺不含那個版本），就手動刪掉那個複本。
 
 ⛔ 不要自己 printf 一個只掛本檔的 hook：那會把 require_preflight_pass 與
 mkdocs strict 靜默拆掉，而畫面上本守衛還在。⛔ 也不要用

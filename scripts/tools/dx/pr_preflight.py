@@ -1113,8 +1113,8 @@ def _prepush_guards_wired() -> Tuple[Optional[bool], str]:
         return None, f"量不到：無法從 {_INSTALLER} 取出 shim 全文（VIBE_SHIM_EOF heredoc）"
 
     # ⛔ 不是 shim 時，訊息只說它和安裝器產生的 shim 不同並給處方，不預告安裝器會怎麼
-    # 處置：它依 chained 有沒有被佔、是不是守衛複本而拒絕、取代或串接，在這裡複製那些
-    # 判定就是第二份（#2697）。
+    # 處置：它依那是不是 git-lfs 的 hook、pre-commit 樣板或守衛複本而取代或拒絕，在這裡
+    # 複製那些判定就是第二份（#2697）。
     if not hook.is_file():
         if hook.exists() or hook.is_symlink():
             return False, (

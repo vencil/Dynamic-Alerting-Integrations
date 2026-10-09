@@ -251,6 +251,11 @@ class TestPrepushWiring:
         # hook: that depends on state only the installer judges (#2697).
         assert "與安裝器產生的守衛 shim 不同" in why, why
         assert "重跑 install_prepush_hook.sh" in why, why
+        # The installer refuses someone's hook and says to fold it elsewhere or
+        # delete it (#2746); following that output is the rest of the remedy.
+        r = self._install_guards(tmp_path)
+        assert r.returncode == 1 and "delete it, then re-run" in r.stderr, r.stderr
+        hook.unlink()
         assert self._install_guards(tmp_path).returncode == 0
         wired, why = mod._prepush_guards_wired()
         assert wired is True, f"following the message's remedy did not fix it: {why!r}"

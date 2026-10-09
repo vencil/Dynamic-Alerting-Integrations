@@ -11,32 +11,22 @@
 
 set -uo pipefail
 
-# The hooks directories whose dispatcher is already running further up this
-# push, one per line; set only on the chained hook's environment (see the
-# bottom of this file). Finding our own there means a push started under
-# pre-push.chained came back into this repository: left alone that recursion
-# never returns (#2728). Other repositories' hooks on the list are no concern
-# of ours, so a chained hook may push somewhere else.
+# Earlier installers moved the hook they found to pre-push.chained and this
+# file ran it. Nothing runs it now (git-lfs is run directly, below), so a hook
+# left there would stop running without a word: refuse until the installer has
+# dealt with it.
 _hooks_dir="$(git rev-parse --git-path hooks 2>/dev/null)"
-_own_hooks="$(cd "$_hooks_dir" 2>/dev/null && pwd -P)"
-_nl=$'\n'
-if [ -n "$_own_hooks" ]; then
-    case "$_nl${VIBE_PREPUSH_DISPATCHING:-}$_nl" in
-        *"$_nl$_own_hooks$_nl"*)
-            cat >&2 <<REENTERED
+if [ -n "$_hooks_dir" ] && { [ -e "$_hooks_dir/pre-push.chained" ] || [ -L "$_hooks_dir/pre-push.chained" ]; }; then
+    cat >&2 <<CHAINED
 
-[prepush_dispatch] ⛔ pre-push.chained started a push back into this repository,
-which runs these hooks again inside themselves. Stopping here.
+[prepush_dispatch] ⛔ $_hooks_dir/pre-push.chained is still there. An earlier
+installer moved a hook to it, and nothing runs it any more. Re-run:
+    bash scripts/ops/install_prepush_hook.sh
+It removes git-lfs's hook or a copy of ours, and says what to do with
+anything else.
 
-pre-push.chained (in the directory \`git rev-parse --git-path hooks\` prints) is
-meant to hold someone else's hook, such as git-lfs's. If it is a copy of the
-guard shim, delete it. If it is a hook of yours, it must not push into this
-repository.
-
-REENTERED
-            exit 1
-            ;;
-    esac
+CHAINED
+    exit 1
 fi
 
 _dispatch_dir="${BASH_SOURCE[0]%/*}"
@@ -61,11 +51,6 @@ GUARDS_NEEDING_COMMITS=(
 )
 
 _Z40="0000000000000000000000000000000000000000"
-
-# Whatever owned .git/hooks/pre-push before the installer took the slot. On a
-# fresh clone of this repo that is git-lfs's hook (the repo has `filter=lfs`
-# paths and `git lfs install` is global), and it has real work to do.
-_CHAINED_NAME="pre-push.chained"
 
 # ⛔ Read stdin ONCE, then hand every guard its own copy. Each guard reads the
 # refspec itself, so chaining them lets the first drain the pipe and leaves
@@ -129,15 +114,30 @@ GUARD_MISSING
     fi
 done
 
-# ⛔ Invoke the chained hook DIRECTLY — never `bash "$hook"`. It is not
-# necessarily a shell script, and bash ignores its shebang: measured, a python
-# hook gives `import: command not found`, rc=2.
-if [ -n "${_hooks_dir:-}" ] && [ -x "$_hooks_dir/$_CHAINED_NAME" ]; then
-    VIBE_PREPUSH_DISPATCHING="${VIBE_PREPUSH_DISPATCHING:+$VIBE_PREPUSH_DISPATCHING$_nl}$_own_hooks" \
-        "$_hooks_dir/$_CHAINED_NAME" "$@" < <(_feed)
-    _chained_rc=$?
-    if [ "$_chained_rc" -ne 0 ]; then
-        _rc="$_chained_rc"
+# git-lfs: on a fresh clone of this repo its own pre-push hook held the slot
+# the installer took (the repo has `filter=lfs` paths and `git lfs install` is
+# global), so its work is done here. ⛔ Keyed on LFS being configured, not on
+# git-lfs being on PATH: skipping when the binary is missing reports a pushed
+# branch whose LFS objects never left the machine — lfs's own hook refuses
+# then, and so does this.
+if git config --get-regexp '^filter\.lfs\.' >/dev/null 2>&1; then
+    if command -v git-lfs >/dev/null 2>&1; then
+        git lfs pre-push "$@" < <(_feed)
+        _lfs_rc=$?
+        if [ "$_lfs_rc" -ne 0 ]; then
+            _rc="$_lfs_rc"
+        fi
+    else
+        cat >&2 <<NO_LFS
+
+[prepush_dispatch] ⛔ Git LFS is configured (filter.lfs.* in git config) but
+git-lfs is not on PATH, so LFS objects in this push would not be uploaded.
+Install git-lfs. If you no longer use it, remove the filter.lfs section from
+the config that sets it; this shows which one:
+    git config --show-origin --get-regexp '^filter\.lfs\.'
+
+NO_LFS
+        _rc=1
     fi
 fi
 
