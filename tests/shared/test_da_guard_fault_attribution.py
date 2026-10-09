@@ -122,18 +122,20 @@ def test_cli_exits_2_for_a_da_guard_that_cannot_run(tmp_path, monkeypatch, da_gu
     assert rows["policy_dsl"]["suggested_action"] == vc._DA_GUARD_BROKEN_HINT, rows["policy_dsl"]
 
 
-@pytest.mark.parametrize("dangling", [False, True], ids=["clean", "another-file-unreadable"])
-def test_cli_rc_for_a_too_old_da_guard_follows_the_existing_downgrade(dangling, tmp_path,
+@pytest.mark.parametrize("other", ["none", "dangling", "bad-yaml"])
+def test_cli_rc_for_a_too_old_da_guard_follows_the_existing_downgrade(other, tmp_path,
                                                                       monkeypatch):
-    """既有的 exit-code 規則不改：caller error 是 rc 2，但樹裡另有讀不到的檔時降為 rc 1
-    （找不到 da-guard 也同樣降）。文件寫的就是這兩個數字。"""
+    """既有的 exit-code 規則不改：caller error 是 rc 2，但 `yaml_syntax` 列另有無法使用的檔
+    （讀不到或 YAML 解析失敗）時降為 rc 1（找不到 da-guard 也同樣降）。文件寫的就是這兩個數字。"""
     conf_d = _tree(tmp_path / "t", _CLEAN)
-    if dangling:
+    if other == "dangling":
         symlink_or_skip("/nonexistent/x.yaml", conf_d / "zz.yaml")
+    elif other == "bad-yaml":
+        (conf_d / "bad.yaml").write_text("tenants:\n  b: [\n", encoding="utf-8")
     monkeypatch.setenv("DA_GUARD_BINARY", _script(tmp_path, "dg-old", _OLD))
     rc, rows = _cli(conf_d, "--policy-dsl", _policy(tmp_path))
     assert rows["policy_dsl"]["suggested_action"] == vc._DA_GUARD_TOO_OLD_HINT, rows["policy_dsl"]
-    assert rc == (1 if dangling else 2), (rc, rows["policy_dsl"])
+    assert rc == (2 if other == "none" else 1), (rc, rows["policy_dsl"], rows["yaml_syntax"])
 
 
 def test_a_da_guard_killed_by_a_signal_is_not_classified(tmp_path):
