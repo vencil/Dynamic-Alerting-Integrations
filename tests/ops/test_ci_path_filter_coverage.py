@@ -1036,10 +1036,8 @@ def test_python_tests_run_cannot_be_path_skipped() -> None:
     Stronger than the other assertions, which are bounded by what the scanner
     can SEE. Quantified over EVERY tracked file and every job gated on
     `python`, on every event ci.yml declares, so a new leg or spelling inherits
-    it without an edit here. Measured against the filter as it stood BEFORE the
-    catch-all: 101 tracked files sat outside the enumerated list (#1383,
-    `4fd49561`) and 9 of the 400 commits before #1402 (`17a05bb5`) touched
-    nothing else. ⚠️ SCOPE: the
+    it without an edit here. Why the filter has a catch-all at all: the
+    comment above it in ci.yml (#1383, #1402). ⚠️ SCOPE: the
     JOB-level `if:` only; step-level switches are refused by `_job_step_files`
     and the push-event half by
     `test_detect_outputs_are_forced_true_off_a_pull_request`.
