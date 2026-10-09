@@ -1759,6 +1759,7 @@ da-tools generate-routes --config-dir <path> [options]
 | `--configmap <NAME>` | ConfigMap 名稱。**只有 `--apply` / `--output-configmap` 會讀它**，其他模式結束碼 2 | `alertmanager-config` |
 | `--yes` | 搭配 --apply 跳過確認提示。**只有 `--apply` 會讀它**，其他模式結束碼 2 | false |
 | `--policy <FILE>` | 策略 YAML 的**路徑**，內含 `allowed_domains:` 清單（省略＝不限制）。⚠️ 這裡吃的是檔案路徑，不是逗號分隔的域名；供了但讀不到會 exit 2（#1556） | （不限制） |
+| `--findings-json <PATH>` | 另外把這次執行**印出的** finding（warning stream 與拒收訊息的每一行）寫成 JSON 到 PATH，格式見下方「結構化 finding」。所有模式都讀它；每一種結束（含拒收與呼叫端錯誤）都會寫，先寫暫存檔再改名。stdout、stderr 與結束碼不變；PATH 寫不進去是結束碼 2（#2766）。⚠️ v2.9.0 映像沒有這個旗標 <!-- image-caveat: v2.9.0 --> | （不寫） |
 
 **輸出**
 
@@ -1769,6 +1770,8 @@ da-tools generate-routes --config-dir <path> [options]
 **租戶 id（[ADR-035](adr/035-tenant-id-single-source.md)）**：租戶 id 必須是 DNS-1123 label——1–63 個小寫英數與 `-`，首尾為英數（規則只寫在 `tenant-config.schema.json` 的 `definitions.tenantId`）。conf.d 只要宣告一個不合法 id（空字串、含大寫、`_`、`.`、空白，或超過 63 字元），**所有模式**（render、`--dry-run`、`--output-configmap`、`--apply`、`--validate`，不分 `--strict`）都回 1、什麼都不寫出也不套用，訊息開頭 `FAIL: N invalid tenant id(s)`，逐一點名並引用規則說明。不是只略過那個租戶：略過會部署出少了它的設定，它的告警落到 root receiver，而出貨的 `default` 是空 receiver。修法是改名；全數字的 id 要加引號。⚠️ v2.9.0 映像不檢查租戶 id，照樣產出 <!-- image-caveat: v2.9.0 -->
 
 **時長寫法（[#2490](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/2490)）**：`group_wait`／`group_interval`／`repeat_interval`（租戶 `_routing`、overrides、`routes` 條目、`_routing_defaults`、`_routing_enforced`、routing profile）照 Alertmanager 的讀法判定——整數加單位、由大到小、每個單位最多一次（`y`、`w`、`d`、`h`、`m`、`s`、`ms`），或單獨一個 `0`；規則只寫在 `tenant-config.schema.json` 的 `definitions.duration`。`1h30m`、`90m`、`1d` 照用（再套上下界護欄）；小數（`1.5h`）、單位倒序（`30m1h`）或重複（`1h1h`）、`ns`／`us`、正負號、前後空白、超過約 292 年的值，Alertmanager 會拒收整份設定，所以產生器把它換成平台預設值並印 `WARN: … invalid <參數> '<值>' …`，`--validate` 與 `validate-config` 對這行回 1；render、`--dry-run` 照常產出（換成預設值的那份）、結束碼不變。⚠️ v2.9.0 映像把 `1h30m` 換成平台預設、把 `1.5h` 原樣交給 Alertmanager，`--validate` 都回 0 <!-- image-caveat: v2.9.0 -->
+
+**結構化 finding（`--findings-json`，[#2766](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/2766)）**：頂層是 `schema`（`da-tools.findings/v1`）、`generator_version`（da-tools 版本，讀不到為 null）、`config_dir`、`exit_code`（這次執行實際的結束碼）與 `findings`。每筆 finding 有 `kind`（穩定的 snake_case 代號，與 da-guard 同義者同名；`unclassified` 表示還沒分類，只有文字可依賴）、`severity`（SARIF 等級：`error`／`warning`／`note`）、`blocks`（何時讓產生器失敗：`always` 所有模式、`strict` 加 `--strict` 時、`validate` 加 `--validate` 時、`never`）、`tenant`／`policy`／`file`（相對於 `--config-dir`）／`field`（不知道時為 null）與 `message`（印出的那一行，只去掉開頭縮排）。只收這次印出的行：被拒收的執行只有拒收訊息，`--validate` 重印的錯誤不重複列。⚠️ v2.9.0 映像沒有這個輸出 <!-- image-caveat: v2.9.0 -->
 
 **Fragment 模式** (`--output-configmap` 未指定)：
 YAML 片段，包含 route、receivers、inhibit_rules。

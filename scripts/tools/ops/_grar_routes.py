@@ -45,6 +45,7 @@ from _grar_merge import (  # noqa: E402
     _substitute_tenant,
     build_receiver_config,
     skipped_entry_warning,
+    unclassified,
 )
 from _grar_validate import (  # noqa: E402
     group_by_problem_text,
@@ -55,7 +56,9 @@ from _grar_validate import (  # noqa: E402
 )
 
 
-def _apply_group_by(route: dict, group_by: object, ctx: str) -> list[str]:
+def _apply_group_by(route: dict, group_by: object, ctx: str, *,
+                    tenant_id: str | None = None,
+                    field_prefix: str = "") -> list[str]:
     """Set ``route["group_by"]`` from a written ``group_by``; return its WARNs.
 
     #2503: the ONE place each of the generator's group_by outputs goes
@@ -67,14 +70,18 @@ def _apply_group_by(route: dict, group_by: object, ctx: str) -> list[str]:
     skipping`` line each (blocking under ``--validate``, like every dropped
     entry) — and a list repaired to empty renders no ``group_by`` (the route
     then inherits its parent's). ``--strict`` refuses the same elements
-    earlier (``_grar_parse.load_tenant_tree``).
+    earlier (``_grar_parse.load_tenant_tree``). #2766: *tenant_id* /
+    *field_prefix* (``"overrides[0]."``) are only the lines' ``Finding``
+    fields; *ctx* stays the text.
     """
     if not (group_by and isinstance(group_by, list)):
         return []
     kept, problems = group_by_problems(group_by)
     if kept:
         route["group_by"] = kept
-    return [skipped_entry_warning(f"  WARN: {ctx}: {group_by_problem_text(f'group_by[{idx}]', kind, value)}, skipping")
+    return [skipped_entry_warning(f"  WARN: {ctx}: {group_by_problem_text(f'group_by[{idx}]', kind, value)}, skipping",
+                                  kind="routing_group_by_invalid", tenant=tenant_id,
+                                  field=f"{field_prefix}group_by[{idx}]")
             for idx, kind, value in problems]
 
 
@@ -152,13 +159,17 @@ def _validate_override_matcher(override: dict, idx: int, tenant: str) -> tuple[b
     if not has_alertname and not has_metric_group:
         warnings.append(
             skipped_entry_warning(f"  WARN: {tenant}: override[{idx}] must have either "
-                                  "'alertname' or 'metric_group', skipping"))
+                                  "'alertname' or 'metric_group', skipping",
+                                  kind="empty_override_matcher", tenant=tenant,
+                                  field=f"overrides[{idx}]"))
         return False, warnings, has_alertname, has_metric_group
 
     if has_alertname and has_metric_group:
         warnings.append(
             skipped_entry_warning(f"  WARN: {tenant}: override[{idx}] has both 'alertname' and "
-                                  "'metric_group' (exactly one required), skipping"))
+                                  "'metric_group' (exactly one required), skipping",
+                                  kind="conflicting_override_matcher", tenant=tenant,
+                                  field=f"overrides[{idx}]"))
         return False, warnings, has_alertname, has_metric_group
 
     return True, warnings, has_alertname, has_metric_group
@@ -191,10 +202,14 @@ def _process_override_receiver(override: dict, idx: int, tenant: str,
     warnings = []
     receiver_obj = override.get("receiver")
     if not receiver_obj:
-        warnings.append(skipped_entry_warning(f"  WARN: {tenant}: override[{idx}] missing 'receiver', skipping"))
+        warnings.append(skipped_entry_warning(f"  WARN: {tenant}: override[{idx}] missing 'receiver', skipping",
+                                              kind="missing_receiver_field", tenant=tenant,
+                                              field=f"overrides[{idx}].receiver"))
         return None, warnings
 
-    am_config, recv_warnings = build_receiver_config(receiver_obj, f"{tenant}-override-{idx}")
+    am_config, recv_warnings = build_receiver_config(
+        receiver_obj, f"{tenant}-override-{idx}",
+        tenant_id=tenant, field=f"overrides[{idx}].receiver")
     warnings.extend(recv_warnings)
     if am_config is None:
         return None, warnings
@@ -202,7 +217,8 @@ def _process_override_receiver(override: dict, idx: int, tenant: str,
     # Domain allowlist check (SSRF prevention)
     if allowed_domains:
         domain_warnings = validate_receiver_domains(
-            receiver_obj, f"{tenant}-override-{idx}", allowed_domains)
+            receiver_obj, f"{tenant}-override-{idx}", allowed_domains,
+            tenant_id=tenant, receiver_field=f"overrides[{idx}].receiver")
         warnings.extend(domain_warnings)
         if any("not in allowed_domains" in w for w in domain_warnings):
             return None, warnings
@@ -224,10 +240,13 @@ def _build_override_route(idx: int, tenant: str, matchers: list[str],
 
     # Optional: group_by from override (#2503: repaired, WARN per dropped element)
     warnings.extend(_apply_group_by(sub_route, override.get("group_by"),
-                                    f"{tenant}: override[{idx}]"))
+                                    f"{tenant}: override[{idx}]", tenant_id=tenant,
+                                    field_prefix=f"overrides[{idx}]."))
 
     # Optional: timing parameters with guardrails
-    timing, timing_warnings = _apply_timing_params(override, f"{tenant}-override-{idx}")
+    timing, timing_warnings = _apply_timing_params(
+        override, f"{tenant}-override-{idx}", tenant_id=tenant,
+        field_prefix=f"overrides[{idx}].")
     warnings.extend(timing_warnings)
     sub_route.update(timing)
 
@@ -270,12 +289,16 @@ def expand_routing_overrides(tenant: str, routing_config: dict, allowed_domains:
         return sub_routes, override_receivers, warnings
 
     if not isinstance(overrides, list):
-        warnings.append(skipped_entry_warning(f"  WARN: {tenant}: 'overrides' must be a list, skipping"))
+        warnings.append(skipped_entry_warning(f"  WARN: {tenant}: 'overrides' must be a list, skipping",
+                                              kind="invalid_override_entry", tenant=tenant,
+                                              field="overrides"))
         return sub_routes, override_receivers, warnings
 
     for idx, override in enumerate(overrides):
         if not isinstance(override, dict):
-            warnings.append(skipped_entry_warning(f"  WARN: {tenant}: override[{idx}] must be a dict, skipping"))
+            warnings.append(skipped_entry_warning(f"  WARN: {tenant}: override[{idx}] must be a dict, skipping",
+                                                  kind="invalid_override_entry", tenant=tenant,
+                                                  field=f"overrides[{idx}]"))
             continue
 
         # Validate exactly one of alertname or metric_group is set
@@ -347,7 +370,9 @@ def expand_routing_routes(tenant: str, routing_config: dict,
     if entries is None or entries == []:
         return sub_routes, receivers, warnings
     if not isinstance(entries, list):
-        warnings.append(skipped_entry_warning(f"  WARN: {tenant}: 'routes' must be a list, skipping"))
+        warnings.append(skipped_entry_warning(f"  WARN: {tenant}: 'routes' must be a list, skipping",
+                                              kind="invalid_route_entry", tenant=tenant,
+                                              field="routes"))
         return sub_routes, receivers, warnings
 
     for idx, entry in enumerate(entries):
@@ -363,15 +388,19 @@ def expand_routing_routes(tenant: str, routing_config: dict,
         receiver_obj = entry.get("receiver")
         if not receiver_obj:
             warnings.append(skipped_entry_warning(f"  WARN: {tenant}: routes[{idx}] missing "
-                                                  "'receiver', skipping"))
+                                                  "'receiver', skipping",
+                                                  kind="missing_receiver_field", tenant=tenant,
+                                                  field=f"routes[{idx}].receiver"))
             continue
-        am_config, recv_warnings = build_receiver_config(receiver_obj, ctx)
+        am_config, recv_warnings = build_receiver_config(
+            receiver_obj, ctx, tenant_id=tenant, field=f"routes[{idx}].receiver")
         warnings.extend(recv_warnings)
         if am_config is None:
             continue
         if allowed_domains:
             domain_warnings = validate_receiver_domains(
-                receiver_obj, ctx, allowed_domains)
+                receiver_obj, ctx, allowed_domains, tenant_id=tenant,
+                receiver_field=f"routes[{idx}].receiver")
             warnings.extend(domain_warnings)
             if any("not in allowed_domains" in w for w in domain_warnings):
                 continue
@@ -379,8 +408,10 @@ def expand_routing_routes(tenant: str, routing_config: dict,
         receiver_name = _route_receiver_name(tenant, idx)
         sub_route: dict = {"matchers": matchers, "receiver": receiver_name}
         warnings.extend(_apply_group_by(sub_route, entry.get("group_by"),
-                                        f"{tenant}: routes[{idx}]"))
-        timing, timing_warnings = _apply_timing_params(entry, ctx)
+                                        f"{tenant}: routes[{idx}]", tenant_id=tenant,
+                                        field_prefix=f"routes[{idx}]."))
+        timing, timing_warnings = _apply_timing_params(
+            entry, ctx, tenant_id=tenant, field_prefix=f"routes[{idx}].")
         warnings.extend(timing_warnings)
         sub_route.update(timing)
         sub_routes.append(sub_route)
@@ -406,14 +437,16 @@ def _build_per_tenant_enforced_route(tenant: str, enforced_routing: dict,
     substituted = _substitute_tenant(enforced_routing, tenant)
     sub_receiver = substituted.get("receiver")
     am_config, recv_warnings = build_receiver_config(
-        sub_receiver, f"platform-enforced-{tenant}")
+        sub_receiver, f"platform-enforced-{tenant}",
+        field="_routing_enforced.receiver")
     warnings.extend(recv_warnings)
     if am_config is None:
         return None, None, warnings
 
     if allowed_domains:
         domain_warnings = validate_receiver_domains(
-            sub_receiver, f"platform-enforced-{tenant}", allowed_domains)
+            sub_receiver, f"platform-enforced-{tenant}", allowed_domains,
+            receiver_field="_routing_enforced.receiver")
         warnings.extend(domain_warnings)
         if any("not in allowed_domains" in w for w in domain_warnings):
             return None, None, warnings
@@ -431,10 +464,12 @@ def _build_per_tenant_enforced_route(tenant: str, enforced_routing: dict,
         route["matchers"].extend(match)
 
     warnings.extend(_apply_group_by(route, substituted.get("group_by"),
-                                    f"_routing_enforced ({tenant})"))
+                                    f"_routing_enforced ({tenant})",
+                                    field_prefix="_routing_enforced."))
 
     timing, timing_warnings = _apply_timing_params(
-        substituted, f"platform-enforced-{tenant}")
+        substituted, f"platform-enforced-{tenant}",
+        field_prefix="_routing_enforced.")
     warnings.extend(timing_warnings)
     route.update(timing)
 
@@ -451,7 +486,8 @@ def _build_single_enforced_route(enforced_routing: dict,
     """
     warnings = []
     enforced_receiver = enforced_routing.get("receiver")
-    am_config, recv_warnings = build_receiver_config(enforced_receiver, "platform-enforced")
+    am_config, recv_warnings = build_receiver_config(
+        enforced_receiver, "platform-enforced", field="_routing_enforced.receiver")
     warnings.extend(recv_warnings)
     if am_config is None:
         return None, None, warnings
@@ -459,10 +495,13 @@ def _build_single_enforced_route(enforced_routing: dict,
     # Domain allowlist check for platform receiver too
     if allowed_domains:
         domain_warnings = validate_receiver_domains(
-            enforced_receiver, "platform-enforced", allowed_domains)
+            enforced_receiver, "platform-enforced", allowed_domains,
+            receiver_field="_routing_enforced.receiver")
         warnings.extend(domain_warnings)
         if any("not in allowed_domains" in w for w in domain_warnings):
-            warnings.append("  WARN: _routing_enforced: receiver blocked by domain policy")
+            warnings.append(unclassified(
+                "  WARN: _routing_enforced: receiver blocked by domain policy",
+                blocks="never"))
             return None, None, warnings
 
     receiver_name = "platform-enforced"
@@ -478,10 +517,12 @@ def _build_single_enforced_route(enforced_routing: dict,
 
     # Optional group_by
     warnings.extend(_apply_group_by(route, enforced_routing.get("group_by"),
-                                    "_routing_enforced"))
+                                    "_routing_enforced",
+                                    field_prefix="_routing_enforced."))
 
     # Timing parameters with guardrails
-    timing, timing_warnings = _apply_timing_params(enforced_routing, "platform-enforced")
+    timing, timing_warnings = _apply_timing_params(
+        enforced_routing, "platform-enforced", field_prefix="_routing_enforced.")
     warnings.extend(timing_warnings)
     route.update(timing)
 
@@ -529,7 +570,9 @@ def _build_enforced_routes(enforced_routing: dict, routing_configs: dict[str, di
 
     enforced_receiver = enforced_routing.get("receiver")
     if not enforced_receiver:
-        warnings.append(skipped_entry_warning("  WARN: _routing_enforced: missing 'receiver', skipping enforced route"))
+        warnings.append(skipped_entry_warning(
+            "  WARN: _routing_enforced: missing 'receiver', skipping enforced route",
+            kind="missing_receiver_field", field="_routing_enforced.receiver"))
         return routes, receivers, warnings
 
     if _contains_tenant_placeholder(enforced_routing):
@@ -601,11 +644,14 @@ def _build_tenant_routes(routing_configs: dict[str, dict], allowed_domains: list
         # 驗證 receiver（必要欄位，須為含 type 的 dict）
         receiver_obj = cfg.get("receiver")
         if not receiver_obj:
-            warnings.append(skipped_entry_warning(f"  WARN: {tenant}: missing required 'receiver', skipping"))
+            warnings.append(skipped_entry_warning(f"  WARN: {tenant}: missing required 'receiver', skipping",
+                                                  kind="missing_receiver_field", tenant=tenant,
+                                                  field="receiver"))
             continue
 
         # 從結構化物件建立 receiver config
-        am_config, recv_warnings = build_receiver_config(receiver_obj, tenant)
+        am_config, recv_warnings = build_receiver_config(receiver_obj, tenant,
+                                                         tenant_id=tenant)
         warnings.extend(recv_warnings)
         if am_config is None:
             continue
@@ -613,7 +659,7 @@ def _build_tenant_routes(routing_configs: dict[str, dict], allowed_domains: list
         # Domain allowlist 檢查（SSRF 防護）
         if allowed_domains:
             domain_warnings = validate_receiver_domains(
-                receiver_obj, tenant, allowed_domains)
+                receiver_obj, tenant, allowed_domains, tenant_id=tenant)
             warnings.extend(domain_warnings)
             if any("not in allowed_domains" in w for w in domain_warnings):
                 continue
@@ -647,10 +693,11 @@ def _build_tenant_routes(routing_configs: dict[str, dict], allowed_domains: list
         }
 
         # group_by（可選；#2503：修正後輸出，每個略過的元素一行 WARN）
-        warnings.extend(_apply_group_by(route, cfg.get("group_by"), tenant))
+        warnings.extend(_apply_group_by(route, cfg.get("group_by"), tenant,
+                                        tenant_id=tenant))
 
         # Timing parameters with guardrails
-        timing, timing_warnings = _apply_timing_params(cfg, tenant)
+        timing, timing_warnings = _apply_timing_params(cfg, tenant, tenant_id=tenant)
         warnings.extend(timing_warnings)
         route.update(timing)
 
@@ -1067,7 +1114,9 @@ def generate_inhibit_rules(dedup_configs: dict[str, str]) -> tuple[list[dict], l
     for tenant in sorted(dedup_configs.keys()):
         mode = dedup_configs[tenant]
         if mode == "disable":
-            all_warnings.append(f"  INFO: {tenant}: severity_dedup disabled, skipping inhibit rule")
+            all_warnings.append(unclassified(
+                f"  INFO: {tenant}: severity_dedup disabled, skipping inhibit rule",
+                blocks="never"))
             continue
 
         rule = _build_inhibit_rules(tenant)
