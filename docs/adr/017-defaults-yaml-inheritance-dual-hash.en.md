@@ -72,8 +72,9 @@ Inheritance order: **L0 → L1 → L2 → L3 → tenant YAML** (later overrides 
     `_routing.receiver` and `_routing.overrides` are **excluded**: the former
     makes the tenant's entire route disappear (alerts fall through to the
     catch-all), the latter has nothing above it to opt out of.
-  - **Threshold keys**: an explicit `null` does **not** opt out — use
-    `"disable"`. A threshold written as `null` is no write at that layer
+  - **Threshold keys**: an explicit `null` does **not** opt out — in a
+    tenant file or a subdirectory `_defaults.yaml`, use `"disable"` to switch a threshold off
+    (not in the root `defaults:`; see the "blank value" item below). A threshold written as `null` is no write at that layer
     ([#2518](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/2518)): when a tenant
     file or a subdirectory `_defaults.yaml` writes `null`, `/metrics` (`da-guard served-values`),
     `/effective` (`da-guard effective`) and `describe_tenant` give the same result as if this
@@ -102,9 +103,13 @@ Inheritance order: **L0 → L1 → L2 → L3 → tenant YAML** (later overrides 
     The combinations that actually work are "both inside `defaults:`" or "both at the top level
     of a wrapper-less file".
 - **⚠️ A blank value and an explicit `null` are the same thing**: `mysql_connections:` and
-  `mysql_connections: ~` both parse to null in YAML, the same as `mysql_connections: null`. A
-  threshold's null is defined as "this layer did not write it" (see "Threshold keys" above), not
-  as switching the alert off; to switch a threshold off, write `"disable"`.
+  `mysql_connections: ~` both parse to null in YAML, the same as `mysql_connections: null`. In a
+  tenant file or a subdirectory `_defaults.yaml`, a null (either spelling included) is the same as
+  this layer not writing the key; in the root `defaults:`, a null means the root does not declare
+  the threshold and no series is served (for a value a deeper layer gives, see "Threshold keys"
+  above). To switch a threshold off in a tenant file or a subdirectory `_defaults.yaml`, write
+  `"disable"`; written in the root `defaults:`, `"disable"` makes the whole root `_defaults.yaml`
+  fail to parse and be dropped — to switch a threshold off at the root, delete the key.
 - **`_metadata` fields do not inherit**: each tenant's `_metadata` comes only from its own YAML + path inference (ADR-016)
 
 ```yaml

@@ -74,7 +74,8 @@ conf.d/
     並不是時間欄位。）
     `_routing.receiver` 與 `_routing.overrides` **不適用**：前者會讓該租戶整條
     route 消失（告警落到 catch-all），後者無上層可退。
-  - **閾值 key**：顯式 `null` **不退出繼承**，請改用 `"disable"`。閾值寫成 `null` 等於
+  - **閾值 key**：顯式 `null` **不退出繼承**；租戶檔與子目錄 `_defaults.yaml` 要停用請改用
+    `"disable"`（根目錄 `defaults:` 不適用，見下方「空值」一條）。閾值寫成 `null` 等於
     這一層沒寫（[#2518](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/2518)）：
     租戶檔或子目錄 `_defaults.yaml` 寫 `null` 時，`/metrics`（`da-guard served-values`）、
     `/effective`（`da-guard effective`）與 `describe_tenant` 的結果與這一層沒寫這個鍵相同。
@@ -97,8 +98,11 @@ conf.d/
     沒有東西可刪 —— 寫了是靜默 no-op。真正會生效的組合是「兩者都在 `defaults:` 內部」或
     「兩者都在無包裝檔的頂層」。
 - **⚠️ 「空值」與顯式 `null` 是同一件事**：`mysql_connections:` 與 `mysql_connections: ~`
-  在 YAML 都解析成 null，與 `mysql_connections: null` 相同。閾值的 null 定義為「這一層沒寫」
-  （見上方「閾值 key」），不是關閉告警；要關閉一個閾值請寫 `"disable"`。
+  在 YAML 都解析成 null，與 `mysql_connections: null` 相同。租戶檔與子目錄 `_defaults.yaml`
+  寫 null（含這兩種寫法）等於這一層沒寫；根目錄 `defaults:` 寫 null 等於根層沒有宣告這個閾值，
+  不送 series（更深層給了值時的行為見上方「閾值 key」）。租戶檔與子目錄 `_defaults.yaml` 要停用
+  一個閾值請寫 `"disable"`；根目錄 `defaults:` 寫 `"disable"` 會讓整份根 `_defaults.yaml`
+  無法解析而被丟棄，根層要停用就刪掉該鍵。
 - **`_metadata` 欄位不繼承**：每個 tenant 的 `_metadata` 僅來自自身 YAML + 路徑推斷（ADR-016）
 
 ```yaml
