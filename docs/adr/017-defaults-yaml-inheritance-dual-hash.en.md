@@ -72,11 +72,19 @@ Inheritance order: **L0 → L1 → L2 → L3 → tenant YAML** (later overrides 
     `_routing.receiver` and `_routing.overrides` are **excluded**: the former
     makes the tenant's entire route disappear (alerts fall through to the
     catch-all), the latter has nothing above it to opt out of.
-  - **Threshold keys**: an explicit `null` does **not** opt out — use
-    `"disable"`. The emitting path (`collector.go` → `ResolveAtWithStats`)
-    already ignores the null and falls back to the platform default; the
-    diagnostic path (`/effective`, `describe_tenant`, simulate) was aligned to
-    it in #1339.
+  - **Threshold keys**: an explicit `null` does **not** opt out — in a
+    tenant file or a subdirectory `_defaults.yaml`, use `"disable"` to switch a threshold off
+    (not in the root `defaults:`; see the "blank value" item below). A threshold written as `null` is no write at that layer
+    ([#2518](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/2518)): when a tenant
+    file or a subdirectory `_defaults.yaml` writes `null`, `/metrics` (`da-guard served-values`),
+    `/effective` (`da-guard effective`) and `describe_tenant` give the same result as if this
+    layer did not write the key.
+    When the root
+    `_defaults.yaml` writes `null` under `defaults:`, the root does not declare the threshold and
+    `/metrics` serves no series for it (not a threshold of 0): a tenant-side value is named by
+    da-guard's `root_default_null_undeclared`, a subdirectory `_defaults.yaml`'s value by
+    `subtree_default_undeliverable`; when the same key is listed under the root's
+    `optional_overrides:`, the tenant's value is served as usual.
   - **Every other `_`-prefixed reserved key**: an explicit `null` **does opt out** —
     `deepMerge` in `pkg/config/hierarchy.go` runs `delete(result, k)` for an explicit
     null on any `_`-prefixed key, while a non-`_` key (i.e. a threshold) only
@@ -94,12 +102,15 @@ Inheritance order: **L0 → L1 → L2 → L3 → tenant YAML** (later overrides 
     (see "these four things", item 1), so there is nothing to delete — writing it is a silent no-op.
     The combinations that actually work are "both inside `defaults:`" or "both at the top level
     of a wrapper-less file".
-- **⚠️ A blank value and an explicit `null` are the same thing** — listing them
-  as "Null / empty values" was itself the misleading part: `mysql_connections: ~`
-  and `mysql_connections:` are different syntax that YAML parses to the **same
-  null**. Honouring null on a threshold key would therefore make "I stopped
-  typing halfway" mean "silently switch this alert off". That is why it is
-  unsupported there: an accident must fail **loud**, never **silent**.
+- **⚠️ A blank value and an explicit `null` are the same thing**: `mysql_connections:` and
+  `mysql_connections: ~` both parse to null in YAML, the same as `mysql_connections: null`. In a
+  tenant file or a subdirectory `_defaults.yaml`, a null (either spelling included) is the same at runtime
+  as this layer not writing the key, but a null in a tenant file is rejected by
+  `check_confd_schema.py` — to keep the inherited value, a tenant deletes the key; in the root `defaults:`, a null means the root does not declare
+  the threshold and no series is served (for a value a deeper layer gives, see "Threshold keys"
+  above). To switch a threshold off in a tenant file or a subdirectory `_defaults.yaml`, write
+  `"disable"`; written in the root `defaults:`, `"disable"` makes /metrics drop the whole root
+  `_defaults.yaml`, its `optional_overrides:` included (da-guard exits 3).
 - **`_metadata` fields do not inherit**: each tenant's `_metadata` comes only from its own YAML + path inference (ADR-016)
 
 ```yaml
@@ -193,7 +204,8 @@ implementation).
    - a value that **does not parse as `float64`** (mapping / list / string / bool) ⇒
      `parsePartialConfig` returns `ok=false`, **the entire file is dropped**, and it logs
      `ERROR: ... entire block dropped`, taking the file's other sibling keys with it;
-   - a value that **does parse as `float64`** (`100` / `1.5` / **`null`→0**) ⇒ `ok=true`, **no
+   - a value that **does parse as `float64`** (`100` / `1.5`; not `null`, which is no write: measured, indenting `max_metrics_per_tenant: null`
+   leaves no such row in `da-guard served-values`, [#2518](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/2518)) ⇒ `ok=true`, **no
      ERROR/WARN**, and it becomes a threshold key ⇒ **every tenant gains one armed, bogus threshold series** (measured: indenting `max_metrics_per_tenant: 100` resolves to `user_threshold{component="max", metric="metrics_per_tenant"}=100`, the prefix stripped by the resolver), and this plane emits no signal.
 
    ⛔ **But the exporter is only one consumer, and often not the painful one.** The table below
