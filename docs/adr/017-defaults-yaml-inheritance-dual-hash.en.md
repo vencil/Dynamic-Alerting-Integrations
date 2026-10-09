@@ -76,8 +76,8 @@ Inheritance order: **L0 → L1 → L2 → L3 → tenant YAML** (later overrides 
     `"disable"`. A threshold written as `null` is no write at that layer
     ([#2518](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/2518)): when a tenant
     file or a subdirectory `_defaults.yaml` writes `null`, `/metrics` (`da-guard served-values`),
-    `/effective` (`da-guard effective`) and `describe_tenant` all take the next layer down the
-    inheritance chain that has a value for the key, the same as if this layer did not write it.
+    `/effective` (`da-guard effective`) and `describe_tenant` give the same result as if this
+    layer did not write the key.
     When the root
     `_defaults.yaml` writes `null` under `defaults:`, the root does not declare the threshold and
     `/metrics` serves no series for it (not a threshold of 0): a tenant-side value is named by
