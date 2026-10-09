@@ -416,7 +416,8 @@ data:
           # failure was visible only in logs. Since #1980 every load path
           # (cold load, hierarchical reload, the flat tree's incremental
           # reload) drops EVERY tenant a broken tenant file declares from
-          # /metrics, so their threshold alerts stop. Two thresholds capture
+          # /metrics (unless another file that parses declares it too), so
+          # their threshold alerts stop. Two thresholds capture
           # the two failure modes the exporter's own help text + RCA
           # comments distinguish:
           #   - per-tenant file (warning, >5/h per basename — matches
@@ -437,8 +438,9 @@ data:
                 The threshold-exporter has logged >5 YAML parse failures
                 for `{{ $labels.file_basename }}` in the last hour. If it is
                 a tenant file, every tenant declared in that file (all of them, if the file
-                declares several) is removed from /metrics, so their
-                threshold alerts stop firing (#1980). Fix the YAML (the
+                declares several) is removed from /metrics, unless another
+                file that parses declares it too, so their threshold
+                alerts stop firing (#1980). Fix the YAML (the
                 exporter logs `WARN: skip unparseable file` with the
                 parse error) and the tenants come back on the next
                 reload. Tenants declared in other files are unaffected
