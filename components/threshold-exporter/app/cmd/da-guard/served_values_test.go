@@ -913,9 +913,7 @@ func TestServedValues_RowsTheCollectorDrops(t *testing.T) {
 		"one row with q_re twice": {
 			"    redis_queue_length{q_re=\"a\", q=~\"b\"}: 5\n",
 			[]string{`redis_queue_length{q_re="a", q=~"b"}`}},
-		// Two spellings of one key are one threshold since #2031: the decode
-		// keeps the canonical one (its row is dropped), the other is a
-		// spelling_duplicate (`da-guard effective`'s not_served), not a row.
+		// Two spellings of one key are one threshold (#2031): one row.
 		"two spellings of one dropped key": {
 			"    mysql_connections{tenant=\"x\"}: 5\n    mysql_connections{ tenant = \"x\" }: 6\n",
 			[]string{`mysql_connections{tenant="x"}`}},
@@ -1076,10 +1074,7 @@ func TestServedValues_DroppedKeepsEveryRowsReason(t *testing.T) {
 // --- families other than user_threshold ----------------------------------------------
 
 // Two expired overrides whose da_config_event reasons render alike
-// ("container_cpu: a: b") collided in that family and production /metrics
-// answered 500, so served-values refused the tree. Since #2031 the metric_key
-// label tells the two events apart: /metrics serves the tree (pinned in the
-// app package), and so does this.
+// ("container_cpu: a: b") are two series (metric_key, #2031): served.
 func TestServedValues_SameEventReasonText_Serves(t *testing.T) {
 	t.Parallel()
 	code, doc, _, stderr := served(t, map[string]string{
@@ -1111,9 +1106,7 @@ func TestServedValues_NonUTF8DeclaredKeyNobodySets_Serves(t *testing.T) {
 
 // A time-boxed override is read at --at, not at the wall clock: the expiry
 // is far in the future, so only --at can put the run after it, where the
-// platform default is served. (The two overrides' expiry events used to
-// render one da_config_event series and fail the scrape after expiry; the
-// metric_key label keeps them apart since #2031.)
+// platform default is served.
 func TestServedValues_ThresholdExpiryFollowsAt(t *testing.T) {
 	t.Parallel()
 	files := map[string]string{

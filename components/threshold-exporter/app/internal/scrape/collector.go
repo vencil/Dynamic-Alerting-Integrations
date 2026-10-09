@@ -295,12 +295,8 @@ func (c *Collector) collectStateFilters(ch chan<- prometheus.Metric, stateFilter
 //   - silence_expired     — one per (tenant, target_severity); `target: all`
 //     expands to warning + critical, which share the tenant's reason.
 //   - maintenance_expired — one per tenant (a single _state_maintenance key).
-//   - threshold_expired   — one per (tenant, metric key): the key is the
-//     metric_key label (#2031). It used to be encoded into reason only
-//     (`<key>: <reason>`), and a key holding ": " collided with another
-//     key's reason text — `a` with reason `b: c` and `a: b` with reason `c`
-//     both read `a: b: c`, and /metrics answered 500. reason keeps that
-//     text, unchanged.
+//   - threshold_expired   — one per (tenant, metric key): the metric_key
+//     label (#2031), not the reason text, which two keys can share.
 //
 // target_severity and metric_key are part of ONE label schema for all three
 // events, not per-event extras: the events that do not have one set it to
@@ -390,9 +386,8 @@ func (c *Collector) collectMaintenanceExpiries(ch chan<- prometheus.Metric, cfg 
 // override has lapsed (PREVENT #656). The threshold VALUE itself already
 // fail-safed back to the platform default in resolveBaseRows; this event lets a
 // cleanup PR remove the stale conf.d YAML and gives operators visibility. The
-// metric key is the metric_key label, so each (tenant, metric) event is a
-// distinct da_config_event series whatever its reason text (#2031; see
-// configEventDesc). reason still names the key, as it always has.
+// metric_key label keeps each (tenant, metric) event a distinct series
+// (configEventDesc).
 func (c *Collector) collectThresholdExpiries(ch chan<- prometheus.Metric, expiries []config.ResolvedThresholdExpiry) {
 	for _, te := range expiries {
 		if !te.Expired {
