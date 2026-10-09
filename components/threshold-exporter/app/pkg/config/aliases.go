@@ -271,11 +271,14 @@ func canonicalView[V any](m map[string]V) map[string]V {
 // path) is told, for each row appended here, the tenant-config key the row
 // serves: servedKey, the whole canonical key the caller resolved (#2115). The
 // twin is reported under the same servedKey — it is that key's value served a
-// second time under the old metric name, not a key of its own.
+// second time under the old metric name, not a key of its own. sink is also
+// told the metric key each row's component / metric labels come from (#2750):
+// canonicalKey for row — every caller parsed row's labels from it — and
+// legacyKey for the twin.
 func appendWithLegacyTwin(rows []ResolvedThreshold, canonicalKey string, row ResolvedThreshold, sink rowSink, servedKey string) []ResolvedThreshold {
 	rows = append(rows, row)
 	if sink != nil {
-		sink(servedKey, row)
+		sink(servedKey, canonicalKey, row)
 	}
 	if legacyKey, ok := legacyKeyByCanonical[canonicalKey]; ok {
 		twin := row
@@ -286,7 +289,7 @@ func appendWithLegacyTwin(rows []ResolvedThreshold, canonicalKey string, row Res
 		twin.legacyTwinOf = canonicalKey
 		rows = append(rows, twin)
 		if sink != nil {
-			sink(servedKey, twin)
+			sink(servedKey, legacyKey, twin)
 		}
 	}
 	return rows

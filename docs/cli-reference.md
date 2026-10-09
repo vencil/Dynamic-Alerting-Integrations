@@ -674,7 +674,7 @@ da-tools backtest [--git-diff | --config-dir <dir> --baseline <dir>] [options]
 
 2. **目錄比對模式**：`--config-dir <dir> --baseline <dir>`
    （比對兩個配置版本）
-   兩棵樹都由 exporter 讀（`da-guard served-values`，需 da-guard；#2119），逐租戶、逐門檻 key 比 `/metrics` 實際送出的值：平台檔、`_defaults.yaml`、profile、子目錄裡的變更都算；租戶取自各檔的 `tenants:`，沒有 `tenants:` 的檔 exporter 不送、改它也不算。一邊沒送的 key 或租戶（關掉、新增、移除）那一邊記為無值。值比對整個 UTC 日：每個 key 的每一組新舊值報一列；不是整天都成立的，`window` 列出它成立的所有時段（UTC 的 `HH:MM-HH:MM` 清單）。Prometheus 回測不限於這些時段，一律跑整個 `--lookback`。只改 severity 不算。帶維度的 key（`metric{db="a"}`），以及 exporter 在該組新舊值成立的任一時段以 `critical` severity 送出的 key（例如基底有送的 `<base>_critical`；依 served-values 回報的 severity 判斷，不看 key 名稱）照列，但不查 Prometheus，標為 `not_backtested`（`backtest: skipped: dimensioned key`／`critical-severity key`），文字與 Markdown 報告列出未回測幾筆。
+   兩棵樹都由 exporter 讀（`da-guard served-values`，需 da-guard；#2119），逐租戶、逐門檻 key 比 `/metrics` 實際送出的值：平台檔、`_defaults.yaml`、profile、子目錄裡的變更都算；租戶取自各檔的 `tenants:`，沒有 `tenants:` 的檔 exporter 不送、改它也不算。一邊沒送的 key 或租戶（關掉、新增、移除）那一邊記為無值。值比對整個 UTC 日：每個 key 的每一組新舊值報一列；不是整天都成立的，`window` 列出它成立的所有時段（UTC 的 `HH:MM-HH:MM` 清單）。Prometheus 回測不限於這些時段，一律跑整個 `--lookback`。只改 severity 不算。查 Prometheus 用的 metric 名稱取自 served-values 對該 key 回報的 `/metrics` series 的 `metric_key`（[#2750](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/2750)），不看 key 名稱：基底有送的 `<base>_critical` 與時段內覆寫成 `N:critical` 的 key 都以 `<base>` 的資料回測。帶維度的 key（served-values 的 series 有 `dimensions`／`dimensions_regex`，例如 `metric{db="a"}`）照列，但不查 Prometheus，標為 `not_backtested`（`backtest: skipped: dimensioned key`），文字與 Markdown 報告列出未回測幾筆。
 
 **選項**
 
@@ -2514,7 +2514,7 @@ da-tools guard <subcommand> [flags]
 | 子命令 | 說明 |
 |---|---|
 | `defaults-impact` | 對 conf.d/（或 `--scope` 子目錄）下所有租戶執行 deepMerge → guard checks，輸出 Markdown / JSON 報告 |
-| `served-values` | 以 JSON 印出 exporter `/metrics` 對每個租戶實際發出的值（[#2115](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/2115)）；Python 讀取端經 `scripts/tools/_lib_tenant_values.py` 呼叫 |
+| `served-values` | 以 JSON 印出 exporter `/metrics` 對每個租戶實際發出的值（[#2115](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/2115)）；Python 讀取端經 `scripts/tools/_lib_tenant_values.py` 呼叫。每個租戶的 `series` 對 `severities` 裡的每個門檻 key 列出它在 `/metrics` 的 series（[#2750](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/2750)）：`name` 與完整 `labels` 取自 `/metrics` 的 Gather 結果，`metric_key` 是 resolver 解析出 `component`／`metric` label 的那個 key（`X_critical` 與 `X{db="a"}` 都是 `X`），`dimensions`／`dimensions_regex` 是 key 寫的維度 label；舊拼法別名的目標有兩筆（本身、舊名 twin）。`/metrics` 不送的 key（`unserved`、只出現在 `dropped`）與 `_custom_alerts` 沒有這一項。`--schedules` 時每個有送的時段另帶該時段的 `series`（覆寫成 `N:critical` 的時段是另一條 series），值為 `null` 或帶 `error` 的時段沒有 |
 | `effective` | 以 JSON 印出每個租戶在 tenant-api `/effective` 的有效設定，另加綁定的 profile 與每個 key 的來源（[#2564](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/2564)）；Python 讀取端經 `scripts/tools/_lib_tenant_values.py` 的 `load_effective()` 呼叫 |
 
 **Binary 解析順序**

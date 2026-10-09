@@ -522,12 +522,13 @@ def _minute(hhmm):
 
 
 def _served_day(tenant_values, key, side):
-    """`[(start_minute, end_minute, rendered value, severity)]` for one key's
-    whole UTC day as /metrics serves it (`schedules`); a key or tenant
-    /metrics never serves is one segment of None. A segment in which /metrics cannot be
+    """`[(start_minute, end_minute, rendered value, severity, series)]` for
+    one key's whole UTC day as /metrics serves it (`schedules`; `series` the
+    segment's /metrics series, #2750); a key or tenant /metrics never serves
+    is one segment of None. A segment in which /metrics cannot be
     gathered at all is refused: a diff across it would be a guess."""
     if tenant_values is None or key not in (tenant_values.schedules or {}):
-        return [(0, _DAY_MINUTES, None, None)]
+        return [(0, _DAY_MINUTES, None, None, None)]
     out = []
     for seg in tenant_values.schedules[key].segments:
         if seg.error is not None:
@@ -535,12 +536,12 @@ def _served_day(tenant_values, key, side):
                 f"da-guard served-values: {side} /metrics cannot be gathered "
                 f"{seg.start}-{seg.end} UTC ({seg.error})", None, "")
         out.append((_minute(seg.start), _minute(seg.end), _render_served(seg.value),
-                    seg.severity))
+                    seg.severity, seg.series))
     return out
 
 
 def _value_in(day, minute):
-    for start, end, value, _severity in day:
+    for start, end, value, *_ in day:
         if start <= minute < end:
             return value
     return None
@@ -548,7 +549,19 @@ def _value_in(day, minute):
 
 def _severities_in(day, start, end):
     """The severities /metrics serves the key with anywhere in [start, end)."""
-    return {sev for s, e, _v, sev in day if s < end and start < e and sev is not None}
+    return {sev for s, e, _v, sev, _series in day if s < end and start < e and sev is not None}
+
+
+def _series_in(days, spans):
+    """Every /metrics series (`Series`, #2750) the key is served as on
+    either side in any of `spans`, in day order, each once."""
+    out = []
+    for day in days:
+        for start, end in spans:
+            for s, e, _v, _sev, series in day:
+                if s < end and start < e:
+                    out.extend(x for x in series or () if x not in out)
+    return out
 
 
 def _hhmm(minute):
@@ -608,6 +621,11 @@ def extract_changes_from_dirs(config_dir, baseline_dir):
     * `severity: "critical"` when /metrics serves the key as a critical row
       on either side in any part of the day the pair holds in (the
       exporter's verdict, not the key's name); absent otherwise.
+    * `series`: every /metrics series (`Series`, #2750) the key is served
+      as on either side in any part of the day the pair holds in, as
+      served-values reports it. `backtest_change` queries Prometheus with
+      their `metric_key` (a `<base>_critical` key's is `<base>`), so a
+      critical key is backtested against its base's data.
     * A key /metrics serves on one side only (switched off, dropped, or the
       tenant added / removed) has None on the other side — the shape
       `backtest_change` already reads as "enabled" / "disabled".
@@ -651,6 +669,7 @@ def extract_changes_from_dirs(config_dir, baseline_dir):
                 if any("critical" in _severities_in(day, s, e)
                        for day in (old_day, new_day) for s, e in spans):
                     change["severity"] = "critical"
+                change["series"] = _series_in((old_day, new_day), spans)
                 changes.append(change)
 
     return changes
@@ -996,19 +1015,39 @@ def custom_alert_markdown(tenants):
 def not_backtestable(change):
     """Why a threshold key cannot be backtested, or None.
 
-    #2119: `backtest_change` asks Prometheus for `<key>{tenant="..."}`. A
-    dimensioned key (`mysql_connections{db="a"}`) would make that selector
-    invalid, so it is listed in the report as not backtested rather than
-    queried as a raw string. Building selectors for it is not done here.
-    A key /metrics serves as a critical row (`severity: "critical"`, the
-    exporter's verdict: a `<base>_critical` key whose base it serves) names
-    no series of its own either; a `*_critical` key served as a warning row
-    is an ordinary threshold and is backtested."""
-    if "{" in change["metric"]:
+    #2119: `backtest_change` asks Prometheus for `<metric key>{tenant="..."}`.
+    A dimensioned key (`mysql_connections{db="a"}`) narrows that to some
+    label values, which that selector does not, so it is listed in the
+    report as not backtested. Building selectors for it is not done here.
+
+    #2750: a change read from two trees (`extract_changes_from_dirs`)
+    carries the /metrics series served-values reports for it, and is judged
+    by those fields alone: dimensioned when a series has `dimensions` or
+    `dimensions_regex`. Its severity is no reason: a critical row is queried
+    by its `metric_key` (`backtest_change`). A change from `--git-diff` or
+    `--tenant` names a key as written, with no series; there the key's `{`
+    is what marks it dimensioned."""
+    if "series" not in change:
+        return "dimensioned key" if "{" in change["metric"] else None
+    if not change["series"]:
+        return "no /metrics series"
+    if any(s.dimensions or s.dimensions_regex for s in change["series"]):
         return "dimensioned key"
-    if change.get("severity") == "critical":
-        return "critical-severity key"
     return None
+
+
+def _query_metrics(change):
+    """The metric names `backtest_change` asks Prometheus about: the
+    `metric_key` of each /metrics series served-values reports for the
+    change (#2750: `X` for `X_critical`), each once — or, for a change with
+    no series (`--git-diff`, `--tenant`), the key as given."""
+    if "series" not in change:
+        return [change["metric"]]
+    out = []
+    for s in change["series"]:
+        if s.metric_key not in out:
+            out.append(s.metric_key)
+    return out
 
 
 def backtest_change(prom_url, change, lookback_seconds):
@@ -1022,12 +1061,13 @@ def backtest_change(prom_url, change, lookback_seconds):
     new_value = change["new_value"]
 
     # Build PromQL query for this metric + tenant
-    # Try common recording rule patterns
-    queries = [
-        f'{metric}{{tenant="{tenant}"}}',
-        f'tenant:{metric}:max{{tenant="{tenant}"}}',
-        f'{metric}{{namespace="{tenant}"}}',
-    ]
+    # Try common recording rule patterns, for each metric name the change's
+    # /metrics series name (#2750), in order.
+    queries = [q for name in _query_metrics(change) for q in (
+        f'{name}{{tenant="{tenant}"}}',
+        f'tenant:{name}:max{{tenant="{tenant}"}}',
+        f'{name}{{namespace="{tenant}"}}',
+    )]
 
     values = []
     used_query = None

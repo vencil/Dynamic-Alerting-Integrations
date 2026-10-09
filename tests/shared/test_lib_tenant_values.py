@@ -429,17 +429,26 @@ def test_schedules_are_parsed_as_da_guard_writes_them(tmp_path, da_guard):
     conf_d = _tree(tmp_path, _SCHEDULED)
     got = tv.load_served_values(conf_d, at="2026-07-01T03:00:00Z", binary=da_guard, schedules=True)["tenant-a"]
     S = tv.ScheduleSegment
+
+    def ident(severity: str, component: str = "mysql", metric: str = "connections") -> tuple:
+        return (tv.Series("user_threshold", {"tenant": "tenant-a", "component": component,
+                                             "metric": metric, "severity": severity},
+                          f"{component}_{metric}", {}, {}),)
+    warn, crit = ident("warning"), ident("critical")
     assert got.schedules["mysql_connections"] == tv.KeySchedule([
-        S("00:00", "06:00", 1000.0, "warning"), S("06:00", "12:00", 70.0, "warning"),
-        S("12:00", "13:00", None, None), S("13:00", "15:00", 70.0, "warning"),
-        S("15:00", "16:00", 700.0, "critical"), S("16:00", "22:00", 70.0, "warning"),
-        S("22:00", "24:00", 1000.0, "warning"),
+        S("00:00", "06:00", 1000.0, "warning", None, warn), S("06:00", "12:00", 70.0, "warning", None, warn),
+        S("12:00", "13:00", None, None), S("13:00", "15:00", 70.0, "warning", None, warn),
+        S("15:00", "16:00", 700.0, "critical", None, crit), S("16:00", "22:00", 70.0, "warning", None, warn),
+        S("22:00", "24:00", 1000.0, "warning", None, warn),
     ], None, None)
     segs = got.schedules["mysql_connections"].segments
     assert all(isinstance(s.value, float) for s in segs if s.value is not None)
+    # #2750: series 照 da-guard 給的讀；與 --at 那一刻的 series 同一份 Go 讀數。
+    assert got.series["mysql_connections"] == warn
     # 過期：整天是平台預設；expires 照寫、expired 是 Go 在 --at 的判定。
     assert got.schedules["redis_memory"] == tv.KeySchedule(
-        [S("00:00", "24:00", 90.0, "warning")], "2026-01-01T00:00:00Z", True)
+        [S("00:00", "24:00", 90.0, "warning", None, ident("warning", "redis", "memory"))],
+        "2026-01-01T00:00:00Z", True)
     # --at 那一刻的 values 與 schedules 對應段一致（同一份 Go 讀數）。
     assert got.values["mysql_connections"] == 1000
 
@@ -492,10 +501,21 @@ def test_output_without_aliases_is_refused(tmp_path):
 def test_output_without_schedules_is_refused(tmp_path):
     fake = _old_da_guard(tmp_path, '{"at": "x", "parse_failed": [], "skipped": [], "unreadable": [], '
                                    '"aliases": {}, "tenants": {"t": {"values": {}, "severities": {}, '
-                                   '"unserved": {}, "dropped": {}}}}')
+                                   '"series": {}, "unserved": {}, "dropped": {}}}}')
     with pytest.raises(tv.ServedValuesError) as ei:
         tv.load_served_tree(tmp_path, binary=fake, schedules=True)
     assert "schedules" in str(ei.value)
+    assert "older than this tool: upgrade or rebuild it" in str(ei.value)
+
+
+def test_output_without_series_is_refused(tmp_path):
+    """#2750：da-guard 的輸出沒有 series → 這支 da-guard 比工具舊，不當成「沒有 series」讀。"""
+    fake = _old_da_guard(tmp_path, '{"at": "x", "parse_failed": [], "skipped": [], "unreadable": [], '
+                                   '"aliases": {}, "tenants": {"t": {"values": {}, "severities": {}, '
+                                   '"unserved": {}, "dropped": {}}}}')
+    with pytest.raises(tv.ServedValuesError) as ei:
+        tv.load_served_tree(tmp_path, binary=fake)
+    assert "series" in str(ei.value) and ei.value.binary_fault
     assert "older than this tool: upgrade or rebuild it" in str(ei.value)
 
 
@@ -513,13 +533,13 @@ def test_schedules_are_asked_for_only_on_request(tmp_path, da_guard):
 def test_output_without_schedules_is_fine_when_not_asked_for(tmp_path):
     fake = _old_da_guard(tmp_path, '{"at": "x", "parse_failed": [], "skipped": [], "unreadable": [], '
                                    '"aliases": {}, "tenants": {"t": {"values": {}, "severities": {}, '
-                                   '"unserved": {}, "dropped": {}}}}')
+                                   '"series": {}, "unserved": {}, "dropped": {}}}}')
     assert tv.load_served_values(tmp_path, binary=fake)["t"].schedules is None
 
 
 _ARGV_DOC = ('{"at": "x", "parse_failed": [], "skipped": [], "unreadable": [], "aliases": {}, '
-             '"tenants": {"t": {"values": {}, "severities": {}, "unserved": {}, "dropped": {}, '
-             '"schedules": {}}}}')
+             '"tenants": {"t": {"values": {}, "severities": {}, "series": {}, "unserved": {}, '
+             '"dropped": {}, "schedules": {}}}}')
 
 
 @pytest.mark.parametrize("asked", [False, True])

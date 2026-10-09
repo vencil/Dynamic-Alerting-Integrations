@@ -53,18 +53,31 @@ is what keeps either of them off column 0.
   of every threshold key /metrics serves at
   some minute of it (or whose `expires:` the exporter honours), canonical
   spelling → `KeySchedule` (#2115 (c)): `segments`, each a
-  `ScheduleSegment(start, end, value, severity, error)` — `"HH:MM"` to
+  `ScheduleSegment(start, end, value, severity, error, series)` — `"HH:MM"` to
   `"HH:MM"` (the last ends `"24:00"`), in order with no gap; `value` a float
   as in `values`, or None when the key has no /metrics row in that segment
   (`severity` None too). `error` is None except in a segment (never the one
   holding `at`) in which the exporter's /metrics cannot be gathered at all:
   then it is da-guard's text for that failure, and `value` / `severity` are
-  None — nothing is served then, for any key. The segments are the exporter's reading, so a
+  None — nothing is served then, for any key. `series` is the key's series
+  in that segment, as in `TenantValues.series` (a window serving
+  `N:critical` is another series); None exactly when `value` is None.
+  The segments are the exporter's reading, so a
   caller checking "every part of the day" reads them as they are and never
   reads the `overrides:` of the config itself. `expires` (as written) and
   `expired` (the exporter's verdict at `at`) are None unless the exporter
   honours a time-box on the key (base keys only); the segments already
   follow that verdict.
+* `series` (#2750) — for each threshold key of `severities` (exactly those
+  keys), the /metrics series its rows are, a tuple of `Series(name, labels,
+  metric_key, dimensions, dimensions_regex)`: `name` and `labels` (the full
+  label set) as the Gather of the exporter's /metrics returns them,
+  `metric_key` the key the exporter's resolver parsed the `component` /
+  `metric` labels from (`X` for `X_critical` and for `X{db="a"}`), and the
+  dimensional labels the key writes (`{}` for none). Two for a retired-alias
+  target: its row, then its legacy twin. A key /metrics serves no row for
+  (`unserved`, or only `dropped`) has no entry, nor does `_custom_alerts`.
+  A da-guard whose output lacks the field is named as older than this tool.
 
 Whether /metrics serves at all follows Gather over the same collectors
 production /metrics serves. A tree whose output would carry any string that
@@ -180,6 +193,7 @@ __all__ = [
     "KeySource",
     "NotServedKey",
     "ScheduleSegment",
+    "Series",
     "ServedTree",
     "ServedValuesError",
     "SkippedFile",
@@ -219,12 +233,22 @@ _EXIT_PARSE_FAILED = 3
 _NON_FINITE = {"+Inf": float("inf"), "-Inf": float("-inf"), "NaN": float("nan")}
 
 
+class Series(NamedTuple):
+    """One /metrics series a threshold key is served as (#2750)."""
+    name: str                          # the family name, as the Gather returns it
+    labels: dict[str, str]             # the series' full label set
+    metric_key: str                    # the key the resolver parsed component/metric from
+    dimensions: dict[str, str]         # `{db="a"}` -> {"db": "a"}; {} for none
+    dimensions_regex: dict[str, str]   # `{ts=~"SYS.*"}` -> {"ts": "SYS.*"}; {} for none
+
+
 class ScheduleSegment(NamedTuple):
     start: str              # "HH:MM", UTC
     end: str                # "HH:MM", UTC; the day's last segment ends "24:00"
     value: float | None     # None: no /metrics row for the key in [start, end)
     severity: str | None    # None exactly when value is None
     error: str | None = None  # da-guard's text when /metrics cannot be gathered in [start, end)
+    series: tuple[Series, ...] | None = None  # None exactly when value is None
 
 
 class KeySchedule(NamedTuple):
@@ -240,6 +264,7 @@ class TenantValues(NamedTuple):
     unserved: dict[str, Any]
     dropped: dict[str, list[str]]
     schedules: dict[str, KeySchedule] | None  # None unless asked for (schedules=True)
+    series: dict[str, tuple[Series, ...]]     # threshold key -> its /metrics series (#2750)
 
 
 class SkippedFile(NamedTuple):
@@ -616,6 +641,16 @@ def load_served_tree(
             raise ServedValuesError(
                 f"da-guard {SUBCOMMAND}: tenant {tenant_id!r} carries a value that is not a threshold ({e})",
                 returncode, stderr, broken=True) from e
+        if "series" not in tv:
+            raise ServedValuesError(
+                f"da-guard {SUBCOMMAND}: tenant {tenant_id!r} has no series — this da-guard is "
+                "older than this tool: upgrade or rebuild it", returncode, stderr, stale=True)
+        try:
+            series = {str(k): _series_list(v) for k, v in tv["series"].items()}
+        except (ValueError, KeyError, TypeError, AttributeError) as e:
+            raise ServedValuesError(
+                f"da-guard {SUBCOMMAND}: tenant {tenant_id!r} carries series that are not of their shape ({e})",
+                returncode, stderr, broken=True) from e
         days: dict[str, KeySchedule] | None = None
         if schedules:
             if "schedules" not in tv:
@@ -629,8 +664,23 @@ def load_served_tree(
                     f"da-guard {SUBCOMMAND}: tenant {tenant_id!r} carries a schedule that is not of its shape ({e})",
                     returncode, stderr, broken=True) from e
         out[tenant_id] = TenantValues(tenant_id, values, severities, dict(tv["unserved"]),
-                                     {k: list(v) for k, v in tv["dropped"].items()}, days)
+                                     {k: list(v) for k, v in tv["dropped"].items()}, days, series)
     return ServedTree(out, skipped, _nonempty_lines(stderr), aliases)
+
+
+def _str_map(m: Any) -> dict[str, str]:
+    if not isinstance(m, dict):
+        raise TypeError(f"not a mapping: {m!r}")
+    return {str(k): str(v) for k, v in m.items()}
+
+
+def _series_list(items: Any) -> tuple[Series, ...]:
+    """One key's `series`, as da-guard wrote it (a non-empty list)."""
+    if not isinstance(items, list) or not items:
+        raise ValueError(f"series is not a non-empty list: {items!r}")
+    return tuple(Series(str(s["name"]), _str_map(s["labels"]), str(s["metric_key"]),
+                        _str_map(s["dimensions"]), _str_map(s["dimensions_regex"]))
+                 for s in items)
 
 
 def _key_schedule(s: dict[str, Any]) -> KeySchedule:
@@ -646,7 +696,9 @@ def _key_schedule(s: dict[str, Any]) -> KeySchedule:
         segments.append(ScheduleSegment(
             str(seg["from"]), str(seg["to"]),
             None if value is None else _threshold(value),
-            None if value is None else str(seg["severity"])))
+            None if value is None else str(seg["severity"]),
+            None,
+            None if value is None else _series_list(seg["series"])))
     expired = s.get("expired")
     if expired is not None and not isinstance(expired, bool):
         raise ValueError(f"expired is not a boolean: {expired!r}")
