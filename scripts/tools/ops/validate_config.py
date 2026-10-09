@@ -196,7 +196,6 @@ from _lib_tenant_values import (  # noqa: E402
     DaGuardNotFoundError,
     ParseFailedError,
     load_effective_tree,
-    load_served_tree,
     print_load_error,
     value_not_served_as_written,
 )
@@ -648,8 +647,8 @@ def check_yaml_quoting(config_dir: str) -> dict[str, object]:
     explicit `!!bool yes` (yaml.v3 does not accept it) is the same WARN;
     whether the exporter can still read that file is not this row's
     verdict but da-guard's — a file its load drops FAILs the rows that read
-    the tree through it, with the exporter's reason
-    (`_with_exporter_reasons`). #2740: so the WARN is kept only for a file
+    the tree through it, with the exporter's reason (`da-guard effective`'s
+    stderr carries it since #2115). #2740: so the WARN is kept only for a file
     `da-guard effective`'s parse_failed names, the run `profiles` reads
     (`_effective_tree`); a file it does not name — a `_routing_profiles.yaml`,
     which the exporter does not load and whose Go reader takes `!!bool yes`
@@ -1220,24 +1219,6 @@ def _tenant_load_failure_row(check: str, exc: Exception, config_dir: str,
                         caller_error=caller_error, hint=hint)
 
 
-def _with_exporter_reasons(exc: ParseFailedError, config_dir: str) -> ParseFailedError:
-    """`da-guard effective` names the files the exporter's load drops but not
-    WHY (its walk logs nothing); served-values runs the exporter's own load,
-    whose log says it (e.g. "cannot unmarshal !!int ..."). On this failure
-    path only, ask served-values for the same verdict and keep its error when
-    it names the same first file; otherwise — it fails another way (e.g. it
-    refuses the tree's /metrics, #2115 F2), or names another file — keep
-    effective's. The row's verdict never depends on served-values."""
-    try:
-        load_served_tree(config_dir)
-    except ParseFailedError as served:
-        if served.path == exc.path:
-            return served
-    except (DaGuardNotFoundError, DaGuardError):
-        pass
-    return exc
-
-
 # #2740: one `da-guard effective` run per validate-config run, shared by the
 # rows that read it (`yaml_quoting`, `profiles`, `values_not_served`). `main()`
 # opens it for its rows and closes it after them; a check called on its own
@@ -1278,9 +1259,9 @@ def check_profiles(config_dir: str) -> dict[str, object]:
     One da-guard run, `effective`: its `skipped` names the files with no
     tenant, so served-values (/metrics) is not needed — a tree whose /metrics
     da-guard refuses (e.g. `X_critical` written at the root and in a tenant,
-    #2115 F2) is not this row's business. served-values runs only after
-    effective has already failed the row on a dropped file, for the
-    exporter's reason (`_with_exporter_reasons`).
+    #2115 F2) is not this row's business. A file the load drops is named
+    with the exporter's reason from effective's own stderr (#2115: it logs
+    the load as served-values does), so served-values is not run for it.
 
     The tenants are the exporter's: the whole tree (a tenant in a
     sub-directory included — this row has read recursively since PR #1343),
@@ -1316,8 +1297,6 @@ def check_profiles(config_dir: str) -> dict[str, object]:
     try:
         tree = _effective_tree(config_dir)
     except (DaGuardNotFoundError, DaGuardError, ParseFailedError) as exc:
-        if isinstance(exc, ParseFailedError):
-            exc = _with_exporter_reasons(exc, config_dir)
         return _tenant_load_failure_row(
             "profiles", exc, config_dir,
             (_PROFILES_TREE_UNREADABLE_HINT, _PROFILES_NO_CONFIG_FILE_HINT,
@@ -2162,8 +2141,6 @@ def check_values_not_served(config_dir: str) -> dict[str, object]:
     try:
         tree = _effective_tree(config_dir)
     except (DaGuardNotFoundError, DaGuardError, ParseFailedError) as exc:
-        if isinstance(exc, ParseFailedError):
-            exc = _with_exporter_reasons(exc, config_dir)
         return _tenant_load_failure_row(
             "values_not_served", exc, config_dir,
             (_VALUES_NOT_SERVED_TREE_UNREADABLE_HINT, _VALUES_NOT_SERVED_NO_CONFIG_FILE_HINT,
