@@ -272,6 +272,97 @@ class TestStrictFailOpenClosures:
 
 
 # ============================================================
+# #2758 — receiver-type 項目是集合（mapping / list / set）
+# ============================================================
+class TestReceiverTypeCollectionEntry:
+    """集合項目不可 hash，`set()` 曾直接 TypeError；None 與字串混在一起時
+    違規訊息的 `sorted()` 也會 TypeError。集合項目不指名任何 receiver type：
+    略過、其餘字串項目照常執行；strict 下報具名 ERROR，非 strict 不出聲
+    （同 #2326 F4 的 tenants 項目）。非空的 allowed 清單即使沒有任何字串
+    項目仍然限制（與語料 `_verdict()`、da-guard `AllowedListNonEmpty` 一致）。
+    """
+
+    # !!set {a} → set、!!omap / !!pairs → list of tuples：都不可 hash。
+    COLLECTIONS = [{"a": 1}, ["a"], {"a"}, [("a", 1)]]
+
+    @staticmethod
+    def _policy(constraints):
+        return {"pol": {"tenants": ["tenant-x"], "constraints": constraints}}
+
+    @staticmethod
+    def _routing(recv_type):
+        return {"tenant-x": {"receiver": {"type": recv_type}}}
+
+    @pytest.mark.parametrize("entry", COLLECTIONS,
+                             ids=["dict", "list", "set", "omap"])
+    def test_forbidden_strict_names_the_entry_and_still_enforces_slack(
+            self, entry):
+        policies = self._policy({"forbidden_receiver_types": ["slack", entry]})
+        strict = check_domain_policies(self._routing("slack"), policies,
+                                       strict=True)
+        kind = type(entry).__name__
+        assert any(
+            m.lstrip().startswith(POLICY_ERROR_PREFIX)
+            and f"'forbidden_receiver_types' entry must be a receiver type, "
+                f"got {kind}" in m
+            and "list each receiver type as a plain YAML scalar" in m
+            for m in strict), strict
+        assert any("receiver type 'slack' is forbidden" in m
+                   and "domain forbids ['slack']" in m for m in strict), strict
+
+    @pytest.mark.parametrize("entry", COLLECTIONS,
+                             ids=["dict", "list", "set", "omap"])
+    def test_forbidden_lenient_is_silent_about_the_entry(self, entry):
+        policies = self._policy({"forbidden_receiver_types": ["slack", entry]})
+        assert check_domain_policies(self._routing("email"), policies) == []
+        lenient = check_domain_policies(self._routing("slack"), policies)
+        assert len(lenient) == 1, lenient
+        assert "receiver type 'slack' is forbidden" in lenient[0]
+
+    def test_a_list_of_only_collections_forbids_nothing(self):
+        policies = self._policy({"forbidden_receiver_types": [{"a": 1}]})
+        assert check_domain_policies(self._routing("slack"), policies) == []
+
+    def test_allowed_of_only_collections_still_restricts(self):
+        policies = self._policy({"allowed_receiver_types": [{"a": 1}]})
+        lenient = check_domain_policies(self._routing("webhook"), policies)
+        assert len(lenient) == 1, lenient
+        assert "receiver type 'webhook' not in allowed types []" in lenient[0]
+        strict = check_domain_policies(self._routing("webhook"), policies,
+                                       strict=True)
+        assert any("'allowed_receiver_types' entry must be a receiver type, "
+                   "got dict" in m for m in strict), strict
+        assert any("not in allowed types []" in m for m in strict), strict
+
+    def test_allowed_string_entries_still_allowed(self):
+        policies = self._policy({"allowed_receiver_types": ["email", ["a"]]})
+        assert check_domain_policies(self._routing("email"), policies) == []
+        lenient = check_domain_policies(self._routing("slack"), policies)
+        assert len(lenient) == 1, lenient
+        assert "not in allowed types ['email']" in lenient[0]
+
+    def test_mixed_null_and_string_allowed_does_not_crash(self):
+        """`[!!null x, email]` → {None, 'email'}：sorted() 曾 TypeError。"""
+        policies = self._policy({"allowed_receiver_types": [None, "email"]})
+        for strict in (False, True):
+            msgs = check_domain_policies(self._routing("slack"), policies,
+                                         strict=strict)
+            assert len(msgs) == 1, msgs
+            assert "receiver type 'slack' not in allowed types ['email']" \
+                in msgs[0]
+
+    def test_mixed_null_and_string_forbidden_does_not_crash(self):
+        policies = self._policy({"forbidden_receiver_types": [None, "slack"]})
+        for strict in (False, True):
+            msgs = check_domain_policies(self._routing("slack"), policies,
+                                         strict=strict)
+            assert len(msgs) == 1, msgs
+            assert "receiver type 'slack' is forbidden" in msgs[0]
+            if strict:
+                assert "domain forbids ['slack']" in msgs[0]
+
+
+# ============================================================
 # POLICY_ERROR_PREFIX 唯一來源鎖（F4）
 # ============================================================
 class TestPolicyErrorPrefixPin:

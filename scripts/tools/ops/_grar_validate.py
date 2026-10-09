@@ -2105,6 +2105,40 @@ def check_domain_policies(
             return []
         return raw
 
+    def _receiver_type_set(policy_name: str, constraints: dict,
+                           field: str) -> set:
+        """A receiver-type constraint as a set of its entries.
+
+        #2758: an entry that is a collection (a mapping, a list, a set —
+        unhashable) names no receiver type: strict ERRORs on it, and it is
+        kept as the non-string placeholder None — it matches no receiver
+        type, yet a non-empty `allowed_receiver_types` stays non-empty and
+        still restricts (as the corpus oracle and da-guard read it).
+        """
+        out: set = set()
+        for entry in _constraint_list(policy_name, constraints, field):
+            try:
+                hash(entry)
+            except TypeError:
+                if strict:
+                    messages.append(_fmt(
+                        f"domain_policy '{policy_name}': '{field}' entry "
+                        f"must be a receiver type, got {type(entry).__name__} "
+                        f"— the entry cannot be enforced",
+                        "list each receiver type as a plain YAML scalar"))
+                entry = None
+            out.add(entry)
+        return out
+
+    def _type_names(types: set) -> list:
+        """The string entries of a receiver-type set, sorted, for a message.
+
+        A non-string entry (None from `!!null x` or a collection, True from
+        `yes`) equals no receiver type the generator accepts, and mixed with
+        strings it is unorderable (#2758).
+        """
+        return sorted(t for t in types if isinstance(t, str))
+
     for policy_name, policy in sorted(domain_policies.items()):
         if not isinstance(policy, dict):
             # Explicit null policy is schema-legal (inert); anything else
@@ -2134,10 +2168,10 @@ def check_domain_policies(
                     "define 'constraints' as a mapping of constraint keys"))
             continue
 
-        forbidden_types = set(_constraint_list(
-            policy_name, constraints, "forbidden_receiver_types"))
-        allowed_types = set(_constraint_list(
-            policy_name, constraints, "allowed_receiver_types"))
+        forbidden_types = _receiver_type_set(
+            policy_name, constraints, "forbidden_receiver_types")
+        allowed_types = _receiver_type_set(
+            policy_name, constraints, "allowed_receiver_types")
         enforce_group_by = _constraint_list(
             policy_name, constraints, "enforce_group_by")
         max_repeat = constraints.get("max_repeat_interval")
@@ -2232,16 +2266,16 @@ def check_domain_policies(
                             f"domain_policy '{policy_name}', "
                             f"{subject}: receiver type '{recv_type}' "
                             f"is forbidden",
-                            f"domain forbids {sorted(forbidden_types)}; switch "
+                            f"domain forbids {_type_names(forbidden_types)}; switch "
                             f"{whose} receiver.type to a compliant type "
                             f"or amend the domain policy"))
                     if allowed_types and recv_type not in allowed_types:
                         messages.append(_fmt(
                             f"domain_policy '{policy_name}', "
                             f"{subject}: receiver type '{recv_type}' "
-                            f"not in allowed types {sorted(allowed_types)}",
+                            f"not in allowed types {_type_names(allowed_types)}",
                             f"switch {whose} receiver.type to one of "
-                            f"{sorted(allowed_types)} or amend the domain policy"))
+                            f"{_type_names(allowed_types)} or amend the domain policy"))
 
                 # Check max_repeat_interval / min_group_wait — #2490: ONE
                 # comparison for both modes; only the level differs (strict

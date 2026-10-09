@@ -530,6 +530,24 @@ def test_f4_a_mapping_in_a_policy_tenants_list_does_not_crash(tmp_path, policy_f
         assert "'tenants' entry must be a tenant id, got dict" in res.stderr
 
 
+@pytest.mark.parametrize("entry", ["{a: 1}", "[a]", "!!set {a}", "!!omap [{a: 1}]"])
+@pytest.mark.parametrize("strict, rc", [(True, EXIT_VIOLATION), (False, EXIT_OK)])
+def test_2758_a_collection_receiver_type_entry_does_not_crash(tmp_path, entry, strict, rc):
+    """#2758: the collection entry is skipped, `email` is still forbidden."""
+    d = _write(tmp_path / "conf.d", {
+        "_defaults.yaml": _EMAIL_RD,
+        "_domain_policy.yaml": ("domain_policies:\n  fin:\n    tenants: [t-team]\n"
+                                f"    constraints:\n      forbidden_receiver_types: [email, {entry}]\n"),
+        "team/t-team.yaml": _tenant("t-team"),
+    })
+    res = _gar("--config-dir", str(d), "--validate", *(["--strict"] if strict else []))
+    assert "Traceback" not in res.stderr, res.stderr
+    assert res.returncode == rc, res.stdout + res.stderr
+    out = res.stdout + res.stderr
+    assert "tenant 't-team': receiver type 'email' is forbidden" in out, out
+    assert ("'forbidden_receiver_types' entry must be a receiver type" in out) == strict, out
+
+
 def test_an_unparseable_unselected_carrier_spelling_is_not_refused(tmp_path):
     """F1's reader carries nothing from a file that does not parse — Go's
     LoadTree skips it the same way — so only the multi-carrier WARN."""
