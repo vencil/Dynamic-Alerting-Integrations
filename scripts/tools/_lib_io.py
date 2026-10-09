@@ -872,18 +872,32 @@ class GoRejectedBoolTag:
     def __init__(self, line: int, path: str, text: str) -> None:
         self.line, self.path, self.text = line, path, text
 
-    def message(self) -> str:
+    # The message's last sentence: where the exporter's verdict on the file is.
+    # #2740: the lint has no da-guard, so it cannot promise a `profiles` row
+    # naming the file (for a `_routing_profiles.yaml` there is none) — it
+    # points at validate-config. validate-config prints the WARN only for a
+    # file da-guard effective's parse_failed names (or with no da-guard
+    # verdict at all), so there the `profiles` row is the pointer.
+    LINT_POINTER = ("Whether the exporter can still read this file is da-guard's "
+                    "verdict, not this lint's: run validate-config with `--config-dir` "
+                    "pointed at this tree")
+    PROFILES_ROW_POINTER = ("Whether the exporter can still read this file is decided by "
+                            "da-guard — see validate-config's `profiles` row for this "
+                            "tree (`--config-dir`)")
+
+    def message(self, pointer: str = LINT_POINTER) -> str:
         """⛔ A WARN, and no claim about what the exporter does with the file:
         three Python rebuilds of "which file, which document, which key" each
         failed blind review (#2509 rounds 1-3). Whether the exporter can read
         the file is da-guard's verdict (its parse_failed), which
-        `validate_config` already reports with the exporter's reason."""
+        `validate_config` already reports with the exporter's reason.
+        *pointer*: the last sentence, `LINT_POINTER` or
+        `PROFILES_ROW_POINTER` (#2740)."""
         return (f"{self.path}: explicit `!!bool {self.text}` — yaml.v3 (the exporter's "
                 f"YAML library) does not accept it (only true / True / TRUE / false / "
                 f"False / FALSE under `!!bool`); remove the tag and write the value this "
                 f"field takes (true / false for a boolean, a quoted string for a string). "
-                f"Whether the exporter can still read this file is decided by da-guard — "
-                f"see validate-config's `profiles` row for this tree (`--config-dir`)")
+                f"{pointer}")
 
 
 def find_go_rejected_bool_tags(root: Optional["yaml.Node"]) -> list[GoRejectedBoolTag]:

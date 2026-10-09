@@ -21,6 +21,11 @@ PyYAML（YAML 1.1）讀成布林，schema 因此放行；yaml.v3 讀到的是字
   `validate_config` 的 da-guard 列會連同 exporter 的理由報 FAIL（本檔有一格釘住這條路徑）。
   PyYAML 建不出的值（`!!bool y`、`!!int x`）由 `check_confd_schema` 具名報 ERROR、不出 traceback，
   措辭只講 lint 自己的限制（這份檔沒做 schema 檢查）。
+- #2740（owner 選 B）：lint 沒有 da-guard，不再斷言「會有對應的 `profiles` 列」，只叫人對這棵樹跑
+  validate-config。validate-config 的 `yaml_quoting` 只為 da-guard effective 的 parse_failed 點名的檔
+  保留這則 WARN（指向 `profiles` 列，與 `profiles` 共用同一次 da-guard 執行）；沒點名的檔（exporter 不載入、
+  Go routing reader 照讀 `!!bool yes` 的 `_routing_profiles.yaml`）不報。沒有 da-guard 的判決（找不到、
+  太舊、失敗）時照舊全部保留、措辭不變。
 
 修正前（main 59e58c81）兩條 lint 對 yes/on/no/off 都完全安靜（schema 讓它過、quoting 只看字串欄位）。
 
@@ -30,6 +35,7 @@ from __future__ import annotations
 
 import io
 import json
+import os
 import re
 import subprocess
 import sys
@@ -283,7 +289,9 @@ _EXPLICIT = ["!!bool yes", "!!bool on", "!!bool no", "!!bool off", "!!bool Yes",
 def test_explicit_bool_tag_yaml_v3_refuses_is_a_neutral_warn(tmp_path, field, word):
     """明確 `!!bool yes`：兩條 lint 路徑都給 WARN、rc 不變，指向 da-guard 與 validate-config，
     不斷言 exporter 會怎麼處理這份檔。不綁 `make` 入口（盲審第 4 輪 R4-1：Makefile 寫死
-    conf.d 路徑，對其他樹不成立；這句也會出現在 validate-config 自己的輸出裡）。"""
+    conf.d 路徑，對其他樹不成立；這句也會出現在 validate-config 自己的輸出裡）。
+    #2740：lint 那行不承諾 `profiles` 列（它沒有 da-guard）；租戶檔在 da-guard 的 parse_failed 裡，
+    所以 validate-config 那行保留、且指向 `profiles` 列——兩行只差最後一句。"""
     conf_d, line = _tree(tmp_path, field, word)
     p = _lint(conf_d)
     assert p.returncode == 0, p.stderr
@@ -295,13 +303,21 @@ def test_explicit_bool_tag_yaml_v3_refuses_is_a_neutral_warn(tmp_path, field, wo
     assert "make" not in w, w
     for claim in ("cannot decode", "drops", "parse_failed", "exits 3"):
         assert claim not in w, (claim, w)
+    assert "`profiles` row" not in w and "run validate-config with `--config-dir`" in w, w
     row = vc.check_yaml_quoting(str(conf_d))
-    assert row["status"] == vc.WARN and row["details"] == [w], row
+    assert row["status"] == vc.WARN and row["details"] == [_as_validate_config(w)], row
     # 盲審第 5 輪 R5-1／R5-4：補救寫在這一行自己身上（拿掉 tag、不叫人只加引號），
     # 並指向 validate-config 的 `profiles` 列；row 沒有另一套依種類變化的 hint。
     assert "remove the tag" in w and "quote it" not in w, w
-    assert "`profiles` row" in w, w
+    assert "`profiles` row" in row["details"][0], row
     assert row["hint"] is None, row
+
+
+def _as_validate_config(lint_line: str) -> str:
+    """lint 那行換成 validate-config 的最後一句（#2740）；其餘逐字相同。"""
+    tail = _lib_io.GoRejectedBoolTag.LINT_POINTER
+    assert lint_line.endswith(tail), lint_line
+    return lint_line[:-len(tail)] + _lib_io.GoRejectedBoolTag.PROFILES_ROW_POINTER
 
 
 _SLACK_TAGGED = ("    _routing:\n      receiver:\n        type: slack\n"
@@ -404,28 +420,50 @@ def _explicit_tree(tmp_path: Path, files: dict[str, str]) -> Path:
 
 
 _SM = "    _state_maintenance: {enabled: !!bool yes}\n"
-# (id, files, file the finding is in) — file kinds both lints read; one WARN each, rc 0.
+_ROUTING_PROFILE_TAGGED = ("routing_profiles:\n  rp1:\n    receiver: {type: webhook, "
+                           "url: 'https://h.example.com/x', send_resolved: !!bool yes}\n")
+# (id, files, file the finding is in, in da-guard effective's parse_failed) — file kinds
+# both lints read; the lint gives one WARN each, rc 0, in every one. validate-config keeps
+# it only where da-guard names the file (#2740). A tenant file's second document is one
+# the exporter's load does not decode a tag in (measured: parse_failed is empty), so it
+# is not named either.
 _PLACES = [
     ("tenant-doc2", {"sub/t1.yaml": "tenants:\n  t1:\n    mysql_connections: '5'\n---\n"
-                                    "tenants:\n  t1:\n" + _SM}, "sub/t1.yaml"),
+                                    "tenants:\n  t1:\n" + _SM}, "sub/t1.yaml", False),
     ("root-defaults", {"_defaults.yaml": _DEFAULTS + "  container_cpu: !!bool yes\n"},
-     "_defaults.yaml"),
+     "_defaults.yaml", True),
     ("root-multidb-tenants", {"_defaults-multidb.yaml": "tenants:\n  t1:\n" + _SM},
-     "_defaults-multidb.yaml"),
-    ("routing-profiles", {"_routing_profiles.yaml": "routing_profiles:\n  rp1:\n    receiver: "
-                          "{type: webhook, url: 'https://h.example.com/x', send_resolved: !!bool yes}\n"},
-     "_routing_profiles.yaml"),
+     "_defaults-multidb.yaml", True),
+    ("routing-profiles", {"_routing_profiles.yaml": _ROUTING_PROFILE_TAGGED},
+     "_routing_profiles.yaml", False),
+    ("routing-profiles-subdir", {"sub/_routing_profiles.yaml": _ROUTING_PROFILE_TAGGED},
+     "sub/_routing_profiles.yaml", False),
 ]
 
 
-@pytest.mark.parametrize("name,files,rel", _PLACES, ids=[c[0] for c in _PLACES])
-def test_explicit_bool_tag_is_the_same_warn_in_every_file_kind(tmp_path, name, files, rel):
+def _parse_failed(conf_d: Path) -> list[str]:
+    try:
+        tv.load_effective(conf_d)
+    except tv.ParseFailedError as exc:
+        return exc.parse_failed
+    return []
+
+
+@pytest.mark.parametrize("name,files,rel,dropped", _PLACES, ids=[c[0] for c in _PLACES])
+def test_explicit_bool_tag_is_the_same_warn_in_every_file_kind(tmp_path, name, files, rel,
+                                                               dropped):
     conf_d = _explicit_tree(tmp_path, files)
     p = _lint(conf_d)
     hits = [l for l in (p.stdout + p.stderr).splitlines() if "explicit `!!bool yes`" in l]
     assert p.returncode == 0 and len(hits) == 1 and hits[0].startswith(f"WARN: {rel}:"), p.stderr
+    assert (rel in _parse_failed(conf_d)) is dropped                 # 前提：da-guard 的判決
     row = vc.check_yaml_quoting(str(conf_d))
-    assert row["status"] == vc.WARN and row["details"] == hits, row
+    if dropped:
+        assert row["status"] == vc.WARN and row["details"] == [_as_validate_config(hits[0])], row
+    else:
+        # #2740：da-guard 不點名這份檔（exporter 不載入它、或不解碼那份文件）——不報。
+        assert row["status"] == vc.PASS, row
+        assert not any("explicit `!!bool" in d for d in row["details"]), row
 
 
 def test_a_file_the_exporter_drops_fails_validate_config_through_da_guard(tmp_path):
@@ -456,3 +494,87 @@ def test_value_pyyaml_cannot_construct_is_named_not_a_traceback(tmp_path, value,
     assert "exporter" not in err, err
     tag_warns = [l for l in _warn_lines(p) if "explicit `!!bool" in l]
     assert len(tag_warns) == (1 if value.startswith("!!bool") else 0), p.stderr
+
+
+# ── #2740（owner 選 B）：validate-config 以 da-guard 的 parse_failed 為準 ──────────
+
+VALIDATE_CONFIG = REPO_ROOT / "scripts" / "tools" / "ops" / "validate_config.py"
+
+
+def _validate_config(conf_d: Path, da_guard: str) -> dict[str, dict]:
+    p = subprocess.run([sys.executable, "-X", "utf8", str(VALIDATE_CONFIG), "--config-dir",
+                        str(conf_d), "--json"],
+                       capture_output=True, text=True, encoding="utf-8", errors="replace",
+                       timeout=300, env={**os.environ, "DA_GUARD_BINARY": da_guard})
+    return {r["check"]: r for r in json.loads(p.stdout)}
+
+
+def _explicit_warns(row: dict) -> list[str]:
+    return [d for d in row["details"] if "explicit `!!bool" in d]
+
+
+def _counting_da_guard(tmp_path: Path, real: str) -> tuple[str, Path]:
+    """da-guard behind a wrapper that logs each subcommand it is run with."""
+    log = tmp_path / "da-guard.log"
+    wrapper = tmp_path / "da-guard-counting"
+    wrapper.write_text(f'#!/bin/sh\necho "$1" >> "{log}"\nexec "{real}" "$@"\n',
+                       encoding="utf-8")
+    wrapper.chmod(0o755)
+    return str(wrapper), log
+
+
+def test_validate_config_keeps_the_warn_for_a_file_da_guard_drops(tmp_path, da_guard_binary):
+    """租戶檔寫 `!!bool yes`：yaml_quoting 保留 WARN（指向 profiles 列），profiles FAIL 並指名該檔；
+    兩列讀的是同一次 `da-guard effective`（validate-config 一次執行只跑一次）。"""
+    conf_d = _explicit_tree(tmp_path, {"sub/t1.yaml": "tenants:\n  t1:\n" + _SM})
+    da_guard, log = _counting_da_guard(tmp_path, da_guard_binary)
+    rows = _validate_config(conf_d, da_guard)
+    (w,) = _explicit_warns(rows["yaml_quoting"])
+    assert w.startswith("WARN: sub/t1.yaml:3: ") and "`profiles` row" in w, w
+    assert rows["yaml_quoting"]["status"] == vc.WARN, rows["yaml_quoting"]
+    assert rows["profiles"]["status"] == vc.FAIL, rows["profiles"]
+    assert "sub/t1.yaml" in "\n".join(rows["profiles"]["details"]), rows["profiles"]
+    assert log.read_text(encoding="utf-8").split().count("effective") == 1, log.read_text()
+
+
+def test_validate_config_two_dropped_files_each_keep_their_warn(tmp_path, da_guard_binary):
+    conf_d = _explicit_tree(tmp_path, {
+        f"sub/{t}.yaml": f"tenants:\n  {t}:\n" + _SM for t in ("t1", "t2")})
+    rows = _validate_config(conf_d, da_guard_binary)
+    assert [w.split(":", 2)[1].strip() for w in _explicit_warns(rows["yaml_quoting"])] == [
+        "sub/t1.yaml", "sub/t2.yaml"], rows["yaml_quoting"]
+    text = "\n".join(rows["profiles"]["details"])
+    assert rows["profiles"]["status"] == vc.FAIL and "sub/t1.yaml" in text and "sub/t2.yaml" in text
+
+
+@pytest.mark.parametrize("rel", ["_routing_profiles.yaml", "sub/_routing_profiles.yaml"])
+def test_validate_config_drops_the_warn_for_a_routing_profiles_file(tmp_path, da_guard_binary,
+                                                                    rel):
+    """根目錄或子目錄的 `_routing_profiles.yaml` 寫 `!!bool yes`：exporter 不載入它，da-guard 的
+    parse_failed 不點名、profiles PASS——yaml_quoting 不再報這則 WARN（lint 照報）。"""
+    conf_d = _explicit_tree(tmp_path, {rel: _ROUTING_PROFILE_TAGGED})
+    assert len([l for l in _warn_lines(_lint(conf_d)) if "explicit `!!bool" in l]) == 1
+    rows = _validate_config(conf_d, da_guard_binary)
+    assert _explicit_warns(rows["yaml_quoting"]) == [], rows["yaml_quoting"]
+    assert rows["yaml_quoting"]["status"] == vc.PASS, rows["yaml_quoting"]
+    assert rows["profiles"]["status"] == vc.PASS, rows["profiles"]
+
+
+@pytest.mark.parametrize("no_verdict", ["missing", "exits-2"])
+def test_without_a_da_guard_verdict_every_warn_is_kept(tmp_path, monkeypatch, no_verdict):
+    """沒有 da-guard 的判決（找不到、或像沒有 `effective` 的舊版那樣 exit 2）：照舊全部保留，
+    措辭不變（指向 profiles 列，那一列說明為何沒有判決）。"""
+    if no_verdict == "missing":
+        binary = tmp_path / "no-such-da-guard"
+    else:
+        binary = tmp_path / "old-da-guard"
+        binary.write_text("#!/bin/sh\necho 'unknown subcommand' >&2\nexit 2\n", encoding="utf-8")
+        binary.chmod(0o755)
+    monkeypatch.setenv("DA_GUARD_BINARY", str(binary))
+    conf_d = _explicit_tree(tmp_path, {"_routing_profiles.yaml": _ROUTING_PROFILE_TAGGED,
+                                       "sub/t2.yaml": "tenants:\n  t2:\n" + _SM})
+    lint_hits = [l for l in _warn_lines(_lint(conf_d)) if "explicit `!!bool" in l]
+    assert len(lint_hits) == 2, lint_hits
+    row = vc.check_yaml_quoting(str(conf_d))
+    assert row["status"] == vc.WARN, row
+    assert sorted(row["details"]) == sorted(_as_validate_config(l) for l in lint_hits), row

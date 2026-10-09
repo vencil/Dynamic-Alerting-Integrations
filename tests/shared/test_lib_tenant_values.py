@@ -547,10 +547,15 @@ def test_da_guard_without_the_schedules_flag_is_named_as_too_old(tmp_path):
         tv.load_served_tree(tmp_path, binary=str(fake), schedules=True)
     assert ei.value.returncode == 2
     assert "older than this tool: upgrade or rebuild it" in str(ei.value)
-    # 其他 exit 2 不被說成「太舊」。
+    assert ei.value.stale and ei.value.binary_fault
+    # 其他 exit 2（同一組 argv 加 `-h` 回 0 的 da-guard：認得子命令與旗標）不被說成「太舊」
+    # ——判定看 `-h` 的結束碼，不看 stderr 的字（#2725）。
     other = tmp_path / "other-da-guard"
-    other.write_text("#!/bin/sh\necho 'boom' >&2\nexit 2\n", encoding="utf-8")
+    other.write_text('#!/bin/sh\nfor a in "$@"; do [ "$a" = -h ] && exit 0; done\n'
+                     "echo 'flag provided but not defined: -schedules' >&2\nexit 2\n",
+                     encoding="utf-8")
     other.chmod(0o755)
     with pytest.raises(tv.ServedValuesError) as ei:
         tv.load_served_tree(tmp_path, binary=str(other), schedules=True)
     assert "older than this tool" not in str(ei.value)
+    assert not ei.value.binary_fault
