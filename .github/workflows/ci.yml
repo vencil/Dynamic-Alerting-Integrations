@@ -217,14 +217,10 @@ jobs:
               # Why a catch-all rather than enumerating the rest: an
               # enumeration is only as complete as the scanner deriving it, and
               # `test_wrapped_path_references` reads the WHOLE tracked tree —
-              # no filter narrower than everything can express its input set.
-              # Measured on #1383 (`4fd49561`), against the filter as it stood
-              # BEFORE the catch-all: 101 tracked files sat outside the
-              # enumerated list, and (#1402, `17a05bb5`) 9 of the 400 commits
-              # before it touched nothing else. The rejected alternative
-              # (repo-wide guards in an ungated job) cost ~17x more COMPUTE
-              # there, though ⚠️ LESS wall — reject it on compute and on its
-              # hand-maintained list, not on wall.
+              # no filter narrower than everything can express its input set
+              # (#1383, #1402). The rejected alternative (repo-wide guards in an
+              # ungated job) is rejected on compute and on its hand-maintained
+              # list, not on wall time.
               #
               # ⚠️ NOT every entry below is pinned by
               # tests/ops/test_ci_path_filter_coverage.py: deleting some of
@@ -1569,7 +1565,8 @@ jobs:
         # it via shutil.which — VIBE_REQUIRE_CHECK_JSONSCHEMA above makes a
         # missing CLI fail instead of skipping.
         # pre-commit: since #1689 it is NOT the runner for the pre-push guards
-        # (a hook it runs is handed one refspec). tests/ops/test_prepush_hook_wiring.py
+        # (pre-commit reads git's stdin first, and the guards read nothing else).
+        # tests/ops/test_prepush_hook_wiring.py
         # and tests/dx/test_preflight_marker.py still need it installed, to
         # drive `pre-commit install --hook-type pre-push` and prove the
         # installer takes the slot back from it, `-f` included. The Lint job
@@ -1944,7 +1941,8 @@ jobs:
         # it via shutil.which — VIBE_REQUIRE_CHECK_JSONSCHEMA above makes a
         # missing CLI fail instead of skipping.
         # pre-commit: since #1689 it is NOT the runner for the pre-push guards
-        # (a hook it runs is handed one refspec). tests/ops/test_prepush_hook_wiring.py
+        # (pre-commit reads git's stdin first, and the guards read nothing else).
+        # tests/ops/test_prepush_hook_wiring.py
         # and tests/dx/test_preflight_marker.py still need it installed, to
         # drive `pre-commit install --hook-type pre-push` and prove the
         # installer takes the slot back from it, `-f` included. The Lint job

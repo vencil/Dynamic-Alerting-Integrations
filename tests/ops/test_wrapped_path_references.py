@@ -260,16 +260,16 @@ widening selection would mean changing that schema. Raised by CodeRabbit
 on #1383.
 
 ⛔ FIXED, and worth keeping the shape written down. `python-tests-run` used to
-be genuinely path-gated while 101 tracked files — counted then, against the
-pre-`**` filter — fell outside ci.yml's `python` filter, so a PR touching only
-such a file did not run this guard at all.
+be genuinely path-gated while tracked files fell outside ci.yml's `python`
+filter (#1383), so a PR touching only such a file did not run this guard at
+all.
 ⚠️ The required check `Python Tests (3.13)` is reported by the always-run
 aggregate, not by the skipped leg — so it reported SUCCESS, never `skipped`.
 The defect was never "a skipped required check satisfies branch protection";
 it was `detect-changes` answering "not needed" for a suite that was needed.
 Same #1368 shape, one level up.
 
-⛔ The fix is a catch-all rather than "add those 101 paths" because of this
+⛔ The fix is a catch-all rather than "add those paths" because of this
 module: it reads the WHOLE tracked tree, so no filter NARROWER than everything
 can express its input set — any such filter is a guess that is wrong by
 construction. ci.yml's `python` filter now carries `**`, pinned by
