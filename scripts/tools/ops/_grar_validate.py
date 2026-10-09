@@ -1173,7 +1173,7 @@ def is_receiver_name_collision(line: str) -> bool:
 
 
 # ── #2326: a conf.d tree the routing plane refuses (blocking in EVERY mode) ─
-# ADR-017 "Amendment 2026-09-28": `_routing_enforced` below the root, a
+# ADR-017 Decision 9: `_routing_enforced` below the root, a
 # `receiver` / `overrides` written as null in a subdirectory level's
 # `_routing_defaults`, one routing-profile name defined in two files. (One
 # tenant id declared in two files is `DUPLICATE_TENANT_PREFIX` below, #2315 —

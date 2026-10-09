@@ -407,7 +407,7 @@ def _refuse_nested_enforced(fname: str, result: dict) -> None:
         result, "routing_enforced_below_root", fname, "_routing_enforced",
         f"{fname}: _routing_enforced is read only at the conf.d root — a "
         f"NOC route scoped to one subtree is not supported (ADR-017 "
-        f"amendment 2026-09-28 (b)); move it to a root platform file or "
+        f"Decision 9); move it to a root platform file or "
         f"delete it")
 
 
@@ -428,7 +428,7 @@ def _parse_nested_config(data: dict, fname: str, level: str,
                          is_level_carrier: bool, result: dict) -> None:
     """The routing-plane keys of one file BELOW the conf.d root (#2326).
 
-    ADR-017 "Amendment 2026-09-28":
+    ADR-017 Decision 9:
 
     * (a) `_routing_defaults` is read from the directory's defaults CARRIER
       only (the one `_defaults.yaml` / `.yml` the threshold chain reads), at
@@ -489,7 +489,7 @@ def _parse_nested_config(data: dict, fname: str, level: str,
                         f"the conf.d root that takes the {key} away from "
                         f"every tenant under {level}/ that does not set its "
                         f"own, and their alerts fall silently to the "
-                        f"catch-all (ADR-017 amendment 2026-09-28 (a)); set "
+                        f"catch-all (ADR-017 Decision 9); set "
                         f"a value or remove the key")
             result.setdefault("routing_defaults_levels", {})[level] = rd
 
@@ -855,7 +855,7 @@ def _parse_config_files(config_dir: str) -> dict:
         print(f"ERROR: config directory not found: {config_dir}", file=sys.stderr)
         sys.exit(EXIT_CALLER_ERROR)
 
-    # #2326 (ADR-016/017 "Amendment 2026-09-28"): this reader walks the WHOLE
+    # #2326 (ADR-016 "Amendment 2026-09-28", ADR-017 Decision 9): this reader walks the WHOLE
     # tree, with the walker every other reader of the threshold plane uses
     # (`list_config_tree`: hidden directories pruned, directory symlinks
     # reported). Until #2326 it was flat — a tenant in a subdirectory got no
@@ -1061,7 +1061,7 @@ def _parse_config_files(config_dir: str) -> dict:
             continue
 
         # #2326 (f): the `tenants:` block of a platform file BELOW the root is
-        # read by no plane (ADR-017 item 1); threshold-exporter WARNs about
+        # read by no plane (ADR-017 Decision 5); threshold-exporter WARNs about
         # it, and so does this reader now that it opens the file.
         if level != ROOT_LEVEL and is_reserved_name(path_p.name):
             if data.get("tenants"):

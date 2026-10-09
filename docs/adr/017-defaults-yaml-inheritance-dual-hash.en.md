@@ -18,7 +18,7 @@ lang: en
 
 ✅ **Accepted** (v2.7.0, 2026-04-19). Later amendments are folded into the sections they change:
 
-| Date | Amendment | Where in this ADR |
+| Date | What changed | Where in this ADR |
 |:--|:--|:--|
 | 2026-04-25 | "Defaults changed but the tenant's effective config did not" split in two: blocked by a tenant override (shadowed) and no substantive change (cosmetic) | Decision 7 |
 | 2026-09-28 | Routing settings are inherited level by level along directories too | Decision 9 |
@@ -28,6 +28,7 @@ lang: en
 
 - **Tenant file**: a file whose name does not start with `_` and that declares tenants under `tenants:`. **Platform file**: a file whose name starts with `_`, such as `_defaults.yaml`.
 - **Effective config**: what applies to a tenant after every defaults level is stacked in order and the tenant file is stacked on top. Read it with `da-guard effective`, tenant-api's `GET /api/v1/tenants/{id}/effective`, or `describe_tenant.py`.
+- **da-guard**: this repo's conf.d/ checking tool. `da-guard effective` prints the effective config tenant-api's `/effective` would return, and `da-guard served-values` prints the values the exporter's `/metrics` would serve.
 - **`/metrics`**: the metrics the exporter exposes to Prometheus; thresholds are served as `user_threshold` series. `da-guard served-values` prints the values it serves.
 - **Hot reload**: the exporter rescans the directory periodically and applies new config without a restart.
 
@@ -74,19 +75,26 @@ Two exceptions:
 
 ### 3. Example
 
+`conf.d/_defaults.yaml` (root):
+
 ```yaml
-# conf.d/_defaults.yaml (root)
 defaults:
   pg_stat_activity_count: 500
   pg_replication_lag_seconds: 30
   pg_locks_count: 300
+```
 
-# conf.d/finance/_defaults.yaml (domain level: finance is stricter)
+`conf.d/finance/_defaults.yaml` (domain level, finance is stricter):
+
+```yaml
 defaults:
   pg_stat_activity_count: 200
   pg_locks_count: 100
+```
 
-# conf.d/finance/fin-db-001.yaml (tenant file)
+`conf.d/finance/fin-db-001.yaml` (tenant file):
+
+```yaml
 tenants:
   fin-db-001:
     pg_stat_activity_count: "150"
@@ -114,14 +122,14 @@ Output of `da-guard effective --config-dir conf.d` (excerpt):
 Two things to notice in this example:
 
 - **The tenant's value is quoted; the values under `defaults:` are not.** A tenant threshold is a string or an object with a schedule, and an unquoted number is rejected by `check_confd_schema.py`; platform defaults take numbers only.
-- **A subdirectory can only change thresholds the root declares.** Remove `pg_locks_count` from the root and the effective config still shows 100, but `/metrics` does not serve it: `not_served` marks it `undeliverable` and da-guard reports `subtree_default_undeliverable`.
+- **A subdirectory can only change thresholds the root declares.** Remove `pg_locks_count` from the root and the effective config still shows 100, but `/metrics` does not serve it. Every tenant in `da-guard effective` has a `not_served` field that lists, key by key, the values the effective config shows but `/metrics` does not serve, with the reason; here it is `undeliverable`, and da-guard's check reports `subtree_default_undeliverable`.
 
 ### 4. A threshold written as `null` is the same as not writing it at that level
 
 A threshold key written as `null` does not switch the alert off; to switch it off write `"disable"`.
 
 - When a tenant file or a subdirectory `_defaults.yaml` writes `null`, `/metrics` (`da-guard served-values`), `/effective` (`da-guard effective`) and `describe_tenant` give the same result as when that level does not write the key.
-- When the root `_defaults.yaml` writes `null` under `defaults:`, the root does not declare that threshold and `/metrics` serves no series for it (not a threshold of 0): a value the tenant supplies is named by da-guard's `root_default_null_undeclared`, a value a subdirectory `_defaults.yaml` supplies by `subtree_default_undeliverable`. If the same key is listed in the root's `optional_overrides:`, the tenant's value is served as usual.
+- When the root `_defaults.yaml` writes `null` under `defaults:`, the root does not declare that threshold and `/metrics` serves no series for it (not a threshold of 0): a value the tenant supplies is named by da-guard's `root_default_null_undeclared`, a value a subdirectory `_defaults.yaml` supplies by `subtree_default_undeliverable`. If the same key is listed in the root's `optional_overrides:`, the tenant's value is served as usual. (`optional_overrides:` is a list of key names at the top level of the root `_defaults.yaml`: it declares that these thresholds exist without giving them a platform default, so they are served only when a tenant writes them.)
 
 **Why `null` does not mean "off"**: in YAML, `kx:` followed by nothing parses to `null`, exactly like `kx: ~`. If `null` meant off, forgetting to fill in a value would silently switch an alert off. When config is wrong, an extra alert is better than a missing one.
 
@@ -129,7 +137,7 @@ Other keys behave differently with `null`:
 
 - **The four routing fields** (`group_by`, `group_wait`, `group_interval`, `repeat_interval` under `_routing`): `null` means "do not inherit the upper value", and the generated route omits the field. `""`, `0` and `[]` have the same effect.
 - **`_routing.receiver` cannot be used this way**: when a tenant writes `receiver: null`, the route generator prints a WARN and skips the tenant, whose alerts go back to Alertmanager's root route.
-- **Other keys starting with `_`** (such as `_namespaces`): `null` in a `_defaults.yaml` deletes the value inherited from above. It works only inside `defaults:`, or at the top level of a file without `defaults:`; a `null` in a tenant file or in the root `_defaults.yaml`'s `tenants:` block is rejected by `check_confd_schema.py`. And the `null` must sit in the same position as the inherited value:
+- **Other keys starting with `_`** (such as `_namespaces`): `null` in a `_defaults.yaml` deletes the value inherited from above. It works only inside `defaults:`, or at the top level of a file without `defaults:`; a `null` in a tenant file is rejected by `check_confd_schema.py`. And the `null` must sit in the same position as the inherited value:
 
 | Upper level (has `defaults:`) | Lower level writes `null` | Result |
 |:--|:--|:--|
@@ -142,21 +150,20 @@ When `defaults:` itself is `null` (`defaults:` followed by nothing), the whole f
 
 ### 5. Which keys of a `_defaults.yaml` enter the effective config
 
-**Only keys under `defaults:` enter the effective config and `merged_hash`.** A subdirectory file without `defaults:` is merged whole as defaults. The root `_defaults.yaml` must have `defaults:`: without it the exporter does not read its thresholds, `/effective` still shows them, and `not_served` marks them `root_defaults_unwrapped`.
+**Keys under `defaults:` enter the effective config and `merged_hash`; so does the `tenants:` block of the root `_defaults.yaml` (see below).** A subdirectory file without `defaults:` is merged whole as defaults; the schema, however, allows only a fixed set of keys at the top level of such a file, so a threshold key written there directly (for example `cpu: 80`) is rejected by `check_confd_schema.py`. The root `_defaults.yaml` must have `defaults:`: without it the exporter does not read its thresholds, `/effective` still shows them, and `not_served` marks them `root_defaults_unwrapped`.
 
-Top-level keys beside `defaults:` do not enter the effective config; each has its own reader. After changing one, confirm the change where it is read:
+Apart from the `tenants:` block, top-level keys beside `defaults:` do not enter the effective config; each has its own reader. After changing one, confirm the change where it is read:
 
 | Key you changed | Where to confirm |
 |:--|:--|
 | `state_filters` | `user_state_filter{tenant,filter,severity}` on `/metrics` |
-| the `tenants:` block of the root `_defaults.yaml` (e.g. `_silent_mode`) | `user_silent_mode{tenant,target_severity}` on `/metrics`; `platform_overlay` in `da-guard effective` |
 | `_routing_defaults`, `_routing_enforced` | the full output of `generate_alertmanager_routes.py --config-dir conf.d/ --dry-run`, before vs after |
 | `_custom_alerts` | `compile_custom_alerts.py --check` |
 | `max_metrics_per_tenant` | see below |
 
 This table is not complete. For a key that is not in it, find the code that reads it before deciding whether the change took effect; other top-level keys starting with `_` (for example `_silent_mode` written directly at the top level) have no reader — they take no effect and raise no error.
 
-**The `tenants:` block of the root `_defaults.yaml`** holds the platform's defaults for existing tenants: for the same key the tenant file wins, whatever the file names sort as; a tenant no tenant file declares is ignored with a WARN (a platform file cannot create a tenant); the `tenants:` block of a platform file in a subdirectory is not read, and both the exporter and the route generator log a WARN.
+**The `tenants:` block of the root `_defaults.yaml`** holds the platform's defaults for existing tenants. It enters the effective config and `merged_hash`: adding `tenants: {fin-db-001: {_silent_mode: warning}}` to the example's root, for instance, adds `_silent_mode: warning` to `fin-db-001`'s effective config, `key_sources` marks it `layer: platform`, `platform_overlay` names the file and key that supplied it, `merged_hash` moves from `5db367c3efd997ce` to `73e76f3cabed3a9f`, and `/metrics` gains `user_silent_mode{tenant,target_severity}`. For the same key the tenant file wins, whatever the file names sort as; a tenant no tenant file declares is ignored with a WARN (a platform file cannot create a tenant); the `tenants:` block of a platform file in a subdirectory is not read, and both the exporter and the route generator log a WARN.
 
 **`max_metrics_per_tenant`** caps how many threshold series one tenant may serve, and is read only from the top level of the root `_defaults.yaml`; written in a subdirectory `_defaults.yaml` or a tenant file it is ignored with a WARN, so a tenant cannot raise its own cap. Unset or 0 means a cap of 500; a negative value means no truncation. The Helm chart key is `thresholdConfig.max_metrics_per_tenant`.
 
@@ -199,7 +206,7 @@ the tenant file's source_hash changed  → applied (reason=source; a new tenant 
 otherwise, a _defaults.yaml on the chain changed:
   merged_hash changed                    → applied (reason=defaults)
   unchanged, every changed key is overridden by the tenant  → shadowed
-  unchanged, no key under defaults: changed                 → cosmetic (comments, order or whitespace only, or top-level keys only)
+  unchanged, no key under defaults: changed                 → cosmetic (comments, order or whitespace only, or top-level keys other than tenants: only)
 ```
 
 Known gap: the tenant-file branch does not compare `merged_hash`, so a comment-only edit of a tenant file is also recorded as applied (reason=source).
@@ -216,10 +223,10 @@ Hashes are never used as metric labels, to keep the series count from exploding;
 
 ### 8. Changes to top-level keys are invisible in the effective config
 
-Top-level keys do not enter the effective config, so no tool whose input is the effective config or `merged_hash` sees their changes: `/effective`, `describe_tenant`, da-guard, the blast-radius report, `tenant-verify`. This is a cost accepted deliberately so that Decision 7 records changes correctly (see Alternative D for why), but it has two consequences to know:
+Apart from the `tenants:` block, top-level keys do not enter the effective config, so no tool whose input is the effective config or `merged_hash` sees their changes: `/effective`, `describe_tenant`, da-guard, the blast-radius report, `tenant-verify`. This is a cost accepted deliberately so that Decision 7 records changes correctly (see Alternative D for why), but it has two consequences to know:
 
 - **`effect="cosmetic"` does not mean only a comment changed.** A change that only edits the root's `_routing_defaults` and one that only adds a comment are both recorded by the exporter as `effect="cosmetic"`.
-- **`da-tools tenant-verify --expect-merged-hash` is not evidence here.** It exits 2 when the hash differs, but after a platform top-level key changes it still exits 0: exit 0 means this face is not covered, not that a rollback was verified.
+- **`da-tools tenant-verify --expect-merged-hash` is not evidence here.** It exits 2 when the hash differs (an edit of the root `tenants:` block makes it exit 2), but after any other platform top-level key changes it still exits 0: exit 0 means this face is not covered, not that a rollback was verified.
 
 A separate mechanism that compares platform top-level keys is tracked in [#1516](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/1516).
 
@@ -243,7 +250,7 @@ For example, when the root supplies `receiver` and `group_wait: 60s` and `a/_def
 **Limits**:
 
 - A subdirectory's `_routing_defaults` may not write `receiver` or `overrides` as `null` (exit 2); otherwise every tenant in the subtree without its own receiver would lose its route.
-- `_routing_enforced` (the route the platform enforces) is accepted only at the root; in a subdirectory it exits 2.
+- `_routing_enforced` (the route the platform enforces) is accepted only at the root; in a subdirectory it exits 2. An enforced route scoped to one subtree is not supported today; it will be reconsidered when a customer or team explicitly needs an on-call (NOC) route that applies to one subtree only.
 - A routing profile (`_routing_profiles.yaml`) may live in a subdirectory and is visible only to tenants at that level and below; a name may be defined only once in the whole tree, and a duplicate exits 2.
 - A domain policy (`_domain_policy.yaml`) may live in a subdirectory and constrains only that subtree; naming a tenant outside the subtree has no effect — an error with `--strict` (exit 1), a WARN otherwise. Policies of different levels stack: a tenant must satisfy each of them.
 - The same tenant id declared in two files exits 1.
@@ -262,7 +269,7 @@ On the same tree, `/effective` and `/metrics` can give different values — for 
 
 - **Benefits**: a default is written once and the whole subtree inherits it; each defaults change is classified per tenant as applied / shadowed / cosmetic, so the blast-radius report shows whom a change really affected.
 - **Costs**:
-  - Changes to top-level keys are invisible in the effective config (Decision 8).
+  - Changes to top-level keys other than `tenants:` are invisible in the effective config (Decision 8).
   - A comment-only edit of a tenant file is recorded as applied (Decision 7).
   - `_custom_alerts` differs between `describe_tenant.py` and the Go implementation (Decision 2).
   - A subdirectory file without `defaults:` is merged whole, so its top-level keys (such as `state_filters`) also enter the effective config: changing one moves the `merged_hash` of every tenant in that subtree. `rule-packs/recipes/examples/conf.d/finance/_defaults.yaml` has this shape (its only top-level key is `_custom_alerts`).
@@ -281,7 +288,7 @@ On the same tree, `/effective` and `/metrics` can give different values — for 
 
 ❌ With `group_by: [severity]` above and `group_by: [alertname]` below, concatenation gives `[severity, alertname]`, whose meaning is unclear. Someone writing `group_by` means "use this instead", not "add this".
 
-### D: Merge the top-level keys into the effective config too
+### D: Merge the other top-level keys into the effective config too
 
 ❌ This is the most direct way to make the changes of Decision 8 visible, but three reasons rule it out:
 

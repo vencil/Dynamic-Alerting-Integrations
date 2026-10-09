@@ -33,6 +33,7 @@ updated_at: 2026-10-09
 
 - **租戶檔**：檔名不以 `_` 開頭、用 `tenants:` 宣告租戶的檔。**平台檔**：檔名以 `_` 開頭的檔，例如 `_defaults.yaml`。
 - **最終設定（effective config）**：各層預設值依序疊上、再疊上租戶檔之後，這個租戶適用的設定。用 `da-guard effective`、tenant-api 的 `GET /api/v1/tenants/{id}/effective` 或 `describe_tenant.py` 查看。
+- **da-guard**：本 repo 的 conf.d/ 檢查工具。`da-guard effective` 印出 tenant-api `/effective` 會給的最終設定，`da-guard served-values` 印出 exporter `/metrics` 會送的值。
 - **`/metrics`**：exporter 給 Prometheus 抓的指標，閾值以 `user_threshold` series 送出。`da-guard served-values` 印出它會送的值。
 - **熱重載**：exporter 不重啟，定期重新掃描目錄並套用新設定。
 
@@ -79,19 +80,26 @@ conf.d/
 
 ### 3. 範例
 
+`conf.d/_defaults.yaml`（根目錄）：
+
 ```yaml
-# conf.d/_defaults.yaml（根目錄）
 defaults:
   pg_stat_activity_count: 500
   pg_replication_lag_seconds: 30
   pg_locks_count: 300
+```
 
-# conf.d/finance/_defaults.yaml（domain 層：金融更嚴格）
+`conf.d/finance/_defaults.yaml`（domain 層，金融更嚴格）：
+
+```yaml
 defaults:
   pg_stat_activity_count: 200
   pg_locks_count: 100
+```
 
-# conf.d/finance/fin-db-001.yaml（租戶檔）
+`conf.d/finance/fin-db-001.yaml`（租戶檔）：
+
+```yaml
 tenants:
   fin-db-001:
     pg_stat_activity_count: "150"
@@ -119,14 +127,14 @@ tenants:
 讀這個範例要注意兩件事：
 
 - **租戶的值加引號，`defaults:` 裡不加。** 租戶的閾值是字串或帶排程的物件，未加引號的數字會被 `check_confd_schema.py` 擋下；平台預設只收數字。
-- **子目錄只能改根目錄已宣告的閾值。** 把根目錄的 `pg_locks_count` 拿掉，最終設定仍顯示 100，但 `/metrics` 不送它：`not_served` 標 `undeliverable`，da-guard 報 `subtree_default_undeliverable`。
+- **子目錄只能改根目錄已宣告的閾值。** 把根目錄的 `pg_locks_count` 拿掉，最終設定仍顯示 100，但 `/metrics` 不送它。`da-guard effective` 的每個租戶有一個 `not_served` 欄位，逐鍵列出「最終設定顯示了、`/metrics` 卻不送」的值與原因，這裡標 `undeliverable`；da-guard 的檢查報 `subtree_default_undeliverable`。
 
 ### 4. 閾值寫 `null` 等於這一層沒寫
 
 閾值鍵寫 `null` 不會關掉告警；要關掉請寫 `"disable"`。
 
 - 租戶檔或子目錄 `_defaults.yaml` 寫 `null` 時，`/metrics`（`da-guard served-values`）、`/effective`（`da-guard effective`）與 `describe_tenant` 的結果與這一層沒寫這個鍵相同。
-- 根目錄 `_defaults.yaml` 的 `defaults:` 寫 `null` 時，根層沒有宣告這個閾值，`/metrics` 不送出這個閾值的 series（不是門檻 0）：租戶給的值由 da-guard 的 `root_default_null_undeclared` 指名，子目錄 `_defaults.yaml` 給的值由 `subtree_default_undeliverable` 指名。同一個鍵若列在根目錄的 `optional_overrides:`，租戶給的值照常送出。
+- 根目錄 `_defaults.yaml` 的 `defaults:` 寫 `null` 時，根層沒有宣告這個閾值，`/metrics` 不送出這個閾值的 series（不是門檻 0）：租戶給的值由 da-guard 的 `root_default_null_undeclared` 指名，子目錄 `_defaults.yaml` 給的值由 `subtree_default_undeliverable` 指名。同一個鍵若列在根目錄的 `optional_overrides:`，租戶給的值照常送出。（`optional_overrides:` 是根目錄 `_defaults.yaml` 頂層的一份鍵名清單：宣告這些閾值存在、但不給平台預設值，租戶自己寫了才送。）
 
 **為什麼不讓 `null` 代表關閉**：YAML 裡 `kx:` 後面留白，解析出來和 `kx: ~` 一樣是 `null`。如果 `null` 代表關閉，打到一半忘了填值就會靜靜關掉一條告警。設定寫錯時，寧可多出告警，也不要少掉告警。
 
@@ -134,7 +142,7 @@ tenants:
 
 - **路由的四個欄位**（`_routing` 底下的 `group_by`、`group_wait`、`group_interval`、`repeat_interval`）：寫 `null` 表示不沿用上層的值，產出的 route 不帶這個欄位。寫 `""`、`0` 或 `[]` 效果相同。
 - **`_routing.receiver` 不能這樣用**：租戶寫 `receiver: null`，路由產生器會印 WARN 並略過這個租戶，它的告警交回 Alertmanager 的根路由。
-- **其他 `_` 開頭的鍵**（例如 `_namespaces`）：在 `_defaults.yaml` 寫 `null` 會刪掉從上層繼承來的值。這只能寫在 `_defaults.yaml` 的 `defaults:` 裡或沒有 `defaults:` 的檔的頂層；租戶檔與根目錄 `_defaults.yaml` 的 `tenants:` 區塊寫 `null` 會被 `check_confd_schema.py` 擋下。而且 `null` 要和被繼承的值落在同一個位置：
+- **其他 `_` 開頭的鍵**（例如 `_namespaces`）：在 `_defaults.yaml` 寫 `null` 會刪掉從上層繼承來的值。這只能寫在 `_defaults.yaml` 的 `defaults:` 裡或沒有 `defaults:` 的檔的頂層；租戶檔寫 `null` 會被 `check_confd_schema.py` 擋下。而且 `null` 要和被繼承的值落在同一個位置：
 
 | 上層（有 `defaults:`） | 下層的 `null` 寫在 | 結果 |
 |:--|:--|:--|
@@ -147,21 +155,20 @@ tenants:
 
 ### 5. `_defaults.yaml` 裡哪些鍵進最終設定
 
-**只有 `defaults:` 底下的鍵進最終設定與 `merged_hash`。** 子目錄的檔若沒有 `defaults:`，整份文件都當成預設值併入。根目錄的 `_defaults.yaml` 一定要有 `defaults:`：沒有時 exporter 不讀其中的閾值，`/effective` 照樣顯示，`not_served` 標 `root_defaults_unwrapped`。
+**`defaults:` 底下的鍵進最終設定與 `merged_hash`；根目錄 `_defaults.yaml` 的 `tenants:` 區塊也會進（見下方）。** 子目錄的檔若沒有 `defaults:`，整份文件都當成預設值併入；不過 schema 只允許這種檔的頂層出現固定的鍵，直接寫閾值鍵（例如 `cpu: 80`）會被 `check_confd_schema.py` 擋下。根目錄的 `_defaults.yaml` 一定要有 `defaults:`：沒有時 exporter 不讀其中的閾值，`/effective` 照樣顯示，`not_served` 標 `root_defaults_unwrapped`。
 
-與 `defaults:` 並列的頂層鍵不進最終設定，各有自己的讀取程式。改了這些鍵，要到讀它的地方確認有沒有生效：
+除了 `tenants:` 區塊，與 `defaults:` 並列的頂層鍵不進最終設定，各有自己的讀取程式。改了這些鍵，要到讀它的地方確認有沒有生效：
 
 | 你改的鍵 | 去哪裡確認 |
 |:--|:--|
 | `state_filters` | `/metrics` 的 `user_state_filter{tenant,filter,severity}` |
-| 根目錄 `_defaults.yaml` 的 `tenants:` 區塊（例如 `_silent_mode`） | `/metrics` 的 `user_silent_mode{tenant,target_severity}`；`da-guard effective` 的 `platform_overlay` |
 | `_routing_defaults`、`_routing_enforced` | `generate_alertmanager_routes.py --config-dir conf.d/ --dry-run` 的完整輸出，改前改後對照 |
 | `_custom_alerts` | `compile_custom_alerts.py --check` |
 | `max_metrics_per_tenant` | 見下方 |
 
 這張表不是全部。不在表上的鍵，先找到讀它的程式再判斷有沒有生效；頂層其他 `_` 開頭的鍵（例如直接寫在頂層的 `_silent_mode`）沒有讀取者，寫了不生效，也不報錯。
 
-**根目錄 `_defaults.yaml` 的 `tenants:` 區塊**是平台給既有租戶的預設值：同一個鍵由租戶檔勝出，與檔名排序無關；沒有租戶檔宣告的租戶會被忽略並記 WARN（平台檔不能建立租戶）；子目錄平台檔的 `tenants:` 區塊不被讀取，exporter 與路由產生器都記 WARN。
+**根目錄 `_defaults.yaml` 的 `tenants:` 區塊**是平台給既有租戶的預設值。它會進最終設定與 `merged_hash`：例如在範例的根目錄加上 `tenants: {fin-db-001: {_silent_mode: warning}}`，`fin-db-001` 的最終設定多出 `_silent_mode: warning`，`key_sources` 標為 `layer: platform`，`platform_overlay` 列出提供它的檔與鍵，`merged_hash` 從 `5db367c3efd997ce` 變成 `73e76f3cabed3a9f`，`/metrics` 也多出 `user_silent_mode{tenant,target_severity}`。同一個鍵由租戶檔勝出，與檔名排序無關；沒有租戶檔宣告的租戶會被忽略並記 WARN（平台檔不能建立租戶）；子目錄平台檔的 `tenants:` 區塊不被讀取，exporter 與路由產生器都記 WARN。
 
 **`max_metrics_per_tenant`** 是每個租戶最多送幾條閾值 series 的上限，只認根目錄 `_defaults.yaml` 的頂層；子目錄 `_defaults.yaml` 或租戶檔寫了會記 WARN 並忽略，租戶因此不能替自己調高上限。未設或 0 時上限是 500，負值表示不截斷。Helm chart 的設定鍵是 `thresholdConfig.max_metrics_per_tenant`。
 
@@ -204,7 +211,7 @@ $ printf '%s' '{"pg_locks_count":100,"pg_replication_lag_seconds":30,"pg_stat_ac
 否則，鏈上的 _defaults.yaml 變了：
   merged_hash 變了                    → applied（reason=defaults）
   沒變，且變動的鍵都被租戶自己覆蓋     → shadowed
-  沒變，且 defaults: 裡沒有鍵變動      → cosmetic（只改註解、順序、空白，或只改頂層鍵）
+  沒變，且 defaults: 裡沒有鍵變動      → cosmetic（只改註解、順序、空白，或只改 tenants: 以外的頂層鍵）
 ```
 
 已知落差：租戶檔那條分支不比對 `merged_hash`，所以只改租戶檔的註解也記成 applied（reason=source）。
@@ -221,10 +228,10 @@ $ printf '%s' '{"pg_locks_count":100,"pg_replication_lag_seconds":30,"pg_stat_ac
 
 ### 8. 頂層鍵的變更，最終設定看不到
 
-頂層鍵不進最終設定，所以凡是以最終設定或 `merged_hash` 為輸入的工具都看不到它們的變更：`/effective`、`describe_tenant`、da-guard、爆炸半徑報告、`tenant-verify`。這是為了決策 7 的歸類正確而刻意接受的代價（理由見替代方案 D），但有兩個後果要知道：
+除了 `tenants:` 區塊，頂層鍵不進最終設定，所以凡是以最終設定或 `merged_hash` 為輸入的工具都看不到它們的變更：`/effective`、`describe_tenant`、da-guard、爆炸半徑報告、`tenant-verify`。這是為了決策 7 的歸類正確而刻意接受的代價（理由見替代方案 D），但有兩個後果要知道：
 
 - **`effect="cosmetic"` 不代表只改了註解。** 只改根目錄 `_routing_defaults` 的一次變更，與只加一行註解，exporter 都記成 `effect="cosmetic"`。
-- **`da-tools tenant-verify --expect-merged-hash` 在這裡不是證據。** 它在雜湊不符時回 2，但改了平台頂層鍵之後它照樣回 0：回 0 代表這一面沒被涵蓋，不代表回滾已經驗證。
+- **`da-tools tenant-verify --expect-merged-hash` 在這裡不是證據。** 它在雜湊不符時回 2（改根目錄 `tenants:` 區塊會讓它回 2），但改了其他平台頂層鍵之後它照樣回 0：回 0 代表這一面沒被涵蓋，不代表回滾已經驗證。
 
 另建一個比較平台頂層鍵的機制，追蹤在 [#1516](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/1516)。
 
@@ -248,7 +255,7 @@ resolved(t) = rd(t) ⊕ profiles[t._routing_profile] ⊕ t._routing
 **限制**：
 
 - 子目錄的 `_routing_defaults` 不能把 `receiver` 或 `overrides` 寫成 `null`（回 2），否則整個子樹沒有自己 receiver 的租戶都會失去 route。
-- `_routing_enforced`（平台強制的路由）只認根目錄，出現在子目錄回 2。
+- `_routing_enforced`（平台強制的路由）只認根目錄，出現在子目錄回 2。目前不支援只作用於某個子樹的強制路由；等到有客戶或團隊明確需要只作用於某個子樹的值班（NOC）路由時再評估。
 - routing profile（`_routing_profiles.yaml`）可以放在子目錄，只對該層以下的租戶可見；同一個名稱在整棵樹只能定義一次，重複回 2。
 - domain policy（`_domain_policy.yaml`）可以放在子目錄，只約束該子樹；點名子樹外的租戶不生效，加 `--strict` 時是錯誤（回 1），否則記 WARN。不同層的 policy 疊加判定，租戶要同時滿足每一條。
 - 同一個租戶 id 宣告在兩個檔，回 1。
@@ -267,7 +274,7 @@ resolved(t) = rd(t) ⊕ profiles[t._routing_profile] ⊕ t._routing
 
 - **好處**：同一個預設值只寫一次，整棵子樹繼承；預設值變更能逐租戶歸類成 applied / shadowed / cosmetic，爆炸半徑報告看得出一次變更真正影響了誰。
 - **代價**：
-  - 頂層鍵的變更在最終設定這一面看不到（決策 8）。
+  - `tenants:` 以外的頂層鍵，變更在最終設定這一面看不到（決策 8）。
   - 只改租戶檔的註解也記成 applied（決策 7）。
   - `_custom_alerts` 在 `describe_tenant.py` 與 Go 實作之間不一致（決策 2）。
   - 沒有 `defaults:` 的子目錄檔整份併入，它的頂層鍵（例如 `state_filters`）因此也進最終設定：改它會讓該子樹每個租戶的 `merged_hash` 都動。`rule-packs/recipes/examples/conf.d/finance/_defaults.yaml` 就是這個形狀（頂層只有 `_custom_alerts`）。
@@ -286,7 +293,7 @@ resolved(t) = rd(t) ⊕ profiles[t._routing_profile] ⊕ t._routing
 
 ❌ 上層 `group_by: [severity]`、下層 `group_by: [alertname]`，串接得到 `[severity, alertname]`，語意不明確。寫 `group_by` 的人想的是「換成這個」，不是「再加上這個」。
 
-### D：把頂層鍵也併進最終設定
+### D：把其他頂層鍵也併進最終設定
 
 ❌ 這是讓決策 8 那些變更看得見最直接的做法，但有三個理由不採用：
 

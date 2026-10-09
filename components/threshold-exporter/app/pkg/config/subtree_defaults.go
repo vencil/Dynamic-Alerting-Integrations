@@ -1135,7 +1135,7 @@ func scheduledValueFromRaw(raw any) (ScheduledValue, bool) {
 // (mapping / list / string / bool) makes `parsePartialConfig` return ok=false
 // and the WHOLE file is dropped; and `_`-prefixed keys are consumed from the
 // `tenants:` block, not from `defaults:`. Read
-// docs/adr/017-defaults-yaml-inheritance-dual-hash.md §「已知的可達例外」
+// docs/adr/017-defaults-yaml-inheritance-dual-hash.md (Decision 5 and Consequences)
 // before changing anything here — the measurements above were taken before
 // that rewrite landed and are kept only because they are what this code was
 // built against.
@@ -1146,7 +1146,7 @@ func scheduledValueFromRaw(raw any) (ScheduledValue, bool) {
 // `"disable"`, `"70:critical"` and a schedule — none of which `map[string]float64`
 // would accept. Judging the source by the destination's domain is the whole
 // point; judging it by `map[string]float64` instead would stop `"disable"`
-// inheriting, and ADR-017 §Null names `"disable"` as the sanctioned way for a
+// inheriting, and ADR-017 Decision 4 names `"disable"` as the sanctioned way for a
 // threshold key to opt out of the chain.
 //
 // ⚠️ THE COST, STATED. Because the admitted domain is wider than the source

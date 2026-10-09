@@ -545,7 +545,7 @@ def duplicate_tenants_refusal(duplicates: dict[str, list[str]]) -> list[str]:
 def _refuse_routing_tree_errors(tree: TenantTree) -> None:
     """#2326: refuse a conf.d tree the routing plane cannot route as one.
 
-    ADR-017 "Amendment 2026-09-28" makes the routing plane hierarchical and
+    ADR-017 Decision 9 makes the routing plane hierarchical and
     names what blocks it: `_routing_enforced` below the root, `receiver` /
     `overrides` written as null in a subdirectory level's `_routing_defaults`,
     one routing-profile name defined in two files. (One tenant id declared in
@@ -579,7 +579,7 @@ def routing_tree_errors_refusal(
     if not errors:
         return []
     return [f"ERROR: {len(errors)} routing-tree error(s) — nothing was "
-            f"generated, written or applied (ADR-017 amendment 2026-09-28):",
+            f"generated, written or applied (ADR-017 Decision 9):",
             *(f"  {safe_label(msg)}" for _kind, _fname, _field, msg in errors)]
 
 
