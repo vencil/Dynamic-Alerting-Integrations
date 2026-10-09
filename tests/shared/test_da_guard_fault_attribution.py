@@ -125,8 +125,8 @@ def test_cli_exits_2_for_a_da_guard_that_cannot_run(tmp_path, monkeypatch, da_gu
 @pytest.mark.parametrize("other", ["none", "dangling", "bad-yaml"])
 def test_cli_rc_for_a_too_old_da_guard_follows_the_existing_downgrade(other, tmp_path,
                                                                       monkeypatch):
-    """既有的 exit-code 規則不改：caller error 是 rc 2，但 `yaml_syntax` 列另有無法使用的檔
-    （讀不到或 YAML 解析失敗）時降為 rc 1（找不到 da-guard 也同樣降）。文件寫的就是這兩個數字。"""
+    """既有的 exit-code 規則不改：caller error 是 rc 2，但 `yaml_syntax` 列另有點名的無法使用檔案
+    （其 `unusable_files`）時降為 rc 1（找不到 da-guard 也同樣降）。文件寫的就是這兩個數字。"""
     conf_d = _tree(tmp_path / "t", _CLEAN)
     if other == "dangling":
         symlink_or_skip("/nonexistent/x.yaml", conf_d / "zz.yaml")
