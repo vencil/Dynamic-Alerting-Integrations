@@ -138,14 +138,58 @@ tenant-api 判 `require_critical_escalation` 等規則時，用的是租戶合�
 | P1 | 只信產生器；Go 模擬碼（`shapeWork` 等）刪除 | 寫入回 503 | 讀有效設定 JSON |
 
 - P0 不退回只用 Go：sidecar 是否可用可以被請求方影響（大量昂貴請求），而 Go 單獨判定有已知的寬分歧，退回等於讓攻擊者選擇較寬的判定者。業界對照：Kyverno 預設 `failurePolicy: Fail`；Gatekeeper 預設 Ignore，在被當成安全控制時有被繞過的風險。
-- P0 → P1 的觸發條件：一段 shadow 期內，每一筆判定不一致都有穩定的原因碼，並列在明確的「已解釋」清單裡，沒有未解釋的不一致。shadow 期長度待定。
+- **P0 → P1 的出口條件**（owner 2026-10-09 拍板）：以條件定出口，不以天數定，三條全部成立：
+  1. CI 裡，語料加 fuzz 的雙向等式（扣掉不一致清單中已列冊的項目）在 chart 釘的映像對上連續 14 天綠。fuzz 的 seed 每天輪替，失敗時記錄 seed。
+  2. 線上 shadow 滿 14 天、跨過至少一個 `tools/v*` release，而且有**實際比對量**：比對次數達下限，另有每天一次走真實路徑的合成 canary 寫入。只看天數的話，零流量也會成立。
+  3. 每一筆不一致都列在不一致清單裡（見下）。
+- **不一致清單**比照 `tests/rulepacks/vm_deviation_catalog.yaml`：
+  - 每筆欄位：fixture、mechanism、direction、disposition、ref、`expire_at`。
+  - direction 由測試從兩邊的判定**算出來**，再與清單上的值比對，標錯就紅；不靠手寫標籤。
+  - 雙向把關：沒列冊的不一致會紅，列冊後已經消失的也會紅。不設萬用類別。
+  - Go 比產生器寬的項目，disposition 一律是 fix-pending，並擋住 P1。#2759 目前列的寬類都屬這種，全部修好之前不能進 P1。
+  - Go 比產生器嚴的項目，要在 ref 留下「以產生器為準、接受」的明示簽核，因為 P1 刪掉 Go 端之後，這些輸入的寫入會改成被接受。
+  - 現有語料的 `known: stricter` 併進這份清單，不留兩份。
+  - 清單的修改一律經 PR，由 owner 核准。
+- 客戶的 conf.d 樹拿不到，上述條件只涵蓋 owner 的樹。另提供一個 `da-tools` 比對指令，讓客戶在自己的樹上跑同一套比對。
 - 回退旗標 `--policy-source=go|union|generator`。P0 之後 `go` 不是預設值，選用時大聲記錄。
 - 既有的 `--policy-unavailable-open` 維持原意（policy 檔不可用時放行），**不**涵蓋 sidecar 不可用；sidecar 不可用沒有放行開關。
 - **P0 期間的讀取是驗收條件的明示例外**：GET 與 policy watcher 仍用 Go 讀法，#2759 列的已知分歧在讀取側持續存在，直到 P1。寫入在 P0 就必須滿足驗收條件。
+- **metric**：`tenant_api_policy_available` 被告警直接讀取（`TenantApiPolicyUnavailable`），維持原名、原 label，代表聯集判定的結果。分來源的數值另開新 metric 名稱，P1 時刪的是新 metric，不是告警讀的那一個。
 
-### 7. da-guard
+### 7. da-guard（owner 2026-10-09 拍板）
 
-da-guard 與產生器在同一個 da-tools 映像裡。路由與 policy 的判定改向產生器取，不再自己解析這部分 YAML；閾值相關的讀取（exporter 語意）不變。具體介面見「待決問題」。
+da-guard **不再判路由與 policy**，這部分一律由產生器的 `--validate --strict` 判定（比照 kubectl 把驗證交給 server 的 `--dry-run=server`）。閾值相關的讀取（exporter 語意）不變。
+
+- 單獨執行 da-guard（獨立發布的 binary，沒有 Python）時，報告（文字與 JSON）明示路由與 policy 為 `not_judged`，並回一個專用的 exit code，不得被讀成「判過、沒問題」。
+- `--required-fields _routing.*` 在沒有產生器時直接報錯，不得靜默失效。
+- 刪除 Go 端檢查之前：
+  - Go 獨有的檢查先移植到產生器，並加進 `routing_policy_parity_matrix.json` 的列，附 mutation 證明它真的會擋。
+  - Go 獨有檢查的清單由 `internal/guard/types.go` 減去 matrix 算出來，不手寫數字。
+  - 移植過去的 warn 級檢查（如 `duplicate_override_matcher`）在產生器端若改成 error，屬於變嚴，要在 changelog 寫明。
+- `guard-defaults-impact.yml` 加跑產生器（安裝釘版的 PyYAML）。
+- P0 期間 da-guard 的 Go 檢查保留，CI 取兩者聯集；P1 刪除。
+- 這是 breaking change：只跑 da-guard 的 CI 從此不再涵蓋路由與 policy，要在 changelog 與遷移說明寫明。
+
+### 8. tenant-api 的讀取端點（owner 2026-10-09 拍板）
+
+- 目前沒有任何 GET 端點吐出產生器渲染的路由，沒有東西要遷移。
+- 等到有消費者需要渲染後的路由，才新增 `GET /tenants/{id}/routing`，一律由有效設定 JSON 供應，不由 Go 解析。
+- `/effective` 回應裡的 `_routing` 是 exporter 語意下的原始合併鍵，不是渲染後的路由；在 API 說明中標明。
+
+### 9. P1 刪除範圍（owner 2026-10-09 拍板）
+
+依反向依賴刪除，並且**現在就**加一個 CI 檢查：列出 `pkg/pyyamlcompat`、`pkg/routingpolicy` 與 vendored yaml.v3 各段 patch 的 importer，與下表比對，不一致就紅。
+
+| 項目 | 處理 |
+|---|---|
+| `SpacesOnly` patch | 唯一使用者是 `routingpolicy.policyDecoder`，一起刪 |
+| nonspecific-tag patch | 沒有 importer 依賴時才刪 |
+| `uniquekeys` patch | 保留；是 exporter（`pkg/config`）用到的全域效能 patch |
+| `routingpolicy` 的 PyYAML 模擬（`shapeWork`、`pyResolve`、`ParseDomainPolicies`、`UnmarshalPolicy` 等） | 刪 |
+| `routingpolicy` 的非模擬工具（`IsValidTenantID`、`LevelOf`、`IsDomainPolicyFile` 等） | 保留或搬出；搬動時列出 ADR-035 的使用端 |
+
+- `tests/ops/test_vendored_yaml_v3.py` 的 patch 釘值在同一支 PR 更新。
+- 已驗：產生器的 loader 對重複 key 也拒收（`DuplicateKeyError`），所以刪掉 Go 端的重複 key 檢查不會讓判定變寬。
 
 ## 驗收的機械化
 
@@ -172,6 +216,8 @@ da-guard 與產生器在同一個 da-tools 映像裡。路由與 policy 的判�
 - 只解析一次，下游吃標準形式：Kubernetes 的 `sigs.k8s.io/yaml` 先轉 JSON；Envoy 先轉 protobuf；OPA／conftest 判 `terraform show -json` 而不是 HCL 原文。
 - 解析工具以 sidecar 形式放在使用者的 pod 裡：Argo CD 的 Config Management Plugin（repo-server 的 sidecar）、OPA 的 sidecar 部署、Envoy Gateway 以 Unix socket 連 OPA sidecar。
 - 介面格式的約束：I-JSON（RFC 7493）。
+- 驗證交給權威端：Kubernetes 以 `kubectl --dry-run=server` 把驗證交給 API server，因為用戶端看不到 server 端的規則，版本落差也會讓兩邊判定不同。
+- 新舊實作並行比對：GitHub Scientist 同時跑兩條路徑、記錄不一致，以 ignore 機制排除已理解的差異；shadow 的出場以條件為準，不以時間為準。Kubernetes KEP-5241 對 GA 的 e2e 要求至少兩週無 flake。
 - LangSec：處理前先完整辨識。
 
 ## 考慮過但否決
@@ -190,24 +236,21 @@ da-guard 與產生器在同一個 da-tools 映像裡。路由與 policy 的判�
 | 寫入時使用 last-good | 版本落差時舊 policy 被無限期沿用 |
 | `ensure_ascii=True` | 分歧搬進 Go 的 `encoding/json` |
 
-## 待決問題
+## 已決定、在此記錄的取捨
 
-1. **da-guard 的介面**：da-guard 是直接呼叫產生器的 Python 模組，還是讀一份由產生器先產出的 JSON（例如 `--effective-json`）？後者讓 da-guard 在沒有 Python 的環境（CI 自建 binary）也能跑。
-2. **P0 shadow 期的長度**與「已解釋不一致」清單的審核方式。
-3. **tenant-api 的 GET 端點**：讀閾值的部分屬 exporter 語意、不在本 ADR 範圍；讀路由的部分改讀 JSON 的時程隨 P1。
-4. **P1 刪除範圍**：vendored yaml.v3 的三段 patch 中，只服務 policy 路徑的（`SpacesOnly`、nonspecific-tag）是否一併移除；`uniquekeys` 是否仍有 exporter 使用者。
+原列的 4 個待決問題已由 owner 拍板，分別寫在「過渡」（shadow 出口條件與不一致清單）、「da-guard」、「tenant-api 的讀取端點」與「P1 刪除範圍」各節。另外：
 
-**已決定、在此記錄的取捨**：
 - Unix socket 的授權邊界是「掛載了該 volume、且符合 socket 檔案權限的程序」，也就是 tenant-api 與 sidecar 這兩個容器裡的程序都能呼叫驗證端點，視為可接受。沒有掛載該 volume 的容器不能呼叫。
 - sidecar 只以 `cat-file`／`ls-tree` 依 rev 讀 git 物件，不碰 index 與工作目錄，不與 PR 模式的 `checkout -f` 搶 `index.lock`。
 
 ## 實作切分
 
 1. 產生器輸出結構化 finding（前置）。
-2. sidecar：有效設定 JSON 與寫入驗證端點；Helm chart 加容器、socket 與資源設定。
-3. tenant-api：寫入路徑呼叫 sidecar（P0 聯集）、讀取改吃 JSON。
-4. da-guard 改向產生器取路由與 policy 的判定。
-5. P1：刪除 Go 端的 PyYAML 模擬碼，於 main 重測 [#2759](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/2759)、[#2700](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/2700)、[#2713](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/2713)、[#2674](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/2674) 後關票。
+2. P1 刪除範圍的 importer 比對檢查，以及不一致清單與它的雙向測試。
+3. sidecar：有效設定 JSON 與寫入驗證端點；Helm chart 加容器、socket 與資源設定。
+4. tenant-api：寫入路徑呼叫 sidecar（P0 聯集）、讀取改吃 JSON。
+5. da-guard：Go 獨有檢查移植到產生器；`not_judged` 狀態與專用 exit code；`guard-defaults-impact.yml` 加跑產生器。
+6. P1：刪除 Go 端的 PyYAML 模擬碼，於 main 重測 [#2759](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/2759)、[#2700](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/2700)、[#2713](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/2713)、[#2674](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/2674) 後關票。
 
 ## 相關
 

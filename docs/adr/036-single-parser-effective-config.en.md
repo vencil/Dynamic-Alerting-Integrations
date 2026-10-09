@@ -132,14 +132,58 @@ The thresholds row is the existing precedent in the other direction; this ADR do
 | P1 | the generator only; the Go emulation (`shapeWork` and so on) deleted | writes get 503 | read the effective-config JSON |
 
 - P0 does not fall back to Go alone: whether the sidecar is available can be influenced by requesters (floods of expensive requests), and Go alone has known looser divergences, so a fallback would let an attacker pick the looser judge. For comparison: Kyverno defaults to `failurePolicy: Fail`; Gatekeeper defaults to Ignore, which risks bypass when it is used as a security control.
-- The P0 → P1 trigger: over a shadow period, every disagreement carries a stable reason code and is on an explicit "explained" list, with no unexplained disagreement. The length of the shadow period is open.
+- **The P0 → P1 exit criteria** (owner decision, 2026-10-09): exit on criteria, not elapsed days; all three must hold:
+  1. In CI, the two-way equality over the corpus plus fuzzing (minus entries catalogued in the divergence catalog) stays green on the chart's pinned image pair for 14 consecutive days. The fuzz seed rotates daily and is logged on failure.
+  2. Live shadowing runs at least 14 days and spans at least one `tools/v*` release, with **actual comparison volume**: a minimum number of comparisons, plus a daily synthetic canary write through the real path. Counting days alone would pass with zero traffic.
+  3. Every disagreement is in the divergence catalog (below).
+- **The divergence catalog** follows `tests/rulepacks/vm_deviation_catalog.yaml`:
+  - Fields per entry: fixture, mechanism, direction, disposition, ref, `expire_at`.
+  - The test **computes** direction from the two verdicts and compares it with the catalogued value, so a mislabel fails; it never relies on a hand-written label.
+  - Both ways are checked: an uncatalogued disagreement fails, and so does a catalogued one that has disappeared. There is no catch-all kind.
+  - An entry where Go is looser than the generator is always fix-pending and blocks P1. Every looser class #2759 lists today is of this kind, so P1 cannot start until all are fixed.
+  - An entry where Go is stricter needs an explicit "generator is authoritative, accepted" sign-off in ref, because once P1 deletes the Go side, writes on those inputs become accepted.
+  - The corpus's existing `known: stricter` rows move into this catalog; there is only one.
+  - Changes to the catalog go through a PR approved by the owner.
+- Customers' conf.d trees are not available, so these criteria cover the owner's trees only. A `da-tools` comparison command lets customers run the same comparison on their own trees.
 - A rollback flag `--policy-source=go|union|generator`. After P0, `go` is not the default and choosing it is logged loudly.
 - The existing `--policy-unavailable-open` keeps its meaning (let writes through when the policy file is unusable) and does **not** cover an unavailable sidecar; there is no open switch for that.
 - **Reads during P0 are an explicit exception to the acceptance condition**: GET and the policy watcher keep the Go reading, so the known divergences listed in #2759 persist on the read side until P1. Writes must meet the acceptance condition already in P0.
+- **Metric**: `tenant_api_policy_available` is read directly by an alert (`TenantApiPolicyUnavailable`), so it keeps its name and labels and represents the union verdict. Per-source values get new metric names; P1 deletes those new metrics, not the one the alert reads.
 
-### 7. da-guard
+### 7. da-guard (owner decision, 2026-10-09)
 
-da-guard ships in the same da-tools image as the generator. It obtains routing and policy verdicts from the generator instead of parsing that YAML itself; threshold reads (exporter semantics) are unchanged. The exact interface is an open question.
+da-guard **stops judging routing and policy**; the generator's `--validate --strict` is the one judge for them (as Kubernetes hands validation to the server with `kubectl --dry-run=server`). Threshold reads (exporter semantics) are unchanged.
+
+- When da-guard runs on its own (the standalone binary, no Python), its report (text and JSON) states routing and policy as `not_judged` and it returns a dedicated exit code, so the run cannot be read as "judged and clean".
+- `--required-fields _routing.*` errors out when the generator is absent; it must never silently stop enforcing.
+- Before the Go checks are deleted:
+  - Go-only checks are ported to the generator and added as rows of `routing_policy_parity_matrix.json`, with a mutation proof that they actually block.
+  - The list of Go-only checks is computed as `internal/guard/types.go` minus the matrix, not hand-counted.
+  - A warn-level check ported as an error on the generator side (e.g. `duplicate_override_matcher`) is a tightening and is called out in the changelog.
+- `guard-defaults-impact.yml` also runs the generator (with pinned PyYAML installed).
+- During P0, da-guard keeps its Go checks and CI takes the union of both; P1 deletes them.
+- This is a breaking change: CI that runs only da-guard no longer covers routing and policy. The changelog and migration notes say so.
+
+### 8. tenant-api read endpoints (owner decision, 2026-10-09)
+
+- No GET endpoint returns the generator's rendered routing today, so there is nothing to migrate.
+- Only when a consumer needs rendered routing is `GET /tenants/{id}/routing` added, always served from the effective-config JSON, never parsed by Go.
+- `_routing` in the `/effective` response is the raw merged key under exporter semantics, not the rendered route; the API description says so.
+
+### 9. P1 deletion scope (owner decision, 2026-10-09)
+
+Delete by reverse dependency, with a CI check added **now** that lists the importers of `pkg/pyyamlcompat`, `pkg/routingpolicy` and each vendored yaml.v3 patch and fails when they disagree with this table.
+
+| Item | Action |
+|---|---|
+| `SpacesOnly` patch | its only user is `routingpolicy.policyDecoder`; deleted with it |
+| nonspecific-tag patch | deleted only when no importer depends on it |
+| `uniquekeys` patch | kept; a global performance patch the exporter (`pkg/config`) uses |
+| the PyYAML emulation in `routingpolicy` (`shapeWork`, `pyResolve`, `ParseDomainPolicies`, `UnmarshalPolicy` and so on) | deleted |
+| non-emulation helpers in `routingpolicy` (`IsValidTenantID`, `LevelOf`, `IsDomainPolicyFile` and so on) | kept or moved; a move lists ADR-035's consumers |
+
+- The patch pins in `tests/ops/test_vendored_yaml_v3.py` are updated in the same PR.
+- Verified: the generator's loader also refuses duplicate keys (`DuplicateKeyError`), so deleting Go's duplicate-key check does not loosen the verdict.
 
 ## Mechanising the acceptance condition
 
@@ -166,6 +210,8 @@ With a warm cache, a single write costs mainly one file's parse plus the checks.
 - Parse once, consume a canonical form downstream: Kubernetes' `sigs.k8s.io/yaml` converts to JSON first; Envoy converts to protobuf; OPA / conftest judge `terraform show -json`, not HCL source.
 - The parsing tool runs as a sidecar in the consumer's pod: Argo CD's Config Management Plugins (sidecars of the repo-server), OPA's sidecar deployment, Envoy Gateway reaching an OPA sidecar over a Unix socket.
 - Interchange-format constraints: I-JSON (RFC 7493).
+- Hand validation to the authority: Kubernetes hands validation to the API server with `kubectl --dry-run=server`, because the client cannot see server-side rules and version skew makes the two disagree.
+- Running old and new side by side: GitHub Scientist runs both paths, records mismatches and excludes understood differences with `ignore`; a shadow exits on criteria, not on time. Kubernetes KEP-5241 requires at least two flake-free weeks of e2e before GA.
 - LangSec: recognise the input fully before processing it.
 
 ## Rejected alternatives
@@ -184,24 +230,21 @@ With a warm cache, a single write costs mainly one file's parse plus the checks.
 | Using last-good for writes | under version skew an old policy is kept indefinitely |
 | `ensure_ascii=True` | moves the divergence into Go's `encoding/json` |
 
-## Open questions
+## Trade-offs decided and recorded here
 
-1. **da-guard's interface**: does da-guard call the generator's Python module directly, or read a JSON the generator produced first (for example `--effective-json`)? The latter keeps da-guard usable where there is no Python (a binary built in CI).
-2. **The length of the P0 shadow period** and how the "explained disagreements" list is reviewed.
-3. **tenant-api's GET endpoints**: the threshold parts are exporter semantics and out of scope here; the routing parts move to the JSON on P1's schedule.
-4. **P1 deletion scope**: of the three vendored yaml.v3 patches, whether those serving only the policy path (`SpacesOnly`, nonspecific-tag) are removed too, and whether `uniquekeys` still has exporter users.
+The four questions previously left open were settled by the owner and are written into "Transition" (shadow exit criteria and the divergence catalog), "da-guard", "tenant-api read endpoints" and "P1 deletion scope". In addition:
 
-**Trade-offs decided and recorded here**:
 - The authorisation boundary of the Unix socket is "processes that have the volume mounted and pass the socket file's permissions", meaning the processes in the tenant-api and sidecar containers can call the validation endpoint, which is accepted. A container without the mount cannot.
 - The sidecar reads git objects by rev with `cat-file` / `ls-tree` only and touches neither the index nor the working tree, so it does not contend with PR mode's `checkout -f` for `index.lock`.
 
 ## Implementation plan
 
 1. The generator emits structured findings (prerequisite).
-2. Sidecar: the effective-config JSON and the write-validation endpoint; the Helm chart gains the container, socket and resource settings.
-3. tenant-api: write paths call the sidecar (P0 union); reads move to the JSON.
-4. da-guard obtains routing and policy verdicts from the generator.
-5. P1: delete the Go PyYAML emulation; re-test [#2759](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/2759), [#2700](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/2700), [#2713](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/2713) and [#2674](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/2674) on main, then close them.
+2. The importer check for the P1 deletion scope, and the divergence catalog with its two-way test.
+3. Sidecar: the effective-config JSON and the write-validation endpoint; the Helm chart gains the container, socket and resource settings.
+4. tenant-api: write paths call the sidecar (P0 union); reads move to the JSON.
+5. da-guard: Go-only checks ported to the generator; the `not_judged` state and dedicated exit code; `guard-defaults-impact.yml` runs the generator.
+6. P1: delete the Go PyYAML emulation; re-test [#2759](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/2759), [#2700](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/2700), [#2713](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/2713) and [#2674](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/2674) on main, then close them.
 
 ## Related
 
