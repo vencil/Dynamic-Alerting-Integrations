@@ -419,20 +419,25 @@ class TestPrepushWiring:
         wired, why = mod._prepush_guards_wired()
         assert wired is True, f"following the message's remedy did not fix it: {why!r}"
 
-    @pytest.mark.parametrize("hooks_path", ["shared", "/dev/null", "hooks-dir"])
-    def test_a_hooks_path_away_from_this_repository_is_unmeasurable(
+    @pytest.mark.parametrize("hooks_path", [
+        "shared", "/dev/null", "hooks-dir", "", ".git/hooks", "own-absolute"])
+    def test_a_set_hooks_path_is_unmeasurable(
         self, tmp_path, monkeypatch, hooks_path
     ):
         """#2696: core.hooksPath can point git at a directory many repositories
-        share, where a shim refuses every push of every one of them. Neither the
-        judgement nor the installer goes there; the message names
-        core.hooksPath, and its remedy is followed once."""
+        share, where a shim refuses every push of every one of them, and ""
+        makes git run no hook at all. While it is set, whatever its value,
+        neither the judgement nor the installer goes there — pre-commit refuses
+        on the same test. The message names core.hooksPath, and its remedy is
+        followed once."""
         mod = _load()
         repo = tmp_path / "repo"
         repo.mkdir()
         self._repo(repo)
         monkeypatch.chdir(repo)
-        target = str(tmp_path / "shared") if hooks_path == "shared" else hooks_path
+        target = {"shared": str(tmp_path / "shared"),
+                  "own-absolute": str(repo / ".git" / "hooks")}.get(hooks_path, hooks_path)
+        before = sorted(p.name for p in (repo / ".git" / "hooks").iterdir())
         assert subprocess.run(  # subprocess-timeout: ignore
             ["git", "config", "core.hooksPath", target], cwd=repo).returncode == 0
 
@@ -442,6 +447,7 @@ class TestPrepushWiring:
         assert r.returncode == 1 and "core.hooksPath" in r.stderr, r.stderr
         for place in (tmp_path / "shared", repo / "hooks-dir"):
             assert not place.exists(), f"the installer wrote into {place}"
+        assert sorted(p.name for p in (repo / ".git" / "hooks").iterdir()) == before
 
         assert subprocess.run(  # subprocess-timeout: ignore
             ["git", "config", "--unset", "core.hooksPath"], cwd=repo).returncode == 0
@@ -449,13 +455,29 @@ class TestPrepushWiring:
         wired, why = mod._prepush_guards_wired()
         assert wired is True, f"following the message's remedy did not fix it: {why!r}"
 
+    def test_a_symlinked_hooks_directory_is_where_the_guards_go(self, tmp_path, monkeypatch):
+        """Without core.hooksPath, .git/hooks itself may be a symlink (to a
+        dotfiles checkout, say). git runs the hooks through it, so the guards
+        install and are judged there as anywhere else."""
+        mod = _load()
+        self._repo(tmp_path)
+        monkeypatch.chdir(tmp_path)
+        hooks = tmp_path / ".git" / "hooks"
+        real = tmp_path / "real-hooks"
+        shutil.move(str(hooks), str(real))
+        symlink_or_skip(real, hooks)
+        r = self._install_guards(tmp_path)
+        assert r.returncode == 0, r.stderr
+        wired, why = mod._prepush_guards_wired()
+        assert wired is True, why
+        assert (real / "pre-push").is_file()
+
     @pytest.mark.parametrize("damage", ["missing", "not-utf8"])
-    def test_an_installer_that_cannot_be_read_is_unmeasurable_and_restorable(
+    def test_an_installer_that_cannot_be_read_is_unmeasurable(
         self, tmp_path, monkeypatch, damage
     ):
         """#2760: reading the installer fails outright — it is gone, or it is
-        not UTF-8. The verdict is None, not a traceback, and the restore it
-        prints works."""
+        not UTF-8. The verdict is None, not a traceback."""
         mod = _load()
         self._repo(tmp_path)
         monkeypatch.chdir(tmp_path)
@@ -470,13 +492,7 @@ class TestPrepushWiring:
         else:
             installer.write_bytes(b"\xff\xfe" + installer.read_bytes())
         wired, why = mod._prepush_guards_wired()
-        assert wired is None, why
-        restore = "git checkout HEAD -- :/scripts/ops/install_prepush_hook.sh"
-        assert restore in why, why
-
-        assert subprocess.run(restore.split(), cwd=tmp_path / "scripts").returncode == 0  # subprocess-timeout: ignore
-        wired, why = mod._prepush_guards_wired()
-        assert wired is True, f"following the message's remedy did not fix it: {why!r}"
+        assert wired is None and "量不到" in why, why
 
     @pytest.mark.parametrize("installer", [
         "#!/usr/bin/env bash\n",

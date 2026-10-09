@@ -1101,34 +1101,34 @@ def _prepush_guards_wired() -> Tuple[Optional[bool], str]:
 
     回傳 `(wired, message)`。⛔ **「量不到」與「量了沒事」要分得開**。
     """
-    r = run(["git", "rev-parse", "--git-path", "hooks/pre-push", "--path-format=absolute",
-             "--git-path", "hooks", "--git-common-dir"], timeout=30)
-    lines = (r.stdout or "").splitlines()
-    if r.returncode != 0 or len(lines) != 3:
-        # ⛔ None，不是 False：git 跑不了或不在 git repository，都量不到守衛在不在；
-        # 說成「沒裝」會開出安裝器這帖藥，而那兩種情況下它照做也回不到綠。
-        reason = (r.stderr or "").strip() or f"rc={r.returncode}"
+    # ⛔ core.hooksPath 有設（空字串也算）就不判（#2696），與 pre-commit 拒絕安裝的
+    # 判準相同。它指向的可能是許多 repo 共用的目錄，裝進去的 shim 會擋下其他 repo 的
+    # 每一次 push；空字串則讓 git 一支 hook 都不跑。None：這裡量不到本 repo 的守衛。
+    hp = run(["git", "config", "--get", "core.hooksPath"], timeout=30)
+    if hp.returncode == 0:
         return None, (
-            f"量不到：git rev-parse --git-path 失敗（{reason}）。請在 `git` 可執行、"
-            "且位於本 repo 內的 shell 重跑（Windows：Git Bash）。"
-        )
-    hook = Path(lines[0])
-    # ⛔ 只認本 repo 的預設 hooks 目錄（#2696）。core.hooksPath 指到別處時，那裡可能
-    # 是許多 repo 共用的目錄，裝進去的 shim 會擋下其他 repo 的每一次 push；pre-commit
-    # 在 hooksPath 有設時也直接拒絕安裝。None：這裡量不到本 repo 的守衛。
-    if lines[1] != f"{lines[2]}/hooks":
-        return None, (
-            f"量不到：core.hooksPath 讓 git 到 {lines[1]} 找 hook，不是本 repo 的"
-            f" {lines[2]}/hooks；本 repo 的守衛只裝在後者。先移除 core.hooksPath"
-            "（`git config --show-origin --get core.hooksPath` 指出設在哪），"
+            f"量不到：core.hooksPath 設成 {(hp.stdout or '').strip()!r}，git 不在本 repo"
+            "的 hooks 目錄找 hook，而本 repo 的守衛只裝在那裡。先移除 core.hooksPath"
+            "（`git config --show-origin --get core.hooksPath` 指出設在哪；"
+            "設在 global 或 system 的值其他 repo 也在用，移除前先想好它們），"
             "再跑 install_prepush_hook.sh。"
         )
+    r = run(["git", "rev-parse", "--git-path", "hooks/pre-push"], timeout=30)
+    if hp.returncode != 1 or r.returncode != 0:
+        # ⛔ None，不是 False：git 跑不了或不在 git repository，都量不到守衛在不在；
+        # 說成「沒裝」會開出安裝器這帖藥，而那兩種情況下它照做也回不到綠。
+        bad = r if r.returncode != 0 else hp
+        reason = (bad.stderr or "").strip() or f"rc={bad.returncode}"
+        return None, (
+            f"量不到：git 失敗（{reason}）。這不代表守衛沒裝。"
+            "請在 `git` 可執行、且位於本 repo 內的 shell 重跑（Windows：Git Bash）。"
+        )
+    hook = Path((r.stdout or "").strip())
     shim = _shim_body()
     if shim is None:
         return None, (
             f"量不到：無法從 {_INSTALLER} 取出 shim 全文（VIBE_SHIM_EOF heredoc）。"
-            "它受版控，從 HEAD 還原："
-            "`git checkout HEAD -- :/scripts/ops/install_prepush_hook.sh`。"
+            "這不代表守衛沒裝。"
         )
 
     # ⛔ 不是 shim 時，訊息只說它和安裝器產生的 shim 不同並給處方，不預告安裝器會怎麼
@@ -1167,8 +1167,7 @@ def check_local_hooks(*, run_precommit: bool = True) -> CheckResult:
             Status.FAIL,
             "量不到 pre-push 守衛在不在 push 路徑上",
             detail=(
-                f"{why}\n\n"
-                "這不代表守衛沒裝。"
+                why
             ),
         )
     if not wired:

@@ -47,7 +47,8 @@ case "${1:-}" in
             "usage: bash scripts/ops/install_prepush_hook.sh" \
             "" \
             "Installs the pre-push guard shim over git-lfs's hook, pre-commit's template" \
-            "or a copy of a guard; refuses any other hook already there." \
+            "or a copy of a guard; refuses any other hook already there, and refuses" \
+            "while core.hooksPath is set." \
             "To ask whether the guards are wired, run: make pr-preflight" \
             "  (without make: python3 scripts/tools/dx/pr_preflight.py; on Windows, python)" >&2
         exit 0 ;;
@@ -60,20 +61,24 @@ root="$(git rev-parse --show-toplevel 2>/dev/null)" || {
     warn "⛔ not inside a git work tree"
     exit 2
 }
+# ⛔ Not while core.hooksPath is set, even to "" (#2696) — pre-commit refuses
+# on the same test. It may name a directory many repositories share, where the
+# shim would refuse every push of every one of them; "" makes git run no hook.
+if hooks_path="$(git config --get core.hooksPath)"; then
+    warn "⛔ refusing: core.hooksPath is set (to '$hooks_path'), so git does not look for"
+    warn "   hooks in this repository's own hooks directory, where the guards go."
+    warn "   Remove it (git config --show-origin --get core.hooksPath shows where it is"
+    warn "   set; a global or system value is used by other repositories too, so think"
+    warn "   of them first), then re-run."
+    warn "   Nothing was changed."
+    exit 1
+fi
 # ⛔ --git-path, not --git-dir: inside a worktree the git dir is
 # .git/worktrees/<name> but the hooks live in the MAIN repo's .git/hooks.
 hooks="$(git rev-parse --git-path hooks 2>/dev/null)" || {
     warn "⛔ cannot resolve the hooks directory"
     exit 2
 }
-# Absolute forms, to check below that git looks for hooks where this
-# repository keeps them.
-where="$(git rev-parse --path-format=absolute --git-path hooks --git-common-dir 2>/dev/null)" || {
-    warn "⛔ cannot resolve the hooks directory"
-    exit 2
-}
-looked_in="${where%%$'\n'*}"
-own_hooks="${where#*$'\n'}/hooks"
 
 hook="$hooks/pre-push"
 legacy="$hooks/pre-push.legacy"
@@ -223,16 +228,6 @@ need() {   # $1 = tool, $2 = what it is for
 }
 
 # --- Checks. Nothing below changes anything until they have all passed. ------
-
-# ⛔ Only this repository's own hooks directory (#2696). core.hooksPath can send
-# git elsewhere: a directory shared by many repositories, where the shim would
-# refuse every push of every one of them, or /dev/null.
-if [ "$looked_in" != "$own_hooks" ]; then
-    refuse "core.hooksPath makes git look for hooks in $looked_in, not in this" \
-        "repository's $own_hooks. The guards are only installed there." \
-        "Remove core.hooksPath where it is set (git config --show-origin --get" \
-        "core.hooksPath shows where), then re-run."
-fi
 
 # Earlier versions of this installer moved the hook they found to
 # pre-push.chained and the dispatcher ran it. It runs nothing now, and refuses
