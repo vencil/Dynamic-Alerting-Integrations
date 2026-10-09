@@ -131,7 +131,7 @@ tenants:
 
 ### 4. 閾值寫 `null` 等於這一層沒寫
 
-閾值鍵寫 `null` 不會關掉告警；要關掉，在租戶檔或子目錄 `_defaults.yaml` 寫 `"disable"`。根目錄 `defaults:` 不能寫 `"disable"`：/metrics 會丟掉整份根 `_defaults.yaml`，連同其中的 `optional_overrides:`（da-guard 回 rc 3）。
+在租戶檔或子目錄 `_defaults.yaml` 把閾值鍵寫成 `null` 不會關掉告警（根目錄 `defaults:` 寫 `null` 的效果見下方第二條）；要關掉，在這兩處寫 `"disable"`。根目錄 `defaults:` 不要寫 `"disable"`：`check_confd_schema.py` 不會擋，但 /metrics 會丟掉整份根 `_defaults.yaml`，連同其中的 `optional_overrides:`，da-guard 結束碼 3。
 
 - 租戶檔或子目錄 `_defaults.yaml` 寫 `null` 時，`/metrics`（`da-guard served-values`）、`/effective`（`da-guard effective`）與 `describe_tenant` 的結果與這一層沒寫這個鍵相同。不過租戶檔寫 `null`（含 `kx:`、`kx: ~`）會被 `check_confd_schema.py` 擋下；租戶要沿用上層的值，就刪掉這個鍵。
 - 根目錄 `_defaults.yaml` 的 `defaults:` 寫 `null` 時，根層沒有宣告這個閾值，`/metrics` 不送出這個閾值的 series（不是門檻 0）：租戶給的值由 da-guard 的 `root_default_null_undeclared` 指名，子目錄 `_defaults.yaml` 給的值由 `subtree_default_undeliverable` 指名。同一個鍵若列在根目錄的 `optional_overrides:`，租戶給的值照常送出。（`optional_overrides:` 是根目錄 `_defaults.yaml` 頂層的一份鍵名清單：宣告這些閾值存在、但不給平台預設值，租戶自己寫了才送。）
