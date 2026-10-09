@@ -419,10 +419,11 @@ class TestPrepushWiring:
         wired, why = mod._prepush_guards_wired()
         assert wired is True, f"following the message's remedy did not fix it: {why!r}"
 
+    @pytest.mark.parametrize("scope", ["local", "global", "local-behind-GIT_CONFIG"])
     @pytest.mark.parametrize("hooks_path", [
         "shared", "/dev/null", "hooks-dir", "", ".git/hooks", "own-absolute"])
     def test_a_set_hooks_path_is_unmeasurable(
-        self, tmp_path, monkeypatch, hooks_path
+        self, tmp_path, monkeypatch, hooks_path, scope
     ):
         """#2696: core.hooksPath can point git at a directory many repositories
         share, where a shim refuses every push of every one of them, and ""
@@ -438,8 +439,15 @@ class TestPrepushWiring:
         target = {"shared": str(tmp_path / "shared"),
                   "own-absolute": str(repo / ".git" / "hooks")}.get(hooks_path, hooks_path)
         before = sorted(p.name for p in (repo / ".git" / "hooks").iterdir())
+        # global: the #2696 case, a value every repository on the machine reads.
+        # GIT_CONFIG only redirects `git config` itself; git still runs hooks by
+        # the local value, so the judgement must not be fooled by it.
+        where = ["--global"] if scope == "global" else ["--local"]
+        monkeypatch.setenv("GIT_CONFIG_GLOBAL", str(tmp_path / "global.gitconfig"))
         assert subprocess.run(  # subprocess-timeout: ignore
-            ["git", "config", "core.hooksPath", target], cwd=repo).returncode == 0
+            ["git", "config", *where, "core.hooksPath", target], cwd=repo).returncode == 0
+        if scope == "local-behind-GIT_CONFIG":
+            monkeypatch.setenv("GIT_CONFIG", os.devnull)
 
         wired, why = mod._prepush_guards_wired()
         assert wired is None and "core.hooksPath" in why, why
@@ -449,8 +457,9 @@ class TestPrepushWiring:
             assert not place.exists(), f"the installer wrote into {place}"
         assert sorted(p.name for p in (repo / ".git" / "hooks").iterdir()) == before
 
+        monkeypatch.delenv("GIT_CONFIG", raising=False)
         assert subprocess.run(  # subprocess-timeout: ignore
-            ["git", "config", "--unset", "core.hooksPath"], cwd=repo).returncode == 0
+            ["git", "config", *where, "--unset", "core.hooksPath"], cwd=repo).returncode == 0
         assert self._install_guards(repo).returncode == 0
         wired, why = mod._prepush_guards_wired()
         assert wired is True, f"following the message's remedy did not fix it: {why!r}"

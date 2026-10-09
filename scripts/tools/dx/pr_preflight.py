@@ -102,7 +102,8 @@ class PreflightReport:
         print()
 
 
-def run(cmd: List[str], capture: bool = True, timeout: int = 120) -> subprocess.CompletedProcess:
+def run(cmd: List[str], capture: bool = True, timeout: int = 120,
+        env: Optional[dict] = None) -> subprocess.CompletedProcess:
     """Run a command with sensible defaults.
 
     Uses errors="replace" on decoding because tools like git may emit
@@ -119,6 +120,7 @@ def run(cmd: List[str], capture: bool = True, timeout: int = 120) -> subprocess.
             encoding="utf-8",
             errors="replace",
             timeout=timeout,
+            env=env,
         )
     except FileNotFoundError:
         # Command not found — return a synthetic failure
@@ -1104,11 +1106,13 @@ def _prepush_guards_wired() -> Tuple[Optional[bool], str]:
     # ⛔ core.hooksPath 有設（空字串也算）就不判（#2696），與 pre-commit 拒絕安裝的
     # 判準相同。它指向的可能是許多 repo 共用的目錄，裝進去的 shim 會擋下其他 repo 的
     # 每一次 push；空字串則讓 git 一支 hook 都不跑。None：這裡量不到本 repo 的守衛。
-    hp = run(["git", "config", "--get", "core.hooksPath"], timeout=30)
+    # GIT_CONFIG 只改變 `git config` 讀哪個檔，git 跑 hook 時照樣讀原本的設定。
+    env = {k: v for k, v in os.environ.items() if k != "GIT_CONFIG"}
+    hp = run(["git", "config", "--get", "core.hooksPath"], timeout=30, env=env)
     if hp.returncode == 0:
         return None, (
-            f"量不到：core.hooksPath 設成 {(hp.stdout or '').strip()!r}，git 不在本 repo"
-            "的 hooks 目錄找 hook，而本 repo 的守衛只裝在那裡。先移除 core.hooksPath"
+            f"量不到：core.hooksPath 設成 {(hp.stdout or '').strip()!r}；本 repo 的守衛"
+            "只在它沒設時判定與安裝（pre-commit 也一樣拒絕）。先移除 core.hooksPath"
             "（`git config --show-origin --get core.hooksPath` 指出設在哪；"
             "設在 global 或 system 的值其他 repo 也在用，移除前先想好它們），"
             "再跑 install_prepush_hook.sh。"

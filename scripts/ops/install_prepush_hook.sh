@@ -64,15 +64,21 @@ root="$(git rev-parse --show-toplevel 2>/dev/null)" || {
 # ⛔ Not while core.hooksPath is set, even to "" (#2696) — pre-commit refuses
 # on the same test. It may name a directory many repositories share, where the
 # shim would refuse every push of every one of them; "" makes git run no hook.
-if hooks_path="$(git config --get core.hooksPath)"; then
-    warn "⛔ refusing: core.hooksPath is set (to '$hooks_path'), so git does not look for"
-    warn "   hooks in this repository's own hooks directory, where the guards go."
-    warn "   Remove it (git config --show-origin --get core.hooksPath shows where it is"
-    warn "   set; a global or system value is used by other repositories too, so think"
-    warn "   of them first), then re-run."
-    warn "   Nothing was changed."
-    exit 1
-fi
+# GIT_CONFIG only changes which file `git config` reads; git still runs hooks
+# by the usual configuration.
+hooks_path="$(unset GIT_CONFIG; git config --get core.hooksPath)"
+case $? in
+    0)  warn "⛔ refusing: core.hooksPath is set (to '$hooks_path'). The guards are"
+        warn "   judged and installed only while it is not (pre-commit refuses too)."
+        warn "   Remove it (git config --show-origin --get core.hooksPath shows where it is"
+        warn "   set; a global or system value is used by other repositories too, so think"
+        warn "   of them first), then re-run."
+        warn "   Nothing was changed."
+        exit 1 ;;
+    1)  ;;
+    *)  warn "⛔ cannot read core.hooksPath from git config"
+        exit 2 ;;
+esac
 # ⛔ --git-path, not --git-dir: inside a worktree the git dir is
 # .git/worktrees/<name> but the hooks live in the MAIN repo's .git/hooks.
 hooks="$(git rev-parse --git-path hooks 2>/dev/null)" || {
