@@ -122,6 +122,14 @@
       "note": "`python3 scripts/tools/lint/check_doc_links.py --ci` 驗連結與錨點；`docs/internal/**` 不需 `.en.md`，其餘外部面向文件雙語同步；push 時 mkdocs strict 對被推的 commit 建站。"
     },
     {
+      "id": "adr",
+      "paths": ["docs/adr/**"],
+      "read": [
+        {"file": ".agents/skills/vibe-adr-writing/SKILL.md"}
+      ],
+      "note": "ADR 寫給沒參與討論的人：決策、脈絡、取捨、後果、可對照的範例；拿掉內部代號與 PR 歷史敘事，描述行為的句子在 head 上實測、量不到就刪。改了標題跑 `make adr-index`。"
+    },
+    {
       "id": "workflows",
       "paths": [".github/workflows/**"],
       "read": [
