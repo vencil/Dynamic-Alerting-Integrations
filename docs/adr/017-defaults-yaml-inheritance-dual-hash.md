@@ -155,9 +155,9 @@ tenants:
 
 ### 5. `_defaults.yaml` 裡哪些鍵進最終設定
 
-**`defaults:` 底下的鍵進最終設定與 `merged_hash`；根目錄平台檔（`_defaults.yaml` 或其他 `_` 開頭的檔）的 `tenants:` 區塊也會進（見下方）。** 子目錄的檔若沒有 `defaults:`，整份文件都當成預設值併入；不過 schema 只允許這種檔的頂層出現固定的鍵，直接寫閾值鍵（例如 `cpu: 80`）會被 `check_confd_schema.py` 擋下。根目錄的 `_defaults.yaml` 一定要有 `defaults:`：沒有時 exporter 不讀其中的閾值，`/effective` 照樣顯示，`not_served` 標 `root_defaults_unwrapped`。
+**`defaults:` 底下的鍵進最終設定與 `merged_hash`。** 根目錄平台檔的 `tenants:` 區塊與 `_profiles.yaml` 的 `profiles:` 區塊也會進（見下方）。 子目錄的檔若沒有 `defaults:`，整份文件都當成預設值併入；不過 schema 只允許這種檔的頂層出現固定的鍵，直接寫閾值鍵（例如 `cpu: 80`）會被 `check_confd_schema.py` 擋下。根目錄的 `_defaults.yaml` 一定要有 `defaults:`：沒有時 exporter 不讀其中的閾值，`/effective` 照樣顯示，`not_served` 標 `root_defaults_unwrapped`。
 
-除了 `tenants:` 區塊，與 `defaults:` 並列的頂層鍵不進最終設定，各有自己的讀取程式。改了這些鍵，要到讀它的地方確認有沒有生效：
+下表這些鍵各有自己的讀取程式；其中根目錄的 `state_filters` 與 `_routing_defaults` 不進最終設定，改了之後 `merged_hash` 不動。改了這些鍵，要到讀它的地方確認有沒有生效：
 
 | 你改的鍵 | 去哪裡確認 |
 |:--|:--|
@@ -166,9 +166,11 @@ tenants:
 | `_custom_alerts` | `compile_custom_alerts.py --check` |
 | `max_metrics_per_tenant` | 見下方 |
 
-這張表不是全部。不在表上的鍵，先找到讀它的程式再判斷有沒有生效；頂層其他 `_` 開頭的鍵（例如直接寫在頂層的 `_silent_mode`）沒有讀取者，寫了不生效，也不報錯。
+這張表不是全部。不在表上的鍵，先找到讀它的程式再判斷有沒有生效。直接寫在根目錄 `_defaults.yaml` 頂層的 `_silent_mode` 沒有讀取者：寫了不生效，也不報錯。
 
-**根目錄平台檔的 `tenants:` 區塊**（寫在 `_defaults.yaml` 或其他 `_` 開頭的根目錄檔，例如 `_ops.yaml`）是平台給既有租戶的預設值。它會進最終設定與 `merged_hash`：例如在範例的根目錄加上 `tenants: {fin-db-001: {_silent_mode: warning}}`，`fin-db-001` 的最終設定多出 `_silent_mode: warning`，`key_sources` 標為 `layer: platform`，`platform_overlay` 列出提供它的檔與鍵（寫在 `_ops.yaml` 時就標 `_ops.yaml`），`merged_hash` 從 `5db367c3efd997ce` 變成 `73e76f3cabed3a9f`，`/metrics` 也多出 `user_silent_mode{tenant,target_severity}`。同一個鍵由租戶檔勝出，與檔名排序無關；沒有租戶檔宣告的租戶會被忽略並記 WARN（平台檔不能建立租戶）；子目錄平台檔的 `tenants:` 區塊不被讀取，exporter 與路由產生器都記 WARN。
+**根目錄平台檔的 `tenants:` 區塊**（寫在 `_defaults.yaml` 或其他 `_` 開頭的根目錄檔，例如 `_ops.yaml`；根目錄同時有 `_defaults.yaml` 與 `_defaults.yml` 時只讀前者，後者整份被忽略並記 WARN）是平台給既有租戶的預設值。它會進最終設定與 `merged_hash`：例如在範例的根目錄加上 `tenants: {fin-db-001: {_silent_mode: warning}}`，`fin-db-001` 的最終設定多出 `_silent_mode: warning`，`key_sources` 標為 `layer: platform`，`platform_overlay` 列出提供它的檔與鍵（寫在 `_ops.yaml` 時就標 `_ops.yaml`），`merged_hash` 從 `5db367c3efd997ce` 變成 `73e76f3cabed3a9f`，`/metrics` 也多出 `user_silent_mode{tenant,target_severity}`。同一個鍵由租戶檔勝出，與檔名排序無關；沒有租戶檔宣告的租戶會被忽略並記 WARN（平台檔不能建立租戶）；子目錄平台檔的 `tenants:` 區塊不被讀取，exporter 與路由產生器都記 WARN。
+
+**`_profiles.yaml` 的 `profiles:` 區塊**也會進：租戶寫 `_profile: std` 選用一個 profile 時，profile 的值進入最終設定（`key_sources` 標 `layer: profile`）；改 profile 裡的值，選用它的租戶 `merged_hash` 跟著變，`tenant-verify` 回 2。
 
 **`max_metrics_per_tenant`** 是每個租戶最多送幾條閾值 series 的上限，只認根目錄 `_defaults.yaml` 的頂層；子目錄 `_defaults.yaml` 或租戶檔寫了會記 WARN 並忽略，租戶因此不能替自己調高上限。未設或 0 時上限是 500，負值表示不截斷。Helm chart 的設定鍵是 `thresholdConfig.max_metrics_per_tenant`。
 
@@ -211,7 +213,7 @@ $ printf '%s' '{"pg_locks_count":100,"pg_replication_lag_seconds":30,"pg_stat_ac
 否則，鏈上的 _defaults.yaml 變了：
   merged_hash 變了                    → applied（reason=defaults）
   沒變，且變動的鍵都被租戶自己覆蓋     → shadowed
-  沒變，且 defaults: 裡沒有鍵變動      → cosmetic（例如只改註解、順序、空白，或只改 _routing_defaults 這類不進最終設定的頂層鍵）
+  沒變，且 defaults: 裡沒有鍵變動      → cosmetic（例如只改註解、順序、空白，或只改根目錄的 _routing_defaults）
 ```
 
 根目錄平台檔 `tenants:` 區塊裡某個租戶的條目改了，也走 reason=defaults 這一支：該租戶的 `merged_hash` 變了就記 applied，改的鍵被租戶檔覆蓋就記 shadowed。
@@ -228,18 +230,18 @@ $ printf '%s' '{"pg_locks_count":100,"pg_replication_lag_seconds":30,"pg_stat_ac
 
 雜湊不當 metric label 用，避免 series 數量爆增；`_defaults.yaml` 也不產生自己的 series，它的值算進各租戶的閾值，受 `max_metrics_per_tenant` 限制。
 
-### 8. 頂層鍵的變更，最終設定看不到
+### 8. 有些頂層鍵的變更，最終設定看不到
 
-除了 `tenants:` 區塊，頂層鍵不進最終設定，所以凡是以最終設定或 `merged_hash` 為輸入的工具都看不到它們的變更：`/effective`、`describe_tenant`、da-guard、爆炸半徑報告、`tenant-verify`。這是為了決策 7 的歸類正確而刻意接受的代價（理由見替代方案 D），但有兩個後果要知道：
+根目錄的 `_routing_defaults` 與 `state_filters` 不進最終設定，改了之後 `merged_hash` 不動，所以凡是以最終設定或 `merged_hash` 為輸入的工具都看不到這些變更：`/effective`、`describe_tenant`、da-guard、爆炸半徑報告、`tenant-verify`。這是為了決策 7 的歸類正確而刻意接受的代價（理由見替代方案 D），但有兩個後果要知道：
 
 - **`effect="cosmetic"` 不代表只改了註解。** 只改根目錄 `_routing_defaults` 的一次變更，與只加一行註解，exporter 都記成 `effect="cosmetic"`。
-- **`da-tools tenant-verify --expect-merged-hash` 在這裡不是證據。** 它在雜湊不符時回 2：改根目錄平台檔 `tenants:` 裡某個租戶的條目、且改的鍵沒被租戶檔覆蓋時，那個租戶回 2，其他租戶回 0。但改了 `tenants:` 以外的平台頂層鍵之後，它對每個租戶都回 0：回 0 代表這一面沒被涵蓋，不代表回滾已經驗證。
+- **`da-tools tenant-verify --expect-merged-hash` 在這裡不是證據。** 它在雜湊不符時回 2，但只改根目錄 `_routing_defaults` 之後它回 0：回 0 代表這一面沒被涵蓋，不代表回滾已經驗證。
 
-另建一個比較平台頂層鍵的機制，追蹤在 [#1516](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/1516)。
+另建一個比較這類平台頂層鍵的機制，追蹤在 [#1516](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/1516)。
 
 ### 9. 路由設定沿目錄逐層繼承
 
-路由設定不進最終設定，但沿著同一棵目錄有自己的繼承鏈。以下的結束碼都是 `generate_alertmanager_routes.py` 的；回 2 時什麼都不產生。
+平台的 `_routing_defaults` 不進最終設定（租戶自己的 `_routing` 會進），但路由設定沿著同一棵目錄有自己的繼承鏈。以下的結束碼都是 `generate_alertmanager_routes.py` 的；回 2 時什麼都不產生。
 
 **放在哪裡讀**：根目錄從任一 `_` 開頭的檔的頂層讀 `_routing_defaults` 與 `_routing_enforced`。子目錄每一層只讀該層 `_defaults.yaml`（或 `_defaults.yml`）頂層的 `_routing_defaults`；寫在子目錄其他 `_` 檔裡的會被略過並記 WARN，`--validate` 回 1。
 
@@ -276,7 +278,7 @@ resolved(t) = rd(t) ⊕ profiles[t._routing_profile] ⊕ t._routing
 
 - **好處**：同一個預設值只寫一次，整棵子樹繼承；預設值變更能逐租戶歸類成 applied / shadowed / cosmetic，爆炸半徑報告看得出一次變更真正影響了誰。
 - **代價**：
-  - `tenants:` 以外的頂層鍵，變更在最終設定這一面看不到（決策 8）。
+  - 根目錄 `_routing_defaults`、`state_filters` 這類頂層鍵的變更，在最終設定這一面看不到（決策 8）。
   - 只改租戶檔的註解也記成 applied（決策 7）。
   - `_custom_alerts` 在 `describe_tenant.py` 與 Go 實作之間不一致（決策 2）。
   - 沒有 `defaults:` 的子目錄檔整份併入，它的頂層鍵（例如 `state_filters`）因此也進最終設定：改它會讓該子樹每個租戶的 `merged_hash` 都動。`rule-packs/recipes/examples/conf.d/finance/_defaults.yaml` 就是這個形狀（頂層只有 `_custom_alerts`）。
@@ -295,15 +297,15 @@ resolved(t) = rd(t) ⊕ profiles[t._routing_profile] ⊕ t._routing
 
 ❌ 上層 `group_by: [severity]`、下層 `group_by: [alertname]`，串接得到 `[severity, alertname]`，語意不明確。寫 `group_by` 的人想的是「換成這個」，不是「再加上這個」。
 
-### D：把其他頂層鍵也併進最終設定
+### D：把 `_routing_defaults`、`state_filters` 這類頂層鍵也併進最終設定
 
 ❌ 這是讓決策 8 那些變更看得見最直接的做法，但有三個理由不採用：
 
-1. **歸因失真。** `merged_hash` 決定一次變更記成 applied、shadowed 或 cosmetic。把頂層鍵併進來，每次平台路由編輯都會把每個租戶記成 applied，`da_config_reload_trigger_total{reason="defaults"}` 跟著增加，但實際的載入工作不變（本來就每次全量重建）。
+1. **歸因失真。** `merged_hash` 決定一次變更記成 applied、shadowed 或 cosmetic。把它們併進來，每次平台路由編輯都會把每個租戶記成 applied，`da_config_reload_trigger_total{reason="defaults"}` 跟著增加，但實際的載入工作不變（本來就每次全量重建）。
 2. **既存的雜湊全部失效。** `merged_hash` 是 `tenant-verify --expect-merged-hash` 的比對值，改變它的定義會讓所有存下來的值對不上。
 3. **深合併表達不了路由的語意。** 租戶的 `_routing` 是逐頂層鍵覆蓋 `_routing_defaults`，不是同鍵深合併。改平台的 `group_wait` 時，自帶 `_routing.group_wait` 的租戶 route 完全不變；深合併卻會讓它的 `merged_hash` 移動，被記成受影響。
 
-頂層鍵的變更本來就不依賴 `merged_hash` 生效：只改 `state_filters` 的 severity，`/metrics` 的 `user_state_filter` 跟著變，`merged_hash` 不動；對照組改 `defaults:` 底下的鍵，沒覆蓋它的租戶 `merged_hash` 就會動。
+這類鍵的變更本來就不依賴 `merged_hash` 生效：只改 `state_filters` 的 severity，`/metrics` 的 `user_state_filter` 跟著變，`merged_hash` 不動；對照組改 `defaults:` 底下的鍵，沒覆蓋它的租戶 `merged_hash` 就會動。
 
 ## 影響範圍
 
