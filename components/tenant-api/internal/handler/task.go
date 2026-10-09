@@ -59,6 +59,14 @@ func GetTask(d *Deps) http.HandlerFunc {
 		// Return a defensive copy (don't mutate manager-held pointer).
 		response := task
 		response.Results = filtered
+		// #1530: the stored summary counts EVERY result, including the ones
+		// just filtered out — "1 succeeded, 1 failed" beside one visible
+		// result tells the caller a hidden tenant was in the run. Re-render
+		// it over what the caller gets. A task with no summary yet (pending,
+		// running, failed) keeps none.
+		if response.Summary != "" {
+			response.Summary = async.SummarizeResults(filtered)
+		}
 
 		writeJSON(w, http.StatusOK, response)
 	}

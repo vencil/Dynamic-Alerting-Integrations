@@ -124,12 +124,15 @@ v2.7.0 的 RBAC 透過 `rbacMgr.Middleware(perm, tenantIDFn)` 在路由層做 `P
 
 | 端點 | v2.7.0 行為 | v2.8.0 行為 |
 |---|---|---|
-| `PUT /api/v1/groups/{id}` | 任何 `PermWrite` user 可編輯任意 group 的 `members` | 必須對**每個** member tenant 有 `PermWrite`；缺者列入 403 訊息 |
-| `DELETE /api/v1/groups/{id}` | 任何 `PermWrite` user 可刪除任意 group | 必須對 group 既有**每個** member 有 `PermWrite`（防 DoS）|
-| `GET /api/v1/tasks/{id}` | 回傳完整 `Results[]`（含所有 task 觸及租戶）| 過濾 `Results[]` 為 caller 可讀的子集；已有結果但一筆都不可讀時回 403（還沒有結果的 task 照回 200）|
+| `PUT /api/v1/groups/{id}` | 任何 `PermWrite` user 可編輯任意 group 的 `members` | 必須對請求帶來的**每個** member tenant 有 `PermWrite`；更新既有 group 時，也必須對它**既有的每個** member 有 `PermWrite`（[#1529](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/1529)：整份替換等於移除沒帶上的成員，與 DELETE 同一條規則；`members: []` 也一樣）；缺者列入 403 訊息（列法見 §3.6）|
+| `DELETE /api/v1/groups/{id}` | 任何 `PermWrite` user 可刪除任意 group | 必須對 group 既有**每個** member 有 `PermWrite`（防 DoS）；caller 看不到的 group 回 404（見下方「group 可見性」）|
+| `POST /api/v1/groups/{id}/batch` | 回應列出 group 的全部成員 | `results[]` 只列 caller 可讀的成員，`summary` 也只算這些（[#1530](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/1530)；同步、非同步、PR 模式皆同）；caller 看不到的 group 回 404 |
+| `GET /api/v1/tasks/{id}` | 回傳完整 `Results[]`（含所有 task 觸及租戶）| 過濾 `Results[]` 為 caller 可讀的子集，`summary` 依過濾後的結果重算；已有結果但一筆都不可讀時回 403（還沒有結果的 task 照回 200）|
 | `GET /api/v1/prs` | 回傳所有 pending PR/MR | bulk 模式：自動過濾不可讀租戶；`?tenant=<id>` 模式：不可讀回**空列表**（不 403，避免 existence oracle）|
 
-⚠️ 這張表描述的是 handler 層。這四個端點在路由層還有一道閘門：先要求對 `*` 有對應權限，也就是規則裡要有 `tenants: ["*"]`（可帶 org／metadata 範圍）。只有單租戶或前綴授權（如 `["db-a-*"]`）的呼叫者一律 403 `insufficient permissions for tenant *`，到不了上面的過濾。這個 403 不帶租戶 id，所以不構成 existence oracle。是否刻意見 [#2520](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/2520)。
+**group 可見性**：`GET /groups`、`GET /groups/{id}`、`DELETE /groups/{id}`、`POST /groups/{id}/batch` 共用同一個判斷——group 沒有成員，或 caller 至少能讀一個成員，才算看得到。看不到的 group 一律回與「不存在」逐位元組相同的 404，而且在讀 body 之前就回，所以任何一個端點都不會證實它存在。沒有成員的 group 對所有人可見（它沒有成員可洩漏；先前它對所有人都是 404，連平台管理員也刪不掉）。⚠️ 已知限制：`PUT` 是 upsert，對看不到的既有 group 回 403、對新 id 回 200，這個差異仍會透露 group id 已被使用；要消除得把 group id 依 org 分區，不在本次範圍。
+
+⚠️ 這張表描述的是 handler 層。這些端點在路由層還有一道閘門：先要求對 `*` 有對應權限，也就是規則裡要有 `tenants: ["*"]`（可帶 org／metadata 範圍）。只有單租戶或前綴授權（如 `["db-a-*"]`）的呼叫者一律 403 `insufficient permissions for tenant *`，到不了上面的過濾。這個 403 不帶租戶 id，所以不構成 existence oracle。是否刻意見 [#2520](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/2520)。
 
 ### 3.2 為什麼 `?tenant=<id>` 不直接回 403
 
@@ -168,6 +171,16 @@ ADR-016 提到「flat tenant 缺 `_metadata.{domain,region,environment}` 時可�
 ```
 
 去重 + 按請求順序保留：caller 可直接 grep 自己的 RBAC config 找原因。
+
+**列出哪些 id 取決於 id 從哪來（[#1531](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/1531)）**：請求帶來的 id 一律列出（caller 本來就知道）；從磁碟上 group 讀出的既有成員，只列 caller **讀得到**的，讀不到的只加一句不帶數字的說明：
+
+```json
+{
+  "error": "insufficient permission to delete group with forbidden member tenants: db-b; it also has member tenants you cannot view"
+}
+```
+
+全部都讀不到時是 `insufficient permission to delete group: it has member tenants you cannot view`。不給數字：403 本身已表示有東西被擋，數字則會透露讀取端藏起來的成員有幾個。
 
 ---
 

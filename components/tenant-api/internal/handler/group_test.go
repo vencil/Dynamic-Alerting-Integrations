@@ -280,13 +280,15 @@ func TestGetGroup_OrgScopeFiltersMembers(t *testing.T) {
 		t.Errorf("cross-org-only GetGroup status = %d, want 404 (group with no accessible member must be hidden)", w.Code)
 	}
 
-	// Edge: a group with NO members has no accessible member either, so it is
-	// hidden (404) under configured RBAC — matching ListGroups' skip. This is a
-	// behavior change vs pre-fix (200 with empty members) that applies whenever
-	// RBAC groups are configured (not only under org-scope); pinned here so the
-	// parity with ListGroups is intentional, not incidental.
-	if w := get(t, "empty-grp", orgReadMemberOrg); w.Code != http.StatusNotFound {
-		t.Errorf("empty-member GetGroup status = %d, want 404 (group with no members is hidden, matching ListGroups)", w.Code)
+	// Edge: a group with NO members is visible (200, empty members). It used to
+	// be hidden here — hasAccessibleMember is false for an empty list — which
+	// made it a 404 to every caller, platform admins included. #1530/#1531 put
+	// the same visibility predicate on DELETE and the batch endpoint, where
+	// "hidden from everyone" would mean an empty group nobody could delete; an
+	// empty group has no member to leak, so it is visible on every endpoint
+	// (groupVisible). ListGroups agrees: TestListGroups_EmptyGroupVisible.
+	if w := get(t, "empty-grp", orgReadMemberOrg); w.Code != http.StatusOK {
+		t.Errorf("empty-member GetGroup status = %d, want 200 (a group with no members leaks nothing and must stay reachable)", w.Code)
 	}
 }
 
