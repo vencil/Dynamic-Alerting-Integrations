@@ -97,9 +97,12 @@ bash scripts/ops/install_prepush_hook.sh || guards_failed=1
 # reinstalls it every time. So no-op when the last run ended in RESULT=ok, the
 # guards are in place, and the commit hook and e2e deps that run installed are
 # still there. Anything else runs the whole script again.
+# The commit hook is found the way the installers place it, via `--git-path`:
+# in a linked worktree `.git` is a file (#2775). A failed rev-parse yields "",
+# and `[ -f "" ]` is false — so it reruns rather than no-ops.
 if [ -z "$guards_failed" ] && [ -f "$MARKER" ] && grep -q '^RESULT=ok$' "$MARKER" 2>/dev/null \
   && command -v pre-commit >/dev/null 2>&1 \
-  && [ -f .git/hooks/pre-commit ] \
+  && [ -f "$(git rev-parse --git-path hooks/pre-commit 2>/dev/null)" ] \
   && { [ ! -f tests/e2e/package.json ] || [ -d tests/e2e/node_modules ]; }; then
   note "re-run at $(date -u +%Y-%m-%dT%H:%M:%SZ): already bootstrapped, no-op"
   say "already bootstrapped (marker: $MARKER) — nothing else to do"
