@@ -1105,22 +1105,28 @@ def _prepush_guards_wired() -> Tuple[Optional[bool], str]:
     """
     # ⛔ 任何一棵 worktree 讀得到 core.hooksPath（空字串也算）就不判（#2696）。它指向
     # 的可能是許多 repo 共用的目錄，裝進去的 shim 會擋下其他 repo 的每一次 push；
-    # 空字串則讓 git 一支 hook 都不跑。逐棵在那棵裡讀，不是只讀這一棵：
-    # `git config --worktree` 與 includeIf gitdir 都能讓它只在某一棵生效，從那棵
-    # push 就不經 .git/hooks（#2772）。目錄不存在的 worktree 推不了，不讀。
-    # None：這裡量不到本 repo 的守衛。
-    # GIT_CONFIG 只改變 `git config` 讀哪個檔，git 跑 hook 時照樣讀原本的設定。
-    env = {k: v for k, v in os.environ.items() if k != "GIT_CONFIG"}
-    wl = run(["git", "worktree", "list", "--porcelain", "-z"], timeout=30)
-    bad = wl if wl.returncode != 0 else None
-    trees = [f[len("worktree "):] for f in (wl.stdout or "").split("\0")
-             if f.startswith("worktree ")] if bad is None else []
-    for tree in (t for t in trees if os.path.isdir(t)):
-        hp = run(["git", "-C", tree, "config", "--get", "core.hooksPath"],
+    # 空字串則讓 git 一支 hook 都不跑。`git config --worktree` 與 includeIf gitdir
+    # 都能讓它只在某一棵生效，從那棵 push 就不經 .git/hooks（#2772），所以逐棵讀。
+    # 以那棵的 git 目錄（common dir 與其下 worktrees/*）讀，不進 worktree 目錄：
+    # 登記的路徑不存在時，搬走的那棵照樣能 push。None：這裡量不到本 repo 的守衛。
+    # GIT_CONFIG 只改變 `git config` 讀哪個檔，git 跑 hook 時照樣讀原本的設定；
+    # GIT_COMMON_DIR 會蓋掉 --git-dir 推出的 common dir。
+    env = {k: v for k, v in os.environ.items() if k not in ("GIT_CONFIG", "GIT_COMMON_DIR")}
+    cd = run(["git", "rev-parse", "--git-common-dir"], timeout=30)
+    bad = cd if cd.returncode != 0 else None
+    dirs: List[Path] = []
+    if bad is None:
+        common = Path((cd.stdout or "").strip()).resolve()
+        try:
+            dirs = [common, *sorted(p for p in (common / "worktrees").glob("*") if p.is_dir())]
+        except OSError as e:
+            return None, f"量不到：讀不到 {common / 'worktrees'}（{e}）。這不代表守衛沒裝。"
+    for gd in dirs:
+        hp = run(["git", "--git-dir", str(gd), "config", "--get", "core.hooksPath"],
                  timeout=30, env=env)
         if hp.returncode == 0:
             return None, (
-                f"量不到：worktree {tree} 的 core.hooksPath 設成 "
+                f"量不到：以 {gd} 為 git 目錄讀到 core.hooksPath 設成 "
                 f"{(hp.stdout or '').strip()!r}；本 repo 的守衛只在每棵 worktree"
                 " 都沒設它時判定。"
             )

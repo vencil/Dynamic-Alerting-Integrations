@@ -463,14 +463,16 @@ class TestPrepushWiring:
         wired, why = mod._prepush_guards_wired()
         assert wired is True, f"unsetting core.hooksPath did not bring the guards back: {why!r}"
 
+    @pytest.mark.parametrize("where", ["in-place", "moved", "GIT_DIR"])
     @pytest.mark.parametrize("how", ["worktree-config", "includeIf-gitdir"])
     def test_a_hooks_path_set_for_one_worktree_only_is_unmeasurable(
-        self, tmp_path, monkeypatch, how
+        self, tmp_path, monkeypatch, how, where
     ):
         """#2772: core.hooksPath can reach a single worktree, and a push from
         there skips .git/hooks while the main checkout reads nothing set. The
-        judgement from the main checkout is None and names that worktree; a
-        worktree whose directory is gone is not read."""
+        judgement from the main checkout is None and names that worktree, also
+        once the worktree was moved without `git worktree repair` (it still
+        pushes) and with GIT_DIR exported to the main checkout."""
         mod = _load()
         repo = tmp_path / "repo"
         repo.mkdir()
@@ -500,18 +502,56 @@ class TestPrepushWiring:
             inc = tmp_path / "inc.gitconfig"
             inc.write_text(f"[core]\n\thooksPath = {empty.as_posix()}\n", encoding="utf-8")
             gcfg.write_text(
-                f'[includeIf "gitdir:{(repo / ".git" / "worktrees").as_posix()}/"]\n'
+                f'[includeIf "gitdir:{(repo / ".git" / "worktrees" / "only-this-tree").as_posix()}"]\n'
                 f"\tpath = {inc.as_posix()}\n", encoding="utf-8")
         bare = tmp_path / "bare.git"
         subprocess.run(["git", "init", "-q", "--bare", str(bare)], check=True)  # subprocess-timeout: ignore
+        if where == "moved":
+            src = tmp_path / "moved-away"
+            shutil.move(str(tmp_path / "only-this-tree"), str(src))
+        else:
+            src = tmp_path / "only-this-tree"
         push = subprocess.run(  # subprocess-timeout: ignore
-            ["git", "-C", str(tmp_path / "only-this-tree"), "push", "-q", str(bare), "HEAD:refs/heads/main"],
+            ["git", "-C", str(src), "push", "-q", str(bare), "HEAD:refs/heads/main"],
             capture_output=True, text=True, encoding="utf-8", errors="replace", timeout=60,
             env={**os.environ, "GIT_PREFLIGHT_BYPASS": "1", "MKDOCS_STRICT_BYPASS": "1"})
         assert push.returncode == 0, f"PREMISE: the push from that worktree skips the guards: {push.stderr}"
+        if where == "GIT_DIR":
+            monkeypatch.setenv("GIT_DIR", str(repo / ".git"))
 
         wired, why = mod._prepush_guards_wired()
         assert wired is None and "core.hooksPath" in why and "only-this-tree" in why, why
+
+    @pytest.mark.parametrize("fails", ["the-linked-worktree-only", "finding-the-common-dir"])
+    def test_git_failing_for_another_worktree_is_unmeasurable(self, tmp_path, monkeypatch, fails):
+        """#2772: the worktrees are read one by one, so a read that fails for
+        any of them, or failing to find them at all, is None — not the verdict
+        of the checkouts that could be read."""
+        mod = _load()
+        repo = tmp_path / "repo"
+        repo.mkdir()
+        self._repo(repo)
+        assert self._install_guards(repo).returncode == 0
+        subprocess.run(  # subprocess-timeout: ignore
+            ["git", "-C", str(repo), "worktree", "add", "-q", "--detach", str(tmp_path / "wt")],
+            check=True)
+        monkeypatch.chdir(repo)
+        wired, why = mod._prepush_guards_wired()
+        assert wired is True, f"CONTROL: wired with a readable linked worktree: {why!r}"
+        real = shutil.which("git")
+        bindir = tmp_path / "bin"
+        bindir.mkdir()
+        pattern = {"the-linked-worktree-only": '*"/worktrees/"*" config --get core.hooksPath "*',
+                   "finding-the-common-dir": '*" rev-parse --git-common-dir "*'}[fails]
+        (bindir / "git").write_text(
+            "#!/bin/sh\n"
+            f'case " $* " in {pattern}) exit 5 ;; esac\n'
+            f'exec "{real}" "$@"\n', encoding="utf-8", newline="\n")
+        (bindir / "git").chmod(0o755)
+        monkeypatch.setenv("PATH", f"{bindir}{os.pathsep}{os.environ['PATH']}")
+
+        wired, why = mod._prepush_guards_wired()
+        assert wired is None and "rc=5" in why, why
 
     def test_git_config_failing_to_read_hooks_path_changes_nothing(self, tmp_path, monkeypatch):
         """When git cannot say whether core.hooksPath is set, neither side
