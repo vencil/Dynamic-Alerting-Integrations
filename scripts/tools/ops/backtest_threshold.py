@@ -1020,6 +1020,12 @@ def not_backtestable(change):
     is what marks it dimensioned."""
     if "series" not in change:
         return "dimensioned key" if "{" in change["metric"] else None
+    # Fail closed: with no series to name the data (none at all, or only a
+    # legacy twin, which `_query_metrics` never asks about) nothing would be
+    # queried, and `backtest_change` would report that as "no data".
+    # `extract_changes_from_dirs` never yields such a change today.
+    if not _query_metrics(change):
+        return "served-values gave no non-twin /metrics series"
     if any(s.dimensions or s.dimensions_regex for s in change["series"]):
         return "dimensioned key"
     return None

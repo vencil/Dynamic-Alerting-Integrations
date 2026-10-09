@@ -406,10 +406,31 @@ def test_a_window_served_as_critical_is_backtested(
     ("plain", [tv.Series("user_threshold", {}, "plain", False, {}, {"ts": "SYS.*"})], "dimensioned key"),
     ('x{db="a"}', [tv.Series("user_threshold", {}, "x", False, {}, {})], None),
     ("x_critical", [tv.Series("user_threshold", {"severity": "critical"}, "x", False, {}, {})], None),
+    # Nothing to ask Prometheus about is not "no data" (fail closed, #2750 N2).
+    ("x", [], "served-values gave no non-twin /metrics series"),
+    ("x", [tv.Series("user_threshold", {}, "x_old", True, {}, {})],
+     "served-values gave no non-twin /metrics series"),
 ])
 def test_not_backtestable_reads_the_series_fields(metric: str, series: list, want: str | None) -> None:
     change = {"tenant": "tx", "metric": metric, "old_value": "1", "new_value": "2", "series": series}
     assert bt.not_backtestable(change) == want
+
+
+def test_a_change_with_nothing_to_query_is_not_reported_as_no_data(
+        tmp_path: Path, monkeypatch, capsys, cli_argv) -> None:
+    """A change whose series are only a legacy twin (or none) asks Prometheus
+    nothing; the report says so, it does not say "No historical data found"
+    (#2750 N2)."""
+    b = _tree(tmp_path / "base", {"_defaults.yaml": _DEFAULTS, "tx.yaml": _wrapper("50")})
+    c = _tree(tmp_path / "cur", {"_defaults.yaml": _DEFAULTS, "tx.yaml": _wrapper("60")})
+    twin_only = [_ident("mysql_cpu", "warning", metric="cpu", twin=True)]
+    monkeypatch.setattr(bt, "extract_changes_from_dirs", lambda cur, base: [
+        {"tenant": "tx", "metric": "k", "old_value": "50", "new_value": "60", "series": twin_only}])
+    _, out, asked = _run_main(monkeypatch, capsys, cli_argv, b, c, "--json")
+    rows = json.loads(out.out)["changes"]
+    assert [(r["metric"], r["status"], r["backtest"]) for r in rows] == [
+        ("k", "not_backtested", "skipped: served-values gave no non-twin /metrics series")]
+    assert asked == []
 
 
 def test_queries_name_the_series_metric_keys_never_the_twin() -> None:

@@ -387,3 +387,30 @@ func TestServedSeries_Shapes(t *testing.T) {
 		}
 	}
 }
+
+// TestCheckKeySeries_Shapes: the invariant a reader of `series` relies on —
+// one row of the key's own, first, then at most its legacy twin — refuses
+// every other shape.
+func TestCheckKeySeries_Shapes(t *testing.T) {
+	t.Parallel()
+	row := metricsSeries{Name: "user_threshold", MetricKey: "x"}
+	tw := metricsSeries{Name: "user_threshold", MetricKey: "y", LegacyTwin: true}
+	for _, tc := range []struct {
+		name string
+		list []metricsSeries
+		ok   bool
+	}{
+		{"row", []metricsSeries{row}, true},
+		{"row then twin", []metricsSeries{row, tw}, true},
+		{"empty", nil, false},
+		{"twin alone", []metricsSeries{tw}, false},
+		{"twin then row", []metricsSeries{tw, row}, false},
+		{"row, row", []metricsSeries{row, row}, false},
+		{"three", []metricsSeries{row, tw, tw}, false},
+	} {
+		err := checkKeySeries("tx", "k", tc.list)
+		if (err == nil) != tc.ok {
+			t.Errorf("%s: err = %v, want ok=%v", tc.name, err, tc.ok)
+		}
+	}
+}
