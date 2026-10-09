@@ -65,11 +65,12 @@ lang: zh
 | `ADR-034` | adr | ADR-034: 合法值不得同時當作無法辨識時的 fallback | platform | — | [docs/adr/034-legal-value-as-fallback.md](../adr/034-legal-value-as-fallback.md) |
 | `ADR-035` | adr | ADR-035: tenant id 合法字元集的單一來源 | platform | — | [docs/adr/035-tenant-id-single-source.md](../adr/035-tenant-id-single-source.md) |
 
-### proposed (16)
+### proposed (17)
 
 | ID | Kind | Title | Domain | PR | Source |
 |----|------|-------|--------|------|--------|
 | `ADR-026` | adr | ADR-026: Node/Cluster 維護告警抑制 — 不需要子系統 | k8s | — | [docs/adr/026-node-maintenance-liveness-suppression.md](../adr/026-node-maintenance-liveness-suppression.md) |
+| `ADR-036` | adr | ADR-036: conf.d 的路由與 policy 只由產生器解析一次，Go 讀取端吃它的輸出 | platform | — | [docs/adr/036-single-parser-effective-config.md](../adr/036-single-parser-effective-config.md) |
 | `TRK-001` | dx | TRK-001: `check_noqa_hygiene.py` — noqa/nosec 必要性驗證 | ci | — | [docs/internal/dx-tooling-backlog.md](../internal/dx-tooling-backlog.md) |
 | `TRK-002` | dx | TRK-002: `make test-impact` — 變更影響測試自動縮減 | ci | — | [docs/internal/dx-tooling-backlog.md](../internal/dx-tooling-backlog.md) |
 | `TRK-003` | dx | TRK-003: Pre-commit hook CI gate | ci | — | [docs/internal/dx-tooling-backlog.md](../internal/dx-tooling-backlog.md) |
