@@ -23,7 +23,8 @@ package config
 //     root decode has no field for it (FlatBuild.RootDefaultsUnread).
 //   - value_rejected: applySubtreeDefaults refuses a subtree level's value
 //     (not threshold-shaped) and the tenant keeps a shallower one
-//     (FlatBuild.RejectedChainValues).
+//     (FlatBuild.RejectedChainValues, less the keys the tenant sets itself:
+//     FlatBuild.rejectedTenantSets).
 //   - value_unparsed: resolveBaseRows cannot parse the tenant's value and
 //     serves the platform default instead (rejectRecorder).
 //   - value_unparsed_dropped: the critical / dimensional / declared phase
@@ -289,8 +290,8 @@ func ValueNotServedReasons() []string {
 // modified. nil when nothing is recorded.
 //
 // ⚠️ Tenant values only: a subtree `_defaults.yaml` value the build refused
-// is FlatBuild.RejectedChainValues, and the other NotServed reasons are the
-// build's, not the resolver's.
+// is FlatBuild.RejectedChainValues (less rejectedTenantSets), and the other
+// NotServed reasons are the build's, not the resolver's.
 //
 // It resolves c with a recorder over every minute of the UTC day at which
 // some tenant value may resolve differently, so the verdict does not depend
@@ -353,11 +354,12 @@ func (r *rejectRecorder) noteInvalidWindows(tenant, key string, sv ScheduledValu
 // resolver (#2296). Built from the build ScopeEffective / ResolveEffective
 // already ran over the same scan.
 type servedVerdicts struct {
-	parseFailed   map[string]bool            // root-relative scan keys (FlatBuild.ParseFailed)
-	rootUnread    map[string]bool            // root carrier keys (FlatBuild.RootDefaultsUnread)
-	rejected      map[string]map[string]bool // file → keys (FlatBuild.RejectedChainValues)
-	undeliverable map[string]map[string]bool // tenant → keys (undeliverableThresholds)
-	rootNull      map[string]map[string]bool // tenant → keys (FlatBuild.RootNullUndeclared)
+	parseFailed   map[string]bool                       // root-relative scan keys (FlatBuild.ParseFailed)
+	rootUnread    map[string]bool                       // root carrier keys (FlatBuild.RootDefaultsUnread)
+	rejected      map[string]map[string]bool            // file → keys (FlatBuild.RejectedChainValues)
+	tenantSets    map[string]map[string]map[string]bool // tenant → file → keys of rejected it sets (FlatBuild.rejectedTenantSets)
+	undeliverable map[string]map[string]bool            // tenant → keys (undeliverableThresholds)
+	rootNull      map[string]map[string]bool            // tenant → keys (FlatBuild.RootNullUndeclared)
 
 	// cfg is the build's config; unparsed is ValuesNotServed over it,
 	// computed on the first tenant that asks (all, when all is set — the
@@ -393,7 +395,7 @@ func newServedVerdicts(built *FlatBuild, all bool) *servedVerdicts {
 		}
 		v.rootUnread[u.Key] = true
 	}
-	v.rejected = built.RejectedChainValues
+	v.rejected, v.tenantSets = built.RejectedChainValues, built.rejectedTenantSets
 	for tenantID, keys := range undeliverableThresholds(built.UnreachableValues) {
 		if v.undeliverable == nil {
 			v.undeliverable = map[string]map[string]bool{}
@@ -473,7 +475,7 @@ func (v *servedVerdicts) notServed(tenantID string, view map[string]any, ks map[
 			reason = NotServedParseFailed
 		case atRoot && v.rootUnread[k]:
 			reason = NotServedRootDefaultsUnwrapped
-		case src.Layer == KeyLayerDefaults && !atRoot && v.rejected[src.File][k]:
+		case src.Layer == KeyLayerDefaults && !atRoot && v.rejected[src.File][k] && !v.tenantSets[tenantID][src.File][k]:
 			reason = NotServedValueRejected
 		case unparsed[canon] == NotServedValueUnparsedDropped:
 			reason = NotServedValueUnparsedDropped
@@ -498,14 +500,19 @@ func (v *servedVerdicts) notServed(tenantID string, view map[string]any, ks map[
 	return out
 }
 
-// relRejected converts applySubtreeDefaults' absolute-path rejection table
-// to root-relative slash paths (FlatBuild.RejectedChainValues).
+// relRejected converts one of applySubtreeDefaults' absolute-path rejection
+// tables (defaults file → keys: the whole tree's, or one tenant's
+// tenantSets) to root-relative slash paths (FlatBuild.RejectedChainValues,
+// FlatBuild.rejectedTenantSets), dropping files with no key. nil when none.
 func relRejected(rootDir string, byAbs map[string]map[string]bool) map[string]map[string]bool {
-	if len(byAbs) == 0 {
-		return nil
-	}
-	out := make(map[string]map[string]bool, len(byAbs))
+	var out map[string]map[string]bool
 	for p, keys := range byAbs {
+		if len(keys) == 0 {
+			continue
+		}
+		if out == nil {
+			out = map[string]map[string]bool{}
+		}
 		out[subtreeRelPath(rootDir, filepath.Clean(p))] = keys
 	}
 	return out

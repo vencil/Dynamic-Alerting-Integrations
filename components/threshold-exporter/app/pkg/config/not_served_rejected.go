@@ -21,10 +21,11 @@ import (
 // profiles, the root carrier) — plus the tenant id. The build's tables the
 // value_rejected verdict reads (RejectedChainValues, ParseFailed of a chain
 // file) are functions of those files' bytes: a chain file's refused keys
-// are its values that are not threshold-shaped, recorded for any tenant that
-// does not set the key itself, and the verdict reads them only where that
-// file is the tenant's winning layer. The zero value is ready; safe for
-// concurrent use.
+// are its values that are not threshold-shaped, whichever tenants are under
+// it, and the verdict reads them only where that file is the tenant's
+// winning layer and the tenant does not set the key itself
+// (FlatBuild.rejectedTenantSets, from its own files). The zero value is
+// ready; safe for concurrent use.
 type RejectedShownCache struct {
 	mu      sync.Mutex
 	entries map[string]rejectedShownEntry
