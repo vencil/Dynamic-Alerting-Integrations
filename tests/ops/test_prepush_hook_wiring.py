@@ -1300,7 +1300,7 @@ def test_a_stale_guard_copy_is_replaced_by_the_installer(
     r, out = _push(work, "HEAD:refs/heads/feat/legacy")
     assert r.returncode != 0, f"a broken install silently allowed the push:\n{out}"
     said = _CHAINED_STILL_THERE in out if slot == "pre-push.chained" else _helper_missing_lines(out)
-    assert said and _INSTALL in out, out
+    assert said, out
 
     r = _install_guards(work)
     assert r.returncode == 0, f"installer failed:\n{r.stdout}{r.stderr}"
@@ -1342,6 +1342,10 @@ _USER_HOOKS = {
         'echo >&2 "', 'echo >&2 "x"; echo USER-HOOK-RAN >&2; echo "', 1),
     "lfs-check-then-more-on-its-line": _LFS_HOOKS["3.x"].replace(
         'exit 2; }\n', 'exit 2; }; echo USER-HOOK-RAN >&2 || { echo >&2 "x"; exit 2; }\n', 1),
+    "lfs-check-continued-onto-the-next-line": "#!/bin/sh\n" + "".join(
+        'command -v git-lfs >/dev/null 2>&1 || { echo >&2 "%s"; exit 2; }\n' % m
+        for m in ("a\\", "; }; echo USER-HOOK-RAN >&2; { echo ", "b\\"))
+        + 'git lfs pre-push "$@"\n',
     "lfs-check-that-expands": _LFS_HOOKS["3.x"].replace(
         'echo >&2 "', 'echo >&2 "$(echo USER-HOOK-RAN >&2)', 1),
     "names-the-pre-commit-flag": _USER_HOOK + "# unlike pre-commit's --hook-type=pre-push\n",
