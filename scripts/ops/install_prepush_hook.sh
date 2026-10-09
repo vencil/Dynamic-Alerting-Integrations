@@ -259,7 +259,8 @@ elif is_precommit "$hook"; then
         drop_legacy=1
     fi
 else
-    refuse "$hook is not the guard shim, a committed version of a guard, git-lfs's hook or pre-commit's template." \
+    refuse "$hook is not the guard shim, git-lfs's hook or pre-commit's template, and no" \
+        "version of a guard in this clone's history matches it." \
         "Installing the shim would stop it running: the dispatcher runs this" \
         "repo's guards and git-lfs, nothing else. Fold what it does into your own" \
         "workflow or delete it, then re-run."
