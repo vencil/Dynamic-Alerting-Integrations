@@ -45,15 +45,14 @@ type rejectedShownEntry struct {
 // the result. Keys are spelled as effective_config writes them.
 //
 // scan is the scan built came from; a file a warm scan did not cache is read
-// from disk and used only when its SHA-256 is the scan's, so a tenant whose
-// files moved since the scan is skipped. A tenant that does not resolve is
-// skipped too, as /effective fails for it. nil when there is none.
+// from disk and used only when its SHA-256 is the scan's. A candidate whose
+// resolve failed (a file changed since the scan, or could not be read) is
+// not in the result, as /effective fails for it. nil when there is none.
 //
 // It reuses the previous call's answer for a candidate whose inputs did not
-// move. A candidate whose resolve failed (a file changed since the scan, or
-// could not be read) is not in the result and nothing is cached for it, so
-// the next call resolves it again (#2065 r4: a cached failure outlived the
-// file changing back to the scanned bytes).
+// move. Nothing is cached for a failed resolve, so the next call resolves it
+// again (#2065 r4: a cached failure outlived the file changing back to the
+// scanned bytes).
 func (c *RejectedShownCache) Shown(scan *TreeScan, built *FlatBuild) map[string]map[string]string {
 	c.mu.Lock()
 	defer c.mu.Unlock()

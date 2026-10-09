@@ -259,14 +259,14 @@ func ValueNotServedAsWritten(key, reason string) bool {
 // tenant values of c it does not serve as written, over the whole UTC day:
 // tenant → canonical key → NotServedValueUnparsed,
 // NotServedValueUnparsedDropped or NotServedWindowInvalid (#2065). It is
-// the table `da-guard effective`'s not_served reads. Silent; cfg is not
+// the table `da-guard effective`'s not_served reads. Silent; c is not
 // modified. nil when nothing is recorded.
 //
 // ⚠️ Tenant values only: a subtree `_defaults.yaml` value the build refused
 // is FlatBuild.RejectedChainValues, and the other NotServed reasons are the
 // build's, not the resolver's.
 //
-// It resolves cfg with a recorder over every minute of the UTC day at which
+// It resolves c with a recorder over every minute of the UTC day at which
 // some tenant value may resolve differently, so the verdict does not depend
 // on the time of day the request is made.
 //
