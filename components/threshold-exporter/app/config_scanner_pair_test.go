@@ -200,12 +200,11 @@ func pairMutationAgrees(t *testing.T, build func(t *testing.T, dir string), flat
 func TestAnUnparseableFileMovesBothPlanesTogether(t *testing.T) {
 	t.Parallel()
 	for _, tc := range []struct {
-		name       string
-		touchPlat  bool // also edit _profiles.yaml → full-rebuild branch
-		wantServed bool
+		name      string
+		touchPlat bool // also edit _profiles.yaml → full-rebuild branch
 	}{
-		{"full-rebuild branch drops it from both", true, false},
-		{"tenant-only branch drops it from both too (#1980)", false, false},
+		{"full-rebuild branch drops it from both", true},
+		{"tenant-only branch drops it from both too (#1980)", false},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()
@@ -233,14 +232,13 @@ func TestAnUnparseableFileMovesBothPlanesTogether(t *testing.T) {
 			m.mu.RLock()
 			_, attributed := m.hierarchy.tenantSources["t-a"]
 			m.mu.RUnlock()
-			if served != tc.wantServed {
-				t.Fatalf("fixture precondition: merged config serves t-a = %v, want %v — "+
-					"this leg no longer exercises the branch it is named for", served, tc.wantServed)
+			if served {
+				t.Errorf("t-a: /metrics still serves it after its file failed the one decode — " +
+					"a broken tenant file must drop its tenants on both merge branches (#1980)")
 			}
-			if attributed != served {
-				t.Errorf("t-a: /metrics population has it = %v, /effective population has it = %v — "+
-					"the two planes disagree about a tenant whose file failed the one decode (#1957)",
-					served, attributed)
+			if attributed {
+				t.Errorf("t-a: /effective population (tenantSources) still has it after its file failed " +
+					"the one decode — the two planes must both drop it (#1957, #1980)")
 			}
 			if strings.Contains(logBuf.String(), undeliverableAnchor) {
 				t.Errorf("an ERROR for a state both planes agree on:\n%s", logBuf.String())

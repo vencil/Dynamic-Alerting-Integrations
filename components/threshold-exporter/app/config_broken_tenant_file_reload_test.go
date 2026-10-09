@@ -71,20 +71,38 @@ func removeA(t *testing.T, dir string) {
 	}
 }
 
-// brokenFileCases are the four shapes measured on main. wantParseFailed
-// says whether the FINAL state still has a.yaml on disk as a file that does
-// not parse — the cases where the loud signals (WARN + counter + identity
-// parse_failed) must be present after the last reload.
+// brokenFileMovedTo breaks a.yaml and, in the same reload, declares acme in
+// c.yaml instead — a move whose source file was left broken. To the walker
+// the broken a.yaml declares nothing, so this is no duplicate (a real one is
+// rejected by scanVerdict before incrementalLoadFrom), and acme must be
+// served from c.yaml, as a fresh Load serves it.
+func brokenFileMovedTo(t *testing.T, dir string) {
+	t.Helper()
+	writeTestYAML(t, filepath.Join(dir, "a.yaml"), "tenants:\n  acme: [1\n")
+	writeTestYAML(t, filepath.Join(dir, "c.yaml"), "tenants:\n  acme:\n    _silent_mode: critical\n")
+}
+
+// brokenFileCases are the four shapes measured on main, plus the one shape
+// where a broken file's tenant SURVIVES (patchTenants' reclaimTenantFrom
+// branch). wantSeries is user_silent_mode after the last reload, the
+// must-fire control (zeta=critical) included. wantParseFailed says whether
+// the FINAL state still has a.yaml on disk as a file that does not parse —
+// the cases where the loud signals (WARN + counter + identity parse_failed)
+// must be present after the last reload.
 var brokenFileCases = []struct {
 	name            string
 	steps           []brokenFileStep
+	wantSeries      string
 	wantParseFailed bool
 }{
-	{"syntax error", []brokenFileStep{writeA("tenants:\n  acme: [1\n")}, true},
-	{"tenant body is a scalar", []brokenFileStep{writeA("tenants:\n  acme: 5\n")}, true},
-	{"replaced by a directory (unreadable as a file)", []brokenFileStep{replaceAWithDir}, false},
+	{"syntax error", []brokenFileStep{writeA("tenants:\n  acme: [1\n")}, "zeta=critical", true},
+	{"tenant body is a scalar", []brokenFileStep{writeA("tenants:\n  acme: 5\n")}, "zeta=critical", true},
+	{"replaced by a directory (unreadable as a file)", []brokenFileStep{replaceAWithDir}, "zeta=critical", false},
 	// #2022: broken on one reload, deleted on the next.
-	{"broken then deleted (#2022)", []brokenFileStep{writeA("tenants:\n  acme: [1\n"), removeA}, false},
+	{"broken then deleted (#2022)", []brokenFileStep{writeA("tenants:\n  acme: [1\n"), removeA}, "zeta=critical", false},
+	// The broken file's tenant is taken over by another file in the same
+	// reload: dropping it unconditionally would be wrong (fresh Load serves it).
+	{"broken while moved to another file", []brokenFileStep{brokenFileMovedTo}, "acme=critical,zeta=critical", true},
 }
 
 func buildBrokenFileTree(t *testing.T, dir string, hierarchical bool) {
@@ -190,9 +208,9 @@ func TestABrokenTenantFileDropsItsTenantsOnEveryReloadPath(t *testing.T) {
 
 				// The must-fire control, then the subject.
 				got := silentModeSeries(t, mIncr)
-				if strings.Join(got, ",") != "zeta=critical" {
-					t.Errorf("user_silent_mode after the reload = %v, want [zeta=critical] "+
-						"(zeta's flip must land; acme's file no longer declares it)", got)
+				if strings.Join(got, ",") != tc.wantSeries {
+					t.Errorf("user_silent_mode after the reload = %v, want %s "+
+						"(zeta's flip must land; acme only where another file declares it)", got, tc.wantSeries)
 				}
 				if want := silentModeSeries(t, mFull); strings.Join(got, ",") != strings.Join(want, ",") {
 					t.Errorf("user_silent_mode: reload %v, fresh Load %v", got, want)

@@ -937,9 +937,13 @@ func (m *ConfigManager) incrementalLoadFrom(scan *treeScan) error {
 	// walker's verdict, and a full load drops its tenants from BOTH planes;
 	// both branches of this path now drop them from the merged config too
 	// (#1980 removed the tenant-only branch's "keep the last good values").
-	// A tenant another surviving file still declares (a duplicate the fast
-	// path accepts) is re-attributed to that file by the addition loop below,
-	// which is where a full load attributes it.
+	// A tenant another file declares in the same reload is re-attributed to
+	// that file by the addition loop below, which is where a full load
+	// attributes it. The reachable shape is a move that broke the source: the
+	// tenant's old file turns unparseable while the same reload adds it to
+	// another file. To the walker the broken file declares nothing, so this
+	// is no duplicate — a real cross-file duplicate never gets here, since
+	// scanVerdict (scan.Conflict) rejects the whole scan on the watch path.
 	//
 	// Additions are attributed from the flat scan rather than left blank: a
 	// tenant absent from `tenantSources` has no committed hierarchy entry
@@ -1455,7 +1459,10 @@ func patchTenants(prev *ThresholdConfig, newConfigs, oldConfigs map[string]Thres
 	// ⛔ A FILE THAT NO LONGER PARSES DECLARES NOTHING (#1980). It was deleted
 	// from `newConfigs` upstream, so `newPartial` is the zero value and every
 	// tenant its last good parse declared counts as no longer declared here:
-	// dropped, unless another surviving file still declares it — the same
+	// dropped, unless another surviving file declares it (reachable: the same
+	// reload moved the tenant into another file while breaking this one;
+	// pinned by TestABrokenTenantFileDropsItsTenantsOnEveryReloadPath's
+	// "broken while moved" case) — the same
 	// verdict a full load reaches, because the walker rejects the file
 	// (#1957). This used to `continue` on an unparsed file, i.e. keep the
 	// file's tenants on their last good values; the owner ruled that

@@ -747,15 +747,14 @@ func TestPlatformTenantOverlayReloadMatchesFreshLoad(t *testing.T) {
 func TestPlatformOrphanWarnFollowsWhatIsServed(t *testing.T) {
 	t.Parallel()
 	cases := []struct {
-		name       string
-		platform   string
-		body       string
-		wantServed bool
+		name     string
+		platform string
+		body     string
 	}{
 		{"carrier (hierarchical path drops it)", "_defaults.yaml",
-			"defaults:\n  mysql_connections: 80\ntenants:\n  tx:\n    mysql_connections: \"60\"\n", false},
+			"defaults:\n  mysql_connections: 80\ntenants:\n  tx:\n    mysql_connections: \"60\"\n"},
 		{"flat-profiles (patch path drops it too, #1980)", "_profiles.yaml",
-			"tenants:\n  tx:\n    mysql_connections: \"60\"\n", false},
+			"tenants:\n  tx:\n    mysql_connections: \"60\"\n"},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
@@ -781,22 +780,13 @@ func TestPlatformOrphanWarnFollowsWhatIsServed(t *testing.T) {
 			}
 			ov, served := m.GetConfig().Tenants["tx"]
 			lines := logLinesWith(buf.String(), orphanAnchor)
-			if !tc.wantServed {
-				if served {
-					t.Fatalf("tx served (%v) after its only file stopped parsing — "+
-						"a broken tenant file must drop its tenants on every reload path (#1980)", ov)
-				}
-				if len(lines) != 1 {
-					t.Errorf("tx is not served, so its platform entry is ignored — want exactly one orphan WARN, got %d: %q",
-						len(lines), lines)
-				}
-				return
+			if served {
+				t.Fatalf("tx served (%v) after its only file stopped parsing — "+
+					"a broken tenant file must drop its tenants on every reload path (#1980)", ov)
 			}
-			if !served || ov["mysql_connections"].Default != "60" || ov["redis_x"].Default != "1" {
-				t.Fatalf("fail-safe not in effect (served=%v, %v) — this test's premise is gone", served, ov)
-			}
-			if len(lines) != 0 {
-				t.Errorf("tx is still served with the platform value, yet: %q", lines)
+			if len(lines) != 1 {
+				t.Errorf("tx is not served, so its platform entry is ignored — want exactly one orphan WARN, got %d: %q",
+					len(lines), lines)
 			}
 		})
 	}
