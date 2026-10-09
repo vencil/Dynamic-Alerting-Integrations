@@ -1,0 +1,158 @@
+"""`.claude/hooks/session-start.sh` — the pre-push guards come first, every run.
+
+Each test runs the real script in a throwaway repo, with the marker redirected
+through `VIBE_SESSION_START_MARKER` and a `pre-commit` on PATH that only records
+that it was called. None of them reaches the pip / npm steps (see `_repo`).
+"""
+from __future__ import annotations
+
+import importlib.util
+import os
+import shutil
+import subprocess
+import sys
+from pathlib import Path
+
+import pytest
+
+sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+from _platform_fs import symlink_or_skip  # noqa: E402
+
+_REPO_ROOT = Path(__file__).resolve().parents[2]
+_BASH = shutil.which("bash") or "bash"
+_OPS = (
+    "_prepush_refs.sh", "protect_main_push.sh", "require_preflight_pass.sh",
+    "pre_push_mkdocs_strict.sh", "prepush_dispatch.sh", "install_prepush_hook.sh",
+)
+
+pytestmark = pytest.mark.skipif(sys.platform == "win32", reason="cloud-only script (bash)")
+
+
+def _load_preflight():
+    spec = importlib.util.spec_from_file_location(
+        "pr_preflight", _REPO_ROOT / "scripts" / "tools" / "dx" / "pr_preflight.py")
+    assert spec and spec.loader
+    mod = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(mod)
+    return mod
+
+
+def _repo(root: Path) -> Path:
+    repo = root / "repo"
+    env = {**os.environ, "GIT_AUTHOR_NAME": "t", "GIT_AUTHOR_EMAIL": "t@e",
+           "GIT_COMMITTER_NAME": "t", "GIT_COMMITTER_EMAIL": "t@e"}
+    subprocess.run(["git", "init", "-q", "-b", "main", str(repo)],  # subprocess-timeout: ignore
+                   check=True, env=env)
+    (repo / "scripts" / "ops").mkdir(parents=True)
+    for name in _OPS:
+        shutil.copy2(_REPO_ROOT / "scripts" / "ops" / name, repo / "scripts" / "ops" / name)
+    (repo / ".claude" / "hooks").mkdir(parents=True)
+    shutil.copy2(_REPO_ROOT / ".claude" / "hooks" / "session-start.sh",
+                 repo / ".claude" / "hooks" / "session-start.sh")
+    (repo / "requirements").mkdir()
+    # The script refuses a constraints file that sets an index, before any pip
+    # run: a broken script under test stops there instead of installing.
+    (repo / "requirements" / "ci-constraints.txt").write_text(
+        "--index-url http://127.0.0.1:9/simple\n", encoding="utf-8")
+    (repo / ".pre-commit-config.yaml").write_text("repos: []\n", encoding="utf-8")
+    subprocess.run(["git", "-C", str(repo), "add", "-A"],  # subprocess-timeout: ignore
+                   check=True, env=env)
+    subprocess.run(  # subprocess-timeout: ignore
+        ["git", "-C", str(repo), "-c", "core.hooksPath=/dev/null",
+         "commit", "-q", "-m", "init"], check=True, env=env)
+    return repo
+
+
+def _run(root: Path, repo: Path, marker_text: str | None):
+    """Run the script; return (completed, marker text, whether pre-commit ran)."""
+    marker = root / "marker"
+    if marker_text is not None:
+        marker.write_text(marker_text, encoding="utf-8")
+    called = root / "pre-commit-called"
+    bindir = root / "bin"
+    bindir.mkdir(exist_ok=True)
+    fake = bindir / "pre-commit"
+    fake.write_text(f'#!/bin/sh\necho "$@" >> "{called}"\nexit 97\n', encoding="utf-8")
+    fake.chmod(0o755)
+    env = {**os.environ, "CLAUDE_CODE_REMOTE": "true", "CLAUDE_PROJECT_DIR": str(repo),
+           "VIBE_SESSION_START_MARKER": str(marker),
+           "PATH": f"{bindir}{os.pathsep}{os.environ['PATH']}"}
+    r = subprocess.run(  # subprocess-timeout: ignore
+        [_BASH, ".claude/hooks/session-start.sh"], cwd=repo, env=env,
+        capture_output=True, text=True, encoding="utf-8", errors="replace",
+    )
+    text = marker.read_text(encoding="utf-8") if marker.exists() else None
+    return r, text, called.exists()
+
+
+def _require_pre_commit():
+    # Same flag as tests/dx/test_preflight_marker.py: under it a missing
+    # pre_commit fails instead of skipping.
+    if os.environ.get("VIBE_REQUIRE_PRE_COMMIT") == "1":
+        assert importlib.util.find_spec("pre_commit") is not None
+    else:
+        pytest.importorskip("pre_commit")
+
+
+def test_an_already_bootstrapped_container_gets_its_guards_back(tmp_path, monkeypatch):
+    """#2761: the no-op path used to count any .git/hooks/pre-push as wired, so
+    pre-commit's pre-push template stayed and a push to main went unguarded."""
+    _require_pre_commit()
+    repo = _repo(tmp_path)
+    for args in ((), ("--hook-type", "pre-push")):
+        subprocess.run(  # subprocess-timeout: ignore
+            [sys.executable, "-m", "pre_commit", "install", *args],
+            cwd=repo, check=True, capture_output=True)
+    mod = _load_preflight()
+    monkeypatch.chdir(repo)
+    assert mod._prepush_guards_wired()[0] is False
+
+    r, marker, _ = _run(tmp_path, repo, "RESULT=ok\n")
+
+    assert r.returncode == 0, r.stdout + r.stderr
+    assert "already bootstrapped" in r.stdout
+    wired, why = mod._prepush_guards_wired()
+    assert wired is True, why
+    assert marker.splitlines()[0] == "RESULT=ok"
+
+
+def test_a_pre_push_hook_someone_wrote_is_reported_not_skipped(tmp_path):
+    """The no-op path no longer hides a hook the installer refuses."""
+    repo = _repo(tmp_path)
+    hooks = repo / ".git" / "hooks"
+    (hooks / "pre-commit").write_text("#!/bin/sh\n", encoding="utf-8")
+    mine = "#!/bin/sh\necho mine\n"
+    (hooks / "pre-push").write_text(mine, encoding="utf-8")
+
+    r, marker, _ = _run(tmp_path, repo, "RESULT=ok\n")
+
+    assert r.returncode == 1, r.stdout + r.stderr
+    assert "already bootstrapped" not in r.stdout
+    assert "RESULT=failed (install_prepush_hook)" in marker
+    assert (hooks / "pre-push").read_text(encoding="utf-8") == mine
+
+
+@pytest.mark.parametrize("setup", ["symlinked-hooks", "empty-hooks-path"])
+def test_an_installer_refusal_comes_before_pre_commit_writes_anything(tmp_path, setup):
+    """When the installer refuses, pre-commit has not run yet: nothing lands in a
+    directory the hooks link leads to, nor in the repo's own hooks directory."""
+    repo = _repo(tmp_path)
+    hooks = repo / ".git" / "hooks"
+    if setup == "symlinked-hooks":
+        shared = tmp_path / "shared"
+        shared.mkdir()
+        shutil.rmtree(hooks)
+        symlink_or_skip(shared, hooks)
+        watched = shared
+    else:
+        subprocess.run(["git", "-C", str(repo), "config", "core.hooksPath", ""],  # subprocess-timeout: ignore
+                       check=True)
+        watched = hooks
+    before = sorted(p.name for p in watched.iterdir())
+
+    r, marker, pre_commit_ran = _run(tmp_path, repo, None)
+
+    assert r.returncode == 1, r.stdout + r.stderr
+    assert "RESULT=failed (install_prepush_hook)" in marker
+    assert not pre_commit_ran
+    assert sorted(p.name for p in watched.iterdir()) == before

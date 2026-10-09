@@ -22,7 +22,7 @@
 #   4. pytest & friends missing  → every tests/**/*.py suite is uncollectable
 #                                  (ModuleNotFoundError), so "no failures" is
 #                                  indistinguishable from "nothing ran".
-#   5. mkdocs missing            → the mkdocs strict guard (installed by step 3
+#   5. mkdocs missing            → the mkdocs strict guard (installed first
 #                                  below, via scripts/ops/install_prepush_hook.sh
 #                                  — it is not a pre-commit hook id any more,
 #                                  #1689) degrades to a warn-only Tier 2 and
@@ -66,20 +66,44 @@ if [ -z "$ROOT" ] || [ ! -f "$ROOT/requirements/ci-constraints.txt" ]; then
 fi
 cd "$ROOT"
 
-MARKER="/tmp/vibe-session-start-hook.ran"
+# The override is for tests only: CLAUDE.md tells sessions to read the default.
+MARKER="${VIBE_SESSION_START_MARKER:-/tmp/vibe-session-start-hook.ran}"
 say() { printf '  [session-start] %s\n' "$1"; }
 note() { printf '%s\n' "$1" >> "$MARKER"; }
+
+# --- Pre-push guards, first and on every run --------------------------------
+# ⛔ Every run, the no-op below included (#2761): only the installer tells its
+# shim apart from whatever else sits at .git/hooks/pre-push (pre-commit's
+# template, a hook someone wrote), and it is idempotent.
+# ⛔ Before `pre-commit install`: when it refuses (core.hooksPath set, a
+# symlinked hooks directory) nothing has been written yet. The other way round,
+# pre-commit's hook lands wherever the link leads.
+# ⛔ NOT `pre-commit install --hook-type pre-push` (#1689). Since the three
+# pre-push guards left .pre-commit-config.yaml that command installs a hook
+# which runs ZERO pre-push hooks — and a hook pre-commit runs is handed only one
+# refspec anyway, which is the defect #1689 removed. The installer owns
+# .git/hooks/pre-push (replacing git-lfs's hook on a fresh clone; the
+# dispatcher runs git lfs itself). Without it a remote session pushes with no
+# guards and `make pr-preflight` is the only thing that would ever say so.
+say "installing the pre-push guards"
+if ! bash scripts/ops/install_prepush_hook.sh; then
+  : > "$MARKER"
+  note "session-start.sh ran at $(date -u +%Y-%m-%dT%H:%M:%SZ)"
+  note "RESULT=failed (install_prepush_hook)"
+  say "⛔ pre-push guards NOT installed, nor pre-commit's hooks — commits and pushes are UNGATED"
+  exit 1
+fi
 
 # SessionStart fires for more than a cold start (a resumed or compacted session
 # reuses the SAME container, where everything below is already in place). Doing
 # the work again is not free: `npm ci` DELETES tests/e2e/node_modules and
-# reinstalls it every time. So re-verify the four things this script exists to
-# guarantee and no-op when they all hold. This is a state check, not a matcher —
+# reinstalls it every time. So re-verify what the rest of this script exists to
+# guarantee and no-op when it all holds. This is a state check, not a matcher —
 # it stays correct whichever sources the harness fires on, and a container that
 # genuinely lost one of them still gets repaired.
 if [ -f "$MARKER" ] && grep -q '^RESULT=ok$' "$MARKER" 2>/dev/null \
   && command -v pre-commit >/dev/null 2>&1 \
-  && [ -f .git/hooks/pre-commit ] && [ -f .git/hooks/pre-push ] \
+  && [ -f .git/hooks/pre-commit ] \
   && { [ ! -f tests/e2e/package.json ] || [ -d tests/e2e/node_modules ]; }; then
   note "re-run at $(date -u +%Y-%m-%dT%H:%M:%SZ): already bootstrapped, no-op"
   say "already bootstrapped (marker: $MARKER) — nothing to do"
@@ -177,25 +201,10 @@ fi
 # prints on stdout, not stderr) and "Running in migration mode with existing
 # hooks at .git/hooks/pre-commit.legacy". Hiding either is how a broken or
 # surprising install becomes invisible.
-if hp=$(git config --get core.hooksPath 2>/dev/null) && [ -n "$hp" ]; then
-  say "⚠️ core.hooksPath is set ($hp) — pre-commit refuses to install; gates stay OFF"
-  say "   this session's commits are UNGATED unless that is unset first"
-  note "RESULT=failed (core.hooksPath=$hp)"
-  exit 1
-fi
 say "installing pre-commit hooks (commit stage)"
-pre-commit install
-# ⛔ NOT `pre-commit install --hook-type pre-push` (#1689). Since the three
-# pre-push guards left .pre-commit-config.yaml that command installs a hook
-# which runs ZERO pre-push hooks — and a hook pre-commit runs is handed only one
-# refspec anyway, which is the defect #1689 removed. The installer below owns
-# .git/hooks/pre-push (replacing git-lfs's hook on a fresh clone; the
-# dispatcher runs git lfs itself), and is idempotent. Without it a remote session pushes with no guards
-# and `make pr-preflight` is the only thing that would ever say so.
-say "installing the pre-push guards"
-if ! bash scripts/ops/install_prepush_hook.sh; then
-  say "⛔ pre-push guards NOT installed — dev-rule #12 has no enforcement here"
-  note "RESULT=failed (install_prepush_hook)"
+if ! pre-commit install; then
+  say "⛔ pre-commit hooks NOT installed — commits in this session are UNGATED."
+  note "RESULT=failed (pre-commit install)"
   exit 1
 fi
 note "git-hooks=installed"
