@@ -74,9 +74,15 @@ conf.d/
     並不是時間欄位。）
     `_routing.receiver` 與 `_routing.overrides` **不適用**：前者會讓該租戶整條
     route 消失（告警落到 catch-all），後者無上層可退。
-  - **閾值 key**：顯式 `null` **不退出繼承**，請改用 `"disable"`。發射面
-    （`collector.go` → `ResolveAtWithStats`）本來就會忽略 null 並回退平台預設；
-    診斷面（`/effective`、`describe_tenant`、simulate）已於 #1339 對齊。
+  - **閾值 key**：顯式 `null` **不退出繼承**，請改用 `"disable"`。閾值寫成 `null` 等於
+    這一層沒寫（[#2518](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/2518)）：
+    租戶檔寫 `null` 時，`/metrics`（`da-guard served-values`）、`/effective`（`da-guard effective`）、
+    `describe_tenant` 與 `/simulate` 都取下一層的值——子目錄 `_defaults.yaml` 有值就取它，
+    沒有才取根目錄 `_defaults.yaml` 的值；子目錄 `_defaults.yaml` 寫 `null` 時取根目錄的值。
+    根目錄 `_defaults.yaml` 的 `defaults:` 寫 `null` 時，根層沒有宣告這個閾值，`/metrics`
+    不送出這個閾值的 series（不是門檻 0）：租戶給的值由 da-guard 的 `root_default_null_undeclared`
+    指名，子目錄 `_defaults.yaml` 給的值由 `subtree_default_undeliverable` 指名；同一個鍵若列在
+    根目錄的 `optional_overrides:`，租戶給的值照常送出。
   - **其餘 `_` 前綴的保留 key**：顯式 `null` **退出繼承**——`pkg/config/hierarchy.go` 的
     `deepMerge` 對任何 `_` 前綴鍵的 explicit null 做 `delete(result, k)`，非 `_` 前綴
     （＝閾值鍵）只 `continue`。該處註解把本 ADR 指為這條規則的權威，所以規則寫在這裡：
@@ -175,7 +181,7 @@ effective = deep_merge( defaults_block(L0), …, defaults_block(Ln), tenant_body
    **先講對所有鍵都成立的那一半**（exporter 端，依**值的型別**二分，與鍵名無關）：
    - 值**解不成 `float64`**（mapping / list / 字串 / bool）⇒ `parsePartialConfig` 回 `ok=false`、
      **整份檔案被丟棄**並 log `ERROR: ... entire block dropped`，同檔其他平級鍵一起陪葬。
-   - 值**解得成 `float64`**（`100` / `1.5` / **`null`→0**）⇒ `ok=true`、**無 ERROR / WARN**、
+   - 值**解得成 `float64`**（`100` / `1.5`；`null` 不算，它等於沒寫：實測縮排 `max_metrics_per_tenant: null` 後 `da-guard served-values` 沒有這一列，[#2518](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/2518)）⇒ `ok=true`、**無 ERROR / WARN**、
      它變成一個閾值鍵 ⇒ **每個租戶都多出一條武裝好的假閾值 series**（實測 `max_metrics_per_tenant: 100` 縮排後，resolve 出 `user_threshold{component="max", metric="metrics_per_tenant"}=100`，前綴被 resolver 剝掉），而這一面零訊號。
 
    ⛔ **但 exporter 只是其中一個消費端，而且往往不是最痛的那個。** 下表是**有專屬消費端**的

@@ -73,10 +73,17 @@ Inheritance order: **L0 → L1 → L2 → L3 → tenant YAML** (later overrides 
     makes the tenant's entire route disappear (alerts fall through to the
     catch-all), the latter has nothing above it to opt out of.
   - **Threshold keys**: an explicit `null` does **not** opt out — use
-    `"disable"`. The emitting path (`collector.go` → `ResolveAtWithStats`)
-    already ignores the null and falls back to the platform default; the
-    diagnostic path (`/effective`, `describe_tenant`, simulate) was aligned to
-    it in #1339.
+    `"disable"`. A threshold written as `null` is no write at that layer
+    ([#2518](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/2518)): when a tenant
+    file writes `null`, `/metrics` (`da-guard served-values`), `/effective` (`da-guard effective`),
+    `describe_tenant` and `/simulate` all take the next layer's value — a subdirectory
+    `_defaults.yaml`'s value when it has one, otherwise the root `_defaults.yaml`'s; when a
+    subdirectory `_defaults.yaml` writes `null`, the root's value is taken. When the root
+    `_defaults.yaml` writes `null` under `defaults:`, the root does not declare the threshold and
+    `/metrics` serves no series for it (not a threshold of 0): a tenant-side value is named by
+    da-guard's `root_default_null_undeclared`, a subdirectory `_defaults.yaml`'s value by
+    `subtree_default_undeliverable`; when the same key is listed under the root's
+    `optional_overrides:`, the tenant's value is served as usual.
   - **Every other `_`-prefixed reserved key**: an explicit `null` **does opt out** —
     `deepMerge` in `pkg/config/hierarchy.go` runs `delete(result, k)` for an explicit
     null on any `_`-prefixed key, while a non-`_` key (i.e. a threshold) only
@@ -193,7 +200,8 @@ implementation).
    - a value that **does not parse as `float64`** (mapping / list / string / bool) ⇒
      `parsePartialConfig` returns `ok=false`, **the entire file is dropped**, and it logs
      `ERROR: ... entire block dropped`, taking the file's other sibling keys with it;
-   - a value that **does parse as `float64`** (`100` / `1.5` / **`null`→0**) ⇒ `ok=true`, **no
+   - a value that **does parse as `float64`** (`100` / `1.5`; not `null`, which is no write: measured, indenting `max_metrics_per_tenant: null`
+   leaves no such row in `da-guard served-values`, [#2518](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/2518)) ⇒ `ok=true`, **no
      ERROR/WARN**, and it becomes a threshold key ⇒ **every tenant gains one armed, bogus threshold series** (measured: indenting `max_metrics_per_tenant: 100` resolves to `user_threshold{component="max", metric="metrics_per_tenant"}=100`, the prefix stripped by the resolver), and this plane emits no signal.
 
    ⛔ **But the exporter is only one consumer, and often not the painful one.** The table below
