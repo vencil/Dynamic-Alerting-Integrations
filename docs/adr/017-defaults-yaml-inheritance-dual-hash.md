@@ -103,7 +103,7 @@ conf.d/
   擋下，租戶要沿用上層的值就刪掉該鍵；根目錄 `defaults:` 寫 null 等於根層沒有宣告這個閾值，
   不送 series（更深層給了值時的行為見上方「閾值 key」）。租戶檔與子目錄 `_defaults.yaml` 要停用
   一個閾值請寫 `"disable"`；根目錄 `defaults:` 寫 `"disable"` 會讓 /metrics 丟掉整份根
-  `_defaults.yaml`，所有租戶的閾值都不送，連租戶自己寫的值也一樣（da-guard 回 rc 3）。
+  `_defaults.yaml`，連租戶自己寫的一般閾值與 `_critical` 也不送（da-guard 回 rc 3）。
 - **`_metadata` 欄位不繼承**：每個 tenant 的 `_metadata` 僅來自自身 YAML + 路徑推斷（ADR-016）
 
 ```yaml
