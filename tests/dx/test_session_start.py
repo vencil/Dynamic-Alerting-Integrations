@@ -195,22 +195,29 @@ def test_a_no_op_needs_every_condition(tmp_path, state):
     assert calls["pip"] and _installs(calls["pre-commit"])
 
 
-def test_a_bootstrapped_linked_worktree_is_a_no_op(tmp_path):
+@pytest.mark.parametrize("commit_hook", [True, False])
+def test_a_linked_worktree_no_ops_only_with_the_commit_hook(tmp_path, commit_hook):
     """#2775: in a linked worktree `.git` is a file, so a literal
-    `.git/hooks/pre-commit` check never held and every start reran `npm ci`."""
+    `.git/hooks/pre-commit` check never held and every start reran `npm ci`.
+    The commit hook is looked for where git keeps it, not taken for granted."""
     repo = _repo(tmp_path)
     wt = tmp_path / "wt"
     subprocess.run(["git", "-C", str(repo), "worktree", "add", "-q", str(wt)],  # subprocess-timeout: ignore
                    check=True)
     assert (wt / ".git").is_file()
-    (repo / ".git" / "hooks" / "pre-commit").write_text("#!/bin/sh\n", encoding="utf-8")
+    if commit_hook:
+        (repo / ".git" / "hooks" / "pre-commit").write_text("#!/bin/sh\n", encoding="utf-8")
 
     r, marker, calls = _run(tmp_path, wt, "RESULT=ok\n")
 
-    assert r.returncode == 0, r.stdout + r.stderr
-    assert "already bootstrapped" in r.stdout, r.stdout + r.stderr
-    assert calls["pip"] == [] and calls["npm"] == []
-    assert _result(marker) == ["RESULT=ok"]
+    if commit_hook:
+        assert r.returncode == 0, r.stdout + r.stderr
+        assert "already bootstrapped" in r.stdout, r.stdout + r.stderr
+        assert calls["pip"] == [] and calls["npm"] == []
+        assert _result(marker) == ["RESULT=ok"]
+    else:
+        assert "already bootstrapped" not in r.stdout
+        assert calls["pip"] and _installs(calls["pre-commit"])
 
 
 def test_a_failed_pre_commit_install_is_recorded(tmp_path):

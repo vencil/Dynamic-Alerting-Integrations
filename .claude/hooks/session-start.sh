@@ -98,8 +98,7 @@ bash scripts/ops/install_prepush_hook.sh || guards_failed=1
 # guards are in place, and the commit hook and e2e deps that run installed are
 # still there. Anything else runs the whole script again.
 # The commit hook is found the way the installers place it, via `--git-path`:
-# in a linked worktree `.git` is a file (#2775). A failed rev-parse yields "",
-# and `[ -f "" ]` is false — so it reruns rather than no-ops.
+# in a linked worktree `.git` is a file (#2775).
 if [ -z "$guards_failed" ] && [ -f "$MARKER" ] && grep -q '^RESULT=ok$' "$MARKER" 2>/dev/null \
   && command -v pre-commit >/dev/null 2>&1 \
   && [ -f "$(git rev-parse --git-path hooks/pre-commit 2>/dev/null)" ] \
