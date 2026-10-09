@@ -1130,13 +1130,14 @@ func scheduledValueFromRaw(raw any) (ScheduledValue, bool) {
 //	                   over the repo, not from memory.
 //
 // ⛔ ADR-017 IS NOW THE AUTHORITY ON THE ABOVE, and it agrees. #1516/#1555
-// rewrote it to state the same split independently: only keys inside
-// `defaults:` enter `effective`; a value that will not parse as float64
-// (mapping / list / string / bool) makes `parsePartialConfig` return ok=false
-// and the WHOLE file is dropped; and `_`-prefixed keys are consumed from the
-// `tenants:` block, not from `defaults:`. Read
-// docs/adr/017-defaults-yaml-inheritance-dual-hash.md (Decision 5 and Consequences)
-// before changing anything here — the measurements above were taken before
+// rewrote it to state the same split independently: of a `_defaults.yaml`,
+// the keys inside `defaults:` enter `effective`, and so does the `tenants:`
+// block of a root platform file (Decision 5); a value inside `defaults:` that
+// will not parse as float64 (mapping / list / string / bool) makes
+// `parsePartialConfig` return ok=false and the WHOLE file is dropped
+// (Decision 6); and `_`-prefixed keys are consumed from the `tenants:` block,
+// not from `defaults:`. Read docs/adr/017-defaults-yaml-inheritance-dual-hash.md
+// (Decisions 5 and 6, and Consequences) before changing anything here — the measurements above were taken before
 // that rewrite landed and are kept only because they are what this code was
 // built against.
 //

@@ -410,7 +410,7 @@ def s_canonical_json_escaping():
 
 # Scenario 12: a NESTED null under an inherited reserved key (ADR-017
 # Decision 4). deep_merge deletes on null only when the key itself is `_`-prefixed
-# (ADR-017: 判準是「是否 `_` 前綴」); the sub-keys here sit one level under
+# (ADR-017 Decision 4: "其他 `_` 開頭的鍵"); the sub-keys here sit one level under
 # the reserved key and are not `_`-prefixed. So:
 #   inherited_list / inherited_str   inherited from `defaults:`, nulled here
 #                             -> the inherited value is RETAINED

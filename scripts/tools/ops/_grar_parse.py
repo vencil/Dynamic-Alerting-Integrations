@@ -430,13 +430,14 @@ def _parse_nested_config(data: dict, fname: str, level: str,
 
     ADR-017 Decision 9:
 
-    * (a) `_routing_defaults` is read from the directory's defaults CARRIER
+    * `_routing_defaults` is read from the directory's defaults CARRIER
       only (the one `_defaults.yaml` / `.yml` the threshold chain reads), at
       the top level of the document, and joins the chain of the tenants at
       and below that directory. `receiver` / `overrides` written as null
       there is blocking: every tenant below without its own would lose it.
-    * (b) `_routing_enforced` in ANY file below the root is blocking.
-    * (c), (d) profiles and policies: `_parse_profiles_and_policies`.
+    * `_routing_enforced` in ANY file below the root is blocking.
+    * routing profiles and domain policies below the root:
+      `_parse_profiles_and_policies`.
     * the carrier's `defaults:` widens the key universe of the tenants below
       it (validate_tenant_keys), as the root carrier's does for every tenant.
     """

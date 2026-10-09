@@ -150,7 +150,7 @@ When `defaults:` itself is `null` (`defaults:` followed by nothing), the whole f
 
 ### 5. Which keys of a `_defaults.yaml` enter the effective config
 
-**Keys under `defaults:` enter the effective config and `merged_hash`; so does the `tenants:` block of the root `_defaults.yaml` (see below).** A subdirectory file without `defaults:` is merged whole as defaults; the schema, however, allows only a fixed set of keys at the top level of such a file, so a threshold key written there directly (for example `cpu: 80`) is rejected by `check_confd_schema.py`. The root `_defaults.yaml` must have `defaults:`: without it the exporter does not read its thresholds, `/effective` still shows them, and `not_served` marks them `root_defaults_unwrapped`.
+**Keys under `defaults:` enter the effective config and `merged_hash`; so does the `tenants:` block of a root platform file (`_defaults.yaml` or any other file starting with `_`; see below).** A subdirectory file without `defaults:` is merged whole as defaults; the schema, however, allows only a fixed set of keys at the top level of such a file, so a threshold key written there directly (for example `cpu: 80`) is rejected by `check_confd_schema.py`. The root `_defaults.yaml` must have `defaults:`: without it the exporter does not read its thresholds, `/effective` still shows them, and `not_served` marks them `root_defaults_unwrapped`.
 
 Apart from the `tenants:` block, top-level keys beside `defaults:` do not enter the effective config; each has its own reader. After changing one, confirm the change where it is read:
 
@@ -163,7 +163,7 @@ Apart from the `tenants:` block, top-level keys beside `defaults:` do not enter 
 
 This table is not complete. For a key that is not in it, find the code that reads it before deciding whether the change took effect; other top-level keys starting with `_` (for example `_silent_mode` written directly at the top level) have no reader — they take no effect and raise no error.
 
-**The `tenants:` block of the root `_defaults.yaml`** holds the platform's defaults for existing tenants. It enters the effective config and `merged_hash`: adding `tenants: {fin-db-001: {_silent_mode: warning}}` to the example's root, for instance, adds `_silent_mode: warning` to `fin-db-001`'s effective config, `key_sources` marks it `layer: platform`, `platform_overlay` names the file and key that supplied it, `merged_hash` moves from `5db367c3efd997ce` to `73e76f3cabed3a9f`, and `/metrics` gains `user_silent_mode{tenant,target_severity}`. For the same key the tenant file wins, whatever the file names sort as; a tenant no tenant file declares is ignored with a WARN (a platform file cannot create a tenant); the `tenants:` block of a platform file in a subdirectory is not read, and both the exporter and the route generator log a WARN.
+**The `tenants:` block of a root platform file** (written in `_defaults.yaml` or in any other root file starting with `_`, such as `_ops.yaml`) holds the platform's defaults for existing tenants. It enters the effective config and `merged_hash`: adding `tenants: {fin-db-001: {_silent_mode: warning}}` to the example's root, for instance, adds `_silent_mode: warning` to `fin-db-001`'s effective config, `key_sources` marks it `layer: platform`, `platform_overlay` names the file and key that supplied it (`_ops.yaml` when it is written there), `merged_hash` moves from `5db367c3efd997ce` to `73e76f3cabed3a9f`, and `/metrics` gains `user_silent_mode{tenant,target_severity}`. For the same key the tenant file wins, whatever the file names sort as; a tenant no tenant file declares is ignored with a WARN (a platform file cannot create a tenant); the `tenants:` block of a platform file in a subdirectory is not read, and both the exporter and the route generator log a WARN.
 
 **`max_metrics_per_tenant`** caps how many threshold series one tenant may serve, and is read only from the top level of the root `_defaults.yaml`; written in a subdirectory `_defaults.yaml` or a tenant file it is ignored with a WARN, so a tenant cannot raise its own cap. Unset or 0 means a cap of 500; a negative value means no truncation. The Helm chart key is `thresholdConfig.max_metrics_per_tenant`.
 
@@ -206,8 +206,10 @@ the tenant file's source_hash changed  → applied (reason=source; a new tenant 
 otherwise, a _defaults.yaml on the chain changed:
   merged_hash changed                    → applied (reason=defaults)
   unchanged, every changed key is overridden by the tenant  → shadowed
-  unchanged, no key under defaults: changed                 → cosmetic (comments, order or whitespace only, or top-level keys other than tenants: only)
+  unchanged, no key under defaults: changed                 → cosmetic (e.g. comments, order or whitespace only, or only top-level keys that do not enter the effective config, such as _routing_defaults)
 ```
+
+A change to one tenant's entry in the `tenants:` block of a root platform file takes the reason=defaults branch too: that tenant is recorded as applied when its `merged_hash` moved, and as shadowed when the changed key is overridden by its tenant file.
 
 Known gap: the tenant-file branch does not compare `merged_hash`, so a comment-only edit of a tenant file is also recorded as applied (reason=source).
 
@@ -226,7 +228,7 @@ Hashes are never used as metric labels, to keep the series count from exploding;
 Apart from the `tenants:` block, top-level keys do not enter the effective config, so no tool whose input is the effective config or `merged_hash` sees their changes: `/effective`, `describe_tenant`, da-guard, the blast-radius report, `tenant-verify`. This is a cost accepted deliberately so that Decision 7 records changes correctly (see Alternative D for why), but it has two consequences to know:
 
 - **`effect="cosmetic"` does not mean only a comment changed.** A change that only edits the root's `_routing_defaults` and one that only adds a comment are both recorded by the exporter as `effect="cosmetic"`.
-- **`da-tools tenant-verify --expect-merged-hash` is not evidence here.** It exits 2 when the hash differs (an edit of the root `tenants:` block makes it exit 2), but after any other platform top-level key changes it still exits 0: exit 0 means this face is not covered, not that a rollback was verified.
+- **`da-tools tenant-verify --expect-merged-hash` is not evidence here.** It exits 2 when the hash differs: after a change to one tenant's entry in the `tenants:` block of a root platform file, where the changed key is not overridden by the tenant file, that tenant exits 2 and the others exit 0. But after a platform top-level key other than `tenants:` changes, it exits 0 for every tenant: exit 0 means this face is not covered, not that a rollback was verified.
 
 A separate mechanism that compares platform top-level keys is tracked in [#1516](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/1516).
 
