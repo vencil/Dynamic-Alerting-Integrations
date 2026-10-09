@@ -150,9 +150,9 @@ When `defaults:` itself is `null` (`defaults:` followed by nothing), the whole f
 
 ### 5. Which keys of a `_defaults.yaml` enter the effective config
 
-**Keys under `defaults:` enter the effective config and `merged_hash`.** So do the `tenants:` block of a root platform file and the `profiles:` block of `_profiles.yaml` (see below). A subdirectory file without `defaults:` is merged whole as defaults; the schema, however, allows only a fixed set of keys at the top level of such a file, so a threshold key written there directly (for example `cpu: 80`) is rejected by `check_confd_schema.py`. The root `_defaults.yaml` must have `defaults:`: without it the exporter does not read its thresholds, `/effective` still shows them, and `not_served` marks them `root_defaults_unwrapped`.
+**Keys under `defaults:` enter the effective config and `merged_hash`.** So do the `tenants:` block of a root platform file and the `profiles:` block of the root `_profiles.yaml` (see below). A subdirectory file without `defaults:` is merged whole as defaults; the schema, however, allows only a fixed set of keys at the top level of such a file, so a threshold key written there directly (for example `cpu: 80`) is rejected by `check_confd_schema.py`. The root `_defaults.yaml` must have `defaults:`: without it the exporter does not read its thresholds, `/effective` still shows them, and `not_served` marks them `root_defaults_unwrapped`.
 
-Each key below has its own reader; of these, the root's `state_filters` and `_routing_defaults` do not enter the effective config, and changing them leaves `merged_hash` unchanged. After changing one, confirm the change where it is read:
+Each key below has its own reader, and a change to it is not necessarily reflected in `merged_hash`. After changing one, confirm the change where it is read:
 
 | Key you changed | Where to confirm |
 |:--|:--|
@@ -161,11 +161,11 @@ Each key below has its own reader; of these, the root's `state_filters` and `_ro
 | `_custom_alerts` | `compile_custom_alerts.py --check` |
 | `max_metrics_per_tenant` | see below |
 
-This table is not complete. For a key that is not in it, find the code that reads it before deciding whether the change took effect. `_silent_mode` written directly at the top level of the root `_defaults.yaml` has no reader: it takes no effect and raises no error.
+This table is not complete. For a key that is not in it, find the code that reads it before deciding whether the change took effect.
 
 **The `tenants:` block of a root platform file** (written in `_defaults.yaml` or in any other root file starting with `_`, such as `_ops.yaml`; when the root holds both `_defaults.yaml` and `_defaults.yml`, only the former is read and the latter is ignored whole with a WARN) holds the platform's defaults for existing tenants. It enters the effective config and `merged_hash`: adding `tenants: {fin-db-001: {_silent_mode: warning}}` to the example's root, for instance, adds `_silent_mode: warning` to `fin-db-001`'s effective config, `key_sources` marks it `layer: platform`, `platform_overlay` names the file and key that supplied it (`_ops.yaml` when it is written there), `merged_hash` moves from `5db367c3efd997ce` to `73e76f3cabed3a9f`, and `/metrics` gains `user_silent_mode{tenant,target_severity}`. For the same key the tenant file wins, whatever the file names sort as; a tenant no tenant file declares is ignored with a WARN (a platform file cannot create a tenant); the `tenants:` block of a platform file in a subdirectory is not read, and both the exporter and the route generator log a WARN.
 
-**The `profiles:` block of `_profiles.yaml`** enters too: when a tenant picks a profile with `_profile: std`, the profile's values enter its effective config (`key_sources` marks them `layer: profile`); changing a value in the profile moves the `merged_hash` of the tenants that pick it, and `tenant-verify` exits 2.
+**The `profiles:` block of the root `_profiles.yaml`** enters too: when a tenant picks a profile with `_profile: std`, the profile's values enter its effective config (`key_sources` marks them `layer: profile`); changing a value in the profile moves the `merged_hash` of the tenants that pick it and do not set that key in their own tenant file, and `tenant-verify` exits 2.
 
 **`max_metrics_per_tenant`** caps how many threshold series one tenant may serve, and is read only from the top level of the root `_defaults.yaml`; written in a subdirectory `_defaults.yaml` or a tenant file it is ignored with a WARN, so a tenant cannot raise its own cap. Unset or 0 means a cap of 500; a negative value means no truncation. The Helm chart key is `thresholdConfig.max_metrics_per_tenant`.
 
@@ -208,7 +208,7 @@ the tenant file's source_hash changed  → applied (reason=source; a new tenant 
 otherwise, a _defaults.yaml on the chain changed:
   merged_hash changed                    → applied (reason=defaults)
   unchanged, every changed key is overridden by the tenant  → shadowed
-  unchanged, no key under defaults: changed                 → cosmetic (e.g. comments, order or whitespace only, or only the root's _routing_defaults)
+  unchanged, no key under defaults: changed                 → cosmetic (e.g. comments, order or whitespace only, or only the _routing_defaults in the root _defaults.yaml)
 ```
 
 A change to one tenant's entry in the `tenants:` block of a root platform file takes the reason=defaults branch too: that tenant is recorded as applied when its `merged_hash` moved, and as shadowed when the changed key is overridden by its tenant file.
@@ -227,16 +227,16 @@ Hashes are never used as metric labels, to keep the series count from exploding;
 
 ### 8. Changes to some top-level keys are invisible in the effective config
 
-The root's `_routing_defaults` and `state_filters` do not enter the effective config and leave `merged_hash` unchanged, so no tool whose input is the effective config or `merged_hash` sees these changes: `/effective`, `describe_tenant`, da-guard, the blast-radius report, `tenant-verify`. This is a cost accepted deliberately so that Decision 7 records changes correctly (see Alternative D for why), but it has two consequences to know:
+For example, the root's `_routing_defaults` and `state_filters` do not enter the effective config and leave `merged_hash` unchanged, so no tool whose input is the effective config or `merged_hash` sees these changes: `/effective`, `describe_tenant`, da-guard, the blast-radius report, `tenant-verify`. This is a cost accepted deliberately so that Decision 7 records changes correctly (see Alternative D for why), but it has two consequences to know:
 
-- **`effect="cosmetic"` does not mean only a comment changed.** A change that only edits the root's `_routing_defaults` and one that only adds a comment are both recorded by the exporter as `effect="cosmetic"`.
+- **`effect="cosmetic"` does not mean only a comment changed.** A change that only edits the `_routing_defaults` in the root `_defaults.yaml` and one that only adds a comment are both recorded by the exporter as `effect="cosmetic"`.
 - **`da-tools tenant-verify --expect-merged-hash` is not evidence here.** It exits 2 when the hash differs, but after a change to only the root's `_routing_defaults` it exits 0: exit 0 means this face is not covered, not that a rollback was verified.
 
 A separate mechanism that compares such platform top-level keys is tracked in [#1516](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/1516).
 
 ### 9. Routing settings are inherited level by level along directories
 
-The platform's `_routing_defaults` does not enter the effective config (a tenant's own `_routing` does), but routing settings have their own inheritance chain along the same directory tree. The exit codes below are `generate_alertmanager_routes.py`'s; on exit 2 nothing is generated.
+The root's `_routing_defaults` does not enter the effective config (a tenant's own `_routing` does), but routing settings have their own inheritance chain along the same directory tree. The exit codes below are `generate_alertmanager_routes.py`'s; on exit 2 nothing is generated.
 
 **Where they are read**: at the root, `_routing_defaults` and `_routing_enforced` are read from the top level of any file whose name starts with `_`. In a subdirectory, each level reads only the `_routing_defaults` at the top level of that level's `_defaults.yaml` (or `_defaults.yml`); one written in any other `_` file of a subdirectory is skipped with a WARN, and `--validate` exits 1.
 

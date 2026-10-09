@@ -155,9 +155,9 @@ tenants:
 
 ### 5. `_defaults.yaml` 裡哪些鍵進最終設定
 
-**`defaults:` 底下的鍵進最終設定與 `merged_hash`。** 根目錄平台檔的 `tenants:` 區塊與 `_profiles.yaml` 的 `profiles:` 區塊也會進（見下方）。 子目錄的檔若沒有 `defaults:`，整份文件都當成預設值併入；不過 schema 只允許這種檔的頂層出現固定的鍵，直接寫閾值鍵（例如 `cpu: 80`）會被 `check_confd_schema.py` 擋下。根目錄的 `_defaults.yaml` 一定要有 `defaults:`：沒有時 exporter 不讀其中的閾值，`/effective` 照樣顯示，`not_served` 標 `root_defaults_unwrapped`。
+**`defaults:` 底下的鍵進最終設定與 `merged_hash`。** 根目錄平台檔的 `tenants:` 區塊與根目錄 `_profiles.yaml` 的 `profiles:` 區塊也會進（見下方）。子目錄的檔若沒有 `defaults:`，整份文件都當成預設值併入；不過 schema 只允許這種檔的頂層出現固定的鍵，直接寫閾值鍵（例如 `cpu: 80`）會被 `check_confd_schema.py` 擋下。根目錄的 `_defaults.yaml` 一定要有 `defaults:`：沒有時 exporter 不讀其中的閾值，`/effective` 照樣顯示，`not_served` 標 `root_defaults_unwrapped`。
 
-下表這些鍵各有自己的讀取程式；其中根目錄的 `state_filters` 與 `_routing_defaults` 不進最終設定，改了之後 `merged_hash` 不動。改了這些鍵，要到讀它的地方確認有沒有生效：
+下表這些鍵各有自己的讀取程式，改了不一定反映在 `merged_hash`。改了這些鍵，要到讀它的地方確認有沒有生效：
 
 | 你改的鍵 | 去哪裡確認 |
 |:--|:--|
@@ -166,11 +166,11 @@ tenants:
 | `_custom_alerts` | `compile_custom_alerts.py --check` |
 | `max_metrics_per_tenant` | 見下方 |
 
-這張表不是全部。不在表上的鍵，先找到讀它的程式再判斷有沒有生效。直接寫在根目錄 `_defaults.yaml` 頂層的 `_silent_mode` 沒有讀取者：寫了不生效，也不報錯。
+這張表不是全部。不在表上的鍵，先找到讀它的程式再判斷有沒有生效。
 
 **根目錄平台檔的 `tenants:` 區塊**（寫在 `_defaults.yaml` 或其他 `_` 開頭的根目錄檔，例如 `_ops.yaml`；根目錄同時有 `_defaults.yaml` 與 `_defaults.yml` 時只讀前者，後者整份被忽略並記 WARN）是平台給既有租戶的預設值。它會進最終設定與 `merged_hash`：例如在範例的根目錄加上 `tenants: {fin-db-001: {_silent_mode: warning}}`，`fin-db-001` 的最終設定多出 `_silent_mode: warning`，`key_sources` 標為 `layer: platform`，`platform_overlay` 列出提供它的檔與鍵（寫在 `_ops.yaml` 時就標 `_ops.yaml`），`merged_hash` 從 `5db367c3efd997ce` 變成 `73e76f3cabed3a9f`，`/metrics` 也多出 `user_silent_mode{tenant,target_severity}`。同一個鍵由租戶檔勝出，與檔名排序無關；沒有租戶檔宣告的租戶會被忽略並記 WARN（平台檔不能建立租戶）；子目錄平台檔的 `tenants:` 區塊不被讀取，exporter 與路由產生器都記 WARN。
 
-**`_profiles.yaml` 的 `profiles:` 區塊**也會進：租戶寫 `_profile: std` 選用一個 profile 時，profile 的值進入最終設定（`key_sources` 標 `layer: profile`）；改 profile 裡的值，選用它的租戶 `merged_hash` 跟著變，`tenant-verify` 回 2。
+**根目錄 `_profiles.yaml` 的 `profiles:` 區塊**也會進：租戶寫 `_profile: std` 選用一個 profile 時，profile 的值進入最終設定（`key_sources` 標 `layer: profile`）；改 profile 裡的值，選用它且租戶檔沒有自己寫該鍵的租戶 `merged_hash` 跟著變，`tenant-verify` 回 2。
 
 **`max_metrics_per_tenant`** 是每個租戶最多送幾條閾值 series 的上限，只認根目錄 `_defaults.yaml` 的頂層；子目錄 `_defaults.yaml` 或租戶檔寫了會記 WARN 並忽略，租戶因此不能替自己調高上限。未設或 0 時上限是 500，負值表示不截斷。Helm chart 的設定鍵是 `thresholdConfig.max_metrics_per_tenant`。
 
@@ -213,7 +213,7 @@ $ printf '%s' '{"pg_locks_count":100,"pg_replication_lag_seconds":30,"pg_stat_ac
 否則，鏈上的 _defaults.yaml 變了：
   merged_hash 變了                    → applied（reason=defaults）
   沒變，且變動的鍵都被租戶自己覆蓋     → shadowed
-  沒變，且 defaults: 裡沒有鍵變動      → cosmetic（例如只改註解、順序、空白，或只改根目錄的 _routing_defaults）
+  沒變，且 defaults: 裡沒有鍵變動      → cosmetic（例如只改註解、順序、空白，或只改根目錄 _defaults.yaml 裡的 _routing_defaults）
 ```
 
 根目錄平台檔 `tenants:` 區塊裡某個租戶的條目改了，也走 reason=defaults 這一支：該租戶的 `merged_hash` 變了就記 applied，改的鍵被租戶檔覆蓋就記 shadowed。
@@ -232,16 +232,16 @@ $ printf '%s' '{"pg_locks_count":100,"pg_replication_lag_seconds":30,"pg_stat_ac
 
 ### 8. 有些頂層鍵的變更，最終設定看不到
 
-根目錄的 `_routing_defaults` 與 `state_filters` 不進最終設定，改了之後 `merged_hash` 不動，所以凡是以最終設定或 `merged_hash` 為輸入的工具都看不到這些變更：`/effective`、`describe_tenant`、da-guard、爆炸半徑報告、`tenant-verify`。這是為了決策 7 的歸類正確而刻意接受的代價（理由見替代方案 D），但有兩個後果要知道：
+例如根目錄的 `_routing_defaults` 與 `state_filters` 不進最終設定，改了之後 `merged_hash` 不動，所以凡是以最終設定或 `merged_hash` 為輸入的工具都看不到這些變更：`/effective`、`describe_tenant`、da-guard、爆炸半徑報告、`tenant-verify`。這是為了決策 7 的歸類正確而刻意接受的代價（理由見替代方案 D），但有兩個後果要知道：
 
-- **`effect="cosmetic"` 不代表只改了註解。** 只改根目錄 `_routing_defaults` 的一次變更，與只加一行註解，exporter 都記成 `effect="cosmetic"`。
+- **`effect="cosmetic"` 不代表只改了註解。** 只改根目錄 `_defaults.yaml` 裡 `_routing_defaults` 的一次變更，與只加一行註解，exporter 都記成 `effect="cosmetic"`。
 - **`da-tools tenant-verify --expect-merged-hash` 在這裡不是證據。** 它在雜湊不符時回 2，但只改根目錄 `_routing_defaults` 之後它回 0：回 0 代表這一面沒被涵蓋，不代表回滾已經驗證。
 
 另建一個比較這類平台頂層鍵的機制，追蹤在 [#1516](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/1516)。
 
 ### 9. 路由設定沿目錄逐層繼承
 
-平台的 `_routing_defaults` 不進最終設定（租戶自己的 `_routing` 會進），但路由設定沿著同一棵目錄有自己的繼承鏈。以下的結束碼都是 `generate_alertmanager_routes.py` 的；回 2 時什麼都不產生。
+根目錄的 `_routing_defaults` 不進最終設定（租戶自己的 `_routing` 會進），但路由設定沿著同一棵目錄有自己的繼承鏈。以下的結束碼都是 `generate_alertmanager_routes.py` 的；回 2 時什麼都不產生。
 
 **放在哪裡讀**：根目錄從任一 `_` 開頭的檔的頂層讀 `_routing_defaults` 與 `_routing_enforced`。子目錄每一層只讀該層 `_defaults.yaml`（或 `_defaults.yml`）頂層的 `_routing_defaults`；寫在子目錄其他 `_` 檔裡的會被略過並記 WARN，`--validate` 回 1。
 
