@@ -376,8 +376,8 @@ func benchScanDirTreeWarm(b *testing.B, dir string) {
 		b.Fatal(err)
 	}
 	reread := 0
-	for k := range probe.Files {
-		if !probe.Reused(k) {
+	for _, f := range probe.Files {
+		if !f.Reused {
 			reread++
 		}
 	}
@@ -521,8 +521,8 @@ func requireRereadMode(b *testing.B, mgr *ConfigManager, dir string) {
 		b.Fatal(err)
 	}
 	reused := 0
-	for k := range probe.Files {
-		if probe.Reused(k) {
+	for _, f := range probe.Files {
+		if f.Reused {
 			reused++
 		}
 	}
