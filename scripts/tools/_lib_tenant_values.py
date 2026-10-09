@@ -256,13 +256,18 @@ class ParseFailedError(YamlFileError):
 
     `str()` keeps `YamlFileError`'s one-line contract; `stderr_lines` is
     da-guard's stderr, every non-empty line as written, for a caller to show
-    below that line; `unreadable` the unreadable files ([] when none)."""
+    below that line; `unreadable` the unreadable files ([] when none);
+    `parse_failed` every file da-guard named as not decoding, root-relative
+    slash paths as it wrote them ([] when none) — `path` is only the first
+    (#2740: validate-config's `yaml_quoting` row reads the whole list)."""
 
     def __init__(self, path: str, cause: Exception, stderr_lines: list[str],
-                 unreadable: list[UnreadableFile] | None = None) -> None:
+                 unreadable: list[UnreadableFile] | None = None,
+                 parse_failed: list[str] | None = None) -> None:
         super().__init__(path, cause)
         self.stderr_lines = stderr_lines
         self.unreadable = list(unreadable or [])
+        self.parse_failed = list(parse_failed or [])
 
 
 class KeySource(NamedTuple):
@@ -447,7 +452,8 @@ def _run_da_guard(
                            f"{', '.join(f'{u.file} ({u.reason})' for u in unreadable)}")
         first = parse_failed[0] if parse_failed else unreadable[0].file
         raise ParseFailedError(str(Path(conf_d) / first), ValueError("; ".join(clauses)),
-                               _nonempty_lines(stderr), unreadable)
+                               _nonempty_lines(stderr), unreadable,
+                               [str(f) for f in parse_failed])
     if proc.returncode != _EXIT_OK:
         fields = "parse_failed or unreadable" if reads_unreadable else "parse_failed"
         raise error(
