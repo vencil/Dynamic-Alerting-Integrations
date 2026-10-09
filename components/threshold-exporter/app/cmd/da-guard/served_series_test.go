@@ -51,6 +51,7 @@ type seriesIdentityOut struct {
 	Name            string            `json:"name"`
 	Labels          map[string]string `json:"labels"`
 	MetricKey       string            `json:"metric_key"`
+	LegacyTwin      bool              `json:"legacy_twin"`
 	Dimensions      map[string]string `json:"dimensions"`
 	DimensionsRegex map[string]string `json:"dimensions_regex"`
 }
@@ -283,6 +284,8 @@ var seriesTree = map[string]string{
     mysql_connections{schema="s1"}: "60"
     oracle_tablespace{tablespace=~"SYS.*"}: "85:critical"
     mysql_threads_running: "44"
+    mysql_threads_running_critical: "88"
+    mysql_threads_running{db="x"}: "33"
     redis_memory: disable
 `,
 }
@@ -300,6 +303,12 @@ func ident(severity, component, metric, metricKey string, extra map[string]strin
 }
 
 var none = map[string]string{}
+
+// twin marks s as a #1231 legacy twin.
+func twin(s seriesIdentityOut) seriesIdentityOut {
+	s.LegacyTwin = true
+	return s
+}
 
 // TestServedSeries_Shapes pins each key shape's identity at `--at`, and the
 // identity of each segment of a key whose severity a window changes.
@@ -326,7 +335,17 @@ func TestServedSeries_Shapes(t *testing.T) {
 		{"alias target: its row, then its legacy twin", "mysql_threads_running",
 			[]seriesIdentityOut{
 				ident("warning", "mysql", "threads_running", "mysql_threads_running", nil, none, none),
-				ident("warning", "mysql", "cpu", "mysql_cpu", nil, none, none)}},
+				twin(ident("warning", "mysql", "cpu", "mysql_cpu", nil, none, none))}},
+		{"alias target's _critical: also row then twin", "mysql_threads_running_critical",
+			[]seriesIdentityOut{
+				ident("critical", "mysql", "threads_running", "mysql_threads_running", nil, none, none),
+				twin(ident("critical", "mysql", "cpu", "mysql_cpu", nil, none, none))}},
+		{"alias target's dimensional key: also row then twin", `mysql_threads_running{db="x"}`,
+			[]seriesIdentityOut{
+				ident("warning", "mysql", "threads_running", "mysql_threads_running",
+					map[string]string{"db": "x"}, map[string]string{"db": "x"}, none),
+				twin(ident("warning", "mysql", "cpu", "mysql_cpu",
+					map[string]string{"db": "x"}, map[string]string{"db": "x"}, none))}},
 		{"unserved (disable): no entry", "redis_memory", nil},
 	} {
 		got, ok := tx.Series[tc.key]

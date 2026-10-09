@@ -217,6 +217,9 @@ func readingsAt(cfg *config.ThresholdConfig, at time.Time, name keyNamer) (readi
 			if len(r.series) != len(rs) {
 				return nil, "", fmt.Errorf("internal: tenant %s: key %q owns %d rows but %d series", tenant, name, len(rs), len(r.series))
 			}
+			if err := checkKeySeries(tenant, name, r.series); err != nil {
+				return nil, "", err
+			}
 			if out[tenant] == nil {
 				out[tenant] = map[string]reading{}
 			}

@@ -225,21 +225,20 @@ def test_a_severity_boundary_does_not_split_a_change(
         "        - window: \"01:00-09:00\"\n          value: \"75:critical\"\n")})
     t = tv.load_served_tree(c, at=AT, schedules=True).tenants["tx"]
     assert len(t.schedules["mysql_connections"].segments) == 3  # not vacuous
-    # 01:00-09:00 is served as a critical row, so the change says so.
     got = _backtest(monkeypatch, b, c)
     assert _no_series(got) == [
-        {"tenant": "tx", "metric": "mysql_connections", "old_value": "70", "new_value": "75",
-         "severity": "critical"}]
-    # #2750: both series the key is served as that day, from the segments.
+        {"tenant": "tx", "metric": "mysql_connections", "old_value": "70", "new_value": "75"}]
+    # #2750: both series the key is served as that day, from the segments —
+    # 01:00-09:00 is served as the critical row.
     assert got[0]["series"] == [_ident("mysql_connections", "warning"),
                                 _ident("mysql_connections", "critical")]
 
 
 def _ident(metric_key: str, severity: str, component: str = "mysql",
-           metric: str = "connections") -> "tv.Series":
+           metric: str = "connections", twin: bool = False) -> "tv.Series":
     """The identity served-values gives a plain tx key (pinned, #2750)."""
     return tv.Series("user_threshold", {"tenant": "tx", "component": component, "metric": metric,
-                                        "severity": severity}, metric_key, {}, {})
+                                        "severity": severity}, metric_key, twin, {}, {})
 
 
 def test_a_critical_segment_outside_the_changed_pair_does_not_skip_it(
@@ -291,15 +290,17 @@ def test_a_part_of_the_day_metrics_cannot_gather_fails_closed() -> None:
         bt._served_day(values, "k", "current")
 
 
-def _run_main(monkeypatch, capsys, cli_argv, base: Path, cur: Path, *extra: str):
-    """`main` in-process with Prometheus answered by a stub series (50 then 2000)."""
+def _run_main(monkeypatch, capsys, cli_argv, base: Path, cur: Path, *extra: str,
+              has_data=lambda q: True):
+    """`main` in-process with Prometheus answered by a stub series (50 then
+    2000) for every query `has_data` accepts, nothing for the others."""
     monkeypatch.setattr(bt, "now_at", lambda: AT, raising=False)
     monkeypatch.setattr(bt, "prometheus_available", lambda url, timeout=5: True)
     asked = []
 
     def query_range(url, q, lookback, step=bt.DEFAULT_STEP):
         asked.append(q)
-        return [{"values": [[0, "50"], [1, "2000"]]}]
+        return [{"values": [[0, "50"], [1, "2000"]]}] if has_data(q) else []
     monkeypatch.setattr(bt, "query_range", query_range)
     cli_argv("backtest_threshold", "--config-dir", str(cur), "--baseline", str(base),
              "--prometheus", "http://prom:9090", *extra)
@@ -355,7 +356,7 @@ def test_dimensioned_keys_are_listed_not_backtested(
 
 def test_a_key_served_as_critical_is_backtested_on_its_base_series(
         tmp_path: Path, monkeypatch, capsys, cli_argv) -> None:
-    """`<base>_critical` whose base /metrics serves is a critical row of the
+    """`<base>_critical` whose base the root `defaults:` declares is a critical row of the
     base's metric (Go's verdict): served-values says so (#2750 — its series'
     `metric_key` is the base), so Prometheus is asked about the base and the
     change is analyzed, not skipped. Nothing is asked about a
@@ -390,8 +391,8 @@ def test_a_window_served_as_critical_is_backtested(
             f"        - window: \"01:00-09:00\"\n          value: \"{v}:critical\"\n")}
     b, c = _tree(tmp_path / "base", files("1000")), _tree(tmp_path / "cur", files("1500"))
     changes = _backtest(monkeypatch, b, c)
-    assert [(ch["window"], ch["severity"], ch["series"]) for ch in changes] == [
-        (["01:00-09:00"], "critical", [_ident("mysql_connections", "critical")])]
+    assert [(ch["window"], ch["series"]) for ch in changes] == [
+        (["01:00-09:00"], [_ident("mysql_connections", "critical")])]
     _, out, asked = _run_main(monkeypatch, capsys, cli_argv, b, c, "--json")
     rows = json.loads(out.out)["changes"]
     assert [(r["metric"], r["status"], r["window"]) for r in rows] == [
@@ -401,25 +402,46 @@ def test_a_window_served_as_critical_is_backtested(
 
 @pytest.mark.parametrize("metric,series,want", [
     # The reason is served-values' fields, never the key's name.
-    ("plain", [tv.Series("user_threshold", {}, "plain", {"db": "a"}, {})], "dimensioned key"),
-    ("plain", [tv.Series("user_threshold", {}, "plain", {}, {"ts": "SYS.*"})], "dimensioned key"),
-    ('x{db="a"}', [tv.Series("user_threshold", {}, "x", {}, {})], None),
-    ("x_critical", [tv.Series("user_threshold", {"severity": "critical"}, "x", {}, {})], None),
-    ("x", [], "no /metrics series"),
+    ("plain", [tv.Series("user_threshold", {}, "plain", False, {"db": "a"}, {})], "dimensioned key"),
+    ("plain", [tv.Series("user_threshold", {}, "plain", False, {}, {"ts": "SYS.*"})], "dimensioned key"),
+    ('x{db="a"}', [tv.Series("user_threshold", {}, "x", False, {}, {})], None),
+    ("x_critical", [tv.Series("user_threshold", {"severity": "critical"}, "x", False, {}, {})], None),
 ])
 def test_not_backtestable_reads_the_series_fields(metric: str, series: list, want: str | None) -> None:
     change = {"tenant": "tx", "metric": metric, "old_value": "1", "new_value": "2", "series": series}
     assert bt.not_backtestable(change) == want
 
 
-def test_queries_name_the_series_metric_keys_in_order() -> None:
+def test_queries_name_the_series_metric_keys_never_the_twin() -> None:
     """A critical key is asked about by its series' metric_key; an alias
-    target's legacy twin is asked about after its row (#2750)."""
+    target's legacy twin is never asked about (#2750 review F1)."""
     change = {"tenant": "tx", "metric": "mysql_threads_running_critical", "series": [
-        tv.Series("user_threshold", {}, "mysql_threads_running", {}, {}),
-        tv.Series("user_threshold", {}, "mysql_cpu", {}, {})]}
-    assert bt._query_metrics(change) == ["mysql_threads_running", "mysql_cpu"]
+        tv.Series("user_threshold", {}, "mysql_threads_running", False, {}, {}),
+        tv.Series("user_threshold", {}, "mysql_cpu", True, {}, {})]}
+    assert bt._query_metrics(change) == ["mysql_threads_running"]
     assert bt._query_metrics({"tenant": "tx", "metric": "k"}) == ["k"]  # --tenant / --git-diff
+
+
+def test_a_retired_name_with_data_is_not_backtested_against(
+        tmp_path: Path, monkeypatch, capsys, cli_argv) -> None:
+    """`mysql_cpu` 40 -> 90 (the retired spelling of mysql_threads_running) with
+    Prometheus holding data under `mysql_cpu` only: the twin's name is not
+    this threshold's data (#1231 renamed it because it reads as host CPU%), so
+    the change is no_data and nothing is asked about `mysql_cpu` (#2750 F1)."""
+    def files(v: int) -> dict[str, str]:
+        return {"_defaults.yaml": _DEFAULTS + "  mysql_threads_running: 30\n",
+                "tx.yaml": f"tenants:\n  tx:\n    mysql_cpu: \"{v}\"\n"}
+    b, c = _tree(tmp_path / "base", files(40)), _tree(tmp_path / "cur", files(90))
+    changes = _backtest(monkeypatch, b, c)
+    assert [(ch["metric"], ch["series"]) for ch in changes] == [
+        ("mysql_threads_running",
+         [_ident("mysql_threads_running", "warning", metric="threads_running"),
+          _ident("mysql_cpu", "warning", metric="cpu", twin=True)])]
+    _, out, asked = _run_main(monkeypatch, capsys, cli_argv, b, c, "--json",
+                              has_data=lambda q: q.startswith("mysql_cpu"))
+    rows = json.loads(out.out)["changes"]
+    assert [(r["metric"], r["status"]) for r in rows] == [("mysql_threads_running", "no_data")]
+    assert asked and all("mysql_cpu" not in q for q in asked), asked
 
 
 @pytest.mark.parametrize("side", ["baseline", "current", "both"])

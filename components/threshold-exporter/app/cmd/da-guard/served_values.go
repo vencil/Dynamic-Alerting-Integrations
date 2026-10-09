@@ -113,8 +113,10 @@ type servedTenantValues struct {
 	// Series (#2750): for each threshold key in Severities — exactly those
 	// keys — the /metrics series its rows are (metricsSeries: the family name
 	// and full label set as the Gather returns them, the resolver's metric
-	// key, the dimensional labels). One series, or two for a #1231 alias
-	// target (its row, then its legacy twin). A key with no /metrics row
+	// key, the legacy-twin mark, the dimensional labels). One series, or two
+	// for every key derived from a #1231 alias target — the target, its
+	// `_critical`, its dimensional spellings: its row, then its legacy twin
+	// (LegacyTwin true; checkKeySeries). A key with no /metrics row
 	// (Unserved, or only in Dropped) has no entry; `_custom_alerts` has none
 	// either (its rows are its value). Always present ({} when none).
 	Series map[string][]metricsSeries `json:"series"`
@@ -205,8 +207,10 @@ func parseServedValuesFlags(args []string, errOut io.Writer) (*servedValuesFlags
 		fmt.Fprintf(errOut, "Each tenant's \"series\" maps every threshold key of \"severities\" to the /metrics series\n"+
 			"its rows are, read back from the Gather: [{\"name\", \"labels\" (the full label set),\n"+
 			"\"metric_key\" (the key the resolver parsed the component/metric labels from, e.g. X for\n"+
-			"X_critical and X{db=\"a\"}), \"dimensions\", \"dimensions_regex\"}] — two entries for a\n"+
-			"retired-alias target (its row, then its legacy twin). A key with no /metrics row\n"+
+			"X_critical and X{db=\"a\"}), \"legacy_twin\", \"dimensions\", \"dimensions_regex\"}]. Every key\n"+
+			"derived from a retired alias's target (the target, its _critical, its dimensional\n"+
+			"spellings) has two: its own row (\"legacy_twin\": false) first, then the same value\n"+
+			"under the retired metric identity (\"legacy_twin\": true). A key with no /metrics row\n"+
 			"(unserved, or only dropped) and _custom_alerts have no entry. With --schedules each\n"+
 			"served segment carries its own \"series\" (an `N:critical` window serves another one);\n"+
 			"a segment with a null value or an error has none.\n\n")
@@ -487,6 +491,9 @@ func servedValues(cfg *config.ThresholdConfig, at time.Time,
 			tv.Series[name] = seriesBy[tenant][name]
 			if len(tv.Series[name]) != len(rows) {
 				return nil, fmt.Errorf("internal: tenant %s: key %q owns %d rows but %d series", tenant, name, len(rows), len(tv.Series[name]))
+			}
+			if err := checkKeySeries(tenant, name, tv.Series[name]); err != nil {
+				return nil, err
 			}
 		}
 

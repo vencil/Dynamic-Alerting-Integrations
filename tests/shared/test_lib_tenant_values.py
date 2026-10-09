@@ -433,7 +433,7 @@ def test_schedules_are_parsed_as_da_guard_writes_them(tmp_path, da_guard):
     def ident(severity: str, component: str = "mysql", metric: str = "connections") -> tuple:
         return (tv.Series("user_threshold", {"tenant": "tenant-a", "component": component,
                                              "metric": metric, "severity": severity},
-                          f"{component}_{metric}", {}, {}),)
+                          f"{component}_{metric}", False, {}, {}),)
     warn, crit = ident("warning"), ident("critical")
     assert got.schedules["mysql_connections"] == tv.KeySchedule([
         S("00:00", "06:00", 1000.0, "warning", None, warn), S("06:00", "12:00", 70.0, "warning", None, warn),

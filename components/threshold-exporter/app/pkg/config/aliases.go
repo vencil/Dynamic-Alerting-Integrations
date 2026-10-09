@@ -274,11 +274,11 @@ func canonicalView[V any](m map[string]V) map[string]V {
 // second time under the old metric name, not a key of its own. sink is also
 // told the metric key each row's component / metric labels come from (#2750):
 // canonicalKey for row — every caller parsed row's labels from it — and
-// legacyKey for the twin.
+// legacyKey for the twin, and which of the two rows is the twin.
 func appendWithLegacyTwin(rows []ResolvedThreshold, canonicalKey string, row ResolvedThreshold, sink rowSink, servedKey string) []ResolvedThreshold {
 	rows = append(rows, row)
 	if sink != nil {
-		sink(servedKey, canonicalKey, row)
+		sink(servedKey, canonicalKey, false, row)
 	}
 	if legacyKey, ok := legacyKeyByCanonical[canonicalKey]; ok {
 		twin := row
@@ -289,7 +289,7 @@ func appendWithLegacyTwin(rows []ResolvedThreshold, canonicalKey string, row Res
 		twin.legacyTwinOf = canonicalKey
 		rows = append(rows, twin)
 		if sink != nil {
-			sink(servedKey, legacyKey, twin)
+			sink(servedKey, legacyKey, true, twin)
 		}
 	}
 	return rows

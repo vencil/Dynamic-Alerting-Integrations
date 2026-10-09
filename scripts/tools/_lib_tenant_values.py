@@ -70,12 +70,15 @@ is what keeps either of them off column 0.
   follow that verdict.
 * `series` (#2750) — for each threshold key of `severities` (exactly those
   keys), the /metrics series its rows are, a tuple of `Series(name, labels,
-  metric_key, dimensions, dimensions_regex)`: `name` and `labels` (the full
-  label set) as the Gather of the exporter's /metrics returns them,
+  metric_key, legacy_twin, dimensions, dimensions_regex)`: `name` and `labels`
+  (the full label set) as the Gather of the exporter's /metrics returns them,
   `metric_key` the key the exporter's resolver parsed the `component` /
   `metric` labels from (`X` for `X_critical` and for `X{db="a"}`), and the
-  dimensional labels the key writes (`{}` for none). Two for a retired-alias
-  target: its row, then its legacy twin. A key /metrics serves no row for
+  dimensional labels the key writes (`{}` for none). Every key derived from a
+  retired alias's target (the target, its `_critical`, its dimensional
+  spellings) has two: its own row first, then its legacy twin — the same
+  value under the retired metric identity, `legacy_twin` True (the
+  resolver's mark). A key /metrics serves no row for
   (`unserved`, or only `dropped`) has no entry, nor does `_custom_alerts`.
   A da-guard whose output lacks the field is named as older than this tool.
 
@@ -238,6 +241,7 @@ class Series(NamedTuple):
     name: str                          # the family name, as the Gather returns it
     labels: dict[str, str]             # the series' full label set
     metric_key: str                    # the key the resolver parsed component/metric from
+    legacy_twin: bool                  # the #1231 twin: the row again under the retired identity
     dimensions: dict[str, str]         # `{db="a"}` -> {"db": "a"}; {} for none
     dimensions_regex: dict[str, str]   # `{ts=~"SYS.*"}` -> {"ts": "SYS.*"}; {} for none
 
@@ -678,9 +682,14 @@ def _series_list(items: Any) -> tuple[Series, ...]:
     """One key's `series`, as da-guard wrote it (a non-empty list)."""
     if not isinstance(items, list) or not items:
         raise ValueError(f"series is not a non-empty list: {items!r}")
-    return tuple(Series(str(s["name"]), _str_map(s["labels"]), str(s["metric_key"]),
-                        _str_map(s["dimensions"]), _str_map(s["dimensions_regex"]))
-                 for s in items)
+    out = []
+    for s in items:
+        twin = s["legacy_twin"]
+        if not isinstance(twin, bool):
+            raise TypeError(f"legacy_twin is not a boolean: {twin!r}")
+        out.append(Series(str(s["name"]), _str_map(s["labels"]), str(s["metric_key"]), twin,
+                          _str_map(s["dimensions"]), _str_map(s["dimensions_regex"])))
+    return tuple(out)
 
 
 def _key_schedule(s: dict[str, Any]) -> KeySchedule:

@@ -522,13 +522,13 @@ def _minute(hhmm):
 
 
 def _served_day(tenant_values, key, side):
-    """`[(start_minute, end_minute, rendered value, severity, series)]` for
-    one key's whole UTC day as /metrics serves it (`schedules`; `series` the
-    segment's /metrics series, #2750); a key or tenant /metrics never serves
-    is one segment of None. A segment in which /metrics cannot be
+    """`[(start_minute, end_minute, rendered value, series)]` for one key's
+    whole UTC day as /metrics serves it (`schedules`; `series` the segment's
+    /metrics series, #2750); a key or tenant /metrics never serves is one
+    segment of None. A segment in which /metrics cannot be
     gathered at all is refused: a diff across it would be a guess."""
     if tenant_values is None or key not in (tenant_values.schedules or {}):
-        return [(0, _DAY_MINUTES, None, None, None)]
+        return [(0, _DAY_MINUTES, None, None)]
     out = []
     for seg in tenant_values.schedules[key].segments:
         if seg.error is not None:
@@ -536,20 +536,15 @@ def _served_day(tenant_values, key, side):
                 f"da-guard served-values: {side} /metrics cannot be gathered "
                 f"{seg.start}-{seg.end} UTC ({seg.error})", None, "")
         out.append((_minute(seg.start), _minute(seg.end), _render_served(seg.value),
-                    seg.severity, seg.series))
+                    seg.series))
     return out
 
 
 def _value_in(day, minute):
-    for start, end, value, *_ in day:
+    for start, end, value, _series in day:
         if start <= minute < end:
             return value
     return None
-
-
-def _severities_in(day, start, end):
-    """The severities /metrics serves the key with anywhere in [start, end)."""
-    return {sev for s, e, _v, sev, _series in day if s < end and start < e and sev is not None}
 
 
 def _series_in(days, spans):
@@ -558,7 +553,7 @@ def _series_in(days, spans):
     out = []
     for day in days:
         for start, end in spans:
-            for s, e, _v, _sev, series in day:
+            for s, e, _v, series in day:
                 if s < end and start < e:
                     out.extend(x for x in series or () if x not in out)
     return out
@@ -618,14 +613,13 @@ def extract_changes_from_dirs(config_dir, baseline_dir):
     served value differs; a severity-only change is not one (the firing
     count this tool measures does not depend on it).
 
-    * `severity: "critical"` when /metrics serves the key as a critical row
-      on either side in any part of the day the pair holds in (the
-      exporter's verdict, not the key's name); absent otherwise.
     * `series`: every /metrics series (`Series`, #2750) the key is served
       as on either side in any part of the day the pair holds in, as
-      served-values reports it. `backtest_change` queries Prometheus with
-      their `metric_key` (a `<base>_critical` key's is `<base>`), so a
-      critical key is backtested against its base's data.
+      served-values reports it — never empty, since at least one side
+      serves a value there and a served segment always carries its series.
+      `backtest_change` queries Prometheus with the `metric_key` of those
+      that are not a legacy twin (a `<base>_critical` key's is `<base>`), so
+      a critical key is backtested against its base's data.
     * A key /metrics serves on one side only (switched off, dropped, or the
       tenant added / removed) has None on the other side — the shape
       `backtest_change` already reads as "enabled" / "disabled".
@@ -666,9 +660,6 @@ def extract_changes_from_dirs(config_dir, baseline_dir):
                           "old_value": old_v, "new_value": new_v}
                 if spans != [(0, _DAY_MINUTES)]:
                     change["window"] = [f"{_hhmm(s)}-{_hhmm(e)}" for s, e in spans]
-                if any("critical" in _severities_in(day, s, e)
-                       for day in (old_day, new_day) for s, e in spans):
-                    change["severity"] = "critical"
                 change["series"] = _series_in((old_day, new_day), spans)
                 changes.append(change)
 
@@ -1029,8 +1020,6 @@ def not_backtestable(change):
     is what marks it dimensioned."""
     if "series" not in change:
         return "dimensioned key" if "{" in change["metric"] else None
-    if not change["series"]:
-        return "no /metrics series"
     if any(s.dimensions or s.dimensions_regex for s in change["series"]):
         return "dimensioned key"
     return None
@@ -1040,12 +1029,18 @@ def _query_metrics(change):
     """The metric names `backtest_change` asks Prometheus about: the
     `metric_key` of each /metrics series served-values reports for the
     change (#2750: `X` for `X_critical`), each once — or, for a change with
-    no series (`--git-diff`, `--tenant`), the key as given."""
+    no series (`--git-diff`, `--tenant`), the key as given.
+
+    ⛔ A legacy twin (`legacy_twin`, the resolver's mark) is never asked
+    about: it is the same row under the retired name (#1231 renamed
+    `mysql_cpu` because it read as host CPU%), so data found under that name
+    is not this threshold's data. With only the twin's name in Prometheus the
+    change is `no_data`, not analyzed against it."""
     if "series" not in change:
         return [change["metric"]]
     out = []
     for s in change["series"]:
-        if s.metric_key not in out:
+        if not s.legacy_twin and s.metric_key not in out:
             out.append(s.metric_key)
     return out
 

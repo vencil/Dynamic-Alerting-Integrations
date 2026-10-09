@@ -35,10 +35,15 @@ import (
 // Dimensions / DimensionsRegex are the row's dimensional labels as the key
 // writes them (`{db="a"}` → {"db": "a"}; `{ts=~"SYS.*"}` → DimensionsRegex
 // {"ts": "SYS.*"}, served as the label `ts_re`); {} for a key without.
+// LegacyTwin is the resolver's own mark (config.KeyedThreshold.LegacyTwin):
+// true on the #1231 legacy twin — the second series of every key derived from
+// an alias target (the target, its `_critical`, its dimensional spellings),
+// served under the retired metric identity; false on every other series.
 type metricsSeries struct {
 	Name            string            `json:"name"`
 	Labels          map[string]string `json:"labels"`
 	MetricKey       string            `json:"metric_key"`
+	LegacyTwin      bool              `json:"legacy_twin"`
 	Dimensions      map[string]string `json:"dimensions"`
 	DimensionsRegex map[string]string `json:"dimensions_regex"`
 }
@@ -115,11 +120,23 @@ func keySeries(keyed []config.KeyedThreshold, results []emitResult, gathered gat
 			Name:            names[0],
 			Labels:          labels,
 			MetricKey:       k.MetricKey,
+			LegacyTwin:      k.LegacyTwin,
 			Dimensions:      copyLabels(k.CustomLabels),
 			DimensionsRegex: copyLabels(k.RegexLabels),
 		})
 	}
 	return out, nil
+}
+
+// checkKeySeries is the invariant a reader of `series` relies on: a key's
+// rows are one row of its own (LegacyTwin false), first, and at most its
+// legacy twin after it.
+func checkKeySeries(tenant, key string, list []metricsSeries) error {
+	ok := len(list) >= 1 && len(list) <= 2 && !list[0].LegacyTwin && (len(list) == 1 || list[1].LegacyTwin)
+	if !ok {
+		return fmt.Errorf("internal: tenant %s: key %q: its series are not one row then at most its legacy twin", tenant, key)
+	}
+	return nil
 }
 
 func copyLabels(m map[string]string) map[string]string {
@@ -136,7 +153,7 @@ func sameSeries(a, b []metricsSeries) bool {
 		return false
 	}
 	for i := range a {
-		if a[i].Name != b[i].Name || a[i].MetricKey != b[i].MetricKey ||
+		if a[i].Name != b[i].Name || a[i].MetricKey != b[i].MetricKey || a[i].LegacyTwin != b[i].LegacyTwin ||
 			!sameLabels(a[i].Labels, b[i].Labels) || !sameLabels(a[i].Dimensions, b[i].Dimensions) ||
 			!sameLabels(a[i].DimensionsRegex, b[i].DimensionsRegex) {
 			return false
