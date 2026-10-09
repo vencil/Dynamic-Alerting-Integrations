@@ -47,7 +47,7 @@ lang: zh
 | `ADR-014` | adr | ADR-014: wizard.jsx design token 遷移採 Option A（Tailwind arbitrary value 全改寫） | portal | — | [docs/adr/014-wizard-arbitrary-value-token-migration.md](../adr/014-wizard-arbitrary-value-token-migration.md) |
 | `ADR-015` | adr | ADR-015: 全面改用 `[data-theme]` 單軌 dark mode，移除 Tailwind `dark:` 變體 | portal | — | [docs/adr/015-data-theme-single-track-dark-mode.md](../adr/015-data-theme-single-track-dark-mode.md) |
 | `ADR-016` | adr | ADR-016: conf.d/ 目錄分層 + 混合模式 + 遷移策略 | exporter | — | [docs/adr/016-conf-d-directory-hierarchy-mixed-mode.md](../adr/016-conf-d-directory-hierarchy-mixed-mode.md) |
-| `ADR-017` | adr | ADR-017: _defaults.yaml 繼承語意 + dual-hash hot-reload | exporter | — | [docs/adr/017-defaults-yaml-inheritance-dual-hash.md](../adr/017-defaults-yaml-inheritance-dual-hash.md) |
+| `ADR-017` | adr | ADR-017: _defaults.yaml 多層繼承與雙雜湊熱重載 | exporter | — | [docs/adr/017-defaults-yaml-inheritance-dual-hash.md](../adr/017-defaults-yaml-inheritance-dual-hash.md) |
 | `ADR-018` | adr | ADR-018: Profile-as-Directory-Default | tools | — | [docs/adr/018-profile-as-directory-default.md](../adr/018-profile-as-directory-default.md) |
 | `ADR-019` | adr | ADR-019: Planning SSOT — Frontmatter Contract + Discovery-based Index | docs | — | [docs/adr/019-planning-ssot.md](../adr/019-planning-ssot.md) |
 | `ADR-020` | adr | ADR-020: Tenant Federation — Label-Injection Proxy over Self-Built Endpoint | tenant-api | — | [docs/adr/020-tenant-federation.md](../adr/020-tenant-federation.md) |

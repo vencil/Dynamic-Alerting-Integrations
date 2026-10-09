@@ -202,7 +202,7 @@ layers (`LoadRoot`); see the table above.
   → the tenant's own `_routing`. The full semantics (shallow merge per top-level
   key, root-only `_routing_enforced`, subtree-scoped profiles and domain
   policies, duplicate tenant ids) are recorded in
-  [ADR-017 "Amendment 2026-09-28"](017-defaults-yaml-inheritance-dual-hash.en.md),
+  [ADR-017 Decision 9](017-defaults-yaml-inheritance-dual-hash.en.md#9-routing-settings-are-inherited-level-by-level-along-directories),
   the ADR that owns inheritance semantics; they are not repeated here.
 - **Blocking conditions** (replacing the #2326 step-1 stopgap "any config file in
   a subdirectory → rc 2", since a subdirectory file is no longer an error once the

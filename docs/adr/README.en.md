@@ -48,7 +48,7 @@ New here? Pick based on your needs:
 | ADR-014 | [wizard.jsx design token migration adopts Option A (full Tailwind arbitrary value rewrite)](./014-wizard-arbitrary-value-token-migration.en.md) | ✅ Accepted | v2.7.0 |
 | ADR-015 | [Migrate comprehensively to `[data-theme]` single-track dark mode, remove Tailwind `dark:` variant](./015-data-theme-single-track-dark-mode.en.md) | ✅ Accepted | v2.7.0 |
 | ADR-016 | [conf.d/ Directory Hierarchy + Mixed Mode + Migration Strategy](./016-conf-d-directory-hierarchy-mixed-mode.en.md) | ✅ Accepted | v2.7.0 |
-| ADR-017 | [_defaults.yaml Inheritance Semantics + Dual-Hash Hot-Reload](./017-defaults-yaml-inheritance-dual-hash.en.md) | ✅ Accepted | v2.7.0 |
+| ADR-017 | [Multi-Level _defaults.yaml Inheritance and Dual-Hash Hot Reload](./017-defaults-yaml-inheritance-dual-hash.en.md) | ✅ Accepted | v2.7.0 |
 | ADR-018 | [Profile-as-Directory-Default](./018-profile-as-directory-default.en.md) | 🟢 Accepted | v2.8.0 |
 | ADR-019 | [Planning SSOT — Frontmatter Contract + Discovery-based Index](./019-planning-ssot.md) | ✅ Accepted | v2.8.0 |
 | ADR-020 | [Tenant Federation — Label-Injection Proxy over Self-Built Endpoint](./020-tenant-federation.md) | ✅ Accepted | v2.8.0 |

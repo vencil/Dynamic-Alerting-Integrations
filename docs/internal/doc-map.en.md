@@ -28,7 +28,7 @@ lang: en
 | `docs/adr/014-wizard-arbitrary-value-token-migration.md` (.en.md) | frontend-developers, maintainers | ADR-014: wizard.jsx design token migration adopts Option A (full Tailwind arbitrary value rewrite) |
 | `docs/adr/015-data-theme-single-track-dark-mode.md` (.en.md) | frontend-developers, designers, maintainers | ADR-015: Migrate comprehensively to `[data-theme]` single-track dark mode, remove Tailwind `dark:` variant |
 | `docs/adr/016-conf-d-directory-hierarchy-mixed-mode.md` (.en.md) | Platform Engineers, SREs, contributors | ADR-016: conf.d/ Directory Hierarchy + Mixed Mode + Migration Strategy |
-| `docs/adr/017-defaults-yaml-inheritance-dual-hash.md` (.en.md) | Platform Engineers, SREs, contributors | ADR-017: _defaults.yaml Inheritance Semantics + Dual-Hash Hot-Reload |
+| `docs/adr/017-defaults-yaml-inheritance-dual-hash.md` (.en.md) | Platform Engineers, SREs, contributors | ADR-017: Multi-Level _defaults.yaml Inheritance and Dual-Hash Hot Reload |
 | `docs/adr/018-profile-as-directory-default.md` (.en.md) | Platform Engineers, SREs, contributors | ADR-018: Profile-as-Directory-Default |
 | `docs/adr/019-planning-ssot.md` | Platform Engineers, contributors, ai-agents | ADR-019: Planning SSOT — Frontmatter Contract + Discovery-based Index |
 | `docs/adr/020-tenant-federation.md` | Platform Engineers, contributors | ADR-020: Tenant Federation — Label-Injection Proxy over Self-Built Endpoint |

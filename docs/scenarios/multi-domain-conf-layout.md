@@ -139,7 +139,7 @@ tenants:
 > 子目錄把 `receiver` / `overrides` 寫成 `null` 是阻擋錯誤）；`_routing_enforced` 只認根目錄；
 > `_routing_profiles.yaml` 與 `_domain_policy.yaml` 可放在子目錄、只作用於所在子樹；同一個
 > 租戶 id 在多個檔案宣告是阻擋錯誤。完整語意見
-> [ADR-017「Amendment 2026-09-28」](../adr/017-defaults-yaml-inheritance-dual-hash.md)。
+> [ADR-017 決策 9](../adr/017-defaults-yaml-inheritance-dual-hash.md#9-路由設定沿目錄逐層繼承)。
 > ⚠️ 寫在 `defaults:` 區塊**裡**的 `_routing*` 仍不會被讀。v2.9.0 映像的路由面只讀頂層 <!-- image-caveat: v2.9.0 -->
 >
 > ✅ **`validate_config.py` 已於 [PR #1343](https://github.com/vencil/Dynamic-Alerting-Integrations/pull/1343)
@@ -172,7 +172,7 @@ tenants:
 > **仍被拒絕**——它會讓該租戶整條 route 消失、告警落到 catch-all。
 > **閾值 key 一律用 `"disable"`**，不要用 `null`：`mysql_connections: ~` 與打到
 > 一半的 `mysql_connections:` 對 YAML 完全相同，所以 schema 擋掉它。詳見
-> [ADR-017 §Merge 語意](../adr/017-defaults-yaml-inheritance-dual-hash.md)。
+> [ADR-017 決策 4](../adr/017-defaults-yaml-inheritance-dual-hash.md#4-閾值寫-null-等於這一層沒寫)。
 
 ## 操作指南
 
