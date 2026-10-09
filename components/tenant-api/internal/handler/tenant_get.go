@@ -216,13 +216,13 @@ func GetTenant(d *Deps) http.HandlerFunc {
 	}
 }
 
-// msgRootPlatformRead is the fixed client-facing text for a GET whose read of
-// the conf.d root platform files did not complete in time. The full error
-// goes to the server log only.
 // msgCustomAlertsUnparseable is the fixed 500 text when a tenant's
 // _custom_alerts cannot be extracted; the parser's own error stays in the log.
 const msgCustomAlertsUnparseable = "failed to parse tenant custom alerts"
 
+// msgRootPlatformRead is the fixed client-facing text for a GET whose read of
+// the conf.d root platform files did not complete in time. The full error
+// goes to the server log only.
 const msgRootPlatformRead = "cannot read the conf.d root platform files in time; " +
 	"the tenant's effective thresholds cannot be computed"
 

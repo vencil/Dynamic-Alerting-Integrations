@@ -379,6 +379,9 @@ func putTenantPRMode(d *Deps, rw http.ResponseWriter, r *http.Request, tenantID,
 		if writeBaseRestoreFailed(rw, r, "PR write failed: ", err) {
 			return
 		}
+		if writeMergeFailed(rw, r, "PR write failed: ", err) {
+			return
+		}
 		// Anything else is an unexpected git failure → generic 500 (its text
 		// stays in the log — WriteErrorEnvelope, #1700).
 		WriteJSONError(rw, r, http.StatusInternalServerError, "PR write failed: "+err.Error())

@@ -111,7 +111,7 @@ Two errors keep their text on purpose, so they carry their own code:
 
 | code | status | content |
 |---|---|---|
-| `CONFIG_DECODE_ERROR` | 500 | a conf.d config file failed to decode (`parse defaults[i]: …`), telling the operator which file to fix; no path |
+| `CONFIG_DECODE_ERROR` | 500 | conf.d config content failed to decode: `/effective`'s `parse defaults[i]: …`, a tenant file the custom-alerts write cannot merge or parse, an unparseable `_groups.yaml` / `_views.yaml`; the text says which entry is wrong, with no path |
 | `BASE_RESTORE_FAILED` | 500 | after a PR-mode write the worktree could not return to base: names the branch and whether it reached origin (do not retry — a retry pushes a second branch); without the underlying git error |
 
 ---

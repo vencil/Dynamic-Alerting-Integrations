@@ -222,7 +222,9 @@ func PutTenantCustomAlerts(d *Deps) http.HandlerFunc {
 		// G4, consistent with the unparseable-merged 500 below).
 		merged, err := customalerts.MergeCustomAlerts(string(raw), tenantID, *req.CustomAlerts)
 		if err != nil {
-			WriteJSONError(w, r, http.StatusInternalServerError,
+			// The text describes the tenant file's content, not the
+			// server (#1700): its own code, so it is not withheld.
+			WriteJSONErrorWithCode(w, r, http.StatusInternalServerError, CodeConfigDecode,
 				"internal error: cannot merge into the tenant file: "+err.Error())
 			return
 		}
@@ -237,7 +239,9 @@ func PutTenantCustomAlerts(d *Deps) http.HandlerFunc {
 			// unreachable — if it fires, our merge logic is at fault (a
 			// server bug), not the client's input. Fail-fast as 500, not a
 			// misleading 400.
-			WriteJSONError(w, r, http.StatusInternalServerError,
+			// The text describes the tenant file's content, not the
+			// server (#1700): its own code, so it is not withheld.
+			WriteJSONErrorWithCode(w, r, http.StatusInternalServerError, CodeConfigDecode,
 				"internal error: merged config is not parseable: "+err.Error())
 			return
 		}
@@ -259,7 +263,9 @@ func PutTenantCustomAlerts(d *Deps) http.HandlerFunc {
 		// tenant-api write path is covered.
 		currentAlerts, err := customalerts.Extract(string(raw), tenantID)
 		if err != nil {
-			WriteJSONError(w, r, http.StatusInternalServerError,
+			// The text describes the tenant file's content, not the
+			// server (#1700): its own code, so it is not withheld.
+			WriteJSONErrorWithCode(w, r, http.StatusInternalServerError, CodeConfigDecode,
 				"internal error: cannot read current custom alerts: "+err.Error())
 			return
 		}

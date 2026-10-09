@@ -22,7 +22,11 @@ import (
 
 	"github.com/go-chi/chi/v5/middleware"
 
+	"github.com/vencil/tenant-api/internal/confd"
+	"github.com/vencil/tenant-api/internal/federation/fedpolicy"
 	"github.com/vencil/tenant-api/internal/gitops"
+	"github.com/vencil/tenant-api/internal/groups"
+	"github.com/vencil/tenant-api/internal/rbac"
 )
 
 const leakyText = "read federation subset: read /srv/conf.d/_federation/t.yaml: is a directory"
@@ -140,6 +144,8 @@ func TestWriteErrorIsForClient(t *testing.T) {
 		fmt.Errorf("%w: %q", gitops.ErrReservedTenantID, "_defaults"),
 		fmt.Errorf("%w %q: bad", gitops.ErrInvalidTenantID, "A"),
 		fmt.Errorf("%w for t: %w", gitops.ErrMergeFailed, errors.New("cannot patch structured key")),
+		fmt.Errorf("%w: %q is claimed by %v", confd.ErrAmbiguousTenantFile, "t", []string{"t.yaml", "t.yml"}),
+		fmt.Errorf("%w: %s", confd.ErrNotRegularFile, "t.yaml"),
 	}
 	for _, err := range forClient {
 		if !writeErrorIsForClient(err) {
@@ -171,6 +177,9 @@ func TestBatchTenants_ServerSideOpFailureNamesNoServerPath(t *testing.T) {
 	configDir := setupConfigDir(t, map[string]string{
 		// db-b's file is a list: refused as a file the client must repair.
 		"db-b.yaml": "- not a tenant mapping\n",
+		// db-c is claimed by two files: a conf.d layout the operator fixes.
+		"db-c.yaml": "tenants:\n  db-c:\n    _silent_mode: \"warning\"\n",
+		"db-c.yml":  "tenants:\n  db-c:\n    _silent_mode: \"warning\"\n",
 	})
 	initGitRepo(t, configDir)
 	// db-a's file is a directory: reading it fails server-side.
@@ -181,7 +190,8 @@ func TestBatchTenants_ServerSideOpFailureNamesNoServerPath(t *testing.T) {
 	deps := &Deps{Writer: newTestWriter(configDir), ConfigDir: configDir, RBAC: rbacMgr, WriteMode: WriteModeDirect}
 	body := `{"operations":[
 		{"tenant_id":"db-a","patch":{"_silent_mode":"warning"}},
-		{"tenant_id":"db-b","patch":{"_silent_mode":"warning"}}
+		{"tenant_id":"db-b","patch":{"_silent_mode":"warning"}},
+		{"tenant_id":"db-c","patch":{"_silent_mode":"critical"}}
 	]}`
 	req := httptest.NewRequest("POST", "/api/v1/tenants/batch", bytes.NewBufferString(body))
 	req.Header.Set("Content-Type", "application/json")
@@ -206,6 +216,9 @@ func TestBatchTenants_ServerSideOpFailureNamesNoServerPath(t *testing.T) {
 	}
 	if got := byTenant["db-b"]; got.Status != "error" || got.Code != CodeTenantConfigNotLoadable || !strings.Contains(got.Message, "db-b") {
 		t.Errorf("db-b (client-facing failure) = %+v, want its own not-loadable text", got)
+	}
+	if got := byTenant["db-c"]; got.Status != "error" || !strings.Contains(got.Message, "is claimed by") {
+		t.Errorf("db-c (two files claim it) = %+v, want its own ambiguous-tenant text", got)
 	}
 }
 
@@ -234,5 +247,51 @@ func TestPutTenant_ServerSideWriteFailureNamesNoServerPath(t *testing.T) {
 	}
 	if got.Error != msgWriteFailed {
 		t.Errorf("error = %q, want %q (git's own text stays in the log)", got.Error, msgWriteFailed)
+	}
+}
+
+// The metric-discovery 502: the upstream error is a *url.Error naming the
+// internal Prometheus URL, host and IP. Its own code (UPSTREAM_ERROR) is not
+// withheld by the envelope, so the handler writes fixed text itself.
+func TestDiscoverMetrics_UpstreamFailureNamesNoUpstream(t *testing.T) {
+	t.Parallel()
+	const upstream = "http://127.0.0.1:1" // nothing listens: connection refused
+	h := DiscoverMetrics(&Deps{MetricDiscoverer: fedpolicy.NewMetricDiscoverer(upstream)})
+	w := httptest.NewRecorder()
+	h(w, newRequestWithChiParam("GET", "/api/v1/tenants/db-a/metrics", "id", "db-a", nil))
+
+	if w.Code != http.StatusBadGateway {
+		t.Fatalf("status = %d, want 502 (the fault did not fire as designed); body: %s", w.Code, w.Body.String())
+	}
+	if strings.Contains(w.Body.String(), "127.0.0.1") {
+		t.Errorf("502 body names the upstream: %s", w.Body.String())
+	}
+}
+
+// _groups.yaml that does not decode answers CONFIG_DECODE_ERROR with the
+// decoder's text: the operator must fix the file, and the text says what is
+// wrong. Without its own code the envelope would withhold it.
+func TestPutGroup_UnparseableGroupsFileIsConfigDecodeError(t *testing.T) {
+	t.Parallel()
+	configDir := setupConfigDir(t, map[string]string{"_groups.yaml": "grops:\n  g-a:\n    label: a\n"})
+	initGitRepo(t, configDir)
+	rbacMgr := newRBACManager(t, partialWriterRBAC)
+	d := &Deps{Writer: gitops.NewWriter(configDir, configDir), Groups: groups.NewManager(configDir), RBAC: rbacMgr}
+	body, _ := json.Marshal(PutGroupRequest{Label: "gx", Members: []string{"t-owned"}})
+	req := newRequestWithChiParam("PUT", "/api/v1/groups/g-x", "id", "g-x", bytes.NewBuffer(body))
+	req.Header.Set("X-Forwarded-Email", "op@example.com")
+	req.Header.Set("X-Forwarded-Groups", "readers,owners")
+	w := httptest.NewRecorder()
+	wrapWithRBACMiddleware(PutGroup(d), rbacMgr, rbac.PermRead, nil).ServeHTTP(w, req)
+
+	var got ErrorResponse
+	if err := json.Unmarshal(w.Body.Bytes(), &got); err != nil {
+		t.Fatalf("unmarshal %s: %v", w.Body.String(), err)
+	}
+	if w.Code != http.StatusInternalServerError || got.Code != CodeConfigDecode || !strings.Contains(got.Error, "_groups.yaml") {
+		t.Errorf("= %d %+v, want 500 %s naming _groups.yaml", w.Code, got, CodeConfigDecode)
+	}
+	if strings.Contains(w.Body.String(), configDir) {
+		t.Errorf("body carries conf.d's path: %s", w.Body.String())
 	}
 }

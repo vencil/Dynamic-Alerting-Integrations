@@ -61,11 +61,13 @@ const (
 	CodeConflict        = "CONFLICT"
 	CodeBadRequest      = "BAD_REQUEST"
 	CodeInternal        = "INTERNAL_ERROR"
-	// CodeConfigDecode marks a 500 whose text is a conf.d decode error the
-	// client is meant to read (`parse defaults[i]: …` — the decoder's own
-	// message, which names no path). It is not INTERNAL_ERROR because
-	// WriteErrorEnvelope withholds every INTERNAL_ERROR text (#1700); the
-	// problem is in the operator's config, and the text says where.
+	// CodeConfigDecode marks a 500 whose text describes conf.d content the
+	// server could not decode or merge — /effective's `parse defaults[i]: …`,
+	// a tenant file the custom-alerts or PR-mode write cannot merge, an
+	// unparseable _groups.yaml / _views.yaml. The decoder's own message names
+	// no path. It is not INTERNAL_ERROR because WriteErrorEnvelope withholds
+	// every INTERNAL_ERROR text (#1700); the problem is in the operator's
+	// config, and the text says what is wrong.
 	CodeConfigDecode = "CONFIG_DECODE_ERROR"
 	// CodeBaseRestoreFailed marks a 500 from a PR-mode write whose worktree
 	// could not return to the base branch (#2070). Its text names the branch
@@ -387,14 +389,18 @@ const msgBatchOpFailed = "the write failed; the server log has the details"
 
 // writeErrorIsForClient reports whether a tenant-write error's own text is
 // meant for the caller: a validation verdict on the body, an unusable tenant
-// id, or (batch) a merge error describing the patch against the file. Any
-// other error out of a write is the server's — reading the file, the temp
-// file, git — and its text carries server paths (#1700).
+// id, (batch) a merge error describing the patch against the file, or a
+// conf.d layout problem the operator must fix (two files claim the tenant, or
+// its file is not a regular file — both name basenames only). Any other error
+// out of a write is the server's — reading the file, the temp file, git — and
+// its text carries server paths (#1700).
 func writeErrorIsForClient(err error) bool {
 	return errors.Is(err, gitops.ErrValidation) ||
 		errors.Is(err, gitops.ErrReservedTenantID) ||
 		errors.Is(err, gitops.ErrInvalidTenantID) ||
-		errors.Is(err, gitops.ErrMergeFailed)
+		errors.Is(err, gitops.ErrMergeFailed) ||
+		errors.Is(err, confd.ErrAmbiguousTenantFile) ||
+		errors.Is(err, confd.ErrNotRegularFile)
 }
 
 // writeErrorText is the text a tenant-write failure shows the client: its own
@@ -717,7 +723,35 @@ func writeConfigFileError(w http.ResponseWriter, r *http.Request, err error) {
 		WriteJSONError(w, r, http.StatusConflict, err.Error())
 		return
 	}
+	// The shared file on disk does not decode: the operator has to fix it,
+	// and the decoder's text (no path) says what is wrong.
+	var parseErr *configFileParseError
+	if errors.As(err, &parseErr) {
+		WriteJSONErrorWithCode(w, r, http.StatusInternalServerError, CodeConfigDecode, err.Error())
+		return
+	}
 	WriteJSONError(w, r, http.StatusInternalServerError, err.Error())
+}
+
+// configFileParseError marks parseGroupsFile / parseViewsFile failing on the
+// file's content, as opposed to the git failures writeConfigFileError also
+// sees. Its text is unchanged; writeConfigFileError answers it with
+// CodeConfigDecode instead of a withheld INTERNAL_ERROR (#1700).
+type configFileParseError struct{ err error }
+
+func (e *configFileParseError) Error() string { return e.err.Error() }
+func (e *configFileParseError) Unwrap() error { return e.err }
+
+// writeMergeFailed answers a PR-mode write whose merge refused the tenant's
+// file (gitops.ErrMergeFailed) and reports whether err was one. The direct
+// path shows the same error to the client; without this the PR path would
+// withhold it as an INTERNAL_ERROR (#1700).
+func writeMergeFailed(w http.ResponseWriter, r *http.Request, prefix string, err error) bool {
+	if !errors.Is(err, gitops.ErrMergeFailed) {
+		return false
+	}
+	WriteJSONErrorWithCode(w, r, http.StatusInternalServerError, CodeConfigDecode, prefix+err.Error())
+	return true
 }
 
 // writeForgeCreateError renders the canonical response for a failure from

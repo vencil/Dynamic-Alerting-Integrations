@@ -384,6 +384,9 @@ func runBatchPR(d *Deps, rw http.ResponseWriter, r *http.Request, ops []BatchOpe
 		if writeBaseRestoreFailed(rw, r, "PR/MR batch write failed: ", err) {
 			return BatchResponse{}, false
 		}
+		if writeMergeFailed(rw, r, "PR/MR batch write failed: ", err) {
+			return BatchResponse{}, false
+		}
 		// Anything else is an unexpected git failure → generic 500 (its text
 		// stays in the log — WriteErrorEnvelope, #1700).
 		WriteJSONError(rw, r, http.StatusInternalServerError, "PR/MR batch write failed: "+err.Error())

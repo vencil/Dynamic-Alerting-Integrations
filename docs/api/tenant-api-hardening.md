@@ -111,7 +111,7 @@ tenant 寫入的其他錯誤也一樣：`PUT /tenants/{id}`、`PUT /tenants/{id}
 
 | code | status | 內容 |
 |---|---|---|
-| `CONFIG_DECODE_ERROR` | 500 | conf.d 設定檔解碼失敗（`parse defaults[i]: …`），告訴 operator 要修哪個檔；不含路徑 |
+| `CONFIG_DECODE_ERROR` | 500 | conf.d 設定內容解碼失敗：`/effective` 的 `parse defaults[i]: …`、custom-alerts 寫入時租戶檔內容無法 merge／解析、`_groups.yaml`／`_views.yaml` 無法解析；文字說明哪個項目出錯，不含路徑 |
 | `BASE_RESTORE_FAILED` | 500 | PR 模式寫入後 worktree 回不到 base：列出分支名與是否已推上 origin（不要重試，否則會再推一條分支）；不含底層 git 錯誤 |
 
 ---

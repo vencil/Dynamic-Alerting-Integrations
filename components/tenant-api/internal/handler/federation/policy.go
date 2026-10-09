@@ -278,10 +278,14 @@ func runAdmissionChecks(d *handler.Deps, ctx context.Context, metrics []string) 
 				// unreachable) maps to the soft gate: a metric that
 				// cannot be queried cannot be proven bad, so it warns
 				// rather than hard-blocks.
+				// The error is usually a *url.Error naming the internal
+				// Prometheus URL, host and IP (#1700): logged, not returned.
+				slog.Warn("federation admission check could not be completed",
+					"metric", metric, "error", err)
 				res = fedpolicy.AdmissionResult{
 					Metric: metric,
 					State:  fedpolicy.AdmissionWarn,
-					Reason: "admission check could not be completed: " + err.Error(),
+					Reason: "admission check could not be completed: the Prometheus query failed (see the server log)",
 				}
 			}
 			results[i] = res
