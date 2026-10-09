@@ -110,8 +110,7 @@ Inheritance order: **L0 → L1 → L2 → L3 → tenant YAML** (later overrides 
   the threshold and no series is served (for a value a deeper layer gives, see "Threshold keys"
   above). To switch a threshold off in a tenant file or a subdirectory `_defaults.yaml`, write
   `"disable"`; written in the root `defaults:`, `"disable"` makes /metrics drop the whole root
-  `_defaults.yaml`, and even the plain thresholds and `_critical` values a tenant wrote itself
-  are not served (da-guard exits 3).
+  `_defaults.yaml`, its `optional_overrides:` included (da-guard exits 3).
 - **`_metadata` fields do not inherit**: each tenant's `_metadata` comes only from its own YAML + path inference (ADR-016)
 
 ```yaml
