@@ -114,12 +114,6 @@ type LoadReport struct {
 	// keys that act when merged (ActsWhenMerged), so /metrics does not carry
 	// them while /effective shows them (#2296). nil when there is none.
 	RootDefaultsUnread []UnreadKey
-	// WrittenKeys maps a tenant to its EffectiveConfig.KeySpellings (#2031):
-	// the config keys every dimensional key by its canonical spelling, and a
-	// reader that names keys as the author wrote them — as `da-guard
-	// effective` does — spells them through it (EffectiveConfig.WrittenKey's
-	// rule). Only tenants with such a key; nil when there is none.
-	WrittenKeys map[string]map[string]string
 }
 
 // LoadDirReport is LoadDir, also naming the files that contribute no tenant
@@ -136,47 +130,66 @@ type LoadReport struct {
 // RootStatUnreadable when the root cannot even be stat'ed for a reason other
 // than a wrong path (StatErrIsWrongPath) (#2627).
 func LoadDirReport(dir string, logger *log.Logger) (cfg *ThresholdConfig, rep LoadReport, err error) {
+	cfg, rep, _, _, err = loadDirReport(dir, logger)
+	return cfg, rep, err
+}
+
+// LoadDirReportWritten is LoadDirReport plus, per tenant whose effective
+// config shows a key in another spelling than the config keys it by, that
+// tenant's EffectiveConfig.KeySpellings (#2031; nil when none): the config
+// keys every dimensional key by its canonical spelling, and `da-guard
+// served-values` spells its keys through it (WrittenKey), as `da-guard
+// effective` does.
+func LoadDirReportWritten(dir string, logger *log.Logger) (cfg *ThresholdConfig, rep LoadReport, written map[string]map[string]string, err error) {
+	cfg, rep, scan, built, err := loadDirReport(dir, logger)
+	if err != nil || built == nil {
+		return cfg, rep, nil, err
+	}
+	return cfg, rep, writtenKeys(scan, built), nil
+}
+
+func loadDirReport(dir string, logger *log.Logger) (cfg *ThresholdConfig, rep LoadReport, scan *TreeScan, built *FlatBuild, err error) {
 	if logger == nil {
 		logger = discardLogger
 	}
 	absRoot := AbsScanRoot(dir)
 	if _, serr := os.Stat(absRoot); serr != nil && !StatErrIsWrongPath(serr) {
 		statErr := fmt.Errorf("stat configDir %q: %w", dir, serr)
-		return nil, LoadReport{Unreadable: []UnreadableFile{RootStatUnreadable}, RootListErr: statErr},
+		return nil, LoadReport{Unreadable: []UnreadableFile{RootStatUnreadable}, RootListErr: statErr}, nil, nil,
 			fmt.Errorf("%w: %w", statErr, ErrNoYAMLFiles)
 	}
 	scanLogger, rootWarn := withRootWalkWarnHeld(logger, absRoot)
-	scan, err := ScanDirTree(dir, nil, nil, scanLogger)
+	scan, err = ScanDirTree(dir, nil, nil, scanLogger)
 	// The root's walk WARN is dropped only when RootListErr carries it below
 	// (the caller prints that); otherwise — e.g. the root's listing failed
 	// part-way, so the walk kept files — it is logged as the walker wrote it.
 	reported := rootListReported(scan, err)
 	rootWarn.release(reported)
 	if err != nil {
-		return nil, LoadReport{}, err
+		return nil, LoadReport{}, nil, nil, err
 	}
 	if err := RejectDuplicateTenant(scan); err != nil {
-		return nil, LoadReport{}, err
+		return nil, LoadReport{}, nil, nil, err
 	}
 	if reported {
 		listErr := fmt.Errorf("cannot list configDir %q: %w", dir, scan.RootWalkErr)
-		return nil, LoadReport{Unreadable: []UnreadableFile{RootUnreadable}, RootListErr: listErr},
+		return nil, LoadReport{Unreadable: []UnreadableFile{RootUnreadable}, RootListErr: listErr}, nil, nil,
 			fmt.Errorf("%w: %w", listErr, ErrNoYAMLFiles)
 	}
 	if len(scan.Files) == 0 {
-		return nil, LoadReport{Unreadable: scan.Unreadable}, fmt.Errorf("%w in %s", ErrNoYAMLFiles, dir)
+		return nil, LoadReport{Unreadable: scan.Unreadable}, nil, nil, fmt.Errorf("%w in %s", ErrNoYAMLFiles, dir)
 	}
-	built, err := loadDirBuild(scan, dir, logger, nil)
+	b, err := loadDirBuild(scan, dir, logger, nil)
 	if err != nil {
-		return nil, LoadReport{}, err
+		return nil, LoadReport{}, nil, nil, err
 	}
+	built = &b
 	rep.ParseFailed = built.ParseFailed
 	rep.Unreadable = scan.Unreadable
 	rep.Undeliverable = undeliverableThresholds(built.UnreachableValues)
 	rep.RootDefaultsUnread = built.RootDefaultsUnread
 	rep.NoTenant = noTenantKeys(scan)
-	rep.WrittenKeys = writtenKeys(scan, &built)
-	return &built.Config, rep, nil
+	return &built.Config, rep, scan, built, nil
 }
 
 // noTenantKeys is LoadReport.NoTenant read off a scan: the keys (sorted) of

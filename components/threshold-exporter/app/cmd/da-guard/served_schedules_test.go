@@ -249,7 +249,7 @@ func TestServedSchedules_AgreeWithServedValuesEveryMinute(t *testing.T) {
 	day := time.Date(2026, 7, 1, 0, 0, 0, 0, time.UTC)
 	for m := 0; m < config.MinutesPerDay; m++ {
 		now := day.Add(time.Duration(m) * time.Minute)
-		served, _, _, err := keyedRows(cfg, now)
+		served, _, _, err := keyedRows(cfg, now, nil)
 		if err != nil {
 			t.Fatalf("%s: %v", hhmm(m), err)
 		}

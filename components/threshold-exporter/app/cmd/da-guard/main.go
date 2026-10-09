@@ -601,7 +601,7 @@ func buildCheckInput(scoped *config.ScopedTenants, f *flags) guard.CheckInput {
 		CustomAlertDuplicates: customAlertDuplicates(scoped),
 		// #2031: the whole tree, whatever the scope — one series two keys
 		// share fails the scrape for every tenant.
-		MetricsNotGatherable: gatherVerdict(scoped.Config, time.Now()),
+		MetricsNotGatherable: gatherVerdict(scoped.Config, time.Now(), writtenNamer(scoped.WrittenKeys)),
 	}
 }
 
@@ -609,7 +609,8 @@ func buildCheckInput(scoped *config.ScopedTenants, f *flags) guard.CheckInput {
 // Message with its tenant's keys as the layer that supplied them wrote them
 // (#2031): the guard reads maps keyed by the canonical dimensional spelling
 // (config.EffectiveConfig.KeySpellings). A field below a key (`key.leaf`)
-// keeps its leaf; a key quoted with %q is matched in its quoted form too.
+// keeps its leaf. In a message only a whole key is replaced — between
+// backticks, or quoted whole with %q — never a key inside another one.
 func spellFindingsAsWritten(report *guard.GuardReport, scoped *config.ScopedTenants) {
 	byTenant := map[string]*config.EffectiveConfig{}
 	for _, ec := range scoped.Tenants {
@@ -630,9 +631,8 @@ func spellFindingsAsWritten(report *guard.GuardReport, scoped *config.ScopedTena
 			if f.Field == canon || strings.HasPrefix(f.Field, canon+".") {
 				f.Field = written + f.Field[len(canon):]
 			}
-			f.Message = strings.ReplaceAll(f.Message, canon, written)
-			qc, qw := strconv.Quote(canon), strconv.Quote(written)
-			f.Message = strings.ReplaceAll(f.Message, qc[1:len(qc)-1], qw[1:len(qw)-1])
+			f.Message = strings.ReplaceAll(f.Message, "`"+canon+"`", "`"+written+"`")
+			f.Message = strings.ReplaceAll(f.Message, strconv.Quote(canon), strconv.Quote(written))
 		}
 	}
 }

@@ -233,7 +233,7 @@ func runServedValues(args []string, stdout, errOut io.Writer) int {
 		}
 	}
 
-	cfg, rep, err := config.LoadDirReport(f.configDir, log.New(errOut, "", 0))
+	cfg, rep, written, err := config.LoadDirReportWritten(f.configDir, log.New(errOut, "", 0))
 	// A tree whose every config file is unreadable is not "no .yaml files"
 	// (#2627): the exporter serves nothing from it, so the document carries
 	// no tenant and names the files in unreadable (exit 3), as effective and
@@ -255,12 +255,12 @@ func runServedValues(args []string, stdout, errOut io.Writer) int {
 			fmt.Fprintf(errOut, "%s %s: %v\n", programName, servedValuesCmd, err)
 			return exitCallerErr
 		}
-		tenants, err = servedValues(cfg, at, rep.Undeliverable, f.schedules)
+		tenants, err = servedValues(cfg, at, rep.Undeliverable, f.schedules, written)
 		if err != nil {
 			fmt.Fprintf(errOut, "%s %s: %v\n", programName, servedValuesCmd, err)
 			return exitCallerErr
 		}
-		spellAsWritten(tenants, rep.WrittenKeys)
+		spellAsWritten(tenants, written)
 	}
 	parseFailed := rep.ParseFailed
 	if parseFailed == nil {
@@ -407,8 +407,10 @@ func joinPath(path, name string) string {
 // also fills Schedules (--schedules).
 func servedValues(cfg *config.ThresholdConfig, at time.Time,
 	undeliverable map[string]map[string]config.ScheduledValue, withSchedules bool,
+	written map[string]map[string]string,
 ) (map[string]servedTenantValues, error) {
-	ownedBy, droppedBy, res, err := keyedRows(cfg, at)
+	name := writtenNamer(func() map[string]map[string]string { return written })
+	ownedBy, droppedBy, res, err := keyedRows(cfg, at, name)
 	if err != nil {
 		return nil, err
 	}
@@ -535,7 +537,7 @@ func servedValues(cfg *config.ThresholdConfig, at time.Time,
 		out[tenant] = tv
 	}
 	if withSchedules {
-		if err := addSchedules(cfg, at, out, res.ThresholdExpiries); err != nil {
+		if err := addSchedules(cfg, at, out, res.ThresholdExpiries, name); err != nil {
 			return nil, err
 		}
 	}
@@ -543,7 +545,7 @@ func servedValues(cfg *config.ThresholdConfig, at time.Time,
 }
 
 // spellAsWritten re-keys each tenant's maps with its keys as written
-// (LoadReport.WrittenKeys, #2031): the exporter's config keys a dimensional
+// (config.LoadDirReportWritten, #2031): the exporter's config keys a dimensional
 // key by its canonical spelling, and `da-guard effective` shows it as the
 // layer that supplied it wrote it — a reader joins the two documents by key.
 // The base keeps this document's canonical #1231 spelling (config.WrittenKey).
@@ -595,11 +597,29 @@ func renamed[V any](m map[string]V, name func(string) string) map[string]V {
 //
 // That failure is a *notGatherableError: the main gate's
 // metrics_not_gatherable reads this same verdict (gatherVerdict, #2031).
-func keyedRows(cfg *config.ThresholdConfig, at time.Time) (
+func keyedRows(cfg *config.ThresholdConfig, at time.Time, name keyNamer) (
 	served map[string]map[string][]config.ResolvedThreshold, dropped map[string]map[string][]string,
 	reserved scrape.Reserved, err error,
 ) {
-	return keyedRowsWith(cfg, at, (*config.ThresholdConfig).ResolveAtWithKeys)
+	return keyedRowsWith(cfg, at, (*config.ThresholdConfig).ResolveAtWithKeys, name)
+}
+
+// keyNamer spells a key of the exporter's config for a message: as written
+// (#2031). nil leaves it as the config keys it.
+type keyNamer func(tenant, key string) string
+
+// writtenNamer is a keyNamer over the written-key table written returns
+// (config.WrittenKey), asked for it only when a key is first named — a
+// Gather that fails — so a caller may compute it lazily.
+func writtenNamer(written func() map[string]map[string]string) keyNamer {
+	var w map[string]map[string]string
+	done := false
+	return func(tenant, key string) string {
+		if !done {
+			w, done = written(), true
+		}
+		return config.WrittenKey(w[tenant], key)
+	}
 }
 
 // notGatherableError is keyedRows' verdict that the exporter's /metrics
@@ -617,11 +637,11 @@ func (e *notGatherableError) Error() string {
 // gathered, "" when it can (or when the reading failed for another reason,
 // which served-values reports). For the main gate's metrics_not_gatherable
 // (#2031).
-func gatherVerdict(cfg *config.ThresholdConfig, at time.Time) string {
+func gatherVerdict(cfg *config.ThresholdConfig, at time.Time, name keyNamer) string {
 	if cfg == nil {
 		return ""
 	}
-	_, _, _, err := keyedRowsWith(cfg, at, (*config.ThresholdConfig).ResolveAtWithKeysSilent)
+	_, _, _, err := keyedRowsWith(cfg, at, (*config.ThresholdConfig).ResolveAtWithKeysSilent, name)
 	var ng *notGatherableError
 	if errors.As(err, &ng) {
 		return ng.Error()
@@ -632,6 +652,7 @@ func gatherVerdict(cfg *config.ThresholdConfig, at time.Time) string {
 // keyedRowsWith is keyedRows with the user_threshold resolve as a parameter.
 func keyedRowsWith(cfg *config.ThresholdConfig, at time.Time,
 	resolve func(*config.ThresholdConfig, time.Time) ([]config.KeyedThreshold, config.ResolveStats, error),
+	name keyNamer,
 ) (
 	served map[string]map[string][]config.ResolvedThreshold, dropped map[string]map[string][]string,
 	reserved scrape.Reserved, err error,
@@ -668,7 +689,7 @@ func keyedRowsWith(cfg *config.ThresholdConfig, at time.Time,
 		return nil, nil, scrape.Reserved{}, keyErr
 	}
 	if gerr != nil {
-		return nil, nil, scrape.Reserved{}, &notGatherableError{detail: fmt.Sprintf("%s: %v", sameSeriesKeys(keyed, results), gerr)}
+		return nil, nil, scrape.Reserved{}, &notGatherableError{detail: fmt.Sprintf("%s: %v", sameSeriesKeys(keyed, results, name), gerr)}
 	}
 	if observed != 1 {
 		return nil, nil, scrape.Reserved{}, fmt.Errorf("internal: the collector reported its reserved-key readings %d times, want 1", observed)
@@ -745,9 +766,14 @@ type emitResult struct {
 }
 
 // sameSeriesKeys names, for the Gather error message only, the keys of rows
-// whose built metrics carry the same label set. Gather has already decided
-// the tree fails; this just points at the config keys behind it.
-func sameSeriesKeys(keyed []config.KeyedThreshold, results []emitResult) string {
+// whose built metrics carry the same label set, spelled by name (nil: as the
+// config keys them), each pair and the list sorted so the message does not
+// depend on map order. Gather has already decided the tree fails; this just
+// points at the config keys behind it.
+func sameSeriesKeys(keyed []config.KeyedThreshold, results []emitResult, name keyNamer) string {
+	if name == nil {
+		name = func(_, key string) string { return key }
+	}
 	seen := map[string]string{}
 	var named []string
 	for i, r := range results {
@@ -765,8 +791,12 @@ func sameSeriesKeys(keyed []config.KeyedThreshold, results []emitResult) string 
 		sort.Strings(pairs)
 		id := keyed[i].Tenant + "\x00" + strings.Join(pairs, ",")
 		if first, dup := seen[id]; dup {
+			a, b := name(keyed[i].Tenant, first), name(keyed[i].Tenant, keyed[i].Key)
+			if b < a {
+				a, b = b, a
+			}
 			named = append(named, fmt.Sprintf("tenant %s: keys %q and %q give one series user_threshold{%s}",
-				keyed[i].Tenant, first, keyed[i].Key, strings.Join(pairs, ",")))
+				keyed[i].Tenant, a, b, strings.Join(pairs, ",")))
 			continue
 		}
 		seen[id] = keyed[i].Key
@@ -774,6 +804,7 @@ func sameSeriesKeys(keyed []config.KeyedThreshold, results []emitResult) string 
 	if len(named) == 0 {
 		return ""
 	}
+	sort.Strings(named)
 	return " (" + strings.Join(named, "; ") + ")"
 }
 

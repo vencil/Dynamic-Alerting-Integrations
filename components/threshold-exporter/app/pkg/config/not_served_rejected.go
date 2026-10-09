@@ -243,6 +243,9 @@ func spellingCandidates(scan *TreeScan, built *FlatBuild, r *effectiveResolver) 
 // EffectiveConfig.KeySpellings (#2031) — what `da-guard served-values` spells
 // its keys with, so they read as `da-guard effective`'s do. nil when none.
 func writtenKeys(scan *TreeScan, built *FlatBuild) map[string]map[string]string {
+	if !built.maySpell() {
+		return nil
+	}
 	r := newEffectiveResolver(scan)
 	spelled := spellingCandidates(scan, built, r)
 	var out map[string]map[string]string

@@ -208,3 +208,44 @@ func TestSpelling_FindingNamesTheKeyAsWritten(t *testing.T) {
 		t.Errorf("redundant_override = %+v, want Field and message naming %s", got, written)
 	}
 }
+
+// Only a whole key is re-spelled in a message: a key holding another's
+// canonical spelling inside it keeps its own text.
+func TestSpelling_FindingKeepsAKeyThatContainsAnother(t *testing.T) {
+	t.Parallel()
+	const other = `xredis_queue_length{a="1", b="2"}`
+	_, fs := guardFindingsOf(t, map[string]string{
+		"_defaults.yaml": spellingRoot,
+		"tx.yaml":        "tenants:\n  tx:\n    'redis_queue_length{b=\"2\",a=\"1\"}': 5\n    '" + other + "': abc\n",
+	})
+	for _, f := range fs {
+		if f.Field == other && !strings.Contains(f.Message, "`"+other+"`") {
+			t.Errorf("message re-spells part of %s: %s", other, f.Message)
+		}
+	}
+}
+
+// A tree whose /metrics cannot be gathered names the keys as written, in a
+// fixed order, in served-values' error and in the gate's finding alike.
+func TestSpelling_NotGatherableNamesKeysAsWritten(t *testing.T) {
+	t.Parallel()
+	files := map[string]string{
+		"_defaults.yaml": spellingRoot,
+		"tx.yaml":        "tenants:\n  tx:\n    'redis_queue_length{ q=~\"a\" }': 2\n    'redis_queue_length{q_re=\"a\"}': 3\n",
+	}
+	want := `keys "redis_queue_length{ q=~\"a\" }" and "redis_queue_length{q_re=\"a\"}"`
+	for i := 0; i < 5; i++ {
+		code, _, _, stderr := served(t, files, "")
+		if code != exitCallerErr || !strings.Contains(stderr, want) {
+			t.Fatalf("served-values exit %d, stderr %q: want %s", code, stderr, want)
+		}
+		_, fs := guardFindingsOf(t, files)
+		found := false
+		for _, f := range fs {
+			found = found || (f.Kind == guard.FindingMetricsNotGatherable && strings.Contains(f.Message, want))
+		}
+		if !found {
+			t.Fatalf("no metrics_not_gatherable naming %s: %+v", want, fs)
+		}
+	}
+}

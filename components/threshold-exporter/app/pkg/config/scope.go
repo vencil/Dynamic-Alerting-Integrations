@@ -207,6 +207,10 @@ type ScopedTenants struct {
 	// metrics_not_gatherable (#2031). nil when the tree has no file.
 	Config *ThresholdConfig
 
+	// scan and built are what Config was read off, for WrittenKeys.
+	scan  *TreeScan
+	built *FlatBuild
+
 	// ScheduleNulls is every threshold, in a file the exporter reads that
 	// bears on the scope, written as a schedule with override windows and a
 	// null in it — refused at validation time (#2708, scopeScheduleNulls).
@@ -448,7 +452,7 @@ func scopeEffective(configDir, scopeDir string, wholeTree bool) (*ScopedTenants,
 		ScheduleNulls:          scopeScheduleNulls(scan, filepath.ToSlash(rel), inScope, parseFailed),
 	}
 	if built != nil {
-		out.Config = &built.Config
+		out.Config, out.scan, out.built = &built.Config, scan, built
 	}
 	// The build's verdicts, kept for the in-scope tenants only (#1976,
 	// #2518), and the reserved keys of the same build's subtree chain (#2388).
@@ -703,4 +707,15 @@ func pathAtOrBelow(p, dir string, wholeTree bool) bool {
 		return true
 	}
 	return strings.HasPrefix(p, dir+string(filepath.Separator))
+}
+
+// WrittenKeys is, over the whole tree, each tenant's
+// EffectiveConfig.KeySpellings (#2031; nil when none): how to spell a key of
+// Config as written. Resolved on each call; da-guard asks it only to name
+// the keys of a /metrics that cannot be gathered.
+func (s *ScopedTenants) WrittenKeys() map[string]map[string]string {
+	if s.built == nil {
+		return nil
+	}
+	return writtenKeys(s.scan, s.built)
 }
