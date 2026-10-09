@@ -508,9 +508,10 @@ def convert_opa_violations(
             `violations contains msg if {...}` set of strings, or
             `"severity": null`, reported a pass).
 
-    A string `severity` is compared case-insensitively: `warning` (any
-    case) is warning-level; every other string, and a missing `severity`,
-    is error-level. Missing `tenant` / `msg` / `field` get their defaults.
+    A string `severity` is compared case-insensitively, ASCII only:
+    `warning` in any ASCII case is warning-level; every other string
+    (`warnıng` with a dotless ı included), and a missing `severity`, is
+    error-level. Missing `tenant` / `msg` / `field` get their defaults.
     """
     result = PolicyResult(
         tenants_evaluated=tenants_count,
@@ -529,9 +530,10 @@ def convert_opa_violations(
             raise OpaEvalError(
                 f"violations item {i} has a severity that is not a string: got JSON "
                 f"{_json_type(severity)} {_preview(severity)}; expected {expected}")
-        level = severity.upper()
-        if level not in ("ERROR", "WARNING"):
-            level = "ERROR"
+        # ASCII-only case folding: `str.upper()` maps "warnıng" (U+0131) to
+        # "WARNING", which would turn an error into a warning (#2724).
+        level = ("WARNING" if severity.isascii() and severity.lower() == "warning"
+                 else "ERROR")
         result.violations.append(Violation(
             tenant=str(v.get("tenant", "unknown")),
             level=level,

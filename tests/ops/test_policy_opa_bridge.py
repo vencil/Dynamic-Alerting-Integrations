@@ -790,9 +790,10 @@ class _RawServer:
     for responses http.server cannot produce (a bad status line, a body cut
     short of its Content-Length).
 
-    It reads the WHOLE request (headers, then Content-Length bytes of body)
-    before answering, and after answering half-closes and drains until the
-    client hangs up. Closing with request bytes still unread makes the kernel
+    Before answering it reads the headers and then the number of body bytes
+    their Content-Length names (no chunked decoding: urllib sends this
+    tool's POST with a Content-Length); after answering it half-closes and
+    drains until the client hangs up. Closing with request bytes still unread makes the kernel
     send RST, and the client then sees ConnectionResetError instead of the
     malformed response under test — a flake under parallel load."""
 
@@ -954,6 +955,24 @@ class TestOpaNotEvaluatedIsCallerError:
         finally:
             srv.close()
         assert rc == 0 and "soft" in out and "Result: PASS" in out
+
+    @pytest.mark.parametrize("severity, rc_want", [
+        ("WARNING", 0), ("Warning", 0),
+        ("warnıng", 1),   # dotless ı: str.upper() would make it "WARNING"
+        ("warninG​", 1),  # zero-width space
+    ], ids=["upper", "title", "dotless-i", "zwsp"])
+    def test_rest_severity_is_warning_only_in_ascii(self, monkeypatch, capsys, tree,
+                                                   severity, rc_want):
+        body = json.dumps({"result": [{"msg": "m", "severity": severity,
+                                       "tenant": "tenant-a", "field": "x"}]}).encode("utf-8")
+        srv = _Server(200, body)
+        try:
+            rc, out, _ = self._run(monkeypatch, capsys,
+                                   ["--config-dir", tree, "--opa-url", srv.url, "--ci"])
+        finally:
+            srv.close()
+        assert rc == rc_want, out
+        assert ("[ERROR]" in out) == bool(rc_want), out
 
     def test_rest_defined_empty_set_still_passes(self, monkeypatch, capsys, tree):
         srv = _Server(200, b'{"result": []}')
