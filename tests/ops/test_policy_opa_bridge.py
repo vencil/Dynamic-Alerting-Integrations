@@ -180,22 +180,71 @@ class TestCallOpaRest:
         assert len(out) == 1
         assert out[0]["msg"] == "bad"
 
-    def test_url_error_returns_empty_with_stderr(self, monkeypatch, capsys):
+    # #2724: these used to return [] — "no violations" — so main reported
+    # PASS rc 0. Each is now OpaEvalError (main: rc 2).
+    def test_url_error_raises(self, monkeypatch):
         def boom(*a, **kw):
             raise URLError("connection refused")
         monkeypatch.setattr(pob, "urlopen", boom)
-        assert pob.call_opa_rest("http://x", "p", {}) == []
-        assert "OPA API call failed" in capsys.readouterr().err
+        with pytest.raises(pob.OpaEvalError, match="OPA API call failed"):
+            pob.call_opa_rest("http://x", "p", {})
 
-    def test_invalid_json_returns_empty(self, monkeypatch, capsys):
+    def test_timeout_raises(self, monkeypatch):
+        def boom(*a, **kw):
+            raise TimeoutError("timed out")
+        monkeypatch.setattr(pob, "urlopen", boom)
+        with pytest.raises(pob.OpaEvalError, match="timed out"):
+            pob.call_opa_rest("http://x", "p", {})
+
+    def test_bad_url_raises(self):
+        with pytest.raises(pob.OpaEvalError, match="OPA API call failed"):
+            pob.call_opa_rest("not-a-url", "p", {})
+
+    def test_invalid_json_raises(self, monkeypatch):
         self._stub_urlopen(monkeypatch, b"{not json")
-        assert pob.call_opa_rest("http://x", "p", {}) == []
-        assert "OPA response parsing failed" in capsys.readouterr().err
+        with pytest.raises(pob.OpaEvalError, match="is not JSON"):
+            pob.call_opa_rest("http://x", "p", {})
 
-    def test_result_not_a_list_returns_empty(self, monkeypatch):
+    def test_result_not_a_list_raises(self, monkeypatch):
         body = json.dumps({"result": "string-not-list"}).encode("utf-8")
         self._stub_urlopen(monkeypatch, body)
+        with pytest.raises(pob.OpaEvalError, match="not a set or array"):
+            pob.call_opa_rest("http://x", "p", {})
+
+    def test_undefined_raises(self, monkeypatch):
+        """OPA answers `{}` for a path with no value: nothing was evaluated."""
+        self._stub_urlopen(monkeypatch, b"{}")
+        with pytest.raises(pob.OpaEvalError, match="undefined"):
+            pob.call_opa_rest("http://x", "p", {})
+
+    def test_defined_empty_set_is_no_violation(self, monkeypatch):
+        self._stub_urlopen(monkeypatch, b'{"result": []}')
         assert pob.call_opa_rest("http://x", "p", {}) == []
+
+    @pytest.mark.parametrize("package, path", [
+        ("dynamic_alerting.policy", "/v1/data/dynamic_alerting/policy/violations"),
+        ("dynamic_alerting/policy", "/v1/data/dynamic_alerting/policy/violations"),
+        ("a.b.c", "/v1/data/a/b/c/violations"),
+    ])
+    def test_package_dots_become_slashes(self, monkeypatch, package, path):
+        """#2724: OPA's data API takes the package with `/`; the default
+        `dynamic_alerting.policy` sent as written is one key, undefined."""
+        captured = {}
+
+        class FakeResp:
+            def read(self):
+                return b'{"result": []}'
+            def __enter__(self):
+                return self
+            def __exit__(self, *a):
+                return False
+
+        def fake_urlopen(req, timeout):
+            captured["url"] = req.full_url
+            return FakeResp()
+        monkeypatch.setattr(pob, "urlopen", fake_urlopen)
+        pob.call_opa_rest("http://localhost:8181", package, {})
+        assert captured["url"] == "http://localhost:8181" + path
 
     def test_strips_trailing_slash_from_url(self, monkeypatch):
         captured = {}
@@ -226,42 +275,92 @@ class TestCallOpaBinary:
         proc = subprocess.CompletedProcess(
             args=[], returncode=returncode, stdout=stdout, stderr=stderr,
         )
-        monkeypatch.setattr(pob.subprocess, "run", lambda *a, **kw: proc)
+        calls = []
+
+        def fake_run(cmd, **kw):
+            calls.append((cmd, kw))
+            return proc
+        monkeypatch.setattr(pob.subprocess, "run", fake_run)
+        return calls
+
+    @staticmethod
+    def _eval_doc(value):
+        """`opa eval --format json`'s shape for a defined query."""
+        return json.dumps({"result": [{"expressions": [
+            {"value": value, "text": "data.pkg.violations",
+             "location": {"row": 1, "col": 1}}]}]})
 
     def test_success_returns_violations(self, monkeypatch):
-        self._stub_run(monkeypatch, 0, json.dumps({
-            "result": [{"msg": "x", "severity": "error", "tenant": "t", "field": "f"}],
-        }))
+        self._stub_run(monkeypatch, 0, self._eval_doc(
+            [{"msg": "x", "severity": "error", "tenant": "t", "field": "f"}]))
         out = pob.call_opa_binary("opa", "/p.rego", "pkg", {})
-        assert len(out) == 1
+        assert out == [{"msg": "x", "severity": "error", "tenant": "t", "field": "f"}]
 
-    def test_nonzero_returncode_returns_empty(self, monkeypatch, capsys):
+    def test_command_passes_input_on_stdin(self, monkeypatch):
+        """#2724: `-I` takes no value; the old command put the input JSON after
+        it, so OPA saw a second query and refused every run."""
+        calls = self._stub_run(monkeypatch, 0, self._eval_doc([]))
+        pob.call_opa_binary("opa", "/p.rego", "dynamic_alerting.policy", {"tenants": {}})
+        (cmd, kw), = calls
+        assert cmd == ["opa", "eval", "--format", "json", "-d", "/p.rego",
+                       "--stdin-input", "data.dynamic_alerting.policy.violations"]
+        assert json.loads(kw["input"]) == {"tenants": {}}
+
+    @pytest.mark.parametrize("package, query", [
+        ("dynamic_alerting.policy", "data.dynamic_alerting.policy.violations"),
+        ("dynamic_alerting/policy", "data.dynamic_alerting.policy.violations"),
+    ])
+    def test_package_query(self, package, query):
+        assert pob.package_query(package) == query
+
+    # #2724: these used to return [] — PASS rc 0. Each is now OpaEvalError.
+    def test_nonzero_returncode_raises(self, monkeypatch):
         self._stub_run(monkeypatch, 1, "", "policy parse error")
-        assert pob.call_opa_binary("opa", "/p.rego", "pkg", {}) == []
-        assert "OPA eval failed" in capsys.readouterr().err
+        with pytest.raises(pob.OpaEvalError, match="OPA eval failed.*policy parse error"):
+            pob.call_opa_binary("opa", "/p.rego", "pkg", {})
 
-    def test_binary_not_found_returns_empty(self, monkeypatch, capsys):
+    def test_eval_errors_on_stdout_are_named(self, monkeypatch):
+        self._stub_run(monkeypatch, 2, json.dumps({"errors": [{
+            "message": "unexpected eof token", "code": "rego_parse_error",
+            "location": {"file": "/p.rego", "row": 3}}]}), "")
+        with pytest.raises(pob.OpaEvalError,
+                           match=r"rego_parse_error: unexpected eof token \(/p.rego:3\)"):
+            pob.call_opa_binary("opa", "/p.rego", "pkg", {})
+
+    def test_binary_not_found_raises(self, monkeypatch):
         def boom(*a, **kw):
             raise FileNotFoundError("opa not found")
         monkeypatch.setattr(pob.subprocess, "run", boom)
-        assert pob.call_opa_binary("opa", "/p.rego", "pkg", {}) == []
-        assert "OPA binary not found" in capsys.readouterr().err
+        with pytest.raises(pob.OpaEvalError, match="OPA binary not found"):
+            pob.call_opa_binary("opa", "/p.rego", "pkg", {})
 
-    def test_timeout_returns_empty(self, monkeypatch, capsys):
+    def test_timeout_raises(self, monkeypatch):
         def boom(*a, **kw):
             raise subprocess.TimeoutExpired(cmd="opa", timeout=10)
         monkeypatch.setattr(pob.subprocess, "run", boom)
-        assert pob.call_opa_binary("opa", "/p.rego", "pkg", {}) == []
-        assert "OPA eval timeout" in capsys.readouterr().err
+        with pytest.raises(pob.OpaEvalError, match="timed out"):
+            pob.call_opa_binary("opa", "/p.rego", "pkg", {})
 
-    def test_invalid_json_output_returns_empty(self, monkeypatch, capsys):
+    def test_invalid_json_output_raises(self, monkeypatch):
         self._stub_run(monkeypatch, 0, "{not json", "")
-        assert pob.call_opa_binary("opa", "/p.rego", "pkg", {}) == []
-        assert "OPA output parsing failed" in capsys.readouterr().err
+        with pytest.raises(pob.OpaEvalError, match="is not JSON"):
+            pob.call_opa_binary("opa", "/p.rego", "pkg", {})
 
-    def test_result_not_a_list_returns_empty(self, monkeypatch):
+    def test_undefined_raises(self, monkeypatch):
+        """`opa eval` prints `{}` rc 0 for an undefined query."""
+        self._stub_run(monkeypatch, 0, "{}\n", "")
+        with pytest.raises(pob.OpaEvalError, match="undefined"):
+            pob.call_opa_binary("opa", "/p.rego", "pkg", {})
+
+    def test_result_without_expressions_raises(self, monkeypatch):
         self._stub_run(monkeypatch, 0, json.dumps({"result": "scalar"}), "")
-        assert pob.call_opa_binary("opa", "/p.rego", "pkg", {}) == []
+        with pytest.raises(pob.OpaEvalError, match="expressions"):
+            pob.call_opa_binary("opa", "/p.rego", "pkg", {})
+
+    def test_value_not_a_list_raises(self, monkeypatch):
+        self._stub_run(monkeypatch, 0, self._eval_doc({"a": 1}), "")
+        with pytest.raises(pob.OpaEvalError, match="not a set or array"):
+            pob.call_opa_binary("opa", "/p.rego", "pkg", {})
 
 
 # ---------------------------------------------------------------------------
@@ -612,3 +711,295 @@ class TestMain:
         assert rc == EXIT_CALLER_ERROR
         err = capsys.readouterr().err
         assert "必須指定" in err
+
+
+# ---------------------------------------------------------------------------
+# #2724: OPA that did not evaluate is exit 2, not "All policies passed."
+# ---------------------------------------------------------------------------
+# Before #2724 every one of these shapes printed `✓ All policies passed.` and
+# exited 0, `--ci` included. These drive `main` end to end (real da-guard, a
+# real tree); only OPA's side is a fake, so no `opa` binary is needed.
+_TENANT_VIOLATES = {"_defaults.yaml": "defaults:\n  mysql_connections: 80\n",
+                    "team/tenant-a.yaml": 'tenants:\n  tenant-a:\n    mysql_connections: "95"\n'}
+_TENANT_CLEAN = {"_defaults.yaml": "defaults:\n  mysql_connections: 80\n",
+                 "team/tenant-a.yaml": 'tenants:\n  tenant-a:\n    mysql_connections: "70"\n'}
+
+
+def _fake_opa(tmp_path, body: str):
+    """An executable `opa` stand-in (POSIX shell)."""
+    if os.name == "nt":
+        pytest.skip("fake `opa` is a POSIX shell script")
+    f = tmp_path / "fake-opa"
+    f.write_text("#!/bin/sh\n" + body, encoding="utf-8")
+    f.chmod(0o755)
+    return str(f)
+
+
+def _closed_port() -> int:
+    import socket
+    s = socket.socket()
+    s.bind(("127.0.0.1", 0))
+    port = s.getsockname()[1]
+    s.close()
+    return port
+
+
+class _Server:
+    """A local HTTP server answering every POST with a fixed status + body."""
+
+    def __init__(self, status: int, body: bytes):
+        import http.server
+        import threading
+
+        class H(http.server.BaseHTTPRequestHandler):
+            def do_POST(self):  # noqa: N802
+                self.rfile.read(int(self.headers.get("Content-Length", 0)))
+                self.send_response(status)
+                self.end_headers()
+                self.wfile.write(body)
+
+            def log_message(self, *a):
+                pass
+
+        self.httpd = http.server.HTTPServer(("127.0.0.1", 0), H)
+        self.url = f"http://127.0.0.1:{self.httpd.server_address[1]}"
+        threading.Thread(target=self.httpd.serve_forever, daemon=True).start()
+
+    def close(self):
+        self.httpd.shutdown()
+        self.httpd.server_close()
+
+
+@pytest.mark.usefixtures("da_guard_env")
+class TestOpaNotEvaluatedIsCallerError:
+    @pytest.fixture
+    def tree(self, tmp_path):
+        return str(_write_tree(tmp_path / "conf.d", _TENANT_VIOLATES))
+
+    def _run(self, monkeypatch, capsys, argv):
+        monkeypatch.setattr(pob, "detect_cli_lang", lambda: "en")
+        rc = pob.main(argv)
+        cap = capsys.readouterr()
+        return rc, cap.out, cap.err
+
+    def _assert_caller_error(self, rc, out, err, needle):
+        assert rc == EXIT_CALLER_ERROR, (rc, out, err)
+        assert "All policies passed" not in out
+        assert needle in err, err
+        assert "Traceback" not in err
+
+    def test_unreachable_opa_url(self, monkeypatch, capsys, tree):
+        url = f"http://127.0.0.1:{_closed_port()}"
+        rc, out, err = self._run(monkeypatch, capsys,
+                                 ["--config-dir", tree, "--opa-url", url, "--ci"])
+        self._assert_caller_error(rc, out, err, "OPA API call failed")
+
+    def test_unreachable_opa_url_json_leaves_stdout_empty(self, monkeypatch, capsys, tree):
+        """This tool's caller-error convention: stderr only, no envelope
+        (`test_yaml_file_error::test_decorated_tools_leave_stdout_empty_under_json`)."""
+        url = f"http://127.0.0.1:{_closed_port()}"
+        rc, out, err = self._run(monkeypatch, capsys,
+                                 ["--config-dir", tree, "--opa-url", url, "--json"])
+        self._assert_caller_error(rc, out, err, "OPA API call failed")
+        assert out == ""
+
+    @pytest.mark.parametrize("status, body, needle", [
+        (200, b"<html>not json", "is not JSON"),
+        (200, b"{}", "undefined"),
+        (200, b'{"result": {"a": 1}}', "not a set or array"),
+        (500, b'{"code": "internal_error"}', "HTTP 500"),
+    ], ids=["garbage", "undefined", "not-a-list", "http-500"])
+    def test_rest_answer_that_is_not_an_evaluation(self, monkeypatch, capsys, tree,
+                                                   status, body, needle):
+        srv = _Server(status, body)
+        try:
+            rc, out, err = self._run(monkeypatch, capsys,
+                                     ["--config-dir", tree, "--opa-url", srv.url, "--ci"])
+        finally:
+            srv.close()
+        self._assert_caller_error(rc, out, err, needle)
+
+    def test_rest_defined_empty_set_still_passes(self, monkeypatch, capsys, tree):
+        srv = _Server(200, b'{"result": []}')
+        try:
+            rc, out, _ = self._run(monkeypatch, capsys,
+                                   ["--config-dir", tree, "--opa-url", srv.url, "--ci"])
+        finally:
+            srv.close()
+        assert rc == 0 and "All policies passed" in out
+
+    @pytest.mark.parametrize("script, needle", [
+        ("echo 'not json'\n", "is not JSON"),
+        ("echo '{}'\n", "undefined"),
+        ("echo 'rego_parse_error' >&2\nexit 1\n", "OPA eval failed (rc 1): rego_parse_error"),
+    ], ids=["garbage", "undefined", "eval-fails"])
+    def test_binary_that_does_not_evaluate(self, monkeypatch, capsys, tmp_path, tree,
+                                           script, needle):
+        opa = _fake_opa(tmp_path, script)
+        rc, out, err = self._run(monkeypatch, capsys, [
+            "--config-dir", tree, "--opa-binary", opa,
+            "--policy-path", str(tmp_path / "p.rego"), "--ci"])
+        self._assert_caller_error(rc, out, err, needle)
+
+    def test_binary_missing(self, monkeypatch, capsys, tmp_path, tree):
+        rc, out, err = self._run(monkeypatch, capsys, [
+            "--config-dir", tree, "--opa-binary", str(tmp_path / "no-such-opa"),
+            "--policy-path", str(tmp_path / "p.rego"), "--ci"])
+        self._assert_caller_error(rc, out, err, "OPA binary not found")
+
+    def test_binary_timeout(self, monkeypatch, capsys, tmp_path, tree):
+        monkeypatch.setattr(pob, "OPA_TIMEOUT_SECONDS", 0.5)
+        opa = _fake_opa(tmp_path, "exec sleep 5\n")
+        rc, out, err = self._run(monkeypatch, capsys, [
+            "--config-dir", tree, "--opa-binary", opa,
+            "--policy-path", str(tmp_path / "p.rego"), "--ci"])
+        self._assert_caller_error(rc, out, err, "timed out")
+
+    def test_binary_receives_input_on_stdin(self, monkeypatch, capsys, tmp_path, tree):
+        """The fake echoes a violation built from what it read on stdin: a
+        tenant reaches the report only if the input arrived there (#2724: the
+        old `-I <json>` made OPA refuse every run)."""
+        opa = _fake_opa(tmp_path, (
+            'python3 -c "import json,sys; d=json.load(sys.stdin); '
+            't=sorted(d[\'served\'])[0]; '
+            'print(json.dumps({\'result\':[{\'expressions\':[{\'value\':'
+            '[{\'msg\':\'m\',\'severity\':\'error\',\'tenant\':t,\'field\':\'f\'}]}]}]}))"\n'))
+        rc, out, err = self._run(monkeypatch, capsys, [
+            "--config-dir", tree, "--opa-binary", opa,
+            "--policy-path", str(tmp_path / "p.rego"), "--ci"])
+        assert rc == 1, (out, err)
+        assert "[tenant-a]" in out
+
+
+# ---------------------------------------------------------------------------
+# #2724: against a real `opa` (binary and REST server)
+# ---------------------------------------------------------------------------
+# Every test above fakes OPA's side; these run the real thing, so the command
+# line, the query, the REST path and the response shapes are OPA's own. The
+# binary comes from $OPA_BINARY, else `opa` on PATH; without one the class
+# SKIPS and says so — it is not on CI's runners today.
+def _opa_binary():
+    import shutil
+    path = os.environ.get("OPA_BINARY") or shutil.which("opa")
+    if not path or not os.path.isfile(path):
+        pytest.skip("NOT MEASURED: no real `opa` — set OPA_BINARY or put `opa` on PATH "
+                    "to run policy_opa_bridge against real OPA (#2724)")
+    return path
+
+
+_REGO = """package dynamic_alerting.policy
+import rego.v1
+violations contains v if {
+  some t
+  input.served[t].mysql_connections > 90
+  v := {"msg": sprintf("%s too high", [t]), "severity": "error",
+        "tenant": t, "field": "mysql_connections"}
+}
+"""
+
+
+@pytest.fixture(scope="module")
+def real_opa():
+    return _opa_binary()
+
+
+@pytest.fixture(scope="module")
+def rego_file(tmp_path_factory):
+    d = tmp_path_factory.mktemp("rego")
+    (d / "thr.rego").write_text(_REGO, encoding="utf-8")
+    (d / "broken.rego").write_text("package dynamic_alerting.policy\nviolations contains v if {\n",
+                                   encoding="utf-8")
+    return d
+
+
+@pytest.fixture(scope="module")
+def opa_server(real_opa, rego_file):
+    import socket
+    import time
+    port = _closed_port()
+    proc = subprocess.Popen([real_opa, "run", "--server", "--addr", f"127.0.0.1:{port}",
+                             str(rego_file / "thr.rego")],
+                            stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+    try:
+        for _ in range(100):
+            try:
+                socket.create_connection(("127.0.0.1", port), 0.2).close()
+                break
+            except OSError:
+                time.sleep(0.1)
+        else:
+            pytest.fail("opa server did not start")
+        yield f"http://127.0.0.1:{port}"
+    finally:
+        proc.terminate()
+        proc.wait(10)
+
+
+@pytest.mark.usefixtures("da_guard_env")
+class TestRealOpa:
+    def _run(self, monkeypatch, capsys, argv):
+        monkeypatch.setattr(pob, "detect_cli_lang", lambda: "en")
+        rc = pob.main(argv)
+        cap = capsys.readouterr()
+        return rc, cap.out, cap.err
+
+    @pytest.mark.parametrize("files, rc_want", [(_TENANT_VIOLATES, 1), (_TENANT_CLEAN, 0)],
+                             ids=["violates", "clean"])
+    def test_binary_default_package(self, monkeypatch, capsys, tmp_path, real_opa,
+                                    rego_file, files, rc_want):
+        tree = str(_write_tree(tmp_path / "conf.d", files))
+        rc, out, err = self._run(monkeypatch, capsys, [
+            "--config-dir", tree, "--opa-binary", real_opa,
+            "--policy-path", str(rego_file / "thr.rego"), "--ci"])
+        assert rc == rc_want, (out, err)
+        if rc_want:
+            assert "tenant-a too high" in out
+
+    @pytest.mark.parametrize("files, rc_want", [(_TENANT_VIOLATES, 1), (_TENANT_CLEAN, 0)],
+                             ids=["violates", "clean"])
+    @pytest.mark.parametrize("package", ["dynamic_alerting.policy", "dynamic_alerting/policy"])
+    def test_rest(self, monkeypatch, capsys, tmp_path, opa_server, files, rc_want, package):
+        tree = str(_write_tree(tmp_path / "conf.d", files))
+        rc, out, err = self._run(monkeypatch, capsys, [
+            "--config-dir", tree, "--opa-url", opa_server,
+            "--policy-package", package, "--ci"])
+        assert rc == rc_want, (out, err)
+
+    def test_binary_undefined_package(self, monkeypatch, capsys, tmp_path, real_opa, rego_file):
+        tree = str(_write_tree(tmp_path / "conf.d", _TENANT_VIOLATES))
+        rc, out, err = self._run(monkeypatch, capsys, [
+            "--config-dir", tree, "--opa-binary", real_opa,
+            "--policy-path", str(rego_file / "thr.rego"),
+            "--policy-package", "no.such.pkg", "--ci"])
+        assert rc == EXIT_CALLER_ERROR and "undefined" in err, (out, err)
+
+    def test_rest_undefined_package(self, monkeypatch, capsys, tmp_path, opa_server):
+        tree = str(_write_tree(tmp_path / "conf.d", _TENANT_VIOLATES))
+        rc, out, err = self._run(monkeypatch, capsys, [
+            "--config-dir", tree, "--opa-url", opa_server,
+            "--policy-package", "no.such.pkg", "--ci"])
+        assert rc == EXIT_CALLER_ERROR and "undefined" in err, (out, err)
+
+    def test_binary_broken_rego(self, monkeypatch, capsys, tmp_path, real_opa, rego_file):
+        tree = str(_write_tree(tmp_path / "conf.d", _TENANT_VIOLATES))
+        rc, out, err = self._run(monkeypatch, capsys, [
+            "--config-dir", tree, "--opa-binary", real_opa,
+            "--policy-path", str(rego_file / "broken.rego"), "--ci"])
+        assert rc == EXIT_CALLER_ERROR and "rego_parse_error" in err, (out, err)
+
+    def test_defaults_shape_as_documented(self, monkeypatch, capsys, tmp_path, real_opa):
+        """The module docstring: `input.defaults` is the carrier's top-level
+        keys, not unwrapped — a rego reads `input.defaults.defaults.<key>`."""
+        d = tmp_path / "rego"
+        d.mkdir()
+        (d / "d.rego").write_text(
+            "package dynamic_alerting.policy\nimport rego.v1\n"
+            "violations contains v if {\n"
+            "  input.defaults.defaults.mysql_connections == 80\n"
+            '  v := {"msg": "seen", "severity": "error", "tenant": "-", "field": "d"}\n}\n',
+            encoding="utf-8")
+        tree = str(_write_tree(tmp_path / "conf.d", _TENANT_CLEAN))
+        rc, out, err = self._run(monkeypatch, capsys, [
+            "--config-dir", tree, "--opa-binary", real_opa,
+            "--policy-path", str(d / "d.rego"), "--ci"])
+        assert rc == 1 and "seen" in out, (out, err)
