@@ -1300,6 +1300,9 @@ PYTHON_ENTRIES_THIS_SCANNER_JUSTIFIES = {
     # GAINED by #1471: tests/ops/test_bench_workload_record_trigger.py reads the
     # workload-closure SSOT to pin bench-workload-record.yaml's literal trigger.
     ".github/bench-reference.yaml",
+    # GAINED by #2761: tests/dx/test_session_start.py copies and runs the
+    # real `.claude/hooks/session-start.sh`.
+    ".claude/hooks/session-start.sh",
 }
 
 

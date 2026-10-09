@@ -28,7 +28,7 @@ lang: zh
 cat /tmp/vibe-session-start-hook.ran     # 沒有這個檔 = hook 沒跑
 ```
 
-有 `RESULT=ok` ⇒ 閘門已就緒。**檔案不存在或 `RESULT=failed` ⇒ 手動跑一次**：
+有 `RESULT=ok` ⇒ 閘門已就緒。**檔案不存在或 `RESULT=failed` ⇒ 手動跑一次**（`failed` 時先看括號裡的原因：`install_prepush_hook` 是 pre-push 安裝器沒裝成，原因在它的輸出裡；它拒絕的 hooks 狀態不先處理，重跑也會同樣失敗）：
 
 ```bash
 CLAUDE_CODE_REMOTE=true CLAUDE_PROJECT_DIR="$PWD" bash .claude/hooks/session-start.sh

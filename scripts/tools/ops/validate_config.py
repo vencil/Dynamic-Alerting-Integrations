@@ -645,11 +645,17 @@ def check_yaml_quoting(config_dir: str) -> dict[str, object]:
     in a field that takes a boolean is listed too, as WARN (the row is WARN
     when that is all it found): PyYAML reads a boolean, some of the
     exporter's readers the string — `_lib_io.find_yaml11_bool_words`. An
-    explicit `!!bool yes` (yaml.v3 does not accept it) is the same WARN,
-    wherever it is; whether the exporter can still read that file is not
-    this row's verdict but da-guard's — a file its load drops FAILs the
-    rows that read the tree through it, with the exporter's reason
-    (`_with_exporter_reasons`). A root `_defaults*` file's
+    explicit `!!bool yes` (yaml.v3 does not accept it) is the same WARN;
+    whether the exporter can still read that file is not this row's
+    verdict but da-guard's — a file its load drops FAILs the rows that read
+    the tree through it, with the exporter's reason
+    (`_with_exporter_reasons`). #2740: so the WARN is kept only for a file
+    `da-guard effective`'s parse_failed names, the run `profiles` reads
+    (`_effective_tree`); a file it does not name — a `_routing_profiles.yaml`,
+    which the exporter does not load and whose Go reader takes `!!bool yes`
+    — gets none. No Python list of the files the exporter reads (#2509).
+    With no da-guard verdict (none found, too old, failed) every hit is
+    kept, as before #2740 — `_explicit_bool_verdict`. A root `_defaults*` file's
     `tenants:` block is held to the tenant schema too (#2509 review F3), a
     nested one is not (the exporter does not read it).
     """
@@ -666,7 +672,9 @@ def check_yaml_quoting(config_dir: str) -> dict[str, object]:
         with open(path, encoding="utf-8") as fh:
             schemas[name] = json.load(fh)
     errors: list[str] = []
-    warnings: list[str] = []
+    # A str, or (label, hit) for an explicit `!!bool` hit: those wait for
+    # da-guard's verdict, asked only when there is one (#2740).
+    warnings: list[object] = []
     checked = 0
     for fpath, label, schema_name in _quoting_scope(config_dir):
         try:
@@ -687,8 +695,13 @@ def check_yaml_quoting(config_dir: str) -> dict[str, object]:
                 for word in find_yaml11_bool_words(root, schemas[name_], schemas, name_):
                     warnings.append(f"WARN: {label}:{word.line}: {word.message()}")
         # Same order as check_confd_schema: after the per-document findings.
-        warnings.extend(f"WARN: {label}:{tag.line}: {tag.message()}"
-                        for root in roots for tag in find_go_rejected_bool_tags(root))
+        warnings.extend((label, tag) for root in roots for tag in find_go_rejected_bool_tags(root))
+    if any(isinstance(w, tuple) for w in warnings):
+        parse_failed = _explicit_bool_verdict(config_dir)
+        warnings = [w if isinstance(w, str)
+                    else f"WARN: {w[0]}:{w[1].line}: {w[1].message(w[1].PROFILES_ROW_POINTER)}"
+                    for w in warnings
+                    if isinstance(w, str) or parse_failed is None or w[0] in parse_failed]
     # #2509 blind review 5: each line carries its own remedy; the row's hint
     # only points back at them (a per-kind hint contradicted the lines).
     if errors:
@@ -711,6 +724,23 @@ JSON_SCHEMA_NOT_CHECKED_HINT = (
     "conf.d against its JSON Schemas — without them, a value of the "
     "wrong shape (e.g. `group_by: alertname` where a list is required) is "
     "not detected here.")
+
+
+def _explicit_bool_verdict(config_dir: str) -> set[str] | None:
+    """The files `da-guard effective` names in parse_failed (root-relative,
+    as `_quoting_scope` labels them) — the set an explicit-`!!bool` WARN is
+    kept for (#2740) — or None when there is no verdict: da-guard missing,
+    older than this tool, or failing another way. Then the caller keeps
+    every WARN with its neutral wording; the `profiles` row, reading the
+    same run, says why there was no verdict. A run that loads cleanly is
+    the empty set."""
+    try:
+        _effective_tree(config_dir)
+    except ParseFailedError as exc:
+        return set(exc.parse_failed)
+    except (DaGuardNotFoundError, DaGuardError):
+        return None
+    return set()
 
 
 def check_json_schema(config_dir: str) -> dict[str, object]:
@@ -1208,6 +1238,32 @@ def _with_exporter_reasons(exc: ParseFailedError, config_dir: str) -> ParseFaile
     return exc
 
 
+# #2740: one `da-guard effective` run per validate-config run, shared by the
+# rows that read it (`yaml_quoting`, `profiles`, `values_not_served`). `main()`
+# opens it for its rows and closes it after them; a check called on its own
+# (None) runs da-guard itself, so a test that edits the tree between calls
+# never reads a stale verdict. Key: the --config-dir string as passed.
+_effective_runs: dict[str, tuple[object, BaseException | None]] | None = None
+
+
+def _effective_tree(config_dir: str):
+    """`load_effective_tree(config_dir)`, from the shared run when `main()`
+    opened one — its result or its exception (`DaGuardNotFoundError`,
+    `DaGuardError`, `ParseFailedError`), raised again for each row."""
+    runs = _effective_runs
+    if runs is None:
+        return load_effective_tree(config_dir)
+    if config_dir not in runs:
+        try:
+            runs[config_dir] = (load_effective_tree(config_dir), None)
+        except (DaGuardNotFoundError, DaGuardError, ParseFailedError) as exc:
+            runs[config_dir] = (None, exc)
+    tree, exc = runs[config_dir]
+    if exc is not None:
+        raise exc
+    return tree
+
+
 def check_profiles(config_dir: str) -> dict[str, object]:
     """Validate tenant _profile references and profile structure.
 
@@ -1258,7 +1314,7 @@ def check_profiles(config_dir: str) -> dict[str, object]:
     read it as `raw.get("defaults") or {}`, never `.get("defaults", {})`.
     """
     try:
-        tree = load_effective_tree(config_dir)
+        tree = _effective_tree(config_dir)
     except (DaGuardNotFoundError, DaGuardError, ParseFailedError) as exc:
         if isinstance(exc, ParseFailedError):
             exc = _with_exporter_reasons(exc, config_dir)
@@ -2104,7 +2160,7 @@ def check_values_not_served(config_dir: str) -> dict[str, object]:
     da-guard cannot load is the load-failure row `profiles` also uses.
     """
     try:
-        tree = load_effective_tree(config_dir)
+        tree = _effective_tree(config_dir)
     except (DaGuardNotFoundError, DaGuardError, ParseFailedError) as exc:
         if isinstance(exc, ParseFailedError):
             exc = _with_exporter_reasons(exc, config_dir)
@@ -2923,6 +2979,11 @@ def main() -> None:
         sys.path.insert(0, tools_dir)
 
     results = []
+    # #2740: the rows below share one `da-guard effective` run; closed after
+    # them. `_run_check` catches everything a row raises, so nothing skips
+    # the close.
+    global _effective_runs
+    _effective_runs = {}
 
     # 1. YAML syntax
     results.append(_run_check("yaml_syntax", check_yaml_syntax,
@@ -3008,6 +3069,7 @@ def main() -> None:
     # unconditional: da-guard refuses the same set (value_not_served).
     results.append(_run_check("values_not_served", check_values_not_served,
                               args.config_dir, _config_dir=args.config_dir))
+    _effective_runs = None
 
     # Report
     print_report(results, as_json=args.json)
