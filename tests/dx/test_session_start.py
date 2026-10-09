@@ -88,6 +88,11 @@ def _run(root: Path, repo: Path, marker_text: str | None, pre_commit_install_rc:
     return r, text, calls
 
 
+def _installs(calls: list[str]) -> list[str]:
+    """`pre-commit install …` calls, whatever their flags (not install-hooks)."""
+    return [c for c in calls if c.split()[:1] == ["install"]]
+
+
 def _result(marker: str) -> list[str]:
     return [line for line in marker.splitlines() if line.startswith("RESULT=")]
 
@@ -139,7 +144,7 @@ def test_a_refusal_in_a_bootstrapped_container_reruns_everything_and_fails(tmp_p
     results = _result(marker)
     assert len(results) == 1 and "install_prepush_hook" in results[0], marker
     assert calls["pip"], "a refusal skipped the Python deps"
-    assert "install" not in calls["pre-commit"]
+    assert _installs(calls["pre-commit"]) == []
     assert (hooks / "pre-push").read_text(encoding="utf-8") == mine
 
 
@@ -167,7 +172,7 @@ def test_a_refusal_skips_pre_commit_install_and_nothing_else(tmp_path, setup):
     assert r.returncode == 1, r.stdout + r.stderr
     results = _result(marker)
     assert len(results) == 1 and "install_prepush_hook" in results[0], marker
-    assert "install" not in calls["pre-commit"]
+    assert _installs(calls["pre-commit"]) == []
     assert calls["pip"], "a refusal skipped the Python deps"
     assert sorted(p.name for p in watched.iterdir()) == before
 
@@ -187,7 +192,7 @@ def test_a_no_op_needs_every_condition(tmp_path, state):
     r, _, calls = _run(tmp_path, repo, marker_text)
 
     assert "already bootstrapped" not in r.stdout
-    assert calls["pip"] and "install" in calls["pre-commit"]
+    assert calls["pip"] and _installs(calls["pre-commit"])
 
 
 def test_a_failed_pre_commit_install_is_recorded(tmp_path):

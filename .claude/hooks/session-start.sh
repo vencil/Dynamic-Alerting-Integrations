@@ -76,9 +76,10 @@ note() { printf '%s\n' "$1" >> "$MARKER"; }
 # ⛔ Every run, the no-op below included (#2761): a .git/hooks/pre-push being
 # there says nothing about what it is (pre-commit's template, a hook someone
 # wrote), and the installer is idempotent.
-# ⛔ Before `pre-commit install`, which is skipped when the installer refuses
-# (core.hooksPath set, a symlinked hooks directory): run first, pre-commit's
-# hook would land wherever the link leads. A refusal skips nothing else — the
+# ⛔ Before `pre-commit install`, which is skipped when the installer fails
+# (it refuses core.hooksPath set, a symlinked hooks directory): run first,
+# pre-commit's hook would land wherever the link leads. A failure skips nothing
+# else — the
 # Python deps, tags and e2e deps below do not depend on .git/hooks.
 # ⛔ NOT `pre-commit install --hook-type pre-push` (#1689). Since the three
 # pre-push guards left .pre-commit-config.yaml that command installs a hook
@@ -88,16 +89,16 @@ note() { printf '%s\n' "$1" >> "$MARKER"; }
 # dispatcher runs git lfs itself). Without it a remote session pushes with no
 # guards.
 say "installing the pre-push guards"
-guards_refused=""
-bash scripts/ops/install_prepush_hook.sh || guards_refused=1
+guards_failed=""
+bash scripts/ops/install_prepush_hook.sh || guards_failed=1
 
 # SessionStart fires for more than a cold start (a resumed or compacted session
 # reuses the SAME container, where everything below is already in place). Doing
 # the work again is not free: `npm ci` DELETES tests/e2e/node_modules and
 # reinstalls it every time. So no-op when the last run ended in RESULT=ok, the
-# guards are in place, and what a resumed container is known to lose is still
-# there. Anything else runs the whole script again.
-if [ -z "$guards_refused" ] && [ -f "$MARKER" ] && grep -q '^RESULT=ok$' "$MARKER" 2>/dev/null \
+# guards are in place, and the commit hook and e2e deps that run installed are
+# still there. Anything else runs the whole script again.
+if [ -z "$guards_failed" ] && [ -f "$MARKER" ] && grep -q '^RESULT=ok$' "$MARKER" 2>/dev/null \
   && command -v pre-commit >/dev/null 2>&1 \
   && [ -f .git/hooks/pre-commit ] \
   && { [ ! -f tests/e2e/package.json ] || [ -d tests/e2e/node_modules ]; }; then
@@ -109,7 +110,7 @@ fi
 : > "$MARKER"
 note "session-start.sh ran at $(date -u +%Y-%m-%dT%H:%M:%SZ)"
 note "repo_root=$ROOT"
-[ -z "$guards_refused" ] || note "pre-push-guards=REFUSED (the installer's reason is in this run's output)"
+[ -z "$guards_failed" ] || note "pre-push-guards=FAILED (the installer's reason is in this run's output)"
 
 # --- 0. The constraints file must only pin versions ------------------------
 # ⛔ pip HONORS global options written inside a `-c` constraints file. Measured:
@@ -125,7 +126,7 @@ if grep -nE '^[[:space:]]*(--(index-url|extra-index-url|find-links|trusted-host)
      requirements/ci-constraints.txt; then
   say "⛔ requirements/ci-constraints.txt redirects the package index (lines above)."
   say "   Refusing to install from it. It is a version-pin SSOT; it must not set an index."
-  note "RESULT=failed (constraints file sets a package index)"
+  note "RESULT=failed (${guards_failed:+install_prepush_hook; }constraints file sets a package index)"
   exit 1
 fi
 
@@ -188,7 +189,7 @@ fi
 # runs through it, and a session without it commits completely ungated.
 if ! command -v pre-commit >/dev/null 2>&1; then
   say "⛔ pre-commit is NOT installed — commits in this session are UNGATED."
-  note "RESULT=failed (pre-commit missing)"
+  note "RESULT=failed (${guards_failed:+install_prepush_hook; }pre-commit missing)"
   exit 1
 fi
 
@@ -197,9 +198,9 @@ fi
 # e.g. "Running in migration mode with existing hooks at
 # .git/hooks/pre-commit.legacy" — and its errors, on stdout, not stderr. Hiding
 # them is how a broken or surprising install becomes invisible.
-if [ -n "$guards_refused" ]; then
-  say "⛔ skipping pre-commit install: the installer refused this hooks setup (above)"
-  say "   whatever commit hook was already there is untouched"
+if [ -n "$guards_failed" ]; then
+  say "⛔ skipping pre-commit install: the pre-push installer failed on this hooks setup (above)"
+  say "   whatever commit hook was already there is untouched; with none, commits are UNGATED"
   note "git-hooks=SKIPPED"
 else
   say "installing pre-commit hooks (commit stage)"
@@ -244,7 +245,7 @@ say "pre-building pre-commit hook environments (cached into the container image)
 pre-commit install-hooks >/dev/null 2>&1 || say "  install-hooks incomplete — first run will build the rest"
 
 failed=""
-if [ -n "$guards_refused" ]; then
+if [ -n "$guards_failed" ]; then
   failed="install_prepush_hook"
   say "⛔ pre-push guards NOT installed — no guard runs on push (the installer's reason is above)"
 fi
