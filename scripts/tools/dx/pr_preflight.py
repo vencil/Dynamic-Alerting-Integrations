@@ -102,7 +102,8 @@ class PreflightReport:
         print()
 
 
-def run(cmd: List[str], capture: bool = True, timeout: int = 120) -> subprocess.CompletedProcess:
+def run(cmd: List[str], capture: bool = True, timeout: int = 120,
+        env: Optional[dict] = None) -> subprocess.CompletedProcess:
     """Run a command with sensible defaults.
 
     Uses errors="replace" on decoding because tools like git may emit
@@ -119,6 +120,7 @@ def run(cmd: List[str], capture: bool = True, timeout: int = 120) -> subprocess.
             encoding="utf-8",
             errors="replace",
             timeout=timeout,
+            env=env,
         )
     except FileNotFoundError:
         # Command not found — return a synthetic failure
@@ -1101,16 +1103,41 @@ def _prepush_guards_wired() -> Tuple[Optional[bool], str]:
 
     回傳 `(wired, message)`。⛔ **「量不到」與「量了沒事」要分得開**。
     """
+    # ⛔ core.hooksPath 有設（空字串也算）就不判（#2696）。它指向的可能是許多 repo
+    # 共用的目錄，裝進去的 shim 會擋下其他 repo 的每一次 push；空字串則讓 git 一支
+    # hook 都不跑。None：這裡量不到本 repo 的守衛。
+    # GIT_CONFIG 只改變 `git config` 讀哪個檔，git 跑 hook 時照樣讀原本的設定。
+    env = {k: v for k, v in os.environ.items() if k != "GIT_CONFIG"}
+    hp = run(["git", "config", "--get", "core.hooksPath"], timeout=30, env=env)
+    if hp.returncode == 0:
+        return None, (
+            f"量不到：core.hooksPath 設成 {(hp.stdout or '').strip()!r}；本 repo 的守衛"
+            "只在它沒設時判定與安裝。"
+        )
     r = run(["git", "rev-parse", "--git-path", "hooks/pre-push"], timeout=30)
-    if r.returncode != 0:
+    if hp.returncode != 1 or r.returncode != 0:
         # ⛔ None，不是 False：git 跑不了或不在 git repository，都量不到守衛在不在；
         # 說成「沒裝」會開出安裝器這帖藥，而那兩種情況下它照做也回不到綠。
-        reason = (r.stderr or "").strip() or f"rc={r.returncode}"
-        return None, f"量不到：git rev-parse --git-path 失敗（{reason}）"
+        bad = r if r.returncode != 0 else hp
+        reason = (bad.stderr or "").strip() or f"rc={bad.returncode}"
+        return None, (
+            f"量不到：git 失敗（{reason}）。這不代表守衛沒裝。"
+            "請在 `git` 可執行、且位於本 repo 內的 shell 重跑（Windows：Git Bash）。"
+        )
     hook = Path((r.stdout or "").strip())
+    # ⛔ hooks 目錄本身是 symlink 時也不判：它可能連到其他 repo 共用的目錄，
+    # 與共用的 core.hooksPath 同一種傷害（#2696）。
+    if hook.parent.is_symlink():
+        return None, (
+            f"量不到：{hook.parent} 是 symlink；本 repo 的守衛只在本 repo 自己的"
+            " hooks 目錄判定與安裝，不經過連結。"
+        )
     shim = _shim_body()
     if shim is None:
-        return None, f"量不到：無法從 {_INSTALLER} 取出 shim 全文（VIBE_SHIM_EOF heredoc）"
+        return None, (
+            f"量不到：無法從 {_INSTALLER} 取出 shim 全文（VIBE_SHIM_EOF heredoc）。"
+            "這不代表守衛沒裝。"
+        )
 
     # ⛔ 不是 shim 時，訊息只說它和安裝器產生的 shim 不同並給處方，不預告安裝器會怎麼
     # 處置：它依那是不是 git-lfs 的 hook、pre-commit 樣板或守衛複本而取代或拒絕，在這裡
@@ -1148,9 +1175,7 @@ def check_local_hooks(*, run_precommit: bool = True) -> CheckResult:
             Status.FAIL,
             "量不到 pre-push 守衛在不在 push 路徑上",
             detail=(
-                f"{why}\n\n"
-                "這不代表守衛沒裝。請在 `git` 可執行、且位於本 repo 內的 shell 重跑"
-                "（Windows：Git Bash）。"
+                why
             ),
         )
     if not wired:

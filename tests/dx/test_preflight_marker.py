@@ -419,27 +419,156 @@ class TestPrepushWiring:
         wired, why = mod._prepush_guards_wired()
         assert wired is True, f"following the message's remedy did not fix it: {why!r}"
 
-    def test_the_hook_is_found_where_git_looks_for_it(self, tmp_path, monkeypatch):
-        """core.hooksPath moves the hooks directory: a shim left at
-        .git/hooks/pre-push is then never run, and one in the configured
-        directory is."""
+    @pytest.mark.parametrize("scope", ["local", "global", "local-behind-GIT_CONFIG"])
+    @pytest.mark.parametrize("hooks_path", [
+        "shared", "/dev/null", "hooks-dir", "", ".git/hooks", "own-absolute"])
+    def test_a_set_hooks_path_is_unmeasurable(
+        self, tmp_path, monkeypatch, hooks_path, scope
+    ):
+        """#2696: core.hooksPath can point git at a directory many repositories
+        share, where a shim refuses every push of every one of them, and ""
+        makes git run no hook at all. While it is set, whatever its value,
+        neither the judgement nor the installer goes there, and the message
+        names core.hooksPath; unsetting it brings the guards back."""
+        mod = _load()
+        repo = tmp_path / "repo"
+        repo.mkdir()
+        self._repo(repo)
+        monkeypatch.chdir(repo)
+        target = {"shared": str(tmp_path / "shared"),
+                  "own-absolute": str(repo / ".git" / "hooks")}.get(hooks_path, hooks_path)
+        before = sorted(p.name for p in (repo / ".git" / "hooks").iterdir())
+        # global: the #2696 case, a value every repository on the machine reads.
+        # GIT_CONFIG only redirects `git config` itself; git still runs hooks by
+        # the local value, so the judgement must not be fooled by it.
+        where = ["--global"] if scope == "global" else ["--local"]
+        monkeypatch.setenv("GIT_CONFIG_GLOBAL", str(tmp_path / "global.gitconfig"))
+        assert subprocess.run(  # subprocess-timeout: ignore
+            ["git", "config", *where, "core.hooksPath", target], cwd=repo).returncode == 0
+        if scope == "local-behind-GIT_CONFIG":
+            monkeypatch.setenv("GIT_CONFIG", os.devnull)
+
+        wired, why = mod._prepush_guards_wired()
+        assert wired is None and "core.hooksPath" in why, why
+        r = self._install_guards(repo)
+        assert r.returncode == 1 and "core.hooksPath" in r.stderr, r.stderr
+        for place in (tmp_path / "shared", repo / "hooks-dir"):
+            assert not place.exists(), f"the installer wrote into {place}"
+        assert sorted(p.name for p in (repo / ".git" / "hooks").iterdir()) == before
+
+        monkeypatch.delenv("GIT_CONFIG", raising=False)
+        assert subprocess.run(  # subprocess-timeout: ignore
+            ["git", "config", *where, "--unset", "core.hooksPath"], cwd=repo).returncode == 0
+        assert self._install_guards(repo).returncode == 0
+        wired, why = mod._prepush_guards_wired()
+        assert wired is True, f"unsetting core.hooksPath did not bring the guards back: {why!r}"
+
+    def test_git_config_failing_to_read_hooks_path_changes_nothing(self, tmp_path, monkeypatch):
+        """When git cannot say whether core.hooksPath is set, neither side
+        takes it for unset: the judgement is None and the installer stops
+        with nothing changed."""
+        mod = _load()
+        repo = tmp_path / "repo"
+        repo.mkdir()
+        self._repo(repo)
+        monkeypatch.chdir(repo)
+        real = shutil.which("git")
+        bindir = tmp_path / "bin"
+        bindir.mkdir()
+        (bindir / "git").write_text(
+            "#!/bin/sh\n"
+            'if [ "$1 $2 $3" = "config --get core.hooksPath" ]; then exit 5; fi\n'
+            f'exec "{real}" "$@"\n', encoding="utf-8", newline="\n")
+        (bindir / "git").chmod(0o755)
+        monkeypatch.setenv("PATH", f"{bindir}{os.pathsep}{os.environ['PATH']}")
+        before = sorted(p.name for p in (repo / ".git" / "hooks").iterdir())
+
+        wired, why = mod._prepush_guards_wired()
+        assert wired is None, why
+        r = self._install_guards(repo)
+        assert r.returncode == 2 and "cannot read core.hooksPath" in r.stderr, r.stderr
+        assert sorted(p.name for p in (repo / ".git" / "hooks").iterdir()) == before
+
+    @pytest.mark.parametrize("target", ["shared", "dangling"])
+    def test_a_symlinked_hooks_directory_is_unmeasurable(self, tmp_path, monkeypatch, target):
+        """#2696 by another road: .git/hooks itself may be a link to a directory
+        other repositories share, where the shim would refuse their every push.
+        Neither side goes through it, and nothing is written there."""
+        mod = _load()
+        repo = tmp_path / "repo"
+        repo.mkdir()
+        self._repo(repo)
+        monkeypatch.chdir(repo)
+        hooks = repo / ".git" / "hooks"
+        shutil.rmtree(hooks)
+        shared = tmp_path / "shared"
+        if target == "shared":
+            shared.mkdir()
+        symlink_or_skip(shared, hooks)
+
+        wired, why = mod._prepush_guards_wired()
+        assert wired is None and "symlink" in why, why
+        r = self._install_guards(repo)
+        assert r.returncode == 1 and "symlink" in r.stderr, r.stderr
+        assert (sorted(shared.iterdir()) if shared.exists() else None) == (
+            [] if target == "shared" else None), "the installer wrote through the link"
+
+    def test_a_dot_git_symlink_is_not_a_symlinked_hooks_directory(self, tmp_path, monkeypatch):
+        """Only the hooks directory itself is refused. A repository whose .git is
+        a link (hooks a plain directory behind it) is judged and installed."""
+        mod = _load()
+        repo = tmp_path / "repo"
+        repo.mkdir()
+        self._repo(repo)
+        real = tmp_path / "gitdir"
+        (repo / ".git").rename(real)
+        symlink_or_skip(real, repo / ".git")
+        monkeypatch.chdir(repo)
+
+        wired, why = mod._prepush_guards_wired()
+        assert wired is False, why
+        assert self._install_guards(repo).returncode == 0
+        wired, why = mod._prepush_guards_wired()
+        assert wired is True, why
+
+    def test_a_linked_worktree_sees_the_shared_hook(self, tmp_path, monkeypatch):
+        """git runs the common .git/hooks for every worktree, so the judgement
+        from a linked worktree reads that hook, not one under .git/worktrees/."""
+        mod = _load()
+        repo = tmp_path / "repo"
+        repo.mkdir()
+        self._repo(repo)
+        wt = tmp_path / "wt"
+        subprocess.run(  # subprocess-timeout: ignore
+            ["git", "-C", str(repo), "worktree", "add", "-q", "--detach", str(wt)],
+            check=True)
+        assert self._install_guards(repo).returncode == 0
+        monkeypatch.chdir(wt)
+
+        wired, why = mod._prepush_guards_wired()
+        assert wired is True, why
+
+    @pytest.mark.parametrize("damage", ["missing", "not-utf8"])
+    def test_an_installer_that_cannot_be_read_is_unmeasurable(
+        self, tmp_path, monkeypatch, damage
+    ):
+        """#2760: reading the installer fails outright — it is gone, or it is
+        not UTF-8. The verdict is None, not a traceback."""
         mod = _load()
         self._repo(tmp_path)
         monkeypatch.chdir(tmp_path)
-        assert subprocess.run(  # subprocess-timeout: ignore
-            ["git", "config", "core.hooksPath", "hooks-dir"], cwd=tmp_path).returncode == 0
         assert self._install_guards(tmp_path).returncode == 0
-        moved = tmp_path / "hooks-dir" / "pre-push"
-        wired, why = mod._prepush_guards_wired()
-        assert wired is True and moved.is_file(), why
+        installer = tmp_path / "scripts" / "ops" / "install_prepush_hook.sh"
+        monkeypatch.setattr(mod, "_INSTALLER", installer)
+        wired, _ = mod._prepush_guards_wired()
+        assert wired is True, "CONTROL: it must be wired with the intact installer"
 
-        default = tmp_path / ".git" / "hooks" / "pre-push"
-        default.parent.mkdir(parents=True, exist_ok=True)
-        default.write_bytes(moved.read_bytes())
-        default.chmod(0o755)
-        moved.unlink()
+        if damage == "missing":
+            installer.unlink()
+        else:
+            installer.write_bytes(b"\xff\xfe" + installer.read_bytes())
         wired, why = mod._prepush_guards_wired()
-        assert wired is False, f"a shim git never runs was reported as wired: {why!r}"
+        assert wired is None and "量不到" in why, why
 
     @pytest.mark.parametrize("installer", [
         "#!/usr/bin/env bash\n",
