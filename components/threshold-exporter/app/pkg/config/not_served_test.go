@@ -155,6 +155,16 @@ func TestNotServed_Table(t *testing.T) {
 			"team/_defaults.yaml": "defaults:\n  " + retiredCPU + ": 50\n",
 			"team/tx.yaml":        "tenants:\n  tx: {}\n",
 		}},
+		// #2065: tx sets the threshold under the other spelling (platform
+		// layer), so the build refuses the subtree value for tw only; tw's
+		// file must not make tx's verdict value_rejected.
+		{name: "subtree value rejected for a neighbour, tenant sets the alias", files: map[string]string{
+			"_defaults.yaml":     "defaults:\n  mysql_connections: 80\n",
+			"_platform.yaml":     "tenants:\n  tx:\n    mysql_threads_running: {default: \"abc\", expires: \"2099-07-01T06:00:00Z\", reason: r}\n",
+			"sub/_defaults.yaml": "defaults:\n  " + retiredCPU + ":\n    default: \"33\"\n    overrides: \"01:00-09:00\"\n",
+			"sub/tx.yaml":        "tenants:\n  tx:\n    mysql_connections: \"70\"\n",
+			"sub/tw.yaml":        "tenants:\n  tw:\n    mysql_connections: \"70\"\n",
+		}},
 		{name: "F3 retired spelling in the tenant", files: map[string]string{
 			"_defaults.yaml": "defaults:\n  mysql_threads_running: 80\n",
 			"tx.yaml":        "tenants:\n  tx:\n    " + retiredCPU + ": \"60\"\n",
