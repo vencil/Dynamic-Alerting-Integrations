@@ -72,14 +72,21 @@ func ParseConfigFile(data []byte) (ThresholdConfig, error) {
 func normalizeConfigKeys(cfg *ThresholdConfig) {
 	var s *keySpellings
 	cfg.Defaults, s = normalizeKeys(cfg.Defaults)
-	cfg.spelled = s != nil
-	for _, m := range []map[string]map[string]ScheduledValue{cfg.Tenants, cfg.Profiles} {
-		for name, body := range m {
-			if m[name], s = normalizeKeys(body); s != nil {
-				cfg.spelled = true
-			}
+	tenants, profiles := normalizeBodies(cfg.Tenants), normalizeBodies(cfg.Profiles)
+	cfg.spelled = s != nil || tenants || profiles
+}
+
+// normalizeBodies is normalizeKeys over each body of m, in place; it reports
+// whether any body was re-spelled.
+func normalizeBodies(m map[string]map[string]ScheduledValue) bool {
+	spelled := false
+	for name, body := range m {
+		nb, s := normalizeKeys(body)
+		if s != nil {
+			m[name], spelled = nb, true
 		}
 	}
+	return spelled
 }
 
 // dropNullShadowingSpellings removes from a decoded `defaults:` map every

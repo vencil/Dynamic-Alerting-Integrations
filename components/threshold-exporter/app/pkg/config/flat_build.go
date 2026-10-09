@@ -124,10 +124,11 @@ type FlatBuild struct {
 	RejectedChainValues map[string]map[string]bool
 
 	// respelledChain is the defaults files (absolute, as ParsedDefaults keys
-	// them) whose parsed block holds a dimensional or a #1231-aliased key —
-	// the files whose decode may have re-spelled a key or found a threshold
-	// written twice (#2031; spellingCandidates). A superset: the parsed
-	// block no longer tells. nil when none.
+	// them) whose parsed block holds a dimensional key, or both #1231
+	// spellings of a threshold — the files whose decode may have re-spelled a
+	// key or found a threshold written twice (#2031; spellingCandidates). A
+	// superset for dimensional keys: the parsed block, already re-spelled, no
+	// longer tells how the file wrote them. nil when none.
 	respelledChain map[string]bool
 }
 
@@ -277,13 +278,24 @@ func BuildFlatConfig(scan *TreeScan, in FlatBuildInput) (FlatBuild, error) {
 	}, nil
 }
 
+// bothSpellings reports whether block also holds another #1231 spelling of k.
+func bothSpellings(block map[string]any, k string) bool {
+	var buf [2]string
+	for _, s := range otherSpellings(k, &buf) {
+		if _, in := block[s]; in {
+			return true
+		}
+	}
+	return false
+}
+
 // respelledChainFiles is FlatBuild.respelledChain over parsed. No
 // allocation for a tree whose defaults hold no such key.
 func respelledChainFiles(parsed map[string]map[string]any) map[string]bool {
 	var out map[string]bool
 	for p, block := range parsed {
 		for k := range block {
-			if _, _, dim := dimParts(k); dim || touchesAlias(k) {
+			if _, _, dim := dimParts(k); dim || bothSpellings(block, k) {
 				if out == nil {
 					out = map[string]bool{}
 				}
