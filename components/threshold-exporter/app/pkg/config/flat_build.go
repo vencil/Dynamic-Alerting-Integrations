@@ -122,6 +122,13 @@ type FlatBuild struct {
 	// threshold-shaped for some tenant under it, so that tenant keeps a
 	// shallower level's value or none (#2296). nil when there is none.
 	RejectedChainValues map[string]map[string]bool
+	// RejectedChainWinners is, per tenant, each key whose value /effective
+	// shows is one RejectedChainValues refused — the deepest subtree level
+	// writing the key for that tenant, which does not set it itself — and
+	// that file (root-relative slash path) (#2065). The exporter's
+	// da_config_values_not_served{reason="value_rejected"} counts it. nil
+	// when there is none.
+	RejectedChainWinners map[string]map[string]string
 }
 
 // BuildFlatConfig builds the merged ThresholdConfig from a scan: parse each
@@ -257,7 +264,7 @@ func BuildFlatConfig(scan *TreeScan, in FlatBuildInput) (FlatBuild, error) {
 	}
 	merged.applyProfiles(profileLogf)
 
-	n, unreachable, applied, rejected := applySubtreeDefaults(&merged, in.Root, in.TenantDefaults, in.ParsedDefaults)
+	n, unreachable, applied, rejected, rejectedWinners := applySubtreeDefaults(&merged, in.Root, in.TenantDefaults, in.ParsedDefaults)
 	return FlatBuild{
 		Config: merged, FileConfigs: fileConfigs, SubtreeFilled: n,
 		Unreachable: unreachableKeys(unreachable), UnreachableValues: unreachable,
@@ -266,6 +273,7 @@ func BuildFlatConfig(scan *TreeScan, in FlatBuildInput) (FlatBuild, error) {
 		RootNullUndeclared:     rootNullUndeclared(&merged, rootNull),
 		RootDefaultsUnread:     rootUnread,
 		RejectedChainValues:    rejected,
+		RejectedChainWinners:   rejectedWinners,
 	}, nil
 }
 

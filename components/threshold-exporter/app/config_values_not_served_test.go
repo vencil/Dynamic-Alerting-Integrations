@@ -7,6 +7,7 @@ package main
 import (
 	"bytes"
 	"log"
+	"os"
 	"path/filepath"
 	"reflect"
 	"strings"
@@ -55,29 +56,27 @@ func writeValuesTree(t *testing.T, dir, tenantBody, subDefaults string) {
 func TestValuesNotServed_LoadPublishesEachReason(t *testing.T) {
 	t.Parallel()
 	for _, tc := range []struct {
-		name         string
-		body, sub    string
-		reason       string
-		wantInLine   []string
-		wantNoTenant bool
+		name       string
+		body, sub  string
+		reason     string
+		wantInLine []string
 	}{
 		{name: "unparsed", body: "    mysql_connections: \"abc\"\n", reason: config.NotServedValueUnparsed,
-			wantInLine: []string{"tenant=tx file=team/t.yaml key=mysql_connections reason=value_unparsed"}},
+			wantInLine: []string{"tenant=tx key=mysql_connections reason=value_unparsed"}},
 		{name: "unparsed with severity", body: "    mysql_connections: \"7O:critical\"\n", reason: config.NotServedValueUnparsed,
 			wantInLine: []string{"tenant=tx", "reason=value_unparsed"}},
 		{name: "dropped", body: "    mysql_connections_critical: \"abc\"\n", reason: config.NotServedValueUnparsedDropped,
-			wantInLine: []string{"tenant=tx file=team/t.yaml key=mysql_connections_critical reason=value_unparsed_dropped"}},
+			wantInLine: []string{"tenant=tx key=mysql_connections_critical reason=value_unparsed_dropped"}},
 		{name: "window start equals end", body: "    mysql_connections:\n      default: \"70\"\n      overrides:\n" +
 			"        - window: \"05:00-05:00\"\n          value: \"1000\"\n", reason: config.NotServedWindowInvalid,
-			wantInLine: []string{"tenant=tx file=team/t.yaml key=mysql_connections reason=window_invalid"}},
+			wantInLine: []string{"tenant=tx key=mysql_connections reason=window_invalid"}},
 		{name: "window not a range", body: "    mysql_connections:\n      default: \"70\"\n      overrides:\n" +
 			"        - window: \"01:00~09:00\"\n          value: \"1000\"\n", reason: config.NotServedWindowInvalid,
 			wantInLine: []string{"reason=window_invalid"}},
 		{name: "subtree value rejected", body: "    mysql_threads_running: \"31\"\n",
-			sub:          "defaults:\n  mysql_connections:\n    default: \"70\"\n    overrides: \"01:00-09:00\"\n",
-			reason:       config.NotServedValueRejected,
-			wantInLine:   []string{" file=team/_defaults.yaml key=mysql_connections reason=value_rejected"},
-			wantNoTenant: true},
+			sub:        "defaults:\n  mysql_connections:\n    default: \"70\"\n    overrides: \"01:00-09:00\"\n",
+			reason:     config.NotServedValueRejected,
+			wantInLine: []string{"tenant=tx key=mysql_connections reason=value_rejected"}},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()
@@ -102,8 +101,8 @@ func TestValuesNotServed_LoadPublishesEachReason(t *testing.T) {
 			if !strings.HasPrefix(lines[0], "WARN: ") || !strings.Contains(lines[0], "da-guard effective") {
 				t.Errorf("WARN shape: %s", lines[0])
 			}
-			if tc.wantNoTenant && strings.Contains(lines[0], "tenant=") {
-				t.Errorf("value_rejected is per file, the line names a tenant: %s", lines[0])
+			if strings.Contains(lines[0], "file=") {
+				t.Errorf("the WARN names no file (#2065 r1 L1): %s", lines[0])
 			}
 		})
 	}
@@ -188,8 +187,8 @@ func TestValuesNotServed_FlatIncrementalReload(t *testing.T) {
 	if got := testutil.ToFloat64(fresh.valuesNotServed[config.NotServedValueUnparsedDropped]); got != 1 {
 		t.Errorf("value_unparsed_dropped = %v after the incremental reload, want 1\n%s", got, logBuf.String())
 	}
-	if lines := logLinesWith(logBuf.String(), valuesNotServedAnchor); len(lines) != 1 || !strings.Contains(lines[0], "file=t.yaml") {
-		t.Errorf("WARN lines %q, want one naming file=t.yaml", lines)
+	if lines := logLinesWith(logBuf.String(), valuesNotServedAnchor); len(lines) != 1 || !strings.Contains(lines[0], `tenant=tx key=mysql_connections{db="x"} reason=value_unparsed_dropped`) {
+		t.Errorf("WARN lines %q, want one naming tx and the dimensional key", lines)
 	}
 }
 
@@ -213,8 +212,8 @@ func TestValuesNotServed_SingleFileMode(t *testing.T) {
 		t.Errorf("gauge = %v, want %v", got, want)
 	}
 	lines := logLinesWith(logBuf.String(), valuesNotServedAnchor)
-	if len(lines) != 1 || !strings.Contains(lines[0], "tenant=tx file=config.yaml key=mysql_connections reason=value_unparsed") ||
-		!strings.Contains(lines[0], "tenant=ty file=config.yaml key=mysql_connections reason=window_invalid") {
+	if len(lines) != 1 || !strings.Contains(lines[0], "tenant=tx key=mysql_connections reason=value_unparsed") ||
+		!strings.Contains(lines[0], "tenant=ty key=mysql_connections reason=window_invalid") {
 		t.Errorf("WARN lines %q", lines)
 	}
 }
@@ -239,7 +238,7 @@ func TestValuesNotServed_MatchesEffectiveNotServed(t *testing.T) {
 	flat := m.flat
 	m.mu.RUnlock()
 	got := map[string]string{}
-	for _, v := range m.auditValuesNotServed(m.GetConfig(), nil, &flat, "probe") {
+	for _, v := range m.auditValuesNotServed(m.GetConfig(), &flat, "probe") {
 		got[v.Tenant+"/"+v.Key] = v.Reason
 	}
 	tree, err := config.EffectiveTree(dir)
@@ -267,13 +266,13 @@ func TestFormatValuesNotServedLog_CapsTheSample(t *testing.T) {
 	t.Parallel()
 	var vs []valueNotServed
 	for i := 0; i < 23; i++ {
-		vs = append(vs, valueNotServed{Tenant: "t" + string(rune('a'+i)), File: "f.yaml", Key: "k", Reason: config.NotServedValueUnparsed})
+		vs = append(vs, valueNotServed{Tenant: "t" + string(rune('a'+i)), Key: "k", Reason: config.NotServedValueUnparsed})
 	}
 	line := formatValuesNotServedLog(vs, "/conf.d", "Config loaded (directory)")
 	if strings.Contains(line, "\n") || strings.Count(line, "tenant=") != 20 || !strings.HasSuffix(line, "; +3 more") {
 		t.Errorf("line = %s", line)
 	}
-	if !strings.Contains(line, "23 value(s) under /conf.d") {
+	if !strings.Contains(line, "23 tenant value(s) under /conf.d") {
 		t.Errorf("line does not count and root the set: %s", line)
 	}
 }
@@ -301,5 +300,112 @@ func TestValuesNotServed_GaugeRegisteredUnderItsName(t *testing.T) {
 	}
 	if len(reasons) != len(valuesNotServedReasons) {
 		t.Errorf("reasons %v, want %v", reasons, valuesNotServedReasons)
+	}
+}
+
+// retiredCPUKey is the #1231 retired spelling of mysql_threads_running, built
+// so the repo's re-introduction guard does not read the fixture as config.
+const retiredCPUKey = "mysql_" + "cpu"
+
+// TestValuesNotServed_MatchesEffectiveOnEveryShape (#2065 r1 M1, L1): on each
+// shape the exporter's (tenant, key, reason) set is `da-guard effective`'s
+// not_served restricted to ValueNotServedAsWritten — the key in the
+// effective config's spelling — and the gauge counts those pairs. A refused
+// subtree value a deeper level or the tenant itself displaces is no pair.
+func TestValuesNotServed_MatchesEffectiveOnEveryShape(t *testing.T) {
+	t.Parallel()
+	const root = "defaults:\n  mysql_connections: 80\n  mysql_threads_running: 30\n"
+	const refused = "defaults:\n  mysql_connections:\n    default: \"70\"\n    overrides: \"01:00-09:00\"\n"
+	const sameEnds = "      overrides:\n        - window: \"05:00-05:00\"\n          value: \"1\"\n"
+	for _, tc := range []struct {
+		name  string
+		files map[string]string
+		want  map[string]float64 // gauge
+	}{
+		{"U1 refused subtree value shown", map[string]string{
+			"team/_defaults.yaml": refused,
+			"team/t.yaml":         "tenants:\n  tx:\n    mysql_threads_running: \"31\"\n",
+		}, map[string]float64{config.NotServedValueRejected: 1}},
+		{"F10 deeper level writes a value", map[string]string{
+			"team/_defaults.yaml":     refused,
+			"team/sub/_defaults.yaml": "defaults:\n  mysql_connections: 75\n",
+			"team/sub/t.yaml":         "tenants:\n  tx:\n    mysql_threads_running: \"31\"\n",
+		}, nil},
+		{"F10b the tenant sets the key", map[string]string{
+			"team/_defaults.yaml": refused,
+			"team/t.yaml":         "tenants:\n  tx:\n    mysql_connections: \"66\"\n",
+		}, nil},
+		{"refused below a valid level", map[string]string{
+			"team/_defaults.yaml":     "defaults:\n  mysql_connections: 75\n",
+			"team/sub/_defaults.yaml": refused,
+			"team/sub/t.yaml":         "tenants:\n  tx: {}\n",
+		}, map[string]float64{config.NotServedValueRejected: 1}},
+		{"reserved key in subtree defaults", map[string]string{
+			"team/_defaults.yaml": "defaults:\n  _routing_defaults:\n    receiver: {type: webhook}\n",
+			"team/t.yaml":         "tenants:\n  tx: {}\n",
+		}, nil},
+		{"G3 platform entry", map[string]string{
+			"_platform.yaml": "tenants:\n  tx:\n    mysql_connections: \"abc\"\n",
+			"team/t.yaml":    "tenants:\n  tx:\n    mysql_threads_running: \"31\"\n",
+		}, map[string]float64{config.NotServedValueUnparsed: 1}},
+		{"G4 profile", map[string]string{
+			"_profiles.yaml": "profiles:\n  gold:\n    mysql_connections: \"abc\"\n",
+			"team/t.yaml":    "tenants:\n  tx:\n    _profile: gold\n",
+		}, map[string]float64{config.NotServedValueUnparsed: 1}},
+		{"F12 subtree schedule window", map[string]string{
+			"team/_defaults.yaml": "defaults:\n  mysql_connections:\n    default: \"70\"\n" + strings.ReplaceAll(sameEnds, "      ", "    "),
+			"team/t.yaml":         "tenants:\n  tx:\n    mysql_threads_running: \"31\"\n",
+		}, map[string]float64{config.NotServedWindowInvalid: 1}},
+		{"F15 retired spelling", map[string]string{
+			"team/t.yaml": "tenants:\n  tx:\n    " + retiredCPUKey + ":\n      default: \"20\"\n" + sameEnds,
+		}, map[string]float64{config.NotServedWindowInvalid: 1}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			dir := t.TempDir()
+			writeTestYAML(t, filepath.Join(dir, "_defaults.yaml"), root)
+			for rel, body := range tc.files {
+				if err := os.MkdirAll(filepath.Dir(filepath.Join(dir, rel)), 0o755); err != nil {
+					t.Fatal(err)
+				}
+				writeTestYAML(t, filepath.Join(dir, rel), body)
+			}
+			m, fresh, logBuf := newAuditedManager(t, dir)
+			if err := m.Load(); err != nil {
+				t.Fatalf("Load: %v", err)
+			}
+			if got, want := valuesNotServedGauge(t, fresh), wantValuesNotServed(tc.want); !reflect.DeepEqual(got, want) {
+				t.Errorf("gauge = %v, want %v", got, want)
+			}
+			m.mu.RLock()
+			flat := m.flat
+			m.mu.RUnlock()
+			got := map[string]string{}
+			for _, v := range m.auditValuesNotServed(m.GetConfig(), &flat, "probe") {
+				got[v.Tenant+"/"+v.Key] = v.Reason
+			}
+			tree, err := config.EffectiveTree(dir)
+			if err != nil {
+				t.Fatal(err)
+			}
+			want := map[string]string{}
+			for _, ec := range tree.Tenants {
+				for k, ns := range ec.NotServed {
+					if config.ValueNotServedAsWritten(k, ns.Reason) {
+						want[ec.TenantID+"/"+k] = ns.Reason
+					}
+				}
+			}
+			if !reflect.DeepEqual(got, want) {
+				t.Errorf("exporter %v, effective %v", got, want)
+			}
+			for _, line := range logLinesWith(logBuf.String(), valuesNotServedAnchor) {
+				for k := range got {
+					if key := strings.SplitN(k, "/", 2)[1]; !strings.Contains(line, "key="+key+" ") {
+						t.Errorf("WARN does not name key %q as effective spells it: %s", key, line)
+					}
+				}
+			}
+		})
 	}
 }

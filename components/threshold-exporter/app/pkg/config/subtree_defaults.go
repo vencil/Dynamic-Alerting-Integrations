@@ -71,9 +71,11 @@ func applySubtreeDefaults(
 	root string,
 	tenantDefaults map[string][]string,
 	parsed map[string]map[string]any,
-) (int, map[string]map[string]ScheduledValue, map[string]map[string]SubtreeRefusedVerdict, map[string]map[string]bool) {
+) (int, map[string]map[string]ScheduledValue, map[string]map[string]SubtreeRefusedVerdict, map[string]map[string]bool,
+	map[string]map[string]string,
+) {
 	if cfg == nil || len(cfg.Tenants) == 0 || len(tenantDefaults) == 0 {
-		return 0, nil, nil, nil
+		return 0, nil, nil, nil, nil
 	}
 	// ⛔ ABSOLUTE, because the chain is. `scanDirTree` stores every defaults
 	// path under the absolutised, cleaned AND symlink-resolved root
@@ -113,6 +115,14 @@ func applySubtreeDefaults(
 	// refusal branch below and nowhere else, so /effective can say why it
 	// shows a value /metrics does not serve (FlatBuild.RejectedChainValues).
 	var rejected map[string]map[string]bool
+	// ⛔ WHICH TENANTS GET NO VALUE FROM A REFUSED ONE (#2065): tenant → key
+	// → the root-relative defaults file whose refused value is the deepest
+	// level writing the key for that tenant (the value /effective shows),
+	// when the tenant does not set the key itself. Another level's written
+	// value displaces it as it displaces the shown one: a deeper threshold-
+	// shaped value (applied or unreachable) clears it, a null (no write) does
+	// not. Recorded on this loop's own branches, beside `rejected`.
+	var rejectedWinners map[string]map[string]string
 
 	filled := 0
 	for tenantID, overrides := range cfg.Tenants {
@@ -133,6 +143,7 @@ func applySubtreeDefaults(
 		var refusedSeen map[string]struct{}
 		var refusedSource map[string]SubtreeRefusedVerdict // key → the written level (deepest wins)
 		var refusedTenantSets map[string]bool
+		var rejectedWin map[string]string // key → absolute defaults path
 		for _, defaultsPath := range tenantDefaults[tenantID] {
 			if filepath.Dir(filepath.Clean(defaultsPath)) == rootDir {
 				continue // the global defaults file — already in cfg.Defaults
@@ -170,9 +181,18 @@ func applySubtreeDefaults(
 							rejected[defaultsPath] = map[string]bool{}
 						}
 						rejected[defaultsPath][key] = true
+						if !nullThreshold(key, raw) {
+							if rejectedWin == nil {
+								rejectedWin = map[string]string{}
+							}
+							rejectedWin[key] = defaultsPath
+						}
 					}
 					continue
 				}
+				// A threshold-shaped value at this level: it is the value
+				// shown now, not a shallower refused one.
+				delete(rejectedWin, key)
 				// ⛔ A KEY NO EMITTER ITERATES IS NOT DELIVERED BY WRITING IT.
 				// `resolveBaseRows` walks `cfg.Defaults`; `resolveDeclaredRows`
 				// walks `cfg.OptionalOverrides`. A key that appears only in a
@@ -258,6 +278,15 @@ func applySubtreeDefaults(
 		// `_state_maintenance: disable` + finance/us/ `enable` — the tenant's
 		// filter stays off (finance/'s disable), so the key is applied, and
 		// deleting both levels would turn it on.
+		for key, p := range rejectedWin {
+			if rejectedWinners == nil {
+				rejectedWinners = map[string]map[string]string{}
+			}
+			if rejectedWinners[tenantID] == nil {
+				rejectedWinners[tenantID] = map[string]string{}
+			}
+			rejectedWinners[tenantID][key] = subtreeRelPath(rootDir, filepath.Clean(p))
+		}
 		for key := range refusedSeen {
 			if applied == nil {
 				applied = map[string]map[string]SubtreeRefusedVerdict{}
@@ -274,9 +303,9 @@ func applySubtreeDefaults(
 		}
 	}
 	if len(unreachable) == 0 {
-		return filled, nil, applied, relRejected(rootDir, rejected)
+		return filled, nil, applied, relRejected(rootDir, rejected), rejectedWinners
 	}
-	return filled, unreachable, applied, relRejected(rootDir, rejected)
+	return filled, unreachable, applied, relRejected(rootDir, rejected), rejectedWinners
 }
 
 // SubtreeRefusedVerdict is applySubtreeDefaults' own account of one key

@@ -281,7 +281,8 @@ func (c *ThresholdConfig) ValuesNotServed(now time.Time) map[string]map[string]s
 // where the phases read each scheduled value's windows (noteInvalidWindows;
 // AtMinuteOfDay drops the schedules). Each tenant with a schedule is then
 // resolved alone (a one-tenant copy) at the start of each segment of its own
-// day (tenantScheduleCuts). Resolving every tenant at the union of every
+// day (tenantScheduleCuts) but the one now falls in (#2065 r1: the resolve
+// as written already read it). Resolving every tenant at the union of every
 // tenant's cuts records the same table
 // (TestRecordUnparsed_PerTenantCutsMatchUnionOfCuts) at the cost of
 // tenants × all cuts. (Grouping the tenants by their set of cuts was
@@ -291,15 +292,24 @@ func (c *ThresholdConfig) ValuesNotServed(now time.Time) map[string]map[string]s
 func recordUnparsed(cfg *ThresholdConfig, now time.Time) map[string]map[string]string {
 	rec := &rejectRecorder{}
 	cfg.resolveAtWithStats(now, nil, nil, rec)
+	utc := now.UTC()
+	nowMinute := utc.Hour()*60 + utc.Minute()
 	var one ThresholdConfig
 	for tenant, overrides := range cfg.Tenants {
 		cuts := tenantScheduleCuts(overrides)
 		if cuts == nil {
 			continue
 		}
+		// The segment now's minute falls in was read by the resolve above:
+		// no window of this tenant's starts or ends between its start and
+		// now, so the values there are the values at now.
+		current := sort.SearchInts(cuts, nowMinute+1) - 1
 		one = *cfg
 		one.Tenants = map[string]map[string]ScheduledValue{tenant: overrides}
-		for _, m := range cuts {
+		for i, m := range cuts {
+			if i == current {
+				continue
+			}
 			one.AtMinuteOfDay(m).resolveAtWithStats(now, nil, nil, rec)
 		}
 	}

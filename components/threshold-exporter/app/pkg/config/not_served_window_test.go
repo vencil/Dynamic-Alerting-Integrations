@@ -9,6 +9,7 @@ import (
 	"reflect"
 	"strings"
 	"testing"
+	"time"
 )
 
 // TestParseTimeWindow_StartEqualsEndRefused: a window whose start equals its
@@ -71,11 +72,11 @@ func TestRejectRecorder_KeepsTheStrongestVerdict(t *testing.T) {
 // tenant resolved at every cut of every tenant (ScheduleCuts), plus the
 // whole config resolved as written (where the phases read the windows) —
 // the reference the per-tenant reading must agree with.
-func recordUnparsedUnionOfCuts(cfg *ThresholdConfig) map[string]map[string]string {
+func recordUnparsedUnionOfCuts(cfg *ThresholdConfig, now time.Time) map[string]map[string]string {
 	rec := &rejectRecorder{}
-	cfg.resolveAtWithStats(scheduleDay, nil, nil, rec)
+	cfg.resolveAtWithStats(now, nil, nil, rec)
 	for _, m := range cfg.ScheduleCuts() {
-		cfg.AtMinuteOfDay(m).resolveAtWithStats(scheduleDay, nil, nil, rec)
+		cfg.AtMinuteOfDay(m).resolveAtWithStats(now, nil, nil, rec)
 	}
 	return rec.byTenant
 }
@@ -92,7 +93,7 @@ func TestRecordUnparsed_PerTenantCutsMatchUnionOfCuts(t *testing.T) {
 		"01:00~09:00", "05:00-05:00", "", "00:00-23:59"}
 	keys := []string{"mysql_connections", "mysql_connections_critical", "redis_memory",
 		`mysql_connections{db="x"}`, "mysql_threads_running", "pg_connections"}
-	for seed := int64(1); seed <= 200; seed++ {
+	for seed := int64(1); seed <= 600; seed++ {
 		r := rand.New(rand.NewSource(seed))
 		pick := func(xs []string) string { return xs[r.Intn(len(xs))] }
 		cfg := &ThresholdConfig{
@@ -111,11 +112,18 @@ func TestRecordUnparsed_PerTenantCutsMatchUnionOfCuts(t *testing.T) {
 			}
 			cfg.Tenants[fmt.Sprintf("t%d", i)] = m
 		}
-		got, want := recordUnparsed(cfg, scheduleDay), recordUnparsedUnionOfCuts(cfg)
-		if !reflect.DeepEqual(got, want) {
-			t.Fatalf("seed %d: per-tenant cuts recorded\n %v\nunion of cuts\n %v\ncfg %+v", seed, got, want, cfg.Tenants)
+		// now anywhere in the day (#2065 r1: the cut now falls in is read
+		// by the resolve as written, not again), on a window edge half the time.
+		now := scheduleDay.Add(time.Duration(r.Intn(1440)) * time.Minute)
+		if r.Intn(2) == 0 {
+			edges := []int{60, 300, 301, 360, 750, 780, 1320, 1439}
+			now = scheduleDay.Add(time.Duration(edges[r.Intn(len(edges))]) * time.Minute)
 		}
-		if got2 := cfg.ValuesNotServed(scheduleDay); !reflect.DeepEqual(got2, got) {
+		got, want := recordUnparsed(cfg, now), recordUnparsedUnionOfCuts(cfg, now)
+		if !reflect.DeepEqual(got, want) {
+			t.Fatalf("seed %d at %s: per-tenant cuts recorded\n %v\nunion of cuts\n %v\ncfg %+v", seed, now, got, want, cfg.Tenants)
+		}
+		if got2 := cfg.ValuesNotServed(now); !reflect.DeepEqual(got2, got) {
 			t.Fatalf("seed %d: ValuesNotServed %v, recordUnparsed %v", seed, got2, got)
 		}
 	}

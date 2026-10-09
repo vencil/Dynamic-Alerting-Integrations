@@ -69,12 +69,12 @@ type flatScanState struct {
 	// without any commit (#2132).
 	parseFailed []string
 
-	// rejected is the commit's FlatBuild.RejectedChainValues (#2065):
-	// root-relative subtree defaults file → the keys whose value the build
-	// refused as not threshold-shaped. Read by the values-not-served audit
+	// rejected is the commit's FlatBuild.RejectedChainWinners (#2065):
+	// tenant → key → the subtree defaults file whose refused value is the
+	// one the tenant is shown. Read by the values-not-served audit
 	// (config_values_not_served.go); nil on the flat incremental path, whose
 	// tree holds no `_defaults` file.
-	rejected map[string]map[string]bool
+	rejected map[string]map[string]string
 }
 
 // hierarchyState bundles the v2.7.0+ ADR-016/017 hierarchical-mode caches.
@@ -533,7 +533,7 @@ func (m *ConfigManager) commitConfig(cfg *ThresholdConfig, hash string, flatScan
 	// written — the resolver's own record and the build's refused subtree
 	// values — as da_config_values_not_served{reason} and one WARN per
 	// change. Outside m.mu, like the audit above; never on the scrape path.
-	m.auditValuesNotServed(cfg, hierTenantSources, flatScan, logHeader)
+	m.auditValuesNotServed(cfg, flatScan, logHeader)
 }
 
 // installConfig performs the atomic swap under m.mu and RETURNS the
@@ -1662,7 +1662,7 @@ func (m *ConfigManager) commitFlatFrom(scan *treeScan) error {
 		mtimes:      scan.RelMtimes(),
 		tree:        scan,
 		parseFailed: built.ParseFailed,
-		rejected:    built.RejectedChainValues,
+		rejected:    built.RejectedChainWinners,
 	}, fmt.Sprintf("Config loaded (%s)", m.Mode()))
 	return nil
 }
