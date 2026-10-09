@@ -360,6 +360,62 @@ func TestLoadRoot_ProblemsAndSkip(t *testing.T) {
 	}
 }
 
+// TestBuildPolicies_CollectionReceiverTypeEntry (#2758): a receiver-type
+// entry that is a collection names no type — the generator skips it and
+// --strict names it; da-guard reports the same Problem and keeps the string
+// entries. A non-empty allowed list of none still restricts.
+func TestBuildPolicies_CollectionReceiverTypeEntry(t *testing.T) {
+	t.Parallel()
+	doc := func(cons string) []byte {
+		return []byte("domain_policies:\n  fin:\n    tenants: [t1]\n    constraints:\n" + cons)
+	}
+	cases := []struct {
+		name, cons, field   string
+		forbidden, allowed  []string
+		allowedListNonEmpty bool
+	}{
+		{"mapping", "      forbidden_receiver_types: [slack, {a: 1}]\n", "forbidden_receiver_types",
+			[]string{"slack"}, nil, false},
+		{"list", "      forbidden_receiver_types: [slack, [a]]\n", "forbidden_receiver_types",
+			[]string{"slack"}, nil, false},
+		{"set", "      forbidden_receiver_types: [slack, !!set {a}]\n", "forbidden_receiver_types",
+			[]string{"slack"}, nil, false},
+		{"omap", "      forbidden_receiver_types: [slack, !!omap [{a: 1}]]\n", "forbidden_receiver_types",
+			[]string{"slack"}, nil, false},
+		{"aliased list", "      x: &l [a]\n      forbidden_receiver_types: [slack, *l]\n", "forbidden_receiver_types",
+			[]string{"slack"}, nil, false},
+		{"allowed mapping", "      allowed_receiver_types: [email, {a: 1}]\n", "allowed_receiver_types",
+			nil, []string{"email"}, true},
+		{"allowed of none", "      allowed_receiver_types: [{a: 1}]\n", "allowed_receiver_types",
+			nil, nil, true},
+	}
+	for _, c := range cases {
+		pols, probs, err := ParseDomainPolicies(doc(c.cons))
+		if err != nil {
+			t.Fatalf("%s: %v", c.name, err)
+		}
+		want := "domain_policies.fin.constraints." + c.field
+		if len(probs) != 1 || probs[0].Kind != ProblemDomainPolicyUnusable || probs[0].Field != want ||
+			!strings.Contains(probs[0].Message, "entry must be a receiver type") {
+			t.Errorf("%s: problems = %+v, want one %s on %s", c.name, probs, ProblemDomainPolicyUnusable, want)
+		}
+		if len(pols) != 1 || !reflect.DeepEqual(pols[0].ForbiddenReceiverTypes, c.forbidden) ||
+			!reflect.DeepEqual(pols[0].AllowedReceiverTypes, c.allowed) ||
+			pols[0].AllowedListNonEmpty != c.allowedListNonEmpty {
+			t.Errorf("%s: policies = %+v", c.name, pols)
+		}
+	}
+	// Scalar entries that are no string are dropped without a Problem.
+	for _, cons := range []string{
+		"      forbidden_receiver_types: [slack, !!null x, 7]\n",
+		"      allowed_receiver_types: [email, ~]\n",
+	} {
+		if _, probs, err := ParseDomainPolicies(doc(cons)); err != nil || len(probs) != 0 {
+			t.Errorf("%q: problems = %+v, err = %v; want none", cons, probs, err)
+		}
+	}
+}
+
 // TestWithPyYAMLRouting_NonStringKeysAndFailClosed (#2295 review): the
 // PyYAML side is read by its string key `receiver` even when another key is
 // not a string (map[any]any), and a receiver whose PyYAML reading is not

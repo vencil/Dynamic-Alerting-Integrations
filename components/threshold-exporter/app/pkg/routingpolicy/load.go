@@ -1289,6 +1289,12 @@ func buildPolicies(nodes map[string]*yaml.Node, origin map[string]string) ([]Pol
 				p.AllowedListNonEmpty = true
 			}
 			for _, item := range l.Content {
+				// #2758: a collection entry names no type; --strict says so.
+				if d := deref(item); d != nil && (d.Kind == yaml.MappingNode || d.Kind == yaml.SequenceNode) {
+					bad(field+".constraints."+cn.key, "domain policy %q: a '%s' entry must be a receiver type, got %s — the entry cannot be enforced",
+						name, cn.key, kindName(d))
+					continue
+				}
 				if s, ok := ReceiverTypeEntry(item); ok {
 					*cn.dst = append(*cn.dst, s)
 				}
