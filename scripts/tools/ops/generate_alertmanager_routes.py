@@ -167,7 +167,7 @@ from _grar_validate import duplicate_tenant_errors  # noqa: E402
 # ADR-035 D3: the invalid-tenant-id refusal cites the rule's own words.
 from _grar_validate import invalid_tenant_id_text  # noqa: E402
 # #2766: structured findings (the refusal lines are built as them here).
-from _grar_merge import Finding, as_finding  # noqa: E402
+from _grar_merge import Finding, as_finding, unclassified  # noqa: E402
 import yaml  # noqa: E402
 
 
@@ -204,7 +204,7 @@ def _assembly_failed(exc: ValueError, refusing: str) -> None:
 
 
 def _validate_mode(routes: list[dict], receivers: list[dict], inhibit_rules: list[dict],
-                   all_warnings: list[str]) -> None:
+                   all_warnings: list[str], sink: list | None = None) -> None:
     """Handle --validate mode: check for errors and exit.
 
     #2311: every verdict comes from ``evaluate_generated_config`` — the SAME
@@ -217,6 +217,13 @@ def _validate_mode(routes: list[dict], receivers: list[dict], inhibit_rules: lis
     verdict = evaluate_generated_config(
         routes, receivers, inhibit_rules, all_warnings,
         extra_errors=_policy_errors(all_warnings))
+    # #2766: the lines only --validate prints join the findings. A verdict
+    # error that is already one (a stream line, kept by identity) is not
+    # added twice; the rest (the inhibit tripwire) block under --validate.
+    recorded = {id(f) for f in sink} if sink is not None else set()
+    _sink_extend(sink, [unclassified(w, blocks="never") for w in verdict.warnings])
+    _sink_extend(sink, [unclassified(e, blocks="validate")
+                        for e in verdict.errors if id(e) not in recorded])
     # Non-blocking lines the checks' helpers used to print directly (an
     # un-gated equal-label, a degraded probe set): same stream, same text.
     for w in verdict.warnings:
@@ -925,9 +932,9 @@ def _build_parser() -> argparse.ArgumentParser:
                              "warning-stream and refusal lines, each with "
                              "kind / severity / blocks / tenant / policy / "
                              f"file / field) as JSON ({FINDINGS_SCHEMA}) to "
-                             "PATH, atomically, on every exit after the "
-                             "arguments parse; stdout, stderr and the exit "
-                             "code are unchanged")
+                             "PATH, atomically, on every exit (usage errors "
+                             "and exceptions included); stdout, stderr and "
+                             "the exit code are unchanged")
     return parser
 
 
@@ -965,19 +972,34 @@ def da_tools_version() -> str | None:
 
 
 def findings_document(findings: list[str], *, config_dir: str,
-                      exit_code: int) -> dict:
+                      exit_code: int, validate: bool = False,
+                      strict: bool = False) -> dict:
     """The ``--findings-json`` document (schema ``FINDINGS_SCHEMA``).
 
     ``findings`` keeps the run's order; each record is
     ``Finding.as_record()`` — ``message`` is the line's exact text with only
     its leading indentation stripped.
     """
+    records = [as_finding(f) for f in findings]
+    # #2766: a non-zero exit with no finding that blocks in this run's mode
+    # (an amtool rejection, an assembly refusal, "no valid routes", a caller
+    # error) must not read as a pass to a consumer that looks only at the
+    # findings — the document is never looser than the run's own exit code.
+    in_force = {"always"} | ({"validate"} if validate else set()) \
+        | ({"strict"} if strict else set())
+    if exit_code != EXIT_OK and not any(f.blocks in in_force for f in records):
+        records.append(Finding(
+            f"exit code {exit_code}: the run failed for a reason not itemised "
+            "here — read the run's stderr",
+            kind="run_failed", severity="error", blocks="always"))
     return {
         "schema": FINDINGS_SCHEMA,
         "generator_version": da_tools_version(),
         "config_dir": config_dir,
         "exit_code": exit_code,
-        "findings": [as_finding(f).as_record() for f in findings],
+        "validate": validate,
+        "strict": strict,
+        "findings": [f.as_record() for f in records],
     }
 
 
@@ -1015,23 +1037,51 @@ def _exit_code_of(exc: SystemExit) -> int:
 def main() -> None:
     """CLI entry point: Generate Alertmanager route + receiver + inhibit config from tenant YAML."""
     parser = _build_parser()
-    args = parser.parse_args()
     # #2766: every finding the run prints, in the order it was determined.
-    # --findings-json writes it on EVERY exit from here on — each refusal,
-    # verdict and caller error ends in sys.exit, so the one place that sees
-    # them all is a SystemExit handler around the run.
+    # --findings-json writes it on EVERY exit — a refusal, a verdict, a caller
+    # error, a usage error, an exception — so a document a previous run left
+    # at PATH is never read as this run's. Its path is read before the full
+    # parse for exactly that: a usage error (rc 2) still replaces it.
+    early = _early_findings_args()
     findings: list[str] = []
+    args: argparse.Namespace | None = None
+    code = 1  # what an exception other than SystemExit ends the process with
     try:
+        args = parser.parse_args()
         _run(args, findings)
+        code = EXIT_OK
     except SystemExit as exc:
-        if args.findings_json is not None:
-            write_findings_json(args.findings_json, findings_document(
-                findings, config_dir=args.config_dir,
-                exit_code=_exit_code_of(exc)))
+        code = _exit_code_of(exc)
         raise
-    if args.findings_json is not None:
-        write_findings_json(args.findings_json, findings_document(
-            findings, config_dir=args.config_dir, exit_code=EXIT_OK))
+    finally:
+        src = args if args is not None else early
+        if src.findings_json is not None:
+            write_findings_json(src.findings_json, findings_document(
+                findings, config_dir=src.config_dir, exit_code=code,
+                validate=src.validate, strict=src.strict))
+
+
+def _early_findings_args(argv: list[str] | None = None) -> argparse.Namespace:
+    """The four flags the --findings-json document needs, read from argv
+    before the full parse (#2766), so a usage error still replaces a stale
+    document. A plain scan, not a second parser (the CLI contract check reads
+    this file's parser): the exact spellings ``--flag VALUE`` /
+    ``--flag=VALUE`` only — an abbreviated flag is found by the full parse
+    alone."""
+    argv = sys.argv[1:] if argv is None else argv
+    early = argparse.Namespace(findings_json=None, config_dir=None,
+                               validate="--validate" in argv,
+                               strict="--strict" in argv)
+    for i, tok in enumerate(argv):
+        if tok == "--":
+            break
+        for flag, dest in (("--findings-json", "findings_json"),
+                           ("--config-dir", "config_dir")):
+            if tok == flag and i + 1 < len(argv):
+                setattr(early, dest, argv[i + 1])
+            elif tok.startswith(flag + "="):
+                setattr(early, dest, tok[len(flag) + 1:])
+    return early
 
 
 def _run(args: argparse.Namespace, findings: list[str]) -> None:
@@ -1189,7 +1239,7 @@ def _run(args: argparse.Namespace, findings: list[str]) -> None:
 
     # Validate mode
     if args.validate:
-        _validate_mode(routes, receivers, inhibit_rules, all_warnings)
+        _validate_mode(routes, receivers, inhibit_rules, all_warnings, findings)
 
     # #2279: two generated receivers with one name. Blocking in EVERY mode and
     # with or without --strict — Alertmanager refuses such a config, and a

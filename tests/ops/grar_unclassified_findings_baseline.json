@@ -10,6 +10,7 @@
     "scripts/tools/ops/_grar_routes.py::_build_single_enforced_route": 1,
     "scripts/tools/ops/_grar_routes.py::generate_inhibit_rules": 1,
     "scripts/tools/ops/_grar_validate.py::_validate_profile_refs": 1,
-    "scripts/tools/ops/_grar_validate.py::receiver_name_collisions": 1
+    "scripts/tools/ops/_grar_validate.py::receiver_name_collisions": 1,
+    "scripts/tools/ops/generate_alertmanager_routes.py::_validate_mode": 2
   }
 }

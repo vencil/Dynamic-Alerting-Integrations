@@ -80,6 +80,10 @@ FINDING_KINDS: dict[str, str] = {
     "refusal_summary":
         "The framing line of a refusal (what was refused and why it stops "
         "the run); the itemised findings are separate.",
+    "run_failed":
+        "The run exited non-zero and no other finding is an error; the "
+        "reason is only in the run's stderr. Never printed: added by "
+        "--findings-json so a reader of the findings alone cannot pass it.",
     # ADR-007 domain policies
     "domain_policy_violation":
         "A tenant's resolved routing (main route or a sub-route) breaks a "
@@ -248,9 +252,11 @@ def unclassified(line: str, *, blocks: str) -> Finding:
 def as_finding(line: str) -> Finding:
     """*line* as a ``Finding`` for a writer that must not fail: a plain str
     that slipped past every producer is reported as ``unclassified`` with
-    ``never`` (the guard test refuses such a producer)."""
+    ``always`` — fail closed: a line nobody classified may be blocking, and
+    the document must never be looser than the run (the guard test refuses
+    such a producer)."""
     return line if isinstance(line, Finding) else Finding(
-        line, kind=UNCLASSIFIED, blocks="never")
+        line, kind=UNCLASSIFIED, blocks="always")
 
 
 # ── #2489: "a config entry was dropped as unusable" is a TYPE, not a word ──

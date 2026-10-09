@@ -40,7 +40,7 @@ BASELINE = Path(__file__).resolve().parent / "grar_unclassified_findings_baselin
 RECORD_KEYS = {"kind", "severity", "blocks", "tenant", "policy", "file",
                "field", "message"}
 DOC_KEYS = {"schema", "generator_version", "config_dir", "exit_code",
-            "findings"}
+            "validate", "strict", "findings"}
 
 
 def _golden() -> dict:
@@ -107,6 +107,11 @@ def test_document_shape_and_printed_lines(tmp_path, fixture, mode):
         assert rec["blocks"] in gm.FINDING_BLOCKS, rec
         # Only what this run printed (leading indentation stripped).
         assert rec["message"] in printed, rec["message"]
+    # Every non-zero exit of these fixtures is itemised by printed findings,
+    # one of which blocks — the run_failed backstop is never what carries it.
+    assert all(r["kind"] != "run_failed" for r in doc["findings"]), doc
+    if doc["exit_code"] != 0:
+        assert any(r["blocks"] != "never" for r in doc["findings"]), doc
         assert rec["message"] == rec["message"].lstrip()
     # Format: UTF-8, ensure_ascii=False, sort_keys, newline-terminated, no
     # temp file left beside it.
@@ -201,7 +206,119 @@ def test_caller_error_exit_still_writes_the_document(tmp_path):
     res = cases.run_gar(d, ["--validate", "--yes"], ["--findings-json", str(out)])
     assert res.returncode == 2, res.stderr
     doc = json.loads(out.read_text(encoding="utf-8"))
-    assert doc["exit_code"] == 2 and doc["findings"] == []
+    # A caller error prints no finding, so the document carries the one
+    # finding it adds itself: a reader of the findings alone must not pass it.
+    assert doc["exit_code"] == 2
+    [rec] = doc["findings"]
+    assert (rec["kind"], rec["severity"], rec["blocks"]) == (
+        "run_failed", "error", "always")
+
+
+def test_validate_only_lines_join_the_findings_once(monkeypatch):
+    """A --validate verdict error that is not a stream line (the inhibit
+    tripwire) is recorded as blocking under --validate; one that IS a stream
+    line already recorded is not recorded twice; the verdict's warnings are
+    recorded as non-blocking."""
+    from _grar_render import GeneratedConfigVerdict
+    stream = gm.skipped_entry_warning("  WARN: alpha: bad entry, skipping")
+    trip = "  WARN: generated inhibit_rules[0] would silence a platform alert"
+    note = "  NOTICE: equal-label not presence-gated"
+    monkeypatch.setattr(gar, "evaluate_generated_config",
+                        lambda *a, **k: GeneratedConfigVerdict(
+                            errors=[stream, trip], warnings=[note]))
+    sink = [stream]
+    with pytest.raises(SystemExit) as exc:
+        gar._validate_mode([], [], [], [stream], sink)
+    assert exc.value.code == 1
+    assert [(str(f), f.blocks) for f in sink] == [
+        (stream, "validate"), (note, "never"), (trip, "validate")]
+    assert sink[0] is stream
+
+
+def _pigeon_tree(root: Path) -> Path:
+    """One tenant whose only receiver is unusable and whose dedup is off:
+    nothing renders, so every mode exits 1 ("No valid routes ...") although
+    the one finding blocks only under --validate (blind review B1)."""
+    d = root / "conf.d"
+    d.mkdir()
+    (d / "_defaults.yaml").write_text(cases._DEFAULTS, encoding="utf-8")
+    (d / "pigeon.yaml").write_text(
+        cases._tenant("pigeon", "      receiver:\n        type: carrier-pigeon\n",
+                      "    _severity_dedup: disable\n"), encoding="utf-8")
+    return d
+
+
+@pytest.mark.parametrize("argv,validate,strict", [
+    (["--dry-run"], False, False),
+    (["--strict", "--dry-run"], False, True),
+    (["--validate"], True, False),
+])
+def test_exit_1_without_a_blocking_line_still_blocks(tmp_path, argv, validate,
+                                                      strict):
+    d = _pigeon_tree(tmp_path)
+    out = tmp_path / "f.json"
+    res = cases.run_gar(d, argv, ["--findings-json", str(out)])
+    assert res.returncode == 1, res.stderr
+    doc = json.loads(out.read_text(encoding="utf-8"))
+    assert (doc["exit_code"], doc["validate"], doc["strict"]) == (1, validate,
+                                                                  strict)
+    in_force = {"always"} | ({"validate"} if validate else set()) \
+        | ({"strict"} if strict else set())
+    assert any(r["blocks"] in in_force for r in doc["findings"]), doc
+    # The backstop is added only when no printed line blocks in this mode.
+    assert any(r["kind"] == "run_failed" for r in doc["findings"]) is (
+        not validate), doc
+
+
+def test_usage_error_replaces_a_stale_document(tmp_path):
+    d = cases.build_tree(tmp_path, "clean")
+    out = tmp_path / "f.json"
+    out.write_text('{"exit_code": 0, "findings": []}\n', encoding="utf-8")
+    res = cases.run_gar(d, ["--dry-run", "--no-such-flag"],
+                        ["--findings-json", str(out)])
+    assert res.returncode == 2, res.stderr
+    doc = json.loads(out.read_text(encoding="utf-8"))
+    assert doc["exit_code"] == 2
+    assert [r["kind"] for r in doc["findings"]] == ["run_failed"]
+
+
+def test_an_exception_still_writes_a_failing_document(tmp_path, monkeypatch):
+    out = tmp_path / "f.json"
+    monkeypatch.setattr(sys, "argv", ["gar", "--config-dir", str(tmp_path),
+                                      "--dry-run", "--findings-json", str(out)])
+
+    def boom(_args, findings):
+        findings.append(gm.Finding("  WARN: x", blocks="never"))
+        raise BrokenPipeError("stdout closed")
+
+    monkeypatch.setattr(gar, "_run", boom)
+    with pytest.raises(BrokenPipeError):
+        gar.main()
+    doc = json.loads(out.read_text(encoding="utf-8"))
+    assert doc["exit_code"] == 1
+    assert [r["kind"] for r in doc["findings"]] == ["unclassified", "run_failed"]
+
+
+def test_an_unmarked_line_fails_closed():
+    assert gm.as_finding("  WARN: from nowhere").blocks == "always"
+
+
+@pytest.mark.parametrize("exit_code,findings,validate,strict,backstop", [
+    (0, [], False, False, False),
+    (1, [], True, True, True),
+    (1, ["strict"], True, False, True),     # strict-only finding, not --strict
+    (1, ["strict"], False, True, False),
+    (1, ["validate"], False, False, True),
+    (1, ["validate"], True, False, False),
+    (1, ["never"], True, True, True),
+    (1, ["always"], False, False, False),
+])
+def test_run_failed_backstop(exit_code, findings, validate, strict, backstop):
+    doc = gar.findings_document(
+        [gm.Finding("  WARN: x", blocks=b) for b in findings],
+        config_dir="c", exit_code=exit_code, validate=validate, strict=strict)
+    added = [r for r in doc["findings"] if r["kind"] == "run_failed"]
+    assert bool(added) is backstop, doc
 
 
 def test_unwritable_findings_path_is_a_caller_error(tmp_path):
@@ -487,3 +604,17 @@ def test_site_scanner_controls(source, expected):
 
 def test_baseline_is_not_vacuous():
     assert sum(_current_sites().values()) >= 1
+
+
+@pytest.mark.parametrize("argv,expected", [
+    (["--config-dir", "c", "--findings-json", "f.json", "--strict"],
+     ("f.json", "c", False, True)),
+    (["--config-dir=c", "--findings-json=f.json", "--validate"],
+     ("f.json", "c", True, False)),
+    (["--config-dir", "c", "--findings-json"], (None, "c", False, False)),
+    (["--config-dir", "c", "--", "--findings-json", "f.json"],
+     (None, "c", False, False)),
+])
+def test_early_findings_args(argv, expected):
+    e = gar._early_findings_args(argv)
+    assert (e.findings_json, e.config_dir, e.validate, e.strict) == expected
