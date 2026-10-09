@@ -319,7 +319,9 @@ func PutTenantCustomAlerts(d *Deps) http.HandlerFunc {
 			if writeTenantPlacementError(w, r, err) {
 				return
 			}
-			WriteJSONError(w, r, http.StatusBadRequest, err.Error())
+			// #1700: as PutTenant's fallback — the error's own text only
+			// when it is about the request.
+			WriteJSONError(w, r, http.StatusBadRequest, writeErrorText(r, err))
 			return
 		}
 

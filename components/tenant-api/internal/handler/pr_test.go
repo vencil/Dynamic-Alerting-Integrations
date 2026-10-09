@@ -504,9 +504,13 @@ func TestPutTenant_PRMode_HappyPath(t *testing.T) {
 		}
 	case http.StatusInternalServerError:
 		// Expected in test env without git — verify it's the PR write path, not direct
+		// #1700: the PR path's unexpected git failure is an INTERNAL_ERROR
+		// whose text is withheld; the direct path never answers this way
+		// (its unrecognized write failure is a 400), so the shape still
+		// tells the two paths apart.
 		bodyStr := w.Body.String()
-		if !strings.Contains(bodyStr, "PR write failed") {
-			t.Errorf("expected PR write path error, got: %s", bodyStr)
+		if !strings.Contains(bodyStr, `"error":"`+msgInternal+`"`) {
+			t.Errorf("expected the PR write path's withheld 500, got: %s", bodyStr)
 		}
 	case http.StatusConflict:
 		// 409 means pending_pr_exists check is working
@@ -537,9 +541,13 @@ func TestPutTenant_GitLabMode_HappyPath(t *testing.T) {
 
 	// In test env, WritePR will fail on git operations. We verify the routing.
 	if w.Code == http.StatusInternalServerError {
+		// #1700: the PR path's unexpected git failure is an INTERNAL_ERROR
+		// whose text is withheld; the direct path never answers this way
+		// (its unrecognized write failure is a 400), so the shape still
+		// tells the two paths apart.
 		bodyStr := w.Body.String()
-		if !strings.Contains(bodyStr, "PR write failed") {
-			t.Errorf("expected PR write path error, got: %s", bodyStr)
+		if !strings.Contains(bodyStr, `"error":"`+msgInternal+`"`) {
+			t.Errorf("expected the PR write path's withheld 500, got: %s", bodyStr)
 		}
 	}
 	// Any non-panic, non-direct-mode response confirms correct routing

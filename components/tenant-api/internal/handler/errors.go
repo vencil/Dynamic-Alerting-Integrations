@@ -61,8 +61,18 @@ const (
 	CodeConflict        = "CONFLICT"
 	CodeBadRequest      = "BAD_REQUEST"
 	CodeInternal        = "INTERNAL_ERROR"
-	CodePayloadTooLarge = "PAYLOAD_TOO_LARGE"
-	CodeUpstream        = "UPSTREAM_ERROR"
+	// CodeConfigDecode marks a 500 whose text is a conf.d decode error the
+	// client is meant to read (`parse defaults[i]: …` — the decoder's own
+	// message, which names no path). It is not INTERNAL_ERROR because
+	// WriteErrorEnvelope withholds every INTERNAL_ERROR text (#1700); the
+	// problem is in the operator's config, and the text says where.
+	CodeConfigDecode = "CONFIG_DECODE_ERROR"
+	// CodeBaseRestoreFailed marks a 500 from a PR-mode write whose worktree
+	// could not return to the base branch (#2070). Its text names the branch
+	// and whether it was pushed, so it is not INTERNAL_ERROR (#1700).
+	CodeBaseRestoreFailed = "BASE_RESTORE_FAILED"
+	CodePayloadTooLarge   = "PAYLOAD_TOO_LARGE"
+	CodeUpstream          = "UPSTREAM_ERROR"
 	// CodeUnauthorized marks a 401 (missing/invalid caller identity). The RBAC
 	// middleware's 401 mirrors this value in its own package-local const
 	// (internal/rbac/middleware.go) — the depguard domain-no-handler ratchet
@@ -307,11 +317,108 @@ func writeJSON(w http.ResponseWriter, status int, v any) {
 //
 // `r` may be nil for test-only call sites; production handlers
 // always have r in scope so request_id population is automatic.
+//
+// #1700: an INTERNAL_ERROR body never carries the server's own error text.
+// Call sites answer an unexpected failure with `err.Error()` (or a prefix
+// plus it), and that text carries what only the server should see —
+// conf.d's absolute path in an EISDIR / EACCES / ELOOP, a temp-file path, a
+// git message. Deciding that per call site is what left 21 of them leaking
+// after two rounds of per-site fixes, so it is decided HERE: the text goes to
+// the log with the request_id, and the client gets msgInternal plus that
+// request_id to quote. A new call site is covered without anyone noticing it.
+//
+// The fixed messages in publicInternalMessages say nothing about the server
+// and are kept, because they tell the client which operation failed. An error
+// whose own text is meant for the client (a config decode error) uses its own
+// code rather than INTERNAL_ERROR — CodeConfigDecode — so it never reaches
+// this branch. Other codes, 503s included, are untouched.
 func WriteErrorEnvelope(w http.ResponseWriter, r *http.Request, status int, env ErrorResponse) {
 	if env.RequestID == "" && r != nil {
 		env.RequestID = middleware.GetReqID(r.Context())
 	}
+	if env.Code == CodeInternal && !publicInternalMessages[env.Error] {
+		logWithheldError(r, status, env.RequestID, env.Error)
+		env.Error = msgInternal
+	}
 	writeJSON(w, status, env)
+}
+
+// msgInternal is the client-facing text of every INTERNAL_ERROR whose own text
+// was withheld (#1700). The envelope's request_id finds the full text in the
+// server log.
+const msgInternal = "internal error; the server log has the details under this request_id"
+
+// publicInternalMessages are the INTERNAL_ERROR texts the client may see
+// verbatim: fixed sentences that name the failed operation and nothing about
+// the server. Every other INTERNAL_ERROR text is withheld (WriteErrorEnvelope).
+// Adding one here is a decision that the text can never carry server state.
+var publicInternalMessages = map[string]bool{
+	msgInternal:                true,
+	msgTenantTreeScan:          true,
+	msgRootPlatformRead:        true,
+	msgEffectiveUnresolved:     true,
+	msgCustomAlertsUnparseable: true,
+}
+
+// msgWriteFailed is the client-facing text of a tenant write that failed for a
+// reason that is not the client's (#1700); the request_id finds the full text.
+const msgWriteFailed = "the write failed; the server log has the details under this request_id"
+
+// writeBaseRestoreFailed answers a PR-mode write whose branch was cut (and
+// maybe pushed) but whose worktree could not return to base (#2070), and
+// reports whether err was one. It stays a 500 with no Retry-After — a retry
+// would cut a second branch — and its text names the branch and whether it
+// reached origin, which the operator needs to find it. It leaves out the git
+// error, whose text can carry server paths (#1700); that goes to the log.
+// Its own code keeps WriteErrorEnvelope from withholding the branch.
+func writeBaseRestoreFailed(w http.ResponseWriter, r *http.Request, prefix string, err error) bool {
+	var br *gitops.BaseRestoreError
+	if !errors.As(err, &br) {
+		return false
+	}
+	slog.Error("PR-mode write: worktree left on the feature branch", "error", err)
+	WriteJSONErrorWithCode(w, r, http.StatusInternalServerError, CodeBaseRestoreFailed, prefix+br.Summary())
+	return true
+}
+
+// msgBatchOpFailed is msgWriteFailed for one op of a batch: an async op has no
+// request_id, so its log line is found by tenant and time instead.
+const msgBatchOpFailed = "the write failed; the server log has the details"
+
+// writeErrorIsForClient reports whether a tenant-write error's own text is
+// meant for the caller: a validation verdict on the body, an unusable tenant
+// id, or (batch) a merge error describing the patch against the file. Any
+// other error out of a write is the server's — reading the file, the temp
+// file, git — and its text carries server paths (#1700).
+func writeErrorIsForClient(err error) bool {
+	return errors.Is(err, gitops.ErrValidation) ||
+		errors.Is(err, gitops.ErrReservedTenantID) ||
+		errors.Is(err, gitops.ErrInvalidTenantID) ||
+		errors.Is(err, gitops.ErrMergeFailed)
+}
+
+// writeErrorText is the text a tenant-write failure shows the client: its own
+// when writeErrorIsForClient, else msgWriteFailed with the original logged.
+func writeErrorText(r *http.Request, err error) string {
+	if writeErrorIsForClient(err) {
+		return err.Error()
+	}
+	var reqID string
+	if r != nil {
+		reqID = middleware.GetReqID(r.Context())
+	}
+	logWithheldError(r, 0, reqID, err.Error())
+	return msgWriteFailed
+}
+
+// logWithheldError records the text WriteErrorEnvelope keeps from the client,
+// keyed by the request_id the client receives.
+func logWithheldError(r *http.Request, status int, requestID, text string) {
+	attrs := []any{"status", status, "request_id", requestID, "error", text}
+	if r != nil {
+		attrs = append(attrs, "method", r.Method, "path", r.URL.Path)
+	}
+	slog.Error("internal error response; detail withheld from the client", attrs...)
 }
 
 // WriteJSONError emits a simple error envelope: {error, code,
@@ -590,7 +697,8 @@ func writeWriteFlowError(w http.ResponseWriter, r *http.Request, err error) bool
 //   - gitops.ErrWriteOverloaded → 503 + Retry-After (admission queue full, TRK-320)
 //   - gitops.ErrTreeNotOnBase   → 503 + Retry-After (worktree left on a PR branch, #1723)
 //   - gitops.ErrConflict        → 409 with the error text
-//   - anything else             → 500 with the error text
+//   - anything else             → 500 INTERNAL_ERROR (its text goes to the log
+//     only — WriteErrorEnvelope, #1700)
 //
 // The default is 500 — deliberately distinct from tenant_put.go /
 // tenant_custom_alerts.go, whose unrecognized-write case is a 400. This helper

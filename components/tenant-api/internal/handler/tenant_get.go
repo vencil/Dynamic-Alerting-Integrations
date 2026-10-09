@@ -198,7 +198,7 @@ func GetTenant(d *Deps) http.HandlerFunc {
 			// contents) in the server log only; return a stable, non-sensitive
 			// message to clients.
 			slog.Error("failed to parse tenant custom alerts", "tenant", tenantID, "err", err)
-			WriteJSONError(w, r, http.StatusInternalServerError, "failed to parse tenant custom alerts")
+			WriteJSONError(w, r, http.StatusInternalServerError, msgCustomAlertsUnparseable)
 			return
 		}
 
@@ -219,6 +219,10 @@ func GetTenant(d *Deps) http.HandlerFunc {
 // msgRootPlatformRead is the fixed client-facing text for a GET whose read of
 // the conf.d root platform files did not complete in time. The full error
 // goes to the server log only.
+// msgCustomAlertsUnparseable is the fixed 500 text when a tenant's
+// _custom_alerts cannot be extracted; the parser's own error stays in the log.
+const msgCustomAlertsUnparseable = "failed to parse tenant custom alerts"
+
 const msgRootPlatformRead = "cannot read the conf.d root platform files in time; " +
 	"the tenant's effective thresholds cannot be computed"
 
