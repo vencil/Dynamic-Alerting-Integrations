@@ -23,7 +23,8 @@ package config
 //     root decode has no field for it (FlatBuild.RootDefaultsUnread).
 //   - value_rejected: applySubtreeDefaults refuses a subtree level's value
 //     (not threshold-shaped) and the tenant keeps a shallower one
-//     (FlatBuild.RejectedChainValues).
+//     (FlatBuild.RejectedChainValues, less the keys the tenant sets itself:
+//     FlatBuild.rejectedTenantSets).
 //   - value_unparsed: resolveBaseRows cannot parse the tenant's value and
 //     serves the platform default instead (rejectRecorder).
 //   - value_unparsed_dropped: the critical / dimensional / declared phase
@@ -289,8 +290,8 @@ func ValueNotServedReasons() []string {
 // modified. nil when nothing is recorded.
 //
 // ⚠️ Tenant values only: a subtree `_defaults.yaml` value the build refused
-// is FlatBuild.RejectedChainValues, and the other NotServed reasons are the
-// build's, not the resolver's.
+// is FlatBuild.RejectedChainValues (less rejectedTenantSets), and the other
+// NotServed reasons are the build's, not the resolver's.
 //
 // It resolves c with a recorder over every minute of the UTC day at which
 // some tenant value may resolve differently, so the verdict does not depend
