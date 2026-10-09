@@ -200,6 +200,13 @@ type ScopedTenants struct {
 	// are listed; nil when there is none.
 	RootNullUndeclared map[string][]RootNullKey
 
+	// Config is the exporter's own build of the WHOLE tree (FlatBuild.Config
+	// of the build the other fields are read off): what /metrics serves,
+	// whatever the scope — one series two keys share fails the scrape for
+	// every tenant. For da-guard's custom_alert_duplicate_series and
+	// metrics_not_gatherable (#2031). nil when the tree has no file.
+	Config *ThresholdConfig
+
 	// ScheduleNulls is every threshold, in a file the exporter reads that
 	// bears on the scope, written as a schedule with override windows and a
 	// null in it — refused at validation time (#2708, scopeScheduleNulls).
@@ -439,6 +446,9 @@ func scopeEffective(configDir, scopeDir string, wholeTree bool) (*ScopedTenants,
 		DeclaredStateFilters:   stateFilters,
 		SubtreeRefusedVerdicts: applied,
 		ScheduleNulls:          scopeScheduleNulls(scan, filepath.ToSlash(rel), inScope, parseFailed),
+	}
+	if built != nil {
+		out.Config = &built.Config
 	}
 	// The build's verdicts, kept for the in-scope tenants only (#1976,
 	// #2518), and the reserved keys of the same build's subtree chain (#2388).

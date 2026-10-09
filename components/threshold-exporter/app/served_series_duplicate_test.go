@@ -133,3 +133,37 @@ func TestMetrics_DimensionalKeySpellings_OneSeries(t *testing.T) {
 		})
 	}
 }
+
+// #2031: a `_custom_alerts` entry repeating an earlier entry's series — a
+// custom alert with the same name and shape, or a slo_burn_rate alert of the
+// same shape (one user_slo_objective) — is dropped: 200, the first entry's
+// series, and the drop counted on da_custom_alert_parse_errors.
+func TestMetrics_CustomAlertDuplicateSeries_DropsTheLaterEntry(t *testing.T) {
+	t.Parallel()
+	for name, tc := range map[string]struct {
+		list, want string
+	}{
+		"same name and shape": {
+			"      - {recipe: threshold, name: q_high, metric: qd, op: \">\", window: 5m, threshold: \"100:warning\"}\n" +
+				"      - {recipe: threshold, name: q_high, metric: qd, op: \">\", window: 5m, threshold: \"200:warning\"}\n",
+			`severity="warning",tenant="tenant-a"} 100`},
+		"slo, same shape": {
+			"      - {recipe: slo_burn_rate, name: avail1, metric: err_total, denominator_metric: req_total, objective: \"99.9\"}\n" +
+				"      - {recipe: slo_burn_rate, name: avail2, metric: err_total, denominator_metric: req_total, objective: \"99.5\"}\n",
+			`tenant="tenant-a"} 99.9`},
+	} {
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+			code, body := scrapeTree(t, "tenants:\n  tenant-a:\n    _custom_alerts:\n"+tc.list)
+			if code != http.StatusOK {
+				t.Fatalf("status = %d, want 200; body:\n%s", code, body)
+			}
+			if !strings.Contains(body, tc.want) {
+				t.Errorf("want %s (the first entry); body:\n%s", tc.want, body)
+			}
+			if !strings.Contains(body, `da_custom_alert_parse_errors{tenant="tenant-a"} 1`) {
+				t.Errorf("the dropped entry is not counted; body:\n%s", body)
+			}
+		})
+	}
+}

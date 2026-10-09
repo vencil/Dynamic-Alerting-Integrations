@@ -596,6 +596,8 @@ func buildCheckInput(scoped *config.ScopedTenants, f *flags) guard.CheckInput {
 		ScheduleNulls: scoped.ScheduleNulls,
 		// #2065: the effective configs' not_served, in-scope tenants only.
 		ValuesNotServed: notServed,
+		// #2031: the exporter's own build drops these entries.
+		CustomAlertDuplicates: customAlertDuplicates(scoped),
 	}
 }
 
@@ -629,6 +631,26 @@ func spellFindingsAsWritten(report *guard.GuardReport, scoped *config.ScopedTena
 			f.Message = strings.ReplaceAll(f.Message, qc[1:len(qc)-1], qw[1:len(qw)-1])
 		}
 	}
+}
+
+// customAlertDuplicates is guard.CheckInput.CustomAlertDuplicates: the
+// `_custom_alerts` entries the exporter's own build of the tree drops as
+// duplicates of an earlier entry's series (config.CustomAlertDuplicates), for
+// the in-scope tenants. nil when none.
+func customAlertDuplicates(scoped *config.ScopedTenants) map[string][]config.CustomAlertDuplicate {
+	if scoped.Config == nil {
+		return nil
+	}
+	var out map[string][]config.CustomAlertDuplicate
+	for _, ec := range scoped.Tenants {
+		if d := config.CustomAlertDuplicates(ec.TenantID, scoped.Config.Tenants[ec.TenantID]); len(d) > 0 {
+			if out == nil {
+				out = map[string][]config.CustomAlertDuplicate{}
+			}
+			out[ec.TenantID] = d
+		}
+	}
+	return out
 }
 
 // splitNonEmpty splits "a, b , ,c" into ["a","b","c"] — empty

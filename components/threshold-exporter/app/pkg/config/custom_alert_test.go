@@ -692,3 +692,63 @@ func TestValidateTenantCustomAlerts_SloBurnRate(t *testing.T) {
 		t.Errorf("disabled slo must be valid and uncounted (cap=2 with 1 active), got %v", got)
 	}
 }
+
+// #2031: an entry putting on /metrics a series an earlier entry of the list
+// already puts there is dropped and counted — the first is served, and the
+// other entries are not touched. Judged by the series, not by the
+// preflight's stricter name / shape+severity rules.
+func TestCustomAlert_DuplicateSeriesDropsTheLaterEntry(t *testing.T) {
+	t.Parallel()
+	const thr = "recipe: threshold, metric: qd, op: \">\", window: 5m"
+	const slo = "recipe: slo_burn_rate, metric: err_total, denominator_metric: req_total"
+	for name, tc := range map[string]struct {
+		list      string
+		rows      int
+		objective []float64
+		errs      int
+		dups      []CustomAlertDuplicate
+	}{
+		"same name and shape": {
+			list: "      - {" + thr + ", name: q_high, threshold: \"100:warning\"}\n" +
+				"      - {" + thr + ", name: q_high, threshold: \"200:warning\"}\n" +
+				"      - {" + thr + ", name: q_low, threshold: \"5:warning\"}\n",
+			rows: 2, errs: 1,
+			dups: []CustomAlertDuplicate{{Index: 1, Name: "q_high", Of: 0, OfName: "q_high"}}},
+		"slo, same shape, another name": {
+			list: "      - {" + slo + ", name: avail1, objective: \"99.9\"}\n" +
+				"      - {" + slo + ", name: avail2, objective: \"99.5\"}\n",
+			rows: 2, objective: []float64{99.9}, errs: 1,
+			dups: []CustomAlertDuplicate{{Index: 1, Name: "avail2", Of: 0, OfName: "avail1"}}},
+		// the preflight refuses one shape+severity twice; /metrics serves both
+		"same shape and severity, another name": {
+			list: "      - {" + thr + ", name: q_high, threshold: \"100:warning\"}\n" +
+				"      - {" + thr + ", name: q_other, threshold: \"200:warning\"}\n",
+			rows: 2},
+	} {
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+			cfg := customAlertsConfig(t, "shop-a", tc.list)
+			rows, objs, errs := resolveTenantCustomAlerts("shop-a", cfg.Tenants["shop-a"])
+			var got []float64
+			for _, o := range objs {
+				got = append(got, o.Objective)
+			}
+			if len(rows) != tc.rows || errs != tc.errs || !reflect.DeepEqual(got, tc.objective) {
+				t.Errorf("rows %d errs %d objectives %v, want %d %d %v", len(rows), errs, got, tc.rows, tc.errs, tc.objective)
+			}
+			if len(rows) > 0 && rows[0].Value != 100 && tc.objective == nil {
+				t.Errorf("first row %+v: want the first entry served", rows[0])
+			}
+			dups := CustomAlertDuplicates("shop-a", cfg.Tenants["shop-a"])
+			for i := range dups {
+				if dups[i].Series == "" {
+					t.Errorf("duplicate %d names no series", i)
+				}
+				dups[i].Series = ""
+			}
+			if !reflect.DeepEqual(dups, tc.dups) {
+				t.Errorf("CustomAlertDuplicates = %+v, want %+v", dups, tc.dups)
+			}
+		})
+	}
+}

@@ -106,6 +106,11 @@
 //     NotServed (CheckInput.ValuesNotServed), the table `da-guard
 //     effective` prints as not_served.
 //
+//  12. Custom alerts serving one series twice (#2031; see
+//     custom_alert_duplicate.go), error: a `_custom_alerts` entry the
+//     exporter drops because an earlier entry already serves its series. The
+//     set is the exporter's own (CheckInput.CustomAlertDuplicates).
+//
 // Future PRs in the C-12 family:
 //   - PR-4: CLI subcommand `da-tools guard defaults-impact` plus
 //     YAML parsing convenience layer that runs the actual merge
@@ -517,4 +522,11 @@ type CheckInput struct {
 	// config.ValueNotServedReasons) become value_not_served errors for a
 	// tenant in EffectiveConfigs (#2065); nil skips the check.
 	ValuesNotServed map[string]map[string]config.NotServedKey `json:"-"`
+
+	// CustomAlertDuplicates maps tenant ID → the `_custom_alerts` entries
+	// the exporter drops because an earlier entry of the list already serves
+	// their series (config.CustomAlertDuplicates over the exporter's build).
+	// Each becomes a custom_alert_duplicate_series error for a tenant in
+	// EffectiveConfigs (#2031); nil skips the check.
+	CustomAlertDuplicates map[string][]config.CustomAlertDuplicate `json:"-"`
 }
