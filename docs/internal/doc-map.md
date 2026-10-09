@@ -46,6 +46,7 @@ lang: zh
 | `docs/adr/033-ops-execution-plane-interface.md` | Platform Engineers, SREs | ADR-033: 與運維執行平面的協同介面 — MariaDB 計畫性作業 |
 | `docs/adr/034-legal-value-as-fallback.md` | Platform Engineers, SREs, contributors | ADR-034: 合法值不得同時當作無法辨識時的 fallback |
 | `docs/adr/035-tenant-id-single-source.md` (.en.md) | Platform Engineers, SREs, contributors | ADR-035: tenant id 合法字元集的單一來源 |
+| `docs/adr/036-single-parser-effective-config.md` (.en.md) | Platform Engineers, SREs, contributors | ADR-036: 路由與 domain policy 設定只由產生器解析一次 |
 | `docs/alerting-best-practices.md` (.en.md) | SREs, Platform Engineers | Actionable 之後：從告警決策到自動化動作的冪等光譜 |
 | `docs/alerting-design-fundamentals.md` (.en.md) | SREs, Domain Experts (DBA), Tenants | 告警該響之前：從資源飽和到症狀導向的告警設計 |
 | `docs/alerting-slo-error-budget.md` (.en.md) | SREs, Domain Experts (DBA), Tenants | 多嚴才算嚴：用 SLO 與錯誤預算決定告警門檻 |

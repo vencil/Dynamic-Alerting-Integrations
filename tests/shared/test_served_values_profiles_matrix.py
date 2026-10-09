@@ -21,6 +21,7 @@ da-guard 由 conftest 的 session fixture 以 `go build` 建出；建不起來�
 from __future__ import annotations
 
 import json
+import os
 import subprocess
 import sys
 from pathlib import Path
@@ -29,6 +30,7 @@ import pytest
 
 import _lib_tenant_values as tv
 import validate_config as vc
+from _platform_fs import require_shebang_scripts
 from test_effective_values_parity import _doc, _fake_da_guard
 from test_served_values_readers_matrix import _tree
 
@@ -275,38 +277,40 @@ def test_da_guard_older_than_this_tool_is_a_caller_error(tmp_path, monkeypatch):
     assert rows["profiles"]["suggested_action"] == vc._DA_GUARD_TOO_OLD_HINT, rows["profiles"]
 
 
-# ── _with_exporter_reasons：只有「served-values 點名同一個檔」才換成它的錯 ─────
+# ── 被丟掉的檔：原因取自 effective 自己的 stderr，不再補跑 served-values（#2115 F4）──
 
-def _parse_failed(path: str, reason: str) -> tv.ParseFailedError:
-    return tv.ParseFailedError(path, ValueError(reason), [])
-
-
-@pytest.mark.parametrize("served", [
-    pytest.param(tv.ServedValuesError("da-guard served-values exited 2", 2, "refused"),
-                 id="served-fails-another-way"),
-    pytest.param(_parse_failed("conf.d/other.yaml", "served: other file"),
-                 id="served-names-another-file"),
-    pytest.param(None, id="served-succeeds"),
+@pytest.mark.parametrize("files,reason", [
+    pytest.param({"_defaults.yaml": 'defaults:\n  mysql_threads_running: "abc"\n',
+                  "tx.yaml": "tenants:\n  tx: {}\n"},
+                 "cannot unmarshal !!str `abc` into float64", id="root-defaults-type"),
+    pytest.param({"_defaults.yaml": "defaults:\n  mysql_connections: 80\n",
+                  "tx.yaml": "tenants:\n  tx: [a]\n", "ty.yaml": "tenants:\n  ty: {}\n"},
+                 "cannot unmarshal !!seq into map[string]config.ScheduledValue",
+                 id="tenant-body-list"),
 ])
-def test_with_exporter_reasons_keeps_effectives_error(served, monkeypatch):
-    effective = _parse_failed("conf.d/_platform.yaml", "effective")
-
-    def fake_load_served_tree(_config_dir):
-        if served is not None:
-            raise served
-        return None
-
-    monkeypatch.setattr(vc, "load_served_tree", fake_load_served_tree)
-    assert vc._with_exporter_reasons(effective, "conf.d") is effective
-
-
-def test_with_exporter_reasons_takes_served_error_for_the_same_file(monkeypatch):
-    """對照組：同一支 helper 在 served-values 點名同一個檔時確實換成 served 的錯。"""
-    effective = _parse_failed("conf.d/_platform.yaml", "effective")
-    served = _parse_failed("conf.d/_platform.yaml", "served")
-
-    def fake_load_served_tree(_config_dir):
-        raise served
-
-    monkeypatch.setattr(vc, "load_served_tree", fake_load_served_tree)
-    assert vc._with_exporter_reasons(effective, "conf.d") is served
+def test_dropped_file_reason_comes_from_effective_alone(tmp_path, monkeypatch, files, reason):
+    """`_with_exporter_reasons` 曾在 effective 失敗後補跑 served-values 借原因文字；
+    `da-guard effective` 的 stderr 自 #2115 C 起就帶原因，補跑已拿掉。量測：profiles 與
+    values_not_served 兩列 FAIL、明細有 exporter 的原因行，而 da-guard 只被呼叫
+    `effective`（以計數 wrapper 記錄子命令）。"""
+    require_shebang_scripts()  # the counting wrapper is a `#!` script
+    conf_d = tmp_path / "conf.d"
+    conf_d.mkdir()
+    for name, body in files.items():
+        (conf_d / name).write_text(body, encoding="utf-8")
+    log = tmp_path / "calls.log"
+    wrapper = tmp_path / "dg-wrap.sh"
+    wrapper.write_text(f'#!/bin/sh\necho "$1" >> "{log}"\nexec "$DA_GUARD_REAL" "$@"\n',
+                       encoding="utf-8")
+    wrapper.chmod(0o755)
+    monkeypatch.setenv("DA_GUARD_REAL", os.environ["DA_GUARD_BINARY"])
+    monkeypatch.setenv("DA_GUARD_BINARY", str(wrapper))
+    p = subprocess.run([sys.executable, str(OPS / "validate_config.py"), "--config-dir",
+                        str(conf_d), "--json"], capture_output=True, text=True,
+                       encoding="utf-8", errors="replace", timeout=300)
+    rows = {r["check"]: r for r in json.loads(p.stdout)}
+    for check in ("profiles", "values_not_served"):
+        row = rows[check]
+        assert row["status"] == vc.FAIL and row["caller_error"] is False, row
+        assert any(d.startswith("  da-guard| ") and reason in d for d in row["details"]), row
+    assert log.read_text(encoding="utf-8").split() == ["effective"]

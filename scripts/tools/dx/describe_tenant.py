@@ -1229,6 +1229,23 @@ def _tenant_body(tconfig: Any) -> Any:
     return {} if tconfig is None else _without_null_thresholds(tconfig)
 
 
+def _undecodable_tenant_body(doc: Any) -> "str | None":
+    """Why the exporter cannot decode `doc` for its `tenants:` block, or None.
+
+    A tenant body that is neither a mapping nor null (`tenants: {tx: [a]}`,
+    `{tx: 5}`) fails the exporter's typed decode of the WHOLE file (#2115,
+    measured: served-values lists the file in parse_failed and serves none
+    of its tenants, `ty: {}` beside it included; effective exits 3). Named
+    by the first such tenant, in the file's order."""
+    block = doc.get("tenants") if isinstance(doc, dict) else None
+    if not isinstance(block, dict):
+        return None
+    for tid, body in block.items():
+        if body is not None and not isinstance(body, dict):
+            return f"tenant '{_tenant_id(tid)}' is a {type(body).__name__}, not a mapping"
+    return None
+
+
 # ---------------------------------------------------------------------------
 # Profile expansion (#2117) — MUST stay in lockstep with
 # pkg/config/profile_overlay.go; tests/shared/platform_tenant_overlay_matrix.json
@@ -1582,7 +1599,9 @@ class ConfDScanner:
         rejects declares nothing there, so Go can resolve this tenant from
         the other file. Refusing is still right — it matches validate_config
         and beats picking a value — but claiming the exporter rejects it
-        would be false for that tree.
+        would be false for that tree. One such shape never gets here: a file
+        with a non-mapping tenant body is skipped by the scan
+        (`_load_tenant_file`, #2115), so it declares nothing here either.
         """
         files = self.duplicates.get(tenant_id)
         if not files:
@@ -1603,12 +1622,24 @@ class ConfDScanner:
         the exporter logs it) rather than refusing the whole tree, so this
         tool names it on stderr and describes the rest — before #2019 one
         broken tenant file ended the run with a traceback.
+
+        A file that parses but holds a tenant body the exporter cannot
+        decode (`_undecodable_tenant_body`) is skipped the same way (#2115):
+        the exporter serves none of its tenants. Before, describing one of
+        them ended in an AttributeError traceback (rc 1), and describing
+        another tenant of the same file answered rc 0.
         """
         try:
-            return _load_first_document(fp)
+            doc = _load_first_document(fp)
         except Exception as exc:  # noqa: BLE001 — named, then skipped
             print(f"WARNING: skipped {fp} — does not parse: {exc}", file=sys.stderr)
             return None
+        why = _undecodable_tenant_body(doc)
+        if why is not None:
+            print(f"WARNING: skipped {fp} — the exporter cannot decode it: {why}; "
+                  f"none of its tenants is served", file=sys.stderr)
+            return None
+        return doc
 
     def _read_platform_files(self, entries) -> "list[tuple[str, Path, dict]]":
         """Every ROOT platform file's `tenants:` block, in merge order (#2019).
@@ -2022,11 +2053,23 @@ def what_if_result(scanner: "ConfDScanner", tid: str, what_if_path: Path,
             # #2739: `_tenant_body` passes a non-mapping body through, and
             # deep_merge then died on it (AttributeError traceback, rc 1).
             # Refused by name like a non-mapping document (`_UnsupportedShape`).
-            body = bodies[tid]
-            if body is not None and not isinstance(body, dict):
-                raise WhatIfError(f"--what-if file {what_if_path} has an unsupported shape: "
-                                  f"tenant '{tid}' is a {type(body).__name__}, not a mapping")
-            tenant_raw = _tenant_body(body)
+            # #2115: any tenant's, not only `tid`'s — the exporter cannot
+            # decode the whole file, so it serves `tid` from it neither.
+            why = _undecodable_tenant_body(what_if_platform_doc)
+            if why is not None:
+                raise WhatIfError(f"--what-if file {what_if_path} has an unsupported shape: {why}")
+            tenant_raw = _tenant_body(bodies[tid])
+        elif any(str(resolved) == str(target) for _n, resolved, _b in scanner._platform_files):
+            # #2115: standing in for a root platform file (`_defaults.yaml`,
+            # `_profiles.yaml`, …), whose `tenants:` block `platform_blocks`
+            # reads with a non-mapping body silently dropped — rc 0 with the
+            # tenant's platform values simply gone, where the exporter
+            # cannot decode that file at all (effective exits 3).
+            why = _undecodable_tenant_body(what_if_platform_doc)
+            if why is not None:
+                raise WhatIfError(f"--what-if file {what_if_path} has an unsupported shape: {why} "
+                                  f"(it stands in for the root platform file {replaces}, which "
+                                  f"the exporter could not decode)")
     else:
         # Insert according to directory depth if the ENTRY is inside
         # conf.d/, else append. #1967: both depths come from

@@ -2388,6 +2388,8 @@ da-tools config-diff --old-dir <path> --new-dir <path> [options]
 
 Markdown 格式報告，含 per-tenant 變更表格與摘要統計。
 
+**Profile 爆炸半徑**：`_profiles.yaml` 裡的 profile 有變更時，`affected_tenants` 列出 `--new-dir` 中 `_profile` 指名它的租戶。名稱經 `da-guard effective` 讀取，與 exporter 的讀法一致：`_profile: {default: std}` 指名 `std`；寫在根目錄平台檔 `tenants:` 裡的算；從子目錄 `_defaults.yaml` 繼承來的不算。所以有 profile 變更時需要 da-guard（映像內建；repo 內 `make da-guard-build`）；找不到 da-guard、da-guard 失敗，或 `--new-dir` 有 exporter 解不出來的檔時，結束碼 2，stderr 印 `ERROR:` 行說明原因；da-guard 有執行到時，下面接著轉印它的 stderr，非空白行各加前綴 `da-guard|`（前有兩格縮排）；找不到或無法執行 da-guard 時沒有這些行。⚠️ v2.9.0 映像仍只認字串寫法的 `_profile`。 <!-- image-caveat: v2.9.0 -->
+
 **範例**
 
 ```bash
@@ -2401,7 +2403,7 @@ da-tools config-diff --old-dir ./conf.d-old --new-dir ./conf.d-new --json-output
 |------|------|
 | `0` | 無配置變更 |
 | `1` | 偵測到變更。⚠️ 只比對各租戶檔自己寫的值，且只讀頂層：只改 `_defaults.yaml` 或只動子目錄裡的檔都回 0，不能單靠它判斷「這個 PR 動了配置」 |
-| `2` | 呼叫端錯誤：目錄不存在、輸入無法解析，或執行未完成 |
+| `2` | 呼叫端錯誤：目錄不存在、輸入無法解析，或執行未完成；有 profile 變更時，另含找不到 da-guard 或 da-guard 失敗 |
 
 > ⚠️ **`1` 是「有變更」，不是失敗。** 裸呼叫這個命令的 CI 步驟，會在它正常運作時失敗。
 > 可照抄的消費端寫法（`set +e` / `rc=$?`）在

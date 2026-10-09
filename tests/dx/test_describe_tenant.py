@@ -494,20 +494,19 @@ class TestDuplicateDeclaration:
         assert r.returncode == 0, r.stderr
         assert json.loads(r.stdout)["effective_config"] == {"cpu_pct": 70}
 
-    def test_a_file_the_exporter_drops_still_counts_but_the_verdict_is_conditional(
-            self, tmp_path):
-        """Pinned KNOWN divergence from Go (#1942), deliberately NOT in the
-        shared Go/Python matrix (the two sides answer differently there).
-
-        `zbad.yaml` also declares `other: 5` — a scalar tenant body, which
+    def test_a_file_the_exporter_drops_declares_nothing(self, tmp_path):
+        """`zbad.yaml` also declares `other: 5` — a scalar tenant body, which
         the exporter's full decode rejects, so on the Go side that file
         declares NOTHING and ResolveEffective(acme) returns good.yaml's
-        cpu_pct 70 (measured on this branch). Python counts carriers by the
-        first document's `tenants:` keys and does not mirror Go's decode
-        (`_lib_confd.declared_tenant_ids`, #1942), so it still refuses —
-        consistently with validate_config, and better than the old answer,
-        which picked zbad.yaml's 10 by file order. What it must NOT do is
-        claim unconditionally that the exporter rejects this tenant.
+        cpu_pct 70 (`da-guard effective`: parse_failed [zbad.yaml], acme 70).
+
+        This was a pinned KNOWN divergence (#1942): describe counted zbad.yaml
+        as a second carrier and refused acme as a duplicate (rc 1). Since
+        #2115 describe skips a tenant file the exporter cannot decode
+        (`_undecodable_tenant_body`), so it answers as Go does: acme from
+        good.yaml, rc 0, zbad.yaml named on stderr.
+        ⚠️ validate_config's `tenant_uniqueness` still counts zbad.yaml
+        (`_lib_confd.declared_tenant_ids`) — a divergence left to that tool.
         """
         conf_d = tmp_path / "conf.d"
         conf_d.mkdir()
@@ -516,14 +515,11 @@ class TestDuplicateDeclaration:
         (conf_d / "zbad.yaml").write_text(
             "tenants:\n  acme:\n    cpu_pct: 10\n  other: 5\n", encoding="utf-8")
         r = self._run(conf_d, "acme")
-        assert r.returncode == dt.EXIT_VIOLATION, (r.returncode, r.stdout, r.stderr)
-        assert r.stdout == ""
-        assert "duplicate tenant ID 'acme'" in r.stderr
-        assert "good.yaml, zbad.yaml" in r.stderr, r.stderr
-        # Conditional wording only: "If every one of these files parses, ...".
-        assert "If every one of these files parses" in r.stderr, r.stderr
-        assert "— the exporter rejects" not in r.stderr, r.stderr
-        assert "run validate-config" in r.stderr, r.stderr
+        assert r.returncode == 0, (r.returncode, r.stdout, r.stderr)
+        assert json.loads(r.stdout)["effective_config"] == {"cpu_pct": 70}
+        assert "duplicate" not in r.stderr, r.stderr
+        assert f"skipped {conf_d / 'zbad.yaml'}" in r.stderr, r.stderr
+        assert "tenant 'other' is a int, not a mapping" in r.stderr, r.stderr
 
     @pytest.mark.parametrize("shape", SHAPES)
     def test_validate_config_flags_the_same_tenant_and_files(self, tmp_path, shape):

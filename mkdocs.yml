@@ -343,6 +343,7 @@ nav:
       - ADR-033 與運維執行平面的協同介面: adr/033-ops-execution-plane-interface.md
       - ADR-034 合法值不得同時當作無法辨識時的 fallback: adr/034-legal-value-as-fallback.md
       - ADR-035 tenant id 合法字元集的單一來源: adr/035-tenant-id-single-source.md
+      - ADR-036 路由與 domain policy 只由產生器解析: adr/036-single-parser-effective-config.md
   - 整合指南:
     - 整合指南導覽: integration/README.md
     - BYO Prometheus: integration/byo-prometheus-integration.md
