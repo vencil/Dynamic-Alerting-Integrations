@@ -260,6 +260,7 @@ func runServedValues(args []string, stdout, errOut io.Writer) int {
 			fmt.Fprintf(errOut, "%s %s: %v\n", programName, servedValuesCmd, err)
 			return exitCallerErr
 		}
+		spellAsWritten(tenants, rep.WrittenKeys)
 	}
 	parseFailed := rep.ParseFailed
 	if parseFailed == nil {
@@ -539,6 +540,38 @@ func servedValues(cfg *config.ThresholdConfig, at time.Time,
 		}
 	}
 	return out, nil
+}
+
+// spellAsWritten re-keys each tenant's maps with its keys as written
+// (LoadReport.WrittenKeys, #2031): the exporter's config keys a dimensional
+// key by its canonical spelling, and `da-guard effective` shows it as the
+// layer that supplied it wrote it — a reader joins the two documents by key.
+// The base keeps this document's canonical #1231 spelling (config.WrittenKey).
+func spellAsWritten(tenants map[string]servedTenantValues, written map[string]map[string]string) {
+	for tenant, tv := range tenants {
+		w := written[tenant]
+		if len(w) == 0 {
+			continue
+		}
+		name := func(k string) string { return config.WrittenKey(w, k) }
+		tv.Values = renamed(tv.Values, name)
+		tv.Severities = renamed(tv.Severities, name)
+		tv.Unserved = renamed(tv.Unserved, name)
+		tv.Dropped = renamed(tv.Dropped, name)
+		if tv.Schedules != nil {
+			s := renamed(*tv.Schedules, name)
+			tv.Schedules = &s
+		}
+		tenants[tenant] = tv
+	}
+}
+
+func renamed[V any](m map[string]V, name func(string) string) map[string]V {
+	out := make(map[string]V, len(m))
+	for k, v := range m {
+		out[name(k)] = v
+	}
+	return out
 }
 
 // keyedRows gathers, at `at`, the registry the exporter's /metrics serves —

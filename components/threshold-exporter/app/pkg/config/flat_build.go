@@ -122,6 +122,13 @@ type FlatBuild struct {
 	// threshold-shaped for some tenant under it, so that tenant keeps a
 	// shallower level's value or none (#2296). nil when there is none.
 	RejectedChainValues map[string]map[string]bool
+
+	// respelledChain is the defaults files (absolute, as ParsedDefaults keys
+	// them) whose parsed block holds a dimensional or a #1231-aliased key —
+	// the files whose decode may have re-spelled a key or found a threshold
+	// written twice (#2031; spellingCandidates). A superset: the parsed
+	// block no longer tells. nil when none.
+	respelledChain map[string]bool
 }
 
 // BuildFlatConfig builds the merged ThresholdConfig from a scan: parse each
@@ -266,7 +273,26 @@ func BuildFlatConfig(scan *TreeScan, in FlatBuildInput) (FlatBuild, error) {
 		RootNullUndeclared:     rootNullUndeclared(&merged, rootNull),
 		RootDefaultsUnread:     rootUnread,
 		RejectedChainValues:    rejected,
+		respelledChain:         respelledChainFiles(in.ParsedDefaults),
 	}, nil
+}
+
+// respelledChainFiles is FlatBuild.respelledChain over parsed. No
+// allocation for a tree whose defaults hold no such key.
+func respelledChainFiles(parsed map[string]map[string]any) map[string]bool {
+	var out map[string]bool
+	for p, block := range parsed {
+		for k := range block {
+			if _, _, dim := dimParts(k); dim || touchesAlias(k) {
+				if out == nil {
+					out = map[string]bool{}
+				}
+				out[p] = true
+				break
+			}
+		}
+	}
+	return out
 }
 
 // scanKeyBase is the underscore convention's unit of judgement: the FILE NAME,

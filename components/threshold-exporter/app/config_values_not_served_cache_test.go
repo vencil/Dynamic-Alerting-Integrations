@@ -236,8 +236,8 @@ func assertRejectedIsEffective(t *testing.T, m *ConfigManager, dir, step string)
 	want := map[string]string{}
 	for _, ec := range tree.Tenants {
 		for k, ns := range ec.NotServed {
-			if ns.Reason == config.NotServedValueRejected {
-				want[ec.TenantID+"/"+k] = ns.File
+			if ns.Reason == config.NotServedValueRejected || ns.Reason == config.NotServedSpellingDuplicate {
+				want[ec.TenantID+"/"+k] = ns.Reason
 			}
 		}
 	}

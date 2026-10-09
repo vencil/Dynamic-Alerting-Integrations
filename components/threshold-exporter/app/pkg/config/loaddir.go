@@ -114,6 +114,12 @@ type LoadReport struct {
 	// keys that act when merged (ActsWhenMerged), so /metrics does not carry
 	// them while /effective shows them (#2296). nil when there is none.
 	RootDefaultsUnread []UnreadKey
+	// WrittenKeys maps a tenant to its EffectiveConfig.KeySpellings (#2031):
+	// the config keys every dimensional key by its canonical spelling, and a
+	// reader that names keys as the author wrote them — as `da-guard
+	// effective` does — spells them through it (EffectiveConfig.WrittenKey's
+	// rule). Only tenants with such a key; nil when there is none.
+	WrittenKeys map[string]map[string]string
 }
 
 // LoadDirReport is LoadDir, also naming the files that contribute no tenant
@@ -169,6 +175,7 @@ func LoadDirReport(dir string, logger *log.Logger) (cfg *ThresholdConfig, rep Lo
 	rep.Undeliverable = undeliverableThresholds(built.UnreachableValues)
 	rep.RootDefaultsUnread = built.RootDefaultsUnread
 	rep.NoTenant = noTenantKeys(scan)
+	rep.WrittenKeys = writtenKeys(scan, &built)
 	return &built.Config, rep, nil
 }
 

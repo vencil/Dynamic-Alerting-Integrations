@@ -87,6 +87,7 @@ import (
 	"log"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 
 	"github.com/vencil/threshold-exporter/internal/guard"
@@ -324,6 +325,7 @@ func run(args []string, stdout, errOut io.Writer) int {
 		fmt.Fprintf(errOut, "%s: guard run: %v\n", programName, err)
 		return exitCallerErr
 	}
+	spellFindingsAsWritten(report, scoped)
 
 	if err := writeReport(stdout, errOut, f, scoped, report, notices); err != nil {
 		fmt.Fprintf(errOut, "%s: %v\n", programName, err)
@@ -594,6 +596,38 @@ func buildCheckInput(scoped *config.ScopedTenants, f *flags) guard.CheckInput {
 		ScheduleNulls: scoped.ScheduleNulls,
 		// #2065: the effective configs' not_served, in-scope tenants only.
 		ValuesNotServed: notServed,
+	}
+}
+
+// spellFindingsAsWritten re-spells, in place, each finding's Field and
+// Message with its tenant's keys as the layer that supplied them wrote them
+// (#2031): the guard reads maps keyed by the canonical dimensional spelling
+// (config.EffectiveConfig.KeySpellings). A field below a key (`key.leaf`)
+// keeps its leaf; a key quoted with %q is matched in its quoted form too.
+func spellFindingsAsWritten(report *guard.GuardReport, scoped *config.ScopedTenants) {
+	byTenant := map[string]*config.EffectiveConfig{}
+	for _, ec := range scoped.Tenants {
+		if len(ec.KeySpellings) > 0 {
+			byTenant[ec.TenantID] = ec
+		}
+	}
+	if len(byTenant) == 0 {
+		return
+	}
+	for i := range report.Findings {
+		f := &report.Findings[i]
+		ec := byTenant[f.TenantID]
+		if ec == nil {
+			continue
+		}
+		for canon, written := range ec.KeySpellings {
+			if f.Field == canon || strings.HasPrefix(f.Field, canon+".") {
+				f.Field = written + f.Field[len(canon):]
+			}
+			f.Message = strings.ReplaceAll(f.Message, canon, written)
+			qc, qw := strconv.Quote(canon), strconv.Quote(written)
+			f.Message = strings.ReplaceAll(f.Message, qc[1:len(qc)-1], qw[1:len(qw)-1])
+		}
 	}
 }
 

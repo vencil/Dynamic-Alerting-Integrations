@@ -1,7 +1,9 @@
 package config
 
 // RejectedShownCache: which tenants are shown a subtree defaults value the
-// build refused (#2065, the exporter's value_rejected count).
+// build refused (#2065, the exporter's value_rejected count), or a spelling
+// of a threshold its layer also writes under the spelling /metrics serves
+// (#2031, spelling_duplicate).
 
 import (
 	"hash/fnv"
@@ -16,13 +18,17 @@ import (
 // fingerprint is the scan's SHA-256 of every file the resolve reads
 // for it — the tenant file, each file of its defaults chain (in order, by
 // path) and every `_` file at the root (platform `tenants:` entries,
-// profiles, the root carrier) — plus the tenant id. The build's tables the
-// value_rejected verdict reads (RejectedChainValues, ParseFailed of a chain
-// file) are functions of those files' bytes: a chain file's refused keys
-// are its values that are not threshold-shaped, recorded for any tenant that
-// does not set the key itself, and the verdict reads them only where that
-// file is the tenant's winning layer. The zero value is ready; safe for
-// concurrent use.
+// profiles, the root carrier) — plus the tenant id, plus the keys
+// RejectedChainValues holds for each file of the chain. The build's tables
+// the value_rejected verdict reads (RejectedChainValues, ParseFailed of a
+// chain file) are functions of those files' bytes but one: a chain file's
+// refused keys are its values that are not threshold-shaped, recorded for
+// any tenant under it that does not set the key itself — so whether a key
+// is in the table moves with ANOTHER tenant's file (#2031: measured when
+// the tenant was kept a candidate by its spellings after the table emptied),
+// which is why those keys are in the fingerprint. The verdict reads them
+// only where that file is the tenant's winning layer. The zero value is
+// ready; safe for concurrent use.
 type RejectedShownCache struct {
 	mu      sync.Mutex
 	entries map[string]rejectedShownEntry
@@ -36,13 +42,17 @@ type rejectedShownEntry struct {
 }
 
 // Shown is, per tenant, each key the tenant's effective config
-// names NotServedValueRejected, and the file of the value shown — the
-// verdict `/effective`, `da-guard effective` and da-guard's gate give, from
-// the same resolver (effectiveResolver.resolve → servedVerdicts.notServed,
-// keySources' winner attribution). Nothing is re-judged here: a tenant is
-// resolved when its defaults chain holds a file of built.RejectedChainValues
-// (no other tenant can be named value_rejected), and the reason is read off
-// the result. Keys are spelled as effective_config writes them.
+// names NotServedValueRejected or NotServedSpellingDuplicate, and the
+// reason — the verdict `/effective`, `da-guard effective` and da-guard's gate
+// give, from the same resolver (effectiveResolver.resolve →
+// servedVerdicts.notServed, keySources' winner attribution). Nothing is
+// re-judged here: a tenant is resolved when its defaults chain holds a file
+// of built.RejectedChainValues (no other tenant can be named
+// value_rejected), or when a file its resolve reads re-spelled a key
+// (spellingCandidates; no other tenant can be named spelling_duplicate), and
+// the reason is read off the result. Keys are spelled as the resolver keys
+// effective_config (canonically, #2031), and a spelling_duplicate key as
+// written.
 //
 // scan is the scan built came from; a file a warm scan did not cache is read
 // from disk and used only when its SHA-256 is the scan's. A candidate whose
@@ -56,11 +66,17 @@ type rejectedShownEntry struct {
 func (c *RejectedShownCache) Shown(scan *TreeScan, built *FlatBuild) map[string]map[string]string {
 	c.mu.Lock()
 	defer c.mu.Unlock()
-	if scan == nil || built == nil || len(built.RejectedChainValues) == 0 || len(scan.Tenants) == 0 {
+	if scan == nil || built == nil || len(scan.Tenants) == 0 {
 		c.entries = nil
 		return nil
 	}
 	r := newEffectiveResolver(scan)
+	r.readUncached = true
+	spelled := spellingCandidates(scan, built, r)
+	if len(built.RejectedChainValues) == 0 && len(spelled) == 0 {
+		c.entries = nil
+		return nil
+	}
 	var rootFiles []string
 	for _, k := range scan.Keys {
 		if !strings.Contains(k, "/") && isPlatformKey(k) {
@@ -78,7 +94,7 @@ func (c *RejectedShownCache) Shown(scan *TreeScan, built *FlatBuild) map[string]
 	for _, id := range ids {
 		abs := scan.Tenants[id]
 		chain := r.chain(filepath.Dir(abs))
-		candidate := false
+		candidate := spelled[id]
 		for _, p := range chain {
 			if len(built.RejectedChainValues[r.rel(p)]) > 0 {
 				candidate = true
@@ -88,11 +104,10 @@ func (c *RejectedShownCache) Shown(scan *TreeScan, built *FlatBuild) map[string]
 		if !candidate {
 			continue
 		}
-		in := c.input(scan, r, id, abs, chain, rootFiles)
+		in := c.input(scan, r, id, abs, chain, rootFiles, built.RejectedChainValues)
 		e, ok := c.entries[id]
 		if !ok || e.input != in {
 			if !served {
-				r.readUncached = true
 				r.served = newServedVerdicts(built, false)
 				r.served.noUnparsed = true
 				served = true
@@ -117,7 +132,9 @@ func (c *RejectedShownCache) Shown(scan *TreeScan, built *FlatBuild) map[string]
 }
 
 // input is the fingerprint of tenant id's resolve inputs (see the type).
-func (c *RejectedShownCache) input(scan *TreeScan, r *effectiveResolver, id, abs string, chain, rootFiles []string) uint64 {
+func (c *RejectedShownCache) input(scan *TreeScan, r *effectiveResolver, id, abs string, chain, rootFiles []string,
+	rejected map[string]map[string]bool,
+) uint64 {
 	h := fnv.New64a()
 	add := func(s string) {
 		_, _ = h.Write([]byte(s))
@@ -135,7 +152,17 @@ func (c *RejectedShownCache) input(scan *TreeScan, r *effectiveResolver, id, abs
 	file(r.rel(abs))
 	_, _ = h.Write([]byte{1})
 	for _, p := range chain {
-		file(r.rel(p))
+		rel := r.rel(p)
+		file(rel)
+		keys := make([]string, 0, len(rejected[rel]))
+		for k := range rejected[rel] {
+			keys = append(keys, k)
+		}
+		sort.Strings(keys)
+		for _, k := range keys {
+			add(k)
+		}
+		_, _ = h.Write([]byte{3})
 	}
 	_, _ = h.Write([]byte{2})
 	for _, k := range rootFiles {
@@ -144,7 +171,8 @@ func (c *RejectedShownCache) input(scan *TreeScan, r *effectiveResolver, id, abs
 	return h.Sum64()
 }
 
-// resolveRejected is the value_rejected keys of id's effective config.
+// resolveRejected is the value_rejected and spelling_duplicate keys of id's
+// effective config, each with its reason.
 func resolveRejected(r *effectiveResolver, id string) (map[string]string, error) {
 	ec, err := r.resolve(id)
 	if err != nil {
@@ -152,13 +180,83 @@ func resolveRejected(r *effectiveResolver, id string) (map[string]string, error)
 	}
 	var keys map[string]string
 	for k, ns := range ec.NotServed {
-		if ns.Reason != NotServedValueRejected {
+		if ns.Reason != NotServedValueRejected && ns.Reason != NotServedSpellingDuplicate {
 			continue
 		}
 		if keys == nil {
 			keys = map[string]string{}
 		}
-		keys[k] = ns.File
+		keys[k] = ns.Reason
 	}
 	return keys, nil
+}
+
+// spellingCandidates is the tenants of scan whose effective config reads a
+// file that wrote a dimensional key in another spelling than the canonical
+// one, or a threshold twice (#2031): its tenant file or a root platform file
+// (the build's own decode, ThresholdConfig.spelled), or a file of its
+// defaults chain that may have (FlatBuild.respelledChain). Only those can be
+// shown a key as written that is not its canonical spelling, or a
+// spelling_duplicate. nil when none — without a per-tenant walk when no file
+// is spelled, the steady state.
+func spellingCandidates(scan *TreeScan, built *FlatBuild, r *effectiveResolver) map[string]bool {
+	var out map[string]bool
+	add := func(id string) {
+		if out == nil {
+			out = map[string]bool{}
+		}
+		out[id] = true
+	}
+	for name, fc := range built.FileConfigs {
+		if !fc.spelled {
+			continue
+		}
+		if !strings.Contains(name, "/") && isPlatformKey(name) {
+			for id := range scan.Tenants {
+				add(id)
+			}
+			return out
+		}
+		for id := range fc.Tenants {
+			if _, ok := scan.Tenants[id]; ok {
+				add(id)
+			}
+		}
+	}
+	if len(built.respelledChain) == 0 {
+		return out
+	}
+	for id, abs := range scan.Tenants {
+		if out[id] {
+			continue
+		}
+		for _, p := range r.chain(filepath.Dir(abs)) {
+			if built.respelledChain[p] {
+				add(id)
+				break
+			}
+		}
+	}
+	return out
+}
+
+// writtenKeys is, per tenant of scan its effective config shows a key of in
+// another spelling than the resolver keys it by, that tenant's
+// EffectiveConfig.KeySpellings (#2031) — what `da-guard served-values` spells
+// its keys with, so they read as `da-guard effective`'s do. nil when none.
+func writtenKeys(scan *TreeScan, built *FlatBuild) map[string]map[string]string {
+	r := newEffectiveResolver(scan)
+	spelled := spellingCandidates(scan, built, r)
+	var out map[string]map[string]string
+	for id := range spelled {
+		ec, err := r.resolve(id)
+		if err != nil || len(ec.KeySpellings) == 0 {
+			continue
+		}
+		if out == nil {
+			out = map[string]map[string]string{}
+		}
+		out[id] = ec.KeySpellings
+	}
+	return out
 }

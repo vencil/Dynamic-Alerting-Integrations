@@ -60,8 +60,26 @@ func ParseConfigFile(data []byte) (ThresholdConfig, error) {
 	if err == nil {
 		dropNullThresholds(&cfg, data)
 		dropNullShadowingSpellings(cfg.Defaults, data)
+		normalizeConfigKeys(&cfg)
 	}
 	return cfg, err
+}
+
+// normalizeConfigKeys re-keys every threshold map of one file's decode to the
+// canonical dimensional spelling (normalizeKeys, #2031) — after the null
+// drops above, which look keys up by the text the file wrote. The maps keep
+// their identity when nothing is re-spelled.
+func normalizeConfigKeys(cfg *ThresholdConfig) {
+	var s *keySpellings
+	cfg.Defaults, s = normalizeKeys(cfg.Defaults)
+	cfg.spelled = s != nil
+	for _, m := range []map[string]map[string]ScheduledValue{cfg.Tenants, cfg.Profiles} {
+		for name, body := range m {
+			if m[name], s = normalizeKeys(body); s != nil {
+				cfg.spelled = true
+			}
+		}
+	}
 }
 
 // dropNullShadowingSpellings removes from a decoded `defaults:` map every

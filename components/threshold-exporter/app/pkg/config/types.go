@@ -244,6 +244,14 @@ type ThresholdConfig struct {
 	Tenants             map[string]map[string]ScheduledValue `yaml:"tenants"`
 	Profiles            map[string]map[string]ScheduledValue `yaml:"profiles"`
 	MaxMetricsPerTenant int                                  `yaml:"max_metrics_per_tenant"`
+
+	// spelled is set by ParseConfigFile when the file writes a dimensional
+	// key in another spelling than the canonical one, or a threshold under
+	// two spellings in one map (normalizeKeys, #2031): the readers that give
+	// keys back as written, or count the duplicates, resolve the effective
+	// config of the tenants it bears on (spellingCandidates). Not merged:
+	// only a file's own decode carries it.
+	spelled bool
 }
 
 // ResolvedThreshold is the final resolved state for one tenant+metric pair.

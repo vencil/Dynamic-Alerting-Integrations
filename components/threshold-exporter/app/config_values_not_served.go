@@ -16,7 +16,9 @@ package main
 // — the resolver's own record, the same table `da-guard effective` reports as
 // not_served — and the subtree half is config.RejectedShownCache.Shown: the
 // effective resolver's own value_rejected verdict, for the tenants under a
-// value the build refused (FlatBuild.RejectedChainValues). Nothing here
+// value the build refused (FlatBuild.RejectedChainValues), and its
+// spelling_duplicate verdict (#2031), for the tenants reading a file that
+// wrote a threshold under two spellings in one map. Nothing here
 // reads YAML or attributes a key to a layer itself.
 //
 // ⚠️ It names tenant and key, never a file: which layer and file a value
@@ -42,12 +44,7 @@ import (
 // valuesNotServedReasons is the closed label set of
 // da_config_values_not_served{reason}: the not_served reasons whose cause is
 // a value written in the config (pkg/config's NotServed* constants).
-var valuesNotServedReasons = []string{
-	config.NotServedValueUnparsed,
-	config.NotServedValueUnparsedDropped,
-	config.NotServedWindowInvalid,
-	config.NotServedValueRejected,
-}
+var valuesNotServedReasons = config.ValueNotServedReasons()
 
 // valuesNotServedLogSampleLimit caps how many values the WARN names inline.
 const valuesNotServedLogSampleLimit = 20
@@ -63,7 +60,8 @@ type valueNotServed struct {
 
 // collectValuesNotServed lists the (tenant, key) pairs of cfg /metrics does
 // not serve as written, sorted, one reason each: the build's refused subtree
-// values a tenant is shown (rejected: config.RejectedShownCache.Shown), then
+// values a tenant is shown and its spelling duplicates (rejected:
+// config.RejectedShownCache.Shown, key → reason), then
 // the resolver's record (verdicts: cfg.ValuesNotServed at the commit's now,
 // or valuesNotServedCache's copy of it) — in the order pkg/config's
 // notServed asks them, so a pair carries the reason `da-guard effective`
@@ -71,9 +69,9 @@ type valueNotServed struct {
 func collectValuesNotServed(cfg *ThresholdConfig, verdicts, rejected map[string]map[string]string) []valueNotServed {
 	byPair := map[[2]string]string{}
 	for tenant, keys := range rejected {
-		for key := range keys {
-			if config.ValueNotServedAsWritten(key, config.NotServedValueRejected) {
-				byPair[[2]string{tenant, key}] = config.NotServedValueRejected
+		for key, reason := range keys {
+			if config.ValueNotServedAsWritten(key, reason) {
+				byPair[[2]string{tenant, key}] = reason
 			}
 		}
 	}
@@ -137,7 +135,8 @@ func formatValuesNotServedLog(vs []valueNotServed, root, context string) string 
 	fmt.Fprintf(&b,
 		"WARN: config values not served as written (%s): %d tenant value(s) under %s are not served as written "+
 			"by /metrics: value_unparsed serves the platform default, value_unparsed_dropped serves no series, "+
-			"window_invalid never applies that schedule window, value_rejected keeps a shallower level's value. "+
+			"window_invalid never applies that schedule window, value_rejected keeps a shallower level's value, "+
+			"spelling_duplicate is a second spelling of a threshold the same mapping writes and only the other one is served. "+
 			"Alerts on them do not fire at the written threshold. "+
 			"Run `da-guard effective --config-dir %s` (not_served) for the file of each one. Values:",
 		context, len(vs), root, root)

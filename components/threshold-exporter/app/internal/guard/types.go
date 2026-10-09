@@ -512,8 +512,9 @@ type CheckInput struct {
 	// ValuesNotServed maps tenant ID → key → why /metrics does not serve
 	// that key as the tenant's effective config shows it
 	// (config.EffectiveConfig.NotServed, filled by ScopeEffective). The
-	// reasons value_unparsed, value_unparsed_dropped, window_invalid and
-	// value_rejected become value_not_served errors for a tenant in
-	// EffectiveConfigs (#2065); nil skips the check.
+	// reasons value_unparsed, value_unparsed_dropped, window_invalid,
+	// value_rejected and spelling_duplicate (#2031;
+	// config.ValueNotServedReasons) become value_not_served errors for a
+	// tenant in EffectiveConfigs (#2065); nil skips the check.
 	ValuesNotServed map[string]map[string]config.NotServedKey `json:"-"`
 }

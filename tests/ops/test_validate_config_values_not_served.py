@@ -40,6 +40,10 @@ _SHAPES = {
         'defaults:\n  mysql_connections:\n    default: "70"\n    overrides: "01:00-09:00"\n',
         '    mysql_threads_running: "31"\n',
         ("team/_defaults.yaml", "mysql_connections", "value_rejected")),
+    # #2031：同一 mapping 把一個閾值寫成兩種拼法；送出的是 canonical 那個，另一個點名（照原文）。
+    "spelling-duplicate": (
+        None, "    'mysql_connections{q=\"a\"}': 5\n    \"mysql_connections{q='a'}\": 6\n",
+        ("team/t.yaml", "mysql_connections{q='a'}", "spelling_duplicate")),
 }
 
 

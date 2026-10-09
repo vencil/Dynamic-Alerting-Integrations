@@ -44,6 +44,7 @@ type PlatformTenants struct {
 	AbsPath string // TreeFile.AbsPath — the reload's scope attribution
 	Hash    string // TreeFile.Hash the block was decoded from — the reload's reuse key
 	tenants map[string]map[string]any
+	spell   map[string]*keySpellings // per tenant: what normalizeKeys changed (#2031); nil: nothing
 }
 
 // Block returns the file's entry for tenantID (read-only), if any.
@@ -58,6 +59,7 @@ func (pt PlatformTenants) Block(tenantID string) (map[string]any, bool) {
 type PlatformBlock struct {
 	File  string
 	Block map[string]any
+	spell *keySpellings // what normalizeKeys changed in Block (#2031); nil: nothing
 }
 
 // PlatformOverlaySource is one entry of EffectiveConfig.PlatformOverlay: a
@@ -111,6 +113,13 @@ func parsePlatformTenants(key string, f *TreeFile, data []byte) PlatformTenants 
 		if pt.tenants == nil {
 			pt.tenants = make(map[string]map[string]any, len(doc.Tenants))
 		}
+		var spell *keySpellings
+		if m, spell = normalizeKeys(m); spell != nil { // #2031
+			if pt.spell == nil {
+				pt.spell = make(map[string]*keySpellings)
+			}
+			pt.spell[tid] = spell
+		}
 		pt.tenants[tid] = m
 	}
 	return pt
@@ -159,7 +168,7 @@ func PlatformOverlayFor(files []PlatformTenants, tenantID string) []PlatformBloc
 	var out []PlatformBlock
 	for _, pt := range files {
 		if b, ok := pt.tenants[tenantID]; ok {
-			out = append(out, PlatformBlock{File: pt.File, Block: b})
+			out = append(out, PlatformBlock{File: pt.File, Block: b, spell: pt.spell[tenantID]})
 		}
 	}
 	return out

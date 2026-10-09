@@ -277,8 +277,9 @@ class NotServedKey(NamedTuple):
 
 
 # The not_served reasons whose cause is a written threshold value (#2065) —
-# pkg/config ValueNotServedAsWritten's set.
-VALUE_NOT_SERVED_REASONS = ("value_unparsed", "value_unparsed_dropped", "window_invalid", "value_rejected")
+# pkg/config ValueNotServedAsWritten's set (spelling_duplicate: #2031).
+VALUE_NOT_SERVED_REASONS = ("value_unparsed", "value_unparsed_dropped", "window_invalid", "value_rejected",
+                            "spelling_duplicate")
 
 
 def value_not_served_as_written(key: str, reason: str) -> bool:

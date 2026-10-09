@@ -12,7 +12,7 @@ package guard
 // is the effective config's NotServed (pkg/config: the resolver's own record
 // and the build's refused subtree values) — the table `da-guard effective`
 // prints as not_served — handed in as CheckInput.ValuesNotServed. This check
-// keeps the four reasons whose cause is a written value, on threshold keys
+// keeps the reasons whose cause is a written value, on threshold keys
 // (config.ValueNotServedAsWritten: a reserved key a subtree `_defaults.yaml`
 // writes is subtree_default_reserved_key's or a routing check's); the other
 // reasons have findings of their own (parse_failed is exit 3, undeliverable is
@@ -33,7 +33,7 @@ import (
 const FindingValueNotServed FindingKind = "value_not_served"
 
 // checkValuesNotServed reports one FindingValueNotServed per (tenant, key) of
-// input.ValuesNotServed that config.ValueNotServedAsWritten selects (the four
+// input.ValuesNotServed that config.ValueNotServedAsWritten selects (the
 // written-value reasons, on a threshold key), for the tenants in
 // input.EffectiveConfigs only.
 func checkValuesNotServed(input CheckInput) []Finding {
@@ -98,6 +98,11 @@ func valueNotServedMessage(k string, ns config.NotServedKey) string {
 		return fmt.Sprintf("window_invalid: %s writes `%s` as a schedule with an override whose `window:` the "+
 			"exporter does not accept — not a UTC `HH:MM-HH:MM` (hours 00-23, minutes 00-59), missing, or a start "+
 			"equal to its end — so that override never applies. Fix the window (e.g. `01:00-09:00`; `22:00-06:00` crosses midnight) or remove the override.",
+			file, k)
+	case config.NotServedSpellingDuplicate:
+		return fmt.Sprintf("spelling_duplicate: %s writes `%s` beside another spelling of the same threshold in the "+
+			"same mapping (dimensional labels in another order or quoted differently, or the retired #1231 name), "+
+			"so /metrics serves the other spelling's value and not this one. Keep one spelling and delete the other.",
 			file, k)
 	default: // config.NotServedValueRejected
 		return fmt.Sprintf("value_rejected: %s writes `%s` with a value that is not threshold-shaped (e.g. "+

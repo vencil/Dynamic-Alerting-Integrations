@@ -72,6 +72,9 @@ type PlatformProfiles struct {
 	files    []string            // merge order, for the attribution order
 	abs      map[string]string   // file (scan key) → TreeFile.AbsPath, the reload's scope attribution
 	declared map[string]struct{} // canonicalizeOptionalOverrides of the root carrier
+	// spell is, per profile and file, what normalizeKeys changed in that
+	// file's body of the profile (#2031); nil: nothing.
+	spell map[string]map[string]*keySpellings
 }
 
 // profileSourceFile is one root platform file's bytes for newPlatformProfiles.
@@ -135,6 +138,16 @@ func newPlatformProfiles(files []profileSourceFile) *PlatformProfiles {
 			// A null body is a known, empty profile (ParseConfigFile
 			// accepted the file, so any other body is a mapping).
 			m, _ := normalizeYAMLToJSON(body).(map[string]any)
+			m, spell := normalizeKeys(m) // #2031
+			if spell != nil {
+				if pp.spell == nil {
+					pp.spell = make(map[string]map[string]*keySpellings)
+				}
+				if pp.spell[name] == nil {
+					pp.spell[name] = make(map[string]*keySpellings)
+				}
+				pp.spell[name][f.key] = spell
+			}
 			for k, v := range m {
 				// A threshold written as null is no write (#2518): it
 				// neither fills the tenant nor replaces an earlier file's

@@ -147,6 +147,15 @@ type EffectiveConfig struct {
 	// which do not pay for it. Not serialized, like BoundProfile.
 	KeySources map[string]KeySource `json:"-"`
 
+	// KeySpellings maps a key of EffectiveConfig to the spelling the layer
+	// that supplied its value wrote it in, where that is not the key itself
+	// (#2031): every layer's map is keyed by the canonical dimensional
+	// spelling before the merge, so EffectiveConfig, KeySources, NotServed
+	// and the overlays' Keys hold that spelling. AsWritten gives them back
+	// as written; da-guard's findings are spelled through it. nil when no
+	// layer re-spelled a key the tenant is shown. Not serialized.
+	KeySpellings map[string]string `json:"-"`
+
 	// MergedConfig is the leaf-by-leaf merge merged_hash hashes — each
 	// layer's own spelling side by side, a schedule merged with the one
 	// below — where EffectiveConfig is built per threshold from the same
@@ -202,7 +211,9 @@ func ResolveEffective(configDir, tenantID string) (*EffectiveConfig, error) {
 		}
 		r.served = newServedVerdicts(&built, false)
 	}
-	return r.resolve(tenantID)
+	ec, err := r.resolve(tenantID)
+	// #2031: tenant-api's /effective shows every key as written.
+	return ec.AsWritten(), err
 }
 
 // discardLogger silences the walker for the library readers. ⛔ Deliberate:
@@ -249,8 +260,9 @@ type effectiveResolver struct {
 	withSources bool
 	// chainBlocks is each chain file's defaults block parsed once per
 	// resolver (keyed by absolute path), for the reported view
-	// (effectiveView, #2115) and the attribution.
-	chainBlocks map[string]map[string]any
+	// (effectiveView, #2115), the attribution and the level's spellings
+	// (#2031).
+	chainBlocks map[string]ChainDefaults
 
 	// served is the exporter's build's not-served tables (#2296): with it,
 	// resolve fills NotServed and reads a chain file the build dropped for a
@@ -386,7 +398,8 @@ func (r *effectiveResolver) resolve(tenantID string) (*EffectiveConfig, error) {
 	}
 
 	overlay := PlatformOverlayFor(r.platformTenants(), tenantID)
-	parts, err := computeEffectiveConfigDocAt(r.tenantDoc(tenantFile, tenantBytes), tenantID, defaultsYAML, overlay, r.platformProfiles(), rootLevel)
+	doc := r.tenantDoc(tenantFile, tenantBytes)
+	parts, err := computeEffectiveConfigDocAt(doc, tenantID, defaultsYAML, overlay, r.platformProfiles(), rootLevel)
 	if err != nil {
 		// #2123: name the file whose bytes the decode rejected, so a caller
 		// can tell "this file is broken" from any other resolve failure
@@ -417,9 +430,14 @@ func (r *effectiveResolver) resolve(tenantID string) (*EffectiveConfig, error) {
 	// #2115: the reported config is laid per threshold, as /metrics serves
 	// it (effectiveView); merged_hash above stays the merge's own.
 	blocks := make([]map[string]any, len(chain))
+	spells := layerSpellings{tenant: doc.spell[tenantID]}
 	for i, p := range chain {
-		blocks[i] = r.chainBlock(p, defaultsYAML[i])
+		cd := r.chainBlock(p, defaultsYAML[i])
+		blocks[i] = cd.block
+		spells.addChain(i, len(chain), cd.spell)
 	}
+	spells.addPlatform(overlay)
+	spells.addProfile(r.platformProfiles(), parts.profile)
 	view := effectiveView(blocks, parts.override)
 
 	ec := &EffectiveConfig{
@@ -441,7 +459,7 @@ func (r *effectiveResolver) resolve(tenantID string) (*EffectiveConfig, error) {
 	if r.served != nil {
 		unparsed = r.served.unparsedOf(tenantID)
 	}
-	if r.withSources || (r.served != nil && r.served.candidates(tenantID, relChain, unparsed)) {
+	if r.withSources || spells.any() || (r.served != nil && r.served.candidates(tenantID, relChain, unparsed)) {
 		ks, err := keySources(view, parts.tenantRaw, ec.SourceFile, relChain, blocks,
 			overlay, parts.platformSources, parts.profileSources)
 		if err != nil {
@@ -453,6 +471,16 @@ func (r *effectiveResolver) resolve(tenantID string) (*EffectiveConfig, error) {
 		if r.served != nil {
 			ec.NotServed = r.served.notServed(tenantID, view, ks, rootLevel, unparsed)
 		}
+		// #2031: the spelling each key's winning layer wrote, and the
+		// spellings a layer wrote beside the one /metrics serves.
+		var dups map[string]NotServedKey
+		ec.KeySpellings, dups = spells.forView(view, ks)
+		for k, ns := range dups {
+			if ec.NotServed == nil {
+				ec.NotServed = map[string]NotServedKey{}
+			}
+			ec.NotServed[k] = ns
+		}
 	}
 	return ec, nil
 }
@@ -461,16 +489,16 @@ func (r *effectiveResolver) resolve(tenantID string) (*EffectiveConfig, error) {
 // (ParseChainDefaults — the parse foldDefaults folds), once per resolver.
 // The merge has already succeeded over these bytes, so a parse error cannot
 // reach here; a block that is not a mapping is nil, as the merge skips it.
-func (r *effectiveResolver) chainBlock(absPath string, b []byte) map[string]any {
-	if blk, ok := r.chainBlocks[absPath]; ok {
-		return blk
+func (r *effectiveResolver) chainBlock(absPath string, b []byte) ChainDefaults {
+	if cd, ok := r.chainBlocks[absPath]; ok {
+		return cd
 	}
 	if r.chainBlocks == nil {
-		r.chainBlocks = make(map[string]map[string]any)
+		r.chainBlocks = make(map[string]ChainDefaults)
 	}
-	blk := ParseChainDefaults(b).block
-	r.chainBlocks[absPath] = blk
-	return blk
+	cd := ParseChainDefaults(b)
+	r.chainBlocks[absPath] = cd
+	return cd
 }
 
 // ============================================================
@@ -879,6 +907,9 @@ func mergeOverSpellings(base, over map[string]any) map[string]any {
 type ChainDefaults struct {
 	block map[string]any // nil: the document has no defaults mapping (skipped by the merge)
 	err   error          // the yaml.Unmarshal error, unwrapped
+	// spell is what normalizeKeys changed in block (#2031): the level's own
+	// spellings and the thresholds it writes twice. nil: nothing.
+	spell *keySpellings
 }
 
 // ParseChainDefaults parses one defaults file's bytes for
@@ -890,7 +921,8 @@ func ParseChainDefaults(b []byte) ChainDefaults {
 	if err := yaml.Unmarshal(b, &raw); err != nil {
 		return ChainDefaults{err: err}
 	}
-	return ChainDefaults{block: extractDefaultsBlock(normalizeYAMLToJSON(raw))}
+	block, spell := normalizeKeys(extractDefaultsBlock(normalizeYAMLToJSON(raw)))
+	return ChainDefaults{block: block, spell: spell}
 }
 
 // mergeDefaultsChain folds the chain L0→Ln. The first entry that failed to
@@ -945,6 +977,9 @@ func foldDefaults(merged map[string]any, i int, pd ChainDefaults) (map[string]an
 type TenantDoc struct {
 	doc any   // normalizeYAMLToJSON of the document; nil when err != nil
 	err error // the yaml.Unmarshal error, unwrapped
+	// spell is, per tenant id, what normalizeKeys changed in its block
+	// (#2031). nil: nothing, for every tenant.
+	spell map[string]*keySpellings
 }
 
 // ParseTenantDoc parses one tenant file's bytes for the *Doc merge entry
@@ -954,7 +989,30 @@ func ParseTenantDoc(b []byte) *TenantDoc {
 	if err != nil {
 		return &TenantDoc{err: err}
 	}
-	return &TenantDoc{doc: doc}
+	d := &TenantDoc{doc: doc}
+	// #2031: each tenant's block keyed by the canonical dimensional
+	// spelling, before any merge reads it (normalizeKeys). The shared
+	// document is re-keyed here, once; tenantRaw copies from it.
+	if m, ok := doc.(map[string]any); ok {
+		if block, ok := m["tenants"].(map[string]any); ok {
+			for tid, body := range block {
+				b, ok := body.(map[string]any)
+				if !ok {
+					continue
+				}
+				nb, s := normalizeKeys(b)
+				if s == nil {
+					continue
+				}
+				block[tid] = nb
+				if d.spell == nil {
+					d.spell = make(map[string]*keySpellings)
+				}
+				d.spell[tid] = s
+			}
+		}
+	}
+	return d
 }
 
 // TenantRaw is tenantID's override block from the parsed file — a fresh

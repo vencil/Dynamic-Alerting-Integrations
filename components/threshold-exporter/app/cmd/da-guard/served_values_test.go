@@ -913,11 +913,12 @@ func TestServedValues_RowsTheCollectorDrops(t *testing.T) {
 		"one row with q_re twice": {
 			"    redis_queue_length{q_re=\"a\", q=~\"b\"}: 5\n",
 			[]string{`redis_queue_length{q_re="a", q=~"b"}`}},
-		// Both rows are dropped, so their would-be collision never reaches
-		// Gather: /metrics serves 200 and so must this.
-		"two dropped rows that would collide": {
+		// Two spellings of one key are one threshold since #2031: the decode
+		// keeps the canonical one (its row is dropped), the other is a
+		// spelling_duplicate (`da-guard effective`'s not_served), not a row.
+		"two spellings of one dropped key": {
 			"    mysql_connections{tenant=\"x\"}: 5\n    mysql_connections{ tenant = \"x\" }: 6\n",
-			[]string{`mysql_connections{tenant="x"}`, `mysql_connections{ tenant = "x" }`}},
+			[]string{`mysql_connections{tenant="x"}`}},
 	} {
 		t.Run(name, func(t *testing.T) {
 			t.Parallel()

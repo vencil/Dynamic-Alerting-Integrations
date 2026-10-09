@@ -2130,8 +2130,14 @@ paths:
         with the exporter's own reason (parse_failed,
         root_defaults_unwrapped, value_rejected, value_unparsed,
         value_unparsed_dropped, window_invalid, undeliverable,
-        root_null_undeclared)
-        and the file of the value shown. chain_parse_failed lists the
+        root_null_undeclared, spelling_duplicate)
+        and the file of the value shown; spelling_duplicate names a
+        spelling of a threshold that the same mapping also writes
+        under the spelling /metrics serves (two spellings of one
+        dimensional key, or both #1231 names). Dimensional keys are
+        one threshold whatever their label order or quoting: every key
+        here is spelled as the layer that supplied its value wrote it.
+        chain_parse_failed lists the
         defaults_chain files with a syntax error the exporter does not
         read; they are read as empty and the tenant is still answered
         (200). Both are omitted when empty.

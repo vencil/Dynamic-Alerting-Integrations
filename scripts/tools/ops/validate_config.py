@@ -2052,7 +2052,8 @@ def check_values_not_served(config_dir: str) -> dict[str, object]:
 
     Reads `da-guard effective`'s `not_served` — the exporter's own record of
     the values its resolver cannot parse, the schedule windows it cannot
-    read and the subtree defaults values its build refuses — and keeps the
+    read, the subtree defaults values its build refuses and the second
+    spelling of a threshold one mapping writes twice — and keeps the
     verdicts da-guard's `value_not_served` refuses
     (`value_not_served_as_written`). No YAML is judged here. A tree
     da-guard cannot load is the load-failure row `profiles` also uses.
@@ -2336,7 +2337,8 @@ _CHECK_HINTS: dict[str, tuple[str, str]] = {
         "Fix each listed value: write a number (optionally `:<severity>`) or "
         "`disable`; give each schedule window a UTC `HH:MM-HH:MM` whose start "
         "differs from its end; write a subtree default as a number or a "
-        "`{default, overrides: [{window, value}]}` schedule. "
+        "`{default, overrides: [{window, value}]}` schedule; keep one spelling "
+        "of a threshold a mapping writes twice (spelling_duplicate). "
         "`da-guard effective --config-dir <dir>` lists each one under `not_served`.",
         "docs/cli-reference.md#validate-config",
     ),

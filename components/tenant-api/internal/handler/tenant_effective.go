@@ -64,8 +64,14 @@ import (
 // @Description with the exporter's own reason (parse_failed,
 // @Description root_defaults_unwrapped, value_rejected, value_unparsed,
 // @Description value_unparsed_dropped, window_invalid, undeliverable,
-// @Description root_null_undeclared)
-// @Description and the file of the value shown. chain_parse_failed lists the
+// @Description root_null_undeclared, spelling_duplicate)
+// @Description and the file of the value shown; spelling_duplicate names a
+// @Description spelling of a threshold that the same mapping also writes
+// @Description under the spelling /metrics serves (two spellings of one
+// @Description dimensional key, or both #1231 names). Dimensional keys are
+// @Description one threshold whatever their label order or quoting: every key
+// @Description here is spelled as the layer that supplied its value wrote it.
+// @Description chain_parse_failed lists the
 // @Description defaults_chain files with a syntax error the exporter does not
 // @Description read; they are read as empty and the tenant is still answered
 // @Description (200). Both are omitted when empty.
