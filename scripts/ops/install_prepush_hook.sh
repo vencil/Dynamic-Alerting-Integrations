@@ -47,7 +47,8 @@ case "${1:-}" in
             "usage: bash scripts/ops/install_prepush_hook.sh" \
             "" \
             "Installs the pre-push guard shim over git-lfs's hook, pre-commit's template" \
-            "or a copy of a guard; refuses any other hook already there." \
+            "or a copy of a guard; refuses any other hook already there, and refuses" \
+            "while core.hooksPath is set or the hooks directory is a symlink." \
             "To ask whether the guards are wired, run: make pr-preflight" \
             "  (without make: python3 scripts/tools/dx/pr_preflight.py; on Windows, python)" >&2
         exit 0 ;;
@@ -60,9 +61,23 @@ root="$(git rev-parse --show-toplevel 2>/dev/null)" || {
     warn "⛔ not inside a git work tree"
     exit 2
 }
+# ⛔ Not while core.hooksPath is set, even to "" (#2696). It may name a
+# directory many repositories share, where the shim would refuse every push of
+# every one of them; "" makes git run no hook.
+# GIT_CONFIG only changes which file `git config` reads; git still runs hooks
+# by the usual configuration.
+hooks_path="$(unset GIT_CONFIG; git config --get core.hooksPath)"
+case $? in
+    0)  warn "⛔ refusing: core.hooksPath is set (to '$hooks_path'). The guards are"
+        warn "   judged and installed only while it is not."
+        warn "   Nothing was changed."
+        exit 1 ;;
+    1)  ;;
+    *)  warn "⛔ cannot read core.hooksPath from git config"
+        exit 2 ;;
+esac
 # ⛔ --git-path, not --git-dir: inside a worktree the git dir is
-# .git/worktrees/<name> but the hooks live in the MAIN repo's .git/hooks. It
-# also follows core.hooksPath, which this repo sets.
+# .git/worktrees/<name> but the hooks live in the MAIN repo's .git/hooks.
 hooks="$(git rev-parse --git-path hooks 2>/dev/null)" || {
     warn "⛔ cannot resolve the hooks directory"
     exit 2
@@ -216,6 +231,13 @@ need() {   # $1 = tool, $2 = what it is for
 }
 
 # --- Checks. Nothing below changes anything until they have all passed. ------
+
+# ⛔ Not through a symlinked hooks directory (#2696): it may lead to a directory
+# other repositories share, the same harm as a shared core.hooksPath.
+if [ -L "$hooks" ]; then
+    refuse "$hooks is a symlink. The guards are installed only in this" \
+        "repository's own hooks directory, never through a link."
+fi
 
 # Earlier versions of this installer moved the hook they found to
 # pre-push.chained and the dispatcher ran it. It runs nothing now, and refuses
