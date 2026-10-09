@@ -1076,22 +1076,19 @@ func TestServedValues_DroppedKeepsEveryRowsReason(t *testing.T) {
 // --- families other than user_threshold ----------------------------------------------
 
 // Two expired overrides whose da_config_event reasons render alike
-// ("container_cpu: a: b") collide in that family: production /metrics answers
-// 500 (pinned in the app package), so served-values must refuse too even
-// though every user_threshold row is fine.
-func TestServedValues_OtherFamilyFailsGather_ExitsTwo(t *testing.T) {
+// ("container_cpu: a: b") collided in that family and production /metrics
+// answered 500, so served-values refused the tree. Since #2031 the metric_key
+// label tells the two events apart: /metrics serves the tree (pinned in the
+// app package), and so does this.
+func TestServedValues_SameEventReasonText_Serves(t *testing.T) {
 	t.Parallel()
 	code, doc, _, stderr := served(t, map[string]string{
 		"_defaults.yaml": defaultsOnly + "  container_cpu: 75\n  \"container_cpu: a\": 50\n",
 		"tenant-a.yaml": "tenants:\n  tenant-a:\n    container_cpu:\n      default: \"95\"\n      expires: \"2026-06-01T00:00:00Z\"\n      reason: \"a: b\"\n" +
 			"    \"container_cpu: a\":\n      default: \"96\"\n      expires: \"2026-06-01T00:00:00Z\"\n      reason: \"b\"\n",
 	}, "2026-07-01T00:00:00Z")
-	if code != exitCallerErr {
-		t.Fatalf("exit = %d, want %d; tenants=%v stderr=%q", code, exitCallerErr, doc.Tenants, stderr)
-	}
-	if !strings.Contains(stderr, "da_config_event") || !strings.Contains(stderr, "HTTP 500") {
-		t.Errorf("stderr should carry client_golang's error: %q", stderr)
-	}
+	mustOK(t, code, stderr)
+	wantValue(t, doc, "tenant-a", "container_cpu", 75) // expired: the platform default
 }
 
 // A non-UTF-8 name in optional_overrides reaches no output string while no
@@ -1112,10 +1109,11 @@ func TestServedValues_NonUTF8DeclaredKeyNobodySets_Serves(t *testing.T) {
 
 // --- threshold expiry events follow --at ----------------------------------------------
 
-// Two time-boxed overrides whose expiry events would render one
-// da_config_event series ("container_cpu: a: b"): before they expire nothing
-// collides; after, the scrape fails. The expiry is far in the future, so only
-// --at (not the wall clock) can put the run after it.
+// A time-boxed override is read at --at, not at the wall clock: the expiry
+// is far in the future, so only --at can put the run after it, where the
+// platform default is served. (The two overrides' expiry events used to
+// render one da_config_event series and fail the scrape after expiry; the
+// metric_key label keeps them apart since #2031.)
 func TestServedValues_ThresholdExpiryFollowsAt(t *testing.T) {
 	t.Parallel()
 	files := map[string]string{
@@ -1126,10 +1124,9 @@ func TestServedValues_ThresholdExpiryFollowsAt(t *testing.T) {
 	code, doc, _, stderr := served(t, files, "2026-07-01T00:00:00Z")
 	mustOK(t, code, stderr)
 	wantValue(t, doc, "tenant-a", "container_cpu", 95)
-	code, _, _, stderr = served(t, files, "2099-07-01T00:00:00Z")
-	if code != exitCallerErr || !strings.Contains(stderr, "da_config_event") {
-		t.Fatalf("after expiry: exit = %d, want %d naming da_config_event; stderr=%q", code, exitCallerErr, stderr)
-	}
+	code, doc, _, stderr = served(t, files, "2099-07-01T00:00:00Z")
+	mustOK(t, code, stderr)
+	wantValue(t, doc, "tenant-a", "container_cpu", 75)
 }
 
 // --config-dir is the caller's own argument and is not in the output, so a

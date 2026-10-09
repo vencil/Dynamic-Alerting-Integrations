@@ -36,7 +36,7 @@ paths:
         - `user_silent_mode{tenant, target_severity}`: Emitted only while silent mode is active, one series per muted severity, value always 1 (alerts still fire; notifications are inhibited)
         - `user_severity_dedup{tenant, alertname}`: Severity deduplication flag
         - `tenant_metadata_info{tenant, metadata_labels}`: Tenant metadata key-value pairs as labels
-        - `da_config_event{tenant, event, reason, target_severity}`: Timed config expiry event, value always 1 (event: silence_expired / maintenance_expired / threshold_expired; target_severity is set only for silence_expired, empty otherwise)
+        - `da_config_event{tenant, event, reason, target_severity, metric_key}`: Timed config expiry event, value always 1 (event: silence_expired / maintenance_expired / threshold_expired; target_severity is set only for silence_expired and metric_key only for threshold_expired, empty otherwise)
       operationId: getMetrics
       tags:
         - Metrics

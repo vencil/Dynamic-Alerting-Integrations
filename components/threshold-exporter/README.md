@@ -95,7 +95,7 @@
 | `user_slo_objective` | Gauge | 租戶在 `slo_burn_rate` 自訂告警宣告的 SLO 目標百分比；`objective: "disable"` 不發（labels: tenant / recipe_id；ADR-031） |
 | `tenant_metadata_info` | Gauge | 租戶 `_metadata` 的資訊指標，值恆 1；Rule Pack 以 `group_left(runbook_url, owner, tier)` join 進告警（labels: tenant / runbook_url / owner / tier） |
 | `tenant_expected_exporter` | Gauge | per-tenant exporter liveness 期望，值恆 1（labels: tenant / db_type；**僅對宣告 `_metadata.db_type` 的租戶 emit**）。`TenantExporterAbsent` anti-join 的左手邊（#869） |
-| `da_config_event` | Gauge | timed config 失效事件（silent / maintenance 自動解除；labels: tenant / event / reason / target_severity） |
+| `da_config_event` | Gauge | timed config 失效事件（silent / maintenance 自動解除；labels: tenant / event / reason / target_severity / metric_key；`metric_key` 只在 `event="threshold_expired"` 填該閾值的 key，其他事件為空字串；同租戶兩個過期 key 由它區分，不再靠 reason 文字，#2031） |
 | `da_custom_alert_parse_errors` | Gauge | 每租戶被丟棄的 `_custom_alerts` 數（fail-loud；0 = 全數有效；label: tenant） |
 | `da_tenant_metrics_over_limit` | Gauge | 每租戶超出 cardinality 上限的量（`max(0, 產出數 − 上限)`；持續超限就持續報該值；label: tenant） |
 | `da_config_deprecated_keys` | Gauge | 每租戶設定裡仍在用的舊 key 拼法數（#1231 改名過渡期；只供觀察遷移進度，沒有告警；label: tenant） |
