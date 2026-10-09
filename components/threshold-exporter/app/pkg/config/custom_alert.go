@@ -913,7 +913,10 @@ func resolveCustomAlertSpecs(tenant string, overrides map[string]ScheduledValue,
 	var out []ResolvedThreshold
 	var objectives []ResolvedSloObjective
 	var dups []CustomAlertDuplicate
-	owner := map[string]int{} // series identity → index of the entry that serves it
+	var owner map[customSeriesID]int // series → index of the entry that serves it; one entry cannot repeat another
+	if len(specs) > 1 {
+		owner = make(map[customSeriesID]int, len(specs)+1)
+	}
 	errCount := 0
 	for i, spec := range specs {
 		rts, err := resolveOneCustomAlert(tenant, spec)
@@ -934,17 +937,21 @@ func resolveCustomAlertSpecs(tenant string, overrides map[string]ScheduledValue,
 				obj = &ResolvedSloObjective{Tenant: tenant, RecipeID: rts[0].CustomLabels["recipe_id"], Objective: v}
 			}
 		}
-		series := customAlertSeries(rts, obj)
-		if d, dup := customAlertSeriesCollision(series, owner); dup {
-			d.Index, d.Name, d.OfName = i, spec.Name, specs[d.Of].Name
-			dups = append(dups, d)
-			logCustomAlertError(logf, tenant, spec.Name, fmt.Errorf(
-				"its series %s is the one _custom_alerts[%d] (%q) already serves; only the first is served", d.Series, d.Of, d.OfName))
-			errCount++
-			continue
-		}
-		for _, id := range series {
-			owner[id] = i
+		if owner != nil {
+			if d, dup := customAlertSeriesCollision(rts, obj, owner); dup {
+				d.Index, d.Name, d.OfName = i, spec.Name, specs[d.Of].Name
+				dups = append(dups, d)
+				logCustomAlertError(logf, tenant, spec.Name, fmt.Errorf(
+					"its series %s is the one _custom_alerts[%d] (%q) already serves; only the first is served", d.Series, d.Of, d.OfName))
+				errCount++
+				continue
+			}
+			for _, r := range rts {
+				owner[customRowID(r)] = i
+			}
+			if obj != nil {
+				owner[customSeriesID{objective: true, recipeID: obj.RecipeID}] = i
+			}
 		}
 		out = append(out, rts...)
 		if obj != nil {
@@ -976,35 +983,37 @@ func CustomAlertDuplicates(tenant string, overrides map[string]ScheduledValue) [
 	return dups
 }
 
-// customAlertSeries is the identity of each series one resolved custom alert
-// puts on /metrics: every user_threshold row's labels, and the
-// user_slo_objective's (tenant, recipe_id) — the label sets client_golang
-// refuses to see twice. Not the preflight's stricter rules (one name, one
-// shape+severity per tenant): an entry they refuse but /metrics serves is
-// still served (ValidateTenantCustomAlerts keeps them for tenant-api).
-func customAlertSeries(rows []ResolvedThreshold, obj *ResolvedSloObjective) []string {
-	out := make([]string, 0, len(rows)+1)
-	for _, r := range rows {
-		labels := make([]string, 0, len(r.CustomLabels))
-		for k, v := range r.CustomLabels {
-			labels = append(labels, k+"="+strconv.Quote(v))
-		}
-		sort.Strings(labels)
-		out = append(out, fmt.Sprintf("user_threshold{component=%q,metric=%q,severity=%q,tenant=%q,%s}",
-			r.Component, r.Metric, r.Severity, r.Tenant, strings.Join(labels, ",")))
-	}
-	if obj != nil {
-		out = append(out, fmt.Sprintf("user_slo_objective{recipe_id=%q,tenant=%q}", obj.RecipeID, obj.Tenant))
-	}
-	return out
+// customSeriesID is the identity of one series a resolved custom alert of
+// one tenant puts on /metrics — a user_threshold row (component "custom",
+// its metric and severity, and the recipe_id / name / mode labels
+// resolveOneCustomAlert sets) or, with objective set, its
+// user_slo_objective{recipe_id}: the label sets client_golang refuses to see
+// twice. Not the preflight's stricter rules (one name, one shape+severity per
+// tenant): an entry they refuse but /metrics serves is still served
+// (ValidateTenantCustomAlerts keeps them for tenant-api).
+type customSeriesID struct {
+	objective                              bool
+	metric, severity, recipeID, name, mode string
 }
 
-// customAlertSeriesCollision reports whether one of series is already in
-// owner (series → the index of the entry serving it), and which.
-func customAlertSeriesCollision(series []string, owner map[string]int) (CustomAlertDuplicate, bool) {
-	for _, id := range series {
-		if of, taken := owner[id]; taken {
-			return CustomAlertDuplicate{Of: of, Series: id}, true
+func customRowID(r ResolvedThreshold) customSeriesID {
+	return customSeriesID{metric: r.Metric, severity: r.Severity,
+		recipeID: r.CustomLabels["recipe_id"], name: r.CustomLabels["name"], mode: r.CustomLabels["mode"]}
+}
+
+// customAlertSeriesCollision reports whether a series of one resolved
+// custom alert (rows, obj) is already in owner, and which entry serves it.
+func customAlertSeriesCollision(rows []ResolvedThreshold, obj *ResolvedSloObjective, owner map[customSeriesID]int) (CustomAlertDuplicate, bool) {
+	for _, r := range rows {
+		if of, taken := owner[customRowID(r)]; taken {
+			return CustomAlertDuplicate{Of: of, Series: fmt.Sprintf(
+				"user_threshold{component=%q, metric=%q, severity=%q, recipe_id=%q, name=%q, mode=%q}",
+				r.Component, r.Metric, r.Severity, r.CustomLabels["recipe_id"], r.CustomLabels["name"], r.CustomLabels["mode"])}, true
+		}
+	}
+	if obj != nil {
+		if of, taken := owner[customSeriesID{objective: true, recipeID: obj.RecipeID}]; taken {
+			return CustomAlertDuplicate{Of: of, Series: fmt.Sprintf("user_slo_objective{recipe_id=%q}", obj.RecipeID)}, true
 		}
 	}
 	return CustomAlertDuplicate{}, false
