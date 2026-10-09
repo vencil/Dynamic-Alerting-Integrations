@@ -2400,7 +2400,7 @@ An option to print only the summary is not implemented yet; the report's last li
 
 Markdown format report with per-tenant change tables and summary statistics.
 
-**Profile blast radius**: when a profile in `_profiles.yaml` changes, `affected_tenants` lists the `--new-dir` tenants whose `_profile` names it. The name is read through `da-guard effective`, as the exporter reads it: `_profile: {default: std}` names `std`, a `_profile` in a root platform file's `tenants:` entry counts, and one inherited from a subdirectory `_defaults.yaml` does not. So a run with a profile change needs da-guard (bundled in the image; `make da-guard-build` in a checkout); if da-guard is missing or fails, or a `--new-dir` file cannot be decoded by the exporter, the exit code is 2, with one `ERROR:` line and da-guard's stderr below it. ⚠️ The v2.9.0 image still reads `_profile` only in its string form. <!-- image-caveat: v2.9.0 -->
+**Profile blast radius**: when a profile in `_profiles.yaml` changes, `affected_tenants` lists the `--new-dir` tenants whose `_profile` names it. The name is read through `da-guard effective`, as the exporter reads it: `_profile: {default: std}` names `std`, a `_profile` in a root platform file's `tenants:` entry counts, and one inherited from a subdirectory `_defaults.yaml` does not. So a run with a profile change needs da-guard (bundled in the image; `make da-guard-build` in a checkout); if da-guard is missing or fails, or a `--new-dir` file cannot be decoded by the exporter, the exit code is 2: stderr has `ERROR:` lines saying why, then da-guard's stderr (each line prefixed `da-guard|`). ⚠️ The v2.9.0 image still reads `_profile` only in its string form. <!-- image-caveat: v2.9.0 -->
 
 **Examples**
 

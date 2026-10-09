@@ -840,6 +840,27 @@ class TestProfileDiffEndToEnd:
             assert len(results[0]["key_diffs"]) == 1
             assert results[0]["key_diffs"][0]["change"] == "added"
 
+    def test_da_guard_failure_exits_2_with_its_reason(self, tmp_path):
+        """#2115 F1：讀 profile 綁定時 da-guard 失敗（這裡是 `--new-dir` 的根
+        `_defaults.yaml` 帶 `_profile: std`，exporter 整份丟掉、effective rc 3）——
+        rc 2，stderr 除了 ERROR 行，還要有 da-guard 自己的原因行（`print_load_error`
+        轉印）。只靠泛用 `except Exception` 時 rc 也是 2，但原因行會消失。"""
+        old_dir, new_dir = tmp_path / "old", tmp_path / "new"
+        for d, cpu in ((old_dir, 60), (new_dir, 50)):
+            d.mkdir()
+            (d / "_profiles.yaml").write_text(
+                f"profiles:\n  std:\n    mysql_connections: {cpu}\n", encoding="utf-8")
+            (d / "db-a.yaml").write_text("tenants:\n  db-a:\n    _profile: std\n",
+                                         encoding="utf-8")
+        (new_dir / "_defaults.yaml").write_text(
+            "defaults:\n  mysql_connections: 80\n  _profile: std\n", encoding="utf-8")
+        p = _run_cli(old_dir, new_dir)
+        assert p.returncode == 2, (p.returncode, p.stdout, p.stderr)
+        assert "reading the --new-dir profile bindings through da-guard failed" in p.stderr, p.stderr
+        reason = [l for l in p.stderr.splitlines()
+                  if l.lstrip().startswith("da-guard| ") and "skip unparseable" in l]
+        assert reason and "_defaults.yaml" in reason[0], p.stderr
+
     def test_json_output_includes_key_diffs(self):
         """JSON output should include key_diffs in profile_diffs."""
         with tempfile.TemporaryDirectory() as old_dir, \
