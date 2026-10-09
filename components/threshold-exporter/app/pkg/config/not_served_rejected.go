@@ -18,16 +18,13 @@ import (
 // fingerprint is the scan's SHA-256 of every file the resolve reads
 // for it — the tenant file, each file of its defaults chain (in order, by
 // path) and every `_` file at the root (platform `tenants:` entries,
-// profiles, the root carrier) — plus the tenant id, and the keys
-// RejectedChainValues holds for each file of the chain. ParseFailed of a
-// chain file is a function of those files' bytes; RejectedChainValues is
-// not: a chain file's refused keys are its values that are not
-// threshold-shaped, recorded for any tenant under it that does not set the
-// key itself, so whether a key is in the table moves with another tenant's
-// file (one that does not set it added or removed) while this tenant's
-// files stay byte-identical. The verdict reads the table only where that
-// file is the tenant's winning layer. The zero value is ready; safe for
-// concurrent use.
+// profiles, the root carrier) — plus the tenant id. The build's tables the
+// value_rejected verdict reads (RejectedChainValues, ParseFailed of a chain
+// file) are functions of those files' bytes: a chain file's refused keys
+// are its values that are not threshold-shaped, recorded per tenant when
+// that tenant does not set the key itself (under any spelling), and the
+// verdict reads the tenant's own entry only where that file is its winning
+// layer. The zero value is ready; safe for concurrent use.
 type RejectedShownCache struct {
 	mu      sync.Mutex
 	entries map[string]rejectedShownEntry
@@ -46,7 +43,7 @@ type rejectedShownEntry struct {
 // give, from the same resolver (effectiveResolver.resolve →
 // servedVerdicts.notServed, keySources' winner attribution). Nothing is
 // re-judged here: a tenant is resolved when its defaults chain holds a file
-// of built.RejectedChainValues (no other tenant can be named
+// of its built.RejectedChainValues entry (no other tenant can be named
 // value_rejected), or when a file its resolve reads re-spelled a key
 // (spellingCandidates; no other tenant can be named spelling_duplicate), and
 // the reason is read off the result. Keys are spelled as the resolver keys
@@ -95,7 +92,7 @@ func (c *RejectedShownCache) Shown(scan *TreeScan, built *FlatBuild) map[string]
 		chain := r.chain(filepath.Dir(abs))
 		candidate := spelled[id]
 		for _, p := range chain {
-			if len(built.RejectedChainValues[r.rel(p)]) > 0 {
+			if len(built.RejectedChainValues[id][r.rel(p)]) > 0 {
 				candidate = true
 				break
 			}
@@ -103,7 +100,7 @@ func (c *RejectedShownCache) Shown(scan *TreeScan, built *FlatBuild) map[string]
 		if !candidate {
 			continue
 		}
-		in := c.input(scan, r, id, abs, chain, rootFiles, built.RejectedChainValues)
+		in := c.input(scan, r, id, abs, chain, rootFiles)
 		e, ok := c.entries[id]
 		if !ok || e.input != in {
 			if !served {
@@ -131,8 +128,7 @@ func (c *RejectedShownCache) Shown(scan *TreeScan, built *FlatBuild) map[string]
 }
 
 // input is the fingerprint of tenant id's resolve inputs (see the type).
-// rejected is the build's RejectedChainValues.
-func (c *RejectedShownCache) input(scan *TreeScan, r *effectiveResolver, id, abs string, chain, rootFiles []string, rejected map[string]map[string]bool) uint64 {
+func (c *RejectedShownCache) input(scan *TreeScan, r *effectiveResolver, id, abs string, chain, rootFiles []string) uint64 {
 	h := fnv.New64a()
 	add := func(s string) {
 		_, _ = h.Write([]byte(s))
@@ -150,17 +146,7 @@ func (c *RejectedShownCache) input(scan *TreeScan, r *effectiveResolver, id, abs
 	file(r.rel(abs))
 	_, _ = h.Write([]byte{1})
 	for _, p := range chain {
-		rel := r.rel(p)
-		file(rel)
-		keys := make([]string, 0, len(rejected[rel]))
-		for k := range rejected[rel] {
-			keys = append(keys, k)
-		}
-		sort.Strings(keys)
-		for _, k := range keys {
-			add(k)
-		}
-		_, _ = h.Write([]byte{3})
+		file(r.rel(p))
 	}
 	_, _ = h.Write([]byte{2})
 	for _, k := range rootFiles {

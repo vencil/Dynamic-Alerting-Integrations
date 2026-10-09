@@ -353,11 +353,11 @@ func (r *rejectRecorder) noteInvalidWindows(tenant, key string, sv ScheduledValu
 // resolver (#2296). Built from the build ScopeEffective / ResolveEffective
 // already ran over the same scan.
 type servedVerdicts struct {
-	parseFailed   map[string]bool            // root-relative scan keys (FlatBuild.ParseFailed)
-	rootUnread    map[string]bool            // root carrier keys (FlatBuild.RootDefaultsUnread)
-	rejected      map[string]map[string]bool // file → keys (FlatBuild.RejectedChainValues)
-	undeliverable map[string]map[string]bool // tenant → keys (undeliverableThresholds)
-	rootNull      map[string]map[string]bool // tenant → keys (FlatBuild.RootNullUndeclared)
+	parseFailed   map[string]bool                       // root-relative scan keys (FlatBuild.ParseFailed)
+	rootUnread    map[string]bool                       // root carrier keys (FlatBuild.RootDefaultsUnread)
+	rejected      map[string]map[string]map[string]bool // tenant → file → keys (FlatBuild.RejectedChainValues)
+	undeliverable map[string]map[string]bool            // tenant → keys (undeliverableThresholds)
+	rootNull      map[string]map[string]bool            // tenant → keys (FlatBuild.RootNullUndeclared)
 
 	// cfg is the build's config; unparsed is ValuesNotServed over it,
 	// computed on the first tenant that asks (all, when all is set — the
@@ -445,7 +445,7 @@ func (v *servedVerdicts) candidates(tenantID string, chain []string, unparsed ma
 		return true
 	}
 	for _, f := range chain {
-		if len(v.rejected[f]) > 0 {
+		if len(v.rejected[tenantID][f]) > 0 {
 			return true
 		}
 	}
@@ -473,7 +473,7 @@ func (v *servedVerdicts) notServed(tenantID string, view map[string]any, ks map[
 			reason = NotServedParseFailed
 		case atRoot && v.rootUnread[k]:
 			reason = NotServedRootDefaultsUnwrapped
-		case src.Layer == KeyLayerDefaults && !atRoot && v.rejected[src.File][k]:
+		case src.Layer == KeyLayerDefaults && !atRoot && v.rejected[tenantID][src.File][k]:
 			reason = NotServedValueRejected
 		case unparsed[canon] == NotServedValueUnparsedDropped:
 			reason = NotServedValueUnparsedDropped
@@ -500,13 +500,16 @@ func (v *servedVerdicts) notServed(tenantID string, view map[string]any, ks map[
 
 // relRejected converts applySubtreeDefaults' absolute-path rejection table
 // to root-relative slash paths (FlatBuild.RejectedChainValues).
-func relRejected(rootDir string, byAbs map[string]map[string]bool) map[string]map[string]bool {
+func relRejected(rootDir string, byAbs map[string]map[string]map[string]bool) map[string]map[string]map[string]bool {
 	if len(byAbs) == 0 {
 		return nil
 	}
-	out := make(map[string]map[string]bool, len(byAbs))
-	for p, keys := range byAbs {
-		out[subtreeRelPath(rootDir, filepath.Clean(p))] = keys
+	out := make(map[string]map[string]map[string]bool, len(byAbs))
+	for tenantID, files := range byAbs {
+		out[tenantID] = make(map[string]map[string]bool, len(files))
+		for p, keys := range files {
+			out[tenantID][subtreeRelPath(rootDir, filepath.Clean(p))] = keys
+		}
 	}
 	return out
 }

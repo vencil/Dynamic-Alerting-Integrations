@@ -117,11 +117,14 @@ type FlatBuild struct {
 	// ⚠️ Filled only when this build decoded the root carrier's bytes, like
 	// RootNullUndeclared.
 	RootDefaultsUnread []UnreadKey
-	// RejectedChainValues is, per subtree defaults file (root-relative slash
-	// path), the keys whose value applySubtreeDefaults refused as not
-	// threshold-shaped for some tenant under it, so that tenant keeps a
-	// shallower level's value or none (#2296). nil when there is none.
-	RejectedChainValues map[string]map[string]bool
+	// RejectedChainValues is, per tenant and subtree defaults file of its
+	// chain (root-relative slash path), the keys whose value
+	// applySubtreeDefaults refused as not threshold-shaped for that tenant,
+	// so it keeps a shallower level's value or none (#2296). A tenant that
+	// sets the threshold itself, under any spelling, has no entry for it.
+	// Per tenant so that a tenant's entry depends on its own inputs only
+	// (#2065). nil when there is none.
+	RejectedChainValues map[string]map[string]map[string]bool
 
 	// respelledChain is the defaults files (absolute, as ParsedDefaults keys
 	// them) whose parsed block holds a dimensional key, or both #1231

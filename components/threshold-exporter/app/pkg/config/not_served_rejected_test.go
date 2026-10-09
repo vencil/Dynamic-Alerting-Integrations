@@ -66,15 +66,17 @@ func TestRejectedShownCache_FailedResolveIsNotCached(t *testing.T) {
 	}
 }
 
-// TestRejectedShownCache_AnotherTenantMovesChainRejection (#2065
-// follow-up): a chain file's refused key is recorded in RejectedChainValues
-// only for a tenant under it that does not set the key itself. tx sets
-// mysql_threads_running at the platform layer (a time-boxed unparseable
-// value), so its own build records nothing for team/sub's mysql_cpu, yet its
-// resolve names the chain file the winner. Adding tw — who does not set it —
-// puts the key in the table and so changes tx's verdict, while every file
-// tx's resolve reads is byte-identical. The cached answer must not outlive it.
-func TestRejectedShownCache_AnotherTenantMovesChainRejection(t *testing.T) {
+// TestRejectedShownCache_AnotherTenantDoesNotMoveTheVerdict (#2065
+// follow-up): a tenant's value_rejected verdict depends on its own inputs
+// only. mysql_cpu is an alias (the retired #1231 spelling) of
+// mysql_threads_running; tx sets mysql_threads_running at the platform
+// layer (a time-boxed unparseable value), so the build — which asks "the
+// tenant sets this threshold" under any spelling — refuses team/sub's
+// mysql_cpu for tw but not for tx. Keyed by file alone, the table named tx
+// as soon as tw (who does not set it) was added, though every file tx's
+// resolve reads was byte-identical: tx must be named on neither tree, and
+// the cached answer after adding tw must equal a cold one.
+func TestRejectedShownCache_AnotherTenantDoesNotMoveTheVerdict(t *testing.T) {
 	t.Parallel()
 	tmp := t.TempDir()
 	testutil.WriteTree(t, tmp, map[string]string{
@@ -101,9 +103,9 @@ func TestRejectedShownCache_AnotherTenantMovesChainRejection(t *testing.T) {
 
 	var c RejectedShownCache
 	scan, built := build()
-	before := map[string]map[string]string{"ty": {"mysql_connections": NotServedValueRejected}}
-	if got := c.Shown(scan, built); !reflect.DeepEqual(got, before) {
-		t.Fatalf("precondition: shown %v; want %v (tx a candidate through team/_defaults.yaml, nothing named)", got, before)
+	wantA := map[string]map[string]string{"ty": {"mysql_connections": NotServedValueRejected}}
+	if got := c.Shown(scan, built); !reflect.DeepEqual(got, wantA) {
+		t.Errorf("without tw: shown %v; want %v", got, wantA)
 	}
 
 	testutil.WriteTree(t, tmp, map[string]string{
@@ -111,12 +113,15 @@ func TestRejectedShownCache_AnotherTenantMovesChainRejection(t *testing.T) {
 	})
 	scan, built = build()
 	var cold RejectedShownCache
-	want := cold.Shown(scan, built)
-	if want["tx"]["mysql_cpu"] != NotServedValueRejected {
-		t.Fatalf("precondition: a cold resolve names tx/mysql_cpu %q; want %q (%v)",
-			want["tx"]["mysql_cpu"], NotServedValueRejected, want)
+	wantB := map[string]map[string]string{
+		"ty": {"mysql_connections": NotServedValueRejected},
+		"tw": {"mysql_cpu": NotServedValueRejected},
 	}
-	if got := c.Shown(scan, built); !reflect.DeepEqual(got, want) {
-		t.Errorf("after tw's file was added: cached %v; cold %v", got, want)
+	got := cold.Shown(scan, built)
+	if !reflect.DeepEqual(got, wantB) {
+		t.Errorf("with tw, cold: shown %v; want %v (tx named on neither tree)", got, wantB)
+	}
+	if cached := c.Shown(scan, built); !reflect.DeepEqual(cached, got) {
+		t.Errorf("with tw: cached %v; cold %v", cached, got)
 	}
 }

@@ -71,7 +71,7 @@ func applySubtreeDefaults(
 	root string,
 	tenantDefaults map[string][]string,
 	parsed map[string]map[string]any,
-) (int, map[string]map[string]ScheduledValue, map[string]map[string]SubtreeRefusedVerdict, map[string]map[string]bool) {
+) (int, map[string]map[string]ScheduledValue, map[string]map[string]SubtreeRefusedVerdict, map[string]map[string]map[string]bool) {
 	if cfg == nil || len(cfg.Tenants) == 0 || len(tenantDefaults) == 0 {
 		return 0, nil, nil, nil
 	}
@@ -108,11 +108,14 @@ func applySubtreeDefaults(
 	// with several levels, "move it" must say WHICH value) and whether the
 	// tenant sets the key itself.
 	var applied map[string]map[string]SubtreeRefusedVerdict
-	// ⛔ WHICH VALUES THIS OVERLAY REFUSED (#2296): defaults file (absolute)
-	// → the keys whose value is not threshold-shaped, recorded on the
-	// refusal branch below and nowhere else, so /effective can say why it
+	// ⛔ WHICH VALUES THIS OVERLAY REFUSED (#2296): tenant → defaults file
+	// (absolute) → the keys whose value is not threshold-shaped, recorded on
+	// the refusal branch below and nowhere else, so /effective can say why it
 	// shows a value /metrics does not serve (FlatBuild.RejectedChainValues).
-	var rejected map[string]map[string]bool
+	// Per tenant, because the branch is: a tenant that sets the threshold
+	// under any spelling is skipped above, and keyed by file alone the
+	// verdict for one tenant moved with another tenant's file (#2065).
+	var rejected map[string]map[string]map[string]bool
 
 	filled := 0
 	for tenantID, overrides := range cfg.Tenants {
@@ -164,12 +167,15 @@ func applySubtreeDefaults(
 				if !ok || !isThresholdShaped(value) {
 					if raw != nil {
 						if rejected == nil {
-							rejected = map[string]map[string]bool{}
+							rejected = map[string]map[string]map[string]bool{}
 						}
-						if rejected[defaultsPath] == nil {
-							rejected[defaultsPath] = map[string]bool{}
+						if rejected[tenantID] == nil {
+							rejected[tenantID] = map[string]map[string]bool{}
 						}
-						rejected[defaultsPath][key] = true
+						if rejected[tenantID][defaultsPath] == nil {
+							rejected[tenantID][defaultsPath] = map[string]bool{}
+						}
+						rejected[tenantID][defaultsPath][key] = true
 					}
 					continue
 				}
