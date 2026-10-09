@@ -143,7 +143,10 @@ func applySubtreeDefaults(
 		var refusedSeen map[string]struct{}
 		var refusedSource map[string]SubtreeRefusedVerdict // key → the written level (deepest wins)
 		var refusedTenantSets map[string]bool
-		var rejectedWin map[string]string // key → absolute defaults path
+		// canonical key (canonicalKeyFor, the resolver's #1231 folding) → the
+		// written key and absolute defaults path: a deeper level writing the
+		// threshold under its other spelling displaces it too (#2065 r2).
+		var rejectedWin map[string][2]string
 		for _, defaultsPath := range tenantDefaults[tenantID] {
 			if filepath.Dir(filepath.Clean(defaultsPath)) == rootDir {
 				continue // the global defaults file — already in cfg.Defaults
@@ -183,16 +186,21 @@ func applySubtreeDefaults(
 						rejected[defaultsPath][key] = true
 						if !nullThreshold(key, raw) {
 							if rejectedWin == nil {
-								rejectedWin = map[string]string{}
+								rejectedWin = map[string][2]string{}
 							}
-							rejectedWin[key] = defaultsPath
+							canon, _ := canonicalKeyFor(key)
+							rejectedWin[canon] = [2]string{key, defaultsPath}
 						}
 					}
 					continue
 				}
-				// A threshold-shaped value at this level: it is the value
-				// shown now, not a shallower refused one.
-				delete(rejectedWin, key)
+				// A threshold-shaped value at this level, in either #1231
+				// spelling: it is the value shown now, not a shallower
+				// refused one.
+				if rejectedWin != nil {
+					canon, _ := canonicalKeyFor(key)
+					delete(rejectedWin, canon)
+				}
 				// ⛔ A KEY NO EMITTER ITERATES IS NOT DELIVERED BY WRITING IT.
 				// `resolveBaseRows` walks `cfg.Defaults`; `resolveDeclaredRows`
 				// walks `cfg.OptionalOverrides`. A key that appears only in a
@@ -278,7 +286,8 @@ func applySubtreeDefaults(
 		// `_state_maintenance: disable` + finance/us/ `enable` — the tenant's
 		// filter stays off (finance/'s disable), so the key is applied, and
 		// deleting both levels would turn it on.
-		for key, p := range rejectedWin {
+		for _, kp := range rejectedWin {
+			key, p := kp[0], kp[1]
 			if rejectedWinners == nil {
 				rejectedWinners = map[string]map[string]string{}
 			}

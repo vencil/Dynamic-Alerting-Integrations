@@ -340,6 +340,20 @@ func TestValuesNotServed_MatchesEffectiveOnEveryShape(t *testing.T) {
 			"team/sub/_defaults.yaml": refused,
 			"team/sub/t.yaml":         "tenants:\n  tx: {}\n",
 		}, map[string]float64{config.NotServedValueRejected: 1}},
+		{"A1 refused canonical, deeper valid retired spelling", map[string]string{
+			"team/_defaults.yaml":     "defaults:\n  mysql_threads_running:\n    default: \"33\"\n    overrides: \"01:00-09:00\"\n",
+			"team/sub/_defaults.yaml": "defaults:\n  " + retiredCPUKey + ": 50\n",
+			"team/sub/t.yaml":         "tenants:\n  tx: {}\n",
+		}, nil},
+		{"A3 refused retired spelling, deeper valid canonical", map[string]string{
+			"team/_defaults.yaml":     "defaults:\n  " + retiredCPUKey + ":\n    default: \"33\"\n    overrides: \"01:00-09:00\"\n",
+			"team/sub/_defaults.yaml": "defaults:\n  mysql_threads_running: 50\n",
+			"team/sub/t.yaml":         "tenants:\n  tx: {}\n",
+		}, nil},
+		{"refused retired spelling shown", map[string]string{
+			"team/_defaults.yaml": "defaults:\n  " + retiredCPUKey + ":\n    default: \"33\"\n    overrides: \"01:00-09:00\"\n",
+			"team/t.yaml":         "tenants:\n  tx: {}\n",
+		}, map[string]float64{config.NotServedValueRejected: 1}},
 		{"reserved key in subtree defaults", map[string]string{
 			"team/_defaults.yaml": "defaults:\n  _routing_defaults:\n    receiver: {type: webhook}\n",
 			"team/t.yaml":         "tenants:\n  tx: {}\n",
