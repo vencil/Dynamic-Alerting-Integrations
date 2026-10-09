@@ -6,8 +6,7 @@ package guard
 // `X_critical`, a regex label `q=~` beside an exact label `q_re=`, or any
 // other shape the decode does not fold into one key — client_golang refuses
 // the whole Gather and the exporter's /metrics answers HTTP 500 for every
-// tenant. `da-guard served-values` already refused such a tree (exit 2); the
-// main gate let it through (rc 0).
+// tenant. The main gate let such a tree through (rc 0).
 //
 // ⛔ NO VERDICT OF ITS OWN: it is served-values' Gather of the exporter's
 // own collectors over the exporter's build of the WHOLE tree, whatever
@@ -27,6 +26,6 @@ func checkMetricsNotGatherable(input CheckInput) []Finding {
 	return []Finding{{
 		Severity: SeverityError,
 		Kind:     FindingMetricsNotGatherable,
-		Message:  input.MetricsNotGatherable + "; `da-guard served-values` shows the same verdict.",
+		Message:  input.MetricsNotGatherable,
 	}}
 }

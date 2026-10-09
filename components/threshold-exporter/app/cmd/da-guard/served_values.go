@@ -662,7 +662,7 @@ func (e *notGatherableError) verdict() string {
 // resolver's WARN lines discarded: the first notGatherableError.verdict, ""
 // when /metrics can be gathered all day (or when the reading failed for
 // another reason, which served-values reports). For the main gate's
-// metrics_not_gatherable (#2031), whatever the time it runs at.
+// metrics_not_gatherable (#2031).
 func gatherVerdict(cfg *config.ThresholdConfig, at time.Time, name keyNamer) string {
 	if cfg == nil {
 		return ""

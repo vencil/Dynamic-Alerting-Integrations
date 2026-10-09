@@ -314,7 +314,8 @@ func run(args []string, stdout, errOut io.Writer) int {
 	// 3, never the vacuous 0.
 	// #2031: not when the whole tree's /metrics cannot be gathered — that
 	// fails every tenant's scrape, whatever the scope (the report below).
-	if len(scoped.Tenants) == 0 && gatherVerdict(scoped.Config, time.Now(), writtenNamer(scoped.WrittenKeys)) == "" {
+	input := buildCheckInput(scoped, f)
+	if len(scoped.Tenants) == 0 && input.MetricsNotGatherable == "" {
 		if err := writeEmptyReport(stdout, errOut, f, scoped.ParseFailed, scoped.Unreadable); err != nil {
 			fmt.Fprintf(errOut, "%s: %v\n", programName, err)
 			return exitCallerErr
@@ -322,7 +323,6 @@ func run(args []string, stdout, errOut io.Writer) int {
 		return reportDroppedFiles(errOut, scoped, exitOK)
 	}
 
-	input := buildCheckInput(scoped, f)
 	report, err := guard.CheckDefaultsImpact(input)
 	if err != nil {
 		fmt.Fprintf(errOut, "%s: guard run: %v\n", programName, err)
@@ -702,7 +702,7 @@ func writeReport(stdout, errOut io.Writer, f *flags, scoped *config.ScopedTenant
 		}{
 			ConfigDir:   f.configDir,
 			Scope:       f.scopeDir,
-			SourceFiles: scoped.SourceFiles,
+			SourceFiles: nonNilStrings(scoped.SourceFiles), // #2031: [] for a scope with no tenant
 			Notices:     notices,
 			ParseFailed: scoped.ParseFailed,
 			Unreadable:  unreadableOrNil(scoped.Unreadable),

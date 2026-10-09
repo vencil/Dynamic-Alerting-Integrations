@@ -5,7 +5,6 @@ package main
 // served-values gives, over the whole tree whatever --scope says.
 
 import (
-	"path/filepath"
 	"strings"
 	"testing"
 	"time"
@@ -30,8 +29,7 @@ func TestGuard_MetricsNotGatherable(t *testing.T) {
 		// both serve q_re="A"
 		"keys the parser cuts at a comma": {
 			"    'redis_queue_length{q=~\"A,B\"}': 1\n    'redis_queue_length{q=~\"A\"}': 2\n", true},
-		"a window's value giving one series": {"    'redis_queue_length{q=~\"a\"}': 2\n" + windowedQRe("a"), true},
-		"control":                            {"    mysql_connections: \"70:critical\"\n    'redis_queue_length{q=~\"a\"}': 2\n" + windowedQRe("b"), false},
+		"control": {"    mysql_connections: \"70:critical\"\n    'redis_queue_length{q=~\"a\"}': 2\n" + windowedQRe("b"), false},
 	} {
 		t.Run(name, func(t *testing.T) {
 			t.Parallel()
@@ -86,7 +84,7 @@ func TestGatherVerdict_EveryCutOfTheDay(t *testing.T) {
 			"_defaults.yaml": "defaults:\n  redis_queue_length: 10\n",
 			"tx.yaml":        "tenants:\n  tx:\n    'redis_queue_length{q=~\"a\"}': 2\n" + windowedQRe(v),
 		})
-		cfg, _, err := config.LoadDir(filepath.Clean(dir), nil)
+		cfg, _, err := config.LoadDir(dir, nil)
 		if err != nil {
 			t.Fatal(err)
 		}
