@@ -48,7 +48,7 @@ case "${1:-}" in
             "" \
             "Installs the pre-push guard shim over git-lfs's hook, pre-commit's template" \
             "or a copy of a guard; refuses any other hook already there, and refuses" \
-            "while core.hooksPath is set." \
+            "while core.hooksPath is set or the hooks directory is a symlink." \
             "To ask whether the guards are wired, run: make pr-preflight" \
             "  (without make: python3 scripts/tools/dx/pr_preflight.py; on Windows, python)" >&2
         exit 0 ;;
@@ -61,8 +61,9 @@ root="$(git rev-parse --show-toplevel 2>/dev/null)" || {
     warn "⛔ not inside a git work tree"
     exit 2
 }
-# ⛔ Not while core.hooksPath is set, even to "" (#2696). It may name a directory many repositories share, where the
-# shim would refuse every push of every one of them; "" makes git run no hook.
+# ⛔ Not while core.hooksPath is set, even to "" (#2696). It may name a
+# directory many repositories share, where the shim would refuse every push of
+# every one of them; "" makes git run no hook.
 # GIT_CONFIG only changes which file `git config` reads; git still runs hooks
 # by the usual configuration.
 hooks_path="$(unset GIT_CONFIG; git config --get core.hooksPath)"

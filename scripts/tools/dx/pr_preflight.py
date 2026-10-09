@@ -1103,8 +1103,9 @@ def _prepush_guards_wired() -> Tuple[Optional[bool], str]:
 
     回傳 `(wired, message)`。⛔ **「量不到」與「量了沒事」要分得開**。
     """
-    # ⛔ core.hooksPath 有設（空字串也算）就不判（#2696）。它指向的可能是許多 repo 共用的目錄，裝進去的 shim 會擋下其他 repo 的
-    # 每一次 push；空字串則讓 git 一支 hook 都不跑。None：這裡量不到本 repo 的守衛。
+    # ⛔ core.hooksPath 有設（空字串也算）就不判（#2696）。它指向的可能是許多 repo
+    # 共用的目錄，裝進去的 shim 會擋下其他 repo 的每一次 push；空字串則讓 git 一支
+    # hook 都不跑。None：這裡量不到本 repo 的守衛。
     # GIT_CONFIG 只改變 `git config` 讀哪個檔，git 跑 hook 時照樣讀原本的設定。
     env = {k: v for k, v in os.environ.items() if k != "GIT_CONFIG"}
     hp = run(["git", "config", "--get", "core.hooksPath"], timeout=30, env=env)

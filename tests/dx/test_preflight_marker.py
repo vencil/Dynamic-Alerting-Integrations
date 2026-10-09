@@ -513,6 +513,41 @@ class TestPrepushWiring:
         assert (sorted(shared.iterdir()) if shared.exists() else None) == (
             [] if target == "shared" else None), "the installer wrote through the link"
 
+    def test_a_dot_git_symlink_is_not_a_symlinked_hooks_directory(self, tmp_path, monkeypatch):
+        """Only the hooks directory itself is refused. A repository whose .git is
+        a link (hooks a plain directory behind it) is judged and installed."""
+        mod = _load()
+        repo = tmp_path / "repo"
+        repo.mkdir()
+        self._repo(repo)
+        real = tmp_path / "gitdir"
+        (repo / ".git").rename(real)
+        symlink_or_skip(real, repo / ".git")
+        monkeypatch.chdir(repo)
+
+        wired, why = mod._prepush_guards_wired()
+        assert wired is False, why
+        assert self._install_guards(repo).returncode == 0
+        wired, why = mod._prepush_guards_wired()
+        assert wired is True, why
+
+    def test_a_linked_worktree_sees_the_shared_hook(self, tmp_path, monkeypatch):
+        """git runs the common .git/hooks for every worktree, so the judgement
+        from a linked worktree reads that hook, not one under .git/worktrees/."""
+        mod = _load()
+        repo = tmp_path / "repo"
+        repo.mkdir()
+        self._repo(repo)
+        wt = tmp_path / "wt"
+        subprocess.run(  # subprocess-timeout: ignore
+            ["git", "-C", str(repo), "worktree", "add", "-q", "--detach", str(wt)],
+            check=True)
+        assert self._install_guards(repo).returncode == 0
+        monkeypatch.chdir(wt)
+
+        wired, why = mod._prepush_guards_wired()
+        assert wired is True, why
+
     @pytest.mark.parametrize("damage", ["missing", "not-utf8"])
     def test_an_installer_that_cannot_be_read_is_unmeasurable(
         self, tmp_path, monkeypatch, damage
