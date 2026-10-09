@@ -111,12 +111,15 @@ v2.7.0 RBAC enforced `PermRead` / `PermWrite` at the route level via `rbacMgr.Mi
 
 | Endpoint | v2.7.0 behaviour | v2.8.0 behaviour |
 |---|---|---|
-| `PUT /api/v1/groups/{id}` | Any `PermWrite` user could rewrite any group's `members` | Caller must hold `PermWrite` on **every** member tenant; forbidden ones listed in 403 message |
-| `DELETE /api/v1/groups/{id}` | Any `PermWrite` user could delete any group | Caller must hold `PermWrite` on each existing member (DoS protection) |
-| `GET /api/v1/tasks/{id}` | Returned the full `Results[]` (all tenants the task touched) | Filters `Results[]` to the readable subset; results present but none readable → 403 (a task with no results yet still returns 200) |
+| `PUT /api/v1/groups/{id}` | Any `PermWrite` user could rewrite any group's `members` | Caller must hold `PermWrite` on **every** member tenant the request brings; when updating an existing group, also on **every member it already has** ([#1529](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/1529): replacing the list removes the members left out — the same rule as DELETE; `members: []` included); forbidden ones listed in the 403 message (see §3.6 for which) |
+| `DELETE /api/v1/groups/{id}` | Any `PermWrite` user could delete any group | Caller must hold `PermWrite` on each existing member (DoS protection); a group the caller cannot see is a 404 (see "Group visibility" below) |
+| `POST /api/v1/groups/{id}/batch` | Response listed every member of the group | `results[]` lists only members the caller can read, and `summary` counts only those ([#1530](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/1530); sync, async and PR mode alike); a group the caller cannot see is a 404 |
+| `GET /api/v1/tasks/{id}` | Returned the full `Results[]` (all tenants the task touched) | Filters `Results[]` to the readable subset and re-renders `summary` from it; results present but none readable → 403 (a task with no results yet still returns 200) |
 | `GET /api/v1/prs` | Returned all pending PRs/MRs | Bulk mode: filtered to readable tenants; `?tenant=<id>` mode: **empty list** (not 403) when forbidden, to avoid existence oracle |
 
-⚠️ This table describes the handler layer. All four endpoints also have a route-level gate that first requires the matching permission on `*`, i.e. a rule with `tenants: ["*"]` (org / metadata scope allowed). A caller with only single-tenant or prefix grants (such as `["db-a-*"]`) always gets 403 `insufficient permissions for tenant *` and never reaches the filtering above. That 403 names no tenant, so it is not an existence oracle. Whether this is intended: [#2520](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/2520).
+**Group visibility**: `GET /groups`, `GET /groups/{id}`, `DELETE /groups/{id}` and `POST /groups/{id}/batch` share one test — a group is visible when it has no members, or when the caller can read at least one of them. An invisible group gets the same 404 as a missing one, byte for byte, before any body is read, so no endpoint confirms it exists. A group with no members is visible to everyone (it has no member to leak; it used to be a 404 to everyone, platform admins included, who therefore could not delete it). ⚠️ Known limitation: `PUT` is an upsert — 403 on an invisible existing group, 200 on a new id — so it still tells that a group id is taken; removing that needs group ids partitioned by org, which is out of scope here.
+
+⚠️ This table describes the handler layer. These endpoints also have a route-level gate that first requires the matching permission on `*`, i.e. a rule with `tenants: ["*"]` (org / metadata scope allowed). A caller with only single-tenant or prefix grants (such as `["db-a-*"]`) always gets 403 `insufficient permissions for tenant *` and never reaches the filtering above. That 403 names no tenant, so it is not an existence oracle. Whether this is intended: [#2520](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/2520).
 
 ### 3.2 Why `?tenant=<id>` does NOT return 403
 
@@ -155,6 +158,16 @@ ADR-016 mentions "if a flat tenant lacks `_metadata.{domain,region,environment}`
 ```
 
 De-duplicated, in request order. Operators can grep their RBAC config directly.
+
+**Which ids are listed depends on where they came from ([#1531](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/1531))**: ids the request brought are always listed (the caller knows them already); of the group's stored members, only those the caller can **read** are listed, and the rest get one sentence without a count:
+
+```json
+{
+  "error": "insufficient permission to delete group with forbidden member tenants: db-b; it also has member tenants you cannot view"
+}
+```
+
+When none are readable it reads `insufficient permission to delete group: it has member tenants you cannot view`. No count: the 403 already says something was refused, while a count would tell how many members the read plane hid.
 
 ---
 
