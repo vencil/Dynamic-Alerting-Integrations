@@ -636,3 +636,18 @@ def test_unwritable_path_keeps_the_exception(tmp_path, monkeypatch, capsys):
         gar.main()
     assert "--findings-json" in capsys.readouterr().err
     assert not out.exists()
+
+
+def test_unclassified_keeps_an_existing_finding():
+    f = gm.Finding("  WARN: x", kind="duplicate_tenant", blocks="always")
+    assert gm.unclassified(f, blocks="never") is f
+
+
+@pytest.mark.parametrize("receiver,kind", [
+    ({"a": "x"}, "missing_receiver_field"),          # group 1 ok, group 2 empty
+    ({"a": "x", "c": "y", "d": "z"}, "conflicting_receiver_field"),
+    ({"a": "x", "c": "y"}, "invalid_receiver_field"),  # every group satisfied
+])
+def test_exactly_one_kind_walks_every_group(receiver, kind):
+    spec = {"exactly_one_of": [["a", "b"], ["c", "d"]]}
+    assert gm._exactly_one_kind(spec, receiver) == kind
