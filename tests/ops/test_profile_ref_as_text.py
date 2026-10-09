@@ -245,3 +245,26 @@ def test_config_diff_profile_refs_strip_the_name(tmp_path, da_guard, ref):
     assert diagnose.lookup_tenant_profile("tx", str(d)) == "010"
     assert validate_config.check_profiles(str(d))["status"] == validate_config.PASS
     assert config_diff.load_tenant_profile_refs(str(d)) == {"010": ["tx"]}
+
+
+def test_config_diff_profile_refs_follow_the_layer_go_binds(tmp_path):
+    """#2115: config_diff's refs are da-guard's (`effective_config._profile`),
+    kept only where the tenant's own layer writes it. A `_profile` inherited
+    from a sub-directory `_defaults.yaml` shows in effective_config but binds
+    nothing (Go `profile` None) — not a ref. One written in the root platform
+    file's `tenants:` entry binds — a ref (the file walk before never saw it)."""
+    d = tmp_path / "conf.d"
+    (d / "sub").mkdir(parents=True)
+    (d / "_defaults.yaml").write_text(
+        "defaults:\n  container_cpu: 80\ntenants:\n  tp:\n    _profile: std\n", encoding="utf-8")
+    (d / "_profiles.yaml").write_text("profiles:\n  std:\n    container_cpu: 55\n",
+                                      encoding="utf-8")
+    (d / "tp.yaml").write_text("tenants:\n  tp: {}\n", encoding="utf-8")
+    (d / "sub" / "_defaults.yaml").write_text("defaults:\n  _profile: std\n", encoding="utf-8")
+    (d / "sub" / "tx.yaml").write_text("tenants:\n  tx:\n    mysql_connections: 5\n",
+                                       encoding="utf-8")
+    eff = _lib_tenant_values.load_effective(d)
+    # The oracle: tx carries `_profile` from the chain, unbound; tp is bound.
+    assert eff["tx"].effective_config.get("_profile") == "std" and eff["tx"].profile is None
+    assert eff["tp"].profile == "std"
+    assert config_diff.load_tenant_profile_refs(str(d)) == {"std": ["tp"]}

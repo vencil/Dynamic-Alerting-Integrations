@@ -789,8 +789,10 @@ class TestCustomAlertDiff:
             assert parsed["custom_alert_diffs"]["db-b"][0]["change"] == "added"
 
 
+@pytest.mark.usefixtures("da_guard_env")
 class TestProfileDiffEndToEnd:
-    """End-to-end profile diff with directories."""
+    """End-to-end profile diff with directories. A changed profile asks
+    da-guard which tenants name it (#2115), so da-guard is required."""
 
     def test_profile_modified_with_key_diffs(self):
         """Modified profile should include key_diffs in result."""

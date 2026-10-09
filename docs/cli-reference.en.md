@@ -2400,6 +2400,8 @@ An option to print only the summary is not implemented yet; the report's last li
 
 Markdown format report with per-tenant change tables and summary statistics.
 
+**Profile blast radius**: when a profile in `_profiles.yaml` changes, `affected_tenants` lists the `--new-dir` tenants whose `_profile` names it. The name is read through `da-guard effective`, as the exporter reads it: `_profile: {default: std}` names `std`, a `_profile` in a root platform file's `tenants:` entry counts, and one inherited from a subdirectory `_defaults.yaml` does not. So a run with a profile change needs da-guard (bundled in the image; `make da-guard-build` in a checkout); if da-guard is missing or fails, or a `--new-dir` file cannot be decoded by the exporter, the exit code is 2, with one `ERROR:` line and da-guard's stderr below it. ⚠️ The v2.9.0 image still reads `_profile` only in its string form. <!-- image-caveat: v2.9.0 -->
+
 **Examples**
 
 ```bash
@@ -2413,7 +2415,7 @@ da-tools config-diff --old-dir ./conf.d-old --new-dir ./conf.d-new --json-output
 |------|-------------|
 | `0` | No configuration changes |
 | `1` | Changes detected. ⚠️ Only the values each tenant file writes itself are compared, top level only: a change to `_defaults.yaml` alone, or to files in subdirectories only, gives 0, so this alone cannot tell that a PR touched config |
-| `2` | Caller error: directory missing, input unreadable, or the run did not complete |
+| `2` | Caller error: directory missing, input unreadable, or the run did not complete; with a profile change, also da-guard missing or failing |
 
 > ⚠️ **`1` means "there are changes", not "it failed".** A CI step that calls
 > this command bare will fail whenever the command is working correctly.
