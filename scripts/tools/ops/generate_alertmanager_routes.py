@@ -22,6 +22,7 @@ Usage:
   python3 scripts/tools/ops/generate_alertmanager_routes.py --config-dir conf.d/ -o alertmanager-routes.yaml
   python3 scripts/tools/ops/generate_alertmanager_routes.py --config-dir conf.d/ --dry-run
   python3 scripts/tools/ops/generate_alertmanager_routes.py --config-dir conf.d/ --output-configmap -o am-configmap.yaml
+  python3 scripts/tools/ops/generate_alertmanager_routes.py --config-dir conf.d/ --validate --findings-json findings.json
 
 v2.8.0 PR-3a: This file is now a CLI facade. The 1645-line monolith was
 split into 5 helper modules (_grar_validate / _grar_merge / _grar_parse /
@@ -32,7 +33,10 @@ test imports keep working unchanged.
 from __future__ import annotations
 
 import argparse
+import contextlib
+import json
 import os
+import re
 import sys
 import textwrap
 
@@ -46,8 +50,12 @@ sys.path.insert(0, os.path.join(_THIS_DIR, '..'))  # Repo subdir layout
 # test backward-compat, and `test_grar_facade_reexports` pins that set. These
 # two are USED, not re-exported.
 from _lib_io import (  # noqa: E402  (#1538 output-layer escaping, #1789)
-    safe_label, write_text_or_die,
+    OutputWriteError, safe_label, write_text_or_die,
 )
+# #2766: the --findings-json temp-file write. Module form, because the bare
+# name is already a `_lib_python` re-export in the F401 block below.
+import _lib_io  # noqa: E402
+from _lib_compat import find_project_root  # noqa: E402  (#2766 VERSION)
 from _lib_python import (  # noqa: E402, F401
     write_text_secure,
     PLATFORM_DEFAULTS,
@@ -158,6 +166,8 @@ from _grar_validate import is_receiver_name_collision  # noqa: E402
 from _grar_validate import duplicate_tenant_errors  # noqa: E402
 # ADR-035 D3: the invalid-tenant-id refusal cites the rule's own words.
 from _grar_validate import invalid_tenant_id_text  # noqa: E402
+# #2766: structured findings (the refusal lines are built as them here).
+from _grar_merge import Finding, as_finding, unclassified  # noqa: E402
 import yaml  # noqa: E402
 
 
@@ -194,7 +204,7 @@ def _assembly_failed(exc: ValueError, refusing: str) -> None:
 
 
 def _validate_mode(routes: list[dict], receivers: list[dict], inhibit_rules: list[dict],
-                   all_warnings: list[str]) -> None:
+                   all_warnings: list[str], sink: list | None = None) -> None:
     """Handle --validate mode: check for errors and exit.
 
     #2311: every verdict comes from ``evaluate_generated_config`` — the SAME
@@ -207,6 +217,13 @@ def _validate_mode(routes: list[dict], receivers: list[dict], inhibit_rules: lis
     verdict = evaluate_generated_config(
         routes, receivers, inhibit_rules, all_warnings,
         extra_errors=_policy_errors(all_warnings))
+    # #2766: the lines only --validate prints join the findings. A verdict
+    # error that is already one (a stream line, kept by identity) is not
+    # added twice; the rest (the inhibit tripwire) block under --validate.
+    recorded = {id(f) for f in sink} if sink is not None else set()
+    _sink_extend(sink, [unclassified(w, blocks="never") for w in verdict.warnings])
+    _sink_extend(sink, [unclassified(e, blocks="validate")
+                        for e in verdict.errors if id(e) not in recorded])
     # Non-blocking lines the checks' helpers used to print directly (an
     # un-gated equal-label, a degraded probe set): same stream, same text.
     for w in verdict.warnings:
@@ -454,7 +471,8 @@ def _render_output_mode(routes: list[dict], receivers: list[dict], inhibit_rules
         print(content)
 
 
-def _refuse_unreadable_tenant_files(tree: TenantTree) -> None:
+def _refuse_unreadable_tenant_files(tree: TenantTree,
+                                    sink: list | None = None) -> None:
     """#1460: say what was read, and refuse to go on if any of it was not.
 
     Runs in EVERY mode, right after the scan and before the "No tenants
@@ -485,6 +503,7 @@ def _refuse_unreadable_tenant_files(tree: TenantTree) -> None:
                                               tree.tenant_file_errors)
     if not refusal:
         return
+    _sink_extend(sink, refusal)
     for msg in refusal:
         print(msg, file=sys.stderr)
     sys.exit(EXIT_VIOLATION)
@@ -500,17 +519,32 @@ def unreadable_tenant_files_refusal(
     if not tenant_file_errors:
         return []
     return [
-        f"FAIL: {len(tenant_file_errors)} config file(s) could not be read — "
-        f"refusing to treat the remaining {files_read} as the whole tree:",
-        *(f"  {safe_label(fname)}: {safe_label(reason)}"
+        _refusal_line(
+            f"FAIL: {len(tenant_file_errors)} config file(s) could not be read — "
+            f"refusing to treat the remaining {files_read} as the whole tree:"),
+        *(_refusal_line(f"  {safe_label(fname)}: {safe_label(reason)}",
+                        kind="tenant_file_unreadable", file=fname)
           for fname, reason in tenant_file_errors),
-        "  ⛔ Every tenant in a skipped file is ABSENT from this run, so no "
-        "verdict over the rest is a verdict over your conf.d. Repair the "
-        "file (or remove it from conf.d) and re-run.",
+        _refusal_line(
+            "  ⛔ Every tenant in a skipped file is ABSENT from this run, so no "
+            "verdict over the rest is a verdict over your conf.d. Repair the "
+            "file (or remove it from conf.d) and re-run."),
     ]
 
 
-def _refuse_duplicate_tenants(tree: TenantTree) -> None:
+def _refusal_line(text: str, *, kind: str = "refusal_summary",
+                  **fields: str | None) -> Finding:
+    """#2766: one line of a refusal (blocking in every mode) as a Finding.
+
+    A refusal's framing lines (``FAIL: …``, the ⛔ advice) are
+    ``refusal_summary``; the itemised lines carry their own kind.
+    """
+    return Finding(text, kind=kind, severity="error", blocks="always",
+                   **fields)
+
+
+def _refuse_duplicate_tenants(tree: TenantTree,
+                              sink: list | None = None) -> None:
     """#2315: one tenant id in two tenant files — refused in EVERY mode.
 
     Runs next to `_refuse_unreadable_tenant_files` and for the same reason:
@@ -523,6 +557,7 @@ def _refuse_duplicate_tenants(tree: TenantTree) -> None:
     refusal = duplicate_tenants_refusal(tree.duplicate_tenants)
     if not refusal:
         return
+    _sink_extend(sink, refusal)
     for msg in refusal:
         print(msg, file=sys.stderr)
     sys.exit(EXIT_VIOLATION)
@@ -537,12 +572,13 @@ def duplicate_tenants_refusal(duplicates: dict[str, list[str]]) -> list[str]:
     dups = duplicate_tenant_errors(duplicates)
     if not dups:
         return []
-    return [f"FAIL: {len(dups)} tenant(s) declared in more than one file — "
-            "nothing was written or applied:",
-            *(safe_label(e) for e in dups)]
+    return [_refusal_line(f"FAIL: {len(dups)} tenant(s) declared in more than one file — "
+                          "nothing was written or applied:"),
+            *(e.with_text(safe_label(e)) for e in dups)]
 
 
-def _refuse_routing_tree_errors(tree: TenantTree) -> None:
+def _refuse_routing_tree_errors(tree: TenantTree,
+                                sink: list | None = None) -> None:
     """#2326: refuse a conf.d tree the routing plane cannot route as one.
 
     ADR-017 "Amendment 2026-09-28" makes the routing plane hierarchical and
@@ -562,6 +598,7 @@ def _refuse_routing_tree_errors(tree: TenantTree) -> None:
     refusal = routing_tree_errors_refusal(tree.routing_tree_errors)
     if not refusal:
         return
+    _sink_extend(sink, refusal)
     for msg in refusal:
         print(msg, file=sys.stderr)
     sys.exit(EXIT_CALLER_ERROR)
@@ -578,12 +615,15 @@ def routing_tree_errors_refusal(
     """
     if not errors:
         return []
-    return [f"ERROR: {len(errors)} routing-tree error(s) — nothing was "
-            f"generated, written or applied (ADR-017 amendment 2026-09-28):",
-            *(f"  {safe_label(msg)}" for _kind, _fname, _field, msg in errors)]
+    return [_refusal_line(f"ERROR: {len(errors)} routing-tree error(s) — nothing was "
+                          f"generated, written or applied (ADR-017 amendment 2026-09-28):"),
+            *(_refusal_line(f"  {safe_label(msg)}", kind=kind, file=fname,
+                            field=field)
+              for kind, fname, field, msg in errors)]
 
 
-def _refuse_invalid_tenant_ids(tree: TenantTree) -> None:
+def _refuse_invalid_tenant_ids(tree: TenantTree,
+                               sink: list | None = None) -> None:
     """ADR-035 D3: a declared tenant id the rule refuses — refused in EVERY mode.
 
     Render, --dry-run, --apply, --output-configmap, --validate, with or
@@ -598,6 +638,7 @@ def _refuse_invalid_tenant_ids(tree: TenantTree) -> None:
     refusal = invalid_tenant_ids_refusal(tree.invalid_tenant_ids)
     if not refusal:
         return
+    _sink_extend(sink, refusal)
     for msg in refusal:
         print(msg, file=sys.stderr)
     sys.exit(EXIT_VIOLATION)
@@ -611,9 +652,10 @@ def invalid_tenant_ids_refusal(invalid_ids: list[str]) -> list[str]:
     """
     if not invalid_ids:
         return []
-    return [f"FAIL: {len(invalid_ids)} invalid tenant id(s) — nothing was "
-            "generated, written or applied; rename the tenant(s):",
-            *(f"  {safe_label(invalid_tenant_id_text(t))}"
+    return [_refusal_line(f"FAIL: {len(invalid_ids)} invalid tenant id(s) — nothing was "
+                          "generated, written or applied; rename the tenant(s):"),
+            *(_refusal_line(f"  {safe_label(invalid_tenant_id_text(t))}",
+                            kind="invalid_tenant_id", tenant=t)
               for t in invalid_ids)]
 
 
@@ -673,7 +715,8 @@ FLAGS_CLASSIFIED_BY_MODE_GUARD = frozenset({
     "output", "dry_run", "namespace", "configmap", "yes",
     "apply", "output_configmap",
 })
-FLAGS_READ_IN_EVERY_MODE = frozenset({"config_dir", "validate", "strict", "policy"})
+FLAGS_READ_IN_EVERY_MODE = frozenset({"config_dir", "validate", "strict", "policy",
+                                      "findings_json"})
 FLAGS_GUARDED_BY_BASE_CONFIG_CHECK = frozenset({"base_config"})
 
 
@@ -884,13 +927,192 @@ def _build_parser() -> argparse.ArgumentParser:
                         help="Policy YAML with allowed_domains for webhook URL validation")
     parser.add_argument("--yes", action="store_true",
                         help="Skip confirmation prompt for --apply")
+    parser.add_argument("--findings-json", default=None, metavar="PATH",
+                        help="Also write the findings this run prints (its "
+                             "warning-stream and refusal lines, each with "
+                             "kind / severity / blocks / tenant / policy / "
+                             f"file / field) as JSON ({FINDINGS_SCHEMA}) to "
+                             "PATH, atomically, on every exit (usage errors "
+                             "and exceptions included); stdout, stderr and "
+                             "the exit code are unchanged")
     return parser
+
+
+# ── #2766 (ADR-036 §3): --findings-json ────────────────────────────────
+FINDINGS_SCHEMA = "da-tools.findings/v1"
+_VERSION_RE = re.compile(r"[0-9]+\.[0-9]+\.[0-9]+")
+
+
+def _sink_extend(sink: list | None, findings: list) -> None:
+    """Record *findings* for --findings-json (no-op without a sink)."""
+    if sink is not None:
+        sink.extend(findings)
+
+
+def da_tools_version() -> str | None:
+    """The da-tools release this generator ships in, or None if unreadable.
+
+    The image's flat layout puts ``VERSION`` beside this file
+    (``/opt/da-tools``); the repo keeps it at ``components/da-tools/app``.
+    """
+    cands = [os.path.join(_THIS_DIR, "VERSION")]
+    root = find_project_root(_THIS_DIR)  # None inside the image
+    if root is not None:
+        cands.append(os.path.join(root, "components", "da-tools", "app",
+                                  "VERSION"))
+    for cand in cands:
+        try:
+            with open(cand, encoding="utf-8") as fh:
+                text = fh.read().strip()
+        except (OSError, UnicodeDecodeError):
+            continue
+        if _VERSION_RE.fullmatch(text):
+            return text
+    return None
+
+
+def findings_document(findings: list[str], *, config_dir: str,
+                      exit_code: int, validate: bool = False,
+                      strict: bool = False) -> dict:
+    """The ``--findings-json`` document (schema ``FINDINGS_SCHEMA``).
+
+    ``findings`` keeps the run's order; each record is
+    ``Finding.as_record()`` — ``message`` is the line's exact text with only
+    its leading indentation stripped.
+    """
+    records = [as_finding(f) for f in findings]
+    # #2766: a non-zero exit with no finding that blocks in this run's mode
+    # (an amtool rejection, an assembly refusal, "no valid routes", a caller
+    # error) must not read as a pass to a consumer that looks only at the
+    # findings — the document is never looser than the run's own exit code.
+    in_force = {"always"} | ({"validate"} if validate else set()) \
+        | ({"strict"} if strict else set())
+    if exit_code != EXIT_OK and not any(f.blocks in in_force for f in records):
+        records.append(Finding(
+            f"exit code {exit_code}: the run failed for a reason not itemised "
+            "here — read the run's stderr",
+            kind="run_failed", severity="error", blocks="always"))
+    return {
+        "schema": FINDINGS_SCHEMA,
+        "generator_version": da_tools_version(),
+        "config_dir": config_dir,
+        "exit_code": exit_code,
+        "validate": validate,
+        "strict": strict,
+        "findings": [f.as_record() for f in records],
+    }
+
+
+def write_findings_json(path: str, doc: dict) -> None:
+    """Write *doc* to *path* atomically (temp file + rename), or exit 2.
+
+    UTF-8, ``ensure_ascii=False``, ``sort_keys``, ``allow_nan=False``. The
+    temp file sits beside *path*, so the rename never crosses a filesystem
+    and a reader sees the old document or the new one, never half of one.
+    """
+    text = json.dumps(doc, ensure_ascii=False, sort_keys=True,
+                      allow_nan=False, indent=2) + "\n"
+    tmp = f"{path}.tmp-{os.getpid()}"
+    try:
+        _lib_io.write_text_secure(tmp, text, flag="--findings-json")
+        os.replace(tmp, path)
+    except OSError as exc:
+        with contextlib.suppress(OSError):
+            os.unlink(tmp)
+        cause = exc.cause if isinstance(exc, OutputWriteError) else exc
+        print(f"ERROR: {safe_label(str(OutputWriteError(path, cause, flag='--findings-json')))}",
+              file=sys.stderr)
+        sys.exit(EXIT_CALLER_ERROR)
+
+
+def _exit_code_of(exc: SystemExit) -> int:
+    """The process exit status ``sys.exit(code)`` produces."""
+    if exc.code is None:
+        return EXIT_OK
+    if isinstance(exc.code, int):
+        return exc.code
+    return 1  # a message: Python prints it and exits 1
 
 
 def main() -> None:
     """CLI entry point: Generate Alertmanager route + receiver + inhibit config from tenant YAML."""
     parser = _build_parser()
-    args = parser.parse_args()
+    # #2766: every finding the run prints, in the order it was determined.
+    # --findings-json writes it on EVERY exit — a refusal, a verdict, a caller
+    # error, a usage error, an exception — so a document a previous run left
+    # at PATH is never read as this run's. Its path is read before the full
+    # parse for exactly that: a usage error (rc 2) still replaces it.
+    early = _early_findings_args()
+    findings: list[str] = []
+    args: argparse.Namespace | None = None
+    code = 1  # what an exception other than SystemExit ends the process with
+    try:
+        args = parser.parse_args()
+        _run(args, findings)
+        code = EXIT_OK
+    except SystemExit as exc:
+        code = _exit_code_of(exc)
+        _write_findings_if_asked(early, args, findings, code)
+        raise
+    except BaseException:
+        # An exception the run did not turn into an exit: write the failing
+        # document, but a PATH that cannot be written must not replace the
+        # exception (its traceback is the diagnosis) — the ERROR line is
+        # printed and the exception propagates.
+        _write_findings_if_asked(early, args, findings, code,
+                                 keep_exception=True)
+        raise
+    _write_findings_if_asked(early, args, findings, code)
+
+
+def _write_findings_if_asked(early: argparse.Namespace,
+                             args: argparse.Namespace | None,
+                             findings: list[str], code: int, *,
+                             keep_exception: bool = False) -> None:
+    """Write the --findings-json document, if one was asked for (#2766).
+
+    With *keep_exception* (an exception is propagating), a failed write
+    prints its ERROR line but does not exit, so the exception survives."""
+    src = args if args is not None else early
+    if src.findings_json is None:
+        return
+    doc = findings_document(findings, config_dir=src.config_dir,
+                            exit_code=code, validate=src.validate,
+                            strict=src.strict)
+    if not keep_exception:
+        write_findings_json(src.findings_json, doc)
+        return
+    with contextlib.suppress(SystemExit):
+        write_findings_json(src.findings_json, doc)
+
+
+def _early_findings_args(argv: list[str] | None = None) -> argparse.Namespace:
+    """The four flags the --findings-json document needs, read from argv
+    before the full parse (#2766), so a usage error still replaces a stale
+    document. A plain scan, not a second parser (the CLI contract check reads
+    this file's parser): the exact spellings ``--flag VALUE`` /
+    ``--flag=VALUE`` only — an abbreviated flag is found by the full parse
+    alone."""
+    argv = sys.argv[1:] if argv is None else argv
+    early = argparse.Namespace(findings_json=None, config_dir=None,
+                               validate="--validate" in argv,
+                               strict="--strict" in argv)
+    for i, tok in enumerate(argv):
+        if tok == "--":
+            break
+        for flag, dest in (("--findings-json", "findings_json"),
+                           ("--config-dir", "config_dir")):
+            if (tok == flag and i + 1 < len(argv)
+                    and not argv[i + 1].startswith("-")):
+                setattr(early, dest, argv[i + 1])
+            elif tok.startswith(flag + "="):
+                setattr(early, dest, tok[len(flag) + 1:])
+    return early
+
+
+def _run(args: argparse.Namespace, findings: list[str]) -> None:
+    """``main`` after argument parsing; appends each finding to *findings*
+    (#2766) as soon as the run has determined it."""
 
     # #1650: four more flags of the #1616 class — accepted, then never read
     # by the mode that is about to run. Decided HERE, before any conf.d work,
@@ -989,10 +1211,14 @@ def main() -> None:
     tree = load_tenant_tree(args.config_dir, strict_policies=args.strict)
     routing_configs, dedup_configs, schema_warnings, enforced_routing, metadata_configs = \
         tree.as_tuple()
-    _refuse_unreadable_tenant_files(tree)
-    _refuse_duplicate_tenants(tree)
-    _refuse_routing_tree_errors(tree)
-    _refuse_invalid_tenant_ids(tree)
+    # #2766: --findings-json holds exactly the findings this run PRINTS — a
+    # refusal prints its own lines and not the schema stream, so the stream
+    # joins only once no refusal has stopped the run.
+    _refuse_unreadable_tenant_files(tree, findings)
+    _refuse_duplicate_tenants(tree, findings)
+    _refuse_routing_tree_errors(tree, findings)
+    _refuse_invalid_tenant_ids(tree, findings)
+    findings.extend(schema_warnings)
 
     has_routing = bool(routing_configs)
     has_dedup = bool(dedup_configs)
@@ -1027,6 +1253,7 @@ def main() -> None:
 
     # Collect all warnings
     all_warnings = schema_warnings + route_warnings + dedup_warnings
+    findings.extend(route_warnings + dedup_warnings)
     for w in all_warnings:
         # #1538: escape here, not in `all_warnings` — the same list is handed
         # to --validate / --json consumers, which must stay raw.
@@ -1038,7 +1265,7 @@ def main() -> None:
 
     # Validate mode
     if args.validate:
-        _validate_mode(routes, receivers, inhibit_rules, all_warnings)
+        _validate_mode(routes, receivers, inhibit_rules, all_warnings, findings)
 
     # #2279: two generated receivers with one name. Blocking in EVERY mode and
     # with or without --strict — Alertmanager refuses such a config, and a
