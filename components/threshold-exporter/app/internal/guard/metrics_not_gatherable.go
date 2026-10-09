@@ -27,7 +27,6 @@ func checkMetricsNotGatherable(input CheckInput) []Finding {
 	return []Finding{{
 		Severity: SeverityError,
 		Kind:     FindingMetricsNotGatherable,
-		Message: input.MetricsNotGatherable + ". Every tenant's scrape fails until one of the keys named is " +
-			"removed or changed; `da-guard served-values` shows the same verdict.",
+		Message:  input.MetricsNotGatherable + "; `da-guard served-values` shows the same verdict.",
 	}}
 }

@@ -173,6 +173,7 @@ func (c *ThresholdConfig) resolveAtWithStats(now time.Time, keyed *[]KeyedThresh
 	// (canonical wins), the explicit guard against emitting two rows with
 	// identical label sets, which would 500 the whole Prometheus Gather.
 	canonDefaults := canonicalizeDefaults(c.Defaults)
+	warnUnparsedRootDims(canonDefaults, logf)
 	// #1189: the declared surface, hoisted for the same reason canonDefaults is
 	// — it is per-config, not per-tenant, and this is the per-scrape path.
 	canonOptional := canonicalizeOptionalOverrides(c.OptionalOverrides)
@@ -762,7 +763,8 @@ func (c *ThresholdConfig) resolveDimensionalRows(tenant string, defaults map[str
 		if sv, own := overrides[key]; (own && !isThresholdExpired(sv, now)) || !isDimensionalKey(key) {
 			continue
 		}
-		rows = c.appendDimensionalRow(rows, tenant, key, ScheduledValue{Default: strconv.FormatFloat(v, 'g', -1, 64)}, now, sink, logf, nil)
+		// Its parse failure is warnUnparsedRootDims' line, once per resolve.
+		rows = c.appendDimensionalRow(rows, tenant, key, ScheduledValue{Default: strconv.FormatFloat(v, 'g', -1, 64)}, now, sink, discardLogf, nil)
 	}
 	for key, sv := range overrides {
 		if !strings.Contains(key, "{") {
@@ -778,6 +780,22 @@ func (c *ThresholdConfig) resolveDimensionalRows(tenant string, defaults map[str
 		rows = c.appendDimensionalRow(rows, tenant, key, sv, now, sink, logf, rec)
 	}
 	return rows
+}
+
+func discardLogf(string, ...any) {}
+
+// warnUnparsedRootDims logs, once per resolve rather than once per tenant,
+// each root dimensional default whose labels the exporter cannot parse, so
+// no tenant is served it (#2031).
+func warnUnparsedRootDims(defaults map[string]float64, logf func(format string, args ...any)) {
+	for key := range defaults {
+		if !isDimensionalKey(key) {
+			continue
+		}
+		if _, exact, regex := parseKeyWithLabels(key); exact == nil && regex == nil {
+			logf("WARN: failed to parse dimensional key %q of the root defaults, so no tenant is served it", key)
+		}
+	}
 }
 
 // appendDimensionalRow appends the row (and #1231 twin) dimensional key's

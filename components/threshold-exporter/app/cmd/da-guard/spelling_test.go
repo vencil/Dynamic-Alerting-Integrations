@@ -242,3 +242,36 @@ func TestSpelling_NotGatherableNamesKeysAsWritten(t *testing.T) {
 		first = msg
 	}
 }
+
+// Three keys giving one series are named together, sorted, on every run.
+func TestSpelling_NotGatherableNamesAllKeysOfASeries(t *testing.T) {
+	t.Parallel()
+	files := map[string]string{
+		"_defaults.yaml": spellingRoot,
+		"tx.yaml": "tenants:\n  tx:\n    'redis_queue_length{q=~\"a\"}': 5\n" +
+			"    'redis_queue_length{q_re=\"a\"}': 6\n    'redis_queue_length{q=~\"a\",}': 7\n",
+	}
+	want := `keys "redis_queue_length{q=~\"a\",}", "redis_queue_length{q=~\"a\"}" and "redis_queue_length{q_re=\"a\"}" give one series`
+	for i := 0; i < 5; i++ {
+		if code, _, _, stderr := served(t, files, ""); code != exitCallerErr || !strings.Contains(stderr, want) {
+			t.Fatalf("served-values exit %d, stderr %q: want %s", code, stderr, want)
+		}
+	}
+}
+
+// A root dimensional default the exporter cannot parse is listed in
+// served-values' unserved, as the same key in a tenant file is.
+func TestSpelling_UnparsedRootDimensionalDefaultIsUnserved(t *testing.T) {
+	t.Parallel()
+	const key = `redis_queue_length{env}`
+	for name, files := range map[string]map[string]string{
+		"root":   {"_defaults.yaml": spellingRoot + "  '" + key + "': 5\n", "tx.yaml": "tenants:\n  tx:\n    pg_connections: 90\n"},
+		"tenant": {"_defaults.yaml": spellingRoot, "tx.yaml": "tenants:\n  tx:\n    '" + key + "': 5\n"},
+	} {
+		code, doc, _, stderr := served(t, files, "")
+		mustOK(t, code, stderr)
+		if _, ok := doc.Tenants["tx"].Unserved[key]; !ok {
+			t.Errorf("%s: unserved = %v, want %s", name, doc.Tenants["tx"].Unserved, key)
+		}
+	}
+}

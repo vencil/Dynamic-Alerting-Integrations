@@ -517,6 +517,16 @@ func servedValues(cfg *config.ThresholdConfig, at time.Time,
 			}
 			tv.Unserved[k] = rawScheduledValue(sv)
 		}
+		// #2031: a root dimensional default the tenant does not write is the
+		// tenant's labelled series — unless the exporter cannot parse the key.
+		for k, v := range cfg.Defaults {
+			canon, _ := config.CanonicalKeyFor(k)
+			_, own := overrides[canon]
+			if _, served := tv.Values[canon]; served || own || !strings.Contains(k, "{") {
+				continue
+			}
+			tv.Unserved[k] = v
+		}
 		// #1976: the build's own verdict (LoadReport.Undeliverable:
 		// FlatBuild.Unreachable minus what undeliverableThresholds leaves
 		// out), never re-judged here. Invariant, so no membership check: such
@@ -781,12 +791,16 @@ type emitResult struct {
 }
 
 // sameSeriesKeys names, for the Gather error message only, the keys of rows
-// whose built metrics carry the same label set, spelled by name, each pair and the list sorted so the message does not
+// whose built metrics carry the same label set, spelled by name: every key of
+// one series together, sorted, and the series sorted, so the message does not
 // depend on map order. Gather has already decided the tree fails; this just
 // points at the config keys behind it.
 func sameSeriesKeys(keyed []config.KeyedThreshold, results []emitResult, name keyNamer) string {
-	seen := map[string]string{}
-	var named []string
+	type series struct {
+		tenant, labels string
+		keys           []string
+	}
+	byID := map[string]*series{}
 	for i, r := range results {
 		if r.metric == nil {
 			continue
@@ -801,16 +815,23 @@ func sameSeriesKeys(keyed []config.KeyedThreshold, results []emitResult, name ke
 		}
 		sort.Strings(pairs)
 		id := keyed[i].Tenant + "\x00" + strings.Join(pairs, ",")
-		if first, dup := seen[id]; dup {
-			a, b := name(keyed[i].Tenant, first), name(keyed[i].Tenant, keyed[i].Key)
-			if b < a {
-				a, b = b, a
-			}
-			named = append(named, fmt.Sprintf("tenant %s: keys %q and %q give one series user_threshold{%s}",
-				keyed[i].Tenant, a, b, strings.Join(pairs, ",")))
+		if byID[id] == nil {
+			byID[id] = &series{tenant: keyed[i].Tenant, labels: strings.Join(pairs, ",")}
+		}
+		byID[id].keys = append(byID[id].keys, name(keyed[i].Tenant, keyed[i].Key))
+	}
+	var named []string
+	for _, s := range byID {
+		if len(s.keys) < 2 {
 			continue
 		}
-		seen[id] = keyed[i].Key
+		sort.Strings(s.keys)
+		for i, k := range s.keys {
+			s.keys[i] = strconv.Quote(k)
+		}
+		last := len(s.keys) - 1
+		named = append(named, fmt.Sprintf("tenant %s: keys %s and %s give one series user_threshold{%s}",
+			s.tenant, strings.Join(s.keys[:last], ", "), s.keys[last], s.labels))
 	}
 	if len(named) == 0 {
 		return ""

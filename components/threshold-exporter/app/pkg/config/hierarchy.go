@@ -734,20 +734,13 @@ func isCriticalRowKey(k string) bool {
 		!strings.HasPrefix(k, "_state_") && !strings.HasPrefix(k, "_silent_")
 }
 
-// servedFromTenantMapOnly reports whether a key's rows come only from the
-// tenant's override map — a `_critical` key (#2544) — so the root
-// `_defaults.yaml`, which does not fill that map, is no fallback for it.
-func servedFromTenantMapOnly(k string) bool {
-	return isCriticalRowKey(k)
-}
-
-// noteTenantMapOnlyWriters records the servedFromTenantMapOnly keys one
+// noteTenantMapOnlyWriters records the `_critical` keys (isCriticalRowKey) one
 // non-root chain level writes — "writes" being levelWritesSpelling, the
 // predicate applySubtreeDefaults uses to decide what it hands the tenant's
 // override map. s stays nil until one is seen.
 func noteTenantMapOnlyWriters(s map[string]bool, block map[string]any) map[string]bool {
 	for k := range block {
-		if !servedFromTenantMapOnly(k) || !levelWritesSpelling(block, k) {
+		if !isCriticalRowKey(k) || !levelWritesSpelling(block, k) {
 			continue
 		}
 		if s == nil {
@@ -759,7 +752,8 @@ func noteTenantMapOnlyWriters(s map[string]bool, block map[string]any) map[strin
 }
 
 // dropRootOnlyTenantMapKeys is the merged chain without the
-// servedFromTenantMapOnly keys no non-root level writes (#2544; see
+// `_critical` keys no non-root level writes (#2544: their critical row comes
+// only from the tenant's override map, which the root does not fill; see
 // computeEffectiveConfigDocAt). With rootLevel < 0 nothing is dropped.
 // Returns m itself when nothing is dropped.
 func dropRootOnlyTenantMapKeys(m map[string]any, rootLevel int, subtreeWrites map[string]bool) map[string]any {
@@ -768,7 +762,7 @@ func dropRootOnlyTenantMapKeys(m map[string]any, rootLevel int, subtreeWrites ma
 	}
 	var drop []string
 	for k := range m {
-		if servedFromTenantMapOnly(k) && !subtreeWrites[k] {
+		if isCriticalRowKey(k) && !subtreeWrites[k] {
 			drop = append(drop, k)
 		}
 	}
