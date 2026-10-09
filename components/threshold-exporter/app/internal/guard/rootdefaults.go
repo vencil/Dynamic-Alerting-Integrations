@@ -216,9 +216,8 @@ func checkDefaultsWrapper(input CheckInput) []Finding {
 
 // FindingRootDefaultsCriticalKey (warn, TenantID ""; #2544): a
 // `<metric>_critical` key (either #1231 spelling) under the conf.d root
-// carrier's `defaults:` mapping. The exporter serves it as a threshold of its
-// own (metric `<metric>_critical`, severity=warning); it does not become
-// `<metric>`'s severity=critical row, which only a tenant's override map
+// carrier's `defaults:` mapping. It does not become `<metric>`'s
+// severity=critical row, which only a tenant's override map
 // carries (the tenant's own key, or one a subtree `_defaults.yaml`, a root
 // platform `tenants:` entry or a profile hands it). Field is
 // `<file>:defaults.<key>`. Not blocking (owner decision on #2544, option b).
