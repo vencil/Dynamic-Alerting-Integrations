@@ -32,7 +32,7 @@ type RejectedShownCache struct {
 
 type rejectedShownEntry struct {
 	input uint64
-	keys  map[string]string // nil: resolved, nothing value_rejected (a failed resolve is not cached)
+	keys  map[string]string // nil: resolved, nothing value_rejected
 }
 
 // Shown is, per tenant, each key the tenant's effective config
@@ -46,8 +46,8 @@ type rejectedShownEntry struct {
 //
 // scan is the scan built came from; a file a warm scan did not cache is read
 // from disk and used only when its SHA-256 is the scan's. A candidate whose
-// resolve failed (a file changed since the scan, or could not be read) is
-// not in the result, as /effective fails for it. nil when there is none.
+// resolve failed is not in the result, as /effective fails for it. nil when
+// there is none.
 //
 // It reuses the previous call's answer for a candidate whose inputs did not
 // move. Nothing is cached for a failed resolve, so the next call resolves it
