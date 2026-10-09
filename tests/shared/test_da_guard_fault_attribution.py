@@ -122,6 +122,29 @@ def test_cli_exits_2_for_a_da_guard_that_cannot_run(tmp_path, monkeypatch, da_gu
     assert rows["policy_dsl"]["suggested_action"] == vc._DA_GUARD_BROKEN_HINT, rows["policy_dsl"]
 
 
+@pytest.mark.parametrize("dangling", [False, True], ids=["clean", "another-file-unreadable"])
+def test_cli_rc_for_a_too_old_da_guard_follows_the_existing_downgrade(dangling, tmp_path,
+                                                                      monkeypatch):
+    """既有的 exit-code 規則不改：caller error 是 rc 2，但樹裡另有讀不到的檔時降為 rc 1
+    （找不到 da-guard 也同樣降）。文件寫的就是這兩個數字。"""
+    conf_d = _tree(tmp_path / "t", _CLEAN)
+    if dangling:
+        symlink_or_skip("/nonexistent/x.yaml", conf_d / "zz.yaml")
+    monkeypatch.setenv("DA_GUARD_BINARY", _script(tmp_path, "dg-old", _OLD))
+    rc, rows = _cli(conf_d, "--policy-dsl", _policy(tmp_path))
+    assert rows["policy_dsl"]["suggested_action"] == vc._DA_GUARD_TOO_OLD_HINT, rows["policy_dsl"]
+    assert rc == (1 if dangling else 2), (rc, rows["policy_dsl"])
+
+
+def test_a_da_guard_killed_by_a_signal_is_not_classified(tmp_path):
+    """被 signal 殺掉（負的結束碼）與逾時同類：不判 broken／stale（已知限制）。"""
+    killer = _script(tmp_path, "dg-killed", "kill -9 $$\n")
+    with pytest.raises(tv.EffectiveError) as ei:
+        tv.load_effective(tmp_path, binary=killer)
+    assert ei.value.returncode is not None and ei.value.returncode < 0, ei.value.returncode
+    assert not ei.value.broken and not ei.value.binary_fault
+
+
 @pytest.mark.parametrize("row", sorted(_ROWS))
 def test_control_a_tree_a_working_da_guard_refuses_stays_the_trees(row, tmp_path):
     """對照組：可用的 da-guard（`-h` 回 0）拒收的樹（F0，exit 2）仍是樹的問題。"""

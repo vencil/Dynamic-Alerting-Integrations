@@ -141,7 +141,9 @@ Raises (both loaders):
   da-guard that does not accept the subcommand and flags, which the same
   argv plus `-h` asks it (no file is written, its stderr is not read).
   Exit 2 from a da-guard that accepts them is the tree's (no config file,
-  a tree the exporter's load rejects).
+  a tree the exporter's load rejects). ⚠️ Known limitation: a timeout, a
+  da-guard killed by a signal (negative exit code) and a Go panic (exit 2,
+  `-h` still 0) are not classified as the binary's fault.
 
 #2115: https://github.com/vencil/Dynamic-Alerting-Integrations/issues/2115
 #2564: https://github.com/vencil/Dynamic-Alerting-Integrations/issues/2564
@@ -448,6 +450,11 @@ def _run_da_guard(
                 f"da-guard {subcommand} exited {proc.returncode}, and this da-guard does not accept "
                 f"`{subcommand}` with {' '.join(a for a in cmd[2:] if a.startswith('--'))} — it is "
                 "older than this tool: upgrade or rebuild it", proc.returncode, stderr, stale=True)
+        raise error(f"da-guard {subcommand} exited {proc.returncode}", proc.returncode, stderr)
+    if proc.returncode < 0:
+        # Killed by a signal (OOM, a timeout of the CI job, …): not classified,
+        # like the timeout above — neither `broken` nor `stale` (#2725 known
+        # limitation; such a row is still advised as the tree's).
         raise error(f"da-guard {subcommand} exited {proc.returncode}", proc.returncode, stderr)
     if proc.returncode not in (_EXIT_OK, _EXIT_PARSE_FAILED):
         raise error(f"da-guard {subcommand} exited {proc.returncode}, an exit code it never uses "
