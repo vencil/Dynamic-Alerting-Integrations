@@ -527,3 +527,36 @@ func TestValuesNotServed_RejectedSurvivesAWarmReload(t *testing.T) {
 		t.Errorf("after a warm reload: value_rejected = %v, want 2", g)
 	}
 }
+
+// TestValuesNotServed_SkippedRejectedCheckIsWarnedOnce (#2065 r4): tenants
+// whose value_rejected check was skipped are named in one WARN, written once
+// per change of the set and again after a clean commit.
+func TestValuesNotServed_SkippedRejectedCheckIsWarnedOnce(t *testing.T) {
+	t.Parallel()
+	dir := t.TempDir()
+	writeValuesTree(t, dir, "    mysql_threads_running: \"31\"\n", "")
+	m, _, logBuf := newAuditedManager(t, dir)
+	if err := m.Load(); err != nil {
+		t.Fatal(err)
+	}
+	const anchor = "value_rejected check of"
+	count := func() int { return len(logLinesWith(logBuf.String(), anchor)) }
+	skipped := &flatScanState{rejectedSkipped: map[string]string{"tx": "read \"team/t.yaml\": the file changed since the scan"}}
+	m.auditValuesNotServed(m.GetConfig(), skipped, "commit-1")
+	if count() != 1 {
+		t.Fatalf("WARN lines = %d, want 1:\n%s", count(), logBuf.String())
+	}
+	if line := logLinesWith(logBuf.String(), anchor)[0]; !strings.Contains(line, "tenant=tx (") ||
+		!strings.Contains(line, "changed since the scan") {
+		t.Errorf("WARN does not name the tenant and the reason: %s", line)
+	}
+	m.auditValuesNotServed(m.GetConfig(), skipped, "commit-2")
+	if count() != 1 {
+		t.Errorf("an unchanged skipped set re-logged: %d lines", count())
+	}
+	m.auditValuesNotServed(m.GetConfig(), &flatScanState{}, "commit-3")
+	m.auditValuesNotServed(m.GetConfig(), skipped, "commit-4")
+	if count() != 2 {
+		t.Errorf("a relapse after a clean commit must log again: %d lines", count())
+	}
+}
