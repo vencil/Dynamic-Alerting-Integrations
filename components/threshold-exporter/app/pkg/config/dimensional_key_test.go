@@ -3,6 +3,7 @@ package config
 import (
 	"reflect"
 	"testing"
+	"time"
 )
 
 // #2031: the canonical spelling of a dimensional key, and the keys it leaves
@@ -175,5 +176,46 @@ func TestWrittenKey(t *testing.T) {
 		if got := WrittenKey(spell, key); got != want {
 			t.Errorf("WrittenKey(%q) = %q, want %q", key, got, want)
 		}
+	}
+}
+
+// #2031: a root `defaults:` dimensional key is the labelled series of a
+// tenant that does not write it, under any spelling the tenant writes; a
+// tenant override of it with a lapsed `expires:` falls back to it, and
+// emits its expiry event, as a base key's does.
+func TestRootDimensionalDefault_IsTheLabelledSeries(t *testing.T) {
+	cfg, err := ParseConfigFile([]byte(`defaults:
+  pg_connections: 100
+  'pg_connections{r="x",env="prod"}': 30
+tenants:
+  ta:
+    pg_connections: 90
+  tb:
+    "pg_connections{env='prod', r='x'}": 50
+  tc:
+    'pg_connections{env="prod",r="x"}': {default: "60", expires: "2026-01-01T00:00:00Z"}
+`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	now := time.Date(2026, 7, 1, 0, 0, 0, 0, time.UTC)
+	got := map[string]float64{}
+	for _, r := range cfg.ResolveAt(now) {
+		if r.Metric != "connections" {
+			t.Errorf("row %+v: metric label is not the base metric", r)
+		}
+		if len(r.CustomLabels) > 0 {
+			if !reflect.DeepEqual(r.CustomLabels, map[string]string{"env": "prod", "r": "x"}) {
+				t.Errorf("row %+v: labels", r)
+			}
+			got[r.Tenant] = r.Value
+		}
+	}
+	if want := map[string]float64{"ta": 30, "tb": 50, "tc": 30}; !reflect.DeepEqual(got, want) {
+		t.Errorf("labelled series = %v, want %v", got, want)
+	}
+	ex := cfg.ResolveThresholdExpiriesAt(now)
+	if len(ex) != 1 || ex[0].Tenant != "tc" || !ex[0].Expired {
+		t.Errorf("expiries = %+v, want tc's lapsed one", ex)
 	}
 }

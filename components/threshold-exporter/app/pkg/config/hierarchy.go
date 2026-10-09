@@ -568,8 +568,8 @@ func computeEffectiveConfigBytesDetailed(
 // implementation: the byte form above only parses and calls it.
 //
 // It does not know which chain entry is the conf.d root's `_defaults.yaml`,
-// so its mergedDefaults keeps a root-only dimensional key (#2419) and a
-// root-only `_critical` key (#2544; see computeEffectiveConfigDocAt); only
+// so its mergedDefaults keeps a root-only `_critical` key (#2544; see
+// computeEffectiveConfigDocAt); only
 // ResolveEffective, which knows the chain's paths, hands da-guard a
 // mergedDefaults without them.
 func computeEffectiveConfigDocDetailed(
@@ -586,15 +586,6 @@ func computeEffectiveConfigDocDetailed(
 // rootLevel: the index in defaultsChainYAML of the conf.d root's own
 // `_defaults.yaml`, or -1 when the chain has none or the caller does not
 // know. The merged config does not depend on it; only mergedDefaults does.
-//
-// ⛔ #2419: a dimensional key (`mysql_connections{env="prod"}`) that only
-// the root level writes is no fallback. On /metrics the root's defaults go
-// to cfg.Defaults, where resolveBaseRows serves the key as its own row
-// (metric `connections{env="prod"}`, no labels), while the labelled series
-// comes only from the tenant's override map (resolveDimensionalRows) — which
-// a SUBTREE level fills (applySubtreeDefaults) and the root level does not.
-// Measured before the fix: root and tenant both at 30, da-guard called the
-// tenant's key redundant, and deleting it removed the `env="prod"` series.
 //
 // ⛔ #2544: a `<metric>_critical` key (either #1231 spelling) that only the
 // root level writes is the same shape. The root's key is served as a row of
@@ -616,7 +607,7 @@ func computeEffectiveConfigDocAt(
 	// per re-merged tenant). A file after a broken one is never parsed.
 	var err error
 	var writers map[string]int      // #2414: deepest chain level per aliased spelling
-	var subtreeDims map[string]bool // #2419 / #2544: tenant-map-only keys a non-root level writes
+	var subtreeDims map[string]bool // #2544: tenant-map-only keys a non-root level writes
 	chainSpelled := false           // #2031: a level re-spelled a key (mergedAsWritten)
 	merged := make(map[string]any)
 	for i, defBytes := range defaultsChainYAML {
@@ -676,12 +667,12 @@ func computeEffectiveConfigDocAt(
 	// subtree level's value down over any other spelling a shallower level
 	// set, so that shallower spelling is no fallback either.
 	//
-	// And a dimensional key only the root level writes is dropped (#2419,
-	// dropRootOnlyTenantMapKeys): no labelled series falls back to it. Same
-	// for a `_critical` key only the root level writes (#2544): no critical
-	// row falls back to it. The platform entry and the profile layered on
-	// below DO reach the tenant's override map, so a key of either shape they
-	// write stays a fallback.
+	// And a `_critical` key only the root level writes is dropped (#2544,
+	// dropRootOnlyTenantMapKeys): no critical row falls back to it. The
+	// platform entry and the profile layered on below DO reach the tenant's
+	// override map, so such a key they write stays a fallback. (A root-only
+	// dimensional key, #2419, is a fallback since #2031: resolveDimensionalRows
+	// serves it as the labelled series for a tenant that does not write it.)
 	chainD := dropRootOnlyTenantMapKeys(
 		dropShadowedSpellings(dropShallowerSpellings(chain, writers)), rootLevel, subtreeDims)
 	switch {
@@ -748,11 +739,10 @@ func isCriticalRowKey(k string) bool {
 }
 
 // servedFromTenantMapOnly reports whether a key's rows come only from the
-// tenant's override map — a dimensional key (#2419) or a `_critical` key
-// (#2544) — so the root `_defaults.yaml`, which does not fill that map, is
-// no fallback for it.
+// tenant's override map — a `_critical` key (#2544) — so the root
+// `_defaults.yaml`, which does not fill that map, is no fallback for it.
 func servedFromTenantMapOnly(k string) bool {
-	return isDimensionalKey(k) || isCriticalRowKey(k)
+	return isCriticalRowKey(k)
 }
 
 // noteTenantMapOnlyWriters records the servedFromTenantMapOnly keys one
@@ -773,7 +763,7 @@ func noteTenantMapOnlyWriters(s map[string]bool, block map[string]any) map[strin
 }
 
 // dropRootOnlyTenantMapKeys is the merged chain without the
-// servedFromTenantMapOnly keys no non-root level writes (#2419, #2544; see
+// servedFromTenantMapOnly keys no non-root level writes (#2544; see
 // computeEffectiveConfigDocAt). With rootLevel < 0 nothing is dropped.
 // Returns m itself when nothing is dropped.
 func dropRootOnlyTenantMapKeys(m map[string]any, rootLevel int, subtreeWrites map[string]bool) map[string]any {

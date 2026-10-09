@@ -211,7 +211,7 @@ func (c *ThresholdConfig) resolveAtWithStats(now time.Time, keyed *[]KeyedThresh
 		// and the cardinality sort below.
 		result = append(result, c.resolveBaseRows(tenant, canonDefaults, canonOverrides, now, collect, logf, rec)...)
 		result = append(result, c.resolveCriticalRows(tenant, canonDefaults, canonOverrides, now, collect, logf, rec)...)
-		result = append(result, c.resolveDimensionalRows(tenant, canonOverrides, now, collect, logf, rec)...)
+		result = append(result, c.resolveDimensionalRows(tenant, canonDefaults, canonOverrides, now, collect, logf, rec)...)
 		// Phase 2C (#1189): declared-without-value keys — emitted ONLY when the
 		// tenant supplied a value. Must stay inside this segment: the
 		// cardinality guard below measures result[startIdx:] exactly once, so a
@@ -452,8 +452,8 @@ func baseRowsSkipKey(metricKey string) bool {
 func (c *ThresholdConfig) resolveBaseRows(tenant string, defaults map[string]float64, overrides map[string]ScheduledValue, now time.Time, sink rowSink, logf func(format string, args ...any), rec *rejectRecorder) []ResolvedThreshold {
 	var rows []ResolvedThreshold
 	for metricKey, defaultValue := range defaults {
-		if baseRowsSkipKey(metricKey) {
-			continue
+		if baseRowsSkipKey(metricKey) || isDimensionalKey(metricKey) {
+			continue // a dimensional default is resolveDimensionalRows' (#2031)
 		}
 
 		// Parse metric key: "mysql_connections" → component="mysql", metric="connections"
@@ -749,8 +749,21 @@ func (c *ThresholdConfig) resolveCriticalRows(tenant string, defaults map[string
 // label set, closing the transition-window gap the base/_critical shapes
 // already covered (review F1: without this, upgrading a plain override to a
 // dimensional one made the legacy-identity series vanish mid-window).
-func (c *ThresholdConfig) resolveDimensionalRows(tenant string, overrides map[string]ScheduledValue, now time.Time, sink rowSink, logf func(format string, args ...any), rec *rejectRecorder) []ResolvedThreshold {
+//
+// #2031: a dimensional key of the root `defaults:` is the default of that
+// labelled series for every tenant whose map does not write the key — the
+// value a subtree `_defaults.yaml` would hand down, one level shallower. It
+// used to be served by resolveBaseRows as a row of its own, the whole key as
+// its metric label. With that default to fall back to, a lapsed `expires:`
+// override of the key is treated as absent, as resolveBaseRows does.
+func (c *ThresholdConfig) resolveDimensionalRows(tenant string, defaults map[string]float64, overrides map[string]ScheduledValue, now time.Time, sink rowSink, logf func(format string, args ...any), rec *rejectRecorder) []ResolvedThreshold {
 	var rows []ResolvedThreshold
+	for key, v := range defaults {
+		if sv, own := overrides[key]; (own && !isThresholdExpired(sv, now)) || !isDimensionalKey(key) {
+			continue
+		}
+		rows = c.appendDimensionalRow(rows, tenant, key, ScheduledValue{Default: strconv.FormatFloat(v, 'g', -1, 64)}, now, sink, logf, nil)
+	}
 	for key, sv := range overrides {
 		if !strings.Contains(key, "{") {
 			continue // not a dimensional key
@@ -759,55 +772,63 @@ func (c *ThresholdConfig) resolveDimensionalRows(tenant string, overrides map[st
 			key == "_severity_dedup" || strings.HasPrefix(key, "_routing") {
 			continue
 		}
-
-		baseKey, customLabels, regexLabels := parseKeyWithLabels(key)
-		if len(customLabels) == 0 && len(regexLabels) == 0 {
-			logf("WARN: failed to parse dimensional key %q for tenant=%s, skipping", key, tenant)
-			continue
+		if _, hasDefault := defaults[key]; hasDefault && isThresholdExpired(sv, now) {
+			continue // the default above is served
 		}
-
-		// PREVENT #656 v1: `expires:` is intentionally NOT honored on dimensional
-		// overrides — no platform default to fail-safe to (reverting would go
-		// SILENT). expires here is a no-op; ValidateTenantKeys warns. See
-		// resolveBaseRows for the honored path.
-		valStr := sv.resolveValue(now, logf)
-		if rec != nil {
-			rec.noteInvalidWindows(tenant, key, sv)
-		}
-		lower := strings.TrimSpace(strings.ToLower(valStr))
-		if isDisabled(lower) {
-			continue
-		}
-
-		component, metric := parseMetricKey(baseKey)
-		severity := "warning"
-
-		parts := strings.SplitN(valStr, ":", 2)
-		valueStr := strings.TrimSpace(parts[0])
-		if len(parts) == 2 {
-			severity = strings.TrimSpace(parts[1])
-		}
-
-		v, err := strconv.ParseFloat(valueStr, 64)
-		if err != nil {
-			logf("WARN: invalid dimensional threshold %q for tenant=%s key=%s, skipping", valStr, tenant, key)
-			if rec != nil {
-				rec.note(tenant, key, NotServedValueUnparsedDropped)
-			}
-			continue
-		}
-
-		rows = appendWithLegacyTwin(rows, baseKey, ResolvedThreshold{
-			Tenant:       tenant,
-			Metric:       metric,
-			Value:        v,
-			Severity:     severity,
-			Component:    component,
-			CustomLabels: customLabels,
-			RegexLabels:  regexLabels,
-		}, sink, key)
+		rows = c.appendDimensionalRow(rows, tenant, key, sv, now, sink, logf, rec)
 	}
 	return rows
+}
+
+// appendDimensionalRow appends the row (and #1231 twin) dimensional key's
+// value sv serves for tenant — nothing for a disabled or unparseable value.
+func (c *ThresholdConfig) appendDimensionalRow(rows []ResolvedThreshold, tenant, key string, sv ScheduledValue, now time.Time, sink rowSink, logf func(format string, args ...any), rec *rejectRecorder) []ResolvedThreshold {
+	baseKey, customLabels, regexLabels := parseKeyWithLabels(key)
+	if len(customLabels) == 0 && len(regexLabels) == 0 {
+		logf("WARN: failed to parse dimensional key %q for tenant=%s, skipping", key, tenant)
+		return rows
+	}
+
+	// PREVENT #656 v1: `expires:` is intentionally NOT honored here — with no
+	// root default to fail-safe to, reverting would go SILENT. expires is then
+	// a no-op; ValidateTenantKeys warns. resolveDimensionalRows honors it for
+	// a key the root `defaults:` writes (#2031).
+	valStr := sv.resolveValue(now, logf)
+	if rec != nil {
+		rec.noteInvalidWindows(tenant, key, sv)
+	}
+	lower := strings.TrimSpace(strings.ToLower(valStr))
+	if isDisabled(lower) {
+		return rows
+	}
+
+	component, metric := parseMetricKey(baseKey)
+	severity := "warning"
+
+	parts := strings.SplitN(valStr, ":", 2)
+	valueStr := strings.TrimSpace(parts[0])
+	if len(parts) == 2 {
+		severity = strings.TrimSpace(parts[1])
+	}
+
+	v, err := strconv.ParseFloat(valueStr, 64)
+	if err != nil {
+		logf("WARN: invalid dimensional threshold %q for tenant=%s key=%s, skipping", valStr, tenant, key)
+		if rec != nil {
+			rec.note(tenant, key, NotServedValueUnparsedDropped)
+		}
+		return rows
+	}
+
+	return appendWithLegacyTwin(rows, baseKey, ResolvedThreshold{
+		Tenant:       tenant,
+		Metric:       metric,
+		Value:        v,
+		Severity:     severity,
+		Component:    component,
+		CustomLabels: customLabels,
+		RegexLabels:  regexLabels,
+	}, sink, key)
 }
 
 // truncationSortKey produces a deterministic ordering key for one tenant's
