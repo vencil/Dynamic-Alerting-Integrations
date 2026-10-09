@@ -46,10 +46,10 @@ disclosed boundary, because all of this module's assertions are negative
     `_command_verb` lists as a gap.
 
 The shared failure mode all three exist to prevent: `detect-changes` answers
-"not needed" for a leg that was needed, the leg is skipped, and the always-run
-aggregate that reports the required check turns that skip into SUCCESS. Nothing
-about such a PR looks wrong, so the omission merges and the red lands on
-someone else.
+"not needed" for a leg that was needed and the leg is skipped; where an
+always-run aggregate reports the required check, it turns that skip into
+SUCCESS. Nothing about such a PR looks wrong, so the omission merges and the
+red lands on someone else.
 
 The original portal rationale, still accurate for invariant 1:
 
@@ -2068,8 +2068,7 @@ def test_gating_filter_covers_every_file_its_job_runs() -> None:
     assert not uncovered, (
         "path-gated jobs run or install from repo files that are NOT covered "
         "by the filter gating them — a PR touching only those paths skips the "
-        "job (its always-run aggregate gate still reports success) even "
-        "though the file decides what that job does.\n"
+        "job even though the file decides what that job does.\n"
         "⛔ If you just GENERALISED a filter entry (e.g. an exact path to "
         "`dir/pre_*.ext`), the entry is probably fine and `_covers` simply "
         "does not model that glob shape — extend its alphabet instead of "
