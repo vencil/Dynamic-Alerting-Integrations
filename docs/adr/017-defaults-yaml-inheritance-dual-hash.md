@@ -96,11 +96,9 @@ conf.d/
     **兄弟**位置，在有包裝的形狀下根本不會進 `effective`（見 §給要編輯的人 第 1 條），也就
     沒有東西可刪 —— 寫了是靜默 no-op。真正會生效的組合是「兩者都在 `defaults:` 內部」或
     「兩者都在無包裝檔的頂層」。
-- **⚠️ 「空值」與顯式 `null` 是同一件事**——原文把兩者並列成「Null / 空值」，
-  正是誤導的來源：`mysql_connections: ~` 與 `mysql_connections:` 語法不同，但
-  YAML 解析出來**都是 null**。所以若讓閾值面的 null 生效，等於明文規定
-  「打到一半忘了填」＝安靜關掉一條告警。這就是閾值面不支援 null 的理由：
-  意外要走向**吵**，不能走向**靜**。
+- **⚠️ 「空值」與顯式 `null` 是同一件事**：`mysql_connections:` 與 `mysql_connections: ~`
+  在 YAML 都解析成 null，與 `mysql_connections: null` 相同。閾值的 null 定義為「這一層沒寫」
+  （見上方「閾值 key」），不是關閉告警；要關閉一個閾值請寫 `"disable"`。
 - **`_metadata` 欄位不繼承**：每個 tenant 的 `_metadata` 僅來自自身 YAML + 路徑推斷（ADR-016）
 
 ```yaml

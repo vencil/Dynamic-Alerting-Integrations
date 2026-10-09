@@ -101,12 +101,10 @@ Inheritance order: **L0 → L1 → L2 → L3 → tenant YAML** (later overrides 
     (see "these four things", item 1), so there is nothing to delete — writing it is a silent no-op.
     The combinations that actually work are "both inside `defaults:`" or "both at the top level
     of a wrapper-less file".
-- **⚠️ A blank value and an explicit `null` are the same thing** — listing them
-  as "Null / empty values" was itself the misleading part: `mysql_connections: ~`
-  and `mysql_connections:` are different syntax that YAML parses to the **same
-  null**. Honouring null on a threshold key would therefore make "I stopped
-  typing halfway" mean "silently switch this alert off". That is why it is
-  unsupported there: an accident must fail **loud**, never **silent**.
+- **⚠️ A blank value and an explicit `null` are the same thing**: `mysql_connections:` and
+  `mysql_connections: ~` both parse to null in YAML, the same as `mysql_connections: null`. A
+  threshold's null is defined as "this layer did not write it" (see "Threshold keys" above), not
+  as switching the alert off; to switch a threshold off, write `"disable"`.
 - **`_metadata` fields do not inherit**: each tenant's `_metadata` comes only from its own YAML + path inference (ADR-016)
 
 ```yaml
