@@ -2,12 +2,13 @@
 # Run: promtool test rules tests/rulepacks/rule-pack-operational_test.yaml
 #
 # Pins the da_config_event -> TenantConfigEvent label flow for the label schema
-# {tenant, event, reason, target_severity}:
+# {tenant, event, reason, target_severity, metric_key}:
 #   - an expired `_silent_mode: {target: all, reason: ...}` is TWO series that
 #     differ only in target_severity -> TWO alerts, each carrying it (before
 #     #2003 the pair was label-identical and /metrics answered 500);
 #   - maintenance / threshold events emit target_severity="" and the alert has
-#     NO target_severity label (empty value == absent in the Prometheus model).
+#     NO target_severity label (empty value == absent in the Prometheus model);
+#   - threshold_expired carries metric_key (#2031), the other events emit "".
 # Second case: no event series -> no alert.
 rule_files:
 - ../../rule-packs/rule-pack-operational.yaml
@@ -15,13 +16,13 @@ evaluation_interval: 15s
 tests:
 - interval: 15s
   input_series:
-  - series: da_config_event{tenant="tenant-x", event="silence_expired", reason="DB maintenance", target_severity="warning"}
+  - series: da_config_event{tenant="tenant-x", event="silence_expired", reason="DB maintenance", target_severity="warning", metric_key=""}
     values: 1x8
-  - series: da_config_event{tenant="tenant-x", event="silence_expired", reason="DB maintenance", target_severity="critical"}
+  - series: da_config_event{tenant="tenant-x", event="silence_expired", reason="DB maintenance", target_severity="critical", metric_key=""}
     values: 1x8
-  - series: da_config_event{tenant="tenant-y", event="maintenance_expired", reason="window", target_severity=""}
+  - series: da_config_event{tenant="tenant-y", event="maintenance_expired", reason="window", target_severity="", metric_key=""}
     values: 1x8
-  - series: 'da_config_event{tenant="tenant-z", event="threshold_expired", reason="mysql_connections: incident", target_severity=""}'
+  - series: 'da_config_event{tenant="tenant-z", event="threshold_expired", reason="mysql_connections: incident", target_severity="", metric_key="mysql_connections"}'
     values: 1x8
   alert_rule_test:
   - eval_time: 1m
@@ -64,6 +65,7 @@ tests:
         tenant: tenant-z
         event: threshold_expired
         reason: 'mysql_connections: incident'
+        metric_key: mysql_connections
       exp_annotations:
         summary: 'Config expired for tenant-z: threshold_expired'
         summary_zh: tenant-z 的組態已過期：threshold_expired
@@ -71,7 +73,7 @@ tests:
         description_zh: 'tenant-z 的定時組態已過期並自動停用。事件：threshold_expired。原因：mysql_connections: incident。請更新或移除過期的組態項目。'
 - interval: 15s
   input_series:
-  - series: da_config_event{tenant="tenant-x", event="silence_expired", reason="r", target_severity="warning"}
+  - series: da_config_event{tenant="tenant-x", event="silence_expired", reason="r", target_severity="warning", metric_key=""}
     values: _x8
   alert_rule_test:
   - eval_time: 1m

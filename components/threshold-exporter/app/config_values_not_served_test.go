@@ -190,6 +190,13 @@ func TestValuesNotServed_FlatIncrementalReload(t *testing.T) {
 	if lines := logLinesWith(logBuf.String(), valuesNotServedAnchor); len(lines) != 1 || !strings.Contains(lines[0], `tenant=tx key=mysql_connections{db="x"} reason=value_unparsed_dropped`) {
 		t.Errorf("WARN lines %q, want one naming tx and the dimensional key", lines)
 	}
+	// #2031: a threshold written under two spellings is counted on this
+	// path too.
+	writeTestYAML(t, path, "tenants:\n  tx:\n    'mysql_connections{db=\"x\"}': 5\n    \"mysql_connections{db='x'}\": 6\n")
+	m.tickOnce()
+	if got := testutil.ToFloat64(fresh.valuesNotServed[config.NotServedSpellingDuplicate]); got != 1 {
+		t.Errorf("spelling_duplicate = %v after the incremental reload, want 1\n%s", got, logBuf.String())
+	}
 }
 
 // TestValuesNotServed_SingleFileMode: the single-file Load commits with no
@@ -340,6 +347,29 @@ func TestValuesNotServed_MatchesEffectiveOnEveryShape(t *testing.T) {
 		{"F15 retired spelling", map[string]string{
 			"team/t.yaml": "tenants:\n  tx:\n    " + retiredCPUKey + ":\n      default: \"20\"\n" + sameEnds,
 		}, map[string]float64{config.NotServedWindowInvalid: 1}},
+		// #2031: one mapping writes a threshold under two spellings.
+		{"dimensional key spelled twice in the tenant file", map[string]string{
+			"team/t.yaml": "tenants:\n  tx:\n    'redis_queue_length{b=\"2\",a=\"1\"}': 5\n    'redis_queue_length{a=\"1\", b=\"2\"}': 6\n",
+		}, map[string]float64{config.NotServedSpellingDuplicate: 1}},
+		{"both #1231 spellings in the tenant file", map[string]string{
+			"team/t.yaml": "tenants:\n  tx:\n    " + retiredCPUKey + ": \"20\"\n    mysql_threads_running: \"21\"\n",
+		}, map[string]float64{config.NotServedSpellingDuplicate: 1}},
+		{"dimensional key spelled twice in a subtree defaults file", map[string]string{
+			"team/_defaults.yaml": "defaults:\n  'redis_queue_length{q=\"a\"}': 5\n  \"redis_queue_length{q='a'}\": 6\n",
+			"team/t.yaml":         "tenants:\n  tx: {}\n",
+		}, map[string]float64{config.NotServedSpellingDuplicate: 1}},
+		{"dimensional key spelled twice in a platform entry", map[string]string{
+			"_platform.yaml": "tenants:\n  tx:\n    'redis_queue_length{q=\"a\"}': 5\n    \"redis_queue_length{q='a'}\": 6\n",
+			"team/t.yaml":    "tenants:\n  tx: {}\n",
+		}, map[string]float64{config.NotServedSpellingDuplicate: 1}},
+		{"dimensional key spelled twice in a profile", map[string]string{
+			"_profiles.yaml": "profiles:\n  gold:\n    'redis_queue_length{q=\"a\"}': 5\n    \"redis_queue_length{q='a'}\": 6\n",
+			"team/t.yaml":    "tenants:\n  tx:\n    _profile: gold\n",
+		}, map[string]float64{config.NotServedSpellingDuplicate: 1}},
+		{"spelled twice in a layer the tenant overrides: nothing", map[string]string{
+			"team/_defaults.yaml": "defaults:\n  'redis_queue_length{q=\"a\"}': 5\n  \"redis_queue_length{q='a'}\": 6\n",
+			"team/t.yaml":         "tenants:\n  tx:\n    'redis_queue_length{ q = \"a\" }': 7\n",
+		}, nil},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()

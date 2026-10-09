@@ -1,13 +1,12 @@
 package main
 
 // #2419: da-guard's redundant-override advice on DIMENSIONAL keys
-// (`pg_connections{env="prod"}`). The labelled series comes only from the
-// tenant's override map (resolveDimensionalRows); a subtree `_defaults.yaml`,
-// a platform `tenants:` entry and a profile fill that map, the root
-// `_defaults.yaml` does not (its key is served as a row of its own, metric
-// `connections{env="prod"}`, no labels). So a tenant key equal to a
-// root-only dimensional default is not redundant: deleting it removes the
-// `env="prod"` series.
+// (`pg_connections{env="prod"}`). Before #2031 the root `_defaults.yaml`'s
+// dimensional key was served as a row of its own (metric
+// `connections{env="prod"}`, no labels), so a tenant key equal to it was not
+// redundant. Since #2031 every layer's dimensional key — the root's too — is
+// the labelled series of a tenant that does not write it, so such a tenant
+// key is redundant like any other.
 //
 // The oracle is /metrics at the LABEL level — every user_threshold series of
 // tx, label set and value, gathered through the exporter's own collector —
@@ -83,30 +82,30 @@ func TestGuard_RedundantOverrideOnDimensionalKeys(t *testing.T) {
 		redundant bool
 		symlink   bool // read the tree through a symlink to its real root
 	}{
-		// The measured false advice (redundant before the fix).
-		{"root-only-dimensional-key-is-not-redundant",
+		// A root dimensional default (#2419 measured the false advice; #2031
+		// made the root a fallback, so these flipped to redundant).
+		{"root-only-dimensional-key-is-redundant",
 			map[string]string{"_defaults.yaml": root + "  " + dim + ": 50\n"},
-			"tx.yaml", "    mysql_connections: 80\n", dim + ": 50", false, false},
-		{"root-only-regex-dimensional-key-is-not-redundant",
+			"tx.yaml", "    mysql_connections: 80\n", dim + ": 50", true, false},
+		{"root-only-regex-dimensional-key-is-redundant",
 			map[string]string{"_defaults.yaml": root + "  pg_connections{db=~\"a.*\"}: 50\n"},
-			"tx.yaml", "    mysql_connections: 80\n", "pg_connections{db=~\"a.*\"}: 50", false, false},
-		{"root-only-dimensional-key-under-a-subtree-without-it-is-not-redundant",
+			"tx.yaml", "    mysql_connections: 80\n", "pg_connections{db=~\"a.*\"}: 50", true, false},
+		{"root-only-dimensional-key-under-a-subtree-without-it-is-redundant",
 			map[string]string{"_defaults.yaml": root + "  " + dim + ": 50\n", "sub/_defaults.yaml": "defaults:\n  pg_connections: 60\n"},
-			"sub/tx.yaml", "    mysql_connections: 80\n", dim + ": 50", false, false},
-		{"root-dimensional-key-a-subtree-nulls-is-not-redundant",
+			"sub/tx.yaml", "    mysql_connections: 80\n", dim + ": 50", true, false},
+		{"root-dimensional-key-a-subtree-nulls-is-redundant",
 			map[string]string{"_defaults.yaml": root + "  " + dim + ": 50\n", "sub/_defaults.yaml": "defaults:\n  " + dim + ": null\n"},
-			"sub/tx.yaml", "    mysql_connections: 80\n", dim + ": 50", false, false},
+			"sub/tx.yaml", "    mysql_connections: 80\n", dim + ": 50", true, false},
 		// The root level is found by PATH, against the scan's resolved root:
 		// a config dir that is a symlink, and a root carrier spelled
 		// `_defaults.yml`, are still the root.
-		{"root-only-dimensional-key-through-a-symlinked-config-dir-is-not-redundant",
+		{"root-only-dimensional-key-through-a-symlinked-config-dir-is-redundant",
 			map[string]string{"_defaults.yaml": root + "  " + dim + ": 50\n"},
-			"tx.yaml", "    mysql_connections: 80\n", dim + ": 50", false, true},
-		{"root-only-dimensional-key-in-a-yml-root-carrier-is-not-redundant",
+			"tx.yaml", "    mysql_connections: 80\n", dim + ": 50", true, true},
+		{"root-only-dimensional-key-in-a-yml-root-carrier-is-redundant",
 			map[string]string{"_defaults.yml": root + "  " + dim + ": 50\n"},
-			"tx.yaml", "    mysql_connections: 80\n", dim + ": 50", false, false},
-		// Controls: the layers that DO fill the tenant's override map stay
-		// redundant — the check is narrowed, not switched off.
+			"tx.yaml", "    mysql_connections: 80\n", dim + ": 50", true, false},
+		// The layers that fill the tenant's override map.
 		{"subtree-dimensional-key-is-redundant",
 			map[string]string{"_defaults.yaml": root, "sub/_defaults.yaml": "defaults:\n  " + dim + ": 50\n"},
 			"sub/tx.yaml", "    mysql_connections: 80\n", dim + ": 50", true, false},

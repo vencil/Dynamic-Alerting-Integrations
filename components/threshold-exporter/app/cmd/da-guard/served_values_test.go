@@ -779,7 +779,7 @@ func TestServedValues_TwoKeysOneSeries_ExitsTwoNamingBothKeys(t *testing.T) {
 			if code != exitCallerErr {
 				t.Fatalf("exit = %d, want %d; tenants=%v stderr=%q", code, exitCallerErr, doc.Tenants, stderr)
 			}
-			if !strings.Contains(stderr, "was collected before with the same name and label values") || !strings.Contains(stderr, "HTTP 500") {
+			if !strings.Contains(stderr, "give one series user_threshold{") || !strings.Contains(stderr, "HTTP 500") {
 				t.Errorf("stderr should name the collision: %q", stderr)
 			}
 		})
@@ -913,11 +913,10 @@ func TestServedValues_RowsTheCollectorDrops(t *testing.T) {
 		"one row with q_re twice": {
 			"    redis_queue_length{q_re=\"a\", q=~\"b\"}: 5\n",
 			[]string{`redis_queue_length{q_re="a", q=~"b"}`}},
-		// Both rows are dropped, so their would-be collision never reaches
-		// Gather: /metrics serves 200 and so must this.
-		"two dropped rows that would collide": {
+		// Two spellings of one key are one threshold (#2031): one row.
+		"two spellings of one dropped key": {
 			"    mysql_connections{tenant=\"x\"}: 5\n    mysql_connections{ tenant = \"x\" }: 6\n",
-			[]string{`mysql_connections{tenant="x"}`, `mysql_connections{ tenant = "x" }`}},
+			[]string{`mysql_connections{tenant="x"}`}},
 	} {
 		t.Run(name, func(t *testing.T) {
 			t.Parallel()
@@ -1075,22 +1074,16 @@ func TestServedValues_DroppedKeepsEveryRowsReason(t *testing.T) {
 // --- families other than user_threshold ----------------------------------------------
 
 // Two expired overrides whose da_config_event reasons render alike
-// ("container_cpu: a: b") collide in that family: production /metrics answers
-// 500 (pinned in the app package), so served-values must refuse too even
-// though every user_threshold row is fine.
-func TestServedValues_OtherFamilyFailsGather_ExitsTwo(t *testing.T) {
+// ("container_cpu: a: b") are two series (metric_key, #2031): served.
+func TestServedValues_SameEventReasonText_Serves(t *testing.T) {
 	t.Parallel()
 	code, doc, _, stderr := served(t, map[string]string{
 		"_defaults.yaml": defaultsOnly + "  container_cpu: 75\n  \"container_cpu: a\": 50\n",
 		"tenant-a.yaml": "tenants:\n  tenant-a:\n    container_cpu:\n      default: \"95\"\n      expires: \"2026-06-01T00:00:00Z\"\n      reason: \"a: b\"\n" +
 			"    \"container_cpu: a\":\n      default: \"96\"\n      expires: \"2026-06-01T00:00:00Z\"\n      reason: \"b\"\n",
 	}, "2026-07-01T00:00:00Z")
-	if code != exitCallerErr {
-		t.Fatalf("exit = %d, want %d; tenants=%v stderr=%q", code, exitCallerErr, doc.Tenants, stderr)
-	}
-	if !strings.Contains(stderr, "da_config_event") || !strings.Contains(stderr, "HTTP 500") {
-		t.Errorf("stderr should carry client_golang's error: %q", stderr)
-	}
+	mustOK(t, code, stderr)
+	wantValue(t, doc, "tenant-a", "container_cpu", 75) // expired: the platform default
 }
 
 // A non-UTF-8 name in optional_overrides reaches no output string while no
@@ -1111,10 +1104,9 @@ func TestServedValues_NonUTF8DeclaredKeyNobodySets_Serves(t *testing.T) {
 
 // --- threshold expiry events follow --at ----------------------------------------------
 
-// Two time-boxed overrides whose expiry events would render one
-// da_config_event series ("container_cpu: a: b"): before they expire nothing
-// collides; after, the scrape fails. The expiry is far in the future, so only
-// --at (not the wall clock) can put the run after it.
+// A time-boxed override is read at --at, not at the wall clock: the expiry
+// is far in the future, so only --at can put the run after it, where the
+// platform default is served.
 func TestServedValues_ThresholdExpiryFollowsAt(t *testing.T) {
 	t.Parallel()
 	files := map[string]string{
@@ -1125,10 +1117,9 @@ func TestServedValues_ThresholdExpiryFollowsAt(t *testing.T) {
 	code, doc, _, stderr := served(t, files, "2026-07-01T00:00:00Z")
 	mustOK(t, code, stderr)
 	wantValue(t, doc, "tenant-a", "container_cpu", 95)
-	code, _, _, stderr = served(t, files, "2099-07-01T00:00:00Z")
-	if code != exitCallerErr || !strings.Contains(stderr, "da_config_event") {
-		t.Fatalf("after expiry: exit = %d, want %d naming da_config_event; stderr=%q", code, exitCallerErr, stderr)
-	}
+	code, doc, _, stderr = served(t, files, "2099-07-01T00:00:00Z")
+	mustOK(t, code, stderr)
+	wantValue(t, doc, "tenant-a", "container_cpu", 75)
 }
 
 // --config-dir is the caller's own argument and is not in the output, so a

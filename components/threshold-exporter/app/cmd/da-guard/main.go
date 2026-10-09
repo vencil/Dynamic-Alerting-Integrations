@@ -87,7 +87,9 @@ import (
 	"log"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
+	"time"
 
 	"github.com/vencil/threshold-exporter/internal/guard"
 	"github.com/vencil/threshold-exporter/pkg/config"
@@ -310,7 +312,10 @@ func run(args []string, stdout, errOut io.Writer) int {
 	// could not be read at all (#2588): the walker skipped it, so "no
 	// tenants" may be exactly the tenants that file declares. That is exit
 	// 3, never the vacuous 0.
-	if len(scoped.Tenants) == 0 {
+	// #2031: not when the whole tree's /metrics cannot be gathered — that
+	// fails every tenant's scrape, whatever the scope (the report below).
+	input := buildCheckInput(scoped, f)
+	if len(scoped.Tenants) == 0 && input.MetricsNotGatherable == "" {
 		if err := writeEmptyReport(stdout, errOut, f, scoped.ParseFailed, scoped.Unreadable); err != nil {
 			fmt.Fprintf(errOut, "%s: %v\n", programName, err)
 			return exitCallerErr
@@ -318,12 +323,12 @@ func run(args []string, stdout, errOut io.Writer) int {
 		return reportDroppedFiles(errOut, scoped, exitOK)
 	}
 
-	input := buildCheckInput(scoped, f)
 	report, err := guard.CheckDefaultsImpact(input)
 	if err != nil {
 		fmt.Fprintf(errOut, "%s: guard run: %v\n", programName, err)
 		return exitCallerErr
 	}
+	spellFindingsAsWritten(report, scoped)
 
 	if err := writeReport(stdout, errOut, f, scoped, report, notices); err != nil {
 		fmt.Fprintf(errOut, "%s: %v\n", programName, err)
@@ -594,7 +599,64 @@ func buildCheckInput(scoped *config.ScopedTenants, f *flags) guard.CheckInput {
 		ScheduleNulls: scoped.ScheduleNulls,
 		// #2065: the effective configs' not_served, in-scope tenants only.
 		ValuesNotServed: notServed,
+		// #2031: the exporter's own build drops these entries.
+		CustomAlertDuplicates: customAlertDuplicates(scoped),
+		// #2031: the whole tree, whatever the scope — one series two keys
+		// share fails the scrape for every tenant.
+		MetricsNotGatherable: gatherVerdict(scoped.Config, time.Now(), writtenNamer(scoped.WrittenKeys)),
 	}
+}
+
+// spellFindingsAsWritten re-spells, in place, each finding's Field and
+// Message with its tenant's keys as the layer that supplied them wrote them
+// (#2031): the guard reads maps keyed by the canonical dimensional spelling
+// (config.EffectiveConfig.KeySpellings). A field below a key (`key.leaf`)
+// keeps its leaf. In a message only a whole key is replaced — between
+// backticks, or quoted whole with %q — never a key inside another one.
+func spellFindingsAsWritten(report *guard.GuardReport, scoped *config.ScopedTenants) {
+	byTenant := map[string]*config.EffectiveConfig{}
+	for _, ec := range scoped.Tenants {
+		if len(ec.KeySpellings) > 0 {
+			byTenant[ec.TenantID] = ec
+		}
+	}
+	if len(byTenant) == 0 {
+		return
+	}
+	for i := range report.Findings {
+		f := &report.Findings[i]
+		ec := byTenant[f.TenantID]
+		if ec == nil {
+			continue
+		}
+		for canon, written := range ec.KeySpellings {
+			if f.Field == canon || strings.HasPrefix(f.Field, canon+".") {
+				f.Field = written + f.Field[len(canon):]
+			}
+			f.Message = strings.ReplaceAll(f.Message, "`"+canon+"`", "`"+written+"`")
+			f.Message = strings.ReplaceAll(f.Message, strconv.Quote(canon), strconv.Quote(written))
+		}
+	}
+}
+
+// customAlertDuplicates is guard.CheckInput.CustomAlertDuplicates: the
+// `_custom_alerts` entries the exporter's own build of the tree drops as
+// duplicates of an earlier entry's series (config.CustomAlertDuplicates), for
+// the in-scope tenants. nil when none.
+func customAlertDuplicates(scoped *config.ScopedTenants) map[string][]config.CustomAlertDuplicate {
+	if scoped.Config == nil {
+		return nil
+	}
+	var out map[string][]config.CustomAlertDuplicate
+	for _, ec := range scoped.Tenants {
+		if d := config.CustomAlertDuplicates(ec.TenantID, scoped.Config.Tenants[ec.TenantID]); len(d) > 0 {
+			if out == nil {
+				out = map[string][]config.CustomAlertDuplicate{}
+			}
+			out[ec.TenantID] = d
+		}
+	}
+	return out
 }
 
 // splitNonEmpty splits "a, b , ,c" into ["a","b","c"] — empty
@@ -640,7 +702,7 @@ func writeReport(stdout, errOut io.Writer, f *flags, scoped *config.ScopedTenant
 		}{
 			ConfigDir:   f.configDir,
 			Scope:       f.scopeDir,
-			SourceFiles: scoped.SourceFiles,
+			SourceFiles: nonNilStrings(scoped.SourceFiles), // #2031: [] for a scope with no tenant
 			Notices:     notices,
 			ParseFailed: scoped.ParseFailed,
 			Unreadable:  unreadableOrNil(scoped.Unreadable),

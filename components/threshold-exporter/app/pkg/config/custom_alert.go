@@ -886,24 +886,39 @@ func resolveTenantCustomAlerts(tenant string, overrides map[string]ScheduledValu
 // rejected-alert ERROR sink as a parameter (#2397; nil = silent). The returned
 // error count — the da_custom_alert_parse_errors gauge — does not depend on it.
 func resolveTenantCustomAlertsLogf(tenant string, overrides map[string]ScheduledValue, logf func(format string, args ...any)) ([]ResolvedThreshold, []ResolvedSloObjective, int) {
+	out, objectives, errCount, _ := resolveCustomAlertSpecs(tenant, overrides, logf)
+	return out, objectives, errCount
+}
+
+// resolveCustomAlertSpecs is resolveTenantCustomAlertsLogf plus the entries
+// it dropped as duplicates of an earlier one's series (#2031): each counts as
+// a malformed entry and is logged as one.
+func resolveCustomAlertSpecs(tenant string, overrides map[string]ScheduledValue, logf func(format string, args ...any)) (
+	[]ResolvedThreshold, []ResolvedSloObjective, int, []CustomAlertDuplicate,
+) {
 	if logf == nil {
 		logf = func(string, ...any) {}
 	}
 	sv, ok := overrides["_custom_alerts"]
 	if !ok || strings.TrimSpace(sv.Default) == "" {
-		return nil, nil, 0
+		return nil, nil, 0, nil
 	}
 	var specs []CustomAlertSpec
 	if err := yaml.Unmarshal([]byte(sv.Default), &specs); err != nil {
 		// whole block unparseable → count as 1 error; the tenant gets NO custom
 		// alerts but the rest of its config is unaffected.
 		logCustomAlertError(logf, tenant, "<block>", fmt.Errorf("cannot parse _custom_alerts: %w", err))
-		return nil, nil, 1
+		return nil, nil, 1, nil
 	}
 	var out []ResolvedThreshold
 	var objectives []ResolvedSloObjective
+	var dups []CustomAlertDuplicate
+	var owner map[customSeriesID]int // series → index of the entry that serves it; one entry cannot repeat another
+	if len(specs) > 1 {
+		owner = make(map[customSeriesID]int, len(specs)+1)
+	}
 	errCount := 0
-	for _, spec := range specs {
+	for i, spec := range specs {
 		rts, err := resolveOneCustomAlert(tenant, spec)
 		if errors.Is(err, errCustomAlertDisabled) {
 			continue // three-state opt-out: no series, NOT an error
@@ -913,21 +928,95 @@ func resolveTenantCustomAlertsLogf(tenant string, overrides map[string]Scheduled
 			errCount++
 			continue
 		}
-		out = append(out, rts...)
 		// slo_burn_rate: echo the raw objective for the user_slo_objective gauge.
 		// Reaching here means resolveSloBurnRate already ParseFloat'ed it (the
 		// disable case exited via errCustomAlertDisabled above → no gauge).
+		var obj *ResolvedSloObjective
 		if spec.Recipe == "slo_burn_rate" && len(rts) > 0 {
-			if obj, perr := strconv.ParseFloat(spec.Objective.value, 64); perr == nil {
-				objectives = append(objectives, ResolvedSloObjective{
-					Tenant:    tenant,
-					RecipeID:  rts[0].CustomLabels["recipe_id"],
-					Objective: obj,
-				})
+			if v, perr := strconv.ParseFloat(spec.Objective.value, 64); perr == nil {
+				obj = &ResolvedSloObjective{Tenant: tenant, RecipeID: rts[0].CustomLabels["recipe_id"], Objective: v}
 			}
 		}
+		if owner != nil {
+			if d, dup := customAlertSeriesCollision(rts, obj, owner); dup {
+				d.Index, d.Name, d.OfName = i, spec.Name, specs[d.Of].Name
+				dups = append(dups, d)
+				logCustomAlertError(logf, tenant, spec.Name, fmt.Errorf(
+					"its series %s is the one _custom_alerts[%d] (%q) already serves; only the first is served", d.Series, d.Of, d.OfName))
+				errCount++
+				continue
+			}
+			for _, r := range rts {
+				owner[customRowID(r)] = i
+			}
+			if obj != nil {
+				owner[customSeriesID{objective: true, recipeID: obj.RecipeID}] = i
+			}
+		}
+		out = append(out, rts...)
+		if obj != nil {
+			objectives = append(objectives, *obj)
+		}
 	}
-	return out, objectives, errCount
+	return out, objectives, errCount, dups
+}
+
+// CustomAlertDuplicate is one `_custom_alerts` entry the exporter drops
+// because a series it would put on /metrics is one an earlier entry of the
+// same list already puts there (#2031): two series with one label set fail
+// the whole Gather (HTTP 500 for every tenant), so the later entry is
+// dropped, counted on da_custom_alert_parse_errors and logged at ERROR.
+type CustomAlertDuplicate struct {
+	Index  int    // the dropped entry's index in the list
+	Name   string // its name
+	Of     int    // the index of the entry whose series it repeats
+	OfName string // that entry's name
+	Series string // the repeated series: its metric name and labels
+}
+
+// CustomAlertDuplicates is the `_custom_alerts` entries of one tenant's
+// built map (overrides) the exporter drops as duplicates of an earlier
+// entry's series — the exporter's own reading, for da-guard's
+// custom_alert_duplicate_series. nil when none.
+func CustomAlertDuplicates(tenant string, overrides map[string]ScheduledValue) []CustomAlertDuplicate {
+	_, _, _, dups := resolveCustomAlertSpecs(tenant, overrides, nil)
+	return dups
+}
+
+// customSeriesID is the identity of one series a resolved custom alert of
+// one tenant puts on /metrics — a user_threshold row (component "custom",
+// its metric and severity, and the recipe_id / name / mode labels
+// resolveOneCustomAlert sets) or, with objective set, its
+// user_slo_objective{recipe_id}: the label sets client_golang refuses to see
+// twice. Not the preflight's stricter rules (one name, one shape+severity per
+// tenant): an entry they refuse but /metrics serves is still served
+// (ValidateTenantCustomAlerts keeps them for tenant-api).
+type customSeriesID struct {
+	objective                              bool
+	metric, severity, recipeID, name, mode string
+}
+
+func customRowID(r ResolvedThreshold) customSeriesID {
+	return customSeriesID{metric: r.Metric, severity: r.Severity,
+		recipeID: r.CustomLabels["recipe_id"], name: r.CustomLabels["name"], mode: r.CustomLabels["mode"]}
+}
+
+// customAlertSeriesCollision reports whether a series of one resolved
+// custom alert (rows, obj) is already in owner, and which entry serves it.
+func customAlertSeriesCollision(rows []ResolvedThreshold, obj *ResolvedSloObjective, owner map[customSeriesID]int) (CustomAlertDuplicate, bool) {
+	for _, r := range rows {
+		if of, taken := owner[customRowID(r)]; taken {
+			return CustomAlertDuplicate{Of: of, Series: fmt.Sprintf(
+				"user_threshold{component=%q, metric=%q, severity=%q, recipe_id=%q, name=%q, mode=%q}",
+				r.Component, r.Metric, r.Severity, r.CustomLabels["recipe_id"], r.CustomLabels["name"], r.CustomLabels["mode"])}, true
+		}
+	}
+	if obj != nil {
+		if of, taken := owner[customSeriesID{objective: true, recipeID: obj.RecipeID}]; taken {
+			return CustomAlertDuplicate{Of: of, Series: fmt.Sprintf("user_slo_objective{recipe_id=%q}", obj.RecipeID)}, true
+		}
+	}
+	return CustomAlertDuplicate{}, false
 }
 
 // MaxCustomRecipesDefault mirrors the Python loader's MAX_CUSTOM_RECIPES_DEFAULT

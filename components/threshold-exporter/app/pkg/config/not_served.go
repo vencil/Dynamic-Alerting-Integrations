@@ -36,6 +36,9 @@ package config
 //     FlatBuild.UnreachableValues through undeliverableThresholds).
 //   - root_null_undeclared: the root writes the key as null (#2518,
 //     FlatBuild.RootNullUndeclared).
+//   - spelling_duplicate: the winning layer's map writes the threshold
+//     under another spelling too, and the decode keeps that one
+//     (normalizeKeys, #2031; keyed by the losing spelling as written).
 //
 // ⚠️ NOT COVERED, stated so an empty NotServed is not read as "/metrics
 // serves what effective shows": a profile-layer value applyProfiles discards
@@ -67,6 +70,11 @@ const (
 	NotServedWindowInvalid         = "window_invalid"
 	NotServedUndeliverable         = "undeliverable"
 	NotServedRootNullUndeclared    = "root_null_undeclared"
+	// NotServedSpellingDuplicate (#2031): one layer — one file's map —
+	// writes a threshold under two spellings (two spellings of one
+	// dimensional key, or both #1231 spellings); /metrics serves one of them
+	// (keySpellings.dups).
+	NotServedSpellingDuplicate = "spelling_duplicate"
 )
 
 // NotServedKey is why /metrics does not serve one key of an effective config
@@ -237,8 +245,8 @@ func (r *rejectRecorder) note(tenant, key, reason string) {
 
 // ValueNotServedAsWritten reports whether a NotServed verdict on key is about
 // a threshold value as written that /metrics does not serve as written
-// (#2065): reason is value_unparsed, value_unparsed_dropped, window_invalid
-// or value_rejected, and key is a threshold key — not `_`-prefixed
+// (#2065): reason is value_unparsed, value_unparsed_dropped, window_invalid,
+// value_rejected or spelling_duplicate (#2031), and key is a threshold key — not `_`-prefixed
 // ("not reserved ⇒ is a threshold", the tenant schema's rule; a reserved
 // key a subtree `_defaults.yaml` writes is refused by the same overlay and
 // named by da-guard's subtree_default_reserved_key / routing checks). The
@@ -248,11 +256,29 @@ func ValueNotServedAsWritten(key, reason string) bool {
 	if strings.HasPrefix(key, "_") {
 		return false
 	}
-	switch reason {
-	case NotServedValueUnparsed, NotServedValueUnparsedDropped, NotServedWindowInvalid, NotServedValueRejected:
-		return true
+	for _, r := range valueNotServedReasons {
+		if reason == r {
+			return true
+		}
 	}
 	return false
+}
+
+// valueNotServedReasons is the reasons ValueNotServedAsWritten selects: the
+// ones whose cause is a value as written. spelling_duplicate (#2031): a
+// spelling of a threshold the same map also writes under the spelling
+// /metrics serves.
+var valueNotServedReasons = []string{
+	NotServedValueUnparsed, NotServedValueUnparsedDropped, NotServedWindowInvalid,
+	NotServedValueRejected, NotServedSpellingDuplicate,
+}
+
+// ValueNotServedReasons is a copy of the reasons ValueNotServedAsWritten
+// selects — the closed label set of the exporter's
+// da_config_values_not_served{reason}, so the gauge and da-guard's
+// value_not_served read one list.
+func ValueNotServedReasons() []string {
+	return append([]string(nil), valueNotServedReasons...)
 }
 
 // ValuesNotServed is what the resolver behind /metrics records about the

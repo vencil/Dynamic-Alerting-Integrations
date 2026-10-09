@@ -147,6 +147,15 @@ type EffectiveConfig struct {
 	// which do not pay for it. Not serialized, like BoundProfile.
 	KeySources map[string]KeySource `json:"-"`
 
+	// KeySpellings maps a key of EffectiveConfig to the spelling the layer
+	// that supplied its value wrote it in, where that is not the key itself
+	// (#2031): every layer's map is keyed by the canonical dimensional
+	// spelling before the merge, so EffectiveConfig, KeySources, NotServed
+	// and the overlays' Keys hold that spelling. AsWritten gives them back
+	// as written; da-guard's findings are spelled through it. nil when no
+	// layer re-spelled a key the tenant is shown. Not serialized.
+	KeySpellings map[string]string `json:"-"`
+
 	// MergedConfig is the leaf-by-leaf merge merged_hash hashes — each
 	// layer's own spelling side by side, a schedule merged with the one
 	// below — where EffectiveConfig is built per threshold from the same
@@ -202,7 +211,9 @@ func ResolveEffective(configDir, tenantID string) (*EffectiveConfig, error) {
 		}
 		r.served = newServedVerdicts(&built, false)
 	}
-	return r.resolve(tenantID)
+	ec, err := r.resolve(tenantID)
+	// #2031: tenant-api's /effective shows every key as written.
+	return ec.AsWritten(), err
 }
 
 // discardLogger silences the walker for the library readers. ⛔ Deliberate:
@@ -249,8 +260,9 @@ type effectiveResolver struct {
 	withSources bool
 	// chainBlocks is each chain file's defaults block parsed once per
 	// resolver (keyed by absolute path), for the reported view
-	// (effectiveView, #2115) and the attribution.
-	chainBlocks map[string]map[string]any
+	// (effectiveView, #2115), the attribution and the level's spellings
+	// (#2031).
+	chainBlocks map[string]ChainDefaults
 
 	// served is the exporter's build's not-served tables (#2296): with it,
 	// resolve fills NotServed and reads a chain file the build dropped for a
@@ -386,7 +398,8 @@ func (r *effectiveResolver) resolve(tenantID string) (*EffectiveConfig, error) {
 	}
 
 	overlay := PlatformOverlayFor(r.platformTenants(), tenantID)
-	parts, err := computeEffectiveConfigDocAt(r.tenantDoc(tenantFile, tenantBytes), tenantID, defaultsYAML, overlay, r.platformProfiles(), rootLevel)
+	doc := r.tenantDoc(tenantFile, tenantBytes)
+	parts, err := computeEffectiveConfigDocAt(doc, tenantID, defaultsYAML, overlay, r.platformProfiles(), rootLevel)
 	if err != nil {
 		// #2123: name the file whose bytes the decode rejected, so a caller
 		// can tell "this file is broken" from any other resolve failure
@@ -417,9 +430,14 @@ func (r *effectiveResolver) resolve(tenantID string) (*EffectiveConfig, error) {
 	// #2115: the reported config is laid per threshold, as /metrics serves
 	// it (effectiveView); merged_hash above stays the merge's own.
 	blocks := make([]map[string]any, len(chain))
+	spells := layerSpellings{tenant: doc.spell[tenantID]}
 	for i, p := range chain {
-		blocks[i] = r.chainBlock(p, defaultsYAML[i])
+		cd := r.chainBlock(p, defaultsYAML[i])
+		blocks[i] = cd.block
+		spells.addChain(i, len(chain), cd.spell)
 	}
+	spells.addPlatform(overlay)
+	spells.addProfile(r.platformProfiles(), parts.profile)
 	view := effectiveView(blocks, parts.override)
 
 	ec := &EffectiveConfig{
@@ -441,7 +459,7 @@ func (r *effectiveResolver) resolve(tenantID string) (*EffectiveConfig, error) {
 	if r.served != nil {
 		unparsed = r.served.unparsedOf(tenantID)
 	}
-	if r.withSources || (r.served != nil && r.served.candidates(tenantID, relChain, unparsed)) {
+	if r.withSources || spells.any() || (r.served != nil && r.served.candidates(tenantID, relChain, unparsed)) {
 		ks, err := keySources(view, parts.tenantRaw, ec.SourceFile, relChain, blocks,
 			overlay, parts.platformSources, parts.profileSources)
 		if err != nil {
@@ -453,6 +471,16 @@ func (r *effectiveResolver) resolve(tenantID string) (*EffectiveConfig, error) {
 		if r.served != nil {
 			ec.NotServed = r.served.notServed(tenantID, view, ks, rootLevel, unparsed)
 		}
+		// #2031: the spelling each key's winning layer wrote, and the
+		// spellings a layer wrote beside the one /metrics serves.
+		var dups map[string]NotServedKey
+		ec.KeySpellings, dups = spells.forView(view, ks)
+		for k, ns := range dups {
+			if ec.NotServed == nil {
+				ec.NotServed = map[string]NotServedKey{}
+			}
+			ec.NotServed[k] = ns
+		}
 	}
 	return ec, nil
 }
@@ -461,16 +489,16 @@ func (r *effectiveResolver) resolve(tenantID string) (*EffectiveConfig, error) {
 // (ParseChainDefaults — the parse foldDefaults folds), once per resolver.
 // The merge has already succeeded over these bytes, so a parse error cannot
 // reach here; a block that is not a mapping is nil, as the merge skips it.
-func (r *effectiveResolver) chainBlock(absPath string, b []byte) map[string]any {
-	if blk, ok := r.chainBlocks[absPath]; ok {
-		return blk
+func (r *effectiveResolver) chainBlock(absPath string, b []byte) ChainDefaults {
+	if cd, ok := r.chainBlocks[absPath]; ok {
+		return cd
 	}
 	if r.chainBlocks == nil {
-		r.chainBlocks = make(map[string]map[string]any)
+		r.chainBlocks = make(map[string]ChainDefaults)
 	}
-	blk := ParseChainDefaults(b).block
-	r.chainBlocks[absPath] = blk
-	return blk
+	cd := ParseChainDefaults(b)
+	r.chainBlocks[absPath] = cd
+	return cd
 }
 
 // ============================================================
@@ -540,8 +568,8 @@ func computeEffectiveConfigBytesDetailed(
 // implementation: the byte form above only parses and calls it.
 //
 // It does not know which chain entry is the conf.d root's `_defaults.yaml`,
-// so its mergedDefaults keeps a root-only dimensional key (#2419) and a
-// root-only `_critical` key (#2544; see computeEffectiveConfigDocAt); only
+// so its mergedDefaults keeps a root-only `_critical` key (#2544; see
+// computeEffectiveConfigDocAt); only
 // ResolveEffective, which knows the chain's paths, hands da-guard a
 // mergedDefaults without them.
 func computeEffectiveConfigDocDetailed(
@@ -559,15 +587,6 @@ func computeEffectiveConfigDocDetailed(
 // `_defaults.yaml`, or -1 when the chain has none or the caller does not
 // know. The merged config does not depend on it; only mergedDefaults does.
 //
-// ⛔ #2419: a dimensional key (`mysql_connections{env="prod"}`) that only
-// the root level writes is no fallback. On /metrics the root's defaults go
-// to cfg.Defaults, where resolveBaseRows serves the key as its own row
-// (metric `connections{env="prod"}`, no labels), while the labelled series
-// comes only from the tenant's override map (resolveDimensionalRows) — which
-// a SUBTREE level fills (applySubtreeDefaults) and the root level does not.
-// Measured before the fix: root and tenant both at 30, da-guard called the
-// tenant's key redundant, and deleting it removed the `env="prod"` series.
-//
 // ⛔ #2544: a `<metric>_critical` key (either #1231 spelling) that only the
 // root level writes is the same shape. The root's key is served as a row of
 // its own (metric `connections_critical`, severity=warning), while the
@@ -583,18 +602,22 @@ func computeEffectiveConfigDocAt(
 	profiles *PlatformProfiles,
 	rootLevel int,
 ) (effectiveParts, error) {
-	// Parse-and-fold one file at a time (no []ChainDefaults: this is the
-	// debounced path's per-tenant call, and a slice per call was +1 alloc
-	// per re-merged tenant). A file after a broken one is never parsed.
+	// Parse-and-fold one file at a time. A file after a broken one is never
+	// parsed. ⚠️ This is the debounced path's per-tenant call: a heap slice
+	// per call was +1 alloc per re-merged tenant, so the parses mergedAsWritten
+	// reads sit in a stack buffer for a chain of usual depth.
 	var err error
 	var writers map[string]int      // #2414: deepest chain level per aliased spelling
-	var subtreeDims map[string]bool // #2419 / #2544: tenant-map-only keys a non-root level writes
+	var subtreeDims map[string]bool // #2544: tenant-map-only keys a non-root level writes
+	var buf [8]ChainDefaults
+	parsed := buf[:0]
 	merged := make(map[string]any)
 	for i, defBytes := range defaultsChainYAML {
 		pd := ParseChainDefaults(defBytes)
 		if merged, err = foldDefaults(merged, i, pd); err != nil {
 			return effectiveParts{}, err
 		}
+		parsed = append(parsed, pd)
 		writers = noteSpellingWriters(writers, i, pd.block)
 		if rootLevel >= 0 && i != rootLevel {
 			subtreeDims = noteTenantMapOnlyWriters(subtreeDims, pd.block)
@@ -606,6 +629,7 @@ func computeEffectiveConfigDocAt(
 	if err != nil {
 		return effectiveParts{}, err
 	}
+	p.merged = mergedAsWritten(p.merged, parsed, tenantDoc.spell[tenantID], p.effectiveParts, overlay, profiles)
 
 	// The merged-defaults state BEFORE the tenant override: `chain` is
 	// untouched by the merge above (deepMerge copies its base), and is
@@ -639,12 +663,12 @@ func computeEffectiveConfigDocAt(
 	// subtree level's value down over any other spelling a shallower level
 	// set, so that shallower spelling is no fallback either.
 	//
-	// And a dimensional key only the root level writes is dropped (#2419,
-	// dropRootOnlyTenantMapKeys): no labelled series falls back to it. Same
-	// for a `_critical` key only the root level writes (#2544): no critical
-	// row falls back to it. The platform entry and the profile layered on
-	// below DO reach the tenant's override map, so a key of either shape they
-	// write stays a fallback.
+	// And a `_critical` key only the root level writes is dropped (#2544,
+	// dropRootOnlyTenantMapKeys): no critical row falls back to it. The
+	// platform entry and the profile layered on below DO reach the tenant's
+	// override map, so such a key they write stays a fallback. (A root-only
+	// dimensional key, #2419, is a fallback since #2031: resolveDimensionalRows
+	// serves it as the labelled series for a tenant that does not write it.)
 	chainD := dropRootOnlyTenantMapKeys(
 		dropShadowedSpellings(dropShallowerSpellings(chain, writers)), rootLevel, subtreeDims)
 	switch {
@@ -710,21 +734,13 @@ func isCriticalRowKey(k string) bool {
 		!strings.HasPrefix(k, "_state_") && !strings.HasPrefix(k, "_silent_")
 }
 
-// servedFromTenantMapOnly reports whether a key's rows come only from the
-// tenant's override map — a dimensional key (#2419) or a `_critical` key
-// (#2544) — so the root `_defaults.yaml`, which does not fill that map, is
-// no fallback for it.
-func servedFromTenantMapOnly(k string) bool {
-	return isDimensionalKey(k) || isCriticalRowKey(k)
-}
-
-// noteTenantMapOnlyWriters records the servedFromTenantMapOnly keys one
+// noteTenantMapOnlyWriters records the `_critical` keys (isCriticalRowKey) one
 // non-root chain level writes — "writes" being levelWritesSpelling, the
 // predicate applySubtreeDefaults uses to decide what it hands the tenant's
 // override map. s stays nil until one is seen.
 func noteTenantMapOnlyWriters(s map[string]bool, block map[string]any) map[string]bool {
 	for k := range block {
-		if !servedFromTenantMapOnly(k) || !levelWritesSpelling(block, k) {
+		if !isCriticalRowKey(k) || !levelWritesSpelling(block, k) {
 			continue
 		}
 		if s == nil {
@@ -736,7 +752,8 @@ func noteTenantMapOnlyWriters(s map[string]bool, block map[string]any) map[strin
 }
 
 // dropRootOnlyTenantMapKeys is the merged chain without the
-// servedFromTenantMapOnly keys no non-root level writes (#2419, #2544; see
+// `_critical` keys no non-root level writes (#2544: their critical row comes
+// only from the tenant's override map, which the root does not fill; see
 // computeEffectiveConfigDocAt). With rootLevel < 0 nothing is dropped.
 // Returns m itself when nothing is dropped.
 func dropRootOnlyTenantMapKeys(m map[string]any, rootLevel int, subtreeWrites map[string]bool) map[string]any {
@@ -745,7 +762,7 @@ func dropRootOnlyTenantMapKeys(m map[string]any, rootLevel int, subtreeWrites ma
 	}
 	var drop []string
 	for k := range m {
-		if servedFromTenantMapOnly(k) && !subtreeWrites[k] {
+		if isCriticalRowKey(k) && !subtreeWrites[k] {
 			drop = append(drop, k)
 		}
 	}
@@ -879,6 +896,9 @@ func mergeOverSpellings(base, over map[string]any) map[string]any {
 type ChainDefaults struct {
 	block map[string]any // nil: the document has no defaults mapping (skipped by the merge)
 	err   error          // the yaml.Unmarshal error, unwrapped
+	// spell is what normalizeKeys changed in block (#2031): the level's own
+	// spellings and the thresholds it writes twice. nil: nothing.
+	spell *keySpellings
 }
 
 // ParseChainDefaults parses one defaults file's bytes for
@@ -890,7 +910,8 @@ func ParseChainDefaults(b []byte) ChainDefaults {
 	if err := yaml.Unmarshal(b, &raw); err != nil {
 		return ChainDefaults{err: err}
 	}
-	return ChainDefaults{block: extractDefaultsBlock(normalizeYAMLToJSON(raw))}
+	block, spell := normalizeKeys(extractDefaultsBlock(normalizeYAMLToJSON(raw)))
+	return ChainDefaults{block: block, spell: spell}
 }
 
 // mergeDefaultsChain folds the chain L0→Ln. The first entry that failed to
@@ -945,6 +966,9 @@ func foldDefaults(merged map[string]any, i int, pd ChainDefaults) (map[string]an
 type TenantDoc struct {
 	doc any   // normalizeYAMLToJSON of the document; nil when err != nil
 	err error // the yaml.Unmarshal error, unwrapped
+	// spell is, per tenant id, what normalizeKeys changed in its block
+	// (#2031). nil: nothing, for every tenant.
+	spell map[string]*keySpellings
 }
 
 // ParseTenantDoc parses one tenant file's bytes for the *Doc merge entry
@@ -954,7 +978,30 @@ func ParseTenantDoc(b []byte) *TenantDoc {
 	if err != nil {
 		return &TenantDoc{err: err}
 	}
-	return &TenantDoc{doc: doc}
+	d := &TenantDoc{doc: doc}
+	// #2031: each tenant's block keyed by the canonical dimensional
+	// spelling, before any merge reads it (normalizeKeys). The shared
+	// document is re-keyed here, once; tenantRaw copies from it.
+	if m, ok := doc.(map[string]any); ok {
+		if block, ok := m["tenants"].(map[string]any); ok {
+			for tid, body := range block {
+				b, ok := body.(map[string]any)
+				if !ok {
+					continue
+				}
+				nb, s := normalizeKeys(b)
+				if s == nil {
+					continue
+				}
+				block[tid] = nb
+				if d.spell == nil {
+					d.spell = make(map[string]*keySpellings)
+				}
+				d.spell[tid] = s
+			}
+		}
+	}
+	return d
 }
 
 // TenantRaw is tenantID's override block from the parsed file — a fresh
@@ -1550,7 +1597,7 @@ func ComputeMergedHashFromChainDoc(
 	if err != nil {
 		return "", err
 	}
-	return mergedHashOf(tm.merged)
+	return mergedHashOf(mergedAsWritten(tm.merged, defaultsChain, tenantDoc.spell[tenantID], tm.effectiveParts, l.Overlay, l.Profiles))
 }
 
 // mergedHashOf is SHA-256 over CanonicalJSON(merged), truncated to 16 hex.

@@ -70,10 +70,10 @@ type flatScanState struct {
 	parseFailed []string
 
 	// rejected is config.RejectedShownCache.Shown of the commit's scan and build
-	// (#2065): tenant → key → the subtree defaults file whose refused value
-	// the tenant is shown — the effective resolver's value_rejected verdict. Read by the values-not-served audit
-	// (config_values_not_served.go); nil on the flat incremental path, whose
-	// tree holds no `_defaults` file.
+	// (#2065): tenant → key → the effective resolver's value_rejected or
+	// spelling_duplicate (#2031) verdict on it. Read by the values-not-served audit
+	// (config_values_not_served.go). On the flat incremental path, whose tree
+	// holds no `_defaults` file, only spelling_duplicate.
 	rejected map[string]map[string]string
 }
 
@@ -1051,6 +1051,11 @@ func (m *ConfigManager) incrementalLoadFrom(scan *treeScan) error {
 	merged.ApplyProfiles()
 	refreshTenantSources()
 
+	// #2031: a tenant or platform file writing a threshold under two
+	// spellings is counted here too (spelling_duplicate). This tree has no
+	// `_defaults` file, so no value_rejected; the build is the merge above
+	// and the partials it was merged from.
+	rejected := m.rejectedShown.Shown(scan, &config.FlatBuild{Config: merged, FileConfigs: newConfigs})
 	scan.ReleaseData()
 	m.commitConfig(&merged, compositeHash, &flatScanState{
 		hashes:      newHashes,
@@ -1058,6 +1063,7 @@ func (m *ConfigManager) incrementalLoadFrom(scan *treeScan) error {
 		mtimes:      newMtimes,
 		tree:        scan,
 		parseFailed: incrementalParseFailed(scan, oldParseFailed, reparse, reparseFailed),
+		rejected:    rejected,
 	}, fmt.Sprintf("Config reloaded (incremental, %d changed, %d added, %d removed)", len(changed), len(added), len(removed)))
 	return nil
 }

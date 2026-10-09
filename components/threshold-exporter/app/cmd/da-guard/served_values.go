@@ -233,7 +233,7 @@ func runServedValues(args []string, stdout, errOut io.Writer) int {
 		}
 	}
 
-	cfg, rep, err := config.LoadDirReport(f.configDir, log.New(errOut, "", 0))
+	cfg, rep, written, err := config.LoadDirReportWritten(f.configDir, log.New(errOut, "", 0))
 	// A tree whose every config file is unreadable is not "no .yaml files"
 	// (#2627): the exporter serves nothing from it, so the document carries
 	// no tenant and names the files in unreadable (exit 3), as effective and
@@ -255,11 +255,12 @@ func runServedValues(args []string, stdout, errOut io.Writer) int {
 			fmt.Fprintf(errOut, "%s %s: %v\n", programName, servedValuesCmd, err)
 			return exitCallerErr
 		}
-		tenants, err = servedValues(cfg, at, rep.Undeliverable, f.schedules)
+		tenants, err = servedValues(cfg, at, rep.Undeliverable, f.schedules, written)
 		if err != nil {
 			fmt.Fprintf(errOut, "%s %s: %v\n", programName, servedValuesCmd, err)
 			return exitCallerErr
 		}
+		spellAsWritten(tenants, written)
 	}
 	parseFailed := rep.ParseFailed
 	if parseFailed == nil {
@@ -406,8 +407,10 @@ func joinPath(path, name string) string {
 // also fills Schedules (--schedules).
 func servedValues(cfg *config.ThresholdConfig, at time.Time,
 	undeliverable map[string]map[string]config.ScheduledValue, withSchedules bool,
+	written map[string]map[string]string,
 ) (map[string]servedTenantValues, error) {
-	ownedBy, droppedBy, res, err := keyedRows(cfg, at)
+	name := func(tenant, key string) string { return config.WrittenKey(written[tenant], key) }
+	ownedBy, droppedBy, res, err := keyedRows(cfg, at, name)
 	if err != nil {
 		return nil, err
 	}
@@ -514,6 +517,16 @@ func servedValues(cfg *config.ThresholdConfig, at time.Time,
 			}
 			tv.Unserved[k] = rawScheduledValue(sv)
 		}
+		// #2031: a root dimensional default the tenant does not write is the
+		// tenant's labelled series; one with no row is unserved.
+		for k, v := range cfg.Defaults {
+			canon, _ := config.CanonicalKeyFor(k)
+			_, own := overrides[canon]
+			if _, served := tv.Values[canon]; served || own || !strings.Contains(k, "{") {
+				continue
+			}
+			tv.Unserved[k] = v
+		}
 		// #1976: the build's own verdict (LoadReport.Undeliverable:
 		// FlatBuild.Unreachable minus what undeliverableThresholds leaves
 		// out), never re-judged here. Invariant, so no membership check: such
@@ -534,11 +547,43 @@ func servedValues(cfg *config.ThresholdConfig, at time.Time,
 		out[tenant] = tv
 	}
 	if withSchedules {
-		if err := addSchedules(cfg, at, out, res.ThresholdExpiries); err != nil {
+		if err := addSchedules(cfg, at, out, res.ThresholdExpiries, name); err != nil {
 			return nil, err
 		}
 	}
 	return out, nil
+}
+
+// spellAsWritten re-keys each tenant's maps with its keys as written
+// (config.LoadDirReportWritten, #2031): the exporter's config keys a dimensional
+// key by its canonical spelling, and `da-guard effective` shows it as the
+// layer that supplied it wrote it — a reader joins the two documents by key.
+// The base keeps this document's canonical #1231 spelling (config.WrittenKey).
+func spellAsWritten(tenants map[string]servedTenantValues, written map[string]map[string]string) {
+	for tenant, tv := range tenants {
+		w := written[tenant]
+		if len(w) == 0 {
+			continue
+		}
+		name := func(k string) string { return config.WrittenKey(w, k) }
+		tv.Values = renamed(tv.Values, name)
+		tv.Severities = renamed(tv.Severities, name)
+		tv.Unserved = renamed(tv.Unserved, name)
+		tv.Dropped = renamed(tv.Dropped, name)
+		if tv.Schedules != nil {
+			s := renamed(*tv.Schedules, name)
+			tv.Schedules = &s
+		}
+		tenants[tenant] = tv
+	}
+}
+
+func renamed[V any](m map[string]V, name func(string) string) map[string]V {
+	out := make(map[string]V, len(m))
+	for k, v := range m {
+		out[name(k)] = v
+	}
+	return out
 }
 
 // keyedRows gathers, at `at`, the registry the exporter's /metrics serves —
@@ -559,7 +604,84 @@ func servedValues(cfg *config.ThresholdConfig, at time.Time,
 // config, so no tree can make it fail. The config metrics are a fresh set,
 // registered so a name the collector emits that collides with one of them
 // fails here as it would on /metrics; the collector writes nothing to them.
-func keyedRows(cfg *config.ThresholdConfig, at time.Time) (
+//
+// That failure is a *notGatherableError: the main gate's
+// metrics_not_gatherable reads this same verdict (gatherVerdict, #2031).
+func keyedRows(cfg *config.ThresholdConfig, at time.Time, name keyNamer) (
+	served map[string]map[string][]config.ResolvedThreshold, dropped map[string]map[string][]string,
+	reserved scrape.Reserved, err error,
+) {
+	return keyedRowsWith(cfg, at, (*config.ThresholdConfig).ResolveAtWithKeys, name)
+}
+
+// keyNamer spells a key of the exporter's config for a message: as written
+// (#2031).
+type keyNamer func(tenant, key string) string
+
+// writtenNamer is a keyNamer over the written-key table written returns
+// (config.WrittenKey), asked for it only when a key is first named — a
+// Gather that fails — so a caller may compute it lazily.
+func writtenNamer(written func() map[string]map[string]string) keyNamer {
+	var w map[string]map[string]string
+	done := false
+	return func(tenant, key string) string {
+		if !done {
+			w, done = written(), true
+		}
+		return config.WrittenKey(w[tenant], key)
+	}
+}
+
+// notGatherableError is keyedRows' verdict that the exporter's /metrics
+// cannot be gathered for the tree: the config keys behind it when they can
+// be named (sameSeriesKeys), and client_golang's error.
+type notGatherableError struct {
+	keys string
+	err  error
+}
+
+// Error is verdict, with client_golang's text only when no key is named: that
+// text quotes the series' values in collection order, which differs between
+// runs of one tree.
+func (e *notGatherableError) Error() string {
+	if e.keys != "" {
+		return e.verdict()
+	}
+	return e.verdict() + ": " + e.err.Error()
+}
+
+// verdict is the error without client_golang's text: the main gate's finding
+// message, the same for one tree on every run.
+func (e *notGatherableError) verdict() string {
+	return "the exporter's /metrics cannot be gathered for this tree, so its scrape fails " +
+		"as a whole (HTTP 500) and nothing is served" + e.keys
+}
+
+// gatherVerdict is keyedRows' Gather verdict over cfg at every schedule cut
+// of the day (ScheduleCuts; `at` only for expiry readings), read with the
+// resolver's WARN lines discarded: the first notGatherableError.verdict, ""
+// when /metrics can be gathered all day (or when the reading failed for
+// another reason, which served-values reports). For the main gate's
+// metrics_not_gatherable (#2031).
+func gatherVerdict(cfg *config.ThresholdConfig, at time.Time, name keyNamer) string {
+	if cfg == nil {
+		return ""
+	}
+	for _, m := range cfg.ScheduleCuts() {
+		_, _, _, err := keyedRowsWith(cfg.AtMinuteOfDay(m), at, (*config.ThresholdConfig).ResolveAtWithKeysSilent, name)
+		var ng *notGatherableError
+		if errors.As(err, &ng) {
+			return ng.verdict()
+		}
+	}
+	return ""
+}
+
+// keyedRowsWith is keyedRows with the user_threshold resolve as a parameter.
+func keyedRowsWith(cfg *config.ThresholdConfig, at time.Time,
+	resolve func(*config.ThresholdConfig, time.Time) ([]config.KeyedThreshold, config.ResolveStats, error),
+	name keyNamer,
+) (
 	served map[string]map[string][]config.ResolvedThreshold, dropped map[string]map[string][]string,
 	reserved scrape.Reserved, err error,
 ) {
@@ -572,7 +694,7 @@ func keyedRows(cfg *config.ThresholdConfig, at time.Time) (
 		Now: func() time.Time { return at },
 		Resolve: func(c *config.ThresholdConfig, now time.Time) ([]config.ResolvedThreshold, config.ResolveStats) {
 			var stats config.ResolveStats
-			keyed, stats, keyErr = c.ResolveAtWithKeys(now)
+			keyed, stats, keyErr = resolve(c, now)
 			rows := make([]config.ResolvedThreshold, len(keyed))
 			for i, k := range keyed {
 				rows[i] = k.ResolvedThreshold
@@ -595,8 +717,7 @@ func keyedRows(cfg *config.ThresholdConfig, at time.Time) (
 		return nil, nil, scrape.Reserved{}, keyErr
 	}
 	if gerr != nil {
-		return nil, nil, scrape.Reserved{}, fmt.Errorf("the exporter's /metrics cannot be gathered for this tree, so its scrape fails "+
-			"as a whole (HTTP 500) and nothing is served%s: %v", sameSeriesKeys(keyed, results), gerr)
+		return nil, nil, scrape.Reserved{}, &notGatherableError{keys: sameSeriesKeys(keyed, results, name), err: gerr}
 	}
 	if observed != 1 {
 		return nil, nil, scrape.Reserved{}, fmt.Errorf("internal: the collector reported its reserved-key readings %d times, want 1", observed)
@@ -673,11 +794,16 @@ type emitResult struct {
 }
 
 // sameSeriesKeys names, for the Gather error message only, the keys of rows
-// whose built metrics carry the same label set. Gather has already decided
-// the tree fails; this just points at the config keys behind it.
-func sameSeriesKeys(keyed []config.KeyedThreshold, results []emitResult) string {
-	seen := map[string]string{}
-	var named []string
+// whose built metrics carry the same label set, spelled by name: every key of
+// one series together, sorted, and the series sorted, so the message does not
+// depend on map order. Gather has already decided the tree fails; this just
+// points at the config keys behind it.
+func sameSeriesKeys(keyed []config.KeyedThreshold, results []emitResult, name keyNamer) string {
+	type series struct {
+		tenant, labels string
+		keys           []string
+	}
+	byID := map[string]*series{}
 	for i, r := range results {
 		if r.metric == nil {
 			continue
@@ -692,16 +818,28 @@ func sameSeriesKeys(keyed []config.KeyedThreshold, results []emitResult) string 
 		}
 		sort.Strings(pairs)
 		id := keyed[i].Tenant + "\x00" + strings.Join(pairs, ",")
-		if first, dup := seen[id]; dup {
-			named = append(named, fmt.Sprintf("tenant %s: keys %q and %q give one series user_threshold{%s}",
-				keyed[i].Tenant, first, keyed[i].Key, strings.Join(pairs, ",")))
+		if byID[id] == nil {
+			byID[id] = &series{tenant: keyed[i].Tenant, labels: strings.Join(pairs, ",")}
+		}
+		byID[id].keys = append(byID[id].keys, name(keyed[i].Tenant, keyed[i].Key))
+	}
+	var named []string
+	for _, s := range byID {
+		if len(s.keys) < 2 {
 			continue
 		}
-		seen[id] = keyed[i].Key
+		sort.Strings(s.keys)
+		for i, k := range s.keys {
+			s.keys[i] = strconv.Quote(k)
+		}
+		last := len(s.keys) - 1
+		named = append(named, fmt.Sprintf("tenant %s: keys %s and %s give one series user_threshold{%s}",
+			s.tenant, strings.Join(s.keys[:last], ", "), s.keys[last], s.labels))
 	}
 	if len(named) == 0 {
 		return ""
 	}
+	sort.Strings(named)
 	return " (" + strings.Join(named, "; ") + ")"
 }
 

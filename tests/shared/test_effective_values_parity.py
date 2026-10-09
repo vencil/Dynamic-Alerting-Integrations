@@ -372,6 +372,7 @@ def test_effective_without_not_served_is_named_too_old(tmp_path):
     ("mysql_connections_critical", "value_unparsed_dropped", True),
     ("mysql_connections", "window_invalid", True),
     ("mysql_connections", "value_rejected", True),
+    ('mysql_connections{q="a"}', "spelling_duplicate", True),  # #2031
     ("_routing_defaults", "value_rejected", False),
     ("_state_maintenance", "window_invalid", False),
     ("mysql_connections", "undeliverable", False),

@@ -117,9 +117,9 @@ func TestCollector_Collect_ThresholdExpiry_EmitsEvent(t *testing.T) {
 	collector := NewThresholdCollector(manager)
 
 	expected := `
-# HELP da_config_event Config lifecycle event (1=event active). Emitted when timed config expires. Labels identify tenant, event type and reason; target_severity is set for silence_expired and empty for other events.
+# HELP da_config_event Config lifecycle event (1=event active). Emitted when timed config expires. Labels identify tenant, event type and reason; target_severity is set for silence_expired and metric_key for threshold_expired, each empty for the other events.
 # TYPE da_config_event gauge
-da_config_event{event="threshold_expired",reason="mysql_connections: incident #1234",target_severity="",tenant="db-a"} 1
+da_config_event{event="threshold_expired",metric_key="mysql_connections",reason="mysql_connections: incident #1234",target_severity="",tenant="db-a"} 1
 `
 	if err := testutil.CollectAndCompare(collector, strings.NewReader(expected), "da_config_event"); err != nil {
 		t.Errorf("da_config_event mismatch: %v", err)
@@ -988,12 +988,12 @@ func TestCollector_ConfigEvent_ExpiredSilenceAllWithReason_ServesMetrics(t *test
 	}
 
 	expected := `
-# HELP da_config_event Config lifecycle event (1=event active). Emitted when timed config expires. Labels identify tenant, event type and reason; target_severity is set for silence_expired and empty for other events.
+# HELP da_config_event Config lifecycle event (1=event active). Emitted when timed config expires. Labels identify tenant, event type and reason; target_severity is set for silence_expired and metric_key for threshold_expired, each empty for the other events.
 # TYPE da_config_event gauge
-da_config_event{event="maintenance_expired",reason="window",target_severity="",tenant="tenant-y"} 1
-da_config_event{event="silence_expired",reason="DB maintenance",target_severity="critical",tenant="tenant-x"} 1
-da_config_event{event="silence_expired",reason="DB maintenance",target_severity="warning",tenant="tenant-x"} 1
-da_config_event{event="threshold_expired",reason="mysql_connections: incident",target_severity="",tenant="tenant-z"} 1
+da_config_event{event="maintenance_expired",metric_key="",reason="window",target_severity="",tenant="tenant-y"} 1
+da_config_event{event="silence_expired",metric_key="",reason="DB maintenance",target_severity="critical",tenant="tenant-x"} 1
+da_config_event{event="silence_expired",metric_key="",reason="DB maintenance",target_severity="warning",tenant="tenant-x"} 1
+da_config_event{event="threshold_expired",metric_key="mysql_connections",reason="mysql_connections: incident",target_severity="",tenant="tenant-z"} 1
 `
 	if err := testutil.CollectAndCompare(collector, strings.NewReader(expected), "da_config_event"); err != nil {
 		t.Errorf("da_config_event mismatch: %v", err)

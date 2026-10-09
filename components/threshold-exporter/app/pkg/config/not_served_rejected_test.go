@@ -38,7 +38,7 @@ func TestRejectedShownCache_FailedResolveIsNotCached(t *testing.T) {
 		scan.ReleaseData() // as the exporter's warm scan: bytes read back from disk
 		return scan, &built
 	}
-	want := map[string]map[string]string{"tx": {"mysql_connections": "team/_defaults.yaml"}}
+	want := map[string]map[string]string{"tx": {"mysql_connections": NotServedValueRejected}}
 
 	var c RejectedShownCache
 	scan, built := warm()

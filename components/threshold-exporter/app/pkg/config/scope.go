@@ -200,6 +200,17 @@ type ScopedTenants struct {
 	// are listed; nil when there is none.
 	RootNullUndeclared map[string][]RootNullKey
 
+	// Config is the exporter's own build of the WHOLE tree (FlatBuild.Config
+	// of the build the other fields are read off): what /metrics serves,
+	// whatever the scope — one series two keys share fails the scrape for
+	// every tenant. For da-guard's custom_alert_duplicate_series and
+	// metrics_not_gatherable (#2031). nil when the tree has no file.
+	Config *ThresholdConfig
+
+	// scan and built are what Config was read off, for WrittenKeys.
+	scan  *TreeScan
+	built *FlatBuild
+
 	// ScheduleNulls is every threshold, in a file the exporter reads that
 	// bears on the scope, written as a schedule with override windows and a
 	// null in it — refused at validation time (#2708, scopeScheduleNulls).
@@ -400,9 +411,13 @@ func scopeEffective(configDir, scopeDir string, wholeTree bool) (*ScopedTenants,
 		noTenant = noTenantKeys(scan)
 	}
 	if len(inScope) == 0 {
-		return &ScopedTenants{ParseFailed: parseFailed, DefaultsFiles: defaultsFiles, Unreadable: unreadable,
+		out := &ScopedTenants{ParseFailed: parseFailed, DefaultsFiles: defaultsFiles, Unreadable: unreadable,
 			NestedPlatformFiles: nestedFiles, RootListErr: rootListErr, DeclaredStateFilters: stateFilters,
-			NoTenant: noTenant}, nil
+			NoTenant: noTenant}
+		if built != nil { // #2031: the whole tree's /metrics, whatever the scope
+			out.Config, out.scan, out.built = &built.Config, scan, built
+		}
+		return out, nil
 	}
 
 	// Sort tenant IDs for deterministic output. The CLI's exit-code
@@ -439,6 +454,9 @@ func scopeEffective(configDir, scopeDir string, wholeTree bool) (*ScopedTenants,
 		DeclaredStateFilters:   stateFilters,
 		SubtreeRefusedVerdicts: applied,
 		ScheduleNulls:          scopeScheduleNulls(scan, filepath.ToSlash(rel), inScope, parseFailed),
+	}
+	if built != nil {
+		out.Config, out.scan, out.built = &built.Config, scan, built
 	}
 	// The build's verdicts, kept for the in-scope tenants only (#1976,
 	// #2518), and the reserved keys of the same build's subtree chain (#2388).
@@ -693,4 +711,15 @@ func pathAtOrBelow(p, dir string, wholeTree bool) bool {
 		return true
 	}
 	return strings.HasPrefix(p, dir+string(filepath.Separator))
+}
+
+// WrittenKeys is, over the whole tree, each tenant's
+// EffectiveConfig.KeySpellings (#2031; nil when none): how to spell a key of
+// Config as written. Resolved on each call; da-guard asks it only to name
+// the keys of a /metrics that cannot be gathered.
+func (s *ScopedTenants) WrittenKeys() map[string]map[string]string {
+	if s.built == nil {
+		return nil
+	}
+	return writtenKeys(s.scan, s.built)
 }

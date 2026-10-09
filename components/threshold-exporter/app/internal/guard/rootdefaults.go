@@ -216,9 +216,8 @@ func checkDefaultsWrapper(input CheckInput) []Finding {
 
 // FindingRootDefaultsCriticalKey (warn, TenantID ""; #2544): a
 // `<metric>_critical` key (either #1231 spelling) under the conf.d root
-// carrier's `defaults:` mapping. The exporter serves it as a threshold of its
-// own (metric `<metric>_critical`, severity=warning); it does not become
-// `<metric>`'s severity=critical row, which only a tenant's override map
+// carrier's `defaults:` mapping. It does not become `<metric>`'s
+// severity=critical row, which only a tenant's override map
 // carries (the tenant's own key, or one a subtree `_defaults.yaml`, a root
 // platform `tenants:` entry or a profile hands it). Field is
 // `<file>:defaults.<key>`. Not blocking (owner decision on #2544, option b).
@@ -258,16 +257,22 @@ func checkRootCriticalKeys(input CheckInput) []Finding {
 		sort.Strings(keys)
 		for _, k := range keys {
 			base := strings.TrimSuffix(k, "_critical")
+			// A key with a label segment (`x{a="1"}_critical`) is no row of
+			// its own (#2031): the clauses about its rows do not hold.
+			served, rest := "is not", "."
+			if !strings.Contains(k, "{") {
+				served = "is served as a threshold of its own (severity=warning), not as"
+				rest = fmt.Sprintf(": only a tenant's own `%s` (or one a subtree `_defaults.yaml`, a root platform "+
+					"`tenants:` entry or a profile supplies) produces that row. A tenant deleting its own `%s` falls "+
+					"back to this root value only on that separate warning series, never on the critical row, so the "+
+					"tenant's key is not reported redundant against it.", k, k)
+			}
 			out = append(out, Finding{
 				Severity: SeverityWarn,
 				Kind:     FindingRootDefaultsCriticalKey,
 				Field:    f.Name + ":defaults." + k,
-				Message: fmt.Sprintf("%s: `%s` under the conf.d root `defaults:` is served as a threshold of its own "+
-					"(severity=warning), not as the severity=critical row of `%s`: only a tenant's own `%s` "+
-					"(or one a subtree `_defaults.yaml`, a root platform `tenants:` entry or a profile supplies) "+
-					"produces that row. A tenant deleting its own `%s` falls back to this root value only on that "+
-					"separate warning series, never on the critical row, so the tenant's key is not reported "+
-					"redundant against it.", f.Name, k, base, k, k),
+				Message: fmt.Sprintf("%s: `%s` under the conf.d root `defaults:` %s the severity=critical row of `%s`%s",
+					f.Name, k, served, base, rest),
 			})
 		}
 	}

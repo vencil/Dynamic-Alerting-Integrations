@@ -41,7 +41,7 @@ import (
 // itself the run already failed (exit 2) before reaching here — servedValues'
 // Gather is that piece's.
 func addSchedules(cfg *config.ThresholdConfig, at time.Time, tenants map[string]servedTenantValues,
-	expiries []config.ResolvedThresholdExpiry,
+	expiries []config.ResolvedThresholdExpiry, name keyNamer,
 ) error {
 	cuts := cfg.ScheduleCuts()
 	ends := make([]int, len(cuts))
@@ -58,7 +58,7 @@ func addSchedules(cfg *config.ThresholdConfig, at time.Time, tenants map[string]
 	passes := make([]map[string]map[string]reading, len(cuts))
 	gatherErrs := make([]string, len(cuts))
 	for i, m := range cuts {
-		r, gerr, err := readingsAt(cfg.AtMinuteOfDay(m), at)
+		r, gerr, err := readingsAt(cfg.AtMinuteOfDay(m), at, name)
 		if err == nil && gerr != "" && i == cur {
 			err = fmt.Errorf("internal: the schedule reading at --at cannot be gathered, the served values could: %s", gerr)
 		}
@@ -170,7 +170,7 @@ func sameAsValues(tenant string, tv servedTenantValues, piece map[string]reading
 // builder drops is not served. gatherErr, when not empty, says why the
 // Gather fails — /metrics then serves nothing, so readings is nil; err is
 // any other failure.
-func readingsAt(cfg *config.ThresholdConfig, at time.Time) (readings map[string]map[string]reading, gatherErr string, err error) {
+func readingsAt(cfg *config.ThresholdConfig, at time.Time, name keyNamer) (readings map[string]map[string]reading, gatherErr string, err error) {
 	keyed, _, err := cfg.ResolveAtWithKeysSilent(at)
 	if err != nil {
 		return nil, "", err
@@ -185,8 +185,12 @@ func readingsAt(cfg *config.ThresholdConfig, at time.Time) (readings map[string]
 		results[i] = emitResult{reported: true, metric: m, err: err}
 	}})
 	if _, gerr := reg.Gather(); gerr != nil {
-		return nil, fmt.Sprintf("the exporter's /metrics cannot be gathered, so its scrape fails "+
-			"as a whole (HTTP 500) and nothing is served%s: %v", sameSeriesKeys(keyed, results), gerr), nil
+		msg := "the exporter's /metrics cannot be gathered, so its scrape fails " +
+			"as a whole (HTTP 500) and nothing is served"
+		if keys := sameSeriesKeys(keyed, results, name); keys != "" {
+			return nil, msg + keys, nil // as notGatherableError.Error
+		}
+		return nil, msg + ": " + gerr.Error(), nil
 	}
 	served, _, err := groupRows(keyed, results)
 	if err != nil {

@@ -153,6 +153,7 @@ func runEffective(args []string, stdout, errOut io.Writer) int {
 			doc.Skipped = append(doc.Skipped, skippedFile{File: name, Reason: config.NoTenantReason})
 		}
 		for _, ec := range tree.Tenants {
+			ec = ec.AsWritten() // #2031: every key as its layer wrote it
 			t := effectiveTenant{EffectiveConfig: *ec, KeySources: ec.KeySources,
 				NotServed: ec.NotServed, ChainParseFailed: ec.ChainParseFailed}
 			// A YAML `.inf` / `.nan` is sent as text, as tenant-api sends it.
