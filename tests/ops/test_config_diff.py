@@ -850,7 +850,7 @@ class TestProfileDiffEndToEnd:
             d.mkdir()
             (d / "_profiles.yaml").write_text(
                 f"profiles:\n  std:\n    mysql_connections: {cpu}\n", encoding="utf-8")
-            (d / "db-a.yaml").write_text("tenants:\n  db-a:\n    _profile: std\n",
+            (d / "tx.yaml").write_text("tenants:\n  tx:\n    _profile: std\n",
                                          encoding="utf-8")
         (new_dir / "_defaults.yaml").write_text(
             "defaults:\n  mysql_connections: 80\n  _profile: std\n", encoding="utf-8")
