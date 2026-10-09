@@ -404,6 +404,7 @@ func TestRoutingPolicyParityMatrix(t *testing.T) {
 func checkTenantAPIModel(t *testing.T, files map[string]string, tenantID string, block map[string]any, layers Layers, want parityTenantAPI) {
 	t.Helper()
 	var pols []Policy
+	unavailable := false
 	for _, name := range []string{"_domain_policy.yaml", "_domain_policy.yml"} {
 		src, ok := files[name]
 		if !ok {
@@ -411,7 +412,9 @@ func checkTenantAPIModel(t *testing.T, files map[string]string, tenantID string,
 		}
 		if DomainPoliciesShapeError([]byte(src)) != nil {
 			// #2659: tenant-api refuses the file (parseConfig), and its
-			// watcher, reading the tree at startup, has no last good.
+			// watcher, reading the tree at startup, has no last good: hub
+			// #2486 Q7-2, a direct-mode PUT answers 503 POLICY_UNAVAILABLE.
+			unavailable = true
 			continue
 		}
 		filePols, _, err := ParseDomainPolicies([]byte(src))
@@ -448,7 +451,9 @@ func checkTenantAPIModel(t *testing.T, files map[string]string, tenantID string,
 	}
 	put := "ok"
 	r, writesRouting := block["_routing"]
-	if verdict(block) {
+	if unavailable {
+		put = "503"
+	} else if verdict(block) {
 		put = "403"
 	} else if (writesRouting && RoutingNotMapping(r)) || writesBadReceiver(block) || len(ValuesNotString(block["_routing"])) > 0 ||
 		len(GroupByInvalidForTenant(tenantID, block["_routing"])) > 0 {

@@ -1,21 +1,31 @@
-"""The vendored gopkg.in/yaml.v3 is upstream v3.0.1 plus ONE hunk (#2681).
+"""The vendored gopkg.in/yaml.v3 is upstream v3.0.1 plus THREE pinned patches.
 
 Both Go modules replace ``gopkg.in/yaml.v3`` with
 ``components/threshold-exporter/app/third_party/yaml.v3``: upstream v3.0.1
-with grafana/go-yaml a1d5f0f's ``decode.go`` change (duplicate mapping keys
-checked through a hash map above 48 keys, so a large mapping no longer costs
-O(n²)). Nothing else from that fork may come along — its block-scalar encode,
-``Node.DecodeWithOptions``, ``0`` as a ``time.Duration`` and the upstream
-v3.0.2+ backports all change behaviour.
+with
+- grafana/go-yaml a1d5f0f's ``decode.go`` change (#2681: duplicate mapping
+  keys checked through a hash map above 48 keys, so a large mapping no longer
+  costs O(n²)). Nothing else from that fork may come along — its block-scalar
+  encode, ``Node.DecodeWithOptions``, ``0`` as a ``time.Duration`` and the
+  upstream v3.0.2+ backports all change behaviour;
+- this repo's own ``decode.go`` change (#2730 §6): a quoted or block scalar
+  written with the non-specific tag ``!`` keeps ``Tag == "!"`` on its node,
+  so the Go readers can read ``! "true"`` / ``! "<<"`` as PyYAML does;
+- this repo's own scanner switch (hub #2486 PR-7c round 6):
+  ``Decoder.SpacesOnly``, off by default, makes the scanner take only a space
+  as a separator, as PyYAML's does — the domain-policy readers turn it on,
+  nothing else does. ``yaml.go``, ``yamlh.go`` and ``scannerc.go``, several
+  hunks; with the switch off every branch is upstream's.
 
 How this is checked, without the network and without Go:
 
-1. The allowed change is the hunk in ``third_party/yaml.v3-uniquekeys.patch``,
-   and that file is pinned by SHA-256 here — widening what may differ means
-   editing this test, in the same diff a reviewer reads.
-2. The vendored ``decode.go`` must contain the hunk's new text exactly once.
-   Swapping it back for the hunk's old text has to give upstream's file.
-3. With that one swap, the whole directory's Go module hash (``h1:``, the
+1. The allowed changes are the hunks in the ``_PATCHES`` files, each file
+   pinned by SHA-256 and by the files and hunk counts it may touch — widening what may differ
+   means editing this test, in the same diff a reviewer reads.
+2. The vendored file each hunk patches must contain the hunk's new text
+   exactly once. Swapping them back for the hunks' old text, last applied
+   first, has to give upstream's files.
+3. With those swaps, the whole directory's Go module hash (``h1:``, the
    dirhash algorithm ``go.sum`` uses) must equal v3.0.1's, as published by
    sum.golang.org. That covers every other file, byte for byte, including
    files added or removed.
@@ -44,6 +54,8 @@ from _tree import repo_files
 _THIRD_PARTY = ROOT / "components" / "threshold-exporter" / "app" / "third_party"
 _VENDORED = _THIRD_PARTY / "yaml.v3"
 _PATCH = _THIRD_PARTY / "yaml.v3-uniquekeys.patch"
+_NONSPECIFIC_PATCH = _THIRD_PARTY / "yaml.v3-nonspecific-tag.patch"
+_SPACES_ONLY_PATCH = _THIRD_PARTY / "yaml.v3-spaces-only.patch"
 
 _MODULE = "gopkg.in/yaml.v3"
 _VERSION = "v3.0.1"
@@ -52,6 +64,18 @@ _UPSTREAM_H1 = "h1:fxVm/GzAzEWqLHuvctI91KS9hhNmmWOoWu0XTYJS7CA="
 # grafana/go-yaml a1d5f0f's decode.go hunk; its +/- lines are byte-identical
 # to that commit, only the @@ line numbers moved by -3 to land on v3.0.1.
 _PATCH_SHA256 = "32fd9b238124d4eb520292c97119b2eaed76b983b9d1bc2f16e6d0f429451b9a"
+# #2730 §6: (*parser).scalar keeps the tag "!" on a non-plain scalar.
+_NONSPECIFIC_PATCH_SHA256 = "e28069e759fe29c3645e48b0aee3af4d49062b6dd4ada440cc0256866a936964"
+# Hub #2486 PR-7c round 6: Decoder.SpacesOnly (off by default), the scanner
+# taking only a space as a separator, as PyYAML's does.
+_SPACES_ONLY_PATCH_SHA256 = "30987acac7b60084bf76703c8620140ceb78d5b1ecb7a817633b0b05557ec8fb"
+# Every allowed change, applied in this order on upstream v3.0.1: its pinned
+# sha256, and the hunks it may hold per file.
+_PATCHES = {
+    _PATCH: (_PATCH_SHA256, {"decode.go": 1}),
+    _NONSPECIFIC_PATCH: (_NONSPECIFIC_PATCH_SHA256, {"decode.go": 1}),
+    _SPACES_ONLY_PATCH: (_SPACES_ONLY_PATCH_SHA256, {"yaml.go": 1, "yamlh.go": 1, "scannerc.go": 15}),
+}
 
 # The modules that build with it, and the replace each must carry.
 _REPLACES = {
@@ -59,31 +83,53 @@ _REPLACES = {
     ROOT / "components" / "tenant-api" / "go.mod": "../threshold-exporter/app/third_party/yaml.v3",
 }
 
-_HUNK = re.compile(r"^@@ -\d+(?:,\d+)? \+\d+(?:,\d+)? @@")
+_HUNK = re.compile(r"^@@ -\d+(?:,(\d+))? \+\d+(?:,(\d+))? @@")
 
 
-def _hunk() -> tuple[str, str]:
-    """(old text, new text) of the patch's only hunk, against decode.go."""
-    lines = _PATCH.read_text(encoding="utf-8").splitlines(keepends=True)
-    assert lines[:2] == ["--- a/decode.go\n", "+++ b/decode.go\n"], (
-        f"{_PATCH.name} must patch decode.go and nothing else; it starts "
-        f"{lines[:2]!r}.")
-    headers = [i for i, line in enumerate(lines) if _HUNK.match(line)]
-    assert headers == [2], f"{_PATCH.name} must hold exactly one hunk, right after the header."
-    old: list[str] = []
-    new: list[str] = []
-    for line in lines[3:]:
-        tag, text = line[:1], line[1:]
-        if tag == " ":
-            old.append(text)
-            new.append(text)
-        elif tag == "-":
-            old.append(text)
-        elif tag == "+":
-            new.append(text)
-        else:
-            raise AssertionError(f"{_PATCH.name}: unexpected line {line!r}")
-    return "".join(old), "".join(new)
+def _hunks(patch: Path) -> list[tuple[str, str, str]]:
+    """(file, old text, new text) of each hunk of a unified diff, in order.
+
+    Each hunk is read by its header's line counts, so a removed line that
+    happens to start with `-- a/` cannot be taken for a file header."""
+    lines = patch.read_text(encoding="utf-8").splitlines(keepends=True)
+    out: list[tuple[str, str, str]] = []
+    i = 0
+    while i < len(lines):
+        head = lines[i:i + 2]
+        assert (len(head) == 2 and head[0].startswith("--- a/") and head[1].startswith("+++ b/")
+                and head[0][6:] == head[1][6:]), (
+            f"{patch.name}:{i + 1}: expected a `--- a/<file>` / `+++ b/<file>` header, got {head!r}")
+        name = head[0][6:].rstrip("\n")
+        assert "/" not in name, f"{patch.name}: {name} is not a top-level file of the module"
+        i += 2
+        assert i < len(lines) and _HUNK.match(lines[i]), f"{patch.name}: {name} has no hunk"
+        while i < len(lines) and (m := _HUNK.match(lines[i])):
+            n_old, n_new = int(m.group(1) or 1), int(m.group(2) or 1)
+            i += 1
+            old: list[str] = []
+            new: list[str] = []
+            while len(old) < n_old or len(new) < n_new:
+                assert i < len(lines), f"{patch.name}: a hunk of {name} is cut short"
+                tag, text = lines[i][:1], lines[i][1:]
+                if tag == " ":
+                    old.append(text)
+                    new.append(text)
+                elif tag == "-":
+                    old.append(text)
+                elif tag == "+":
+                    new.append(text)
+                else:
+                    raise AssertionError(f"{patch.name}: unexpected line {lines[i]!r}")
+                i += 1
+            assert (len(old), len(new)) == (n_old, n_new), f"{patch.name}: a hunk of {name} miscounts"
+            out.append((name, "".join(old), "".join(new)))
+    return out
+
+
+def _hunk(patch: Path = _PATCH) -> tuple[str, str]:
+    """(old text, new text) of a one-hunk patch."""
+    (only,) = _hunks(patch)
+    return only[1], only[2]
 
 
 def _dirhash_h1(files: dict[str, bytes]) -> str:
@@ -96,15 +142,20 @@ def _dirhash_h1(files: dict[str, bytes]) -> str:
 
 
 def _reverted_h1(tree: dict[str, bytes]) -> str:
-    """The tree's h1 after swapping the allowed hunk back to upstream's text."""
-    old, new = _hunk()
-    decode = tree["decode.go"].decode("utf-8")
-    count = decode.count(new)
-    assert count == 1, (
-        f"vendored decode.go carries the patched block {count} time(s), not 1: "
-        "the duplicate-key hunk was edited, or something else was changed "
-        "inside it.")
-    return _dirhash_h1({**tree, "decode.go": decode.replace(new, old).encode()})
+    """The tree's h1 after swapping the allowed hunks back to upstream's text
+    (last applied first)."""
+    texts: dict[str, str] = {}
+    for patch in reversed(list(_PATCHES)):
+        for name, old, new in reversed(_hunks(patch)):
+            assert name in tree, f"{patch.name} patches {name}, which the vendored tree lacks"
+            text = texts.setdefault(name, tree[name].decode("utf-8"))
+            count = text.count(new)
+            assert count == 1, (
+                f"vendored {name} carries a patched block of {patch.name} "
+                f"{count} time(s), not 1: the hunk was edited, or something else "
+                "was changed inside it.")
+            texts[name] = text.replace(new, old)
+    return _dirhash_h1({**tree, **{name: text.encode() for name, text in texts.items()}})
 
 
 def _tree(directory: Path) -> dict[str, bytes]:
@@ -126,14 +177,26 @@ def _repo_tree() -> dict[str, bytes]:
     return out
 
 
-def test_the_allowed_change_is_the_pinned_hunk() -> None:
-    digest = hashlib.sha256(_PATCH.read_bytes()).hexdigest()
-    assert digest == _PATCH_SHA256, (
-        f"{_PATCH.name} changed (sha256 {digest}). It defines what may differ "
-        "from upstream v3.0.1; widening it is a decision for #2681's owner, "
-        "made by editing _PATCH_SHA256 here in the same diff.")
+def test_the_allowed_changes_are_the_pinned_hunks() -> None:
+    for patch, (want, files) in _PATCHES.items():
+        digest = hashlib.sha256(patch.read_bytes()).hexdigest()
+        assert digest == want, (
+            f"{patch.name} changed (sha256 {digest}). It defines what may differ "
+            "from upstream v3.0.1; widening it is a decision for the owner "
+            "(#2681, #2730, #2486), made by editing its pinned sha256 here in the same diff.")
+        counts: dict[str, int] = {}
+        for name, _, _ in _hunks(patch):
+            counts[name] = counts.get(name, 0) + 1
+        assert counts == files, f"{patch.name} touches {counts}, pinned {files}"
     old, new = _hunk()
     assert "func (d *decoder) mapping(" in old and "checkUniqueKeysMap" in new
+    old, new = _hunk(_NONSPECIFIC_PATCH)
+    assert 'n.Tag = "!"' in new and 'n.Tag = "!"' not in old
+    # Every hunk of the switch is behind it: a new line that tests no flag is
+    # a call of the gated helpers, or the field and the setter.
+    for name, old, new in _hunks(_SPACES_ONLY_PATCH):
+        added = [line for line in new.splitlines() if line not in old.splitlines()]
+        assert any("spaces_only" in line or "is_separator" in line for line in added), (name, added)
 
 
 def test_vendored_tree_is_v3_0_1_plus_only_the_hunk() -> None:
@@ -340,7 +403,8 @@ def test_pristine_copy_passes(scratch: Path) -> None:
 
 def test_a_byte_outside_the_hunk_is_caught(scratch: Path) -> None:
     f = scratch / "scannerc.go"
-    f.write_bytes(f.read_bytes().replace(b"yaml_", b"yamL_", 1))
+    # The package clause: upstream's, outside every hunk.
+    f.write_bytes(f.read_bytes().replace(b"\npackage yaml\n", b"\npackage yamL\n", 1))
     assert _reverted_h1(_tree(scratch)) != _UPSTREAM_H1
 
 
@@ -348,7 +412,23 @@ def test_a_byte_inside_the_hunk_is_caught(scratch: Path) -> None:
     f = scratch / "decode.go"
     f.write_bytes(f.read_bytes().replace(
         b"const uniqueKeysScanLimit = 48", b"const uniqueKeysScanLimit = 49"))
-    with pytest.raises(AssertionError, match="patched block 0 time"):
+    with pytest.raises(AssertionError, match="uniquekeys.patch 0 time"):
+        _reverted_h1(_tree(scratch))
+
+
+def test_a_byte_inside_the_spaces_only_hunk_is_caught(scratch: Path) -> None:
+    f = scratch / "scannerc.go"
+    f.write_bytes(f.read_bytes().replace(
+        b"if parser.spaces_only && *indent == 0 {", b"if *indent == 0 {"))
+    with pytest.raises(AssertionError, match="spaces-only.patch 0 time"):
+        _reverted_h1(_tree(scratch))
+
+
+def test_a_byte_inside_the_nonspecific_hunk_is_caught(scratch: Path) -> None:
+    f = scratch / "decode.go"
+    f.write_bytes(f.read_bytes().replace(
+        b'if nodeTag == "!" && nodeStyle != 0 {', b'if nodeTag == "!" {'))
+    with pytest.raises(AssertionError, match="nonspecific-tag.patch 0 time"):
         _reverted_h1(_tree(scratch))
 
 

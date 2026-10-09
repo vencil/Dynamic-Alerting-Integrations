@@ -985,6 +985,38 @@ data:
                 TenantApiConfigReloadFailing (a rate alert) cannot.
               runbook_url: "https://github.com/vencil/Dynamic-Alerting-Integrations/blob/main/docs/governance-security.md"
 
+          # --- tenant-api domain policy UNAVAILABLE (hub #2486 Q7-2) ---
+          # A _domain_policy.yaml / .yml that is present but unusable (a
+          # directory, a dangling symlink, unreadable, or refused by the parse)
+          # and has no last good version of its own makes tenant-api refuse, in
+          # direct write mode, every write the domain policy judges (503
+          # POLICY_UNAVAILABLE) instead of judging it on no policy. /ready stays
+          # 200 on purpose (one replica, `strategy: Recreate`: NotReady would
+          # take reads down too), so this gauge is the signal. `for: 2m` rides
+          # out a non-atomic write caught mid-way by one watcher tick.
+          - alert: TenantApiPolicyUnavailable
+            expr: tenant_api_policy_available{job="tenant-api"} == 0
+            for: 2m
+            labels:
+              severity: warning
+              alert_source: platform
+            annotations:
+              summary: "tenant-api domain policy is unavailable — policy-judged writes answer 503"
+              description: |
+                A `_domain_policy.yaml` / `.yml` in the tenant-api conf.d is present
+                but cannot be read or parsed, and has no last good version, so in
+                direct write mode tenant-api refuses every write the domain policy
+                judges (PUT /tenants/{id}; tenant and group batch ops that write
+                `_routing_receiver_type` or touch `_routing` / `_routing_profile`)
+                with 503 POLICY_UNAVAILABLE. Other writes and all reads are
+                unaffected. The tenant-api WARN log ("policy: file cannot be read
+                or does not parse") names the file and the reason; repair (or
+                remove) the file and the alert clears on the next watcher tick.
+                `--policy-unavailable-open` lets such writes through (logged,
+                counted in tenant_api_policy_unavailable_open_total) — an escape
+                hatch, not a fix.
+              runbook_url: "https://github.com/vencil/Dynamic-Alerting-Integrations/blob/main/docs/governance-security.md"
+
           # --- Prometheus reload failure (#1246) ---
           # The config-reloader sidecar added in #1246 automates what used to be a
           # manual POST /-/reload — and in doing so creates a failure mode that did

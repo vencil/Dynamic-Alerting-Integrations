@@ -23,9 +23,12 @@
 // key, a malformed merge), is an Unsupported value: never a string, which is
 // what the callers ask.
 //
-// Known limitation: a scalar carrying the non-specific tag `!` is resolved
-// implicitly by PyYAML even when quoted (`! "123"` is 123), but yaml.v3
-// drops that tag from the node, so here it reads like `"123"` — a string.
+// The non-specific tag `!`: PyYAML resolves a scalar so tagged as if it were
+// plain, quoted or not (`! "123"` is 123, `! "<<"` a merge key). The vendored
+// yaml.v3 keeps that tag on a non-plain scalar's node (Tag "!",
+// third_party/yaml.v3-nonspecific-tag.patch, #2730 §6), and this package
+// resolves such a node's text with PyYAML's implicit resolvers; a plain one
+// already reads as plain.
 //
 // Oracle: testdata/pyyaml_plain_scalars.json is PyYAML's own verdict on a few
 // hundred plain scalars (tests/shared/test_receiver_spec_parity.py generates
@@ -68,14 +71,22 @@ const (
 	TagTimestamp = "timestamp"
 	TagMerge     = "merge"
 	TagValue     = "value"
+	// TagYAML is PyYAML's resolution of `!`, `&` or `*`: only a scalar
+	// written with the non-specific tag `!` (`! "*"`) can carry that text,
+	// and SafeLoader has no constructor for it.
+	TagYAML = "yaml"
 )
+
+// NonSpecificTag is the tag the vendored yaml.v3 leaves on a quoted or block
+// scalar written with the non-specific tag `!` (a plain one is resolved).
+const NonSpecificTag = "!"
 
 // implicitResolvers are PyYAML's Resolver.yaml_implicit_resolvers (PyYAML
 // 6.0), in the order Resolver.resolve tries them. PyYAML indexes them by the
 // value's first character; every pattern below can only match a value whose
 // first character is one it is indexed under, so trying them all in order is
-// the same lookup. The `yaml` resolver (`!`, `&`, `*`) is left out: those
-// characters cannot start a plain scalar.
+// the same lookup. The `yaml` resolver (`!`, `&`, `*`) is last: no plain
+// scalar can be one of those, only a non-specific `! "*"`.
 var implicitResolvers = []struct {
 	tag string
 	re  *regexp.Regexp
@@ -99,6 +110,7 @@ var implicitResolvers = []struct {
 		`(?:[ \t]*(?:Z|[-+][0-9][0-9]?(?::[0-9][0-9])?))?)$`)},
 	{TagMerge, regexp.MustCompile(`^(?:<<)$`)},
 	{TagValue, regexp.MustCompile(`^(?:=)$`)},
+	{TagYAML, regexp.MustCompile(`^(?:!|&|\*)$`)},
 }
 
 // boolValues is SafeConstructor.bool_values: the lower-cased YAML 1.1
@@ -109,13 +121,29 @@ var boolValues = map[string]bool{
 
 // Resolve returns the tag PyYAML's SafeLoader gives the plain scalar text
 // (one of the Tag* constants): TagStr when no implicit resolver matches.
+// Python's `$` also matches before a final newline, so text ending in one
+// "\n" resolves as the text without it ("7\n" is an int) — only a scalar
+// written with the non-specific tag `!` (`! "7\n"`, `! |`) can end so, and
+// PyYAML indexes its resolvers by the first character, so "\n" alone is a
+// string, never the empty null.
 func Resolve(text string) string {
 	for _, r := range implicitResolvers {
-		if r.re.MatchString(text) {
+		if PyMatch(r.re, text) {
 			return r.tag
 		}
 	}
 	return TagStr
+}
+
+// PyMatch is Python's re.match(pattern, text) for a pattern anchored `^...$`:
+// `$` matches at the end or before a final "\n". text "\n" itself is
+// never cut to "" (PyYAML's resolver index looks at the first character).
+func PyMatch(re *regexp.Regexp, text string) bool {
+	if re.MatchString(text) {
+		return true
+	}
+	cut, ok := strings.CutSuffix(text, "\n")
+	return ok && cut != "" && re.MatchString(cut)
 }
 
 // Decode returns the value PyYAML's SafeLoader builds from n (see the package
@@ -189,14 +217,16 @@ func (d *decoder) sequence(n *yaml.Node) any {
 }
 
 // IsMergeKey reports whether PyYAML's SafeLoader takes the key node k as a
-// merge key: a plain `<<` or an explicit `!!merge` (any spelling of the tag),
-// k an alias judged by the node it names. The one blind spot is the
-// non-specific tag `!` on a quoted `<<` (PyYAML merges `! "<<"`; a yaml.Node
-// keeps a quoted string), as for scalars (pyyaml.go in routingpolicy).
+// merge key: a plain `<<`, an explicit `!!merge` (any spelling of the tag),
+// or text PyYAML resolves to merge under the non-specific tag `!` (`! "<<"`,
+// #2730 §6), k an alias judged by the node it names.
 func IsMergeKey(k *yaml.Node) bool {
 	k = deref(k)
 	if k == nil || k.Kind != yaml.ScalarNode {
 		return false
+	}
+	if k.Tag == NonSpecificTag {
+		return Resolve(k.Value) == TagMerge
 	}
 	if t := explicitTag(k); t != "" {
 		return t == "!!merge"
@@ -210,6 +240,9 @@ func isValueKey(k *yaml.Node) bool {
 	k = deref(k)
 	if k == nil || k.Kind != yaml.ScalarNode {
 		return false
+	}
+	if k.Tag == NonSpecificTag {
+		return Resolve(k.Value) == TagValue
 	}
 	if t := explicitTag(k); t != "" {
 		return t == "!!value"
@@ -309,6 +342,9 @@ func (d *decoder) mapping(n *yaml.Node) any {
 
 func scalar(n *yaml.Node) any {
 	tag := explicitTag(n)
+	if n.Tag == NonSpecificTag {
+		tag = "!!" + Resolve(n.Value) // PyYAML resolves it as if plain
+	}
 	if tag == "" {
 		if n.Style != 0 {
 			return n.Value // quoted, literal, folded
@@ -338,7 +374,7 @@ func scalar(n *yaml.Node) any {
 			return v
 		}
 		return Unsupported{Tag: tag, Text: n.Value, Reason: "PyYAML cannot construct it"}
-	case "!!merge", "!!value":
+	case "!!merge", "!!value", "!!yaml":
 		return Unsupported{Tag: tag, Text: n.Value, Reason: "SafeLoader has no constructor for it"}
 	default:
 		return Unsupported{Tag: tag, Text: n.Value, Reason: "tag not modelled"}
@@ -351,7 +387,9 @@ func scalar(n *yaml.Node) any {
 // constructInt is SafeConstructor.construct_yaml_int on text Resolve typed
 // as an int.
 func constructInt(text string) any {
-	v := strings.ReplaceAll(text, "_", "")
+	// A final "\n" (only a non-specific `! "7\n"` carries one this far) is
+	// whitespace to Python's int().
+	v := strings.ReplaceAll(strings.TrimSuffix(text, "\n"), "_", "")
 	sign := int64(1)
 	if strings.HasPrefix(v, "-") {
 		sign = -1
@@ -433,8 +471,10 @@ func constructFloat(text string) any {
 }
 
 // pyFloat is Python's float() on the digit strings construct_yaml_float hands
-// it: an overflow is ±inf rather than an error.
+// it: an overflow is ±inf rather than an error, and a final "\n" (which only
+// a non-specific `! "1.5\n"` carries this far) is whitespace to it.
 func pyFloat(s string) (float64, bool) {
+	s = strings.TrimSuffix(s, "\n")
 	if s == "" || s == "." {
 		return 0, false
 	}
@@ -450,7 +490,7 @@ func pyFloat(s string) (float64, bool) {
 
 var timestampRE = regexp.MustCompile(`^([0-9]{4})-([0-9]{1,2})-([0-9]{1,2})` +
 	`(?:(?:[Tt]|[ \t]+)([0-9]{1,2}):([0-9]{2}):([0-9]{2})(?:\.([0-9]*))?` +
-	`(?:[ \t]*(Z|([-+])([0-9]{1,2})(?::([0-9]{2}))?))?)?$`)
+	`(?:[ \t]*(Z|([-+])([0-9]{1,2})(?::([0-9]{2}))?))?)?\n?$`) // Python's `$`: before a final newline too
 
 // constructTimestamp is SafeConstructor.construct_yaml_timestamp: a date or a
 // datetime, with Python's range checks (datetime.date / datetime.datetime /

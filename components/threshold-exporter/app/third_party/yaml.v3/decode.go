@@ -246,6 +246,14 @@ func (p *parser) scalar() *Node {
 	}
 	n := p.node(ScalarNode, defaultTag, nodeTag, nodeValue)
 	n.Style |= nodeStyle
+	// Keep the non-specific tag "!" on a quoted or block scalar, so that a
+	// caller can tell `! "true"` apart from `"true"` (a YAML 1.1 reader
+	// resolves the former as if it were plain). Such a value still decodes
+	// as a string; as a key, `! "<<"` is now a merge key (isMerge accepts
+	// the tag "!"), and the encoder writes the tag back.
+	if nodeTag == "!" && nodeStyle != 0 {
+		n.Tag = "!"
+	}
 	p.anchor(n, p.event.anchor)
 	p.expect(yaml_SCALAR_EVENT)
 	return n

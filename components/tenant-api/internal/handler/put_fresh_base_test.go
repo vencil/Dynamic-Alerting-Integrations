@@ -15,6 +15,7 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"os"
 	"os/exec"
 	"path/filepath"
 	"strings"
@@ -178,25 +179,71 @@ func TestPutTenant_PRMode_InSyncUnchanged(t *testing.T) {
 	})
 }
 
-// #2486 review B1: a `_domain_policy.yml` broken when the pod starts is
-// skipped, and the sound `.yaml` beside it is enforced — direct-mode PUT and
-// batch alike (the route generator drops the broken file, `--strict` rc 1).
-func TestDirectMode_BrokenYmlAtStartupKeepsYamlEnforced(t *testing.T) {
+// #2486 review B1, then hub #2486 Q7-2: a `_domain_policy.yml` broken when
+// the pod starts has no last good content, so the policy is unavailable and
+// direct mode refuses the writes the policy judges — 503 POLICY_UNAVAILABLE,
+// PUT and a routing batch op alike, nothing written — instead of judging
+// them on the sound `.yaml` alone (the route generator drops the broken
+// file and its `--strict` exits 1). A batch op the policy does not judge
+// goes through.
+func TestDirectMode_BrokenYmlAtStartupRefusesPolicyWrites(t *testing.T) {
 	files := staleTree("    _routing_profile: domain-ok\n")
 	files["_domain_policy.yml"] = "domain_policies: [unclosed\n"
 	t.Run("put", func(t *testing.T) {
-		code, resp, _ := putRoutingTenant(t, files, "t-off", "tenants:\n  t-off:\n    _routing_profile: team-chat\n")
-		if code != http.StatusForbidden || !strings.Contains(resp, CodePolicyViolation) {
-			t.Fatalf("status %d, body %s; want 403 from the .yaml policy", code, resp)
+		code, resp, configDir := putRoutingTenant(t, files, "t-off", "tenants:\n  t-off:\n    _routing_profile: domain-ok\n")
+		if code != http.StatusServiceUnavailable || !strings.Contains(resp, CodePolicyUnavailable) {
+			t.Fatalf("status %d, body %s; want 503 POLICY_UNAVAILABLE", code, resp)
+		}
+		if got, err := os.ReadFile(filepath.Join(configDir, "t-off.yaml")); err != nil || string(got) != files["t-off.yaml"] {
+			t.Errorf("refused PUT changed t-off.yaml: %q, %v", got, err)
 		}
 	})
 	t.Run("batch", func(t *testing.T) {
 		configDir := seedGitTree(t, files)
 		d := &Deps{Writer: newTestWriter(configDir), ConfigDir: configDir, RBAC: adminRBAC(t),
 			Policy: policy.NewManager(configDir), WriteMode: WriteModeDirect}
+		w := postTenantBatch(t, d, `[{"tenant_id":"t-off","patch":{"_routing_profile":"team-chat"}}]`)
+		if w.Code != http.StatusServiceUnavailable || !strings.Contains(w.Body.String(), CodePolicyUnavailable) {
+			t.Fatalf("status %d, body %s; want 503 POLICY_UNAVAILABLE", w.Code, w.Body.String())
+		}
+		// A patch the policy does not judge is not refused.
+		resp := runBatch(t, configDir, d, `[{"tenant_id":"t-off","patch":{"cpu_usage_percent":"90"}}]`)
+		if len(resp.Results) != 1 || resp.Results[0].Status != "ok" {
+			t.Errorf("results = %+v, want the non-routing op written", resp.Results)
+		}
+	})
+	t.Run("escape hatch", func(t *testing.T) {
+		configDir := seedGitTree(t, files)
+		mgr := policy.NewManager(configDir)
+		mgr.SetOpenOnUnavailable(true)
+		d := &Deps{Writer: newTestWriter(configDir), ConfigDir: configDir, RBAC: adminRBAC(t),
+			Policy: mgr, WriteMode: WriteModeDirect}
 		resp := runBatch(t, configDir, d, `[{"tenant_id":"t-off","patch":{"_routing_profile":"team-chat"}}]`)
 		if len(resp.Results) != 1 || !strings.Contains(resp.Results[0].Message, "domain policy violation") {
-			t.Errorf("results = %+v, want the op refused by the .yaml policy", resp.Results)
+			t.Errorf("results = %+v, want the op judged by the .yaml policy (let through the gate)", resp.Results)
+		}
+		if mgr.OpenPasses() == 0 {
+			t.Error("OpenPasses = 0, want the write let through counted")
+		}
+	})
+	// N2 (hub #2486 PR-7c round 2): tenant_api_policy_unavailable_open_total
+	// counts writes — one per op the policy judges — never the batch request
+	// on top: two routing ops and one the policy does not judge count 2 (the
+	// batch-level gate used to count once more).
+	t.Run("escape hatch counts each write once", func(t *testing.T) {
+		configDir := seedGitTree(t, files)
+		mgr := policy.NewManager(configDir)
+		mgr.SetOpenOnUnavailable(true)
+		d := &Deps{Writer: newTestWriter(configDir), ConfigDir: configDir, RBAC: adminRBAC(t),
+			Policy: mgr, WriteMode: WriteModeDirect}
+		resp := runBatch(t, configDir, d, `[{"tenant_id":"t-off","patch":{"_routing_profile":"domain-ok"}},`+
+			`{"tenant_id":"t-other","patch":{"_routing_profile":"domain-ok"}},`+
+			`{"tenant_id":"t-off","patch":{"cpu_usage_percent":"90"}}]`)
+		if len(resp.Results) != 3 {
+			t.Fatalf("results = %+v, want 3", resp.Results)
+		}
+		if got := mgr.OpenPasses(); got != 2 {
+			t.Errorf("OpenPasses = %d, want 2 (one per routing op, none for the batch)", got)
 		}
 	})
 }

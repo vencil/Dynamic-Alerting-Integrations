@@ -2,6 +2,7 @@ package policy
 
 import (
 	"bytes"
+	"errors"
 	"fmt"
 	"log/slog"
 	"reflect"
@@ -608,11 +609,12 @@ func TestJudgeTenantRouting_RequireCriticalEscalation(t *testing.T) {
 	}
 }
 
-// #2325: a require_critical_escalation value. tenant-api treats one PyYAML
-// refuses (`!!bool y`, `!!int abc`; the route generator drops the whole file)
-// as this constraint off: the rest of the file loads (and a WARN). One PyYAML
-// reads but is not a boolean (`!!int 5`) loads with only that constraint off
-// (and a WARN), as the generator does.
+// #2325: a require_critical_escalation value. One PyYAML refuses (`!!bool y`,
+// `!!int abc`; the route generator drops the whole file) makes tenant-api
+// refuse the whole file too (hub #2486 PR-7c round 2, B1 — #2325 read it as
+// this constraint off and loaded the rest). One PyYAML reads but is not a
+// boolean (`!!int 5`) loads with only that constraint off (and a WARN), as
+// the generator does.
 const escalationPolicyTmpl = "domain_policies:\n  fin:\n    tenants: [t1]\n    constraints:\n" +
 	"      require_critical_escalation: %s\n      forbidden_receiver_types: [slack]\n"
 
@@ -633,50 +635,62 @@ func (r *reloadOutcomes) last() bool {
 	return len(r.oks) > 0 && r.oks[len(r.oks)-1]
 }
 
-func TestLoad_RefusedEscalationValueTurnsOnlyItOff(t *testing.T) {
+// refusedEscalations are require_critical_escalation values PyYAML refuses
+// — for their own tag or text, a direct child, or deeper — so the route
+// generator drops the whole file (each measured with _verdict()).
+var refusedEscalations = []string{"!!bool y", "!!int abc", "!!float x", "!!timestamp nope", "!!bool 1",
+	"!!omap [1]", "!!pairs [a]", "{<<: 1}", "!!bool [true]", "!!bool {a: 1}", "!!str [1]",
+	"!!int {a: 1}", "!foo [1]", "!!seq {a: 1}", "!!map [1]", "{[1]: 2}", "!!timestamp [1]",
+	"!!binary [1]", "{? [1] : 2}", "{a: 1, a: 2}", "!!merge x", "<<", "{x: [<<]}",
+	"!!null {}", "!!null [1]",
+	// refused below the direct children
+	"[!!bool y]", "{a: !!int x}", "!!omap [{a: !!bool y}]", "{<<: [{b: !!bool y}]}", "[[!!bool y]]",
+	"{b: 2001-13-40}", "[2001-13-40]"}
+
+// B1 (hub #2486 PR-7c round 2): a refused value makes the whole file
+// unusable, on a first load (no policy, and Unavailable: the direct-mode
+// policy writes answer 503) and on a hot reload (the last good file stays,
+// the reload is recorded as failed).
+func TestLoad_RefusedEscalationValueRefusesTheFile(t *testing.T) {
 	t.Parallel()
-	for _, v := range []string{"!!bool y", "!!int abc", "!!float x", "!!timestamp nope", "!!bool 1",
-		// Collections PyYAML refuses for their own tag or direct children.
-		"!!omap [1]", "!!pairs [a]", "{<<: 1}", "!!bool [true]", "!!bool {a: 1}", "!!str [1]",
-		"!!int {a: 1}", "!foo [1]", "!!seq {a: 1}", "!!map [1]", "{[1]: 2}", "!!timestamp [1]",
-		"!!binary [1]", "{? [1] : 2}",
-		// #2677: what the generator drops the whole file for, here only
-		// under constraints.require_critical_escalation (dropEscalationValues).
-		"{a: 1, a: 2}", "!!merge x", "<<", "{x: [<<]}"} {
-		want := func(what string, m *Manager) {
-			t.Helper()
-			pols := m.RoutingPolicies()
-			if len(pols) != 1 || pols[0].RequireCriticalEscalation ||
-				!reflect.DeepEqual(pols[0].ForbiddenReceiverTypes, []string{"slack"}) {
-				t.Errorf("%s %s: policies %+v, want escalation off and slack still forbidden", what, v, pols)
-			}
-		}
+	for _, v := range refusedEscalations {
 		dir, _ := testutil.MkTempYAML(t, "_domain_policy.yaml", fmt.Sprintf(escalationPolicyTmpl, v))
-		want("initial load", NewManager(dir))
+		m := NewManager(dir)
+		if pols := m.RoutingPolicies(); len(pols) != 0 {
+			t.Errorf("initial load %s: policies %+v, want none (the file refused)", v, pols)
+		}
+		if err := m.Unavailable(); !errors.Is(err, ErrUnavailable) {
+			t.Errorf("initial load %s: Unavailable() = %v, want ErrUnavailable", v, err)
+		}
 
 		dir, _ = testutil.MkTempYAML(t, "_domain_policy.yaml", fmt.Sprintf(escalationPolicyTmpl, "true"))
-		m := NewManager(dir)
+		m = NewManager(dir)
 		obs := &reloadOutcomes{}
 		m.SetReloadObserver(obs)
 		testutil.WriteYAML(t, dir, "_domain_policy.yaml", fmt.Sprintf(escalationPolicyTmpl, v))
-		if err := m.Reload(); err != nil {
-			t.Errorf("%s: Reload() = %v, want the file loaded with this constraint off", v, err)
+		if err := m.Reload(); err == nil {
+			t.Errorf("%s: Reload() = nil, want the file refused", v)
 		}
-		if !obs.last() {
-			t.Errorf("%s: reload recorded as failed, want a success", v)
+		if obs.last() {
+			t.Errorf("%s: reload recorded as a success, want a failure", v)
 		}
-		want("hot reload", m)
+		pols := m.RoutingPolicies()
+		if len(pols) != 1 || !pols[0].RequireCriticalEscalation ||
+			!reflect.DeepEqual(pols[0].ForbiddenReceiverTypes, []string{"slack"}) {
+			t.Errorf("hot reload %s: policies %+v, want the last good file (escalation on, slack forbidden)", v, pols)
+		}
+		if err := m.Unavailable(); err != nil {
+			t.Errorf("hot reload %s: Unavailable() = %v, want nil (last good content)", v, err)
+		}
 	}
 }
 
-// A mapping or sequence value is not a boolean (#2325), however it is built:
-// an alias cycle or fan-out must neither crash the process (a CrashLoop, on
-// the first load and on a hot reload alike) nor stall it, and as for any
-// other non-boolean the constraint is off while the rest still applies.
-// Accepted gap: nothing below the direct children is looked at, so a value
-// PyYAML refuses only there (`[!!bool y]`) reads as a non-boolean while the
-// generator and da-guard refuse it; tenant-api treats every refused value as
-// this constraint off, so the outcome is the same.
+// A mapping or sequence value PyYAML reads is not a boolean (#2325), however
+// it is built: an alias cycle or fan-out must neither crash the process (a
+// CrashLoop, on the first load and on a hot reload alike) nor stall it, and
+// as for any other non-boolean the constraint is off while the rest still
+// applies. (One PyYAML refuses, however deep, refuses the file:
+// refusedEscalations.)
 func TestLoad_CollectionEscalationValueIsNonBoolean(t *testing.T) {
 	t.Parallel()
 	fan := "&l0 [x,x,x,x,x,x,x,x,x,x]"
@@ -696,9 +710,8 @@ func TestLoad_CollectionEscalationValueIsNonBoolean(t *testing.T) {
 	}
 	for _, v := range []string{"&x [*x]", "&x {b: *x}", "[" + fan + "]", "!!omap [{[1]: 2}]", "{<<: !foo {b: 1}}",
 		"[true]", "!!set {a: null}", "!!omap [{a: 1}]", "!!pairs [{a: 1}]", "{<<: {b: 1}}",
-		// the accepted gap: PyYAML refuses these below the direct children
-		"[!!bool y]", "{a: !!int x}", "!!set {!!bool y: null}", "!!omap [{a: !!bool y}]",
-		"{<<: [{b: !!bool y}]}", "[[!!bool y]]", "{b: 2001-13-40}", "[2001-13-40]"} {
+		// a set's keys are their source text to the generator's loader
+		"!!set {!!bool y: null}"} {
 		start := time.Now()
 		dir, _ := testutil.MkTempYAML(t, "_domain_policy.yaml", fmt.Sprintf(escalationPolicyTmpl, v))
 		want("initial load", v, NewManager(dir), time.Since(start))
@@ -714,19 +727,17 @@ func TestLoad_CollectionEscalationValueIsNonBoolean(t *testing.T) {
 	}
 }
 
-// A `!!null`-tagged value (#2325) — and `!!bool y`, refused without the tag —
-// on the first load and on a hot reload from a good policy with escalation
-// on. PyYAML reads a tagged scalar as None and refuses a tagged collection
-// (the generator drops the file); tenant-api reads both as this constraint
-// off: the file loads, slack is still forbidden in the same domain, and
-// another domain's escalation is still on.
+// A `!!null`-tagged scalar value (#2325) on the first load and on a hot
+// reload from a good policy with escalation on: PyYAML reads it as None, so
+// the file loads with this constraint off, slack is still forbidden in the
+// same domain, and another domain's escalation is still on. (A tagged
+// collection, `!!null {}`, PyYAML refuses: refusedEscalations.)
 const twoDomainEscalationTmpl = escalationPolicyTmpl +
 	"  ops:\n    tenants: [t2]\n    constraints:\n      require_critical_escalation: true\n"
 
 func TestLoad_TaggedNullEscalationValue(t *testing.T) {
 	t.Parallel()
-	for _, v := range []string{"!!null x", "!<tag:yaml.org,2002:null> x", `!!null ""`,
-		"!!null {}", "!!null [1]", "!!bool y"} {
+	for _, v := range []string{"!!null x", "!<tag:yaml.org,2002:null> x", `!!null ""`} {
 		want := func(what string, m *Manager) {
 			t.Helper()
 			pols := m.RoutingPolicies()
@@ -775,6 +786,7 @@ func TestReload_NonBooleanEscalationValueLoadsWithWarn(t *testing.T) {
 }
 
 // Not parallel: it swaps the process-wide slog default to read the WARN.
+// A refused value (B1) is logged as the file's failure, with the line.
 func TestLoad_RefusedEscalationValueWarns(t *testing.T) {
 	var buf lockedBuffer
 	orig := slog.Default()
@@ -782,12 +794,12 @@ func TestLoad_RefusedEscalationValueWarns(t *testing.T) {
 	slog.SetDefault(slog.New(slog.NewTextHandler(&buf, nil)))
 
 	dir, _ := testutil.MkTempYAML(t, "_domain_policy.yaml", fmt.Sprintf(escalationPolicyTmpl, "!!null {}"))
-	if pols := NewManager(dir).RoutingPolicies(); len(pols) != 1 || pols[0].RequireCriticalEscalation {
-		t.Errorf("policies %+v, want fin loaded with escalation off", pols)
+	if pols := NewManager(dir).RoutingPolicies(); len(pols) != 0 {
+		t.Errorf("policies %+v, want none (the file refused)", pols)
 	}
-	if out := buf.String(); strings.Count(out, "PyYAML refuses") != 1 || !strings.Contains(out, "domain=fin") ||
-		!strings.Contains(out, "reason=") {
-		t.Errorf("log %q, want one refusal WARN for domain fin with its reason", out)
+	if out := buf.String(); !strings.Contains(out, "does not parse") || !strings.Contains(out, "_domain_policy.yaml") ||
+		!strings.Contains(out, "line 5") {
+		t.Errorf("log %q, want the file's failure WARN naming line 5", out)
 	}
 }
 
@@ -806,4 +818,46 @@ func (l *lockedBuffer) String() string {
 	l.mu.Lock()
 	defer l.mu.Unlock()
 	return l.b.String()
+}
+
+// F1 (hub #2486 PR-7c round 2): a receiver-type entry PyYAML cannot build
+// refuses the whole file (the generator drops it), and an allowed entry
+// PyYAML builds as no string allows nothing — `!!null webhook` is None to
+// PyYAML, so a webhook receiver is not allowed (its text used to allow it).
+func TestParseConfig_ReceiverTypeEntriesAsPyYAMLBuildsThem(t *testing.T) {
+	t.Parallel()
+	const tmpl = "domain_policies:\n  fin:\n    tenants: [t1]\n    constraints:\n      %s\n"
+	for _, c := range []string{"forbidden_receiver_types: [slack, !!int x]", "allowed_receiver_types: [email, !custom x]",
+		"allowed_receiver_types: [!!timestamp 2001-13-01]", `forbidden_receiver_types: [! "="]`,
+		"forbidden_receiver_types: [!!binary aGk=]"} {
+		if cfg, err := parseConfig([]byte(fmt.Sprintf(tmpl, c))); err == nil {
+			t.Errorf("%s: parseConfig = %+v, want the file refused", c, cfg.DomainPolicies)
+		}
+	}
+	for _, c := range []struct {
+		allowed string
+		blocked []string
+		passed  []string
+	}{
+		{"[!!null webhook]", []string{"webhook", "slack"}, nil},
+		{"[!!null slack, email]", []string{"slack"}, []string{"email"}},
+		{"[yes, 7]", []string{"yes", "7"}, nil},
+	} {
+		cfg, err := parseConfig([]byte(fmt.Sprintf(tmpl, "allowed_receiver_types: "+c.allowed)))
+		if err != nil {
+			t.Fatalf("%s: %v", c.allowed, err)
+		}
+		m := NewForTest(cfg)
+		for _, typ := range c.blocked {
+			if v := m.CheckWrite("t1", map[string]string{"_routing_receiver_type": typ}); len(v) != 1 ||
+				v[0].Constraint != "allowed_receiver_types" {
+				t.Errorf("allowed %s, type %q: violations %+v, want one allowed_receiver_types", c.allowed, typ, v)
+			}
+		}
+		for _, typ := range c.passed {
+			if v := m.CheckWrite("t1", map[string]string{"_routing_receiver_type": typ}); len(v) != 0 {
+				t.Errorf("allowed %s, type %q: violations %+v, want none", c.allowed, typ, v)
+			}
+		}
+	}
 }

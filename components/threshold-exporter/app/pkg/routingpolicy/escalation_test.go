@@ -44,10 +44,15 @@ func TestParseDomainPolicies_RequireCriticalEscalationValue(t *testing.T) {
 		{"!!bool yEs", true, false},
 		{"!!bool 'no'", false, false},
 		{"!<tag:yaml.org,2002:bool> on", true, false},
-		// yaml.v3 reads these, PyYAML refuses them (the generator drops the
-		// file): a problem, never a silently skipped constraint.
-		{"!!int 0X1F", false, true},
-		{"2001-13-40", false, true},
+	}
+	// yaml.v3 reads these, PyYAML refuses them and the generator drops the
+	// whole file: so does da-guard (policyShape; hub #2486 PR-7c round 2 —
+	// before, a problem on the constraint while the rest of the file applied).
+	for _, value := range []string{"!!int 0X1F", "2001-13-40"} {
+		src := "domain_policies:\n  d:\n    tenants: [t1]\n    constraints:\n      require_critical_escalation: " + value + "\n"
+		if pols, _, err := ParseDomainPolicies([]byte(src)); err == nil {
+			t.Errorf("%s: policies %+v, want the file refused", value, pols)
+		}
 	}
 	for _, tc := range cases {
 		src := "domain_policies:\n  d:\n    tenants: [t1]\n    constraints:\n      require_critical_escalation: " + tc.value + "\n"
@@ -72,7 +77,7 @@ func TestParseDomainPolicies_RequireCriticalEscalationValue(t *testing.T) {
 // A value PyYAML refuses (`!!bool y`, `!!null {}`) fails PyYAML's whole
 // safe_load, and the generator drops the file: da-guard refuses the whole
 // document (or, for a collection, reports the constraint). A PyYAMLValue field records the refusal in Refused and the rest
-// of the struct decodes (tenant-api turns only this constraint off). One
+// of the struct decodes (tenant-api's parseConfig then refuses the file). One
 // PyYAML reads but yaml.v3 cannot (`!!int 1:30`, `!!binary 1_000`) decodes,
 // as a non-boolean.
 func TestPyYAMLValue_RefusedIsRecorded(t *testing.T) {

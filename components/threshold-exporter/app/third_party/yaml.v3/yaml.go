@@ -111,6 +111,15 @@ func (dec *Decoder) KnownFields(enable bool) {
 	dec.knownFields = enable
 }
 
+// SpacesOnly makes the decoder scan as PyYAML's scanner does: a space is the
+// only separator between tokens, so a TAB outside a quoted scalar, a comment
+// or a block scalar is an error, a directive's parts must be separated by
+// spaces, and a %YAML directive's version must be followed by a space or a
+// line break. Off by default. Call it before the first Decode.
+func (dec *Decoder) SpacesOnly(enable bool) {
+	dec.parser.parser.spaces_only = enable
+}
+
 // Decode reads the next YAML-encoded value from its input
 // and stores it in the value pointed to by v.
 //

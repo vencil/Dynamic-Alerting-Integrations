@@ -186,3 +186,35 @@ func TestGroupBatch_PatchValueValidation(t *testing.T) {
 		})
 	}
 }
+
+// Hub #2486 Q7-2: a `_domain_policy.yml` that cannot be used and never parsed
+// makes a direct-mode group batch whose patch the policy judges answer 503
+// POLICY_UNAVAILABLE, with nothing committed; PR mode is unaffected (its
+// fresh-base check refuses an unusable policy on its own), and a patch the
+// policy does not judge goes through.
+func TestGroupBatch_DirectMode_PolicyUnavailable(t *testing.T) {
+	files := batchTree()
+	files["_groups.yaml"] = finGroupsYAML
+	files["_domain_policy.yml"] = "domain_policies: [unclosed\n"
+	f := newGroupBatchFixtureOver(t, WriteModeDirect, files)
+	before := f.mainSHA(t)
+	for _, q := range []string{"", "?async=true"} {
+		req := newRequestWithChiParam("POST", "/api/v1/groups/g-fin/batch"+q, "id", "g-fin",
+			bytes.NewBufferString(`{"patch":{"_routing_profile":"team-chat"}}`))
+		req.Header.Set("Content-Type", "application/json")
+		req.Header.Set("X-Forwarded-Email", "alice@example.com")
+		req.Header.Set("X-Forwarded-Groups", "admins")
+		w := httptest.NewRecorder()
+		f.deps.RBAC.Middleware(rbac.PermRead, nil)(GroupBatch(f.deps)).ServeHTTP(w, req)
+		if w.Code != http.StatusServiceUnavailable || !strings.Contains(w.Body.String(), CodePolicyUnavailable) {
+			t.Errorf("%q: status %d, body %s; want 503 POLICY_UNAVAILABLE", q, w.Code, w.Body.String())
+		}
+	}
+	if after := f.mainSHA(t); after != before {
+		t.Errorf("base branch moved %s → %s on a refused group batch", before, after)
+	}
+	resp := decodeGroupBatch(t, f.post(t, `{"patch":{"cpu_usage_percent":"90"}}`))
+	if len(resp.Results) != 2 || resp.Results[0].Status != "ok" {
+		t.Errorf("results = %+v, want the non-routing patch written", resp.Results)
+	}
+}
