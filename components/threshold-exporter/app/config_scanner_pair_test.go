@@ -184,21 +184,19 @@ func pairMutationAgrees(t *testing.T, build func(t *testing.T, dir string), flat
 // (config.ParseConfigFile) a file that fails it declares no tenant on ANY
 // plane, and the state cause (a) described is a bug, not a signal.
 //
-// ⛔ BOTH MERGE BRANCHES, because they disagree about the tenant itself.
-// The full-rebuild branch (forced here by touching `_profiles.yaml` in the
-// same reload) drops the broken file's tenants, as a restart does; the
-// tenant-only branch keeps them (patchTenants' "keep the last good values",
-// a deliberate fail-safe this ticket does not revisit). The prune must follow
-// whichever the merged config did — measured: keying it on the file alone
-// (prune on every parse failure) reddens the tenant-only leg, keying it on
-// "keep" (the pre-#1957 rule) reddens the full-rebuild leg.
+// ⛔ BOTH MERGE BRANCHES. The full-rebuild branch (forced here by touching
+// `_profiles.yaml` in the same reload) and the tenant-only branch both drop
+// the broken file's tenants, as a restart does. Until #1980 the tenant-only
+// branch kept them (patchTenants' "keep the last good values") and this
+// table's second leg asserted served=true on both planes; the owner removed
+// that fail-safe, so both legs now assert the tenant is gone from both.
 //
 // ⚠️ THE TREE HAS NO `_defaults` CARRIER, AND MUST NOT (#1577). Both branches
 // live in incrementalLoadFrom, which the watch path reaches only for a tree
 // with no carrier; with one, every reload is the hierarchical path's full
-// flat rebuild and the tenant-only leg's fail-safe never runs (measured: the
-// leg's precondition fails, served=false). The full-rebuild branch is forced
-// with `_profiles.yaml` instead, a platform file that is not a carrier.
+// flat rebuild and the tenant-only branch never runs. The full-rebuild branch
+// is forced with `_profiles.yaml` instead, a platform file that is not a
+// carrier.
 func TestAnUnparseableFileMovesBothPlanesTogether(t *testing.T) {
 	t.Parallel()
 	for _, tc := range []struct {
@@ -207,7 +205,7 @@ func TestAnUnparseableFileMovesBothPlanesTogether(t *testing.T) {
 		wantServed bool
 	}{
 		{"full-rebuild branch drops it from both", true, false},
-		{"tenant-only branch keeps it on both", false, true},
+		{"tenant-only branch drops it from both too (#1980)", false, false},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()
