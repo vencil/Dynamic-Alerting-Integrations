@@ -64,7 +64,7 @@ if [ ! -r "$_prepush_dir/_prepush_refs.sh" ]; then
 If that is in scripts/ops/, the helper is gone from your checkout. It is
 version-controlled: restore it from HEAD (this works when the deletion is
 staged too):
-    git checkout HEAD -- scripts/ops/_prepush_refs.sh
+    git checkout HEAD -- :/scripts/ops/_prepush_refs.sh
 The installer cannot restore it.
 
 ⛔ Do not hand-write a hook that runs only this script: that silently drops

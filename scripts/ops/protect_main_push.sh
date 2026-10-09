@@ -46,7 +46,7 @@ if [ ! -r "$_prepush_dir/_prepush_refs.sh" ]; then
 
 如果那在 scripts/ops/ 裡：helper 從你的 checkout 裡不見了。它受版控，
 從 HEAD 還原（刪除已經 stage 也適用）：
-    git checkout HEAD -- scripts/ops/_prepush_refs.sh
+    git checkout HEAD -- :/scripts/ops/_prepush_refs.sh
 安裝器還原不了它。
 
 ⛔ 不要自己 printf 一個只掛本檔的 hook：那會把 require_preflight_pass 與

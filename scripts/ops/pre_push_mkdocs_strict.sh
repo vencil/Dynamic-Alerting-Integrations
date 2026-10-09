@@ -60,7 +60,7 @@ if [ ! -r "$_prepush_dir/_prepush_refs.sh" ]; then
     echo "  If that is in scripts/ops/, the helper is gone from your checkout. It is" >&2
     echo "  version-controlled: restore it from HEAD (this works when the deletion is" >&2
     echo "  staged too):" >&2
-    echo "    git checkout HEAD -- scripts/ops/_prepush_refs.sh" >&2
+    echo "    git checkout HEAD -- :/scripts/ops/_prepush_refs.sh" >&2
     echo "  The installer cannot restore it." >&2
     exit 1
 fi
