@@ -230,6 +230,9 @@ type ConfigManager struct {
 	// valuesNotServed tracks what the values-not-served audit last put in
 	// the log (#2065); see config_values_not_served.go.
 	valuesNotServed valuesNotServedLogState
+	// valuesNotServedCache keeps the audit's per-tenant verdicts between
+	// commits (#2065); see config_values_not_served.go.
+	valuesNotServedCache valuesNotServedCache
 
 	// onReloadTenantParse is a test seam, nil in production (#2153): called
 	// once per tenant-file parse a reload tick's merges make (classifyAndCount

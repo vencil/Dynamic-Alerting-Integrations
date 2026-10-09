@@ -63,10 +63,11 @@ type valueNotServed struct {
 // collectValuesNotServed lists the (tenant, key) pairs of cfg /metrics does
 // not serve as written, sorted, one reason each: the build's refused subtree
 // values a tenant is shown (rejected: FlatBuild.RejectedChainWinners), then
-// the resolver's record at now (cfg.ValuesNotServed) — in the order
-// pkg/config's notServed asks them, so a pair carries the reason
-// `da-guard effective` gives it. Only config.ValueNotServedAsWritten pairs.
-func collectValuesNotServed(cfg *ThresholdConfig, now time.Time, rejected map[string]map[string]string) []valueNotServed {
+// the resolver's record (verdicts: cfg.ValuesNotServed at the commit's now,
+// or valuesNotServedCache's copy of it) — in the order pkg/config's
+// notServed asks them, so a pair carries the reason `da-guard effective`
+// gives it. Only config.ValueNotServedAsWritten pairs.
+func collectValuesNotServed(cfg *ThresholdConfig, verdicts, rejected map[string]map[string]string) []valueNotServed {
 	byPair := map[[2]string]string{}
 	for tenant, keys := range rejected {
 		for key := range keys {
@@ -75,7 +76,7 @@ func collectValuesNotServed(cfg *ThresholdConfig, now time.Time, rejected map[st
 			}
 		}
 	}
-	for tenant, keys := range cfg.ValuesNotServed(now) {
+	for tenant, keys := range verdicts {
 		for canon, reason := range keys {
 			key := writtenSpelling(cfg.Tenants[tenant], canon)
 			if !config.ValueNotServedAsWritten(key, reason) {
@@ -167,7 +168,7 @@ func (m *ConfigManager) auditValuesNotServed(cfg *ThresholdConfig, flatScan *fla
 	if flatScan != nil {
 		rejected = flatScan.rejected
 	}
-	vs := collectValuesNotServed(cfg, m.now(), rejected)
+	vs := collectValuesNotServed(cfg, m.valuesNotServedCache.verdicts(cfg, m.now()), rejected)
 	metrics := m.getMetrics()
 	if m.valuesNotServed.recordAndDecide(vs, metrics.SetValuesNotServed) {
 		m.getLogger().Print(formatValuesNotServedLog(vs, m.path, context))
@@ -223,4 +224,95 @@ func (d *valuesNotServedLogState) recordAndDecide(vs []valueNotServed, setGauge 
 	}
 	d.last = key
 	return true
+}
+
+// valuesNotServedCache keeps, between commits, each tenant's resolver
+// verdicts (ThresholdConfig.ValuesNotServed's entry) with the inputs they
+// were computed from, so a commit re-resolves only the tenants whose inputs
+// moved (#2065: the whole-day reading costs about one full resolve per
+// schedule segment, on every reload). A tenant is recomputed when it is new,
+// its built map moved (config.TenantValuesInput), now has passed the
+// earliest `expires:` it had not passed (config.ValuesNotServedExpiryEdge),
+// or now is before the instant it was computed at (a clock set back can
+// un-expire a value); every tenant when the config-wide input moved
+// (ThresholdConfig.ValuesNotServedGlobalInput). A tenant gone from the
+// config is dropped.
+//
+// ⛔ The fingerprints are of what the resolver reads, not of files — see
+// pkg/config/not_served_inputs.go for why that is exact and a file hash or
+// merged_hash is not. Only the commit path uses it; scrapes never do.
+type valuesNotServedCache struct {
+	mu      sync.Mutex
+	valid   bool
+	global  uint64
+	tenants map[string]valuesNotServedEntry
+	// fullPasses / tenantPasses count the recomputes, for tests to see
+	// which path a commit took.
+	fullPasses, tenantPasses int
+}
+
+type valuesNotServedEntry struct {
+	input    uint64
+	at       time.Time
+	edge     time.Time
+	hasEdge  bool
+	verdicts map[string]string // nil: nothing recorded
+}
+
+// fresh reports whether e still holds the tenant's verdicts for input at now.
+func (e valuesNotServedEntry) fresh(input uint64, now time.Time) bool {
+	return e.input == input && !now.Before(e.at) && (!e.hasEdge || !now.After(e.edge))
+}
+
+func newValuesNotServedEntry(overrides map[string]ScheduledValue, input uint64, now time.Time, v map[string]string) valuesNotServedEntry {
+	edge, hasEdge := config.ValuesNotServedExpiryEdge(overrides, now)
+	return valuesNotServedEntry{input: input, at: now, edge: edge, hasEdge: hasEdge, verdicts: v}
+}
+
+// verdicts is cfg.ValuesNotServed(now), recomputed only where it may have
+// changed since the previous call.
+func (c *valuesNotServedCache) verdicts(cfg *ThresholdConfig, now time.Time) map[string]map[string]string {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	global := cfg.ValuesNotServedGlobalInput()
+	inputs := make(map[string]uint64, len(cfg.Tenants))
+	var stale []string
+	for tenant, overrides := range cfg.Tenants {
+		in := config.TenantValuesInput(overrides)
+		inputs[tenant] = in
+		if !c.valid || c.global != global {
+			continue
+		}
+		if e, ok := c.tenants[tenant]; !ok || !e.fresh(in, now) {
+			stale = append(stale, tenant)
+		}
+	}
+	// Recomputing tenants one by one pays the resolve's per-call setup each
+	// time; past half the tenants one whole-config pass is cheaper.
+	if !c.valid || c.global != global || 2*len(stale) > len(cfg.Tenants) {
+		all := cfg.ValuesNotServed(now)
+		c.tenants = make(map[string]valuesNotServedEntry, len(cfg.Tenants))
+		for tenant, overrides := range cfg.Tenants {
+			c.tenants[tenant] = newValuesNotServedEntry(overrides, inputs[tenant], now, all[tenant])
+		}
+		c.global, c.valid = global, true
+		c.fullPasses++
+		return all
+	}
+	for _, tenant := range stale {
+		overrides := cfg.Tenants[tenant]
+		c.tenants[tenant] = newValuesNotServedEntry(overrides, inputs[tenant], now, cfg.TenantValuesNotServed(tenant, now))
+		c.tenantPasses++
+	}
+	out := map[string]map[string]string{}
+	for tenant, e := range c.tenants {
+		if _, live := inputs[tenant]; !live {
+			delete(c.tenants, tenant)
+			continue
+		}
+		if len(e.verdicts) > 0 {
+			out[tenant] = e.verdicts
+		}
+	}
+	return out
 }
