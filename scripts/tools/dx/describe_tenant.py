@@ -76,7 +76,6 @@ from _grar_validate import (  # noqa: E402
 # `da-guard effective`'s — the exporter's and tenant-api's value — read, not
 # computed here. `_canonical_hash` below stays for `--what-if` only.
 from _lib_tenant_values import (  # noqa: E402
-    DA_GUARD_PREFIX,
     DaGuardError,
     DaGuardNotFoundError,
     ParseFailedError,
@@ -1386,6 +1385,15 @@ def _expand_profile(own: Any, profiles: dict,
     return out, sources
 
 
+# #1549: `merged_hash_error`, when there is no merged_hash. Fixed words that
+# name no file: the cause, with da-guard's own lines, is on stderr.
+MERGED_HASH_NO_DA_GUARD = "no da-guard to read merged_hash from (see stderr)"
+MERGED_HASH_DA_GUARD_FAILED = "da-guard effective failed, so there is no merged_hash (see stderr)"
+MERGED_HASH_UNREADABLE_TREE = ("the exporter's load skips or cannot read a file of this tree, "
+                               "so da-guard effective gives no merged_hash (see stderr)")
+MERGED_HASH_NO_TENANT = "da-guard effective resolves no tenant with this id, so there is no merged_hash"
+
+
 class ConfDScanner:
     """Scan a conf.d/ directory and build the inheritance graph."""
 
@@ -1919,9 +1927,13 @@ class ConfDScanner:
 
         No da-guard, a da-guard that fails, a tree with a file the exporter
         cannot decode or read, or a tenant da-guard does not resolve: None,
-        with the reason. The first three are named on stderr once per
-        scanner (a WARN line, then da-guard's own lines); nothing computed
-        here stands in for the value."""
+        with the reason — in fixed words naming no file (`MERGED_HASH_*`):
+        the field rides on the machine-readable output, and every entry the
+        walk could not read is named exactly once per run, on stderr
+        (#1607). The cause is said on stderr once per scanner: a WARN line,
+        then da-guard's own lines — except when the exporter's load only
+        could not READ some entries, which this tool's own walk has already
+        named above. Nothing computed here stands in for the value."""
         if self._go_hashes is None and self._go_hashes_error is None:
             try:
                 self._go_hashes = {str(t): e.merged_hash
@@ -1931,25 +1943,33 @@ class ConfDScanner:
                 print_load_error(exc, buf)
                 lines = buf.getvalue().splitlines()
                 reason = lines[0].removeprefix("ERROR: ") if lines else str(exc)
-                # da-guard's own lines carry the cause (`exited 2` alone
-                # does not say "duplicate tenant ID"); the field holds them too.
-                said = [ln.removeprefix(DA_GUARD_PREFIX).strip() for ln in lines[1:]]
-                self._go_hashes_error = ("da-guard effective gave no merged_hash: " + reason
-                                         + "".join(f" | {ln}" for ln in said if ln))
-                # WARN, not the ERROR line `print_load_error` writes: every
-                # other field is still reported. da-guard's own lines follow
-                # as that function prefixes and escapes them.
-                print(f"WARN: merged_hash is not reported (null, with merged_hash_error): "
-                      f"it is da-guard effective's and none could be read (#1549): {reason}",
-                      file=sys.stderr)
-                for line in lines[1:]:
-                    print(line, file=sys.stderr)
+                head = ("WARN: merged_hash is not reported (null, with merged_hash_error): "
+                        "it is da-guard effective's and none could be read (#1549)")
+                if isinstance(exc, DaGuardNotFoundError):
+                    self._go_hashes_error = MERGED_HASH_NO_DA_GUARD
+                elif isinstance(exc, ParseFailedError):
+                    self._go_hashes_error = MERGED_HASH_UNREADABLE_TREE
+                else:
+                    self._go_hashes_error = MERGED_HASH_DA_GUARD_FAILED
+                if isinstance(exc, ParseFailedError) and not exc.parse_failed:
+                    # Only entries the load could not read (a broken
+                    # symlink, a directory named *.yaml): `_scan` named each
+                    # of them above, and naming them again breaks "once per
+                    # run" (#1607).
+                    print(f"{head}: the exporter's load cannot read an entry of this "
+                          f"tree (named above).", file=sys.stderr)
+                else:
+                    # WARN, not the ERROR line `print_load_error` writes:
+                    # every other field is still reported. da-guard's own
+                    # lines follow as that function prefixes and escapes them.
+                    print(f"{head}: {reason}", file=sys.stderr)
+                    for line in lines[1:]:
+                        print(line, file=sys.stderr)
         if self._go_hashes is None:
             return None, self._go_hashes_error
         tid = _tenant_id(tenant_id)
         if tid not in self._go_hashes:
-            return None, (f"da-guard effective resolves no tenant '{tid}' in "
-                          f"{self.conf_d}, so there is no merged_hash for it")
+            return None, MERGED_HASH_NO_TENANT
         return self._go_hashes[tid], None
 
     def source_info(self, tenant_id: str) -> dict:

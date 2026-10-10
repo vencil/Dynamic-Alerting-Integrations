@@ -153,8 +153,9 @@ def test_without_da_guard(tmp_path, monkeypatch):
     got = json.loads((tmp_path / "a.json").read_text(encoding="utf-8"))
     for t in ("t1", "t2"):
         assert got[t]["merged_hash"] is None, got[t]
-        assert "da-guard binary not found" in got[t]["merged_hash_error"]
+        assert "no da-guard" in got[t]["merged_hash_error"], got[t]
         assert got[t]["effective_config"]["cpu"]
+    assert "da-guard binary not found" in p.stderr, p.stderr
     v = subprocess.run([sys.executable, str(VERIFY), "t1", "--conf-d", str(a), "--json"],
                        capture_output=True, text=True, encoding="utf-8", timeout=120)
     assert v.returncode == 1, (v.returncode, v.stdout, v.stderr)

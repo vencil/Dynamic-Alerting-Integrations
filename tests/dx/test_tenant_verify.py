@@ -344,13 +344,14 @@ def test_duplicate_tree_clean_tenant_has_no_merged_hash(verify_module, tmp_path,
                                                          cli_argv):
     """#1549: the `duplicate` refusal is still per tenant, but merged_hash
     is da-guard's, and da-guard refuses the whole tree over the duplicate.
-    So `solo` is not verified either: exit 1 naming da-guard's reason — not
-    rc 0 on a hash nothing in Go would serve, and not 2 (a mismatch)."""
+    So `solo` is not verified either: exit 1, da-guard's reason on stderr —
+    not rc 0 on a hash nothing in Go would serve, and not 2 (a mismatch)."""
     root = _dup_tree(tmp_path, "other.yaml")
     cli_argv("tenant-verify", "solo", "--conf-d", str(root))
     assert verify_module.main() == 1
-    out = capsys.readouterr().out
-    assert "merged_hash_unavailable" in out and 'duplicate tenant ID "acme"' in out, out
+    captured = capsys.readouterr()
+    assert "merged_hash_unavailable" in captured.out, captured.out
+    assert 'duplicate tenant ID "acme"' in captured.err, captured.err
 
 
 def test_single_declaration_item6_passes(verify_module, tmp_path, cli_argv):
@@ -372,14 +373,18 @@ def test_all_with_duplicate_exits_2_and_keeps_others(
     cli_argv("tenant-verify", "--all", "--conf-d", str(root), "--json")
     code = verify_module.main()
     assert code == 2
-    doc = _json.loads(capsys.readouterr().out)
+    captured = capsys.readouterr()
+    doc = _json.loads(captured.out)
     tenants = {t["tenant_id"]: t for t in doc["tenants"]}
     assert set(tenants) == {"acme", "solo"}
     assert tenants["acme"]["error"] == "duplicate"
     assert tenants["acme"]["files"] == ["other.yaml", "real.yaml"]
     assert "merged_hash" not in tenants["acme"]
     assert tenants["solo"]["error"] == "merged_hash_unavailable"
-    assert 'duplicate tenant ID "acme"' in tenants["solo"]["detail"]
+    # The entry's detail is fixed wording (no file names on the JSON
+    # stream, #1607); da-guard's reason is on stderr.
+    assert tenants["solo"]["detail"] == verify_module._load_describe_module().MERGED_HASH_DA_GUARD_FAILED
+    assert 'duplicate tenant ID "acme"' in captured.err, captured.err
 
 
 def test_all_human_with_duplicate_exits_2(verify_module, tmp_path, capsys, cli_argv):

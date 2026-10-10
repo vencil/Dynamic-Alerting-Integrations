@@ -201,7 +201,7 @@ def test_merge_parity_python(golden: dict, da_guard_env):
         f"describe_tenant's own merged_hash drift for {golden['scenario']}"
     if golden["fixture_dir"] in NOT_SERVED:
         assert result["merged_hash"] is None, golden["scenario"]
-        assert "do not decode" in result["merged_hash_error"], result["merged_hash_error"]
+        assert result["merged_hash_error"] == dt.MERGED_HASH_UNREADABLE_TREE, result
     else:
         assert result["merged_hash"] == golden["merged_hash"], \
             f"merged_hash drift for {golden['scenario']}"

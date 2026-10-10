@@ -156,7 +156,8 @@ def test_describe_tenant_matches_the_pinned_go_answer(tree, tmp_path: Path, da_g
         # to the pinned Go answer in every tree.
         if any(expect_shape(w) == "error" for w in tree["expect"].values()):
             assert out["merged_hash"] is None, tenant
-            assert "duplicate tenant ID" in out["merged_hash_error"], out["merged_hash_error"]
+            assert out["merged_hash_error"] == dt.MERGED_HASH_DA_GUARD_FAILED, out
+            assert 'duplicate tenant ID "' in r.stderr, r.stderr   # da-guard's own line
         else:
             assert out["merged_hash"] == want["merged_hash"], tenant
         own = dt._canonical_hash(dt.ConfDScanner(conf_d).effective_config(
