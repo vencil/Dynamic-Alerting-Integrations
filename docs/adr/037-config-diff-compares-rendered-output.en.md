@@ -12,7 +12,7 @@ lang: en
 
 ## Status
 
-✅ **Accepted** (drafted 2026-10-10, approved by the owner 2026-10-10). The decisions were made by the owner in [#1516](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/1516).
+✅ **Accepted** (drafted 2026-10-10, approved by the owner 2026-10-10). The decisions were made by the owner in [#1516](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/1516). On 2026-10-10 decision 4 gained the table for rendering failures (a broken base-side configuration does not block the PR).
 
 ## Summary
 
@@ -97,7 +97,22 @@ Carriers not covered yet, and when they will be:
 
 ### 4. Exit codes and the report
 
-Exit codes keep their meaning: 0 no changes; 1 changes, or changes that were not compared; 2 rendering failed or the input could not be read, and the report says "not computed" rather than falling back to "no changes".
+Exit codes: 0 no changes; 1 changes, or changes that were not compared; 2 no result was computed (the PR side failed to render, the tool itself failed, or the input could not be read), and the report says "not computed" rather than falling back to "no changes".
+
+When rendering fails, the first question is whether the configuration or the tool is at fault, and the second is which side failed. The base side is the branch the PR merges into (usually main); if the configuration there is already broken, the PR that fixes it must not be blocked:
+
+| Situation | Handling | Exit code |
+|---|---|---|
+| One view fails to render on the PR side | That view says "not computed"; the other views are compared as usual | 2 |
+| The PR side has no conf.d, or no `.yaml` file in it | As above: the renderers are not run, and the view says "not computed" | 2 |
+| The base side's configuration is broken (see the rule below) | The report names the base-side failure and its reason; that view is listed as "not compared" as a whole, never compared against a partial base; the carriers (see decision 3) of a base-side file that could not be read are listed as not compared too | 1 |
+| The base side has no conf.d, or no `.yaml` file in it (the configuration is imported for the first time) | The renderers are not run; an empty configuration is the base, and every tenant counts as added | 1 |
+| The tool itself fails, on either side | The report says "not computed" | 2 |
+| Both sides fail | Handled as the PR side | 2 |
+
+Only the following count as a broken configuration; anything else is treated as a tool failure (blocking rather than letting a failure through): `da-guard served-values` exits 3 (a file does not decode or cannot be read; it still writes a partial result, which must not be compared); da-guard accepts the arguments but exits 2, for example when one tenant is declared in two files; the route generator rejects the tree. Tool failures include: da-guard not found, da-guard older than the version da-tools requires, output not in the expected format, a timeout, or the process being killed.
+
+"No conf.d or no `.yaml` file" is decided by looking at the directory, not by an exit code: `da-guard served-values` exits 2 both for an empty directory and for one that does not exist, while the route generator exits 0 on an empty directory.
 
 The report is grouped by change: one platform change lists the number of affected tenants and the first few names instead of a thousand lines, and the whole report still respects the PR comment length limit. The JSON output gets a new structure with a top-level `schema` version; readers reject versions they do not recognise.
 
