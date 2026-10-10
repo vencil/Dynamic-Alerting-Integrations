@@ -351,3 +351,12 @@ def test_unserved_routing_value_as_written_is_masked():
     by_key = {c.key: (c.base, c.pr) for c in out}
     assert by_key["_routing"] == (rd.MASKED, rd.MASKED)
     assert by_key["x"] == ("url: https://h/SEKRET-1", "url: https://h/SEKRET-2")  # 對照：一般鍵照原值
+
+
+def test_silence_made_open_ended_is_seen_by_the_served_comparison():
+    """`time_boxes` 也在 served 比對裡：靜默改成無期限，送出的讀數不變，時效變了。"""
+    def t(boxes):
+        return {"a": tv.TenantValues("a", {"_silent_mode": ["warning"]}, {}, {}, {}, None, {}, {}, boxes)}
+    boxed = {"_silent_mode": (tv.TimeBox("warning", "2027-01-01T00:00:00Z", False),)}
+    out = rd.diff_served(t(boxed), t({}))
+    assert [(c.field, c.key) for c in out] == [("time_boxes", "_silent_mode")]

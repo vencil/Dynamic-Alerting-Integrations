@@ -736,7 +736,7 @@ def test_output_without_time_boxes_is_refused_as_older(tmp_path):
     assert "time_boxes" in str(ei.value) and ei.value.stale
 
 
-@pytest.mark.parametrize("boxes", ['[]', '{"_silent_mode": {}}', '{"_silent_mode": [{"expires": ""}]}',
+@pytest.mark.parametrize("boxes", ['[]', '{"_silent_mode": {}}', '{"_silent_mode": [{"expires": "", "expired": false}]}',
                                    '{"_silent_mode": [{"expires": "x", "expired": "no"}]}'],
                          ids=["list", "not-a-list", "empty-expires", "expired-not-bool"])
 def test_time_boxes_not_of_their_shape_are_refused(tmp_path, boxes):

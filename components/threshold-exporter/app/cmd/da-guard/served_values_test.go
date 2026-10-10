@@ -715,15 +715,17 @@ func TestServedValues_MatchesResolveAt(t *testing.T) {
 				if wantTB[tenant] == nil {
 					wantTB[tenant] = map[string]string{}
 				}
-				wantTB[tenant][key] = fmt.Sprintf("%s|%v", exp.UTC().Format(time.RFC3339), expired)
+				wantTB[tenant][key] = fmt.Sprintf("%s|%v", exp.UTC().Format(time.RFC3339Nano), expired)
 			}
 			for _, sm := range append(append([]config.ResolvedSilentMode(nil), ops.Silences...), ops.ExpiredSilences...) {
 				if !sm.Expires.IsZero() {
 					addTB(sm.Tenant, "_silent_mode/"+sm.TargetSeverity, sm.Expires, sm.Expired)
 				}
 			}
-			for _, me := range cfg.ResolveMaintenanceExpiriesAt(now) {
-				addTB(me.Tenant, "_state_maintenance/", me.Expires, me.Expired)
+			if _, declared := cfg.StateFilters["maintenance"]; declared {
+				for _, me := range cfg.ResolveMaintenanceExpiriesAt(now) {
+					addTB(me.Tenant, "_state_maintenance/", me.Expires, me.Expired)
+				}
 			}
 			routed := map[string]bool{}
 			for _, r := range cfg.ResolveRouting() {
@@ -1284,5 +1286,25 @@ func TestServedValues_TimeBoxChangeIsVisible(t *testing.T) {
 	}
 	if n := len(read(cases[0].a).Tenants["t"].TimeBoxes["_silent_mode"]); n != 2 {
 		t.Errorf("target all: %d _silent_mode entries, want 2 (warning, critical)", n)
+	}
+	// Sub-second digits are kept: a change below the second is a change.
+	got := read("    _silent_mode: {target: warning, expires: \"2027-01-01T00:00:00.9Z\"}\n").Tenants["t"].TimeBoxes["_silent_mode"]
+	if len(got) != 1 || got[0].Expires != "2027-01-01T00:00:00.9Z" {
+		t.Errorf("sub-second expires: %+v", got)
+	}
+}
+
+// TestServedValues_UndeclaredMaintenanceHasNoTimeBox: without the maintenance
+// filter declared the mode is not in force, so its time-box changes nothing
+// and is not listed (the control above declares it and lists it).
+func TestServedValues_UndeclaredMaintenanceHasNoTimeBox(t *testing.T) {
+	t.Parallel()
+	code, doc, _, stderr := served(t, map[string]string{
+		"_defaults.yaml": "defaults:\n  x: 1\n",
+		"t.yaml":         "tenants:\n  t:\n    _state_maintenance: {target: enable, expires: \"2027-01-01T00:00:00Z\"}\n",
+	}, "2026-07-01T03:00:00Z")
+	mustOK(t, code, stderr)
+	if tb := doc.Tenants["t"].TimeBoxes; len(tb) != 0 {
+		t.Errorf("undeclared maintenance filter: time_boxes %+v, want none", tb)
 	}
 }

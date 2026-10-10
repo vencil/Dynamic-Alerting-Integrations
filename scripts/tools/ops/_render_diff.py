@@ -77,7 +77,7 @@ DEFAULT_TIMEOUT = 600
 EMPTY_ROUTES: dict[str, Any] = {"route": {}, "receivers": [], "inhibit_rules": []}
 
 ROUTE_ATTRS = ("receiver", "group_by", "group_wait", "group_interval", "repeat_interval", "continue")
-SERVED_FIELDS = ("values", "severities", "state_filters", "unserved", "dropped", "schedules")
+SERVED_FIELDS = ("values", "severities", "state_filters", "time_boxes", "unserved", "dropped", "schedules")
 # Receiver fields whose value may be a credential (webhook URLs carry tokens).
 _SECRET_KEY = re.compile(r"url|token|password|secret|key|credential|auth", re.IGNORECASE)
 _TENANT_MATCHER = re.compile(r'^\s*tenant\s*=\s*"?(.*?)"?\s*$')

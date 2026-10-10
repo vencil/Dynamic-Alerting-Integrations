@@ -164,7 +164,8 @@ type servedTenantValues struct {
 	// TimeBoxes: every time-box the exporter honours on an operational
 	// mode, keyed by the reserved key that writes it — `_silent_mode` (one
 	// entry per silenced severity) and `_state_maintenance` (structured
-	// form) — with `expires` as the exporter parsed it (RFC3339) and its
+	// form, when the maintenance filter is declared) — with `expires` as the
+	// exporter parsed it (RFC3339, sub-second digits kept) and its
 	// verdict at `at`. The mode's own reading in Values says only whether
 	// it is in force at `at`, so extending a silence or making it
 	// open-ended changes nothing there; it changes this. A mode with no
@@ -509,11 +510,17 @@ func servedValues(cfg *config.ThresholdConfig, at time.Time,
 			continue
 		}
 		timeBoxes[sm.Tenant] = append(timeBoxes[sm.Tenant], keyedBox{"_silent_mode", servedTimeBox{
-			Target: sm.TargetSeverity, Expires: sm.Expires.UTC().Format(time.RFC3339), Expired: sm.Expired}})
+			Target: sm.TargetSeverity, Expires: sm.Expires.UTC().Format(time.RFC3339Nano), Expired: sm.Expired}})
 	}
-	for _, me := range res.MaintenanceExpiries {
-		timeBoxes[me.Tenant] = append(timeBoxes[me.Tenant], keyedBox{"_state_maintenance", servedTimeBox{
-			Expires: me.Expires.UTC().Format(time.RFC3339), Expired: me.Expired}})
+	// A maintenance time-box is listed only when the maintenance filter is
+	// declared: without it the mode is not in force at all, so its time-box
+	// changes nothing (the expiry reading itself does not look at the
+	// declaration).
+	if _, declared := cfg.StateFilters["maintenance"]; declared {
+		for _, me := range res.MaintenanceExpiries {
+			timeBoxes[me.Tenant] = append(timeBoxes[me.Tenant], keyedBox{"_state_maintenance", servedTimeBox{
+				Expires: me.Expires.UTC().Format(time.RFC3339Nano), Expired: me.Expired}})
+		}
 	}
 	for _, boxes := range timeBoxes {
 		sort.Slice(boxes, func(i, j int) bool {
