@@ -67,6 +67,9 @@ BUILD_EXEMPT = frozenset({
     # analyze_rule_pack_gaps, policy_engine and policy_opa_bridge.
     # Library, not CLI.
     "_lib_tenant_values.py",
+    # #1516 — credential-field redaction shared by config_diff and
+    # _render_diff (list mirrors tenant-api credmask). Library, not CLI.
+    "_lib_redact.py",
     # v2.8.0 PR-3a — generate_alertmanager_routes.py split into 5 helpers.
     # These are library modules consumed by the main file via re-export,
     # not CLI commands themselves.
