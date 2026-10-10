@@ -45,6 +45,8 @@ import (
 	"github.com/vencil/threshold-exporter/pkg/receiverspec"
 	"github.com/vencil/threshold-exporter/pkg/routingpolicy"
 	"gopkg.in/yaml.v3"
+
+	"github.com/vencil/tenant-api/internal/credmask"
 )
 
 // ReceiverViolation is one receiver problem, one matcher value that is
@@ -84,7 +86,7 @@ func (e *ReceiverShapeError) lines() []string {
 // body the Writer's own pre-flight would refuse (over the size cap, bad YAML,
 // a missing tenant section) passes here, so the Writer answers it as before.
 func ReceiverPreflight(tenantID, yamlContent string) error {
-	if v := receiverViolations(tenantID, yamlContent); len(v) > 0 {
+	if v := preflightViolations(tenantID, yamlContent); len(v) > 0 {
 		return &ReceiverShapeError{Violations: v}
 	}
 	return nil
@@ -96,10 +98,41 @@ func dryRunPreflight(tenantID, yamlContent string) []string {
 	if errs := validateBodyOnly(tenantID, yamlContent); len(errs) > 0 {
 		return errs
 	}
-	if v := receiverViolations(tenantID, yamlContent); len(v) > 0 {
+	if v := preflightViolations(tenantID, yamlContent); len(v) > 0 {
 		return (&ReceiverShapeError{Violations: v}).lines()
 	}
 	return nil
+}
+
+// preflightViolations is what ReceiverPreflight and the dry-runs judge: the
+// receivers and matcher values, then any masked-credential placeholder.
+func preflightViolations(tenantID, yamlContent string) []ReceiverViolation {
+	return append(receiverViolations(tenantID, yamlContent), placeholderViolations(yamlContent)...)
+}
+
+// placeholderViolations refuses every value in the body that decodes to
+// credmask.Placeholder (#1560) — the text a caller without write permission
+// is shown in place of a credential. Written back, it would replace the real
+// credential with the placeholder. The callers shown it cannot PUT (the mask
+// and the PUT gate share one predicate); this catches a client that read
+// under one identity and writes under another.
+//
+// ⛔ ON THE DECODED VALUE, ANYWHERE IN THE DOCUMENT: a quoted, `!!str`-tagged,
+// block-scalar or aliased placeholder decodes to the same string, and a
+// body may move a value to a key the mask never touched.
+func placeholderViolations(yamlContent string) []ReceiverViolation {
+	if len(CheckTenantDocSize(yamlContent)) > 0 {
+		return nil // the Writer's to refuse, unparsed (as receiverViolations)
+	}
+	var out []ReceiverViolation
+	for _, path := range credmask.PlaceholderPaths([]byte(yamlContent)) {
+		out = append(out, ReceiverViolation{
+			Field: path,
+			Reason: fmt.Sprintf("is %q, the placeholder shown in place of a credential to callers "+
+				"without write permission; send the real value", credmask.Placeholder),
+		})
+	}
+	return out
 }
 
 // receiverViolations returns one violation per receiverspec problem of every

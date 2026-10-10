@@ -1281,42 +1281,70 @@ func (w *Writer) WriteMerged(ctx context.Context, tenantID, authorEmail string, 
 // It takes no lock, so it resolves the file through previewTenantFilePath:
 // its #2078 walk is shared with concurrent previews (see scanTreeForRead).
 func (w *Writer) Diff(tenantID, proposedContent string) (string, error) {
-	filePath, err := w.previewTenantFilePath(tenantID)
+	current, exists, err := w.PreviewCurrent(tenantID)
 	if err != nil {
 		return "", err
 	}
+	return w.DiffTexts(tenantID, string(current), exists, proposedContent)
+}
 
+// PreviewCurrent returns the tenant's current file content for a preview, and
+// whether the file exists. It resolves the file as Diff does (no lock, the
+// shared #2078 walk), so its errors are Diff's.
+func (w *Writer) PreviewCurrent(tenantID string) ([]byte, bool, error) {
+	filePath, err := w.previewTenantFilePath(tenantID)
+	if err != nil {
+		return nil, false, err
+	}
 	existing, err := os.ReadFile(filePath)
 	if os.IsNotExist(err) {
+		return nil, false, nil
+	}
+	if err != nil {
+		return nil, false, fmt.Errorf("read existing: %w", err)
+	}
+	return existing, true, nil
+}
+
+// DiffTexts is the unified diff from current to proposed — Diff without the
+// file read, so a caller can diff two texts it prepared itself (the masked
+// preview, #1560). exists=false renders proposed as a new file. Equal texts
+// give "".
+//
+// The diff runs on two temporary files named current/<id>.yaml and
+// proposed/<id>.yaml in a private directory, from inside it, so the header
+// names those relative paths: no conf.d or temp-dir path reaches the caller.
+func (w *Writer) DiffTexts(tenantID, current string, exists bool, proposed string) (string, error) {
+	if !exists {
 		// New file — show the entire proposed content as an addition
 		var lines []string
-		for _, line := range strings.Split(proposedContent, "\n") {
+		for _, line := range strings.Split(proposed, "\n") {
 			lines = append(lines, "+"+line)
 		}
 		return strings.Join(lines, "\n"), nil
 	}
-	if err != nil {
-		return "", fmt.Errorf("read existing: %w", err)
-	}
-
-	if string(existing) == proposedContent {
+	if current == proposed {
 		return "", nil
 	}
 
-	// Use git diff --no-index for a proper unified diff
-	tmpFile, err := os.CreateTemp("", "tenant-api-diff-*.yaml")
+	dir, err := os.MkdirTemp("", "tenant-api-diff-*")
 	if err != nil {
-		return "", fmt.Errorf("create temp file: %w", err)
+		return "", fmt.Errorf("create temp dir: %w", err)
 	}
-	defer func() { _ = os.Remove(tmpFile.Name()) }()
-
-	if _, err := tmpFile.WriteString(proposedContent); err != nil {
-		return "", fmt.Errorf("write temp file: %w", err)
+	defer func() { _ = os.RemoveAll(dir) }()
+	name := tenantID + ".yaml"
+	for sub, text := range map[string]string{"current": current, "proposed": proposed} {
+		if err := os.Mkdir(filepath.Join(dir, sub), 0o700); err != nil {
+			return "", fmt.Errorf("create temp dir: %w", err)
+		}
+		if err := os.WriteFile(filepath.Join(dir, sub, name), []byte(text), 0o600); err != nil {
+			return "", fmt.Errorf("write temp file: %w", err)
+		}
 	}
-	_ = tmpFile.Close()
 
-	cmd, _, cancel := w.gitCmd("diff", "--no-index", "--", filePath, tmpFile.Name())
+	cmd, _, cancel := w.gitCmd("diff", "--no-index", "--", "current/"+name, "proposed/"+name)
 	defer cancel()
+	cmd.Dir = dir
 	// git diff exits 1 when there are differences — that's expected, so the error
 	// is intentionally discarded. A deadline-killed diff likewise returns empty
 	// output here (this is a read-only advisory diff, not a write path).

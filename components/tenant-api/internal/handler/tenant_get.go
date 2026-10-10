@@ -15,6 +15,7 @@ import (
 
 	"github.com/vencil/tenant-api/internal/boundedcall"
 	"github.com/vencil/tenant-api/internal/confd"
+	"github.com/vencil/tenant-api/internal/credmask"
 	"github.com/vencil/tenant-api/internal/customalerts"
 )
 
@@ -62,6 +63,22 @@ type TenantDetail struct {
 	// batch patches) refuse such a file (TENANT_CONFIG_NOT_LOADABLE) until
 	// the tenant file itself is repaired. Absent on a usable file.
 	ConfigError string `json:"config_error,omitempty" enums:"malformed_yaml,invalid_config"`
+	// Masked is true when the caller may read this tenant but not write it
+	// (#1560): raw_yaml is then the file re-encoded with every receiver
+	// credential (webhook / chat URLs, PagerDuty keys, passwords, tokens)
+	// replaced by the placeholder "<masked: write permission required>" and
+	// without comments, and custom_alerts is masked the same way. A PUT
+	// carrying the placeholder is refused (400), so a masked copy cannot be
+	// written back over the real values. source_hash is then empty: a hash
+	// of the stored file would let a guess be checked offline.
+	Masked bool `json:"masked,omitempty"`
+	// RawYAMLWithheld is true, with raw_yaml, custom_alerts and source_hash
+	// empty, when
+	// the caller would be shown the masked form but the file cannot be masked
+	// with certainty: it is not YAML, holds more than one document, or uses an
+	// anchor, alias or merge key (a credential can be placed outside any
+	// credential field through one).
+	RawYAMLWithheld bool `json:"raw_yaml_withheld,omitempty"`
 }
 
 // tenantDetailNotLoadable is TenantDetail for a file with a config_error: the
@@ -72,6 +89,34 @@ type tenantDetailNotLoadable struct {
 	RawYAML     string `json:"raw_yaml"`
 	SourceHash  string `json:"source_hash"`
 	ConfigError string `json:"config_error"`
+	// Masked / RawYAMLWithheld: as on TenantDetail.
+	Masked          bool `json:"masked,omitempty"`
+	RawYAMLWithheld bool `json:"raw_yaml_withheld,omitempty"`
+}
+
+// sourceHashFor is the source_hash a caller is shown: empty when the caller
+// is shown the masked form (#1560). The hash of the stored bytes confirms a
+// guess of the file, credentials included, offline; the caller cannot write,
+// so it has no use for the hash as a base_hash either.
+func sourceHashFor(data []byte, masked bool) string {
+	if masked {
+		return ""
+	}
+	return cfg.ComputeSourceHash(data)
+}
+
+// rawYAMLFor returns what a caller is shown of the tenant file's bytes:
+// verbatim to one who can see credentials, masked to anyone else, and
+// nothing (withheld) when the masked form cannot be built with certainty.
+func rawYAMLFor(r *http.Request, d *Deps, tenantID string, data []byte) (raw string, masked, withheld bool) {
+	if canSeeCredentials(r, d, tenantID) {
+		return string(data), false, false
+	}
+	m, err := credmask.MaskYAML(data)
+	if err != nil {
+		return "", false, true
+	}
+	return string(m), true, false
 }
 
 // GetTenant handles GET /api/v1/tenants/{id}
@@ -91,6 +136,11 @@ type tenantDetailNotLoadable struct {
 // @Description I/O, a directory) refuses the write. "Cannot parse" is the end-of-life check's decode (the tenants: block, though
 // @Description the whole file must be valid YAML); the added-section check decodes the whole file as a tenant config, and which
 // @Description broken files each can parse is not guaranteed to match, so fix the file in git when needed.
+// @Description A caller who may read the tenant but not write it gets raw_yaml with every receiver credential replaced by
+// @Description "<masked: write permission required>" and comments removed, custom_alerts masked the same way and
+// @Description source_hash empty (masked: true);
+// @Description or raw_yaml, custom_alerts and source_hash empty with raw_yaml_withheld: true when the file uses an anchor, alias or merge
+// @Description key, holds several documents or is not YAML.
 // @Tags        tenants
 // @Produce     json
 // @Param       id   path     string true "Tenant ID"
@@ -154,11 +204,14 @@ func GetTenant(d *Deps) http.HandlerFunc {
 		// either: the spec types them as arrays (Swagger 2.0 has no
 		// nullable) and does not require them, so absence stays valid.
 		if reason := tenantConfigError(data); reason != "" {
+			raw, masked, withheld := rawYAMLFor(r, d, tenantID, data)
 			writeJSON(w, http.StatusOK, tenantDetailNotLoadable{
-				ID:          tenantID,
-				RawYAML:     string(data),
-				SourceHash:  cfg.ComputeSourceHash(data),
-				ConfigError: reason,
+				ID:              tenantID,
+				RawYAML:         raw,
+				SourceHash:      sourceHashFor(data, masked || withheld),
+				ConfigError:     reason,
+				Masked:          masked,
+				RawYAMLWithheld: withheld,
 			})
 			return
 		}
@@ -202,14 +255,29 @@ func GetTenant(d *Deps) http.HandlerFunc {
 			return
 		}
 
+		// #1560: custom_alerts is the same file decoded, so it is masked the
+		// same way — and when the file is withheld it is withheld too: the
+		// decode resolved the aliases that made the file unmaskable, so a
+		// credential can sit under any key in it.
+		raw, masked, withheld := rawYAMLFor(r, d, tenantID, data)
+		switch {
+		case withheld:
+			customAlerts = []map[string]any{}
+		case masked:
+			for i, recipe := range customAlerts {
+				customAlerts[i], _ = credmask.MaskValue(recipe).(map[string]any)
+			}
+		}
 		detail := TenantDetail{
-			ID:           tenantID,
-			RawYAML:      string(data),
-			Resolved:     tenantResolved,
-			Warnings:     kv.Errors,
-			Notices:      kv.Notices,
-			SourceHash:   cfg.ComputeSourceHash(data),
-			CustomAlerts: customAlerts,
+			ID:              tenantID,
+			RawYAML:         raw,
+			Resolved:        tenantResolved,
+			Warnings:        kv.Errors,
+			Notices:         kv.Notices,
+			SourceHash:      sourceHashFor(data, masked || withheld),
+			CustomAlerts:    customAlerts,
+			Masked:          masked,
+			RawYAMLWithheld: withheld,
 		}
 
 		writeJSON(w, http.StatusOK, detail)

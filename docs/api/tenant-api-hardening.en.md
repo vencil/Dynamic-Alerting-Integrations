@@ -182,6 +182,30 @@ De-duplicated, in request order. Operators can grep their RBAC config directly.
 
 When none are readable it reads `insufficient permission to delete group: it has member tenants you cannot view`. No count: the 403 already says something was refused, while a count would tell how many members the read plane hid.
 
+### 3.7 Receiver credentials are shown only to callers who can write ([#1560](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/1560))
+
+Behaviour change: `GET /tenants/{id}`, `/effective` and `POST /tenants/{id}/diff` used to return the receiver credentials in a tenant file verbatim to anyone who could read the tenant; the shipped `viewers` rule reads `tenants: ["*"]`, so every viewer read every tenant's webhook URLs. Now only a caller with **write** permission on the tenant sees the values; everyone else sees `<masked: write permission required>`, and the response carries `masked: true`.
+
+**Who sees them**: the decision is the same predicate as the `PUT /tenants/{id}` gate (the org axis and the `environments` / `domains` axes included). A caller shown the placeholder therefore cannot `PUT`, so there is no "read the masked copy, change one line, write it back" path that replaces the real value with the placeholder. Open mode (no `_rbac.yaml`) grants no write permission, so everyone sees the masked form there.
+
+**What is masked**: matched by key name, at any depth, case-insensitively. Containers whose whole value becomes the placeholder: `http_config` (the route generator hands it to Alertmanager as written, and `proxy_connect_header`, `http_headers`, `tls_config`'s key and `oauth2.endpoint_params` can all hold a secret — a field list cannot keep up), `tls_config`, `headers`, `http_headers`, `proxy_connect_header`, `endpoint_params`. Single fields: `url`, `api_url`, `webhook_url`, `proxy_url`, `routing_key`, `service_key`, `auth_password`, `auth_secret`, `password`, `bearer_token`, `credentials`, `client_secret`, `api_key`, `token`, `bot_token`, `user_key`. A receiver appears in at least five places (`_routing.receiver`, `overrides[i].receiver`, `routes[i].receiver`, `_routing_defaults`, a routing profile); a list of paths misses the sixth the day it appears. The price of matching by name is that a value under one of these keys that is not a credential is masked too.
+
+| Route | What a masked caller gets |
+|---|---|
+| `GET /tenants/{id}` | `raw_yaml` re-encoded **without comments** (a commented-out URL is still a credential); `custom_alerts` masked the same way. A multi-line value (block scalar) becomes a one-line placeholder |
+| `GET /tenants/{id}/effective` | Credentials masked in `effective_config` from every layer (defaults chain, platform files, profile, tenant file); the decode-failure 500 `CONFIG_DECODE_ERROR` carries a fixed text (a yaml type error quotes the value it could not decode) |
+| `POST /tenants/{id}/diff` | **Both sides** are masked before they are compared and diffed. A proposal that changes only a credential returns `has_diff: false`. The previous implementation compared the raw bytes first: a correct guess of the whole file came back as an empty diff and a wrong one did not, so credentials could be guessed one at a time; with both sides masked, the two answers are the same |
+
+**When it cannot be masked with certainty, nothing is shown**: the file uses an anchor, alias or merge key (`_metadata.owner: &h <secret>` plus `api_url: *h` puts the credential under a key that is not a credential key), holds more than one document, or is not YAML. `GET` returns empty `raw_yaml` and `custom_alerts` with `raw_yaml_withheld: true`; `/diff` returns 422 `MASKED_PREVIEW_UNAVAILABLE`. A masked caller's proposal over the tenant-document size limit or the request-body limit is a 413, never a preview of a truncated body.
+
+**Write-back guard**: `PUT /tenants/{id}` refuses with 400 a body in which any value **decodes** to the placeholder — quoted, `!!str`-tagged, as a block scalar or through an alias alike; `POST /tenants/{id}/validate` answers the same body 200 with `valid: false` and the same reason.
+
+**No hashes either**: a masked caller gets `source_hash` (`GET`, `/effective`) and `merged_hash` (`/effective`) as empty strings. `merged_hash` hashes the decoded merge; a masked caller has every other value, so putting a guess where the placeholder is and running the public algorithm checks the guess offline — a dictionary attack on a low-entropy password. `source_hash` hashes the stored bytes and confirms a guess of the whole file the same way. A masked caller cannot write, so it has no use for `source_hash` as a `base_hash`.
+
+**Nothing is shown for a tagged key**: a key written `? !!binary YXBpX3VybA==` decodes to `api_url`, which its text does not show, so a key with an explicit tag other than `!!str` also counts as not maskable with certainty.
+
+This is an interim measure: the long-term fix is a reference form for credentials (a Secret reference that is never returned after it is written; #1560 option c).
+
 ---
 
 ## 4. Upgrade guidance
