@@ -1339,6 +1339,8 @@ func (c *ThresholdConfig) ResolveSeverityDedup() []ResolvedSeverityDedup {
 //
 // _metadata is stored as a re-serialized YAML string in ScheduledValue.Default
 // (arbitrary mapping path in UnmarshalYAML). We parse it back into TenantMetadata.
+// The value is already every layer's merged per key — the root platform
+// files' `tenants:` entries and the tenant file (#2370, overlayTenantLayer).
 func (c *ThresholdConfig) ResolveMetadata() []ResolvedMetadata {
 	var result []ResolvedMetadata
 
@@ -1547,26 +1549,17 @@ func (c *ThresholdConfig) validateOverrideKeys() KeyValidation {
 				}
 			}
 
-			// Known reserved key
-			if validReservedKeys[canonKey] {
-				continue
-			}
-
-			// Known reserved prefix
-			reserved := false
-			for _, prefix := range validReservedPrefixes {
-				if strings.HasPrefix(canonKey, prefix) {
-					reserved = true
-					break
-				}
-			}
-			if reserved {
+			// #1822: the shape and the platform key it is judged against come
+			// from overrideKeyShape, which PlatformKeyFor (da-guard key-refs)
+			// shares, so "which metric does this key belong to" has one answer.
+			shape, baseKey := overrideKeyShape(canonKey)
+			if shape == shapeReserved {
 				continue
 			}
 
 			// Dimensional key with {labels}
-			if strings.Contains(canonKey, "{") {
-				baseKey, customLabels, regexLabels := parseKeyWithLabels(canonKey)
+			if shape == shapeDimensional {
+				_, customLabels, regexLabels := parseKeyWithLabels(canonKey)
 				_, baseValued := canonDefaults[baseKey]
 				_, baseDeclared := canonOptional[baseKey]
 				// A declared base is accepted here with no reservation, unlike
@@ -1611,8 +1604,7 @@ func (c *ThresholdConfig) validateOverrideKeys() KeyValidation {
 			// `mysql_cpu_critical` whose (renamed) base exists gets only the
 			// rename notice above — no dangling error; a truly base-less
 			// `_critical` still errors, naming the NEW key.
-			if strings.HasSuffix(canonKey, "_critical") {
-				baseKey := strings.TrimSuffix(canonKey, "_critical")
+			if shape == shapeCritical {
 				if _, exists := canonDefaults[baseKey]; exists {
 					continue
 				}

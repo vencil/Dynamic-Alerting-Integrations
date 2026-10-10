@@ -186,7 +186,9 @@ func PlatformOverlayFor(files []PlatformTenants, tenantID string) []PlatformBloc
 // would. With no overlay the tenant block is returned as is (no copy).
 //
 // Attribution: a key is reported when the platform value is what the
-// effective config carries for it — never `_metadata` (not inherited), and
+// effective config carries for it — never `_metadata` (the effective config
+// carries none: deepMerge drops it; its platform layer is merged per key by
+// the metadata readers instead, metadata_layers.go), and
 // never a null on a threshold key (deepMerge ignores it). A null on a
 // RESERVED (`_`-prefixed) key deletes the inherited value, so it is
 // reported exactly when `chain` (the merged defaults chain) has that key

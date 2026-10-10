@@ -196,8 +196,13 @@ jobs:
           # (conf.d family #1911) already prints this warning in repo source,
           # but no released `tools/v*` tag contains it (added in PR #1343,
           # after tools/v2.9.0),
-          # so the fix cannot reach CI through the image until a release. Bump
-          # the pin and this block can go.
+          # so the fix cannot reach CI through the image until a release.
+          # Since #1420 `config_diff.py` itself names the changed files it does
+          # not compare (a "Changed Files Not Compared" section, exit 1), so
+          # once the pin moves past v2.9.0 this block only repeats the report:
+          # remove it in that release. The marker on the next line makes
+          # `make pre-tag` (check_image_caveats.py) fail until it is gone.
+          # <!-- image-caveat: v2.9.0 -->
           # ⛔ Both queries are about WHAT THIS PR CHANGED, and both classify
           # git's exit code instead of reading its output through a test that
           # cannot tell "no" from "git failed". The first draft of this block
@@ -324,7 +329,7 @@ jobs:
           fi
           # ⛔ An accepted rc with NOTHING written is the same silent green the
           # block above describes — removing the 0600 cause did not remove the
-          # detector's blind spot. Measured with the pinned v2.9.0 image: a
+          # detector's blind spot. Measured on da-tools v2.9.0 (the pin then): a
           # malformed YAML (or non-UTF-8 bytes) in conf.d makes it traceback with
           # rc=1, which "changes detected" also uses, stdout is 0 bytes,
           # has_changes stays unset, the comment step is skipped and the job is

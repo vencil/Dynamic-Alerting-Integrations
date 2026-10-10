@@ -106,7 +106,8 @@ func TestPlatformTenantAliasSurvivesReload(t *testing.T) {
 //
 // ⛔ CONFIG LAYER ON PURPOSE. A flat tree serves no threshold row (see the
 // test above), so /metrics cannot tell the two apart; `Tenants` can.
-// MEASURED: with reclaimTenantFrom's config.OverlayAcrossSpellings replaced by
+// MEASURED: with reclaimTenantFrom's cross-spelling overlay (since #2370
+// config.OverlayTenantLayer) replaced by
 // a per-key assignment, the reload keeps BOTH spellings
 // (mysql_cpu:91 mysql_threads_running:75 redis_x:1) while a fresh Load keeps
 // only mysql_cpu — this test fails; restored, it passes.

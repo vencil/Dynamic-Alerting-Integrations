@@ -37,9 +37,14 @@ contract. Pinned image references (`ghcr.io/vencil/da-tools:vX.Y.Z`) are NOT
 this gate's job: `bump_docs.py --tools` rewrites them at release and
 `bump_docs.py --check` (first step of `make pre-tag`) fails on any it missed.
 
-Scanned: every `*.md` under `docs/` and `components/`, plus the root
-`README*.md`. Skipped: `CHANGELOG*.md` (release notes name old images on
-purpose, and are never edited to expire).
+Scanned: every `*.md` under `docs/` and `components/`, the root
+`README*.md`, and every `*.yml` / `*.yaml` directly in `.github/workflows/`
+(#1420): a workflow that runs a pinned da-tools image carries the same kind
+of caveat in its comments — a step that stands in for a fix the pinned image
+does not have yet — and it goes stale at the same release. In YAML the
+marker sits inside a `#` comment; a block is still a run of non-blank lines.
+Skipped: `CHANGELOG*.md` (release notes name old images on purpose, and are
+never edited to expire).
 
 Exit codes (scripts/tools/_lib_exitcodes.py): 0 clean / 1 finding /
 2 caller error (VERSION missing or unparseable, nothing to scan).
@@ -58,6 +63,7 @@ from _lib_validation import i18n_text  # noqa: E402
 
 REPO_ROOT = Path(__file__).resolve().parents[3]
 VERSION_FILE = Path("components/da-tools/app/VERSION")
+WORKFLOW_DIR = Path(".github/workflows")
 SCAN_DIRS = ("docs", "components")
 
 _SEMVER = r"(\d+)\.(\d+)\.(\d+)"
@@ -105,6 +111,10 @@ def iter_markdown(root: Path) -> list[Path]:
                 if not any(part.startswith(".") for part in p.relative_to(root).parts)
             )
     files.extend(p for p in root.glob("README*.md") if p.is_file())
+    workflows = root / WORKFLOW_DIR
+    if workflows.is_dir():
+        files.extend(p for p in workflows.iterdir()
+                     if p.is_file() and p.suffix in (".yml", ".yaml"))
     return sorted(
         p for p in files if not p.name.upper().startswith("CHANGELOG")
     )

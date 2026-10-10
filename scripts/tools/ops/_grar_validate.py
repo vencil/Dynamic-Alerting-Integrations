@@ -18,6 +18,7 @@ from __future__ import annotations
 
 import base64
 import binascii
+import difflib
 import fnmatch
 import functools
 import json
@@ -424,6 +425,10 @@ def _find_platform_rules_configmap() -> "Path | None":
 
 _PLATFORM_IDENTITY_CACHE: "tuple[dict, ...] | None" = None
 _PLATFORM_DEGRADED_WARNED = False
+# Why the DEFAULT (cached) probe set is the fallback constant, or None when it
+# is not. Written on every default-path computation, alongside the cache, so a
+# test that clears `_PLATFORM_IDENTITY_CACHE` gets a fresh value too.
+_PLATFORM_DEGRADED_REASON: "str | None" = None
 
 
 def _warn_probe_set_degraded(reason: str) -> None:
@@ -521,20 +526,21 @@ def platform_alert_identities(
     delivery path in this repo, not a curiosity — see ``_rule_tree`` for the
     kubelet ``MakePayload`` fallback that makes it one.
     """
-    global _PLATFORM_IDENTITY_CACHE
+    global _PLATFORM_IDENTITY_CACHE, _PLATFORM_DEGRADED_REASON
     if configmap_path is None and _PLATFORM_IDENTITY_CACHE is not None:
         return _PLATFORM_IDENTITY_CACHE
+    reason: str | None = None
     if configmap_path:
         path = Path(configmap_path)
     else:
         path = _find_platform_rules_configmap()
         if path is None:
-            _warn_probe_set_degraded(
-                f"{_PLATFORM_RULES_BASENAME} not found beside this tool nor "
-                f"under any ancestor's k8s/03-monitoring/"
-            )
+            reason = (f"{_PLATFORM_RULES_BASENAME} not found beside this tool "
+                      f"nor under any ancestor's k8s/03-monitoring/")
+            _warn_probe_set_degraded(reason)
             identities = PLATFORM_ALERT_IDENTITY_LABELS
             _PLATFORM_IDENTITY_CACHE = identities
+            _PLATFORM_DEGRADED_REASON = reason
             return identities
     try:
         docs = [d for d in yaml.safe_load_all(path.read_text(encoding="utf-8"))
@@ -576,15 +582,37 @@ def platform_alert_identities(
         if out:
             identities = tuple(out)
         else:
-            _warn_probe_set_degraded(f"{path} yielded no platform alert")
+            reason = f"{path} yielded no platform alert"
+            _warn_probe_set_degraded(reason)
             identities = PLATFORM_ALERT_IDENTITY_LABELS
     except (OSError, yaml.YAMLError, KeyError, StopIteration, AttributeError,
             TypeError, ValueError) as exc:
-        _warn_probe_set_degraded(f"{path} unreadable: {type(exc).__name__}")
+        reason = f"{path} unreadable: {type(exc).__name__}"
+        _warn_probe_set_degraded(reason)
         identities = PLATFORM_ALERT_IDENTITY_LABELS
     if configmap_path is None:
         _PLATFORM_IDENTITY_CACHE = identities
+        _PLATFORM_DEGRADED_REASON = reason
     return identities
+
+
+def probe_set_is_degraded() -> bool:
+    """True iff the DEFAULT probe set is the built-in fallback constant (#1533).
+
+    Any of the three degradation causes counts: the pack was not found, it was
+    unreadable, or it yielded no platform alert. Computing it performs the same
+    lookup as :func:`platform_alert_identities` and shares its cache, so it can
+    never disagree with the set the guards actually probed with.
+    """
+    # Identity, not equality: a pack that happened to list exactly the six
+    # fallback alerts is a full set, not a degraded one.
+    return platform_alert_identities() is PLATFORM_ALERT_IDENTITY_LABELS
+
+
+def probe_set_degraded_reason() -> "str | None":
+    """Why the default probe set degraded, or None when it did not (#1533)."""
+    platform_alert_identities()
+    return _PLATFORM_DEGRADED_REASON
 
 
 def _pinned_label_values(matchers: list[str], label: str) -> list[str]:
@@ -664,6 +692,113 @@ def assert_platform_alerts_not_tenant_silenceable(
         "match while platform alerts are excluded), or narrow the target.")
 
 
+class PlatformProbeSetUnverifiable(Exception):
+    """#1533: the silencing invariant could not be VERIFIED, as opposed to
+    being violated.
+
+    The default probe set degraded to the built-in fallback, and an
+    operator-supplied inhibit rule is tenant-triggered, so whether it silences
+    a platform alert outside the fallback is unknown. "Could not verify" is
+    exit 2 (no verdict, like amtool being unusable), not exit 1 (a verdict on
+    the config) — so this is deliberately NOT a ``ValueError``: every render
+    path turns ``ValueError`` from the invariant asserts into rc 1, and a
+    subclass would be swallowed there.
+    """
+
+
+def _target_excludes_platform_alerts(rule: dict) -> bool:
+    """True iff the target cannot reach a platform alert whatever the probe
+    set holds.
+
+    Two shapes:
+    - a target matcher on ``alert_source`` rejects ``platform``. Every platform
+      identity carries ``alert_source="platform"`` by construction (the
+      derivation keeps only rules with that marker); this is also the fix the
+      silencing violation message tells operators to write.
+    - the target requires ``metric_group``. No shipped platform alert carries
+      it (the generator's own rules rely on the same fact, and the repo's CI
+      checks them against the full set), so this covers generated rules and
+      copies of them in a base or cluster config alike, on both render paths.
+    """
+    targets = _inhibit_target_matchers(rule) or []
+    if _matchers_gate_label_present(targets, "metric_group"):
+        return True
+    for matcher in targets:
+        parsed = _INHIBIT_MATCHER_RE.match(matcher)
+        if (parsed and parsed.group(1) == PLATFORM_ALERT_SOURCE_LABEL
+                and not _matcher_matches_labels(
+                    matcher, {PLATFORM_ALERT_SOURCE_LABEL:
+                              PLATFORM_ALERT_SOURCE_VALUE})):
+            return True
+    return False
+
+
+def find_unverifiable_tenant_triggered_inhibits(
+        inhibit_rules: list[dict] | None,
+        exempt: "list[dict] | tuple" = ()) -> list[int]:
+    """Indexes of tenant-triggered inhibit rules the probe set cannot vouch for.
+
+    Empty unless :func:`probe_set_is_degraded`. *exempt* are rules (matched by
+    identity, not equality) the caller knows are code-shaped — the generator's
+    own output, verified against the FULL set by the repo's CI — so only
+    operator-supplied rules (a base config, the cluster's existing config) are
+    judged. "Tenant-triggered" is the predicate
+    :func:`find_tenant_silenceable_platform_inhibits` uses: the source
+    matchers presence-gate ``tenant``. A rule whose target excludes
+    ``alert_source="platform"`` is skipped: no probe set is needed to know it
+    cannot reach a platform alert.
+    """
+    if not probe_set_is_degraded():
+        return []
+    exempt_ids = {id(r) for r in exempt}
+    out: list[int] = []
+    for i, rule in enumerate(inhibit_rules or []):
+        if not isinstance(rule, dict) or id(rule) in exempt_ids:
+            continue
+        sources = _inhibit_side_matchers(rule, "source")
+        if (sources and _matchers_gate_label_present(sources, "tenant")
+                and not _target_excludes_platform_alerts(rule)):
+            out.append(i)
+    return out
+
+
+def assert_tenant_inhibits_verifiable(
+        inhibit_rules: list[dict] | None,
+        exempt: "list[dict] | tuple" = ()) -> None:
+    """Raise :class:`PlatformProbeSetUnverifiable` when the probe set degraded
+    and an operator-supplied tenant-triggered inhibit rule is present (#1533).
+
+    Run AFTER :func:`assert_platform_alerts_not_tenant_silenceable` on the
+    same final set: a violation the fallback can still see is a verdict (rc
+    1) and outranks "could not verify" (rc 2).
+    """
+    unverifiable = find_unverifiable_tenant_triggered_inhibits(
+        inhibit_rules, exempt)
+    if not unverifiable:
+        return
+    indexes = ", ".join(f"inhibit_rules[{i}]" for i in unverifiable)
+    raise PlatformProbeSetUnverifiable(
+        "Platform-alert silencing invariant could NOT be verified: the "
+        "platform alert identity probe set is degraded to the "
+        f"{len(PLATFORM_ALERT_IDENTITY_LABELS)}-entry built-in fallback "
+        f"({probe_set_degraded_reason()}), and operator-supplied "
+        f"tenant-triggered rule(s) {indexes} may suppress a platform "
+        "self-monitoring alert outside that fallback. Fix: make "
+        f"{_PLATFORM_RULES_BASENAME} reachable (beside this tool, or under the "
+        "checkout's k8s/03-monitoring/) and re-run, or remove those rules from "
+        "the base / cluster config.")
+
+
+# One line on purpose: validate-config prints row details through a sanitiser
+# that turns control characters (newlines included) into `?`.
+_POLICY_KEY_REMEDY = (
+    "To allow every webhook domain on purpose, write `allowed_domains: []`; "
+    "to restrict, list the patterns under `allowed_domains:`. A file that is "
+    "only a lint policy needs the `allowed_domains: []` line when it is also "
+    "passed to generate-routes / validate-config. Do not drop the flag to "
+    "clear this error: that turns the webhook domain allowlist off.")
+
+
 class PolicyInputError(ValueError):
     """`--policy` was supplied but the value cannot serve as a policy.
 
@@ -686,35 +821,31 @@ def load_policy(policy_path: str | None) -> list[str]:
     EXIT_CALLER_ERROR, so a supplied-but-unusable value now raises and the
     callers turn that into exit 2.
 
-    ⛔⛔ NOT CLOSED, and an earlier revision of this docstring said it was.
-    It claimed the empty-list return "survives for exactly two inputs, and both
-    mean the operator asked for no constraint" — a sentence written in the
-    function whose entire purpose is to stop that class. Measured, NINE inputs
-    reach ``return []``:
+    ⛔ The CONTENT axis (#1649). A file that reads and parses can still
+    leave the allowlist with nothing in it, and before #1649 six such inputs
+    returned ``[]`` — "no constraint" — at exit 0 with ``[PASS] policy``:
+    a 0-byte file, a whitespace-only file, a comment-only file, the key
+    absent, the key misspelled (``allowed_domain:``), and a list whose
+    entries are all non-strings. A truncated ``kubectl cp``, an empty
+    ConfigMap key and one missing ``s`` all landed there.
 
-        asked for no constraint (3)   no --policy at all
-                                      allowed_domains: []
-                                      allowed_domains:        (empty value)
-        could not tell (6)            a 0-byte file
-                                      a space/newline-only file (⚠️ NOT one
-                                        holding a TAB — the YAML scanner
-                                        rejects tabs, so that one raises.
-                                        Measured; "whitespace-only" was too
-                                        wide a word for what was tested.)
-                                      a comment-only file
-                                      the key absent entirely
-                                      the key misspelled (allowed_domain:)
-                                      a list whose entries are all non-strings
+    The line is drawn on whether the KEY is present, because that is what an
+    operator writes to say "no constraint" and what none of those six do:
 
-    The six below the line are the #1556 danger class arriving through a
-    different door: the operator supplied a policy, the SSRF domain allowlist
-    is off, and the report says ``[PASS] policy``. A truncated ``kubectl cp``, an
-    empty ConfigMap key and one missing ``s`` all land there. What this function
-    closes is the *path* axis (a value that is not a usable file); the *content*
-    axis is open (#1649 — and until that ticket existed this docstring said
-    "tracked separately" while nothing tracked it), and must not be read as
-    covered because
-    the path axis now raises.
+        no constraint (3)    no --policy at all
+                             allowed_domains: []
+                             allowed_domains:        (empty value)
+        caller error         no YAML document (empty / whitespace /
+                               comments only)
+                             no `allowed_domains` key (a near-miss spelling
+                               is named in the message)
+                             any entry that is not a string
+
+    ⚠️ The same file is often also a lint policy (`validate-config --policy`
+    hands it to ``lint_custom_rules`` too, and the governance doc's template
+    carries only lint keys). Such a file now needs an explicit
+    ``allowed_domains: []`` to keep meaning "no domain constraint"; the
+    error says so.
     """
     # ⛔ `is None`, not `not policy_path`. An empty string is SUPPLIED — it is
     # what an unset shell variable expands to — and the falsy test routed it
@@ -740,7 +871,7 @@ def load_policy(policy_path: str | None) -> list[str]:
     # alongside "檔案/路徑不存在"; nothing here may distinguish them.
     try:
         with open(policy_path, encoding="utf-8") as f:
-            data = yaml.safe_load(f) or {}
+            data = yaml.safe_load(f)
     except UnicodeDecodeError as exc:
         raise PolicyInputError(
             f"--policy: {policy_path!r} is not valid UTF-8: {exc}") from exc
@@ -750,11 +881,33 @@ def load_policy(policy_path: str | None) -> list[str]:
     except OSError as exc:
         raise PolicyInputError(
             f"--policy: cannot read {policy_path!r}: {exc}") from exc
+    # ⛔ No `or {}` above: folding "no document" into an empty mapping is how
+    # an empty / comment-only file became "no constraint" (#1649).
+    if data is None:
+        raise PolicyInputError(
+            f"--policy: {policy_path!r} holds no YAML document (empty, "
+            f"whitespace or comments only), so it says nothing about "
+            f"`allowed_domains`. {_POLICY_KEY_REMEDY}")
     if not isinstance(data, dict):
         raise PolicyInputError(
             f"--policy: top level of {policy_path!r} is "
             f"{type(data).__name__}, expected a mapping with `allowed_domains:`")
-    domains = data.get("allowed_domains", [])
+    if "allowed_domains" not in data:
+        # ⛔ Only allow-list spellings are offered: `disallowed_domains` /
+        # `blocked_domains` are close by edit distance but mean the opposite,
+        # and renaming one per the hint would turn a block list into an
+        # allow list.
+        near = difflib.get_close_matches(
+            "allowed_domains",
+            [str(k) for k in data
+             if "allow" in str(k).lower() and "disallow" not in str(k).lower()],
+            n=1, cutoff=0.8)
+        hint = (f" (found `{near[0]}` — did you mean `allowed_domains`?)"
+                if near else "")
+        raise PolicyInputError(
+            f"--policy: {policy_path!r} has no `allowed_domains` key{hint}. "
+            f"{_POLICY_KEY_REMEDY}")
+    domains = data["allowed_domains"]
     # ⛔ `allowed_domains:` with nothing under it is YAML for an empty value,
     # and it means the same thing as `allowed_domains: []` and as omitting the
     # key: no constraint. An earlier cut of this function raised on it — a
@@ -771,7 +924,14 @@ def load_policy(policy_path: str | None) -> list[str]:
             f"--policy: `allowed_domains` in {policy_path!r} is "
             f"{type(domains).__name__}, expected a list (or empty for "
             f"no constraint)")
-    return [d for d in domains if isinstance(d, str)]
+    # ⛔ Not silently filtered: a list of only non-strings filtered down to
+    # `[]`, which is "no constraint" (#1649).
+    bad = [d for d in domains if not isinstance(d, str)]
+    if bad:
+        raise PolicyInputError(
+            f"--policy: `allowed_domains` in {policy_path!r} holds non-string "
+            f"entries {bad!r}; quote each domain pattern")
+    return list(domains)
 
 
 # --- ADR-024 Version-Aware Threshold: dimensional `version` label guard ---

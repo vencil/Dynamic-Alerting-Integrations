@@ -266,6 +266,18 @@ def _check_retire_drift(root):
     return sorted(check_retire_drift.conf_d_declared_db_type_tenants(root))
 
 
+def _config_diff_uncovered(root):
+    import config_diff
+    # #1420: both of config_diff's listings — the tenants its comparison
+    # reads (the control comes from here) and the files it reports as
+    # changed-but-not-compared, the recursive walk that can reach `.snap/`.
+    # Against an empty old side, every file that walk sees is "changed".
+    empty = root.parent / "h1420-empty-old"
+    empty.mkdir(exist_ok=True)
+    return (sorted(config_diff.load_configs_from_dir(str(root)))
+            + config_diff.compute_uncovered_files(str(empty), str(root)))
+
+
 # cell id -> (defining file, relative to scripts/tools; adapter)
 CELLS: dict[str, tuple[str, Callable[[pathlib.Path], list[str]]]] = {
     "tenant_carriers": ("_lib_confd.py", _tenant_carriers),
@@ -294,6 +306,7 @@ CELLS: dict[str, tuple[str, Callable[[pathlib.Path], list[str]]]] = {
     "assemble_config_dir": ("ops/assemble_config_dir.py",
                             _assemble_config_dir),
     "deprecate_rule": ("ops/deprecate_rule.py", _deprecate_rule),
+    "config_diff_uncovered": ("ops/config_diff.py", _config_diff_uncovered),
     # #2360: both were KNOWN_OPEN below until they pruned hidden directories
     # (check_confd_schema) and hidden names at all (check_retire_drift).
     "check_confd_schema": ("lint/check_confd_schema.py", _check_confd_schema),

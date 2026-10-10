@@ -9,106 +9,87 @@ tracking_kind: adr
 status: accepted
 domain: helm
 created_at: 2026-03-13
-updated_at: 2026-05-13
+updated_at: 2026-10-10
 ---
 # ADR-002: OCI Registry 替代 ChartMuseum
 
 > **Language / 語言：** **中文 (Current)** | [English](./002-oci-registry-over-chartmuseum.en.md)
 
+**決策摘要**：Helm chart 與容器映像放在同一個容器映像倉庫（ghcr.io），chart 以 OCI 製品的形式發佈，不另外架設 ChartMuseum。
+
 ## 狀態
 
-✅ **Accepted** (v1.12.0)
+✅ **Accepted**（v1.12.0）
+
+## 名詞
+
+- **OCI 製品（OCI artifact）**：符合 Open Container Initiative 格式、可以存進容器映像倉庫的檔案。容器映像是其中一種，Helm chart 也可以用這個格式存放。
+- **ChartMuseum**：專門存放 Helm chart 的獨立服務，客戶端以 `helm repo add` 接上它。
+- **ghcr.io**：GitHub 提供的容器映像倉庫（GitHub Container Registry）。
 
 ## 背景
 
-Multi-Tenant Dynamic Alerting 平台需要分發多種製品：
+平台要發佈兩類東西：
 
-1. **Helm Chart**：threshold-exporter 與 dynamic-alerting 的部署配置
-2. **Docker Images**：threshold-exporter、da-tools CLI、Prometheus rules 等容器映像
+1. **Helm chart**：threshold-exporter、da-portal、tenant-api 的部署設定。
+2. **容器映像**：threshold-exporter、da-tools、da-portal、tenant-api。
 
-傳統方案使用 ChartMuseum 作為獨立的 Helm 圖表儲存庫，Docker images 存放在容器映像倉庫 (e.g., ghcr.io)，形成兩套獨立的基礎設施。
+常見做法是映像放容器映像倉庫（例如 ghcr.io），chart 另外放在 ChartMuseum 這類 chart 倉庫，於是有兩套要維運的基礎設施。
 
 ## 決策
 
-**統一採用 OCI 容器映像倉庫 (ghcr.io)，同時存放 Helm Charts 與 Docker Images。消除對 ChartMuseum 的依賴。**
+**統一使用 OCI 容器映像倉庫（ghcr.io），同時存放 Helm chart 與容器映像，不依賴 ChartMuseum。**
 
-## 基本原理
+Helm 3.8 起原生支援 OCI：chart 可以直接推進容器映像倉庫，以 OCI 製品的方式做版本管理與存取控制。
 
-### OCI 規範支援
+### 範例
 
-Helm 3.8+ 原生支援 OCI 層級的製品分發標準。Helm charts 可以直接推送到容器映像倉庫，視為 OCI 製品進行版本管理、存取控制、簽名驗證。
+發佈端（release workflow）把打包好的 chart 推到 `charts/` 底下：
 
-### 統一基礎設施的優勢
+```bash
+helm push .build/threshold-exporter-2.9.0.tgz oci://ghcr.io/vencil/charts
+```
 
-- **單一真理來源**：所有製品 (charts + images) 在同一倉庫，統一的 RBAC、簽名、稽核日誌
-- **簡化運維**：無需維護獨立的 ChartMuseum 實例、備份策略、高可用配置
-- **降低成本**：ghcr.io 免費額度充足，無額外基礎設施費用
-- **版本追蹤一致**：所有製品使用相同的語義版本 (semantic versioning)
+同一個倉庫裡，映像與 chart 並排：
 
-### 客戶側改動最小
+| 製品 | 位置 |
+|:--|:--|
+| 容器映像 | `ghcr.io/vencil/threshold-exporter:v2.9.0` |
+| Helm chart | `oci://ghcr.io/vencil/charts/threshold-exporter`，版本 `2.9.0` |
 
-- Helm 3.8+ 廣泛採用，大多數企業已升級
-- 切換命令簡單：`helm repo add` 改為 `helm pull oci://ghcr.io/...`
-- Chart 內容本身無需改動，只改佈署方式
+安裝端不需要 `helm repo add`，直接指定 OCI 位址：
 
-## 後果
+```bash
+helm install threshold-exporter \
+  oci://ghcr.io/vencil/charts/threshold-exporter --version 2.9.0 \
+  -n monitoring --create-namespace -f values-override.yaml
+```
 
-### 正面影響
+倉庫中這個 chart 的 manifest，設定層的媒體類型是 `application/vnd.cncf.helm.config.v1+json`，也就是以 Helm chart 的身分存放的 OCI 製品。
 
-✅ 單一倉庫管理，降低營運成本與複雜度
-✅ 原生 OCI 簽名驗證，安全性提升
-✅ 統一的 RBAC 與稽核追蹤
-✅ CI/CD 流程簡化 (push once → artifacts distributed)
+## 後果與已知限制
 
-### 負面影響
+**得到的**
 
-⚠️ 需要 Helm 3.8+ (大多數環境已滿足)
-⚠️ 企業內如有舊版 Helm，需協調升級計畫
-⚠️ 某些 Helm plugin (e.g., helm-diff) 需驗證 OCI 相容性
+- 只維運一個倉庫：不必另外顧 ChartMuseum 的實例、備份與高可用設定，也省下這套服務的基礎設施費用。
+- chart 本身的內容不需要為此修改，改的只有發佈與安裝的方式。
 
-### 遷移策略
+**要承擔的**
 
-- Chart `v1.12.0` 開始採用 OCI 發佈
-- 文件記錄並行維護期：3 個月內仍保留 ChartMuseum 作為過渡
-- 舊版本仍在 ChartMuseum 可用，新安裝推薦 OCI 方式
+- 安裝端需要 Helm 3.8 以上。企業內仍有舊版 Helm 時，要安排升級。
+- 部分 Helm 外掛（例如 helm-diff）需要另外確認與 OCI chart 的相容性。
 
-## 替代方案考量
+## 考慮過的替代方案
 
-### 方案 A：保留 ChartMuseum + ghcr.io 雙軌 (已拒絕)
-- 優點：相容所有舊版 Helm
-- 缺點：維護兩套基礎設施，複雜度倍增
+### 保留 ChartMuseum，與 ghcr.io 雙軌並行（不採用）
 
-### 方案 B：使用 Artifactory / Nexus (已考量但拒絕)
-- 優點：企業級功能豐富
-- 缺點：需自建/付費、與 ghcr.io 競爭、額外學習曲線
+相容所有舊版 Helm，但要維護兩套基礎設施，維運複雜度加倍。
 
-## 相關決策
+### 改用 Artifactory 或 Nexus（不採用）
 
-- [ADR-005: 投影卷掛載 Rule Pack](./005-projected-volume-for-rule-packs.md) — Rule Pack 透過 OCI registry 分發後，以 Projected Volume 掛載至 Prometheus
+企業級功能完整，但需要自建或付費，功能與 ghcr.io 重疊，團隊也要另外學一套工具。
 
-## 實施檢查清單
+## 相關
 
-- [x] 驗證 Helm 3.8+ OCI 相容性
-- [x] 配置 ghcr.io OCI push 流程
-- [x] 更新安裝文件與快速入門指南
-- [x] 為過渡期維護 ChartMuseum 備份 (可選，3 個月過期)
-- [x] 發佈變更日誌 (CHANGELOG.md)
-
-## 參考資料
-
-- [Helm 官方 — OCI Support](https://helm.sh/docs/topics/registries/)
-- [`docs/getting-started/for-platform-engineers.md`](../getting-started/for-platform-engineers.md) — 安裝步驟
-- `CHANGELOG.md` — 分發方式變更記錄
-
-## 相關資源
-
-| 資源 | 相關性 |
-|------|--------|
-| [001-severity-dedup-via-inhibit](001-severity-dedup-via-inhibit.md) | ⭐⭐⭐ |
-| [002-oci-registry-over-chartmuseum](002-oci-registry-over-chartmuseum.md) | ⭐⭐⭐ |
-| [003-sentinel-alert-pattern](003-sentinel-alert-pattern.md) | ⭐⭐⭐ |
-| [004-federation-central-exporter-first](004-federation-central-exporter-first.md) | ⭐⭐⭐ |
-| [005-projected-volume-for-rule-packs](005-projected-volume-for-rule-packs.md) | ⭐⭐⭐ |
-| [README](README.md) | ⭐⭐⭐ |
-| ["架構與設計 — 動態多租戶警報平台技術白皮書"](../architecture-and-design.md) | ⭐⭐ |
-| ["架構與設計 — 附錄 A"](../architecture-and-design.md#附錄角色與工具速查) | ⭐⭐ |
+- [Helm 官方文件：Registries（OCI 支援）](https://helm.sh/docs/topics/registries/)
+- [threshold-exporter README §6 部署](https://github.com/vencil/Dynamic-Alerting-Integrations/blob/main/components/threshold-exporter/README.md#6-部署) — 以 OCI chart 安裝的完整指令

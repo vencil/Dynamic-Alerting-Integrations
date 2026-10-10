@@ -95,14 +95,16 @@ bash scripts/ops/install_prepush_hook.sh || guards_failed=1
 # reuses the SAME container, where everything below is already in place). Doing
 # the work again is not free: `npm ci` DELETES tests/e2e/node_modules and
 # reinstalls it every time. So no-op when the last run ended in RESULT=ok, the
-# guards are in place, and the commit hook and e2e deps that run installed are
-# still there. Anything else runs the whole script again.
-# The commit hook is found the way the installers place it, via `--git-path`:
-# in a linked worktree `.git` is a file (#2775).
+# guards are in place, the e2e deps that run installed are still there, and
+# `pre-commit install` succeeds. Anything else runs the whole script again.
+# ⛔ The commit hook is reinstalled, not inspected (#2790): one that exists may
+# still not run (mode 0644) or not be pre-commit's (an `exit 0` stub), and
+# `pre-commit install` is idempotent. Its stdout is kept, as in step 3. A
+# failure here falls through, and step 3 records it.
 if [ -z "$guards_failed" ] && [ -f "$MARKER" ] && grep -q '^RESULT=ok$' "$MARKER" 2>/dev/null \
   && command -v pre-commit >/dev/null 2>&1 \
-  && [ -f "$(git rev-parse --git-path hooks/pre-commit 2>/dev/null)" ] \
-  && { [ ! -f tests/e2e/package.json ] || [ -d tests/e2e/node_modules ]; }; then
+  && { [ ! -f tests/e2e/package.json ] || [ -d tests/e2e/node_modules ]; } \
+  && pre-commit install; then
   note "re-run at $(date -u +%Y-%m-%dT%H:%M:%SZ): already bootstrapped, no-op"
   say "already bootstrapped (marker: $MARKER) — nothing else to do"
   exit 0

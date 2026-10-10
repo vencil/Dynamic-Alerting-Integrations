@@ -34,6 +34,15 @@ TOOL = Path(deprecate_rule.__file__).resolve()
 GOLDEN = Path(__file__).resolve().parents[1] / "golden" / "fixtures"
 
 
+@pytest.fixture(autouse=True)
+def _with_da_guard(da_guard_env):
+    """#1822: the tool asks the exporter (`da-guard key-refs`) before it
+    writes; every contract here is pinned on that path, the one a real run
+    takes. Without da-guard CI would only ever measure the 未體檢 path, which
+    tests/ops/test_deprecate_rule_exporter_precheck.py covers on its own."""
+    return da_guard_env
+
+
 def _write(root: Path, name: str, body: str) -> None:
     (root / name).write_text(body, encoding="utf-8")
 

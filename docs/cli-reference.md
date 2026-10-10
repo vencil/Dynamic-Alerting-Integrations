@@ -1758,7 +1758,7 @@ da-tools generate-routes --config-dir <path> [options]
 | `--namespace <NS>` | ConfigMap 所在 namespace。**只有 `--apply` / `--output-configmap` 會讀它**，其他模式結束碼 2 | `monitoring` |
 | `--configmap <NAME>` | ConfigMap 名稱。**只有 `--apply` / `--output-configmap` 會讀它**，其他模式結束碼 2 | `alertmanager-config` |
 | `--yes` | 搭配 --apply 跳過確認提示。**只有 `--apply` 會讀它**，其他模式結束碼 2 | false |
-| `--policy <FILE>` | 策略 YAML 的**路徑**，內含 `allowed_domains:` 清單（省略＝不限制）。⚠️ 這裡吃的是檔案路徑，不是逗號分隔的域名；供了但讀不到會 exit 2（#1556） | （不限制） |
+| `--policy <FILE>` | 策略 YAML 的**路徑**，內含 `allowed_domains:` 清單（省略＝不限制）。⚠️ 這裡吃的是檔案路徑，不是逗號分隔的域名；供了但讀不到會 exit 2（#1556）；檔裡沒有 `allowed_domains` 鍵（空檔、只有註解、鍵拼錯）或清單有非字串項目也是 exit 2，要明示不限制請寫 `allowed_domains: []`（#1649）。⚠️ v2.9.0 映像仍是舊行為 | （不限制） <!-- image-caveat: v2.9.0 --> |
 | `--findings-json <PATH>` | 另外把這次執行**印出的** finding（warning stream 與拒收訊息的每一行）寫成 JSON 到 PATH，格式見下方「結構化 finding」。所有模式都讀它；每一種結束（含拒收、呼叫端錯誤、參數錯誤與程式例外）都會寫，先寫暫存檔再改名，所以 PATH 上不會留下前一次執行的文件。stdout、stderr 與結束碼不變；PATH 寫不進去是結束碼 2（#2766）。⚠️ v2.9.0 映像沒有這個旗標 <!-- image-caveat: v2.9.0 --> | （不寫） |
 
 **輸出**
@@ -1783,6 +1783,8 @@ YAML 片段，包含 route、receivers、inhibit_rules。
 
 **root receiver 沒有 integration 時印 WARN（#2660）**：`--output-configmap` 與 `--apply` 要寫出／套用的那份 `alertmanager.yml`，若 root route 的 receiver 沒有任何非空的 `*_configs`（名字找不到 receiver 也算），stderr 印一行 `WARN: the root route's receiver '<name>' has no integration …`——沒被子 route 接走的告警（含平台自監控告警）會落到那裡、不通知任何人；接法見 [BYO 整合指南 §11](integration/byo-alertmanager-integration.md#11-平台自監控告警的投遞)。判的是 `--base-config` 的 root receiver（未給時是內建 base 的空 `default`，所以預設一定會印）、`--apply` 時是叢集上的。只是提醒：不是錯誤、`--strict` 不升級、結束碼不變；render、`--validate` 不印。⚠️ v2.9.0 映像不印這行 <!-- image-caveat: v2.9.0 -->
 
+**平台告警探針集降級時（#1533）**：「租戶觸發的 inhibit 規則不得靜音平台自監控告警」這項檢查，探測的是 `configmap-rules-platform.yaml` 裡的每一條平台告警（映像裡與工具同目錄、checkout 裡在 `k8s/03-monitoring/`）。這個檔找不到、讀不了、或讀不出任何平台告警時，探針集退回內建的 6 筆，stderr 印一行 `WARN: platform alert identity probe set degraded …`。此時若你提供的 inhibit 規則——`--output-configmap` 的 `--base-config`，或 `--apply` 時叢集上現有的設定——含有租戶觸發的規則（source matchers 要求 `tenant` 存在），結束碼 2、不寫檔、不 apply：這是不變式驗證不了，不是對你設定的判定。訊息點名原因與出問題的 `inhibit_rules[<i>]`。沒有這種規則時照舊只印 WARN、繼續執行；產生出來的規則、以及 target 同樣要求 `metric_group` 的規則（例如 base 裡的副本）不算（平台告警不帶 `metric_group`），target 已排除平台告警的規則也不算（例如違規訊息建議的 `alert_source=""`）。`--validate` 結束碼不變，stdout 多一行 `Probe set: DEGRADED to the 6-entry built-in fallback …`。與 `--strict` 無關。⚠️ v2.9.0 映像只印 WARN、回 0 並照常寫出／套用 <!-- image-caveat: v2.9.0 -->
+
 **Receiver 名稱不可重複（#2279）**：租戶 id 可以含 `-`，所以租戶 `<t>` 的 `routes[0]` receiver（`tenant-<t>-route-0`）可能和另一個叫 `<t>-route-0` 的租戶的主 receiver 同名（`-override-<n>` 同理）。兩個來源產生同名 receiver 時，所有模式都回 1、不寫檔、不 apply，不分 `--strict`，訊息點名雙方來源。`--output-configmap --base-config` 的 base 若有 receiver 和產生的 receiver 同名，也回 1、不寫檔（否則 base 那份會蓋掉 conf.d 那份）；平台固定的 `custom-alerts-firehose` / `watchdog-heartbeat` / `synthetic-receiver` / `sentinel-sinkhole` 本來就讓 base 定義優先，不算在內。`--apply` 則照舊以這次產生的覆蓋叢集裡同名的 receiver。⚠️ v2.9.0 映像兩種情況都回 0 <!-- image-caveat: v2.9.0 -->
 
 **範例**
@@ -1800,7 +1802,7 @@ da-tools generate-routes --config-dir ./conf.d --apply --yes
 |------|------|
 | `0` | 成功 |
 | `1` | 配置驗證失敗；**或 conf.d 裡有解析不了／讀不了的租戶檔**（壞 YAML、非 UTF-8、頂層不是 mapping、目錄型 `x.yaml`）——所有模式一律拒絕，不分 `--strict`，stdout 點名檔案（#1460）；**或 PATH 上的 `amtool` 拒收 `--output-configmap` / `--apply` 要寫出／套用的設定**——不寫檔、不 apply（#2219）；**或拒收 `--validate` 以內建 base 組出的設定**（#2260）；**或兩個來源產生同名 receiver**（所有模式，不分 `--strict`）、`--output-configmap` 的 base 有和產生的 receiver 同名的 receiver（#2279）；**或組裝時違反平台不變式**（例如 base 的 inhibit 規則會讓租戶靜音平台告警）——`--output-configmap`／`--validate` 印 `FAIL:`（#2260），`--apply` 時叢集上現有的設定違反不變式也印 `FAIL:`、不 apply（#2506）；**或同一個租戶 id 由兩個租戶檔宣告**（所有模式，見上方「階層式 conf.d」）；**或 conf.d 宣告了不合法的租戶 id**（所有模式，不分 `--strict`，見上方「租戶 id」；ADR-035）；**或 `--validate` 遇到 Alertmanager 不接受的時長**（見上方「時長寫法」；#2490） |
-| `2` | 呼叫端錯誤：**工具因為「怎麼被呼叫的」或「環境」而做不了事**，不是你的設定有違規。今天到得了這一格的有（非窮舉）：`--policy` / `--base-config` 供了但不可用（不是檔案、讀不到、不是合法 YAML、頂層不是 mapping）、`--base-config` 用在 `--output-configmap` 以外的模式、**`-o` / `--dry-run` / `--namespace` / `--configmap` / `--yes` 用在不讀它們的模式**（訊息會點名旗標與模式並給一個 argparse 接受的改法；#1650）、`-o` 的輸出路徑寫不進去、`--apply` 在讀不到 stdin 的環境下沒帶 `--yes`、以及 kubectl／叢集操作失敗（#1556、#1616、#1617）；`amtool` 在 PATH 上但無法執行、逾時或自身出錯（沒有給出拒收判定）、`--apply` 之後 Alertmanager `/-/reload` 失敗（v2.10.0 前只印 WARN、結束碼 0；#2219）；conf.d 樹的形狀被路由面拒收（上方「階層式 conf.d」列回 2 的三種情況，訊息開頭 `ERROR: N routing-tree error(s)`；#2326）。⚠️ **上列是 v2.10.0 的契約**；本頁上方釘的 `v2.9.0` 映像對其中多數回 0 或 1 <!-- image-caveat: v2.9.0 --> |
+| `2` | 呼叫端錯誤：**工具因為「怎麼被呼叫的」或「環境」而做不了事**，不是你的設定有違規。今天到得了這一格的有（非窮舉）：`--policy` / `--base-config` 供了但不可用（不是檔案、讀不到、不是合法 YAML、頂層不是 mapping）、`--base-config` 用在 `--output-configmap` 以外的模式、**`-o` / `--dry-run` / `--namespace` / `--configmap` / `--yes` 用在不讀它們的模式**（訊息會點名旗標與模式並給一個 argparse 接受的改法；#1650）、`-o` 的輸出路徑寫不進去、`--apply` 在讀不到 stdin 的環境下沒帶 `--yes`、以及 kubectl／叢集操作失敗（#1556、#1616、#1617）；`amtool` 在 PATH 上但無法執行、逾時或自身出錯（沒有給出拒收判定）、`--apply` 之後 Alertmanager `/-/reload` 失敗（v2.10.0 前只印 WARN、結束碼 0；#2219）；conf.d 樹的形狀被路由面拒收（上方「階層式 conf.d」列回 2 的三種情況，訊息開頭 `ERROR: N routing-tree error(s)`；#2326）；平台告警探針集降級，而你提供的 inhibit 規則（base config 或叢集設定）裡有租戶觸發的規則驗證不了——不寫檔、不 apply（見上方「平台告警探針集降級時」；#1533）。⚠️ **上列是 v2.10.0 的契約**；本頁上方釘的 `v2.9.0` 映像對其中多數回 0 或 1 <!-- image-caveat: v2.9.0 --> |
 
 ---
 
@@ -2011,7 +2013,7 @@ da-tools validate-config --config-dir <path> [options]
 
 | 選項 | 說明 | 預設值 |
 |------|------|--------|
-| `--policy <FILE>` | 策略 YAML 的**路徑**，內含 `allowed_domains:` 清單（省略＝不限制）。⚠️ 供了但用不了 → exit 2（不是檔案、讀不到、非 UTF-8、不是合法 YAML、頂層不是 mapping），不再靜默略過（#1556）。⚠️ v2.9.0 映像仍是舊行為 | （不限制） <!-- image-caveat: v2.9.0 --> |
+| `--policy <FILE>` | 策略 YAML 的**路徑**，內含 `allowed_domains:` 清單（省略＝不限制）。⚠️ 供了但用不了 → exit 2（不是檔案、讀不到、非 UTF-8、不是合法 YAML、頂層不是 mapping），不再靜默略過（#1556）；檔裡沒有 `allowed_domains` 鍵（空檔、只有註解、鍵拼錯）或清單有非字串項目也是 exit 2，要明示不限制請寫 `allowed_domains: []`（#1649）。⚠️ v2.9.0 映像仍是舊行為 | （不限制） <!-- image-caveat: v2.9.0 --> |
 | `--rule-packs <PATH>` | `rule-packs/` 目錄的路徑，供自訂規則 lint 使用。⚠️ 供了但用不了 → exit 2；**省略時整個 `custom_rules` 檢查列不會出現**（#1556） | （不跑此檢查） |
 | `--policy-dsl <FILE>` | 獨立 Policy-as-Code DSL 檔的路徑（頂層 `policies:` key）。⚠️ 供了但用不了 → exit 2（五種形狀同 `--policy`）；修前的輸出與**完全不給旗標逐字相同**（#1556） | （只讀 `_defaults.yaml` 的 `_policies`） |
 | `--version-check` | 一併跑版號一致性檢查 | false |
@@ -2160,7 +2162,7 @@ da-tools deprecate <metric_keys...> [options]
 
 **輸出**
 
-從 `_defaults.yaml`／`.yml` 的 `defaults:` 與 `optional_overrides:`（宣告層，只有名字），以及平面目錄下非 `_` 前綴的租戶檔刪除上述 key，逐 key 印出原值；清空的 `defaults:`／`optional_overrides:` 整個拿掉；載體沒有相關 key 時具名略過、不寫入。**不是**把值寫成 `disable`：`defaults:` 是 `map[string]float64`，字串會讓 exporter 丟掉整份 root 載體（[#1787](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/1787)）。載體體檢（見 `--plane`）發現 exporter 讀不進去的檔時整輪降級為預覽：不寫入、rc 1；本工具 pure parser 讀不了的 `_` 檔同樣整輪降級（訊息會標明 exporter 讀得進去）；`defaults:` 的空值只警告。本工具不遞迴寫入子目錄，但完成度重掃會往下看：子樹自有 `_defaults.yaml` 與租戶檔 `tenants:` 的殘留照印出的指引對該子樹跑 `--plane subtree`；root 層 `_` 前綴檔的 `tenants:`／`profiles:` 區塊本工具射程外，殘留需手動移除；exporter 不讀或丟棄的區塊只警告。⚠️ NOT GUARDED：寫回是整份重新序列化，header 以外的註解會被移除（沒刪的未加引號純量照原文寫回，`010`、`yes` 不會改型；加引號的值可能換成單引號或拿掉引號）；exporter alias 表的 legacy 拼法與其餘區塊的值形狀不在體檢範圍（追蹤入口：#1822）。
+從 `_defaults.yaml`／`.yml` 的 `defaults:` 與 `optional_overrides:`（宣告層，只有名字），以及平面目錄下非 `_` 前綴的租戶檔刪除上述 key，逐 key 印出原值；清空的 `defaults:`／`optional_overrides:` 整個拿掉；載體沒有相關 key 時具名略過、不寫入。**不是**把值寫成 `disable`：`defaults:` 是 `map[string]float64`，字串會讓 exporter 丟掉整份 root 載體（[#1787](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/1787)）。載體體檢（見 `--plane`）發現 exporter 讀不進去的檔時整輪降級為預覽：不寫入、rc 1；本工具 pure parser 讀不了的 `_` 檔同樣整輪降級（訊息會標明 exporter 讀得進去）；`defaults:` 的空值只警告。寫入之前（預覽與 `--execute` 都一樣）先以 `da-guard key-refs` 問 exporter（[#1822](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/1822)）：root 層 `_` 前綴檔在 exporter 自己的 load 的 `parse_failed`（判的是只把 root 層 `_` 檔套上本輪寫入、放進空的暫存目錄後的樣子；那一次問不到就沿用現況的答案，不放行）或 `unreadable` 裡同樣整輪降級（rc 1）；經 exporter 正規化後屬於該 metric 的 key（alias 表的 legacy 拼法、`_critical`、各種維度鍵拼法）與 canonical key 一樣列為引用、一樣移除，子目錄 `_` 檔裡的這類拼法列為殘留；da-guard 的 stderr 整份照轉（`  da-guard| ` 前綴）。找不到 da-guard（`$DA_GUARD_BINARY` → `$PATH`）或它答不出來（含 da-guard 的任何 exit 2）時印「未體檢」與原因，行為與 rc 照舊，Step 3 另提醒檢查 alias 表的舊拼法。本工具不遞迴寫入子目錄，但完成度重掃會往下看：子樹自有 `_defaults.yaml` 與租戶檔 `tenants:` 的殘留照印出的指引對該子樹跑 `--plane subtree`；root 層 `_` 前綴檔的 `tenants:`／`profiles:` 區塊本工具射程外，殘留需手動移除；exporter 不讀或丟棄的區塊只警告。⚠️ NOT GUARDED：寫回是整份重新序列化，header 以外的註解會被移除（沒刪的未加引號純量照原文寫回，`010`、`yes` 不會改型；加引號的值可能換成單引號或拿掉引號）；平面判定仍靠 `--plane`（`subtree` 不採用 da-guard 對 `_` 前綴檔的判定）；本工具的載體鏡射擋下、exporter 其實收的檔仍擋。
 
 **範例**
 
@@ -2391,6 +2393,8 @@ da-tools config-diff --old-dir <path> --new-dir <path> [options]
 
 Markdown 格式報告，含 per-tenant 變更表格與摘要統計。
 
+**比對範圍**：只比對頂層各租戶檔自己寫的值，不解析 `_defaults.yaml` 的繼承。`_` 開頭的檔（`_defaults.yaml`、`_platform.yaml` 等）與子目錄裡的檔不在比對內；`_profiles.yaml` 只比對 `profiles:`。這些檔兩側內容（逐位元組）不同、或只存在於一側時，報告開頭的「Changed Files Not Compared」區段逐一列出檔名，結束碼為 1，不會印 `No changes detected.`；JSON 輸出的 `uncovered_files` 是同一份清單。只改註解也會列出。⚠️ v2.9.0 映像沒有這個區段：只改這些檔時印 `No changes detected.` 並回 0。 <!-- image-caveat: v2.9.0 -->
+
 **Profile 爆炸半徑**：`_profiles.yaml` 裡的 profile 有變更時，`affected_tenants` 列出 `--new-dir` 中 `_profile` 指名它的租戶。名稱經 `da-guard effective` 讀取，與 exporter 的讀法一致：`_profile: {default: std}` 指名 `std`；寫在根目錄平台檔 `tenants:` 裡的算；從子目錄 `_defaults.yaml` 繼承來的不算。所以有 profile 變更時需要 da-guard（映像內建；repo 內 `make da-guard-build`）；找不到 da-guard、da-guard 失敗，或 `--new-dir` 有 exporter 解不出來的檔時，結束碼 2，stderr 印 `ERROR:` 行說明原因；da-guard 有執行到時，下面接著轉印它的 stderr，非空白行各加前綴 `da-guard|`（前有兩格縮排）；找不到或無法執行 da-guard 時沒有這些行。⚠️ v2.9.0 映像仍只認字串寫法的 `_profile`。 <!-- image-caveat: v2.9.0 -->
 
 **範例**
@@ -2405,7 +2409,7 @@ da-tools config-diff --old-dir ./conf.d-old --new-dir ./conf.d-new --json-output
 | 代碼 | 說明 |
 |------|------|
 | `0` | 無配置變更 |
-| `1` | 偵測到變更。⚠️ 只比對各租戶檔自己寫的值，且只讀頂層：只改 `_defaults.yaml` 或只動子目錄裡的檔都回 0，不能單靠它判斷「這個 PR 動了配置」 |
+| `1` | 偵測到變更，或有報告未比對的檔案變了（見上方「比對範圍」） |
 | `2` | 呼叫端錯誤：目錄不存在、輸入無法解析，或執行未完成；有 profile 變更時，另含找不到 da-guard 或 da-guard 失敗 |
 
 > ⚠️ **`1` 是「有變更」，不是失敗。** 裸呼叫這個命令的 CI 步驟，會在它正常運作時失敗。
@@ -2441,7 +2445,7 @@ da-tools evaluate-policy --config-dir <PATH> [--policy <FILE>] [--json] [--ci]
 **規則讀的是哪一個值**（[#2115](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/2115)）：`--config-dir` 讀生效值，不是租戶檔的字面內容；`target` 與 `when` 依 key 種類讀：
 
 - **閾值**（不以 `_` 開頭）：exporter 在 `/metrics` 實際發出的數字（經 `da-guard served-values --schedules`）。值寫在根 `defaults:`、平台檔 `tenants:`、租戶檔或子目錄 `_defaults.yaml` 都一樣，子目錄裡的租戶也會評估。排程閾值逐時段比對，任一時段違規即違規（訊息附 UTC 時段）；某時段 `disable` 時該段只有 `required` 算違規。整天都不發出的鍵（`disable`、沒有預設值）視同沒有：`required` 對有寫但 exporter 不發的鍵報「已配置（值: …）但 exporter 不發出」，`when` 不論精確或萬用字元 target 都當它不存在，其他運算子略過。萬用字元 target 的 `when` 只支援 `required`／`forbidden`（取值運算子對一組鍵沒有意義）。數字以數值比較（`equals: 80` 等於發出的 `80.0`）。`target` 寫舊拼法（例如 `mysql_cpu`）時以 exporter 的別名表換成現行拼法；寫成 `<key>_critical` 鍵的 critical 列以 `<key>_critical` 比對，寫成 `"95:critical"` 的值仍以 `<key>` 比對（該列 severity 為 critical）。`when` 對排程閾值：任一時段成立即成立。
-- **保留鍵**（`_` 開頭，`_routing` 除外）：寫法＋繼承（經 `da-guard effective`），只收租戶可寫的保留鍵（根層專用的 `_policies`、`_routing_defaults` 等不算租戶的）；exporter 自動補的預設值（`_severity_dedup: enable` 等）不算有寫。`_metadata` 例外：`/effective` 不帶它，改取 `/metrics` 的 `_metadata`（照 exporter 淺層繼承），去掉 exporter 補的空欄位（空字串、空 list）後才算有寫——所以明寫的 `owner: ""` 也算沒寫（`forbidden`／`not_equals: ""` 不再對它報）；exporter 不認得的欄位（例如 `cost_center`）不在其中；`_metadata` 整份解析失敗時（例如 `tags: foo`）exporter 不送任何欄位，`required _metadata.owner` 照樣報「未配置或為空」（da-guard 沒有結構化訊號可分辨，原因只在 stderr 轉印的 da-guard WARN 裡）。只評估 exporter 認得的租戶保留鍵；其他 `_` 開頭的鍵（例如 `_foo`）不在 policy 的視野內，`forbidden: _foo` 不會響。
+- **保留鍵**（`_` 開頭，`_routing` 除外）：寫法＋繼承（經 `da-guard effective`），只收租戶可寫的保留鍵（根層專用的 `_policies`、`_routing_defaults` 等不算租戶的）；exporter 自動補的預設值（`_severity_dedup: enable` 等）不算有寫。`_metadata` 例外：`/effective` 不帶它，改取 `/metrics` 的 `_metadata`（平台檔 `tenants:` 與租戶檔逐鍵合併，[#2370](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/2370)），去掉 exporter 補的空欄位（空字串、空 list）後才算有寫——所以明寫的 `owner: ""` 也算沒寫（`forbidden`／`not_equals: ""` 不再對它報）；exporter 不認得的欄位（例如 `cost_center`）不在其中；`_metadata` 整份解析失敗時（例如 `tags: foo`）exporter 不送任何欄位，`required _metadata.owner` 照樣報「未配置或為空」（da-guard 沒有結構化訊號可分辨，原因只在 stderr 轉印的 da-guard WARN 裡）。只評估 exporter 認得的租戶保留鍵；其他 `_` 開頭的鍵（例如 `_foo`）不在 policy 的視野內，`forbidden: _foo` 不會響。
 - **`_routing`**：路由產生器解析後的結果（`_routing_defaults` 逐層、routing profile、租戶 `_routing` 合併，`{{tenant}}` 已代換）。
 
 沒有 `tenants:` 的檔不是租戶，stderr 逐檔印 `WARN`；da-guard 的 stderr 逐行轉印（前綴 `da-guard|`）。需要 da-guard（映像內建；repo 裡直接跑時用 `$DA_GUARD_BINARY` 或 `$PATH`）。⚠️ 已知限制：根 `defaults:` 與租戶同時寫 `X_critical` 的樹，da-guard 拒收（結束碼 2），本工具不評估任何規則。
@@ -2523,6 +2527,7 @@ da-tools guard <subcommand> [flags]
 | `defaults-impact` | 對 conf.d/（或 `--scope` 子目錄）下所有租戶執行 deepMerge → guard checks，輸出 Markdown / JSON 報告 |
 | `served-values` | 以 JSON 印出 exporter `/metrics` 對每個租戶實際發出的值（[#2115](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/2115)）；Python 讀取端經 `scripts/tools/_lib_tenant_values.py` 呼叫。每個租戶的 `series` 對 `severities` 裡的每個門檻 key 列出它在 `/metrics` 的 series（[#2750](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/2750)）：`name` 與完整 `labels` 取自 `/metrics` 的 Gather 結果，`metric_key` 是 resolver 解析出 `component`／`metric` label 的那個 key（`X_critical` 與 `X{db="a"}` 都是 `X`），`dimensions`／`dimensions_regex` 是 key 寫的維度 label。凡由舊拼法別名的目標導出的 key（目標本身、它的 `_critical`、它的維度 key）都有兩筆：先是它自己的 row（`legacy_twin: false`），再是同一個值以舊 metric 身分送出的 twin（`legacy_twin: true`，resolver 自己的標記）。`/metrics` 不送的 key（`unserved`、只出現在 `dropped`）與 `_custom_alerts` 沒有這一項。`--schedules` 時每個有送的時段另帶該時段的 `series`（覆寫成 `N:critical` 的時段是另一條 series），值為 `null` 或帶 `error` 的時段沒有 |
 | `effective` | 以 JSON 印出每個租戶在 tenant-api `/effective` 的有效設定，另加綁定的 profile 與每個 key 的來源（[#2564](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/2564)）；Python 讀取端經 `scripts/tools/_lib_tenant_values.py` 的 `load_effective()` 呼叫 |
+| `key-refs` | **不經 `da-tools guard` 轉發**，只供 `deprecate_rule` 內部直接呼叫 da-guard binary（`da-guard key-refs --config-dir <dir> --metric <key> [--metric …]`，[#1822](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/1822)）：以 JSON 列出經 exporter 判定（ValidateTenantKeys 的同一個分類：alias 表舊拼法、`_critical`、維度鍵各種拼法）屬於各 `--metric` 的 key，每筆 `{file, section, owner, key, nested}`，`key` 為原文，`nested` 標明子目錄的 `_` 開頭檔；另附與 `served-values` 同源的 `parse_failed`／`unreadable`。結束碼同 `served-values`（0／2／3） |
 
 **Binary 解析順序**
 

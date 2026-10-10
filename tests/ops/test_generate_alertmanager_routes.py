@@ -294,12 +294,16 @@ class TestValidateReceiverDomains:
             load_policy("/nonexistent/policy.yaml")
 
     def test_load_policy_no_key(self, config_dir):
-        """Policy 檔案缺少 allowed_domains 鍵。"""
+        """Policy 檔案缺少 allowed_domains 鍵 → caller error（#1649）。
+
+        原本斷言 `== []`，也就是把「只寫 lint 規則的檔」讀成不限制。
+        """
         path = os.path.join(config_dir, "policy.yaml")
         with open(path, "w", encoding="utf-8") as f:
             f.write("denied_functions:\n  - holt_winters\n")
         os.chmod(path, 0o600)
-        assert load_policy(path) == []
+        with pytest.raises(PolicyInputError):
+            load_policy(path)
 
 
 class TestExtractHost:

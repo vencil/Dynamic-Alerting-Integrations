@@ -9,11 +9,17 @@ package handler
 // then the tenant's own overrides, plus two SHA-256[:16] hashes for change
 // detection.
 //
-// The handler is stateless — it re-scans `configDir` on every request. That's
-// acceptable because (a) this endpoint is low-traffic (UI + support tooling,
-// not a hot path like /metrics), and (b) the read-only, scan-each-call shape
-// matches the existing GET /api/v1/tenants/{id} handler, avoiding any new
-// shared-mutable-state surface area between tenant-api and the exporter.
+// Each request walks conf.d once, on the production Writer's prior (#1977,
+// gitops.Writer.ResolveEffective): a file whose stat is unchanged and older
+// than the exporter's mtime guard is not read again, and the resolve then
+// reads only the tenant's own file, the root `_` files and the defaults
+// carriers of its directories — byte for byte the answer a cold walk of the
+// same tree gives. The walk is the write path's bounded one (timeout, and
+// the read path's stuck-walk breaker, so a blocked walk here never fails a
+// write); the resolve's reads of those few files after it are not bounded.
+// The walk is never shared with another request's walk: a GET after a
+// PUT walks after the PUT returned. A Deps without a Writer (handler-test
+// literals) walks cold per request, as every request did before.
 //
 // Parity: the merged_hash returned here is byte-identical to
 // describe_tenant.py's computed hash for the shapes the golden fixtures
@@ -22,7 +28,8 @@ package handler
 // itself); the byte-for-byte claim rests on threshold-exporter's
 // app/config_golden_parity_test.go, which exercises the same pkg/config this
 // handler imports. Chain discovery included: TestGoldenParity_ResolveEffective
-// calls the same config.ResolveEffective this handler does on every golden
+// calls config.ResolveEffective — a cold walk, then the same
+// config.ResolveEffectiveFromScan this handler's resolve runs — on every golden
 // fixture and compares chain, hashes and effective config with the Python
 // capture (#1550). Before it, reversing the chain order in ResolveEffective
 // moved the served merged_hash and left every golden assertion green.
@@ -103,9 +110,15 @@ func GetTenantEffective(d *Deps) http.HandlerFunc {
 		// review): a sibling `<id>.yml` that declares nothing for the tenant
 		// (`tenants: {}`, another tenant only, unparseable, a dangling
 		// symlink, a symlink to a directory) is no second declaration — the
-		// exporter serves the tenant — so only ResolveEffective's typed
+		// exporter serves the tenant — so only the resolve's typed
 		// *DuplicateTenantError turns a request into a 409.
-		ec, err := cfg.ResolveEffective(d.ConfigDir, tenantID)
+		var ec *cfg.EffectiveConfig
+		var err error
+		if d.Writer != nil {
+			ec, err = d.Writer.ResolveEffective(tenantID)
+		} else {
+			ec, err = cfg.ResolveEffective(d.ConfigDir, tenantID)
+		}
 		if err != nil {
 			var dup *cfg.DuplicateTenantError
 			var decodeErr *cfg.DecodeError

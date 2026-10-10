@@ -71,7 +71,7 @@ The order is root → each level downwards → tenant file; what is applied late
 
 Two exceptions:
 
-- **`_metadata` is not inherited**: `_metadata` written at an upper level does not appear in the tenant's effective config.
+- **`_metadata` is not inherited**: `_metadata` written at an upper level does not appear in the tenant's effective config. A root platform file's `tenants.<id>._metadata` is not part of this chain: it merges with the tenant file's `_metadata` key by key ([#2370](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/2370); the rule is in [config-driven](../design/config-driven.en.md)).
 - **`_custom_alerts` (tenant custom alerts, see [ADR-024](024-version-aware-threshold-via-dimensional-label.en.md)) differs between the two implementations**: the effective config `describe_tenant.py` shows is a union — the list declared at the top level of an upper `_defaults.yaml` plus the tenant's own list, with each entry's name, the file declaring it and whether the tenant owns it; the one tenant-api and da-guard compute holds only the tenant's own list. `merged_hash` is not affected: `describe_tenant.py --show-sources` / `--all` and `tenant-verify` print the value da-guard computes, the same as tenant-api's, and it does not change with file names. The blast-radius report takes "did the values change" from `merged_hash` and compares custom alerts separately, by each union entry's content, name and whether the tenant owns it — not by the file declaring it: moving a file is not a change, while retuning a platform recipe's threshold lists every tenant inheriting it ([#1549](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/1549)).
 
 ### 3. Example
