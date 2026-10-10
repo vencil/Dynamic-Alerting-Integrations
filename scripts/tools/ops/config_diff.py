@@ -651,6 +651,160 @@ def compute_custom_alert_diff(old_alerts, new_alerts):
     return result
 
 
+# ── The same three sections, read from served-values (ADR-037) ─────────────
+#
+# config-diff is moving from reading each tenant file's own YAML to comparing
+# what the exporter serves on each side (`da-guard served-values`). These
+# readers turn one side's served tenants into the shapes the readers above
+# return, so compute_diff / compute_setting_diff / compute_custom_alert_diff
+# and render_markdown apply unchanged. Not wired to the CLI yet.
+#
+# What changes against the YAML readers, by decision (#1516):
+# * thresholds are the values the exporter serves, so a change a tenant
+#   inherits (a `defaults:` value it does not override) is reported for it;
+# * a tenant added or removed is not listed in the settings section — the
+#   threshold section already names it, and every reserved key the exporter
+#   reads would otherwise be listed as added;
+# * a custom alert is the rows the exporter serves for it: `threshold` is
+#   "<value>:<severity>" per row, `mode` and `recipe_id` are its labels, so an
+#   `op` / `window` / `for` change shows as a `recipe_id` change; a recipe
+#   whose rows are gone is reported removed with SERVED_REMOVED_NOTE, as the
+#   rows cannot tell a deleted recipe from a disabled threshold or a recipe
+#   the exporter rejects.
+
+SERVED_STATE_FILTERS_KEY = "state_filters"
+SERVED_REMOVED_NOTE = ("no longer served: the recipe was deleted, its threshold "
+                       "disabled, or the exporter rejected it (see da-guard's stderr)")
+
+
+def _served_number(value):
+    """A served threshold as written in YAML: 85.0 -> 85."""
+    if isinstance(value, float) and value.is_integer():
+        return int(value)
+    return value
+
+
+def _served_threshold(key, value, severity, schedule):
+    """One threshold key's reading, comparable across both sides.
+
+    The number alone when the severity is the key's own (`_critical` keys are
+    critical, every other key warning), `"<number>:<severity>"` otherwise —
+    the spelling a tenant file uses for it. A key whose served value changes
+    during the day, or that carries a time-box the exporter honours
+    (`expires:`), is a mapping of both, shown as "(scheduled)".
+    """
+    if schedule is not None and (len(schedule.segments) > 1 or schedule.expires is not None):
+        return {"schedule": [
+            (seg.start, seg.end, _served_number(seg.value), seg.severity)
+            for seg in schedule.segments],
+            "expires": schedule.expires, "expired": schedule.expired}
+    natural = "critical" if key.endswith("_critical") else "warning"
+    num = _served_number(value)
+    return num if severity == natural else f"{num}:{severity}"
+
+
+def served_metric_configs(tenants):
+    """{tenant: {key: reading}} for compute_diff, from served-values tenants.
+
+    Threshold keys are what /metrics serves (`_served_threshold`); a key the
+    tenant switched off, or that the exporter cannot serve, is its value as
+    written (`unserved`, e.g. "disable"). Reserved (`_`) keys are not here.
+    """
+    out = {}
+    for tenant, tv in tenants.items():
+        flat = {}
+        for key, raw in (tv.unserved or {}).items():
+            if not str(key).startswith("_"):
+                flat[str(key)] = raw
+        for key, severity in tv.severities.items():
+            schedule = (tv.schedules or {}).get(key)
+            flat[key] = _served_threshold(key, tv.values.get(key), severity, schedule)
+        out[tenant] = flat
+    return out
+
+
+def served_setting_configs(tenants):
+    """{tenant: {"_key": value}} for compute_setting_diff: the reserved keys
+    the exporter reads for each tenant (`_custom_alerts` aside, in its own
+    section), the reserved keys it does not serve as written, and the state
+    filters on for the tenant with their severity (SERVED_STATE_FILTERS_KEY,
+    not `_`-prefixed so no key a tenant writes can collide with it).
+
+    A routing key the exporter does not serve arrives as the text written
+    (a receiver it rejects, a `type` left out): the text may hold a webhook
+    URL or token that _redact cannot see inside a string. It is kept here so
+    a change to it is still a change; served_setting_diff prints it as
+    _REDACTED."""
+    out = {}
+    for tenant, tv in tenants.items():
+        settings = {}
+        for key, value in (tv.unserved or {}).items():
+            if str(key).startswith("_"):
+                settings[str(key)] = value
+        for key, value in tv.values.items():
+            if str(key).startswith("_"):
+                settings[key] = value
+        settings.pop("_custom_alerts", None)
+        settings[SERVED_STATE_FILTERS_KEY] = dict(tv.state_filters or {})
+        out[tenant] = settings
+    return out
+
+
+def served_setting_diff(old_tenants, new_tenants):
+    """compute_setting_diff over the tenants both sides serve; a routing key
+    served as the text written is printed as _REDACTED (see
+    served_setting_configs)."""
+    both = set(old_tenants) & set(new_tenants)
+    old = served_setting_configs({t: v for t, v in old_tenants.items() if t in both})
+    new = served_setting_configs({t: v for t, v in new_tenants.items() if t in both})
+    diff = compute_setting_diff(old, new)
+    for changes in diff.values():
+        for c in changes:
+            if "." not in str(c["key"]) and str(c["key"]).startswith("_routing"):
+                c["old"], c["new"] = (_REDACTED if isinstance(v, str) else v
+                                      for v in (c["old"], c["new"]))
+    return diff
+
+
+def served_custom_alerts(tenants):
+    """{tenant: {name: view}} for compute_custom_alert_diff: each recipe the
+    exporter serves rows for, as `metric`, `threshold` ("<value>:<severity>"),
+    `mode` and `recipe_id` — each the sorted distinct values of the recipe's
+    rows joined by ", ", so a change to any row (two recipes sharing a name
+    included) is a change to the view."""
+    fields = ("metric", "threshold", "mode", "recipe_id")
+    out = {}
+    for tenant, tv in tenants.items():
+        recipes = {}
+        for row in tv.values.get("_custom_alerts") or []:
+            labels = row.get("labels") or {}
+            name = labels.get("name")
+            if not name:
+                continue
+            view = recipes.setdefault(str(name), {f: set() for f in fields})
+            view["metric"].add(str(row.get("metric")))
+            view["threshold"].add(f"{_served_number(row.get('value'))}:{row.get('severity')}")
+            view["mode"].add(str(labels.get("mode")))
+            view["recipe_id"].add(str(labels.get("recipe_id")))
+        for name, view in recipes.items():
+            recipes[name] = {f: ", ".join(sorted(view[f])) for f in fields}
+        if recipes:
+            out[tenant] = recipes
+    return out
+
+
+def served_custom_alert_diff(old_tenants, new_tenants):
+    """compute_custom_alert_diff over served rows; a removed recipe carries
+    SERVED_REMOVED_NOTE as its `note`."""
+    diff = compute_custom_alert_diff(served_custom_alerts(old_tenants),
+                                     served_custom_alerts(new_tenants))
+    for changes in diff.values():
+        for c in changes:
+            if c["change"] == "removed":
+                c["note"] = SERVED_REMOVED_NOTE
+    return diff
+
+
 def estimate_affected_alerts(metric_key):
     """The alerts a change to ``metric_key`` reaches, as the report cell.
 
