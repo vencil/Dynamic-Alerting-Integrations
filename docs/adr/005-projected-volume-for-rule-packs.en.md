@@ -134,8 +134,8 @@ Each Rule Pack could be its own chart, but Helm releases become fragmented and d
 
 ## Related
 
-- [ADR-001: Severity Dedup via Inhibit Rules](./001-severity-dedup-via-inhibit.en.md) — inhibit rules can be part of a Rule Pack
-- [ADR-003: Sentinel Alert Pattern](./003-sentinel-alert-pattern.en.md) — sentinel alert rules are distributed with Rule Packs
+- [ADR-001: Severity Dedup via Inhibit Rules](./001-severity-dedup-via-inhibit.md) — inhibit rules can be part of a Rule Pack
+- [ADR-003: Sentinel Alert Pattern](./003-sentinel-alert-pattern.md) — sentinel alert rules are distributed with Rule Packs
 - [`rule-packs/README.md`](https://github.com/vencil/Dynamic-Alerting-Integrations/blob/main/rule-packs/README.md) — the Rule Pack list and how to unload one
 - [`docs/getting-started/for-platform-engineers.en.md`](../getting-started/for-platform-engineers.en.md) — guide to custom Rule Packs
 - [Kubernetes Projected Volume documentation](https://kubernetes.io/docs/concepts/storage/projected-volumes/)

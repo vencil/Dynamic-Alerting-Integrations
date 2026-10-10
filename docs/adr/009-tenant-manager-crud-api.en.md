@@ -9,7 +9,7 @@ lang: en
 
 > **Language / 語言：** **English (Current)** | [中文](./009-tenant-manager-crud-api.md)
 
-**Decision in brief**: add tenant-api, a standalone Go HTTP server that serves as the management backend for da-portal. Sign-in is handled by an oauth2-proxy in front of it, and tenant-api decides permissions from the identity headers oauth2-proxy passes along; in the default direct write-back mode every write modifies the tenant config file in the Git repo directly and commits it as the operator (for PR write-back see [ADR-011](011-pr-based-write-back.en.md)), so Git remains the single source of the configuration.
+**Decision in brief**: add tenant-api, a standalone Go HTTP server that serves as the management backend for da-portal. Sign-in is handled by an oauth2-proxy in front of it, and tenant-api decides permissions from the identity headers oauth2-proxy passes along; in the default direct write-back mode every write modifies the tenant config file in the Git repo directly and commits it as the operator (for PR write-back see [ADR-011](011-pr-based-write-back.md)), so Git remains the single source of the configuration.
 
 ## Status
 
@@ -157,11 +157,11 @@ Several operators writing the same tenant's config at the same time can conflict
 
 | ADR | Relationship |
 |-----|-------------|
-| [ADR-003: Sentinel Alert Pattern](003-sentinel-alert-pattern.en.md) | The flag-metric pattern (a metric fixed at 1 that only signals that some state holds) extends to the API server's operational monitoring metrics |
-| [ADR-007: Cross-Domain Routing Profiles and Domain Policies](007-cross-domain-routing-profiles.en.md) | The API's `PUT /tenants/{id}` must understand and preserve the `_routing` field |
-| [ADR-008: Operator-Native Integration Path](008-operator-native-integration-path.en.md) | CRD (Kubernetes custom resource) changes on the Operator path do not go through the API and keep using the CLI toolchain |
-| [ADR-010: Multi-Tenant Grouping Architecture](010-multi-tenant-grouping.en.md) | Adds custom groups on top of this API |
-| [ADR-011: PR-based Write-back Mode](011-pr-based-write-back.en.md) | Adds a write-back mode that opens a PR instead of committing directly |
+| [ADR-003: Sentinel Alert Pattern](003-sentinel-alert-pattern.md) | The flag-metric pattern (a metric fixed at 1 that only signals that some state holds) extends to the API server's operational monitoring metrics |
+| [ADR-007: Cross-Domain Routing Profiles and Domain Policies](007-cross-domain-routing-profiles.md) | The API's `PUT /tenants/{id}` must understand and preserve the `_routing` field |
+| [ADR-008: Operator-Native Integration Path](008-operator-native-integration-path.md) | CRD (Kubernetes custom resource) changes on the Operator path do not go through the API and keep using the CLI toolchain |
+| [ADR-010: Multi-Tenant Grouping Architecture](010-multi-tenant-grouping.md) | Adds custom groups on top of this API |
+| [ADR-011: PR-based Write-back Mode](011-pr-based-write-back.md) | Adds a write-back mode that opens a PR instead of committing directly |
 
 - [`governance-security.md` configuration validation and compliance](../governance-security.en.md#configuration-validation-and-compliance) — how validation is split between Go and Python
 - [oauth2-proxy documentation](https://oauth2-proxy.github.io/oauth2-proxy/) — IdP configuration reference

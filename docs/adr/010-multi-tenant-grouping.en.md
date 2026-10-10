@@ -9,7 +9,7 @@ lang: en
 
 > **Language / 語言：** **English (Current)** | [中文](./010-multi-tenant-grouping.md)
 
-**Decision in brief**: custom groups are defined in `_groups.yaml` in conf.d/, with members given as an explicit list of tenant IDs; they are managed through tenant-api's group API, and writes of group definitions reuse the write lock and HEAD conflict detection of tenant writes (in PR write-back mode they are still committed directly, see [ADR-011](011-pr-based-write-back.en.md)). In addition, tenant `_metadata` gains fields such as environment, region, domain, and db_type for filtering in the API and UI; these fields are not added as labels of `tenant_metadata_info`.
+**Decision in brief**: custom groups are defined in `_groups.yaml` in conf.d/, with members given as an explicit list of tenant IDs; they are managed through tenant-api's group API, and writes of group definitions reuse the write lock and HEAD conflict detection of tenant writes (in PR write-back mode they are still committed directly, see [ADR-011](011-pr-based-write-back.md)). In addition, tenant `_metadata` gains fields such as environment, region, domain, and db_type for filtering in the API and UI; these fields are not added as labels of `tenant_metadata_info`.
 
 ## Status
 
@@ -37,7 +37,7 @@ tenant-api already offered single-tenant CRUD and batch operations, but once the
 
 - Groups are a UI and API concept and **do not affect how Prometheus metrics are produced**.
 - Group definitions need version control (Git) and support for several people working at once (conflict detection).
-- Reuse the Git write-back pattern of [ADR-009](009-tenant-manager-crud-api.en.md) instead of introducing a new persistence layer.
+- Reuse the Git write-back pattern of [ADR-009](009-tenant-manager-crud-api.md) instead of introducing a new persistence layer.
 
 ## Decision
 
@@ -178,6 +178,6 @@ Structured fields (environment, domain, db_type) suit UI filtering better than f
 
 ## Related
 
-- [ADR-009: Tenant Manager CRUD API Architecture](009-tenant-manager-crud-api.en.md) — the foundation of the group API
-- [ADR-007: Cross-Domain Routing Profiles and Domain Policies](007-cross-domain-routing-profiles.en.md) — the `_routing` schema
-- [ADR-011: PR-based Write-back Mode](011-pr-based-write-back.en.md) — in PR mode a group batch operation becomes a single PR
+- [ADR-009: Tenant Manager CRUD API Architecture](009-tenant-manager-crud-api.md) — the foundation of the group API
+- [ADR-007: Cross-Domain Routing Profiles and Domain Policies](007-cross-domain-routing-profiles.md) — the `_routing` schema
+- [ADR-011: PR-based Write-back Mode](011-pr-based-write-back.md) — in PR mode a group batch operation becomes a single PR

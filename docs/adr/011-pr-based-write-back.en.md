@@ -19,7 +19,7 @@ lang: en
 
 ## Terms
 
-- **Direct write-back (direct)**: the commit-on-write of [ADR-009](009-tenant-manager-crud-api.en.md): the API modifies YAML in conf.d/ and commits immediately.
+- **Direct write-back (direct)**: the commit-on-write of [ADR-009](009-tenant-manager-crud-api.md): the API modifies YAML in conf.d/ and commits immediately.
 - **PR / MR**: GitHub's Pull Request and GitLab's Merge Request, two names for the same thing. "PR" in this document covers both.
 - **GitOps**: an operating model in which a Git repo is the single source of configuration and every change reaches the system through Git.
 - **Four-eyes principle**: a change must be reviewed by at least one other person before it takes effect.
@@ -29,7 +29,7 @@ lang: en
 
 ### Problem
 
-The direct write-back of [ADR-009](009-tenant-manager-crud-api.en.md) (UI → tenant-api → git commit) works well in fast-iterating environments, but runs into compliance friction in high-security scenarios:
+The direct write-back of [ADR-009](009-tenant-manager-crud-api.md) (UI → tenant-api → git commit) works well in fast-iterating environments, but runs into compliance friction in high-security scenarios:
 
 1. **Four-eyes principle**: regulated industries such as finance and healthcare require configuration changes to be reviewed by at least one person before they take effect.
 2. **Reversibility**: with several operators working in parallel, reverting a direct commit means tracking down the commit hash by hand.
@@ -263,9 +263,9 @@ All paths except the UI are under `components/tenant-api/`.
 
 ## Related
 
-- [ADR-009: Tenant Manager CRUD API Architecture](009-tenant-manager-crud-api.en.md) — PR mode builds on direct write-back
-- [ADR-010: Multi-Tenant Grouping Architecture](010-multi-tenant-grouping.en.md) — how group batch operations are consolidated into a PR
-- [ADR-008: Operator-Native Integration Path](008-operator-native-integration-path.en.md) — how PR write-back maps to CRDs (Kubernetes custom resources) in Operator mode
+- [ADR-009: Tenant Manager CRUD API Architecture](009-tenant-manager-crud-api.md) — PR mode builds on direct write-back
+- [ADR-010: Multi-Tenant Grouping Architecture](010-multi-tenant-grouping.md) — how group batch operations are consolidated into a PR
+- [ADR-008: Operator-Native Integration Path](008-operator-native-integration-path.md) — how PR write-back maps to CRDs (Kubernetes custom resources) in Operator mode
 - [GitHub REST API: Pulls](https://docs.github.com/en/rest/pulls)
 - [GitHub Fine-grained PAT](https://docs.github.com/en/authentication/keeping-your-account-and-data-secure/managing-your-personal-access-tokens)
 - [GitLab REST API: Merge Requests](https://docs.gitlab.com/ee/api/merge_requests.html)
