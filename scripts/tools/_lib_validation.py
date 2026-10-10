@@ -11,7 +11,7 @@ import re
 from pathlib import Path
 from typing import Any, Optional, Union
 
-from _lib_compat import PROJECT_ROOT_MARKERS
+from _lib_compat import find_project_root
 from _lib_constants import (
     _DISABLED_VALUES,
     _DURATION_MULTIPLIERS,
@@ -216,20 +216,15 @@ def _find_tenant_schema() -> Optional[Path]:
 
     Flat first: the da-tools image copies it beside this module (build.sh
     ``REPO_DATA_FILES``, paired by ``REQUIRED_DATA_FILES`` in
-    check_build_completeness.py) and carries no project-root marker. The repo
-    branch walks up to a marker, bounded there, then reads
-    ``docs/schemas/``. Same shape as ``_grar_validate._find_platform_rules_configmap``
-    (#1494): no counting of directory levels.
+    check_build_completeness.py) and has no repo tree. Otherwise
+    ``docs/schemas/`` under THIS tree's root (``find_project_root``; #1494 no
+    counting of levels, #2845 never an enclosing project's).
     """
     here = Path(__file__).resolve().parent
     flat = here / _TENANT_SCHEMA_BASENAME
     if flat.is_file():
         return flat
-    repo_root = next(
-        (base for base in (here, *here.parents)
-         if any((base / m).exists() for m in PROJECT_ROOT_MARKERS)),
-        None,
-    )
+    repo_root = find_project_root(here)
     if repo_root is not None:
         candidate = repo_root / "docs" / "schemas" / _TENANT_SCHEMA_BASENAME
         if candidate.is_file():

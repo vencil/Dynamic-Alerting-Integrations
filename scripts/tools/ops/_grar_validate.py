@@ -40,6 +40,7 @@ from _lib_python import (  # noqa: E402
     VALID_RESERVED_KEYS,
     VALID_RESERVED_PREFIXES,
 )
+from _lib_compat import find_project_root  # noqa: E402  (#2845)
 from _lib_validation import tenant_id_rule  # noqa: E402  (ADR-035)
 from _lib_validation import am_duration_seconds  # noqa: E402  (#2490)
 from _grar_merge import (  # noqa: E402  (#2326 directory scope)
@@ -380,10 +381,10 @@ def _find_platform_rules_configmap() -> "Path | None":
       ``k8s/`` exist on that ancestor chain, so this is checked first.
     * a checkout, a ``git archive`` tarball or a vendored copy of the tree:
       the module is at ``<root>/scripts/tools/ops/`` and the pack at
-      ``<root>/k8s/03-monitoring/``. ``<root>`` is found by FILE, not by
-      depth: the ancestor whose ``scripts/tools/ops/<this file>`` resolves to
-      this very file (#1494's ``parents[3]`` raised at import in the image;
-      a walk that finds nothing just returns None).
+      ``<root>/k8s/03-monitoring/``. ``<root>`` is found by structure, not by
+      depth — ``_lib_compat.find_project_root``, shared with every other
+      repo-data lookup since #2845 (#1494's ``parents[3]`` raised at import in
+      the image; a search that finds nothing just returns None).
 
     The marker walk this replaces stopped at the first ancestor holding a
     ``.git`` / ``Makefile`` / ``pyproject.toml`` and took that ancestor's
@@ -399,13 +400,11 @@ def _find_platform_rules_configmap() -> "Path | None":
     flat = here / _PLATFORM_RULES_BASENAME
     if flat.is_file():
         return flat
-    me = Path(__file__).resolve()
-    for base in here.parents:
-        if (base / "scripts" / "tools" / "ops" / me.name).resolve() == me:
-            candidate = (base / "k8s" / "03-monitoring"
-                         / _PLATFORM_RULES_BASENAME)
-            return candidate if candidate.is_file() else None
-    return None
+    root = find_project_root(here)
+    if root is None:
+        return None
+    candidate = root / "k8s" / "03-monitoring" / _PLATFORM_RULES_BASENAME
+    return candidate if candidate.is_file() else None
 
 
 _PLATFORM_IDENTITY_CACHE: "tuple[dict, ...] | None" = None
