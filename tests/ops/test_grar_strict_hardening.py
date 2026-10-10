@@ -1169,9 +1169,10 @@ class TestPlatformPackLocationIsLayoutIndependent:
             d.mkdir(parents=True)
         except OSError:
             d = Path(tempfile.mkdtemp())
-        # ⛔ 用被測程式碼**同一份**標記集合，不要重抄 `.git`。被測的
-        # `_find_platform_rules_configmap` 認的是 `PROJECT_ROOT_MARKERS`
-        # （`.git` / `Makefile` / `pyproject.toml`），而這裡原本只檢查
+        # ⛔ #1533 §2 之後被測函式已不看 marker（只認本樹自己的根目錄），
+        # 這道護欄留著是多一層隔離：暫存目錄不得落在任何專案樹裡。
+        # 用 `PROJECT_ROOT_MARKERS` 這**同一份**標記集合，不要重抄 `.git`。
+        # 這裡原本只檢查
         # `.git`：`Path(sys.executable).anchor` 不可寫時會退到
         # `tempfile.mkdtemp()`（即上面 docstring 明言要避開的 `$TMPDIR`），
         # 若那條祖先鏈上的 checkout 沒有 `.git`（`git archive` / vendored CI
@@ -1330,6 +1331,97 @@ class TestPlatformPackLocationIsLayoutIndependent:
                 assert "WARN" not in capsys.readouterr().err
             finally:
                 sys.path.remove(str(d))
+        finally:
+            shutil.rmtree(root, ignore_errors=True)
+
+    # ── #1533 §2: find the pack where this tree puts it, not a marker ────
+    _DECOY = ("apiVersion: v1\nkind: ConfigMap\ndata:\n  rules.yaml: |\n"
+              "    groups:\n    - name: decoy\n      rules:\n"
+              "      - alert: SomeoneElsesAlert\n        expr: vector(1)\n"
+              "        labels: {alert_source: platform, severity: warning}\n")
+
+    @classmethod
+    def _plant(cls, root, real: bool):
+        pack = root / "k8s" / "03-monitoring" / "configmap-rules-platform.yaml"
+        pack.parent.mkdir(parents=True)
+        if real:
+            shutil.copy2(os.path.join(REPO_ROOT, "k8s", "03-monitoring",
+                                      "configmap-rules-platform.yaml"), pack)
+        else:
+            pack.write_text(cls._DECOY, encoding="utf-8")
+        return pack
+
+    def _resolve(self, module_dir):
+        module_dir.mkdir(parents=True, exist_ok=True)
+        self._stage(module_dir, with_pack=False)
+        try:
+            mod = self._load_isolated(module_dir)
+            return mod, mod._find_platform_rules_configmap()
+        finally:
+            sys.path.remove(str(module_dir))
+
+    def test_a_marker_less_tree_inside_another_repo_uses_its_own_pack(self):
+        """#1533 §2 row 1: this tree has no marker but carries its pack; the
+        repo it was vendored into has a Makefile AND a pack of its own. The
+        marker walk stopped at the outer Makefile and adopted the outer pack
+        (measured: 1 identity, no warning)."""
+        root = self._staging_dir()
+        try:
+            (root / "Makefile").write_text("all:\n", encoding="utf-8")
+            self._plant(root, real=False)
+            proj = root / "vendor" / "proj"
+            own = self._plant(proj, real=True)
+            mod, found = self._resolve(proj / "scripts" / "tools" / "ops")
+            assert found == own, f"adopted {found}, not this tree's {own}"
+        finally:
+            shutil.rmtree(root, ignore_errors=True)
+
+    def test_a_marker_less_tree_finds_its_pack_when_the_outer_has_none(self):
+        """#1533 §2 row 2: the outer repo has a Makefile but no pack; the
+        marker walk stopped there and returned None although this tree's
+        pack sat two levels below it."""
+        root = self._staging_dir()
+        try:
+            (root / "Makefile").write_text("all:\n", encoding="utf-8")
+            proj = root / "vendor" / "proj"
+            own = self._plant(proj, real=True)
+            mod, found = self._resolve(proj / "scripts" / "tools" / "ops")
+            assert found == own
+        finally:
+            shutil.rmtree(root, ignore_errors=True)
+
+    def test_scripts_dropped_under_another_checkout_does_not_adopt_it(
+            self, capsys):
+        """#1533 §2 row 4: only `scripts/` was copied, into a directory whose
+        ancestor is someone else's checkout (Makefile + pack). No pack belongs
+        to THIS tree, so the answer is "not found" — degraded and loud — not
+        the other checkout's rules."""
+        home = self._staging_dir()
+        try:
+            (home / "Makefile").write_text("all:\n", encoding="utf-8")
+            self._plant(home, real=False)
+            module_dir = home / "work" / "scripts" / "tools" / "ops"
+            module_dir.mkdir(parents=True)
+            mod, found = self._resolve(module_dir)
+            assert found is None, f"adopted someone else's pack {found}"
+            assert (mod.platform_alert_identities()
+                    is mod.PLATFORM_ALERT_IDENTITY_LABELS)
+            assert "WARN" in capsys.readouterr().err
+        finally:
+            shutil.rmtree(home, ignore_errors=True)
+
+    def test_a_decoy_root_with_a_marker_is_not_adopted(self, capsys):
+        """The existing decoy test's root had no marker, so it only pinned the
+        un-marked half; with a Makefile at the decoy root the marker walk
+        adopted it (the issue's own measurement)."""
+        root = self._staging_dir()
+        try:
+            (root / "Makefile").write_text("all:\n", encoding="utf-8")
+            self._plant(root, real=False)
+            module_dir = root / "sub"
+            module_dir.mkdir()
+            mod, found = self._resolve(module_dir)
+            assert found is None, f"adopted the decoy {found}"
         finally:
             shutil.rmtree(root, ignore_errors=True)
 
