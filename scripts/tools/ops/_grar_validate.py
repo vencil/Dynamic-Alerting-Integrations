@@ -535,7 +535,7 @@ def platform_alert_identities(
         path = _find_platform_rules_configmap()
         if path is None:
             reason = (f"{_PLATFORM_RULES_BASENAME} not found beside this tool "
-                      f"nor under any ancestor's k8s/03-monitoring/")
+                      f"nor under this tree's k8s/03-monitoring/")
             _warn_probe_set_degraded(reason)
             identities = PLATFORM_ALERT_IDENTITY_LABELS
             _PLATFORM_IDENTITY_CACHE = identities

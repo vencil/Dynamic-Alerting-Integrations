@@ -1169,9 +1169,10 @@ class TestPlatformPackLocationIsLayoutIndependent:
             d.mkdir(parents=True)
         except OSError:
             d = Path(tempfile.mkdtemp())
-        # ⛔ 用被測程式碼**同一份**標記集合，不要重抄 `.git`。被測的
-        # `_find_platform_rules_configmap` 認的是 `PROJECT_ROOT_MARKERS`
-        # （`.git` / `Makefile` / `pyproject.toml`），而這裡原本只檢查
+        # ⛔ #1533 §2 之後被測函式已不看 marker（只認本樹自己的根目錄），
+        # 這道護欄留著是多一層隔離：暫存目錄不得落在任何專案樹裡。
+        # 用 `PROJECT_ROOT_MARKERS` 這**同一份**標記集合，不要重抄 `.git`。
+        # 這裡原本只檢查
         # `.git`：`Path(sys.executable).anchor` 不可寫時會退到
         # `tempfile.mkdtemp()`（即上面 docstring 明言要避開的 `$TMPDIR`），
         # 若那條祖先鏈上的 checkout 沒有 `.git`（`git archive` / vendored CI
