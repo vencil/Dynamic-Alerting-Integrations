@@ -67,8 +67,8 @@ The Go halves read the same rows:
   da-guard's ParseDomainPolicies says what PyYAML says, or what
   tests/shared/merge_key_go_verdicts.json records for that row.
 - components/tenant-api/internal/policy/merge_key_corpus_test.go: tenant-api's
-  parseConfig says what PyYAML says or what that snapshot records, or
-  refuses the file (refusals are not recorded yet: ADR-036 step 2, PR-C).
+  parseConfig says what PyYAML says or what that snapshot records — a
+  refusal of a row PyYAML reads is recorded "unusable" (go_refuses).
 The snapshot holds only the rows where a Go reader differs; each is matched
 to an entry of tests/shared/reader_divergence_catalog.yaml, and its direction
 computed, by tests/shared/test_reader_divergence_catalog.py.
@@ -1272,7 +1272,7 @@ def _render(rows: list[dict]) -> str:
         "is True.",
         "Go: da-guard's ParseDomainPolicies must say the same, or what",
         "merge_key_go_verdicts.json records for the row; tenant-api's",
-        "parseConfig the same, or what it records, or refuse the file.",
+        "parseConfig the same (a refusal being \"unusable\"), or what it records.",
         "`id`: the first 16 hex digits of the sha256 of the file the row",
         "stands for (the key of merge_key_go_verdicts.json and of",
         "reader_divergence_catalog.yaml). `pyyaml_strict_blocks`: the file is",

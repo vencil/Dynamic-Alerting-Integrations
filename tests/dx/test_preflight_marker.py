@@ -231,7 +231,7 @@ class TestPrepushWiring:
         for _ in range(2):
             r = self._install_guards(tmp_path)
             assert r.returncode == 0, f"{r.stdout}{r.stderr}"
-        assert hook.read_bytes() == mod._shim_body().encode(), (
+        assert hook.read_bytes() == mod._shim_body()[0].encode(), (
             f"pre-push is not the shim:\n{r.stdout}")
         assert not (tmp_path / ".git" / "hooks" / "pre-push.chained").exists(), (
             f"pre-push.chained was created:\n{r.stdout}")
@@ -425,7 +425,7 @@ class TestPrepushWiring:
 
     @pytest.mark.parametrize("scope", ["local", "global", "local-behind-GIT_CONFIG"])
     @pytest.mark.parametrize("hooks_path", [
-        "shared", "/dev/null", "hooks-dir", "", ".git/hooks", "own-absolute"])
+        "shared", "/dev/null", "hooks-dir", "", ".git/hooks", "own-absolute", "a\tb"])
     def test_a_set_hooks_path_is_unmeasurable(
         self, tmp_path, monkeypatch, hooks_path, scope
     ):
@@ -456,6 +456,16 @@ class TestPrepushWiring:
         assert wired is None and "core.hooksPath" in why, why
         r = self._install_guards(repo)
         assert r.returncode == 1 and "core.hooksPath" in r.stderr, r.stderr
+        # #2776: both name the layer and the file the value comes from, the
+        # facts a reader needs to find where to change it.
+        layer, src = (("global", tmp_path / "global.gitconfig") if scope == "global"
+                      else ("local", repo / ".git" / "config"))
+        assert f"（scope {layer}，來自 file:{src}）" in why, why
+        assert f"; scope {layer}, from file:{src})" in r.stderr, r.stderr
+        assert f"以 {repo / '.git'} 為 git 目錄" in why, why
+        # Facts only (#2696 R1): no command to run.
+        assert "--unset" not in why and "--unset" not in r.stderr, (why, r.stderr)
+        assert f"(to '{target}';" in r.stderr and f"設成 {target!r}" in why, (why, r.stderr)
         for place in (tmp_path / "shared", repo / "hooks-dir"):
             assert not place.exists(), f"the installer wrote into {place}"
         assert sorted(p.name for p in (repo / ".git" / "hooks").iterdir()) == before
@@ -466,6 +476,91 @@ class TestPrepushWiring:
         assert self._install_guards(repo).returncode == 0
         wired, why = mod._prepush_guards_wired()
         assert wired is True, f"unsetting core.hooksPath did not bring the guards back: {why!r}"
+
+    def test_a_git_without_show_scope_judges_the_same(self, tmp_path, monkeypatch):
+        """#2776: the layer and file are read only for the message. A git that
+        does not know `--show-scope` (before 2.26) gets the same verdict from
+        both sides, and a message without them."""
+        mod = _load()
+        repo = tmp_path / "repo"
+        repo.mkdir()
+        self._repo(repo)
+        monkeypatch.chdir(repo)
+        bindir = tmp_path / "bin"
+        bindir.mkdir()
+        (bindir / "git").write_text(
+            "#!/bin/sh\n"
+            'for a in "$@"; do [ "$a" = --show-scope ] && exit 129; done\n'
+            f'exec "{shutil.which("git")}" "$@"\n', encoding="utf-8", newline="\n")
+        (bindir / "git").chmod(0o755)
+        monkeypatch.setenv("PATH", f"{bindir}{os.pathsep}{os.environ['PATH']}")
+
+        assert self._install_guards(repo).returncode == 0
+        wired, why = mod._prepush_guards_wired()
+        assert wired is True, why
+        subprocess.run(["git", "config", "core.hooksPath", "/x"], check=True)  # subprocess-timeout: ignore
+        wired, why = mod._prepush_guards_wired()
+        assert wired is None and "設成 '/x'；" in why, why
+        r = self._install_guards(repo)
+        assert r.returncode == 1 and "is set (to '/x')." in r.stderr, r.stderr
+
+    @pytest.mark.parametrize("where", ["global", "repo-include", "repo-include-ascii"])
+    def test_a_quoted_config_file_is_named_absolute(self, tmp_path, monkeypatch, where):
+        """#2776: git C-quotes a file name with non-ASCII bytes. An absolute one
+        stays as git wrote it; one relative to the top level gets it in front,
+        inside the quotes, like an unquoted one."""
+        repo = tmp_path / "repo"
+        repo.mkdir()
+        self._repo(repo)
+        sub = repo / "sub"
+        sub.mkdir()
+        gdir = tmp_path / "g\u00e9"
+        gdir.mkdir()
+        monkeypatch.setenv("GIT_CONFIG_GLOBAL", str(gdir / "cfg"))
+        if where == "global":
+            (gdir / "cfg").write_text("[core]\n\thooksPath = /x\n", encoding="utf-8")
+            want = 'from file:"' + str(tmp_path) + '/g\\303\\251/cfg")'
+        elif where == "repo-include":
+            (repo / ".git" / "\u00f1.inc").write_text("[core]\n\thooksPath = /x\n", encoding="utf-8")
+            subprocess.run(["git", "-C", str(repo), "config", "include.path",  # subprocess-timeout: ignore
+                            "\u00f1.inc"], check=True)
+            want = 'from file:"' + str(repo) + '/.git/\\303\\261.inc")'
+        else:
+            (repo / ".git" / "n.inc").write_text("[core]\n\thooksPath = /x\n", encoding="utf-8")
+            subprocess.run(["git", "-C", str(repo), "config", "include.path",  # subprocess-timeout: ignore
+                            "n.inc"], check=True)
+            want = f"from file:{repo}/.git/n.inc)"
+        r = subprocess.run(  # subprocess-timeout: ignore
+            [shutil.which("bash"), str(repo / "scripts" / "ops" / "install_prepush_hook.sh")],
+            cwd=sub, capture_output=True, text=True, encoding="utf-8", errors="replace")
+        assert r.returncode == 1 and want in r.stderr, (want, r.stderr)
+
+    @pytest.mark.parametrize("gitdir", ["relative", "not-utf8"])
+    def test_the_worktree_a_hooks_path_was_read_for_is_named(
+        self, tmp_path, monkeypatch, gitdir
+    ):
+        """#2776: the admin directory's gitdir file names the worktree. git may
+        write it relative to that directory, and a path need not be UTF-8."""
+        mod = _load()
+        repo = tmp_path / "repo"
+        repo.mkdir()
+        self._repo(repo)
+        wt = tmp_path / ("w\udcff" if gitdir == "not-utf8" and os.name != "nt" else "wt")
+        subprocess.run(["git", "-C", str(repo), "worktree", "add", "-q", "--detach",  # subprocess-timeout: ignore
+                        str(wt)], check=True)
+        subprocess.run(["git", "-C", str(repo), "config", "extensions.worktreeConfig", "true"],  # subprocess-timeout: ignore
+                       check=True)
+        subprocess.run(["git", "-C", str(wt), "config", "--worktree", "core.hooksPath", "/x"],  # subprocess-timeout: ignore
+                       check=True)
+        admin = repo / ".git" / "worktrees" / wt.name
+        if gitdir == "relative":
+            (admin / "gitdir").write_text(os.path.relpath(wt / ".git", admin) + "\n",
+                                          encoding="utf-8", newline="\n")
+        monkeypatch.chdir(repo)
+
+        wired, why = mod._prepush_guards_wired()
+        # ascii(): a non-UTF-8 path in a failure report breaks pytest-xdist.
+        assert wired is None and f"（worktree {wt}）" in why, ascii(why)
 
     @pytest.mark.parametrize("where", ["in-place", "moved", "GIT_DIR"])
     @pytest.mark.parametrize("how", ["worktree-config", "includeIf-gitdir"])
@@ -525,6 +620,13 @@ class TestPrepushWiring:
 
         wired, why = mod._prepush_guards_wired()
         assert wired is None and "core.hooksPath" in why and "only-this-tree" in why, why
+        # #2776: the worktree as registered, and where the value comes from.
+        assert f"（worktree {tmp_path / 'only-this-tree'}）" in why, why
+        origin = ("scope worktree，來自 file:" + str(repo / ".git" / "worktrees"
+                                                     / "only-this-tree" / "config.worktree")
+                  if how == "worktree-config"
+                  else f"scope global，來自 file:{tmp_path / 'inc.gitconfig'}")
+        assert origin in why, why
 
     @pytest.mark.parametrize("fails", ["the-linked-worktree-only", "finding-the-common-dir"])
     def test_git_failing_for_another_worktree_is_unmeasurable(self, tmp_path, monkeypatch, fails):
@@ -545,7 +647,7 @@ class TestPrepushWiring:
         real = shutil.which("git")
         bindir = tmp_path / "bin"
         bindir.mkdir()
-        pattern = {"the-linked-worktree-only": '*"/worktrees/"*" config --get core.hooksPath "*',
+        pattern = {"the-linked-worktree-only": '*"/worktrees/"*" --get core.hooksPath "*',
                    "finding-the-common-dir": '*" rev-parse --git-common-dir "*'}[fails]
         (bindir / "git").write_text(
             "#!/bin/sh\n"
@@ -571,7 +673,7 @@ class TestPrepushWiring:
         bindir.mkdir()
         (bindir / "git").write_text(
             "#!/bin/sh\n"
-            'case " $* " in *" config --get core.hooksPath "*) exit 5 ;; esac\n'
+            'case " $* " in *" --get core.hooksPath "*) exit 5 ;; esac\n'
             f'exec "{real}" "$@"\n', encoding="utf-8", newline="\n")
         (bindir / "git").chmod(0o755)
         monkeypatch.setenv("PATH", f"{bindir}{os.pathsep}{os.environ['PATH']}")
@@ -663,12 +765,18 @@ class TestPrepushWiring:
             installer.write_bytes(b"\xff\xfe" + installer.read_bytes())
         wired, why = mod._prepush_guards_wired()
         assert wired is None and "量不到" in why, why
+        # #2773: the cause it names is the one that happened.
+        said = {"missing": f"讀不到 {installer}（[Errno 2]",
+                "not-utf8": f"{installer} 不是 UTF-8"}[damage]
+        assert said in why and "VIBE_SHIM_EOF" not in why, why
 
     @pytest.mark.parametrize("installer", [
         "#!/usr/bin/env bash\n",
         "x <<'VIBE_SHIM_EOF'\na\nVIBE_SHIM_EOF\ny <<'VIBE_SHIM_EOF'\nb\nVIBE_SHIM_EOF\n",
         "VIBE_SHIM_EOF\nx <<'VIBE_SHIM_EOF'\na\n",
-    ], ids=["no-heredoc", "two-heredocs", "end-before-start"])
+        "# <<'VIBE_SHIM_EOF'\nx <<'VIBE_SHIM_EOF'\na\nVIBE_SHIM_EOF\n",
+        "x <<'VIBE_SHIM_EOF'\na\nVIBE_SHIM_EOF\nVIBE_SHIM_EOF\n",
+    ], ids=["no-heredoc", "two-heredocs", "end-before-start", "two-starts", "two-ends"])
     def test_an_installer_without_the_shim_is_unmeasurable_not_unwired(
         self, tmp_path, monkeypatch, installer
     ):
@@ -687,7 +795,7 @@ class TestPrepushWiring:
         monkeypatch.setattr(mod, "_INSTALLER", broken)
         wired, why = mod._prepush_guards_wired()
         assert wired is None, why
-        assert "VIBE_SHIM_EOF" in why, why
+        assert f"{broken} 裡找不到恰好一段 VIBE_SHIM_EOF heredoc" in why, why
 
 
 class TestMarkerPython:

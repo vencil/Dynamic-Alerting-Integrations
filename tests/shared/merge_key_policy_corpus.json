@@ -15,7 +15,7 @@
       "is True.",
       "Go: da-guard's ParseDomainPolicies must say the same, or what",
       "merge_key_go_verdicts.json records for the row; tenant-api's",
-      "parseConfig the same, or what it records, or refuse the file.",
+      "parseConfig the same (a refusal being \"unusable\"), or what it records.",
       "`id`: the first 16 hex digits of the sha256 of the file the row",
       "stands for (the key of merge_key_go_verdicts.json and of",
       "reader_divergence_catalog.yaml). `pyyaml_strict_blocks`: the file is",

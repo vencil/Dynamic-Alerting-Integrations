@@ -27,7 +27,7 @@ lang: zh
 | `TRK-010` | dx | TRK-010: Flake 自動重試 CI Policy（不是盲目全域 retry） | ci | — | [docs/internal/dx-tooling-backlog.md](../internal/dx-tooling-backlog.md) |
 | `TRK-336` | dx | TRK-336: 補齊本地 gate 覆蓋（CI-only / 單邊 gate 執行點判準） | ci | — | [docs/internal/dx-tooling-backlog.md](../internal/dx-tooling-backlog.md) |
 
-### accepted (34)
+### accepted (35)
 
 | ID | Kind | Title | Domain | PR | Source |
 |----|------|-------|--------|------|--------|
@@ -65,6 +65,7 @@ lang: zh
 | `ADR-034` | adr | ADR-034: 合法值不得同時當作無法辨識時的 fallback | platform | — | [docs/adr/034-legal-value-as-fallback.md](../adr/034-legal-value-as-fallback.md) |
 | `ADR-035` | adr | ADR-035: tenant id 合法字元集的單一來源 | platform | — | [docs/adr/035-tenant-id-single-source.md](../adr/035-tenant-id-single-source.md) |
 | `ADR-036` | adr | ADR-036: 路由與 domain policy 設定只由產生器解析一次 | platform | — | [docs/adr/036-single-parser-effective-config.md](../adr/036-single-parser-effective-config.md) |
+| `ADR-037` | adr | ADR-037: config-diff 改為比較渲染結果 | platform | — | [docs/adr/037-config-diff-compares-rendered-output.md](../adr/037-config-diff-compares-rendered-output.md) |
 
 ### proposed (16)
 

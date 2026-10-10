@@ -64,10 +64,12 @@ func loadRoutingPolicyMatrix(t *testing.T) []daGuardParityTree {
 		t.Fatalf("read matrix: %v", err)
 	}
 	var m struct {
-		Comment       []string            `json:"_comment"`
-		BlockingKinds json.RawMessage     `json:"blocking_kinds"`
-		TenantIDs     json.RawMessage     `json:"tenant_ids"` // pinned by pkg/routingpolicy
-		Trees         []daGuardParityTree `json:"trees"`
+		Comment       []string        `json:"_comment"`
+		BlockingKinds json.RawMessage `json:"blocking_kinds"`
+		TenantIDs     json.RawMessage `json:"tenant_ids"` // pinned by pkg/routingpolicy
+		// Why a tenant_api cell is null: the Python half asserts it.
+		TenantAPIUnmeasured json.RawMessage     `json:"tenant_api_unmeasured"`
+		Trees               []daGuardParityTree `json:"trees"`
 	}
 	dec := json.NewDecoder(bytes.NewReader(raw))
 	dec.DisallowUnknownFields()
