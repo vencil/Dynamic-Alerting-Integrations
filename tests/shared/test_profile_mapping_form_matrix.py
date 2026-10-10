@@ -9,8 +9,9 @@ Go 的讀法（pkg/config `withProfileText` ← `ScheduledValue.UnmarshalYAML`�
   走任意 mapping 的分支，以 merged mapping 的 yaml.v3 `Marshal` 文字（`default: x\\n`）當
   profile 名稱。**describe 刻意不鏡像**（減法裁決：不移植 yaml.v3 Marshal）：`_profile`
   留成 generic mapping、不選 profile，並在 stderr 印 WARNING 點名檔案與租戶。fixture 不定義
-  以 Marshal 文字命名的 profile，所以兩邊的「值」相同；`_profile` 允許不同（merged_hash
-  自 #1549 起是 describe 從 da-guard 讀來的，兩邊相同）——見 `MERGE_KEY_SHAPES` 那組已知分歧列。
+  以 Marshal 文字命名的 profile，所以兩邊的「值」相同；`_profile` 允許不同，describe 自算的
+  hash（`--what-if` 的兩個 merged_hash）也可能不同；`--show-sources` 印的 merged_hash 自 #1549
+  起讀自 da-guard——見 `MERGE_KEY_SHAPES` 那組已知分歧列。
 - 其他 mapping（完全沒有 `default`）、sequence、null：原樣保留，不選 profile。
 
 每格在租戶檔與根平台檔 `tenants:` 兩個位置各量一次，比對三樣東西：effective_config 的
@@ -46,8 +47,9 @@ pytestmark = pytest.mark.usefixtures("da_guard_env")
 _DEFAULTS = "defaults:\n  mysql_connections: 80\n"
 # One profile, `010`. No profile is named by a yaml.v3 Marshal text
 # (`default: "010"`): the merge-key rows are a known divergence on `_profile`
-# only (merged_hash is read from da-guard since #1549), so their served value
-# must still agree.
+# and on the hash describe computes itself (`--what-if`); the merged_hash
+# `--show-sources` prints is read from da-guard since #1549. Their served
+# value must still agree.
 _PROFILES = 'profiles:\n  "010":\n    mysql_connections: 10\n'
 
 # (name, `_profile:` as written, the value Go serves for mysql_connections)

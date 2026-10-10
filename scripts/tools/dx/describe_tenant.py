@@ -987,8 +987,10 @@ class _GoKeyProfileTextLoader(_GoKeyLoader):
     merged mapping (`default: x\\n`) as the profile NAME — normally an
     unknown profile. Here it stays the generic mapping and elects nothing:
     the served values agree unless a profile is named by that text, but
-    `_profile` differs from the exporter's (merged_hash does not: it is
-    read from da-guard, #1549).
+    `_profile` differs from the exporter's, and so do the hashes this tool
+    computes itself (`--what-if`'s baseline / what_if merged_hash). The
+    merged_hash `--show-sources` / `--all` print is read from da-guard
+    (#1549) and is the exporter's.
     ⚠️ Not mirrored: a `default:` that is a sequence or a mapping. yaml.v3
     cannot decode it into a string, so the exporter rejects the WHOLE file
     (the `_read_profiles` precedent); here `_profile` stays that mapping and
@@ -1102,7 +1104,9 @@ def _warn_unmirrored_profiles(path: Path, doc: Any) -> None:
               f"merge key (`<<`) or an alias key — not mirrored here. The exporter elects the YAML text of "
               f"the merged mapping as the profile name; this tool keeps the mapping and "
               f"elects no profile, so `_profile` in the effective config shown here "
-              f"differs from the exporter's (#2515).", file=sys.stderr)
+              f"differs from the exporter's, and so may the merged_hash this tool computes "
+              f"itself (--what-if's baseline_merged_hash / what_if_merged_hash); the "
+              f"merged_hash --show-sources / --all print is da-guard's (#2515).", file=sys.stderr)
 
 
 def _load_first_document(path: Path) -> Any:

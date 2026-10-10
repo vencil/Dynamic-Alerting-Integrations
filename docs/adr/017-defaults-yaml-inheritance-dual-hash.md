@@ -28,7 +28,7 @@ updated_at: 2026-10-10
 | 2026-04-25 | 「預設值改了、租戶的最終設定沒變」拆成兩種：被租戶覆蓋（shadowed）與沒有實質變更（cosmetic） | 決策 7 |
 | 2026-09-28 | 路由設定也沿目錄逐層繼承 | 決策 9 |
 | 2026-10-08 | 最終設定逐字顯示寫下的值，`/metrics` 不送的值逐鍵標出 | 決策 10 |
-| 2026-10-10 | `describe_tenant.py` 與 `tenant-verify` 的 `merged_hash` 改讀 da-guard 的值；爆炸半徑報告另比對自訂告警 | 決策 2 |
+| 2026-10-10 | `describe_tenant.py --show-sources`／`--all` 與 `tenant-verify` 的 `merged_hash` 改讀 da-guard 的值；爆炸半徑報告另比對自訂告警 | 決策 2 |
 
 ## 名詞
 
@@ -77,7 +77,7 @@ conf.d/
 兩個例外：
 
 - **`_metadata` 不繼承**：上層寫的 `_metadata` 不會出現在租戶的最終設定裡。
-- **`_custom_alerts`（租戶自訂告警，見 [ADR-024](024-version-aware-threshold-via-dimensional-label.md)）在兩個實作裡不同**：`describe_tenant.py` 顯示的最終設定是聯集，上層 `_defaults.yaml` 頂層宣告的清單加上租戶自己的清單，另附每一條的名稱、宣告所在的檔與是否為租戶自己的；tenant-api 與 da-guard 算的只有租戶自己的清單。`merged_hash` 不受這個差異影響：`describe_tenant.py` 與 `tenant-verify` 印出的是 da-guard 算的值，與 tenant-api 相同，也不隨檔名改變。爆炸半徑報告以 `merged_hash` 判斷設定值有沒有變，自訂告警另外比對聯集裡每一條的內容、名稱與是否為租戶自己的，不比宣告所在的檔：只搬檔不算變更，平台改一條 recipe 的門檻，繼承它的租戶都會列出（[#1549](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/1549)）。
+- **`_custom_alerts`（租戶自訂告警，見 [ADR-024](024-version-aware-threshold-via-dimensional-label.md)）在兩個實作裡不同**：`describe_tenant.py` 顯示的最終設定是聯集，上層 `_defaults.yaml` 頂層宣告的清單加上租戶自己的清單，另附每一條的名稱、宣告所在的檔與是否為租戶自己的；tenant-api 與 da-guard 算的只有租戶自己的清單。`merged_hash` 不受這個差異影響：`describe_tenant.py --show-sources`／`--all` 與 `tenant-verify` 印出的是 da-guard 算的值，與 tenant-api 相同，也不隨檔名改變。爆炸半徑報告以 `merged_hash` 判斷設定值有沒有變，自訂告警另外比對聯集裡每一條的內容、名稱與是否為租戶自己的，不比宣告所在的檔：只搬檔不算變更，平台改一條 recipe 的門檻，繼承它的租戶都會列出（[#1549](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/1549)）。
 
 ### 3. 範例
 
@@ -281,7 +281,7 @@ resolved(t) = rd(t) ⊕ profiles[t._routing_profile] ⊕ t._routing
 - **代價**：
   - 根目錄 `_routing_defaults`、`state_filters` 這類頂層鍵的變更，在最終設定這一面看不到（決策 8）。
   - 只改租戶檔的註解也記成 applied（決策 7）。
-  - `_custom_alerts` 在 `describe_tenant.py` 顯示的最終設定與 Go 實作之間不一致（決策 2）；`merged_hash` 一律取 Go 的值，不受影響。
+  - `_custom_alerts` 在 `describe_tenant.py` 顯示的最終設定與 Go 實作之間不一致（決策 2）；`describe_tenant.py --show-sources`／`--all` 與 `tenant-verify` 的 `merged_hash` 取 Go 的值，不受影響（`--what-if` 的兩個 `merged_hash` 是本工具自算，可能與 exporter 不同）。
   - 沒有 `defaults:` 的子目錄檔整份併入，它的頂層鍵（例如 `state_filters`）因此也進最終設定：改它會讓該子樹每個租戶的 `merged_hash` 都動。`rule-packs/recipes/examples/conf.d/finance/_defaults.yaml` 就是這個形狀（頂層只有 `_custom_alerts`）。
 
 ## 考量過的替代方案

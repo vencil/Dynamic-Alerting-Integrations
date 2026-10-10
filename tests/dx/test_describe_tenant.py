@@ -222,8 +222,11 @@ class TestSourceInfo:
 
         scanner = dt.ConfDScanner(conf_d)
         info = scanner.source_info("t1")
-        # source_hash is of the tenant file only; merged_hash includes defaults
-        assert info["source_hash"] != info["merged_hash"]
+        # source_hash is of the tenant file only; the hash of the merged
+        # config includes defaults. This tool's own canonical hash (#1549:
+        # the printed merged_hash is da-guard's, None without one).
+        own = dt._canonical_hash(scanner.effective_config("t1"))
+        assert isinstance(own, str) and info["source_hash"] != own
 
 
 # ---------------------------------------------------------------------------
@@ -1763,11 +1766,17 @@ class TestYamlMappingKeyParity:
         (conf_d / "tx.yaml").write_text("tenants:\n  tx:\n    mysql_connections: 60\n", encoding="utf-8")
 
         def merged_hash():
+            # rc 0 and no traceback through the CLI; the hash compared is
+            # this tool's own canonical hash of the merged config, which is
+            # what this test guards (#1549: the printed merged_hash is
+            # da-guard's, None without one — and da-guard exits 3 on `_x.yaml`).
             res = subprocess.run([sys.executable, self.DESCRIBE, "tx", "--conf-d", str(conf_d), "--show-sources"],
                                  capture_output=True, text=True, encoding="utf-8", timeout=20)
             assert res.returncode == 0, res.stderr
             assert "Traceback" not in res.stderr
-            return json.loads(res.stdout)["merged_hash"], res.stderr
+            own = dt._canonical_hash(dt.ConfDScanner(conf_d).effective_config("tx"))
+            assert isinstance(own, str)
+            return own, res.stderr
 
         without, _ = merged_hash()
         # A root platform file that does not parse contributes nothing, and

@@ -191,3 +191,45 @@ def test_changed_merged_hash_with_no_field_diff_is_still_reported():
     assert _fields(report) == {"t1": ["merged_hash"]}
     base["t1"]["merged_hash"] = pr["t1"]["merged_hash"] = None
     assert _compute(base, pr)["summary"]["affected_tenants"] == 0
+
+
+def test_one_side_without_merged_hash_compares_fields():
+    """只有一側有 hash（例如 base 在沒有 da-guard 時產出）：退回逐欄比對。欄位相同 ⇒ 0；
+    cpu 改 ⇒ Tier A（必響）。兩個方向都量。"""
+    for base_h, pr_h in ((None, "h2"), ("h1", None)):
+        base = {"t1": {"merged_hash": base_h, "effective_config": {"cpu": "80"}}}
+        pr = {"t1": {"merged_hash": pr_h, "effective_config": {"cpu": "80"}}}
+        assert _compute(base, pr)["summary"]["affected_tenants"] == 0, (base_h, pr_h)
+        pr["t1"]["effective_config"]["cpu"] = "81"
+        report = _compute(base, pr)
+        assert [(t["tenant_id"], t["highest_tier"]) for t in report["tenants"]] == [("t1", "A")]
+        assert _fields(report) == {"t1": ["cpu"]}, (base_h, pr_h)
+
+
+_RECIPE = {"recipe": "threshold", "name": "plat_cpu", "metric": "node_cpu", "op": ">",
+           "window": "5m", "threshold": "90:warning"}
+
+
+def _with_recipe(merged_hash: str, *, name: str = "plat_cpu", is_own: bool = False,
+                 origin: str = "_defaults.yaml") -> dict:
+    return {"t1": {"merged_hash": merged_hash, "effective_config": {
+        "cpu": "80",
+        "_custom_alerts": [{**_RECIPE, "name": name}],
+        "_custom_alerts_resolution": [{"name": name, "origin": origin, "is_own": is_own}],
+    }}}
+
+
+@pytest.mark.parametrize("pr_hash", ["h1", "h2"], ids=["same-hash", "hash-changed"])
+@pytest.mark.parametrize("change,expect", [
+    ({"is_own": True}, ["_custom_alerts_resolution"]),
+    ({"name": "plat_cpu_v2"}, ["_custom_alerts", "_custom_alerts_resolution"]),
+], ids=["is_own", "name"])
+def test_recipe_name_or_ownership_change_is_tier_a_recipe_field(change, expect, pr_hash):
+    """recipe 的 name 或 is_own 改變（origin 同時改也一樣）：報 Tier A 的 recipe 欄位，
+    不是退路的 Tier B `merged_hash`。對照：只改 origin ⇒ 0。"""
+    base = _with_recipe("h1")
+    pr = _with_recipe(pr_hash, origin="t1.yaml", **change)
+    report = _compute(base, pr)
+    assert [(t["tenant_id"], t["highest_tier"]) for t in report["tenants"]] == [("t1", "A")]
+    assert _fields(report) == {"t1": expect}, report
+    assert _compute(base, _with_recipe("h1", origin="sub/moved.yaml"))["summary"]["affected_tenants"] == 0
