@@ -705,10 +705,12 @@ changelog-fragments-consumed: ## ⛔ 擋住「changelog.d/ 還有沒組裝的片
 # Every entry of tests/shared/reader_divergence_catalog.yaml has an
 # expire_at. In PR CI an expired entry only warns (owner decision on #2766);
 # the tag gate is where it must be re-decided, so pre-tag runs the catalog
-# test with strict expiry. READER_DIVERGENCE_TODAY=YYYY-MM-DD injects "today".
+# test with strict expiry against the real date: READER_DIVERGENCE_TODAY (the
+# unit tests' injectable "today") is unset here, so a stale value in the
+# caller's environment cannot move the tag gate's clock.
 .PHONY: reader-divergence-expiry
 reader-divergence-expiry: ## ⛔ 讀取端差異清單有過期記錄就擋 tag（ADR-036）
-	@READER_DIVERGENCE_STRICT_EXPIRY=1 python3 -m pytest tests/shared/test_reader_divergence_catalog.py -q -p no:cacheprovider
+	@env -u READER_DIVERGENCE_TODAY READER_DIVERGENCE_STRICT_EXPIRY=1 python3 -m pytest tests/shared/test_reader_divergence_catalog.py -q -p no:cacheprovider
 
 # --- #1269 / TRK-354: unpublished draft security advisory gate ---
 # WHY THIS IS A MAKE TARGET AND NOT ONLY A CHECKLIST LINE: a draft advisory

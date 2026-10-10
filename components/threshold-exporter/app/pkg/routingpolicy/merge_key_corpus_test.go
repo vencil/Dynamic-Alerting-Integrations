@@ -311,6 +311,8 @@ func timedShape(shape string) bool {
 // becomes a SeverityError finding except an unusable routing_profiles block
 // (a warning) — internal/guard's platformProblemFindings, mirrored here
 // because this package cannot import internal/guard (it imports this one).
+// internal/guard's TestPlatformProblemSeverityMatchesCorpusEmulation holds
+// the real mapping to this copy for every Problem kind declared here.
 func blocksDaGuard(p Problem) bool {
 	return p.Kind != ProblemRoutingProfilesUnusable
 }
@@ -337,7 +339,9 @@ func daGuardVerdict(t *testing.T, file []byte, shape string, i int) string {
 	}
 	got := map[string]corpusPolicy{}
 	for _, p := range pols {
-		if len(p.ForbiddenReceiverTypes) == 0 && !p.AllowedListNonEmpty {
+		// Escalation alone is an enforced rule (the generator checks it
+		// whatever the receiver-type lists say): such a domain is kept.
+		if len(p.ForbiddenReceiverTypes) == 0 && !p.AllowedListNonEmpty && !p.RequireCriticalEscalation {
 			continue
 		}
 		f := append([]string{}, p.ForbiddenReceiverTypes...)

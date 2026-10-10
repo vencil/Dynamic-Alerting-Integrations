@@ -263,14 +263,16 @@ func tenantAPIVerdict(t *testing.T, cfg *DomainPolicyConfig) string {
 	got := map[string]corpusPolicy{}
 	for name, p := range cfg.DomainPolicies {
 		allowed := p.Constraints.AllowedReceiverTypes
-		if len(p.Constraints.ForbiddenReceiverTypes) == 0 && len(allowed) == 0 {
+		// The escalation as RoutingPolicies enforces it: a boolean true.
+		escalation := p.Constraints.RequireCriticalEscalation.Value == true
+		// Escalation alone is an enforced rule (the generator checks it
+		// whatever the receiver-type lists say): such a domain is kept.
+		if len(p.Constraints.ForbiddenReceiverTypes) == 0 && len(allowed) == 0 && !escalation {
 			continue
 		}
 		f := append([]string{}, p.Constraints.ForbiddenReceiverTypes...)
 		sort.Strings(f)
-		// The escalation as RoutingPolicies enforces it: a boolean true.
-		cp := corpusPolicy{Tenants: append([]string{}, p.Tenants...), Forbidden: f,
-			Escalation: p.Constraints.RequireCriticalEscalation.Value == true}
+		cp := corpusPolicy{Tenants: append([]string{}, p.Tenants...), Forbidden: f, Escalation: escalation}
 		if len(allowed) > 0 {
 			// A non-string entry (NotAReceiverType) allows no type: the
 			// corpus lists the string entries only.

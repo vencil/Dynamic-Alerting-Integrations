@@ -196,6 +196,13 @@ def _dom(tenants, forbidden=(), allowed=None, escalation=False) -> dict:
     # Escalation: Py true / Go false is looser, the reverse stricter.
     ({"fin": _dom(["t1"], ["slack"], escalation=True)}, {"fin": _dom(["t1"], ["slack"])}, "go_looser"),
     ({"fin": _dom(["t1"], ["slack"])}, {"fin": _dom(["t1"], ["slack"], escalation=True)}, "go_stricter"),
+    # Escalation alone (no receiver-type list) is a rule like any other.
+    ({"fin": _dom(["t1"], escalation=True)}, {}, "go_looser"),
+    ({"fin": _dom(["t1", "t2"], escalation=True)}, {"fin": _dom(["t1"], escalation=True)}, "go_looser"),
+    ({"fin": _dom(["t1"], escalation=True)}, {"fin": _dom(["t1"])}, "go_looser"),
+    ({}, {"fin": _dom(["t1"], escalation=True)}, "go_stricter"),
+    ({"fin": _dom(["t1"], escalation=True)}, {"fin": _dom(["t1", "t2"], escalation=True)}, "go_stricter"),
+    ({"fin": _dom(["t1"], escalation=True)}, {"fin": _dom(["t2"], escalation=True)}, "value_differs"),
     # Mixed: looser for one tenant, stricter for another.
     ({"fin": _dom(["t1"], ["slack"])}, {"fin": _dom(["t2"], ["slack", "email"]), "o": _dom(["t1"])},
      "value_differs"),
@@ -526,3 +533,6 @@ def test_pre_tag_runs_strict_expiry() -> None:
     assert "reader-divergence-expiry" in pre_tag.split("##")[0].split()
     recipe = makefile.split("\nreader-divergence-expiry:", 1)[1].split("\n\n", 1)[0]
     assert f"{STRICT_EXPIRY_ENV}=1" in recipe and "test_reader_divergence_catalog.py" in recipe, recipe
+    # The gate's clock is the real date: a stale injected "today" in the
+    # caller's environment must not reach it.
+    assert f"env -u {TODAY_ENV} " in recipe, recipe

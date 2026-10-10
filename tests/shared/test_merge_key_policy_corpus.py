@@ -14,7 +14,8 @@ where no policy reader looks. Rows with nothing enforced are thinned to one
 in four. Each row holds what the route generator's own reader
 (`_parse_config_files`, PyYAML) makes of it: `unusable` (the file or its
 domain_policies block is dropped) or, per domain with a non-empty
-`forbidden_receiver_types` or `allowed_receiver_types`, its tenants and
+`forbidden_receiver_types` or `allowed_receiver_types` or with
+require_critical_escalation True (escalation alone is enforced), its tenants and
 forbidden types, its allowed types when that list is non-empty (`allowed`:
 the string entries; a list of none still restricts), and `escalation: true`
 when its require_critical_escalation is True (the generator's `is True`; any
@@ -1064,6 +1065,36 @@ def _2759_n_bom_512() -> list[str]:
     return ["#" + "a" * (start - 1) + "﻿\n" + _POLICY for start in (510, 511, 509)]
 
 
+def _escalation_only() -> list[str]:
+    """A domain whose only constraint is `require_critical_escalation: true`
+    (no receiver-type list, or empty ones): the generator enforces the
+    escalation all the same, so the verdict keeps the domain. Written in
+    place, flow style, supplied by a merge at the domain and constraints
+    levels, through an aliased constraints mapping, beside a domain with a
+    forbidden list, and as `! "true"`; tenants lists of one and two."""
+    docs = []
+    for tenants in ("[t1]", "[t1, t2]"):
+        docs += [
+            f"domain_policies:\n  fin:\n    tenants: {tenants}\n    constraints:\n"
+            "      require_critical_escalation: true\n",
+            f"domain_policies:\n  fin:\n    tenants: {tenants}\n    constraints:\n"
+            "      forbidden_receiver_types: []\n      require_critical_escalation: true\n",
+            f"domain_policies: {{fin: {{tenants: {tenants}, constraints: {{require_critical_escalation: true}}}}}}\n",
+            f"x-b: &b {{tenants: {tenants}, constraints: {{require_critical_escalation: true}}}}\n"
+            "domain_policies:\n  fin:\n    <<: *b\n",
+            f"x-c: &c {{require_critical_escalation: true}}\ndomain_policies:\n  fin:\n    tenants: {tenants}\n"
+            "    constraints:\n      <<: *c\n",
+            f"x-c: &c {{require_critical_escalation: true}}\ndomain_policies:\n  fin:\n    tenants: {tenants}\n"
+            "    constraints: *c\n",
+            f"domain_policies:\n  fin:\n    tenants: {tenants}\n    constraints:\n"
+            "      require_critical_escalation: true\n"
+            "  ops:\n    tenants: [t2]\n    constraints:\n      forbidden_receiver_types: [slack]\n",
+            f"domain_policies:\n  fin:\n    tenants: {tenants}\n    constraints:\n"
+            "      require_critical_escalation: ! \"true\"\n",
+        ]
+    return docs
+
+
 _KNOWN_STRICTER_2759 = "known-stricter-2759"
 _FUZZ_LOOSER_ONLY = "fuzz-looser-only"
 
@@ -1097,7 +1128,8 @@ def _shapes() -> list[tuple[str, str]]:
                         ("2759-a-depth", _2759_a_depth()),
                         ("2759-f-set", _2759_f_set()),
                         ("2759-k1-merge-collection-key", _2759_k1_merge_collection_key()),
-                        ("2759-n-bom-512", _2759_n_bom_512())):
+                        ("2759-n-bom-512", _2759_n_bom_512()),
+                        ("escalation-only", _escalation_only())):
         out += [(shape, d) for d in docs]
     out += _merge_chains() + _many_aliases()
     seen: set = set()
@@ -1138,7 +1170,11 @@ def _verdict(doc: str, root: Path, encoding: str | None = None) -> object:
         # ("missing required 'receiver.type'", blocking). So `forbidden` is
         # the string entries, and a list of none forbids nothing (#2730 §6).
         forbidden = sorted(f for f in forbidden if isinstance(f, str))
-        if not forbidden and not allowed:
+        # A domain enforces something when it forbids a type, restricts to an
+        # allowlist, or requires critical escalation — the generator checks
+        # escalation whatever the receiver-type lists say (_grar_validate).
+        escalation = cons.get("require_critical_escalation") is True
+        if not forbidden and not allowed and not escalation:
             continue
         entry = {"tenants": [t for t in tenants if isinstance(t, str)], "forbidden": forbidden}
         # allowed_receiver_types, when a non-empty list: it restricts, and only
@@ -1148,7 +1184,7 @@ def _verdict(doc: str, root: Path, encoding: str | None = None) -> object:
             entry["allowed"] = sorted(a for a in allowed if isinstance(a, str))
         # require_critical_escalation as the generator enforces it (`is True`,
         # _grar_validate): `! "true"` is True to PyYAML (#2730 §6).
-        if cons.get("require_critical_escalation") is True:
+        if escalation:
             entry["escalation"] = True
         out[str(name)] = entry
     return out
@@ -1227,8 +1263,9 @@ def _render(rows: list[dict]) -> str:
         "from a fixed seed — regenerate with REGEN_MERGE_KEY_CORPUS=1; never",
         "edit by hand. `pyyaml`: \"unusable\" (the file or its domain_policies",
         "block is dropped), else each domain the generator enforces (a list",
-        "`tenants`) with string forbidden_receiver_types or a non-empty",
-        "allowed_receiver_types list: its string tenants and those forbidden",
+        "`tenants`) with string forbidden_receiver_types, a non-empty",
+        "allowed_receiver_types list or require_critical_escalation True",
+        "(escalation alone is enforced): its string tenants and those forbidden",
         "types, sorted (a non-string entry forbids nothing a usable config",
         "has), `allowed` (its string entries, sorted) when the allowed list is",
         "non-empty, and `escalation: true` when require_critical_escalation",
@@ -1288,8 +1325,13 @@ def test_corpus_is_not_vacuous() -> None:
                   "tab-space", "tab-trailing", "tab-after-indicator", "line-break-nel-ls-ps",
                   "encoding-not-utf8", "known-stricter-2759", "fuzz-looser-only",
                   "merge-chain-domains-200", "merge-chain-anchors-200", "2715-aliased-tenants-990",
-                  "2759-a-depth", "2759-f-set", "2759-k1-merge-collection-key", "2759-n-bom-512"):
+                  "2759-a-depth", "2759-f-set", "2759-k1-merge-collection-key", "2759-n-bom-512",
+                  "escalation-only"):
         assert shape in shapes, shape
+    # Escalation alone is an enforced rule: rows must keep such a domain.
+    esc_only = [r for r in rows if isinstance(r["pyyaml"], dict) and any(
+        d.get("escalation") and not d["forbidden"] and "allowed" not in d for d in r["pyyaml"].values())]
+    assert len(esc_only) >= 10, len(esc_only)
 
 
 def test_row_ids_are_unique_and_are_the_file_hash() -> None:
