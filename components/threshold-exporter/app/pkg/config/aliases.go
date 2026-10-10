@@ -362,7 +362,8 @@ func otherSpellings(key string, buf *[2]string) []string {
 // from dst every other spelling of the same threshold that src does not
 // write itself. It is the per-key "later layer wins" of every plane that
 // stacks a tenant's layers — the flat merge (mergePartialInto, the
-// fast-path reclaim), the walker (overlayTenant) and the tenant-api core
+// fast-path reclaim; both through overlayTenantLayer, which adds the
+// per-key `_metadata` rule), the walker (overlayTenant) and the tenant-api core
 // (supplyFor) — so a tenant file writing `mysql_cpu` beats a platform
 // `tenants:` entry writing `mysql_threads_running`.
 //
@@ -395,13 +396,6 @@ func overlayAcrossSpellings[V any](dst, src map[string]V) {
 		}
 		dst[k] = v
 	}
-}
-
-// OverlayAcrossSpellings is overlayAcrossSpellings for package main's
-// incremental reload (reclaimTenantFrom), which must stack a tenant's
-// declaring files exactly as mergePartialInto does.
-func OverlayAcrossSpellings(dst, src map[string]ScheduledValue) {
-	overlayAcrossSpellings(dst, src)
 }
 
 // WithoutDoubleSpelledThresholds returns overrides without every key whose

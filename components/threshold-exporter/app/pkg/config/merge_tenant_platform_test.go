@@ -222,10 +222,10 @@ func TestMergeTenantPlatformLayerMatchesMetrics(t *testing.T) {
 					t.Errorf("merge created tenant %q the body does not declare", tid)
 				}
 			}
-			// `_metadata`: the WALKER rule (not inherited), not /metrics'.
-			// The oracle side is asserted too, so the divergence is measured
-			// rather than assumed: if /metrics stopped inheriting it, the
-			// comment above and this pin would be stale.
+			// `_metadata`: this core does not carry it (nothing it resolves
+			// reads metadata); the metadata readers merge the platform layer
+			// per key (#2370, metadata_layers.go). The oracle side is
+			// asserted too: /metrics does carry the platform entry's value.
 			if _, ok := byteMerge.Tenants["tx"]["_metadata"]; ok {
 				t.Errorf("platform _metadata was inherited into the tenant: %v", byteMerge.Tenants["tx"]["_metadata"])
 			}
@@ -237,7 +237,7 @@ func TestMergeTenantPlatformLayerMatchesMetrics(t *testing.T) {
 					}
 				}
 				if metricsOwner != "platform-team" {
-					t.Errorf("/metrics' ResolveMetadata owner for tx = %q: the documented divergence (/metrics inherits platform _metadata) no longer holds", metricsOwner)
+					t.Errorf("/metrics' ResolveMetadata owner for tx = %q: want platform-team (/metrics merges the platform entry's _metadata)", metricsOwner)
 				}
 			}
 

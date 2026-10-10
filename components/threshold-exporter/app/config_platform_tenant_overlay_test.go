@@ -65,6 +65,9 @@ type overlayMatrix struct {
 			ExporterDedup *string        `json:"exporter_dedup"`
 			SilentMode    *string        `json:"silent_mode"`
 			Walker        *overlayWalker `json:"walker"` // #2019: /effective + describe_tenant
+			// Metadata (#2370, optional): the exporter's resolved _metadata,
+			// non-empty string fields by YAML key; nil = not asserted.
+			Metadata map[string]string `json:"metadata"`
 		} `json:"expect"`
 	} `json:"trees"`
 }
@@ -193,6 +196,27 @@ func exporterSilentMode(m *ConfigManager, tenant string) *string {
 	return &joined
 }
 
+// exporterMetadata is the tenant's ResolveMetadata entry as YAML key →
+// value, non-empty string fields only (the matrix's metadata column).
+func exporterMetadata(m *ConfigManager, tenant string) map[string]string {
+	out := map[string]string{}
+	for _, md := range m.GetConfig().ResolveMetadata() {
+		if md.Tenant != tenant {
+			continue
+		}
+		for k, v := range map[string]string{
+			"runbook_url": md.RunbookURL, "owner": md.Owner, "tier": md.Tier,
+			"environment": md.Environment, "region": md.Region, "domain": md.Domain,
+			"db_type": md.DBType,
+		} {
+			if v != "" {
+				out[k] = v
+			}
+		}
+	}
+	return out
+}
+
 func sameOptString(a, b *string) bool {
 	if a == nil || b == nil {
 		return a == b
@@ -256,6 +280,11 @@ func TestPlatformTenantOverlayMatrix(t *testing.T) {
 				}
 				if got := exporterSilentMode(mgr, tenant); !sameOptString(got, want.SilentMode) {
 					t.Errorf("%s: %s exporter _silent_mode = %s, want %s", tree.Name, tenant, showOpt(got), showOpt(want.SilentMode))
+				}
+				if want.Metadata != nil {
+					if got := exporterMetadata(mgr, tenant); !reflect.DeepEqual(got, want.Metadata) {
+						t.Errorf("%s: %s exporter _metadata = %v, want %v", tree.Name, tenant, got, want.Metadata)
+					}
 				}
 				// #2019: the walker plane must serve the same tenant values.
 				// The column is checked against ResolveEffective here and

@@ -497,8 +497,8 @@ func MergeParsedTenantWithRootDefaults(configDir string, tenantCfg ThresholdConf
 // fallback or ApplyProfiles — the entry points layer those on so each
 // preserves its exact step ordering.
 //
-// The platform layer is the flat plane's (/metrics), rule for rule, with
-// ONE deliberate exception (`_metadata`, below):
+// The platform layer is the flat plane's (/metrics), rule for rule, except
+// that this core does not carry `_metadata` (below):
 //
 //   - WHICH FILES: rootPlatformKeys over ONE root-only walk (scanRootPlatform)
 //     — `_`-prefixed, at the root, not an unselected root carrier; hidden
@@ -511,10 +511,17 @@ func MergeParsedTenantWithRootDefaults(configDir string, tenantCfg ThresholdConf
 //     map overwrite. A reserved key the body writes, even as null, is the
 //     body's; a threshold key written as null is not written at all (#2518,
 //     MergeTenantOverRootPlatform decodes through ParseConfigFile).
-//   - ⚠️ `_metadata` is NOT inherited — the walker plane's rule (/effective,
-//     overlayTenant), deliberately NOT /metrics': the flat merge carries a
-//     platform entry's `_metadata` into ResolveMetadata. GET serves no
-//     metadata field, so no client sees the difference today; the pin is
+//   - ⚠️ `_metadata` is NOT carried by this core: nothing resolved from it
+//     (ResolveAt, ValidateTenantKeys, GET /api/v1/tenants/{id}) reads a
+//     tenant's metadata, and the walker plane (/effective) carries none
+//     either. It is NOT a different answer from /metrics'. The platform
+//     layer's `_metadata` does reach every reader of tenant metadata — the
+//     tenant-api list and search (TenantSummary's environment / domain /
+//     db_type / owner …) and its other metadata readers through
+//     RootPlatform.PlatformMetadata + MergeMetadata, /metrics through the
+//     flat merge — with ONE rule: per key, the tenant file over the
+//     platform files, a later platform file over an earlier one (#2370,
+//     metadata_layers.go). The pin that this core stays out of it is
 //     TestMergeTenantPlatformLayerMatchesMetrics' `_metadata` tree.
 //   - VALUES are the typed decode's ScheduledValue, the one /metrics resolves
 //     — never a round trip through an untyped `any` (which would turn
@@ -665,11 +672,18 @@ func (r rootPlatform) carrier() *rootPlatformFile {
 // selected file through rootPlatformParses. A root that cannot be walked
 // yields no files — the historical "no platform surface" answer.
 func loadRootPlatform(configDir string) rootPlatform {
-	var out rootPlatform
 	scan, err := scanRootPlatform(configDir)
 	if err != nil {
-		return out
+		return rootPlatform{}
 	}
+	return rootPlatformFrom(scan)
+}
+
+// rootPlatformFrom decodes the files of a root-only walk (scanRootPlatform)
+// — loadRootPlatform's half after the walk, shared with
+// LoadRootPlatformChecked.
+func rootPlatformFrom(scan *TreeScan) rootPlatform {
+	var out rootPlatform
 	carrierKey := selectedRootCarrierKey(scan)
 	for _, k := range rootPlatformKeys(scan) {
 		f := scan.Files[k]
@@ -692,7 +706,8 @@ func loadRootPlatform(configDir string) rootPlatform {
 
 // supplyFor returns, in merge order, what each platform file supplies to
 // tenant: its entry's keys that the body (own) does not write, that no
-// later file overwrites, and that are not `_metadata`.
+// later file overwrites, and that are not `_metadata` (this core does not
+// carry it; PlatformMetadata reads that layer).
 func (r rootPlatform) supplyFor(tenant string, own map[string]ScheduledValue) []platformSupply {
 	var owner map[string]int
 	for i := range r.files {
