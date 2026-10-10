@@ -337,3 +337,40 @@ def test_explain_route_trace_does_not_traceback_when_unverifiable(
         pass
     err = capsys.readouterr().err
     assert "cannot verify this config" in err
+
+
+def test_no_shipped_platform_alert_can_carry_metric_group():
+    """The `metric_group` exemption rests on one fact about the shipped pack:
+    no platform alert carries that label at fire time. Pin it, so a platform
+    rule that labels it, groups `by (… metric_group …)`, or reads `ALERTS`
+    (whose series pass tenant alerts' `metric_group` through) turns this red
+    before the exemption silently becomes a bypass (CodeRabbit on #2821).
+
+    ⚠️ Not exhaustive: an unaggregated expr over some other series that
+    carries `metric_group` would also pass it through. No platform expr reads
+    such a series today; this test cannot prove none ever will.
+    """
+    import re
+    from pathlib import Path
+    pack = (Path(__file__).resolve().parents[2] / "k8s" / "03-monitoring"
+            / "configmap-rules-platform.yaml")
+    grouped = re.compile(r"\bby\s*\([^)]*\bmetric_group\b")
+    reads_alerts = re.compile(r"\bALERTS\b")
+    checked, offenders = 0, []
+    for doc in yaml.safe_load_all(pack.read_text(encoding="utf-8")):
+        if not doc or doc.get("kind") != "ConfigMap":
+            continue
+        for body in _VALIDATE._configmap_rule_bodies(doc):
+            for group in (yaml.safe_load(body) or {}).get("groups") or []:
+                for rule in group.get("rules") or []:
+                    labels = rule.get("labels") or {}
+                    if "alert" not in rule or labels.get(
+                            "alert_source") != "platform":
+                        continue
+                    checked += 1
+                    expr = str(rule.get("expr", ""))
+                    if ("metric_group" in labels or grouped.search(expr)
+                            or reads_alerts.search(expr)):
+                        offenders.append(rule["alert"])
+    assert checked >= len(_VALIDATE.PLATFORM_ALERT_IDENTITY_LABELS)
+    assert offenders == [], offenders
