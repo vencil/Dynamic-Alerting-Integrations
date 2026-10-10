@@ -15,6 +15,8 @@ lang: en
 
 ✅ **Accepted** (v1.0.0)
 
+2026-10-10: corrected the scope of fault isolation: it only covers a missing ConfigMap; a syntax error in any rule file affects every Rule Pack, now listed as a known limitation.
+
 ## Terms
 
 - **Rule Pack**: a set of Prometheus rule files shipped with the platform (recording rules and alert rules), one file per database or purpose, for example `rule-pack-mariadb.yaml`. When deployed, each Rule Pack maps to a ConfigMap named `prometheus-rules-<pack>`. Two exceptions: the platform self-monitoring ConfigMap `prometheus-rules-platform` has no matching file under `rule-packs/`, and the tenant custom-alert ConfigMap `prometheus-rules-custom-alerts` is not part of the projected volume described here.
@@ -83,7 +85,7 @@ Result: `jvm-recording.yml` and `jvm-alert.yml` disappear from the rules directo
 ### Why a projected volume
 
 - **Optional**: `optional: true` lets Prometheus start even when a ConfigMap does not exist or has been deleted. Unloading a Rule Pack only takes deleting its ConfigMap.
-- **Changes take effect automatically**: Prometheus does not watch rule files itself. A config-reloader sidecar in the same Pod watches the file contents of the rules directory and calls Prometheus's `/-/reload` on change, so adjusting the set of Rule Packs needs no Prometheus restart. This covers Rule Packs only: the main config `prometheus.yml` is mounted with `subPath`, and Kubernetes does not propagate ConfigMap updates into files mounted with `subPath`, so changing it still needs a Pod restart.
+- **Changes take effect automatically**: Prometheus does not watch rule files itself. A config-reloader sidecar (a helper container running in the same Pod as Prometheus) watches the file contents of the rules directory and calls Prometheus's `/-/reload` on change, so adjusting the set of Rule Packs needs no Prometheus restart. This covers Rule Packs only: the main config `prometheus.yml` is mounted with `subPath`, and Kubernetes does not propagate ConfigMap updates into files mounted with `subPath`, so changing it still needs a Pod restart.
 - **Simple to operate**: no custom controller and no complex initialization logic, only native Kubernetes features.
 
 ### Why not one large ConfigMap
@@ -111,6 +113,7 @@ Result: `jvm-recording.yml` and `jvm-alert.yml` disappear from the rules directo
 
 **Operational recommendations**
 
+- Provide a Helm chart that generates the projected volume configuration, so it does not have to be written by hand.
 - Documentation should state clearly that "deleting the ConfigMap = unloading the Rule Pack".
 - Monitoring tools should be able to list the Rule Packs currently enabled.
 - CI should check that at least one Rule Pack ConfigMap exists; otherwise Prometheus has no rules at all.

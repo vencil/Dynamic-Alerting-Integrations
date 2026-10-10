@@ -21,6 +21,7 @@ lang: en
 - **GitOps**: an operating model in which a Git repo is the single source of configuration and every change reaches the system through Git.
 - **conf.d/**: the directory holding tenant config YAML; threshold-exporter reads its configuration from here.
 - **oauth2-proxy**: an open-source authenticating reverse proxy. Users first sign in through it with an IdP (identity provider, for example GitHub, Google, or a corporate identity system that speaks OIDC, the standard sign-in protocol); it then forwards the request to the backend, carrying the user's email and groups in the `X-Forwarded-Email` and `X-Forwarded-Groups` headers.
+- **sidecar**: a helper container deployed alongside the main program in the same Pod.
 - **commit-on-write**: every write the API handles modifies the YAML in conf.d/ and immediately creates a git commit whose author is the operator's email.
 - **SSE (Server-Sent Events)**: one-way push from server to browser: the server keeps an HTTP response open and writes an entry into it whenever there is an event.
 
@@ -156,7 +157,7 @@ Several operators writing the same tenant's config at the same time can conflict
 
 | ADR | Relationship |
 |-----|-------------|
-| [ADR-003: Sentinel Alert Pattern](003-sentinel-alert-pattern.en.md) | The flag-metric pattern extends to the API server's operational monitoring metrics |
+| [ADR-003: Sentinel Alert Pattern](003-sentinel-alert-pattern.en.md) | The flag-metric pattern (a metric fixed at 1 that only signals that some state holds) extends to the API server's operational monitoring metrics |
 | [ADR-007: Cross-Domain Routing Profiles and Domain Policies](007-cross-domain-routing-profiles.en.md) | The API's `PUT /tenants/{id}` must understand and preserve the `_routing` field |
 | [ADR-008: Operator-Native Integration Path](008-operator-native-integration-path.en.md) | CRD (Kubernetes custom resource) changes on the Operator path do not go through the API and keep using the CLI toolchain |
 | [ADR-010: Multi-Tenant Grouping Architecture](010-multi-tenant-grouping.en.md) | Adds custom groups on top of this API |

@@ -15,7 +15,7 @@ updated_at: 2026-10-10
 
 > **Language / 語言：** **中文 (Current)** | [English](./011-pr-based-write-back.en.md)
 
-**決策摘要**：tenant-api 除了直接 commit，另提供「開 PR」的寫回模式，部署時以 `--write-mode`（或環境變數 `TA_WRITE_MODE`）選擇，預設仍是直接 commit。PR 模式下，每次 UI 寫入都開一條新分支、commit、push，再在 GitHub 開 PR 或在 GitLab 開 MR；設定要等 PR 合併後才生效。同一個租戶同時只能有一個待審核的 PR。
+**決策摘要**：tenant-api 除了直接 commit，另提供「開 PR」的寫回模式，部署時以 `--write-mode`（或環境變數 `TA_WRITE_MODE`）選擇，預設仍是直接 commit。PR 模式下，每次 UI 寫入都開一條新分支、commit、push，再在 GitHub 開 PR 或在 GitLab 開 MR；設定要等 PR 合併後才生效。單筆寫入時，同一個租戶同時只能有一個待審核的 PR。
 
 ## 狀態
 
@@ -87,7 +87,7 @@ TA_GITHUB_TOKEN=<token>          # 從 Kubernetes Secret 注入
 │ (UI 操作) │ ──────────→ │ pending_review│ ──────────→ │  merged   │
 └──────────┘              └─────────────┘              └──────────┘
                                │
-                               │ close/conflict
+                               │ close
                                ▼
                           ┌──────────┐
                           │  closed   │
@@ -98,7 +98,7 @@ TA_GITHUB_TOKEN=<token>          # 從 Kubernetes Secret 注入
 |------|------|
 | `pending_review` | PR 已建立，等待審核 |
 | `merged` | PR 已合併，設定生效 |
-| `closed` | PR 被關閉或有衝突 |
+| `closed` | PR 被關閉 |
 
 ### 範例：單一租戶寫入
 
@@ -113,7 +113,7 @@ TA_GITHUB_TOKEN=<token>          # 從 Kubernetes Secret 注入
 }
 ```
 
-PR 建立後再加上 `tenant-api`、`auto-generated` 兩個 label。API 回應：
+PR 建立後再加上 `tenant-api`、`auto-generated` 兩個 label（GitLab 則在建立 MR 時一併附上）。API 回應：
 
 ```json
 {
@@ -167,8 +167,8 @@ PR 建立後再加上 `tenant-api`、`auto-generated` 兩個 label。API 回應�
 
 **做法**：
 
-1. 每個 PR 只改寫它所屬租戶的設定檔（批量 PR 改的是批量裡各租戶的設定檔）。多個租戶共用同一個設定檔時，不同租戶的 PR 仍會改到同一個檔案，仍可能衝突。
-2. 同一個租戶若已有待審核的 PR，新的寫入回 409，並附上現有 PR 的連結：
+1. 每個 PR 只改寫它所屬租戶的設定檔（批量 PR 改的是批量裡各租戶的設定檔）。
+2. 單筆寫入（`PUT /api/v1/tenants/{id}`）時，同一個租戶若已有待審核的 PR，就回 409，並附上現有 PR 的連結：
 
 ```json
 {
@@ -190,7 +190,7 @@ PR 模式下，tenant-manager UI 要區分兩種設定狀態：
 | 狀態 | 資料來源 | 顯示方式 |
 |------|---------|---------|
 | **生效中** | `conf.d/*.yaml`（base 分支的 HEAD） | 正常顯示 |
-| **待審核** | tenant-api 記憶體裡的待審核 PR 清單 | 頁面上方提示「N 個待審核 PR — 配置變更尚未生效」並列出 PR 連結；租戶卡片上顯示 `PR #N` 標記 |
+| **待審核** | tenant-api 記憶體裡的待審核 PR 清單 | 頁面上方提示「N 個待審核 PR — 配置變更尚未生效」並列出前 3 個 PR 的連結（其餘以「+N 更多」表示）；租戶卡片上顯示 `PR #N` 標記 |
 
 tenant-api 在記憶體裡維護一份待審核 PR 的清單，定期向 GitHub／GitLab API 同步，並提供：
 
@@ -234,14 +234,14 @@ GitHub 的 PR 機制原生整合了 code review、核准與 CI 檢查。自建�
 - **延遲**：PR 模式下，設定變更從「立即生效」變成「等合併」。
 - **複雜度**：多了 GitHub／GitLab API 的依賴、token 管理與待審核 PR 的追蹤。
 - **最終一致**：UI 要處理「已送出、未生效」的中間狀態。
-- **GitHub／GitLab 不可用時無法寫入**：此時回 503，要求稍後重試。
+- **GitHub／GitLab 不可用時，租戶設定無法寫入**：此時回 503，要求稍後重試。
 - **token 問題啟動時不擋**：啟動時會檢查 token 是否有效，但失敗只記警告、照常啟動。
-- **PR 沒有逾時機制**：一個 PR 一直不合併也不關閉，該租戶之後的寫入會一直回 409，直到 PR 合併或關閉。
 
 **已知限制**
 
 - **群組與 saved views 不走 PR**：PR 模式下，群組定義（`_groups.yaml`）與 saved views（`_views.yaml`）的寫入仍直接 commit，四眼原則不涵蓋它們。
-- **只能跑一個副本**：「同一租戶只能有一個待審核 PR」的檢查存在單一 process 的記憶體裡，不跨 Pod 協調。PR 模式必須 `replicaCount=1`（Helm chart 預設值），多個副本可能替同一個租戶開出重複的 PR；直接寫回模式不受影響。
+- **批量寫入不檢查待審核 PR**：「同一租戶只能有一個待審核 PR」只在單筆寫入檢查；批量寫入（`POST /api/v1/tenants/batch`、`POST /api/v1/groups/{id}/batch`）的 PR 路徑不做這個檢查，開出的分支名稱是 `tenant-api/batch/<UTC 時間>`。
+- **只能跑一個副本**：「同一租戶只能有一個待審核 PR」的檢查存在單一 process 的記憶體裡，不跨 Pod 協調，多個副本可能替同一個租戶開出重複的 PR。Helm chart 在 `replicaCount` 大於 1 時拒絕渲染。
 
 ## 考慮過的替代方案
 

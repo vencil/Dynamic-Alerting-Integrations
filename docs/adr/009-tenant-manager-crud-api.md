@@ -27,6 +27,7 @@ updated_at: 2026-10-10
 - **GitOps**：以 Git repo 作為設定的唯一來源，所有變更都經由 Git 進到系統的運維方式。
 - **conf.d/**：存放租戶設定 YAML 的目錄，threshold-exporter 從這裡讀設定。
 - **oauth2-proxy**：開源的認證反向代理。使用者先在它那裡經由 IdP（身分提供者，例如 GitHub、Google，或支援 OIDC 這個標準登入協定的企業身分系統）登入，它再把請求轉給後端，並以 `X-Forwarded-Email`、`X-Forwarded-Groups` 標頭帶上使用者的 email 與所屬群組。
+- **sidecar**：與主程式放在同一個 Pod 裡一起部署的輔助容器。
 - **commit-on-write**：API 每處理一次寫入，就修改 conf.d/ 裡的 YAML 並立刻建立一個 git commit，commit 的 author 是操作者的 email。
 - **SSE（Server-Sent Events）**：瀏覽器與伺服器之間的單向推播：伺服器保持一條 HTTP 回應不結束，有事件就往裡面寫一筆。
 
@@ -162,7 +163,7 @@ oauth2-proxy 支援主流 IdP（GitHub、Google、Azure AD、通用 OIDC），�
 
 | ADR | 關聯 |
 |-----|------|
-| [ADR-003: Sentinel Alert 模式](003-sentinel-alert-pattern.md) | 旗標指標的模式延伸到 API server 的運維監控指標 |
+| [ADR-003: Sentinel Alert 模式](003-sentinel-alert-pattern.md) | 旗標指標（值固定為 1、只用來表示某個狀態成立的指標）的模式延伸到 API server 的運維監控指標 |
 | [ADR-007: 跨域路由設定檔與域策略](007-cross-domain-routing-profiles.md) | API 的 `PUT /tenants/{id}` 需理解並保留 `_routing` 欄位 |
 | [ADR-008: Operator-Native 整合路徑](008-operator-native-integration-path.md) | Operator 路徑下的 CRD（Kubernetes 自訂資源）變更不走 API，維持 CLI 工具鏈 |
 | [ADR-010: Multi-Tenant Grouping Architecture](010-multi-tenant-grouping.md) | 以這套 API 為基礎加上自訂群組 |

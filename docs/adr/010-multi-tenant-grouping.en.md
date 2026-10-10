@@ -9,7 +9,7 @@ lang: en
 
 > **Language / 語言：** **English (Current)** | [中文](./010-multi-tenant-grouping.md)
 
-**Decision in brief**: custom groups are defined in `_groups.yaml` in conf.d/, with members given as an explicit list of tenant IDs; they are managed through tenant-api's group API, and writes go through the same Git write-back flow as tenant config. In addition, tenant `_metadata` gains fields such as environment, region, domain, and db_type for filtering in the API and UI; these fields are not added as labels of `tenant_metadata_info`.
+**Decision in brief**: custom groups are defined in `_groups.yaml` in conf.d/, with members given as an explicit list of tenant IDs; they are managed through tenant-api's group API, and writes reuse the write lock and HEAD conflict detection of tenant writes (in PR write-back mode they are still committed directly, see [ADR-011](011-pr-based-write-back.en.md)). In addition, tenant `_metadata` gains fields such as environment, region, domain, and db_type for filtering in the API and UI; these fields are not added as labels of `tenant_metadata_info`.
 
 ## Status
 
@@ -62,6 +62,7 @@ Properties of the new fields:
 - **All optional**: omitting a field equals an empty value, so existing configs keep working.
 - **Not added to `tenant_metadata_info`**: they do not become labels of that metric, which avoids a cardinality blow-up.
 - **`db_type` has a metric of its own**: for a tenant that declares `db_type`, the exporter also emits `tenant_expected_exporter{tenant, db_type}` (value 1), which liveness checks use to tell whether the tenant's database exporter is missing; there is one series per declaring tenant.
+- **environment and domain can also scope permissions**: rules in `_rbac.yaml` can use `environments` and `domains` to narrow what they apply to; the default is shadow mode, which only records and does not block.
 - **Readable on both sides**: both the Go `TenantMetadata` struct and the Python `generate_tenant_metadata.py` understand these fields.
 
 ### 2. `_groups.yaml`: custom group definitions
@@ -119,7 +120,7 @@ user_severity_dedup{mode="enable",tenant="db-a"} 1
 user_threshold{component="mysql",metric="connections",severity="warning",tenant="db-a"} 70
 ```
 
-Result: `tenant_metadata_info` carries only owner, runbook_url, and tier; environment, region, domain, tags, and groups appear on no metric, and `db_type` appears only on `tenant_expected_exporter`. Running again without `_groups.yaml` gives identical output, apart from timing metrics such as load duration.
+Result: `tenant_metadata_info` carries only owner, runbook_url, and tier; environment, region, domain, tags, and groups appear on no metric, and `db_type` appears only on `tenant_expected_exporter`. Running again without `_groups.yaml` gives identical output, apart from timing and Go runtime metrics (`go_memstats_*`, `go_threads`).
 
 ## Rationale
 

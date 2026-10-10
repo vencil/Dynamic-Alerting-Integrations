@@ -9,7 +9,7 @@ lang: en
 
 > **Language / 語言：** **English (Current)** | [中文](./011-pr-based-write-back.md)
 
-**Decision in brief**: besides committing directly, tenant-api offers an "open a PR" write-back mode, chosen at deployment time with `--write-mode` (or the `TA_WRITE_MODE` environment variable); the default is still a direct commit. In PR mode every UI write creates a new branch, commits, pushes, and then opens a PR on GitHub or an MR on GitLab; the configuration only takes effect once the PR is merged. A tenant can have at most one pending PR at a time.
+**Decision in brief**: besides committing directly, tenant-api offers an "open a PR" write-back mode, chosen at deployment time with `--write-mode` (or the `TA_WRITE_MODE` environment variable); the default is still a direct commit. In PR mode every UI write creates a new branch, commits, pushes, and then opens a PR on GitHub or an MR on GitLab; the configuration only takes effect once the PR is merged. For single writes, a tenant can have at most one pending PR at a time.
 
 ## Status
 
@@ -81,7 +81,7 @@ write request → write-back mode?
 │ (UI op)   │ ──────────→ │ pending_review│ ──────────→ │  merged   │
 └──────────┘              └─────────────┘              └──────────┘
                                │
-                               │ close/conflict
+                               │ close
                                ▼
                           ┌──────────┐
                           │  closed   │
@@ -92,7 +92,7 @@ write request → write-back mode?
 |-------|---------|
 | `pending_review` | PR created, awaiting review |
 | `merged` | PR merged, the configuration is in effect |
-| `closed` | PR closed or has conflicts |
+| `closed` | PR closed |
 
 ### Example: single-tenant write
 
@@ -107,7 +107,7 @@ write request → write-back mode?
 }
 ```
 
-After the PR is created, the `tenant-api` and `auto-generated` labels are added. The API response:
+After the PR is created, the `tenant-api` and `auto-generated` labels are added (on GitLab they are sent along when the MR is created). The API response:
 
 ```json
 {
@@ -161,8 +161,8 @@ A batch operation is consolidated into **one PR** (one PR holding several tenant
 
 **Approach**:
 
-1. Each PR rewrites only its own tenant's config file (a batch PR changes the files of the tenants in the batch). When several tenants share one config file, PRs for different tenants still change the same file and can still conflict.
-2. If a tenant already has a pending PR, a new write returns 409 together with a link to the existing PR:
+1. Each PR rewrites only its own tenant's config file (a batch PR changes the files of the tenants in the batch).
+2. For a single write (`PUT /api/v1/tenants/{id}`), if the tenant already has a pending PR, the write returns 409 together with a link to the existing PR:
 
 ```json
 {
@@ -184,7 +184,7 @@ In PR mode the tenant-manager UI has to distinguish two configuration states:
 | State | Data source | Display |
 |-------|-------------|---------|
 | **In effect** | `conf.d/*.yaml` (HEAD of the base branch) | Normal display |
-| **Pending review** | the pending-PR list tenant-api keeps in memory | A notice at the top of the page, "N pending PR(s) — config changes awaiting review", listing the PR links; a `PR #N` badge on the tenant card |
+| **Pending review** | the pending-PR list tenant-api keeps in memory | A notice at the top of the page, "N pending PR(s) — config changes awaiting review", listing links to the first 3 PRs (the rest shown as "+N more"); a `PR #N` badge on the tenant card |
 
 tenant-api keeps the list of pending PRs in memory, syncs it periodically with the GitHub / GitLab API, and exposes:
 
@@ -228,14 +228,14 @@ In PR mode, group definitions are still committed directly (see "Known limitatio
 - **Latency**: in PR mode a configuration change goes from "effective immediately" to "wait for the merge".
 - **Complexity**: a dependency on the GitHub / GitLab API, token management, and tracking of pending PRs.
 - **Eventual consistency**: the UI has to handle the "submitted but not in effect" intermediate state.
-- **No writes while GitHub / GitLab is unavailable**: the API then returns 503 and asks to retry later.
+- **No tenant-config writes while GitHub / GitLab is unavailable**: the API then returns 503 and asks to retry later.
 - **Token problems do not stop startup**: the token is checked at startup, but a failure is only logged as a warning and startup continues.
-- **PRs never time out**: if a PR is neither merged nor closed, every later write for that tenant returns 409 until the PR is merged or closed.
 
 **Known limitations**
 
 - **Groups and saved views bypass PRs**: in PR mode, writes to group definitions (`_groups.yaml`) and saved views (`_views.yaml`) are still committed directly, so the four-eyes principle does not cover them.
-- **Single replica only**: the "one pending PR per tenant" check lives in the memory of a single process and is not coordinated across Pods. PR mode requires `replicaCount=1` (the Helm chart default); more replicas can open duplicate PRs for the same tenant. Direct write-back mode is unaffected.
+- **Batch writes do not check for pending PRs**: the "one pending PR per tenant" check runs only for single writes; the PR path of batch writes (`POST /api/v1/tenants/batch`, `POST /api/v1/groups/{id}/batch`) does not perform it, and the branch it creates is named `tenant-api/batch/<UTC time>`.
+- **Single replica only**: the "one pending PR per tenant" check lives in the memory of a single process and is not coordinated across Pods, so more replicas can open duplicate PRs for the same tenant. The Helm chart refuses to render when `replicaCount` is greater than 1.
 
 ## Alternatives considered
 

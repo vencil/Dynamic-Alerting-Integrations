@@ -21,6 +21,8 @@ updated_at: 2026-10-10
 
 ✅ **Accepted**（v1.0.0）
 
+2026-10-10：更正故障隔離的範圍：只涵蓋 ConfigMap 不存在；任一規則檔語法錯誤會影響全部 Rule Pack，改列為已知限制。
+
 ## 名詞
 
 - **Rule Pack**：平台隨附的一組 Prometheus 規則檔（recording rule 與告警規則），每個檔案對應一種資料庫或用途，例如 `rule-pack-mariadb.yaml`。部署時每個 Rule Pack 對應一個名為 `prometheus-rules-<pack>` 的 ConfigMap。兩個例外：平台自我監控的 `prometheus-rules-platform` 在 `rule-packs/` 下沒有對應的檔案；租戶自訂告警的 `prometheus-rules-custom-alerts` 不在本文的 projected volume 裡。
@@ -89,7 +91,7 @@ kubectl delete cm prometheus-rules-jvm -n monitoring
 ### 為什麼選 projected volume
 
 - **可選**：`optional: true` 讓 ConfigMap 不存在或被刪除時，Prometheus 仍能啟動。卸載一個 Rule Pack 只要刪掉它的 ConfigMap。
-- **改了自動生效**：Prometheus 本身不監看規則檔。同一個 Pod 裡的 config-reloader sidecar 監看規則目錄的檔案內容，有變更就呼叫 Prometheus 的 `/-/reload`，調整 Rule Pack 組合不必重啟 Prometheus。這只涵蓋 Rule Pack：主設定 `prometheus.yml` 以 `subPath` 掛載，而 Kubernetes 不會把 ConfigMap 的更新傳進以 `subPath` 掛載的檔案，改它仍須重啟 Pod。
+- **改了自動生效**：Prometheus 本身不監看規則檔。同一個 Pod 裡的 config-reloader sidecar（與 Prometheus 放在同一個 Pod 的輔助容器）監看規則目錄的檔案內容，有變更就呼叫 Prometheus 的 `/-/reload`，調整 Rule Pack 組合不必重啟 Prometheus。這只涵蓋 Rule Pack：主設定 `prometheus.yml` 以 `subPath` 掛載，而 Kubernetes 不會把 ConfigMap 的更新傳進以 `subPath` 掛載的檔案，改它仍須重啟 Pod。
 - **運維簡單**：不需要自訂 controller 或複雜的初始化邏輯，只用 Kubernetes 原生功能。
 
 ### 為什麼不用單一大 ConfigMap
@@ -117,6 +119,7 @@ kubectl delete cm prometheus-rules-jvm -n monitoring
 
 **運維建議**
 
+- 提供 Helm chart 自動生成 projected volume 設定，免去手寫。
 - 文件要寫清楚「刪除 ConfigMap = 卸載 Rule Pack」。
 - 監控工具應能列出目前啟用的 Rule Pack。
 - CI 應檢查至少有一個 Rule Pack ConfigMap 存在，否則 Prometheus 沒有任何規則。

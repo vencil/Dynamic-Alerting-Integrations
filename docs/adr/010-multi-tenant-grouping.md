@@ -15,7 +15,7 @@ updated_at: 2026-10-10
 
 > **Language / 語言：** **中文 (Current)** | [English](./010-multi-tenant-grouping.en.md)
 
-**決策摘要**：自訂群組定義在 conf.d/ 的 `_groups.yaml`，成員是一份明列的租戶 ID 清單，透過 tenant-api 的群組 API 管理，寫入走與租戶設定相同的 Git 寫回流程。同時在租戶的 `_metadata` 加上 environment、region、domain、db_type 等欄位，供 API 與 UI 篩選；這些欄位不加進 `tenant_metadata_info` 的標籤。
+**決策摘要**：自訂群組定義在 conf.d/ 的 `_groups.yaml`，成員是一份明列的租戶 ID 清單，透過 tenant-api 的群組 API 管理，寫入沿用租戶寫入的寫入鎖與 HEAD 衝突偵測（PR 寫回模式下仍直接 commit，見 [ADR-011](011-pr-based-write-back.md)）。同時在租戶的 `_metadata` 加上 environment、region、domain、db_type 等欄位，供 API 與 UI 篩選；這些欄位不加進 `tenant_metadata_info` 的標籤。
 
 ## 狀態
 
@@ -68,6 +68,7 @@ _metadata:
 - **全部選填**：省略等同空值，向下相容。
 - **不加進 `tenant_metadata_info`**：不成為這個指標的標籤，避免 cardinality 暴增。
 - **`db_type` 另有一個指標**：宣告了 `db_type` 的租戶，exporter 另外輸出 `tenant_expected_exporter{tenant, db_type}`（值為 1），供存活檢查判斷這個租戶的資料庫 exporter 是否缺席；每個宣告的租戶只有一條。
+- **environment、domain 也可限定權限範圍**：`_rbac.yaml` 的規則可用 `environments`、`domains` 限定適用範圍；預設是 shadow 模式，只記錄、不阻擋。
 - **兩端都能解析**：Go 的 `TenantMetadata` struct 與 Python 的 `generate_tenant_metadata.py` 都讀得懂這些欄位。
 
 ### 2. `_groups.yaml`：自訂群組定義
@@ -125,7 +126,7 @@ user_severity_dedup{mode="enable",tenant="db-a"} 1
 user_threshold{component="mysql",metric="connections",severity="warning",tenant="db-a"} 70
 ```
 
-結果：`tenant_metadata_info` 只帶 owner、runbook_url、tier 三個欄位，environment、region、domain、tags、groups 都不出現在任何指標上；`db_type` 只出現在 `tenant_expected_exporter`。拿掉 `_groups.yaml` 重跑，除了載入耗時這類計時指標，輸出完全相同。
+結果：`tenant_metadata_info` 只帶 owner、runbook_url、tier 三個欄位，environment、region、domain、tags、groups 都不出現在任何指標上；`db_type` 只出現在 `tenant_expected_exporter`。拿掉 `_groups.yaml` 重跑，除了計時與 Go runtime 指標（`go_memstats_*`、`go_threads`），輸出完全相同。
 
 ## 理由
 
