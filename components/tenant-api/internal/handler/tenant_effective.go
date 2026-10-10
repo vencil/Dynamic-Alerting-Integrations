@@ -39,6 +39,7 @@ import (
 	cfg "github.com/vencil/threshold-exporter/pkg/config"
 
 	"github.com/vencil/tenant-api/internal/confd"
+	"github.com/vencil/tenant-api/internal/credmask"
 )
 
 // GetTenantEffective handles GET /api/v1/tenants/{id}/effective.
@@ -78,7 +79,13 @@ import (
 // @Tags        tenants
 // @Produce     json
 // @Param       id   path     string true "Tenant ID"
-// @Success     200  {object} cfg.EffectiveConfig
+// @Description A caller who may read the tenant but not write it gets every
+// @Description receiver credential in effective_config (webhook / chat URLs,
+// @Description PagerDuty keys, passwords, tokens — at any depth) replaced by
+// @Description "<masked: write permission required>", with masked: true and
+// @Description source_hash and merged_hash empty (either would let a guess of
+// @Description a credential be checked offline).
+// @Success     200  {object} TenantEffectiveResponse
 // @Failure     400  {object} ErrorResponse
 // @Failure     404  {object} ErrorResponse
 // @Failure     409  {object} ErrorResponse "Conflict: ambiguous tenant file, or the tenant is declared by more than one conf.d file"
@@ -120,7 +127,14 @@ func GetTenantEffective(d *Deps) http.HandlerFunc {
 				// exporter reads but the merge cannot decode still does.
 				// Its own code, not INTERNAL_ERROR, so WriteErrorEnvelope
 				// keeps the text (#1700): it tells the operator what to fix.
-				WriteJSONErrorWithCode(w, r, http.StatusInternalServerError, CodeConfigDecode, err.Error())
+				//
+				// #1560: except to a caller shown masked credentials — a yaml.v3
+				// type error quotes the offending value, which can be one.
+				msg := err.Error()
+				if !canSeeCredentials(r, d, tenantID) {
+					msg = msgEffectiveDecodeMasked
+				}
+				WriteJSONErrorWithCode(w, r, http.StatusInternalServerError, CodeConfigDecode, msg)
 			default:
 				// Walker and read failures carry server paths (a missing root
 				// answers `stat "/…/conf.d": …`): fixed text, full error logged.
@@ -133,11 +147,41 @@ func GetTenantEffective(d *Deps) http.HandlerFunc {
 		// A YAML `.inf` / `.nan` leaves a non-finite float in the tree, which
 		// JSON cannot carry: send it as the text Python's json.dumps writes.
 		// merged_hash was computed from the original tree, so it is unchanged.
-		out := *ec
-		out.EffectiveConfig = cfg.NonFiniteAsText(ec.EffectiveConfig)
+		out := TenantEffectiveResponse{EffectiveConfig: *ec}
+		out.EffectiveConfig.EffectiveConfig = cfg.NonFiniteAsText(ec.EffectiveConfig)
+		// #1560: masked for a caller who cannot write the tenant. Every
+		// layer is masked, the defaults chain and the platform entries
+		// included — a value is masked by its key, wherever it came from.
+		if !canSeeCredentials(r, d, tenantID) {
+			out.EffectiveConfig.EffectiveConfig, _ = credmask.MaskValue(out.EffectiveConfig.EffectiveConfig).(map[string]any)
+			// Both hashes cover the real values: merged_hash is a hash of
+			// the decoded merge, so a caller who has every other value can
+			// put a guess in place of the placeholder and check it offline
+			// with the public ComputeMergedHash.
+			out.SourceHash, out.MergedHash = "", ""
+			out.Masked = true
+		}
 		writeJSON(w, http.StatusOK, out)
 	}
 }
+
+// TenantEffectiveResponse is GET /tenants/{id}/effective's answer: the
+// effective config, plus Masked when its credentials were masked for the
+// caller (#1560; see canSeeCredentials).
+type TenantEffectiveResponse struct {
+	cfg.EffectiveConfig
+	// Masked is true when every receiver credential in effective_config was
+	// replaced by the placeholder "<masked: write permission required>"
+	// because the caller may read the tenant but not write it; source_hash
+	// and merged_hash are then empty.
+	Masked bool `json:"masked,omitempty"`
+}
+
+// msgEffectiveDecodeMasked replaces the decoder's message for a caller shown
+// masked credentials: a yaml.v3 type error quotes the value it could not
+// decode, which can be a credential.
+const msgEffectiveDecodeMasked = "the tenant's effective config does not decode; " +
+	"the decoder's message is shown to callers with write permission on the tenant"
 
 // msgEffectiveUnresolved is the fixed client-facing text for a resolve
 // failure other than not-found, a duplicate or a decode error: those errors

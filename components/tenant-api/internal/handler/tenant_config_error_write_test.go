@@ -79,8 +79,11 @@ func TestPutCustomAlerts_RefusesFileExporterRejects(t *testing.T) {
 			dir := rejDir(t, c.body)
 			deps := &Deps{ConfigDir: dir, Writer: newTestWriter(dir), RBAC: newRBACManager(t, caWriteRBAC)}
 
-			gw := httptest.NewRecorder()
-			GetTenant(deps)(gw, newRequestWithChiParam("GET", "/api/v1/tenants/db-a", "id", "db-a", nil))
+			// GET as the caller who then PUTs: since #1560 a caller who may
+			// not write the tenant (an anonymous request included) is shown
+			// no source_hash.
+			gw := servePopulatingRBAC(t, GetTenant(deps),
+				newRequestWithChiParam("GET", "/api/v1/tenants/db-a", "id", "db-a", nil), "alice@example.com", []string{"dba"})
 			if gw.Code != http.StatusOK {
 				t.Fatalf("GET status = %d; body: %s", gw.Code, gw.Body.String())
 			}
