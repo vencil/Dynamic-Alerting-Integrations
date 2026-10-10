@@ -155,3 +155,18 @@ def test_the_checkout_still_resolves_to_this_repo(tmp_path):
     off = {k: v for k, v in got.items()
            if not v or not (v.startswith(str(REPO_ROOT)) or v[0].isdigit())}
     assert not off, off
+
+
+def test_the_not_found_messages_name_the_rule_that_applies(monkeypatch):
+    """A marker no longer decides the root, so the remedy must not say add one."""
+    import importlib  # noqa: PLC0415
+    oml = importlib.import_module("_observed_map_lib")
+    reg = importlib.import_module("_registry_lib")
+    monkeypatch.setattr(oml, "DEFAULT_RULE_PACKS_DIR", None)
+    with pytest.raises(oml.RulePacksNotFoundError) as packs:
+        oml.default_pack_paths()
+    with pytest.raises(reg.RepoTreeNotFoundError) as tree:
+        reg._repo_path_or_raise(None, "the thing")
+    for msg in (str(packs.value), str(tree.value)):
+        assert "scripts/tools" in msg, msg
+        assert "Makefile" not in msg and "pyproject" not in msg, msg

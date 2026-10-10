@@ -96,10 +96,10 @@ def _in_repo(*parts: str) -> Optional[str]:
 def _repo_path_or_raise(path: Optional[str], what: str) -> str:
     if path is None:
         raise RepoTreeNotFoundError(
-            f"{what} lives in the repository tree, and no project root "
-            f"(.git / Makefile / pyproject.toml) is reachable from {_THIS_DIR} "
-            f"— this function is repo-only (the da-tools image carries no repo "
-            f"tree); pass an explicit path instead"
+            f"{what} lives in the repository tree, and {_THIS_DIR} is not "
+            f"inside a scripts/tools tree — this function is repo-only (the "
+            f"da-tools image carries no repo tree); pass an explicit path "
+            f"instead"
         )
     return path
 

@@ -388,9 +388,8 @@ def default_pack_paths() -> list[str]:
     if DEFAULT_RULE_PACKS_DIR is None:
         raise RulePacksNotFoundError(
             f"no rule packs reachable from {_THIS_DIR}: none beside this "
-            f"module ({_PACK_GLOB}) and no project root "
-            f"(.git / Makefile / pyproject.toml) above it with a rule-packs/ "
-            f"directory"
+            f"module ({_PACK_GLOB}), and no rule-packs/ directory at the root "
+            f"of the scripts/tools tree this module sits in"
         )
     paths = sorted(glob.glob(os.path.join(DEFAULT_RULE_PACKS_DIR, _PACK_GLOB)))
     if not paths:
