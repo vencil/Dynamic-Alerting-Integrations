@@ -60,10 +60,15 @@ from _grar_validate import (  # noqa: E402
     assert_watchdog_inhibit_immunity,
     assert_platform_alerts_not_tenant_silenceable,
     assert_equal_labels_gated,
+    assert_tenant_inhibits_verifiable,
     blocking_generation_errors,
     find_tenant_silenceable_platform_inhibits,
     find_ungated_equal_label_inhibits,
     find_watchdog_suppressing_inhibits,
+)
+from _grar_validate import (  # noqa: E402  (#1533: the guard's own predicates)
+    _inhibit_target_matchers,
+    _matchers_gate_label_present,
 )
 
 
@@ -473,6 +478,12 @@ def assemble_configmap(base: dict, routes: list[dict], receivers: list[dict], in
     # A tenant-triggered inhibit (Silent Mode) must never suppress a PLATFORM
     # self-monitoring alert — three of them carry a tenant label at fire time.
     assert_platform_alerts_not_tenant_silenceable(merged["inhibit_rules"])
+    # #1533: with a degraded probe set the line above cannot vouch for a
+    # tenant-triggered BASE rule — refuse (rc 2) instead of passing it. The
+    # generated rules are exempt: code-shaped, and verified against the full
+    # set in repo CI.
+    assert_tenant_inhibits_verifiable(merged["inhibit_rules"],
+                                      exempt=list(inhibit_rules or []))
 
     # #1132: every equal-label must be presence-gated on some side (strict → fail,
     # else → warn). Runs on the base+generated merge, so a hand-written base rule
@@ -878,6 +889,12 @@ def _read_existing_configmap(namespace: str, configmap_name: str) -> tuple[dict 
     return existing, warnings
 
 
+def _is_previously_generated_inhibit(rule: dict) -> bool:
+    """The merge's own "this came from the generator" test: a source matcher
+    naming ``metric_group`` (only ``_build_inhibit_rules`` writes one)."""
+    return any('metric_group' in m for m in rule.get("source_matchers", []))
+
+
 def _merge_routes_receivers_inhibits(existing: dict, routes: list[dict],
                                      receivers: list[dict], inhibit_rules: list[dict],
                                      strict: bool = False) -> dict:
@@ -923,7 +940,7 @@ def _merge_routes_receivers_inhibits(existing: dict, routes: list[dict],
     if inhibit_rules:
         # Keep non-generated inhibit rules (e.g., Silent Mode sentinel rules)
         kept_rules = [r for r in existing.get("inhibit_rules", [])
-                      if not any('metric_group' in m for m in r.get("source_matchers", []))]
+                      if not _is_previously_generated_inhibit(r)]
         existing["inhibit_rules"] = kept_rules + inhibit_rules
 
     # ADR-025 D1: fail-closed on the FINAL inhibit set (validated even when no
@@ -932,6 +949,22 @@ def _merge_routes_receivers_inhibits(existing: dict, routes: list[dict],
     assert_watchdog_inhibit_immunity(existing.get("inhibit_rules", []))
     # Same tenant-cannot-silence-platform invariant on the --apply merge path.
     assert_platform_alerts_not_tenant_silenceable(existing.get("inhibit_rules", []))
+    # #1533: a degraded probe set cannot vouch for the CLUSTER's own
+    # tenant-triggered rules — refuse (rc 2). Exempt: this run's generated
+    # rules, and an earlier run's (when this run generated none, the merge
+    # keeps them), by the same predicate the merge uses to tell them apart.
+    # ⛔ The earlier run's rules are exempt only when their TARGET also
+    # requires `metric_group` (every generated rule's does, and no platform
+    # alert carries it): the source-side test alone is a shape an operator can
+    # write, and would wave a hand-written rule through unverified.
+    final_rules = existing.get("inhibit_rules", [])
+    assert_tenant_inhibits_verifiable(
+        final_rules,
+        exempt=list(inhibit_rules or []) + [
+            r for r in final_rules or []
+            if isinstance(r, dict) and _is_previously_generated_inhibit(r)
+            and _matchers_gate_label_present(
+                _inhibit_target_matchers(r) or [], "metric_group")])
     # #1132: same equal-label-gated invariant on the --apply merge path.
     _enforce_equal_labels_gated(existing.get("inhibit_rules", []), strict)
 
@@ -1029,6 +1062,9 @@ def apply_to_configmap(routes: list[dict], receivers: list[dict], inhibit_rules:
         not run); nothing was sent to the cluster. #2219.
         AlertmanagerConfigInvariantViolated: the merged config breaks a
         platform invariant; nothing was sent to the cluster. #2506.
+        PlatformProbeSetUnverifiable: the probe set degraded and the cluster
+        config holds a tenant-triggered inhibit rule it cannot vouch for;
+        nothing was sent to the cluster. #1533.
     """
     # 1. Read existing ConfigMap
     existing, read_warnings = _read_existing_configmap(namespace, configmap_name)

@@ -424,6 +424,10 @@ def _find_platform_rules_configmap() -> "Path | None":
 
 _PLATFORM_IDENTITY_CACHE: "tuple[dict, ...] | None" = None
 _PLATFORM_DEGRADED_WARNED = False
+# Why the DEFAULT (cached) probe set is the fallback constant, or None when it
+# is not. Written on every default-path computation, alongside the cache, so a
+# test that clears `_PLATFORM_IDENTITY_CACHE` gets a fresh value too.
+_PLATFORM_DEGRADED_REASON: "str | None" = None
 
 
 def _warn_probe_set_degraded(reason: str) -> None:
@@ -521,20 +525,21 @@ def platform_alert_identities(
     delivery path in this repo, not a curiosity — see ``_rule_tree`` for the
     kubelet ``MakePayload`` fallback that makes it one.
     """
-    global _PLATFORM_IDENTITY_CACHE
+    global _PLATFORM_IDENTITY_CACHE, _PLATFORM_DEGRADED_REASON
     if configmap_path is None and _PLATFORM_IDENTITY_CACHE is not None:
         return _PLATFORM_IDENTITY_CACHE
+    reason: str | None = None
     if configmap_path:
         path = Path(configmap_path)
     else:
         path = _find_platform_rules_configmap()
         if path is None:
-            _warn_probe_set_degraded(
-                f"{_PLATFORM_RULES_BASENAME} not found beside this tool nor "
-                f"under any ancestor's k8s/03-monitoring/"
-            )
+            reason = (f"{_PLATFORM_RULES_BASENAME} not found beside this tool "
+                      f"nor under any ancestor's k8s/03-monitoring/")
+            _warn_probe_set_degraded(reason)
             identities = PLATFORM_ALERT_IDENTITY_LABELS
             _PLATFORM_IDENTITY_CACHE = identities
+            _PLATFORM_DEGRADED_REASON = reason
             return identities
     try:
         docs = [d for d in yaml.safe_load_all(path.read_text(encoding="utf-8"))
@@ -576,15 +581,37 @@ def platform_alert_identities(
         if out:
             identities = tuple(out)
         else:
-            _warn_probe_set_degraded(f"{path} yielded no platform alert")
+            reason = f"{path} yielded no platform alert"
+            _warn_probe_set_degraded(reason)
             identities = PLATFORM_ALERT_IDENTITY_LABELS
     except (OSError, yaml.YAMLError, KeyError, StopIteration, AttributeError,
             TypeError, ValueError) as exc:
-        _warn_probe_set_degraded(f"{path} unreadable: {type(exc).__name__}")
+        reason = f"{path} unreadable: {type(exc).__name__}"
+        _warn_probe_set_degraded(reason)
         identities = PLATFORM_ALERT_IDENTITY_LABELS
     if configmap_path is None:
         _PLATFORM_IDENTITY_CACHE = identities
+        _PLATFORM_DEGRADED_REASON = reason
     return identities
+
+
+def probe_set_is_degraded() -> bool:
+    """True iff the DEFAULT probe set is the built-in fallback constant (#1533).
+
+    Any of the three degradation causes counts: the pack was not found, it was
+    unreadable, or it yielded no platform alert. Computing it performs the same
+    lookup as :func:`platform_alert_identities` and shares its cache, so it can
+    never disagree with the set the guards actually probed with.
+    """
+    # Identity, not equality: a pack that happened to list exactly the six
+    # fallback alerts is a full set, not a degraded one.
+    return platform_alert_identities() is PLATFORM_ALERT_IDENTITY_LABELS
+
+
+def probe_set_degraded_reason() -> "str | None":
+    """Why the default probe set degraded, or None when it did not (#1533)."""
+    platform_alert_identities()
+    return _PLATFORM_DEGRADED_REASON
 
 
 def _pinned_label_values(matchers: list[str], label: str) -> list[str]:
@@ -662,6 +689,73 @@ def assert_platform_alerts_not_tenant_silenceable(
         f'add `{PLATFORM_ALERT_SOURCE_LABEL}=""` to target_matchers (a missing '
         "label equals the empty string in Alertmanager, so tenant alerts still "
         "match while platform alerts are excluded), or narrow the target.")
+
+
+class PlatformProbeSetUnverifiable(Exception):
+    """#1533: the silencing invariant could not be VERIFIED, as opposed to
+    being violated.
+
+    The default probe set degraded to the built-in fallback, and an
+    operator-supplied inhibit rule is tenant-triggered, so whether it silences
+    a platform alert outside the fallback is unknown. "Could not verify" is
+    exit 2 (no verdict, like amtool being unusable), not exit 1 (a verdict on
+    the config) — so this is deliberately NOT a ``ValueError``: every render
+    path turns ``ValueError`` from the invariant asserts into rc 1, and a
+    subclass would be swallowed there.
+    """
+
+
+def find_unverifiable_tenant_triggered_inhibits(
+        inhibit_rules: list[dict] | None,
+        exempt: "list[dict] | tuple" = ()) -> list[int]:
+    """Indexes of tenant-triggered inhibit rules the probe set cannot vouch for.
+
+    Empty unless :func:`probe_set_is_degraded`. *exempt* are rules (matched by
+    identity, not equality) the caller knows are code-shaped — the generator's
+    own output, verified against the FULL set by the repo's CI — so only
+    operator-supplied rules (a base config, the cluster's existing config) are
+    judged. "Tenant-triggered" is the predicate
+    :func:`find_tenant_silenceable_platform_inhibits` uses: the source
+    matchers presence-gate ``tenant``.
+    """
+    if not probe_set_is_degraded():
+        return []
+    exempt_ids = {id(r) for r in exempt}
+    out: list[int] = []
+    for i, rule in enumerate(inhibit_rules or []):
+        if not isinstance(rule, dict) or id(rule) in exempt_ids:
+            continue
+        sources = _inhibit_side_matchers(rule, "source")
+        if sources and _matchers_gate_label_present(sources, "tenant"):
+            out.append(i)
+    return out
+
+
+def assert_tenant_inhibits_verifiable(
+        inhibit_rules: list[dict] | None,
+        exempt: "list[dict] | tuple" = ()) -> None:
+    """Raise :class:`PlatformProbeSetUnverifiable` when the probe set degraded
+    and an operator-supplied tenant-triggered inhibit rule is present (#1533).
+
+    Run AFTER :func:`assert_platform_alerts_not_tenant_silenceable` on the
+    same final set: a violation the fallback can still see is a verdict (rc
+    1) and outranks "could not verify" (rc 2).
+    """
+    unverifiable = find_unverifiable_tenant_triggered_inhibits(
+        inhibit_rules, exempt)
+    if not unverifiable:
+        return
+    indexes = ", ".join(f"inhibit_rules[{i}]" for i in unverifiable)
+    raise PlatformProbeSetUnverifiable(
+        "Platform-alert silencing invariant could NOT be verified: the "
+        "platform alert identity probe set is degraded to the "
+        f"{len(PLATFORM_ALERT_IDENTITY_LABELS)}-entry built-in fallback "
+        f"({probe_set_degraded_reason()}), and operator-supplied "
+        f"tenant-triggered rule(s) {indexes} may suppress a platform "
+        "self-monitoring alert outside that fallback. Fix: make "
+        f"{_PLATFORM_RULES_BASENAME} reachable (beside this tool, or under the "
+        "checkout's k8s/03-monitoring/) and re-run, or remove those rules from "
+        "the base / cluster config.")
 
 
 class PolicyInputError(ValueError):
