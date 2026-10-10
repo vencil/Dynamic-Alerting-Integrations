@@ -360,7 +360,8 @@ func (pp *PlatformProfiles) bound(own map[string]any) string {
 // with the elected profile's values filled in, and the attribution of the
 // keys it filled. With nothing to fill `own` is returned as is (no copy).
 //
-// Attribution follows overlayTenant's: never `_metadata` (not inherited),
+// Attribution follows overlayTenant's: never `_metadata` (not in the
+// effective config),
 // never a null on a threshold key (deepMerge ignores it), a null on a
 // reserved key only when `chain` has that key to delete.
 func (pp *PlatformProfiles) expand(own, chain map[string]any) (map[string]any, []ProfileOverlaySource) {

@@ -54,10 +54,14 @@
     "tenant-api's own and not in this column. Go (config_platform_tenant_overlay_test.go)",
     "asserts it, and that it equals metric except null for a nested tenant. Profiles",
     "are expanded the /metrics way (ApplyProfiles, #1385; p1/p2/p6 served 80 before).",
-    "tenant_api is a threshold column only: on platform-metadata-is-never-inherited-or-listed",
-    "its 60 is mysql_connections. The core does NOT inherit the platform entry's _metadata",
-    "(the walker rule), while /metrics' ResolveMetadata does - a deliberate divergence",
-    "pinned by pkg/config TestMergeTenantPlatformLayerMatchesMetrics, not by this table.",
+    "tenant_api is a threshold column only: the tenant-api merge core carries no _metadata",
+    "(nothing it resolves reads metadata; pinned by pkg/config TestMergeTenantPlatformLayerMatchesMetrics).",
+    "#2370 metadata (optional) = the exporter's resolved _metadata for the tenant (ResolveMetadata:",
+    "tenant_metadata_info / tenant_expected_exporter), non-empty string fields only; Go asserts it.",
+    "A root platform `tenants:` entry's _metadata and the tenant file's merge PER KEY: the tenant",
+    "file wins a key both write, a later platform file an earlier one; a key only one layer writes",
+    "is kept. The tenant-api metadata readers (LIST) apply the same rule (tenant-api handler tests).",
+    "walker carries no _metadata on any row (/effective drops it): platform_overlay never names it.",
     "#2368 a-rows (#1231 alias spellings): a tree may name metric_key (default",
     "mysql_connections), the threshold its metric / tenant_api columns read; for",
     "mysql_threads_running Go also requires the legacy twin (metric=\"cpu\") to carry",
@@ -691,7 +695,7 @@
       }
     },
     {
-      "name": "platform-metadata-is-never-inherited-or-listed",
+      "name": "platform-metadata-is-inherited-but-not-in-effective-config",
       "files": {
         "_defaults.yaml": "defaults:\n  mysql_connections: 80\ntenants:\n  tx:\n    _metadata:\n      owner: platform-team\n    mysql_connections: \"60\"\n",
         "tx.yaml": "tenants:\n  tx: {}\n"
@@ -717,6 +721,48 @@
               }
             ],
             "profile_overlay": null
+          },
+          "metadata": {
+            "owner": "platform-team"
+          }
+        }
+      }
+    },
+    {
+      "name": "platform-metadata-merges-per-key-with-the-tenant-file",
+      "files": {
+        "_defaults.yaml": "defaults:\n  mysql_connections: 80\ntenants:\n  tx:\n    _metadata:\n      owner: platform-team\n      environment: production\n      domain: finance\n    mysql_connections: \"60\"\n",
+        "_ops.yaml": "tenants:\n  tx:\n    _metadata:\n      owner: ops-team\n      tier: silver\n",
+        "tx.yaml": "tenants:\n  tx:\n    _metadata:\n      db_type: mariadb\n      tier: gold\n"
+      },
+      "expect": {
+        "tx": {
+          "metric": 60,
+          "tenant_api": 60,
+          "dedup": "enable",
+          "group_wait": null,
+          "exporter_dedup": "enable",
+          "silent_mode": "",
+          "walker": {
+            "effective_config": {
+              "mysql_connections": "60"
+            },
+            "platform_overlay": [
+              {
+                "file": "_defaults.yaml",
+                "keys": [
+                  "mysql_connections"
+                ]
+              }
+            ],
+            "profile_overlay": null
+          },
+          "metadata": {
+            "owner": "ops-team",
+            "environment": "production",
+            "domain": "finance",
+            "tier": "gold",
+            "db_type": "mariadb"
           }
         }
       }

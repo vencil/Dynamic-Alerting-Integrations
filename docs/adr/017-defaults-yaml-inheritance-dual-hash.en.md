@@ -70,7 +70,7 @@ The order is root → each level downwards → tenant file; what is applied late
 
 Two exceptions:
 
-- **`_metadata` is not inherited**: `_metadata` written at an upper level does not appear in the tenant's effective config.
+- **`_metadata` is not inherited**: `_metadata` written at an upper level does not appear in the tenant's effective config. A root platform file's `tenants.<id>._metadata` is not part of this chain: it merges with the tenant file's `_metadata` key by key ([#2370](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/2370); the rule is in [config-driven](../design/config-driven.en.md)).
 - **`_custom_alerts` (tenant custom alerts, see [ADR-024](024-version-aware-threshold-via-dimensional-label.en.md)) differs between the two implementations**: the effective config `describe_tenant.py` computes is a union — the list declared at the top level of an upper `_defaults.yaml` plus the tenant's own list; the one tenant-api and da-guard compute holds only the tenant's own list. Their `merged_hash` therefore differ ([#1549](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/1549)).
 
 ### 3. Example
