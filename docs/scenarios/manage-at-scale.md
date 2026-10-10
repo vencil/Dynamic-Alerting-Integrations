@@ -23,7 +23,7 @@ lang: zh
 ## 前置條件
 
 - 已完成 `conf.d/` 階層式結構遷移（參考 [multi-domain-conf-layout](multi-domain-conf-layout.md)）或至少部分域名使用階層式結構（混合模式）
-- 已安裝工具：`scripts/tools/dx/describe_tenant.py`、`scripts/tools/ops/blast_radius.py`、`scripts/tools/dx/migrate_conf_d.py`
+- 已安裝工具：`scripts/tools/dx/describe_tenant.py`、`scripts/tools/ops/blast_radius.py`、`scripts/tools/dx/migrate_conf_d.py`；`describe_tenant.py` 輸出的 `merged_hash` 讀自 da-guard（`$DA_GUARD_BINARY` 或 PATH 上的 `da-guard`，da-tools 映像已內建；repo 內 `make da-guard-build` 建到 `.build/da-guard`），沒有 da-guard 時該欄為 `null`，`blast_radius.py` 改為逐欄比對並在 stderr 說明
 - GitHub Actions 已啟用 `blast-radius.yml` workflow
 
 ## 情景 1：變更域預設值前評估 Blast Radius
@@ -270,7 +270,7 @@ python3 scripts/tools/ops/blast_radius.py \
   --format json
 ```
 
-預期結果：`"affected_tenants": 0`。如果有非零結果，表示遷移過程中有配置語義發生變化，需要逐一排查。
+預期結果：`"affected_tenants": 0`。只搬移或改名檔案（包括宣告 `_custom_alerts` 的檔）不算變更：`merged_hash` 不看檔名，自訂告警比對 recipe 內容、名稱與是否為租戶自己的，不比宣告所在的檔（[#1549](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/1549)）。如果有非零結果，表示遷移過程中有配置語義發生變化，需要逐一排查。
 
 ## 工具速查
 

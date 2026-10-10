@@ -3,7 +3,11 @@ Golden parity test for describe_tenant.py deep_merge + inheritance.
 
 This test is the trump card for ADR-017 semantic verification:
 - Runs describe_tenant.py against every scenario captured in golden.json
-- Compares source_hash + merged_hash + effective_config against golden.json
+- Compares source_hash + merged_hash + effective_config against golden.json.
+  The merged_hash describe_tenant prints is read from `da-guard effective`
+  (#1549), so this test also hashes describe_tenant's own effective config
+  in-process (`_canonical_hash`, what `--what-if` prints) against the same
+  golden value — that leg is the Python half of the parity.
 - If any hash diverges, either:
     (a) Python describe_tenant.py logic changed → bug or intentional update (regen golden)
     (b) A Go port produces different hashes → semantic drift, fix the Go side
@@ -67,6 +71,12 @@ describe_tenant, and on the Go side by TestGoldenParity_ScannerChainOrder
 (pkg/config ResolveEffective, behind tenant-api `/effective`).
 
 Known gaps (a mutation there leaves this oracle green):
+- `_custom_alerts` is in no fixture, and cannot be on the effective_config
+  leg: describe_tenant shows the compiler's ADR-024 UNION (inherited +
+  own recipes, plus `_custom_alerts_resolution`), the exporter's merge
+  replaces the list. The two hashes agree because describe_tenant reads
+  merged_hash from da-guard (#1549); blast_radius compares the recipe lists
+  on their own (tests/ops/test_blast_radius.py, #1549 rows).
 - ADR-017's `_routing` null opt-out is enforced by the route generator
   (_grar_merge.py over `_routing_defaults` + the tenant file's `_routing`),
   which neither merge implementation runs; no golden row exercises
@@ -100,7 +110,13 @@ from _tree import repo_files
 HERE = Path(__file__).parent
 REPO_ROOT = HERE.parent.parent
 DESCRIBE = REPO_ROOT / "scripts" / "tools" / "dx" / "describe_tenant.py"
+sys.path.insert(0, str(DESCRIBE.parent))
+import describe_tenant as dt  # noqa: E402
 GOLDEN = json.loads((HERE / "golden.json").read_text(encoding="utf-8"))
+# The trees whose root file the exporter drops whole (exit 3). da-guard
+# effective refuses to give their values (#1549: describe_tenant then prints
+# merged_hash null and says why), so only the Python leg holds their hash.
+NOT_SERVED = set(json.loads((HERE / "not_served.json").read_text(encoding="utf-8"))["trees"])
 
 # Keys every golden entry must carry for the parity assertions to mean
 # anything. build_and_capture.py writes an entry with only `error` when a
@@ -148,7 +164,7 @@ def _run_describe(conf_d: Path, tenant_id: str) -> dict:
 
 
 @pytest.mark.parametrize("golden", GOLDEN, ids=lambda g: f"{g['scenario']}/{g['tenant_id']}")
-def test_merge_parity_python(golden: dict):
+def test_merge_parity_python(golden: dict, da_guard_env):
     """Verify current describe_tenant output matches captured golden hashes.
 
     This guards against:
@@ -176,8 +192,19 @@ def test_merge_parity_python(golden: dict):
 
     assert result["source_hash"] == golden["source_hash"], \
         f"source_hash drift for {golden['scenario']}"
-    assert result["merged_hash"] == golden["merged_hash"], \
-        f"merged_hash drift for {golden['scenario']}"
+    # #1549: the Python half — describe_tenant's own canonical hash of the
+    # effective config it reads (REPLACE for every list, as Go merges).
+    own = dt._canonical_hash(
+        dt.ConfDScanner(conf_d).effective_config(golden["tenant_id"],
+                                                 resolve_custom_alerts=False))
+    assert own == golden["merged_hash"], \
+        f"describe_tenant's own merged_hash drift for {golden['scenario']}"
+    if golden["fixture_dir"] in NOT_SERVED:
+        assert result["merged_hash"] is None, golden["scenario"]
+        assert result["merged_hash_error"] == dt.MERGED_HASH_UNREADABLE_TREE, result
+    else:
+        assert result["merged_hash"] == golden["merged_hash"], \
+            f"merged_hash drift for {golden['scenario']}"
     assert result["effective_config"] == golden["effective_config"], \
         f"effective_config drift for {golden['scenario']}"
     assert result["defaults_chain"] == golden["defaults_chain"], \

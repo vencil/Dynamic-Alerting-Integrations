@@ -2,9 +2,11 @@ package main
 
 // Golden parity test — the TRUMP CARD for ADR-017 conformance.
 //
-// This test reads tests/golden/golden.json (captured from Python
-// describe_tenant.py) and runs the Go computeMergedHash + config.ComputeSourceHash
-// against the same fixtures. Byte-for-byte hash equality is required;
+// This test reads tests/golden/golden.json (captured with Python
+// describe_tenant.py, whose merged_hash is read from `da-guard effective`
+// since #1549; tests/golden/test_merge_parity.py checks describe_tenant's own
+// canonical hash against the same value) and runs the Go computeMergedHash +
+// config.ComputeSourceHash against the same fixtures. Byte-for-byte hash equality is required;
 // any divergence is a §8.11.2 semantic trap and a ship blocker.
 //
 // What the fixtures cover (NOT every ADR-017 clause; see "Known gaps"):
@@ -92,6 +94,9 @@ package main
 //   - EffectiveConfig compares Go canonicalJSON with Go canonicalJSON, so it
 //     is blind to a Go-side escaping change; MergedHash / ResolveEffective
 //     catch that.
+//   - `_custom_alerts` is in no fixture: describe_tenant's effective config
+//     carries the compiler's ADR-024 UNION for it, this merge replaces the
+//     list, so the effective_config rows cannot hold it (#1549).
 // Orphan files in the fixture trees are guarded on the Python side
 // (tests/golden/test_merge_parity.py::test_fixture_trees_have_no_orphans,
 // #1551).

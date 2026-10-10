@@ -1,8 +1,10 @@
 """Python half of tests/shared/yaml_number_value_matrix.json (#2415).
 
 describe_tenant must read an int / float VALUE as the exporter's yaml.v3
-reads it and write it into the canonical JSON as encoding/json does, so its
-merged_hash is the exporter's. The `go_json` column is pkg/config's
+reads it and write it into the canonical JSON as encoding/json does, so the
+hash it computes over it (`_canonical_hash`, what `--what-if` prints) is the
+exporter's. The merged_hash `--show-sources` / `--all` print is read from
+`da-guard effective` instead (#1549); the CLI rows below check that one. The `go_json` column is pkg/config's
 CanonicalJSON of the same tree, asserted on every Go run by
 components/threshold-exporter/app/pkg/config/yaml_number_value_parity_test.go;
 this file asserts describe_tenant against it and never reads the Go source.
@@ -85,11 +87,14 @@ def test_describe_tenant_matches_the_exporter(tmp_path: Path, row: dict, side: s
         return
     eff = scanner.effective_config("t1")
     assert dt._canonical_json(eff) == row["go_json"]
-    assert scanner.source_info("t1")["merged_hash"] == _hash(row["go_json"])
+    # #1549: Python's own hash, as `--what-if` computes it — the printed
+    # merged_hash is da-guard's and would make this row Go against Go.
+    assert dt._canonical_hash(eff) == _hash(row["go_json"])
 
 
 # The issue's five divergent rows, end to end through the CLI: the printed
-# effective_config and merged_hash are the exporter's.
+# effective_config and merged_hash are the exporter's (the hash read from
+# da-guard since #1549, hence `da_guard_env`).
 ISSUE_ROWS = {
     "1.0": (1, "5447b9dcc066b19a"),
     "0o17": (15, "a68f3ce1a63b337d"),
@@ -100,7 +105,7 @@ ISSUE_ROWS = {
 
 
 @pytest.mark.parametrize("source", sorted(ISSUE_ROWS))
-def test_cli_prints_the_exporters_value_and_hash(tmp_path: Path, source: str) -> None:
+def test_cli_prints_the_exporters_value_and_hash(tmp_path: Path, source: str, da_guard_env) -> None:
     conf_d = _tree(tmp_path, source)
     res = subprocess.run(
         [sys.executable, str(DESCRIBE), "t1", "--conf-d", str(conf_d), "--show-sources"],

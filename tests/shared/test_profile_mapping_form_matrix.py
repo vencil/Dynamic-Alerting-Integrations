@@ -9,8 +9,9 @@ Go 的讀法（pkg/config `withProfileText` ← `ScheduledValue.UnmarshalYAML`�
   走任意 mapping 的分支，以 merged mapping 的 yaml.v3 `Marshal` 文字（`default: x\\n`）當
   profile 名稱。**describe 刻意不鏡像**（減法裁決：不移植 yaml.v3 Marshal）：`_profile`
   留成 generic mapping、不選 profile，並在 stderr 印 WARNING 點名檔案與租戶。fixture 不定義
-  以 Marshal 文字命名的 profile，所以兩邊的「值」相同；`_profile` 與 merged_hash 允許不同
-  ——見 `MERGE_KEY_SHAPES` 那組已知分歧列。
+  以 Marshal 文字命名的 profile，所以兩邊的「值」相同；`_profile` 允許不同，describe 自算的
+  hash（`--what-if` 的兩個 merged_hash）也可能不同；`--show-sources` 印的 merged_hash 自 #1549
+  起讀自 da-guard——見 `MERGE_KEY_SHAPES` 那組已知分歧列。
 - 其他 mapping（完全沒有 `default`）、sequence、null：原樣保留，不選 profile。
 
 每格在租戶檔與根平台檔 `tenants:` 兩個位置各量一次，比對三樣東西：effective_config 的
@@ -46,7 +47,9 @@ pytestmark = pytest.mark.usefixtures("da_guard_env")
 _DEFAULTS = "defaults:\n  mysql_connections: 80\n"
 # One profile, `010`. No profile is named by a yaml.v3 Marshal text
 # (`default: "010"`): the merge-key rows are a known divergence on `_profile`
-# and merged_hash only, so their served value must still agree.
+# and on the hash describe computes itself (`--what-if`); the merged_hash
+# `--show-sources` prints is read from da-guard since #1549. Their served
+# value must still agree.
 _PROFILES = 'profiles:\n  "010":\n    mysql_connections: 10\n'
 
 # (name, `_profile:` as written, the value Go serves for mysql_connections)
@@ -201,7 +204,7 @@ def test_a_non_scalar_default_is_a_known_divergence(tmp_path, profile):
 @pytest.mark.parametrize("where", WHERE)
 @pytest.mark.parametrize("name,profile", MERGE_KEY_SHAPES, ids=[s[0] for s in MERGE_KEY_SHAPES])
 def test_merge_key_only_default_is_a_named_known_divergence(tmp_path, name, profile, where):
-    """已知分歧列：值與 Go 相同（兩邊都沒綁 profile）；`_profile` 與 merged_hash 允許不同
+    """已知分歧列：值與 Go 相同（兩邊都沒綁 profile）；`_profile` 允許不同
     （Go 的 `_profile` 是 Marshal 文字，describe 是 generic mapping，不斷言相等）；stderr 有
     WARNING，點名檔案與租戶，每個檔、每個租戶只印一次。"""
     conf_d = _tree(tmp_path, profile, where)
@@ -212,12 +215,14 @@ def test_merge_key_only_default_is_a_named_known_divergence(tmp_path, name, prof
     assert got["value"] == oracle["value"] == 80, got
     assert got["bound"] == [] and isinstance(got["_profile"], dict), got
     assert "default" in got["_profile"], got
+    # #1549: --show-sources prints da-guard's merged_hash, not one over `_profile` as read here.
+    assert got["merged_hash"] == oracle["merged_hash"], got
     err = _describe_proc(conf_d, "-s").stderr
     fname = "t1.yaml" if where == "tenant-file" else "_defaults.yaml"
     lines = [l for l in err.splitlines() if "only through a merge key" in l]
     assert len(lines) == 1, err
     assert lines[0].startswith("WARNING: ") and fname in lines[0] and "tenant 't1'" in lines[0]
-    assert "merged_hash differ" in lines[0], lines[0]
+    assert "`_profile` in the effective config shown here differs" in lines[0], lines[0]
 
 
 def test_written_default_and_plain_mappings_do_not_warn(tmp_path):

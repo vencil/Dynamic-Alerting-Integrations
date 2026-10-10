@@ -19,13 +19,17 @@ Exit codes:
          it matched)
     1  — usage / IO error, or a selected `_defaults.yaml` anywhere in the
          tree that does not parse or has an unsupported shape (named on
-         stderr)
+         stderr), or no merged_hash to report: it is `da-guard effective`'s
+         and da-guard is missing, fails, or does not resolve the tenant
+         (#1549; named on stderr and in the entry's `detail`)
     2  — verification failed (--expect-merged-hash mismatch, tenant not
          found, or tenant declared in more than one file); with --all,
          any tenant declared in more than one file
 
-Design note: this tool reuses describe_tenant.ConfDScanner for the actual
-inheritance + canonical-hash computation. The wrapping here is purposely
+Design note: this tool reuses describe_tenant.ConfDScanner for the
+inheritance chain and source_hash; merged_hash is the one
+`ConfDScanner.merged_hash` reads from `da-guard effective` (the exporter's
+and tenant-api's value, #1549), never one computed in Python. The wrapping here is purposely
 thin — verify is a CLI ergonomics layer (terse output + exit codes) on
 top of the existing describe primitives, NOT a re-implementation. See
 v2.8.0 Phase B closure plan Track A item A5 for context.
@@ -58,7 +62,8 @@ from _lib_compat import try_utf8_stdout  # noqa: E402
 # change without a coordinated doc + runbook migration + CHANGELOG note.
 # Mirrors diag_pr_ci.py's documented extension.
 EXIT_PASS = 0           # verification passed (tenant exists; hash matched if given)
-EXIT_USAGE_ERROR = 1    # usage / IO error (bad args, conf.d missing, mutually-excl flags)
+EXIT_USAGE_ERROR = 1    # usage / IO error (bad args, conf.d missing, mutually-excl flags,
+                        # no merged_hash from da-guard — #1549)
 EXIT_VERIFY_FAILED = 2  # mismatch, not found, or duplicate (rollback-checklist signal)
 
 # Lazy-import describe_tenant — same dir, can't relative-import in script mode
@@ -100,6 +105,10 @@ def verify_one(scanner,tenant_id: str, expect_merged_hash: str | None) -> tuple[
     or, on a finding, { "tenant_id": ..., "error": "not_found" } /
       { "tenant_id": ..., "error": "duplicate", "files": [...],
         "detail": ... }
+    or, when there is no merged_hash to verify (#1549: da-guard missing or
+    failing, or not resolving this tenant), { "tenant_id": ...,
+      "error": "merged_hash_unavailable", "detail": ... } with exit 1 — not
+    2, which rollback checklist item 6 reads as a mismatch.
 
     #2093: a tenant declared by more than one conf.d file is refused
     BEFORE any hash is computed. The scanner keeps one declaration for its
@@ -121,6 +130,13 @@ def verify_one(scanner,tenant_id: str, expect_merged_hash: str | None) -> tuple[
         info = scanner.source_info(tenant_id)
     except KeyError:
         return ({"tenant_id": tenant_id, "error": "not_found"}, EXIT_VERIFY_FAILED)
+
+    if info["merged_hash"] is None:
+        return ({
+            "tenant_id": info["tenant_id"],
+            "error": "merged_hash_unavailable",
+            "detail": info.get("merged_hash_error", "no merged_hash"),
+        }, EXIT_USAGE_ERROR)
 
     out = {
         "tenant_id": info["tenant_id"],
@@ -168,6 +184,8 @@ def _print_human(info: dict) -> None:
                 print(f"  declared in: {f}")
             print("  fix:         keep the tenant in exactly one file "
                   "(remove the extra declaration), then re-run")
+        elif info["error"] == "merged_hash_unavailable":
+            print(f"  detail:      {info['detail']}")
         return
     print(f"  source_file: {info['source_file']}")
     print(f"  source_hash: {info['source_hash']}")
@@ -247,6 +265,7 @@ def main() -> int:
     if args.all:
         results = verify_all(scanner)
         dups = _duplicated(results)
+        unavailable = [r for r in results if r.get("error") == "merged_hash_unavailable"]
         if args.json:
             print(json.dumps({"tenants": results}, indent=2, ensure_ascii=False))
         else:
@@ -255,14 +274,21 @@ def main() -> int:
                 print()
             # Verified and refused are counted apart: a duplicated tenant
             # has no merged_hash, so it must not read as one of N verified.
-            print(f"# total: {len(results) - len(dups)} tenants verified, "
-                  f"{len(dups)} duplicate-declared (not verified) in {conf_d}")
+            print(f"# total: {len(results) - len(dups) - len(unavailable)} tenants verified, "
+                  f"{len(dups)} duplicate-declared (not verified), "
+                  f"{len(unavailable)} without merged_hash (not verified) in {conf_d}")
         if dups:
             print(f"error: {len(dups)} tenant(s) declared in more than one "
                   f"file, no merged_hash reported for them: "
                   f"{', '.join(str(r['tenant_id']) for r in dups)}",
                   file=sys.stderr)
             return EXIT_VERIFY_FAILED
+        if unavailable:
+            print(f"error: no merged_hash for {len(unavailable)} tenant(s) — it is "
+                  f"da-guard effective's (see above): "
+                  f"{', '.join(str(r['tenant_id']) for r in unavailable)}",
+                  file=sys.stderr)
+            return EXIT_USAGE_ERROR
         return EXIT_PASS
 
     info, exit_code = verify_one(scanner, args.tenant_id, args.expect_merged_hash)
