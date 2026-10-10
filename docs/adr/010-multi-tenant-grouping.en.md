@@ -62,7 +62,7 @@ Properties of the new fields:
 - **All optional**: omitting a field equals an empty value, so existing configs keep working.
 - **Not added to `tenant_metadata_info`**: they do not become labels of that metric, which avoids a cardinality blow-up.
 - **`db_type` has a metric of its own**: for a tenant that declares `db_type`, the exporter also emits `tenant_expected_exporter{tenant, db_type}` (value 1), which liveness checks use to tell whether the tenant's database exporter is missing; there is one series per declaring tenant.
-- **environment and domain can also scope permissions**: rules in `_rbac.yaml` can use `environments` and `domains` to narrow what they apply to; the default is shadow mode, which only records and does not block.
+- **environment and domain can also scope permissions**: rules in `_rbac.yaml` can use `environments` and `domains` to narrow what they apply to.
 - **Readable on both sides**: both the Go `TenantMetadata` struct and the Python `generate_tenant_metadata.py` understand these fields.
 
 ### 2. `_groups.yaml`: custom group definitions

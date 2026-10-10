@@ -68,7 +68,7 @@ _metadata:
 - **全部選填**：省略等同空值，向下相容。
 - **不加進 `tenant_metadata_info`**：不成為這個指標的標籤，避免 cardinality 暴增。
 - **`db_type` 另有一個指標**：宣告了 `db_type` 的租戶，exporter 另外輸出 `tenant_expected_exporter{tenant, db_type}`（值為 1），供存活檢查判斷這個租戶的資料庫 exporter 是否缺席；每個宣告的租戶只有一條。
-- **environment、domain 也可限定權限範圍**：`_rbac.yaml` 的規則可用 `environments`、`domains` 限定適用範圍；預設是 shadow 模式，只記錄、不阻擋。
+- **environment、domain 也可限定權限範圍**：`_rbac.yaml` 的規則可用 `environments`、`domains` 限定適用範圍。
 - **兩端都能解析**：Go 的 `TenantMetadata` struct 與 Python 的 `generate_tenant_metadata.py` 都讀得懂這些欄位。
 
 ### 2. `_groups.yaml`：自訂群組定義
