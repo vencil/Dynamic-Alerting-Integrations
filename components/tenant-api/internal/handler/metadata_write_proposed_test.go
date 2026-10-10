@@ -43,10 +43,10 @@ func TestProposedScopeMetaReadsTheBody(t *testing.T) {
 	t.Parallel()
 	dir := setupConfigDir(t, map[string]string{"db-a.yaml": tenantInProd})
 
-	if onDisk, _, _ := WriteScopeMeta(dir)("db-a"); onDisk != "production" {
+	if onDisk, _ := WriteScopeMeta(dir)("db-a"); onDisk != "production" {
 		t.Fatalf("precondition: on-disk environment = %q, want production", onDisk)
 	}
-	proposed, _, _ := proposedScopeMeta(dir, tenantInDev)("db-a")
+	proposed, _ := proposedScopeMeta(dir, tenantInDev)("db-a")
 	if proposed != "dev" {
 		t.Errorf("proposedScopeMeta = %q, want dev — it is reading something other than the body", proposed)
 	}

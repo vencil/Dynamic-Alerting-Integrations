@@ -6,6 +6,7 @@ package handler
 // (threshold-exporter's config_metadata_layers_test.go runs the same shapes).
 
 import (
+	"bytes"
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
@@ -13,6 +14,8 @@ import (
 	"path/filepath"
 	"reflect"
 	"testing"
+
+	"github.com/vencil/tenant-api/internal/rbac"
 )
 
 // listedMetadata is the metadata part of one LIST row.
@@ -190,17 +193,24 @@ func writeDanglingPlatformFile(t *testing.T, dir string) {
 	}
 }
 
-// A root platform file that cannot be read leaves the metadata unknown: the
-// listing is refused rather than served without that file's keys.
-func TestListTenants_UnreadablePlatformFileFailsTheListing(t *testing.T) {
+// platform file unreadable: list falls back to tenant-file metadata.
+func TestListTenants_UnreadablePlatformFileFallsBackToTenantFileMetadata(t *testing.T) {
 	t.Parallel()
 	dir := setupConfigDir(t, map[string]string{
 		"_platform.yaml": "tenants:\n  tx:\n    _metadata:\n      owner: plat-team\n",
-		"tx.yaml":        "tenants:\n  tx: {}\n",
+		"tx.yaml":        "tenants:\n  tx:\n    _metadata:\n      db_type: mariadb\n",
+		"ty.yaml":        listControlTenantFile,
 	})
 	writeDanglingPlatformFile(t, dir)
-	if code, rows := listTenantRows(t, dir); code != http.StatusInternalServerError {
-		t.Errorf("LIST status = %d (rows %v), want 500", code, rows)
+	code, rows := listTenantRows(t, dir)
+	if code != http.StatusOK {
+		t.Fatalf("LIST status = %d, want 200", code)
+	}
+	if got, want := metadataOf(rows["tx"]), (listedMetadata{DBType: "mariadb"}); !reflect.DeepEqual(got, want) {
+		t.Errorf("tx metadata on LIST = %+v, want %+v (tenant file only)", got, want)
+	}
+	if got := metadataOf(rows["ty"]); !reflect.DeepEqual(got, listControlMetadata) {
+		t.Errorf("ty metadata on LIST = %+v, want %+v", got, listControlMetadata)
 	}
 }
 
@@ -214,30 +224,71 @@ func TestMetadataReadersMergePlatformLayerPerKey(t *testing.T) {
 		"tx.yaml":        "tenants:\n  tx:\n    _metadata:\n      db_type: mariadb\n",
 		"ty.yaml":        listControlTenantFile,
 	})
-	if env, domain, ok := WriteScopeMeta(dir)("tx"); env != "production" || domain != "finance" || !ok {
-		t.Errorf("on-disk read for tx = (%q, %q, %v), want (production, finance, true)", env, domain, ok)
+	if env, domain := WriteScopeMeta(dir)("tx"); env != "production" || domain != "finance" {
+		t.Errorf("on-disk read for tx = (%q, %q), want (production, finance)", env, domain)
 	}
-	if env, domain, ok := WriteScopeMeta(dir)("ty"); env != "" || domain != "" || !ok {
-		t.Errorf("on-disk read for ty = (%q, %q, %v), want (\"\", \"\", true)", env, domain, ok)
+	if env, domain := WriteScopeMeta(dir)("ty"); env != "" || domain != "" {
+		t.Errorf("on-disk read for ty = (%q, %q), want (\"\", \"\")", env, domain)
 	}
 	body := "tenants:\n  tx:\n    _metadata:\n      domain: payments\n"
-	if env, domain, ok := proposedScopeMeta(dir, body)("tx"); env != "production" || domain != "payments" || !ok {
-		t.Errorf("proposed-body read for tx = (%q, %q, %v), want (production, payments, true)", env, domain, ok)
+	if env, domain := proposedScopeMeta(dir, body)("tx"); env != "production" || domain != "payments" {
+		t.Errorf("proposed-body read for tx = (%q, %q), want (production, payments)", env, domain)
 	}
 }
 
-// With a root platform file that cannot be read, both readers report no
-// reading (ok=false) instead of the tenant file's keys alone.
-func TestMetadataReadersReportUnreadablePlatformLayer(t *testing.T) {
+// platform file unreadable: both metadata readers return the tenant layer's
+// own values (the file on disk, the proposed body).
+func TestMetadataReadersFallBackToTenantLayerWhenPlatformFileUnreadable(t *testing.T) {
 	t.Parallel()
 	dir := setupConfigDir(t, map[string]string{
-		"tx.yaml": "tenants:\n  tx:\n    _metadata:\n      environment: production\n",
+		"_platform.yaml": "tenants:\n  tx:\n    _metadata:\n      environment: staging\n      domain: finance\n",
+		"tx.yaml":        "tenants:\n  tx:\n    _metadata:\n      environment: production\n",
 	})
 	writeDanglingPlatformFile(t, dir)
-	if env, domain, ok := WriteScopeMeta(dir)("tx"); ok || env != "" || domain != "" {
-		t.Errorf("on-disk read = (%q, %q, %v), want (\"\", \"\", false)", env, domain, ok)
+	if env, domain := WriteScopeMeta(dir)("tx"); env != "production" || domain != "" {
+		t.Errorf("on-disk read = (%q, %q), want (production, \"\")", env, domain)
 	}
-	if env, domain, ok := proposedScopeMeta(dir, "tenants:\n  tx: {}\n")("tx"); ok || env != "" || domain != "" {
-		t.Errorf("proposed-body read = (%q, %q, %v), want (\"\", \"\", false)", env, domain, ok)
+	body := "tenants:\n  tx:\n    _metadata:\n      domain: payments\n"
+	if env, domain := proposedScopeMeta(dir, body)("tx"); env != "" || domain != "payments" {
+		t.Errorf("proposed-body read = (%q, %q), want (\"\", payments)", env, domain)
+	}
+}
+
+// putFixtureGroups is the test server's groups file.
+const putFixtureGroups = `groups:
+  - name: prod-ops
+    tenants: ["*"]
+    permissions: [read, write]
+    environments: [production]
+`
+
+// tenant write succeeds when a root platform file is unreadable: the write
+// reads the tenant layer's metadata, as it did before #2370.
+func TestPutTenant_SucceedsWhenRootPlatformFileUnreadable(t *testing.T) {
+	t.Parallel()
+	configDir := setupConfigDir(t, map[string]string{
+		"_platform.yaml": "tenants:\n  tx:\n    _metadata:\n      owner: plat-team\n",
+		"tx.yaml":        "tenants:\n  tx:\n    _metadata:\n      environment: production\n",
+	})
+	writeDanglingPlatformFile(t, configDir)
+	initGitRepo(t, configDir)
+	rbacMgr := newRBACManager(t, putFixtureGroups)
+	h := PutTenant(&Deps{
+		Writer:    newTestWriter(configDir),
+		ConfigDir: configDir,
+		RBAC:      rbacMgr,
+		WriteMode: WriteModeDirect,
+	})
+	body := "tenants:\n  tx:\n    _metadata:\n      environment: production\n      tier: gold\n"
+	req := newRequestWithChiParam("PUT", "/api/v1/tenants/tx", "id", "tx", bytes.NewBufferString(body))
+	req.Header.Set("X-Forwarded-Email", "ops@example.com")
+	req.Header.Set("X-Forwarded-Groups", "prod-ops")
+	w := httptest.NewRecorder()
+	wrapWithRBACMiddleware(h, rbacMgr, rbac.PermWrite, TenantIDFromPath).ServeHTTP(w, req)
+	if w.Code != http.StatusOK {
+		t.Fatalf("PUT status = %d, body %s; want 200", w.Code, w.Body.String())
+	}
+	if got, err := os.ReadFile(filepath.Join(configDir, "tx.yaml")); err != nil || string(got) != body {
+		t.Errorf("tx.yaml after PUT = %q, %v; want the body", got, err)
 	}
 }

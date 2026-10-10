@@ -242,13 +242,9 @@ func loadAllTenants(configDir string) ([]TenantSummary, error) {
 	// #2370: a tenant's metadata is the root platform files'
 	// `tenants.<id>._metadata` merged per key under the tenant file's own
 	// (cfg.MergeMetadata), as /metrics resolves it. One root read per
-	// listing. A platform layer that could not be read leaves every row's
-	// metadata unknown, so the listing is refused like the duplicate-file
-	// case below rather than served with the platform keys missing.
-	platform, err := loadPlatformMetadata(configDir)
-	if err != nil {
-		return nil, fmt.Errorf("tenant metadata: %w", err)
-	}
+	// listing; when it cannot be read the rows carry the tenant files'
+	// own `_metadata` alone (platformMetadataOrNone logs it).
+	platform := platformMetadataOrNone(configDir, "list")
 
 	summaries := []TenantSummary{}
 	seen := make(map[string]string, len(files)) // tenant id → the file that claimed it

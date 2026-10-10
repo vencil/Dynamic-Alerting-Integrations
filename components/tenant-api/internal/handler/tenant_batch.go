@@ -256,12 +256,13 @@ func runBatchPR(d *Deps, rw http.ResponseWriter, r *http.Request, ops []BatchOpe
 	// advisories below flattens them.
 	advisoriesByTenant := map[string][]string{}
 	var advisoryTenants []string
+	metaOf := WriteScopeMeta(d.ConfigDir) // one resolver: the root platform files are read once per batch
 	for i, op := range ops {
 		if err := ValidateWritableTenantID(op.TenantID); err != nil {
 			batchResults = append(batchResults, BatchResult{TenantID: op.TenantID, Status: "error", Message: err.Error()})
 			continue
 		}
-		if !OrgAllowed(d.RBAC, d.TenantOrg, p, op.TenantID, rbac.PermWrite, WriteScopeMeta(d.ConfigDir)) {
+		if !OrgAllowed(d.RBAC, d.TenantOrg, p, op.TenantID, rbac.PermWrite, metaOf) {
 			batchResults = append(batchResults, BatchResult{TenantID: op.TenantID, Status: "error", Message: "insufficient permissions"})
 			continue
 		}
@@ -455,8 +456,9 @@ func prBatchSummary(status string, results []BatchResult) string {
 // _tenant_orgs.yaml hot-reload has since changed (stale-orgs hazard).
 func executeBatchOps(ctx context.Context, w *gitops.Writer, configDir string, ops []BatchOperation, email string, p *rbac.VerifiedPrincipal, rbacMgr *rbac.Manager, tenantOrg *tenantorg.Manager, policyMgr *policy.Manager) []BatchResult {
 	results := make([]BatchResult, 0, len(ops))
+	metaOf := WriteScopeMeta(configDir) // one resolver: the root platform files are read once per batch
 	for _, op := range ops {
-		if res, failed := gateBatchOp(op.TenantID, p, rbacMgr, tenantOrg, configDir); failed {
+		if res, failed := gateBatchOp(op.TenantID, p, rbacMgr, tenantOrg, metaOf); failed {
 			results = append(results, res)
 			continue
 		}

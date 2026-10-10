@@ -26,7 +26,6 @@ package handler
 // ============================================================
 
 import (
-	"log/slog"
 	"net/http"
 	"path/filepath"
 	"sync"
@@ -52,40 +51,34 @@ import (
 // #2370: the metadata read is the one the list reads (extractMetadata): the
 // root platform files' `tenants.<id>._metadata` with the tenant document's
 // own `_metadata` merged over it per key. The root platform files are read
-// once per resolver (one resolver per request), on first use.
+// once per resolver, on first use. When they cannot be read
+// (platformMetadataOrNone) the tenant document's own `_metadata` is used
+// alone, as before #2370.
 //
 // A tenant file that is absent or unusable fails SOFT to the empty pair — an
 // unlabeled tenant — which is exactly what the pre-#1597 metadata-blind write
 // plane behaved like. Resolution never invents a label it could not read.
-// ok is false when the root platform files could not be read
-// (loadPlatformMetadata): the metadata is then unknown, the pair is
-// empty and is not a reading.
-type ScopeMetaFunc func(tenantID string) (environment, domain string, ok bool)
+type ScopeMetaFunc func(tenantID string) (environment, domain string)
 
 // platformMetadataSource reads configDir's root platform layer once, on first
-// use, for one resolver (a resolver lives for one request).
+// use, for one resolver.
 type platformMetadataSource struct {
 	configDir string
 	once      sync.Once
 	root      cfg.RootPlatform
-	err       error
 }
 
 // environmentDomainOf is a ScopeMetaFunc's answer for a tenant document data that
 // declares tenantID (or that the caller proposes to write for it).
-func (s *platformMetadataSource) environmentDomainOf(data []byte, tenantID string) (string, string, bool) {
+func (s *platformMetadataSource) environmentDomainOf(data []byte, tenantID string) (string, string) {
 	var platform map[string]any
 	if s.configDir != "" {
-		s.once.Do(func() { s.root, s.err = loadPlatformMetadata(s.configDir) })
-		if s.err != nil {
-			slog.Error("tenant metadata could not be resolved", "tenant", tenantID, "error", s.err)
-			return "", "", false
-		}
+		s.once.Do(func() { s.root = platformMetadataOrNone(s.configDir, "write") })
 		platform = s.root.PlatformMetadata(tenantID)
 	}
 	var summary TenantSummary
 	extractMetadata(&summary, data, tenantID, platform)
-	return summary.Environment, summary.Domain, true
+	return summary.Environment, summary.Domain
 }
 
 // WriteScopeMeta builds the write-plane resolver: one targeted read of the
@@ -93,13 +86,13 @@ func (s *platformMetadataSource) environmentDomainOf(data []byte, tenantID strin
 // silently treated as unlabeled — #1673).
 func WriteScopeMeta(configDir string) ScopeMetaFunc {
 	src := &platformMetadataSource{configDir: configDir}
-	return func(tenantID string) (string, string, bool) {
+	return func(tenantID string) (string, string) {
 		if configDir == "" {
-			return "", "", true
+			return "", ""
 		}
 		path, err := confd.ResolveTenantFile(configDir, tenantID)
 		if err != nil {
-			return "", "", true // absent, ambiguous or unsafe id → unlabeled
+			return "", "" // absent, ambiguous or unsafe id → unlabeled
 		}
 		// #2477: confd.ReadTenantFile, not os.ReadFile — it opens without
 		// blocking and refuses a non-regular file on the opened fd, so the
@@ -107,7 +100,7 @@ func WriteScopeMeta(configDir string) ScopeMetaFunc {
 		// Any problem → unlabeled, the same fail-soft as above.
 		data, problem := confd.ReadTenantFile(filepath.Dir(path), filepath.Base(path))
 		if problem != confd.ProblemNone {
-			return "", "", true
+			return "", ""
 		}
 		return src.environmentDomainOf(data, tenantID)
 	}
@@ -131,10 +124,7 @@ func OrgAllowed(rbacMgr *rbac.Manager, tenantOrg *tenantorg.Manager,
 	orgs, _ := tenantOrg.OrgsForTenant(tenantID)
 	var environment, domain string
 	if meta != nil {
-		var ok bool
-		if environment, domain, ok = meta(tenantID); !ok {
-			return false
-		}
+		environment, domain = meta(tenantID)
 	}
 	return rbacMgr.AllowedInOrg(p, tenantID, want, orgs, environment, domain)
 }
@@ -206,7 +196,7 @@ func RequireOrgWriteProposed(w http.ResponseWriter, r *http.Request, d *Deps,
 // the value the tenant will have once the body is written.
 func proposedScopeMeta(configDir, yamlContent string) ScopeMetaFunc {
 	src := &platformMetadataSource{configDir: configDir}
-	return func(tenantID string) (string, string, bool) {
+	return func(tenantID string) (string, string) {
 		return src.environmentDomainOf([]byte(yamlContent), tenantID)
 	}
 }
