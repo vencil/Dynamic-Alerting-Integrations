@@ -16,6 +16,8 @@ lang: en
 
 ✅ **Accepted** (v1.12.0) → **Extended** (v2.3.0)
 
+v2.3.0: edge evaluation added — the normalisation part of the Rule Packs can be evaluated in edge Prometheus, while threshold-exporter and alert evaluation stay central.
+
 ## Terms
 
 - **Federation**: bringing data from several Prometheus servers together in one place. Here it means the platform's own cross-cluster deployment: edge clusters collect metrics, and the central cluster manages thresholds and alerting for all of them.
@@ -73,7 +75,7 @@ scrape_configs:
       - targets: ["prometheus-edge-asia-1.example.com:9090"]
 ```
 
-**Edge evaluation**: `da-tools rule-pack-split` splits Rule Packs into an edge part and a central part. The input directory `my-packs/` contains only `rule-pack-mariadb.yaml`:
+**Edge evaluation (v2.3.0, exporter still central)**: `da-tools rule-pack-split` splits Rule Packs into an edge part and a central part. The input directory `my-packs/` contains only `rule-pack-mariadb.yaml`:
 
 ```bash
 da-tools rule-pack-split --rule-packs-dir my-packs/ --output-dir split-output/

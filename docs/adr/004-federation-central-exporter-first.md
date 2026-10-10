@@ -23,6 +23,8 @@ updated_at: 2026-10-10
 
 ✅ **Accepted** (v1.12.0) → **Extended** (v2.3.0)
 
+v2.3.0：新增邊緣評估——Rule Pack 的正規化部分可在邊緣 Prometheus 評估，threshold-exporter 與告警評估仍在中央。
+
 ## 名詞
 
 - **Federation（聯邦）**：把多個 Prometheus 的資料彙整到一處。本文指平台內部的跨叢集部署：邊緣叢集收集指標，中央叢集統一管理閾值與告警。
@@ -80,7 +82,7 @@ scrape_configs:
       - targets: ["prometheus-edge-asia-1.example.com:9090"]
 ```
 
-**邊緣評估**：`da-tools rule-pack-split` 把 Rule Pack 拆成邊緣與中央兩份。輸入目錄 `my-packs/` 只放 `rule-pack-mariadb.yaml`：
+**邊緣評估（v2.3.0，exporter 仍在中央）**：`da-tools rule-pack-split` 把 Rule Pack 拆成邊緣與中央兩份。輸入目錄 `my-packs/` 只放 `rule-pack-mariadb.yaml`：
 
 ```bash
 da-tools rule-pack-split --rule-packs-dir my-packs/ --output-dir split-output/

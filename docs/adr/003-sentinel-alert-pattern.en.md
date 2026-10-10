@@ -28,7 +28,7 @@ Tenants on the platform have three operational states:
 
 - **Normal**: alerts fire and are notified as usual.
 - **Silent**: alerts still fire, but no notification is sent.
-- **Maintenance**: during maintenance, specific alerts are suppressed.
+- **Maintenance**: when maintenance mode is turned on with `_state_maintenance`, alert rules carrying the maintenance condition do not fire.
 
 We need a mechanism that lets a tenant's state switch dynamically with its settings, and that is easy to combine and easy to troubleshoot.
 
@@ -105,7 +105,7 @@ Result: `shop`'s warning alerts still fire and stay in the TSDB (Prometheus's ti
 
 **Out of scope**
 
-- **Maintenance does not use this pattern.** Rule Pack alert rules exclude tenants under maintenance with `unless on(tenant) (user_state_filter{filter="maintenance"} == 1)`, and a rule carrying this condition does not fire during maintenance, leaving no record in the TSDB. Not every alert rule carries this condition.
+- **Maintenance does not use this pattern.** An inhibit rule only blocks notifications, so an inhibited alert still fires and stays in the TSDB; maintenance mode turned on with `_state_maintenance` needs the rule itself not to fire, so it uses PromQL `unless` (see [config-driven §2.7](../design/config-driven.en.md#27-three-state-operational-modes) for the behaviour comparison). Rule Pack alert rules exclude tenants under maintenance with `unless on(tenant) (user_state_filter{filter="maintenance"} == 1)`, and a rule carrying this condition does not fire during maintenance, leaving no record in the TSDB. Not every alert rule carries this condition.
 - **The severity-dedup sentinel (`TenantSeverityDedupEnabled`) is for displaying state only.** Deduplication itself is [ADR-001](./001-severity-dedup-via-inhibit.en.md)'s critical→warning inhibit rule, which does not use a sentinel as its source.
 
 **Operational advice**

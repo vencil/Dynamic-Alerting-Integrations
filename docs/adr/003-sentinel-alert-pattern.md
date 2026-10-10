@@ -34,7 +34,7 @@ updated_at: 2026-10-10
 
 - **Normal**：正常觸發告警、正常通知。
 - **Silent（靜默）**：告警照常觸發，但不送通知。
-- **Maintenance（維護）**：維護期間，特定告警被抑制。
+- **Maintenance（維護）**：以 `_state_maintenance` 開啟維護模式時，帶維護條件的告警規則不觸發。
 
 需要一個機制，讓租戶的狀態可以隨設定動態切換，而且容易組合、容易排查。
 
@@ -111,7 +111,7 @@ Alertmanager 的抑制規則：
 
 **不涵蓋的範圍**
 
-- **Maintenance 不走這個模式。** Rule Pack 的告警規則以 `unless on(tenant) (user_state_filter{filter="maintenance"} == 1)` 排除維護中的租戶，帶這個條件的規則在維護期間不觸發，TSDB 也沒有紀錄。不是每條告警規則都帶這個條件。
+- **Maintenance 不走這個模式。** 抑制規則只擋通知，被擋的告警仍會觸發並留在 TSDB；以 `_state_maintenance` 開啟的維護模式要讓規則本身不觸發，所以用 PromQL 的 `unless`（行為對照見 [config-driven §2.7](../design/config-driven.md#27-三態運營模式-operational-modes)）。Rule Pack 的告警規則以 `unless on(tenant) (user_state_filter{filter="maintenance"} == 1)` 排除維護中的租戶，帶這個條件的規則在維護期間不觸發，TSDB 也沒有紀錄。不是每條告警規則都帶這個條件。
 - **嚴重度去重的 sentinel（`TenantSeverityDedupEnabled`）只用來顯示狀態。** 去重本身是 [ADR-001](./001-severity-dedup-via-inhibit.md) 的 critical→warning 抑制規則，不以 sentinel 為來源。
 
 **運維建議**
