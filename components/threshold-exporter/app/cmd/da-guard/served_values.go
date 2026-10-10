@@ -40,6 +40,11 @@ import (
 // servedValuesCmd is the subcommand name: `da-guard served-values ...`.
 const servedValuesCmd = "served-values"
 
+// servedValuesSchema names this document's shape. A reader refuses any other
+// value (and a document without one), so a change to the shape a reader
+// relies on is a new value here (ADR-037).
+const servedValuesSchema = "da-guard.served-values/v1"
+
 // customAlertsKey is the reserved key whose rows are the tenant's custom
 // alerts; its value is the list of those rows rather than one number.
 const customAlertsKey = "_custom_alerts"
@@ -50,7 +55,8 @@ const customAlertsKey = "_custom_alerts"
 // input, no reader uses it, and a path that is not valid UTF-8 is no reason
 // to refuse the tree.
 type servedValuesDoc struct {
-	At string `json:"at"`
+	Schema string `json:"schema"`
+	At     string `json:"at"`
 	// ParseFailed is LoadDir's parseFailed: the files the exporter's load
 	// skips because they do not decode. Always present ([] when none).
 	ParseFailed []string `json:"parse_failed"`
@@ -146,6 +152,20 @@ type servedTenantValues struct {
 	// exporter's own resolver, not from the schedule as written: see
 	// addSchedules. `_custom_alerts` is not included.
 	Schedules *map[string]servedSchedule `json:"schedules,omitempty"`
+	// StateFilters (ADR-037): every state filter on for the tenant at `at`
+	// — exactly the user_state_filter rows /metrics serves for it — with the
+	// severity label of its row (config.ResolvedStateFilter). A filter that
+	// is off has no entry; Values' `_state_<filter>` stays the true/false
+	// reading. A sibling of Values rather than a new type for
+	// `_state_<filter>` (a reader tests that value `is True`) or a key of
+	// Severities (readers take those keys for threshold keys). Always
+	// present ({} when none).
+	StateFilters map[string]servedStateFilter `json:"state_filters"`
+}
+
+// servedStateFilter is one entry of servedTenantValues.StateFilters.
+type servedStateFilter struct {
+	Severity string `json:"severity"`
 }
 
 // servedSchedule is one key's day. Segments cover 00:00–24:00 UTC in order,
@@ -213,7 +233,10 @@ func parseServedValuesFlags(args []string, errOut io.Writer) (*servedValuesFlags
 			"under the retired metric identity (\"legacy_twin\": true). A key with no /metrics row\n"+
 			"(unserved, or only dropped) and _custom_alerts have no entry. With --schedules each\n"+
 			"served segment carries its own \"series\" (an `N:critical` window serves another one);\n"+
-			"a segment with a null value or an error has none.\n\n")
+			"a segment with a null value or an error has none.\n\n"+
+			"Each tenant's \"state_filters\" maps every state filter on for it at --at to the severity\n"+
+			"label of its user_state_filter row ({\"severity\"}); a filter that is off has no entry.\n"+
+			"The document's \"schema\" is "+servedValuesSchema+"; a reader refuses any other value.\n\n")
 		fs.PrintDefaults()
 		fmt.Fprintf(errOut, "\nExit codes:\n  0  ok\n  2  caller error, a tree the exporter rejects (e.g. a tenant declared twice),\n"+
 			"     any output string that is not valid UTF-8, or a Gather failure of the same\n"+
@@ -300,6 +323,7 @@ func runServedValues(args []string, stdout, errOut io.Writer) int {
 		unreadKeys = append(unreadKeys, unreadKey{File: u.File, Key: u.Key, Reason: config.NotServedRootDefaultsUnwrapped})
 	}
 	doc := servedValuesDoc{
+		Schema:      servedValuesSchema,
 		At:          at.Format(time.RFC3339),
 		ParseFailed: parseFailed,
 		Skipped:     skipped,
@@ -456,12 +480,12 @@ func servedValues(cfg *config.ThresholdConfig, at time.Time,
 		routing[r.Tenant] = r
 	}
 	byTenant := res.Ops.ByTenant(cfg)
-	stateOn := map[string]map[string]bool{}
+	stateOn := map[string]map[string]servedStateFilter{}
 	for _, sf := range res.Ops.StateFilters {
 		if stateOn[sf.Tenant] == nil {
-			stateOn[sf.Tenant] = map[string]bool{}
+			stateOn[sf.Tenant] = map[string]servedStateFilter{}
 		}
-		stateOn[sf.Tenant][sf.FilterName] = true
+		stateOn[sf.Tenant][sf.FilterName] = servedStateFilter{Severity: sf.Severity}
 	}
 
 	out := make(map[string]servedTenantValues, len(cfg.Tenants))
@@ -472,6 +496,11 @@ func servedValues(cfg *config.ThresholdConfig, at time.Time,
 			Series:     map[string][]metricsSeries{},
 			Unserved:   map[string]any{},
 			Dropped:    map[string][]string{},
+
+			StateFilters: map[string]servedStateFilter{},
+		}
+		for name, sf := range stateOn[tenant] {
+			tv.StateFilters[name] = sf
 		}
 		for name, errs := range droppedBy[tenant] {
 			tv.Dropped[name] = errs
@@ -518,7 +547,8 @@ func servedValues(cfg *config.ThresholdConfig, at time.Time,
 		}
 		reserved["_silent_mode"] = nonNilStrings(byTenant[tenant].SilentTargets)
 		for name := range cfg.StateFilters {
-			reserved["_state_"+name] = stateOn[tenant][name]
+			_, on := stateOn[tenant][name]
+			reserved["_state_"+name] = on
 		}
 		if rc, ok := routing[tenant]; ok {
 			reserved["_routing"] = map[string]any{

@@ -20,6 +20,7 @@ import (
 
 // servedOut is the JSON document as a reader decodes it.
 type servedOut struct {
+	Schema      string   `json:"schema"`
 	At          string   `json:"at"`
 	ParseFailed []string `json:"parse_failed"`
 	Skipped     []struct {
@@ -46,6 +47,9 @@ type servedOut struct {
 			Expires string `json:"expires"`
 			Expired *bool  `json:"expired"`
 		} `json:"schedules"`
+		StateFilters map[string]struct {
+			Severity string `json:"severity"`
+		} `json:"state_filters"`
 	} `json:"tenants"`
 	Aliases map[string]string `json:"aliases"`
 }
@@ -556,6 +560,7 @@ state_filters:
   maintenance:
     reasons: []
     default_state: disable
+    severity: info
   crashloop:
     reasons: ["CrashLoopBackOff"]
 tenants:
@@ -692,8 +697,13 @@ func TestServedValues_MatchesResolveAt(t *testing.T) {
 			ops := cfg.OperationalStatesAt(now)
 			byTenant := ops.ByTenant(cfg)
 			on := map[string]bool{}
+			wantSF := map[string]map[string]string{}
 			for _, sf := range ops.StateFilters {
 				on[sf.Tenant+"/"+sf.FilterName] = true
+				if wantSF[sf.Tenant] == nil {
+					wantSF[sf.Tenant] = map[string]string{}
+				}
+				wantSF[sf.Tenant][sf.FilterName] = sf.Severity
 			}
 			routed := map[string]bool{}
 			for _, r := range cfg.ResolveRouting() {
@@ -718,6 +728,16 @@ func TestServedValues_MatchesResolveAt(t *testing.T) {
 					if tv.Values["_state_"+name] != on[tenant+"/"+name] {
 						t.Errorf("%s: _state_%s %v, resolver %v", tenant, name, tv.Values["_state_"+name], on[tenant+"/"+name])
 					}
+				}
+				gotSF := map[string]string{}
+				for name, sf := range tv.StateFilters {
+					gotSF[name] = sf.Severity
+				}
+				if want := wantSF[tenant]; !reflect.DeepEqual(gotSF, want) && (len(gotSF) > 0 || len(want) > 0) {
+					t.Errorf("%s: state_filters %v, resolver %v", tenant, gotSF, want)
+				}
+				if tv.StateFilters == nil {
+					t.Errorf("%s: state_filters is absent or null, want an object", tenant)
 				}
 				if _, ok := tv.Values["_routing"]; ok != routed[tenant] {
 					t.Errorf("%s: _routing present=%v, ResolveRouting has it=%v", tenant, ok, routed[tenant])
@@ -752,6 +772,9 @@ func TestServedValues_ConsistencyTreeIsNotVacuous(t *testing.T) {
 		{"profile disable → unserved", b.Unserved["container_cpu"] == "disable"},
 		{"_critical", b.Values["mysql_connections_critical"] == 95.0 && b.Severities["mysql_connections_critical"] == "critical"},
 		{"subtree defaults", c.Values["mysql_connections"] == 60.0},
+		{"state filter severity as written", b.StateFilters["maintenance"].Severity == "info"},
+		{"state filter severity defaulted", b.StateFilters["crashloop"].Severity == "warning"},
+		{"state filter switched off has no entry", a.Values["_state_crashloop"] == false && len(a.StateFilters) == 0},
 	}
 	for _, ch := range checks {
 		if !ch.ok {
@@ -1136,5 +1159,52 @@ func TestServedValues_NonUTF8ConfigDir_Serves(t *testing.T) {
 	mustOK(t, code, stderr)
 	if strings.Contains(stdout, `\ufffd`) || strings.Contains(stdout, "\ufffd") {
 		t.Errorf("output carries U+FFFD:\n%s", stdout)
+	}
+}
+
+// TestServedValues_SchemaIsNamed: the document names its shape, so a reader
+// can refuse one it does not know (ADR-037).
+func TestServedValues_SchemaIsNamed(t *testing.T) {
+	t.Parallel()
+	code, doc, _, stderr := served(t, map[string]string{"t.yaml": "tenants:\n  t:\n    x: 1\n"}, "")
+	mustOK(t, code, stderr)
+	if doc.Schema != servedValuesSchema || servedValuesSchema != "da-guard.served-values/v1" {
+		t.Fatalf("schema = %q, want %q", doc.Schema, "da-guard.served-values/v1")
+	}
+}
+
+// TestServedValues_StateFilterSeverityChangeIsVisible is ADR-037's case: a
+// platform change of nothing but a state filter's severity changes what
+// /metrics serves (user_state_filter{severity}), so it changes this document
+// too — the `_state_<filter>` true/false reading alone stays the same.
+func TestServedValues_StateFilterSeverityChangeIsVisible(t *testing.T) {
+	t.Parallel()
+	tree := func(sev string) map[string]string {
+		return map[string]string{
+			"_defaults.yaml": "defaults:\n  x: 1\nstate_filters:\n  crashloop:\n    reasons: [\"CrashLoopBackOff\"]\n    severity: " + sev + "\n",
+			"a.yaml":         "tenants:\n  a:\n    x: 2\n",
+			"b.yaml":         "tenants:\n  b:\n    _state_crashloop: disable\n",
+		}
+	}
+	const at = "2026-07-01T03:00:00Z"
+	code, crit, _, stderr := served(t, tree("critical"), at)
+	mustOK(t, code, stderr)
+	code, warn, _, stderr := served(t, tree("warning"), at)
+	mustOK(t, code, stderr)
+	if crit.Tenants["a"].Values["_state_crashloop"] != true || warn.Tenants["a"].Values["_state_crashloop"] != true {
+		t.Fatalf("_state_crashloop: critical tree %v, warning tree %v; want true in both",
+			crit.Tenants["a"].Values["_state_crashloop"], warn.Tenants["a"].Values["_state_crashloop"])
+	}
+	if got := crit.Tenants["a"].StateFilters["crashloop"].Severity; got != "critical" {
+		t.Errorf("critical tree: a's crashloop severity = %q, want critical", got)
+	}
+	if got := warn.Tenants["a"].StateFilters["crashloop"].Severity; got != "warning" {
+		t.Errorf("warning tree: a's crashloop severity = %q, want warning", got)
+	}
+	if reflect.DeepEqual(crit.Tenants, warn.Tenants) {
+		t.Errorf("a severity-only change leaves the tenants identical: %+v", crit.Tenants)
+	}
+	if n := len(crit.Tenants["b"].StateFilters); n != 0 {
+		t.Errorf("b switched crashloop off but has %d state_filters entries: %+v", n, crit.Tenants["b"].StateFilters)
 	}
 }

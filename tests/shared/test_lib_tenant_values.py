@@ -6,6 +6,7 @@
 """
 from __future__ import annotations
 
+import json
 import math
 import os
 import shutil
@@ -300,7 +301,7 @@ def test_output_without_skipped_is_refused(tmp_path):
     """舊版 da-guard（JSON 沒有 skipped）：不靜默當成「沒有略過的檔」，而是 raise。"""
     require_shebang_scripts()  # the stand-in da-guard below is a `#!` script
     fake = tmp_path / "old-da-guard"
-    fake.write_text("#!/bin/sh\necho '{\"at\": \"x\", \"parse_failed\": [], \"tenants\": {}}'\n",
+    fake.write_text("#!/bin/sh\necho '{\"schema\": \"da-guard.served-values/v1\", \"at\": \"x\", \"parse_failed\": [], \"tenants\": {}}'\n",
                     encoding="utf-8")
     fake.chmod(0o755)
     with pytest.raises(tv.ServedValuesError) as ei:
@@ -313,7 +314,7 @@ def test_output_without_unreadable_is_refused(tmp_path):
     """da-guard 的 JSON 沒有 unreadable（早於該欄位的版本）：不當成「每個檔都讀得到」，而是 raise。"""
     require_shebang_scripts()  # the stand-in da-guard below is a `#!` script
     fake = tmp_path / "old-da-guard"
-    fake.write_text("#!/bin/sh\necho '{\"at\": \"x\", \"parse_failed\": [], \"skipped\": [], "
+    fake.write_text("#!/bin/sh\necho '{\"schema\": \"da-guard.served-values/v1\", \"at\": \"x\", \"parse_failed\": [], \"skipped\": [], "
                     "\"tenants\": {}}'\n", encoding="utf-8")
     fake.chmod(0o755)
     with pytest.raises(tv.ServedValuesError) as ei:
@@ -490,7 +491,7 @@ def _old_da_guard(tmp_path: Path, doc: str) -> str:
 
 
 def test_output_without_aliases_is_refused(tmp_path):
-    fake = _old_da_guard(tmp_path, '{"at": "x", "parse_failed": [], "skipped": [], '
+    fake = _old_da_guard(tmp_path, '{"schema": "da-guard.served-values/v1", "at": "x", "parse_failed": [], "skipped": [], '
                                    '"unreadable": [], "tenants": {}}')
     with pytest.raises(tv.ServedValuesError) as ei:
         tv.load_served_tree(tmp_path, binary=fake)
@@ -499,9 +500,9 @@ def test_output_without_aliases_is_refused(tmp_path):
 
 
 def test_output_without_schedules_is_refused(tmp_path):
-    fake = _old_da_guard(tmp_path, '{"at": "x", "parse_failed": [], "skipped": [], "unreadable": [], '
+    fake = _old_da_guard(tmp_path, '{"schema": "da-guard.served-values/v1", "at": "x", "parse_failed": [], "skipped": [], "unreadable": [], '
                                    '"aliases": {}, "tenants": {"t": {"values": {}, "severities": {}, '
-                                   '"series": {}, "unserved": {}, "dropped": {}}}}')
+                                   '"series": {}, "unserved": {}, "dropped": {}, "state_filters": {}}}}')
     with pytest.raises(tv.ServedValuesError) as ei:
         tv.load_served_tree(tmp_path, binary=fake, schedules=True)
     assert "schedules" in str(ei.value)
@@ -510,9 +511,9 @@ def test_output_without_schedules_is_refused(tmp_path):
 
 def test_output_without_series_is_refused(tmp_path):
     """#2750：da-guard 的輸出沒有 series → 這支 da-guard 比工具舊，不當成「沒有 series」讀。"""
-    fake = _old_da_guard(tmp_path, '{"at": "x", "parse_failed": [], "skipped": [], "unreadable": [], '
+    fake = _old_da_guard(tmp_path, '{"schema": "da-guard.served-values/v1", "at": "x", "parse_failed": [], "skipped": [], "unreadable": [], '
                                    '"aliases": {}, "tenants": {"t": {"values": {}, "severities": {}, '
-                                   '"unserved": {}, "dropped": {}}}}')
+                                   '"unserved": {}, "dropped": {}, "state_filters": {}}}}')
     with pytest.raises(tv.ServedValuesError) as ei:
         tv.load_served_tree(tmp_path, binary=fake)
     assert "series" in str(ei.value) and ei.value.binary_fault
@@ -531,15 +532,15 @@ def test_schedules_are_asked_for_only_on_request(tmp_path, da_guard):
 
 
 def test_output_without_schedules_is_fine_when_not_asked_for(tmp_path):
-    fake = _old_da_guard(tmp_path, '{"at": "x", "parse_failed": [], "skipped": [], "unreadable": [], '
+    fake = _old_da_guard(tmp_path, '{"schema": "da-guard.served-values/v1", "at": "x", "parse_failed": [], "skipped": [], "unreadable": [], '
                                    '"aliases": {}, "tenants": {"t": {"values": {}, "severities": {}, '
-                                   '"series": {}, "unserved": {}, "dropped": {}}}}')
+                                   '"series": {}, "unserved": {}, "dropped": {}, "state_filters": {}}}}')
     assert tv.load_served_values(tmp_path, binary=fake)["t"].schedules is None
 
 
-_ARGV_DOC = ('{"at": "x", "parse_failed": [], "skipped": [], "unreadable": [], "aliases": {}, '
+_ARGV_DOC = ('{"schema": "da-guard.served-values/v1", "at": "x", "parse_failed": [], "skipped": [], "unreadable": [], "aliases": {}, '
              '"tenants": {"t": {"values": {}, "severities": {}, "series": {}, "unserved": {}, '
-             '"dropped": {}, "schedules": {}}}}')
+             '"dropped": {}, "schedules": {}, "state_filters": {}}}}')
 
 
 @pytest.mark.parametrize("asked", [False, True])
@@ -623,3 +624,106 @@ def test_load_key_refs_from_a_da_guard_without_the_subcommand_is_stale(tmp_path)
         tv.load_key_refs(tmp_path, ["m"], binary=str(fake))
     assert ei.value.stale and ei.value.binary_fault
     assert ei.value.stderr_lines == ["unexpected argument"]
+
+
+# ── ADR-037：schema 與 state_filters ────────────────────────────────────────
+
+_SV_HEAD = '{"at": "x", "parse_failed": [], "skipped": [], "unreadable": [], "aliases": {}, '
+_SV_TENANT = '"values": {}, "severities": {}, "series": {}, "unserved": {}, "dropped": {}'
+
+
+def _sv_doc(schema: str | None, tenant_extra: str = ', "state_filters": {}') -> str:
+    head = _SV_HEAD if schema is None else _SV_HEAD.replace('{', '{"schema": "%s", ' % schema, 1)
+    return head + '"tenants": {"t": {' + _SV_TENANT + tenant_extra + '}}}'
+
+
+def test_real_da_guard_names_the_schema_this_reader_reads(tmp_path, da_guard):
+    """真的 da-guard 寫的 schema 就是讀取端認的那個；不一致時讀取本身就會 raise。"""
+    conf_d = _tree(tmp_path, {"t.yaml": "tenants:\n  t:\n    _silent_mode: disable\n"})
+    proc = subprocess.run([da_guard, "served-values", "--config-dir", str(conf_d)],
+                          capture_output=True, text=True, encoding="utf-8", check=True, timeout=120)
+    assert json.loads(proc.stdout)["schema"] == tv.SERVED_VALUES_SCHEMA == "da-guard.served-values/v1"
+    assert tv.load_served_values(conf_d, binary=da_guard)["t"].state_filters == {}
+
+
+def test_output_without_schema_is_refused_as_older(tmp_path):
+    """沒有 schema 的文件來自早於 ADR-037 的 da-guard：raise 並指出要升級，不靜默照舊讀。"""
+    fake = _old_da_guard(tmp_path, _sv_doc(None))
+    with pytest.raises(tv.ServedValuesError) as ei:
+        tv.load_served_tree(tmp_path, binary=fake)
+    assert "'schema'" in str(ei.value)
+    assert "older than this tool: upgrade or rebuild it" in str(ei.value)
+    assert ei.value.stale and ei.value.binary_fault
+
+
+def test_output_with_an_unknown_schema_is_refused(tmp_path):
+    """認不得的 schema（例如未來的 v2）：raise 並寫出兩個值，不當成舊版、也不照 v1 讀。"""
+    fake = _old_da_guard(tmp_path, _sv_doc("da-guard.served-values/v2"))
+    with pytest.raises(tv.ServedValuesError) as ei:
+        tv.load_served_tree(tmp_path, binary=fake)
+    msg = str(ei.value)
+    assert "da-guard.served-values/v2" in msg and "da-guard.served-values/v1" in msg
+    assert "older than this tool" not in msg
+    assert ei.value.binary_fault and not ei.value.stale
+
+
+def test_control_doc_with_the_schema_is_read(tmp_path):
+    """對照組：同一份文件帶對的 schema 就讀得進來，上面兩個 raise 只來自 schema。"""
+    fake = _old_da_guard(tmp_path, _sv_doc(tv.SERVED_VALUES_SCHEMA,
+                                          ', "state_filters": {"crashloop": {"severity": "critical"}}'))
+    assert tv.load_served_values(tmp_path, binary=fake)["t"].state_filters == {"crashloop": "critical"}
+
+
+@pytest.mark.parametrize("extra", [
+    "",                                                    # 欄位不存在
+    ', "state_filters": null',
+    ', "state_filters": []',
+    ', "state_filters": {"crashloop": "critical"}',
+    ', "state_filters": {"crashloop": {}}',
+    ', "state_filters": {"crashloop": {"severity": ""}}',
+    ', "state_filters": {"crashloop": {"severity": 1}}',
+], ids=["missing", "null", "list", "bare-string", "no-severity", "empty-severity", "number"])
+def test_state_filters_not_of_their_shape_are_refused(tmp_path, extra):
+    """帶 v1 schema 卻沒有（或寫壞）state_filters：是壞掉的輸出，不是舊版，也不當成「沒有開啟的 filter」。"""
+    fake = _old_da_guard(tmp_path, _sv_doc(tv.SERVED_VALUES_SCHEMA, extra))
+    with pytest.raises(tv.ServedValuesError) as ei:
+        tv.load_served_tree(tmp_path, binary=fake)
+    assert "state_filters" in str(ei.value)
+    assert ei.value.binary_fault and not ei.value.stale
+
+
+def test_schema_refusal_exits_2_through_the_cli_decorator(tmp_path, capsys):
+    """讀取端的 CLI 一律經 exit_on_served_values_error：schema 缺少或認不得都是 rc 2、一行 ERROR。"""
+    for schema in (None, "da-guard.served-values/v2"):
+        fake = _old_da_guard(tmp_path, _sv_doc(schema))
+
+        @tv.exit_on_served_values_error
+        def main():
+            tv.load_served_values(tmp_path, binary=fake)
+
+        with pytest.raises(SystemExit) as ei:
+            main()
+        assert ei.value.code == 2
+        assert capsys.readouterr().err.startswith("ERROR: da-guard served-values exited 0 without the expected JSON")
+
+
+def test_state_filter_severity_only_change_is_visible(tmp_path, da_guard):
+    """ADR-037 的缺口：平台只改 state_filters 的 severity，/metrics 的 user_state_filter{severity}
+    變了，served-values 的讀數也要跟著變；`_state_<filter>` 的 True/False 則兩邊相同。"""
+    def tree(root: Path, sev: str) -> Path:
+        return _tree(root, {
+            "_defaults.yaml": "defaults:\n  mysql_connections: 80\nstate_filters:\n  crashloop:\n"
+                              f"    reasons: [\"CrashLoopBackOff\"]\n    severity: {sev}\n",
+            "a.yaml": "tenants:\n  a:\n    mysql_connections: 70\n",
+            "b.yaml": "tenants:\n  b:\n    _state_crashloop: disable\n",
+        })
+    at = "2026-07-01T03:00:00Z"
+    crit = tv.load_served_values(tree(tmp_path / "c", "critical"), at=at, binary=da_guard)
+    warn = tv.load_served_values(tree(tmp_path / "w", "warning"), at=at, binary=da_guard)
+    assert crit["a"].values["_state_crashloop"] is True and warn["a"].values["_state_crashloop"] is True
+    assert crit["a"].state_filters == {"crashloop": "critical"}
+    assert warn["a"].state_filters == {"crashloop": "warning"}
+    assert crit != warn
+    # 對照組：關掉 filter 的租戶沒有條目，兩邊相同
+    assert crit["b"].state_filters == warn["b"].state_filters == {}
+    assert crit["b"].values["_state_crashloop"] is False
