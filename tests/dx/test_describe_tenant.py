@@ -220,13 +220,14 @@ class TestSourceInfo:
             encoding="utf-8"
         )
 
-        scanner = dt.ConfDScanner(conf_d)
-        info = scanner.source_info("t1")
-        # source_hash is of the tenant file only; the hash of the merged
-        # config includes defaults. This tool's own canonical hash (#1549:
-        # the printed merged_hash is da-guard's, None without one).
-        own = dt._canonical_hash(scanner.effective_config("t1"))
-        assert isinstance(own, str) and info["source_hash"] != own
+        # The hash of the merged config includes the defaults: the same tree
+        # without `_defaults.yaml` hashes differently. This tool's own
+        # canonical hash (#1549: the printed merged_hash is da-guard's, None
+        # without one).
+        with_defaults = dt._canonical_hash(dt.ConfDScanner(conf_d).effective_config("t1"))
+        (conf_d / "_defaults.yaml").unlink()
+        without = dt._canonical_hash(dt.ConfDScanner(conf_d).effective_config("t1"))
+        assert isinstance(with_defaults, str) and with_defaults != without
 
 
 # ---------------------------------------------------------------------------

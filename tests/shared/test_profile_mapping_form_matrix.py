@@ -215,6 +215,8 @@ def test_merge_key_only_default_is_a_named_known_divergence(tmp_path, name, prof
     assert got["value"] == oracle["value"] == 80, got
     assert got["bound"] == [] and isinstance(got["_profile"], dict), got
     assert "default" in got["_profile"], got
+    # #1549: --show-sources prints da-guard's merged_hash, not one over `_profile` as read here.
+    assert got["merged_hash"] == oracle["merged_hash"], got
     err = _describe_proc(conf_d, "-s").stderr
     fname = "t1.yaml" if where == "tenant-file" else "_defaults.yaml"
     lines = [l for l in err.splitlines() if "only through a merge key" in l]
