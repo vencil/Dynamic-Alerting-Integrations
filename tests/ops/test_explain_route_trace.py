@@ -1002,7 +1002,7 @@ class TestSubdirectoryTenantTrace:
         assert am.stdout.strip().split(",") == _delivered(trace) \
             == [f"tenant-{tenant}"]
         # `team/_defaults.yaml` replaces the root's receiver for its subtree
-        # only (ADR-017 amendment 2026-09-28: deeper wins, per top-level key).
+        # only (ADR-017 Decision 9: deeper wins, per top-level key).
         assert trace["steps"][1]["receiver_type"] == rtype
         assert trace["timing"]["group_wait"] == "30s"
 

@@ -1,727 +1,319 @@
 ---
-title: "ADR-017: _defaults.yaml Inheritance Semantics + Dual-Hash Hot-Reload"
+title: "ADR-017: Multi-Level _defaults.yaml Inheritance and Dual-Hash Hot Reload"
 tags: [adr, defaults, inheritance, hot-reload, dual-hash, v2.7.0]
 audience: [platform-engineers, sre, contributors]
 version: v2.9.0
 lang: en
 ---
 
-# ADR-017: _defaults.yaml Inheritance Semantics + Dual-Hash Hot-Reload
+# ADR-017: Multi-Level _defaults.yaml Inheritance and Dual-Hash Hot Reload
 
 > **Language / 語言：** **English (Current)** | [中文](./017-defaults-yaml-inheritance-dual-hash.md)
 
-> Second building block of v2.7.0 Scale Foundation. Paired with [ADR-016](016-conf-d-directory-hierarchy-mixed-mode.en.md) (Directory Hierarchy).
+> Paired with [ADR-016](016-conf-d-directory-hierarchy-mixed-mode.en.md) (conf.d/ directory hierarchy): ADR-016 decides how config files are laid out in directories; this ADR decides how each level's defaults flow down, and how to tell which tenants a defaults change affected.
+
+**Decision in brief**: every directory level of conf.d/ may hold a `_defaults.yaml`. A tenant's config is the defaults stacked from the root downwards, level by level, with the tenant file on top. Every tenant keeps two hashes: one of its own file, and one of the stacked result (its effective config); the second tells whether a defaults change really changed this tenant.
 
 ## Status
 
-✅ **Accepted** (v2.7.0, 2026-04-19) — Multi-level `_defaults.yaml` inheritance, dual-hash hot-reload, and 300ms debounce shipped with v2.7.0; the noop-semantic split (`shadowed` / `cosmetic`) was added as a v2.8.0 amendment.
+✅ **Accepted** (v2.7.0, 2026-04-19). Later amendments are folded into the sections they change:
+
+| Date | What changed | Where in this ADR |
+|:--|:--|:--|
+| 2026-04-25 | "Defaults changed but the tenant's effective config did not" split in two: blocked by a tenant override (shadowed) and no substantive change (cosmetic) | Decision 7 |
+| 2026-09-28 | Routing settings are inherited level by level along directories too | Decision 9 |
+| 2026-10-08 | The effective config shows values verbatim as written; values `/metrics` does not serve are named key by key | Decision 10 |
+
+## Terms
+
+- **Tenant file**: a file whose name does not start with `_` and that declares tenants under `tenants:`. **Platform file**: a file whose name starts with `_`, such as `_defaults.yaml`.
+- **Effective config**: what applies to a tenant after every defaults level is stacked in order and the tenant file is stacked on top. Read it with `da-guard effective`, tenant-api's `GET /api/v1/tenants/{id}/effective`, or `describe_tenant.py`.
+- **da-guard**: this repo's conf.d/ checking tool. `da-guard effective` prints the effective config tenant-api's `/effective` would return, and `da-guard served-values` prints the values the exporter's `/metrics` would serve.
+- **`/metrics`**: the metrics the exporter exposes to Prometheus; thresholds are served as `user_threshold` series. `da-guard served-values` prints the values it serves.
+- **Hot reload**: the exporter rescans the directory periodically and applies new config without a restart.
 
 ## Context
 
-The v2.6.x `_defaults.yaml` only exists as a single global defaults file in the flat `conf.d/` root.
-With ADR-016's hierarchical directories, we need to define multi-layer `_defaults.yaml` inheritance semantics:
+conf.d/ used to have a single `_defaults.yaml` at its root. Once ADR-016 allowed conf.d/ to be split into directories, three questions needed answers:
 
-- Which directory levels can contain `_defaults.yaml`?
-- How do parent-child defaults merge?
-- When `_defaults.yaml` changes, which tenants need reload? How do we prevent reload storms?
+1. Which directories may hold a `_defaults.yaml`?
+2. How are values from upper and lower levels merged?
+3. When one level's `_defaults.yaml` changes, which tenants are affected?
 
-v2.5.0 already has SHA-256 hot-reload (`source_hash` comparison), but it only tracks tenant YAML itself.
-Now a tenant's **effective config** depends on both its own YAML and inherited defaults,
-requiring a second hash to determine "did the effective config actually change?"
+The existing hot reload hashed (SHA-256) only the tenant file, to tell whether that file changed. But a tenant's effective config also depends on the defaults it inherits, so the tenant file alone cannot answer question 3. Hence a second hash.
 
 ## Decision
 
-### Inheritance Levels
-
-`_defaults.yaml` can appear at any of the following levels (all optional):
+### 1. Every directory level may hold a `_defaults.yaml`
 
 ```
 conf.d/
-├── _defaults.yaml              ← L0: global defaults
+├── _defaults.yaml              ← root: platform-wide defaults
 ├── {domain}/
-│   ├── _defaults.yaml          ← L1: domain-level defaults
+│   ├── _defaults.yaml          ← domain level
 │   └── {region}/
-│       ├── _defaults.yaml      ← L2: region-level defaults (uncommon)
+│       ├── _defaults.yaml      ← region level
 │       └── {env}/
-│           ├── _defaults.yaml  ← L3: env-level defaults
+│           ├── _defaults.yaml  ← env level
 │           └── tenant-001.yaml
 ```
 
-Inheritance order: **L0 → L1 → L2 → L3 → tenant YAML** (later overrides earlier).
+The order is root → each level downwards → tenant file; what is applied later overrides what was applied earlier. Every level is optional, and the depth is not limited to the levels shown.
 
-### Merge Semantics: Deep Merge with Override
+### 2. Merge rules
 
-- **Dict/Map fields**: deep merge (child layer's new keys preserved, same keys overridden by child)
-- **Array/List fields**: **replace, not concat** (avoids ambiguity — "I overrode group_by, why are old values there?")
-  - ⚠️ **Known exception: `_custom_alerts` uses UNION** (ADR-024 / #772; the test is "is it
-    overwritten AFTER deep_merge", not a list of key names) — a tenant's own list
-    **adds to** the inherited platform/domain policy recipes rather than replacing them
-    (`describe_tenant.py` overwrites that key after deep_merge). ⛔ **This is Python-only**:
-    Go has no such path and still does REPLACE, so the two implementations' `effective` are
-    different sets (see Known reachable exceptions, 2, and #1549).
-- **Scalar fields**: child overrides parent
-- **Null values — per-field, not a blanket rule** (#1339 split what used to be one line):
-  - **The four routing fields** (`group_by` / `group_wait` / `group_interval` /
-    `repeat_interval` under `_routing`): an explicit `null` **opts out of
-    inheritance** and the generated route omits the field. These fields have no
-    `"disable"` sentinel, so removing the value is the only way to say it.
-    ⚠️ But `null` is **not the only spelling**: all four are falsy checks (`if val:` in
-    `_grar_merge.py` for the three timing fields, `if group_by and isinstance(group_by,
-    list)` in `_grar_routes.py` for `group_by`), so `""` / `0` / `[]` omit the field just
-    the same. (Also note `group_by` is not a timing field.)
-    `_routing.receiver` and `_routing.overrides` are **excluded**: the former
-    makes the tenant's entire route disappear (alerts fall through to the
-    catch-all), the latter has nothing above it to opt out of.
-  - **Threshold keys**: an explicit `null` does **not** opt out — in a
-    tenant file or a subdirectory `_defaults.yaml`, use `"disable"` to switch a threshold off
-    (not in the root `defaults:`; see the "blank value" item below). A threshold written as `null` is no write at that layer
-    ([#2518](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/2518)): when a tenant
-    file or a subdirectory `_defaults.yaml` writes `null`, `/metrics` (`da-guard served-values`),
-    `/effective` (`da-guard effective`) and `describe_tenant` give the same result as if this
-    layer did not write the key.
-    When the root
-    `_defaults.yaml` writes `null` under `defaults:`, the root does not declare the threshold and
-    `/metrics` serves no series for it (not a threshold of 0): a tenant-side value is named by
-    da-guard's `root_default_null_undeclared`, a subdirectory `_defaults.yaml`'s value by
-    `subtree_default_undeliverable`; when the same key is listed under the root's
-    `optional_overrides:`, the tenant's value is served as usual.
-  - **Every other `_`-prefixed reserved key**: an explicit `null` **does opt out** —
-    `deepMerge` in `pkg/config/hierarchy.go` runs `delete(result, k)` for an explicit
-    null on any `_`-prefixed key, while a non-`_` key (i.e. a threshold) only
-    `continue`s. That code names THIS ADR as the authority for the rule, so the rule
-    is stated here: **the test is "is it `_`-prefixed", not "is it a routing field".**
-    ⛔ **But this only works on the `_defaults.yaml` side.** `tenant-config.schema.json`
-    declares non-null types for `_silent_mode` / `_profile` / `_severity_dedup` /
-    `_namespaces` / `_custom_alerts`, so writing `null` in a **tenant** file is rejected by
-    `check_confd_schema.py`; `platform-defaults.schema.json` leaves those keys loose, so only
-    a `_defaults.yaml` — at its top level or inside `defaults:` — is admitted (the `defaults`
-    sub-schema says verbatim that its interior values are "left loose"). The reachable path is
-    defaults-file to defaults-file.
-    ⛔ **And the inherited value and the `null` must sit in the SAME position**: a `_`-prefixed
-    key written as a **sibling** of `defaults:` never enters `effective` in the wrapped shape
-    (see "these four things", item 1), so there is nothing to delete — writing it is a silent no-op.
-    The combinations that actually work are "both inside `defaults:`" or "both at the top level
-    of a wrapper-less file".
-- **⚠️ A blank value and an explicit `null` are the same thing**: `mysql_connections:` and
-  `mysql_connections: ~` both parse to null in YAML, the same as `mysql_connections: null`. In a
-  tenant file or a subdirectory `_defaults.yaml`, a null (either spelling included) is the same at runtime
-  as this layer not writing the key, but a null in a tenant file is rejected by
-  `check_confd_schema.py` — to keep the inherited value, a tenant deletes the key; in the root `defaults:`, a null means the root does not declare
-  the threshold and no series is served (for a value a deeper layer gives, see "Threshold keys"
-  above). To switch a threshold off in a tenant file or a subdirectory `_defaults.yaml`, write
-  `"disable"`; written in the root `defaults:`, `"disable"` makes /metrics drop the whole root
-  `_defaults.yaml`, its `optional_overrides:` included (da-guard exits 3).
-- **`_metadata` fields do not inherit**: each tenant's `_metadata` comes only from its own YAML + path inference (ADR-016)
+| Value type | Rule | Example |
+|:--|:--|:--|
+| Mapping | Deep merge: keys added by the lower level are kept; a key present in both takes the lower level's value | upper `{p: 1, q: 1}`, tenant `{q: 9}` → `{p: 1, q: 9}` |
+| List | Replaced whole, never concatenated | upper `[ns-a, ns-b]`, tenant `[ns-c]` → `[ns-c]` |
+| Scalar (number, string) | The lower level overrides | upper `200`, tenant `"150"` → `"150"` |
+
+Two exceptions:
+
+- **`_metadata` is not inherited**: `_metadata` written at an upper level does not appear in the tenant's effective config.
+- **`_custom_alerts` (tenant custom alerts, see [ADR-024](024-version-aware-threshold-via-dimensional-label.en.md)) differs between the two implementations**: the effective config `describe_tenant.py` computes is a union — the list declared at the top level of an upper `_defaults.yaml` plus the tenant's own list; the one tenant-api and da-guard compute holds only the tenant's own list. Their `merged_hash` therefore differ ([#1549](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/1549)).
+
+### 3. Example
+
+`conf.d/_defaults.yaml` (root):
 
 ```yaml
-# L0 _defaults.yaml
 defaults:
   pg_stat_activity_count: 500
   pg_replication_lag_seconds: 30
+  pg_locks_count: 300
+```
 
-# ↓ top-level key, a sibling of `defaults:` — NOT nested under it.
-#   `defaults:` is map[string]float64; any nested mapping inside it fails the
-#   unmarshal for the WHOLE file, so EVERY default is dropped — not just the
-#   offending key. ⚠️ Two consumers KNOWN to log an ERROR (not exhaustive): the exporter via
-#   parsePartialConfig, which also bumps parse_failure; tenant-api via
-#   merge_tenant.go), and neither applies any defaults.
-_routing_defaults:
-  group_wait: "60s"
-  group_interval: "5m"
+`conf.d/finance/_defaults.yaml` (domain level, finance is stricter):
 
-# L1 finance/_defaults.yaml
+```yaml
 defaults:
-  pg_stat_activity_count: 200     # override: finance domain is stricter
-  pg_locks_count: 100             # addition: domain-specific
+  pg_stat_activity_count: 200
+  pg_locks_count: 100
+```
 
-# tenant YAML
+`conf.d/finance/fin-db-001.yaml` (tenant file):
+
+```yaml
 tenants:
   fin-db-001:
-    pg_stat_activity_count: "150" # override: single tenant is strictest
-                                  # ⚠️ quoted here, unquoted under `defaults:` above —
-                                  # tenant values are ScheduledValue (string | object),
-                                  # platform defaults are map[string]float64
-    # pg_replication_lag_seconds: inherited from L0 = 30
-    # pg_locks_count: inherited from L1 = 100
-    # _routing_defaults.group_wait: inherited by the routing layer chain = 60s
-    #   (the 2026-09-28 amendment below, implemented in #2326)
-    #   ⛔ but NOT part of the effective config below — see the scope note that follows
+    pg_stat_activity_count: "150"
 ```
 
-**Effective config computation**:
+Output of `da-guard effective --config-dir conf.d` (excerpt):
 
-```
-effective = deep_merge( defaults_block(L0), …, defaults_block(Ln), tenant_body )
-
-  where defaults_block(f) = f["defaults"]
-        ⤷ falls back to f itself (the WHOLE document) when that key is absent,
-          or present with a null value (see exceptions 1 and 3 below)
-```
-
-The two unwrap implementations: `ddata.get("defaults", ddata)` in `describe_tenant.py`, and
-`pkg/config.ExtractDefaultsBlock` in Go (implemented by the unexported `extractDefaultsBlock`
-in the same package;
-`config_inheritance.go` holds a same-named thin wrapper that just forwards to it — not a second
-implementation).
-
-### If you are editing a `_defaults.yaml`, these four things
-
-1. **Only keys inside the `defaults:` block enter `effective`** (⚠️ **there are exceptions** —
-   see Known reachable exceptions 1 and 2 below;
-   `rule-packs/recipes/examples/conf.d/finance/_defaults.yaml` is exception 1 in shipped form,
-   and this item alone would misjudge it as inert). The top-level keys that sit **alongside** it
-   do **not** enter `effective` / `merged_hash`; each travels a different pipeline.
-   ⛔ **Do not infer "still takes effect" from "does not enter effective".** This document
-   deliberately does **not** list which sibling keys take effect — every version of that list
-   has been wrong (this ADR has been falsified on it three times). ⚠️ Two measured
-   counterexamples show why: until #2028 `max_metrics_per_tenant` had **never** taken effect under
-   `-config-dir` (see the end of item 2); `_routing` and `_routing_profile` at the top level are
-   **silent no-ops**. ⇒ **Whether the key you changed takes effect: ask the consumer in item 3's
-   table, and if it is not there, find it yourself before concluding.**
-   ⛔ **Which keys may appear is defined by
-   [`platform-defaults.schema.json`](../schemas/platform-defaults.schema.json) — but that is a
-   list of "which top-level keys this file allows", NOT a list of "put the key here and it will
-   take effect".**
-   ⛔ **The test is "does anything read it at the top level" — not the prefix, and not a list of
-   names.** The only platform-level top-level consumers found today are **three named keys**:
-   `_routing_defaults` and `_routing_enforced` (`_grar_parse.py` reads top level only — the top
-   level of the YAML document, not of the directory tree; for directory levels see "Amendment
-   2026-09-28" below — and only recognises those two **literal names** — the `^_routing` prefix is **not** sufficient to
-   infer: `_routing` and `_routing_profile` were measured to have no top-level consumer), plus
-   `_custom_alerts` (`custom_alerts/loader.py` reads top level only). ⚠️ Every other
-   `_`-prefixed key is actually consumed under the **`tenants:` block** of `_defaults.yaml`;
-   written at the top level it is a **silent no-op** (measured for `_silent_mode` / `_profile` /
-   `_severity_dedup` / `_namespaces` / `_metadata` / `_routing_profile`: `effective`
-   byte-identical, zero WARN from the exporter, schema lint returns `OK`). ⛔ Those six are a
-   **measurement, not a roster**, and so are the three named keys: when any new `_`-prefixed key
-   appears, apply the test above rather than reasoning backwards from these names.
-   ⚠️ That **`tenants:` block** means "the platform's default for an **existing** tenant" ([#1982](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/1982)): for the same key the tenant file wins, key by key, whatever the file names (tenant file versus platform file only; among several platform files the later in file-name order still wins); a tenant no tenant file declares is stripped with a WARN (a platform file cannot create a tenant); the `tenants:` block of a platform file in a subdirectory is read by no plane (the exporter WARNs; the route generator, which reads the tree since #2326, WARNs the same way, and the amendment of 2026-09-28 below leaves this block out of scope); `/effective`, da-guard, `describe_tenant` and `merged_hash` apply this layer too and name the supplying platform files and keys in `platform_overlay`, while `/simulate` does not (its request carries no platform files; [#2019](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/2019)).
-
-2. ⛔ **Do not indent sibling keys INTO `defaults:` to "make them visible".**
-
-   **First, the half that holds for every key** (exporter side, decided by the **value's type**,
-   independent of the key name):
-   - a value that **does not parse as `float64`** (mapping / list / string / bool) ⇒
-     `parsePartialConfig` returns `ok=false`, **the entire file is dropped**, and it logs
-     `ERROR: ... entire block dropped`, taking the file's other sibling keys with it;
-   - a value that **does parse as `float64`** (`100` / `1.5`; not `null`, which is no write: measured, indenting `max_metrics_per_tenant: null`
-   leaves no such row in `da-guard served-values`, [#2518](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/2518)) ⇒ `ok=true`, **no
-     ERROR/WARN**, and it becomes a threshold key ⇒ **every tenant gains one armed, bogus threshold series** (measured: indenting `max_metrics_per_tenant: 100` resolves to `user_threshold{component="max", metric="metrics_per_tenant"}=100`, the prefix stripped by the resolver), and this plane emits no signal.
-
-   ⛔ **But the exporter is only one consumer, and often not the painful one.** The table below
-   covers keys with a **dedicated** consumer — **currently known, not exhaustive** (⚠️ the lists
-   in this ADR have been falsified five times). **If the key you are holding is not in the
-   table, go find its consumer before concluding anything**: the exporter half only tells you
-   whether the file was dropped, **not what happened to the pipeline that key was feeding**.
-
-   | Key you indented | What its dedicated consumer does |
-   |:--|:--|
-   | `_routing_defaults`, `_routing_enforced` (and any `^_routing`-prefixed key) | routing: `_grar_parse.py` reads **top level only** (`if "_routing_defaults" in data`; the document's top level, not the directory tree's — for directory levels see "Amendment 2026-09-28" below), so indenting silently disables it. Measured for `_routing_defaults`: a tenant with no `_routing` of its own **loses its entire route AND receiver** (`Found 2 tenant(s) with routing config: db-a, db-b` → `Found 1 ...: db-b`, with **RC=0, zero errors, zero warnings**). Measured for `_routing_enforced`: the platform-enforced NOC route **and** the `platform-enforced` receiver disappear wholesale, equally without signal |
-   | `_custom_alerts` | custom-alert compilation: `custom_alerts/loader.py` reads only the **top level**, so after indenting it sees **zero entries and zero errors**. ⛔ But `compile_custom_alerts.py --check` (present in both `ci.yml` and pre-commit) **does block** — it is a drift check (its docstring reads `1  drift detected (--check)`), exits 1 and lists the vanished rules one by one. The genuinely silent path is **re-running the compile right after indenting**: the gate turns green and the loss survives only in the pack's diff. ⛔ All three readers pick the carrier the same way (the loader, the exporter and `describe_tenant`; any casing and `.yml` since #1588, exactly one per directory since #1674): when a directory holds both `_defaults.yaml` and `_defaults.**yml**`, the `_custom_alerts` in the `.yml` is read by **none** of them, only WARNed about — writing the list into the unselected spelling likewise sees zero |
-   | most keys (diagnostic surface) | `effective`: **silently accepted** as a nested key, so blast-radius goes from "no changes" to a report (measured: Tier B for `max_metrics_per_tenant` / `_routing_defaults`, Tier A for `_custom_alerts`). ⚠️ **The diagnostic surface rewards this action while it takes a tenant's alerting away**. ⛔ **But this is not a guarantee**: `_metadata` is skipped unconditionally by `deep_merge` (`if k == "_metadata": continue` in `describe_tenant.py`), so after indenting it `effective` is **byte-identical** and blast-radius prints "No effective tenant config changes detected" verbatim — while the exporter side has already dropped the whole file. **Silence on the diagnostic surface is not evidence that nothing happened.** |
-
-   ⛔ `check_confd_schema.py` returns `RC=0` for **all** of the above (the `defaults` sub-schema
-   says verbatim that its values are left loose) — **no schema gate blocks this**.
-
-   ⚠️ **`max_metrics_per_tenant` is a different story — do not explain it with indenting**: it is
-   a top-level key honoured **at the root only** (#2028). Under `-config-dir` (the mode Helm
-   ships), only the value in the conf.d **root** `_defaults.yaml` reaches
-   `ThresholdConfig.MaxMetricsPerTenant`; a nested `_defaults.yaml`, any other `_*` file and any
-   tenant file are **ignored with a WARN** (tenant files are stripped for a security reason:
-   otherwise a tenant could raise its own cap). It does not follow subtree inheritance — it is one
-   global cap, not a per-tenant threshold. Unset or 0 = the built-in
-   `DefaultMaxMetricsPerTenant = 500`; negative = no truncation (`resolve.go` only truncates when
-   `limit > 0`). Helm users set it through the chart's `thresholdConfig.max_metrics_per_tenant`.
-   ⛔ History: before #2028 `mergePartialInto` did not copy this field, so the key **never took
-   effect in directory mode** (only in single-file `-config` mode).
-
-3. **After changing a sibling key, do not use `merged_hash` / `/effective` / `blast_radius` to
-   confirm it took effect** (those three cannot see it, and the runtime labels it
-   `effect="cosmetic"` — see "The diagnostic cost" below). **Ask the consumer of the key you
-   changed** — this table is likewise **known, not exhaustive**; ⛔ **if your key is not in it,
-   this document does not know its consumer: find it before concluding "it took effect"**:
-
-   | Key you changed | Ask |
-   |:--|:--|
-   | `state_filters` | `user_state_filter{tenant,filter,severity}` on the exporter's `/metrics` |
-   | `_silent_mode` (the one under the **`tenants:` block**; at the top level alongside `defaults:` it is the silent no-op from item 1) | `user_silent_mode{tenant,target_severity}` |
-   | `_custom_alerts` | the output of `compile_custom_alerts.py --check` (⚠️ see the warning below) |
-   | `_routing_defaults` / `_routing_enforced` | `generate_alertmanager_routes.py --config-dir conf.d/ --dry-run`, and **diff the full before/after output** |
-
-   ⚠️ The **`tenants:` block** holding `_silent_mode` in the table above means "the platform's default for an **existing** tenant" ([#1982](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/1982)): for the same key the tenant file wins, key by key, whatever the file names (tenant file versus platform file only; among several platform files the later in file-name order still wins); a tenant no tenant file declares is stripped with a WARN (a platform file cannot create a tenant); the `tenants:` block of a platform file in a subdirectory is read by no plane (the exporter WARNs; the route generator, which reads the tree since #2326, WARNs the same way, and the amendment of 2026-09-28 below leaves this block out of scope); `/effective`, da-guard, `describe_tenant` and `merged_hash` apply this layer too and name the supplying platform files and keys in `platform_overlay`, while `/simulate` does not (its request carries no platform files; [#2019](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/2019)).
-
-   ⚠️ **`compile_custom_alerts.py`'s output path does not follow `--config-dir`**
-   (`out_path = repo / OUT_REL`, anchored on the repository). This used to continue "so
-   trying it against another tree overwrites the shipped file" — **that consequence no
-   longer happens as of
-   [#1582](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/1582)**: a write
-   now **requires an explicit `--out`** and exits 2 without one. `--check` writes nothing,
-   so it may still be omitted there.
-   ⇒ Verify this row with `--check`; to compile another tree, point `--out` at it.
-
-   ⛔ For the routing row, **diff the full output only — the two signals people take as
-   shortcuts each have a blind spot**:
-   - `Found N tenant(s) with routing config` counts **how many tenants parsed a routing
-     config**, not how many routes came out. Measured: dropping
-     `_routing_defaults.receiver.type` makes db-a's route AND receiver **both disappear**
-     (`2 route(s), 2 receiver(s)` → `1, 1`) while that line stays byte-identical. ⚠️ This one
-     does emit `WARN: db-a: missing required 'receiver.type', skipping` — unlike the genuinely
-     signal-free indenting in item 2; do not conflate the two.
-   - The receiver set only reacts to a receiver appearing or disappearing; it is blind to
-     **values**. Measured with `group_wait` 30s→35s, and again with `receiver.to` changed to
-     **a recipient on a different domain** — both times the full output differed by that one
-     line while both signals stayed byte-identical. ⚠️ The blind spot covers **where the
-     notification goes**, not just timing parameters; and `group_wait` is the very key used in
-     the inheritance example above.
-
-4. **To opt out of an inherited `_`-prefixed key with an explicit `null`, the test is "after the
-   unwrap, do the two land on the SAME key path".** Which keys qualify is decided by the prefix
-   (`deepMerge` in `pkg/config/hierarchy.go` runs `delete(result, k)` for `_`-prefixed keys,
-   while a non-`_` key only `continue`s). **Position** does not require the two files to have the
-   same shape, because `defaults_block(f)` is applied **per file**. Measured, four arms with a
-   control:
-
-   | Parent | Where the child's `null` sits | Result |
-   |:--|:--|:--|
-   | wrapped | (no child file — control) | kept |
-   | wrapped | **sibling** of the child's `defaults:` | ⛔ **kept = silent no-op** |
-   | wrapped | **inside** the child's `defaults:` | deleted ✅ |
-   | wrapped | **top level of a wrapper-less child** | deleted ✅ |
-
-   ⛔ The only combination that does nothing is "sibling of `defaults:` within the same file,
-   **while `defaults:` is a real mapping**" — there is nothing there to delete. ⚠️ When
-   `defaults:` is **absent** both implementations fall back to the whole document and that
-   position becomes effective; when `defaults:` is **null** only Go falls back (measured: the
-   sibling-position `null` does delete), while Python's `ddata.get("defaults", ddata)` returns
-   `None` ⇒ `describe_tenant` crashes outright (see Known reachable exceptions, 1 and 3).
-   ⛔ Writing it in a **tenant file whose name does not start with `_`** is always rejected by
-   `check_confd_schema.py` (`definitions/tenantConfig` in `tenant-config.schema.json`
-   declares non-null types for the named keys, and the rest of `_*` are caught by the
-   `additionalProperties` `oneOf` catch-all — both paths measured at `RC=1`);
-   writing it under the **`tenants:` block of a `_defaults.yaml` is NOT rejected** (measured
-   `RC=0`) — and item 1 points the reader at exactly that position.
-
-### Known reachable exceptions (NOT exhaustive — this list is not a guarantee)
-
-1. **A file with no `defaults:` key** merges the **entire document** into `effective`, siblings
-   included. ⚠️ The schema only admits this when **every** top-level key is on the whitelist
-   (`additionalProperties: false` + the fixed properties + `^_state_` / `^_routing`
-   patternProperties), so "drop the `defaults:` wrapper and write bare threshold keys" is in
-   fact rejected by `check_confd_schema.py`. The shape exists in this repo
-   (`rule-packs/recipes/examples/conf.d/finance/_defaults.yaml`, whose only top-level key is
-   `_custom_alerts`). ⛔ **This document does not state how many such files there are** — that
-   number drifts. To inventory your own tree, load every `_defaults*.y*ml` with `yaml.safe_load`
-   and keep the ones whose result **is a dict and has no `defaults` key** (⚠️ a comments-only
-   file parses to `None` — exclude it, it merges nothing, and counting it overstates the set). ⇒ This shape being invisible to the reachability gate is the subject of
-   [#1552](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/1552).
-
-2. **`_custom_alerts` is injected by ADR-024's UNION resolver AFTER the unwrap**
-   (`describe_tenant.py`, #772), so it **enters `effective` even when the `defaults:` wrapper is
-   present**; Go has no such injection path. Measured on identical input: Python yields
-   `{cpu_usage, _custom_alerts, _custom_alerts_resolution}`, Go yields only `{cpu_usage}` ⇒
-   **the two implementations' `effective` are different sets, so `merged_hash` differs** ⇒
-   [#1549](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/1549).
-
-3. **`defaults:` present but explicitly `null`** (the schema's `type: ["object","null"]` permits
-   it; `check_confd_schema.py` was measured to admit it): Go's type assertion
-   `m["defaults"].(map[string]any)` fails ⇒ it falls through and merges the entire document;
-   Python's `ddata.get("defaults", ddata)` returns `None` for a key that exists with a null
-   value (**not** the fallback) ⇒ `deep_merge` raises `AttributeError` and `describe_tenant`
-   crashes outright. ⇒ Not yet ticketed.
-
-⛔ Every `_defaults.yaml` under `tests/golden/fixtures` currently has the "wrapped, zero
-siblings" shape, so the **golden parity suite structurally cannot detect any of these
-exceptions** — do not read its green as an endorsement that the two implementations are
-equivalent.
-
-### The diagnostic cost (deliberately accepted)
-
-Platform-level changes are structurally invisible to consumers that take `effective_config` /
-`merged_hash` as input. ⛔ **What follows is the currently-known set, not an exhaustive one** —
-the first version of this list missed `tenant-verify` (below), and the affected surface spans
-Go, Python, the Portal **and CI workflows** (`.github/workflows/blast-radius.yml` is the layer
-that turns this plane into a PR comment; `guard-defaults-impact.yml` is the other one). ⚠️ **This document does not claim to know all of
-them**: to inventory your own tree, go by **capability** rather than identifier — find whatever
-calls `describe_tenant` / `tenant-verify` / `blast_radius` / `GET .../effective` / `da-guard`,
-and sweep `.github/workflows/**` and `Makefile` too (searching
-`merged_hash|MergedHash|ResolveEffective|EffectiveConfig` misses the workflows: those two score
-0 hits on all four tokens). Known today: `GET /effective`,
-`describe_tenant`, `blast_radius`, the what-if preview (`handler_simulate.go`, Portal
-`simulate-preview.jsx`), and `da-guard`. Two of those are worse than merely blind:
-
-⛔ **At runtime the change is MISLABELLED, not just missed.** `parseDefaultsBytes` in
-`config_defaults_diff.go` goes through the same unwrap, so `classifyDefaultsNoOpEffect` never
-sees sibling keys — a real "changed platform severity AND changed routing" edit produces a
-**byte-identical** `effect="cosmetic"` to "added one comment line". An SRE seeing
-`blast_radius{effect="cosmetic"}` will read it as "just a comment change".
-
-⛔ **`da-tools tenant-verify --expect-merged-hash` is a gate, not a diagnostic** (the blocking
-signal in the rollback checklist, exit 2 = mismatch): after a platform-plane rollback it returns
-exit 0, and **that means "this plane was not covered", not "the rollback is verified"**.
-
-⇒ This is the subject of
-[#1516](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/1516); the remedy is a
-**separate platform-plane comparison**. For why the domain here is not simply widened, see
-**§Alternatives Considered, D** in this document.
-
-### Dual-Hash Mechanism
-
-Each tenant maintains two hashes:
-
-| Hash | Definition | Purpose |
-|:-----|:-----------|:--------|
-| `source_hash` | SHA-256 of tenant YAML file bytes, **truncated to the first 16 hex chars** | Detect tenant source file changes |
-| `merged_hash` | SHA-256 of effective config (canonical JSON after merge), **truncated to the first 16 hex chars** | Detect actual effective config changes |
-
-⛔ **Both are 16 chars, not the full 64-char digest.** The scanner's internal
-`m.hierarchy.hashes` stores the **untruncated 64-char** SHA-256 — the *same* digest; the first
-16 chars of the tenant-file entry are exactly the `source_hash` above. ⛔ But `merged_hash`
-hashes the canonical JSON, **not** file bytes, so running `sha256sum` on any file will never
-match `--expect-merged-hash`.
-
-**Reload decision logic**:
-
-```
-if source_hash changed:
-    recompute effective config → update merged_hash
-    record as applied (reason=source; reason=new if the tenant is newly seen)
-    ⚠️ this branch does NOT compare merged_hash — see the note below
-elif any ancestor _defaults.yaml changed:
-    recompute effective config → update merged_hash
-    if merged_hash changed:
-        record as applied (reason=defaults)
-    else:
-        record as shadowed / cosmetic (see §Amendment 2026-04-25)
+```json
+"effective_config": {
+  "pg_locks_count": 100,
+  "pg_replication_lag_seconds": 30,
+  "pg_stat_activity_count": "150"
+},
+"key_sources": {
+  "pg_locks_count":             {"layer": "defaults", "file": "finance/_defaults.yaml", "level": 1},
+  "pg_replication_lag_seconds": {"layer": "defaults", "file": "_defaults.yaml", "level": 0},
+  "pg_stat_activity_count":     {"layer": "tenant",   "file": "finance/fin-db-001.yaml"}
+},
+"source_hash": "45006e7b8bf54ba3",
+"merged_hash": "5db367c3efd997ce"
 ```
 
-⚠️ **This pseudocode describes how a change is CLASSIFIED, not whether a rebuild
-happens.** In the implementation, the hierarchical path's `diffAndReload` calls
-`installNewHierarchyState` **unconditionally** after `classifyAndCount`, and the first thing
-that function does is run `fullDirLoad` unconditionally. `merged_hash` decides whether the
-change is recorded as `applied` (`IncReloadTrigger`) or as `shadowed` / `cosmetic` — it does
-**not decide the rebuild**.
+`da-guard served-values --config-dir conf.d` shows `/metrics` serving the same three values: `pg_locks_count` 100, `pg_replication_lag_seconds` 30, `pg_stat_activity_count` 150.
 
-⛔ **The `source_hash` branch does not compare `merged_hash`**: the `if sourceChanged` path in
-`config_debounce.go` records `applied` directly, and the `prev == mh` comparison appears only
-under `else if defaultsChanged`. ⚠️ The consequence: **a comment-only edit to a tenant YAML is
-also recorded as `applied`**, polluting the blast-radius high-impact signal. That is a known
-gap between the implementation and this ADR's intent, not a deliberate design.
+Two things to notice in this example:
 
-### Inheritance Graph Data Structure
+- **The tenant's value is quoted; the values under `defaults:` are not.** A tenant threshold is a string or an object with a schedule, and an unquoted number is rejected by `check_confd_schema.py`; platform defaults take numbers only.
+- **A subdirectory can only change thresholds the root declares.** Remove `pg_locks_count` from the root and the effective config still shows 100, but `/metrics` does not serve it. Every tenant in `da-guard effective` has a `not_served` field that lists, key by key, the values the effective config shows but `/metrics` does not serve, with the reason; here it is `undeliverable`, and da-guard's check reports `subtree_default_undeliverable`.
 
-The Scanner maintains an **inheritance graph**:
+### 4. A threshold written as `null` is the same as not writing it at that level
 
-```go
-type InheritanceGraph struct {
-    // _defaults.yaml path → affected tenant ID list
-    DefaultsToTenants map[string][]string
-    // tenant ID → its inheritance chain _defaults.yaml paths (ordered, L0→L3)
-    TenantDefaults    map[string][]string
-}
+A threshold key written as `null` in a tenant file or a subdirectory `_defaults.yaml` does not switch the alert off (for `null` in the root `defaults:`, see the second item below); to switch it off, write `"disable"` in either of those places. Do not write `"disable"` in the root `defaults:`: `check_confd_schema.py` does not reject it, but /metrics drops the whole root `_defaults.yaml`, its `optional_overrides:` included, and da-guard exits 3.
+
+- When a tenant file or a subdirectory `_defaults.yaml` writes `null`, `/metrics` (`da-guard served-values`), `/effective` (`da-guard effective`) and `describe_tenant` give the same result as when that level does not write the key. A `null` in a tenant file (`kx:` and `kx: ~` included), however, is rejected by `check_confd_schema.py`; to keep the inherited value, a tenant deletes the key.
+- When the root `_defaults.yaml` writes `null` under `defaults:`, the root does not declare that threshold and `/metrics` serves no series for it (not a threshold of 0): a value the tenant supplies is named by da-guard's `root_default_null_undeclared`, a value a subdirectory `_defaults.yaml` supplies by `subtree_default_undeliverable`. If the same key is listed in the root's `optional_overrides:`, the tenant's value is served as usual. (`optional_overrides:` is a list of key names at the top level of the root `_defaults.yaml`: it declares that these thresholds exist without giving them a platform default, so they are served only when a tenant writes them.)
+
+**Why `null` does not mean "off"**: in YAML, `kx:` followed by nothing parses to `null`, exactly like `kx: ~`. If `null` meant off, forgetting to fill in a value would silently switch an alert off. When config is wrong, an extra alert is better than a missing one.
+
+Other keys behave differently with `null`:
+
+- **The four routing fields** (`group_by`, `group_wait`, `group_interval`, `repeat_interval` under `_routing`): `null` means "do not inherit the upper value", and the generated route omits the field. `""`, `0` and `[]` have the same effect.
+- **`_routing.receiver` cannot be used this way**: when a tenant writes `receiver: null`, the route generator prints a WARN and skips the tenant, whose alerts go back to Alertmanager's root route.
+- **Other keys starting with `_`** (such as `_namespaces`): `null` in a `_defaults.yaml` deletes the value inherited from above. It works only inside `defaults:`, or at the top level of a file without `defaults:`; a `null` in a tenant file is rejected by `check_confd_schema.py`. And the `null` must sit in the same position as the inherited value:
+
+| Upper level (has `defaults:`) | Lower level writes `null` | Result |
+|:--|:--|:--|
+| `defaults: {_foo: "on"}` | nowhere (control) | kept |
+| same | **next to** its `defaults:` (top level) | kept: the `null` has no effect |
+| same | **inside** its `defaults:` | deleted |
+| same | at the top level of a file without `defaults:` | deleted |
+
+When `defaults:` itself is `null` (`defaults:` followed by nothing), the whole file is treated as having no `defaults:`.
+
+### 5. Which keys of a `_defaults.yaml` enter the effective config
+
+**Keys under `defaults:` enter the effective config and `merged_hash`.** So do the `tenants:` block of a root platform file and the `profiles:` block of a root file whose name starts with `_`, usually `_profiles.yaml` (see below). A subdirectory file without `defaults:` is merged whole as defaults; the schema, however, allows only a fixed set of keys at the top level of such a file, so a threshold key written there directly (for example `cpu: 80`) is rejected by `check_confd_schema.py`. The root `_defaults.yaml` must have `defaults:`: without it the exporter does not read its thresholds, `/effective` still shows them, and `not_served` marks them `root_defaults_unwrapped`.
+
+Each key below has its own reader, and a change to it is not necessarily reflected in `merged_hash`. After changing one, confirm the change where it is read:
+
+| Key you changed | Where to confirm |
+|:--|:--|
+| `state_filters` | `user_state_filter{tenant,filter,severity}` on `/metrics` |
+| `_routing_defaults`, `_routing_enforced` | the full output of `generate_alertmanager_routes.py --config-dir conf.d/ --dry-run`, before vs after |
+| `_custom_alerts` | `compile_custom_alerts.py --check` |
+| `max_metrics_per_tenant` | see below |
+
+This table is not complete. For a key that is not in it, find the code that reads it before deciding whether the change took effect.
+
+**The `tenants:` block of a root platform file** (written in `_defaults.yaml` or in any other root file starting with `_`, such as `_ops.yaml`; when the root holds both `_defaults.yaml` and `_defaults.yml`, only the former is read and the latter is ignored whole with a WARN) holds the platform's defaults for existing tenants. It enters the effective config and `merged_hash`: adding `tenants: {fin-db-001: {_silent_mode: warning}}` to the example's root, for instance, adds `_silent_mode: warning` to `fin-db-001`'s effective config, `key_sources` marks it `layer: platform`, `platform_overlay` names the file and key that supplied it (`_ops.yaml` when it is written there), `merged_hash` moves from `5db367c3efd997ce` to `73e76f3cabed3a9f`, and `/metrics` gains `user_silent_mode{tenant,target_severity}`. For the same key the tenant file wins, whatever the file names sort as; a tenant no tenant file declares is ignored with a WARN (a platform file cannot create a tenant); the `tenants:` block of a platform file in a subdirectory is not read, and both the exporter and the route generator log a WARN.
+
+**The root `profiles:` block** (usually written in `_profiles.yaml`) enters too: when a tenant picks a profile with `_profile: std`, the profile's values enter its effective config (`key_sources` marks them `layer: profile`); when a value in the profile changes, the `merged_hash` moves for the tenants whose `key_sources` mark that key `layer: profile` with `file` naming the file that changed, and `tenant-verify` exits 2; tenants for which the key is overridden by their tenant file or by a root platform file's `tenants:` block are unaffected.
+
+**`max_metrics_per_tenant`** caps how many threshold series one tenant may serve, and is read only from the top level of the root `_defaults.yaml`; written in a subdirectory `_defaults.yaml` or a tenant file it is ignored with a WARN, so a tenant cannot raise its own cap. Unset or 0 means a cap of 500; a negative value means no truncation. The Helm chart key is `thresholdConfig.max_metrics_per_tenant`.
+
+### 6. Do not indent top-level keys into `defaults:`
+
+Indenting a top-level key into `defaults:` to make it "appear in the effective config" has an outcome that depends on the value's type, and the schema check (`check_confd_schema.py`) answers `OK` to both:
+
+- **The value is not a number** (mapping, list, string): the exporter drops the **whole file**, logs `ERROR: skip unparseable defaults/profiles file …`, sets `da_config_defaults_unusable{reason="parse_failure"}` to 1, and the file's other thresholds disappear with it.
+- **The value is a number**: it becomes one threshold series per tenant, with no warning. Indenting `max_metrics_per_tenant: 100`, for example, adds `user_threshold{component="max",metric="metrics_per_tenant"} 100` to `/metrics`.
+
+The readers of these keys look only at the document's top level, so an indented key is not there for them:
+
+- With `_routing_defaults` indented, every tenant with neither its own `_routing` nor a routing profile loses its whole route; the route generator exits 0 with no error and no warning.
+- With `_custom_alerts` indented, `compile_custom_alerts.py --check` exits 1 and lists every rule that disappeared; but recompile afterwards and the check turns green, leaving the lost rules visible only in the rule pack's diff.
+
+### 7. Dual hash and reload
+
+| Hash | How it is computed | Purpose |
+|:--|:--|:--|
+| `source_hash` | SHA-256 of the tenant file's bytes, first 16 hex characters | did the tenant file change |
+| `merged_hash` | SHA-256 of the effective config as canonical JSON (keys sorted, no whitespace), first 16 hex characters | did the effective config change |
+
+Checked against `fin-db-001` from the example:
+
+```bash
+$ sha256sum conf.d/finance/fin-db-001.yaml | cut -c1-16
+45006e7b8bf54ba3
+$ printf '%s' '{"pg_locks_count":100,"pg_replication_lag_seconds":30,"pg_stat_activity_count":"150"}' | sha256sum | cut -c1-16
+5db367c3efd997ce
 ```
 
-⚠️ **`DefaultsToTenants` / `TenantsAffectedBy` currently have no production consumer** (the
-only readers are the accessor in `inheritance_graph.go` itself, plus tests). The actual reload path, `classifyAndCount`, iterates over every scanned tenant, uses
-the **reverse** map `TenantDefaults[tid]`, and decides whether that tenant needs recomputing by
-comparing **per-file SHA-256 values** (`scan.hashes` vs `prior.hashes`, covering the tenant file
-and its whole defaults chain); when nothing moved it reuses the previous round's cached
-`merged_hash`. ⛔ The `merged_hash` comparison itself (`prev == mh`) happens **after** the
-recompute — its right operand IS the recompute's output — so it **cannot save any recompute**;
-it only decides whether the change is classified `applied` or `shadowed` / `cosmetic`.
-"Avoiding full recalculation" is achieved by that **file-hash** comparison, not by this forward
-map. The map is retained as existing structure; changing it does not change
-behaviour.
+So `sha256sum` of any file never matches a `merged_hash`. And because `merged_hash` looks only at the effective config, changing or removing the root's `pg_locks_count` in the example leaves `fin-db-001`'s `merged_hash` at `5db367c3efd997ce`: the finance level already overrides it.
 
-### Watch Mechanism: Maintain Periodic Scan
+**When reloads happen**: the exporter scans conf.d/ every 30 seconds (`-reload-interval`). After it sees a change it waits 300 ms (`-scan-debounce`) before reloading. This wait is called debouncing: changes that arrive close together are folded into one, so a `git pull` that changes 20 files triggers a single reload.
 
-- **Do not adopt inotify/fsnotify**: container mount event loss + kernel watch limits
-- Maintain existing periodic scan (configurable interval, default 30s)
-- ⚠️ **"Only recalculate hashes for files whose `stat()` changed" is NOT implemented**: the
-  `priorMtimes` parameter of `scanDirHierarchical` is currently ignored (`config_hierarchy.go`
-  says verbatim `_ = priorMtimes // reserved for Phase 3`), and every file walked is hashed
-  unconditionally with `sha256.Sum256`. The benchmark numbers are the cost of hashing everything.
+**Every reload rebuilds the whole config.** The two hashes decide what a change is recorded as, for the metrics and for the blast-radius report (how many tenants one change affected):
 
-### Debounce
+```
+the tenant file's source_hash changed  → applied (reason=source; a new tenant reason=new; a deleted file reason=delete)
+otherwise, a _defaults.yaml on the chain changed:
+  merged_hash changed                    → applied (reason=defaults)
+  unchanged, every changed key is overridden by the tenant  → shadowed
+  unchanged, no key under defaults: changed                 → cosmetic (e.g. comments, order or whitespace only, or only the _routing_defaults in the root _defaults.yaml)
+```
 
-- When `git pull` lands 50 files, each `stat()` change does not immediately trigger reload
-- Debounce window: **300ms** (configurable via `--scan-debounce` flag)
-- Window accumulates all changes → batch recompute → single reload pass
-- Prevents reload storms (50 tenant reloads → becomes 1 batch reload)
+A change to one tenant's entry in the `tenants:` block of a root platform file takes the reason=defaults branch too: that tenant is recorded as applied when its `merged_hash` moved, and as shadowed when the changed key is overridden by its tenant file.
 
-### Cardinality Guard
-
-- `_defaults.yaml` **does not produce Prometheus metric series**
-- Inherited fields still follow existing Cardinality Guard rules (v2.5.0 ADR-005)
-- `merged_hash` label is not exposed in metrics (prevents label explosion)
-
-### New Prometheus Metrics
+Known gap: the tenant-file branch does not compare `merged_hash`, so a comment-only edit of a tenant file is also recorded as applied (reason=source).
 
 | Metric | Type | Labels | Description |
-|:-------|:-----|:-------|:------------|
-| `da_config_scan_duration_seconds` | histogram | — | Single periodic scan duration |
-| `da_config_reload_trigger_total` | counter | `reason` | Reload reason. **Only four values are actually emitted**: source / defaults / new / delete (all from `classifyAndCount`, hierarchical mode only). ⚠️ `config_metrics.go` lists `forced` in the declared domain, but **no production path ever uses it as a label**: `ReloadReasonForced` is returned by `detectChange()` in hierarchical mode (**not** the manual / SIGHUP trigger its constant comment describes) and only flows into the debouncer's `pendingReasons`, whose length alone feeds `da_config_debounce_batch_size`. The effective domain of `blast_radius`'s `reason` below is the **same** |
-| `da_config_defaults_change_noop_total` | counter | — | **Classification** count: a defaults change whose merged_hash did not move. ⚠️ **Not "rebuilds saved"** — the rebuild runs unconditionally (see the note under §Reload decision logic) — **v2.8.0 narrows the semantics to cosmetic-only** (see Amendment 2026-04-25) |
-| `da_config_defaults_shadowed_total` | counter | — | **v2.8.0 (Issue #61)** — Defaults change blocked by tenant override (split out from `da_config_defaults_change_noop_total`) |
-| `da_config_blast_radius_tenants_affected` | histogram | `reason / scope / effect` | **v2.8.0 (Issue #61)** — Per-tick distribution of affected tenants |
+|:--|:--|:--|:--|
+| `da_config_scan_duration_seconds` | histogram | — | duration of one scan |
+| `da_config_reload_trigger_total` | counter | `reason`: `source` / `defaults` / `new` / `delete` | per-tenant count of changes recorded as applied |
+| `da_config_defaults_change_noop_total` | counter | — | count recorded as cosmetic |
+| `da_config_defaults_shadowed_total` | counter | — | count recorded as shadowed |
+| `da_config_blast_radius_tenants_affected` | histogram | `reason` / `scope` / `effect` | distribution of tenants affected per reload; `effect` is `applied` / `shadowed` / `cosmetic` |
 
-### Amendment 2026-04-25 (Issue #61): noop semantic split
+Hashes are never used as metric labels, to keep the series count from exploding; `_defaults.yaml` produces no series of its own either — its values count towards each tenant's thresholds and are subject to `max_metrics_per_tenant`.
 
-The original §Reload logic conflated "comment-only edit" with "override-shadowed edit" under `da_config_defaults_change_noop_total`, leaving ops unable to distinguish "truly no impact" from "inheritance system blocked the change". v2.8.0 splits this by `effect`:
+### 8. Changes to some top-level keys are invisible in the effective config
 
-```
-elif any ancestor _defaults.yaml changed:
-    recompute effective config → update merged_hash
-    if merged_hash changed:
-        record as applied (IncReloadTrigger(reason=defaults))
-        emit blast_radius{effect="applied"}
-    else:
-        # Further classification (Issue #61)
-        compute changedKeys = diff(prior_parsed_defaults, new_parsed_defaults)
-        if len(changedKeys) == 0:
-            # Pure cosmetic: comment-only / reordering / whitespace
-            increment da_config_defaults_change_noop_total
-            emit blast_radius{effect="cosmetic"}
-        elif tenantOverridesAll(tenant_src, changedKeys):
-            # Shadowed: tenant overrides every changed key
-            increment da_config_defaults_shadowed_total
-            emit blast_radius{effect="shadowed"}
-        else:
-            # Logically unreachable (merged_hash should have moved)
-            # — defensive fallback to cosmetic
-            increment da_config_defaults_change_noop_total
-```
+For example, the root's `_routing_defaults` and `state_filters` do not enter the effective config and leave `merged_hash` unchanged, so no tool whose input is the effective config or `merged_hash` sees these changes: `/effective`, `describe_tenant`, the blast-radius report, `tenant-verify`. This is a cost accepted deliberately so that Decision 7 records changes correctly (see Alternative D for why), but it has two consequences to know:
 
-Implementation notes:
-- `m.hierarchy.parsedDefaults` and `m.hierarchy.hashes` (folded into the `hierarchyState` sub-struct as of v2.8.0), atomic-swapped together, caching the normalized parsed dict (`map[string]any`) of every `_defaults.yaml`. ~1 MB at 1000 tenants.
-- `populateHierarchyState` eager-parses every defaults file at cold start; `diffAndReload` only re-parses files whose hash actually moved, reusing the prior parse otherwise.
-- See `components/threshold-exporter/app/config_defaults_diff.go` and Issue #61 RFC.
+- **`effect="cosmetic"` does not mean only a comment changed.** A change that only edits the `_routing_defaults` in the root `_defaults.yaml` and one that only adds a comment are both recorded by the exporter as `effect="cosmetic"`.
+- **`da-tools tenant-verify --expect-merged-hash` is not evidence here.** It exits 2 when the hash differs, but after a change to only the root's `_routing_defaults` it exits 0: exit 0 means this face is not covered, not that a rollback was verified.
 
-### Amendment 2026-09-28 (#2326): routing-plane layer chain across directory levels
+A separate mechanism that compares such platform top-level keys is tracked in [#1516](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/1516).
 
-**Status: implemented.** Owner decision, option **P2** of
-[#2326](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/2326); implemented in
-one PR for the Python route generator (`_grar_parse` / `_grar_merge`, and the readers built on
-it) and Go `pkg/routingpolicy.LoadTree` (da-guard), with the parity matrix's `hier-*` trees
-pinning (a)–(e) on both sides. Where the text below leaves a choice open, the implementation
-took: the blocking conditions all exit **2** in every mode, (c)'s duplicate profile name
-included ((e) is the exception, see there); the first definition of a duplicated name is kept (root files first, then the tree
-in name order) and the later file is named; a subtree policy entry naming an out-of-subtree
-tenant is dropped from that policy (not enforced) besides being reported. ⚠️ tenant-api lists
-tenant files at the root only, so it keeps reading the root half (`LoadRoot`).
+### 9. Routing settings are inherited level by level along directories
 
-The routing plane gets its own chain along the same directories as the threshold chain.
-It stays **outside** `effective` / `merged_hash` — alternative D below still stands.
+The root's `_routing_defaults` does not enter the effective config (a tenant's own `_routing` does), but routing settings have their own inheritance chain along the same directory tree. The exit codes below are `generate_alertmanager_routes.py`'s; on exit 2 nothing is generated.
 
-**Carriers.** At each subdirectory level, the carrier is the one the threshold chain
-reads: `_defaults.yaml` / `_defaults.yml`, one per directory, chosen the same way (#1674).
-At the root the existing rule stays: `_routing_defaults` / `_routing_enforced` are read
-from any root `_`-prefixed file. The key sits where it sits at the root today, at the top
-level of the document (item 2 above still applies to indenting it into `defaults:`).
-Walker: Python `_lib_confd.list_config_tree()`; Go `config.ScanDirTree` +
-`CollectDefaultsChain` (hidden directories pruned, directory symlinks reported, a
-directory holding only a README contributes nothing).
+**Where they are read**: at the root, `_routing_defaults` and `_routing_enforced` are read from the top level of any file whose name starts with `_`. In a subdirectory, each level reads only the `_routing_defaults` at the top level of that level's `_defaults.yaml` (or `_defaults.yml`); one written in any other `_` file of a subdirectory is skipped with a WARN, and `--validate` exits 1.
 
-**(a) `_routing_defaults` across levels: shallow merge per top-level key.** The deeper
-level wins. An explicit `null` follows the existing "Null values" rules above, with no new
-rule: on the four fields (`group_by` / `group_wait` / `group_interval` / `repeat_interval`)
-`null` opts out of inheritance and the rendered route omits the field; `receiver` and
-`overrides` are **excluded** — writing them as `null` in a subdirectory level's
-`_routing_defaults` is a **blocking error** (rc 2), because otherwise every tenant in that
-subtree without its own receiver would lose its route and alerts would silently fall to the
-catch-all. Then the routing profile, then the tenant's own `_routing` (order unchanged):
+**How they merge**: each level's `_routing_defaults` is merged shallowly, top-level key by top-level key, the deeper level winning; then the routing profile is applied, and finally the tenant's own `_routing`:
 
 ```
-rd(t)       = L0._routing_defaults ⊕ L1._routing_defaults ⊕ … ⊕ Ln._routing_defaults
+rd(t)       = root._routing_defaults ⊕ level 1 ⊕ … ⊕ the tenant's own level
 resolved(t) = rd(t) ⊕ profiles[t._routing_profile] ⊕ t._routing
 
-  a ⊕ b: for each top-level key k of b —
-           a[k] = b[k]   (the whole value, no recursion into it; a null is stored
-                          too, and omitted or refused downstream per the field rules)
+  a ⊕ b: each top-level key of b replaces a's key of the same name whole, without recursing
 ```
 
-Same shape as the existing profile/tenant merge (`merge_routing_with_defaults` in
-`_grar_merge.py`, `routingpolicy.Resolve` in Go). Deep merge is rejected for the reason in
-alternative D, 3: it cannot express the semantics, and on `receiver` it would mix fields
-of different receiver types (a subtree switching `type` from `slack` to `pagerduty` would
-keep the parent's `api_url`).
+For example, when the root supplies `receiver` and `group_wait: 60s` and `a/_defaults.yaml` supplies `group_wait: 10s`, a tenant under `a/` gets the root's `receiver` and 10s. The merge is shallow because deep-merging `receiver` would keep the upper level's `api_url` when a lower level switches `type` from `slack` to `pagerduty`, mixing the fields of two receiver types.
 
-**(b) `_routing_enforced`: root only.** A copy in any subdirectory file is a **blocking
-error** (route generator rc 2). Deferred: additive, subtree-scoped enforced routes.
-Trigger: a customer or team explicitly needs a NOC route scoped to one subtree.
+**Limits**:
 
-**(c) Routing profiles.** `_routing_profiles.yaml` / `.yml` may sit in a subdirectory; its
-profiles are visible to the tenants in that subtree. A tenant resolves
-`_routing_profile: X` against the profiles defined at its own level or an ancestor's. A
-profile name is **unique across the whole tree**: the same name defined in two files is an
-error — including `_routing_profiles.yaml` and `.yml` both at the root (today the later file
-silently overrides; this is a behaviour change).
+- A subdirectory's `_routing_defaults` may not write `receiver` or `overrides` as `null` (exit 2); otherwise every tenant in the subtree without its own receiver would lose its route.
+- `_routing_enforced` (the route the platform enforces) is accepted only at the root; in a subdirectory it exits 2. An enforced route scoped to one subtree is not supported today; it will be reconsidered when a customer or team explicitly needs an on-call (NOC) route that applies to one subtree only.
+- A routing profile (`_routing_profiles.yaml`) may live in a subdirectory and is visible only to tenants at that level and below; a name may be defined only once in the whole tree, and a duplicate exits 2.
+- A domain policy (`_domain_policy.yaml`) may live in a subdirectory and constrains only that subtree; naming a tenant outside the subtree has no effect — an error with `--strict` (exit 1), a WARN otherwise. Policies of different levels stack: a tenant must satisfy each of them.
+- The same tenant id declared in two files exits 1.
 
-**(d) Domain policies.** `_domain_policy.yaml` / `.yml` may sit in a subdirectory and
-applies only within its subtree. A subtree policy whose `tenants:` names a tenant outside
-that subtree is an **error** (ERROR under `--strict`, WARN otherwise), with a message
-distinct from "tenant not found anywhere". Policies at different levels are judged
-**additively**: a tenant must satisfy every policy that applies to it, so a subtree can
-only tighten.
+### 10. When the effective config and `/metrics` disagree
 
-**(e) Duplicate tenant id.** The same tenant id declared in more than one file is a
-**blocking error** in the routing plane too, aligning with Go
-`DuplicateTenantError` and `validate_config.check_tenant_uniqueness`. The rc is **1**, not 2:
-this refusal landed first with [#2315](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/2315)
-(`_refuse_duplicate_tenants`, which calls validate-config's own scan, rc 1 in every mode) and
-runs before the other tree-shape refusals; this amendment adopts it rather than adding a second
-spelling.
+On the same tree, `/effective` and `/metrics` can give different values — for example a subdirectory value the root does not declare, or a file with broken syntax. The decisions:
 
-**(f) Out of scope.** The `tenants:` block of a platform (`_`) file in a subdirectory stays
-unread by every plane (item 1 above); the route generator WARNs about it the way the
-exporter does.
-
-**Replaces the #2326 step-1 stopgap.** The stopgap failed the generator with rc 2 whenever a
-subdirectory held a config file. Once the tree is read, that is no longer an error; the
-blocking conditions become: `_routing_enforced` in a subdirectory file → rc 2; a duplicate
-tenant id → rc 1 (see (e)); `receiver` or `overrides` written as `null` in a subdirectory level's
-`_routing_defaults` → rc 2 (see (a)); the (c) and (d) errors as stated above.
-
-### Amendment 2026-10-08 (#2296): `effective` is the verbatim view of what was written; what `/metrics` does not serve, within scope, is named key by key
-
-Context: on one tree, `/effective` (tenant-api, `da-guard effective`) and `/metrics` gave different
-values — the exporter drops the whole root `_defaults.yaml` when its `defaults:` holds a non-number,
-falls back to a shallower level for a subtree value that is not threshold-shaped, and serves the
-default for a tenant value written with an inline merge key (`<<:`) it cannot parse, while
-`/effective` showed the written value ([#2296](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/2296)).
-
-Decision:
-
-1. **`effective` is the verbatim view of what was written.** `effective_config` keeps every layer's
-   value as written, neither dropped nor rewritten; a value `/metrics` does not serve from the
-   sources below is named, per tenant, in `not_served` with its reason (a closed set:
-   `parse_failed`, `root_defaults_unwrapped`, `value_rejected`, `value_unparsed`,
-   `value_unparsed_dropped`, `undeliverable`, `root_null_undeclared`; [#2065](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/2065)
-   added `window_invalid`: a schedule window the exporter does not accept, which never applies) and the file of the value
-   shown: the defaults chain (a file the exporter drops whole, a value the subtree overlay refuses,
-   a subtree key that cannot be delivered, a key the root writes as null), a root `_defaults.yaml`
-   without its `defaults:` wrapper (judged by the same predicate as da-guard's
-   `root_defaults_unwrapped`, so a key another tool reads from the top level, such as
-   `_routing_defaults`, is not named), and a value in a platform `tenants:` entry or the tenant
-   file that does not parse. ⚠️ Out of scope and **not** named today: a profile-layer value the
-   exporter discards (e.g. `pg_connections: abc` in `_profiles.yaml` — `effective_config` shows
-   `abc`, `/metrics` serves nothing), and an expired (`expires:`) override — an empty `not_served`
-   does not mean `/metrics` serves what `effective_config` shows.
-2. **Every reason is the `/metrics` path's own verdict**, recorded where the exporter's build
-   (`BuildFlatConfig`: a file dropped whole, a root top-level key not read, a value the subtree
-   overlay refuses) and its resolver (a value it cannot parse, in the branches that already WARN)
-   make it; `effective` only answers whose value it shows — which layer, which file — and looks
-   that up. It must **not** be inferred by comparing the two outputs: a legitimate `"60:critical"`
-   is written differently from what is served, so a value comparison misjudges it; nor by parsing
-   stderr.
-3. **A defaults chain file `/metrics` skips does not make the request or the tenant disappear.**
-   A chain file with a syntax error, which the exporter does not read at all, is read as empty;
-   the tenant is still answered and the file named in `chain_parse_failed`. tenant-api
-   `/effective` answers HTTP 200 (500 before) and `da-guard effective` exits 3 (the `parse_failed`
-   convention). `merged_hash` is computed over the chain without that file. `da-guard`'s main gate
-   (`ScopeEffective`) is unchanged and still stops on such a file as a decode error.
-4. **Keys keep the author's spelling.** A #1231 retired spelling (e.g. `mysql_cpu`) is not
-   `not_served`: `/metrics` serves the same threshold under the canonical name; `served-values`'
-   `aliases` maps one spelling to the other.
-
-## Alternatives Considered
-
-### A: Single-Hash (source_hash only)
-
-❌ Cannot determine which tenants are actually affected when `_defaults.yaml` changes,
-forcing full reload. Reload storms are unacceptable in 1000+ tenant environments.
-
-### B: fsnotify / inotify
-
-❌ Event loss in container mounts (NFS/FUSE/projected volume) is a known issue.
-Kernel watch limits (default 8192) are exhausted in thousand-tenant environments.
-Measured cost of the periodic scan is in
-[`benchmarks.en.md` §1](../benchmarks.en.md#1-scale-how-many-tenants): at **1000 tenants**, a cold full
-load takes **112 ms** and a steady-state reload **1.3 ms**. ⚠️ The "< 200ms for 2000 tenants"
-figure in this ADR's earlier text has no locatable source in the repo and has been replaced
-with the numbers that can actually be checked.
-
-### C: Array Concat (Instead of Replace)
-
-❌ `group_by: [severity]` (L0) + `group_by: [alertname]` (L1)
-→ concat result `[severity, alertname]` has unclear semantics.
-Users expect "I overrode group_by" not "I appended to it."
-Replace semantics are more intuitive and consistent with Helm values merge behavior.
-
-### D: Widen the domain of `effective` (merge the siblings in) — REJECTED
-
-❌ This is the intuitive fix proposed in
-[#1516](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/1516): since
-platform-level changes are invisible on the diagnostic surface, merge the sibling keys
-(`state_filters` / `_routing_defaults` and friends) into `effective` too. **Three reasons,
-equally load-bearing, all measured**:
-
-1. **It would manufacture reload-attribution noise.** `merged_hash` is the input to reload
-   **attribution** and to the blast-radius signal: `classifyTenant` in `config_debounce.go`
-   uses it to decide whether
-   a defaults change is recorded as `applied` (`IncReloadTrigger`) or as `shadowed` /
-   `cosmetic`. Merging the siblings in would flip every tenant from `cosmetic` to `applied` on
-   every platform routing edit, and increment
-   `da_config_reload_trigger_total{reason="defaults"}` each time — while the reason this ADR
-   exists is the question above, how to avoid a reload storm. **It shares its root with why
-   alternative A was rejected (both live on the reload-attribution line), but the problem
-   differs**: A's rejection reads verbatim "Cannot determine which tenants are actually affected
-   when `_defaults.yaml` changes, forcing full reload. Reload storms are unacceptable in
-   1000+ tenant environments." The
-   problem here is purely **attribution** — mislabelling **the tick that already happens** from
-   `cosmetic` to `applied`. Both `defaultsChanged` branches of `classifyTenant` have already
-   run `recomputeMergedHash`, and `installNewHierarchyState` runs unconditionally, so merging
-   the siblings in changes the labels and counters, not the amount of loading.
-   ⚠️ **Which surfaces a tension this ADR never states**: hierarchical mode **already runs
-   `fullDirLoad` on every tick**. What dual-hash buys is **attribution**, not saved loading —
-   §A's "can only reload everything" is stale as a description of today's implementation. ⚠️ Precisely: tenants are
-   **already** fed into the `da_config_blast_radius_tenants_affected` histogram on every tick;
-   what would change is the `effect` label and whether the counter increments, not whether they
-   are recorded at all.
-
-2. **It would invalidate every existing snapshot at once.** `merged_hash` is the comparison
-   value for `da-tools tenant-verify --expect-merged-hash`; widening the domain makes all
-   existing snapshots mismatch.
-
-3. **deep_merge cannot express the semantics.** `_routing_defaults` is overridden by `_routing`
-   — a **different key name** — as a top-level shallow overwrite (`merge_routing_with_defaults`
-   in `_grar_merge.py`), not a same-key deep merge. Measured: one edit to the platform
-   `_routing_defaults.group_wait` records all 5 tenants as affected, yet the one tenant carrying
-   its own `_routing` sees **no change at all** to its actual route — that attribution is
-   provably false.
-
-**Two findings back this decision — the first is a measurement with a control that DID move**:
-
-- Applying a sibling key does not depend on `merged_hash`. In the wrapped shape, changing only
-  `state_filters.<filter>.severity` takes effect while `merged_hash` stays byte-identical; the
-  control (changing a key under `defaults:` that the tenant does not override) does move the
-  hash. ⚠️ In the wrapper-less shape the same edit moves **every** tenant's hash (see Known
-  reachable exceptions, 1).
-- Neither load path is gated on `merged_hash`: in flat mode any change to a `_`-prefixed file
-  takes the full-rebuild path (`isTenantOnlyChange` in `config.go`), and in hierarchical mode
-  `installNewHierarchyState` runs `fullDirLoad` every time. ⚠️ The flat path does have a
-  composite-hash (one per directory) no-op fast path that returns early
-  (`compositeHash == prevHash` in `config.go`) — that is a **different hash**.
-
-⚠️ **The `_routing` family's status toward the exporter is asymmetric and worth recording**:
-`_routing_defaults` has no corresponding `ThresholdConfig` field and is dropped at decode time,
-whereas tenant-level `_routing` **is** loaded into `ThresholdConfig.Tenants` (`resolveBaseRows`
-has to skip the `_routing*` prefix explicitly precisely because it sits in that map) — but **no
-production caller consumes it**: `ResolveRouting()` is called only from tests, and `types.go`
-states verbatim that it "is currently not called by the exporter", retained as a guardrail
-reference implementation. It does have **known** real consumers in the repo (not exhaustive): the four-layer merge in
-`generate_alertmanager_routes.py`, and `cmd/da-guard`, which reads `EffectiveConfig["_routing"]`
-to build `RoutingByTenant`.
+1. **The effective config shows the value each level wrote, verbatim, deleting and changing nothing.** A value `/metrics` does not serve is named key by key in each tenant's `not_served`, with the reason and the file of the value shown. The reasons are a closed set; the full list is in [the CLI reference for `da-guard effective`](../cli-reference.en.md#guard).
+2. **Reasons come from the exporter's own verdicts while loading and resolving, never from comparing the two outputs.** A legal spelling's text and the served value can differ by design (for example `"60:critical"`), so comparing values would misjudge.
+3. **An empty `not_served` does not mean `/metrics` serves what the effective config shows.** For example, when a tenant override has expired (`expires:`), the effective config shows the text as written, `/metrics` serves the platform default, and `not_served` is still empty.
+4. **A `_defaults.yaml` on the chain with broken syntax does not make the tenant disappear.** The exporter does not read that file; `/effective` reads it as empty, still returns the tenant and lists the file in `chain_parse_failed`, and `merged_hash` is computed over the chain without it. tenant-api answers HTTP 200, `da-guard effective` exits 3, and da-guard's main check also stops with exit 3.
+5. **Keys keep the author's spelling.** A retired spelling (for example `mysql_cpu`) is not `not_served`: `/metrics` serves the same threshold under its current name, and `da-guard served-values`' `aliases` maps the two spellings.
 
 ## Consequences
 
-- **Directory Scanner Go code**: New inheritance graph + dual-hash + debounce logic
-- **CLI**: New `describe-tenant` command expands effective config + shows inheritance sources
-- **Tenant API**: New `GET /api/v1/tenants/{id}/effective` endpoint
-- **Schema**: new `platform-defaults.schema.json` for `_defaults*.yaml`. ⚠️ **Not** an upgrade to `tenant-config.schema.json` — that file's root has only `tenants` with `additionalProperties: false` and structurally cannot express platform defaults; the routing lives in `check_confd_schema.py`
-- **Benchmark**: Thousand-tenant + multi-layer inheritance scan performance compared against the v2.7.0 planning baseline (validated)
+- **Benefits**: a default is written once and the whole subtree inherits it; each defaults change is classified per tenant as applied / shadowed / cosmetic, so the blast-radius report shows whom a change really affected.
+- **Costs**:
+  - Changes to top-level keys such as the root's `_routing_defaults` and `state_filters` are invisible in the effective config (Decision 8).
+  - A comment-only edit of a tenant file is recorded as applied (Decision 7).
+  - `_custom_alerts` differs between `describe_tenant.py` and the Go implementation (Decision 2).
+  - A subdirectory file without `defaults:` is merged whole, so its top-level keys (such as `state_filters`) also enter the effective config: changing one moves the `merged_hash` of every tenant in that subtree. `rule-packs/recipes/examples/conf.d/finance/_defaults.yaml` has this shape (its only top-level key is `_custom_alerts`).
+
+## Alternatives Considered
+
+### A: A single hash (tenant file only)
+
+❌ When defaults change, it cannot tell which tenants were really affected and must record every tenant as affected, which makes the blast-radius report meaningless. The exporter rebuilds the whole config on every reload, so what the dual hash buys is correct attribution, not saved loading work.
+
+### B: File-system events (inotify / fsnotify) instead of periodic scans
+
+❌ On directories mounted into a container (ConfigMap projected volumes, NFS, FUSE), file-change events are unreliable; the kernel also limits how many watches a user may hold (`fs.inotify.max_user_watches`), which a thousand-tenant tree can exhaust. The measured cost of periodic scanning is in [benchmarks §1](../benchmarks.en.md#1-scale-how-many-tenants).
+
+### C: Concatenate lists instead of replacing them
+
+❌ With `group_by: [severity]` above and `group_by: [alertname]` below, concatenation gives `[severity, alertname]`, whose meaning is unclear. Someone writing `group_by` means "use this instead", not "add this".
+
+### D: Merge top-level keys such as `_routing_defaults` and `state_filters` into the effective config too
+
+❌ This is the most direct way to make the changes of Decision 8 visible, but three reasons rule it out:
+
+1. **Attribution would be wrong.** `merged_hash` decides whether a change is recorded as applied, shadowed or cosmetic. With them merged in, every platform routing edit would record every tenant as applied and increment `da_config_reload_trigger_total{reason="defaults"}`, while the actual loading work stays the same (the whole config is rebuilt every time anyway).
+2. **Every stored hash would break.** `merged_hash` is the value `tenant-verify --expect-merged-hash` compares against; changing its definition makes every stored value mismatch.
+3. **A deep merge cannot express routing's semantics.** A tenant's `_routing` overrides `_routing_defaults` top-level key by top-level key; it is not a same-key deep merge. When the platform's `group_wait` changes, a tenant with its own `_routing.group_wait` keeps exactly the same route; a deep merge would still move its `merged_hash` and record it as affected.
+
+These keys do not need `merged_hash` to take effect: changing only `state_filters`' severity changes `user_state_filter` on `/metrics` while `merged_hash` stays put; as a control, changing a key under `defaults:` moves the `merged_hash` of every tenant that does not override it.
+
+## Scope of Impact
+
+- **threshold-exporter**: dual hash, debouncing, periodic scans, the `da_config_*` metrics.
+- **CLI**: `describe_tenant.py` expands the effective config; `--show-sources` shows where each value came from.
+- **tenant-api**: `GET /api/v1/tenants/{id}/effective`.
+- **Schema**: `_defaults*.yaml` is checked against `platform-defaults.schema.json`, tenant files against `tenant-config.schema.json`.
 
 ## Related
 
-- [ADR-016: conf.d/ Directory Hierarchy + Mixed Mode](016-conf-d-directory-hierarchy-mixed-mode.en.md)
-- [Benchmark Report §1 Scale](../benchmarks.en.md#1-scale-how-many-tenants) — dual-hash 1000-tenant measurements + SLO interpretation
-- [architecture-and-design.md §Design Concepts](../architecture-and-design.en.md#design-concepts-overview)
+- [ADR-016: conf.d/ directory hierarchy + mixed mode](016-conf-d-directory-hierarchy-mixed-mode.en.md)
+- [ADR-024: Declarative dimensional alerting engine](024-version-aware-threshold-via-dimensional-label.en.md) — `_custom_alerts`
+- [CLI reference: da-guard](../cli-reference.en.md#guard) — `served-values`, `effective` and the list of `not_served` reasons
+- [Benchmark Report §1 Scale](../benchmarks.en.md#1-scale-how-many-tenants)
+- [architecture-and-design §Design concepts](../architecture-and-design.en.md)
+- Open questions: [#1516](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/1516) (comparing platform top-level key changes), [#1549](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/1549) (`_custom_alerts` differs between implementations)

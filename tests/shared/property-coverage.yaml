@@ -259,6 +259,14 @@ modules:
       visible_routing_profiles: "#2326 union of the profiles on the chain; example-covered by test_generate_routes_nested_tree.py and the hier-c parity trees"
       skipped_entry_warning: "#2489 one-line constructor marking a dropped-entry line as SkippedEntryWarning (text unchanged), the type blocking_generation_errors tests; per-producer equivalence, mark-survives-to-every-caller and the unwrapped-literal guard pinned by test_grar_skipped_entry_warning.py"
       replaced_value_warning: "#2490 one-line constructor marking a replaced-value line as ReplacedValueWarning (text unchanged), blocking_generation_errors' fourth category; pinned by test_grar_am_duration.py and test_grar_skipped_entry_warning.py::test_value_alertmanager_refuses_blocks_by_its_own_type"
+      _severity_of: "#2766 three-way prefix read (ERROR / WARN / else) of a line's own level word; example-pinned by test_grar_findings.py::test_blocks_restates_todays_rule over every fixture line"
+      _rebuild_finding: "#2766 pickle/copy reconstructor (cls(text, **attrs)); round-trip pinned by test_grar_findings.py::test_finding_keeps_text_type_and_fields"
+      Finding._attrs: "#2766 dict of the seven Finding slots; pinned through as_record / copy / pickle in test_grar_findings.py"
+      Finding.with_text: "#2766 same finding with an escaped text; pinned by test_grar_findings.py::test_finding_keeps_text_type_and_fields"
+      Finding.as_record: "#2766 --findings-json record (fields + leading-indent-stripped message); every record of every fixture checked by test_grar_findings.py::test_document_shape_and_printed_lines"
+      unclassified: "#2766 wraps a not-yet-classified line (Finding passes through); its call sites are the shrink-only baseline pinned by test_grar_findings.py"
+      as_finding: "#2766 writer fallback for a plain str (unclassified, never); the guard test_every_stream_and_refusal_line_is_a_finding keeps it unreached"
+      _exactly_one_kind: "#2766 kind of a receiver exactly-one problem from the same field states (invalid / missing / conflicting); closed case list pinned by test_grar_findings.py::test_receiver_kinds_follow_the_field_states"
 
   scripts/tools/ops/_grar_validate.py:
     covered:

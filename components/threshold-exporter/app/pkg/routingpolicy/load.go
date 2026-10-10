@@ -1386,7 +1386,7 @@ func LoadRoot(configDir string, skip func(rel string) bool) (Layers, []Policy, [
 // the `_routing_enforced` block the generator renders from (Tree.Enforced,
 // #2503: the last root file, in name order, that enables one).
 //
-// #2326 (ADR-007 amendment 2026-09-28 (c)): a profile name is unique across
+// #2326 (ADR-017 Decision 9): a profile name is unique across
 // the tree, so a second root file defining it (`_routing_profiles.yml` beside
 // `.yaml`) is ProblemRoutingProfileDuplicate and the FIRST definition, in name
 // order, is kept — before, the later file silently replaced it.

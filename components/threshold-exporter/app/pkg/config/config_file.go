@@ -31,13 +31,11 @@ import (
 // content gets the same verdict on every plane.
 //
 // ⚠️ THAT IS A STATEMENT ABOUT ONE FILE'S BYTES, NOT "THE PLANES ALWAYS HOLD
-// THE SAME TENANTS". Two known exceptions, both pre-existing and tracked:
-//   - the exporter's incremental tenant-only reload (package main's
-//     patchTenants) KEEPS a now-rejected file's last good values on /metrics
-//     and in its committed hierarchy (tenantSources), while the stateless readers here
-//     (ResolveEffective → tenant-api, ScopeEffective → da-guard) have no
-//     prior and answer not-found — #1980, pinned by package main's
-//     TestOneTenantSet_KnownException_IncrementalKeepsLastGood;
+// THE SAME TENANTS". One known exception, pre-existing and tracked (a second,
+// the exporter's incremental tenant-only reload keeping a now-rejected file's
+// last good values, was removed by #1980 — package main's
+// TestOneTenantSet_IncrementalDropsABrokenFileLikeTheStatelessReaders pins
+// that it agrees with ResolveEffective / ScopeEffective now):
 //   - a `_`-prefixed platform file declaring `tenants:` is never parsed for
 //     tenants by the walker, but the flat plane merges its `tenants:` block,
 //     so /metrics serves a tenant /effective does not know — #1982.

@@ -126,6 +126,7 @@ lang: zh
 | `vibe-subagent-review` | 副檔名路由 review（code spec→quality / IaC blast-radius）、收 review 處置、長時 agent ledger | 補集 #448：機械層單檔 SAST 由 #448，本 skill 顧跨檔 cascade（TRK-305） |
 | `vibe-release` | 六線版號 release 收尾 SOP | #474 機械化 Layer 1/2；`draft-advisory-check` 只在本地 `make pre-tag` 路徑，直接 push tag 仍繞過（TRK-306） |
 | `vibe-brainstorm` | 設計階段五問 + locked decision + 外審 | 無對應 hook（TRK-308） |
+| `vibe-adr-writing` | ADR 寫作：讀者要帶走的五件事、要拿掉的代號與歷史敘事、自檢清單 | 無擋下的 hook；編輯 `docs/adr/**` 時 paths-map 注入提醒（#2789） |
 | `vibe-converge` | 多輪修正：decidability gate、跨輪三類、停止規則、`ROUNDS.jsonl` | 刻意無 hook：`make converge-status` 只觀測不擋（TRK-360） |
 | `vibe-security-audit` | 週期性深度安全稽核 harness | 與 diff-scoped `/security-review` 互補、不進 CI（#1001） |
 

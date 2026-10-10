@@ -732,33 +732,29 @@ func TestPlatformTenantOverlayReloadMatchesFreshLoad(t *testing.T) {
 	}
 }
 
-// TestPlatformOrphanWarnFollowsWhatIsServed: a tenant file that turns
-// unparseable keeps its tenant on the last good values on the incremental
-// patch path (the fail-safe, #1980) — platform-supplied keys included. The
-// orphan WARN must not then claim the platform entry is ignored while the
-// same commit serves it.
+// TestPlatformOrphanWarnFollowsWhatIsServed: the orphan WARN names exactly
+// the platform entries the same commit does not serve. A tenant file that
+// turns unparseable drops its tenant on every reload path (#1980), so its
+// platform entry is then an orphan and the WARN must say so.
 //
-// ⚠️ TWO TREES, TWO ANSWERS, ONE RULE (#1577). The watch path reaches the
-// patch path only for a tree with no `_defaults` carrier: the flat leg, whose
-// per-tenant platform values live in `_profiles.yaml`, keeps tx. With a
-// carrier every reload is the hierarchical path's full flat rebuild, which
-// drops tx as a restart does — so that leg asserts the other half of the
-// rule: tx is not served, and the WARN does say its platform entry is
-// ignored. (This leg used to drive the removed `IncrementalLoad()` and assert
-// the fail-safe on the carrier tree too: a state the watch path never
-// produces.)
+// ⚠️ TWO TREES, ONE ANSWER (#1980). The watch path reaches the incremental
+// patch path only for a tree with no `_defaults` carrier (the flat leg, whose
+// per-tenant platform values live in `_profiles.yaml`); with a carrier every
+// reload is the hierarchical path's full flat rebuild. Until #1980 the flat
+// leg kept tx on its last good values (the patch path's fail-safe) and
+// asserted NO orphan WARN; the owner removed that fail-safe, so both legs now
+// drop tx, as a restart does, and both expect exactly one WARN.
 func TestPlatformOrphanWarnFollowsWhatIsServed(t *testing.T) {
 	t.Parallel()
 	cases := []struct {
-		name       string
-		platform   string
-		body       string
-		wantServed bool
+		name     string
+		platform string
+		body     string
 	}{
 		{"carrier (hierarchical path drops it)", "_defaults.yaml",
-			"defaults:\n  mysql_connections: 80\ntenants:\n  tx:\n    mysql_connections: \"60\"\n", false},
-		{"flat-profiles (patch path keeps it)", "_profiles.yaml",
-			"tenants:\n  tx:\n    mysql_connections: \"60\"\n", true},
+			"defaults:\n  mysql_connections: 80\ntenants:\n  tx:\n    mysql_connections: \"60\"\n"},
+		{"flat-profiles (patch path drops it too, #1980)", "_profiles.yaml",
+			"tenants:\n  tx:\n    mysql_connections: \"60\"\n"},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
@@ -773,7 +769,7 @@ func TestPlatformOrphanWarnFollowsWhatIsServed(t *testing.T) {
 			if got := m.GetConfig().Tenants["tx"]["mysql_connections"].Default; got != "60" {
 				t.Fatalf("load: tx mysql_connections=%q, want the platform's 60", got)
 			}
-			if tc.wantServed {
+			if tc.platform != "_defaults.yaml" {
 				requireFlatWatchPath(t, m)
 			}
 			buf.Reset()
@@ -784,22 +780,13 @@ func TestPlatformOrphanWarnFollowsWhatIsServed(t *testing.T) {
 			}
 			ov, served := m.GetConfig().Tenants["tx"]
 			lines := logLinesWith(buf.String(), orphanAnchor)
-			if !tc.wantServed {
-				if served {
-					t.Fatalf("tx served (%v) after its only file stopped parsing on the hierarchical path — "+
-						"this leg's premise is gone", ov)
-				}
-				if len(lines) != 1 {
-					t.Errorf("tx is not served, so its platform entry is ignored — want exactly one orphan WARN, got %d: %q",
-						len(lines), lines)
-				}
-				return
+			if served {
+				t.Fatalf("tx served (%v) after its only file stopped parsing — "+
+					"a broken tenant file must drop its tenants on every reload path (#1980)", ov)
 			}
-			if !served || ov["mysql_connections"].Default != "60" || ov["redis_x"].Default != "1" {
-				t.Fatalf("fail-safe not in effect (served=%v, %v) — this test's premise is gone", served, ov)
-			}
-			if len(lines) != 0 {
-				t.Errorf("tx is still served with the platform value, yet: %q", lines)
+			if len(lines) != 1 {
+				t.Errorf("tx is not served, so its platform entry is ignored — want exactly one orphan WARN, got %d: %q",
+					len(lines), lines)
 			}
 		})
 	}

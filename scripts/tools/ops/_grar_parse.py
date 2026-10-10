@@ -48,6 +48,7 @@ from _lib_confd import (  # noqa: E402
 
 from _grar_merge import (  # noqa: E402
     ROOT_LEVEL,
+    Finding,
     _substitute_tenant,
     chain_levels,
     domain_policy_levels,
@@ -55,6 +56,7 @@ from _grar_merge import (  # noqa: E402
     policy_reaches,
     resolve_routing_defaults,
     skipped_entry_warning,
+    unclassified,
     visible_routing_profiles,
 )
 from _grar_validate import (  # noqa: E402
@@ -162,6 +164,9 @@ def _drop_unusable_policy(fname: str, reason: str, remedy: str, result: dict,
         # hand-built result dict.
         result.setdefault("policy_file_errors", []).append(
             detail.replace("\n", " "))
+        # #2766: the file of each record above, by index — the record is
+        # text, and a finding's `file` is never parsed back out of text.
+        result.setdefault("policy_file_error_files", []).append(fname)
     # #1538: escape at the PRINT, not in `detail` above — `detail` lands in
     # result["policy_file_errors"] -> schema_warnings -> validate-config
     # --json, whose bytes must not change (json.dumps already escapes).
@@ -296,7 +301,9 @@ def _parse_platform_config(data: dict, fname: str, result: dict) -> None:
                 result.setdefault("routing_defaults_errors", []).append(
                     skipped_entry_warning(f"  WARN: _routing_defaults in {fname}: 'routes' is not "
                                           "supported here (define it in a routing profile or the "
-                                          "tenant's _routing), skipping"))
+                                          "tenant's _routing), skipping",
+                                          kind="routing_defaults_routes_ignored", file=fname,
+                                          field="_routing_defaults.routes"))
             result["routing_defaults"] = rd
         else:
             print(f"  WARN: _routing_defaults in {_f} ignored "
@@ -322,7 +329,9 @@ def _parse_platform_config(data: dict, fname: str, result: dict) -> None:
                     skipped_entry_warning(f"  WARN: _routing_enforced in {fname}: 'enabled' must be "
                                           f"a YAML boolean (true / false), got "
                                           f"{type(enabled).__name__} {enabled!r} — platform-enforced "
-                                          f"(NOC) routing is NOT enabled, skipping"))
+                                          f"(NOC) routing is NOT enabled, skipping",
+                                          kind="routing_enforced_enabled_invalid",
+                                          file=fname, field="_routing_enforced.enabled"))
             else:
                 print(f"  WARN: _routing_enforced in {_f} must be a dict "
                       "with 'enabled: true', ignoring", file=sys.stderr)
@@ -340,7 +349,9 @@ def _routing_defaults_not_mapping(fname: str, value: object,
     since #2412) and the finding is blocking: a ``WARN … skipping`` line in
     every mode, an ERROR under ``--strict`` (``load_tenant_tree``)."""
     result.setdefault("routing_defaults_errors", []).append(
-        skipped_entry_warning(f"  WARN: {routing_defaults_not_mapping_text(fname, value)}, skipping"))
+        skipped_entry_warning(f"  WARN: {routing_defaults_not_mapping_text(fname, value)}, skipping",
+                              kind="routing_defaults_not_mapping", file=fname,
+                              field="_routing_defaults"))
     result.setdefault("routing_defaults_not_mapping", []).append(
         (fname, value))
 
@@ -407,7 +418,7 @@ def _refuse_nested_enforced(fname: str, result: dict) -> None:
         result, "routing_enforced_below_root", fname, "_routing_enforced",
         f"{fname}: _routing_enforced is read only at the conf.d root — a "
         f"NOC route scoped to one subtree is not supported (ADR-017 "
-        f"amendment 2026-09-28 (b)); move it to a root platform file or "
+        f"Decision 9); move it to a root platform file or "
         f"delete it")
 
 
@@ -428,15 +439,16 @@ def _parse_nested_config(data: dict, fname: str, level: str,
                          is_level_carrier: bool, result: dict) -> None:
     """The routing-plane keys of one file BELOW the conf.d root (#2326).
 
-    ADR-017 "Amendment 2026-09-28":
+    ADR-017 Decision 9:
 
-    * (a) `_routing_defaults` is read from the directory's defaults CARRIER
+    * `_routing_defaults` is read from the directory's defaults CARRIER
       only (the one `_defaults.yaml` / `.yml` the threshold chain reads), at
       the top level of the document, and joins the chain of the tenants at
       and below that directory. `receiver` / `overrides` written as null
       there is blocking: every tenant below without its own would lose it.
-    * (b) `_routing_enforced` in ANY file below the root is blocking.
-    * (c), (d) profiles and policies: `_parse_profiles_and_policies`.
+    * `_routing_enforced` in ANY file below the root is blocking.
+    * routing profiles and domain policies below the root:
+      `_parse_profiles_and_policies`.
     * the carrier's `defaults:` widens the key universe of the tenants below
       it (validate_tenant_keys), as the root carrier's does for every tenant.
     """
@@ -458,7 +470,9 @@ def _parse_nested_config(data: dict, fname: str, level: str,
                 skipped_entry_warning(f"  WARN: _routing_defaults in {fname} is not read: below the "
                                       f"conf.d root only the directory's defaults carrier "
                                       f"(_defaults.yaml / _defaults.yml) carries it — move it there, "
-                                      f"skipping"))
+                                      f"skipping",
+                                      kind="routing_in_unread_location", file=fname,
+                                      field="_routing_defaults"))
             _tree_problem(
                 result, "routing_in_unread_location", fname,
                 "_routing_defaults",
@@ -479,7 +493,9 @@ def _parse_nested_config(data: dict, fname: str, level: str,
                 result.setdefault("routing_defaults_errors", []).append(
                     skipped_entry_warning(f"  WARN: _routing_defaults in {fname}: 'routes' is not "
                                           "supported here (define it in a routing profile or the "
-                                          "tenant's _routing), skipping"))
+                                          "tenant's _routing), skipping",
+                                          kind="routing_defaults_routes_ignored", file=fname,
+                                          field="_routing_defaults.routes"))
             for key in ("receiver", "overrides"):
                 if key in rd and rd[key] is None:
                     _tree_problem(
@@ -489,7 +505,7 @@ def _parse_nested_config(data: dict, fname: str, level: str,
                         f"the conf.d root that takes the {key} away from "
                         f"every tenant under {level}/ that does not set its "
                         f"own, and their alerts fall silently to the "
-                        f"catch-all (ADR-017 amendment 2026-09-28 (a)); set "
+                        f"catch-all (ADR-017 Decision 9); set "
                         f"a value or remove the key")
             result.setdefault("routing_defaults_levels", {})[level] = rd
 
@@ -855,7 +871,7 @@ def _parse_config_files(config_dir: str) -> dict:
         print(f"ERROR: config directory not found: {config_dir}", file=sys.stderr)
         sys.exit(EXIT_CALLER_ERROR)
 
-    # #2326 (ADR-016/017 "Amendment 2026-09-28"): this reader walks the WHOLE
+    # #2326 (ADR-016 "Amendment 2026-09-28", ADR-017 Decision 9): this reader walks the WHOLE
     # tree, with the walker every other reader of the threshold plane uses
     # (`list_config_tree`: hidden directories pruned, directory symlinks
     # reported). Until #2326 it was flat — a tenant in a subdirectory got no
@@ -1061,7 +1077,7 @@ def _parse_config_files(config_dir: str) -> dict:
             continue
 
         # #2326 (f): the `tenants:` block of a platform file BELOW the root is
-        # read by no plane (ADR-017 item 1); threshold-exporter WARNs about
+        # read by no plane (ADR-017 Decision 5); threshold-exporter WARNs about
         # it, and so does this reader now that it opens the file.
         if level != ROOT_LEVEL and is_reserved_name(path_p.name):
             if data.get("tenants"):
@@ -1413,8 +1429,10 @@ def load_tenant_tree(
     # #2326: the blocking routing-tree findings come FIRST in the stream, so a
     # reader of --validate / validate-config sees why the tree is refused
     # before the findings that follow from it.
+    # #2766: each one a Finding with the record's own kind / file / field.
     schema_warnings = [
-        f"  {ROUTING_TREE_ERROR_PREFIX} {msg}"
+        Finding(f"  {ROUTING_TREE_ERROR_PREFIX} {msg}", kind=kind,
+                blocks="always", file=_f, field=_fld)
         for kind, _f, _fld, msg in parsed.get("routing_tree_problems", [])
         if kind in BLOCKING_TREE_KINDS]
 
@@ -1427,8 +1445,9 @@ def load_tenant_tree(
         for d in chain_levels(tenant_dirs.get(tenant, ROOT_LEVEL)):
             universe |= by_dir_keys.get(d, set())
         schema_warnings.extend(
-            validate_tenant_keys(tenant, keys, universe,
-                                 parsed["optional_override_keys"]))
+            unclassified(w, blocks="never")
+            for w in validate_tenant_keys(tenant, keys, universe,
+                                          parsed["optional_override_keys"]))
 
     # v2.1.0 ADR-007: Validate profile references
     schema_warnings.extend(_validate_profile_refs(parsed))
@@ -1447,7 +1466,8 @@ def load_tenant_tree(
     # #2341 R8: a tenant id the routing plane refuses — nothing rendered.
     invalid_ids = sorted(set(parsed.get("invalid_tenant_ids", [])), key=str)
     for tenant in invalid_ids:
-        schema_warnings.append(skipped_entry_warning(f"  WARN: {invalid_tenant_id_text(tenant)}, skipping"))
+        schema_warnings.append(skipped_entry_warning(f"  WARN: {invalid_tenant_id_text(tenant)}, skipping",
+                                                     kind="invalid_tenant_id", tenant=tenant))
 
     # v2.1.0 ADR-007: Validate domain policies against resolved routing.
     # #2326 (d): a policy file below the root applies to the tenants of its
@@ -1469,8 +1489,10 @@ def load_tenant_tree(
                 reachable, policies, strict=strict_policies))
             continue
         source = policy_level_source(parsed, level)
-        msgs, rows = check_policy_scope(level, policies, tenant_dirs,
-                                        source=source, strict=strict_policies)
+        msgs, rows = check_policy_scope(
+            level, policies, tenant_dirs, source=source, strict=strict_policies,
+            policy_files={d: origin[(level, d)] for d in policies
+                          if (level, d) in origin})
         schema_warnings.extend(msgs)
         for domain, tenant in rows:
             tree_problems.append((
@@ -1496,48 +1518,65 @@ def load_tenant_tree(
     # routing_group_by_invalid; tenant-api: 400); without --strict the
     # generator drops the element with a `WARN … skipping` line instead.
     if strict_policies:
+        # #2766: the strict twins of classified lines carry the same kind
+        # (da-guard's), so a finding's kind never depends on --strict.
         for tenant in invalid_ids:  # #2341 R8
-            schema_warnings.append(
-                f"  {POLICY_ERROR_PREFIX} {invalid_tenant_id_text(tenant)}")
+            schema_warnings.append(Finding(
+                f"  {POLICY_ERROR_PREFIX} {invalid_tenant_id_text(tenant)}",
+                kind="invalid_tenant_id", blocks="strict", tenant=tenant))
         # #2341 R5: the same two shapes as a blocking ERROR under --strict.
         for tenant in sorted(refused, key=str):
-            schema_warnings.append(
+            schema_warnings.append(Finding(
                 f"  {POLICY_ERROR_PREFIX} tenant '{tenant}': "
-                f"{routing_not_mapping_text(refused[tenant])}")
+                f"{routing_not_mapping_text(refused[tenant])}",
+                kind="routing_not_mapping", blocks="strict", tenant=tenant,
+                field="_routing"))
         for fname, value in parsed.get("routing_defaults_not_mapping", []):
-            schema_warnings.append(
+            schema_warnings.append(Finding(
                 f"  {POLICY_ERROR_PREFIX} "
-                f"{routing_defaults_not_mapping_text(fname, value)}")
+                f"{routing_defaults_not_mapping_text(fname, value)}",
+                kind="routing_defaults_not_mapping", blocks="strict",
+                file=fname, field="_routing_defaults"))
         for tenant, rc in sorted(routing_configs.items()):
             for fld, value in routing_values_not_string(rc):
-                schema_warnings.append(
+                schema_warnings.append(Finding(
                     f"  {POLICY_ERROR_PREFIX} "
-                    f"{value_not_string_message(tenant, fld, value)}")
+                    f"{value_not_string_message(tenant, fld, value)}",
+                    kind="routing_value_not_string", blocks="strict",
+                    tenant=tenant, field=fld))
             for fld, kind, value in routing_group_by_invalid(rc):
-                schema_warnings.append(
+                schema_warnings.append(Finding(
                     f"  {POLICY_ERROR_PREFIX} tenant '{tenant}': "
-                    f"{group_by_problem_text(fld, kind, value)}")
+                    f"{group_by_problem_text(fld, kind, value)}",
+                    kind="routing_group_by_invalid", blocks="strict",
+                    tenant=tenant, field=fld))
         # Only the enforced routes the generator renders, the `{{tenant}}`
         # shape per tenant after substitution (#2503 round 2, F1 / F4) — over
         # every tenant it recognises, routed or not (#2519).
         for ctx, idx, kind, value in enforced_group_by_problems(
                 parsed["enforced_routing"], enforced_route_tenants(
                     routing_configs, parsed["dedup_configs"])):
-            schema_warnings.append(
+            schema_warnings.append(Finding(
                 f"  {POLICY_ERROR_PREFIX} {ctx}: "
-                f"{group_by_problem_text(f'group_by[{idx}]', kind, value)}")
-        for err in parsed.get("policy_file_errors", []):
+                f"{group_by_problem_text(f'group_by[{idx}]', kind, value)}",
+                kind="routing_group_by_invalid", blocks="strict",
+                field=f"_routing_enforced.group_by[{idx}]"))
+        policy_files = parsed.get("policy_file_error_files", [])
+        for i, err in enumerate(parsed.get("policy_file_errors", [])):
             # The cause and the remedy travel with the record (see
             # _drop_unusable_policy); this line only frames the consequence.
-            schema_warnings.append(
+            schema_warnings.append(Finding(
                 f"  {POLICY_ERROR_PREFIX} domain policy file could not be "
-                f"used — every domain policy is silently dropped: {err}")
+                f"used — every domain policy is silently dropped: {err}",
+                kind="domain_policy_unusable", blocks="strict",
+                file=policy_files[i] if i < len(policy_files) else None))
         for fname in parsed.get("policy_misplacements", []):
-            schema_warnings.append(
+            schema_warnings.append(unclassified(
                 f"  {POLICY_ERROR_PREFIX} domain_policies block in "
                 f"'{fname}' is ignored (only _domain_policy.yaml is "
                 f"loaded), so those policies are not enforced — fix: move "
-                f"the domain_policies block into _domain_policy.yaml")
+                f"the domain_policies block into _domain_policy.yaml",
+                blocks="strict"))
 
     return TenantTree(
         routing_configs, parsed["dedup_configs"], schema_warnings,

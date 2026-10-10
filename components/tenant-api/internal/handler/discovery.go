@@ -27,11 +27,17 @@ package handler
 // redundant against the abuse vector the global limiter already bounds.
 
 import (
+	"log/slog"
 	"net/http"
 	"regexp"
 
 	"github.com/go-chi/chi/v5"
+	"github.com/go-chi/chi/v5/middleware"
 )
+
+// msgDiscoveryUpstream is the 502 text when the upstream Prometheus query
+// fails; the error itself (with the upstream URL) is logged (#1700).
+const msgDiscoveryUpstream = "metric discovery upstream error; the server log has the details under this request_id"
 
 // metricNameQueryPattern bounds the `?q=` prefix to the Prometheus
 // metric-name charset. Validating (not escaping) the input is the
@@ -113,8 +119,11 @@ func DiscoverMetrics(d *Deps) http.HandlerFunc {
 			// Upstream Prometheus failure (unreachable / timeout / bad
 			// response). 502 = we are a healthy proxy but the backend
 			// failed, distinct from the 503 "feature disabled" above.
-			WriteJSONError(w, r, http.StatusBadGateway,
-				"metric discovery upstream error: "+err.Error())
+			// The error is usually a *url.Error naming the internal
+			// Prometheus URL, host and IP (#1700): logged, not returned.
+			slog.Error("metric discovery upstream error", "tenant", tenantID,
+				"request_id", middleware.GetReqID(r.Context()), "error", err)
+			WriteJSONError(w, r, http.StatusBadGateway, msgDiscoveryUpstream)
 			return
 		}
 

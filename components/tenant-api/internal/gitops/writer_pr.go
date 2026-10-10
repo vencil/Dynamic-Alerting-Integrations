@@ -79,8 +79,36 @@ func (w *Writer) restoreBase(base, branch string, pushed bool) error {
 	slog.Error("gitops: failed to switch back to base branch — worktree left on feature branch (#2070)",
 		"base", base, "branch", branch, "pushed", pushed,
 		"attempts", baseRestoreAttempts, "error", err)
-	return fmt.Errorf("%w (branch %q, pushed to origin: %t, attempts: %d): %v",
-		ErrBaseRestore, branch, pushed, baseRestoreAttempts, err)
+	return &BaseRestoreError{Branch: branch, Pushed: pushed, Attempts: baseRestoreAttempts, Cause: err}
+}
+
+// BaseRestoreError is the error restoreBase returns. It unwraps to
+// ErrBaseRestore ONLY — the git error is kept in Cause and rendered with %v,
+// never wrapped, for the reason restoreBase gives.
+//
+// The fields exist so a handler can tell the operator what they need — the
+// branch, and whether it reached origin — without passing on the git error,
+// whose text can carry server paths (an index.lock path, #1700). Error() is
+// the full text, for the log.
+type BaseRestoreError struct {
+	Branch   string
+	Pushed   bool
+	Attempts int
+	Cause    error
+}
+
+func (e *BaseRestoreError) Error() string {
+	return fmt.Sprintf("%v (branch %q, pushed to origin: %t, attempts: %d): %v",
+		ErrBaseRestore, e.Branch, e.Pushed, e.Attempts, e.Cause)
+}
+
+// Unwrap makes errors.Is(err, ErrBaseRestore) hold, and nothing else.
+func (e *BaseRestoreError) Unwrap() error { return ErrBaseRestore }
+
+// Summary is Error() without the git error: what the operator needs to find a
+// branch that may be on origin with no PR/MR for it.
+func (e *BaseRestoreError) Summary() string {
+	return fmt.Sprintf("%v (branch %q, pushed to origin: %t)", ErrBaseRestore, e.Branch, e.Pushed)
 }
 
 // WritePR validates and writes a tenant config to a feature branch for PR creation.
