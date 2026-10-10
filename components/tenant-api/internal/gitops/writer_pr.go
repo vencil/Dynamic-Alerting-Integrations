@@ -404,6 +404,11 @@ func (w *Writer) WritePRBatch(ctx context.Context, ops []PRBatchOp, authorEmail 
 			if errors.Is(err, ErrMergePolicyRefused) {
 				continue
 			}
+			// #2830: likewise for the metadata write scope — the tenant's
+			// metadata on the base decides where the op lands.
+			if errors.Is(err, ErrMergeScopeRefused) {
+				continue
+			}
 			return nil, err
 		}
 	}

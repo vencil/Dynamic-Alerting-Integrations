@@ -307,6 +307,21 @@ func runBatchPR(d *Deps, rw http.ResponseWriter, r *http.Request, ops []BatchOpe
 				if err != nil {
 					return "", err
 				}
+				// #2830: the metadata write scope, judged on the fresh base
+				// the branch is cut from: merged is the tenant's file there
+				// with this request's earlier ops for it already applied, so
+				// it is the metadata the tenant will have. The per-op check
+				// (gateBatchOpPostState) read the pod's local tree, which is
+				// synced only at pod start. A refusal aborts the whole batch,
+				// as a policy refusal below does. Enforce only: in shadow the
+				// verdict is "allow" anyway, and this closure also runs in
+				// WritePRBatch's pre-flight over the local tree without the
+				// earlier ops, where it would record a would-deny for a write
+				// enforce would not refuse.
+				if touchesScopeMetadata(op) && d.RBAC.MetadataWriteScopeEnforced() &&
+					!OrgAllowed(d.RBAC, d.TenantOrg, p, op.TenantID, rbac.PermWrite, proposedScopeMeta(d.ConfigDir, merged)) {
+					return "", &freshBaseScopeError{TenantID: op.TenantID, Op: i}
+				}
 				// B2 F1: the check above read the pod's local tree; this one
 				// reads the fresh base the branch is cut from. A refusal here
 				// aborts the whole batch (WritePRBatch), nothing written.
@@ -359,6 +374,13 @@ func runBatchPR(d *Deps, rw http.ResponseWriter, r *http.Request, ops []BatchOpe
 		var freshPolicy *freshBasePolicyError
 		if errors.As(err, &freshPolicy) {
 			writeFreshBasePolicyViolation(rw, r, freshPolicy)
+			return BatchResponse{}, false
+		}
+		// #2830: likewise for an op the metadata write scope refuses on the
+		// fresh base.
+		var freshScope *freshBaseScopeError
+		if errors.As(err, &freshScope) {
+			writeFreshBaseScopeViolation(rw, r, freshScope)
 			return BatchResponse{}, false
 		}
 		// #1102: an all-no-op batch (idempotent patch / retry) produced no
