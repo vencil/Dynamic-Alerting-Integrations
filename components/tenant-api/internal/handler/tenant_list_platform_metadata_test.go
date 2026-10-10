@@ -317,8 +317,9 @@ func TestListAndSearch_UnreadablePlatformLayerMakesMetadataUnknown(t *testing.T)
 	t.Parallel()
 	dir := setupConfigDir(t, map[string]string{
 		"_platform.yaml": "tenants:\n  t1:\n    _metadata:\n      environment: production\n",
-		"t1.yaml":        "tenants:\n  t1:\n    _metadata:\n      owner: t1-team\n",
-		"t2.yaml":        "tenants:\n  t2:\n    _metadata:\n      environment: production\n",
+		"t1.yaml": "tenants:\n  t1:\n    _metadata:\n      owner: t1-team\n      tier: gold\n" +
+			"      domain: finance\n      db_type: mariadb\n      tags: [blue]\n",
+		"t2.yaml": "tenants:\n  t2:\n    _metadata:\n      environment: production\n",
 	})
 	both := []string{"t1", "t2"}
 	type view struct {
@@ -409,10 +410,20 @@ func TestListAndSearch_UnreadablePlatformLayerMakesMetadataUnknown(t *testing.T)
 		t.Errorf("rows while unreadable = %+v, want t1 owner t1-team (no environment), t2 environment production", rows)
 	}
 	// Search handles the unknown rows as it does degraded rows: no metadata
-	// filter matches them, free text matches the id.
+	// filter matches them, free text matches the id. Each metadata filter is
+	// queried with the value t1's own file writes (t1 is left out only
+	// because its metadata is incomplete) and with a value it does not.
 	mgr := newRBACManager(t, platformUnknownRBACYAML)
 	for query, want := range map[string][]string{
 		"environment=production": {},
+		"tier=gold":              {},
+		"tier=silver":            {},
+		"domain=finance":         {},
+		"domain=payments":        {},
+		"db_type=mariadb":        {},
+		"db_type=postgresql":     {},
+		"tag=blue":               {},
+		"tag=red":                {},
 		"q=t1-team":              {},
 		"q=T1":                   {"t1"},
 	} {
@@ -428,5 +439,11 @@ func TestListAndSearch_UnreadablePlatformLayerMakesMetadataUnknown(t *testing.T)
 	checkIncomplete(t, "platform readable again", "absent")
 	if got := viewAs(t, mgr, "all-tenants", "environment=production").search; !reflect.DeepEqual(got, both) {
 		t.Errorf("search environment=production after recovery = %v, want %v", got, both)
+	}
+	// With the platform layer readable again, t1's own values match.
+	for _, query := range []string{"tier=gold", "domain=finance", "db_type=mariadb", "tag=blue"} {
+		if got := viewAs(t, mgr, "all-tenants", query).search; !reflect.DeepEqual(got, []string{"t1"}) {
+			t.Errorf("search %s after recovery = %v, want [t1]", query, got)
+		}
 	}
 }
