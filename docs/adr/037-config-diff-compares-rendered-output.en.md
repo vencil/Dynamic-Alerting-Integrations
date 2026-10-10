@@ -97,22 +97,34 @@ Carriers not covered yet, and when they will be:
 
 ### 4. Exit codes and the report
 
-Exit codes: 0 no changes; 1 changes, or changes that were not compared; 2 no result was computed (the PR side failed to render, the tool itself failed, or the input could not be read), and the report says "not computed" rather than falling back to "no changes".
+Exit codes:
 
-When rendering fails, the first question is whether the configuration or the tool is at fault, and the second is which side failed. The base side is the branch the PR merges into (usually main); if the configuration there is already broken, the PR that fixes it must not be blocked:
+- **0**: no changes.
+- **1**: changes, or something that was not compared.
+- **2**: no result was computed. The report says "not computed" and never passes for "no changes".
 
-| Situation | Handling | Exit code |
+When rendering fails, one rule decides: **a failure on the PR side, or of the tool, exits 2; a broken configuration on the base side, or a first import with no configuration yet, exits 1.** The base side is the branch the PR merges into (usually main). If the configuration on main is already broken, the PR that fixes it must not be blocked.
+
+| Situation | Exit code | Report |
 |---|---|---|
-| One view fails to render on the PR side | That view says "not computed"; the other views are compared as usual | 2 |
-| The PR side has no conf.d, or no `.yaml` file in it | As above: the renderers are not run, and the view says "not computed" | 2 |
-| The base side's configuration is broken (see the rule below) | The report names the base-side failure and its reason; that view is listed as "not compared" as a whole, never compared against a partial base; the carriers (see decision 3) of a base-side file that could not be read are listed as not compared too | 1 |
-| The base side has no conf.d, or no `.yaml` file in it (the configuration is imported for the first time) | The renderers are not run; an empty configuration is the base, and every tenant counts as added | 1 |
-| The tool itself fails, on either side | The report says "not computed" | 2 |
-| Both sides fail | Handled as the PR side | 2 |
+| One view fails to render on the PR side | 2 | That view says "not computed"; the other views are compared as usual |
+| The PR side has no conf.d, or no `.yaml` file in it | 2 | The renderers are not run; that view says "not computed" |
+| The base side's configuration is broken | 1 | Names the reason; that view is listed as "not compared" **as a whole** |
+| The base side has no conf.d, or no `.yaml` file in it (first import) | 1 | The renderers are not run; the base is taken as empty, and every tenant counts as added |
+| The tool fails (on either side) | 2 | Says "not computed" |
+| Both sides fail | 2 | Handled as the PR side |
 
-Only the following count as a broken configuration; anything else is treated as a tool failure (blocking rather than letting a failure through): `da-guard served-values` exits 3 (a file does not decode or cannot be read; it still writes a partial result, which must not be compared); da-guard accepts the arguments but exits 2, for example when one tenant is declared in two files; the route generator rejects the tree. Tool failures include: da-guard not found, da-guard older than the version da-tools requires, output not in the expected format, a timeout, or the process being killed.
+When the base side's configuration is broken, nothing of it is compared against, even a part it still renders; the carriers (see decision 3) of a base-side file that could not be read are listed as "not compared" too.
 
-"No conf.d or no `.yaml` file" is decided by looking at the directory, not by an exit code: `da-guard served-values` exits 2 both for an empty directory and for one that does not exist, while the route generator exits 0 on an empty directory.
+What counts as a broken configuration: only the three cases below. Anything else is treated as a tool failure (when in doubt, block).
+
+- `da-guard served-values` exits 3: a file does not decode or cannot be read. It still writes a partial result, which must not be compared.
+- da-guard accepts the arguments but exits 2: for example, one tenant declared in two files.
+- The route generator rejects the tree.
+
+Examples of a tool failure: da-guard not found, da-guard older than the version da-tools requires, output not in the expected format, a timeout, the process being killed.
+
+"No conf.d or no `.yaml` file" is decided by looking at the directory before any renderer runs, not by an exit code: `da-guard served-values` exits 2 both for an empty directory and for one that does not exist, while the route generator exits 0 on an empty directory.
 
 The report is grouped by change: one platform change lists the number of affected tenants and the first few names instead of a thousand lines, and the whole report still respects the PR comment length limit. The JSON output gets a new structure with a top-level `schema` version; readers reject versions they do not recognise.
 
