@@ -22,10 +22,11 @@ package main
 //     components/tenant-api; a missing module root is a failure, never a skip;
 //   - every .go file whatever its build constraints (go/parser does not
 //     evaluate them), _test.go files and external `_test` packages included;
-//   - not third_party/ (vendored upstream yaml.v3, tests/_vendored_go.py) and
-//     not testdata/. Every other directory is read, `.`/`_`-prefixed and
-//     vendor/ included: an import there is not compiled today, but reporting
-//     it costs a row while missing it costs a broken phase 2.
+//   - not the module root's third_party/ (vendored upstream yaml.v3,
+//     tests/_vendored_go.py) and not testdata/ at any depth. Every other
+//     directory is read, `.`/`_`-prefixed and vendor/ included: an import
+//     there is not compiled today, but reporting it costs a row while missing
+//     it costs a broken phase 2.
 //
 // The import path is compared exactly or as a parent ("<pkg>/sub" counts for
 // <pkg>); the binding name (alias, `.`, `_`) is ignored, so every spelling
@@ -35,7 +36,9 @@ package main
 // selector — reflection, a copy of the code pasted elsewhere, a generated file
 // written at build time; and whether code relies on yaml.v3 keeping Tag "!"
 // (the nonspecific-tag patch): the table records which packages are believed
-// reliant, nothing here proves it.
+// reliant, nothing here proves it. A row is a directory × test-or-not, so a
+// listed user that adds another file importing the package, or another
+// `SpacesOnly` call, stays green: this lists users, not how much each uses.
 
 import (
 	"bufio"
@@ -361,7 +364,11 @@ func scanPhase2Scope(repoRoot string, modules []string, modulePath string, packa
 				return err
 			}
 			if d.IsDir() {
-				if p != base && (d.Name() == "third_party" || d.Name() == "testdata") {
+				// testdata/ at any depth (go build never compiles it); third_party/
+				// only at the module root, where the vendored code lives — a
+				// third_party/ deeper down is ordinary, compiled code.
+				if p != base && (d.Name() == "testdata" ||
+					(d.Name() == "third_party" && filepath.Dir(p) == base)) {
 					return filepath.SkipDir
 				}
 				return nil
@@ -550,6 +557,8 @@ func TestPhase2ScanFindsEverySpellingOfAUse(t *testing.T) {
 			nil, nil},
 		{"testdata is not read", map[string]string{h + "/testdata/h.go": imp("package h", "", rp)},
 			nil, nil},
+		{"a third_party/ below the module root is read", map[string]string{h + "/third_party/x/x.go": imp("package x", "_", rp)},
+			map[string][]phase2Site{"pkg/routingpolicy": {{h + "/third_party/x", false}}}, nil},
 		{"third_party is not read", map[string]string{
 			"exp/third_party/yaml.v3/y.go": "package yaml\n\nimport _ " + strconv.Quote(rp) + "\n\nfunc f(d *D) { d.SpacesOnly(true) }\n"},
 			nil, nil},
