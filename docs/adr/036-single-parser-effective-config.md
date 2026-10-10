@@ -200,7 +200,7 @@ tenant-api pod
 - 雙向把關：沒列進清單的差異會紅；已列入、但實際已消失的差異也會紅。
 - **Go 比產生器寬鬆的差異一律擋住第二階段**。#2759 目前列的寬鬆類都屬於這種，全部修好之前不能進第二階段。
 - Go 比產生器嚴格的差異，要在追蹤票留下「以產生器為準」的明確簽核。進入第二階段後，這些寫入會改成被接受。
-- 清單的任何修改都經 PR，由 owner 核准。
+- 清單的任何修改都經 PR。每筆記錄寫死精確列數，所以任何增減都會出現在 PR 的 diff 裡，由審查者看見；目前沒有機制強制 owner 核准（main 的分支保護不要求 review，CODEOWNERS 只會通知）。
 
 客戶的 conf.d 無法取得，上面的條件只涵蓋 owner 的樹。另外提供一個 `da-tools` 指令，讓客戶在自己的樹上跑同一套比對。
 
@@ -304,7 +304,10 @@ da-guard 不再判斷路由與 policy，交給產生器的 `--validate --strict`
 | §9 的使用者比對（CI 檢查） | 宣告表 `tests/shared/phase2_deletion_scope.json`（以套件為單位：`pkg/routingpolicy`、`pkg/pyyamlcompat` 的使用者、`SpacesOnly` 的呼叫處、三份 patch 的處理）；比對它的測試 `components/threshold-exporter/app/phase2_deletion_scope_test.go`，讀 exporter 與 tenant-api 兩個 module 的全部 Go 檔，只排除 module 根目錄的 `third_party/`（更深層的 `third_party/` 照讀）與任何深度的 `testdata/` |
 | vendored YAML 解析器的修改 | `third_party/yaml.v3`：`SpacesOnly`（只給 policy，刪除）、nonspecific-tag（沒有使用者時刪除）、`uniquekeys`（exporter 使用，保留）；釘值測試 `tests/ops/test_vendored_yaml_v3.py` 同一支 PR 更新 |
 | 只有 Go 有的 da-guard 檢查 | `internal/guard/types.go` 減去 `tests/shared/routing_policy_parity_matrix.json` |
-| 現有的「已知較嚴」標記（併入差異清單） | `merge_key_policy_corpus.json` 的 `known: stricter` |
+| 差異清單（policy 層） | `tests/shared/reader_divergence_catalog.yaml`；每筆寫死精確列數與一列範例，寬的差異逐列列出 |
+| Go 端判讀與產生器不同的列（快照） | `tests/shared/merge_key_go_verdicts.json`，由兩支 Go 語料測試以 `UPDATE_GO_VERDICTS=1` 重產（`routingpolicy/merge_key_corpus_test.go`、`tenant-api/internal/policy/merge_key_corpus_test.go`），列以內容雜湊（語料的 `id`）為鍵 |
+| 方向計算與雙向比對、到期檢查、第二階段是否就緒 | `tests/shared/test_reader_divergence_catalog.py`；`make pre-tag` 經 `reader-divergence-expiry` 以嚴格到期執行 |
+| 原本的「已知較嚴」標記 | 已移除，併入上面的快照與差異清單 |
 
 ## 參考
 

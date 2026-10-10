@@ -14,7 +14,8 @@ where no policy reader looks. Rows with nothing enforced are thinned to one
 in four. Each row holds what the route generator's own reader
 (`_parse_config_files`, PyYAML) makes of it: `unusable` (the file or its
 domain_policies block is dropped) or, per domain with a non-empty
-`forbidden_receiver_types` or `allowed_receiver_types`, its tenants and
+`forbidden_receiver_types` or `allowed_receiver_types` or with
+require_critical_escalation True (escalation alone is enforced), its tenants and
 forbidden types, its allowed types when that list is non-empty (`allowed`:
 the string entries; a list of none still restricts), and `escalation: true`
 when its require_critical_escalation is True (the generator's `is True`; any
@@ -44,14 +45,33 @@ byte order mark, or as Latin-1, which the generator (UTF-8 only) cannot
 read and yaml.v3 can. Their verdicts are `_verdict()`'s
 like any other row's, and Go skips none of them (`nonspecific_tag` marks
 the rows that carry the non-specific tag `!` on a quoted scalar, which Go
-reads through the vendored yaml.v3's patch — #2730 §6).
+reads through the vendored yaml.v3's patch — #2730 §6). The shapes also
+hold the divergences #2759 lists as Go-looser that no row measured before (ADR-036
+step 2): a nesting depth of 600 (A), `!!set` at domain_policies / a domain
+/ constraints (F), a merge value holding a mapping with a collection key, in
+each spelling (K1), and a UTF-8 BOM in a comment straddling byte 512 (N),
+each with a control every reader reads alike.
+
+Every row has an `id`: the first 16 hex digits of the sha256 of the file it
+stands for (its `doc` as UTF-8, or written in its `encoding`). A row whose
+file the generator reads but blocks on as production runs it (`--validate
+--strict`) carries `pyyaml_strict_blocks`: the generator's own blocking
+findings for the file (kind, policy, field), taken from the structured
+findings load_tenant_tree returns — the verdict alone (what it enforces)
+cannot tell a blocked file from one that enforces nothing. The Go halves
+hold such a row to "unusable": a Go reader that neither refuses it nor
+reports a blocking problem is looser.
 
 The Go halves read the same rows:
 - components/threshold-exporter/app/pkg/routingpolicy/merge_key_corpus_test.go:
-  da-guard's ParseDomainPolicies says exactly what PyYAML says.
+  da-guard's ParseDomainPolicies says what PyYAML says, or what
+  tests/shared/merge_key_go_verdicts.json records for that row.
 - components/tenant-api/internal/policy/merge_key_corpus_test.go: tenant-api's
-  parseConfig says what PyYAML says, or refuses the file — never a policy
-  PyYAML does not read.
+  parseConfig says what PyYAML says or what that snapshot records, or
+  refuses the file (refusals are not recorded yet: ADR-036 step 2, PR-C).
+The snapshot holds only the rows where a Go reader differs; each is matched
+to an entry of tests/shared/reader_divergence_catalog.yaml, and its direction
+computed, by tests/shared/test_reader_divergence_catalog.py.
 
 The rows are generated from a fixed seed, never hand-edited:
 
@@ -61,6 +81,7 @@ The rows are generated from a fixed seed, never hand-edited:
 from __future__ import annotations
 
 import contextlib
+import hashlib
 import io
 import json
 import os
@@ -75,7 +96,7 @@ import yaml
 REPO_ROOT = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(REPO_ROOT / "scripts" / "tools"))
 sys.path.insert(0, str(REPO_ROOT / "scripts" / "tools" / "ops"))
-from _grar_parse import _parse_config_files  # noqa: E402
+from _grar_parse import _parse_config_files, load_tenant_tree  # noqa: E402
 
 CORPUS_PATH = Path(__file__).parent / "merge_key_policy_corpus.json"
 SEED = 2677
@@ -658,8 +679,10 @@ def _known_stricter_2759() -> list[str]:
     """Known stricter (#2759): the generator reads these, da-guard refuses.
 
     da-guard's load.go is the 2eb4181b1 version: hand-modelling how PyYAML
-    builds `!!omap` / `!!pairs` items kept opening new divergences, so these
-    rows stay as `known: stricter` (#2759) until the root fix (#2766) lands.
+    builds `!!omap` / `!!pairs` items kept opening new divergences, so
+    da-guard's refusals of these rows stay recorded in
+    merge_key_go_verdicts.json and catalogued in
+    reader_divergence_catalog.yaml (#2759) until the root fix (#2766) lands.
     """
     return [
         # An `!!omap` / `!!pairs` item is taken apart, not built by
@@ -868,8 +891,10 @@ def _many_aliases() -> list[tuple[str, str]]:
 # Documents mixing the features the shapes above are about — null keys,
 # `!!omap` / `!!pairs` / `!!set`, merge keys, `tenants` nested in those,
 # explicit tags, `=` values, anchors and aliases across them — from a fixed
-# seed. Their rows are `known: stricter`: da-guard may refuse a file the
-# generator reads (#2759), never read one it drops or read other values.
+# seed. Each row where a Go reader differs is recorded in
+# merge_key_go_verdicts.json, and reader_divergence_catalog.yaml accepts only
+# refusals here (go_stricter): a read of a file the generator drops, or of
+# other values, has no entry and is red (#2759).
 
 _FUZZ_SEED = 2759
 _FUZZ_DOCS = 400
@@ -986,10 +1011,92 @@ def _fuzz_looser_only() -> list[str]:
     return out
 
 
+# --- #2759's Go-looser classes (ADR-036 step 2) -------------------------------
+#
+# Measured on main (2026-10-09) and listed in #2759 as Go reading what the
+# generator drops or missing what it enforces; no row held them before. They
+# are here so the Go halves record them and the catalog pins them as still
+# looser, row by row: each is a blocker for ADR-036's phase 2.
+
+def _2759_a_depth() -> list[str]:
+    """A: a nesting depth of 600 — PyYAML's recursive constructor gives up
+    and the generator drops the file; Go reads the policy. Depth 300 is the
+    control every reader reads (well below the limit even under pytest's own
+    stack frames)."""
+    docs = []
+    for n in (600, 300):
+        docs.append(_POLICY + "x: " + "[" * n + "]" * n + "\n")
+        docs.append(_POLICY + "x: " + "{a: " * n + "1" + "}" * n + "\n")
+    return docs
+
+
+def _2759_f_set() -> list[str]:
+    """F: `!!set` where domain_policies, a domain or its constraints go.
+    PyYAML builds a set of the keys (no mapping): the generator drops the
+    file (domain_policies) or enforces nothing there; Go reads a mapping."""
+    return [
+        "domain_policies: !!set\n  fin:\n    tenants: [t1]\n    constraints:\n"
+        "      forbidden_receiver_types: [slack]\n",
+        "domain_policies:\n  fin: !!set\n    tenants: [t1]\n    constraints:\n"
+        "      forbidden_receiver_types: [slack]\n",
+        "domain_policies:\n  fin:\n    tenants: [t1]\n    constraints: !!set\n"
+        "      forbidden_receiver_types: [slack]\n",
+        f"domain_policies: !!set {{fin: {_FIN_BODY}}}\n",
+        "domain_policies: {fin: !!set {tenants: [t1], constraints: {forbidden_receiver_types: [slack]}}}\n",
+        "domain_policies: {fin: {tenants: [t1], constraints: !!set {forbidden_receiver_types: [slack]}}}\n",
+    ]
+
+
+def _2759_k1_merge_collection_key() -> list[str]:
+    """K1: a merge value holding a mapping with a collection key — PyYAML
+    cannot hash the key and the generator drops the file; spelled as a
+    mapping, a merge sequence and a `!!omap`."""
+    return [
+        _POLICY + "x: {<<: {? [a] : 1}}\n",
+        _POLICY + "x: {<<: [{? [a] : 1}]}\n",
+        _POLICY + "x: {<<: !!omap [{? [a] : 1}]}\n",
+    ]
+
+
+def _2759_n_bom_512() -> list[str]:
+    """N: a UTF-8 BOM inside a comment, its three bytes straddling byte 512
+    (starting at byte 510 or 511). The generator reads and enforces the
+    policy; both Go readers read none. Starting at byte 509 is the control."""
+    return ["#" + "a" * (start - 1) + "﻿\n" + _POLICY for start in (510, 511, 509)]
+
+
+def _escalation_only() -> list[str]:
+    """A domain whose only constraint is `require_critical_escalation: true`
+    (no receiver-type list, or empty ones): the generator enforces the
+    escalation all the same, so the verdict keeps the domain. Written in
+    place, flow style, supplied by a merge at the domain and constraints
+    levels, through an aliased constraints mapping, beside a domain with a
+    forbidden list, and as `! "true"`; tenants lists of one and two."""
+    docs = []
+    for tenants in ("[t1]", "[t1, t2]"):
+        docs += [
+            f"domain_policies:\n  fin:\n    tenants: {tenants}\n    constraints:\n"
+            "      require_critical_escalation: true\n",
+            f"domain_policies:\n  fin:\n    tenants: {tenants}\n    constraints:\n"
+            "      forbidden_receiver_types: []\n      require_critical_escalation: true\n",
+            f"domain_policies: {{fin: {{tenants: {tenants}, constraints: {{require_critical_escalation: true}}}}}}\n",
+            f"x-b: &b {{tenants: {tenants}, constraints: {{require_critical_escalation: true}}}}\n"
+            "domain_policies:\n  fin:\n    <<: *b\n",
+            f"x-c: &c {{require_critical_escalation: true}}\ndomain_policies:\n  fin:\n    tenants: {tenants}\n"
+            "    constraints:\n      <<: *c\n",
+            f"x-c: &c {{require_critical_escalation: true}}\ndomain_policies:\n  fin:\n    tenants: {tenants}\n"
+            "    constraints: *c\n",
+            f"domain_policies:\n  fin:\n    tenants: {tenants}\n    constraints:\n"
+            "      require_critical_escalation: true\n"
+            "  ops:\n    tenants: [t2]\n    constraints:\n      forbidden_receiver_types: [slack]\n",
+            f"domain_policies:\n  fin:\n    tenants: {tenants}\n    constraints:\n"
+            "      require_critical_escalation: ! \"true\"\n",
+        ]
+    return docs
+
+
 _KNOWN_STRICTER_2759 = "known-stricter-2759"
 _FUZZ_LOOSER_ONLY = "fuzz-looser-only"
-# Shapes whose rows carry `known: stricter`.
-_KNOWN_STRICTER = (_KNOWN_STRICTER_2759, _FUZZ_LOOSER_ONLY)
 
 
 def _shapes() -> list[tuple[str, str]]:
@@ -1017,7 +1124,12 @@ def _shapes() -> list[tuple[str, str]]:
                         ("tab-trailing", _tab_trailing()),
                         ("tab-after-indicator", _tab_after_indicator()),
                         ("line-break-nel-ls-ps", _line_breaks()),
-                        (_FUZZ_LOOSER_ONLY, _fuzz_looser_only())):
+                        (_FUZZ_LOOSER_ONLY, _fuzz_looser_only()),
+                        ("2759-a-depth", _2759_a_depth()),
+                        ("2759-f-set", _2759_f_set()),
+                        ("2759-k1-merge-collection-key", _2759_k1_merge_collection_key()),
+                        ("2759-n-bom-512", _2759_n_bom_512()),
+                        ("escalation-only", _escalation_only())):
         out += [(shape, d) for d in docs]
     out += _merge_chains() + _many_aliases()
     seen: set = set()
@@ -1058,7 +1170,11 @@ def _verdict(doc: str, root: Path, encoding: str | None = None) -> object:
         # ("missing required 'receiver.type'", blocking). So `forbidden` is
         # the string entries, and a list of none forbids nothing (#2730 §6).
         forbidden = sorted(f for f in forbidden if isinstance(f, str))
-        if not forbidden and not allowed:
+        # A domain enforces something when it forbids a type, restricts to an
+        # allowlist, or requires critical escalation — the generator checks
+        # escalation whatever the receiver-type lists say (_grar_validate).
+        escalation = cons.get("require_critical_escalation") is True
+        if not forbidden and not allowed and not escalation:
             continue
         entry = {"tenants": [t for t in tenants if isinstance(t, str)], "forbidden": forbidden}
         # allowed_receiver_types, when a non-empty list: it restricts, and only
@@ -1068,10 +1184,49 @@ def _verdict(doc: str, root: Path, encoding: str | None = None) -> object:
             entry["allowed"] = sorted(a for a in allowed if isinstance(a, str))
         # require_critical_escalation as the generator enforces it (`is True`,
         # _grar_validate): `! "true"` is True to PyYAML (#2730 §6).
-        if cons.get("require_critical_escalation") is True:
+        if escalation:
             entry["escalation"] = True
         out[str(name)] = entry
     return out
+
+
+def row_id(doc: str, encoding: str | None = None) -> str:
+    """A row's stable id: the first 16 hex digits of the sha256 of the file
+    it stands for. The Go halves compute the same from their own bytes."""
+    return hashlib.sha256(_encode(doc, encoding)).hexdigest()[:16]
+
+
+# Finding.blocks values that block the generator as production runs it
+# (`generate-routes --validate --strict`): all but "never" (_grar_merge).
+_PRODUCTION_BLOCKS = ("always", "strict", "validate")
+
+
+def _strict_blocks(root: Path) -> list[dict]:
+    """The generator's own blocking findings on the policy file in `root`,
+    run as production runs it (strict policies): load_tenant_tree's
+    structured findings (`Finding.kind` / `.blocks`, _grar_merge) whose
+    `blocks` stops `--validate --strict`. The tree holds the policy file
+    alone, so every finding is about it — and none depends on a tenant's
+    routing (a violation by a tenant is the tenant's, not the file's)."""
+    with contextlib.redirect_stderr(io.StringIO()), contextlib.redirect_stdout(io.StringIO()):
+        tree = load_tenant_tree(str(root), strict_policies=True)
+    found = {(f.kind, f.policy or "", f.field or "") for f in tree.schema_warnings
+             if getattr(f, "blocks", None) in _PRODUCTION_BLOCKS}
+    return [{"kind": k, "policy": p, "field": fld} for k, p, fld in sorted(found)]
+
+
+def _row(doc: str, root: Path, encoding: str | None = None, **extra) -> dict:
+    row: dict = {"doc": doc, "id": row_id(doc, encoding), "pyyaml": _verdict(doc, root, encoding)}
+    if encoding is not None:
+        row["encoding"] = encoding
+    # A file the generator reads but blocks on under --strict: the verdict
+    # alone (what it enforces) cannot say so. An unusable file blocks anyway.
+    if row["pyyaml"] != "unusable":
+        blocks = _strict_blocks(root)
+        if blocks:
+            row["pyyaml_strict_blocks"] = blocks
+    row.update(extra)
+    return row
 
 
 def _rows() -> list[dict]:
@@ -1080,27 +1235,23 @@ def _rows() -> list[dict]:
     with tempfile.TemporaryDirectory() as d:
         root = Path(d)
         for doc in _documents():
-            verdict = _verdict(doc, root)
-            if verdict == {}:  # nothing enforced: one in four kept
+            row = _row(doc, root)
+            if row["pyyaml"] == {}:  # nothing enforced: one in four kept
                 empty += 1
                 if empty % 4:
                     continue
-            row: dict = {"doc": doc, "pyyaml": verdict}
             if NONSPECIFIC_SPELLING in doc:
                 row["nonspecific_tag"] = NONSPECIFIC
             rows.append(row)
             if len(rows) == DOCS:
                 break
         for shape, doc in _shapes():
-            row = {"doc": doc, "pyyaml": _verdict(doc, root), "shape": shape}
-            if shape in _KNOWN_STRICTER:
-                row["known"] = "stricter"
+            row = _row(doc, root, shape=shape)
             if _NONSPECIFIC_RE.search(doc):
                 row["nonspecific_tag"] = NONSPECIFIC
             rows.append(row)
         for encoding, doc in _encoded():
-            rows.append({"doc": doc, "encoding": encoding, "pyyaml": _verdict(doc, root, encoding),
-                         "shape": "encoding-not-utf8"})
+            rows.append(_row(doc, root, encoding, shape="encoding-not-utf8"))
     return rows
 
 
@@ -1112,23 +1263,29 @@ def _render(rows: list[dict]) -> str:
         "from a fixed seed — regenerate with REGEN_MERGE_KEY_CORPUS=1; never",
         "edit by hand. `pyyaml`: \"unusable\" (the file or its domain_policies",
         "block is dropped), else each domain the generator enforces (a list",
-        "`tenants`) with string forbidden_receiver_types or a non-empty",
-        "allowed_receiver_types list: its string tenants and those forbidden",
+        "`tenants`) with string forbidden_receiver_types, a non-empty",
+        "allowed_receiver_types list or require_critical_escalation True",
+        "(escalation alone is enforced): its string tenants and those forbidden",
         "types, sorted (a non-string entry forbids nothing a usable config",
         "has), `allowed` (its string entries, sorted) when the allowed list is",
         "non-empty, and `escalation: true` when require_critical_escalation",
         "is True.",
-        "Go: da-guard's ParseDomainPolicies must say the same; tenant-api's",
-        "parseConfig the same or refuse the file. `nonspecific_tag`: the row",
+        "Go: da-guard's ParseDomainPolicies must say the same, or what",
+        "merge_key_go_verdicts.json records for the row; tenant-api's",
+        "parseConfig the same, or what it records, or refuse the file.",
+        "`id`: the first 16 hex digits of the sha256 of the file the row",
+        "stands for (the key of merge_key_go_verdicts.json and of",
+        "reader_divergence_catalog.yaml). `pyyaml_strict_blocks`: the file is",
+        "read, but the generator run as in production (--validate --strict)",
+        "blocks on it — its own blocking findings (kind, policy, field); the",
+        "Go halves hold such a row to \"unusable\" (refused, or a blocking",
+        "problem). `nonspecific_tag`: the row",
         "carries the non-specific tag `!` on a quoted scalar, which Go reads",
         "through the vendored yaml.v3's patch (#2730 §6). `encoding`: the",
         "file is `doc` written in that encoding (utf-16-le-bom, utf-16-be-bom:",
         "the byte order mark, then UTF-16; latin-1), not UTF-8. `shape`: a",
         "deterministic row pinning one ticket's shape",
-        "(hub #2486, PR-7c/7d), after the seeded ones. `known: stricter`:",
-        "da-guard may refuse a file PyYAML reads (a known gap, #2759) and",
-        "nothing else — if both read, the values must be equal; if PyYAML",
-        "drops the file, da-guard must refuse it.",
+        "(hub #2486, PR-7c/7d; #2759 A, F, K1, N), after the seeded ones.",
     ]
     body = ",\n".join("    " + json.dumps(r, ensure_ascii=False, sort_keys=True) for r in rows)
     # Line and byte-order characters stay escaped: the fixture is one row a
@@ -1167,5 +1324,26 @@ def test_corpus_is_not_vacuous() -> None:
                   "n1-directive-tab", "n1-dash-tab", "n1-not-a-directive",
                   "tab-space", "tab-trailing", "tab-after-indicator", "line-break-nel-ls-ps",
                   "encoding-not-utf8", "known-stricter-2759", "fuzz-looser-only",
-                  "merge-chain-domains-200", "merge-chain-anchors-200", "2715-aliased-tenants-990"):
+                  "merge-chain-domains-200", "merge-chain-anchors-200", "2715-aliased-tenants-990",
+                  "2759-a-depth", "2759-f-set", "2759-k1-merge-collection-key", "2759-n-bom-512",
+                  "escalation-only"):
         assert shape in shapes, shape
+    # Escalation alone is an enforced rule: every `escalation-only` row is
+    # written, and every one keeps its escalation-only `fin` domain (a count
+    # floor would let half of the spellings go unnoticed).
+    esc_rows = [r for r in rows if r.get("shape") == "escalation-only"]
+    assert len(esc_rows) == len(_escalation_only()), len(esc_rows)
+    for r in esc_rows:
+        fin = r["pyyaml"]["fin"] if isinstance(r["pyyaml"], dict) else None
+        assert fin and fin.get("escalation") is True and not fin["forbidden"] \
+            and "allowed" not in fin, (r["id"], r["pyyaml"])
+
+
+def test_row_ids_are_unique_and_are_the_file_hash() -> None:
+    """The snapshot and the catalog key rows by `id`: two rows sharing one
+    would let one row's entry excuse the other."""
+    rows = json.loads(CORPUS_PATH.read_text(encoding="utf-8"))["rows"]
+    ids = [r["id"] for r in rows]
+    assert len(set(ids)) == len(ids), "two corpus rows share an id"
+    for r in rows:
+        assert r["id"] == row_id(r["doc"], r.get("encoding")), r["id"]

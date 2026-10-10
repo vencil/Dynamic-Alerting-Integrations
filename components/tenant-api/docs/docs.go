@@ -818,7 +818,7 @@ const docTemplate = `{
         },
         "/api/v1/tenants": {
             "get": {
-                "description": "Returns tenants visible to the authenticated user, filtered by RBAC.\nconfig_derived is derived from config at request time (「依設定推算」), not observed from Alertmanager.\nA tenant whose config file is not usable is returned as a degraded row carrying only ` + "`" + `id` + "`" + ` and ` + "`" + `config_error` + "`" + `\n(unreadable | not_regular_file | malformed_yaml | invalid_config — parses as YAML at the syntax level but cannot be\nloaded as a tenant config: wrong shape, errors only a typed decode detects, such as duplicate keys, or a declared\ntenant id that is not valid UTF-8 — threshold-exporter skips such a file whole).\nIts environment/domain are unknown, so the\nrow is visible only to callers whose matching RBAC rule does not restrict environments or domains.",
+                "description": "Returns tenants visible to the authenticated user, filtered by RBAC.\nconfig_derived is derived from config at request time (「依設定推算」), not observed from Alertmanager.\nA tenant whose config file is not usable is returned as a degraded row carrying only ` + "`" + `id` + "`" + ` and ` + "`" + `config_error` + "`" + `\n(unreadable | not_regular_file | malformed_yaml | invalid_config — parses as YAML at the syntax level but cannot be\nloaded as a tenant config: wrong shape, errors only a typed decode detects, such as duplicate keys, or a declared\ntenant id that is not valid UTF-8 — threshold-exporter skips such a file whole).\nIts environment/domain are unknown, so the\nrow is visible only to callers whose matching RBAC rule does not restrict environments or domains.\nWhen the conf.d root platform files cannot be read, every other row's metadata carries only the tenant file's own ` + "`" + `_metadata` + "`" + `\nvalues and the row is marked ` + "`" + `metadata_incomplete` + "`" + `; its visibility is that of a degraded row.",
                 "produces": [
                     "application/json"
                 ],
@@ -930,7 +930,7 @@ const docTemplate = `{
         },
         "/api/v1/tenants/search": {
             "get": {
-                "description": "Server-side filter / sort / pagination over the tenants visible to the caller (RBAC-filtered). Each item's config_derived is derived from config at request time (「依設定推算」), not observed from Alertmanager; the response's config_derivation names the conf.d files skipped as unparseable.",
+                "description": "Server-side filter / sort / pagination over the tenants visible to the caller (RBAC-filtered). Each item's config_derived is derived from config at request time (「依設定推算」), not observed from Alertmanager; the response's config_derivation names the conf.d files skipped as unparseable.\nWhen the conf.d root platform files cannot be read, an item's metadata carries only the tenant file's own ` + "`" + `_metadata` + "`" + ` values and the item is marked ` + "`" + `metadata_incomplete` + "`" + `: like a degraded item (config_error) it is visible only to callers whose matching RBAC rule does not restrict environments or domains, no metadata filter (environment / tier / domain / db_type / tag) matches it, and q matches its id only.",
                 "produces": [
                     "application/json"
                 ],
@@ -3182,6 +3182,10 @@ const docTemplate = `{
                 "maintenance": {
                     "description": "Raw ` + "`" + `_state_maintenance` + "`" + ` value from the tenant's own config file, not the tenant's state (see config_derived); omitted when config_derived cannot be derived.",
                     "type": "string"
+                },
+                "metadata_incomplete": {
+                    "description": "Set when the conf.d root platform files could not be read: the metadata fields carry only the tenant file's own ` + "`" + `_metadata` + "`" + ` values, and the row's visibility is that of a degraded row (only callers whose matching RBAC rule does not restrict environments or domains see it); the search metadata filters do not match it. Absent otherwise.",
+                    "type": "boolean"
                 },
                 "owner": {
                     "type": "string"

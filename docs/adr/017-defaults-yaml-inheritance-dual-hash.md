@@ -75,7 +75,7 @@ conf.d/
 
 兩個例外：
 
-- **`_metadata` 不繼承**：上層寫的 `_metadata` 不會出現在租戶的最終設定裡。
+- **`_metadata` 不繼承**：上層寫的 `_metadata` 不會出現在租戶的最終設定裡。根目錄平台檔的 `tenants.<id>._metadata` 不屬於這條鏈，它與租戶檔的 `_metadata` 逐鍵合併（[#2370](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/2370)，規則見 [config-driven](../design/config-driven.md)）。
 - **`_custom_alerts`（租戶自訂告警，見 [ADR-024](024-version-aware-threshold-via-dimensional-label.md)）在兩個實作裡不同**：`describe_tenant.py` 算的最終設定是聯集，上層 `_defaults.yaml` 頂層宣告的清單加上租戶自己的清單；tenant-api 與 da-guard 算的只有租戶自己的清單。兩邊的 `merged_hash` 因此不同（[#1549](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/1549)）。
 
 ### 3. 範例
