@@ -501,6 +501,23 @@ def _exactly_one_kind(spec: dict, receiver_obj: dict) -> str:
     return "invalid_receiver_field"
 
 
+def receiver_type(receiver_obj: object) -> str:
+    """The receiver type every check reads: the receiver's ``type`` when the
+    receiver is a mapping and the type a non-empty string, else ``""``.
+
+    #2780: the one read of ``receiver.type`` — the Go copy is
+    ``routingpolicy.ReceiverType()``. A type PyYAML builds as anything but a
+    string (``{a: 1}``, ``[a]``, ``5``, ``true``, ``~``) names no receiver
+    type; a mapping or a list is unhashable and crashed every ``in`` /
+    ``dict.get`` a caller did with it. ``build_receiver_config`` refuses such
+    a receiver (``missing_receiver_field``).
+    """
+    if not isinstance(receiver_obj, dict):
+        return ""
+    rtype = receiver_obj.get("type")
+    return rtype if isinstance(rtype, str) else ""
+
+
 def build_receiver_config(receiver_obj: dict, tenant: str, *,
                           tenant_id: str | None = None,
                           field: str = "receiver") -> tuple[dict | None, list[str]]:
@@ -530,8 +547,8 @@ def build_receiver_config(receiver_obj: dict, tenant: str, *,
             kind="missing_receiver_field", **at()))
         return None, warnings
 
-    rtype = receiver_obj.get("type")
-    if not rtype or not isinstance(rtype, str):
+    rtype = receiver_type(receiver_obj)
+    if not rtype:
         warnings.append(skipped_entry_warning(
             f"  WARN: {tenant}: missing required 'receiver.type', skipping",
             kind="missing_receiver_field", **at(".type")))

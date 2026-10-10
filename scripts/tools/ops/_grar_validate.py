@@ -49,6 +49,7 @@ from _grar_merge import (  # noqa: E402  (#2326 directory scope)
     ReplacedValueWarning,
     SkippedEntryWarning,
     level_contains,
+    receiver_type,
     replaced_value_warning,
     skipped_entry_warning,
     visible_routing_profiles,
@@ -90,9 +91,7 @@ def validate_receiver_domains(receiver_obj: dict, tenant: str, allowed_domains: 
     if not allowed_domains or not isinstance(receiver_obj, dict):
         return warnings
 
-    rtype = receiver_obj.get("type", "")
-    if isinstance(rtype, str):
-        rtype = rtype.strip().lower()
+    rtype = receiver_type(receiver_obj).strip().lower()  # #2780
 
     url_fields = RECEIVER_URL_FIELDS.get(rtype, [])
     for field in url_fields:
@@ -2124,8 +2123,10 @@ ESCALATION_TYPES = frozenset({"pagerduty"})
 
 
 def _subroute_receiver_type(sub_rc: dict) -> str:
-    recv = sub_rc.get("receiver")
-    return recv.get("type", "") if isinstance(recv, dict) else ""
+    # #2780: a non-string type reads as "" (receiver_type) — it escalates
+    # nowhere, as da-guard's ReceiverType() reads it, instead of crashing the
+    # `in ESCALATION_TYPES` tests below.
+    return receiver_type(sub_rc.get("receiver"))
 
 
 class EscalationFindings(NamedTuple):
@@ -2543,8 +2544,13 @@ def check_domain_policies(
                             "field": key if _ref is None else f"{_ref}.{key}"}
 
                 # Check receiver type constraints
-                recv = rc.get("receiver", {})
-                recv_type = recv.get("type", "") if isinstance(recv, dict) else ""
+                # #2780: a type that is not a string (a mapping or a list —
+                # unhashable, it crashed the `in` below — or a scalar such as
+                # 5 / true) reads as "" and no policy judges it, as da-guard's
+                # routingpolicy.ReceiverType() and explain-route read it.
+                # build_receiver_config refuses that entry itself
+                # (missing_receiver_field, blocking under --validate).
+                recv_type = receiver_type(rc.get("receiver"))
                 if recv_type:
                     if forbidden_types and recv_type in forbidden_types:
                         messages.append(_fmt(

@@ -5,6 +5,7 @@ list / 壞 YAML policy 檔）在 strict 下必須 fail-loud ERROR；非 strict �
 byte-identical（零 policy 訊息、exit 0）。另鎖 POLICY_ERROR_PREFIX 唯一
 來源（_policy_errors() 的 blocking 判定不被其他 ERROR 字串汙染）。
 """
+import json
 import os
 import shutil
 import subprocess
@@ -360,6 +361,134 @@ class TestReceiverTypeCollectionEntry:
             assert "receiver type 'slack' is forbidden" in msgs[0]
             if strict:
                 assert "domain forbids ['slack']" in msgs[0]
+
+
+# ============================================================
+# #2780 — 租戶端 receiver.type 不是字串（mapping / list / 純量）
+# ============================================================
+class TestTenantReceiverTypeNotString:
+    """租戶的 `receiver.type` 是 mapping 或 list 時不可 hash，
+    `recv_type in forbidden_types` 曾直接 TypeError，`--strict` 以 traceback
+    結束、findings 文件只剩 `run_failed`。
+
+    非字串的 type 不指名任何 receiver type：policy 檢查不判它（同 da-guard
+    `routingpolicy.ReceiverType()` 回 ""、explain-route 的 `_receiver_type`、
+    parity matrix「type 非空字串才算，否則 null」）。擋下它的是 receiver 本身的
+    檢查——`build_receiver_config` 對同一租戶報 `missing_receiver_field`
+    （`blocks: validate`），policy 這一處不重複報。
+    """
+
+    SHAPES = [{"a": 1}, ["a"]]
+    SHAPE_IDS = ["dict", "list"]
+
+    @staticmethod
+    def _policy(constraints):
+        return {"pol": {"tenants": ["tenant-x"], "constraints": constraints}}
+
+    @pytest.mark.parametrize("recv_type", SHAPES + [5, True],
+                             ids=SHAPE_IDS + ["int", "bool"])
+    @pytest.mark.parametrize("strict", [False, True],
+                             ids=["lenient", "strict"])
+    def test_policy_check_does_not_judge_a_non_string_type(self, recv_type,
+                                                           strict):
+        policies = self._policy({"forbidden_receiver_types": ["slack"],
+                                 "allowed_receiver_types": ["webhook"]})
+        routing = {"tenant-x": {
+            "receiver": {"type": recv_type},
+            "overrides": [{"alertname": "A",
+                           "receiver": {"type": recv_type}}],
+            "routes": [{"match": {"severity": "critical"},
+                        "receiver": {"type": recv_type}}],
+        }}
+        assert check_domain_policies(routing, policies, strict=strict) == []
+
+    def test_a_string_sub_route_type_is_still_judged(self):
+        """Must-succeed 對照：主 route 型別壞掉，不能連帶放過 sub-route。"""
+        policies = self._policy({"forbidden_receiver_types": ["slack"]})
+        routing = {"tenant-x": {
+            "receiver": {"type": {"a": 1}},
+            "routes": [{"match": {"severity": "critical"},
+                        "receiver": {"type": "slack"}}],
+        }}
+        msgs = check_domain_policies(routing, policies, strict=True)
+        assert len(msgs) == 1, msgs
+        assert "routes[0]" in msgs[0] and "is forbidden" in msgs[0]
+
+    # ── #2780 R2：機械化——每一個讀 receiver type 的檢查 × 每一個位置 ──
+    # 形狀：PyYAML 讀出的非字串 type。null 也在內（`type: ~`）。
+    E2E_SHAPES = {"dict": {"a": 1}, "list": ["a"], "int": 5, "bool": True,
+                  "null": None}
+    # 位置：主 route、overrides[0]、routes[0]——list_tenant_subroutes 的三種。
+    PLACEMENTS = ("receiver", "overrides[0]", "routes[0]")
+    # 讀 receiver type 的檢查：domain policy 的三個 constraint，與
+    # --policy 的 allowed_domains（validate_receiver_domains）。
+    CHECKS = {
+        "forbidden": {"forbidden_receiver_types": ["slack"]},
+        "allowed": {"allowed_receiver_types": ["webhook"]},
+        "escalation": {"require_critical_escalation": True},
+        # 主 receiver 是 pagerduty（合規）：leak 迴圈才會讀每個 sub-route 的 type。
+        "escalation-compliant": {"require_critical_escalation": True},
+        "cli-policy": None,
+    }
+    TENANT = "tenant-fin"
+
+    @classmethod
+    def _routing(cls, placement, recv_type, check):
+        bad = {"type": recv_type, "url": "https://h.example/a"}
+        good = ({"type": "pagerduty", "service_key": "k"}
+                if check == "escalation-compliant"
+                else {"type": "webhook", "url": "https://h.example/a"})
+        routing = {"receiver": bad if placement == "receiver" else good}
+        if placement == "overrides[0]":
+            routing["overrides"] = [{"alertname": "A", "receiver": bad}]
+        if placement == "routes[0]":
+            routing["routes"] = [{"match": {"severity": "critical"},
+                                  "receiver": bad}]
+        return routing
+
+    @classmethod
+    def _matrix_tree(cls, d, check, placement, recv_type):
+        _wy(d, "_defaults.yaml", {"defaults": {"cpu": 80}})
+        constraints = cls.CHECKS[check]
+        if constraints is not None:
+            _wy(d, "_domain_policy.yaml", {"domain_policies": {
+                "fin": {"tenants": [cls.TENANT],
+                        "constraints": constraints}}})
+        _wy(d, f"{cls.TENANT}.yaml", {"tenants": {cls.TENANT: {
+            "cpu": "90", "_routing": cls._routing(placement, recv_type, check)}}})
+
+    @pytest.mark.parametrize("check", list(CHECKS))
+    @pytest.mark.parametrize("placement", PLACEMENTS)
+    @pytest.mark.parametrize("shape", list(E2E_SHAPES))
+    def test_validate_strict_blocks_with_a_tenant_finding(
+            self, tmp_path, shape, placement, check):
+        """`--validate --strict --findings-json`：沒有 traceback、沒有
+        `run_failed`、rc 1，且有一筆點名該租戶、在這個模式下擋的 finding。"""
+        d = tmp_path / "conf"
+        d.mkdir()
+        self._matrix_tree(str(d), check, placement, self.E2E_SHAPES[shape])
+        argv = [sys.executable, _SCRIPT, "--config-dir", str(d),
+                "--validate", "--strict",
+                "--findings-json", str(tmp_path / "findings.json")]
+        if check == "cli-policy":
+            pol = tmp_path / "policy.yaml"
+            pol.write_text("allowed_domains: [h.example]\n", encoding="utf-8")
+            argv += ["--policy", str(pol)]
+        res = subprocess.run(argv, capture_output=True, text=True,
+                             encoding="utf-8", timeout=120)
+        assert "Traceback" not in res.stderr, res.stderr
+        assert res.returncode == 1, res.stdout + res.stderr
+        doc = json.loads((tmp_path / "findings.json").read_text(
+            encoding="utf-8"))
+        kinds = [f["kind"] for f in doc["findings"]]
+        assert "run_failed" not in kinds, doc["findings"]
+        field = ("receiver.type" if placement == "receiver"
+                 else f"{placement}.receiver.type")
+        hits = [f for f in doc["findings"]
+                if f["tenant"] == self.TENANT
+                and f["blocks"] in ("always", "strict", "validate")
+                and f["field"] == field]
+        assert hits, doc["findings"]
 
 
 # ============================================================
