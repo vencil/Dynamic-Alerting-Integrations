@@ -78,7 +78,8 @@ def test_inherited_threshold_change_is_reported_for_tenants_that_do_not_override
     assert _by_key(diff["inherits"])["container_memory"]["change"] == "looser"
     assert "overrides" not in diff
     # 對照：YAML 讀法看不到這個變更（它只讀租戶檔自己寫的值）
-    assert cd.compute_diff({"inherits": {}}, {"inherits": {}}) == {}
+    assert cd.compute_diff(cd.load_configs_from_dir(tmp_path / "base"),
+                           cd.load_configs_from_dir(tmp_path / "pr")) == {}
 
 
 def test_added_and_removed_tenant_and_key(tmp_path, da_guard):
@@ -95,6 +96,24 @@ def test_scheduled_threshold_shows_as_scheduled(tmp_path, da_guard):
     got = _by_key(_metric(b, p)["t"])["mysql_connections"]
     assert got["change"] == "modified" and isinstance(got["new"], dict)
     assert cd._format_value(got["new"]) == "(scheduled)"
+
+
+def test_critical_key_keeps_its_own_severity(tmp_path, da_guard):
+    """`_critical` 鍵本身就是 critical：數字變大仍是 looser，不會因為 severity 被當成 modified。"""
+    b, p = _served(tmp_path, da_guard, {"t": {"mysql_connections_critical": "90"}},
+                   {"t": {"mysql_connections_critical": "95"}})
+    got = _by_key(_metric(b, p)["t"])["mysql_connections_critical"]
+    assert (got["old"], got["new"], got["change"]) == (90, 95, "looser")
+
+
+@pytest.mark.parametrize("old, new", [
+    ({"default": "70", "expires": "2027-01-01T00:00:00Z"}, {"default": "70", "expires": "2028-01-01T00:00:00Z"}),
+    ({"default": "70", "expires": "2027-01-01T00:00:00Z"}, "70"),
+], ids=["extended", "made-permanent"])
+def test_threshold_time_box_change_is_reported(tmp_path, da_guard, old, new):
+    """`expires:` 改了（延長或改成永久）送出的值當下不變，仍要列出。"""
+    b, p = _served(tmp_path, da_guard, {"t": {"mysql_connections": old}}, {"t": {"mysql_connections": new}})
+    assert _by_key(_metric(b, p)["t"])["mysql_connections"]["change"] == "modified"
 
 
 def test_comment_only_change_is_no_change(tmp_path, da_guard):
@@ -134,7 +153,13 @@ def test_state_filter_severity_change_is_a_setting_change(tmp_path, da_guard):
     b, p = _served(tmp_path, da_guard, body, body,
                    pr_defaults=_DEFAULTS.replace("severity: critical", "severity: warning"))
     got = _by_key(cd.served_setting_diff(b, p)["t"])
-    assert (got["_state_filters.crashloop"]["old"], got["_state_filters.crashloop"]["new"]) == ("critical", "warning")
+    key = f"{cd.SERVED_STATE_FILTERS_KEY}.crashloop"
+    assert (got[key]["old"], got[key]["new"]) == ("critical", "warning")
+
+
+def test_a_tenant_key_named_like_the_state_filters_entry_is_still_compared(tmp_path, da_guard):
+    b, p = _served(tmp_path, da_guard, {"t": {"_state_filters": "enable"}}, {"t": {"_state_filters": "disable"}})
+    assert "_state_filters" in {e["key"] for e in cd.served_setting_diff(b, p)["t"]}
 
 
 def test_routing_credential_is_redacted(tmp_path, da_guard):
@@ -145,6 +170,27 @@ def test_routing_credential_is_redacted(tmp_path, da_guard):
     assert "SEKRET" not in repr(diff)
     url = [e for e in diff["t"] if e["key"].endswith(".url")]
     assert url and (url[0]["old"], url[0]["new"]) == (cd._REDACTED, cd._REDACTED)
+
+
+@pytest.mark.parametrize("receiver", [{"type": "bogus", "url": "https://h/SEKRET"}, {"url": "https://h/SEKRET"}],
+                         ids=["unknown-type", "type-left-out"])
+def test_rejected_routing_text_is_redacted_whole(tmp_path, da_guard, receiver):
+    """exporter 拒收的 `_routing` 以原文字串進 unserved：整段遮罩，變更照報。"""
+    def body(suffix):
+        return {"t": {"_routing": {"receiver": {**receiver, "url": receiver["url"] + suffix}}}}
+    b, p = _served(tmp_path, da_guard, body("-1"), body("-2"))
+    diff = cd.served_setting_diff(b, p)
+    assert "SEKRET" not in repr(diff)
+    assert any(e["key"] == "_routing" for e in diff["t"]), diff
+
+
+def test_a_routing_timing_change_still_prints_its_values(tmp_path, da_guard):
+    """對照：只有整段原文才遮；`_routing.group_wait` 這類一般欄位照常印出前後值。"""
+    def body(gw):
+        return {"t": {"_routing": {"receiver": {"type": "webhook", "url": "https://h/x"}, "group_wait": gw}}}
+    b, p = _served(tmp_path, da_guard, body("30s"), body("1m"))
+    got = _by_key(cd.served_setting_diff(b, p)["t"])
+    assert (got["_routing.group_wait"]["old"], got["_routing.group_wait"]["new"]) == ("30s", "1m")
 
 
 def test_added_or_removed_tenant_lists_no_settings(tmp_path, da_guard):
@@ -202,6 +248,34 @@ def test_custom_alert_no_longer_served_is_removed_with_the_note(tmp_path, da_gua
     assert entry["change"] == "removed" and entry["note"] == cd.SERVED_REMOVED_NOTE
 
 
+def _two_rows(tmp_path, da_guard, old, new):
+    return _ca(tmp_path, da_guard, old, new)
+
+
+def test_custom_alert_change_in_a_second_row_of_the_same_name_is_seen(tmp_path, da_guard):
+    """同名的兩條 recipe：改第二條的 mode／metric 也要報（不是只看第一列）。"""
+    a, b2 = _recipe(), _recipe(metric="m2")
+    for field, new in (("mode", [a, dict(b2, mode="silent")]), ("metric", [a, dict(b2, metric="m3")])):
+        diff = _ca(tmp_path / field, da_guard, [a, b2], new)
+        assert diff and diff["t"][0]["change"] == "modified", new
+        assert field in {f["field"] for f in diff["t"][0]["field_changes"]}, diff
+
+
+def test_custom_alert_rows_are_read_in_a_stable_order(tmp_path, da_guard):
+    """多列（多個 severity）的 recipe：兩側列序不同不算變更，threshold 依排序後的值比。"""
+    tenants = {"t": {"_custom_alerts": [_recipe()]}}
+    b, _ = _served(tmp_path, da_guard, tenants, tenants)
+    rows = b["t"].values["_custom_alerts"]
+    many = [dict(rows[0], value=float(v), severity=sev)
+            for v, sev in ((900, "critical"), (150, "warning"), (700, "info"), (300, "critical"),
+                           (500, "warning"), (100, "info"), (800, "warning"), (200, "critical"))]
+    fwd = b["t"]._replace(values={**b["t"].values, "_custom_alerts": many})
+    rev = b["t"]._replace(values={**b["t"].values, "_custom_alerts": many[::-1]})
+    assert cd.served_custom_alerts({"t": fwd}) == cd.served_custom_alerts({"t": rev})
+    got = cd.served_custom_alerts({"t": fwd})["t"]["x"]["threshold"].split(", ")
+    assert got == sorted(got) and len(got) == 8
+
+
 def test_custom_alert_added_and_identical(tmp_path, da_guard):
     diff = _ca(tmp_path, da_guard, [], [_recipe()])
     assert [e["change"] for e in diff["t"]] == ["added"]
@@ -225,3 +299,16 @@ def test_rendered_report_reads_the_served_sections(tmp_path, da_guard):
                             custom_alert_diffs=cd.served_custom_alert_diff(b, p),
                             setting_diffs=cd.served_setting_diff(b, p))
     assert "mysql_connections" in md and "_silent_mode" in md and "200:critical" in md
+
+
+def test_every_row_of_a_recipe_counts_not_only_the_first():
+    """固定列序：同名的第二列改了 mode，view 也要跟著變（不能只看第一列）。"""
+    def row(metric, mode):
+        return {"metric": metric, "value": 150.0, "severity": "warning",
+                "labels": {"name": "x", "mode": mode, "recipe_id": f"threshold__{metric}"}}
+
+    def tenants(second_mode):
+        return {"t": tv.TenantValues("t", {"_custom_alerts": [row("m1", "page"), row("m2", second_mode)]},
+                                     {}, {}, {}, None, {}, {})}
+    old, new = cd.served_custom_alerts(tenants("page")), cd.served_custom_alerts(tenants("silent"))
+    assert old["t"]["x"]["mode"] == "page" and new["t"]["x"]["mode"] == "page, silent"
