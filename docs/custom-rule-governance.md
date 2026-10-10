@@ -227,6 +227,10 @@ required_labels:
 max_range_duration: 1h     # 禁止 [7d] 等超長 range vector
 max_evaluation_interval: 60s  # Custom Rule group interval 上限
 
+# 同一個檔也交給 generate-routes / validate-config 的 --policy 時，
+# 這一行必填：[] 表示不限制 webhook 網域；缺這個鍵會 exit 2（#1649）
+allowed_domains: []
+
 # 平台 COMPILED pack 的逐檔豁免（v2.10.0）——deny-list 治理對象是租戶手寫
 # raw PromQL；compiler 產出的 pack（如 Custom Alerts forecast recipe 的
 # predict_linear，成本緩解在編譯期內建）由 file_overrides 取得列管豁免

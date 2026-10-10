@@ -1770,7 +1770,7 @@ da-tools generate-routes --config-dir <path> [options]
 | `--namespace <NS>` | Namespace of the ConfigMap. **Read only by `--apply` / `--output-configmap`**; exit 2 in any other mode | `monitoring` |
 | `--configmap <NAME>` | ConfigMap name. **Read only by `--apply` / `--output-configmap`**; exit 2 in any other mode | `alertmanager-config` |
 | `--yes` | Skip confirmation prompt with --apply. **Read only by `--apply`**; exit 2 in any other mode | false |
-| `--policy <FILE>` | **Path** to a policy YAML holding an `allowed_domains:` list (omit for no constraint). ⚠️ This takes a file path, not a comma-separated domain list; a value that cannot be read exits 2 (#1556) | (unrestricted) |
+| `--policy <FILE>` | **Path** to a policy YAML holding an `allowed_domains:` list (omit for no constraint). ⚠️ This takes a file path, not a comma-separated domain list; a value that cannot be read exits 2 (#1556); so does a file with no `allowed_domains` key (empty, comments only, misspelled key) or a list with a non-string entry — write `allowed_domains: []` to say "no constraint" explicitly (#1649). ⚠️ The v2.9.0 image still has the old behaviour | (unrestricted) <!-- image-caveat: v2.9.0 --> |
 | `--findings-json <PATH>` | Also write the findings this run **prints** (each warning-stream and refusal line) as JSON to PATH; the shape is under "Structured findings" below. Read in every mode; written on every exit (refusals, caller errors, usage errors and exceptions included), to a temp file renamed into place, so PATH never keeps a previous run's document. stdout, stderr and the exit code are unchanged; a PATH that cannot be written exits 2 (#2766). ⚠️ The v2.9.0 image has no such flag <!-- image-caveat: v2.9.0 --> | (not written) |
 
 **Output**
@@ -2023,7 +2023,7 @@ da-tools validate-config --config-dir <path> [options]
 
 | Option | Description | Default |
 |--------|-------------|---------|
-| `--policy <FILE>` | **Path** to a policy YAML holding an `allowed_domains:` list (omit for no constraint). ⚠️ A supplied value that cannot be used now exits 2 instead of being skipped — not a file, unreadable, not UTF-8, not valid YAML, or not a mapping at the top level (#1556). ⚠️ The v2.9.0 image still has the old behaviour | (unrestricted) <!-- image-caveat: v2.9.0 --> |
+| `--policy <FILE>` | **Path** to a policy YAML holding an `allowed_domains:` list (omit for no constraint). ⚠️ A supplied value that cannot be used now exits 2 instead of being skipped — not a file, unreadable, not UTF-8, not valid YAML, or not a mapping at the top level (#1556); so does a file with no `allowed_domains` key (empty, comments only, misspelled key) or a list with a non-string entry — write `allowed_domains: []` to say "no constraint" explicitly (#1649). ⚠️ The v2.9.0 image still has the old behaviour | (unrestricted) <!-- image-caveat: v2.9.0 --> |
 | `--rule-packs <PATH>` | Path to the `rule-packs/` directory for the custom rule lint. ⚠️ A supplied value that cannot be used exits 2; **omitting it removes the `custom_rules` row from the report entirely** (#1556) | (check not run) |
 | `--policy-dsl <FILE>` | Path to a standalone Policy-as-Code DSL file (top-level `policies:` key). ⚠️ A supplied value that cannot be used exits 2 (same five shapes as `--policy`); before the fix its output was byte-identical to passing no flag at all (#1556) | (only `_policies` in `_defaults.yaml`) |
 | `--version-check` | Also run the version consistency check | false |
