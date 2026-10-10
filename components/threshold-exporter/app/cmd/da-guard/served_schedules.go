@@ -127,7 +127,7 @@ func daySegments(cuts, ends []int, passes []map[string]map[string]reading, gathe
 		gerr := gatherErrs[i]
 		r, served := passes[i][tenant][k]
 		if n := len(segs); n > 0 && gerr == lastErr && served == lastServed &&
-			(!served || (sameFloat(r.value, last.value) && r.severity == last.severity)) {
+			(!served || (sameFloat(r.value, last.value) && r.severity == last.severity && sameSeries(r.series, last.series))) {
 			segs[n-1].To = hhmm(ends[i])
 			continue
 		}
@@ -138,6 +138,7 @@ func daySegments(cuts, ends []int, passes []map[string]map[string]reading, gathe
 		case served:
 			seg.Value = jsonFloat(r.value)
 			seg.Severity = r.severity
+			seg.Series = r.series
 		default:
 			seg.Value = jsonNull
 		}
@@ -148,11 +149,12 @@ func daySegments(cuts, ends []int, passes []map[string]map[string]reading, gathe
 }
 
 // sameAsValues checks that the piece of the day holding `at` reads, for the
-// tenant, exactly the threshold keys, values and severities Values reads.
+// tenant, exactly the threshold keys, values, severities and series Values
+// reads.
 func sameAsValues(tenant string, tv servedTenantValues, piece map[string]reading) error {
 	for k, sev := range tv.Severities {
 		r, ok := piece[k]
-		if !ok || r.severity != sev || jsonFloat(r.value) != tv.Values[k] {
+		if !ok || r.severity != sev || jsonFloat(r.value) != tv.Values[k] || !sameSeries(r.series, tv.Series[k]) {
 			return fmt.Errorf("internal: tenant %s: key %q: the schedule reading at --at differs from the served value", tenant, k)
 		}
 	}
@@ -184,7 +186,8 @@ func readingsAt(cfg *config.ThresholdConfig, at time.Time, name keyNamer) (readi
 	reg.MustRegister(thresholdRows{rows: rows, report: func(i int, m prometheus.Metric, err error) {
 		results[i] = emitResult{reported: true, metric: m, err: err}
 	}})
-	if _, gerr := reg.Gather(); gerr != nil {
+	gathered, gerr := gatherSeries(reg)
+	if gerr != nil {
 		msg := "the exporter's /metrics cannot be gathered, so its scrape fails " +
 			"as a whole (HTTP 500) and nothing is served"
 		if keys := sameSeriesKeys(keyed, results, name); keys != "" {
@@ -196,6 +199,10 @@ func readingsAt(cfg *config.ThresholdConfig, at time.Time, name keyNamer) (readi
 	if err != nil {
 		return nil, "", err
 	}
+	series, err := keySeries(keyed, results, gathered)
+	if err != nil {
+		return nil, "", err
+	}
 	out := make(map[string]map[string]reading, len(served))
 	for tenant, byKey := range served {
 		for name, rs := range byKey {
@@ -204,6 +211,13 @@ func readingsAt(cfg *config.ThresholdConfig, at time.Time, name keyNamer) (readi
 			}
 			r, err := keyReading(tenant, name, rs)
 			if err != nil {
+				return nil, "", err
+			}
+			r.series = series[tenant][name]
+			if len(r.series) != len(rs) {
+				return nil, "", fmt.Errorf("internal: tenant %s: key %q owns %d rows but %d series", tenant, name, len(rs), len(r.series))
+			}
+			if err := checkKeySeries(tenant, name, r.series); err != nil {
 				return nil, "", err
 			}
 			if out[tenant] == nil {

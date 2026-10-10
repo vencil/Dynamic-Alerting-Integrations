@@ -203,6 +203,8 @@ class TestExtractChangesFromDirs:
         base = _confd(tmp_path / "base", {"_defaults.yaml": _DEFAULTS,
                                           "db-a.yaml": "tenants:\n  db-a:\n    mysql_connections: 70\n"})
         changes = bt.extract_changes_from_dirs(str(cur), str(base))
+        # #2750：每筆帶 served-values 給的 /metrics series（矩陣測試逐格比對）。
+        assert [s.metric_key for s in changes[0].pop("series")] == ["mysql_connections"]
         assert changes == [{"tenant": "db-a", "metric": "mysql_connections",
                             "old_value": "70", "new_value": "50"}]
 
@@ -220,7 +222,8 @@ class TestExtractChangesFromDirs:
         tenant = {"db-a.yaml": "tenants:\n  db-a: {}\n"}
         cur = _confd(tmp_path / "cur", {"_defaults.yaml": "defaults:\n  mysql_connections: 90\n", **tenant})
         base = _confd(tmp_path / "base", {"_defaults.yaml": _DEFAULTS, **tenant})
-        assert bt.extract_changes_from_dirs(str(cur), str(base)) == [
+        changes = bt.extract_changes_from_dirs(str(cur), str(base))
+        assert [{k: v for k, v in c.items() if k != "series"} for c in changes] == [
             {"tenant": "db-a", "metric": "mysql_connections", "old_value": "80", "new_value": "90"}]
 
     def test_no_changes(self, tmp_path):

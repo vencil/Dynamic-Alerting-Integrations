@@ -118,7 +118,9 @@ func GetTenantEffective(d *Deps) http.HandlerFunc {
 				// chain file the exporter drops for a syntax error no longer
 				// lands here (#2296: read as empty, ChainParseFailed); one the
 				// exporter reads but the merge cannot decode still does.
-				WriteJSONError(w, r, http.StatusInternalServerError, err.Error())
+				// Its own code, not INTERNAL_ERROR, so WriteErrorEnvelope
+				// keeps the text (#1700): it tells the operator what to fix.
+				WriteJSONErrorWithCode(w, r, http.StatusInternalServerError, CodeConfigDecode, err.Error())
 			default:
 				// Walker and read failures carry server paths (a missing root
 				// answers `stat "/…/conf.d": …`): fixed text, full error logged.

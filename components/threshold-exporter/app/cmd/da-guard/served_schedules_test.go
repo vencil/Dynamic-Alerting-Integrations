@@ -249,7 +249,7 @@ func TestServedSchedules_AgreeWithServedValuesEveryMinute(t *testing.T) {
 	day := time.Date(2026, 7, 1, 0, 0, 0, 0, time.UTC)
 	for m := 0; m < config.MinutesPerDay; m++ {
 		now := day.Add(time.Duration(m) * time.Minute)
-		served, _, _, err := keyedRows(cfg, now, func(_, k string) string { return k })
+		served, _, _, _, err := keyedRows(cfg, now, func(_, k string) string { return k })
 		if err != nil {
 			t.Fatalf("%s: %v", hhmm(m), err)
 		}
@@ -397,6 +397,12 @@ func TestServedSchedules_UngatherableSegmentCarriesTheError(t *testing.T) {
 				t.Errorf("%s %s: segment %v carries an error", tc.tenant, tc.key, s)
 			}
 			delete(s, "error")
+			// #2750: a segment that serves carries its series; a null or
+			// error segment carries none.
+			if list, has := s["series"].([]any); (s["value"] != nil) != (has && len(list) > 0) {
+				t.Errorf("%s %s: segment %v: series present=%v, value=%v", tc.tenant, tc.key, s, has, s["value"])
+			}
+			delete(s, "series")
 		}
 		if !reflect.DeepEqual(got, tc.want) {
 			t.Errorf("%s %s (error text removed):\n got %v\nwant %v", tc.tenant, tc.key, got, tc.want)
