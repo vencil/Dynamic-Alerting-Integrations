@@ -13,6 +13,7 @@ import (
 	"encoding/json"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"github.com/vencil/tenant-api/internal/platform"
@@ -80,8 +81,9 @@ func TestBatchRelabelOutOfScopeRefusedUnderEnforce(t *testing.T) {
 		} {
 			t.Run(string(mode)+"/"+name, func(t *testing.T) {
 				results, wrote := postStateBatch(t, mode, true, `[{"tenant_id":"db-a","patch":`+patch+`}]`)
-				if len(results) != 1 || results[0].Status != "error" {
-					t.Errorf("results = %+v, want one refused op", results)
+				if len(results) != 1 || results[0].Status != "error" ||
+					!strings.Contains(results[0].Message, "the tenant metadata this op proposes") {
+					t.Errorf("results = %+v, want one op refused by the post-state check", results)
 				}
 				if wrote {
 					t.Error("a refused op was written")

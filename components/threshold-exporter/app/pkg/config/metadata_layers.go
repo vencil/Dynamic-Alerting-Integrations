@@ -46,7 +46,10 @@ func overlayMetadata(base map[string]any, layer any) map[string]any {
 	if !ok {
 		return nil
 	}
-	out := make(map[string]any, len(base)+len(m))
+	// Sized for base alone: a capacity of len(base)+len(m) is a size
+	// computation CodeQL flags (go/allocation-size-overflow); the map grows
+	// as m is written.
+	out := make(map[string]any, len(base))
 	for k, v := range base {
 		out[k] = v
 	}
