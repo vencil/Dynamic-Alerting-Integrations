@@ -15,7 +15,7 @@ updated_at: 2026-10-10
 
 > **Language / 語言：** **中文 (Current)** | [English](./011-pr-based-write-back.en.md)
 
-**決策摘要**：tenant-api 除了直接 commit，另提供「開 PR」的寫回模式，部署時以 `--write-mode`（或環境變數 `TA_WRITE_MODE`）選擇，預設仍是直接 commit。PR 模式下，每次 UI 寫入都開一條新分支、commit、push，再在 GitHub 開 PR 或在 GitLab 開 MR；設定要等 PR 合併後才生效。單筆寫入時，同一個租戶同時只能有一個待審核的 PR。
+**決策摘要**：tenant-api 除了直接 commit，另提供「開 PR」的寫回模式，部署時以 `--write-mode`（或環境變數 `TA_WRITE_MODE`）選擇，預設仍是直接 commit。PR 模式下，每次 UI 寫入都開一條新分支、commit、push，再在 GitHub 開 PR 或在 GitLab 開 MR；設定要等 PR 合併後才生效。單筆寫入之間，同一個租戶同時只能有一個待審核的 PR（批量寫入不在此列，見已知限制）。
 
 ## 狀態
 
@@ -240,7 +240,7 @@ GitHub 的 PR 機制原生整合了 code review、核准與 CI 檢查。自建�
 **已知限制**
 
 - **群組與 saved views 不走 PR**：PR 模式下，群組定義（`_groups.yaml`）與 saved views（`_views.yaml`）的寫入仍直接 commit，四眼原則不涵蓋它們。
-- **批量寫入不檢查待審核 PR**：「同一租戶只能有一個待審核 PR」只在單筆寫入檢查；批量寫入（`POST /api/v1/tenants/batch`、`POST /api/v1/groups/{id}/batch`）的 PR 路徑不做這個檢查，開出的分支名稱是 `tenant-api/batch/<UTC 時間>`。
+- **批量寫入不檢查待審核 PR**：「同一租戶只能有一個待審核 PR」只在單筆寫入檢查；批量寫入（`POST /api/v1/tenants/batch`、`POST /api/v1/groups/{id}/batch`）的 PR 路徑不做這個檢查，開出的分支名稱是 `tenant-api/batch/<UTC 時間>`。單筆寫入的檢查也看不到批量寫入開出的 PR：批量 PR 尚未合併時，單筆寫入仍可能替同一個租戶再開一個 PR。
 - **只能跑一個副本**：「同一租戶只能有一個待審核 PR」的檢查存在單一 process 的記憶體裡，不跨 Pod 協調，多個副本可能替同一個租戶開出重複的 PR。Helm chart 在 `replicaCount` 大於 1 時拒絕渲染。
 
 ## 考慮過的替代方案

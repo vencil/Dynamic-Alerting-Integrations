@@ -9,7 +9,7 @@ lang: en
 
 > **Language / 語言：** **English (Current)** | [中文](./011-pr-based-write-back.md)
 
-**Decision in brief**: besides committing directly, tenant-api offers an "open a PR" write-back mode, chosen at deployment time with `--write-mode` (or the `TA_WRITE_MODE` environment variable); the default is still a direct commit. In PR mode every UI write creates a new branch, commits, pushes, and then opens a PR on GitHub or an MR on GitLab; the configuration only takes effect once the PR is merged. For single writes, a tenant can have at most one pending PR at a time.
+**Decision in brief**: besides committing directly, tenant-api offers an "open a PR" write-back mode, chosen at deployment time with `--write-mode` (or the `TA_WRITE_MODE` environment variable); the default is still a direct commit. In PR mode every UI write creates a new branch, commits, pushes, and then opens a PR on GitHub or an MR on GitLab; the configuration only takes effect once the PR is merged. Between single writes, a tenant can have at most one pending PR at a time (batch writes are not covered; see the known limitations).
 
 ## Status
 
@@ -234,7 +234,7 @@ In PR mode, group definitions are still committed directly (see "Known limitatio
 **Known limitations**
 
 - **Groups and saved views bypass PRs**: in PR mode, writes to group definitions (`_groups.yaml`) and saved views (`_views.yaml`) are still committed directly, so the four-eyes principle does not cover them.
-- **Batch writes do not check for pending PRs**: the "one pending PR per tenant" check runs only for single writes; the PR path of batch writes (`POST /api/v1/tenants/batch`, `POST /api/v1/groups/{id}/batch`) does not perform it, and the branch it creates is named `tenant-api/batch/<UTC time>`.
+- **Batch writes do not check for pending PRs**: the "one pending PR per tenant" check runs only for single writes; the PR path of batch writes (`POST /api/v1/tenants/batch`, `POST /api/v1/groups/{id}/batch`) does not perform it, and the branch it creates is named `tenant-api/batch/<UTC time>`. The single-write check does not see PRs opened by batch writes either: while a batch PR is unmerged, a single write can still open another PR for the same tenant.
 - **Single replica only**: the "one pending PR per tenant" check lives in the memory of a single process and is not coordinated across Pods, so more replicas can open duplicate PRs for the same tenant. The Helm chart refuses to render when `replicaCount` is greater than 1.
 
 ## Alternatives considered

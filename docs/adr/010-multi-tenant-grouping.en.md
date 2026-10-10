@@ -9,7 +9,7 @@ lang: en
 
 > **Language / 語言：** **English (Current)** | [中文](./010-multi-tenant-grouping.md)
 
-**Decision in brief**: custom groups are defined in `_groups.yaml` in conf.d/, with members given as an explicit list of tenant IDs; they are managed through tenant-api's group API, and writes reuse the write lock and HEAD conflict detection of tenant writes (in PR write-back mode they are still committed directly, see [ADR-011](011-pr-based-write-back.en.md)). In addition, tenant `_metadata` gains fields such as environment, region, domain, and db_type for filtering in the API and UI; these fields are not added as labels of `tenant_metadata_info`.
+**Decision in brief**: custom groups are defined in `_groups.yaml` in conf.d/, with members given as an explicit list of tenant IDs; they are managed through tenant-api's group API, and writes of group definitions reuse the write lock and HEAD conflict detection of tenant writes (in PR write-back mode they are still committed directly, see [ADR-011](011-pr-based-write-back.en.md)). In addition, tenant `_metadata` gains fields such as environment, region, domain, and db_type for filtering in the API and UI; these fields are not added as labels of `tenant_metadata_info`.
 
 ## Status
 

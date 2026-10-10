@@ -15,7 +15,7 @@ updated_at: 2026-10-10
 
 > **Language / 語言：** **中文 (Current)** | [English](./010-multi-tenant-grouping.en.md)
 
-**決策摘要**：自訂群組定義在 conf.d/ 的 `_groups.yaml`，成員是一份明列的租戶 ID 清單，透過 tenant-api 的群組 API 管理，寫入沿用租戶寫入的寫入鎖與 HEAD 衝突偵測（PR 寫回模式下仍直接 commit，見 [ADR-011](011-pr-based-write-back.md)）。同時在租戶的 `_metadata` 加上 environment、region、domain、db_type 等欄位，供 API 與 UI 篩選；這些欄位不加進 `tenant_metadata_info` 的標籤。
+**決策摘要**：自訂群組定義在 conf.d/ 的 `_groups.yaml`，成員是一份明列的租戶 ID 清單，透過 tenant-api 的群組 API 管理，群組定義的寫入沿用租戶寫入的寫入鎖與 HEAD 衝突偵測（PR 寫回模式下仍直接 commit，見 [ADR-011](011-pr-based-write-back.md)）。同時在租戶的 `_metadata` 加上 environment、region、domain、db_type 等欄位，供 API 與 UI 篩選；這些欄位不加進 `tenant_metadata_info` 的標籤。
 
 ## 狀態
 
