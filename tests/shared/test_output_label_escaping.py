@@ -592,11 +592,11 @@ def test_the_suite_does_not_write_to_the_repo(hostile_dirs, tmp_path):
     parallel: "did the tree change" is a question about shared state, and under
     `-n auto` another worker is free to change it for unrelated reasons.
 
-    Known default outputs today: `operator_generate` -> ``operator-manifests/``
-    and `migrate_to_operator` -> ``migration-output/`` (both cwd-relative, so
-    ``cwd=sandbox`` contains them); `compile_custom_alerts` ->
-    ``rule-packs/rule-pack-custom-alerts.yaml`` resolved from ``__file__``,
-    which cwd does NOT contain — hence ``REPO_ANCHORED_OUTPUT``.
+    Since #1582 none of these tools has a default output path: `operator_generate`
+    and `migrate_to_operator` print to stdout without ``--output-dir``, and
+    `compile_custom_alerts` refuses to write without ``--out``. The xdist-safe
+    form of this check, over an AST-derived population and more call shapes,
+    is ``tests/shared/test_config_dir_write_containment.py``.
     """
     def status() -> list[str]:
         # A ceiling, not a budget: `git status` here answers in well under a
