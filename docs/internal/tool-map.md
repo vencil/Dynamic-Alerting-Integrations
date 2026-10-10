@@ -264,6 +264,7 @@ lang: zh
 - `scripts/tools/ops/_grar_validate.py`：URL / domain / schema validation for generate_alertmanager_routes.
 - `scripts/tools/ops/_observed_map_lib.py`：Shared SoT extractor for the threshold observed-map (#719).
 - `scripts/tools/ops/_registry_lib.py`：threshold-registry SoT loader / validator / query lib (TRK-339 WS1a / #1200).
+- `scripts/tools/ops/_render_diff.py`：Render both sides of a config change and compare what they render to (ADR-037).
 - `scripts/tools/ops/_threshold_alerts.py`：Which alerts read a threshold key — looked up in the rule packs, not guessed.
 - `scripts/tools/dx/_atomic_write.py`：Atomic write helper shared by the regen tools (Trap #60, #2082, #2128).
 - `scripts/tools/dx/_recipe_preview.py`：recipe would-fire preview core (#657 P2).

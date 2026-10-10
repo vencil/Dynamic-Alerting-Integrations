@@ -337,6 +337,10 @@ NOT_A_CELL: dict[str, str] = {
         "lists only through `_lib_confd.iter_config_files` (library cell)",
     "ops/validate_config.py":
         "lists only through `_lib_confd.iter_config_files` (library cell)",
+    "ops/_render_diff.py":
+        "asks `_lib_confd.iter_config_files` only whether a side has any "
+        "config file (library cell); the rest is rendered by da-guard and "
+        "the route generator",
     "ops/init_project.py":
         "reads conf.d only through `_lib_confd.iter_config_files`; its "
         "other walks are over the tree it scaffolds",
