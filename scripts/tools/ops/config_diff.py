@@ -724,6 +724,18 @@ def render_markdown(diffs, old_dir, new_dir, profile_diffs=None,
             "> :warning: Custom alert recipes are real alerting changes "
             "(new / removed / retuned alert rules), not format-only."
         )
+        # #1517 (owner: state the limit, point at no other report — customers
+        # get no blast-radius report to point at). Without it this section is
+        # silent where blast_radius says SILENCED, and nothing tells the reader
+        # its view is narrower.
+        lines.append(">")
+        lines.append(
+            "> Not a silencing verdict: this compares each top-level tenant "
+            "file's own recipes and does not resolve `_defaults.yaml` "
+            "inheritance. Only an in-place flip to a disabled threshold or "
+            "`mode: silent` is flagged; whether a removed recipe stops a page, "
+            "and any recipe a tenant inherits, are outside this report."
+        )
         lines.append("")
         for tenant, changes in custom_alert_diffs.items():
             summary = _summarize_changes(changes)
