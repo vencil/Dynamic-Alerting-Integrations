@@ -87,6 +87,8 @@ from _platform_fs import require_shebang_scripts, symlink_or_skip  # noqa: E402
 # discovered its population by substring; a tool could satisfy neither
 # and be absent from both. Both gates now read `_confd_population`.
 from _confd_population import confd_flag
+# The prefix every da-guard stderr line a tool passes on carries (#1822).
+from _lib_tenant_values import DA_GUARD_PREFIX as _DA_GUARD_PREFIX
 
 REPO = pathlib.Path(__file__).resolve().parents[2]
 TOOLS_DIR = REPO / "scripts" / "tools"
@@ -1335,8 +1337,10 @@ def test_operator_generate_does_not_invent_tenants_from_unusable_entries(
         f"vacuous; got {produced}")
 
 
+
+
 def test_each_reader_names_an_unusable_entry_exactly_once(
-        tmp_path: pathlib.Path) -> None:
+        tmp_path: pathlib.Path, da_guard_env: str) -> None:
     """⛔ Said once per run, not once per scan.
 
     Every one of these tools walks its conf.d more than once — `deprecate_rule`
@@ -1346,6 +1350,12 @@ def test_each_reader_names_an_unusable_entry_exactly_once(
     before this was pinned: `deprecate_rule a b c` printed the same two
     warnings THREE times. A repeated warning trains the operator to skim past
     it, which costs the signal the report exists to give.
+
+    Pinned to the path with a da-guard (`da_guard_env`), so the answer does not
+    depend on whether the environment has one (#1822). da-guard's own stderr,
+    which a tool passes on whole behind `DA_GUARD_PREFIX`, names the tree's
+    files in da-guard's words once per da-guard run; the claim here is about
+    each tool's own report, so those lines are not counted.
     """
     tree = _unusable_tree(tmp_path / "conf.d")
     out = tmp_path / "out"
@@ -1362,8 +1372,10 @@ def test_each_reader_names_an_unusable_entry_exactly_once(
              *argv.get(tool_rel, _argv_for(tool_rel, tree, out))],
             capture_output=True, timeout=180, cwd=str(tmp_path),
             env=dict(os.environ, PYTHONIOENCODING="utf-8"))
-        text = (r.stdout.decode("utf-8", "replace")
-                + r.stderr.decode("utf-8", "replace"))
+        text = "\n".join(
+            ln for ln in (r.stdout.decode("utf-8", "replace")
+                          + r.stderr.decode("utf-8", "replace")).split("\n")
+            if not ln.startswith(_DA_GUARD_PREFIX))
         for name in _UNUSABLE_NAMES:
             hits = text.count(name)
             assert hits == 1, (

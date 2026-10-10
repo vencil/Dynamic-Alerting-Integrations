@@ -22,6 +22,9 @@ import subprocess
 import sys
 from pathlib import Path
 
+import pytest
+from _platform_fs import symlink_or_skip  # noqa: E402
+
 import deprecate_rule  # noqa: E402
 
 TOOL = Path(deprecate_rule.__file__).resolve()
@@ -44,10 +47,10 @@ def _bytes(root: Path) -> dict[str, bytes]:
             for p in sorted(root.rglob("*")) if p.is_file()}
 
 
-def _run(conf_d: Path, *extra: str, env=None) -> subprocess.CompletedProcess:
+def _run(conf_d: Path, *extra: str, env=None, cwd=None) -> subprocess.CompletedProcess:
     return subprocess.run(
         [sys.executable, str(TOOL), METRIC, "--config-dir", str(conf_d), *extra],
-        capture_output=True, text=True, encoding="utf-8", timeout=120,
+        capture_output=True, text=True, encoding="utf-8", timeout=120, cwd=cwd,
         env={**(os.environ if env is None else env), "PYTHONIOENCODING": "utf-8"})
 
 
@@ -153,17 +156,39 @@ def test_a_carrier_this_round_repairs_is_not_blocked(tmp_path, da_guard_env):
         "defaults:\n  disk_usage: 80\n")
 
 
-def test_a_tree_the_exporter_refuses_is_not_written(tmp_path, da_guard_env):
+def test_da_guard_exit_2_is_unchecked_not_a_refusal(tmp_path, da_guard_env):
+    """F5: da-guard's exit 2 (here a tenant declared twice) is 未體檢 with its
+    reason and stderr, and the run behaves as without da-guard — not blocked."""
     conf_d = _tree(tmp_path, {
         "_defaults.yaml": _DEFAULTS,
         "a.yaml": "tenants:\n  t1:\n    mysql_threads_running: \"40\"\n",
         "b.yaml": "tenants:\n  t1:\n    disk_usage: \"70\"\n",
     })
-    before = _bytes(conf_d)
     r = _run(conf_d, "--execute")
-    assert r.returncode == 1, r.stdout + r.stderr
-    assert "exporter 拒絕載入整棵樹" in r.stdout
-    assert _bytes(conf_d) == before
+    assert r.returncode == 0, r.stdout + r.stderr
+    assert "未體檢：da-guard 無法回答" in r.stdout
+    assert "拒絕" not in r.stdout
+    assert f"{deprecate_rule.DA_GUARD_PREFIX}" in r.stderr and "duplicate" in r.stderr
+    assert "mysql_threads_running" not in (conf_d / "a.yaml").read_text(encoding="utf-8")
+
+
+def test_a_file_name_da_guard_cannot_put_in_json_is_unchecked(tmp_path, da_guard_env):
+    """F5: a non-UTF-8 file name makes key-refs exit 2 although the exporter
+    takes the tree: 未體檢, not blocked."""
+    conf_d = _tree(tmp_path, {
+        "_defaults.yaml": _DEFAULTS,
+        "t2.yaml": "tenants:\n  t2:\n    mysql_threads_running: \"40\"\n",
+    })
+    try:
+        (Path(os.fsdecode(os.fsencode(str(conf_d)) + b"/t\xff.yaml"))
+         .write_text("tenants:\n  t3:\n    mysql_threads_running: \"1\"\n", encoding="utf-8"))
+    except (OSError, UnicodeError):
+        pytest.skip("this filesystem does not take a non-UTF-8 file name")
+    r = _run(conf_d, "--execute")
+    assert r.returncode == 0, r.stdout + r.stderr
+    assert "未體檢：da-guard 無法回答" in r.stdout
+    assert "not valid UTF-8" in r.stderr
+    assert "mysql_threads_running" not in (conf_d / "t2.yaml").read_text(encoding="utf-8")
 
 
 def test_a_tenant_file_the_exporter_drops_is_left_alone_and_named(tmp_path, da_guard_env):
@@ -192,3 +217,113 @@ def test_without_da_guard_the_run_says_unchecked_and_behaves_as_before(tmp_path)
     assert "未體檢" in summary and "下架完成" in summary
     # Without the exporter's answer the alias spelling is not known to the tool.
     assert "mysql_cpu" in (conf_d / "t1.yaml").read_text(encoding="utf-8")
+
+
+# ── F1／F2：寫入後的判定只看 root 層 `_` 檔，照 exporter 的 walk 取檔 ─────────
+
+_BROKEN_CARRIER = _DEFAULTS + "optional_overrides: 5\n"
+
+
+def test_a_relative_symlink_carrier_is_judged_from_outside_conf_d(tmp_path, da_guard_env):
+    """The carrier is `_defaults.yaml -> ../store/_defaults.yaml` and the tool
+    runs with its CWD outside conf.d: the link resolves from its own
+    directory, so the dropped carrier still blocks."""
+    conf_d = _tree(tmp_path, {"t2.yaml": "tenants:\n  t2:\n    mysql_threads_running: \"40\"\n"})
+    store = tmp_path / "store"
+    store.mkdir()
+    (store / "_defaults.yaml").write_text(_BROKEN_CARRIER, encoding="utf-8")
+    symlink_or_skip(Path("..") / "store" / "_defaults.yaml", conf_d / "_defaults.yaml")
+    # Deeper than conf.d, so the link text read against the CWD names nothing.
+    elsewhere = tmp_path / "x" / "y" / "elsewhere"
+    elsewhere.mkdir(parents=True)
+    before = (store / "_defaults.yaml").read_bytes()
+    r = _run(conf_d, "--execute", cwd=elsewhere)
+    assert r.returncode == 1, r.stdout + r.stderr
+    assert "本輪寫入後仍在 parse_failed" in r.stdout
+    assert (store / "_defaults.yaml").read_bytes() == before
+
+
+def test_a_directory_symlink_is_not_followed(tmp_path, da_guard_env):
+    """The exporter does not follow a directory symlink, so a link to a
+    directory declaring t1 is no duplicate tenant: nothing is blocked and
+    nothing is 未體檢."""
+    conf_d = _tree(tmp_path, {
+        "_defaults.yaml": _DEFAULTS,
+        "a/t1.yaml": "tenants:\n  t1:\n    disk_usage: \"70\"\n",
+    })
+    symlink_or_skip(conf_d / "a", conf_d / "link", target_is_directory=True)
+    r = _run(conf_d, "--execute")
+    assert r.returncode == 0, r.stdout + r.stderr
+    assert "未體檢" not in r.stdout
+    assert (conf_d / "_defaults.yaml").read_text(encoding="utf-8") == "defaults:\n  disk_usage: 80\n"
+
+
+def test_a_fifo_in_a_subdirectory_does_not_let_a_dropped_carrier_through(
+        tmp_path, da_guard_env):
+    """Nothing outside the root `_` files is copied, so a FIFO below cannot
+    make the after-write check fail and drop the verdict."""
+    if not hasattr(os, "mkfifo"):
+        pytest.skip("no FIFOs on this platform")
+    conf_d = _tree(tmp_path, {
+        "_defaults.yaml": _BROKEN_CARRIER,
+        "sub/t2.yaml": "tenants:\n  t2:\n    disk_usage: \"40\"\n",
+    })
+    os.mkfifo(conf_d / "sub" / "pipe")
+    before = (conf_d / "_defaults.yaml").read_bytes()
+    r = _run(conf_d, "--execute")
+    assert r.returncode == 1, r.stdout + r.stderr
+    assert "本輪寫入後仍在 parse_failed" in r.stdout
+    assert (conf_d / "_defaults.yaml").read_bytes() == before
+
+
+def test_when_the_after_write_check_cannot_answer_the_current_verdict_holds(
+        tmp_path, da_guard_env, monkeypatch, capsys):
+    """Fail-closed: the after-write check raising falls back to today's
+    parse_failed, says why, and still blocks."""
+    conf_d = _tree(tmp_path, {
+        "_defaults.yaml": _BROKEN_CARRIER,
+        "t2.yaml": "tenants:\n  t2:\n    mysql_threads_running: \"40\"\n",
+    })
+    before = (conf_d / "_defaults.yaml").read_bytes()
+
+    def boom(*_a, **_k):
+        raise OSError("no space left")
+    monkeypatch.setattr(deprecate_rule.tempfile, "mkdtemp", boom)
+    monkeypatch.setattr(sys, "argv", ["deprecate_rule", METRIC, "--config-dir",
+                                      str(conf_d), "--execute"])
+    with pytest.raises(SystemExit) as ei:
+        deprecate_rule.main()
+    out = capsys.readouterr().out
+    assert ei.value.code == 1, out
+    assert "寫入後的體檢問不到" in out and "no space left" in out
+    assert "現況在 parse_failed" in out
+    assert (conf_d / "_defaults.yaml").read_bytes() == before
+
+
+# ── F4：子目錄 `_` 檔的 legacy 拼法算殘留 ──────────────────────────────────
+
+
+def test_a_legacy_spelling_in_a_subtree_carrier_withholds_the_claim(tmp_path, da_guard_env):
+    for key in ("mysql_threads_running", "mysql_cpu"):
+        conf_d = _tree(tmp_path / key, {
+            "_defaults.yaml": _DEFAULTS,
+            "sub/_defaults.yaml": f"defaults:\n  {key}: 20\n",
+            "sub/t2.yaml": "tenants:\n  t2:\n    disk_usage: \"40\"\n",
+        })
+        r = _run(conf_d, "--execute")
+        assert r.returncode == 1, (key, r.stdout + r.stderr)
+        tail = r.stdout.split("下架未完成", 1)[1]
+        assert f"sub/_defaults.yaml" in tail and "--plane subtree" in tail, (key, tail)
+        assert key in tail, (key, tail)
+
+
+# ── F6：未體檢時 Step 3 留著 alias 提醒；有 exporter 的答案時不印 ─────────────
+
+
+def test_the_alias_reminder_shows_only_when_unchecked(tmp_path, da_guard_env):
+    reminder = "若此 metric 在 exporter alias 表"
+    conf_d = _alias_tree(tmp_path / "with")
+    assert reminder not in _run(conf_d).stdout
+    conf_d = _alias_tree(tmp_path / "without")
+    env = {**os.environ, "DA_GUARD_BINARY": str(tmp_path / "no-such-da-guard")}
+    assert reminder in _run(conf_d, env=env).stdout

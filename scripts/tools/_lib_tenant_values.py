@@ -126,7 +126,8 @@ caller that needs only /effective and so does not run served-values at all.
 platform key the exporter judges it to be (`da-guard key-refs`: the check
 ValidateTenantKeys runs — a retired alias spelling, the `_critical` tier,
 a dimensional key in any label spelling), each a `KeyRef(file, section,
-owner, key)` with `key` as written; beside them the load's `parse_failed`
+owner, key, nested)` with `key` as written and `nested` marking a
+`_`-prefixed file below the root; beside them the load's `parse_failed`
 and `unreadable`, `unscanned` (files whose keys da-guard could not list,
 as `SkippedFile`s) and `stderr_lines`. Unlike the two loaders it does NOT
 raise `ParseFailedError`: a file the exporter drops is an answer its caller
@@ -380,6 +381,7 @@ class KeyRef(NamedTuple):
     section: str  # "defaults" | "optional_overrides" | "tenants" | "profiles"
     owner: str    # tenant id / profile name; "" for defaults and optional_overrides
     key: str      # the key as the file writes it
+    nested: bool = False  # a `_`-prefixed file below the root (the flat load does not merge it)
 
 
 class KeyRefsTree(NamedTuple):
@@ -942,8 +944,9 @@ def load_key_refs(
         for m in metrics:
             got = []
             for r in doc["refs"][m]:
-                ref = KeyRef(r["file"], r["section"], r["owner"], r["key"])
-                if not all(isinstance(v, str) for v in ref) or ref.section not in _KEY_REF_SECTIONS:
+                ref = KeyRef(r["file"], r["section"], r["owner"], r["key"], r["nested"])
+                if (not all(isinstance(v, str) for v in ref[:4]) or not isinstance(ref.nested, bool)
+                        or ref.section not in _KEY_REF_SECTIONS):
                     raise ValueError(f"reference {r!r} is not of its shape")
                 got.append(ref)
             refs[m] = got

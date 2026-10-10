@@ -48,7 +48,7 @@ type keyRefsDoc struct {
 	// tree (the exit code is unchanged). Always present ([] when none).
 	Unscanned []skippedFile `json:"unscanned"`
 	// Refs: every --metric → the keys whose platform key it is
-	// (config.KeyRefs), each {file, section, owner, key}. Every --metric has
+	// (config.KeyRefs), each {file, section, owner, key, nested}. Every --metric has
 	// an entry ([] when nothing refers to it).
 	Refs map[string][]config.KeyRef `json:"refs"`
 }
@@ -78,8 +78,9 @@ func parseKeyRefsFlags(args []string, errOut io.Writer) (string, []string, error
 		fmt.Fprintf(errOut, "Print, as JSON, every key of the tree whose platform key is one of the --metric keys,\n"+
 			"as the exporter judges it (the check ValidateTenantKeys runs): the key itself, a retired\n"+
 			"alias spelling, its _critical tier and its dimensional keys in any label spelling. Each\n"+
-			"reference is {file, section (defaults|optional_overrides|tenants|profiles), owner, key}\n"+
-			"with key as written. Files the exporter drops are named in parse_failed / unreadable and\n"+
+			"reference is {file, section (defaults|optional_overrides|tenants|profiles), owner, key,\n"+
+			"nested} with key as written; nested marks a _-prefixed file below the root, which the flat\n"+
+			"load does not merge. Files the exporter drops are named in parse_failed / unreadable and\n"+
 			"their keys are not listed.\n\n")
 		fs.PrintDefaults()
 		fmt.Fprintf(errOut, "\nExit codes:\n  0  ok\n  2  caller error, or a tree the exporter rejects (e.g. a tenant declared twice,\n"+

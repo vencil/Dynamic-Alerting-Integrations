@@ -12,13 +12,15 @@
 key-refs` 以 exporter 自己的程式碼回答兩件事——這一層哪些檔 exporter 的 load
 會丟掉（`parse_failed`／`unreadable`），以及哪些 key 經 exporter 的正規化屬於
 要下架的 metric（alias 表的 legacy 拼法、`_critical`、維度鍵的各種拼法；與
-canonical key 一樣列為引用、一樣移除）。root 層 `_` 前綴檔的判定看「本輪寫入
-之後」：把本輪的寫入套在 conf.d 的暫存複本上再問一次（本輪要刪的 key 可能正是
-讓載體被丟的那一個），仍被丟就擋寫入、rc 1；讀不到的檔看現況。
+canonical key 一樣列為引用、一樣移除；子目錄 `_` 檔裡的拼法用來判殘留）。
+root 層 `_` 前綴檔的判定看「本輪寫入之後」：只把這些檔套上本輪寫入放進空的
+暫存 conf.d 再問一次（本輪要刪的 key 可能正是讓載體被丟的那一個），仍被丟就
+擋寫入、rc 1；那一次問不到就退回現況的答案；讀不到的檔看現況。
 找不到 da-guard（`$DA_GUARD_BINARY` → `$PATH`）或它答不出來時印「未體檢」與
 原因，行為與 rc 照舊：體檢是附加的，缺了它本工具的判定與 #1822 之前相同，
 不是前置條件的缺失（不回 rc 2），也不是對這棵樹的發現（不回 rc 1）。
-da-guard 正常回答「exporter 拒絕整棵樹」（例如同一租戶宣告兩次）則擋寫入、rc 1。
+da-guard 的 exit 2 一律算「答不出來」（未體檢），不當成 exporter 拒絕整棵樹：
+它也可能只是 da-guard 寫不出 JSON（例如非 UTF-8 檔名）。
 
 NOT GUARDED（da-guard 也沒回答的）:
   * 平面判定仍靠 `--plane`: da-guard 把 --config-dir 當 root 判，所以
@@ -200,9 +202,8 @@ NULL_NOT_DECLARED = "null_not_declared"  # 這一個 key 寫成 null：exporter 
 UNREADABLE = "unreadable"              # 本工具讀不到，無法判定
 UNPARSED_BY_TOOL = "unparsed_by_tool"  # pure-Python parser 讀不了；exporter 未必
 EXPORTER_DROPPED = "exporter_dropped"  # da-guard：exporter 自己的 load 丟掉／讀不到這份檔（#1822）
-EXPORTER_REFUSED = "exporter_refused"  # da-guard：exporter 拒絕載入整棵樹（#1822）
 BLOCKING_KINDS = frozenset({UNPARSEABLE, UNREADABLE, UNPARSED_BY_TOOL,
-                            EXPORTER_DROPPED, EXPORTER_REFUSED})
+                            EXPORTER_DROPPED})
 # yaml.v3 是 libyaml 的移植：有 libyaml 就用它讀，scanner 層的判定才同源。
 _LOADER = yaml.CSafeLoader if yaml.__with_libyaml__ else yaml.SafeLoader
 # `ThresholdConfig` 會解碼的頂層 key（`pkg/config/types.go`）；其餘頂層 key 的子樹
@@ -910,21 +911,20 @@ def remove_from_tenants(metric_key, config_dir, execute=False, *,
 
 
 # ── exporter 的真 oracle（#1822）─────────────────────────────────────────
-DA_GUARD_EXIT_CALLER_ERR = 2  # da-guard 自己的 exit 2：呼叫錯誤，或 exporter 拒絕整棵樹
 
 
 def exporter_precheck(config_dir, metrics):
     """寫入前問 exporter 一次（`da-guard key-refs`，#1822）。
 
-    回 `(tree, unchecked, refused, stderr_lines)`，三者至多一個有值：
+    回 `(tree, unchecked, stderr_lines)`，`tree` 與 `unchecked` 恰一個有值：
       * `tree`: `KeyRefsTree`——這棵樹 exporter 丟掉哪些檔（`parse_failed`／
         `unreadable`），以及每個 metric 被哪些 key（原文）引用，判定用的是
         exporter 自己的 ValidateTenantKeys 分類（alias 表 legacy 拼法、
         `_critical`、維度鍵的各種拼法）。本工具不鏡射那些語意。
-      * `unchecked`: 問不到（沒有 da-guard、binary 壞了或太舊、逾時）的原因——
-        呼叫端印「未體檢」，行為照舊。
-      * `refused`: da-guard 正常回答「exporter 拒絕載入整棵樹」（exit 2，例如
-        同一個租戶宣告兩次）——呼叫端擋寫入。
+      * `unchecked`: 問不到的原因——沒有 da-guard、binary 壞了或太舊、逾時，
+        以及 da-guard 的任何 exit 2。exit 2 不當成「exporter 拒絕整棵樹」：它
+        也可能是 da-guard 自己寫不出 JSON（例如非 UTF-8 檔名），而 exporter
+        收這棵樹（#1822 F5）。呼叫端印「未體檢」，行為照舊。
     `stderr_lines` 是 da-guard 的 stderr，整份、不挑行。
     """
     try:
@@ -932,12 +932,10 @@ def exporter_precheck(config_dir, metrics):
     except DaGuardNotFoundError:
         return (None, "找不到 da-guard（$DA_GUARD_BINARY 未設或指向的路徑沒有檔案，"
                       "$PATH 上也沒有；本 repo 內 `make da-guard-build` 會建到 "
-                      ".build/da-guard）", None, [])
+                      ".build/da-guard）", [])
     except DaGuardError as e:
-        if e.returncode == DA_GUARD_EXIT_CALLER_ERR and not e.binary_fault:
-            return None, None, e.message, e.stderr_lines
-        return None, f"da-guard 無法回答（{e.message}）", None, e.stderr_lines
-    return tree, None, None, tree.stderr_lines
+        return None, f"da-guard 無法回答（{e.message}）", e.stderr_lines
+    return tree, None, tree.stderr_lines
 
 
 def _print_guard_lines(what, lines):
@@ -948,31 +946,65 @@ def _print_guard_lines(what, lines):
             print(f"{DA_GUARD_PREFIX}{safe_label(line)}", file=sys.stderr)
 
 
-def exporter_after_writes(config_dir, metrics, spellings, skip):
-    """本輪寫入（Step 1／Step 2，與 `--execute` 同一段寫入邏輯）套在 conf.d 的暫存
-    複本上，再問 exporter 一次：回 `(tree, unchecked, refused)`，意義同
-    `exporter_precheck`。真的 conf.d 一個位元組都不碰；複本用完即刪。複本跟隨
-    symlink、略過懸空的（讀不到的檔看現況那一次的答案）。"""
-    tmp = tempfile.mkdtemp(prefix="deprecate-rule-")
+def root_platform_files(config_dir):
+    """這一層 exporter 會逐檔解碼的 `_` 前綴檔 `[(名字, 實際路徑), ...]`。
+
+    照 exporter 的 walk：不跟目錄 symlink；檔案 symlink 以連結所在目錄解析
+    （`os.path.realpath(連結路徑)`，不是 readlink 原文，也與行程的 CWD 無關）。
+    懸空的連結、讀不到的檔不在其中——那是現況那次的 `unreadable`。
+    """
+    # Flat on purpose: only the root `_` files bear on the verdict (see
+    # `exporter_after_writes`); the nested-tree WARN is the tool's, printed once.
+    warn_nested(Path(config_dir), tool="deprecate_rule")
+    out = []
+    for e in sorted(Path(config_dir).iterdir()):
+        if (not e.name.startswith("_") or not has_yaml_extension(e.name)):
+            continue
+        real = os.path.realpath(str(e))
+        if os.path.isfile(real):
+            out.append((e.name, real))
+    return out
+
+
+def exporter_after_writes(config_dir, metrics, spellings):
+    """本輪寫入後，root 層 `_` 前綴檔 exporter 讀不讀得進去（#1822）。
+
+    回 `(parse_failed, unchecked)`：`parse_failed` 是寫入後仍被丟的檔名，問不到
+    時為 None、`unchecked` 是原因——呼叫端改用現況的答案（fail-closed）。
+
+    只看 root 層 `_` 檔本身：exporter 判它們丟不丟只看各檔的位元組與哪些
+    根載體存在（Go 測試 `TestKeyRefs_RootPlatformVerdictIsPerFile` 釘住），與
+    租戶檔、子目錄無關。所以把它們（套上本輪 Step 1 的寫入，同一段寫入邏輯）
+    放進一個只有它們的暫存 conf.d 再問一次；真的 conf.d 一個位元組都不碰。
+    """
+    tmp = None
     try:
-        copy = Path(tmp) / "conf.d"
         try:
-            shutil.copytree(config_dir, copy, symlinks=False,
-                            ignore_dangling_symlinks=True)
+            files = root_platform_files(config_dir)
+            if not files:
+                return [], None
+            tmp = tempfile.mkdtemp(prefix="deprecate-rule-")
+            copy = Path(tmp) / "conf.d"
+            copy.mkdir()
+            for name, real in files:
+                with open(real, "rb") as src:
+                    (copy / name).write_bytes(src.read())
             with contextlib.redirect_stdout(io.StringIO()), \
                     contextlib.redirect_stderr(io.StringIO()):
                 for m in metrics:
                     remove_from_all_defaults(m, copy, execute=True,
                                              spellings=spellings[m])
-                    remove_from_tenants(m, copy, execute=True, skip=skip,
-                                        spellings=spellings[m])
-        except (OSError, shutil.Error, SystemExit) as e:
-            return None, f"無法在暫存複本上套用本輪寫入（{e}），寫入後的載體未經 exporter 判定", None
-        tree, unchecked, refused, lines = exporter_precheck(copy, metrics)
-        _print_guard_lines(f"da-guard key-refs（套用本輪寫入後的暫存複本 {copy}）", lines)
-        return tree, unchecked, refused
+        except (Exception, SystemExit) as e:  # noqa: BLE001 — fail-closed below
+            return None, f"無法在暫存目錄套用本輪寫入（{e.__class__.__name__}: {e}）"
+        tree, unchecked, lines = exporter_precheck(copy, metrics)
+        _print_guard_lines(f"da-guard key-refs（root 層 `_` 檔套用本輪寫入後，暫存於 {copy}）",
+                           lines)
+        if tree is None:
+            return None, unchecked
+        return list(tree.parse_failed), None
     finally:
-        shutil.rmtree(tmp, ignore_errors=True)
+        if tmp is not None:
+            shutil.rmtree(tmp, ignore_errors=True)
 
 
 def _health_reason(key, raw, kind):
@@ -983,9 +1015,6 @@ def _health_reason(key, raw, kind):
     if kind == EXPORTER_DROPPED:
         return (f"exporter 讀不進這份檔（da-guard：{raw}；原因見上方 "
                 f"`{DA_GUARD_PREFIX.strip()}` 行），整份檔會被丟棄，下架不會生效；請先修檔")
-    if kind == EXPORTER_REFUSED:
-        return (f"exporter 拒絕載入整棵樹（da-guard：{raw}），任何寫入都不會生效；"
-                f"請先修好這棵樹")
     if key is None:
         return f"exporter 讀不進這份檔（{raw}），整份載體會被丟棄；請先修檔"
     return (f"`defaults:` 的 {key} 的值 {raw} exporter 讀不成數字（defaults 的型別是 "
@@ -1043,7 +1072,7 @@ def main():
 
     # #1822: 任何寫入之前（預覽與 --execute 一樣）問 exporter 一次。da-guard 的
     # stderr 整份照轉（每行加前綴）；問不到就明說「未體檢」，行為照舊。
-    oracle, unchecked, refused, guard_lines = exporter_precheck(
+    oracle, unchecked, guard_lines = exporter_precheck(
         args.config_dir, args.metrics)
     _print_guard_lines("da-guard key-refs（現況）", guard_lines)
     if unchecked:
@@ -1109,9 +1138,10 @@ def main():
     # #1822: exporter 自己的 load 丟掉／讀不到的這一層檔。子目錄裡的檔不是這一層
     # 的，略過。租戶檔看現況（da-guard 的 parse_failed）：照既有慣例不改寫它、
     # 殘留具名。root 層 `_` 前綴檔看「本輪寫入之後」——本輪自己要刪的 key 可能
-    # 正是讓它被丟的那一個（`old_metric: disable`），所以把本輪寫入套在暫存複本
-    # 上再問一次；讀不到的檔本工具修不了，看現況。子樹平面不採用 `_` 前綴檔的
-    # 判定：da-guard 把 --config-dir 當 root 判，子樹載體的值形狀規則不同。
+    # 正是讓它被丟的那一個（`old_metric: disable`），見 `exporter_after_writes`；
+    # 那一次問不到就退回現況的答案（fail-closed，不放行）。讀不到的檔本工具修
+    # 不了，看現況。子樹平面不採用 `_` 前綴檔的判定：da-guard 把 --config-dir
+    # 當 root 判，子樹載體的值形狀規則不同。
     if oracle is not None:
         for name in oracle.parse_failed:
             if ("/" in name or name.startswith("_") or name in tenant_bad
@@ -1125,16 +1155,15 @@ def main():
                   f"（{safe_label(u.reason)}）——這份檔的其他拼法未體檢")
         dropped = [(u.file, f"讀不到：{u.reason}") for u in oracle.unreadable]
         if args.plane == "root":
-            after, after_unchecked, after_refused = exporter_after_writes(
-                args.config_dir, args.metrics, spellings, tenant_bad)
+            after, after_why = exporter_after_writes(
+                args.config_dir, args.metrics, spellings)
             if after is not None:
-                dropped += [(n, "本輪寫入後仍在 parse_failed")
-                            for n in after.parse_failed]
-            if after_refused and not refused:
-                refused = f"本輪寫入後：{after_refused}"
-            unchecked = unchecked or after_unchecked
-            if after_unchecked:
-                print(f"\n  ⚠️  未體檢：{safe_label(after_unchecked)}")
+                dropped += [(n, "本輪寫入後仍在 parse_failed") for n in after]
+            else:
+                print(f"\n  ⚠️  寫入後的體檢問不到（{safe_label(after_why)}）——root 層 "
+                      f"`_` 前綴檔改用現況的 parse_failed 判定")
+                dropped += [(n, "現況在 parse_failed；寫入後的體檢問不到")
+                            for n in oracle.parse_failed]
         for name, why in dropped:
             if "/" in name or name == "." or not name.startswith("_") or name in blocked:
                 continue
@@ -1142,9 +1171,6 @@ def main():
                 continue
             health.setdefault(name, []).append((None, why, EXPORTER_DROPPED))
             blocked.add(name)
-    if refused:
-        health["."] = [(None, refused, EXPORTER_REFUSED)]
-        blocked.add(".")
     if args.plane != "root" and carriers_here:
         print("  ℹ️  子樹載體不做型別體檢：子樹平面的字串值合法"
               "（`computeEffectiveConfig` 走 map[string]any），"
@@ -1241,6 +1267,10 @@ def main():
         print(f"     • Recording Rule: tenant:{metric}:* 或 tenant:custom_{metric}:*")
         print(f"     • Alert Rule: 引用上述 Recording Rule 的 Alert")
         print(f"     • Threshold Rule: tenant:alert_threshold:{metric}")
+        if unchecked:
+            # 有 exporter 的答案時 legacy 拼法已在 Step 1／2 處理；未體檢就只能提醒。
+            print(f"     • 若此 metric 在 exporter alias 表（pkg/config/aliases.go）有 "
+                  f"legacy 名字，租戶檔請一併檢查")
 
     # 完成度是 KEY 級: 重掃（或預覽時用掃描結果）扣掉本工具會清的，剩下的具名。
     # 載體體檢已具名的檔不再以「無法讀取」重複列。

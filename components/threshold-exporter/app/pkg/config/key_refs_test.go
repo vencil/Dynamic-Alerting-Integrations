@@ -86,6 +86,8 @@ func TestKeyRefs(t *testing.T) {
 		"t3.yaml": "tenants:\n  t3:\n    - mysql_cpu\n",
 		// A nested tenant file is read too.
 		"sub/t4.yaml": "tenants:\n  t4:\n    mysql_cpu: ~\n",
+		// A subtree carrier's references are listed, marked nested (#1822 F4).
+		"sub/_defaults.yaml": "defaults:\n  mysql_cpu: 20\n",
 	})
 	rep, err := KeyRefs(dir, []string{"mysql_threads_running", "nothing_here"}, nil)
 	if err != nil {
@@ -95,6 +97,7 @@ func TestKeyRefs(t *testing.T) {
 		{File: "_defaults.yaml", Section: "defaults", Key: "mysql_cpu"},
 		{File: "_defaults.yaml", Section: "optional_overrides", Key: "mysql_threads_running_critical"},
 		{File: "_profiles.yaml", Section: "profiles", Owner: "p1", Key: "mysql_threads_running"},
+		{File: "sub/_defaults.yaml", Section: "defaults", Key: "mysql_cpu", Nested: true},
 		{File: "sub/t4.yaml", Section: "tenants", Owner: "t4", Key: "mysql_cpu"},
 		{File: "t1.yaml", Section: "tenants", Owner: "t1", Key: "mysql_cpu"},
 		{File: "t2.yaml", Section: "tenants", Owner: "t2", Key: "mysql_cpu{db='a'}"},
@@ -153,5 +156,49 @@ func TestKeyRefs_RefusedTree(t *testing.T) {
 	}
 	if _, err := KeyRefs(filepath.Join(dir, "missing"), []string{"disk_usage"}, nil); err == nil {
 		t.Error("a missing dir: no error")
+	}
+}
+
+// TestKeyRefs_RootPlatformVerdictIsPerFile pins the premise deprecate_rule's
+// after-write check stands on (#1822 F1): whether the load drops a root `_`
+// file depends on that file's bytes and on which root carriers exist (only
+// the selected one is parsed), never on the tenant files or subdirectories.
+// So judging the root `_` files alone, in an otherwise empty tree, gives the
+// verdict the whole tree gives.
+func TestKeyRefs_RootPlatformVerdictIsPerFile(t *testing.T) {
+	t.Parallel()
+	root := map[string]string{
+		"_defaults.yaml": "defaults:\n  disk_usage: 80\noptional_overrides: 5\n",
+		"_defaults.yml":  "defaults: [unselected, never parsed]\n",
+		"_profiles.yaml": "profiles:\n  p1: [1]\n",
+		"_ok.yaml":       "profiles:\n  p2:\n    disk_usage: 1\n",
+	}
+	full := map[string]string{
+		"t1.yaml":            "tenants:\n  t1:\n    disk_usage: 1\n  t9: [1]\n",
+		"sub/t2.yaml":        "tenants:\n  t2:\n    disk_usage: 1\n",
+		"sub/_defaults.yaml": "defaults: [broken\n",
+	}
+	for k, v := range root {
+		full[k] = v
+	}
+	whole, alone := t.TempDir(), t.TempDir()
+	testutil.WriteTree(t, whole, full)
+	testutil.WriteTree(t, alone, root)
+	rootOnly := func(dir string) []string {
+		rep, err := KeyRefs(dir, []string{"disk_usage"}, nil)
+		if err != nil {
+			t.Fatal(err)
+		}
+		var out []string
+		for _, f := range rep.Load.ParseFailed {
+			if !strings.Contains(f, "/") && strings.HasPrefix(f, "_") {
+				out = append(out, f)
+			}
+		}
+		return out
+	}
+	w, a := rootOnly(whole), rootOnly(alone)
+	if !reflect.DeepEqual(w, a) || !reflect.DeepEqual(w, []string{"_defaults.yaml", "_profiles.yaml"}) {
+		t.Errorf("root `_` parse_failed: whole tree %v, root files alone %v; want both [_defaults.yaml _profiles.yaml]", w, a)
 	}
 }

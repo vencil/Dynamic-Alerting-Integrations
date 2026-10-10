@@ -91,6 +91,11 @@ type KeyRef struct {
 	// Key is the key as the file writes it (an optional_overrides entry: the
 	// entry as written).
 	Key string `json:"key"`
+	// Nested: the file is a `_`-prefixed file below the root
+	// (isNestedPlatformFile), which the flat load does not merge — a subtree
+	// `_defaults.yaml` the hierarchy plane reads, or a file nothing reads. Its
+	// references are listed so a caller can name what is left there.
+	Nested bool `json:"nested"`
 }
 
 // KeyRefsReport is KeyRefs' answer.
@@ -122,7 +127,7 @@ type writtenSections struct {
 // KeyRefs lists, for each metric, the keys of the tree at dir whose
 // platform key (PlatformKeyFor) is that metric — in every file the
 // exporter's load keeps (LoadDirReport's scan, minus the files it drops for
-// not decoding and the nested `_` files it never reads), as written, in the
+// not decoding; a nested `_` file's references are marked Nested), as written, in the
 // four sections whose keys name metrics. Every key the file writes is
 // listed, a null one too: the question is what the file still says once the
 // metric is gone, not what the exporter serves today.
@@ -148,15 +153,18 @@ func KeyRefs(dir string, metrics []string, logger *log.Logger) (KeyRefsReport, e
 	for _, pf := range rep.ParseFailed {
 		dropped[pf] = true
 	}
+	nested := false
 	add := func(file, section, owner, key string) {
 		if pk, ok := PlatformKeyFor(key); ok && want[pk] {
-			out.Refs[pk] = append(out.Refs[pk], KeyRef{File: file, Section: section, Owner: owner, Key: key})
+			out.Refs[pk] = append(out.Refs[pk], KeyRef{File: file, Section: section, Owner: owner, Key: key,
+				Nested: nested})
 		}
 	}
 	for _, k := range scan.Keys {
-		if dropped[k] || isNestedPlatformFile(k) {
+		if dropped[k] {
 			continue
 		}
+		nested = isNestedPlatformFile(k)
 		f := scan.Files[k]
 		data := f.Data
 		if data == nil {
