@@ -849,6 +849,14 @@ var ErrMergeNoOp = errors.New("merge changes nothing")
 // nothing of the batch is written.
 var ErrMergePolicyRefused = errors.New("merged content breaks the domain policy")
 
+// ErrMergeScopeRefused is what a MergeFunc's error wraps (errors.Is) when the
+// merged content would place the tenant outside the caller's metadata write
+// scope (#2830: a batch op setting `_profile` or a string `_metadata`). A
+// verdict on the tree it was read from, like ErrMergePolicyRefused, and
+// handled the same way: tolerated by WritePRBatch's pre-flight, decided by
+// the post-checkout pass on the fresh base.
+var ErrMergeScopeRefused = errors.New("merged content leaves the caller's metadata write scope")
+
 // ErrMergeBaseNotLoadable is what a MergeFunc's error wraps (errors.Is) when it
 // refuses the EXISTING file as its base because the file cannot be loaded as
 // a tenant config (#2373). It is a verdict on the file's content, so like

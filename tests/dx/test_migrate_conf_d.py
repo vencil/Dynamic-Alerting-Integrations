@@ -278,3 +278,55 @@ class TestCLIIntegration:
         assert plan_file.exists()
         plan = json.loads(plan_file.read_text())
         assert isinstance(plan, list) and len(plan) > 0
+
+
+class TestUnplaceableMetadata:
+    """#2830: a `_metadata` the exporter reads but this plan cannot place —
+    the string form, or a non-string domain/region/environment — is listed
+    for a manual move instead of crashing the whole plan."""
+
+    @pytest.mark.parametrize("body, reason", [
+        ('tenants:\n  t2:\n    _metadata: "domain: finance\\nenvironment: production\\n"\n',
+         "_metadata is not a mapping (str)"),
+        ("tenants:\n  t3:\n    _metadata:\n      domain: finance\n      environment: 123\n",
+         "_metadata.environment is not a string (int)"),
+        ("tenants:\n  t5:\n    _metadata:\n      domain: 7\n",
+         "_metadata.domain is not a string (int)"),
+    ])
+    def test_listed_not_crashed(self, tmp_path, body, reason):
+        conf_d = tmp_path / "conf.d"
+        conf_d.mkdir()
+        (conf_d / "t.yaml").write_text(body, encoding="utf-8")
+        (conf_d / "t4.yaml").write_text(
+            "tenants:\n  t4:\n    _metadata:\n      domain: finance\n", encoding="utf-8")
+        by_source = {a["source"]: a for a in mcd.plan_migration(conf_d)}
+        assert by_source["t.yaml"]["status"] == "skip_unplaceable_metadata"
+        assert by_source["t.yaml"]["reason"] == reason
+        assert by_source["t.yaml"]["target"] == "t.yaml"
+        # The other file is still planned.
+        assert by_source["t4.yaml"]["status"] == "ok"
+        assert by_source["t4.yaml"]["target"] == "finance/t4.yaml"
+
+    def test_cli_names_the_file(self, tmp_path):
+        conf_d = tmp_path / "conf.d"
+        conf_d.mkdir()
+        (conf_d / "t2.yaml").write_text(
+            'tenants:\n  t2:\n    _metadata: "domain: finance\\n"\n', encoding="utf-8")
+        proc = subprocess.run(
+            [sys.executable, os.path.join(_TOOLS_DIR, "migrate_conf_d.py"), "--conf-d", str(conf_d), "--dry-run"],
+            capture_output=True, text=True, encoding="utf-8", timeout=60)
+        assert proc.returncode == 0, proc.stderr
+        assert "Skip (unplaceable): 1" in proc.stdout
+        assert "t2.yaml: _metadata is not a mapping (str) — move it by hand" in proc.stdout
+
+    def test_an_empty_path_field_is_not_written(self, tmp_path):
+        """`environment:` (YAML null) is left out of the path, as before
+        #2830 — not reported as a non-string."""
+        conf_d = tmp_path / "conf.d"
+        conf_d.mkdir()
+        (conf_d / "t1.yaml").write_text(
+            "tenants:\n  t1:\n    _metadata:\n      domain: finance\n      region: us\n      environment:\n",
+            encoding="utf-8")
+        (action,) = mcd.plan_migration(conf_d)
+        assert action["status"] == "ok"
+        assert action["target"] == "finance/us/t1.yaml"

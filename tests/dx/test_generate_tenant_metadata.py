@@ -359,3 +359,26 @@ class TestPagerdutyRoutingChannel:
         for recv in ({"type": "pagerduty", "service_key": "secret-k"},
                      {"type": "pagerduty", "routing_key": "secret-r"}):
             assert "secret" not in self._channel(recv)
+
+
+class TestEnvironmentIsNotInferredFromTheName:
+    """#2830: `environment` is the one the exporter reads from `_metadata`
+    (tenant_metadata_info, tenant-api's list/search), never one guessed from
+    the tenant name — the portal falls back to this file when tenant-api is
+    down, so a guess would show the tenant in two environments. Same rule as
+    db_type (#2115 B4)."""
+
+    def test_a_name_pattern_sets_no_environment(self, tmp_path):
+        root = tmp_path / "conf.d"
+        root.mkdir()
+        (root / "_defaults.yaml").write_text(_DEFAULTS, encoding="utf-8")
+        for tid in ("prod-x", "staging-y", "dev-z"):
+            (root / f"{tid}.yaml").write_text(
+                f"tenants:\n  {tid}:\n    _metadata:\n      owner: sre\n", encoding="utf-8")
+        (root / "t4.yaml").write_text(
+            "tenants:\n  t4:\n    _metadata:\n      environment: production\n", encoding="utf-8")
+        meta = gtm.build_tenant_metadata(root)
+        envs = {t: m["environment"] for t, m in meta["tenant_metadata"].items()}
+        assert envs == {"prod-x": "", "staging-y": "", "dev-z": "", "t4": "production"}
+        grouped = {t for g in meta["tenant_groups"].values() for t in g["tenants"]}
+        assert grouped == {"t4"}, meta["tenant_groups"]
