@@ -34,7 +34,6 @@ import yaml
 _THIS_DIR = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, _THIS_DIR)  # Docker flat layout
 sys.path.insert(0, os.path.join(_THIS_DIR, '..'))  # Repo subdir layout
-from _lib_compat import PROJECT_ROOT_MARKERS  # noqa: E402
 from _lib_python import (  # noqa: E402
     parse_duration_seconds,
     RECEIVER_URL_FIELDS,
@@ -374,52 +373,39 @@ def _find_platform_rules_configmap() -> "Path | None":
     (``generate_alertmanager_routes``, ``byo_check``) meant the whole
     ``generate-routes`` / ``byo-check`` surface died before its first line.
 
-    ⛔ Counting levels is the defect, so the fix does not count levels — it
-    looks for the file. Order matters: flat-first, because in the image the
-    pack ships beside this module (``build.sh`` ``REPO_DATA_FILES``, paired to
-    this module by ``REQUIRED_DATA_FILES``), while a repo checkout keeps it
-    under ``k8s/``. **The flat branch comes first precisely because it assumes
-    no marker**: the shipped image is ``python:*-alpine`` with ``WORKDIR
-    /opt/da-tools`` and only ``entrypoint.py`` / ``VERSION`` / ``tools/``
-    copied in, so none of ``_lib_compat.PROJECT_ROOT_MARKERS`` (``.git`` /
-    ``Makefile`` / ``pyproject.toml``) exists anywhere on that ancestor chain
-    — nor does ``k8s/``. The image path must therefore resolve before any
-    marker is consulted, and the bounded marker walk below serves only the
-    repo branch, where a marker does exist. One enumeration, from the shared
-    constant: the earlier revision listed the markers twice and the two lists
-    disagreed (``k8s`` is not a marker; ``pyproject.toml``, the one a Python
-    image is most likely to carry, was missing from the first list).
+    ⛔ Look for the pack where THIS tree puts it, not for a project marker
+    (#1533 §2). Two layouts ship this module:
 
-    Returns None when no copy is reachable — the caller degrades loudly rather
-    than raising, because a missing pack must not take the tool down.
+    * the image: the pack sits beside it (``build.sh`` ``REPO_DATA_FILES``,
+      paired to this module by ``REQUIRED_DATA_FILES``). No marker and no
+      ``k8s/`` exist on that ancestor chain, so this is checked first.
+    * a checkout, a ``git archive`` tarball or a vendored copy of the tree:
+      the module is at ``<root>/scripts/tools/ops/`` and the pack at
+      ``<root>/k8s/03-monitoring/``. ``<root>`` is found by FILE, not by
+      depth: the ancestor whose ``scripts/tools/ops/<this file>`` resolves to
+      this very file (#1494's ``parents[3]`` raised at import in the image;
+      a walk that finds nothing just returns None).
+
+    The marker walk this replaces stopped at the first ancestor holding a
+    ``.git`` / ``Makefile`` / ``pyproject.toml`` and took that ancestor's
+    ``k8s/``. That adopted SOMEONE ELSE'S pack whenever this tree sat inside
+    another repo or under another checkout (measured: 1 identity instead of
+    45, no warning), and skipped this tree's own pack when the outer repo had
+    none. A pack that is not where this tree keeps it is not this platform's.
+
+    Returns None when neither place has it — the caller degrades loudly
+    rather than raising, because a missing pack must not take the tool down.
     """
     here = Path(__file__).resolve().parent
     flat = here / _PLATFORM_RULES_BASENAME
     if flat.is_file():
         return flat
-    # ⛔ BOUNDED at the project root. An unbounded ancestor walk keeps climbing
-    # past the checkout, so a stray `k8s/03-monitoring/` anywhere above it —
-    # another checkout, a home directory, `/` — would be adopted as this
-    # platform's rule pack.
-    #
-    # ⛔ The marker set is shared with `describe_tenant`, and sharing it is the
-    # point: this side was left keyed on `.git` alone for one revision while
-    # the other side had already been widened, which made a source tarball
-    # (`git archive`, a release zip, a vendored copy — no `.git`) fall back to
-    # the 6-entry constant instead of the 41-entry pack. That is the fail-OPEN
-    # direction, and it was the MORE serious of the two places, so "fixed the
-    # one that was pointed at" left the worse half broken. `.git` is a
-    # directory in a clone and a FILE in a worktree, hence `exists()`.
-    repo_root = next(
-        (base for base in (here, *here.parents)
-         if any((base / m).exists() for m in PROJECT_ROOT_MARKERS)),
-        None,
-    )
-    if repo_root is not None:
-        candidate = (repo_root / "k8s" / "03-monitoring"
-                     / _PLATFORM_RULES_BASENAME)
-        if candidate.is_file():
-            return candidate
+    me = Path(__file__).resolve()
+    for base in here.parents:
+        if (base / "scripts" / "tools" / "ops" / me.name).resolve() == me:
+            candidate = (base / "k8s" / "03-monitoring"
+                         / _PLATFORM_RULES_BASENAME)
+            return candidate if candidate.is_file() else None
     return None
 
 
