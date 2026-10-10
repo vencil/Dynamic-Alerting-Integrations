@@ -597,7 +597,7 @@ entries:
     count: 1
 
   # --- 路由層：產生器 --strict 擋下租戶、tenant-api 卻放行 PUT（擋住第二階段）-
-  # 產生器在正式環境以 --validate --strict 執行：任何 blocks 為 strict／always、
+  # 產生器以 --validate --strict 執行（只看 conf.d 的參數，同 make validate-routes）：任何 blocks 為 strict／always、
   # 主體（Finding.tenant）是被寫入租戶的 finding，都表示產生器擋下該租戶的設
   # 定，不論值來自租戶檔、_routing_defaults、routing profile 或平台 overlay。
   # 這些格子要等第一階段的寫入路徑（tenant-api 改向產生器取判定，ADR-036 實作
@@ -660,10 +660,11 @@ entries:
     count: 1
 
   # --- 路由層：產生器生成階段的 finding 擋下租戶、tenant-api 放行（擋住第二階段）
-  # 產生器的判定取自它自己以正式環境方式執行（--validate --strict
+  # 產生器的判定取自它自己以只看 conf.d 的參數執行（--validate --strict
   # --findings-json）的 findings 文件：in-force（blocks 在該次的 in-force 集合）
   # 且主體是該租戶（或該租戶自己的檔）的 finding。下列 finding 只在生成階段出
-  # 現（blocks=validate），不在 load_tenant_tree 的 schema_warnings 裡。
+  # 現（blocks=validate），不在 load_tenant_tree 的 schema_warnings 裡。CLI 的
+  # --policy 檔（部署端的 allowed_domains）依 owner 決定不在範圍，見 #2826。
   - id: tenant-api-put-ignores-invalid-route-entry
     reader: tenant-api
     layer: routing

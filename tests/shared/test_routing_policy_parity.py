@@ -90,6 +90,13 @@ MATRIX = json.loads((Path(__file__).parent / "routing_policy_parity_matrix.json"
 TOP_KEYS = {"_comment", "blocking_kinds", "tenant_ids", "tenant_api_unmeasured", "trees"}
 # Why a tenant_api cell may be null (tenant-api's verdict is not measured).
 UNMEASURED_KINDS = {"nested_tree", "no_put_body", "outside_table"}
+# Every `outside_table` cell, with the refusal tenant-api actually answers
+# there (its reason must name it): a measurable PUT parked outside the table
+# is red until it is added here, in the diff.
+OUTSIDE_TABLE = {
+    ("tenant-merge-tag-key-2700", "t1"): '400 BAD_REQUEST',
+    ("hier-e-duplicate-tenant-id", "t-x"): "409 TENANT_DECLARED_ELSEWHERE",
+}
 TREE_KEYS = {"name", "files", "platform", "expect", "enforced_group_by_invalid"}
 PLATFORM_KINDS = {"routing_defaults_routes_ignored", "routing_in_unread_location",
                   "domain_policy_unusable",
@@ -278,6 +285,16 @@ def unmeasured_errors(matrix: dict) -> list:
                 errors.append(f"{where}: no_put_body, but a {tenant}.yaml exists (measure it, or nested_tree)")
             if why["kind"] == "outside_table" and not root_body:
                 errors.append(f"{where}: outside_table needs a measurable PUT (a root files[{tenant}.yaml])")
+            if why["kind"] == "outside_table":
+                pinned = OUTSIDE_TABLE.get((name, tenant))
+                if pinned is None:
+                    errors.append(f"{where}: outside_table is not in OUTSIDE_TABLE — measure the cell, or add "
+                                  f"(tree, tenant) with tenant-api's actual refusal to that list")
+                elif pinned not in str(why["reason"]):
+                    errors.append(f"{where}: the reason does not name the pinned refusal {pinned!r}")
+    for (name, tenant) in OUTSIDE_TABLE:
+        if table.get(name, {}).get(tenant, {}).get("kind") != "outside_table":
+            errors.append(f"OUTSIDE_TABLE {name} {tenant}: no such outside_table cell (drop it from the list)")
     return errors
 
 
@@ -300,6 +317,17 @@ def test_unmeasured_guard_is_red() -> None:
     m = json.loads(json.dumps(MATRIX))
     m["tenant_api_unmeasured"]["invalid-tenant-ids"]["UPPER"]["kind"] = "nested_tree"
     assert any("nested_tree needs the tenant's own file below the root" in e for e in unmeasured_errors(m))
+    # A measurable cell parked as outside_table, not in OUTSIDE_TABLE: red.
+    m = json.loads(json.dumps(MATRIX))
+    next(t for t in m["trees"] if t["name"] == "domain-policy-null")["expect"]["t-null"]["tenant_api"] = None
+    m["tenant_api_unmeasured"]["domain-policy-null"] = {"t-null": {"kind": "outside_table", "reason": "r"}}
+    assert any("domain-policy-null t-null: outside_table is not in OUTSIDE_TABLE" in e
+               for e in unmeasured_errors(m))
+    # A pinned cell whose reason no longer names its refusal: red.
+    m = json.loads(json.dumps(MATRIX))
+    m["tenant_api_unmeasured"]["hier-e-duplicate-tenant-id"]["t-x"]["reason"] = "something else"
+    assert any("does not name the pinned refusal '409 TENANT_DECLARED_ELSEWHERE'" in e
+               for e in unmeasured_errors(m))
     # A root-level tenant of a nested tree is measurable: parking it is red.
     m = json.loads(json.dumps(MATRIX))
     next(t for t in m["trees"] if t["name"] == "hier-d-subtree-policy-additive-and-scoped")[
@@ -468,10 +496,12 @@ _POLICY_KINDS = {"domain_policy_violation", "critical_escalation_missing"}
 
 
 def generator_findings(config_dir: Path) -> dict:
-    """The generator's own verdict on a tree, exactly as production asks
-    for it (`generate_alertmanager_routes.py --validate --strict
-    --findings-json`, .github/workflows/validate.yaml): the findings
-    document of an in-process run of its `main()`. Nothing is
+    """The generator's own verdict on a tree: the findings document of an
+    in-process run of its `main()` with the conf.d-only arguments
+    `--validate --strict` (as `make validate-routes` runs it) plus
+    `--findings-json`. The CLI `--policy` file (a deployment's
+    allowed_domains, which .github/workflows/validate.yaml passes) is out
+    of scope by owner decision: see issue #2826. Nothing is
     reconstructed from load_tenant_tree — generation-stage findings
     (invalid_route_entry, missing_receiver_field …) and refusals are only
     there."""
@@ -510,7 +540,7 @@ def blocking_kinds(doc: dict, tenant: str) -> set:
 def _generator_put(want: dict, blocking: set) -> dict | None:
     """The tenant_api cell as the generator would judge that PUT (the
     tenant's own file verbatim): it refuses the write when an in-force
-    finding of the production run is the write's (`blocking`, from
+    finding of that run is the write's (`blocking`, from
     blocking_kinds) — 403 for the domain policy's (_POLICY_KINDS), else 400
     (any other kind: values_not_string, group_by_invalid,
     routing_not_mapping, invalid_route_entry, tenant_file_unreadable,

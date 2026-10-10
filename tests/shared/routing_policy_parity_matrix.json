@@ -54,8 +54,8 @@
     "python_differs: null, or the values the Python side produces where the YAML readers disagree",
     "(the Go columns above hold for every Go reader); `reason` says why. Its keys: targets, policy,",
     "rejected_routes, group_by_invalid, refused - the generator's values, asserted by the Python half -",
-    "and tenant_api, the verdict the generator gives that PUT, taken from its own findings document as",
-    "production runs it (--validate --strict --findings-json, in-process): it refuses the write when an",
+    "and tenant_api, the verdict the generator gives that PUT, taken from its own findings document with the",
+    "conf.d-only arguments --validate --strict (as `make validate-routes`) and --findings-json, in-process; the CLI --policy file (a deployment's allowed_domains) is out of scope by owner decision, see #2826: it refuses the write when an",
     "in-force finding (blocks in the run's in-force set) names the tenant or the file the PUT writes",
     "(`<tenant>.yaml`), or the run failed unitemised (run_failed) - '403' for a domain-policy kind, else '400' -",
     "whatever layer the value came from. Where tenant-api answers 'ok' that code goes here; where tenant-api",
@@ -972,7 +972,7 @@
             "batch": null
           },
           "python_differs": {
-            "reason": "tenant-api lets the PUT through; the generator's production run (--validate --strict) reports a missing_receiver_field for the tenant (blocks=validate: a generation-stage finding) and fails.",
+            "reason": "tenant-api lets the PUT through; the generator run with --validate --strict reports a missing_receiver_field for the tenant (blocks=validate: a generation-stage finding) and fails.",
             "targets": [],
             "policy": [],
             "rejected_routes": [],
@@ -1266,7 +1266,7 @@
             "batch": null
           },
           "python_differs": {
-            "reason": "tenant-api lets the PUT through; the generator's production run (--validate --strict) reports an invalid_route_entry for the tenant (blocks=validate: a generation-stage finding) and fails. The tenant's `routes` is no list.",
+            "reason": "tenant-api lets the PUT through; the generator run with --validate --strict reports an invalid_route_entry for the tenant (blocks=validate: a generation-stage finding) and fails. The tenant's `routes` is no list.",
             "targets": [
               {
                 "ref": "receiver",
@@ -4416,7 +4416,7 @@
             "batch": null
           },
           "python_differs": {
-            "reason": "tenant-api lets the PUT through; the generator's production run (--validate --strict) reports an invalid_route_entry for the tenant (blocks=validate: a generation-stage finding) and fails. A routes match key is no label name.",
+            "reason": "tenant-api lets the PUT through; the generator run with --validate --strict reports an invalid_route_entry for the tenant (blocks=validate: a generation-stage finding) and fails. A routes match key is no label name.",
             "targets": [
               {
                 "ref": "receiver",
@@ -4456,7 +4456,7 @@
             "batch": null
           },
           "python_differs": {
-            "reason": "tenant-api lets the PUT through; the generator's production run (--validate --strict) reports an invalid_route_entry for the tenant (blocks=validate: a generation-stage finding) and fails. A routes match key is no label name.",
+            "reason": "tenant-api lets the PUT through; the generator run with --validate --strict reports an invalid_route_entry for the tenant (blocks=validate: a generation-stage finding) and fails. A routes match key is no label name.",
             "targets": [
               {
                 "ref": "receiver",
@@ -4496,7 +4496,7 @@
             "batch": null
           },
           "python_differs": {
-            "reason": "tenant-api lets the PUT through; the generator's production run (--validate --strict) reports an invalid_route_entry for the tenant (blocks=validate: a generation-stage finding) and fails. A routes match key is no label name.",
+            "reason": "tenant-api lets the PUT through; the generator run with --validate --strict reports an invalid_route_entry for the tenant (blocks=validate: a generation-stage finding) and fails. A routes match key is no label name.",
             "targets": [
               {
                 "ref": "receiver",
@@ -4536,7 +4536,7 @@
             "batch": null
           },
           "python_differs": {
-            "reason": "tenant-api lets the PUT through; the generator's production run (--validate --strict) reports an invalid_route_entry for the tenant (blocks=validate: a generation-stage finding) and fails. A routes match key is no label name.",
+            "reason": "tenant-api lets the PUT through; the generator run with --validate --strict reports an invalid_route_entry for the tenant (blocks=validate: a generation-stage finding) and fails. A routes match key is no label name.",
             "targets": [
               {
                 "ref": "receiver",
@@ -4576,7 +4576,7 @@
             "batch": null
           },
           "python_differs": {
-            "reason": "tenant-api lets the PUT through; the generator's production run (--validate --strict) reports an invalid_route_entry for the tenant (blocks=validate: a generation-stage finding) and fails. A routes match key is no label name.",
+            "reason": "tenant-api lets the PUT through; the generator run with --validate --strict reports an invalid_route_entry for the tenant (blocks=validate: a generation-stage finding) and fails. A routes match key is no label name.",
             "targets": [
               {
                 "ref": "receiver",
@@ -4616,7 +4616,7 @@
             "batch": null
           },
           "python_differs": {
-            "reason": "tenant-api lets the PUT through; the generator's production run (--validate --strict) reports an invalid_route_entry for the tenant (blocks=validate: a generation-stage finding) and fails. A routes match key is no label name.",
+            "reason": "tenant-api lets the PUT through; the generator run with --validate --strict reports an invalid_route_entry for the tenant (blocks=validate: a generation-stage finding) and fails. A routes match key is no label name.",
             "targets": [
               {
                 "ref": "receiver",
@@ -4656,7 +4656,7 @@
             "batch": null
           },
           "python_differs": {
-            "reason": "tenant-api lets the PUT through; the generator's production run (--validate --strict) reports an invalid_route_entry for the tenant (blocks=validate: a generation-stage finding) and fails. A routes match key is no label name.",
+            "reason": "tenant-api lets the PUT through; the generator run with --validate --strict reports an invalid_route_entry for the tenant (blocks=validate: a generation-stage finding) and fails. A routes match key is no label name.",
             "targets": [
               {
                 "ref": "receiver",
@@ -4696,7 +4696,7 @@
             "batch": null
           },
           "python_differs": {
-            "reason": "tenant-api lets the PUT through; the generator's production run (--validate --strict) reports an invalid_route_entry for the tenant (blocks=validate: a generation-stage finding) and fails. A routes match key is no label name.",
+            "reason": "tenant-api lets the PUT through; the generator run with --validate --strict reports an invalid_route_entry for the tenant (blocks=validate: a generation-stage finding) and fails. A routes match key is no label name.",
             "targets": [
               {
                 "ref": "receiver",
@@ -5229,7 +5229,7 @@
             "batch": null
           },
           "python_differs": {
-            "reason": "tenant-api lets the PUT through; the generator's production run (--validate --strict) reports an invalid_route_entry for the tenant (blocks=validate: a generation-stage finding) and fails. A routes match key is null.",
+            "reason": "tenant-api lets the PUT through; the generator run with --validate --strict reports an invalid_route_entry for the tenant (blocks=validate: a generation-stage finding) and fails. A routes match key is null.",
             "targets": [
               {
                 "ref": "receiver",
@@ -5269,7 +5269,7 @@
             "batch": null
           },
           "python_differs": {
-            "reason": "tenant-api lets the PUT through; the generator's production run (--validate --strict) reports an invalid_route_entry for the tenant (blocks=validate: a generation-stage finding) and fails. A routes match key is null.",
+            "reason": "tenant-api lets the PUT through; the generator run with --validate --strict reports an invalid_route_entry for the tenant (blocks=validate: a generation-stage finding) and fails. A routes match key is null.",
             "targets": [
               {
                 "ref": "receiver",
@@ -5309,7 +5309,7 @@
             "batch": null
           },
           "python_differs": {
-            "reason": "tenant-api lets the PUT through; the generator's production run (--validate --strict) reports an invalid_route_entry for the tenant (blocks=validate: a generation-stage finding) and fails. A routes match key is null.",
+            "reason": "tenant-api lets the PUT through; the generator run with --validate --strict reports an invalid_route_entry for the tenant (blocks=validate: a generation-stage finding) and fails. A routes match key is null.",
             "targets": [
               {
                 "ref": "receiver",
