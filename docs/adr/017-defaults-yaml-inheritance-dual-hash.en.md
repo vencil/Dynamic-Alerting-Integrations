@@ -317,4 +317,4 @@ These keys do not need `merged_hash` to take effect: changing only `state_filter
 - [CLI reference: da-guard](../cli-reference.en.md#guard) — `served-values`, `effective` and the list of `not_served` reasons
 - [Benchmark Report §1 Scale](../benchmarks.en.md#1-scale-how-many-tenants)
 - [architecture-and-design §Design concepts](../architecture-and-design.en.md)
-- Open questions: [#1516](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/1516) (comparing platform top-level key changes), [#1549](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/1549) (`_custom_alerts` differs between implementations)
+- Open questions: [#1516](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/1516) (comparing platform top-level key changes)

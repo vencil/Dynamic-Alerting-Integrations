@@ -322,4 +322,4 @@ resolved(t) = rd(t) ⊕ profiles[t._routing_profile] ⊕ t._routing
 - [CLI 參考：da-guard](../cli-reference.md#guard) — `served-values`、`effective` 與 `not_served` 原因清單
 - [Benchmark Report §1 規模](../benchmarks.md#1-規模能撐多少租戶)
 - [architecture-and-design.md §設計概念](../architecture-and-design.md#設計概念總覽)
-- 未解的問題：[#1516](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/1516)（平台頂層鍵的變更比較）、[#1549](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/1549)（`_custom_alerts` 兩實作不一致）
+- 未解的問題：[#1516](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/1516)（平台頂層鍵的變更比較）
