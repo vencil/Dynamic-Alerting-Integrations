@@ -5,143 +5,134 @@ audience: [platform-engineers]
 version: v2.9.0
 lang: en
 ---
-
 # ADR-005: Projected Volume for Rule Packs
 
-> **Language / 語言：** **English (Current)** | [中文](005-projected-volume-for-rule-packs.md)
+> **Language / 語言：** **English (Current)** | [中文](./005-projected-volume-for-rule-packs.md)
+
+**Decision in brief**: each Rule Pack lives in its own ConfigMap, and all of them are mounted together into Prometheus's rules directory through a Kubernetes projected volume, with `optional: true` on every source. Deleting a Rule Pack's ConfigMap unloads that pack, and Prometheus does not fail to start because of it.
 
 ## Status
 
 ✅ **Accepted** (v1.0.0)
 
+## Terms
+
+- **Rule Pack**: a set of Prometheus rule files shipped with the platform (recording rules and alert rules), one file per database or purpose, for example `rule-pack-mariadb.yaml`. When deployed, each Rule Pack maps to a ConfigMap named `prometheus-rules-<pack>`.
+- **Projected volume**: a Kubernetes volume that merges several sources (ConfigMaps, Secrets, and so on) into one mounted directory.
+- **`optional: true`**: a setting on a projected volume source. With it, the Pod still starts when that ConfigMap does not exist; the directory simply lacks those files.
+
 ## Background
 
-The platform provides 16 pre-built Rule Packs covering different infrastructure and application scenarios (Kubernetes, JVM, Nginx, Database, etc.).
+The platform ships several pre-built Rule Packs covering different infrastructure and application scenarios (Kubernetes, JVM, Nginx, various databases, and so on).
 
-### Challenges of Rule Pack Distribution
+Tenants should be able to choose which Rule Packs to enable instead of being forced to accept all of them:
 
-Tenants should be able to selectively enable Rule Packs rather than be forced to accept all packs:
+- **Enable on demand**: some tenants only care about Kubernetes monitoring and do not need JVM or Nginx rules.
+- **Performance**: loading every Rule Pack increases Prometheus's startup time and memory use.
 
-- **Static Scenarios**: Some tenants care only about Kubernetes monitoring, not requiring JVM or Nginx rules
-- **Performance Considerations**: Loading all Rule Packs increases Prometheus startup time and memory consumption
-- **Reliability**: If a Rule Pack configuration has errors, it should not affect other packs or core systems
+### Candidate comparison
 
-### Candidate Approach Comparison
-
-| Approach | Implementation | Selectivity | Prometheus Failure Mode | Operational Complexity |
-|:-----|:--------|:-----:|:-----:|:-----:|
-| Single Large ConfigMap | All rules → one ConfigMap | ❌ None | Complete Failure | Low |
-| N ConfigMaps + Projected Volume | Each pack → independent ConfigMap + optional:true | ✅ Strong | Isolated Failure | Medium |
-| Dynamic Rule Injection | Controller dynamically modifies rules | ✅ Strong | Complex | High |
+| Approach | How | Selectivity | Operational complexity |
+|:-----|:-----|:-----:|:-----:|
+| One large ConfigMap | All rules in a single ConfigMap | ❌ None | Low |
+| Multiple ConfigMaps + projected volume | One ConfigMap per Rule Pack, sources set to `optional: true` | ✅ High | Medium |
+| Dynamic rule injection | A custom controller modifies rules at runtime | ✅ High | High |
 
 ## Decision
 
-**Adopt Projected Volume + optional: true architecture: each Rule Pack corresponds to an independent ConfigMap, mounted to Prometheus's rules directory via Kubernetes Projected Volume, with optional: true configured.**
+**Adopt a projected volume with `optional: true`: each Rule Pack maps to its own ConfigMap, mounted into Prometheus's rules directory through a projected volume, with `optional: true` on every source.**
+
+### Example
+
+The `rules` volume in `k8s/03-monitoring/deployment-prometheus.yaml` (excerpt):
 
 ```yaml
-# Prometheus Deployment partial configuration example
 volumes:
-  - name: rule-packs
+  - name: rules
     projected:
       sources:
         - configMap:
-            name: rule-pack-kubernetes
+            name: prometheus-rules-mariadb
             optional: true
             items:
-              - key: rules.yaml
-                path: kubernetes-rules.yaml
+              - key: mariadb-recording.yml
+                path: mariadb-recording.yml
+              - key: mariadb-alert.yml
+                path: mariadb-alert.yml
         - configMap:
-            name: rule-pack-jvm
+            name: prometheus-rules-jvm
             optional: true
             items:
-              - key: rules.yaml
-                path: jvm-rules.yaml
-        # ... the remaining rule packs follow the same pattern
+              - key: jvm-recording.yml
+                path: jvm-recording.yml
+              - key: jvm-alert.yml
+                path: jvm-alert.yml
+        # ... the remaining Rule Packs follow the same pattern
 ```
 
-## Rationale
+The volume is mounted at `/etc/prometheus/rules`, and the Prometheus config reads it with `rule_files: ["/etc/prometheus/rules/*.yml"]`.
 
-### Why Choose Projected Volume
+Unloading the JVM Rule Pack:
 
-**Optionality**: `optional: true` means if the ConfigMap does not exist or is deleted, Prometheus will not fail to start due to missing content. Tenants can simply unload a Rule Pack via `kubectl delete configmap rule-pack-jvm`.
+```bash
+kubectl delete cm prometheus-rules-jvm -n monitoring
+```
 
-**Isolation and Fault Tolerance**: Each Rule Pack is independently controlled. If Rule Pack-JVM has configuration errors, only JVM rules are affected; other packs and core rules are not impacted.
+Result: `jvm-recording.yml` and `jvm-alert.yml` disappear from the rules directory, the other Rule Packs keep working, and Prometheus does not fail to start because the ConfigMap is missing.
 
-**Dynamic Management**: a config-reloader sidecar watches the projected volume's **file contents** and POSTs `/-/reload`, so tenants can adjust Rule Pack combinations without restarting Prometheus. (Corrected in #1246: this sidecar was **documented but never actually deployed** — Prometheus does not watch rule files, so before it existed a synced ConfigMap only took effect after a manual reload or a pod restart. The sidecar landed in `deployment-prometheus.yaml` in #1246. **Rule Packs only**: `prometheus.yml` is mounted via `subPath`, and Kubernetes does **not** propagate ConfigMap updates to subPath mounts, so changing it still requires a pod restart.)
+### Why a projected volume
 
-**Operational Simplicity**: No need for custom controllers or complex initialization logic. Pure Kubernetes native features, easy to understand and maintain.
+- **Optional**: `optional: true` lets Prometheus start even when a ConfigMap does not exist or has been deleted. Unloading a Rule Pack only takes deleting its ConfigMap.
+- **Changes take effect automatically**: Prometheus does not watch rule files itself. A config-reloader sidecar in the same Pod watches the file contents of the rules directory and calls Prometheus's `/-/reload` on change, so adjusting the set of Rule Packs needs no Prometheus restart. This covers Rule Packs only: the main config `prometheus.yml` is mounted with `subPath`, and Kubernetes does not propagate ConfigMap updates into files mounted with `subPath`, so changing it still needs a Pod restart.
+- **Simple to operate**: no custom controller and no complex initialization logic, only native Kubernetes features.
 
-### Why Reject Single Large ConfigMap
+### Why not one large ConfigMap
 
-- **All-or-Nothing**: No selective unloading; tenants forced to accept all packs
-- **Version Management Difficulty**: Rule Packs have different update cycles (K8s pack frequent, Database pack stable), difficult to unify versioning
-- **Failure Amplification**: Single ConfigMap containing 16 packs; if one has errors, entire system fails to start
+- **All or nothing**: a single pack cannot be unloaded on its own, so tenants are forced to accept every Rule Pack.
+- **Hard to version**: Rule Packs are updated on different cycles, and keeping them together makes a single version hard to manage.
 
-## Consequences
+## Consequences and known limitations
 
-### Positive Impact
+**What we get**
 
-✅ Tenants freely choose Rule Pack combinations, reducing unnecessary compute overhead
-✅ Rule Packs update independently, flexible version management
-✅ Fault Isolation: One pack issue does not affect other packs
-✅ Simplified Prometheus config validation: can run `promtool check rules` per pack
-✅ Seamless extension support for third-party or custom Rule Packs
+- Tenants can freely choose their set of Rule Packs, reducing unnecessary compute.
+- Rule Packs can be updated independently, which keeps versioning flexible.
+- Each Rule Pack can be validated on its own with `promtool check rules`.
+- Third-party or custom Rule Packs can be added the same way.
 
-### Negative Impact
+**What we accept**
 
-⚠️ Kubernetes manifests become more complex (Projected Volume + 16 ConfigMap sources)
-⚠️ Maintain 16 ConfigMaps; initial deployment time increases
-⚠️ Tenants must understand `optional: true` semantics to avoid accidental deletion
+- The Kubernetes manifest gets more complex: the projected volume has to list every Rule Pack's ConfigMap source one by one.
+- Tenants need to understand what `optional: true` means, so they do not delete a ConfigMap by mistake.
 
-### Operational Considerations
+**Known limitations**
 
-- Provide Helm chart auto-generating Projected Volume configuration, eliminating manual editing
-- Documentation clearly explain "ConfigMap deletion = Rule Pack unload" mechanism
-- Monitoring tools (e.g., `check_alert.py`) should support viewing "current enabled Rule Pack list"
-- CI workflow validates: at least one Rule Pack ConfigMap must exist, otherwise Prometheus rules would be empty
+- The isolation only covers "the ConfigMap does not exist". If any Rule Pack's rule file has a syntax error, Prometheus fails to start; a reload while running is rejected as a whole, and every Rule Pack stays at the last version that loaded successfully.
 
-## Alternative Approaches Considered
+**Operational recommendations**
 
-### Approach A: Single Large ConfigMap (Rejected)
-- Pros: Simple configuration, quick deployment
-- Cons: No selectivity, failure amplification, version management difficulty
+- Documentation should state clearly that "deleting the ConfigMap = unloading the Rule Pack".
+- Monitoring tools (for example `check_alert.py`) should be able to list the Rule Packs currently enabled.
+- CI should check that at least one Rule Pack ConfigMap exists; otherwise Prometheus has no rules at all.
 
-### Approach B: Dynamic Rule Injection Controller (Considered)
-- Pros: More flexible, supports runtime Rule Pack changes
-- Cons: Introduces custom controller, high complexity, difficult to maintain
+## Alternatives considered
 
-### Approach C: Helm Subcharts (Considered)
-- Pros: Each pack can be independent chart
-- Cons: Helm release fragmentation, complex dependency management
+### One large ConfigMap (rejected)
 
-## Implementation Checklist
+Simple to configure and quick to deploy, but packs cannot be unloaded selectively and versioning is hard.
 
-- [x] Partition Rule Pack YAML into 16 independent ConfigMaps
-- [x] Configure Helm chart Projected Volume + optional:true
-- [x] Test unloading single Rule Pack does not cause Prometheus startup failure
-- [x] Document how tenants disable specific Rule Packs
-- [x] Add "display enabled Rule Packs" functionality to `check_alert.py`
+### A controller that injects rules dynamically (considered, rejected)
 
-## Related Decisions
+More flexible, and Rule Packs could be adjusted at runtime. But it means introducing and maintaining a custom controller, which is complex.
 
-- [ADR-001: Severity Dedup via Inhibit Rules] — inhibit rules can be part of Rule Pack
-- [ADR-003: Sentinel Alert Pattern](003-sentinel-alert-pattern.md) — sentinel rules distributed as Rule Pack
+### One Helm subchart per Rule Pack (considered, rejected)
 
-## References
+Each Rule Pack could be its own chart, but Helm releases become fragmented and dependencies between charts are hard to manage.
 
-- [`rule-packs/README.md`](https://github.com/vencil/Dynamic-Alerting-Integrations/blob/main/rule-packs/README.md) — Rule Pack directory structure and list
-- [`docs/getting-started/for-platform-engineers.en.md`](../getting-started/for-platform-engineers.md) §Rule Pack Configuration — Custom Rule Pack guide
-- [Kubernetes Projected Volume Official Documentation](https://kubernetes.io/docs/concepts/storage/projected-volumes/)
+## Related
 
-## Related Resources
-
-| Resource | Relevance |
-|----------|-----------|
-| [001-severity-dedup-via-inhibit.en](001-severity-dedup-via-inhibit.en.md) | ⭐⭐⭐ |
-| [002-oci-registry-over-chartmuseum.en](002-oci-registry-over-chartmuseum.en.md) | ⭐⭐⭐ |
-| [003-sentinel-alert-pattern.en](003-sentinel-alert-pattern.en.md) | ⭐⭐⭐ |
-| [004-federation-central-exporter-first.en](004-federation-central-exporter-first.en.md) | ⭐⭐⭐ |
-| [005-projected-volume-for-rule-packs.en](005-projected-volume-for-rule-packs.en.md) | ⭐⭐⭐ |
-| [README.en](README.en.md) | ⭐⭐⭐ |
-| ["Architecture and Design"](../architecture-and-design.md) | ⭐⭐ |
-| ["Architecture & Design — Appendix A"](../architecture-and-design.en.md#appendix-a-role--tool-quick-reference) | ⭐⭐ |
+- [ADR-001: Severity Dedup via Inhibit Rules](./001-severity-dedup-via-inhibit.en.md) — inhibit rules can be part of a Rule Pack
+- [ADR-003: Sentinel Alert Pattern](./003-sentinel-alert-pattern.en.md) — sentinel alert rules are distributed with Rule Packs
+- [`rule-packs/README.md`](https://github.com/vencil/Dynamic-Alerting-Integrations/blob/main/rule-packs/README.md) — the Rule Pack list and how to unload one
+- [`docs/getting-started/for-platform-engineers.en.md`](../getting-started/for-platform-engineers.en.md) — guide to custom Rule Packs
+- [Kubernetes Projected Volume documentation](https://kubernetes.io/docs/concepts/storage/projected-volumes/)

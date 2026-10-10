@@ -5,53 +5,73 @@ audience: [platform-engineers, developers]
 version: v2.9.0
 lang: en
 ---
-
 # ADR-011: PR-based Write-back Mode
 
 > **Language / 語言：** **English (Current)** | [中文](./011-pr-based-write-back.md)
 
+**Decision in brief**: besides committing directly, tenant-api offers an "open a PR" write-back mode, chosen at deployment time with `--write-mode` (or the `TA_WRITE_MODE` environment variable); the default is still a direct commit. In PR mode every UI write creates a new branch, commits, pushes, and then opens a PR on GitHub or an MR on GitLab; the configuration only takes effect once the PR is merged. A tenant can have at most one pending PR at a time.
+
 ## Status
 
-✅ **Accepted** (v2.6.0) — Adds `_write_mode: pr` option where UI operations create GitHub PRs instead of direct commits
+✅ **Accepted** (v2.6.0) — Adds a PR write-back mode (`--write-mode pr`) where UI operations create GitHub PRs instead of direct commits
+
+## Terms
+
+- **Direct write-back (direct)**: the commit-on-write of [ADR-009](009-tenant-manager-crud-api.en.md): the API modifies YAML in conf.d/ and commits immediately.
+- **PR / MR**: GitHub's Pull Request and GitLab's Merge Request, two names for the same thing. "PR" in this document covers both.
+- **Four-eyes principle**: a change must be reviewed by at least one other person before it takes effect.
+- **Eventual consistency**: a successful write does not take effect immediately; in PR mode the configuration only really takes effect after the PR is merged, so there is a "submitted but not yet in effect" state in between.
 
 ## Background
 
-### Problem Statement
+### Problem
 
-The commit-on-write model established in ADR-009 (UI → tenant-api → git commit) works well in fast-iteration environments, but encounters compliance friction in high-security scenarios:
+The direct write-back of [ADR-009](009-tenant-manager-crud-api.en.md) (UI → tenant-api → git commit) works well in fast-iterating environments, but runs into compliance friction in high-security scenarios:
 
-1. **Four-eyes principle**: Regulated industries (finance, healthcare) require configuration changes to be reviewed by at least one additional person before taking effect
-2. **Change reversibility**: Direct commits in multi-operator environments make reverting harder to track
-3. **CI integration**: Some teams want config changes to trigger CI pipelines (lint, dry-run apply, SLA impact assessment) before merging
-4. **Audit granularity**: PRs provide richer audit metadata than git log (reviewer, approval time, discussion thread)
+1. **Four-eyes principle**: regulated industries such as finance and healthcare require configuration changes to be reviewed by at least one person before they take effect.
+2. **Reversibility**: with several operators working in parallel, reverting a direct commit means tracking down the commit hash by hand.
+3. **CI integration**: some teams want a config change to trigger CI first (lint, dry-run apply, SLA impact assessment) and only then be merged.
+4. **Audit granularity**: a PR carries richer audit information than git log (reviewer, approval time, discussion thread).
 
-### Decision Drivers
+### Decision drivers
 
-- Maintain GitOps spirit: Git repo remains the source of truth
-- Backward compatible: Existing `direct` mode is unaffected; `pr` is opt-in
-- Eventual consistency is acceptable: UI must clearly indicate "submitted but not yet merged" configs
-- Reuse GitHub API: No additional approval infrastructure
+- Keep the GitOps spirit: the Git repo remains the single source of configuration.
+- Backward compatible: the existing direct write-back is unaffected, and PR mode has to be turned on explicitly.
+- Eventual consistency is acceptable: in PR mode the UI must clearly mark configuration that is "submitted but not merged".
+- Reuse GitHub's PR mechanism instead of building review infrastructure.
 
 ## Decision
 
-### Dual-Mode Architecture: `_write_mode: direct | pr`
+### Two write-back modes
 
-A new global config `_write_mode` (or environment variable `TA_WRITE_MODE`) sits alongside `_rbac.yaml`:
+| `--write-mode` | Behavior |
+|------|------|
+| `direct` (default) | Commit directly (ADR-009 behavior) |
+| `pr` or `pr-github` | Open a GitHub PR |
+| `pr-gitlab` | Open a GitLab MR |
 
-```yaml
-# tenant-api flag or env var
-_write_mode: pr   # "direct" (default, ADR-009 behavior) | "pr" (PR-based)
+GitHub and GitLab implement the same provider-agnostic interfaces (create a PR, track pending PRs), so the handlers do not need to know which platform is behind them.
+
+### Example: turning on PR mode
+
+```bash
+TA_WRITE_MODE=pr
+TA_GITHUB_REPO=org/repo          # or --github-repo
+TA_GITHUB_TOKEN=<token>          # injected from a Kubernetes Secret
+# optional: TA_GITHUB_BASE_BRANCH, defaults to main
 ```
 
-**Routing logic** (writer.go layer):
+For `pr-gitlab` the counterparts are `TA_GITLAB_PROJECT`, `TA_GITLAB_TOKEN`, and `TA_GITLAB_TARGET_BRANCH`. If the repo or the token is missing, tenant-api fails at startup.
+
+Write flow:
 
 ```
-WriteRequest → _write_mode?
-  ├─ "direct" → existing commit-on-write (ADR-009)
-  └─ "pr"     → create-branch → commit → push → create-PR → return pr_url
+write request → write-back mode?
+  ├─ direct → commit directly (ADR-009)
+  └─ pr     → create branch → commit → push → create PR → return pr_url
 ```
 
-### PR Lifecycle State Model
+### PR lifecycle
 
 ```
 ┌──────────┐    create    ┌─────────────┐    merge     ┌──────────┐
@@ -65,43 +85,40 @@ WriteRequest → _write_mode?
                           └──────────┘
 ```
 
-| State | Semantics | UI Rendering |
-|-------|-----------|-------------|
-| `pending_review` | PR created, awaiting reviewer | Yellow banner + PR link |
-| `merged` | PR merged, config is active | Green notification, banner disappears |
-| `closed` | PR closed or has conflicts | Red warning + re-submit button |
+| State | Meaning |
+|-------|---------|
+| `pending_review` | PR created, awaiting review |
+| `merged` | PR merged, the configuration is in effect |
+| `closed` | PR closed or has conflicts |
 
-### PR Creation Strategy
+### Example: single-tenant write
 
-**Branch naming**: `tenant-api/{tenantID}/{timestamp}` (e.g., `tenant-api/db-a-prod/20260406-143022`)
+`PUT /api/v1/tenants/db-a-prod` by operator `alice@example.com`. tenant-api creates a branch named `tenant-api/{tenant ID}/{UTC time}`, for example `tenant-api/db-a-prod/20260406-143022`; the commit content is the same as with direct write-back (only this tenant's YAML changes), and the author is the operator's email. The PR it creates:
 
-**Commit content**: Same as direct mode (single tenant YAML modification), author is operator email
-
-**PR metadata**:
 ```json
 {
   "title": "[tenant-api] Update db-a-prod configuration",
-  "body": "Operator: alice@example.com\nChanges: _silent_mode → enabled\nSource: tenant-manager UI",
+  "body": "**Operator:** alice@example.com\n**Source:** tenant-manager UI\n**Tenant:** db-a-prod",
   "head": "tenant-api/db-a-prod/20260406-143022",
-  "base": "main",
-  "labels": ["tenant-api", "auto-generated"]
+  "base": "main"
 }
 ```
 
-### API Response Format
-
-**Single tenant write** (PR mode):
+After the PR is created, the `tenant-api` and `auto-generated` labels are added. The API response:
 
 ```json
 {
   "status": "pending_review",
+  "tenant_id": "db-a-prod",
   "pr_url": "https://github.com/org/repo/pull/42",
   "pr_number": 42,
-  "message": "PR created. Configuration will take effect after merge."
+  "message": "PR/MR created. Configuration will take effect after merge."
 }
 ```
 
-**Batch operation** (PR mode):
+### Example: batch write
+
+A batch operation is consolidated into **one PR** (one PR holding several tenants' changes), so reviewers are not flooded with PRs:
 
 ```json
 {
@@ -112,135 +129,128 @@ WriteRequest → _write_mode?
     {"tenant_id": "db-a-prod", "status": "included"},
     {"tenant_id": "db-b-staging", "status": "included"}
   ],
-  "message": "Batch PR created with 2 tenant changes."
+  "summary": "2 included in PR/MR, 0 failed",
+  "message": "Batch PR/MR created with 2 tenant changes."
 }
 ```
 
-Batch operations consolidate into a **single PR** to avoid overwhelming reviewers.
+### Token permissions and secret management
 
-### Token Permissions & Secret Management
-
-**GitHub mode** (`--write-mode pr` or `pr-github`):
+**GitHub** (`--write-mode pr` or `pr-github`):
 
 | Item | Specification |
 |------|---------------|
-| **Token type** | GitHub Fine-grained PAT (recommended) or GitHub App Installation Token |
+| **Token type** | GitHub Fine-grained Personal Access Token (recommended) or GitHub App Installation Token |
 | **Minimum permissions** | `contents: write` + `pull_requests: write` (target repo only) |
-| **Storage** | K8s Secret → env var `TA_GITHUB_TOKEN`; never in ConfigMap or YAML |
-| **Rotation policy** | 90-day expiry + Helm pre-upgrade hook to check validity |
+| **Storage** | Kubernetes Secret → environment variable `TA_GITHUB_TOKEN`; never put it in a ConfigMap or YAML |
 
-**GitLab mode** (`--write-mode pr-gitlab`, added in v2.6.0):
+**GitLab** (`--write-mode pr-gitlab`):
 
 | Item | Specification |
 |------|---------------|
 | **Token type** | GitLab Project Access Token (recommended), Group Access Token, or Personal Access Token |
 | **Minimum permissions** | `api` scope (covers MR creation and branch operations) |
-| **Storage** | K8s Secret → env var `TA_GITLAB_TOKEN`; never in ConfigMap or YAML |
-| **Rotation policy** | 365-day expiry (GitLab default) + Helm pre-upgrade hook to check validity |
+| **Storage** | Kubernetes Secret → environment variable `TA_GITLAB_TOKEN`; never put it in a ConfigMap or YAML |
 
-### Parallel PR Conflict Handling
+### Parallel PRs for the same tenant
 
-**Problem**: Tenant A route change (PR 1) + Tenant B threshold change (PR 2) may conflict if they modify the same file.
+**Problem**: tenant A changes routing (PR 1) and tenant B changes a threshold (PR 2); if both modify the same file, a Git conflict can occur.
 
-**Two-layer mitigation**:
+**Approach**: if a tenant already has a pending PR, a new write returns 409 together with a link to the existing PR:
 
-1. **File-level isolation** (already in place): Each tenant has its own YAML file (`conf.d/{tenantID}.yaml`); different tenants' PRs are naturally isolated
-2. **Same-tenant concurrency control**: If a tenant already has a pending PR, new writes return 409 + existing PR link
-3. **`_groups.yaml` special handling**: Group operations modify a shared file; use advisory lock + auto-rebase before PR creation
+```json
+{
+  "code": "PENDING_PR_EXISTS",
+  "error": "pending_pr_exists",
+  "existing_pr_url": "https://github.com/org/repo/pull/42",
+  "message": "A pending PR/MR for db-a-prod already exists or is being created. Merge or close it first.",
+  "pr_number": 42,
+  "request_id": "<request ID>"
+}
+```
 
-### Eventual Consistency Semantics
+### Showing eventual consistency
 
-In PR mode, tenant-manager UI must distinguish two config states:
+In PR mode the tenant-manager UI has to distinguish two configuration states:
 
 | State | Data source | Display |
 |-------|-------------|---------|
-| **Active** | `conf.d/*.yaml` (main branch HEAD) | Normal display |
-| **Pending review** | tenant-api in-memory PR tracker | Yellow overlay + "Pending PR" badge |
+| **In effect** | `conf.d/*.yaml` (HEAD of the base branch) | Normal display |
+| **Pending review** | the pending-PR list tenant-api keeps in memory | Yellow marker + "Pending PR" label |
 
-tenant-api maintains an in-memory PR tracker (periodically syncing with GitHub API), exposing:
+tenant-api keeps the list of pending PRs in memory, syncs it periodically with the GitHub / GitLab API, and exposes:
+
 - `GET /api/v1/prs` — list all pending PRs
-- `GET /api/v1/prs?tenant={id}` — query pending PRs for a specific tenant
-
-### Implementation Layers
-
-| Layer | File | Changes |
-|-------|------|---------|
-| **Config** | `cmd/server/main.go` | `-write-mode` flag (`direct` / `pr` / `pr-github` / `pr-gitlab`) + env vars |
-| **Platform Interface** | `internal/platform/platform.go` (v2.6.0) | Provider-agnostic `Client` + `Tracker` interfaces |
-| **Writer** | `internal/gitops/writer.go` | `WritePR()` method: branch → commit → push |
-| **GitHub Client** | `internal/github/client.go` | Wraps GitHub REST API, implements `platform.Client` |
-| **GitHub Tracker** | `internal/github/tracker.go` | In-memory pending PR cache + periodic sync, implements `platform.Tracker` |
-| **GitLab Client** | `internal/gitlab/client.go` (v2.6.0) | Wraps GitLab REST API v4, implements `platform.Client` |
-| **GitLab Tracker** | `internal/gitlab/tracker.go` (v2.6.0) | In-memory pending MR cache + periodic sync, implements `platform.Tracker` |
-| **Handler** | `internal/handler/tenant_put.go` | Route by write mode → `Write()` or `WritePR()` via `platform.Client` |
-| **Handler** | `internal/handler/tenant_batch.go` | Batch PR/MR mode: consolidate into single PR/MR |
-| **Handler** | `internal/handler/pr.go` | `GET /api/v1/prs` endpoint via `platform.Tracker` |
-| **UI** | `tenant-manager.jsx` | Pending PRs/MRs banner + status overlay |
+- `GET /api/v1/prs?tenant={id}` — query the pending PR of a specific tenant
 
 ## Rationale
 
 ### Why not Git hooks + auto-merge?
 
-GitHub PRs provide native code review, approval, and CI check integration. Building custom approval workflows duplicates existing ecosystem capabilities.
+GitHub's PR mechanism natively integrates code review, approval, and CI checks. Building our own approval flow would reinvent the wheel and miss out on the existing ecosystem.
 
-### Why consolidate batch operations into a single PR?
+### Why consolidate a batch into one PR?
 
-- Reviewer experience: Review all related changes at once
-- Atomicity: All tenant changes in a batch either take effect or don't
-- Reduces PR volume: Avoids 20 PRs from a 20-tenant batch
+- Reviewer experience: all related changes are reviewed at once.
+- Atomicity: the tenant changes in a batch either all take effect or none do.
+- Fewer PRs: a 20-tenant batch does not produce 20 PRs.
 
 ### Why allow only one pending PR per tenant?
 
-- Avoids merge-order ambiguity (PR 1 enables silent, PR 2 disables it — merge order determines outcome)
-- Simplifies UI (at most one pending badge per tenant)
-- For multiple modifications, operators can update (force-push) the existing PR branch
+- It avoids ambiguity from merge order (PR 1 enables silent mode, PR 2 disables it, and the final state depends on which merges last).
+- It keeps the UI simple (at most one pending marker per tenant).
+- For several changes, the existing PR's branch can be updated (force-pushed).
 
-### Why not split `_groups.yaml` into multiple files?
+### Why not split `_groups.yaml` into several files?
 
-Evaluated but costs outweigh benefits:
-- Group operations are far less frequent than tenant operations; conflict probability is low
-- Splitting requires changes to loader, API, and schema
-- Advisory lock + auto-rebase sufficiently handles occasional conflicts
+The evaluation found the cost outweighs the benefit:
 
-## Consequences
+- Group operations are far less frequent than tenant operations, so conflicts are unlikely.
+- Splitting would require changing the loader, the API, and the schema throughout.
 
-### Positive
+## Consequences and known limitations
 
-- Meets compliance requirements for regulated industries (finance, healthcare)
-- PRs provide native change tracking, discussion, and CI integration
-- Backward compatible: `direct` mode is completely unaffected
+**What we get**
 
-### Negative
+- Meets the compliance requirements of high-security environments such as finance and healthcare.
+- PRs provide native change tracking, discussion, and CI integration.
+- Backward compatible: direct write-back mode is not affected at all.
 
-- **Latency**: Config changes go from "instant" to "await merge" (PR mode)
-- **Complexity**: Adds GitHub API dependency, token management, PR tracker
-- **Eventual consistency**: UI must handle the "submitted but not active" intermediate state
+**What we accept**
 
-### Risk Mitigation
+- **Latency**: in PR mode a configuration change goes from "effective immediately" to "wait for the merge".
+- **Complexity**: a dependency on the GitHub / GitLab API, token management, and tracking of pending PRs.
+- **Eventual consistency**: the UI has to handle the "submitted but not in effect" intermediate state.
 
-| Risk | Mitigation |
-|------|-----------|
-| GitHub/GitLab API unavailable | Return 503 + degrade hint "temporarily use direct mode or retry later" |
-| Token expired | Check token validity on startup + report in `/healthz` |
-| PR/MR never merged | Optional `pr_ttl` auto-close (disabled by default) |
+## Alternatives considered
 
-## Alternatives Considered
+| Alternative | Assessment | Why not |
+|-------------|-----------|---------|
+| **A custom approval queue** | Viable | Reinvents the wheel, lacks CI/CD integration, high maintenance cost |
+| **A branch per write + manual merge** | Viable | Poor experience; operators have to leave the UI and work in Git by hand |
+| **Write-ahead log (WAL: write every change to a log first, then apply it)** | Over-engineering | Tenant configuration does not need database-grade (ACID) durability guarantees |
 
-| Alternative | Assessment | Reason for Rejection |
-|-------------|-----------|---------------------|
-| **GitLab MR** (instead of GitHub PR) | ✅ **Implemented** | v2.6.0: `platform.Client` abstraction layer + `internal/gitlab/` package. Enabled via `--write-mode pr-gitlab` |
-| **Custom approval queue** | Viable | Reinvents the wheel, lacks CI/CD integration, high maintenance cost |
-| **Git branch per-write + manual merge** | Viable | Poor UX; operators must leave UI for Git operations |
-| **Write-Ahead Log (WAL)** | Over-engineering | Tenant config doesn't need ACID-level persistence guarantees |
+## Implementation
 
-## Related Decisions
+| Layer | File | Content |
+|---|------|------|
+| **Config** | `cmd/server/main.go` | `--write-mode` flag (`direct` / `pr` / `pr-github` / `pr-gitlab`) and its environment variables |
+| **Platform interface** | `internal/platform/platform.go` | Provider-agnostic `Client` and `Tracker` interfaces |
+| **Writer** | `internal/gitops/writer_pr.go` | `WritePR()`: create branch → commit → push |
+| **GitHub** | `internal/github/client.go`, `internal/github/tracker.go` | Wraps the GitHub REST API; caches pending PRs and syncs them periodically |
+| **GitLab** | `internal/gitlab/client.go`, `internal/gitlab/tracker.go` | Wraps the GitLab REST API v4; caches pending MRs and syncs them periodically |
+| **Handler** | `internal/handler/tenant_put.go` | Chooses a direct commit or a PR according to the write-back mode |
+| **Handler** | `internal/handler/tenant_batch.go` | Consolidates a batch into one PR in PR mode |
+| **Handler** | `internal/handler/pr.go` | `GET /api/v1/prs` |
+| **UI** | `tenant-manager.jsx` | Pending-PR notice and markers |
 
-- **ADR-009**: Tenant Manager CRUD API — PR mode builds on commit-on-write foundation
-- **ADR-010**: Multi-Tenant Grouping — Batch PR consolidation strategy for group operations
-- **ADR-008**: Operator Native Integration — PR write-back CRD mapping for Operator mode
+All paths except the UI are under `components/tenant-api/`.
 
-## References
+## Related
 
+- [ADR-009: Tenant Manager CRUD API Architecture](009-tenant-manager-crud-api.en.md) — PR mode builds on direct write-back
+- [ADR-010: Multi-Tenant Grouping Architecture](010-multi-tenant-grouping.en.md) — how group batch operations are consolidated into a PR
+- [ADR-008: Operator-Native Integration Path](008-operator-native-integration-path.en.md) — how PR write-back maps to CRDs (Kubernetes custom resources) in Operator mode
 - [GitHub REST API: Pulls](https://docs.github.com/en/rest/pulls)
 - [GitHub Fine-grained PAT](https://docs.github.com/en/authentication/keeping-your-account-and-data-secure/managing-your-personal-access-tokens)
 - [GitLab REST API: Merge Requests](https://docs.gitlab.com/ee/api/merge_requests.html)

@@ -9,144 +9,136 @@ tracking_kind: adr
 status: accepted
 domain: k8s
 created_at: 2026-03-13
-updated_at: 2026-05-13
+updated_at: 2026-10-10
 ---
 # ADR-005: 投影卷掛載 Rule Pack
 
 > **Language / 語言：** **中文 (Current)** | [English](./005-projected-volume-for-rule-packs.en.md)
 
+**決策摘要**：每個 Rule Pack 各放在一個獨立的 ConfigMap，以 Kubernetes 的 projected volume 一起掛進 Prometheus 的規則目錄，每個來源都設 `optional: true`。刪掉某個 Rule Pack 的 ConfigMap 就等於卸載它，Prometheus 不會因此啟動失敗。
+
 ## 狀態
 
-✅ **Accepted** (v1.0.0)
+✅ **Accepted**（v1.0.0）
+
+## 名詞
+
+- **Rule Pack**：平台隨附的一組 Prometheus 規則檔（recording rule 與告警規則），每個檔案對應一種資料庫或用途，例如 `rule-pack-mariadb.yaml`。部署時每個 Rule Pack 對應一個名為 `prometheus-rules-<pack>` 的 ConfigMap。
+- **Projected volume（投影卷）**：Kubernetes 的一種 volume，把多個來源（ConfigMap、Secret 等）合併掛載到同一個目錄。
+- **`optional: true`**：projected volume 來源的設定。設了之後，該 ConfigMap 不存在時 Pod 照常啟動，只是目錄裡少了那幾個檔案。
 
 ## 背景
 
-平台提供 16 個預構建的 Rule Pack，涵蓋不同的基礎設施與應用場景 (Kubernetes、JVM、Nginx、Database、等)。
+平台提供多個預先建好的 Rule Pack，涵蓋不同的基礎設施與應用場景（Kubernetes、JVM、Nginx、各種資料庫等）。
 
-### Rule Pack 分發的挑戰
+租戶應能選擇要啟用哪些 Rule Pack，而不是被迫全部接受：
 
-租戶應能選擇性啟用 Rule Pack，而不是被迫接受所有 pack：
+- **按需啟用**：某些租戶只關心 Kubernetes 監控，不需要 JVM 或 Nginx 的規則。
+- **效能**：載入所有 Rule Pack 會增加 Prometheus 的啟動時間與記憶體消耗。
 
-- **靜態場景**：某些租戶只關心 Kubernetes 監控，不需 JVM 或 Nginx rules
-- **性能考量**：加載所有 Rule Pack 會增加 Prometheus 的啟動時間與記憶體消耗
-- **可靠性**：若某個 Rule Pack 配置有誤，應不影響其他 pack 或核心系統
+### 候選方案比較
 
-### 候選方案對比
-
-| 方案 | 實現方式 | 可選性 | Prometheus 失敗模式 | 運維複雜度 |
-|:-----|:--------|:-----:|:-----:|:-----:|
-| 單一大 ConfigMap | 所有 rules → 一個 ConfigMap | ❌ 無 | 全部失敗 | 低 |
-| N 個 ConfigMap + Projected Volume | 每個 pack → 獨立 ConfigMap + optional:true | ✅ 強 | 隔離失敗 | 中 |
-| 動態規則注入 | Controller 動態修改 rules | ✅ 強 | 複雜 | 高 |
+| 方案 | 做法 | 可選性 | 運維複雜度 |
+|:-----|:-----|:-----:|:-----:|
+| 單一大 ConfigMap | 所有規則放進一個 ConfigMap | ❌ 無 | 低 |
+| 多個 ConfigMap + projected volume | 每個 Rule Pack 一個 ConfigMap，來源設 `optional: true` | ✅ 高 | 中 |
+| 動態注入規則 | 自訂 controller 在執行時修改規則 | ✅ 高 | 高 |
 
 ## 決策
 
-**採用 Projected Volume + optional: true 架構：每個 Rule Pack 對應一個獨立的 ConfigMap，透過 Kubernetes Projected Volume 掛載至 Prometheus 的 rules 目錄，並設置 optional: true。**
+**採用 projected volume + `optional: true`：每個 Rule Pack 對應一個獨立的 ConfigMap，透過 projected volume 掛載到 Prometheus 的規則目錄，每個來源都設 `optional: true`。**
+
+### 範例
+
+`k8s/03-monitoring/deployment-prometheus.yaml` 的 `rules` volume（節錄）：
 
 ```yaml
-# Prometheus Deployment 部份配置示例
 volumes:
-  - name: rule-packs
+  - name: rules
     projected:
       sources:
         - configMap:
-            name: rule-pack-kubernetes
+            name: prometheus-rules-mariadb
             optional: true
             items:
-              - key: rules.yaml
-                path: kubernetes-rules.yaml
+              - key: mariadb-recording.yml
+                path: mariadb-recording.yml
+              - key: mariadb-alert.yml
+                path: mariadb-alert.yml
         - configMap:
-            name: rule-pack-jvm
+            name: prometheus-rules-jvm
             optional: true
             items:
-              - key: rules.yaml
-                path: jvm-rules.yaml
-        # ... 其餘 rule pack 比照
+              - key: jvm-recording.yml
+                path: jvm-recording.yml
+              - key: jvm-alert.yml
+                path: jvm-alert.yml
+        # ... 其餘 Rule Pack 比照
 ```
 
-## 基本原理
+這個 volume 掛在 `/etc/prometheus/rules`，Prometheus 設定以 `rule_files: ["/etc/prometheus/rules/*.yml"]` 讀取。
 
-### 為何選擇 Projected Volume
+卸載 JVM 的 Rule Pack：
 
-**可選性（Optionality）**：`optional: true` 表示若 ConfigMap 不存在或被刪除，Prometheus 不會因缺失而啟動失敗。租戶可透過 `kubectl delete configmap rule-pack-jvm` 簡單地卸載 Rule Pack。
+```bash
+kubectl delete cm prometheus-rules-jvm -n monitoring
+```
 
-**隔離與容錯**：每個 Rule Pack 獨立受控。若 Rule Pack-JVM 的配置有誤，只影響 JVM rules，不波及其他 pack 或核心 rules。
+結果：`jvm-recording.yml` 與 `jvm-alert.yml` 從規則目錄消失，其他 Rule Pack 的規則照常運作；Prometheus 不會因為缺少這個 ConfigMap 而啟動失敗。
 
-**動態管理**：config-reloader sidecar 監視 projected volume 的**檔案內容**變更，自動 POST `/-/reload`，租戶可快速調整 Rule Pack 組合、無需重啟 Prometheus。（#1246 更正：此 sidecar 原本**只寫在文件裡、從未實際部署** —— Prometheus 不監看 rule 檔，在補上 sidecar 之前，ConfigMap 同步進 volume 後規則要等人工 reload 或 Pod 重啟才生效。sidecar 已於 #1246 補進 `deployment-prometheus.yaml`。**範圍限 Rule Pack**：主設定 `prometheus.yml` 以 `subPath` 掛載，而 Kubernetes 對 subPath 掛載**不傳播** ConfigMap 更新，改它仍須重啟 Pod。）
+### 為什麼選 projected volume
 
-**運維簡潔**：無需自定義 controller 或複雜的初始化邏輯。純 K8s 原生功能，易於理解與維護。
+- **可選**：`optional: true` 讓 ConfigMap 不存在或被刪除時，Prometheus 仍能啟動。卸載一個 Rule Pack 只要刪掉它的 ConfigMap。
+- **改了自動生效**：Prometheus 本身不監看規則檔。同一個 Pod 裡的 config-reloader sidecar 監看規則目錄的檔案內容，有變更就呼叫 Prometheus 的 `/-/reload`，調整 Rule Pack 組合不必重啟 Prometheus。這只涵蓋 Rule Pack：主設定 `prometheus.yml` 以 `subPath` 掛載，而 Kubernetes 不會把 ConfigMap 的更新傳進以 `subPath` 掛載的檔案，改它仍須重啟 Pod。
+- **運維簡單**：不需要自訂 controller 或複雜的初始化邏輯，只用 Kubernetes 原生功能。
 
-### Why Reject Single Large ConfigMap
+### 為什麼不用單一大 ConfigMap
 
-- **All-or-nothing**：無法選擇卸載，租戶被迫接受所有 pack
-- **版本管理困難**：Rule Pack 的更新週期不同 (K8s pack 頻繁，Database pack 穩定)，難以統一版本
-- **故障放大**：單一 ConfigMap 包含 16 個 pack，若其中一個有錯誤，整個系統啟動失敗
+- **全有或全無**：無法只卸載其中一個，租戶被迫接受所有 Rule Pack。
+- **版本管理困難**：各 Rule Pack 的更新週期不同，放在一起很難統一管理版本。
 
-## 後果
+## 後果與已知限制
 
-### 正面影響
+**得到的**
 
-✅ 租戶可自由選擇 Rule Pack 組合，減少不必要的計算開銷
-✅ Rule Pack 獨立更新，版本管理靈活
-✅ 故障隔離：一個 pack 出問題不影響其他 pack
-✅ 簡化 Prometheus 配置驗證：可為單個 pack 執行 `promtool check rules`
-✅ 支援第三方或自定義 Rule Pack 的無縫擴展
+- 租戶可以自由選擇 Rule Pack 組合，減少不必要的計算開銷。
+- Rule Pack 可以各自更新，版本管理有彈性。
+- 每個 Rule Pack 可以單獨用 `promtool check rules` 驗證。
+- 第三方或自訂的 Rule Pack 可以照同樣的方式加進來。
 
-### 負面影響
+**要承擔的**
 
-⚠️ Kubernetes manifests 變複雜 (Projected Volume + 16 個 ConfigMap source)
-⚠️ 需維護 16 個 ConfigMap，初期佈署時間增加
-⚠️ 租戶需瞭解 `optional: true` 的語意，避免誤刪
+- Kubernetes manifest 變複雜：projected volume 要逐一列出每個 Rule Pack 的 ConfigMap 來源。
+- 租戶需要了解 `optional: true` 的意義，避免誤刪 ConfigMap。
 
-### 運維考量
+**已知限制**
 
-- 提供 Helm chart 自動化生成 Projected Volume 配置，無需手工編寫
-- 文件清楚說明「刪除 ConfigMap = 卸載 Rule Pack」的機制
-- 監控工具 (e.g., `check_alert.py`) 應支援檢視「當前啟用的 Rule Pack 清單」
-- CI 流程驗證：必須至少有一個 Rule Pack ConfigMap 存在，否則 Prometheus 規則為空
+- 隔離只涵蓋「ConfigMap 不存在」。任何一個 Rule Pack 的規則檔有語法錯誤時，Prometheus 啟動會失敗；執行中的 reload 則整批拒絕，所有 Rule Pack 都停在上一次成功載入的版本。
 
-## 替代方案考量
+**運維建議**
 
-### Approach A: Single Large ConfigMap (Rejected)
-- 優點：配置簡單、部署快速
-- 缺點：無選擇性、故障放大、版本管理困難
+- 文件要寫清楚「刪除 ConfigMap = 卸載 Rule Pack」。
+- 監控工具（例如 `check_alert.py`）應能列出目前啟用的 Rule Pack。
+- CI 應檢查至少有一個 Rule Pack ConfigMap 存在，否則 Prometheus 沒有任何規則。
 
-### 方案 B：動態規則注入 Controller (已考量)
-- 優點：更靈活、可支援執行時 Rule Pack 變更
-- 缺點：引入自定義 controller、複雜度高、難於維護
+## 考慮過的替代方案
 
-### Approach C: Helm Subcharts (Considered)
-- 優點：每個 pack 可獨立 chart
-- 缺點：Helm release 碎片化、依賴管理複雜
+### 單一大 ConfigMap（不採用）
 
-## 實施檢查清單
+設定簡單、部署快，但無法選擇性卸載，版本也難管理。
 
-- [x] Rule Pack YAML 拆分為 16 個獨立 ConfigMap
-- [x] Helm chart 配置 Projected Volume + optional:true
-- [x] 測試卸載單個 Rule Pack 不造成 Prometheus 啟動失敗
-- [x] 文件說明租戶如何禁用特定 Rule Pack
-- [x] `check_alert.py` 新增「顯示啟用的 Rule Pack」功能
+### 動態注入規則的 controller（考慮過，不採用）
 
-## 相關決策
+更有彈性，可以在執行時調整 Rule Pack。但要引入並維護一個自訂 controller，複雜度高。
 
-- [ADR-001: 嚴重度 Dedup 採用 Inhibit 規則](./001-severity-dedup-via-inhibit.md) — inhibit rules 可作為 Rule Pack 一部分
-- [ADR-003: Sentinel Alert 模式](./003-sentinel-alert-pattern.md) — sentinel rules 作為 Rule Pack 分發
+### 每個 Rule Pack 一個 Helm subchart（考慮過，不採用）
 
-## 參考資料
+每個 Rule Pack 可以是獨立的 chart，但 Helm release 會變得零碎，chart 之間的依賴也難管理。
 
-- [`rule-packs/README.md`](https://github.com/vencil/Dynamic-Alerting-Integrations/blob/main/rule-packs/README.md) — Rule Pack 目錄結構與清單
-- [`docs/getting-started/for-platform-engineers.md`](../getting-started/for-platform-engineers.md) §Rule Pack 配置 — 自定義 Rule Pack 指南
+## 相關
+
+- [ADR-001: 嚴重度 Dedup 採用 Inhibit 規則](./001-severity-dedup-via-inhibit.md) — 抑制規則可以作為 Rule Pack 的一部分
+- [ADR-003: Sentinel Alert 模式](./003-sentinel-alert-pattern.md) — sentinel 告警規則隨 Rule Pack 分發
+- [`rule-packs/README.md`](https://github.com/vencil/Dynamic-Alerting-Integrations/blob/main/rule-packs/README.md) — Rule Pack 清單與卸載方式
+- [`docs/getting-started/for-platform-engineers.md`](../getting-started/for-platform-engineers.md) — 自訂 Rule Pack 指南
 - [Kubernetes Projected Volume 官方文件](https://kubernetes.io/docs/concepts/storage/projected-volumes/)
-
-## 相關資源
-
-| 資源 | 相關性 |
-|------|--------|
-| [001-severity-dedup-via-inhibit](001-severity-dedup-via-inhibit.md) | ⭐⭐⭐ |
-| [002-oci-registry-over-chartmuseum](002-oci-registry-over-chartmuseum.md) | ⭐⭐⭐ |
-| [003-sentinel-alert-pattern](003-sentinel-alert-pattern.md) | ⭐⭐⭐ |
-| [004-federation-central-exporter-first](004-federation-central-exporter-first.md) | ⭐⭐⭐ |
-| [005-projected-volume-for-rule-packs](005-projected-volume-for-rule-packs.md) | ⭐⭐⭐ |
-| [README](README.md) | ⭐⭐⭐ |
-| ["架構與設計 — 動態多租戶警報平台技術白皮書"](../architecture-and-design.md) | ⭐⭐ |
-| ["架構與設計 — 附錄 A"](../architecture-and-design.md#附錄角色與工具速查) | ⭐⭐ |

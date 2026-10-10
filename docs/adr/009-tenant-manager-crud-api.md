@@ -9,38 +9,46 @@ tracking_kind: adr
 status: accepted
 domain: tenant-api
 created_at: 2026-04-05
-updated_at: 2026-05-13
+updated_at: 2026-10-10
 ---
 # ADR-009: Tenant Manager CRUD API 架構
 
 > **Language / 語言：** **中文 (Current)** | [English](./009-tenant-manager-crud-api.en.md)
 
+**決策摘要**：新增 tenant-api，一個獨立的 Go HTTP server，作為 da-portal 的管理後端。登入交給前面的 oauth2-proxy，tenant-api 依 oauth2-proxy 帶來的身分標頭判斷權限；每次寫入都直接修改 Git repo 裡的租戶設定檔並以操作者身分 commit，Git 仍是設定的唯一來源。
+
 ## 狀態
 
-✅ **Accepted** (v2.4.0) — Tenant Management API 以 Go HTTP server + oauth2-proxy + commit-on-write 模式實作
+✅ **Accepted**（v2.4.0）— Tenant Management API 以 Go HTTP server + oauth2-proxy + commit-on-write 模式實作
+
+## 名詞
+
+- **conf.d/**：存放租戶設定 YAML 的目錄，threshold-exporter 從這裡讀設定。
+- **oauth2-proxy**：開源的認證反向代理。使用者先在它那裡經由 IdP（身分提供者，例如 GitHub、Google，或支援 OIDC 這個標準登入協定的企業身分系統）登入，它再把請求轉給後端，並以 `X-Forwarded-Email`、`X-Forwarded-Groups` 標頭帶上使用者的 email 與所屬群組。
+- **commit-on-write**：API 每處理一次寫入，就修改 conf.d/ 裡的 YAML 並立刻建立一個 git commit，commit 的 author 是操作者的 email。
+- **SSE（Server-Sent Events）**：瀏覽器與伺服器之間的單向推播：伺服器保持一條 HTTP 回應不結束，有事件就往裡面寫一筆。
 
 ## 背景
 
-### 問題陳述
+### 問題
 
-v2.3.0 的 da-portal 是純靜態展示層：tenant 配置由 domain expert 手動編輯 YAML 後透過 ConfigMap 或 GitOps 流程更新。這造成以下摩擦：
+在這個決策之前，da-portal 只是靜態展示層：租戶設定由領域專家手動編輯 YAML，再經 ConfigMap 或 GitOps 流程更新。這造成以下摩擦：
 
-1. **操作門檻高**：非工程師背景的 domain expert 需要直接編輯 YAML，容易引入格式錯誤
-2. **審計軌跡不一致**：手動 `kubectl apply` 或 `git push` 無法統一記錄操作者身份
-3. **批量操作低效**：將 20 個 tenant 切換為靜默模式需要逐一編輯 20 個 YAML 檔案
-4. **驗證時間晚**：配置錯誤在 threshold-exporter reload 後才被發現，無法在寫入前預防
-5. **權限粒度不足**：目前無機制限制某個 group 只能管理特定 tenant 子集
+1. **操作門檻高**：非工程背景的領域專家要直接編輯 YAML，容易寫錯格式。
+2. **稽核軌跡不一致**：手動 `kubectl apply` 或 `git push` 無法統一記錄操作者是誰。
+3. **批量操作沒效率**：要把 20 個租戶切到靜默模式，得逐一編輯 20 個 YAML 檔。
+4. **錯誤發現得晚**：設定錯誤要等 threshold-exporter 重新載入後才發現，無法在寫入前擋下。
+5. **權限不夠細**：沒有機制限制某個群組只能管理特定的租戶子集。
 
 ### 決策驅動力
 
-- 維持 GitOps 精神：Git repo 仍是 source of truth，API 是寫入 Git 的受控通道
-- 複用現有 threshold-exporter 的 config 解析與驗證邏輯，不重複維護 schema
-- 認證外包給成熟工具，API server 零 auth 程式碼
-- Portal 降級安全：API 不可用時，Portal 自動退回唯讀靜態模式
+- 維持 GitOps 精神：Git repo 仍是設定的唯一來源，API 是寫入 Git 的受控通道。
+- 重用 threshold-exporter 既有的設定解析與驗證邏輯，不另外維護一份 schema。
+- 認證交給成熟工具。
 
 ## 決策
 
-引入 **tenant-api**：一個獨立的 Go HTTP server，作為 da-portal 的管理平面後端。
+新增 **tenant-api**：一個獨立的 Go HTTP server，作為 da-portal 的管理後端。
 
 ```mermaid
 graph LR
@@ -49,108 +57,111 @@ graph LR
     C -->|"commit-on-write<br/>(操作者歸屬)"| D["Git Repo<br/>conf.d/"]
 ```
 
-### 核心決策點
+### 各項選擇
 
 | 決策項目 | 選擇 | 理由 |
 |----------|------|------|
-| **API 實作語言** | Go | 直接 import `pkg/config` 共用 config 解析與驗證邏輯，避免 Go↔Python 雙端維護 schema |
-| **認證機制** | oauth2-proxy sidecar | K8s 原生模式，API server 只讀 HTTP header，零 auth 程式碼；支援 GitHub OAuth / Google OIDC / 通用 OIDC |
-| **寫回機制** | commit-on-write | UI 操作 → API → 修改 conf.d/ YAML → git commit（以操作者 email 為 author）。完整 audit trail，與 GitOps 流程相容 |
-| **權限模型** | `_rbac.yaml` 靜態映射 | 維護一份 `_rbac.yaml`：`groups[].tenants[]` 對應表。IdP groups 為 source of truth，動態載入，無需硬編碼 |
-| **並發模型** | `sync.Mutex` → goroutine pool | v2.4.0 同步執行；v2.6.0 升級為 goroutine pool + `task_id` 輪詢非同步模式 |
-| **API 文件** | swaggo/swag annotation | 從 Go handler annotation 自動產出 `swagger.yaml`，與程式碼保持同步 |
-| **Portal 定位** | 擴展現有 da-portal | 不另起新專案；新增 API client layer，tenant-manager.jsx 降級保護（API 不可用 → 靜態 JSON 唯讀模式）|
-| **Go module 邊界** | 獨立 module + replace | `github.com/vencil/tenant-api` 有自己的 `go.mod`，以 `replace` directive 指向本地 `threshold-exporter/`；未來可獨立發布 |
+| **API 實作語言** | Go | 直接 import threshold-exporter 的 `pkg/config`，共用設定解析與驗證邏輯，不必在 Go 與 Python 兩邊維護 schema |
+| **認證機制** | oauth2-proxy sidecar | Kubernetes 常見做法；授權判斷只讀 oauth2-proxy 帶來的 HTTP 標頭；支援 GitHub OAuth、Google OIDC 與通用 OIDC |
+| **寫回機制** | commit-on-write | UI 操作 → API → 修改 conf.d/ 的 YAML → git commit（author 為操作者 email）。稽核軌跡完整，與 GitOps 流程相容 |
+| **權限模型** | `_rbac.yaml` 靜態對應 | 維護一份 `_rbac.yaml`，列出 IdP 群組對應哪些租戶、有哪些權限。群組歸屬以 IdP 為準，檔案改了會自動重新載入，程式裡不寫死 |
+| **並行模型** | 寫入序列化，批量可非同步 | 所有寫入由 writer lock 序列化；批量操作預設同步執行，加 `?async=true` 改由背景 worker 執行，用 `task_id` 輪詢結果 |
+| **變更通知** | SSE | 設定變更以 SSE 即時推給瀏覽器。只需要伺服器往瀏覽器單向推播，SSE 比 WebSocket 簡單，也與 HTTP/2 原生相容 |
+| **API 文件** | swaggo/swag 標註 | 從 Go handler 上的標註自動產生 `swagger.yaml`，與程式碼保持同步 |
+| **Portal 定位** | 擴充現有 da-portal | 不另起新專案，在 tenant-manager 前端加上呼叫 API 的那一層 |
+| **Go module 邊界** | 獨立 module + `replace` | `github.com/vencil/tenant-api` 有自己的 `go.mod`，以 `replace` 指向 repo 內的 threshold-exporter；之後可以獨立發布 |
 
-### RBAC 熱更新設計
+### 範例：`_rbac.yaml`
 
-`_rbac.yaml` 使用 `sync/atomic.Value` 存放解析後的 RBAC 結構，與 threshold-exporter config hot-reload 模式一致：
-
-```go
-type RBACManager struct {
-    path  string
-    value atomic.Value  // 存放 *RBACConfig
-}
-// WatchLoop: 定期 SHA-256 比對，有變更才 atomic.Store()
-// handler goroutine: atomic.Load()，lock-free
+```yaml
+groups:
+  - name: platform-admins
+    tenants: ["*"]
+    permissions: [read, write, admin]
+  - name: db-operators
+    tenants: ["db-a-*", "db-b-*"]
+    permissions: [read, write]
 ```
 
-### 批量操作回應格式
+`name` 對應 IdP 群組名稱，也就是 oauth2-proxy 放在 `X-Forwarded-Groups` 裡的值；`tenants` 可以寫完整租戶 ID、`*` 或前綴樣式（`db-a-*`）。結果：`X-Forwarded-Groups` 含 `db-operators` 的使用者，可以讀寫 ID 以 `db-a-` 或 `db-b-` 開頭的租戶，其他租戶不行。
 
-v2.4.0 同步執行，`status` 永遠為 `"completed"`。v2.6.0 已升級為非同步模式（goroutine pool + `task_id` 輪詢）：
+`_rbac.yaml` 解析後存放在 `sync/atomic.Value` 裡，handler 讀取時不必加鎖；背景定期比對檔案的 SHA-256，內容變了才重新解析、替換，與 threshold-exporter 的設定熱更新同一個模式。
+
+### 範例：批量操作的回應
+
+`POST /api/v1/tenants/batch` 帶兩個操作，第一個成功、第二個在寫入時遇到並行衝突。預設的同步模式回：
 
 ```json
 {
   "status": "completed",
-  "task_id": "batch-20260405-001",
+  "task_id": "batch-20260405-0002",
   "results": [
     {"tenant_id": "db-a-prod", "status": "ok"},
-    {"tenant_id": "db-b-staging", "status": "error", "message": "validation failed: unknown key _foo"}
-  ]
+    {"tenant_id": "db-b-staging", "status": "error", "message": "conflict: retry after refresh"}
+  ],
+  "summary": "1 succeeded, 1 failed"
 }
 ```
 
-## 基本原理
+加 `?async=true` 時改回 202 與 `task_id`，結果用 `GET /api/v1/tasks/{id}` 取得。
+
+## 理由
 
 ### 為何選 Go 而非 Python？
 
-threshold-exporter 的核心 config 解析邏輯（`ValidateTenantKeys`, `ResolveAt`, `ParseConfigFile`）全在 Go。以 Go 撰寫 API server 可直接 `import "github.com/vencil/threshold-exporter/pkg/config"`，鍵驗證與 exporter 同源。⚠️ 這不等於與 `da-tools validate-config` 一致：後者是 Python（`validate_config.py`），兩邊拒收的集合不同（見 [config-driven](../design/config-driven.md)）。若改用 Python，必須同步維護兩套 schema validator，歷史上 Go↔Python 雙端維護曾造成驗證邏輯不一致（參見 `governance-security.md §2`）。
+threshold-exporter 的核心設定解析邏輯（`ValidateTenantKeys`、`ResolveAt`、`ParseConfigFile`）都在 Go。以 Go 寫 API server，可以直接 `import "github.com/vencil/threshold-exporter/pkg/config"`，鍵的驗證與 exporter 同源。這不等於與 `da-tools validate-config` 一致：後者是 Python（`validate_config.py`），兩邊拒收的集合不同（見 [config-driven](../design/config-driven.md)）。若改用 Python 寫 API，就得同時維護兩套 schema 驗證器。
 
 ### 為何不用資料庫？
 
-Git repo 已是 source of truth。引入資料庫會產生 Git state ↔ DB state 的雙向同步問題，增加系統複雜度和故障點。commit-on-write 模式保留完整 audit trail，任何時間點的配置狀態都可透過 `git log` 重建，符合 GitOps 核心精神。
+Git repo 已經是設定的唯一來源。引入資料庫會產生 Git 與資料庫兩邊的狀態同步問題，增加系統複雜度與故障點。commit-on-write 保留完整的稽核軌跡，任何時間點的設定狀態都能從 `git log` 重建，符合 GitOps 的核心精神。
 
-### 為何用 oauth2-proxy 而非自建 JWT 驗證？
+### 為何用 oauth2-proxy 而非自己驗證 JWT？
 
-oauth2-proxy 是 CNCF 生態的成熟工具，支援所有主流 IdP（GitHub、Google、Azure AD、通用 OIDC）。注入 `X-Forwarded-Email` 和 `X-Forwarded-Groups` header 後，API server 只需讀取 header，無需任何 token 驗證程式碼。這遵循 separation of concerns 原則，且與 K8s ingress auth 模式一致。
+oauth2-proxy 支援主流 IdP（GitHub、Google、Azure AD、通用 OIDC），登入流程交給它，tenant-api 的授權判斷只讀它注入的 `X-Forwarded-Email` 與 `X-Forwarded-Groups`。這讓認證與業務邏輯分開，也與 Kubernetes ingress 層做認證的常見模式一致。
 
-### 為何 v2.4.0 不做即時推播？
+## 後果與已知限制
 
-v2.4.0 的主要用戶場景是低頻操作（每次操作間隔 ≥1 秒），polling 或手動重新整理已足夠。v2.6.0 以 SSE（Server-Sent Events）實現配置變更即時通知，取代最初規劃的 WebSocket 方案——SSE 單向推播更簡潔，且與 HTTP/2 原生相容。
+**得到的**
 
-## 後果
+- **操作體驗提升**：領域專家透過 Portal UI 管理租戶，不必直接編輯 YAML。
+- **統一的稽核軌跡**：所有設定變更都以操作者 email 為 git commit 的 author，可以追溯。
+- **寫入前驗證**：API 在 commit 前執行 `ValidateTenantKeys()`，設定錯誤當場回報。
+- **細粒度權限**：`_rbac.yaml` 可以把特定團隊限制在它負責的租戶子集。
 
-### 正向
+**要承擔的**
 
-- **操作體驗提升**：domain expert 透過 Portal UI 進行 tenant 管理，無需直接編輯 YAML
-- **統一 audit trail**：所有配置變更以操作者 email 為 git commit author，可追溯
-- **寫入前驗證**：API server 在 commit 前執行 `ValidateTenantKeys()`，配置錯誤即時回饋
-- **細粒度權限**：`_rbac.yaml` 可將特定 team 限制在其負責的 tenant 子集
-- **零停機降級**：oauth2-proxy 或 API server 故障時，Portal 自動降級為靜態唯讀模式
+- **OAuth 設定**：第一次部署要在 IdP（GitHub、Google 等）建立 OAuth application，並設定 callback URL。
+- **網路多一跳**：請求路徑變成 Portal → oauth2-proxy → tenant-api → Git。
+- **依賴 git 執行檔**：API 以 `os/exec` 呼叫 `git`，容器裡必須有 git。執行階段的 image 以 alpine 為基底，並以 `apk add git` 安裝。
 
-### 負向
+**並行寫入的衝突**
 
-- **新增運維元件**：tenant-api + oauth2-proxy 各增加一個 Deployment，需要監控、升級、排障
-- **OAuth 設定複雜度**：首次部署需要在 IdP（GitHub/Google）建立 OAuth application，設定 callback URL
-- **網路拓撲增加**：Portal → oauth2-proxy → tenant-api → Git 的多跳延遲（預期 <100ms in-cluster）
+多個操作者同時寫同一個租戶的設定時可能衝突。API 的寫入由 writer lock 序列化；commit 之後比對這個 commit 的 parent 是否仍是寫入前記下的 HEAD，不是就回 409。回 409 時這筆寫入**已經 commit、不會回滾**（[#1535](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/1535)）。「讀到之後、寫入之前被別人改過」（lost update）要靠選用的 `X-DA-Base-Hash` 前置條件：請求帶上讀取時拿到的雜湊值，檔案已經變了就回 409。這個標頭只在直接寫回模式有效。
 
-### 風險
+**不涵蓋的範圍**
 
-- **Git conflict**：多個操作者同時寫入同一 tenant 配置可能產生 conflict。Mitigation：API 的寫入由 writer lock 序列化；commit 後比對 parent 是否仍是寫入前的 HEAD，不是就回 409。⚠️ 回 409 時這筆寫入**已經 commit、不會回滾**（[#1535](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/1535)）。讀到寫之間被別人改過（lost update）要靠選用的 `X-DA-Base-Hash` 前置條件（僅 direct 寫回模式），不符回 409
-- **git binary 依賴**：API server 以 `os/exec` 呼叫 `git` 指令，容器內需安裝 git。Mitigation：Dockerfile 使用 `golang:alpine` build stage 確保 git 可用
+- 權限以租戶為單位，沒有欄位層級的權限。
 
-## 演進狀態
+## 實作位置
 
-- **v2.4.0**（已完成）：核心 CRUD API、commit-on-write、oauth2-proxy 認證、`_rbac.yaml` 權限模型、Portal 降級安全
-- **v2.5.0**（已完成）：Multi-Tenant Grouping（ADR-010）、多維度篩選、Group CRUD + batch 操作
-- **v2.6.0**（已完成）：非同步批量操作（goroutine pool + `task_id` 輪詢）、SSE 即時推播（取代 WebSocket）、PR-based 寫回（ADR-011，GitHub + GitLab 雙平台）
+- `components/tenant-api/` — API server
+- `components/threshold-exporter/app/pkg/config/` — 共用的設定解析 package
+- `components/tenant-api/internal/rbac/` — `_rbac.yaml` 的載入與權限判斷
+- `components/tenant-api/internal/gitops/writer.go` — commit-on-write 與衝突偵測
+- `components/tenant-api/internal/async/` — 非同步批量操作的 worker pool
+- `components/tenant-api/internal/ws/hub.go` — SSE 推播
+- `tools/portal/src/interactive/tools/tenant-manager.jsx` — Portal 前端
 
-**殘留**：
-- 細粒度欄位級 RBAC（目前為 tenant 層級）— 排入 v2.7.0 候選
-
-## 相關決策
+## 相關
 
 | ADR | 關聯 |
 |-----|------|
-| [ADR-003: Sentinel Alert 模式](003-sentinel-alert-pattern.md) | flag metric 模式延伸至 API server 的操作監控 metrics |
-| [ADR-007: 四層路由合併](007-cross-domain-routing-profiles.md) | API 的 `PUT /tenants/{id}` 需理解並保留 `_routing` 欄位 |
-| [ADR-008: Operator-Native 整合路徑](008-operator-native-integration-path.md) | Operator 路徑下的 CRD 變更不走 API，維持 CLI 工具鏈 |
+| [ADR-003: Sentinel Alert 模式](003-sentinel-alert-pattern.md) | 旗標指標的模式延伸到 API server 的運維監控指標 |
+| [ADR-007: 跨域路由設定檔與域策略](007-cross-domain-routing-profiles.md) | API 的 `PUT /tenants/{id}` 需理解並保留 `_routing` 欄位 |
+| [ADR-008: Operator-Native 整合路徑](008-operator-native-integration-path.md) | Operator 路徑下的 CRD（Kubernetes 自訂資源）變更不走 API，維持 CLI 工具鏈 |
+| [ADR-010: Multi-Tenant Grouping Architecture](010-multi-tenant-grouping.md) | 以這套 API 為基礎加上自訂群組 |
+| [ADR-011: PR-based Write-back 模式](011-pr-based-write-back.md) | 在 commit-on-write 之外，提供改開 PR 的寫回模式 |
 
-## 相關資源
-
-- `components/tenant-api/` — API server 實作
-- `components/threshold-exporter/pkg/config/` — 共用 config 解析 package
-- `tools/portal/src/interactive/tools/tenant-manager.jsx` — Portal 前端
-- `docs/governance-security.md §2` — Schema validation 雙端一致性要求
+- [`governance-security.md` 配置驗證與合規](../governance-security.md) — Go 與 Python 兩端驗證的分工
 - [oauth2-proxy 官方文件](https://oauth2-proxy.github.io/oauth2-proxy/) — IdP 設定參考
-- [swaggo/swag](https://github.com/swaggo/swag) — Go annotation → swagger.yaml
+- [swaggo/swag](https://github.com/swaggo/swag) — Go 標註 → swagger.yaml
