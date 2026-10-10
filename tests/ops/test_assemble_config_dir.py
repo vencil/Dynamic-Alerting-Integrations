@@ -26,6 +26,7 @@ from _platform_fs import symlink_or_skip  # noqa: E402
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[2] / "scripts" / "tools"))
 import _lib_tenant_uniqueness as tu  # noqa: E402
+from _lib_exitcodes import EXIT_CALLER_ERROR, EXIT_OK  # noqa: E402
 
 from assemble_config_dir import (
     PLATFORM_FILES,
@@ -1646,15 +1647,37 @@ class TestValidateReadsWhatTheExporterReads:
 
 
 class TestManifestOnlyNamesTheMissingFlag:
-    """argparse accepts `--manifest` alone (there is no load path — #1829), so
-    the zero-carrier arm is reachable with no sources at all. Blaming the
-    carriers there points at the wrong thing."""
+    """`--manifest` only saves; there is no load path (#1829). Alone it used to
+    run the assembly over zero sources and overwrite the manifest at rc 0, and
+    later at rc 1 — a flag combination the caller got wrong is rc 2."""
 
     def test_it_says_sources_is_required(self, config_dir, capsys, cli_argv):
         cli_argv("assemble", "--manifest", str(Path(config_dir) / "m.json"),
                  "--output", str(Path(config_dir) / "out"))
-        assert main() == 1
+        assert main() == EXIT_CALLER_ERROR
         assert "--sources is required" in capsys.readouterr().err
+
+    def test_an_existing_manifest_is_left_alone(self, config_dir, cli_argv):
+        """The damage #1829 reported: the manifest was rewritten with zero
+        sources. Refused before anything is written."""
+        m = Path(config_dir) / "m.json"
+        m.write_text('{"file_count": 2}\n', encoding="utf-8")
+        cli_argv("assemble", "--manifest", str(m),
+                 "--output", str(Path(config_dir) / "out"))
+        assert main() == EXIT_CALLER_ERROR
+        assert m.read_text(encoding="utf-8") == '{"file_count": 2}\n'
+        assert not (Path(config_dir) / "out").exists()
+
+    def test_sources_naming_no_directory_says_so(self, config_dir, capsys,
+                                                 cli_argv):
+        """`--sources ,` stays on the zero-carrier arm (rc 1, see
+        TestZeroCarriersIsAMisPointedSources) but must not mention a
+        `--manifest` the caller never passed."""
+        cli_argv("assemble", "--sources", ",", "--check")
+        assert main() == 1
+        err = capsys.readouterr().err
+        assert "--sources names no directory" in err
+        assert "--manifest" not in err
 
     def test_a_real_empty_source_still_blames_the_source(self, config_dir,
                                                          capsys, cli_argv):
@@ -1667,3 +1690,78 @@ class TestManifestOnlyNamesTheMissingFlag:
         err = capsys.readouterr().err
         assert "no config carrier found in" in err
         assert str(s) in err
+
+
+class TestCheckRefusesFlagsItCannotHonour:
+    """#1828: `--check` returns before anything is assembled, so `--validate`
+    never ran under it and the pair answered ✅ / rc 0 for a source that
+    `--output --validate` rejects. `--manifest` had the same shape: rc 0 and
+    no manifest. Both pairs are refused (dev-rules #13)."""
+
+    _BROKEN = "- not\n- a mapping\n"
+
+    def _src(self, config_dir):
+        s = Path(config_dir) / "src"
+        s.mkdir()
+        _write_file(s / "ok.yaml", _TENANT_DOC.format(t="ok", v=1))
+        _write_file(s / "notmap.yaml", self._BROKEN)
+        return s
+
+    def test_check_with_validate_is_refused(self, config_dir, capsys,
+                                            cli_argv):
+        s = self._src(config_dir)
+        out = Path(config_dir) / "out"
+        cli_argv("assemble", "--sources", str(s), "--output", str(out),
+                 "--check", "--validate")
+        assert main() == EXIT_CALLER_ERROR
+        captured = capsys.readouterr()
+        assert "--validate" in captured.err and "--check" in captured.err
+        assert "No conflicts" not in captured.out
+        assert not out.exists()
+
+    def test_check_with_manifest_is_refused(self, config_dir, cli_argv):
+        s = self._src(config_dir)
+        m = Path(config_dir) / "m.json"
+        cli_argv("assemble", "--sources", str(s), "--check",
+                 "--manifest", str(m))
+        assert main() == EXIT_CALLER_ERROR
+        assert not m.exists()
+
+    def test_json_rejection_is_one_document(self, config_dir, capsys,
+                                            cli_argv):
+        s = self._src(config_dir)
+        cli_argv("assemble", "--sources", str(s), "--check", "--validate",
+                 "--json")
+        assert main() == EXIT_CALLER_ERROR
+        doc = json.loads(capsys.readouterr().out)
+        assert doc == {"status": "caller_error",
+                       "reason": "check_with_validate"}
+
+    def test_check_alone_still_passes(self, config_dir, cli_argv):
+        """CONTROL — `--check` by itself is a file-selection preview; the
+        broken carrier is not its question."""
+        cli_argv("assemble", "--sources", str(self._src(config_dir)),
+                 "--check")
+        assert main() == EXIT_OK
+
+    def test_validate_does_fire_on_this_source(self, config_dir, capsys,
+                                               cli_argv):
+        """CONTROL — the fixture is one `--validate` rejects, so the refusal
+        above is not passing on a source that would have validated anyway."""
+        s = self._src(config_dir)
+        cli_argv("assemble", "--sources", str(s),
+                 "--output", str(Path(config_dir) / "out"), "--validate",
+                 "--json")
+        assert main() == 2   # the module's validation-error exit
+        doc = json.loads(capsys.readouterr().out)
+        assert doc["status"] == "validation_error"
+
+    def test_assembly_without_output_is_refused_with_a_document(
+            self, config_dir, capsys, cli_argv):
+        """Same family: assembly needs `--output`. Refused before the sources
+        are read, and `--json` still gets its one document."""
+        cli_argv("assemble", "--sources", str(self._src(config_dir)),
+                 "--validate", "--json")
+        assert main() == EXIT_CALLER_ERROR
+        assert json.loads(capsys.readouterr().out) == {
+            "status": "caller_error", "reason": "output_required"}

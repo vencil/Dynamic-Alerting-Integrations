@@ -16,8 +16,10 @@ Exit codes:
        tool's own policy; only one copy could ever ship), or one tenant id
        declared by two carriers (the exporter rejects the WHOLE config-dir in
        that state). Nothing is written in either case.
-    2  validation error (malformed YAML), or the duplicate-tenant question
-       could not be answered
+    2  validation error (malformed YAML), the duplicate-tenant question
+       could not be answered, or the flags contradict each other
+       (`--check` with `--validate` / `--manifest`, `--manifest` without
+       `--sources`) — refused before anything is read or written
 """
 
 import argparse
@@ -441,11 +443,12 @@ def main() -> int:
     )
     parser.add_argument(
         "--validate", action="store_true",
-        help="Run YAML validation on assembled output",
+        help="Run YAML validation on assembled output (not with --check)",
     )
     parser.add_argument(
         "--manifest", type=str, default="",
-        help="Path to save/load assembly manifest JSON",
+        help="Path to save the assembly manifest JSON (needs --sources; "
+             "not with --check). There is no load mode.",
     )
     parser.add_argument(
         "--json", action="store_true",
@@ -453,14 +456,47 @@ def main() -> int:
     )
     args = parser.parse_args()
 
-    # Parse sources
-    if not args.sources and not args.manifest:
-        parser.error("--sources or --manifest is required")
+    def reject(reason: str, message: str) -> int:
+        """Contradictory or incomplete flags: exit 2 (dev-rules #13).
 
-    sources: List[Path] = []
-    if args.sources:
-        sources = [Path(s.strip()).resolve() for s in args.sources.split(",")
-                   if s.strip()]
+        Not `parser.error`: under `--json` stdout still has to carry exactly
+        one document, so the rejection is answered there too.
+        """
+        if args.json:
+            print(format_json_report({"status": "caller_error",
+                                      "reason": reason}))
+        parser.print_usage(sys.stderr)
+        print(f"{parser.prog}: error: {message}", file=sys.stderr)
+        return EXIT_CALLER_ERROR
+
+    # ⛔ `--check` returns before anything is assembled, so a flag that acts
+    # on the assembled output is never reached under it. Accepting the pair
+    # turned `--check --validate` into a green that validated nothing (#1828)
+    # and `--check --manifest` into rc 0 with no manifest written.
+    if args.check and args.validate:
+        return reject("check_with_validate",
+                      "--validate checks the assembled output and --check "
+                      "assembles nothing; drop --check and pass --output to "
+                      "validate")
+    if args.check and args.manifest:
+        return reject("check_with_manifest",
+                      "--manifest records an assembly and --check assembles "
+                      "nothing; drop --check and pass --output to write it")
+
+    # `--manifest` only saves; there is no load path. Accepting it alone ran
+    # the assembly over zero sources and overwrote the manifest (#1829).
+    if not args.sources:
+        if args.manifest:
+            return reject("manifest_without_sources",
+                          "--sources is required (--manifest only saves a "
+                          "manifest; it cannot load one)")
+        return reject("sources_required", "--sources is required")
+    if not args.check and not args.output:
+        return reject("output_required",
+                      "--output is required for assembly (or use --check)")
+
+    sources: List[Path] = [Path(s.strip()).resolve()
+                           for s in args.sources.split(",") if s.strip()]
     # Resolved early: the duplicate-tenant question below has to include what
     # is already sitting in this directory, and that question is asked before
     # `--check` returns.
@@ -516,16 +552,15 @@ def main() -> int:
     # config-dir the exporter reads as "no tenants".
     if not file_map:
         if not sources:
-            # argparse accepts `--manifest` alone, so this path is reachable
-            # with no sources at all. Blaming the carriers there points at the
-            # wrong thing: nothing was ever going to be found.
-            print("ERROR: --sources is required to assemble (--manifest alone "
-                  "loads nothing; there is no load path).", file=sys.stderr)
+            # `--sources ","` — a value that names no directory. Blaming the
+            # carriers there points at the wrong thing.
+            print(f"ERROR: --sources names no directory: {args.sources!r}",
+                  file=sys.stderr)
         else:
             print(f"ERROR: no config carrier found in "
                   f"{', '.join(str(s) for s in sources)}"
-                  f" — assembling this would write an empty config-dir, which "
-                  f"the exporter reads as a platform with no tenants.",
+                  f" — assembling this would write an empty config-dir, "
+                  f"which the exporter reads as a platform with no tenants.",
                   file=sys.stderr)
         if args.json:
             print(format_json_report({"status": "no_carriers",
@@ -704,10 +739,7 @@ def main() -> int:
             }))
         return EXIT_OK
 
-    # Assemble
-    if output_dir is None:
-        parser.error("--output is required for assembly (or use --check)")
-
+    # Assemble (`--output` presence was settled before anything was read)
     count = assemble(file_map, output_dir)
 
     # Validate
