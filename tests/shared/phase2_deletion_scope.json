@@ -9,9 +9,9 @@
     "Package level, not per symbol (owner decision on #2766, 2026-10-10): what stays inside a package",
     "is prose in `notes`, never rows.",
     "importers: one row per (repo-relative directory, whether the importing file is a _test.go file);",
-    "every .go file counts whatever its build tags, external `_test` packages included; third_party/",
-    "and testdata/ are not read.",
-    "spaces_only_callers: every `.SpacesOnly` selector (call or method value) outside third_party/.",
+    "every .go file counts whatever its build tags, external `_test` packages included; not read:",
+    "the module root's third_party/ (a third_party/ deeper down is read) and testdata/ at any depth.",
+    "spaces_only_callers: every `.SpacesOnly` selector (call or method value) outside the module root's third_party/.",
     "patches: exactly the third_party/*.patch files on disk, the same set",
     "tests/ops/test_vendored_yaml_v3.py pins in _PATCHES.",
     "Dispositions: package delete | split; patch keep | delete-with-routingpolicy | delete-when-unrelied."
