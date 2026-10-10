@@ -822,9 +822,14 @@ func walkDirTree(root string, prior *TreeScan, obs ScanObserver, logger *log.Log
 		scan.Unreadable = unreadable
 	}
 	scan.RootWalkErr = rootWalkErr
+	// One buffer for every per-file hash (#1939): `Write([]byte(h))` made a
+	// fresh copy per file, because Write is an interface call the conversion
+	// escapes through — 1000 allocations per tick on a 1000-file tree.
 	compositeHasher := sha256.New()
+	var hashBuf []byte
 	for _, k := range scan.Keys {
-		compositeHasher.Write([]byte(scan.Files[k].Hash))
+		hashBuf = append(hashBuf[:0], scan.Files[k].Hash...)
+		compositeHasher.Write(hashBuf)
 	}
 	scan.Composite = fmt.Sprintf("%x", compositeHasher.Sum(nil))
 
