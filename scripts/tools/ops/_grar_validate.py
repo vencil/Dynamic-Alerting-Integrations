@@ -431,7 +431,7 @@ _PLATFORM_DEGRADED_WARNED = False
 _PLATFORM_DEGRADED_REASON: "str | None" = None
 
 
-def _warn_probe_set_degraded(reason: str) -> None:
+def _warn_probe_set_degraded(reason: str, partial: bool = False) -> None:
     """Say out loud that the identity probe set fell back to the constant.
 
     ⛔ The fallback is fail-OPEN (an alert absent from the probe set is one
@@ -454,6 +454,16 @@ def _warn_probe_set_degraded(reason: str) -> None:
     if _PLATFORM_DEGRADED_WARNED:
         return
     _PLATFORM_DEGRADED_WARNED = True
+    if partial:
+        print(
+            f"WARN: platform alert identity probe set is INCOMPLETE ({reason}); "
+            f"the {len(PLATFORM_ALERT_IDENTITY_LABELS)}-entry built-in fallback "
+            f"was added back. Tenant inhibit rules that would silence a "
+            f"platform alert in the part that could not be read are NOT "
+            f"checked in this run.",
+            file=sys.stderr,
+        )
+        return
     print(
         f"WARN: platform alert identity probe set degraded to the "
         f"{len(PLATFORM_ALERT_IDENTITY_LABELS)}-entry built-in fallback "
@@ -479,7 +489,7 @@ def _warn_probe_set_degraded(reason: str) -> None:
 _EXPR_TENANT_AGG_RE = re.compile(r'\bby\s*\(\s*[^)]*\btenant\b\s*[,)]')
 
 
-def _configmap_rule_bodies(doc: dict):
+def _configmap_rule_bodies(doc: dict, skipped: "list[str] | None" = None):
     """Every rule-file body a kubelet would project from *doc*, as text.
 
     ``data`` values are already text. ``binaryData`` values are base64 and are
@@ -498,6 +508,8 @@ def _configmap_rule_bodies(doc: dict):
             try:
                 yield base64.b64decode(str(value), validate=True).decode("utf-8")
             except (ValueError, UnicodeDecodeError, binascii.Error):
+                if skipped is not None:
+                    skipped.append("an undecodable binaryData key")
                 continue
 
 
@@ -511,10 +523,11 @@ def platform_alert_identities(
     how a tenant-silenceable platform alert survived review.
 
     Falls back to :data:`PLATFORM_ALERT_IDENTITY_LABELS` when the ConfigMap is
-    unreachable (the tool also runs from images that carry no repo tree). The
-    fallback is a strict subset, so it can only under-report, never green-light
-    something the full set would flag — and a repo-anchored test pins that
-    in-repo callers get the full set, so the degradation cannot go unnoticed.
+    unreachable (the tool also runs from images that carry no repo tree), and
+    adds the fallback entries back when the shipped pack is only partly read
+    (#1533 §3: a malformed element skipped, or a fallback alert missing). Both
+    are recorded as degraded (:func:`probe_set_is_degraded`) and warned about,
+    because the result can under-report what the full set would flag.
 
     ⛔ EVERY ConfigMap document and EVERY key under ``data`` / ``binaryData``,
     not ``docs[0]``'s first key. Both narrowings were silent drops, and dropping
@@ -548,12 +561,23 @@ def platform_alert_identities(
         if not docs:
             raise KeyError("no ConfigMap document")
         out: list[dict] = []
+        # #1533 §3: every element skipped because its SHAPE is wrong. Such a
+        # skip silently drops whatever alerts it held (measured: one broken
+        # group took 45 identities to 9 with no warning), so any of them makes
+        # the set partial. Well-formed rules that are simply not platform
+        # alerts (recording rules, Watchdog) are not counted.
+        skipped: list[str] = []
         for doc in docs:
-            for body in _configmap_rule_bodies(doc):
+            for body in _configmap_rule_bodies(doc, skipped):
                 rules_doc = yaml.safe_load(body) or {}
                 if not isinstance(rules_doc, dict):
+                    skipped.append("a rules file that is not a mapping")
                     continue
-                for group in rules_doc.get("groups") or []:
+                groups = rules_doc.get("groups") or []
+                if not isinstance(groups, list):
+                    skipped.append("`groups` that is not a list")
+                    continue
+                for group in groups:
                     # ⛔ Per-element isolation, matching `_configmap_rule_bodies`
                     # above. Without it a single non-mapping element raises into
                     # the handler below and `identities` collapses to the
@@ -561,9 +585,17 @@ def platform_alert_identities(
                     # function's docstring warns about, reachable from one bad
                     # element anywhere in the tree. Measured: 41 identities -> 6.
                     if not isinstance(group, dict):
+                        skipped.append("a group that is not a mapping")
                         continue
-                    for rule in group.get("rules") or []:
-                        if not isinstance(rule, dict) or "alert" not in rule:
+                    rules = group.get("rules") or []
+                    if not isinstance(rules, list):
+                        skipped.append("`rules` that is not a list")
+                        continue
+                    for rule in rules:
+                        if not isinstance(rule, dict):
+                            skipped.append("a rule that is not a mapping")
+                            continue
+                        if "alert" not in rule:
                             continue
                         labels = dict(rule.get("labels") or {})
                         if labels.get("alert_source") != "platform":
@@ -579,7 +611,31 @@ def platform_alert_identities(
                         if _EXPR_TENANT_AGG_RE.search(str(rule.get("expr", ""))):
                             labels.setdefault("tenant", "any-tenant")
                         out.append(labels)
-        if out:
+        # The fallback names are a known subset of the shipped pack, so one
+        # missing from a non-empty read is a well-formed loss the skip count
+        # cannot see (e.g. its `alert_source` marker was removed).
+        read_names = {d.get("alertname") for d in out}
+        missing = sorted(d["alertname"] for d in PLATFORM_ALERT_IDENTITY_LABELS
+                         if d["alertname"] not in read_names)
+        # Only the DEFAULT lookup reads the shipped pack, the one both checks
+        # are about; an explicit `configmap_path` is "read this file as it
+        # is" (tests and analysis feed it synthetic packs) and is returned
+        # unchanged, as before.
+        if configmap_path is None and out and (skipped or missing):
+            parts = []
+            if skipped:
+                parts.append(f"{len(skipped)} malformed element(s) skipped: "
+                             + ", ".join(sorted(set(skipped))))
+            if missing:
+                parts.append("built-in fallback alert(s) not found: "
+                             + ", ".join(missing))
+            reason = f"{path} partially read — " + "; ".join(parts)
+            _warn_probe_set_degraded(reason, partial=True)
+            # P1: keep what was read, add back the fallback entries it lacks.
+            identities = tuple(out) + tuple(
+                d for d in PLATFORM_ALERT_IDENTITY_LABELS
+                if d["alertname"] in missing)
+        elif out:
             identities = tuple(out)
         else:
             reason = f"{path} yielded no platform alert"
@@ -597,16 +653,17 @@ def platform_alert_identities(
 
 
 def probe_set_is_degraded() -> bool:
-    """True iff the DEFAULT probe set is the built-in fallback constant (#1533).
+    """True iff the DEFAULT probe set is not the whole shipped pack (#1533).
 
-    Any of the three degradation causes counts: the pack was not found, it was
-    unreadable, or it yielded no platform alert. Computing it performs the same
-    lookup as :func:`platform_alert_identities` and shares its cache, so it can
-    never disagree with the set the guards actually probed with.
+    Either it fell back to the built-in constant (the pack was not found, was
+    unreadable, or yielded no platform alert), or the pack was only partly
+    read (a malformed element was skipped, or a built-in fallback alert is
+    missing from it) and the fallback entries were added back. Computing it
+    performs the same lookup as :func:`platform_alert_identities` and shares
+    its cache, so it can never disagree with the set the guards probed with.
     """
-    # Identity, not equality: a pack that happened to list exactly the six
-    # fallback alerts is a full set, not a degraded one.
-    return platform_alert_identities() is PLATFORM_ALERT_IDENTITY_LABELS
+    platform_alert_identities()
+    return _PLATFORM_DEGRADED_REASON is not None
 
 
 def probe_set_degraded_reason() -> "str | None":
@@ -779,14 +836,13 @@ def assert_tenant_inhibits_verifiable(
     indexes = ", ".join(f"inhibit_rules[{i}]" for i in unverifiable)
     raise PlatformProbeSetUnverifiable(
         "Platform-alert silencing invariant could NOT be verified: the "
-        "platform alert identity probe set is degraded to the "
-        f"{len(PLATFORM_ALERT_IDENTITY_LABELS)}-entry built-in fallback "
+        "platform alert identity probe set is degraded "
         f"({probe_set_degraded_reason()}), and operator-supplied "
         f"tenant-triggered rule(s) {indexes} may suppress a platform "
-        "self-monitoring alert outside that fallback. Fix: make "
-        f"{_PLATFORM_RULES_BASENAME} reachable (beside this tool, or under the "
-        "checkout's k8s/03-monitoring/) and re-run, or remove those rules from "
-        "the base / cluster config.")
+        "self-monitoring alert it could not see. Fix: make "
+        f"{_PLATFORM_RULES_BASENAME} reachable and intact (beside this tool, or "
+        "under the checkout's k8s/03-monitoring/) and re-run, or remove those "
+        "rules from the base / cluster config.")
 
 
 # One line on purpose: validate-config prints row details through a sanitiser
