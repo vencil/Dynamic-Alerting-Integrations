@@ -951,7 +951,8 @@ def root_platform_files(config_dir):
 
     照 exporter 的 walk：不跟目錄 symlink；檔案 symlink 以連結所在目錄解析
     （`os.path.realpath(連結路徑)`，不是 readlink 原文，也與行程的 CWD 無關）。
-    懸空的連結、讀不到的檔不在其中——那是現況那次的 `unreadable`。
+    懸空的連結不在其中；權限讀不到的一般檔在其中（`isfile` 看不出來），由
+    `exporter_after_writes` 讀的時候略過——兩者都由現況那次的 `unreadable` 擋下。
     """
     # Flat on purpose: only the root `_` files bear on the verdict (see
     # `exporter_after_writes`); the nested-tree WARN is the tool's, printed once.
@@ -987,8 +988,14 @@ def exporter_after_writes(config_dir, metrics, spellings):
             copy = Path(tmp) / "conf.d"
             copy.mkdir()
             for name, real in files:
-                with open(real, "rb") as src:
-                    (copy / name).write_bytes(src.read())
+                # 讀不到的檔略過、不讓整次判定作廢：exporter 也不 decode 它（載體由
+                # 下一個拼法遞補），它由現況那次的 `unreadable` 擋下。
+                try:
+                    with open(real, "rb") as src:
+                        data = src.read()
+                except OSError:
+                    continue
+                (copy / name).write_bytes(data)
             with contextlib.redirect_stdout(io.StringIO()), \
                     contextlib.redirect_stderr(io.StringIO()):
                 for m in metrics:

@@ -327,3 +327,39 @@ def test_the_alias_reminder_shows_only_when_unchecked(tmp_path, da_guard_env):
     conf_d = _alias_tree(tmp_path / "without")
     env = {**os.environ, "DA_GUARD_BINARY": str(tmp_path / "no-such-da-guard")}
     assert reminder in _run(conf_d, env=env).stdout
+
+
+def test_an_unreadable_root_file_does_not_void_the_after_write_check(
+        tmp_path, da_guard_env, monkeypatch, capsys):
+    """r2: a root `_` file this process cannot read is skipped when the root
+    files are staged, not a reason to drop the whole after-write verdict.
+    Before, the PermissionError voided it, the run fell back to today's
+    parse_failed and told the operator to fix `_defaults.yaml` — which this
+    round repairs (`old_metric: disable` is the key it deletes).
+
+    The test runs as root in CI, where `chmod 000` does not stop a read, so
+    `open` in the tool's module is made to refuse `_profiles.yaml` instead;
+    the tool's own read of it is refused too, as for a real unreadable file.
+    """
+    conf_d = _tree(tmp_path, {
+        "_defaults.yaml": "defaults:\n  disk_usage: 80\n  old_metric: disable\n",
+        "_profiles.yaml": "profiles:\n  p1:\n    disk_usage: 1\n",
+        "t1.yaml": "tenants:\n  t1:\n    disk_usage: \"70\"\n",
+    })
+    real_open = open
+
+    def refusing_open(file, *a, **k):
+        if os.path.basename(str(file)) == "_profiles.yaml":
+            raise PermissionError(13, "Permission denied", str(file))
+        return real_open(file, *a, **k)
+    monkeypatch.setattr(deprecate_rule, "open", refusing_open, raising=False)
+    monkeypatch.setattr(sys, "argv", ["deprecate_rule", "old_metric", "--config-dir",
+                                      str(conf_d), "--execute"])
+    with pytest.raises(SystemExit) as ei:
+        deprecate_rule.main()
+    out = capsys.readouterr().out
+    assert ei.value.code == 1, out
+    tail = out.split("下架未完成", 1)[1]
+    assert "_profiles.yaml" in tail, tail
+    assert "_defaults.yaml" not in tail, tail
+    assert "寫入後的體檢問不到" not in out, out
