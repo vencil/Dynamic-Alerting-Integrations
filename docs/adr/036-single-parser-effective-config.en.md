@@ -295,6 +295,7 @@ Code locations for implementers; skip when reading for the decision.
 | tenant-api's current write verdict | `judgePutBody`; PR mode re-judges inside the `WritePRChecked` closure |
 | batch patch rewritten by Go | `mergePatchYAML` |
 | old "unreadable file counts as empty" behaviour (to be deleted) | `tenantBlockOnDisk` |
+| the §9 user comparison (CI check) | declared table `tests/shared/phase2_deletion_scope.json` (per package: the users of `pkg/routingpolicy` and `pkg/pyyamlcompat`, the `SpacesOnly` call sites, what happens to each of the three patches); the test comparing against it, `components/threshold-exporter/app/phase2_deletion_scope_test.go`, reads every Go file of both the exporter and tenant-api modules except the module root's `third_party/` (a deeper `third_party/` is read) and `testdata/` at any depth |
 | changes in the vendored YAML parser | `third_party/yaml.v3`: `SpacesOnly` (policy only, deleted), nonspecific-tag (deleted when unused), `uniquekeys` (used by the exporter, kept); the pinning test `tests/ops/test_vendored_yaml_v3.py` is updated in the same PR |
 | da-guard checks only Go has | `internal/guard/types.go` minus `tests/shared/routing_policy_parity_matrix.json` |
 | the existing "known stricter" marker (folded into the difference list) | `known: stricter` in `merge_key_policy_corpus.json` |
