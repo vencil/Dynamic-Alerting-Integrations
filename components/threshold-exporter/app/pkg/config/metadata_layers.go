@@ -20,10 +20,12 @@ package config
 //     A tenant writing `_metadata: null` therefore has no metadata.
 //
 // The planes: /metrics (tenant_metadata_info, tenant_expected_exporter —
-// the flat merge stacks layers through overlayTenantLayer) and the
-// tenant-api metadata readers (RootPlatform.PlatformMetadata + MergeMetadata).
-// The walker plane (/effective, da-guard effective) carries no `_metadata`
-// at all (mergeDroppedKeys); that is unchanged.
+// the flat merge stacks layers through overlayTenantLayer, then
+// ApplyProfiles fills in, then ResolveMetadata decodes) and the tenant-api
+// metadata readers (RootPlatform.ResolveTenantMetadata, which runs those
+// same three steps for one tenant, #2830). The walker plane (/effective,
+// da-guard effective) carries no `_metadata` at all (mergeDroppedKeys);
+// that is unchanged.
 
 import (
 	"errors"
@@ -52,18 +54,6 @@ func overlayMetadata(base map[string]any, layer any) map[string]any {
 		out[k] = v
 	}
 	return out
-}
-
-// MergeMetadata applies one more layer over the metadata of the layers below
-// it (nil = none): the per-key rule of this file. own is the layer's decoded
-// `_metadata` value and writes reports whether the layer writes the key at
-// all — a layer that does not write `_metadata` leaves below unchanged, one
-// that writes a non-mapping clears it.
-func MergeMetadata(below map[string]any, own any, writes bool) map[string]any {
-	if !writes {
-		return below
-	}
-	return overlayMetadata(below, own)
 }
 
 // decodeMetadataValue decodes a `_metadata` ScheduledValue back into the YAML
@@ -163,23 +153,73 @@ func LoadRootPlatformChecked(configDir string) (RootPlatform, error) {
 	return RootPlatform{r: rootPlatformFrom(scan)}, nil
 }
 
-// PlatformMetadata returns the `_metadata` the root platform files'
-// `tenants.<tenantID>` entries resolve to — merged per key in merge order —
-// or nil when none writes it (or the last one to write it wrote a
-// non-mapping). A file the flat decode rejects contributes nothing.
-// Apply the tenant's own layer with MergeMetadata. The result is a new map.
-func (root RootPlatform) PlatformMetadata(tenantID string) map[string]any {
-	var acc map[string]any
-	for i := range root.r.files {
-		pf := root.r.files[i].parsed
-		if pf.err != nil {
-			continue
-		}
-		sv, writes := pf.cfg.Tenants[tenantID][metadataKey]
-		if !writes {
-			continue
-		}
-		acc = overlayMetadata(acc, decodeMetadataValue(sv))
+// ResolveTenantMetadata resolves tenantID's metadata from tenantData (a
+// tenant file's bytes) over this root platform surface, with /metrics' own
+// steps (#2830):
+//
+//   - LAYERS: the root platform files' `tenants.<tenantID>._metadata` in
+//     merge order, then the tenant file's, stacked with overlayTenantLayer —
+//     the per-key rule at the top of this file. A layer written as a string
+//     holding YAML (`_metadata: "owner: x\n"`) decodes to the same mapping
+//     as the mapping form, as on /metrics, where both reach ScheduledValue's
+//     Default as YAML text.
+//   - PROFILE: when no layer writes `_metadata`, the profile the tenant
+//     elects (`_profile`, the tenant file's or a platform entry's) fills it
+//     in whole — applyProfiles, the fill-in ApplyProfiles runs. A layer that
+//     writes `_metadata` keeps the profile's out entirely, not per key.
+//   - DECODE: tenantMetadataOf, ResolveMetadata's per-tenant body — a
+//     non-string scalar value is read as its text (`environment: 123` is
+//     "123"), and a value that cannot decode into TenantMetadata leaves
+//     every field empty. Nothing is logged here.
+//
+// ok is false when tenantData does not decode (ParseConfigFile) or does not
+// declare tenantID: no metadata is read for it, as /metrics reads none from
+// a file it skips. The zero RootPlatform has no platform files and no
+// profiles, so the result is then the tenant file's own `_metadata` alone.
+func (root RootPlatform) ResolveTenantMetadata(tenantID string, tenantData []byte) (meta ResolvedMetadata, ok bool) {
+	tenantCfg, err := ParseConfigFile(tenantData)
+	if err != nil {
+		return ResolvedMetadata{Tenant: tenantID}, false
 	}
-	return acc
+	own, declared := tenantCfg.Tenants[tenantID]
+	if !declared {
+		return ResolvedMetadata{Tenant: tenantID}, false
+	}
+	// mergeTenantConfig supplies the platform entries' other keys (so a
+	// platform entry's `_profile` is the one applyProfiles reads) and the
+	// root files' `profiles:`; it carries `_metadata` only from the tenant
+	// file, so the stacked value replaces it below.
+	merged := mergeTenantConfig(root.r, ThresholdConfig{
+		Tenants: map[string]map[string]ScheduledValue{tenantID: own},
+	})
+	overrides := merged.Tenants[tenantID]
+	if sv, writes := root.r.stackedMetadata(tenantID, own); writes {
+		overrides[metadataKey] = sv
+	} else {
+		delete(overrides, metadataKey)
+	}
+	merged.applyProfiles(nil)
+	return tenantMetadataOf(tenantID, merged.Tenants[tenantID], nil), true
+}
+
+// stackedMetadata is the `_metadata` value the flat merge leaves for tenant
+// before ApplyProfiles: every root platform file's entry in merge order, then
+// own, each written over the ones before it by overlayTenantLayer (as
+// mergePartialInto does). A file the flat decode rejects contributes
+// nothing. writes is false when no layer writes the key.
+func (r rootPlatform) stackedMetadata(tenant string, own map[string]ScheduledValue) (ScheduledValue, bool) {
+	acc := make(map[string]ScheduledValue, 1)
+	stack := func(layer map[string]ScheduledValue) {
+		if sv, writes := layer[metadataKey]; writes {
+			overlayTenantLayer(acc, map[string]ScheduledValue{metadataKey: sv})
+		}
+	}
+	for i := range r.files {
+		if pf := r.files[i].parsed; pf.err == nil {
+			stack(pf.cfg.Tenants[tenant])
+		}
+	}
+	stack(own)
+	sv, writes := acc[metadataKey]
+	return sv, writes
 }

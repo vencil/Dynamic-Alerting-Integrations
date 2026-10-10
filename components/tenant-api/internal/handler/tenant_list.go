@@ -10,7 +10,6 @@ import (
 	"github.com/vencil/tenant-api/internal/rbac"
 	"github.com/vencil/tenant-api/internal/tenantorg"
 	cfg "github.com/vencil/threshold-exporter/pkg/config"
-	"gopkg.in/yaml.v3"
 )
 
 // TenantSummary is the list-view representation of a single tenant.
@@ -254,9 +253,10 @@ func loadAllTenants(configDir string) ([]TenantSummary, error) {
 	if err != nil {
 		return nil, err
 	}
-	// #2370: a tenant's metadata is the root platform files'
-	// `tenants.<id>._metadata` merged per key under the tenant file's own
-	// (cfg.MergeMetadata), as /metrics resolves it. One root read per
+	// #2370, #2830: a tenant's metadata is what /metrics reads for it
+	// (extractMetadata): the root platform files' `tenants.<id>._metadata`
+	// merged per key under the tenant file's own, else the elected
+	// profile's. One root read per
 	// listing; when it cannot be read the rows carry the tenant files'
 	// own `_metadata` alone and their metadata is unknown (MetadataIncomplete):
 	// a key the platform layer would have set is missing, not unset — the
@@ -313,9 +313,7 @@ func loadAllTenants(configDir string) ([]TenantSummary, error) {
 		}
 
 		// v2.5.0: Extract _metadata fields for filtering and UI display.
-		// Metadata is stored as a raw YAML map since ThresholdConfig doesn't
-		// model _metadata natively — it's parsed from the raw document.
-		extractMetadata(&summary, data, tenantID, platform.PlatformMetadata(tenantID))
+		extractMetadata(&summary, data, tenantID, platform)
 		summary.MetadataIncomplete = !platformKnown
 
 		summaries = append(summaries, summary)
@@ -325,60 +323,28 @@ func loadAllTenants(configDir string) ([]TenantSummary, error) {
 }
 
 // extractMetadata populates the TenantSummary's metadata fields from the
-// tenant's `_metadata`: platform (the root platform files' layer,
-// cfg.RootPlatform.PlatformMetadata; nil = none) with the tenant document's
-// own `_metadata` merged over it per key (cfg.MergeMetadata, #2370).
-// The tenant document is parsed with a loose YAML structure to avoid
-// coupling to the ThresholdConfig schema. A document that does not parse or
-// does not declare tenantID yields no metadata at all: the platform layer
-// only applies to a tenant a tenant file declares.
-func extractMetadata(summary *TenantSummary, data []byte, tenantID string, platform map[string]any) {
-	var raw struct {
-		Tenants map[string]map[string]interface{} `yaml:"tenants"`
-	}
-	if err := yaml.Unmarshal(data, &raw); err != nil {
-		return
-	}
-	tenant, ok := raw.Tenants[tenantID]
+// tenant's `_metadata` as /metrics reads it (#2830): root
+// (cfg.RootPlatform.ResolveTenantMetadata) stacks the root platform files'
+// `tenants.<id>._metadata` and the tenant document's own per key (#2370),
+// fills in the elected profile's when neither writes it, reads the string
+// form like the mapping form, and reads a non-string scalar as its text. The
+// zero root reads the tenant document's own `_metadata` alone. A document
+// that does not decode or does not declare tenantID yields no metadata.
+func extractMetadata(summary *TenantSummary, data []byte, tenantID string, root cfg.RootPlatform) {
+	meta, ok := root.ResolveTenantMetadata(tenantID, data)
 	if !ok {
 		return
 	}
-	metaRaw, writes := tenant["_metadata"]
-	meta := cfg.MergeMetadata(platform, metaRaw, writes)
-	if meta == nil {
-		return
+	summary.Environment = meta.Environment
+	summary.Region = meta.Region
+	summary.Tier = meta.Tier
+	summary.Domain = meta.Domain
+	summary.DBType = meta.DBType
+	summary.Owner = meta.Owner
+	if len(meta.Tags) > 0 {
+		summary.Tags = meta.Tags
 	}
-
-	if v, ok := meta["environment"].(string); ok {
-		summary.Environment = v
-	}
-	if v, ok := meta["region"].(string); ok {
-		summary.Region = v
-	}
-	if v, ok := meta["tier"].(string); ok {
-		summary.Tier = v
-	}
-	if v, ok := meta["domain"].(string); ok {
-		summary.Domain = v
-	}
-	if v, ok := meta["db_type"].(string); ok {
-		summary.DBType = v
-	}
-	if v, ok := meta["owner"].(string); ok {
-		summary.Owner = v
-	}
-	if tags, ok := meta["tags"].([]interface{}); ok {
-		for _, t := range tags {
-			if s, ok := t.(string); ok {
-				summary.Tags = append(summary.Tags, s)
-			}
-		}
-	}
-	if groups, ok := meta["groups"].([]interface{}); ok {
-		for _, g := range groups {
-			if s, ok := g.(string); ok {
-				summary.Groups = append(summary.Groups, s)
-			}
-		}
+	if len(meta.Groups) > 0 {
+		summary.Groups = meta.Groups
 	}
 }

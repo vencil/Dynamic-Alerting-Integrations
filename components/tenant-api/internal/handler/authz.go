@@ -48,10 +48,11 @@ import (
 // NOT take one of these — they are per-item loops, and binding the metadata
 // axis there is a separate plane with its own migration, out of scope here.)
 //
-// #2370: the metadata read is the one the list reads (extractMetadata): the
-// root platform files' `tenants.<id>._metadata` with the tenant document's
-// own `_metadata` merged over it per key. The root platform files are read
-// once per resolver, on first use. When they cannot be read
+// #2370, #2830: the metadata read is the one the list reads
+// (extractMetadata), which is /metrics' reading: the root platform files'
+// `tenants.<id>._metadata` with the tenant document's own `_metadata` merged
+// over it per key, else the elected profile's. The root platform files are
+// read once per resolver, on first use. When they cannot be read
 // (platformMetadataOrNone) the tenant document's own `_metadata` is used
 // alone, as before #2370.
 //
@@ -71,13 +72,13 @@ type platformMetadataSource struct {
 // environmentDomainOf is a ScopeMetaFunc's answer for a tenant document data that
 // declares tenantID (or that the caller proposes to write for it).
 func (s *platformMetadataSource) environmentDomainOf(data []byte, tenantID string) (string, string) {
-	var platform map[string]any
+	var root cfg.RootPlatform
 	if s.configDir != "" {
 		s.once.Do(func() { s.root, _ = platformMetadataOrNone(s.configDir, "write") })
-		platform = s.root.PlatformMetadata(tenantID)
+		root = s.root
 	}
 	var summary TenantSummary
-	extractMetadata(&summary, data, tenantID, platform)
+	extractMetadata(&summary, data, tenantID, root)
 	return summary.Environment, summary.Domain
 }
 
