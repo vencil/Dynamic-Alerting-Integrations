@@ -188,32 +188,24 @@ type EffectiveConfig struct {
 // unreadable _defaults.yaml drops out of the chain. Before W2 (#1677) an
 // unreadable defaults file was a hard error on this path.
 //
-// ⚠️ A COLD scan per call (prior nil): every file is read and, since #1957,
+// A COLD scan per call (prior nil): every file is read and, since #1957,
 // every tenant file decoded in full — the unified parse that makes a tenant
-// the exporter rejects 404 here too. Reusing a prior scan across requests
-// would put this back on the mtime fast-path; that is #1977, not done here.
+// the exporter rejects 404 here too. A caller that keeps a prior across calls
+// resolves on its own warm scan with ResolveEffectiveFromScan (#1977,
+// tenant-api's /effective); this function is that, over a cold scan.
 //
-// NotServed / ChainParseFailed (#2296) come from the exporter's own build of
-// the same scan (loadDirBuild, its log discarded): a chain `_defaults.yaml`
-// the exporter drops for a syntax error is read as empty here too — the
-// tenant is answered, the file named in ChainParseFailed — where it used to
-// fail the request with a *DecodeError.
+// NotServed / ChainParseFailed (#2296) come from the exporter's own build
+// (loadDirBuild, its log discarded) over the files the tenant's answer reads
+// (see ResolveEffectiveFromScan): a chain `_defaults.yaml` the exporter drops
+// for a syntax error is read as empty here too — the tenant is answered, the
+// file named in ChainParseFailed — where it used to fail the request with a
+// *DecodeError.
 func ResolveEffective(configDir, tenantID string) (*EffectiveConfig, error) {
 	scan, err := ScanDirTree(configDir, nil, nil, discardLogger)
 	if err != nil {
 		return nil, err
 	}
-	r := newEffectiveResolver(scan)
-	if _, lerr := scan.Locate(tenantID); lerr == nil {
-		built, berr := loadDirBuild(scan, scan.AbsRoot, discardLogger, discardLogger.Printf)
-		if berr != nil {
-			return nil, berr
-		}
-		r.served = newServedVerdicts(&built, false)
-	}
-	ec, err := r.resolve(tenantID)
-	// #2031: tenant-api's /effective shows every key as written.
-	return ec.AsWritten(), err
+	return ResolveEffectiveFromScan(scan, tenantID)
 }
 
 // discardLogger silences the walker for the library readers. ⛔ Deliberate:
