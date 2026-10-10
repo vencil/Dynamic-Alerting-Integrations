@@ -1185,8 +1185,8 @@ class TestUncoveredFiles:
         assert len(md) <= cd.COMMENT_SAFETY_LIMIT
         assert "truncated to fit GitHub's comment limit" in md
 
-    def test_unreadable_on_both_sides_is_listed(self, tmp_path, monkeypatch):
-        """讀不到的檔算差異：兩側都讀不到時不得因 None == None 被當成沒變。"""
+    def test_unreadable_file_is_a_caller_error_not_a_change(self, tmp_path, monkeypatch, capsys):
+        """讀不到的檔是 IO failure（exit 2），不是「有變」（exit 1）：SSOT 把 IO failure 歸在 2。"""
         files = {"db-a.yaml": self.TENANT, "_defaults.yaml": "defaults: {}\n"}
         old, new = self._pair(tmp_path, files, files)
         real = Path.read_bytes
@@ -1197,7 +1197,13 @@ class TestUncoveredFiles:
             return real(path)
 
         monkeypatch.setattr(Path, "read_bytes", read_bytes)
-        assert cd.compute_uncovered_files(str(old), str(new)) == ["_defaults.yaml"]
+        monkeypatch.setattr(sys, "argv", ["config_diff.py", "--old-dir", str(old),
+                                          "--new-dir", str(new)])
+        with pytest.raises(SystemExit) as exc:
+            cd.main()
+        assert exc.value.code == cd.EXIT_CALLER_ERROR
+        err = capsys.readouterr().err
+        assert "ERROR:" in err and "_defaults.yaml" in err, err
 
     def test_listing_is_sorted(self, tmp_path):
         rels = ["_z.yaml", "a/_defaults.yaml", "_a.yaml", "b/t.yaml"]

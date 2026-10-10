@@ -247,8 +247,10 @@ def _uncovered_contents(dir_path):
     The walk is `iter_config_files`, the exporter's rule (recursive, hidden
     entries skipped); minus the top-level files `_compared_names` lists,
     what is left is the `_`-prefixed files (`_defaults.yaml`, `_profiles.yaml`,
-    `_platform.yaml`, ...) and everything in a sub-directory. None = the file
-    could not be read, which counts as a difference.
+    `_platform.yaml`, ...) and everything in a sub-directory. A file that
+    cannot be read raises: it is an IO failure, exit 2 through `main`'s
+    catch-all (the exit-code SSOT names IO failure there), not a change —
+    listing it as "changed" would turn an environment fault into a finding.
     """
     root = Path(dir_path)
     compared = _compared_names(dir_path)
@@ -257,10 +259,7 @@ def _uncovered_contents(dir_path):
         rel = path.relative_to(root).as_posix()
         if rel in compared:
             continue
-        try:
-            out[rel] = path.read_bytes()
-        except OSError:
-            out[rel] = None
+        out[rel] = path.read_bytes()
     return out
 
 
@@ -282,8 +281,7 @@ def compute_uncovered_files(old_dir, new_dir):
     new = _uncovered_contents(new_dir)
     return sorted(
         rel for rel in set(old) | set(new)
-        if rel not in old or rel not in new
-        or old[rel] is None or new[rel] is None or old[rel] != new[rel]
+        if rel not in old or rel not in new or old[rel] != new[rel]
     )
 
 
