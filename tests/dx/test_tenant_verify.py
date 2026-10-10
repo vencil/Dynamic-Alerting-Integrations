@@ -400,16 +400,16 @@ def test_all_human_with_duplicate_exits_2(verify_module, tmp_path, capsys, cli_a
     assert "declared in more than one file" in captured.err
     # Neither is counted as verified: acme is duplicated, and solo has no
     # merged_hash because da-guard refuses the tree (#1549).
-    assert "# total: 0 tenants verified, 1 duplicate-declared (not verified)" \
-        in captured.out
+    assert "# total: 0 tenants verified, 1 duplicate-declared (not verified), " \
+        "1 without merged_hash (not verified)" in captured.out
 
 
 def test_all_human_total_without_duplicate(verify_module, conf_d, capsys, cli_argv):
     """Must-ring control for the total line: clean tree → all verified."""
     cli_argv("tenant-verify", "--all", "--conf-d", str(conf_d))
     assert verify_module.main() == 0
-    assert "# total: 3 tenants verified, 0 duplicate-declared (not verified)" \
-        in capsys.readouterr().out
+    assert "# total: 3 tenants verified, 0 duplicate-declared (not verified), " \
+        "0 without merged_hash (not verified)" in capsys.readouterr().out
 
 
 def test_all_without_duplicate_exits_0(verify_module, conf_d, cli_argv):

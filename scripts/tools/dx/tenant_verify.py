@@ -275,7 +275,8 @@ def main() -> int:
             # Verified and refused are counted apart: a duplicated tenant
             # has no merged_hash, so it must not read as one of N verified.
             print(f"# total: {len(results) - len(dups) - len(unavailable)} tenants verified, "
-                  f"{len(dups)} duplicate-declared (not verified) in {conf_d}")
+                  f"{len(dups)} duplicate-declared (not verified), "
+                  f"{len(unavailable)} without merged_hash (not verified) in {conf_d}")
         if dups:
             print(f"error: {len(dups)} tenant(s) declared in more than one "
                   f"file, no merged_hash reported for them: "
