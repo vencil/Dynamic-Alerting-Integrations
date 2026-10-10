@@ -136,6 +136,13 @@ const (
 	// once the file is repaired (or removed). Also carried per op on a
 	// direct-mode async batch (BatchResult.Code), judged at execution time.
 	CodePolicyUnavailable = "POLICY_UNAVAILABLE"
+	// CodeMaskedPreviewUnavailable marks a 422 from POST /tenants/{id}/diff
+	// for a caller who may read the tenant but not write it (#1560): the
+	// preview shown to such a caller is computed on the masked form of both
+	// sides, and one side cannot be masked with certainty (not YAML, several
+	// documents, an anchor, alias or merge key). Falling back to the raw
+	// diff would show the credentials the mask exists to hide.
+	CodeMaskedPreviewUnavailable = "MASKED_PREVIEW_UNAVAILABLE"
 )
 
 // policyUnavailableRetryAfterS is the Retry-After hint (seconds) on the

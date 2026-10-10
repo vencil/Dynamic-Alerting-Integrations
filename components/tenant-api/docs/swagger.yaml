@@ -29,71 +29,6 @@ definitions:
       reason:
         type: string
     type: object
-  config.EffectiveConfig:
-    properties:
-      chain_parse_failed:
-        description: |-
-          ChainParseFailed is every file of DefaultsChain that does not parse
-          and that /metrics therefore does not read at all (it is in the build's
-          ParseFailed): the resolve reads it as an empty file, as the exporter
-          does, instead of failing the tenant (#2296). Root-relative, chain
-          order. Filled by ResolveEffective and EffectiveTree; omitted when none.
-        items:
-          type: string
-        type: array
-      defaults_chain:
-        items:
-          type: string
-        type: array
-      effective_config:
-        additionalProperties: {}
-        type: object
-      merged_hash:
-        type: string
-      not_served:
-        additionalProperties:
-          $ref: '#/definitions/config.NotServedKey'
-        description: |-
-          NotServed names each key of EffectiveConfig whose value, as shown,
-          /metrics does not serve, with the reason the exporter's own build or
-          resolver gives for it and the file of the value shown (#2296,
-          not_served.go). EffectiveConfig keeps the value as written. Filled by
-          ResolveEffective and EffectiveTree; nil from ScopeEffective, and
-          omitted when no key is named.
-        type: object
-      platform_overlay:
-        description: |-
-          PlatformOverlay names the root platform files whose `tenants:` block
-          supplied values to EffectiveConfig (#2019), in merge order, each with
-          the top-level keys it supplied — only keys the tenant file does not
-          write and no later platform file overwrote. Omitted when that layer
-          contributes nothing. Same name and shape as describe_tenant.py.
-        items:
-          $ref: '#/definitions/config.PlatformOverlaySource'
-        type: array
-      profile_overlay:
-        description: |-
-          ProfileOverlay names the profile the tenant is on (`_profile`, from
-          the tenant file or the platform overlay) and, per root platform file
-          that profile's filled-in values came from (merge order), the
-          top-level keys it supplied to EffectiveConfig — only keys neither the
-          tenant file nor the platform overlay writes (#2117). Omitted when the
-          profile contributes nothing (no `_profile`, an unknown profile, or
-          every key already set). Same name and shape as describe_tenant.py.
-        items:
-          $ref: '#/definitions/config.ProfileOverlaySource'
-        type: array
-      source_file:
-        type: string
-      source_hash:
-        type: string
-      tenant_id:
-        type: string
-      warnings:
-        items:
-          type: string
-        type: array
-    type: object
   config.NotServedKey:
     properties:
       file:
@@ -598,6 +533,14 @@ definitions:
         type: string
       has_diff:
         type: boolean
+      masked:
+        description: |-
+          Masked is true when the caller may read the tenant but not write it
+          (#1560): the diff is then between the masked forms of the current file
+          and the proposal — re-encoded, without comments, every receiver
+          credential replaced by "<masked: write permission required>" — so
+          has_diff does not report a change to a credential value.
+        type: boolean
       tenant_id:
         type: string
     type: object
@@ -1014,8 +957,27 @@ definitions:
         type: array
       id:
         type: string
+      masked:
+        description: |-
+          Masked is true when the caller may read this tenant but not write it
+          (#1560): raw_yaml is then the file re-encoded with every receiver
+          credential (webhook / chat URLs, PagerDuty keys, passwords, tokens)
+          replaced by the placeholder "<masked: write permission required>" and
+          without comments, and custom_alerts is masked the same way. A PUT
+          carrying the placeholder is refused (400), so a masked copy cannot be
+          written back over the real values. source_hash is still the hash of the
+          file as stored.
+        type: boolean
       raw_yaml:
         type: string
+      raw_yaml_withheld:
+        description: |-
+          RawYAMLWithheld is true, with raw_yaml and custom_alerts empty, when
+          the caller would be shown the masked form but the file cannot be masked
+          with certainty: it is not YAML, holds more than one document, or uses an
+          anchor, alias or merge key (a credential can be placed outside any
+          credential field through one).
+        type: boolean
       resolved_thresholds:
         items:
           $ref: '#/definitions/config.ResolvedThreshold'
@@ -1047,6 +1009,77 @@ definitions:
           ("platform file <name>, profile "<p>" …") — the platform operator
           fixes those there. Split fields so a client never has to text-parse
           severity out of one list.
+        items:
+          type: string
+        type: array
+    type: object
+  internal_handler.TenantEffectiveResponse:
+    properties:
+      chain_parse_failed:
+        description: |-
+          ChainParseFailed is every file of DefaultsChain that does not parse
+          and that /metrics therefore does not read at all (it is in the build's
+          ParseFailed): the resolve reads it as an empty file, as the exporter
+          does, instead of failing the tenant (#2296). Root-relative, chain
+          order. Filled by ResolveEffective and EffectiveTree; omitted when none.
+        items:
+          type: string
+        type: array
+      defaults_chain:
+        items:
+          type: string
+        type: array
+      effective_config:
+        additionalProperties: {}
+        type: object
+      masked:
+        description: |-
+          Masked is true when every receiver credential in effective_config was
+          replaced by the placeholder "<masked: write permission required>"
+          because the caller may read the tenant but not write it.
+        type: boolean
+      merged_hash:
+        type: string
+      not_served:
+        additionalProperties:
+          $ref: '#/definitions/config.NotServedKey'
+        description: |-
+          NotServed names each key of EffectiveConfig whose value, as shown,
+          /metrics does not serve, with the reason the exporter's own build or
+          resolver gives for it and the file of the value shown (#2296,
+          not_served.go). EffectiveConfig keeps the value as written. Filled by
+          ResolveEffective and EffectiveTree; nil from ScopeEffective, and
+          omitted when no key is named.
+        type: object
+      platform_overlay:
+        description: |-
+          PlatformOverlay names the root platform files whose `tenants:` block
+          supplied values to EffectiveConfig (#2019), in merge order, each with
+          the top-level keys it supplied — only keys the tenant file does not
+          write and no later platform file overwrote. Omitted when that layer
+          contributes nothing. Same name and shape as describe_tenant.py.
+        items:
+          $ref: '#/definitions/config.PlatformOverlaySource'
+        type: array
+      profile_overlay:
+        description: |-
+          ProfileOverlay names the profile the tenant is on (`_profile`, from
+          the tenant file or the platform overlay) and, per root platform file
+          that profile's filled-in values came from (merge order), the
+          top-level keys it supplied to EffectiveConfig — only keys neither the
+          tenant file nor the platform overlay writes (#2117). Omitted when the
+          profile contributes nothing (no `_profile`, an unknown profile, or
+          every key already set). Same name and shape as describe_tenant.py.
+        items:
+          $ref: '#/definitions/config.ProfileOverlaySource'
+        type: array
+      source_file:
+        type: string
+      source_hash:
+        type: string
+      tenant_id:
+        type: string
+      warnings:
         items:
           type: string
         type: array
@@ -1855,6 +1888,10 @@ paths:
         I/O, a directory) refuses the write. "Cannot parse" is the end-of-life check's decode (the tenants: block, though
         the whole file must be valid YAML); the added-section check decodes the whole file as a tenant config, and which
         broken files each can parse is not guaranteed to match, so fix the file in git when needed.
+        A caller who may read the tenant but not write it gets raw_yaml with every receiver credential replaced by
+        "<masked: write permission required>" and comments removed, custom_alerts masked the same way (masked: true);
+        or raw_yaml and custom_alerts empty with raw_yaml_withheld: true when the file uses an anchor, alias or merge
+        key, holds several documents or is not YAML.
       parameters:
       - description: Tenant ID
         in: path
@@ -2084,7 +2121,14 @@ paths:
     post:
       consumes:
       - application/json
-      description: Returns unified diff between current file and proposed content.
+      description: |-
+        Returns unified diff between current file and proposed content.
+        The diff header names current/<id>.yaml and proposed/<id>.yaml.
+        A caller who may read the tenant but not write it gets the diff of the masked forms of both sides
+        (re-encoded, without comments, every receiver credential replaced by "<masked: write permission required>"),
+        with masked: true; a change to a credential value alone then shows has_diff false. Such a caller gets 413
+        for a proposal over the tenant-document size limit, and 422 MASKED_PREVIEW_UNAVAILABLE when either side is
+        not YAML, holds several documents, or uses an anchor, alias or merge key.
       parameters:
       - description: Tenant ID
         in: path
@@ -2110,6 +2154,14 @@ paths:
             $ref: '#/definitions/ErrorResponse'
         "409":
           description: Conflict
+          schema:
+            $ref: '#/definitions/ErrorResponse'
+        "413":
+          description: Request Entity Too Large
+          schema:
+            $ref: '#/definitions/ErrorResponse'
+        "422":
+          description: Unprocessable Entity
           schema:
             $ref: '#/definitions/ErrorResponse'
         "500":
@@ -2153,6 +2205,11 @@ paths:
         defaults_chain files with a syntax error the exporter does not
         read; they are read as empty and the tenant is still answered
         (200). Both are omitted when empty.
+        A caller who may read the tenant but not write it gets every
+        receiver credential in effective_config (webhook / chat URLs,
+        PagerDuty keys, passwords, tokens — at any depth) replaced by
+        "<masked: write permission required>", with masked: true;
+        source_hash and merged_hash still describe the stored values.
       parameters:
       - description: Tenant ID
         in: path
@@ -2165,7 +2222,7 @@ paths:
         "200":
           description: OK
           schema:
-            $ref: '#/definitions/config.EffectiveConfig'
+            $ref: '#/definitions/internal_handler.TenantEffectiveResponse'
         "400":
           description: Bad Request
           schema:
