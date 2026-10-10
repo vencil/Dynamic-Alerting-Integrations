@@ -318,3 +318,15 @@ class TestUnplaceableMetadata:
         assert proc.returncode == 0, proc.stderr
         assert "Skip (unplaceable): 1" in proc.stdout
         assert "t2.yaml: _metadata is not a mapping (str) — move it by hand" in proc.stdout
+
+    def test_an_empty_path_field_is_not_written(self, tmp_path):
+        """`environment:` (YAML null) is left out of the path, as before
+        #2830 — not reported as a non-string."""
+        conf_d = tmp_path / "conf.d"
+        conf_d.mkdir()
+        (conf_d / "t1.yaml").write_text(
+            "tenants:\n  t1:\n    _metadata:\n      domain: finance\n      region: us\n      environment:\n",
+            encoding="utf-8")
+        (action,) = mcd.plan_migration(conf_d)
+        assert action["status"] == "ok"
+        assert action["target"] == "finance/us/t1.yaml"

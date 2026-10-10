@@ -86,7 +86,8 @@ def _unplaceable_reason(meta) -> str:
         return f"_metadata is not a mapping ({type(meta).__name__})"
     for field in _PATH_FIELDS:
         value = meta.get(field, "")
-        if not isinstance(value, str):
+        # An empty value (`environment:`) is not written, as before.
+        if value is not None and not isinstance(value, str):
             return f"_metadata.{field} is not a string ({type(value).__name__})"
     return ""
 
