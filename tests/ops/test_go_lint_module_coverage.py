@@ -397,9 +397,9 @@ def test_editing_a_module_wakes_the_lint_job() -> None:
         d for d in set(_lint_steps().values())
         if not _condition_triggers(condition, f"{d}/probe.go", filters))
     assert not unreachable, (
-        f"these modules cannot trigger {LINT_JOB}: {unreachable}. A path-skipped "
-        "required check reports `skipped`, which SATISFIES branch protection — "
-        f"the step is real and never runs. Widen the `validate` filter in "
+        f"these modules cannot trigger {LINT_JOB}: {unreachable}. The run leg is "
+        "skipped and its always-run gate reports success on the required check — "
+        f"the step is real and never runs on the PR that breaks it. Widen the `validate` filter in "
         f"{VALIDATE.name} first.")
 
 

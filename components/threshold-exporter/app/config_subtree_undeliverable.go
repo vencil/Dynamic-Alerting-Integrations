@@ -16,11 +16,9 @@ package main
 // GET /api/v1/tenants/{id}/effective — pkg/config.ResolveEffective — which
 // reads the same conf.d tree from disk on each request.)
 //
-// So the same file gets the same tenant verdict on both planes. (Not "both
-// planes hold the same tenants" unconditionally: the incremental tenant-only
-// reload keeps a now-broken file's last good tenants, which the stateless
-// readers — tenant-api, da-guard — cannot (#1980). Not this audit's
-// business.) What this audit reports is one KEY shape: a key that exists ONLY in a subtree `_defaults.yaml`.
+// So the same file gets the same tenant verdict on both planes — on every
+// reload path since #1980, which removed the incremental tenant-only reload's
+// "keep a now-broken file's last good tenants". What this audit reports is one KEY shape: a key that exists ONLY in a subtree `_defaults.yaml`.
 // /effective resolves the tenant's inheritance chain and reports the value;
 // the collector cannot emit it, because it iterates the ROOT defaults and the
 // declared surface (`optional_overrides:`), and a nested `_` file feeds

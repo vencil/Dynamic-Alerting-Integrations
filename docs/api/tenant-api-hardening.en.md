@@ -101,6 +101,19 @@ curl -H "X-Request-ID: cust-incident-2026-04-29-001" \
 
 From then on, grepping backend logs for `cust-incident-2026-04-29-001` pins down all audit lines for that request.
 
+### 2.4 Internal errors answer a fixed message ([#1700](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/1700))
+
+A response with `code` `INTERNAL_ERROR` always carries the fixed `error` text `internal error; the server log has the details under this request_id`. The original error text — which can carry conf.d's absolute path, a temp-file path or a git message — goes only to the server log, with the same `request_id`; to investigate, grep the log for the response's `request_id`. The few fixed messages that say which operation failed and nothing about the server (a failed conf.d scan, for example) are returned as before.
+
+Other tenant-write failures follow the same rule: on `PUT /tenants/{id}`, `PUT /tenants/{id}/custom-alerts` and the per-op batch results, validation and merge errors still show their own text, while server-side failures (reading the file, the temp file, git) answer `the write failed; the server log has the details…`, with the HTTP status unchanged.
+
+Two errors keep their text on purpose, so they carry their own code:
+
+| code | status | content |
+|---|---|---|
+| `CONFIG_DECODE_ERROR` | 500 | conf.d config content failed to decode: `/effective`'s `parse defaults[i]: …`, a tenant file the custom-alerts write cannot merge or parse, an unparseable `_groups.yaml` / `_views.yaml`; the text says which entry is wrong, with no path |
+| `BASE_RESTORE_FAILED` | 500 | after a PR-mode write the worktree could not return to base: names the branch and whether it reached origin (do not retry — a retry pushes a second branch); without the underlying git error |
+
 ---
 
 ## 3. Tenant-Scoped Authorization

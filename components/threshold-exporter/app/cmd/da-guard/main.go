@@ -466,7 +466,7 @@ func buildCheckInput(scoped *config.ScopedTenants, f *flags) guard.CheckInput {
 	skip := func(rel string) bool { return failed[rel] }
 	// #2326: the WHOLE tree — `_routing_defaults` along each tenant's
 	// directory chain, profiles and domain policies scoped to their subtree
-	// (ADR-017 amendment 2026-09-28), as the route generator reads it. Read
+	// (ADR-017 Decision 9), as the route generator reads it. Read
 	// from --config-dir even for a --scope run: the generator refuses the
 	// whole tree on a blocking shape anywhere in it, so a scoped run reports
 	// it too.

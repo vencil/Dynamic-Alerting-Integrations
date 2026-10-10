@@ -252,7 +252,9 @@ func PutTenant(d *Deps) http.HandlerFunc {
 			if writeTenantPlacementError(rw, r, err) {
 				return
 			}
-			WriteJSONError(rw, r, http.StatusBadRequest, err.Error())
+			// #1700: the text is the caller's only when it is about the
+			// request; a file / git failure keeps its path in the log.
+			WriteJSONError(rw, r, http.StatusBadRequest, writeErrorText(r, err))
 			return
 		}
 
@@ -374,7 +376,14 @@ func putTenantPRMode(d *Deps, rw http.ResponseWriter, r *http.Request, tenantID,
 			WriteJSONError(rw, r, http.StatusBadRequest, err.Error())
 			return
 		}
-		// Anything else is an unexpected git failure → generic 500.
+		if writeBaseRestoreFailed(rw, r, "PR write failed: ", err) {
+			return
+		}
+		if writeMergeFailed(rw, r, "PR write failed: ", err) {
+			return
+		}
+		// Anything else is an unexpected git failure → generic 500 (its text
+		// stays in the log — WriteErrorEnvelope, #1700).
 		WriteJSONError(rw, r, http.StatusInternalServerError, "PR write failed: "+err.Error())
 		return
 	}

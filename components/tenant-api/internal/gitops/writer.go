@@ -851,6 +851,14 @@ var ErrMergePolicyRefused = errors.New("merged content breaks the domain policy"
 // tolerates it (see there); the post-checkout pass decides.
 var ErrMergeBaseNotLoadable = errors.New("merge base cannot be loaded as a tenant config")
 
+// ErrMergeFailed wraps (errors.Is) every error a caller's MergeFunc returned,
+// as readMerge reports it. A merge error describes the patch against the
+// file's content, which the caller is meant to read; the other errors out of
+// a write (reading the file, the temp file, git) describe the server and
+// carry its paths. The batch handler tells the two apart with this (#1700).
+// Its text is the prefix readMerge always used, so messages are unchanged.
+var ErrMergeFailed = errors.New("merge tenant config")
+
 // tenantFilePath is the writer-side answer to "which file does this tenant's
 // config live in" (#1673). It returns the tenant's EXISTING file whatever its
 // spelling, and DefaultTenantFileName only for a tenant that has none — so a
@@ -1140,7 +1148,7 @@ func (w *Writer) readMerge(tenantID, filePath string, merge MergeFunc) (content 
 	}
 	content, merr := merge(existing)
 	if merr != nil {
-		return "", existing, fmt.Errorf("merge tenant config for %s: %w", tenantID, merr)
+		return "", existing, fmt.Errorf("%w for %s: %w", ErrMergeFailed, tenantID, merr)
 	}
 	return content, existing, nil
 }

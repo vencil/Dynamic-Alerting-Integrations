@@ -50,9 +50,8 @@ type flatScanState struct {
 
 	// parseFailed is the sorted scan keys (root-relative slash paths, the
 	// keys of `hashes`) of the files whose bytes in this commit's scan did
-	// not parse (#2069) — those bytes are not in the config, though the flat
-	// patch branch may keep serving the file's tenants from the previous
-	// version (failSafeHeldTenants, #1980): the
+	// not parse (#2069) — those bytes are not in the config, and neither are
+	// the tenants the file declared (on every load path since #1980): the
 	// walker's TreeFile.ParseFailed, plus the `_`-prefixed files the flat
 	// build rejected. It is served by GET /api/v1/config/identity next to
 	// lastHash.
@@ -931,17 +930,20 @@ func (m *ConfigManager) incrementalLoadFrom(scan *treeScan) error {
 	//
 	//	gone from disk                 → prune (operator deleted the file)
 	//	on disk, parsed, no longer declares the tenant → prune (operator deleted the tenant)
-	//	on disk, did NOT parse         → keep exactly while the merged config keeps it
+	//	on disk, did NOT parse         → prune (the file declares nothing)
 	//
-	// ⛔ THE THIRD ROW FOLLOWS THE MERGED CONFIG, NOT THE FILE (#1957). A file
-	// that fails the one decode (config.ParseConfigFile) declares no tenant on
-	// the walker's verdict, and a full load drops its tenants from BOTH planes.
-	// This path may instead keep them in the merged config — patchTenants'
-	// "keep the last good values" on the tenant-only branch — or drop them —
-	// the full-rebuild branch. Whichever it did, the committed hierarchy
-	// (tenantSources) must hold the same tenant set /metrics serves: before #1957 this row was "KEEP,
-	// so cause (a) still fires", i.e. the rule deliberately MADE the two
-	// planes disagree so the divergence audit could report it.
+	// ⛔ THE THIRD ROW IS THE FULL LOAD'S VERDICT (#1957, #1980). A file that
+	// fails the one decode (config.ParseConfigFile) declares no tenant on the
+	// walker's verdict, and a full load drops its tenants from BOTH planes;
+	// both branches of this path now drop them from the merged config too
+	// (#1980 removed the tenant-only branch's "keep the last good values").
+	// A tenant another file declares in the same reload is re-attributed to
+	// that file by the addition loop below, which is where a full load
+	// attributes it. The reachable shape is a move that broke the source: the
+	// tenant's old file turns unparseable while the same reload adds it to
+	// another file. To the walker the broken file declares nothing, so this
+	// is no duplicate — a real cross-file duplicate never gets here, since
+	// scanVerdict (scan.Conflict) rejects the whole scan on the watch path.
 	//
 	// Additions are attributed from the flat scan rather than left blank: a
 	// tenant absent from `tenantSources` has no committed hierarchy entry
@@ -972,12 +974,12 @@ func (m *ConfigManager) incrementalLoadFrom(scan *treeScan) error {
 			if _, onDisk := newHashes[key]; !onDisk {
 				continue // the file is gone
 			}
-			if partial, parsed := newConfigs[key]; parsed {
-				if _, declared := partial.Tenants[tid]; !declared {
-					continue // the file parsed and no longer names this tenant
-				}
-			} else if _, served := merged.Tenants[tid]; !served {
-				continue // the file failed to parse and the merged config dropped it
+			partial, parsed := newConfigs[key]
+			if !parsed {
+				continue // the file failed to parse: it declares nothing
+			}
+			if _, declared := partial.Tenants[tid]; !declared {
+				continue // the file parsed and no longer names this tenant
 			}
 			next[tid] = src
 		}
@@ -1003,29 +1005,17 @@ func (m *ConfigManager) incrementalLoadFrom(scan *treeScan) error {
 
 	// Existence is THIS scan's verdict, on both branches (see
 	// declaredTenantIDs): the patch branch can orphan a platform entry too,
-	// by removing the only tenant file that declared the tenant.
-	//
-	// ⛔ ON THE PATCH BRANCH, "EXISTS" IS WHAT THIS RELOAD WILL SERVE. A
-	// tenant file that fails to parse keeps its tenants' last good values
-	// there (patchTenants' fail-safe, #1980), platform-supplied keys
-	// included; the scan has no declaration for it, so without this the
-	// orphan WARN named a tenant the same commit kept serving with the
-	// platform value. The full-rebuild branch drops such a tenant, so there
-	// the scan's verdict alone is right.
+	// by removing the only tenant file that declared the tenant, or by that
+	// file failing to parse (#1980: its tenants are dropped, as a full load
+	// drops them, so the orphan WARN is right to name them).
 	exists := tenantExistenceFor(newConfigs, scan)
 	// ONE snapshot of the published config, read under the lock, serves the
-	// branch decision, the fail-safe lookup and the patch itself — the
-	// branch test used to read m.config outside the lock, and each consumer
-	// took its own read.
+	// branch decision and the patch itself — the branch test used to read
+	// m.config outside the lock, and each consumer took its own read.
 	m.mu.RLock()
 	prev := m.config
 	m.mu.RUnlock()
 	patchBranch := isTenantOnlyChange(changed, added, removed) && prev != nil
-	if patchBranch && exists != nil {
-		for _, tid := range m.failSafeHeldTenants(prev, newHashes, newConfigs) {
-			exists[tid] = struct{}{}
-		}
-	}
 	reportPlatformOrphans(newConfigs, exists, m.getLogger())
 	if patchBranch {
 		// Incremental patch: copy existing merged config, patch only affected
@@ -1112,47 +1102,6 @@ func incrementalParseFailed(scan *treeScan, prior, reparse []string, reparseFail
 		out = append(out, k)
 	}
 	sort.Strings(out)
-	return out
-}
-
-// failSafeHeldTenants lists the tenants the patch branch keeps serving on
-// last good values: attributed (tenantSources) to a file that is still on
-// disk (newHashes) but did not parse this round (absent from newConfigs) —
-// the "on disk, did NOT parse" row refreshTenantSources keeps. Read from
-// the attribution BEFORE this reload refreshes it, because that is the
-// population m.config (the patch's prev) was built for.
-//
-// ⚠️ A held tenant whose file is then DELETED is not listed (off disk), yet
-// the patch path keeps serving it — see the exception in patchTenants'
-// header and #2022.
-//
-// `prev` is the caller's snapshot of m.config — the same one the patch is
-// built from — so "still served" is judged against exactly that config.
-// tenantSources is still read under the lock here.
-func (m *ConfigManager) failSafeHeldTenants(prev *ThresholdConfig, newHashes map[string]string, newConfigs map[string]ThresholdConfig) []string {
-	if prev == nil {
-		return nil
-	}
-	scanRoot := absScanRoot(m.path)
-	m.mu.RLock()
-	defer m.mu.RUnlock()
-	var out []string
-	for tid, src := range m.hierarchy.tenantSources {
-		rel, err := filepath.Rel(scanRoot, filepath.Clean(src))
-		if err != nil {
-			continue
-		}
-		key := filepath.ToSlash(rel)
-		if _, onDisk := newHashes[key]; !onDisk {
-			continue
-		}
-		if _, parsed := newConfigs[key]; parsed {
-			continue
-		}
-		if _, served := prev.Tenants[tid]; served {
-			out = append(out, tid)
-		}
-	}
 	return out
 }
 
@@ -1337,13 +1286,14 @@ func reclaimTenantFrom(newConfigs map[string]ThresholdConfig, declaredIn tenantD
 //     it even when a platform file's `tenants:` block still names it — a
 //     platform file cannot keep a tenant alive any more than it can create
 //     one, which is what the full rebuild does too.
-//     ⚠️ EXCEPT a tenant the fail-safe is holding: its file turned
-//     unparseable on an earlier reload and is now deleted. That file's
-//     partial left the cache when it failed to parse, so the removal pass
-//     below never sees the deletion and the tenant keeps being served —
-//     platform values included — while the orphan WARN (it is no longer in
-//     `exists`: the file is off disk) says the platform entry is ignored.
-//     Root cause predates this change (#2022); not fixed here.
+//   - a changed file that no longer parses declares NOTHING (#1980): its
+//     tenants are dropped exactly as if the file had been deleted, which is
+//     the full load's verdict (the walker rejects the file, #1957). There is
+//     no "keep the last good values" on this path any more — that fail-safe
+//     made a typo invisible on /metrics until a restart, disagreed with the
+//     hierarchical reload, and kept serving a tenant whose broken file was
+//     later deleted (#2022: the partial had already left the cache, so the
+//     removal pass below never saw the deletion).
 //   - a removed file's tenant is dropped only when this same reload did NOT
 //     re-introduce it via an added/changed file. A tenant relocating from a
 //     removed file into an added/changed file in the same reload must stay —
@@ -1506,29 +1456,24 @@ func patchTenants(prev *ThresholdConfig, newConfigs, oldConfigs map[string]Thres
 	// names. Alerts for a tenant the operator deleted keep firing until
 	// something unrelated forces a full reload. (#1569 sweep B-2.)
 	//
-	// ⚠️ SCOPED TO FILES THAT STILL PARSE. When a changed file fails to parse
-	// it is deleted from `newConfigs` upstream, so `ok` is false and THIS
-	// file's tenants are left alone — today's fail-safe "keep the last good
-	// values". A full load drops them instead (the walker rejects the file,
-	// #1957), so the two PATHS still disagree there — though on each path
-	// the committed hierarchy (tenantSources) follows /metrics
-	// (refreshTenantSources keeps such a tenant
-	// exactly while this merged config does). That difference is a
-	// deliberate behaviour question (silently keep stale values vs. stop a
-	// tenant's alerts on a typo), not something to settle inside a bug fix.
-	//
-	// ⚠️ THE FAIL-SAFE DOES NOT EXTEND TO OTHER FILES' TENANTS, measured: with
-	// a cross-file duplicate live, editing one file to drop the tenant while
-	// the OTHER file fails to parse in the same reload removes the tenant even
-	// though the unparseable file still declares it on disk. Same outcome
-	// before and after this change, and it needs the invalid duplicate state to
-	// reach, so it is recorded rather than fixed here.
+	// ⛔ A FILE THAT NO LONGER PARSES DECLARES NOTHING (#1980). It was deleted
+	// from `newConfigs` upstream, so `newPartial` is the zero value and every
+	// tenant its last good parse declared counts as no longer declared here:
+	// dropped, unless another surviving file declares it (reachable: the same
+	// reload moved the tenant into another file while breaking this one;
+	// pinned by TestABrokenTenantFileDropsItsTenantsOnEveryReloadPath's
+	// "broken while moved" case) — the same
+	// verdict a full load reaches, because the walker rejects the file
+	// (#1957). This used to `continue` on an unparsed file, i.e. keep the
+	// file's tenants on their last good values; the owner ruled that
+	// fail-safe out (#1980) — it disagreed with the hierarchical reload, the
+	// full load and a restart, and it was the root of #2022.
 	for _, name := range changed {
 		oldPartial, hadOld := oldConfigs[name]
-		newPartial, parsed := newConfigs[name]
-		if !hadOld || !parsed {
+		if !hadOld {
 			continue
 		}
+		newPartial := newConfigs[name] // zero value when the file did not parse
 		for tenant := range oldPartial.Tenants {
 			if _, stillDeclared := newPartial.Tenants[tenant]; stillDeclared {
 				continue

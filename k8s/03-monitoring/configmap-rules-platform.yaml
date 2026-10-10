@@ -410,11 +410,14 @@ data:
               runbook_url: "https://github.com/vencil/Dynamic-Alerting-Integrations/blob/main/docs/adr/017-defaults-yaml-inheritance-dual-hash.md"
 
           # --- Config Parse Failure (issue #643) ---
-          # An invalid tenant or _defaults YAML increments
-          # da_config_parse_failure_total and ERRORs in the exporter log
-          # (config_debounce.go), but until this alert shipped the
-          # failure was visible only in logs — the affected tenant
-          # silently lost fresh rule evaluation. Two thresholds capture
+          # An invalid YAML file increments da_config_parse_failure_total
+          # and logs the parse error (WARN for a tenant file, ERROR for a
+          # _defaults / _profiles file), but until this alert shipped the
+          # failure was visible only in logs. Since #1980 every load path
+          # (cold load, hierarchical reload, the flat tree's incremental
+          # reload) drops EVERY tenant a broken tenant file declares from
+          # /metrics (unless another file that parses declares it too), so
+          # their threshold alerts stop. Two thresholds capture
           # the two failure modes the exporter's own help text + RCA
           # comments distinguish:
           #   - per-tenant file (warning, >5/h per basename — matches
@@ -430,14 +433,22 @@ data:
               severity: warning
               alert_source: platform
             annotations:
-              summary: "Tenant config YAML parse failures (file {{ $labels.file_basename }})"
+              summary: "Config YAML parse failures (file {{ $labels.file_basename }})"
               description: |
                 The threshold-exporter has logged >5 YAML parse failures
-                for `{{ $labels.file_basename }}` in the last hour. The
-                tenant backed by that file is no longer getting fresh
-                rule evaluation — fix the YAML (see the exporter ERROR
-                logs for the parse error) and the alert clears
-                automatically. Other tenants are unaffected.
+                for `{{ $labels.file_basename }}` in the last hour. If it is
+                a tenant file, every tenant declared in that file (all of them, if the file
+                declares several) is removed from /metrics, unless another
+                file that parses declares it too, so their threshold
+                alerts stop firing (#1980). Fix the YAML (the
+                exporter logs `WARN: skip unparseable file` with the
+                parse error) and the tenants come back on the next
+                reload. Tenants declared in other files are unaffected
+                when the file is a tenant file. When it is a `_`-prefixed
+                platform file (e.g. `_profiles.yaml`), the exporter logs
+                `ERROR: skip unparseable defaults/profiles file` instead,
+                and every tenant that uses what the file provides (e.g. a
+                profile) loses those values.
                 NOTE: this evaluates a 1-hour sliding window, so the
                 alert may stay Firing for up to ~1h after the YAML is
                 fixed (the old failures only drop out of the window as

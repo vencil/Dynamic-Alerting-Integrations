@@ -12,7 +12,7 @@ with ``_routing_defaults``, a root tenant ``roota.yaml`` and a nested
 
 The route tree a customer deploys had no route for ``nestedb`` — its alerts
 fell to the catch-all — while threshold-exporter served its thresholds.
-ADR-017 / ADR-016 / ADR-007 "Amendment 2026-09-28" (option P2) make the
+ADR-017 Decision 9 / ADR-016 / ADR-007 "Amendment 2026-09-28" (option P2) make the
 routing plane hierarchical; this file pins the semantics listed there:
 
 * tenants at any depth get routes; hidden directories and README-only

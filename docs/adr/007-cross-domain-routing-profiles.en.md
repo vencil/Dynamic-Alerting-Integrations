@@ -309,7 +309,7 @@ In a hierarchical conf.d ([ADR-016](016-conf-d-directory-hierarchy-mixed-mode.en
 - **Merge order is unchanged**: `_routing_defaults` → profile → tenant `_routing`, each
   step a shallow merge per top-level key. `_routing_defaults` itself now comes from a chain
   of directory levels, and `_routing_enforced` stays root-only; both are specified in
-  [ADR-017 "Amendment 2026-09-28"](017-defaults-yaml-inheritance-dual-hash.en.md).
+  [ADR-017 Decision 9](017-defaults-yaml-inheritance-dual-hash.en.md#9-routing-settings-are-inherited-level-by-level-along-directories).
 
 ## v2.1.0 Implementation Summary
 

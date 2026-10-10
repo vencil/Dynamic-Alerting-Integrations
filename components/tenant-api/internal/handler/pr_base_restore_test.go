@@ -76,10 +76,16 @@ func assertBaseRestore500(t *testing.T, rec *httptest.ResponseRecorder, dir, pre
 		t.Errorf("Retry-After = %q on a failed restore — the pushed write must not be retried", rec.Header().Get("Retry-After"))
 	}
 	body := rec.Body.String()
-	for _, want := range []string{prefix, branchPrefix, "pushed to origin: true"} {
+	for _, want := range []string{prefix, branchPrefix, "pushed to origin: true", `"code":"BASE_RESTORE_FAILED"`} {
 		if !strings.Contains(body, want) {
 			t.Errorf("body missing %q: %s", want, body)
 		}
+	}
+	// #1700: the git error behind the failed restore names the held
+	// .git/index.lock by absolute path; the branch is the operator's, the
+	// path is not.
+	if strings.Contains(body, dir) || strings.Contains(body, "index.lock") {
+		t.Errorf("body carries the git error's server path: %s", body)
 	}
 	head, err := exec.Command("git", "-C", dir, "rev-parse", "--abbrev-ref", "HEAD").Output()
 	if err != nil {

@@ -74,7 +74,7 @@ func TestDeepMerge_NullOnReservedKey_StillDeletes(t *testing.T) {
 	// which means THIS hand-constructed test is the only thing holding the
 	// branch in place — remove the branch and this test, and nothing else in
 	// the repo goes red. That is why it is pinned here.
-	// See ADR-017 §Merge 語意, the reserved-key null rule.
+	// See ADR-017 Decision 4, the reserved-key null rule.
 	base := map[string]any{
 		"_silent_mode":      "warning",
 		"mysql_connections": 80,

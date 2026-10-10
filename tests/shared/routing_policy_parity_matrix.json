@@ -84,7 +84,7 @@
     "An explicitly tagged `!!bool` value is read as PyYAML's construct_yaml_bool reads it: value.lower() in",
     "yes/no/true/false/on/off (so `!!bool yEs` is true); a file that carries one is not refused whole, and its",
     "other constraints (forbidden_receiver_types) are enforced alongside it.",
-    "#2326 (ADR-017 / ADR-007 amendment 2026-09-28) - the routing plane is hierarchical: tenants at any",
+    "#2326 (ADR-017 Decision 9 / ADR-007 amendment 2026-09-28) - the routing plane is hierarchical: tenants at any",
     "depth; _routing_defaults from the root (any root _ file), then from each subdirectory's defaults",
     "carrier on the tenant's path, shallow per top-level key, deeper wins; profiles visible to their",
     "own subtree; a subtree _domain_policy applies to its subtree only (entries naming a tenant outside",

@@ -386,7 +386,7 @@ def _contains_tenant_placeholder(obj: object) -> bool:
 
 
 # ── #2326: the routing layer chain across conf.d directory levels ──────
-# ADR-017 "Amendment 2026-09-28": `_routing_defaults` comes from the root
+# ADR-017 Decision 9: `_routing_defaults` comes from the root
 # (any root `_` file) and then from the defaults carrier of every directory on
 # the tenant's path, each level a SHALLOW merge per top-level key, deeper
 # wins; routing profiles are visible to the tenants at their own level or

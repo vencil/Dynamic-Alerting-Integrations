@@ -52,7 +52,7 @@ def _collect_data(config_dir: str) -> dict:
     """Scan config-dir and collect profiles, policies, tenant IDs, and refs.
 
     #2326: the WHOLE tree, as the route generator reads it since the
-    hierarchical routing plane (ADR-007 / ADR-017 "Amendment 2026-09-28"):
+    hierarchical routing plane (ADR-007 "Amendment 2026-09-28" / ADR-017 Decision 9):
     profiles and policies may sit in a subdirectory and are scoped to it, a
     tenant may live at any depth. File names are relative to the root (a root
     file keeps its bare name).
@@ -146,7 +146,7 @@ def _collect_data(config_dir: str) -> dict:
         # loop (#1982): platform file first, tenant file wins, whatever
         # either is called; a platform file cannot create a tenant. The
         # `tenants:` block of a platform file BELOW the root is read by no
-        # plane (ADR-017 item 1), so it is not collected either.
+        # plane (ADR-017 Decision 5), so it is not collected either.
         if level != ROOT_LEVEL and is_reserved_name(base):
             continue
         tenants_block = data.get("tenants", {})

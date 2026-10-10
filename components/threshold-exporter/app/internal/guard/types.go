@@ -248,7 +248,7 @@ const (
 	FindingInvalidTenantID FindingKind = "invalid_tenant_id"
 )
 
-// Routing-tree findings (#2326, ADR-017 / ADR-007 "Amendment 2026-09-28"):
+// Routing-tree findings (#2326, ADR-017 Decision 9 / ADR-007 "Amendment 2026-09-28"):
 // the routing plane reads the whole conf.d, and these tree shapes are what
 // the route generator refuses (exit 2, every mode) or — the out-of-scope
 // policy entry — does not enforce. All errors, TenantID "", Field

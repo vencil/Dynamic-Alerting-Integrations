@@ -201,22 +201,22 @@
  },
  "tree/render": {
   "rc": 2,
-  "stderr": "ERROR: 1 routing-tree error(s) — nothing was generated, written or applied (ADR-017 amendment 2026-09-28):\n  team/_defaults.yaml: _routing_enforced is read only at the conf.d root — a NOC route scoped to one subtree is not supported (ADR-017 amendment 2026-09-28 (b)); move it to a root platform file or delete it\n",
+  "stderr": "ERROR: 1 routing-tree error(s) — nothing was generated, written or applied (ADR-017 Decision 9):\n  team/_defaults.yaml: _routing_enforced is read only at the conf.d root — a NOC route scoped to one subtree is not supported (ADR-017 Decision 9); move it to a root platform file or delete it\n",
   "stdout": "Config files: 3 read, 0 skipped\n"
  },
  "tree/strict": {
   "rc": 2,
-  "stderr": "ERROR: 1 routing-tree error(s) — nothing was generated, written or applied (ADR-017 amendment 2026-09-28):\n  team/_defaults.yaml: _routing_enforced is read only at the conf.d root — a NOC route scoped to one subtree is not supported (ADR-017 amendment 2026-09-28 (b)); move it to a root platform file or delete it\n",
+  "stderr": "ERROR: 1 routing-tree error(s) — nothing was generated, written or applied (ADR-017 Decision 9):\n  team/_defaults.yaml: _routing_enforced is read only at the conf.d root — a NOC route scoped to one subtree is not supported (ADR-017 Decision 9); move it to a root platform file or delete it\n",
   "stdout": "Config files: 3 read, 0 skipped\n"
  },
  "tree/validate": {
   "rc": 2,
-  "stderr": "ERROR: 1 routing-tree error(s) — nothing was generated, written or applied (ADR-017 amendment 2026-09-28):\n  team/_defaults.yaml: _routing_enforced is read only at the conf.d root — a NOC route scoped to one subtree is not supported (ADR-017 amendment 2026-09-28 (b)); move it to a root platform file or delete it\n",
+  "stderr": "ERROR: 1 routing-tree error(s) — nothing was generated, written or applied (ADR-017 Decision 9):\n  team/_defaults.yaml: _routing_enforced is read only at the conf.d root — a NOC route scoped to one subtree is not supported (ADR-017 Decision 9); move it to a root platform file or delete it\n",
   "stdout": "Config files: 3 read, 0 skipped\n"
  },
  "tree/validate_strict": {
   "rc": 2,
-  "stderr": "ERROR: 1 routing-tree error(s) — nothing was generated, written or applied (ADR-017 amendment 2026-09-28):\n  team/_defaults.yaml: _routing_enforced is read only at the conf.d root — a NOC route scoped to one subtree is not supported (ADR-017 amendment 2026-09-28 (b)); move it to a root platform file or delete it\n",
+  "stderr": "ERROR: 1 routing-tree error(s) — nothing was generated, written or applied (ADR-017 Decision 9):\n  team/_defaults.yaml: _routing_enforced is read only at the conf.d root — a NOC route scoped to one subtree is not supported (ADR-017 Decision 9); move it to a root platform file or delete it\n",
   "stdout": "Config files: 3 read, 0 skipped\n"
  },
  "unreadable/render": {
