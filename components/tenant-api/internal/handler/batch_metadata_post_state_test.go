@@ -11,6 +11,7 @@ package handler
 
 import (
 	"encoding/json"
+	"net/http"
 	"os"
 	"path/filepath"
 	"strings"
@@ -139,5 +140,83 @@ func TestPostStateScopeMetaKeepsUntouchedKeys(t *testing.T) {
 	op := BatchOperation{TenantID: "db-a", Patch: map[string]string{"_profile": "prodalt"}}
 	if env, domain := postStateScopeMeta(dir, nil, op)("db-a"); env != "production" || domain != "" {
 		t.Errorf("post-state = (%q, %q), want (production, \"\"): the tenant's own string _metadata wins over the profile", env, domain)
+	}
+}
+
+// PR mode re-judges the metadata write scope on the fresh base the branch is
+// cut from: the pod's local tree (synced at pod start) still has db-a's own
+// string `_metadata`, which wins over any profile, so the per-op check reads
+// production; on the base that line is gone, and `_profile: devprof` would
+// land db-a in dev. Under enforce the whole batch is refused (403 FORBIDDEN,
+// no PR, no branch, origin unmoved); in shadow the PR is opened as before.
+func TestBatchPRModeScopeJudgedOnFreshBase(t *testing.T) {
+	profiles := postStateTree()["_profiles.yaml"]
+	local := map[string]string{"_profiles.yaml": profiles,
+		"db-a.yaml": "tenants:\n  db-a:\n    _profile: prodprof\n    _metadata: \"environment: production\\n\"\n"}
+	origin := map[string]string{"db-a.yaml": "tenants:\n  db-a:\n    _profile: prodprof\n"}
+	const ops = `[{"tenant_id":"db-a","patch":{"_profile":"devprof"}}]`
+
+	t.Run("enforce", func(t *testing.T) {
+		f := newStaleFixture(t, local, origin)
+		mgr := newRBACManager(t, postStateRBAC)
+		mgr.EnableMetadataWriteScopeEnforce()
+		f.deps.RBAC = mgr
+		if env, _ := WriteScopeMeta(f.dir)("db-a"); env != "production" {
+			t.Fatalf("precondition: db-a on the local tree = %q, want production", env)
+		}
+		before := gitRev(t, f.bare, "main")
+		w := postTenantBatch(t, f.deps, ops)
+		var env map[string]any
+		_ = json.Unmarshal(w.Body.Bytes(), &env)
+		msg, _ := env["error"].(string)
+		if w.Code != http.StatusForbidden || env["code"] != CodeForbidden || env["tenant_id"] != "db-a" ||
+			env["operation"] != float64(0) || !strings.Contains(msg, "latest base branch") ||
+			!strings.Contains(msg, "Nothing in this batch was written") {
+			t.Errorf("status %d, body %s; want 403 %s naming operations[0] (db-a) on the latest base", w.Code, w.Body.String(), CodeForbidden)
+		}
+		if f.prOpened {
+			t.Error("a PR was opened")
+		}
+		if b := f.batchBranches(t); b != "" {
+			t.Errorf("batch branch left behind: %s", b)
+		}
+		if got := gitRev(t, f.bare, "main"); got != before {
+			t.Errorf("origin main moved: %s → %s", before, got)
+		}
+	})
+	t.Run("shadow", func(t *testing.T) {
+		f := newStaleFixture(t, local, origin)
+		f.deps.RBAC = newRBACManager(t, postStateRBAC)
+		if w := postTenantBatch(t, f.deps, ops); w.Code != http.StatusOK || !f.prOpened {
+			t.Errorf("status %d, PR opened %v; want the PR opened in shadow: %s", w.Code, f.prOpened, w.Body.String())
+		}
+	})
+}
+
+// countingScopeAuditor counts would-deny observations per axis.
+type countingScopeAuditor struct{ n map[string]int }
+
+func (a *countingScopeAuditor) IncWouldDeny(axis string) { a.n[axis]++ }
+
+// In shadow the fresh-base re-check does not run: it would refuse nothing,
+// and WritePRBatch's pre-flight runs it over the local tree without the
+// request's earlier ops, where it would count a would-deny for a batch
+// enforce lets through — here the second op alone reads dev, but stacked on
+// the first one's string `_metadata` the tenant stays in production.
+func TestBatchPRModeShadowCountsNoFalseWouldDeny(t *testing.T) {
+	dir := seedGitTree(t, postStateTree())
+	mgr := newRBACManager(t, postStateRBAC)
+	audit := &countingScopeAuditor{n: map[string]int{}}
+	mgr.SetScopeAuditor(audit)
+	d := &Deps{Writer: newTestWriter(dir), ConfigDir: dir, RBAC: mgr, WriteMode: WriteModePR,
+		PRClient: &mockPlatformClient{providerName: "github"}, PRTracker: &mockPlatformTracker{}}
+	w := postTenantBatch(t, d, `[
+		{"tenant_id":"db-a","patch":{"_metadata":"environment: production\n"}},
+		{"tenant_id":"db-a","patch":{"_profile":"devprof"}}]`)
+	if w.Code != http.StatusOK {
+		t.Fatalf("status %d: %s", w.Code, w.Body.String())
+	}
+	if got := audit.n["metadata_write"]; got != 0 {
+		t.Errorf("would-deny{axis=metadata_write} = %d, want 0: nothing in this batch leaves production", got)
 	}
 }

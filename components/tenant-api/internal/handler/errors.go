@@ -600,6 +600,36 @@ func writeFreshBasePolicyViolation(w http.ResponseWriter, r *http.Request, e *fr
 	WriteErrorEnvelope(w, r, http.StatusForbidden, env)
 }
 
+// freshBaseScopeError is a PR-mode batch op the metadata write scope refuses
+// on the FRESH base the feature branch is cut from (#2830): the op sets
+// `_profile` or a string `_metadata`, and merged onto the tenant's file on the
+// base it would place the tenant outside the caller's environments/domains,
+// although the per-op check on the pod's local tree (synced only at pod
+// start) let it through. Op is as in freshBasePolicyError.
+type freshBaseScopeError struct {
+	TenantID string
+	Op       int
+}
+
+func (e *freshBaseScopeError) Error() string {
+	return fmt.Sprintf("insufficient permissions for the tenant metadata operations[%d] (tenant %s) proposes on the latest base branch: "+
+		"its environment/domain would place tenant %s outside your scope (#1597). "+
+		"This server's local config is behind the base branch, so the per-operation check did not catch it. "+
+		"Nothing in this batch was written and no PR/MR was opened.", e.Op, e.TenantID, e.TenantID)
+}
+
+func (e *freshBaseScopeError) Unwrap() error { return gitops.ErrMergeScopeRefused }
+
+// writeFreshBaseScopeViolation answers a freshBaseScopeError with 403
+// FORBIDDEN, as the per-op check's refusal is, naming the tenant and the op.
+func writeFreshBaseScopeViolation(w http.ResponseWriter, r *http.Request, e *freshBaseScopeError) {
+	WriteErrorEnvelope(w, r, http.StatusForbidden, ErrorResponse{
+		Error: e.Error(),
+		Code:  CodeForbidden,
+		Extra: map[string]any{"tenant_id": e.TenantID, "operation": e.Op},
+	})
+}
+
 // forgeDegradedRetryAfterS is the coarse Retry-After hint (seconds) on the 503
 // returned when the in-lock base fetch times out (TRK-318 / gitops.ErrForgeDegraded).
 // It aligns with the default TA_GIT_FETCH_TIMEOUT (5s). DELIBERATELY a coarse

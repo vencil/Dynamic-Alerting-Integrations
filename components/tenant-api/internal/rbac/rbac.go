@@ -235,6 +235,14 @@ func (m *Manager) EnableMetadataScopeEnforce() { m.metadataScopeEnforce = true }
 // the writes this flip would start rejecting.
 func (m *Manager) EnableMetadataWriteScopeEnforce() { m.metadataWriteScopeEnforce = true }
 
+// MetadataWriteScopeEnforced reports whether the write plane's metadata axis
+// is in ENFORCE. A check that only refuses on that axis and whose verdict in
+// SHADOW is a foregone "allow" can skip itself in shadow, so it records no
+// would-deny of its own (#2830: the PR-mode batch re-check on the fresh base,
+// which also runs over the local tree without the request's earlier ops).
+// Nil-safe: a nil Manager is not enforcing.
+func (m *Manager) MetadataWriteScopeEnforced() bool { return m != nil && m.metadataWriteScopeEnforce }
+
 // EnableOrgScopeEnforce switches the org-scope axis from SHADOW (default) to
 // ENFORCE: an unlabeled tenant on an org-scoped rule is DENIED instead of
 // allowed-with-would-deny-signal (ADR-027 / LD-6 P4). Called from main when
