@@ -11,8 +11,10 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"os"
 	"path/filepath"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -193,5 +195,43 @@ func TestResolveEffective_StalePriorHashWalksCold(t *testing.T) {
 	}
 	if f := w.treePrior.Load().Files["t1.yaml"]; f.Reused {
 		t.Error("the prior is still the fast-path walk; the cold walk did not replace it")
+	}
+}
+
+// A tree that changes between every walk and the resolve's reads fails
+// closed with cfg.ErrScanStale after effectiveResolveAttempts walks — the
+// retry is bounded, not a loop that chases a tree rewritten faster than it
+// can walk.
+func TestResolveEffective_StaleRetriesAreBounded(t *testing.T) {
+	t.Parallel()
+	dir := t.TempDir()
+	p := filepath.Join(dir, "t1.yaml")
+	writeFile(t, p, effTenant("t1", "61"))
+	w := &Writer{configDir: dir, treeScanTimeout: time.Minute}
+	var walks atomic.Int32
+	w.onTreeScan = func() { walks.Add(1) }
+	n := 0
+	w.onEffectiveWalked = func() { // a different body after every walk
+		n++
+		// Not writeFile: this runs off the test goroutine, where t.Fatal
+		// must not be called. A failed write leaves the bytes the walk
+		// hashed, and the assertions below fail.
+		_ = os.WriteFile(p, []byte(effTenant("t1", fmt.Sprintf("%02d", n%100))), 0o644)
+	}
+	done := make(chan error, 1)
+	go func() {
+		_, err := w.ResolveEffective("t1")
+		done <- err
+	}()
+	select {
+	case err := <-done:
+		if !errors.Is(err, cfg.ErrScanStale) {
+			t.Fatalf("err = %v, want cfg.ErrScanStale", err)
+		}
+	case <-time.After(10 * time.Second):
+		t.Fatal("ResolveEffective kept retrying a tree that changes after every walk")
+	}
+	if got := walks.Load(); got != effectiveResolveAttempts {
+		t.Errorf("walks = %d, want %d", got, effectiveResolveAttempts)
 	}
 }

@@ -16,7 +16,8 @@ package handler
 // carriers of its directories — byte for byte the answer a cold walk of the
 // same tree gives. The walk is the write path's bounded one (timeout, and
 // the read path's stuck-walk breaker, so a blocked walk here never fails a
-// write), and it is never shared with another request's walk: a GET after a
+// write); the resolve's reads of those few files after it are not bounded.
+// The walk is never shared with another request's walk: a GET after a
 // PUT walks after the PUT returned. A Deps without a Writer (handler-test
 // literals) walks cold per request, as every request did before.
 //

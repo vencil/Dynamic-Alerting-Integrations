@@ -424,6 +424,12 @@ type Writer struct {
 	// instead of starting one. Always nil in production.
 	onReadScanJoin func()
 
+	// onEffectiveWalked is a TEST-ONLY seam (#1977): ResolveEffective calls
+	// it, when non-nil, after each walk returns and before the resolve reads
+	// the files — so a test can change the tree between the two. Always nil
+	// in production.
+	onEffectiveWalked func()
+
 	// beforeBaseRestore is a TEST-ONLY seam (#2070): restoreBase calls it, when
 	// non-nil, right before each checkoutBaseClean attempt (attempt is 1-based).
 	// Per-Writer rather than package-level so parallel tests cannot see each

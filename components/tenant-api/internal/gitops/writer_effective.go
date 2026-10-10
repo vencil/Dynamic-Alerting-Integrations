@@ -29,7 +29,8 @@ const effectiveResolveAttempts = 3
 // prior).
 //
 // The walk is walkTree's: bounded by treeScanTimeout and published as the
-// next prior only when it completed in time. Its breaker is the read
+// next prior only when it completed in time. ⚠️ Only the walk is bounded:
+// the resolve's reads of the tenant's files after it are not. Its breaker is the read
 // path's (stuckReadTreeScans): a walk this endpoint left blocked fails later
 // reads at once — previews and /effective — and never a write, whose walks
 // count in stuckTreeScans. Sharing the read breaker rather than keeping a
@@ -53,6 +54,9 @@ func (w *Writer) ResolveEffective(tenantID string) (*cfg.EffectiveConfig, error)
 		scan, err := w.walkTreeFrom(&w.stuckReadTreeScans, attempt == 1)
 		if err != nil {
 			return nil, fmt.Errorf("conf.d walk for tenant %s: %w", tenantID, err)
+		}
+		if w.onEffectiveWalked != nil {
+			w.onEffectiveWalked()
 		}
 		ec, err := cfg.ResolveEffectiveFromScan(scan, tenantID)
 		if errors.Is(err, cfg.ErrScanStale) && attempt < effectiveResolveAttempts {
