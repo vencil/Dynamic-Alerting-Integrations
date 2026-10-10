@@ -18,6 +18,7 @@ from __future__ import annotations
 
 import base64
 import binascii
+import difflib
 import fnmatch
 import functools
 import json
@@ -664,6 +665,16 @@ def assert_platform_alerts_not_tenant_silenceable(
         "match while platform alerts are excluded), or narrow the target.")
 
 
+# One line on purpose: validate-config prints row details through a sanitiser
+# that turns control characters (newlines included) into `?`.
+_POLICY_KEY_REMEDY = (
+    "To allow every webhook domain on purpose, write `allowed_domains: []`; "
+    "to restrict, list the patterns under `allowed_domains:`. A file that is "
+    "only a lint policy needs the `allowed_domains: []` line when it is also "
+    "passed to generate-routes / validate-config. Do not drop the flag to "
+    "clear this error: that turns the webhook domain allowlist off.")
+
+
 class PolicyInputError(ValueError):
     """`--policy` was supplied but the value cannot serve as a policy.
 
@@ -686,35 +697,31 @@ def load_policy(policy_path: str | None) -> list[str]:
     EXIT_CALLER_ERROR, so a supplied-but-unusable value now raises and the
     callers turn that into exit 2.
 
-    ⛔⛔ NOT CLOSED, and an earlier revision of this docstring said it was.
-    It claimed the empty-list return "survives for exactly two inputs, and both
-    mean the operator asked for no constraint" — a sentence written in the
-    function whose entire purpose is to stop that class. Measured, NINE inputs
-    reach ``return []``:
+    ⛔ The CONTENT axis (#1649). A file that reads and parses can still
+    leave the allowlist with nothing in it, and before #1649 six such inputs
+    returned ``[]`` — "no constraint" — at exit 0 with ``[PASS] policy``:
+    a 0-byte file, a whitespace-only file, a comment-only file, the key
+    absent, the key misspelled (``allowed_domain:``), and a list whose
+    entries are all non-strings. A truncated ``kubectl cp``, an empty
+    ConfigMap key and one missing ``s`` all landed there.
 
-        asked for no constraint (3)   no --policy at all
-                                      allowed_domains: []
-                                      allowed_domains:        (empty value)
-        could not tell (6)            a 0-byte file
-                                      a space/newline-only file (⚠️ NOT one
-                                        holding a TAB — the YAML scanner
-                                        rejects tabs, so that one raises.
-                                        Measured; "whitespace-only" was too
-                                        wide a word for what was tested.)
-                                      a comment-only file
-                                      the key absent entirely
-                                      the key misspelled (allowed_domain:)
-                                      a list whose entries are all non-strings
+    The line is drawn on whether the KEY is present, because that is what an
+    operator writes to say "no constraint" and what none of those six do:
 
-    The six below the line are the #1556 danger class arriving through a
-    different door: the operator supplied a policy, the SSRF domain allowlist
-    is off, and the report says ``[PASS] policy``. A truncated ``kubectl cp``, an
-    empty ConfigMap key and one missing ``s`` all land there. What this function
-    closes is the *path* axis (a value that is not a usable file); the *content*
-    axis is open (#1649 — and until that ticket existed this docstring said
-    "tracked separately" while nothing tracked it), and must not be read as
-    covered because
-    the path axis now raises.
+        no constraint (3)    no --policy at all
+                             allowed_domains: []
+                             allowed_domains:        (empty value)
+        caller error         no YAML document (empty / whitespace /
+                               comments only)
+                             no `allowed_domains` key (a near-miss spelling
+                               is named in the message)
+                             any entry that is not a string
+
+    ⚠️ The same file is often also a lint policy (`validate-config --policy`
+    hands it to ``lint_custom_rules`` too, and the governance doc's template
+    carries only lint keys). Such a file now needs an explicit
+    ``allowed_domains: []`` to keep meaning "no domain constraint"; the
+    error says so.
     """
     # ⛔ `is None`, not `not policy_path`. An empty string is SUPPLIED — it is
     # what an unset shell variable expands to — and the falsy test routed it
@@ -740,7 +747,7 @@ def load_policy(policy_path: str | None) -> list[str]:
     # alongside "檔案/路徑不存在"; nothing here may distinguish them.
     try:
         with open(policy_path, encoding="utf-8") as f:
-            data = yaml.safe_load(f) or {}
+            data = yaml.safe_load(f)
     except UnicodeDecodeError as exc:
         raise PolicyInputError(
             f"--policy: {policy_path!r} is not valid UTF-8: {exc}") from exc
@@ -750,11 +757,33 @@ def load_policy(policy_path: str | None) -> list[str]:
     except OSError as exc:
         raise PolicyInputError(
             f"--policy: cannot read {policy_path!r}: {exc}") from exc
+    # ⛔ No `or {}` above: folding "no document" into an empty mapping is how
+    # an empty / comment-only file became "no constraint" (#1649).
+    if data is None:
+        raise PolicyInputError(
+            f"--policy: {policy_path!r} holds no YAML document (empty, "
+            f"whitespace or comments only), so it says nothing about "
+            f"`allowed_domains`. {_POLICY_KEY_REMEDY}")
     if not isinstance(data, dict):
         raise PolicyInputError(
             f"--policy: top level of {policy_path!r} is "
             f"{type(data).__name__}, expected a mapping with `allowed_domains:`")
-    domains = data.get("allowed_domains", [])
+    if "allowed_domains" not in data:
+        # ⛔ Only allow-list spellings are offered: `disallowed_domains` /
+        # `blocked_domains` are close by edit distance but mean the opposite,
+        # and renaming one per the hint would turn a block list into an
+        # allow list.
+        near = difflib.get_close_matches(
+            "allowed_domains",
+            [str(k) for k in data
+             if "allow" in str(k).lower() and "disallow" not in str(k).lower()],
+            n=1, cutoff=0.8)
+        hint = (f" (found `{near[0]}` — did you mean `allowed_domains`?)"
+                if near else "")
+        raise PolicyInputError(
+            f"--policy: {policy_path!r} has no `allowed_domains` key{hint}. "
+            f"{_POLICY_KEY_REMEDY}")
+    domains = data["allowed_domains"]
     # ⛔ `allowed_domains:` with nothing under it is YAML for an empty value,
     # and it means the same thing as `allowed_domains: []` and as omitting the
     # key: no constraint. An earlier cut of this function raised on it — a
@@ -771,7 +800,14 @@ def load_policy(policy_path: str | None) -> list[str]:
             f"--policy: `allowed_domains` in {policy_path!r} is "
             f"{type(domains).__name__}, expected a list (or empty for "
             f"no constraint)")
-    return [d for d in domains if isinstance(d, str)]
+    # ⛔ Not silently filtered: a list of only non-strings filtered down to
+    # `[]`, which is "no constraint" (#1649).
+    bad = [d for d in domains if not isinstance(d, str)]
+    if bad:
+        raise PolicyInputError(
+            f"--policy: `allowed_domains` in {policy_path!r} holds non-string "
+            f"entries {bad!r}; quote each domain pattern")
+    return list(domains)
 
 
 # --- ADR-024 Version-Aware Threshold: dimensional `version` label guard ---
