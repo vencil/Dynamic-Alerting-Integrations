@@ -930,7 +930,7 @@ def exporter_precheck(config_dir, metrics):
     try:
         tree = load_key_refs(config_dir, list(metrics))
     except DaGuardNotFoundError:
-        return (None, "找不到 da-guard（$DA_GUARD_BINARY 未設或指向不存在的檔，"
+        return (None, "找不到 da-guard（$DA_GUARD_BINARY 未設或指向的路徑沒有檔案，"
                       "$PATH 上也沒有；本 repo 內 `make da-guard-build` 會建到 "
                       ".build/da-guard）", None, [])
     except DaGuardError as e:
