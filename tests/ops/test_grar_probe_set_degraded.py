@@ -279,3 +279,61 @@ def test_every_degradation_cause_counts(monkeypatch, tmp_path):
                                 lambda p=p: p)
         assert _VALIDATE.probe_set_is_degraded(), body
         assert _VALIDATE.probe_set_degraded_reason(), body
+
+
+# ── review follow-ups ───────────────────────────────────────────────────
+
+def test_degraded_base_copy_of_a_generated_rule_still_renders(
+        degraded, monkeypatch, capsys, tmp_path, tenant_dir):
+    """A base that carries the generator's own shape (the repo's k8s base
+    does) must not be refused: its target requires `metric_group`, which no
+    platform alert carries — the same reason the generated rules are exempt."""
+    copy = {"source_matchers": ['severity="critical"', 'metric_group=~".+"',
+                                'tenant="t1"'],
+            "target_matchers": ['severity="warning"', 'metric_group=~".+"',
+                                'tenant="t1"'],
+            "equal": ["metric_group"]}
+    rc, out = _render(monkeypatch, tmp_path, tenant_dir, copy)
+    err = capsys.readouterr().err
+    assert rc == EXIT_OK, err
+    assert out.exists()
+
+
+def test_a_verdict_that_needs_no_probe_set_outranks_could_not_verify(
+        degraded, monkeypatch, capsys, tmp_path, tenant_dir):
+    """Ungated `equal:` under --strict is rc 1 whatever the probe set holds,
+    so it must be reported instead of the rc 2 "could not verify"."""
+    rule = {"source_matchers": ['tenant=~".+"', 'severity="critical"'],
+            "target_matchers": ['alertname="NoSuchAlert"'],
+            "equal": ["cluster"]}
+    base = tmp_path / "base.yaml"
+    base.write_text(yaml.safe_dump({
+        "route": {"receiver": "default"}, "receivers": [{"name": "default"}],
+        "inhibit_rules": [rule]}), encoding="utf-8")
+    rc = _main(monkeypatch, tmp_path, "--config-dir", str(tenant_dir),
+               "--output-configmap", "--base-config", str(base),
+               "-o", str(tmp_path / "out.yaml"), "--strict")
+    err = capsys.readouterr().err
+    assert rc == EXIT_VIOLATION, err
+    assert "could NOT be verified" not in err
+
+
+def test_explain_route_trace_does_not_traceback_when_unverifiable(
+        degraded, monkeypatch, capsys, tmp_path, tenant_dir):
+    """explain_route assembles with the operator's --base-config too; the
+    rc-2 refusal must reach it as a WARN, like the generator's other
+    refusals, not as an uncaught exception."""
+    explain = importlib.import_module("explain_route")
+    base = tmp_path / "base.yaml"
+    base.write_text(yaml.safe_dump({
+        "route": {"receiver": "default"}, "receivers": [{"name": "default"}],
+        "inhibit_rules": [_TENANT_RULE]}), encoding="utf-8")
+    monkeypatch.setenv("PATH", str(tmp_path))
+    try:
+        explain.main(["--config-dir", str(tenant_dir), "--trace",
+                      "--tenant", "t1", "--alertname", "X",
+                      "--base-config", str(base)])
+    except SystemExit:
+        pass
+    err = capsys.readouterr().err
+    assert "cannot verify this config" in err

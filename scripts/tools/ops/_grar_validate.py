@@ -706,14 +706,23 @@ class PlatformProbeSetUnverifiable(Exception):
 
 
 def _target_excludes_platform_alerts(rule: dict) -> bool:
-    """True iff a target matcher on ``alert_source`` rejects ``platform``.
+    """True iff the target cannot reach a platform alert whatever the probe
+    set holds.
 
-    Every platform identity carries ``alert_source="platform"`` by
-    construction (the derivation keeps only rules with that marker), so such a
-    target cannot suppress a platform alert whatever the probe set holds. It is
-    also the fix the silencing violation message tells operators to write.
+    Two shapes:
+    - a target matcher on ``alert_source`` rejects ``platform``. Every platform
+      identity carries ``alert_source="platform"`` by construction (the
+      derivation keeps only rules with that marker); this is also the fix the
+      silencing violation message tells operators to write.
+    - the target requires ``metric_group``. No shipped platform alert carries
+      it (the generator's own rules rely on the same fact, and the repo's CI
+      checks them against the full set), so this covers generated rules and
+      copies of them in a base or cluster config alike, on both render paths.
     """
-    for matcher in _inhibit_target_matchers(rule) or []:
+    targets = _inhibit_target_matchers(rule) or []
+    if _matchers_gate_label_present(targets, "metric_group"):
+        return True
+    for matcher in targets:
         parsed = _INHIBIT_MATCHER_RE.match(matcher)
         if (parsed and parsed.group(1) == PLATFORM_ALERT_SOURCE_LABEL
                 and not _matcher_matches_labels(
