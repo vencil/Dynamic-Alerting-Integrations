@@ -530,6 +530,12 @@ def staged_image_dir():
         assert not stray, (
             f"project-root markers above the staged dir make this host unlike "
             f"the image: {stray}")
+        # Since #2845 the repo branch is reached by a `scripts/tools` ancestor,
+        # not by a marker; this is the condition that actually keeps it shut.
+        from _lib_compat import find_project_root  # noqa: PLC0415
+        assert find_project_root(flat) is None, (
+            f"{flat} sits under a scripts/tools tree, so the repo branch of the "
+            f"lookup is reachable: unlike the image")
         yield flat
     finally:
         shutil.rmtree(cleanup_root, ignore_errors=True)

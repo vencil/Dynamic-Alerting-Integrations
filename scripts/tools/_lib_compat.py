@@ -170,43 +170,43 @@ def harden_stdout_errors() -> None:
 harden_stdout_errors()
 
 
-# ── Project-root markers, shared by every layout-independent path lookup ──
+# ── Locating this tree's root from a shipped tool ──
 #
-# ⛔ ONE definition, deliberately. Shipped tools must not locate repo content by
-# counting directory levels: the image flattens every tool into one directory
-# (`/opt/da-tools/`, three ancestors) while a checkout has eight or nine, so a
-# level count is right in exactly one of the two layouts (#1494). The
-# replacement is "walk up until a marker appears" — and that walk needs an
-# upper bound, or it climbs past the checkout and adopts somebody else's files.
+# ⛔ Shipped tools must not locate repo content by counting directory levels:
+# the image flattens every tool into one directory (`/opt/da-tools/`, three
+# ancestors) while a checkout has eight or nine, so a level count is right in
+# exactly one of the two layouts (#1494).
 #
-# ⛔ `.git` alone is NOT enough, and the cost of learning that twice is why this
-# lives here: a source tarball (`git archive`, a release zip, a vendored or
-# rsync'd copy) carries no git metadata but is still a project root. When the
-# two call sites each kept their own copy of this tuple, one was widened and
-# the other was not — and the one left behind was the fail-OPEN side, where a
-# missed root silently degrades a governance check instead of printing an
-# error. All three entries are tracked at the repository root, so `git archive`
-# carries them; the image carries none, which is the intended answer there.
+# ⛔ Nor by "the nearest ancestor holding a project marker" (#2845, after
+# #1533 §2). A tree whose own root carries no marker — a vendored or rsync'd
+# copy, a `scripts/` dropped into another repo — then took the ENCLOSING
+# project's files as its own. Measured: with an outer repo holding a plausible
+# but different `tenant-config.schema.json`, `validate-config` and
+# `generate-routes --validate` passed an invalid webhook URL with rc 0. The
+# root is found by structure instead; see `find_project_root`.
+#
+# These markers remain only as a test-isolation guard (a staging dir must not
+# sit inside any project tree); nothing in `scripts/tools` locates by them.
 PROJECT_ROOT_MARKERS = (".git", "Makefile", "pyproject.toml")
 
 
 def find_project_root(start) -> "Path | None":
-    """Nearest ancestor of *start* (inclusive) holding a PROJECT_ROOT_MARKERS entry.
+    """The root of the tree whose ``scripts/tools/`` contains *start*.
 
-    Returns None when no ancestor has one — which is the CORRECT answer inside
-    the da-tools image (``/opt/da-tools/`` carries no marker and no repo tree),
-    so callers must treat None as "there is no repo here", never as a path to
-    join onto. The first marker found is the bound: the walk stops there
-    instead of climbing past the checkout into somebody else's files.
+    *start* is a shipped module's directory. Its tree's root is the directory
+    holding the ``scripts/tools`` it sits in — the innermost one, so a copy
+    nested inside another checkout resolves to the copy. That holds in a
+    clone, a git worktree, a ``git archive`` tarball and a vendored copy
+    alike, marker or not, and it never reaches an enclosing project.
 
-    ``.git`` is a directory in a clone and a FILE in a worktree, hence
-    ``exists()`` rather than ``is_dir()``.
+    Returns None when *start* is not under a ``scripts/tools`` — the da-tools
+    image (``/opt/da-tools/``), which carries no repo tree. Callers must treat
+    None as "there is no repo here", never as a path to join onto.
     """
     from pathlib import Path
 
     here = Path(start).resolve()
-    return next(
-        (base for base in (here, *here.parents)
-         if any((base / m).exists() for m in PROJECT_ROOT_MARKERS)),
-        None,
-    )
+    for base in (here, *here.parents):
+        if base.name == "tools" and base.parent.name == "scripts":
+            return base.parent.parent
+    return None

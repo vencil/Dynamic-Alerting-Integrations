@@ -350,8 +350,9 @@ def _find_rule_packs_dir() -> Optional[str]:
     Flat first: build.sh ``REPO_DATA_FILES`` copies every pack that references
     ``alert_threshold:`` beside this module (the set ``build_map`` can extract
     from at all; ``tests/ops/test_threshold_alerts.py`` pins that roster). The
-    repo branch walks up to a ``PROJECT_ROOT_MARKERS`` entry and stops there —
-    same shape as ``_threshold_alerts.find_rule_pack_paths``.
+    repo branch reads ``rule-packs/`` under THIS tree's root
+    (``find_project_root``, #2845) — same shape as
+    ``_threshold_alerts.find_rule_pack_paths``.
     """
     if glob.glob(os.path.join(_THIS_DIR, _PACK_GLOB)):
         return _THIS_DIR
@@ -387,9 +388,8 @@ def default_pack_paths() -> list[str]:
     if DEFAULT_RULE_PACKS_DIR is None:
         raise RulePacksNotFoundError(
             f"no rule packs reachable from {_THIS_DIR}: none beside this "
-            f"module ({_PACK_GLOB}) and no project root "
-            f"(.git / Makefile / pyproject.toml) above it with a rule-packs/ "
-            f"directory"
+            f"module ({_PACK_GLOB}), and no rule-packs/ directory at the root "
+            f"of the scripts/tools tree this module sits in"
         )
     paths = sorted(glob.glob(os.path.join(DEFAULT_RULE_PACKS_DIR, _PACK_GLOB)))
     if not paths:

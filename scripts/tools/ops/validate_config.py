@@ -585,17 +585,17 @@ _PROFILES_NAMES = ("_routing_profiles.yaml", "_routing_profiles.yml")
 
 def _find_schema(name: str) -> Path | None:
     """Flat first (the da-tools image ships the schemas beside the tools —
-    build.sh REPO_DATA_FILES), then `docs/schemas/` under the project root.
-    Same lookup shape as `_grar_validate._find_platform_rules_configmap`."""
-    from _lib_compat import PROJECT_ROOT_MARKERS
+    build.sh REPO_DATA_FILES), then `docs/schemas/` under THIS tree's root
+    (`find_project_root`, #2845: never an enclosing project's)."""
+    from _lib_compat import find_project_root
     here = Path(__file__).resolve().parent
     if (here / name).is_file():
         return here / name
-    for base in (here, *here.parents):
-        if any((base / m).exists() for m in PROJECT_ROOT_MARKERS):
-            candidate = base / "docs" / "schemas" / name
-            return candidate if candidate.is_file() else None
-    return None
+    root = find_project_root(here)
+    if root is None:
+        return None
+    candidate = root / "docs" / "schemas" / name
+    return candidate if candidate.is_file() else None
 
 
 def _quoting_scope(config_dir: str) -> list[tuple[Path, str, str]]:

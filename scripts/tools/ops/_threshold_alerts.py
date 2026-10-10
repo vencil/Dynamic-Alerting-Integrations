@@ -19,7 +19,7 @@ directory levels (issue 1494):
 * image — ``build.sh`` ``REPO_DATA_FILES`` ships ``rule-pack-*.yaml`` flat
   beside this module (paired by ``REQUIRED_DATA_FILES`` in
   ``check_build_completeness.py``);
-* repo — ``rule-packs/`` under the project root, found by the shared markers.
+* repo — ``rule-packs/`` under this tree's root (``find_project_root``).
 
 When neither exists the answer is "unknown", never a guess: callers get
 ``None`` and one line on stderr says why.
@@ -36,7 +36,7 @@ import yaml
 _THIS_DIR = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, _THIS_DIR)  # Docker flat layout
 sys.path.insert(0, os.path.join(_THIS_DIR, '..'))  # Repo subdir layout
-from _lib_compat import PROJECT_ROOT_MARKERS  # noqa: E402
+from _lib_compat import find_project_root  # noqa: E402
 
 PACK_GLOB = "rule-pack-*.yaml"
 
@@ -54,13 +54,8 @@ def find_rule_pack_paths(here: "Path | None" = None) -> "list[Path]":
     flat = sorted(here.glob(PACK_GLOB))
     if flat:
         return flat
-    # Bounded at the project root, for the reason _grar_validate gives: an
-    # unbounded walk adopts a stray rule-packs/ from whatever sits above.
-    root = next(
-        (base for base in (here, *here.parents)
-         if any((base / m).exists() for m in PROJECT_ROOT_MARKERS)),
-        None,
-    )
+    # This tree's root, never an enclosing project's (#2845).
+    root = find_project_root(here)
     if root is None:
         return []
     return sorted((root / "rule-packs").glob(PACK_GLOB))

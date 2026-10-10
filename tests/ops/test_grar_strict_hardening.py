@@ -1314,6 +1314,12 @@ class TestPlatformPackLocationIsLayoutIndependent:
             f"staging dir {d} sits inside a project tree (markers found at "
             f"{offenders}); the isolation this class depends on does not hold "
             f"here")
+        # #2845: the lookup's repo branch is reached through a `scripts/tools`
+        # ancestor now, so that is the condition the isolation needs.
+        from _lib_compat import find_project_root  # noqa: PLC0415
+        assert find_project_root(d) is None, (
+            f"staging dir {d} sits under a scripts/tools tree; the lookup "
+            f"would reach that tree's files")
         return d
 
     @staticmethod

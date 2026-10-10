@@ -36,7 +36,7 @@ from typing import Any
 _THIS_DIR = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, str(_THIS_DIR))
 sys.path.insert(0, os.path.join(str(_THIS_DIR), ".."))
-from _lib_compat import try_utf8_stdout, PROJECT_ROOT_MARKERS  # noqa: E402
+from _lib_compat import try_utf8_stdout, find_project_root  # noqa: E402
 from _lib_confd import (  # noqa: E402  (#1588 shared name predicates)
     duplicate_declarations,
     has_yaml_extension,
@@ -2322,30 +2322,15 @@ def main() -> None:
         # search simply comes up empty and the existing error path below says
         # so with the `--conf-d` remedy.
         here = Path(__file__).resolve().parent
-        # ⛔ BOUNDED. The search stops at the repository root and never looks
-        # above it. An unbounded `for base in (here, *here.parents)` walk —
-        # which is what the first version of this fix did — keeps climbing
-        # past the checkout and will happily bind to a `conf.d` that belongs
-        # to somebody else: `C:\Users\<user>\conf.d` on a dev box, `/opt` or
-        # `/` inside the image. That direction fails by silently describing
-        # the WRONG tenants, which is worse than the level-counting bug it
-        # replaced (that one at least stayed inside the repo).
-        #
-        # "Project root" = the nearest ancestor carrying one of
-        # `PROJECT_ROOT_MARKERS`. ⚠️ `.git` ALONE is not enough: a source
-        # tarball (`git archive`, a GitHub release zip, a vendored or rsync'd
-        # copy) has no `.git`, and keying only on it turned a tree the OLD
-        # code handled correctly into an error — a regression introduced while
-        # fixing the unbounded walk, measured on two of ten layouts. `.git` is
-        # a directory in a clone and a FILE in a git worktree, hence
-        # `exists()`. The image carries none of these markers, so there the
-        # search ends empty and the error path below prints the `--conf-d`
-        # remedy — the same outcome the old code produced.
-        repo_root = next(
-            (base for base in (here, *here.parents)
-             if any((base / m).exists() for m in PROJECT_ROOT_MARKERS)),
-            None,
-        )
+        # ⛔ BOUNDED to THIS tree's root (`find_project_root`). An unbounded
+        # `for base in (here, *here.parents)` walk — the first version of this
+        # fix — bound to a `conf.d` belonging to somebody else
+        # (`C:\Users\<user>\conf.d`, `/opt`, `/`), and the marker walk that
+        # replaced it still did whenever this tree's own root carried no
+        # marker: a vendored copy described the ENCLOSING project's tenants
+        # (#2845). Inside the image there is no tree, the search ends empty and
+        # the error path below prints the `--conf-d` remedy.
+        repo_root = find_project_root(here)
         conf_d = None
         if repo_root is not None:
             if (repo_root / "conf.d").is_dir():
