@@ -82,7 +82,7 @@ Alertmanager's inhibit rule:
   equal: ['tenant']
 ```
 
-Result: `shop`'s warning alerts still fire and stay in the TSDB, but their notifications are blocked; critical alerts are notified as usual. Remove `_silent_mode` and the flag metric disappears, the sentinel alert resolves, and notifications resume.
+Result: `shop`'s warning alerts still fire and stay in the TSDB (Prometheus's time-series database), but their notifications are blocked; critical alerts are notified as usual. Remove `_silent_mode` and the flag metric disappears, the sentinel alert resolves, and notifications resume.
 
 ## Consequences and Known Limitations
 

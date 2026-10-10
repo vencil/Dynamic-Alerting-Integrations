@@ -83,7 +83,7 @@ For the steps to move from the central to the edge architecture, see [Federation
 ### Current Tooling
 
 - `da-tools federation-check` verifies the edge cluster, the central cluster, or end to end (`edge` / `central` / `e2e`).
-- `da-tools rule-pack-split` splits Rule Packs into an edge normalisation part and a central part, and can output Operator PrometheusRule CRDs.
+- `da-tools rule-pack-split` splits Rule Packs into an edge normalisation part and a central part, and can output the PrometheusRule CRDs (Kubernetes custom resources) used by the Prometheus Operator.
 - `da-tools operator-generate --kustomize` generates a `kustomization.yaml` listing all CRD files; `da-tools drift-detect --mode operator` compares the PrometheusRule CRDs on a cluster with local files.
 
 ## Alternatives Considered

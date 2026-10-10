@@ -90,7 +90,7 @@ updated_at: 2026-10-10
 ### 目前的工具支援
 
 - `da-tools federation-check` 可分別驗證邊緣叢集、中央叢集與端對端（`edge` / `central` / `e2e`）。
-- `da-tools rule-pack-split` 把 Rule Pack 拆成邊緣正規化與中央兩部分，也能輸出 Operator 的 PrometheusRule CRD。
+- `da-tools rule-pack-split` 把 Rule Pack 拆成邊緣正規化與中央兩部分，也能輸出 Prometheus Operator 使用的 PrometheusRule CRD（Kubernetes 自訂資源）。
 - `da-tools operator-generate --kustomize` 產生列出所有 CRD 檔的 `kustomization.yaml`；`da-tools drift-detect --mode operator` 比對叢集上的 PrometheusRule CRD 與本地檔案。
 
 ## 考慮過的替代方案

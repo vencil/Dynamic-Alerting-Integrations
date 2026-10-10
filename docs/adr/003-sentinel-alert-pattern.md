@@ -88,7 +88,7 @@ Alertmanager 的抑制規則：
   equal: ['tenant']
 ```
 
-結果：`shop` 的 warning 告警照常觸發、留在 TSDB，通知被擋下；critical 告警照常通知。把 `_silent_mode` 拿掉，旗標指標消失，sentinel 告警解除，通知恢復。
+結果：`shop` 的 warning 告警照常觸發、留在 TSDB（Prometheus 的時間序列資料庫），通知被擋下；critical 告警照常通知。把 `_silent_mode` 拿掉，旗標指標消失，sentinel 告警解除，通知恢復。
 
 ## 後果與已知限制
 
