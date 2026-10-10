@@ -239,6 +239,16 @@ func loadAllTenants(configDir string) ([]TenantSummary, error) {
 	if err != nil {
 		return nil, err
 	}
+	// #2370: a tenant's metadata is the root platform files'
+	// `tenants.<id>._metadata` merged per key under the tenant file's own
+	// (cfg.MergeMetadata), as /metrics resolves it. One root read per
+	// listing. A platform layer that could not be read leaves every row's
+	// metadata unknown, so the listing is refused like the duplicate-file
+	// case below rather than served with the platform keys missing.
+	platform, err := loadPlatformMetadata(configDir)
+	if err != nil {
+		return nil, fmt.Errorf("tenant metadata: %w", err)
+	}
 
 	summaries := []TenantSummary{}
 	seen := make(map[string]string, len(files)) // tenant id → the file that claimed it
@@ -292,7 +302,7 @@ func loadAllTenants(configDir string) ([]TenantSummary, error) {
 		// v2.5.0: Extract _metadata fields for filtering and UI display.
 		// Metadata is stored as a raw YAML map since ThresholdConfig doesn't
 		// model _metadata natively — it's parsed from the raw document.
-		extractMetadata(&summary, data, tenantID)
+		extractMetadata(&summary, data, tenantID, platform.PlatformMetadata(tenantID))
 
 		summaries = append(summaries, summary)
 	}
@@ -300,9 +310,15 @@ func loadAllTenants(configDir string) ([]TenantSummary, error) {
 	return summaries, nil
 }
 
-// extractMetadata parses _metadata from raw YAML and populates the TenantSummary.
-// Uses a loose YAML structure to avoid coupling to ThresholdConfig schema.
-func extractMetadata(summary *TenantSummary, data []byte, tenantID string) {
+// extractMetadata populates the TenantSummary's metadata fields from the
+// tenant's `_metadata`: platform (the root platform files' layer,
+// cfg.RootPlatform.PlatformMetadata; nil = none) with the tenant document's
+// own `_metadata` merged over it per key (cfg.MergeMetadata, #2370).
+// The tenant document is parsed with a loose YAML structure to avoid
+// coupling to the ThresholdConfig schema. A document that does not parse or
+// does not declare tenantID yields no metadata at all: the platform layer
+// only applies to a tenant a tenant file declares.
+func extractMetadata(summary *TenantSummary, data []byte, tenantID string, platform map[string]any) {
 	var raw struct {
 		Tenants map[string]map[string]interface{} `yaml:"tenants"`
 	}
@@ -313,12 +329,9 @@ func extractMetadata(summary *TenantSummary, data []byte, tenantID string) {
 	if !ok {
 		return
 	}
-	metaRaw, ok := tenant["_metadata"]
-	if !ok {
-		return
-	}
-	meta, ok := metaRaw.(map[string]interface{})
-	if !ok {
+	metaRaw, writes := tenant["_metadata"]
+	meta := cfg.MergeMetadata(platform, metaRaw, writes)
+	if meta == nil {
 		return
 	}
 

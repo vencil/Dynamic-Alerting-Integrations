@@ -43,10 +43,10 @@ func TestProposedScopeMetaReadsTheBody(t *testing.T) {
 	t.Parallel()
 	dir := setupConfigDir(t, map[string]string{"db-a.yaml": tenantInProd})
 
-	if onDisk, _ := WriteScopeMeta(dir)("db-a"); onDisk != "production" {
+	if onDisk, _, _ := WriteScopeMeta(dir)("db-a"); onDisk != "production" {
 		t.Fatalf("precondition: on-disk environment = %q, want production", onDisk)
 	}
-	proposed, _ := proposedScopeMeta(tenantInDev)("db-a")
+	proposed, _, _ := proposedScopeMeta(dir, tenantInDev)("db-a")
 	if proposed != "dev" {
 		t.Errorf("proposedScopeMeta = %q, want dev — it is reading something other than the body", proposed)
 	}
@@ -66,12 +66,12 @@ func TestWriteThatRelabelsTenantOutOfScopeIsRefused(t *testing.T) {
 	if !OrgAllowed(m, nil, p, "db-a", rbac.PermWrite, WriteScopeMeta(dir)) {
 		t.Fatal("pre-state gate must allow: the tenant is production today and the caller is production-scoped")
 	}
-	if OrgAllowed(m, nil, p, "db-a", rbac.PermWrite, proposedScopeMeta(tenantInDev)) {
+	if OrgAllowed(m, nil, p, "db-a", rbac.PermWrite, proposedScopeMeta(dir, tenantInDev)) {
 		t.Error("post-state gate must refuse a body that moves the tenant to an environment the caller does not administer")
 	}
 	// A body that keeps the tenant in scope stays writable — the check narrows
 	// one shape, it does not block ordinary edits.
-	if !OrgAllowed(m, nil, p, "db-a", rbac.PermWrite, proposedScopeMeta(tenantInProd)) {
+	if !OrgAllowed(m, nil, p, "db-a", rbac.PermWrite, proposedScopeMeta(dir, tenantInProd)) {
 		t.Error("post-state gate must still allow a body that keeps the tenant in the caller's environment")
 	}
 }
@@ -84,7 +84,7 @@ func TestPostStateCheckIsInertInShadowMode(t *testing.T) {
 	p := proposedTestPrincipal()
 	m := rbac.NewForTest(proposedTestCfg()) // shadow: flag NOT enabled
 
-	if !OrgAllowed(m, nil, p, "db-a", rbac.PermWrite, proposedScopeMeta(tenantInDev)) {
+	if !OrgAllowed(m, nil, p, "db-a", rbac.PermWrite, proposedScopeMeta("", tenantInDev)) {
 		t.Error("shadow mode must still allow — the post-state check must not tighten anyone before the flip")
 	}
 }

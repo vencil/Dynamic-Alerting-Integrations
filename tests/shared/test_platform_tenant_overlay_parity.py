@@ -48,6 +48,9 @@ OPTIONAL_TREE_KEYS = {"metric_key"}
 # asserts `dedup` / `group_wait` / `walker` and only pins the key set of the
 # rest.
 EXPECT_KEYS = {"metric", "tenant_api", "dedup", "group_wait", "exporter_dedup", "silent_mode", "walker"}
+# #2370: `metadata` is the Go half's column too (the exporter's resolved
+# `_metadata`, non-empty string fields); optional, only on the metadata rows.
+OPTIONAL_EXPECT_KEYS = {"metadata"}
 WALKER_KEYS = {"effective_config", "platform_overlay", "profile_overlay"}
 # #2115: where describe_tenant.py still differs from /effective.
 OPTIONAL_WALKER_KEYS = {"describe_tenant_effective_config"}
@@ -79,7 +82,12 @@ def test_matrix_keys_are_exactly_the_known_ones() -> None:
         assert TREE_KEYS <= set(tree) <= TREE_KEYS | OPTIONAL_TREE_KEYS, (
             tree.get("name"), set(tree) ^ TREE_KEYS)
         for tenant, want in tree["expect"].items():
-            assert set(want) == EXPECT_KEYS, (tree["name"], tenant, set(want) ^ EXPECT_KEYS)
+            assert EXPECT_KEYS <= set(want) <= EXPECT_KEYS | OPTIONAL_EXPECT_KEYS, (
+                tree["name"], tenant, set(want) ^ EXPECT_KEYS)
+            md = want.get("metadata")
+            assert md is None or (isinstance(md, dict) and md
+                                  and all(isinstance(v, str) and v for v in md.values())), (
+                tree["name"], tenant, md)
             walker = want["walker"]
             if walker is not None:
                 assert WALKER_KEYS <= set(walker) <= WALKER_KEYS | OPTIONAL_WALKER_KEYS, (

@@ -1327,6 +1327,8 @@ func (c *ThresholdConfig) ResolveSeverityDedup() []ResolvedSeverityDedup {
 //
 // _metadata is stored as a re-serialized YAML string in ScheduledValue.Default
 // (arbitrary mapping path in UnmarshalYAML). We parse it back into TenantMetadata.
+// The value is already every layer's merged per key — the root platform
+// files' `tenants:` entries and the tenant file (#2370, overlayTenantLayer).
 func (c *ThresholdConfig) ResolveMetadata() []ResolvedMetadata {
 	var result []ResolvedMetadata
 

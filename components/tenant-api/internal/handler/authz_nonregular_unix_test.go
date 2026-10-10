@@ -126,7 +126,7 @@ func TestWriteScopeMeta_NonRegularTenantFileResolvesUnlabeled(t *testing.T) {
 
 	var env, domain string
 	withinBound(t, "WriteScopeMeta", func() {
-		env, domain = WriteScopeMeta(dir)(nonRegularTenantID)
+		env, domain, _ = WriteScopeMeta(dir)(nonRegularTenantID)
 	})
 	if env != "" || domain != "" {
 		t.Errorf("WriteScopeMeta = (%q, %q), want the unlabeled pair", env, domain)

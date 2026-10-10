@@ -26,13 +26,16 @@ package handler
 // ============================================================
 
 import (
+	"log/slog"
 	"net/http"
 	"path/filepath"
+	"sync"
 
 	"github.com/vencil/tenant-api/internal/confd"
 	"github.com/vencil/tenant-api/internal/gitops"
 	"github.com/vencil/tenant-api/internal/rbac"
 	"github.com/vencil/tenant-api/internal/tenantorg"
+	cfg "github.com/vencil/threshold-exporter/pkg/config"
 )
 
 // ScopeMetaFunc resolves one tenant's (environment, domain) for a write-plane
@@ -46,22 +49,57 @@ import (
 // NOT take one of these — they are per-item loops, and binding the metadata
 // axis there is a separate plane with its own migration, out of scope here.)
 //
-// It fails SOFT to the empty pair — an unlabeled tenant — which is exactly what
-// the pre-#1597 metadata-blind write plane behaved like. Resolution never
-// invents a label it could not read.
-type ScopeMetaFunc func(tenantID string) (environment, domain string)
+// #2370: the metadata read is the one the list reads (extractMetadata): the
+// root platform files' `tenants.<id>._metadata` with the tenant document's
+// own `_metadata` merged over it per key. The root platform files are read
+// once per resolver (one resolver per request), on first use.
+//
+// A tenant file that is absent or unusable fails SOFT to the empty pair — an
+// unlabeled tenant — which is exactly what the pre-#1597 metadata-blind write
+// plane behaved like. Resolution never invents a label it could not read.
+// ok is false when the root platform files could not be read
+// (loadPlatformMetadata): the metadata is then unknown, the pair is
+// empty and is not a reading.
+type ScopeMetaFunc func(tenantID string) (environment, domain string, ok bool)
+
+// platformMetadataSource reads configDir's root platform layer once, on first
+// use, for one resolver (a resolver lives for one request).
+type platformMetadataSource struct {
+	configDir string
+	once      sync.Once
+	root      cfg.RootPlatform
+	err       error
+}
+
+// environmentDomainOf is a ScopeMetaFunc's answer for a tenant document data that
+// declares tenantID (or that the caller proposes to write for it).
+func (s *platformMetadataSource) environmentDomainOf(data []byte, tenantID string) (string, string, bool) {
+	var platform map[string]any
+	if s.configDir != "" {
+		s.once.Do(func() { s.root, s.err = loadPlatformMetadata(s.configDir) })
+		if s.err != nil {
+			slog.Error("tenant metadata could not be resolved", "tenant", tenantID, "error", s.err)
+			return "", "", false
+		}
+		platform = s.root.PlatformMetadata(tenantID)
+	}
+	var summary TenantSummary
+	extractMetadata(&summary, data, tenantID, platform)
+	return summary.Environment, summary.Domain, true
+}
 
 // WriteScopeMeta builds the write-plane resolver: one targeted read of the
 // tenant's actual file (confd.ResolveTenantFile, so a `<id>.yml` tenant is not
 // silently treated as unlabeled — #1673).
 func WriteScopeMeta(configDir string) ScopeMetaFunc {
-	return func(tenantID string) (string, string) {
+	src := &platformMetadataSource{configDir: configDir}
+	return func(tenantID string) (string, string, bool) {
 		if configDir == "" {
-			return "", ""
+			return "", "", true
 		}
 		path, err := confd.ResolveTenantFile(configDir, tenantID)
 		if err != nil {
-			return "", "" // absent, ambiguous or unsafe id → unlabeled
+			return "", "", true // absent, ambiguous or unsafe id → unlabeled
 		}
 		// #2477: confd.ReadTenantFile, not os.ReadFile — it opens without
 		// blocking and refuses a non-regular file on the opened fd, so the
@@ -69,11 +107,9 @@ func WriteScopeMeta(configDir string) ScopeMetaFunc {
 		// Any problem → unlabeled, the same fail-soft as above.
 		data, problem := confd.ReadTenantFile(filepath.Dir(path), filepath.Base(path))
 		if problem != confd.ProblemNone {
-			return "", ""
+			return "", "", true
 		}
-		var summary TenantSummary
-		extractMetadata(&summary, data, tenantID)
-		return summary.Environment, summary.Domain
+		return src.environmentDomainOf(data, tenantID)
 	}
 }
 
@@ -95,7 +131,10 @@ func OrgAllowed(rbacMgr *rbac.Manager, tenantOrg *tenantorg.Manager,
 	orgs, _ := tenantOrg.OrgsForTenant(tenantID)
 	var environment, domain string
 	if meta != nil {
-		environment, domain = meta(tenantID)
+		var ok bool
+		if environment, domain, ok = meta(tenantID); !ok {
+			return false
+		}
 	}
 	return rbacMgr.AllowedInOrg(p, tenantID, want, orgs, environment, domain)
 }
@@ -154,7 +193,7 @@ func RequireOrgWrite(w http.ResponseWriter, r *http.Request, d *Deps, tenantID s
 // denied caller learns nothing from a body it was never allowed to submit.
 func RequireOrgWriteProposed(w http.ResponseWriter, r *http.Request, d *Deps,
 	tenantID string, want rbac.Permission, proposedYAML string) bool {
-	return requireOrgWriteWithMeta(w, r, d, tenantID, want, proposedScopeMeta(proposedYAML),
+	return requireOrgWriteWithMeta(w, r, d, tenantID, want, proposedScopeMeta(d.ConfigDir, proposedYAML),
 		"insufficient permissions for the tenant metadata this write proposes"+
 			" — the environment/domain in the body places tenant "+tenantID+
 			" outside your scope (#1597)")
@@ -162,12 +201,13 @@ func RequireOrgWriteProposed(w http.ResponseWriter, r *http.Request, d *Deps,
 
 // proposedScopeMeta reads environment/domain from the content the caller is
 // proposing to write, rather than from disk. Same extractor the list plane
-// uses, so a body and a stored file are read identically.
-func proposedScopeMeta(yamlContent string) ScopeMetaFunc {
-	return func(tenantID string) (string, string) {
-		var summary TenantSummary
-		extractMetadata(&summary, []byte(yamlContent), tenantID)
-		return summary.Environment, summary.Domain
+// uses, so a body and a stored file are read identically — the body's
+// `_metadata` merged per key over configDir's root platform layer (#2370),
+// the value the tenant will have once the body is written.
+func proposedScopeMeta(configDir, yamlContent string) ScopeMetaFunc {
+	src := &platformMetadataSource{configDir: configDir}
+	return func(tenantID string) (string, string, bool) {
+		return src.environmentDomainOf([]byte(yamlContent), tenantID)
 	}
 }
 
