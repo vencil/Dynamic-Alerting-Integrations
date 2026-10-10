@@ -684,11 +684,11 @@ version-check: ## 檢查版號一致性 + 計數一致性 (CI lint 用；DRIFT/D
 	@python3 ./scripts/tools/dx/bump_docs.py --sync-counts --check
 
 .PHONY: pre-tag
-pre-tag: version-check lint-docs lint-image-caveats playbook-freshness-ll changelog-fragments-consumed draft-advisory-check benchmark-report-warn docker-build-all trivy-scan-all ## ⛔ Pre-tag 品質閘門（所有檢查必須通過才能打 tag；benchmark-report + trivy informational）
+pre-tag: version-check lint-docs lint-image-caveats playbook-freshness-ll changelog-fragments-consumed reader-divergence-expiry draft-advisory-check benchmark-report-warn docker-build-all trivy-scan-all ## ⛔ Pre-tag 品質閘門（所有檢查必須通過才能打 tag；benchmark-report + trivy informational）
 	@echo ""
 	@echo "============================================================"
 	@echo "  Pre-tag Gate: version-check ✅  lint-docs ✅  image-caveats ✅  playbook-freshness (advisory — read its output above; it never blocks)"
-	@echo "  Changelog fragments assembled ✅  Draft-advisory check ✅  Docker build (7 self-built images) ✅  Trivy CVE scan (informational)"
+	@echo "  Changelog fragments assembled ✅  Reader-divergence catalog not expired ✅  Draft-advisory check ✅  Docker build (7 self-built images) ✅  Trivy CVE scan (informational)"
 	@echo "  Bench baseline: .build/bench-baseline.txt (informational, issue #60 Phase 1)"
 	@echo "  Safe to create tags."
 	@echo "============================================================"
@@ -700,6 +700,17 @@ pre-tag: version-check lint-docs lint-image-caveats playbook-freshness-ll change
 .PHONY: changelog-fragments-consumed
 changelog-fragments-consumed: ## ⛔ 擋住「changelog.d/ 還有沒組裝的片段就打 tag」（#2102）
 	@python3 scripts/tools/dx/generate_changelog.py --check-consumed
+
+# --- ADR-036 step 2: reader-divergence catalog expiry ---
+# Every entry of tests/shared/reader_divergence_catalog.yaml has an
+# expire_at. In PR CI an expired entry only warns (owner decision on #2766);
+# the tag gate is where it must be re-decided, so pre-tag runs the catalog
+# test with strict expiry against the real date: READER_DIVERGENCE_TODAY (the
+# unit tests' injectable "today") is unset here, so a stale value in the
+# caller's environment cannot move the tag gate's clock.
+.PHONY: reader-divergence-expiry
+reader-divergence-expiry: ## ⛔ 讀取端差異清單有過期記錄就擋 tag（ADR-036）
+	@env -u READER_DIVERGENCE_TODAY READER_DIVERGENCE_STRICT_EXPIRY=1 python3 -m pytest tests/shared/test_reader_divergence_catalog.py -q -p no:cacheprovider
 
 # --- #1269 / TRK-354: unpublished draft security advisory gate ---
 # WHY THIS IS A MAKE TARGET AND NOT ONLY A CHECKLIST LINE: a draft advisory

@@ -324,8 +324,8 @@ def load_base_config(path: str | None) -> dict:
     *the value names a file*, and *that file parses to a mapping* — so no shape
     is enumerated and an unanticipated spelling lands on an existing branch.
 
-    ⚠️ NOT closed: the CONTENT axis, as ``load_policy``'s docstring records for
-    ``--policy``. A file that IS a mapping but whose ``global:`` is empty or
+    ⚠️ NOT closed: the CONTENT axis (``--policy`` closed its own in #1649;
+    this one stays open). A file that IS a mapping but whose ``global:`` is empty or
     wrong still merges silently. Partial files are legitimate (absent top-level
     keys fall back per key, pinned by ``test_partial_file_fills_defaults``), so
     "is a mapping" is as far as the path axis reaches.

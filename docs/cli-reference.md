@@ -1758,7 +1758,7 @@ da-tools generate-routes --config-dir <path> [options]
 | `--namespace <NS>` | ConfigMap 所在 namespace。**只有 `--apply` / `--output-configmap` 會讀它**，其他模式結束碼 2 | `monitoring` |
 | `--configmap <NAME>` | ConfigMap 名稱。**只有 `--apply` / `--output-configmap` 會讀它**，其他模式結束碼 2 | `alertmanager-config` |
 | `--yes` | 搭配 --apply 跳過確認提示。**只有 `--apply` 會讀它**，其他模式結束碼 2 | false |
-| `--policy <FILE>` | 策略 YAML 的**路徑**，內含 `allowed_domains:` 清單（省略＝不限制）。⚠️ 這裡吃的是檔案路徑，不是逗號分隔的域名；供了但讀不到會 exit 2（#1556） | （不限制） |
+| `--policy <FILE>` | 策略 YAML 的**路徑**，內含 `allowed_domains:` 清單（省略＝不限制）。⚠️ 這裡吃的是檔案路徑，不是逗號分隔的域名；供了但讀不到會 exit 2（#1556）；檔裡沒有 `allowed_domains` 鍵（空檔、只有註解、鍵拼錯）或清單有非字串項目也是 exit 2，要明示不限制請寫 `allowed_domains: []`（#1649）。⚠️ v2.9.0 映像仍是舊行為 | （不限制） <!-- image-caveat: v2.9.0 --> |
 | `--findings-json <PATH>` | 另外把這次執行**印出的** finding（warning stream 與拒收訊息的每一行）寫成 JSON 到 PATH，格式見下方「結構化 finding」。所有模式都讀它；每一種結束（含拒收、呼叫端錯誤、參數錯誤與程式例外）都會寫，先寫暫存檔再改名，所以 PATH 上不會留下前一次執行的文件。stdout、stderr 與結束碼不變；PATH 寫不進去是結束碼 2（#2766）。⚠️ v2.9.0 映像沒有這個旗標 <!-- image-caveat: v2.9.0 --> | （不寫） |
 
 **輸出**
@@ -2011,7 +2011,7 @@ da-tools validate-config --config-dir <path> [options]
 
 | 選項 | 說明 | 預設值 |
 |------|------|--------|
-| `--policy <FILE>` | 策略 YAML 的**路徑**，內含 `allowed_domains:` 清單（省略＝不限制）。⚠️ 供了但用不了 → exit 2（不是檔案、讀不到、非 UTF-8、不是合法 YAML、頂層不是 mapping），不再靜默略過（#1556）。⚠️ v2.9.0 映像仍是舊行為 | （不限制） <!-- image-caveat: v2.9.0 --> |
+| `--policy <FILE>` | 策略 YAML 的**路徑**，內含 `allowed_domains:` 清單（省略＝不限制）。⚠️ 供了但用不了 → exit 2（不是檔案、讀不到、非 UTF-8、不是合法 YAML、頂層不是 mapping），不再靜默略過（#1556）；檔裡沒有 `allowed_domains` 鍵（空檔、只有註解、鍵拼錯）或清單有非字串項目也是 exit 2，要明示不限制請寫 `allowed_domains: []`（#1649）。⚠️ v2.9.0 映像仍是舊行為 | （不限制） <!-- image-caveat: v2.9.0 --> |
 | `--rule-packs <PATH>` | `rule-packs/` 目錄的路徑，供自訂規則 lint 使用。⚠️ 供了但用不了 → exit 2；**省略時整個 `custom_rules` 檢查列不會出現**（#1556） | （不跑此檢查） |
 | `--policy-dsl <FILE>` | 獨立 Policy-as-Code DSL 檔的路徑（頂層 `policies:` key）。⚠️ 供了但用不了 → exit 2（五種形狀同 `--policy`）；修前的輸出與**完全不給旗標逐字相同**（#1556） | （只讀 `_defaults.yaml` 的 `_policies`） |
 | `--version-check` | 一併跑版號一致性檢查 | false |
@@ -2443,7 +2443,7 @@ da-tools evaluate-policy --config-dir <PATH> [--policy <FILE>] [--json] [--ci]
 **規則讀的是哪一個值**（[#2115](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/2115)）：`--config-dir` 讀生效值，不是租戶檔的字面內容；`target` 與 `when` 依 key 種類讀：
 
 - **閾值**（不以 `_` 開頭）：exporter 在 `/metrics` 實際發出的數字（經 `da-guard served-values --schedules`）。值寫在根 `defaults:`、平台檔 `tenants:`、租戶檔或子目錄 `_defaults.yaml` 都一樣，子目錄裡的租戶也會評估。排程閾值逐時段比對，任一時段違規即違規（訊息附 UTC 時段）；某時段 `disable` 時該段只有 `required` 算違規。整天都不發出的鍵（`disable`、沒有預設值）視同沒有：`required` 對有寫但 exporter 不發的鍵報「已配置（值: …）但 exporter 不發出」，`when` 不論精確或萬用字元 target 都當它不存在，其他運算子略過。萬用字元 target 的 `when` 只支援 `required`／`forbidden`（取值運算子對一組鍵沒有意義）。數字以數值比較（`equals: 80` 等於發出的 `80.0`）。`target` 寫舊拼法（例如 `mysql_cpu`）時以 exporter 的別名表換成現行拼法；寫成 `<key>_critical` 鍵的 critical 列以 `<key>_critical` 比對，寫成 `"95:critical"` 的值仍以 `<key>` 比對（該列 severity 為 critical）。`when` 對排程閾值：任一時段成立即成立。
-- **保留鍵**（`_` 開頭，`_routing` 除外）：寫法＋繼承（經 `da-guard effective`），只收租戶可寫的保留鍵（根層專用的 `_policies`、`_routing_defaults` 等不算租戶的）；exporter 自動補的預設值（`_severity_dedup: enable` 等）不算有寫。`_metadata` 例外：`/effective` 不帶它，改取 `/metrics` 的 `_metadata`（照 exporter 淺層繼承），去掉 exporter 補的空欄位（空字串、空 list）後才算有寫——所以明寫的 `owner: ""` 也算沒寫（`forbidden`／`not_equals: ""` 不再對它報）；exporter 不認得的欄位（例如 `cost_center`）不在其中；`_metadata` 整份解析失敗時（例如 `tags: foo`）exporter 不送任何欄位，`required _metadata.owner` 照樣報「未配置或為空」（da-guard 沒有結構化訊號可分辨，原因只在 stderr 轉印的 da-guard WARN 裡）。只評估 exporter 認得的租戶保留鍵；其他 `_` 開頭的鍵（例如 `_foo`）不在 policy 的視野內，`forbidden: _foo` 不會響。
+- **保留鍵**（`_` 開頭，`_routing` 除外）：寫法＋繼承（經 `da-guard effective`），只收租戶可寫的保留鍵（根層專用的 `_policies`、`_routing_defaults` 等不算租戶的）；exporter 自動補的預設值（`_severity_dedup: enable` 等）不算有寫。`_metadata` 例外：`/effective` 不帶它，改取 `/metrics` 的 `_metadata`（平台檔 `tenants:` 與租戶檔逐鍵合併，[#2370](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/2370)），去掉 exporter 補的空欄位（空字串、空 list）後才算有寫——所以明寫的 `owner: ""` 也算沒寫（`forbidden`／`not_equals: ""` 不再對它報）；exporter 不認得的欄位（例如 `cost_center`）不在其中；`_metadata` 整份解析失敗時（例如 `tags: foo`）exporter 不送任何欄位，`required _metadata.owner` 照樣報「未配置或為空」（da-guard 沒有結構化訊號可分辨，原因只在 stderr 轉印的 da-guard WARN 裡）。只評估 exporter 認得的租戶保留鍵；其他 `_` 開頭的鍵（例如 `_foo`）不在 policy 的視野內，`forbidden: _foo` 不會響。
 - **`_routing`**：路由產生器解析後的結果（`_routing_defaults` 逐層、routing profile、租戶 `_routing` 合併，`{{tenant}}` 已代換）。
 
 沒有 `tenants:` 的檔不是租戶，stderr 逐檔印 `WARN`；da-guard 的 stderr 逐行轉印（前綴 `da-guard|`）。需要 da-guard（映像內建；repo 裡直接跑時用 `$DA_GUARD_BINARY` 或 `$PATH`）。⚠️ 已知限制：根 `defaults:` 與租戶同時寫 `X_critical` 的樹，da-guard 拒收（結束碼 2），本工具不評估任何規則。

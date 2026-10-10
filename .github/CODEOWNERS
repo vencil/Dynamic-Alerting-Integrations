@@ -97,3 +97,15 @@ CLAUDE.md                @vencil
 # 是否再補 CODEOWNERS 另議。
 # ============================================================
 .claude/                 @vencil
+
+# ============================================================
+# 讀取端差異清單與 Go 判讀快照（ADR-036 第 2 步）
+#
+# ⚠️ **只是通知，不是強制**。main 的 branch protection 沒有要求任何 review
+# （`required_pull_request_reviews: null`），而且唯一的 owner 無法核准自己的
+# PR——所以這一行不會擋下任何修改，也不代表清單的改動「經過 owner 核准」。
+# 清單改動的可見度靠的是每筆記錄寫死的精確列數：一改就出現在 diff 裡
+# （tests/shared/test_reader_divergence_catalog.py）。
+# ============================================================
+tests/shared/reader_divergence_catalog.yaml  @vencil
+tests/shared/merge_key_go_verdicts.json      @vencil

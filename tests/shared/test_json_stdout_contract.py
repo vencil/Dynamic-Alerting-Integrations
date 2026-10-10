@@ -102,7 +102,8 @@ SCOPE — WHAT THIS GATE DOES *NOT* ASSERT (honest boundaries)
    is no terminal path to speak of.  That boundary is already gated by
    ``test_tool_exit_codes.py::test_invalid_args_exits_caller_error``.  The
    contract here covers paths the tool itself reaches after accepting its args.
-   Exception: ``patch_config[bad-arguments]``, a tool that answers them too.
+   Exceptions: ``patch_config[bad-arguments]`` and ``assemble_config_dir``'s
+   contradictory-flag recipes (#1828/#1829), tools that answer them too.
 2. Windows
    ``CreateProcess`` resolves a bare ``kubectl`` to ``kubectl.exe`` and ignores
    ``PATHEXT``, so the fake-kubectl shim is bypassed and the REAL kubectl would
@@ -874,13 +875,20 @@ RECIPES: list[Recipe] = [
     R("assemble_config_dir", "assemble",
       lambda t, s: ["--sources", str(SEED_CONF_D),
                     "--output", _out(t, "assembled"), "--json"]),
-    # COMBINATION recipe (#1112 flag-matrix sweep): `--check` returns early, so
-    # `--validate` is silently ignored when both are given (see the sweep notes
-    # in the PR — a semantics question for the owner, not a stdout-contract
-    # break). Gated here for the stdout contract only: the combined path must
-    # still emit exactly one document.
+    # COMBINATION recipe (#1112 flag-matrix sweep): `--check` returns before
+    # anything is assembled, so `--validate` used to be silently ignored and
+    # the pair answered rc 0 (#1828). It is refused now — rc 2, and the
+    # rejection still emits exactly one document naming why.
     R("assemble_config_dir", "check-validate",
-      lambda t, s: ["--sources", str(SEED_CONF_D), "--check", "--validate", "--json"]),
+      lambda t, s: ["--sources", str(SEED_CONF_D), "--check", "--validate", "--json"],
+      expect_caller_error=True,
+      doc_check=_caller_error_doc("check_with_validate")),
+    # #1829: `--manifest` alone (no `--sources`) has no load path to take.
+    R("assemble_config_dir", "manifest-without-sources",
+      lambda t, s: ["--manifest", _out(t, "m.json"),
+                    "--output", _out(t, "assembled"), "--json"],
+      expect_caller_error=True,
+      doc_check=_caller_error_doc("manifest_without_sources")),
 
     # ── backtest_threshold  (⚠ known multi-mode trap) ──────────────────────
     R("backtest_threshold", "single-tenant",

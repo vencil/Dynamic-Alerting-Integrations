@@ -198,6 +198,11 @@ required_labels:
 max_range_duration: 1h     # Prohibit excessively long range vectors (e.g., [7d])
 max_evaluation_interval: 60s  # Custom Rule Group interval cap
 
+# Required when the same file is also passed to generate-routes /
+# validate-config --policy: [] means no webhook domain constraint;
+# without the key those exit 2 (#1649)
+allowed_domains: []
+
 # Per-file exemptions for platform-COMPILED packs (v2.10.0) — the deny-list
 # governs tenant hand-written raw PromQL; compiler-emitted packs (e.g. the
 # Custom Alerts forecast recipe's predict_linear, whose cost mitigations are
