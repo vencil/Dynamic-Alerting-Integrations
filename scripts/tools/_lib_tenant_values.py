@@ -81,6 +81,14 @@ is what keeps either of them off column 0.
   resolver's mark). A key /metrics serves no row for
   (`unserved`, or only `dropped`) has no entry, nor does `_custom_alerts`.
   A da-guard whose output lacks the field is named as older than this tool.
+* `state_filters` (ADR-037) — every state filter on for the tenant at `at`,
+  filter name -> the `severity` label of its `user_state_filter` row on
+  /metrics. A filter that is off has no entry; `values["_state_<filter>"]`
+  stays the True / False reading.
+
+The document must name its shape: a `schema` other than
+`SERVED_VALUES_SCHEMA` is refused, and a document with none is named as
+coming from a da-guard older than this tool (ADR-037).
 
 Whether /metrics serves at all follows Gather over the same collectors
 production /metrics serves. A tree whose output would carry any string that
@@ -241,6 +249,8 @@ __all__ = [
 ]
 
 SUBCOMMAND = "served-values"
+# The `schema` value load_served_tree reads; any other is refused (ADR-037).
+SERVED_VALUES_SCHEMA = "da-guard.served-values/v1"
 EFFECTIVE_SUBCOMMAND = "effective"
 # The `schema` value load_effective reads; any other is refused.
 EFFECTIVE_SCHEMA = "da-guard.effective/v1"
@@ -291,6 +301,7 @@ class TenantValues(NamedTuple):
     dropped: dict[str, list[str]]
     schedules: dict[str, KeySchedule] | None  # None unless asked for (schedules=True)
     series: dict[str, tuple[Series, ...]]     # threshold key -> its /metrics series (#2750)
+    state_filters: dict[str, str]             # filter on at `at` -> its user_state_filter severity
 
 
 class SkippedFile(NamedTuple):
@@ -557,7 +568,9 @@ def _run_da_guard(
                       if reads_unreadable else [])
     except (ValueError, KeyError, TypeError) as e:  # UnicodeDecodeError is a ValueError
         stale = (" — this da-guard is older than this tool: upgrade or rebuild it"
-                 if isinstance(e, KeyError) and e.args in (("skipped",), ("unreadable",)) else "")
+                 if isinstance(e, KeyError) and (e.args in (("skipped",), ("unreadable",))
+                                                or (e.args == ("schema",) and subcommand == SUBCOMMAND))
+                else "")
         # Not the tree's either way: da-guard writes this JSON whatever the
         # tree holds (#2725).
         raise error(
@@ -667,7 +680,7 @@ def load_served_tree(
     # is named as older than this tool by `_run_da_guard`'s `-h` check, not
     # by a phrase of its stderr (#2725).
     (tenants, skipped, aliases), returncode, stderr = _run_da_guard(
-        SUBCOMMAND, extra, conf_d, binary, timeout, ServedValuesError, schema=None,
+        SUBCOMMAND, extra, conf_d, binary, timeout, ServedValuesError, schema=SERVED_VALUES_SCHEMA,
         read=lambda doc: (doc["tenants"],
                           [SkippedFile(str(e["file"]), str(e["reason"])) for e in doc["skipped"]],
                           doc.get("aliases")),
@@ -708,6 +721,14 @@ def load_served_tree(
             raise ServedValuesError(
                 f"da-guard {SUBCOMMAND}: tenant {tenant_id!r} carries series that are not of their shape ({e})",
                 returncode, stderr, broken=True) from e
+        try:
+            state_filters = _state_filters(tv["state_filters"])
+        except (ValueError, KeyError, TypeError, AttributeError) as e:
+            # Not "older than this tool": every da-guard that writes this
+            # document's schema writes the field.
+            raise ServedValuesError(
+                f"da-guard {SUBCOMMAND}: tenant {tenant_id!r} carries state_filters that are not of their shape ({e!r})",
+                returncode, stderr, broken=True) from e
         days: dict[str, KeySchedule] | None = None
         if schedules:
             if "schedules" not in tv:
@@ -721,8 +742,23 @@ def load_served_tree(
                     f"da-guard {SUBCOMMAND}: tenant {tenant_id!r} carries a schedule that is not of its shape ({e})",
                     returncode, stderr, broken=True) from e
         out[tenant_id] = TenantValues(tenant_id, values, severities, dict(tv["unserved"]),
-                                     {k: list(v) for k, v in tv["dropped"].items()}, days, series)
+                                     {k: list(v) for k, v in tv["dropped"].items()}, days, series,
+                                     state_filters)
     return ServedTree(out, skipped, _nonempty_lines(stderr), aliases)
+
+
+def _state_filters(m: Any) -> dict[str, str]:
+    """A tenant's `state_filters`, as da-guard wrote it: filter name ->
+    {"severity": <non-empty string>}."""
+    if not isinstance(m, dict):
+        raise TypeError(f"not a mapping: {m!r}")
+    out = {}
+    for name, sf in m.items():
+        sev = sf["severity"]
+        if not isinstance(sev, str) or not sev:
+            raise TypeError(f"{name}: severity is not a non-empty string: {sev!r}")
+        out[str(name)] = sev
+    return out
 
 
 def _str_map(m: Any) -> dict[str, str]:

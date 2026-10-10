@@ -285,7 +285,7 @@ def test_skipped_files_are_named_once_with_their_tree(
 def test_a_part_of_the_day_metrics_cannot_gather_fails_closed() -> None:
     """A segment carrying da-guard's error is refused, not read as "no row"."""
     seg = tv.ScheduleSegment("00:00", "24:00", None, None, "gather failed")
-    values = tv.TenantValues("tx", {}, {}, {}, {}, {"k": tv.KeySchedule([seg], None, None)}, {})
+    values = tv.TenantValues("tx", {}, {}, {}, {}, {"k": tv.KeySchedule([seg], None, None)}, {}, {})
     with pytest.raises(tv.ServedValuesError, match="gather failed"):
         bt._served_day(values, "k", "current")
 
