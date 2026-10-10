@@ -434,14 +434,31 @@ def _want(want: dict, key: str):
     return differs[key] if differs is not None else want[key]
 
 
-def _generator_put(want: dict, refused: str | None, policy_rows: list, esc: dict | None) -> dict | None:
+# Blocking findings that are the domain policy's verdict (tenant-api: 403);
+# any other blocking finding of the tenant is a 400-class refusal.
+_POLICY_KINDS = {"domain_policy_violation", "critical_escalation_missing"}
+
+
+def _blocking_kinds(warnings: list, tenant: str) -> set:
+    """The kinds of the generator's structured findings that block under
+    --validate --strict (blocks strict / always) and whose subject is
+    *tenant* (Finding.tenant) — whatever layer the value came from."""
+    return {f.kind for f in warnings
+            if getattr(f, "tenant", None) == tenant and getattr(f, "blocks", None) in ("strict", "always")}
+
+
+def _generator_put(want: dict, refused: str | None, blocking: set) -> dict | None:
     """The tenant_api cell as the generator would judge that PUT (the
-    tenant's own file verbatim), from what this reader found for the
-    tenant: it refuses the write when the file cannot be read (400) or the
-    routing breaks a domain policy (403: a receiver-type line or an
-    escalation violation). Platform-file findings are no finding of the
-    write (ADR-036: a base tree's errors do not refuse a clean write), so
-    an unusable policy file refuses nothing here.
+    tenant's own file verbatim): production runs it with --validate
+    --strict, so it refuses the write when the file cannot be read (400) or
+    when any blocking finding names the tenant (`blocking`, from the
+    structured findings: _blocking_kinds) — 403 for the domain policy's
+    (_POLICY_KINDS), else 400 (values_not_string, group_by_invalid,
+    routing_not_mapping, invalid_tenant_id …), whether the value was written
+    by the tenant file or came from _routing_defaults, a profile or the
+    platform overlay. A finding that names no tenant (a platform file's) is
+    no finding of the write (ADR-036: a base tree's errors do not refuse a
+    clean write), so an unusable policy file refuses nothing here.
 
     Ranked against tenant-api's cell on whether each side refuses: the
     generator refusing what tenant-api answers 'ok' gives the generator's
@@ -449,19 +466,19 @@ def _generator_put(want: dict, refused: str | None, policy_rows: list, esc: dict
     cannot use) where the generator refuses nothing gives 'ok'; otherwise
     (both refuse, or neither) tenant-api's own cell: no difference.
 
-    Not modelled: the generator's strict ERRORs of the tenant's own
-    resolved routing (values_not_string, group_by_invalid, a refusal) —
-    tenant-api answers 400 for the ones the body writes and judges none
-    from a routing layer (#2431); a cell where they differ is not checked
-    here."""
+    What stays out: the `batch` sub-cell is kept as tenant-api's — judging
+    it would need the generator run on the tree with the patch laid over
+    the block on disk, which this half does not build."""
     api = want["tenant_api"]
     if api is None:
         return None
     gen = None
     if refused == "tenant_file_unreadable":
         gen = "400"
-    elif policy_rows or (esc is not None and esc["verdict"] == "violation"):
+    elif blocking & _POLICY_KINDS:
         gen = "403"
+    elif blocking:
+        gen = "400"
     if gen is not None and api["put"] == "ok":
         return {**api, "put": gen}
     if gen is None and api["put"] == "503":
@@ -510,7 +527,7 @@ def test_python_reader_matches_the_table(tree, tmp_path: Path) -> None:
         # Every measured tenant_api cell, python_differs or not: a verdict the
         # generator would give differently is a difference python_differs
         # must carry (and the catalog then accept), never an unrecorded one.
-        api = _generator_put(want, refused.get(tenant), mine, esc)
+        api = _generator_put(want, refused.get(tenant), _blocking_kinds(got.schema_warnings, tenant))
         assert _want(want, "tenant_api") == api, (where, api)
 
     # Platform-file findings: the table's rows, and no other.

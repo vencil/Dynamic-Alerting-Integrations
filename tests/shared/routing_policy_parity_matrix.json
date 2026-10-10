@@ -54,8 +54,8 @@
     "python_differs: null, or the values the Python side produces where the YAML readers disagree",
     "(the Go columns above hold for every Go reader); `reason` says why. Its keys: targets, policy,",
     "rejected_routes, group_by_invalid, refused - the generator's values, asserted by the Python half -",
-    "and tenant_api, the verdict the generator gives that PUT: its code ('400' when it cannot read the",
-    "file, '403' when the routing breaks a domain policy) where tenant-api answers 'ok', else",
+    "and tenant_api, the verdict the generator (--validate --strict) gives that PUT: its code ('400' when it",
+    "cannot read the file or any other blocking finding names the tenant - from whatever layer -, '403' for a domain-policy one) where tenant-api answers 'ok', 'ok' where tenant-api answers 503 and the generator blocks nothing, else",
     "tenant-api's own cell. refused may be 'tenant_file_unreadable' here alone: PyYAML cannot read",
     "a tenant file, so the generator refuses the whole tree (#1460, rc 1) and every tenant of it",
     "carries that refusal, targets null. ADR-036 step 2 (PR-C): every field where python_differs",
@@ -4091,7 +4091,25 @@
             "put": "ok",
             "batch": null
           },
-          "python_differs": null,
+          "python_differs": {
+            "reason": "tenant-api lets the PUT through; the generator's --validate --strict blocks the tenant with a routing_value_not_string ERROR (a matcher value of its resolved routing that PyYAML does not read as a string, from a routing layer the body does not write - tenant-api judges only the values the body writes, #2431).",
+            "targets": [
+              {
+                "ref": "receiver",
+                "type": "pagerduty"
+              }
+            ],
+            "policy": [],
+            "rejected_routes": [
+              "routes[0]"
+            ],
+            "group_by_invalid": [],
+            "refused": null,
+            "tenant_api": {
+              "put": "400",
+              "batch": null
+            }
+          },
           "escalation": null,
           "refused": null
         },
@@ -4115,7 +4133,25 @@
             "put": "ok",
             "batch": null
           },
-          "python_differs": null,
+          "python_differs": {
+            "reason": "tenant-api lets the PUT through; the generator's --validate --strict blocks the tenant with a routing_value_not_string ERROR (a matcher value of its resolved routing that PyYAML does not read as a string, from a routing layer the body does not write - tenant-api judges only the values the body writes, #2431).",
+            "targets": [
+              {
+                "ref": "receiver",
+                "type": "pagerduty"
+              }
+            ],
+            "policy": [],
+            "rejected_routes": [
+              "routes[0]"
+            ],
+            "group_by_invalid": [],
+            "refused": null,
+            "tenant_api": {
+              "put": "400",
+              "batch": null
+            }
+          },
           "escalation": null,
           "refused": null
         },
@@ -4139,7 +4175,25 @@
             "put": "ok",
             "batch": null
           },
-          "python_differs": null,
+          "python_differs": {
+            "reason": "tenant-api lets the PUT through; the generator's --validate --strict blocks the tenant with a routing_value_not_string ERROR (a matcher value of its resolved routing that PyYAML does not read as a string, from a routing layer the body does not write - tenant-api judges only the values the body writes, #2431).",
+            "targets": [
+              {
+                "ref": "receiver",
+                "type": "pagerduty"
+              }
+            ],
+            "policy": [],
+            "rejected_routes": [
+              "routes[0]"
+            ],
+            "group_by_invalid": [],
+            "refused": null,
+            "tenant_api": {
+              "put": "400",
+              "batch": null
+            }
+          },
           "escalation": null,
           "refused": null
         },
@@ -4187,7 +4241,27 @@
             "put": "ok",
             "batch": null
           },
-          "python_differs": null,
+          "python_differs": {
+            "reason": "tenant-api lets the PUT through; the generator's --validate --strict blocks the tenant with a routing_value_not_string ERROR (a matcher value of its resolved routing that PyYAML does not read as a string, from a routing layer the body does not write - tenant-api judges only the values the body writes, #2431).",
+            "targets": [
+              {
+                "ref": "receiver",
+                "type": "pagerduty"
+              },
+              {
+                "ref": "overrides[0]",
+                "type": "webhook"
+              }
+            ],
+            "policy": [],
+            "rejected_routes": [],
+            "group_by_invalid": [],
+            "refused": null,
+            "tenant_api": {
+              "put": "400",
+              "batch": null
+            }
+          },
           "escalation": null,
           "refused": null
         },
@@ -4249,7 +4323,27 @@
             "put": "ok",
             "batch": null
           },
-          "python_differs": null,
+          "python_differs": {
+            "reason": "tenant-api lets the PUT through; the generator's --validate --strict blocks the tenant with a routing_value_not_string ERROR (a matcher value of its resolved routing that PyYAML does not read as a string, from a routing layer the body does not write - tenant-api judges only the values the body writes, #2431, supplied by _routing_defaults).",
+            "targets": [
+              {
+                "ref": "receiver",
+                "type": "pagerduty"
+              },
+              {
+                "ref": "overrides[0]",
+                "type": "webhook"
+              }
+            ],
+            "policy": [],
+            "rejected_routes": [],
+            "group_by_invalid": [],
+            "refused": null,
+            "tenant_api": {
+              "put": "400",
+              "batch": null
+            }
+          },
           "escalation": null,
           "refused": null
         }
@@ -4752,7 +4846,28 @@
             "put": "ok",
             "batch": null
           },
-          "python_differs": null,
+          "python_differs": {
+            "reason": "tenant-api lets the PUT through (it does not judge a routing profile's group_by); the generator's --validate --strict blocks the tenant with a routing_group_by_invalid ERROR from its profile.",
+            "targets": [
+              {
+                "ref": "receiver",
+                "type": "pagerduty"
+              }
+            ],
+            "policy": [],
+            "rejected_routes": [],
+            "group_by_invalid": [
+              [
+                "group_by[1]",
+                "not_string"
+              ]
+            ],
+            "refused": null,
+            "tenant_api": {
+              "put": "400",
+              "batch": null
+            }
+          },
           "escalation": null,
           "refused": null
         },
@@ -5599,7 +5714,18 @@
             "put": "ok",
             "batch": null
           },
-          "python_differs": null,
+          "python_differs": {
+            "reason": "tenant-api lets the PUT through; the generator's --validate --strict blocks the tenant with a routing_not_mapping ERROR: the root platform overlay's _routing, which the body does not replace, is no mapping.",
+            "targets": null,
+            "policy": [],
+            "rejected_routes": [],
+            "group_by_invalid": [],
+            "refused": "routing_not_mapping",
+            "tenant_api": {
+              "put": "400",
+              "batch": null
+            }
+          },
           "escalation": null,
           "refused": "routing_not_mapping"
         },

@@ -595,3 +595,66 @@ entries:
     sign_off: https://github.com/vencil/Dynamic-Alerting-Integrations/issues/2759  # TODO(owner)
     expire_at: 2027-04-10
     count: 1
+
+  # --- 路由層：產生器 --strict 擋下租戶、tenant-api 卻放行 PUT（擋住第二階段）-
+  # 產生器在正式環境以 --validate --strict 執行：任何 blocks 為 strict／always、
+  # 主體（Finding.tenant）是被寫入租戶的 finding，都表示產生器擋下該租戶的設
+  # 定，不論值來自租戶檔、_routing_defaults、routing profile 或平台 overlay。
+  # 這些格子要等第一階段的寫入路徑（tenant-api 改向產生器取判定，ADR-036 實作
+  # 順序第 4 步）才會消失。
+  - id: tenant-api-put-ignores-layer-value-not-string
+    reader: tenant-api
+    layer: routing
+    match:
+      cells:
+        - [routing-values-yaml11, t-m-date, tenant_api]
+        - [routing-values-yaml11, t-m-null, tenant_api]
+        - [routing-values-yaml11, t-m-int-tag, tenant_api]
+        - [routing-values-yaml11, t-o-yes, tenant_api]
+        - [routing-values-yaml11-routing-defaults, t-o-defaults, tenant_api]
+    mechanism: >-
+      租戶合併後路由裡的 matcher 值（routes[i].match.<label>、
+      overrides[i].alertname）PyYAML 讀起來不是字串，但值來自 routing
+      profile、平台 overlay 或 _routing_defaults，不是 PUT body 自己寫的。
+      產生器以 --strict 報 routing_value_not_string（主體是該租戶）而擋下；
+      tenant-api 只判 body 寫的值（#2431），照常寫入。第一階段寫入改向產生器
+      取判定（ADR-036 實作順序第 4 步）後消失。
+    direction: go_looser
+    disposition: fix-pending
+    ref: https://github.com/vencil/Dynamic-Alerting-Integrations/issues/2766
+    expire_at: 2027-01-10
+    count: 5
+
+  - id: tenant-api-put-ignores-profile-group-by
+    reader: tenant-api
+    layer: routing
+    match:
+      cells:
+        - [group-by-elements, t-gb-profile, tenant_api]
+    mechanism: >-
+      租戶引用的 routing profile 有不合法的 group_by 元素。產生器以 --strict 報
+      routing_group_by_invalid（主體是該租戶）而擋下；tenant-api 不判 profile 的
+      group_by，照常寫入。第一階段寫入改向產生器取判定（ADR-036 實作順序第 4
+      步）後消失。
+    direction: go_looser
+    disposition: fix-pending
+    ref: https://github.com/vencil/Dynamic-Alerting-Integrations/issues/2766
+    expire_at: 2027-01-10
+    count: 1
+
+  - id: tenant-api-put-ignores-overlay-routing-not-mapping
+    reader: tenant-api
+    layer: routing
+    match:
+      cells:
+        - [routing-not-mapping, t-overlay, tenant_api]
+    mechanism: >-
+      根目錄平台檔的 tenants.<id> overlay 給了一個不是 mapping 的 _routing，而
+      PUT body 沒有寫 _routing 取代它。產生器以 --strict 報 routing_not_mapping
+      （主體是該租戶）而擋下；tenant-api 照常寫入。第一階段寫入改向產生器取判定
+      （ADR-036 實作順序第 4 步）後消失。
+    direction: go_looser
+    disposition: fix-pending
+    ref: https://github.com/vencil/Dynamic-Alerting-Integrations/issues/2766
+    expire_at: 2027-01-10
+    count: 1
