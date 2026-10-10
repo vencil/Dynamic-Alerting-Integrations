@@ -2680,9 +2680,12 @@ def _gen_gitlab_ci(
         # change, 1 = changes detected (the ordinary answer on a merge request
         # that edits tenants), 2 and above = the run did not complete. A bare
         # call would fail this job on every merge request that changes a tenant.
-        # ⚠️ It compares TENANT files only and skips every file whose name
-        # starts with `_`, so a change to conf.d/_defaults.yaml (inherited by
-        # every tenant) reports "no changes". Review those by hand.
+        # ⚠️ It compares top-level TENANT files only. A changed file it does
+        # not compare (any `_`-prefixed file such as conf.d/_defaults.yaml,
+        # inherited by every tenant, or a file in a sub-directory) exits 1 and
+        # is named under "Changed Files Not Compared", without the tenants it
+        # reaches. Review those by hand. Images up to v2.9.0 predate this and
+        # report such a change as "no changes" with exit 0.
         - |
           set +e
           da-tools config-diff --old-dir .output/base/"${{CONFIG_DIR%/}}" --new-dir "$CONFIG_DIR" --format markdown > .output/blast-radius.md

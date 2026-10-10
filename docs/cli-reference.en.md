@@ -2419,7 +2419,7 @@ da-tools config-diff --old-dir ./conf.d-old --new-dir ./conf.d-new --json-output
 | Code | Description |
 |------|-------------|
 | `0` | No configuration changes |
-| `1` | Changes detected, or a file the report does not compare changed (see "Comparison scope" below) |
+| `1` | Changes detected, or a file the report does not compare changed (see "Comparison scope" above) |
 | `2` | Caller error: directory missing, input unreadable, or the run did not complete; with a profile change, also da-guard missing or failing |
 
 > ⚠️ **`1` means "there are changes", not "it failed".** A CI step that calls

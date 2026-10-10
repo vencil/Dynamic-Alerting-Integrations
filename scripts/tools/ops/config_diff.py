@@ -842,7 +842,9 @@ def render_markdown(diffs, old_dir, new_dir, profile_diffs=None,
                 f"{len(uncovered_files)} changed file(s) not compared (above).")
         else:
             lines.append("No changes detected.")
-        return "\n".join(lines)
+        # Through the cap too: the not-compared list holds PR-controlled
+        # paths, so this branch is no longer one line long (#1420).
+        return _cap_for_comment("\n".join(lines))
 
     total_changes = 0
     for tenant, changes in diffs.items():
@@ -889,10 +891,13 @@ def render_markdown(diffs, old_dir, new_dir, profile_diffs=None,
         summary += f", {len(uncovered_files)} changed file(s) not compared"
     lines.append(summary)
 
-    # Truncation safeguard (Reef 2): never let the bot comment exceed GitHub's
-    # ceiling — a silently-dropped comment on a huge, high-risk PR is worse than
-    # a truncated one. The exit code + changed files remain authoritative.
-    result = "\n".join(lines)
+    return _cap_for_comment("\n".join(lines))
+
+
+def _cap_for_comment(result):
+    """Truncation safeguard (Reef 2): never let the bot comment exceed GitHub's
+    ceiling — a silently-dropped comment on a huge, high-risk PR is worse than
+    a truncated one. The exit code + changed files remain authoritative."""
     if len(result) > COMMENT_SAFETY_LIMIT:
         notice = (
             "\n\n---\n"

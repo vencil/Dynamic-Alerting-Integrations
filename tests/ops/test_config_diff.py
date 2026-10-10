@@ -1177,3 +1177,29 @@ class TestUncoveredFiles:
         assert sum(line.startswith("- `_f") for line in md.splitlines()) == cd.UNCOVERED_LIST_LIMIT
         assert f"`{uncovered[-1]}`" not in md
         assert f"does not compare {n} changed file(s)" in md
+
+    def test_not_compared_only_report_is_capped_for_a_comment(self):
+        """只有未比對檔時也要截斷：檔名由 PR 控制，50 個長路徑可超過 GitHub 留言上限。"""
+        names = [f"{i:02d}/" + "c" * 2000 + "/z.yaml" for i in range(cd.UNCOVERED_LIST_LIMIT)]
+        md = cd.render_markdown({}, "old", "new", uncovered_files=names)
+        assert len(md) <= cd.COMMENT_SAFETY_LIMIT
+        assert "truncated to fit GitHub's comment limit" in md
+
+    def test_unreadable_on_both_sides_is_listed(self, tmp_path, monkeypatch):
+        """讀不到的檔算差異：兩側都讀不到時不得因 None == None 被當成沒變。"""
+        files = {"db-a.yaml": self.TENANT, "_defaults.yaml": "defaults: {}\n"}
+        old, new = self._pair(tmp_path, files, files)
+        real = Path.read_bytes
+
+        def read_bytes(path):
+            if path.name == "_defaults.yaml":
+                raise PermissionError(13, "denied", str(path))
+            return real(path)
+
+        monkeypatch.setattr(Path, "read_bytes", read_bytes)
+        assert cd.compute_uncovered_files(str(old), str(new)) == ["_defaults.yaml"]
+
+    def test_listing_is_sorted(self, tmp_path):
+        rels = ["_z.yaml", "a/_defaults.yaml", "_a.yaml", "b/t.yaml"]
+        old, new = self._pair(tmp_path, {}, {r: "a: 1\n" for r in rels})
+        assert cd.compute_uncovered_files(str(old), str(new)) == sorted(rels)
