@@ -239,10 +239,27 @@ def engines_available() -> bool:
     return locate_helm()[0] is not None and locate_kube_linter()[0] is not None
 
 
+# Values a chart refuses to render without, applied to every variant as
+# `--set` (#2855: tenant-api needs writeBack.mode). The production shape is
+# set, so kube-linter judges what an operator deploys: the PR mode with its
+# forge flags and Secret references. A variant file must not set these keys —
+# `--set` would override it.
+RENDER_BASE_SETS: dict[str, list[str]] = {
+    "tenant-api": [
+        "writeBack.mode=pr-github",
+        "gitRepoUrl=https://github.example/acme/conf.git",
+        "writeBack.token.secretName=tenant-api-vcs",
+        "writeBack.github.repo=acme/conf",
+    ],
+}
+
+
 def helm_render(chart_dir: str, values_rel: str | None) -> tuple[str | None, str]:
     """Render a chart (optionally with a -f values override). (text|None, err)."""
     mode, binary = locate_helm()
     args = ["template", "r"]
+    for kv in RENDER_BASE_SETS.get(chart_name(chart_dir), []):
+        args += ["--set", kv]
     if mode == "binary":
         cmd = [binary, *args, str(REPO_ROOT / chart_dir)]
         if values_rel:

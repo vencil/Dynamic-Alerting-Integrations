@@ -47,6 +47,7 @@ from pathlib import Path
 
 import pytest
 import yaml
+from _render_baseline import baseline_args
 
 _REPO_ROOT = Path(__file__).resolve().parents[2]
 # ⛔ Keep this as ONE literal "helm/tenant-api" string, not `/ "helm" / "tenant-api"`.
@@ -78,7 +79,7 @@ def test_helm_present_when_required() -> None:
 
 def _render(*, store_namespace: str | None) -> list[dict]:
     cmd = [
-        "helm", "template", "ta", str(_CHART), "-n", _RELEASE_NS,
+        "helm", "template", "ta", str(_CHART), *baseline_args(_CHART), "-n", _RELEASE_NS,
         "--set", "federation.enabled=true",
     ]
     if store_namespace is not None:

@@ -7,6 +7,7 @@
   replicaCount MUST stay 1. Horizontal write scaling needs a K8s Lease
   (leader-election) — ADR-023 Deferred option A3, not a replicaCount bump.
 */ -}}
+{{- include "tenant-api.writeBackGuard" . }}
 {{- if gt (int .Values.replicaCount) 1 }}
 {{- fail (printf "ADR-023 single-writer invariant violated: tenant-api replicaCount=%d but MUST be 1. The write plane has no cross-pod coordination; multi-replica writes corrupt the shared git tree. To scale writes, implement a K8s Lease (ADR-023 Deferred option A3) — do not raise replicaCount." (int .Values.replicaCount)) }}
 {{- end }}
@@ -85,6 +86,7 @@ spec:
                 configMapKeyRef:
                   name: {{ include "tenant-api.name" . }}-config
                   key: GIT_REPO_URL
+            {{- include "tenant-api.gitCredentialEnv" . | nindent 12 }}
           volumeMounts:
             - name: conf-dir
               mountPath: /conf.d
@@ -108,6 +110,21 @@ spec:
             - --git-dir=/conf.d
             - --rbac=/etc/rbac/_rbac.yaml
             - --reload-interval={{ .Values.tenantApi.reloadInterval }}
+            # #2855: always explicit — the chart used to pass none, so every
+            # install ran direct. writeBackGuard (_helpers.tpl) rejects an
+            # unset or incomplete writeBack before we get here.
+            - --write-mode={{ .Values.writeBack.mode }}
+            {{- if ne .Values.writeBack.mode "direct" }}
+            - --git-base-branch={{ .Values.writeBack.baseBranch }}
+            {{- end }}
+            {{- if eq .Values.writeBack.mode "pr-github" }}
+            - --github-repo={{ .Values.writeBack.github.repo }}
+            - --github-base-branch={{ .Values.writeBack.github.targetBranch }}
+            {{- end }}
+            {{- if eq .Values.writeBack.mode "pr-gitlab" }}
+            - --gitlab-project={{ .Values.writeBack.gitlab.project }}
+            - --gitlab-target-branch={{ .Values.writeBack.gitlab.targetBranch }}
+            {{- end }}
             {{- if .Values.rbac.metadataScopeEnforce }}
             # ADR-027 / LD-6 P1: flip the env/domain metadata scope filter from
             # SHADOW (default) to fail-closed — an unlabeled tenant on a
@@ -192,6 +209,29 @@ spec:
             - --human-socket={{ .Values.humanSocket.path }}
             {{- end }}
           env:
+            {{- if eq .Values.writeBack.mode "pr-github" }}
+            - name: TA_GITHUB_TOKEN
+              valueFrom:
+                secretKeyRef:
+                  name: {{ .Values.writeBack.token.secretName }}
+                  key: {{ .Values.writeBack.token.secretKey }}
+            {{- with .Values.writeBack.github.apiUrl }}
+            - name: TA_GITHUB_API_URL
+              value: {{ . | quote }}
+            {{- end }}
+            {{- end }}
+            {{- if eq .Values.writeBack.mode "pr-gitlab" }}
+            - name: TA_GITLAB_TOKEN
+              valueFrom:
+                secretKeyRef:
+                  name: {{ .Values.writeBack.token.secretName }}
+                  key: {{ .Values.writeBack.token.secretKey }}
+            {{- with .Values.writeBack.gitlab.apiUrl }}
+            - name: TA_GITLAB_API_URL
+              value: {{ . | quote }}
+            {{- end }}
+            {{- end }}
+            {{- include "tenant-api.gitCredentialEnv" . | nindent 12 }}
             - name: GIT_COMMITTER_NAME
               value: {{ .Values.tenantApi.gitCommitterName | quote }}
             - name: GIT_COMMITTER_EMAIL

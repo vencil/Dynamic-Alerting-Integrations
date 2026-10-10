@@ -25,6 +25,7 @@ from pathlib import Path
 
 import pytest
 import yaml
+from _render_baseline import baseline_args
 
 _CHART = "helm/tenant-api"
 _VALUES = "helm/tenant-api/values.yaml"
@@ -69,7 +70,7 @@ def test_deployment_carries_guarded_claim_arg_block(repo_root: Path):
 
 # ── render layer (helm-gated) ───────────────────────────────────────────────
 def _helm_template(repo_root: Path, *set_args: str):
-    cmd = ["helm", "template", "t", str(repo_root / _CHART)]
+    cmd = ["helm", "template", "t", str(repo_root / _CHART), *baseline_args(_CHART)]
     for kv in set_args:
         cmd += ["--set", kv]
     return subprocess.run(cmd, capture_output=True, text=True, encoding="utf-8", errors="replace", timeout=60)

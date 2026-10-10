@@ -29,6 +29,7 @@ from pathlib import Path
 
 import pytest
 import yaml
+from _render_baseline import baseline_args
 
 # (chart dir, expected image repository)
 _CHARTS = [
@@ -68,7 +69,7 @@ def _primary_image(manifests: list[dict], repo: str) -> str:
 
 
 def _render(chart_dir: Path, values_file: Path | None = None) -> list[dict]:
-    cmd = ["helm", "template", "t", str(chart_dir), "-n", "monitoring"]
+    cmd = ["helm", "template", "t", str(chart_dir), *baseline_args(chart_dir), "-n", "monitoring"]
     if values_file is not None:
         cmd += ["-f", str(values_file)]
     out = subprocess.run(cmd, capture_output=True, text=True, encoding="utf-8", errors="replace", check=True, timeout=30)

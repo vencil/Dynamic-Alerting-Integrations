@@ -93,13 +93,18 @@ kubectl get configmap -n monitoring | grep prometheus-rules
 **tenant-api**（file-based 設定 API，commit-on-write）：
 
 ```bash
-helm install tenant-api ./helm/tenant-api/ -n tenant-api --create-namespace
+kubectl -n tenant-api create secret generic tenant-api-vcs --from-literal=token=<forge token>
+helm install tenant-api ./helm/tenant-api/ -n tenant-api --create-namespace \
+  --set gitRepoUrl=https://github.com/your-org/your-config-repo.git \
+  --set writeBack.mode=pr-github \
+  --set writeBack.github.repo=your-org/your-config-repo \
+  --set writeBack.token.secretName=tenant-api-vcs
 ```
 
 需要：
 - **身分**：chart 預設帶 oauth2-proxy sidecar（`oauth2Proxy.enabled=true`，provider github），須先建好 `oauth2-proxy-secrets`（見 chart 的 `secret-oauth2proxy.yaml` 模板）。production 由 oauth2-proxy 注入 `X-Forwarded-Email`；本機 dev 才用 `--dev-bypass-auth`（[ADR-022](../adr/022-dev-auth-bypass-four-layer-containment.md)，**不在 published image**）。缺 `X-Forwarded-Email` 時 `/api/v1/me` 回 401；有 `_rbac.yaml` 時，規則裡沒有 `tenants: ["*"]` 讀權限的人回 403——只有單租戶或前綴授權也一樣（[#2520](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/2520)）。
 - **conf.d 來源**：`gitRepoUrl` 指向放 conf.d 的 git repo（init container clone）；留空則 conf.d 為空、`_rbac.yaml` 由 configmap 掛 `/etc/rbac`。
-- **寫回**：PR/MR 模式（`--write-mode pr-github` / `pr-gitlab`，[ADR-011](../adr/011-pr-based-write-back.md)）；single-writer 約束需 `replicaCount=1`。
+- **寫回（必填）**：`writeBack.mode` 沒有預設值，不設 chart 就不 render（[#2855](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/2855)）。`pr-github` / `pr-gitlab` 每筆寫入開一個 PR/MR，合併後由你的 GitOps 流程組出 exporter 讀的 `threshold-config` ConfigMap（[ADR-011](../adr/011-pr-based-write-back.md)）；需要 `gitRepoUrl` 與放 forge token 的 Secret（`writeBack.token.secretName`），clone 與 push 都用它認證，token 不會出現在 URL 或 ConfigMap。`direct` 只把寫入留在 pod 自己的 `/conf.d`：不 push、送不到 exporter、重啟即失，只適合試用，且要另設 `writeBack.directAcknowledgeNotDelivered=true`。single-writer 約束需 `replicaCount=1`。
 
 **da-portal**（Tenant Manager UI）：
 
