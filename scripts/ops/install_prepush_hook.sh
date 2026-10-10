@@ -68,8 +68,26 @@ root="$(git rev-parse --show-toplevel 2>/dev/null)" || {
 # by the usual configuration.
 hooks_path="$(unset GIT_CONFIG; git config --get core.hooksPath)"
 case $? in
-    0)  warn "⛔ refusing: core.hooksPath is set (to '$hooks_path'). The guards are"
-        warn "   judged and installed only while it is not."
+    0)  # The layer and file are said too (#2776): set in global, `git config
+        # --unset` in the repo only returns 5. Message only — `--show-scope` needs
+        # git 2.26, and the verdict above must not depend on it. The line is
+        # `scope<TAB>origin<TAB>value`.
+        _hp_where=""
+        if _hp_line="$(unset GIT_CONFIG; git config --show-scope --show-origin --get core.hooksPath 2>/dev/null)" \
+            && [ "${_hp_line#*$'\t'*$'\t'}" != "$_hp_line" ]; then
+            _hp_scope="${_hp_line%%$'\t'*}"
+            _hp_line="${_hp_line#*$'\t'}"
+            _hp_origin="${_hp_line%%$'\t'*}"
+            # git names a repo file relative to the top level, not to where this runs.
+            case $_hp_origin in
+                file:/*|file:\"/*) ;;
+                file:\"*) _hp_origin="file:\"$root/${_hp_origin#file:\"}" ;;
+                file:*) _hp_origin="file:$root/${_hp_origin#file:}" ;;
+            esac
+            _hp_where="; scope $_hp_scope, from $_hp_origin"
+        fi
+        warn "⛔ refusing: core.hooksPath is set (to '$hooks_path'$_hp_where)."
+        warn "   The guards are judged and installed only while it is not."
         warn "   Nothing was changed."
         exit 1 ;;
     1)  ;;
