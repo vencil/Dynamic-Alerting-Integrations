@@ -381,7 +381,14 @@ func runBatchPR(d *Deps, rw http.ResponseWriter, r *http.Request, ops []BatchOpe
 			WriteJSONError(rw, r, http.StatusBadRequest, err.Error())
 			return BatchResponse{}, false
 		}
-		// Anything else is an unexpected git failure → generic 500.
+		if writeBaseRestoreFailed(rw, r, "PR/MR batch write failed: ", err) {
+			return BatchResponse{}, false
+		}
+		if writeMergeFailed(rw, r, "PR/MR batch write failed: ", err) {
+			return BatchResponse{}, false
+		}
+		// Anything else is an unexpected git failure → generic 500 (its text
+		// stays in the log — WriteErrorEnvelope, #1700).
 		WriteJSONError(rw, r, http.StatusInternalServerError, "PR/MR batch write failed: "+err.Error())
 		return BatchResponse{}, false
 	}
@@ -550,6 +557,13 @@ func applyPatch(ctx context.Context, w *gitops.Writer, configDir string, op Batc
 			// #2373 review F1: nothing written; the tenant file must be
 			// repaired first.
 			msg, code = notLoadable.Error(), CodeTenantConfigNotLoadable
+		case !writeErrorIsForClient(err):
+			// #1700: a file / git failure — its text carries server paths.
+			// The op may run async, after the request is gone, so the log
+			// line is keyed by tenant rather than request_id.
+			slog.Error("batch op failed; detail withheld from the client",
+				"tenant", op.TenantID, "error", err)
+			msg = msgBatchOpFailed
 		}
 		return BatchResult{TenantID: op.TenantID, Status: "error", Message: msg, Code: code}
 	}

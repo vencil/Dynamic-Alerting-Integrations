@@ -465,11 +465,11 @@ func parseGroupsFile(current []byte) (*groups.GroupsConfig, error) {
 		return &groups.GroupsConfig{Groups: make(map[string]groups.Group)}, nil
 	}
 	if err := requireTopLevelKey(current, "groups"); err != nil {
-		return nil, fmt.Errorf("read current _groups.yaml: %w", err)
+		return nil, &configFileParseError{fmt.Errorf("read current _groups.yaml: %w", err)}
 	}
 	cfg, err := groups.ParseConfig(current)
 	if err != nil {
-		return nil, fmt.Errorf("read current _groups.yaml: %w", err)
+		return nil, &configFileParseError{fmt.Errorf("read current _groups.yaml: %w", err)}
 	}
 	if cfg.Groups == nil {
 		cfg.Groups = make(map[string]groups.Group)
