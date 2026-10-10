@@ -21,6 +21,7 @@ import copy
 import datetime
 import decimal
 import hashlib
+import io
 import json
 import math
 import os
@@ -69,6 +70,18 @@ from _grar_validate import (  # noqa: E402
     is_null_schedule,
     overlay_across_spellings,
     writes_nothing,
+)
+
+# #1549: `merged_hash` in `--show-sources` / `--all` (and tenant-verify) is
+# `da-guard effective`'s — the exporter's and tenant-api's value — read, not
+# computed here. `_canonical_hash` below stays for `--what-if` only.
+from _lib_tenant_values import (  # noqa: E402
+    DA_GUARD_PREFIX,
+    DaGuardError,
+    DaGuardNotFoundError,
+    ParseFailedError,
+    load_effective,
+    print_load_error,
 )
 
 try:
@@ -974,7 +987,8 @@ class _GoKeyProfileTextLoader(_GoKeyLoader):
     merged mapping (`default: x\\n`) as the profile NAME — normally an
     unknown profile. Here it stays the generic mapping and elects nothing:
     the served values agree unless a profile is named by that text, but
-    `_profile` and merged_hash differ from the exporter's.
+    `_profile` differs from the exporter's (merged_hash does not: it is
+    read from da-guard, #1549).
     ⚠️ Not mirrored: a `default:` that is a sequence or a mapping. yaml.v3
     cannot decode it into a string, so the exporter rejects the WHOLE file
     (the `_read_profiles` precedent); here `_profile` stays that mapping and
@@ -1087,8 +1101,8 @@ def _warn_unmirrored_profiles(path: Path, doc: Any) -> None:
         print(f"WARNING: {path}: tenant '{tid}': `_profile` takes `default` only through a "
               f"merge key (`<<`) or an alias key — not mirrored here. The exporter elects the YAML text of "
               f"the merged mapping as the profile name; this tool keeps the mapping and "
-              f"elects no profile, so `_profile` and merged_hash differ from the "
-              f"exporter's (#2515).", file=sys.stderr)
+              f"elects no profile, so `_profile` in the effective config shown here "
+              f"differs from the exporter's (#2515).", file=sys.stderr)
 
 
 def _load_first_document(path: Path) -> Any:
@@ -1396,6 +1410,12 @@ class ConfDScanner:
         # deep_merge (REPLACE) fallback for `_custom_alerts`; callers can detect it.
         self.custom_alerts_resolution_error: str | None = None
         self._profiles: dict | None = None  # #2117: `profiles()` cache
+        # #1549: `da-guard effective` over this tree, run once on the first
+        # `merged_hash()` — {tenant_id: merged_hash}, or the reason there is
+        # none (`_go_hashes_error`). Unset until asked: the modes that print
+        # no merged_hash never run da-guard.
+        self._go_hashes: "dict[str, str] | None" = None
+        self._go_hashes_error: str | None = None
         self._scan()
         self._resolve_custom_alerts()
 
@@ -1883,15 +1903,63 @@ class ConfDScanner:
             merged = deep_merge(merged, _defaults_block(ddata))
         return merged
 
+    def merged_hash(self, tenant_id: str) -> "tuple[str | None, str | None]":
+        """`(merged_hash, None)` — the tenant's merged_hash as `da-guard
+        effective` (tenant-api's /effective, the exporter's resolver) gives it
+        — or `(None, reason)` when there is none to give (#1549).
+
+        Read, never computed here: this tool's effective config differs from
+        Go's by design on `_custom_alerts` (the compiler's ADR-024 UNION, plus
+        `_custom_alerts_resolution` with file paths), so a hash over it could
+        never equal the exporter's and moved when a file was merely renamed.
+
+        No da-guard, a da-guard that fails, a tree with a file the exporter
+        cannot decode or read, or a tenant da-guard does not resolve: None,
+        with the reason. The first three are named on stderr once per
+        scanner (a WARN line, then da-guard's own lines); nothing computed
+        here stands in for the value."""
+        if self._go_hashes is None and self._go_hashes_error is None:
+            try:
+                self._go_hashes = {str(t): e.merged_hash
+                                   for t, e in load_effective(self.conf_d).items()}
+            except (DaGuardNotFoundError, DaGuardError, ParseFailedError) as exc:
+                buf = io.StringIO()
+                print_load_error(exc, buf)
+                lines = buf.getvalue().splitlines()
+                reason = lines[0].removeprefix("ERROR: ") if lines else str(exc)
+                # da-guard's own lines carry the cause (`exited 2` alone
+                # does not say "duplicate tenant ID"); the field holds them too.
+                said = [ln.removeprefix(DA_GUARD_PREFIX).strip() for ln in lines[1:]]
+                self._go_hashes_error = ("da-guard effective gave no merged_hash: " + reason
+                                         + "".join(f" | {ln}" for ln in said if ln))
+                # WARN, not the ERROR line `print_load_error` writes: every
+                # other field is still reported. da-guard's own lines follow
+                # as that function prefixes and escapes them.
+                print(f"WARN: merged_hash is not reported (null, with merged_hash_error): "
+                      f"it is da-guard effective's and none could be read (#1549): {reason}",
+                      file=sys.stderr)
+                for line in lines[1:]:
+                    print(line, file=sys.stderr)
+        if self._go_hashes is None:
+            return None, self._go_hashes_error
+        tid = _tenant_id(tenant_id)
+        if tid not in self._go_hashes:
+            return None, (f"da-guard effective resolves no tenant '{tid}' in "
+                          f"{self.conf_d}, so there is no merged_hash for it")
+        return self._go_hashes[tid], None
+
     def source_info(self, tenant_id: str) -> dict:
-        """Return source traceability for a tenant."""
+        """Return source traceability for a tenant.
+
+        `merged_hash` is da-guard effective's (`merged_hash()`); when there is
+        none it is None and `merged_hash_error` says why (#1549)."""
         if tenant_id not in self.tenants:
             raise KeyError(f"Tenant '{tenant_id}' not found")
 
         chain = self.defaults_chain[tenant_id]
         effective = self.effective_config(tenant_id)
         source_h = _file_hash(self.tenant_files[tenant_id])
-        merged_h = _canonical_hash(effective)
+        merged_h, merged_h_error = self.merged_hash(tenant_id)
 
         info = {
             "tenant_id": tenant_id,
@@ -1899,11 +1967,15 @@ class ConfDScanner:
                                              self.tenant_files[tenant_id]),
             "source_hash": source_h,
             "merged_hash": merged_h,
+        }
+        if merged_h_error is not None:
+            info["merged_hash_error"] = merged_h_error
+        info.update({
             "defaults_chain": [
                 self._report_path(entry, p)
                 for entry, p in zip(self._defaults_chain_entries[tenant_id], chain)
             ],
-        }
+        })
         # Omitted when empty, as Go's `platform_overlay,omitempty`.
         overlay = self.platform_overlay(tenant_id)
         if overlay:

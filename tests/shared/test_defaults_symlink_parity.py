@@ -1,8 +1,9 @@
 """Python half of tests/shared/defaults_symlink_parity_matrix.json (#1674).
 
-describe_tenant must give the merged_hash the exporter's chain gives
-(pkg/config defaults_symlink_parity_test.go asserts the same table) when a
-defaults carrier is a symlink. The carrier belongs to the directory that
+describe_tenant must give the chain and effective config the exporter's
+chain gives (pkg/config defaults_symlink_parity_test.go asserts the same
+table) when a defaults carrier is a symlink; the merged_hash it prints is
+read from `da-guard effective` (#1549), so that column checks the plumbing. The carrier belongs to the directory that
 holds the ENTRY, whatever it points at.
 Since #2054 the table also pins tenants the exporter does NOT see at all
 (`"absent": true`: hidden files, hidden directories, a ConfigMap mount's
@@ -23,6 +24,8 @@ from _platform_fs import symlink_or_skip  # noqa: E402
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
 DESCRIBE = REPO_ROOT / "scripts" / "tools" / "dx" / "describe_tenant.py"
+sys.path.insert(0, str(DESCRIBE.parent))
+import describe_tenant as dt  # noqa: E402
 EXIT_VIOLATION = 1  # _lib_exitcodes.EXIT_VIOLATION: describe_tenant's "duplicate" (#2049)
 EXIT_CALLER_ERROR = 2  # _lib_exitcodes.EXIT_CALLER_ERROR: describe_tenant's "not found"
 MATRIX = json.loads((Path(__file__).parent / "defaults_symlink_parity_matrix.json")
@@ -102,7 +105,7 @@ def test_matrix_keys_are_exactly_the_known_ones() -> None:
 
 
 @pytest.mark.parametrize("tree", MATRIX["trees"], ids=lambda t: t["name"])
-def test_describe_tenant_matches_the_pinned_go_answer(tree, tmp_path: Path) -> None:
+def test_describe_tenant_matches_the_pinned_go_answer(tree, tmp_path: Path, da_guard_env) -> None:
     for rel, content in tree["files"].items():
         p = tmp_path / rel
         p.parent.mkdir(parents=True, exist_ok=True)
@@ -146,4 +149,16 @@ def test_describe_tenant_matches_the_pinned_go_answer(tree, tmp_path: Path) -> N
         out = json.loads(r.stdout)
         assert len(out["defaults_chain"]) == want["chain_len"], (tenant, out["defaults_chain"])
         assert out["effective_config"] == want["effective_config"], tenant
-        assert out["merged_hash"] == want["merged_hash"], tenant
+        # #1549: the printed merged_hash is da-guard effective's, and
+        # da-guard refuses a whole tree that declares a tenant twice — so in
+        # such a tree the other tenants print null with da-guard's reason.
+        # describe_tenant's own hash of the effective config it reads is held
+        # to the pinned Go answer in every tree.
+        if any(expect_shape(w) == "error" for w in tree["expect"].values()):
+            assert out["merged_hash"] is None, tenant
+            assert "duplicate tenant ID" in out["merged_hash_error"], out["merged_hash_error"]
+        else:
+            assert out["merged_hash"] == want["merged_hash"], tenant
+        own = dt._canonical_hash(dt.ConfDScanner(conf_d).effective_config(
+            tenant, resolve_custom_alerts=False))
+        assert own == want["merged_hash"], tenant

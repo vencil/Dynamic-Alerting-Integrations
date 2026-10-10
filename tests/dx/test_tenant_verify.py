@@ -20,6 +20,10 @@ Tests focus on:
 Per S#32 lesson: assertions on hashes are equality on string values
 (not invariant ranges), because canonical_hash is deterministic by
 construction.
+
+merged_hash is read from `da-guard effective` (#1549), so every test here
+runs with `da_guard_env`; the one that checks the behaviour without da-guard
+points `$DA_GUARD_BINARY` at a missing file itself.
 """
 from __future__ import annotations
 
@@ -28,6 +32,8 @@ import sys
 from pathlib import Path
 
 import pytest
+
+pytestmark = pytest.mark.usefixtures("da_guard_env")
 
 REPO_ROOT = Path(__file__).resolve().parent.parent.parent
 TOOL_PATH = REPO_ROOT / "scripts" / "tools" / "dx" / "tenant_verify.py"
@@ -334,11 +340,17 @@ def test_duplicate_declaration_fails_without_expect_human(
     assert "merged_hash:" not in out
 
 
-def test_duplicate_tree_clean_tenant_still_passes(verify_module, tmp_path, cli_argv):
-    """Must-ring control: the refusal is per tenant, not per tree."""
+def test_duplicate_tree_clean_tenant_has_no_merged_hash(verify_module, tmp_path, capsys,
+                                                         cli_argv):
+    """#1549: the `duplicate` refusal is still per tenant, but merged_hash
+    is da-guard's, and da-guard refuses the whole tree over the duplicate.
+    So `solo` is not verified either: exit 1 naming da-guard's reason — not
+    rc 0 on a hash nothing in Go would serve, and not 2 (a mismatch)."""
     root = _dup_tree(tmp_path, "other.yaml")
     cli_argv("tenant-verify", "solo", "--conf-d", str(root))
-    assert verify_module.main() == 0
+    assert verify_module.main() == 1
+    out = capsys.readouterr().out
+    assert "merged_hash_unavailable" in out and 'duplicate tenant ID "acme"' in out, out
 
 
 def test_single_declaration_item6_passes(verify_module, tmp_path, cli_argv):
@@ -352,7 +364,8 @@ def test_single_declaration_item6_passes(verify_module, tmp_path, cli_argv):
 def test_all_with_duplicate_exits_2_and_keeps_others(
         verify_module, tmp_path, capsys, cli_argv):
     """--all: the duplicated tenant is an error entry (files, no hash),
-    the other tenants are still reported, and the run exits 2."""
+    the other tenants are still listed, and the run exits 2. They carry no
+    merged_hash either: da-guard refuses the tree over the duplicate (#1549)."""
     import json as _json
 
     root = _dup_tree(tmp_path, "other.yaml")
@@ -365,7 +378,8 @@ def test_all_with_duplicate_exits_2_and_keeps_others(
     assert tenants["acme"]["error"] == "duplicate"
     assert tenants["acme"]["files"] == ["other.yaml", "real.yaml"]
     assert "merged_hash" not in tenants["acme"]
-    assert tenants["solo"]["merged_hash"]
+    assert tenants["solo"]["error"] == "merged_hash_unavailable"
+    assert 'duplicate tenant ID "acme"' in tenants["solo"]["detail"]
 
 
 def test_all_human_with_duplicate_exits_2(verify_module, tmp_path, capsys, cli_argv):
@@ -379,8 +393,9 @@ def test_all_human_with_duplicate_exits_2(verify_module, tmp_path, capsys, cli_a
     assert "declared in: zz.yaml" in captured.out
     assert "tenant_id:     solo" in captured.out
     assert "declared in more than one file" in captured.err
-    # The duplicated tenant is not counted as verified (2 listed, 1 verified).
-    assert "# total: 1 tenants verified, 1 duplicate-declared (not verified)" \
+    # Neither is counted as verified: acme is duplicated, and solo has no
+    # merged_hash because da-guard refuses the tree (#1549).
+    assert "# total: 0 tenants verified, 1 duplicate-declared (not verified)" \
         in captured.out
 
 

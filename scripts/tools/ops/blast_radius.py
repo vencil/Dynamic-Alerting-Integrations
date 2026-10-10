@@ -7,6 +7,11 @@ Usage:
     python3 scripts/tools/ops/blast_radius.py --base base.json --pr pr.json --output report.json
 
 Consumes two JSON files produced by `describe-tenant --all --output`.
+Whether a tenant's configured values changed is `merged_hash`'s answer —
+`da-guard effective`'s, which describe-tenant reads (#1549). Its custom
+alert recipes are compared separately, as the compiler resolves them
+(ADR-024 UNION: recipe, name, own or inherited — not the file a recipe is
+declared in), because the exporter's merge does not see inherited recipes.
 Diffs per-tenant effective configs and classifies changes into tiers:
   - Tier A: threshold / routing receiver changes (highlight)
   - Tier B: other alerting field changes (list)
@@ -52,10 +57,12 @@ TIER_A_PATTERNS = (
     "_custom_alerts",
     # ⚠️ Explicit, because the segment-boundary matcher no longer reaches it
     # via the "_custom_alerts" prefix. Losing it was an UNINTENDED side effect
-    # of that fix: it carries each recipe's provenance — which `_defaults` a
-    # paging rule was inherited from — so a change here can move a pager
-    # between owners. That belongs in the highlight tier, and demoting it
-    # should be a decision rather than a by-product.
+    # of that fix. It is compared WITHOUT `origin` (`comparable_effective`,
+    # #1549): the file a recipe is declared in is provenance, not something
+    # the compiled rule carries (the compiler reads `origin` for its error
+    # messages only), so a pure file move must not flag the highlight tier.
+    # What is left — the recipe's name and whether it is the tenant's own or
+    # inherited — is a change of who may edit a paging rule, and stays here.
     # ⛔ NO key count in this comment, and none is coming back. Versions of that
     # one number have been wrong in several distinct ways: arithmetically right
     # but with its scope never stated (a union over every conf.d tree in the
@@ -319,6 +326,28 @@ def classify_diff(diff: dict) -> dict[str, list[dict]]:
     return tiers
 
 
+def comparable_effective(effective: Any) -> Any:
+    """`effective`, as this tool compares it: each `_custom_alerts_resolution`
+    entry without its `origin` (#1549).
+
+    `origin` names the file a recipe was declared in. describe-tenant shows
+    it, and it stays in the input, but the compiled rule does not depend on
+    it (the compiler reads it for error messages only), so moving or renaming
+    a conf.d file is not a change of any tenant's alerting. The recipe
+    itself (`_custom_alerts`), its name and `is_own` are still compared."""
+    if not isinstance(effective, dict):
+        return effective
+    resolution = effective.get("_custom_alerts_resolution")
+    if not isinstance(resolution, list):
+        return effective
+    out = dict(effective)
+    out["_custom_alerts_resolution"] = [
+        {k: v for k, v in entry.items() if k != "origin"} if isinstance(entry, dict) else entry
+        for entry in resolution
+    ]
+    return out
+
+
 def compute_blast_radius(base_data: dict, pr_data: dict) -> dict:
     """Compute blast radius report comparing base vs PR effective configs.
 
@@ -369,22 +398,41 @@ def compute_blast_radius(base_data: dict, pr_data: dict) -> dict:
             })
             continue
 
-        # Compare merged_hash for quick skip
-        base_hash = base_info.get("merged_hash", "")
-        pr_hash = pr_info.get("merged_hash", "")
+        # #1549: `merged_hash` is da-guard effective's — the exporter's
+        # answer to "did this tenant's configured values change". It does
+        # not see the custom alert recipes a tenant inherits (the exporter's
+        # merge is not the compiler's ADR-024 UNION), so equal hashes skip
+        # every field EXCEPT the recipe lists, which are compared as the
+        # compiler resolves them. ⛔ Not a quick skip any more: a platform
+        # recipe retuned under an override tenant leaves its hash unchanged.
+        # A side without a hash (describe-tenant could not run da-guard, so
+        # it wrote null) is compared field by field, as before.
+        base_hash = base_info.get("merged_hash") or ""
+        pr_hash = pr_info.get("merged_hash") or ""
+        hashes_known = bool(base_hash and pr_hash)
+        values_changed = hashes_known and base_hash != pr_hash
 
-        if base_hash and pr_hash and base_hash == pr_hash:
-            continue  # No effective change
+        base_eff = comparable_effective(base_info.get("effective_config", {}))
+        pr_eff = comparable_effective(pr_info.get("effective_config", {}))
+        if hashes_known and not values_changed:
+            base_eff = {k: base_eff[k] for k in RECIPE_LIST_FIELDS if k in base_eff}
+            pr_eff = {k: pr_eff[k] for k in RECIPE_LIST_FIELDS if k in pr_eff}
 
-        # Deep diff effective configs
-        base_eff = base_info.get("effective_config", {})
-        pr_eff = pr_info.get("effective_config", {})
-
-        if base_eff == pr_eff:
-            continue  # Identical after merge (hash collision edge case)
+        if base_eff == pr_eff and not values_changed:
+            continue  # No change in values or recipes
 
         diff = diff_configs(base_eff, pr_eff)
         tiers = classify_diff(diff)
+        if values_changed and not any(tiers.values()):
+            # The exporter's merge says the values changed and this file's
+            # effective_config shows no field that did: the two readers
+            # disagree. Go is the authority, so the tenant is reported —
+            # Tier B, as anything unclassified is (#1419) — rather than dropped.
+            tiers["B"].append({
+                "field": "merged_hash",
+                "action": "changed",
+                "detail": {"base": base_hash, "pr": pr_hash},
+            })
 
         # Determine highest tier
         if tiers["A"]:
@@ -1175,6 +1223,17 @@ def main() -> None:
     # Load inputs
     base_data = load_effective_json(args.base)
     pr_data = load_effective_json(args.pr)
+    # #1549: a tenant describe-tenant wrote without merged_hash (no da-guard)
+    # is compared field by field, which is this file's reading, not the
+    # exporter's. Said once, so a report built that way is not taken for one
+    # built on the exporter's values.
+    no_hash = sorted({str(t) for data in (base_data, pr_data) for t, info in data.items()
+                      if isinstance(info, dict) and not info.get("merged_hash")})
+    if no_hash:
+        print(f"WARN: {len(no_hash)} tenant(s) have no merged_hash in the input "
+              f"(describe-tenant could not read it from da-guard): their values are "
+              f"compared field by field from effective_config, not by the exporter's "
+              f"merged_hash. First: {_printable(', '.join(no_hash[:5]))}", file=sys.stderr)
 
     # Compute blast radius
     report = compute_blast_radius(base_data, pr_data)

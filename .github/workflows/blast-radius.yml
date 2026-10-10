@@ -65,6 +65,24 @@ jobs:
       - name: Install dependencies
         run: pip install pyyaml -c requirements/ci-constraints.txt
 
+      # #1549: describe-tenant reads each tenant's merged_hash from
+      # `da-guard effective` (the exporter's value), and blast_radius.py takes
+      # "did the values change" from it. Built once from this checkout, so the
+      # PR side and the base side below are read by the same binary; a failed
+      # build fails the job. Without it describe-tenant writes merged_hash null
+      # and the report falls back to comparing fields (named on stderr).
+      - name: Set up Go (da-guard)
+        uses: actions/setup-go@v6
+        with:
+          go-version-file: components/threshold-exporter/app/go.mod
+          cache: true
+          cache-dependency-path: components/threshold-exporter/app/go.sum
+
+      - name: Build da-guard
+        run: |
+          make da-guard-build
+          echo "DA_GUARD_BINARY=$PWD/.build/da-guard" >> "$GITHUB_ENV"
+
       - name: Detect conf.d path
         id: detect
         run: |

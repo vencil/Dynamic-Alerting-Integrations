@@ -182,7 +182,7 @@ class TestConfDScanner:
 class TestSourceInfo:
     """Tests for source_info() — traceability & hashing."""
 
-    def test_source_info_structure(self, tmp_path):
+    def test_source_info_structure(self, tmp_path, da_guard_env):
         conf_d = tmp_path / "conf.d"
         conf_d.mkdir()
 
@@ -1490,8 +1490,9 @@ class TestYamlTypedScalarParity:
         assert "t1.yaml" in res.stderr and "does not parse" in res.stderr
         assert set(json.loads(res.stdout)) == {"t2"}
 
-    def test_the_go_merged_hash_of_an_unquoted_date(self, tmp_path):
-        """The merged_hash Go computes for the issue's own shape, via the CLI."""
+    def test_the_go_merged_hash_of_an_unquoted_date(self, tmp_path, da_guard_env):
+        """The merged_hash Go computes for the issue's own shape, via the CLI
+        (read from da-guard since #1549)."""
         conf_d = self._tree(tmp_path, self.ALIGNED[0][1])
         res = subprocess.run([sys.executable, self.DESCRIBE, "t1", "--conf-d", str(conf_d), "--show-sources"],
                              capture_output=True, text=True, encoding="utf-8", timeout=20)
@@ -1881,7 +1882,10 @@ class TestUnparseableDefaults:
 
 class TestDefaultsDocumentParity:
     """#2459: `_defaults.yaml` documents the exporter DOES serve, described
-    with its merged_hash. Every `go_hash` below is ResolveEffective's
+    with its merged_hash. `_hash` is this tool's own canonical hash of the
+    effective config it reads (`--what-if` prints that one; the merged_hash
+    `--show-sources` prints is da-guard's since #1549, which would make the
+    rows Go against Go). Every `go_hash` below is ResolveEffective's
     MergedHash for the same two-file tree (`_defaults.yaml` + `tx.yaml`),
     measured with a scratch Go program built against
     components/threshold-exporter/app (`config.LoadDir` +
@@ -1929,7 +1933,7 @@ class TestDefaultsDocumentParity:
         conf_d.mkdir()
         (conf_d / "_defaults.yaml").write_text(body, encoding="utf-8")
         (conf_d / "tx.yaml").write_text(self.TENANT, encoding="utf-8")
-        return dt.ConfDScanner(conf_d).source_info("tx")["merged_hash"][:16]
+        return dt._canonical_hash(dt.ConfDScanner(conf_d).effective_config("tx"))
 
     @pytest.mark.parametrize("case", sorted(CASES))
     def test_merged_hash_matches_the_exporter(self, tmp_path, case):
@@ -1974,7 +1978,7 @@ class TestDefaultsDocumentParity:
         assert "does not parse" not in res.stderr, res.stderr
         assert res.stdout == ""
 
-    def test_control_subdirectory_defaults_mapping_matches_the_exporter(self, tmp_path):
+    def test_control_subdirectory_defaults_mapping_matches_the_exporter(self, tmp_path, da_guard_env):
         """Must-trigger control for the test above: the same level written
         as a mapping describes with rc 0 and ResolveEffective's hash."""
         conf_d = self._sub_tree(tmp_path, "defaults:\n  mysql_connections: 81\n")

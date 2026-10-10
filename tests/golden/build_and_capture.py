@@ -3,6 +3,14 @@
 Build the golden fixture scenarios, run describe_tenant.py against each,
 capture expected source_hash + merged_hash, emit golden.json.
 
+merged_hash is describe_tenant's own canonical hash of the effective config
+it reads (`--what-if` prints that one). The merged_hash its `--show-sources`
+prints is read from `da-guard effective` since #1549; where da-guard gives
+one, it must equal the captured value or the scenario fails, so run this with
+da-guard (`bash scripts/ops/with_da_guard.sh python3 tests/golden/build_and_capture.py`
+builds one from this checkout). Without one each row is captured with a NOTE
+and not cross-checked; the Go parity test still checks the Go hashes.
+
 The scenarios exercise the deep_merge / inheritance rules listed in
 test_merge_parity.py's module docstring so the Go port can verify
 byte-for-byte parity. They do NOT cover every ADR-017 clause. #1550's
@@ -30,6 +38,8 @@ from pathlib import Path
 HERE = Path(__file__).parent
 ROOT = HERE / "fixtures"
 DESCRIBE = HERE.parent.parent / "scripts" / "tools" / "dx" / "describe_tenant.py"
+sys.path.insert(0, str(DESCRIBE.parent))
+import describe_tenant as dt  # noqa: E402  (#1549: its own hash is the golden value)
 
 
 def write(path: Path, content: str) -> None:
@@ -710,7 +720,24 @@ def run_describe(scenario_dir: str, tenant_id: str) -> dict:
     if result.returncode != 0:
         print(f"FAIL {scenario_dir}:{tenant_id}: {result.stderr}", file=sys.stderr)
         return {"error": result.stderr}
-    return json.loads(result.stdout)
+    out = json.loads(result.stdout)
+    # #1549: the merged_hash describe_tenant prints is read from `da-guard
+    # effective` — null without da-guard, and null for the trees whose root
+    # file the exporter drops (not_served.json). The golden value is
+    # describe_tenant's OWN canonical hash, as before; where da-guard gave
+    # one, the two must agree or the scenario fails.
+    own = dt._canonical_hash(dt.ConfDScanner(conf_d).effective_config(
+        tenant_id, resolve_custom_alerts=False))
+    go = out.get("merged_hash")
+    if go is not None and go != own:
+        why = f"describe_tenant's own merged_hash {own} != da-guard effective's {go}"
+        print(f"FAIL {scenario_dir}:{tenant_id}: {why}", file=sys.stderr)
+        return {"error": why}
+    if go is None:
+        print(f"NOTE {scenario_dir}:{tenant_id}: not cross-checked against da-guard "
+              f"({out.get('merged_hash_error')})", file=sys.stderr)
+    out["merged_hash"] = own
+    return out
 
 
 def main() -> int:
