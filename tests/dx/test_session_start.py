@@ -60,17 +60,25 @@ def _repo(root: Path) -> Path:
     return repo
 
 
+_INSTALL_SAID = "stand-in pre-commit install ran"
+
+
 def _run(root: Path, repo: Path, marker_text: str | None, pre_commit_install_rc: int = 0,
-         pre_commit: bool = True):
+         pre_commit: bool = True, real_pre_commit: bool = False):
     """Run the script; return (completed, marker text, {tool: [argument lines]}).
-    `pre_commit=False` leaves no pre-commit anywhere on PATH."""
+    `pre_commit=False` leaves no pre-commit anywhere on PATH; `real_pre_commit`
+    puts the installed one there (still recorded). The stand-in's `install`
+    prints `_INSTALL_SAID` to stdout, as the real one reports there."""
     marker = root / "marker"
     if marker_text is not None:
         marker.write_text(marker_text, encoding="utf-8")
     bindir = root / "bin"
     bindir.mkdir(exist_ok=True)
     for tool in ("pip", "npm", "pre-commit") if pre_commit else ("pip", "npm"):
-        rc = f'[ "$1" = install ] && exit {pre_commit_install_rc}\n' if tool == "pre-commit" else ""
+        rc = (f'[ "$1" = install ] && echo {_INSTALL_SAID} && exit {pre_commit_install_rc}\n'
+              if tool == "pre-commit" else "")
+        if tool == "pre-commit" and real_pre_commit:
+            rc = f'exec "{sys.executable}" -m pre_commit "$@"\n'
         stub = bindir / tool
         stub.write_text(f'#!/bin/sh\necho "$*" >> "{root / tool}.calls"\n{rc}exit 0\n',
                         encoding="utf-8")
@@ -127,6 +135,8 @@ def test_an_already_bootstrapped_container_gets_its_guards_back(tmp_path, monkey
 
     assert r.returncode == 0, r.stdout + r.stderr
     assert "already bootstrapped" in r.stdout and calls["pip"] == []
+    # #2790: even a commit hook pre-commit wrote, executable, is reinstalled.
+    assert _installs(calls["pre-commit"]) == ["install"], calls["pre-commit"]
     wired, why = mod._prepush_guards_wired()
     assert wired is True, why
     assert _result(marker) == ["RESULT=ok"]
@@ -182,15 +192,14 @@ def test_a_refusal_skips_pre_commit_install_and_nothing_else(tmp_path, setup):
 
 
 @pytest.mark.parametrize("state", [
-    "last-run-failed", "no-commit-hook", "no-pre-commit-on-PATH", "e2e-deps-gone"])
+    "last-run-failed", "no-pre-commit-on-PATH", "e2e-deps-gone"])
 def test_a_no_op_needs_every_condition(tmp_path, state):
     """The no-op path is taken only after a RESULT=ok run, with pre-commit on
-    PATH, the commit hook and the e2e deps still in place; otherwise the whole
-    script runs again."""
+    PATH and the e2e deps still in place; otherwise the whole script runs
+    again."""
     repo = _repo(tmp_path)
     hooks = repo / ".git" / "hooks"
-    if state != "no-commit-hook":
-        (hooks / "pre-commit").write_text("#!/bin/sh\n", encoding="utf-8")
+    (hooks / "pre-commit").write_text("#!/bin/sh\n", encoding="utf-8")
     if state == "e2e-deps-gone":
         (repo / "tests" / "e2e").mkdir(parents=True)
         (repo / "tests" / "e2e" / "package.json").write_text("{}\n", encoding="utf-8")
@@ -202,14 +211,15 @@ def test_a_no_op_needs_every_condition(tmp_path, state):
     assert "already bootstrapped" not in r.stdout
     assert calls["pip"]
     if state != "no-pre-commit-on-PATH":
-        assert _installs(calls["pre-commit"])
+        assert _installs(calls["pre-commit"]) == ["install"], calls["pre-commit"]
+        assert _INSTALL_SAID in r.stdout
 
 
 @pytest.mark.parametrize("commit_hook", [True, False])
-def test_a_linked_worktree_no_ops_only_with_the_commit_hook(tmp_path, commit_hook):
+def test_a_linked_worktree_no_ops_and_reinstalls_the_commit_hook(tmp_path, commit_hook):
     """#2775: in a linked worktree `.git` is a file, so a literal
     `.git/hooks/pre-commit` check never held and every start reran `npm ci`.
-    The commit hook is looked for where git keeps it, not taken for granted."""
+    #2790: the commit hook is reinstalled on the no-op path, not looked for."""
     repo = _repo(tmp_path)
     wt = tmp_path / "wt"
     subprocess.run(["git", "-C", str(repo), "worktree", "add", "-q", str(wt)],  # subprocess-timeout: ignore
@@ -220,14 +230,64 @@ def test_a_linked_worktree_no_ops_only_with_the_commit_hook(tmp_path, commit_hoo
 
     r, marker, calls = _run(tmp_path, wt, "RESULT=ok\n")
 
-    if commit_hook:
-        assert r.returncode == 0, r.stdout + r.stderr
-        assert "already bootstrapped" in r.stdout, r.stdout + r.stderr
-        assert calls["pip"] == [] and calls["npm"] == []
-        assert _result(marker) == ["RESULT=ok"]
-    else:
-        assert "already bootstrapped" not in r.stdout
-        assert calls["pip"] and _installs(calls["pre-commit"])
+    assert r.returncode == 0, r.stdout + r.stderr
+    assert "already bootstrapped" in r.stdout, r.stdout + r.stderr
+    assert calls["pip"] == [] and calls["npm"] == []
+    assert _installs(calls["pre-commit"]) == ["install"]
+    assert _result(marker) == ["RESULT=ok"]
+
+
+@pytest.mark.parametrize("commit_hook", ["0644", "absent"])
+def test_a_no_op_reinstalls_a_commit_hook_git_would_not_run(tmp_path, commit_hook):
+    """#2790: a commit hook that exists may still not run (0644), and none at
+    all is the same. The no-op path runs `pre-commit install` either way."""
+    repo = _repo(tmp_path)
+    hook = repo / ".git" / "hooks" / "pre-commit"
+    if commit_hook == "0644":
+        hook.write_text("#!/bin/sh\n", encoding="utf-8")
+        hook.chmod(0o644)
+
+    r, marker, calls = _run(tmp_path, repo, "RESULT=ok\n")
+
+    assert r.returncode == 0, r.stdout + r.stderr
+    assert _installs(calls["pre-commit"]) == ["install"], r.stdout + r.stderr
+    assert "already bootstrapped" in r.stdout and calls["pip"] == []
+    assert _INSTALL_SAID in r.stdout, "pre-commit install's own report was hidden"
+    assert _result(marker) == ["RESULT=ok"]
+
+
+def test_a_no_op_makes_a_0644_commit_hook_run_again(tmp_path):
+    """#2790 with the real pre-commit: after the no-op, git runs the commit
+    hook again (pre-commit rewrites it executable)."""
+    _require_pre_commit()
+    repo = _repo(tmp_path)
+    subprocess.run(  # subprocess-timeout: ignore
+        [sys.executable, "-m", "pre_commit", "install"], cwd=repo, check=True,
+        capture_output=True)
+    hook = repo / ".git" / "hooks" / "pre-commit"
+    hook.chmod(0o644)
+
+    r, marker, _ = _run(tmp_path, repo, "RESULT=ok\n", real_pre_commit=True)
+
+    assert r.returncode == 0 and "already bootstrapped" in r.stdout, r.stdout + r.stderr
+    assert os.access(hook, os.X_OK), "the no-op left a commit hook git does not run"
+    assert _result(marker) == ["RESULT=ok"]
+
+
+def test_a_failed_reinstall_does_not_no_op(tmp_path):
+    """#2790: when `pre-commit install` fails on the no-op path the whole
+    script runs and the failure is what the marker ends with."""
+    repo = _repo(tmp_path)
+    hook = repo / ".git" / "hooks" / "pre-commit"
+    hook.write_text("#!/bin/sh\n", encoding="utf-8")
+    hook.chmod(0o755)
+
+    r, marker, calls = _run(tmp_path, repo, "RESULT=ok\n", pre_commit_install_rc=97)
+
+    assert r.returncode == 1, r.stdout + r.stderr
+    assert "already bootstrapped" not in r.stdout
+    assert calls["pip"], "a failed reinstall no-opped"
+    assert _result(marker) == ["RESULT=failed (pre-commit install)"]
 
 
 def test_a_failed_pre_commit_install_is_recorded(tmp_path):

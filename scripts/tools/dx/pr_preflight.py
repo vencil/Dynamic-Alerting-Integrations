@@ -1090,8 +1090,8 @@ def _prepush_guards_wired() -> Tuple[Optional[bool], str]:
     ⛔ #1664 續辦，#1689 改寫。**這裡是這個判定的唯一實作**。⛔ 不要改回
     shell out 到 `install_prepush_hook.sh --check`：理由見該檔檔頭。
 
-    **只有一種正確狀態**：`pre-push` 與安裝器產生的 shim 逐位元組相同，而且有
-    執行位元。只認標頭的話，shim 被插一行 `exit 0`、被截斷，或 `pre-push` 放的
+    **只有一種正確狀態**：`pre-push` 是一般檔案（不是 symlink，#2770）、與安裝器
+    產生的 shim 逐位元組相同，而且有執行位元。只認標頭的話，shim 被插一行 `exit 0`、被截斷，或 `pre-push` 放的
     是別種 hook 的 pre-commit 樣板，都會報已接上而直推 main 照樣成功
     （#2669、#2701）。pre-commit 的 pre-push 樣板一律不算：安裝器會換掉它，
     理由見該檔檔頭。
@@ -1161,7 +1161,9 @@ def _prepush_guards_wired() -> Tuple[Optional[bool], str]:
     # ⛔ 不是 shim 時，訊息只說它和安裝器產生的 shim 不同並給處方，不預告安裝器會怎麼
     # 處置：它依那是不是 git-lfs 的 hook、pre-commit 樣板或守衛複本而取代或拒絕，在這裡
     # 複製那些判定就是第二份（#2697）。
-    if not hook.is_file():
+    # ⛔ symlink 一律不算接上，即使指向 shim 的副本（#2770）：`is_file()` 會跟著連結走，
+    # 而安裝器不經過連結寫入，判 True 就與它的處置說法相反。
+    if hook.is_symlink() or not hook.is_file():
         if hook.exists() or hook.is_symlink():
             return False, (
                 f"{hook} 不是一般檔案。先看清楚它是什麼並移走，再跑"
