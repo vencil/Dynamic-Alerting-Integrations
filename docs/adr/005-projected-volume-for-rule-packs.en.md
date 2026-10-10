@@ -9,7 +9,7 @@ lang: en
 
 > **Language / 語言：** **English (Current)** | [中文](./005-projected-volume-for-rule-packs.md)
 
-**Decision in brief**: each Rule Pack lives in its own ConfigMap, and all of them are mounted together into Prometheus's rules directory through a Kubernetes projected volume, with `optional: true` on every source. Deleting a Rule Pack's ConfigMap unloads that pack, and Prometheus does not fail to start because of it.
+**Decision in brief**: each Rule Pack lives in its own ConfigMap, and all of them are mounted together into Prometheus's rules directory through a Kubernetes projected volume, with `optional: true` on every source. Deleting a Rule Pack's ConfigMap unloads that pack once Prometheus reloads successfully, and Prometheus does not fail to start because of it.
 
 ## Status
 

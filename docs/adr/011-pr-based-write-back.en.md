@@ -9,11 +9,11 @@ lang: en
 
 > **Language / 語言：** **English (Current)** | [中文](./011-pr-based-write-back.md)
 
-**Decision in brief**: besides committing directly, tenant-api offers an "open a PR" write-back mode, chosen at deployment time with `--write-mode` (or the `TA_WRITE_MODE` environment variable); the default is still a direct commit. In PR mode every UI write creates a new branch, commits, pushes, and then opens a PR on GitHub or an MR on GitLab; the configuration only takes effect once the PR is merged. Between single writes, a tenant can have at most one pending PR at a time (batch writes are not covered; see the known limitations).
+**Decision in brief**: besides committing directly, tenant-api offers an "open a PR" write-back mode, chosen at deployment time with `--write-mode` (or the `TA_WRITE_MODE` environment variable); the default is still a direct commit. In PR mode every write of tenant configuration creates a new branch, commits, pushes, and then opens a PR on GitHub or an MR on GitLab; the configuration only takes effect once the PR is merged. Between single writes, a tenant can have at most one pending PR at a time (batch writes are not covered; see the known limitations).
 
 ## Status
 
-✅ **Accepted** (v2.6.0) — Adds a PR write-back mode (`--write-mode pr`) where UI operations create GitHub PRs instead of direct commits
+✅ **Accepted** (v2.6.0) — Adds a PR write-back mode (`--write-mode pr`) where writes of tenant configuration create GitHub PRs instead of direct commits
 
 2026-10-10: corrected how the write-back mode is configured: it is `--write-mode` / `TA_WRITE_MODE`, not a `_write_mode` setting in conf.d.
 

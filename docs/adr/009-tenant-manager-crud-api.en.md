@@ -9,7 +9,7 @@ lang: en
 
 > **Language / 語言：** **English (Current)** | [中文](./009-tenant-manager-crud-api.md)
 
-**Decision in brief**: add tenant-api, a standalone Go HTTP server that serves as the management backend for da-portal. Sign-in is handled by an oauth2-proxy in front of it, and tenant-api decides permissions from the identity headers oauth2-proxy passes along; every write modifies the tenant config file in the Git repo directly and commits it as the operator, so Git remains the single source of the configuration.
+**Decision in brief**: add tenant-api, a standalone Go HTTP server that serves as the management backend for da-portal. Sign-in is handled by an oauth2-proxy in front of it, and tenant-api decides permissions from the identity headers oauth2-proxy passes along; in the default direct write-back mode every write modifies the tenant config file in the Git repo directly and commits it as the operator (for PR write-back see [ADR-011](011-pr-based-write-back.en.md)), so Git remains the single source of the configuration.
 
 ## Status
 
@@ -22,7 +22,7 @@ lang: en
 - **conf.d/**: the directory holding tenant config YAML; threshold-exporter reads its configuration from here.
 - **oauth2-proxy**: an open-source authenticating reverse proxy. Users first sign in through it with an IdP (identity provider, for example GitHub, Google, or a corporate identity system that speaks OIDC, the standard sign-in protocol); it then forwards the request to the backend, carrying the user's email and groups in the `X-Forwarded-Email` and `X-Forwarded-Groups` headers.
 - **sidecar**: a helper container deployed alongside the main program in the same Pod.
-- **commit-on-write**: every write the API handles modifies the YAML in conf.d/ and immediately creates a git commit whose author is the operator's email.
+- **commit-on-write**: in direct write-back mode, every write the API handles modifies the YAML in conf.d/ and immediately creates a git commit whose author is the operator's email.
 - **SSE (Server-Sent Events)**: one-way push from server to browser: the server keeps an HTTP response open and writes an entry into it whenever there is an event.
 
 ## Background
@@ -61,7 +61,7 @@ graph LR
 |----------|--------|-----------|
 | **API language** | Go | Imports threshold-exporter's `pkg/config` directly to share config parsing and validation logic, so the schema is not maintained in both Go and Python |
 | **Authentication** | oauth2-proxy sidecar | A common Kubernetes pattern; authorization reads only the HTTP headers oauth2-proxy adds; supports GitHub OAuth, Google OIDC, and generic OIDC |
-| **Write-back** | commit-on-write | UI action → API → modify YAML in conf.d/ → git commit (author is the operator's email). Complete audit trail, compatible with the GitOps workflow |
+| **Write-back** | commit-on-write (direct write-back mode; PR mode in ADR-011) | UI action → API → modify YAML in conf.d/ → git commit (author is the operator's email). Complete audit trail, compatible with the GitOps workflow |
 | **Permission model** | `_rbac.yaml` static mapping | One `_rbac.yaml` lists which tenants each IdP group maps to and with which permissions. Group membership comes from the IdP; the file is reloaded automatically when it changes, and nothing is hard-coded |
 | **Concurrency model** | Serialized writes, optionally async batches | All writes are serialized by the writer lock (tenant-api's internal write lock, which lets one write proceed at a time); batch operations run synchronously by default, and in direct write-back mode `?async=true` runs them on background workers with the result polled by `task_id` (PR write-back mode ignores the parameter and always runs synchronously) |
 | **Change notification** | SSE | Config changes are pushed to the browser in real time over SSE. Only one-way server-to-browser push is needed, and SSE is simpler than WebSocket and works natively with HTTP/2 |

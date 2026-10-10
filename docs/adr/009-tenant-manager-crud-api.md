@@ -15,7 +15,7 @@ updated_at: 2026-10-10
 
 > **Language / 語言：** **中文 (Current)** | [English](./009-tenant-manager-crud-api.en.md)
 
-**決策摘要**：新增 tenant-api，一個獨立的 Go HTTP server，作為 da-portal 的管理後端。登入交給前面的 oauth2-proxy，tenant-api 依 oauth2-proxy 帶來的身分標頭判斷權限；每次寫入都直接修改 Git repo 裡的租戶設定檔並以操作者身分 commit，Git 仍是設定的唯一來源。
+**決策摘要**：新增 tenant-api，一個獨立的 Go HTTP server，作為 da-portal 的管理後端。登入交給前面的 oauth2-proxy，tenant-api 依 oauth2-proxy 帶來的身分標頭判斷權限；預設的直接寫回模式下，每次寫入都直接修改 Git repo 裡的租戶設定檔並以操作者身分 commit（PR 寫回模式見 [ADR-011](011-pr-based-write-back.md)），Git 仍是設定的唯一來源。
 
 ## 狀態
 
@@ -28,7 +28,7 @@ updated_at: 2026-10-10
 - **conf.d/**：存放租戶設定 YAML 的目錄，threshold-exporter 從這裡讀設定。
 - **oauth2-proxy**：開源的認證反向代理。使用者先在它那裡經由 IdP（身分提供者，例如 GitHub、Google，或支援 OIDC 這個標準登入協定的企業身分系統）登入，它再把請求轉給後端，並以 `X-Forwarded-Email`、`X-Forwarded-Groups` 標頭帶上使用者的 email 與所屬群組。
 - **sidecar**：與主程式放在同一個 Pod 裡一起部署的輔助容器。
-- **commit-on-write**：API 每處理一次寫入，就修改 conf.d/ 裡的 YAML 並立刻建立一個 git commit，commit 的 author 是操作者的 email。
+- **commit-on-write**：直接寫回模式下，API 每處理一次寫入，就修改 conf.d/ 裡的 YAML 並立刻建立一個 git commit，commit 的 author 是操作者的 email。
 - **SSE（Server-Sent Events）**：瀏覽器與伺服器之間的單向推播：伺服器保持一條 HTTP 回應不結束，有事件就往裡面寫一筆。
 
 ## 背景
@@ -67,7 +67,7 @@ graph LR
 |----------|------|------|
 | **API 實作語言** | Go | 直接 import threshold-exporter 的 `pkg/config`，共用設定解析與驗證邏輯，不必在 Go 與 Python 兩邊維護 schema |
 | **認證機制** | oauth2-proxy sidecar | Kubernetes 常見做法；授權判斷只讀 oauth2-proxy 帶來的 HTTP 標頭；支援 GitHub OAuth、Google OIDC 與通用 OIDC |
-| **寫回機制** | commit-on-write | UI 操作 → API → 修改 conf.d/ 的 YAML → git commit（author 為操作者 email）。稽核軌跡完整，與 GitOps 流程相容 |
+| **寫回機制** | commit-on-write（直接寫回模式；PR 模式見 ADR-011） | UI 操作 → API → 修改 conf.d/ 的 YAML → git commit（author 為操作者 email）。稽核軌跡完整，與 GitOps 流程相容 |
 | **權限模型** | `_rbac.yaml` 靜態對應 | 維護一份 `_rbac.yaml`，列出 IdP 群組對應哪些租戶、有哪些權限。群組歸屬以 IdP 為準，檔案改了會自動重新載入，程式裡不寫死 |
 | **並行模型** | 寫入序列化，批量可非同步 | 所有寫入由 writer lock（tenant-api 內部的寫入鎖，同一時間只讓一筆寫入進行）序列化；批量操作預設同步執行，直接寫回模式下加 `?async=true` 改由背景 worker 執行，用 `task_id` 輪詢結果（PR 寫回模式忽略這個參數，一律同步） |
 | **變更通知** | SSE | 設定變更以 SSE 即時推給瀏覽器。只需要伺服器往瀏覽器單向推播，SSE 比 WebSocket 簡單，也與 HTTP/2 原生相容 |

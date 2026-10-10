@@ -15,11 +15,11 @@ updated_at: 2026-10-10
 
 > **Language / 語言：** **中文 (Current)** | [English](./011-pr-based-write-back.en.md)
 
-**決策摘要**：tenant-api 除了直接 commit，另提供「開 PR」的寫回模式，部署時以 `--write-mode`（或環境變數 `TA_WRITE_MODE`）選擇，預設仍是直接 commit。PR 模式下，每次 UI 寫入都開一條新分支、commit、push，再在 GitHub 開 PR 或在 GitLab 開 MR；設定要等 PR 合併後才生效。單筆寫入之間，同一個租戶同時只能有一個待審核的 PR（批量寫入不在此列，見已知限制）。
+**決策摘要**：tenant-api 除了直接 commit，另提供「開 PR」的寫回模式，部署時以 `--write-mode`（或環境變數 `TA_WRITE_MODE`）選擇，預設仍是直接 commit。PR 模式下，每次租戶設定的寫入都開一條新分支、commit、push，再在 GitHub 開 PR 或在 GitLab 開 MR；設定要等 PR 合併後才生效。單筆寫入之間，同一個租戶同時只能有一個待審核的 PR（批量寫入不在此列，見已知限制）。
 
 ## 狀態
 
-✅ **Accepted**（v2.6.0）— 新增 PR 寫回模式（`--write-mode pr`），UI 操作產生 GitHub PR 而非直接 commit
+✅ **Accepted**（v2.6.0）— 新增 PR 寫回模式（`--write-mode pr`），租戶設定的寫入產生 GitHub PR 而非直接 commit
 
 2026-10-10：更正寫回模式的設定方式：是 `--write-mode`／`TA_WRITE_MODE`，不是 conf.d 裡的 `_write_mode` 設定。
 

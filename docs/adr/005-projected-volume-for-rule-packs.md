@@ -15,7 +15,7 @@ updated_at: 2026-10-10
 
 > **Language / 語言：** **中文 (Current)** | [English](./005-projected-volume-for-rule-packs.en.md)
 
-**決策摘要**：每個 Rule Pack 各放在一個獨立的 ConfigMap，以 Kubernetes 的 projected volume 一起掛進 Prometheus 的規則目錄，每個來源都設 `optional: true`。刪掉某個 Rule Pack 的 ConfigMap 就等於卸載它，Prometheus 不會因此啟動失敗。
+**決策摘要**：每個 Rule Pack 各放在一個獨立的 ConfigMap，以 Kubernetes 的 projected volume 一起掛進 Prometheus 的規則目錄，每個來源都設 `optional: true`。刪掉某個 Rule Pack 的 ConfigMap，在 Prometheus 重新載入成功後就等於卸載它，Prometheus 不會因此啟動失敗。
 
 ## 狀態
 
