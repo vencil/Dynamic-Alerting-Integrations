@@ -126,18 +126,18 @@ _build_one() {
         # is EXACTLY the #1690 defect this guard exists to remove: it returns
         # the wrong tree's exit status as the verdict, so a clean working tree
         # turns a broken pushed commit green.
-        cat >&2 <<WORKTREE_FAILED
-
-[pre-push-mkdocs] ⛔ could not check out $_sha to validate it.
-
-This guard builds the commit you are PUSHING, not the tree you are standing
-in, so it cannot fall back to the working tree — that would report on the
-wrong commit. Refusing instead.
-
-To push anyway (the docs build then runs only in CI):
-    MKDOCS_STRICT_BYPASS=1 git push ...
-
-WORKTREE_FAILED
+        printf '%s\n' \
+            "" \
+            "[pre-push-mkdocs] ⛔ could not check out $_sha to validate it." \
+            "" \
+            "This guard builds the commit you are PUSHING, not the tree you are standing" \
+            "in, so it cannot fall back to the working tree — that would report on the" \
+            "wrong commit. Refusing instead." \
+            "" \
+            "To push anyway (the docs build then runs only in CI):" \
+            "    MKDOCS_STRICT_BYPASS=1 git push ..." \
+            "" \
+            >&2
         return 1
     fi
     # ⛔ A subshell, not a bare command: bash starts a bare `cmd &` with SIGINT
@@ -153,7 +153,8 @@ WORKTREE_FAILED
 # --- Tiered execution --------------------------------------------------------
 # Tier 1: native mkdocs
 if command -v mkdocs >/dev/null 2>&1; then
-    echo "[pre-push-mkdocs] Using native mkdocs ($(mkdocs --version 2>&1 | head -1))"
+    _mkdocs_version="$(mkdocs --version 2>&1)"
+    echo "[pre-push-mkdocs] Using native mkdocs (${_mkdocs_version%%$'\n'*})"
     # ⛔ Every non-zero lands here — broken links, a failed checkout, an aborted
     # build — so this line names the commit, gives no advice, and stops (#2210).
     for _sha in "${_build_shas[@]}"; do

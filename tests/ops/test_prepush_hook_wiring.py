@@ -946,6 +946,74 @@ def test_the_dispatcher_s_refusals_are_printed_without_cat_on_path(
     assert "command not found" not in r.stderr, r.stderr
 
 
+@pytest.mark.parametrize("case", ["preflight-banner", "preflight-refs-missing",
+                                  "protect-refs-missing", "mkdocs-checkout-failed"])
+def test_the_guards_refusals_are_printed_without_cat_on_path(
+    tmp_path: Path, case: str
+) -> None:
+    """#2801: the guards' own messages need no `cat`, `basename` or `head`
+    either. Without them a refusal still exits non-zero, but used to say
+    nothing but `cat: command not found` — so the way out it names was lost."""
+    work = _make_repo(tmp_path, _PROTECT_ONLY)
+    ops = work / "scripts" / "ops"
+    guard, said = {
+        "preflight-banner": ("require_preflight_pass.sh", "Push blocked"),
+        "preflight-refs-missing": ("require_preflight_pass.sh", "git checkout HEAD --"),
+        "protect-refs-missing": ("protect_main_push.sh", "git checkout HEAD --"),
+        "mkdocs-checkout-failed": ("pre_push_mkdocs_strict.sh", "MKDOCS_STRICT_BYPASS=1"),
+    }[case]
+    bindir = tmp_path / "bin"
+    bindir.mkdir()
+    symlink_or_skip(shutil.which("bash"), bindir / "bash")
+    if case.endswith("refs-missing"):
+        (ops / "_prepush_refs.sh").unlink()
+    if case == "preflight-banner":
+        # A python that starts: the banner then has no "install one first" line.
+        symlink_or_skip(sys.executable, bindir / "python3")
+    if case == "mkdocs-checkout-failed":
+        # mkdocs on PATH takes Tier 1; a git whose `worktree add` fails takes
+        # the refusal. Both are bash scripts, so PATH still has no cat/head.
+        (bindir / "mkdocs").write_text("#!/usr/bin/env bash\necho 'mkdocs 1.0'\necho more\n",
+                                       encoding="utf-8", newline="\n")
+        (bindir / "git").write_text(
+            "#!/usr/bin/env bash\n"
+            'for a in "$@"; do [ "$p" = worktree ] && [ "$a" = add ] && exit 128; p=$a; done\n'
+            f'exec {shutil.which("git")} "$@"\n', encoding="utf-8", newline="\n")
+        for tool in ("mkdocs", "git"):
+            (bindir / tool).chmod(0o755)
+    else:
+        symlink_or_skip(shutil.which("git"), bindir / "git")
+    sha = _git(work, "rev-parse", "HEAD").stdout.strip()
+    env = {k: v for k, v in os.environ.items()
+           if k not in ("GIT_PREFLIGHT_BYPASS", "MKDOCS_STRICT_BYPASS")}
+    env.update(GIT_CONFIG_GLOBAL=os.devnull, GIT_CONFIG_NOSYSTEM="1",
+               GIT_PREFLIGHT_STRICT="1", PATH=str(bindir))
+    r = subprocess.run(  # subprocess-timeout: ignore
+        [_BASH, str(ops / guard), "origin", "url"], cwd=work,
+        input=f"refs/heads/f {sha} refs/heads/f {'0' * 40}\n",
+        capture_output=True, text=True, encoding="utf-8", errors="replace", env=env)
+    out = r.stdout + r.stderr
+    assert r.returncode == 1 and said in r.stderr, out
+    assert "command not found" not in out, out
+    # The words around the anchor, as the heredocs printed them.
+    if case == "preflight-banner":
+        lines = r.stderr.split("\n")
+        assert [i for i, x in enumerate(lines) if not x] == [0, len(lines) - 2,
+                                                          len(lines) - 1], out
+        assert f"║  HEAD:    {sha}" in lines, out
+        assert f"║  Missing marker: .preflight-ok.{sha}" in lines, out
+        assert "║      GIT_PREFLIGHT_STRICT=1 is set" in lines, out
+    elif case == "preflight-refs-missing":
+        assert f"is not next to {ops / guard}," in r.stderr, out
+    elif case == "protect-refs-missing":
+        assert f"⛔ {ops / guard} 旁邊找不到" in r.stderr, out
+    if case.endswith("refs-missing"):
+        # The message replaces bash's own: the guard stops before sourcing.
+        assert "No such file or directory" not in out, out
+    elif case == "mkdocs-checkout-failed":
+        assert "[pre-push-mkdocs] Using native mkdocs (mkdocs 1.0)\n" in r.stdout, out
+
+
 # ---------------------------------------------------------------------------
 # "Nothing to push" is not refused, whatever the environment says (#1846)
 # ---------------------------------------------------------------------------

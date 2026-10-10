@@ -59,23 +59,23 @@ _prepush_dir="${BASH_SOURCE[0]%/*}"
 # worse, so name the way back here instead.
 if [ ! -r "$_prepush_dir/_prepush_refs.sh" ]; then
     printf '\n[require_preflight_pass] ⛔ _prepush_refs.sh is not next to %s,\nso the gate cannot tell what is being pushed.\n' "${BASH_SOURCE[0]}" >&2
-    cat >&2 <<'PREPUSH_MISSING'
-
-If that is in scripts/ops/, the helper is gone from your checkout. It is
-version-controlled: restore it from HEAD (this works when the deletion is
-staged too):
-    git checkout HEAD -- :/scripts/ops/_prepush_refs.sh
-The installer cannot restore it.
-
-⛔ Do not hand-write a hook that runs only this script: that silently drops
-protect_main_push and the mkdocs strict check while this one still looks fine.
-⛔ Do not use `pre-commit install --hook-type pre-push` either: a hook run by
-pre-commit sees no refspec at all (#1664).
-
-⛔ Do not reach for --no-verify and do not delete .git/hooks/pre-push: both
-turn off the direct-push-to-main guard for good, which is what #1664 fixed.
-
-PREPUSH_MISSING
+    printf '%s\n' \
+        '' \
+        'If that is in scripts/ops/, the helper is gone from your checkout. It is' \
+        'version-controlled: restore it from HEAD (this works when the deletion is' \
+        'staged too):' \
+        '    git checkout HEAD -- :/scripts/ops/_prepush_refs.sh' \
+        'The installer cannot restore it.' \
+        '' \
+        '⛔ Do not hand-write a hook that runs only this script: that silently drops' \
+        'protect_main_push and the mkdocs strict check while this one still looks fine.' \
+        '⛔ Do not use `pre-commit install --hook-type pre-push` either: a hook run by' \
+        'pre-commit sees no refspec at all (#1664).' \
+        '' \
+        '⛔ Do not reach for --no-verify and do not delete .git/hooks/pre-push: both' \
+        'turn off the direct-push-to-main guard for good, which is what #1664 fixed.' \
+        '' \
+        >&2
     exit 1
 fi
 # shellcheck source=scripts/ops/_prepush_refs.sh
@@ -264,42 +264,42 @@ else
 fi
 
 # No marker — block with actionable instructions.
-cat >&2 <<EOF
-
-╔══════════════════════════════════════════════════════════════╗
-║  ⛔ Push blocked — no preflight PASS for this commit         ║
-╠══════════════════════════════════════════════════════════════╣
-║                                                              ║
-║  Pushing: ${_missing_branch} -> ${_missing_sha}
-║  HEAD:    ${head_sha}
-║  Missing marker: $(basename "$marker")
-║                                                              ║
-║  No marker means one of: preflight never ran on this commit,
-║  it did not pass, or a later FAIL on this commit removed it —
-║  from ANY worktree standing on it, since markers are shared.
-║                                                              ║
-║  ⛔ The marker names a COMMIT, not "now". If HEAD above is a
-║  different commit, running preflight where you stand writes
-║  the marker for THAT commit and this push stays blocked.
-║                                                              ║
-║  Run this in bash (on Windows: Git Bash) before pushing:
-${_checkout_hint}${_py_note:+
-${_py_note}}
-║                                                              ║
-║  Emergency bypass (use sparingly):                           ║
-║      GIT_PREFLIGHT_BYPASS=1 git push ...                     ║
-║                                                              ║
-║  Why the marker is required for THIS push:
-║      ${marker_reason}
-║                                                              ║
-║  ⛔ If the reason above is about \`gh\`, there is no PR to close
-║  and no WIP branch to switch to — run the preflight above, or
-║  use the bypass. Force strict mode anywhere:
-║      GIT_PREFLIGHT_STRICT=1 git push ...                     ║
-║                                                              ║
-║  Why: pushing without preflight risks CI-visible failures    ║
-║  that block PR merges. See dev-rules #12.                    ║
-╚══════════════════════════════════════════════════════════════╝
-
-EOF
+printf '%s\n' \
+    "" \
+    "╔══════════════════════════════════════════════════════════════╗" \
+    "║  ⛔ Push blocked — no preflight PASS for this commit         ║" \
+    "╠══════════════════════════════════════════════════════════════╣" \
+    "║                                                              ║" \
+    "║  Pushing: ${_missing_branch} -> ${_missing_sha}" \
+    "║  HEAD:    ${head_sha}" \
+    "║  Missing marker: ${marker##*/}" \
+    "║                                                              ║" \
+    "║  No marker means one of: preflight never ran on this commit," \
+    "║  it did not pass, or a later FAIL on this commit removed it —" \
+    "║  from ANY worktree standing on it, since markers are shared." \
+    "║                                                              ║" \
+    "║  ⛔ The marker names a COMMIT, not \"now\". If HEAD above is a" \
+    "║  different commit, running preflight where you stand writes" \
+    "║  the marker for THAT commit and this push stays blocked." \
+    "║                                                              ║" \
+    "║  Run this in bash (on Windows: Git Bash) before pushing:" \
+    "${_checkout_hint}" \
+    ${_py_note:+"$_py_note"} \
+    "║                                                              ║" \
+    "║  Emergency bypass (use sparingly):                           ║" \
+    "║      GIT_PREFLIGHT_BYPASS=1 git push ...                     ║" \
+    "║                                                              ║" \
+    "║  Why the marker is required for THIS push:" \
+    "║      ${marker_reason}" \
+    "║                                                              ║" \
+    "║  ⛔ If the reason above is about \`gh\`, there is no PR to close" \
+    "║  and no WIP branch to switch to — run the preflight above, or" \
+    "║  use the bypass. Force strict mode anywhere:" \
+    "║      GIT_PREFLIGHT_STRICT=1 git push ...                     ║" \
+    "║                                                              ║" \
+    "║  Why: pushing without preflight risks CI-visible failures    ║" \
+    "║  that block PR merges. See dev-rules #12.                    ║" \
+    "╚══════════════════════════════════════════════════════════════╝" \
+    "" \
+    >&2
 exit 1

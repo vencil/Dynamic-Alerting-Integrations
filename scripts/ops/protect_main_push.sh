@@ -42,21 +42,21 @@ _prepush_dir="${BASH_SOURCE[0]%/*}"
 # 全都有害，所以這裡自己把可行的出路講出來。
 if [ ! -r "$_prepush_dir/_prepush_refs.sh" ]; then
     printf '\n[protect_main_push] ⛔ %s 旁邊找不到 _prepush_refs.sh，本守衛無法判斷你在推什麼。\n' "${BASH_SOURCE[0]}" >&2
-    cat >&2 <<'PREPUSH_MISSING'
-
-如果那在 scripts/ops/ 裡：helper 從你的 checkout 裡不見了。它受版控，
-從 HEAD 還原（刪除已經 stage 也適用）：
-    git checkout HEAD -- :/scripts/ops/_prepush_refs.sh
-安裝器還原不了它。
-
-⛔ 不要自己 printf 一個只掛本檔的 hook：那會把 require_preflight_pass 與
-mkdocs strict 靜默拆掉，而畫面上本守衛還在。⛔ 也不要用
-`pre-commit install --hook-type pre-push`：它不會把守衛裝上（#1689）。
-
-⛔ 不要用 --no-verify、也不要刪掉 .git/hooks/pre-push 來轉綠——那會把擋直推
-main 這道閘門永久關掉，正是 #1664 修掉的那件事。
-
-PREPUSH_MISSING
+    printf '%s\n' \
+        '' \
+        '如果那在 scripts/ops/ 裡：helper 從你的 checkout 裡不見了。它受版控，' \
+        '從 HEAD 還原（刪除已經 stage 也適用）：' \
+        '    git checkout HEAD -- :/scripts/ops/_prepush_refs.sh' \
+        '安裝器還原不了它。' \
+        '' \
+        '⛔ 不要自己 printf 一個只掛本檔的 hook：那會把 require_preflight_pass 與' \
+        'mkdocs strict 靜默拆掉，而畫面上本守衛還在。⛔ 也不要用' \
+        '`pre-commit install --hook-type pre-push`：它不會把守衛裝上（#1689）。' \
+        '' \
+        '⛔ 不要用 --no-verify、也不要刪掉 .git/hooks/pre-push 來轉綠——那會把擋直推' \
+        'main 這道閘門永久關掉，正是 #1664 修掉的那件事。' \
+        '' \
+        >&2
     exit 1
 fi
 # shellcheck source=scripts/ops/_prepush_refs.sh
