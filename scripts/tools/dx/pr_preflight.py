@@ -1069,18 +1069,46 @@ def check_conflict() -> CheckResult:
 _INSTALLER = Path(__file__).resolve().parents[2] / "ops" / "install_prepush_hook.sh"
 
 
-def _shim_body() -> Optional[str]:
+def _shim_body() -> Tuple[Optional[str], str]:
     """安裝器寫出的 shim 全文：`IFS= read -r -d '' SHIM_BODY <<'VIBE_SHIM_EOF'`
-    的 heredoc，每行接 `\n`。讀檔解析而不 shell out，理由見安裝器檔頭。"""
+    的 heredoc，每行接 `\n`。讀檔解析而不 shell out，理由見安裝器檔頭。
+
+    回傳 `(全文, "")`；取不出時 `(None, 原因)`，原因照實寫是哪一種（#2773）。"""
     try:
-        lines = _INSTALLER.read_bytes().decode("utf-8").split("\n")
-    except (OSError, UnicodeDecodeError):
-        return None
+        data = _INSTALLER.read_bytes()
+    except OSError as e:
+        return None, f"讀不到 {_INSTALLER}（{e}）"
+    try:
+        lines = data.decode("utf-8").split("\n")
+    except UnicodeDecodeError:
+        return None, f"{_INSTALLER} 不是 UTF-8"
     start = [i for i, x in enumerate(lines) if x.endswith("<<'VIBE_SHIM_EOF'")]
     end = [i for i, x in enumerate(lines) if x == "VIBE_SHIM_EOF"]
     if len(start) != 1 or len(end) != 1 or end[0] <= start[0]:
-        return None
-    return "".join(x + "\n" for x in lines[start[0] + 1:end[0]])
+        return None, f"{_INSTALLER} 裡找不到恰好一段 VIBE_SHIM_EOF heredoc"
+    return "".join(x + "\n" for x in lines[start[0] + 1:end[0]]), ""
+
+
+def _hooks_path_origin(gd: Path, env: dict) -> str:
+    """core.hooksPath 設在哪一層、哪個檔，照實寫進訊息（#2776）：設在 global 時，在
+    repo 裡 `git config --unset` 只回 rc 5。⛔ 只供訊息：判定看不帶旗標的那次讀取，
+    `--show-scope` 要 git 2.26+，讀不出來就省略。"""
+    r = run(["git", "--git-dir", str(gd), "config", "--show-scope", "--show-origin",
+             "--get", "core.hooksPath"], timeout=30, env=env)
+    parts = (r.stdout or "").split("\t", 2)
+    if r.returncode != 0 or len(parts) < 3:
+        return ""
+    return f"（scope {parts[0]}，來自 {parts[1]}）"
+
+
+def _worktree_of(gd: Path) -> str:
+    """linked worktree 的 git 目錄是 admin 目錄，它的 gitdir 檔記著那棵登記在哪裡；
+    相對路徑以 admin 目錄為基準。讀不到（不是 linked worktree）就省略。"""
+    try:
+        raw = os.fsdecode((gd / "gitdir").read_bytes()).strip()
+    except OSError:
+        return ""
+    return f"（worktree {os.path.normpath(os.path.join(gd, raw, os.pardir))}）"
 
 
 def _prepush_guards_wired() -> Tuple[Optional[bool], str]:
@@ -1125,9 +1153,10 @@ def _prepush_guards_wired() -> Tuple[Optional[bool], str]:
         hp = run(["git", "--git-dir", str(gd), "config", "--get", "core.hooksPath"],
                  timeout=30, env=env)
         if hp.returncode == 0:
+            value = (hp.stdout or "").rstrip("\n")
             return None, (
-                f"量不到：以 {gd} 為 git 目錄讀到 core.hooksPath 設成 "
-                f"{(hp.stdout or '').strip()!r}；本 repo 的守衛只在每棵 worktree"
+                f"量不到：以 {gd}{_worktree_of(gd)} 為 git 目錄讀到 core.hooksPath 設成 "
+                f"{value!r}{_hooks_path_origin(gd, env)}；本 repo 的守衛只在每棵 worktree"
                 " 都沒設它時判定。"
             )
         if hp.returncode != 1:
@@ -1151,12 +1180,9 @@ def _prepush_guards_wired() -> Tuple[Optional[bool], str]:
             f"量不到：{hook.parent} 是 symlink；本 repo 的守衛只在本 repo 自己的"
             " hooks 目錄判定與安裝，不經過連結。"
         )
-    shim = _shim_body()
+    shim, why_not = _shim_body()
     if shim is None:
-        return None, (
-            f"量不到：無法從 {_INSTALLER} 取出 shim 全文（VIBE_SHIM_EOF heredoc）。"
-            "這不代表守衛沒裝。"
-        )
+        return None, f"量不到：取不出安裝器的 shim 全文（{why_not}）。這不代表守衛沒裝。"
 
     # ⛔ 不是 shim 時，訊息只說它和安裝器產生的 shim 不同並給處方，不預告安裝器會怎麼
     # 處置：它依那是不是 git-lfs 的 hook、pre-commit 樣板或守衛複本而取代或拒絕，在這裡
