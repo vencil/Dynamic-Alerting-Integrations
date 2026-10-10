@@ -579,3 +579,47 @@ def test_da_guard_without_the_schedules_flag_is_named_as_too_old(tmp_path):
         tv.load_served_tree(tmp_path, binary=str(other), schedules=True)
     assert "older than this tool" not in str(ei.value)
     assert not ei.value.binary_fault
+
+
+# ── load_key_refs（#1822）─────────────────────────────────────────────────
+
+
+def test_load_key_refs_names_every_spelling_the_exporter_assigns(tmp_path, da_guard):
+    """legacy alias、`_critical`、維度鍵都由 exporter 判給 canonical metric；Python 不鏡射。"""
+    conf_d = _tree(tmp_path, {
+        "_defaults.yaml": "defaults:\n  mysql_threads_running: 30\n",
+        "t1.yaml": "tenants:\n  t1:\n    mysql_cpu: \"50\"\n    mysql_cpu_util: 1\n",
+        "t2.yaml": "tenants:\n  t2:\n    mysql_cpu_critical: \"90\"\n    mysql_cpu{db='a'}: \"5\"\n",
+    })
+    tree = tv.load_key_refs(conf_d, ["mysql_threads_running"], binary=da_guard)
+    assert tree.parse_failed == [] and tree.unreadable == [] and tree.unscanned == []
+    assert [(r.file, r.owner, r.key) for r in tree.refs["mysql_threads_running"]] == [
+        ("_defaults.yaml", "", "mysql_threads_running"),
+        ("t1.yaml", "t1", "mysql_cpu"),
+        ("t2.yaml", "t2", "mysql_cpu_critical"),
+        ("t2.yaml", "t2", "mysql_cpu{db='a'}"),
+    ]
+
+
+def test_load_key_refs_returns_dropped_files_instead_of_raising(tmp_path, da_guard):
+    """exit 3：exporter 丟掉的檔是呼叫端要讀的答案，不 raise ParseFailedError；stderr 整份保留。"""
+    conf_d = _tree(tmp_path, {
+        "_defaults.yaml": "defaults:\n  mysql_threads_running: 30\noptional_overrides: 5\n",
+        "t2.yaml": "tenants:\n  t2:\n    mysql_threads_running: \"40\"\n",
+    })
+    tree = tv.load_key_refs(conf_d, ["mysql_threads_running"], binary=da_guard)
+    assert tree.parse_failed == ["_defaults.yaml"]
+    assert [r.file for r in tree.refs["mysql_threads_running"]] == ["t2.yaml"]
+    assert any("cannot unmarshal" in ln for ln in tree.stderr_lines), tree.stderr_lines
+
+
+def test_load_key_refs_from_a_da_guard_without_the_subcommand_is_stale(tmp_path):
+    """沒有 key-refs 的舊 da-guard（exit 2，`-h` 也 exit 2）被說成太舊，不是樹的錯。"""
+    require_shebang_scripts()  # the stand-in da-guard below is a `#!` script
+    fake = tmp_path / "old-da-guard"
+    fake.write_text("#!/bin/sh\necho 'unexpected argument' >&2\nexit 2\n", encoding="utf-8")
+    fake.chmod(0o755)
+    with pytest.raises(tv.KeyRefsError) as ei:
+        tv.load_key_refs(tmp_path, ["m"], binary=str(fake))
+    assert ei.value.stale and ei.value.binary_fault
+    assert ei.value.stderr_lines == ["unexpected argument"]

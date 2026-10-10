@@ -76,6 +76,12 @@
 // effective config as tenant-api's /effective resolves it, with profile
 // binding and per-key sources, as JSON. Same exit codes as served-values
 // (3 also for paths the walk cannot read, named in unreadable, #2588).
+//
+// Subcommand `key-refs` (#1822, key_refs.go) prints, as JSON, every key of a
+// tree whose platform key is one of the --metric keys as ValidateTenantKeys
+// judges it (retired alias spellings, `_critical`, dimensional keys), beside
+// the load's parse_failed / unreadable, for deprecate_rule's pre-check. Same
+// exit codes as served-values.
 package main
 
 import (
@@ -172,11 +178,15 @@ func parseFlags(args []string, errOut io.Writer) (*flags, error) {
 		fmt.Fprintf(errOut, "Usage: %s [flags]\n", programName)
 		fmt.Fprintf(errOut, "       %s %s --config-dir <dir> [--at <RFC3339>]\n", programName, servedValuesCmd)
 		fmt.Fprintf(errOut, "       %s %s --config-dir <dir>\n", programName, effectiveCmd)
+		fmt.Fprintf(errOut, "       %s %s --config-dir <dir> --metric <key> [--metric <key> ...]\n", programName, keyRefsCmd)
 		fmt.Fprintf(errOut, "Validate a conf.d/ tree against the C-12 Dangling Defaults Guard.\n")
 		fmt.Fprintf(errOut, "'%s' prints the values the exporter's /metrics serves per tenant, as JSON "+
 			"(see '%s %s -h').\n", servedValuesCmd, programName, servedValuesCmd)
 		fmt.Fprintf(errOut, "'%s' prints every tenant's effective config as tenant-api's /effective resolves it, "+
-			"with profile binding and per-key sources, as JSON (see '%s %s -h').\n\n", effectiveCmd, programName, effectiveCmd)
+			"with profile binding and per-key sources, as JSON (see '%s %s -h').\n", effectiveCmd, programName, effectiveCmd)
+		fmt.Fprintf(errOut, "'%s' prints every key that belongs to the given metric keys as the exporter judges it "+
+			"(retired alias spellings, _critical, dimensional keys), as JSON (see '%s %s -h').\n\n",
+			keyRefsCmd, programName, keyRefsCmd)
 		fs.PrintDefaults()
 		fmt.Fprintf(errOut, "\nExit codes:\n  0  clean\n  1  guard found errors\n  2  caller error\n"+
 			"  3  config files the exporter cannot decode or cannot read; the report names them (fix, re-run)\n")
@@ -204,6 +214,9 @@ func run(args []string, stdout, errOut io.Writer) int {
 	}
 	if len(args) > 0 && args[0] == effectiveCmd {
 		return runEffective(args[1:], stdout, errOut)
+	}
+	if len(args) > 0 && args[0] == keyRefsCmd {
+		return runKeyRefs(args[1:], stdout, errOut)
 	}
 
 	f, err := parseFlags(args, errOut)
