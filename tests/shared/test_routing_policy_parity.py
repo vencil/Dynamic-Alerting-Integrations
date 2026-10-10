@@ -83,7 +83,9 @@ MATRIX = json.loads((Path(__file__).parent / "routing_policy_parity_matrix.json"
 
 # Exact key sets: a misspelt key read as absent would turn a row into one
 # that tests nothing while staying green.
-TOP_KEYS = {"_comment", "blocking_kinds", "tenant_ids", "trees"}
+TOP_KEYS = {"_comment", "blocking_kinds", "tenant_ids", "tenant_api_unmeasured", "trees"}
+# Why a tenant_api cell may be null (tenant-api's verdict is not measured).
+UNMEASURED_KINDS = {"nested_tree", "no_put_body", "outside_table"}
 TREE_KEYS = {"name", "files", "platform", "expect", "enforced_group_by_invalid"}
 PLATFORM_KINDS = {"routing_defaults_routes_ignored", "routing_in_unread_location",
                   "domain_policy_unusable",
@@ -236,6 +238,65 @@ def test_matrix_is_not_vacuous() -> None:
         assert required in names, required
 
 
+def unmeasured_errors(matrix: dict) -> list:
+    """A null tenant_api cell hides whatever tenant-api would answer, so it
+    is allowed only where the verdict genuinely is not measured: the cell is
+    listed in tenant_api_unmeasured with a kind the tree bears out and a
+    reason — and every listed cell is null."""
+    errors = []
+    table = matrix["tenant_api_unmeasured"]
+    trees = {t["name"]: t for t in matrix["trees"]}
+    for tree in matrix["trees"]:
+        for tenant, want in tree["expect"].items():
+            listed = table.get(tree["name"], {}).get(tenant)
+            if want["tenant_api"] is None and listed is None:
+                errors.append(f"{tree['name']} {tenant}: tenant_api is null but not in tenant_api_unmeasured "
+                              f"(measure it, or state why it cannot be)")
+            if want["tenant_api"] is not None and listed is not None:
+                errors.append(f"{tree['name']} {tenant}: tenant_api is measured, drop it from tenant_api_unmeasured")
+    for name, cells in table.items():
+        tree = trees.get(name)
+        for tenant, why in cells.items():
+            where = f"tenant_api_unmeasured {name} {tenant}"
+            if tree is None or tenant not in tree["expect"]:
+                errors.append(f"{where}: no such cell")
+                continue
+            if not (isinstance(why, dict) and set(why) == {"kind", "reason"}
+                    and why["kind"] in UNMEASURED_KINDS and str(why["reason"]).strip()):
+                errors.append(f"{where}: must be {{kind: one of {sorted(UNMEASURED_KINDS)}, reason}}")
+                continue
+            nested = any("/" in f for f in tree["files"])
+            if why["kind"] == "nested_tree" and not nested:
+                errors.append(f"{where}: nested_tree, but no file of the tree is below the root")
+            if why["kind"] == "no_put_body" and (nested or f"{tenant}.yaml" in tree["files"]):
+                errors.append(f"{where}: no_put_body, but files[{tenant}.yaml] is the PUT body (or the tree "
+                              f"is nested_tree)")
+            if why["kind"] == "outside_table" and (nested or f"{tenant}.yaml" not in tree["files"]):
+                errors.append(f"{where}: outside_table needs a measurable PUT (a root files[{tenant}.yaml])")
+    return errors
+
+
+def test_null_tenant_api_cells_are_unmeasured_only() -> None:
+    errors = unmeasured_errors(MATRIX)
+    assert not errors, "\n".join(errors)
+
+
+def test_unmeasured_guard_is_red() -> None:
+    """Nulling a measured cell, or listing a measured one, is red."""
+    m = json.loads(json.dumps(MATRIX))
+    cell = next(w for t in m["trees"] if t["name"] == "domain-policy-merge-key-order"
+                for k, w in t["expect"].items() if k == "t-mo-own")
+    cell["tenant_api"] = None
+    assert any("t-mo-own: tenant_api is null but not in tenant_api_unmeasured" in e
+               for e in unmeasured_errors(m))
+    m = json.loads(json.dumps(MATRIX))
+    m["tenant_api_unmeasured"]["domain-policy-null"] = {"t-null": {"kind": "outside_table", "reason": "r"}}
+    assert any("drop it from tenant_api_unmeasured" in e for e in unmeasured_errors(m))
+    m = json.loads(json.dumps(MATRIX))
+    m["tenant_api_unmeasured"]["invalid-tenant-ids"]["UPPER"]["kind"] = "nested_tree"
+    assert any("nested_tree, but no file" in e for e in unmeasured_errors(m))
+
+
 def test_matrix_keys_are_exactly_the_known_ones() -> None:
     assert set(MATRIX) == TOP_KEYS, set(MATRIX) ^ TOP_KEYS
     for tree in MATRIX["trees"]:
@@ -374,20 +435,38 @@ def _want(want: dict, key: str):
 
 
 def _generator_put(want: dict, refused: str | None, policy_rows: list, esc: dict | None) -> dict | None:
-    """The tenant_api cell as the generator would judge that PUT, for a cell
-    with python_differs: where it refuses the tenant's own file — the file
-    cannot be read (400) or its routing breaks a domain policy (403) — and
-    tenant-api lets the PUT through, the generator's code; else (it refuses
-    nothing, or both refuse) tenant-api's own cell: no difference."""
+    """The tenant_api cell as the generator would judge that PUT (the
+    tenant's own file verbatim), from what this reader found for the
+    tenant: it refuses the write when the file cannot be read (400) or the
+    routing breaks a domain policy (403: a receiver-type line or an
+    escalation violation). Platform-file findings are no finding of the
+    write (ADR-036: a base tree's errors do not refuse a clean write), so
+    an unusable policy file refuses nothing here.
+
+    Ranked against tenant-api's cell on whether each side refuses: the
+    generator refusing what tenant-api answers 'ok' gives the generator's
+    code; tenant-api answering 503 (POLICY_UNAVAILABLE: a policy file it
+    cannot use) where the generator refuses nothing gives 'ok'; otherwise
+    (both refuse, or neither) tenant-api's own cell: no difference.
+
+    Not modelled: the generator's strict ERRORs of the tenant's own
+    resolved routing (values_not_string, group_by_invalid, a refusal) —
+    tenant-api answers 400 for the ones the body writes and judges none
+    from a routing layer (#2431); a cell where they differ is not checked
+    here."""
     api = want["tenant_api"]
+    if api is None:
+        return None
     gen = None
     if refused == "tenant_file_unreadable":
         gen = "400"
     elif policy_rows or (esc is not None and esc["verdict"] == "violation"):
         gen = "403"
-    if gen is None or api is None or api["put"] != "ok":
-        return api
-    return {**api, "put": gen}
+    if gen is not None and api["put"] == "ok":
+        return {**api, "put": gen}
+    if gen is None and api["put"] == "503":
+        return {**api, "put": "ok"}
+    return api
 
 
 @pytest.mark.parametrize("tree", MATRIX["trees"], ids=lambda t: t["name"])
@@ -428,9 +507,11 @@ def test_python_reader_matches_the_table(tree, tmp_path: Path) -> None:
         assert refused.get(tenant) == _want(want, "refused"), (where, refused)
         esc = _escalation(tenant, rc, _requiring_domains(policies, tenant), got.schema_warnings)
         assert esc == want["escalation"], (where, esc)
-        if want["python_differs"] is not None:
-            api = _generator_put(want, refused.get(tenant), mine, esc)
-            assert want["python_differs"]["tenant_api"] == api, (where, api)
+        # Every measured tenant_api cell, python_differs or not: a verdict the
+        # generator would give differently is a difference python_differs
+        # must carry (and the catalog then accept), never an unrecorded one.
+        api = _generator_put(want, refused.get(tenant), mine, esc)
+        assert _want(want, "tenant_api") == api, (where, api)
 
     # Platform-file findings: the table's rows, and no other.
     got_platform = sorted(

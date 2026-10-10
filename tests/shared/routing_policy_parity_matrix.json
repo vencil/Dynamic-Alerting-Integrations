@@ -75,7 +75,7 @@
     "A YAML merge key (`<<:`) in a platform tenants.<id> entry is expanded before the keys are read, as every reader's decoder does (#2291); an explicit key wins, earlier sources first.",
     "#2437/#2438 - the same holds in domain_policies, a domain policy, its constraints and routing_profiles, and at a file's top level (a `<<:` there supplies domain_policies / routing_profiles / _routing_defaults / tenants; an explicit key replaces a merged one whole); an alias key names its anchor's text.",
     "#2677 - merge precedence is PyYAML's SafeConstructor.flatten_mapping in the generator and da-guard: a key the mapping writes itself wins; among several merge keys in one mapping (`<<:` beside a tagged `!!merge x:`) the LATER one wins; within one merge sequence (`<<: [*a, *b]`) the EARLIER source wins; a merge source is itself flattened by the same rules first. The trees domain-policy-merge-key-order(-top) pin it; their policy cells are the generator's own --strict lines.",
-    "#2677 R1 - a merge value PyYAML refuses to merge - not a mapping nor a list of mappings (`!!merge q: 5`; `<<: 5` alike, but the exporter's own decode refuses that file, so it is no tree here) - drops the whole file in the generator (its strict \"could not be used\" line) and in da-guard (domain_policy_unusable, field \"\", the finding naming the file alone). tenant-api reads a merge key with yaml.v3's own merge, which differs from the generator's (#2663), and refuses a file with a merge key spelled other than `<<` anywhere in it (DomainPoliciesShapeError; domain-policy-tagged-merge-value-scalar, and domain-policy-merge-key-order t-mo-earlier and t-mo-seq-key, where the generator's verdict is the same). tenant_api is null where its verdict differs from the generator's - domain-policy-merge-key-order-top, domain-policy-merge-anchor-aliased and the other domain-policy-merge-key-order tenants (tenant-api refuses the file: 503, POLICY_UNAVAILABLE, hub #2486 Q7-2).",
+    "#2677 R1 - a merge value PyYAML refuses to merge - not a mapping nor a list of mappings (`!!merge q: 5`; `<<: 5` alike, but the exporter's own decode refuses that file, so it is no tree here) - drops the whole file in the generator (its strict \"could not be used\" line) and in da-guard (domain_policy_unusable, field \"\", the finding naming the file alone). tenant-api reads a merge key with yaml.v3's own merge, which differs from the generator's (#2663), and refuses a file with a merge key spelled other than `<<` anywhere in it (DomainPoliciesShapeError; domain-policy-tagged-merge-value-scalar, and domain-policy-merge-key-order t-mo-earlier and t-mo-seq-key, where the generator's verdict is the same). tenant-api refuses the file there: 503, POLICY_UNAVAILABLE (hub #2486 Q7-2) - where the tenant's routing breaks a policy the generator refuses the PUT too (403: both refuse, no difference), else python_differs.tenant_api is 'ok' (go_refuses).",
     "escalation (#2325): the ADR-007 require_critical_escalation verdict. null = no domain policy with",
     "`require_critical_escalation: true` lists the tenant, or it has no resolved routing / main receiver",
     "(nothing is judged). Else {verdict, leaks}: verdict 'violation' = severity=critical alerts reach no",
@@ -121,7 +121,13 @@
     "B2 (#2341) - tenant_api.batch may carry `unset` (a list; only '_routing'): the keys the op removes from the tenant's block on disk after its patch is laid over it. Removing `_routing` turns routing back on for a disabled tenant, so the op is judged like one that writes `_routing`: 'policy_violation' when the routing it re-enables breaks the domain policy, 'ok' otherwise.",
     "tenant_ids (#2341 R8, ADR-035): the ids every reader refuses (Python _lib_validation.is_valid_tenant_id, Go routingpolicy.IsValidTenantID) and accepts. The rule is the tenant-config schema's definitions.tenantId, a DNS-1123 label: 1-63 characters of [a-z0-9-], starting and ending with [a-z0-9] - so UPPER, `_`, a leading or trailing `-` and 64 characters are refused. A declared tenant with a refused id makes the generator refuse the WHOLE tree in every mode (ADR-035 D3: rc 1, nothing written); within the tree it renders NOTHING (no route, receiver or inhibit rule): refused 'invalid_tenant_id', targets null - load_tenant_tree's blocking `WARN ... skipping` (--strict: ERROR), da-guard's invalid_tenant_id (Field <file>:tenants.<id>), tenant-api's 400 on a write to that id. schema_search_accepts: ids the schema's `propertyNames` check (Python jsonschema; JSON Schema `pattern` is a SEARCH and Python's `$` matches before a trailing newline) lets through although every decoded-key reader refuses them - the accepted gap ADR-035 D2 names; Python asserts both halves, Go the refusal.",
     "#2341 - a disabling string is decided as _lib_validation.is_disabled decides it: Python str.strip() (U+001C-U+001F are whitespace too) then lower() on the remaining text, which must be ASCII (U+0130 'I with dot' never lowers to 'i'): `\"\\x1coff\"` disables, `\"d\\u0130sable\"` is routing_not_mapping.",
-    "#2659 - `domain_policies: null` (`~`, a bare key) in a _domain_policy.yaml is unusable in every reader: the generator's --strict drops the block (\"domain policy file could not be used\"), da-guard reports domain_policy_unusable (field domain_policies), and tenant-api refuses the file (routingpolicy.DomainPoliciesShapeError, the shape check da-guard applies): on a hot reload it keeps the last good policy (tested in tenant-api, not expressible here); with none, as here, direct-mode writes the policy judges answer 503 POLICY_UNAVAILABLE (hub #2486 Q7-2)."
+    "#2659 - `domain_policies: null` (`~`, a bare key) in a _domain_policy.yaml is unusable in every reader: the generator's --strict drops the block (\"domain policy file could not be used\"), da-guard reports domain_policy_unusable (field domain_policies), and tenant-api refuses the file (routingpolicy.DomainPoliciesShapeError, the shape check da-guard applies): on a hot reload it keeps the last good policy (tested in tenant-api, not expressible here); with none, as here, direct-mode writes the policy judges answer 503 POLICY_UNAVAILABLE (hub #2486 Q7-2).",
+    "tenant_api_unmeasured (ADR-036 step 2): every cell whose tenant_api is null - tenant-api's verdict is not",
+    "measured for it - as {tree: {tenant: {kind, reason}}}; the Python half asserts it is exactly the null cells",
+    "and checks the kind: nested_tree (the tree has a file below the root), no_put_body (no files[<tenant>.yaml]),",
+    "outside_table (tenant-api refuses for a reason the put verdicts do not express; the reason says which).",
+    "Every measured cell is held to the generator's verdict on that PUT (test_routing_policy_parity._generator_put),",
+    "so a null cannot hide a difference."
   ],
   "blocking_kinds": [
     "routing_defaults_null_below_root",
@@ -161,6 +167,180 @@
     "schema_search_accepts": [
       "abc\n"
     ]
+  },
+  "tenant_api_unmeasured": {
+    "top-level-yaml-merge-key-subtree": {
+      "t-sub-policy": {
+        "kind": "nested_tree",
+        "reason": "the tree has files below the conf.d root: tenant-api lists and writes tenant files at the root only, and its handler test cannot seed the subtree, so no PUT is measured"
+      },
+      "t-sub-profile": {
+        "kind": "nested_tree",
+        "reason": "the tree has files below the conf.d root: tenant-api lists and writes tenant files at the root only, and its handler test cannot seed the subtree, so no PUT is measured"
+      },
+      "t-sub-defaults": {
+        "kind": "nested_tree",
+        "reason": "the tree has files below the conf.d root: tenant-api lists and writes tenant files at the root only, and its handler test cannot seed the subtree, so no PUT is measured"
+      },
+      "t-sub-unread": {
+        "kind": "nested_tree",
+        "reason": "the tree has files below the conf.d root: tenant-api lists and writes tenant files at the root only, and its handler test cannot seed the subtree, so no PUT is measured"
+      }
+    },
+    "hier-a-routing-defaults-chain-deeper-wins": {
+      "t-root": {
+        "kind": "nested_tree",
+        "reason": "the tree has files below the conf.d root: tenant-api lists and writes tenant files at the root only, and its handler test cannot seed the subtree, so no PUT is measured"
+      },
+      "t-team": {
+        "kind": "nested_tree",
+        "reason": "the tree has files below the conf.d root: tenant-api lists and writes tenant files at the root only, and its handler test cannot seed the subtree, so no PUT is measured"
+      },
+      "t-deep": {
+        "kind": "nested_tree",
+        "reason": "the tree has files below the conf.d root: tenant-api lists and writes tenant files at the root only, and its handler test cannot seed the subtree, so no PUT is measured"
+      },
+      "t-other": {
+        "kind": "nested_tree",
+        "reason": "the tree has files below the conf.d root: tenant-api lists and writes tenant files at the root only, and its handler test cannot seed the subtree, so no PUT is measured"
+      }
+    },
+    "hier-a-null-receiver-below-root": {
+      "t-root": {
+        "kind": "nested_tree",
+        "reason": "the tree has files below the conf.d root: tenant-api lists and writes tenant files at the root only, and its handler test cannot seed the subtree, so no PUT is measured"
+      },
+      "t-own": {
+        "kind": "nested_tree",
+        "reason": "the tree has files below the conf.d root: tenant-api lists and writes tenant files at the root only, and its handler test cannot seed the subtree, so no PUT is measured"
+      }
+    },
+    "hier-b-routing-enforced-below-root": {
+      "t-team": {
+        "kind": "nested_tree",
+        "reason": "the tree has files below the conf.d root: tenant-api lists and writes tenant files at the root only, and its handler test cannot seed the subtree, so no PUT is measured"
+      }
+    },
+    "hier-c-profiles-scoped-to-subtree": {
+      "t-root": {
+        "kind": "nested_tree",
+        "reason": "the tree has files below the conf.d root: tenant-api lists and writes tenant files at the root only, and its handler test cannot seed the subtree, so no PUT is measured"
+      },
+      "t-a": {
+        "kind": "nested_tree",
+        "reason": "the tree has files below the conf.d root: tenant-api lists and writes tenant files at the root only, and its handler test cannot seed the subtree, so no PUT is measured"
+      },
+      "t-b": {
+        "kind": "nested_tree",
+        "reason": "the tree has files below the conf.d root: tenant-api lists and writes tenant files at the root only, and its handler test cannot seed the subtree, so no PUT is measured"
+      },
+      "t-c": {
+        "kind": "nested_tree",
+        "reason": "the tree has files below the conf.d root: tenant-api lists and writes tenant files at the root only, and its handler test cannot seed the subtree, so no PUT is measured"
+      },
+      "t-d": {
+        "kind": "nested_tree",
+        "reason": "the tree has files below the conf.d root: tenant-api lists and writes tenant files at the root only, and its handler test cannot seed the subtree, so no PUT is measured"
+      }
+    },
+    "hier-c-profile-name-defined-twice": {
+      "t-root": {
+        "kind": "nested_tree",
+        "reason": "the tree has files below the conf.d root: tenant-api lists and writes tenant files at the root only, and its handler test cannot seed the subtree, so no PUT is measured"
+      },
+      "t-team": {
+        "kind": "nested_tree",
+        "reason": "the tree has files below the conf.d root: tenant-api lists and writes tenant files at the root only, and its handler test cannot seed the subtree, so no PUT is measured"
+      }
+    },
+    "hier-d-subtree-policy-additive-and-scoped": {
+      "t-root": {
+        "kind": "nested_tree",
+        "reason": "the tree has files below the conf.d root: tenant-api lists and writes tenant files at the root only, and its handler test cannot seed the subtree, so no PUT is measured"
+      },
+      "t-team": {
+        "kind": "nested_tree",
+        "reason": "the tree has files below the conf.d root: tenant-api lists and writes tenant files at the root only, and its handler test cannot seed the subtree, so no PUT is measured"
+      }
+    },
+    "hier-e-duplicate-tenant-id": {
+      "t-x": {
+        "kind": "nested_tree",
+        "reason": "the tree has files below the conf.d root: tenant-api lists and writes tenant files at the root only, and its handler test cannot seed the subtree, so no PUT is measured"
+      }
+    },
+    "hier-b-enforced-in-unselected-carrier-spelling": {
+      "t-team": {
+        "kind": "nested_tree",
+        "reason": "the tree has files below the conf.d root: tenant-api lists and writes tenant files at the root only, and its handler test cannot seed the subtree, so no PUT is measured"
+      }
+    },
+    "hier-e-duplicate-tenant-with-null-body": {
+      "t-x": {
+        "kind": "nested_tree",
+        "reason": "the tree has files below the conf.d root: tenant-api lists and writes tenant files at the root only, and its handler test cannot seed the subtree, so no PUT is measured"
+      }
+    },
+    "hier-f-routing-defaults-in-nested-non-carrier": {
+      "t-team": {
+        "kind": "nested_tree",
+        "reason": "the tree has files below the conf.d root: tenant-api lists and writes tenant files at the root only, and its handler test cannot seed the subtree, so no PUT is measured"
+      }
+    },
+    "hier-a-root-routing-defaults-not-a-mapping": {
+      "t-root": {
+        "kind": "nested_tree",
+        "reason": "the tree has files below the conf.d root: tenant-api lists and writes tenant files at the root only, and its handler test cannot seed the subtree, so no PUT is measured"
+      },
+      "t-own": {
+        "kind": "nested_tree",
+        "reason": "the tree has files below the conf.d root: tenant-api lists and writes tenant files at the root only, and its handler test cannot seed the subtree, so no PUT is measured"
+      },
+      "t-team": {
+        "kind": "nested_tree",
+        "reason": "the tree has files below the conf.d root: tenant-api lists and writes tenant files at the root only, and its handler test cannot seed the subtree, so no PUT is measured"
+      }
+    },
+    "routing-defaults-not-mapping-below-root": {
+      "t-a": {
+        "kind": "nested_tree",
+        "reason": "the tree has files below the conf.d root: tenant-api lists and writes tenant files at the root only, and its handler test cannot seed the subtree, so no PUT is measured"
+      },
+      "t-b": {
+        "kind": "nested_tree",
+        "reason": "the tree has files below the conf.d root: tenant-api lists and writes tenant files at the root only, and its handler test cannot seed the subtree, so no PUT is measured"
+      }
+    },
+    "invalid-tenant-ids": {
+      "": {
+        "kind": "no_put_body",
+        "reason": "no files[<tenant>.yaml] holds the PUT body: the id is declared in another file"
+      },
+      "bad tenant": {
+        "kind": "no_put_body",
+        "reason": "no files[<tenant>.yaml] holds the PUT body: the id is declared in another file"
+      },
+      "Bad_Tenant!": {
+        "kind": "no_put_body",
+        "reason": "no files[<tenant>.yaml] holds the PUT body: the id is declared in another file"
+      },
+      "UPPER": {
+        "kind": "no_put_body",
+        "reason": "no files[<tenant>.yaml] holds the PUT body: the id is declared in another file"
+      }
+    },
+    "every-tenant-id-invalid": {
+      "1.5e3": {
+        "kind": "no_put_body",
+        "reason": "no files[<tenant>.yaml] holds the PUT body: the id is declared in another file"
+      }
+    },
+    "tenant-merge-tag-key-2700": {
+      "t1": {
+        "kind": "outside_table",
+        "reason": "tenant-api refuses this PUT 400 BAD_REQUEST for a reason unrelated to routing or policy (`q` is no threshold key of defaults: 'unknown key \"q\" not in defaults'); the table's put verdicts do not express it. t2 of the same tree carries the routing difference with a known key"
+      }
+    }
   },
   "trees": [
     {
@@ -1714,7 +1894,10 @@
           "values_not_string": [],
           "group_by_invalid": [],
           "unknown_profile": null,
-          "tenant_api": null,
+          "tenant_api": {
+            "put": "503",
+            "batch": null
+          },
           "python_differs": null,
           "escalation": null,
           "refused": null
@@ -1752,7 +1935,23 @@
             "put": "503",
             "batch": null
           },
-          "python_differs": null,
+          "python_differs": {
+            "reason": "tenant-api refuses the policy file (a merge key spelled other than `<<`: DomainPoliciesShapeError) and, with no last good version, answers the PUT 503 POLICY_UNAVAILABLE; the generator reads the file and t-mo-earlier's routing breaks no policy, so it accepts the write.",
+            "targets": [
+              {
+                "ref": "receiver",
+                "type": "slack"
+              }
+            ],
+            "policy": [],
+            "rejected_routes": [],
+            "group_by_invalid": [],
+            "refused": null,
+            "tenant_api": {
+              "put": "ok",
+              "batch": null
+            }
+          },
           "escalation": null,
           "refused": null
         },
@@ -1774,7 +1973,10 @@
           "values_not_string": [],
           "group_by_invalid": [],
           "unknown_profile": null,
-          "tenant_api": null,
+          "tenant_api": {
+            "put": "503",
+            "batch": null
+          },
           "python_differs": null,
           "escalation": null,
           "refused": null
@@ -1797,7 +1999,10 @@
           "values_not_string": [],
           "group_by_invalid": [],
           "unknown_profile": null,
-          "tenant_api": null,
+          "tenant_api": {
+            "put": "503",
+            "batch": null
+          },
           "python_differs": null,
           "escalation": null,
           "refused": null
@@ -1820,7 +2025,10 @@
           "values_not_string": [],
           "group_by_invalid": [],
           "unknown_profile": null,
-          "tenant_api": null,
+          "tenant_api": {
+            "put": "503",
+            "batch": null
+          },
           "python_differs": null,
           "escalation": null,
           "refused": null
@@ -1843,7 +2051,10 @@
           "values_not_string": [],
           "group_by_invalid": [],
           "unknown_profile": null,
-          "tenant_api": null,
+          "tenant_api": {
+            "put": "503",
+            "batch": null
+          },
           "python_differs": null,
           "escalation": null,
           "refused": null
@@ -1864,7 +2075,23 @@
             "put": "503",
             "batch": null
           },
-          "python_differs": null,
+          "python_differs": {
+            "reason": "tenant-api refuses the policy file (a merge key spelled other than `<<`: DomainPoliciesShapeError) and answers the PUT 503 POLICY_UNAVAILABLE; the generator reads the file and t-mo-seq-key's routing breaks no policy, so it accepts the write.",
+            "targets": [
+              {
+                "ref": "receiver",
+                "type": "slack"
+              }
+            ],
+            "policy": [],
+            "rejected_routes": [],
+            "group_by_invalid": [],
+            "refused": null,
+            "tenant_api": {
+              "put": "ok",
+              "batch": null
+            }
+          },
           "escalation": null,
           "refused": null
         }
@@ -1898,7 +2125,10 @@
           "values_not_string": [],
           "group_by_invalid": [],
           "unknown_profile": null,
-          "tenant_api": null,
+          "tenant_api": {
+            "put": "503",
+            "batch": null
+          },
           "python_differs": null,
           "escalation": null,
           "refused": null
@@ -1937,7 +2167,23 @@
             "put": "503",
             "batch": null
           },
-          "python_differs": null,
+          "python_differs": {
+            "reason": "tenant-api refuses the policy file (`!!merge q: 5`, a merge key spelled other than `<<`) and answers the PUT 503 POLICY_UNAVAILABLE; the generator drops the file (a platform finding, not one of this write) and judges the PUT on no policy: it accepts the write.",
+            "targets": [
+              {
+                "ref": "receiver",
+                "type": "slack"
+              }
+            ],
+            "policy": [],
+            "rejected_routes": [],
+            "group_by_invalid": [],
+            "refused": null,
+            "tenant_api": {
+              "put": "ok",
+              "batch": null
+            }
+          },
           "escalation": null,
           "refused": null
         }
@@ -3627,7 +3873,10 @@
           "values_not_string": [],
           "group_by_invalid": [],
           "unknown_profile": null,
-          "tenant_api": null,
+          "tenant_api": {
+            "put": "ok",
+            "batch": null
+          },
           "python_differs": null,
           "escalation": null,
           "refused": null
@@ -3662,7 +3911,10 @@
           "values_not_string": [],
           "group_by_invalid": [],
           "unknown_profile": null,
-          "tenant_api": null,
+          "tenant_api": {
+            "put": "ok",
+            "batch": null
+          },
           "python_differs": null,
           "escalation": null,
           "refused": null
@@ -4758,7 +5010,10 @@
           "values_not_string": [],
           "group_by_invalid": [],
           "unknown_profile": null,
-          "tenant_api": null,
+          "tenant_api": {
+            "put": "ok",
+            "batch": null
+          },
           "python_differs": null,
           "escalation": null,
           "refused": null
@@ -4809,7 +5064,10 @@
           "values_not_string": [],
           "group_by_invalid": [],
           "unknown_profile": null,
-          "tenant_api": null,
+          "tenant_api": {
+            "put": "ok",
+            "batch": null
+          },
           "python_differs": null,
           "escalation": null,
           "refused": null
@@ -4826,7 +5084,10 @@
           "values_not_string": [],
           "group_by_invalid": [],
           "unknown_profile": null,
-          "tenant_api": null,
+          "tenant_api": {
+            "put": "ok",
+            "batch": null
+          },
           "python_differs": null,
           "escalation": null,
           "refused": null
@@ -4857,7 +5118,10 @@
           "values_not_string": [],
           "group_by_invalid": [],
           "unknown_profile": null,
-          "tenant_api": null,
+          "tenant_api": {
+            "put": "ok",
+            "batch": null
+          },
           "python_differs": null,
           "escalation": null,
           "refused": null
@@ -4869,7 +5133,10 @@
           "values_not_string": [],
           "group_by_invalid": [],
           "unknown_profile": null,
-          "tenant_api": null,
+          "tenant_api": {
+            "put": "ok",
+            "batch": null
+          },
           "python_differs": null,
           "escalation": null,
           "refused": null
@@ -4900,7 +5167,10 @@
           "values_not_string": [],
           "group_by_invalid": [],
           "unknown_profile": null,
-          "tenant_api": null,
+          "tenant_api": {
+            "put": "ok",
+            "batch": null
+          },
           "python_differs": null,
           "escalation": null,
           "refused": null
@@ -4926,7 +5196,10 @@
           "values_not_string": [],
           "group_by_invalid": [],
           "unknown_profile": null,
-          "tenant_api": null,
+          "tenant_api": {
+            "put": "ok",
+            "batch": null
+          },
           "python_differs": null,
           "escalation": null,
           "refused": null
@@ -4938,7 +5211,10 @@
           "values_not_string": [],
           "group_by_invalid": [],
           "unknown_profile": null,
-          "tenant_api": null,
+          "tenant_api": {
+            "put": "ok",
+            "batch": null
+          },
           "python_differs": null,
           "escalation": null,
           "refused": null
@@ -4972,7 +5248,10 @@
           "values_not_string": [],
           "group_by_invalid": [],
           "unknown_profile": null,
-          "tenant_api": null,
+          "tenant_api": {
+            "put": "ok",
+            "batch": null
+          },
           "python_differs": null,
           "escalation": null,
           "refused": null
@@ -5000,7 +5279,10 @@
           "values_not_string": [],
           "group_by_invalid": [],
           "unknown_profile": null,
-          "tenant_api": null,
+          "tenant_api": {
+            "put": "ok",
+            "batch": null
+          },
           "python_differs": null,
           "escalation": null,
           "refused": null
@@ -5028,7 +5310,10 @@
           "values_not_string": [],
           "group_by_invalid": [],
           "unknown_profile": null,
-          "tenant_api": null,
+          "tenant_api": {
+            "put": "ok",
+            "batch": null
+          },
           "python_differs": null,
           "escalation": null,
           "refused": null
@@ -5056,7 +5341,10 @@
           "values_not_string": [],
           "group_by_invalid": [],
           "unknown_profile": null,
-          "tenant_api": null,
+          "tenant_api": {
+            "put": "ok",
+            "batch": null
+          },
           "python_differs": null,
           "escalation": null,
           "refused": null
@@ -5086,7 +5374,10 @@
           "values_not_string": [],
           "group_by_invalid": [],
           "unknown_profile": null,
-          "tenant_api": null,
+          "tenant_api": {
+            "put": "ok",
+            "batch": null
+          },
           "python_differs": null,
           "escalation": null,
           "refused": null
@@ -5468,7 +5759,10 @@
           "values_not_string": [],
           "group_by_invalid": [],
           "unknown_profile": null,
-          "tenant_api": null,
+          "tenant_api": {
+            "put": "ok",
+            "batch": null
+          },
           "python_differs": null,
           "escalation": null,
           "refused": null
@@ -5530,7 +5824,23 @@
             "put": "503",
             "batch": null
           },
-          "python_differs": null,
+          "python_differs": {
+            "reason": "tenant-api refuses `domain_policies: null` and answers the PUT 503 POLICY_UNAVAILABLE; the generator drops the block (a platform finding, not one of this write) and judges the PUT on no policy: it accepts the write.",
+            "targets": [
+              {
+                "ref": "receiver",
+                "type": "slack"
+              }
+            ],
+            "policy": [],
+            "rejected_routes": [],
+            "group_by_invalid": [],
+            "refused": null,
+            "tenant_api": {
+              "put": "ok",
+              "batch": null
+            }
+          },
           "escalation": null,
           "refused": null
         }

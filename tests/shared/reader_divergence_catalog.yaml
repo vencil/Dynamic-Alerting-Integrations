@@ -22,7 +22,11 @@
 #     policy），從未成功過則 policy 不可用——寫入回 503，但開了
 #     --policy-unavailable-open 就一律放行。所以每筆 go_refuses 的簽核必須
 #     交代這兩種情況。產生器也擋（丟檔或 --strict 擋）的檔被拒收，是兩邊
-#     同判，不是差異。
+#     同判，不是差異。路由層同理：tenant-api 因 policy 檔不可用對 PUT 回 503，
+#     而產生器會接受那筆寫入，是 go_refuses；產生器也擋（403）則是同判。
+#   - 路由對照表的 tenant_api 格只有在 tenant-api 的判定確實量不到時才能是
+#     null，且必須列在對照表的 tenant_api_unmeasured 並寫明原因（由
+#     tests/shared/test_routing_policy_parity.py 把關），null 藏不住差異。
 #   - count 是精確值；example 必須在比中的列裡；比中零列或零格（差異已消
 #     失）、列出的列或格已不再是差異，都紅。清單一改，數字就出現在 diff 裡。
 #   - go_looser／value_differs 一律擋住 ADR-036 第二階段，必須逐列（policy
@@ -542,4 +546,52 @@ entries:
     disposition: fix-pending
     ref: https://github.com/vencil/Dynamic-Alerting-Integrations/issues/2713
     expire_at: 2027-01-10
+    count: 1
+
+  # --- 路由層：tenant-api 因 policy 檔不可用而拒收 PUT（go_refuses）----------
+  # 路由對照表裡 tenant-api 答 503 POLICY_UNAVAILABLE、產生器卻會接受這筆寫入
+  # 的格子（租戶的路由沒有違反 policy）。後果同上方 policy 層的 go_refuses。
+  # 該租戶路由違反 policy 的格子（產生器也擋，403）是兩邊同判，不列。
+  # TODO(owner): 以下兩筆的 sign_off 同樣是佔位，請一併簽核後換成留言 URL。
+  - id: tenant-api-routing-refuses-merge-key-spelling
+    reader: tenant-api
+    layer: routing
+    match:
+      cells:
+        - [domain-policy-merge-key-order, t-mo-earlier, tenant_api]
+        - [domain-policy-merge-key-order, t-mo-seq-key, tenant_api]
+        - [domain-policy-tagged-merge-value-scalar, t-mv-tagged, tenant_api]
+    mechanism: >-
+      根目錄 `_domain_policy.yaml` 有字面不是 `<<` 的 merge key（`!!merge q:`），
+      tenant-api 的 DomainPoliciesShapeError 整份拒收；樹裡沒有上一份可用內容，
+      所以 PUT 回 503 POLICY_UNAVAILABLE。產生器照讀（或把整份丟掉，那是
+      platform finding、不屬於這筆寫入），這些租戶的路由不違反 policy，會接受
+      寫入。後果：熱重載時 watcher 改用該檔上一份可用內容（可能是舊 policy）；
+      從未成功過則如此處回 503，但設了 --policy-unavailable-open 就一律放行、
+      不判 policy；PR 模式拒絕寫入。
+    direction: go_refuses
+    disposition: accept-document
+    ref: https://github.com/vencil/Dynamic-Alerting-Integrations/issues/2759
+    sign_off: https://github.com/vencil/Dynamic-Alerting-Integrations/issues/2759  # TODO(owner)
+    expire_at: 2027-04-10
+    count: 3
+
+  - id: tenant-api-routing-refuses-domain-policies-null
+    reader: tenant-api
+    layer: routing
+    match:
+      cells:
+        - [domain-policy-null, t-null, tenant_api]
+    mechanism: >-
+      `domain_policies: null`：tenant-api 拒收整份 policy 檔（#2659），沒有上一份
+      可用內容，PUT 回 503 POLICY_UNAVAILABLE。產生器以 --strict 丟掉這個
+      block（platform finding，不屬於這筆寫入），在沒有 policy 下判這筆 PUT，
+      會接受。後果：熱重載時 watcher 改用該檔上一份可用內容（可能是舊
+      policy）；從未成功過則如此處回 503，但設了 --policy-unavailable-open 就
+      一律放行、不判 policy；PR 模式拒絕寫入。
+    direction: go_refuses
+    disposition: accept-document
+    ref: https://github.com/vencil/Dynamic-Alerting-Integrations/issues/2759
+    sign_off: https://github.com/vencil/Dynamic-Alerting-Integrations/issues/2759  # TODO(owner)
+    expire_at: 2027-04-10
     count: 1

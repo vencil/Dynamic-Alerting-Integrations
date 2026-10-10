@@ -92,7 +92,10 @@ type parityMatrix struct {
 		Invalid             []string `json:"invalid"`
 		SchemaSearchAccepts []string `json:"schema_search_accepts"`
 	} `json:"tenant_ids"`
-	Trees []parityTree `json:"trees"`
+	// TenantAPIUnmeasured: why a cell's tenant_api is null (asserted by the
+	// Python half, ADR-036 step 2); parsed only.
+	TenantAPIUnmeasured json.RawMessage `json:"tenant_api_unmeasured"`
+	Trees               []parityTree    `json:"trees"`
 }
 
 func loadParityMatrix(t *testing.T) parityMatrix {

@@ -70,7 +70,8 @@ DISPOSITIONS = ("accept-document", "fix-pending")
 # Directions that block ADR-036's phase 2: they must be listed row by row.
 BLOCKING = ("go_looser", "value_differs")
 # Directions an owner may accept (sign_off): Go blocks where the generator
-# does not. go_refuses is tenant-api's alone (a policy file it refuses).
+# does not. go_refuses is tenant-api's alone (a policy file it refuses, or
+# a PUT it answers 503 POLICY_UNAVAILABLE for one).
 ACCEPTABLE = ("go_stricter", "go_refuses")
 REQUIRED = ("id", "reader", "layer", "match", "mechanism", "direction", "disposition", "ref",
             "expire_at", "count")
@@ -340,9 +341,14 @@ def _blocks(py_blocks: bool, go_blocks: bool) -> str:
 
 
 def _verdict_direction(py: str, go: str, ok: str = "ok") -> str | None:
-    """One tenant_api verdict (put or batch): None when equal."""
+    """One tenant_api verdict (put or batch): None when equal. tenant-api
+    refusing for an unusable policy file (503 POLICY_UNAVAILABLE) where the
+    generator accepts is go_refuses, as for the policy layer: it hangs on
+    tenant-api's last good policy and on --policy-unavailable-open."""
     if py == go:
         return None
+    if go == "503" and py == ok:
+        return "go_refuses"
     return _blocks(py != ok, go != ok)
 
 
@@ -357,8 +363,9 @@ def routing_direction(field: str, py: object, go: object) -> str:
     Per field: policy / rejected_routes / group_by_invalid are lists of
     findings — the generator's a strict superset is looser, Go's stricter,
     neither value_differs. refused: one side refusing alone. tenant_api:
-    {put, batch} — a verdict other than 'ok' blocks; put and batch ranked
-    alone, then combined (two directions, or a side not judged, is
+    {put, batch} — a verdict other than 'ok' blocks, and tenant-api's 503
+    (an unusable policy file) where the generator says 'ok' is go_refuses;
+    put and batch ranked alone, then combined (two directions, or a side not judged, is
     value_differs). targets is rendered routes, not a verdict:
     value_differs whenever it differs. Equal values raise."""
     if py == go:
@@ -417,6 +424,12 @@ _BATCH = {"patch": {"_routing_profile": "p"}, "verdict": "ok"}
     ("tenant_api", {"put": "403", "batch": None}, _PUT, "go_looser"),
     ("tenant_api", {"put": "400", "batch": None}, _PUT, "go_looser"),
     ("tenant_api", _PUT, {"put": "403", "batch": None}, "go_stricter"),
+    # tenant-api's policy file unusable (503) where the generator accepts:
+    # go_refuses. Both refusing (403 / 503) is no difference: the routing
+    # parity test holds python_differs to tenant-api's own cell there, so it
+    # never reaches this; ranked anyway, two codes are value_differs.
+    ("tenant_api", _PUT, {"put": "503", "batch": None}, "go_refuses"),
+    ("tenant_api", {"put": "403", "batch": None}, {"put": "503", "batch": None}, "value_differs"),
     ("tenant_api", {"put": "403", "batch": None}, {"put": "400", "batch": None}, "value_differs"),
     ("tenant_api", {"put": "403", "batch": None}, None, "value_differs"),
     ("tenant_api", {"put": "ok", "batch": {**_BATCH, "verdict": "policy_violation"}},
@@ -552,8 +565,8 @@ def schema_errors(entries: list, corpus_ids: set) -> list:
             errors.append(f"{name}: reader {e['reader']!r} not in {READERS}")
         if e["direction"] not in DIRECTIONS:
             errors.append(f"{name}: direction {e['direction']!r} not in {DIRECTIONS}")
-        if e["direction"] == "go_refuses" and (e["reader"], e["layer"]) != ("tenant-api", "policy"):
-            errors.append(f"{name}: go_refuses is tenant-api's refusal of a policy file alone")
+        if e["direction"] == "go_refuses" and e["reader"] != "tenant-api":
+            errors.append(f"{name}: go_refuses is tenant-api's refusal over a policy file alone")
         if e["disposition"] not in DISPOSITIONS:
             errors.append(f"{name}: disposition {e['disposition']!r} not in {DISPOSITIONS}")
         if e["disposition"] == "accept-document" and e["direction"] not in ACCEPTABLE:

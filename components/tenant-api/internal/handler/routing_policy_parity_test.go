@@ -78,10 +78,12 @@ func loadTenantAPIParityMatrix(t *testing.T) []tenantAPIParityTree {
 		t.Fatalf("read matrix: %v", err)
 	}
 	var m struct {
-		Comment       []string              `json:"_comment"`
-		BlockingKinds json.RawMessage       `json:"blocking_kinds"`
-		TenantIDs     json.RawMessage       `json:"tenant_ids"` // pinned by pkg/routingpolicy
-		Trees         []tenantAPIParityTree `json:"trees"`
+		Comment       []string        `json:"_comment"`
+		BlockingKinds json.RawMessage `json:"blocking_kinds"`
+		TenantIDs     json.RawMessage `json:"tenant_ids"` // pinned by pkg/routingpolicy
+		// Why a tenant_api cell is null (not measured): the Python half asserts it.
+		TenantAPIUnmeasured json.RawMessage       `json:"tenant_api_unmeasured"`
+		Trees               []tenantAPIParityTree `json:"trees"`
 	}
 	dec := json.NewDecoder(bytes.NewReader(raw))
 	dec.DisallowUnknownFields()
