@@ -109,8 +109,8 @@ def test_routing_parser_reads_the_tree(tmp_path: pathlib.Path):
 
     Until #2326 this pinned the opposite — `recursive=False` was
     load-bearing, and a tenant in `team-a/` got no route at rc 0 while
-    threshold-exporter served its thresholds. ADR-016/017 "Amendment
-    2026-09-28" made the routing plane hierarchical; this pins that a nested
+    threshold-exporter served its thresholds. ADR-016 "Amendment
+    2026-09-28" and ADR-017 Decision 9 made the routing plane hierarchical; this pins that a nested
     tenant is read, where it lives is recorded (it decides which routing
     layers reach it), and the old "read FLAT … SKIPPED" warning is gone.
     """

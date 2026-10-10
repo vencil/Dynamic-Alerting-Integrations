@@ -1,7 +1,7 @@
 package routingpolicy
 
 // tree.go — the routing plane across conf.d directory levels (#2326,
-// ADR-017 / ADR-016 / ADR-007 "Amendment 2026-09-28"). Python twin:
+// ADR-017 Decision 9 / ADR-016 / ADR-007 "Amendment 2026-09-28"). Python twin:
 // scripts/tools/ops/_grar_parse._parse_nested_config / _record_profiles /
 // _apply_tenant_entries and _grar_merge.resolve_routing_defaults /
 // visible_routing_profiles; the parity matrix pins the two.
@@ -27,10 +27,10 @@ import (
 // every domain-policy finding as an error).
 const (
 	// ProblemRoutingEnforcedBelowRoot: `_routing_enforced` in a file below
-	// the conf.d root. It is read only at the root (ADR-017 (b)).
+	// the conf.d root. It is read only at the root (ADR-017 Decision 9).
 	ProblemRoutingEnforcedBelowRoot = "routing_enforced_below_root"
 	// ProblemRoutingDefaultsNullBelowRoot: `receiver` or `overrides` written
-	// as null in a subdirectory level's `_routing_defaults` (ADR-017 (a)):
+	// as null in a subdirectory level's `_routing_defaults` (ADR-017 Decision 9):
 	// every tenant below without its own would lose it.
 	ProblemRoutingDefaultsNullBelowRoot = "routing_defaults_null_below_root"
 	// ProblemRoutingProfileDuplicate: one routing-profile name defined in two
@@ -38,7 +38,7 @@ const (
 	// (ADR-007 (c)). The first definition is kept; the later file is named.
 	ProblemRoutingProfileDuplicate = "routing_profile_duplicate"
 	// ProblemDuplicateTenant: one tenant id declared by two tenant files
-	// (ADR-017 (e)); the later file in name order is named.
+	// (ADR-017 Decision 9); the later file in name order is named.
 	ProblemDuplicateTenant = "duplicate_tenant"
 	// ProblemDomainPolicyOutOfScope: a `_domain_policy.yaml` below the root
 	// names a tenant declared outside its subtree (ADR-007 (d)). The entry is

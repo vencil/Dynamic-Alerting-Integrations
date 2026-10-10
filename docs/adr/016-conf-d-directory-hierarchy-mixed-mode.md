@@ -188,10 +188,10 @@ owner 裁決（[#2326](https://github.com/vencil/Dynamic-Alerting-Integrations/i
 - **分層鏈**：租戶繼承鏈上的 `_routing_defaults` → routing profile → 租戶本體的
   `_routing`。完整語意（頂層逐鍵淺合併、`_routing_enforced` 只認根目錄、profile 與 domain
   policy 以子樹為範圍、租戶 id 重複）記在負責繼承語意的
-  [ADR-017「Amendment 2026-09-28」](017-defaults-yaml-inheritance-dual-hash.md)，這裡不重複。
+  [ADR-017 決策 9](017-defaults-yaml-inheritance-dual-hash.md#9-路由設定沿目錄逐層繼承)，這裡不重複。
 - **阻擋條件**（取代 #2326 第 1 步止血的「子目錄有設定檔就 rc 2」；整棵樹都讀之後，子目錄
   有檔本身不再是錯誤）：子目錄檔案裡出現 `_routing_enforced` → rc 2；同一個租戶 id 在多個
-  檔案宣告 → rc 1（#2315；見 ADR-017 (e)）；以及 ADR-017 列出的 `receiver` 寫成 `null`、profile 名稱與 domain policy 錯誤。
+  檔案宣告 → rc 1（#2315；見 [ADR-017 決策 9](017-defaults-yaml-inheritance-dual-hash.md#9-路由設定沿目錄逐層繼承)）；以及該段列出的 `receiver` 寫成 `null`、profile 名稱與 domain policy 錯誤。
 
 ## 相關
 

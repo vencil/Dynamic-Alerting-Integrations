@@ -305,7 +305,7 @@ def check_domain_policies(resolved_routing, tenant_id, policies):
   適用於它的 policy，所以子樹只能收緊。
 - **合併順序不變**：`_routing_defaults` → profile → tenant `_routing`，每一步都是頂層逐鍵
   淺合併。`_routing_defaults` 本身改由各目錄層組成的鏈提供，`_routing_enforced` 維持只認
-  根目錄；兩者的規格見 [ADR-017「Amendment 2026-09-28」](017-defaults-yaml-inheritance-dual-hash.md)。
+  根目錄；兩者的規格見 [ADR-017 決策 9](017-defaults-yaml-inheritance-dual-hash.md#9-路由設定沿目錄逐層繼承)。
 
 ## v2.1.0 Implementation Summary
 

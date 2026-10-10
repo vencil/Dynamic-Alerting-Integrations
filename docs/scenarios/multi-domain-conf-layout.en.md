@@ -143,7 +143,7 @@ tenants:
 > blocking error); `_routing_enforced` at the root only; `_routing_profiles.yaml` and
 > `_domain_policy.yaml` allowed in subdirectories and scoped to their subtree; the same
 > tenant id declared in more than one file is a blocking error. Full semantics:
-> [ADR-017 "Amendment 2026-09-28"](../adr/017-defaults-yaml-inheritance-dual-hash.en.md).
+> [ADR-017 Decision 9](../adr/017-defaults-yaml-inheritance-dual-hash.en.md#9-routing-settings-are-inherited-level-by-level-along-directories).
 > ⚠️ `_routing*` written **inside** a `defaults:` block is still read by nothing. The
 > v2.9.0 image's routing plane reads the top level only <!-- image-caveat: v2.9.0 -->
 >
@@ -184,7 +184,7 @@ tenants:
 > **For threshold keys always use `"disable"`**, never `null`:
 > `mysql_connections: ~` and a half-typed `mysql_connections:` are identical to
 > YAML, which is why the schema blocks it. See
-> [ADR-017 §Merge Semantics](../adr/017-defaults-yaml-inheritance-dual-hash.en.md).
+> [ADR-017 Decision 4](../adr/017-defaults-yaml-inheritance-dual-hash.en.md#4-a-threshold-written-as-null-is-the-same-as-not-writing-it-at-that-level).
 
 ## Operational Guide
 

@@ -1,0 +1,18 @@
+[
+  {"query": "幫我把 ADR-017 改寫得好讀一點，新人看不懂", "should_trigger": true},
+  {"query": "這份 ADR 草稿寫好了，要放進 docs/adr/，幫我看寫法", "should_trigger": true},
+  {"query": "ADR 裡一堆 0-B、D10 這種代號，幫我清掉", "should_trigger": true},
+  {"query": "幫 ADR-024 補一段 amendment，記錄這次行為變更", "should_trigger": true},
+  {"query": "ADR 的英文版跟中文版內容對不上，幫我同步", "should_trigger": true},
+  {"query": "ADR 寫了一大段 PR 歷史，要怎麼精簡成讀者需要的內容", "should_trigger": true},
+  {"query": "新的架構決策紀錄要包含哪些段落、範例要怎麼給", "should_trigger": true},
+  {"query": "ADR-031 第一次出現的 burn rate 要怎麼解釋給不熟 SRE 的人", "should_trigger": true},
+  {"query": "我想寫一份 ADR 決定 L7 caller identity 要用 mTLS 還是 JWT，方向還沒定", "should_trigger": false},
+  {"query": "跑 make adr-index 更新索引", "should_trigger": false},
+  {"query": "ADR-020 的內容幫我摘要成三句", "should_trigger": false},
+  {"query": "幫我改 README 的安裝步驟", "should_trigger": false},
+  {"query": "tenant-api 回 401，幫我找原因", "should_trigger": false},
+  {"query": "review 這份 PR", "should_trigger": false},
+  {"query": "把所有 ADR 的 frontmatter version 從 v2.8.0 改成 v2.9.0", "should_trigger": false},
+  {"query": "寫一篇 blog 介紹這個平台", "should_trigger": false}
+]

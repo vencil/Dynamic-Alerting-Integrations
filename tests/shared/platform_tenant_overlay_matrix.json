@@ -25,7 +25,7 @@
     "walker (and that walker agrees with those three); Python dedup/group_wait and walker.",
     "A tenant file whose FIRST document does not parse declares nothing on either",
     "side (Go: walker parse failure; Python: declared_tenant_ids skips it).",
-    "#2326: the routing plane reads the whole tree (ADR-017 amendment 2026-09-28), so a tenant",
+    "#2326: the routing plane reads the whole tree (ADR-017 Decision 9), so a tenant",
     "declared only in a subdirectory has its dedup there too; a nested platform file still adds none.",
     "Measured on main 19dc4c76 before the fix: c1 rows served tx on /metrics;",
     "c3 TX.yaml / 0tx.yaml served 60 (tx.yaml 70); c2-c5 tx.yaml gave dedup",

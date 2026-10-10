@@ -17,7 +17,7 @@
 //     domain allowlist are not read;
 //   - the platform files that feed it (_grar_parse._parse_platform_config
 //     and, below the root, _parse_nested_config): LoadTree reads the whole
-//     tree (#2326, ADR-017 amendment 2026-09-28) — `_routing_defaults` along
+//     tree (#2326, ADR-017 Decision 9) — `_routing_defaults` along
 //     the tenant's directory chain, profiles and domain policies scoped to
 //     the subtree they sit in (Tree.LayersFor, Policy.Scope) — and reports
 //     the tree shapes the generator refuses (IsBlocking); LoadRoot is its

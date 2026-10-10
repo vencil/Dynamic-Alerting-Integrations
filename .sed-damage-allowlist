@@ -172,3 +172,11 @@ docs/schemas/routing-profiles.schema.json
 # independently: a truncated file is invalid JSON or drops rows, and the
 # open-encoding-audit hook then fails on the missing ledger or the unlisted sites.
 docs/internal/subprocess-encoding-baseline.json
+
+# #2789: ADR-017 rewritten for readability (~48% of its former size, both
+# languages): history, codenames and claims that no longer hold on head were
+# removed, not truncated. Damage is caught independently: check_doc_links
+# validates the anchors other docs link into these two files, and the
+# ZH/EN structure-sync hook compares their headings.
+docs/adr/017-defaults-yaml-inheritance-dual-hash.md
+docs/adr/017-defaults-yaml-inheritance-dual-hash.en.md

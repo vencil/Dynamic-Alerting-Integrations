@@ -71,6 +71,7 @@ CLAUDE_CODE_REMOTE=true CLAUDE_PROJECT_DIR="$PWD" bash .claude/hooks/session-sta
 | multi-file PR、`Agent` 跑完後、spawn 長時 reviewer 前 | `vibe-subagent-review` skill |
 | release 收尾 / 打 tag | `vibe-release` skill → [`github-release-playbook.md`](docs/internal/github-release-playbook.md) |
 | 新 ADR / 新 component / epic 拆解 / 技術選型 | `vibe-brainstorm` skill |
+| 寫或改 ADR 的文字（`docs/adr/**`：新篇、修訂、中英同步、讓它好讀） | `vibe-adr-writing` skill |
 | 同一缺陷進入第 2 輪修正、或每修一輪就冒新洞 | `vibe-converge` skill |
 | 新信任邊界 GA 前 / incident 後 / 季度深稽核 | `vibe-security-audit` skill |
 | 架構概念、設計原理 | [`architecture-and-design.md`](docs/architecture-and-design.md)、spoke 在 [`docs/design/`](docs/design/) |
