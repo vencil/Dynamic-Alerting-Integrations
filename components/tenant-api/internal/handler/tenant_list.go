@@ -45,6 +45,21 @@ type TenantSummary struct {
 	ConfigError string `json:"config_error,omitempty" enums:"unreadable,not_regular_file,malformed_yaml,invalid_config"`
 	// Silent-mode / maintenance state DERIVED FROM CONFIG (「依設定推算」) at request time — what threshold-exporter would emit for this conf.d, not a reading from Alertmanager. Absent when it cannot be derived: a degraded row (config_error), a file the exporter skips, or conf.d not loading (see config_derivation on the search response).
 	ConfigDerived *ConfigDerivedState `json:"config_derived,omitempty"`
+
+	// metadataUnknown marks a healthy row whose metadata is UNKNOWN because
+	// the conf.d root platform layer could not be read (#2370): the row
+	// carries the tenant file's own `_metadata`, but the platform layer's
+	// keys under it are missing. RBAC visibility and the search filters treat
+	// it like a degraded row (#1680). Not part of the JSON response.
+	metadataUnknown bool
+}
+
+// metadataIsUnknown reports whether the row's environment/domain (and the
+// rest of its metadata) are unknown rather than read: a degraded row
+// (ConfigError, #1680), or a healthy row read while the root platform layer
+// could not be (#2370).
+func (t TenantSummary) metadataIsUnknown() bool {
+	return t.ConfigError != "" || t.metadataUnknown
 }
 
 // ListTenants handles GET /api/v1/tenants
@@ -103,8 +118,10 @@ func ListTenants(d *Deps) http.HandlerFunc {
 // yields unlabeled orgs, which with no org-scoped rule is byte-identical to the
 // pre-P4 metadata-only filter.
 //
-// A DEGRADED row (ConfigError != "", #1680) is decided by
-// ScopeAllowedUnknownMetadata instead of ScopeAllowed. ⛔ Passing its empty
+// A DEGRADED row (ConfigError != "", #1680) — and, alike, a healthy row whose
+// metadata is unknown because the root platform layer could not be read
+// (#2370, metadataIsUnknown) — is decided by ScopeAllowedUnknownMetadata
+// instead of ScopeAllowed. ⛔ Passing its empty
 // Environment/Domain to ScopeAllowed would be a leak: ScopeAllowed reads an
 // empty value as UNLABELED, which shadow metadata mode lets through, so an
 // environment-restricted caller would see a broken tenant whose real — merely
@@ -123,7 +140,7 @@ func filterTenantsByRBAC(tenants []TenantSummary, rbacMgr *rbac.Manager, tenantO
 	filtered := make([]TenantSummary, 0, len(tenants))
 	for _, t := range tenants {
 		orgs, _ := tenantOrg.OrgsForTenant(t.ID)
-		if t.ConfigError != "" {
+		if t.metadataIsUnknown() {
 			if rbacMgr.ScopeAllowedUnknownMetadata(p, t.ID, orgs) {
 				filtered = append(filtered, t)
 			}
@@ -243,8 +260,10 @@ func loadAllTenants(configDir string) ([]TenantSummary, error) {
 	// `tenants.<id>._metadata` merged per key under the tenant file's own
 	// (cfg.MergeMetadata), as /metrics resolves it. One root read per
 	// listing; when it cannot be read the rows carry the tenant files'
-	// own `_metadata` alone (platformMetadataOrNone logs it).
-	platform := platformMetadataOrNone(configDir, "list")
+	// own `_metadata` alone and their metadata is unknown (metadataUnknown):
+	// a key the platform layer would have set is missing, not unset — the
+	// same as a degraded row's metadata (#1680).
+	platform, platformKnown := platformMetadataOrNone(configDir, "list")
 
 	summaries := []TenantSummary{}
 	seen := make(map[string]string, len(files)) // tenant id → the file that claimed it
@@ -299,6 +318,7 @@ func loadAllTenants(configDir string) ([]TenantSummary, error) {
 		// Metadata is stored as a raw YAML map since ThresholdConfig doesn't
 		// model _metadata natively — it's parsed from the raw document.
 		extractMetadata(&summary, data, tenantID, platform.PlatformMetadata(tenantID))
+		summary.metadataUnknown = !platformKnown
 
 		summaries = append(summaries, summary)
 	}

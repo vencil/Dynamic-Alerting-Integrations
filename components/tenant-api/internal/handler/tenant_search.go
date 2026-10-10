@@ -58,6 +58,11 @@ import (
 //     name finds it broken rather than absent. Sorting treats its empty
 //     metadata like any unlabeled row (sorts first, id tiebreaker).
 //     Pinned by TestSearchTenants_DegradedRows.
+//   - #2370: when the conf.d root platform layer cannot be read, every
+//     healthy row's metadata is unknown too (TenantSummary.metadataUnknown)
+//     and is handled as a degraded row's: the same RBAC decision, no
+//     metadata filter matches it, free-text q matches its id only. The row
+//     still shows (and sorts by) the tenant file's own `_metadata`.
 //   - cursor-style pagination uses a numeric offset for v1. Opaque
 //     cursor tokens (resilient to ordering changes between pages)
 //     are a future enhancement.
@@ -275,7 +280,17 @@ func parseSearchParams(r *http.Request) (*searchParams, error) {
 func applyFilters(in []TenantSummary, p *searchParams) []TenantSummary {
 	out := make([]TenantSummary, 0, len(in))
 	qLower := strings.ToLower(p.q)
+	metadataFiltered := p.environment != "" || p.tier != "" || p.domain != "" || p.dbType != "" || p.tag != ""
 	for _, t := range in {
+		if t.metadataUnknown {
+			// Metadata unknown (#2370): handled as a degraded row's (#1680) —
+			// no metadata filter matches it, and free text matches its id only.
+			if metadataFiltered || (qLower != "" && !strings.Contains(strings.ToLower(t.ID), qLower)) {
+				continue
+			}
+			out = append(out, t)
+			continue
+		}
 		if p.environment != "" && t.Environment != p.environment {
 			continue
 		}

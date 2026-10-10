@@ -3,6 +3,7 @@ package handler
 import (
 	"fmt"
 	"log/slog"
+	"path/filepath"
 	"sync"
 
 	"github.com/vencil/tenant-api/internal/boundedcall"
@@ -16,11 +17,12 @@ import (
 // not fail GET /tenants/{id}, and the reverse. Per directory so that a read
 // stuck under one conf.d never touches another's (tests run many in
 // parallel; a test may store a guard with a short Timeout for its own
-// directory before the first read).
-var metadataRootReadGuards sync.Map // configDir → *boundedcall.Guard
+// directory before the first read). The key is filepath.Clean(configDir), so
+// two spellings of one directory share a guard.
+var metadataRootReadGuards sync.Map // filepath.Clean(configDir) → *boundedcall.Guard
 
 func metadataRootReadGuard(configDir string) *boundedcall.Guard {
-	g, _ := metadataRootReadGuards.LoadOrStore(configDir, &boundedcall.Guard{})
+	g, _ := metadataRootReadGuards.LoadOrStore(filepath.Clean(configDir), &boundedcall.Guard{})
 	return g.(*boundedcall.Guard)
 }
 
@@ -56,15 +58,17 @@ func loadPlatformMetadata(configDir string) (cfg.RootPlatform, error) {
 
 // platformMetadataOrNone is loadPlatformMetadata for the metadata readers:
 // when the root platform layer cannot be read it logs an ERROR naming the
-// reader and returns the empty layer, so the reader answers from the tenant
-// file's own `_metadata` alone — what tenant-api read before #2370 — instead
-// of failing.
-func platformMetadataOrNone(configDir, reader string) cfg.RootPlatform {
+// reader and returns the empty layer and known=false, instead of failing.
+// What the empty layer means is the reader's call: the write plane answers
+// from the tenant file's own `_metadata` alone — what tenant-api read before
+// #2370 — while the list marks every healthy row's metadata unknown
+// (loadAllTenants).
+func platformMetadataOrNone(configDir, reader string) (root cfg.RootPlatform, known bool) {
 	root, err := loadPlatformMetadata(configDir)
 	if err != nil {
-		slog.Error("root platform files unreadable: tenant metadata read from tenant files only",
+		slog.Error("root platform files unreadable: tenant metadata incomplete",
 			"reader", reader, "config_dir", configDir, "error", err)
-		return cfg.RootPlatform{}
+		return cfg.RootPlatform{}, false
 	}
-	return root
+	return root, true
 }

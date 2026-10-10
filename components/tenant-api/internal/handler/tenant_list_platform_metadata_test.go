@@ -292,3 +292,90 @@ func TestPutTenant_SucceedsWhenRootPlatformFileUnreadable(t *testing.T) {
 		t.Errorf("tx.yaml after PUT = %q, %v; want the body", got, err)
 	}
 }
+
+// platformUnknownRBACYAML has one group restricted to production and one with
+// no metadata restriction.
+const platformUnknownRBACYAML = `groups:
+  - name: all-tenants
+    tenants: ["*"]
+    permissions: [read]
+  - name: prod-only
+    tenants: ["*"]
+    environments: ["production"]
+    permissions: [read]
+`
+
+// Root platform layer unreadable: every healthy row's metadata is unknown, so
+// LIST and search decide its visibility as they do a degraded row's (#1680,
+// rbac.ScopeAllowedUnknownMetadata) — a caller restricted to production does
+// not get t1, whose environment only the platform layer sets, nor t2, whose
+// own file sets it; an unrestricted caller gets both. With the platform layer
+// readable (before the file breaks and after it is removed) the restricted
+// caller gets both.
+func TestListAndSearch_UnreadablePlatformLayerMakesMetadataUnknown(t *testing.T) {
+	t.Parallel()
+	dir := setupConfigDir(t, map[string]string{
+		"_platform.yaml": "tenants:\n  t1:\n    _metadata:\n      environment: production\n",
+		"t1.yaml":        "tenants:\n  t1:\n    _metadata:\n      owner: t1-team\n",
+		"t2.yaml":        "tenants:\n  t2:\n    _metadata:\n      environment: production\n",
+	})
+	both := []string{"t1", "t2"}
+	type view struct {
+		list, search []string
+	}
+	viewAs := func(t *testing.T, mgr *rbac.Manager, group, query string) view {
+		t.Helper()
+		resp, code, body := runSearch(t, dir, mgr, []string{group}, query)
+		if code != http.StatusOK {
+			t.Fatalf("search status %d: %s", code, body)
+		}
+		return view{list: idsOf(listTenantsAs(t, dir, mgr, group)), search: idsOf(resp.Items)}
+	}
+	check := func(t *testing.T, phase string, wantRestricted []string) {
+		t.Helper()
+		for _, enforce := range []bool{false, true} {
+			mgr := newRBACManager(t, platformUnknownRBACYAML)
+			mode := "metadata=shadow"
+			if enforce {
+				mgr.EnableMetadataScopeEnforce()
+				mode = "metadata=enforce"
+			}
+			if got := viewAs(t, mgr, "prod-only", ""); !reflect.DeepEqual(got, view{wantRestricted, wantRestricted}) {
+				t.Errorf("%s/%s: prod-only sees %+v, want list and search %v", phase, mode, got, wantRestricted)
+			}
+			if got := viewAs(t, mgr, "all-tenants", ""); !reflect.DeepEqual(got, view{both, both}) {
+				t.Errorf("%s/%s: all-tenants sees %+v, want list and search %v", phase, mode, got, both)
+			}
+		}
+	}
+
+	check(t, "platform readable", both)
+
+	writeDanglingPlatformFile(t, dir)
+	check(t, "platform unreadable", []string{})
+	// The rows still show the tenant files' own metadata.
+	rows := listTenantsAs(t, dir, newRBACManager(t, platformUnknownRBACYAML), "all-tenants")
+	if len(rows) != 2 || rows[0].Owner != "t1-team" || rows[0].Environment != "" || rows[1].Environment != "production" {
+		t.Errorf("rows while unreadable = %+v, want t1 owner t1-team (no environment), t2 environment production", rows)
+	}
+	// Search handles the unknown rows as it does degraded rows: no metadata
+	// filter matches them, free text matches the id.
+	mgr := newRBACManager(t, platformUnknownRBACYAML)
+	for query, want := range map[string][]string{
+		"environment=production": {},
+		"q=t1-team":              {},
+		"q=T1":                   {"t1"},
+	} {
+		if got := viewAs(t, mgr, "all-tenants", query).search; !reflect.DeepEqual(got, want) {
+			t.Errorf("search %s while unreadable = %v, want %v", query, got, want)
+		}
+	}
+
+	if err := os.Remove(filepath.Join(dir, "_dangling.yaml")); err != nil {
+		t.Fatal(err)
+	}
+	check(t, "platform readable again", both)
+	if got := viewAs(t, mgr, "all-tenants", "environment=production").search; !reflect.DeepEqual(got, both) {
+		t.Errorf("search environment=production after recovery = %v, want %v", got, both)
+	}
+}

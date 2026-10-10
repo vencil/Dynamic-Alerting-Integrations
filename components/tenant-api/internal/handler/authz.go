@@ -73,7 +73,7 @@ type platformMetadataSource struct {
 func (s *platformMetadataSource) environmentDomainOf(data []byte, tenantID string) (string, string) {
 	var platform map[string]any
 	if s.configDir != "" {
-		s.once.Do(func() { s.root = platformMetadataOrNone(s.configDir, "write") })
+		s.once.Do(func() { s.root, _ = platformMetadataOrNone(s.configDir, "write") })
 		platform = s.root.PlatformMetadata(tenantID)
 	}
 	var summary TenantSummary

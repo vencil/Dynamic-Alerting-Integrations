@@ -463,9 +463,10 @@ func prBatchSummary(status string, results []BatchResult) string {
 // _tenant_orgs.yaml hot-reload has since changed (stale-orgs hazard).
 func executeBatchOps(ctx context.Context, w *gitops.Writer, configDir string, ops []BatchOperation, email string, p *rbac.VerifiedPrincipal, rbacMgr *rbac.Manager, tenantOrg *tenantorg.Manager, policyMgr *policy.Manager) []BatchResult {
 	results := make([]BatchResult, 0, len(ops))
-	metaOf := WriteScopeMeta(configDir) // one resolver: the root platform files are read once per batch
 	for _, op := range ops {
-		if res, failed := gateBatchOp(op.TenantID, p, rbacMgr, tenantOrg, metaOf); failed {
+		// A resolver per op: its metadata, the root platform layer included
+		// (#2370), is read when that op runs.
+		if res, failed := gateBatchOp(op.TenantID, p, rbacMgr, tenantOrg, WriteScopeMeta(configDir)); failed {
 			results = append(results, res)
 			continue
 		}
