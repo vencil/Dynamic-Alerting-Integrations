@@ -1,0 +1,204 @@
+# 讀取端差異清單（ADR-036 第 2 步，policy 層）
+#
+# 產生器（純 Python PyYAML 的 _parse_config_files）是權威；Go 讀取端
+# （da-guard 的 ParseDomainPolicies、tenant-api 的 parseConfig）每一處與它
+# 不同的判讀，都必須在這裡有一筆記錄。差異本身由 Go 測試寫進
+# tests/shared/merge_key_go_verdicts.json（每列一個 corpus row id），本清單
+# 只負責「接受」它們。
+#
+# 把關（tests/shared/test_reader_divergence_catalog.py）：
+#   - 快照裡每一列必須恰好被一筆記錄比中；沒比中、比中兩筆都紅。
+#   - 方向由測試計算（依兩邊實際執行的規則集合的包含關係），與 direction
+#     不同就紅——不靠人手寫。
+#   - count 是比中列數的精確值；example 必須在比中的列裡；比中零列（差異
+#     已消失）也紅。清單一改，列數就出現在 diff 裡。
+#   - go_looser／value_differs 一律擋住 ADR-036 第二階段，必須逐列列出
+#     （match.rows），處置只能是 fix-pending。
+#   - expire_at 過期：一般 PR CI 只警告；`make pre-tag`（或設
+#     READER_DIVERGENCE_STRICT_EXPIRY=1）時失敗。
+#
+# 欄位：
+#   id:          記錄名稱，唯一
+#   reader:      da-guard | tenant-api
+#   layer:       policy（路由層的差異在 PR-C 加入）
+#   match:       {shape: <corpus shape>}（該 reader 在快照裡屬於此 shape 的
+#                所有列；只給 go_stricter 用）或 {rows: [<row id>, ...]}
+#   mechanism:   差異的成因
+#   direction:   go_looser | go_stricter | value_differs（由測試核對）
+#   disposition: accept-document（只限 go_stricter，需 sign_off）| fix-pending
+#   ref:         追蹤票 URL
+#   sign_off:    owner「以產生器為準」簽核留言的 URL（測試只能檢查格式）
+#   expire_at:   到期日（ISO 日期）
+#   count:       比中的列數（精確值）
+#   example:     比中的列之一（row id）
+#
+# tenant-api 的拒收目前一律放行、不記錄（parseConfig 可拒收任何一列）；
+# 它另立方向 go_refuses，在 PR-C 處理。
+
+entries:
+  # --- da-guard：比產生器嚴（拒收產生器照讀的檔）---------------------------
+  - id: da-guard-omap-pairs-item-model
+    reader: da-guard
+    layer: policy
+    match: {shape: known-stricter-2759}
+    mechanism: >-
+      da-guard 手寫模擬 PyYAML 建構 `!!omap` / `!!pairs` 項目（以及「先被建成
+      mapping、再被當 omap 項目引用」的錨點）時，不照 PyYAML 的建構順序；
+      PyYAML 照讀的檔，da-guard 判為不可用。
+    direction: go_stricter
+    disposition: accept-document
+    ref: https://github.com/vencil/Dynamic-Alerting-Integrations/issues/2759
+    # TODO(owner): 換成 #2759 上「以產生器為準」的簽核留言 URL。
+    sign_off: https://github.com/vencil/Dynamic-Alerting-Integrations/issues/2759
+    expire_at: 2027-04-10
+    count: 13
+    example: 11508912abc9aa82
+
+  - id: da-guard-fuzz-refusals
+    reader: da-guard
+    layer: policy
+    match: {shape: fuzz-looser-only}
+    mechanism: >-
+      固定種子的混合語料（null key、`!!omap` / `!!pairs` / `!!set`、merge、
+      錨點交錯）裡，da-guard 拒收而 PyYAML 照讀的列；成因與上一筆同屬
+      omap／pairs 建構模型。只接受拒收：讀出不同值或讀出產生器丟掉的檔，
+      方向會算成 go_looser／value_differs，與本筆不符而紅。
+    direction: go_stricter
+    disposition: accept-document
+    ref: https://github.com/vencil/Dynamic-Alerting-Integrations/issues/2759
+    # TODO(owner): 換成 #2759 上「以產生器為準」的簽核留言 URL。
+    sign_off: https://github.com/vencil/Dynamic-Alerting-Integrations/issues/2759
+    expire_at: 2027-04-10
+    count: 19
+    example: 1c9718cd114053b4
+
+  # --- da-guard：比產生器寬（擋住第二階段）---------------------------------
+  - id: da-guard-2759-a-depth-600
+    reader: da-guard
+    layer: policy
+    match:
+      rows:
+        - 41778ed26cf6cd86  # x: 600 層巢狀 list
+        - 80663c6b81671bcb  # x: 600 層巢狀 mapping
+    mechanism: >-
+      #2759 A：巢狀 600 層時 PyYAML 的遞迴建構放棄，產生器丟檔；da-guard
+      照讀出 policy。
+    direction: go_looser
+    disposition: fix-pending
+    ref: https://github.com/vencil/Dynamic-Alerting-Integrations/issues/2759
+    expire_at: 2027-01-10
+    count: 2
+    example: 41778ed26cf6cd86
+
+  - id: da-guard-2759-f-set
+    reader: da-guard
+    layer: policy
+    match:
+      rows:
+        - 27314f4f6be08885  # domain_policies: !!set（block）
+        - f835e22ca5ccd23b  # fin: !!set（block）
+        - 640251281ed28e48  # constraints: !!set（block）
+        - 7cc78fffa4cde516  # domain_policies: !!set（flow）
+        - 93d7d6f7f65fff6a  # fin: !!set（flow）
+        - c7ac54712c07e570  # constraints: !!set（flow）
+    mechanism: >-
+      #2759 F：`!!set` 放在 domain_policies、domain 或 constraints。PyYAML
+      只留下 key 的集合（不是 mapping），產生器丟檔或不執行該 policy；
+      da-guard 當成 mapping 讀出 policy。
+    direction: go_looser
+    disposition: fix-pending
+    ref: https://github.com/vencil/Dynamic-Alerting-Integrations/issues/2759
+    expire_at: 2027-01-10
+    count: 6
+    example: 27314f4f6be08885
+
+  - id: da-guard-2759-n-bom-512
+    reader: da-guard
+    layer: policy
+    match:
+      rows:
+        - c318e5865a1d83c2  # 註解內的 BOM 從 byte 510 開始
+        - 1b6ca508500f3001  # 註解內的 BOM 從 byte 511 開始
+    mechanism: >-
+      #2759 N：UTF-8 BOM 放在註解裡、跨過 byte 512。產生器照讀並執行
+      policy；da-guard 讀不到任何 policy，也不報錯。
+    direction: go_looser
+    disposition: fix-pending
+    ref: https://github.com/vencil/Dynamic-Alerting-Integrations/issues/2759
+    expire_at: 2027-01-10
+    count: 2
+    example: c318e5865a1d83c2
+
+  # --- tenant-api：比產生器寬（擋住第二階段）-------------------------------
+  - id: tenant-api-2759-a-depth-600
+    reader: tenant-api
+    layer: policy
+    match:
+      rows:
+        - 41778ed26cf6cd86  # x: 600 層巢狀 list
+        - 80663c6b81671bcb  # x: 600 層巢狀 mapping
+    mechanism: >-
+      #2759 A：巢狀 600 層時產生器丟檔；tenant-api 照讀出 policy。
+    direction: go_looser
+    disposition: fix-pending
+    ref: https://github.com/vencil/Dynamic-Alerting-Integrations/issues/2759
+    expire_at: 2027-01-10
+    count: 2
+    example: 41778ed26cf6cd86
+
+  - id: tenant-api-2759-f-set
+    reader: tenant-api
+    layer: policy
+    match:
+      rows:
+        - 27314f4f6be08885  # domain_policies: !!set（block）
+        - f835e22ca5ccd23b  # fin: !!set（block）
+        - 640251281ed28e48  # constraints: !!set（block）
+        - 7cc78fffa4cde516  # domain_policies: !!set（flow）
+        - 93d7d6f7f65fff6a  # fin: !!set（flow）
+        - c7ac54712c07e570  # constraints: !!set（flow）
+    mechanism: >-
+      #2759 F：`!!set` 放在 domain_policies、domain 或 constraints；產生器
+      丟檔或不執行，tenant-api 當成 mapping 讀出 policy。
+    direction: go_looser
+    disposition: fix-pending
+    ref: https://github.com/vencil/Dynamic-Alerting-Integrations/issues/2759
+    expire_at: 2027-01-10
+    count: 6
+    example: 27314f4f6be08885
+
+  - id: tenant-api-2759-k1-merge-collection-key
+    reader: tenant-api
+    layer: policy
+    match:
+      rows:
+        - cdc6e33ca6b7002f  # x: {<<: {? [a] : 1}}
+        - ec8ea739c14cb12f  # x: {<<: [{? [a] : 1}]}
+        - fe42e43fb9bc1b98  # x: {<<: !!omap [{? [a] : 1}]}
+    mechanism: >-
+      #2759 K1：merge 值裡有以 collection 當 key 的 mapping。PyYAML 無法
+      hash 該 key，產生器丟檔；tenant-api 讀出 policy（da-guard 拒收，與
+      產生器同判）。
+    direction: go_looser
+    disposition: fix-pending
+    ref: https://github.com/vencil/Dynamic-Alerting-Integrations/issues/2759
+    expire_at: 2027-01-10
+    count: 3
+    example: cdc6e33ca6b7002f
+
+  - id: tenant-api-2759-n-bom-512
+    reader: tenant-api
+    layer: policy
+    match:
+      rows:
+        - c318e5865a1d83c2  # 註解內的 BOM 從 byte 510 開始
+        - 1b6ca508500f3001  # 註解內的 BOM 從 byte 511 開始
+    mechanism: >-
+      #2759 N：UTF-8 BOM 放在註解裡、跨過 byte 512。產生器照讀並執行
+      policy；tenant-api 讀不到任何 policy，也不報錯。
+    direction: go_looser
+    disposition: fix-pending
+    ref: https://github.com/vencil/Dynamic-Alerting-Integrations/issues/2759
+    expire_at: 2027-01-10
+    count: 2
+    example: c318e5865a1d83c2
