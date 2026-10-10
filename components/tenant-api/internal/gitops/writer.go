@@ -1054,6 +1054,14 @@ func (w *Writer) scanTreeForRead() (*cfg.TreeScan, error) {
 // walkTree is the bounded walk behind scanTree and scanTreeForRead; stuck is
 // the breaker of the path it walks for.
 func (w *Writer) walkTree(stuck *atomic.Int32) (*cfg.TreeScan, error) {
+	return w.walkTreeFrom(stuck, true)
+}
+
+// walkTreeFrom is walkTree; withPrior false walks cold (no prior: every file
+// read and hashed), for a caller that found the prior's carried hash no
+// longer matches a file's bytes (ResolveEffective). Either walk is
+// published as the next prior under the same rule.
+func (w *Writer) walkTreeFrom(stuck *atomic.Int32, withPrior bool) (*cfg.TreeScan, error) {
 	if stuck.Load() > 0 {
 		return nil, errTreeScanStuck
 	}
@@ -1065,7 +1073,10 @@ func (w *Writer) walkTree(stuck *atomic.Int32) (*cfg.TreeScan, error) {
 		scan *cfg.TreeScan
 		err  error
 	}
-	prior := w.treePrior.Load()
+	var prior *cfg.TreeScan
+	if withPrior {
+		prior = w.treePrior.Load()
+	}
 	// boundedcall.RunCommit keeps #2153's publication rule: the commit runs
 	// on the walking goroutine under the same mutex that decides abandonment,
 	// and only for a walk handed back to its caller (returned, not panicked,
