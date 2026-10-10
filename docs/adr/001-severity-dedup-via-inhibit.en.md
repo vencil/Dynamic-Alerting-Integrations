@@ -5,99 +5,118 @@ audience: [platform-engineers]
 version: v2.9.0
 lang: en
 ---
-
 # ADR-001: Severity Dedup via Inhibit Rules
 
-> **Language / 語言：** **English (Current)** | [中文](001-severity-dedup-via-inhibit.md)
+> **Language / 語言：** **English (Current)** | [中文](./001-severity-dedup-via-inhibit.md)
+
+**Decision in brief**: when the same condition fires both a warning and a critical alert, only the critical one is notified. This is handled at the notification layer by Alertmanager inhibit rules (`inhibit_rules`); Prometheus alert rules do no deduplication, so both severities fire as usual and both stay in the TSDB.
 
 ## Status
 
 ✅ **Accepted** (v1.0.0)
 
-> **v2.1.0 Status:** This mechanism remains actively in use. Severity Dedup generates inhibit_rules automatically via `generate_alertmanager_routes.py`, covering `_critical` multi-severity tiers, validated by 3070+ tests.
+## Terms
+
+- **Severity dedup**: when one condition fires alerts at several severities, only the highest-severity notification is sent.
+- **Inhibit rule**: an Alertmanager setting. While an alert matching the "source" conditions is firing, alerts matching the "target" conditions are not notified; the labels listed under `equal` must have the same value on both sides for the rule to apply. An inhibited alert still exists; it just isn't notified.
+- **TSDB**: Prometheus's time-series database. When an alert fires, Prometheus writes an `ALERTS` series that can be queried later.
+- **`metric_group`**: a label on alert rules that pairs the warning and critical alerts for the same condition (the two have different alert names).
 
 ## Background
 
-In multi-level alerting systems, the same metric often triggers multiple severity-level alerts simultaneously. For example, when CPU usage exceeds both "warning" (70%) and "critical" (90%) thresholds, the system should send only the critical-level alert and suppress the lower-level warning alert.
+Platform thresholds come in two severities, warning and critical. For example, when CPU usage is above both 70% (warning) and 90% (critical), the on-call engineer only needs the critical notification.
 
-### Problem Statement
+Deduplication can live in one of two places:
 
-A mechanism is needed for severity deduplication (Severity Dedup), with two main candidate approaches:
-
-1. **PromQL Level**: Use `absent()` or `unless()` operators in alert rules to filter warning alerts if critical alerts exist
-2. **Alertmanager Level**: Use Alertmanager `inhibit_rules` to suppress alerts
+1. **PromQL layer**: add `unless()` or `absent()` to the warning rule so that it does not fire while the critical alert exists.
+2. **Alertmanager layer**: let both severities fire as usual and have `inhibit_rules` block the warning notification.
 
 ## Decision
 
-**Adopt Alertmanager `inhibit_rules` for severity deduplication.**
+**Use Alertmanager `inhibit_rules` for severity deduplication.** Prometheus keeps the full alert record for every severity; Alertmanager only decides whether to notify.
 
-TSDB (Time Series Database) retains complete metric data across all severity levels, while Alertmanager performs intelligent suppression at the notification layer.
+The inhibit rules are not hand-written: `generate_alertmanager_routes.py` reads the tenant configuration in conf.d/ and generates one rule per tenant. A tenant that sets `_severity_dedup: "disable"` gets no rule and receives notifications for both severities.
 
-## Rationale
+### Example
 
-### Why Reject PromQL Approach
+Input: two tenants; `shop` uses the default, `batch` turns deduplication off.
 
-The PromQL-level `unless()` or `absent()` method has fundamental flaws:
+```yaml
+# conf.d/shop.yaml
+tenants:
+  shop:
+    _routing:
+      receiver:
+        type: webhook
+        url: "https://hooks.example.com/alerts"
+```
 
-- **TSDB Data Loss**: Filtered time series do not enter TSDB, resulting in incomplete historical data
-- **Limited Retrospective Queries**: Prometheus cannot look back on complete warning-level metrics for a given time period
-- **Difficult Debugging**: Platform engineers cannot view the original multi-level alert state; they only see the final filtered result
-- **Poor Maintainability**: Every alert rule requires manual addition of `unless()` logic, prone to errors
+```yaml
+# conf.d/batch.yaml
+tenants:
+  batch:
+    _severity_dedup: "disable"
+    _routing:
+      receiver:
+        type: webhook
+        url: "https://hooks.example.com/batch"
+```
 
-### Advantages of inhibit_rules
+```bash
+python3 scripts/tools/ops/generate_alertmanager_routes.py --config-dir conf.d/ --dry-run
+```
 
-- **TSDB Completeness**: All severity levels are recorded, supporting fine-grained analysis and retrospective queries
-- **Centralized Management**: Alertmanager `inhibit_rules` are defined in one place, easy to modify and maintain
-- **Notification-Layer Control**: Retains flexibility to adjust suppression logic based on routing, receivers, and other dimensions
-- **Observability**: Alertmanager UI clearly shows suppressed alerts, facilitating troubleshooting
+Output (excerpt): only `shop` gets an inhibit rule; `batch` is skipped.
 
-## Consequences
+```
+  INFO: batch: severity_dedup disabled, skipping inhibit rule
+...
+inhibit_rules:
+- source_matchers:
+  - severity="critical"
+  - metric_group=~".+"
+  - tenant="shop"
+  target_matchers:
+  - severity="warning"
+  - metric_group=~".+"
+  - tenant="shop"
+  equal:
+  - metric_group
+```
 
-### Positive Impact
+How to read it: while `shop` has a critical alert firing, warning alerts with the same `metric_group` are not notified. On the alert-rule side, each pair of alerts must carry the same `metric_group`; for example, the Rule Pack's `MariaDBHighConnections` (warning) and `MariaDBHighConnectionsCritical` (critical) both carry `metric_group: "connections"`.
 
-✅ TSDB always retains complete data, supporting arbitrary dimensional historical queries
-✅ Alertmanager configuration reloads dynamically, no need to restart Prometheus
-✅ Alert rules are concise, logic centralized in one place
+## Consequences and Known Limitations
 
-### Negative Impact
+**What we gain**
 
-⚠️ Alertmanager configuration complexity increases slightly
-⚠️ Need to synchronize severity label definitions between Alertmanager and Prometheus
+- The TSDB keeps the alert record for every severity, so you can still query how often the warning fired over a period, regardless of whether the critical fired at the same time.
+- Alert rules don't each carry their own deduplication logic; it is managed in one place, in Alertmanager.
+- Changing an inhibit rule only needs an Alertmanager config reload, not a Prometheus restart.
+- The Alertmanager UI shows which alerts are inhibited, so the original state is visible while troubleshooting.
 
-### Operational Considerations
+**What we take on**
 
-- Use `generate_alertmanager_routes.py` to auto-generate inhibit_rules, reducing manual errors
-- Validate inhibit rules and alert rule label consistency in CI
-- Periodically audit Alertmanager suppression state to ensure it matches expectations
+- Alertmanager configuration grows, and it has to stay aligned with the labels on alert rules: if a pair of alerts lacks `metric_group`, or the two sides carry different values, the inhibit rule does not apply and two notifications go out. CI checks that same-named pairs (`X` and `XCritical`) carry the same `metric_group` (`check_metric_group_pairs.py`); pairs whose names don't follow that pattern are outside the check's scope.
+- Alerts without a `metric_group` label do not take part in deduplication: both the source and target of the inhibit rule require `metric_group=~".+"`.
+- Periodically review the Alertmanager inhibition state to confirm it matches expectations.
 
-## Alternative Approaches Considered
+## Alternatives Considered
 
-### Approach A: PromQL-Level Deduplication (Rejected)
-- Pros: Self-contained at rule level
-- Cons: TSDB data loss, poor maintainability
+### Deduplicate in PromQL (rejected)
 
-### Approach B: Client-Side Deduplication (Rejected)
-- Pros: Decoupled from Alertmanager
-- Cons: Complexity shifted to N clients, difficult to manage uniformly
+Add a "don't fire while critical exists" condition to every warning rule. The rule is self-contained, but:
 
-## Related Decisions
+- A filtered warning never fires, so the TSDB has no record of it, and you can't later reconstruct the full warning-level state for a period.
+- Platform engineers only see the filtered result, not the original multi-severity state, which makes troubleshooting harder.
+- Every alert rule needs this condition added by hand, which is easy to miss.
 
-- [ADR-003: Sentinel Alert Pattern](003-sentinel-alert-pattern.md) — Leverage inhibit to implement tri-state control
+### Deduplicate at the receiving end (rejected)
 
-## References
+Let each receiver filter for itself. This decouples from Alertmanager, but the same logic has to be implemented once per receiver and can't be managed centrally.
 
-- [`docs/architecture-and-design.en.md`](../architecture-and-design.md) §2.8 — Severity dedup design details
-- [`generate_alertmanager_routes.py`](https://github.com/vencil/Dynamic-Alerting-Integrations/blob/main/scripts/tools/ops/generate_alertmanager_routes.py) — Auto-generate inhibit_rules
+## Related
 
-## Related Resources
-
-| Resource | Relevance |
-|----------|-----------|
-| [001-severity-dedup-via-inhibit.en](001-severity-dedup-via-inhibit.en.md) | ⭐⭐⭐ |
-| [002-oci-registry-over-chartmuseum.en](002-oci-registry-over-chartmuseum.en.md) | ⭐⭐⭐ |
-| [003-sentinel-alert-pattern.en](003-sentinel-alert-pattern.en.md) | ⭐⭐⭐ |
-| [004-federation-central-exporter-first.en](004-federation-central-exporter-first.en.md) | ⭐⭐⭐ |
-| [005-projected-volume-for-rule-packs.en](005-projected-volume-for-rule-packs.en.md) | ⭐⭐⭐ |
-| [README.en](README.en.md) | ⭐⭐⭐ |
-| ["Architecture and Design"](../architecture-and-design.md) | ⭐⭐ |
-| ["Architecture & Design — Appendix A"](../architecture-and-design.en.md#appendix-a-role--tool-quick-reference) | ⭐⭐ |
+- [ADR-003: Sentinel Alert Pattern](./003-sentinel-alert-pattern.en.md) — also uses inhibit rules, to implement silent mode
+- [Config-Driven Architecture §2.8](../design/config-driven.en.md#28-severity-dedup) — behaviour matrix and tenant settings
+- [`generate_alertmanager_routes.py`](https://github.com/vencil/Dynamic-Alerting-Integrations/blob/main/scripts/tools/ops/generate_alertmanager_routes.py) — the inhibit-rule generator

@@ -9,7 +9,7 @@ tracking_kind: adr
 status: accepted
 domain: exporter
 created_at: 2026-04-07
-updated_at: 2026-05-13
+updated_at: 2026-10-10
 ---
 # ADR-004: Federation 架構——中央 Exporter 優先
 
@@ -17,104 +17,92 @@ updated_at: 2026-05-13
 
 <!-- Language switcher is provided by mkdocs-static-i18n header. -->
 
+**決策摘要**：多叢集部署先支援「中央 Exporter + 邊緣 Prometheus」：一個 threshold-exporter 放在中央叢集，服務所有邊緣叢集。「每個邊緣叢集各放一個 exporter」的架構延後，之後再補上。
+
 ## 狀態
 
 ✅ **Accepted** (v1.12.0) → **Extended** (v2.1.0+：兩種架構均已實現)
 
+## 名詞
+
+- **Federation（聯邦）**：把多個 Prometheus 的資料彙整到一處。本文指平台內部的跨叢集部署：邊緣叢集收集指標，中央叢集統一管理閾值與告警。
+- **中央叢集／邊緣叢集**：中央叢集負責統一的監控與告警；邊緣叢集是各自跑業務與資料庫的 Kubernetes 叢集。
+
 ## 背景
 
-Multi-Tenant Dynamic Alerting 平台面臨多叢集監控需求。企業通常在多個 Kubernetes 叢集上運行業務，需要統一的告警管理。
-
-Federation 存在兩種主要架構：
+企業通常把業務分散在多個 Kubernetes 叢集上，需要統一的告警管理。多叢集部署有兩種主要架構：
 
 **中央 Exporter + 邊緣 Prometheus**
-- 單一 threshold-exporter 部署在中央，服務所有邊緣叢集
-- 邊緣 Prometheus 透過 `remote_read` 從中央 exporter 讀取閾值指標
-- 邊緣 Prometheus 只需本地 rules；告警由本地或中央 Alertmanager 處理
+
+- 一個 threshold-exporter 部署在中央，服務所有邊緣叢集。
 
 **邊緣 Exporter + 中央聚合**
-- 每個邊緣叢集部署獨立的 threshold-exporter
-- 中央 Prometheus 透過聯邦抓取或 remote_write 聚合邊緣資料
-- 複雜度：N 個 exporter 實例、N 個配置、中央協調邏輯
+
+- 每個邊緣叢集各自部署 threshold-exporter。
+- 中央 Prometheus 以聯邦抓取（federation）或 `remote_write` 彙整邊緣的資料。
+- 複雜度：N 個 exporter 實例、N 份設定，以及中央的協調邏輯。
 
 ### 決策標準
 
 | 標準 | 中央 Exporter | 邊緣 Exporter |
 |:-----|:-----:|:-----:|
 | Exporter 部署數 | 1 | N |
-| 配置管理複雜度 | 低 | 高 |
-| 覆蓋用例百分比 | ~80% | ~20% |
-| 實施時間 | 短 | 長 |
+| 設定管理複雜度 | 低 | 高 |
+| 涵蓋的使用情境（決策時估計） | 約 80% | 約 20% |
+| 實作時間 | 短 | 長 |
 
 ## 決策
 
-**優先實現「中央 Exporter + 邊緣 Prometheus」架構。**
+**先實作「中央 Exporter + 邊緣 Prometheus」架構。**
 
-基於 80-20 法則：大多數企業採用中央管理的監控架構（統一告警策略、單一 exporter 即可應對多叢集），此架構可覆蓋多數用例，且實施快速。
+依決策當時的估計，約八成的企業採用中央管理的監控架構（統一的告警策略、一個 exporter 就能應付多個叢集）。先做這個架構，能用較短的時間涵蓋大多數情境。
 
-## 基本原理
+## 理由
 
-### 架構簡潔性
+### 架構簡單
 
-**中央 Exporter**：配置集中管理，所有 Prometheus 同步拉取。單個 exporter 部署 HA（多副本），成本低。邊緣 Prometheus 之間無依賴、無協調邏輯。
+**中央 Exporter**：設定集中管理。exporter 只有一份部署，以多副本做高可用，成本低。邊緣的 Prometheus 之間沒有相依，也不需要協調邏輯。
 
-**邊緣 Exporter**：每個邊緣需獨立配置，中央需追蹤 N 個實例。N 個 exporter 版本升級需協調。中央需聚合邊緣資料，可能出現資料重複或遺漏。
+**邊緣 Exporter**：每個邊緣都要各自設定，中央要追蹤 N 個實例；N 個 exporter 升級版本時要彼此協調；中央彙整邊緣資料時，可能出現資料重複或遺漏。
 
-### 時間與資源考量
+### 時間與資源
 
-中央 Exporter 的核心開發工作在 v1.12.0 已完成：`remote_read` 整合測試、文件記錄（[federation-integration.md](../integration/federation-integration.md)）、典型部署時間 2-3 小時。相比之下，邊緣 Exporter 架構需額外 6-8 週開發時間（實例管理框架、聚合邏輯、多層配置驗證）。
+決策當時估計，邊緣 Exporter 架構需要額外 6–8 週開發（實例管理框架、彙整邏輯、多層設定驗證）。
 
 ## 後果
 
 ### 正面影響
 
-- 快速推出 Federation 支援，滿足多數用例
-- 簡化初期運維負擔
-- 為後續邊緣 Exporter 架構打下 API/工具基礎
-- 客戶可漸進式採用——先用中央架構，後續按需升級
+- 能較快推出多叢集支援，滿足多數情境。
+- 降低初期的運維負擔。
+- 為之後的邊緣 Exporter 架構先打好 API 與工具基礎。
+- 客戶可以漸進採用：先用中央架構，之後再依需要升級。
 
 ### 負面影響
 
-- 邊緣自主運營的用例在 v1.x 無法支援
-- 若邊緣 Exporter 需求旺盛，會面臨部分重設計
+- 只支援中央架構的期間（v1.x），邊緣叢集需要自主運作的情境無法支援。
+- 若邊緣 Exporter 的需求很大，要面對部分重新設計。
 
 ### 遷移路徑
 
-中央架構的使用者升級至邊緣架構時可平滑遷移：API 相容性保證（無需修改現有部署）、`scaffold_tenant.py` 擴展支援邊緣配置、文件提供明確切換步驟。
+從中央架構切換到邊緣架構的步驟，見 [Federation 整合指南 §8.5](../integration/federation-integration.md#85-從中央評估遷移到邊緣評估)。
 
-## 替代方案考量
+### 目前的工具支援
+
+- `da-tools federation-check` 可分別驗證邊緣叢集、中央叢集與端對端（`edge` / `central` / `e2e`）。
+- `da-tools rule-pack-split` 把 Rule Pack 拆成邊緣正規化與中央兩部分，也能輸出 Operator 的 PrometheusRule CRD。
+- `da-tools operator-generate --kustomize` 產生列出所有 CRD 檔的 `kustomization.yaml`；`da-tools drift-detect --mode operator` 比對叢集上的 PrometheusRule CRD 與本地檔案。
+
+## 考慮過的替代方案
 
 | 方案 | 判斷 | 原因 |
 |------|------|------|
-| 同時實現兩種架構 | 拒絕 | 時間表延期、初期複雜度過高、難以測試 |
-| 只實現邊緣架構 | 拒絕 | 違背 MVP 原則、挫傷客戶時間表 |
+| 同時實作兩種架構 | 不採用 | 時程延後、初期複雜度過高、難以測試 |
+| 只實作邊緣架構 | 不採用 | 違背先交付最小可用版本的原則，也拖累客戶的時程 |
 
-## 相關決策
+## 相關
 
-- [ADR-006: 租戶映射拓撲](./006-tenant-mapping-topologies.md) — 基於中央 Exporter 的 data-plane Recording Rules 實現 1:N 映射
-- [ADR-005: 投影卷掛載 Rule Pack](./005-projected-volume-for-rule-packs.md) — Federation 中 Rule Pack 的掛載機制
-
-## 演進紀錄
-
-| 版本 | 狀態 | 變更 |
-|------|------|------|
-| v1.12.0 | ✅ 完成 | 中央 Exporter 核心實現、`remote_read` 整合測試、文件記錄 |
-| v2.1.0 | ✅ 完成 | `federation_check.py` 支援邊緣/中央雙模驗證。**邊緣 Exporter 架構亦已實現**——`da-tools rule-pack-split` 支援邊緣正規化 + 中央聚合 + Operator CRD 輸出 |
-| v2.6.0 | ✅ 完成 | `operator-generate --kustomize` 支援多叢集 CRD 部署；`drift_detect.py --mode operator` 偵測跨叢集 CRD 漂移 |
-
-## 參考資料
-
-- [`docs/federation-integration.md`](../integration/federation-integration.md) — Federation 詳細整合指南
-- [`docs/scenarios/multi-cluster-federation.md`](../scenarios/multi-cluster-federation.md) — 多叢集場景案例
-- `CHANGELOG.md` — v1.12.0 Federation 初始實現記錄
-
-## 相關資源
-
-| 資源 | 相關性 |
-|------|--------|
-| [001-severity-dedup-via-inhibit](001-severity-dedup-via-inhibit.md) | ⭐⭐⭐ |
-| [002-oci-registry-over-chartmuseum](002-oci-registry-over-chartmuseum.md) | ⭐⭐⭐ |
-| [003-sentinel-alert-pattern](003-sentinel-alert-pattern.md) | ⭐⭐⭐ |
-| [005-projected-volume-for-rule-packs](005-projected-volume-for-rule-packs.md) | ⭐⭐⭐ |
-| [README](README.md) | ⭐⭐⭐ |
-| [架構與設計](../architecture-and-design.md) | ⭐⭐ |
+- [ADR-006: 租戶映射拓撲](./006-tenant-mapping-topologies.md) — 以中央 Exporter 搭配資料面的 Recording Rules 實現 1:N 映射
+- [ADR-005: 投影卷掛載 Rule Pack](./005-projected-volume-for-rule-packs.md) — 多叢集部署中 Rule Pack 的掛載方式
+- [Federation 整合指南](../integration/federation-integration.md) — 詳細的整合步驟
+- [場景：多叢集聯邦架構](../scenarios/multi-cluster-federation.md) — 多叢集的部署案例

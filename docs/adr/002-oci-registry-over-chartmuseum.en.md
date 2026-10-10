@@ -5,105 +5,85 @@ audience: [platform-engineers]
 version: v2.9.0
 lang: en
 ---
-
 # ADR-002: OCI Registry over ChartMuseum
 
-> **Language / 語言：** **English (Current)** | [中文](002-oci-registry-over-chartmuseum.md)
+> **Language / 語言：** **English (Current)** | [中文](./002-oci-registry-over-chartmuseum.md)
+
+**Decision in brief**: Helm charts and container images live in the same container registry (ghcr.io); charts are published as OCI artifacts, and no separate ChartMuseum is run.
 
 ## Status
 
 ✅ **Accepted** (v1.12.0)
 
+## Terms
+
+- **OCI artifact**: a file in the Open Container Initiative format that can be stored in a container registry. Container images are one kind; Helm charts can be stored in this format too.
+- **ChartMuseum**: a standalone service dedicated to hosting Helm charts; clients connect to it with `helm repo add`.
+- **ghcr.io**: the container registry provided by GitHub (GitHub Container Registry).
+
 ## Background
 
-The Multi-Tenant Dynamic Alerting platform needs to distribute multiple artifact types:
+The platform publishes two kinds of artifacts:
 
-1. **Helm Charts**: Deployment configurations for threshold-exporter and dynamic-alerting
-2. **Docker Images**: Container images for threshold-exporter, da-tools CLI, Prometheus rules, and others
+1. **Helm charts**: deployment configuration for threshold-exporter, da-portal and tenant-api.
+2. **Container images**: threshold-exporter, da-tools, da-portal and tenant-api.
 
-The traditional approach uses ChartMuseum as a standalone Helm chart repository, with Docker images stored in a container image registry (e.g., ghcr.io), creating two separate infrastructure systems.
+A common setup keeps images in a container registry (such as ghcr.io) and charts in a separate chart repository such as ChartMuseum, which means two pieces of infrastructure to operate.
 
 ## Decision
 
-**Consolidate on OCI container image registry (ghcr.io) to distribute both Helm Charts and Docker Images. Eliminate dependency on ChartMuseum.**
+**Use a single OCI container registry (ghcr.io) for both Helm charts and container images, with no dependency on ChartMuseum.**
 
-## Rationale
+Helm supports OCI natively from 3.8: charts can be pushed straight into a container registry and versioned and access-controlled as OCI artifacts.
 
-### OCI Specification Support
+### Example
 
-Helm 3.8+ natively supports OCI-level artifact distribution standards. Helm charts can be pushed directly to container image repositories, treated as OCI artifacts with version management, access control, and signature verification.
+On the publishing side (the release workflow), the packaged chart is pushed under `charts/`:
 
-### Advantages of Unified Infrastructure
+```bash
+helm push .build/threshold-exporter-2.9.0.tgz oci://ghcr.io/vencil/charts
+```
 
-- **Single Source of Truth**: All artifacts (charts + images) in one repository, unified RBAC, signing, and audit logs
-- **Simplified Operations**: No need to maintain standalone ChartMuseum instances, backup policies, or high-availability configurations
-- **Cost Reduction**: ghcr.io has sufficient free quota; no additional infrastructure expenses
-- **Consistent Version Tracking**: All artifacts use the same semantic versioning
+Images and charts sit side by side in the same registry:
 
-### Minimal Client-Side Changes
+| Artifact | Location |
+|:--|:--|
+| Container image | `ghcr.io/vencil/threshold-exporter:v2.9.0` |
+| Helm chart | `oci://ghcr.io/vencil/charts/threshold-exporter`, version `2.9.0` |
 
-- Helm 3.8+ is widely adopted; most enterprises have already upgraded
-- Migration command is simple: `helm repo add` becomes `helm pull oci://ghcr.io/...`
-- Chart content itself requires no modification, only the distribution method changes
+On the installing side there is no `helm repo add`; the OCI address is given directly:
 
-## Consequences
+```bash
+helm install threshold-exporter \
+  oci://ghcr.io/vencil/charts/threshold-exporter --version 2.9.0 \
+  -n monitoring --create-namespace -f values-override.yaml
+```
 
-### Positive Impact
+In the registry, this chart's manifest has a config media type of `application/vnd.cncf.helm.config.v1+json`, i.e. it is stored as an OCI artifact identified as a Helm chart.
 
-✅ Single repository management, reduced operational cost and complexity
-✅ Native OCI signature verification, enhanced security
-✅ Unified RBAC and audit trails
-✅ Simplified CI/CD pipeline (push once → artifacts distributed)
+## Consequences and Known Limitations
 
-### Negative Impact
+**What we gain**
 
-⚠️ Requires Helm 3.8+ (most environments already satisfy this)
-⚠️ Enterprises with older Helm versions need coordinated upgrade planning
-⚠️ Some Helm plugins (e.g., helm-diff) require verification of OCI compatibility
+- One registry to operate: no separate ChartMuseum instance, backups or high-availability setup to look after, and none of that service's infrastructure cost.
+- Chart contents don't change for this; only how charts are published and installed does.
 
-### Migration Strategy
+**What we take on**
 
-- Starting with Chart `v1.12.0`, adopt OCI distribution
-- Document parallel maintenance period: retain ChartMuseum for 3 months as a transition bridge
-- Older versions remain available on ChartMuseum; new installations recommended to use OCI approach
+- Installers need Helm 3.8 or later. Organisations still on older Helm have to plan an upgrade.
+- Some Helm plugins (for example helm-diff) need their compatibility with OCI charts confirmed separately.
 
-## Alternative Approaches Considered
+## Alternatives Considered
 
-### Approach A: Maintain ChartMuseum + ghcr.io Dual Track (Rejected)
-- Pros: Compatible with all older Helm versions
-- Cons: Maintain two infrastructure systems, complexity doubles
+### Keep ChartMuseum alongside ghcr.io (rejected)
 
-### Approach B: Use Artifactory / Nexus (Considered but Rejected)
-- Pros: Enterprise-grade feature richness
-- Cons: Requires self-hosting/payment, competes with ghcr.io, additional learning curve
+Works with every older Helm version, but means maintaining two pieces of infrastructure and doubles the operational complexity.
 
-## Related Decisions
+### Use Artifactory or Nexus (rejected)
 
-- [ADR-005: Projected Volume for Rule Packs](./005-projected-volume-for-rule-packs.en.md) — Rule Packs distributed via OCI registry are mounted into Prometheus using Projected Volumes
+Rich enterprise features, but it has to be self-hosted or paid for, overlaps with ghcr.io, and is one more tool for the team to learn.
 
-## Implementation Checklist
+## Related
 
-- [x] Verify Helm 3.8+ OCI compatibility
-- [x] Configure ghcr.io OCI push workflow
-- [x] Update installation documentation and quick start guides
-- [x] Maintain ChartMuseum backup for transition period (optional, expires in 3 months)
-- [x] Publish change log (CHANGELOG.md)
-
-## References
-
-- [Helm Official — OCI Support](https://helm.sh/docs/topics/registries/)
-- [`docs/getting-started/for-platform-engineers.en.md`](../getting-started/for-platform-engineers.md) — Installation steps
-- `CHANGELOG.md` — Distribution method change log
-
-## Related Resources
-
-| Resource | Relevance |
-|----------|-----------|
-| [001-severity-dedup-via-inhibit.en](001-severity-dedup-via-inhibit.en.md) | ⭐⭐⭐ |
-| [002-oci-registry-over-chartmuseum.en](002-oci-registry-over-chartmuseum.en.md) | ⭐⭐⭐ |
-| [003-sentinel-alert-pattern.en](003-sentinel-alert-pattern.en.md) | ⭐⭐⭐ |
-| [004-federation-central-exporter-first.en](004-federation-central-exporter-first.en.md) | ⭐⭐⭐ |
-| [005-projected-volume-for-rule-packs.en](005-projected-volume-for-rule-packs.en.md) | ⭐⭐⭐ |
-| [README.en](README.en.md) | ⭐⭐⭐ |
-| ["Architecture and Design"](../architecture-and-design.md) | ⭐⭐ |
-| ["Architecture & Design — Appendix A"](../architecture-and-design.en.md#appendix-a-role--tool-quick-reference) | ⭐⭐ |
+- [Helm documentation: Registries (OCI support)](https://helm.sh/docs/topics/registries/)
+- [threshold-exporter README §6 Deployment](https://github.com/vencil/Dynamic-Alerting-Integrations/blob/main/components/threshold-exporter/README.md#6-部署) — full commands for installing from the OCI chart

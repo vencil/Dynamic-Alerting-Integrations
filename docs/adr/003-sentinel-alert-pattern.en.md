@@ -5,123 +5,126 @@ audience: [platform-engineers]
 version: v2.9.0
 lang: en
 ---
-
 # ADR-003: Sentinel Alert Pattern
 
-> **Language / 語言：** **English (Current)** | [中文](003-sentinel-alert-pattern.md)
+> **Language / 語言：** **English (Current)** | [中文](./003-sentinel-alert-pattern.md)
+
+**Decision in brief**: a tenant's operational state (for example "silenced") is exposed by threshold-exporter as a flag metric; a Prometheus alert rule turns the flag into a sentinel alert; Alertmanager uses that sentinel alert as the source of an inhibit rule that blocks notifications for the tenant's alerts. Business alert rules never need to know about these states.
 
 ## Status
 
 ✅ **Accepted** (v1.0.0)
 
-> **v2.1.0 Status:** The Sentinel pattern has been extended into a full tri-state operational framework (Normal / Silent / Maintenance), supporting `expires` auto-expiry and `_state_maintenance` dimensional labels. All new flag metrics follow this pattern.
+## Terms
+
+- **Sentinel alert**: an alert that does not signal a fault; it only expresses "this tenant is currently in this state". The platform's sentinel alerts always carry `severity: none` and `component: sentinel`.
+- **Inhibit rule**: an Alertmanager setting. While an alert matching the "source" conditions is firing, alerts matching the "target" conditions are not notified; the labels listed under `equal` must have the same value on both sides. An inhibited alert still exists; it just isn't notified (see [ADR-001](./001-severity-dedup-via-inhibit.en.md)).
+- **Flag metric**: a metric with value 1 that the exporter emits from tenant settings, such as `user_silent_mode`. Remove the setting and the metric disappears.
 
 ## Background
 
-The platform supports tri-state operational modes:
+Tenants on the platform have three operational states:
 
-- **Normal**: Standard alert mode, triggering corresponding notifications
-- **Silent**: Silent mode, completely suppressing alerts
-- **Maintenance**: Maintenance mode, suppressing specific alerts
+- **Normal**: alerts fire and are notified as usual.
+- **Silent**: alerts still fire, but no notification is sent.
+- **Maintenance**: during maintenance, alerts do not fire.
 
-A mechanism is needed to dynamically switch tenant alert states with strong composability and ease of debugging.
+We need a mechanism that lets a tenant's state switch dynamically with its settings, and that is easy to combine and easy to troubleshoot.
 
-### Candidate Approach Comparison
+### Candidate Comparison
 
-| Approach | Implementation | Composability | Observability | Complexity |
-|:-----|:--------|:-----:|:-----:|:-----:|
-| Direct PromQL Suppression | Wrap each rule with `unless(tenant_silent)` | ❌ Low | ❌ Low | High |
-| Sentinel Alert + Inhibit | exporter flag → alert → inhibit | ✅ High | ✅ High | Medium |
-| Alertmanager Routing | Suppress notification at routing layer | ⚠️ Medium | ⚠️ Medium | Medium |
+| Approach | How | Composability | Observability | Complexity |
+|:-----|:-----|:-----:|:-----:|:-----:|
+| Suppress directly in PromQL | Wrap every rule in `unless` (don't fire while the state flag exists) | ❌ Low | ❌ Low | High |
+| Sentinel alert + inhibit rule | exporter flag → sentinel alert → inhibit rule | ✅ High | ✅ High | Medium |
+| Alertmanager routing | Drop the notification at the routing layer | ⚠️ Medium | ⚠️ Medium | Medium |
 
 ## Decision
 
-**Adopt Sentinel Alert Pattern: exporter emits tenant state flag metric → recording rule generates sentinel alert → inhibit_rules suppress related alerts.**
+**Adopt the sentinel alert pattern: the exporter emits a tenant state flag → an alert rule produces a sentinel alert → an inhibit rule blocks notifications for the affected alerts.**
+
+1. **Exporter**: threshold-exporter reads the tenant settings and emits a flag metric (`user_silent_mode`).
+2. **Prometheus**: alert rules in the Rule Pack read the flag and produce sentinel alerts (`TenantSilentWarning`, `TenantSilentCritical`).
+3. **Alertmanager**: an inhibit rule with the sentinel alert as source and the same tenant's business alerts as target blocks the notifications.
+
+### Example
+
+Input: tenant `shop` wants to silence warning-level notifications only.
+
+```yaml
+tenants:
+  shop:
+    _silent_mode: "warning"
+```
+
+threshold-exporter's `/metrics` output:
 
 ```
-exporter (tenant_silent_mode)
-  → recording rule (SentinelSilentMode)
-    → sentinel alert (SilentModeActive)
-      → inhibit rules (suppress other alerts for silent tenant)
+user_silent_mode{target_severity="warning",tenant="shop"} 1
 ```
 
-## Rationale
+The Rule Pack (`rule-pack-operational.yaml`) turns it into a sentinel alert:
 
-### Why Choose Sentinel Pattern
+```yaml
+- alert: TenantSilentWarning
+  expr: user_silent_mode{target_severity="warning"} == 1
+  labels:
+    severity: none
+    component: sentinel
+    tenant: "{{ $labels.tenant }}"
+```
 
-**Composability**: Any combination of tri-state modes is handled by the same set of inhibit rules; adding new states requires no modification to existing rules.
+Alertmanager's inhibit rule:
 
-**Observability**: Sentinel alerts are visible in Alertmanager, allowing platform engineers to clearly see the system's current tri-state status, facilitating troubleshooting.
+```yaml
+- source_matchers: ['alertname="TenantSilentWarning"', 'tenant=~".+"']
+  target_matchers: ['severity="warning"', 'tenant=~".+"', 'alert_source=""']
+  equal: ['tenant']
+```
 
-**Decoupling**: Alert rules and state control logic are separated. Alert rules focus on anomaly detection; state control logic operates independently at the exporter layer.
+Result: `shop`'s warning alerts still fire and stay in the TSDB, but their notifications are blocked; critical alerts are notified as usual. Remove `_silent_mode` and the flag metric disappears, the sentinel alert resolves, and notifications resume.
 
-### Architecture Flow
+## Consequences and Known Limitations
 
-1. **Exporter Layer**: threshold-exporter reads tenant configuration and emits flag metrics like `tenant_silent_mode` / `tenant_maintenance_state`
-2. **Prometheus Layer**: Recording rules aggregate flag metrics, producing intermediate metrics like `SentinelSilentMode` / `SentinelMaintenanceState`
-3. **Alert Rule Layer**: Sentinel recording rules translate into virtual alerts (produced by Prometheus rules)
-4. **Alertmanager Layer**: inhibit_rules pair sentinel alerts with business alerts for suppression
+**What we gain**
 
-### Why Not Use Direct PromQL
+- Adding another "block notifications only" state does not touch business alert rules: it only needs a flag, a sentinel alert rule and an inhibit rule.
+- State control is separate from anomaly detection: alert rules only detect anomalies, and the exporter emits the state from settings.
+- Sentinel alerts are visible in the Alertmanager UI, so troubleshooting shows directly which tenant is in which state, instead of alerts that simply vanished.
 
-**Fragility**: Every business alert rule needs manual wrapping with `unless(tenant_silent_mode)`, easily leading to missed new rules
+**What we take on**
 
-**Unmaintainable**: When Rule Packs change, all alert rules' `unless()` clauses must be updated simultaneously
+- The extra sentinel layer adds conceptual complexity, and the Rule Pack carries additional sentinel alert rules.
+- Troubleshooting means looking at the exporter's flag metric, the sentinel alert rule and the inhibit rule together.
+- Sentinel alerts carry a tenant label, so without a distinguishing label they would be routed to the tenant or the operations centre as notifications. Every sentinel alert therefore carries a fixed `component="sentinel"`, and Alertmanager routes it, ahead of the tenant routes, to a receiver that sends nothing (sentinel-sinkhole). A test guards this convention: a new sentinel alert without that label fails it.
 
-**No Observability**: Users cannot see the suppression logic; they only know alerts disappeared
+**Out of scope**
 
-## Consequences
+- **Maintenance does not use this pattern.** It is excluded in each alert rule's PromQL with `unless on(tenant) (user_state_filter{filter="maintenance"} == 1)`, so during maintenance alerts do not fire, the TSDB has no record of them, and nothing is notified.
+- **The severity-dedup sentinel (`TenantSeverityDedupEnabled`) is for displaying state only.** Deduplication itself is [ADR-001](./001-severity-dedup-via-inhibit.en.md)'s critical→warning inhibit rule, which does not use a sentinel as its source.
 
-### Positive Impact
+**Operational advice**
 
-✅ Tri-state logic centralized in Sentinel + Inhibit, easy to maintain and extend
-✅ Alertmanager UI clearly displays sentinel alerts, facilitating debugging
-✅ Adding new states requires no modification to existing business alert rules
-✅ Supports complex condition combinations (e.g., "silent OR maintenance")
+- Periodically confirm that sentinel alerts match the actual state switches.
+- Document clearly what happens when several states are set at once.
 
-### Negative Impact
+## Alternatives Considered
 
-⚠️ Introduces additional intermediate layer (sentinel alerts), increasing conceptual complexity
-⚠️ Prometheus Rules configuration volume increases (additional recording rules)
-⚠️ Debugging requires inspecting exporter metrics, recording rules, and inhibit rules simultaneously
+### Suppress directly in PromQL (rejected)
 
-### Operational Considerations
+Wrap every business alert rule in a "don't fire while the state flag exists" condition. Simple in concept, but:
 
-- Periodically verify that sentinel rules sync with actual state transitions
-- Alertmanager logs should record inhibit actions for auditing purposes
-- Documentation should clearly specify state priority (e.g., Silent takes precedence over Maintenance)
-- Every sentinel carries the static `component="sentinel"` label and is swallowed by the platform-static sentinel-sinkhole route ahead of the tenant/NOC notification channels — a sentinel is an inhibit source + AM UI/Grafana state surface, **not a notification**; a guard test pins this contract, so a new sentinel without the label fails loud ([#1095](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/1095))
+- **Easy to miss**: every rule has to be wrapped by hand, and newly added rules are easily forgotten.
+- **Hard to maintain**: when a Rule Pack changes, this condition has to be updated across all rules.
+- **Invisible**: users only see that an alert disappeared, not which state blocked it.
 
-## Alternative Approaches Considered
+### Handle it in the Alertmanager routing layer (considered, rejected)
 
-### Approach A: Direct PromQL Suppression (Rejected)
-- Pros: Conceptually simple
-- Cons: Not composable, difficult to maintain, no observability
+No alert-rule changes are needed, but it can only decide not to notify; it cannot control whether the alert is produced, and complex per-tenant logic is hard to express.
 
-### Approach B: Alertmanager Routing Layer (Considered)
-- Pros: No need to modify alert rules
-- Cons: Can only suppress notifications, cannot control alert generation; difficult for complex tenant-level logic
+## Related
 
-## Related Decisions
-
-- [ADR-001: Severity Dedup via Inhibit Rules] — Foundation design for inhibit_rules
-- [ADR-005: Projected Volume for Rule Packs] — Sentinel rules distributed as part of rule pack
-
-## References
-
-- [`docs/architecture-and-design.en.md`](../architecture-and-design.md) §2.7 — Tri-state operational mode detailed design
-- [`docs/architecture-and-design.en.md`](../architecture-and-design.md) §2.8 — Dedup and Sentinel interaction mechanism
-- [`rule-packs/README.md`](https://github.com/vencil/Dynamic-Alerting-Integrations/blob/main/rule-packs/README.md) — Rule Packs overview (includes Sentinel Recording Rules)
-
-## Related Resources
-
-| Resource | Relevance |
-|----------|-----------|
-| [001-severity-dedup-via-inhibit.en](001-severity-dedup-via-inhibit.en.md) | ⭐⭐⭐ |
-| [002-oci-registry-over-chartmuseum.en](002-oci-registry-over-chartmuseum.en.md) | ⭐⭐⭐ |
-| [003-sentinel-alert-pattern.en](003-sentinel-alert-pattern.en.md) | ⭐⭐⭐ |
-| [004-federation-central-exporter-first.en](004-federation-central-exporter-first.en.md) | ⭐⭐⭐ |
-| [005-projected-volume-for-rule-packs.en](005-projected-volume-for-rule-packs.en.md) | ⭐⭐⭐ |
-| [README.en](README.en.md) | ⭐⭐⭐ |
-| ["Architecture and Design"](../architecture-and-design.md) | ⭐⭐ |
-| ["Architecture & Design — Appendix A"](../architecture-and-design.en.md#appendix-a-role--tool-quick-reference) | ⭐⭐ |
+- [ADR-001: Severity Dedup via Inhibit Rules](./001-severity-dedup-via-inhibit.en.md) — the base design for inhibit rules
+- [ADR-005: Projected Volume for Rule Packs](./005-projected-volume-for-rule-packs.en.md) — sentinel alert rules are part of the Rule Packs
+- [Config-Driven Architecture §2.7 Three-State Operational Modes](../design/config-driven.en.md#27-three-state-operational-modes) — the behaviour matrix for the three states, `expires` auto-expiry and setting syntax
+- [`rule-packs/README.md`](https://github.com/vencil/Dynamic-Alerting-Integrations/blob/main/rule-packs/README.md) — Rule Pack overview
