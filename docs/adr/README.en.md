@@ -67,7 +67,7 @@ New here? Pick based on your needs:
 | ADR-034 | [合法值不得同時當作無法辨識時的 fallback](./034-legal-value-as-fallback.md) | ✅ Accepted | — |
 | ADR-035 | [Single Source for the Legal Tenant-ID Character Set](./035-tenant-id-single-source.en.md) | ✅ Accepted | — |
 | ADR-036 | [Routing and Domain-Policy Config Is Parsed Once, by the Generator](./036-single-parser-effective-config.en.md) | ✅ Accepted | — |
-| ADR-037 | [config-diff Compares Rendered Output](./037-config-diff-compares-rendered-output.en.md) | 🟡 Proposed | — |
+| ADR-037 | [config-diff Compares Rendered Output](./037-config-diff-compares-rendered-output.en.md) | ✅ Accepted | — |
 
 <!-- ADR_INDEX_END -->
 

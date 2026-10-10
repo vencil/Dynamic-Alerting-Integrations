@@ -6,7 +6,7 @@ version: v2.9.0
 lang: zh
 id: ADR-037
 tracking_kind: adr
-status: proposed
+status: accepted
 domain: platform
 created_at: 2026-10-10
 updated_at: 2026-10-10
@@ -18,7 +18,7 @@ updated_at: 2026-10-10
 
 ## 狀態
 
-🟡 **Proposed**（2026-10-10 起草）。決策內容已由 owner 在 [#1516](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/1516) 拍板；本文待 owner 核可。
+✅ **Accepted**（2026-10-10 起草，2026-10-10 由 owner 核可）。決策內容由 owner 在 [#1516](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/1516) 拍板。
 
 ## 摘要
 

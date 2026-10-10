@@ -12,7 +12,7 @@ lang: en
 
 ## Status
 
-🟡 **Proposed** (drafted 2026-10-10). The decisions were made by the owner in [#1516](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/1516); this text awaits owner approval.
+✅ **Accepted** (drafted 2026-10-10, approved by the owner 2026-10-10). The decisions were made by the owner in [#1516](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/1516).
 
 ## Summary
 
