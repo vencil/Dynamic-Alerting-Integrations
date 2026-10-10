@@ -17,15 +17,13 @@ set -uo pipefail
 # dealt with it.
 _hooks_dir="$(git rev-parse --git-path hooks 2>/dev/null)"
 if [ -n "$_hooks_dir" ] && { [ -e "$_hooks_dir/pre-push.chained" ] || [ -L "$_hooks_dir/pre-push.chained" ]; }; then
-    cat >&2 <<CHAINED
-
-[prepush_dispatch] ⛔ $_hooks_dir/pre-push.chained is still there. An earlier
-installer moved a hook to it, and nothing runs it any more. Re-run:
-    bash scripts/ops/install_prepush_hook.sh
-It removes what the shim makes redundant (git-lfs's hook, a copy of ours,
-pre-commit's template) and says what to do with anything else.
-
-CHAINED
+    printf '%s\n' "" \
+        "[prepush_dispatch] ⛔ $_hooks_dir/pre-push.chained is still there. An earlier" \
+        "installer moved a hook to it, and nothing runs it any more. Re-run:" \
+        "    bash scripts/ops/install_prepush_hook.sh" \
+        "It removes what the shim makes redundant (git-lfs's hook, a copy of ours," \
+        "pre-commit's template) and says what to do with anything else." \
+        "" >&2
     exit 1
 fi
 
@@ -55,7 +53,11 @@ _Z40="0000000000000000000000000000000000000000"
 # ⛔ Read stdin ONCE, then hand every guard its own copy. Each guard reads the
 # refspec itself, so chaining them lets the first drain the pipe and leaves
 # every later guard with EOF — the #1664 picture, relocated.
-_refs="$(cat)"
+# ⛔ The `read` builtin, not `$(cat)`: without `cat` on PATH that read nothing,
+# every guard saw zero rows and allowed the push (#2765). Trailing newlines are
+# dropped, as `$(cat)` dropped them, so the guards get the same bytes.
+IFS= read -r -d '' _refs || true
+_refs="${_refs%"${_refs##*[!$'\n']}"}"
 
 _feed() {
     if [ -n "$_refs" ]; then
@@ -91,20 +93,18 @@ for _guard in "${GUARDS[@]}"; do
     fi
     _path="$_dispatch_dir/$_guard"
     if [ ! -r "$_path" ]; then
-        cat >&2 <<GUARD_MISSING
-
-[prepush_dispatch] ⛔ $_guard is missing from $_dispatch_dir, so one of the
-pre-push guards cannot run. Stopping here rather than running the rest.
-
-It is version-controlled: restore it from HEAD (the deletion may already be
-staged).
-
-⛔ Not the installer: it writes .git/hooks, never scripts/ops, so it exits 0
-and changes nothing here. And do not reach for --no-verify or delete
-.git/hooks/pre-push — both turn off the direct-push-to-main guard for good,
-which is what #1664 fixed.
-
-GUARD_MISSING
+        printf '%s\n' "" \
+            "[prepush_dispatch] ⛔ $_guard is missing from $_dispatch_dir, so one of the" \
+            "pre-push guards cannot run. Stopping here rather than running the rest." \
+            "" \
+            "It is version-controlled: restore it from HEAD (the deletion may already be" \
+            "staged)." \
+            "" \
+            "⛔ Not the installer: it writes .git/hooks, never scripts/ops, so it exits 0" \
+            "and changes nothing here. And do not reach for --no-verify or delete" \
+            ".git/hooks/pre-push — both turn off the direct-push-to-main guard for good," \
+            "which is what #1664 fixed." \
+            "" >&2
         exit 1
     fi
     bash "$_path" "$@" < <(_feed)
@@ -128,15 +128,13 @@ if git config --get-regexp '^filter\.lfs\.' >/dev/null 2>&1; then
             _rc="$_lfs_rc"
         fi
     else
-        cat >&2 <<NO_LFS
-
-[prepush_dispatch] ⛔ Git LFS is configured (filter.lfs.* in git config) but
-git-lfs is not on PATH, so LFS objects in this push would not be uploaded.
-Install git-lfs. If you no longer use it, remove the filter.lfs section from
-every config that sets it; this lists them:
-    git config --show-origin --get-regexp '^filter\.lfs\.'
-
-NO_LFS
+        printf '%s\n' "" \
+            "[prepush_dispatch] ⛔ Git LFS is configured (filter.lfs.* in git config) but" \
+            "git-lfs is not on PATH, so LFS objects in this push would not be uploaded." \
+            "Install git-lfs. If you no longer use it, remove the filter.lfs section from" \
+            "every config that sets it; this lists them:" \
+            "    git config --show-origin --get-regexp '^filter\\.lfs\\.'" \
+            "" >&2
         _rc=1
     fi
 fi

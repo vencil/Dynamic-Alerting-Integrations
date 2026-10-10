@@ -854,6 +854,49 @@ def test_every_guard_in_the_dispatcher_gets_the_refspec_not_just_the_first(
     )
 
 
+def test_a_direct_push_to_main_is_blocked_without_cat_on_path(tmp_path: Path) -> None:
+    """#2765: the dispatcher read git's stdin with `$(cat)`. With no `cat` on
+    PATH that read nothing, every guard saw zero rows and the push to main went
+    through. PATH here holds only bash and git (and git-lfs, so a global LFS
+    filter cannot block the push for another reason)."""
+    work = _make_repo(tmp_path, _PROTECT_ONLY)
+    assert _install_guards(work).returncode == 0
+    env = {**_SIBLINGS_OFF,
+           "PATH": _path_of(tmp_path, *[t for t in ("bash", "git", "git-lfs")
+                                        if shutil.which(t)])["PATH"]}
+    assert not (tmp_path / "bin" / "cat").exists()
+
+    blocked, out = _push(work, "HEAD:refs/heads/main", env_extra=env)
+    assert blocked.returncode != 0 and _banner_for("main") in out, out
+
+    allowed, allowed_out = _push(work, "HEAD:refs/heads/feat/x", env_extra=env)
+    assert allowed.returncode == 0, f"CONTROL: a feature push was blocked:\n{allowed_out}"
+
+
+@pytest.mark.parametrize("refs", [
+    "refs/heads/f {sha} refs/heads/main {z}\n",
+    "refs/heads/f {sha} refs/heads/main {z}\nrefs/heads/g {sha} refs/heads/g {z}\n",
+], ids=["one-row", "two-rows"])
+def test_every_guard_gets_the_bytes_git_sent(tmp_path: Path, refs: str) -> None:
+    """#2765: the dispatcher hands each guard exactly what git wrote on its
+    stdin — no row lost, none added, not even an empty one."""
+    work = _make_repo(tmp_path, _PROTECT_ONLY)
+    ops = work / "scripts" / "ops"
+    guards = _dispatcher_guards()
+    for g in guards:
+        (ops / g).write_text(f'#!/usr/bin/env bash\ncat > "{tmp_path / g}.in"\n',
+                             encoding="utf-8", newline="\n")
+    sha = _git(work, "rev-parse", "HEAD").stdout.strip()
+    data = refs.format(sha=sha, z="0" * 40)
+    r = subprocess.run(  # subprocess-timeout: ignore
+        [_BASH, str(ops / "prepush_dispatch.sh"), "origin", "url"], cwd=work,
+        input=data.encode(), capture_output=True,
+        env={**os.environ, "GIT_CONFIG_GLOBAL": os.devnull, "GIT_CONFIG_NOSYSTEM": "1"})
+    assert r.returncode == 0, r.stderr
+    for g in guards:
+        assert (tmp_path / f"{g}.in").read_bytes() == data.encode(), g
+
+
 # ---------------------------------------------------------------------------
 # "Nothing to push" is not refused, whatever the environment says (#1846)
 # ---------------------------------------------------------------------------
