@@ -57,12 +57,20 @@ func routingPolicyProblemKinds(t *testing.T) map[string]string {
 			for _, spec := range gd.Specs {
 				vs := spec.(*ast.ValueSpec)
 				for i, name := range vs.Names {
-					if !strings.HasPrefix(name.Name, "Problem") || i >= len(vs.Values) {
+					if !strings.HasPrefix(name.Name, "Problem") {
 						continue
+					}
+					// Fail rather than skip: a kind declared any other way
+					// (iota, an implicit repeat, "a"+"b", an alias of another
+					// constant) would otherwise drop out of this check unseen.
+					if i >= len(vs.Values) {
+						t.Fatalf("%s has no value of its own (iota or an implicit repeat?): "+
+							"declare every Problem kind as a string literal so this test reads it", name.Name)
 					}
 					lit, ok := vs.Values[i].(*ast.BasicLit)
 					if !ok || lit.Kind != token.STRING {
-						continue
+						t.Fatalf("%s is not a plain string literal: declare every Problem kind as one "+
+							"so this test reads it", name.Name)
 					}
 					v, err := strconv.Unquote(lit.Value)
 					if err != nil {
@@ -78,6 +86,12 @@ func routingPolicyProblemKinds(t *testing.T) map[string]string {
 
 func TestPlatformProblemSeverityMatchesCorpusEmulation(t *testing.T) {
 	kinds := routingPolicyProblemKinds(t)
+	// The kinds the source declares today; a smaller set means the reader
+	// above lost some, not that routingpolicy dropped them.
+	const minKinds = 10
+	if len(kinds) < minKinds {
+		t.Fatalf("read %d Problem kinds from pkg/routingpolicy, want at least %d: %v", len(kinds), minKinds, kinds)
+	}
 	if kinds["ProblemDomainPolicyUnusable"] != routingpolicy.ProblemDomainPolicyUnusable ||
 		kinds["ProblemRoutingProfilesUnusable"] != routingpolicy.ProblemRoutingProfilesUnusable {
 		t.Fatalf("Problem kinds read from source look wrong: %v", kinds)

@@ -1328,10 +1328,15 @@ def test_corpus_is_not_vacuous() -> None:
                   "2759-a-depth", "2759-f-set", "2759-k1-merge-collection-key", "2759-n-bom-512",
                   "escalation-only"):
         assert shape in shapes, shape
-    # Escalation alone is an enforced rule: rows must keep such a domain.
-    esc_only = [r for r in rows if isinstance(r["pyyaml"], dict) and any(
-        d.get("escalation") and not d["forbidden"] and "allowed" not in d for d in r["pyyaml"].values())]
-    assert len(esc_only) >= 10, len(esc_only)
+    # Escalation alone is an enforced rule: every `escalation-only` row is
+    # written, and every one keeps its escalation-only `fin` domain (a count
+    # floor would let half of the spellings go unnoticed).
+    esc_rows = [r for r in rows if r.get("shape") == "escalation-only"]
+    assert len(esc_rows) == len(_escalation_only()), len(esc_rows)
+    for r in esc_rows:
+        fin = r["pyyaml"]["fin"] if isinstance(r["pyyaml"], dict) else None
+        assert fin and fin.get("escalation") is True and not fin["forbidden"] \
+            and "allowed" not in fin, (r["id"], r["pyyaml"])
 
 
 def test_row_ids_are_unique_and_are_the_file_hash() -> None:
