@@ -293,14 +293,18 @@ class TestPrepushWiring:
         wired, why = mod._prepush_guards_wired()
         assert wired is True, f"following the message's remedy did not fix it: {why!r}"
 
-    @pytest.mark.parametrize("shape", ["directory", "dangling-symlink"])
+    @pytest.mark.parametrize("shape", [
+        "directory", "dangling-symlink", "symlink-to-the-shim",
+        "relative-symlink-to-the-shim", "symlink-to-a-guard", "symlink-to-a-directory"])
     def test_a_pre_push_that_is_not_a_regular_file_is_not_called_missing(
         self, tmp_path, monkeypatch, shape
     ):
         """#2697: `is_file()` is False for a directory and for a symlink to
         nothing, and both used to be reported as "does not exist — never
-        installed". The installer refuses both (#2702), so the message says what
-        is there and to move it aside first; the second half follows that
+        installed". #2770: a symlink is never wired either, even to a copy of
+        the shim — `is_file()` follows it, and the installer refuses it (or, to
+        a guard, replaces it) instead of writing through. So the message says
+        what is there and to move it aside first; the second half follows that
         remedy once."""
         mod = _load()
         self._repo(tmp_path)
@@ -309,34 +313,34 @@ class TestPrepushWiring:
         hook.parent.mkdir(parents=True, exist_ok=True)
         if shape == "directory":
             hook.mkdir()
-        else:
+        elif shape == "dangling-symlink":
             symlink_or_skip(tmp_path / "no-such-hook", hook)
+        elif shape == "symlink-to-a-directory":
+            (tmp_path / "a-directory").mkdir()
+            symlink_or_skip(tmp_path / "a-directory", hook)
+        elif shape == "symlink-to-a-guard":
+            guard = tmp_path / "scripts" / "ops" / "protect_main_push.sh"
+            assert guard.is_file(), "CONTROL: the link must lead to a guard"
+            symlink_or_skip(guard, hook)
+        else:
+            assert self._install_guards(tmp_path).returncode == 0
+            wired, why = mod._prepush_guards_wired()
+            assert wired is True, f"CONTROL: the shim itself must be wired: {why!r}"
+            copy = (hook.parent / "shim-copy" if shape.startswith("relative")
+                    else tmp_path / "shim-elsewhere")
+            hook.rename(copy)
+            symlink_or_skip(copy.name if shape.startswith("relative") else copy, hook)
 
         wired, why = mod._prepush_guards_wired()
         assert wired is False, why
-        assert "不是一般檔案" in why, why
+        # The whole remedy, and nothing about what the installer will do (#2697).
+        assert why.endswith("不是一般檔案。先看清楚它是什麼並移走，再跑 install_prepush_hook.sh。"), why
 
         moved = tmp_path / "moved-aside"
         hook.rename(moved)
         assert self._install_guards(tmp_path).returncode == 0
         wired, why = mod._prepush_guards_wired()
         assert wired is True, f"following the message's remedy did not fix it: {why!r}"
-
-    def test_a_symlink_to_the_shim_is_wired(self, tmp_path, monkeypatch):
-        """`is_file()` follows the link, so a pre-push that is a symlink to an
-        executable copy of the shim is wired: git runs it and the guards fire.
-        Only a link to nothing (above) is "not a regular file"."""
-        mod = _load()
-        self._repo(tmp_path)
-        monkeypatch.chdir(tmp_path)
-        assert self._install_guards(tmp_path).returncode == 0
-        hook = tmp_path / ".git" / "hooks" / "pre-push"
-        target = tmp_path / "shim-elsewhere"
-        hook.rename(target)
-        symlink_or_skip(target, hook)
-
-        wired, why = mod._prepush_guards_wired()
-        assert wired is True, why
 
     def test_an_unreadable_pre_push_is_not_wired(self, tmp_path, monkeypatch):
         """A read error is reported as such and never as wired. Injected at

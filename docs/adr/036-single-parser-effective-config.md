@@ -301,6 +301,7 @@ da-guard 不再判斷路由與 policy，交給產生器的 `--validate --strict`
 | tenant-api 現在的寫入判定 | `judgePutBody`；PR 模式在 `WritePRChecked` 的閉包內重判 |
 | 批次 patch 由 Go 重新輸出 | `mergePatchYAML` |
 | 「讀不了的檔當成空」的舊行為（將刪除） | `tenantBlockOnDisk` |
+| §9 的使用者比對（CI 檢查） | 宣告表 `tests/shared/phase2_deletion_scope.json`（以套件為單位：`pkg/routingpolicy`、`pkg/pyyamlcompat` 的使用者、`SpacesOnly` 的呼叫處、三份 patch 的處理）；比對它的測試 `components/threshold-exporter/app/phase2_deletion_scope_test.go`，讀 exporter 與 tenant-api 兩個 module 的全部 Go 檔，只排除 module 根目錄的 `third_party/`（更深層的 `third_party/` 照讀）與任何深度的 `testdata/` |
 | vendored YAML 解析器的修改 | `third_party/yaml.v3`：`SpacesOnly`（只給 policy，刪除）、nonspecific-tag（沒有使用者時刪除）、`uniquekeys`（exporter 使用，保留）；釘值測試 `tests/ops/test_vendored_yaml_v3.py` 同一支 PR 更新 |
 | 只有 Go 有的 da-guard 檢查 | `internal/guard/types.go` 減去 `tests/shared/routing_policy_parity_matrix.json` |
 | 現有的「已知較嚴」標記（併入差異清單） | `merge_key_policy_corpus.json` 的 `known: stricter` |
