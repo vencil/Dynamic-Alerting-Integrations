@@ -117,9 +117,20 @@ def _oracle(base: Path, cur: Path) -> list[dict]:
             for t, k in sorted(set(old) | set(new)) if old.get((t, k)) != new.get((t, k))]
 
 
+def _series_at(conf_d: Path) -> dict[tuple[str, str], tuple]:
+    """{(tenant, threshold key): its /metrics series} as served-values reports them at AT (#2750)."""
+    return {(t, k): s for t, v in tv.load_served_values(conf_d, at=AT).items()
+            for k, s in v.series.items()}
+
+
 def _backtest(monkeypatch: pytest.MonkeyPatch, base: Path, cur: Path) -> list[dict]:
     monkeypatch.setattr(bt, "now_at", lambda: AT, raising=False)
     return bt.extract_changes_from_dirs(str(cur), str(base))
+
+
+def _no_series(changes: list[dict]) -> list[dict]:
+    """The changes without `series` (pinned on its own where a test is about it)."""
+    return [{k: v for k, v in c.items() if k != "series"} for c in changes]
 
 
 def test_matrix_is_not_vacuous(tmp_path: Path) -> None:
@@ -143,7 +154,16 @@ def test_matrix_is_not_vacuous(tmp_path: Path) -> None:
 def test_backtest_agrees_with_the_exporter(tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
                                            name: str, base: dict, cur: dict) -> None:
     b, c = _tree(tmp_path / "base", base), _tree(tmp_path / "cur", cur)
-    assert _backtest(monkeypatch, b, c) == _oracle(b, c), name
+    got = _backtest(monkeypatch, b, c)
+    assert _no_series(got) == _oracle(b, c), name
+    # #2750: each change carries the series served-values gives the key, the
+    # baseline's first, each once.
+    old, new = _series_at(b), _series_at(c)
+    for change in got:
+        key = (change["tenant"], change["metric"])
+        want = list(old.get(key, ()))
+        want += [s for s in new.get(key, ()) if s not in want]
+        assert want and change["series"] == want, (name, change)
 
 
 def _two_windows(night: str, evening: str) -> str:
@@ -159,7 +179,7 @@ def test_a_change_outside_the_instant_is_named_with_its_window(
     b = _tree(tmp_path / "base", {"_defaults.yaml": _DEFAULTS, "tx.yaml": _scheduled("1000")})
     c = _tree(tmp_path / "cur", {"_defaults.yaml": _DEFAULTS, "tx.yaml": _scheduled("2000")})
     assert _oracle(b, c) == []  # the instant alone would miss it
-    assert _backtest(monkeypatch, b, c) == [{
+    assert _no_series(_backtest(monkeypatch, b, c)) == [{
         "tenant": "tx", "metric": "mysql_connections",
         "old_value": "1000", "new_value": "2000", "window": ["01:00-09:00"]}]
 
@@ -170,7 +190,7 @@ def test_every_differing_part_of_the_day_is_a_row(
     review: the 20:00 change used to be dropped)."""
     b = _tree(tmp_path / "base", {"_defaults.yaml": _DEFAULTS, "tx.yaml": _two_windows("1000", "5")})
     c = _tree(tmp_path / "cur", {"_defaults.yaml": _DEFAULTS, "tx.yaml": _two_windows("1001", "99999")})
-    assert _backtest(monkeypatch, b, c) == [
+    assert _no_series(_backtest(monkeypatch, b, c)) == [
         {"tenant": "tx", "metric": "mysql_connections", "old_value": "1000", "new_value": "1001",
          "window": ["01:00-02:00"]},
         {"tenant": "tx", "metric": "mysql_connections", "old_value": "5", "new_value": "99999",
@@ -183,14 +203,14 @@ def test_one_pair_in_several_parts_of_the_day_is_one_change(
     review: a 22:00-02:00 override used to make two HIGH rows)."""
     b = _tree(tmp_path / "base", {"_defaults.yaml": _DEFAULTS, "tx.yaml": _two_windows("1000", "1000")})
     c = _tree(tmp_path / "cur", {"_defaults.yaml": _DEFAULTS, "tx.yaml": _two_windows("2000", "2000")})
-    assert _backtest(monkeypatch, b, c) == [
+    assert _no_series(_backtest(monkeypatch, b, c)) == [
         {"tenant": "tx", "metric": "mysql_connections", "old_value": "1000", "new_value": "2000",
          "window": ["01:00-02:00", "20:00-21:00"]}]
     over_midnight = ("tenants:\n  tx:\n    mysql_connections:\n      default: \"70\"\n"
                      "      overrides:\n        - window: \"22:00-02:00\"\n          value: \"{v}\"\n")
     b = _tree(tmp_path / "base2", {"_defaults.yaml": _DEFAULTS, "tx.yaml": over_midnight.format(v=1000)})
     c = _tree(tmp_path / "cur2", {"_defaults.yaml": _DEFAULTS, "tx.yaml": over_midnight.format(v=5)})
-    assert _backtest(monkeypatch, b, c) == [
+    assert _no_series(_backtest(monkeypatch, b, c)) == [
         {"tenant": "tx", "metric": "mysql_connections", "old_value": "1000", "new_value": "5",
          "window": ["00:00-02:00", "22:00-24:00"]}]
 
@@ -205,10 +225,20 @@ def test_a_severity_boundary_does_not_split_a_change(
         "        - window: \"01:00-09:00\"\n          value: \"75:critical\"\n")})
     t = tv.load_served_tree(c, at=AT, schedules=True).tenants["tx"]
     assert len(t.schedules["mysql_connections"].segments) == 3  # not vacuous
-    # 01:00-09:00 is served as a critical row, so the change says so.
-    assert _backtest(monkeypatch, b, c) == [
-        {"tenant": "tx", "metric": "mysql_connections", "old_value": "70", "new_value": "75",
-         "severity": "critical"}]
+    got = _backtest(monkeypatch, b, c)
+    assert _no_series(got) == [
+        {"tenant": "tx", "metric": "mysql_connections", "old_value": "70", "new_value": "75"}]
+    # #2750: both series the key is served as that day, from the segments —
+    # 01:00-09:00 is served as the critical row.
+    assert got[0]["series"] == [_ident("mysql_connections", "warning"),
+                                _ident("mysql_connections", "critical")]
+
+
+def _ident(metric_key: str, severity: str, component: str = "mysql",
+           metric: str = "connections", twin: bool = False) -> "tv.Series":
+    """The identity served-values gives a plain tx key (pinned, #2750)."""
+    return tv.Series("user_threshold", {"tenant": "tx", "component": component, "metric": metric,
+                                        "severity": severity}, metric_key, twin, {}, {})
 
 
 def test_a_critical_segment_outside_the_changed_pair_does_not_skip_it(
@@ -221,7 +251,7 @@ def test_a_critical_segment_outside_the_changed_pair_does_not_skip_it(
         "tenants:\n  tx:\n    mysql_connections:\n      default: \"70\"\n" + override)})
     c = _tree(tmp_path / "cur", {"_defaults.yaml": _DEFAULTS, "tx.yaml": (
         "tenants:\n  tx:\n    mysql_connections:\n      default: \"75\"\n" + override)})
-    assert _backtest(monkeypatch, b, c) == [
+    assert _no_series(_backtest(monkeypatch, b, c)) == [
         {"tenant": "tx", "metric": "mysql_connections", "old_value": "70", "new_value": "75",
          "window": ["00:00-01:00", "09:00-24:00"]}]
 
@@ -255,20 +285,22 @@ def test_skipped_files_are_named_once_with_their_tree(
 def test_a_part_of_the_day_metrics_cannot_gather_fails_closed() -> None:
     """A segment carrying da-guard's error is refused, not read as "no row"."""
     seg = tv.ScheduleSegment("00:00", "24:00", None, None, "gather failed")
-    values = tv.TenantValues("tx", {}, {}, {}, {}, {"k": tv.KeySchedule([seg], None, None)})
+    values = tv.TenantValues("tx", {}, {}, {}, {}, {"k": tv.KeySchedule([seg], None, None)}, {})
     with pytest.raises(tv.ServedValuesError, match="gather failed"):
         bt._served_day(values, "k", "current")
 
 
-def _run_main(monkeypatch, capsys, cli_argv, base: Path, cur: Path, *extra: str):
-    """`main` in-process with Prometheus answered by a stub series (50 then 2000)."""
+def _run_main(monkeypatch, capsys, cli_argv, base: Path, cur: Path, *extra: str,
+              has_data=lambda q: True):
+    """`main` in-process with Prometheus answered by a stub series (50 then
+    2000) for every query `has_data` accepts, nothing for the others."""
     monkeypatch.setattr(bt, "now_at", lambda: AT, raising=False)
     monkeypatch.setattr(bt, "prometheus_available", lambda url, timeout=5: True)
     asked = []
 
     def query_range(url, q, lookback, step=bt.DEFAULT_STEP):
         asked.append(q)
-        return [{"values": [[0, "50"], [1, "2000"]]}]
+        return [{"values": [[0, "50"], [1, "2000"]]}] if has_data(q) else []
     monkeypatch.setattr(bt, "query_range", query_range)
     cli_argv("backtest_threshold", "--config-dir", str(cur), "--baseline", str(base),
              "--prometheus", "http://prom:9090", *extra)
@@ -297,8 +329,9 @@ def test_window_reaches_json_text_and_markdown(tmp_path: Path, monkeypatch, caps
 
 def test_dimensioned_keys_are_listed_not_backtested(
         tmp_path: Path, monkeypatch, capsys, cli_argv) -> None:
-    """A dimensioned key is no PromQL selector: listed, marked, never queried,
-    and counted in the text report. A `_critical` key is an ordinary
+    """A dimensioned key (served-values' `dimensions`, #2750) is not narrowed
+    by the selector asked: listed, marked, never queried, and counted in the
+    text report. A `_critical` key is an ordinary
     threshold to /metrics (declared in defaults with no base key, it is
     served as a warning row) and is backtested as one (round-2 review)."""
     def files(v: int) -> dict[str, str]:
@@ -321,24 +354,115 @@ def test_dimensioned_keys_are_listed_not_backtested(
     assert "**Not backtested:** 1 (dimensioned key)" in md.read_text(encoding="utf-8")
 
 
-def test_a_key_served_as_critical_is_listed_not_backtested(
+def test_a_key_served_as_critical_is_backtested_on_its_base_series(
         tmp_path: Path, monkeypatch, capsys, cli_argv) -> None:
-    """`<base>_critical` whose base /metrics serves is a critical row (Go's
-    verdict, round-3 review): no series of its own, so listed and not
-    queried. The base-less `*_critical` above is a warning row and is."""
+    """`<base>_critical` whose base the root `defaults:` declares is a critical row of the
+    base's metric (Go's verdict): served-values says so (#2750 — its series'
+    `metric_key` is the base), so Prometheus is asked about the base and the
+    change is analyzed, not skipped. Nothing is asked about a
+    `mysql_connections_critical` series, which does not exist."""
     def files(v: int) -> dict[str, str]:
         return {"_defaults.yaml": _DEFAULTS,
                 "tx.yaml": ("tenants:\n  tx:\n    mysql_connections: \"70\"\n"
                             f"    mysql_connections_critical: \"{v}\"\n")}
     b, c = _tree(tmp_path / "base", files(99)), _tree(tmp_path / "cur", files(95))
-    assert tv.load_served_values(c, at=AT)["tx"].severities["mysql_connections_critical"] == "critical"
+    served = tv.load_served_values(c, at=AT)["tx"]
+    assert served.severities["mysql_connections_critical"] == "critical"
+    assert served.series["mysql_connections_critical"] == (_ident("mysql_connections", "critical"),)
+    _, out, asked = _run_main(monkeypatch, capsys, cli_argv, b, c, "--json")
+    rows = json.loads(out.out)["changes"]
+    assert [(r["metric"], r["status"], r.get("backtest")) for r in rows] == [
+        ("mysql_connections_critical", "analyzed", None)]
+    # The stub serves 50 then 2000: 99 and 95 both fire once.
+    assert (rows[0]["old_breach_count"], rows[0]["new_breach_count"]) == (1, 1)
+    assert asked == ['mysql_connections{tenant="tx"}']
+    _, out, _ = _run_main(monkeypatch, capsys, cli_argv, b, c)
+    assert "Not backtested" not in out.out
+
+
+def test_a_window_served_as_critical_is_backtested(
+        tmp_path: Path, monkeypatch, capsys, cli_argv) -> None:
+    """A base key a window overrides to `N:critical` (#2750's other shape): the
+    changed pair holds in the critical window only; the series of that window
+    is the base's critical row, so the change is analyzed on the base."""
+    def files(v: str) -> dict[str, str]:
+        return {"_defaults.yaml": _DEFAULTS, "tx.yaml": (
+            "tenants:\n  tx:\n    mysql_connections:\n      default: \"70\"\n      overrides:\n"
+            f"        - window: \"01:00-09:00\"\n          value: \"{v}:critical\"\n")}
+    b, c = _tree(tmp_path / "base", files("1000")), _tree(tmp_path / "cur", files("1500"))
+    changes = _backtest(monkeypatch, b, c)
+    assert [(ch["window"], ch["series"]) for ch in changes] == [
+        (["01:00-09:00"], [_ident("mysql_connections", "critical")])]
+    _, out, asked = _run_main(monkeypatch, capsys, cli_argv, b, c, "--json")
+    rows = json.loads(out.out)["changes"]
+    assert [(r["metric"], r["status"], r["window"]) for r in rows] == [
+        ("mysql_connections", "analyzed", ["01:00-09:00"])]
+    assert asked == ['mysql_connections{tenant="tx"}']
+
+
+@pytest.mark.parametrize("metric,series,want", [
+    # The reason is served-values' fields, never the key's name.
+    ("plain", [tv.Series("user_threshold", {}, "plain", False, {"db": "a"}, {})], "dimensioned key"),
+    ("plain", [tv.Series("user_threshold", {}, "plain", False, {}, {"ts": "SYS.*"})], "dimensioned key"),
+    ('x{db="a"}', [tv.Series("user_threshold", {}, "x", False, {}, {})], None),
+    ("x_critical", [tv.Series("user_threshold", {"severity": "critical"}, "x", False, {}, {})], None),
+    # Nothing to ask Prometheus about is not "no data" (fail closed, #2750 N2).
+    ("x", [], "served-values gave no non-twin /metrics series"),
+    ("x", [tv.Series("user_threshold", {}, "x_old", True, {}, {})],
+     "served-values gave no non-twin /metrics series"),
+])
+def test_not_backtestable_reads_the_series_fields(metric: str, series: list, want: str | None) -> None:
+    change = {"tenant": "tx", "metric": metric, "old_value": "1", "new_value": "2", "series": series}
+    assert bt.not_backtestable(change) == want
+
+
+def test_a_change_with_nothing_to_query_is_not_reported_as_no_data(
+        tmp_path: Path, monkeypatch, capsys, cli_argv) -> None:
+    """A change whose series are only a legacy twin (or none) asks Prometheus
+    nothing; the report says so, it does not say "No historical data found"
+    (#2750 N2)."""
+    b = _tree(tmp_path / "base", {"_defaults.yaml": _DEFAULTS, "tx.yaml": _wrapper("50")})
+    c = _tree(tmp_path / "cur", {"_defaults.yaml": _DEFAULTS, "tx.yaml": _wrapper("60")})
+    twin_only = [_ident("mysql_cpu", "warning", metric="cpu", twin=True)]
+    monkeypatch.setattr(bt, "extract_changes_from_dirs", lambda cur, base: [
+        {"tenant": "tx", "metric": "k", "old_value": "50", "new_value": "60", "series": twin_only}])
     _, out, asked = _run_main(monkeypatch, capsys, cli_argv, b, c, "--json")
     rows = json.loads(out.out)["changes"]
     assert [(r["metric"], r["status"], r["backtest"]) for r in rows] == [
-        ("mysql_connections_critical", "not_backtested", "skipped: critical-severity key")]
+        ("k", "not_backtested", "skipped: served-values gave no non-twin /metrics series")]
     assert asked == []
-    _, out, _ = _run_main(monkeypatch, capsys, cli_argv, b, c)
-    assert "Not backtested: 1 (critical-severity key)" in out.out
+
+
+def test_queries_name_the_series_metric_keys_never_the_twin() -> None:
+    """A critical key is asked about by its series' metric_key; an alias
+    target's legacy twin is never asked about (#2750 review F1)."""
+    change = {"tenant": "tx", "metric": "mysql_threads_running_critical", "series": [
+        tv.Series("user_threshold", {}, "mysql_threads_running", False, {}, {}),
+        tv.Series("user_threshold", {}, "mysql_cpu", True, {}, {})]}
+    assert bt._query_metrics(change) == ["mysql_threads_running"]
+    assert bt._query_metrics({"tenant": "tx", "metric": "k"}) == ["k"]  # --tenant / --git-diff
+
+
+def test_a_retired_name_with_data_is_not_backtested_against(
+        tmp_path: Path, monkeypatch, capsys, cli_argv) -> None:
+    """`mysql_cpu` 40 -> 90 (the retired spelling of mysql_threads_running) with
+    Prometheus holding data under `mysql_cpu` only: the twin's name is not
+    this threshold's data (#1231 renamed it because it reads as host CPU%), so
+    the change is no_data and nothing is asked about `mysql_cpu` (#2750 F1)."""
+    def files(v: int) -> dict[str, str]:
+        return {"_defaults.yaml": _DEFAULTS + "  mysql_threads_running: 30\n",
+                "tx.yaml": f"tenants:\n  tx:\n    mysql_cpu: \"{v}\"\n"}
+    b, c = _tree(tmp_path / "base", files(40)), _tree(tmp_path / "cur", files(90))
+    changes = _backtest(monkeypatch, b, c)
+    assert [(ch["metric"], ch["series"]) for ch in changes] == [
+        ("mysql_threads_running",
+         [_ident("mysql_threads_running", "warning", metric="threads_running"),
+          _ident("mysql_cpu", "warning", metric="cpu", twin=True)])]
+    _, out, asked = _run_main(monkeypatch, capsys, cli_argv, b, c, "--json",
+                              has_data=lambda q: q.startswith("mysql_cpu"))
+    rows = json.loads(out.out)["changes"]
+    assert [(r["metric"], r["status"]) for r in rows] == [("mysql_threads_running", "no_data")]
+    assert asked and all("mysql_cpu" not in q for q in asked), asked
 
 
 @pytest.mark.parametrize("side", ["baseline", "current", "both"])

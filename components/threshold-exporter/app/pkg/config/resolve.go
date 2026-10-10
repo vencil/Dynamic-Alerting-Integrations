@@ -117,9 +117,11 @@ func (c *ThresholdConfig) ResolveAtWithStats(now time.Time) ([]ResolvedThreshold
 }
 
 // rowSink is told, for a threshold row a resolve phase produces, the
-// canonical tenant-config key the row serves (#2115). nil on the public
-// resolve path, so the phases skip the reporting entirely.
-type rowSink func(key string, row ResolvedThreshold)
+// canonical tenant-config key the row serves (#2115) and the metric key the
+// row's component / metric labels were parsed from (#2750; "" for a
+// custom-alert row), and whether the row is a #1231 legacy twin. nil on the
+// public resolve path, so the phases skip the reporting entirely.
+type rowSink func(key, metricKey string, legacyTwin bool, row ResolvedThreshold)
 
 // customAlertsKey is the reserved key every custom-alert row serves.
 const customAlertsKey = "_custom_alerts"
@@ -233,7 +235,7 @@ func (c *ThresholdConfig) resolveAtWithStats(now time.Time, keyed *[]KeyedThresh
 			// enter the segment here, so they are reported here.
 			if collect != nil {
 				for _, r := range caRows {
-					collect(customAlertsKey, r)
+					collect(customAlertsKey, "", false, r)
 				}
 			}
 		}
@@ -316,6 +318,16 @@ func (c *ThresholdConfig) resolveAtWithStats(now time.Time, keyed *[]KeyedThresh
 // shadows, and every custom-alert row under `_custom_alerts`.
 type KeyedThreshold struct {
 	Key string
+	// MetricKey is the metric key the row's component and metric labels
+	// were parsed from, as the resolver held it (#2750): the key itself for
+	// a base or declared row, `X` for `X_critical`'s critical row and for a
+	// dimensional `X{...}` row, the retired base for a #1231 legacy twin.
+	// Empty for a custom-alert row, which no metric key names.
+	MetricKey string
+	// LegacyTwin is true on a #1231 legacy twin: the row a key derived from
+	// an alias target (the target itself, its `_critical`, a dimensional
+	// spelling) is served a second time under the retired metric identity.
+	LegacyTwin bool
 	ResolvedThreshold
 }
 
@@ -366,8 +378,8 @@ func checkKeyed(rows []ResolvedThreshold, keyed []KeyedThreshold) error {
 // order the phases append them to the segment.
 type segmentPairs struct{ pairs []KeyedThreshold }
 
-func (p *segmentPairs) add(key string, row ResolvedThreshold) {
-	p.pairs = append(p.pairs, KeyedThreshold{Key: key, ResolvedThreshold: row})
+func (p *segmentPairs) add(key, metricKey string, legacyTwin bool, row ResolvedThreshold) {
+	p.pairs = append(p.pairs, KeyedThreshold{Key: key, MetricKey: metricKey, LegacyTwin: legacyTwin, ResolvedThreshold: row})
 }
 
 // sortInto is the truncation sort on the keyed path: the pairs are sorted by

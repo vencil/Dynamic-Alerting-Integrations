@@ -110,6 +110,16 @@ type servedTenantValues struct {
 	Values map[string]any `json:"values"`
 	// Severities: the severity label of each threshold key in Values.
 	Severities map[string]string `json:"severities"`
+	// Series (#2750): for each threshold key in Severities — exactly those
+	// keys — the /metrics series its rows are (metricsSeries: the family name
+	// and full label set as the Gather returns them, the resolver's metric
+	// key, the legacy-twin mark, the dimensional labels). One series, or two
+	// for every key derived from a #1231 alias target — the target, its
+	// `_critical`, its dimensional spellings: its row, then its legacy twin
+	// (LegacyTwin true; checkKeySeries). A key with no /metrics row
+	// (Unserved, or only in Dropped) has no entry; `_custom_alerts` has none
+	// either (its rows are its value). Always present ({} when none).
+	Series map[string][]metricsSeries `json:"series"`
 	// Unserved: keys of the tenant's merged config with no entry in Values
 	// (switched off, or served by nothing), keyed as the merged config spells
 	// them, value as written — plus the threshold keys the tenant inherits
@@ -155,15 +165,19 @@ type servedSchedule struct {
 // "24:00"). Value is the served number (as in Values), or null (jsonNull):
 // the key has no /metrics row in that segment (switched off, dropped, or
 // nothing to serve). Severity is the row's severity label; absent when Value
-// is null. Error, set only on a segment in which the exporter's /metrics
-// cannot be gathered at all (HTTP 500 — nothing is served, for any key), is
-// that Gather's failure; Value and Severity are then absent.
+// is null. Series (#2750) is the key's series in that segment, as in
+// servedTenantValues.Series — read from that segment's own Gather, since a
+// window's `N:critical` serves another series; absent when Value is null.
+// Error, set only on a segment in which the exporter's /metrics cannot be
+// gathered at all (HTTP 500 — nothing is served, for any key), is that
+// Gather's failure; Value, Severity and Series are then absent.
 type scheduleSegment struct {
-	From     string `json:"from"`
-	To       string `json:"to"`
-	Value    any    `json:"value,omitempty"`
-	Severity string `json:"severity,omitempty"`
-	Error    string `json:"error,omitempty"`
+	From     string          `json:"from"`
+	To       string          `json:"to"`
+	Value    any             `json:"value,omitempty"`
+	Severity string          `json:"severity,omitempty"`
+	Series   []metricsSeries `json:"series,omitempty"`
+	Error    string          `json:"error,omitempty"`
 }
 
 // jsonNull is a segment's Value when the key is not served: an explicit JSON
@@ -190,6 +204,16 @@ func parseServedValuesFlags(args []string, errOut io.Writer) (*servedValuesFlags
 	fs.Usage = func() {
 		fmt.Fprintf(errOut, "Usage: %s %s --config-dir <dir> [--at <RFC3339>] [--schedules]\n", programName, servedValuesCmd)
 		fmt.Fprintf(errOut, "Print, as JSON, the values the exporter's /metrics serves per tenant.\n\n")
+		fmt.Fprintf(errOut, "Each tenant's \"series\" maps every threshold key of \"severities\" to the /metrics series\n"+
+			"its rows are, read back from the Gather: [{\"name\", \"labels\" (the full label set),\n"+
+			"\"metric_key\" (the key the resolver parsed the component/metric labels from, e.g. X for\n"+
+			"X_critical and X{db=\"a\"}), \"legacy_twin\", \"dimensions\", \"dimensions_regex\"}]. Every key\n"+
+			"derived from a retired alias's target (the target, its _critical, its dimensional\n"+
+			"spellings) has two: its own row (\"legacy_twin\": false) first, then the same value\n"+
+			"under the retired metric identity (\"legacy_twin\": true). A key with no /metrics row\n"+
+			"(unserved, or only dropped) and _custom_alerts have no entry. With --schedules each\n"+
+			"served segment carries its own \"series\" (an `N:critical` window serves another one);\n"+
+			"a segment with a null value or an error has none.\n\n")
 		fs.PrintDefaults()
 		fmt.Fprintf(errOut, "\nExit codes:\n  0  ok\n  2  caller error, a tree the exporter rejects (e.g. a tenant declared twice),\n"+
 			"     any output string that is not valid UTF-8, or a Gather failure of the same\n"+
@@ -410,7 +434,7 @@ func servedValues(cfg *config.ThresholdConfig, at time.Time,
 	written map[string]map[string]string,
 ) (map[string]servedTenantValues, error) {
 	name := func(tenant, key string) string { return config.WrittenKey(written[tenant], key) }
-	ownedBy, droppedBy, res, err := keyedRows(cfg, at, name)
+	ownedBy, droppedBy, seriesBy, res, err := keyedRows(cfg, at, name)
 	if err != nil {
 		return nil, err
 	}
@@ -445,6 +469,7 @@ func servedValues(cfg *config.ThresholdConfig, at time.Time,
 		tv := servedTenantValues{
 			Values:     map[string]any{},
 			Severities: map[string]string{},
+			Series:     map[string][]metricsSeries{},
 			Unserved:   map[string]any{},
 			Dropped:    map[string][]string{},
 		}
@@ -463,6 +488,13 @@ func servedValues(cfg *config.ThresholdConfig, at time.Time,
 			}
 			tv.Values[name] = jsonFloat(r.value)
 			tv.Severities[name] = r.severity
+			tv.Series[name] = seriesBy[tenant][name]
+			if len(tv.Series[name]) != len(rows) {
+				return nil, fmt.Errorf("internal: tenant %s: key %q owns %d rows but %d series", tenant, name, len(rows), len(tv.Series[name]))
+			}
+			if err := checkKeySeries(tenant, name, tv.Series[name]); err != nil {
+				return nil, err
+			}
 		}
 
 		// Reserved keys, as the exporter's own resolvers read them.
@@ -568,6 +600,7 @@ func spellAsWritten(tenants map[string]servedTenantValues, written map[string]ma
 		name := func(k string) string { return config.WrittenKey(w, k) }
 		tv.Values = renamed(tv.Values, name)
 		tv.Severities = renamed(tv.Severities, name)
+		tv.Series = renamed(tv.Series, name)
 		tv.Unserved = renamed(tv.Unserved, name)
 		tv.Dropped = renamed(tv.Dropped, name)
 		if tv.Schedules != nil {
@@ -598,7 +631,8 @@ func renamed[V any](m map[string]V, name func(string) string) map[string]V {
 // row the collector reports on carries its key.
 //
 // It also returns the reserved-key readings that scrape resolved
-// (Hooks.Observe), for servedValues to read instead of resolving them again.
+// (Hooks.Observe), for servedValues to read instead of resolving them again,
+// and each kept row's series as that same Gather returned it (keySeries).
 //
 // Not registered: the Go runtime collector the exporter adds — it reads no
 // config, so no tree can make it fail. The config metrics are a fresh set,
@@ -609,7 +643,7 @@ func renamed[V any](m map[string]V, name func(string) string) map[string]V {
 // metrics_not_gatherable reads this same verdict (gatherVerdict, #2031).
 func keyedRows(cfg *config.ThresholdConfig, at time.Time, name keyNamer) (
 	served map[string]map[string][]config.ResolvedThreshold, dropped map[string]map[string][]string,
-	reserved scrape.Reserved, err error,
+	series map[string]map[string][]metricsSeries, reserved scrape.Reserved, err error,
 ) {
 	return keyedRowsWith(cfg, at, (*config.ThresholdConfig).ResolveAtWithKeys, name)
 }
@@ -668,7 +702,7 @@ func gatherVerdict(cfg *config.ThresholdConfig, at time.Time, name keyNamer) str
 		return ""
 	}
 	for _, m := range cfg.ScheduleCuts() {
-		_, _, _, err := keyedRowsWith(cfg.AtMinuteOfDay(m), at, (*config.ThresholdConfig).ResolveAtWithKeysSilent, name)
+		_, _, _, _, err := keyedRowsWith(cfg.AtMinuteOfDay(m), at, (*config.ThresholdConfig).ResolveAtWithKeysSilent, name)
 		var ng *notGatherableError
 		if errors.As(err, &ng) {
 			return ng.verdict()
@@ -683,7 +717,7 @@ func keyedRowsWith(cfg *config.ThresholdConfig, at time.Time,
 	name keyNamer,
 ) (
 	served map[string]map[string][]config.ResolvedThreshold, dropped map[string]map[string][]string,
-	reserved scrape.Reserved, err error,
+	series map[string]map[string][]metricsSeries, reserved scrape.Reserved, err error,
 ) {
 	var keyed []config.KeyedThreshold
 	observed := 0
@@ -712,21 +746,25 @@ func keyedRowsWith(cfg *config.ThresholdConfig, at time.Time,
 	})
 	reg := prometheus.NewRegistry()
 	scrape.Register(reg, collector, metrics)
-	_, gerr := reg.Gather()
+	gathered, gerr := gatherSeries(reg)
 	if keyErr != nil {
-		return nil, nil, scrape.Reserved{}, keyErr
+		return nil, nil, nil, scrape.Reserved{}, keyErr
 	}
 	if gerr != nil {
-		return nil, nil, scrape.Reserved{}, &notGatherableError{keys: sameSeriesKeys(keyed, results, name), err: gerr}
+		return nil, nil, nil, scrape.Reserved{}, &notGatherableError{keys: sameSeriesKeys(keyed, results, name), err: gerr}
 	}
 	if observed != 1 {
-		return nil, nil, scrape.Reserved{}, fmt.Errorf("internal: the collector reported its reserved-key readings %d times, want 1", observed)
+		return nil, nil, nil, scrape.Reserved{}, fmt.Errorf("internal: the collector reported its reserved-key readings %d times, want 1", observed)
 	}
 	served, dropped, err = groupRows(keyed, results)
 	if err != nil {
-		return nil, nil, scrape.Reserved{}, err
+		return nil, nil, nil, scrape.Reserved{}, err
 	}
-	return served, dropped, reserved, nil
+	series, err = keySeries(keyed, results, gathered)
+	if err != nil {
+		return nil, nil, nil, scrape.Reserved{}, err
+	}
+	return served, dropped, series, reserved, nil
 }
 
 // groupRows groups the rows of one Gather by tenant and key: those the
@@ -758,10 +796,12 @@ func groupRows(keyed []config.KeyedThreshold, results []emitResult) (
 	return served, dropped, nil
 }
 
-// reading is what one threshold key serves: its rows' value and severity.
+// reading is what one threshold key serves: its rows' value and severity,
+// and (schedule readings) the series they are.
 type reading struct {
 	value    float64
 	severity string
+	series   []metricsSeries
 }
 
 // keyReading is the value and severity of the rows a key owns: one row, or a
