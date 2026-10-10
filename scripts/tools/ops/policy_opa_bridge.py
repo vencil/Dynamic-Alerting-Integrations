@@ -6,10 +6,25 @@ Converts tenant YAML configs to OPA input JSON format, evaluates via OPA (REST A
 and converts OPA responses back to PolicyResult / Violation format compatible with policy_engine.py.
 
 Modes:
-  --opa-url: Call OPA REST API (POST /v1/data/<package>/violations)
-  --opa-binary: Call local 'opa eval' subprocess
+  --opa-url: Call OPA REST API (POST /v1/data/<package, dots as slashes>/violations)
+  --policy-path: Path to .rego file(s) for local eval via `opa eval`
+      (`--opa-binary`, default `opa`; query `data.<package>.violations`,
+      input on stdin)
   --dry-run: Show input JSON without calling OPA
-  --policy-path: Path to .rego file(s) for local eval
+
+When OPA does not evaluate (#2724) — the server cannot be reached, answers
+an HTTP error or a redirect (redirects are not followed: point `--opa-url`
+at OPA's final address), or breaks the HTTP exchange; `opa` is missing,
+fails or times out; the answer is not JSON; `<package>.violations` is
+undefined (no policy under that package) — or when an item of `violations`
+is not a violation object (a set of strings, `"severity": null`), the tool
+exits 2 (EXIT_CALLER_ERROR) with one `ERROR:` line on stderr and nothing on
+stdout, `--json` included. Each used to report `All policies passed.` rc 0.
+
+When OPA did evaluate, every item is listed in the report; the run passes
+when none is error-level. `--ci` exits 1 only on an error-level item, so a
+`violations` holding only warnings is still rc 0 — a pass with warnings, by
+design. An empty `violations` set is a pass.
 
 OPA Input JSON format:
   {
@@ -21,7 +36,7 @@ OPA Input JSON format:
       "tenant-a": { "mysql_connections": 70, "mysql_connections_critical": 95 },
       ...
     },
-    "defaults": { "mysql_connections": 80 },
+    "defaults": { "defaults": { "mysql_connections": 80 } },
     "rule_packs": ["mariadb", "kubernetes"],
     "platform_version": "v2.3.0"
   }
@@ -44,7 +59,20 @@ it here: it is the number that alerts. A file the exporter drops or cannot
 read is exit 2, as is a tree da-guard refuses; a file it reads but serves no
 tenant from is a WARN line.
 
-OPA Response format:
+`_routing` in `tenants` is as written plus inherited, NOT the route
+generator's resolution (#2724): `_routing_defaults` is not applied and
+`{{tenant}}` is not substituted, so a tenant that relies on the defaults
+alone has no `_routing` here. `evaluate-policy` reads the resolved routing.
+
+`defaults` (#2724): the root defaults carrier's top-level keys as written,
+minus the `_`-prefixed ones — NOT unwrapped. The usual carrier writes its
+thresholds under `defaults:`, so a rego reads
+`input.defaults.defaults.mysql_connections`; `state_filters:` and any other
+top-level key come along beside it. The thresholds a tenant actually gets
+are in `served`.
+
+OPA Response format (REST; `opa eval` nests the same list under
+`result[0].expressions[0].value`):
   { "result": [{"msg": "...", "severity": "error|warning", "tenant": "...", "field": "..."}] }
 
 Violation conversion:
@@ -61,8 +89,9 @@ import sys
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Optional
-from urllib.request import Request, urlopen
-from urllib.error import URLError
+from http.client import HTTPException
+from urllib.request import HTTPRedirectHandler, Request, build_opener
+from urllib.error import HTTPError
 
 # Pull `try_utf8_stdout` from the shared compat lib at scripts/tools/.
 # Migrated in #489 Phase B (was missing encoding setup → would crash on
@@ -232,6 +261,95 @@ def build_opa_input(
 # ---------------------------------------------------------------------------
 # OPA evaluation
 # ---------------------------------------------------------------------------
+OPA_TIMEOUT_SECONDS = 10
+
+
+class OpaEvalError(Exception):
+    """OPA did not evaluate the policy (#2724): unreachable, failed, timed
+    out, answered something that is not the `violations` list, or has no
+    `violations` rule under the package. `main` prints the message as one
+    `ERROR:` line and exits 2 — before #2724 each of these was swallowed into
+    `[]` and reported as `All policies passed.` rc 0, `--ci` included."""
+
+
+def package_url_path(package: str) -> str:
+    """`--policy-package` as the REST path under `/v1/data/`: OPA's data API
+    separates the package's segments with `/`, so the default
+    `dynamic_alerting.policy` must become `dynamic_alerting/policy` — sent as
+    written, OPA looks up one key named `dynamic_alerting.policy`, finds
+    nothing and answers `{}` (#2724). A package already written with `/`
+    passes unchanged."""
+    return package.strip("./").replace(".", "/")
+
+
+def package_query(package: str) -> str:
+    """`--policy-package` as the `opa eval` query for its `violations` rule:
+    `data.<package>.violations`, either separator accepted."""
+    return f"data.{package.strip('./').replace('/', '.')}.violations"
+
+
+def _violations_list(value: Any, where: str) -> list:
+    """`value` is what OPA answered for `<package>.violations`; a rule that is
+    not a set or array of violations cannot be reported on."""
+    if not isinstance(value, list):
+        raise OpaEvalError(
+            f"{where}: `violations` is a {type(value).__name__}, not a set or array of "
+            "violations")
+    return value
+
+
+def _undefined(package: str) -> OpaEvalError:
+    return OpaEvalError(
+        f"`{package_query(package)}` is undefined in OPA (no `violations` rule under "
+        f"package {package!r}, or it produced no value): no policy was evaluated — "
+        "check --policy-package and that the policy is loaded")
+
+
+def _first_lines(text: str, limit: int = 5) -> str:
+    lines = [ln for ln in (text or "").splitlines() if ln.strip()]
+    more = f" (+{len(lines) - limit} more lines)" if len(lines) > limit else ""
+    return " / ".join(lines[:limit]) + more
+
+
+class _NoRedirect(HTTPRedirectHandler):
+    """Refuse every redirect (#2724). urllib re-sends a 301/302/303'd POST as
+    a GET without its body, so OPA would evaluate an empty input and answer
+    `[]` — a pass; it does not follow a POST's 307/308 at all. Refusing all
+    of them gives one behaviour: the 3xx is raised as HTTPError (returning
+    None makes urllib do that), which `call_opa_rest` reports as exit 2."""
+
+    def redirect_request(self, req, fp, code, msg, headers, newurl):  # noqa: D102
+        return None
+
+
+_OPENER = build_opener(_NoRedirect)
+
+
+def urlopen(req: Request, timeout: float):
+    """`urllib.request.urlopen` without following redirects (`_NoRedirect`)."""
+    return _OPENER.open(req, timeout=timeout)  # nosec B310  #see call_opa_rest
+
+
+def _eval_errors(stdout: str, limit: int = 3) -> str:
+    """`opa eval --format json`'s `{"errors": [...]}` as one line
+    (`code: message (file:row)`); `""` when stdout is not that shape."""
+    try:
+        errors = json.loads(stdout).get("errors")
+    except (ValueError, AttributeError):
+        return ""
+    if not isinstance(errors, list):
+        return ""
+    parts = []
+    for err in errors[:limit]:
+        if not isinstance(err, dict):
+            continue
+        loc = err.get("location") if isinstance(err.get("location"), dict) else {}
+        where = f" ({loc.get('file', '')}:{loc.get('row', '')})" if loc else ""
+        parts.append(f"{err.get('code', 'error')}: {err.get('message', '')}{where}")
+    more = f" (+{len(errors) - limit} more)" if len(errors) > limit else ""
+    return "; ".join(parts) + more
+
+
 def call_opa_rest(
     opa_url: str,
     package: str,
@@ -246,26 +364,51 @@ def call_opa_rest(
 
     Returns:
         List of violation dicts from OPA result
+
+    Raises:
+        OpaEvalError: OPA did not evaluate (see the class)
     """
-    endpoint = f"{opa_url.rstrip('/')}/v1/data/{package}/violations"
+    endpoint = f"{opa_url.rstrip('/')}/v1/data/{package_url_path(package)}/violations"
 
     request_body = json.dumps({"input": input_data}).encode("utf-8")
-    req = Request(endpoint, data=request_body, method="POST")  # nosec B310  #operator-supplied internal OPA URL
-    req.add_header("Content-Type", "application/json")
-
     try:
-        with urlopen(req, timeout=10) as response:  # nosec B310  #see Request line above
-            response_data = json.loads(response.read().decode("utf-8"))
-            result = response_data.get("result", [])
-            if isinstance(result, list):
-                return result
-            return []
-    except URLError as e:
-        print(f"ERROR: OPA API call failed: {safe_label(e)}", file=sys.stderr)
-        return []
-    except json.JSONDecodeError as e:
-        print(f"ERROR: OPA response parsing failed: {safe_label(e)}", file=sys.stderr)
-        return []
+        req = Request(endpoint, data=request_body, method="POST")  # nosec B310  #operator-supplied internal OPA URL
+        req.add_header("Content-Type", "application/json")
+        with urlopen(req, timeout=OPA_TIMEOUT_SECONDS) as response:  # nosec B310  #see Request line above
+            raw = response.read()
+    except HTTPError as e:
+        if 300 <= e.code < 400:
+            # `_NoRedirect` refuses every redirect (see its docstring).
+            location = e.headers.get("Location", "") if e.headers else ""
+            raise OpaEvalError(
+                f"OPA API call failed: POST {endpoint}: HTTP {e.code} redirect"
+                + (f" to {location}" if location else "")
+                + " (redirects are not followed; point --opa-url at OPA's final address)"
+            ) from e
+        detail = ""
+        try:
+            detail = _first_lines(e.read().decode("utf-8", "replace"), 3)
+        except (OSError, HTTPException):
+            pass
+        raise OpaEvalError(
+            f"OPA API call failed: POST {endpoint}: HTTP {e.code}"
+            + (f": {detail}" if detail else "")) from e
+    except (OSError, ValueError, HTTPException) as e:
+        # URLError, refused, timeout, bad URL; HTTPException: a malformed
+        # status line (BadStatusLine), a body cut short (IncompleteRead), ...
+        raise OpaEvalError(
+            f"OPA API call failed: POST {endpoint}: {type(e).__name__}: {e}") from e
+
+    where = f"OPA response from {endpoint}"
+    try:
+        response_data = json.loads(raw.decode("utf-8"))
+    except ValueError as e:  # JSONDecodeError, UnicodeDecodeError
+        raise OpaEvalError(f"{where} is not JSON: {e}") from e
+    if not isinstance(response_data, dict):
+        raise OpaEvalError(f"{where} is not a JSON object")
+    if "result" not in response_data:
+        raise _undefined(package)
+    return _violations_list(response_data["result"], where)
 
 
 def call_opa_binary(
@@ -276,6 +419,11 @@ def call_opa_binary(
 ) -> list[dict]:
     """Call local OPA binary via subprocess.
 
+    `opa eval --format json -d <policy_path> --stdin-input
+    data.<package>.violations`, the input JSON on stdin (#2724: the old
+    command passed it after `-I`, which takes no value, so OPA saw a second
+    query and refused every run).
+
     Args:
         opa_binary: Path to opa binary (default: 'opa')
         policy_path: Path to .rego file(s)
@@ -284,45 +432,58 @@ def call_opa_binary(
 
     Returns:
         List of violation dicts from OPA result
-    """
-    input_json = json.dumps(input_data)
 
+    Raises:
+        OpaEvalError: OPA did not evaluate (see the class)
+    """
     cmd = [
         opa_binary,
         "eval",
-        f"-d={policy_path}",
-        f"{package}/violations",
-        "-I",
-        input_json,
+        "--format", "json",
+        "-d", policy_path,
+        "--stdin-input",
+        package_query(package),
     ]
 
     try:
         result = subprocess.run(
             cmd,
+            input=json.dumps(input_data),
             capture_output=True,
             text=True, encoding="utf-8", errors="replace",
-            timeout=10,
+            timeout=OPA_TIMEOUT_SECONDS,
             check=False,
         )
+    except FileNotFoundError as e:
+        raise OpaEvalError(f"OPA binary not found: {opa_binary}") from e
+    except subprocess.TimeoutExpired as e:
+        raise OpaEvalError(
+            f"OPA eval timed out after {OPA_TIMEOUT_SECONDS}s: {opa_binary}") from e
+    except OSError as e:  # not executable, ...
+        raise OpaEvalError(f"OPA binary could not run: {opa_binary}: {e}") from e
 
-        if result.returncode != 0:
-            print(f"ERROR: OPA eval failed: {safe_label(result.stderr)}", file=sys.stderr)
-            return []
+    if result.returncode != 0:
+        # `--format json` puts evaluation errors on stdout, usage errors on stderr.
+        detail = _eval_errors(result.stdout) or _first_lines(result.stderr) \
+            or _first_lines(result.stdout)
+        raise OpaEvalError(f"OPA eval failed (rc {result.returncode}): {detail}")
 
+    where = f"`{opa_binary} eval` output"
+    try:
         response_data = json.loads(result.stdout)
-        result_data = response_data.get("result", [])
-        if isinstance(result_data, list):
-            return result_data
-        return []
-    except FileNotFoundError:
-        print(f"ERROR: OPA binary not found at {opa_binary}", file=sys.stderr)
-        return []
-    except subprocess.TimeoutExpired:
-        print("ERROR: OPA eval timeout", file=sys.stderr)
-        return []
-    except json.JSONDecodeError as e:
-        print(f"ERROR: OPA output parsing failed: {safe_label(e)}", file=sys.stderr)
-        return []
+    except ValueError as e:
+        raise OpaEvalError(f"{where} is not JSON: {e}") from e
+    if not isinstance(response_data, dict):
+        raise OpaEvalError(f"{where} is not a JSON object")
+    if "result" not in response_data:
+        raise _undefined(package)
+    try:
+        value = response_data["result"][0]["expressions"][0]["value"]
+    except (KeyError, IndexError, TypeError) as e:
+        raise OpaEvalError(
+            f"{where} has no result[0].expressions[0].value: {_first_lines(result.stdout, 2)}"
+        ) from e
+    return _violations_list(value, where)
 
 
 # ---------------------------------------------------------------------------
@@ -340,32 +501,63 @@ def convert_opa_violations(
 
     Returns:
         PolicyResult with converted violations
+
+    Raises:
+        OpaEvalError: an item is not a violation object, or its `severity`
+            is not a string (#2724: such items used to be skipped, so a
+            `violations contains msg if {...}` set of strings, or
+            `"severity": null`, reported a pass).
+
+    A string `severity` is compared case-insensitively, ASCII only:
+    `warning` in any ASCII case is warning-level; every other string
+    (`warnıng` with a dotless ı included), and a missing `severity`, is
+    error-level. Missing `tenant` / `msg` / `field` get their defaults.
     """
     result = PolicyResult(
         tenants_evaluated=tenants_count,
         policy_package="dynamic_alerting.policy",
     )
 
-    for v in opa_violations:
+    expected = ('an object {"msg": ..., "severity": "error"|"warning", '
+                '"tenant": ..., "field": ...}')
+    for i, v in enumerate(opa_violations):
         if not isinstance(v, dict):
-            continue
-
-        try:
-            level = v.get("severity", "error").upper()
-            if level not in ("ERROR", "WARNING"):
-                level = "ERROR"
-
-            violation = Violation(
-                tenant=str(v.get("tenant", "unknown")),
-                level=level,
-                message=str(v.get("msg", "Policy violation")),
-                field=str(v.get("field", "")),
-            )
-            result.violations.append(violation)
-        except (KeyError, AttributeError):
-            continue
+            raise OpaEvalError(
+                f"violations item {i} is not {expected}: got JSON {_json_type(v)} "
+                f"{_preview(v)}")
+        severity = v.get("severity", "error")
+        if not isinstance(severity, str):
+            raise OpaEvalError(
+                f"violations item {i} has a severity that is not a string: got JSON "
+                f"{_json_type(severity)} {_preview(severity)}; expected {expected}")
+        # ASCII-only case folding: `str.upper()` maps "warnıng" (U+0131) to
+        # "WARNING", which would turn an error into a warning (#2724).
+        level = ("WARNING" if severity.isascii() and severity.lower() == "warning"
+                 else "ERROR")
+        result.violations.append(Violation(
+            tenant=str(v.get("tenant", "unknown")),
+            level=level,
+            message=str(v.get("msg", "Policy violation")),
+            field=str(v.get("field", "")),
+        ))
 
     return result
+
+
+def _json_type(value: Any) -> str:
+    """The JSON name of `value`'s type, for an error message."""
+    if value is None:
+        return "null"
+    if isinstance(value, bool):
+        return "boolean"
+    if isinstance(value, (int, float)):
+        return "number"
+    return {str: "string", list: "array", dict: "object"}.get(type(value), type(value).__name__)
+
+
+def _preview(value: Any, limit: int = 60) -> str:
+    text = json.dumps(value, ensure_ascii=False, default=str)
+    return text if len(text) <= limit else text[:limit - 3] + "..."
 
 
 # ---------------------------------------------------------------------------
@@ -569,30 +761,35 @@ def main(argv: Optional[list[str]] = None) -> int:
         return EXIT_OK
 
     # Evaluate via OPA
-    opa_violations: list[dict] = []
-
-    if args.opa_url:
-        opa_violations = call_opa_rest(
-            args.opa_url,
-            args.policy_package,
-            opa_input,
-        )
-    elif args.policy_path:
-        opa_violations = call_opa_binary(
-            args.opa_binary,
-            args.policy_path,
-            args.policy_package,
-            opa_input,
-        )
-    else:
+    if not args.opa_url and not args.policy_path:
         if lang == "zh":
             print("錯誤：必須指定 --opa-url 或 --policy-path", file=sys.stderr)
         else:
             print("ERROR: Must specify --opa-url or --policy-path", file=sys.stderr)
         return EXIT_CALLER_ERROR
 
-    # Convert to PolicyResult
-    result = convert_opa_violations(opa_violations, len(tenant_configs))
+    try:
+        if args.opa_url:
+            opa_violations = call_opa_rest(
+                args.opa_url,
+                args.policy_package,
+                opa_input,
+            )
+        else:
+            opa_violations = call_opa_binary(
+                args.opa_binary,
+                args.policy_path,
+                args.policy_package,
+                opa_input,
+            )
+        result = convert_opa_violations(opa_violations, len(tenant_configs))
+    except OpaEvalError as e:
+        # #2724: no evaluation (or an answer that is not violations) is not a
+        # pass. stderr only, stdout empty under --json too — this tool's
+        # caller-error convention (the da-guard and no-OPA-selected exits
+        # above print no envelope either).
+        print(f"ERROR: {safe_label(str(e))}", file=sys.stderr)
+        return EXIT_CALLER_ERROR
 
     # Output
     if args.json_output:

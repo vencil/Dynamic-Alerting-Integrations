@@ -329,8 +329,13 @@ def _stub_payload(path: str) -> tuple[int, bytes, str]:
         return j([])
     if path.startswith("/api/v2/silences"):
         return j([])
-    # OPA REST
+    # OPA REST. policy_opa_bridge asks for `.../<package>/violations`, whose
+    # value OPA answers bare: an empty set is `{"result": []}`. (The old
+    # package-level `{"violations": [], "allow": true}` stopped being a pass
+    # in #2724 — an answer that is not the violations list is exit 2.)
     if path.startswith("/v1/data"):
+        if path.rstrip("/").endswith("/violations"):
+            return j({"result": []})
         return j({"result": {"violations": [], "allow": True}})
     # Pushgateway
     if path.startswith("/metrics/job"):
