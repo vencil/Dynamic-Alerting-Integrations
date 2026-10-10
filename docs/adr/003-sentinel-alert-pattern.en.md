@@ -19,6 +19,7 @@ lang: en
 
 - **Sentinel alert**: an alert that does not signal a fault; it only expresses "this tenant is currently in this state". The platform's sentinel alerts always carry `severity: none` and `component: sentinel`.
 - **Inhibit rule**: an Alertmanager setting. While an alert matching the "source" conditions is firing, alerts matching the "target" conditions are not notified; the labels listed under `equal` must have the same value on both sides. An inhibited alert still exists; it just isn't notified (see [ADR-001](./001-severity-dedup-via-inhibit.en.md)).
+- **Rule Pack**: a set of Prometheus rule files (recording rules and alert rules) shipped with the platform, one file per database or purpose, such as `rule-pack-mariadb.yaml`.
 - **Flag metric**: a metric with value 1 that the exporter emits from tenant settings, such as `user_silent_mode`. Remove the setting and the metric disappears.
 
 ## Background
@@ -27,7 +28,7 @@ Tenants on the platform have three operational states:
 
 - **Normal**: alerts fire and are notified as usual.
 - **Silent**: alerts still fire, but no notification is sent.
-- **Maintenance**: during maintenance, alerts do not fire.
+- **Maintenance**: during maintenance, no alert should be produced or recorded at all.
 
 We need a mechanism that lets a tenant's state switch dynamically with its settings, and that is easy to combine and easy to troubleshoot.
 
@@ -42,6 +43,8 @@ We need a mechanism that lets a tenant's state switch dynamically with its setti
 ## Decision
 
 **Adopt the sentinel alert pattern: the exporter emits a tenant state flag → an alert rule produces a sentinel alert → an inhibit rule blocks notifications for the affected alerts.**
+
+This pattern handles states where alerts still fire and only the notification is blocked, i.e. Silent. Maintenance needs no alert to be produced at all, which an inhibit rule cannot do since it only blocks notifications, so Maintenance stays in PromQL (see "Out of scope" below).
 
 1. **Exporter**: threshold-exporter reads the tenant settings and emits a flag metric (`user_silent_mode`).
 2. **Prometheus**: alert rules in the Rule Pack read the flag and produce sentinel alerts (`TenantSilentWarning`, `TenantSilentCritical`).
@@ -82,6 +85,8 @@ Alertmanager's inhibit rule:
   equal: ['tenant']
 ```
 
+`alert_source=""` limits the target to alerts without an `alert_source` label. The platform's self-monitoring alerts carry `alert_source="platform"` (except the Watchdog heartbeat, whose severity is none and so is never a target anyway), so a tenant's silent setting cannot block the platform's own alerts.
+
 Result: `shop`'s warning alerts still fire and stay in the TSDB (Prometheus's time-series database), but their notifications are blocked; critical alerts are notified as usual. Remove `_silent_mode` and the flag metric disappears, the sentinel alert resolves, and notifications resume.
 
 ## Consequences and Known Limitations
@@ -100,7 +105,7 @@ Result: `shop`'s warning alerts still fire and stay in the TSDB (Prometheus's ti
 
 **Out of scope**
 
-- **Maintenance does not use this pattern.** It is excluded in each alert rule's PromQL with `unless on(tenant) (user_state_filter{filter="maintenance"} == 1)`, so during maintenance alerts do not fire, the TSDB has no record of them, and nothing is notified.
+- **Maintenance does not use this pattern.** It needs no alert to be produced, so it lives in PromQL: Rule Pack alert rules exclude tenants under maintenance with `unless on(tenant) (user_state_filter{filter="maintenance"} == 1)`, and a rule carrying this condition does not fire during maintenance, leaving no record in the TSDB. Not every alert rule carries this condition.
 - **The severity-dedup sentinel (`TenantSeverityDedupEnabled`) is for displaying state only.** Deduplication itself is [ADR-001](./001-severity-dedup-via-inhibit.en.md)'s critical→warning inhibit rule, which does not use a sentinel as its source.
 
 **Operational advice**
@@ -120,7 +125,7 @@ Wrap every business alert rule in a "don't fire while the state flag exists" con
 
 ### Handle it in the Alertmanager routing layer (considered, rejected)
 
-No alert-rule changes are needed, but it can only decide not to notify; it cannot control whether the alert is produced, and complex per-tenant logic is hard to express.
+No alert-rule changes are needed, but complex per-tenant logic is hard to express.
 
 ## Related
 

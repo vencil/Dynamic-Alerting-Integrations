@@ -26,6 +26,7 @@ updated_at: 2026-10-10
 - **嚴重度去重（severity dedup）**：同一件事同時觸發多個嚴重度的告警時，只送出最高等級的通知。
 - **抑制規則（inhibit rule）**：Alertmanager 的設定。符合「來源」條件的告警正在觸發時，符合「目標」條件的告警不送通知；`equal` 列出的標籤在兩邊必須同值，規則才成立。被抑制的告警仍然存在，只是不通知。
 - **TSDB**：Prometheus 的時間序列資料庫。告警觸發時 Prometheus 會寫入 `ALERTS` 時間序列，事後可以查。
+- **Rule Pack**：平台隨附的一組 Prometheus 規則檔（recording rule 與告警規則），每個檔案對應一種資料庫或用途，例如 `rule-pack-mariadb.yaml`。
 - **`metric_group`**：告警規則上的標籤，用來把同一件事的 warning 與 critical 配成一對（兩者的告警名稱不同）。
 
 ## 背景
@@ -104,6 +105,7 @@ inhibit_rules:
 **要承擔的**
 
 - Alertmanager 的設定變多，而且要和告警規則的標籤對齊：成對的告警缺 `metric_group`，或兩邊的值不同，抑制就不成立，會收到兩則通知。CI 會檢查同名成對的告警（`X` 與 `XCritical`）帶相同的 `metric_group`（`check_metric_group_pairs.py`）；名稱不成對的告警不在這個檢查的範圍內。
+- Kubernetes Rule Pack 目前有 4 對告警（`PodContainerHighCPU`、`PodContainerHighMemory`、`PodContainerCPUThrottled`、`ContainerOOMKilled` 與各自的 `…Critical`）兩邊都沒有 `metric_group`，去重對它們不生效，會收到兩則通知。上面的 CI 檢查把這 4 對列為已知例外，只擋新增的違規（[#1199](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/1199)）。
 - 沒有 `metric_group` 標籤的告警不參與去重：抑制規則的來源與目標都要求 `metric_group=~".+"`。
 - 建議定期檢視 Alertmanager 的抑制狀態，確認符合預期。
 

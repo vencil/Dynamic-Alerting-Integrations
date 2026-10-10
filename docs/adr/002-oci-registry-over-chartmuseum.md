@@ -34,6 +34,8 @@ updated_at: 2026-10-10
 1. **Helm chart**：threshold-exporter、da-portal、tenant-api 的部署設定。
 2. **容器映像**：threshold-exporter、da-tools、da-portal、tenant-api。
 
+release workflow 也為 recipe-preview 定義了映像與 chart 的發佈步驟（推到同一個倉庫），但這條版號線還沒有發佈過，倉庫裡目前沒有它的製品。
+
 常見做法是映像放容器映像倉庫（例如 ghcr.io），chart 另外放在 ChartMuseum 這類 chart 倉庫，於是有兩套要維運的基礎設施。
 
 ## 決策

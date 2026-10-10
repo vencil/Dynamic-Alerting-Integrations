@@ -25,6 +25,7 @@ updated_at: 2026-10-10
 
 - **Sentinel 告警（哨兵告警）**：本身不代表故障，只用來表達「某個租戶目前處於某個狀態」的告警。平台的 sentinel 告警一律帶 `severity: none` 與 `component: sentinel`。
 - **抑制規則（inhibit rule）**：Alertmanager 的設定。符合「來源」條件的告警正在觸發時，符合「目標」條件的告警不送通知；`equal` 列出的標籤在兩邊必須同值。被抑制的告警仍然存在，只是不通知（見 [ADR-001](./001-severity-dedup-via-inhibit.md)）。
+- **Rule Pack**：平台隨附的一組 Prometheus 規則檔（recording rule 與告警規則），每個檔案對應一種資料庫或用途，例如 `rule-pack-mariadb.yaml`。
 - **旗標指標**：exporter 依租戶設定輸出、值為 1 的指標，例如 `user_silent_mode`。設定拿掉，指標就消失。
 
 ## 背景
@@ -33,7 +34,7 @@ updated_at: 2026-10-10
 
 - **Normal**：正常觸發告警、正常通知。
 - **Silent（靜默）**：告警照常觸發，但不送通知。
-- **Maintenance（維護）**：維護期間，告警不觸發。
+- **Maintenance（維護）**：維護期間不該產生告警，也不留紀錄。
 
 需要一個機制，讓租戶的狀態可以隨設定動態切換，而且容易組合、容易排查。
 
@@ -48,6 +49,8 @@ updated_at: 2026-10-10
 ## 決策
 
 **採用 Sentinel 告警模式：exporter 輸出租戶狀態旗標 → 告警規則產生 sentinel 告警 → 抑制規則擋下相關告警的通知。**
+
+這個模式處理的是「告警照常觸發、只擋通知」的狀態，也就是 Silent。Maintenance 要的是根本不產生告警，抑制規則只能擋通知、做不到，所以 Maintenance 留在 PromQL 處理（見下方「不涵蓋的範圍」）。
 
 1. **exporter**：threshold-exporter 讀租戶設定，輸出旗標指標（`user_silent_mode`）。
 2. **Prometheus**：Rule Pack 裡的告警規則讀旗標，產生 sentinel 告警（`TenantSilentWarning`、`TenantSilentCritical`）。
@@ -88,6 +91,8 @@ Alertmanager 的抑制規則：
   equal: ['tenant']
 ```
 
+`alert_source=""` 表示目標只限沒有 `alert_source` 標籤的告警。平台自我監控的告警帶 `alert_source="platform"`（心跳告警 Watchdog 除外，它的 severity 是 none，本來就不在目標內），所以租戶的靜默設定擋不到平台自己的告警。
+
 結果：`shop` 的 warning 告警照常觸發、留在 TSDB（Prometheus 的時間序列資料庫），通知被擋下；critical 告警照常通知。把 `_silent_mode` 拿掉，旗標指標消失，sentinel 告警解除，通知恢復。
 
 ## 後果與已知限制
@@ -106,7 +111,7 @@ Alertmanager 的抑制規則：
 
 **不涵蓋的範圍**
 
-- **Maintenance 不走這個模式。** 它在每條告警規則的 PromQL 裡以 `unless on(tenant) (user_state_filter{filter="maintenance"} == 1)` 排除，維護期間告警不觸發、TSDB 沒有紀錄、也沒有通知。
+- **Maintenance 不走這個模式。** 它要的是不產生告警，所以放在 PromQL：Rule Pack 的告警規則以 `unless on(tenant) (user_state_filter{filter="maintenance"} == 1)` 排除維護中的租戶，帶這個條件的規則在維護期間不觸發，TSDB 也沒有紀錄。不是每條告警規則都帶這個條件。
 - **嚴重度去重的 sentinel（`TenantSeverityDedupEnabled`）只用來顯示狀態。** 去重本身是 [ADR-001](./001-severity-dedup-via-inhibit.md) 的 critical→warning 抑制規則，不以 sentinel 為來源。
 
 **運維建議**
@@ -126,7 +131,7 @@ Alertmanager 的抑制規則：
 
 ### 在 Alertmanager 路由層處理（考慮過，不採用）
 
-不必修改告警規則，但只能決定不送通知，控制不了告警是否產生；租戶層級的複雜邏輯也不好表達。
+不必修改告警規則，但租戶層級的複雜邏輯不好表達。
 
 ## 相關
 

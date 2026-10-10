@@ -20,6 +20,7 @@ lang: en
 - **Severity dedup**: when one condition fires alerts at several severities, only the highest-severity notification is sent.
 - **Inhibit rule**: an Alertmanager setting. While an alert matching the "source" conditions is firing, alerts matching the "target" conditions are not notified; the labels listed under `equal` must have the same value on both sides for the rule to apply. An inhibited alert still exists; it just isn't notified.
 - **TSDB**: Prometheus's time-series database. When an alert fires, Prometheus writes an `ALERTS` series that can be queried later.
+- **Rule Pack**: a set of Prometheus rule files (recording rules and alert rules) shipped with the platform, one file per database or purpose, such as `rule-pack-mariadb.yaml`.
 - **`metric_group`**: a label on alert rules that pairs the warning and critical alerts for the same condition (the two have different alert names).
 
 ## Background
@@ -98,6 +99,7 @@ How to read it: while `shop` has a critical alert firing, warning alerts with th
 **What we take on**
 
 - Alertmanager configuration grows, and it has to stay aligned with the labels on alert rules: if a pair of alerts lacks `metric_group`, or the two sides carry different values, the inhibit rule does not apply and two notifications go out. CI checks that same-named pairs (`X` and `XCritical`) carry the same `metric_group` (`check_metric_group_pairs.py`); pairs whose names don't follow that pattern are outside the check's scope.
+- The Kubernetes Rule Pack currently has 4 pairs of alerts (`PodContainerHighCPU`, `PodContainerHighMemory`, `PodContainerCPUThrottled`, `ContainerOOMKilled` and their `…Critical` counterparts) with no `metric_group` on either side, so deduplication does not apply to them and two notifications go out. The CI check above lists these 4 pairs as known exceptions and only blocks new violations ([#1199](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/1199)).
 - Alerts without a `metric_group` label do not take part in deduplication: both the source and target of the inhibit rule require `metric_group=~".+"`.
 - Periodically review the Alertmanager inhibition state to confirm it matches expectations.
 

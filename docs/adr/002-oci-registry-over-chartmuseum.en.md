@@ -28,6 +28,8 @@ The platform publishes two kinds of artifacts:
 1. **Helm charts**: deployment configuration for threshold-exporter, da-portal and tenant-api.
 2. **Container images**: threshold-exporter, da-tools, da-portal and tenant-api.
 
+The release workflow also defines publishing steps for a recipe-preview image and chart (to the same registry), but that release line has not been published yet, so the registry holds no recipe-preview artifacts today.
+
 A common setup keeps images in a container registry (such as ghcr.io) and charts in a separate chart repository such as ChartMuseum, which means two pieces of infrastructure to operate.
 
 ## Decision
@@ -86,4 +88,4 @@ Rich enterprise features, but it has to be self-hosted or paid for, overlaps wit
 ## Related
 
 - [Helm documentation: Registries (OCI support)](https://helm.sh/docs/topics/registries/)
-- [threshold-exporter README §6 Deployment](https://github.com/vencil/Dynamic-Alerting-Integrations/blob/main/components/threshold-exporter/README.md#6-部署) — full commands for installing from the OCI chart
+- [threshold-exporter README](https://github.com/vencil/Dynamic-Alerting-Integrations/blob/main/components/threshold-exporter/README.md) (in Chinese; see the deployment section) — full commands for installing from the OCI chart
