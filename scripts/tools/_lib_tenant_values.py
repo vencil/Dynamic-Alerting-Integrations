@@ -121,6 +121,19 @@ tenant from — the same `SkippedFile` list, in the same words, as
 `load_served_tree`'s (da-guard effective's `skipped`, #2115 R3), for a
 caller that needs only /effective and so does not run served-values at all.
 
+`load_key_refs(conf_d, metrics, binary=None)` returns a `KeyRefsTree`
+(#1822): for each metric key asked about, every key of the tree whose
+platform key the exporter judges it to be (`da-guard key-refs`: the check
+ValidateTenantKeys runs — a retired alias spelling, the `_critical` tier,
+a dimensional key in any label spelling), each a `KeyRef(file, section,
+owner, key)` with `key` as written; beside them the load's `parse_failed`
+and `unreadable`, `unscanned` (files whose keys da-guard could not list,
+as `SkippedFile`s) and `stderr_lines`. Unlike the two loaders it does NOT
+raise `ParseFailedError`: a file the exporter drops is an answer its caller
+reads (`parse_failed` / `unreadable`), not a reason to stop. It raises
+`DaGuardNotFoundError` and `KeyRefsError` (a `DaGuardError`) as the loaders
+raise theirs.
+
 `binary` is the da-guard path; without it, `$DA_GUARD_BINARY`, then
 `da-guard` on `$PATH` (the resolution `da-tools guard` uses).
 
@@ -205,6 +218,9 @@ __all__ = [
     "UnreadableFile",
     "YamlFileError",
     "EffectiveTree",
+    "KeyRef",
+    "KeyRefsError",
+    "KeyRefsTree",
     "DA_GUARD_PREFIX",
     "MISSING_BINARY_MESSAGE",
     "VALUE_NOT_SERVED_REASONS",
@@ -214,6 +230,7 @@ __all__ = [
     "is_tenant_reserved_key",
     "load_effective",
     "load_effective_tree",
+    "load_key_refs",
     "load_served_tree",
     "load_served_values",
     "print_load_error",
@@ -226,6 +243,10 @@ SUBCOMMAND = "served-values"
 EFFECTIVE_SUBCOMMAND = "effective"
 # The `schema` value load_effective reads; any other is refused.
 EFFECTIVE_SCHEMA = "da-guard.effective/v1"
+KEY_REFS_SUBCOMMAND = "key-refs"
+# The `schema` value load_key_refs reads; any other is refused.
+KEY_REFS_SCHEMA = "da-guard.key-refs/v1"
+_KEY_REF_SECTIONS = frozenset({"defaults", "optional_overrides", "tenants", "profiles"})
 _KEY_LAYERS = frozenset({"defaults", "platform", "profile", "tenant"})
 # Seconds: generous for a large tree, and a hang still ends.
 DEFAULT_TIMEOUT = 600
@@ -354,6 +375,21 @@ class EffectiveTree(NamedTuple):
     skipped: list[SkippedFile]  # as ServedTree.skipped: files the walk takes no tenant from
 
 
+class KeyRef(NamedTuple):
+    file: str     # root-relative slash path, as the exporter's scan keys it
+    section: str  # "defaults" | "optional_overrides" | "tenants" | "profiles"
+    owner: str    # tenant id / profile name; "" for defaults and optional_overrides
+    key: str      # the key as the file writes it
+
+
+class KeyRefsTree(NamedTuple):
+    refs: dict[str, list[KeyRef]]      # every metric asked about -> its references
+    parse_failed: list[str]            # the files the exporter's load skips (do not decode)
+    unreadable: list[UnreadableFile]   # the paths the load cannot stat, read or list
+    unscanned: list[SkippedFile]       # files the load kept whose keys da-guard could not list
+    stderr_lines: list[str]            # every non-empty line of da-guard's stderr, as written
+
+
 class DaGuardNotFoundError(FileNotFoundError):
     """No da-guard binary at the explicit path, `$DA_GUARD_BINARY` or `$PATH`."""
 
@@ -382,6 +418,13 @@ class DaGuardError(RuntimeError):
         """The da-guard binary failed, not the config tree (#2725)."""
         return self.stale or self.broken
 
+    @property
+    def stderr_lines(self) -> list[str]:
+        """Every non-empty line of `stderr`, as `ServedTree.stderr_lines`
+        splits a successful run's (#1822: a caller that goes on after the
+        failure passes them on whole)."""
+        return _nonempty_lines(self.stderr)
+
 
 class ServedValuesError(DaGuardError):
     """da-guard served-values failed."""
@@ -389,6 +432,10 @@ class ServedValuesError(DaGuardError):
 
 class EffectiveError(DaGuardError):
     """da-guard effective failed."""
+
+
+class KeyRefsError(DaGuardError):
+    """da-guard key-refs failed."""
 
 
 def _stderr_text(b: bytes | str | None) -> str:
@@ -442,6 +489,7 @@ def _run_da_guard(
     schema: str | None,
     read: Callable[[dict[str, Any]], _T],
     reads_unreadable: bool = False,
+    dropped_ok: bool = False,
 ) -> tuple[_T, int, str]:
     """Run `da-guard <subcommand> --config-dir <conf_d> <extra>` and return
     (`read(document)`, the exit code, stderr) — the one error contract both
@@ -454,7 +502,10 @@ def _run_da_guard(
     other value included; a missing `skipped` / `unreadable` named as a
     da-guard older than this tool); `ParseFailedError` for a non-empty
     `parse_failed` or — with `reads_unreadable`, which makes `unreadable` a
-    field the document must carry — `unreadable`; exit 3 with neither."""
+    field the document must carry — `unreadable`; exit 3 with neither.
+    With `dropped_ok` (key-refs, #1822) a non-empty `parse_failed` /
+    `unreadable` is returned through `read` instead of raised; exit 3 with
+    neither is still output that is not da-guard's."""
     dispatcher = guard_dispatch.DISPATCHER
     exe = dispatcher.resolve_binary(binary)
     if exe is None:
@@ -511,7 +562,7 @@ def _run_da_guard(
             f"da-guard {subcommand} exited {proc.returncode} without the expected JSON ({e}){stale}",
             proc.returncode, stderr, stale=bool(stale), broken=not stale) from e
 
-    if parse_failed or unreadable:
+    if (parse_failed or unreadable) and not dropped_ok:
         clauses = []
         if parse_failed:
             clauses.append(f"the exporter's load skips {len(parse_failed)} file(s) that do not decode: "
@@ -523,7 +574,7 @@ def _run_da_guard(
         raise ParseFailedError(str(Path(conf_d) / first), ValueError("; ".join(clauses)),
                                _nonempty_lines(stderr), unreadable,
                                [str(f) for f in parse_failed])
-    if proc.returncode != _EXIT_OK:
+    if proc.returncode != _EXIT_OK and not (parse_failed or unreadable):
         fields = "parse_failed or unreadable" if reads_unreadable else "parse_failed"
         raise error(
             f"da-guard {subcommand} exited {proc.returncode} with no file in {fields}",
@@ -872,6 +923,39 @@ def _load_effective(conf_d: str | Path, binary: str | None, timeout: float,
             f"da-guard {EFFECTIVE_SUBCOMMAND}: an entry is not the shape this reader reads ({e})",
             returncode, stderr, broken=True) from e
     return EffectiveTree(out, skipped)
+
+
+def load_key_refs(
+    conf_d: str | Path,
+    metrics: list[str],
+    binary: str | None = None,
+    timeout: float = DEFAULT_TIMEOUT,
+) -> KeyRefsTree:
+    """`da-guard key-refs` over the tree at `conf_d` for `metrics` (#1822).
+    See the module docstring for the contract and the exceptions."""
+    extra: list[str] = []
+    for m in metrics:
+        extra += ["--metric", m]
+
+    def read(doc: dict[str, Any]) -> KeyRefsTree:
+        refs: dict[str, list[KeyRef]] = {}
+        for m in metrics:
+            got = []
+            for r in doc["refs"][m]:
+                ref = KeyRef(r["file"], r["section"], r["owner"], r["key"])
+                if not all(isinstance(v, str) for v in ref) or ref.section not in _KEY_REF_SECTIONS:
+                    raise ValueError(f"reference {r!r} is not of its shape")
+                got.append(ref)
+            refs[m] = got
+        return KeyRefsTree(
+            refs, [str(f) for f in doc["parse_failed"]],
+            [UnreadableFile(str(e["file"]), str(e["reason"])) for e in doc["unreadable"]],
+            [SkippedFile(str(e["file"]), str(e["reason"])) for e in doc["unscanned"]], [])
+
+    tree, _returncode, stderr = _run_da_guard(
+        KEY_REFS_SUBCOMMAND, extra, conf_d, binary, timeout, KeyRefsError, schema=KEY_REFS_SCHEMA,
+        read=read, reads_unreadable=True, dropped_ok=True)
+    return tree._replace(stderr_lines=_nonempty_lines(stderr))
 
 
 def is_tenant_reserved_key(key: str) -> bool:

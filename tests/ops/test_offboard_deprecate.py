@@ -528,7 +528,11 @@ def test_main_names_unusable_entries_once_per_invocation(
                "--config-dir", str(root)])
 
     cap = capsys.readouterr()
-    text = cap.out + cap.err
+    # da-guard's own stderr (#1822, passed on whole behind DA_GUARD_PREFIX when
+    # a da-guard is found) names the tree's files in its own words; the claim
+    # here is about this tool's report.
+    text = "\n".join(ln for ln in (cap.out + cap.err).split("\n")
+                     if not ln.startswith(deprecate_rule.DA_GUARD_PREFIX))
     for name in ("notes.yaml", "broken.yaml"):
         assert text.count(name) == 1, (
             f"{name} named {text.count(name)} time(s) for three metrics; "

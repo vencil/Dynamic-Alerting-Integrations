@@ -8,6 +8,24 @@
   Step 3: 印出需要手動處理的 Prometheus ConfigMap 清理指引
   最後:   完成度判定（key 級重掃 + root 層 `_` 前綴檔的載體體檢），不通過 rc 1
 
+寫入之前（預覽與 --execute 一樣）先問 exporter 一次（#1822）: `da-guard
+key-refs` 以 exporter 自己的程式碼回答兩件事——這一層哪些檔 exporter 的 load
+會丟掉（`parse_failed`／`unreadable`），以及哪些 key 經 exporter 的正規化屬於
+要下架的 metric（alias 表的 legacy 拼法、`_critical`、維度鍵的各種拼法；與
+canonical key 一樣列為引用、一樣移除）。root 層 `_` 前綴檔的判定看「本輪寫入
+之後」：把本輪的寫入套在 conf.d 的暫存複本上再問一次（本輪要刪的 key 可能正是
+讓載體被丟的那一個），仍被丟就擋寫入、rc 1；讀不到的檔看現況。
+找不到 da-guard（`$DA_GUARD_BINARY` → `$PATH`）或它答不出來時印「未體檢」與
+原因，行為與 rc 照舊：體檢是附加的，缺了它本工具的判定與 #1822 之前相同，
+不是前置條件的缺失（不回 rc 2），也不是對這棵樹的發現（不回 rc 1）。
+da-guard 正常回答「exporter 拒絕整棵樹」（例如同一租戶宣告兩次）則擋寫入、rc 1。
+
+NOT GUARDED（da-guard 也沒回答的）:
+  * 平面判定仍靠 `--plane`: da-guard 把 --config-dir 當 root 判，所以
+    `--plane subtree` 不採用它對 `_` 前綴檔的判定（租戶檔與拼法照用）。
+  * 本工具自己的載體鏡射（`exporter_verdicts`）擋下、exporter 其實收的檔仍擋
+    （見該函式的 docstring）；體檢只補「鏡射說綠、exporter 整份丟」那一側。
+
 下架＝刪 key，不是把值寫成 `disable`（#1787）: `disable` 是租戶 opt-out 的
 語意，而 root `defaults:` 的型別是 `map[string]float64`，一個字串會讓
 exporter 丟掉整份載體。
@@ -34,8 +52,12 @@ import sys
 import os
 import argparse
 import codecs
+import contextlib
+import io
 import math
 import re
+import shutil
+import tempfile
 from pathlib import Path
 import yaml
 
@@ -66,6 +88,12 @@ from _lib_python import write_text_or_die  # noqa: E402
 from _lib_io import safe_label  # noqa: E402  (#1538 output-layer escaping)
 from _lib_io import duplicate_in_mapping  # noqa: E402  (#2123 shared check)
 from _lib_exitcodes import EXIT_CALLER_ERROR, EXIT_VIOLATION  # noqa: E402
+from _lib_tenant_values import (  # noqa: E402  (#1822 the exporter's own answer)
+    DA_GUARD_PREFIX,
+    DaGuardError,
+    DaGuardNotFoundError,
+    load_key_refs,
+)
 from _lib_confd import (  # noqa: E402  (#1588 shared name predicates)
     defaults_files_in,
     has_yaml_extension,
@@ -135,26 +163,31 @@ def save_yaml_file(path, data, header_comment=""):
     write_text_or_die(path, content)
 
 
-def metric_pattern_keys(metric_key):
+def metric_pattern_keys(metric_key, spellings=()):
     """一個 metric 在 `defaults:`／`optional_overrides:` 佔用的精確 key 集合。
 
     掃描、移除、重掃三邊共用這一份，所以掃得到的就是清得掉的。維度形狀
     `<名字>{…}` 只在租戶平面出現，由 `tenant_key_belongs_to_metric` 錨在這四個
-    名字上。
+    名字上。`spellings` 是 exporter 判給這個 metric 的其他寫法（`da-guard
+    key-refs` 的答案，#1822：alias 表的 legacy 拼法等），原文照收、接在後面。
     """
-    return [
+    base = [
         metric_key,
         f"{metric_key}_critical",
         f"custom_{metric_key}",
         f"custom_{metric_key}_critical",
     ]
+    return base + [k for k in sorted(spellings) if k not in base]
 
 
-def tenant_key_belongs_to_metric(key, metric_key):
-    """租戶平面上「這個 key 是不是這個 metric 的」: 四個確切名字或其維度形狀。
+def tenant_key_belongs_to_metric(key, metric_key, spellings=()):
+    """租戶平面上「這個 key 是不是這個 metric 的」: 四個確切名字或其維度形狀，
+    或 exporter 判給它的寫法（`spellings`，#1822）。
 
     不是子字串比對——`container_cpu_throttle{pod="x"}` 是另一個指標的資料。
     """
+    if key in spellings:
+        return True
     for pk in metric_pattern_keys(metric_key):
         if key == pk or key.startswith(pk + "{"):
             return True
@@ -166,7 +199,10 @@ UNPARSEABLE = "unparseable"            # exporter 整份丟掉這個檔
 NULL_NOT_DECLARED = "null_not_declared"  # 這一個 key 寫成 null：exporter 當作沒宣告（只警告，#2518）
 UNREADABLE = "unreadable"              # 本工具讀不到，無法判定
 UNPARSED_BY_TOOL = "unparsed_by_tool"  # pure-Python parser 讀不了；exporter 未必
-BLOCKING_KINDS = frozenset({UNPARSEABLE, UNREADABLE, UNPARSED_BY_TOOL})
+EXPORTER_DROPPED = "exporter_dropped"  # da-guard：exporter 自己的 load 丟掉／讀不到這份檔（#1822）
+EXPORTER_REFUSED = "exporter_refused"  # da-guard：exporter 拒絕載入整棵樹（#1822）
+BLOCKING_KINDS = frozenset({UNPARSEABLE, UNREADABLE, UNPARSED_BY_TOOL,
+                            EXPORTER_DROPPED, EXPORTER_REFUSED})
 # yaml.v3 是 libyaml 的移植：有 libyaml 就用它讀，scanner 層的判定才同源。
 _LOADER = yaml.CSafeLoader if yaml.__with_libyaml__ else yaml.SafeLoader
 # `ThresholdConfig` 會解碼的頂層 key（`pkg/config/types.go`）；其餘頂層 key 的子樹
@@ -435,21 +471,19 @@ def exporter_verdicts(data):
     `tests/golden/fixtures/defaults-carrier-oracle.json`，Go 測試
     `TestDefaultsCarrierOracle` 是那張表的裁判。文件層級的項目 key 為 None。
 
-    已知近似與 NOT GUARDED:
+    本函式說綠、exporter 卻整份丟的檔（值形狀、第二份 document 的 scanner 錯誤、
+    merge key 的覆寫等向量表以外的面），由 `exporter_precheck` 問 exporter 自己的
+    load 補上（#1822）；那時這裡只是第二意見。未體檢時這裡就是全部判定。
+
+    已知近似與 NOT GUARDED（體檢補不了的那一側：本函式擋、exporter 收）:
       * 重複 key: Go 會解碼的頂層區塊（`_DECODED_SECTIONS`）底下所有深度都檢查。
         Go 對這些區塊內「未知欄位」底下的重複 key 會接受、本函式會擋——刻意
         fail-closed（YAML 1.2 本就不允許，且寫回的 safe_dump 會靜默丟掉前一個）。
         其他頂層 key 的子樹不看，與 Go 同。
-      * 值形狀: `optional_overrides`／`state_filters`／`tenants`／`profiles`／
-        `max_metrics_per_tenant` 的值型別不看。
-      * 只看第一份 document；第二份 document 緊接 `---` 的 scanner 錯誤 Go 會整份丟。
       * merge key 的覆寫判定以 key 的字面文字比對；非 `!!str` 解析的 key（數字／
-        布林／null）與 alias 當 key，Go 用解碼後的值比對，可能分歧。
-      * 頂層的 merge key、非純量 key、非特定 tag `!`、UTF-16 等向量表以外的拼法。
+        布林／null）與 alias 當 key，Go 用解碼後的值比對，可能分歧（本函式多擋）。
       * 沒有 libyaml 時 pure parser 的 scanner 錯誤（如 tab）回 `UNPARSED_BY_TOOL`，
         不冒充 exporter 的判定（有 libyaml 時同一格由 `carrier_health` 補上）。
-      * exporter alias 表（`pkg/config/aliases.go`）的 legacy 拼法；Go 側後續票
-        處理（追蹤入口: #1822）。
     """
     try:
         root = next(yaml.compose_all(data, Loader=_LOADER), None)
@@ -629,10 +663,10 @@ def unclearable_occurrences(metric_key, findings, *, predict, plane="root",
     return out
 
 
-def _occurrences_in(data, metric_key):
+def _occurrences_in(data, metric_key, spellings=()):
     """一份已解析的 mapping 裡該 metric 的引用 `[(section, key, value), ...]`。"""
     out = []
-    pattern_keys = metric_pattern_keys(metric_key)
+    pattern_keys = metric_pattern_keys(metric_key, spellings)
     defaults = data.get("defaults") or {}
     if isinstance(defaults, dict):
         out += [("defaults", pk, defaults[pk]) for pk in pattern_keys
@@ -650,11 +684,11 @@ def _occurrences_in(data, metric_key):
                 continue
             out += [(f"{section}.{owner_name}", key, val)
                     for key, val in cfg.items()
-                    if tenant_key_belongs_to_metric(key, metric_key)]
+                    if tenant_key_belongs_to_metric(key, metric_key, spellings)]
     return out
 
 
-def scan_for_metric(metric_key, config_dir):
+def scan_for_metric(metric_key, config_dir, spellings=()):
     """平面掃描 conf.d 這一層引用該 metric 的檔。
 
     回傳 `[{filename, path, occurrences}, ...]`；讀不了的檔以 `("unreadable",
@@ -677,7 +711,7 @@ def scan_for_metric(metric_key, config_dir):
         if err is not None:
             occurrences = [("unreadable", "", err)]
         else:
-            occurrences = _occurrences_in(data, metric_key)
+            occurrences = _occurrences_in(data, metric_key, spellings)
         if occurrences:
             findings.append({
                 "filename": filename,
@@ -687,7 +721,7 @@ def scan_for_metric(metric_key, config_dir):
     return findings
 
 
-def nested_residue(metric_key, config_dir):
+def nested_residue(metric_key, config_dir, spellings=()):
     """子目錄裡（平面那一層以下）仍引用該 metric 的檔——只讀，供完成度判定。
 
     形狀同 `scan_for_metric`，`filename` 是相對 POSIX 路徑（含 `/`，所以
@@ -700,7 +734,7 @@ def nested_residue(metric_key, config_dir):
             continue
         data, err = _read_yaml(str(p))
         occurrences = ([("unreadable", "", err)] if err is not None
-                       else _occurrences_in(data, metric_key))
+                       else _occurrences_in(data, metric_key, spellings))
         if occurrences:
             out.append({"filename": p.relative_to(base).as_posix(),
                         "path": str(p), "occurrences": occurrences})
@@ -744,7 +778,7 @@ def defaults_carriers(config_dir):
     return defaults_files_in(base, [e.name for e in entries if e.is_file()])
 
 
-def remove_from_all_defaults(metric_key, config_dir, execute=False):
+def remove_from_all_defaults(metric_key, config_dir, execute=False, spellings=()):
     """對每個 defaults 載體執行 `_remove_in_carrier`。
 
     回傳每個載體一筆 `(path, ok, msg, removed)`。沒有任何載體時回
@@ -755,10 +789,11 @@ def remove_from_all_defaults(metric_key, config_dir, execute=False):
     carriers = defaults_carriers(base)
     if not carriers:
         carriers = [resolve_defaults_file(base)]
-    return [(p, *_remove_in_carrier(metric_key, p, execute)) for p in carriers]
+    return [(p, *_remove_in_carrier(metric_key, p, execute, spellings))
+            for p in carriers]
 
 
-def _remove_in_carrier(metric_key, defaults_path, execute=False):
+def _remove_in_carrier(metric_key, defaults_path, execute=False, spellings=()):
     """從一個 defaults 載體移除 metric 的所有相關 key。
 
     回傳 `(ok, msg, removed)`，`removed` 為 `[(平面, key, 原值), ...]`，平面是
@@ -782,7 +817,7 @@ def _remove_in_carrier(metric_key, defaults_path, execute=False):
         return False, (f"defaults 不是 mapping（{_type_name(defaults)}），"
                        f"本工具不改寫，請先修檔"), []
 
-    pattern_keys = metric_pattern_keys(metric_key)
+    pattern_keys = metric_pattern_keys(metric_key, spellings)
     declared = data.get("optional_overrides")
     declared_hit = ([pk for pk in pattern_keys if pk in declared]
                     if isinstance(declared, list) else [])
@@ -832,7 +867,7 @@ def _header_of(path):
 
 
 def remove_from_tenants(metric_key, config_dir, execute=False, *,
-                        skip=frozenset()):
+                        skip=frozenset(), spellings=()):
     """從平面目錄下非 `_` 前綴的租戶檔移除該 metric 的 key；`skip` 裡的檔不碰。"""
     removed = []
     config_base = Path(config_dir)
@@ -859,7 +894,8 @@ def remove_from_tenants(metric_key, config_dir, execute=False, *,
             if not isinstance(tenant_config, dict):
                 continue
             keys_to_remove = [key for key in tenant_config
-                              if tenant_key_belongs_to_metric(key, metric_key)]
+                              if tenant_key_belongs_to_metric(key, metric_key,
+                                                              spellings)]
             for key in keys_to_remove:
                 val = tenant_config[key]
                 removed.append((filename, tenant_name, key, val))
@@ -873,11 +909,83 @@ def remove_from_tenants(metric_key, config_dir, execute=False, *,
     return removed
 
 
+# ── exporter 的真 oracle（#1822）─────────────────────────────────────────
+DA_GUARD_EXIT_CALLER_ERR = 2  # da-guard 自己的 exit 2：呼叫錯誤，或 exporter 拒絕整棵樹
+
+
+def exporter_precheck(config_dir, metrics):
+    """寫入前問 exporter 一次（`da-guard key-refs`，#1822）。
+
+    回 `(tree, unchecked, refused, stderr_lines)`，三者至多一個有值：
+      * `tree`: `KeyRefsTree`——這棵樹 exporter 丟掉哪些檔（`parse_failed`／
+        `unreadable`），以及每個 metric 被哪些 key（原文）引用，判定用的是
+        exporter 自己的 ValidateTenantKeys 分類（alias 表 legacy 拼法、
+        `_critical`、維度鍵的各種拼法）。本工具不鏡射那些語意。
+      * `unchecked`: 問不到（沒有 da-guard、binary 壞了或太舊、逾時）的原因——
+        呼叫端印「未體檢」，行為照舊。
+      * `refused`: da-guard 正常回答「exporter 拒絕載入整棵樹」（exit 2，例如
+        同一個租戶宣告兩次）——呼叫端擋寫入。
+    `stderr_lines` 是 da-guard 的 stderr，整份、不挑行。
+    """
+    try:
+        tree = load_key_refs(config_dir, list(metrics))
+    except DaGuardNotFoundError:
+        return (None, "找不到 da-guard（$DA_GUARD_BINARY 未設或指向不存在的檔，"
+                      "$PATH 上也沒有；本 repo 內 `make da-guard-build` 會建到 "
+                      ".build/da-guard）", None, [])
+    except DaGuardError as e:
+        if e.returncode == DA_GUARD_EXIT_CALLER_ERR and not e.binary_fault:
+            return None, None, e.message, e.stderr_lines
+        return None, f"da-guard 無法回答（{e.message}）", None, e.stderr_lines
+    return tree, None, None, tree.stderr_lines
+
+
+def _print_guard_lines(what, lines):
+    """da-guard 的 stderr 整份照轉到 stderr，每行加 `DA_GUARD_PREFIX`、跳脫。"""
+    if lines:
+        print(f"  ℹ️  {what} 的 stderr：", file=sys.stderr)
+        for line in lines:
+            print(f"{DA_GUARD_PREFIX}{safe_label(line)}", file=sys.stderr)
+
+
+def exporter_after_writes(config_dir, metrics, spellings, skip):
+    """本輪寫入（Step 1／Step 2，與 `--execute` 同一段寫入邏輯）套在 conf.d 的暫存
+    複本上，再問 exporter 一次：回 `(tree, unchecked, refused)`，意義同
+    `exporter_precheck`。真的 conf.d 一個位元組都不碰；複本用完即刪。複本跟隨
+    symlink、略過懸空的（讀不到的檔看現況那一次的答案）。"""
+    tmp = tempfile.mkdtemp(prefix="deprecate-rule-")
+    try:
+        copy = Path(tmp) / "conf.d"
+        try:
+            shutil.copytree(config_dir, copy, symlinks=False,
+                            ignore_dangling_symlinks=True)
+            with contextlib.redirect_stdout(io.StringIO()), \
+                    contextlib.redirect_stderr(io.StringIO()):
+                for m in metrics:
+                    remove_from_all_defaults(m, copy, execute=True,
+                                             spellings=spellings[m])
+                    remove_from_tenants(m, copy, execute=True, skip=skip,
+                                        spellings=spellings[m])
+        except (OSError, shutil.Error, SystemExit) as e:
+            return None, f"無法在暫存複本上套用本輪寫入（{e}），寫入後的載體未經 exporter 判定", None
+        tree, unchecked, refused, lines = exporter_precheck(copy, metrics)
+        _print_guard_lines(f"da-guard key-refs（套用本輪寫入後的暫存複本 {copy}）", lines)
+        return tree, unchecked, refused
+    finally:
+        shutil.rmtree(tmp, ignore_errors=True)
+
+
 def _health_reason(key, raw, kind):
     if kind == UNREADABLE:
         return f"本工具讀不了（無法讀取：{raw}），無法判定 exporter 讀不讀得進去"
     if kind == UNPARSED_BY_TOOL:
         return f"本工具讀不了（pure parser 限制）：{raw}；請先修檔"
+    if kind == EXPORTER_DROPPED:
+        return (f"exporter 讀不進這份檔（da-guard：{raw}；原因見上方 "
+                f"`{DA_GUARD_PREFIX.strip()}` 行），整份檔會被丟棄，下架不會生效；請先修檔")
+    if kind == EXPORTER_REFUSED:
+        return (f"exporter 拒絕載入整棵樹（da-guard：{raw}），任何寫入都不會生效；"
+                f"請先修好這棵樹")
     if key is None:
         return f"exporter 讀不進這份檔（{raw}），整份載體會被丟棄；請先修檔"
     return (f"`defaults:` 的 {key} 的值 {raw} exporter 讀不成數字（defaults 的型別是 "
@@ -933,11 +1041,23 @@ def main():
             print(f"     • {safe_label(name)}——{safe_label(reason)}")
     carriers_here = defaults_carriers(base)
 
+    # #1822: 任何寫入之前（預覽與 --execute 一樣）問 exporter 一次。da-guard 的
+    # stderr 整份照轉（每行加前綴）；問不到就明說「未體檢」，行為照舊。
+    oracle, unchecked, refused, guard_lines = exporter_precheck(
+        args.config_dir, args.metrics)
+    _print_guard_lines("da-guard key-refs（現況）", guard_lines)
+    if unchecked:
+        print(f"\n  ⚠️  未體檢：{safe_label(unchecked)}——exporter 讀不讀得進這棵樹、"
+              f"alias 表的 legacy 拼法都沒有問 exporter；本輪只用本工具自己的判定")
+    spellings = {m: (frozenset(r.key for r in oracle.refs[m]) if oracle
+                     else frozenset()) for m in args.metrics}
+
     # 載體體檢跑在任何寫入之前。root 平面的母體是這一層所有 `_` 前綴檔（exporter
     # 把每個都解碼成 ThresholdConfig；#1676 起非載體的 defaults 雖不生效，解碼失敗
     # 仍讓整檔連同 profiles 一起丟掉）；本輪自己要刪的 key 不算殘留；空值只警告；
     # exporter 讀不進去的（blocking）讓整輪降級為預覽。租戶檔的警告與平面無關。
-    planned = {k for m in args.metrics for k in metric_pattern_keys(m)}
+    planned = {k for m in args.metrics
+               for k in metric_pattern_keys(m, spellings[m])}
     health = {}
     blocked = set()
     tenant_bad = {}        # 租戶檔 → exporter 讀不進去的原因；本輪不改寫它
@@ -986,6 +1106,45 @@ def main():
                           f"（{safe_label(key)}: {safe_label(raw)}）——exporter 會整份"
                           f"丟掉這個租戶檔；本工具不寫它")
                     tenant_bad.setdefault(e.name, f"{key}: {raw}")
+    # #1822: exporter 自己的 load 丟掉／讀不到的這一層檔。子目錄裡的檔不是這一層
+    # 的，略過。租戶檔看現況（da-guard 的 parse_failed）：照既有慣例不改寫它、
+    # 殘留具名。root 層 `_` 前綴檔看「本輪寫入之後」——本輪自己要刪的 key 可能
+    # 正是讓它被丟的那一個（`old_metric: disable`），所以把本輪寫入套在暫存複本
+    # 上再問一次；讀不到的檔本工具修不了，看現況。子樹平面不採用 `_` 前綴檔的
+    # 判定：da-guard 把 --config-dir 當 root 判，子樹載體的值形狀規則不同。
+    if oracle is not None:
+        for name in oracle.parse_failed:
+            if ("/" in name or name.startswith("_") or name in tenant_bad
+                    or _read_yaml(str(base / name))[1] is not None):
+                continue                       # 讀不了的 `scan_for_metric` 會具名
+            print(f"  ⚠️  {safe_label(name)} exporter 讀不進去（da-guard：parse_failed）"
+                  f"——整份租戶檔會被丟掉；本工具不寫它")
+            tenant_bad[name] = "da-guard：parse_failed"
+        for u in oracle.unscanned:
+            print(f"  ⚠️  da-guard 列不出 {safe_label(u.file)} 的 key"
+                  f"（{safe_label(u.reason)}）——這份檔的其他拼法未體檢")
+        dropped = [(u.file, f"讀不到：{u.reason}") for u in oracle.unreadable]
+        if args.plane == "root":
+            after, after_unchecked, after_refused = exporter_after_writes(
+                args.config_dir, args.metrics, spellings, tenant_bad)
+            if after is not None:
+                dropped += [(n, "本輪寫入後仍在 parse_failed")
+                            for n in after.parse_failed]
+            if after_refused and not refused:
+                refused = f"本輪寫入後：{after_refused}"
+            unchecked = unchecked or after_unchecked
+            if after_unchecked:
+                print(f"\n  ⚠️  未體檢：{safe_label(after_unchecked)}")
+        for name, why in dropped:
+            if "/" in name or name == "." or not name.startswith("_") or name in blocked:
+                continue
+            if args.plane != "root":
+                continue
+            health.setdefault(name, []).append((None, why, EXPORTER_DROPPED))
+            blocked.add(name)
+    if refused:
+        health["."] = [(None, refused, EXPORTER_REFUSED)]
+        blocked.add(".")
     if args.plane != "root" and carriers_here:
         print("  ℹ️  子樹載體不做型別體檢：子樹平面的字串值合法"
               "（`computeEffectiveConfig` 走 map[string]any），"
@@ -1013,8 +1172,8 @@ def main():
         print(f"{'─'*40}\n")
 
         # 掃描（印出的 Step 1 之前）
-        findings = scan_for_metric(metric, args.config_dir)
-        nested = nested_residue(metric, args.config_dir)
+        findings = scan_for_metric(metric, args.config_dir, spellings[metric])
+        nested = nested_residue(metric, args.config_dir, spellings[metric])
         findings_by_metric[metric] = findings
         nested_by_metric[metric] = nested
         if findings:
@@ -1049,10 +1208,14 @@ def main():
             results = []
         else:
             results = remove_from_all_defaults(metric, args.config_dir,
-                                               execute=write)
+                                               execute=write,
+                                               spellings=spellings[metric])
         for carrier, ok, msg, removed in results:
             print(f"\n  Step 1: {safe_label(carrier.name)}")
             icon = "✅" if ok else "❌"
+            if ok and carrier.name in blocked:
+                # 寫得進去不等於生效：exporter 讀不進這份載體（見結尾）。
+                icon, msg = "⛔", f"{msg}——但這份載體讀不進去，見結尾"
             print(f"  {icon} {safe_label(msg)}")
             for where, key, val in removed:
                 plane = "" if where == "defaults" else f"{where} 的 "
@@ -1064,7 +1227,7 @@ def main():
         # Step 2 (as printed): 從 tenant configs 移除
         print(f"\n  Step 2: Tenant configs")
         removed = remove_from_tenants(metric, args.config_dir, execute=write,
-                                      skip=tenant_bad)
+                                      skip=tenant_bad, spellings=spellings[metric])
         if removed:
             for filename, tenant, key, val in removed:
                 print(f"  🗑️  {action}: {safe_label(filename)} → "
@@ -1078,14 +1241,12 @@ def main():
         print(f"     • Recording Rule: tenant:{metric}:* 或 tenant:custom_{metric}:*")
         print(f"     • Alert Rule: 引用上述 Recording Rule 的 Alert")
         print(f"     • Threshold Rule: tenant:alert_threshold:{metric}")
-        print(f"     • 若此 metric 在 exporter alias 表（pkg/config/aliases.go）有 "
-              f"legacy 名字，租戶檔請一併檢查")
 
     # 完成度是 KEY 級: 重掃（或預覽時用掃描結果）扣掉本工具會清的，剩下的具名。
     # 載體體檢已具名的檔不再以「無法讀取」重複列。
     for metric in args.metrics:
-        findings = (scan_for_metric(metric, args.config_dir) if write
-                    else findings_by_metric[metric])
+        findings = (scan_for_metric(metric, args.config_dir, spellings[metric])
+                    if write else findings_by_metric[metric])
         findings = findings + nested_by_metric[metric]
         for name, section, key, val, designed in unclearable_occurrences(
                 metric, findings, predict=not write, plane=args.plane,
@@ -1115,6 +1276,10 @@ def main():
                   f"{safe_label(reason)}")
         print(f"{'='*60}")
         sys.exit(EXIT_VIOLATION)
+    if unchecked:
+        # 不擋（D12）：da-guard 是本工具的附加體檢，不是前置；缺了它本工具的判定
+        # 與 #1822 之前相同，rc 照那套判定走。但結論不冒充體檢過。
+        print(f"⚠️  未體檢：{safe_label(unchecked)}——以下結論沒有經過 exporter 的判定")
     if args.execute:
         print("✅ 下架完成！threshold-exporter 將在下次 reload 時生效。")
         print("📋 請在下個 Release Cycle 清理 Prometheus ConfigMap 中的對應規則。")
