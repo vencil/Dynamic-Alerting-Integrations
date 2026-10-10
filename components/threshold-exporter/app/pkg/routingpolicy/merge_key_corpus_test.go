@@ -13,8 +13,10 @@ package routingpolicy
 // `nonspecific_tag` row included — or exactly what
 // tests/shared/merge_key_go_verdicts.json records for that row under
 // "da-guard" (ADR-036 step 2). The snapshot holds only the rows where
-// da-guard differs: "unusable" (it refuses a file PyYAML reads) or the
-// policies it reads, in the corpus's own verdict shape. Which way each
+// da-guard differs: "unusable" (it refuses the file, or reports a Problem
+// that fails its run) or the policies it reads, in the corpus's own verdict
+// shape. A row the generator reads but blocks on under --validate --strict
+// (`pyyaml_strict_blocks`) is held to "unusable" too. Which way each
 // difference leans, and which catalog entry accepts it, is decided once, in
 // Python: tests/shared/test_reader_divergence_catalog.py against
 // tests/shared/reader_divergence_catalog.yaml. A row whose verdict changed
@@ -55,10 +57,11 @@ type mergeKeyCorpusRow struct {
 	Nonspecific string          `json:"nonspecific_tag"`
 	Shape       string          `json:"shape"`
 	Encoding    string          `json:"encoding"`
-	// PyYAMLDropped (the domains the generator drops with a blocking
-	// --strict finding) is read only by the Python catalog test, to rank a
-	// difference; the comparison here is the verdict's.
-	PyYAMLDropped []string `json:"pyyaml_dropped"`
+	// PyYAMLStrictBlocks lists the generator's own blocking findings for a
+	// file it reads but blocks on as production runs it (`--validate
+	// --strict`). Such a row's verdict, for a Go reader, is "unusable": Go
+	// must refuse it or report a blocking problem (pyEffectiveVerdict).
+	PyYAMLStrictBlocks []json.RawMessage `json:"pyyaml_strict_blocks"`
 }
 
 // corpusBytes is the file a row stands for: its doc as UTF-8, or, for an
@@ -162,6 +165,22 @@ func canonicalVerdict(t *testing.T, v any) string {
 		t.Fatalf("verdict %s: %v", raw, err)
 	}
 	return strings.TrimSuffix(b.String(), "\n")
+}
+
+// pyEffectiveVerdict is the verdict a Go reader is held to: PyYAML's, or
+// "unusable" when the generator reads the file but blocks on it under
+// --validate --strict (`pyyaml_strict_blocks`) — enforcing nothing there
+// and reporting nothing would let through a file production refuses.
+func pyEffectiveVerdict(t *testing.T, raw json.RawMessage, strictBlocks []json.RawMessage, i int) string {
+	t.Helper()
+	if len(strictBlocks) > 0 {
+		return canonicalVerdict(t, "unusable")
+	}
+	var py any
+	if err := json.Unmarshal(raw, &py); err != nil {
+		t.Fatalf("row %d: verdict %s: %v", i, raw, err)
+	}
+	return canonicalVerdict(t, py)
 }
 
 // goVerdictsFile is merge_key_go_verdicts.json: per reader, row id to that
@@ -288,19 +307,33 @@ func timedShape(shape string) bool {
 	return strings.HasPrefix(shape, "merge-chain-") || strings.HasPrefix(shape, "2715-")
 }
 
+// blocksDaGuard says whether da-guard fails the run on a Problem: every kind
+// becomes a SeverityError finding except an unusable routing_profiles block
+// (a warning) — internal/guard's platformProblemFindings, mirrored here
+// because this package cannot import internal/guard (it imports this one).
+func blocksDaGuard(p Problem) bool {
+	return p.Kind != ProblemRoutingProfilesUnusable
+}
+
 // daGuardVerdict is ParseDomainPolicies's verdict on a file in the corpus's
-// shape: "unusable" when it refuses the file, else each domain with
-// forbidden types or a non-empty allowed list.
+// shape: "unusable" when it refuses the file or reports a Problem that fails
+// da-guard's run, else each domain with forbidden types or a non-empty
+// allowed list.
 func daGuardVerdict(t *testing.T, file []byte, shape string, i int) string {
 	t.Helper()
 	start := time.Now()
-	pols, _, err := ParseDomainPolicies(file)
+	pols, probs, err := ParseDomainPolicies(file)
 	if timedShape(shape) {
 		t.Logf("row %d (%s, %d bytes): ParseDomainPolicies took %v, err = %v",
 			i, shape, len(file), time.Since(start), err)
 	}
 	if err != nil {
 		return canonicalVerdict(t, "unusable")
+	}
+	for _, p := range probs {
+		if blocksDaGuard(p) {
+			return canonicalVerdict(t, "unusable")
+		}
 	}
 	got := map[string]corpusPolicy{}
 	for _, p := range pols {
@@ -342,11 +375,7 @@ func TestMergeKeyCorpus_ParseDomainPoliciesIsPyYAMLsOrRecorded(t *testing.T) {
 			t.Fatalf("row %d: id %q, the file's sha256 says %q", i, row.ID, id)
 		}
 		seen[row.ID] = true
-		var py any
-		if err := json.Unmarshal(row.PyYAML, &py); err != nil {
-			t.Fatalf("row %d: verdict %s: %v", i, row.PyYAML, err)
-		}
-		pyVerdict := canonicalVerdict(t, py)
+		pyVerdict := pyEffectiveVerdict(t, row.PyYAML, row.PyYAMLStrictBlocks, i)
 		got := daGuardVerdict(t, file, row.Shape, i)
 		if got != pyVerdict {
 			differ[row.ID] = json.RawMessage(got)

@@ -66,10 +66,11 @@ type corpusRow struct {
 	Nonspecific string          `json:"nonspecific_tag"`
 	Shape       string          `json:"shape"`
 	Encoding    string          `json:"encoding"`
-	// PyYAMLDropped (the domains the generator drops with a blocking
-	// --strict finding) is read only by the Python catalog test, to rank a
-	// difference; the comparison here is the verdict's.
-	PyYAMLDropped []string `json:"pyyaml_dropped"`
+	// PyYAMLStrictBlocks lists the generator's own blocking findings for a
+	// file it reads but blocks on as production runs it (`--validate
+	// --strict`). Such a row's verdict, for a Go reader, is "unusable":
+	// parseConfig must refuse it (pyEffectiveVerdict).
+	PyYAMLStrictBlocks []json.RawMessage `json:"pyyaml_strict_blocks"`
 }
 
 // corpusBytes is the file a row stands for: its doc as UTF-8, or, for an
@@ -139,6 +140,23 @@ func canonicalVerdict(t *testing.T, v any) string {
 		t.Fatalf("verdict %s: %v", raw, err)
 	}
 	return strings.TrimSuffix(b.String(), "\n")
+}
+
+// pyEffectiveVerdict is the verdict a Go reader is held to: PyYAML's, or
+// "unusable" when the generator reads the file but blocks on it under
+// --validate --strict (`pyyaml_strict_blocks`) — enforcing nothing there
+// and reporting nothing would let through a file production refuses.
+// da-guard's half holds the same.
+func pyEffectiveVerdict(t *testing.T, raw json.RawMessage, strictBlocks []json.RawMessage, i int) string {
+	t.Helper()
+	if len(strictBlocks) > 0 {
+		return canonicalVerdict(t, "unusable")
+	}
+	var py any
+	if err := json.Unmarshal(raw, &py); err != nil {
+		t.Fatalf("row %d: verdict %s: %v", i, raw, err)
+	}
+	return canonicalVerdict(t, py)
 }
 
 // goVerdictsFile is merge_key_go_verdicts.json: per reader, row id to that
@@ -307,11 +325,7 @@ func TestMergeKeyCorpus_ParseConfigIsPyYAMLsOrRecordedOrRefuses(t *testing.T) {
 			t.Fatalf("row %d: id %q, the file's sha256 says %q", i, row.ID, id)
 		}
 		seen[row.ID] = true
-		var py any
-		if err := json.Unmarshal(row.PyYAML, &py); err != nil {
-			t.Fatalf("row %d: verdict %s: %v", i, row.PyYAML, err)
-		}
-		pyVerdict := canonicalVerdict(t, py)
+		pyVerdict := pyEffectiveVerdict(t, row.PyYAML, row.PyYAMLStrictBlocks, i)
 		start := time.Now()
 		cfg, err := parseConfig(file)
 		if strings.HasPrefix(row.Shape, "merge-chain-") || strings.HasPrefix(row.Shape, "2715-") {

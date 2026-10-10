@@ -53,10 +53,13 @@ each with a control every reader reads alike.
 
 Every row has an `id`: the first 16 hex digits of the sha256 of the file it
 stands for (its `doc` as UTF-8, or written in its `encoding`). A row whose
-file the generator reads but where it drops a domain with a blocking
---strict finding (the policy, or its `tenants` / `constraints`, of the wrong
-type: #2759 F) lists those domains in `pyyaml_dropped`: the verdict alone
-cannot tell a dropped domain from one that enforces nothing.
+file the generator reads but blocks on as production runs it (`--validate
+--strict`) carries `pyyaml_strict_blocks`: the generator's own blocking
+findings for the file (kind, policy, field), taken from the structured
+findings load_tenant_tree returns — the verdict alone (what it enforces)
+cannot tell a blocked file from one that enforces nothing. The Go halves
+hold such a row to "unusable": a Go reader that neither refuses it nor
+reports a blocking problem is looser.
 
 The Go halves read the same rows:
 - components/threshold-exporter/app/pkg/routingpolicy/merge_key_corpus_test.go:
@@ -92,7 +95,7 @@ import yaml
 REPO_ROOT = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(REPO_ROOT / "scripts" / "tools"))
 sys.path.insert(0, str(REPO_ROOT / "scripts" / "tools" / "ops"))
-from _grar_parse import _parse_config_files  # noqa: E402
+from _grar_parse import _parse_config_files, load_tenant_tree  # noqa: E402
 
 CORPUS_PATH = Path(__file__).parent / "merge_key_policy_corpus.json"
 SEED = 2677
@@ -1106,35 +1109,24 @@ def _shapes() -> list[tuple[str, str]]:
     return unique
 
 
-def _verdict(doc: str, root: Path, encoding: str | None = None, dropped: list | None = None) -> object:
-    """PyYAML's verdict on a row. `dropped`, when given, collects the domains
-    the generator drops with a blocking --strict finding (check_domain_policies'
-    three `continue`s that report one: the policy, or its present `tenants` /
-    `constraints`, of the wrong type — an explicit null policy or constraints
-    is inert, no finding)."""
+def _verdict(doc: str, root: Path, encoding: str | None = None) -> object:
     (root / "_domain_policy.yaml").write_bytes(_encode(doc, encoding))
     with contextlib.redirect_stderr(io.StringIO()), contextlib.redirect_stdout(io.StringIO()):
         res = _parse_config_files(str(root))
     if res["policy_file_errors"]:
         return "unusable"
     out = {}
-    drops = dropped if dropped is not None else []
     for name, body in res["domain_policies"].items():
         if not isinstance(body, dict):
-            if body is not None:
-                drops.append(str(name))
             continue
         # As check_domain_policies (_grar_validate) reads a policy: `tenants`
         # present and not a list skips the policy (a finding of its own),
         # and a `tenants` entry that is not a string names no tenant.
         tenants = body.get("tenants", [])
         if not isinstance(tenants, list):
-            drops.append(str(name))
             continue
         cons = body.get("constraints")
         if not isinstance(cons, dict):
-            if cons is not None:
-                drops.append(str(name))
             continue
         forbidden = cons.get("forbidden_receiver_types")
         forbidden = forbidden if isinstance(forbidden, list) else []
@@ -1168,13 +1160,35 @@ def row_id(doc: str, encoding: str | None = None) -> str:
     return hashlib.sha256(_encode(doc, encoding)).hexdigest()[:16]
 
 
+# Finding.blocks values that block the generator as production runs it
+# (`generate-routes --validate --strict`): all but "never" (_grar_merge).
+_PRODUCTION_BLOCKS = ("always", "strict", "validate")
+
+
+def _strict_blocks(root: Path) -> list[dict]:
+    """The generator's own blocking findings on the policy file in `root`,
+    run as production runs it (strict policies): load_tenant_tree's
+    structured findings (`Finding.kind` / `.blocks`, _grar_merge) whose
+    `blocks` stops `--validate --strict`. The tree holds the policy file
+    alone, so every finding is about it — and none depends on a tenant's
+    routing (a violation by a tenant is the tenant's, not the file's)."""
+    with contextlib.redirect_stderr(io.StringIO()), contextlib.redirect_stdout(io.StringIO()):
+        tree = load_tenant_tree(str(root), strict_policies=True)
+    found = {(f.kind, f.policy or "", f.field or "") for f in tree.schema_warnings
+             if getattr(f, "blocks", None) in _PRODUCTION_BLOCKS}
+    return [{"kind": k, "policy": p, "field": fld} for k, p, fld in sorted(found)]
+
+
 def _row(doc: str, root: Path, encoding: str | None = None, **extra) -> dict:
-    dropped: list = []
-    row: dict = {"doc": doc, "id": row_id(doc, encoding), "pyyaml": _verdict(doc, root, encoding, dropped)}
+    row: dict = {"doc": doc, "id": row_id(doc, encoding), "pyyaml": _verdict(doc, root, encoding)}
     if encoding is not None:
         row["encoding"] = encoding
-    if dropped:
-        row["pyyaml_dropped"] = sorted(set(dropped))
+    # A file the generator reads but blocks on under --strict: the verdict
+    # alone (what it enforces) cannot say so. An unusable file blocks anyway.
+    if row["pyyaml"] != "unusable":
+        blocks = _strict_blocks(root)
+        if blocks:
+            row["pyyaml_strict_blocks"] = blocks
     row.update(extra)
     return row
 
@@ -1224,11 +1238,11 @@ def _render(rows: list[dict]) -> str:
         "parseConfig the same, or what it records, or refuse the file.",
         "`id`: the first 16 hex digits of the sha256 of the file the row",
         "stands for (the key of merge_key_go_verdicts.json and of",
-        "reader_divergence_catalog.yaml). `pyyaml_dropped`: the domains the",
-        "generator drops with a blocking --strict finding (the policy, or its",
-        "`tenants` / `constraints`, of the wrong type) — a Go reader that",
-        "enforces one reads a policy the generator drops (looser).",
-        "`nonspecific_tag`: the row",
+        "reader_divergence_catalog.yaml). `pyyaml_strict_blocks`: the file is",
+        "read, but the generator run as in production (--validate --strict)",
+        "blocks on it — its own blocking findings (kind, policy, field); the",
+        "Go halves hold such a row to \"unusable\" (refused, or a blocking",
+        "problem). `nonspecific_tag`: the row",
         "carries the non-specific tag `!` on a quoted scalar, which Go reads",
         "through the vendored yaml.v3's patch (#2730 §6). `encoding`: the",
         "file is `doc` written in that encoding (utf-16-le-bom, utf-16-be-bom:",

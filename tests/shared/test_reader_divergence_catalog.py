@@ -8,7 +8,10 @@ to tests/shared/merge_key_go_verdicts.json (per reader, keyed by corpus row
 against tests/shared/reader_divergence_catalog.yaml:
 
 - direction() computes each snapshot row's direction from the rules each
-  side actually enforces (go_looser / go_stricter / value_differs);
+  side actually enforces (go_looser / go_stricter / value_differs); a file
+  the generator blocks on as production runs it (`--validate --strict`, the
+  row's `pyyaml_strict_blocks`) counts as unusable, so a Go reader that
+  neither refuses it nor reports a blocking problem is looser;
 - every snapshot row must match exactly one entry, of the same direction;
 - each entry pins its exact row count and an example row; an entry that
   matches nothing (the difference healed) is red, as is an uncatalogued row;
@@ -105,36 +108,41 @@ def _misses(want: tuple, have: tuple) -> bool:
     return e_want and not e_have
 
 
-def direction(pyyaml: object, go: object, dropped: tuple | list = ()) -> str:
+def effective_pyyaml(row: dict) -> object:
+    """The verdict a Go reader is held to: PyYAML's, or "unusable" when the
+    generator reads the file but blocks on it as production runs it
+    (`--validate --strict`: the row's `pyyaml_strict_blocks`)."""
+    return "unusable" if row.get("pyyaml_strict_blocks") else row["pyyaml"]
+
+
+def direction(pyyaml: object, go: object, strict_blocks: bool = False) -> str:
     """Which way a Go verdict leans from PyYAML's, by enforced-rule inclusion.
 
     Both are "unusable" or {domain: {tenants, forbidden, allowed?,
-    escalation?}} (the corpus's verdict shape); `dropped` is the row's
-    `pyyaml_dropped`, the domains the generator drops with a blocking
-    --strict finding.
-    - PyYAML drops the file and Go reads it (whatever it enforces): looser —
-      the generator blocks it under --strict.
-    - PyYAML reads, Go refuses: stricter.
-    - Both read: Go enforcing a domain the generator drops is looser (it
-      reads a policy the generator drops; its rules there count for nothing
-      stricter). Otherwise Go enforcing less for some tenant is looser,
-      more is stricter; both at once is value_differs. A difference that
-      changes no enforced rule cannot be ranked and is value_differs too
-      (blocking).
+    escalation?}} (the corpus's verdict shape). Go's "unusable" means it
+    blocks: refuses the file, or (da-guard) reports a Problem that fails its
+    run. `strict_blocks`: the generator reads the file but blocks on it
+    under --validate --strict (`pyyaml_strict_blocks`) — as good as unusable.
+    - The generator blocks (unusable, or strict_blocks) and Go does not
+      (whatever it enforces, `{}` included): looser — production refuses
+      the file, Go lets it through. Both blocking is no difference.
+    - Go blocks and the generator does not: stricter.
+    - Both read: Go enforcing less for some tenant is looser, more is
+      stricter; both at once is value_differs. A difference that changes no
+      enforced rule cannot be ranked and is value_differs too (blocking).
     """
+    if strict_blocks:
+        pyyaml = "unusable"
     if pyyaml == go:
         raise ValueError("the verdicts are equal: no direction")
     if pyyaml == "unusable":
         return "go_looser"
     if go == "unusable":
         return "go_stricter"
-    reads_dropped = any(name in dropped for name in go)
-    kept = {name: dom for name, dom in go.items() if name not in dropped}
-    py_rules, go_rules, kept_rules = _tenant_rules(pyyaml), _tenant_rules(go), _tenant_rules(kept)
+    py_rules, go_rules = _tenant_rules(pyyaml), _tenant_rules(go)
     tenants = set(py_rules) | set(go_rules)
-    looser = reads_dropped or any(
-        _misses(py_rules.get(t, _NO_RULES), go_rules.get(t, _NO_RULES)) for t in tenants)
-    stricter = any(_misses(kept_rules.get(t, _NO_RULES), py_rules.get(t, _NO_RULES)) for t in tenants)
+    looser = any(_misses(py_rules.get(t, _NO_RULES), go_rules.get(t, _NO_RULES)) for t in tenants)
+    stricter = any(_misses(go_rules.get(t, _NO_RULES), py_rules.get(t, _NO_RULES)) for t in tenants)
     if looser and not stricter:
         return "go_looser"
     if stricter and not looser:
@@ -203,19 +211,29 @@ def test_direction(py, go, want) -> None:
     assert direction(py, go) == want
 
 
-@pytest.mark.parametrize("py, go, dropped, want", [
-    # #2759 F: the generator drops `fin` (a `!!set`, strict ERROR); Go
-    # enforcing it reads a policy the generator drops.
-    ({}, {"fin": _dom(["t1"], ["slack"])}, ["fin"], "go_looser"),
-    # The same Go verdict with nothing dropped: Go only enforces more.
-    ({}, {"fin": _dom(["t1"], ["slack"])}, [], "go_stricter"),
-    # A dropped domain read beside one Go misses: still looser, not mixed.
-    ({"ops": _dom(["t2"], ["email"])}, {"fin": _dom(["t1"], ["slack"])}, ["fin"], "go_looser"),
-    # Another domain dropped than the one Go adds: Go only enforces more.
-    ({}, {"fin": _dom(["t1"], ["slack"])}, ["ops"], "go_stricter"),
+@pytest.mark.parametrize("py, go, strict_blocks, want", [
+    # The generator reads the file but blocks under --strict; Go reads
+    # nothing and reports nothing: production refuses, Go permits.
+    ({}, {}, True, "go_looser"),
+    # ...or Go reads the same policies (no blocking problem): still looser.
+    ({"fin": _dom(["t1"], ["slack"])}, {"fin": _dom(["t1"], ["slack"])}, True, "go_looser"),
+    # #2759 F: the generator drops `fin` (a `!!set`, strict ERROR), Go
+    # enforces it: looser, although Go enforces more rules.
+    ({}, {"fin": _dom(["t1"], ["slack"])}, True, "go_looser"),
+    # The same Go verdict without the strict block: Go only enforces more.
+    ({}, {"fin": _dom(["t1"], ["slack"])}, False, "go_stricter"),
+    # Go blocks (refuses, or a blocking Problem) and the generator does not.
+    ({"fin": _dom(["t1"], ["slack"])}, "unusable", False, "go_stricter"),
 ])
-def test_direction_with_dropped_domains(py, go, dropped, want) -> None:
-    assert direction(py, go, dropped) == want
+def test_direction_with_strict_blocks(py, go, strict_blocks, want) -> None:
+    assert direction(py, go, strict_blocks) == want
+
+
+def test_both_blocking_is_no_difference() -> None:
+    with pytest.raises(ValueError):
+        direction({"fin": _dom(["t1"], ["slack"])}, "unusable", strict_blocks=True)
+    with pytest.raises(ValueError):
+        direction("unusable", "unusable")
 
 
 def test_direction_refuses_equal_verdicts() -> None:
@@ -339,14 +357,15 @@ def catalog_errors(entries: list, snapshot: dict, corpus: dict) -> list:
             if reader == "tenant-api" and go == "unusable":
                 errors.append(f"{reader} {row_id}: tenant-api refusals are not recorded yet (PR-C)")
                 continue
-            if go == row["pyyaml"]:
+            if go == effective_pyyaml(row):
                 errors.append(f"{reader} {row_id}: the snapshot records PyYAML's own verdict")
                 continue
-            got = direction(row["pyyaml"], go, row.get("pyyaml_dropped", ()))
+            got = direction(row["pyyaml"], go, bool(row.get("pyyaml_strict_blocks")))
             hits = [e for e in entries if _matches(e, reader, row)]
             if not hits:
+                blocked = " — blocked under --validate --strict" if row.get("pyyaml_strict_blocks") else ""
                 errors.append(f"{reader} {row_id} [{row.get('shape', 'seeded')}]: uncatalogued {got} "
-                              f"difference (PyYAML {json.dumps(row['pyyaml'])}, Go {json.dumps(go)})")
+                              f"difference (PyYAML {json.dumps(row['pyyaml'])}{blocked}, Go {json.dumps(go)})")
                 continue
             if len(hits) > 1:
                 errors.append(f"{reader} {row_id}: matched by more than one entry: {[e['id'] for e in hits]}")
@@ -429,8 +448,12 @@ def _entry(**over) -> dict:
 
 
 _POL = {"fin": _dom(["t1"], ["slack"])}
+_STRICT = [{"kind": "domain_policy_unusable", "policy": "fin", "field": "constraints.require_critical_escalation"}]
 _CORPUS = {"aaaaaaaaaaaaaaaa": {"id": "aaaaaaaaaaaaaaaa", "pyyaml": "unusable", "shape": "s"},
-           "bbbbbbbbbbbbbbbb": {"id": "bbbbbbbbbbbbbbbb", "pyyaml": _POL, "shape": "s"}}
+           "bbbbbbbbbbbbbbbb": {"id": "bbbbbbbbbbbbbbbb", "pyyaml": _POL, "shape": "s"},
+           # Read by the generator, but blocked under --validate --strict.
+           "dddddddddddddddd": {"id": "dddddddddddddddd", "pyyaml": _POL, "shape": "s",
+                                "pyyaml_strict_blocks": _STRICT}}
 
 
 def test_gate_is_green_on_a_matching_catalog() -> None:
@@ -458,6 +481,12 @@ def test_gate_is_green_on_a_matching_catalog() -> None:
     ([_entry(extra=1)], {}, "unknown keys"),
     ([_entry()], {"tenant-api": {"bbbbbbbbbbbbbbbb": "unusable"}}, "not recorded yet"),
     ([_entry()], {"da-guard": {"aaaaaaaaaaaaaaaa": _POL, "bbbbbbbbbbbbbbbb": _POL}},
+     "PyYAML's own verdict"),
+    # The generator strict-blocks: Go reading the same policies is a looser
+    # difference that needs an entry, and Go blocking too is none at all.
+    ([_entry()], {"da-guard": {"aaaaaaaaaaaaaaaa": _POL, "dddddddddddddddd": _POL}},
+     "dddddddddddddddd [s]: uncatalogued go_looser"),
+    ([_entry()], {"da-guard": {"aaaaaaaaaaaaaaaa": _POL, "dddddddddddddddd": "unusable"}},
      "PyYAML's own verdict"),
 ])
 def test_gate_is_red(entries, snapshot, needle) -> None:

@@ -9,7 +9,9 @@
 # 把關（tests/shared/test_reader_divergence_catalog.py）：
 #   - 快照裡每一列必須恰好被一筆記錄比中；沒比中、比中兩筆都紅。
 #   - 方向由測試計算（依兩邊實際執行的規則集合的包含關係），與 direction
-#     不同就紅——不靠人手寫。
+#     不同就紅——不靠人手寫。產生器以 --validate --strict 執行時會擋的檔
+#     （語料的 pyyaml_strict_blocks，取自產生器自己的結構化 finding）等同
+#     不可用：Go 既不拒收、也不回報會擋的問題，就是寬。
 #   - count 是比中列數的精確值；example 必須在比中的列裡；比中零列（差異
 #     已消失）也紅。清單一改，列數就出現在 diff 裡。
 #   - go_looser／value_differs 一律擋住 ADR-036 第二階段，必須逐列列出
@@ -51,18 +53,39 @@ entries:
     # TODO(owner): 換成 #2759 上「以產生器為準」的簽核留言 URL。
     sign_off: https://github.com/vencil/Dynamic-Alerting-Integrations/issues/2759
     expire_at: 2027-04-10
-    count: 13
+    count: 12
     example: 11508912abc9aa82
 
   - id: da-guard-fuzz-refusals
     reader: da-guard
     layer: policy
-    match: {shape: fuzz-looser-only}
+    # 逐列列出而不以 shape 比對：同一個 shape 裡也有一列 go_looser
+    # （da-guard-strict-block-tenants），一列只能被一筆記錄比中。
+    match:
+      rows:
+        - 1c9718cd114053b4
+        - 1d01ff650f8f5cfc
+        - 2a8d97bbbf771c37
+        - 3262c48b82a8bc8b
+        - 423fcee29bad4909
+        - 5e1080d9b0e22906
+        - 5f64b898ec1d1de4
+        - 7668c52653b98139
+        - 7c2450582f547295
+        - 7dd38ba5b8dc97fd
+        - 835ab62908028e95
+        - 8c6bc91dba3aec88
+        - 9ec8eae0ad1383b2
+        - a3b2640c0621026c
+        - a8b1165d87b88b06
+        - ad68935480e56cad
+        - bd151680098bb2d5
+        - c7a0b3546b5d0743
+        - f6b3702c42d1a6ec
     mechanism: >-
       固定種子的混合語料（null key、`!!omap` / `!!pairs` / `!!set`、merge、
-      錨點交錯）裡，da-guard 拒收而 PyYAML 照讀的列；成因與上一筆同屬
-      omap／pairs 建構模型。只接受拒收：讀出不同值或讀出產生器丟掉的檔，
-      方向會算成 go_looser／value_differs，與本筆不符而紅。
+      錨點交錯）裡，da-guard 拒收而產生器照讀、--strict 也不擋的列；成因與
+      上一筆同屬 omap／pairs 建構模型。
     direction: go_stricter
     disposition: accept-document
     ref: https://github.com/vencil/Dynamic-Alerting-Integrations/issues/2759
@@ -128,6 +151,26 @@ entries:
     expire_at: 2027-01-10
     count: 2
     example: c318e5865a1d83c2
+
+  - id: da-guard-strict-block-tenants
+    reader: da-guard
+    layer: policy
+    match:
+      rows:
+        - 1f679544660aa7cf  # fin: {tenants: !!omap [{~: =}], ...}
+        - bf4bf836f8694735  # fin: {tenants: !!pairs [t1, {~: =}], ...}
+        - c7c5d25c7697b387  # ops: &a0 {tenants: !!omap [[{a: 1}]]}（fuzz）
+    mechanism: >-
+      產生器以 --validate --strict 執行時，對該 domain 的 `tenants` 報
+      blocking 的 domain_policy_unusable（`!!omap` / `!!pairs` 建出的項目不是
+      租戶 id 字串，或整個值不是 list），整個檔被擋；da-guard 讀出 tenants、
+      沒有任何 Problem，照常放行。
+    direction: go_looser
+    disposition: fix-pending
+    ref: https://github.com/vencil/Dynamic-Alerting-Integrations/issues/2759
+    expire_at: 2027-01-10
+    count: 3
+    example: 1f679544660aa7cf
 
   # --- tenant-api：比產生器寬（擋住第二階段）-------------------------------
   - id: tenant-api-2759-a-depth-600
@@ -202,3 +245,47 @@ entries:
     expire_at: 2027-01-10
     count: 2
     example: c318e5865a1d83c2
+
+  - id: tenant-api-strict-block-escalation-not-bool
+    reader: tenant-api
+    layer: policy
+    match:
+      rows:
+        - 0a52f9e769092988  # require_critical_escalation: 1（flow）
+        - 0c2fe3000cc84b6e  # b1：block 寫法
+        - 5402140c438f879d  # b1：block 寫法
+        - 7ba5ed84a340a5c2  # b1：block 寫法
+        - 8453edb50d229d62  # b1：flow 寫法
+        - f9f6aaf109c46084  # b1：flow 寫法
+        - 22dbaf35bd3e49c4  # require_critical_escalation: ! "7"
+        - fea1670a73724e8a  # s6：non-specific tag 的非布林值
+    mechanism: >-
+      require_critical_escalation 寫成產生器照讀、但不是布林的值（`1`、
+      `"true"`、`yes`、`! "7"` 之類）。產生器以 --validate --strict 執行時報
+      blocking 的 domain_policy_unusable，整個檔被擋；tenant-api 照讀、不
+      執行 escalation，也不報錯（da-guard 回報 Problem，與產生器同判）。
+    direction: go_looser
+    disposition: fix-pending
+    ref: https://github.com/vencil/Dynamic-Alerting-Integrations/issues/2759
+    expire_at: 2027-01-10
+    count: 8
+    example: 0a52f9e769092988
+
+  - id: tenant-api-strict-block-lt-key-policy
+    reader: tenant-api
+    layer: policy
+    match:
+      rows:
+        - 2cef6e43436d0cac  # domain_policies 裡的 '<<'（引號）值是 list
+        - b570e3a65f6e576b  # domain_policies 裡的 !!str << 值是 list
+    mechanism: >-
+      domain_policies 下有一個字面上叫 `<<` 的 domain（引號或 `!!str`，不是
+      merge），值是 list。產生器以 --validate --strict 執行時報「policy must
+      be a mapping」的 blocking finding，整個檔被擋；tenant-api 讀出其餘
+      policy、不報錯（da-guard 回報 Problem，與產生器同判）。
+    direction: go_looser
+    disposition: fix-pending
+    ref: https://github.com/vencil/Dynamic-Alerting-Integrations/issues/2759
+    expire_at: 2027-01-10
+    count: 2
+    example: 2cef6e43436d0cac
