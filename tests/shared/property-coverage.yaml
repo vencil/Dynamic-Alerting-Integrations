@@ -251,6 +251,7 @@ modules:
       - _apply_timing_params
     excluded:
       build_receiver_config: "Heavy state-machine over RECEIVER_TYPES; covered by test_generate_alertmanager_routes.py integration"
+      receiver_type: "#2780 two-branch accessor (mapping receiver with a str type → that type, else ''), Go copy routingpolicy.ReceiverType; closed shape list (dict / list / int / bool / null type × main / overrides / routes × every check that reads a type) pinned by test_grar_strict_hardening.py::TestTenantReceiverTypeNotString"
       chain_levels: "#2326 path-prefix split of a POSIX directory level; example-covered by test_generate_routes_nested_tree.py (root / one / two levels) and the hier-* trees of routing_policy_parity_matrix.json, which pin it against Go's ChainLevels"
       level_contains: "#2326 subtree membership (root contains all; prefix + '/' so `team` does not contain `team-b`); example-covered by test_generate_routes_nested_tree.py"
       domain_policy_levels: "#2435 list assembly (root's domain_policies first, then domain_policies_by_dir in name order) shared by load_tenant_tree and explain_route --trace; example-covered by test_explain_route_trace.py::TestSubtreePolicyScopeNoAmtool and the nested-tree policy tests"

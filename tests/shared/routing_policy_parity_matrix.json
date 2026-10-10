@@ -6324,6 +6324,59 @@
         }
       },
       "enforced_group_by_invalid": []
+    },
+    {
+      "name": "tenant-receiver-type-not-string-2780",
+      "files": {
+        "_defaults.yaml": "defaults:\n  cpu_usage_percent: 80\n",
+        "_domain_policy.yaml": "domain_policies:\n  finance:\n    constraints:\n      forbidden_receiver_types:\n      - slack\n      allowed_receiver_types:\n      - webhook\n    tenants:\n    - t-map\n    - t-list\n",
+        "t-map.yaml": "tenants:\n  t-map:\n    cpu_usage_percent: '85'\n    _routing:\n      receiver:\n        type: {a: 1}\n        api_url: https://hooks.slack.com/services/T/B/X\n",
+        "t-list.yaml": "tenants:\n  t-list:\n    cpu_usage_percent: '85'\n    _routing:\n      receiver:\n        type: [slack]\n        api_url: https://hooks.slack.com/services/T/B/X\n"
+      },
+      "platform": [],
+      "expect": {
+        "t-list": {
+          "targets": [
+            {
+              "ref": "receiver",
+              "type": null
+            }
+          ],
+          "policy": [],
+          "rejected_routes": [],
+          "values_not_string": [],
+          "group_by_invalid": [],
+          "unknown_profile": null,
+          "tenant_api": {
+            "put": "400",
+            "batch": null
+          },
+          "python_differs": null,
+          "escalation": null,
+          "refused": null
+        },
+        "t-map": {
+          "targets": [
+            {
+              "ref": "receiver",
+              "type": null
+            }
+          ],
+          "policy": [],
+          "rejected_routes": [],
+          "values_not_string": [],
+          "group_by_invalid": [],
+          "unknown_profile": null,
+          "tenant_api": {
+            "put": "400",
+            "batch": null
+          },
+          "python_differs": null,
+          "escalation": null,
+          "refused": null
+        }
+      },
+      "enforced_group_by_invalid": []
     }
   ]
 }
