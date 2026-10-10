@@ -43,6 +43,12 @@ type parityDiffers struct {
 	Policy         [][3]string     `json:"policy"`
 	RejectedRoutes []string        `json:"rejected_routes"`
 	GroupByInvalid [][2]string     `json:"group_by_invalid"` // #2503: the Python value only
+	// Refused and TenantAPI (ADR-036 step 2, PR-C): the generator's values —
+	// a refusal no Go reader knows (tenant_file_unreadable), and the verdict
+	// it would give the PUT. Parsed only: this half asserts the Go columns,
+	// tests/shared/test_reader_divergence_catalog.py ranks the difference.
+	Refused   *string          `json:"refused"`
+	TenantAPI *parityTenantAPI `json:"tenant_api"`
 }
 
 // parityEscalation is the `escalation` cell (#2325).
@@ -86,7 +92,10 @@ type parityMatrix struct {
 		Invalid             []string `json:"invalid"`
 		SchemaSearchAccepts []string `json:"schema_search_accepts"`
 	} `json:"tenant_ids"`
-	Trees []parityTree `json:"trees"`
+	// TenantAPIUnmeasured: why a cell's tenant_api is null (asserted by the
+	// Python half, ADR-036 step 2); parsed only.
+	TenantAPIUnmeasured json.RawMessage `json:"tenant_api_unmeasured"`
+	Trees               []parityTree    `json:"trees"`
 }
 
 func loadParityMatrix(t *testing.T) parityMatrix {

@@ -306,6 +306,8 @@ da-guard 不再判斷路由與 policy，交給產生器的 `--validate --strict`
 | 只有 Go 有的 da-guard 檢查 | `internal/guard/types.go` 減去 `tests/shared/routing_policy_parity_matrix.json` |
 | 差異清單（policy 層） | `tests/shared/reader_divergence_catalog.yaml`；每筆寫死精確列數與一列範例，寬的差異逐列列出 |
 | Go 端判讀與產生器不同的列（快照） | `tests/shared/merge_key_go_verdicts.json`，由兩支 Go 語料測試以 `UPDATE_GO_VERDICTS=1` 重產（`routingpolicy/merge_key_corpus_test.go`、`tenant-api/internal/policy/merge_key_corpus_test.go`），列以內容雜湊（語料的 `id`）為鍵 |
+| 差異清單（路由層） | 同一份清單的 `layer: routing` 記錄，以 `[樹, 租戶, 欄位]` 逐格列出。差異來自 `tests/shared/routing_policy_parity_matrix.json`：格子的 `python_differs`（產生器的值）與 Go 欄位不同之處，每個有斷言該欄位的 Go 測試各算一筆（`targets` 只有 `pkg/routingpolicy`；`policy`、`rejected_routes`、`group_by_invalid`、`refused` 另加 da-guard；`tenant_api` 是 tenant-api）。`tenant_api` 格只有 tenant-api 的判定確實量不到時才能是 null，並列在對照表的 `tenant_api_unmeasured` 寫明原因。`tenant_api` 的產生器判定取自產生器以只看 conf.d 的參數 `--validate --strict`（與 `make validate-routes` 相同）加 `--findings-json` 執行的 findings 文件；CLI 的 `--policy` 檔（部署端的 allowed_domains）依 owner 決定不在範圍內，見 [#2826](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/2826)：in-force 且主體是該租戶或它自己的檔的 finding 就擋。[未驗] batch：12 個 `tenant_api.batch` 子格沒有比對產生器，數目由測試釘住 |
+| tenant-api 拒收產生器照讀的 policy 檔 | 快照記為 `"unusable"`，方向 `go_refuses`，不算較嚴：拒收後沿用該檔上一份可用內容（`policy.go` 的 `fileWiseParser`），從未成功過則寫入回 503，但開了 `--policy-unavailable-open` 就放行。路由層裡 tenant-api 因此對 PUT 回 503、產生器卻接受的格子同樣是 `go_refuses`。每筆的簽核必須交代這兩種情況 |
 | 方向計算與雙向比對、到期檢查、第二階段是否就緒 | `tests/shared/test_reader_divergence_catalog.py`；`make pre-tag` 經 `reader-divergence-expiry` 以嚴格到期執行 |
 | 原本的「已知較嚴」標記 | 已移除，併入上面的快照與差異清單 |
 

@@ -37,6 +37,10 @@ import (
 func WriteYAML(t testing.TB, dir, name, content string) string {
 	t.Helper()
 	path := filepath.Join(dir, name)
+	// A name below dir (a conf.d subtree, #2326) gets its directories.
+	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+		t.Fatalf("WriteYAML(%q): %v", name, err)
+	}
 	if err := os.WriteFile(path, []byte(content), 0644); err != nil {
 		t.Fatalf("WriteYAML(%q): %v", name, err)
 	}
