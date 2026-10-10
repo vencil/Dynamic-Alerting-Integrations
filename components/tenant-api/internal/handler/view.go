@@ -102,6 +102,7 @@ type PutViewRequest struct {
 // @Success     200  {object} map[string]string
 // @Failure     400  {object} ErrorResponse
 // @Failure     409  {object} ErrorResponse
+// @Failure     413  {object} ErrorResponse
 // @Failure     500  {object} ErrorResponse
 // @Failure     503  {object} ErrorResponse
 // @Router      /api/v1/views/{id} [put]

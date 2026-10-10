@@ -3,9 +3,6 @@ package handler
 import (
 	"encoding/json"
 	"errors"
-	"fmt"
-	"io"
-	"math"
 	"net/http"
 	"strings"
 
@@ -74,17 +71,11 @@ func DiffTenant(d *Deps) http.HandlerFunc {
 		}
 		masked := !canSeeCredentials(r, d, tenantID)
 
-		var body []byte
-		if masked {
-			var ok bool
-			if body, ok = readDiffBodyWhole(rw, r, d); !ok {
-				return
-			}
-		} else {
-			var ok bool
-			if body, ok = readLimitedBody(rw, r, d); !ok {
-				return
-			}
+		// A body over the cap is a 413 for every caller (#2778); the masked
+		// preview, which parses what it reads, relied on that first (R5).
+		body, ok := readLimitedBody(rw, r, d)
+		if !ok {
+			return
 		}
 
 		// Determine format: JSON envelope or raw YAML
@@ -176,26 +167,4 @@ func writeMaskedPreviewUnavailable(rw http.ResponseWriter, r *http.Request, whic
 	WriteJSONErrorWithCode(rw, r, http.StatusUnprocessableEntity, CodeMaskedPreviewUnavailable,
 		"a caller without write permission on the tenant is shown a preview with credentials masked, and "+
 			which+" cannot be masked with certainty (not YAML, several documents, or an anchor, alias or merge key)")
-}
-
-// readDiffBodyWhole reads the body under the endpoint's byte limit and, unlike
-// readLimitedBody, answers 413 when the body is over it rather than going on
-// with a truncated proposal: the masked preview parses what it reads.
-func readDiffBodyWhole(rw http.ResponseWriter, r *http.Request, d *Deps) ([]byte, bool) {
-	limit := d.MaxBody()
-	probe := limit
-	if probe < math.MaxInt64 {
-		probe++
-	}
-	body, err := io.ReadAll(io.LimitReader(r.Body, probe))
-	if err != nil {
-		WriteJSONError(rw, r, http.StatusBadRequest, "failed to read request body: "+err.Error())
-		return nil, false
-	}
-	if int64(len(body)) > limit {
-		WriteJSONError(rw, r, http.StatusRequestEntityTooLarge, fmt.Sprintf(
-			"request body is over the %d-byte limit for this endpoint", limit))
-		return nil, false
-	}
-	return body, true
 }

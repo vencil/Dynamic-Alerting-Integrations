@@ -207,6 +207,7 @@ type PutGroupRequest struct {
 // @Failure     400  {object} ErrorResponse
 // @Failure     403  {object} ErrorResponse
 // @Failure     409  {object} ErrorResponse
+// @Failure     413  {object} ErrorResponse
 // @Failure     500  {object} ErrorResponse
 // @Failure     503  {object} ErrorResponse
 // @Router      /api/v1/groups/{id} [put]

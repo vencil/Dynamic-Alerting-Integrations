@@ -176,8 +176,11 @@ type Deps struct {
 	// Deps so parallel tests do not share it.
 	loadRoot func(configDir string) cfg.RootPlatform
 
-	// MaxBodyBytes caps the request body every write handler will
-	// read via `io.LimitReader`. Wired from `TA_MAX_BODY_BYTES`
+	// MaxBodyBytes caps the request body of the non-batch write
+	// handlers; readLimitedBody answers a body over it with 413
+	// rather than reading a truncated prefix (#2778; the federation
+	// handlers still use a bare io.LimitReader, see
+	// DefaultMaxBodyBytes). Wired from `TA_MAX_BODY_BYTES`
 	// (default 1 MiB; see DefaultMaxBodyBytes / MaxBodyBytesFromEnv
 	// in middleware.go). Read via d.MaxBody() so a zero value (e.g.
 	// in tests that construct Deps literally) falls back to the

@@ -95,8 +95,12 @@ func SlogRequestLogger(next http.Handler) http.Handler {
 // Request body size limit (issue #144)
 // ─────────────────────────────────────────────────────────────────
 
-// DefaultMaxBodyBytes is the request-body cap applied by every
-// write handler via `io.LimitReader(r.Body, d.MaxBodyBytes)`. 1 MiB
+// DefaultMaxBodyBytes is the request-body cap (d.MaxBody()) for the
+// non-batch write handlers. Those that read through readLimitedBody
+// answer a body over it with 413 PAYLOAD_TOO_LARGE and never act on a
+// truncated prefix (#2778); the federation handlers still read it via
+// io.LimitReader, where an over-cap JSON body fails to decode as a 400.
+// The batch endpoints have their own, tighter cap (below). 1 MiB
 // fits even the largest realistic tenant YAML (deeply-nested rule
 // pack with hundreds of thresholds) with order-of-magnitude
 // headroom, while keeping a single oversize POST from holding
