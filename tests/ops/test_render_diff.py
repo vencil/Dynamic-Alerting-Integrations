@@ -346,7 +346,7 @@ def test_generator_is_found_beside_this_module():
 def test_unserved_routing_value_as_written_is_masked():
     """`unserved` 照原文帶出路由鍵（例如寫錯的 `_routing` 是一段字串）：整段遮罩。"""
     def t(raw):
-        return tv.TenantValues("a", {}, {}, {"_routing": raw, "x": raw}, {}, None, {}, {})
+        return tv.TenantValues("a", {}, {}, {"_routing": raw, "x": raw}, {}, None, {}, {}, {})
     out = rd.diff_served({"a": t("url: https://h/SEKRET-1")}, {"a": t("url: https://h/SEKRET-2")})
     by_key = {c.key: (c.base, c.pr) for c in out}
     assert by_key["_routing"] == (rd.MASKED, rd.MASKED)
