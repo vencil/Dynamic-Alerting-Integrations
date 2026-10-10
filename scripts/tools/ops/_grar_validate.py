@@ -19,6 +19,7 @@ from __future__ import annotations
 import base64
 import binascii
 import fnmatch
+import functools
 import json
 import os
 import re
@@ -43,6 +44,8 @@ from _lib_validation import tenant_id_rule  # noqa: E402  (ADR-035)
 from _lib_validation import am_duration_seconds  # noqa: E402  (#2490)
 from _grar_merge import (  # noqa: E402  (#2326 directory scope)
     ROOT_LEVEL,
+    Finding,
+    unclassified,
     ReplacedValueWarning,
     SkippedEntryWarning,
     level_contains,
@@ -67,13 +70,18 @@ def _extract_host(value: str | None) -> str | None:
     return parsed.hostname
 
 
-def validate_receiver_domains(receiver_obj: dict, tenant: str, allowed_domains: list[str]) -> list[str]:
+def validate_receiver_domains(receiver_obj: dict, tenant: str, allowed_domains: list[str],
+                              *, tenant_id: str | None = None,
+                              receiver_field: str = "receiver") -> list[str]:
     """Validate receiver URL fields against a domain allowlist.
 
     Args:
         receiver_obj: dict with 'type' and type-specific fields.
         tenant: tenant name for messages.
         allowed_domains: list of allowed domain patterns (fnmatch).
+        tenant_id / receiver_field: #2766 ``Finding`` fields only — the
+            tenant (when *tenant* is a context string) and the receiver's
+            path in the routing.
 
     Returns:
         list of warning strings (empty if all valid).
@@ -95,12 +103,16 @@ def validate_receiver_domains(receiver_obj: dict, tenant: str, allowed_domains: 
         if not host:
             warnings.append(
                 skipped_entry_warning(f"  WARN: {tenant}: cannot parse host from receiver "
-                                      f"{field}='{raw}', skipping domain check"))
+                                      f"{field}='{raw}', skipping domain check",
+                                      kind="receiver_host_unparseable", tenant=tenant_id,
+                                      field=f"{receiver_field}.{field}"))
             continue
         if not any(fnmatch.fnmatch(host, pat) for pat in allowed_domains):
             warnings.append(
                 skipped_entry_warning(f"  WARN: {tenant}: receiver {field} host '{host}' "
-                                      f"not in allowed_domains, skipping"))
+                                      f"not in allowed_domains, skipping",
+                                      kind="receiver_domain_not_allowed", tenant=tenant_id,
+                                      field=f"{receiver_field}.{field}"))
     return warnings
 
 
@@ -1086,9 +1098,9 @@ def _validate_profile_refs(parsed: dict) -> list[str]:
                      f"is not on this tenant's directory chain — a profile is "
                      f"visible only to tenants at its own level or below)"
                      if where else "")
-            warnings.append(
+            warnings.append(unclassified(
                 f"  WARN: {tenant}: _routing_profile references unknown "
-                f"profile '{profile_name}'{extra}")
+                f"profile '{profile_name}'{extra}", blocks="never"))
     return warnings
 
 
@@ -1099,6 +1111,7 @@ def check_policy_scope(
     *,
     source: str,
     strict: bool = False,
+    policy_files: "dict[str, str] | None" = None,
 ) -> tuple[list[str], list[tuple[str, str]]]:
     """#2326 (d): a subtree policy may name only tenants of its subtree.
 
@@ -1109,6 +1122,9 @@ def check_policy_scope(
     policy simply cannot reach it, so the entry is not enforced. A tenant no
     file declares is left to the lint that reports unknown tenants
     (``check_routing_profiles``), as for a root policy.
+
+    *policy_files* (#2766) maps a domain to the file that declares it, for
+    the finding's ``file``; a domain it does not name gets None.
 
     Returns ``(messages, [(domain, tenant), ...])``.
     """
@@ -1140,7 +1156,11 @@ def check_policy_scope(
                 msg += (f" — fix: move the entry to a _domain_policy.yaml at "
                         f"or above the tenant's directory, or drop '{t}' from "
                         f"this policy")
-            messages.append(msg)
+            # #2766: da-guard / the tree record's kind for the same entry.
+            messages.append(Finding(
+                msg, kind="domain_policy_out_of_scope", blocks="strict",
+                tenant=t, policy=name, file=(policy_files or {}).get(name),
+                field=f"domain_policies.{name}.tenants"))
     return messages, rows
 
 
@@ -1207,6 +1227,7 @@ def duplicate_tenant_errors(duplicates: "dict[str, list[str]]") -> list[str]:
     one drops that file's overrides silently.
     """
     return [
+        Finding(  # #2766: the tenant is the subject; several files, so no file
         f"  {DUPLICATE_TENANT_PREFIX} tenant '{tenant}' is declared in "
         f"{len(files)} files: {', '.join(files)}. The threshold-exporter (and "
         "da-guard) reject the WHOLE config dir in this state, so every tenant "
@@ -1214,7 +1235,8 @@ def duplicate_tenant_errors(duplicates: "dict[str, list[str]]") -> list[str]:
         "your decision (removing the wrong one drops its overrides "
         "silently): keep the tenant in exactly one file. If one of these "
         "files cannot be decoded by the threshold-exporter (da-guard exit 3), "
-        "fix that file first."
+        "fix that file first.",
+        kind="duplicate_tenant", blocks="always", tenant=tenant)
         for tenant, files in sorted(duplicates.items())
     ]
 
@@ -1272,12 +1294,12 @@ def receiver_name_collisions(labelled: list[tuple[str, str]]) -> list[str]:
     for name, sources in by_name.items():
         if len(sources) < 2:
             continue
-        lines.append(
+        lines.append(unclassified(
             f"  {RECEIVER_NAME_COLLISION_PREFIX} receiver '{name}' is generated "
             f"by {' and by '.join(sources)}. Alertmanager refuses a config "
             "whose receivers repeat a name (and a merge that de-duplicates by "
             "name would silently keep only one of them). Rename one of the "
-            "tenants, or remove one of the entries.")
+            "tenants, or remove one of the entries.", blocks="always"))
     return lines
 
 # ── #1231: deprecated tenant-config key aliases ──
@@ -1411,8 +1433,10 @@ def _timing_bound_violations(
         policy_name: str, subject: str, rc: dict,
         max_repeat: object, max_sec: float | None,
         min_group_wait: object, min_sec: float | None,
-        src, who) -> list[tuple[str, str]]:
-    """``(finding, fix hint)`` per timing bound one route breaks (#2490).
+        src, who) -> list[tuple[str, str, str]]:
+    """``(key, finding, fix hint)`` per timing bound one route breaks (#2490;
+    *key* — ``repeat_interval`` / ``group_wait`` — since #2766, for the
+    finding's ``field``).
 
     The ONE comparison behind a domain policy's ``max_repeat_interval`` /
     ``min_group_wait``, called by ``check_domain_policies`` in BOTH modes —
@@ -1425,7 +1449,7 @@ def _timing_bound_violations(
     ``90000``, ``1.5h``) is reported as not a valid duration. *src* / *who*
     are the caller's value-origin and fix-target texts for a key.
     """
-    out: list[tuple[str, str]] = []
+    out: list[tuple[str, str, str]] = []
     checks = (
         ("repeat_interval", max_repeat, max_sec, "max", "exceeds max",
          lambda v, b: v > b,
@@ -1449,6 +1473,7 @@ def _timing_bound_violations(
         sec = _rendered_duration(value)
         if sec is None:
             out.append((
+                key,
                 f"domain_policy '{policy_name}', {subject}: {key} "
                 f"'{value}'{src(key)} is not a valid duration "
                 f"— cannot check against {noun} '{raw}'",
@@ -1456,6 +1481,7 @@ def _timing_bound_violations(
                 "(whole numbers, units largest first)"))
         elif breaks(sec, bound):
             out.append((
+                key,
                 f"domain_policy '{policy_name}', {subject}: {key} "
                 f"'{value}'{src(key)} {verb} '{raw}'",
                 fix(raw)))
@@ -1507,35 +1533,38 @@ def route_entry_matchers(entry: object, idx: int,
     unsupported key, or a missing / empty / malformed ``match``.
     """
     ctx = f"{tenant}: routes[{idx}]"
+    # #2766: da-guard's kind for the same entries (routingpolicy.RouteEntryProblem).
+    where = {"kind": "invalid_route_entry", "tenant": tenant or None,
+             "field": f"routes[{idx}]"}
     if not isinstance(entry, dict):
-        return None, [skipped_entry_warning(f"  WARN: {ctx} must be a dict, skipping")]
+        return None, [skipped_entry_warning(f"  WARN: {ctx} must be a dict, skipping", **where)]
     unsupported = sorted(str(k) for k in entry if k not in ROUTE_ENTRY_KEYS)
     if unsupported:
         return None, [
             skipped_entry_warning(f"  WARN: {ctx} has unsupported key(s) {unsupported} (supported: "
                                   f"{sorted(ROUTE_ENTRY_KEYS)}; label equality only — no regex, no "
-                                  "continue), skipping")]
+                                  "continue), skipping", **where)]
     match = entry.get("match")
     if not isinstance(match, dict) or not match:
         return None, [skipped_entry_warning(f"  WARN: {ctx} needs a non-empty 'match' mapping of "
                                             "label: value (an empty match would take every alert "
-                                            "of the tenant), skipping")]
+                                            "of the tenant), skipping", **where)]
     matchers = []
     for label, value in match.items():
         if not isinstance(label, str) or not _LABEL_NAME_RE.fullmatch(label):
             return None, [skipped_entry_warning(f"  WARN: {ctx}: match label {label!r} is not a "
-                                                "valid label name, skipping")]
+                                                "valid label name, skipping", **where)]
         if not isinstance(value, str):
             return None, [skipped_entry_warning(f"  WARN: {ctx}: match value for '{label}' must be "
                                                 f"a string, got {type(value).__name__} {value!r} "
-                                                "(quote it in YAML), skipping")]
+                                                "(quote it in YAML), skipping", **where)]
         if value == "":
             # AM reads label="" as "label absent", so this child would take
             # nearly every alert of the tenant — the same shadowing an empty
             # `match` causes.
             return None, [skipped_entry_warning(f"  WARN: {ctx}: match value for '{label}' is "
                                                 "empty (it would match every alert without that "
-                                                "label), skipping")]
+                                                "label), skipping", **where)]
         matchers.append(f"{label}={_quote_matcher_value(value)}")
     return matchers, []
 
@@ -1734,7 +1763,9 @@ def routing_not_mapping_text(value: object) -> str:
 def routing_not_mapping_warning(tenant: str, value: object) -> str:
     """The render-mode line (blocking under ``--validate``)."""
     return (skipped_entry_warning(f"  WARN: {tenant}: {routing_not_mapping_text(value)} — no route "
-                                  "is rendered for this tenant, skipping"))
+                                  "is rendered for this tenant, skipping",
+                                  kind="routing_not_mapping", tenant=tenant,
+                                  field="_routing"))
 
 
 def invalid_tenant_id_text(tenant: object) -> str:
@@ -2001,8 +2032,10 @@ def _check_critical_escalation(messages: list[str], fmt, policy_name: str,
     Non-compliance goes through *fmt* (strict → blocking ERROR, else WARN).
     A non-escalation destination that can still receive a critical alert
     (``critical_escalation_findings().leaks``) is always a plain WARN — it
-    never blocks: it is a plain ``str``, not a ``SkippedEntryWarning``
-    (#2489), and the text still avoids the ``skipping`` word.
+    never blocks: it is not a ``SkippedEntryWarning`` (#2489), and the text
+    still avoids the ``skipping`` word. #2766: both are ``Finding``s with
+    da-guard's kinds and fields (``critical_escalation_missing`` /
+    ``critical_escalation_leak``, ``<ref>.receiver.type``).
     """
     target, leaks = critical_escalation_findings(routing_config, tenant)
     escalation = sorted(ESCALATION_TYPES)
@@ -2016,21 +2049,27 @@ def _check_critical_escalation(messages: list[str], fmt, policy_name: str,
             f"severity=critical with such a receiver)",
             "add `routes: - match: {severity: critical}` with a pagerduty "
             "receiver to the tenant's _routing or its routing profile, or "
-            "switch the main receiver.type to pagerduty"))
+            "switch the main receiver.type to pagerduty",
+            kind="critical_escalation_missing", tenant=tenant,
+            field="receiver.type"))
         return
     for ref, match, rtype, caught in leaks:
         if match:
-            messages.append(
+            messages.append(Finding(
                 f"  WARN: domain_policy '{policy_name}', tenant '{tenant}' "
                 f"{ref} ({match}): receiver type '{rtype}' catches alerts "
                 f"with {caught} before any receiver of type {escalation} "
-                f"does, so they never reach one")
+                f"does, so they never reach one",
+                kind="critical_escalation_leak", blocks="never", tenant=tenant,
+                policy=policy_name, field=f"{ref}.receiver.type"))
         else:
-            messages.append(
+            messages.append(Finding(
                 f"  WARN: domain_policy '{policy_name}', tenant '{tenant}': "
                 f"severity=critical alerts that no sub-route catches go to "
                 f"the main receiver (type '{rtype}'), not a receiver of type "
-                f"{escalation}")
+                f"{escalation}",
+                kind="critical_escalation_leak", blocks="never", tenant=tenant,
+                policy=policy_name, field="receiver.type"))
 
 
 def check_domain_policies(
@@ -2078,12 +2117,18 @@ def check_domain_policies(
     messages: list[str] = []
     severity = POLICY_ERROR_PREFIX.rstrip(":") if strict else "WARN"
 
-    def _fmt(base: str, hint: str) -> str:
-        """Format one violation; strict mode appends the fix hint."""
+    def _fmt(base: str, hint: str, *, kind: str, policy: str,
+             tenant: str | None = None, field: str | None = None) -> Finding:
+        """Format one violation; strict mode appends the fix hint.
+
+        #2766: a ``Finding`` — blocking under ``--strict`` (where its text is
+        the ``ERROR:`` line ``_policy_errors`` selects), in both modes.
+        """
         msg = f"  {severity}: {base}"
         if strict:
             msg += f" — fix: {hint}"
-        return msg
+        return Finding(msg, kind=kind, blocks="strict", tenant=tenant,
+                       policy=policy, field=field)
 
     def _constraint_list(policy_name: str, constraints: dict,
                          field: str) -> list:
@@ -2101,7 +2146,9 @@ def check_domain_policies(
                     f"domain_policy '{policy_name}': constraint '{field}' "
                     f"must be a list, got {type(raw).__name__} — the "
                     f"constraint cannot be enforced",
-                    f"define '{field}' as a YAML list"))
+                    f"define '{field}' as a YAML list",
+                    kind="domain_policy_unusable", policy=policy_name,
+                    field=f"constraints.{field}"))
             return []
         return raw
 
@@ -2125,7 +2172,9 @@ def check_domain_policies(
                         f"domain_policy '{policy_name}': '{field}' entry "
                         f"must be a receiver type, got {type(entry).__name__} "
                         f"— the entry cannot be enforced",
-                        "list each receiver type as a plain YAML scalar"))
+                        "list each receiver type as a plain YAML scalar",
+                        kind="domain_policy_unusable", policy=policy_name,
+                        field=f"constraints.{field}"))
                 entry = None
             out.add(entry)
         return out
@@ -2149,13 +2198,16 @@ def check_domain_policies(
                     f"mapping, got {type(policy).__name__} — the policy "
                     f"cannot be enforced",
                     "define the policy as a mapping with "
-                    "description/tenants/constraints keys"))
+                    "description/tenants/constraints keys",
+                    kind="domain_policy_unusable", policy=policy_name))
             continue
         tenants = policy.get("tenants", [])
         if not isinstance(tenants, list):
             messages.append(_fmt(
                 f"domain_policy '{policy_name}': 'tenants' must be a list",
-                "define 'tenants' as a YAML list of tenant ids"))
+                "define 'tenants' as a YAML list of tenant ids",
+                kind="domain_policy_unusable", policy=policy_name,
+                field="tenants"))
             continue
         constraints = policy.get("constraints", {})
         if not isinstance(constraints, dict):
@@ -2165,7 +2217,9 @@ def check_domain_policies(
                     f"domain_policy '{policy_name}': 'constraints' must be "
                     f"a mapping, got {type(constraints).__name__} — the "
                     f"policy cannot be enforced",
-                    "define 'constraints' as a mapping of constraint keys"))
+                    "define 'constraints' as a mapping of constraint keys",
+                    kind="domain_policy_unusable", policy=policy_name,
+                    field="constraints"))
             continue
 
         forbidden_types = _receiver_type_set(
@@ -2188,7 +2242,9 @@ def check_domain_policies(
                 f"{type(escalation).__name__} {escalation!r} — the "
                 f"constraint cannot be enforced",
                 "set 'require_critical_escalation' to true or false "
-                "(unquoted)"))
+                "(unquoted)",
+                kind="domain_policy_unusable", policy=policy_name,
+                field="constraints.require_critical_escalation"))
 
         # Strict: validate constraint-side durations once per policy —
         # an unparseable bound (e.g. "banana", "-1h") means the constraint
@@ -2208,7 +2264,9 @@ def check_domain_policies(
                         f"'{field}' value '{raw}' is not a valid duration "
                         f"— the constraint cannot be enforced",
                         "use Prometheus/Go duration syntax such as '30s', "
-                        "'1h' or '1h30m'; negative values are not allowed"))
+                        "'1h' or '1h30m'; negative values are not allowed",
+                        kind="domain_policy_unusable", policy=policy_name,
+                        field=f"constraints.{field}"))
 
         for tenant in tenants:
             # #2326 review F4: a `tenants:` entry that is not a scalar id (a
@@ -2222,7 +2280,9 @@ def check_domain_policies(
                         f"domain_policy '{policy_name}': 'tenants' entry "
                         f"must be a tenant id, got {type(tenant).__name__} "
                         f"— the entry cannot be enforced",
-                        "list each tenant id as a plain YAML scalar"))
+                        "list each tenant id as a plain YAML scalar",
+                        kind="domain_policy_unusable", policy=policy_name,
+                        field="tenants"))
                 continue
             if tenant not in routing_configs:
                 continue
@@ -2235,7 +2295,8 @@ def check_domain_policies(
             if (require_escalation and isinstance(tenant_rc, dict)
                     and tenant_rc.get("receiver")):
                 _check_critical_escalation(
-                    messages, _fmt, policy_name, tenant, tenant_rc)
+                    messages, functools.partial(_fmt, policy=policy_name),
+                    policy_name, tenant, tenant_rc)
             targets = [(f"tenant '{tenant}'", None, tenant_rc, frozenset())]
             targets.extend(
                 (f"tenant '{tenant}' {ref} ({match})", ref, sub_rc, inherited)
@@ -2257,6 +2318,13 @@ def check_domain_policies(
                                 f"{_ref}'s own")
                     return _whose
 
+                # #2766: the Finding fields of a violation on this target.
+                def _at(key: str, _ref: str | None = ref,
+                        _tenant: str = tenant) -> dict:
+                    return {"kind": "domain_policy_violation",
+                            "policy": policy_name, "tenant": _tenant,
+                            "field": key if _ref is None else f"{_ref}.{key}"}
+
                 # Check receiver type constraints
                 recv = rc.get("receiver", {})
                 recv_type = recv.get("type", "") if isinstance(recv, dict) else ""
@@ -2268,23 +2336,24 @@ def check_domain_policies(
                             f"is forbidden",
                             f"domain forbids {_type_names(forbidden_types)}; switch "
                             f"{whose} receiver.type to a compliant type "
-                            f"or amend the domain policy"))
+                            f"or amend the domain policy", **_at("receiver.type")))
                     if allowed_types and recv_type not in allowed_types:
                         messages.append(_fmt(
                             f"domain_policy '{policy_name}', "
                             f"{subject}: receiver type '{recv_type}' "
                             f"not in allowed types {_type_names(allowed_types)}",
                             f"switch {whose} receiver.type to one of "
-                            f"{_type_names(allowed_types)} or amend the domain policy"))
+                            f"{_type_names(allowed_types)} or amend the domain policy",
+                            **_at("receiver.type")))
 
                 # Check max_repeat_interval / min_group_wait — #2490: ONE
                 # comparison for both modes; only the level differs (strict
                 # ERROR + hint via _fmt, lenient WARN, exit code unchanged).
-                for base, hint in _timing_bound_violations(
+                for key, base, hint in _timing_bound_violations(
                         policy_name, subject, rc,
                         max_repeat, max_sec, min_group_wait, min_sec,
                         _src, _who):
-                    messages.append(_fmt(base, hint))
+                    messages.append(_fmt(base, hint, **_at(key)))
 
                 # Check enforce_group_by
                 if enforce_group_by:
@@ -2301,7 +2370,8 @@ def check_domain_policies(
                                 f"{subject}: group_by{_src('group_by')} missing required "
                                 f"labels: {sorted(missing)}",
                                 f"add {sorted(missing)} to {_who('group_by')} group_by "
-                                f"(policy requires {sorted(enforce_group_by)})"))
+                                f"(policy requires {sorted(enforce_group_by)})",
+                                **_at("group_by")))
                     elif strict:
                         messages.append(_fmt(
                             f"domain_policy '{policy_name}', "
@@ -2309,6 +2379,6 @@ def check_domain_policies(
                             f"{type(tenant_gb).__name__} — cannot check "
                             f"enforce_group_by",
                             f"define {whose} group_by as a YAML list of "
-                            "label names"))
+                            "label names", **_at("group_by")))
 
     return messages

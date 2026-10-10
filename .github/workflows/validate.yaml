@@ -117,9 +117,10 @@ jobs:
               # `scripts/tools/**` above does NOT reach scripts/ops/. Go Lint
               # runs this checksum verifier on both halves of its golangci-lint
               # download (install script + binary), so it is the supply-chain
-              # control for that job — yet a PR editing ONLY the verifier
-              # matches no `validate` path, and a path-skipped required check
-              # reports `skipped`, which satisfies branch protection. Not yet
+              # control for that job — yet without the entry below, a PR editing
+              # ONLY the verifier would match no `validate` path, so the Go Lint
+              # run leg would be skipped and its always-run gate would report
+              # success. Not yet
               # burned, and for a stronger reason than luck: as of #1368 the
               # file's only commit was 91bae528 (#849), which PREDATES
               # `go-lint` entering this workflow (ae0cd4fc, #912) — at that

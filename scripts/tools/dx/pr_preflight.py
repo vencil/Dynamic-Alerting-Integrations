@@ -1103,22 +1103,41 @@ def _prepush_guards_wired() -> Tuple[Optional[bool], str]:
 
     回傳 `(wired, message)`。⛔ **「量不到」與「量了沒事」要分得開**。
     """
-    # ⛔ core.hooksPath 有設（空字串也算）就不判（#2696）。它指向的可能是許多 repo
-    # 共用的目錄，裝進去的 shim 會擋下其他 repo 的每一次 push；空字串則讓 git 一支
-    # hook 都不跑。None：這裡量不到本 repo 的守衛。
-    # GIT_CONFIG 只改變 `git config` 讀哪個檔，git 跑 hook 時照樣讀原本的設定。
-    env = {k: v for k, v in os.environ.items() if k != "GIT_CONFIG"}
-    hp = run(["git", "config", "--get", "core.hooksPath"], timeout=30, env=env)
-    if hp.returncode == 0:
-        return None, (
-            f"量不到：core.hooksPath 設成 {(hp.stdout or '').strip()!r}；本 repo 的守衛"
-            "只在它沒設時判定與安裝。"
-        )
+    # ⛔ 任何一棵 worktree 讀得到 core.hooksPath（空字串也算）就不判（#2696）。它指向
+    # 的可能是許多 repo 共用的目錄，裝進去的 shim 會擋下其他 repo 的每一次 push；
+    # 空字串則讓 git 一支 hook 都不跑。`git config --worktree` 與 includeIf gitdir
+    # 都能讓它只在某一棵生效，從那棵 push 就不經 .git/hooks（#2772），所以逐棵讀。
+    # 以那棵的 git 目錄（common dir 與其下 worktrees/*）讀，不進 worktree 目錄：
+    # 登記的路徑不存在時，搬走的那棵照樣能 push。None：這裡量不到本 repo 的守衛。
+    # GIT_CONFIG 只改變 `git config` 讀哪個檔，git 跑 hook 時照樣讀原本的設定；
+    # GIT_COMMON_DIR 會蓋掉 --git-dir 推出的 common dir。
+    env = {k: v for k, v in os.environ.items() if k not in ("GIT_CONFIG", "GIT_COMMON_DIR")}
+    cd = run(["git", "rev-parse", "--git-common-dir"], timeout=30)
+    bad = cd if cd.returncode != 0 else None
+    dirs: List[Path] = []
+    if bad is None:
+        common = Path((cd.stdout or "").strip()).resolve()
+        try:
+            dirs = [common, *sorted(p for p in (common / "worktrees").glob("*") if p.is_dir())]
+        except OSError as e:
+            return None, f"量不到：讀不到 {common / 'worktrees'}（{e}）。這不代表守衛沒裝。"
+    for gd in dirs:
+        hp = run(["git", "--git-dir", str(gd), "config", "--get", "core.hooksPath"],
+                 timeout=30, env=env)
+        if hp.returncode == 0:
+            return None, (
+                f"量不到：以 {gd} 為 git 目錄讀到 core.hooksPath 設成 "
+                f"{(hp.stdout or '').strip()!r}；本 repo 的守衛只在每棵 worktree"
+                " 都沒設它時判定。"
+            )
+        if hp.returncode != 1:
+            bad = hp
+            break
     r = run(["git", "rev-parse", "--git-path", "hooks/pre-push"], timeout=30)
-    if hp.returncode != 1 or r.returncode != 0:
+    if bad is not None or r.returncode != 0:
         # ⛔ None，不是 False：git 跑不了或不在 git repository，都量不到守衛在不在；
         # 說成「沒裝」會開出安裝器這帖藥，而那兩種情況下它照做也回不到綠。
-        bad = r if r.returncode != 0 else hp
+        bad = bad or r
         reason = (bad.stderr or "").strip() or f"rc={bad.returncode}"
         return None, (
             f"量不到：git 失敗（{reason}）。這不代表守衛沒裝。"

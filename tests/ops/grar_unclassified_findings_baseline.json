@@ -1,0 +1,16 @@
+{
+  "_comment": [
+    "Producer sites under scripts/tools/ops whose generation warning-stream lines are still kind=unclassified (#2766, ADR-036 §3). 'path::function' -> number of such producer calls.",
+    "Shrink-only: give a line a kind from _grar_merge.FINDING_KINDS, then lower its count here (a row at 0 is deleted). tests/ops/test_grar_findings.py refuses a new site and a stale row."
+  ],
+  "ticket": "#2766",
+  "sites": {
+    "scripts/tools/ops/_grar_merge.py::_apply_timing_params": 1,
+    "scripts/tools/ops/_grar_parse.py::load_tenant_tree": 2,
+    "scripts/tools/ops/_grar_routes.py::_build_single_enforced_route": 1,
+    "scripts/tools/ops/_grar_routes.py::generate_inhibit_rules": 1,
+    "scripts/tools/ops/_grar_validate.py::_validate_profile_refs": 1,
+    "scripts/tools/ops/_grar_validate.py::receiver_name_collisions": 1,
+    "scripts/tools/ops/generate_alertmanager_routes.py::_validate_mode": 2
+  }
+}
