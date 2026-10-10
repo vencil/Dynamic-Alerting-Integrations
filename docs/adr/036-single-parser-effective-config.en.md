@@ -194,7 +194,7 @@ The **difference list** reuses the format of the existing `tests/rulepacks/vm_de
 - Checked both ways: a difference not on the list fails, and so does a listed one that has disappeared.
 - **Any difference where Go is looser than the generator blocks phase 2**. Every loose class #2759 lists today is of this kind, so phase 2 cannot start until all of them are fixed.
 - A difference where Go is stricter needs an explicit "the generator is authoritative" sign-off on its tracking issue. Once phase 2 starts, those writes become accepted.
-- Every change to the list goes through a PR approved by the owner.
+- Every change to the list goes through a PR. Each record pins its exact row count, so any change shows up in the PR diff for reviewers to see; nothing currently forces the owner's approval (main's branch protection requires no review, and CODEOWNERS only notifies).
 
 Customers' conf.d trees are not available, so these conditions cover the owner's trees only. A `da-tools` command lets customers run the same comparison on their own trees.
 
