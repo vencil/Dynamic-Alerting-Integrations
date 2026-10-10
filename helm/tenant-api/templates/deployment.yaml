@@ -122,7 +122,11 @@ spec:
             - --github-base-branch={{ .Values.writeBack.github.targetBranch }}
             {{- end }}
             {{- if eq .Values.writeBack.mode "pr-gitlab" }}
-            - --gitlab-project={{ .Values.writeBack.gitlab.project }}
+            {{- /* A numeric project id written in a values file is a float64
+                 to helm, printed as 4.5678901e+07 from 1e6 up; print it as an
+                 integer. */}}
+            {{- $project := .Values.writeBack.gitlab.project }}
+            - --gitlab-project={{ if kindIs "float64" $project }}{{ $project | int64 }}{{ else }}{{ $project }}{{ end }}
             - --gitlab-target-branch={{ .Values.writeBack.gitlab.targetBranch }}
             {{- end }}
             {{- if .Values.rbac.metadataScopeEnforce }}

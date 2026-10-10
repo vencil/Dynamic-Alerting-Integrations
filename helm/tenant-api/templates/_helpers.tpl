@@ -81,8 +81,14 @@ emptyDir, are lost on restart.
 {{- if not .Values.gitRepoUrl -}}
 {{- fail (printf "writeBack.mode=%s needs gitRepoUrl: the PRs are pushed to that repository's origin (#2855)." $mode) -}}
 {{- end -}}
+{{- if or (not (hasPrefix "https://" .Values.gitRepoUrl)) (not (urlParse .Values.gitRepoUrl).host) -}}
+{{- fail (printf "writeBack.mode=%s needs an https:// gitRepoUrl (got %q): the forge token authenticates clone and push over HTTPS only, and is never sent over plain http (#2855)." $mode .Values.gitRepoUrl) -}}
+{{- end -}}
 {{- if not $wb.token.secretName -}}
 {{- fail (printf "writeBack.mode=%s needs writeBack.token.secretName: an existing Secret holding the forge token (#2855)." $mode) -}}
+{{- end -}}
+{{- if not $wb.token.secretKey -}}
+{{- fail (printf "writeBack.mode=%s needs writeBack.token.secretKey: the key of the token in that Secret (#2855)." $mode) -}}
 {{- end -}}
 {{- if and (eq $mode "pr-github") (not $wb.github.repo) -}}
 {{- fail "writeBack.mode=pr-github needs writeBack.github.repo (owner/repo) (#2855)." -}}
@@ -98,7 +104,9 @@ Git HTTPS credentials for the PR modes (#2855), shared by the clone init
 container and tenant-api. A credential helper set through git's environment
 config (GIT_CONFIG_COUNT, git >= 2.31) answers `get` from GIT_FORGE_USER /
 GIT_FORGE_TOKEN, so the token never lands in the remote URL, .git/config,
-the ConfigMap or a log line. Empty in direct mode.
+the ConfigMap or a log line. It is scoped to gitRepoUrl's https host
+(credential.https://<host>.helper): any other host gets no answer.
+Empty in direct mode.
 */}}
 {{- define "tenant-api.gitCredentialEnv" -}}
 {{- $mode := .Values.writeBack.mode -}}
@@ -115,7 +123,7 @@ the ConfigMap or a log line. Empty in direct mode.
 - name: GIT_CONFIG_COUNT
   value: "1"
 - name: GIT_CONFIG_KEY_0
-  value: credential.helper
+  value: {{ printf "credential.https://%s.helper" (urlParse .Values.gitRepoUrl).host | quote }}
 - name: GIT_CONFIG_VALUE_0
   value: '!f() { test "$1" = get || exit 0; echo "username=$GIT_FORGE_USER"; echo "password=$GIT_FORGE_TOKEN"; }; f'
 {{- end }}

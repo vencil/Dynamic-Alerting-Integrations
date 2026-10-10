@@ -181,10 +181,11 @@ policy:
   # Default false = fail closed. Turn it on only while repairing the file.
   unavailableOpen: false
 
-# Git repository to clone on startup (optional for `direct`, required for the
-# PR modes). Leave empty to skip the init container (use hostPath or a
-# pre-populated PVC instead). Do not put credentials in this URL: it is stored
-# in a ConfigMap. Credentials for a private repo come from writeBack.token.
+# Git repository to clone on startup (optional for `direct`; required for the
+# PR modes, and then it must be an https:// URL). Leave empty to skip the init
+# container (use hostPath or a pre-populated PVC instead). Do not put
+# credentials in this URL: it is stored in a ConfigMap. Credentials for a
+# private repo come from writeBack.token, offered only to this URL's host.
 gitRepoUrl: ""
 
 # Where writes go (#2855). ⛔ REQUIRED — the chart refuses to render until

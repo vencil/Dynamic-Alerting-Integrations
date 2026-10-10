@@ -74,6 +74,9 @@ def test_values_ship_no_default_mode():
     (tuple(a for a in _GITHUB if not a.startswith("writeBack.token")), "needs writeBack.token.secretName"),
     (tuple(a for a in _GITHUB if not a.startswith("writeBack.github")), "needs writeBack.github.repo"),
     (tuple(a for a in _GITLAB if not a.startswith("writeBack.gitlab")), "needs writeBack.gitlab.project"),
+    (_GITHUB + ["gitRepoUrl=http://github.com/acme/conf.git"], "needs an https:// gitRepoUrl"),
+    (_GITHUB + ["gitRepoUrl=git@github.com:acme/conf.git"], "needs an https:// gitRepoUrl"),
+    (_GITHUB + ["writeBack.token.secretKey="], "needs writeBack.token.secretKey"),
 ])
 def test_render_refuses(args, needle):
     res = _render(*args)
@@ -115,7 +118,8 @@ def test_pr_mode_is_wired_end_to_end(args, mode, flags, token_env, user):
         e = _env(cs[name])
         assert e["GIT_FORGE_TOKEN"]["valueFrom"]["secretKeyRef"] == {"name": "vcs", "key": "token"}, name
         assert e["GIT_FORGE_USER"]["value"] == user, name
-        assert e["GIT_CONFIG_KEY_0"]["value"] == "credential.helper", name
+        host = "github.com" if mode == "pr-github" else "gitlab.example"
+        assert e["GIT_CONFIG_KEY_0"]["value"] == f"credential.https://{host}.helper", name
         assert e["GIT_TERMINAL_PROMPT"]["value"] == "0", name
 
 
@@ -135,6 +139,26 @@ def test_the_credential_helper_answers_get_from_the_environment(tmp_path):
     assert out.returncode == 0, out.stderr
     assert "username=x-access-token" in out.stdout
     assert "password=s3cr3t" in out.stdout
+    # Scoped to gitRepoUrl's host: any other host gets no token.
+    env["GIT_TERMINAL_PROMPT"] = "0"
+    other = subprocess.run(["git", "credential", "fill"], input="protocol=https\nhost=evil.example\n\n",
+                           capture_output=True, text=True, encoding="utf-8", env=env, timeout=30)
+    assert "s3cr3t" not in other.stdout + other.stderr
+    assert other.returncode != 0
+
+
+@_needs_helm
+def test_a_numeric_gitlab_project_id_from_a_values_file_stays_an_integer(tmp_path):
+    """A values file makes 45678901 a float64 to helm, which prints it as
+    4.5678901e+07 from 1e6 up; the flag must carry the integer."""
+    vf = tmp_path / "v.yaml"
+    vf.write_text("writeBack:\n  mode: pr-gitlab\n  gitlab:\n    project: 45678901\n"
+                  "  token:\n    secretName: vcs\ngitRepoUrl: https://gitlab.example/a/b.git\n",
+                  encoding="utf-8")
+    res = subprocess.run(["helm", "template", "t", str(_REPO_ROOT / _CHART), "-f", str(vf)],
+                         capture_output=True, text=True, encoding="utf-8", timeout=60)
+    assert res.returncode == 0, res.stderr
+    assert "--gitlab-project=45678901" in _containers(res.stdout)["tenant-api"]["args"]
 
 
 @_needs_helm
