@@ -266,6 +266,10 @@ func runBatchPR(d *Deps, rw http.ResponseWriter, r *http.Request, ops []BatchOpe
 			batchResults = append(batchResults, BatchResult{TenantID: op.TenantID, Status: "error", Message: "insufficient permissions"})
 			continue
 		}
+		if res, refused := gateBatchOpPostState(d.ConfigDir, included[op.TenantID], op, p, d.RBAC, d.TenantOrg); refused {
+			batchResults = append(batchResults, res)
+			continue
+		}
 		if d.Policy != nil {
 			// #2280: an op that sets `_routing_profile` / `_routing`, or
 			// unsets `_routing`, is judged on the routing it produces; see
@@ -467,6 +471,11 @@ func executeBatchOps(ctx context.Context, w *gitops.Writer, configDir string, op
 		// A resolver per op: its metadata, the root platform layer included
 		// (#2370), is read when that op runs.
 		if res, failed := gateBatchOp(op.TenantID, p, rbacMgr, tenantOrg, WriteScopeMeta(configDir)); failed {
+			results = append(results, res)
+			continue
+		}
+		// nil prior: each op is written before the next one is judged.
+		if res, refused := gateBatchOpPostState(configDir, nil, op, p, rbacMgr, tenantOrg); refused {
 			results = append(results, res)
 			continue
 		}

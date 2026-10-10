@@ -48,10 +48,11 @@ import (
 // NOT take one of these — they are per-item loops, and binding the metadata
 // axis there is a separate plane with its own migration, out of scope here.)
 //
-// #2370: the metadata read is the one the list reads (extractMetadata): the
-// root platform files' `tenants.<id>._metadata` with the tenant document's
-// own `_metadata` merged over it per key. The root platform files are read
-// once per resolver, on first use. When they cannot be read
+// #2370, #2830: the metadata read is the one the list reads
+// (cfg.MetadataResolver), which is /metrics' reading: the root platform files'
+// `tenants.<id>._metadata` with the tenant document's own `_metadata` merged
+// over it per key, else the elected profile's. The root platform files are
+// read once per resolver, on first use. When they cannot be read
 // (platformMetadataOrNone) the tenant document's own `_metadata` is used
 // alone, as before #2370.
 //
@@ -65,20 +66,24 @@ type ScopeMetaFunc func(tenantID string) (environment, domain string)
 type platformMetadataSource struct {
 	configDir string
 	once      sync.Once
-	root      cfg.RootPlatform
+	metadata  cfg.MetadataResolver
 }
 
 // environmentDomainOf is a ScopeMetaFunc's answer for a tenant document data that
 // declares tenantID (or that the caller proposes to write for it).
 func (s *platformMetadataSource) environmentDomainOf(data []byte, tenantID string) (string, string) {
-	var platform map[string]any
+	var metadata cfg.MetadataResolver // no configDir: the document's own `_metadata` alone
 	if s.configDir != "" {
-		s.once.Do(func() { s.root, _ = platformMetadataOrNone(s.configDir, "write") })
-		platform = s.root.PlatformMetadata(tenantID)
+		s.once.Do(func() {
+			root, _ := platformMetadataOrNone(s.configDir, "write")
+			s.metadata = root.MetadataResolver()
+		})
+		metadata = s.metadata
 	}
-	var summary TenantSummary
-	extractMetadata(&summary, data, tenantID, platform)
-	return summary.Environment, summary.Domain
+	// A `_metadata` that does not decode reads as the empty pair, as an
+	// unusable file does.
+	meta, _, _ := metadata.ResolveFile(tenantID, data)
+	return meta.Environment, meta.Domain
 }
 
 // WriteScopeMeta builds the write-plane resolver: one targeted read of the
@@ -172,9 +177,11 @@ func RequireOrgWrite(w http.ResponseWriter, r *http.Request, d *Deps, tenantID s
 //
 // This is specific to the metadata axis. The org axis cannot be attacked this
 // way: org membership lives in the admin-only `_tenant_orgs.yaml`, a separate
-// file this path cannot write. Nor can the batch path reach it — it refuses to
-// overwrite a structured key like `_metadata` with a scalar patch value
-// (tenant_batch.go). Whole-file PUT is the exposed shape.
+// file this path cannot write. The batch path reaches the metadata axis
+// through scalar keys alone — `_profile`, and `_metadata` in its string form
+// (#2830; it refuses to overwrite a `_metadata` mapping with a scalar,
+// tenant_batch.go) — and runs the same post-state check per op
+// (gateBatchOpPostState).
 //
 // The check runs the SAME predicate against the PROPOSED metadata, so it
 // inherits the axis's flag: in shadow it changes nothing, and it closes the gap

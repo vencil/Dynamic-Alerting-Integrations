@@ -324,7 +324,8 @@ func validatePatchMap(patch map[string]string, fieldPrefix string) []Violation {
 // value rule, so each key admitted here must be one whose removal the write
 // path is known to handle — `_routing`, whose removal resets the tenant to
 // `_routing_defaults` + its profile and is judged by domain policy
-// (touchesRouting). Widening it is one entry here plus the docs.
+// (touchesRouting). Widening it is one entry here plus the docs — and, for
+// `_metadata` or `_profile`, touchesScopeMetadata, which judges only the patch.
 var unsetAllowedKeys = map[string]bool{
 	"_routing": true,
 }

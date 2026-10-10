@@ -20,10 +20,12 @@ package config
 //     A tenant writing `_metadata: null` therefore has no metadata.
 //
 // The planes: /metrics (tenant_metadata_info, tenant_expected_exporter —
-// the flat merge stacks layers through overlayTenantLayer) and the
-// tenant-api metadata readers (RootPlatform.PlatformMetadata + MergeMetadata).
-// The walker plane (/effective, da-guard effective) carries no `_metadata`
-// at all (mergeDroppedKeys); that is unchanged.
+// the flat merge stacks layers through overlayTenantLayer, then
+// ApplyProfiles fills in, then ResolveMetadata decodes) and the tenant-api
+// metadata readers (MetadataResolver, which runs those same three steps
+// for one tenant, #2830). The walker plane (/effective,
+// da-guard effective) carries no `_metadata` at all (mergeDroppedKeys);
+// that is unchanged.
 
 import (
 	"errors"
@@ -44,7 +46,10 @@ func overlayMetadata(base map[string]any, layer any) map[string]any {
 	if !ok {
 		return nil
 	}
-	out := make(map[string]any, len(base)+len(m))
+	// Sized for base alone: a capacity of len(base)+len(m) is a size
+	// computation CodeQL flags (go/allocation-size-overflow); the map grows
+	// as m is written.
+	out := make(map[string]any, len(base))
 	for k, v := range base {
 		out[k] = v
 	}
@@ -52,18 +57,6 @@ func overlayMetadata(base map[string]any, layer any) map[string]any {
 		out[k] = v
 	}
 	return out
-}
-
-// MergeMetadata applies one more layer over the metadata of the layers below
-// it (nil = none): the per-key rule of this file. own is the layer's decoded
-// `_metadata` value and writes reports whether the layer writes the key at
-// all — a layer that does not write `_metadata` leaves below unchanged, one
-// that writes a non-mapping clears it.
-func MergeMetadata(below map[string]any, own any, writes bool) map[string]any {
-	if !writes {
-		return below
-	}
-	return overlayMetadata(below, own)
 }
 
 // decodeMetadataValue decodes a `_metadata` ScheduledValue back into the YAML
@@ -163,23 +156,127 @@ func LoadRootPlatformChecked(configDir string) (RootPlatform, error) {
 	return RootPlatform{r: rootPlatformFrom(scan)}, nil
 }
 
-// PlatformMetadata returns the `_metadata` the root platform files'
-// `tenants.<tenantID>` entries resolve to — merged per key in merge order —
-// or nil when none writes it (or the last one to write it wrote a
-// non-mapping). A file the flat decode rejects contributes nothing.
-// Apply the tenant's own layer with MergeMetadata. The result is a new map.
-func (root RootPlatform) PlatformMetadata(tenantID string) map[string]any {
-	var acc map[string]any
+// MetadataResolver reads tenants' `_metadata` over one RootPlatform the way
+// /metrics reads it (#2830). Build it once per root read
+// (RootPlatform.MetadataResolver) and resolve each tenant with Resolve or
+// ResolveFile: the part every tenant shares — the root files' merged
+// `profiles:` and the root carrier's `optional_overrides` — is computed once
+// here, and each tenant pays only for its own layers.
+//
+// Per tenant, /metrics' own steps:
+//
+//   - LAYERS: the root platform files' `tenants.<id>` entries in merge
+//     order, then the tenant file's, stacked with overlayTenantLayer (as
+//     mergePartialInto does) — for `_metadata`, the per-key rule at the top
+//     of this file; for `_profile`, the later layer's value. A layer written
+//     as a string holding YAML (`_metadata: "owner: x\n"`) decodes to the
+//     same mapping as the mapping form, as on /metrics, where both reach
+//     ScheduledValue's Default as YAML text.
+//   - PROFILE: applyProfiles, the fill-in ApplyProfiles runs, over the
+//     profiles' `_metadata` alone: when no layer writes `_metadata`, the
+//     elected profile's fills it in whole; a layer that writes it keeps the
+//     profile's out entirely, not per key. (profileFill decides each key on
+//     its own, so leaving the profiles' other keys out changes nothing for
+//     `_metadata`.)
+//   - DECODE: tenantMetadataOf, ResolveMetadata's per-tenant body — a
+//     non-string scalar value is read as its text (`environment: 123` is
+//     "123"), and a value that cannot decode into its TenantMetadata field's
+//     type (a mapping for `environment`, a single string for `tags`) leaves
+//     every field empty, and Resolve reports it (decoded = false): the
+//     tenant wrote metadata that cannot be read, which is not the same as
+//     writing none.
+//
+// Nothing is logged: not the decode WARN, not the profile WARNs, and not the
+// root carrier's parse ERROR (/metrics and the tenant-api merge core log
+// those). The zero value — and the resolver of the zero RootPlatform — has
+// no platform files and no profiles: it reads the tenant file's own
+// `_metadata` alone. Read-only after construction; safe for concurrent use.
+type MetadataResolver struct {
+	root rootPlatform
+	// profiles is, per profile name, the merged profile's `_metadata` entry
+	// (mergeProfilesInto's rule: a later file over an earlier one), or an
+	// empty map when it writes none — the name is still a known profile.
+	profiles map[string]map[string]ScheduledValue
+	// declared is the root carrier's optional_overrides when they declare
+	// `_metadata` (then no profile may fill it in), else nil.
+	declared []string
+}
+
+// MetadataResolver builds the resolver for this root platform surface.
+func (root RootPlatform) MetadataResolver() MetadataResolver {
+	m := MetadataResolver{root: root.r}
+	// mergeProfilesInto's rule (a later file over an earlier one, per
+	// profile name, per key) for the `_metadata` key alone: the profiles'
+	// other keys are never copied.
 	for i := range root.r.files {
 		pf := root.r.files[i].parsed
 		if pf.err != nil {
 			continue
 		}
-		sv, writes := pf.cfg.Tenants[tenantID][metadataKey]
-		if !writes {
-			continue
+		for name, values := range pf.cfg.Profiles {
+			if m.profiles == nil {
+				m.profiles = make(map[string]map[string]ScheduledValue, len(pf.cfg.Profiles))
+			}
+			only := m.profiles[name]
+			if only == nil {
+				only = make(map[string]ScheduledValue, 1)
+				m.profiles[name] = only
+			}
+			if sv, ok := values[metadataKey]; ok {
+				only[metadataKey] = sv
+			}
 		}
-		acc = overlayMetadata(acc, decodeMetadataValue(sv))
 	}
-	return acc
+	if c := root.r.carrier(); c != nil && c.parsed.err == nil {
+		if _, declared := canonicalizeOptionalOverrides(c.parsed.cfg.OptionalOverrides)[metadataKey]; declared {
+			m.declared = []string{metadataKey}
+		}
+	}
+	return m
+}
+
+// Resolve reads tenantID's metadata, own being the tenant's entry in its
+// tenant file as ParseConfigFile decodes it (nil = the file writes no key).
+// decoded is false when the resolved `_metadata` is written but does not
+// decode into TenantMetadata — the case in which every field reads empty
+// although the tenant wrote metadata.
+func (m MetadataResolver) Resolve(tenantID string, own map[string]ScheduledValue) (meta ResolvedMetadata, decoded bool) {
+	layers := make(map[string]ScheduledValue, 2)
+	stack := func(layer map[string]ScheduledValue) {
+		for _, k := range [...]string{metadataKey, "_profile"} {
+			if sv, writes := layer[k]; writes {
+				overlayTenantLayer(layers, map[string]ScheduledValue{k: sv})
+			}
+		}
+	}
+	for i := range m.root.files {
+		if pf := m.root.files[i].parsed; pf.err == nil {
+			stack(pf.cfg.Tenants[tenantID])
+		}
+	}
+	stack(own)
+	c := ThresholdConfig{
+		Tenants:           map[string]map[string]ScheduledValue{tenantID: layers},
+		Profiles:          m.profiles,
+		OptionalOverrides: m.declared,
+	}
+	c.applyProfiles(nil)
+	return tenantMetadataOf(tenantID, layers, nil)
+}
+
+// ResolveFile is Resolve over a tenant file's bytes. ok is false when they
+// do not decode (ParseConfigFile) or do not declare tenantID: no metadata is
+// read for it, as /metrics reads none from a file it skips. decoded is
+// Resolve's (true when ok is false).
+func (m MetadataResolver) ResolveFile(tenantID string, tenantData []byte) (meta ResolvedMetadata, ok, decoded bool) {
+	tenantCfg, err := ParseConfigFile(tenantData)
+	if err != nil {
+		return ResolvedMetadata{Tenant: tenantID}, false, true
+	}
+	own, declared := tenantCfg.Tenants[tenantID]
+	if !declared {
+		return ResolvedMetadata{Tenant: tenantID}, false, true
+	}
+	meta, decoded = m.Resolve(tenantID, own)
+	return meta, true, decoded
 }

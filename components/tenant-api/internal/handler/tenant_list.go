@@ -10,7 +10,6 @@ import (
 	"github.com/vencil/tenant-api/internal/rbac"
 	"github.com/vencil/tenant-api/internal/tenantorg"
 	cfg "github.com/vencil/threshold-exporter/pkg/config"
-	"gopkg.in/yaml.v3"
 )
 
 // TenantSummary is the list-view representation of a single tenant.
@@ -46,14 +45,14 @@ type TenantSummary struct {
 	// Silent-mode / maintenance state DERIVED FROM CONFIG (「依設定推算」) at request time — what threshold-exporter would emit for this conf.d, not a reading from Alertmanager. Absent when it cannot be derived: a degraded row (config_error), a file the exporter skips, or conf.d not loading (see config_derivation on the search response).
 	ConfigDerived *ConfigDerivedState `json:"config_derived,omitempty"`
 
-	// Set when the conf.d root platform files could not be read: the metadata fields carry only the tenant file's own `_metadata` values, and the row's visibility is that of a degraded row (only callers whose matching RBAC rule does not restrict environments or domains see it); the search metadata filters do not match it. Absent otherwise.
+	// Set when the row's metadata is unknown: the conf.d root platform files could not be read (the metadata fields then carry only the tenant file's own `_metadata` values), or the tenant's `_metadata` does not decode (the metadata fields are then empty, as threshold-exporter reads them). The row's visibility is that of a degraded row (only callers whose matching RBAC rule does not restrict environments or domains see it); the search metadata filters do not match it. Absent otherwise.
 	MetadataIncomplete bool `json:"metadata_incomplete,omitempty"`
 }
 
 // metadataIsUnknown reports whether the row's environment/domain (and the
 // rest of its metadata) are unknown rather than read: a degraded row
-// (ConfigError, #1680), or a healthy row read while the root platform layer
-// could not be (#2370).
+// (ConfigError, #1680), a healthy row read while the root platform layer
+// could not be (#2370), or one whose `_metadata` does not decode (#2830).
 func (t TenantSummary) metadataIsUnknown() bool {
 	return t.ConfigError != "" || t.MetadataIncomplete
 }
@@ -86,6 +85,7 @@ func (t TenantSummary) metadataIsUnknown() bool {
 // @Description row is visible only to callers whose matching RBAC rule does not restrict environments or domains.
 // @Description When the conf.d root platform files cannot be read, every other row's metadata carries only the tenant file's own `_metadata`
 // @Description values and the row is marked `metadata_incomplete`; its visibility is that of a degraded row.
+// @Description A row whose `_metadata` does not decode is marked `metadata_incomplete` the same way, with empty metadata fields.
 // @Tags        tenants
 // @Produce     json
 // @Success     200 {array}  TenantSummary
@@ -254,14 +254,18 @@ func loadAllTenants(configDir string) ([]TenantSummary, error) {
 	if err != nil {
 		return nil, err
 	}
-	// #2370: a tenant's metadata is the root platform files'
-	// `tenants.<id>._metadata` merged per key under the tenant file's own
-	// (cfg.MergeMetadata), as /metrics resolves it. One root read per
+	// #2370, #2830: a tenant's metadata is what /metrics reads for it
+	// (cfg.MetadataResolver): the root platform files' `tenants.<id>._metadata`
+	// merged per key under the tenant file's own, else the elected
+	// profile's. One root read per
 	// listing; when it cannot be read the rows carry the tenant files'
 	// own `_metadata` alone and their metadata is unknown (MetadataIncomplete):
 	// a key the platform layer would have set is missing, not unset — the
 	// same as a degraded row's metadata (#1680).
 	platform, platformKnown := platformMetadataOrNone(configDir, "list")
+	// One resolver per listing: what every tenant shares (the profiles,
+	// the carrier's optional_overrides) is computed once here (#2830).
+	metadata := platform.MetadataResolver()
 
 	summaries := []TenantSummary{}
 	seen := make(map[string]string, len(files)) // tenant id → the file that claimed it
@@ -313,10 +317,18 @@ func loadAllTenants(configDir string) ([]TenantSummary, error) {
 		}
 
 		// v2.5.0: Extract _metadata fields for filtering and UI display.
-		// Metadata is stored as a raw YAML map since ThresholdConfig doesn't
-		// model _metadata natively — it's parsed from the raw document.
-		extractMetadata(&summary, data, tenantID, platform.PlatformMetadata(tenantID))
-		summary.MetadataIncomplete = !platformKnown
+		// partial is ParseConfigFile's decode (ParseTenantFile), the one
+		// the resolver reads, so the file is not decoded a second time.
+		// A `_metadata` that is written but does not decode reads as empty
+		// fields (as on /metrics) and is marked metadata_incomplete, like an
+		// unreadable root platform layer.
+		decoded := true
+		if overrides, ok := partial.Tenants[tenantID]; ok {
+			var meta cfg.ResolvedMetadata
+			meta, decoded = metadata.Resolve(tenantID, overrides)
+			setMetadata(&summary, meta)
+		}
+		summary.MetadataIncomplete = !platformKnown || !decoded
 
 		summaries = append(summaries, summary)
 	}
@@ -324,61 +336,22 @@ func loadAllTenants(configDir string) ([]TenantSummary, error) {
 	return summaries, nil
 }
 
-// extractMetadata populates the TenantSummary's metadata fields from the
-// tenant's `_metadata`: platform (the root platform files' layer,
-// cfg.RootPlatform.PlatformMetadata; nil = none) with the tenant document's
-// own `_metadata` merged over it per key (cfg.MergeMetadata, #2370).
-// The tenant document is parsed with a loose YAML structure to avoid
-// coupling to the ThresholdConfig schema. A document that does not parse or
-// does not declare tenantID yields no metadata at all: the platform layer
-// only applies to a tenant a tenant file declares.
-func extractMetadata(summary *TenantSummary, data []byte, tenantID string, platform map[string]any) {
-	var raw struct {
-		Tenants map[string]map[string]interface{} `yaml:"tenants"`
+// setMetadata copies the metadata a cfg.MetadataResolver read for the tenant
+// (#2830: /metrics' reading — the root platform files'
+// `tenants.<id>._metadata` and the tenant document's own merged per key
+// (#2370), else the elected profile's; the string form read like the mapping
+// form; a non-string scalar read as its text) into summary's metadata fields.
+func setMetadata(summary *TenantSummary, meta cfg.ResolvedMetadata) {
+	summary.Environment = meta.Environment
+	summary.Region = meta.Region
+	summary.Tier = meta.Tier
+	summary.Domain = meta.Domain
+	summary.DBType = meta.DBType
+	summary.Owner = meta.Owner
+	if len(meta.Tags) > 0 {
+		summary.Tags = meta.Tags
 	}
-	if err := yaml.Unmarshal(data, &raw); err != nil {
-		return
-	}
-	tenant, ok := raw.Tenants[tenantID]
-	if !ok {
-		return
-	}
-	metaRaw, writes := tenant["_metadata"]
-	meta := cfg.MergeMetadata(platform, metaRaw, writes)
-	if meta == nil {
-		return
-	}
-
-	if v, ok := meta["environment"].(string); ok {
-		summary.Environment = v
-	}
-	if v, ok := meta["region"].(string); ok {
-		summary.Region = v
-	}
-	if v, ok := meta["tier"].(string); ok {
-		summary.Tier = v
-	}
-	if v, ok := meta["domain"].(string); ok {
-		summary.Domain = v
-	}
-	if v, ok := meta["db_type"].(string); ok {
-		summary.DBType = v
-	}
-	if v, ok := meta["owner"].(string); ok {
-		summary.Owner = v
-	}
-	if tags, ok := meta["tags"].([]interface{}); ok {
-		for _, t := range tags {
-			if s, ok := t.(string); ok {
-				summary.Tags = append(summary.Tags, s)
-			}
-		}
-	}
-	if groups, ok := meta["groups"].([]interface{}); ok {
-		for _, g := range groups {
-			if s, ok := g.(string); ok {
-				summary.Groups = append(summary.Groups, s)
-			}
-		}
+	if len(meta.Groups) > 0 {
+		summary.Groups = meta.Groups
 	}
 }

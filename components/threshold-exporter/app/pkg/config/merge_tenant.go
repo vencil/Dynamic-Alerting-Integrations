@@ -518,10 +518,10 @@ func MergeParsedTenantWithRootDefaults(configDir string, tenantCfg ThresholdConf
 //     layer's `_metadata` does reach every reader of tenant metadata — the
 //     tenant-api list and search (TenantSummary's environment / domain /
 //     db_type / owner …) and its other metadata readers through
-//     RootPlatform.PlatformMetadata + MergeMetadata, /metrics through the
-//     flat merge — with ONE rule: per key, the tenant file over the
-//     platform files, a later platform file over an earlier one (#2370,
-//     metadata_layers.go). The pin that this core stays out of it is
+//     MetadataResolver, /metrics through the flat merge
+//     — with ONE rule: per key, the tenant file over the platform files, a
+//     later platform file over an earlier one, the elected profile's only
+//     when no layer writes it (#2370, #2830, metadata_layers.go). The pin that this core stays out of it is
 //     TestMergeTenantPlatformLayerMatchesMetrics' `_metadata` tree.
 //   - VALUES are the typed decode's ScheduledValue, the one /metrics resolves
 //     — never a round trip through an untyped `any` (which would turn
@@ -707,7 +707,7 @@ func rootPlatformFrom(scan *TreeScan) rootPlatform {
 // supplyFor returns, in merge order, what each platform file supplies to
 // tenant: its entry's keys that the body (own) does not write, that no
 // later file overwrites, and that are not `_metadata` (this core does not
-// carry it; PlatformMetadata reads that layer).
+// carry it; MetadataResolver reads that layer).
 func (r rootPlatform) supplyFor(tenant string, own map[string]ScheduledValue) []platformSupply {
 	var owner map[string]int
 	for i := range r.files {

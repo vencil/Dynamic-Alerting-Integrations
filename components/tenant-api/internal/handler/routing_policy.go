@@ -126,7 +126,9 @@ func applyBatchEdit(block map[string]any, op BatchOperation) {
 
 // tenantBlockOnDisk is tenants.<tenantID> of the tenant's file in configDir,
 // or an empty block for a new tenant. A file that cannot be resolved or read
-// is logged and read as empty (fail-open: the patches are judged alone).
+// is logged and read as empty (fail-open: the patches are judged alone). Read
+// by the routing check (batchRoutingViolations) and the metadata post-state
+// check (postStateScopeMeta).
 func tenantBlockOnDisk(configDir, tenantID string) map[string]any {
 	block := map[string]any{}
 	path, err := confd.ResolveTenantFile(configDir, tenantID)
@@ -134,7 +136,7 @@ func tenantBlockOnDisk(configDir, tenantID string) map[string]any {
 	case err == nil:
 		data, problem := confd.ReadTenantFile(filepath.Dir(path), filepath.Base(path))
 		if problem != confd.ProblemNone {
-			slog.Warn("batch routing policy check: tenant file unreadable, judging the patch alone",
+			slog.Warn("batch check: tenant file unreadable, judging the patch alone",
 				"tenant", tenantID, "problem", problem)
 		}
 		for k, v := range extractTenantBlock(data, tenantID) {
@@ -143,7 +145,7 @@ func tenantBlockOnDisk(configDir, tenantID string) map[string]any {
 	case errors.Is(err, confd.ErrTenantFileNotFound):
 		// A new tenant: the patches are the whole block.
 	default:
-		slog.Warn("batch routing policy check: tenant file not resolved, judging the patch alone",
+		slog.Warn("batch check: tenant file not resolved, judging the patch alone",
 			"tenant", tenantID, "error", err)
 	}
 	return block
