@@ -11,7 +11,7 @@ Usage:
   python3 scripts/tools/validate_all.py --json          # JSON summary output
   python3 scripts/tools/validate_all.py --json --baseline  # save JSON as baseline
   python3 scripts/tools/validate_all.py --json --compare   # compare against baseline
-  python3 scripts/tools/validate_all.py --diff-report       # show what --fix would change (needs `git add -u` first)
+  python3 scripts/tools/validate_all.py --diff-report       # show what --fix would change (runs in a throwaway worktree)
   python3 scripts/tools/validate_all.py --fix              # auto-fix all drift
   python3 scripts/tools/validate_all.py --profile          # append timing to CSV
   python3 scripts/tools/validate_all.py --watch            # file-watch auto-rerun
@@ -36,8 +36,10 @@ import argparse
 import json as json_mod
 import os
 import re
+import shutil
 import subprocess
 import sys
+import tempfile
 import time
 from concurrent.futures import ProcessPoolExecutor, as_completed
 from pathlib import Path
@@ -937,53 +939,101 @@ def _compare_baseline(current: dict) -> None:
     print("=" * 60, file=sys.stderr)
 
 
-def _unstaged_tracked_files(project_root: Path):
-    """Tracked files whose working-tree copy differs from the index.
+# Per fix command, as in the --fix path below.
+_FIX_TIMEOUT_SECONDS = 60
 
-    This approximates what the ``git checkout .`` below overwrites: that
-    command restores from the index, so staged content survives and untracked
-    files are left alone. Deriving the precondition from what the destructive
-    command actually destroys, rather than from a general "is the tree clean",
-    is what keeps it from refusing on the untracked scratch files every
-    worktree has. ``-z`` because git C-quotes non-ASCII paths otherwise, and
-    the names this prints are the whole point of the refusal.
 
-    ⛔ THIS IS NOT PROTECTION — it narrows an unconditional loss to a race.
-    Two gaps still lose data, and both are open in #1706: the probe samples
-    one instant while each fix command below runs before the restore (TOCTOU),
-    and ``--assume-unchanged`` files are absent here while ``git checkout .``
-    still overwrites them. Do not cite this function as proof of safety.
+def _git(args: List[str], cwd: Path, timeout: int = 60):
+    return subprocess.run(
+        ["git", *args], capture_output=True, text=True, encoding="utf-8",
+        errors="replace", timeout=timeout, cwd=str(cwd),
+    )
 
-    Returns ``None`` when git cannot answer. A probe that did not run is not
-    evidence of a clean tree, and the caller treats it the same as dirty.
+
+def _isolated_tree(project_root: Path, tree: Path) -> str:
+    """Build a throwaway worktree at *tree* holding the operator's tree (#1706).
+
+    ``git stash create`` records tracked files as they differ from the index
+    on disk, staged or not, as a commit no ref points to (the stash list is
+    untouched); an empty answer means nothing differs from HEAD. Untracked
+    (not ignored) files are copied across so a fix that reads them sees what
+    it would see in place. Everything is then staged INSIDE the worktree and
+    that index is returned as a tree id: the base every fix's diff is taken
+    against and every reset returns to.
+
+    ⛔ The operator's tree is only ever read. The old restore was ``git
+    checkout .`` at the repo root, which also overwrote ``--assume-unchanged``
+    files and anything edited while a fix ran. What remains:
+
+    * ``git stash create`` refreshes the stat data in the operator's index
+      (content and flags unchanged), so it takes ``index.lock`` and fails —
+      safely, as "Not run" — while another git command holds it.
+    * Edits to ``--assume-unchanged`` / ``--skip-worktree`` files are not in
+      the snapshot: those fixes run against the committed copy.
+
+    Raises ``RuntimeError`` naming the git step that failed.
     """
+    snap = _git(["stash", "create"], project_root)
+    if snap.returncode != 0:
+        raise RuntimeError(f"`git stash create` failed: {snap.stderr.strip()}")
+    rev = snap.stdout.strip() or "HEAD"
+    added = _git(["worktree", "add", "--detach", str(tree), rev],
+                 project_root, timeout=300)
+    if added.returncode != 0:
+        raise RuntimeError(
+            f"`git worktree add` failed: {added.stderr.strip()}")
+    others = _git(["ls-files", "--others", "--exclude-standard", "-z"],
+                  project_root)
+    if others.returncode != 0:
+        raise RuntimeError(
+            f"`git ls-files --others` failed: {others.stderr.strip()}")
+    for rel in (p for p in others.stdout.split("\0") if p):
+        src = project_root / rel
+        if not src.is_file() and not src.is_symlink():
+            continue
+        dst = tree / rel
+        dst.parent.mkdir(parents=True, exist_ok=True)
+        shutil.copy2(src, dst, follow_symlinks=False)
+    staged = _git(["add", "-A"], tree, timeout=300)
+    base = _git(["write-tree"], tree) if staged.returncode == 0 else staged
+    if base.returncode != 0 or not base.stdout.strip():
+        raise RuntimeError(f"staging the snapshot in the worktree failed: "
+                           f"{base.stderr.strip()}")
+    return base.stdout.strip()
+
+
+def _drop_isolated_tree(project_root: Path, tree: Path) -> None:
+    """Remove *tree* and its registration — and no other worktree's.
+
+    ⛔ Never ``git worktree prune``: it drops EVERY registration whose
+    directory is not visible right now, and in this repo that includes a
+    Windows-side worktree seen from the dev container (its gitdir is a
+    ``C:/`` path), taking that worktree's index and HEAD with it.
+    """
+    if not tree.exists():
+        return
+    admin = None
     try:
-        probe = subprocess.run(
-            ["git", "diff", "--name-only", "-z"],
-            capture_output=True, text=True, encoding="utf-8",
-            errors="replace", timeout=30, cwd=str(project_root),
-        )
+        found = _git(["rev-parse", "--absolute-git-dir"], tree)
+        if found.returncode == 0:
+            admin = Path(found.stdout.strip())
+        _git(["worktree", "remove", "--force", str(tree)], project_root)
     except (OSError, subprocess.SubprocessError):
-        return None
-    if probe.returncode != 0:
-        return None
-    return [p for p in probe.stdout.split("\0") if p]
+        pass
+    # If remove failed, delete this worktree's own admin dir and nothing else.
+    if admin is not None and admin.parent.name == "worktrees" and admin.is_dir():
+        shutil.rmtree(admin, ignore_errors=True)
 
 
 def _generate_diff_report(failed_checks: dict, tools_dir: Path,
                           project_root: Path) -> str:
     """Generate unified diff for failed checks that have fix commands.
 
-    For each failed check with a fix command:
-    1. Capture current state of potentially affected files
-    2. Run the fix command
-    3. Capture git diff
-    4. Restore original files
-
-    Step 4 is ``git checkout .`` at the repo root and step 3's diff is
-    whole-tree, so this mode refuses to start when any tracked file has
-    unstaged changes: it would both overwrite them and report them as the
-    fix's own (#1706).
+    The fix commands run in a throwaway worktree built from the current tree
+    (:func:`_isolated_tree`), never in *project_root*: each one runs, its
+    diff against the snapshot (new files included) is captured, and the
+    worktree is reset to the snapshot for the next. The worktree is removed
+    at the end, on every path, Ctrl-C included.
 
     Returns formatted diff report string.
     """
@@ -998,84 +1048,59 @@ def _generate_diff_report(failed_checks: dict, tools_dir: Path,
         lines.append("  No auto-fixable checks failed.")
         return "\n".join(lines)
 
-    # Checked after the no-op case above: with nothing to run there is nothing
-    # to restore, so there is nothing to refuse.
-    dirty = _unstaged_tracked_files(project_root)
-    if dirty is None or dirty:
-        lines.append("")
-        lines.append("  Refusing to run. This mode runs each fix command and then")
-        lines.append("  restores with `git checkout .`, which overwrites EVERY")
-        lines.append("  unstaged change to a tracked file, not only the ones the fix")
-        lines.append("  touched. The report would be wrong too: the `git diff` it")
-        lines.append("  prints would carry your edits mixed in with the fix's.")
-        if dirty is None:
-            lines.append("")
-            lines.append("  `git diff --name-only` could not be read here, so an")
-            lines.append("  unstaged change cannot be ruled out. Get that command")
-            lines.append("  working in this directory first — committing or stashing")
-            lines.append("  is not the problem here. (#1706)")
-        else:
-            lines.append("")
-            lines.append(f"  {len(dirty)} tracked file(s) with unstaged changes:")
-            for path in dirty[:20]:
-                lines.append(f"    {path}")
-            if len(dirty) > 20:
-                lines.append(f"    ... and {len(dirty) - 20} more")
-            lines.append("")
-            lines.append("  Run `git add -u` and re-run. Staging is the lossless")
-            lines.append("  route: `git checkout .` restores FROM the index, so your")
-            lines.append("  edits survive it, and the diff you get back is then the")
-            lines.append("  fix's alone. Untracked files are unaffected either way.")
-            lines.append("  ⛔ `git stash` is NOT equivalent: if your edit is what")
-            lines.append("  made a check fail, stashing it makes the failure go away")
-            lines.append("  and this report is never produced. (#1706)")
-        lines.append("")
+    try:
+        rel_tools = tools_dir.resolve().relative_to(project_root.resolve())
+    except ValueError:
+        # A fix script finds the tree it edits from its own location, so one
+        # outside the snapshot would edit the operator's tree after all.
+        lines.append(f"  Not run: {tools_dir} is outside {project_root}, so the")
+        lines.append("  fix commands cannot be run against an isolated copy.")
         lines.append("=" * 60)
         return "\n".join(lines)
 
-    for name in sorted(fixable):
-        cmd = FIX_COMMANDS[name]
-        script_path = str(tools_dir / cmd[0])
-        fix_args = cmd[1:]
-
-        lines.append(f"\n--- {name} ---")
-
+    with tempfile.TemporaryDirectory(prefix="validate-all-diff-") as tmp:
+        tree = Path(tmp) / "tree"
         try:
-            # Run fix command
-            subprocess.run(
-                [sys.executable, script_path] + fix_args,
-                capture_output=True, text=True, encoding="utf-8", errors="replace", timeout=60,
-                cwd=str(project_root),
-            )
-
-            # Capture diff
-            diff_result = subprocess.run(
-                ["git", "diff", "--no-color"],
-                capture_output=True, text=True, encoding="utf-8", errors="replace", timeout=30,
-                cwd=str(project_root),
-            )
-
-            if diff_result.stdout.strip():
-                lines.append(diff_result.stdout.rstrip())
-            else:
-                lines.append("  (no diff produced — fix may need manual review)")
-
-            # Restore changed files
-            subprocess.run(
-                ["git", "checkout", "."],
-                capture_output=True, text=True, encoding="utf-8", errors="replace", timeout=30,
-                cwd=str(project_root),
-            )
-        except subprocess.TimeoutExpired:
-            lines.append("  (timeout running fix command)")
-            # Attempt restore anyway
-            subprocess.run(
-                ["git", "checkout", "."],
-                capture_output=True, text=True, encoding="utf-8", errors="replace", timeout=30,
-                cwd=str(project_root),
-            )
-        except (OSError, subprocess.SubprocessError) as e:
-            lines.append(f"  (error: {e})")
+            try:
+                base = _isolated_tree(project_root, tree)
+            except (OSError, subprocess.SubprocessError, RuntimeError) as e:
+                lines.append("  Not run: could not build an isolated worktree,")
+                lines.append("  and the fix commands are never run in your own")
+                lines.append(f"  tree. ({e})")
+                lines.append("=" * 60)
+                return "\n".join(lines)
+            for name in sorted(fixable):
+                cmd = FIX_COMMANDS[name]
+                script_path = str(tree / rel_tools / cmd[0])
+                lines.append(f"\n--- {name} ---")
+                try:
+                    subprocess.run(
+                        [sys.executable, script_path] + cmd[1:],
+                        capture_output=True, text=True, encoding="utf-8",
+                        errors="replace", timeout=_FIX_TIMEOUT_SECONDS,
+                        cwd=str(tree),
+                    )
+                    _git(["add", "-A"], tree)
+                    diff_result = _git(["diff", "--cached", "--no-color", base],
+                                       tree)
+                    if diff_result.stdout.strip():
+                        lines.append(diff_result.stdout.rstrip())
+                    else:
+                        lines.append("  (no diff produced — fix may need "
+                                     "manual review)")
+                except subprocess.TimeoutExpired:
+                    lines.append("  (timeout running fix command)")
+                except (OSError, subprocess.SubprocessError) as e:
+                    lines.append(f"  (error: {e})")
+                # Reset the throwaway tree only (files the fix created
+                # included), so the next fix starts from the operator's state.
+                try:
+                    _git(["read-tree", "-u", "--reset", base], tree)
+                    _git(["clean", "-fdq"], tree)
+                except (OSError, subprocess.SubprocessError):
+                    pass
+        finally:
+            _drop_isolated_tree(project_root, tree)
 
     lines.append("")
     lines.append("=" * 60)
@@ -1159,8 +1184,8 @@ def main():
     parser.add_argument(
         "--diff-report", action="store_true",
         help="Show unified diff of what --fix would change for failed checks. "
-             "Refuses to run while any tracked file has unstaged changes: it "
-             "restores with `git checkout .` afterwards (#1706)",
+             "The fix commands run in a throwaway git worktree holding the "
+             "current tree; your own tree is not written (#1706)",
     )
     parser.add_argument(
         "--notify", action="store_true",
