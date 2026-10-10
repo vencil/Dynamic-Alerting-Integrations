@@ -24,6 +24,7 @@ import json
 import os
 import subprocess
 import sys
+import time
 from pathlib import Path
 from unittest.mock import MagicMock, patch
 
@@ -843,201 +844,219 @@ class TestListMode:
 # ============================================================
 
 class TestGenerateDiffReport:
-    """--diff-report 功能測試。
+    """--diff-report runs each fix in a throwaway worktree (#1706).
 
-    The "fix runs" cases stub ``_unstaged_tracked_files`` clean so they test
-    diff generation, not #1706's refusal; the refusal has its own cases below.
+    Real git repos and a stub fix script stand in for the shipped tools: the
+    failure being guarded is what happens to the OPERATOR's tree, which a
+    mocked ``subprocess.run`` cannot show. The stub sits at the path
+    ``FIX_COMMANDS["versions"]`` names, under ``<repo>/tools``.
     """
 
+    _GIT = ["git", "-c", "user.email=t@e.st", "-c", "user.name=t",
+            "-c", "core.hooksPath=/dev/null"]
+
+    def _repo(self, tmp_path, stub_body):
+        repo = tmp_path / "repo"
+        repo.mkdir()
+        subprocess.run(self._GIT + ["init", "-q", str(repo)],
+                       check=True, timeout=30)
+        (repo / "a.md").write_text("a1\n", encoding="utf-8")
+        (repo / "b.md").write_text("b1\n", encoding="utf-8")
+        stub = repo / "tools" / FIX_COMMANDS["versions"][0]
+        stub.parent.mkdir(parents=True)
+        stub.write_text(
+            "import pathlib, sys, time\n"
+            "root = pathlib.Path(__file__).resolve().parents[2]\n"
+            + stub_body, encoding="utf-8")
+        subprocess.run(self._GIT + ["-C", str(repo), "add", "-A"],
+                       check=True, timeout=30)
+        subprocess.run(self._GIT + ["-C", str(repo), "commit", "-qm", "init"],
+                       check=True, timeout=30)
+        return repo
+
+    def _report(self, repo):
+        return va._generate_diff_report(
+            {"versions": "fail"}, repo / "tools", repo)
+
     @staticmethod
-    def _pretend_clean(monkeypatch):
-        monkeypatch.setattr(va, "_unstaged_tracked_files", lambda root: [])
+    def _worktrees(repo):
+        out = subprocess.run(["git", "-C", str(repo), "worktree", "list"],
+                             capture_output=True, text=True,
+                             encoding="utf-8", timeout=30, check=True).stdout
+        return [ln for ln in out.splitlines() if ln.strip()]
+
+    _APPEND_B = ("p = root / 'b.md'\n"
+                 "p.write_text(p.read_text() + 'fixed\\n')\n")
 
     def test_no_fixable_checks(self, tmp_path):
         """No fixable failed checks returns informative message."""
-        # Use a check name that's not in FIX_COMMANDS
         result = va._generate_diff_report(
             {"structure": "fail"}, tmp_path, tmp_path)
         assert "No auto-fixable" in result
 
-    def test_fix_produces_diff(self, tmp_path, monkeypatch):
-        """Fixable check runs fix and captures git diff."""
-        calls = []
+    def test_fix_produces_diff_and_the_tree_is_untouched(self, tmp_path):
+        repo = self._repo(tmp_path, self._APPEND_B)
+        result = self._report(repo)
+        assert "--- versions ---" in result
+        assert "+fixed" in result
+        assert (repo / "b.md").read_text(encoding="utf-8") == "b1\n"
+        assert len(self._worktrees(repo)) == 1, "throwaway worktree left behind"
 
-        def mock_run(cmd, **kwargs):
-            calls.append(cmd)
-            mock = MagicMock()
-            mock.returncode = 0
-            if "diff" in cmd:
-                mock.stdout = "diff --git a/foo b/foo\n--- a/foo\n+++ b/foo"
-            else:
-                mock.stdout = ""
-            return mock
+    def test_unstaged_edit_survives_and_stays_out_of_the_diff(self, tmp_path):
+        """Formerly refused; now it runs, and the diff is the fix's alone."""
+        repo = self._repo(tmp_path, self._APPEND_B)
+        (repo / "a.md").write_text("operator edit\n", encoding="utf-8")
+        (repo / "b.md").write_text("operator b\n", encoding="utf-8")
+        result = self._report(repo)
+        assert (repo / "a.md").read_text(encoding="utf-8") == "operator edit\n"
+        assert (repo / "b.md").read_text(encoding="utf-8") == "operator b\n"
+        assert "+fixed" in result
+        assert "operator edit" not in result      # a.md is not the fix's
+        assert "+operator b" not in result        # the base is the edit
 
-        self._pretend_clean(monkeypatch)
-        monkeypatch.setattr(subprocess, "run", mock_run)
-        result = va._generate_diff_report(
-            {"versions": "fail"}, tmp_path, tmp_path)
-        assert "versions" in result
-        assert "diff --git" in result
-        # Should have called: fix command, git diff, git checkout
-        assert len(calls) == 3
+    def test_assume_unchanged_edit_survives(self, tmp_path):
+        """`git checkout .` overwrote these and no diff probe could see them."""
+        repo = self._repo(tmp_path, self._APPEND_B)
+        subprocess.run(["git", "-C", str(repo), "update-index",
+                        "--assume-unchanged", "a.md"], check=True, timeout=30)
+        (repo / "a.md").write_text("hidden edit\n", encoding="utf-8")
+        self._report(repo)
+        assert (repo / "a.md").read_text(encoding="utf-8") == "hidden edit\n"
 
-    def test_fix_timeout(self, tmp_path, monkeypatch):
-        """Timeout during fix is handled gracefully."""
-        call_count = [0]
+    def test_edit_made_while_a_fix_runs_survives(self, tmp_path):
+        """TOCTOU: the stub sleeps, the operator edits meanwhile."""
+        import threading  # noqa: PLC0415
+        repo = self._repo(tmp_path, "time.sleep(2)\n" + self._APPEND_B)
 
-        def mock_run(cmd, **kwargs):
-            call_count[0] += 1
-            if call_count[0] == 1:
-                raise subprocess.TimeoutExpired(cmd, 60)
-            mock = MagicMock()
-            mock.returncode = 0
-            mock.stdout = ""
-            return mock
+        def edit():
+            time.sleep(0.5)
+            (repo / "a.md").write_text("mid-run edit\n", encoding="utf-8")
 
-        self._pretend_clean(monkeypatch)
-        monkeypatch.setattr(subprocess, "run", mock_run)
-        result = va._generate_diff_report(
-            {"versions": "fail"}, tmp_path, tmp_path)
-        assert "timeout" in result
+        t = threading.Thread(target=edit)
+        t.start()
+        self._report(repo)
+        t.join()
+        assert (repo / "a.md").read_text(encoding="utf-8") == "mid-run edit\n"
 
-    def test_no_diff_produced(self, tmp_path, monkeypatch):
-        """Fix that produces no diff shows informative message."""
-        def mock_run(cmd, **kwargs):
-            mock = MagicMock()
-            mock.returncode = 0
-            mock.stdout = ""
-            return mock
+    def test_untracked_files_are_visible_to_the_fix(self, tmp_path):
+        repo = self._repo(tmp_path,
+                          "(root / 'b.md').write_text("
+                          "(root / 'new.md').read_text())\n")
+        (repo / "new.md").write_text("from untracked\n", encoding="utf-8")
+        result = self._report(repo)
+        assert "+from untracked" in result
+        assert "diff --git a/new.md" not in result, (
+            "the copied file must not show as the fix's change")
 
-        self._pretend_clean(monkeypatch)
-        monkeypatch.setattr(subprocess, "run", mock_run)
-        result = va._generate_diff_report(
-            {"versions": "fail"}, tmp_path, tmp_path)
-        assert "no diff produced" in result
+    def test_a_fix_to_an_untracked_file_is_reported(self, tmp_path):
+        """A new doc the operator has not added yet is still the fix's input."""
+        repo = self._repo(tmp_path,
+                          "p = root / 'new.md'\n"
+                          "p.write_text(p.read_text() + 'fixed\\n')\n")
+        (repo / "new.md").write_text("draft\n", encoding="utf-8")
+        result = self._report(repo)
+        assert "+fixed" in result
+        assert (repo / "new.md").read_text(encoding="utf-8") == "draft\n"
 
-    # -------- #1706: the restore is `git checkout .` at the repo root -------
+    def test_a_fix_runs_with_the_throwaway_tree_as_cwd(self, tmp_path):
+        """Some tools resolve paths from the cwd, not from their own file."""
+        seen = tmp_path / "cwd.txt"
+        repo = self._repo(tmp_path,
+                          f"pathlib.Path({str(seen)!r}).write_text("
+                          "str(pathlib.Path.cwd().resolve()))\n"
+                          "p = pathlib.Path('b.md')\n"
+                          "p.write_text(p.read_text() + 'fixed\\n')\n")
+        result = self._report(repo)
+        assert "+fixed" in result
+        assert seen.read_text(encoding="utf-8") != str(repo.resolve())
+        assert (repo / "b.md").read_text(encoding="utf-8") == "b1\n"
 
-    def test_refuses_while_a_tracked_file_has_unstaged_changes(
+    def test_a_file_the_fix_creates_is_reported_and_not_carried_over(
             self, tmp_path, monkeypatch):
-        """Nothing may run: the restore would take the operator's edits too."""
-        calls = []
-
-        def mock_run(cmd, **kwargs):
-            calls.append(cmd)
-            mock = MagicMock()
-            mock.returncode = 0
-            mock.stdout = ""
-            return mock
-
-        # ⛔ Not a real tracked path: verify_diff.py builds its change map from
-        # string literals in test files, so naming a real doc here would wire a
-        # permanent phantom dependency between that doc and this module.
-        monkeypatch.setattr(
-            va, "_unstaged_tracked_files",
-            lambda root: ["zz-not-a-real-path/edited-by-the-operator.md"])
-        monkeypatch.setattr(subprocess, "run", mock_run)
+        repo = self._repo(tmp_path,
+                          "n = root / 'made-by-fix.md'\n"
+                          "(root / 'b.md').write_text("
+                          "'saw it\\n' if n.exists() else 'fresh\\n')\n"
+                          "n.write_text('new\\n')\n")
+        monkeypatch.setitem(FIX_COMMANDS, "zz_second",
+                            list(FIX_COMMANDS["versions"]))
         result = va._generate_diff_report(
-            {"versions": "fail"}, tmp_path, tmp_path)
-        assert "Refusing to run" in result
-        assert "zz-not-a-real-path/edited-by-the-operator.md" in result
-        assert calls == [], (
-            f"the refusal must happen before anything is spawned, got {calls}")
+            {"versions": "fail", "zz_second": "fail"}, repo / "tools", repo)
+        first, second = result.split("--- zz_second ---")
+        assert "diff --git a/made-by-fix.md" in first
+        assert "+fresh" in second and "saw it" not in second
+        assert not (repo / "made-by-fix.md").exists()
 
-    def test_refuses_when_git_cannot_answer(self, tmp_path, monkeypatch):
-        """A probe that did not run is not evidence of a clean tree."""
-        calls = []
+    def test_other_worktree_registrations_survive(self, tmp_path):
+        """No `git worktree prune`: a worktree whose directory is not visible
+        from here (a Windows-side one, seen from the dev container) keeps its
+        registration, index and HEAD."""
+        repo = self._repo(tmp_path, self._APPEND_B)
+        other = tmp_path / "other"
+        subprocess.run(["git", "-C", str(repo), "worktree", "add", "-q",
+                        "--detach", str(other)], check=True, timeout=30)
+        other.rename(tmp_path / "other-hidden")
+        self._report(repo)
+        assert len(self._worktrees(repo)) == 2
 
-        def mock_run(cmd, **kwargs):
-            calls.append(cmd)
-            mock = MagicMock()
-            mock.returncode = 0
-            mock.stdout = ""
-            return mock
+    def test_ctrl_c_mid_setup_still_removes_the_worktree(self, tmp_path,
+                                                         monkeypatch):
+        repo = self._repo(tmp_path, self._APPEND_B)
+        real = va._git
 
-        monkeypatch.setattr(va, "_unstaged_tracked_files", lambda root: None)
-        monkeypatch.setattr(subprocess, "run", mock_run)
+        def interrupted(args, cwd, timeout=60):
+            if args[:1] == ["ls-files"]:
+                raise KeyboardInterrupt
+            return real(args, cwd, timeout)
+
+        monkeypatch.setattr(va, "_git", interrupted)
+        with pytest.raises(KeyboardInterrupt):
+            self._report(repo)
+        monkeypatch.setattr(va, "_git", real)
+        assert len(self._worktrees(repo)) == 1
+
+    def test_fix_timeout_is_reported_and_cleaned_up(self, tmp_path,
+                                                    monkeypatch):
+        repo = self._repo(tmp_path, "time.sleep(10)\n")
+        monkeypatch.setattr(va, "_FIX_TIMEOUT_SECONDS", 1)
+        result = self._report(repo)
+        assert "timeout" in result
+        assert len(self._worktrees(repo)) == 1
+
+    def test_no_diff_produced(self, tmp_path):
+        repo = self._repo(tmp_path, "pass\n")
+        assert "no diff produced" in self._report(repo)
+
+    def test_each_fix_starts_from_the_operator_state(self, tmp_path,
+                                                     monkeypatch):
+        """The throwaway tree is reset between fixes."""
+        repo = self._repo(tmp_path, self._APPEND_B)
+        monkeypatch.setitem(FIX_COMMANDS, "zz_second",
+                            list(FIX_COMMANDS["versions"]))
         result = va._generate_diff_report(
-            {"versions": "fail"}, tmp_path, tmp_path)
-        assert "Refusing to run" in result
-        assert "could not be read" in result
-        assert calls == []
+            {"versions": "fail", "zz_second": "fail"}, repo / "tools", repo)
+        second = result.split("--- zz_second ---")[1]
+        assert second.count("+fixed") == 1, "saw the first fix's output as base"
 
-    def test_refusal_names_a_way_back_to_green(self, tmp_path, monkeypatch):
-        """The route must be `git add -u`, and stash must be marked as not
-        equivalent: stashing the edit often clears the very failure that would
-        have produced this report, so the operator gets silence instead.
-        """
-        monkeypatch.setattr(va, "_unstaged_tracked_files", lambda root: ["a.md"])
+    def test_outside_a_repo_runs_nothing(self, tmp_path):
+        """No isolated copy → no fix at all, never a run in place."""
+        tools = tmp_path / "tools"
+        stub = tools / FIX_COMMANDS["versions"][0]
+        stub.parent.mkdir(parents=True)
+        marker = tmp_path / "ran"
+        stub.write_text(f"open({str(marker)!r}, 'w').close()\n",
+                        encoding="utf-8")
+        result = va._generate_diff_report({"versions": "fail"}, tools,
+                                          tmp_path)
+        assert "Not run" in result
+        assert not marker.exists()
+
+    def test_tools_dir_outside_the_tree_runs_nothing(self, tmp_path):
+        repo = self._repo(tmp_path, self._APPEND_B)
         result = va._generate_diff_report(
-            {"versions": "fail"}, tmp_path, tmp_path)
-        assert "git add -u" in result
-        assert "stash" in result and "NOT equivalent" in result
-
-
-class TestUnstagedTrackedFiles:
-    """#1706's predicate, against a real repo — it decides who gets refused.
-
-    The set has to be exactly what ``git checkout .`` overwrites. Too wide
-    (untracked files, staged content) and the refusal fires on every worktree
-    that has scratch files in it, which is the cheapest possible reason for
-    someone to delete the guard.
-    """
-
-    @staticmethod
-    def _repo(tmp_path):
-        run = ["git", "-c", "core.filemode=false", "-c", "user.email=t@e.st",
-               "-c", "user.name=t"]
-        subprocess.run(run + ["init", "-q", str(tmp_path)],
-                       check=True, timeout=30)
-        (tmp_path / "tracked.md").write_text("one\n", encoding="utf-8")
-        subprocess.run(run + ["-C", str(tmp_path), "add", "tracked.md"],
-                       check=True, timeout=30)
-        subprocess.run(run + ["-C", str(tmp_path), "commit", "-qm", "init"],
-                       check=True, timeout=30)
-        return tmp_path
-
-    def test_clean_repo_reports_nothing(self, tmp_path):
-        assert va._unstaged_tracked_files(self._repo(tmp_path)) == []
-
-    def test_modified_tracked_file_is_reported(self, tmp_path):
-        repo = self._repo(tmp_path)
-        (repo / "tracked.md").write_text("two\n", encoding="utf-8")
-        assert va._unstaged_tracked_files(repo) == ["tracked.md"]
-
-    def test_untracked_file_is_not_reported(self, tmp_path):
-        """`git checkout .` leaves untracked files alone, so they must pass."""
-        repo = self._repo(tmp_path)
-        (repo / "scratch.md").write_text("draft\n", encoding="utf-8")
-        assert va._unstaged_tracked_files(repo) == []
-
-    def test_staged_change_is_not_reported(self, tmp_path):
-        """The restore comes from the index, so staged content survives it."""
-        repo = self._repo(tmp_path)
-        (repo / "tracked.md").write_text("staged\n", encoding="utf-8")
-        subprocess.run(["git", "-C", str(repo), "add", "tracked.md"],
-                       check=True, timeout=30)
-        assert va._unstaged_tracked_files(repo) == []
-
-    def test_non_ascii_name_is_reported_verbatim(self, tmp_path):
-        """Without `-z` git C-quotes it, and naming the file is the whole
-        point of the refusal. Every other case in this class stays green
-        when `-z` is dropped, so this is the only one holding that flag.
-        """
-        repo = self._repo(tmp_path)
-        name = "中文檔案.md"
-        (repo / name).write_text("one\n", encoding="utf-8")
-        subprocess.run(["git", "-C", str(repo), "add", name],
-                       check=True, timeout=30)
-        subprocess.run(["git", "-c", "user.email=t@e.st", "-c", "user.name=t",
-                        "-C", str(repo), "commit", "-qm", "cjk"],
-                       check=True, timeout=30)
-        (repo / name).write_text("two\n", encoding="utf-8")
-        assert va._unstaged_tracked_files(repo) == [name]
-
-    def test_outside_a_repo_returns_none(self, tmp_path):
-        """None, not [] — 'could not measure' must differ from 'measured OK'."""
-        assert va._unstaged_tracked_files(tmp_path) is None
+            {"versions": "fail"}, repo / "tools", tmp_path / "elsewhere")
+        assert "Not run" in result
+        assert (repo / "b.md").read_text(encoding="utf-8") == "b1\n"
 
 
 class TestMainCLI:
