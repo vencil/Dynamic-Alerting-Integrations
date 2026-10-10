@@ -49,7 +49,7 @@ import (
 // axis there is a separate plane with its own migration, out of scope here.)
 //
 // #2370, #2830: the metadata read is the one the list reads
-// (extractMetadata), which is /metrics' reading: the root platform files'
+// (cfg.MetadataResolver), which is /metrics' reading: the root platform files'
 // `tenants.<id>._metadata` with the tenant document's own `_metadata` merged
 // over it per key, else the elected profile's. The root platform files are
 // read once per resolver, on first use. When they cannot be read
@@ -66,20 +66,22 @@ type ScopeMetaFunc func(tenantID string) (environment, domain string)
 type platformMetadataSource struct {
 	configDir string
 	once      sync.Once
-	root      cfg.RootPlatform
+	metadata  cfg.MetadataResolver
 }
 
 // environmentDomainOf is a ScopeMetaFunc's answer for a tenant document data that
 // declares tenantID (or that the caller proposes to write for it).
 func (s *platformMetadataSource) environmentDomainOf(data []byte, tenantID string) (string, string) {
-	var root cfg.RootPlatform
+	var metadata cfg.MetadataResolver // no configDir: the document's own `_metadata` alone
 	if s.configDir != "" {
-		s.once.Do(func() { s.root, _ = platformMetadataOrNone(s.configDir, "write") })
-		root = s.root
+		s.once.Do(func() {
+			root, _ := platformMetadataOrNone(s.configDir, "write")
+			s.metadata = root.MetadataResolver()
+		})
+		metadata = s.metadata
 	}
-	var summary TenantSummary
-	extractMetadata(&summary, data, tenantID, root)
-	return summary.Environment, summary.Domain
+	meta, _ := metadata.ResolveFile(tenantID, data)
+	return meta.Environment, meta.Domain
 }
 
 // WriteScopeMeta builds the write-plane resolver: one targeted read of the

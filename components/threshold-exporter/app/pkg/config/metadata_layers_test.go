@@ -1,7 +1,6 @@
 package config
 
-// #2830: RootPlatform.ResolveTenantMetadata (the tenant-api metadata
-// readers) reads a tenant's `_metadata` as /metrics does. The oracle is
+// #2830: MetadataResolver (the tenant-api metadata readers) reads a tenant's `_metadata` as /metrics does. The oracle is
 // LoadDir + ResolveMetadata over the same tree; every tree also states the
 // expected value, so a tree where both sides read nothing cannot pass by
 // agreeing on empty.
@@ -111,10 +110,37 @@ func tenantMetadataTrees() []struct {
 			},
 			want: ResolvedMetadata{},
 		},
+		{
+			name: "carrier declares _metadata in optional_overrides: the profile does not fill it",
+			files: map[string]string{
+				"_defaults.yaml": "defaults:\n  k: 1\noptional_overrides: [_metadata]\n",
+				"_profiles.yaml": metadataProfiles,
+				"tx.yaml":        "tenants:\n  tx:\n    _profile: pfin\n",
+			},
+			want: ResolvedMetadata{},
+		},
+		{
+			name: "two files define the profile: the later file's _metadata",
+			files: map[string]string{
+				"_a.yaml": metadataProfiles,
+				"_b.yaml": "profiles:\n  pfin:\n    _metadata:\n      owner: team-b\n",
+				"tx.yaml": "tenants:\n  tx:\n    _profile: pfin\n",
+			},
+			want: ResolvedMetadata{Owner: "team-b"},
+		},
+		{
+			name: "tenant file's empty _profile over a platform entry's: no profile",
+			files: map[string]string{
+				"_profiles.yaml": metadataProfiles,
+				"_platform.yaml": "tenants:\n  tx:\n    _profile: pfin\n",
+				"tx.yaml":        "tenants:\n  tx:\n    _profile: \"\"\n",
+			},
+			want: ResolvedMetadata{},
+		},
 	}
 }
 
-func TestResolveTenantMetadataMatchesMetrics(t *testing.T) {
+func TestMetadataResolverMatchesMetrics(t *testing.T) {
 	t.Parallel()
 	for _, tc := range tenantMetadataTrees() {
 		t.Run(tc.name, func(t *testing.T) {
@@ -146,24 +172,24 @@ func TestResolveTenantMetadataMatchesMetrics(t *testing.T) {
 			if err != nil {
 				t.Fatalf("LoadRootPlatformChecked: %v", err)
 			}
-			got, ok := root.ResolveTenantMetadata("tx", body)
+			got, ok := root.MetadataResolver().ResolveFile("tx", body)
 			if !ok {
-				t.Fatalf("ResolveTenantMetadata: tx not read")
+				t.Fatalf("ResolveFile: tx not read")
 			}
 			if !reflect.DeepEqual(got, metrics) {
-				t.Errorf("ResolveTenantMetadata = %+v, /metrics = %+v", got, metrics)
+				t.Errorf("MetadataResolver = %+v, /metrics = %+v", got, metrics)
 			}
 		})
 	}
 }
 
-// The zero RootPlatform (no platform files, no profiles) reads the tenant
+// The zero MetadataResolver (no platform files, no profiles) reads the tenant
 // file's own `_metadata` alone; a body that does not declare the tenant or
 // does not decode is not read.
-func TestResolveTenantMetadataWithoutRootAndUnreadBodies(t *testing.T) {
+func TestMetadataResolverWithoutRootAndUnreadBodies(t *testing.T) {
 	t.Parallel()
-	var root RootPlatform
-	got, ok := root.ResolveTenantMetadata("tx", []byte("tenants:\n  tx:\n    _profile: pfin\n    _metadata: \"domain: finance\\n\"\n"))
+	var root MetadataResolver
+	got, ok := root.ResolveFile("tx", []byte("tenants:\n  tx:\n    _profile: pfin\n    _metadata: \"domain: finance\\n\"\n"))
 	if want := (ResolvedMetadata{Tenant: "tx", Domain: "finance"}); !ok || !reflect.DeepEqual(got, want) {
 		t.Errorf("zero root = %+v, %v; want %+v, true", got, ok, want)
 	}
@@ -171,7 +197,7 @@ func TestResolveTenantMetadataWithoutRootAndUnreadBodies(t *testing.T) {
 		"other tenant only": "tenants:\n  ty:\n    _metadata:\n      domain: finance\n",
 		"does not decode":   "tenants: [\n",
 	} {
-		if got, ok := root.ResolveTenantMetadata("tx", []byte(body)); ok || !reflect.DeepEqual(got, ResolvedMetadata{Tenant: "tx"}) {
+		if got, ok := root.ResolveFile("tx", []byte(body)); ok || !reflect.DeepEqual(got, ResolvedMetadata{Tenant: "tx"}) {
 			t.Errorf("%s: = %+v, %v; want empty, false", name, got, ok)
 		}
 	}

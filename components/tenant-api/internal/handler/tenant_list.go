@@ -254,7 +254,7 @@ func loadAllTenants(configDir string) ([]TenantSummary, error) {
 		return nil, err
 	}
 	// #2370, #2830: a tenant's metadata is what /metrics reads for it
-	// (extractMetadata): the root platform files' `tenants.<id>._metadata`
+	// (cfg.MetadataResolver): the root platform files' `tenants.<id>._metadata`
 	// merged per key under the tenant file's own, else the elected
 	// profile's. One root read per
 	// listing; when it cannot be read the rows carry the tenant files'
@@ -262,6 +262,9 @@ func loadAllTenants(configDir string) ([]TenantSummary, error) {
 	// a key the platform layer would have set is missing, not unset — the
 	// same as a degraded row's metadata (#1680).
 	platform, platformKnown := platformMetadataOrNone(configDir, "list")
+	// One resolver per listing: what every tenant shares (the profiles,
+	// the carrier's optional_overrides) is computed once here (#2830).
+	metadata := platform.MetadataResolver()
 
 	summaries := []TenantSummary{}
 	seen := make(map[string]string, len(files)) // tenant id → the file that claimed it
@@ -313,7 +316,11 @@ func loadAllTenants(configDir string) ([]TenantSummary, error) {
 		}
 
 		// v2.5.0: Extract _metadata fields for filtering and UI display.
-		extractMetadata(&summary, data, tenantID, platform)
+		// partial is ParseConfigFile's decode (ParseTenantFile), the one
+		// the resolver reads, so the file is not decoded a second time.
+		if overrides, ok := partial.Tenants[tenantID]; ok {
+			setMetadata(&summary, metadata.Resolve(tenantID, overrides))
+		}
 		summary.MetadataIncomplete = !platformKnown
 
 		summaries = append(summaries, summary)
@@ -322,19 +329,12 @@ func loadAllTenants(configDir string) ([]TenantSummary, error) {
 	return summaries, nil
 }
 
-// extractMetadata populates the TenantSummary's metadata fields from the
-// tenant's `_metadata` as /metrics reads it (#2830): root
-// (cfg.RootPlatform.ResolveTenantMetadata) stacks the root platform files'
-// `tenants.<id>._metadata` and the tenant document's own per key (#2370),
-// fills in the elected profile's when neither writes it, reads the string
-// form like the mapping form, and reads a non-string scalar as its text. The
-// zero root reads the tenant document's own `_metadata` alone. A document
-// that does not decode or does not declare tenantID yields no metadata.
-func extractMetadata(summary *TenantSummary, data []byte, tenantID string, root cfg.RootPlatform) {
-	meta, ok := root.ResolveTenantMetadata(tenantID, data)
-	if !ok {
-		return
-	}
+// setMetadata copies the metadata a cfg.MetadataResolver read for the tenant
+// (#2830: /metrics' reading — the root platform files'
+// `tenants.<id>._metadata` and the tenant document's own merged per key
+// (#2370), else the elected profile's; the string form read like the mapping
+// form; a non-string scalar read as its text) into summary's metadata fields.
+func setMetadata(summary *TenantSummary, meta cfg.ResolvedMetadata) {
 	summary.Environment = meta.Environment
 	summary.Region = meta.Region
 	summary.Tier = meta.Tier

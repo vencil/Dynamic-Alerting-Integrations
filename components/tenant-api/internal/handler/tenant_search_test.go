@@ -27,7 +27,7 @@ func fixtureTenantYAML(id, env, tier, domain, dbType, owner string, tags ...stri
 		// 6-space indent = sibling of environment / tier / etc. under
 		// `_metadata:`. NOT 8-space — that would nest tags under
 		// `owner:` instead, which silently makes the search-by-tag
-		// tests fail (extractMetadata returns no tags). Bug pinned by
+		// tests fail (the metadata read returns no tags). Bug pinned by
 		// TestSearchTenants_TagFilterRequiresExactMatch / FreeTextMatchesTags.
 		tagBlock = "      tags:\n"
 		for _, t := range tags {

@@ -97,17 +97,28 @@ func TestSearchTenants_MetadataReadLikeExporter(t *testing.T) {
 	}
 }
 
-// The single-tenant readers — the tenant's file on disk (WriteScopeMeta) and
-// a proposed body (proposedScopeMeta) — read the same environment / domain
-// as LIST.
-func TestSingleTenantMetadataReaders_ReadLikeExporter(t *testing.T) {
+// The per-tenant readers — the tenant's file on disk (WriteScopeMeta) and a
+// proposed body (proposedScopeMeta) — read the same environment / domain as
+// LIST. For the proposed body every tenant's file on disk holds other values
+// (environment / domain "on-disk"), so only a read of the body passes.
+func TestPerTenantMetadataReaders_ReadLikeExporter(t *testing.T) {
 	t.Parallel()
 	files := exporterParityTree()
-	dir := setupConfigDir(t, files)
-	onDisk := WriteScopeMeta(dir)
+	onDisk := WriteScopeMeta(setupConfigDir(t, files))
 	for id, want := range exporterParityWant {
 		if env, domain := onDisk(id); env != want.Environment || domain != want.Domain {
 			t.Errorf("on-disk read for %s = (%q, %q), want (%q, %q)", id, env, domain, want.Environment, want.Domain)
+		}
+	}
+
+	other := map[string]string{"_profiles.yaml": files["_profiles.yaml"]}
+	for id := range exporterParityWant {
+		other[id+".yaml"] = "tenants:\n  " + id + ":\n    _metadata:\n      environment: on-disk\n      domain: on-disk\n"
+	}
+	dir := setupConfigDir(t, other)
+	for id, want := range exporterParityWant {
+		if env, domain := WriteScopeMeta(dir)(id); env != "on-disk" || domain != "on-disk" {
+			t.Fatalf("fixture: on-disk read for %s = (%q, %q), want (on-disk, on-disk)", id, env, domain)
 		}
 		if env, domain := proposedScopeMeta(dir, files[id+".yaml"])(id); env != want.Environment || domain != want.Domain {
 			t.Errorf("proposed-body read for %s = (%q, %q), want (%q, %q)", id, env, domain, want.Environment, want.Domain)

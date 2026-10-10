@@ -1357,7 +1357,7 @@ func (c *ThresholdConfig) ResolveMetadata() []ResolvedMetadata {
 }
 
 // tenantMetadataOf is ResolveMetadata for one tenant's merged overrides,
-// shared with RootPlatform.ResolveTenantMetadata (#2830) so the tenant-api
+// shared with MetadataResolver (#2830) so the tenant-api
 // reads `_metadata` with this decode. The value is decoded into
 // TenantMetadata: a non-string scalar is read as its text, and a decode error
 // leaves every field empty (logf receives the WARN; nil = silent).
