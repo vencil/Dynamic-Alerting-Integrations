@@ -170,7 +170,7 @@ from _grar_validate import invalid_tenant_id_text  # noqa: E402
 # tenant-triggered inhibit rule (rc 2), and the --validate summary line.
 from _grar_validate import (  # noqa: E402
     PLATFORM_ALERT_IDENTITY_LABELS, PlatformProbeSetUnverifiable,
-    probe_set_degraded_reason, probe_set_is_degraded,
+    platform_alert_identities, probe_set_degraded_reason, probe_set_is_degraded,
 )
 # #2766: structured findings (the refusal lines are built as them here).
 from _grar_merge import Finding, as_finding, unclassified  # noqa: E402
@@ -250,9 +250,15 @@ def _validate_mode(routes: list[dict], receivers: list[dict], inhibit_rules: lis
     # #1533: the rc does not change (generated rules cannot reach a platform
     # alert — see the CLI reference), but the run must say what it checked.
     if probe_set_is_degraded():
-        print(f"Probe set: DEGRADED to the {len(PLATFORM_ALERT_IDENTITY_LABELS)}"
-              f"-entry built-in fallback of the shipped platform alert "
-              f"identities ({probe_set_degraded_reason()})")
+        if platform_alert_identities() is PLATFORM_ALERT_IDENTITY_LABELS:
+            print(f"Probe set: DEGRADED to the "
+                  f"{len(PLATFORM_ALERT_IDENTITY_LABELS)}-entry built-in "
+                  f"fallback of the shipped platform alert identities "
+                  f"({probe_set_degraded_reason()})")
+        else:
+            print(f"Probe set: DEGRADED, shipped platform alert identities "
+                  f"only partly read; built-in fallback added back "
+                  f"({probe_set_degraded_reason()})")
     if verdict.errors:
         print(f"FAIL: {len(verdict.errors)} error(s) found:", file=sys.stderr)
         for e in verdict.errors:

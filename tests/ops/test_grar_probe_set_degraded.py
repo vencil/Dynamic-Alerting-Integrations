@@ -374,3 +374,157 @@ def test_no_shipped_platform_alert_can_carry_metric_group():
                         offenders.append(rule["alert"])
     assert checked >= len(_VALIDATE.PLATFORM_ALERT_IDENTITY_LABELS)
     assert offenders == [], offenders
+
+
+# ── #1533 §3–4: a pack that is only partly read ─────────────────────────
+
+def _pack_copy(tmp_path, mutate_body=None, mutate_cm=None):
+    """A copy of the shipped pack with its first rules file mutated."""
+    import copy
+    from pathlib import Path
+    src = (Path(__file__).resolve().parents[2] / "k8s" / "03-monitoring"
+           / "configmap-rules-platform.yaml")
+    docs = [d for d in yaml.safe_load_all(src.read_text(encoding="utf-8")) if d]
+    cm = copy.deepcopy(next(d for d in docs if d.get("kind") == "ConfigMap"))
+    key = next(iter(cm["data"]))
+    body = yaml.safe_load(cm["data"][key])
+    if mutate_body:
+        mutate_body(body)
+    cm["data"][key] = yaml.safe_dump(body, sort_keys=False)
+    if mutate_cm:
+        mutate_cm(cm)
+    out = tmp_path / "configmap-rules-platform.yaml"
+    out.write_text(yaml.safe_dump(cm, sort_keys=False), encoding="utf-8")
+    return out
+
+
+def _use_pack(monkeypatch, path):
+    _fresh_cache(monkeypatch)
+    monkeypatch.setattr(_VALIDATE, "_find_platform_rules_configmap",
+                        lambda: path)
+
+
+def _strip_marker(body, alertname):
+    for group in body["groups"]:
+        for rule in group["rules"]:
+            if rule.get("alert") == alertname:
+                rule["labels"].pop("alert_source")
+
+
+_FALLBACK_NAMES = {d["alertname"]
+                   for d in _VALIDATE.PLATFORM_ALERT_IDENTITY_LABELS}
+
+_PARTIAL_SHAPES = {
+    "group0-not-mapping": dict(
+        mutate_body=lambda b: b["groups"].__setitem__(0, "oops")),
+    "group1-not-mapping": dict(
+        mutate_body=lambda b: b["groups"].__setitem__(1, "oops")),
+    # index 1: index 0 is Watchdog, which is skipped legitimately anyway
+    "one-rule-not-mapping": dict(
+        mutate_body=lambda b: b["groups"][0]["rules"].__setitem__(1, "oops")),
+    "rules-not-a-list": dict(
+        mutate_body=lambda b: b["groups"][0].__setitem__("rules", "oops")),
+    "undecodable-binarydata-key": dict(
+        mutate_cm=lambda c: c.setdefault("binaryData", {}).__setitem__(
+            "extra.yaml", "!!not base64!!")),
+    # a SECOND data key, so the first still yields alerts (partial, not empty)
+    "extra-rules-file-not-a-mapping": dict(
+        mutate_cm=lambda c: c["data"].__setitem__("extra.yaml", "- a\n- b\n")),
+    "extra-rules-file-groups-not-a-list": dict(
+        mutate_cm=lambda c: c["data"].__setitem__("extra.yaml",
+                                                  "groups: oops\n")),
+    "extra-rules-file-not-valid-yaml": dict(
+        mutate_cm=lambda c: c["data"].__setitem__("extra.yaml", "groups: [\n")),
+    "rule-with-neither-alert-nor-record": dict(
+        mutate_body=lambda b: b["groups"][0]["rules"][1].__setitem__(
+            "alrt", b["groups"][0]["rules"][1].pop("alert"))),
+    # well-formed, so only the fallback-names check can see it
+    "marker-removed-from-a-fallback-alert": dict(
+        mutate_body=lambda b: _strip_marker(b, "ThresholdExporterDown")),
+}
+
+
+@pytest.mark.parametrize("shape", sorted(_PARTIAL_SHAPES))
+def test_a_partly_read_pack_is_degraded_and_keeps_what_it_read(
+        monkeypatch, capsys, tmp_path, shape):
+    """Each shape used to drop alerts with no warning and no degraded flag
+    (measured: one broken group took 45 identities to 9). Now the set is
+    flagged, warned about once, and is what was read ∪ the fallback (P1)."""
+    path = _pack_copy(tmp_path, **_PARTIAL_SHAPES[shape])
+    _use_pack(monkeypatch, path)
+    ids = _VALIDATE.platform_alert_identities()
+    assert _VALIDATE.probe_set_is_degraded(), shape
+    assert "partially read" in _VALIDATE.probe_set_degraded_reason()
+    names = {d["alertname"] for d in ids}
+    assert _FALLBACK_NAMES <= names
+    # what was read is kept: more than the fallback alone
+    assert len(ids) > len(_VALIDATE.PLATFORM_ALERT_IDENTITY_LABELS)
+    err = capsys.readouterr().err
+    assert err.count("probe set is INCOMPLETE") == 1, err
+
+
+def test_control_an_intact_copy_is_not_degraded(monkeypatch, capsys,
+                                                tmp_path):
+    """Must not fire on the shipped pack itself (re-serialised the same way)."""
+    _use_pack(monkeypatch, _pack_copy(tmp_path))
+    assert not _VALIDATE.probe_set_is_degraded()
+    assert "INCOMPLETE" not in capsys.readouterr().err
+
+
+def test_control_a_recording_rule_is_not_a_malformed_skip(monkeypatch,
+                                                          tmp_path):
+    """Recording rules (no `alert`) are skipped by design, not counted."""
+    path = _pack_copy(tmp_path, mutate_body=lambda b: b["groups"][0][
+        "rules"].append({"record": "x:y:rate5m", "expr": "rate(x[5m])"}))
+    _use_pack(monkeypatch, path)
+    assert not _VALIDATE.probe_set_is_degraded()
+
+
+def test_a_pack_with_no_platform_alert_falls_back_and_says_so(
+        monkeypatch, capsys, tmp_path):
+    """#1533 §4: the "yielded no platform alert" branch had no test (removing
+    its warn left every test green). Pinned: fallback constant, degraded,
+    and the warn names the cause."""
+    def strip_all(body):
+        for group in body["groups"]:
+            for rule in group["rules"]:
+                (rule.get("labels") or {}).pop("alert_source", None)
+    _use_pack(monkeypatch, _pack_copy(tmp_path, mutate_body=strip_all))
+    assert (_VALIDATE.platform_alert_identities()
+            is _VALIDATE.PLATFORM_ALERT_IDENTITY_LABELS)
+    assert _VALIDATE.probe_set_is_degraded()
+    assert "yielded no platform alert" in capsys.readouterr().err
+
+
+def test_a_partly_read_pack_still_refuses_an_unverifiable_render(
+        monkeypatch, capsys, tmp_path, tenant_dir):
+    """P1 reaches the #2821 refusal: a partial set is degraded, so an
+    operator-supplied tenant-triggered rule it cannot vouch for is rc 2."""
+    pack_dir = tmp_path / "pack"
+    pack_dir.mkdir()
+    path = _pack_copy(pack_dir, **_PARTIAL_SHAPES["group1-not-mapping"])
+    _use_pack(monkeypatch, path)
+    # Targets an alert that lives only in the unread group and is not in the
+    # fallback — the one the partial set cannot see. (A target in the part
+    # that WAS read is a real violation, rc 1, and outranks this.)
+    rule = {"source_matchers": ['tenant=~".+"', 'severity="critical"'],
+            "target_matchers": ['alertname="FederationAuditPipelineSilent"']}
+    rc, out = _render(monkeypatch, tmp_path, tenant_dir, rule)
+    err = capsys.readouterr().err
+    assert rc == EXIT_CALLER_ERROR, err
+    assert not out.exists()
+    assert "partially read" in err
+
+
+def test_validate_says_the_set_was_only_partly_read(monkeypatch, capsys,
+                                                    tmp_path, tenant_dir):
+    pack_dir = tmp_path / "pack"
+    pack_dir.mkdir()
+    _use_pack(monkeypatch, _pack_copy(
+        pack_dir, **_PARTIAL_SHAPES["group0-not-mapping"]))
+    rc = _main(monkeypatch, tmp_path, "--config-dir", str(tenant_dir),
+               "--validate")
+    out = capsys.readouterr().out
+    assert rc == EXIT_OK
+    assert out.count("Probe set: DEGRADED, shipped platform alert "
+                     "identities only partly read") == 1, out
