@@ -184,6 +184,8 @@ def compute_profile_key_diff(old_data, new_data):
         change_type = classify_change(old_val, new_val)
         if change_type == "unchanged":
             continue
+        # A profile can carry a receiver (`_routing`) like a tenant file.
+        old_val, new_val = redact_pair(key, old_val, new_val)
         changes.append({
             "key": key,
             "old": old_val,
@@ -726,16 +728,21 @@ def served_setting_configs(tenants):
 
 
 def served_setting_diff(old_tenants, new_tenants):
-    """compute_setting_diff over the tenants both sides serve; a routing key
-    served as the text written is printed as _REDACTED (see
-    served_setting_configs)."""
+    """compute_setting_diff over the tenants both sides serve; a reserved key
+    served as the text written (`unserved`) is printed as _REDACTED whatever
+    its name — `_routng` or `_Routing` with a receiver under it is text no
+    key-name rule can see into (see served_setting_configs)."""
     both = set(old_tenants) & set(new_tenants)
     old = served_setting_configs({t: v for t, v in old_tenants.items() if t in both})
     new = served_setting_configs({t: v for t, v in new_tenants.items() if t in both})
+    as_text = {t: {str(k) for side in (old_tenants[t], new_tenants[t])
+                   for k, v in (side.unserved or {}).items()
+                   if str(k).startswith("_") and isinstance(v, str)}
+               for t in both}
     diff = compute_setting_diff(old, new)
-    for changes in diff.values():
+    for tenant, changes in diff.items():
         for c in changes:
-            if "." not in str(c["key"]) and str(c["key"]).startswith("_routing"):
+            if "." not in str(c["key"]) and str(c["key"]) in as_text[tenant]:
                 c["old"], c["new"] = (_REDACTED if isinstance(v, str) else v
                                       for v in (c["old"], c["new"]))
     return diff

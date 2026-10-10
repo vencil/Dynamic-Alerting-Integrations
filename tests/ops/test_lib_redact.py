@@ -82,3 +82,12 @@ def test_config_diff_does_not_descend_into_a_credential_container():
     diff = cd.compute_setting_diff(body("S1"), body("S2"))
     assert "S1" not in repr(diff) and "S2" not in repr(diff), diff
     assert [e["key"] for e in diff["t"]] == ["_routing.receiver.http_config"]
+
+
+def test_profile_key_diff_is_redacted():
+    """`_profiles.yaml` 的 profile 可以帶 receiver：profile 差異同一條規則遮。"""
+    old = {"_routing": {"receiver": {"type": "webhook", "url": "https://h/S1"}}, "x": 1}
+    new = {"_routing": {"receiver": {"type": "webhook", "url": "https://h/S2"}}, "x": 2}
+    got = cd.compute_profile_key_diff(old, new)
+    assert "S1" not in repr(got) and "S2" not in repr(got)
+    assert {e["key"]: (e["old"], e["new"]) for e in got}["x"] == (1, 2)  # 對照

@@ -271,7 +271,12 @@ def diff_served(base: dict[str, tv.TenantValues], pr: dict[str, tv.TenantValues]
                     for leaf, (lb, lp) in _field_changes(bv if isinstance(bv, dict) else {},
                                                          pv if isinstance(pv, dict) else {}).items():
                         out.append(ValueChange(tenant, field, f"{key}.{leaf}", lb, lp))
-                elif _secret_key(str(key)):
+                elif _secret_key(str(key)) or (
+                        # A reserved key the exporter does not serve arrives
+                        # as the text written; whatever its name, a receiver
+                        # in it is text no key-name rule can see into.
+                        field == "unserved" and str(key).startswith("_")
+                        and (isinstance(bv, str) or isinstance(pv, str))):
                     out.append(ValueChange(tenant, field, key, _mask(bv), _mask(pv)))
                 else:
                     out.append(ValueChange(tenant, field, key, bv, pv))
