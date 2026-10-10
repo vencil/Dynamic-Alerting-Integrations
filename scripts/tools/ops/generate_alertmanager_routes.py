@@ -166,6 +166,12 @@ from _grar_validate import is_receiver_name_collision  # noqa: E402
 from _grar_validate import duplicate_tenant_errors  # noqa: E402
 # ADR-035 D3: the invalid-tenant-id refusal cites the rule's own words.
 from _grar_validate import invalid_tenant_id_text  # noqa: E402
+# #1533: a degraded probe set that cannot vouch for an operator-supplied
+# tenant-triggered inhibit rule (rc 2), and the --validate summary line.
+from _grar_validate import (  # noqa: E402
+    PLATFORM_ALERT_IDENTITY_LABELS, PlatformProbeSetUnverifiable,
+    probe_set_degraded_reason, probe_set_is_degraded,
+)
 # #2766: structured findings (the refusal lines are built as them here).
 from _grar_merge import Finding, as_finding, unclassified  # noqa: E402
 import yaml  # noqa: E402
@@ -203,6 +209,15 @@ def _assembly_failed(exc: ValueError, refusing: str) -> None:
     sys.exit(EXIT_VIOLATION)
 
 
+def _unverifiable(exc: PlatformProbeSetUnverifiable, refusing: str) -> None:
+    """#1533: the probe set degraded and an operator-supplied tenant-triggered
+    inhibit rule could not be checked against it. No verdict on the config —
+    rc 2, like amtool being unusable — and nothing is written or applied."""
+    print(f"ERROR: the assembled Alertmanager config could not be verified — "
+          f"{refusing}:\n  {safe_label(str(exc))}", file=sys.stderr)
+    sys.exit(EXIT_CALLER_ERROR)
+
+
 def _validate_mode(routes: list[dict], receivers: list[dict], inhibit_rules: list[dict],
                    all_warnings: list[str], sink: list | None = None) -> None:
     """Handle --validate mode: check for errors and exit.
@@ -232,6 +247,12 @@ def _validate_mode(routes: list[dict], receivers: list[dict], inhibit_rules: lis
     inhibit_count = len(inhibit_rules)
     print(f"Validation: {route_count} route(s), {len(receivers)} receiver(s), "
           f"{inhibit_count} inhibit rule(s)")
+    # #1533: the rc does not change (generated rules cannot reach a platform
+    # alert — see the CLI reference), but the run must say what it checked.
+    if probe_set_is_degraded():
+        print(f"Probe set: DEGRADED to the {len(PLATFORM_ALERT_IDENTITY_LABELS)}"
+              f"-entry built-in fallback of the shipped platform alert "
+              f"identities ({probe_set_degraded_reason()})")
     if verdict.errors:
         print(f"FAIL: {len(verdict.errors)} error(s) found:", file=sys.stderr)
         for e in verdict.errors:
@@ -353,6 +374,8 @@ def _apply_mode(routes: list[dict], receivers: list[dict], inhibit_rules: list[d
         # #2506: the same `FAIL:` verdict #2260 gave --output-configmap and
         # --validate, instead of a traceback at rc 1.
         _assembly_failed(exc, "nothing was applied to the cluster")
+    except PlatformProbeSetUnverifiable as exc:
+        _unverifiable(exc, "nothing was applied to the cluster")
     # #1617: this was EXIT_VIOLATION (1) while docs/cli-reference.{md,en.md}
     # documented 2 — the code and the shipped table said opposite things.
     # `_lib_exitcodes` settles it: "cannot reach Prometheus / API" is
@@ -387,6 +410,8 @@ def _output_configmap_mode(routes: list[dict], receivers: list[dict], inhibit_ru
             namespace=namespace, configmap_name=configmap_name, strict=strict)
     except ValueError as exc:
         _assembly_failed(exc, f"nothing was written to {target}")
+    except PlatformProbeSetUnverifiable as exc:
+        _unverifiable(exc, f"nothing was written to {target}")
 
     # #2219: validate what Alertmanager will LOAD from what this run EMITS.
     # `cm_yaml` is the string that goes to -o / stdout below, unchanged; the
