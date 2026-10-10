@@ -11,9 +11,10 @@ with rc 0, and ``describe_tenant`` described the outer repo's ``conf.d``.
 Two layouts, both built outside this repo under an outer project that has a
 marker and a decoy copy of every file the lookups read:
 
-* ``bare``: only ``scripts/`` is vendored. Every lookup must come back empty
-  (and the callers degrade loudly, as they already do in the image), never
-  with a decoy path.
+* ``bare``: only ``scripts/`` is vendored. Every lookup must come back empty,
+  never with a decoy path. What the callers then do is unchanged by #2845:
+  ``validate_config`` fails with rc 2, ``generate_alertmanager_routes
+  --validate`` raises (a traceback, rc 1), as they do with no tree at all.
 * ``own``: the vendored tree also carries its data but no marker (a
   ``git archive`` minus its root files). Every lookup must find THAT data —
   the must-fire control that keeps "returns None" from passing for free.

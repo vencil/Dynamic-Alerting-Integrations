@@ -485,16 +485,14 @@ def sandbox_repo(tmp_path_factory) -> Path:
     with no CLI override).  Running it against the real tree would mutate the
     repo, so that one recipe runs from this copy instead.
 
-    ⛔ The copy must carry a project-root marker (#1501): the tool now FINDS
-    `rule-packs/` by walking up to one instead of counting three levels, and
-    without it the run correctly refuses with rc 2 ("no rule packs
-    reachable") rather than regenerating from nothing.
+    ⛔ The copy keeps the `scripts/tools` + `rule-packs/` shape: the tool FINDS
+    `rule-packs/` under the root of the `scripts/tools` it sits in (#1501 no
+    level counting, #2845 no marker), and without it the run correctly refuses
+    with rc 2 ("no rule packs reachable") rather than regenerating from nothing.
     """
     root = tmp_path_factory.mktemp("sandbox_repo")
     shutil.copytree(REPO_ROOT / "scripts" / "tools", root / "scripts" / "tools")
     shutil.copytree(RULE_PACKS, root / "rule-packs")
-    (root / "Makefile").write_text("# sandbox project-root marker\n",
-                                   encoding="utf-8")
     return root
 
 
