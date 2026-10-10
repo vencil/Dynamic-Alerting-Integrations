@@ -179,10 +179,14 @@ The GitLab artifact has a blast-radius step too (the `blast-radius` job in the
   its first line with an `ERROR:` line saying the image has no git; pin a
   newer version in `DA_TOOLS_IMAGE`.
 
-⚠️ config-diff compares tenant files only and skips files whose names start
-with `_`, so a merge request that changes only `conf.d/_defaults.yaml` gets
-"No changes detected" — that file affects every tenant that does not override
-it, so review it by hand. The GitHub artifact behaves the same way.
+⚠️ config-diff compares top-level tenant files only, not files whose names
+start with `_` (such as `conf.d/_defaults.yaml`) or files in subdirectories.
+When one of those changes, a "Changed Files Not Compared" section at the top of
+the report names it and the exit code is 1 — but the affected tenants are not
+listed. `_defaults.yaml` affects every tenant that does not override it, so
+review it by hand. The GitHub artifact behaves the same way. The v2.9.0 image
+has no such section: a merge request that changes only those files gets
+"No changes detected". <!-- image-caveat: v2.9.0 -->
 
 ## 2. Three-Stage CI/CD Pipeline
 

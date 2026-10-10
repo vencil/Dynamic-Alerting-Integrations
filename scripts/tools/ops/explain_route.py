@@ -55,6 +55,7 @@ from _grar_render import (  # noqa: E402
     _run_binary, assemble_configmap, receiver_integration_kinds,
 )
 from _grar_validate import (  # noqa: E402
+    PlatformProbeSetUnverifiable,
     ROUTING_TREE_ERROR_PREFIX,
     check_policy_scope,
     duplicate_tenant_errors,
@@ -962,6 +963,11 @@ def trace_alert_routing(
                   f"--base-config?): {exc}")
         except ValueError as exc:
             _warn(f"the generator refuses to assemble this config: {exc}")
+        except PlatformProbeSetUnverifiable as exc:
+            # #1533: not a ValueError on purpose (the generator exits 2 on it,
+            # not 1); here it is the same "no trace" outcome, not a traceback.
+            _warn("the generator cannot verify this config "
+                  f"(generate_alertmanager_routes.py exits 2): {exc}")
         else:
             assembled = True
             hits, unknown = run_amtool_trace(am_yml, root, alert_labels,

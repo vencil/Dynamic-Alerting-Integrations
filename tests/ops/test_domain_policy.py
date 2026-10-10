@@ -16,6 +16,7 @@ import pytest
 import yaml
 
 from factories import make_receiver, make_routing_config, write_yaml
+from _lib_exitcodes import EXIT_CALLER_ERROR
 
 from generate_alertmanager_routes import (
     validate_receiver_domains,
@@ -150,11 +151,20 @@ class TestLoadPolicy:
         domains = load_policy(path)
         assert domains == ["*.example.com", "hooks.slack.com"]
 
-    def test_empty_policy_file(self, config_dir):
-        """空 YAML policy 回傳空 list。"""
-        path = write_yaml(config_dir, "policy.yaml", "")
-        domains = load_policy(path)
-        assert domains == []
+    @pytest.mark.parametrize("body", [
+        "",                                   # 0 位元組
+        "\n  \n",                             # 只有空白
+        "# allowed_domains: [example.com]\n",  # 只有註解
+    ], ids=["empty", "whitespace", "comment-only"])
+    def test_a_file_with_no_document_raises(self, config_dir, body):
+        """#1649：檔可讀可解析，但沒說任何 `allowed_domains` → caller error。
+
+        ⛔ 這格原本叫 `test_empty_policy_file`、斷言 `== []`，把「判不出來」
+        釘成「不設限」——webhook 網域白名單整條關掉、rc 0、`[PASS] policy`。
+        """
+        path = write_yaml(config_dir, "policy.yaml", body)
+        with pytest.raises(PolicyInputError, match="no YAML document"):
+            load_policy(path)
 
     def test_nonexistent_policy_raises(self):
         """供了 --policy 但那不是檔案 → 必須拋，不可回空 list。
@@ -177,11 +187,51 @@ class TestLoadPolicy:
         """沒有供 --policy 回傳空 list —— 「不要求限制」與「判不出來」不同。"""
         assert load_policy(None) == []
 
-    def test_policy_without_allowed_domains_key(self, config_dir):
-        """YAML 缺 allowed_domains key 回傳空 list。"""
-        path = write_yaml(config_dir, "policy.yaml", yaml.dump({"other_key": "value"}))
-        domains = load_policy(path)
-        assert domains == []
+    def test_policy_without_allowed_domains_key_raises(self, config_dir):
+        """#1649：缺 `allowed_domains` 鍵 → caller error（原本斷言 `== []`）。
+
+        錯誤訊息要說怎麼明示「不設限」，否則最便宜的轉綠是拿掉旗標。
+        """
+        path = write_yaml(config_dir, "policy.yaml",
+                          "denied_functions: [holt_winters]\n")
+        with pytest.raises(PolicyInputError,
+                           match="no `allowed_domains` key") as exc:
+            load_policy(path)
+        assert "allowed_domains: []" in str(exc.value)
+
+    def test_a_misspelled_key_is_named(self, config_dir):
+        """`allowed_domain:`（少一個 s）→ raise，且訊息點名拼錯的那個鍵。"""
+        path = write_yaml(config_dir, "policy.yaml",
+                          "allowed_domain: [example.com]\n")
+        with pytest.raises(PolicyInputError, match="found `allowed_domain`"):
+            load_policy(path)
+
+    def test_a_block_list_key_is_not_offered_as_the_fix(self, config_dir):
+        """`disallowed_domains` 與 `allowed_domains` 字面很近、語意相反：
+        照「did you mean」改名會把封鎖清單變成允許清單。仍要 raise，但不提示。"""
+        path = write_yaml(config_dir, "policy.yaml",
+                          "disallowed_domains: [evil.test]\n")
+        with pytest.raises(PolicyInputError) as exc:
+            load_policy(path)
+        assert "did you mean" not in str(exc.value)
+
+    def test_the_message_is_one_line(self, config_dir):
+        """validate-config 會把控制字元印成 `?`，訊息必須是單行。"""
+        path = write_yaml(config_dir, "policy.yaml", "")
+        with pytest.raises(PolicyInputError) as exc:
+            load_policy(path)
+        assert "\n" not in str(exc.value)
+
+    def test_non_string_entries_raise(self, config_dir):
+        """全是非字串的清單原本被濾成 `[]` ＝ 不設限（#1649）。"""
+        path = write_yaml(config_dir, "policy.yaml", "allowed_domains: [123]\n")
+        with pytest.raises(PolicyInputError, match="non-string"):
+            load_policy(path)
+
+    def test_an_explicit_empty_list_is_no_restriction(self, config_dir):
+        """對照組：鍵在、值是 `[]` → 仍是「不設限」，不得被上面幾格一起擋掉。"""
+        path = write_yaml(config_dir, "policy.yaml", "allowed_domains: []\n")
+        assert load_policy(path) == []
 
     def test_allowed_domains_with_an_empty_value_is_no_restriction(
             self, config_dir):
@@ -209,6 +259,55 @@ class TestLoadPolicy:
             path = write_yaml(config_dir, "policy_bad.yaml", bad)
             with pytest.raises(PolicyInputError):
                 load_policy(path)
+
+
+class TestPolicyContentAxisExitCodes:
+    """#1649 的 CLI 面：required check 走的 `generate-routes --validate
+    --strict --policy`。每一格都與兩個必響對照組一起跑：有效 policy 必須點名
+    evil 網域並回 1；明示的 `[]` 必須仍回 0。"""
+
+    _TENANT = ("tenants:\n  t1:\n    _routing:\n      receiver:\n"
+               "        type: webhook\n"
+               "        url: \"https://evil.attacker.test/hook\"\n")
+
+    def _run(self, config_dir, policy_body, capsys, cli_argv):
+        from generate_alertmanager_routes import main as gen_main
+        confd = os.path.join(config_dir, "conf.d")
+        os.makedirs(confd)
+        write_yaml(confd, "t1.yaml", self._TENANT)
+        policy = write_yaml(config_dir, "policy.yaml", policy_body)
+        cli_argv("generate_alertmanager_routes", "--config-dir", confd,
+                 "--validate", "--strict", "--policy", policy)
+        try:
+            rc = gen_main()
+        except SystemExit as exc:
+            rc = exc.code
+        captured = capsys.readouterr()
+        return rc, captured.out + captured.err
+
+    @pytest.mark.parametrize("body", [
+        "", "# allowed_domains: [example.com]\n",
+        "allowed_domain: [example.com]\n", "allowed_domains: [123]\n",
+    ], ids=["empty", "comment-only", "misspelled-key", "non-string"])
+    def test_content_that_says_nothing_is_a_caller_error(
+            self, config_dir, body, capsys, cli_argv):
+        rc, _ = self._run(config_dir, body, capsys, cli_argv)
+        assert rc == EXIT_CALLER_ERROR
+
+    def test_control_a_real_policy_names_the_domain(self, config_dir, capsys,
+                                                    cli_argv):
+        rc, out = self._run(config_dir, "allowed_domains: [example.com]\n",
+                            capsys, cli_argv)
+        assert rc == 1
+        assert "evil.attacker.test" in out
+
+    @pytest.mark.parametrize("body", ["allowed_domains: []\n",
+                                      "allowed_domains:\n"],
+                             ids=["empty-list", "empty-value"])
+    def test_control_an_explicit_no_constraint_still_passes(
+            self, config_dir, body, capsys, cli_argv):
+        rc, _ = self._run(config_dir, body, capsys, cli_argv)
+        assert rc == 0
 
 
 # ── generate_routes + policy integration ─────────────────────

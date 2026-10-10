@@ -1631,21 +1631,19 @@ def _gen_github_actions(
               #       not touch tenant config at all, and skipping would leave
               #       the PREVIOUS run's report standing as though it were
               #       still current.
-              #       ⚠️ READ THIS BEFORE TRUSTING A "no changes" COMMENT.
-              #       config-diff compares TENANT files only — it skips every
-              #       file whose name starts with `_`, which includes
-              #       conf.d/_defaults.yaml. So a pull request that changes a
-              #       PLATFORM DEFAULT, inherited by every tenant that does
-              #       not override it, gets a comment that states "No changes
-              #       detected". Measured: raising _defaults.yaml's
-              #       mysql_connections exits 0 with a 325-byte "no changes"
-              #       report, while the same key changed in one tenant file
-              #       exits 1 and is listed. That is the widest-blast-radius
-              #       edit this job can be handed, and it is the one it cannot
-              #       see. Review _defaults.yaml changes by hand, or gate them
+              #       ⚠️ config-diff compares top-level TENANT files only. A
+              #       changed file it does not compare — any file whose name
+              #       starts with `_`, such as conf.d/_defaults.yaml, or a file
+              #       in a sub-directory — is not a 0: it exits 1 and the report
+              #       names the file under "Changed Files Not Compared". It does
+              #       NOT list the tenants such a change reaches, and a PLATFORM
+              #       DEFAULT is inherited by every tenant that does not
+              #       override it. Review those files by hand, or gate them
               #       separately (the platform runs its own
               #       guard-defaults-impact workflow for exactly this, which
-              #       `da-tools init` does not emit).
+              #       `da-tools init` does not emit). Images up to v2.9.0
+              #       predate this and report such a change as "No changes
+              #       detected" with exit 0.
               #   1 = changes detected  -> the report is the payload.
               #   2 and above           -> the run did not complete; fail, and
               #       the step below replaces the report with an explicit
@@ -2682,9 +2680,12 @@ def _gen_gitlab_ci(
         # change, 1 = changes detected (the ordinary answer on a merge request
         # that edits tenants), 2 and above = the run did not complete. A bare
         # call would fail this job on every merge request that changes a tenant.
-        # ⚠️ It compares TENANT files only and skips every file whose name
-        # starts with `_`, so a change to conf.d/_defaults.yaml (inherited by
-        # every tenant) reports "no changes". Review those by hand.
+        # ⚠️ It compares top-level TENANT files only. A changed file it does
+        # not compare (any `_`-prefixed file such as conf.d/_defaults.yaml,
+        # inherited by every tenant, or a file in a sub-directory) exits 1 and
+        # is named under "Changed Files Not Compared", without the tenants it
+        # reaches. Review those by hand. Images up to v2.9.0 predate this and
+        # report such a change as "no changes" with exit 0.
         - |
           set +e
           da-tools config-diff --old-dir .output/base/"${{CONFIG_DIR%/}}" --new-dir "$CONFIG_DIR" --format markdown > .output/blast-radius.md

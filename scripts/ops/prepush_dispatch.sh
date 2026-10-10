@@ -39,17 +39,6 @@ GUARDS=(
     pre_push_mkdocs_strict.sh
 )
 
-# Guards that run only when the push carries commits. ⛔ Do NOT add the other
-# two: `git push origin :main` must stay judged (#1691). mkdocs belongs here
-# because a deletion carries no tree to build — and since #1690 it drops
-# deletion rows itself, so this entry is a cheap short-circuit, not the
-# mechanism.
-GUARDS_NEEDING_COMMITS=(
-    pre_push_mkdocs_strict.sh
-)
-
-_Z40="0000000000000000000000000000000000000000"
-
 # ⛔ Read stdin ONCE, then hand every guard its own copy. Each guard reads the
 # refspec itself, so chaining them lets the first drain the pipe and leaves
 # every later guard with EOF — the #1664 picture, relocated.
@@ -66,32 +55,16 @@ _feed() {
     fi
 }
 
-# Does this push carry any commits, or is it only deletions / nothing at all?
-# Rows are git's own protocol: <local_ref> <local_sha> <remote_ref> <remote_sha>.
-_pushes_commits=0
-while read -r _lref _lsha _rref _rsha; do
-    [ -n "${_rref:-}" ] || continue
-    [ "$_lsha" = "$_Z40" ] && continue
-    _pushes_commits=1
-    break
-done < <(_feed)
-
-_needs_commits() {
-    local _g
-    for _g in "${GUARDS_NEEDING_COMMITS[@]}"; do
-        [ "$_g" = "$1" ] && return 0
-    done
-    return 1
-}
-
-# ⛔ Run every guard; do not short-circuit on the first failure, and do not put
+# ⛔ Run every guard on every push, deletions and up-to-date pushes included:
+# each one decides from the rows what it has to judge (the mkdocs guard drops
+# deletion rows itself, #1690). Do not add a "does this push carry commits?"
+# skip here: it duplicates the guards' own reading of the rows, and the two
+# can drift apart without any test noticing (#2802).
+# ⛔ Do not short-circuit on the first failure, and do not put
 # a guard on the right-hand side of a pipe — process substitution keeps the exit
 # status unambiguously the guard's own.
 _rc=0
 for _guard in "${GUARDS[@]}"; do
-    if _needs_commits "$_guard" && [ "$_pushes_commits" = "0" ]; then
-        continue
-    fi
     _path="$_dispatch_dir/$_guard"
     if [ ! -r "$_path" ]; then
         printf '%s\n' "" \

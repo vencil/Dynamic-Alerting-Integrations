@@ -1261,8 +1261,9 @@ func reclaimTenantFrom(newConfigs map[string]ThresholdConfig, declaredIn tenantD
 	overrides := make(map[string]ScheduledValue)
 	for _, name := range sources {
 		// Later in sortFlatMergeOrder wins, same as mergePartialConfigs —
-		// per threshold, across spellings (#2368), as mergePartialInto does.
-		config.OverlayAcrossSpellings(overrides, newConfigs[name].Tenants[tenant])
+		// per threshold, across spellings (#2368), and `_metadata` per key
+		// (#2370), as mergePartialInto does.
+		config.OverlayTenantLayer(overrides, newConfigs[name].Tenants[tenant])
 	}
 	return overrides, true
 }
