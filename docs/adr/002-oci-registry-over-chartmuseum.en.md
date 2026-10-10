@@ -28,8 +28,6 @@ The platform publishes two kinds of artifacts:
 1. **Helm charts**: deployment configuration for threshold-exporter, da-portal and tenant-api.
 2. **Container images**: threshold-exporter, da-tools, da-portal and tenant-api.
 
-The release workflow also defines publishing steps for a recipe-preview image and chart (to the same registry), but that release line has not been published yet, so the registry holds no recipe-preview artifacts today.
-
 A common setup keeps images in a container registry (such as ghcr.io) and charts in a separate chart repository such as ChartMuseum, which means two pieces of infrastructure to operate.
 
 ## Decision

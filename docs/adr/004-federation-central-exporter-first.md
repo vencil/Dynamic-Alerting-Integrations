@@ -17,11 +17,11 @@ updated_at: 2026-10-10
 
 <!-- Language switcher is provided by mkdocs-static-i18n header. -->
 
-**決策摘要**：多叢集部署先支援「中央 Exporter + 邊緣 Prometheus」：一個 threshold-exporter 放在中央叢集，管理所有邊緣租戶的閾值，告警規則在中央評估。「每個邊緣叢集各放一個 exporter」的架構延後，之後再補上。
+**決策摘要**：多叢集部署先支援「中央 Exporter + 邊緣 Prometheus」：一個 threshold-exporter 放在中央叢集，管理所有邊緣租戶的閾值，告警規則在中央評估。「每個邊緣叢集各放一個 exporter」的架構延後。
 
 ## 狀態
 
-✅ **Accepted** (v1.12.0) → **Extended** (v2.3.0：兩種架構均已實現)
+✅ **Accepted** (v1.12.0) → **Extended** (v2.3.0)
 
 ## 名詞
 
@@ -42,7 +42,6 @@ updated_at: 2026-10-10
 **邊緣 Exporter + 中央聚合**
 
 - 每個邊緣叢集各自部署 threshold-exporter。
-- 資料流：邊緣 Prometheus 先在本地評估 Rule Pack 的正規化部分，只把 recording rule 的結果以 federation 或 `remote_write` 送到中央彙整。
 - 複雜度：N 個 exporter 實例、N 份設定，以及中央的協調邏輯。
 
 ### 決策標準
@@ -81,7 +80,7 @@ scrape_configs:
       - targets: ["prometheus-edge-asia-1.example.com:9090"]
 ```
 
-**之後補上的邊緣評估**：`da-tools rule-pack-split` 把 Rule Pack 拆成邊緣與中央兩份。輸入目錄 `my-packs/` 只放 `rule-pack-mariadb.yaml`：
+**邊緣評估**：`da-tools rule-pack-split` 把 Rule Pack 拆成邊緣與中央兩份。輸入目錄 `my-packs/` 只放 `rule-pack-mariadb.yaml`：
 
 ```bash
 da-tools rule-pack-split --rule-packs-dir my-packs/ --output-dir split-output/
@@ -117,11 +116,10 @@ da-tools rule-pack-split --rule-packs-dir my-packs/ --output-dir split-output/
 - 能較快推出多叢集支援，滿足多數情境。
 - 降低初期的運維負擔。
 - 為之後的邊緣 Exporter 架構先打好 API 與工具基礎。
-- 客戶可以漸進採用：先用中央架構，之後再依需要升級。切換步驟見 [Federation 整合指南 §8.5](../integration/federation-integration.md#85-從中央評估遷移到邊緣評估)。
+- 客戶可以漸進採用：先用中央架構，之後再依需要升級。
 
 **要承擔的**
 
-- 只支援中央架構的期間（v1.x），邊緣叢集需要自主運作的情境無法支援。
 - 若邊緣 Exporter 的需求很大，要面對部分重新設計。
 
 ## 考慮過的替代方案

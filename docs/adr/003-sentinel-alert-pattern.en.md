@@ -28,7 +28,7 @@ Tenants on the platform have three operational states:
 
 - **Normal**: alerts fire and are notified as usual.
 - **Silent**: alerts still fire, but no notification is sent.
-- **Maintenance**: during maintenance, no alert should be produced or recorded at all.
+- **Maintenance**: during maintenance, specific alerts are suppressed.
 
 We need a mechanism that lets a tenant's state switch dynamically with its settings, and that is easy to combine and easy to troubleshoot.
 
@@ -44,7 +44,7 @@ We need a mechanism that lets a tenant's state switch dynamically with its setti
 
 **Adopt the sentinel alert pattern: the exporter emits a tenant state flag → an alert rule produces a sentinel alert → an inhibit rule blocks notifications for the affected alerts.**
 
-This pattern handles states where alerts still fire and only the notification is blocked, i.e. Silent. Maintenance needs no alert to be produced at all, which an inhibit rule cannot do since it only blocks notifications, so Maintenance stays in PromQL (see "Out of scope" below).
+This pattern handles states where alerts still fire and only the notification is blocked, i.e. Silent.
 
 1. **Exporter**: threshold-exporter reads the tenant settings and emits a flag metric (`user_silent_mode`).
 2. **Prometheus**: alert rules in the Rule Pack read the flag and produce sentinel alerts (`TenantSilentWarning`, `TenantSilentCritical`).
@@ -105,7 +105,7 @@ Result: `shop`'s warning alerts still fire and stay in the TSDB (Prometheus's ti
 
 **Out of scope**
 
-- **Maintenance does not use this pattern.** It needs no alert to be produced, so it lives in PromQL: Rule Pack alert rules exclude tenants under maintenance with `unless on(tenant) (user_state_filter{filter="maintenance"} == 1)`, and a rule carrying this condition does not fire during maintenance, leaving no record in the TSDB. Not every alert rule carries this condition.
+- **Maintenance does not use this pattern.** Rule Pack alert rules exclude tenants under maintenance with `unless on(tenant) (user_state_filter{filter="maintenance"} == 1)`, and a rule carrying this condition does not fire during maintenance, leaving no record in the TSDB. Not every alert rule carries this condition.
 - **The severity-dedup sentinel (`TenantSeverityDedupEnabled`) is for displaying state only.** Deduplication itself is [ADR-001](./001-severity-dedup-via-inhibit.en.md)'s critical→warning inhibit rule, which does not use a sentinel as its source.
 
 **Operational advice**

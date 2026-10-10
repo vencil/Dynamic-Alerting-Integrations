@@ -34,7 +34,7 @@ updated_at: 2026-10-10
 
 - **Normal**：正常觸發告警、正常通知。
 - **Silent（靜默）**：告警照常觸發，但不送通知。
-- **Maintenance（維護）**：維護期間不該產生告警，也不留紀錄。
+- **Maintenance（維護）**：維護期間，特定告警被抑制。
 
 需要一個機制，讓租戶的狀態可以隨設定動態切換，而且容易組合、容易排查。
 
@@ -50,7 +50,7 @@ updated_at: 2026-10-10
 
 **採用 Sentinel 告警模式：exporter 輸出租戶狀態旗標 → 告警規則產生 sentinel 告警 → 抑制規則擋下相關告警的通知。**
 
-這個模式處理的是「告警照常觸發、只擋通知」的狀態，也就是 Silent。Maintenance 要的是根本不產生告警，抑制規則只能擋通知、做不到，所以 Maintenance 留在 PromQL 處理（見下方「不涵蓋的範圍」）。
+這個模式處理的是「告警照常觸發、只擋通知」的狀態，也就是 Silent。
 
 1. **exporter**：threshold-exporter 讀租戶設定，輸出旗標指標（`user_silent_mode`）。
 2. **Prometheus**：Rule Pack 裡的告警規則讀旗標，產生 sentinel 告警（`TenantSilentWarning`、`TenantSilentCritical`）。
@@ -111,7 +111,7 @@ Alertmanager 的抑制規則：
 
 **不涵蓋的範圍**
 
-- **Maintenance 不走這個模式。** 它要的是不產生告警，所以放在 PromQL：Rule Pack 的告警規則以 `unless on(tenant) (user_state_filter{filter="maintenance"} == 1)` 排除維護中的租戶，帶這個條件的規則在維護期間不觸發，TSDB 也沒有紀錄。不是每條告警規則都帶這個條件。
+- **Maintenance 不走這個模式。** Rule Pack 的告警規則以 `unless on(tenant) (user_state_filter{filter="maintenance"} == 1)` 排除維護中的租戶，帶這個條件的規則在維護期間不觸發，TSDB 也沒有紀錄。不是每條告警規則都帶這個條件。
 - **嚴重度去重的 sentinel（`TenantSeverityDedupEnabled`）只用來顯示狀態。** 去重本身是 [ADR-001](./001-severity-dedup-via-inhibit.md) 的 critical→warning 抑制規則，不以 sentinel 為來源。
 
 **運維建議**

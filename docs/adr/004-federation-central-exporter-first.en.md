@@ -10,11 +10,11 @@ lang: en
 
 > **Language / 語言：** **English (Current)** | [中文](004-federation-central-exporter-first.md)
 
-**Decision in brief**: multi-cluster deployments are supported first as "central exporter + edge Prometheus": one threshold-exporter runs in the central cluster and manages thresholds for every edge tenant, and alert rules are evaluated centrally. The "one exporter per edge cluster" architecture is deferred and added later.
+**Decision in brief**: multi-cluster deployments are supported first as "central exporter + edge Prometheus": one threshold-exporter runs in the central cluster and manages thresholds for every edge tenant, and alert rules are evaluated centrally. The "one exporter per edge cluster" architecture is deferred.
 
 ## Status
 
-✅ **Accepted** (v1.12.0) → **Extended** (v2.3.0: both architectures now implemented)
+✅ **Accepted** (v1.12.0) → **Extended** (v2.3.0)
 
 ## Terms
 
@@ -35,7 +35,6 @@ Enterprises usually spread workloads across several Kubernetes clusters and need
 **Edge Exporter + Central Aggregation**
 
 - Each edge cluster deploys its own threshold-exporter.
-- Data flow: edge Prometheus first evaluates the normalisation part of the Rule Packs locally, and sends only the recording-rule results to the centre via federation or `remote_write` for aggregation.
 - Complexity: N exporter instances, N configurations, plus central coordination logic.
 
 ### Decision Criteria
@@ -74,7 +73,7 @@ scrape_configs:
       - targets: ["prometheus-edge-asia-1.example.com:9090"]
 ```
 
-**Edge evaluation, added later**: `da-tools rule-pack-split` splits Rule Packs into an edge part and a central part. The input directory `my-packs/` contains only `rule-pack-mariadb.yaml`:
+**Edge evaluation**: `da-tools rule-pack-split` splits Rule Packs into an edge part and a central part. The input directory `my-packs/` contains only `rule-pack-mariadb.yaml`:
 
 ```bash
 da-tools rule-pack-split --rule-packs-dir my-packs/ --output-dir split-output/
@@ -110,11 +109,10 @@ The estimate at decision time was that the edge exporter architecture needed an 
 - Multi-cluster support ships sooner and covers most use cases.
 - Lower operational burden early on.
 - Lays the API and tooling groundwork for the later edge exporter architecture.
-- Customers can adopt gradually: start with the central architecture and upgrade later as needed. For the switch-over steps, see [Federation Integration Guide §8.5](../integration/federation-integration.en.md#85-migrating-from-central-evaluation-to-edge-evaluation).
+- Customers can adopt gradually: start with the central architecture and upgrade later as needed.
 
 **What we take on**
 
-- While only the central architecture was supported (v1.x), use cases needing edge clusters to operate autonomously were not supported.
 - If demand for edge exporters is high, part of the design has to be reworked.
 
 ## Alternatives Considered

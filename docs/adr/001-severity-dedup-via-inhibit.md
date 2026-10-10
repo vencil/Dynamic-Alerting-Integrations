@@ -105,7 +105,7 @@ inhibit_rules:
 **要承擔的**
 
 - Alertmanager 的設定變多，而且要和告警規則的標籤對齊：成對的告警缺 `metric_group`，或兩邊的值不同，抑制就不成立，會收到兩則通知。CI 會檢查同名成對的告警（`X` 與 `XCritical`）帶相同的 `metric_group`（`check_metric_group_pairs.py`）；名稱不成對的告警不在這個檢查的範圍內。
-- Kubernetes Rule Pack 目前有 4 對告警（`PodContainerHighCPU`、`PodContainerHighMemory`、`PodContainerCPUThrottled`、`ContainerOOMKilled` 與各自的 `…Critical`）兩邊都沒有 `metric_group`，去重對它們不生效，會收到兩則通知。上面的 CI 檢查把這 4 對列為已知例外，只擋新增的違規（[#1199](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/1199)）。
+- Kubernetes Rule Pack 目前有 4 對告警（`PodContainerHighCPU`、`PodContainerHighMemory`、`PodContainerCPUThrottled`、`ContainerOOMKilled` 與各自的 `…Critical`）兩邊都沒有 `metric_group`，去重對它們不生效，會收到兩則通知。上面的 CI 檢查把這 4 對列為已知例外，擋新增的違規（[#1199](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/1199)）。
 - 沒有 `metric_group` 標籤的告警不參與去重：抑制規則的來源與目標都要求 `metric_group=~".+"`。
 - 建議定期檢視 Alertmanager 的抑制狀態，確認符合預期。
 
