@@ -526,6 +526,29 @@ class TestCustomAlertDiff:
                 "_custom_alerts": recipes,
             }}}, f)
 
+    def test_removed_page_recipe_states_this_is_not_a_silencing_verdict(self, tmp_path):
+        """#1517：刪掉會 page 的 recipe，blast_radius 標 SILENCED，這裡只列 removed。
+        報告要自己寫明視野限制（不判定消音、不含繼承），不得對同一件事沉默。"""
+        old, new = tmp_path / "old", tmp_path / "new"
+        old.mkdir(), new.mkdir()
+        self._write(str(old), "db-b", [self._recipe("pager", mode="page")])
+        self._write(str(new), "db-b", [])
+        p = _run_cli(old, new)
+        assert p.returncode == 1, p.stdout + p.stderr
+        lines = p.stdout.splitlines()
+        section = lines.index("## Custom Alert Changes")
+        removed = next(i for i, l in enumerate(lines) if l.startswith("- `pager` (removed)"))
+        note = next(i for i, l in enumerate(lines) if "Not a silencing verdict" in l)
+        assert section < note < removed, (section, note, removed)
+        # The claims themselves, not keywords: a reworded "resolves inheritance"
+        # or "every silencing change is flagged" must turn this red.
+        for claim in ("does not resolve `_defaults.yaml` inheritance",
+                      "Only an in-place flip to a disabled threshold or `mode: silent` is flagged",
+                      "whether a removed recipe stops a page"):
+            assert claim in lines[note], (claim, lines[note])
+        # One blockquote, two paragraphs: under the warning, not glued to it.
+        assert lines[note].startswith("> ") and lines[note - 1] == ">", lines[note - 1:note + 1]
+
     def test_added_recipe(self):
         with tempfile.TemporaryDirectory() as old_dir, \
              tempfile.TemporaryDirectory() as new_dir:
