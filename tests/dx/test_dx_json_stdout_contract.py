@@ -462,10 +462,11 @@ RECIPES: list[Recipe] = [
 
     # ── tenant_verify  (--all on a duplicate-free tree → EXIT_PASS 0; a
     #    tenant declared in 2+ files makes --all exit 2 (#2093), pinned in
-    #    test_tenant_verify.py; inversion not exercised here) ─────────────
+    #    test_tenant_verify.py; inversion not exercised here; merged_hash
+    #    is read from da-guard, #1549) ───────────────────────────────────
     R("tenant_verify", "all-json",
       lambda t: ["--all", "--conf-d", str(SEED_CONF_D), "--json"],
-      expect_exit=EXIT_OK),
+      expect_exit=EXIT_OK, needs_da_guard=True),
 
     # ── verify_diff  (--check emits one doc; exit gates on unmapped tests) ──
     R("verify_diff", "check-json",
