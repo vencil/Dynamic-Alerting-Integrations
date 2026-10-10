@@ -60,14 +60,16 @@ def _repo(root: Path) -> Path:
     return repo
 
 
-def _run(root: Path, repo: Path, marker_text: str | None, pre_commit_install_rc: int = 0):
-    """Run the script; return (completed, marker text, {tool: [argument lines]})."""
+def _run(root: Path, repo: Path, marker_text: str | None, pre_commit_install_rc: int = 0,
+         pre_commit: bool = True):
+    """Run the script; return (completed, marker text, {tool: [argument lines]}).
+    `pre_commit=False` leaves no pre-commit anywhere on PATH."""
     marker = root / "marker"
     if marker_text is not None:
         marker.write_text(marker_text, encoding="utf-8")
     bindir = root / "bin"
     bindir.mkdir(exist_ok=True)
-    for tool in ("pip", "npm", "pre-commit"):
+    for tool in ("pip", "npm", "pre-commit") if pre_commit else ("pip", "npm"):
         rc = f'[ "$1" = install ] && exit {pre_commit_install_rc}\n' if tool == "pre-commit" else ""
         stub = bindir / tool
         stub.write_text(f'#!/bin/sh\necho "$*" >> "{root / tool}.calls"\n{rc}exit 0\n',
@@ -75,7 +77,9 @@ def _run(root: Path, repo: Path, marker_text: str | None, pre_commit_install_rc:
         stub.chmod(0o755)
     env = {**os.environ, "CLAUDE_CODE_REMOTE": "true", "CLAUDE_PROJECT_DIR": str(repo),
            "VIBE_SESSION_START_MARKER": str(marker),
-           "PATH": f"{bindir}{os.pathsep}{os.environ['PATH']}"}
+           "PATH": os.pathsep.join([str(bindir)] + [
+               d for d in os.environ["PATH"].split(os.pathsep)
+               if pre_commit or not (Path(d) / "pre-commit").exists()])}
     r = subprocess.run(  # subprocess-timeout: ignore
         [_BASH, ".claude/hooks/session-start.sh"], cwd=repo, env=env,
         capture_output=True, text=True, encoding="utf-8", errors="replace",
@@ -177,22 +181,53 @@ def test_a_refusal_skips_pre_commit_install_and_nothing_else(tmp_path, setup):
     assert sorted(p.name for p in watched.iterdir()) == before
 
 
-@pytest.mark.parametrize("state", ["last-run-failed", "no-commit-hook"])
+@pytest.mark.parametrize("state", [
+    "last-run-failed", "no-commit-hook", "no-pre-commit-on-PATH", "e2e-deps-gone"])
 def test_a_no_op_needs_every_condition(tmp_path, state):
-    """The no-op path is taken only after a RESULT=ok run with the commit hook
-    still in place; otherwise the whole script runs again."""
+    """The no-op path is taken only after a RESULT=ok run, with pre-commit on
+    PATH, the commit hook and the e2e deps still in place; otherwise the whole
+    script runs again."""
     repo = _repo(tmp_path)
     hooks = repo / ".git" / "hooks"
-    if state == "last-run-failed":
+    if state != "no-commit-hook":
         (hooks / "pre-commit").write_text("#!/bin/sh\n", encoding="utf-8")
-        marker_text = "RESULT=failed (not importable: mkdocs)\n"
-    else:
-        marker_text = "RESULT=ok\n"
+    if state == "e2e-deps-gone":
+        (repo / "tests" / "e2e").mkdir(parents=True)
+        (repo / "tests" / "e2e" / "package.json").write_text("{}\n", encoding="utf-8")
+    marker_text = ("RESULT=failed (not importable: mkdocs)\n" if state == "last-run-failed"
+                   else "RESULT=ok\n")
 
-    r, _, calls = _run(tmp_path, repo, marker_text)
+    r, _, calls = _run(tmp_path, repo, marker_text, pre_commit=state != "no-pre-commit-on-PATH")
 
     assert "already bootstrapped" not in r.stdout
-    assert calls["pip"] and _installs(calls["pre-commit"])
+    assert calls["pip"]
+    if state != "no-pre-commit-on-PATH":
+        assert _installs(calls["pre-commit"])
+
+
+@pytest.mark.parametrize("commit_hook", [True, False])
+def test_a_linked_worktree_no_ops_only_with_the_commit_hook(tmp_path, commit_hook):
+    """#2775: in a linked worktree `.git` is a file, so a literal
+    `.git/hooks/pre-commit` check never held and every start reran `npm ci`.
+    The commit hook is looked for where git keeps it, not taken for granted."""
+    repo = _repo(tmp_path)
+    wt = tmp_path / "wt"
+    subprocess.run(["git", "-C", str(repo), "worktree", "add", "-q", str(wt)],  # subprocess-timeout: ignore
+                   check=True)
+    assert (wt / ".git").is_file()
+    if commit_hook:
+        (repo / ".git" / "hooks" / "pre-commit").write_text("#!/bin/sh\n", encoding="utf-8")
+
+    r, marker, calls = _run(tmp_path, wt, "RESULT=ok\n")
+
+    if commit_hook:
+        assert r.returncode == 0, r.stdout + r.stderr
+        assert "already bootstrapped" in r.stdout, r.stdout + r.stderr
+        assert calls["pip"] == [] and calls["npm"] == []
+        assert _result(marker) == ["RESULT=ok"]
+    else:
+        assert "already bootstrapped" not in r.stdout
+        assert calls["pip"] and _installs(calls["pre-commit"])
 
 
 def test_a_failed_pre_commit_install_is_recorded(tmp_path):
