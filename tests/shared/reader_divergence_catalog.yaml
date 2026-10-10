@@ -50,8 +50,7 @@ entries:
     direction: go_stricter
     disposition: accept-document
     ref: https://github.com/vencil/Dynamic-Alerting-Integrations/issues/2759
-    # TODO(owner): 換成 #2759 上「以產生器為準」的簽核留言 URL。
-    sign_off: https://github.com/vencil/Dynamic-Alerting-Integrations/issues/2759
+    sign_off: https://github.com/vencil/Dynamic-Alerting-Integrations/issues/2759#issuecomment-6093354532
     expire_at: 2027-04-10
     count: 12
     example: 11508912abc9aa82
@@ -89,8 +88,7 @@ entries:
     direction: go_stricter
     disposition: accept-document
     ref: https://github.com/vencil/Dynamic-Alerting-Integrations/issues/2759
-    # TODO(owner): 換成 #2759 上「以產生器為準」的簽核留言 URL。
-    sign_off: https://github.com/vencil/Dynamic-Alerting-Integrations/issues/2759
+    sign_off: https://github.com/vencil/Dynamic-Alerting-Integrations/issues/2759#issuecomment-6093354532
     expire_at: 2027-04-10
     count: 19
     example: 1c9718cd114053b4
