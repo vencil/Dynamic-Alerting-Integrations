@@ -136,6 +136,34 @@ def test_control_degraded_without_tenant_rule_still_renders(
     assert "could NOT be verified" not in err
 
 
+def test_degraded_rule_that_excludes_platform_alerts_still_renders(
+        degraded, monkeypatch, capsys, tmp_path, tenant_dir):
+    """The fix the violation message itself recommends — `alert_source=""` on
+    the target — cannot reach a platform alert whatever the probe set holds,
+    so degradation must not refuse it."""
+    rule = {**_TENANT_RULE, "target_matchers": [
+        *_TENANT_RULE["target_matchers"], 'alert_source=""']}
+    rc, out = _render(monkeypatch, tmp_path, tenant_dir, rule)
+    err = capsys.readouterr().err
+    assert rc == EXIT_OK, err
+    assert out.exists()
+
+
+@pytest.mark.parametrize("matcher, unverifiable", [
+    ('alert_source=""', False),
+    ('alert_source!="platform"', False),
+    ('alert_source="platform"', True),      # pins platform alerts IN
+    ('alert_source=~"plat.*"', True),       # still matches platform
+    ('severity="critical"', True),          # says nothing about alert_source
+])
+def test_only_targets_that_reject_platform_are_exempt(
+        degraded, matcher, unverifiable):
+    rule = {**_TENANT_RULE, "target_matchers": [
+        *_TENANT_RULE["target_matchers"], matcher]}
+    got = _VALIDATE.find_unverifiable_tenant_triggered_inhibits([rule])
+    assert got == ([0] if unverifiable else [])
+
+
 # ── --apply ─────────────────────────────────────────────────────────────
 
 def _apply(monkeypatch, tmp_path, config_dir, rules):

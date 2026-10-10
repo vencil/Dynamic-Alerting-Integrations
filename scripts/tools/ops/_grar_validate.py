@@ -705,6 +705,24 @@ class PlatformProbeSetUnverifiable(Exception):
     """
 
 
+def _target_excludes_platform_alerts(rule: dict) -> bool:
+    """True iff a target matcher on ``alert_source`` rejects ``platform``.
+
+    Every platform identity carries ``alert_source="platform"`` by
+    construction (the derivation keeps only rules with that marker), so such a
+    target cannot suppress a platform alert whatever the probe set holds. It is
+    also the fix the silencing violation message tells operators to write.
+    """
+    for matcher in _inhibit_target_matchers(rule) or []:
+        parsed = _INHIBIT_MATCHER_RE.match(matcher)
+        if (parsed and parsed.group(1) == PLATFORM_ALERT_SOURCE_LABEL
+                and not _matcher_matches_labels(
+                    matcher, {PLATFORM_ALERT_SOURCE_LABEL:
+                              PLATFORM_ALERT_SOURCE_VALUE})):
+            return True
+    return False
+
+
 def find_unverifiable_tenant_triggered_inhibits(
         inhibit_rules: list[dict] | None,
         exempt: "list[dict] | tuple" = ()) -> list[int]:
@@ -716,7 +734,9 @@ def find_unverifiable_tenant_triggered_inhibits(
     operator-supplied rules (a base config, the cluster's existing config) are
     judged. "Tenant-triggered" is the predicate
     :func:`find_tenant_silenceable_platform_inhibits` uses: the source
-    matchers presence-gate ``tenant``.
+    matchers presence-gate ``tenant``. A rule whose target excludes
+    ``alert_source="platform"`` is skipped: no probe set is needed to know it
+    cannot reach a platform alert.
     """
     if not probe_set_is_degraded():
         return []
@@ -726,7 +746,8 @@ def find_unverifiable_tenant_triggered_inhibits(
         if not isinstance(rule, dict) or id(rule) in exempt_ids:
             continue
         sources = _inhibit_side_matchers(rule, "source")
-        if sources and _matchers_gate_label_present(sources, "tenant"):
+        if (sources and _matchers_gate_label_present(sources, "tenant")
+                and not _target_excludes_platform_alerts(rule)):
             out.append(i)
     return out
 
