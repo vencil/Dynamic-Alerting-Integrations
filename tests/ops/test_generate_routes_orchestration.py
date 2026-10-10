@@ -1653,7 +1653,8 @@ def _real_platform_label_sets():
     """Label sets of every SHIPPED platform alert, derived from the ConfigMap.
 
     Two sources of `tenant`, and the second is the one a rule-file reader misses:
-      * rule-level `labels.tenant` (TenantMetricsOverLimit), and
+      * rule-level `labels.tenant` (TenantMetricsOverLimit — a `{{ }}` template,
+        probed as a placeholder, #2817), and
       * a runtime label produced by the expr's `sum by (tenant)`
         (FederationRejectionRateAnomaly / FederationGatewayBackendErrors) — those
         rules' `labels:` blocks say nothing about tenant.
@@ -1672,7 +1673,8 @@ def _real_platform_label_sets():
     ConfigMap docs; that part stays here as a deliberately narrow second reader,
     and TestPlatformReaderParity is what makes the narrowness visible.
     """
-    from _grar_validate import _EXPR_TENANT_AGG_RE  # noqa: PLC0415
+    from _grar_validate import (  # noqa: PLC0415
+        _EXPR_TENANT_AGG_RE, _FIRE_TIME_LABEL_VALUE, _LABEL_TEMPLATE_RE)
     repo_root = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", ".."))
     path = os.path.join(
         repo_root, "k8s", "03-monitoring", "configmap-rules-platform.yaml")
@@ -1686,9 +1688,14 @@ def _real_platform_label_sets():
                 labels = dict(rule.get("labels") or {})
                 if labels.get("alert_source") != "platform":
                     continue  # Watchdog rides its own lane; guarded separately
+                # #2817: a `{{ ... }}` value is a fire-time unknown, probed the
+                # same way production does (imported, for the reason above).
+                labels = {k: _LABEL_TEMPLATE_RE.sub(_FIRE_TIME_LABEL_VALUE, v)
+                          if isinstance(v, str) else v
+                          for k, v in labels.items()}
                 labels["alertname"] = rule["alert"]
                 if _EXPR_TENANT_AGG_RE.search(str(rule.get("expr", ""))):
-                    labels.setdefault("tenant", "any-tenant")
+                    labels.setdefault("tenant", _FIRE_TIME_LABEL_VALUE)
                 out.append(labels)
     return out
 

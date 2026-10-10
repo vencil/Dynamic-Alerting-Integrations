@@ -473,6 +473,13 @@ def _warn_probe_set_degraded(reason: str, partial: bool = False) -> None:
 # the whole grammar of the thing being detected; enumerating what may precede it
 # only adds ways to be wrong.
 _EXPR_TENANT_AGG_RE = re.compile(r'\bby\s*\(\s*[^)]*\btenant\b\s*[,)]')
+# Probe value for a label whose value is only known when the alert fires (an
+# expr `by (tenant)` aggregation, or a `{{ ... }}` template in `labels:`). Same
+# spelling as the fallback constant, so the full set is never looser than it.
+_FIRE_TIME_LABEL_VALUE = "any-tenant"
+# One `{{ ... }}` action in a rule-level label value. Only the action is
+# replaced, so `"prefix-{{ $labels.x }}"` still probes as `prefix-…`.
+_LABEL_TEMPLATE_RE = re.compile(r"\{\{.*?\}\}", re.DOTALL)
 
 
 def _configmap_rule_bodies(doc: dict, skipped: "list[str] | None" = None):
@@ -605,9 +612,18 @@ def platform_alert_identities(
                             # unmarked alert is excluded for the same stated reason
                             # rather than by accident.
                             continue
+                        # #2817: a templated value (`tenant: "{{ $labels.tenant }}"`)
+                        # is only known at fire time. Probing with the template
+                        # string itself made every regex target on that label
+                        # miss, so the full set flagged LESS than the fallback.
+                        # Probe it like an expr-derived tenant instead.
+                        for key, value in labels.items():
+                            if isinstance(value, str):
+                                labels[key] = _LABEL_TEMPLATE_RE.sub(
+                                    _FIRE_TIME_LABEL_VALUE, value)
                         labels["alertname"] = rule["alert"]
                         if _EXPR_TENANT_AGG_RE.search(str(rule.get("expr", ""))):
-                            labels.setdefault("tenant", "any-tenant")
+                            labels.setdefault("tenant", _FIRE_TIME_LABEL_VALUE)
                         out.append(labels)
         # The fallback names are a known subset of the shipped pack, so one
         # missing from a non-empty read is a well-formed loss the skip count
