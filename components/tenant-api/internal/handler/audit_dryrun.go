@@ -26,7 +26,7 @@ package handler
 //	 1. PlatformAdminNonOrgScoped(bar)   → constant 403 (byte-identical P6)
 //	 2. ValidateTenantID                 → 400
 //	 3. query-param validation (strict)  → 400
-//	 4. bounded body read (d.MaxBody)
+//	 4. bounded body read (d.MaxBody)    → 413 over the cap
 //	 5. JSON shell / candidate.rbac_yaml presence → 400
 //	 6. rbac.ParseCandidateConfig        → 400 CANDIDATE_INVALID + detail
 //	 7. rule-count bound (maxCandidateRules) → 400
@@ -226,6 +226,7 @@ var dryRunCaveats = []string{
 // @Failure     400 {object} map[string]string
 // @Failure     401 {object} map[string]string
 // @Failure     403 {object} map[string]string
+// @Failure     413 {object} map[string]string
 // @Router      /api/v1/audit/tenants/{id}/access-report/dry-run [post]
 func DryRunTenantAccessReport(d *Deps) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {

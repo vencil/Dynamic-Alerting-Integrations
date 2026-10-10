@@ -295,12 +295,15 @@ func TestDryRun_AuthorizedCaller400s(t *testing.T) {
 		}
 	}
 
-	// Oversized body: a tight MaxBody truncates the read and the JSON shell
-	// rejects the torn document (tenant_validate.go LimitReader precedent).
+	// Oversized body: a tight MaxBody is a 413 naming the knob, not a
+	// truncated read whose torn JSON fails as a 400 (#2778).
 	small := &Deps{RBAC: d.RBAC, TenantOrg: d.TenantOrg, ClaimHeaders: d.ClaimHeaders, MaxBodyBytes: 64}
 	w := serveDryRun(t, small, dryrunTenantLabeled, "", "dryrun-platform-admins", "", valid)
-	if w.Code != http.StatusBadRequest {
-		t.Errorf("oversized body: status = %d, want 400; body=%s", w.Code, w.Body.String())
+	if w.Code != http.StatusRequestEntityTooLarge {
+		t.Errorf("oversized body: status = %d, want 413; body=%s", w.Code, w.Body.String())
+	}
+	if !strings.Contains(w.Body.String(), "TA_MAX_BODY_BYTES") {
+		t.Errorf("oversized body: 413 does not name TA_MAX_BODY_BYTES: %s", w.Body.String())
 	}
 }
 

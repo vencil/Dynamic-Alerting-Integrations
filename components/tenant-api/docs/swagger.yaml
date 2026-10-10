@@ -1393,6 +1393,12 @@ paths:
             additionalProperties:
               type: string
             type: object
+        "413":
+          description: Request Entity Too Large
+          schema:
+            additionalProperties:
+              type: string
+            type: object
       summary: 'What-if dry-run: diff a candidate _rbac.yaml''s access report (audit-only)'
       tags:
       - audit
@@ -1722,6 +1728,10 @@ paths:
           description: Conflict
           schema:
             $ref: '#/definitions/ErrorResponse'
+        "413":
+          description: Request Entity Too Large
+          schema:
+            $ref: '#/definitions/ErrorResponse'
         "500":
           description: Internal Server Error
           schema:
@@ -2012,6 +2022,12 @@ paths:
             TENANT_CONFIG_NOT_LOADABLE, config_error not_regular_file; nothing written)'
           schema:
             $ref: '#/definitions/ErrorResponse'
+        "413":
+          description: 'Payload too large: the body is over TA_MAX_BODY_BYTES (code
+            PAYLOAD_TOO_LARGE; nothing written). The body is refused whole, never
+            written truncated (#2778)'
+          schema:
+            $ref: '#/definitions/ErrorResponse'
         "500":
           description: Internal Server Error
           schema:
@@ -2115,6 +2131,10 @@ paths:
             $ref: '#/definitions/ErrorResponse'
         "409":
           description: Conflict
+          schema:
+            $ref: '#/definitions/ErrorResponse'
+        "413":
+          description: Request Entity Too Large
           schema:
             $ref: '#/definitions/ErrorResponse'
         "500":
@@ -2404,6 +2424,10 @@ paths:
           description: Bad Request
           schema:
             $ref: '#/definitions/ErrorResponse'
+        "413":
+          description: Request Entity Too Large
+          schema:
+            $ref: '#/definitions/ErrorResponse'
       summary: Validate tenant config
       tags:
       - tenants
@@ -2658,6 +2682,10 @@ paths:
             $ref: '#/definitions/ErrorResponse'
         "409":
           description: Conflict
+          schema:
+            $ref: '#/definitions/ErrorResponse'
+        "413":
+          description: Request Entity Too Large
           schema:
             $ref: '#/definitions/ErrorResponse'
         "500":
