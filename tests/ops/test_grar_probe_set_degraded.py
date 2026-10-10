@@ -427,6 +427,17 @@ _PARTIAL_SHAPES = {
     "undecodable-binarydata-key": dict(
         mutate_cm=lambda c: c.setdefault("binaryData", {}).__setitem__(
             "extra.yaml", "!!not base64!!")),
+    # a SECOND data key, so the first still yields alerts (partial, not empty)
+    "extra-rules-file-not-a-mapping": dict(
+        mutate_cm=lambda c: c["data"].__setitem__("extra.yaml", "- a\n- b\n")),
+    "extra-rules-file-groups-not-a-list": dict(
+        mutate_cm=lambda c: c["data"].__setitem__("extra.yaml",
+                                                  "groups: oops\n")),
+    "extra-rules-file-not-valid-yaml": dict(
+        mutate_cm=lambda c: c["data"].__setitem__("extra.yaml", "groups: [\n")),
+    "rule-with-neither-alert-nor-record": dict(
+        mutate_body=lambda b: b["groups"][0]["rules"][1].__setitem__(
+            "alrt", b["groups"][0]["rules"][1].pop("alert"))),
     # well-formed, so only the fallback-names check can see it
     "marker-removed-from-a-fallback-alert": dict(
         mutate_body=lambda b: _strip_marker(b, "ThresholdExporterDown")),

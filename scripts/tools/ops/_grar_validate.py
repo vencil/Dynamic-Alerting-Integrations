@@ -569,7 +569,13 @@ def platform_alert_identities(
         skipped: list[str] = []
         for doc in docs:
             for body in _configmap_rule_bodies(doc, skipped):
-                rules_doc = yaml.safe_load(body) or {}
+                # Per body: one unparseable key must not throw away what the
+                # other keys yielded (P1 keeps what was read).
+                try:
+                    rules_doc = yaml.safe_load(body) or {}
+                except yaml.YAMLError:
+                    skipped.append("a rules file that is not valid YAML")
+                    continue
                 if not isinstance(rules_doc, dict):
                     skipped.append("a rules file that is not a mapping")
                     continue
@@ -596,6 +602,12 @@ def platform_alert_identities(
                             skipped.append("a rule that is not a mapping")
                             continue
                         if "alert" not in rule:
+                            # A recording rule is a legitimate skip; a rule
+                            # with neither key is malformed (Prometheus needs
+                            # one) and may be an alert whose key was mistyped.
+                            if "record" not in rule:
+                                skipped.append("a rule with neither `alert` "
+                                               "nor `record`")
                             continue
                         labels = dict(rule.get("labels") or {})
                         if labels.get("alert_source") != "platform":
@@ -639,6 +651,9 @@ def platform_alert_identities(
             identities = tuple(out)
         else:
             reason = f"{path} yielded no platform alert"
+            if skipped:
+                reason += (f" ({len(skipped)} malformed element(s) skipped: "
+                           + ", ".join(sorted(set(skipped))) + ")")
             _warn_probe_set_degraded(reason)
             identities = PLATFORM_ALERT_IDENTITY_LABELS
     except (OSError, yaml.YAMLError, KeyError, StopIteration, AttributeError,
