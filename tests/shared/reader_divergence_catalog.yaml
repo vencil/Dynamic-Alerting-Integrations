@@ -1,41 +1,56 @@
-# 讀取端差異清單（ADR-036 第 2 步，policy 層）
+# 讀取端差異清單（ADR-036 第 2 步：policy 層與路由層）
 #
-# 產生器（純 Python PyYAML 的 _parse_config_files）是權威；Go 讀取端
-# （da-guard 的 ParseDomainPolicies、tenant-api 的 parseConfig）每一處與它
-# 不同的判讀，都必須在這裡有一筆記錄。差異本身由 Go 測試寫進
-# tests/shared/merge_key_go_verdicts.json（每列一個 corpus row id），本清單
-# 只負責「接受」它們。
+# 產生器（純 Python PyYAML）是權威；Go 讀取端每一處與它不同的判讀，都必須
+# 在這裡有一筆記錄。本清單只負責「接受」差異，差異本身來自兩處：
+#   - policy 層：da-guard 的 ParseDomainPolicies、tenant-api 的 parseConfig
+#     讀 `_domain_policy.yaml` 與 _parse_config_files 不同的列，由 Go 測試寫進
+#     tests/shared/merge_key_go_verdicts.json（每列一個 corpus row id）。
+#   - 路由層：tests/shared/routing_policy_parity_matrix.json 每個格子
+#     （樹 × 租戶）的 Go 欄位與 python_differs（產生器的值）不同的欄位；每個
+#     有斷言該欄位的 Go 半邊各算一筆差異（routingpolicy：pkg/routingpolicy
+#     的半邊，da-guard 與 tenant-api 共用的套件；da-guard；tenant-api）。
 #
 # 把關（tests/shared/test_reader_divergence_catalog.py）：
-#   - 快照裡每一列必須恰好被一筆記錄比中；沒比中、比中兩筆都紅。
-#   - 方向由測試計算（依兩邊實際執行的規則集合的包含關係），與 direction
-#     不同就紅——不靠人手寫。產生器以 --validate --strict 執行時會擋的檔
-#     （語料的 pyyaml_strict_blocks，取自產生器自己的結構化 finding）等同
-#     不可用：Go 既不拒收、也不回報會擋的問題，就是寬。
-#   - count 是比中列數的精確值；example 必須在比中的列裡；比中零列（差異
-#     已消失）也紅。清單一改，列數就出現在 diff 裡。
-#   - go_looser／value_differs 一律擋住 ADR-036 第二階段，必須逐列列出
-#     （match.rows），處置只能是 fix-pending。
+#   - 每一筆差異必須恰好被一筆記錄比中；沒比中、比中兩筆都紅。
+#   - 方向由測試計算，與 direction 不同就紅——不靠人手寫。policy 層依兩邊
+#     實際執行的規則集合的包含關係；產生器以 --validate --strict 執行時會擋
+#     的檔（語料的 pyyaml_strict_blocks）等同不可用：Go 既不拒收、也不回報
+#     會擋的問題，就是寬。路由層：產生器擋下／拒收／丟棄而 Go 沒有是寬，
+#     反過來是嚴，其餘的值不同（例如 targets 不同）是 value_differs。
+#   - tenant-api 拒收產生器照讀（且 --strict 不擋）的 policy 檔是
+#     go_refuses，不算嚴：拒收後 watcher 沿用該檔上一份可用內容（可能是舊
+#     policy），從未成功過則 policy 不可用——寫入回 503，但開了
+#     --policy-unavailable-open 就一律放行。所以每筆 go_refuses 的簽核必須
+#     交代這兩種情況。產生器也擋（丟檔或 --strict 擋）的檔被拒收，是兩邊
+#     同判，不是差異。
+#   - count 是精確值；example 必須在比中的列裡；比中零列或零格（差異已消
+#     失）、列出的列或格已不再是差異，都紅。清單一改，數字就出現在 diff 裡。
+#   - go_looser／value_differs 一律擋住 ADR-036 第二階段，必須逐列（policy
+#     層 match.rows）或逐格（路由層 match.cells）列出，處置只能是
+#     fix-pending。
 #   - expire_at 過期：一般 PR CI 只警告；`make pre-tag`（或設
 #     READER_DIVERGENCE_STRICT_EXPIRY=1）時失敗。
 #
 # 欄位：
 #   id:          記錄名稱，唯一
-#   reader:      da-guard | tenant-api
-#   layer:       policy（路由層的差異在 PR-C 加入）
-#   match:       {shape: <corpus shape>}（該 reader 在快照裡屬於此 shape 的
-#                所有列；只給 go_stricter 用）或 {rows: [<row id>, ...]}
-#   mechanism:   差異的成因
-#   direction:   go_looser | go_stricter | value_differs（由測試核對）
-#   disposition: accept-document（只限 go_stricter，需 sign_off）| fix-pending
+#   reader:      policy 層 da-guard | tenant-api；路由層 routingpolicy |
+#                da-guard | tenant-api
+#   layer:       policy | routing
+#   match:       policy 層：{shape: <corpus shape>}（該 reader 在快照裡屬於此
+#                shape 的所有列；`seeded` 指沒有 shape 的固定種子列）、
+#                {shape: ..., verdict: unusable}（其中 Go 判為 unusable 的列）
+#                或 {rows: [<row id>, ...]}；shape 只給 go_stricter／go_refuses。
+#                路由層：{cells: [[<tree>, <tenant>, <field>], ...]}，field 是
+#                python_differs 的欄位，且必須是該 reader 有斷言的欄位。
+#   mechanism:   差異的成因（go_refuses 另須寫明拒收的後果）
+#   direction:   go_looser | go_stricter | go_refuses | value_differs（由測試核對）
+#   disposition: accept-document（只限 go_stricter／go_refuses，需 sign_off）|
+#                fix-pending
 #   ref:         追蹤票 URL
 #   sign_off:    owner「以產生器為準」簽核留言的 URL（測試只能檢查格式）
 #   expire_at:   到期日（ISO 日期）
-#   count:       比中的列數（精確值）
-#   example:     比中的列之一（row id）
-#
-# tenant-api 的拒收目前一律放行、不記錄（parseConfig 可拒收任何一列）；
-# 它另立方向 go_refuses，在 PR-C 處理。
+#   count:       比中的列數或列出的格數（精確值）
+#   example:     policy 層必填：比中的列之一（row id）；路由層已逐格列出，不填
 
 entries:
   # --- da-guard：比產生器嚴（拒收產生器照讀的檔）---------------------------
@@ -287,3 +302,244 @@ entries:
     expire_at: 2027-01-10
     count: 2
     example: 2cef6e43436d0cac
+
+  # --- tenant-api：拒收產生器照讀的 policy 檔（go_refuses）--------------------
+  # 拒收的後果（每筆 mechanism 都寫明，簽核時必須交代）：
+  #   - watcher（fileWiseParser，每 30 秒重讀）：拒收的那一份檔改用它上一份
+  #     可用內容，另一份 policy 檔（.yaml／.yml）不受影響。上一份可能是舊
+  #     policy：新版的收緊不生效，tenant-api 照舊版放行寫入。
+  #   - 從未成功解析過（例如啟動時就是這份）：該檔不可用。direct 模式下，
+  #     policy 判定的寫入（PUT /tenants/{id}、批次的路由 op）回 503
+  #     POLICY_UNAVAILABLE；若設了 --policy-unavailable-open（或
+  #     TA_POLICY_UNAVAILABLE_OPEN），這些寫入一律放行、完全不判 policy，只記
+  #     log 與 tenant_api_policy_unavailable_open_total。
+  #   - PR 模式（LoadSnapshot）：整份拒收，寫入被拒。
+  # TODO(owner): 以下五筆的 sign_off 是佔位（#2759 本身，不是簽核留言）。請在
+  # #2759 留下「以產生器為準、接受」並交代上面兩種情況的簽核，再把 sign_off
+  # 換成該留言的 URL。
+  - id: tenant-api-refuses-merge-key-spelling
+    reader: tenant-api
+    layer: policy
+    match: {shape: seeded, verdict: unusable}
+    mechanism: >-
+      檔中任何位置有 PyYAML 當成 merge、字面卻不是 `<<` 的 key（`!!merge q:`、
+      以 alias `*k` 當 key 指向 `<<`）。tenant-api 的 DomainPoliciesShapeError
+      整份拒收（yaml.v3 自己的 merge 與產生器不同，#2663、#2677 R1），產生器
+      照讀並執行。後果：watcher 改用該檔上一份可用內容（可能是舊 policy）；
+      從未成功過則 policy 不可用，direct 模式寫入回 503，設了
+      --policy-unavailable-open 則一律放行、不判 policy；PR 模式拒絕寫入。
+    direction: go_refuses
+    disposition: accept-document
+    ref: https://github.com/vencil/Dynamic-Alerting-Integrations/issues/2759
+    sign_off: https://github.com/vencil/Dynamic-Alerting-Integrations/issues/2759  # TODO(owner)
+    expire_at: 2027-04-10
+    count: 48
+    example: 039f41da96df341d
+
+  - id: tenant-api-refuses-fuzz
+    reader: tenant-api
+    layer: policy
+    match: {shape: fuzz-looser-only, verdict: unusable}
+    mechanism: >-
+      固定種子的混合語料裡 tenant-api 拒收、產生器照讀的列：多數是 non-specific
+      tag 寫成的 null key（`! "null"`，產生器讀成 null 後丟掉該 key，tenant-api
+      無法照產生器的讀法讀），另有 merge-tagged mapping 與 `!!null x` 各一列。
+      後果：watcher 改用該檔上一份可用內容（可能是舊 policy）；從未成功過則
+      policy 不可用，direct 模式寫入回 503，設了 --policy-unavailable-open 則
+      一律放行、不判 policy；PR 模式拒絕寫入。
+    direction: go_refuses
+    disposition: accept-document
+    ref: https://github.com/vencil/Dynamic-Alerting-Integrations/issues/2759
+    sign_off: https://github.com/vencil/Dynamic-Alerting-Integrations/issues/2759  # TODO(owner)
+    expire_at: 2027-04-10
+    count: 44
+    example: 041e8e8592d87b9c
+
+  - id: tenant-api-refuses-omap-pairs-item-model
+    reader: tenant-api
+    layer: policy
+    match: {shape: known-stricter-2759, verdict: unusable}
+    mechanism: >-
+      與 da-guard-omap-pairs-item-model 同源：模擬 PyYAML 建構 `!!omap` /
+      `!!pairs` 項目時不照它的建構順序，判為「PyYAML 建不出來」而整份拒收，
+      產生器其實照讀。後果：watcher 改用該檔上一份可用內容（可能是舊
+      policy）；從未成功過則 policy 不可用，direct 模式寫入回 503，設了
+      --policy-unavailable-open 則一律放行、不判 policy；PR 模式拒絕寫入。
+    direction: go_refuses
+    disposition: accept-document
+    ref: https://github.com/vencil/Dynamic-Alerting-Integrations/issues/2759
+    sign_off: https://github.com/vencil/Dynamic-Alerting-Integrations/issues/2759  # TODO(owner)
+    expire_at: 2027-04-10
+    count: 12
+    example: 11508912abc9aa82
+
+  - id: tenant-api-refuses-nonspecific-null-key
+    reader: tenant-api
+    layer: policy
+    match: {shape: e-reader-stricter, verdict: unusable}
+    mechanism: >-
+      domain_policies 下有 non-specific tag 寫成的 null key（`! "null": ...`）。
+      產生器讀成 null key 並丟掉，照常執行其餘 domain；tenant-api 無法照這個
+      讀法讀，整份拒收。後果：watcher 改用該檔上一份可用內容（可能是舊
+      policy）；從未成功過則 policy 不可用，direct 模式寫入回 503，設了
+      --policy-unavailable-open 則一律放行、不判 policy；PR 模式拒絕寫入。
+    direction: go_refuses
+    disposition: accept-document
+    ref: https://github.com/vencil/Dynamic-Alerting-Integrations/issues/2759
+    sign_off: https://github.com/vencil/Dynamic-Alerting-Integrations/issues/2759  # TODO(owner)
+    expire_at: 2027-04-10
+    count: 3
+    example: 214363641fd21f0f
+
+  - id: tenant-api-refuses-nonspecific-scalar-policy
+    reader: tenant-api
+    layer: policy
+    match: {shape: s6-nonspecific-value, verdict: unusable}
+    mechanism: >-
+      一個 domain 或它的 constraints 寫成 non-specific tag 的引號 scalar
+      （`fin: ! '~'`、`constraints: ! "null"`）。PyYAML 讀成字串，產生器跳過該
+      domain（或不執行其 constraints），其餘照常；yaml.v3 無法把它 decode 進
+      struct，tenant-api 整份拒收。後果：watcher 改用該檔上一份可用內容（可能
+      是舊 policy）；從未成功過則 policy 不可用，direct 模式寫入回 503，設了
+      --policy-unavailable-open 則一律放行、不判 policy；PR 模式拒絕寫入。
+    direction: go_refuses
+    disposition: accept-document
+    ref: https://github.com/vencil/Dynamic-Alerting-Integrations/issues/2759
+    sign_off: https://github.com/vencil/Dynamic-Alerting-Integrations/issues/2759  # TODO(owner)
+    expire_at: 2027-04-10
+    count: 4
+    example: 535e6be2fbb1fcf3
+
+  # --- 路由層：租戶檔的 `!!merge` key（#2700，擋住第二階段）------------------
+  # 樹 tenant-merge-tag-key-2700：t1 寫 `!!merge q:`（#2700 原始重現），t2 寫
+  # `!!merge _routing:`（換成已知 key，tenant-api 的 PUT 就放行）。
+  - id: routingpolicy-2700-targets
+    reader: routingpolicy
+    layer: routing
+    match:
+      cells:
+        - [tenant-merge-tag-key-2700, t1, targets]
+        - [tenant-merge-tag-key-2700, t2, targets]
+    mechanism: >-
+      #2700：PyYAML 把任何帶 `!!merge` tag 的 key 當 merge key，把裡面的
+      _routing 併進租戶，渲染出 slack receiver；Go 讀取端的 yaml.v3 只認字面
+      `<<`，把它當普通 key：t1 沒有 _routing（targets null），t2 的 _routing
+      是一個沒有 receiver 的 mapping（targets []）。
+    direction: value_differs
+    disposition: fix-pending
+    ref: https://github.com/vencil/Dynamic-Alerting-Integrations/issues/2700
+    expire_at: 2027-01-10
+    count: 2
+
+  - id: routingpolicy-2700-policy
+    reader: routingpolicy
+    layer: routing
+    match:
+      cells:
+        - [tenant-merge-tag-key-2700, t1, policy]
+        - [tenant-merge-tag-key-2700, t2, policy]
+    mechanism: >-
+      #2700：產生器以 --strict 擋下併進來的 slack receiver（domain 禁用
+      slack）；pkg/routingpolicy 看不到這份 _routing，沒有任何違規。
+    direction: go_looser
+    disposition: fix-pending
+    ref: https://github.com/vencil/Dynamic-Alerting-Integrations/issues/2700
+    expire_at: 2027-01-10
+    count: 2
+
+  - id: da-guard-2700-policy
+    reader: da-guard
+    layer: routing
+    match:
+      cells:
+        - [tenant-merge-tag-key-2700, t1, policy]
+        - [tenant-merge-tag-key-2700, t2, policy]
+    mechanism: >-
+      #2700：產生器 --validate --strict 回報 slack 被禁用、rc 1；da-guard 讀不到
+      併進來的 _routing，沒有 domain_policy_violation，rc 0。
+    direction: go_looser
+    disposition: fix-pending
+    ref: https://github.com/vencil/Dynamic-Alerting-Integrations/issues/2700
+    expire_at: 2027-01-10
+    count: 2
+
+  - id: tenant-api-2700-put
+    reader: tenant-api
+    layer: routing
+    match:
+      cells:
+        - [tenant-merge-tag-key-2700, t2, tenant_api]
+    mechanism: >-
+      #2700：PUT t2 的租戶檔原文（`!!merge _routing:`），產生器會因 slack 被禁用
+      而擋（403）；tenant-api 讀到的 _routing 沒有 receiver，照常寫入。t1 的
+      `!!merge q:` 剛好因 `q` 不是 defaults 裡的閾值鍵被 400 擋下（與 policy
+      無關），不列入。
+    direction: go_looser
+    disposition: fix-pending
+    ref: https://github.com/vencil/Dynamic-Alerting-Integrations/issues/2700
+    expire_at: 2027-01-10
+    count: 1
+
+  # --- 路由層：被蓋掉的 merge 來源裡有建不出來的值（#2713，擋住第二階段）----
+  # 樹 tenant-merge-overridden-unconstructable-2713：t1 寫
+  # `<<: {_routing: !!bool y}`，自己又寫了 _routing。
+  - id: routingpolicy-2713-targets
+    reader: routingpolicy
+    layer: routing
+    match:
+      cells:
+        - [tenant-merge-overridden-unconstructable-2713, t1, targets]
+    mechanism: >-
+      #2713：PyYAML 先建構所有 merge 來源的 pair 再合併，`!!bool y` 建不出來，
+      產生器讀不了 t1.yaml、整棵樹拒收（沒有任何渲染）；yaml.v3 跳過被 t1 自己
+      的 _routing 蓋掉的值，渲染出 pagerduty receiver。
+    direction: value_differs
+    disposition: fix-pending
+    ref: https://github.com/vencil/Dynamic-Alerting-Integrations/issues/2713
+    expire_at: 2027-01-10
+    count: 1
+
+  - id: routingpolicy-2713-refused
+    reader: routingpolicy
+    layer: routing
+    match:
+      cells:
+        - [tenant-merge-overridden-unconstructable-2713, t1, refused]
+    mechanism: >-
+      #2713：產生器以 tenant_file_unreadable 拒收整棵樹（rc 1）；
+      pkg/routingpolicy 照常讀出 t1 的路由，沒有任何拒收。
+    direction: go_looser
+    disposition: fix-pending
+    ref: https://github.com/vencil/Dynamic-Alerting-Integrations/issues/2713
+    expire_at: 2027-01-10
+    count: 1
+
+  - id: da-guard-2713-refused
+    reader: da-guard
+    layer: routing
+    match:
+      cells:
+        - [tenant-merge-overridden-unconstructable-2713, t1, refused]
+    mechanism: >-
+      #2713：產生器 --validate --strict 報「config file could not be read」、
+      rc 1；da-guard 讀得了整棵樹，沒有 parse_failed、沒有 finding，rc 0。
+    direction: go_looser
+    disposition: fix-pending
+    ref: https://github.com/vencil/Dynamic-Alerting-Integrations/issues/2713
+    expire_at: 2027-01-10
+    count: 1
+
+  - id: tenant-api-2713-put
+    reader: tenant-api
+    layer: routing
+    match:
+      cells:
+        - [tenant-merge-overridden-unconstructable-2713, t1, tenant_api]
+    mechanism: >-
+      #2713：PUT t1 的租戶檔原文，產生器讀不了這份檔（400 等級的拒收）；
+      tenant-api 照常寫入。
+    direction: go_looser
+    disposition: fix-pending
+    ref: https://github.com/vencil/Dynamic-Alerting-Integrations/issues/2713
+    expire_at: 2027-01-10
+    count: 1

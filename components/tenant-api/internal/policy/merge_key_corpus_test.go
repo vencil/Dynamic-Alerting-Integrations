@@ -7,19 +7,23 @@ package policy
 // tests/shared/test_merge_key_policy_corpus.py, then the deterministic
 // `shape` rows of hub #2486 (PR-7c/7d) and #2759 (A, F, K1, N).
 //
-// parseConfig must read what PyYAML reads, or exactly what
+// parseConfig must say what PyYAML says, or exactly what
 // tests/shared/merge_key_go_verdicts.json records for that row under
-// "tenant-api" (ADR-036 step 2), or refuse the file — for every row, a
-// `nonspecific_tag` row included. Refusing is still excused wholesale (the
-// watcher keeps the last good file) and is not recorded; refusals get a
-// direction of their own in a later step (ADR-036 step 2, PR-C). Every row
-// parseConfig READS differently from PyYAML is recorded, and which way it
-// leans and which catalog entry accepts it is decided once, in Python:
+// "tenant-api" (ADR-036 step 2) — for every row, a `nonspecific_tag` row
+// included. A refusal is a verdict like any other: "unusable". Refusing a
+// file the generator also drops, or blocks on under --validate --strict
+// (`pyyaml_strict_blocks`), is PyYAML's own verdict and is not recorded;
+// refusing a file the generator reads is recorded "unusable", which the
+// Python side ranks `go_refuses` — not go_stricter: the watcher then serves
+// that file's last good content (or none), and with none
+// --policy-unavailable-open lets writes through. Every row parseConfig reads
+// or refuses differently from PyYAML is recorded, and which way it leans and
+// which catalog entry accepts it is decided once, in Python:
 // tests/shared/test_reader_divergence_catalog.py against
 // tests/shared/reader_divergence_catalog.yaml. A changed verdict — a new
-// difference, or a recorded one that healed or is now refused — is red
-// here until the snapshot is regenerated (which rewrites only the
-// "tenant-api" entries):
+// difference, or a recorded one that healed or changed — is red here until
+// the snapshot is regenerated (which rewrites only the "tenant-api"
+// entries):
 //
 //	UPDATE_GO_VERDICTS=1 go test ./internal/policy/ -run TestMergeKeyCorpus -count=1
 //
@@ -290,7 +294,7 @@ func tenantAPIVerdict(t *testing.T, cfg *DomainPolicyConfig) string {
 	return canonicalVerdict(t, got)
 }
 
-func TestMergeKeyCorpus_ParseConfigIsPyYAMLsOrRecordedOrRefuses(t *testing.T) {
+func TestMergeKeyCorpus_ParseConfigIsPyYAMLsOrRecorded(t *testing.T) {
 	t.Parallel()
 	raw, err := os.ReadFile(sharedTestFile("merge_key_policy_corpus.json"))
 	if err != nil {
@@ -313,8 +317,8 @@ func TestMergeKeyCorpus_ParseConfigIsPyYAMLsOrRecordedOrRefuses(t *testing.T) {
 	recorded := snap.Readers[goVerdictsReader]
 	update := os.Getenv("UPDATE_GO_VERDICTS") != ""
 	// No row is skipped (hub #2486 Q7-2): a `nonspecific_tag` row — the
-	// non-specific tag `!` the vendored yaml.v3 keeps — must be read as PyYAML
-	// reads it or as recorded, or refused.
+	// non-specific tag `!` the vendored yaml.v3 keeps — must be read (or
+	// refused) as PyYAML reads it, or as recorded.
 	differ := map[string]json.RawMessage{}
 	seen := map[string]bool{}
 	refused, bad, matched := 0, 0, 0
@@ -335,23 +339,20 @@ func TestMergeKeyCorpus_ParseConfigIsPyYAMLsOrRecordedOrRefuses(t *testing.T) {
 				i, row.Shape, len(row.Doc), time.Since(start), err)
 		}
 		rec, isRecorded := recorded[row.ID]
+		// A refusal is the verdict "unusable" (ADR-036 step 2, PR-C): equal
+		// to PyYAML's when the generator drops or strict-blocks the file,
+		// else a recorded difference (go_refuses on the Python side).
+		var got string
 		if err != nil {
 			refused++
 			refusedBy[class]++
-			// Refusing is excused (the watcher keeps the last good file) —
-			// but a recorded read that is now a refusal is a stale entry.
-			if isRecorded && !update {
-				bad++
-				badBy[class]++
-				t.Errorf("row %d %s [%s]: parseConfig refuses the file, the snapshot records a read %s;"+
-					" regenerate with UPDATE_GO_VERDICTS=1", i, row.ID, class, rec)
-			}
-			continue
+			got = canonicalVerdict(t, "unusable")
+		} else {
+			got = tenantAPIVerdict(t, cfg)
 		}
-		got := tenantAPIVerdict(t, cfg)
 		if got != pyVerdict {
 			differ[row.ID] = json.RawMessage(got)
-		} else if pyVerdict != `{}` {
+		} else if pyVerdict != `{}` && pyVerdict != `"unusable"` {
 			matched++
 		}
 		want := pyVerdict
@@ -409,6 +410,6 @@ func TestMergeKeyCorpus_ParseConfigIsPyYAMLsOrRecordedOrRefuses(t *testing.T) {
 	if matched < 80 {
 		t.Errorf("only %d of %d rows enforce a policy parseConfig reads the same — near-vacuous", matched, len(c.Rows))
 	}
-	t.Logf("%d rows compared, %d refused by parseConfig, %d enforcing rows read the same, %d read differently (recorded)",
+	t.Logf("%d rows compared, %d refused by parseConfig, %d enforcing rows read the same, %d differ (recorded)",
 		len(c.Rows), refused, matched, len(differ))
 }

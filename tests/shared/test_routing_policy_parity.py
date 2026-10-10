@@ -48,7 +48,16 @@ What this half measures, per tree written to a tmp dir:
   `targets` column pins that the generator renders nothing from those bytes.
 
 A cell's `python_differs` replaces the Go value where the YAML readers
-disagree (see the matrix `_comment`).
+disagree (see the matrix `_comment`): `targets`, `policy`, `rejected_routes`,
+`group_by_invalid` and `refused` are asserted against it here, and its
+`tenant_api` (the verdict the generator would give the PUT) against what this
+reader found (`_generator_put`). Every field where it differs from the Go
+column is a reader difference that tests/shared/test_reader_divergence_catalog.py
+ranks and matches to a `layer: routing` entry of
+tests/shared/reader_divergence_catalog.yaml (ADR-036 step 2, PR-C). A tree
+the generator refuses whole because a tenant file cannot be read
+(`tenant_file_errors`, #1460: rc 1, nothing rendered) is one only through
+that: every tenant's `python_differs.refused` is `tenant_file_unreadable`.
 """
 from __future__ import annotations
 
@@ -101,7 +110,11 @@ BATCH_KEYS = {"patch", "verdict"}
 # B2 (#2341): the keys a batch op may remove (tenant-api's unsetAllowedKeys).
 BATCH_OPTIONAL_KEYS = {"unset"}
 BATCH_UNSET_KEYS = {"_routing"}
-DIFFERS_KEYS = {"reason", "targets", "policy", "rejected_routes", "group_by_invalid"}
+DIFFERS_KEYS = {"reason", "targets", "policy", "rejected_routes", "group_by_invalid", "refused",
+                "tenant_api"}
+# The generator's refusals: the Go readers' kinds, and (python_differs only)
+# a tenant file it cannot read, which refuses the whole tree.
+DIFFERS_REFUSED_KINDS = REFUSED_KINDS | {"tenant_file_unreadable"}
 CONSTRAINTS = {"forbidden_receiver_types", "allowed_receiver_types"}
 
 # One receiver-type violation line of check_domain_policies. `ref` is absent
@@ -254,6 +267,10 @@ def test_matrix_keys_are_exactly_the_known_ones() -> None:
                             and not set(unset) & set(batch["patch"])), where
             differs = want["python_differs"]
             assert differs is None or (set(differs) == DIFFERS_KEYS and differs["reason"]), where
+            if differs is not None:
+                assert differs["refused"] is None or differs["refused"] in DIFFERS_REFUSED_KINDS, where
+                assert differs["refused"] is None or differs["targets"] is None, where
+                assert differs["tenant_api"] is None or set(differs["tenant_api"]) == TENANT_API_KEYS, where
             assert want["refused"] is None or want["refused"] in REFUSED_KINDS, where
             assert want["refused"] is None or want["targets"] is None, where
             esc = want["escalation"]
@@ -356,11 +373,27 @@ def _want(want: dict, key: str):
     return differs[key] if differs is not None else want[key]
 
 
+def _generator_put(want: dict, refused: str | None, policy_rows: list, esc: dict | None) -> dict | None:
+    """The tenant_api cell as the generator would judge that PUT, for a cell
+    with python_differs: where it refuses the tenant's own file — the file
+    cannot be read (400) or its routing breaks a domain policy (403) — and
+    tenant-api lets the PUT through, the generator's code; else (it refuses
+    nothing, or both refuse) tenant-api's own cell: no difference."""
+    api = want["tenant_api"]
+    gen = None
+    if refused == "tenant_file_unreadable":
+        gen = "400"
+    elif policy_rows or (esc is not None and esc["verdict"] == "violation"):
+        gen = "403"
+    if gen is None or api is None or api["put"] != "ok":
+        return api
+    return {**api, "put": gen}
+
+
 @pytest.mark.parametrize("tree", MATRIX["trees"], ids=lambda t: t["name"])
 def test_python_reader_matches_the_table(tree, tmp_path: Path) -> None:
     _build(tree, tmp_path)
     got = load_tenant_tree(str(tmp_path), strict_policies=True)
-    assert not got.tenant_file_errors, (tree["name"], got.tenant_file_errors)
     policies = _parse_config_files(str(tmp_path))["domain_policies"]
 
     rows = _policy_rows(got.schema_warnings)
@@ -370,6 +403,13 @@ def test_python_reader_matches_the_table(tree, tmp_path: Path) -> None:
     refused.update({ast.literal_eval(m["repr"]): "invalid_tenant_id"
                     for m in map(_INVALID_TENANT_ID.search, got.schema_warnings) if m})
     assert set(refused) <= set(tree["expect"]), (tree["name"], refused)
+    # A tenant file the generator cannot read refuses the whole tree (#1460,
+    # rc 1, nothing rendered) — a reader difference (#2713) that only
+    # python_differs can carry: every tenant's refusal is that one.
+    unreadable = [f for f, _reason in got.tenant_file_errors]
+    assert set(unreadable) <= set(tree["files"]), (tree["name"], got.tenant_file_errors)
+    if unreadable:
+        refused = dict.fromkeys(tree["expect"], "tenant_file_unreadable")
     for tenant, want in tree["expect"].items():
         where = (tree["name"], tenant)
         rc = got.routing_configs.get(tenant)
@@ -385,9 +425,12 @@ def test_python_reader_matches_the_table(tree, tmp_path: Path) -> None:
         mine = sorted((d, r, c) for t, d, r, c in rows if t == tenant)
         assert mine == sorted(tuple(p) for p in _want(want, "policy")), (where, mine)
         assert unknown.get(tenant) == want["unknown_profile"], (where, unknown)
-        assert refused.get(tenant) == want["refused"], (where, refused)
+        assert refused.get(tenant) == _want(want, "refused"), (where, refused)
         esc = _escalation(tenant, rc, _requiring_domains(policies, tenant), got.schema_warnings)
         assert esc == want["escalation"], (where, esc)
+        if want["python_differs"] is not None:
+            api = _generator_put(want, refused.get(tenant), mine, esc)
+            assert want["python_differs"]["tenant_api"] == api, (where, api)
 
     # Platform-file findings: the table's rows, and no other.
     got_platform = sorted(
