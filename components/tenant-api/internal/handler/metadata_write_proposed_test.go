@@ -15,10 +15,9 @@ import (
 // production, committed into dev.
 //
 // The org axis is NOT exposed this way (org membership lives in the admin-only
-// _tenant_orgs.yaml, a separate file this path cannot write), and neither is
-// the batch path (it refuses to overwrite a structured key like `_metadata`
-// with a scalar patch). Whole-file PUT is the exposed shape, so that is what
-// these tests pin.
+// _tenant_orgs.yaml, a separate file this path cannot write). These tests pin
+// whole-file PUT; the batch path's scalar shapes (`_profile`, a string
+// `_metadata`, #2830) are pinned in batch_metadata_post_state_test.go.
 
 func proposedTestCfg() *rbac.RBACConfig {
 	return &rbac.RBACConfig{Groups: []rbac.GroupRule{{
