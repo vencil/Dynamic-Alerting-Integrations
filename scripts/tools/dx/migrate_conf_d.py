@@ -75,6 +75,22 @@ def _extract_metadata(data: dict) -> dict | None:
     return None
 
 
+_PATH_FIELDS = ("domain", "region", "environment")
+
+
+def _unplaceable_reason(meta) -> str:
+    """Why a non-empty `_metadata` cannot place its file, or "" when it can:
+    it is not a mapping (e.g. the string form), or a path field is not a
+    string. The text names the shape, never the value."""
+    if not isinstance(meta, dict):
+        return f"_metadata is not a mapping ({type(meta).__name__})"
+    for field in _PATH_FIELDS:
+        value = meta.get(field, "")
+        if not isinstance(value, str):
+            return f"_metadata.{field} is not a string ({type(value).__name__})"
+    return ""
+
+
 def plan_migration(conf_d: Path) -> list[dict]:
     """Scan flat conf.d/ and plan git mv operations.
 
@@ -85,7 +101,8 @@ def plan_migration(conf_d: Path) -> list[dict]:
             "target": "finance/us-east/prod/tenant-a.yaml",
             "tenant_id": "tenant-a",
             "metadata": {"domain": "finance", "region": "us-east", "environment": "prod"},
-            "status": "ok" | "skip_no_metadata" | "skip_already_nested" | "skip_system_file"
+            "status": "ok" | "skip_no_metadata" | "skip_unplaceable_metadata"
+                      | "skip_already_nested" | "skip_system_file"
         }
     ]
     """
@@ -138,6 +155,22 @@ def plan_migration(conf_d: Path) -> list[dict]:
                 "tenant_id": tid,
                 "metadata": None,
                 "status": "skip_no_metadata",
+            })
+            continue
+
+        # #2830: this plan reads the tenant file's own `_metadata` as a
+        # mapping of strings. Another shape — the string form, or a
+        # non-string domain/region/environment, both of which the exporter
+        # reads — is not guessed at: the file is listed for a manual move.
+        unplaceable = _unplaceable_reason(meta)
+        if unplaceable:
+            actions.append({
+                "source": fp.name,
+                "target": fp.name,
+                "tenant_id": tid,
+                "metadata": None,
+                "status": "skip_unplaceable_metadata",
+                "reason": unplaceable,
             })
             continue
 
@@ -242,12 +275,16 @@ def main() -> None:
     skipped_meta = [a for a in actions if a["status"] == "skip_no_metadata"]
     skipped_nested = [a for a in actions if a["status"] == "skip_already_nested"]
     skipped_sys = [a for a in actions if a["status"] == "skip_system_file"]
+    skipped_unplaceable = [a for a in actions if a["status"] == "skip_unplaceable_metadata"]
 
     print(f"📂 Scanned {conf_d}")
     print(f"   Migratable:        {len(ok)}")
     print(f"   Skip (no metadata): {len(skipped_meta)}")
     print(f"   Skip (nested):      {len(skipped_nested)}")
     print(f"   Skip (system):      {len(skipped_sys)}")
+    print(f"   Skip (unplaceable): {len(skipped_unplaceable)}")
+    for a in skipped_unplaceable:
+        print(f"     {a['source']}: {a['reason']} — move it by hand")
     print()
 
     if args.output_plan:

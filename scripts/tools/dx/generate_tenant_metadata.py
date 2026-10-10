@@ -133,20 +133,18 @@ def extract_tier(tenant_config: dict) -> str:
 
 
 def extract_environment(tenant_name: str, metadata: dict) -> str:
-    """Infer environment from _metadata or tenant name pattern."""
+    """Return the environment the tenant's `_metadata` resolves to, or "".
+
+    Not inferred from the tenant name (#2830), for the reason db_type is not
+    inferred (extract_db_type): the exporter's tenant_metadata_info and
+    tenant-api's list/search read only `_metadata`, and the portal falls back
+    to this file when tenant-api is down, so a `prod-x` tenant with no
+    environment would show as production here and as unset there. tenant_name
+    is kept for the callers' signature."""
     if isinstance(metadata, dict):
         env = metadata.get("environment", "")
-        if env:
+        if isinstance(env, str):
             return env
-
-    # Infer from name pattern
-    if tenant_name.startswith("prod-") or "production" in tenant_name:
-        return "production"
-    elif tenant_name.startswith("staging-") or "staging" in tenant_name:
-        return "staging"
-    elif tenant_name.startswith("dev-") or "development" in tenant_name:
-        return "development"
-
     return ""
 
 
