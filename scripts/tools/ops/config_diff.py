@@ -38,6 +38,7 @@ from _lib_io import load_yaml_file_strict  # noqa: E402  (#2231 duplicate key = 
 from _lib_io import (  # noqa: E402  (#2297 `_profile` as source text)
     YamlFileError, load_yaml_file_strict_exporter_keys, strict_load_exporter_keys,
 )
+from _lib_confd import iter_config_files, printable_name  # noqa: E402  (#1420)
 from _lib_exitcodes import EXIT_OK, EXIT_VIOLATION, EXIT_CALLER_ERROR  # noqa: E402
 from _lib_tenant_values import (  # noqa: E402  (#2115 profile binding is Go's)
     DaGuardError, DaGuardNotFoundError, ParseFailedError, load_effective, print_load_error,
@@ -51,6 +52,10 @@ from _threshold_alerts import alerts_for_key  # noqa: E402
 # all. Cap with ~5KB headroom for the workflow's wrapper marker/footer (Reef 2).
 GITHUB_COMMENT_HARD_LIMIT = 65_536
 COMMENT_SAFETY_LIMIT = 60_000
+
+# How many not-compared file names the Markdown report spells out; the rest
+# is a count. The JSON report lists them all.
+UNCOVERED_LIST_LIMIT = 50
 
 
 def load_configs_from_dir(dir_path):
@@ -227,6 +232,59 @@ def compute_profile_diff(old_dir, new_dir):
         })
 
     return results
+
+
+def _compared_names(dir_path):
+    """Top-level names the tenant comparison reads: what the shared loader
+    lists (`iter_yaml_files`, reserved and dot files skipped)."""
+    return {fname for fname, _ in iter_yaml_files(dir_path)}
+
+
+def _uncovered_contents(dir_path):
+    """{relative POSIX path: bytes or None} for every config file of
+    `dir_path` the exporter reads and the tenant comparison does not.
+
+    The walk is `iter_config_files`, the exporter's rule (recursive, hidden
+    entries skipped); minus the top-level files `_compared_names` lists,
+    what is left is the `_`-prefixed files (`_defaults.yaml`, `_profiles.yaml`,
+    `_platform.yaml`, ...) and everything in a sub-directory. None = the file
+    could not be read, which counts as a difference.
+    """
+    root = Path(dir_path)
+    compared = _compared_names(dir_path)
+    out = {}
+    for path in iter_config_files(root):
+        rel = path.relative_to(root).as_posix()
+        if rel in compared:
+            continue
+        try:
+            out[rel] = path.read_bytes()
+        except OSError:
+            out[rel] = None
+    return out
+
+
+def compute_uncovered_files(old_dir, new_dir):
+    """Changed files this report does not compare (#1420), sorted.
+
+    The metric, setting and custom-alert sections read each top-level tenant
+    file on its own; nothing here resolves `_defaults.yaml` inheritance or
+    reads a sub-directory, and the Profile section reads only the `profiles:`
+    of a top-level `_profiles.yaml`. A change confined to those files used to
+    print "No changes detected." with exit 0 — while a platform default is
+    the widest-reaching edit this report is ever handed. So such a file is
+    listed when its bytes differ (or it exists on one side only): byte
+    equality, not a parse, because a file this tool does not interpret has
+    no semantic comparison here to lean on. A comment-only edit is listed
+    too; "not compared" is the claim, not "changed meaning".
+    """
+    old = _uncovered_contents(old_dir)
+    new = _uncovered_contents(new_dir)
+    return sorted(
+        rel for rel in set(old) | set(new)
+        if rel not in old or rel not in new
+        or old[rel] is None or new[rel] is None or old[rel] != new[rel]
+    )
 
 
 def flatten_tenant_config(raw):
@@ -624,13 +682,39 @@ def _format_value(val):
 
 
 def render_markdown(diffs, old_dir, new_dir, profile_diffs=None,
-                    custom_alert_diffs=None, setting_diffs=None):
+                    custom_alert_diffs=None, setting_diffs=None,
+                    uncovered_files=None):
     """Render a Markdown blast radius report."""
     lines = []
     lines.append("# Config Diff Report")
     lines.append("")
     lines.append(f"Comparing: `{old_dir}` → `{new_dir}`")
     lines.append("")
+
+    # Coverage first (#1420): what follows is a comparison of top-level
+    # tenant files, and a reviewer has to know what it left out before
+    # reading it — above all when it then finds nothing. File names come
+    # from the PR's tree, so each one goes through printable_name (terminal
+    # escapes) and _code_span (code-span break-out, F5).
+    if uncovered_files:
+        lines.append("## Changed Files Not Compared")
+        lines.append("")
+        lines.append(
+            f"> :warning: **This report does not compare "
+            f"{len(uncovered_files)} changed file(s).** It reads each "
+            "top-level tenant file on its own: `_`-prefixed files (platform "
+            "defaults such as `_defaults.yaml`, inherited by every tenant "
+            "that does not override them) and files in sub-directories are "
+            "outside it, and of `_profiles.yaml` only `profiles:` is compared "
+            "(Profile Changes). Review these files directly."
+        )
+        lines.append("")
+        for rel in uncovered_files[:UNCOVERED_LIST_LIMIT]:
+            lines.append(f"- {_code_span(printable_name(rel))}")
+        if len(uncovered_files) > UNCOVERED_LIST_LIMIT:
+            lines.append(
+                f"- ... (+{len(uncovered_files) - UNCOVERED_LIST_LIMIT} more)")
+        lines.append("")
 
     # Custom alert changes section (v2.9.0 ADR-024 Capability B, #741).
     # These are real alerting changes (add/remove/retune a paging rule), NOT
@@ -750,7 +834,14 @@ def render_markdown(diffs, old_dir, new_dir, profile_diffs=None,
 
     if (not diffs and not profile_diffs and not custom_alert_diffs
             and not setting_diffs):
-        lines.append("No changes detected.")
+        if uncovered_files:
+            # Not "No changes detected.": something changed, it is just
+            # outside what this report compares (#1420).
+            lines.append(
+                "No changes among the files compared; "
+                f"{len(uncovered_files)} changed file(s) not compared (above).")
+        else:
+            lines.append("No changes detected.")
         return "\n".join(lines)
 
     total_changes = 0
@@ -794,6 +885,8 @@ def render_markdown(diffs, old_dir, new_dir, profile_diffs=None,
             f", {len(setting_diffs)} tenant(s) with {st_changes} "
             f"setting change(s)"
         )
+    if uncovered_files:
+        summary += f", {len(uncovered_files)} changed file(s) not compared"
     lines.append(summary)
 
     # Truncation safeguard (Reef 2): never let the bot comment exceed GitHub's
@@ -941,6 +1034,7 @@ def _run(args):
         load_settings_from_dir(args.old_dir),
         load_settings_from_dir(args.new_dir),
     )
+    uncovered_files = compute_uncovered_files(args.old_dir, args.new_dir)
 
     use_json = args.json_output or args.format == "json"
     if use_json:
@@ -949,6 +1043,7 @@ def _run(args):
             "profile_diffs": profile_diffs,
             "custom_alert_diffs": custom_alert_diffs,
             "setting_diffs": setting_diffs,
+            "uncovered_files": uncovered_files,
         }
         print(format_json_report(output, default=str))
     else:
@@ -957,11 +1052,15 @@ def _run(args):
             profile_diffs=profile_diffs,
             custom_alert_diffs=custom_alert_diffs,
             setting_diffs=setting_diffs,
+            uncovered_files=uncovered_files,
         ))
 
-    # Exit 1 if changes detected (CI signal), 0 if clean
+    # Exit 1 if changes detected (CI signal), 0 if clean. A changed file
+    # this report does not compare is a change (#1420): exit 0 is read as
+    # "nothing to review", and a platform default edit is not that.
     has_changes = (bool(diffs) or bool(profile_diffs)
-                   or bool(custom_alert_diffs) or bool(setting_diffs))
+                   or bool(custom_alert_diffs) or bool(setting_diffs)
+                   or bool(uncovered_files))
     sys.exit(EXIT_VIOLATION if has_changes else EXIT_OK)
 
 

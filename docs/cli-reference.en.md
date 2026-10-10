@@ -2403,6 +2403,8 @@ An option to print only the summary is not implemented yet; the report's last li
 
 Markdown format report with per-tenant change tables and summary statistics.
 
+**Comparison scope**: only the values each top-level tenant file writes itself are compared; `_defaults.yaml` inheritance is not resolved. `_`-prefixed files (`_defaults.yaml`, `_platform.yaml`, ...) and files in subdirectories are outside the comparison, and of `_profiles.yaml` only `profiles:` is compared. When such a file differs between the two sides (byte for byte) or exists on one side only, a "Changed Files Not Compared" section at the top of the report names it, the exit code is 1, and `No changes detected.` is not printed; `uncovered_files` in the JSON output is the same list. A comment-only edit is listed too. ⚠️ The v2.9.0 image has no such section: a change confined to these files prints `No changes detected.` and exits 0. <!-- image-caveat: v2.9.0 -->
+
 **Profile blast radius**: when a profile in `_profiles.yaml` changes, `affected_tenants` lists the `--new-dir` tenants whose `_profile` names it. The name is read through `da-guard effective`, as the exporter reads it: `_profile: {default: std}` names `std`, a `_profile` in a root platform file's `tenants:` entry counts, and one inherited from a subdirectory `_defaults.yaml` does not. So a run with a profile change needs da-guard (bundled in the image; `make da-guard-build` in a checkout); if da-guard is missing or fails, or a `--new-dir` file cannot be decoded by the exporter, the exit code is 2: stderr has `ERROR:` lines saying why; when da-guard ran, its stderr follows, each non-blank line prefixed with `da-guard|` (indented two spaces); when da-guard is missing or cannot be run there are no such lines. ⚠️ The v2.9.0 image still reads `_profile` only in its string form. <!-- image-caveat: v2.9.0 -->
 
 **Examples**
@@ -2417,7 +2419,7 @@ da-tools config-diff --old-dir ./conf.d-old --new-dir ./conf.d-new --json-output
 | Code | Description |
 |------|-------------|
 | `0` | No configuration changes |
-| `1` | Changes detected. ⚠️ Only the values each tenant file writes itself are compared, top level only: a change to `_defaults.yaml` alone, or to files in subdirectories only, gives 0, so this alone cannot tell that a PR touched config |
+| `1` | Changes detected, or a file the report does not compare changed (see "Comparison scope" below) |
 | `2` | Caller error: directory missing, input unreadable, or the run did not complete; with a profile change, also da-guard missing or failing |
 
 > ⚠️ **`1` means "there are changes", not "it failed".** A CI step that calls

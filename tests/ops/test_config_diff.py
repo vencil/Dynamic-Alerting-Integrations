@@ -1073,3 +1073,107 @@ class TestCredentialsAreNotPrinted:
                         if re.search(r"pass|key|token|secret|url", n, re.I)}
         not_credentials = {"runbook_url", "icon_url", "client_url"}
         assert looks_secret - not_credentials == set(cd._CREDENTIAL_KEYS)
+
+
+class TestUncoveredFiles:
+    """報告比對不到的檔案有變，要具名列出、rc=1，不得印 "No changes detected."（#1420）。
+
+    ⛔ 修正前：只改 `_defaults.yaml`（每個沒覆寫的租戶都繼承）得到
+    "No changes detected."、rc=0；同一個 key 改在租戶檔則 rc=1。這是這份報告
+    會收到的爆炸半徑最大的一類改動，也是它唯一說「沒變」的一類。
+    """
+
+    TENANT = "tenants:\n  db-a:\n    mysql_connections: '70'\n"
+
+    def _pair(self, tmp_path, files_old, files_new):
+        old, new = tmp_path / "old", tmp_path / "new"
+        for root, files in ((old, files_old), (new, files_new)):
+            root.mkdir()
+            for rel, text in files.items():
+                (root / rel).parent.mkdir(parents=True, exist_ok=True)
+                (root / rel).write_text(text, encoding="utf-8", newline="\n")
+        return old, new
+
+    def test_defaults_only_change_is_named_and_exits_1(self, tmp_path):
+        old, new = self._pair(
+            tmp_path,
+            {"db-a.yaml": self.TENANT, "_defaults.yaml": "defaults:\n  mysql_connections: 80\n"},
+            {"db-a.yaml": self.TENANT, "_defaults.yaml": "defaults:\n  mysql_connections: 240\n"},
+        )
+        p = _run_cli(old, new)
+        assert p.returncode == 1, p.stdout + p.stderr
+        assert "No changes detected" not in p.stdout
+        assert "## Changed Files Not Compared" in p.stdout
+        assert "- `_defaults.yaml`" in p.stdout
+
+    def test_identical_trees_still_exit_0(self, tmp_path):
+        files = {"db-a.yaml": self.TENANT,
+                 "_defaults.yaml": "defaults:\n  mysql_connections: 80\n",
+                 "team/db-b.yaml": "tenants:\n  db-b:\n    cpu: '1'\n"}
+        old, new = self._pair(tmp_path, files, files)
+        p = _run_cli(old, new)
+        assert p.returncode == 0, p.stdout + p.stderr
+        assert "No changes detected." in p.stdout
+        assert "Not Compared" not in p.stdout
+
+    @pytest.mark.parametrize("rel", [
+        "_platform.yaml", "team-x/db-z.yaml", "team-x/_defaults.yaml", "_profiles.yaml",
+    ])
+    def test_added_file_outside_the_comparison_is_named(self, tmp_path, rel):
+        old, new = self._pair(tmp_path, {"db-a.yaml": self.TENANT},
+                              {"db-a.yaml": self.TENANT, rel: "tenants: {}\n"})
+        p = _run_cli(old, new, "--format", "json")
+        assert p.returncode == 1, p.stdout + p.stderr
+        assert json.loads(p.stdout)["uncovered_files"] == [rel]
+
+    def test_removed_file_is_named(self, tmp_path):
+        old, new = self._pair(
+            tmp_path,
+            {"db-a.yaml": self.TENANT, "_defaults.yaml": "defaults: {}\n"},
+            {"db-a.yaml": self.TENANT})
+        assert cd.compute_uncovered_files(str(old), str(new)) == ["_defaults.yaml"]
+
+    def test_compared_and_hidden_files_are_not_listed(self, tmp_path):
+        """租戶檔的變更由比對本身報；`.` 開頭的檔 exporter 不讀，也不列。"""
+        old, new = self._pair(
+            tmp_path,
+            {"db-a.yaml": self.TENANT, ".scratch.yaml": "a: 1\n"},
+            {"db-a.yaml": self.TENANT.replace("70", "90"), ".scratch.yaml": "a: 2\n"})
+        p = _run_cli(old, new, "--format", "json")
+        assert p.returncode == 1, p.stdout + p.stderr
+        report = json.loads(p.stdout)
+        assert report["uncovered_files"] == []
+        assert report["metric_diffs"]
+
+    def test_listed_alongside_compared_changes(self, tmp_path):
+        old, new = self._pair(
+            tmp_path,
+            {"db-a.yaml": self.TENANT, "_defaults.yaml": "defaults: {}\n"},
+            {"db-a.yaml": self.TENANT.replace("70", "90"),
+             "_defaults.yaml": "defaults:\n  cpu: 1\n"})
+        p = _run_cli(old, new)
+        assert p.returncode == 1, p.stdout + p.stderr
+        assert "- `_defaults.yaml`" in p.stdout
+        assert "1 changed file(s) not compared" in p.stdout.splitlines()[-1]
+
+    def test_file_name_cannot_break_out_of_its_code_span(self, tmp_path):
+        """檔名來自 PR 的樹：反引號不得關掉 code span，控制字元不得原樣印出。"""
+        rel = "_x`y\x1b[2J.yaml"
+        old, new = self._pair(tmp_path, {"db-a.yaml": self.TENANT},
+                              {"db-a.yaml": self.TENANT, rel: "a: 1\n"})
+        md = cd.render_markdown({}, str(old), str(new),
+                                uncovered_files=cd.compute_uncovered_files(str(old), str(new)))
+        assert "\x1b" not in md
+        assert "- `_x'y\\x1b[2J.yaml`" in md
+
+    def test_long_list_is_capped_in_markdown_not_in_json(self, tmp_path):
+        n = cd.UNCOVERED_LIST_LIMIT + 3
+        files = {f"_f{i:03d}.yaml": "a: 1\n" for i in range(n)}
+        old, new = self._pair(tmp_path, {}, files)
+        uncovered = cd.compute_uncovered_files(str(old), str(new))
+        assert len(uncovered) == n
+        md = cd.render_markdown({}, str(old), str(new), uncovered_files=uncovered)
+        assert "- ... (+3 more)" in md
+        assert sum(line.startswith("- `_f") for line in md.splitlines()) == cd.UNCOVERED_LIST_LIMIT
+        assert f"`{uncovered[-1]}`" not in md
+        assert f"does not compare {n} changed file(s)" in md
