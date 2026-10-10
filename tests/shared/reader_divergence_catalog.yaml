@@ -658,3 +658,53 @@ entries:
     ref: https://github.com/vencil/Dynamic-Alerting-Integrations/issues/2766
     expire_at: 2027-01-10
     count: 1
+
+  # --- 路由層：產生器生成階段的 finding 擋下租戶、tenant-api 放行（擋住第二階段）
+  # 產生器的判定取自它自己以正式環境方式執行（--validate --strict
+  # --findings-json）的 findings 文件：in-force（blocks 在該次的 in-force 集合）
+  # 且主體是該租戶（或該租戶自己的檔）的 finding。下列 finding 只在生成階段出
+  # 現（blocks=validate），不在 load_tenant_tree 的 schema_warnings 裡。
+  - id: tenant-api-put-ignores-invalid-route-entry
+    reader: tenant-api
+    layer: routing
+    match:
+      cells:
+        - [routes-entry-shapes, t-routes-scalar, tenant_api]
+        - [routing-values-invalid-label-keys, t-k-date, tenant_api]
+        - [routing-values-invalid-label-keys, t-k-inf, tenant_api]
+        - [routing-values-invalid-label-keys, t-k-bigint, tenant_api]
+        - [routing-values-invalid-label-keys, t-k-date-yes, tenant_api]
+        - [routing-values-invalid-label-keys, t-k-profile-int, tenant_api]
+        - [routing-values-invalid-label-keys, t-k-overlay-int, tenant_api]
+        - [routing-values-invalid-label-keys, t-k-newline-yes, tenant_api]
+        - [routing-values-invalid-label-keys, t-k-newline-x, tenant_api]
+        - [routes-match-null-key, t-null-alone, tenant_api]
+        - [routes-match-null-key, t-null-empty, tenant_api]
+        - [routes-match-null-key, t-null-profile, tenant_api]
+    mechanism: >-
+      租戶合併後路由的 routes 項目被產生器判為無效（routes 不是 list、match 的
+      key 不是 label 名稱、match 有 null key；值可來自租戶檔、profile 或
+      overlay）。產生器以 --validate 報 invalid_route_entry（主體是該租戶，
+      blocks=validate）而失敗；da-guard 也回報，但 tenant-api 對這筆 PUT 照常寫入。
+      第一階段寫入改向產生器取判定（ADR-036 實作順序第 4 步）後消失。
+    direction: go_looser
+    disposition: fix-pending
+    ref: https://github.com/vencil/Dynamic-Alerting-Integrations/issues/2766
+    expire_at: 2027-01-10
+    count: 12
+
+  - id: tenant-api-put-ignores-missing-receiver-field
+    reader: tenant-api
+    layer: routing
+    match:
+      cells:
+        - [main-receiver-empty-and-override-matchers, t-nomain, tenant_api]
+    mechanism: >-
+      租戶的 receiver 缺必要欄位。產生器以 --validate 報 missing_receiver_field
+      （主體是該租戶，blocks=validate）而失敗；tenant-api 對這筆 PUT 照常寫入。
+      第一階段寫入改向產生器取判定（ADR-036 實作順序第 4 步）後消失。
+    direction: go_looser
+    disposition: fix-pending
+    ref: https://github.com/vencil/Dynamic-Alerting-Integrations/issues/2766
+    expire_at: 2027-01-10
+    count: 1

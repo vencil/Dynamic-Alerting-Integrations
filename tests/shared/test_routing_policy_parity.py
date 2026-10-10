@@ -62,9 +62,12 @@ that: every tenant's `python_differs.refused` is `tenant_file_unreadable`.
 from __future__ import annotations
 
 import ast
+import contextlib
+import io
 import json
 import re
 import sys
+import tempfile
 from collections import Counter
 from pathlib import Path
 
@@ -77,6 +80,7 @@ sys.path.insert(0, str(REPO_ROOT / "scripts" / "tools" / "ops"))
 from _grar_parse import BLOCKING_TREE_KINDS, _parse_config_files, load_tenant_tree  # noqa: E402
 from _grar_validate import list_tenant_subroutes, route_entry_matchers  # noqa: E402
 from _lib_validation import is_valid_tenant_id  # noqa: E402
+import generate_alertmanager_routes as gar  # noqa: E402
 
 MATRIX = json.loads((Path(__file__).parent / "routing_policy_parity_matrix.json")
                     .read_text(encoding="utf-8"))
@@ -265,13 +269,14 @@ def unmeasured_errors(matrix: dict) -> list:
                     and why["kind"] in UNMEASURED_KINDS and str(why["reason"]).strip()):
                 errors.append(f"{where}: must be {{kind: one of {sorted(UNMEASURED_KINDS)}, reason}}")
                 continue
-            nested = any("/" in f for f in tree["files"])
-            if why["kind"] == "nested_tree" and not nested:
-                errors.append(f"{where}: nested_tree, but no file of the tree is below the root")
-            if why["kind"] == "no_put_body" and (nested or f"{tenant}.yaml" in tree["files"]):
-                errors.append(f"{where}: no_put_body, but files[{tenant}.yaml] is the PUT body (or the tree "
-                              f"is nested_tree)")
-            if why["kind"] == "outside_table" and (nested or f"{tenant}.yaml" not in tree["files"]):
+            root_body = f"{tenant}.yaml" in tree["files"]
+            nested_own = any("/" in f and f.rsplit("/", 1)[1] == f"{tenant}.yaml" for f in tree["files"])
+            if why["kind"] == "nested_tree" and (root_body or not nested_own):
+                errors.append(f"{where}: nested_tree needs the tenant's own file below the root "
+                              f"(<sub>/{tenant}.yaml) and none at the root")
+            if why["kind"] == "no_put_body" and (root_body or nested_own):
+                errors.append(f"{where}: no_put_body, but a {tenant}.yaml exists (measure it, or nested_tree)")
+            if why["kind"] == "outside_table" and not root_body:
                 errors.append(f"{where}: outside_table needs a measurable PUT (a root files[{tenant}.yaml])")
     return errors
 
@@ -294,7 +299,30 @@ def test_unmeasured_guard_is_red() -> None:
     assert any("drop it from tenant_api_unmeasured" in e for e in unmeasured_errors(m))
     m = json.loads(json.dumps(MATRIX))
     m["tenant_api_unmeasured"]["invalid-tenant-ids"]["UPPER"]["kind"] = "nested_tree"
-    assert any("nested_tree, but no file" in e for e in unmeasured_errors(m))
+    assert any("nested_tree needs the tenant's own file below the root" in e for e in unmeasured_errors(m))
+    # A root-level tenant of a nested tree is measurable: parking it is red.
+    m = json.loads(json.dumps(MATRIX))
+    next(t for t in m["trees"] if t["name"] == "hier-d-subtree-policy-additive-and-scoped")[
+        "expect"]["t-root"]["tenant_api"] = None
+    m["tenant_api_unmeasured"]["hier-d-subtree-policy-additive-and-scoped"]["t-root"] = {
+        "kind": "nested_tree", "reason": "r"}
+    assert any("hier-d-subtree-policy-additive-and-scoped t-root: nested_tree needs" in e
+               for e in unmeasured_errors(m))
+
+
+# [未驗] batch: the tenant_api.batch sub-cells are not held to the generator
+# (_generator_put keeps them as tenant-api's). Pinned so that the unjudged
+# set cannot grow silently: a new batch cell changes this number in a diff.
+UNJUDGED_BATCH_CELLS = 12
+
+
+def test_batch_cells_are_pinned() -> None:
+    n = sum(1 for t in MATRIX["trees"] for w in t["expect"].values()
+            if w["tenant_api"] is not None and w["tenant_api"]["batch"] is not None)
+    assert n == UNJUDGED_BATCH_CELLS, (
+        f"{n} tenant_api.batch cells, UNJUDGED_BATCH_CELLS says {UNJUDGED_BATCH_CELLS}: the batch "
+        "verdict is not held to the generator ([未驗] batch) — update the count, the matrix _comment, "
+        "the changelog fragment and ADR-036's appendix together")
 
 
 def test_matrix_keys_are_exactly_the_known_ones() -> None:
@@ -435,30 +463,58 @@ def _want(want: dict, key: str):
 
 
 # Blocking findings that are the domain policy's verdict (tenant-api: 403);
-# any other blocking finding of the tenant is a 400-class refusal.
+# any other blocking finding of the write is a 400-class refusal.
 _POLICY_KINDS = {"domain_policy_violation", "critical_escalation_missing"}
 
 
-def _blocking_kinds(warnings: list, tenant: str) -> set:
-    """The kinds of the generator's structured findings that block under
-    --validate --strict (blocks strict / always) and whose subject is
-    *tenant* (Finding.tenant) — whatever layer the value came from."""
-    return {f.kind for f in warnings
-            if getattr(f, "tenant", None) == tenant and getattr(f, "blocks", None) in ("strict", "always")}
+def generator_findings(config_dir: Path) -> dict:
+    """The generator's own verdict on a tree, exactly as production asks
+    for it (`generate_alertmanager_routes.py --validate --strict
+    --findings-json`, .github/workflows/validate.yaml): the findings
+    document of an in-process run of its `main()`. Nothing is
+    reconstructed from load_tenant_tree — generation-stage findings
+    (invalid_route_entry, missing_receiver_field …) and refusals are only
+    there."""
+    with tempfile.TemporaryDirectory() as out_dir:
+        out = Path(out_dir) / "findings.json"
+        argv = ["generate_alertmanager_routes.py", "--config-dir", str(config_dir),
+                "--validate", "--strict", "--findings-json", str(out)]
+        sink = io.StringIO()
+        saved = sys.argv
+        sys.argv = argv
+        try:
+            with contextlib.redirect_stdout(sink), contextlib.redirect_stderr(sink):
+                gar.main()
+        except SystemExit:
+            pass
+        finally:
+            sys.argv = saved
+        return json.loads(out.read_text(encoding="utf-8"))
 
 
-def _generator_put(want: dict, refused: str | None, blocking: set) -> dict | None:
+def blocking_kinds(doc: dict, tenant: str) -> set:
+    """The kinds of the in-force findings of a findings document (blocks in
+    the run's in-force set, gar.in_force_blocks of its validate / strict
+    fields) whose subject is the write of *tenant*'s own file: the finding
+    names the tenant, or names the file the PUT writes (`<tenant>.yaml`,
+    e.g. a tenant_file_unreadable). A run that failed for a reason it does
+    not itemise (`run_failed`) blocks every write. A finding naming neither
+    (a platform file's, a refusal summary) is no finding of the write."""
+    in_force = gar.in_force_blocks(validate=doc["validate"], strict=doc["strict"])
+    live = [f for f in doc["findings"] if f["blocks"] in in_force]
+    if any(f["kind"] == "run_failed" for f in live):
+        return {"run_failed"}
+    return {f["kind"] for f in live if f["tenant"] == tenant or f["file"] == f"{tenant}.yaml"}
+
+
+def _generator_put(want: dict, blocking: set) -> dict | None:
     """The tenant_api cell as the generator would judge that PUT (the
-    tenant's own file verbatim): production runs it with --validate
-    --strict, so it refuses the write when the file cannot be read (400) or
-    when any blocking finding names the tenant (`blocking`, from the
-    structured findings: _blocking_kinds) — 403 for the domain policy's
-    (_POLICY_KINDS), else 400 (values_not_string, group_by_invalid,
-    routing_not_mapping, invalid_tenant_id …), whether the value was written
-    by the tenant file or came from _routing_defaults, a profile or the
-    platform overlay. A finding that names no tenant (a platform file's) is
-    no finding of the write (ADR-036: a base tree's errors do not refuse a
-    clean write), so an unusable policy file refuses nothing here.
+    tenant's own file verbatim): it refuses the write when an in-force
+    finding of the production run is the write's (`blocking`, from
+    blocking_kinds) — 403 for the domain policy's (_POLICY_KINDS), else 400
+    (any other kind: values_not_string, group_by_invalid,
+    routing_not_mapping, invalid_route_entry, tenant_file_unreadable,
+    run_failed …), whatever layer the value came from.
 
     Ranked against tenant-api's cell on whether each side refuses: the
     generator refusing what tenant-api answers 'ok' gives the generator's
@@ -468,14 +524,13 @@ def _generator_put(want: dict, refused: str | None, blocking: set) -> dict | Non
 
     What stays out: the `batch` sub-cell is kept as tenant-api's — judging
     it would need the generator run on the tree with the patch laid over
-    the block on disk, which this half does not build."""
+    the block on disk, which this half does not build ([未驗] batch; the
+    count of such cells is pinned by test_batch_cells_are_pinned)."""
     api = want["tenant_api"]
     if api is None:
         return None
     gen = None
-    if refused == "tenant_file_unreadable":
-        gen = "400"
-    elif blocking & _POLICY_KINDS:
+    if blocking & _POLICY_KINDS:
         gen = "403"
     elif blocking:
         gen = "400"
@@ -491,6 +546,7 @@ def test_python_reader_matches_the_table(tree, tmp_path: Path) -> None:
     _build(tree, tmp_path)
     got = load_tenant_tree(str(tmp_path), strict_policies=True)
     policies = _parse_config_files(str(tmp_path))["domain_policies"]
+    doc = generator_findings(tmp_path)
 
     rows = _policy_rows(got.schema_warnings)
     unknown = {m["tenant"]: m["name"] for m in map(_UNKNOWN_PROFILE.search, got.schema_warnings) if m}
@@ -527,7 +583,7 @@ def test_python_reader_matches_the_table(tree, tmp_path: Path) -> None:
         # Every measured tenant_api cell, python_differs or not: a verdict the
         # generator would give differently is a difference python_differs
         # must carry (and the catalog then accept), never an unrecorded one.
-        api = _generator_put(want, refused.get(tenant), _blocking_kinds(got.schema_warnings, tenant))
+        api = _generator_put(want, blocking_kinds(doc, tenant))
         assert _want(want, "tenant_api") == api, (where, api)
 
     # Platform-file findings: the table's rows, and no other.

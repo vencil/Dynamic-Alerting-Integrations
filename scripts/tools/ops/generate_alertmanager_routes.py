@@ -996,6 +996,15 @@ def da_tools_version() -> str | None:
     return None
 
 
+def in_force_blocks(*, validate: bool, strict: bool) -> set[str]:
+    """The ``blocks`` values that make a run in this mode fail: ``always``,
+    plus ``validate`` under --validate and ``strict`` under --strict. A
+    reader of a ``--findings-json`` document takes the mode from its
+    ``validate`` / ``strict`` fields."""
+    return {"always"} | ({"validate"} if validate else set()) \
+        | ({"strict"} if strict else set())
+
+
 def findings_document(findings: list[str], *, config_dir: str,
                       exit_code: int, validate: bool = False,
                       strict: bool = False) -> dict:
@@ -1010,8 +1019,7 @@ def findings_document(findings: list[str], *, config_dir: str,
     # (an amtool rejection, an assembly refusal, "no valid routes", a caller
     # error) must not read as a pass to a consumer that looks only at the
     # findings — the document is never looser than the run's own exit code.
-    in_force = {"always"} | ({"validate"} if validate else set()) \
-        | ({"strict"} if strict else set())
+    in_force = in_force_blocks(validate=validate, strict=strict)
     if exit_code != EXIT_OK and not any(f.blocks in in_force for f in records):
         records.append(Finding(
             f"exit code {exit_code}: the run failed for a reason not itemised "
