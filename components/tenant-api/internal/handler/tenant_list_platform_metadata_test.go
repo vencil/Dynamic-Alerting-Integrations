@@ -311,7 +311,8 @@ const platformUnknownRBACYAML = `groups:
 // not get t1, whose environment only the platform layer sets, nor t2, whose
 // own file sets it; an unrestricted caller gets both. With the platform layer
 // readable (before the file breaks and after it is removed) the restricted
-// caller gets both.
+// caller gets both. The rows carry `metadata_incomplete: true` exactly while
+// the platform layer is unreadable; otherwise the key is absent.
 func TestListAndSearch_UnreadablePlatformLayerMakesMetadataUnknown(t *testing.T) {
 	t.Parallel()
 	dir := setupConfigDir(t, map[string]string{
@@ -349,10 +350,59 @@ func TestListAndSearch_UnreadablePlatformLayerMakesMetadataUnknown(t *testing.T)
 		}
 	}
 
+	// rawIncomplete returns, per id, the raw `metadata_incomplete` value of
+	// the LIST and search rows the unrestricted caller gets ("absent" when the
+	// key is not in the JSON).
+	rawIncomplete := func(t *testing.T) (list, search map[string]string) {
+		t.Helper()
+		mgr := newRBACManager(t, platformUnknownRBACYAML)
+		collect := func(rows []map[string]json.RawMessage) map[string]string {
+			out := map[string]string{}
+			for _, r := range rows {
+				var id string
+				_ = json.Unmarshal(r["id"], &id)
+				v, ok := r["metadata_incomplete"]
+				out[id] = "absent"
+				if ok {
+					out[id] = string(v)
+				}
+			}
+			return out
+		}
+		h := mgr.Middleware(rbac.PermRead, nil)(ListTenants(&Deps{ConfigDir: dir, RBAC: mgr}))
+		req := httptest.NewRequest(http.MethodGet, "/api/v1/tenants", nil)
+		req.Header.Set("X-Forwarded-Email", "test@example.com")
+		req.Header.Set("X-Forwarded-Groups", "all-tenants")
+		w := httptest.NewRecorder()
+		h.ServeHTTP(w, req)
+		var listRows []map[string]json.RawMessage
+		if err := json.Unmarshal(w.Body.Bytes(), &listRows); err != nil {
+			t.Fatalf("LIST %d: %v: %s", w.Code, err, w.Body.String())
+		}
+		_, code, body := runSearch(t, dir, mgr, []string{"all-tenants"}, "")
+		var resp struct {
+			Items []map[string]json.RawMessage `json:"items"`
+		}
+		if err := json.Unmarshal(body, &resp); err != nil {
+			t.Fatalf("search %d: %v: %s", code, err, body)
+		}
+		return collect(listRows), collect(resp.Items)
+	}
+	checkIncomplete := func(t *testing.T, phase, want string) {
+		t.Helper()
+		wantRows := map[string]string{"t1": want, "t2": want}
+		list, search := rawIncomplete(t)
+		if !reflect.DeepEqual(list, wantRows) || !reflect.DeepEqual(search, wantRows) {
+			t.Errorf("%s: metadata_incomplete on LIST %v, on search %v; want %v", phase, list, search, wantRows)
+		}
+	}
+
 	check(t, "platform readable", both)
+	checkIncomplete(t, "platform readable", "absent")
 
 	writeDanglingPlatformFile(t, dir)
 	check(t, "platform unreadable", []string{})
+	checkIncomplete(t, "platform unreadable", "true")
 	// The rows still show the tenant files' own metadata.
 	rows := listTenantsAs(t, dir, newRBACManager(t, platformUnknownRBACYAML), "all-tenants")
 	if len(rows) != 2 || rows[0].Owner != "t1-team" || rows[0].Environment != "" || rows[1].Environment != "production" {
@@ -375,6 +425,7 @@ func TestListAndSearch_UnreadablePlatformLayerMakesMetadataUnknown(t *testing.T)
 		t.Fatal(err)
 	}
 	check(t, "platform readable again", both)
+	checkIncomplete(t, "platform readable again", "absent")
 	if got := viewAs(t, mgr, "all-tenants", "environment=production").search; !reflect.DeepEqual(got, both) {
 		t.Errorf("search environment=production after recovery = %v, want %v", got, both)
 	}

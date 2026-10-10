@@ -59,7 +59,7 @@ import (
 //     metadata like any unlabeled row (sorts first, id tiebreaker).
 //     Pinned by TestSearchTenants_DegradedRows.
 //   - #2370: when the conf.d root platform layer cannot be read, every
-//     healthy row's metadata is unknown too (TenantSummary.metadataUnknown)
+//     healthy row's metadata is unknown too (TenantSummary.MetadataIncomplete)
 //     and is handled as a degraded row's: the same RBAC decision, no
 //     metadata filter matches it, free-text q matches its id only. The row
 //     still shows (and sorts by) the tenant file's own `_metadata`.
@@ -159,6 +159,7 @@ type SearchResponse struct {
 //
 // @Summary     Search tenants
 // @Description Server-side filter / sort / pagination over the tenants visible to the caller (RBAC-filtered). Each item's config_derived is derived from config at request time (「依設定推算」), not observed from Alertmanager; the response's config_derivation names the conf.d files skipped as unparseable.
+// @Description When the conf.d root platform files cannot be read, an item's metadata carries only the tenant file's own `_metadata` values and the item is marked `metadata_incomplete`: like a degraded item (config_error) it is visible only to callers whose matching RBAC rule does not restrict environments or domains, no metadata filter (environment / tier / domain / db_type / tag) matches it, and q matches its id only.
 // @Tags        tenants
 // @Produce     json
 // @Param       q           query    string false "Case-insensitive substring over id / owner / domain / db_type / tags"
@@ -282,7 +283,7 @@ func applyFilters(in []TenantSummary, p *searchParams) []TenantSummary {
 	qLower := strings.ToLower(p.q)
 	metadataFiltered := p.environment != "" || p.tier != "" || p.domain != "" || p.dbType != "" || p.tag != ""
 	for _, t := range in {
-		if t.metadataUnknown {
+		if t.MetadataIncomplete {
 			// Metadata unknown (#2370): handled as a degraded row's (#1680) —
 			// no metadata filter matches it, and free text matches its id only.
 			if metadataFiltered || (qLower != "" && !strings.Contains(strings.ToLower(t.ID), qLower)) {
