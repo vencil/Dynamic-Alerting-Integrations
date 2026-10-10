@@ -45,14 +45,14 @@ type TenantSummary struct {
 	// Silent-mode / maintenance state DERIVED FROM CONFIG (「依設定推算」) at request time — what threshold-exporter would emit for this conf.d, not a reading from Alertmanager. Absent when it cannot be derived: a degraded row (config_error), a file the exporter skips, or conf.d not loading (see config_derivation on the search response).
 	ConfigDerived *ConfigDerivedState `json:"config_derived,omitempty"`
 
-	// Set when the conf.d root platform files could not be read: the metadata fields carry only the tenant file's own `_metadata` values, and the row's visibility is that of a degraded row (only callers whose matching RBAC rule does not restrict environments or domains see it); the search metadata filters do not match it. Absent otherwise.
+	// Set when the row's metadata is unknown: the conf.d root platform files could not be read (the metadata fields then carry only the tenant file's own `_metadata` values), or the tenant's `_metadata` does not decode (the metadata fields are then empty, as threshold-exporter reads them). The row's visibility is that of a degraded row (only callers whose matching RBAC rule does not restrict environments or domains see it); the search metadata filters do not match it. Absent otherwise.
 	MetadataIncomplete bool `json:"metadata_incomplete,omitempty"`
 }
 
 // metadataIsUnknown reports whether the row's environment/domain (and the
 // rest of its metadata) are unknown rather than read: a degraded row
-// (ConfigError, #1680), or a healthy row read while the root platform layer
-// could not be (#2370).
+// (ConfigError, #1680), a healthy row read while the root platform layer
+// could not be (#2370), or one whose `_metadata` does not decode (#2830).
 func (t TenantSummary) metadataIsUnknown() bool {
 	return t.ConfigError != "" || t.MetadataIncomplete
 }
@@ -85,6 +85,7 @@ func (t TenantSummary) metadataIsUnknown() bool {
 // @Description row is visible only to callers whose matching RBAC rule does not restrict environments or domains.
 // @Description When the conf.d root platform files cannot be read, every other row's metadata carries only the tenant file's own `_metadata`
 // @Description values and the row is marked `metadata_incomplete`; its visibility is that of a degraded row.
+// @Description A row whose `_metadata` does not decode is marked `metadata_incomplete` the same way, with empty metadata fields.
 // @Tags        tenants
 // @Produce     json
 // @Success     200 {array}  TenantSummary
@@ -318,10 +319,16 @@ func loadAllTenants(configDir string) ([]TenantSummary, error) {
 		// v2.5.0: Extract _metadata fields for filtering and UI display.
 		// partial is ParseConfigFile's decode (ParseTenantFile), the one
 		// the resolver reads, so the file is not decoded a second time.
+		// A `_metadata` that is written but does not decode reads as empty
+		// fields (as on /metrics) and is marked metadata_incomplete, like an
+		// unreadable root platform layer.
+		decoded := true
 		if overrides, ok := partial.Tenants[tenantID]; ok {
-			setMetadata(&summary, metadata.Resolve(tenantID, overrides))
+			var meta cfg.ResolvedMetadata
+			meta, decoded = metadata.Resolve(tenantID, overrides)
+			setMetadata(&summary, meta)
 		}
-		summary.MetadataIncomplete = !platformKnown
+		summary.MetadataIncomplete = !platformKnown || !decoded
 
 		summaries = append(summaries, summary)
 	}

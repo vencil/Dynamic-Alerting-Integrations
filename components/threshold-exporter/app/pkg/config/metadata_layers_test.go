@@ -172,7 +172,7 @@ func TestMetadataResolverMatchesMetrics(t *testing.T) {
 			if err != nil {
 				t.Fatalf("LoadRootPlatformChecked: %v", err)
 			}
-			got, ok := root.MetadataResolver().ResolveFile("tx", body)
+			got, ok, _ := root.MetadataResolver().ResolveFile("tx", body)
 			if !ok {
 				t.Fatalf("ResolveFile: tx not read")
 			}
@@ -189,7 +189,7 @@ func TestMetadataResolverMatchesMetrics(t *testing.T) {
 func TestMetadataResolverWithoutRootAndUnreadBodies(t *testing.T) {
 	t.Parallel()
 	var root MetadataResolver
-	got, ok := root.ResolveFile("tx", []byte("tenants:\n  tx:\n    _profile: pfin\n    _metadata: \"domain: finance\\n\"\n"))
+	got, ok, _ := root.ResolveFile("tx", []byte("tenants:\n  tx:\n    _profile: pfin\n    _metadata: \"domain: finance\\n\"\n"))
 	if want := (ResolvedMetadata{Tenant: "tx", Domain: "finance"}); !ok || !reflect.DeepEqual(got, want) {
 		t.Errorf("zero root = %+v, %v; want %+v, true", got, ok, want)
 	}
@@ -197,8 +197,52 @@ func TestMetadataResolverWithoutRootAndUnreadBodies(t *testing.T) {
 		"other tenant only": "tenants:\n  ty:\n    _metadata:\n      domain: finance\n",
 		"does not decode":   "tenants: [\n",
 	} {
-		if got, ok := root.ResolveFile("tx", []byte(body)); ok || !reflect.DeepEqual(got, ResolvedMetadata{Tenant: "tx"}) {
+		if got, ok, _ := root.ResolveFile("tx", []byte(body)); ok || !reflect.DeepEqual(got, ResolvedMetadata{Tenant: "tx"}) {
 			t.Errorf("%s: = %+v, %v; want empty, false", name, got, ok)
 		}
+	}
+}
+
+// decoded is false exactly when a written `_metadata` does not decode into
+// TenantMetadata — wherever the undecodable field comes from — and true when
+// the tenant writes none, writes null, or writes one that decodes.
+func TestMetadataResolverReportsUndecodableMetadata(t *testing.T) {
+	t.Parallel()
+	for _, tc := range []struct {
+		name        string
+		files       map[string]string
+		wantDecoded bool
+	}{
+		{"mapping under a string field", map[string]string{
+			"tx.yaml": "tenants:\n  tx:\n    _metadata:\n      domain: finance\n      environment: {a: b}\n"}, false},
+		{"single string for tags", map[string]string{
+			"tx.yaml": "tenants:\n  tx:\n    _metadata:\n      domain: finance\n      tags: x\n"}, false},
+		{"undecodable field from the platform layer", map[string]string{
+			"_platform.yaml": "tenants:\n  tx:\n    _metadata:\n      tags: x\n",
+			"tx.yaml":        "tenants:\n  tx:\n    _metadata:\n      domain: finance\n"}, false},
+		{"undecodable field from the profile", map[string]string{
+			"_profiles.yaml": "profiles:\n  pfin:\n    _metadata:\n      tags: x\n",
+			"tx.yaml":        "tenants:\n  tx:\n    _profile: pfin\n"}, false},
+		{"no _metadata", map[string]string{"tx.yaml": "tenants:\n  tx: {}\n"}, true},
+		{"null _metadata", map[string]string{"tx.yaml": "tenants:\n  tx:\n    _metadata: null\n"}, true},
+		{"decodable _metadata", map[string]string{"tx.yaml": "tenants:\n  tx:\n    _metadata:\n      environment: 123\n"}, true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			dir := t.TempDir()
+			writeMergeTree(t, dir, tc.files)
+			root, err := LoadRootPlatformChecked(dir)
+			if err != nil {
+				t.Fatal(err)
+			}
+			body, err := os.ReadFile(filepath.Join(dir, "tx.yaml"))
+			if err != nil {
+				t.Fatal(err)
+			}
+			_, ok, decoded := root.MetadataResolver().ResolveFile("tx", body)
+			if !ok || decoded != tc.wantDecoded {
+				t.Errorf("ResolveFile ok=%v decoded=%v, want ok=true decoded=%v", ok, decoded, tc.wantDecoded)
+			}
+		})
 	}
 }

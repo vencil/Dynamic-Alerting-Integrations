@@ -1345,7 +1345,8 @@ func (c *ThresholdConfig) ResolveMetadata() []ResolvedMetadata {
 	var result []ResolvedMetadata
 
 	for tenant, overrides := range c.Tenants {
-		result = append(result, tenantMetadataOf(tenant, overrides, log.Printf))
+		meta, _ := tenantMetadataOf(tenant, overrides, log.Printf)
+		result = append(result, meta)
 	}
 
 	// Sort by tenant name for deterministic output
@@ -1357,22 +1358,22 @@ func (c *ThresholdConfig) ResolveMetadata() []ResolvedMetadata {
 }
 
 // tenantMetadataOf is ResolveMetadata for one tenant's merged overrides,
-// shared with MetadataResolver (#2830) so the tenant-api
-// reads `_metadata` with this decode. The value is decoded into
-// TenantMetadata: a non-string scalar is read as its text, and a decode error
-// leaves every field empty (logf receives the WARN; nil = silent).
-func tenantMetadataOf(tenant string, overrides map[string]ScheduledValue, logf func(format string, args ...any)) ResolvedMetadata {
-	meta := ResolvedMetadata{Tenant: tenant}
+// shared with MetadataResolver (#2830) so the tenant-api reads `_metadata`
+// with this decode. The value is decoded into TenantMetadata: a non-string
+// scalar is read as its text, and a decode error leaves every field empty
+// (logf receives the WARN; nil = silent). decoded is false exactly then.
+func tenantMetadataOf(tenant string, overrides map[string]ScheduledValue, logf func(format string, args ...any)) (meta ResolvedMetadata, decoded bool) {
+	meta = ResolvedMetadata{Tenant: tenant}
 	sv, exists := overrides["_metadata"]
 	if !exists || sv.Default == "" {
-		return meta
+		return meta, true
 	}
 	var tm TenantMetadata
 	if err := yaml.Unmarshal([]byte(sv.Default), &tm); err != nil {
 		if logf != nil {
 			logf("WARN: tenant=%s: failed to parse _metadata: %v", tenant, err)
 		}
-		return meta
+		return meta, false
 	}
 	meta.RunbookURL = tm.RunbookURL
 	meta.Owner = tm.Owner
@@ -1383,7 +1384,7 @@ func tenantMetadataOf(tenant string, overrides map[string]ScheduledValue, logf f
 	meta.DBType = tm.DBType
 	meta.Tags = tm.Tags
 	meta.Groups = tm.Groups
-	return meta
+	return meta, true
 }
 
 // KeyValidation is the two-channel result of ValidateTenantKeys (#1231 c2).

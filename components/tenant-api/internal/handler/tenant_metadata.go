@@ -27,8 +27,10 @@ func metadataRootReadGuard(configDir string) *boundedcall.Guard {
 }
 
 // loadPlatformMetadata reads configDir's root platform layer for tenant
-// metadata — every root platform file's `tenants.<id>._metadata`, read
-// through cfg.LoadRootPlatformChecked — under configDir's guard.
+// metadata — what cfg.MetadataResolver reads from it: every root platform
+// file's `tenants.<id>` entries (`_metadata`, `_profile`), their `profiles:`
+// (each profile's `_metadata`), and the root carrier's `optional_overrides`,
+// read through cfg.LoadRootPlatformChecked — under configDir's guard.
 //
 // It returns an error when that layer could not be read in full: the root
 // could not be walked, a root platform file could not be read, or the read

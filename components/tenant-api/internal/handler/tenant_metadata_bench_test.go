@@ -6,6 +6,8 @@ package handler
 // entry for every second tenant, and a 50-key root `_defaults.yaml`.
 //
 //	go test ./internal/handler -run '^$' -bench MetadataProfiles -benchmem -count=3
+//
+// TestMetadataBenchTreeReads pins what the benchmarked readers read on it.
 
 import (
 	"fmt"
@@ -21,7 +23,7 @@ const (
 	benchMetadataKeys     = 50
 )
 
-func writeMetadataBenchTree(b *testing.B) string {
+func writeMetadataBenchTree(b testing.TB) string {
 	b.Helper()
 	dir := b.TempDir()
 	write := func(name, body string) {
@@ -77,5 +79,49 @@ func BenchmarkLoadTenantSnapshot_MetadataProfiles(b *testing.B) {
 		if _, err := loadTenantSnapshot(dir); err != nil {
 			b.Fatal(err)
 		}
+	}
+}
+
+// The per-tenant readers build their resolver per call (per request).
+func BenchmarkWriteScopeMeta_MetadataProfiles(b *testing.B) {
+	dir := writeMetadataBenchTree(b)
+	b.ResetTimer()
+	for i := 0; i < b.N; i++ {
+		WriteScopeMeta(dir)("t1")
+	}
+}
+
+func BenchmarkProposedScopeMeta_MetadataProfiles(b *testing.B) {
+	dir := writeMetadataBenchTree(b)
+	body := "tenants:\n  t1:\n    _profile: p1\n    k1: 5\n"
+	b.ResetTimer()
+	for i := 0; i < b.N; i++ {
+		proposedScopeMeta(dir, body)("t1")
+	}
+}
+
+func TestMetadataBenchTreeReads(t *testing.T) {
+	t.Parallel()
+	dir := writeMetadataBenchTree(t)
+	rows, err := loadAllTenants(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	byID := map[string]TenantSummary{}
+	for _, r := range rows {
+		byID[r.ID] = r
+	}
+	// t2 has a platform entry writing `_metadata`, so its profile's is not used.
+	if r := byID["t2"]; r.Environment != "" || r.Domain != "" || r.Owner != "o2" || r.MetadataIncomplete {
+		t.Errorf("t2 on LIST = %+v, want owner o2 alone (platform entry)", r)
+	}
+	if r := byID["t1"]; r.Environment != "e1" || r.Domain != "d1" || r.Owner != "" {
+		t.Errorf("t1 on LIST = %+v, want e1 / d1 (profile p1), no owner", r)
+	}
+	if env, domain := WriteScopeMeta(dir)("t1"); env != "e1" || domain != "d1" {
+		t.Errorf("on-disk read for t1 = (%q, %q), want (e1, d1)", env, domain)
+	}
+	if env, domain := proposedScopeMeta(dir, "tenants:\n  t1:\n    _profile: p3\n")("t1"); env != "e3" || domain != "d3" {
+		t.Errorf("proposed-body read for t1 = (%q, %q), want (e3, d3)", env, domain)
 	}
 }

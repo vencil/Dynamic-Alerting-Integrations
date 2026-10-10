@@ -35,14 +35,14 @@ func TestMetadataResolverWritesNoLog(t *testing.T) {
 		if id == "tx" {
 			body = "tenants:\n  tx:\n    _profile: pfin\n"
 		}
-		if _, ok := r.ResolveFile(id, []byte(body)); !ok {
+		if _, ok, _ := r.ResolveFile(id, []byte(body)); !ok {
 			t.Fatalf("%s not read", id)
 		}
 	}
-	if got, _ := r.ResolveFile("tx", []byte("tenants:\n  tx:\n    _profile: pfin\n")); got.Owner != "team-p" {
+	if got, _, _ := r.ResolveFile("tx", []byte("tenants:\n  tx:\n    _profile: pfin\n")); got.Owner != "team-p" {
 		t.Errorf("tx owner = %q, want team-p (the profile's)", got.Owner)
 	}
-	if _, ok := r.ResolveFile("ty", []byte("tenants:\n  ty:\n    _metadata:\n      environment: {a: b}\n")); !ok {
+	if _, ok, _ := r.ResolveFile("ty", []byte("tenants:\n  ty:\n    _metadata:\n      environment: {a: b}\n")); !ok {
 		t.Fatal("ty not read")
 	}
 	if buf.Len() != 0 {

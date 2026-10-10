@@ -80,7 +80,9 @@ func (s *platformMetadataSource) environmentDomainOf(data []byte, tenantID strin
 		})
 		metadata = s.metadata
 	}
-	meta, _ := metadata.ResolveFile(tenantID, data)
+	// A `_metadata` that does not decode reads as the empty pair, as an
+	// unusable file does.
+	meta, _, _ := metadata.ResolveFile(tenantID, data)
 	return meta.Environment, meta.Domain
 }
 

@@ -179,7 +179,9 @@ func LoadRootPlatformChecked(configDir string) (RootPlatform, error) {
 //     non-string scalar value is read as its text (`environment: 123` is
 //     "123"), and a value that cannot decode into its TenantMetadata field's
 //     type (a mapping for `environment`, a single string for `tags`) leaves
-//     every field empty.
+//     every field empty, and Resolve reports it (decoded = false): the
+//     tenant wrote metadata that cannot be read, which is not the same as
+//     writing none.
 //
 // Nothing is logged: not the decode WARN, not the profile WARNs, and not the
 // root carrier's parse ERROR (/metrics and the tenant-api merge core log
@@ -200,16 +202,26 @@ type MetadataResolver struct {
 // MetadataResolver builds the resolver for this root platform surface.
 func (root RootPlatform) MetadataResolver() MetadataResolver {
 	m := MetadataResolver{root: root.r}
-	all := make(map[string]map[string]ScheduledValue)
-	root.r.mergeProfilesInto(all)
-	if len(all) > 0 {
-		m.profiles = make(map[string]map[string]ScheduledValue, len(all))
-		for name, values := range all {
-			only := make(map[string]ScheduledValue, 1)
+	// mergeProfilesInto's rule (a later file over an earlier one, per
+	// profile name, per key) for the `_metadata` key alone: the profiles'
+	// other keys are never copied.
+	for i := range root.r.files {
+		pf := root.r.files[i].parsed
+		if pf.err != nil {
+			continue
+		}
+		for name, values := range pf.cfg.Profiles {
+			if m.profiles == nil {
+				m.profiles = make(map[string]map[string]ScheduledValue, len(pf.cfg.Profiles))
+			}
+			only := m.profiles[name]
+			if only == nil {
+				only = make(map[string]ScheduledValue, 1)
+				m.profiles[name] = only
+			}
 			if sv, ok := values[metadataKey]; ok {
 				only[metadataKey] = sv
 			}
-			m.profiles[name] = only
 		}
 	}
 	if c := root.r.carrier(); c != nil && c.parsed.err == nil {
@@ -222,7 +234,10 @@ func (root RootPlatform) MetadataResolver() MetadataResolver {
 
 // Resolve reads tenantID's metadata, own being the tenant's entry in its
 // tenant file as ParseConfigFile decodes it (nil = the file writes no key).
-func (m MetadataResolver) Resolve(tenantID string, own map[string]ScheduledValue) ResolvedMetadata {
+// decoded is false when the resolved `_metadata` is written but does not
+// decode into TenantMetadata — the case in which every field reads empty
+// although the tenant wrote metadata.
+func (m MetadataResolver) Resolve(tenantID string, own map[string]ScheduledValue) (meta ResolvedMetadata, decoded bool) {
 	layers := make(map[string]ScheduledValue, 2)
 	stack := func(layer map[string]ScheduledValue) {
 		for _, k := range [...]string{metadataKey, "_profile"} {
@@ -248,15 +263,17 @@ func (m MetadataResolver) Resolve(tenantID string, own map[string]ScheduledValue
 
 // ResolveFile is Resolve over a tenant file's bytes. ok is false when they
 // do not decode (ParseConfigFile) or do not declare tenantID: no metadata is
-// read for it, as /metrics reads none from a file it skips.
-func (m MetadataResolver) ResolveFile(tenantID string, tenantData []byte) (meta ResolvedMetadata, ok bool) {
+// read for it, as /metrics reads none from a file it skips. decoded is
+// Resolve's (true when ok is false).
+func (m MetadataResolver) ResolveFile(tenantID string, tenantData []byte) (meta ResolvedMetadata, ok, decoded bool) {
 	tenantCfg, err := ParseConfigFile(tenantData)
 	if err != nil {
-		return ResolvedMetadata{Tenant: tenantID}, false
+		return ResolvedMetadata{Tenant: tenantID}, false, true
 	}
 	own, declared := tenantCfg.Tenants[tenantID]
 	if !declared {
-		return ResolvedMetadata{Tenant: tenantID}, false
+		return ResolvedMetadata{Tenant: tenantID}, false, true
 	}
-	return m.Resolve(tenantID, own), true
+	meta, decoded = m.Resolve(tenantID, own)
+	return meta, true, decoded
 }
