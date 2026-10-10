@@ -23,6 +23,8 @@ updated_at: 2026-10-10
 
 ## 名詞
 
+- **da-portal**：平台的 Web 入口，租戶管理介面（tenant-manager）就在這裡。
+- **GitOps**：以 Git repo 作為設定的唯一來源，所有變更都經由 Git 進到系統的運維方式。
 - **conf.d/**：存放租戶設定 YAML 的目錄，threshold-exporter 從這裡讀設定。
 - **oauth2-proxy**：開源的認證反向代理。使用者先在它那裡經由 IdP（身分提供者，例如 GitHub、Google，或支援 OIDC 這個標準登入協定的企業身分系統）登入，它再把請求轉給後端，並以 `X-Forwarded-Email`、`X-Forwarded-Groups` 標頭帶上使用者的 email 與所屬群組。
 - **commit-on-write**：API 每處理一次寫入，就修改 conf.d/ 裡的 YAML 並立刻建立一個 git commit，commit 的 author 是操作者的 email。
@@ -45,6 +47,7 @@ updated_at: 2026-10-10
 - 維持 GitOps 精神：Git repo 仍是設定的唯一來源，API 是寫入 Git 的受控通道。
 - 重用 threshold-exporter 既有的設定解析與驗證邏輯，不另外維護一份 schema。
 - 認證交給成熟工具。
+- Portal 在 API 不可用時仍要能顯示：改讀靜態的 `platform-data.json`，再不行就用內建的示範資料。
 
 ## 決策
 
@@ -65,10 +68,10 @@ graph LR
 | **認證機制** | oauth2-proxy sidecar | Kubernetes 常見做法；授權判斷只讀 oauth2-proxy 帶來的 HTTP 標頭；支援 GitHub OAuth、Google OIDC 與通用 OIDC |
 | **寫回機制** | commit-on-write | UI 操作 → API → 修改 conf.d/ 的 YAML → git commit（author 為操作者 email）。稽核軌跡完整，與 GitOps 流程相容 |
 | **權限模型** | `_rbac.yaml` 靜態對應 | 維護一份 `_rbac.yaml`，列出 IdP 群組對應哪些租戶、有哪些權限。群組歸屬以 IdP 為準，檔案改了會自動重新載入，程式裡不寫死 |
-| **並行模型** | 寫入序列化，批量可非同步 | 所有寫入由 writer lock 序列化；批量操作預設同步執行，加 `?async=true` 改由背景 worker 執行，用 `task_id` 輪詢結果 |
+| **並行模型** | 寫入序列化，批量可非同步 | 所有寫入由 writer lock（tenant-api 內部的寫入鎖，同一時間只讓一筆寫入進行）序列化；批量操作預設同步執行，直接寫回模式下加 `?async=true` 改由背景 worker 執行，用 `task_id` 輪詢結果（PR 寫回模式忽略這個參數，一律同步） |
 | **變更通知** | SSE | 設定變更以 SSE 即時推給瀏覽器。只需要伺服器往瀏覽器單向推播，SSE 比 WebSocket 簡單，也與 HTTP/2 原生相容 |
 | **API 文件** | swaggo/swag 標註 | 從 Go handler 上的標註自動產生 `swagger.yaml`，與程式碼保持同步 |
-| **Portal 定位** | 擴充現有 da-portal | 不另起新專案，在 tenant-manager 前端加上呼叫 API 的那一層 |
+| **Portal 定位** | 擴充現有 da-portal | 不另起新專案，在 tenant-manager 前端加上呼叫 API 的那一層；API 不可用時依序改讀靜態的 `platform-data.json` 與內建示範資料 |
 | **Go module 邊界** | 獨立 module + `replace` | `github.com/vencil/tenant-api` 有自己的 `go.mod`，以 `replace` 指向 repo 內的 threshold-exporter；之後可以獨立發布 |
 
 ### 範例：`_rbac.yaml`
@@ -103,7 +106,7 @@ groups:
 }
 ```
 
-加 `?async=true` 時改回 202 與 `task_id`，結果用 `GET /api/v1/tasks/{id}` 取得。
+直接寫回模式下加 `?async=true` 時改回 202 與 `task_id`，結果用 `GET /api/v1/tasks/{id}` 取得；PR 寫回模式忽略 `?async=true`。
 
 ## 理由
 
@@ -117,7 +120,9 @@ Git repo 已經是設定的唯一來源。引入資料庫會產生 Git 與資料
 
 ### 為何用 oauth2-proxy 而非自己驗證 JWT？
 
-oauth2-proxy 支援主流 IdP（GitHub、Google、Azure AD、通用 OIDC），登入流程交給它，tenant-api 的授權判斷只讀它注入的 `X-Forwarded-Email` 與 `X-Forwarded-Groups`。這讓認證與業務邏輯分開，也與 Kubernetes ingress 層做認證的常見模式一致。
+JWT 是 IdP 登入後簽發、帶有使用者身分的 token；自己驗證就得在 tenant-api 裡處理簽章、過期與各家 IdP 的差異。
+
+oauth2-proxy 支援主流 IdP（GitHub、Google、Azure AD、通用 OIDC），登入流程交給它，tenant-api 的授權判斷只讀它注入的身分標頭。這讓認證與業務邏輯分開，也與 Kubernetes ingress 層做認證的常見模式一致。
 
 ## 後果與已知限制
 
@@ -127,6 +132,7 @@ oauth2-proxy 支援主流 IdP（GitHub、Google、Azure AD、通用 OIDC），�
 - **統一的稽核軌跡**：所有設定變更都以操作者 email 為 git commit 的 author，可以追溯。
 - **寫入前驗證**：API 在 commit 前執行 `ValidateTenantKeys()`，設定錯誤當場回報。
 - **細粒度權限**：`_rbac.yaml` 可以把特定團隊限制在它負責的租戶子集。
+- **API 不可用時 Portal 仍能顯示**：依序改讀靜態的 `platform-data.json` 與內建示範資料。
 
 **要承擔的**
 
@@ -162,6 +168,6 @@ oauth2-proxy 支援主流 IdP（GitHub、Google、Azure AD、通用 OIDC），�
 | [ADR-010: Multi-Tenant Grouping Architecture](010-multi-tenant-grouping.md) | 以這套 API 為基礎加上自訂群組 |
 | [ADR-011: PR-based Write-back 模式](011-pr-based-write-back.md) | 在 commit-on-write 之外，提供改開 PR 的寫回模式 |
 
-- [`governance-security.md` 配置驗證與合規](../governance-security.md) — Go 與 Python 兩端驗證的分工
+- [`governance-security.md` 配置驗證與合規](../governance-security.md#配置驗證與合規) — Go 與 Python 兩端驗證的分工
 - [oauth2-proxy 官方文件](https://oauth2-proxy.github.io/oauth2-proxy/) — IdP 設定參考
 - [swaggo/swag](https://github.com/swaggo/swag) — Go 標註 → swagger.yaml

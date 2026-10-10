@@ -23,7 +23,7 @@ updated_at: 2026-10-10
 
 ## 名詞
 
-- **Rule Pack**：平台隨附的一組 Prometheus 規則檔（recording rule 與告警規則），每個檔案對應一種資料庫或用途，例如 `rule-pack-mariadb.yaml`。部署時每個 Rule Pack 對應一個名為 `prometheus-rules-<pack>` 的 ConfigMap。
+- **Rule Pack**：平台隨附的一組 Prometheus 規則檔（recording rule 與告警規則），每個檔案對應一種資料庫或用途，例如 `rule-pack-mariadb.yaml`。部署時每個 Rule Pack 對應一個名為 `prometheus-rules-<pack>` 的 ConfigMap。兩個例外：平台自我監控的 `prometheus-rules-platform` 在 `rule-packs/` 下沒有對應的檔案；租戶自訂告警的 `prometheus-rules-custom-alerts` 不在本文的 projected volume 裡。
 - **Projected volume（投影卷）**：Kubernetes 的一種 volume，把多個來源（ConfigMap、Secret 等）合併掛載到同一個目錄。
 - **`optional: true`**：projected volume 來源的設定。設了之後，該 ConfigMap 不存在時 Pod 照常啟動，只是目錄裡少了那幾個檔案。
 
@@ -118,7 +118,7 @@ kubectl delete cm prometheus-rules-jvm -n monitoring
 **運維建議**
 
 - 文件要寫清楚「刪除 ConfigMap = 卸載 Rule Pack」。
-- 監控工具（例如 `check_alert.py`）應能列出目前啟用的 Rule Pack。
+- 監控工具應能列出目前啟用的 Rule Pack。
 - CI 應檢查至少有一個 Rule Pack ConfigMap 存在，否則 Prometheus 沒有任何規則。
 
 ## 考慮過的替代方案

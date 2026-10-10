@@ -15,10 +15,13 @@ lang: en
 
 ✅ **Accepted** (v2.6.0) — Adds a PR write-back mode (`--write-mode pr`) where UI operations create GitHub PRs instead of direct commits
 
+2026-10-10: corrected how the write-back mode is configured: it is `--write-mode` / `TA_WRITE_MODE`, not a `_write_mode` setting in conf.d.
+
 ## Terms
 
 - **Direct write-back (direct)**: the commit-on-write of [ADR-009](009-tenant-manager-crud-api.en.md): the API modifies YAML in conf.d/ and commits immediately.
 - **PR / MR**: GitHub's Pull Request and GitLab's Merge Request, two names for the same thing. "PR" in this document covers both.
+- **GitOps**: an operating model in which a Git repo is the single source of configuration and every change reaches the system through Git.
 - **Four-eyes principle**: a change must be reviewed by at least one other person before it takes effect.
 - **Eventual consistency**: a successful write does not take effect immediately; in PR mode the configuration only really takes effect after the PR is merged, so there is a "submitted but not yet in effect" state in between.
 
@@ -30,7 +33,7 @@ The direct write-back of [ADR-009](009-tenant-manager-crud-api.en.md) (UI → te
 
 1. **Four-eyes principle**: regulated industries such as finance and healthcare require configuration changes to be reviewed by at least one person before they take effect.
 2. **Reversibility**: with several operators working in parallel, reverting a direct commit means tracking down the commit hash by hand.
-3. **CI integration**: some teams want a config change to trigger CI first (lint, dry-run apply, SLA impact assessment) and only then be merged.
+3. **CI integration**: some teams want a config change to trigger CI first (lint, dry-run apply, SLA (service level agreement) impact assessment) and only then be merged.
 4. **Audit granularity**: a PR carries richer audit information than git log (reviewer, approval time, discussion thread).
 
 ### Decision drivers
@@ -152,11 +155,14 @@ A batch operation is consolidated into **one PR** (one PR holding several tenant
 | **Minimum permissions** | `api` scope (covers MR creation and branch operations) |
 | **Storage** | Kubernetes Secret → environment variable `TA_GITLAB_TOKEN`; never put it in a ConfigMap or YAML |
 
-### Parallel PRs for the same tenant
+### Conflicts between parallel PRs
 
-**Problem**: tenant A changes routing (PR 1) and tenant B changes a threshold (PR 2); if both modify the same file, a Git conflict can occur.
+**Problem**: when two pending PRs change the same file, merging one of them can leave the other in a Git conflict.
 
-**Approach**: if a tenant already has a pending PR, a new write returns 409 together with a link to the existing PR:
+**Approach**:
+
+1. Each PR rewrites only its own tenant's config file (a batch PR changes the files of the tenants in the batch). When several tenants share one config file, PRs for different tenants still change the same file and can still conflict.
+2. If a tenant already has a pending PR, a new write returns 409 together with a link to the existing PR:
 
 ```json
 {
@@ -169,6 +175,8 @@ A batch operation is consolidated into **one PR** (one PR holding several tenant
 }
 ```
 
+Changes made outside the API (manual commits pushed to a PR branch, a force-push to the base branch) can also cause conflicts. tenant-api does not resolve them: conflicts on GitLab MRs are recorded in logs and metrics, while GitHub PRs do not expose their conflict state.
+
 ### Showing eventual consistency
 
 In PR mode the tenant-manager UI has to distinguish two configuration states:
@@ -176,7 +184,7 @@ In PR mode the tenant-manager UI has to distinguish two configuration states:
 | State | Data source | Display |
 |-------|-------------|---------|
 | **In effect** | `conf.d/*.yaml` (HEAD of the base branch) | Normal display |
-| **Pending review** | the pending-PR list tenant-api keeps in memory | Yellow marker + "Pending PR" label |
+| **Pending review** | the pending-PR list tenant-api keeps in memory | A notice at the top of the page, "N pending PR(s) — config changes awaiting review", listing the PR links; a `PR #N` badge on the tenant card |
 
 tenant-api keeps the list of pending PRs in memory, syncs it periodically with the GitHub / GitLab API, and exposes:
 
@@ -199,11 +207,10 @@ GitHub's PR mechanism natively integrates code review, approval, and CI checks. 
 
 - It avoids ambiguity from merge order (PR 1 enables silent mode, PR 2 disables it, and the final state depends on which merges last).
 - It keeps the UI simple (at most one pending marker per tenant).
-- For several changes, the existing PR's branch can be updated (force-pushed).
 
 ### Why not split `_groups.yaml` into several files?
 
-The evaluation found the cost outweighs the benefit:
+In PR mode, group definitions are still committed directly (see "Known limitations"), and their conflicts are handled by direct write-back's HEAD conflict detection. The evaluation found the cost of splitting outweighs the benefit:
 
 - Group operations are far less frequent than tenant operations, so conflicts are unlikely.
 - Splitting would require changing the loader, the API, and the schema throughout.
@@ -221,6 +228,14 @@ The evaluation found the cost outweighs the benefit:
 - **Latency**: in PR mode a configuration change goes from "effective immediately" to "wait for the merge".
 - **Complexity**: a dependency on the GitHub / GitLab API, token management, and tracking of pending PRs.
 - **Eventual consistency**: the UI has to handle the "submitted but not in effect" intermediate state.
+- **No writes while GitHub / GitLab is unavailable**: the API then returns 503 and asks to retry later.
+- **Token problems do not stop startup**: the token is checked at startup, but a failure is only logged as a warning and startup continues.
+- **PRs never time out**: if a PR is neither merged nor closed, every later write for that tenant returns 409 until the PR is merged or closed.
+
+**Known limitations**
+
+- **Groups and saved views bypass PRs**: in PR mode, writes to group definitions (`_groups.yaml`) and saved views (`_views.yaml`) are still committed directly, so the four-eyes principle does not cover them.
+- **Single replica only**: the "one pending PR per tenant" check lives in the memory of a single process and is not coordinated across Pods. PR mode requires `replicaCount=1` (the Helm chart default); more replicas can open duplicate PRs for the same tenant. Direct write-back mode is unaffected.
 
 ## Alternatives considered
 

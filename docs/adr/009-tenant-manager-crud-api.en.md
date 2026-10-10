@@ -17,6 +17,8 @@ lang: en
 
 ## Terms
 
+- **da-portal**: the platform's web front end; the tenant management UI (tenant-manager) lives here.
+- **GitOps**: an operating model in which a Git repo is the single source of configuration and every change reaches the system through Git.
 - **conf.d/**: the directory holding tenant config YAML; threshold-exporter reads its configuration from here.
 - **oauth2-proxy**: an open-source authenticating reverse proxy. Users first sign in through it with an IdP (identity provider, for example GitHub, Google, or a corporate identity system that speaks OIDC, the standard sign-in protocol); it then forwards the request to the backend, carrying the user's email and groups in the `X-Forwarded-Email` and `X-Forwarded-Groups` headers.
 - **commit-on-write**: every write the API handles modifies the YAML in conf.d/ and immediately creates a git commit whose author is the operator's email.
@@ -39,6 +41,7 @@ Before this decision, da-portal was only a static display layer: tenant configur
 - Keep the GitOps spirit: the Git repo remains the single source of configuration, and the API is a controlled channel for writing to Git.
 - Reuse threshold-exporter's existing config parsing and validation logic instead of maintaining a separate schema.
 - Leave authentication to mature tooling.
+- The Portal must still display data when the API is unavailable: it falls back to the static `platform-data.json`, and failing that to built-in demo data.
 
 ## Decision
 
@@ -59,10 +62,10 @@ graph LR
 | **Authentication** | oauth2-proxy sidecar | A common Kubernetes pattern; authorization reads only the HTTP headers oauth2-proxy adds; supports GitHub OAuth, Google OIDC, and generic OIDC |
 | **Write-back** | commit-on-write | UI action → API → modify YAML in conf.d/ → git commit (author is the operator's email). Complete audit trail, compatible with the GitOps workflow |
 | **Permission model** | `_rbac.yaml` static mapping | One `_rbac.yaml` lists which tenants each IdP group maps to and with which permissions. Group membership comes from the IdP; the file is reloaded automatically when it changes, and nothing is hard-coded |
-| **Concurrency model** | Serialized writes, optionally async batches | All writes are serialized by the writer lock; batch operations run synchronously by default, and with `?async=true` they run on background workers and the result is polled by `task_id` |
+| **Concurrency model** | Serialized writes, optionally async batches | All writes are serialized by the writer lock (tenant-api's internal write lock, which lets one write proceed at a time); batch operations run synchronously by default, and in direct write-back mode `?async=true` runs them on background workers with the result polled by `task_id` (PR write-back mode ignores the parameter and always runs synchronously) |
 | **Change notification** | SSE | Config changes are pushed to the browser in real time over SSE. Only one-way server-to-browser push is needed, and SSE is simpler than WebSocket and works natively with HTTP/2 |
 | **API documentation** | swaggo/swag annotations | `swagger.yaml` is generated from annotations on the Go handlers, so it stays in sync with the code |
-| **Portal positioning** | Extend the existing da-portal | No new project; the tenant-manager frontend gains a layer that calls the API |
+| **Portal positioning** | Extend the existing da-portal | No new project; the tenant-manager frontend gains a layer that calls the API; when the API is unavailable it falls back to the static `platform-data.json` and then to built-in demo data |
 | **Go module boundary** | Standalone module + `replace` | `github.com/vencil/tenant-api` has its own `go.mod`, with a `replace` directive pointing to threshold-exporter in the repo; it can be released independently later |
 
 ### Example: `_rbac.yaml`
@@ -97,7 +100,7 @@ The parsed `_rbac.yaml` is stored in a `sync/atomic.Value`, so handlers read it 
 }
 ```
 
-With `?async=true` it returns 202 and a `task_id` instead, and the result is fetched with `GET /api/v1/tasks/{id}`.
+In direct write-back mode, `?async=true` returns 202 and a `task_id` instead, and the result is fetched with `GET /api/v1/tasks/{id}`; PR write-back mode ignores `?async=true`.
 
 ## Rationale
 
@@ -111,7 +114,9 @@ The Git repo is already the single source of configuration. A database would cre
 
 ### Why oauth2-proxy instead of validating JWTs ourselves?
 
-oauth2-proxy supports the mainstream IdPs (GitHub, Google, Azure AD, generic OIDC). The sign-in flow is left to it, and tenant-api's authorization reads only the `X-Forwarded-Email` and `X-Forwarded-Groups` headers it injects. This keeps authentication apart from business logic and matches the common Kubernetes pattern of doing authentication at the ingress layer.
+A JWT is the token an IdP issues after sign-in, carrying the user's identity; validating it ourselves would mean handling signatures, expiry, and the differences between IdPs inside tenant-api.
+
+oauth2-proxy supports the mainstream IdPs (GitHub, Google, Azure AD, generic OIDC). The sign-in flow is left to it, and tenant-api's authorization reads only the identity headers it injects. This keeps authentication apart from business logic and matches the common Kubernetes pattern of doing authentication at the ingress layer.
 
 ## Consequences and known limitations
 
@@ -121,6 +126,7 @@ oauth2-proxy supports the mainstream IdPs (GitHub, Google, Azure AD, generic OID
 - **A unified audit trail**: every config change uses the operator's email as the git commit author and can be traced.
 - **Validation before the write**: the API runs `ValidateTenantKeys()` before committing, and configuration errors are reported immediately.
 - **Fine-grained permissions**: `_rbac.yaml` can restrict a team to the subset of tenants it is responsible for.
+- **The Portal still displays data when the API is unavailable**: it falls back to the static `platform-data.json` and then to built-in demo data.
 
 **What we accept**
 
@@ -156,6 +162,6 @@ Several operators writing the same tenant's config at the same time can conflict
 | [ADR-010: Multi-Tenant Grouping Architecture](010-multi-tenant-grouping.en.md) | Adds custom groups on top of this API |
 | [ADR-011: PR-based Write-back Mode](011-pr-based-write-back.en.md) | Adds a write-back mode that opens a PR instead of committing directly |
 
-- [`governance-security.md` configuration validation and compliance](../governance-security.en.md) — how validation is split between Go and Python
+- [`governance-security.md` configuration validation and compliance](../governance-security.en.md#configuration-validation-and-compliance) — how validation is split between Go and Python
 - [oauth2-proxy documentation](https://oauth2-proxy.github.io/oauth2-proxy/) — IdP configuration reference
 - [swaggo/swag](https://github.com/swaggo/swag) — Go annotations → swagger.yaml

@@ -17,7 +17,7 @@ lang: en
 
 ## Terms
 
-- **Rule Pack**: a set of Prometheus rule files shipped with the platform (recording rules and alert rules), one file per database or purpose, for example `rule-pack-mariadb.yaml`. When deployed, each Rule Pack maps to a ConfigMap named `prometheus-rules-<pack>`.
+- **Rule Pack**: a set of Prometheus rule files shipped with the platform (recording rules and alert rules), one file per database or purpose, for example `rule-pack-mariadb.yaml`. When deployed, each Rule Pack maps to a ConfigMap named `prometheus-rules-<pack>`. Two exceptions: the platform self-monitoring ConfigMap `prometheus-rules-platform` has no matching file under `rule-packs/`, and the tenant custom-alert ConfigMap `prometheus-rules-custom-alerts` is not part of the projected volume described here.
 - **Projected volume**: a Kubernetes volume that merges several sources (ConfigMaps, Secrets, and so on) into one mounted directory.
 - **`optional: true`**: a setting on a projected volume source. With it, the Pod still starts when that ConfigMap does not exist; the directory simply lacks those files.
 
@@ -112,7 +112,7 @@ Result: `jvm-recording.yml` and `jvm-alert.yml` disappear from the rules directo
 **Operational recommendations**
 
 - Documentation should state clearly that "deleting the ConfigMap = unloading the Rule Pack".
-- Monitoring tools (for example `check_alert.py`) should be able to list the Rule Packs currently enabled.
+- Monitoring tools should be able to list the Rule Packs currently enabled.
 - CI should check that at least one Rule Pack ConfigMap exists; otherwise Prometheus has no rules at all.
 
 ## Alternatives considered

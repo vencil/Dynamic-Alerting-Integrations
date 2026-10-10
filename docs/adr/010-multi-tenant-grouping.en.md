@@ -9,7 +9,7 @@ lang: en
 
 > **Language / 語言：** **English (Current)** | [中文](./010-multi-tenant-grouping.md)
 
-**Decision in brief**: custom groups are defined in `_groups.yaml` in conf.d/, with members given as an explicit list of tenant IDs; they are managed through tenant-api's group API, and writes go through the same Git write-back flow as tenant config. In addition, tenant `_metadata` gains fields such as environment, region, domain, and db_type for filtering in the API and UI; these fields do not become Prometheus labels.
+**Decision in brief**: custom groups are defined in `_groups.yaml` in conf.d/, with members given as an explicit list of tenant IDs; they are managed through tenant-api's group API, and writes go through the same Git write-back flow as tenant config. In addition, tenant `_metadata` gains fields such as environment, region, domain, and db_type for filtering in the API and UI; these fields are not added as labels of `tenant_metadata_info`.
 
 ## Status
 
@@ -60,7 +60,8 @@ _metadata:
 Properties of the new fields:
 
 - **All optional**: omitting a field equals an empty value, so existing configs keep working.
-- **For the API and UI only**: they are not added as labels of `tenant_metadata_info`, which avoids a cardinality blow-up.
+- **Not added to `tenant_metadata_info`**: they do not become labels of that metric, which avoids a cardinality blow-up.
+- **`db_type` has a metric of its own**: for a tenant that declares `db_type`, the exporter also emits `tenant_expected_exporter{tenant, db_type}` (value 1), which liveness checks use to tell whether the tenant's database exporter is missing; there is one series per declaring tenant.
 - **Readable on both sides**: both the Go `TenantMetadata` struct and the Python `generate_tenant_metadata.py` understand these fields.
 
 ### 2. `_groups.yaml`: custom group definitions
@@ -100,20 +101,25 @@ groups:
 
 - Group sidebar: shows the list of groups, member counts, and create and delete actions.
 - Group filter: clicking a group filters the tenant list.
-- Multi-dimensional filters: the domain and db_type dropdowns are generated from tenant metadata.
+- Multi-dimensional filters: the list can be filtered by environment, domain, db_type, and other fields; the domain and db_type dropdowns are generated from tenant metadata.
+- Permission-aware display: the UI calls `/api/v1/me` for the caller's permissions, and without write permission the group create and delete actions are hidden (not greyed out).
+- When a write returns 409, the UI says the configuration was updated by someone else and asks the user to refresh and retry.
 
-### Example: groups and the new fields leave `/metrics` unchanged
+### Example: groups leave `/metrics` unchanged, and the new fields stay out of `tenant_metadata_info`
 
 Input: conf.d/ holds `_defaults.yaml` (`defaults: {mysql_connections: 80}`), a tenant file `db-a.yaml` (`mysql_connections: "70"`, with the `_metadata` from section 1), and the `_groups.yaml` from section 2.
 
-The lines of threshold-exporter's `/metrics` that concern this tenant:
+Every line of threshold-exporter's `/metrics` carrying `tenant="db-a"` (comment lines excluded):
 
 ```
+da_tenant_metrics_over_limit{tenant="db-a"} 0
+tenant_expected_exporter{db_type="mariadb",tenant="db-a"} 1
 tenant_metadata_info{owner="team-dba",runbook_url="https://wiki.example.com/db-a",tenant="db-a",tier="tier-1"} 1
+user_severity_dedup{mode="enable",tenant="db-a"} 1
 user_threshold{component="mysql",metric="connections",severity="warning",tenant="db-a"} 70
 ```
 
-Result: `tenant_metadata_info` carries only owner, runbook_url, and tier; the new fields such as environment and domain do not appear. Running again without `_groups.yaml` gives identical output, apart from timing metrics such as load duration.
+Result: `tenant_metadata_info` carries only owner, runbook_url, and tier; environment, region, domain, tags, and groups appear on no metric, and `db_type` appears only on `tenant_expected_exporter`. Running again without `_groups.yaml` gives identical output, apart from timing metrics such as load duration.
 
 ## Rationale
 

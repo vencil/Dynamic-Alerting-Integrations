@@ -15,7 +15,7 @@ updated_at: 2026-10-10
 
 > **Language / 語言：** **中文 (Current)** | [English](./010-multi-tenant-grouping.en.md)
 
-**決策摘要**：自訂群組定義在 conf.d/ 的 `_groups.yaml`，成員是一份明列的租戶 ID 清單，透過 tenant-api 的群組 API 管理，寫入走與租戶設定相同的 Git 寫回流程。同時在租戶的 `_metadata` 加上 environment、region、domain、db_type 等欄位，供 API 與 UI 篩選；這些欄位不會變成 Prometheus 標籤。
+**決策摘要**：自訂群組定義在 conf.d/ 的 `_groups.yaml`，成員是一份明列的租戶 ID 清單，透過 tenant-api 的群組 API 管理，寫入走與租戶設定相同的 Git 寫回流程。同時在租戶的 `_metadata` 加上 environment、region、domain、db_type 等欄位，供 API 與 UI 篩選；這些欄位不加進 `tenant_metadata_info` 的標籤。
 
 ## 狀態
 
@@ -66,7 +66,8 @@ _metadata:
 新欄位的特性：
 
 - **全部選填**：省略等同空值，向下相容。
-- **只給 API 與 UI 用**：不加進 `tenant_metadata_info` 的 Prometheus 標籤，避免 cardinality 暴增。
+- **不加進 `tenant_metadata_info`**：不成為這個指標的標籤，避免 cardinality 暴增。
+- **`db_type` 另有一個指標**：宣告了 `db_type` 的租戶，exporter 另外輸出 `tenant_expected_exporter{tenant, db_type}`（值為 1），供存活檢查判斷這個租戶的資料庫 exporter 是否缺席；每個宣告的租戶只有一條。
 - **兩端都能解析**：Go 的 `TenantMetadata` struct 與 Python 的 `generate_tenant_metadata.py` 都讀得懂這些欄位。
 
 ### 2. `_groups.yaml`：自訂群組定義
@@ -106,20 +107,25 @@ groups:
 
 - 群組側欄：顯示群組清單、成員數，以及建立與刪除操作。
 - 群組篩選：點選群組就過濾租戶清單。
-- 多維度篩選：domain、db_type 的下拉選單由租戶的 metadata 動態產生。
+- 多維度篩選：可依 environment、domain、db_type 等欄位過濾，其中 domain、db_type 的下拉選單由租戶的 metadata 動態產生。
+- 依權限顯示：呼叫 `/api/v1/me` 取得權限，沒有寫入權限時，群組的建立、刪除等寫入操作直接隱藏（不是灰掉）。
+- 寫入回 409 時，提示設定已被別人更新、請重新整理後再試。
 
-### 範例：群組與新欄位不影響 `/metrics`
+### 範例：群組不影響 `/metrics`，新欄位不進 `tenant_metadata_info`
 
 輸入：conf.d/ 裡有 `_defaults.yaml`（`defaults: {mysql_connections: 80}`）、租戶檔 `db-a.yaml`（`mysql_connections: "70"`，`_metadata` 為第 1 節的內容），以及第 2 節的 `_groups.yaml`。
 
-threshold-exporter 的 `/metrics` 中與這個租戶相關的輸出：
+threshold-exporter 的 `/metrics` 中帶 `tenant="db-a"` 的全部輸出（不含註解行）：
 
 ```
+da_tenant_metrics_over_limit{tenant="db-a"} 0
+tenant_expected_exporter{db_type="mariadb",tenant="db-a"} 1
 tenant_metadata_info{owner="team-dba",runbook_url="https://wiki.example.com/db-a",tenant="db-a",tier="tier-1"} 1
+user_severity_dedup{mode="enable",tenant="db-a"} 1
 user_threshold{component="mysql",metric="connections",severity="warning",tenant="db-a"} 70
 ```
 
-結果：`tenant_metadata_info` 只帶 owner、runbook_url、tier 三個欄位，environment、domain 等新欄位不出現；拿掉 `_groups.yaml` 重跑，除了載入耗時這類計時指標，輸出完全相同。
+結果：`tenant_metadata_info` 只帶 owner、runbook_url、tier 三個欄位，environment、region、domain、tags、groups 都不出現在任何指標上；`db_type` 只出現在 `tenant_expected_exporter`。拿掉 `_groups.yaml` 重跑，除了載入耗時這類計時指標，輸出完全相同。
 
 ## 理由
 

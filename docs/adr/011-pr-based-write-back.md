@@ -21,10 +21,13 @@ updated_at: 2026-10-10
 
 ✅ **Accepted**（v2.6.0）— 新增 PR 寫回模式（`--write-mode pr`），UI 操作產生 GitHub PR 而非直接 commit
 
+2026-10-10：更正寫回模式的設定方式：是 `--write-mode`／`TA_WRITE_MODE`，不是 conf.d 裡的 `_write_mode` 設定。
+
 ## 名詞
 
 - **直接寫回（direct）**：[ADR-009](009-tenant-manager-crud-api.md) 的 commit-on-write：API 修改 conf.d/ 的 YAML 後立刻 commit。
 - **PR／MR**：GitHub 的 Pull Request 與 GitLab 的 Merge Request，同一件事的兩種叫法。本文說 PR 時兩者都算。
+- **GitOps**：以 Git repo 作為設定的唯一來源，所有變更都經由 Git 進到系統的運維方式。
 - **四眼原則（four-eyes principle）**：變更至少要經過另一個人審核才能生效。
 - **最終一致（eventual consistency）**：寫入成功不代表立刻生效；PR 模式下，設定在 PR 合併後才真正生效，中間有一段「已送出、未生效」的狀態。
 
@@ -36,7 +39,7 @@ updated_at: 2026-10-10
 
 1. **四眼原則**：金融、醫療等受監管行業要求設定變更經過至少一人審核才能生效。
 2. **變更可逆性**：多人並行操作時，直接 commit 要 revert 得手動追 commit hash。
-3. **CI 整合**：有些團隊希望設定變更先觸發 CI（lint、dry-run apply、SLA 影響評估），再合併。
+3. **CI 整合**：有些團隊希望設定變更先觸發 CI（lint、dry-run apply、SLA（服務水準協議）影響評估），再合併。
 4. **稽核粒度**：PR 提供比 git log 更豐富的稽核資訊（reviewer、核准時間、討論串）。
 
 ### 決策驅動力
@@ -158,11 +161,14 @@ PR 建立後再加上 `tenant-api`、`auto-generated` 兩個 label。API 回應�
 | **最小權限** | `api` scope（涵蓋建立 MR 與分支操作） |
 | **儲存方式** | Kubernetes Secret → 環境變數 `TA_GITLAB_TOKEN`；不要寫進 ConfigMap 或 YAML |
 
-### 同一租戶的並行 PR
+### 並行 PR 的衝突
 
-**問題**：租戶 A 改路由（PR 1）、租戶 B 改閾值（PR 2），若兩者修改同一個檔案，就可能產生 Git 衝突。
+**問題**：兩個待審核的 PR 改到同一個檔案時，先合併的那個可能讓另一個出現 Git 衝突。
 
-**做法**：同一個租戶若已有待審核的 PR，新的寫入回 409，並附上現有 PR 的連結：
+**做法**：
+
+1. 每個 PR 只改寫它所屬租戶的設定檔（批量 PR 改的是批量裡各租戶的設定檔）。多個租戶共用同一個設定檔時，不同租戶的 PR 仍會改到同一個檔案，仍可能衝突。
+2. 同一個租戶若已有待審核的 PR，新的寫入回 409，並附上現有 PR 的連結：
 
 ```json
 {
@@ -175,6 +181,8 @@ PR 建立後再加上 `tenant-api`、`auto-generated` 兩個 label。API 回應�
 }
 ```
 
+在 API 以外的修改（手動推 commit 到 PR 分支、對 base 分支 force-push）也可能造成衝突。tenant-api 不處理這類衝突：GitLab MR 的衝突會記進日誌與指標，GitHub PR 則取不到衝突狀態。
+
 ### 最終一致的呈現
 
 PR 模式下，tenant-manager UI 要區分兩種設定狀態：
@@ -182,7 +190,7 @@ PR 模式下，tenant-manager UI 要區分兩種設定狀態：
 | 狀態 | 資料來源 | 顯示方式 |
 |------|---------|---------|
 | **生效中** | `conf.d/*.yaml`（base 分支的 HEAD） | 正常顯示 |
-| **待審核** | tenant-api 記憶體裡的待審核 PR 清單 | 黃色標記 + "Pending PR" 標籤 |
+| **待審核** | tenant-api 記憶體裡的待審核 PR 清單 | 頁面上方提示「N 個待審核 PR — 配置變更尚未生效」並列出 PR 連結；租戶卡片上顯示 `PR #N` 標記 |
 
 tenant-api 在記憶體裡維護一份待審核 PR 的清單，定期向 GitHub／GitLab API 同步，並提供：
 
@@ -205,11 +213,10 @@ GitHub 的 PR 機制原生整合了 code review、核准與 CI 檢查。自建�
 
 - 避免合併順序造成歧義（PR 1 開啟靜默、PR 2 取消靜默，最終狀態取決於合併順序）。
 - 簡化 UI（每個租戶最多一個待審核標記）。
-- 需要多次修改時，可以更新（force-push）現有 PR 的分支。
 
 ### 為何不把 `_groups.yaml` 拆成多個檔案？
 
-評估後認為成本大於效益：
+群組定義在 PR 模式下仍直接 commit（見「已知限制」），衝突由直接寫回的 HEAD 衝突偵測處理。評估後認為拆分的成本大於效益：
 
 - 群組操作的頻率遠低於租戶操作，衝突機率低。
 - 拆分需要全面修改載入程式、API 與 schema。
@@ -227,6 +234,14 @@ GitHub 的 PR 機制原生整合了 code review、核准與 CI 檢查。自建�
 - **延遲**：PR 模式下，設定變更從「立即生效」變成「等合併」。
 - **複雜度**：多了 GitHub／GitLab API 的依賴、token 管理與待審核 PR 的追蹤。
 - **最終一致**：UI 要處理「已送出、未生效」的中間狀態。
+- **GitHub／GitLab 不可用時無法寫入**：此時回 503，要求稍後重試。
+- **token 問題啟動時不擋**：啟動時會檢查 token 是否有效，但失敗只記警告、照常啟動。
+- **PR 沒有逾時機制**：一個 PR 一直不合併也不關閉，該租戶之後的寫入會一直回 409，直到 PR 合併或關閉。
+
+**已知限制**
+
+- **群組與 saved views 不走 PR**：PR 模式下，群組定義（`_groups.yaml`）與 saved views（`_views.yaml`）的寫入仍直接 commit，四眼原則不涵蓋它們。
+- **只能跑一個副本**：「同一租戶只能有一個待審核 PR」的檢查存在單一 process 的記憶體裡，不跨 Pod 協調。PR 模式必須 `replicaCount=1`（Helm chart 預設值），多個副本可能替同一個租戶開出重複的 PR；直接寫回模式不受影響。
 
 ## 考慮過的替代方案
 
