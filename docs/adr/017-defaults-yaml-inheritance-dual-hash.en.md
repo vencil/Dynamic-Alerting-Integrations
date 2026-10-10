@@ -23,6 +23,7 @@ lang: en
 | 2026-04-25 | "Defaults changed but the tenant's effective config did not" split in two: blocked by a tenant override (shadowed) and no substantive change (cosmetic) | Decision 7 |
 | 2026-09-28 | Routing settings are inherited level by level along directories too | Decision 9 |
 | 2026-10-08 | The effective config shows values verbatim as written; values `/metrics` does not serve are named key by key | Decision 10 |
+| 2026-10-10 | The `merged_hash` of `describe_tenant.py` and `tenant-verify` is read from da-guard; the blast-radius report compares custom alerts separately | Decision 2 |
 
 ## Terms
 
@@ -71,7 +72,7 @@ The order is root → each level downwards → tenant file; what is applied late
 Two exceptions:
 
 - **`_metadata` is not inherited**: `_metadata` written at an upper level does not appear in the tenant's effective config.
-- **`_custom_alerts` (tenant custom alerts, see [ADR-024](024-version-aware-threshold-via-dimensional-label.en.md)) differs between the two implementations**: the effective config `describe_tenant.py` computes is a union — the list declared at the top level of an upper `_defaults.yaml` plus the tenant's own list; the one tenant-api and da-guard compute holds only the tenant's own list. Their `merged_hash` therefore differ ([#1549](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/1549)).
+- **`_custom_alerts` (tenant custom alerts, see [ADR-024](024-version-aware-threshold-via-dimensional-label.en.md)) differs between the two implementations**: the effective config `describe_tenant.py` shows is a union — the list declared at the top level of an upper `_defaults.yaml` plus the tenant's own list, with each entry's name, the file declaring it and whether the tenant owns it; the one tenant-api and da-guard compute holds only the tenant's own list. `merged_hash` is not affected: `describe_tenant.py` and `tenant-verify` print the value da-guard computes, the same as tenant-api's, and it does not change with file names. The blast-radius report takes "did the values change" from `merged_hash` and compares custom alerts separately, by each union entry's content, name and whether the tenant owns it — not by the file declaring it: moving a file is not a change, while retuning a platform recipe's threshold lists every tenant inheriting it ([#1549](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/1549)).
 
 ### 3. Example
 
@@ -275,7 +276,7 @@ On the same tree, `/effective` and `/metrics` can give different values — for 
 - **Costs**:
   - Changes to top-level keys such as the root's `_routing_defaults` and `state_filters` are invisible in the effective config (Decision 8).
   - A comment-only edit of a tenant file is recorded as applied (Decision 7).
-  - `_custom_alerts` differs between `describe_tenant.py` and the Go implementation (Decision 2).
+  - `_custom_alerts` differs between the effective config `describe_tenant.py` shows and the Go implementation (Decision 2); `merged_hash` is always Go's value and is not affected.
   - A subdirectory file without `defaults:` is merged whole, so its top-level keys (such as `state_filters`) also enter the effective config: changing one moves the `merged_hash` of every tenant in that subtree. `rule-packs/recipes/examples/conf.d/finance/_defaults.yaml` has this shape (its only top-level key is `_custom_alerts`).
 
 ## Alternatives Considered

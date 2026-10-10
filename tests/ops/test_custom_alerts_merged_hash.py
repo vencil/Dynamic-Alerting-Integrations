@@ -163,3 +163,31 @@ def test_without_da_guard(tmp_path, monkeypatch):
     report, err = _blast(tmp_path / "a.json", tmp_path / "moved.json")
     assert report["summary"]["affected_tenants"] == 0, report
     assert "have no merged_hash in the input" in err, err
+
+
+def _compute(base: dict, pr: dict) -> dict:
+    sys.path.insert(0, str(BLAST.parent))
+    import blast_radius
+    return blast_radius.compute_blast_radius(base, pr)
+
+
+def test_equal_merged_hash_compares_only_the_recipe_lists():
+    """Go 的 merged_hash 相同：設定值以它為準，effective_config 上其他欄位的差異（兩個讀取端
+    的分歧）不報；對照：同樣的差異在 hash 不同時照報。"""
+    base = {"t1": {"merged_hash": "h1", "effective_config": {"cpu": "80"}}}
+    pr = {"t1": {"merged_hash": "h1", "effective_config": {"cpu": "81"}}}
+    assert _compute(base, pr)["summary"]["affected_tenants"] == 0
+    pr["t1"]["merged_hash"] = "h2"
+    assert _fields(_compute(base, pr)) == {"t1": ["cpu"]}
+
+
+def test_changed_merged_hash_with_no_field_diff_is_still_reported():
+    """Go 說值變了、effective_config 卻看不出哪一欄：以 Go 為準列出（Tier B 的 merged_hash），
+    不靜默丟掉。對照：兩邊 hash 都缺（da-guard 不可用）時照舊逐欄比，無差異就是 0。"""
+    base = {"t1": {"merged_hash": "h1", "effective_config": {"cpu": "80"}}}
+    pr = {"t1": {"merged_hash": "h2", "effective_config": {"cpu": "80"}}}
+    report = _compute(base, pr)
+    assert [(t["tenant_id"], t["highest_tier"]) for t in report["tenants"]] == [("t1", "B")]
+    assert _fields(report) == {"t1": ["merged_hash"]}
+    base["t1"]["merged_hash"] = pr["t1"]["merged_hash"] = None
+    assert _compute(base, pr)["summary"]["affected_tenants"] == 0

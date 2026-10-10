@@ -2823,7 +2823,7 @@ da-tools parser allowlist --format json
 
 #### tenant-verify
 
-印一個 tenant 的 effective config + `merged_hash`（v2.8.0）。設計用來支援 `docs/scenarios/incremental-migration-playbook.md` §Emergency Rollback Procedures 第 6 項驗證 checklist：rollback 後 tenant `merged_hash` 必須回到 Base PR merge 前快照。重用 `describe_tenant.py` 的 `ConfDScanner` 做 inheritance + canonical-hash，本工具是薄 CLI ergonomics 層（簡潔輸出 + exit code）。
+印一個 tenant 的 effective config + `merged_hash`（v2.8.0）。設計用來支援 `docs/scenarios/incremental-migration-playbook.md` §Emergency Rollback Procedures 第 6 項驗證 checklist：rollback 後 tenant `merged_hash` 必須回到 Base PR merge 前快照。重用 `describe_tenant.py` 的 `ConfDScanner` 做 inheritance 與 `source_hash`；`merged_hash` 讀自 `da-guard effective`（與 tenant-api `/effective`、exporter 同一個值，不在 Python 端自算，[#1549](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/1549)），所以需要 da-guard（`$DA_GUARD_BINARY` 或 PATH 上的 `da-guard`；da-tools 映像已內建）。本工具是薄 CLI ergonomics 層（簡潔輸出 + exit code）。
 
 ```bash
 # 印單一 tenant 的 effective config + merged_hash
@@ -2852,10 +2852,10 @@ da-tools tenant-verify db-fin-a --conf-d conf.d/ \
 | Code | 意義 |
 |---|---|
 | 0 | tenant 存在且只由一個檔宣告；若有 `--expect-merged-hash` 則一致。`--all`：沒有任何 tenant 被重複宣告 |
-| 1 | 缺 tenant_id、conf-d 找不到、`--all` 與 `--expect-merged-hash` 並用，或樹中任一被選用的 `_defaults.yaml` 無法解析／形狀不支援（不限該租戶的繼承鏈）（stderr 指名該檔，[#2459](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/2459)）。argparse 擋下的參數錯（未知旗標、多餘參數）是 2 |
+| 1 | 缺 tenant_id、conf-d 找不到、`--all` 與 `--expect-merged-hash` 並用，或樹中任一被選用的 `_defaults.yaml` 無法解析／形狀不支援（不限該租戶的繼承鏈）（stderr 指名該檔，[#2459](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/2459)），或沒有 `merged_hash` 可比：da-guard 找不到、失敗、樹中有 exporter 讀不了的檔，或 da-guard 不解析該 tenant（條目為 `"error": "merged_hash_unavailable"`，`detail` 帶原因，[#1549](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/1549)）。argparse 擋下的參數錯（未知旗標、多餘參數）是 2 |
 | 2 | tenant 不存在、`--expect-merged-hash` 不一致，或**重複宣告**（同一 tenant 出現在兩個以上的檔）（incremental migration playbook checklist 第 6 項擋下訊號）。`--all`：有任何 tenant 被重複宣告 |
 
-**重複宣告**（[#2093](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/2093)）：同一 tenant 由多個檔宣告時，本工具不計算任何 hash——掃描器只會留其中一份、留哪份取決於檔名排序，照算會讓第 6 項在多餘檔排前面時假通過。單一 tenant 模式（不論有沒有帶 `--expect-merged-hash`）回 exit 2，JSON 為 `{"tenant_id": ..., "error": "duplicate", "files": [...], "detail": ...}`（`files` 為排序後、相對 conf.d 的路徑），human 輸出逐行列出 `declared in: <檔>`。`--all` 把該 tenant 列成同形的 error 條目（沒有 `merged_hash`），其餘 tenant 照常輸出，最後 exit 2；human 輸出的 `# total:` 行把已驗證與重複宣告（未驗證）分開計數。處置：刪除多餘的宣告、讓 tenant 只留在一個檔，再重跑（`validate-config` 的 `tenant_uniqueness` 報的是同一件事）。
+**重複宣告**（[#2093](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/2093)）：同一 tenant 由多個檔宣告時，本工具不計算任何 hash——掃描器只會留其中一份、留哪份取決於檔名排序，照算會讓第 6 項在多餘檔排前面時假通過。單一 tenant 模式（不論有沒有帶 `--expect-merged-hash`）回 exit 2，JSON 為 `{"tenant_id": ..., "error": "duplicate", "files": [...], "detail": ...}`（`files` 為排序後、相對 conf.d 的路徑），human 輸出逐行列出 `declared in: <檔>`。`--all` 把該 tenant 列成同形的 error 條目（沒有 `merged_hash`），其餘 tenant 照常列出，最後 exit 2；human 輸出的 `# total:` 行把已驗證與重複宣告（未驗證）分開計數。⚠️ da-guard 對有重複宣告的樹整棵拒收，所以其餘 tenant 也沒有 `merged_hash`（列成 `merged_hash_unavailable` 條目、不計入已驗證）。處置：刪除多餘的宣告、讓 tenant 只留在一個檔，再重跑（`validate-config` 的 `tenant_uniqueness` 報的是同一件事）。
 
 ---
 
