@@ -47,6 +47,7 @@ lang: en
 | `docs/adr/034-legal-value-as-fallback.md` | Platform Engineers, SREs, contributors | ADR-034: 合法值不得同時當作無法辨識時的 fallback |
 | `docs/adr/035-tenant-id-single-source.md` (.en.md) | Platform Engineers, SREs, contributors | ADR-035: Single Source for the Legal Tenant-ID Character Set |
 | `docs/adr/036-single-parser-effective-config.md` (.en.md) | Platform Engineers, SREs, contributors | ADR-036: Routing and Domain-Policy Config Is Parsed Once, by the Generator |
+| `docs/adr/037-config-diff-compares-rendered-output.md` (.en.md) | Platform Engineers, SREs, contributors | ADR-037: config-diff Compares Rendered Output |
 | `docs/alerting-best-practices.md` (.en.md) | SREs, Platform Engineers | Beyond Actionable: From Alert Decisions to the Idempotency Spectrum of Automated Actions |
 | `docs/alerting-design-fundamentals.md` (.en.md) | SREs, Domain Experts (DBA), Tenants | Before the Alert Fires: From Resource Saturation to Symptom-Based Alerting |
 | `docs/alerting-slo-error-budget.md` (.en.md) | SREs, Domain Experts (DBA), Tenants | How Strict Is Strict Enough: Setting Alert Thresholds with SLOs and Error Budgets |
