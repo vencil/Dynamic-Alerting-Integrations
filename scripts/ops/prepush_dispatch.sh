@@ -55,7 +55,8 @@ _Z40="0000000000000000000000000000000000000000"
 # every later guard with EOF — the #1664 picture, relocated.
 # ⛔ The `read` builtin, not `$(cat)`: without `cat` on PATH that read nothing,
 # every guard saw zero rows and allowed the push (#2765). Trailing newlines are
-# dropped, as `$(cat)` dropped them, so the guards get the same bytes.
+# dropped, as `$(cat)` dropped them, so the guards get the same bytes for
+# anything git writes here (no NUL: `read -d ''` stops at one).
 IFS= read -r -d '' _refs || true
 _refs="${_refs%"${_refs##*[!$'\n']}"}"
 
