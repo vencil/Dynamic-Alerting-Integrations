@@ -162,9 +162,10 @@ GitLab 那一份也有 blast-radius 那一步（`generate` stage 的 `blast-radi
   沒有這一步。若 `DA_TOOLS_IMAGE` 仍釘在沒有 git 的舊版，job 第一步就會印出一行 `ERROR:`，
   說明映像裡沒有 git，然後失敗；把 `DA_TOOLS_IMAGE` 換成較新的版本即可。
 
-⚠️ config-diff 只比較租戶檔，會跳過 `_` 開頭的檔案，所以只改
-`conf.d/_defaults.yaml` 的 MR 會得到「No changes detected」——那份檔案影響每個沒有
-覆寫的租戶，要人工審。GitHub 那一份也一樣。
+⚠️ config-diff 只比較頂層租戶檔，不比較 `_` 開頭的檔案（如 `conf.d/_defaults.yaml`）
+與子目錄裡的檔。這些檔有變時，報告開頭的「Changed Files Not Compared」區段會列出檔名、
+結束碼為 1——但不會列出受影響的租戶。`_defaults.yaml` 影響每個沒有覆寫的租戶，要人工審。
+GitHub 那一份也一樣。v2.9.0 映像沒有這個區段，只改這些檔的 MR 會得到「No changes detected」。 <!-- image-caveat: v2.9.0 -->
 
 ## 2. 三階段 CI/CD Pipeline
 

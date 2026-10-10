@@ -83,7 +83,7 @@ The GitLab artifact's blast radius runs in merge request pipelines only; the rep
 | Exit Code | Meaning | CI Behavior |
 |-----------|---------|------------|
 | 0 | No configuration changes | Report says "no changes"; the comment is still refreshed |
-| 1 | Changes detected | Post blast radius report |
+| 1 | Changes detected, or a file the report does not compare (`_`-prefixed, or in a subdirectory) changed | Post blast radius report |
 | 2 | Error (directory not found, etc.) | Pipeline fails, nothing posted |
 
 > ℹ️ Row 0 used to read "skip comment", but **nothing in this repository
