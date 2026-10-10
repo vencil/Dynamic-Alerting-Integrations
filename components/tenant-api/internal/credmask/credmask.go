@@ -28,7 +28,8 @@
 //     plus `api_url: *h` puts the secret on a line no key-name rule reaches
 //     (measured while planning #1560's fix), and following aliases back to
 //     their anchors is more code to get right than refusing the shape;
-//   - a mapping key that is not a scalar.
+//   - a mapping key that is not a scalar, or carries an explicit tag other
+//     than !!str (its decoded name is not its text).
 //
 // The masked document is re-encoded, which normalizes formatting and DROPS
 // EVERY COMMENT: a commented-out `# api_url: https://…` is a credential no
@@ -59,26 +60,40 @@ var ErrUnmaskable = errors.New("document cannot be masked")
 // credentialKeys are the mapping keys whose values are masked, compared
 // case-insensitively. The tenant-config schema's receiver credentials
 // (webhook / slack / teams / rocketchat URLs, the PagerDuty keys, the SMTP
-// password, http_config's basic_auth password, bearer token and proxy URL)
-// plus the secret-typed fields Alertmanager's own receivers and http_config
-// use, so a receiver written in Alertmanager's spelling is covered too.
+// password) plus the secret-typed fields Alertmanager's own receivers use, so
+// a receiver written in Alertmanager's spelling is covered too.
+//
+// ⛔ CONTAINERS ARE MASKED WHOLE. `http_config` is passed to Alertmanager
+// as written (the route generator copies it), and it can carry a secret in
+// more places than a field list keeps up with: proxy_connect_header,
+// http_headers, tls_config's inline key, oauth2.endpoint_params, besides
+// basic_auth / bearer_token / authorization / oauth2.client_secret. So the
+// whole `http_config` value is the placeholder, as are `tls_config`,
+// header maps and `endpoint_params` wherever else they appear (an email
+// receiver's `headers` included).
 var credentialKeys = map[string]bool{
-	"url":           true,
-	"api_url":       true,
-	"webhook_url":   true,
-	"proxy_url":     true,
-	"routing_key":   true,
-	"service_key":   true,
-	"auth_password": true,
-	"auth_secret":   true,
-	"password":      true,
-	"bearer_token":  true,
-	"credentials":   true,
-	"client_secret": true,
-	"api_key":       true,
-	"token":         true,
-	"bot_token":     true,
-	"user_key":      true,
+	"http_config":          true,
+	"tls_config":           true,
+	"headers":              true,
+	"http_headers":         true,
+	"proxy_connect_header": true,
+	"endpoint_params":      true,
+	"url":                  true,
+	"api_url":              true,
+	"webhook_url":          true,
+	"proxy_url":            true,
+	"routing_key":          true,
+	"service_key":          true,
+	"auth_password":        true,
+	"auth_secret":          true,
+	"password":             true,
+	"bearer_token":         true,
+	"credentials":          true,
+	"client_secret":        true,
+	"api_key":              true,
+	"token":                true,
+	"bot_token":            true,
+	"user_key":             true,
 }
 
 // IsCredentialKey reports whether a mapping key's value is masked.
@@ -129,6 +144,12 @@ func maskNode(n *yaml.Node) error {
 		for i := 0; i+1 < len(n.Content); i += 2 {
 			k, v := n.Content[i], n.Content[i+1]
 			if k.Kind != yaml.ScalarNode || k.Anchor != "" || k.Value == "<<" {
+				return ErrUnmaskable
+			}
+			// A key with an explicit non-string tag decodes to something
+			// other than its text (`? !!binary YXBpX3VybA==` is api_url), so
+			// its name cannot be judged from k.Value.
+			if k.Style&yaml.TaggedStyle != 0 && k.ShortTag() != "!!str" {
 				return ErrUnmaskable
 			}
 			k.HeadComment, k.LineComment, k.FootComment = "", "", ""

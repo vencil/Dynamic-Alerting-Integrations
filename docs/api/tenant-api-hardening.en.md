@@ -188,7 +188,7 @@ Behaviour change: `GET /tenants/{id}`, `/effective` and `POST /tenants/{id}/diff
 
 **Who sees them**: the decision is the same predicate as the `PUT /tenants/{id}` gate (the org axis and the `environments` / `domains` axes included). A caller shown the placeholder therefore cannot `PUT`, so there is no "read the masked copy, change one line, write it back" path that replaces the real value with the placeholder. Open mode (no `_rbac.yaml`) grants no write permission, so everyone sees the masked form there.
 
-**What is masked**: matched by key name, at any depth, case-insensitively: `url`, `api_url`, `webhook_url`, `proxy_url`, `routing_key`, `service_key`, `auth_password`, `auth_secret`, `password`, `bearer_token`, `credentials`, `client_secret`, `api_key`, `token`, `bot_token`, `user_key`. A receiver appears in at least five places (`_routing.receiver`, `overrides[i].receiver`, `routes[i].receiver`, `_routing_defaults`, a routing profile); a list of paths misses the sixth the day it appears. The price of matching by name is that a value under one of these keys that is not a credential is masked too.
+**What is masked**: matched by key name, at any depth, case-insensitively. Containers whose whole value becomes the placeholder: `http_config` (the route generator hands it to Alertmanager as written, and `proxy_connect_header`, `http_headers`, `tls_config`'s key and `oauth2.endpoint_params` can all hold a secret — a field list cannot keep up), `tls_config`, `headers`, `http_headers`, `proxy_connect_header`, `endpoint_params`. Single fields: `url`, `api_url`, `webhook_url`, `proxy_url`, `routing_key`, `service_key`, `auth_password`, `auth_secret`, `password`, `bearer_token`, `credentials`, `client_secret`, `api_key`, `token`, `bot_token`, `user_key`. A receiver appears in at least five places (`_routing.receiver`, `overrides[i].receiver`, `routes[i].receiver`, `_routing_defaults`, a routing profile); a list of paths misses the sixth the day it appears. The price of matching by name is that a value under one of these keys that is not a credential is masked too.
 
 | Route | What a masked caller gets |
 |---|---|
@@ -198,9 +198,13 @@ Behaviour change: `GET /tenants/{id}`, `/effective` and `POST /tenants/{id}/diff
 
 **When it cannot be masked with certainty, nothing is shown**: the file uses an anchor, alias or merge key (`_metadata.owner: &h <secret>` plus `api_url: *h` puts the credential under a key that is not a credential key), holds more than one document, or is not YAML. `GET` returns empty `raw_yaml` and `custom_alerts` with `raw_yaml_withheld: true`; `/diff` returns 422 `MASKED_PREVIEW_UNAVAILABLE`. A masked caller's proposal over the tenant-document size limit or the request-body limit is a 413, never a preview of a truncated body.
 
-**Write-back guard**: `PUT /tenants/{id}` (and `POST /tenants/{id}/validate`) refuses with 400 a body in which any value **decodes** to the placeholder — quoted, `!!str`-tagged, as a block scalar or through an alias alike.
+**Write-back guard**: `PUT /tenants/{id}` refuses with 400 a body in which any value **decodes** to the placeholder — quoted, `!!str`-tagged, as a block scalar or through an alias alike; `POST /tenants/{id}/validate` answers the same body 200 with `valid: false` and the same reason.
 
-**Deliberately not done**: `source_hash` / `merged_hash` are still the hashes of the stored file. They confirm a guess of the whole file, which requires guessing every other field and the formatting too; making them an HMAC or dropping them for non-writers is tracked separately. This is an interim measure: the long-term fix is a reference form for credentials (a Secret reference that is never returned after it is written; #1560 option c).
+**No hashes either**: a masked caller gets `source_hash` (`GET`, `/effective`) and `merged_hash` (`/effective`) as empty strings. `merged_hash` hashes the decoded merge; a masked caller has every other value, so putting a guess where the placeholder is and running the public algorithm checks the guess offline — a dictionary attack on a low-entropy password. `source_hash` hashes the stored bytes and confirms a guess of the whole file the same way. A masked caller cannot write, so it has no use for `source_hash` as a `base_hash`.
+
+**Nothing is shown for a tagged key**: a key written `? !!binary YXBpX3VybA==` decodes to `api_url`, which its text does not show, so a key with an explicit tag other than `!!str` also counts as not maskable with certainty.
+
+This is an interim measure: the long-term fix is a reference form for credentials (a Secret reference that is never returned after it is written; #1560 option c).
 
 ---
 

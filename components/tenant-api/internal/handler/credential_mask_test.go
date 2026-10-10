@@ -149,11 +149,18 @@ func TestCredentialMask_GetTenant(t *testing.T) {
 		t.Errorf("viewer raw_yaml lost a non-credential value:\n%s", raw)
 	}
 
+	if m["source_hash"] != "" {
+		t.Errorf("viewer GET: source_hash = %v, want empty (it confirms a guess offline)", m["source_hash"])
+	}
+
 	w = f.get(t, "writers")
 	if w.Code != http.StatusOK {
 		t.Fatalf("writer GET: %d %s", w.Code, w.Body.String())
 	}
 	m = decodeJSON(t, w)
+	if h, _ := m["source_hash"].(string); h == "" {
+		t.Error("writer GET: source_hash is empty")
+	}
 	if m["raw_yaml"] != maskTenantYAML {
 		t.Errorf("writer raw_yaml is not the file verbatim:\n%v", m["raw_yaml"])
 	}
@@ -240,13 +247,56 @@ func TestCredentialMask_Effective(t *testing.T) {
 	if strings.Contains(w.Body.String(), "CANARY") {
 		t.Fatalf("viewer /effective leaks a credential: %s", w.Body.String())
 	}
-	if m := decodeJSON(t, w); m["masked"] != true {
+	m := decodeJSON(t, w)
+	if m["masked"] != true {
 		t.Errorf("viewer /effective: masked = %v, want true", m["masked"])
+	}
+	// merged_hash hashes the decoded merge: with every other value in hand,
+	// a viewer could put a guess in place of the placeholder and check it.
+	if m["merged_hash"] != "" || m["source_hash"] != "" {
+		t.Errorf("viewer /effective: merged_hash = %v, source_hash = %v; want both empty", m["merged_hash"], m["source_hash"])
 	}
 
 	w = f.call(t, GetTenantEffective(f.d), rbac.PermRead, "GET", path, "writers", "")
 	if !strings.Contains(w.Body.String(), "CANARY-SLACK") {
 		t.Errorf("writer /effective lost the credential: %s", w.Body.String())
+	}
+	if m := decodeJSON(t, w); m["merged_hash"] == "" || m["source_hash"] == "" {
+		t.Errorf("writer /effective: hashes missing: %s", w.Body.String())
+	}
+}
+
+// A webhook receiver's http_config is copied to Alertmanager as written, so
+// every field in it can be a secret. A writer can PUT it; a viewer must not
+// read any of it, on GET or /effective.
+func TestCredentialMask_HTTPConfigMaskedWhole(t *testing.T) {
+	t.Parallel()
+	file := `tenants:
+  mask-probe:
+    _routing:
+      receiver:
+        type: webhook
+        url: "https://hook.example/CANARY-URL"
+        http_config:
+          proxy_connect_header: {Proxy-Authorization: ["Basic CANARY-PCH"]}
+          tls_config: {key: CANARY-TLS}
+`
+	f := newMaskFixture(t, file)
+	for _, h := range []struct {
+		name string
+		h    http.HandlerFunc
+		path string
+	}{
+		{"GET", GetTenant(f.d), "/api/v1/tenants/" + maskTenantID},
+		{"/effective", GetTenantEffective(f.d), "/api/v1/tenants/" + maskTenantID + "/effective"},
+	} {
+		w := f.call(t, h.h, rbac.PermRead, "GET", h.path, "viewers", "")
+		if w.Code != http.StatusOK || strings.Contains(w.Body.String(), "CANARY") {
+			t.Errorf("viewer %s: %d, leaks = %v: %s", h.name, w.Code, strings.Contains(w.Body.String(), "CANARY"), w.Body.String())
+		}
+		if w := f.call(t, h.h, rbac.PermRead, "GET", h.path, "writers", ""); !strings.Contains(w.Body.String(), "CANARY-PCH") {
+			t.Errorf("writer %s lost http_config: %s", h.name, w.Body.String())
+		}
 	}
 }
 

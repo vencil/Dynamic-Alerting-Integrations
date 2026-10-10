@@ -69,10 +69,11 @@ type TenantDetail struct {
 	// replaced by the placeholder "<masked: write permission required>" and
 	// without comments, and custom_alerts is masked the same way. A PUT
 	// carrying the placeholder is refused (400), so a masked copy cannot be
-	// written back over the real values. source_hash is still the hash of the
-	// file as stored.
+	// written back over the real values. source_hash is then empty: a hash
+	// of the stored file would let a guess be checked offline.
 	Masked bool `json:"masked,omitempty"`
-	// RawYAMLWithheld is true, with raw_yaml and custom_alerts empty, when
+	// RawYAMLWithheld is true, with raw_yaml, custom_alerts and source_hash
+	// empty, when
 	// the caller would be shown the masked form but the file cannot be masked
 	// with certainty: it is not YAML, holds more than one document, or uses an
 	// anchor, alias or merge key (a credential can be placed outside any
@@ -91,6 +92,17 @@ type tenantDetailNotLoadable struct {
 	// Masked / RawYAMLWithheld: as on TenantDetail.
 	Masked          bool `json:"masked,omitempty"`
 	RawYAMLWithheld bool `json:"raw_yaml_withheld,omitempty"`
+}
+
+// sourceHashFor is the source_hash a caller is shown: empty when the caller
+// is shown the masked form (#1560). The hash of the stored bytes confirms a
+// guess of the file, credentials included, offline; the caller cannot write,
+// so it has no use for the hash as a base_hash either.
+func sourceHashFor(data []byte, masked bool) string {
+	if masked {
+		return ""
+	}
+	return cfg.ComputeSourceHash(data)
 }
 
 // rawYAMLFor returns what a caller is shown of the tenant file's bytes:
@@ -125,8 +137,9 @@ func rawYAMLFor(r *http.Request, d *Deps, tenantID string, data []byte) (raw str
 // @Description the whole file must be valid YAML); the added-section check decodes the whole file as a tenant config, and which
 // @Description broken files each can parse is not guaranteed to match, so fix the file in git when needed.
 // @Description A caller who may read the tenant but not write it gets raw_yaml with every receiver credential replaced by
-// @Description "<masked: write permission required>" and comments removed, custom_alerts masked the same way (masked: true);
-// @Description or raw_yaml and custom_alerts empty with raw_yaml_withheld: true when the file uses an anchor, alias or merge
+// @Description "<masked: write permission required>" and comments removed, custom_alerts masked the same way and
+// @Description source_hash empty (masked: true);
+// @Description or raw_yaml, custom_alerts and source_hash empty with raw_yaml_withheld: true when the file uses an anchor, alias or merge
 // @Description key, holds several documents or is not YAML.
 // @Tags        tenants
 // @Produce     json
@@ -195,7 +208,7 @@ func GetTenant(d *Deps) http.HandlerFunc {
 			writeJSON(w, http.StatusOK, tenantDetailNotLoadable{
 				ID:              tenantID,
 				RawYAML:         raw,
-				SourceHash:      cfg.ComputeSourceHash(data),
+				SourceHash:      sourceHashFor(data, masked || withheld),
 				ConfigError:     reason,
 				Masked:          masked,
 				RawYAMLWithheld: withheld,
@@ -261,7 +274,7 @@ func GetTenant(d *Deps) http.HandlerFunc {
 			Resolved:        tenantResolved,
 			Warnings:        kv.Errors,
 			Notices:         kv.Notices,
-			SourceHash:      cfg.ComputeSourceHash(data),
+			SourceHash:      sourceHashFor(data, masked || withheld),
 			CustomAlerts:    customAlerts,
 			Masked:          masked,
 			RawYAMLWithheld: withheld,

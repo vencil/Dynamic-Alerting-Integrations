@@ -965,14 +965,15 @@ definitions:
           replaced by the placeholder "<masked: write permission required>" and
           without comments, and custom_alerts is masked the same way. A PUT
           carrying the placeholder is refused (400), so a masked copy cannot be
-          written back over the real values. source_hash is still the hash of the
-          file as stored.
+          written back over the real values. source_hash is then empty: a hash
+          of the stored file would let a guess be checked offline.
         type: boolean
       raw_yaml:
         type: string
       raw_yaml_withheld:
         description: |-
-          RawYAMLWithheld is true, with raw_yaml and custom_alerts empty, when
+          RawYAMLWithheld is true, with raw_yaml, custom_alerts and source_hash
+          empty, when
           the caller would be shown the masked form but the file cannot be masked
           with certainty: it is not YAML, holds more than one document, or uses an
           anchor, alias or merge key (a credential can be placed outside any
@@ -1036,7 +1037,8 @@ definitions:
         description: |-
           Masked is true when every receiver credential in effective_config was
           replaced by the placeholder "<masked: write permission required>"
-          because the caller may read the tenant but not write it.
+          because the caller may read the tenant but not write it; source_hash
+          and merged_hash are then empty.
         type: boolean
       merged_hash:
         type: string
@@ -1889,8 +1891,9 @@ paths:
         the whole file must be valid YAML); the added-section check decodes the whole file as a tenant config, and which
         broken files each can parse is not guaranteed to match, so fix the file in git when needed.
         A caller who may read the tenant but not write it gets raw_yaml with every receiver credential replaced by
-        "<masked: write permission required>" and comments removed, custom_alerts masked the same way (masked: true);
-        or raw_yaml and custom_alerts empty with raw_yaml_withheld: true when the file uses an anchor, alias or merge
+        "<masked: write permission required>" and comments removed, custom_alerts masked the same way and
+        source_hash empty (masked: true);
+        or raw_yaml, custom_alerts and source_hash empty with raw_yaml_withheld: true when the file uses an anchor, alias or merge
         key, holds several documents or is not YAML.
       parameters:
       - description: Tenant ID
@@ -2208,8 +2211,9 @@ paths:
         A caller who may read the tenant but not write it gets every
         receiver credential in effective_config (webhook / chat URLs,
         PagerDuty keys, passwords, tokens — at any depth) replaced by
-        "<masked: write permission required>", with masked: true;
-        source_hash and merged_hash still describe the stored values.
+        "<masked: write permission required>", with masked: true and
+        source_hash and merged_hash empty (either would let a guess of
+        a credential be checked offline).
       parameters:
       - description: Tenant ID
         in: path

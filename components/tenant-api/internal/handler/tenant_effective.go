@@ -82,8 +82,9 @@ import (
 // @Description A caller who may read the tenant but not write it gets every
 // @Description receiver credential in effective_config (webhook / chat URLs,
 // @Description PagerDuty keys, passwords, tokens — at any depth) replaced by
-// @Description "<masked: write permission required>", with masked: true;
-// @Description source_hash and merged_hash still describe the stored values.
+// @Description "<masked: write permission required>", with masked: true and
+// @Description source_hash and merged_hash empty (either would let a guess of
+// @Description a credential be checked offline).
 // @Success     200  {object} TenantEffectiveResponse
 // @Failure     400  {object} ErrorResponse
 // @Failure     404  {object} ErrorResponse
@@ -153,6 +154,11 @@ func GetTenantEffective(d *Deps) http.HandlerFunc {
 		// included — a value is masked by its key, wherever it came from.
 		if !canSeeCredentials(r, d, tenantID) {
 			out.EffectiveConfig.EffectiveConfig, _ = credmask.MaskValue(out.EffectiveConfig.EffectiveConfig).(map[string]any)
+			// Both hashes cover the real values: merged_hash is a hash of
+			// the decoded merge, so a caller who has every other value can
+			// put a guess in place of the placeholder and check it offline
+			// with the public ComputeMergedHash.
+			out.SourceHash, out.MergedHash = "", ""
 			out.Masked = true
 		}
 		writeJSON(w, http.StatusOK, out)
@@ -166,7 +172,8 @@ type TenantEffectiveResponse struct {
 	cfg.EffectiveConfig
 	// Masked is true when every receiver credential in effective_config was
 	// replaced by the placeholder "<masked: write permission required>"
-	// because the caller may read the tenant but not write it.
+	// because the caller may read the tenant but not write it; source_hash
+	// and merged_hash are then empty.
 	Masked bool `json:"masked,omitempty"`
 }
 

@@ -40,8 +40,9 @@ func TestMaskYAML_MasksEveryCredentialKeyAtAnyDepth(t *testing.T) {
 	if strings.Contains(string(out), "CANARY") {
 		t.Fatalf("masked output still holds a credential:\n%s", out)
 	}
-	if n := strings.Count(string(out), Placeholder); n != 7 {
-		t.Errorf("placeholder count = %d, want 7 (one per credential field):\n%s", n, out)
+	// api_url, url, http_config (whole), routing_key.
+	if n := strings.Count(string(out), Placeholder); n != 4 {
+		t.Errorf("placeholder count = %d, want 4 (one per credential field):\n%s", n, out)
 	}
 	if !strings.Contains(string(out), "https://runbooks.example/keep-me") {
 		t.Errorf("a non-credential URL was masked:\n%s", out)
@@ -58,8 +59,8 @@ func TestMaskYAML_MasksEveryCredentialKeyAtAnyDepth(t *testing.T) {
 	}
 	// The masked document decodes back to the placeholder at every path.
 	paths := PlaceholderPaths(out)
-	if len(paths) != 7 {
-		t.Errorf("PlaceholderPaths(masked) = %v, want 7 paths", paths)
+	if len(paths) != 4 {
+		t.Errorf("PlaceholderPaths(masked) = %v, want 4 paths", paths)
 	}
 }
 
@@ -75,6 +76,8 @@ func TestMaskYAML_FailsClosed(t *testing.T) {
 		"two documents":                     "a: 1\n---\napi_url: CANARY\n",
 		"not YAML":                          "a: [unclosed\n",
 		"non-scalar key":                    "? [api_url]\n: CANARY\n",
+		"binary-tagged key":                 "a:\n  ? !!binary YXBpX3VybA==\n  : https://CANARY\n",
+		"custom-tagged key":                 "a:\n  !k api_url: https://CANARY\n",
 	}
 	for name, in := range cases {
 		t.Run(name, func(t *testing.T) {
@@ -87,6 +90,35 @@ func TestMaskYAML_FailsClosed(t *testing.T) {
 				t.Errorf("an unmaskable document returned content: %q", out)
 			}
 		})
+	}
+}
+
+// http_config is passed to Alertmanager as written and can hold a secret in
+// fields no list keeps up with: it is masked whole, as are tls_config and
+// header maps wherever they appear.
+func TestMaskYAML_MasksContainersWhole(t *testing.T) {
+	t.Parallel()
+	in := `r:
+  type: webhook
+  http_config:
+    proxy_connect_header: {Proxy-Authorization: ["Basic CANARY-PCH"]}
+    http_headers: {X-Api-Key: {secrets: [CANARY-HH]}}
+    tls_config: {key: CANARY-TLS}
+    oauth2: {client_id: c, endpoint_params: {audience: CANARY-EP}}
+email:
+  headers: {Authorization: CANARY-EMAIL}
+other:
+  tls_config: {key: CANARY-TLS2}
+`
+	out, err := MaskYAML([]byte(in))
+	if err != nil {
+		t.Fatalf("MaskYAML: %v", err)
+	}
+	if strings.Contains(string(out), "CANARY") {
+		t.Errorf("a secret inside a container survived:\n%s", out)
+	}
+	if !strings.Contains(string(out), "type: webhook") {
+		t.Errorf("a non-credential sibling was lost:\n%s", out)
 	}
 }
 

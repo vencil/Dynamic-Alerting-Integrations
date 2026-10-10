@@ -188,7 +188,7 @@ ADR-016 提到「flat tenant 缺 `_metadata.{domain,region,environment}` 時可�
 
 **誰看得到**：判定與 `PUT /tenants/{id}` 的閘門用同一個述詞（org 軸、`environments`／`domains` 軸都一樣）。所以被遮罩的人一定不能 `PUT`，不存在「讀遮罩版、改一行、寫回去」把佔位字串蓋掉真值的路徑。open mode（沒有 `_rbac.yaml`）不授予寫入權限，所以所有人都看到遮罩版。
 
-**遮哪些**：依 key 名比對，不限位置、不分大小寫：`url`、`api_url`、`webhook_url`、`proxy_url`、`routing_key`、`service_key`、`auth_password`、`auth_secret`、`password`、`bearer_token`、`credentials`、`client_secret`、`api_key`、`token`、`bot_token`、`user_key`。receiver 至少出現在五個位置（`_routing.receiver`、`overrides[i].receiver`、`routes[i].receiver`、`_routing_defaults`、routing profile），照路徑列舉的清單會在第六個位置出現時漏掉；照 key 名比對的代價是同名但不是憑證的值也會被遮。
+**遮哪些**：依 key 名比對，不限位置、不分大小寫。整個值換成佔位字串的容器：`http_config`（route generator 原樣交給 Alertmanager，`proxy_connect_header`、`http_headers`、`tls_config` 的 key、`oauth2.endpoint_params` 都可能放祕密，欄位清單追不上）、`tls_config`、`headers`、`http_headers`、`proxy_connect_header`、`endpoint_params`；單一欄位：`url`、`api_url`、`webhook_url`、`proxy_url`、`routing_key`、`service_key`、`auth_password`、`auth_secret`、`password`、`bearer_token`、`credentials`、`client_secret`、`api_key`、`token`、`bot_token`、`user_key`。receiver 至少出現在五個位置（`_routing.receiver`、`overrides[i].receiver`、`routes[i].receiver`、`_routing_defaults`、routing profile），照路徑列舉的清單會在第六個位置出現時漏掉；照 key 名比對的代價是同名但不是憑證的值也會被遮。
 
 | 出口 | 被遮罩的人看到的 |
 |---|---|
@@ -198,9 +198,13 @@ ADR-016 提到「flat tenant 缺 `_metadata.{domain,region,environment}` 時可�
 
 **無法確定遮乾淨時一律不給**：檔案用了 anchor／alias／merge key（`_metadata.owner: &h <secret>` 再 `api_url: *h`，憑證就落在不叫憑證的 key 上）、有多個 document、或不是 YAML。`GET` 回空的 `raw_yaml` 與 `custom_alerts` 加 `raw_yaml_withheld: true`；`/diff` 回 422 `MASKED_PREVIEW_UNAVAILABLE`。被遮罩的人送的提案超過租戶文件大小上限或 request body 上限時回 413，不截斷後照算。
 
-**寫回保護**：`PUT /tenants/{id}`（以及 `POST /tenants/{id}/validate`）的 body 只要有任何值**解碼後**等於佔位字串就回 400，引號、`!!str`、block scalar、alias 都一樣。
+**寫回保護**：`PUT /tenants/{id}` 的 body 只要有任何值**解碼後**等於佔位字串就回 400，引號、`!!str`、block scalar、alias 都一樣；`POST /tenants/{id}/validate` 對同一個 body 回 200 `valid: false` 並列出同一條理由。
 
-**刻意不做的**：`source_hash`／`merged_hash` 仍是原檔的 hash，它可以拿來驗證「猜的整份檔對不對」，但要猜中整份檔（含其他欄位與格式）才成立；改成 HMAC 或對非寫者拿掉另案處理。這是過渡方案，長期解是讓憑證改用參照形態（Secret 參照，寫入後不再回傳；#1560 選項 c）。
+**hash 也不給**：被遮罩的人拿到的 `source_hash`（`GET`、`/effective`）與 `merged_hash`（`/effective`）是空字串。`merged_hash` 是解碼後合併結果的 hash，被遮罩的人手上有其他所有值，把猜測填回佔位字串的位置、用公開的演算法算一次就能離線驗證猜對沒有，低熵的密碼可以字典攻擊；`source_hash` 是原檔位元組的 hash，同樣能驗證對整份檔的猜測。被遮罩的人不能寫入，也用不到 `source_hash` 當 `base_hash`。
+
+**檔案 key 帶 tag 時不給**：key 寫成 `? !!binary YXBpX3VybA==` 會解碼成 `api_url`，照字面比對看不出來，所以 key 帶 `!!str` 以外的明確 tag 也算無法確定遮乾淨。
+
+這是過渡方案，長期解是讓憑證改用參照形態（Secret 參照，寫入後不再回傳；#1560 選項 c）。
 
 ---
 
