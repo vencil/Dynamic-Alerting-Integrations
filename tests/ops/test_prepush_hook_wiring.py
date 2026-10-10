@@ -854,6 +854,81 @@ def test_every_guard_in_the_dispatcher_gets_the_refspec_not_just_the_first(
     )
 
 
+def test_a_direct_push_to_main_is_blocked_without_cat_on_path(tmp_path: Path) -> None:
+    """#2765: the dispatcher read git's stdin with `$(cat)`. With no `cat` on
+    PATH that read nothing, every guard saw zero rows and the push to main went
+    through. PATH here holds only bash and git; no global or system config, so
+    an LFS filter there cannot block the push for another reason."""
+    work = _make_repo(tmp_path, _PROTECT_ONLY)
+    assert _install_guards(work).returncode == 0
+    env = {**_SIBLINGS_OFF, "GIT_CONFIG_GLOBAL": os.devnull, "GIT_CONFIG_NOSYSTEM": "1",
+           "PATH": _path_of(tmp_path, "bash", "git")["PATH"]}
+    assert not (tmp_path / "bin" / "cat").exists()
+
+    blocked, out = _push(work, "HEAD:refs/heads/main", env_extra=env)
+    assert blocked.returncode != 0 and _banner_for("main") in out, out
+
+    allowed, allowed_out = _push(work, "HEAD:refs/heads/feat/x", env_extra=env)
+    assert allowed.returncode == 0, f"CONTROL: a feature push was blocked:\n{allowed_out}"
+
+
+@pytest.mark.parametrize("refs", [
+    "refs/heads/f {sha} refs/heads/main {z}\n",
+    "refs/heads/f {sha} refs/heads/main {z}\nrefs/heads/g {sha} refs/heads/g {z}\n",
+    "refs/heads/50%Z {sha} refs/heads/main {z}\n",
+    "",
+], ids=["one-row", "two-rows", "percent-in-a-ref-name", "up-to-date-push"])
+def test_every_guard_gets_the_bytes_git_sent(tmp_path: Path, refs: str) -> None:
+    """#2765: the dispatcher hands each guard exactly what git wrote on its
+    stdin — no row lost, none added, not even an empty one. `%` is legal in a
+    ref name, and git sends nothing at all for an up-to-date push."""
+    work = _make_repo(tmp_path, _PROTECT_ONLY)
+    ops = work / "scripts" / "ops"
+    guards = _dispatcher_guards()
+    for g in guards:
+        (ops / g).write_text(f'#!/usr/bin/env bash\ncat > "{tmp_path / g}.in"\n',
+                             encoding="utf-8", newline="\n")
+    sha = _git(work, "rev-parse", "HEAD").stdout.strip()
+    data = refs.format(sha=sha, z="0" * 40)
+    r = subprocess.run(  # subprocess-timeout: ignore
+        [_BASH, str(ops / "prepush_dispatch.sh"), "origin", "url"], cwd=work,
+        input=data.encode(), capture_output=True,
+        env={**os.environ, "GIT_CONFIG_GLOBAL": os.devnull, "GIT_CONFIG_NOSYSTEM": "1"})
+    assert r.returncode == 0, r.stderr
+    skipped = set(_dispatcher_array("GUARDS_NEEDING_COMMITS")) if not data else set()
+    for g in guards:
+        got = tmp_path / f"{g}.in"
+        assert (None if g in skipped else data.encode()) == (
+            got.read_bytes() if got.exists() else None), g
+
+
+@pytest.mark.parametrize("case", ["chained", "guard-missing", "lfs-without-git-lfs"])
+def test_the_dispatcher_s_refusals_are_printed_without_cat_on_path(
+    tmp_path: Path, case: str
+) -> None:
+    """#2765: the dispatcher's own messages need no `cat` either. Without one a
+    refusal still exits non-zero but says nothing but `cat: command not found`."""
+    work = _make_repo(tmp_path, _PROTECT_ONLY)
+    ops = work / "scripts" / "ops"
+    said = {"chained": _CHAINED_STILL_THERE,
+            "guard-missing": "require_preflight_pass.sh is missing from",
+            "lfs-without-git-lfs": "git-lfs is not on PATH"}[case]
+    if case == "chained":
+        (work / ".git" / "hooks" / "pre-push.chained").write_text("x\n", encoding="utf-8")
+    elif case == "guard-missing":
+        (ops / "require_preflight_pass.sh").unlink()
+    else:
+        assert _git(work, "config", "filter.lfs.clean", "git-lfs clean -- %f").returncode == 0
+    env = {**os.environ, **_SIBLINGS_OFF, "GIT_CONFIG_GLOBAL": os.devnull,
+           "GIT_CONFIG_NOSYSTEM": "1", "PATH": _path_of(tmp_path, "bash", "git")["PATH"]}
+    r = subprocess.run(  # subprocess-timeout: ignore
+        [_BASH, str(ops / "prepush_dispatch.sh"), "origin", "url"], cwd=work,
+        input="refs/heads/f " + "a" * 40 + " refs/heads/f " + "0" * 40 + "\n",
+        capture_output=True, text=True, encoding="utf-8", errors="replace", env=env)
+    assert r.returncode != 0 and said in r.stderr, r.stderr
+    assert "command not found" not in r.stderr, r.stderr
+
+
 # ---------------------------------------------------------------------------
 # "Nothing to push" is not refused, whatever the environment says (#1846)
 # ---------------------------------------------------------------------------
