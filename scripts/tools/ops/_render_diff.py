@@ -20,8 +20,9 @@ lays down:
 
 A failure is the configuration's (`kind="config"`) only when it is one of:
 served-values exits 3 (a file does not decode or cannot be read), da-guard
-accepts the arguments but exits 2 (a tree the exporter's load rejects, e.g. a
-tenant declared twice), or the route generator exits 1 without a traceback.
+accepts the arguments but exits 2 without a Go panic (a tree the exporter's
+load rejects, e.g. a tenant declared twice), or the route generator rejects the
+tree (exit 1 without a traceback, or exit 2 with its routing-tree refusal).
 Anything else is the tool's (`kind="tool"`) and is never downgraded. A side
 with no conf.d, or no config file in it, is not rendered: as the base it is an
 empty configuration (first import), as the PR side it is `not_computed`.
@@ -32,7 +33,9 @@ read as a moved route; siblings with identical matchers are paired in order
 (`#1`, `#2`, …). A node belongs to the tenant of the first `tenant="X"`
 matcher on its path, else to `PLATFORM`. A receiver whose definition changed
 belongs to every tenant whose route (on either side) points at it; fields that
-may carry credentials are reported as changed with both values masked.
+may carry credentials are reported as changed with both values masked — in a
+receiver and in served-values alike (`values._routing` carries the tenant's
+receiver; `unserved` may carry a routing key as written).
 Inhibit rules are compared as a multiset, each belonging to the tenant its
 `tenant="X"` matcher names.
 
@@ -78,6 +81,10 @@ SERVED_FIELDS = ("values", "severities", "state_filters", "unserved", "dropped",
 # Receiver fields whose value may be a credential (webhook URLs carry tokens).
 _SECRET_KEY = re.compile(r"url|token|password|secret|key|credential|auth", re.IGNORECASE)
 _TENANT_MATCHER = re.compile(r'^\s*tenant\s*=\s*"?(.*?)"?\s*$')
+# One Alertmanager matcher: name, operator, value (quoted or not).
+_MATCHER = re.compile(r'^\s*([A-Za-z_][A-Za-z0-9_]*)\s*(=~|!~|!=|=)\s*(?:"((?:[^"\\]|\\.)*)"|(.*?))\s*$')
+# The route generator's refusal of a tree's shape (exit 2, ADR-017 Decision 9).
+GENERATOR_TREE_REFUSAL = "routing-tree error(s)"
 
 
 class RenderFailure(NamedTuple):
@@ -162,7 +169,9 @@ def render_served(conf_d: str | os.PathLike[str], at: str, *, binary: str | None
     except tv.DaGuardError as e:
         # Exit 2 from a da-guard that accepts the arguments is the tree's
         # (#2725); a timeout or a signal carries no code we can trust.
-        tree = not e.binary_fault and e.returncode == 2
+        panic = "goroutine " in e.stderr and any(
+            ln.startswith("panic:") for ln in e.stderr.splitlines())
+        tree = not e.binary_fault and e.returncode == 2 and not panic
         raise RenderError(RenderFailure("config" if tree else "tool",
                                         f"served-values: {e.message}")) from e
 
@@ -185,7 +194,9 @@ def render_routes(conf_d: str | os.PathLike[str], *,
         if proc.returncode != 0:
             last = _last_line(proc.stderr) or _last_line(proc.stdout)
             crashed = "Traceback (most recent call last)" in proc.stderr
-            kind = "config" if proc.returncode == 1 and not crashed else "tool"
+            refused = (proc.returncode == 1
+                       or (proc.returncode == 2 and GENERATOR_TREE_REFUSAL in proc.stderr))
+            kind = "config" if refused and not crashed else "tool"
             raise RenderError(RenderFailure(kind, f"route generator exited {proc.returncode}: {last}"))
         if not out.exists():
             # A tree with no tenant: the generator exits 0 and writes nothing
@@ -253,7 +264,17 @@ def diff_served(base: dict[str, tv.TenantValues], pr: dict[str, tv.TenantValues]
             bm, pm = getattr(b, field) or {}, getattr(p, field) or {}
             for key in sorted(set(bm) | set(pm), key=str):
                 bv, pv = bm.get(key), pm.get(key)
-                if _canon(bv) != _canon(pv):
+                if _canon(bv) == _canon(pv):
+                    continue
+                if isinstance(bv, dict) or isinstance(pv, dict):
+                    # Leaf by leaf, so a credential inside (the receiver of
+                    # `_routing`) is masked like a receiver's.
+                    for leaf, (lb, lp) in _field_changes(bv if isinstance(bv, dict) else {},
+                                                         pv if isinstance(pv, dict) else {}).items():
+                        out.append(ValueChange(tenant, field, f"{key}.{leaf}", lb, lp))
+                elif _secret_key(str(key)):
+                    out.append(ValueChange(tenant, field, key, _mask(bv), _mask(pv)))
+                else:
                     out.append(ValueChange(tenant, field, key, bv, pv))
     return out
 
@@ -315,10 +336,21 @@ def flatten_routes(cfg: dict[str, Any]) -> dict[tuple[str, ...], dict[str, Any]]
 
 
 def _matchers(node: dict[str, Any]) -> list[str]:
-    out = [str(m) for m in node.get("matchers") or []]
+    out = [_normal_matcher(str(m)) for m in node.get("matchers") or []]
     out += [f'{k}="{v}"' for k, v in (node.get("match") or {}).items()]
     out += [f'{k}=~"{v}"' for k, v in (node.get("match_re") or {}).items()]
     return sorted(out)
+
+
+def _normal_matcher(m: str) -> str:
+    """`name op "value"`: the spellings Alertmanager reads as one matcher
+    (spaces, an unquoted value) compare equal."""
+    hit = _MATCHER.match(m)
+    if not hit:
+        return m.strip()
+    name, op, quoted, bare = hit.groups()
+    value = quoted if quoted is not None else (bare or "").replace('"', '\\"')
+    return f'{name}{op}"{value}"'
 
 
 def tenant_of_path(path: tuple[str, ...]) -> str:
@@ -370,11 +402,20 @@ def _field_changes(base: dict[str, Any], pr: dict[str, Any]) -> dict[str, tuple[
         b, p = bl.get(path), pl.get(path)
         if _canon(b) == _canon(p):
             continue
-        if any(_SECRET_KEY.search(part) for part in path.split(".") if not part.isdigit()):
-            b = None if b is None else MASKED
-            p = None if p is None else MASKED
+        if any(_secret_key(part) for part in path.split(".") if not part.isdigit()):
+            b, p = _mask(b), _mask(p)
         out[path] = (b, p)
     return out
+
+
+def _secret_key(name: str) -> bool:
+    """A field that may hold a credential: by its name, or a routing key as a
+    whole (its value as written may be a receiver with a URL in it)."""
+    return bool(_SECRET_KEY.search(name)) or name.startswith("_routing")
+
+
+def _mask(v: Any) -> Any:
+    return None if v is None else MASKED
 
 
 def _leaves(node: Any, prefix: str = "") -> dict[str, Any]:

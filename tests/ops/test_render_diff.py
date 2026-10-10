@@ -111,6 +111,26 @@ def test_state_filter_severity_change_is_seen_through_served_values(tmp_path, da
     assert not [c for c in d.served.changes if c.field == "values"]  # `_state_*` 的 true/false 不變
 
 
+@pytest.mark.parametrize("secret", ["?token=SEKRET-1", "bearer"], ids=["url-token", "bearer-token"])
+def test_credentials_do_not_leak_through_served_values(tmp_path, da_guard, secret):
+    """`values._routing` 帶著租戶的 receiver：served 那一面也要遮罩，任何地方都不得出現憑證。"""
+    text = (SAMPLE / "db-b.yaml").read_text(encoding="utf-8")
+    url = next(ln.split("url:", 1)[1].strip().strip('"\'') for ln in text.splitlines() if "url:" in ln)
+
+    def edit(c):
+        if secret == "bearer":
+            line = next(ln for ln in text.splitlines() if "url:" in ln)
+            indent = line[:len(line) - len(line.lstrip())]
+            _edit(c, line, line + f"\n{indent}http_config:\n{indent}  bearer_token: \"BT-SEKRET-2\"", rel="db-b.yaml")
+        else:
+            _edit(c, url, url + secret, rel="db-b.yaml")
+    d = _diff(tmp_path, da_guard, edit)
+    assert d.served.changes or d.routes.changes  # 對照：這個變更確實被看到了
+    assert "SEKRET" not in repr(d), [c for c in d.served.changes]
+    routing = [c for c in d.served.changes if c.key.startswith("_routing.")]
+    assert routing and all(rd.MASKED in (c.base, c.pr) for c in routing), routing
+
+
 def test_receiver_credential_change_is_reported_masked(tmp_path, da_guard):
     """db-b 自己的 webhook URL 改了：歸給 db-b，前後值都遮罩。"""
     text = (SAMPLE / "db-b.yaml").read_text(encoding="utf-8")
@@ -149,8 +169,26 @@ def test_base_side_duplicate_tenant_is_the_configs_fault(tmp_path, da_guard):
     base, pr = _copy(tmp_path, "base"), _copy(tmp_path, "pr")
     (base / "zz-dup.yaml").write_text((SAMPLE / "db-a.yaml").read_text(encoding="utf-8"), encoding="utf-8")
     d = rd.compare(base, pr, AT, binary=da_guard)
-    assert d.served.status == "not_compared", d.served
+    assert (d.served.status, d.routes.status) == ("not_compared", "not_compared"), d
     assert d.exit_code == 1
+
+
+def test_base_side_routing_tree_refusal_is_the_configs_fault(tmp_path, da_guard):
+    """產生器以結束碼 2 拒收樹的形狀（子目錄的 `_routing_enforced`）：是設定壞了，不擋 PR。"""
+    base, pr = _copy(tmp_path, "base"), _copy(tmp_path, "pr")
+    (base / "team").mkdir()
+    (base / "team" / "_defaults.yaml").write_text(_ENFORCED, encoding="utf-8")
+    d = rd.compare(base, pr, AT, binary=da_guard)
+    assert d.routes.status == "not_compared", d.routes
+    assert "_routing_enforced" in d.routes.reason
+    assert d.exit_code == 1
+
+
+def test_generator_tree_refusal_wording_is_what_we_match():
+    """產生器拒收行的措辭一改，上面的分類就會失效：在這裡釘住。"""
+    import generate_alertmanager_routes as gar
+    lines = gar.routing_tree_errors_refusal([("k", "f.yaml", "field", "msg")])
+    assert rd.GENERATOR_TREE_REFUSAL in lines[0]
 
 
 def test_first_import_counts_every_tenant_as_added(tmp_path, da_guard):
@@ -214,7 +252,8 @@ def test_both_sides_broken_follows_the_pr_side(tmp_path, da_guard):
     (tv.ServedValuesError("did not finish", None, ""), "tool"),
     (tv.ServedValuesError("killed", -9, ""), "tool"),
     (tv.DaGuardNotFoundError("no da-guard"), "tool"),
-], ids=["parse-failed", "tree-rejected", "stale", "broken", "timeout", "signal", "missing"])
+    (tv.ServedValuesError("exited 2", 2, "panic: runtime error: index out of range\n\ngoroutine 1 [running]:\n"), "tool"),
+], ids=["parse-failed", "tree-rejected", "stale", "broken", "timeout", "signal", "missing", "go-panic"])
 def test_served_failure_classification(monkeypatch, err, kind):
     def boom(*a, **k):
         raise err
@@ -228,6 +267,7 @@ def test_served_failure_classification(monkeypatch, err, kind):
     (1, "t.yaml: failed to parse", "config"),
     (1, "Traceback (most recent call last):\n  File ...\nKeyError: 'x'", "tool"),
     (2, "ERROR: config directory not found", "tool"),
+    (2, "ERROR: 1 routing-tree error(s) — nothing was generated, written or applied", "config"),
 ])
 def test_generator_failure_classification(monkeypatch, tmp_path, rc, stderr, kind):
     class P:
@@ -264,6 +304,14 @@ def test_route_identity_is_the_matcher_path_not_the_receiver_name():
     assert ('tenant="a" #2',) in rd.flatten_routes(cfg("x"))
 
 
+def test_matcher_spelling_alone_is_no_change():
+    """Alertmanager 讀成同一個 matcher 的寫法（空白、沒加引號）不算路由變更。"""
+    def cfg(m):
+        return {"route": {"receiver": "d", "routes": [{"matchers": [m, 'tenant="a"'], "receiver": "r"}]}}
+    assert rd.diff_routes(cfg('severity="critical"'), cfg("severity = critical")) == []
+    assert rd.diff_routes(cfg('severity="critical"'), cfg('severity="warning"')) != []  # 對照組
+
+
 def test_inhibit_rules_compare_as_a_multiset_and_belong_to_their_tenant():
     rule = {"source_matchers": ['severity="critical"', 'tenant="a"'], "target_matchers": ['severity="warning"', 'tenant="a"'], "equal": ["alertname"]}
     plat = {"source_matchers": ['severity="critical"'], "target_matchers": ['severity="warning"'], "equal": ["alertname"]}
@@ -293,3 +341,13 @@ def test_generator_is_found_beside_this_module():
     """repo 與 da-tools 映像（扁平）都把產生器放在本模組旁邊。"""
     assert rd.GENERATOR.is_file() and rd.GENERATOR.parent == Path(rd.__file__).resolve().parent
     assert sys.executable
+
+
+def test_unserved_routing_value_as_written_is_masked():
+    """`unserved` 照原文帶出路由鍵（例如寫錯的 `_routing` 是一段字串）：整段遮罩。"""
+    def t(raw):
+        return tv.TenantValues("a", {}, {}, {"_routing": raw, "x": raw}, {}, None, {}, {})
+    out = rd.diff_served({"a": t("url: https://h/SEKRET-1")}, {"a": t("url: https://h/SEKRET-2")})
+    by_key = {c.key: (c.base, c.pr) for c in out}
+    assert by_key["_routing"] == (rd.MASKED, rd.MASKED)
+    assert by_key["x"] == ("url: https://h/SEKRET-1", "url: https://h/SEKRET-2")  # 對照：一般鍵照原值
