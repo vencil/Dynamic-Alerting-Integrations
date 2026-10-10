@@ -14,6 +14,7 @@ import yaml
 
 
 import config_diff as cd  # noqa: E402
+import _lib_redact  # noqa: E402
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
 
@@ -1095,7 +1096,10 @@ class TestCredentialsAreNotPrinted:
         looks_secret = {n for n in names
                         if re.search(r"pass|key|token|secret|url", n, re.I)}
         not_credentials = {"runbook_url", "icon_url", "client_url"}
-        assert looks_secret - not_credentials == set(cd._CREDENTIAL_KEYS)
+        # schema 裡像憑證的欄位，每一個都在遮罩名單裡（名單與 tenant-api 的 credmask 同一份，
+        # 兩者一致由 tests/ops/test_lib_redact.py 守）
+        assert looks_secret - not_credentials <= set(cd._CREDENTIAL_KEYS), \
+            looks_secret - not_credentials - set(cd._CREDENTIAL_KEYS)
 
 
 class TestUncoveredFiles:

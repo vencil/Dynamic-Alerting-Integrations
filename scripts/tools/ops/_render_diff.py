@@ -63,9 +63,10 @@ import yaml  # noqa: E402
 
 import _lib_confd  # noqa: E402
 import _lib_tenant_values as tv  # noqa: E402
+from _lib_redact import REDACTED, is_secret_field  # noqa: E402
 
 PLATFORM = "(platform)"
-MASKED = "***"
+MASKED = REDACTED
 VIEW_SERVED = "served"
 VIEW_ROUTES = "routes"
 # The route generator ships beside this module: in the repo both live in
@@ -78,8 +79,6 @@ EMPTY_ROUTES: dict[str, Any] = {"route": {}, "receivers": [], "inhibit_rules": [
 
 ROUTE_ATTRS = ("receiver", "group_by", "group_wait", "group_interval", "repeat_interval", "continue")
 SERVED_FIELDS = ("values", "severities", "state_filters", "unserved", "dropped", "schedules")
-# Receiver fields whose value may be a credential (webhook URLs carry tokens).
-_SECRET_KEY = re.compile(r"url|token|password|secret|key|credential|auth", re.IGNORECASE)
 _TENANT_MATCHER = re.compile(r'^\s*tenant\s*=\s*"?(.*?)"?\s*$')
 # One Alertmanager matcher: name, operator, value (quoted or not).
 _MATCHER = re.compile(r'^\s*([A-Za-z_][A-Za-z0-9_]*)\s*(=~|!~|!=|=)\s*(?:"((?:[^"\\]|\\.)*)"|(.*?))\s*$')
@@ -411,7 +410,7 @@ def _field_changes(base: dict[str, Any], pr: dict[str, Any]) -> dict[str, tuple[
 def _secret_key(name: str) -> bool:
     """A field that may hold a credential: by its name, or a routing key as a
     whole (its value as written may be a receiver with a URL in it)."""
-    return bool(_SECRET_KEY.search(name)) or name.startswith("_routing")
+    return is_secret_field(name) or name.startswith("_routing")
 
 
 def _mask(v: Any) -> Any:
