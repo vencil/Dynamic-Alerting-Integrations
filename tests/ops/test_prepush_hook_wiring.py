@@ -699,6 +699,12 @@ def test_deleting_a_branch_does_not_require_a_green_docs_build(tmp_path: Path) -
     assert _git(work, "-c", "core.hooksPath=/dev/null", "commit", "-q",
                 "-m", "docs edit").returncode == 0
     assert _git(work, "push", "-q", "origin", "HEAD:refs/heads/tmpdel").returncode == 0
+    # Branches the mixed pushes below update. git sends rows for refs the remote
+    # already has first, sorted by name, then new ones — not in refspec order.
+    # Both are created here, so the names set the order.
+    for name in ("aa-docs", "zz-docs"):
+        assert _git(work, "push", "-q", "origin",
+                    f"HEAD~1:refs/heads/{name}").returncode == 0
     assert _install_guards(work).returncode == 0
 
     env = {"GIT_PREFLIGHT_BYPASS": "1",
@@ -716,10 +722,19 @@ def test_deleting_a_branch_does_not_require_a_green_docs_build(tmp_path: Path) -
         f"deleting a branch was blocked by the docs check:\n{del_out}"
     )
 
+    # #2802: a deletion row in the same push must not take the commits with
+    # it. aa-docs < tmpdel < zz-docs: the update row comes first, then last.
+    for specs in (("HEAD:refs/heads/aa-docs", ":refs/heads/tmpdel"),
+                  (":refs/heads/tmpdel", "HEAD:refs/heads/zz-docs")):
+        mixed, mixed_out = _push(work, *specs, env_extra=env)
+        assert mixed.returncode != 0 and "strict says no" in mixed_out, (
+            f"{specs}: the docs build did not run for the pushed branch:\n{mixed_out}")
+
 
 def test_deleting_main_is_still_judged(tmp_path: Path) -> None:
-    """⛔ The other side of the skip above: it must not turn into "deletions are
-    exempt". #1691 is precisely about `git push origin :main`."""
+    """⛔ The other side of the docs check skipping deletions above: it must not
+    turn into "deletions are exempt". #1691 is precisely about
+    `git push origin :main`."""
     work = _make_repo(tmp_path, _PROTECT_ONLY)
     assert _install_guards(work).returncode == 0
     blocked, out = _push(work, ":refs/heads/main", env_extra=_SIBLINGS_OFF)
@@ -876,8 +891,12 @@ def test_a_direct_push_to_main_is_blocked_without_cat_on_path(tmp_path: Path) ->
     "refs/heads/f {sha} refs/heads/main {z}\n",
     "refs/heads/f {sha} refs/heads/main {z}\nrefs/heads/g {sha} refs/heads/g {z}\n",
     "refs/heads/50%Z {sha} refs/heads/main {z}\n",
+    "(delete) {z} refs/heads/old {sha}\n",
+    "refs/heads/a {sha} refs/heads/a {z}\n(delete) {z} refs/heads/old {sha}\n"
+    "refs/heads/main {sha} refs/heads/main {z}\n",
     "",
-], ids=["one-row", "two-rows", "percent-in-a-ref-name", "up-to-date-push"])
+], ids=["one-row", "two-rows", "percent-in-a-ref-name", "deletion-only",
+        "deletion-between-two-updates", "up-to-date-push"])
 def test_every_guard_gets_the_bytes_git_sent(tmp_path: Path, refs: str) -> None:
     """#2765: the dispatcher hands each guard exactly what git wrote on its
     stdin — no row lost, none added, not even an empty one. `%` is legal in a
@@ -895,11 +914,9 @@ def test_every_guard_gets_the_bytes_git_sent(tmp_path: Path, refs: str) -> None:
         input=data.encode(), capture_output=True,
         env={**os.environ, "GIT_CONFIG_GLOBAL": os.devnull, "GIT_CONFIG_NOSYSTEM": "1"})
     assert r.returncode == 0, r.stderr
-    skipped = set(_dispatcher_array("GUARDS_NEEDING_COMMITS")) if not data else set()
     for g in guards:
         got = tmp_path / f"{g}.in"
-        assert (None if g in skipped else data.encode()) == (
-            got.read_bytes() if got.exists() else None), g
+        assert got.read_bytes() == data.encode(), g
 
 
 @pytest.mark.parametrize("case", ["chained", "guard-missing", "lfs-without-git-lfs"])
@@ -1170,22 +1187,6 @@ def test_the_shipped_wiring_runs_exactly_the_three_guards() -> None:
         assert (_OPS / script).is_file(), (
             f"the dispatcher runs {script}, which does not exist"
         )
-
-    # ⛔ The commits-only list is a pin too, and its membership is a decision,
-    # not a detail: a guard added here silently stops running on deletions and
-    # on up-to-date pushes. Only the mkdocs check belongs — a deletion has no
-    # tree for it to build. The other two MUST NOT be here: `git push origin
-    # :main` is exactly what #1691 is about.
-    needs_commits = _dispatcher_array("GUARDS_NEEDING_COMMITS")
-    assert needs_commits == ["pre_push_mkdocs_strict.sh"], (
-        "the set of guards skipped on a no-commit push changed. Adding one here "
-        "means it stops judging deletions — for protect_main_push that would "
-        f"re-open #1691. got={needs_commits}"
-    )
-    assert set(needs_commits) <= set(guards), (
-        f"GUARDS_NEEDING_COMMITS names something the dispatcher does not run: "
-        f"{sorted(set(needs_commits) - set(guards))}"
-    )
 
 
 # ---------------------------------------------------------------------------
@@ -1739,9 +1740,8 @@ def test_a_deletion_or_tag_row_is_not_judged(tmp_path: Path, row: str) -> None:
     only branches are built, so neither a tag nor a note is — and a note's
     tree has no strict check in it to run.
 
-    The dispatcher also skips this guard on a no-commit push
-    (GUARDS_NEEDING_COMMITS); this pins the guard's own answer when it is run
-    on a deletion row directly.
+    The dispatcher runs this guard on every push (#2802), so this answer is
+    the only thing keeping a deletion from being gated on a docs build.
     """
     work, record, sha_a, sha_b = _docs_repo(tmp_path)
     rows = {"deletion": f"refs/heads/topic {_Z40} refs/heads/topic {sha_a}\n",
