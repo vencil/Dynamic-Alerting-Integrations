@@ -1352,8 +1352,10 @@ jobs:
       # had none at all. pre-commit is still required here: since #1689 the
       # guards are NOT pre-commit hooks, and the tests drive `pre-commit install
       # --hook-type pre-push` to prove the installer takes the slot back from
-      # it in either order — including after `-f`, which deletes the shim
-      # without saying so.
+      # it in either order. The `-f` case, which deletes the shim without
+      # saying so, is tests/dx/test_preflight_marker.py's
+      # test_pre_commit_taking_the_slot_back_is_caught_and_undone, which
+      # honours this var too.
       # pre-commit comes from this job's pip step below; without this var a
       # regressed install turns the whole file into skips, which is the failure
       # mode it exists to detect.
@@ -1736,8 +1738,10 @@ jobs:
       # had none at all. pre-commit is still required here: since #1689 the
       # guards are NOT pre-commit hooks, and the tests drive `pre-commit install
       # --hook-type pre-push` to prove the installer takes the slot back from
-      # it in either order — including after `-f`, which deletes the shim
-      # without saying so.
+      # it in either order. The `-f` case, which deletes the shim without
+      # saying so, is tests/dx/test_preflight_marker.py's
+      # test_pre_commit_taking_the_slot_back_is_caught_and_undone, which
+      # honours this var too.
       # pre-commit comes from this job's pip step below; without this var a
       # regressed install turns the whole file into skips, which is the failure
       # mode it exists to detect.

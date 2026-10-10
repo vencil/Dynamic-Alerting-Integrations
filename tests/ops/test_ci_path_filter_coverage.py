@@ -45,9 +45,11 @@ disclosed boundary, because all of this module's assertions are negative
     validate.yaml banners forbid but nothing enforces; and everything
     `_command_verb` lists as a gap.
 
-The shared failure mode all three exist to prevent: a path-skipped required
-check reports `skipped`, which SATISFIES branch protection. Nothing about such
-a PR looks wrong, so the omission merges and the red lands on someone else.
+The shared failure mode all three exist to prevent: `detect-changes` answers
+"not needed" for a leg that was needed and the leg is skipped; where an
+always-run aggregate reports the required check, it turns that skip into
+SUCCESS. Nothing about such a PR looks wrong, so the omission merges and the
+red lands on someone else.
 
 The original portal rationale, still accurate for invariant 1:
 
@@ -57,8 +59,8 @@ hand-maintained portal-side copy to a generated/authored SSOT that lives
 OUTSIDE `tools/portal/`. The assertion lives on the portal end — so if the SSOT
 end is not in the filter, a PR that only moves the SSOT never runs Portal
 Tests, merges green, and leaves the red for the next unrelated portal PR. Worse,
-a path-skipped required check reports `skipped`, which SATISFIES branch
-protection, so nothing about the PR looks wrong.
+the skipped leg never surfaces: the always-run `Portal Tests` aggregate reports
+success on the required check, so nothing about the PR looks wrong.
 
 That is not hypothetical: #1215 and #1222 both regenerated
 `docs/assets/platform-data.json` without it being in the filter, the rule-pack
@@ -1016,8 +1018,9 @@ def test_python_filter_covers_every_out_of_tree_pytest_input() -> None:
     }
     assert not uncovered, (
         "pytest files read repo paths that are NOT in ci.yml's `python` path "
-        "filter — a PR touching only those paths would skip Python Tests "
-        "(reporting `skipped`, which satisfies branch protection).\n"
+        "filter — a PR touching only those paths would skip the Python Tests "
+        "run legs while the always-run aggregate still reports success on the "
+        "required check.\n"
         "⛔ CHECK WHICH FIX APPLIES before editing the filter. Shape B "
         "harvests ANY literal anywhere in the module that resolves to a real "
         "file, so a "
@@ -2065,8 +2068,7 @@ def test_gating_filter_covers_every_file_its_job_runs() -> None:
     assert not uncovered, (
         "path-gated jobs run or install from repo files that are NOT covered "
         "by the filter gating them — a PR touching only those paths skips the "
-        "job (reporting `skipped`, which satisfies branch protection) even "
-        "though the file decides what that job does.\n"
+        "job even though the file decides what that job does.\n"
         "⛔ If you just GENERALISED a filter entry (e.g. an exact path to "
         "`dir/pre_*.ext`), the entry is probably fine and `_covers` simply "
         "does not model that glob shape — extend its alphabet instead of "
@@ -3387,8 +3389,8 @@ def test_portal_filter_covers_every_out_of_tree_test_input() -> None:
     }
     assert not uncovered, (
         "portal Vitests read repo paths that are NOT in ci.yml's `portal` path "
-        "filter — a PR touching only those paths would skip Portal Tests "
-        "(reporting `skipped`, which satisfies branch protection) and leave the "
+        "filter — a PR touching only those paths would skip the Portal Tests "
+        "run leg (the always-run aggregate still reports success) and leave the "
         "drift red for the next portal PR. Add each to the filter:\n"
         + "\n".join(
             f"  - {path!r}  (read by {', '.join(sorted(set(srcs)))})"
