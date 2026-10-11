@@ -185,7 +185,8 @@ def _generate_tenant_metadata(root):
 
 # Cells whose reader takes the tenants (or, for check_retire_drift, #2858, the
 # db_type) from da-guard (#2115 0-B; config_diff renders through it, ADR-037).
-_SERVED_VALUES_CELLS = frozenset({"generate_tenant_metadata", "check_retire_drift", "config_diff"})
+_SERVED_VALUES_CELLS = frozenset({"generate_tenant_metadata", "check_retire_drift", "config_diff",
+                                  "migration_audit"})
 
 
 @pytest.fixture(autouse=True)
@@ -283,6 +284,16 @@ def _config_diff(root):
     return sorted(config_diff._changed_tenants(report)) + report["uncovered_files"]
 
 
+def _migration_audit(root):
+    import migration_audit
+    # Both of its listings (#2898): today's generator walk, and the files
+    # `da-guard parse-tree` selects (the exporter's walk) — every file named
+    # in the report, compared or listed.
+    report = migration_audit.audit(root)
+    return sorted({e["file"] for k in migration_audit.ALL_LISTS for e in report[k]}
+                  | set(report["files_compared"]))
+
+
 # cell id -> (defining file, relative to scripts/tools; adapter)
 CELLS: dict[str, tuple[str, Callable[[pathlib.Path], list[str]]]] = {
     "tenant_carriers": ("_lib_confd.py", _tenant_carriers),
@@ -312,6 +323,7 @@ CELLS: dict[str, tuple[str, Callable[[pathlib.Path], list[str]]]] = {
                             _assemble_config_dir),
     "deprecate_rule": ("ops/deprecate_rule.py", _deprecate_rule),
     "config_diff": ("ops/config_diff.py", _config_diff),
+    "migration_audit": ("ops/migration_audit.py", _migration_audit),
     # #2360: both were KNOWN_OPEN below until they pruned hidden directories
     # (check_confd_schema) and hidden names at all (check_retire_drift).
     "check_confd_schema": ("lint/check_confd_schema.py", _check_confd_schema),
