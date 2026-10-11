@@ -53,6 +53,10 @@ on:
       - "scripts/tools/lint/check_rulepack_sync.py"    # recipe-preview COPY source
       - "scripts/tools/_lib_exitcodes.py"              # recipe-preview COPY source
       - "scripts/tools/_lib_compat.py"                 # recipe-preview COPY source
+      - "scripts/tools/_lib_io.py"                      # recipe-preview COPY source (#2873)
+      - "scripts/tools/_lib_confd.py"                   # recipe-preview COPY source (#2873)
+      - "scripts/tools/_lib_constants.py"               # recipe-preview COPY source (#2873)
+      - "scripts/tools/_lib_yaml_keys.py"               # recipe-preview COPY source (#2873)
       - "docs/interactive/**"        # da-portal Dockerfile COPY source
       - "tools/portal/src/**"        # da-portal COPY source (post TD-042 restructure)
       - "docs/assets/**"             # da-portal COPY source
