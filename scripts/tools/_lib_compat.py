@@ -186,7 +186,9 @@ harden_stdout_errors()
 # root is found by structure instead; see `find_project_root`.
 #
 # These markers remain only as a test-isolation guard (a staging dir must not
-# sit inside any project tree); nothing in `scripts/tools` locates by them.
+# sit inside any project tree). Tools that still take the nearest `.git` as
+# their root are listed and classified in #2852; a dev tool moving off it
+# uses `require_project_root`.
 PROJECT_ROOT_MARKERS = (".git", "Makefile", "pyproject.toml")
 
 
@@ -210,3 +212,19 @@ def find_project_root(start) -> "Path | None":
         if base.name == "tools" and base.parent.name == "scripts":
             return base.parent.parent
     return None
+
+
+def require_project_root(start) -> "Path":
+    """``find_project_root`` for a dev tool that only runs from a repo tree.
+
+    Such a tool always sits under ``scripts/tools``, so None means it was
+    copied out of any tree: print why and exit 2 (``_lib_exitcodes``'
+    EXIT_CALLER_ERROR, as a literal because this module imports no other
+    ``_lib_*``) instead of reading an enclosing project's files (#2852).
+    """
+    root = find_project_root(start)
+    if root is None:
+        print(f"ERROR: {start} is not inside a scripts/tools tree, so there "
+              f"is no repo to read", file=sys.stderr)
+        raise SystemExit(2)
+    return root

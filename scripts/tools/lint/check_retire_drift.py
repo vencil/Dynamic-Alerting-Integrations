@@ -83,16 +83,14 @@ except Exception:  # pragma: no cover - compat shim optional
     def try_utf8_stdout() -> None:  # type: ignore
         pass
 from _lib_exitcodes import EXIT_OK, EXIT_VIOLATION, EXIT_CALLER_ERROR  # noqa: E402
+from _lib_compat import require_project_root  # noqa: E402  (#2852)
 from _lib_confd import has_yaml_extension, is_hidden_name  # noqa: E402
 from _lib_yaml_keys import load_all_exporter_keys, load_exporter_keys  # noqa: E402  (#2216 tenant id as text)
 
 
 def _repo_root() -> Path:
-    p = Path(_THIS_DIR).resolve()
-    for parent in [p, *p.parents]:
-        if (parent / ".git").exists():
-            return parent
-    return p.parent.parent.parent
+    """This tree's root, never an enclosing project's (#2852)."""
+    return require_project_root(_THIS_DIR)
 
 
 def _load_yaml(path: Path) -> dict:
