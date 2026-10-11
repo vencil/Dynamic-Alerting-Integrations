@@ -184,3 +184,34 @@ func TestLoad(t *testing.T) {
 		t.Errorf("dir: %v %q", err, b)
 	}
 }
+
+// A file or directory that is not a tenant-api state backup is refused, not
+// restored as nothing (exit 0 would read as "restored").
+func TestLoad_RefusesNonStateBackups(t *testing.T) {
+	dir := t.TempDir()
+	write := func(name, body string) string {
+		p := filepath.Join(dir, name)
+		if err := os.WriteFile(p, []byte(body), 0o644); err != nil {
+			t.Fatal(err)
+		}
+		return p
+	}
+	confd := filepath.Join(dir, "conf.d")
+	if err := os.MkdirAll(confd, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(confd, "t-a.yaml"), []byte("tenants: {t-a: {}}\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	for name, path := range map[string]string{
+		"empty ConfigMap":       write("empty.yaml", "kind: ConfigMap\nmetadata: {name: tenant-api-state}\n"),
+		"other ConfigMap":       write("tc.yaml", "kind: ConfigMap\ndata:\n  t-a.yaml: |\n    tenants: {t-a: {}}\n"),
+		"token store ConfigMap": write("fed.yaml", "kind: ConfigMap\ndata:\n  store.json: '{}'\n  revoked.txt: ''\n"),
+		"conf.d directory":      confd,
+		"empty directory":       t.TempDir(),
+	} {
+		if _, err := Load(path, nil); err == nil || !strings.Contains(err.Error(), "not a tenant-api state backup") {
+			t.Errorf("%s: err = %v, want it refused", name, err)
+		}
+	}
+}
