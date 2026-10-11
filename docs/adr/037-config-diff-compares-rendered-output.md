@@ -9,7 +9,7 @@ tracking_kind: adr
 status: accepted
 domain: platform
 created_at: 2026-10-10
-updated_at: 2026-10-10
+updated_at: 2026-10-11
 ---
 
 # ADR-037: config-diff 改為比較渲染結果
@@ -18,7 +18,7 @@ updated_at: 2026-10-10
 
 ## 狀態
 
-✅ **Accepted**（2026-10-10 起草，2026-10-10 由 owner 核可）。決策內容由 owner 在 [#1516](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/1516) 拍板。2026-10-10 補上決定 4 的渲染失敗處理表（base 側設定壞了不擋 PR）。
+✅ **Accepted**（2026-10-10 起草，2026-10-10 由 owner 核可）。決策內容由 owner 在 [#1516](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/1516) 拍板。2026-10-10 補上決定 4 的渲染失敗處理表（base 側設定壞了不擋 PR）。2026-10-11 決定 1 補上沒有傳 `--at` 時的時間點，決定 4 補上 JSON 的分組方式。
 
 ## 摘要
 
@@ -63,11 +63,11 @@ updated_at: 2026-10-10
 
 | 面向 | 渲染來源 | 比較的內容 |
 |---|---|---|
-| exporter 送出的值 | `da-guard served-values --at <base commit 時間> --schedules` | 每個租戶的值、severity、被丟掉或沒送出的鍵、state filter 的 severity |
+| exporter 送出的值 | `da-guard served-values --at <時間點> --schedules` | 每個租戶的值、severity、被丟掉或沒送出的鍵、state filter 的 severity |
 | 路由 | 路由產生器 `--output-configmap` 取出的完整 Alertmanager 設定 | route 樹的每個節點、receiver 的定義、inhibit rules |
 
 - 兩側用**同一版**工具渲染（這次 CI 跑的那一版），所以差異只反映設定的差異，不會混進工具改版造成的輸出形狀變化。
-- served-values 的 `--at` 固定為 base commit 的時間，並印在報告上。不固定的話，輸出裡的時間戳每次不同，連只改註解都會變成差異。`--schedules` 讓排程生效的時段也納入比較，不只看單一時間點。
+- served-values 的 `--at` 兩側用同一個時間點，並印在報告上。兩側各取各的執行時間的話，輸出裡的時間戳不同，連只改註解都會變成差異。config-diff 的 `--at` 選填：CI 傳 base commit 的時間，重跑時答案不變；沒有傳時，在執行當下取一次、兩側共用，所以沒有傳 `--at` 的既有 CI 照常運作。`--schedules` 讓排程生效的時段也納入比較，不只看單一時間點。
 - route 節點的身分是「從根到它的 matcher 路徑」，比較的欄位是 receiver、`group_by`、`group_wait`、`group_interval`、`repeat_interval`、`continue`。matcher 是 Alertmanager 用來決定告警走哪條路的條件，例如 `tenant="db-a"`。用 matcher 當身分，不依賴產生器替 receiver 取的名字。
 - receiver 定義裡的憑證欄位（webhook URL、token、密碼）比較時只報「有變」，前後值都遮罩，因為報告會貼成 PR 留言。
 
@@ -132,7 +132,7 @@ base 側的設定壞了時，就算它還渲染得出一部分，那一部分也
 
 「沒有 conf.d 或沒有 `.yaml` 檔」要在跑渲染程式之前先看目錄判斷，不能看結束碼：`da-guard served-values` 對空目錄和不存在的目錄都回 2，路由產生器對空目錄卻回 0。
 
-報告依「同一個變更」分組：一筆平台變更列出受影響的租戶數與前幾個租戶名，不逐一展開上千行；整份報告仍受 PR 留言的長度上限約束。JSON 輸出改用新的結構，頂層帶 `schema` 版本，讀取端遇到不認得的版本就拒收。
+報告依「同一個變更」分組：一筆平台變更列出受影響的租戶數與前幾個租戶名，不逐一展開上千行；整份報告仍受 PR 留言的長度上限約束。JSON 輸出改用新的結構，頂層帶 `schema` 版本，讀取端遇到不認得的版本就拒收。JSON 裡同樣一個變更一筆，帶它影響的租戶清單，所以報告排版之後再改時，JSON 不必再改一次。
 
 ### 5. served-values 補上 state filter 的 severity
 

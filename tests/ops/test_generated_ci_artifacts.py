@@ -4237,8 +4237,17 @@ _EXPECTED_GH_GENERATE: list[str] = [
     'echo "::error::CONFIG_DIR is set to \'${{ env.CONFIG_DIR }}\', which does not exist in this pull request\'s head commit. Either the workflow\'s CONFIG_DIR does not match where this repository actually keeps its tenant config, or this pull request removed that directory. Refusing to compare, because mounting a path that is not there yields an empty directory and a report that says \'no changes\' on every future run."',
     'exit 1',
     'fi',
+    # ADR-037: time-dependent settings read at the base commit's time.
+    'at="$(git show -s --format=%cI "$BASE_SHA")" || {',
+    'echo "::error::cannot read the time of base commit $BASE_SHA from this clone"',
+    'exit 1',
+    '}',
+    'at_args=""',
+    "if docker run --rm ${{ env.DA_TOOLS_IMAGE }} config-diff --help 2>/dev/null | grep -q -- '--at'; then",
+    'at_args="--at $at"',
+    'fi',
     'set +e',
-    'docker run --rm -v "${{ github.workspace }}/.output/base/${{ env.CONFIG_DIR }}:/data/conf.d.base:ro" -v "${{ github.workspace }}/${{ env.CONFIG_DIR }}:/data/conf.d:ro" ${{ env.DA_TOOLS_IMAGE }} config-diff --old-dir /data/conf.d.base --new-dir /data/conf.d --format markdown > .output/blast-radius.md',
+    'docker run --rm -v "${{ github.workspace }}/.output/base/${{ env.CONFIG_DIR }}:/data/conf.d.base:ro" -v "${{ github.workspace }}/${{ env.CONFIG_DIR }}:/data/conf.d:ro" ${{ env.DA_TOOLS_IMAGE }} config-diff --old-dir /data/conf.d.base --new-dir /data/conf.d $at_args --format markdown > .output/blast-radius.md',
     'rc=$?',
     'set -e',
     'if [ "$rc" -gt 1 ]; then',
@@ -4327,8 +4336,16 @@ _EXPECTED_GL_GENERATE: list[str] = [
     'exit 1',
     'fi',
     'da-tools generate-routes --config-dir "$CONFIG_DIR" --validate --strict',
+    'at="$(git show -s --format=%cI "$CI_MERGE_REQUEST_DIFF_BASE_SHA")" || {',
+    'echo "ERROR: cannot read the time of base commit $CI_MERGE_REQUEST_DIFF_BASE_SHA from this clone" >&2',
+    'exit 1',
+    '}',
+    'at_args=""',
+    "if da-tools config-diff --help 2>/dev/null | grep -q -- '--at'; then",
+    'at_args="--at $at"',
+    'fi',
     'set +e',
-    'da-tools config-diff --old-dir .output/base/"${CONFIG_DIR%/}" --new-dir "$CONFIG_DIR" --format markdown > .output/blast-radius.md',
+    'da-tools config-diff --old-dir .output/base/"${CONFIG_DIR%/}" --new-dir "$CONFIG_DIR" $at_args --format markdown > .output/blast-radius.md',
     'rc=$?',
     'set -e',
     'if [ "$rc" -gt 1 ]; then',
@@ -5371,8 +5388,8 @@ _BASE_CPU = "70"
 _HEAD_CPU = "90"
 
 
-def _tenant_yaml(cpu: str) -> str:
-    return f'tenants:\n  db-a:\n    container_cpu: "{cpu}"\n'
+def _tenant_yaml(cpu: str, tenant: str = "db-a") -> str:
+    return f'tenants:\n  {tenant}:\n    container_cpu: "{cpu}"\n'
 
 
 def _symlinks_usable(tmp: Path) -> bool:
@@ -5415,8 +5432,10 @@ def _synthetic_repo(root: Path, *, base_has_config: bool,
         (root / "conf.d").mkdir(exist_ok=True)
         (root / "conf.d" / "db-a.yaml").write_text(
             _tenant_yaml(_BASE_CPU), encoding="utf-8", newline="\n")
+        # Its own tenant: a tenant declared in two files is a tree both
+        # renderers refuse (config-diff, ADR-037), not a baseline.
         (root / "conf.d" / "db-b.yaml").write_text(
-            _tenant_yaml(_BASE_CPU), encoding="utf-8", newline="\n")
+            _tenant_yaml(_BASE_CPU, "db-b"), encoding="utf-8", newline="\n")
         if symlink:
             # A reverse control. `git ls-tree` lists a symlink; `find -type f`
             # does not, so a count-based post-condition failed a perfectly
@@ -5455,7 +5474,8 @@ def _synthetic_repo(root: Path, *, base_has_config: bool,
 def _run_generated_step(step: dict, wf_env: dict, job_env: dict, work: Path,
                         base_sha: str, env_overrides: dict | None = None, *,
                         expect_step_env: bool = True,
-                        stub_docker: tuple[int, str] | None = None):
+                        stub_docker: tuple[int, str] | None = None,
+                        stub_help: str = "  --at AT   Instant to read ... RFC3339\n"):
     (work / ".output").mkdir(parents=True, exist_ok=True)
     (work / "_runner_temp").mkdir(exist_ok=True)
     env = _resolve_step_env(step, wf_env, job_env, base_sha=base_sha,
@@ -5497,7 +5517,12 @@ def _run_generated_step(step: dict, wf_env: dict, job_env: dict, work: Path,
         # escaping rather than of the stub.
         (work / "_stub_stdout").write_text(payload, encoding="utf-8",
                                            newline="\n")
-        prologue += f"docker() {{ cat _stub_stdout; return {rc}; }}\n"
+        # `config-diff --help` is the step's probe for `--at` (an image up
+        # to v2.9.0 rejects the flag); `stub_help` is what that image prints.
+        (work / "_stub_help").write_text(stub_help, encoding="utf-8", newline="\n")
+        prologue += (f"docker() {{ case \" $* \" in *\" --help \"*) cat _stub_help; return 0;; esac; "
+                     f"printf '%s\\n' \"$@\" > _stub_args; "
+                     f"cat _stub_stdout; return {rc}; }}\n")
     # The runner expands `${{ ... }}` before bash ever sees the body. Skipping
     # that leaves a bad substitution in the script, which fails for a reason
     # that has nothing to do with the step — see _substitute_run_expressions.
@@ -5732,20 +5757,21 @@ def test_generated_blast_radius_step_honours_the_exit_contract(
     step, wf_env, job_env = _extract_step(generated[("github", "kustomize")],
                                           "Config diff (blast radius)")
     work = tmp_path / state
-    work.mkdir()
-    if state != "head_config_dir_missing":
-        # What `actions/checkout` would have put there. Created for every
-        # other state so the head-side guard is satisfied and each case
-        # exercises the contract it is actually about — and NOT created for
-        # the one state that is about the guard itself.
-        (work / wf_env["CONFIG_DIR"]).mkdir(parents=True)
+    # A real checkout: the step reads the base commit's time (`--at`, ADR-037).
+    base_sha = _synthetic_repo(work, base_has_config=True)
+    # A head commit years later, so the base's time cannot pass for the head's.
+    subprocess.run(["git", "-c", "commit.gpgsign=false", "-c", "core.hooksPath=",
+                    "commit", "-q", "--allow-empty", "-m", "later"], cwd=work, check=True,
+                   env={**os.environ, "GIT_COMMITTER_DATE": "2030-01-01T00:00:00+00:00"}, timeout=60)
+    assert wf_env["CONFIG_DIR"].rstrip("/") == "conf.d", wf_env  # what the repo holds
+    if state == "head_config_dir_missing":
+        # What `actions/checkout` would have put there is there for every
+        # other state, so the head-side guard is satisfied and each case
+        # exercises the contract it is actually about — and NOT for the one
+        # state that is about the guard itself.
+        shutil.rmtree(work / "conf.d")
     p = _run_generated_step(
-        step, wf_env, job_env, work, base_sha="unused-by-this-step",
-        # This step binds nothing itself; CONFIG_DIR and DA_TOOLS_IMAGE come
-        # from the workflow scope. `_resolve_step_env` asserts that absence
-        # rather than merely tolerating it, so a step that starts binding
-        # something cannot slip past under this flag.
-        expect_step_env=False,
+        step, wf_env, job_env, work, base_sha=base_sha,
         stub_docker=(rc, report),
     )
     assert p.returncode == want_rc, (
@@ -5761,6 +5787,10 @@ def test_generated_blast_radius_step_honours_the_exit_contract(
             "operator reading only the annotation has to guess between an "
             "image problem and a config problem."
         )
+    args = work / "_stub_args"
+    if state != "head_config_dir_missing":
+        argv = args.read_text(encoding="utf-8").splitlines()
+        assert argv[argv.index("--at") + 1] == _git(work, "show", "-s", "--format=%cI", base_sha), argv
     published = work / ".output" / "blast-radius.md"
     if want_rc == 0:
         # The comment step runs only on success, so on this path the file IS
@@ -5770,6 +5800,22 @@ def test_generated_blast_radius_step_honours_the_exit_contract(
             f"[{state}] the step succeeded but the report handed to the "
             "comment step is not what the tool produced."
         )
+
+
+def test_generated_blast_radius_step_leaves_out_at_for_an_older_image(generated, tmp_path) -> None:
+    """An image whose config-diff does not list `--at` (up to v2.9.0) rejects
+    it with exit 2: the step must not pass it then, and must pass it otherwise
+    (the exit-contract cases above)."""
+    step, wf_env, job_env = _extract_step(generated[("github", "kustomize")],
+                                          "Config diff (blast radius)")
+    work = tmp_path / "old-image"
+    base_sha = _synthetic_repo(work, base_has_config=True)
+    p = _run_generated_step(step, wf_env, job_env, work, base_sha=base_sha,
+                            stub_docker=(0, "# Config Diff Report\n\nno changes\n"),
+                            stub_help="  --old-dir OLD_DIR\n  --new-dir NEW_DIR\n  --format\n")
+    assert p.returncode == 0, (p.stdout, p.stderr)
+    argv = (work / "_stub_args").read_text(encoding="utf-8").splitlines()
+    assert "config-diff" in argv and "--at" not in argv, argv
 
 
 def test_the_apply_pins_cover_every_deploy_method() -> None:

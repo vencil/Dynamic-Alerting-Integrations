@@ -184,8 +184,8 @@ def _generate_tenant_metadata(root):
 
 
 # Cells whose reader takes the tenants (or, for check_retire_drift, #2858, the
-# db_type) from da-guard (#2115 0-B).
-_SERVED_VALUES_CELLS = frozenset({"generate_tenant_metadata", "check_retire_drift"})
+# db_type) from da-guard (#2115 0-B; config_diff renders through it, ADR-037).
+_SERVED_VALUES_CELLS = frozenset({"generate_tenant_metadata", "check_retire_drift", "config_diff"})
 
 
 @pytest.fixture(autouse=True)
@@ -267,16 +267,20 @@ def _check_retire_drift(root):
     return sorted(check_retire_drift.conf_d_declared_db_type_tenants(root))
 
 
-def _config_diff_uncovered(root):
+def _config_diff(root):
     import config_diff
-    # #1420: both of config_diff's listings — the tenants its comparison
-    # reads (the control comes from here) and the files it reports as
-    # changed-but-not-compared, the recursive walk that can reach `.snap/`.
-    # Against an empty old side, every file that walk sees is "changed".
+    import _render_diff
+    # Both of config_diff's listings (ADR-037), against an empty old side (a
+    # first import): every tenant either render reports — da-guard's
+    # served-values and the route generator, so the control comes from
+    # here — and the changed `_` files, its own recursive walk that can
+    # reach `.snap/`.
     empty = root.parent / "h1420-empty-old"
     empty.mkdir(exist_ok=True)
-    return (sorted(config_diff.load_configs_from_dir(str(root)))
-            + config_diff.compute_uncovered_files(str(empty), str(root)))
+    diff = _render_diff.compare(empty, root, "2026-10-10T00:00:00Z",
+                                served_report=config_diff.served_sections)
+    report = config_diff.build_report(diff, empty, root)
+    return sorted(config_diff._changed_tenants(report)) + report["uncovered_files"]
 
 
 # cell id -> (defining file, relative to scripts/tools; adapter)
@@ -307,7 +311,7 @@ CELLS: dict[str, tuple[str, Callable[[pathlib.Path], list[str]]]] = {
     "assemble_config_dir": ("ops/assemble_config_dir.py",
                             _assemble_config_dir),
     "deprecate_rule": ("ops/deprecate_rule.py", _deprecate_rule),
-    "config_diff_uncovered": ("ops/config_diff.py", _config_diff_uncovered),
+    "config_diff": ("ops/config_diff.py", _config_diff),
     # #2360: both were KNOWN_OPEN below until they pruned hidden directories
     # (check_confd_schema) and hidden names at all (check_retire_drift).
     "check_confd_schema": ("lint/check_confd_schema.py", _check_confd_schema),

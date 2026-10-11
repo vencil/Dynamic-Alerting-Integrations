@@ -12,7 +12,7 @@ lang: en
 
 ## Status
 
-✅ **Accepted** (drafted 2026-10-10, approved by the owner 2026-10-10). The decisions were made by the owner in [#1516](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/1516). On 2026-10-10 decision 4 gained the table for rendering failures (a broken base-side configuration does not block the PR).
+✅ **Accepted** (drafted 2026-10-10, approved by the owner 2026-10-10). The decisions were made by the owner in [#1516](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/1516). On 2026-10-10 decision 4 gained the table for rendering failures (a broken base-side configuration does not block the PR). On 2026-10-11 decision 1 gained the instant used when `--at` is not given, and decision 4 how the JSON groups changes.
 
 ## Summary
 
@@ -57,11 +57,11 @@ Only the two renderers together cover most platform-level settings; neither is e
 
 | Plane | Rendered by | What is compared |
 |---|---|---|
-| Values the exporter serves | `da-guard served-values --at <base commit time> --schedules` | Each tenant's values, severities, dropped or unserved keys, state-filter severity |
+| Values the exporter serves | `da-guard served-values --at <instant> --schedules` | Each tenant's values, severities, dropped or unserved keys, state-filter severity |
 | Routing | The complete Alertmanager config taken from the route generator's `--output-configmap` | Every node of the route tree, receiver definitions, inhibit rules |
 
 - Both sides are rendered with **the same version** of the tools (the version this CI run uses), so a difference reflects the config only and never a change in a tool's output shape.
-- served-values' `--at` is pinned to the base commit's time and printed in the report. Unpinned, the timestamp in its output differs on every run and even a comment-only edit would show as a difference. `--schedules` brings scheduled time windows into the comparison instead of a single instant.
+- served-values' `--at` is the same instant on both sides and printed in the report. If each side took its own run time, the timestamps in the output would differ and even a comment-only edit would show as a difference. config-diff's `--at` is optional: CI passes the base commit's time, so a re-run gives the same answer; without it, the time of the run is taken once and shared by both sides, so existing CI that passes no `--at` keeps working. `--schedules` brings scheduled time windows into the comparison instead of a single instant.
 - A route node's identity is its matcher path from the root; the fields compared are receiver, `group_by`, `group_wait`, `group_interval`, `repeat_interval` and `continue`. A matcher is the condition Alertmanager uses to decide where an alert goes, such as `tenant="db-a"`. Using matchers as identity means not depending on the names the generator gives receivers.
 - Credential fields in receiver definitions (webhook URLs, tokens, passwords) are reported only as "changed", with both values masked, because the report is posted as a PR comment.
 
@@ -126,7 +126,7 @@ Examples of a tool failure: da-guard not found, da-guard older than the version 
 
 "No conf.d or no `.yaml` file" is decided by looking at the directory before any renderer runs, not by an exit code: `da-guard served-values` exits 2 both for an empty directory and for one that does not exist, while the route generator exits 0 on an empty directory.
 
-The report is grouped by change: one platform change lists the number of affected tenants and the first few names instead of a thousand lines, and the whole report still respects the PR comment length limit. The JSON output gets a new structure with a top-level `schema` version; readers reject versions they do not recognise.
+The report is grouped by change: one platform change lists the number of affected tenants and the first few names instead of a thousand lines, and the whole report still respects the PR comment length limit. The JSON output gets a new structure with a top-level `schema` version; readers reject versions they do not recognise. In the JSON too, one change is one entry with the tenants it reaches, so a later change to the report layout does not change the JSON again.
 
 ### 5. served-values gains the state-filter severity
 

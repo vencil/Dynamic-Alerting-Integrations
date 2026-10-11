@@ -28,7 +28,7 @@ lang: en
 | `byo_check.py` | BYO Prometheus & Alertmanager integration verification. |
 | `cardinality_forecasting.py` | 基數預測工具（§5.8）。 |
 | `check_alert.py` | Check Prometheus alert state for a specific tenant. |
-| `config_diff.py` | Directory-level Config Diff for GitOps PR review. |
+| `config_diff.py` | What a conf.d change does, for GitOps PR review (ADR-037). |
 | `config_history.py` | Config Snapshot & History tracker. |
 | `cutover_tenant.py` | Shadow Monitoring 一鍵切換工具。 |
 | `da_assembler.py` | da-assembler-controller — Lightweight ThresholdConfig CRD → YAML renderer. |

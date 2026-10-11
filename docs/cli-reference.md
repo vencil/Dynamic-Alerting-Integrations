@@ -2354,9 +2354,9 @@ da-tools analyze-gaps --tenant-config ./conf.d/db-a.yaml
 
 #### config-diff
 
-比較兩個配置目錄（conf.d），產出 blast radius 報告。
+比較兩個配置目錄（conf.d）各自「渲染」出來的結果，產出 blast radius 報告：每個變更影響哪些租戶。
 
-**用途**：GitOps PR review；快速評估配置變更影響範圍。
+**用途**：GitOps PR review；平台檔（`_defaults.yaml`、`_profiles.yaml`、根目錄 `_platform.yaml`、路由預設）的變更也會報出它影響到的租戶。
 
 **語法**
 
@@ -2368,19 +2368,27 @@ da-tools config-diff --old-dir <path> --new-dir <path> [options]
 
 | 參數 | 說明 |
 |------|------|
-| `--old-dir <PATH>` | 舊配置目錄 |
-| `--new-dir <PATH>` | 新配置目錄 |
+| `--old-dir <PATH>` | 舊配置目錄（base）。不存在或沒有設定檔時視為第一次匯入，所有租戶都算新增 |
+| `--new-dir <PATH>` | 新配置目錄（PR） |
 
 **選項**
 
 | 選項 | 說明 | 預設值 |
 |------|------|--------|
+| `--at <RFC3339>` | 讀排程、靜默與維護時段的時間點，兩側共用並印在報告上；CI 建議傳 base commit 的時間（`git show -s --format=%cI <base>`） | 執行當下 |
 | `--format {markdown,json}` | 輸出格式 | `markdown` |
 | `--json-output` | 等同 `--format json` | false |
 
-只印摘要的選項尚未實作；報告最後一行就是摘要（`Summary: N tenant(s) changed, N metric change(s)`）。
+**比較什麼**（[ADR-037](adr/037-config-diff-compares-rendered-output.md)）：config-diff 不自己讀 YAML，而是兩側各跑一次把 conf.d 變成線上設定的兩支程式，再比較結果：
 
-**變更分類**
+- `da-guard served-values --at <時間> --schedules`：exporter 對每個租戶實際送出的閾值、severity、設定、state filter、custom alert。
+- 路由產生器 `generate_alertmanager_routes.py --output-configmap`：完整的 Alertmanager 設定。route 節點以 matcher 路徑為身分，比較 receiver、`group_by`、`group_wait`、`group_interval`、`repeat_interval`、`continue`；另比較 receiver 定義與 inhibit rules。
+
+兩支都需要 da-guard（映像內建；repo 內先 `make da-guard-build`，或設 `DA_GUARD_BINARY`）。
+
+**報告區段**：Not Computed / Not Compared（有面向沒算出結果時）、Changed Platform Files、Tenants Added / Removed、Routing Changes、Custom Alert Changes、Tenant Setting Changes、Keys the Exporter Drops、Other Served Changes，以及每個租戶的閾值表。值來自 PR 的檔案：表格以外放在 code span 裡，閾值表的欄位則跳脫 `|` 與換行；receiver 的憑證欄位只報「有變」，前後值都遮成 `<redacted>`。
+
+**變更分類**（閾值表）
 
 | 分類 | 含義 | 影響 |
 |------|------|------|
@@ -2391,20 +2399,19 @@ da-tools config-diff --old-dir <path> --new-dir <path> [options]
 | `toggled` | enable ↔ disable | 開啟或關閉 alert |
 | `modified` | 複雜值變更 | 需人工審閱 |
 
-**輸出**
+**改過的 `_` 開頭檔**：兩側內容（逐位元組）不同、或只存在於一側的 `_` 開頭檔（任何深度），在「Changed Platform Files」逐一列出，結束碼至少為 1，只改註解也算。兩支渲染程式讀不到的設定（例如平台層的 `_custom_alerts`、`instance_tenant_mapping`）不會出現在其他區段，所以要直接看這些檔。
 
-Markdown 格式報告，含 per-tenant 變更表格與摘要統計。
+**Custom Alert 區段不判定消音**：讀的是 exporter 送出的 row，`threshold` 是 `<值>:<severity>`，`op`／`window`／`for` 的變更以 `recipe_id` 不同呈現；不再送出的 recipe 列為 removed，並註明分不出是刪除、停用或被 exporter 拒收。
 
-**比對範圍**：只比對頂層各租戶檔自己寫的值，不解析 `_defaults.yaml` 的繼承。`_` 開頭的檔（`_defaults.yaml`、`_platform.yaml` 等）與子目錄裡的檔不在比對內；`_profiles.yaml` 只比對 `profiles:`。這些檔兩側內容（逐位元組）不同、或只存在於一側時，報告開頭的「Changed Files Not Compared」區段逐一列出檔名，結束碼為 1，不會印 `No changes detected.`；JSON 輸出的 `uncovered_files` 是同一份清單。只改註解也會列出。⚠️ v2.9.0 映像沒有這個區段：只改這些檔時印 `No changes detected.` 並回 0。 <!-- image-caveat: v2.9.0 -->
+**JSON 輸出**：頂層 `schema` 為 `da-tools.config-diff/v1`，另有 `at`、`exit_code`、`views`（`served` 與 `routes` 各自的 `status`：`computed`／`not_computed`／`not_compared`，與 `reason`）、`tenants_added`、`tenants_removed`、`uncovered_files`。各類變更一筆一個項目，帶它影響的租戶清單（`tenants`）：`threshold_changes`、`setting_changes`、`custom_alert_changes`、`dropped_key_changes`、`other_served_changes`、`route_changes`（另帶 `paths`）、`receiver_changes`（另帶 `receivers`）、`inhibit_changes`。同一個平台變更影響多個租戶時只有一筆。
 
-**Custom Alert 區段不判定消音**：只有原地把 `threshold` 改成停用值、或把 `mode` 改成 `silent` 會標示；刪掉的 recipe 只列為 removed，繼承來的 recipe 不在比對內，區段開頭有一行說明這個限制。⚠️ v2.9.0 映像沒有那行說明。 <!-- image-caveat: v2.9.0 -->
-
-**Profile 爆炸半徑**：`_profiles.yaml` 裡的 profile 有變更時，`affected_tenants` 列出 `--new-dir` 中 `_profile` 指名它的租戶。名稱經 `da-guard effective` 讀取，與 exporter 的讀法一致：`_profile: {default: std}` 指名 `std`；寫在根目錄平台檔 `tenants:` 裡的算；從子目錄 `_defaults.yaml` 繼承來的不算。所以有 profile 變更時需要 da-guard（映像內建；repo 內 `make da-guard-build`）；找不到 da-guard、da-guard 失敗，或 `--new-dir` 有 exporter 解不出來的檔時，結束碼 2，stderr 印 `ERROR:` 行說明原因；da-guard 有執行到時，下面接著轉印它的 stderr，非空白行各加前綴 `da-guard|`（前有兩格縮排）；找不到或無法執行 da-guard 時沒有這些行。⚠️ v2.9.0 映像仍只認字串寫法的 `_profile`。 <!-- image-caveat: v2.9.0 -->
+⚠️ v2.9.0 映像仍是舊行為：只比對頂層各租戶檔自己寫的值，平台檔只列檔名，沒有 `--at`，JSON 是沒有 `schema` 的舊結構（`metric_diffs`、`profile_diffs` 等）。 <!-- image-caveat: v2.9.0 -->
 
 **範例**
 
 ```bash
 da-tools config-diff --old-dir ./conf.d-old --new-dir ./conf.d-new
+da-tools config-diff --old-dir ./conf.d-old --new-dir ./conf.d-new --at 2026-10-10T03:00:00Z
 da-tools config-diff --old-dir ./conf.d-old --new-dir ./conf.d-new --json-output
 ```
 
@@ -2413,8 +2420,8 @@ da-tools config-diff --old-dir ./conf.d-old --new-dir ./conf.d-new --json-output
 | 代碼 | 說明 |
 |------|------|
 | `0` | 無配置變更 |
-| `1` | 偵測到變更，或有報告未比對的檔案變了（見上方「比對範圍」） |
-| `2` | 呼叫端錯誤：目錄不存在、輸入無法解析，或執行未完成；有 profile 變更時，另含找不到 da-guard 或 da-guard 失敗 |
+| `1` | 偵測到變更；或有改過的 `_` 開頭檔；或 base 側設定壞了、渲染不出來（該面向列為 Not Compared，不擋修好它的 PR） |
+| `2` | 沒有算出結果：PR 側有檔讀不了（stderr 點名該檔與 exporter／產生器自己的原因）、PR 側沒有設定檔、找不到 da-guard 或工具本身失敗，或參數錯誤（例如 `--at` 不是 RFC3339、目錄位置是一個檔）。上述情況中，參數錯誤以外報告仍會輸出並寫明哪個面向沒有計算；改過的 `_` 開頭檔讀不到、或工具未預期的錯誤，則只在 stderr 印一行 `ERROR:`，不輸出報告 |
 
 > ⚠️ **`1` 是「有變更」，不是失敗。** 裸呼叫這個命令的 CI 步驟，會在它正常運作時失敗。
 > 可照抄的消費端寫法（`set +e` / `rc=$?`）在

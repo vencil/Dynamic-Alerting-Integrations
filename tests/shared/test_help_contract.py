@@ -79,7 +79,7 @@ HELP_CONTRACTS = {
     },
     "config_diff": {
         "script": TOOLS_DIR / "ops" / "config_diff.py",
-        "flags": ["--old-dir", "--new-dir", "--json-output", "--format"],
+        "flags": ["--old-dir", "--new-dir", "--at", "--json-output", "--format"],
         "required": ["--old-dir", "--new-dir"],
         "choices": {"--format": "{markdown,json}"},
     },

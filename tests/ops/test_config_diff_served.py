@@ -77,9 +77,6 @@ def test_inherited_threshold_change_is_reported_for_tenants_that_do_not_override
     diff = _metric(b, p)
     assert _by_key(diff["inherits"])["container_memory"]["change"] == "looser"
     assert "overrides" not in diff
-    # 對照：YAML 讀法看不到這個變更（它只讀租戶檔自己寫的值）
-    assert cd.compute_diff(cd.load_configs_from_dir(tmp_path / "base"),
-                           cd.load_configs_from_dir(tmp_path / "pr")) == {}
 
 
 def test_added_and_removed_tenant_and_key(tmp_path, da_guard):
@@ -318,16 +315,16 @@ def test_custom_alerts_stay_out_of_the_settings_section(tmp_path, da_guard):
     assert cd.served_custom_alert_diff(b, p)
 
 
-def test_rendered_report_reads_the_served_sections(tmp_path, da_guard):
-    """三個區段都能直接交給既有的 render_markdown。"""
+def test_served_sections_are_what_the_report_prints(tmp_path, da_guard):
+    """`served_sections` 交給報告的三個區段，就是上面各自測過的那三個讀法。"""
     b, p = _served(tmp_path, da_guard,
                    {"t": {"mysql_connections": "100", "_silent_mode": "warning", "_custom_alerts": [_recipe()]}},
                    {"t": {"mysql_connections": "80", "_silent_mode": "all",
                           "_custom_alerts": [_recipe(threshold="200:critical")]}})
-    md = cd.render_markdown(_metric(b, p), "base", "pr",
-                            custom_alert_diffs=cd.served_custom_alert_diff(b, p),
-                            setting_diffs=cd.served_setting_diff(b, p))
-    assert "mysql_connections" in md and "_silent_mode" in md and "200:critical" in md
+    sections = cd.served_sections(b, p)
+    assert sections == {"metric": _metric(b, p), "setting": cd.served_setting_diff(b, p),
+                        "custom_alert": cd.served_custom_alert_diff(b, p)}
+    assert all(sections.values())
 
 
 def test_every_row_of_a_recipe_counts_not_only_the_first():
