@@ -455,17 +455,20 @@ class TestResolveScriptPathFallback:
         _, searched = entrypoint._resolve_script_path("definitely_missing_xyz.py")
         assert searched[0].startswith(entrypoint.TOOLS_DIR)
 
-    def test_find_repo_root_walks_up(self, tmp_path):
-        """_find_repo_root walks up to find .git (file or dir)."""
-        # Simulate a nested dir structure with .git at top
-        (tmp_path / ".git").write_text("gitdir: /elsewhere\n")  # worktree-style .git file
-        nested = tmp_path / "a" / "b" / "c"
-        nested.mkdir(parents=True)
-        assert entrypoint._find_repo_root(str(nested)) == str(tmp_path)
+    def test_find_repo_root_is_three_levels_above_the_app_dir(self, tmp_path):
+        """<root>/components/da-tools/app → <root>, with or without a .git (#2852)."""
+        app = tmp_path / "components" / "da-tools" / "app"
+        app.mkdir(parents=True)
+        assert entrypoint._find_repo_root(str(app)) == str(tmp_path)
 
-    def test_find_repo_root_returns_none_without_git(self, tmp_path):
-        """No .git on the path → None."""
-        nested = tmp_path / "a" / "b"
+    def test_find_repo_root_ignores_a_git_off_that_structure(self, tmp_path):
+        """A .git above a path that is not components/da-tools/app → None.
+
+        The old rule walked up to it; #2852 measured that running an outer
+        project's tool when this tree was vendored.
+        """
+        (tmp_path / ".git").write_text("gitdir: /elsewhere\n", encoding="utf-8")
+        nested = tmp_path / "a" / "b" / "c"
         nested.mkdir(parents=True)
         assert entrypoint._find_repo_root(str(nested)) is None
 

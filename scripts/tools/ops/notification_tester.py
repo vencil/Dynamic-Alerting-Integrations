@@ -71,6 +71,7 @@ from _lib_python import (  # noqa: E402
 # exercised directly by tests) delegates its final dump to the shared helper.
 from _lib_python import format_json_report as _dump_json  # noqa: E402
 from _lib_io import safe_label  # noqa: E402  (#1538 output-layer escaping)
+from _grar_merge import receiver_type  # noqa: E402  (#2839 the one type read)
 from _lib_exitcodes import EXIT_VIOLATION, EXIT_CALLER_ERROR  # noqa: E402
 
 _LANG = detect_cli_lang()
@@ -154,6 +155,12 @@ class TenantTestReport:
 # ---------------------------------------------------------------------------
 # Receiver extraction from tenant config
 # ---------------------------------------------------------------------------
+def _type_is_set(receiver: dict[str, Any]) -> bool:
+    """Whether ``type`` is present and neither null nor "" (#2839)."""
+    raw = receiver.get("type")
+    return raw is not None and raw != ""
+
+
 def extract_receivers(
     tenant_name: str,
     tenant_config: dict[str, Any],
@@ -180,9 +187,12 @@ def extract_receivers(
     if not isinstance(routing, dict):
         return receivers
 
+    # Extraction keeps every receiver whose `type` is set (not missing, null
+    # or ""), so a non-string type — falsy ones like 0, false, {}, [] too —
+    # reaches test_receiver and is reported instead of dropped (#2839).
     # Main receiver
     main_recv = routing.get("receiver")
-    if isinstance(main_recv, dict) and main_recv.get("type"):
+    if isinstance(main_recv, dict) and _type_is_set(main_recv):
         recv = dict(main_recv)
         recv.setdefault("_label", f"{tenant_name}-main")
         receivers.append(recv)
@@ -194,7 +204,7 @@ def extract_receivers(
             if not isinstance(override, dict):
                 continue
             recv = override.get("receiver")
-            if isinstance(recv, dict) and recv.get("type"):
+            if isinstance(recv, dict) and _type_is_set(recv):
                 r = dict(recv)
                 r.setdefault("_label", f"{tenant_name}-override-{idx}")
                 receivers.append(r)
@@ -206,7 +216,7 @@ def extract_receivers(
             if not isinstance(entry, dict):
                 continue
             recv = entry.get("receiver")
-            if isinstance(recv, dict) and recv.get("type"):
+            if isinstance(recv, dict) and _type_is_set(recv):
                 r = dict(recv)
                 r.setdefault("_label", f"{tenant_name}-route-{idx}")
                 receivers.append(r)
@@ -217,6 +227,20 @@ def extract_receivers(
 # ---------------------------------------------------------------------------
 # URL validation
 # ---------------------------------------------------------------------------
+def _non_string_type_problem(receiver: dict[str, Any]) -> Optional[str]:
+    """The error for a receiver whose ``type`` is set but is not a string.
+
+    #2839: ``receiver_type()`` (the route generator's one read, #2780) reads
+    such a type as ``""``; a mapping or list used to crash the ``in`` checks
+    below with ``TypeError: unhashable type``. Named here instead of as
+    ``unknown receiver type ''`` so the operator sees what is wrong.
+    """
+    raw = receiver.get("type")
+    if raw is None or isinstance(raw, str):
+        return None
+    return f"receiver type must be a string, got {type(raw).__name__}"
+
+
 def validate_receiver_url(
     receiver: dict[str, Any],
 ) -> tuple[Optional[str], Optional[str]]:
@@ -228,9 +252,12 @@ def validate_receiver_url(
     Returns:
         (url, error) — url string on success, error message on failure.
     """
+    type_err = _non_string_type_problem(receiver)
+    if type_err:
+        return None, type_err
     # Exact match, no case folding or trimming (#2180): the route generator,
     # the schema (`const`) and the Go guard all reject `Webhook` / ` webhook`.
-    rtype = receiver.get("type", "")
+    rtype = receiver_type(receiver)
     if rtype not in RECEIVER_URL_FIELDS:
         return None, f"unknown receiver type '{rtype}'"
 
@@ -369,9 +396,17 @@ def test_receiver(
     label = receiver.get("_label", "unknown")
     # Exact match, no case folding or trimming (#2180): the route generator,
     # the schema (`const`) and the Go guard all reject `Webhook` / ` webhook`.
-    rtype = receiver.get("type", "")
+    rtype = receiver_type(receiver)
 
     # Validate receiver type
+    type_err = _non_string_type_problem(receiver)
+    if type_err:
+        return ReceiverTestResult(
+            receiver_name=label,
+            receiver_type=rtype,
+            status=STATUS_INVALID_CONFIG,
+            detail=type_err,
+        )
     if rtype not in RECEIVER_TYPES:
         return ReceiverTestResult(
             receiver_name=label,

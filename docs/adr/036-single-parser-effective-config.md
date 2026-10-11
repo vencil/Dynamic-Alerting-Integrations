@@ -20,7 +20,7 @@ updated_at: 2026-10-11
 
 ✅ **Accepted**（2026-10-09 起草並由 owner 核可）。
 
-- **2026-10-11 修訂（提議中，待 PR 核可）**：
+- **2026-10-11 修訂（已由 owner 核可）**：
   - YAML 語法層也只留一個解析器：凡是用來判定設定內容的讀取，都讀 Go 解析出的同一份 JSON（例外兩項：§8 的遷移稽核指令兩個解析器都讀；§2 的寫 conf.d 工具讀原檔仍用 PyYAML，寫入前再經 `parse-tree` 核對），產生器只負責路由與 policy 的語意。方向由 owner 在 [#2858](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/2858) 核可。
   - 併入 owner 於 2026-10-10 與 2026-10-11 拍板的切換設計與寫入判準（[#2486](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/2486)）：不分兩階段，一步切換；寫入後整棵樹通過產生器檢查才寫入；不輸出整理好的設定 JSON；移除「policy 不可用時照樣放行」的開關（`--policy-unavailable-open`）；git 為必要。
 - 設計與修訂都經過對抗審查（由不同模型擔任）。

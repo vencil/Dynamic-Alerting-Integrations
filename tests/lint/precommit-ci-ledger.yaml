@@ -229,7 +229,8 @@ hooks:
   evidence:
     workflow: .github/workflows/ci.yml
     job: lint-rule-packs
-    note: Same command, same arguments; no job `if:`.
+    note: Same command, same arguments, through the same da-guard wrapper (setup-go in
+      the job); no job `if:`.
 - id: recipe-status-json-check
   category: a
   evidence:

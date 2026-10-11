@@ -354,6 +354,19 @@ class TestEdgeCases:
         _, err = nt.validate_receiver_url(recv)
         assert err is not None and "unknown receiver type" in err
 
+    @pytest.mark.parametrize("rtype", [{"a": 1}, ["webhook"], 5, 0, False, {}, []],
+                             ids=["mapping", "list", "int", "zero", "false",
+                                  "empty-mapping", "empty-list"])
+    def test_non_string_type_is_invalid_config(self, rtype):
+        """#2839：type 不是字串時回 INVALID_CONFIG 並點名，不得 traceback（同 _grar_merge.receiver_type()）。"""
+        recv = {"type": rtype, "url": "http://127.0.0.1:9/", "_label": "t-main"}
+        result = nt.test_receiver(recv, dry_run=True)
+        assert result.status == nt.STATUS_INVALID_CONFIG
+        assert "receiver type must be a string" in result.detail
+        assert result.receiver_type == ""
+        _, err = nt.validate_receiver_url(recv)
+        assert err is not None and "receiver type must be a string" in err
+
     @pytest.mark.parametrize("keys,expect", [
         ({"routing_key": "r"}, None),
         ({}, "none is set"),
@@ -521,6 +534,37 @@ class TestRunAllTests:
         reports = nt.run_all_tests(str(tmp_path), dry_run=True, rate_limit=0)
         assert [r.tenant for r in reports] == ["db-a"]
         assert reports[0].receivers[0].url_tested == "https://hooks.example.com/db-a"
+
+    @pytest.mark.parametrize("rtype", [{"a": 1}, ["webhook"], 5, 0, False, {}, []],
+                             ids=["mapping", "list", "int", "zero", "false",
+                                  "empty-mapping", "empty-list"])
+    @pytest.mark.parametrize("where", ["receiver", "overrides", "routes"])
+    def test_non_string_type_reported_per_tenant(self, tmp_path, rtype, where):
+        """#2839：任一位置的 receiver.type 非字串時，該租戶報一筆 INVALID_CONFIG，其他租戶照常測試。"""
+        ok = {"type": "webhook", "url": "https://ok.example.com"}
+        bad_recv = {"type": rtype, "url": "http://127.0.0.1:9/"}
+        if where == "receiver":
+            routing = {"receiver": bad_recv}
+        elif where == "overrides":
+            routing = {"receiver": ok,
+                       "overrides": [{"alertname": "X", "receiver": bad_recv}]}
+        else:
+            routing = {"receiver": ok,
+                       "routes": [{"matchers": {"severity": "critical"},
+                                   "receiver": bad_recv}]}
+        write_yaml(str(tmp_path), "db-bad.yaml", make_tenant_yaml(
+            "db-bad", keys={"mysql_connections": 5}, routing=routing))
+        write_yaml(str(tmp_path), "db-ok.yaml", make_tenant_yaml(
+            "db-ok", keys={"mysql_connections": 5}, routing={"receiver": ok}))
+        reports = nt.run_all_tests(str(tmp_path), dry_run=True, rate_limit=0)
+        by_tenant = {r.tenant: r for r in reports}
+        assert by_tenant["db-ok"].passed == 1 and by_tenant["db-ok"].failed == 0
+        bad = [r for r in by_tenant["db-bad"].receivers
+               if r.status == nt.STATUS_INVALID_CONFIG]
+        assert len(bad) == 1 and "receiver type must be a string" in bad[0].detail
+        assert by_tenant["db-bad"].failed == 1
+        nt.format_text_report(reports)
+        nt.format_json_report(reports)
 
     def test_refused_tree_raises(self, tmp_path):
         """#2752：路由產生器拒收的樹（同一租戶宣告於兩檔）不得回空清單。"""
