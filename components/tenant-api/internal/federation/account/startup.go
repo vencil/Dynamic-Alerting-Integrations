@@ -24,6 +24,8 @@ package account
 import (
 	"context"
 	"fmt"
+	"sort"
+	"strings"
 
 	"github.com/vencil/tenant-api/internal/confd"
 	"github.com/vencil/tenant-api/internal/statestore"
@@ -103,4 +105,53 @@ func registryResetError(store string, tenantCount int, state string) error {
 			"with no prior allocations) remove the stale tenant files",
 		RegistryFileName, store, state, tenantCount, FirstTenantAccountID, RegistryFileName,
 	)
+}
+
+// VerifyLiveTokensAgainstRegistry is the startup check that a live logs
+// token agrees with the registry (#2884). Every logs token still valid
+// carries the account_id it was issued for; the registry must hold that same
+// id for that tenant, below next_account_id. A token the registry does not
+// account for means the registry went back in time — typically an older
+// backup put back with `kubectl apply` — and the next allocation would
+// re-issue an id a tenant's live token already uses (ADR-021 cross-tenant
+// log leak). tenant-api refuses to start until the registry is restored
+// through `tenant-api state restore`, which merges these tokens back in.
+//
+// Token records are kept only until the token expires, so an id whose
+// tokens have all expired is outside this check.
+func VerifyLiveTokensAgainstRegistry(ctx context.Context, s statestore.Store, tokens []TokenAllocation) error {
+	if len(tokens) == 0 {
+		return nil
+	}
+	data, _, err := s.Get(ctx, RegistryFileName)
+	if err != nil {
+		return fmt.Errorf("account: cannot read %s from %s for the live-token check: %w", RegistryFileName, s.Describe(), err)
+	}
+	reg, err := Parse(data)
+	if err != nil {
+		return fmt.Errorf("account: %s in %s: %w", RegistryFileName, s.Describe(), err)
+	}
+	var problems []string
+	for _, tk := range tokens {
+		got, ok := reg.Lookup(tk.TenantID)
+		switch {
+		case tk.AccountID >= reg.NextAccountID:
+			problems = append(problems, fmt.Sprintf("token %s of tenant %q carries account_id %d, at/above next_account_id %d",
+				tk.TokenID, tk.TenantID, tk.AccountID, reg.NextAccountID))
+		case !ok:
+			problems = append(problems, fmt.Sprintf("token %s of tenant %q carries account_id %d, but the registry has no allocation for the tenant",
+				tk.TokenID, tk.TenantID, tk.AccountID))
+		case got != tk.AccountID:
+			problems = append(problems, fmt.Sprintf("token %s of tenant %q carries account_id %d, but the registry allocates %d",
+				tk.TokenID, tk.TenantID, tk.AccountID, got))
+		}
+	}
+	if len(problems) == 0 {
+		return nil
+	}
+	sort.Strings(problems)
+	return fmt.Errorf("account: refusing to start — %s in %s disagrees with %d live logs token(s); "+
+		"the next allocation could re-issue an id in use (cross-tenant log leak). "+
+		"Restore the registry with `tenant-api state restore`, which merges these tokens' ids back in:\n  %s",
+		RegistryFileName, s.Describe(), len(problems), strings.Join(problems, "\n  "))
 }

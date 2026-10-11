@@ -488,6 +488,7 @@ kubectl -n tenant-api exec -i deploy/tenant-api -- \
 - 啟用 federation（設了 `TA_FEDERATION_KEY`）時會讀 federation token store 取有效 logs token 的 `account_id`；讀不到就拒絕還原。
 - dir 模式下伺服器與子命令以檔案鎖（flock）序列化寫入，伺服器運行中也可以還原。
 - 結束碼：0 完成（或 dry run 完成）、1 拒絕或失敗、2 用法錯誤。
+- 啟用 federation 時，tenant-api 開機會比對有效 logs token 與帳本：token 的 `account_id` ≥ `next_account_id`、或與帳本對該租戶的配發不一致，就拒絕啟動並列出不一致的 token。帳本被舊備份蓋回時就是這個形狀；用 `state restore` 以同一份備份重做還原即可把這些 id 併回。
 
 ⚠️ 已知限制：token 紀錄只保留到過期為止。帳本整份遺失、只剩舊備份時，**備份之後才配發、目前又沒有有效 logs token** 的租戶，其 id 沒有任何地方記得：還原後的計數器可能不高於這些 id，之後的配發**可能重發它們**（跨租戶 log 洩漏），還原工具也無從察覺。降低這個窗口的方法是備份頻率：備份越新，備份之後才配發的 id 越少。
 

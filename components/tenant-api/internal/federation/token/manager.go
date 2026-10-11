@@ -498,3 +498,8 @@ func LiveLogsAccounts(s RecordStore, now time.Time) ([]Record, error) {
 	}
 	return out, nil
 }
+
+// LiveLogsAccounts is the package-level LiveLogsAccounts over m's store.
+func (m *Manager) LiveLogsAccounts() ([]Record, error) {
+	return LiveLogsAccounts(m.store, time.Now())
+}

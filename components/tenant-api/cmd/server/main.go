@@ -539,6 +539,15 @@ func main() {
 		if err := account.VerifyRegistryNotResetWithFleet(context.Background(), *configDir, stateStore); err != nil {
 			log.Fatalf("FATAL: %v", err)
 		}
+		// #2884: a live logs token the registry does not account for means
+		// the registry went back in time (an older backup applied over it).
+		liveLogs, err := federationMgr.LiveLogsAccounts()
+		if err != nil {
+			log.Fatalf("FATAL: read live logs tokens for the AccountID registry check: %v", err)
+		}
+		if err := account.VerifyLiveTokensAgainstRegistry(context.Background(), stateStore, toTokenAllocations(liveLogs)); err != nil {
+			log.Fatalf("FATAL: %v", err)
+		}
 		slog.Info("federation token endpoint enabled",
 			"token_ttl", federationMgr.TTL(),
 			"store_configmap", ff.ConfigMapName, "store_namespace", federationNS,
