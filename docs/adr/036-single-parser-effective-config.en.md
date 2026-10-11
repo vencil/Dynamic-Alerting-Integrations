@@ -211,7 +211,7 @@ tenant-api pod
 - **Communication**: HTTP/1.1 over a Unix socket; no network port. The socket lives in a shared scratch directory (emptyDir) inside the pod. Only processes that mount that directory and pass the socket file permissions can connect. The chart's existing human socket (for requests carrying a person's identity) works the same way.
 - **Execution**: a long-running process checks files out of git and caches them by commit. Each request is judged in a fresh child process; a batch is validated within that one child process; parse results are reused only within a single request.
 - **Timeout**: when judging times out, the child process is killed along with everything it started; the write is refused.
-- **amtool is required**: amtool is Alertmanager's config-checking tool. The generator's validation mode only prints a notice and passes when it is missing; the generator container does not accept that, and without amtool the container counts as unavailable.
+- **amtool is required**: amtool is Alertmanager's config-checking tool. The generator's validation mode only prints a notice and passes when it is missing; the generator container does not accept that: before every judgement it checks that amtool is present, and counts itself unavailable if not. Otherwise the generator would exit 0 with zero findings, which looks like a pass.
 - **When to parse inside the long-running process instead**: watch the p95 of write-lock hold time (the value 95% of writes stay under). Once p95 exceeds a third of the write timeout, switch: the long-running process forks children and gains a cross-request parse cache. The write timeout is the HTTP server's (`--write-timeout`, 30 s by default); there is also a fixed 30 s request-timeout middleware; neither is the write lock's timeout.
 
 **Getting the files: the generator container reads git objects only, never the working directory.**
@@ -233,29 +233,34 @@ tenant-api pod
   - The criterion is the generator's own result, so tenant-api is never looser than the generator in its container.
 - **Which writes are validated**: every write that changes file content. Whether to validate is not decided by Go guessing "does this touch routing".
 - **Error responses**: list the findings the generator reports (each problem it reports). Those related to the written files come first, marked with which existed before the write and whether they come from platform defaults, a routing profile or the tenant itself. This affects only the message, never the verdict.
-- **Batches**: one request, one commit, all or nothing. The batch is written only if the whole tree passes with the batch applied; otherwise the whole batch is refused, and the response lists the related findings item by item. Intermediate states are not validated and never reach the repo. Prerequisite: tenant-api's git writes support committing several files at once.
+- **Batches**: one request, one commit, all or nothing. The batch is written only if the whole tree passes with the batch applied; otherwise the whole batch is refused, and the response lists the related findings item by item. Intermediate states are not validated and never reach the repo. Synchronous and asynchronous batches follow the same rule; an asynchronous batch is judged when it runs. Prerequisite: tenant-api's git writes support committing several files at once.
 - **Merging batch patches**: Go still reads the file, applies the patch and writes it back; the merged content is always validated.
   - If a file to be written is already unreadable in the base, it is refused before merging. Otherwise Go's re-emission could drop the documents after a `---` or a duplicate key, making the merged content readable — a silent rewrite.
   - What validation cannot catch is a rewrite with no violation whose meaning Go changed; an offline differential test guards that: one side has Go merge and the generator read the result, the other has the generator read the base and apply the same patch; both must match, including the other tenants in the same file.
-- **What was validated is exactly what is written**: the container returns the "file paths, content hashes, base commit, deployment policy file content hash" it validated. tenant-api checks them under the write lock and revalidates on any mismatch; the bytes written must be exactly those validated.
+- **What was validated is exactly what is written**: the container returns the "file paths, content hashes, base commit, deployment policy file content hash" it validated. tenant-api checks them under the write lock; it mounts the same deployment policy file read-only and computes that hash itself. On a mismatch it revalidates once, and refuses if they still differ; the bytes written must be exactly those validated.
+- **PR mode validates the branch point**: what is validated is the PR branch's base commit plus this write. The result after the PR merges into the main branch is outside tenant-api's verdict; the customer's CI or a merge queue guards it.
 - **Any anomaly is a refusal**: a container error, a timeout, incomplete output — all count as refusals.
 
 **Cost (a breaking change)**:
 
 - While anything anywhere in the tree would be blocked, every write through tenant-api is refused until it is fixed.
-- How to fix: when the problem is in one tenant file and fixing that file makes the whole tree pass, it can be fixed through tenant-api. Everything else goes through git, for example platform files, files in subdirectories, or several tenants violating at once (common after the platform tightens a policy).
-- Why this is acceptable: the customer's CI runs the same generator, so a change that turns the whole tree red does not normally reach the main branch; when the whole tree is red, the customer's CI is already red. This amounts to "the main branch always stays green", the same as a merge queue (a queue that runs tests on the latest main branch before merging).
+- How to fix:
+  - When the problem is in one tenant file and fixing that file makes the whole tree pass, it can be fixed through tenant-api.
+  - Everything else goes through git, for example platform files, files in subdirectories, or several tenants violating at once (common after the platform tightens a policy). Problems that appear only after a PR-mode merge belong here too.
+  - When the customer's CI is green but tenant-api judges the whole tree red: rerun locally with the container's generator version (read from the §6 metric) and the deployment policy file, find the findings, and fix through git.
+- Why this is acceptable: when the customer's CI uses the same da-tools version and passes the same deployment policy file, a change that turns the whole tree red cannot reach the main branch; when the whole tree is red, the customer's CI is already red. This amounts to "the main branch always stays green", the same as a merge queue (a queue that runs tests on the latest main branch before merging). If either condition is missing, the customer's CI can be green while tenant-api's whole tree is red; the last fix path above covers that.
 
 ### 5. Policy files and policy status
 
 **The deployment's policy file is mounted into the generator container; when policy is unavailable, writes are refused.**
 
-- **The deployment's policy file** (`--policy`): its `allowed_domains` restrict webhook URL domains. The chart gains an optional value that mounts this file into the container, and it is passed along when judging. Reason: this is an SSRF control (stopping the service from being used to send requests into the internal network on an attacker's behalf) and belongs outside the tenant repo; someone with write access should not be able to change it. The customer CI template `da-tools init` generates does not pass `--policy` today.
+- **The deployment's policy file** (`--policy`): its `allowed_domains` restrict webhook URL domains. The chart gains an optional value that mounts this file into the generator container, and it is passed along when judging; the tenant-api container mounts the same file read-only to check its hash (§4). Reason: this is an SSRF control (stopping the service from being used to send requests into the internal network on an attacker's behalf) and belongs outside the tenant repo; someone with write access should not be able to change it. The customer CI template `da-tools init` generates does not pass `--policy` today; the template gains an option to pass the deployment policy file, so the customer's CI and tenant-api judge against the same file.
 - **Status endpoint**: the generator container reports whether each policy file is usable, and tenant-api reads it to produce `tenant_api_policy_available`. Alerts read this metric, so it keeps its name; it has no labels today.
   - When the status endpoint cannot be reached (container unreachable), the metric is 0, so the alert still fires.
   - Its description counts "keeping the last usable content" as usable; after the switch old content is no longer kept, so the description changes then.
-- **No escape hatch**: when the policy file or the generator container is unavailable, every write that changes file content is refused (thresholds-only writes included) with 503.
-  - When the policy file is unavailable the error code is `POLICY_UNAVAILABLE`; the code for an unavailable container is set during implementation.
+- **No escape hatch**: when the deployment policy file or the generator container is unavailable, every write that changes file content is refused (thresholds-only writes included) with 503.
+  - 503 is used only for these two cases. An error in a policy file inside the repo (platform defaults, a routing profile) is a finding the generator reports and is refused per §4, not with 503.
+  - When the deployment policy file is unavailable the error code is `POLICY_UNAVAILABLE`; the code for an unavailable container is set during implementation.
   - Today tenant-api's scope is narrower: only in direct write mode, and only when a policy file exists but none of its content is usable; a single PUT always gets it; a synchronous batch gets 503 for the whole request if any item touches routing; an asynchronous batch re-judges each item when it runs. The new rule does not depend on the mode.
   - `--policy-unavailable-open` and the counter `tenant_api_policy_unavailable_open_total` are removed. The alert `TenantApiPolicyUnavailable` stays (it reads the availability metric), but its description mentions the escape hatch and the counter and changes with them.
 - **No resolved config JSON is produced**: no code needs to read one today.
@@ -272,7 +277,7 @@ Neither case lets a violating config through; the cost is that the two sides can
 
 - tenant-api's chart pins a default da-tools version, and CI runs compatibility tests against that pair.
 - The config generated by `da-tools init` pins a version instead of `latest`.
-- A policy file can declare "requires at least generator version X"; a container older than that refuses writes. This is a new key, read only by the generator; it must be added no later than the switch release, or older generators will not recognise it.
+- A policy file can declare "requires at least generator version X"; a container older than that refuses every write that changes file content; the fix is for the operator to raise the da-tools version set in the chart. This is a new key, read only by the generator; it must be added no later than the switch release, or older generators will not recognise it.
 - tenant-api exposes the generator and da-guard versions as metrics.
 
 ### 7. A single-step switch
@@ -355,11 +360,12 @@ Duplicate keys, more than one document, tags outside the allow-list: today the g
 |---|---|
 | The generator's exit code on the whole tree after the write is not 0 | Refused; the error response lists the findings, marking those that existed before the write and their source |
 | The generator container is down, times out, or has no amtool | Every write that changes file content gets 503; `tenant_api_policy_available` is 0 |
-| The policy file is unavailable | Every write that changes file content gets 503, error code `POLICY_UNAVAILABLE` |
+| The deployment policy file is unavailable | Every write that changes file content gets 503, error code `POLICY_UNAVAILABLE` |
+| A policy file inside the repo has an error | The generator reports a finding; refused as in the first row, not with 503 |
 | `parse-tree` cannot read a file | The file is listed under unreadable files, the generator's check does not pass, and the write is refused |
 | Text produced by a Python tool that writes conf.d reads back through `parse-tree` differently from what was expected | Nothing is written, and the differing value is reported |
 | A reader meets an unknown format version | The whole document is treated as unusable |
-| The generator in the container is older than a policy requires | Writes are refused |
+| The generator in the container is older than a policy requires | Every write that changes file content is refused until the operator raises the chart's da-tools version |
 | No da-guard locally and no Go to build it | Python tools that read conf.d and the pre-commit hooks fail with the reason; they never fall back to parsing on their own. The affected hooks and the CI jobs without Go are listed by code in the implementation PR; those CI jobs switch to the da-tools image or install Go |
 
 ## How it is accepted
