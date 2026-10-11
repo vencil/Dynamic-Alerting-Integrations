@@ -334,8 +334,8 @@ function StepReview({ config, onChange }) {
               className="w-full px-3 py-2 border border-[color:var(--da-color-surface-border)] rounded-lg text-sm font-mono focus:outline-none focus:ring-2 focus:ring-[color:var(--da-color-focus-ring)]"
             />
             <p id="cicd-da-tools-image-help" className="mt-1 text-xs text-[color:var(--da-color-muted)]">
-              {t('留空則用預設。等同 CLI 的 --da-tools-image。:latest 我們會移動；換成你自己的 registry 時，tag 一樣可能被重指——要可重現請釘 digest。',
-                 'Blank uses the default. Same knob as the CLI --da-tools-image. We move :latest; a tag on your own registry can be repointed too — pin a digest if you need reproducibility.')}
+              {t('留空則用預設：這一版 da-tools 的固定版號 tag。等同 CLI 的 --da-tools-image。:latest 我們會移動；換成你自己的 registry 時，tag 一樣可能被重指——要可重現請釘 digest。',
+                 'Blank uses the default: this da-tools release\'s version tag. Same knob as the CLI --da-tools-image. We move :latest; a tag on your own registry can be repointed too — pin a digest if you need reproducibility.')}
             </p>
           </div>
 

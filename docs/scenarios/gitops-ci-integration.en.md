@@ -68,6 +68,8 @@ docker run --rm -it \
 
 The CLI guides you through: CI/CD platform, deployment method, Rule Pack selection, tenant names.
 
+**The generated configuration pins the da-tools version**: `DA_TOOLS_IMAGE` in the GitHub workflow `env`, the GitLab `variables` and `.pre-commit-config.da.yaml` defaults to the version tag of **the da-tools release that ran `init`** (`ghcr.io/vencil/da-tools:v<version>`), not `:latest` — so the same commit is always judged by the same generator in your CI, and that version can be aligned with the da-tools version the tenant-api chart pins ([ADR-036](../adr/036-single-parser-effective-config.en.md) §6). To upgrade, edit that one `DA_TOOLS_IMAGE` line in the generated files, or re-run `init` with a newer da-tools (pass `--da-tools-image` to name a different image). ⚠️ The v2.9.0 image's `init` still writes `:latest`; the version pin starts with the next image. <!-- image-caveat: v2.9.0 -->
+
 **Non-interactive mode (CI-friendly):**
 
 ```bash
@@ -287,8 +289,8 @@ Once the step finishes successfully (`rc` of 0 or 1), blast-radius.md is posted
 as a PR comment for quick reviewer assessment.
 
 ⚠️ **Whether the workflow `da-tools init` produces already carries this handling
-depends on the image you ran.** `init` pulls `ghcr.io/vencil/da-tools:latest` by
-default, and that tag only moves when the `tools/v*` line is released — this
+depends on the image you ran.** The generated workflow uses the da-tools release
+you ran `init` with (see §1.1), and images only ship when the `tools/v*` line is released — this
 page updates the moment it merges, the image does not. **Do not go by a version
 number; look at the artifact**: check whether the `Config diff (blast radius)`
 step in the generated `.github/workflows/dynamic-alerting.yaml` contains
@@ -429,7 +431,7 @@ Until it is supported again, use the default `--config-source configmap` with th
 
 ⛔ **"Merge" means copying the `- repo: local` item below INTO the `repos:` list of your existing `.pre-commit-config.yaml`.** The block below is a complete file — its first line is `repos:` — so **appending it whole leaves two top-level `repos:` keys, and YAML keeps only the last one, silently**: measured, `pre-commit validate-config` still exits 0 while every hook you had is gone. Take the block as a whole file only if you do not have a `.pre-commit-config.yaml` yet.
 
-⚠️ The block below is what `init` writes with the **default image** (`ghcr.io/vencil/da-tools:latest`). If you passed `--da-tools-image`, the first token of both `entry` values is the image you named — **go by the `.pre-commit-config.da.yaml` in your own repo root**, not by the image printed below.
+⚠️ The block below is what `init` writes with the **default image** (the version tag of the da-tools release that ran `init`; for this page, `ghcr.io/vencil/da-tools:v2.9.0`). If you passed `--da-tools-image`, the first token of both `entry` values is the image you named — **go by the `.pre-commit-config.da.yaml` in your own repo root**, not by the image printed below.
 
 <!-- mirrors-artifact: .pre-commit-config.da.yaml -->
 <!-- merge-mode: merge-items -->
@@ -446,7 +448,7 @@ repos:
       - id: da-validate-config
         name: Validate Dynamic Alerting config
         entry: >-
-          ghcr.io/vencil/da-tools:latest
+          ghcr.io/vencil/da-tools:v2.9.0
           validate-config --config-dir "/src/conf.d"
         language: docker_image
         files: ^conf\.d/.*\.ya?ml$
@@ -455,7 +457,7 @@ repos:
       - id: da-generate-routes
         name: Generate Alertmanager routes (validate)
         entry: >-
-          ghcr.io/vencil/da-tools:latest
+          ghcr.io/vencil/da-tools:v2.9.0
           generate-routes --config-dir "/src/conf.d" --validate --strict
         language: docker_image
         files: ^conf\.d/.*\.ya?ml$

@@ -158,7 +158,8 @@ describe('cicdGenerateDockerCommand', () => {
   it('wraps the init command in docker run', () => {
     const out = cicdGenerateDockerCommand(baseConfig());
     expect(out).toMatch(/^docker run/);
-    expect(out).toContain('ghcr.io/vencil/da-tools:latest');
+    expect(out).toContain(CICD_DEFAULT_DA_TOOLS_IMAGE);
+    expect(out).not.toContain('da-tools:latest');
     expect(out).toContain('init');
   });
 
@@ -464,11 +465,13 @@ describe('da-tools image is configurable (#1351)', () => {
   // equal is a separate step and is deliberately not asserted here.
 
   it('defaults to the same reference the CLI defaults to', () => {
-    // ⚠️ The literal, not a re-export dance: `cicdGenerateDockerCommand`'s own
-    // `toContain('ghcr.io/vencil/da-tools:latest')` above would still pass if
-    // the constant and the generator drifted apart in the same direction, so
-    // this names the value once more at the source of truth.
-    expect(CICD_DEFAULT_DA_TOOLS_IMAGE).toBe('ghcr.io/vencil/da-tools:latest');
+    // ⚠️ The SHAPE, not a literal (issue 2900): the default is the release tag
+    // `bump_docs.py --tools` rewrites at release, and this file is outside that
+    // rule's glob, so a literal here would go stale on every release. Equality
+    // with the CLI's actual default is the Python drift gate's job
+    // (tests/ops/test_generated_ci_artifacts.py); this pins that the wizard
+    // side is a version tag on our repository and never `:latest` again.
+    expect(CICD_DEFAULT_DA_TOOLS_IMAGE).toMatch(/^ghcr\.io\/vencil\/da-tools:v\d+\.\d+\.\d+$/);
     expect(cicdDaToolsImage(baseConfig())).toBe(CICD_DEFAULT_DA_TOOLS_IMAGE);
   });
 
@@ -600,11 +603,17 @@ describe('a reference we cannot vouch for is called out (#1351, review on #1880)
     }
   });
 
-  it('emits exactly one note for the default, and it is a YAML comment', () => {
-    const lines = noteLines(cicdGenerateGitHubActionsPreview(baseConfig()));
+  it('stays silent for the default, which is a release tag we publish (issue 2900)', () => {
+    expect(noteLines(cicdGenerateGitHubActionsPreview(baseConfig()))).toHaveLength(0);
+  });
+
+  it('emits exactly one note for our :latest, and it is a YAML comment', () => {
+    const latest = 'ghcr.io/vencil/da-tools:latest';
+    const lines = noteLines(cicdGenerateGitHubActionsPreview(
+      baseConfig({ daToolsImage: latest })));
     expect(lines).toHaveLength(1);
     expect(lines[0].startsWith('#')).toBe(true);
-    expect(lines[0]).toContain(CICD_DEFAULT_DA_TOOLS_IMAGE);
+    expect(lines[0]).toContain(latest);
   });
 
   it('places the note where it cannot break the workflow header', () => {
@@ -613,7 +622,8 @@ describe('a reference we cannot vouch for is called out (#1351, review on #1880)
     // `env:` block that declares DA_TOOLS_IMAGE. It is the ONE line the
     // preview adds to what `da-tools init` writes; the Python drift gate
     // removes exactly this line, at exactly this position, before comparing.
-    const yaml = cicdGenerateGitHubActionsPreview(baseConfig());
+    const yaml = cicdGenerateGitHubActionsPreview(
+      baseConfig({ daToolsImage: 'ghcr.io/vencil/da-tools:latest' }));
     expect(yaml).toMatch(/\nname: Dynamic Alerting\n/);
     expect(yaml).toMatch(/\n# \S[^\n]*can be repointed[^\n]*\njobs:\n/);
   });
@@ -624,7 +634,8 @@ describe('cicdImageIsMutable', () => {
   // whole-YAML assertion cannot say WHICH input produced the answer.
   it('calls a digest immutable and everything else mutable, except our own version tags', () => {
     const cases: Array<[string, boolean]> = [
-      [CICD_DEFAULT_DA_TOOLS_IMAGE, true],
+      [CICD_DEFAULT_DA_TOOLS_IMAGE, false],
+      ['ghcr.io/vencil/da-tools:latest', true],
       ['ghcr.io/vencil/da-tools', true],
       ['ghcr.io/vencil/da-tools:v2.9.0', false],
       ['ghcr.io/vencil/da-tools@sha256:' + '0'.repeat(64), false],
@@ -666,7 +677,9 @@ describe('cicdSplitImageRef', () => {
     // The exemption compares `repo` against this value, so a parse that put
     // the tag into `repo` would silence the note for every ghcr.io reference.
     expect(cicdSplitImageRef(CICD_DEFAULT_DA_TOOLS_IMAGE)).toEqual({
-      repo: 'ghcr.io/vencil/da-tools', tag: 'latest', digest: false,
+      repo: 'ghcr.io/vencil/da-tools',
+      tag: CICD_DEFAULT_DA_TOOLS_IMAGE.split(':').pop(),
+      digest: false,
     });
   });
 });

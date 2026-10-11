@@ -214,6 +214,36 @@ def find_project_root(start) -> "Path | None":
     return None
 
 
+def read_shipped_da_tools_version(start) -> "str | None":
+    """The da-tools release the module in *start* ships in, or None.
+
+    *start* is a shipped module's directory. The image's flat layout puts
+    ``VERSION`` beside every tool (``/opt/da-tools``); a repo tree keeps it at
+    ``components/da-tools/app/VERSION`` under ``find_project_root(start)``.
+    Only a bare ``X.Y.Z`` counts — the form `release.yaml` holds equal to the
+    ``tools/v*`` tag — so a blank, garbled or decoy file reads as None, never
+    as a version. Callers decide what None means; a generator that writes the
+    value into a file must refuse rather than guess (#2900).
+    """
+    import os
+    import re
+
+    cands = [os.path.join(str(start), "VERSION")]
+    root = find_project_root(start)  # None inside the image
+    if root is not None:
+        cands.append(os.path.join(str(root), "components", "da-tools", "app",
+                                  "VERSION"))
+    for cand in cands:
+        try:
+            with open(cand, encoding="utf-8") as fh:
+                text = fh.read().strip()
+        except (OSError, UnicodeDecodeError):
+            continue
+        if re.fullmatch(r"[0-9]+\.[0-9]+\.[0-9]+", text):
+            return text
+    return None
+
+
 def require_project_root(start) -> "Path":
     """``find_project_root`` for a dev tool that only runs from a repo tree.
 

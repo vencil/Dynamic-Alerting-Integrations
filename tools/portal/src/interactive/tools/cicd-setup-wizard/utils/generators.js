@@ -28,9 +28,16 @@ purpose: |
 // (`DA_TOOLS_IMAGE`) and exposes it as `--da-tools-image`; this hand-kept twin
 // had the same string typed into four template literals with no way for a
 // customer to change it, which is the "da-tools 映像" row of #1351's divergence
-// table. Same default as the CLI, deliberately: `cicdGenerators.test.ts` pins
-// the literal, so changing it here alone goes red.
-const CICD_DEFAULT_DA_TOOLS_IMAGE = 'ghcr.io/vencil/da-tools:latest';
+// table. Same default as the CLI, deliberately: the Python drift gate in
+// tests/ops/test_generated_ci_artifacts.py holds the two equal, so changing it
+// here alone goes red.
+//
+// ⛔ A RELEASE TAG, not `:latest` (issue 2900, ADR-036 §6). The CLI now writes
+// the tag of the da-tools release that generated the project, read from its
+// VERSION file. This side cannot read that file, so the tag is a literal that
+// `bump_docs.py --tools` rewrites at release together with VERSION (its
+// `tools/portal/src/**/*.js` rule) — that bump is what keeps it equal to the CLI.
+const CICD_DEFAULT_DA_TOOLS_IMAGE = 'ghcr.io/vencil/da-tools:v2.9.0';
 
 // ⛔ There is deliberately no argocd CLI image pin here any more, and none in
 // the CLI leg either: `--deploy argocd` is retired (#1351). It scaffolded no

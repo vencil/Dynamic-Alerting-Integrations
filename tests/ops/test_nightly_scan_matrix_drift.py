@@ -1816,11 +1816,22 @@ def _slug(text: str) -> str:
 
 
 def _fake_pin_root(tmp_path, appended: str):
-    """A tree holding a COPY of the pin source with `appended` tacked on."""
+    """A tree holding a COPY of the pin source with `appended` tacked on.
+
+    ⛔ Plus a copy of the da-tools VERSION file (#2900). `DA_TOOLS_IMAGE` is
+    derived from it, resolved against the tree the copy sits in, and a tree
+    without one yields None — which `delivered_refs` rightly refuses as an
+    empty pin. Without the copy every success-path case here exits on that
+    refusal instead of exercising what it was written for.
+    """
     target = tmp_path.joinpath(*_DELIVERED_PIN_SOURCE.split("/"))
     target.parent.mkdir(parents=True, exist_ok=True)
     src = (ROOT / _DELIVERED_PIN_SOURCE).read_text(encoding="utf-8")
     target.write_text(src + appended, encoding="utf-8")
+    version = tmp_path / "components" / "da-tools" / "app" / "VERSION"
+    version.parent.mkdir(parents=True, exist_ok=True)
+    version.write_text((ROOT / "components" / "da-tools" / "app" / "VERSION")
+                       .read_text(encoding="utf-8"), encoding="utf-8")
     return tmp_path
 
 
@@ -2242,6 +2253,23 @@ def test_a_blank_second_source_is_refused_too(tmp_path, blank: str) -> None:
         mod.delivered_refs(root)
     assert "DA_TOOLS_IMAGE" in str(excinfo.value), (
         f"a {blank} DA_TOOLS_IMAGE exited without naming it: {excinfo.value}")
+
+
+def test_a_tree_without_a_da_tools_version_is_refused(tmp_path) -> None:
+    """#2900: the tool pin is derived from VERSION; no VERSION, no pin.
+
+    The realistic form of a blank `DA_TOOLS_IMAGE` now: the pin source sits in
+    a tree that carries no `components/da-tools/app/VERSION`, so it evaluates
+    to None. The delivered scope must refuse and name it — not resolve the
+    other pins and report the tool image clean by omission.
+    """
+    root = _fake_pin_root(tmp_path, "\n")
+    (root / "components" / "da-tools" / "app" / "VERSION").unlink()
+    mod = _load_extractor("_extractor_da_tools_no_version")
+
+    with pytest.raises(SystemExit) as excinfo:
+        mod.delivered_refs(root)
+    assert "DA_TOOLS_IMAGE" in str(excinfo.value), excinfo.value
 
 
 def test_the_blank_pin_guard_still_lets_the_real_table_through(tmp_path) -> None:

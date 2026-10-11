@@ -306,7 +306,14 @@ def _build_tools_rules():
     # `da-tools init --ci gitlab` 產生，不是 checked-in 範本。規則指向不存在的
     # 檔案時 apply_rules() 只會回 SKIP，過去所有 gate 都不看 SKIP，於是這條
     # 規則靜靜死了五個版本（#1407）。B 段已讓 missing 變成 failing signal。
+    #
+    # ⛔ nightly-image-scan.yaml since issue 2900: its scan-delivered matrix
+    # mirrors `da-tools init`'s default image, which is now `:v<VERSION>`
+    # derived from the VERSION file this same rule set bumps. Without this rule
+    # the release bump moves the generator and leaves the matrix behind, and
+    # the nightly matrix-drift guard goes red on the release PR.
     for f in [".github/workflows/config-diff.yaml",
+              ".github/workflows/nightly-image-scan.yaml",
               "k8s/03-monitoring/cronjob-maintenance-scheduler.yaml",
               "k8s/03-monitoring/cronjob-threshold-govern.yaml"]:
         rules.append({
