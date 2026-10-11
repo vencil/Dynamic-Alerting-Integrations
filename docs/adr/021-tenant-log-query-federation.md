@@ -150,7 +150,7 @@ allocations:               allocations:
 
 用 `kubectl apply` 把備份蓋回，下一個要 logs token 的租戶 `t-c` 會拿到 1001，讀得到 `t-b` 還在保留期內的 log；經 `state restore` 合併，帳本維持 `t-b: 1001`、`next_account_id: 1002`，`t-c` 拿到 1002。
 
-⚠️ 已知限制，上述檢查都擋不住：
+⚠️ 已知限制，上述檢查都擋不住（前兩條的補法在 [#2928](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/2928) 討論：在帳本以外另記一份只升不降的高水位）：
 - **只在啟動時檢查**：舊備份在 pod 運行中被蓋回時，運行中的 pod 不比對 token，會照常從倒退的計數器配發，直到某個 pod 重啟才拒絕啟動。所以還原一律走 `state restore`，不靠開機檢查善後。
 - **過期 token 不留紀錄**：token 紀錄只保留到過期為止。帳本整份遺失、只剩舊備份時，備份之後才配發、目前又沒有有效 logs token 的租戶，其 id 沒有任何地方記得，還原後的計數器可能不高於它，之後的配發可能重發它。縮小這個窗口靠備份頻率。
 - **直接編輯 ConfigMap**：有人把計數器連同已退租租戶的配發一起改小時，上述檢查都看不出來，已退租的 id 可能被重發。chart 的 Role 只給 tenant-api 的 ServiceAccount 對 `tenant-api-state` 的 get/update；其他能改 ConfigMap 的人由叢集 RBAC 管。
