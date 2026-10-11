@@ -21,7 +21,7 @@ updated_at: 2026-10-11
 ✅ **Accepted**（2026-10-09 起草並由 owner 核可）。
 
 - **2026-10-11 修訂（提議中，待 PR 核可）**：
-  - YAML 語法層也只留一個解析器：所有工具讀 Go 解析出的同一份 JSON，產生器只負責路由與 policy 的語意。方向由 owner 在 [#2858](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/2858) 核可。
+  - YAML 語法層也只留一個解析器：凡是用來判定設定內容的讀取，都讀 Go 解析出的同一份 JSON（例外兩項：§8 的遷移稽核指令兩個解析器都讀；§2 的寫 conf.d 工具讀原檔仍用 PyYAML，寫入前再經 `parse-tree` 核對），產生器只負責路由與 policy 的語意。方向由 owner 在 [#2858](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/2858) 核可。
   - 併入 owner 於 2026-10-10 與 2026-10-11 拍板的切換設計與寫入判準（[#2486](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/2486)）：不分兩階段，一步切換；寫入後整棵樹通過產生器檢查才寫入；不輸出整理好的設定 JSON；移除「policy 不可用時照樣放行」的開關（`--policy-unavailable-open`）；git 為必要。
 - 設計與修訂都經過對抗審查（由不同模型擔任）。
 
@@ -31,7 +31,7 @@ updated_at: 2026-10-11
 
 **決定**：
 
-1. **YAML 只由 Go 解析。** da-guard 新增一個指令，把整棵 conf.d 讀成一份 JSON：選了哪些檔、每份檔的內容、哪些檔讀不了。Python 端（包含路由產生器）不再自己解析 conf.d 的 YAML，改讀這份 JSON。
+1. **YAML 只由 Go 解析。** da-guard 新增一個指令，把整棵 conf.d 讀成一份 JSON：選了哪些檔、每份檔的內容、哪些檔讀不了。Python 端（包含路由產生器）判定設定內容時不再自己解析 conf.d 的 YAML，改讀這份 JSON；例外只有 §8 的遷移稽核指令與 §2 的寫入工具。
 2. **語意各只有一個實作。** 路由、domain policy、租戶清單的語意只由產生器（Python）判定；閾值與 exporter 送出的值只由 exporter（Go）判定。
 3. tenant-api 的 pod 加一個容器跑產生器，每一筆會改變檔案內容的寫入都先問它。tenant-api 不再自己判定路由與 policy。
 4. **一步切換。** 產生器改讀 JSON、tenant-api 改問產生器容器、da-guard 不再判定路由與 policy，三者在同一個版本發布；Go 端與 Python 端互相模仿的程式在同一個版本刪除。不設新舊並行期。

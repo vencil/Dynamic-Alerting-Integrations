@@ -15,7 +15,7 @@ lang: en
 ✅ **Accepted** (drafted and approved by the owner 2026-10-09).
 
 - **Revised 2026-10-11 (proposed, pending PR approval)**:
-  - The YAML syntax layer also keeps a single parser: every tool reads the same JSON parsed by Go, and the generator is responsible only for routing and policy semantics. The direction was approved by the owner in [#2858](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/2858).
+  - The YAML syntax layer also keeps a single parser: every read used to judge config content reads the same JSON parsed by Go (two exceptions: the migration audit command in §8 reads with both parsers; the tools in §2 that write conf.d still read the original with PyYAML and check the result with `parse-tree` before writing), and the generator is responsible only for routing and policy semantics. The direction was approved by the owner in [#2858](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/2858).
   - Folds in the switch-over design and write criterion the owner decided on 2026-10-10 and 2026-10-11 ([#2486](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/2486)): no two phases, a single-step switch; a write goes ahead only when the whole tree afterwards passes the generator's check; no resolved config JSON; the "let writes through while policy is unavailable" switch (`--policy-unavailable-open`) is removed; git is required.
 - Both the design and the revision went through adversarial review (by a different model).
 
@@ -25,7 +25,7 @@ lang: en
 
 **Decisions**:
 
-1. **Only Go parses the YAML.** da-guard gains a command that reads a whole conf.d into one JSON document: which files were selected, the content of each file, and which files could not be read. The Python side (including the route generator) no longer parses conf.d YAML itself; it reads this JSON.
+1. **Only Go parses the YAML.** da-guard gains a command that reads a whole conf.d into one JSON document: which files were selected, the content of each file, and which files could not be read. When judging config content, the Python side (including the route generator) no longer parses conf.d YAML itself; it reads this JSON. The only exceptions are the migration audit command in §8 and the writing tools in §2.
 2. **Each semantic area has one implementation.** Routing, domain-policy and tenant-list semantics are judged only by the generator (Python); thresholds and the values the exporter serves only by the exporter (Go).
 3. The tenant-api pod gains a container that runs the generator, and every write that changes file content asks it first. tenant-api no longer judges routing and policy itself.
 4. **A single-step switch.** The generator reading the JSON, tenant-api asking the generator container, and da-guard no longer judging routing and policy ship in the same release; the code the Go and Python sides use to imitate each other is deleted in that same release. There is no side-by-side period.
