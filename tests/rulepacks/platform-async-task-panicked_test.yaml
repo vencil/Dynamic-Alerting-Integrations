@@ -34,7 +34,14 @@ tests:
 
   # ⚠️ The eval at 13m is the DISCRIMINATOR for `for: 5m`: increase() is already
   # > 0 there (panic at 10m), so a rule without the hold-down would fire.
-  # The eval at 40m checks the alert clears once the 0 samples left the window.
+  #
+  # The 21m / 30m pair PINS THE 15m WINDOW (last 0 sample at 9m, first 1 at
+  # 10m). With [15m] increase() is > 0 through 23m, so the alert fires from
+  # 15m and clears by 24m. A [10m] window would already have cleared at 21m
+  # (> 0 only through 18m); a [30m] window would still fire at 30m (through
+  # 38m). 30m, not 24m, is the clear point on purpose: it sits clear of the
+  # window edge, where VictoriaMetrics' increase() (which takes the sample
+  # before the window as its base) answers one step later than PromQL.
   - interval: 1m
     name: hold-down-and-clear
     input_series:
@@ -44,7 +51,32 @@ tests:
       - eval_time: 13m
         alertname: TenantApiAsyncTaskPanicked
         exp_alerts: []
-      - eval_time: 40m
+      - eval_time: 21m
+        alertname: TenantApiAsyncTaskPanicked
+        exp_alerts:
+          - exp_labels:
+              severity: warning
+              alert_source: platform
+              job: tenant-api
+              instance: 10.0.0.2:8080
+            exp_annotations:
+              summary: "tenant-api async batch task panicked — task marked failed, tenant-api bug"
+      - eval_time: 30m
+        alertname: TenantApiAsyncTaskPanicked
+        exp_alerts: []
+
+  # The same panic on a series from another job must not fire: the rule is
+  # scoped to job="tenant-api" (pins the selector).
+  - interval: 1m
+    name: other-job-no-fire
+    input_series:
+      - series: 'tenant_api_async_task_panics_total{job="other", instance="10.0.0.9:8080"}'
+        values: '0x9 1x40'
+    alert_rule_test:
+      - eval_time: 16m
+        alertname: TenantApiAsyncTaskPanicked
+        exp_alerts: []
+      - eval_time: 21m
         alertname: TenantApiAsyncTaskPanicked
         exp_alerts: []
 
