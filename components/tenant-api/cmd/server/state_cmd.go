@@ -124,11 +124,17 @@ func tokenAllocations(rs token.RecordStore) ([]account.TokenAllocation, error) {
 	if err != nil {
 		return nil, err
 	}
+	return toTokenAllocations(recs), nil
+}
+
+// toTokenAllocations converts live logs token records to the registry's
+// view of them.
+func toTokenAllocations(recs []token.Record) []account.TokenAllocation {
 	out := make([]account.TokenAllocation, len(recs))
 	for i, r := range recs {
 		out[i] = account.TokenAllocation{TenantID: r.TenantID, AccountID: r.AccountID, TokenID: r.TokenID}
 	}
-	return out, nil
+	return out
 }
 
 // stateSubcommand reports whether argv asks for `tenant-api state ...`.
