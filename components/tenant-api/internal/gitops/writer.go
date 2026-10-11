@@ -1695,8 +1695,9 @@ func validateShape(tenantID, yamlContent string) (cfg.ThresholdConfig, []string)
 	// PRE-PARSE SIZE GATE (#1722). Must be the FIRST thing here and must come
 	// before yaml.Unmarshal, because the cost it bounds is the parse itself:
 	// yaml.v3 is superlinear in the number of keys in ONE mapping, and every
-	// caller below parses yamlContent four times (Unmarshal here,
-	// FindDuplicateKeyIn, CheckTenantRootKeys, yamlDocumentShapeErrors).
+	// caller below parses yamlContent five times (Unmarshal here,
+	// FindDuplicateKeyIn, CheckTenantRootKeys, yamlDocumentShapeErrors,
+	// TenantWritesStringMetadata).
 	//
 	// ⛔ WHY THIS IS NOT MERELY A NICE-TO-HAVE. Since #1718 the authoritative
 	// validate() runs INSIDE the single-writer token, so this cost is no longer
@@ -1752,6 +1753,16 @@ func validateShape(tenantID, yamlContent string) (cfg.ThresholdConfig, []string)
 	// keeps the containment check in the same function as the path it protects.
 	if err := guardTenantID(tenantID); err != nil {
 		return tcfg, []string{err.Error()}
+	}
+	// #2859: `_metadata` is a mapping (tenant-config schema). The exporter
+	// still reads a string that parses as YAML, but after its decode the two
+	// forms are the same value, so the string form is refused here, where it
+	// is written, not where it is read. Only this tenant's section: a flat
+	// file's other sections are not this write's.
+	if cfg.TenantWritesStringMetadata([]byte(yamlContent), tenantID) {
+		return tcfg, []string{fmt.Sprintf(
+			"tenants.%s._metadata must be a mapping (for example `environment: production` on its own line under it), "+
+				"not a string — the string form is no longer accepted on writes (#2859)", tenantID)}
 	}
 	return tcfg, nil
 }

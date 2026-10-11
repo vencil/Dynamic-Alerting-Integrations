@@ -514,6 +514,8 @@ func (m *ConfigManager) commitConfig(cfg *ThresholdConfig, hash string, flatScan
 	// measures the per-file partials; single-file Load measures its one
 	// file itself, before ApplyProfiles folds profile keys into the tenant
 	// maps (the merged cfg here would overstate a tenant's own mapping).
+	// #2859: the entries that still write `_metadata` as a string.
+	publishMetadataStringForm(m.getMetrics(), m.getLogger(), metadataStringFormOf(cfg, flatScan))
 	if flatScan != nil {
 		m.getMetrics().SetConfigShape(configShapeOfFiles(flatScan.configs))
 		// #2592: the `_defaults` files this commit could not parse — state,

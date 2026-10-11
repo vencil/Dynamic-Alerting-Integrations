@@ -50,15 +50,25 @@ import (
 // threshold key of a `tenants:` / `profiles:` body), and inside `defaults:`
 // a spelling that writes nothing beside one that does is dropped
 // (dropNullShadowingSpellings, #2418). The tenant set of a file is the key
-// set of the returned Tenants.
+// set of the returned Tenants. It also records, without changing any value,
+// which entries write `_metadata` as a string (StringMetadataEntries, #2859).
 //
 // ⚠️ A TENANT FILE ASKS ParseTenantFile, NOT THIS. This accepts a tenant id
 // that is not valid UTF-8; that is right for a `_`-prefixed platform file
 // (see ParseTenantFile) and wrong for a file that DECLARES tenants.
 func ParseConfigFile(data []byte) (ThresholdConfig, error) {
 	var cfg ThresholdConfig
-	err := yaml.Unmarshal(data, &cfg)
+	// Through a yaml.Node rather than straight into cfg: yaml.Unmarshal builds
+	// that node anyway, so the typed decode costs the same, and the node still
+	// shows what the typed decode erases — whether `_metadata` was written as
+	// a string (stringMetadataEntries, #2859).
+	var doc yaml.Node
+	err := yaml.Unmarshal(data, &doc)
+	if err == nil && doc.Kind != 0 {
+		err = doc.Decode(&cfg)
+	}
 	if err == nil {
+		cfg.stringMetadata = stringMetadataEntries(&doc)
 		keepReservedMappings(&cfg, data)
 		dropNullThresholds(&cfg, data)
 		dropNullShadowingSpellings(cfg.Defaults, data)
@@ -301,4 +311,88 @@ func mayHaveStructuredReserved(bodies map[string]map[string]ScheduledValue) bool
 		}
 	}
 	return false
+}
+
+// StringMetadataEntries is the file's `tenants:` / `profiles:` entries that
+// write `_metadata` as a string, as "tenants.<id>" / "profiles.<name>"
+// (stringMetadataEntries). Set by ParseConfigFile only; nil for a merged
+// config.
+func (c *ThresholdConfig) StringMetadataEntries() []string { return c.stringMetadata }
+
+// TenantWritesStringMetadata reports whether a tenant config document writes
+// tenants.<tenantID>._metadata as a string. The write side refuses that
+// (#2859): the schema says `_metadata` is a mapping, and after the decode a
+// string that reads as YAML is indistinguishable from one. Bytes that do not
+// parse report false; the caller's own decode is what refuses them.
+func TenantWritesStringMetadata(data []byte, tenantID string) bool {
+	var doc yaml.Node
+	if yaml.Unmarshal(data, &doc) != nil {
+		return false
+	}
+	want := "tenants." + tenantID
+	for _, e := range stringMetadataEntries(&doc) {
+		if e == want {
+			return true
+		}
+	}
+	return false
+}
+
+// stringMetadataEntries lists, in document order, the `tenants:` and
+// `profiles:` entries of a decoded document whose `_metadata` is a non-null
+// scalar: "tenants.<id>" / "profiles.<name>".
+//
+// WHY IT READS THE NODE. ScheduledValue stores a scalar as its text and a
+// mapping as its re-serialized YAML, both in Default, so after the typed
+// decode `_metadata: "environment: production"` and `_metadata:
+// {environment: production}` are the same value. The exporter keeps reading
+// both (a load-side refusal would drop every tenant of the file); this list
+// is what lets it say which entries still use the string form.
+func stringMetadataEntries(doc *yaml.Node) []string {
+	root := derefAlias(doc)
+	if root.Kind == yaml.DocumentNode {
+		if len(root.Content) == 0 {
+			return nil
+		}
+		root = derefAlias(root.Content[0])
+	}
+	if root.Kind != yaml.MappingNode {
+		return nil
+	}
+	var out []string
+	for i := 0; i+1 < len(root.Content); i += 2 {
+		switch section := root.Content[i].Value; section {
+		case "tenants", "profiles":
+			out = appendStringMetadata(out, section, derefAlias(root.Content[i+1]))
+		}
+	}
+	return out
+}
+
+func appendStringMetadata(out []string, section string, entries *yaml.Node) []string {
+	if entries.Kind != yaml.MappingNode {
+		return out
+	}
+	for i := 0; i+1 < len(entries.Content); i += 2 {
+		body := derefAlias(entries.Content[i+1])
+		if body.Kind != yaml.MappingNode {
+			continue
+		}
+		for j := 0; j+1 < len(body.Content); j += 2 {
+			if body.Content[j].Value != "_metadata" {
+				continue
+			}
+			if v := derefAlias(body.Content[j+1]); v.Kind == yaml.ScalarNode && v.ShortTag() != "!!null" {
+				out = append(out, section+"."+entries.Content[i].Value)
+			}
+		}
+	}
+	return out
+}
+
+func derefAlias(n *yaml.Node) *yaml.Node {
+	for n.Kind == yaml.AliasNode && n.Alias != nil {
+		n = n.Alias
+	}
+	return n
 }

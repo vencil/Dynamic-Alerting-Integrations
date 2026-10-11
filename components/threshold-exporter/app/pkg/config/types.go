@@ -252,6 +252,11 @@ type ThresholdConfig struct {
 	// config of the tenants it bears on (spellingCandidates). Not merged:
 	// only a file's own decode carries it.
 	spelled bool
+
+	// stringMetadata is set by ParseConfigFile: the `tenants:` / `profiles:`
+	// entries of the file that write `_metadata` as a string rather than a
+	// mapping (stringMetadataEntries, #2859). Not merged, like spelled.
+	stringMetadata []string
 }
 
 // ResolvedThreshold is the final resolved state for one tenant+metric pair.
