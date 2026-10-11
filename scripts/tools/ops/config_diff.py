@@ -578,6 +578,10 @@ def _summarize_changes(changes):
 
 # ── The report: two renders compared, in sections ─────────────────────────
 
+# The served-values fields the sections below read (`tenant` is the added /
+# removed list).
+_SECTIONED_FIELDS = frozenset(rd.SERVED_FIELDS) | {"tenant"}
+
 VIEW_TITLES = {rd.VIEW_SERVED: "Exporter values (da-guard served-values)",
                rd.VIEW_ROUTES: "Routing (Alertmanager configuration)"}
 
@@ -615,7 +619,9 @@ def build_report(diff, old_dir, new_dir):
     shown |= set(tenants_added) | set(tenants_removed)
     other = {}
     for c in diff.served.changes:
-        if c.tenant not in shown:
+        # Either the field is one no section reads, or no section names the
+        # tenant at all: a tenant shown elsewhere must not hide a new field.
+        if c.field not in _SECTIONED_FIELDS or c.tenant not in shown:
             other.setdefault(c.tenant, []).append(
                 {"field": c.field, "key": c.key, "old": c.base, "new": c.pr})
 

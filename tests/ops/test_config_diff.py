@@ -348,6 +348,12 @@ class TestBuildReport:
         assert cd.report_exit_code(diff, r) == 1
         md = cd.render_markdown(r)
         assert "## Other Served Changes" in md and "No changes detected." not in md
+        # 租戶已在別的區段出現，也不能把它在新欄位的變更藏起來（CodeRabbit 指出的情況）
+        mixed = self._diff(rd.ValueChange("t", "values", "m", 1, 2),
+                           rd.ValueChange("t", "some_new_field", "k", 1, 2),
+                           report={"metric": {"t": [{"key": "m", "old": 1, "new": 2, "change": "looser"}]}})
+        assert cd.build_report(mixed, tmp_path, tmp_path)["other_served"] == {
+            "t": [{"field": "some_new_field", "key": "k", "old": 1, "new": 2}]}
         # 對照：同一筆變更若有區段報了它的租戶，就不重複列
         shown = self._diff(rd.ValueChange("t", "values", "m", 1, 2),
                            report={"metric": {"t": [{"key": "m", "old": 1, "new": 2, "change": "looser"}]}})

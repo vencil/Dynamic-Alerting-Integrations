@@ -298,6 +298,7 @@ def test_gitlab_blast_radius_reads_time_dependent_settings_at_the_base_commit(
     # A head commit years later, so the base's time and the head's (or the
     # run's) cannot be mistaken for each other.
     subprocess.run(["git", "-c", "user.email=t@example.invalid", "-c", "user.name=t",
+                    "-c", "commit.gpgsign=false", "-c", "core.hooksPath=",
                     "commit", "-q", "--allow-empty", "-m", "later"], cwd=work, check=True,
                    env={**os.environ, "GIT_COMMITTER_DATE": "2030-01-01T00:00:00+00:00"}, timeout=60)
     p = _run_job(pipeline, work, base_sha=base_sha,

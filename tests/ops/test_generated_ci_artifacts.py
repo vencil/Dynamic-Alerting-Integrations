@@ -5760,7 +5760,8 @@ def test_generated_blast_radius_step_honours_the_exit_contract(
     # A real checkout: the step reads the base commit's time (`--at`, ADR-037).
     base_sha = _synthetic_repo(work, base_has_config=True)
     # A head commit years later, so the base's time cannot pass for the head's.
-    subprocess.run(["git", "commit", "-q", "--allow-empty", "-m", "later"], cwd=work, check=True,
+    subprocess.run(["git", "-c", "commit.gpgsign=false", "-c", "core.hooksPath=",
+                    "commit", "-q", "--allow-empty", "-m", "later"], cwd=work, check=True,
                    env={**os.environ, "GIT_COMMITTER_DATE": "2030-01-01T00:00:00+00:00"}, timeout=60)
     assert wf_env["CONFIG_DIR"].rstrip("/") == "conf.d", wf_env  # what the repo holds
     if state == "head_config_dir_missing":
