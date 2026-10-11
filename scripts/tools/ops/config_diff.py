@@ -973,7 +973,29 @@ def _path_shape(path):
     def shape(m):
         matcher, sep, repeat = m.partition(" #")
         return f"tenant=*{sep}{repeat}" if rd._tenant_of_matcher(matcher) is not None else m
-    return [", ".join(shape(m) for m in step.split(", ")) for step in path]
+    return [", ".join(shape(m) for m in _split_matchers(step)) for step in path]
+
+
+def _split_matchers(step):
+    """A path step's matchers: split on the `, ` that `_render_diff` joins
+    them with, but not inside a quoted value (`component="api, tenant=x"`
+    is one matcher)."""
+    out, cur, quoted, escaped = [], [], False, False
+    for i, ch in enumerate(step):
+        if escaped:
+            escaped = False
+        elif ch == "\\" and quoted:
+            escaped = True
+        elif ch == '"':
+            quoted = not quoted
+        elif ch == "," and not quoted and step[i + 1:i + 2] == " ":
+            out.append("".join(cur))
+            cur = []
+            continue
+        if cur or ch != " " or not out:
+            cur.append(ch)
+    out.append("".join(cur))
+    return out
 
 
 def _names(names):

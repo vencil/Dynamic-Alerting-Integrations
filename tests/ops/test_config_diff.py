@@ -353,6 +353,14 @@ class TestRenderMarkdown:
         assert cd._path_shape(('tenant="t1"',)) == ["tenant=*"]
         assert cd._path_shape(('severity="critical", tenant="t1" #2',)) == ['severity="critical", tenant=* #2']
 
+    def test_a_comma_inside_a_quoted_value_is_not_a_matcher_boundary(self):
+        """CodeRabbit：值裡的 `, tenant=x` 不是租戶 matcher；兩條只差在那個值的 route 形狀不同。"""
+        blue = cd._path_shape(('component="api, tenant=blue", tenant="t1"',))
+        green = cd._path_shape(('component="api, tenant=green", tenant="t1"',))
+        assert blue == ['component="api, tenant=blue", tenant=*'] and blue != green
+        assert cd._split_matchers('a="x\\", b", c="y"') == ['a="x\\", b"', 'c="y"']
+        assert cd._split_matchers('tenant="t1" #2') == ['tenant="t1" #2']
+
     def test_one_tenant_beside_the_platform_is_singular(self):
         recv = [rd.ReceiverChange("noc", (rd.PLATFORM, "a"), "changed", {"send_resolved": (True, False)})]
         assert "- `noc` (changed) — platform and 1 tenant: `a`" in cd.render_markdown(_report(receivers=recv))
