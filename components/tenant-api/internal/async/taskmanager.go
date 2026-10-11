@@ -35,7 +35,7 @@ const (
 // to ensure consistency.
 type TaskResult struct {
 	TenantID string `json:"tenant_id"`
-	Status   string `json:"status"` // "ok" | "error"
+	Status   string `json:"status"` // "ok" | "error" | "skipped" (a group member that does not exist, #2882)
 	Message  string `json:"message,omitempty"`
 	// Code mirrors handler.BatchResult.Code (#2078): the machine-readable
 	// failure code (e.g. TENANT_DECLARED_ELSEWHERE), empty when none applies.
@@ -300,23 +300,37 @@ func (m *Manager) cleanup() {
 // mirroring the format used in handler/tenant_batch.go
 // (e.g., "5 succeeded, 1 failed" or "5 succeeded"). Exported so GET
 // /tasks/{id} can re-render it over the results a caller may see (#1530).
+// A "skipped" result (#2882) is neither: it is counted apart and appended
+// ("4 succeeded, 1 skipped"); with none the wording is unchanged.
 func SummarizeResults(results []TaskResult) string {
-	successes := 0
-	failures := 0
+	successes, failures, skipped := 0, 0, 0
 
 	for _, r := range results {
-		if r.Status == "ok" {
+		switch r.Status {
+		case "ok":
 			successes++
-		} else {
+		case "skipped":
+			skipped++
+		default:
 			failures++
 		}
 	}
 
-	if failures == 0 {
-		return fmt.Sprintf("%d succeeded", successes)
+	var summary string
+	switch {
+	case skipped > 0 && successes == 0 && failures == 0:
+		return fmt.Sprintf("%d skipped", skipped)
+	case skipped > 0 && successes == 0:
+		summary = fmt.Sprintf("%d failed", failures)
+	case failures == 0:
+		summary = fmt.Sprintf("%d succeeded", successes)
+	case successes == 0:
+		summary = fmt.Sprintf("%d failed", failures)
+	default:
+		summary = fmt.Sprintf("%d succeeded, %d failed", successes, failures)
 	}
-	if successes == 0 {
-		return fmt.Sprintf("%d failed", failures)
+	if skipped > 0 {
+		summary += fmt.Sprintf(", %d skipped", skipped)
 	}
-	return fmt.Sprintf("%d succeeded, %d failed", successes, failures)
+	return summary
 }
