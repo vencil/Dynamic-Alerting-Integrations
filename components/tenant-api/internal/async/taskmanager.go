@@ -12,7 +12,10 @@ package async
 import (
 	"context"
 	"fmt"
+	"log/slog"
+	"runtime/debug"
 	"sync"
+	"sync/atomic"
 	"time"
 )
 
@@ -84,7 +87,18 @@ type Manager struct {
 	wg          sync.WaitGroup
 	cleanupTick *time.Ticker
 	closeOnce   sync.Once
+	// panics counts TaskFuncs that panicked (runTask recovered them); read by
+	// /metrics as tenant_api_async_task_panics_total.
+	panics atomic.Int64
+	// logger receives the panic report; nil means slog.Default() at the
+	// time of the panic. Tests set it to capture the report.
+	logger *slog.Logger
 }
+
+// msgTaskPanicked is the Task.Error of a task whose TaskFunc panicked. It is
+// what an API caller polling the task reads, so it carries no panic value or
+// stack — those go to the server log, keyed by the task id.
+const msgTaskPanicked = "internal error: the task stopped unexpectedly; the tenant-api log has the details under this task id"
 
 // NewManager creates a new Manager with the specified number of worker goroutines.
 // Default workerCount is 4; workChannel buffer is 100.
@@ -214,21 +228,56 @@ func (m *Manager) worker() {
 				return
 			}
 
-			// Mark task as running.
-			m.setStatus(item.taskID, TaskRunning)
-
-			// Execute the work function.
-			results, err := item.fn(m.ctx)
-
-			// Update task state atomically.
-			if err != nil {
-				m.setFailed(item.taskID, err.Error())
-			} else {
-				m.setCompleted(item.taskID, results)
-			}
+			m.runTask(item)
 		}
 	}
 }
+
+// runTask runs one work item and records its outcome.
+//
+// ⛔ A PANICKING TaskFunc MUST NOT TAKE THE PROCESS DOWN. The worker is a
+// plain goroutine: without the recover below, a panic in any TaskFunc (#2913:
+// yaml.v3's typed decode panicked on a tenant file holding a non-scalar key
+// beside a merge key `<<`) ends tenant-api, every other request and task
+// with it. The recover turns it into this task failing: Task.Error says so
+// without the panic value or stack (msgTaskPanicked), the server log gets
+// both, and tenant_api_async_task_panics_total counts it. The worker goes on
+// to the next item.
+//
+// ⚠️ It is a backstop, not a guarantee the process is healthy afterwards: a
+// TaskFunc that panicked while holding a lock it releases without defer
+// leaves that lock held.
+func (m *Manager) runTask(item workItem) {
+	defer func() {
+		if r := recover(); r != nil {
+			m.panics.Add(1)
+			logger := m.logger
+			if logger == nil {
+				logger = slog.Default()
+			}
+			logger.Error("async task panicked; marked failed",
+				"task_id", item.taskID, "panic", fmt.Sprint(r), "stack", string(debug.Stack()))
+			m.setFailed(item.taskID, msgTaskPanicked)
+		}
+	}()
+
+	// Mark task as running.
+	m.setStatus(item.taskID, TaskRunning)
+
+	// Execute the work function.
+	results, err := item.fn(m.ctx)
+
+	// Update task state atomically.
+	if err != nil {
+		m.setFailed(item.taskID, err.Error())
+	} else {
+		m.setCompleted(item.taskID, results)
+	}
+}
+
+// PanicCount is how many TaskFuncs of this manager have panicked (and been
+// marked failed) since it was created: tenant_api_async_task_panics_total.
+func (m *Manager) PanicCount() int64 { return m.panics.Load() }
 
 // setStatus updates the task status and timestamp.
 func (m *Manager) setStatus(taskID string, status TaskStatus) {

@@ -480,3 +480,26 @@ func keyID(pub *rsa.PublicKey) string {
 	sum := sha256.Sum256(canonical)
 	return base64.RawURLEncoding.EncodeToString(sum[:])
 }
+
+// LiveLogsAccounts returns the tenant and account_id of every non-expired
+// logs-plane record in s (#2884): the ids handed out that a token still
+// vouches for. A record is kept only until its token expires, so an id
+// whose tokens have all expired is not among them.
+func LiveLogsAccounts(s RecordStore, now time.Time) ([]Record, error) {
+	recs, err := s.listAll(now)
+	if err != nil {
+		return nil, err
+	}
+	var out []Record
+	for _, r := range recs {
+		if r.Capability == CapLogs && r.AccountID != 0 && !r.expired(now) {
+			out = append(out, r)
+		}
+	}
+	return out, nil
+}
+
+// LiveLogsAccounts is the package-level LiveLogsAccounts over m's store.
+func (m *Manager) LiveLogsAccounts() ([]Record, error) {
+	return LiveLogsAccounts(m.store, time.Now())
+}

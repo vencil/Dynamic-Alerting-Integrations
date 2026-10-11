@@ -141,6 +141,7 @@ da-tools <command> --help
 | `state-reconcile` | 遷移狀態目錄聲明式一致化（schema_version 驗證 + manifest 重建） | `--state-dir <dir>`（預設 `.da/state`） |
 | `rule-pack-diff` | Rule Pack 兩版本機械比對（added / removed / breaking label schema） | `--from <v1.yaml> --to <v2.yaml>` |
 | `silencer-drift-check` | AM silence 對 v2 rule pack 漂移偵測（offline，吃 amtool dump） | `--silences-file <json> --rule-source <path>` |
+| `migration-audit` | 遷移稽核：conf.d 以 PyYAML 與 `da-guard parse-tree` 各讀一次，列出讀法差異（ADR-036 §8） | `--config-dir <dir>` |
 
 ### Operator + Federation 工具
 
@@ -1432,6 +1433,55 @@ da-tools silencer-drift-check --silences-file silences.json --rule-source rule-p
 
 ⛔ **不要把 `--ci` 接到線上 silence dump 上**（上面的 CI gate 用法針對的是 cutover 時人工抓下來的那一份）。實測 2026-08-27：`rule-packs/` 的 122 條 alert **全部帶 `tenant:` label 且全為 templated（0 個字面值）**，而 `maintenance_scheduler.py` 建立的每條 silence 都帶字面 `tenant=<id>` matcher ⇒ 平台自己排程建立的 silence 全部落在既有的 templated-label 假陽性裡（見工具 docstring 的 Known limitations），那道閘門會對**每一個排程維護窗**轉紅。
 
+#### migration-audit
+
+遷移稽核（[ADR-036](adr/036-single-parser-effective-config.md) §8，[#2898](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/2898)）。conf.d 的 YAML 之後改由 Go（yaml.v3，`da-guard parse-tree`）讀；切換前用這支在自己的樹上看清楚哪些地方會變。同一棵 conf.d 讀兩次——今天路由產生器的讀法（PyYAML，同一套選檔與 loader）、`da-guard parse-tree`——比對後**只列差異，不做判定**。
+
+```bash
+da-tools migration-audit --config-dir <dir> [--json] [--da-guard-binary <path>]
+```
+
+**主要參數**
+
+| 參數 | 用途 |
+|------|------|
+| `--config-dir <dir>` | conf.d 根目錄（必須） |
+| `--json` | 輸出一份 JSON（schema `da-tools.migration-audit/v1`）到 stdout |
+| `--da-guard-binary <path>` | da-guard 路徑；未給則依序找 `$DA_GUARD_BINARY`、`$PATH` 上的 `da-guard`（da-tools 映像已內建） |
+| `--timeout <秒>` | da-guard 執行上限（預設 600） |
+
+**列出什麼**
+
+| 清單（`--json` 的鍵） | 內容 |
+|------|------|
+| `values` | 兩邊讀成不同的值：檔案、行號、路徑、兩邊的讀法、建議寫法（例如 `on` 要布林就寫 `true`、要字串就寫 `"on"`）。`rewrites` 逐一列出可替換的寫法（`meaning`、`text`），`span` 是值寫在哪一行哪幾欄（含型別標記，不含錨點）；每一種寫法照做之後兩邊都讀成一樣，不會給有損的寫法（超出 int64 的整數、`tenants:` 清單裡的項目只給加引號的字串；非有限數只給 `.inf`／`.nan`） |
+| `keys` | 只有一邊有的鍵 |
+| `becomes_unreadable` | 今天讀得到、`parse-tree` 判為讀不了的檔，附 `kind`（13 種封閉清單之一） |
+| `becomes_readable` | 今天整份拒收、`parse-tree` 讀得到的檔，附今天的錯誤與 yaml.v3 讀成的內容 |
+| `selection` | 只有一邊會讀的檔 |
+| `exporter_changes` | 刪除 vendored yaml.v3「非特定 tag」patch 後 exporter 讀法改變的兩處：`! "<<"` 不再是合併鍵、SLO `objective: ! "99.9"` 由拒收變接受。這兩種檔 `parse-tree` 也判為 `non_specific_tag`，所以同時列在 `becomes_unreadable` |
+| `still_unreadable` | 兩邊都讀不了的檔（不是變化，不影響結束碼） |
+| `files_compared` | 兩邊都讀得到、逐值比對過的檔（文字輸出在第二行列出），讓「沒有差異」與「什麼都沒比」分得開 |
+
+行號取自 PyYAML 的讀法：值標在它寫的那一行，鍵標在鍵所在行；經別名或合併取得的值，標在錨點或被合併 mapping 的定義行——改那一行會同時影響所有引用處。只有 yaml.v3 有的鍵標在父層的鍵那一行。
+
+政策檔的 `tenants: [010, 1e3, 0777]` 會列為差異（今天讀成原文 `"010"`、`"1e3"`、`"0777"`，yaml.v3 讀成 8、1000、511）：這是依 ADR-036 §2「語意層只依型別與換算後的值判斷」的預期結果，要原文就加引號。
+
+**沒有 da-guard 時**：直接失敗（exit 2）並說明，不會退回自己解析 YAML。
+
+**Exit codes**
+
+| Code | 含義 |
+|------|------|
+| 0 | 兩邊讀法相同（`still_unreadable` 可能非空） |
+| 1 | 列出了差異 |
+| 2 | caller error（`--config-dir` 不存在或讀不了、找不到 da-guard、da-guard 失敗或輸出不是可讀的 parse-tree 文件）；`--json` 時 stdout 仍是一份 JSON，`status: "caller_error"` 並帶 `reason` |
+
+```bash
+da-tools migration-audit --config-dir conf.d/
+da-tools migration-audit --config-dir conf.d/ --json | jq '.values[] | {file, line, suggestion}'
+```
+
 ---
 
 ### Operator + Federation 工具
@@ -2391,7 +2441,7 @@ da-tools config-diff --old-dir <path> --new-dir <path> [options]
 
 兩支都需要 da-guard（映像內建；repo 內先 `make da-guard-build`，或設 `DA_GUARD_BINARY`）。
 
-**報告區段**：Not Computed / Not Compared（有面向沒算出結果時）、Changed Platform Files、Tenants Added / Removed、Routing Changes、Custom Alert Changes、Tenant Setting Changes、Keys the Exporter Drops、Other Served Changes，以及每個租戶的閾值表。值來自 PR 的檔案：表格以外放在 code span 裡，閾值表的欄位則跳脫 `|` 與換行；receiver 的憑證欄位只報「有變」，前後值都遮成 `<redacted>`；同一個憑證值（字串或數字）出現在其他欄位（YAML anchor／alias 或手抄）時也遮掉，報告頂端註記遮了幾處。比對的是完整的值，8 個字元以上的值出現在較長的字串裡也遮；只抄一部分、或改寫過（大小寫、URL 編碼）的副本遮不到。
+**報告區段**：Not Computed / Not Compared（有面向沒算出結果時）、Changed Platform Files、Tenants Added / Removed、Routing Changes、Custom Alert Changes、Tenant Setting Changes、Keys the Exporter Drops、Other Served Changes，以及閾值變更表（Threshold Changes）。每個區段裡同一個變更只列一次，後面寫它影響的租戶：一個時寫租戶名，多個時寫租戶數與前 5 個名字，所以一個平台預設改到 1000 個租戶也只占一行。值來自 PR 的檔案：表格以外放在 code span 裡，閾值表的欄位則跳脫 `|` 與換行；receiver 的憑證欄位只報「有變」，前後值都遮成 `<redacted>`；同一個憑證值（字串或數字）出現在其他欄位（YAML anchor／alias 或手抄）時也遮掉，報告頂端註記遮了幾處。比對的是完整的值，8 個字元以上的值出現在較長的字串裡也遮；只抄一部分、或改寫過（大小寫、URL 編碼）的副本遮不到。
 
 **變更分類**（閾值表）
 
