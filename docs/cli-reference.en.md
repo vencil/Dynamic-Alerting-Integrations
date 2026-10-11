@@ -354,9 +354,11 @@ da-tools batch-diagnose --tenants db-a,db-b,db-c --output report.json
 
 | Code | Description |
 |------|-------------|
-| `0` | The run finished. ⚠️ A failed tenant check **also gives 0 today**; read each tenant's `status` in the output (returning 1 is tracked in [#2493](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/2493)) |
-| `1` | Only an uncaught exception (traceback) returns 1, e.g. `--workers 0` | <!-- datools-cmd-ignore: only a traceback gives 1, no exit to trace -->
-| `2` | Caller error: bad arguments, or the output path given to `-o/--output` cannot be written (#1641) |
+| `0` | Every tenant is `healthy` or `unchecked` (including `--dry-run`) |
+| `1` | One or more tenant checks failed (see each tenant's `status` and `issues` in the output) |
+| `2` | Caller error: bad arguments (including `--workers` below 1), a failed Prometheus query or a missing `kubectl` for any tenant (takes precedence over `1`, as `diagnose` alone does), or the output path given to `-o/--output` cannot be written (#1641) |
+
+⚠️ The v2.9.0 image does not have these exit codes yet: a failed tenant check and a failed Prometheus query both return `0`. On v2.9.0, read each tenant's `status` in the output. <!-- image-caveat: v2.9.0 -->
 
 ---
 

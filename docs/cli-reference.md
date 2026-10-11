@@ -351,9 +351,11 @@ da-tools batch-diagnose --tenants db-a,db-b,db-c --output report.json
 
 | 代碼 | 說明 |
 |------|------|
-| `0` | 執行完畢。⚠️ 租戶檢查失敗**目前也是 0**，要看輸出裡每個租戶的 `status`（改成回 1 在 [#2493](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/2493) 追蹤） |
-| `1` | 只有未捕捉例外（traceback）會回 1，例如 `--workers 0` | <!-- datools-cmd-ignore: 只有 traceback 回 1，沒有出口可追 -->
-| `2` | 呼叫端錯誤：參數錯誤，或 `-o/--output` 指到的輸出路徑寫不進去（#1641） |
+| `0` | 所有租戶都是 `healthy` 或 `unchecked`（含 `--dry-run`） |
+| `1` | 一個或多個租戶檢查失敗（看輸出裡各租戶的 `status` 與 `issues`） |
+| `2` | 呼叫端錯誤：參數錯誤（含 `--workers` 小於 1）、任一租戶的 Prometheus 查詢失敗或缺少 `kubectl`（優先於 `1`，與單跑 `diagnose` 一致），或 `-o/--output` 指到的輸出路徑寫不進去（#1641） |
+
+⚠️ v2.9.0 映像還沒有這套結束碼：租戶檢查失敗與 Prometheus 查詢失敗都回 `0`。用 v2.9.0 時請讀輸出裡各租戶的 `status`。 <!-- image-caveat: v2.9.0 -->
 
 ---
 
