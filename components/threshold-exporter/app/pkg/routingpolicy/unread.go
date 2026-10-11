@@ -5,6 +5,7 @@ import (
 	"path"
 	"sort"
 
+	"github.com/vencil/threshold-exporter/internal/confdlayout"
 	"github.com/vencil/threshold-exporter/pkg/config"
 )
 
@@ -79,7 +80,7 @@ func UnreadRouting(configDir string, defaults []config.DefaultsFile, skip func(r
 // PyYAML refuses (`!!null {}`) fails it — the generator drops that file, so
 // none of it is reported as unread.
 func topMap(name string, data []byte) map[string]any {
-	top, err := parseDoc(data, contains(policyFileNames, path.Base(name)))
+	top, err := parseDoc(data, confdlayout.IsDomainPolicyFile(path.Base(name)))
 	if err != nil || top == nil {
 		return nil
 	}

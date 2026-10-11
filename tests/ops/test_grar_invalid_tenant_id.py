@@ -1,6 +1,6 @@
 """ADR-035 D3（#2341 R8 之後）：tenant id 不合法時，產生器整棵樹拒收。
 
-判定函式 `_lib_validation.is_valid_tenant_id`（Go：routingpolicy.IsValidTenantID）
+判定函式 `_lib_validation.is_valid_tenant_id`（Go：tenantid.Valid）
 讀 schema 的 `definitions.tenantId`（DNS-1123 label），由
 tests/shared/routing_policy_parity_matrix.json 的 `tenant_ids` 表釘住。這裡釘產生器的
 行為：conf.d 只要宣告一個不合法 id，**每一種模式**（render、`--dry-run`、

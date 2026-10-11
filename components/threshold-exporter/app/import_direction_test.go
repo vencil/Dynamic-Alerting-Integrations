@@ -37,6 +37,7 @@ import (
 // Module-relative directories of the CLI-reusable logic layer. Same set as the
 // depguard rule's `files:` globs.
 var logicPackages = []string{
+	"internal/confdlayout", // #2899: conf.d layout helpers moved out of routingpolicy
 	"internal/guard",
 	"internal/parser",
 	"pkg/routingpolicy", // #2280: shared with tenant-api and da-guard

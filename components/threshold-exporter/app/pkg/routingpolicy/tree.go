@@ -14,6 +14,7 @@ import (
 	"sort"
 	"strings"
 
+	"github.com/vencil/threshold-exporter/internal/confdlayout"
 	"github.com/vencil/threshold-exporter/pkg/config"
 	"gopkg.in/yaml.v3"
 )
@@ -97,11 +98,6 @@ func LevelContains(level, other string) bool {
 		return true
 	}
 	return other == level || strings.HasPrefix(other, level+"/")
-}
-
-// LevelOf is the Tree level of a root-relative slash path to a file.
-func LevelOf(rel string) string {
-	return path.Dir(strings.ReplaceAll(rel, "\\", "/"))
 }
 
 // TenantLevel is the level of the tenant file that declares tenantID (the
@@ -222,7 +218,7 @@ func LoadTree(configDir string, skip func(rel string) bool) (Tree, []Policy, []P
 	sort.Strings(ids)
 	for _, id := range ids {
 		files := declared[id]
-		t.tenantDirs[id] = LevelOf(files[0])
+		t.tenantDirs[id] = confdlayout.LevelOf(files[0])
 		if len(files) > 1 {
 			probs = append(probs, Problem{Kind: ProblemDuplicateTenant, File: files[1], Field: "tenants." + id,
 				Message: fmt.Sprintf("duplicate tenant id %q: declared in both %s and %s — threshold-exporter "+
@@ -242,8 +238,8 @@ func LoadTree(configDir string, skip func(rel string) bool) (Tree, []Policy, []P
 		if f == nil || f.Data == nil {
 			continue
 		}
-		level, base := LevelOf(k), path.Base(k)
-		isPolicy := contains(policyFileNames, base)
+		level, base := confdlayout.LevelOf(k), path.Base(k)
+		isPolicy := confdlayout.IsDomainPolicyFile(base)
 		isProfiles := contains(profileFileNames, base)
 		// isPolicy: a subtree `_domain_policy.yaml` is a policy document
 		// too (#2326), so its `require_critical_escalation` gets the same
