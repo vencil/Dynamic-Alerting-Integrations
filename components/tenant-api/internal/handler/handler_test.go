@@ -43,8 +43,7 @@ func setupConfigDir(t *testing.T, files map[string]string) string {
 	return dir
 }
 
-// newTestWriter creates a gitops.Writer for test use.
-// newDirState is a directory state store over dir: tests that wrote the old
+// mustDirState is a directory state store over dir: tests that wrote the old
 // conf.d state files (_groups.yaml, _views.yaml) find the records where they
 // always were (#2856).
 func mustDirState(dir string) statestore.Store {
@@ -55,6 +54,7 @@ func mustDirState(dir string) statestore.Store {
 	return s
 }
 
+// newTestWriter creates a gitops.Writer for test use.
 func newTestWriter(configDir string) *gitops.Writer {
 	return gitops.NewWriter(configDir, "")
 }

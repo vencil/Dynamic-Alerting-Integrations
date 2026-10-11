@@ -275,7 +275,7 @@ func TestConfigMapConcurrentWritersLoseNothing(t *testing.T) {
 
 func TestDirRejectsPathKeys(t *testing.T) {
 	s := newDirStore(t)
-	for _, k := range []string{"", "../x", "a/b", `a\b`, ".", ".."} {
+	for _, k := range []string{"", "../x", "a/b", `a\b`, ".", "..", "_federation.a..b.yaml"} {
 		if _, err := s.Mutate(context.Background(), k, Meta{}, func([]byte) ([]byte, error) { return []byte("x"), nil }); err == nil {
 			t.Errorf("key %q accepted", k)
 		}

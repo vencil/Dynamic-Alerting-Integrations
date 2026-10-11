@@ -49,7 +49,7 @@ func (s *dirStore) log() *slog.Logger {
 // are the constants and SubsetKey of a validated tenant id); refuse one that
 // does rather than write outside dir.
 func (s *dirStore) path(key string) (string, error) {
-	if key == "" || key != filepath.Base(key) || strings.ContainsAny(key, `/\`) || key == "." || key == ".." {
+	if key == "" || key != filepath.Base(key) || strings.ContainsAny(key, `/\`) || strings.Contains(key, "..") || key == "." {
 		return "", fmt.Errorf("statestore: invalid key %q", key)
 	}
 	return filepath.Join(s.dir, key), nil
@@ -126,13 +126,13 @@ func writeAtomic(dir, path string, data []byte) error {
 		return err
 	}
 	tmp := f.Name()
-	defer os.Remove(tmp) // no-op after a successful rename
+	defer func() { _ = os.Remove(tmp) }() // no-op after a successful rename
 	if _, err := f.Write(data); err != nil {
-		f.Close()
+		_ = f.Close()
 		return err
 	}
 	if err := f.Sync(); err != nil {
-		f.Close()
+		_ = f.Close()
 		return err
 	}
 	if err := f.Close(); err != nil {

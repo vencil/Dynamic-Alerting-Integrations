@@ -9,7 +9,6 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"os"
-	"os/exec"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -69,17 +68,6 @@ func fakePromPerMetric(t *testing.T, hardBlock ...string) string {
 	}))
 	t.Cleanup(srv.Close)
 	return srv.URL
-}
-
-// lastCommitMessage returns the full message of the most recent commit
-// in dir — used to assert the --force bypass trailer landed in git.
-func lastCommitMessage(t *testing.T, dir string) string {
-	t.Helper()
-	out, err := exec.Command("git", "-C", dir, "log", "-1", "--format=%B").CombinedOutput()
-	if err != nil {
-		t.Fatalf("git log: %v\n%s", err, out)
-	}
-	return string(out)
 }
 
 // platformAdminRBAC grants admin on every tenant ("*"-scoped) to the
