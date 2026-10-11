@@ -969,7 +969,7 @@ def _build_parser() -> argparse.ArgumentParser:
     return parser
 
 
-# ── #2766 (ADR-036 §3): --findings-json ────────────────────────────────
+# ── #2766 (ADR-036 §4): --findings-json ────────────────────────────────
 FINDINGS_SCHEMA = "da-tools.findings/v1"
 _VERSION_RE = re.compile(r"[0-9]+\.[0-9]+\.[0-9]+")
 

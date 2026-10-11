@@ -66,7 +66,7 @@ lang: zh
 | ADR-033 | [與運維執行平面的協同介面 — MariaDB 計畫性作業](./033-ops-execution-plane-interface.md) | ✅ Accepted | — |
 | ADR-034 | [合法值不得同時當作無法辨識時的 fallback](./034-legal-value-as-fallback.md) | ✅ Accepted | — |
 | ADR-035 | [tenant id 合法字元集的單一來源](./035-tenant-id-single-source.md) | ✅ Accepted | — |
-| ADR-036 | [路由與 domain policy 設定只由產生器解析一次](./036-single-parser-effective-config.md) | ✅ Accepted | — |
+| ADR-036 | [conf.d 只解析一次：YAML 由 Go 讀，路由與 policy 由產生器判](./036-single-parser-effective-config.md) | ✅ Accepted | — |
 | ADR-037 | [config-diff 改為比較渲染結果](./037-config-diff-compares-rendered-output.md) | ✅ Accepted | — |
 
 <!-- ADR_INDEX_END -->
