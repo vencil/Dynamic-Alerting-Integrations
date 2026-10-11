@@ -56,14 +56,18 @@ except Exception:  # pragma: no cover - compat shim optional
     def try_utf8_stdout() -> None:  # type: ignore
         pass
 from _lib_exitcodes import EXIT_OK, EXIT_VIOLATION, EXIT_CALLER_ERROR  # noqa: E402
+from _lib_compat import find_project_root  # noqa: E402  (#2852)
 
 
-def _repo_root() -> Path:
-    p = Path(_THIS_DIR).resolve()
-    for parent in [p, *p.parents]:
-        if (parent / ".git").exists():
-            return parent
-    return p.parent.parent.parent
+def _repo_root() -> "Path | None":
+    """This tree's root, never an enclosing project's (#2852).
+
+    The nearest ancestor with a ``.git`` used to decide it, so a copy without
+    one (vendored, ``git archive``) compared the OUTER project's rule packs.
+    None outside a ``scripts/tools`` tree, e.g. the recipe-preview image, which
+    imports this module's helpers but never runs ``main``.
+    """
+    return find_project_root(_THIS_DIR)
 
 
 # One left-to-right alternation over the things whose CONTENT is not code:
@@ -250,6 +254,10 @@ def main() -> int:
     args = parser.parse_args()
 
     repo = _repo_root()
+    if repo is None:
+        print(f"ERROR: {_THIS_DIR} is not inside a scripts/tools tree, so there "
+              f"is no repo whose rule-packs/ to check", file=sys.stderr)
+        return EXIT_CALLER_ERROR
     pack_files = sorted((repo / "rule-packs").glob("rule-pack-*.yaml"))
     if not pack_files:
         print("ERROR: no rule packs found under rule-packs/", file=sys.stderr)

@@ -193,3 +193,15 @@ def test_main_exit_codes(tmp_path, monkeypatch):
     # introduce drift in the operator copy
     _write_three_copies(tmp_path, "t", src_op="max", op_op="sum")
     assert sync.main() == 1
+
+
+def test_main_outside_a_scripts_tools_tree_is_a_caller_error(monkeypatch, capsys):
+    """#2852: no tree root (the recipe-preview image layout) → rc 2, not a crash.
+
+    Before #2852 the root fell back to an ancestor three levels up; now
+    ``_repo_root`` returns None there and ``main`` must say so.
+    """
+    monkeypatch.setattr(sync, "_repo_root", lambda: None)
+    monkeypatch.setattr(sys, "argv", ["check_rulepack_sync.py", "--ci"])
+    assert sync.main() == 2
+    assert "scripts/tools" in capsys.readouterr().err
