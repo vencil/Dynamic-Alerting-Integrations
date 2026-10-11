@@ -213,7 +213,7 @@ func judge(data []byte, doc *yaml.Node) (Content, *Unreadable) {
 	default:
 		return nil, fail(KindTopLevelNotMapping, "the top level is a %s, not a mapping", kindName(root))
 	}
-	conv := &converter{values: c.values, active: map[*yaml.Node]bool{}}
+	conv := &converter{values: c.values, active: map[*yaml.Node]bool{}, bytes: 2} // the content's {}
 	out := Content{}
 	if err := conv.fill(out, root); err != nil {
 		return nil, err
@@ -462,37 +462,68 @@ func decode(n *yaml.Node, v any) (err error) {
 // ------------------------------------------------------------- expansion
 
 type converter struct {
-	values   map[*yaml.Node]json.RawMessage
-	active   map[*yaml.Node]bool // alias targets being expanded (a cycle guard)
-	expanded int                 // values emitted through an alias so far (MaxAliasExpansion)
+	values map[*yaml.Node]json.RawMessage
+	active map[*yaml.Node]bool // alias targets being expanded (a cycle guard)
+	bytes  int                 // JSON bytes of the content emitted so far (MaxContentBytes)
 }
 
-// MaxAliasExpansion bounds the values one file's content may gain through
-// aliases (an alias, or a merge from an alias: every scalar, mapping and
-// sequence emitted while expanding one). Values written out in the file are
-// not counted — the file's own size bounds them; only aliases make the
-// output grow faster than the input.
+// MaxContentBytes bounds the JSON one file's content encodes to — the
+// content object as `da-guard parse-tree` writes it under "files", counted
+// while it is built, so expansion stops at the bound rather than after it.
 //
-// yaml.v3's own alias limit is a ratio of the nodes it decodes, not a size:
-// measured, a 2.4 KB file of 100 aliases to a 1000-item list passes it and
-// expands to 100,100 values, 3.9 MB of JSON (a review measured an 8.3 KB
-// file at ~15 MB). In conf.d an anchor shares a small block — a receiver, a
-// set of thresholds — so 100,000 values reached through aliases is still,
-// e.g., 1,000 tenants each merging a 100-value block. Over the bound the
-// file is a decode_error rather than megabytes every reader must load.
-const MaxAliasExpansion = 100_000
+// A bound on bytes, not on values or aliases: yaml.v3's own alias limit (kept)
+// is a ratio of decoded nodes, so a small file passes it and still expands
+// far — measured, 300 aliases to one 100,000-character string (a 100,914-byte
+// file) came to 60 MB of JSON, and 1,000 aliases to a list of 100 short
+// strings (a 10 KB file) past 8 MiB. A count of values misses the first
+// shape and a count of aliases the second; bytes catch both.
+//
+// 8 MiB is far above any real conf.d file. Measured on this repository's
+// conf.d trees: the largest content is rule-packs/recipes/examples/conf.d/
+// shop.yaml at 4,572 bytes of JSON (the largest YAML file,
+// components/threshold-exporter/config/conf.d/_defaults.yaml, 8,525 bytes,
+// mostly comments, encodes to 2,513) — some 1,800 times under the bound. A
+// file with no alias at all reaches it only past ~3.6 MB of YAML (40,000
+// keys of 80-character values, 3,640,000 bytes, encode to 8,320,001;
+// TestContentByteBound). Over the bound the file is a decode_error rather
+// than megabytes every reader must load.
+const MaxContentBytes = 8 << 20
 
-// count charges one value emitted while expanding an alias.
-func (c *converter) count(n *yaml.Node) *Unreadable {
-	if len(c.active) == 0 {
-		return nil
-	}
-	c.expanded++
-	if c.expanded > MaxAliasExpansion {
-		return fail(KindDecodeError, "line %d: aliases expand this file by more than %d values; "+
-			"write the repeated parts out, or split the file", n.Line, MaxAliasExpansion)
+// charge adds n bytes of emitted JSON, failing once over MaxContentBytes.
+func (c *converter) charge(n int, at *yaml.Node) *Unreadable {
+	c.bytes += n
+	if c.bytes > MaxContentBytes {
+		return fail(KindDecodeError, "line %d: the content expands to more than %d bytes of JSON "+
+			"(aliases repeat what they point at); write the file smaller, or split it", at.Line, MaxContentBytes)
 	}
 	return nil
+}
+
+// jsonStringLen is the length encoding/json (SetEscapeHTML(false)) writes
+// for s, quotes included. s is valid UTF-8.
+func jsonStringLen(s string) int {
+	n := 2
+	for _, r := range s {
+		switch {
+		case r == '"' || r == '\\' || r == '\n' || r == '\r' || r == '\t' || r == '\b' || r == '\f':
+			n += 2
+		case r < 0x20 || r == '\u2028' || r == '\u2029':
+			n += 6
+		default:
+			n += utf8.RuneLen(r)
+		}
+	}
+	return n
+}
+
+// scalarLen is the JSON length of Scalar{text, tag, raw}:
+// {"text":…,"tag":…[,"value":…]}.
+func scalarLen(text, tag string, raw json.RawMessage) int {
+	n := len(`{"text":`) + jsonStringLen(text) + len(`,"tag":`) + jsonStringLen(tag) + len(`}`)
+	if raw != nil {
+		n += len(`,"value":`) + len(raw)
+	}
+	return n
 }
 
 func (c *converter) node(n *yaml.Node) (any, *Unreadable) {
@@ -505,9 +536,6 @@ func (c *converter) node(n *yaml.Node) (any, *Unreadable) {
 		defer delete(c.active, t)
 		return c.node(t)
 	}
-	if bad := c.count(n); bad != nil {
-		return nil, bad
-	}
 	switch n.Kind {
 	case yaml.ScalarNode:
 		tag := n.Tag
@@ -518,8 +546,19 @@ func (c *converter) node(n *yaml.Node) (any, *Unreadable) {
 		if !utf8.ValidString(s.Text) {
 			return nil, fail(KindInvalidUTF8, "line %d: a scalar is not valid UTF-8", n.Line)
 		}
+		if bad := c.charge(scalarLen(s.Text, s.Tag, s.Value), n); bad != nil {
+			return nil, bad
+		}
 		return s, nil
 	case yaml.SequenceNode:
+		// [a,b,…]: the brackets and one comma per item after the first.
+		sep := len(n.Content) - 1
+		if sep < 0 {
+			sep = 0
+		}
+		if bad := c.charge(2+sep, n); bad != nil {
+			return nil, bad
+		}
 		out := make([]any, 0, len(n.Content))
 		for _, child := range n.Content {
 			v, bad := c.node(child)
@@ -530,6 +569,9 @@ func (c *converter) node(n *yaml.Node) (any, *Unreadable) {
 		}
 		return out, nil
 	case yaml.MappingNode:
+		if bad := c.charge(2, n); bad != nil { // {}
+			return nil, bad
+		}
 		out := map[string]any{}
 		if bad := c.fill(out, n); bad != nil {
 			return nil, bad
@@ -557,6 +599,14 @@ func (c *converter) fill(out map[string]any, n *yaml.Node) *Unreadable {
 		}
 		if _, set := out[text]; set {
 			continue
+		}
+		// "key": — and a comma before every entry but the first.
+		entry := jsonStringLen(text) + 1
+		if len(out) > 0 {
+			entry++
+		}
+		if bad := c.charge(entry, k); bad != nil {
+			return bad
 		}
 		v, bad := c.node(n.Content[i+1])
 		if bad != nil {

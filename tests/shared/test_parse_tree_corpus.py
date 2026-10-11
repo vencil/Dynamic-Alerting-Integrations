@@ -475,12 +475,27 @@ _SCALAR_TAGS = {_Y + t for t in ("str", "int", "float", "bool", "null", "timesta
 # What PyYAML's YAML 1.1 resolver gives a plain `=` and a plain `<<`; yaml.v3
 # reads a string and a merge key (the `x: =` / `<<` rows).
 _IMPLICIT_ONLY = {_Y + "value", _Y + "merge"}
-# A cap per row, so a row of deep aliases cannot stall the walk.
+# A cap per row, so a row of deep aliases cannot stall the walk. Reaching it
+# is a failure of the row, never a silent pass over a truncated walk.
 _ORACLE_NODES = 200_000
 
-# What the merge-key snapshot may hold as pyyaml_only, pinned: growth means a
-# row parse-tree used to refuse is read now, and needs an explicit edit here.
-MERGE_KEY_PYYAML_ONLY = 119
+# The merge-key snapshot's categories, counted and pinned: any movement, in
+# either direction (a row parse-tree used to refuse is read now, or the
+# reverse, or one refused for another kind), needs an explicit edit here.
+MERGE_KEY_HISTOGRAM = {
+    "both_read": 127,
+    "pyyaml_only": 119,
+    "unreadable:bom_not_at_start": 3,
+    "unreadable:decode_error": 83,
+    "unreadable:duplicate_key": 40,
+    "unreadable:invalid_utf8": 7,
+    "unreadable:multiple_documents": 7,
+    "unreadable:non_scalar_key": 2,
+    "unreadable:non_specific_tag": 239,
+    "unreadable:null_key": 128,
+    "unreadable:syntax_error": 82,
+    "unreadable:tag_not_allowed": 749,
+}
 
 
 def _oracle_problems(text: str) -> "list[str] | None":
@@ -507,7 +522,10 @@ def _oracle_problems(text: str) -> "list[str] | None":
         problems.append("a second document")
     seen: set[int] = set()
     stack = list(docs)
-    while stack and len(seen) < _ORACLE_NODES:
+    while stack:
+        if len(seen) >= _ORACLE_NODES:
+            problems.append(f"oracle node cap ({_ORACLE_NODES}) reached; the row was not fully checked")
+            break
         node = stack.pop()
         if node is None or id(node) in seen:
             continue
@@ -567,9 +585,16 @@ def test_oracle_bites() -> None:
     assert _oracle_problems("a: =\nb: {<<: {c: 1}}\n") == []
 
 
-def test_merge_key_pyyaml_only_is_pinned() -> None:
+def test_merge_key_histogram_is_pinned() -> None:
     cats = json.loads(MERGE_KEY_CATEGORIES_PATH.read_text(encoding="utf-8"))["categories"]
-    n = sum(1 for c in cats.values() if c == "pyyaml_only")
-    assert n == MERGE_KEY_PYYAML_ONLY, (
-        f"{n} merge_key rows are pyyaml_only, pinned {MERGE_KEY_PYYAML_ONLY}: parse-tree reads "
-        f"rows it used to refuse (or the reverse) — review, then edit the pin")
+    got: dict[str, int] = {}
+    for c in cats.values():
+        got[c] = got.get(c, 0) + 1
+    assert got == MERGE_KEY_HISTOGRAM, (
+        "the merge_key categories moved — review the snapshot diff, then edit "
+        f"MERGE_KEY_HISTOGRAM: got {dict(sorted(got.items()))}")
+
+
+def test_oracle_cap_fails_loudly(monkeypatch) -> None:
+    monkeypatch.setattr(sys.modules[__name__], "_ORACLE_NODES", 3)
+    assert any("cap" in p for p in _oracle_problems("a: [1, 2, 3, 4]\n"))

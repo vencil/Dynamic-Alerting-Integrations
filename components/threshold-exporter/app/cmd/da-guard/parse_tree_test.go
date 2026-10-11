@@ -312,9 +312,9 @@ func TestParseTree_NonUTF8FileName(t *testing.T) {
 }
 
 // TestParseTree_FileModeOnDisk: --path is judged against what already exists
-// under --config-dir, not by its name alone — a parent the walk does not
-// descend, or an existing --path that is not a regular file, is read by no
-// reader.
+// under --config-dir, not by its name alone. A parent the walk does not
+// descend: read by no reader (not_read). An existing --path that is not a
+// regular file: unreadable exactly as tree mode reports the same path.
 func TestParseTree_FileModeOnDisk(t *testing.T) {
 	t.Parallel()
 	root := writeTree(t, map[string]string{"t.yaml": "a: 1\n", "sub/d.yaml/x.yaml": "a: 1\n", "real/r.yaml": "a: 1\n"})
@@ -324,34 +324,57 @@ func TestParseTree_FileModeOnDisk(t *testing.T) {
 		"inlink":        filepath.Join(root, "real"),
 		"dangling.yaml": filepath.Join(root, "missing"),
 		"filelink.yaml": filepath.Join(root, "t.yaml"),
+		"dirlink.yaml":  outside,
 	} {
 		if err := os.Symlink(target, filepath.Join(root, link)); err != nil {
 			t.Skipf("symlink: %v", err)
 		}
 	}
-	for _, tc := range []struct{ path, reason string }{
-		{"extlink/a.yaml", notReadParentNotWalked},
-		{"inlink/a.yaml", notReadParentNotWalked},
-		{"t.yaml/a.yaml", notReadParentNotWalked},
-		{"dangling.yaml/a.yaml", notReadParentNotWalked},
-		{"sub/d.yaml", notReadNotRegularFile},
-		{"dangling.yaml", notReadNotRegularFile},
-		{"t.yaml", ""},
-		{"filelink.yaml", ""},
-		{"real/r.yaml", ""},
-		{"new/dir/n.yaml", ""},
+	_, tree, _ := runPT(t, "", "--config-dir", root)
+	treeUnreadable := map[string]map[string]any{}
+	for _, u := range tree["unreadable"].([]any) {
+		m := u.(map[string]any)
+		treeUnreadable[m["file"].(string)] = m
+	}
+	treeReaders := readersOf(tree)
+	both := []string{"exporter", "generator"}
+	for _, tc := range []struct{ path, notRead, kind string }{
+		{"extlink/a.yaml", notReadParentNotWalked, ""},
+		{"inlink/a.yaml", notReadParentNotWalked, ""},
+		{"t.yaml/a.yaml", notReadParentNotWalked, ""},
+		{"dangling.yaml/a.yaml", notReadParentNotWalked, ""},
+		{"sub/d.yaml", "", "not_regular_file"},
+		{"dirlink.yaml", "", "not_regular_file"},
+		{"dangling.yaml", "", "read_failure"},
+		{"t.yaml", "", ""},
+		{"filelink.yaml", "", ""},
+		{"real/r.yaml", "", ""},
+		{"new/dir/n.yaml", "", ""},
 	} {
 		_, doc, _ := runPT(t, "a: 1\n", "--config-dir", root, "--path", tc.path, "--input", "-")
 		readers := readersOf(doc)[tc.path]
 		nr := doc["not_read"].([]any)
-		if tc.reason == "" {
-			if len(nr) != 0 || !reflect.DeepEqual(readers, []string{"exporter", "generator"}) {
+		switch {
+		case tc.notRead != "":
+			if len(readers) != 0 || len(nr) != 1 || nr[0].(map[string]any)["reason"] != tc.notRead {
+				t.Errorf("%s: readers %v, not_read %v; want %s", tc.path, readers, nr, tc.notRead)
+			}
+		case tc.kind != "":
+			// The same entry, readers and message as tree mode's.
+			got := doc["unreadable"].([]any)
+			want := treeUnreadable[tc.path]
+			if len(got) != 1 || want == nil || !reflect.DeepEqual(got[0], any(want)) ||
+				want["kind"] != tc.kind || !reflect.DeepEqual(readers, treeReaders[tc.path]) || len(nr) != 0 {
+				t.Errorf("%s: unreadable %v readers %v; tree mode %v readers %v; want kind %s",
+					tc.path, got, readers, want, treeReaders[tc.path], tc.kind)
+			}
+			if len(doc["files"].(map[string]any)) != 0 {
+				t.Errorf("%s: the text was read", tc.path)
+			}
+		default:
+			if len(nr) != 0 || !reflect.DeepEqual(readers, both) || len(doc["unreadable"].([]any)) != 0 {
 				t.Errorf("%s: readers %v, not_read %v; want read by both", tc.path, readers, nr)
 			}
-			continue
-		}
-		if len(readers) != 0 || len(nr) != 1 || nr[0].(map[string]any)["reason"] != tc.reason {
-			t.Errorf("%s: readers %v, not_read %v; want %s", tc.path, readers, nr, tc.reason)
 		}
 	}
 }

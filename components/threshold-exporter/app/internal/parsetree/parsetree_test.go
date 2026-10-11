@@ -1,7 +1,9 @@
 package parsetree
 
 import (
+	"bytes"
 	"encoding/json"
+	"fmt"
 	"strings"
 	"testing"
 
@@ -198,24 +200,92 @@ func TestEmptyIsEmptyMapping(t *testing.T) {
 	}
 }
 
-// TestExpansionBound: a small file whose aliases expand past
-// MaxAliasExpansion — one yaml.v3's own alias ratio lets through — is a
-// decode_error; one just under the bound is read.
-func TestExpansionBound(t *testing.T) {
+// encodedLen is the length parse-tree writes for content (encoding/json,
+// SetEscapeHTML(false), no trailing newline).
+func encodedLen(t *testing.T, content Content) int {
+	t.Helper()
+	var b bytes.Buffer
+	enc := json.NewEncoder(&b)
+	enc.SetEscapeHTML(false)
+	if err := enc.Encode(content); err != nil {
+		t.Fatal(err)
+	}
+	return b.Len() - 1
+}
+
+// TestContentByteCount: the count the bound is checked against is the JSON
+// actually written, byte for byte — escapes, merges, aliases included.
+func TestContentByteCount(t *testing.T) {
 	t.Parallel()
-	doc := func(aliases int) []byte {
-		return []byte("l0: &l0 [" + strings.TrimSuffix(strings.Repeat("x,", 999), ",") + "]\nl1: [" +
-			strings.TrimSuffix(strings.Repeat("*l0,", aliases), ",") + "]\n")
+	for _, in := range []string{
+		"a: 1\n",
+		"a: {}\nb: []\nc: [1, \"x\\ty\\u0001\\\"\\\\\\u2028\\b\\f<&>é\"]\n",
+		"x: &x {a: 1, b: [2, 3]}\ny: {<<: *x, a: 9, c: .inf}\nz: [*x, *x]\nt: 2001-01-01\n\"k\\n\": ~\n",
+		"",
+	} {
+		data := []byte(in)
+		doc, bad := parseDocument(data)
+		if bad != nil {
+			t.Fatalf("%q: %v", in, bad)
+		}
+		if doc == nil {
+			continue
+		}
+		c := &checker{src: newSource(data), values: map[*yaml.Node]json.RawMessage{}}
+		c.src.index(doc.Content[0])
+		if bad := c.checkNode(doc.Content[0], false); bad != nil {
+			t.Fatalf("%q: %v", in, bad)
+		}
+		conv := &converter{values: c.values, active: map[*yaml.Node]bool{}, bytes: 2}
+		out := Content{}
+		if bad := conv.fill(out, doc.Content[0]); bad != nil {
+			t.Fatalf("%q: %v", in, bad)
+		}
+		if want := encodedLen(t, out); conv.bytes != want {
+			t.Errorf("%q: counted %d bytes, the encoder writes %d", in, conv.bytes, want)
+		}
 	}
-	// Each alias expands to the list itself plus its 999 items: 1000 values.
-	over, under := doc(MaxAliasExpansion/1000+1), doc(MaxAliasExpansion/1000)
-	if len(over) > 5_000 {
-		t.Fatalf("the input is %d bytes; the point is a small file", len(over))
+}
+
+// TestContentByteBound: one bound on the JSON bytes of a file's content —
+// a long string repeated by aliases, a fan-out of short lists (both pass
+// yaml.v3's own alias ratio), and a large plain file just under the bound.
+func TestContentByteBound(t *testing.T) {
+	t.Parallel()
+	join := func(item string, n int) string { return strings.TrimSuffix(strings.Repeat(item+",", n), ",") }
+	longString := "s: &s \"" + strings.Repeat("a", 100_000) + "\"\nl: [" + join("*s", 300) + "]\n"
+	fanOut := "l0: &l0 [" + join(strings.Repeat("b", 60), 100) + "]\nl1: [" + join("*l0", 1000) + "]\n"
+	for name, in := range map[string]string{"long string": longString, "fan-out": fanOut} {
+		_, bad := Parse([]byte(in))
+		if bad == nil || bad.Kind != KindDecodeError || !strings.Contains(bad.Message, "more than 8388608 bytes") {
+			t.Errorf("%s (%d bytes): got %v", name, len(in), bad)
+		}
 	}
-	if _, bad := Parse(over); bad == nil || bad.Kind != KindDecodeError || !strings.Contains(bad.Message, "aliases expand") {
-		t.Fatalf("over the bound: got %v", bad)
+	if len(fanOut) > 12_000 {
+		t.Fatalf("fan-out input is %d bytes; the point is a small file", len(fanOut))
 	}
-	if _, bad := Parse(under); bad != nil {
-		t.Fatalf("under the bound: %v", bad)
+
+	// A plain file, no alias: N keys of 80-character values. Find the largest
+	// N under the bound by its encoded size, then check it is read and N+1000
+	// is not.
+	plain := func(n int) []byte {
+		var b strings.Builder
+		for i := 0; i < n; i++ {
+			fmt.Fprintf(&b, "k%07d: %s\n", i, strings.Repeat("v", 80))
+		}
+		return []byte(b.String())
+	}
+	n := 40_000
+	content, bad := Parse(plain(n))
+	if bad != nil {
+		t.Fatalf("plain %d keys: %v", n, bad)
+	}
+	size := encodedLen(t, content)
+	if size > MaxContentBytes || size < MaxContentBytes*9/10 {
+		t.Fatalf("plain %d keys encode to %d bytes; the case must sit just under %d", n, size, MaxContentBytes)
+	}
+	t.Logf("a plain file of %d bytes encodes to %d bytes, under the bound", len(plain(n)), size)
+	if _, bad := Parse(plain(n + 1000)); bad == nil || bad.Kind != KindDecodeError {
+		t.Fatalf("plain %d keys: got %v, want over the bound", n+1000, bad)
 	}
 }
