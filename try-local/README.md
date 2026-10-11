@@ -16,7 +16,7 @@ Give it ~1 minute, then open:
 
 | 產品 | 開這個 | 你會看到 |
 |---|---|---|
-| **Tenant Manager**（da-portal） | <http://localhost:8081> | 2 個 demo 租戶 + 一個預存的 Saved View；建立/儲存一個 Saved View 會落一個**真實 git commit** |
+| **Tenant Manager**（da-portal） | <http://localhost:8081> | 2 個 demo 租戶 + 一個預存的 Saved View；改租戶閾值按 Save 會落一個**真實 git commit** |
 | **Tenant API**（tenant-api） | <http://localhost:8080/api/v1/me> | file-based 設定 API（commit-on-write），oauth2-proxy 身分模型 |
 | **Prometheus** | <http://localhost:9090/alerts> | `MariaDBHighConnectionsCritical` **正在 firing**（紅燈） |
 | **Alertmanager** | <http://localhost:9093> | 同一個 firing 告警，路由到 null receiver |
@@ -73,13 +73,15 @@ graph LR
 docker compose up da-portal tenant-api
 ```
 
-只起 portal + tenant-api（外加一個秒退的 git-init one-shot）。打開 <http://localhost:8081>，瀏覽 2 個租戶、建立一個 Saved View 按 **Save** —— 然後在 host 上看 seed 設定 repo 多了一個真實 commit：
+只起 portal + tenant-api（外加一個秒退的 git-init one-shot）。打開 <http://localhost:8081>，瀏覽 2 個租戶、改一個租戶的閾值按 **Save** —— 然後在 host 上看 seed 設定 repo 多了一個真實 commit：
 
 ```bash
 git -C try-local/seed/conf.d log --oneline
 ```
 
 這就是「設定即 GitOps」最直接的體感：UI 一按 = 一個 commit。
+
+Saved View 與群組不在 conf.d：它們是 tenant-api 自己的紀錄，存在 named volume `tenant-api-state`（state store），不產生 commit。示範用的 Saved View 放在 `seed/state/`，tenant-api 每次啟動前把 volume 裡**還沒有**的紀錄複製進去（`seed/state-seed.sh`），所以你改過的 view 重開後仍在；`make clean-local` 會連 volume 一起清掉，下次啟動回到示範內容。
 
 ## 看點
 
@@ -153,7 +155,7 @@ make clean-local && docker compose up -d
 
 - Windows 使用者**必須**用 **WSL2 + Docker Desktop（WSL2 backend）**。
 - **不要**從原生 Windows 路徑（`C:\...`）跑 —— bind mount 行為不保證。把 repo clone 到 **WSL2 檔案系統內**（如 `~/…`）再跑。
-- 本 stack 多用匿名 volume；唯一 bind mount 是 `seed/conf.d`（read-write，用來承接 portal Save 的 git commit）。
+- 本 stack 多用匿名 volume，tenant-api 的 state store 是 named volume `tenant-api-state`；bind mount 是 `seed/conf.d`（read-write，用來承接 portal Save 的 git commit）與唯讀的 `seed/`（給 tenant-api 啟動時複製示範 state）。
 - seed 會在 `seed/conf.d` 內 `git init`（runtime 產生的 `.git/` 已被 `.gitignore` 忽略）。Save 會改到這些被追蹤的 YAML —— `make clean-local` 後用 `git checkout try-local/seed/conf.d` 可還原 demo 初始狀態。
 
 ## 排錯
