@@ -14,28 +14,22 @@ import (
 
 	"github.com/vencil/tenant-api/internal/federation/account"
 	"github.com/vencil/tenant-api/internal/federation/token"
-	"github.com/vencil/tenant-api/internal/gitops"
 	"github.com/vencil/tenant-api/internal/handler"
+	"github.com/vencil/tenant-api/internal/statestore"
 )
 
-// fakeRegistryWriter implements account.RegistryWriter, returning a fixed
-// error from MutateConfigFile so the handler's allocator error-mapping can be
-// exercised without a real git plane.
+// fakeRegistryWriter is an account.RegistryStore whose every write fails with
+// err, so the handler's allocator error mapping can be exercised.
 type fakeRegistryWriter struct{ err error }
 
-func (f fakeRegistryWriter) MutateConfigFile(_ context.Context, _, _, _ string, _ func(current []byte) (next []byte, err error)) error {
-	return f.err
-}
-
-// HistoricalMaxUint is a no-op here so EnsureAccountID reaches the MutateConfigFile
-// error path this fake exercises (the revert-floor read returns "no history").
-func (f fakeRegistryWriter) HistoricalMaxUint(_ context.Context, _, _ string) (uint32, error) {
-	return 0, nil
+func (f fakeRegistryWriter) Mutate(_ context.Context, _ string, _ statestore.Meta, _ statestore.Transform) (bool, error) {
+	return false, f.err
 }
 
 // newLogsFederationDeps builds a Deps wired for logs-plane issuance: a real
-// git-backed configDir (so the allocator commits the registry), a real
-// token.Manager, and the account.Allocator over the same Writer.
+// git-backed configDir, a directory state store over the same directory (so
+// readRegistry finds the registry where it always looked), a real
+// token.Manager, and the account.Allocator over that store.
 func newLogsFederationDeps(t *testing.T, rbacYAML string, tenantFiles map[string]string) (*handler.Deps, string) {
 	t.Helper()
 	configDir := setupConfigDir(t, tenantFiles)
@@ -51,12 +45,14 @@ func newLogsFederationDeps(t *testing.T, rbacYAML string, tenantFiles map[string
 		t.Fatalf("NewManagerForTest: %v", err)
 	}
 
+	st := newDirState(t, configDir)
 	d := &handler.Deps{
 		ConfigDir:  configDir,
 		Writer:     writer,
+		State:      st,
 		RBAC:       newRBACManager(t, rbacYAML),
 		Federation: fed,
-		Accounts:   account.NewAllocator(writer),
+		Accounts:   account.NewAllocator(st, nil),
 	}
 	return d, configDir
 }
@@ -238,9 +234,9 @@ func TestCreateFederationToken_LogsAllocatorErrorMapping(t *testing.T) {
 		err  error
 		want int
 	}{
-		{"overloaded_503", gitops.ErrWriteOverloaded, http.StatusServiceUnavailable},
-		{"degraded_503", gitops.ErrForgeDegraded, http.StatusServiceUnavailable},
-		{"conflict_409", gitops.ErrConflict, http.StatusConflict},
+		{"unavailable_503", statestore.ErrUnavailable, http.StatusServiceUnavailable},
+		{"conflict_409", statestore.ErrConflict, http.StatusConflict},
+		{"too_large_507", statestore.ErrTooLarge, http.StatusInsufficientStorage},
 		{"generic_500", errors.New("boom"), http.StatusInternalServerError},
 	}
 	for _, tc := range cases {
@@ -250,7 +246,7 @@ func TestCreateFederationToken_LogsAllocatorErrorMapping(t *testing.T) {
 			d := &handler.Deps{
 				RBAC:       newRBACManager(t, platformAdminRBAC),
 				Federation: fed,
-				Accounts:   account.NewAllocator(fakeRegistryWriter{err: tc.err}),
+				Accounts:   account.NewAllocator(fakeRegistryWriter{err: tc.err}, nil),
 			}
 			body := `{"tenant_id":"tenant-alpha","capability":"logs"}`
 			w := executeWithRBAC(t, CreateFederationToken(d), fedReq(t, "POST", "/api/v1/federation/tokens", "", "", body))

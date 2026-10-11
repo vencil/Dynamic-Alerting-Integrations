@@ -19,6 +19,7 @@ import subprocess
 from pathlib import Path
 
 import pytest
+from _render_baseline import baseline_args
 
 _CHART = "helm/tenant-api"
 _TEMPLATE = "helm/tenant-api/templates/deployment.yaml"
@@ -51,7 +52,7 @@ def test_template_pins_recreate(repo_root: Path):
 # ── render layer (helm-gated) ───────────────────────────────────────────────
 def _helm_template(repo_root: Path, replica_count: int):
     return subprocess.run(
-        ["helm", "template", "t", str(repo_root / _CHART),
+        ["helm", "template", "t", str(repo_root / _CHART), *baseline_args(_CHART),
          "--set", f"replicaCount={replica_count}"],
         capture_output=True, text=True, encoding="utf-8", errors="replace", timeout=60,
     )

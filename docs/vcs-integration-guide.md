@@ -105,18 +105,30 @@ export TA_GITLAB_API_URL=https://gitlab.internal.example.com
 
 ## Helm 部署範例
 
+chart 以 `writeBack` 設定寫回模式；它沒有預設值，不設就不 render（[#2855](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/2855)）。先建好放 token 的 Secret，同一個 token 用來開 PR/MR，也用來認證 `git clone` / `git push`（以環境變數提供給 git 的 credential helper，不寫進 URL、ConfigMap 或磁碟）：
+
+```bash
+# FORGE_TOKEN：可推分支、開 PR/MR 的 GitHub／GitLab token
+kubectl create namespace tenant-api
+kubectl -n tenant-api create secret generic tenant-api-vcs --from-literal=token="$FORGE_TOKEN"
+```
+
 ```yaml
 # values.yaml
-tenantApi:
-  env:
-    TA_WRITE_MODE: "pr-github"
-    TA_GITHUB_REPO: "org/config-repo"
-    TA_GITHUB_BASE_BRANCH: "main"
-  secretEnv:
-    TA_GITHUB_TOKEN:
-      secretName: tenant-api-vcs
-      key: github-token
+gitRepoUrl: "https://github.com/org/config-repo.git"   # 不要把憑證放進 URL
+writeBack:
+  mode: pr-github            # GitLab：pr-gitlab，並改填 gitlab.project
+  baseBranch: main           # 設定 repo 的預設分支
+  github:
+    repo: org/config-repo
+    targetBranch: main
+    apiUrl: ""               # GitHub Enterprise 才填
+  token:
+    secretName: tenant-api-vcs
+    secretKey: token
 ```
+
+> ⚠️ 舊版文件的 `tenantApi.env` / `tenantApi.secretEnv` 寫法 chart 從未讀過，照它設定的部署實際跑的是 `direct`。
 
 ## 故障排查
 

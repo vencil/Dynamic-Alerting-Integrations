@@ -129,18 +129,16 @@ func (w *Writer) leavePRBranch() error {
 // WHY this exists: the local base ref is only synced at pod startup by the
 // git-clone initContainer. A long-lived pod's base therefore STALLS after a
 // remote merge — so a later PR branched from it silently rolls back a shared
-// file (_groups.yaml / _views.yaml / _federation_policy.yaml) that another
-// tenant already merged. Fetching here, inside the lock and immediately before
+// file (_defaults.yaml, a platform file) that another change already merged. Fetching here, inside the lock and immediately before
 // branching, closes that window atomically (B1, not the TOCTOU-prone lock-outside
 // B2 — ADR-023 §B).
 //
 // WHY return a ref instead of `reset --hard origin/<base>`: a hard reset would
-// move the LOCAL base ref and revert the working tree — silently discarding any
-// commit made directly on the local base. The special-file writes
-// (WriteGroupsFile / WriteViewsFile / WriteFederationPolicyFile) commit straight
-// to the current branch via commitFileChange even in PR mode, so they CAN leave
-// such local-base commits. Branching the new feature branch from origin/<base>
-// gets the same fresh anchor without touching the local base or its working tree.
+// move the LOCAL base ref and revert the working tree. Before #2856 the
+// special-file writes committed to the local base even in PR mode, so a reset
+// would have discarded them; they now live outside git, and the reset remains
+// a separate decision (#2857). Branching from origin/<base> gets the fresh
+// anchor without touching the local base or its working tree.
 //
 // Failure semantics:
 //   - No origin remote (dev/local, unit tests): nothing to be stale against, the

@@ -1,0 +1,16 @@
+# tenant-api state store (#2856): groups, saved views, the federation
+# whitelist and per-tenant subsets, and the AccountID registry. tenant-api
+# writes every key at runtime; this manifest only creates the object so the
+# Role below can be get + update on it alone. Re-applying this file keeps
+# the runtime keys (`kubectl apply` merges only the keys it carries).
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: tenant-api-state
+  namespace: tenant-api
+  labels:
+    app: tenant-api
+    app.kubernetes.io/part-of: dynamic-alerting
+    app.kubernetes.io/component: state-store
+data:
+  .chart-managed: "tenant-api state store (#2856); the other keys are written by tenant-api"

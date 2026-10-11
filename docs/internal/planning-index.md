@@ -64,7 +64,7 @@ lang: zh
 | `ADR-033` | adr | ADR-033: 與運維執行平面的協同介面 — MariaDB 計畫性作業 | integration | — | [docs/adr/033-ops-execution-plane-interface.md](../adr/033-ops-execution-plane-interface.md) |
 | `ADR-034` | adr | ADR-034: 合法值不得同時當作無法辨識時的 fallback | platform | — | [docs/adr/034-legal-value-as-fallback.md](../adr/034-legal-value-as-fallback.md) |
 | `ADR-035` | adr | ADR-035: tenant id 合法字元集的單一來源 | platform | — | [docs/adr/035-tenant-id-single-source.md](../adr/035-tenant-id-single-source.md) |
-| `ADR-036` | adr | ADR-036: 路由與 domain policy 設定只由產生器解析一次 | platform | — | [docs/adr/036-single-parser-effective-config.md](../adr/036-single-parser-effective-config.md) |
+| `ADR-036` | adr | ADR-036: conf.d 只解析一次：YAML 由 Go 讀，路由與 policy 由產生器判 | platform | — | [docs/adr/036-single-parser-effective-config.md](../adr/036-single-parser-effective-config.md) |
 | `ADR-037` | adr | ADR-037: config-diff 改為比較渲染結果 | platform | — | [docs/adr/037-config-diff-compares-rendered-output.md](../adr/037-config-diff-compares-rendered-output.md) |
 
 ### proposed (16)

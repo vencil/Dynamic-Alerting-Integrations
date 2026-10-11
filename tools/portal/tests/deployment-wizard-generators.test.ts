@@ -27,7 +27,9 @@
  * never its value.
  */
 import { describe, it, expect } from 'vitest';
-import { readFileSync, readdirSync } from 'node:fs';
+import { readFileSync, readdirSync, mkdtempSync, writeFileSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { spawnSync } from 'node:child_process';
 import { resolve, dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { load } from 'js-yaml';
@@ -262,5 +264,41 @@ describe('notes — features that are not Helm values are explained, not emitted
       for (const rel of deployGenerateHelmReleases(cfg).releases)
         for (const k of ['configValidation', 'cardinalityGuard', 'tripleState', 'maxPerTenant'])
           expect(rel.yaml, `${rel.chart} re-emitted ${k}`).not.toContain(k);
+  });
+});
+
+describe('tenant-api values render with the chart (#2855)', () => {
+  // The chart refuses a values file without writeBack.mode, or with
+  // replicaCount > 1 (ADR-023). The wizard used to emit neither writeBack nor
+  // replicaCount 1, so its staging / production files could not install.
+  const tier2 = (environment: string) =>
+    releaseOf(config({ tier: 'tier2', environment }), 'tenant-api').yaml;
+
+  it('local → acknowledged direct; staging / production → PR mode with a token Secret', () => {
+    const local = load(tier2('local')) as Record<string, any>;
+    expect(local.writeBack).toEqual({ mode: 'direct', directAcknowledgeNotDelivered: true });
+    for (const env of ['staging', 'production']) {
+      const v = load(tier2(env)) as Record<string, any>;
+      expect(v.writeBack.mode, env).toBe('pr-github');
+      expect(v.writeBack.github.repo, env).toBeTruthy();
+      expect(v.writeBack.token.secretName, env).toBeTruthy();
+      expect(v.gitRepoUrl, env).toMatch(/^https:\/\//);
+    }
+  });
+
+  it('replicaCount is 1 in every environment', () => {
+    for (const env of ['local', 'staging', 'production'])
+      expect(tier2(env), env).toMatch(/^replicaCount: 1$/m);
+  });
+
+  const helm = spawnSync('helm', ['version', '--short'], { encoding: 'utf-8' });
+  it.skipIf(helm.status !== 0)('helm template accepts the emitted file for every environment', () => {
+    const dir = mkdtempSync(join(tmpdir(), 'wizard-tenant-api-'));
+    for (const env of ['local', 'staging', 'production']) {
+      const file = join(dir, `${env}.yaml`);
+      writeFileSync(file, tier2(env));
+      const r = spawnSync('helm', ['template', 't', resolve(HELM, 'tenant-api'), '-f', file], { encoding: 'utf-8' });
+      expect(r.status, `${env}: ${r.stderr}`).toBe(0);
+    }
   });
 });

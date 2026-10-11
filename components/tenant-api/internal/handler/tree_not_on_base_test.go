@@ -23,7 +23,6 @@ import (
 	"testing"
 
 	"github.com/vencil/tenant-api/internal/gitops"
-	"github.com/vencil/tenant-api/internal/groups"
 	"github.com/vencil/tenant-api/internal/platform"
 	"github.com/vencil/tenant-api/internal/rbac"
 )
@@ -116,16 +115,6 @@ func putTenantDirect(t *testing.T, dir string) *httptest.ResponseRecorder {
 	return rec
 }
 
-func putGroup(t *testing.T, dir string) *httptest.ResponseRecorder {
-	t.Helper()
-	h := PutGroup(&Deps{Groups: groups.NewManager(dir), Writer: gitops.NewWriter(dir, dir), RBAC: permissiveRBACManager(t)})
-	req := newRequestWithChiParam("PUT", "/api/v1/groups/g1", "id", "g1",
-		bytes.NewBufferString(`{"label":"G1","members":["db-a"]}`))
-	req.Header.Set("Content-Type", "application/json")
-	setRequestIdentity(req, "op@example.com")
-	return executeWithRBAC(t, h, req)
-}
-
 // The return to base succeeds, but the request was prepared on the branch:
 // 503 TREE_NOT_ON_BASE, and the tree is left on base for the retry, which
 // succeeds.
@@ -133,7 +122,6 @@ func TestDirectWrite_StrandedOnPRBranch_ReturnsToBase503ThenRetry(t *testing.T) 
 	t.Parallel()
 	for name, do := range map[string]func(*testing.T, string) *httptest.ResponseRecorder{
 		"PutTenant": putTenantDirect,
-		"PutGroup":  putGroup,
 	} {
 		t.Run(name, func(t *testing.T) {
 			t.Parallel()
@@ -164,7 +152,6 @@ func TestDirectWrite_StrandedOnPRBranch_ReturnFails503(t *testing.T) {
 	t.Parallel()
 	for name, do := range map[string]func(*testing.T, string) *httptest.ResponseRecorder{
 		"PutTenant": putTenantDirect,
-		"PutGroup":  putGroup,
 	} {
 		t.Run(name, func(t *testing.T) {
 			t.Parallel()

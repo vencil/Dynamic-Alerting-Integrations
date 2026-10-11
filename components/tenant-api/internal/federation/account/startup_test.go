@@ -1,6 +1,9 @@
 package account
 
 import (
+	"context"
+
+	"github.com/vencil/tenant-api/internal/statestore"
 	"os"
 	"path/filepath"
 	"strings"
@@ -24,7 +27,7 @@ func TestVerifyRegistryNotResetWithFleet_FleetNonEmptyBlankRegistry(t *testing.T
 	writeFile(t, dir, "db-a.yaml", "tenants:\n  db-a: {}\n")
 	writeFile(t, dir, RegistryFileName, "") // blank / 0-byte registry
 
-	err := VerifyRegistryNotResetWithFleet(dir)
+	err := VerifyRegistryNotResetWithFleet(context.Background(), dir, dirStore(t, dir))
 	if err == nil {
 		t.Fatal("expected an error: blank registry + non-empty fleet must refuse to start")
 	}
@@ -41,7 +44,7 @@ func TestVerifyRegistryNotResetWithFleet_FleetNonEmptyMissingRegistry(t *testing
 	writeFile(t, dir, "db-a.yaml", "tenants:\n  db-a: {}\n")
 	// No registry file at all.
 
-	if err := VerifyRegistryNotResetWithFleet(dir); err == nil {
+	if err := VerifyRegistryNotResetWithFleet(context.Background(), dir, dirStore(t, dir)); err == nil {
 		t.Fatal("expected an error: missing registry + non-empty fleet must refuse to start")
 	}
 }
@@ -54,7 +57,7 @@ func TestVerifyRegistryNotResetWithFleet_FleetNonEmptyWhitespaceRegistry(t *test
 	writeFile(t, dir, "db-a.yaml", "tenants:\n  db-a: {}\n")
 	writeFile(t, dir, RegistryFileName, "  \n\t\n")
 
-	if err := VerifyRegistryNotResetWithFleet(dir); err == nil {
+	if err := VerifyRegistryNotResetWithFleet(context.Background(), dir, dirStore(t, dir)); err == nil {
 		t.Fatal("expected an error: whitespace-only registry + non-empty fleet must refuse to start")
 	}
 }
@@ -67,13 +70,13 @@ func TestVerifyRegistryNotResetWithFleet_Day0BlankRegistryOK(t *testing.T) {
 	dir := t.TempDir()
 	// No tenant files. A blank registry present...
 	writeFile(t, dir, RegistryFileName, "")
-	if err := VerifyRegistryNotResetWithFleet(dir); err != nil {
+	if err := VerifyRegistryNotResetWithFleet(context.Background(), dir, dirStore(t, dir)); err != nil {
 		t.Errorf("Day-0 (empty fleet) + blank registry should be OK, got: %v", err)
 	}
 
 	// ...and also with NO registry file at all.
 	dir2 := t.TempDir()
-	if err := VerifyRegistryNotResetWithFleet(dir2); err != nil {
+	if err := VerifyRegistryNotResetWithFleet(context.Background(), dir2, dirStore(t, dir2)); err != nil {
 		t.Errorf("Day-0 (empty fleet) + missing registry should be OK, got: %v", err)
 	}
 }
@@ -88,7 +91,7 @@ func TestVerifyRegistryNotResetWithFleet_Day0IgnoresUnderscoreFiles(t *testing.T
 	writeFile(t, dir, "_groups.yaml", "groups: {}\n")
 	writeFile(t, dir, RegistryFileName, "") // blank, but no real tenant → Day-0
 
-	if err := VerifyRegistryNotResetWithFleet(dir); err != nil {
+	if err := VerifyRegistryNotResetWithFleet(context.Background(), dir, dirStore(t, dir)); err != nil {
 		t.Errorf("only _-prefixed files + blank registry is Day-0, should be OK, got: %v", err)
 	}
 }
@@ -102,7 +105,7 @@ func TestVerifyRegistryNotResetWithFleet_PopulatedRegistryOK(t *testing.T) {
 	writeFile(t, dir, RegistryFileName,
 		"schema_version: v1\nnext_account_id: 1001\nallocations:\n  db-a: 1000\n")
 
-	if err := VerifyRegistryNotResetWithFleet(dir); err != nil {
+	if err := VerifyRegistryNotResetWithFleet(context.Background(), dir, dirStore(t, dir)); err != nil {
 		t.Errorf("populated registry + non-empty fleet is the steady state, should be OK, got: %v", err)
 	}
 }
@@ -112,7 +115,7 @@ func TestVerifyRegistryNotResetWithFleet_PopulatedRegistryOK(t *testing.T) {
 func TestVerifyRegistryNotResetWithFleet_MissingConfigDir(t *testing.T) {
 	t.Parallel()
 	missing := filepath.Join(t.TempDir(), "does-not-exist")
-	if err := VerifyRegistryNotResetWithFleet(missing); err == nil {
+	if err := VerifyRegistryNotResetWithFleet(context.Background(), missing, dirStore(t, t.TempDir())); err == nil {
 		t.Fatal("expected an error for a non-existent config dir")
 	}
 }
@@ -140,4 +143,15 @@ func TestListTenantIDs_SkipsNonTenants(t *testing.T) {
 	if len(ids) != 2 || !got["db-a"] || !got["db-b"] {
 		t.Errorf("ListTenantIDs = %v, want exactly [db-a db-b]", ids)
 	}
+}
+
+// dirStore reads the registry where these tests write it: a directory store
+// over dir holds the record as dir/_account_registry.yaml.
+func dirStore(t *testing.T, dir string) statestore.Store {
+	t.Helper()
+	s, err := statestore.NewDir(dir, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return s
 }

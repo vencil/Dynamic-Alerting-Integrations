@@ -1,6 +1,6 @@
 package main
 
-// go/ast guard for the phase-2 deletion scope of ADR-036 §9 (#2766, #2486):
+// go/ast guard for the phase-2 deletion scope of ADR-036 §11 (#2766, #2486):
 // phase 2 deletes the Go code that imitates PyYAML, and what may be deleted
 // is decided by who still uses it. tests/shared/phase2_deletion_scope.json
 // declares those users; this test lists them from the source and goes red
@@ -163,7 +163,7 @@ func TestPhase2DeletionScopeMatchesTable(t *testing.T) {
 	}
 	problems = append(problems, comparePhase2Patches(table.Patches, onDisk)...)
 	if len(problems) > 0 {
-		t.Errorf("phase-2 deletion scope differs from %s (ADR-036 §9). The table is the reviewed "+
+		t.Errorf("phase-2 deletion scope differs from %s (ADR-036 §11). The table is the reviewed "+
 			"list of what phase 2 must rewrite before deleting; change it in the same PR as the code:\n  %s",
 			phase2TablePath, strings.Join(problems, "\n  "))
 	}
@@ -250,7 +250,7 @@ func validatePhase2Table(table *phase2Table) []string {
 		}
 		declared[p.Package] = true
 		if strings.TrimSpace(p.Category) == "" {
-			bad("packages[%s].category is empty: name the ADR-036 §9 row", p.Package)
+			bad("packages[%s].category is empty: name the ADR-036 §11 row", p.Package)
 		}
 		if !phase2PackageDispositions[p.Disposition] {
 			bad("packages[%s].disposition %q is not one of %v", p.Package, p.Disposition, phase2Keys(phase2PackageDispositions))

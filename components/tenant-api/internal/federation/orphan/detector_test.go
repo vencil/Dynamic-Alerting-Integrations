@@ -1,6 +1,7 @@
 package orphan
 
 import (
+	"context"
 	"errors"
 	"os"
 	"path/filepath"
@@ -11,6 +12,7 @@ import (
 	"time"
 
 	"github.com/vencil/tenant-api/internal/federation/token"
+	"github.com/vencil/tenant-api/internal/statestore"
 )
 
 func TestScanOrphans(t *testing.T) {
@@ -74,7 +76,7 @@ func TestScanKnownTenants(t *testing.T) {
 		}
 	}
 	// a subdirectory (e.g. _federation/) — skipped
-	if err := os.Mkdir(filepath.Join(dir, federationSubsetDir), 0o700); err != nil {
+	if err := os.Mkdir(filepath.Join(dir, "_federation"), 0o700); err != nil {
 		t.Fatal(err)
 	}
 	known, err := scanKnownTenants(dir)
@@ -95,37 +97,37 @@ func TestScanKnownTenants_ReadError(t *testing.T) {
 	}
 }
 
-func TestScanSubsetTenants(t *testing.T) {
-	dir := t.TempDir()
-	fedDir := filepath.Join(dir, federationSubsetDir)
-	if err := os.Mkdir(fedDir, 0o700); err != nil {
+// SubsetTenants lists the tenant of every subset record and ignores the
+// store's other records.
+func TestSubsetTenants(t *testing.T) {
+	st, err := statestore.NewDir(t.TempDir(), nil)
+	if err != nil {
 		t.Fatal(err)
 	}
-	for _, f := range []string{"db-a.yaml", "db-stale.yaml", "README.md"} {
-		if err := os.WriteFile(filepath.Join(fedDir, f), []byte("{}"), 0o600); err != nil {
+	for _, k := range []string{statestore.SubsetKey("db-a"), statestore.SubsetKey("db-stale"), statestore.KeyGroups, statestore.KeyFederationPolicy} {
+		if _, err := st.Mutate(context.Background(), k, statestore.Meta{}, func([]byte) ([]byte, error) { return []byte("{}"), nil }); err != nil {
 			t.Fatal(err)
 		}
 	}
-	got, err := scanSubsetTenants(dir)
+	got, err := SubsetTenants(st)()
 	if err != nil {
 		t.Fatal(err)
 	}
 	sort.Strings(got)
-	want := []string{"db-a", "db-stale"}
-	if !reflect.DeepEqual(got, want) {
+	if want := []string{"db-a", "db-stale"}; !reflect.DeepEqual(got, want) {
 		t.Errorf("subset tenants = %v, want %v", got, want)
 	}
 }
 
-// A missing _federation/ directory is the common case (no tenant has
-// configured a subset) — it must not be an error.
-func TestScanSubsetTenants_NoDir(t *testing.T) {
-	got, err := scanSubsetTenants(t.TempDir())
+// An empty store is the common case (no tenant has configured a subset).
+func TestSubsetTenants_Empty(t *testing.T) {
+	st, err := statestore.NewDir(t.TempDir(), nil)
 	if err != nil {
-		t.Fatalf("missing _federation/ should not error: %v", err)
+		t.Fatal(err)
 	}
-	if len(got) != 0 {
-		t.Errorf("expected no subset tenants, got %v", got)
+	got, err := SubsetTenants(st)()
+	if err != nil || len(got) != 0 {
+		t.Fatalf("SubsetTenants on an empty store = %v, %v; want none, nil", got, err)
 	}
 }
 
@@ -160,19 +162,19 @@ func writeTenantFile(t *testing.T, dir, name string) {
 	}
 }
 
-// seedConfDir builds a conf.d with one live tenant (db-a) and one stale
-// federation subset file (db-stale), so a scan against a store holding a
-// zombie token yields exactly (1 orphaned token, 1 orphaned subset).
-func seedConfDir(t *testing.T) string {
+// subsetList is a settable subset listing for the detector.
+type subsetList struct{ ids []string }
+
+func (l *subsetList) list() ([]string, error) { return l.ids, nil }
+
+// seedConfDir builds a conf.d with one live tenant (db-a) and a subset
+// listing with one stale subset (db-stale), so a scan against a store
+// holding a zombie token yields exactly (1 orphaned token, 1 orphaned subset).
+func seedConfDir(t *testing.T) (string, *subsetList) {
 	t.Helper()
 	dir := t.TempDir()
 	writeTenantFile(t, dir, "db-a.yaml")
-	fedDir := filepath.Join(dir, federationSubsetDir)
-	if err := os.Mkdir(fedDir, 0o700); err != nil {
-		t.Fatal(err)
-	}
-	writeTenantFile(t, fedDir, "db-stale.yaml")
-	return dir
+	return dir, &subsetList{ids: []string{"db-stale"}}
 }
 
 // liveAndZombieRecords returns a records func: one token owned by the
@@ -186,9 +188,9 @@ func liveAndZombieRecords() ([]token.Record, error) {
 
 func TestDetector_ScanOnce_UpdatesGauges(t *testing.T) {
 	saveGauges(t)
-	dir := seedConfDir(t)
+	dir, subs := seedConfDir(t)
 
-	d := NewDetector(dir, liveAndZombieRecords)
+	d := NewDetector(dir, subs.list, liveAndZombieRecords)
 	d.scanOnce()
 
 	tok, sub := OrphanCounts()
@@ -198,12 +200,9 @@ func TestDetector_ScanOnce_UpdatesGauges(t *testing.T) {
 
 	// A later clean scan OVERWRITES the gauges back to zero (gauge, not
 	// counter semantics): make the zombie's tenant reappear and drop the
-	// stale subset file.
+	// stale subset.
 	writeTenantFile(t, dir, "db-gone.yaml")
-	writeTenantFile(t, filepath.Join(dir, federationSubsetDir), "db-a.yaml")
-	if err := os.Remove(filepath.Join(dir, federationSubsetDir, "db-stale.yaml")); err != nil {
-		t.Fatal(err)
-	}
+	subs.ids = []string{"db-a"}
 	d.scanOnce()
 	if tok, sub := OrphanCounts(); tok != 0 || sub != 0 {
 		t.Errorf("clean rescan OrphanCounts() = (%d, %d), want (0, 0)", tok, sub)
@@ -219,8 +218,8 @@ func TestDetector_ScanOnce_FailSafeSkipsPass(t *testing.T) {
 	saveGauges(t)
 
 	// Publish a known-good baseline first: (1, 1).
-	dir := seedConfDir(t)
-	d := NewDetector(dir, liveAndZombieRecords)
+	dir, subs := seedConfDir(t)
+	d := NewDetector(dir, subs.list, liveAndZombieRecords)
 	d.scanOnce()
 	if tok, sub := OrphanCounts(); tok != 1 || sub != 1 {
 		t.Fatalf("baseline OrphanCounts() = (%d, %d), want (1, 1)", tok, sub)
@@ -234,24 +233,21 @@ func TestDetector_ScanOnce_FailSafeSkipsPass(t *testing.T) {
 	}
 
 	t.Run("confd_unreadable", func(t *testing.T) {
-		bad := NewDetector(filepath.Join(t.TempDir(), "nope"), liveAndZombieRecords)
+		bad := NewDetector(filepath.Join(t.TempDir(), "nope"), subs.list, liveAndZombieRecords)
 		bad.scanOnce()
 		assertGaugesUntouched(t, "conf.d read error")
 	})
 
-	t.Run("federation_dir_unreadable", func(t *testing.T) {
-		// _federation exists but is a regular FILE: os.ReadDir fails with
-		// ENOTDIR — the non-IsNotExist error branch of scanSubsetTenants.
-		dir2 := t.TempDir()
-		writeTenantFile(t, dir2, "db-a.yaml")
-		writeTenantFile(t, dir2, federationSubsetDir) // file, not dir
-		bad := NewDetector(dir2, liveAndZombieRecords)
+	t.Run("subset_list_error", func(t *testing.T) {
+		bad := NewDetector(dir, func() ([]string, error) {
+			return nil, errors.New("state store unavailable")
+		}, liveAndZombieRecords)
 		bad.scanOnce()
-		assertGaugesUntouched(t, "_federation/ read error")
+		assertGaugesUntouched(t, "subset listing error")
 	})
 
 	t.Run("token_store_error", func(t *testing.T) {
-		bad := NewDetector(dir, func() ([]token.Record, error) {
+		bad := NewDetector(dir, subs.list, func() ([]token.Record, error) {
 			return nil, errors.New("configmap get: transient apiserver timeout")
 		})
 		bad.scanOnce()
@@ -271,10 +267,10 @@ func TestDetector_ScanOnce_FailSafeSkipsPass(t *testing.T) {
 // least one more, and closing stopCh terminates the goroutine.
 func TestDetector_Run_ScansImmediatelyTicksAndStops(t *testing.T) {
 	saveGauges(t)
-	dir := seedConfDir(t)
+	dir, subs := seedConfDir(t)
 
 	var scans atomic.Int64
-	d := NewDetector(dir, func() ([]token.Record, error) {
+	d := NewDetector(dir, subs.list, func() ([]token.Record, error) {
 		scans.Add(1)
 		return liveAndZombieRecords()
 	})
@@ -305,49 +301,5 @@ func TestDetector_Run_ScansImmediatelyTicksAndStops(t *testing.T) {
 
 	if tok, sub := OrphanCounts(); tok != 1 || sub != 1 {
 		t.Errorf("after Run, OrphanCounts() = (%d, %d), want (1, 1)", tok, sub)
-	}
-}
-
-// #1698: _federation/ accepts every spelling confd.TenantIDFromFile does, so
-// one tenant can have `<id>.yaml` AND `<id>.yml` there at once. That is ONE
-// tenant with a subset, and the orphan gauge counts tenants — two spellings
-// must not make one orphan count twice.
-func TestScanSubsetTenants_TwoSpellingsAreOneTenant(t *testing.T) {
-	t.Parallel()
-	dir := t.TempDir()
-	fedDir := filepath.Join(dir, federationSubsetDir)
-	if err := os.Mkdir(fedDir, 0o700); err != nil {
-		t.Fatal(err)
-	}
-	for _, f := range []string{"db-stale.yaml", "db-stale.yml", "db-stale.YAML", "db-a.yml"} {
-		writeTenantFile(t, fedDir, f)
-	}
-	got, err := scanSubsetTenants(dir)
-	if err != nil {
-		t.Fatal(err)
-	}
-	sort.Strings(got)
-	if want := []string{"db-a", "db-stale"}; !reflect.DeepEqual(got, want) {
-		t.Errorf("subset tenants = %v, want %v", got, want)
-	}
-}
-
-// End to end through scanOnce: the published gauge is 1 for one orphaned
-// tenant, whatever number of spellings its subset is stored under.
-// NOT parallel — writes the package-level gauges (see saveGauges).
-func TestDetector_ScanOnce_TwoSpellingsCountOnce(t *testing.T) {
-	saveGauges(t)
-	dir := t.TempDir()
-	writeTenantFile(t, dir, "db-a.yaml")
-	fedDir := filepath.Join(dir, federationSubsetDir)
-	if err := os.Mkdir(fedDir, 0o700); err != nil {
-		t.Fatal(err)
-	}
-	writeTenantFile(t, fedDir, "db-stale.yaml")
-	writeTenantFile(t, fedDir, "db-stale.yml")
-
-	NewDetector(dir, func() ([]token.Record, error) { return nil, nil }).scanOnce()
-	if _, sub := OrphanCounts(); sub != 1 {
-		t.Errorf("orphaned subset gauge = %d, want 1 — one orphaned tenant stored under two spellings", sub)
 	}
 }

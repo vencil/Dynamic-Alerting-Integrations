@@ -374,6 +374,10 @@ def main() -> int:
             **os.environ,
             "TA_ADDR": addr,
             "TA_CONFIG_DIR": str(config_dir),
+            # #2856: groups / views / federation records live in a state
+            # store, never in conf.d; a plain directory beside it here.
+            "TA_STATE_STORE": "dir",
+            "TA_STATE_DIR": str(workdir / "state"),
             # Disable the per-caller rate limiter: all fuzz traffic shares one
             # X-Forwarded-Email, so the default 100 req/min would 429 the run.
             "TA_RATE_LIMIT_PER_MIN": "0",

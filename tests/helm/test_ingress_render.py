@@ -25,6 +25,7 @@ from pathlib import Path
 
 import pytest
 import yaml
+from _render_baseline import baseline_args
 
 _CHARTS = ["helm/da-portal", "helm/tenant-api"]
 _HAS_HELM = shutil.which("helm") is not None
@@ -37,7 +38,7 @@ def repo_root() -> Path:
 
 
 def _helm_template(repo_root: Path, chart: str, *args: str):
-    cmd = ["helm", "template", "t", str(repo_root / chart), *args]
+    cmd = ["helm", "template", "t", str(repo_root / chart), *baseline_args(chart), *args]
     return subprocess.run(cmd, capture_output=True, text=True, encoding="utf-8", errors="replace", timeout=60)
 
 

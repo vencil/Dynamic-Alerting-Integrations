@@ -100,6 +100,7 @@ func toFederationTokenRecord(r token.Record) FederationTokenRecord {
 // @Failure     429  {object} handler.ErrorResponse
 // @Failure     500  {object} handler.ErrorResponse
 // @Failure     503  {object} handler.ErrorResponse
+// @Failure     507  {object} handler.ErrorResponse
 // @Router      /api/v1/federation/tokens [post]
 func CreateFederationToken(d *handler.Deps) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {

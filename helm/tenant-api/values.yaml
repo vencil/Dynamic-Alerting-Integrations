@@ -181,9 +181,48 @@ policy:
   # Default false = fail closed. Turn it on only while repairing the file.
   unavailableOpen: false
 
-# Git repository to clone on startup (optional).
-# Leave empty to skip the init container (use hostPath or pre-populated PVC instead).
+# Git repository to clone on startup (optional for `direct`; required for the
+# PR modes, and then it must be an https:// URL). Leave empty to skip the init
+# container (use hostPath or a pre-populated PVC instead). Do not put
+# credentials in this URL: it is stored in a ConfigMap. Credentials for a
+# private repo come from writeBack.token, offered only to this URL's host.
 gitRepoUrl: ""
+
+# Where writes go (#2855). ⛔ REQUIRED — the chart refuses to render until
+# `writeBack.mode` is set, because the choice decides whether a write ever
+# reaches threshold-exporter.
+#
+#   pr-github / pr-gitlab — each write opens a PR/MR on your config repo. After
+#     merge, your GitOps pipeline builds the threshold-config ConfigMap that
+#     threshold-exporter reads (docs/integration/gitops-deployment.md). This is
+#     the production mode.
+#   direct — each write is a commit in this pod's /conf.d only. It is never
+#     pushed, never reaches threshold-exporter (which reads the threshold-config
+#     ConfigMap, not this pod's tree), and with the default emptyDir confDir it
+#     is gone on the next restart. Only for a throwaway trial install; requires
+#     `directAcknowledgeNotDelivered: true`.
+writeBack:
+  mode: ""
+  directAcknowledgeNotDelivered: false
+  # Local branch the PR modes cut feature branches from (--git-base-branch).
+  # Set it to your config repo's default branch.
+  baseBranch: main
+  github:
+    repo: ""          # owner/repo (TA_GITHUB_REPO) — required for pr-github
+    targetBranch: main  # branch the PRs target (TA_GITHUB_BASE_BRANCH)
+    apiUrl: ""        # GitHub Enterprise API URL (TA_GITHUB_API_URL); empty = github.com
+  gitlab:
+    project: ""       # group/project or numeric id (TA_GITLAB_PROJECT) — required for pr-gitlab
+    targetBranch: main  # TA_GITLAB_TARGET_BRANCH
+    apiUrl: ""        # self-hosted GitLab URL (TA_GITLAB_API_URL); empty = gitlab.com
+  # Existing Secret holding the forge token — required for the PR modes. The
+  # same token opens the PR/MR through the API and authenticates `git clone` /
+  # `git push` over HTTPS (git credential helper fed from the environment; the
+  # token is never written to the URL, the ConfigMap or the disk). Scopes:
+  # GitHub contents:write + pull_requests:write; GitLab api.
+  token:
+    secretName: ""
+    secretKey: token
 
 # RBAC configuration (_rbac.yaml content)
 rbac:
@@ -274,6 +313,16 @@ rbac:
 #      --federation-* flags. tenant-api owns store.json at runtime; the chart
 #      never templates THAT key (it templates only its own mount sentinel, see
 #      store.sentinelKey), so `helm upgrade` cannot wipe live tokens.
+# tenant-api's own records — groups, saved views, the federation whitelist
+# and subsets, the AccountID registry — live in this ConfigMap, not in conf.d
+# (#2856). The chart pre-creates it (kept on uninstall); tenant-api writes its
+# keys. On the first start after upgrading, tenant-api copies any of these
+# records still in conf.d into it; the conf.d copies are not read afterwards.
+state:
+  configMapName: tenant-api-state
+  # The one key this chart templates into it (see configmap-state.yaml).
+  sentinelKey: .chart-managed
+
 federation:
   enabled: false
 

@@ -9,14 +9,13 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"os"
-	"os/exec"
 	"path/filepath"
 	"strings"
 	"testing"
 
 	"github.com/vencil/tenant-api/internal/federation/fedpolicy"
-	"github.com/vencil/tenant-api/internal/gitops"
 	"github.com/vencil/tenant-api/internal/handler"
+	"github.com/vencil/tenant-api/internal/statestore"
 )
 
 // fakePrometheus mocks the Prometheus Series API for handler-level
@@ -71,17 +70,6 @@ func fakePromPerMetric(t *testing.T, hardBlock ...string) string {
 	return srv.URL
 }
 
-// lastCommitMessage returns the full message of the most recent commit
-// in dir — used to assert the --force bypass trailer landed in git.
-func lastCommitMessage(t *testing.T, dir string) string {
-	t.Helper()
-	out, err := exec.Command("git", "-C", dir, "log", "-1", "--format=%B").CombinedOutput()
-	if err != nil {
-		t.Fatalf("git log: %v\n%s", err, out)
-	}
-	return string(out)
-}
-
 // platformAdminRBAC grants admin on every tenant ("*"-scoped) to the
 // test caller's `platform-admins` group — i.e. a platform admin.
 const platformAdminRBAC = `groups:
@@ -116,7 +104,7 @@ func TestGetFederationPolicy_Empty(t *testing.T) {
 	t.Parallel()
 	configDir := setupConfigDir(t, nil)
 	d := &handler.Deps{
-		FederationPolicy: fedpolicy.NewManager(configDir),
+		FederationPolicy: fedpolicy.NewDirManager(configDir),
 		RBAC:             newRBACManager(t, ""),
 	}
 	w := executeWithRBAC(t, GetFederationPolicy(d), fedReq(t, "GET", "/api/v1/federation/policy", "", "", ""))
@@ -138,8 +126,9 @@ func TestPutFederationPolicy_ForbiddenForNonPlatformAdmin(t *testing.T) {
 	initGitRepo(t, configDir)
 	d := &handler.Deps{
 		ConfigDir:        configDir,
+		State:            newDirState(t, configDir),
 		Writer:           newTestWriter(configDir),
-		FederationPolicy: fedpolicy.NewManager(configDir),
+		FederationPolicy: fedpolicy.NewDirManager(configDir),
 		// Caller is admin on db-a only — not a "*"-scoped platform admin.
 		RBAC: newRBACManager(t, scopedAdminRBAC),
 	}
@@ -156,8 +145,9 @@ func TestPutFederationPolicy_Success(t *testing.T) {
 	initGitRepo(t, configDir)
 	d := &handler.Deps{
 		ConfigDir:        configDir,
+		State:            newDirState(t, configDir),
 		Writer:           newTestWriter(configDir),
-		FederationPolicy: fedpolicy.NewManager(configDir),
+		FederationPolicy: fedpolicy.NewDirManager(configDir),
 		RBAC:             newRBACManager(t, platformAdminRBAC),
 	}
 	body := `{"whitelist":[{"metric":"mysql_up"},{"metric":"tenant:cpu:rate5m"}]}`
@@ -183,8 +173,9 @@ func TestPutFederationPolicy_AdmissionHardBlock(t *testing.T) {
 	promURL := fakePrometheus(t, nil, []map[string]string{{"__name__": "m", "instance": "x"}})
 	d := &handler.Deps{
 		ConfigDir:          configDir,
+		State:              newDirState(t, configDir),
 		Writer:             newTestWriter(configDir),
-		FederationPolicy:   fedpolicy.NewManager(configDir),
+		FederationPolicy:   fedpolicy.NewDirManager(configDir),
 		AdmissionValidator: fedpolicy.NewAdmissionValidator(promURL),
 		RBAC:               newRBACManager(t, platformAdminRBAC),
 	}
@@ -204,10 +195,12 @@ func TestPutFederationPolicy_AdmissionWarnNeedsForce(t *testing.T) {
 	initGitRepo(t, configDir)
 	// Both probes empty — no samples in the window → soft Warn.
 	promURL := fakePrometheus(t, nil, nil)
+	rec := &recordingState{Store: newDirState(t, configDir)}
 	d := &handler.Deps{
 		ConfigDir:          configDir,
+		State:              rec,
 		Writer:             newTestWriter(configDir),
-		FederationPolicy:   fedpolicy.NewManager(configDir),
+		FederationPolicy:   fedpolicy.NewDirManager(configDir),
 		AdmissionValidator: fedpolicy.NewAdmissionValidator(promURL),
 		RBAC:               newRBACManager(t, platformAdminRBAC),
 	}
@@ -229,9 +222,9 @@ func TestPutFederationPolicy_AdmissionWarnNeedsForce(t *testing.T) {
 	if w.Code != http.StatusOK {
 		t.Fatalf("status = %d, want 200 (force + reason), body: %s", w.Code, w.Body.String())
 	}
-	msg := lastCommitMessage(t, configDir)
-	if !strings.Contains(msg, "[Bypass-Validator]") || !strings.Contains(msg, "cold-start: new cluster") {
-		t.Errorf("commit message missing the bypass trailer:\n%s", msg)
+	notes := strings.Join(rec.notes(), "\n")
+	if !strings.Contains(notes, "[Bypass-Validator]") || !strings.Contains(notes, "cold-start: new cluster") {
+		t.Errorf("state write audit notes missing the bypass trailer:\n%s", notes)
 	}
 }
 
@@ -243,8 +236,9 @@ func TestPutFederationPolicy_AdmissionPass(t *testing.T) {
 	promURL := fakePrometheus(t, []map[string]string{{"__name__": "m", "tenant": "db-a"}}, nil)
 	d := &handler.Deps{
 		ConfigDir:          configDir,
+		State:              newDirState(t, configDir),
 		Writer:             newTestWriter(configDir),
-		FederationPolicy:   fedpolicy.NewManager(configDir),
+		FederationPolicy:   fedpolicy.NewDirManager(configDir),
 		AdmissionValidator: fedpolicy.NewAdmissionValidator(promURL),
 		RBAC:               newRBACManager(t, platformAdminRBAC),
 	}
@@ -265,8 +259,9 @@ func TestPutFederationPolicy_AdmissionMultipleMetricsConcurrent(t *testing.T) {
 	promURL := fakePromPerMetric(t, "m3")
 	d := &handler.Deps{
 		ConfigDir:          configDir,
+		State:              newDirState(t, configDir),
 		Writer:             newTestWriter(configDir),
-		FederationPolicy:   fedpolicy.NewManager(configDir),
+		FederationPolicy:   fedpolicy.NewDirManager(configDir),
 		AdmissionValidator: fedpolicy.NewAdmissionValidator(promURL),
 		RBAC:               newRBACManager(t, platformAdminRBAC),
 	}
@@ -286,8 +281,9 @@ func TestPutFederationPolicy_RejectsTooManyNewMetrics(t *testing.T) {
 	initGitRepo(t, configDir)
 	d := &handler.Deps{
 		ConfigDir:          configDir,
+		State:              newDirState(t, configDir),
 		Writer:             newTestWriter(configDir),
-		FederationPolicy:   fedpolicy.NewManager(configDir),
+		FederationPolicy:   fedpolicy.NewDirManager(configDir),
 		AdmissionValidator: fedpolicy.NewAdmissionValidator(fakePrometheus(t, nil, nil)),
 		RBAC:               newRBACManager(t, platformAdminRBAC),
 	}
@@ -318,8 +314,9 @@ func TestPutFederationPolicy_CancelledContextSkipsGitWrite(t *testing.T) {
 	// point-of-no-return context guard right before the git write.
 	d := &handler.Deps{
 		ConfigDir:        configDir,
+		State:            newDirState(t, configDir),
 		Writer:           newTestWriter(configDir),
-		FederationPolicy: fedpolicy.NewManager(configDir),
+		FederationPolicy: fedpolicy.NewDirManager(configDir),
 		RBAC:             newRBACManager(t, platformAdminRBAC),
 	}
 	req := fedReq(t, "PUT", "/api/v1/federation/policy", "", "", `{"whitelist":[{"metric":"m"}]}`)
@@ -337,8 +334,9 @@ func TestPutFederationPolicy_RejectsInvalidMetricName(t *testing.T) {
 	initGitRepo(t, configDir)
 	d := &handler.Deps{
 		ConfigDir:        configDir,
+		State:            newDirState(t, configDir),
 		Writer:           newTestWriter(configDir),
-		FederationPolicy: fedpolicy.NewManager(configDir),
+		FederationPolicy: fedpolicy.NewDirManager(configDir),
 		RBAC:             newRBACManager(t, platformAdminRBAC),
 	}
 	body := `{"whitelist":[{"metric":"bad-name"}]}`
@@ -354,8 +352,9 @@ func TestPutTenantFederation_ForbiddenWithoutTenantAdmin(t *testing.T) {
 	initGitRepo(t, configDir)
 	d := &handler.Deps{
 		ConfigDir:        configDir,
+		State:            newDirState(t, configDir),
 		Writer:           newTestWriter(configDir),
-		FederationPolicy: fedpolicy.NewManager(configDir),
+		FederationPolicy: fedpolicy.NewDirManager(configDir),
 		// Caller has admin on db-a only — editing db-b's subset is denied.
 		RBAC: newRBACManager(t, scopedAdminRBAC),
 	}
@@ -376,6 +375,7 @@ func TestPutTenantFederation_RejectsMetricOutsideWhitelist(t *testing.T) {
 	})
 	d := &handler.Deps{
 		ConfigDir:        configDir,
+		State:            newDirState(t, configDir),
 		Writer:           newTestWriter(configDir),
 		FederationPolicy: mgr,
 		RBAC:             newRBACManager(t, scopedAdminRBAC), // admin on db-a
@@ -400,6 +400,7 @@ func TestPutTenantFederation_Success(t *testing.T) {
 	})
 	d := &handler.Deps{
 		ConfigDir:        configDir,
+		State:            newDirState(t, configDir),
 		Writer:           newTestWriter(configDir),
 		FederationPolicy: mgr,
 		RBAC:             newRBACManager(t, scopedAdminRBAC), // admin on db-a
@@ -423,18 +424,14 @@ func TestGetTenantFederation_ReadRepairDropsStaleMetric(t *testing.T) {
 	configDir := setupConfigDir(t, nil)
 	// Simulate a subset file that went stale: it still lists redis_up,
 	// but the platform whitelist now allows only mysql_up.
-	fedDir := filepath.Join(configDir, "_federation")
-	if err := os.MkdirAll(fedDir, 0755); err != nil {
-		t.Fatalf("mkdir _federation: %v", err)
-	}
-	if err := os.WriteFile(filepath.Join(fedDir, "db-a.yaml"),
+	if err := os.WriteFile(federationSubsetPath(configDir, "db-a"),
 		[]byte("metrics:\n  - mysql_up\n  - redis_up\n"), 0644); err != nil {
 		t.Fatalf("write stale subset: %v", err)
 	}
 	mgr := fedpolicy.NewManagerForTest(&fedpolicy.Config{
 		Whitelist: []fedpolicy.WhitelistEntry{{Metric: "mysql_up"}},
 	})
-	d := &handler.Deps{ConfigDir: configDir, FederationPolicy: mgr, RBAC: newRBACManager(t, "")}
+	d := &handler.Deps{ConfigDir: configDir, State: newDirState(t, configDir), FederationPolicy: mgr, RBAC: newRBACManager(t, "")}
 
 	w := executeWithRBAC(t, GetTenantFederation(d), fedReq(t, "GET", "/api/v1/tenants/db-a/federation", "id", "db-a", ""))
 	if w.Code != http.StatusOK {
@@ -455,7 +452,8 @@ func TestGetTenantFederation_NoFileYieldsEmptySubset(t *testing.T) {
 	configDir := setupConfigDir(t, nil)
 	d := &handler.Deps{
 		ConfigDir:        configDir,
-		FederationPolicy: fedpolicy.NewManager(configDir),
+		State:            newDirState(t, configDir),
+		FederationPolicy: fedpolicy.NewDirManager(configDir),
 		RBAC:             newRBACManager(t, ""),
 	}
 	w := executeWithRBAC(t, GetTenantFederation(d), fedReq(t, "GET", "/api/v1/tenants/db-a/federation", "id", "db-a", ""))
@@ -536,7 +534,7 @@ func TestReadFederationSubset_SinkGuard(t *testing.T) {
 
 	root := t.TempDir()
 	configDir := filepath.Join(root, "conf.d")
-	d := &handler.Deps{ConfigDir: configDir}
+	d := &handler.Deps{ConfigDir: configDir, State: newDirState(t, configDir)}
 
 	// Written before any subtest starts, read-only thereafter.
 	markers := make(map[string]string, len(federationJoinIDs))
@@ -606,17 +604,23 @@ func TestReadFederationSubset_SinkGuard(t *testing.T) {
 func TestFederationJoinSites_AgreeOnEveryID(t *testing.T) {
 	t.Parallel()
 	configDir := t.TempDir()
-	initGitRepo(t, configDir)
-	w := newTestWriter(configDir)
-	d := &handler.Deps{ConfigDir: configDir}
+	d := &handler.Deps{ConfigDir: configDir, State: newDirState(t, configDir)}
 
 	for _, tc := range federationJoinIDs {
 		t.Run(tc.name, func(t *testing.T) {
 			_, readErr := readFederationSubset(d, tc.id)
-			writeErr := w.WriteFederationSubsetFile(context.Background(), tc.id, "test@test.com", "metrics: []\n")
+			// The write site: PutTenantFederation refuses an id before it
+			// names any record, then writes SubsetKey(id).
+			var writeErr error
+			if verr := handler.ValidateWritableTenantID(tc.id); verr != nil {
+				writeErr = verr
+			} else {
+				writeErr = d.MutateState(context.Background(), statestore.SubsetKey(tc.id), "federation/"+tc.id, "test@test.com",
+					func([]byte) ([]byte, error) { return []byte("metrics: []\n"), nil })
+			}
 
 			readRejected := errors.Is(readErr, ErrUnaddressableTenantID)
-			writeRejected := errors.Is(writeErr, gitops.ErrReservedTenantID)
+			writeRejected := handler.ValidateWritableTenantID(tc.id) != nil
 			if readRejected != writeRejected {
 				t.Errorf("id %q: read-side rejected = %v (err %v), write-side rejected = %v (err %v); the two join sites must agree",
 					tc.id, readRejected, readErr, writeRejected, writeErr)

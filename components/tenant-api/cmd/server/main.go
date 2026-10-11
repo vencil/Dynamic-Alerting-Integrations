@@ -25,6 +25,7 @@ import (
 	"net/http"
 	"os"
 	"os/signal"
+	"path/filepath"
 	"sort"
 	"strconv"
 	"strings"
@@ -41,6 +42,7 @@ import (
 	"github.com/vencil/tenant-api/internal/handler"
 	"github.com/vencil/tenant-api/internal/policy"
 	"github.com/vencil/tenant-api/internal/rbac"
+	"github.com/vencil/tenant-api/internal/statemigrate"
 	"github.com/vencil/tenant-api/internal/tenantorg"
 	"github.com/vencil/tenant-api/internal/views"
 	"github.com/vencil/tenant-api/internal/ws"
@@ -193,6 +195,17 @@ func main() {
 	// several times over while holding the single-writer token, so this bounds
 	// cross-tenant write latency, not just memory.
 	maxBatchBodyBytesEnv := os.Getenv("TA_MAX_BATCH_BODY_BYTES")
+
+	// #2856: tenant-api's own records (groups, views, federation whitelist and
+	// subsets, AccountID registry) live in a state store, not in conf.d.
+	stateStoreKind := flag.String("state-store", envOrDefault("TA_STATE_STORE", ""),
+		"Where tenant-api keeps its own records: configmap (Kubernetes) or dir (single host). Required (#2856).")
+	stateConfigMap := flag.String("state-configmap", envOrDefault("TA_STATE_CONFIGMAP", "tenant-api-state"),
+		"Name of the state ConfigMap (--state-store=configmap). The Helm chart pre-creates it.")
+	stateNamespace := flag.String("state-namespace", envOrDefault("TA_STATE_NAMESPACE", ""),
+		"Namespace of the state ConfigMap. Empty uses the pod's own namespace.")
+	stateDir := flag.String("state-dir", envOrDefault("TA_STATE_DIR", ""),
+		"State directory (--state-store=dir). Must be outside --config-dir.")
 
 	// v2.9.0 ADR-020 IV-2d: tenant federation token endpoint.
 	// An empty --federation-key disables the endpoint entirely.
@@ -377,7 +390,60 @@ func main() {
 		})
 	})
 
-	groupMgr := groups.NewManager(*configDir)
+	// #2856: the state store, and the one-time move of these records out of
+	// conf.d. Import never overwrites a record the store already holds.
+	stateStore, err := wireStateStore(stateFlags{
+		Kind:          *stateStoreKind,
+		ConfigMapName: *stateConfigMap,
+		Namespace:     *stateNamespace,
+		Dir:           *stateDir,
+		ConfigDir:     *configDir,
+	}, func(entity string) {
+		eventHub.Broadcast(ws.Event{
+			Type:      "config_change",
+			TenantID:  entity,
+			Timestamp: time.Now(),
+			Detail:    "tenant-api state updated",
+		})
+	})
+	if err != nil {
+		log.Fatalf("FATAL: %v", err)
+	}
+	{
+		// The AccountID floor reads the registry's git history — when conf.d is
+		// a git repository at all. A plain directory (gitRepoUrl unset, a
+		// pre-populated volume) has no history to read, so it is skipped
+		// rather than failing the boot.
+		var hist statemigrate.History
+		repoDir := *gitDir
+		if repoDir == "" {
+			repoDir = *configDir
+		}
+		if _, err := os.Stat(filepath.Join(repoDir, ".git")); err == nil {
+			hist = writer
+		}
+		ictx, cancel := context.WithTimeout(context.Background(), *writeTimeout)
+		rep, ierr := statemigrate.Import(ictx, stateStore, *configDir, hist, func() (int, error) {
+			ids, err := account.ListTenantIDs(*configDir)
+			return len(ids), err
+		})
+		cancel()
+		if ierr != nil {
+			log.Fatalf("FATAL: move tenant-api state out of conf.d: %v", ierr)
+		}
+		if len(rep.Withheld) > 0 {
+			slog.Error("AccountID registry in conf.d is blank or missing while tenants exist; not imported — "+
+				"restore it from a backup before enabling federation (#2856)", "keys", rep.Withheld)
+		}
+		slog.Info("tenant-api state store ready", "store", stateStore.Describe(),
+			"imported_from_confd", rep.Imported, "already_in_store", rep.Kept)
+		if len(rep.Imported)+len(rep.Kept) > 0 {
+			slog.Warn("conf.d still holds tenant-api state files that are no longer read; delete them once the store is confirmed (#2856)",
+				"keys", append(append([]string{}, rep.Imported...), rep.Kept...))
+		}
+	}
+
+	groupMgr := groups.NewManager(stateStore)
 
 	// v2.5.0: Domain policy enforcement at API layer
 	policyMgr := policy.NewManager(*configDir)
@@ -416,12 +482,12 @@ func main() {
 	})
 
 	// v2.5.0: Saved Views for tenant-manager UI
-	viewMgr := views.NewManager(*configDir)
+	viewMgr := views.NewManager(stateStore)
 
 	// v2.9.0 ADR-020 IV-2e: federation 2-tier policy — the platform
 	// metric whitelist (`_federation_policy.yaml`). Per-tenant subsets
 	// live in separate files, read on demand by the handler.
-	federationPolicyMgr := fedpolicy.NewManager(*configDir)
+	federationPolicyMgr := fedpolicy.NewManager(stateStore)
 
 	// v2.9.0 ADR-020 IV-2e: federation admission validator. nil when
 	// --federation-prometheus-url is unset — admission is then disabled
@@ -475,14 +541,17 @@ func main() {
 	// via the same gitops Writer (no external stateful DB).
 	var accountAllocator *account.Allocator
 	if federationMgr != nil {
-		accountAllocator = account.NewAllocator(writer)
+		accountAllocator = account.NewAllocator(stateStore, func() (int, error) {
+			ids, err := account.ListTenantIDs(*configDir)
+			return len(ids), err
+		})
 		// #609 (Gemini #2) fail-loud startup guard: if the AccountID registry is
 		// blank/missing BUT conf.d already holds tenants, the ledger was lost
 		// (truncated mount / interrupted write) and booting would silently
 		// re-issue ids from the floor → cross-tenant log leak. Day-0 (no tenants
 		// yet) with a blank registry is fine and proceeds. Refuse to start
 		// otherwise — before any token can be issued against the reset registry.
-		if err := account.VerifyRegistryNotResetWithFleet(*configDir); err != nil {
+		if err := account.VerifyRegistryNotResetWithFleet(context.Background(), *configDir, stateStore); err != nil {
 			log.Fatalf("FATAL: %v", err)
 		}
 		slog.Info("federation token endpoint enabled",
@@ -512,6 +581,7 @@ func main() {
 	deps := &handler.Deps{
 		ConfigDir:          *configDir,
 		Writer:             writer,
+		State:              stateStore,
 		RBAC:               rbacMgr,
 		ClaimHeaders:       claimHeaders,
 		TenantOrg:          tenantOrgMgr,
@@ -560,6 +630,10 @@ func main() {
 	go policyMgr.WatchLoop(*reloadInterval, stopCh)
 	go tenantOrgMgr.WatchLoop(*reloadInterval, stopCh)
 	go federationPolicyMgr.WatchLoop(*reloadInterval, stopCh)
+	// #2856: a state ConfigMap can be edited out of band (kubectl), so groups
+	// and views reload on the same cadence as every other manager.
+	go groupMgr.WatchLoop(*reloadInterval, stopCh)
+	go viewMgr.WatchLoop(*reloadInterval, stopCh)
 	if prTracker != nil {
 		go prTracker.WatchLoop(stopCh)
 	}
@@ -569,7 +643,7 @@ func main() {
 	// offboarding runbook; never auto-revokes (a transient conf.d
 	// glitch must not nuke live tenants' tokens).
 	if federationMgr != nil {
-		go orphan.NewDetector(*configDir, federationMgr.ListAllRecords).
+		go orphan.NewDetector(*configDir, orphan.SubsetTenants(stateStore), federationMgr.ListAllRecords).
 			Run(*reloadInterval, stopCh)
 		// ADR-028 D1 / #1234: evidence-channel liveness canary. Gated on the
 		// SAME `federationMgr != nil` condition as the orphan detector on

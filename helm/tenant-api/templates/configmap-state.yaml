@@ -1,0 +1,34 @@
+{{- /*
+tenant-api state store (#2856): groups, saved views, the federation whitelist
+and per-tenant subsets, and the AccountID registry. They used to be files in
+the conf.d git tree, committed on the pod's local branch and never pushed, so
+the default emptyDir lost them on every restart.
+
+tenant-api owns every data key at RUNTIME. This chart only pre-creates the
+object so tenant-api's RBAC is get + update on this one resourceName, never a
+namespace-wide `create`. Like the federation token store
+(configmap-federation-store.yaml), the chart templates EXACTLY ONE key, a
+sentinel: Helm's three-way merge patches only the keys a manifest carries, so
+the runtime keys survive `helm upgrade`, and `resource-policy: keep` protects
+them from `helm uninstall`.
+*/ -}}
+{{- $sentinelKey := .Values.state.sentinelKey | default "" }}
+{{- if not $sentinelKey }}
+{{- fail "state.sentinelKey is empty. Set it (default: .chart-managed)." }}
+{{- end }}
+{{- if or (hasPrefix "_" $sentinelKey) (hasSuffix ".yaml" $sentinelKey) }}
+{{- fail (printf "state.sentinelKey=%q looks like a runtime record key (they start with _ and end in .yaml). Templating one here would overwrite live state on every `helm upgrade`. Pick a name tenant-api never writes, e.g. .chart-managed." $sentinelKey) }}
+{{- end }}
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: {{ .Values.state.configMapName }}
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "tenant-api.labels" . | nindent 4 }}
+    app.kubernetes.io/component: state-store
+  annotations:
+    helm.sh/resource-policy: keep
+data:
+  # Chart-owned sentinel; every other key is tenant-api's runtime state.
+  {{ $sentinelKey }}: "tenant-api state store (#2856); the other keys are written by tenant-api"

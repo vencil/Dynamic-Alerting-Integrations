@@ -140,10 +140,11 @@ func newMetaEnfFixture(t *testing.T, enforce bool) *metaEnfFixture {
 func (f *metaEnfFixture) deps() *Deps {
 	return &Deps{
 		ConfigDir: f.configDir,
+		State:     mustDirState(f.configDir),
 		Writer:    f.writer,
 		RBAC:      f.rbacMgr,
-		Groups:    groups.NewManager(f.configDir),
-		Views:     views.NewManager(f.configDir),
+		Groups:    groups.NewDirManager(f.configDir),
+		Views:     views.NewDirManager(f.configDir),
 		WriteMode: WriteModeDirect,
 	}
 }

@@ -131,8 +131,7 @@ var ErrNoChanges = errors.New("no changes: batch produced no commits")
 // (_*, .*) — i.e. an id that ValidateTenantID rejects at the handler. Every
 // current write path validates the id first, so reaching this means a caller
 // bypassed that gate (a programming error): the writer refuses rather than let
-// a tenant write clobber platform config, mirroring MutateConfigFile's own
-// filepath.Base defense on the control-file write path. See internal/confd for
+// a tenant write clobber platform config. See internal/confd for
 // the single "what counts as a tenant file" predicate shared with the scanners.
 var ErrReservedTenantID = errors.New("reserved tenant id: names a conf.d control file")
 
@@ -521,8 +520,7 @@ func (w *Writer) unlockTree() {
 // ⛔ It must come BEFORE the first read of the tree, not merely before the
 // commit. Every read a direct write makes under the lock — which file the
 // tenant resolves to, the declared-elsewhere scan, validation's root defaults,
-// the base-hash comparison, MutateConfigFile's transform input, WriteMerged's
-// merge base — answers for whatever branch is checked out. With the check at
+// the base-hash comparison, WriteMerged's merge base — answers for whatever branch is checked out. With the check at
 // commit time, a read that REFUSED on a stranded tree (409 declared-elsewhere,
 // 409 precondition, a transform error) returned before the guard ran: the
 // caller got the branch's answer, and the tree stayed on the branch.
@@ -686,7 +684,7 @@ func (w *Writer) gitOutput(dir string, args ...string) ([]byte, error) {
 
 // Write validates, persists, and commits a tenant's config YAML.
 //
-// Flow (steps 6–9 are shared with writeSpecialFile via commitFileChange):
+// Flow (steps 6–9 live in commitFileChange):
 //  1. Pre-flight: validateBodyOnly — body-shaped defects only, no tree read
 //  2. Admission (single-writer token), then lock the tree and, before any
 //     read of it, leave a stranded PR branch (lockTreeOnBase, #1723)
@@ -1261,7 +1259,7 @@ func (w *Writer) WriteMerged(ctx context.Context, tenantID, authorEmail string, 
 	if err != nil {
 		return nil, err
 	}
-	// No-op short-circuit (mirrors MutateConfigFile's `if next == nil`): when the
+	// No-op short-circuit: when the
 	// merge changed nothing — an idempotent patch, or a client retry after a
 	// write whose response was lost — the content is byte-identical to disk, so
 	// gitCommit would stage nothing and NOT advance HEAD. commitFileChange's
@@ -1360,10 +1358,6 @@ func (w *Writer) DiffTexts(tenantID, current string, exists bool, proposed strin
 	return string(out), nil
 }
 
-// The special-file write paths (WriteGroupsFile / WriteViewsFile /
-// WriteFederationPolicyFile / WriteFederationSubsetFile and their shared
-// writeSpecialFile helper) live in writer_special.go.
-
 // writeFileAtomic replaces filePath with content via a temp file in the
 // same directory plus os.Rename, mirroring federation/token.store.save.
 //
@@ -1414,9 +1408,10 @@ func writeFileAtomic(filePath string, content []byte, perm os.FileMode) error {
 	return nil
 }
 
-// commitFileChange is the shared write+commit+conflict-detect+notify
-// flow used by both Write (tenant YAML) and writeSpecialFile
-// (_groups.yaml / _views.yaml). Caller MUST hold w.mu before calling.
+// commitFileChange is the write+commit+conflict-detect+notify flow of the
+// tenant writes. tenant-api's own records (groups, views, federation, the
+// AccountID registry) no longer come through here: they live in the state
+// store, outside git (#2856). Caller MUST hold w.mu before calling.
 //
 // `commitTag` identifies what's being committed in log lines, the
 // commit message subject (via gitCommit), and the onWrite callback

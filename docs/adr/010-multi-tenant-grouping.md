@@ -9,17 +9,19 @@ tracking_kind: adr
 status: accepted
 domain: tenant-api
 created_at: 2026-04-06
-updated_at: 2026-10-10
+updated_at: 2026-10-11
 ---
 # ADR-010: Multi-Tenant Grouping Architecture
 
 > **Language / 語言：** **中文 (Current)** | [English](./010-multi-tenant-grouping.en.md)
 
-**決策摘要**：自訂群組定義在 conf.d/ 的 `_groups.yaml`，成員是一份明列的租戶 ID 清單，透過 tenant-api 的群組 API 管理，群組定義的寫入沿用租戶寫入的寫入鎖與 HEAD 衝突偵測（PR 寫回模式下仍直接 commit，見 [ADR-011](011-pr-based-write-back.md)）。同時在租戶的 `_metadata` 加上 environment、region、domain、db_type 等欄位，供 API 與 UI 篩選；這些欄位不加進 `tenant_metadata_info` 的標籤。
+**決策摘要**：自訂群組定義在 `_groups.yaml`（現存於 tenant-api 的 state store，不在 conf.d/，見下方狀態），成員是一份明列的租戶 ID 清單，透過 tenant-api 的群組 API 管理，群組定義的寫入不走 PR（見 [ADR-011](011-pr-based-write-back.md)）。同時在租戶的 `_metadata` 加上 environment、region、domain、db_type 等欄位，供 API 與 UI 篩選；這些欄位不加進 `tenant_metadata_info` 的標籤。
 
 ## 狀態
 
-✅ **Accepted**（v2.5.0）— 自訂群組以 `_groups.yaml` 儲存於 conf.d/，透過 tenant-api CRUD endpoints 管理
+✅ **Accepted**（v2.5.0）— 自訂群組以 `_groups.yaml` 儲存，透過 tenant-api CRUD endpoints 管理
+
+**2026-10-11**：`_groups.yaml` 移出 conf.d/，改存 tenant-api 的 state store（Kubernetes 上是 `tenant-api-state` ConfigMap 的同名 key，單機是一個目錄），寫入改為對 ConfigMap `resourceVersion` 的 compare-and-swap，不再產生 git commit；群組紀錄因此沒有 git 歷史，改以每次寫入的結構化 `state_write` 日誌稽核（[#2856](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/2856)）。下文的儲存位置、寫入模式與後果已照此更新。
 
 ## 名詞
 
@@ -74,7 +76,7 @@ _metadata:
 ### 2. `_groups.yaml`：自訂群組定義
 
 ```yaml
-# conf.d/_groups.yaml — 透過 tenant-api 或手動編輯維護
+# state store 的 _groups.yaml 紀錄 — 透過 tenant-api 維護（或直接編輯 tenant-api-state ConfigMap）
 groups:
   production-dba:
     label: "Production DBA"
@@ -89,9 +91,9 @@ groups:
 
 | 面向 | 決策 | 理由 |
 |------|------|------|
-| 儲存位置 | `conf.d/_groups.yaml`（底線開頭） | 與 `_defaults.yaml`、`_rbac.yaml` 一致 |
+| 儲存位置 | tenant-api state store 的 `_groups.yaml` 紀錄 | 群組是 tenant-api 自己的紀錄，不是租戶設定 |
 | 成員模式 | 明列的 `members[]` 清單 | 可預測、可 review、可 diff |
-| 寫入模式 | 重用 `gitops.Writer` 的 `sync.Mutex` 與 HEAD 衝突偵測 | 不引入新的鎖機制，確保與租戶寫入互斥 |
+| 寫入模式 | state store 的讀改寫：對 ConfigMap `resourceVersion` 做 compare-and-swap，輸掉並行寫入就以最新內容重算 | 並行編輯不同群組不會互相覆蓋 |
 | ID 格式 | `[a-z0-9\-_]`，最長 128 字元 | 可以直接當 YAML key 與 URL 路徑片段 |
 
 ### 3. tenant-api 的群組 API
@@ -153,18 +155,17 @@ user_threshold{component="mysql",metric="connections",severity="warning",tenant=
 
 **得到的**
 
-- `_groups.yaml` 納入 Git 版本控制，稽核軌跡完整。
+- 每次群組寫入留一筆結構化 `state_write` 日誌（key、author）。
 
 **要承擔的**
 
-- conf.d/ 多一個不是租戶設定的檔案（已有 `_defaults.yaml`、`_rbac.yaml` 的先例）。
-- 群組寫入與租戶寫入共用同一把 `sync.Mutex`，並行量高時可能互相等待（實際操作頻率不高）。
+- 群組紀錄沒有 git 歷史，也不經 PR review。
 
 **風險與緩解**
 
 | 風險 | 緩解 |
 |------|------|
-| 多人同時編輯 `_groups.yaml` 造成衝突 | 重用 writer 的 HEAD 衝突偵測，回 409 要求重試 |
+| 多人同時編輯 `_groups.yaml` 造成衝突 | compare-and-swap 重試；重試用盡回 409 要求重試 |
 | 群組成員引用了不存在的租戶 ID | 寫入時不驗證（軟引用） |
 | metadata 欄位變多讓 YAML 變冗長 | 新欄位全部選填，沒設 metadata 的租戶不受影響 |
 

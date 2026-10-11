@@ -23,7 +23,7 @@ lang: en
 - `da-guard served-values`: the values the exporter actually serves.
 - The route generator `generate_alertmanager_routes.py --output-configmap`: the complete Alertmanager configuration.
 
-These are exactly the sole parsers named by [ADR-036](./036-single-parser-effective-config.en.md), so no third way of reading the config appears here.
+These are exactly the sole semantic implementations named by [ADR-036](./036-single-parser-effective-config.en.md) (thresholds by the exporter, routing by the generator), so no third way of reading the config appears here.
 
 ## Background
 

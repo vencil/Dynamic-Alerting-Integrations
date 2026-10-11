@@ -54,9 +54,11 @@ helm install vector ./helm/vector -n vector \
   --set victorialogs.host=victorialogs.monitoring.svc
 
 #    多租戶（tenantProjections 有設）再多一步前置：projection-gate 掛的
-#    conf.d registry ConfigMap 是 namespaced —— 必須存在於 vector ns
-#    （projectionGate.registry.configMapName 指的那顆），否則 gate 一律
-#    degrade 回 0:0。
+#    registry ConfigMap（key `_account_registry.yaml`）是 namespaced —— 必須
+#    存在於 vector ns（projectionGate.registry.configMapName 指的那顆），否則
+#    gate 一律 degrade 回 0:0。registry 本身在 tenant-api 的 `tenant-api-state`
+#    ConfigMap（同名 key，#2856）：tenant-api 與 Vector 同 ns 時直接指向它，
+#    否則要把該 key 同步成 vector ns 裡的一顆 ConfigMap。
 #
 #    ⛔ chart 0.10.0（#1288）起 origin split 同時綁「producer 的 namespace」：
 #    預設 evidenceChannel.podNamespace=tenant-api、.gatewayNamespace=monitoring。
@@ -509,7 +511,7 @@ demux (VRL，注入 log_event_id)
 
 ### 8.2 啟用：把 registry 配發投影進 `tenantProjections`
 
-`tenant_id(str) → AccountID(uint32)` 的 SSOT 是 Git 帳號 registry（`_account_registry.yaml`，PR-1 #887：`next_account_id` + `allocations: {tenant_id: uint32}`）。本 PR (b) 為**靜態 N-sink**：把已配發的租戶 `tenant_id: account_id` **逐筆抄進** `helm/vector` values 的 `tenantProjections`（一份經 review、GitOps 版控的 registry 投影）。Phase 2 (a) 才從 registry **render 時自動產生**（config-from-SSOT，解決海量租戶不 scale）。
+`tenant_id(str) → AccountID(uint32)` 的 SSOT 是 tenant-api 的 AccountID registry（state store 的 `_account_registry.yaml` 紀錄，Kubernetes 上是 `tenant-api-state` ConfigMap 的同名 key，[#2856](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/2856)；PR-1 #887：`next_account_id` + `allocations: {tenant_id: uint32}`）。本 PR (b) 為**靜態 N-sink**：把已配發的租戶 `tenant_id: account_id` **逐筆抄進** `helm/vector` values 的 `tenantProjections`（一份經 review、GitOps 版控的 registry 投影）。Phase 2 (a) 才從 registry **render 時自動產生**（config-from-SSOT，解決海量租戶不 scale）。
 
 ```yaml
 # helm/vector values（或 values-prod-vector.yaml overlay）
@@ -616,7 +618,7 @@ promtool fire/no-fire 與上述 §8.7 spike alert 同放 `tests/rulepacks/tenant
 
 ### 8.9 投影 GATE degrade/enforce 觀測與復原（ADR-021 Phase 2(a) / #908 PR-3a）
 
-§8.7 盯「投影被 abort 丟棄」，本節盯**更上游**的「投影 GATE 本身降級/卡死」——`tenantProjections` 與 conf.d `_account_registry.yaml` 不符（unique-but-wrong accountId 跨租戶洩漏類）或 boot 時讀不到 registry 時，fail-closed gate 的反應與**復原 SOP**。
+§8.7 盯「投影被 abort 丟棄」，本節盯**更上游**的「投影 GATE 本身降級/卡死」——`tenantProjections` 與 registry（`_account_registry.yaml`）不符（unique-but-wrong accountId 跨租戶洩漏類）或 boot 時讀不到 registry 時，fail-closed gate 的反應與**復原 SOP**。
 
 **觀測管線（為何不是 node-exporter / 不是 per-node absent）**：gate init-container 把判定寫進 pod-local emptyDir 的 Prometheus textfile（`--metrics-file /gate-metrics/gate.prom`，metric `vector_tenant_projection_gate_info{category,mode}`）；一支長駐 **exposer sidecar**（`serve_metrics.py`，同 image、`command` override）把該檔以 HTTP 重新 serve，經**獨立 headless Service**（`<vector>-projection-gate-metrics`，gated on `tenantProjections`、**不**綁 `metrics.enabled`）被 Prometheus `monitoring-components`（role:service）scrape。本叢集**無 node-exporter / textfile collector**，Vector 自身 exporter 又只讀 `internal_metrics`，故走 sidecar——且 sidecar 與 pod 同生死 → pod 死時 series **變 absent 而非殘留 stale-"ok"**（crash 不會假性 resolve 真實 mismatch）。Vector 是 DaemonSet、每 node 掛**相同** registry+projections → 每 node 判定**相同**，故 alert 一律 `max by(...)` **跨 pod 聚合**（per-node absent 非必要，且 role:service scrape 本就不給穩定 per-node series）。⚠️ **enforce 死鎖時 sidecar 不會啟動**（init 非零退出 → pod 卡 Init → Vector 與 sidecar 皆未起 → verdict metric **無人 serve**），故那條 alert 改走 **KSM**（見 §8.9.3）。
 

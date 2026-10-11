@@ -23,29 +23,29 @@ func TestGetTenantFederation_UnreadableSubsetNamesNoServerPath(t *testing.T) {
 	// A self-referencing symlink: os.ReadFile fails with ELOOP. (The issue's
 	// EISDIR shape — the path made a directory — is now skipped by the
 	// resolver; ELOOP is the other shape it named that still reaches the read.)
-	subDir := filepath.Join(configDir, "_federation")
-	if err := os.MkdirAll(subDir, 0o755); err != nil {
-		t.Fatal(err)
-	}
-	if err := os.Symlink("db-a.yaml", filepath.Join(subDir, "db-a.yaml")); err != nil {
+	p := federationSubsetPath(configDir, "db-a")
+	if err := os.Symlink(filepath.Base(p), p); err != nil {
 		t.Fatal(err)
 	}
 	d := &handler.Deps{
 		ConfigDir:        configDir,
-		FederationPolicy: fedpolicy.NewManager(configDir),
+		State:            newDirState(t, configDir),
+		FederationPolicy: fedpolicy.NewDirManager(configDir),
 		RBAC:             newRBACManager(t, ""),
 	}
 	w := executeWithRBAC(t, GetTenantFederation(d), fedReq(t, "GET", "/api/v1/tenants/db-a/federation", "id", "db-a", ""))
 
-	if w.Code != http.StatusInternalServerError {
-		t.Fatalf("status = %d, want 500 (the fault did not fire as designed); body: %s", w.Code, w.Body.String())
+	// An unreadable record is a state-store fault (#2856): 503, retryable,
+	// and the body still names no server path.
+	if w.Code != http.StatusServiceUnavailable {
+		t.Fatalf("status = %d, want 503 (the fault did not fire as designed); body: %s", w.Code, w.Body.String())
 	}
 	body := w.Body.String()
 	if strings.Contains(body, configDir) || strings.Contains(body, "too many levels of symbolic links") {
-		t.Errorf("500 body carries the server's own error text: %s", body)
+		t.Errorf("503 body carries the server's own error text: %s", body)
 	}
-	if !strings.Contains(body, `"code":"INTERNAL_ERROR"`) {
-		t.Errorf("500 body lost its code: %s", body)
+	if !strings.Contains(body, `"code":"UPSTREAM_ERROR"`) {
+		t.Errorf("503 body lost its code: %s", body)
 	}
 }
 
@@ -58,8 +58,9 @@ func TestPutFederationPolicy_UnreachablePrometheusNamesNoUpstream(t *testing.T) 
 	initGitRepo(t, configDir)
 	d := &handler.Deps{
 		ConfigDir:          configDir,
+		State:              newDirState(t, configDir),
 		Writer:             newTestWriter(configDir),
-		FederationPolicy:   fedpolicy.NewManager(configDir),
+		FederationPolicy:   fedpolicy.NewDirManager(configDir),
 		AdmissionValidator: fedpolicy.NewAdmissionValidator("http://127.0.0.1:1"),
 		RBAC:               newRBACManager(t, platformAdminRBAC),
 	}

@@ -205,61 +205,6 @@ func TestWritePR_FetchTimeout_ReturnsForgeDegraded(t *testing.T) {
 	}
 }
 
-// TestWritePR_PreservesLocalBaseCommit is the safety invariant the fresh-anchor
-// must NOT violate: the special-file writes (WriteGroupsFile / WriteViewsFile /
-// WriteFederationPolicyFile) commit straight to the local base via
-// commitFileChange even in PR mode, so the local base can carry an un-pushed
-// commit. Cutting the PR branch from origin/<base> must leave that local commit
-// (and its working-tree state) intact — a `reset --hard origin/<base>` would
-// silently discard it. This test fails loudly if the anchor regresses to a hard
-// reset.
-func TestWritePR_PreservesLocalBaseCommit(t *testing.T) {
-	remoteDir := initBareRemoteOnMain(t)
-
-	authorDir := t.TempDir()
-	gitClone(t, remoteDir, authorDir)
-	gitRun(t, authorDir, "config", "user.email", "a@a.com")
-	gitRun(t, authorDir, "config", "user.name", "A")
-	writeFileInDir(t, authorDir, "db-a.yaml", validTenantYAML)
-	gitRun(t, authorDir, "add", "-A")
-	gitRun(t, authorDir, "commit", "-m", "seed")
-	gitRun(t, authorDir, "push", "origin", "main")
-
-	dir := t.TempDir()
-	gitClone(t, remoteDir, dir)
-	gitRun(t, dir, "config", "user.email", "t@t.com")
-	gitRun(t, dir, "config", "user.name", "T")
-
-	// A direct-committed shared file lands on the LOCAL base only (never pushed) —
-	// exactly what WriteGroupsFile does in PR mode.
-	const localGroups = "groups:\n  local-only:\n    members: [db-a]\n"
-	writeFileInDir(t, dir, "_groups.yaml", localGroups)
-	gitRun(t, dir, "add", "_groups.yaml")
-	gitRun(t, dir, "commit", "-m", "local-only groups edit (not pushed)")
-
-	// Meanwhile origin/main advances elsewhere, so the fresh anchor has real work.
-	writeFileInDir(t, authorDir, "db-a.yaml", "tenants:\n  db-a:\n    _silent_mode: \"critical\"\n")
-	gitRun(t, authorDir, "commit", "-am", "remote advance")
-	gitRun(t, authorDir, "push", "origin", "main")
-
-	w := NewWriter(dir, dir)
-	if _, err := w.WritePR(context.Background(), "db-b", "bob@example.com", "tenants:\n  db-b:\n    _silent_mode: \"warning\"\n"); err != nil {
-		t.Fatalf("WritePR: %v", err)
-	}
-
-	// The local-only commit must survive on disk and in local base history.
-	// Normalize CRLF — git's autocrlf may rewrite line endings on checkout (Windows).
-	denorm := func(s string) string { return strings.ReplaceAll(s, "\r\n", "\n") }
-	if got, err := os.ReadFile(filepath.Join(dir, "_groups.yaml")); err != nil {
-		t.Fatalf("read _groups.yaml after WritePR: %v", err)
-	} else if denorm(string(got)) != localGroups {
-		t.Errorf("_groups.yaml = %q after WritePR, want the local-only edit preserved (%q) — the fresh anchor discarded an un-pushed local base commit (TRK-318 regression)", got, localGroups)
-	}
-	if head := denorm(gitOut(t, dir, "show", "main:_groups.yaml")); head != strings.TrimRight(localGroups, "\n") {
-		t.Errorf("main:_groups.yaml = %q, want the local-only commit intact", head)
-	}
-}
-
 // TestWritePR_NoOriginSkipsFetch guards the dev/local path: with no origin remote
 // configured, WritePR must NOT fail (nothing to be stale against) — it branches
 // from the local base exactly as before TRK-318.

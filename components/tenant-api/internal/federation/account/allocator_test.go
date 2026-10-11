@@ -6,80 +6,104 @@ import (
 	"sort"
 	"sync"
 	"testing"
+
+	"github.com/vencil/tenant-api/internal/statestore"
 )
 
-// fakeWriter is an in-memory RegistryWriter: it holds the "committed"
-// registry bytes and serialises MutateConfigFile under its own mutex,
-// exactly as the real gitops.Writer serialises on w.mu. This lets the
-// allocator's allocate-in-lock concurrency be tested with NO git shell-out
-// (the real git path is exercised by the gitops package's own tests).
+// fakeWriter is an in-memory RegistryStore: it holds the stored registry
+// bytes and serialises Mutate under its own mutex. rerunOnce makes the next
+// Mutate run its transform twice — first against stale bytes it then throws
+// away, the way a store re-runs a transform after losing a compare-and-swap
+// race — so a transform that keeps state across runs is caught.
 type fakeWriter struct {
-	mu      sync.Mutex
-	data    []byte // current committed bytes (nil = file absent)
-	commits int    // number of actual writes (no-op transforms don't count)
-	histMax uint32 // simulated git-history high-water mark (0 = no history)
-	histErr error  // simulated HistoricalMaxUint failure (fail-closed path)
+	mu        sync.Mutex
+	data      []byte // current stored bytes (nil = record absent)
+	commits   int    // number of actual writes (no-op transforms don't count)
+	rerunOnce []byte // when non-nil, the next Mutate first runs against these bytes
 }
 
-func (f *fakeWriter) MutateConfigFile(_ context.Context, _, _, _ string, transform func([]byte) ([]byte, error)) error {
+func (f *fakeWriter) Mutate(_ context.Context, _ string, _ statestore.Meta, transform statestore.Transform) (bool, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
+	if f.rerunOnce != nil {
+		stale := f.rerunOnce
+		f.rerunOnce = nil
+		if _, err := transform(stale); err != nil {
+			return false, err
+		}
+	}
 	next, err := transform(f.data)
 	if err != nil {
-		return err
+		return false, err
 	}
 	if next == nil {
-		return nil // no change → no commit (matches the real writer)
+		return false, nil // no change → no write (matches the real stores)
 	}
 	f.data = next
 	f.commits++
-	return nil
+	return true, nil
 }
 
-func (f *fakeWriter) HistoricalMaxUint(_ context.Context, _, _ string) (uint32, error) {
-	return f.histMax, f.histErr
-}
-
-// TestAllocator_FloorsToHistoricalMax: a registry whose ON-DISK next_account_id
-// was reverted/hand-lowered BELOW the git-history high-water mark must still
-// allocate from that mark — never re-issuing an id a reverted-away commit
-// already handed out (ADR-021 §AccountID #1/#3 cross-tenant leak).
-func TestAllocator_FloorsToHistoricalMax(t *testing.T) {
+// A transform re-run after a lost race reports what the LAST run did:
+// the first (stale) run would allocate a different id.
+func TestAllocator_RerunReportsTheLastRun(t *testing.T) {
 	t.Parallel()
-	// On-disk registry looks like a clean revert: counter back at 1002, only the
-	// two oldest tenants survive — internally consistent, so Parse accepts it.
 	fw := &fakeWriter{
-		data:    []byte("schema_version: v1\nnext_account_id: 1002\nallocations:\n  a: 1000\n  b: 1001\n"),
-		histMax: 1005, // but history shows the counter once reached 1005
+		data:      []byte("schema_version: v1\nnext_account_id: 1003\nallocations:\n  a: 1000\n  b: 1001\n  c: 1002\n"),
+		rerunOnce: []byte("schema_version: v1\nnext_account_id: 1001\nallocations:\n  a: 1000\n"),
 	}
-	a := NewAllocator(fw)
-	id, err := a.EnsureAccountID(context.Background(), "tenant-new", "ops@example.com")
+	id, err := NewAllocator(fw, nil).EnsureAccountID(context.Background(), "tenant-new", "ops@example.com")
 	if err != nil {
-		t.Fatalf("EnsureAccountID: %v", err)
+		t.Fatal(err)
 	}
-	if id != 1005 {
-		t.Errorf("allocated id = %d, want 1005 (floored to history, NOT the reverted 1002–1004)", id)
+	if id != 1003 {
+		t.Fatalf("id = %d, want 1003 (from the run that was written, not the stale one)", id)
+	}
+
+	fw.rerunOnce = []byte("schema_version: v1\nnext_account_id: 1000\nallocations: {}\n")
+	res, err := NewAllocator(fw, nil).Backfill(context.Background(), []string{"a", "z"}, "ops@example.com")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if res.AlreadyPresent != 1 || len(res.Allocated) != 1 || res.Allocated[0] != "z" {
+		t.Fatalf("Backfill result %+v, want only the last run's (a present, z allocated)", res)
 	}
 }
 
-// TestAllocator_HistoryReadErrorFailsClosed: an unreadable git history refuses
-// the allocation — never allocates against a counter it cannot verify.
-func TestAllocator_HistoryReadErrorFailsClosed(t *testing.T) {
+// A blank registry while tenants exist is a lost ledger: allocating from the
+// floor would re-issue ids (ADR-021). Refused at runtime, not only at boot.
+func TestAllocator_RefusesBlankRegistryWithFleet(t *testing.T) {
 	t.Parallel()
-	fw := &fakeWriter{histErr: errors.New("git unavailable")}
-	a := NewAllocator(fw)
-	if _, err := a.EnsureAccountID(context.Background(), "t", "ops@example.com"); err == nil {
-		t.Fatal("EnsureAccountID must fail closed when the history read fails")
+	fleet := func() (int, error) { return 3, nil }
+	for _, data := range [][]byte{nil, []byte("  \n")} {
+		fw := &fakeWriter{data: data}
+		if _, err := NewAllocator(fw, fleet).EnsureAccountID(context.Background(), "t", "ops@example.com"); !errors.Is(err, ErrRegistryReset) {
+			t.Fatalf("EnsureAccountID on %q with a fleet: err = %v, want ErrRegistryReset", data, err)
+		}
+		if _, err := NewAllocator(fw, fleet).Backfill(context.Background(), []string{"t"}, "ops@example.com"); !errors.Is(err, ErrRegistryReset) {
+			t.Fatalf("Backfill on %q with a fleet: err = %v, want ErrRegistryReset", data, err)
+		}
+		if fw.commits != 0 {
+			t.Fatal("a refused allocation wrote the registry")
+		}
 	}
-	if fw.commits != 0 {
-		t.Errorf("must not commit when history is unreadable; commits=%d", fw.commits)
+	// Day-0: no tenants yet, a blank registry is fine.
+	fw := &fakeWriter{}
+	id, err := NewAllocator(fw, func() (int, error) { return 0, nil }).EnsureAccountID(context.Background(), "t", "ops@example.com")
+	if err != nil || id != 1000 {
+		t.Fatalf("Day-0 allocation = %d, %v; want 1000, nil", id, err)
+	}
+	// A fleet that cannot be counted is not taken as empty.
+	fw = &fakeWriter{}
+	if _, err := NewAllocator(fw, func() (int, error) { return 0, errors.New("io") }).EnsureAccountID(context.Background(), "t", "x"); err == nil {
+		t.Fatal("an uncountable fleet was treated as Day-0")
 	}
 }
 
 func TestAllocator_EnsureAllocatesAndPersists(t *testing.T) {
 	t.Parallel()
 	fw := &fakeWriter{}
-	a := NewAllocator(fw)
+	a := NewAllocator(fw, nil)
 
 	id, err := a.EnsureAccountID(context.Background(), "tenant-alpha", "ops@example.com")
 	if err != nil {
@@ -104,7 +128,7 @@ func TestAllocator_EnsureAllocatesAndPersists(t *testing.T) {
 func TestAllocator_EnsureIdempotentNoSecondCommit(t *testing.T) {
 	t.Parallel()
 	fw := &fakeWriter{}
-	a := NewAllocator(fw)
+	a := NewAllocator(fw, nil)
 	ctx := context.Background()
 
 	first, err := a.EnsureAccountID(ctx, "tenant-x", "ops@example.com")
@@ -129,7 +153,7 @@ func TestAllocator_EnsureIdempotentNoSecondCommit(t *testing.T) {
 // write. (No t.Parallel — this test itself spawns the concurrency.)
 func TestAllocator_ConcurrentEnsureNeverDuplicates(t *testing.T) {
 	fw := &fakeWriter{}
-	a := NewAllocator(fw)
+	a := NewAllocator(fw, nil)
 	ctx := context.Background()
 
 	const n = 50
@@ -178,7 +202,7 @@ func TestAllocator_ConcurrentEnsureNeverDuplicates(t *testing.T) {
 func TestAllocator_BackfillAllocatesMissingOnly(t *testing.T) {
 	t.Parallel()
 	fw := &fakeWriter{}
-	a := NewAllocator(fw)
+	a := NewAllocator(fw, nil)
 	ctx := context.Background()
 
 	// Pre-allocate one tenant lazily.
@@ -220,7 +244,7 @@ func TestAllocator_BackfillAllocatesMissingOnly(t *testing.T) {
 func TestAllocator_BackfillIdempotent(t *testing.T) {
 	t.Parallel()
 	fw := &fakeWriter{}
-	a := NewAllocator(fw)
+	a := NewAllocator(fw, nil)
 	ctx := context.Background()
 	tenants := []string{"a", "b", "c"}
 
@@ -250,7 +274,7 @@ func TestAllocator_BackfillIdempotent(t *testing.T) {
 func TestAllocator_EnsureFailsOnCorruptRegistry(t *testing.T) {
 	t.Parallel()
 	fw := &fakeWriter{data: []byte("schema_version: v1\nnext_account_id: 1000\nallocations:\n  a: 1005\n")}
-	a := NewAllocator(fw)
+	a := NewAllocator(fw, nil)
 	if _, err := a.EnsureAccountID(context.Background(), "b", "ops@example.com"); err == nil {
 		t.Fatal("EnsureAccountID should fail on a corrupt registry")
 	}

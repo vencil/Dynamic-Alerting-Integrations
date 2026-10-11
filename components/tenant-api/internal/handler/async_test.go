@@ -74,6 +74,7 @@ func TestBatchTenants_Async_ReturnsTaskID(t *testing.T) {
 	deps := &Deps{
 		Writer:    writer,
 		ConfigDir: configDir,
+		State:     mustDirState(configDir),
 		RBAC:      rbacMgr,
 		Policy:    policy.NewManager(configDir),
 		WriteMode: WriteModeDirect,
@@ -128,6 +129,7 @@ func TestBatchTenants_Async_TaskCompletes(t *testing.T) {
 	deps := &Deps{
 		Writer:    writer,
 		ConfigDir: configDir,
+		State:     mustDirState(configDir),
 		RBAC:      rbacMgr,
 		Policy:    policy.NewManager(configDir),
 		WriteMode: WriteModeDirect,
@@ -176,7 +178,7 @@ func TestGroupBatch_Async_ReturnsTaskID(t *testing.T) {
 	})
 	setupGroupsFile(t, configDir, testGroupsYAML)
 
-	groupMgr := groups.NewManager(configDir)
+	groupMgr := groups.NewDirManager(configDir)
 	writer := newTestWriter(configDir)
 	rbacMgr := newRBACManager(t, "")
 	taskMgr := async.NewManager(2)
@@ -186,6 +188,7 @@ func TestGroupBatch_Async_ReturnsTaskID(t *testing.T) {
 		Groups:    groupMgr,
 		Writer:    writer,
 		ConfigDir: configDir,
+		State:     mustDirState(configDir),
 		RBAC:      rbacMgr,
 		Tasks:     taskMgr,
 	}

@@ -67,7 +67,7 @@ func newStaleFixture(t *testing.T, local, originFiles map[string]string) *staleF
 	}
 	f := &staleFixture{dir: dir, bare: bare}
 	f.deps = &Deps{Writer: newTestWriter(dir), ConfigDir: dir, RBAC: adminRBAC(t),
-		Groups: groups.NewManager(dir), Policy: policy.NewManager(dir), WriteMode: WriteModePR,
+		Groups: groups.NewDirManager(dir), Policy: policy.NewManager(dir), WriteMode: WriteModePR,
 		PRClient: &mockPlatformClient{providerName: "github",
 			createPRFunc: func(title, body, h string, labels []string) (*platform.PRInfo, error) {
 				f.prOpened = true

@@ -57,9 +57,13 @@ FROM alpine:3.23.6
 
 # Install git and ca-certs (needed for git over HTTPS)
 # Note: alpine already has nobody(65534); create nonroot with system-assigned IDs
+# /state: the default home of the dir state store (--state-store=dir, #2856).
+# Created here, owned by nonroot, so an empty named volume mounted on it
+# (try-local) inherits that ownership instead of root's.
 RUN apk add --no-cache git ca-certificates tzdata \
     && addgroup -S nonroot \
-    && adduser  -S -G nonroot nonroot
+    && adduser  -S -G nonroot nonroot \
+    && mkdir -p /state && chown nonroot:nonroot /state
 
 COPY --from=builder /tenant-api /usr/local/bin/tenant-api
 

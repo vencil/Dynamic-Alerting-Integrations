@@ -32,10 +32,10 @@ package groups
 import (
 	"fmt"
 	"log/slog"
-	"path/filepath"
 	"sort"
 
 	"github.com/vencil/tenant-api/internal/configwatcher"
+	"github.com/vencil/tenant-api/internal/statestore"
 	"gopkg.in/yaml.v3"
 )
 
@@ -60,16 +60,27 @@ type Manager struct {
 	*configwatcher.Watcher[GroupsConfig]
 }
 
-// NewManager creates a Manager that reads _groups.yaml from configDir.
-// If the file does not exist, the manager starts with an empty config
-// (and logs a WARN — same as pre-PR-8 behavior).
-func NewManager(configDir string) *Manager {
-	path := filepath.Join(configDir, "_groups.yaml")
-	w, err := configwatcher.New(path, "groups", ParseConfig, emptyConfig)
+// NewManager creates a Manager that reads the groups record from the state
+// store (#2856: no longer conf.d/_groups.yaml). A missing record is an empty
+// config.
+func NewManager(s statestore.Store) *Manager {
+	desc := s.Describe() + " " + statestore.KeyGroups
+	w, err := configwatcher.NewWithReader(desc, "groups", statestore.ReadFunc(s, statestore.KeyGroups), ParseConfig, emptyConfig)
 	if err != nil {
 		slog.Warn("groups: initial load failed", "error", err)
 	}
 	return &Manager{Watcher: w}
+}
+
+// NewDirManager is NewManager over a directory store at dir — tests and
+// tools that hold the record as dir/_groups.yaml.
+func NewDirManager(dir string) *Manager {
+	s, err := statestore.NewDir(dir, nil)
+	if err != nil {
+		slog.Warn("groups: state directory", "error", err)
+		return &Manager{Watcher: configwatcher.NewForTest("groups", emptyConfig())}
+	}
+	return NewManager(s)
 }
 
 // emptyConfig returns the empty fallback config used when the file

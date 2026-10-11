@@ -55,6 +55,7 @@ import (
 	"github.com/vencil/tenant-api/internal/groups"
 	"github.com/vencil/tenant-api/internal/platform"
 	"github.com/vencil/tenant-api/internal/rbac"
+	"github.com/vencil/tenant-api/internal/statestore"
 	"github.com/vencil/tenant-api/internal/tenantorg"
 	"github.com/vencil/tenant-api/internal/views"
 )
@@ -79,6 +80,7 @@ const orgEnfRBACYAML = `groups:
 type orgEnfFixture struct {
 	configDir string
 	writer    *gitops.Writer
+	state     statestore.Store // #2856: groups/views writes; counted with the commits
 	rbacMgr   *rbac.Manager
 	tenantOrg *tenantorg.Manager
 	writes    atomic.Int32
@@ -109,6 +111,11 @@ func newOrgEnfFixture(t *testing.T, files map[string]string) *orgEnfFixture {
 	f := &orgEnfFixture{configDir: configDir}
 	f.writer = newTestWriter(configDir)
 	f.writer.SetOnWrite(func(string) { f.writes.Add(1) })
+	st, err := statestore.NewDir(configDir, func(string) { f.writes.Add(1) })
+	if err != nil {
+		t.Fatal(err)
+	}
+	f.state = st
 
 	f.rbacMgr = newRBACManagerWithClaims(t, orgEnfRBACYAML,
 		map[string]string{"org": orgEnfClaimHeader})
@@ -124,11 +131,12 @@ func newOrgEnfFixture(t *testing.T, files map[string]string) *orgEnfFixture {
 func (f *orgEnfFixture) deps() *Deps {
 	return &Deps{
 		ConfigDir: f.configDir,
+		State:     f.state,
 		Writer:    f.writer,
 		RBAC:      f.rbacMgr,
 		TenantOrg: f.tenantOrg,
-		Groups:    groups.NewManager(f.configDir),
-		Views:     views.NewManager(f.configDir),
+		Groups:    groups.NewDirManager(f.configDir),
+		Views:     views.NewDirManager(f.configDir),
 		WriteMode: WriteModeDirect,
 	}
 }

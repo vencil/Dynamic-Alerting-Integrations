@@ -39,7 +39,7 @@ from _lib_validation import (  # noqa: E402  (#2766 finding kinds)
 )
 
 
-# ── #2766 (ADR-036 §3): every warning-stream line is a structured finding ──
+# ── #2766 (ADR-036 §4): every warning-stream line is a structured finding ──
 # The generator's verdict used to exist only as text, so a reader that needed
 # "which tenant / which file / does it block" had to compare strings — and an
 # already-violating tenant rewriting its config produces the SAME line as the

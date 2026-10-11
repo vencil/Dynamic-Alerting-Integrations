@@ -17,16 +17,15 @@ import (
 	"io"
 	"log/slog"
 	"net/http"
-	"os"
 	"strings"
 	"sync"
 
 	"github.com/go-chi/chi/v5"
 	"github.com/vencil/tenant-api/internal/confd"
 	"github.com/vencil/tenant-api/internal/federation/fedpolicy"
-	"github.com/vencil/tenant-api/internal/gitops"
 	"github.com/vencil/tenant-api/internal/handler"
 	"github.com/vencil/tenant-api/internal/rbac"
+	"github.com/vencil/tenant-api/internal/statestore"
 	"gopkg.in/yaml.v3"
 )
 
@@ -91,6 +90,7 @@ type PutFederationPolicyRequest struct {
 // @Failure     409  {object} handler.ErrorResponse
 // @Failure     500  {object} handler.ErrorResponse
 // @Failure     503  {object} handler.ErrorResponse
+// @Failure     507  {object} handler.ErrorResponse
 // @Router      /api/v1/federation/policy [put]
 func PutFederationPolicy(d *handler.Deps) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
@@ -144,17 +144,16 @@ func PutFederationPolicy(d *handler.Deps) http.HandlerFunc {
 			handler.WriteJSONError(w, r, http.StatusInternalServerError, "marshal whitelist: "+err.Error())
 			return
 		}
-		if err := d.Writer.WriteFederationPolicyFile(r.Context(), email, string(yamlBytes), trailer); err != nil {
-			if errors.Is(err, gitops.ErrWriteOverloaded) {
-				handler.WriteOverloaded(w, r)
-				return
-			}
-			if errors.Is(err, gitops.ErrTreeNotOnBase) { // #1723: retryable, nothing written
-				handler.WriteTreeNotOnBase(w, r, err)
-				return
-			}
-			if errors.Is(err, gitops.ErrConflict) {
-				handler.WriteJSONError(w, r, http.StatusConflict, err.Error())
+		// #2856: the whitelist is tenant-api's own record in the state store,
+		// not a conf.d file. A forced bypass's trailer rides in the write's
+		// audit event (it used to ride in the commit message).
+		var notes []string
+		if trailer != "" {
+			notes = append(notes, trailer)
+		}
+		if err := d.MutateState(r.Context(), statestore.KeyFederationPolicy, "federation-policy", email,
+			func([]byte) ([]byte, error) { return yamlBytes, nil }, notes...); err != nil {
+			if handler.WriteStateError(w, r, err) {
 				return
 			}
 			handler.WriteJSONError(w, r, http.StatusInternalServerError, err.Error())
@@ -356,6 +355,7 @@ func admissionMetrics(results []fedpolicy.AdmissionResult) []string {
 // @Failure     400 {object} handler.ErrorResponse
 // @Failure     409 {object} handler.ErrorResponse
 // @Failure     500 {object} handler.ErrorResponse
+// @Failure     503 {object} handler.ErrorResponse
 // @Router      /api/v1/tenants/{id}/federation [get]
 func GetTenantFederation(d *handler.Deps) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
@@ -374,6 +374,9 @@ func GetTenantFederation(d *handler.Deps) http.HandlerFunc {
 			handler.WriteJSONError(w, r, http.StatusConflict, err.Error())
 			return
 		case err != nil:
+			if handler.WriteStateError(w, r, err) {
+				return
+			}
 			handler.WriteJSONError(w, r, http.StatusInternalServerError, "read federation subset: "+err.Error())
 			return
 		}
@@ -402,6 +405,7 @@ func GetTenantFederation(d *handler.Deps) http.HandlerFunc {
 // @Failure     409  {object} handler.ErrorResponse
 // @Failure     500  {object} handler.ErrorResponse
 // @Failure     503  {object} handler.ErrorResponse
+// @Failure     507  {object} handler.ErrorResponse
 // @Router      /api/v1/tenants/{id}/federation [put]
 func PutTenantFederation(d *handler.Deps) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
@@ -443,28 +447,12 @@ func PutTenantFederation(d *handler.Deps) http.HandlerFunc {
 			handler.WriteJSONError(w, r, http.StatusInternalServerError, "marshal subset: "+err.Error())
 			return
 		}
-		if err := d.Writer.WriteFederationSubsetFile(r.Context(), tenantID, email, string(yamlBytes)); err != nil {
-			if errors.Is(err, gitops.ErrWriteOverloaded) {
-				handler.WriteOverloaded(w, r)
-				return
-			}
-			if errors.Is(err, gitops.ErrTreeNotOnBase) { // #1723: retryable, nothing written
-				handler.WriteTreeNotOnBase(w, r, err)
-				return
-			}
-			if errors.Is(err, gitops.ErrConflict) {
-				handler.WriteJSONError(w, r, http.StatusConflict, err.Error())
-				return
-			}
-			// #1698: two subset files claim this tenant, so the writer cannot
-			// know which one to rewrite — 409, as tenant PUT does (#1673).
-			if errors.Is(err, confd.ErrAmbiguousTenantFile) {
-				handler.WriteJSONError(w, r, http.StatusConflict, err.Error())
-				return
-			}
-			// ADR-035: the writer's own copy of the tenant-id rule.
-			if errors.Is(err, gitops.ErrInvalidTenantID) {
-				handler.WriteJSONError(w, r, http.StatusBadRequest, err.Error())
+		// #2856: a tenant's subset is a record in the state store, keyed by
+		// the id ValidateWritableTenantID accepted above (a DNS-1123 label, so
+		// the key needs no further escaping).
+		if err := d.MutateState(r.Context(), statestore.SubsetKey(tenantID), "federation/"+tenantID, email,
+			func([]byte) ([]byte, error) { return yamlBytes, nil }); err != nil {
+			if handler.WriteStateError(w, r, err) {
 				return
 			}
 			handler.WriteJSONError(w, r, http.StatusInternalServerError, err.Error())
@@ -535,21 +523,15 @@ func readFederationSubset(d *handler.Deps, tenantID string) (*fedpolicy.Subset, 
 	if !confd.IsAddressableTenantID(tenantID) {
 		return nil, fmt.Errorf("%w: %q", ErrUnaddressableTenantID, tenantID)
 	}
-	path, err := confd.ResolveTenantFile(confd.FederationSubsetDir(d.ConfigDir), tenantID)
-	if errors.Is(err, confd.ErrTenantFileNotFound) {
-		return &fedpolicy.Subset{Metrics: []string{}}, nil
+	if d.State == nil {
+		return nil, errors.New("tenant-api state store is not configured")
 	}
+	data, ok, err := d.State.Get(context.Background(), statestore.SubsetKey(tenantID))
 	if err != nil {
 		return nil, err
 	}
-	data, err := os.ReadFile(path)
-	if errors.Is(err, os.ErrNotExist) {
-		// Lost a race with a delete between resolve and read — the same
-		// "no subset" answer the resolver would have given a moment later.
+	if !ok {
 		return &fedpolicy.Subset{Metrics: []string{}}, nil
-	}
-	if err != nil {
-		return nil, err
 	}
 	return fedpolicy.ParseSubset(data)
 }

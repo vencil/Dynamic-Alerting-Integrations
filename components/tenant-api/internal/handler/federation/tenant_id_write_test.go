@@ -28,6 +28,7 @@ func TestPutTenantFederation_InvalidTenantID(t *testing.T) {
 			initGitRepo(t, configDir)
 			d := &handler.Deps{
 				ConfigDir: configDir,
+				State:     newDirState(t, configDir),
 				Writer:    newTestWriter(configDir),
 				RBAC:      newRBACManager(t, platformAdminRBAC),
 				FederationPolicy: fedpolicy.NewManagerForTest(&fedpolicy.Config{

@@ -9,13 +9,15 @@ tracking_kind: adr
 status: accepted
 domain: tenant-api
 created_at: 2026-05-30
-updated_at: 2026-06-27
+updated_at: 2026-10-11
 ---
 # ADR-023: tenant-api 寫入平面 — 單一寫者不變式
 
 ## 狀態
 
 ✅ **Accepted**（2026-05-30 起草，2026-06-06 接受）。Deciders：tenant-api maintainer + 平台架構 owner。
+
+2026-10-11：群組、saved views、federation 白名單與子集、AccountID 帳本移出 conf.d，改存 tenant-api 的 state store（Kubernetes 上是 `tenant-api-state` ConfigMap），寫入是對 ConfigMap `resourceVersion` 的 compare-and-swap，不經過本 ADR 所說的 git 寫入鎖（[#2856](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/2856)）。單一寫者不變式仍約束 conf.d 的寫入。
 
 ## TL;DR
 
@@ -96,7 +98,7 @@ ADR-023 single-writer invariant violated: tenant-api replicaCount=2 but MUST be 
 
 ### 2. 寫入前怎麼取得最新 base
 
-寫入前必須讓本地 base 追上遠端，否則共享檔（`_groups.yaml` 等）會被「從過期 base 開的 PR」算成要刪 → 無聲資料遺失。`git fetch` 是阻塞網路呼叫，放錯位置會把網路劣化轉嫁到全域鎖、或引入競態。
+寫入前必須讓本地 base 追上遠端，否則共享檔會被「從過期 base 開的 PR」算成要刪 → 無聲資料遺失。`git fetch` 是阻塞網路呼叫，放錯位置會把網路劣化轉嫁到全域鎖、或引入競態。
 
 **採鎖內 fetch**：進臨界區後、開分支前 `git fetch` 一次，緊接著從最新 ref 開分支——原子、無 TOCTOU。「鎖外預載再鎖內 reset」反而有 TOCTOU（排隊期間遠端前進），且只在高併發寫入才划算，而那違反單寫者前提。fetch 用**獨立的短逾時 `TA_GIT_FETCH_TIMEOUT`（預設 5s）**，與常規 git 逾時（60s）分開——持鎖期間的網路呼叫必須快速 fail 成 503，不能拖到 60s。
 

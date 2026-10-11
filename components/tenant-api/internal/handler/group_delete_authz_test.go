@@ -57,14 +57,14 @@ func TestDeleteGroup_AuthorizesStoredMembersNotSnapshot(t *testing.T) {
 
 	// The snapshot is loaded from a version whose only member the caller owns.
 	writeAndCommit("groups:\n  g-x:\n    label: gx\n    members:\n      - t-owned\n", "seed")
-	gm := groups.NewManager(configDir)
+	gm := groups.NewDirManager(configDir)
 
 	// The file then gains a member the caller may NOT write. The snapshot has
 	// no way to learn this.
 	writeAndCommit("groups:\n  g-x:\n    label: gx\n    members:\n      - t-owned\n      - t-foreign\n", "drift")
 
 	rbacMgr := newRBACManager(t, partialWriterRBAC)
-	d := &Deps{Writer: gitops.NewWriter(configDir, configDir), Groups: gm, RBAC: rbacMgr}
+	d := &Deps{State: mustDirState(configDir), Writer: gitops.NewWriter(configDir, configDir), Groups: gm, RBAC: rbacMgr}
 	h := wrapWithRBACMiddleware(DeleteGroup(d), rbacMgr, rbac.PermRead, nil)
 
 	req := newRequestWithChiParam("DELETE", "/api/v1/groups/g-x", "id", "g-x", bytes.NewBuffer(nil))
@@ -111,9 +111,9 @@ func TestDeleteGroup_StoredMembersAllWritableDeletes(t *testing.T) {
 	runGit(t, configDir, "commit", "-m", "seed")
 
 	rbacMgr := newRBACManager(t, partialWriterRBAC)
-	d := &Deps{
+	d := &Deps{State: mustDirState(configDir),
 		Writer: gitops.NewWriter(configDir, configDir),
-		Groups: groups.NewManager(configDir),
+		Groups: groups.NewDirManager(configDir),
 		RBAC:   rbacMgr,
 	}
 	h := wrapWithRBACMiddleware(DeleteGroup(d), rbacMgr, rbac.PermRead, nil)

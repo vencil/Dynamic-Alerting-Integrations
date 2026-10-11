@@ -65,13 +65,16 @@ flowchart LR
 
 ### 2.1 AccountID 配發（tenant-api，單調、永不回收）
 
-租戶的 `account_id`（uint32）由 tenant-api 從 **Git 帳號 registry**（`_account_registry.yaml`）
+租戶的 `account_id`（uint32）由 tenant-api 從 **AccountID registry**（tenant-api state store 的
+`_account_registry.yaml` 紀錄；Kubernetes 上是 `tenant-api-state` ConfigMap 的同名 key，[#2856](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/2856)）
 **單調發號**（`next_account_id` high-water mark，從 1000 起；0 = 平台 default，1–999 系統保留）。
 
 - **冪等**：同租戶必得同號（重跑不洗號）。
 - ⛔ **永不回收**：退租**不**釋放 id——退租後把同號配給新租戶、舊 log 還在 retention 窗內
   → 新租戶讀得到前租戶殘留 log = **跨租戶洩漏**。registry 是 monotonic tombstone（發過的
-  號永不重發；連 `git revert` 計數器也擋不回——allocator 讀 git 歷史最大值當下限）。
+  號永不重發）。registry 從 conf.d 搬進 state store 的那一次，`next_account_id` 取它在 git 歷史中
+  的最大值；之後 registry 不在 git 裡，計數器只靠 allocator 單調遞增，以及「帳上任一 id ≥ 計數器
+  就拒絕配發」的完整性檢查——直接編輯 ConfigMap、把配發與計數器一起改小，這兩道都擋不住。
 - **配發方式**：onboarding 時 tenant-api 自動配（首次簽 logs token 即配）；或對既有租戶批次
   補配 `POST /api/v1/federation/accounts/backfill`（admin-only、冪等）。
 
@@ -84,7 +87,7 @@ flowchart LR
 # helm/vector/values.yaml
 tenantProjections:
   - tenantId: "<租戶 id>"      # 必須與 federation JWT 的 tenant_id claim 逐字相同
-    accountId: 1000            # 從 _account_registry.yaml 抄這個租戶的 account_id
+    accountId: 1000            # 從 registry（_account_registry.yaml）抄這個租戶的 account_id
 ```
 
 > ⛔ **配發紀律（一筆寫錯 = 跨租戶洩漏，PR review 必對照）**：

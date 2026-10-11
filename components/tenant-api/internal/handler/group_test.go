@@ -92,10 +92,10 @@ const testGroupsYAML = `groups:
 func TestListGroups_Empty(t *testing.T) {
 	t.Parallel()
 	configDir := setupConfigDir(t, nil)
-	mgr := groups.NewManager(configDir)
+	mgr := groups.NewDirManager(configDir)
 
 	rbacMgr := newRBACManager(t, "")
-	h := ListGroups(&Deps{Groups: mgr, RBAC: rbacMgr})
+	h := ListGroups(&Deps{State: mustDirState(configDir), Groups: mgr, RBAC: rbacMgr})
 	req := httptest.NewRequest("GET", "/api/v1/groups", nil)
 	w := httptest.NewRecorder()
 	h(w, req)
@@ -117,10 +117,10 @@ func TestListGroups_WithData(t *testing.T) {
 	t.Parallel()
 	configDir := setupConfigDir(t, nil)
 	setupGroupsFile(t, configDir, testGroupsYAML)
-	mgr := groups.NewManager(configDir)
+	mgr := groups.NewDirManager(configDir)
 
 	rbacMgr := newRBACManager(t, "")
-	h := ListGroups(&Deps{Groups: mgr, RBAC: rbacMgr})
+	h := ListGroups(&Deps{State: mustDirState(configDir), Groups: mgr, RBAC: rbacMgr})
 	req := httptest.NewRequest("GET", "/api/v1/groups", nil)
 	w := httptest.NewRecorder()
 	h(w, req)
@@ -158,11 +158,11 @@ func TestGetGroup_Success(t *testing.T) {
 	t.Parallel()
 	configDir := setupConfigDir(t, nil)
 	setupGroupsFile(t, configDir, testGroupsYAML)
-	mgr := groups.NewManager(configDir)
+	mgr := groups.NewDirManager(configDir)
 
 	// Open-mode RBAC (empty _rbac.yaml): filterAccessibleMembers is the
 	// identity transform, so this pins the byte-identical open-mode path.
-	h := GetGroup(&Deps{Groups: mgr, RBAC: newRBACManager(t, "")})
+	h := GetGroup(&Deps{State: mustDirState(configDir), Groups: mgr, RBAC: newRBACManager(t, "")})
 	req := newRequestWithChiParam("GET", "/api/v1/groups/production-dba", "id", "production-dba", nil)
 	w := httptest.NewRecorder()
 	h(w, req)
@@ -192,9 +192,9 @@ func TestGetGroup_Success(t *testing.T) {
 func TestGetGroup_NotFound(t *testing.T) {
 	t.Parallel()
 	configDir := setupConfigDir(t, nil)
-	mgr := groups.NewManager(configDir)
+	mgr := groups.NewDirManager(configDir)
 
-	h := GetGroup(&Deps{Groups: mgr})
+	h := GetGroup(&Deps{State: mustDirState(configDir), Groups: mgr})
 	req := newRequestWithChiParam("GET", "/api/v1/groups/nonexistent", "id", "nonexistent", nil)
 	w := httptest.NewRecorder()
 	h(w, req)
@@ -207,9 +207,9 @@ func TestGetGroup_NotFound(t *testing.T) {
 func TestGetGroup_InvalidID(t *testing.T) {
 	t.Parallel()
 	configDir := setupConfigDir(t, nil)
-	mgr := groups.NewManager(configDir)
+	mgr := groups.NewDirManager(configDir)
 
-	h := GetGroup(&Deps{Groups: mgr})
+	h := GetGroup(&Deps{State: mustDirState(configDir), Groups: mgr})
 	req := newRequestWithChiParam("GET", "/api/v1/groups/INVALID!", "id", "INVALID!", nil)
 	w := httptest.NewRecorder()
 	h(w, req)
@@ -243,12 +243,12 @@ func TestGetGroup_OrgScopeFiltersMembers(t *testing.T) {
 `
 	configDir := setupConfigDir(t, nil)
 	setupGroupsFile(t, configDir, groupsYAML)
-	groupMgr := groups.NewManager(configDir)
+	groupMgr := groups.NewDirManager(configDir)
 
 	get := func(t *testing.T, groupID, callerOrg string) *httptest.ResponseRecorder {
 		t.Helper()
 		mgr, torg, _ := newOrgReadManager(t, orgReadRBACYAML, true) // enforce
-		d := &Deps{Groups: groupMgr, RBAC: mgr, TenantOrg: torg}
+		d := &Deps{State: mustDirState(configDir), Groups: groupMgr, RBAC: mgr, TenantOrg: torg}
 		// GetGroup's route uses a nil tenantIDFn (the group id is not a tenant
 		// id), so the middleware gate is the org-blind Allowed(p, "*", read) —
 		// the org-scoped "*" reader clears it, and the per-member org filtering
@@ -307,10 +307,10 @@ func TestGetGroup_NoOrgRuleByteIdentical(t *testing.T) {
 `
 	configDir := setupConfigDir(t, nil)
 	setupGroupsFile(t, configDir, groupsYAML)
-	groupMgr := groups.NewManager(configDir)
+	groupMgr := groups.NewDirManager(configDir)
 
 	mgr, torg, _ := newOrgReadManager(t, orgReadPlainRBACYAML, true) // enforce, but no org-scope rule
-	d := &Deps{Groups: groupMgr, RBAC: mgr, TenantOrg: torg}
+	d := &Deps{State: mustDirState(configDir), Groups: groupMgr, RBAC: mgr, TenantOrg: torg}
 	wrapped := wrapWithRBACMiddleware(GetGroup(d), mgr, rbac.PermRead, nil)
 	req := newRequestWithChiParam("GET", "/api/v1/groups/mixed-org", "id", "mixed-org", nil)
 	req = orgReadIdentity(req, orgReadMemberOrg)
@@ -335,7 +335,7 @@ func TestPutGroup_Create(t *testing.T) {
 	t.Parallel()
 	configDir := setupConfigDir(t, nil)
 	initGitRepo(t, configDir)
-	mgr := groups.NewManager(configDir)
+	mgr := groups.NewDirManager(configDir)
 	writer := newTestWriter(configDir)
 
 	body := `{"label":"My Group","description":"Test group","members":["db-a","db-b"]}`
@@ -347,7 +347,7 @@ func TestPutGroup_Create(t *testing.T) {
 	// permissiveRBACManager: v2.8.0 B-6 PR-2 hardening requires
 	// PermWrite on every member tenant. Open-mode RBAC only grants
 	// PermRead, so the test caller needs an explicit admin grant.
-	h := PutGroup(&Deps{Groups: mgr, Writer: writer, RBAC: permissiveRBACManager(t)})
+	h := PutGroup(&Deps{State: mustDirState(configDir), Groups: mgr, Writer: writer, RBAC: permissiveRBACManager(t)})
 	w := executeWithRBAC(t, h, req)
 
 	if w.Code != http.StatusOK {
@@ -381,7 +381,7 @@ func TestPutGroup_Update(t *testing.T) {
 	configDir := setupConfigDir(t, nil)
 	setupGroupsFile(t, configDir, testGroupsYAML)
 	initGitRepo(t, configDir)
-	mgr := groups.NewManager(configDir)
+	mgr := groups.NewDirManager(configDir)
 	writer := newTestWriter(configDir)
 
 	body := `{"label":"Updated DBA","members":["db-a","db-b","db-c"]}`
@@ -390,7 +390,7 @@ func TestPutGroup_Update(t *testing.T) {
 	req.Header.Set("Content-Type", "application/json")
 	setRequestIdentity(req, "test@example.com")
 
-	h := PutGroup(&Deps{Groups: mgr, Writer: writer, RBAC: permissiveRBACManager(t)})
+	h := PutGroup(&Deps{State: mustDirState(configDir), Groups: mgr, Writer: writer, RBAC: permissiveRBACManager(t)})
 	w := executeWithRBAC(t, h, req)
 
 	if w.Code != http.StatusOK {
@@ -409,7 +409,7 @@ func TestPutGroup_Update(t *testing.T) {
 func TestPutGroup_MissingLabel(t *testing.T) {
 	t.Parallel()
 	configDir := setupConfigDir(t, nil)
-	mgr := groups.NewManager(configDir)
+	mgr := groups.NewDirManager(configDir)
 	writer := newTestWriter(configDir)
 
 	body := `{"members":["db-a"]}`
@@ -418,7 +418,7 @@ func TestPutGroup_MissingLabel(t *testing.T) {
 	req.Header.Set("Content-Type", "application/json")
 
 	w := httptest.NewRecorder()
-	h := PutGroup(&Deps{Groups: mgr, Writer: writer, RBAC: newRBACManager(t, "")})
+	h := PutGroup(&Deps{State: mustDirState(configDir), Groups: mgr, Writer: writer, RBAC: newRBACManager(t, "")})
 	h(w, req)
 
 	if w.Code != http.StatusBadRequest {
@@ -429,7 +429,7 @@ func TestPutGroup_MissingLabel(t *testing.T) {
 func TestPutGroup_InvalidJSON(t *testing.T) {
 	t.Parallel()
 	configDir := setupConfigDir(t, nil)
-	mgr := groups.NewManager(configDir)
+	mgr := groups.NewDirManager(configDir)
 	writer := newTestWriter(configDir)
 
 	req := newRequestWithChiParam("PUT", "/api/v1/groups/my-group", "id", "my-group",
@@ -437,7 +437,7 @@ func TestPutGroup_InvalidJSON(t *testing.T) {
 	req.Header.Set("Content-Type", "application/json")
 
 	w := httptest.NewRecorder()
-	h := PutGroup(&Deps{Groups: mgr, Writer: writer, RBAC: newRBACManager(t, "")})
+	h := PutGroup(&Deps{State: mustDirState(configDir), Groups: mgr, Writer: writer, RBAC: newRBACManager(t, "")})
 	h(w, req)
 
 	if w.Code != http.StatusBadRequest {
@@ -452,13 +452,13 @@ func TestDeleteGroup_Success(t *testing.T) {
 	configDir := setupConfigDir(t, nil)
 	setupGroupsFile(t, configDir, testGroupsYAML)
 	initGitRepo(t, configDir)
-	mgr := groups.NewManager(configDir)
+	mgr := groups.NewDirManager(configDir)
 	writer := newTestWriter(configDir)
 
 	req := newRequestWithChiParam("DELETE", "/api/v1/groups/staging-all", "id", "staging-all", nil)
 	setRequestIdentity(req, "test@example.com")
 
-	h := DeleteGroup(&Deps{Groups: mgr, Writer: writer, RBAC: permissiveRBACManager(t)})
+	h := DeleteGroup(&Deps{State: mustDirState(configDir), Groups: mgr, Writer: writer, RBAC: permissiveRBACManager(t)})
 	w := executeWithRBAC(t, h, req)
 
 	if w.Code != http.StatusOK {
@@ -480,14 +480,14 @@ func TestDeleteGroup_Success(t *testing.T) {
 func TestDeleteGroup_NotFound(t *testing.T) {
 	t.Parallel()
 	configDir := setupConfigDir(t, nil)
-	mgr := groups.NewManager(configDir)
+	mgr := groups.NewDirManager(configDir)
 	writer := newTestWriter(configDir)
 
 	req := newRequestWithChiParam("DELETE", "/api/v1/groups/nonexistent", "id", "nonexistent", nil)
 	req.Header.Set("X-Forwarded-Email", "test@example.com")
 
 	w := httptest.NewRecorder()
-	h := DeleteGroup(&Deps{Groups: mgr, Writer: writer, RBAC: newRBACManager(t, "")})
+	h := DeleteGroup(&Deps{State: mustDirState(configDir), Groups: mgr, Writer: writer, RBAC: newRBACManager(t, "")})
 	h(w, req)
 
 	if w.Code != http.StatusNotFound {
@@ -505,7 +505,7 @@ func TestGroupBatch_Success(t *testing.T) {
 	})
 	setupGroupsFile(t, configDir, testGroupsYAML)
 
-	groupMgr := groups.NewManager(configDir)
+	groupMgr := groups.NewDirManager(configDir)
 	writer := newTestWriter(configDir)
 	rbacMgr := newRBACManager(t, "")
 
@@ -516,7 +516,7 @@ func TestGroupBatch_Success(t *testing.T) {
 	req.Header.Set("X-Forwarded-Email", "test@example.com")
 
 	w := httptest.NewRecorder()
-	h := GroupBatch(&Deps{Groups: groupMgr, Writer: writer, ConfigDir: configDir, RBAC: rbacMgr})
+	h := GroupBatch(&Deps{State: mustDirState(configDir), Groups: groupMgr, Writer: writer, ConfigDir: configDir, RBAC: rbacMgr})
 	h(w, req)
 
 	if w.Code != http.StatusOK {
@@ -541,7 +541,7 @@ func TestGroupBatch_Success(t *testing.T) {
 func TestGroupBatch_GroupNotFound(t *testing.T) {
 	t.Parallel()
 	configDir := setupConfigDir(t, nil)
-	groupMgr := groups.NewManager(configDir)
+	groupMgr := groups.NewDirManager(configDir)
 	writer := newTestWriter(configDir)
 	rbacMgr := newRBACManager(t, "")
 
@@ -551,7 +551,7 @@ func TestGroupBatch_GroupNotFound(t *testing.T) {
 	req.Header.Set("Content-Type", "application/json")
 
 	w := httptest.NewRecorder()
-	h := GroupBatch(&Deps{Groups: groupMgr, Writer: writer, ConfigDir: configDir, RBAC: rbacMgr})
+	h := GroupBatch(&Deps{State: mustDirState(configDir), Groups: groupMgr, Writer: writer, ConfigDir: configDir, RBAC: rbacMgr})
 	h(w, req)
 
 	if w.Code != http.StatusNotFound {
@@ -563,7 +563,7 @@ func TestGroupBatch_EmptyPatch(t *testing.T) {
 	t.Parallel()
 	configDir := setupConfigDir(t, nil)
 	setupGroupsFile(t, configDir, testGroupsYAML)
-	groupMgr := groups.NewManager(configDir)
+	groupMgr := groups.NewDirManager(configDir)
 	writer := newTestWriter(configDir)
 	rbacMgr := newRBACManager(t, "")
 
@@ -573,7 +573,7 @@ func TestGroupBatch_EmptyPatch(t *testing.T) {
 	req.Header.Set("Content-Type", "application/json")
 
 	w := httptest.NewRecorder()
-	h := GroupBatch(&Deps{Groups: groupMgr, Writer: writer, ConfigDir: configDir, RBAC: rbacMgr})
+	h := GroupBatch(&Deps{State: mustDirState(configDir), Groups: groupMgr, Writer: writer, ConfigDir: configDir, RBAC: rbacMgr})
 	h(w, req)
 
 	if w.Code != http.StatusBadRequest {
@@ -604,7 +604,7 @@ func TestListTenants_WithMetadata(t *testing.T) {
 	})
 
 	rbacMgr := newRBACManager(t, "")
-	h := ListTenants(&Deps{ConfigDir: configDir, RBAC: rbacMgr})
+	h := ListTenants(&Deps{ConfigDir: configDir, State: mustDirState(configDir), RBAC: rbacMgr})
 	req := httptest.NewRequest("GET", "/api/v1/tenants", nil)
 	w := httptest.NewRecorder()
 	h(w, req)
