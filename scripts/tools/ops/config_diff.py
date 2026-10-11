@@ -817,8 +817,11 @@ def _render_routing(report, lines):
         lines.append("### Routes")
         lines.append("")
         # One entry per distinct change: a platform default reaches one
-        # route node per tenant, each with its own matcher path.
-        for c, group in _group(report["routes"], lambda c: (c.kind, c.changes)):
+        # route node per tenant, each with its own matcher path. Paths that
+        # differ only in the tenant they name are the same change; any other
+        # matcher (an alertname, a component) is what the route catches, so
+        # routes that differ there are listed apart.
+        for c, group in _group(report["routes"], lambda c: (c.kind, c.changes, _path_shape(c.path))):
             if len(group) == 1:
                 lines.append(f"- {_tenant_label(c.tenant)} — route {_code_span(_path_text(c.path))} ({c.kind})")
             else:
@@ -940,7 +943,7 @@ def _render_thresholds(metric, lines):
         lines.append(
             f"| {_cell(c['key'])} | {_cell(_format_value(c['old']))} "
             f"| {_cell(_format_value(c['new']))} | {c['change']} "
-            f"| {estimate_affected_alerts(c['key'])} | {_cell(_who(tenants))} |")
+            f"| {estimate_affected_alerts(c['key'])} | {_who_cell(tenants)} |")
     lines.append("")
 
 
@@ -964,6 +967,12 @@ def _group_per_tenant(per_tenant):
     return [(c, [t for t, _ in group]) for (_, c), group in _group(pairs, lambda tc: tc[1])]
 
 
+def _path_shape(path):
+    """A route's matcher path with the tenant it names left out."""
+    return [", ".join("tenant=*" if rd._tenant_of_matcher(m.split(" #")[0]) is not None else m
+                      for m in step.split(", ")) for step in path]
+
+
 def _names(names):
     """Code spans of the first TENANT_NAME_LIMIT names, and how many more."""
     names = list(names)
@@ -980,8 +989,16 @@ def _who(tenants):
         return _tenant_label(ts[0])
     platform = ts[0] == rd.PLATFORM
     names = [t for t in ts if t != rd.PLATFORM]
-    text = f"{len(names)} tenants: {_names(names)}"
+    text = f"{len(names)} tenant{'' if len(names) == 1 else 's'}: {_names(names)}"
     return f"platform and {text}" if platform else text
+
+
+def _who_cell(tenants):
+    """`_who` in a table cell: its names are code spans already, where a
+    backslash is literal, so only `|` and line breaks are escaped (`_cell`
+    would double every backslash)."""
+    return (_who(tenants).replace("|", "\\|")
+            .replace("\r\n", " ").replace("\n", " ").replace("\r", " "))
 
 
 def _cell(value):

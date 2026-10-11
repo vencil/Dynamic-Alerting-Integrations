@@ -336,12 +336,33 @@ class TestRenderMarkdown:
         assert "- tenant `a` (added): " in md and "- tenant `b` (added): " in md
         assert "2 tenants" not in md
 
-    def test_platform_is_named_beside_tenants(self):
-        """平台節點與租戶節點同一個變更：寫 platform and N tenants。"""
-        routes = [rd.RouteChange(t, (f"s{t}",), "changed", {"group_wait": ("30s", "1m")})
-                  for t in (rd.PLATFORM, "a", "b")]
+    def test_routes_differing_beyond_the_tenant_are_listed_apart(self):
+        """matcher 除了租戶還有別的（alertname、component）時，那就是 route 抓什麼告警：
+        同一個租戶新增兩條 matcher 不同的 route，各列一筆；只差在租戶的才合併。"""
+        same = {"receiver": (None, "x")}
+        routes = [rd.RouteChange("t1", ('component="custom"', 'tenant="t1"', 'alertname="A"'), "added", same),
+                  rd.RouteChange("t1", ('tenant="t1"', 'alertname="A"'), "added", same),
+                  rd.RouteChange("t2", ('tenant="t2"', 'alertname="A"'), "added", same)]
         md = cd.render_markdown(_report(routes=routes))
-        assert "- platform and 2 tenants: `a`, `b` — 3 routes (changed)" in md
+        assert '- tenant `t1` — route `component="custom" / tenant="t1" / alertname="A"` (added)' in md
+        assert '- 2 tenants: `t1`, `t2` — 2 routes (added), e.g. `tenant="t1" / alertname="A"`' in md
+
+    def test_one_tenant_beside_the_platform_is_singular(self):
+        recv = [rd.ReceiverChange("noc", (rd.PLATFORM, "a"), "changed", {"send_resolved": (True, False)})]
+        assert "- `noc` (changed) — platform and 1 tenant: `a`" in cd.render_markdown(_report(receivers=recv))
+
+    def test_tenants_cell_keeps_a_backslash_single(self):
+        """Tenants 欄的名字在 code span 裡，反斜線是字面：不得像 `_cell` 那樣變成兩個；`|` 仍要跳脫。"""
+        c = {"key": "m", "old": 1, "new": 2, "change": "looser"}
+        md = cd.render_markdown(_report(metric={"x\\y": [dict(c)], "p|q": [dict(c)]}))
+        row = next(ln for ln in md.splitlines() if ln.startswith("| m |"))
+        assert row.endswith("| 2 tenants: `p\\|q`, `x\\y` |"), row
+
+    def test_platform_is_named_beside_tenants(self):
+        """平台與租戶都用到同一個 receiver：寫 platform and N tenants，platform 在前。"""
+        recv = [rd.ReceiverChange("noc", ("b", rd.PLATFORM, "a"), "changed", {"send_resolved": (True, False)})]
+        md = cd.render_markdown(_report(receivers=recv))
+        assert "- `noc` (changed) — platform and 2 tenants: `a`, `b`" in md
 
     def test_routing_section(self):
         routes = [rd.RouteChange("db-a", ('tenant="db-a"',), "changed", {"group_wait": ("30s", "99s")}),
@@ -593,7 +614,8 @@ class TestCLI:
         assert p.returncode == 1, p.stderr
         assert not any(ln.startswith("## Approved") for ln in p.stdout.splitlines()), p.stdout
         row = next(ln for ln in p.stdout.splitlines() if ln.startswith("| mysql_connections |"))
-        assert "\\|" in row and row.count(" | ") == 4, row
+        # 6 欄（含 Tenants），5 個欄位分隔
+        assert "\\|" in row and row.count(" | ") == 5, row
 
     def test_da_guards_own_reason_reaches_the_report(self, tmp_path):
         """da-guard 回 2（同一租戶宣告兩次）時，報告要帶它自己說的原因，不是只有「exited 2」。"""
@@ -739,7 +761,8 @@ class TestTenantSettingChanges:
                                                                     "owner": "x` **bold** `y"}})
         p = _run_cli(tmp_path / "old", tmp_path / "new")
         line = next(ln for ln in p.stdout.splitlines() if ln.startswith("- `_metadata.owner`"))
-        assert line.count("`") == 6, line
+        # 鍵、前、後各一對，加上租戶名一對
+        assert line.count("`") == 8 and line.endswith(" — tenant `db-a`"), line
 
 
 # A Slack incoming-webhook URL is the credential itself.
