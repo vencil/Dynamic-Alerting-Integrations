@@ -2,8 +2,8 @@ package config
 
 import (
 	"fmt"
-	"regexp"
 	"sort"
+	"strings"
 	"unicode/utf8"
 
 	"gopkg.in/yaml.v3"
@@ -207,11 +207,6 @@ func ParseTenantFile(data []byte) (ThresholdConfig, error) {
 	return cfg, nil
 }
 
-// defaultKeyRE matches a `default` mapping key in any YAML spelling a file can
-// write it in (plain, quoted, flow): the cheap test for whether a decode can
-// have taken ScheduledValue's structured branch at all.
-var defaultKeyRE = regexp.MustCompile(`\bdefault['"]?\s*:`)
-
 // keepReservedMappings undoes ScheduledValue's structured decode for reserved
 // keys (#2859). ScheduledValue.UnmarshalYAML cannot see the key its value sits
 // under, so a mapping with a `default` key is decoded as a scheduled
@@ -228,9 +223,10 @@ var defaultKeyRE = regexp.MustCompile(`\bdefault['"]?\s*:`)
 // schema admits a string or a mapping keep their decode.
 //
 // The bytes are re-read generically, as dropNullThresholds does, and only
-// when they can contain a `default` key at all.
+// when the typed decode shows a candidate (mayHaveStructuredReserved): a
+// second decode of every file doubled the cost of a cold scan.
 func keepReservedMappings(cfg *ThresholdConfig, data []byte) {
-	if !defaultKeyRE.Match(data) {
+	if !mayHaveStructuredReserved(cfg.Tenants) && !mayHaveStructuredReserved(cfg.Profiles) {
 		return
 	}
 	var raw struct {
@@ -284,4 +280,25 @@ var mappingReservedKeys = map[string]bool{
 	"_routing":          true,
 	"_routing_enforced": true,
 	"_routing_defaults": true,
+}
+
+// mayHaveStructuredReserved reports whether a body holds a mappingReservedKeys
+// value that the structured branch may have decoded. A mapping kept whole is
+// re-serialized YAML, so its text has a `:`; the structured branch leaves the
+// `default` scalar's text, and may leave overrides or an expiry. A `default`
+// whose own text has a `:` beside no overrides is missed — accepted, against
+// a second decode of every file.
+func mayHaveStructuredReserved(bodies map[string]map[string]ScheduledValue) bool {
+	for _, body := range bodies {
+		for k := range mappingReservedKeys {
+			sv, ok := body[k]
+			if !ok {
+				continue
+			}
+			if sv.Overrides != nil || sv.Expiry != nil || !strings.Contains(sv.Default, ":") {
+				return true
+			}
+		}
+	}
+	return false
 }
