@@ -4024,6 +4024,23 @@ class TestDaToolsImagePinnedToThisRelease:
         here = os.path.join(REPO_ROOT, 'scripts', 'tools', 'ops')
         assert read_shipped_da_tools_version(here) == self._version()
 
+    def test_an_unreadable_version_is_a_problem_not_a_missing_file(self, tmp_path):
+        """VERSION 存在但讀不了（是目錄、不是 UTF-8）要記進 problems，不能當成沒有這個檔。"""
+        from _lib_compat import read_shipped_da_tools_version
+        as_dir = tmp_path / 'as-dir'
+        (as_dir / 'VERSION').mkdir(parents=True)
+        problems = []
+        assert read_shipped_da_tools_version(as_dir, problems=problems) is None
+        assert problems == [(str(as_dir / 'VERSION'), '<unreadable>')], problems
+        not_utf8 = tmp_path / 'not-utf8'
+        not_utf8.mkdir()
+        (not_utf8 / 'VERSION').write_bytes(b'\xff\xfe2.9.0\n')
+        problems = []
+        assert read_shipped_da_tools_version(not_utf8, problems=problems) is None
+        assert problems == [(str(not_utf8 / 'VERSION'), '<unreadable>')], problems
+        # Without a problems list the reader still answers None, never raises.
+        assert read_shipped_da_tools_version(as_dir) is None
+
     def test_the_version_grammar_is_bump_docs_own(self):
         """g：VERSION 的合法形狀與 bump_docs 的 `_SEMVER` 是同一個物件，不是第二份。"""
         import _lib_compat
