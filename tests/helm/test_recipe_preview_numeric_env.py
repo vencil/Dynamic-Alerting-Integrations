@@ -8,7 +8,8 @@ every numeric env key the chart writes:
 
   * a value >= 1e6 from a values FILE (the float64 path) and from `--set`
     (the int64 path) renders as a decimal integer string;
-  * a fractional number fails the render, naming the key;
+  * a fractional number, or one outside the int64 range, fails the render,
+    naming the key;
   * a string is passed through unchanged;
   * the default render keeps its values.
 
@@ -86,6 +87,16 @@ def test_large_value_renders_as_decimal_integer(tmp_path: Path, path: str, env: 
 def test_fractional_value_fails_the_render(tmp_path: Path, path: str):
     res = _render("-f", str(_values_file(tmp_path, path, 1.5)))
     assert res.returncode != 0
+    assert path in res.stderr
+
+
+@_needs_helm
+@pytest.mark.parametrize("path", sorted(_NUMERIC_ENV))
+def test_out_of_range_value_fails_the_render(tmp_path: Path, path: str):
+    # int64 wraps 1e19 to -9223372036854775808: a value that starts the
+    # container but rejects every request (PREVIEW_MAX_BODY_BYTES).
+    res = _render("-f", str(_values_file(tmp_path, path, 1e19)))
+    assert res.returncode != 0, _env(res.stdout)
     assert path in res.stderr
 
 
