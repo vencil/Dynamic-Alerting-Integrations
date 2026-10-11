@@ -262,8 +262,8 @@ class TestRenderMarkdown:
     def test_threshold_table_and_summary(self):
         md = cd.render_markdown(_report(metric={
             "db-a": [{"key": "mysql_connections", "old": 80, "new": 50, "change": "tighter"}]}))
-        assert "## db-a — 1 change(s) (1 tighter)" in md
-        assert "| mysql_connections | 80 | 50 | tighter |" in md
+        assert "## Threshold Changes" in md
+        assert "| mysql_connections | 80 | 50 | tighter |" in md and md.count("| tenant `db-a` |") == 1
         assert md.splitlines()[-1].startswith("Summary: 1 tenant(s) changed, 1 metric change(s)")
 
     def test_summary_counts_each_tenant_once_across_sections(self):
@@ -277,6 +277,71 @@ class TestRenderMarkdown:
         summary = md.splitlines()[-1]
         assert summary.startswith("Summary: 2 tenant(s) changed"), summary
         assert "2 routing change(s) (some platform-wide)" in summary
+
+    # ── P4：同一個變更只列一次，帶它影響的租戶數與前幾個名字（ADR-037） ──
+
+    def test_a_platform_change_is_one_entry_in_every_section(self):
+        """1000 個租戶吃到同一個平台變更：每一段只列一筆，寫租戶數與前 5 個名字。"""
+        tenants = [f"t{i:04d}" for i in range(1000)]
+        same = lambda c: {t: [dict(c)] for t in tenants}  # noqa: E731
+        ca = {"name": "x", "change": "modified", "old": {}, "new": {},
+              "field_changes": [{"field": "threshold", "old": "1:warning", "new": "2:warning"}]}
+        md = cd.render_markdown(_report(
+            metric=same({"key": "container_cpu", "old": 80, "new": 90, "change": "looser"}),
+            setting=same({"key": "_silent_mode", "old": None, "new": "warning", "change": "added"}),
+            custom_alert=same(ca),
+            dropped=same({"key": "_x", "old": None, "new": "bad", "change": "added"}),
+            other_served=same({"field": "time_boxes", "key": "k", "old": 1, "new": 2}),
+            routes=[rd.RouteChange(t, (f'tenant="{t}"',), "changed", {"group_wait": ("30s", "1m")})
+                    for t in tenants],
+            receivers=[rd.ReceiverChange(f"tenant-{t}", (t,), "changed", {"send_resolved": (True, False)})
+                       for t in tenants],
+            inhibits=[rd.InhibitChange(t, "added", {"equal": ["alertname"]}) for t in tenants]))
+        who = "1000 tenants: `t0000`, `t0001`, `t0002`, `t0003`, `t0004` (+995 more)"
+        assert md.count(who) == 8, md
+        assert "`t0005`" not in md
+        assert "| container_cpu | 80 | 90 | looser |" in md and md.count("| container_cpu |") == 1
+        assert f"- `_silent_mode` (added) — `warning` — {who}" in md
+        assert f"- `x` (modified) — {who}" in md
+        assert f"- {who} — 1000 routes (changed), e.g. `tenant=\"t0000\"`" in md
+        assert f"- 1000 receivers (changed): `tenant-t0000`, " in md
+        assert f"- {who} — 1000 rules (added): " in md
+        assert len(md) < cd.COMMENT_SAFETY_LIMIT and "truncated" not in md
+        # 摘要照舊以租戶計
+        assert md.splitlines()[-1].startswith("Summary: 1000 tenant(s) changed, 1000 metric change(s)")
+
+    def test_different_changes_stay_apart(self):
+        """對照組：值不同就是不同的變更，各列一筆，各自的租戶。"""
+        md = cd.render_markdown(_report(metric={
+            "a": [{"key": "m", "old": 1, "new": 2, "change": "looser"}],
+            "b": [{"key": "m", "old": 1, "new": 2, "change": "looser"}],
+            "c": [{"key": "m", "old": 1, "new": 3, "change": "looser"}]}))
+        rows = [ln for ln in md.splitlines() if ln.startswith("| m |")]
+        assert len(rows) == 2, rows
+        assert rows[0].startswith("| m | 1 | 2 | looser |") and rows[0].endswith("| 2 tenants: `a`, `b` |")
+        assert rows[1].startswith("| m | 1 | 3 | looser |") and rows[1].endswith("| tenant `c` |")
+
+    def test_different_routing_changes_stay_apart(self):
+        """對照組（路由三段）：值不同的 route／receiver／inhibit 變更各列一筆，不因 kind 相同就合併。"""
+        routes = [rd.RouteChange("a", ('tenant="a"',), "changed", {"group_wait": ("30s", "1m")}),
+                  rd.RouteChange("b", ('tenant="b"',), "changed", {"group_wait": ("30s", "2m")})]
+        recv = [rd.ReceiverChange("ra", ("a",), "changed", {"send_resolved": (True, False)}),
+                rd.ReceiverChange("rb", ("b",), "changed", {"send_resolved": (False, True)})]
+        inhibit = [rd.InhibitChange("a", "added", {"equal": ["x"]}),
+                   rd.InhibitChange("b", "added", {"equal": ["y"]})]
+        md = cd.render_markdown(_report(routes=routes, receivers=recv, inhibits=inhibit))
+        assert "- tenant `a` — route `tenant=\"a\"` (changed)\n  - `group_wait`: `30s` → `1m`" in md
+        assert "- tenant `b` — route `tenant=\"b\"` (changed)\n  - `group_wait`: `30s` → `2m`" in md
+        assert "- `ra` (changed) — tenant `a`" in md and "- `rb` (changed) — tenant `b`" in md
+        assert "- tenant `a` (added): " in md and "- tenant `b` (added): " in md
+        assert "2 tenants" not in md
+
+    def test_platform_is_named_beside_tenants(self):
+        """平台節點與租戶節點同一個變更：寫 platform and N tenants。"""
+        routes = [rd.RouteChange(t, (f"s{t}",), "changed", {"group_wait": ("30s", "1m")})
+                  for t in (rd.PLATFORM, "a", "b")]
+        md = cd.render_markdown(_report(routes=routes))
+        assert "- platform and 2 tenants: `a`, `b` — 3 routes (changed)" in md
 
     def test_routing_section(self):
         routes = [rd.RouteChange("db-a", ('tenant="db-a"',), "changed", {"group_wait": ("30s", "99s")}),
@@ -833,3 +898,24 @@ class TestChangedPlatformFiles:
         assert exc.value.code == cd.EXIT_CALLER_ERROR
         err = capsys.readouterr().err
         assert "ERROR:" in err and "_defaults.yaml" in err, err
+
+
+def test_a_platform_default_reaches_many_tenants_as_one_entry(tmp_path):
+    """端到端：平台預設（閾值與 `_routing_defaults.group_wait`）改到 20 個租戶，
+    真正的兩個渲染器報出的變更在 Markdown 各只列一筆，寫租戶數（P4）。"""
+    def tree(d, cpu, gw):
+        d.mkdir()
+        (d / "_defaults.yaml").write_text(
+            f"defaults:\n  container_cpu: {cpu}\n_routing_defaults:\n  receiver:\n"
+            f"    type: webhook\n    url: https://h/platform\n  group_wait: {gw}\n", encoding="utf-8")
+        for i in range(20):
+            (d / f"t{i:02d}.yaml").write_text(f"tenants:\n  t{i:02d}:\n    container_memory: 85\n",
+                                              encoding="utf-8")
+        return d
+    p = _run_cli(tree(tmp_path / "old", 80, "30s"), tree(tmp_path / "new", 90, "1m"))
+    assert p.returncode == 1, p.stderr
+    who = "20 tenants: `t00`, `t01`, `t02`, `t03`, `t04` (+15 more)"
+    assert f"| container_cpu | 80 | 90 | looser |" in p.stdout and p.stdout.count("| container_cpu |") == 1
+    assert f"| {who} |" in p.stdout
+    assert f"- {who} — 20 routes (changed), e.g. " in p.stdout
+    assert p.stdout.count("`group_wait`: `30s` → `1m`") == 1

@@ -64,6 +64,8 @@ COMMENT_SAFETY_LIMIT = 60_000
 # How many changed platform file names the Markdown report spells out; the
 # rest is a count. The JSON report lists them all.
 UNCOVERED_LIST_LIMIT = 50
+# How many tenant names a change lists before "(+N more)".
+TENANT_NAME_LIMIT = 5
 
 # What `--at` takes: RFC3339, as `da-guard served-values --at` parses it.
 _RFC3339 = re.compile(
@@ -568,14 +570,6 @@ def _cap_for_comment(result):
     return result
 
 
-def _summarize_changes(changes):
-    """Summarize change types for a tenant (e.g., '1 tighter, 2 added')."""
-    counts = {}
-    for c in changes:
-        counts[c["change"]] = counts.get(c["change"], 0) + 1
-    return ", ".join(f"{v} {k}" for k, v in sorted(counts.items()))
-
-
 # ── The report: two renders compared, in sections ─────────────────────────
 
 # The served-values fields the sections below read (`tenant` is the added /
@@ -822,25 +816,39 @@ def _render_routing(report, lines):
     if report["routes"]:
         lines.append("### Routes")
         lines.append("")
-        for c in report["routes"]:
-            lines.append(f"- {_tenant_label(c.tenant)} — route {_code_span(_path_text(c.path))} ({c.kind})")
+        # One entry per distinct change: a platform default reaches one
+        # route node per tenant, each with its own matcher path.
+        for c, group in _group(report["routes"], lambda c: (c.kind, c.changes)):
+            if len(group) == 1:
+                lines.append(f"- {_tenant_label(c.tenant)} — route {_code_span(_path_text(c.path))} ({c.kind})")
+            else:
+                lines.append(f"- {_who(g.tenant for g in group)} — {len(group)} routes ({c.kind}), "
+                             f"e.g. {_code_span(_path_text(c.path))}")
             for attr, (b, p) in c.changes.items():
                 lines.append(f"  - {_code_span(attr)}: {_code_span(b)} → {_code_span(p)}")
         lines.append("")
     if report["receivers"]:
         lines.append("### Receivers")
         lines.append("")
-        for c in report["receivers"]:
-            who = ", ".join(_tenant_label(t) for t in c.tenants)
-            lines.append(f"- {_code_span(c.name)} ({c.kind}) — {who}")
+        for c, group in _group(report["receivers"], lambda c: (c.kind, c.changes)):
+            who = _who(t for g in group for t in g.tenants)
+            if len(group) == 1:
+                lines.append(f"- {_code_span(c.name)} ({c.kind}) — {who}")
+            else:
+                lines.append(f"- {len(group)} receivers ({c.kind}): "
+                             f"{_names([g.name for g in group])} — {who}")
             for field, (b, p) in c.changes.items():
                 lines.append(f"  - {_code_span(field)}: {_code_span(b)} → {_code_span(p)}")
         lines.append("")
     if report["inhibits"]:
         lines.append("### Inhibit Rules")
         lines.append("")
-        for c in report["inhibits"]:
-            lines.append(f"- {_tenant_label(c.tenant)} ({c.kind}): {_code_span(c.rule)}")
+        for c, group in _group(report["inhibits"], lambda c: (c.kind, c.rule)):
+            if len(group) == 1:
+                lines.append(f"- {_tenant_label(c.tenant)} ({c.kind}): {_code_span(c.rule)}")
+            else:
+                lines.append(f"- {_who(g.tenant for g in group)} — {len(group)} rules "
+                             f"({c.kind}): {_code_span(c.rule)}")
         lines.append("")
 
 
@@ -862,33 +870,30 @@ def _render_custom_alerts(custom_alert_diffs, lines):
         "disabled or rejected; which of them is not told apart here."
     )
     lines.append("")
-    for tenant, changes in custom_alert_diffs.items():
-        summary = _summarize_changes(changes)
-        lines.append(f"### {tenant} — {len(changes)} custom alert change(s) ({summary})")
-        lines.append("")
-        for c in changes:
-            name_cs = _code_span(c["name"])
-            if c["change"] == "modified":
-                lines.append(f"- {name_cs} (modified)")
-                for fc in c["field_changes"]:
-                    annotation = _field_change_annotation(fc["field"], fc["old"], fc["new"])
-                    lines.append(
-                        f"  - {_code_span(fc['field'])}: "
-                        f"{_code_span(fc['old'])} → {_code_span(fc['new'])}{annotation}")
-            elif c["change"] == "added":
-                r = c["new"] or {}
+    for c, tenants in _group_per_tenant(custom_alert_diffs):
+        who = _who(tenants)
+        name_cs = _code_span(c["name"])
+        if c["change"] == "modified":
+            lines.append(f"- {name_cs} (modified) — {who}")
+            for fc in c["field_changes"]:
+                annotation = _field_change_annotation(fc["field"], fc["old"], fc["new"])
                 lines.append(
-                    f"- {name_cs} (added) — metric={_code_span(r.get('metric', '?'))} "
-                    f"threshold={_code_span(r.get('threshold', '?'))} "
-                    f"mode={_code_span(r.get('mode', '?'))}")
-            else:
-                r = c["old"] or {}
-                lines.append(
-                    f"- {name_cs} (removed) — was metric={_code_span(r.get('metric', '?'))} "
-                    f"threshold={_code_span(r.get('threshold', '?'))}")
-                if c.get("note"):
-                    lines.append(f"  - {c['note']}")
-        lines.append("")
+                    f"  - {_code_span(fc['field'])}: "
+                    f"{_code_span(fc['old'])} → {_code_span(fc['new'])}{annotation}")
+        elif c["change"] == "added":
+            r = c["new"] or {}
+            lines.append(
+                f"- {name_cs} (added) — {who} — metric={_code_span(r.get('metric', '?'))} "
+                f"threshold={_code_span(r.get('threshold', '?'))} "
+                f"mode={_code_span(r.get('mode', '?'))}")
+        else:
+            r = c["old"] or {}
+            lines.append(
+                f"- {name_cs} (removed) — {who} — was metric={_code_span(r.get('metric', '?'))} "
+                f"threshold={_code_span(r.get('threshold', '?'))}")
+            if c.get("note"):
+                lines.append(f"  - {c['note']}")
+    lines.append("")
 
 
 def _render_settings(setting_diffs, lines):
@@ -902,19 +907,16 @@ def _render_settings(setting_diffs, lines):
         "routing, metadata) without touching a threshold."
     )
     lines.append("")
-    for tenant, changes in setting_diffs.items():
-        summary = _summarize_changes(changes)
-        lines.append(f"### {tenant} — {len(changes)} setting change(s) ({summary})")
-        lines.append("")
-        for c in changes:
-            key_cs = _code_span(c["key"])
-            if c["change"] == "modified":
-                lines.append(f"- {key_cs}: {_code_span(c['old'])} → {_code_span(c['new'])}")
-            elif c["change"] == "added":
-                lines.append(f"- {key_cs} (added) — {_code_span(c['new'])}")
-            else:
-                lines.append(f"- {key_cs} (removed) — was {_code_span(c['old'])}")
-        lines.append("")
+    for c, tenants in _group_per_tenant(setting_diffs):
+        who = _who(tenants)
+        key_cs = _code_span(c["key"])
+        if c["change"] == "modified":
+            lines.append(f"- {key_cs}: {_code_span(c['old'])} → {_code_span(c['new'])} — {who}")
+        elif c["change"] == "added":
+            lines.append(f"- {key_cs} (added) — {_code_span(c['new'])} — {who}")
+        else:
+            lines.append(f"- {key_cs} (removed) — was {_code_span(c['old'])} — {who}")
+    lines.append("")
 
 
 def _render_keyed(title, note, per_tenant, lines):
@@ -922,13 +924,64 @@ def _render_keyed(title, note, per_tenant, lines):
     lines.append("")
     lines.append(f"> {note}")
     lines.append("")
-    for tenant, changes in per_tenant.items():
-        lines.append(f"### {tenant}")
-        lines.append("")
-        for c in changes:
-            field = f"{_code_span(c['field'])} " if "field" in c else ""
-            lines.append(f"- {field}{_code_span(c['key'])}: {_code_span(c['old'])} → {_code_span(c['new'])}")
-        lines.append("")
+    for c, tenants in _group_per_tenant(per_tenant):
+        field = f"{_code_span(c['field'])} " if "field" in c else ""
+        lines.append(f"- {field}{_code_span(c['key'])}: {_code_span(c['old'])} → "
+                     f"{_code_span(c['new'])} — {_who(tenants)}")
+    lines.append("")
+
+
+def _render_thresholds(metric, lines):
+    lines.append("## Threshold Changes")
+    lines.append("")
+    lines.append("| Metric | Before | After | Change | Affected Alerts | Tenants |")
+    lines.append("|--------|--------|-------|--------|-----------------|---------|")
+    for c, tenants in _group_per_tenant(metric):
+        lines.append(
+            f"| {_cell(c['key'])} | {_cell(_format_value(c['old']))} "
+            f"| {_cell(_format_value(c['new']))} | {c['change']} "
+            f"| {estimate_affected_alerts(c['key'])} | {_cell(_who(tenants))} |")
+    lines.append("")
+
+
+# ── grouping: one entry per distinct change, with the tenants it reaches ──
+
+
+def _group(items, key):
+    """[(first item, [items with the same key]), ...] in first-seen order."""
+    groups = {}
+    for it in items:
+        k = json.dumps(key(it), sort_keys=True, default=str)
+        groups.setdefault(k, (it, []))[1].append(it)
+    return list(groups.values())
+
+
+def _group_per_tenant(per_tenant):
+    """{tenant: [change, ...]} -> [(change, [tenant, ...]), ...]: a platform
+    change that reaches 1000 tenants is one entry, not 1000 (as `_grouped`
+    for the JSON report)."""
+    pairs = [(t, c) for t in sorted(per_tenant, key=str) for c in per_tenant[t]]
+    return [(c, [t for t, _ in group]) for (_, c), group in _group(pairs, lambda tc: tc[1])]
+
+
+def _names(names):
+    """Code spans of the first TENANT_NAME_LIMIT names, and how many more."""
+    names = list(names)
+    shown = ", ".join(_code_span(n) for n in names[:TENANT_NAME_LIMIT])
+    rest = len(names) - TENANT_NAME_LIMIT
+    return shown + (f" (+{rest} more)" if rest > 0 else "")
+
+
+def _who(tenants):
+    """The tenants a change reaches: one as `_tenant_label` prints it, more
+    as a count and the first few names (platform first)."""
+    ts = sorted(set(tenants), key=lambda t: (t != rd.PLATFORM, str(t)))
+    if len(ts) == 1:
+        return _tenant_label(ts[0])
+    platform = ts[0] == rd.PLATFORM
+    names = [t for t in ts if t != rd.PLATFORM]
+    text = f"{len(names)} tenants: {_names(names)}"
+    return f"platform and {text}" if platform else text
 
 
 def _cell(value):
@@ -986,19 +1039,9 @@ def render_markdown(report):
             lines.append("No changes detected.")
         return _cap_for_comment("\n".join(lines))
 
-    total_changes = 0
-    for tenant, changes in report["metric"].items():
-        lines.append(f"## {tenant} — {len(changes)} change(s) ({_summarize_changes(changes)})")
-        lines.append("")
-        lines.append("| Metric | Before | After | Change | Affected Alerts |")
-        lines.append("|--------|--------|-------|--------|-----------------|")
-        for c in changes:
-            lines.append(
-                f"| {_cell(c['key'])} | {_cell(_format_value(c['old']))} "
-                f"| {_cell(_format_value(c['new']))} | {c['change']} "
-                f"| {estimate_affected_alerts(c['key'])} |")
-        lines.append("")
-        total_changes += len(changes)
+    if report["metric"]:
+        _render_thresholds(report["metric"], lines)
+    total_changes = sum(len(v) for v in report["metric"].values())
 
     lines.append("---")
     summary = (f"Summary: {len(_changed_tenants(report))} tenant(s) changed, "
