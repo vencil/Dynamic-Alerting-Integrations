@@ -18,7 +18,11 @@ for f in "$SRC"/*.yaml; do
   if [ -e "$t" ]; then
     echo "[seed-state] ${f##*/} already in the state store (kept)"
   else
-    cp "$f" "$t"
+    # Copy then rename: a copy cut short (container killed mid-write) must
+    # not leave a truncated record that every later boot keeps. The dir
+    # store skips ".tmp-" files.
+    cp "$f" "$DST/.tmp-${f##*/}"
+    mv "$DST/.tmp-${f##*/}" "$t"
     echo "[seed-state] seeded ${f##*/}"
   fi
 done

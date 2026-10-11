@@ -155,7 +155,7 @@ make clean-local && docker compose up -d
 
 - Windows 使用者**必須**用 **WSL2 + Docker Desktop（WSL2 backend）**。
 - **不要**從原生 Windows 路徑（`C:\...`）跑 —— bind mount 行為不保證。把 repo clone 到 **WSL2 檔案系統內**（如 `~/…`）再跑。
-- 本 stack 多用匿名 volume，tenant-api 的 state store 是 named volume `tenant-api-state`；bind mount 是 `seed/conf.d`（read-write，用來承接 portal Save 的 git commit）與唯讀的 `seed/`（給 tenant-api 啟動時複製示範 state）。
+- 本 stack 多用匿名 volume，tenant-api 的 state store 是 named volume `tenant-api-state`。tenant-api 的 bind mount 是 `seed/conf.d`（read-write，用來承接 portal Save 的 git commit）與唯讀的 `seed/`（給 tenant-api 啟動時複製示範 state）；其他服務另有各自的設定檔掛載，見 `docker-compose.yaml`。
 - seed 會在 `seed/conf.d` 內 `git init`（runtime 產生的 `.git/` 已被 `.gitignore` 忽略）。Save 會改到這些被追蹤的 YAML —— `make clean-local` 後用 `git checkout try-local/seed/conf.d` 可還原 demo 初始狀態。
 
 ## 排錯
