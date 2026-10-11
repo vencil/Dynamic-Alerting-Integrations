@@ -969,7 +969,9 @@ _READERS_2216 = {
 
 
 # #2115 0-B/B4: these take the tenants from da-guard served-values (Go's id).
-_READERS_VIA_DA_GUARD = frozenset({"generate_tenant_metadata"})
+# check_retire_drift (#2858) takes the db_type from it, looked up by the id
+# its own walk read.
+_READERS_VIA_DA_GUARD = frozenset({"generate_tenant_metadata", "check_retire_drift"})
 
 
 @pytest.mark.parametrize("variant", sorted(_ID_SPELLINGS))

@@ -23,12 +23,20 @@ advisory check to merely flip to enforcing.
 
 What "a tenant" means here
 --------------------------
-We enumerate ONLY tenants that declare `_metadata.db_type` in conf.d, because that
-is EXACTLY the set the collector emits tenant_expected_exporter for (collector.go
+We enumerate ONLY tenants whose served `_metadata.db_type` is non-empty, because
+that is EXACTLY the set the collector emits tenant_expected_exporter for (collector.go
 collectTenantExpectedExporter skips db_type==""). Same ruler as the metric → the
 gate cannot pass while the metric over-emits, or vice versa. (Tenants without a
 db_type are not monitored by TenantExporterAbsent, so a stale conf.d entry for them
 carries no false-positive risk and is not this gate's concern.)
+
+The db_type is the exporter's own reading, from `da-guard served-values`
+(`_lib_tenant_values.load_served_tree`; #2858): a db_type a tenant gets from
+a profile or a root platform file's `tenants:` entry, the per-key layering of
+`_metadata`, `optional_overrides` switching a profile's `_metadata` off and a
+non-string db_type are all the exporter's answer, not re-derived here. Which
+tenants are judged is still this lint's own walk (below): the examples/
+subtree is excluded even though the exporter would load it.
 
 "K8s target declaration" SoT
 ----------------------------
@@ -53,7 +61,11 @@ Directions
 Exit codes (per scripts/tools/_lib_exitcodes.py):
     0  No retire-ordering violations (warnings allowed)
     1  Violation(s) detected (--ci) — conf.d db_type without a K8s target
-    2  Caller error (missing path, YAML parse failure)
+    2  Caller error (missing path, YAML parse failure, da-guard missing or
+       failing, or a conf.d file the exporter drops)
+
+da-guard: `$DA_GUARD_BINARY`, else `da-guard` on `$PATH`. The pre-commit hook
+and CI run this through scripts/ops/with_da_guard.sh, which builds one.
 
 Usage:
     python scripts/tools/lint/check_retire_drift.py            # report
@@ -83,8 +95,14 @@ except Exception:  # pragma: no cover - compat shim optional
     def try_utf8_stdout() -> None:  # type: ignore
         pass
 from _lib_exitcodes import EXIT_OK, EXIT_VIOLATION, EXIT_CALLER_ERROR  # noqa: E402
+from _lib_io import exit_on_yaml_file_error  # noqa: E402
 from _lib_confd import has_yaml_extension, is_hidden_name  # noqa: E402
 from _lib_yaml_keys import load_all_exporter_keys, load_exporter_keys  # noqa: E402  (#2216 tenant id as text)
+from _lib_tenant_values import (  # noqa: E402
+    exit_on_served_values_error,
+    load_served_tree,
+    print_load_warnings,
+)
 
 
 def _repo_root() -> Path:
@@ -105,16 +123,22 @@ def _load_yaml(path: Path) -> dict:
     return data if isinstance(data, dict) else {}
 
 
-def conf_d_declared_db_type_tenants(config_dir: Path) -> Dict[str, str]:
-    """tenant → db_type for every conf.d tenant that DECLARES a non-empty db_type.
+def conf_d_declared_db_type_tenants(config_dir: Path,
+                                     binary: str | None = None) -> Dict[str, str]:
+    """tenant → db_type for every judged tenant whose served db_type is non-empty.
 
-    Mirrors the collector's emit set (ResolveMetadata + db_type!="" guard):
-    walk every YAML carrier under config_dir (`.yaml` / `.yml`, any case —
-    `_lib_confd.has_yaml_extension`, the exporter's own rule) except
-    `_`-prefixed files (defaults / profiles) and the examples/ subtree (dev
-    templates, never shipped); read the `tenants:` block; pick up
-    `_metadata.db_type` (the _metadata value is the same re-serialized mapping
-    ResolveMetadata parses). Only non-empty db_type counts.
+    WHICH TENANTS: this lint's own walk — every YAML carrier under config_dir
+    (`.yaml` / `.yml`, any case — `_lib_confd.has_yaml_extension`, the
+    exporter's own rule) except `_`-prefixed files (defaults / profiles /
+    platform files) and the examples/ subtree (dev templates, never shipped);
+    the keys of each file's `tenants:` block.
+
+    WHICH db_type: `_metadata.db_type` as /metrics serves it (`da-guard
+    served-values`, #2858) — the value collectTenantExpectedExporter reads,
+    with every layer the exporter applies (root platform files' `tenants:`
+    entries, the tenant file, the profile filling what neither writes unless
+    `optional_overrides` declares `_metadata`). A tenant the exporter serves
+    no metadata for counts as none. Raises what `load_served_tree` raises.
 
     #1603 (extension-SPELLING axis): this was `rglob("*.yaml")`. Measured on
     byte-identical bodies before the fix: `alpha.yaml` → {alpha: postgres};
@@ -130,7 +154,7 @@ def conf_d_declared_db_type_tenants(config_dir: Path) -> Dict[str, str]:
     BELOW `config_dir` are judged, so a conf.d root that is itself
     dot-named is still read (the exporter reads the dir it is handed).
     """
-    out: Dict[str, str] = {}
+    judged: Set[str] = set()
     for path in sorted(p for p in config_dir.rglob("*")
                        if has_yaml_extension(p.name)):
         rel_parts = path.relative_to(config_dir).parts
@@ -143,28 +167,21 @@ def conf_d_declared_db_type_tenants(config_dir: Path) -> Dict[str, str]:
         # Skip the examples/ dev-template subtree (not part of a real deployment).
         if "examples" in rel_parts:
             continue
-        data = _load_yaml(path)
-        tenants = data.get("tenants")
-        if not isinstance(tenants, dict):
-            continue
-        for tenant, cfg in tenants.items():
-            if not isinstance(cfg, dict):
-                continue
-            meta_raw = cfg.get("_metadata")
-            db_type = ""
-            if isinstance(meta_raw, str):
-                # _metadata stored as a re-serialized YAML string (matches
-                # resolve.go ResolveMetadata: yaml.Unmarshal of the scalar).
-                parsed = yaml.safe_load(meta_raw)
-                if isinstance(parsed, dict):
-                    dt = parsed.get("db_type")
-                    db_type = dt if isinstance(dt, str) else ""
-            elif isinstance(meta_raw, dict):
-                # Also accept _metadata authored as a native mapping.
-                dt = meta_raw.get("db_type")
-                db_type = dt if isinstance(dt, str) else ""
-            if db_type:
-                out[str(tenant)] = db_type
+        tenants = _load_yaml(path).get("tenants")
+        if isinstance(tenants, dict):
+            judged.update(str(t) for t in tenants)
+    if not judged:
+        return {}
+
+    tree = load_served_tree(config_dir, binary=binary)
+    print_load_warnings(tree)
+    out: Dict[str, str] = {}
+    for tenant in sorted(judged):
+        served = tree.tenants.get(tenant)
+        meta = served.values.get("_metadata") if served is not None else None
+        db_type = meta.get("db_type") if isinstance(meta, dict) else None
+        if isinstance(db_type, str) and db_type:
+            out[tenant] = db_type
     return out
 
 
@@ -200,9 +217,10 @@ def namespace_declared_targets(namespaces_file: Path) -> Set[str]:
     return targets
 
 
-def evaluate(config_dir: Path, helm_dir: Path, namespaces_file: Path) -> dict:
+def evaluate(config_dir: Path, helm_dir: Path, namespaces_file: Path,
+             binary: str | None = None) -> dict:
     """Return {violations: [...], warnings: [...], declared: {...}, targets: [...]}."""
-    declared = conf_d_declared_db_type_tenants(config_dir)
+    declared = conf_d_declared_db_type_tenants(config_dir, binary=binary)
     helm_targets = helm_declared_targets(helm_dir)
     ns_targets = namespace_declared_targets(namespaces_file)
     k8s_targets = helm_targets | ns_targets
@@ -236,6 +254,8 @@ def evaluate(config_dir: Path, helm_dir: Path, namespaces_file: Path) -> dict:
     }
 
 
+@exit_on_yaml_file_error  # #1654: a file that does not decode → rc 2, named
+@exit_on_served_values_error  # da-guard missing or failing → rc 2, named
 def main() -> int:
     """CLI entry point: RETIRE-ordering conf.d↔K8s drift gate (#869)."""
     try_utf8_stdout()

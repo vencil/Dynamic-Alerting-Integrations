@@ -183,8 +183,9 @@ def _generate_tenant_metadata(root):
     return sorted(gtm.build_tenant_metadata(root)["tenant_metadata"])
 
 
-# Cells whose reader takes the tenants from da-guard (#2115 0-B).
-_SERVED_VALUES_CELLS = frozenset({"generate_tenant_metadata"})
+# Cells whose reader takes the tenants (or, for check_retire_drift, #2858, the
+# db_type) from da-guard (#2115 0-B).
+_SERVED_VALUES_CELLS = frozenset({"generate_tenant_metadata", "check_retire_drift"})
 
 
 @pytest.fixture(autouse=True)
