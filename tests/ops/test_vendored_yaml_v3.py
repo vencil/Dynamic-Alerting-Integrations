@@ -1,4 +1,4 @@
-"""The vendored gopkg.in/yaml.v3 is upstream v3.0.1 plus THREE pinned patches.
+"""The vendored gopkg.in/yaml.v3 is upstream v3.0.1 plus FOUR pinned patches.
 
 Both Go modules replace ``gopkg.in/yaml.v3`` with
 ``components/threshold-exporter/app/third_party/yaml.v3``: upstream v3.0.1
@@ -15,7 +15,15 @@ with
   ``Decoder.SpacesOnly``, off by default, makes the scanner take only a space
   as a separator, as PyYAML's does — the domain-policy readers turn it on,
   nothing else does. ``yaml.go``, ``yamlh.go`` and ``scannerc.go``, several
-  hunks; with the switch off every branch is upstream's.
+  hunks; with the switch off every branch is upstream's;
+- upstream's own fix for a merge beside a non-scalar key (#2913,
+  ``go.yaml.in/yaml/v3`` v3.0.2+, unchanged through v3.0.5): the decoder's
+  merged-field set is read and written through
+  ``setPossiblyUnhashableKey`` / ``getPossiblyUnhashableKey``, which turn the
+  runtime panic of a slice or map key ("hash of unhashable type") into a
+  decode error. ``decode.go`` only, three hunks; their +/- lines are
+  byte-identical to upstream's, only the @@ line numbers moved. Nothing else
+  from v3.0.2+ comes along.
 
 How this is checked, without the network and without Go:
 
@@ -56,6 +64,7 @@ _VENDORED = _THIRD_PARTY / "yaml.v3"
 _PATCH = _THIRD_PARTY / "yaml.v3-uniquekeys.patch"
 _NONSPECIFIC_PATCH = _THIRD_PARTY / "yaml.v3-nonspecific-tag.patch"
 _SPACES_ONLY_PATCH = _THIRD_PARTY / "yaml.v3-spaces-only.patch"
+_UNHASHABLE_PATCH = _THIRD_PARTY / "yaml.v3-unhashable-merge-key.patch"
 
 _MODULE = "gopkg.in/yaml.v3"
 _VERSION = "v3.0.1"
@@ -69,12 +78,16 @@ _NONSPECIFIC_PATCH_SHA256 = "e28069e759fe29c3645e48b0aee3af4d49062b6dd4ada440cc0
 # Hub #2486 PR-7c round 6: Decoder.SpacesOnly (off by default), the scanner
 # taking only a space as a separator, as PyYAML's does.
 _SPACES_ONLY_PATCH_SHA256 = "30987acac7b60084bf76703c8620140ceb78d5b1ecb7a817633b0b05557ec8fb"
+# #2913: go.yaml.in/yaml/v3 v3.0.2's decode.go change (the only semantic change
+# to that file through v3.0.5); +/- lines byte-identical to upstream's.
+_UNHASHABLE_PATCH_SHA256 = "84f5baa69149d841265e93cebdd316edff527ab0c9e0cc16cbbb550b0cb7f56e"
 # Every allowed change, applied in this order on upstream v3.0.1: its pinned
 # sha256, and the hunks it may hold per file.
 _PATCHES = {
     _PATCH: (_PATCH_SHA256, {"decode.go": 1}),
     _NONSPECIFIC_PATCH: (_NONSPECIFIC_PATCH_SHA256, {"decode.go": 1}),
     _SPACES_ONLY_PATCH: (_SPACES_ONLY_PATCH_SHA256, {"yaml.go": 1, "yamlh.go": 1, "scannerc.go": 15}),
+    _UNHASHABLE_PATCH: (_UNHASHABLE_PATCH_SHA256, {"decode.go": 3}),
 }
 
 # The modules that build with it, and the replace each must carry.
@@ -183,7 +196,7 @@ def test_the_allowed_changes_are_the_pinned_hunks() -> None:
         assert digest == want, (
             f"{patch.name} changed (sha256 {digest}). It defines what may differ "
             "from upstream v3.0.1; widening it is a decision for the owner "
-            "(#2681, #2730, #2486), made by editing its pinned sha256 here in the same diff.")
+            "(#2681, #2730, #2486, #2913), made by editing its pinned sha256 here in the same diff.")
         counts: dict[str, int] = {}
         for name, _, _ in _hunks(patch):
             counts[name] = counts.get(name, 0) + 1
@@ -197,6 +210,16 @@ def test_the_allowed_changes_are_the_pinned_hunks() -> None:
     for name, old, new in _hunks(_SPACES_ONLY_PATCH):
         added = [line for line in new.splitlines() if line not in old.splitlines()]
         assert any("spaces_only" in line or "is_separator" in line for line in added), (name, added)
+    # Upstream's fix only routes the merged-field set through the two
+    # recovering helpers (and adds them): every changed line names one.
+    for name, old, new in _hunks(_UNHASHABLE_PATCH):
+        changed = ([line for line in new.splitlines() if line not in old.splitlines()]
+                   + [line for line in old.splitlines() if line not in new.splitlines()])
+        assert all("PossiblyUnhashableKey" in line or "mergedFields" in line
+                   or line.strip() in ("defer func() {", "if err := recover(); err != nil {",
+                                       'failf("%v", err)', "}", "}()", "m[key] = value",
+                                       "return m[key]", "")
+                   for line in changed), (name, changed)
 
 
 def test_vendored_tree_is_v3_0_1_plus_only_the_hunk() -> None:
@@ -429,6 +452,15 @@ def test_a_byte_inside_the_nonspecific_hunk_is_caught(scratch: Path) -> None:
     f.write_bytes(f.read_bytes().replace(
         b'if nodeTag == "!" && nodeStyle != 0 {', b'if nodeTag == "!" {'))
     with pytest.raises(AssertionError, match="nonspecific-tag.patch 0 time"):
+        _reverted_h1(_tree(scratch))
+
+
+def test_a_byte_inside_the_unhashable_hunk_is_caught(scratch: Path) -> None:
+    f = scratch / "decode.go"
+    f.write_bytes(f.read_bytes().replace(
+        b"d.setPossiblyUnhashableKey(d.mergedFields, k.Interface(), true)",
+        b"d.mergedFields[k.Interface()] = true"))
+    with pytest.raises(AssertionError, match="unhashable-merge-key.patch 0 time"):
         _reverted_h1(_tree(scratch))
 
 

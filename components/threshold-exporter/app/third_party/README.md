@@ -1,11 +1,11 @@
 # third_party：vendored 第三方原碼
 
-## `yaml.v3/` — `gopkg.in/yaml.v3` v3.0.1 + 線性判重 patch + 非特定 tag patch + 只認空格 patch
+## `yaml.v3/` — `gopkg.in/yaml.v3` v3.0.1 + 線性判重 patch + 非特定 tag patch + 只認空格 patch + 不可雜湊 key 的 merge patch
 
 | 項目 | 內容 |
 |---|---|
 | 上游 | `gopkg.in/yaml.v3` **v3.0.1**（`go.sum`：`h1:fxVm/GzAzEWqLHuvctI91KS9hhNmmWOoWu0XTYJS7CA=`） |
-| 套用的 patch（依序） | ① [`yaml.v3-uniquekeys.patch`](yaml.v3-uniquekeys.patch)：grafana/go-yaml PR #1（v3 分支 commit [`a1d5f0f`](https://github.com/grafana/go-yaml/commit/a1d5f0fedb1c96de6b7def259bf2e99362375690)，"Make duplicate mapping key detection linear for large mappings"）**只取 `decode.go` 那一段**；`+`／`-` 行與該 commit 逐字相同，只把 `@@` 行號平移 -3 對齊 v3.0.1；② [`yaml.v3-nonspecific-tag.patch`](yaml.v3-nonspecific-tag.patch)：本 repo 自寫（#2730 §6），`decode.go` 的 `(*parser).scalar` 對**非 plain** 且寫了非特定 tag `!` 的 scalar 保留 `Node.Tag == "!"`；③ [`yaml.v3-spaces-only.patch`](yaml.v3-spaces-only.patch)：本 repo 自寫（hub #2486 PR-7c 第 6 輪），`Decoder.SpacesOnly` 開關（預設關），開啟時 scanner 照 PyYAML 只認空格為分隔字元；改 `yaml.go`、`yamlh.go`、`scannerc.go` |
+| 套用的 patch（依序） | ① [`yaml.v3-uniquekeys.patch`](yaml.v3-uniquekeys.patch)：grafana/go-yaml PR #1（v3 分支 commit [`a1d5f0f`](https://github.com/grafana/go-yaml/commit/a1d5f0fedb1c96de6b7def259bf2e99362375690)，"Make duplicate mapping key detection linear for large mappings"）**只取 `decode.go` 那一段**；`+`／`-` 行與該 commit 逐字相同，只把 `@@` 行號平移 -3 對齊 v3.0.1；② [`yaml.v3-nonspecific-tag.patch`](yaml.v3-nonspecific-tag.patch)：本 repo 自寫（#2730 §6），`decode.go` 的 `(*parser).scalar` 對**非 plain** 且寫了非特定 tag `!` 的 scalar 保留 `Node.Tag == "!"`；③ [`yaml.v3-spaces-only.patch`](yaml.v3-spaces-only.patch)：本 repo 自寫（hub #2486 PR-7c 第 6 輪），`Decoder.SpacesOnly` 開關（預設關），開啟時 scanner 照 PyYAML 只認空格為分隔字元；改 `yaml.go`、`yamlh.go`、`scannerc.go`；④ [`yaml.v3-unhashable-merge-key.patch`](yaml.v3-unhashable-merge-key.patch)：上游 `go.yaml.in/yaml/v3` **v3.0.2** 的 `decode.go` 修正（v3.0.5 仍相同），`decode.go` 三段；`+`／`-` 行與上游逐字相同，只平移 `@@` 行號 |
 | 使用者 | `components/threshold-exporter/app/go.mod`、`components/tenant-api/go.mod` 的 `replace gopkg.in/yaml.v3 => …/third_party/yaml.v3` |
 | 授權 | 上游 `LICENSE`／`NOTICE` 原樣保留在 `yaml.v3/` 內 |
 | 守衛 | `tests/ops/test_vendored_yaml_v3.py` |
@@ -65,14 +65,30 @@ TAB，維持 `is_blankz` 不動；引號字串與 block scalar 內容裡的 TAB 
 `parseDoc(data, true)`、`DomainPoliciesShapeError`、`UnmarshalPolicy`；tenant-api 經後兩者）。
 exporter 自己的設定檔契約接受 TAB 分隔，所以開關關閉時每一個分支都與上游相同。
 
+### 為什麼（#2913）：同一個 mapping 有非純量 key 又有 `<<`
+
+v3.0.1 解碼 merge key 時，把見過的 key 記在 `map[interface{}]bool`（`(*decoder).merge`
+與 `(*decoder).mapping` 的 `mergedFields`）。key 若是 sequence 或 mapping（`? [a]`、
+`? {k: v}`），解出來是 slice／map，寫進這個 map 會觸發 Go runtime panic
+`hash of unhashable type`；`handleErr` 只把 yaml 自己的錯誤轉回 error，這個 panic 原樣往外丟。
+decode 進 typed struct 才會走到（進 `yaml.Node` 不會，進 `map[string]interface{}` 回
+`invalid map key`）。exporter 的 reload（`loadFile`／conf.d walker → `ParseTenantFile`）與
+tenant-api 的寫入驗證、批次 worker 都會走到，結果是整個程序 crash。
+
+上游 v3.0.2 起把這兩處讀寫改走 `setPossiblyUnhashableKey`／`getPossiblyUnhashableKey`：
+在函式內 `recover()`，再以 `failf` 轉成一般的 decode 錯誤。v3.0.1 到 v3.0.5 之間 `decode.go`
+只有這一處語意改動；patch 只取這一處，`+`／`-` 行與上游逐字相同。上游其他改動
+（模組路徑、其他檔案）一概不取。
+
 ### 守衛在擋什麼
 
 `tests/ops/test_vendored_yaml_v3.py`：
 
-1. 三份 patch 檔各自以 SHA-256 釘住，並釘住各自能改哪些檔、每檔幾段 hunk（前兩份各
-   `decode.go` 一段；第三份 `yaml.go` 1、`yamlh.go` 1、`scannerc.go` 15）——要放寬
-   「允許與上游不同的範圍」，就得在同一個 diff 改測試裡的常數（`_PATCHES`）。第三份的每段
-   hunk 新增的行都必須提到開關（`spaces_only` 或 `is_separator`）。
+1. 四份 patch 檔各自以 SHA-256 釘住，並釘住各自能改哪些檔、每檔幾段 hunk（前兩份各
+   `decode.go` 一段；第三份 `yaml.go` 1、`yamlh.go` 1、`scannerc.go` 15；第四份
+   `decode.go` 3）——要放寬「允許與上游不同的範圍」，就得在同一個 diff 改測試裡的常數
+   （`_PATCHES`）。第三份的每段 hunk 新增的行都必須提到開關（`spaces_only` 或
+   `is_separator`）；第四份改到的每一行都必須是 `mergedFields` 的讀寫或那兩個 helper 本身。
 2. 每段 hunk 所改的檔必須恰好含該段的新內容一次；依反序換回舊內容後，整個目錄的
    Go module hash（`h1:`，`go.sum` 用的 dirhash）必須等於 v3.0.1 在 sum.golang.org 的值。
    任何其他檔案多一個 byte、多一個檔、少一個檔都會轉紅。
@@ -91,6 +107,7 @@ rm -rf "$dst" && cp -r "$dir" "$dst" && chmod -R u+w "$dst"
 patch -p1 -d "$dst" < components/threshold-exporter/app/third_party/yaml.v3-uniquekeys.patch
 patch -p1 -d "$dst" < components/threshold-exporter/app/third_party/yaml.v3-nonspecific-tag.patch
 patch -p1 -d "$dst" < components/threshold-exporter/app/third_party/yaml.v3-spaces-only.patch
+patch -p1 -d "$dst" < components/threshold-exporter/app/third_party/yaml.v3-unhashable-merge-key.patch
 python3 -m pytest -q tests/ops/test_vendored_yaml_v3.py
 ```
 
@@ -126,4 +143,5 @@ curl -sS -X POST https://api.osv.dev/v1/query \
 - 看到 yaml.v3 的安全公告時，要人工判斷是否影響 v3.0.1，必要時把修補做成另一份 patch
   一起套用，並同步更新守衛（`_PATCHES` 的 sha256 與允許的 hunk）。
 - 上游若收下等效的線性判重、非特定 tag 保留與只認空格的開關，就移除 `replace` 與本目錄，
-  改回一般相依；只收下其中幾項時，其餘仍須以 patch 保留。
+  改回一般相依；只收下其中幾項時，其餘仍須以 patch 保留。第四份是上游自己的修正，改回
+  一般相依（`go.yaml.in/yaml/v3` v3.0.2 以上）時自然帶上，不必另外保留。

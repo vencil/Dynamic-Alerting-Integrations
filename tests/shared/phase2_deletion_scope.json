@@ -78,6 +78,11 @@
       "reason": "Adds the Decoder.SpacesOnly option, off by default; only routingpolicy's policy reader turns it on (spaces_only_callers). Deleted together with that code."
     },
     {
+      "file": "yaml.v3-unhashable-merge-key.patch",
+      "disposition": "keep",
+      "reason": "Upstream's own fix (go.yaml.in/yaml/v3 v3.0.2+, #2913): a merge beside a non-scalar key is a decode error, not a process-ending panic. Every typed decode of a tenant or config file depends on it, independent of the PyYAML emulation; it goes only when the vendored copy is replaced by an upstream release that carries it."
+    },
+    {
       "file": "yaml.v3-uniquekeys.patch",
       "disposition": "keep",
       "reason": "Linear duplicate-key detection for large mappings; the exporter's own config decoding uses it for performance, independent of the PyYAML emulation."
