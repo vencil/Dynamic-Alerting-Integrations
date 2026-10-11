@@ -2110,6 +2110,8 @@ da-tools offboard <tenant> [options]
 |------|------|--------|
 | `--config-dir <PATH>` | 租戶配置目錄。⚠️ 預設指向 repo 內部路徑，映像裡不存在——請明確指定 | `components/threshold-exporter/config/conf.d` |
 | `--execute` | **實際執行**（預設只做 Pre-check／預覽，不寫入） | false |
+| `--state <PATH>` | tenant-api state store 的副本：state 目錄，或 `kubectl get configmap tenant-api-state -o yaml`（或 `-o json`）存下的檔。用來列出群組成員、views 的 `filters`、federation 子集對這個租戶的引用（[#2883](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/2883)） | — |
+| `--skip-state-check` | 沒有 `--state` 時仍允許 `--execute`（state store 引用不檢查） | false |
 
 不帶 `--execute` 就是預覽，不需要另外的 dry-run 旗標。
 
@@ -2117,13 +2119,16 @@ da-tools offboard <tenant> [options]
 
 Pre-check 報告：租戶檔的位置、有沒有跨檔案引用這個租戶、它已設定的指標。無法解析的設定檔會被點名，並讓 pre-check 判定失敗（跨檔案引用檢查看不到那份檔的內容）。帶 `--execute` 時直接刪除 `<config-dir>/<tenant>.yaml`，**不會備份**（請先自行備份，或靠 git 還原），也**不會**動 Recording／Alert 規則（清理規則的選項尚未實作）；最後提示要一併清掉 Alertmanager 裡 `tenant=<tenant>` 的路由設定。
 
+群組、views、federation 子集存在 tenant-api 的 state store，不在 conf.d；conf.d 裡若還留著 `_groups.yaml` 等舊檔，只印 ⚠️ 說明已不再被讀，不拿它當答案。有 `--state` 時列出 state store 裡的引用與要呼叫的 tenant-api API（例如 `PUT /api/v1/groups/{id}` 移除成員），工具本身不寫 state store；AccountID 配發只列為資訊（永不回收）。沒給 `--state` 時這一項標為「未判定」，`--execute` 需另加 `--skip-state-check` 才會執行。
+
 **範例**
 
 ```bash
 # 預設只做 Pre-check（不寫入）
 da-tools offboard db-old --config-dir ./conf.d
-# 實際執行下架
-da-tools offboard db-old --config-dir ./conf.d --execute
+# 實際執行下架（先存一份 state store 給 --state）
+kubectl -n tenant-api get configmap tenant-api-state -o yaml > tenant-api-state.yaml
+da-tools offboard db-old --config-dir ./conf.d --state tenant-api-state.yaml --execute
 ```
 
 **結束碼**
@@ -2132,7 +2137,7 @@ da-tools offboard db-old --config-dir ./conf.d --execute
 |------|------|
 | `0` | 成功：pre-check 通過或只有警告（例如跨檔案引用）；帶 `--execute` 時已刪除租戶檔 |
 | `1` | pre-check 未通過（找不到租戶檔、有無法解析的設定檔等 ❌ 項目，報告點名該檔），不論有沒有 `--execute`；或 I/O 失敗（#2179） |
-| `2` | 呼叫端錯誤：只有 argparse 拒絕的參數（缺 tenant 位置參數、未知旗標） |
+| `2` | 呼叫端錯誤：argparse 拒絕的參數（缺 tenant 位置參數、未知旗標）；`--state` 讀不了或不是 state 目錄／ConfigMap 文件；帶 `--execute` 卻沒有 `--state` 也沒有 `--skip-state-check` |
 
 ---
 

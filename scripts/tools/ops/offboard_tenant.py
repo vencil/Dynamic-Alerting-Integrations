@@ -13,11 +13,19 @@
   # 指定 conf.d 目錄
   python3 offboard_tenant.py db-a --config-dir /path/to/conf.d --execute
 
+  # 一併檢查 tenant-api state store 的引用（群組、views、federation 子集）
+  kubectl -n tenant-api get configmap tenant-api-state -o yaml > state.yaml
+  python3 offboard_tenant.py db-a --state state.yaml --execute
+
 Pre-check 項目:
   1. 確認 tenant config 檔案存在
   2. 掃描所有其他 tenant 是否有引用此 tenant
   3. 列出此 tenant 的所有已設定指標
   4. 檢查是否有 custom_ 前綴的規則引用此 tenant
+  5. tenant-api state store 的引用（--state）：群組成員、views 的 filters、
+     federation 子集；AccountID 配發只列為資訊（永不回收，ADR-021）。
+     工具不寫 state store，只印出要呼叫的 tenant-api API。沒給 --state 時
+     標為「未判定」，--execute 需另加 --skip-state-check 才執行。
 """
 
 import sys
@@ -44,6 +52,14 @@ from _lib_confd import (  # noqa: E402
 )
 from _lib_io import safe_label  # noqa: E402  (#1538 output-layer escaping)
 from _lib_io import strict_load_exporter_keys  # noqa: E402  (#2123 duplicate key = YAML error; #2216 tenant id as text)
+from _lib_io import exit_on_yaml_file_error  # noqa: E402  (#1654 unreadable YAML → rc 2, named)
+from _lib_exitcodes import EXIT_CALLER_ERROR  # noqa: E402
+from _lib_confd import LEGACY_STATE_FILES  # noqa: E402  (#2883)
+from _lib_tenant_state import (  # noqa: E402  (#2883 groups / views / subsets live in tenant-api's state store)
+    StateInputError,
+    load_state,
+    subset_key,
+)
 
 
 def find_config_file(tenant, config_dir):
@@ -113,6 +129,13 @@ def load_all_configs(config_dir, unreadable=None):
         filename = entry.name
         if filename.startswith('.'):
             continue
+        if filename in LEGACY_STATE_FILES:
+            # #2883: tenant-api keeps these records in its state store since
+            # #2856 and no longer reads this copy; a reference found here is
+            # not an answer (--state is).
+            print(f"  ⚠️  略過 {safe_label(filename)}: tenant-api 已不讀 conf.d 的這個檔"
+                  "（紀錄在 state store，請用 --state）")
+            continue
         try:
             with open(entry, 'r', encoding='utf-8') as f:
                 # Strict (#2123): a key written twice in one mapping is a
@@ -156,8 +179,44 @@ def get_tenant_metrics(tenant, configs):
     return {}
 
 
-def run_precheck(tenant, config_dir):
-    """執行完整 Pre-check，回傳 (can_proceed, report_lines)。"""
+def check_state_references(tenant, state):
+    """tenant-api state store 中對 tenant 的引用（#2883）。
+
+    回傳 (references, info)：references 是 (說明, 要呼叫的 API) 的清單，
+    info 是只供參考的行（AccountID 配發）。
+    """
+    refs = []
+    for gid, g in sorted(state.groups().items()):
+        members = [str(m) for m in (g.get("members") or [])]
+        if tenant in members:
+            refs.append((f"群組 {safe_label(gid)} 的成員",
+                         f"PUT /api/v1/groups/{safe_label(gid)}（members 移除 {safe_label(tenant)}）"))
+    for vid, v in sorted(state.views().items()):
+        filters = v.get("filters") or {}
+        if not isinstance(filters, dict):
+            continue
+        keys = sorted(str(k) for k, val in filters.items() if str(val) == tenant)
+        if keys:
+            refs.append((f"view {safe_label(vid)} 的 filters（{safe_label(', '.join(keys))}）",
+                         f"PUT 或 DELETE /api/v1/views/{safe_label(vid)}"))
+    key = subset_key(tenant)
+    if key in state.records:
+        refs.append((f"federation 子集紀錄 {safe_label(key)}",
+                     "tenant-api 沒有刪除子集的 API：照 docs/internal/tenant-offboarding-runbook.md 步驟 2 "
+                     "以 kubectl patch 移除 ConfigMap 的這個 key"))
+    info = []
+    account = state.account_id(tenant)
+    if account is not None:
+        info.append(f"AccountID 配發 {safe_label(account)}：永不回收（ADR-021），不需要也不可以清")
+    return refs, info
+
+
+def run_precheck(tenant, config_dir, state=None):
+    """執行完整 Pre-check，回傳 (can_proceed, report_lines)。
+
+    state: _lib_tenant_state.TenantState，或 None（未提供 --state：state
+    store 的引用標為未判定）。
+    """
     report = []
     issues = []
 
@@ -198,6 +257,23 @@ def run_precheck(tenant, config_dir):
     else:
         report.append(f"✅ 無跨檔案引用")
 
+    # 3b. tenant-api state store 的引用（#2883）
+    if state is None:
+        report.append("⚠️  state store 引用：未判定（未提供 --state；群組、views、"
+                      "federation 子集存在 tenant-api 的 state store，不在 conf.d）")
+    else:
+        state_refs, state_info = check_state_references(tenant, state)
+        if state_refs:
+            report.append(f"⚠️  state store 引用 ({safe_label(state.source)})，"
+                          "工具不寫 state store，請在下架後呼叫 tenant-api 清除:")
+            for what, how in state_refs:
+                report.append(f"   → {what}: {how}")
+            issues.append(f"跨檔案引用 (state store): {len(state_refs)} 處")
+        else:
+            report.append(f"✅ 無 state store 引用 ({safe_label(state.source)})")
+        for line in state_info:
+            report.append(f"   ℹ️  {line}")
+
     # 4. 列出 tenant 的所有指標
     metrics = get_tenant_metrics(tenant, configs)
     if metrics:
@@ -214,7 +290,7 @@ def run_precheck(tenant, config_dir):
 
     # 5. 最終判定
     report.append(f"\n{'='*60}")
-    can_proceed = len(issues) == 0 or (len(issues) == 1 and "跨檔案引用" in issues[0])
+    can_proceed = all(i.startswith("跨檔案引用") for i in issues)
 
     if not issues:
         report.append("✅ Pre-check 通過！可安全下架。")
@@ -250,6 +326,7 @@ def execute_offboard(tenant, config_dir):
         return False
 
 
+@exit_on_yaml_file_error  # #2883: an unreadable --state record → rc 2, named
 def main():
     """CLI entry point: 安全的 Tenant 下架工具。."""
     try_utf8_stdout()
@@ -262,15 +339,32 @@ def main():
                         help="conf.d 目錄路徑")
     parser.add_argument("--execute", action="store_true",
                         help="實際執行下架 (預設只做 Pre-check)")
+    parser.add_argument("--state",
+                        help="tenant-api state store 的副本：state 目錄，或 "
+                             "`kubectl get configmap tenant-api-state -o yaml|json` 存下的檔")
+    parser.add_argument("--skip-state-check", action="store_true",
+                        help="沒有 --state 時仍允許 --execute（state store 引用不檢查）")
 
     args = parser.parse_args()
 
-    can_proceed, report = run_precheck(args.tenant, args.config_dir)
+    state = None
+    if args.state:
+        try:
+            state = load_state(args.state)
+        except StateInputError as e:
+            print(f"ERROR: {safe_label(e)}", file=sys.stderr)
+            sys.exit(EXIT_CALLER_ERROR)
+
+    can_proceed, report = run_precheck(args.tenant, args.config_dir, state)
 
     for line in report:
         print(line)
 
     if args.execute:
+        if can_proceed and state is None and not args.skip_state_check:
+            print("\n❌ 未提供 --state，無法確認 tenant-api state store 的引用。"
+                  "加 --state，或明確加 --skip-state-check 後再執行下架。")
+            sys.exit(EXIT_CALLER_ERROR)
         if can_proceed:
             print(f"\n⚡ 正在執行下架...\n")
             execute_offboard(args.tenant, args.config_dir)

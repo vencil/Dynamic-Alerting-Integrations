@@ -219,6 +219,9 @@ TOOL_FILES=(
     # #1516 — which receiver fields hold a credential and how a report
     # prints them; imported by ops/config_diff. Stdlib-only.
     _lib_redact.py
+    # #2883 — reads a tenant-api state store copy (--state); imported by
+    # ops/offboard_tenant. Imports _lib_io (above).
+    _lib_tenant_state.py
     # Data files
     metric-dictionary.yaml
     # #719 — SoT map read by _observed_map_lib.py via same-dir lookup

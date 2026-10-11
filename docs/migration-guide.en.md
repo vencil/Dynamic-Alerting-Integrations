@@ -361,7 +361,7 @@ Prometheus handles this on the next reload — no pod restart needed. Typical cu
 
 ```bash
 da-tools offboard db-a              # Pre-check (no external dependency)
-da-tools offboard db-a --execute    # Execute after confirmation
+da-tools offboard db-a --state tenant-api-state.yaml --execute    # Execute after confirmation (--state: a saved kubectl get configmap tenant-api-state -o yaml)
 
 da-tools deprecate mysql_slave_lag             # Preview
 da-tools deprecate mysql_slave_lag --execute   # Apply changes
