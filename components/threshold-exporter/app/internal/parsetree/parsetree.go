@@ -479,8 +479,8 @@ type converter struct {
 // shape and a count of aliases the second; bytes catch both.
 //
 // 8 MiB is far above any real conf.d file. Measured on this repository's
-// conf.d trees: the largest content is rule-packs/recipes/examples/conf.d/
-// shop.yaml at 4,572 bytes of JSON (the largest YAML file,
+// conf.d trees: the largest content is
+// rule-packs/recipes/examples/conf.d/shop.yaml at 4,572 bytes of JSON (the largest YAML file,
 // components/threshold-exporter/config/conf.d/_defaults.yaml, 8,525 bytes,
 // mostly comments, encodes to 2,513) — some 1,800 times under the bound. A
 // file with no alias at all reaches it only past ~3.6 MB of YAML (40,000

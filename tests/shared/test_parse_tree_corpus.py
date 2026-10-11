@@ -36,8 +36,8 @@ Rows:
   test (UPDATE_PARSE_TREE_CATEGORIES=1) from parse-tree itself and checked
   here against the generator verdict.
 
-The Go half (components/threshold-exporter/app/internal/parsetree/
-corpus_test.go) asserts parse-tree's verdict equals every row's category.
+The Go half
+(components/threshold-exporter/app/internal/parsetree/corpus_test.go) asserts parse-tree's verdict equals every row's category.
 
 Regenerate (never edit by hand):
 
