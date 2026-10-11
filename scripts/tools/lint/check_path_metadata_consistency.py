@@ -45,6 +45,7 @@ _THIS_DIR = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, _THIS_DIR)  # Docker flat layout
 sys.path.insert(0, os.path.join(_THIS_DIR, ".."))  # Repo subdir layout
 from _lib_exitcodes import EXIT_OK  # noqa: E402
+from _lib_compat import require_project_root  # noqa: E402  (#2852)
 from _lib_yaml_keys import load_exporter_keys  # noqa: E402  (#2216 tenant id as text)
 from _lib_confd import (  # noqa: E402  (#1588 shared name predicates)
     has_yaml_extension,
@@ -80,11 +81,12 @@ class Mismatch(NamedTuple):
 
 
 def find_repo_root() -> Path:
-    current = Path.cwd()
-    for parent in [current, *current.parents]:
-        if (parent / ".git").exists():
-            return parent
-    return Path(__file__).resolve().parents[3]
+    """This tree's root (#2852): the tool's own tree, never the cwd's.
+
+    It used to walk up from the cwd to the first `.git`, so a run from inside
+    another checkout took THAT checkout's conf.d as the default.
+    """
+    return require_project_root(_THIS_DIR)
 
 
 def iter_tenant_files(config_dir: Path,

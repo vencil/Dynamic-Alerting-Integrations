@@ -520,17 +520,12 @@ def _stale_rule_packs(tmp: Path) -> str:
     return dest
 
 
-def _playbook_project(tmp: Path) -> list[str]:
-    # bump_playbook_versions 以 cwd 往上找 `.git` 當 repo root。
-    proj = tmp / "proj"
-    (proj / ".git").mkdir(parents=True, exist_ok=True)
-    for rel in ("docs/internal/testing-playbook.md",
-                "docs/internal/benchmark-playbook.md",
-                "docs/internal/windows-mcp-playbook.md",
-                "docs/internal/github-release-playbook.md"):
-        (proj / rel).parent.mkdir(parents=True, exist_ok=True)
-        shutil.copy2(REPO_ROOT / rel, proj / rel)
-    return ["--to", "v99.0.0", "--dry-run"]
+# bump_playbook_versions 以工具自己所在的樹當 repo root（#2852；原本是 cwd
+# 往上第一個 `.git`），所以從 sandbox 的副本跑，寫入才會落在 tmp。
+_PLAYBOOKS = ("docs/internal/testing-playbook.md",
+              "docs/internal/benchmark-playbook.md",
+              "docs/internal/windows-mcp-playbook.md",
+              "docs/internal/github-release-playbook.md")
 
 
 def _reword_repo(tmp: Path) -> list[str]:
@@ -766,7 +761,8 @@ RECIPES: list[Recipe] = [
       cwd="repo", ok_exits=(1,), write_ok_exits=(1,), write_control=True),
 
     R("bump_playbook_versions",
-      lambda t, s: _playbook_project(t), cwd="proj", write_control=True),
+      lambda t, s: ["--to", "v99.0.0", "--dry-run"],
+      sandbox=_PLAYBOOKS, cwd="repo", write_control=True),
 
     R("generate_alert_reference",
       lambda t, s: ["--output-dir", _stale_rule_packs(t), "--dry-run"],

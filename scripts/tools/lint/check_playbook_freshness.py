@@ -29,6 +29,7 @@ sys.path.insert(0, str(_THIS_DIR))
 sys.path.insert(0, os.path.join(str(_THIS_DIR), ".."))
 from _lib_compat import try_utf8_stdout  # noqa: E402
 from _lib_exitcodes import EXIT_OK, EXIT_VIOLATION  # noqa: E402
+from _lib_compat import require_project_root  # noqa: E402  (#2852)
 
 # Playbook 檔案清單（相對於 repo root）
 PLAYBOOK_PATHS = [
@@ -43,15 +44,12 @@ MAX_MINOR_DRIFT = 2
 
 
 def find_repo_root() -> Path:
-    """從 cwd 或腳本位置向上找 repo root。"""
-    # 先試 cwd
-    current = Path.cwd()
-    for parent in [current, *current.parents]:
-        if (parent / ".git").exists():
-            return parent
-    # fallback: 腳本位置 scripts/tools/lint/ → repo root
-    script_dir = Path(__file__).resolve().parent
-    return script_dir.parent.parent.parent
+    """This tree's root (#2852): the tool's own tree, never the cwd's.
+
+    It used to walk up from the cwd to the first `.git`, so a run from inside
+    another checkout checked THAT checkout's playbooks.
+    """
+    return require_project_root(_THIS_DIR)
 
 
 def parse_version(version_str: str) -> Optional[Tuple[int, int, int]]:

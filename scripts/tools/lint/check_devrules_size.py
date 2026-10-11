@@ -33,6 +33,7 @@ _THIS_DIR = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, _THIS_DIR)  # Docker flat layout
 sys.path.insert(0, os.path.join(_THIS_DIR, ".."))  # Repo subdir layout
 from _lib_exitcodes import EXIT_OK, EXIT_VIOLATION, EXIT_CALLER_ERROR  # noqa: E402
+from _lib_compat import require_project_root  # noqa: E402  (#2852)
 
 # 上限。v2.8.0 Phase .a：500 行硬上限。
 # v2.8.1 (#445 AC iv)：500 → 520。新增 §安全紀律（Secret Hygiene）—
@@ -67,12 +68,12 @@ DEV_RULES_PATH = "docs/internal/dev-rules.md"
 
 
 def find_repo_root() -> Path:
-    current = Path.cwd()
-    for parent in [current, *current.parents]:
-        if (parent / ".git").exists():
-            return parent
-    # fallback: 本腳本位置
-    return Path(__file__).resolve().parent.parent.parent.parent
+    """This tree's root (#2852): the tool's own tree, never the cwd's.
+
+    It used to walk up from the cwd to the first `.git`, so a run from inside
+    another checkout measured THAT checkout's dev-rules.md.
+    """
+    return require_project_root(_THIS_DIR)
 
 
 def main() -> int:

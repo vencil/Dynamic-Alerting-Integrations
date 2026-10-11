@@ -66,6 +66,8 @@ def _run_cli(
     handled transparently.
     """
     monkeypatch.chdir(repo_root)
+    # #2852: the root is the tool's own tree, not the cwd's; point it here.
+    monkeypatch.setattr(bpv, "find_repo_root", lambda: repo_root)
     monkeypatch.setattr(
         bpv.sys, "argv",
         ["bump_playbook_versions.py", *args],
@@ -327,21 +329,14 @@ class TestApplyBumpEdgeCases:
 
 
 class TestFindRepoRoot:
-    def test_walks_up_to_git_dir(self, tmp_path, monkeypatch):
+    """#2852: the root is this tool's own tree, never the cwd's `.git`."""
+
+    def test_a_cwd_inside_another_repo_does_not_move_it(self, tmp_path, monkeypatch):
         (tmp_path / ".git").mkdir()
-        nested = tmp_path / "a" / "b" / "c"
+        nested = tmp_path / "a" / "b"
         nested.mkdir(parents=True)
         monkeypatch.chdir(nested)
-        assert bpv.find_repo_root() == tmp_path
-
-    def test_fallback_when_no_git_dir(self, tmp_path, monkeypatch):
-        """Without a .git ancestor, fall back to the script-location
-        heuristic (3 levels up from the module file). The important
-        guarantee is that find_repo_root() never raises."""
-        monkeypatch.chdir(tmp_path)
-        result = bpv.find_repo_root()
-        # Must be a real directory (the heuristic target).
-        assert result.is_dir()
+        assert bpv.find_repo_root() == Path(bpv.__file__).resolve().parents[3]
 
 
 # ── TestNormalizeVersion ───────────────────────────────────────────────
