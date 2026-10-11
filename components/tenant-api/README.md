@@ -396,7 +396,7 @@ tenant_orgs:
 
 | 模式 | 行為 | 適用 |
 |------|------|------|
-| `direct` | 直接 `git commit`，**不 push** | 與 exporter 共用同一棵樹的環境（try-local）；chart 部署下寫入送不到 exporter、重啟即失，需 `writeBack.directAcknowledgeNotDelivered=true` 才肯 render（#2855） |
+| `direct` | 直接 `git commit`，**不 push** | 與 exporter 共用同一棵樹的環境（try-local）；chart 部署下寫入送不到 exporter，confDir 用預設 emptyDir 時重啟即失，需 `writeBack.directAcknowledgeNotDelivered=true` 才肯 render（#2855） |
 | `pr` / `pr-github` | 建 feature branch + GitHub PR | GitHub.com / Enterprise |
 | `pr-gitlab` | 建 feature branch + GitLab MR | GitLab.com / 自託管 |
 

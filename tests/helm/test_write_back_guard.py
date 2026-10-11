@@ -77,11 +77,27 @@ def test_values_ship_no_default_mode():
     (_GITHUB + ["gitRepoUrl=http://github.com/acme/conf.git"], "needs an https:// gitRepoUrl"),
     (_GITHUB + ["gitRepoUrl=git@github.com:acme/conf.git"], "needs an https:// gitRepoUrl"),
     (_GITHUB + ["writeBack.token.secretKey="], "needs writeBack.token.secretKey"),
+    (_GITHUB + ["gitRepoUrl=https://bot:hunter2@github.com/acme/conf.git"], "must not carry credentials"),
+    (_GITHUB + ["gitRepoUrl=http://bot:hunter2@github.com/acme/conf.git"], "must not carry credentials"),
+    (("writeBack.mode=direct", "writeBack.directAcknowledgeNotDelivered=1"), "directAcknowledgeNotDelivered"),
 ])
 def test_render_refuses(args, needle):
     res = _render(*args)
     assert res.returncode != 0, f"render with {args} should fail"
     assert needle in res.stderr, res.stderr
+    assert "hunter2" not in res.stderr + res.stdout  # a URL password is never echoed
+
+
+@_needs_helm
+@pytest.mark.parametrize("ack", ['"false"', '"true"'])
+def test_direct_acknowledgement_is_the_boolean_true_only(tmp_path, ack):
+    """A quoted "false" is a non-empty string, truthy to a bare template `if`."""
+    vf = tmp_path / "v.yaml"
+    vf.write_text(f"writeBack:\n  mode: direct\n  directAcknowledgeNotDelivered: {ack}\n", encoding="utf-8")
+    res = subprocess.run(["helm", "template", "t", str(_REPO_ROOT / _CHART), "-f", str(vf)],
+                         capture_output=True, text=True, encoding="utf-8", timeout=60)
+    assert res.returncode != 0, ack
+    assert "directAcknowledgeNotDelivered" in res.stderr, res.stderr
 
 
 @_needs_helm

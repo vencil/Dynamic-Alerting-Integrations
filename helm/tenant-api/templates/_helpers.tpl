@@ -74,12 +74,21 @@ emptyDir, are lost on restart.
 {{- fail (printf "writeBack.mode must be pr-github, pr-gitlab or direct (got %q). pr-github / pr-gitlab open a PR/MR per write, which your GitOps pipeline delivers to threshold-exporter after merge; direct keeps writes in this pod only (see values.yaml writeBack, #2855)." $mode) -}}
 {{- end -}}
 {{- if eq $mode "direct" -}}
-{{- if not $wb.directAcknowledgeNotDelivered -}}
-{{- fail "writeBack.mode=direct keeps every write in this pod's /conf.d: it is never pushed, never reaches threshold-exporter, and is lost on restart with the default emptyDir confDir. Use pr-github or pr-gitlab, or set writeBack.directAcknowledgeNotDelivered=true for a throwaway trial install (#2855)." -}}
+{{- /* The boolean true only: a quoted "false" is a non-empty string, which
+     a bare `if` would take as an acknowledgement. */ -}}
+{{- if not (and (kindIs "bool" $wb.directAcknowledgeNotDelivered) $wb.directAcknowledgeNotDelivered) -}}
+{{- fail "writeBack.mode=direct keeps every write in this pod's /conf.d: it is never pushed, never reaches threshold-exporter, and is lost on restart with the default emptyDir confDir. Use pr-github or pr-gitlab, or set writeBack.directAcknowledgeNotDelivered=true (the boolean, not a string) for a throwaway trial install (#2855)." -}}
 {{- end -}}
 {{- else -}}
 {{- if not .Values.gitRepoUrl -}}
 {{- fail (printf "writeBack.mode=%s needs gitRepoUrl: the PRs are pushed to that repository's origin (#2855)." $mode) -}}
+{{- end -}}
+{{- /* Before the https check, whose message echoes the URL: a password in
+     it must reach neither an error nor the GIT_REPO_URL ConfigMap. Only a
+     scheme://… URL: urlParse errors on scp-style git@host:path, which the
+     https check below refuses anyway. */ -}}
+{{- if and (contains "://" .Values.gitRepoUrl) (urlParse .Values.gitRepoUrl).userinfo -}}
+{{- fail (printf "writeBack.mode=%s: gitRepoUrl must not carry credentials (user:password@); put the forge token in the writeBack.token Secret instead (#2855)." $mode) -}}
 {{- end -}}
 {{- if or (not (hasPrefix "https://" .Values.gitRepoUrl)) (not (urlParse .Values.gitRepoUrl).host) -}}
 {{- fail (printf "writeBack.mode=%s needs an https:// gitRepoUrl (got %q): the forge token authenticates clone and push over HTTPS only, and is never sent over plain http (#2855)." $mode .Values.gitRepoUrl) -}}

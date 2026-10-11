@@ -108,7 +108,9 @@ export TA_GITLAB_API_URL=https://gitlab.internal.example.com
 chart 以 `writeBack` 設定寫回模式；它沒有預設值，不設就不 render（[#2855](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/2855)）。先建好放 token 的 Secret，同一個 token 用來開 PR/MR，也用來認證 `git clone` / `git push`（以環境變數提供給 git 的 credential helper，不寫進 URL、ConfigMap 或磁碟）：
 
 ```bash
-kubectl -n tenant-api create secret generic tenant-api-vcs --from-literal=token=<token>
+# FORGE_TOKEN：可推分支、開 PR/MR 的 GitHub／GitLab token
+kubectl create namespace tenant-api
+kubectl -n tenant-api create secret generic tenant-api-vcs --from-literal=token="$FORGE_TOKEN"
 ```
 
 ```yaml
