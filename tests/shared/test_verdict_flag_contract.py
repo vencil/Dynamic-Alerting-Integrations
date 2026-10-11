@@ -114,6 +114,7 @@ import pytest
 pytestmark = pytest.mark.usefixtures("da_guard_env")
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
+RULE_PACKS = REPO_ROOT / "rule-packs"
 OPS_DIR = REPO_ROOT / "scripts" / "tools" / "ops"
 
 TIMEOUT_S = 90
@@ -223,12 +224,8 @@ POPULATION_AT_LANDING_SHA256 = "a432124249764d467e80fc162668ba35e813ef9adafe8d28
 
 # Not gated yet. Shrink-only: see test_pending_only_shrinks.
 PENDING: dict[tuple[str, str], str] = {
-    ("alert_correlate", "--min-score"): "#2908",
-    ("blind_spot_discovery", "--exclude-jobs"): "#2908",
     ("cardinality_forecasting", "--warn-days"): "#2908",
-    ("drift_detect", "--ignore-prefix"): "#2908",
     ("explain_route", "--severity"): "#2908",
-    ("silencer_drift_check", "--include-inactive"): "#2908",
     ("threshold_govern", "--max-prs"): "#2908",
 }
 
@@ -295,6 +292,15 @@ class _StubHandler(BaseHTTPRequestHandler):
                  "value": [time.time(), str(value)]}]
             self._send({"status": "success",
                         "data": {"resultType": "vector", "result": result}})
+        elif url.path == "/api/v1/targets":
+            # redis, postgres and mysql exporter targets (blind_spot_discovery).
+            # Job names differ from the db_type they map to, so excluding by
+            # job name and by db_type give different answers.
+            self._send({"status": "success", "data": {"activeTargets": [
+                {"labels": {"job": job, "instance": inst, "namespace": "db"}}
+                for job, inst in (("redis-exporter", "r1:9121"),
+                                  ("postgres-exporter", "p1:9187"),
+                                  ("mysql-exporter", "m1:9104"))]}})
         elif url.path == "/api/v1/query_range":
             self._send({"status": "success",
                         "data": {"resultType": "matrix",
@@ -328,6 +334,11 @@ def stub_url():
 def _write(p: Path, text: str) -> None:
     p.parent.mkdir(parents=True, exist_ok=True)
     p.write_text(text, encoding="utf-8")
+
+
+def _write_str(p: Path, text: str) -> str:
+    _write(p, text)
+    return str(p)
 
 
 def _confd_with_policy(tmp: Path, forbidden_receiver: str) -> str:
@@ -376,6 +387,97 @@ def _confd_with_instance_mapping(tmp: Path, mapped_tenant: str) -> str:
         f"    - tenant: {mapped_tenant}\n"
         "      filter: 'schema=~\"app_.*\"'\n"))
     return str(d)
+
+
+def _correlated_alerts(tmp: Path) -> str:
+    """Two critical alerts a minute apart in one namespace with unrelated
+    names: one cluster whose single pair scores 0.8 (overlap 0.4 + namespace
+    0.3 + severity 0.1, no name prefix), inside the flag's 0..1 range."""
+    labels = {"namespace": "monitoring", "severity": "critical"}
+    return _write_str(tmp / "alerts.json", json.dumps([
+        {"labels": {"alertname": "DiskFull", "tenant": "tenant-one", **labels},
+         "startsAt": "2026-07-01T00:00:00Z", "endsAt": ""},
+        {"labels": {"alertname": "CpuHigh", "tenant": "tenant-two", **labels},
+         "startsAt": "2026-07-01T00:01:00Z", "endsAt": ""},
+    ]))
+
+
+def _avg_correlations(proc: subprocess.CompletedProcess) -> object:
+    """Each cluster's avg_correlation: the mean of the pair scores at or
+    above --min-score (0.0 when none clears it)."""
+    try:
+        return [c["avg_correlation"] for c in json.loads(proc.stdout)["clusters"]]
+    except (ValueError, KeyError, TypeError):
+        return UNPARSABLE
+
+
+def _mysql_only_confd(tmp: Path) -> str:
+    """One tenant monitored for mysql only — the stub's redis and postgres
+    targets are the blind spots."""
+    d = tmp / "confd-mysql-only"
+    _write(d / "_defaults.yaml", "defaults:\n  mysql_connections: 80\n")
+    _write(d / "tenant-one.yaml", "tenants:\n  tenant-one:\n    mysql_connections: 90\n")
+    return str(d)
+
+
+def _blind_spots(proc: subprocess.CompletedProcess) -> object:
+    try:
+        return sorted(r["db_type"] for r in json.loads(proc.stdout)
+                      if r["status"] == "blind_spot")
+    except (ValueError, KeyError, TypeError):
+        return UNPARSABLE
+
+
+def _dirs_drifting_in_ignored_files(tmp: Path) -> str:
+    """Two conf.d dirs that differ only in files the default --ignore-prefix
+    (`_cluster_,_local_`) covers: a `_cluster_` file MODIFIED between them
+    and a `_local_` file present in one only (added/removed). Each prefix of
+    the default is needed, on a different diff path."""
+    a, b = tmp / "drift-a", tmp / "drift-b"
+    for d, value in ((a, "100"), (b, "200")):
+        _write(d / "_defaults.yaml", "defaults:\n  max_connections: 100\n")
+        _write(d / "tenant-one.yaml",
+               "tenants:\n  tenant-one:\n    max_connections: '120'\n")
+        _write(d / "_cluster_overrides.yaml", f"cluster_value: '{value}'\n")
+    _write(a / "_local_only_here.yaml", "local_value: '1'\n")
+    return f"{a},{b}"
+
+
+def _silences(tmp: Path, name: str, alertname_of) -> str:
+    """One silence per way of being (in)active: status active, expired,
+    pending, and no status with an endsAt in the past (decided by timestamp).
+    `alertname_of(id)` picks each silence's alertname — a gone alert makes
+    it an orphan once in scope, a shipped one never does."""
+    def silence(sid: str, state: str | None, ends: str) -> dict:
+        s = {"id": sid, "createdBy": "gate", "comment": "verdict-flag probe",
+             "matchers": [{"name": "alertname", "value": alertname_of(sid),
+                           "isRegex": False, "isEqual": True}],
+             "startsAt": "2026-01-01T00:00:00Z", "endsAt": ends}
+        if state:
+            s["status"] = {"state": state}
+        return s
+    return _write_str(tmp / f"silences-{name}.json", json.dumps([
+        silence("active", "active", "2030-01-01T00:00:00Z"),
+        silence("expired", "expired", "2026-01-02T00:00:00Z"),
+        silence("pending", "pending", "2030-01-01T00:00:00Z"),
+        silence("ended-by-timestamp", None, "2026-01-02T00:00:00Z"),
+    ]))
+
+
+def _orphan_ids(proc: subprocess.CompletedProcess) -> object:
+    try:
+        return sorted(o["silence_id"] for o in json.loads(proc.stdout)["orphans"])
+    except (ValueError, KeyError, TypeError):
+        return UNPARSABLE
+
+
+def _a_shipped_alertname() -> str:
+    """An alert a shipped rule pack really declares (read, not hardcoded)."""
+    m = re.search(r"^\s*-?\s*alert:\s*([A-Za-z0-9_]+)",
+                  (RULE_PACKS / "rule-pack-mariadb.yaml").read_text(encoding="utf-8"),
+                  re.MULTILINE)
+    assert m, "rule-pack-mariadb.yaml declares no alert"
+    return m.group(1)
 
 
 def _assembly(tmp: Path, malformed: bool) -> list[str]:
@@ -543,6 +645,60 @@ RECIPES: list[Recipe] = [
                                   _confd_with_instance_mapping(t, "tenant-one"),
                                   "--metrics", "m1", "--dry-run"],
       note="--dry-run has its own exit for a failed validation; same verdicts"),
+
+    # --min-score filters which pair scores a cluster reports (score_cluster:
+    # "pairs exceeding min_score"); it does NOT decide the --ci verdict, which
+    # reads the root cause's severity only. Observed through the pair scores.
+    # The pair scores 0.8, so both values sit inside the flag's 0..1 range
+    # and the boundary lands exactly on the `>=`.
+    R("alert_correlate", "--min-score",
+      lambda t, s: ["--input", _correlated_alerts(t), "--json"],
+      flip=("--min-score", "0.9"), boundary=("--min-score", "0.8"),
+      without=[0.8], with_=[0.0], observe=_avg_correlations,
+      note="one pair scoring 0.8: default 0.3 and 0.8 (>=) keep it, 0.9 drops "
+           "it; the flag does not change the --ci verdict"),
+
+    # Two job names in one comma list, and a boundary that names the same
+    # services by db_type instead of job: excluding is by job name.
+    R("blind_spot_discovery", "--exclude-jobs",
+      lambda t, s: ["--prometheus", s, "--config-dir", _mysql_only_confd(t),
+                    "--json-output"],
+      flip=("--exclude-jobs", "postgres-exporter,redis-exporter"),
+      boundary=("--exclude-jobs", "redis,postgresql"),
+      without=["postgresql", "redis"], with_=[], observe=_blind_spots,
+      note="unmonitored redis + postgres: excluding both jobs clears them; "
+           "their db_type names exclude nothing"),
+
+    # The flag's DEFAULT does the work: both of its prefixes are needed, one
+    # on the modified path and one on the added/removed path. Configmap mode
+    # only — operator mode needs a cluster (kubectl) and is not covered here.
+    R("drift_detect", "--ignore-prefix",
+      lambda t, s: ["--dirs", _dirs_drifting_in_ignored_files(t),
+                    "--mode", "configmap", "--ci"],
+      flip=("--ignore-prefix", "_cluster_"),
+      boundary=("--ignore-prefix", "_local_,_cluster_"),
+      note="drift only in a modified _cluster_ file and a one-sided _local_ "
+           "file: default and the reversed pair ignore both (0); _cluster_ "
+           "alone reports the _local_ file (1)"),
+
+    R("silencer_drift_check", "--include-inactive",
+      lambda t, s: ["--silences-file",
+                    _silences(t, "gone", lambda sid: f"GoneAlert_{sid.replace('-', '_')}"),
+                    "--rule-source", str(RULE_PACKS), "--json"],
+      flip=("--include-inactive",), boundary=("--include-inactive",),
+      boundary_base=lambda t, s: [
+          "--silences-file",
+          _silences(t, "inactive-live", lambda sid: "GoneAlert_active" if sid == "active"
+                    else _a_shipped_alertname()),
+          "--rule-source", str(RULE_PACKS), "--json"],
+      without=["active"],
+      with_=["active", "ended-by-timestamp", "expired", "pending"],
+      observe=_orphan_ids,
+      note="silences on gone alerts: only the active one is in scope by "
+           "default; --include-inactive adds expired, pending and the one "
+           "ended by timestamp, and keeps the active one. Boundary: the same "
+           "flag over inactive silences on shipped alerts adds no orphan and "
+           "still keeps the active one"),
 
     R("generate_tenant_mapping_rules", "--validate",
       lambda t, s: ["--config-dir", _confd_with_instance_mapping(t, "tenant-ghost"),
