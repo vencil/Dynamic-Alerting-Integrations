@@ -43,13 +43,13 @@ spec:
             - name: PREVIEW_TENANT_API_URL
               value: {{ .Values.tenantApiUrl | quote }}
             - name: PREVIEW_LISTEN_PORT
-              value: {{ .Values.service.port | quote }}
+              value: {{ include "recipe-preview.intEnv" (list "service.port" .Values.service.port) }}
             - name: PREVIEW_MAX_CONCURRENCY
-              value: {{ .Values.preview.maxConcurrency | quote }}
+              value: {{ include "recipe-preview.intEnv" (list "preview.maxConcurrency" .Values.preview.maxConcurrency) }}
             - name: PREVIEW_RATE_LIMIT_PER_MIN
-              value: {{ .Values.preview.rateLimitPerMin | quote }}
+              value: {{ include "recipe-preview.intEnv" (list "preview.rateLimitPerMin" .Values.preview.rateLimitPerMin) }}
             - name: PREVIEW_MAX_BODY_BYTES
-              value: {{ .Values.preview.maxBodyBytes | quote }}
+              value: {{ include "recipe-preview.intEnv" (list "preview.maxBodyBytes" .Values.preview.maxBodyBytes) }}
             - name: PREVIEW_REQUEST_TIMEOUT
               value: {{ .Values.preview.requestTimeout | quote }}
             # Path to the audience-bound projected SA token (volume below). app.py
