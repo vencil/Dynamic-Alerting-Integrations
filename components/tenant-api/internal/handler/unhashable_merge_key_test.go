@@ -13,6 +13,7 @@ package handler
 import (
 	"bytes"
 	"encoding/json"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -35,13 +36,31 @@ var unhashableMergeKeyDocs = map[string]string{
 	"merge, then mapping key":              "tenants:\n  " + unhashableTenant + ":\n    <<: {x: 1}\n    ? {k: v}\n    : 1\n",
 }
 
+// failOnPanic runs f and turns a panic in it into a t.Fatalf of the calling
+// test. Without it, a regression (the vendored yaml.v3 patch gone) panics the
+// test goroutine and ends the whole test binary, so every test in the package
+// reports nothing instead of this one failing and naming the shape.
+func failOnPanic(t *testing.T, what string, f func()) {
+	t.Helper()
+	defer func() {
+		if r := recover(); r != nil {
+			t.Fatalf("%s panicked: %v", what, r)
+		}
+	}()
+	f()
+}
+
 // The whole-file PUT, in both write modes (putReceiverDoc), and once more in
 // direct mode with a domain policy present, so the policy's own reading of
 // the body (judgePutBody) is on the path too.
 func TestPutTenant_UnhashableMergeKeyIsInvalidYAML(t *testing.T) {
 	for name, doc := range unhashableMergeKeyDocs {
 		for _, pr := range []bool{false, true} {
-			code, resp, written := putReceiverDoc(t, doc, pr)
+			var code int
+			var resp, written string
+			failOnPanic(t, fmt.Sprintf("%s (pr=%v) PUT", name, pr), func() {
+				code, resp, written = putReceiverDoc(t, doc, pr)
+			})
 			if code != http.StatusBadRequest || written != "" || !strings.Contains(resp, "invalid YAML") {
 				t.Errorf("%s (pr=%v): status %d, written %q; want 400 invalid YAML, no write; body: %s",
 					name, pr, code, written, resp)
@@ -60,7 +79,9 @@ func TestPutTenant_UnhashableMergeKeyIsInvalidYAML(t *testing.T) {
 		req.Header.Set("X-Forwarded-Email", "alice@example.com")
 		req.Header.Set("X-Forwarded-Groups", "admins")
 		w := httptest.NewRecorder()
-		wrapWithRBACMiddleware(PutTenant(d), rb, rbac.PermWrite, TenantIDFromPath).ServeHTTP(w, req)
+		failOnPanic(t, name+" (domain policy present) PUT", func() {
+			wrapWithRBACMiddleware(PutTenant(d), rb, rbac.PermWrite, TenantIDFromPath).ServeHTTP(w, req)
+		})
 		if w.Code != http.StatusBadRequest || !strings.Contains(w.Body.String(), "invalid YAML") {
 			t.Errorf("%s (domain policy present): status %d; want 400 invalid YAML; body: %s", name, w.Code, w.Body.String())
 		}
@@ -95,7 +116,9 @@ func TestBatchTenants_UnhashableMergeKeyInCurrentFileIsRefused(t *testing.T) {
 			req.Header.Set("X-Forwarded-Email", "alice@example.com")
 			req.Header.Set("X-Forwarded-Groups", "admins")
 			w := httptest.NewRecorder()
-			rb.Middleware(rbac.PermRead, nil)(BatchTenants(d)).ServeHTTP(w, req)
+			failOnPanic(t, fmt.Sprintf("%s (async=%v) batch", name, async_), func() {
+				rb.Middleware(rbac.PermRead, nil)(BatchTenants(d)).ServeHTTP(w, req)
+			})
 
 			var status, code, msg string
 			if async_ {

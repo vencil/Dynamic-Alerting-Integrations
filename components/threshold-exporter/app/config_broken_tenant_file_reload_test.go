@@ -171,6 +171,14 @@ func TestABrokenTenantFileDropsItsTenantsOnEveryReloadPath(t *testing.T) {
 			tree, tc := tree, tc
 			t.Run(tree.name+"/"+tc.name, func(t *testing.T) {
 				t.Parallel()
+				// Nothing on the reload path recovers, so a panic (the #2913
+				// cases, should the vendored yaml.v3 patch go missing) would
+				// end the whole test binary; make it this subtest failing.
+				defer func() {
+					if r := recover(); r != nil {
+						t.Fatalf("panicked: %v", r)
+					}
+				}()
 
 				// Path A: load, then reload once per step as the watch path does.
 				warm := t.TempDir()

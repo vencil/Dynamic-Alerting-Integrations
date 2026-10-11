@@ -18,6 +18,20 @@ import (
 	"testing"
 )
 
+// failOnPanic runs f and turns a panic in it into a t.Fatalf of the calling
+// (sub)test. Nothing on the reload path recovers, so without it a regression
+// (the vendored yaml.v3 patch gone) panics the test goroutine and ends the
+// whole test binary instead of failing this one case.
+func failOnPanic(t *testing.T, what string, f func()) {
+	t.Helper()
+	defer func() {
+		if r := recover(); r != nil {
+			t.Fatalf("%s panicked: %v", what, r)
+		}
+	}()
+	f()
+}
+
 func TestFileModeReloadTreatsUnhashableMergeKeyAsParseError(t *testing.T) {
 	t.Parallel()
 	const good = "defaults:\n  mysql_connections: 80\ntenants:\n  acme:\n    mysql_connections: \"70\"\n"
@@ -44,11 +58,13 @@ func TestFileModeReloadTreatsUnhashableMergeKeyAsParseError(t *testing.T) {
 			}
 
 			buf.Reset()
-			m.tickOnce()
+			failOnPanic(t, "tick", m.tickOnce)
 			if !strings.Contains(buf.String(), "WARN: cannot check config "+path+": parse config ") {
 				t.Errorf("tick: want the parse-failure WARN, log was:\n%s", buf.String())
 			}
-			if err := m.Load(); err == nil || !strings.HasPrefix(err.Error(), "parse config "+path+": ") {
+			var err error
+			failOnPanic(t, "Load", func() { err = m.Load() })
+			if err == nil || !strings.HasPrefix(err.Error(), "parse config "+path+": ") {
 				t.Errorf("Load: err = %v, want the parse-config error", err)
 			}
 			if !m.IsLoaded() || m.GetConfig().Defaults["mysql_connections"] != 80 {

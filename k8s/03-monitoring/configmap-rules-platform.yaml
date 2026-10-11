@@ -1030,6 +1030,43 @@ data:
                 hatch, not a fix.
               runbook_url: "https://github.com/vencil/Dynamic-Alerting-Integrations/blob/main/docs/governance-security.md"
 
+          # --- tenant-api async task PANICKED (#2913) ---
+          # The async batch worker (`?async=true`) recovers a panicking task
+          # instead of letting it end the process: the task is marked failed, the
+          # panic value and stack go to the tenant-api ERROR log keyed by task id,
+          # and tenant_api_async_task_panics_total counts it. Without this alert
+          # that recovery is SILENT — the caller only sees one failed task and
+          # nothing pages, so the tenant-api bug that panicked stays unfound.
+          #
+          # `> 0` (not a tolerance like TenantApiConfigReloadFailing's `> 2`): the
+          # counter has no benign source — every increment is a tenant-api bug.
+          # The counter is exported from process start at 0, so a restart cannot
+          # fake an increase (a reset to 0 adds nothing). [15m] keeps a single
+          # panic visible long enough to be seen; `for: 5m` mirrors the sibling
+          # counter alert. ⚠️ Known blind spot: a panic before the first scrape of
+          # a new pod is never seen as an increase (the series starts at 1).
+          - alert: TenantApiAsyncTaskPanicked
+            expr: increase(tenant_api_async_task_panics_total{job="tenant-api"}[15m]) > 0
+            for: 5m
+            labels:
+              severity: warning
+              alert_source: platform
+            annotations:
+              summary: "tenant-api async batch task panicked — task marked failed, tenant-api bug"
+              description: |
+                A tenant-api async batch task (`?async=true`) panicked in the last
+                15m. The worker recovered it: that task is `failed` (its `error`
+                says the work stopped unexpectedly and carries no panic detail) and
+                the worker went on with later tasks. This counter should stay 0, so
+                any increase is a tenant-api bug, not a config or load problem.
+                Find the ERROR log "async task panicked; marked failed" — it has the
+                task_id, the panic value and the stack — and file it. The caller of
+                that task must retry or redo the batch. A panic while a lock was
+                held can leave tenant-api wedged; if writes then hang, restart the
+                pod. The alert clears ~15m after the last panic as it leaves the
+                window.
+              runbook_url: "https://github.com/vencil/Dynamic-Alerting-Integrations/blob/main/components/tenant-api/README.md#metricsmetrics"
+
           # --- Prometheus reload failure (#1246) ---
           # The config-reloader sidecar added in #1246 automates what used to be a
           # manual POST /-/reload — and in doing so creates a failure mode that did
