@@ -1457,7 +1457,7 @@ da-tools migration-audit --config-dir <dir> [--json] [--da-guard-binary <path>]
 
 | List (`--json` key) | Content |
 |------|------|
-| `values` | Values the two readers read differently: file, line, path, both readings, a suggested spelling (e.g. `on`: write `true` for a boolean, quote it for a string) |
+| `values` | Values the two readers read differently: file, line, path, both readings, a suggested spelling (e.g. `on`: write `true` for a boolean, `"on"` for a string). `rewrites` lists each replacement (`meaning`, `text`) and `span` where the value is written (line and columns, its tag included, its anchor not); every replacement makes both readers read the same, and none is lossy (an integer past int64 or an item of a `tenants:` list gets the quoted string only; a non-finite number only `.inf` / `.nan`) |
 | `keys` | Keys only one side has |
 | `becomes_unreadable` | Files read today that `parse-tree` refuses, with the `kind` (one of the closed list of 13) |
 | `becomes_readable` | Files refused today that `parse-tree` reads, with today's error and what yaml.v3 reads |
@@ -1466,7 +1466,9 @@ da-tools migration-audit --config-dir <dir> [--json] [--da-guard-binary <path>]
 | `still_unreadable` | Files both refuse (no change; does not set the exit code) |
 | `files_compared` | Files both read and compared value by value (the text output names them on its second line), so "no difference" and "nothing compared" read apart |
 
-Lines come from PyYAML's reading: a mapping entry is at its key's line, a sequence item at its own line; a value reached through an alias or a merge is at the line of the key that uses it.
+Lines come from PyYAML's reading: a value is at the line it is written on, a key at its own line; a value reached through an alias or a merge is at the line of its anchor or of the merged mapping's definition — changing that line changes every place that uses it. A key only yaml.v3 has is at its parent's key line.
+
+A policy's `tenants: [010, 1e3, 0777]` is listed as a difference (today the source text `"010"`, `"1e3"`, `"0777"`; yaml.v3 reads 8, 1000, 511): that is the expected result of ADR-036 §2 (the semantic layer judges by type and converted value only); quote them to keep the text.
 
 **Without da-guard** it fails (exit 2) and says why; it never falls back to parsing the YAML itself.
 

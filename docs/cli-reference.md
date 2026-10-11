@@ -1454,7 +1454,7 @@ da-tools migration-audit --config-dir <dir> [--json] [--da-guard-binary <path>]
 
 | 清單（`--json` 的鍵） | 內容 |
 |------|------|
-| `values` | 兩邊讀成不同的值：檔案、行號、路徑、兩邊的讀法、建議寫法（例如 `on` 要布林就寫 `true`、要字串就加引號） |
+| `values` | 兩邊讀成不同的值：檔案、行號、路徑、兩邊的讀法、建議寫法（例如 `on` 要布林就寫 `true`、要字串就寫 `"on"`）。`rewrites` 逐一列出可替換的寫法（`meaning`、`text`），`span` 是值寫在哪一行哪幾欄（含型別標記，不含錨點）；每一種寫法照做之後兩邊都讀成一樣，不會給有損的寫法（超出 int64 的整數、`tenants:` 清單裡的項目只給加引號的字串；非有限數只給 `.inf`／`.nan`） |
 | `keys` | 只有一邊有的鍵 |
 | `becomes_unreadable` | 今天讀得到、`parse-tree` 判為讀不了的檔，附 `kind`（13 種封閉清單之一） |
 | `becomes_readable` | 今天整份拒收、`parse-tree` 讀得到的檔，附今天的錯誤與 yaml.v3 讀成的內容 |
@@ -1463,7 +1463,9 @@ da-tools migration-audit --config-dir <dir> [--json] [--da-guard-binary <path>]
 | `still_unreadable` | 兩邊都讀不了的檔（不是變化，不影響結束碼） |
 | `files_compared` | 兩邊都讀得到、逐值比對過的檔（文字輸出在第二行列出），讓「沒有差異」與「什麼都沒比」分得開 |
 
-行號取自 PyYAML 的讀法：mapping 項目是鍵所在行、序列項目是該項所在行；經別名或合併取得的值，標在使用它的鍵那一行。
+行號取自 PyYAML 的讀法：值標在它寫的那一行，鍵標在鍵所在行；經別名或合併取得的值，標在錨點或被合併 mapping 的定義行——改那一行會同時影響所有引用處。只有 yaml.v3 有的鍵標在父層的鍵那一行。
+
+政策檔的 `tenants: [010, 1e3, 0777]` 會列為差異（今天讀成原文 `"010"`、`"1e3"`、`"0777"`，yaml.v3 讀成 8、1000、511）：這是依 ADR-036 §2「語意層只依型別與換算後的值判斷」的預期結果，要原文就加引號。
 
 **沒有 da-guard 時**：直接失敗（exit 2）並說明，不會退回自己解析 YAML。
 

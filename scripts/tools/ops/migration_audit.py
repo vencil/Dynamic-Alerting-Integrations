@@ -37,10 +37,11 @@ both shapes (`non_specific_tag`), so such a file is in
 as well. ``still_unreadable`` lists the files both readers refuse; that is
 no change, so it does not set the exit code.
 
-Lines are 1-based and come from PyYAML's reading of the file (the key's line
-for a mapping entry, the item's line for a sequence item). A value reached
-through an alias or a merge is reported at the line of the key that uses
-it; a key only yaml.v3 has carries the line of its parent.
+Lines are 1-based and come from PyYAML's reading of the file: a value is
+reported at the line it is written on, a key at its own line. A value reached
+through an alias or a merge is reported at the line of its anchor or of the
+merged mapping's definition — changing that line changes every place that
+uses it. A key only yaml.v3 has carries the line of its parent.
 
 Exit codes (dev-rules §13, `_lib_exitcodes`):
   0  the two readings agree (``still_unreadable`` may be non-empty)
@@ -177,9 +178,11 @@ def run_parse_tree(root: Path, binary: Optional[str], timeout: float) -> dict:
     dispatcher = guard_dispatch.DISPATCHER
     exe = dispatcher.resolve_binary(binary)
     if exe is None:
+        msg = dispatcher.binary_missing_message(binary).strip()
+        for prefix in ("Error: ", "錯誤: "):
+            msg = msg.removeprefix(prefix)
         raise AuditError(
-            dispatcher.binary_missing_message(binary).strip().replace("\n", " ")
-            + " This audit reads yaml.v3's reading from `da-guard parse-tree` only; it does "
+            msg + "\nThis audit reads yaml.v3's reading from `da-guard parse-tree` only; it does "
             "not parse the YAML another way (the da-tools image ships da-guard; in a checkout, "
             "`make da-guard-build` builds .build/da-guard).")
     cmd = [exe, PARSE_TREE_SUBCOMMAND, "--config-dir", str(root)]
@@ -202,19 +205,47 @@ def run_parse_tree(root: Path, binary: Optional[str], timeout: float) -> dict:
         if not isinstance(doc, dict) or doc.get("schema") != PARSE_TREE_SCHEMA:
             got = doc.get("schema") if isinstance(doc, dict) else None
             raise ValueError(f"schema {got!r}, this reader reads {PARSE_TREE_SCHEMA!r}")
-        for field, kind in (("selected", dict), ("files", dict), ("unreadable", list),
-                            ("not_read", list)):
-            if not isinstance(doc.get(field), kind):
-                raise ValueError(f"field {field!r} missing or not a {kind.__name__}")
-        # parse-tree's own invariant: "selected" is "files" plus "unreadable".
-        unreadable = {u["file"] for u in doc["unreadable"]}
-        if set(doc["selected"]) != set(doc["files"]) | unreadable or unreadable & set(doc["files"]):
-            raise ValueError("\"selected\" is not \"files\" plus \"unreadable\"")
-    except (ValueError, RecursionError) as e:  # UnicodeDecodeError is a ValueError
+        _check_shape(doc)
+    except (ValueError, TypeError, KeyError, RecursionError) as e:  # UnicodeDecodeError is a ValueError
         # ADR-036 §2: a document a reader cannot decode is unusable whole.
         raise AuditError(f"da-guard {PARSE_TREE_SUBCOMMAND} wrote no document this tool can "
                          f"read ({e}); nothing of it is used") from e
     return doc
+
+
+def _check_shape(doc: dict) -> None:
+    """Raise ValueError unless `doc` has the parse-tree shape this tool reads,
+    every element of it: a document that is wrong anywhere is unusable whole."""
+    for field, kind in (("selected", dict), ("files", dict), ("unreadable", list),
+                        ("not_read", list)):
+        if not isinstance(doc.get(field), kind):
+            raise ValueError(f"field {field!r} missing or not a {kind.__name__}")
+    for f, readers in doc["selected"].items():
+        if not (isinstance(readers, list) and all(isinstance(r, str) for r in readers)):
+            raise ValueError(f"selected[{f!r}] is not a list of reader names")
+    for name, fields in (("unreadable", ("file", "kind", "message")), ("not_read", ("file", "reason"))):
+        for i, e in enumerate(doc[name]):
+            if not (isinstance(e, dict) and all(isinstance(e.get(k), str) for k in fields)):
+                raise ValueError(f"{name}[{i}] is not an object with string {', '.join(fields)}")
+    for f, content in doc["files"].items():
+        if not isinstance(content, dict) or _is_v3_scalar(content):
+            raise ValueError(f"files[{f!r}] is not a mapping")
+        stack: list[Any] = [content]
+        while stack:
+            v = stack.pop()
+            if isinstance(v, list):
+                stack.extend(v)
+            elif _is_v3_scalar(v):
+                if not (isinstance(v["tag"], str) and isinstance(v.get("value"), (str, bool, type(None)))):
+                    raise ValueError(f"files[{f!r}] holds a scalar of the wrong shape: {v!r:.80}")
+            elif isinstance(v, dict) and not isinstance(v.get("text"), str):  # a mapping
+                stack.extend(v.values())
+            else:
+                raise ValueError(f"files[{f!r}] holds a value of the wrong shape: {v!r:.80}")
+    # parse-tree's own invariant: "selected" is "files" plus "unreadable".
+    unreadable = {u["file"] for u in doc["unreadable"]}
+    if set(doc["selected"]) != set(doc["files"]) | unreadable or unreadable & set(doc["files"]):
+        raise ValueError("\"selected\" is not \"files\" plus \"unreadable\"")
 
 
 def _accepts(cmd: list[str], timeout: float) -> bool:
@@ -313,25 +344,85 @@ def same_scalar(py: Any, v3: dict) -> bool:
     return False
 
 
-def suggestion(py: Any, v3: dict) -> str:
-    """A spelling both readers read the same way, for a scalar they differ on."""
+# Integers both readers read as the same integer: yaml.v3 decodes into int64,
+# or uint64 above it; anything else it reads as a (lossy) float.
+_INT_MIN, _INT_END = -(2 ** 63), 2 ** 64
+
+
+def _float_text(f: float) -> str:
+    """A spelling both readers read as the float `f`: `.inf` / `-.inf` /
+    `.nan`, else Python's shortest repr with a `.` in the mantissa (PyYAML's
+    YAML 1.1 float needs one: `1e+20` is a string to it, `1.0e+20` a float)."""
+    if math.isnan(f):
+        return ".nan"
+    if math.isinf(f):
+        return ".inf" if f > 0 else "-.inf"
+    r = repr(f)
+    mantissa, _, exp = r.partition("e")
+    if "." not in mantissa:
+        mantissa += ".0"
+    return mantissa + ("e" + exp if exp else "")
+
+
+def rewrites(py: Any, v3: dict, raw_text: bool) -> list[dict]:
+    """Spellings both readers read the same way, for a scalar they differ on:
+    [{"meaning": "string" | "boolean" | "number" | "null", "text": <YAML>}],
+    one per meaning either reader gave it (and always the quoted string).
+    Each is the plain YAML to write in place of the value; none is lossy —
+    an integer neither reads exactly, a time, a non-finite float as a number
+    other than `.inf`/`.nan` get no number spelling. `raw_text`: today's
+    reader took this value's source text whatever its type (a `tenants:`
+    list), so only a quoted string reads the same in both.
+    tests/ops/test_migration_audit.py writes every one back and re-audits."""
     text, tag, kind = v3.get("text", ""), v3.get("tag"), _py_kind(py)
-    quoted = json.dumps(text, ensure_ascii=False)
-    if tag == "!!str" and kind == "bool":
-        return (f"if a boolean is meant, write {'true' if py else 'false'}; "
-                f"if a string is meant, quote it: {quoted}")
-    if tag == "!!str" and kind in ("int", "float"):
-        return (f"if a number is meant, write it in decimal: {py!r}; "
-                f"if a string is meant, quote it: {quoted}")
-    if tag in ("!!int", "!!float") and kind == "str":
-        return (f"if a string is meant, quote it: {quoted}; if a number is meant, "
-                f"write it in decimal: {v3.get('value') or text}")
-    if tag in ("!!int", "!!float") and kind in ("int", "float"):
-        return (f"write the number in decimal: {v3.get('value') or text} is what yaml.v3 reads, "
-                f"{py!r} what was read until now")
-    if tag == "!!timestamp" or kind == "timestamp":
-        return f"if a string is meant, quote it: {quoted}"
-    return f"quote it if a string is meant ({quoted}); otherwise write it so both read the same"
+    out: list[dict] = []
+
+    def add(meaning: str, t: str) -> None:
+        if t != text and all(o["text"] != t for o in out):
+            out.append({"meaning": meaning, "text": t})
+
+    def number(meaning_value: Any) -> None:
+        if isinstance(meaning_value, int) and not isinstance(meaning_value, bool):
+            if _INT_MIN <= meaning_value < _INT_END:
+                add("number", str(meaning_value))
+        elif isinstance(meaning_value, float):
+            add("number", _float_text(meaning_value))
+
+    # An integer past what yaml.v3 holds exactly (it reads a float): any
+    # number written there loses digits in one reader, so only the string.
+    lossy_int = kind == "int" and not (_INT_MIN <= py < _INT_END)
+    if not raw_text and not lossy_int:
+        # What today's reader meant.
+        if kind == "bool":
+            add("boolean", "true" if py else "false")
+        elif kind in ("int", "float"):
+            number(py)
+        elif kind == "null":
+            add("null", "null")
+        # What yaml.v3 means.
+        value = v3.get("value")
+        if tag == "!!bool":
+            add("boolean", "true" if value else "false")
+        elif tag == "!!null":
+            add("null", "null")
+        elif tag == "!!int" and isinstance(value, str):
+            number(int(value))
+        elif tag == "!!float":
+            number(float(value) if isinstance(value, str) else _special_float(text))
+    strings = [py] if kind == "str" else []
+    if tag == "!!str" and isinstance(v3.get("value"), str):
+        strings.append(v3["value"])
+    for st in strings + [text]:
+        add("string", json.dumps(st, ensure_ascii=False))
+    return out
+
+
+def suggestion(options: list[dict], written: Optional[str] = None) -> str:
+    """`written`: the value as written (its tag included, its anchor not)."""
+    if not options:
+        return "the two readers build a different structure here; rewrite it so both read the same"
+    head = f"replace {written} — " if written else ""
+    return head + "; ".join(f"if a {o['meaning']} is meant, write {o['text']}" for o in options)
 
 
 class _Walk:
@@ -345,6 +436,7 @@ class _Walk:
         self.capped = False
         self._nodes = 0
         self._loader: Any = None
+        self._lines = text.split("\n")
         self.root_node: Any = None
         try:
             # Composition only (no constructor runs): PyYAML's own nodes, for
@@ -389,7 +481,10 @@ class _Walk:
                 return
             if _is_v3_scalar(b):
                 if not same_scalar(a, b):
-                    self._value(path, line, a, b, suggestion(a, b))
+                    # Today's reader keeps the source text of every item of
+                    # a `tenants:` list (raw_text_sequences), whatever it is.
+                    raw = len(path) >= 2 and isinstance(path[-1], int) and path[-2] == "tenants"
+                    self._value(path, line, a, b, rewrites(a, b, raw), node)
                 continue
             if isinstance(b, dict) and isinstance(a, dict):
                 pairs = self._pairs(node)
@@ -403,7 +498,10 @@ class _Walk:
                         self.keys.append({"file": self.rel, "line": kline, "path": path, "key": k,
                                           "only_in": "yaml_v3", "yaml_v3": _v3_json(b[k])})
                     else:
-                        stack.append((path + [k], a[k], b[k], vn, kline))
+                        # The line the value is written on: an aliased or
+                        # merged value's is its anchor's / merged mapping's.
+                        stack.append((path + [k], a[k], b[k], vn,
+                                      self._line(vn) if isinstance(vn, yaml.ScalarNode) else kline))
                 continue
             if isinstance(b, list) and isinstance(a, list) and len(a) == len(b):
                 items = node.value if isinstance(node, yaml.SequenceNode) else [None] * len(b)
@@ -412,12 +510,36 @@ class _Walk:
                     stack.append((path + [i], a[i], b[i], item,
                                   self._line(item) if item is not None else line))
                 continue
-            self._value(path, line, a, b, "the two readers build a different structure here; "
-                        "rewrite it so both read the same")
+            self._value(path, line, a, b, [])
 
-    def _value(self, path: list, line: Optional[int], a: Any, b: Any, hint: str) -> None:
-        self.values.append({"file": self.rel, "line": line, "path": path,
-                            "pyyaml": _py_json(a), "yaml_v3": _v3_json(b), "suggestion": hint})
+    def _span(self, node: Any) -> Optional[dict]:
+        """Where a one-line value is written: 1-based line, 0-based column
+        range of its tag and text (an anchor before them is not part of it)."""
+        if not isinstance(node, yaml.Node):
+            return None
+        s, e = node.start_mark, node.end_mark
+        if s.line != e.line or s.line >= len(self._lines):
+            return None
+        src = self._lines[s.line]
+        col = s.column
+        if src[col:col + 1] == "&":  # `&name value`: the anchor stays
+            sp = src.find(" ", col)
+            if sp < 0 or sp >= e.column:
+                return None
+            col = sp + 1
+            while col < e.column and src[col] == " ":
+                col += 1
+        return {"line": s.line + 1, "start": col, "end": e.column, "written": src[col:e.column]}
+
+    def _value(self, path: list, line: Optional[int], a: Any, b: Any, options: list,
+               node: Any = None) -> None:
+        span = self._span(node) if options else None
+        entry = {"file": self.rel, "line": line, "path": path,
+                 "pyyaml": _py_json(a), "yaml_v3": _v3_json(b), "rewrites": options,
+                 "suggestion": suggestion(options, span["written"] if span else None)}
+        if span:
+            entry["span"] = span
+        self.values.append(entry)
 
 
 # ── the exporter's own two changes (§8) ──────────────────────────────────
@@ -544,7 +666,7 @@ def audit(root: Path, binary: Optional[str] = None, timeout: float = DEFAULT_TIM
         report["keys"].extend(walk.keys)
         if walk.capped:
             report["values"].append({"file": f, "line": None, "path": [], "pyyaml": None,
-                                     "yaml_v3": None,
+                                     "yaml_v3": None, "rewrites": [],
                                      "suggestion": f"not compared past {MAX_NODES} nodes; "
                                                    "check this file by hand"})
 
@@ -592,18 +714,34 @@ def _reading(v: Optional[dict]) -> str:
     return f"{v['type']} {json.dumps(v.get('value'), ensure_ascii=False, default=str)}"
 
 
-def _content_lines(v: Any, indent: str = "      ") -> Iterator[str]:
+_MAX_INDENT = 40  # deeper levels print their depth instead of more indent
+
+
+def _content_lines(v: Any) -> Iterator[str]:
+    """yaml.v3's reading of one file, one line per entry. Iterative: a file
+    yaml.v3 reads may nest thousands of levels (its limit is 10,000)."""
     if _is_v3_scalar(v):
-        yield f"{indent}{_reading(v)}"
+        yield f"      {_reading(v)}"
         return
-    items = v.items() if isinstance(v, dict) else enumerate(v)
-    for k, sub in items:
-        label = f"- [{k}]" if isinstance(v, list) else f"{k}:"
+    stack: list[tuple[int, Any, Any, Any]] = []
+
+    def push(depth: int, coll: Any) -> None:
+        items = list(coll.items()) if isinstance(coll, dict) else list(enumerate(coll))
+        for k, sub in reversed(items):
+            stack.append((depth, coll, k, sub))
+
+    push(0, v)
+    while stack:
+        depth, parent, k, sub = stack.pop()
+        pad = "      " + "  " * min(depth, _MAX_INDENT)
+        if depth > _MAX_INDENT:
+            pad += f"(depth {depth}) "
+        label = f"- [{k}]" if isinstance(parent, list) else f"{k}:"
         if _is_v3_scalar(sub):
-            yield f"{indent}{label} {_reading(sub)}"
+            yield f"{pad}{label} {_reading(sub)}"
         else:
-            yield f"{indent}{label}" + (" {}" if sub == {} else " []" if sub == [] else "")
-            yield from _content_lines(sub, indent + "  ")
+            yield f"{pad}{label}" + (" {}" if sub == {} else " []" if sub == [] else "")
+            push(depth + 1, sub)
 
 
 def _where(e: dict) -> str:
@@ -693,6 +831,17 @@ _HELP = {
 }
 
 
+def _timeout(value: str) -> float:
+    """--timeout: seconds, finite and > 0 (`nan`, `inf`, 0 and below refused)."""
+    try:
+        t = float(value)
+    except ValueError:
+        raise argparse.ArgumentTypeError(f"not a number of seconds: {value!r}") from None
+    if not math.isfinite(t) or t <= 0:
+        raise argparse.ArgumentTypeError(f"must be a finite number of seconds above 0: {value!r}")
+    return t
+
+
 def build_parser() -> argparse.ArgumentParser:
     h = _HELP["zh" if detect_cli_lang() == "zh" else "en"]
     p = argparse.ArgumentParser(prog="da-tools migration-audit", description=h["description"],
@@ -700,7 +849,7 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--config-dir", required=True, help=h["config_dir"])
     p.add_argument("--json", action="store_true", help=h["json"])
     p.add_argument("--da-guard-binary", default=None, help=h["binary"])
-    p.add_argument("--timeout", type=float, default=DEFAULT_TIMEOUT, help=h["timeout"])
+    p.add_argument("--timeout", type=_timeout, default=DEFAULT_TIMEOUT, help=h["timeout"])
     return p
 
 
@@ -708,17 +857,21 @@ def main(argv: Optional[list[str]] = None) -> int:
     args = build_parser().parse_args(argv)
     try:
         report = audit(Path(args.config_dir), args.da_guard_binary, args.timeout)
-    except AuditError as e:
-        print(f"ERROR: {safe_label(str(e))}", file=sys.stderr)
+        out = (json.dumps(report, ensure_ascii=False, default=str) if args.json
+               else render_text(report))
+    except Exception as e:  # noqa: BLE001 — every failure is exit 2 with a reason, never a traceback
+        reason = (str(e) if isinstance(e, AuditError)
+                  else f"the audit could not finish: {type(e).__name__}: {' '.join(str(e).split())}")
+        first, *rest = reason.split("\n")
+        print(f"ERROR: {safe_label(first)}", file=sys.stderr)
+        for line in rest:
+            print(f"  {safe_label(line)}", file=sys.stderr)
         if args.json:
-            out = empty_report()
-            out.update(status="caller_error", reason=str(e), config_dir=args.config_dir)
-            print(json.dumps(out, ensure_ascii=False))
+            err = empty_report()
+            err.update(status="caller_error", reason=reason, config_dir=args.config_dir)
+            print(json.dumps(err, ensure_ascii=False))
         return EXIT_CALLER_ERROR
-    if args.json:
-        print(json.dumps(report, ensure_ascii=False, default=str))
-    else:
-        print(render_text(report))
+    print(out)
     return EXIT_VIOLATION if has_differences(report) else EXIT_OK
 
 
