@@ -34,7 +34,7 @@ lang: en
 
 - Values written under the old YAML rules may change meaning, and some files become unreadable. For example `send_resolved: yes` in a route used to be read by the generator as the boolean `true`; parsed by yaml.v3 it is the string `"yes"`. A one-off migration audit command lists every affected value and file.
 - Python tools that read conf.d need da-guard. The da-tools image already bundles it; local pre-commit builds it with Go on the spot.
-- tenant-api gains a container (the da-tools image). When the container or the policy file is unavailable, every write that changes file content gets 503 (thresholds-only writes included); there is no switch to let writes through while unavailable.
+- tenant-api gains a container (the da-tools image). When the container or the deployment policy file is unavailable, every write that changes file content gets 503 (thresholds-only writes included); there is no switch to let writes through while unavailable.
 - The whole tree after a write must pass the generator's check before the write goes ahead. While anything in the tree would be blocked, every write through tenant-api is refused until it is fixed (§4).
 - tenant-api requires git; deployments without git are no longer supported.
 - A CI that runs only da-guard no longer covers routing and policy, and needs an extra `da-tools generate-routes --validate --strict` step.
@@ -255,7 +255,7 @@ tenant-api pod
 **The deployment's policy file is mounted into the generator container; when policy is unavailable, writes are refused.**
 
 - **The deployment's policy file** (`--policy`): its `allowed_domains` restrict webhook URL domains. The chart gains an optional value that mounts this file into the generator container, and it is passed along when judging; the tenant-api container mounts the same file read-only to check its hash (§4). Reason: this is an SSRF control (stopping the service from being used to send requests into the internal network on an attacker's behalf) and belongs outside the tenant repo; someone with write access should not be able to change it. The customer CI template `da-tools init` generates does not pass `--policy` today; the template gains an option to pass the deployment policy file, so the customer's CI and tenant-api judge against the same file.
-- **Status endpoint**: the generator container reports whether each policy file is usable, and tenant-api reads it to produce `tenant_api_policy_available`. Alerts read this metric, so it keeps its name; it has no labels today.
+- **Status endpoint**: the generator container reports whether the deployment policy file is usable, and tenant-api reads it to produce `tenant_api_policy_available`. This metric reflects only the deployment policy file and the container; an error in a policy file inside the repo does not set it to 0, and such writes are refused with findings. Alerts read this metric, so it keeps its name; it has no labels today.
   - When the status endpoint cannot be reached (container unreachable), the metric is 0, so the alert still fires.
   - Its description counts "keeping the last usable content" as usable; after the switch old content is no longer kept, so the description changes then.
 - **No escape hatch**: when the deployment policy file or the generator container is unavailable, every write that changes file content is refused (thresholds-only writes included) with 503.
@@ -379,6 +379,7 @@ Duplicate keys, more than one document, tags outside the allow-list: today the g
   - [#2674](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/2674): a self-referencing YAML alias.
 - **The offline differential test for batch patch merging** (§4).
 - **da-guard's "not judged"**: the exit code and report content are tested.
+- **The generator container's refusal conditions**: amtool missing, validated and to-be-written content still differing after one revalidation, and a generator older than a policy requires each have a test, and each ends in a refusal.
 - In CI, run against the version pair the chart pins.
 
 ## Cost

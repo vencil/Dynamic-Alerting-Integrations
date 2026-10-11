@@ -40,7 +40,7 @@ updated_at: 2026-10-11
 
 - 依舊版 YAML 規則成立的寫法，意思可能改變，部分檔案會變成讀不了。例如路由裡的 `send_resolved: yes`，產生器過去讀成布林 `true`，改由 yaml.v3 解析後是字串 `"yes"`。提供一次性的遷移稽核指令，列出所有受影響的值與檔案。
 - 讀 conf.d 的 Python 工具需要 da-guard。da-tools 映像已內附；本機的 pre-commit 會以 Go 現場建置。
-- tenant-api 多一個容器（da-tools 映像）。容器或 policy 檔不可用時，所有會改變檔案內容的寫入回 503（包括只改閾值的），沒有「不可用時照樣放行」的開關。
+- tenant-api 多一個容器（da-tools 映像）。容器或部署端 policy 檔不可用時，所有會改變檔案內容的寫入回 503（包括只改閾值的），沒有「不可用時照樣放行」的開關。
 - 寫入後的整棵樹必須通過產生器的檢查才寫入。樹上任何地方有會擋下的問題，經 tenant-api 的寫入都會被拒，直到修好（§4）。
 - tenant-api 必須搭配 git，不再支援沒有 git 的部署。
 - 只跑 da-guard 的 CI 不再涵蓋路由與 policy，要另外加一步 `da-tools generate-routes --validate --strict`。
@@ -259,7 +259,7 @@ tenant-api pod
 **部署端的 policy 檔掛進產生器容器；policy 檔不可用就拒收寫入。**
 
 - **部署端的 policy 檔**（`--policy`）：檔裡的 `allowed_domains` 限制 webhook 網址的網域。chart 加一個可選值把這份檔掛進產生器容器，判定時一併帶上；tenant-api 容器也唯讀掛載同一份，用來核對 hash（§4）。理由：這是防 SSRF（服務被拿來替攻擊者對內網發請求）的控制，要放在租戶 repo 之外；有寫入權限的人不該能改掉它。`da-tools init` 產生的客戶 CI 模板目前沒帶 `--policy`；模板改為可選擇帶入部署端 policy 檔，讓客戶 CI 與 tenant-api 判的是同一份。
-- **狀態端點**：產生器容器回報每份 policy 檔是否可用，tenant-api 讀它來產生 `tenant_api_policy_available`。這個 metric 有告警在讀，維持原名；目前沒有 label。
+- **狀態端點**：產生器容器回報部署端 policy 檔是否可用，tenant-api 讀它來產生 `tenant_api_policy_available`。這個 metric 只反映部署端 policy 檔與容器；repo 裡的 policy 檔有錯不會讓它變 0，那種情況寫入以 finding 拒收。這個 metric 有告警在讀，維持原名；目前沒有 label。
   - 讀不到狀態端點（容器不可達）時，metric 為 0，告警照樣會亮。
   - 它的說明文字把「沿用上一份可用內容」算成可用，切換後不再沿用舊內容，說明文字屆時要改。
 - **沒有放行開關**：部署端 policy 檔或產生器容器不可用時，會改變檔案內容的寫入一律拒收（包括只改閾值的），回 503。
@@ -383,6 +383,7 @@ CI 的宣告表記錄每個套件與 patch 何時可刪；做切換的那支 PR 
   - [#2674](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/2674)：自我參照的 YAML 別名。
 - **批次 patch 合併的離線差分測試**（§4）。
 - **da-guard 的「未判定」**：exit code 與報告內容有測試。
+- **產生器容器的拒收條件**：找不到 amtool、驗過與要寫的內容重驗一次仍不一致、產生器比 policy 要求的版本舊，三者各有測試，結果都是拒收。
 - 在 CI 裡，以 chart 固定的那一組版本執行。
 
 ## 成本
