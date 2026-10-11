@@ -36,8 +36,43 @@ type Backup map[string][]byte
 
 // Load reads a backup from path: "-" for standard input, a directory (a copy
 // of the single-host state directory), or a file holding the state
-// ConfigMap as YAML or JSON.
+// ConfigMap as YAML or JSON. A backup must hold at least one record and only
+// tenant-api state keys: another ConfigMap (threshold-config, the federation
+// token store) or a conf.d directory is refused rather than restored as
+// nothing.
 func Load(path string, stdin io.Reader) (Backup, error) {
+	bak, err := load(path, stdin)
+	if err != nil {
+		return nil, err
+	}
+	if err := checkBackup(bak, path); err != nil {
+		return nil, err
+	}
+	return bak, nil
+}
+
+func checkBackup(bak Backup, name string) error {
+	if len(bak) == 0 {
+		return fmt.Errorf("%s holds no records: not a tenant-api state backup", name)
+	}
+	var foreign []string
+	for k := range bak {
+		if !ValidKey(k) {
+			foreign = append(foreign, k)
+		}
+	}
+	if len(foreign) > 0 {
+		sort.Strings(foreign)
+		if len(foreign) > 5 {
+			foreign = append(foreign[:5], "…")
+		}
+		return fmt.Errorf("%s holds keys that are not tenant-api state records (%s): not a tenant-api state backup",
+			name, strings.Join(foreign, ", "))
+	}
+	return nil
+}
+
+func load(path string, stdin io.Reader) (Backup, error) {
 	if path == "-" {
 		b, err := io.ReadAll(stdin)
 		if err != nil {
@@ -80,8 +115,8 @@ func loadDir(dir string) (Backup, error) {
 }
 
 // parseConfigMap reads a ConfigMap document (JSON is YAML) and returns its
-// data. Anything else — a List, a different kind, no data map — is refused
-// rather than read as an empty backup.
+// data. A List or a different kind is refused; Load refuses an empty or
+// foreign data map.
 func parseConfigMap(b []byte, name string) (Backup, error) {
 	var cm struct {
 		Kind string            `yaml:"kind"`

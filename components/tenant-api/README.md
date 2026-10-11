@@ -482,7 +482,7 @@ kubectl -n tenant-api exec -i deploy/tenant-api -- \
 # 確認後去掉 --dry-run 再跑一次
 ```
 
-- `--from`：`kubectl get configmap ... -o yaml` 或 `-o json` 的輸出檔、dir 模式的目錄，或 `-` 讀標準輸入。
+- `--from`：`kubectl get configmap ... -o yaml` 或 `-o json` 的輸出檔、dir 模式的目錄，或 `-` 讀標準輸入。備份至少要有一筆紀錄、且每個 key 都是 tenant-api 的 state 紀錄；其他 ConfigMap（例如 `threshold-config`、federation token store）或 conf.d 目錄會被拒絕（rc 1），不會被當成空備份「還原成功」。
 - **帳本（`_account_registry.yaml`）一律合併、不覆蓋**：配發取「現行帳本、備份、仍有效的 logs token」三者聯集；`next_account_id` 取現行、備份、聯集中最大 id + 1 三者最大，只升不降。同一租戶在兩處的 id 不同、或同一個 id 屬於兩個租戶時，整次還原拒絕（rc 1）、什麼都不寫，並列出衝突。帳本不能列在 `--keys`。
 - **其他紀錄只有列在 `--keys` 才整筆覆蓋**；沒列的會印在「not restored」一行。
 - 啟用 federation（設了 `TA_FEDERATION_KEY`）時會讀 federation token store 取有效 logs token 的 `account_id`；讀不到就拒絕還原。
