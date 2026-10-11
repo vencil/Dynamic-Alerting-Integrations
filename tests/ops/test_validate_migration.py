@@ -922,3 +922,47 @@ class TestMainExitCodes:
             capture_output=True, text=True, encoding="utf-8", timeout=60,
         )
         assert proc.returncode == 2, (proc.stdout, proc.stderr)
+
+
+# ---------------------------------------------------------------------------
+# --tolerance reaches the comparison (#2494)
+# ---------------------------------------------------------------------------
+
+class TestToleranceFlag:
+    """`--tolerance` used to be parsed and then dropped: `run_single_comparison`
+    called `compare_vectors` with its built-in 0.001, so every value judged
+    the same whatever the flag said."""
+
+    @staticmethod
+    def _statuses(tmp_path, *extra):
+        # 100 vs 105: a 5% gap — a mismatch at the default 0.1%, a match at 10%.
+        side = [
+            ([{"metric": {"tenant": "t1"}, "value": [0, "100"]}], None),
+            ([{"metric": {"tenant": "t1"}, "value": [0, "105"]}], None),
+        ]
+        out_dir = tmp_path / "out"
+        with mock.patch("validate_migration.query_prometheus", side_effect=side), \
+             mock.patch("sys.argv", ["validate_migration.py", "--old", "old_q",
+                                     "--new", "new_q", "--prometheus",
+                                     "http://p:9090", "-o", str(out_dir), *extra]):
+            vm.main()
+        with open(out_dir / "validation-report.csv", encoding="utf-8") as fh:
+            return [row["Status"] for row in csv.DictReader(fh)]
+
+    def test_a_wider_tolerance_turns_the_gap_into_a_match(self, tmp_path):
+        assert self._statuses(tmp_path, "--tolerance", "0.1") == ["match"]
+
+    def test_the_default_tolerance_still_reports_the_gap(self, tmp_path):
+        """Must-fire control: the fixture really is a mismatch by default."""
+        assert self._statuses(tmp_path) == ["mismatch"]
+
+
+    @pytest.mark.parametrize("bad", ["inf", "1e400", "nan", "-0.1", "abc"])
+    def test_a_tolerance_that_judges_nothing_is_refused(self, tmp_path, bad):
+        """inf would match every pair; negative or NaN would match none."""
+        with pytest.raises(SystemExit) as exc:
+            self._statuses(tmp_path, "--tolerance", bad)
+        assert exc.value.code == 2
+
+    def test_zero_tolerance_is_accepted(self, tmp_path):
+        assert self._statuses(tmp_path, "--tolerance", "0") == ["mismatch"]
