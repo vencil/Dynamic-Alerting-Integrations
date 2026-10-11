@@ -643,9 +643,20 @@ const orgEnfMixedGroupYAML = `groups:
     members: [` + orgEnfTenantIn + `, ` + orgEnfTenantOut + `]
 `
 
+// orgEnfGroupMemberFiles is groupsYAML plus a tenant file for each g-mixed
+// member: a group batch skips a member that does not exist (#2882), so the
+// members must be on disk for the batch to reach its permission checks.
+func orgEnfGroupMemberFiles(groupsYAML string) map[string]string {
+	files := map[string]string{"_groups.yaml": groupsYAML}
+	for _, id := range []string{orgEnfTenantIn, orgEnfTenantOut} {
+		files[id+".yaml"] = "tenants:\n  " + id + ": {}\n"
+	}
+	return files
+}
+
 func TestOrgWriteEnforce_GroupBatch_Sync(t *testing.T) {
 	t.Parallel()
-	f := newOrgEnfFixture(t, map[string]string{"_groups.yaml": orgEnfMixedGroupYAML})
+	f := newOrgEnfFixture(t, orgEnfGroupMemberFiles(orgEnfMixedGroupYAML))
 	body := bytes.NewBufferString(`{"patch":{"_silent_mode":"warning"}}`)
 	req := newRequestWithChiParam("POST", "/api/v1/groups/g-mixed/batch", "id", "g-mixed", body)
 	req = orgEnfIdentity(req, orgEnfMemberOrg)
@@ -719,7 +730,7 @@ func TestOrgWriteEnforce_StarSemantics_ListEndpoint(t *testing.T) {
 // the sync GroupBatch pin plus the async submit/poll cycle.
 func TestOrgWriteEnforce_GroupBatch_Async(t *testing.T) {
 	t.Parallel()
-	f := newOrgEnfFixture(t, map[string]string{"_groups.yaml": orgEnfMixedGroupYAML})
+	f := newOrgEnfFixture(t, orgEnfGroupMemberFiles(orgEnfMixedGroupYAML))
 	taskMgr := async.NewManager(2)
 	defer taskMgr.Close()
 	d := f.deps()

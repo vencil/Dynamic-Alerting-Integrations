@@ -26,9 +26,8 @@ type GroupBatchRequest struct {
 	// keys to remove from every member's config block; at most 1000 entries. Only "_routing" is
 	// accepted: removing it resets the member to `_routing_defaults` and its routing profile,
 	// which turns routing back on for a member a disabling `_routing` turned off (the change is
-	// judged by domain policy like a `_routing` patch). A key the member does not carry, or a
-	// member that does not exist, makes it a no-op: with no patch nothing is written and no
-	// tenant is created. A key must not appear twice, nor in both patch and unset.
+	// judged by domain policy like a `_routing` patch). A key the member does not carry makes it
+	// a no-op. A key must not appear twice, nor in both patch and unset.
 	Unset []string `json:"unset,omitempty" validate:"max=1000"`
 }
 
@@ -68,6 +67,8 @@ type GroupBatchResponse struct {
 // @Description (one operation per member): patch values are range-checked (400), and each member is checked for write permission and domain policy.
 // @Description unset removes keys from every member (only "_routing"): unset ["_routing"] turns routing back on for members a disabling _routing turned off, judged by domain policy.
 // @Description PR write-back mode: the whole group becomes one PR/MR (status pending_review, pr_url, pr_number); nothing is committed to the base branch.
+// @Description A member that does not exist (no tenant section on the base the write merges into, e.g. offboarded while still listed in the group) is not created:
+// @Description its result has status skipped and message "tenant does not exist", nothing is written for it, and the summary counts it apart ("1 succeeded, 1 skipped").
 // @Description PR write-back mode ignores ?async=true and answers 200 synchronously, as POST /api/v1/tenants/batch does.
 // @Description Direct mode: a member whose config file cannot be loaded as a tenant config (config_error malformed_yaml | invalid_config)
 // @Description is not patched: its result carries status error and code TENANT_CONFIG_NOT_LOADABLE; repair the tenant file itself first.
@@ -164,10 +165,12 @@ func GroupBatch(d *Deps) http.HandlerFunc {
 		// are deliberately NOT applied to the expansion: the group, not the
 		// caller, sets its size, and each member's id is checked per op.
 		// A member listed twice yields two ops on one tenant, exactly as two
-		// such ops in a /tenants/batch body would.
+		// such ops in a /tenants/batch body would. #2882: unlike those ops, a
+		// member that does not exist is skipped, not created — offboarding a
+		// tenant does not prune it from the groups listing it.
 		ops := make([]BatchOperation, len(g.Members))
 		for i, member := range g.Members {
-			ops[i] = BatchOperation{TenantID: member, Patch: req.Patch, Unset: req.Unset}
+			ops[i] = BatchOperation{TenantID: member, Patch: req.Patch, Unset: req.Unset, skipAbsent: true}
 		}
 
 		taskID := fmt.Sprintf("group-batch-%s-%s",

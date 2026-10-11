@@ -125,7 +125,7 @@
 | `GET` | `/api/v1/groups/{id}` | read | 取得群組 |
 | `PUT` | `/api/v1/groups/{id}` | write + 逐成員 write | 寫入;對所有 `members` 都需 write,否則回 403 + 不足清單 |
 | `DELETE` | `/api/v1/groups/{id}` | write + 逐成員 write | 刪除(同上權限) |
-| `POST` | `/api/v1/groups/{id}/batch` | read + 逐成員 write | 對群組全成員部分合併 patch(只改指定 key、保留其餘;同步 / 非同步);`unset` 與 `POST /tenants/batch` 同義。每個成員展開成一筆 op、走與 `POST /tenants/batch` 同一條管線:patch 值檢查(違規 400)、逐成員 RBAC + domain policy;PR 模式整組合成**一支** PR(`status: pending_review`),不直接 commit 到 base branch(#2339) |
+| `POST` | `/api/v1/groups/{id}/batch` | read + 逐成員 write | 對群組全成員部分合併 patch(只改指定 key、保留其餘;同步 / 非同步);`unset` 與 `POST /tenants/batch` 同義。每個成員展開成一筆 op、走與 `POST /tenants/batch` 同一條管線:patch 值檢查(違規 400)、逐成員 RBAC + domain policy;PR 模式整組合成**一支** PR(`status: pending_review`),不直接 commit 到 base branch(#2339)。成員名單中**已不存在**的租戶(例如退租後仍留在群組裡)不會被建回來:在寫入鎖內、以寫入所依據的 base 判定(PR 模式為最新 origin base),該筆結果 `status: skipped`、`message: "tenant does not exist"`,不寫入、不進 PR,`summary` 另計(`1 succeeded, 1 skipped`);`POST /tenants/batch` 指名的新租戶照常建立(#2882) |
 | `GET` | `/api/v1/views` | read | 列出 saved view |
 | `GET` `PUT` `DELETE` | `/api/v1/views/{id}` | read / write | Saved view CRUD |
 
