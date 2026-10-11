@@ -249,20 +249,33 @@ _LOCAL_SOURCE_DIRS = (
 )
 
 
-def _find_repo_root(start_dir):
-    """Walk up from `start_dir` to find a directory containing `.git`.
+# Where this file sits in a checkout. Its root is the directory holding it.
+_APP_PARTS = ("components", "da-tools", "app")
 
-    `.git` can be a directory (regular checkout) or a file (worktree).
-    Returns None if no `.git` is found before reaching the filesystem root.
+
+def _find_repo_root(start_dir):
+    """The root of the tree this file sits in, by structure (#2852).
+
+    In a checkout `start_dir` is `<root>/components/da-tools/app`, so the root
+    is three levels up — in a clone, a worktree, a `git archive` tarball and a
+    vendored copy alike, `.git` or not. Anywhere else (the image's flat
+    `/opt/da-tools`) there is no repo tree: returns None.
+
+    ⛔ Not "the nearest ancestor with a `.git`": a copy with none of its own,
+    nested in another project, then ran THAT project's
+    `scripts/tools/ops/<tool>.py`. Same intent as
+    `_lib_compat.find_project_root` (this module imports no `_lib_*`), but
+    keyed on this file's own position: that one looks for the innermost
+    enclosing `scripts/tools`, which this file is never under.
     """
     cur = os.path.abspath(start_dir)
-    while True:
-        if os.path.exists(os.path.join(cur, ".git")):
-            return cur
-        parent = os.path.dirname(cur)
-        if parent == cur:
-            return None
-        cur = parent
+    parts = []
+    for _ in _APP_PARTS:
+        cur, name = os.path.split(cur)
+        parts.append(name)
+    if tuple(reversed(parts)) != _APP_PARTS:
+        return None
+    return cur
 
 
 def _resolve_script_path(script_name):
