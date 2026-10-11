@@ -460,6 +460,37 @@ curl -s localhost:8080/health
 curl -s localhost:8080/metrics
 ```
 
+### state store 的備份與還原
+
+tenant-api 自己的紀錄（群組、saved views、federation 白名單與子集、AccountID 帳本）在 state store 裡，一份就是完整快照，匯出不需要工具（[#2884](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/2884)）：
+
+```bash
+# Kubernetes（configmap 模式）
+kubectl -n tenant-api get configmap tenant-api-state -o yaml > tenant-api-state-backup.yaml
+# 單機（dir 模式）：複製整個 TA_STATE_DIR
+cp -a /state ./tenant-api-state-backup
+```
+
+⛔ **不要用 `kubectl apply`（或把目錄複製回去）還原。** 備份之後才配發的 AccountID 不在備份裡，`next_account_id` 也會倒退，下一個要 logs token 的租戶就拿到同一個 id——它讀得到前一個租戶還在保留期內的 log（[ADR-021](../../docs/adr/021-tenant-log-query-federation.md)）。開機檢查擋不住，因為還原後的帳本格式完全正常。
+
+還原一律用同一個 binary 的子命令，在 tenant-api 的 pod 裡跑（沿用 pod 的 ServiceAccount 與 `TA_*` 設定，不新增網路端點）：
+
+```bash
+# 先看會改什麼（不寫入）
+kubectl -n tenant-api exec -i deploy/tenant-api -- \
+  tenant-api state restore --from - --dry-run --keys _groups.yaml,_views.yaml < tenant-api-state-backup.yaml
+# 確認後去掉 --dry-run 再跑一次
+```
+
+- `--from`：`kubectl get configmap ... -o yaml` 或 `-o json` 的輸出檔、dir 模式的目錄，或 `-` 讀標準輸入。
+- **帳本（`_account_registry.yaml`）一律合併、不覆蓋**：配發取「現行帳本、備份、仍有效的 logs token」三者聯集；`next_account_id` 取現行、備份、聯集中最大 id + 1 三者最大，只升不降。同一租戶在兩處的 id 不同、或同一個 id 屬於兩個租戶時，整次還原拒絕（rc 1）、什麼都不寫，並列出衝突。帳本不能列在 `--keys`。
+- **其他紀錄只有列在 `--keys` 才整筆覆蓋**；沒列的會印在「not restored」一行。
+- 啟用 federation（設了 `TA_FEDERATION_KEY`）時會讀 federation token store 取有效 logs token 的 `account_id`；讀不到就拒絕還原。
+- dir 模式下伺服器與子命令以檔案鎖（flock）序列化寫入，伺服器運行中也可以還原。
+- 結束碼：0 完成（或 dry run 完成）、1 拒絕或失敗、2 用法錯誤。
+
+⚠️ 已知限制：token 紀錄只保留到過期為止。帳本整份遺失、只剩舊備份時，**備份之後才配發、目前又沒有有效 logs token** 的租戶，其 id 沒有任何地方記得：還原後的計數器可能不高於這些 id，之後的配發**可能重發它們**（跨租戶 log 洩漏），還原工具也無從察覺。降低這個窗口的方法是備份頻率：備份越新，備份之後才配發的 id 越少。
+
 ## 開發
 
 ```bash
