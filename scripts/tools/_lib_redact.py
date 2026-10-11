@@ -171,12 +171,22 @@ def credential_values(value: Any, *, text_key: Callable[[str], bool] = lambda _k
     return Secrets(out)
 
 
+def _long_number(s: str) -> float | None:
+    n = _number(s)
+    if n is None or (len(s.strip()) < MIN_SUBSTRING_SECRET and abs(n) < 10 ** (MIN_SUBSTRING_SECRET - 1)):
+        return None
+    return n
+
+
 def mask_values(value: Any, secrets: set[str] | frozenset[str]) -> tuple[Any, int]:
     """`value` with every credential value in `secrets` replaced by REDACTED
     wherever it occurs — a whole string, a number whose text it is, a
     mapping key, or, for a value at least MIN_SUBSTRING_SECRET long, a part
     of a longer string — and how many were. A value that reads as a number
-    masks any number, or text reading as one, of the same value.
+    and is long (MIN_SUBSTRING_SECRET characters) or large (that many digits)
+    masks any number, or text reading as one, of the same value; a short
+    small one (`X-Scope-OrgID: "1"`) only its own text, or every threshold
+    of 1 would be masked.
 
     Substrings: one pass of one pattern, longest first, so a secret that
     contains another is masked whole and REDACTED put in is never matched
@@ -187,7 +197,7 @@ def mask_values(value: Any, secrets: set[str] | frozenset[str]) -> tuple[Any, in
     if not secrets:
         return value, 0
     whole = frozenset(secrets)
-    numbers = {n for n in map(_number, whole) if n is not None}
+    numbers = {n for n in map(_long_number, whole) if n is not None}
     long_ = sorted((s for s in secrets if len(s) >= MIN_SUBSTRING_SECRET), key=len, reverse=True)
     pattern = re.compile("|".join(re.escape(s) for s in long_)) if long_ else None
     count = 0

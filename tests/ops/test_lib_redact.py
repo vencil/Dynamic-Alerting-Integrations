@@ -339,3 +339,15 @@ def test_secrets_has_no_set_operation_that_would_print_them():
         with pytest.raises(TypeError):
             op()
     assert "SECRETAAAA" in s and len(s) == 1 and s == {"SECRETAAAA"} and set(s) == {"SECRETAAAA"}
+
+
+
+def test_a_short_small_number_masks_only_its_own_text():
+    """`X-Scope-OrgID: "1"` 這類短的數值憑證：只遮完全相同的文字，不以數值遮
+    `1.0`、`01`、整數 1——否則所有值為 1 的閾值都被遮掉。"""
+    masked, n = r.mask_values(["1", "1.0", "01", 1, 1.0, "1e0"], {"1"})
+    assert masked == [r.REDACTED, "1.0", "01", r.REDACTED, 1.0, "1e0"] and n == 2
+    # 文字短但數值大（1e12）、或文字長（0012345678）的仍以數值比
+    assert r.mask_values(["1e+12", 1e12], {"1e12"})[0] == [r.REDACTED, r.REDACTED]
+    assert r.mask_values(["1.2345678e+07"], {"0012345678"})[0] == [r.REDACTED]
+    assert r.mask_values(["9999999.0"], {"9999999"})[0] == ["9999999.0"]
