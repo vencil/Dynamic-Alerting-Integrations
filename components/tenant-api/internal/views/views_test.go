@@ -174,7 +174,7 @@ func TestValidateViewID(t *testing.T) {
 func TestNewManager_NoFile(t *testing.T) {
 	t.Parallel()
 	dir := t.TempDir()
-	mgr := NewManager(dir)
+	mgr := NewDirManager(dir)
 
 	cfg := mgr.Get()
 	if len(cfg.Views) != 0 {
@@ -192,7 +192,7 @@ func TestNewManager_WithFile(t *testing.T) {
 	t.Parallel()
 	dir, _ := testutil.MkTempYAML(t, "_views.yaml", sampleViewsYAML)
 
-	mgr := NewManager(dir)
+	mgr := NewDirManager(dir)
 
 	list := mgr.ListViews()
 	if len(list) != 2 {
@@ -213,7 +213,7 @@ func TestManager_GetView(t *testing.T) {
 	t.Parallel()
 	dir, _ := testutil.MkTempYAML(t, "_views.yaml", sampleViewsYAML)
 
-	mgr := NewManager(dir)
+	mgr := NewDirManager(dir)
 
 	t.Run("found", func(t *testing.T) {
 		v, ok := mgr.GetView("prod-finance")
@@ -258,7 +258,7 @@ func TestManager_ListViews(t *testing.T) {
 `
 	testutil.WriteYAML(t, dir, "_views.yaml", multiViewYAML)
 
-	mgr := NewManager(dir)
+	mgr := NewDirManager(dir)
 	list := mgr.ListViews()
 
 	if len(list) != 3 {
@@ -288,7 +288,7 @@ func TestManager_Reload(t *testing.T) {
 `
 	testutil.WriteYAML(t, dir, "_views.yaml", initialYAML)
 
-	mgr := NewManager(dir)
+	mgr := NewDirManager(dir)
 	initial := mgr.Get()
 	if len(initial.Views) != 1 {
 		t.Errorf("initial views = %d, want 1", len(initial.Views))
@@ -349,7 +349,7 @@ func TestManager_Reload_NoFile(t *testing.T) {
 `
 	filePath := testutil.WriteYAML(t, dir, "_views.yaml", initialYAML)
 
-	mgr := NewManager(dir)
+	mgr := NewDirManager(dir)
 	initial := mgr.Get()
 	if len(initial.Views) != 1 {
 		t.Errorf("initial views = %d, want 1", len(initial.Views))
@@ -385,7 +385,7 @@ func TestManager_Reload_HashCaching(t *testing.T) {
 `
 	testutil.WriteYAML(t, dir, "_views.yaml", yaml)
 
-	mgr := NewManager(dir)
+	mgr := NewDirManager(dir)
 	first := mgr.Get()
 	initialHash := mgr.LastHash()
 

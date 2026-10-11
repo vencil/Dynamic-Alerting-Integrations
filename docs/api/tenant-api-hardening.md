@@ -111,7 +111,7 @@ tenant 寫入的其他錯誤也一樣：`PUT /tenants/{id}`、`PUT /tenants/{id}
 
 | code | status | 內容 |
 |---|---|---|
-| `CONFIG_DECODE_ERROR` | 500 | conf.d 設定內容解碼失敗：`/effective` 的 `parse defaults[i]: …`、custom-alerts 寫入時租戶檔內容無法 merge／解析、`_groups.yaml`／`_views.yaml` 無法解析；文字說明哪個項目出錯，不含路徑 |
+| `CONFIG_DECODE_ERROR` | 500 | conf.d 設定內容解碼失敗：`/effective` 的 `parse defaults[i]: …`、custom-alerts 寫入時租戶檔內容無法 merge／解析、state store 的 `_groups.yaml`／`_views.yaml` 紀錄無法解析；文字說明哪個項目出錯，不含路徑 |
 | `BASE_RESTORE_FAILED` | 500 | PR 模式寫入後 worktree 回不到 base：列出分支名與是否已推上 origin（不要重試，否則會再推一條分支）；不含底層 git 錯誤 |
 
 ---
@@ -265,7 +265,7 @@ ADR-016 提到「flat tenant 缺 `_metadata.{domain,region,environment}` 時可�
 | `PutGroupRequest.label` / `PutViewRequest.label` | required, 1-256 chars |
 | `PutGroupRequest.description` / `PutViewRequest.description` | ≤ 4096 chars |
 | `PutGroupRequest.members` | 0-1000 entries, each 1-256 chars |
-| `PutGroupRequest.filters` / `PutViewRequest.filters` 項目數 | ≤ 20 entries（view 另外 required、至少 1 個）。transform 跑在寫入鎖內，且結果寫進 `_groups.yaml` / `_views.yaml` ⇒ 劣化是永久的 |
+| `PutGroupRequest.filters` / `PutViewRequest.filters` 項目數 | ≤ 20 entries（view 另外 required、至少 1 個）。transform 跑在 state store 的讀改寫內（輸掉並行寫入會重跑），且結果寫進 state store 的 `_groups.yaml` / `_views.yaml` 紀錄 ⇒ 劣化是永久的 |
 | `Filters` map values | ≤ 1024 chars per value |
 | `PUT /tenants/{id}` body 自己寫的 receiver（`_routing.receiver`、`overrides[].receiver`、`routes[].receiver`） | receiver 契約（`threshold-exporter/app/pkg/receiverspec`，與 da-guard 共用；[#2295](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/2295)）：已知 type、必填欄位與格式、PagerDuty 恰好一把 key、`send_resolved`／`require_tls` 為 YAML 布林、`http_config` 最多一種 auth 且 `proxy_url` 能被 Go `net/url` 解析。`POST /tenants/{id}/validate` 跑同一段 pre-flight。`field` 形如 `tenants.<id>._routing.receiver.url`。在 domain policy 之後判（policy 違規仍是 403）；繼承來的 receiver 不判 |
 

@@ -16,6 +16,9 @@ import (
 // prefixed with msg500. It always writes exactly one response, so callers invoke it
 // inside `if err != nil { ...; return }`.
 func writeFederationGitError(w http.ResponseWriter, r *http.Request, err error, msg500 string) {
+	if handler.WriteStateError(w, r, err) {
+		return
+	}
 	if errors.Is(err, gitops.ErrWriteOverloaded) || errors.Is(err, gitops.ErrForgeDegraded) {
 		handler.WriteOverloaded(w, r)
 		return

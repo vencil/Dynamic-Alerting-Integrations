@@ -22,11 +22,11 @@ package account
 // uses fleet-nonemptiness to tell Day-0 from corruption.
 
 import (
+	"context"
 	"fmt"
-	"os"
-	"path/filepath"
 
 	"github.com/vencil/tenant-api/internal/confd"
+	"github.com/vencil/tenant-api/internal/statestore"
 )
 
 // ListTenantIDs returns the tenant IDs in configDir — one per non-hidden,
@@ -60,58 +60,47 @@ func ListTenantIDs(configDir string) ([]string, error) {
 // VerifyRegistryNotResetWithFleet is the startup self-check for the
 // blank-registry-but-fleet-nonempty corruption (Gemini #2). It returns a
 // non-nil error — for the caller to treat as FATAL — when the AccountID
-// registry under configDir is blank/missing BUT conf.d already holds ≥1 tenant.
+// registry record in the state store is blank/missing BUT conf.d already
+// holds ≥1 tenant.
 //
 // Decision table:
-//   - registry present and non-blank        → OK (nil). Normal steady state;
-//     Parse's own fail-closed checks guard its content separately.
-//   - registry blank/missing, fleet EMPTY   → OK (nil). Genuine Day-0 — the
-//     first onboarding will create the registry from the floor. Correct.
-//   - registry blank/missing, fleet NON-EMPTY → ERROR. The ledger that those
-//     tenants were allocated against is gone; booting would silently re-issue
-//     ids from 1000 (cross-tenant leak). Refuse to start.
+//   - registry present and non-blank        → OK (nil). Parse's own
+//     fail-closed checks guard its content at issuance time.
+//   - registry blank/missing, fleet EMPTY   → OK (nil). Genuine Day-0.
+//   - registry blank/missing, fleet NON-EMPTY → ERROR: the ledger those
+//     tenants were allocated against is gone; booting would re-issue ids.
 //
-// A configDir that does not exist / cannot be read is reported as an error too
-// (a misconfigured mount must not boot silently). Reading the registry file is
-// the only I/O on the registry — it does NOT call Parse (a malformed-but-present
-// registry is the allocator's fail-closed concern at issuance time, not a
-// reason to block startup; this guard is specifically about the blank-reset
-// false-Day-0 hazard).
-func VerifyRegistryNotResetWithFleet(configDir string) error {
+// An unreadable conf.d or state store is an error too (a misconfigured mount
+// or RBAC must not boot silently). Run it after statemigrate.Import, so a
+// registry still in its old conf.d home has been carried over first.
+func VerifyRegistryNotResetWithFleet(ctx context.Context, configDir string, s statestore.Store) error {
 	tenants, err := ListTenantIDs(configDir)
 	if err != nil {
 		return fmt.Errorf("account: cannot enumerate tenants in %q for registry integrity check: %w", configDir, err)
 	}
 	if len(tenants) == 0 {
-		// Day-0: no tenants yet → a blank/missing registry is expected.
 		return nil
 	}
-
-	registryPath := filepath.Join(configDir, RegistryFileName)
-	data, err := os.ReadFile(registryPath)
+	data, ok, err := s.Get(ctx, RegistryFileName)
 	switch {
-	case err == nil:
-		if isBlank(data) {
-			return registryResetError(configDir, len(tenants), "is blank (0 bytes / whitespace only)")
-		}
-		return nil
-	case os.IsNotExist(err):
-		return registryResetError(configDir, len(tenants), "is missing")
-	default:
-		// An unreadable-but-present registry (permissions, I/O) is also a
-		// don't-boot condition: we cannot confirm the ledger is intact.
-		return fmt.Errorf("account: cannot read %s for registry integrity check: %w", RegistryFileName, err)
+	case err != nil:
+		return fmt.Errorf("account: cannot read %s from %s for registry integrity check: %w", RegistryFileName, s.Describe(), err)
+	case !ok:
+		return registryResetError(s.Describe(), len(tenants), "is missing")
+	case isBlank(data):
+		return registryResetError(s.Describe(), len(tenants), "is blank (0 bytes / whitespace only)")
 	}
+	return nil
 }
 
 // registryResetError formats the fail-loud message for a blank/missing registry
 // alongside a non-empty fleet, naming the remediation.
-func registryResetError(configDir string, tenantCount int, state string) error {
+func registryResetError(store string, tenantCount int, state string) error {
 	return fmt.Errorf(
-		"account: refusing to start — %s in %q %s, but conf.d already holds %d tenant(s); "+
+		"account: refusing to start — %s in %s %s, but conf.d already holds %d tenant(s); "+
 			"booting would silently re-issue account_ids from %d (cross-tenant log leak). "+
-			"Restore %s from git history / backup, or (only if this is a genuine fresh install "+
+			"Restore %s from a backup, or (only if this is a genuine fresh install "+
 			"with no prior allocations) remove the stale tenant files",
-		RegistryFileName, configDir, state, tenantCount, FirstTenantAccountID, RegistryFileName,
+		RegistryFileName, store, state, tenantCount, FirstTenantAccountID, RegistryFileName,
 	)
 }

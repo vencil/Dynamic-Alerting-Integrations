@@ -22,7 +22,7 @@ tenant_api_rate_limit_active_callers 0
 # HELP tenant_api_federation_orphaned_tokens Live federation token records whose tenant is no longer in conf.d.
 # TYPE tenant_api_federation_orphaned_tokens gauge
 tenant_api_federation_orphaned_tokens 0
-# HELP tenant_api_federation_orphaned_subset_files Tenants no longer in conf.d that still have a conf.d/_federation/ subset file (counted once per tenant, whatever the file's spelling).
+# HELP tenant_api_federation_orphaned_subset_files Tenants no longer in conf.d that still have a federation subset record in the tenant-api state store (name kept from when subsets were conf.d/_federation/ files).
 # TYPE tenant_api_federation_orphaned_subset_files gauge
 tenant_api_federation_orphaned_subset_files 0
 # HELP tenant_api_identity_audit_total Machine-identity (KSA/TokenReview) audit observations by result (ADR-027; audit-only, does not affect authz).

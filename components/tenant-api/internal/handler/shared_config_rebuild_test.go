@@ -1,19 +1,18 @@
 package handler
 
-// _groups.yaml / _views.yaml are single shared objects: every write rewrites
+// The groups / views records are single shared objects: every write rewrites
 // EVERY entry, not just the one named in the URL. These tests pin that the
-// rewrite is computed from the copy on disk, read under the writer lock —
-// not from the in-memory snapshot, which only refreshes on the Reload a
-// failed write never reaches.
+// rewrite is computed from the stored record, read inside the store's
+// read-modify-write — not from the in-memory snapshot, which refreshes only
+// on a Reload or the next WatchLoop tick.
 //
-// The scenario is not hypothetical. commitFileChange writes the file BEFORE
-// the git commit, so a write that fails at commit time leaves the new content
-// on disk while the handler returns an error and skips Reload. The snapshot is
-// then permanently behind, and the next edit to any OTHER entry used to delete
-// the one that "failed" — silently, with a 200.
+// The scenario is not hypothetical: the record lives in a ConfigMap (#2856),
+// and an operator's `kubectl edit` changes it without telling this process.
+// A rewrite from the stale snapshot would silently delete that edit.
 
 import (
 	"bytes"
+	"context"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -23,6 +22,7 @@ import (
 	"github.com/vencil/tenant-api/internal/gitops"
 	"github.com/vencil/tenant-api/internal/groups"
 	"github.com/vencil/tenant-api/internal/rbac"
+	"github.com/vencil/tenant-api/internal/statestore"
 	"github.com/vencil/tenant-api/internal/views"
 )
 
@@ -44,9 +44,9 @@ func TestPutGroup_RebuildsFromDiskNotSnapshot(t *testing.T) {
 	t.Parallel()
 	configDir := setupConfigDir(t, nil)
 	initGitRepo(t, configDir)
-	d := &Deps{
+	d := &Deps{State: mustDirState(configDir),
 		Writer: gitops.NewWriter(configDir, configDir),
-		Groups: groups.NewManager(configDir),
+		Groups: groups.NewDirManager(configDir),
 		RBAC:   newRBACManager(t, rebuildRBAC),
 	}
 	h := wrapWithRBACMiddleware(PutGroup(d), d.RBAC, rbac.PermWrite, nil)
@@ -62,13 +62,17 @@ func TestPutGroup_RebuildsFromDiskNotSnapshot(t *testing.T) {
 		t.Fatalf("first group: status = %d, want 200", code)
 	}
 
-	// Make the next commit fail after the file is already written, so the
-	// handler errors out and never reloads its snapshot.
-	installExternalCommitHook(t, configDir)
-	if code := put("g-b"); code != http.StatusConflict {
-		t.Fatalf("group written under an external commit: status = %d, want 409", code)
-	}
-	assertGroupIDs(t, configDir, "g-a", "g-b") // on disk despite the error
+	// An out-of-band edit adds g-b to the stored record; the snapshot does
+	// not know.
+	outOfBandEdit(t, d.State, "_groups.yaml", func(cur []byte) ([]byte, error) {
+		cfg, err := groups.ParseConfig(cur)
+		if err != nil {
+			return nil, err
+		}
+		cfg.Groups["g-b"] = groups.Group{Label: "g-b", Members: []string{}}
+		return groups.MarshalConfig(cfg)
+	})
+	assertGroupIDs(t, configDir, "g-a", "g-b")
 
 	// A later edit to an unrelated group must not resurrect the stale
 	// snapshot's view of the world.
@@ -82,9 +86,9 @@ func TestDeleteGroup_RemovesOnlyItsOwnEntry(t *testing.T) {
 	t.Parallel()
 	configDir := setupConfigDir(t, nil)
 	initGitRepo(t, configDir)
-	d := &Deps{
+	d := &Deps{State: mustDirState(configDir),
 		Writer: gitops.NewWriter(configDir, configDir),
-		Groups: groups.NewManager(configDir),
+		Groups: groups.NewDirManager(configDir),
 		RBAC:   newRBACManager(t, rebuildRBAC),
 	}
 	put := wrapWithRBACMiddleware(PutGroup(d), d.RBAC, rbac.PermWrite, nil)
@@ -111,9 +115,9 @@ func TestPutView_RebuildsFromDiskNotSnapshot(t *testing.T) {
 	t.Parallel()
 	configDir := setupConfigDir(t, nil)
 	initGitRepo(t, configDir)
-	d := &Deps{
+	d := &Deps{State: mustDirState(configDir),
 		Writer: gitops.NewWriter(configDir, configDir),
-		Views:  views.NewManager(configDir),
+		Views:  views.NewDirManager(configDir),
 		RBAC:   newRBACManager(t, rebuildRBAC),
 	}
 	h := wrapWithRBACMiddleware(PutView(d), d.RBAC, rbac.PermWrite, nil)
@@ -128,10 +132,14 @@ func TestPutView_RebuildsFromDiskNotSnapshot(t *testing.T) {
 	if code := put("v-a"); code != http.StatusOK {
 		t.Fatalf("first view: status = %d, want 200", code)
 	}
-	installExternalCommitHook(t, configDir)
-	if code := put("v-b"); code != http.StatusConflict {
-		t.Fatalf("view written under an external commit: status = %d, want 409", code)
-	}
+	outOfBandEdit(t, d.State, "_views.yaml", func(cur []byte) ([]byte, error) {
+		cfg, err := views.ParseConfig(cur)
+		if err != nil {
+			return nil, err
+		}
+		cfg.Views["v-b"] = views.View{Label: "v-b", Filters: map[string]string{"tier": "gold"}}
+		return views.MarshalConfig(cfg)
+	})
 	if code := put("v-c"); code != http.StatusOK {
 		t.Fatalf("third view: status = %d, want 200", code)
 	}
@@ -189,5 +197,14 @@ func assertKeySet(t *testing.T, file string, got map[string]bool, want []string)
 		if !got[id] {
 			t.Errorf("%s is missing %q (has %v)", file, id, got)
 		}
+	}
+}
+
+// outOfBandEdit rewrites the stored record, bypassing the handler and its
+// manager's snapshot — what `kubectl edit` on the state ConfigMap does.
+func outOfBandEdit(t *testing.T, st statestore.Store, key string, edit statestore.Transform) {
+	t.Helper()
+	if _, err := st.Mutate(context.Background(), key, statestore.Meta{}, edit); err != nil {
+		t.Fatal(err)
 	}
 }

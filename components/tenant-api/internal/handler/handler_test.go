@@ -16,6 +16,7 @@ import (
 	"github.com/vencil/tenant-api/internal/gitops"
 	"github.com/vencil/tenant-api/internal/policy"
 	"github.com/vencil/tenant-api/internal/rbac"
+	"github.com/vencil/tenant-api/internal/statestore"
 	"github.com/vencil/tenant-api/internal/testutil"
 	cfg "github.com/vencil/threshold-exporter/pkg/config"
 )
@@ -43,6 +44,17 @@ func setupConfigDir(t *testing.T, files map[string]string) string {
 }
 
 // newTestWriter creates a gitops.Writer for test use.
+// newDirState is a directory state store over dir: tests that wrote the old
+// conf.d state files (_groups.yaml, _views.yaml) find the records where they
+// always were (#2856).
+func mustDirState(dir string) statestore.Store {
+	s, err := statestore.NewDir(dir, nil)
+	if err != nil {
+		panic(err)
+	}
+	return s
+}
+
 func newTestWriter(configDir string) *gitops.Writer {
 	return gitops.NewWriter(configDir, "")
 }

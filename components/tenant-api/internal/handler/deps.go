@@ -32,6 +32,7 @@ import (
 	"github.com/vencil/tenant-api/internal/platform"
 	"github.com/vencil/tenant-api/internal/policy"
 	"github.com/vencil/tenant-api/internal/rbac"
+	"github.com/vencil/tenant-api/internal/statestore"
 	"github.com/vencil/tenant-api/internal/tenantorg"
 	"github.com/vencil/tenant-api/internal/views"
 	cfg "github.com/vencil/threshold-exporter/pkg/config"
@@ -97,6 +98,11 @@ type Deps struct {
 	// Policy enforces domain-level write policy. Optional — handlers
 	// that touch it MUST nil-check (`if d.Policy != nil { ... }`).
 	Policy *policy.Manager
+
+	// State holds tenant-api's own records — groups, views, the federation
+	// whitelist and subsets, the AccountID registry — outside the conf.d
+	// git tree (#2856). Writes to those records go through it, never Writer.
+	State statestore.Store
 
 	// Groups manages the `_groups.yaml` view of tenant groupings.
 	Groups *groups.Manager

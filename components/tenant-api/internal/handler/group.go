@@ -12,6 +12,7 @@ import (
 
 	"github.com/vencil/tenant-api/internal/groups"
 	"github.com/vencil/tenant-api/internal/rbac"
+	"github.com/vencil/tenant-api/internal/statestore"
 	"github.com/vencil/tenant-api/internal/tenantorg"
 )
 
@@ -210,6 +211,7 @@ type PutGroupRequest struct {
 // @Failure     413  {object} ErrorResponse
 // @Failure     500  {object} ErrorResponse
 // @Failure     503  {object} ErrorResponse
+// @Failure     507  {object} ErrorResponse
 // @Router      /api/v1/groups/{id} [put]
 func PutGroup(d *Deps) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
@@ -255,30 +257,28 @@ func PutGroup(d *Deps) http.HandlerFunc {
 			return
 		}
 
-		// Rebuild the whole file from the copy ON DISK, under the writer lock
-		// (MutateConfigFile). _groups.yaml is a single shared object, so this
-		// write necessarily rewrites every OTHER group too — computing it from
-		// the in-memory snapshot silently reverts anything the snapshot has not
-		// seen. That is not hypothetical: the snapshot only refreshes on the
-		// Reload below, which a failed write never reaches, while
-		// commitFileChange has already written the file; the next edit to any
-		// other group then deletes the one that "failed". Two concurrent edits
-		// to different groups lose one the same way. Reading the base inside
-		// the lock removes both — the same fix WriteMerged made for the tenant
-		// batch path (#1097).
+		// Rebuild the whole record from the STORED copy, inside the state
+		// store's read-modify-write (#2856). The groups record is a single
+		// shared object, so this write necessarily rewrites every OTHER group
+		// too — computing it from the in-memory snapshot silently reverts
+		// anything the snapshot has not seen: an operator's out-of-band edit
+		// of the state ConfigMap before the next reload, or a concurrent edit
+		// to a different group. Reading the base inside the store's
+		// compare-and-swap removes both — the same fix WriteMerged made for
+		// the tenant batch path (#1097).
 		//
 		// #1529: a PUT REPLACES the stored member list, so it removes every
 		// stored member the request leaves out — the same outcome DELETE
 		// refuses unless the caller may write every stored member. The check
 		// above only covers the members the request brings; this one covers
-		// the members it would overwrite, and it runs on the copy on disk, in
+		// the members it would overwrite, and it runs on the stored copy, in
 		// the lock, for the reason DeleteGroup's in-lock check gives. There is
 		// deliberately no snapshot pre-check: DeleteGroup's comment records
 		// how a stale snapshot makes that one refuse callers who are entitled.
 		// `members: []` takes the same path — it is the shortest way to strip
 		// a group, and the request-side check has nothing to check for it.
 		var forbiddenOnDisk []string
-		if err := d.Writer.MutateConfigFile(r.Context(), "_groups.yaml", "groups", email,
+		if err := d.mutateState(r.Context(), statestore.KeyGroups, "groups", email,
 			func(current []byte) ([]byte, error) {
 				cfg, perr := parseGroupsFile(current)
 				if perr != nil {
@@ -331,6 +331,7 @@ func PutGroup(d *Deps) http.HandlerFunc {
 // @Failure     409 {object} ErrorResponse
 // @Failure     500 {object} ErrorResponse
 // @Failure     503 {object} ErrorResponse
+// @Failure     507 {object} ErrorResponse
 // @Router      /api/v1/groups/{id} [delete]
 func DeleteGroup(d *Deps) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
@@ -366,11 +367,9 @@ func DeleteGroup(d *Deps) http.HandlerFunc {
 		// ⚠️ It is NOT merely an optimisation: on the DENY side it is final,
 		// because this branch returns and the in-lock check never runs. A
 		// snapshot that is stale in the other direction (the file has since
-		// lost the member the caller cannot write — an admin edited it directly, or
-		// a write landed on disk whose commit failed and so never reached
-		// Reload) therefore 403s a caller who is in fact entitled to delete.
-		// groupMgr has no WatchLoop, so that refusal persists until some other
-		// write succeeds. Closing the fail-closed half means dropping this
+		// lost the member the caller cannot write — an admin edited the state
+		// record directly) therefore 403s a caller who is in fact entitled to
+		// delete, until the next Reload or WatchLoop tick refreshes the snapshot. Closing the fail-closed half means dropping this
 		// pre-check entirely and paying an admission slot per forbidden call;
 		// that trade is deliberately not made here — it is recorded so the
 		// next reader does not mistake the current shape for full coverage.
@@ -380,24 +379,23 @@ func DeleteGroup(d *Deps) http.HandlerFunc {
 		}
 
 		// Same in-lock rebuild as PutGroup — see the comment there for why the
-		// on-disk copy, not the snapshot, has to be the base. A target that is
+		// stored copy, not the snapshot, has to be the base. A target that is
 		// already absent from the file returns nil (no-op success): the 404
 		// above answered "does it exist" from the snapshot, and re-answering it
 		// here would turn a concurrent delete of the same group into an error
 		// for the caller who lost the race, on a request whose desired end
 		// state was reached anyway.
 		//
-		// The member gate is re-evaluated HERE, against the group as it exists
-		// on disk, because this is a DELETE: the object being destroyed is the
+		// The member gate is re-evaluated HERE, against the group as stored,
+		// because this is a DELETE: the object being destroyed is the
 		// stored one, not one the request supplies. Checking the snapshot alone
 		// would authorize against a member list that no longer describes what
-		// gets removed — and the snapshot can stay wrong indefinitely, since
-		// groupMgr has no WatchLoop and only refreshes on a successful write's
-		// Reload below. Under org-scoped RBAC (ADR-027) that gap is a real
+		// gets removed — and the snapshot stays wrong until the next Reload or
+		// WatchLoop tick. Under org-scoped RBAC (ADR-027) that gap is a real
 		// authorization bypass: the route gate only proves platform-wide write,
 		// while OrgAllowed can still deny individual member tenants.
 		var forbiddenOnDisk []string
-		if err := d.Writer.MutateConfigFile(r.Context(), "_groups.yaml", "groups", email,
+		if err := d.mutateState(r.Context(), statestore.KeyGroups, "groups", email,
 			func(current []byte) ([]byte, error) {
 				cfg, perr := parseGroupsFile(current)
 				if perr != nil {
@@ -446,7 +444,7 @@ var GroupIDFromPath = func(r *http.Request) string {
 	return chi.URLParam(r, "id")
 }
 
-// parseGroupsFile decodes _groups.yaml bytes as read under the writer lock.
+// parseGroupsFile decodes _groups.yaml bytes as read inside the state store's read-modify-write.
 // A missing file (current == nil, the first-ever write) starts from an empty
 // config; an existing but unparseable file is an ERROR, never an empty start —
 // silently treating a malformed file as "no groups" would let one bad edit wipe
@@ -496,12 +494,12 @@ func requireTopLevelKey(data []byte, key string) error {
 }
 
 // errGroupMemberForbidden is returned by the PutGroup / DeleteGroup transforms
-// when the group AS STORED has member tenants the caller may not write. MutateConfigFile
-// returns a transform error unchanged, so it arrives here as-is, and is matched with
+// when the group AS STORED has member tenants the caller may not write. The state
+// store returns a transform error unchanged, so it arrives here as-is, and is matched with
 // errors.Is so the handler can answer 403 instead of the generic 500 a
 // transform failure would otherwise produce. The offending ids ride alongside
 // in a captured variable rather than in the error, because the transform runs
-// under the writer lock and the handler renders the response after it returns.
+// inside the store's read-modify-write and the handler renders the response after it returns.
 var errGroupMemberForbidden = errors.New("group has member tenants the caller may not write")
 
 // errGroupNotVisible is returned by DeleteGroup's transform when the group as
@@ -515,7 +513,7 @@ var errGroupNotVisible = errors.New("group is not visible to the caller")
 // The ids it names depend on where they came from (#1531). fromRequest are ids
 // the caller sent, and are always named: the caller knows them already, and
 // naming every one is what authz.go's "fix it in one round-trip" contract asks
-// for. fromStored are ids read off the group on disk; only those the caller
+// for. fromStored are ids read off the stored group; only those the caller
 // can READ are named. The rest would hand out exactly what GET /groups/{id}
 // filters away, so they are only acknowledged, without a count: the 403 itself
 // already says something was refused, and a count would tell how many members

@@ -109,9 +109,9 @@ func TestPutGroup_UnrecognisedFileShapeIsRefusedNotRebuilt(t *testing.T) {
 	runGit(t, configDir, "commit", "-m", "hand-edited with a typo")
 
 	rbacMgr := newRBACManager(t, partialWriterRBAC)
-	d := &Deps{
+	d := &Deps{State: mustDirState(configDir),
 		Writer: gitops.NewWriter(configDir, configDir),
-		Groups: groups.NewManager(configDir),
+		Groups: groups.NewDirManager(configDir),
 		RBAC:   rbacMgr,
 	}
 	h := wrapWithRBACMiddleware(PutGroup(d), rbacMgr, rbac.PermRead, nil)

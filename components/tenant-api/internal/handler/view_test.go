@@ -43,9 +43,9 @@ const testViewsYAML = `views:
 func TestListViews_Empty(t *testing.T) {
 	t.Parallel()
 	configDir := setupConfigDir(t, nil)
-	mgr := views.NewManager(configDir)
+	mgr := views.NewDirManager(configDir)
 
-	h := ListViews(&Deps{Views: mgr})
+	h := ListViews(&Deps{State: mustDirState(configDir), Views: mgr})
 	req := httptest.NewRequest("GET", "/api/v1/views", nil)
 	w := httptest.NewRecorder()
 	h(w, req)
@@ -68,9 +68,9 @@ func TestListViews_WithData(t *testing.T) {
 	t.Parallel()
 	configDir := setupConfigDir(t, nil)
 	setupViewsFile(t, configDir, testViewsYAML)
-	mgr := views.NewManager(configDir)
+	mgr := views.NewDirManager(configDir)
 
-	h := ListViews(&Deps{Views: mgr})
+	h := ListViews(&Deps{State: mustDirState(configDir), Views: mgr})
 	req := httptest.NewRequest("GET", "/api/v1/views", nil)
 	w := httptest.NewRecorder()
 	h(w, req)
@@ -116,9 +116,9 @@ func TestGetView_Success(t *testing.T) {
 	t.Parallel()
 	configDir := setupConfigDir(t, nil)
 	setupViewsFile(t, configDir, testViewsYAML)
-	mgr := views.NewManager(configDir)
+	mgr := views.NewDirManager(configDir)
 
-	h := GetView(&Deps{Views: mgr})
+	h := GetView(&Deps{State: mustDirState(configDir), Views: mgr})
 	req := newRequestWithChiParam("GET", "/api/v1/views/prod-finance", "id", "prod-finance", nil)
 	w := httptest.NewRecorder()
 	h(w, req)
@@ -155,9 +155,9 @@ func TestGetView_Success(t *testing.T) {
 func TestGetView_NotFound(t *testing.T) {
 	t.Parallel()
 	configDir := setupConfigDir(t, nil)
-	mgr := views.NewManager(configDir)
+	mgr := views.NewDirManager(configDir)
 
-	h := GetView(&Deps{Views: mgr})
+	h := GetView(&Deps{State: mustDirState(configDir), Views: mgr})
 	req := newRequestWithChiParam("GET", "/api/v1/views/nonexistent", "id", "nonexistent", nil)
 	w := httptest.NewRecorder()
 	h(w, req)
@@ -171,9 +171,9 @@ func TestGetView_NotFound(t *testing.T) {
 func TestGetView_InvalidID(t *testing.T) {
 	t.Parallel()
 	configDir := setupConfigDir(t, nil)
-	mgr := views.NewManager(configDir)
+	mgr := views.NewDirManager(configDir)
 
-	h := GetView(&Deps{Views: mgr})
+	h := GetView(&Deps{State: mustDirState(configDir), Views: mgr})
 	req := newRequestWithChiParam("GET", "/api/v1/views/INVALID!", "id", "INVALID!", nil)
 	w := httptest.NewRecorder()
 	h(w, req)
@@ -190,7 +190,7 @@ func TestPutView_Create(t *testing.T) {
 	t.Parallel()
 	configDir := setupConfigDir(t, nil)
 	initGitRepo(t, configDir)
-	mgr := views.NewManager(configDir)
+	mgr := views.NewDirManager(configDir)
 	writer := newTestWriter(configDir)
 
 	body := `{
@@ -206,7 +206,7 @@ func TestPutView_Create(t *testing.T) {
 	req.Header.Set("Content-Type", "application/json")
 	setRequestIdentity(req, "test@example.com")
 
-	h := PutView(&Deps{Views: mgr, Writer: writer})
+	h := PutView(&Deps{State: mustDirState(configDir), Views: mgr, Writer: writer})
 	w := executeWithRBAC(t, h, req)
 
 	if w.Code != http.StatusOK {
@@ -258,7 +258,7 @@ func TestPutView_Update(t *testing.T) {
 	configDir := setupConfigDir(t, nil)
 	setupViewsFile(t, configDir, testViewsYAML)
 	initGitRepo(t, configDir)
-	mgr := views.NewManager(configDir)
+	mgr := views.NewDirManager(configDir)
 	writer := newTestWriter(configDir)
 
 	body := `{
@@ -274,7 +274,7 @@ func TestPutView_Update(t *testing.T) {
 	req.Header.Set("Content-Type", "application/json")
 	setRequestIdentity(req, "test@example.com")
 
-	h := PutView(&Deps{Views: mgr, Writer: writer})
+	h := PutView(&Deps{State: mustDirState(configDir), Views: mgr, Writer: writer})
 	w := executeWithRBAC(t, h, req)
 
 	if w.Code != http.StatusOK {
@@ -301,7 +301,7 @@ func TestPutView_Update(t *testing.T) {
 func TestPutView_MissingLabel(t *testing.T) {
 	t.Parallel()
 	configDir := setupConfigDir(t, nil)
-	mgr := views.NewManager(configDir)
+	mgr := views.NewDirManager(configDir)
 	writer := newTestWriter(configDir)
 
 	body := `{
@@ -315,7 +315,7 @@ func TestPutView_MissingLabel(t *testing.T) {
 	req.Header.Set("Content-Type", "application/json")
 
 	w := httptest.NewRecorder()
-	h := PutView(&Deps{Views: mgr, Writer: writer})
+	h := PutView(&Deps{State: mustDirState(configDir), Views: mgr, Writer: writer})
 	h(w, req)
 
 	if w.Code != http.StatusBadRequest {
@@ -332,7 +332,7 @@ func TestPutView_MissingLabel(t *testing.T) {
 func TestPutView_EmptyFilters(t *testing.T) {
 	t.Parallel()
 	configDir := setupConfigDir(t, nil)
-	mgr := views.NewManager(configDir)
+	mgr := views.NewDirManager(configDir)
 	writer := newTestWriter(configDir)
 
 	body := `{
@@ -344,7 +344,7 @@ func TestPutView_EmptyFilters(t *testing.T) {
 	req.Header.Set("Content-Type", "application/json")
 
 	w := httptest.NewRecorder()
-	h := PutView(&Deps{Views: mgr, Writer: writer})
+	h := PutView(&Deps{State: mustDirState(configDir), Views: mgr, Writer: writer})
 	h(w, req)
 
 	if w.Code != http.StatusBadRequest {
@@ -356,7 +356,7 @@ func TestPutView_EmptyFilters(t *testing.T) {
 func TestPutView_InvalidJSON(t *testing.T) {
 	t.Parallel()
 	configDir := setupConfigDir(t, nil)
-	mgr := views.NewManager(configDir)
+	mgr := views.NewDirManager(configDir)
 	writer := newTestWriter(configDir)
 
 	req := newRequestWithChiParam("PUT", "/api/v1/views/my-view", "id", "my-view",
@@ -364,7 +364,7 @@ func TestPutView_InvalidJSON(t *testing.T) {
 	req.Header.Set("Content-Type", "application/json")
 
 	w := httptest.NewRecorder()
-	h := PutView(&Deps{Views: mgr, Writer: writer})
+	h := PutView(&Deps{State: mustDirState(configDir), Views: mgr, Writer: writer})
 	h(w, req)
 
 	if w.Code != http.StatusBadRequest {
@@ -376,7 +376,7 @@ func TestPutView_InvalidJSON(t *testing.T) {
 func TestPutView_InvalidViewID(t *testing.T) {
 	t.Parallel()
 	configDir := setupConfigDir(t, nil)
-	mgr := views.NewManager(configDir)
+	mgr := views.NewDirManager(configDir)
 	writer := newTestWriter(configDir)
 
 	body := `{
@@ -388,7 +388,7 @@ func TestPutView_InvalidViewID(t *testing.T) {
 	req.Header.Set("Content-Type", "application/json")
 
 	w := httptest.NewRecorder()
-	h := PutView(&Deps{Views: mgr, Writer: writer})
+	h := PutView(&Deps{State: mustDirState(configDir), Views: mgr, Writer: writer})
 	h(w, req)
 
 	if w.Code != http.StatusBadRequest {
@@ -404,7 +404,7 @@ func TestDeleteView_Success(t *testing.T) {
 	configDir := setupConfigDir(t, nil)
 	setupViewsFile(t, configDir, testViewsYAML)
 	initGitRepo(t, configDir)
-	mgr := views.NewManager(configDir)
+	mgr := views.NewDirManager(configDir)
 	writer := newTestWriter(configDir)
 
 	// Verify view exists before deletion
@@ -416,7 +416,7 @@ func TestDeleteView_Success(t *testing.T) {
 	req := newRequestWithChiParam("DELETE", "/api/v1/views/prod-finance", "id", "prod-finance", nil)
 	setRequestIdentity(req, "test@example.com")
 
-	h := DeleteView(&Deps{Views: mgr, Writer: writer})
+	h := DeleteView(&Deps{State: mustDirState(configDir), Views: mgr, Writer: writer})
 	w := executeWithRBAC(t, h, req)
 
 	if w.Code != http.StatusOK {
@@ -448,13 +448,13 @@ func TestDeleteView_Success(t *testing.T) {
 func TestDeleteView_NotFound(t *testing.T) {
 	t.Parallel()
 	configDir := setupConfigDir(t, nil)
-	mgr := views.NewManager(configDir)
+	mgr := views.NewDirManager(configDir)
 	writer := newTestWriter(configDir)
 
 	req := newRequestWithChiParam("DELETE", "/api/v1/views/nonexistent", "id", "nonexistent", nil)
 	setRequestIdentity(req, "test@example.com")
 
-	h := DeleteView(&Deps{Views: mgr, Writer: writer})
+	h := DeleteView(&Deps{State: mustDirState(configDir), Views: mgr, Writer: writer})
 	w := executeWithRBAC(t, h, req)
 
 	if w.Code != http.StatusNotFound {
@@ -466,13 +466,13 @@ func TestDeleteView_NotFound(t *testing.T) {
 func TestDeleteView_InvalidID(t *testing.T) {
 	t.Parallel()
 	configDir := setupConfigDir(t, nil)
-	mgr := views.NewManager(configDir)
+	mgr := views.NewDirManager(configDir)
 	writer := newTestWriter(configDir)
 
 	req := newRequestWithChiParam("DELETE", "/api/v1/views/INVALID!", "id", "INVALID!", nil)
 	setRequestIdentity(req, "test@example.com")
 
-	h := DeleteView(&Deps{Views: mgr, Writer: writer})
+	h := DeleteView(&Deps{State: mustDirState(configDir), Views: mgr, Writer: writer})
 	w := executeWithRBAC(t, h, req)
 
 	if w.Code != http.StatusBadRequest {
@@ -486,7 +486,7 @@ func TestPutView_Conflict(t *testing.T) {
 	configDir := setupConfigDir(t, nil)
 	setupViewsFile(t, configDir, testViewsYAML)
 	initGitRepo(t, configDir)
-	mgr := views.NewManager(configDir)
+	mgr := views.NewDirManager(configDir)
 	writer := newTestWriter(configDir)
 
 	body := `{
@@ -506,7 +506,7 @@ func TestPutView_Conflict(t *testing.T) {
 		t.SkipNow()
 	}
 
-	h := PutView(&Deps{Views: mgr, Writer: writer})
+	h := PutView(&Deps{State: mustDirState(configDir), Views: mgr, Writer: writer})
 	w := executeWithRBAC(t, h, req)
 
 	// The request should succeed even if there was a pre-existing HEAD

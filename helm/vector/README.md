@@ -75,8 +75,9 @@ So **narrowing this selector so tenant-api is no longer tailed pages within ~15m
 Off by default. When `tenantProjections` is set, the chart fans out a **second, sanitized** copy of each tenant's `federation_audit` rows into that tenant's native VictoriaLogs `(AccountID, ProjectID=0)` partition — so a tenant can query the platform's operational logs *about itself* without seeing infra topology or another tenant's rows. The platform full copy keeps flowing to the primary `victorialogs` sink (`0:0`) **unchanged**.
 
 ```yaml
-# values.yaml — copy each tenant's id from the Git account registry
-# (_account_registry.yaml). NEVER invent or reuse a retired AccountID.
+# values.yaml — copy each tenant's id from the AccountID registry (key
+# _account_registry.yaml of tenant-api's tenant-api-state ConfigMap).
+# NEVER invent or reuse a retired AccountID.
 tenantProjections:
   - tenantId: "tenant-alpha"   # must equal the audit JSON .tenant_id (JWT claim)
     accountId: 1000

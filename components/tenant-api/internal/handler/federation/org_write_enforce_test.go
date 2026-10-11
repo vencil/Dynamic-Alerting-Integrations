@@ -19,6 +19,7 @@ import (
 	"github.com/vencil/tenant-api/internal/federation/fedpolicy"
 	"github.com/vencil/tenant-api/internal/handler"
 	"github.com/vencil/tenant-api/internal/rbac"
+	"github.com/vencil/tenant-api/internal/statestore"
 	"github.com/vencil/tenant-api/internal/tenantorg"
 	"github.com/vencil/tenant-api/internal/testutil"
 )
@@ -195,7 +196,10 @@ func TestOrgWriteEnforce_PutTenantFederation(t *testing.T) {
 		initGitRepo(t, configDir)
 		writer := newTestWriter(configDir)
 		var writes atomic.Int32
-		writer.SetOnWrite(func(string) { writes.Add(1) })
+		st, err := statestore.NewDir(configDir, func(string) { writes.Add(1) })
+		if err != nil {
+			t.Fatal(err)
+		}
 		tenantOrg := newFedOrgTenantOrg()
 		// PUT /tenants/{id}/federation mounts PermRead middleware (the handler does
 		// its own PermAdmin check), so the P4c read-by-id middleware gate applies.
@@ -207,8 +211,9 @@ func TestOrgWriteEnforce_PutTenantFederation(t *testing.T) {
 			RBAC:             rbacMgr,
 			TenantOrg:        tenantOrg,
 			ConfigDir:        configDir,
+			State:            st,
 			Writer:           writer,
-			FederationPolicy: fedpolicy.NewManager(configDir),
+			FederationPolicy: fedpolicy.NewDirManager(configDir),
 		}
 		req := newRequestWithChiParam("PUT", "/api/v1/tenants/"+fedOrgTenant+"/federation",
 			"id", fedOrgTenant, bytes.NewBufferString(`{"metrics":[]}`))
@@ -310,8 +315,9 @@ func TestOrgWriteEnforce_PlatformStarSitesUnchanged(t *testing.T) {
 			RBAC:             rbacMgr,
 			TenantOrg:        newFedOrgTenantOrg(),
 			ConfigDir:        configDir,
+			State:            newDirState(t, configDir),
 			Writer:           newTestWriter(configDir),
-			FederationPolicy: fedpolicy.NewManager(configDir),
+			FederationPolicy: fedpolicy.NewDirManager(configDir),
 		}
 		req := httptest.NewRequest("PUT", "/api/v1/federation/policy",
 			bytes.NewBufferString(`{"whitelist":[]}`))

@@ -1,23 +1,22 @@
 package federation
 
-// #1723 handler mapping for the federation write paths: the whitelist PUT,
-// the per-tenant subset PUT, and the two account-registry writes (logs token
-// issuance → EnsureAccountID, fleet backfill → Backfill), which reach
-// MutateConfigFile through account.Allocator and map errors through
-// writeFederationGitError. A worktree left on a PR feature branch must reach
-// the client as 503 TREE_NOT_ON_BASE with Retry-After, whatever layer the
-// sentinel crosses on the way; the retry, now on base, succeeds.
+// #2856: the federation whitelist, the per-tenant subsets and the AccountID
+// registry are tenant-api's own records in the state store, not files in the
+// conf.d git tree. Their writes therefore no longer care which branch the
+// tree is on: with the worktree stranded on a PR feature branch (the state
+// #1723 refuses tenant writes in), each of these writes succeeds at once and
+// leaves git exactly as it found it — no ref moves, HEAD stays put, no file
+// in the tree changes. Before #2856 they committed to the local base and
+// were never pushed, which is the loss this replaced.
 //
 // The stranded state is built as in internal/handler/tree_not_on_base_test.go:
-// a branch in the PR namespace whose copies of the files the write reads
-// differ from main's, checked out.
+// a branch in the PR namespace whose copies of the files differ from main's,
+// checked out.
 
 import (
 	"crypto/rand"
 	"crypto/rsa"
-	"encoding/json"
 	"net/http"
-	"net/http/httptest"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -77,38 +76,20 @@ func fedStrandedRepo(t *testing.T, mainFiles, branchFiles map[string]string) (st
 	}
 }
 
-// assertFedTreeNotOnBase503 checks the retryable 503 shape, that the body
-// names neither the stranded branch nor the config dir, and that no ref moved.
-func assertFedTreeNotOnBase503(t *testing.T, rec *httptest.ResponseRecorder, dir string, refs map[string]string) {
+// assertFedGitUntouched checks that no ref moved, HEAD is still the
+// stranded branch, and the working tree is clean.
+func assertFedGitUntouched(t *testing.T, dir string, refs map[string]string) {
 	t.Helper()
-	if rec.Code != http.StatusServiceUnavailable {
-		t.Fatalf("status = %d, want 503; body: %s", rec.Code, rec.Body.String())
-	}
-	if rec.Header().Get("Retry-After") == "" {
-		t.Error("503 without Retry-After")
-	}
-	var env struct {
-		Code string `json:"code"`
-	}
-	if err := json.Unmarshal(rec.Body.Bytes(), &env); err != nil {
-		t.Fatalf("decode body: %v; %s", err, rec.Body.String())
-	}
-	if env.Code != handler.CodeTreeNotOnBase {
-		t.Errorf("code = %q, want %q; body: %s", env.Code, handler.CodeTreeNotOnBase, rec.Body.String())
-	}
-	body := rec.Body.String()
-	for _, leak := range []string{"db-z", platform.BranchPrefix, dir} {
-		if strings.Contains(body, leak) {
-			t.Errorf("body leaks %q: %s", leak, body)
-		}
-	}
 	for ref, before := range refs {
 		if got := fedRevParse(t, dir, ref); got != before {
-			t.Errorf("%s moved although the write was refused", ref)
+			t.Errorf("%s moved: a state write touched git", ref)
 		}
 	}
-	if head := strings.TrimSpace(fedGitOutput(t, dir, "symbolic-ref", "--short", "HEAD")); head != "main" {
-		t.Errorf("HEAD = %q after the 503, want main (the return to base)", head)
+	if head := strings.TrimSpace(fedGitOutput(t, dir, "symbolic-ref", "--short", "HEAD")); head != fedStrandedBranch {
+		t.Errorf("HEAD = %q, want %q: a state write switched branches", head, fedStrandedBranch)
+	}
+	if st := strings.TrimSpace(fedGitOutput(t, dir, "status", "--porcelain")); st != "" {
+		t.Errorf("working tree changed by a state write:\n%s", st)
 	}
 }
 
@@ -119,21 +100,6 @@ func fedGitOutput(t *testing.T, dir string, args ...string) string {
 		t.Fatalf("git %v: %v", args, err)
 	}
 	return string(out)
-}
-
-// assertFedRetryLanded checks the retry got wantStatus and added exactly one
-// commit on main.
-func assertFedRetryLanded(t *testing.T, rec *httptest.ResponseRecorder, wantStatus int, dir string, refs map[string]string) {
-	t.Helper()
-	if rec.Code != wantStatus {
-		t.Fatalf("retry status = %d, want %d; body: %s", rec.Code, wantStatus, rec.Body.String())
-	}
-	if got := fedRevParse(t, dir, "main~1"); got != refs["main"] {
-		t.Errorf("retry did not add exactly one commit on main")
-	}
-	if got := fedRevParse(t, dir, fedStrandedBranch); got != refs[fedStrandedBranch] {
-		t.Errorf("retry moved the stranded branch")
-	}
 }
 
 func newStrandedTokenManager(t *testing.T) *token.Manager {
@@ -149,7 +115,7 @@ func newStrandedTokenManager(t *testing.T) *token.Manager {
 	return fed
 }
 
-func TestFederationWrites_StrandedOnPRBranch_503ThenRetry(t *testing.T) {
+func TestFederationStateWrites_IgnoreTheGitTree(t *testing.T) {
 	t.Parallel()
 	const tenant = "db-a" // scopedAdminRBAC grants admin on this id
 	tenantFile := tenant + ".yaml"
@@ -157,14 +123,12 @@ func TestFederationWrites_StrandedOnPRBranch_503ThenRetry(t *testing.T) {
 		tenantFile:  "tenants:\n  " + tenant + ": {}\n",
 		"db-b.yaml": "tenants:\n  db-b: {}\n",
 	}
-	// The branch changes every file these writes read — the tenant, the
-	// whitelist, the subset — and adds a tenant, so a backfill prepared on
-	// the branch would allocate an id to a tenant base does not have.
+	// The branch changes the tenant file and carries the old conf.d state
+	// files, which nothing reads any more.
 	branchFiles := map[string]string{
 		tenantFile:                  "tenants:\n  " + tenant + ":\n    mysql_connections: \"1\"\n",
 		"_federation_policy.yaml":   "whitelist:\n  - metric: branch_only\n",
 		"_federation/" + tenantFile: "metrics:\n  - branch_only\n",
-		"db-branch-only.yaml":       "tenants:\n  db-branch-only: {}\n",
 	}
 
 	cases := map[string]struct {
@@ -175,10 +139,12 @@ func TestFederationWrites_StrandedOnPRBranch_503ThenRetry(t *testing.T) {
 	}{
 		"PutFederationPolicy": {
 			deps: func(t *testing.T, dir string) *handler.Deps {
+				st := newDirState(t, t.TempDir())
 				return &handler.Deps{
 					ConfigDir:        dir,
 					Writer:           gitops.NewWriter(dir, ""),
-					FederationPolicy: fedpolicy.NewManager(dir),
+					State:            st,
+					FederationPolicy: fedpolicy.NewManager(st),
 					RBAC:             newRBACManager(t, platformAdminRBAC),
 				}
 			},
@@ -193,6 +159,7 @@ func TestFederationWrites_StrandedOnPRBranch_503ThenRetry(t *testing.T) {
 				return &handler.Deps{
 					ConfigDir: dir,
 					Writer:    gitops.NewWriter(dir, ""),
+					State:     newDirState(t, t.TempDir()),
 					FederationPolicy: fedpolicy.NewManagerForTest(&fedpolicy.Config{
 						Whitelist: []fedpolicy.WhitelistEntry{{Metric: "mysql_up"}},
 					}),
@@ -207,13 +174,14 @@ func TestFederationWrites_StrandedOnPRBranch_503ThenRetry(t *testing.T) {
 		},
 		"CreateFederationToken_logs": {
 			deps: func(t *testing.T, dir string) *handler.Deps {
-				w := gitops.NewWriter(dir, "")
+				st := newDirState(t, t.TempDir())
 				return &handler.Deps{
 					ConfigDir:  dir,
-					Writer:     w,
+					Writer:     gitops.NewWriter(dir, ""),
+					State:      st,
 					RBAC:       newRBACManager(t, platformAdminRBAC),
 					Federation: newStrandedTokenManager(t),
-					Accounts:   account.NewAllocator(w),
+					Accounts:   account.NewAllocator(st, nil),
 				}
 			},
 			h: CreateFederationToken,
@@ -224,13 +192,14 @@ func TestFederationWrites_StrandedOnPRBranch_503ThenRetry(t *testing.T) {
 		},
 		"BackfillAccounts": {
 			deps: func(t *testing.T, dir string) *handler.Deps {
-				w := gitops.NewWriter(dir, "")
+				st := newDirState(t, t.TempDir())
 				return &handler.Deps{
 					ConfigDir:  dir,
-					Writer:     w,
+					Writer:     gitops.NewWriter(dir, ""),
+					State:      st,
 					RBAC:       newRBACManager(t, platformAdminRBAC),
 					Federation: newStrandedTokenManager(t),
-					Accounts:   account.NewAllocator(w),
+					Accounts:   account.NewAllocator(st, nil),
 				}
 			},
 			h: BackfillAccounts,
@@ -246,13 +215,11 @@ func TestFederationWrites_StrandedOnPRBranch_503ThenRetry(t *testing.T) {
 			dir, refs := fedStrandedRepo(t, mainFiles, branchFiles)
 			d := tc.deps(t, dir)
 
-			assertFedTreeNotOnBase503(t, executeWithRBAC(t, tc.h(d), tc.req(t)), dir, refs)
-			// Nothing of the branch's proposal is left in the tree.
-			if _, err := os.Stat(filepath.Join(dir, "db-branch-only.yaml")); !os.IsNotExist(err) {
-				t.Errorf("branch-only tenant file still in the tree after the 503 (stat err: %v)", err)
+			rec := executeWithRBAC(t, tc.h(d), tc.req(t))
+			if rec.Code != tc.wantStatus {
+				t.Fatalf("status = %d, want %d; body: %s", rec.Code, tc.wantStatus, rec.Body.String())
 			}
-
-			assertFedRetryLanded(t, executeWithRBAC(t, tc.h(d), tc.req(t)), tc.wantStatus, dir, refs)
+			assertFedGitUntouched(t, dir, refs)
 		})
 	}
 }

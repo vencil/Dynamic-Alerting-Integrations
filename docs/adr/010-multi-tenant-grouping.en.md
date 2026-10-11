@@ -9,11 +9,13 @@ lang: en
 
 > **Language / 語言：** **English (Current)** | [中文](./010-multi-tenant-grouping.md)
 
-**Decision in brief**: custom groups are defined in `_groups.yaml` in conf.d/, with members given as an explicit list of tenant IDs; they are managed through tenant-api's group API, and writes of group definitions reuse the write lock and HEAD conflict detection of tenant writes (in PR write-back mode they are still committed directly, see [ADR-011](011-pr-based-write-back.md)). In addition, tenant `_metadata` gains fields such as environment, region, domain, and db_type for filtering in the API and UI; these fields are not added as labels of `tenant_metadata_info`.
+**Decision in brief**: custom groups are defined in `_groups.yaml` (now kept in tenant-api's state store, not in conf.d/; see Status), with members given as an explicit list of tenant IDs; they are managed through tenant-api's group API, and writes of group definitions do not go through a PR (see [ADR-011](011-pr-based-write-back.md)). In addition, tenant `_metadata` gains fields such as environment, region, domain, and db_type for filtering in the API and UI; these fields are not added as labels of `tenant_metadata_info`.
 
 ## Status
 
-✅ **Accepted** (v2.5.0) — Custom groups stored in `_groups.yaml` within conf.d/, managed via tenant-api CRUD endpoints
+✅ **Accepted** (v2.5.0) — Custom groups stored in `_groups.yaml`, managed via tenant-api CRUD endpoints
+
+**2026-10-11**: `_groups.yaml` moved out of conf.d/ into tenant-api's state store (a key of the same name in the `tenant-api-state` ConfigMap on Kubernetes, a directory on a single host). Writes are a compare-and-swap on the ConfigMap's `resourceVersion` and no longer produce a git commit, so group records have no git history; each write is audited by a structured `state_write` log event instead ([#2856](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/2856)). The storage, write model and consequences below are updated to match.
 
 ## Terms
 
@@ -68,7 +70,7 @@ Properties of the new fields:
 ### 2. `_groups.yaml`: custom group definitions
 
 ```yaml
-# conf.d/_groups.yaml — maintained through tenant-api or by hand
+# the state store's _groups.yaml record — maintained through tenant-api (or by editing the tenant-api-state ConfigMap)
 groups:
   production-dba:
     label: "Production DBA"
@@ -83,9 +85,9 @@ groups:
 
 | Aspect | Decision | Rationale |
 |--------|----------|-----------|
-| Storage location | `conf.d/_groups.yaml` (leading underscore) | Consistent with `_defaults.yaml` and `_rbac.yaml` |
+| Storage location | The `_groups.yaml` record in tenant-api's state store | Groups are tenant-api's own records, not tenant config |
 | Membership model | Explicit `members[]` list | Predictable, reviewable, diffable |
-| Write model | Reuses `gitops.Writer`'s `sync.Mutex` and HEAD conflict detection | No new locking mechanism; writes are mutually exclusive with tenant writes |
+| Write model | The state store's read-modify-write: a compare-and-swap on the ConfigMap's `resourceVersion`, recomputed on fresh content when it loses to a concurrent write | Concurrent edits to different groups do not overwrite each other |
 | ID format | `[a-z0-9\-_]`, at most 128 characters | Usable directly as a YAML key and a URL path segment |
 
 ### 3. tenant-api group API
@@ -147,18 +149,17 @@ Structured fields (environment, domain, db_type) suit UI filtering better than f
 
 **What we get**
 
-- `_groups.yaml` is under Git version control with a complete audit trail.
+- Every group write leaves a structured `state_write` log event (key, author).
 
 **What we accept**
 
-- conf.d/ gains one more file that is not a tenant config (`_defaults.yaml` and `_rbac.yaml` are precedents).
-- Group writes and tenant writes share the same `sync.Mutex`, so they may wait on each other under heavy concurrency (actual operation frequency is low).
+- Group records have no git history and get no PR review.
 
 **Risks and mitigations**
 
 | Risk | Mitigation |
 |------|-----------|
-| Concurrent edits to `_groups.yaml` conflict | Reuses the writer's HEAD conflict detection, returning 409 and asking for a retry |
+| Concurrent edits to `_groups.yaml` conflict | Compare-and-swap retries; once retries run out, 409 asks the caller to retry |
 | A group member refers to a tenant ID that does not exist | Not validated on write (a soft reference) |
 | More metadata fields make the YAML verbose | All new fields are optional; tenants without metadata are unaffected |
 

@@ -1,15 +1,19 @@
 package handler
 
-// #1723 handler mapping, continued: the direct-commit write paths that
-// tree_not_on_base_test.go does not drive — custom alerts (WriteIfUnchanged)
-// and the special-file handlers that go through MutateConfigFile and
-// writeConfigFileError (PutView, DeleteView, DeleteGroup). Each one must reach
-// the client as 503 TREE_NOT_ON_BASE with Retry-After: a layer that wrapped the
-// sentinel with %v, or into its own error type, would turn it into a 500 / 400
-// / 409 and these tests would say which.
+// #1723 handler mapping, continued: the direct-commit write path that
+// tree_not_on_base_test.go does not drive — custom alerts (WriteIfUnchanged).
+// It must reach the client as 503 TREE_NOT_ON_BASE with Retry-After: a layer
+// that wrapped the sentinel with %v, or into its own error type, would turn it
+// into a 500 / 400 / 409 and these tests would say which.
+//
+// Views and groups used to be here too. They are tenant-api's own records in
+// the state store now (#2856), so their writes do not touch git at all: the
+// last test below pins that a stranded tree neither blocks them nor is moved
+// by them.
 
 import (
 	"bytes"
+	"context"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -24,6 +28,7 @@ import (
 	"github.com/vencil/tenant-api/internal/groups"
 	"github.com/vencil/tenant-api/internal/platform"
 	"github.com/vencil/tenant-api/internal/rbac"
+	"github.com/vencil/tenant-api/internal/statestore"
 	"github.com/vencil/tenant-api/internal/views"
 )
 
@@ -95,7 +100,7 @@ func TestCustomAlerts_StrandedOnPRBranch_503ThenRetry(t *testing.T) {
 		map[string]string{"db-a.yaml": caTenantYAML, "_defaults.yaml": caDefaults},
 		map[string]string{"db-a.yaml": branchTenant})
 	refs := snapshotRefs(t, dir)
-	deps := &Deps{ConfigDir: dir, Writer: gitops.NewWriter(dir, dir), RBAC: newRBACManager(t, caWriteRBAC)}
+	deps := &Deps{ConfigDir: dir, State: mustDirState(dir), Writer: gitops.NewWriter(dir, dir), RBAC: newRBACManager(t, caWriteRBAC)}
 
 	// The client read the tenant while the tree was stranded, so its
 	// base_hash is the branch copy's — the cheap pre-lock check passes, and
@@ -122,74 +127,82 @@ func TestCustomAlerts_StrandedOnPRBranch_503ThenRetry(t *testing.T) {
 	assertRetryLanded(t, put(cfg.ComputeSourceHash(onBase)), dir, refs)
 }
 
-func TestSpecialFileWrites_StrandedOnPRBranch_503ThenRetry(t *testing.T) {
+func TestStateWrites_IgnoreTheGitTree(t *testing.T) {
 	t.Parallel()
 	cases := map[string]struct {
-		mainFiles, branchFiles map[string]string
-		do                     func(t *testing.T, dir string) func() *httptest.ResponseRecorder
+		key, seed string
+		do        func(t *testing.T, dir string, st statestore.Store) *httptest.ResponseRecorder
 	}{
 		"PutView": {
-			mainFiles:   map[string]string{"_views.yaml": testViewsYAML},
-			branchFiles: map[string]string{"_views.yaml": strandedViewsBranchYAML},
-			do: func(t *testing.T, dir string) func() *httptest.ResponseRecorder {
-				h := PutView(&Deps{Views: views.NewManager(dir), Writer: gitops.NewWriter(dir, dir)})
-				return func() *httptest.ResponseRecorder {
-					req := newRequestWithChiParam("PUT", "/api/v1/views/my-view", "id", "my-view",
-						bytes.NewBufferString(`{"label":"My View","filters":{"tier":"tier-2"}}`))
-					req.Header.Set("Content-Type", "application/json")
-					setRequestIdentity(req, "op@example.com")
-					return executeWithRBAC(t, h, req)
-				}
+			key: statestore.KeyViews, seed: testViewsYAML,
+			do: func(t *testing.T, dir string, st statestore.Store) *httptest.ResponseRecorder {
+				h := PutView(&Deps{State: st, Views: views.NewManager(st), Writer: gitops.NewWriter(dir, dir)})
+				req := newRequestWithChiParam("PUT", "/api/v1/views/my-view", "id", "my-view",
+					bytes.NewBufferString(`{"label":"My View","filters":{"tier":"tier-2"}}`))
+				req.Header.Set("Content-Type", "application/json")
+				setRequestIdentity(req, "op@example.com")
+				return executeWithRBAC(t, h, req)
 			},
 		},
 		"DeleteView": {
-			mainFiles:   map[string]string{"_views.yaml": testViewsYAML},
-			branchFiles: map[string]string{"_views.yaml": strandedViewsBranchYAML},
-			do: func(t *testing.T, dir string) func() *httptest.ResponseRecorder {
-				h := DeleteView(&Deps{Views: views.NewManager(dir), Writer: gitops.NewWriter(dir, dir)})
-				return func() *httptest.ResponseRecorder {
-					req := newRequestWithChiParam("DELETE", "/api/v1/views/prod-finance", "id", "prod-finance", nil)
-					setRequestIdentity(req, "op@example.com")
-					return executeWithRBAC(t, h, req)
-				}
+			key: statestore.KeyViews, seed: testViewsYAML,
+			do: func(t *testing.T, dir string, st statestore.Store) *httptest.ResponseRecorder {
+				h := DeleteView(&Deps{State: st, Views: views.NewManager(st), Writer: gitops.NewWriter(dir, dir)})
+				req := newRequestWithChiParam("DELETE", "/api/v1/views/prod-finance", "id", "prod-finance", nil)
+				setRequestIdentity(req, "op@example.com")
+				return executeWithRBAC(t, h, req)
 			},
 		},
 		"DeleteGroup": {
-			mainFiles:   map[string]string{"_groups.yaml": testGroupsYAML},
-			branchFiles: map[string]string{"_groups.yaml": strandedGroupsBranchYAML},
-			do: func(t *testing.T, dir string) func() *httptest.ResponseRecorder {
-				h := DeleteGroup(&Deps{Groups: groups.NewManager(dir), Writer: gitops.NewWriter(dir, dir), RBAC: permissiveRBACManager(t)})
-				return func() *httptest.ResponseRecorder {
-					req := newRequestWithChiParam("DELETE", "/api/v1/groups/staging-all", "id", "staging-all", nil)
-					setRequestIdentity(req, "op@example.com")
-					return executeWithRBAC(t, h, req)
-				}
+			key: statestore.KeyGroups, seed: testGroupsYAML,
+			do: func(t *testing.T, dir string, st statestore.Store) *httptest.ResponseRecorder {
+				h := DeleteGroup(&Deps{State: st, Groups: groups.NewManager(st), Writer: gitops.NewWriter(dir, dir), RBAC: permissiveRBACManager(t)})
+				req := newRequestWithChiParam("DELETE", "/api/v1/groups/staging-all", "id", "staging-all", nil)
+				setRequestIdentity(req, "op@example.com")
+				return executeWithRBAC(t, h, req)
 			},
 		},
 	}
 	for name, tc := range cases {
 		t.Run(name, func(t *testing.T) {
 			t.Parallel()
-			dir := strandedRepoWith(t, tc.mainFiles, tc.branchFiles)
+			// The stranded branch still carries the old conf.d state files,
+			// which nothing reads any more.
+			dir := strandedRepoWith(t,
+				map[string]string{"_views.yaml": testViewsYAML, "_groups.yaml": testGroupsYAML},
+				map[string]string{"_views.yaml": strandedViewsBranchYAML, "_groups.yaml": strandedGroupsBranchYAML})
 			refs := snapshotRefs(t, dir)
-			do := tc.do(t, dir)
-
-			rec := do()
-			assertRetryable503(t, rec, CodeTreeNotOnBase, dir, refs)
-			assertNoPathLeak(t, rec, dir)
-			for file, content := range tc.mainFiles {
-				got, err := os.ReadFile(filepath.Join(dir, file))
-				if err != nil {
-					t.Fatal(err)
-				}
-				if string(got) != content {
-					t.Fatalf("tree not back on base after the 503; %s:\n%s", file, got)
-				}
+			st := mustDirState(t.TempDir())
+			if _, err := st.Mutate(context.Background(), tc.key, statestore.Meta{}, func([]byte) ([]byte, error) { return []byte(tc.seed), nil }); err != nil {
+				t.Fatal(err)
 			}
 
-			assertRetryLanded(t, do(), dir, refs)
+			if rec := tc.do(t, dir, st); rec.Code != http.StatusOK {
+				t.Fatalf("status = %d, want 200 (a state write does not depend on the git tree); body: %s", rec.Code, rec.Body.String())
+			}
+			for ref, before := range refs {
+				if got := revParse(t, dir, ref); got != before {
+					t.Errorf("%s moved: a state write touched git", ref)
+				}
+			}
+			if head := strings.TrimSpace(gitOut(t, dir, "symbolic-ref", "--short", "HEAD")); head != strandedBranch {
+				t.Errorf("HEAD = %q, want %q: a state write switched branches", head, strandedBranch)
+			}
+			if st := strings.TrimSpace(gitOut(t, dir, "status", "--porcelain")); st != "" {
+				t.Errorf("working tree changed by a state write:\n%s", st)
+			}
 		})
 	}
+}
+
+// gitOut runs git in dir and returns its stdout.
+func gitOut(t *testing.T, dir string, args ...string) string {
+	t.Helper()
+	out, err := exec.Command("git", append([]string{"-C", dir}, args...)...).Output()
+	if err != nil {
+		t.Fatalf("git %v: %v", args, err)
+	}
+	return string(out)
 }
 
 // A direct PUT that the stranded tree would refuse BEFORE reaching the commit:

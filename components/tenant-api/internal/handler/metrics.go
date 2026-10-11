@@ -129,7 +129,7 @@ func MetricsHandler(w http.ResponseWriter, r *http.Request) {
 	_, _ = fmt.Fprintf(w, "# HELP tenant_api_federation_orphaned_tokens Live federation token records whose tenant is no longer in conf.d.\n")
 	_, _ = fmt.Fprintf(w, "# TYPE tenant_api_federation_orphaned_tokens gauge\n")
 	_, _ = fmt.Fprintf(w, "tenant_api_federation_orphaned_tokens %d\n", orphanTokens)
-	_, _ = fmt.Fprintf(w, "# HELP tenant_api_federation_orphaned_subset_files Tenants no longer in conf.d that still have a conf.d/_federation/ subset file (counted once per tenant, whatever the file's spelling).\n")
+	_, _ = fmt.Fprintf(w, "# HELP tenant_api_federation_orphaned_subset_files Tenants no longer in conf.d that still have a federation subset record in the tenant-api state store (name kept from when subsets were conf.d/_federation/ files).\n")
 	_, _ = fmt.Fprintf(w, "# TYPE tenant_api_federation_orphaned_subset_files gauge\n")
 	_, _ = fmt.Fprintf(w, "tenant_api_federation_orphaned_subset_files %d\n", orphanSubsets)
 

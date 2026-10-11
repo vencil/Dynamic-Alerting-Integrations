@@ -35,10 +35,10 @@ package fedpolicy
 import (
 	"fmt"
 	"log/slog"
-	"path/filepath"
 	"regexp"
 
 	"github.com/vencil/tenant-api/internal/configwatcher"
+	"github.com/vencil/tenant-api/internal/statestore"
 	"gopkg.in/yaml.v3"
 )
 
@@ -81,17 +81,28 @@ type Manager struct {
 	*configwatcher.Watcher[Config]
 }
 
-// NewManager creates a Manager reading _federation_policy.yaml
-// from configDir. A missing file is not an error — configwatcher stores
-// an empty whitelist, and an empty whitelist simply means no metric is
-// federatable yet.
-func NewManager(configDir string) *Manager {
-	path := filepath.Join(configDir, "_federation_policy.yaml")
-	w, err := configwatcher.New(path, "federation-policy", parsePolicyConfig, emptyPolicyConfig)
+// NewManager creates a Manager reading the federation whitelist record from
+// the state store (#2856: no longer conf.d/_federation_policy.yaml). A
+// missing record is not an error — an empty whitelist simply means no metric
+// is federatable yet.
+func NewManager(s statestore.Store) *Manager {
+	desc := s.Describe() + " " + statestore.KeyFederationPolicy
+	w, err := configwatcher.NewWithReader(desc, "federation-policy", statestore.ReadFunc(s, statestore.KeyFederationPolicy), parsePolicyConfig, emptyPolicyConfig)
 	if err != nil {
 		slog.Warn("federation policy: initial load failed", "error", err)
 	}
 	return &Manager{Watcher: w}
+}
+
+// NewDirManager is NewManager over a directory store at dir — tests that
+// hold the record as dir/_federation_policy.yaml.
+func NewDirManager(dir string) *Manager {
+	s, err := statestore.NewDir(dir, nil)
+	if err != nil {
+		slog.Warn("federation policy: state directory", "error", err)
+		return NewManagerForTest(emptyPolicyConfig())
+	}
+	return NewManager(s)
 }
 
 // NewManagerForTest returns a Manager pre-populated with cfg

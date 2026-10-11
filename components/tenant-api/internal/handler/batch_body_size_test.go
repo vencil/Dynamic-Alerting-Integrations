@@ -346,8 +346,8 @@ func TestGroupBatchRejectsOversizeBody(t *testing.T) {
 	setupGroupsFile(t, configDir, testGroupsYAML)
 	gw := newTestWriter(configDir)
 	rbacMgr := newRBACManager(t, "")
-	h := GroupBatch(&Deps{Writer: gw, ConfigDir: configDir, RBAC: rbacMgr,
-		Groups: groups.NewManager(configDir), WriteMode: WriteModeDirect})
+	h := GroupBatch(&Deps{State: mustDirState(configDir), Writer: gw, ConfigDir: configDir, RBAC: rbacMgr,
+		Groups: groups.NewDirManager(configDir), WriteMode: WriteModeDirect})
 	req := newRequestWithChiParam("POST", "/api/v1/groups/production-dba/batch",
 		"id", "production-dba", bytes.NewBufferString(b.String()))
 	req.Header.Set("Content-Type", "application/json")
@@ -654,8 +654,8 @@ func TestUnboundedMapsAreRejectedBeforeTheWriteLock(t *testing.T) {
 		}
 		configDir := t.TempDir()
 		setupGroupsFile(t, configDir, testGroupsYAML)
-		h := GroupBatch(&Deps{Writer: newTestWriter(configDir), ConfigDir: configDir,
-			Groups: groups.NewManager(configDir), RBAC: newRBACManager(t, ""),
+		h := GroupBatch(&Deps{State: mustDirState(configDir), Writer: newTestWriter(configDir), ConfigDir: configDir,
+			Groups: groups.NewDirManager(configDir), RBAC: newRBACManager(t, ""),
 			WriteMode: WriteModeDirect})
 		req := newRequestWithChiParam("POST", "/api/v1/groups/production-dba/batch",
 			"id", "production-dba", bytes.NewBufferString(b.String()))
@@ -682,8 +682,8 @@ func TestUnboundedMapsAreRejectedBeforeTheWriteLock(t *testing.T) {
 		b.WriteString(`}}`)
 		configDir := t.TempDir()
 		setupGroupsFile(t, configDir, testGroupsYAML)
-		h := PutGroup(&Deps{Writer: newTestWriter(configDir), ConfigDir: configDir,
-			Groups: groups.NewManager(configDir), RBAC: permissiveRBACManager(t)})
+		h := PutGroup(&Deps{State: mustDirState(configDir), Writer: newTestWriter(configDir), ConfigDir: configDir,
+			Groups: groups.NewDirManager(configDir), RBAC: permissiveRBACManager(t)})
 		req := newRequestWithChiParam("PUT", "/api/v1/groups/g1", "id", "g1",
 			bytes.NewBufferString(b.String()))
 		req = setRequestIdentity(req, "a@a.com")

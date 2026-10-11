@@ -481,7 +481,7 @@ Prometheus 的 `/-/reload` 和 Alertmanager 的 `/-/reload` 是用於觸發設�
 
 - **tenant-api**：Go HTTP server，透過 oauth2-proxy 認證，commit-on-write 保留完整 Git 審計軌跡
 - **RBAC**：`_rbac.yaml` 控制哪些 team 可管理哪些 tenant
-- **群組管理**：`_groups.yaml` 支援自定義群組 + 批量操作
+- **群組管理**：自定義群組（存於 tenant-api 的 state store，不在 conf.d）+ 批量操作
 - **PR 模式**：高安全環境可啟用 `_write_mode: pr`，UI 操作產生 GitHub PR / GitLab MR，經 reviewer 審核後才生效
 
 詳見 [ADR-009](../adr/009-tenant-manager-crud-api.md)（API 架構）、[ADR-011](../adr/011-pr-based-write-back.md)（PR 寫回模式）。

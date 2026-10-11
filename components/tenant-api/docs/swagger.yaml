@@ -1483,6 +1483,10 @@ paths:
           description: Service Unavailable
           schema:
             $ref: '#/definitions/ErrorResponse'
+        "507":
+          description: Insufficient Storage
+          schema:
+            $ref: '#/definitions/ErrorResponse'
       summary: Replace the platform federation whitelist
       tags:
       - federation
@@ -1565,6 +1569,10 @@ paths:
             $ref: '#/definitions/ErrorResponse'
         "503":
           description: Service Unavailable
+          schema:
+            $ref: '#/definitions/ErrorResponse'
+        "507":
+          description: Insufficient Storage
           schema:
             $ref: '#/definitions/ErrorResponse'
       summary: Issue a tenant federation token
@@ -1663,6 +1671,10 @@ paths:
           description: Service Unavailable
           schema:
             $ref: '#/definitions/ErrorResponse'
+        "507":
+          description: Insufficient Storage
+          schema:
+            $ref: '#/definitions/ErrorResponse'
       summary: Delete a group
       tags:
       - groups
@@ -1738,6 +1750,10 @@ paths:
             $ref: '#/definitions/ErrorResponse'
         "503":
           description: Service Unavailable
+          schema:
+            $ref: '#/definitions/ErrorResponse'
+        "507":
+          description: Insufficient Storage
           schema:
             $ref: '#/definitions/ErrorResponse'
       summary: Create or update a group
@@ -2306,6 +2322,10 @@ paths:
           description: Internal Server Error
           schema:
             $ref: '#/definitions/ErrorResponse'
+        "503":
+          description: Service Unavailable
+          schema:
+            $ref: '#/definitions/ErrorResponse'
       summary: Get a tenant's effective federation metric subset
       tags:
       - federation
@@ -2350,6 +2370,10 @@ paths:
             $ref: '#/definitions/ErrorResponse'
         "503":
           description: Service Unavailable
+          schema:
+            $ref: '#/definitions/ErrorResponse'
+        "507":
+          description: Insufficient Storage
           schema:
             $ref: '#/definitions/ErrorResponse'
       summary: Replace a tenant's federation metric subset
@@ -2624,6 +2648,10 @@ paths:
           description: Service Unavailable
           schema:
             $ref: '#/definitions/ErrorResponse'
+        "507":
+          description: Insufficient Storage
+          schema:
+            $ref: '#/definitions/ErrorResponse'
       summary: Delete a saved view
       tags:
       - views
@@ -2694,6 +2722,10 @@ paths:
             $ref: '#/definitions/ErrorResponse'
         "503":
           description: Service Unavailable
+          schema:
+            $ref: '#/definitions/ErrorResponse'
+        "507":
+          description: Insufficient Storage
           schema:
             $ref: '#/definitions/ErrorResponse'
       summary: Create or update a saved view

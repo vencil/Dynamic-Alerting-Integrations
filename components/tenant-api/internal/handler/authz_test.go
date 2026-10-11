@@ -147,7 +147,7 @@ func TestPutGroup_ForbiddenMember_Returns403(t *testing.T) {
 	// Caller has admin on db-a but NOT db-b. Group request includes
 	// both members → 403, with both… er, one (db-b) listed as forbidden.
 	configDir := setupConfigDir(t, nil)
-	mgr := groups.NewManager(configDir)
+	mgr := groups.NewDirManager(configDir)
 	writer := newTestWriter(configDir)
 
 	rbacYAML := `groups:
@@ -161,7 +161,7 @@ func TestPutGroup_ForbiddenMember_Returns403(t *testing.T) {
 	req := newRequestWithChiParam("PUT", "/api/v1/groups/mixed", "id", "mixed",
 		bytes.NewBufferString(body))
 	req.Header.Set("Content-Type", "application/json")
-	w := servePopulatingRBAC(t, PutGroup(&Deps{Groups: mgr, Writer: writer, RBAC: rbacMgr}), req,
+	w := servePopulatingRBAC(t, PutGroup(&Deps{State: mustDirState(configDir), Groups: mgr, Writer: writer, RBAC: rbacMgr}), req,
 		"alice@example.com", []string{"dba-team-a"})
 
 	if w.Code != http.StatusForbidden {
@@ -186,7 +186,7 @@ func TestPutGroup_AllMembersForbidden_ListsAllInError(t *testing.T) {
 	// the error message so operator can fix in one round-trip
 	// (ergonomics: discover-all-failures-up-front).
 	configDir := setupConfigDir(t, nil)
-	mgr := groups.NewManager(configDir)
+	mgr := groups.NewDirManager(configDir)
 	writer := newTestWriter(configDir)
 
 	rbacMgr := newRBACManager(t, `groups: []`+"\n")
@@ -195,7 +195,7 @@ func TestPutGroup_AllMembersForbidden_ListsAllInError(t *testing.T) {
 	req := newRequestWithChiParam("PUT", "/api/v1/groups/forbidden", "id", "forbidden",
 		bytes.NewBufferString(body))
 	req.Header.Set("Content-Type", "application/json")
-	w := servePopulatingRBAC(t, PutGroup(&Deps{Groups: mgr, Writer: writer, RBAC: rbacMgr}), req,
+	w := servePopulatingRBAC(t, PutGroup(&Deps{State: mustDirState(configDir), Groups: mgr, Writer: writer, RBAC: rbacMgr}), req,
 		"alice@example.com", []string{"unprivileged"})
 
 	if w.Code != http.StatusForbidden {
@@ -226,7 +226,7 @@ func TestDeleteGroup_ForbiddenMember_Returns403(t *testing.T) {
     members: ["db-a", "db-b"]
 `)
 	initGitRepo(t, configDir)
-	mgr := groups.NewManager(configDir)
+	mgr := groups.NewDirManager(configDir)
 	writer := newTestWriter(configDir)
 
 	// Caller has admin on db-a but not db-b.
@@ -237,7 +237,7 @@ func TestDeleteGroup_ForbiddenMember_Returns403(t *testing.T) {
 `)
 
 	req := newRequestWithChiParam("DELETE", "/api/v1/groups/cross-team", "id", "cross-team", nil)
-	w := servePopulatingRBAC(t, DeleteGroup(&Deps{Groups: mgr, Writer: writer, RBAC: rbacMgr}), req,
+	w := servePopulatingRBAC(t, DeleteGroup(&Deps{State: mustDirState(configDir), Groups: mgr, Writer: writer, RBAC: rbacMgr}), req,
 		"alice@example.com", []string{"dba-team-a"})
 
 	if w.Code != http.StatusForbidden {

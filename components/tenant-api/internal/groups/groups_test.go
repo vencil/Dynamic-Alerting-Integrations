@@ -139,7 +139,7 @@ func TestValidateGroupID(t *testing.T) {
 func TestNewManager_NoFile(t *testing.T) {
 	t.Parallel()
 	dir := t.TempDir()
-	mgr := NewManager(dir)
+	mgr := NewDirManager(dir)
 
 	cfg := mgr.Get()
 	if len(cfg.Groups) != 0 {
@@ -156,7 +156,7 @@ func TestNewManager_WithFile(t *testing.T) {
 	t.Parallel()
 	dir, _ := testutil.MkTempYAML(t, "_groups.yaml", sampleGroupsYAML)
 
-	mgr := NewManager(dir)
+	mgr := NewDirManager(dir)
 
 	list := mgr.ListGroups()
 	if len(list) != 2 {
@@ -176,7 +176,7 @@ func TestManager_GetGroup(t *testing.T) {
 	t.Parallel()
 	dir, _ := testutil.MkTempYAML(t, "_groups.yaml", sampleGroupsYAML)
 
-	mgr := NewManager(dir)
+	mgr := NewDirManager(dir)
 
 	g, ok := mgr.GetGroup("production-dba")
 	if !ok {
@@ -196,7 +196,7 @@ func TestManager_Reload(t *testing.T) {
 	t.Parallel()
 	dir, _ := testutil.MkTempYAML(t, "_groups.yaml", sampleGroupsYAML)
 
-	mgr := NewManager(dir)
+	mgr := NewDirManager(dir)
 	if len(mgr.ListGroups()) != 2 {
 		t.Fatal("expected 2 groups initially")
 	}
