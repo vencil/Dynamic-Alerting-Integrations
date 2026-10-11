@@ -131,10 +131,10 @@ def load_all_configs(config_dir, unreadable=None):
             continue
         if filename in LEGACY_STATE_FILES:
             # #2883: tenant-api keeps these records in its state store since
-            # #2856 and no longer reads this copy; a reference found here is
-            # not an answer (--state is).
-            print(f"  ⚠️  略過 {safe_label(filename)}: tenant-api 已不讀 conf.d 的這個檔"
-                  "（紀錄在 state store，請用 --state）")
+            # #2856; it imports this copy at startup only while the store has
+            # no such record. check_state_references judges it against --state.
+            print(f"  ⚠️  略過 {safe_label(filename)}: tenant-api 只在 state store 沒有這筆紀錄時"
+                  "於開機匯入它（引用改由 --state 判定）")
             continue
         try:
             with open(entry, 'r', encoding='utf-8') as f:
@@ -179,13 +179,44 @@ def get_tenant_metrics(tenant, configs):
     return {}
 
 
-def check_state_references(tenant, state):
+def _legacy_refs(tenant, state, config_dir):
+    """conf.d 殘留、而 state store 沒有對應紀錄的舊檔中對 tenant 的引用。
+
+    tenant-api 每次開機在 state store 沒有該筆紀錄時，會從 conf.d 匯入
+    `_groups.yaml`／`_views.yaml`／`_federation_policy.yaml` 與
+    `_federation/<id>.yaml`（statemigrate.Import），所以這些引用在下次
+    重啟後就會出現在 state store。
+    """
+    refs = []
+    if config_dir is None:
+        return refs
+    base = Path(config_dir)
+    for name in LEGACY_STATE_FILES:
+        path = base / name
+        if name == "_account_registry.yaml" or name in state.records or not path.is_file():
+            continue
+        with open(path, "r", encoding="utf-8") as f:
+            data = strict_load_exporter_keys(f, raw_text_sequences=_TENANT_ID_LISTS) or {}
+        if tenant in yaml.dump(data, default_flow_style=False):
+            refs.append((f"conf.d 的 {safe_label(name)}（state store 沒有這筆紀錄，tenant-api 下次開機會匯入）",
+                         f"刪除 {safe_label(str(path))}，或先讓 tenant-api 匯入後再以 API 清除"))
+    if subset_key(tenant) not in state.records:
+        for ext in (".yaml", ".yml"):
+            path = base / "_federation" / f"{tenant}{ext}"
+            if path.is_file():
+                refs.append((f"conf.d 的 _federation/{safe_label(path.name)}（tenant-api 下次開機會匯入為子集紀錄）",
+                             f"刪除 {safe_label(str(path))}"))
+    return refs
+
+
+def check_state_references(tenant, state, config_dir=None):
     """tenant-api state store 中對 tenant 的引用（#2883）。
 
     回傳 (references, info)：references 是 (說明, 要呼叫的 API) 的清單，
-    info 是只供參考的行（AccountID 配發）。
+    info 是只供參考的行（AccountID 配發）。config_dir 給定時，另列 conf.d
+    殘留舊檔中 tenant-api 下次開機會匯入的引用。
     """
-    refs = []
+    refs = _legacy_refs(tenant, state, config_dir)
     for gid, g in sorted(state.groups().items()):
         members = [str(m) for m in (g.get("members") or [])]
         if tenant in members:
@@ -262,7 +293,7 @@ def run_precheck(tenant, config_dir, state=None):
         report.append("⚠️  state store 引用：未判定（未提供 --state；群組、views、"
                       "federation 子集存在 tenant-api 的 state store，不在 conf.d）")
     else:
-        state_refs, state_info = check_state_references(tenant, state)
+        state_refs, state_info = check_state_references(tenant, state, config_dir)
         if state_refs:
             report.append(f"⚠️  state store 引用 ({safe_label(state.source)})，"
                           "工具不寫 state store，請在下架後呼叫 tenant-api 清除:")

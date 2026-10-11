@@ -2131,7 +2131,7 @@ Without `--execute` it is already a preview; there is no separate dry-run flag.
 
 A pre-check report: where the tenant file is, whether any other file references the tenant, and the metrics it has set. A config file that cannot be parsed is named and fails the pre-check (the cross-reference check cannot see inside it). With `--execute` it deletes `<config-dir>/<tenant>.yaml` directly, **without a backup** (back it up yourself or rely on git), and does **not** touch Recording / Alert rules (an option to clean up rules is not implemented yet); at the end it reminds you to also remove the `tenant=<tenant>` routing from Alertmanager.
 
-Groups, views and federation subsets live in tenant-api's state store, not in conf.d; a `_groups.yaml` or similar left in conf.d only gets a ⚠️ saying it is no longer read, and is not used as the answer. With `--state` the report lists the state store references and the tenant-api call that removes each (e.g. `PUT /api/v1/groups/{id}` without the member); the tool itself never writes the state store. The AccountID allocation is listed for information only (it is never reused). Without `--state` this item reads "undetermined", and `--execute` runs only with `--skip-state-check` added.
+Groups, views and federation subsets live in tenant-api's state store, not in conf.d; a `_groups.yaml` or similar left in conf.d only gets a ⚠️ saying it is no longer read, and is not used as the answer. With `--state` the report lists the state store references and the tenant-api call that removes each; a legacy file left in conf.d whose record the state store lacks is imported by tenant-api at its next start, so its references are listed too (e.g. `PUT /api/v1/groups/{id}` without the member); the tool itself never writes the state store. The AccountID allocation is listed for information only (it is never reused). Without `--state` this item reads "undetermined", and `--execute` runs only with `--skip-state-check` added.
 
 **Examples**
 
@@ -2149,7 +2149,7 @@ da-tools offboard db-old --config-dir ./conf.d --state tenant-api-state.yaml --e
 |------|-------------|
 | `0` | Success: the pre-check passed or only warned (e.g. a cross-file reference); with `--execute` the tenant file was deleted |
 | `1` | The pre-check failed (a ❌ item such as the tenant file not found or a config file that cannot be parsed, named in the report), with or without `--execute`; or I/O failed (#2179) |
-| `2` | Caller error: arguments argparse rejects (missing tenant positional, unknown flag); a `--state` that cannot be read or is not a state directory / ConfigMap document; `--execute` with neither `--state` nor `--skip-state-check` |
+| `2` | Caller error: arguments argparse rejects (missing tenant positional, unknown flag); a `--state` that cannot be read, is not a ConfigMap document or directory, holds no records, or holds keys that are not tenant-api state records (for example a saved `threshold-config`, or conf.d itself); `--execute` with neither `--state` nor `--skip-state-check` |
 
 ---
 

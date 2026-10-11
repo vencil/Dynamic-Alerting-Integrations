@@ -138,7 +138,7 @@ def test_metadata_custom_groups_from_state(tmp_path, capsys):
     groups = gtm._load_custom_groups(lts.load_state(_state_dir(tmp_path)), conf)
     assert sorted(groups) == ["g-fin", "g-other"]
     assert groups["g-fin"]["members"] == ["db-a", "db-b"]
-    assert "is no longer read" in capsys.readouterr().err
+    assert "is not read here" in capsys.readouterr().err
     assert gtm._load_custom_groups(None, conf) == {}
 
 
@@ -171,3 +171,61 @@ def test_offboard_main_bad_state_is_a_caller_error(tmp_path, monkeypatch, capsys
         _main(monkeypatch, ["db-a", "--config-dir", str(conf), "--state", str(bad)])
     assert e.value.code == 2
     assert "not a ConfigMap document" in capsys.readouterr().err
+
+
+# F1: a copy that is not tenant-api's state store must not read as "no
+# references" — offboard would then delete the tenant unchecked.
+@pytest.mark.parametrize("name,body", [
+    ("tc.yaml", "kind: ConfigMap\ndata:\n  db-a.yaml: |\n    tenants: {db-a: {}}\n"),
+    ("fed.yaml", "kind: ConfigMap\ndata:\n  store.json: '{}'\n"),
+    ("empty.yaml", "kind: ConfigMap\nmetadata: {name: tenant-api-state}\n"),
+])
+def test_load_state_refuses_foreign_or_empty_configmaps(tmp_path, name, body):
+    p = tmp_path / name
+    p.write_text(body, encoding="utf-8")
+    with pytest.raises(lts.StateInputError):
+        lts.load_state(p)
+
+
+def test_load_state_refuses_confd_and_empty_dirs(tmp_path):
+    conf = _confd(tmp_path)
+    with pytest.raises(lts.StateInputError, match="not tenant-api state records"):
+        lts.load_state(conf)
+    empty = tmp_path / "empty"
+    empty.mkdir()
+    with pytest.raises(lts.StateInputError, match="no records"):
+        lts.load_state(empty)
+
+
+def test_offboard_execute_with_wrong_configmap_deletes_nothing(tmp_path, monkeypatch, capsys):
+    conf = _confd(tmp_path)
+    wrong = tmp_path / "tc.yaml"
+    wrong.write_text("kind: ConfigMap\ndata:\n  db-a.yaml: |\n    tenants: {db-a: {}}\n", encoding="utf-8")
+    with pytest.raises(SystemExit) as e:
+        _main(monkeypatch, ["db-a", "--config-dir", str(conf), "--state", str(wrong), "--execute"])
+    assert e.value.code == 2
+    assert (conf / "db-a.yaml").exists()
+
+
+# F2: tenant-api imports conf.d's legacy files at startup while the store has
+# no such record, so a reference there comes back after the next restart.
+def test_offboard_reports_legacy_files_the_store_lacks(tmp_path):
+    conf = _confd(tmp_path, {"_groups.yaml": "groups:\n  old: {members: [db-a]}\n"})
+    (conf / "_federation").mkdir()
+    (conf / "_federation" / "db-a.yaml").write_text("metrics: [up]\n", encoding="utf-8")
+    st = tmp_path / "state"
+    st.mkdir()
+    (st / "_views.yaml").write_text("views: {}\n", encoding="utf-8")
+    refs, _ = ot.check_state_references("db-a", lts.load_state(st), str(conf))
+    whats = [w for w, _ in refs]
+    assert any("_groups.yaml" in w and "下次開機會匯入" in w for w in whats), whats
+    assert any("_federation/db-a.yaml" in w for w in whats), whats
+
+
+def test_offboard_ignores_legacy_files_the_store_already_holds(tmp_path):
+    conf = _confd(tmp_path, {"_groups.yaml": "groups:\n  old: {members: [db-a]}\n"})
+    st = tmp_path / "state"
+    st.mkdir()
+    (st / "_groups.yaml").write_text("groups: {}\n", encoding="utf-8")
+    refs, _ = ot.check_state_references("db-a", lts.load_state(st), str(conf))
+    assert refs == []

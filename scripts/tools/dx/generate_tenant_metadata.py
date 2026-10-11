@@ -388,8 +388,9 @@ def _load_custom_groups(state: Any, config_dir: Path) -> dict:
     """
     for name in legacy_state_files(config_dir):
         if name == "_groups.yaml":
-            print(f"WARN: {safe_label(str(Path(config_dir) / name))} is no longer read: "
-                  "tenant-api keeps groups in its state store (pass --state)",
+            print(f"WARN: {safe_label(str(Path(config_dir) / name))} is not read here: "
+                  "tenant-api imports it at startup only while its state store has no "
+                  "groups record (pass --state)",
                   file=sys.stderr)
     if state is None:
         return {}  # main says so on stderr; generate_platform_data reads no groups
@@ -618,8 +619,8 @@ def main():
 
 def _note_without_state(state: Any) -> None:
     """Say on stderr that custom_groups is empty for want of --state (#2883).
-    Called on the success exits only, so a failing run still writes one
-    ERROR line and nothing else."""
+    Called on the success exits only, so a failing run does not also print
+    this NOTE after its ERROR line."""
     if state is None:
         print("NOTE: custom_groups is empty: no --state given "
               "(the state directory, or a saved `kubectl get configmap tenant-api-state -o yaml`)",

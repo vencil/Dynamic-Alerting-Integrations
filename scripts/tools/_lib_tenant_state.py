@@ -102,8 +102,39 @@ class TenantState:
         return allocs.get(tenant)
 
 
+def is_state_key(key: str) -> bool:
+    """Whether *key* is a record key tenant-api keeps."""
+    if key in (KEY_GROUPS, KEY_VIEWS, KEY_FEDERATION_POLICY, KEY_ACCOUNT_REGISTRY):
+        return True
+    tenant = key[len(SUBSET_PREFIX):-len(SUBSET_SUFFIX)] if (
+        key.startswith(SUBSET_PREFIX) and key.endswith(SUBSET_SUFFIX)) else ""
+    return bool(tenant) and not any(c in tenant for c in "/\\") and ".." not in tenant
+
+
 def load_state(path: str | os.PathLike[str]) -> TenantState:
-    """Read a state store copy: a directory, or a ConfigMap YAML/JSON file."""
+    """Read a state store copy: a directory, or a ConfigMap YAML/JSON file.
+
+    The copy must hold at least one record and only tenant-api state keys: a
+    different ConfigMap (threshold-config, the federation token store), a
+    tenant config directory or an empty directory is refused with StateInputError,
+    because read as a state store it would report "no references" and let
+    an offboarding go ahead unchecked.
+    """
+    st = _load_state(path)
+    if not st.records:
+        raise StateInputError(
+            f"--state {st.source}: holds no records — not a tenant-api state store copy "
+            "(if the store really is empty, use --skip-state-check)")
+    foreign = sorted(k for k in st.records if not is_state_key(k))
+    if foreign:
+        shown = ", ".join(foreign[:5]) + (", …" if len(foreign) > 5 else "")
+        raise StateInputError(
+            f"--state {st.source}: holds keys that are not tenant-api state records ({shown}) "
+            "— save `kubectl get configmap tenant-api-state -o yaml`, or pass the state directory")
+    return st
+
+
+def _load_state(path: str | os.PathLike[str]) -> TenantState:
     p = Path(path)
     if p.is_dir():
         records = {}
