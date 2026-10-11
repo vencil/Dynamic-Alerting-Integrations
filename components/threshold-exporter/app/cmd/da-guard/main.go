@@ -104,9 +104,11 @@ import (
 	"strings"
 	"time"
 
+	"github.com/vencil/threshold-exporter/internal/confdlayout"
 	"github.com/vencil/threshold-exporter/internal/guard"
 	"github.com/vencil/threshold-exporter/pkg/config"
 	"github.com/vencil/threshold-exporter/pkg/routingpolicy"
+	"github.com/vencil/threshold-exporter/pkg/tenantid"
 )
 
 // Version is overridden at build time via `-ldflags "-X main.Version=..."`.
@@ -544,11 +546,11 @@ func buildCheckInput(scoped *config.ScopedTenants, f *flags) guard.CheckInput {
 		// names it); reading it here judged routes that do not exist.
 		// #2326: the layers of the tenant's own directory level.
 		// #2341 R8: an id the routing plane refuses gets no routing at all —
-		// the generator renders nothing for it (routingpolicy.IsValidTenantID).
-		if !routingpolicy.IsValidTenantID(ec.TenantID) {
+		// the generator renders nothing for it (tenantid.Valid).
+		if !tenantid.Valid(ec.TenantID) {
 			invalidIDs[ec.TenantID] = ec.SourceFile
 		} else {
-			layers := tree.LayersFor(routingpolicy.LevelOf(ec.SourceFile))
+			layers := tree.LayersFor(confdlayout.LevelOf(ec.SourceFile))
 			block := layers.TenantBlock(ec.TenantID, pyyamlOwn(ec, pyRouting))
 			if routingpolicy.IsDisabled(block["_routing"]) {
 				disabled[ec.TenantID] = true

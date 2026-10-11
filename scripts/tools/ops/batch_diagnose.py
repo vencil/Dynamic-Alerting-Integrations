@@ -41,8 +41,10 @@ sys.path.insert(0, _THIS_DIR)  # Docker flat layout
 sys.path.insert(0, os.path.join(_THIS_DIR, '..'))  # Repo subdir layout
 from diagnose import check as diagnose_check  # noqa: E402
 from diagnose import query_prometheus  # noqa: E402
+from diagnose import exit_code as diagnose_exit_code  # noqa: E402  (#2493)
+from diagnose import CommandNotFoundError  # noqa: E402  (#2493)
 from _lib_python import format_json_report, write_json_or_die, add_prometheus_arg  # noqa: E402
-from _lib_exitcodes import EXIT_CALLER_ERROR  # noqa: E402
+from _lib_exitcodes import EXIT_OK, EXIT_VIOLATION, EXIT_CALLER_ERROR  # noqa: E402
 from _lib_confd import (  # noqa: E402
     config_stem,
     has_yaml_extension,
@@ -133,7 +135,9 @@ def discover_tenants(namespace="monitoring", configmap="threshold-config"):
 def run_diagnose_for_tenant(tenant, prom_url, timeout_sec=30):
     """Run diagnose.check() for a single tenant with timeout protection.
 
-    Returns dict: {tenant, status, ...} or {tenant, status: "timeout"}.
+    Returns dict: {tenant, status, ...}; status "error" when the check could
+    not run. A missing `kubectl` also sets `_environment_error` (see
+    batch_exit_code), which main() strips before reporting.
     """
     import io
 
@@ -154,6 +158,11 @@ def run_diagnose_for_tenant(tenant, prom_url, timeout_sec=30):
             result = json.loads(output)
         else:
             result = {"status": "error", "tenant": tenant, "issues": ["empty output"]}
+    except CommandNotFoundError as exc:
+        # `da-tools diagnose` alone exits 2 on this (the environment lacks
+        # kubectl), not 1; keep the same class here (#2493).
+        result = {"status": "error", "tenant": tenant, "issues": [str(exc)],
+                  "_environment_error": True}
     except (OSError, json.JSONDecodeError, ValueError) as exc:
         result = {"status": "error", "tenant": tenant, "issues": [str(exc)]}
 
@@ -277,6 +286,37 @@ def print_text_report(report):
     print("=" * 60)
 
 
+def _positive_int(text):
+    """argparse type for --workers: 0 used to end in a ThreadPoolExecutor
+    traceback (rc 1, which now means "a tenant check failed")."""
+    try:
+        value = int(text)
+    except ValueError:
+        raise argparse.ArgumentTypeError(f"not an integer: {text!r}") from None
+    if value < 1:
+        raise argparse.ArgumentTypeError(f"must be >= 1, got {value}")
+    return value
+
+
+def batch_exit_code(results, environment_errors=()) -> int:
+    """The run's exit code from every tenant's result (#2493).
+
+    Each tenant is classified as ``diagnose`` classifies it alone; then a
+    Prometheus failure on any tenant wins (2: the environment, not a finding —
+    the same precedence as validate's query errors), else any other failure
+    (1), else 0. Before this a failed check also exited 0, so a CI gate on
+    batch-diagnose never failed.
+    """
+    codes = {diagnose_exit_code(r) for r in results}
+    if environment_errors:          # e.g. no kubectl — as `diagnose` alone
+        codes.add(EXIT_CALLER_ERROR)
+    if EXIT_CALLER_ERROR in codes:
+        return EXIT_CALLER_ERROR
+    if EXIT_VIOLATION in codes:
+        return EXIT_VIOLATION
+    return EXIT_OK
+
+
 def main():
     """CLI entry point: Post-cutover multi-tenant health report."""
     parser = argparse.ArgumentParser(
@@ -292,7 +332,7 @@ def main():
                   "(default: $PROMETHEUS_URL, else http://localhost:9090)",
     )
     parser.add_argument(
-        "--workers", type=int, default=5,
+        "--workers", type=_positive_int, default=5,
         help="Max parallel diagnose workers (default: 5)",
     )
     parser.add_argument(
@@ -359,7 +399,7 @@ def main():
                 },
                 "recommendations": [],
             }))
-        return
+        return EXIT_OK
 
     # Run diagnose in parallel
     results = []
@@ -382,6 +422,10 @@ def main():
                 }
             results.append(result)
 
+    # Internal marker only: the report keeps its schema.
+    environment_errors = {r.get("tenant") for r in results
+                          if r.pop("_environment_error", False)}
+
     # Sort results by tenant name
     results.sort(key=lambda r: r.get("tenant", ""))
 
@@ -400,6 +444,8 @@ def main():
         if not args.json:
             print(f"\nJSON report written to: {args.output}")
 
+    return batch_exit_code(results, environment_errors)
+
 
 if __name__ == "__main__":
-    main()
+    sys.exit(main())

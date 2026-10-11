@@ -45,8 +45,9 @@
 //     `_routing_defaults` that is neither a mapping nor null
 //     (ProblemRoutingDefaultsNotMapping);
 //   - the tenant ids the generator accepts (#2341, ADR-035:
-//     _lib_validation.is_valid_tenant_id → IsValidTenantID, both reading the
-//     schema's definitions.tenantId);
+//     _lib_validation.is_valid_tenant_id → pkg/tenantid.Valid, both reading
+//     the schema's definitions.tenantId; checked by this package's callers
+//     and its parity test, no longer wrapped here, #2899);
 //   - `require_critical_escalation` (#2325, _grar_validate.
 //     critical_escalation_findings): whether severity=critical alerts reach
 //     a pagerduty receiver at all, and which non-pagerduty destinations

@@ -8,6 +8,7 @@ import (
 	"path/filepath"
 	"sort"
 
+	"github.com/vencil/threshold-exporter/internal/confdlayout"
 	"github.com/vencil/threshold-exporter/pkg/config"
 	"github.com/vencil/threshold-exporter/pkg/pyyamlcompat"
 	"github.com/vencil/threshold-exporter/pkg/routingpolicy"
@@ -80,7 +81,7 @@ func withGeneratorDuplicates(configDir string, scoped *config.ScopedTenants, err
 		}
 	}
 	for _, f := range scoped.NestedPlatformFiles {
-		if !routingpolicy.IsDomainPolicyFile(path.Base(f.Name)) {
+		if !confdlayout.IsDomainPolicyFile(path.Base(f.Name)) {
 			check(f.Name, f.Data)
 		}
 	}

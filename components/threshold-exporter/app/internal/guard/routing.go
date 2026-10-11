@@ -104,7 +104,7 @@ package guard
 //     `_routing_defaults` that is not a mapping (routing_defaults_not_mapping,
 //     TenantID "").
 // 13. A tenant id the routing plane refuses (error, #2341, invalid_tenant_id,
-//     routingpolicy.IsValidTenantID, ADR-035): the generator refuses the
+//     tenantid.Valid, ADR-035): the generator refuses the
 //     whole tree, in every mode.
 //
 // Why these and not more:
@@ -260,7 +260,7 @@ func checkGroupByInvalid(tenantID string, routing map[string]any) []Finding {
 // enforcedRouteTenants is _grar_routes.enforced_route_tenants: the tenants
 // a `{{tenant}}` `_routing_enforced` expands over — every tenant the
 // generator recognises (#2519), routed or not: those of EffectiveConfigs and
-// RoutingByTenant, less the ids routingpolicy.IsValidTenantID refuses and
+// RoutingByTenant, less the ids tenantid.Valid refuses and
 // the UnloadedTenants (a null body the generator does not load) — the
 // generator renders nothing for either. A tenant with `_routing: disable`, a
 // refused `_routing` or no routing layer at all is in it, as in the
@@ -275,7 +275,7 @@ func enforcedRouteTenants(input CheckInput) []string {
 	}
 	out := make([]string, 0, len(seen))
 	for t := range seen {
-		if _, invalid := input.InvalidTenantIDs[t]; invalid || !routingpolicy.IsValidTenantID(t) {
+		if _, invalid := input.InvalidTenantIDs[t]; invalid || !tenantid.Valid(t) {
 			continue
 		}
 		if _, unloaded := input.UnloadedTenants[t]; unloaded {

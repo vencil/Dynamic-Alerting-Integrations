@@ -1,7 +1,7 @@
 package handler
 
 // #2341 R8 / ADR-035: a write to a tenant id the tenant-id rule refuses
-// (routingpolicy.IsValidTenantID: a DNS-1123 label) is refused with 400
+// (tenantid.Valid: a DNS-1123 label) is refused with 400
 // before anything is read or written; reads keep ValidateTenantID alone.
 
 import (

@@ -100,6 +100,7 @@ _THIS_DIR = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, _THIS_DIR)  # Docker flat layout
 sys.path.insert(0, os.path.join(_THIS_DIR, ".."))
 from _lib_exitcodes import EXIT_OK, EXIT_VIOLATION, EXIT_CALLER_ERROR  # noqa: E402
+from _lib_compat import require_project_root  # noqa: E402  (#2852)
 
 SKIP_DIR_PARTS = {".claude", ".git", "node_modules", ".venv", "venv"}
 
@@ -486,11 +487,7 @@ def main() -> int:
         print(f"ERROR: {exc}", file=sys.stderr)
         return EXIT_CALLER_ERROR
 
-    repo = Path(_THIS_DIR).resolve()
-    for parent in [repo, *repo.parents]:
-        if (parent / ".git").exists():
-            repo = parent
-            break
+    repo = require_project_root(_THIS_DIR)  # #2852: never an outer project
 
     missing = [t for t in _FIXED_TARGETS if not (repo / t).exists()]
     if missing:

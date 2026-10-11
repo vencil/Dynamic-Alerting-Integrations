@@ -1128,7 +1128,7 @@ def load_tenant_configs(config_dir: str) -> dict[str, dict[str, Any]]:
     malformed config directory as an empty one, i.e. to fail OPEN on exactly
     the input that should be loudest. Callers that need a CLI exit code
     should map these to ``EXIT_CALLER_ERROR`` at their own entry point (see
-    ``scripts/tools/ops/config_diff.py:main``); swallowing them *here* would
+    ``scripts/tools/ops/policy_engine.py:main``); swallowing them *here* would
     silently turn "your config is broken" into "you have no tenants" for
     every one of this helper's callers at once.
     """

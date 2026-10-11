@@ -68,6 +68,8 @@ def _run_cli(
 ) -> tuple[int, str, str]:
     """Invoke main() in-process so coverage.py captures execution."""
     monkeypatch.chdir(repo_root)
+    # #2852: the root is the tool's own tree, not the cwd's; point it here.
+    monkeypatch.setattr(cpmc, "find_repo_root", lambda: repo_root)
     monkeypatch.setattr(
         cpmc.sys, "argv",
         ["check_path_metadata_consistency.py", *args],
@@ -320,19 +322,14 @@ class TestExtractTenantMetadata:
 
 
 class TestFindRepoRoot:
-    def test_walks_up_to_git_dir(self, tmp_path, monkeypatch):
+    """#2852: the root is this tool's own tree, never the cwd's `.git`."""
+
+    def test_a_cwd_inside_another_repo_does_not_move_it(self, tmp_path, monkeypatch):
         (tmp_path / ".git").mkdir()
         nested = tmp_path / "a" / "b"
         nested.mkdir(parents=True)
         monkeypatch.chdir(nested)
-        assert cpmc.find_repo_root() == tmp_path
-
-    def test_fallback_when_no_git_dir(self, tmp_path, monkeypatch):
-        monkeypatch.chdir(tmp_path)
-        # Must not raise; returns some directory (script-location
-        # heuristic 3 levels up from the module).
-        result = cpmc.find_repo_root()
-        assert result.is_dir()
+        assert cpmc.find_repo_root() == Path(cpmc.__file__).resolve().parents[3]
 
 
 # ── TestScanFileOSError ──────────────────────────────────────────────

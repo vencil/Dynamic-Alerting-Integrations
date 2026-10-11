@@ -84,10 +84,29 @@ def test_config_diff_does_not_descend_into_a_credential_container():
     assert [e["key"] for e in diff["t"]] == ["_routing.receiver.http_config"]
 
 
-def test_profile_key_diff_is_redacted():
-    """`_profiles.yaml` 的 profile 可以帶 receiver：profile 差異同一條規則遮。"""
-    old = {"_routing": {"receiver": {"type": "webhook", "url": "https://h/S1"}}, "x": 1}
-    new = {"_routing": {"receiver": {"type": "webhook", "url": "https://h/S2"}}, "x": 2}
-    got = cd.compute_profile_key_diff(old, new)
-    assert "S1" not in repr(got) and "S2" not in repr(got)
-    assert {e["key"]: (e["old"], e["new"]) for e in got}["x"] == (1, 2)  # 對照
+def test_a_receiver_carried_by_a_profile_is_redacted(tmp_path, da_guard_env):
+    """`_profiles.yaml` 的 profile 可以帶 receiver：經 profile 改到租戶的憑證，同一條規則遮。
+    profile 差異不再單獨比對，而是看綁到它的租戶實際讀到什麼（ADR-037）。"""
+    import json
+    import subprocess
+    import sys
+
+    def tree(d, secret, cpu):
+        d.mkdir()
+        (d / "_defaults.yaml").write_text("defaults:\n  container_cpu: 80\n", encoding="utf-8")
+        (d / "_profiles.yaml").write_text(
+            f"profiles:\n  std:\n    container_cpu: {cpu}\n    _routing:\n      receiver:\n"
+            f"        type: webhook\n        url: https://h/{secret}\n", encoding="utf-8")
+        (d / "tx.yaml").write_text("tenants:\n  tx:\n    _profile: std\n", encoding="utf-8")
+        return d
+    old, new = tree(tmp_path / "old", "S1", 55), tree(tmp_path / "new", "S2", 60)
+    p = subprocess.run([sys.executable, cd.__file__, "--old-dir", str(old), "--new-dir", str(new),
+                        "--at", "2026-10-10T00:00:00Z", "--format", "json"],
+                       capture_output=True, text=True, encoding="utf-8", timeout=300)
+    assert p.returncode == 1, p.stderr
+    assert "S1" not in p.stdout + p.stderr and "S2" not in p.stdout + p.stderr
+    doc = json.loads(p.stdout)
+    assert {"key": "_routing.receiver.url", "old": r.REDACTED, "new": r.REDACTED,
+            "change": "modified", "tenants": ["tx"]} in doc["setting_changes"]
+    # 對照：同一個 profile 裡不是憑證的值照印
+    assert [(c["key"], c["old"], c["new"]) for c in doc["threshold_changes"]] == [("container_cpu", 55, 60)]

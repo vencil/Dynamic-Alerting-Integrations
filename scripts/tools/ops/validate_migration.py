@@ -46,6 +46,7 @@ import os
 import csv
 import io
 import json
+import math
 import time
 import argparse
 from datetime import datetime, timezone
@@ -117,7 +118,7 @@ def compare_vectors(old_map, new_map, tolerance=0.001):
     return diffs
 
 
-def run_single_comparison(prom_url, old_query, new_query, label):
+def run_single_comparison(prom_url, old_query, new_query, label, tolerance=0.001):
     """執行單次比對，回傳 diff 結果。"""
     old_results, old_err = query_prometheus(prom_url, old_query)
     if old_err:
@@ -132,7 +133,7 @@ def run_single_comparison(prom_url, old_query, new_query, label):
     old_map = extract_value_map(old_results, group_by="tenant")
     new_map = extract_value_map(new_results, group_by="tenant")
 
-    diffs = compare_vectors(old_map, new_map)
+    diffs = compare_vectors(old_map, new_map, tolerance=tolerance)  # #2494
     return {
         "label": label,
         "old_query": old_query,
@@ -416,6 +417,23 @@ class ConvergenceTracker:
         return report
 
 
+def _tolerance(text):
+    """argparse type for --tolerance: a finite ratio >= 0 (#2494).
+
+    Once the flag reached the comparison, `inf` (or any huge value) judged
+    every pair a match — a readiness report with nothing compared — and a
+    negative or NaN value judged even identical values a mismatch.
+    """
+    try:
+        value = float(text)
+    except ValueError:
+        raise argparse.ArgumentTypeError(f"not a number: {text!r}") from None
+    if not math.isfinite(value) or value < 0:
+        raise argparse.ArgumentTypeError(
+            f"must be a finite ratio >= 0 (e.g. 0.01 = 1%), got {text!r}")
+    return value
+
+
 def main():
     """CLI entry point: Shadow Monitoring 驗證工具。."""
     try_utf8_stdout()
@@ -435,7 +453,7 @@ def main():
                                  "叢集內建議用 http://prometheus.monitoring.svc.cluster.local:9090)")
     parser.add_argument("-o", "--output-dir", default="validation_output",
                         help="輸出目錄 (預設: validation_output)")
-    parser.add_argument("--tolerance", type=float, default=0.001,
+    parser.add_argument("--tolerance", type=_tolerance, default=0.001,
                         help="數值誤差容忍度 (預設: 0.001 = 0.1%%)")
     parser.add_argument("--watch", action="store_true",
                         help="持續監控模式")
@@ -484,6 +502,7 @@ def main():
                 pair["old_query"],
                 pair["new_query"],
                 pair["label"],
+                tolerance=args.tolerance,
             )
             all_results.append(result)
         return all_results

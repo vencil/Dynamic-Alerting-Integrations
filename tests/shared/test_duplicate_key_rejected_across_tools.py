@@ -110,8 +110,10 @@ _TOOLS = {
                                  _TDP, False),
     # #2231 — readers that give no pass/fail on the file but whose output,
     # exit code or write followed PyYAML's last value.
+    # ADR-037: renders the whole tree (da-guard and the route generator), so
+    # `_defaults.yaml` is a target too.
     "config_diff": ("ops/config_diff.py", ["--old-dir", "{old}", "--new-dir", "{d}"],
-                    frozenset({"tenant", "profiles"}), False),
+                    _TDP, False),
     # rc 0 all three ways; told apart by naming the file (its WARNING line).
     "generate_tenant_metadata": ("dx/generate_tenant_metadata.py",
                                  ["--config-dir", "{d}", "--dry-run"], _T, False),

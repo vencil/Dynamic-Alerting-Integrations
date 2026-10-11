@@ -1,28 +1,40 @@
 #!/usr/bin/env python3
 """
-config_diff.py — Directory-level Config Diff for GitOps PR review.
+config_diff.py — What a conf.d change does, for GitOps PR review (ADR-037).
 
-Compares two conf.d/ directories and produces a per-tenant blast radius report
-showing which tenants, metrics, and alert thresholds changed (tighter / looser /
-added / removed / toggled).
+Renders both conf.d trees — the base and the PR — with the two programs that
+turn conf.d into what runs, and compares what they render to:
 
-Complements patch_config.py --diff (single-metric live ConfigMap preview).
-config_diff compares entire directory snapshots for PR review.
+* `da-guard served-values`: what the exporter serves for each tenant
+  (thresholds, severities, settings, state filters, custom alerts);
+* the route generator's `--output-configmap`: the whole Alertmanager
+  configuration (route nodes, receivers, inhibit rules).
+
+So a platform change (`_defaults.yaml`, `_profiles.yaml`, a root
+`_platform.yaml`, routing defaults) is reported for the tenants it reaches.
+Nothing here reads the YAML itself; `_render_diff` renders and compares.
+
+The time-dependent settings (schedules, silences, maintenance windows) are
+read at one instant, `--at`, the same on both sides and printed on the report.
+Without `--at` it is the time of the run.
+
+Exit codes: 0 no change; 1 a change, or something not compared (a changed
+`_`-prefixed file, a base side that does not render); 2 no result (the PR side
+or a tool failed, or bad arguments). See ADR-037 decision 4.
 
 Usage:
-  python3 scripts/tools/ops/config_diff.py --old-dir conf.d.bak --new-dir conf.d/
-  python3 scripts/tools/ops/config_diff.py --old-dir conf.d.bak --new-dir conf.d/ --format json
-  python3 scripts/tools/ops/config_diff.py --old-dir conf.d.bak --new-dir conf.d/ --format markdown
+  python3 scripts/tools/ops/config_diff.py --old-dir conf.d.base --new-dir conf.d/
+  python3 scripts/tools/ops/config_diff.py --old-dir conf.d.base --new-dir conf.d/ \\
+      --at 2026-10-10T03:00:00Z --format json
 """
 import argparse
-import io
 import json
 import os
+import re
 import sys
 import textwrap
+from datetime import datetime, timezone
 from pathlib import Path
-
-import yaml
 
 _THIS_DIR = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, _THIS_DIR)  # Docker flat layout
@@ -30,22 +42,16 @@ sys.path.insert(0, os.path.join(_THIS_DIR, '..'))  # Repo subdir layout
 from _lib_python import (  # noqa: E402
     format_json_report,
     is_disabled as _is_disabled,
-    iter_yaml_files,
-    load_tenant_configs as _load_tenant_configs_raw,
-    VALID_RESERVED_KEYS,
 )
-from _lib_io import load_yaml_file_strict  # noqa: E402  (#2231 duplicate key = YAML error)
 from _lib_redact import REDACTED, SECRET_FIELDS, redact, redact_pair  # noqa: E402
 from _lib_redact import is_secret_field as _lib_redact_is_secret  # noqa: E402
-from _lib_io import (  # noqa: E402  (#2297 `_profile` as source text)
-    YamlFileError, load_yaml_file_strict_exporter_keys, strict_load_exporter_keys,
-)
 from _lib_confd import iter_config_files, printable_name  # noqa: E402  (#1420)
 from _lib_exitcodes import EXIT_OK, EXIT_VIOLATION, EXIT_CALLER_ERROR  # noqa: E402
-from _lib_tenant_values import (  # noqa: E402  (#2115 profile binding is Go's)
-    DaGuardError, DaGuardNotFoundError, ParseFailedError, load_effective, print_load_error,
-)
 from _threshold_alerts import alerts_for_key  # noqa: E402
+import _render_diff as rd  # noqa: E402
+
+# The JSON report's version. A reader refuses one it does not know.
+JSON_SCHEMA = "da-tools.config-diff/v1"
 
 # GitHub silently rejects (422 Unprocessable Entity) issue/PR comments over
 # 65,536 chars. The config-diff bot posts render_markdown() output verbatim, so
@@ -55,252 +61,46 @@ from _threshold_alerts import alerts_for_key  # noqa: E402
 GITHUB_COMMENT_HARD_LIMIT = 65_536
 COMMENT_SAFETY_LIMIT = 60_000
 
-# How many not-compared file names the Markdown report spells out; the rest
-# is a count. The JSON report lists them all.
+# How many changed platform file names the Markdown report spells out; the
+# rest is a count. The JSON report lists them all.
 UNCOVERED_LIST_LIMIT = 50
 
-
-def load_configs_from_dir(dir_path):
-    """Load all tenant configs from a conf.d/ directory.
-
-    Returns {tenant_name: {metric_key: value, ...}}.
-    Skips files starting with '_' or '.'.
-
-    Supports both YAML formats:
-      - Wrapped: {tenants: {name: {metric: value}}}  (actual conf.d/ format)
-      - Flat: {metric: value}  (simplified / legacy)
-    """
-    if not Path(dir_path).is_dir():
-        print(f"WARN: directory not found: {dir_path}", file=sys.stderr)
-        return {}
-
-    raw_configs = _load_tenant_configs_raw(dir_path)
-    return {t: flatten_tenant_config(d) for t, d in raw_configs.items()}
+# What `--at` takes: RFC3339, as `da-guard served-values --at` parses it.
+_RFC3339 = re.compile(
+    r"^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(\.\d+)?(Z|[+-]\d{2}:\d{2})$")
 
 
-def load_profiles_from_dir(dir_path):
-    """Load profiles from _profiles.yaml in a conf.d/ directory.
+def _platform_contents(dir_path):
+    """{relative POSIX path: bytes} for every `_`-prefixed config file of
+    `dir_path`, at any depth — the exporter's walk (`iter_config_files`).
 
-    Returns {profile_name: {key: value, ...}} or empty dict.
-    """
-    base = Path(dir_path)
-    if not base.is_dir():
-        return {}
-    profiles_path = str(base / "_profiles.yaml")
-    # Strict (#2231): the exporter drops a _profiles.yaml holding a key
-    # twice, so a diff of whichever value PyYAML kept last is a diff of a
-    # file nobody applies — refuse it like bad syntax (main() -> rc 2).
-    # #2297: profile names are the keys' source text, as the exporter keys
-    # them (`010:` is "010"), so they join `load_tenant_profile_refs`.
-    raw = load_yaml_file_strict_exporter_keys(profiles_path, default={})
-    return raw.get("profiles", {}) if isinstance(raw, dict) else {}
-
-
-def _load_tenant_configs_profile_text(dir_path):
-    """``_lib_python.load_tenant_configs``, except every `_profile:` value is
-    its source TEXT, as the exporter reads it (#2297): `_profile: 010` names
-    profile "010", where PyYAML's 8 named none — and `010` -> `8` diffed as
-    no change.
-
-    ⚠️ A copy of that loader's walk (same ``iter_yaml_files`` listing, same
-    strict read with source-text keys, same wrapper / flat split), not a
-    flag on it: ``_lib_io``'s loaders are being reworked under #2115, and
-    their other callers must not change here. Only `load_settings_from_dir`
-    uses it (which profile a `_profile` binds is da-guard's answer,
-    `load_tenant_profile_refs`); tests/ops/test_profile_ref_as_text.py pins
-    that it lists the same tenants as the shared loader.
-    """
-    configs = {}
-    for fname, fpath in iter_yaml_files(dir_path):
-        try:
-            stream = io.StringIO(Path(fpath).read_bytes().decode("utf-8"))
-            stream.name = str(fpath)
-            raw = strict_load_exporter_keys(stream, raw_text_scalars=("_profile",))
-        except (UnicodeDecodeError, yaml.YAMLError) as exc:
-            raise YamlFileError(str(fpath), exc) from exc
-        if raw is None:
-            raw = {}
-        if not isinstance(raw, dict):
-            continue
-        if "tenants" in raw and isinstance(raw.get("tenants"), dict):
-            for t_name, t_data in raw["tenants"].items():
-                if isinstance(t_data, dict):
-                    configs[t_name] = t_data
-        else:
-            configs[fname.rsplit(".", 1)[0]] = raw
-    return configs
-
-
-def load_tenant_profile_refs(dir_path):
-    """{profile_name: [tenant, ...]}: the tenants of `dir_path` whose
-    `_profile` names each profile, as the exporter reads the name.
-
-    The name is `da-guard effective`'s, not a Python reading of the files
-    (#2115): each tenant's `effective_config._profile`, which the exporter
-    has already turned into the name it elects (Go `withProfileText`) — a
-    scalar's source text (`010` is "010"), the `default:` of the mapping
-    form (`_profile: {default: std}`, #2741; its other keys elect nothing).
-    A value that elects no name (a mapping without `default:`, a sequence)
-    is not a string there and is left out. Stripped, as Go's `profileNameOf`
-    (TrimSpace) names it: `'010 '` refers to profile 010. Only a `_profile`
-    the tenant's own layer writes (its file, or its entry in a root platform
-    file — `key_sources` layer `tenant` / `platform`): one inherited from a
-    sub-directory `_defaults.yaml` shows in effective_config but elects
-    nothing (measured: `profile` None for it).
-
-    By NAME, not by the bound profile (`profile`, None for a name no profile
-    defines): a tenant still naming a profile this change removes is in its
-    blast radius. Raises what `load_effective` raises (da-guard missing or
-    failing, a file the exporter cannot decode).
-    """
-    refs = {}
-    for t_name, eff in sorted(load_effective(dir_path).items()):
-        profile = eff.effective_config.get("_profile")
-        source = eff.key_sources.get("_profile")
-        if source is None or source.layer not in ("tenant", "platform"):
-            continue
-        if isinstance(profile, str) and profile.strip():
-            refs.setdefault(profile.strip(), []).append(t_name)
-    return refs
-
-
-def compute_profile_key_diff(old_data, new_data):
-    """Compute fine-grained key-level diff between two profile data dicts.
-
-    Returns list of {"key", "old", "new", "change"} entries.
-    """
-    if old_data is None:
-        old_data = {}
-    if new_data is None:
-        new_data = {}
-
-    all_keys = set(old_data.keys()) | set(new_data.keys())
-    changes = []
-    for key in sorted(all_keys):
-        old_val = old_data.get(key)
-        new_val = new_data.get(key)
-        if old_val == new_val:
-            continue
-        change_type = classify_change(old_val, new_val)
-        if change_type == "unchanged":
-            continue
-        # A profile can carry a receiver (`_routing`) like a tenant file.
-        old_val, new_val = redact_pair(key, old_val, new_val)
-        changes.append({
-            "key": key,
-            "old": old_val,
-            "new": new_val,
-            "change": change_type,
-        })
-    return changes
-
-
-def compute_profile_diff(old_dir, new_dir):
-    """Compute profile-level diff and blast radius with fine-grained key diffs.
-
-    Returns list of {profile, change, affected_tenants, key_diffs} entries.
-    """
-    old_profiles = load_profiles_from_dir(old_dir)
-    new_profiles = load_profiles_from_dir(new_dir)
-    # Asked of da-guard only when some profile changed (#2115): a run with
-    # no profile change needs no tenant's binding.
-    new_refs = None
-
-    all_names = set(old_profiles.keys()) | set(new_profiles.keys())
-    results = []
-
-    for name in sorted(all_names):
-        old_p = old_profiles.get(name)
-        new_p = new_profiles.get(name)
-        if old_p == new_p:
-            continue
-
-        if new_refs is None:
-            new_refs = load_tenant_profile_refs(new_dir)
-        affected = new_refs.get(name, [])
-        if old_p is None:
-            change = "added"
-        elif new_p is None:
-            change = "removed"
-        else:
-            change = "modified"
-
-        key_diffs = compute_profile_key_diff(old_p, new_p)
-
-        results.append({
-            "profile": name,
-            "change": change,
-            "affected_tenants": affected,
-            "affected_count": len(affected),
-            "key_diffs": key_diffs,
-        })
-
-    return results
-
-
-def _compared_names(dir_path):
-    """Top-level names the tenant comparison reads: what the shared loader
-    lists (`iter_yaml_files`, reserved and dot files skipped)."""
-    return {fname for fname, _ in iter_yaml_files(dir_path)}
-
-
-def _uncovered_contents(dir_path):
-    """{relative POSIX path: bytes or None} for every config file of
-    `dir_path` the exporter reads and the tenant comparison does not.
-
-    The walk is `iter_config_files`, the exporter's rule (recursive, hidden
-    entries skipped); minus the top-level files `_compared_names` lists,
-    what is left is the `_`-prefixed files (`_defaults.yaml`, `_profiles.yaml`,
-    `_platform.yaml`, ...) and everything in a sub-directory. A file that
-    cannot be read raises: it is an IO failure, exit 2 through `main`'s
-    catch-all (the exit-code SSOT names IO failure there), not a change —
-    listing it as "changed" would turn an environment fault into a finding.
-    """
+    A file that cannot be read raises: it is an IO failure, exit 2 through
+    `main`'s catch-all, not a change."""
     root = Path(dir_path)
-    compared = _compared_names(dir_path)
-    out = {}
-    for path in iter_config_files(root):
-        rel = path.relative_to(root).as_posix()
-        if rel in compared:
-            continue
-        out[rel] = path.read_bytes()
-    return out
+    if not root.is_dir():
+        return {}
+    return {path.relative_to(root).as_posix(): path.read_bytes()
+            for path in iter_config_files(root) if path.name.startswith("_")}
 
 
 def compute_uncovered_files(old_dir, new_dir):
-    """Changed files this report does not compare (#1420), sorted.
+    """Changed `_`-prefixed files (#1420), sorted: they exit 1 whatever the
+    renders show.
 
-    The metric, setting and custom-alert sections read each top-level tenant
-    file on its own; nothing here resolves `_defaults.yaml` inheritance or
-    reads a sub-directory, and the Profile section reads only the `profiles:`
-    of a top-level `_profiles.yaml`. A change confined to those files used to
-    print "No changes detected." with exit 0 — while a platform default is
-    the widest-reaching edit this report is ever handed. So such a file is
-    listed when its bytes differ (or it exists on one side only): byte
-    equality, not a parse, because a file this tool does not interpret has
-    no semantic comparison here to lean on. A comment-only edit is listed
-    too; "not compared" is the claim, not "changed meaning".
+    The renders compare what these files do to the exporter's values and to
+    the Alertmanager configuration, but not every setting in them reaches
+    either (a platform `_custom_alerts` recipe, `instance_tenant_mapping`,
+    ...), and which ones do is not yet checked file by file (ADR-037
+    decision 3). Until it is, such a file is listed when its bytes differ,
+    or it exists on one side only — a comment-only edit included: "review
+    this file" is the claim, not "this changed what runs".
     """
-    old = _uncovered_contents(old_dir)
-    new = _uncovered_contents(new_dir)
+    old = _platform_contents(old_dir)
+    new = _platform_contents(new_dir)
     return sorted(
         rel for rel in set(old) | set(new)
         if rel not in old or rel not in new or old[rel] != new[rel]
     )
-
-
-def flatten_tenant_config(raw):
-    """Flatten a tenant YAML into {metric_key: value}, skipping reserved keys.
-
-    Values can be: numeric (threshold), "disable", dict (scheduled), etc.
-    Reserved keys (starting with '_') are excluded.
-    """
-    flat = {}
-    for key, value in (raw or {}).items():
-        if key.startswith("_"):
-            continue
-        flat[key] = value
-    return flat
 
 
 def classify_change(old_val, new_val):
@@ -377,77 +177,10 @@ def compute_diff(old_configs, new_configs):
     return diffs
 
 
-def load_custom_alerts_from_dir(dir_path):
-    """Load tenant-OWN `_custom_alerts` recipes from a conf.d/ directory.
-
-    Returns {tenant_name: {recipe_name: recipe_dict}}. Only tenants declaring
-    at least one named recipe are included.
-
-    Scope note: like the metric diff above, this reads each tenant file's own
-    declarations and does NOT resolve `_defaults.yaml` inheritance — `_defaults`
-    files are skipped by the loader. Inherited platform/domain policy recipes
-    are out of scope here (consistent with how metric diffs ignore `_defaults`).
-    The ADR-024 (#741) compiler in scripts/tools/dx/custom_alerts/ owns the full
-    inheritance-resolved view.
-    """
-    if not Path(dir_path).is_dir():
-        return {}
-
-    raw_configs = _load_tenant_configs_raw(dir_path)
-    out = {}
-    for tenant, cfg in raw_configs.items():
-        recipes = (cfg or {}).get("_custom_alerts")
-        # Strict type guard (Reef 5): a mistyped `_custom_alerts: "to be added"`
-        # is iterable, so a naive `for r in recipes` would iterate CHARS and
-        # `r.get(...)` would AttributeError → CI bot crash → PR blocked. Skip
-        # anything that isn't a list (None / dict / str). The compiler/schema
-        # rejects the malformed shape separately with a clear message.
-        if not isinstance(recipes, list):
-            continue
-        named = {}
-        for r in recipes:
-            if isinstance(r, dict) and r.get("name"):
-                named[str(r["name"])] = r
-        if named:
-            out[tenant] = named
-    return out
-
-
-# Reserved keys this report already covers in its own section.
-_SETTING_KEYS_REPORTED_ELSEWHERE = frozenset({"_custom_alerts"})
-
 # Credential fields and how they print: one rule for every report
 # (`_lib_redact`, the fields Alertmanager types as secret).
 _CREDENTIAL_KEYS = SECRET_FIELDS
 _REDACTED = REDACTED
-
-
-def load_settings_from_dir(dir_path):
-    """Load each tenant's own `_`-prefixed settings from a conf.d/ directory.
-
-    Returns {tenant_name: {"_key": value}}. `flatten_tenant_config` drops these
-    keys from the metric diff, and until this section existed nothing else
-    reported them: removing `_state_maintenance` (every alert of the tenant
-    resumes), switching `_silent_mode`, `_routing` or `_profile` all printed
-    "No changes detected" with exit 0. Every `_` key is read — not a list of
-    known ones — so a reserved key added later is reported without touching
-    this tool. `_custom_alerts` is left out: it has its own section.
-
-    Same scope as the metric diff: the tenant file's own declarations, not
-    `_defaults.yaml` inheritance.
-    """
-    if not Path(dir_path).is_dir():
-        return {}
-    # #2297: `_profile` as its source text — `010` -> `8` is a switch.
-    raw_configs = _load_tenant_configs_profile_text(dir_path)
-    return {
-        tenant: {
-            key: value for key, value in (cfg or {}).items()
-            if str(key).startswith("_")
-            and key not in _SETTING_KEYS_REPORTED_ELSEWHERE
-        }
-        for tenant, cfg in raw_configs.items()
-    }
 
 
 def _mapping_changes(old, new, prefix):
@@ -630,13 +363,12 @@ def compute_custom_alert_diff(old_alerts, new_alerts):
 
 # ── The same three sections, read from served-values (ADR-037) ─────────────
 #
-# config-diff is moving from reading each tenant file's own YAML to comparing
-# what the exporter serves on each side (`da-guard served-values`). These
-# readers turn one side's served tenants into the shapes the readers above
-# return, so compute_diff / compute_setting_diff / compute_custom_alert_diff
-# and render_markdown apply unchanged. Not wired to the CLI yet.
+# config-diff compares what the exporter serves on each side (`da-guard
+# served-values`), not each tenant file's own YAML. These readers turn one
+# side's served tenants into the shapes compute_diff / compute_setting_diff /
+# compute_custom_alert_diff compare (`served_sections`).
 #
-# What changes against the YAML readers, by decision (#1516):
+# What changed against the YAML readers they replaced, by decision (#1516):
 # * thresholds are the values the exporter serves, so a change a tenant
 #   inherits (a `defaults:` value it does not override) is reported for it;
 # * a tenant added or removed is not listed in the settings section — the
@@ -822,231 +554,6 @@ def _format_value(val):
     return str(val)
 
 
-def render_markdown(diffs, old_dir, new_dir, profile_diffs=None,
-                    custom_alert_diffs=None, setting_diffs=None,
-                    uncovered_files=None):
-    """Render a Markdown blast radius report."""
-    lines = []
-    lines.append("# Config Diff Report")
-    lines.append("")
-    lines.append(f"Comparing: `{old_dir}` → `{new_dir}`")
-    lines.append("")
-
-    # Coverage first (#1420): what follows is a comparison of top-level
-    # tenant files, and a reviewer has to know what it left out before
-    # reading it — above all when it then finds nothing. File names come
-    # from the PR's tree, so each one goes through printable_name (terminal
-    # escapes) and _code_span (code-span break-out, F5).
-    if uncovered_files:
-        lines.append("## Changed Files Not Compared")
-        lines.append("")
-        lines.append(
-            f"> :warning: **This report does not compare "
-            f"{len(uncovered_files)} changed file(s).** It reads each "
-            "top-level tenant file on its own: `_`-prefixed files (platform "
-            "defaults such as `_defaults.yaml`, inherited by every tenant "
-            "that does not override them) and files in sub-directories are "
-            "outside it, and of `_profiles.yaml` only `profiles:` is compared "
-            "(Profile Changes). Review these files directly."
-        )
-        lines.append("")
-        for rel in uncovered_files[:UNCOVERED_LIST_LIMIT]:
-            lines.append(f"- {_code_span(printable_name(rel))}")
-        if len(uncovered_files) > UNCOVERED_LIST_LIMIT:
-            lines.append(
-                f"- ... (+{len(uncovered_files) - UNCOVERED_LIST_LIMIT} more)")
-        lines.append("")
-
-    # Custom alert changes section (v2.9.0 ADR-024 Capability B, #741).
-    # These are real alerting changes (add/remove/retune a paging rule), NOT
-    # format-only — surfaced prominently so ops review never misses them.
-    if custom_alert_diffs:
-        lines.append("## Custom Alert Changes")
-        lines.append("")
-        lines.append(
-            "> :warning: Custom alert recipes are real alerting changes "
-            "(new / removed / retuned alert rules), not format-only."
-        )
-        # #1517 (owner: state the limit, point at no other report — customers
-        # get no blast-radius report to point at). Without it this section is
-        # silent where blast_radius says SILENCED, and nothing tells the reader
-        # its view is narrower.
-        lines.append(">")
-        lines.append(
-            "> Not a silencing verdict: this compares each top-level tenant "
-            "file's own recipes and does not resolve `_defaults.yaml` "
-            "inheritance. Only an in-place flip to a disabled threshold or "
-            "`mode: silent` is flagged; whether a removed recipe stops a page, "
-            "and any recipe a tenant inherits, are outside this report."
-        )
-        lines.append("")
-        for tenant, changes in custom_alert_diffs.items():
-            summary = _summarize_changes(changes)
-            lines.append(
-                f"### {tenant} — {len(changes)} custom alert change(s) ({summary})"
-            )
-            lines.append("")
-            for c in changes:
-                # All dynamic values go inside code spans via _code_span (F5).
-                name_cs = _code_span(c["name"])
-                if c["change"] == "modified":
-                    lines.append(f"- {name_cs} (modified)")
-                    for fc in c["field_changes"]:
-                        annotation = _field_change_annotation(
-                            fc["field"], fc["old"], fc["new"]
-                        )
-                        lines.append(
-                            f"  - {_code_span(fc['field'])}: "
-                            f"{_code_span(fc['old'])} → {_code_span(fc['new'])}"
-                            f"{annotation}"
-                        )
-                elif c["change"] == "added":
-                    r = c["new"] or {}
-                    lines.append(
-                        f"- {name_cs} (added) — "
-                        f"recipe={_code_span(r.get('recipe', '?'))} "
-                        f"metric={_code_span(r.get('metric', '?'))} "
-                        f"threshold={_code_span(r.get('threshold', '?'))} "
-                        f"mode={_code_span(r.get('mode', 'page'))}"
-                    )
-                else:  # removed
-                    r = c["old"] or {}
-                    lines.append(
-                        f"- {name_cs} (removed) — "
-                        f"was recipe={_code_span(r.get('recipe', '?'))} "
-                        f"metric={_code_span(r.get('metric', '?'))} "
-                        f"threshold={_code_span(r.get('threshold', '?'))}"
-                    )
-            lines.append("")
-
-    # Tenant `_` settings (maintenance, silent mode, routing, profile, ...).
-    # They change what alerts do without touching a threshold, so they get
-    # the same prominence as custom alerts. Values go through _code_span (F5):
-    # they are rendered from the PR's files, i.e. untrusted.
-    if setting_diffs:
-        lines.append("## Tenant Setting Changes")
-        lines.append("")
-        lines.append(
-            "> :warning: `_`-prefixed tenant settings change how alerts "
-            "behave (maintenance, silent mode, state filters, severity dedup, "
-            "routing, profile, metadata) without touching a threshold."
-        )
-        lines.append("")
-        for tenant, changes in setting_diffs.items():
-            summary = _summarize_changes(changes)
-            lines.append(
-                f"### {tenant} — {len(changes)} setting change(s) ({summary})"
-            )
-            lines.append("")
-            for c in changes:
-                key_cs = _code_span(c["key"])
-                if c["change"] == "modified":
-                    lines.append(
-                        f"- {key_cs}: {_code_span(c['old'])} → "
-                        f"{_code_span(c['new'])}"
-                    )
-                elif c["change"] == "added":
-                    lines.append(f"- {key_cs} (added) — {_code_span(c['new'])}")
-                else:
-                    lines.append(
-                        f"- {key_cs} (removed) — was {_code_span(c['old'])}"
-                    )
-            lines.append("")
-
-    # Profile changes section (v1.12.0)
-    if profile_diffs:
-        lines.append("## Profile Changes")
-        lines.append("")
-        for pd in profile_diffs:
-            affected = pd["affected_count"]
-            tenants_str = ", ".join(pd["affected_tenants"][:10])
-            if affected > 10:
-                tenants_str += f" ... (+{affected - 10} more)"
-            key_diffs = pd.get("key_diffs", [])
-            lines.append(
-                f"### Profile: {pd['profile']} ({pd['change']}) — "
-                f"{affected} tenant(s) affected"
-            )
-            if pd["affected_tenants"]:
-                lines.append(f"  Tenants: {tenants_str}")
-            lines.append("")
-            if key_diffs:
-                lines.append("| Key | Before | After | Change |")
-                lines.append("|-----|--------|-------|--------|")
-                for kd in key_diffs:
-                    lines.append(
-                        f"| {kd['key']} | {_format_value(kd['old'])} "
-                        f"| {_format_value(kd['new'])} | {kd['change']} |"
-                    )
-                lines.append("")
-            elif pd["change"] == "added":
-                lines.append(f"  New profile with {len(pd.get('key_diffs', []))} keys")
-                lines.append("")
-            else:
-                lines.append("")
-
-    if (not diffs and not profile_diffs and not custom_alert_diffs
-            and not setting_diffs):
-        if uncovered_files:
-            # Not "No changes detected.": something changed, it is just
-            # outside what this report compares (#1420).
-            lines.append(
-                "No changes among the files compared; "
-                f"{len(uncovered_files)} changed file(s) not compared (above).")
-        else:
-            lines.append("No changes detected.")
-        # Through the cap too: the not-compared list holds PR-controlled
-        # paths, so this branch is no longer one line long (#1420).
-        return _cap_for_comment("\n".join(lines))
-
-    total_changes = 0
-    for tenant, changes in diffs.items():
-        change_summary = _summarize_changes(changes)
-        lines.append(f"## {tenant} — {len(changes)} change(s) ({change_summary})")
-        lines.append("")
-        lines.append("| Metric | Before | After | Change | Affected Alerts |")
-        lines.append("|--------|--------|-------|--------|-----------------|")
-
-        for c in changes:
-            alert = estimate_affected_alerts(c["key"])
-            lines.append(
-                f"| {c['key']} | {_format_value(c['old'])} "
-                f"| {_format_value(c['new'])} | {c['change']} | {alert} |"
-            )
-        lines.append("")
-        total_changes += len(changes)
-
-    lines.append("---")
-    # "tenant(s) changed" must count tenants changed via metric OR custom-alert
-    # diffs (CodeRabbit #773): a custom-alert-only run otherwise prints
-    # "0 tenant(s) changed" while the custom-alert clause below says otherwise.
-    changed_tenants = set(diffs)
-    changed_tenants.update(custom_alert_diffs or {})
-    changed_tenants.update(setting_diffs or {})
-    changed = len(changed_tenants)
-    profile_affected = sum(pd["affected_count"] for pd in (profile_diffs or []))
-    summary = f"Summary: {changed} tenant(s) changed, {total_changes} metric change(s)"
-    if profile_affected:
-        summary += f", {profile_affected} tenant(s) affected by profile changes"
-    if custom_alert_diffs:
-        ca_tenants = len(custom_alert_diffs)
-        ca_changes = sum(len(v) for v in custom_alert_diffs.values())
-        summary += (
-            f", {ca_tenants} tenant(s) with {ca_changes} custom alert change(s)"
-        )
-    if setting_diffs:
-        st_changes = sum(len(v) for v in setting_diffs.values())
-        summary += (
-            f", {len(setting_diffs)} tenant(s) with {st_changes} "
-            f"setting change(s)"
-        )
-    if uncovered_files:
-        summary += f", {len(uncovered_files)} changed file(s) not compared"
-    lines.append(summary)
-
-    return _cap_for_comment("\n".join(lines))
-
-
 def _cap_for_comment(result):
     """Truncation safeguard (Reef 2): never let the bot comment exceed GitHub's
     ceiling — a silently-dropped comment on a huge, high-risk PR is worse than
@@ -1069,21 +576,472 @@ def _summarize_changes(changes):
     return ", ".join(f"{v} {k}" for k, v in sorted(counts.items()))
 
 
+# ── The report: two renders compared, in sections ─────────────────────────
+
+# The served-values fields the sections below read (`tenant` is the added /
+# removed list).
+_SECTIONED_FIELDS = frozenset(rd.SERVED_FIELDS) | {"tenant"}
+
+VIEW_TITLES = {rd.VIEW_SERVED: "Exporter values (da-guard served-values)",
+               rd.VIEW_ROUTES: "Routing (Alertmanager configuration)"}
+
+
+def served_sections(old_tenants, new_tenants):
+    """The three served sections from the two sides' served tenants: what
+    `_render_diff.compare` keeps of the served renders (masked)."""
+    return {
+        "metric": compute_diff(served_metric_configs(old_tenants),
+                               served_metric_configs(new_tenants)),
+        "setting": served_setting_diff(old_tenants, new_tenants),
+        "custom_alert": served_custom_alert_diff(old_tenants, new_tenants),
+    }
+
+
+def build_report(diff, old_dir, new_dir):
+    """Everything both output formats print, from a `_render_diff.RenderDiff`."""
+    served = diff.served.report or {}
+    metric = served.get("metric") or {}
+    setting = served.get("setting") or {}
+    custom = served.get("custom_alert") or {}
+
+    tenants_added, tenants_removed, dropped = [], [], {}
+    for c in diff.served.changes:
+        if c.field == "tenant":
+            (tenants_added if c.pr else tenants_removed).append(c.tenant)
+        elif c.field == "dropped":
+            dropped.setdefault(c.tenant, []).append(
+                {"key": c.key, "old": c.base, "new": c.pr,
+                 "change": "added" if c.base is None else "removed" if c.pr is None else "modified"})
+    # A served change no section above shows (a field added to served-values
+    # later, say) is still printed, so the exit code never reads 1 above a
+    # report that says nothing changed. diff_served has masked it already.
+    shown = set(metric) | set(setting) | set(custom) | set(dropped)
+    shown |= set(tenants_added) | set(tenants_removed)
+    other = {}
+    for c in diff.served.changes:
+        # Either the field is one no section reads, or no section names the
+        # tenant at all: a tenant shown elsewhere must not hide a new field.
+        if c.field not in _SECTIONED_FIELDS or c.tenant not in shown:
+            other.setdefault(c.tenant, []).append(
+                {"field": c.field, "key": c.key, "old": c.base, "new": c.pr})
+
+    routes = [c for c in diff.routes.changes if isinstance(c, rd.RouteChange)]
+    receivers = [c for c in diff.routes.changes if isinstance(c, rd.ReceiverChange)]
+    inhibits = [c for c in diff.routes.changes if isinstance(c, rd.InhibitChange)]
+    return {
+        "old_dir": str(old_dir), "new_dir": str(new_dir), "at": diff.at,
+        "views": {rd.VIEW_SERVED: diff.served, rd.VIEW_ROUTES: diff.routes},
+        "metric": metric, "setting": setting, "custom_alert": custom,
+        "tenants_added": sorted(tenants_added), "tenants_removed": sorted(tenants_removed),
+        "dropped": dropped, "other_served": other,
+        "routes": routes, "receivers": receivers, "inhibits": inhibits,
+        "uncovered_files": compute_uncovered_files(old_dir, new_dir),
+    }
+
+
+def report_has_changes(report):
+    return any(report[k] for k in (
+        "metric", "setting", "custom_alert", "tenants_added", "tenants_removed",
+        "dropped", "other_served", "routes", "receivers", "inhibits"))
+
+
+def report_exit_code(diff, report):
+    """`RenderDiff.exit_code`, raised to 1 for a changed `_` file or anything
+    the sections show; never lowered from 2."""
+    code = diff.exit_code
+    if code == 2:
+        return EXIT_CALLER_ERROR
+    if code == 1 or report["uncovered_files"] or report_has_changes(report):
+        return EXIT_VIOLATION
+    return EXIT_OK
+
+
+def _changed_tenants(report):
+    tenants = set(report["metric"]) | set(report["setting"]) | set(report["custom_alert"])
+    tenants |= set(report["dropped"]) | set(report["other_served"])
+    tenants |= set(report["tenants_added"]) | set(report["tenants_removed"])
+    tenants |= {c.tenant for c in report["routes"]} | {c.tenant for c in report["inhibits"]}
+    for c in report["receivers"]:
+        tenants |= set(c.tenants)
+    tenants.discard(rd.PLATFORM)
+    return tenants
+
+
+# ── JSON: one entry per distinct change, with the tenants it reaches ──────
+
+
+def _pairs(changes):
+    """{field: (old, new)} -> {field: {"old", "new"}}."""
+    return {k: {"old": b, "new": p} for k, (b, p) in changes.items()}
+
+
+def _grouped(per_tenant):
+    """{tenant: [change, ...]} -> [change + {"tenants": [...]}, ...], one
+    entry per distinct change: a platform change that reaches 1000 tenants is
+    one entry, not 1000."""
+    groups = {}
+    for tenant in sorted(per_tenant):
+        for c in per_tenant[tenant]:
+            key = json.dumps(c, sort_keys=True, default=str)
+            groups.setdefault(key, (c, []))[1].append(tenant)
+    return [dict(c, tenants=ts) for c, ts in groups.values()]
+
+
+def _group_by(items, key, merge):
+    groups = {}
+    for it in items:
+        k = json.dumps(key(it), sort_keys=True, default=str)
+        if k in groups:
+            merge(groups[k], it)
+        else:
+            groups[k] = dict(key(it))
+            merge(groups[k], it)
+    return list(groups.values())
+
+
+def _add(group, field, values):
+    group[field] = sorted(set(group.get(field, [])) | set(values), key=str)
+
+
+def report_json(report, exit_code):
+    """The JSON report (`JSON_SCHEMA`)."""
+    def route_merge(g, c):
+        _add(g, "tenants", [c.tenant])
+        g.setdefault("paths", []).append(list(c.path))
+
+    def receiver_merge(g, c):
+        _add(g, "receivers", [c.name])
+        _add(g, "tenants", c.tenants)
+
+    return {
+        "schema": JSON_SCHEMA,
+        "at": report["at"],
+        "old_dir": report["old_dir"],
+        "new_dir": report["new_dir"],
+        "exit_code": exit_code,
+        "views": {name: {"status": v.status, "reason": v.reason}
+                  for name, v in report["views"].items()},
+        "tenants_added": report["tenants_added"],
+        "tenants_removed": report["tenants_removed"],
+        "threshold_changes": _grouped(report["metric"]),
+        "setting_changes": _grouped(report["setting"]),
+        "custom_alert_changes": _grouped(report["custom_alert"]),
+        "dropped_key_changes": _grouped(report["dropped"]),
+        "other_served_changes": _grouped(report["other_served"]),
+        "route_changes": _group_by(
+            report["routes"], lambda c: {"change": c.kind, "fields": _pairs(c.changes)}, route_merge),
+        "receiver_changes": _group_by(
+            report["receivers"], lambda c: {"change": c.kind, "fields": _pairs(c.changes)},
+            receiver_merge),
+        "inhibit_changes": _group_by(
+            report["inhibits"], lambda c: {"change": c.kind, "rule": c.rule},
+            lambda g, c: _add(g, "tenants", [c.tenant])),
+        "uncovered_files": report["uncovered_files"],
+    }
+
+
+# ── Markdown ──────────────────────────────────────────────────────────────
+
+
+def _tenant_label(tenant):
+    return "platform" if tenant == rd.PLATFORM else f"tenant {_code_span(tenant)}"
+
+
+def _path_text(path):
+    return " / ".join(path) if path else "(root)"
+
+
+def _render_views(report, lines):
+    bad = [(name, v) for name, v in report["views"].items() if v.status != "computed"]
+    if not bad:
+        return
+    lines.append("## Not Computed / Not Compared")
+    lines.append("")
+    for name, v in bad:
+        # The reason names files from the PR's tree: escaped (printable_name)
+        # and inside a code span (F5).
+        reason = _code_span(printable_name(v.reason))
+        if v.status == "not_computed":
+            lines.append(f"- :x: **{VIEW_TITLES[name]}: not computed.** No result for this view, "
+                         f"which is not the same as no change: {reason}")
+        else:
+            lines.append(f"- :warning: **{VIEW_TITLES[name]}: not compared.** Nothing sound to "
+                         f"compare against: {reason}")
+    lines.append("")
+
+
+def _render_uncovered(uncovered, lines):
+    # File names come from the PR's tree, so each one goes through
+    # printable_name (terminal escapes) and _code_span (code-span break-out, F5).
+    lines.append("## Changed Platform Files")
+    lines.append("")
+    lines.append(
+        f"> :warning: **{len(uncovered)} `_`-prefixed file(s) changed.** The sections "
+        "below show what the change does to the exporter's values and to the "
+        "Alertmanager configuration. A setting neither of them reads (for example a "
+        "platform `_custom_alerts` recipe or `instance_tenant_mapping`) is not "
+        "compared, so review these files directly."
+    )
+    lines.append("")
+    for rel in uncovered[:UNCOVERED_LIST_LIMIT]:
+        lines.append(f"- {_code_span(printable_name(rel))}")
+    if len(uncovered) > UNCOVERED_LIST_LIMIT:
+        lines.append(f"- ... (+{len(uncovered) - UNCOVERED_LIST_LIMIT} more)")
+    lines.append("")
+
+
+def _render_routing(report, lines):
+    if not (report["routes"] or report["receivers"] or report["inhibits"]):
+        return
+    lines.append("## Routing Changes")
+    lines.append("")
+    lines.append(
+        "> :warning: How alerts are delivered: route nodes (identified by their "
+        "matchers), receivers and inhibit rules, as the route generator renders them. "
+        "Credential fields are reported as changed with both values masked."
+    )
+    lines.append("")
+    if report["routes"]:
+        lines.append("### Routes")
+        lines.append("")
+        for c in report["routes"]:
+            lines.append(f"- {_tenant_label(c.tenant)} — route {_code_span(_path_text(c.path))} ({c.kind})")
+            for attr, (b, p) in c.changes.items():
+                lines.append(f"  - {_code_span(attr)}: {_code_span(b)} → {_code_span(p)}")
+        lines.append("")
+    if report["receivers"]:
+        lines.append("### Receivers")
+        lines.append("")
+        for c in report["receivers"]:
+            who = ", ".join(_tenant_label(t) for t in c.tenants)
+            lines.append(f"- {_code_span(c.name)} ({c.kind}) — {who}")
+            for field, (b, p) in c.changes.items():
+                lines.append(f"  - {_code_span(field)}: {_code_span(b)} → {_code_span(p)}")
+        lines.append("")
+    if report["inhibits"]:
+        lines.append("### Inhibit Rules")
+        lines.append("")
+        for c in report["inhibits"]:
+            lines.append(f"- {_tenant_label(c.tenant)} ({c.kind}): {_code_span(c.rule)}")
+        lines.append("")
+
+
+def _render_custom_alerts(custom_alert_diffs, lines):
+    # Custom alert changes (ADR-024 Capability B, #741): real alerting
+    # changes (add/remove/retune a paging rule), not format-only.
+    lines.append("## Custom Alert Changes")
+    lines.append("")
+    lines.append(
+        "> :warning: Custom alert recipes are real alerting changes "
+        "(new / removed / retuned alert rules), not format-only."
+    )
+    # #1517: state what this section can and cannot tell.
+    lines.append(">")
+    lines.append(
+        "> Read from the rows the exporter serves: `threshold` is "
+        "`<value>:<severity>`, and an `op` / `window` / `for` change shows as a "
+        "`recipe_id` change. A recipe no longer served may have been deleted, "
+        "disabled or rejected; which of them is not told apart here."
+    )
+    lines.append("")
+    for tenant, changes in custom_alert_diffs.items():
+        summary = _summarize_changes(changes)
+        lines.append(f"### {tenant} — {len(changes)} custom alert change(s) ({summary})")
+        lines.append("")
+        for c in changes:
+            name_cs = _code_span(c["name"])
+            if c["change"] == "modified":
+                lines.append(f"- {name_cs} (modified)")
+                for fc in c["field_changes"]:
+                    annotation = _field_change_annotation(fc["field"], fc["old"], fc["new"])
+                    lines.append(
+                        f"  - {_code_span(fc['field'])}: "
+                        f"{_code_span(fc['old'])} → {_code_span(fc['new'])}{annotation}")
+            elif c["change"] == "added":
+                r = c["new"] or {}
+                lines.append(
+                    f"- {name_cs} (added) — metric={_code_span(r.get('metric', '?'))} "
+                    f"threshold={_code_span(r.get('threshold', '?'))} "
+                    f"mode={_code_span(r.get('mode', '?'))}")
+            else:
+                r = c["old"] or {}
+                lines.append(
+                    f"- {name_cs} (removed) — was metric={_code_span(r.get('metric', '?'))} "
+                    f"threshold={_code_span(r.get('threshold', '?'))}")
+                if c.get("note"):
+                    lines.append(f"  - {c['note']}")
+        lines.append("")
+
+
+def _render_settings(setting_diffs, lines):
+    # They change what alerts do without touching a threshold. Values go
+    # through _code_span (F5): they come from the PR's files.
+    lines.append("## Tenant Setting Changes")
+    lines.append("")
+    lines.append(
+        "> :warning: `_`-prefixed tenant settings change how alerts "
+        "behave (maintenance, silent mode, state filters, severity dedup, "
+        "routing, metadata) without touching a threshold."
+    )
+    lines.append("")
+    for tenant, changes in setting_diffs.items():
+        summary = _summarize_changes(changes)
+        lines.append(f"### {tenant} — {len(changes)} setting change(s) ({summary})")
+        lines.append("")
+        for c in changes:
+            key_cs = _code_span(c["key"])
+            if c["change"] == "modified":
+                lines.append(f"- {key_cs}: {_code_span(c['old'])} → {_code_span(c['new'])}")
+            elif c["change"] == "added":
+                lines.append(f"- {key_cs} (added) — {_code_span(c['new'])}")
+            else:
+                lines.append(f"- {key_cs} (removed) — was {_code_span(c['old'])}")
+        lines.append("")
+
+
+def _render_keyed(title, note, per_tenant, lines):
+    lines.append(f"## {title}")
+    lines.append("")
+    lines.append(f"> {note}")
+    lines.append("")
+    for tenant, changes in per_tenant.items():
+        lines.append(f"### {tenant}")
+        lines.append("")
+        for c in changes:
+            field = f"{_code_span(c['field'])} " if "field" in c else ""
+            lines.append(f"- {field}{_code_span(c['key'])}: {_code_span(c['old'])} → {_code_span(c['new'])}")
+        lines.append("")
+
+
+def _cell(value):
+    """A table cell from the PR's files (a key, a value as written): a `|`
+    would end the cell and a newline the table, letting the rest of the value
+    render as Markdown of its own (a heading, a link) in the PR comment."""
+    return (str(value).replace("\\", "\\\\").replace("|", "\\|")
+            .replace("\r\n", " ").replace("\n", " ").replace("\r", " "))
+
+
+def render_markdown(report):
+    """Render the Markdown report."""
+    lines = ["# Config Diff Report", "",
+             f"Comparing: {_code_span(report['old_dir'])} → {_code_span(report['new_dir'])}",
+             "",
+             (f"Rendered at: {_code_span(report['at'])} (schedules, silences and maintenance "
+              "windows are read at this instant, on both sides)"),
+             ""]
+    _render_views(report, lines)
+    if report["uncovered_files"]:
+        _render_uncovered(report["uncovered_files"], lines)
+    if report["tenants_added"] or report["tenants_removed"]:
+        lines.append("## Tenants Added / Removed")
+        lines.append("")
+        for t in report["tenants_added"]:
+            lines.append(f"- {_code_span(t)} (added)")
+        for t in report["tenants_removed"]:
+            lines.append(f"- {_code_span(t)} (removed)")
+        lines.append("")
+    _render_routing(report, lines)
+    if report["custom_alert"]:
+        _render_custom_alerts(report["custom_alert"], lines)
+    if report["setting"]:
+        _render_settings(report["setting"], lines)
+    if report["dropped"]:
+        _render_keyed("Keys the Exporter Drops",
+                      "Keys the exporter reads and refuses to serve, with its reasons.",
+                      report["dropped"], lines)
+    if report["other_served"]:
+        _render_keyed("Other Served Changes",
+                      "Changes in what the exporter serves that no section above shows.",
+                      report["other_served"], lines)
+
+    computed = all(v.status == "computed" for v in report["views"].values())
+    if not report_has_changes(report):
+        if not computed:
+            lines.append("No change among the views computed; see Not Computed / Not Compared above.")
+        elif report["uncovered_files"]:
+            lines.append("No change in what the two renders show; "
+                         f"{len(report['uncovered_files'])} changed platform file(s) to review (above).")
+        else:
+            lines.append("No changes detected.")
+        return _cap_for_comment("\n".join(lines))
+
+    total_changes = 0
+    for tenant, changes in report["metric"].items():
+        lines.append(f"## {tenant} — {len(changes)} change(s) ({_summarize_changes(changes)})")
+        lines.append("")
+        lines.append("| Metric | Before | After | Change | Affected Alerts |")
+        lines.append("|--------|--------|-------|--------|-----------------|")
+        for c in changes:
+            lines.append(
+                f"| {_cell(c['key'])} | {_cell(_format_value(c['old']))} "
+                f"| {_cell(_format_value(c['new']))} | {c['change']} "
+                f"| {estimate_affected_alerts(c['key'])} |")
+        lines.append("")
+        total_changes += len(changes)
+
+    lines.append("---")
+    summary = (f"Summary: {len(_changed_tenants(report))} tenant(s) changed, "
+               f"{total_changes} metric change(s)")
+    if report["custom_alert"]:
+        summary += (f", {len(report['custom_alert'])} tenant(s) with "
+                    f"{sum(len(v) for v in report['custom_alert'].values())} custom alert change(s)")
+    if report["setting"]:
+        summary += (f", {len(report['setting'])} tenant(s) with "
+                    f"{sum(len(v) for v in report['setting'].values())} setting change(s)")
+    routing = len(report["routes"]) + len(report["receivers"]) + len(report["inhibits"])
+    if routing:
+        summary += f", {routing} routing change(s)"
+    if any(c.tenant == rd.PLATFORM for c in report["routes"]):
+        summary += " (some platform-wide)"
+    if report["uncovered_files"]:
+        summary += f", {len(report['uncovered_files'])} changed platform file(s)"
+    lines.append(summary)
+    return _cap_for_comment("\n".join(lines))
+
+
+# ── CLI ───────────────────────────────────────────────────────────────────
+
+
+def _at(value):
+    try:
+        ok = bool(_RFC3339.match(value)) and bool(
+            datetime.fromisoformat(value.replace("Z", "+00:00")))
+    except ValueError:
+        ok = False  # the shape is right, the date is not (month 13, hour 25, ...)
+    if not ok:
+        raise argparse.ArgumentTypeError(
+            f"{value!r} is not RFC3339 (e.g. 2026-10-10T03:00:00Z)")
+    return value
+
+
+def now_at():
+    """This instant, RFC3339 in UTC to the second."""
+    return datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+
+
 def build_parser():
     """Build CLI argument parser."""
     parser = argparse.ArgumentParser(
-        description="Compare two conf.d/ directories — per-tenant blast radius report",
+        description="Compare what two conf.d/ directories render to — "
+                    "per-tenant blast radius report",
         formatter_class=argparse.RawDescriptionHelpFormatter,
         epilog=textwrap.dedent("""
+            Exit codes: 0 no change; 1 a change, or something not compared;
+            2 no result (the PR side or a tool failed, or bad arguments).
+
             Examples:
               %(prog)s --old-dir conf.d.baseline --new-dir conf.d/
-              %(prog)s --old-dir conf.d.baseline --new-dir conf.d/ --json-output
+              %(prog)s --old-dir conf.d.baseline --new-dir conf.d/ --at 2026-10-10T03:00:00Z
+              %(prog)s --old-dir conf.d.baseline --new-dir conf.d/ --format json
         """),
     )
     parser.add_argument("--old-dir", required=True,
-                        help="Baseline config directory")
+                        help="Baseline config directory (missing or empty: a first import)")
     parser.add_argument("--new-dir", required=True,
                         help="New/staged config directory")
+    parser.add_argument("--at", type=_at, default=None,
+                        help="Instant to read schedules, silences and maintenance windows at, "
+                             "RFC3339 (e.g. the base commit's time). Default: now")
     parser.add_argument("--json-output", action="store_true",
                         help="Output JSON instead of Markdown")
     parser.add_argument("--format", choices=["markdown", "json"],
@@ -1096,71 +1054,26 @@ def build_parser():
 def main():
     """Entry point.
 
-    Exit codes (SSOT: ``scripts/tools/_lib_exitcodes.py``):
-      0 — no changes detected
-      1 — changes detected (useful for CI: non-zero = PR has config diff)
-      2 — caller error: bad args, missing dirs, malformed input, or any
-          unexpected crash
+    Exit codes (SSOT: ``scripts/tools/_lib_exitcodes.py``): 0 no change,
+    1 a change or something not compared, 2 no result.
 
-    ⛔ Why the handler below catches ``Exception`` instead of naming the
-    exception types: measured on this tool, the inputs that MUST land on 2
-    span three different layers, and the third is unreachable from any
-    try/except placed around the loaders.
-
-      * ``yaml.YAMLError`` family (parser / scanner / composer / reader) —
-        a malformed file under either ``--old-dir`` or ``--new-dir``.
-      * ``UnicodeDecodeError`` — a conf.d file that is not UTF-8. Not a
-        ``YAMLError``; ``open()`` raises before the parser ever runs.
-      * ``ValueError: Circular reference detected`` — a self-referencing YAML
-        anchor (``tenants: &a {t: *a}``). ``yaml.safe_load`` accepts it
-        happily; the raise comes from ``json.dumps`` under ``--format json``,
-        i.e. AFTER loading and rendering.
-
-    An enumerated tuple was tried and provably misses the last two, so this is
-    anchored on "the run did not complete" rather than on a list of spellings.
-
-    What the collision costs, and why 2 is the correct code rather than a
-    tidier 1: an uncaught exception exits **1**, which is this tool's
-    "changes detected" signal, while stdout stays empty. Every consumer that
-    follows the documented contract (``docs/integration/gitops-deployment.md``
-    — 0 skip / 1 post the report / 2 fail the pipeline) therefore reads a
-    crash as a finding and posts, or silently skips, an empty report. The
-    exit-code SSOT already assigns "malformed input YAML/JSON ... or an
-    unexpected crash" to ``EXIT_CALLER_ERROR``; this makes the code obey it.
+    ⛔ The handler below catches ``Exception``, not a list of types: an
+    uncaught exception exits **1**, this tool's "changes detected", with an
+    empty stdout — every consumer that follows the documented contract
+    (``docs/integration/gitops-deployment.md``: 0 skip / 1 post the report /
+    2 fail the pipeline) would read a crash as a finding. A render failing is
+    not an exception here (``_render_diff.compare`` reports it per view); what
+    reaches this handler is the tool's own fault, an unreadable file among the
+    platform files, or the like.
     """
     args = build_parser().parse_args()
     try:
         return _run(args)
-    except (DaGuardNotFoundError, ParseFailedError, DaGuardError) as exc:
-        # The profile bindings (`load_tenant_profile_refs`, #2115): da-guard
-        # missing or failing, or a --new-dir file the exporter cannot
-        # decode. Same exit 2, with da-guard's own lines (its reason for a
-        # dropped file) below one ERROR line — `str()` alone loses them.
-        print(f"ERROR: cannot compare configs (--old-dir {args.old_dir} "
-              f"--new-dir {args.new_dir}): reading the --new-dir profile bindings "
-              f"through da-guard failed", file=sys.stderr)
-        print_load_error(exc)
-        sys.exit(EXIT_CALLER_ERROR)
     except Exception as exc:  # noqa: BLE001 — deliberate; see docstring
         # ``sys.exit`` inside ``_run`` raises SystemExit, which derives from
         # BaseException, so the tool's own 0/1/2 exits pass through untouched.
-        #
-        # ``str(exc)``, not ``repr(exc)``: a YAMLError's str() carries the file
-        # name, line and column, while its repr() replaces those Mark objects
-        # with memory addresses. The reader is someone in a CI log deciding
-        # between "the image did not pull", "the mount is wrong" and "one of my
-        # config files is broken".
-        #
-        # ⚠️ Measured, so that the next person does not over-trust this: only
-        # the YAMLError family actually names the offending file — and since
-        # #1654 that family includes non-UTF-8 content, because the shared
-        # loader now hands ``yaml.safe_load`` the bytes and wraps the result
-        # in ``YamlFileError`` with the path attached (measured: a ``\xff``
-        # byte in ``alpha.yaml`` used to print this line with no filename;
-        # it now names the file). ``ValueError('Circular reference
-        # detected')`` still says nothing at all. Hence the type name (str()
-        # alone can be that terse) and both directory paths (the exception
-        # never says which side it was reading).
+        # ``str(exc)``, not ``repr(exc)``: it carries the file name where the
+        # exception has one; the type name because str() alone can be terse.
         print(
             f"ERROR: cannot compare configs "
             f"(--old-dir {args.old_dir} --new-dir {args.new_dir}): "
@@ -1171,55 +1084,35 @@ def main():
 
 
 def _run(args):
-    """Do the comparison. Exits 0/1 itself; raises on anything unexpected."""
-    if not Path(args.old_dir).is_dir():
-        print(f"ERROR: old-dir not found: {args.old_dir}", file=sys.stderr)
-        sys.exit(EXIT_CALLER_ERROR)
-    if not Path(args.new_dir).is_dir():
-        print(f"ERROR: new-dir not found: {args.new_dir}", file=sys.stderr)
-        sys.exit(EXIT_CALLER_ERROR)
+    """Render, compare, print; exits 0/1/2 itself."""
+    for flag, path in (("--old-dir", args.old_dir), ("--new-dir", args.new_dir)):
+        if Path(path).exists() and not Path(path).is_dir():
+            print(f"ERROR: {flag} is not a directory: {path}", file=sys.stderr)
+            sys.exit(EXIT_CALLER_ERROR)
+    at = args.at or now_at()
+    diff = rd.compare(args.old_dir, args.new_dir, at, served_report=served_sections)
+    report = build_report(diff, args.old_dir, args.new_dir)
+    code = report_exit_code(diff, report)
 
-    old_configs = load_configs_from_dir(args.old_dir)
-    new_configs = load_configs_from_dir(args.new_dir)
+    # The reasons go to stderr too: a CI log shows them even where the report
+    # is only posted, and an exit 2 never comes with an empty stderr (#1405).
+    for name, v in report["views"].items():
+        reason = printable_name(v.reason)
+        if v.status == "not_computed":
+            print(f"ERROR: cannot compare configs (--old-dir {args.old_dir} --new-dir "
+                  f"{args.new_dir}): {VIEW_TITLES[name]}: not computed: {reason}", file=sys.stderr)
+        elif v.status == "not_compared":
+            print(f"WARNING: {VIEW_TITLES[name]}: not compared: {reason}", file=sys.stderr)
 
-    diffs = compute_diff(old_configs, new_configs)
-    profile_diffs = compute_profile_diff(args.old_dir, args.new_dir)
-    custom_alert_diffs = compute_custom_alert_diff(
-        load_custom_alerts_from_dir(args.old_dir),
-        load_custom_alerts_from_dir(args.new_dir),
-    )
-    setting_diffs = compute_setting_diff(
-        load_settings_from_dir(args.old_dir),
-        load_settings_from_dir(args.new_dir),
-    )
-    uncovered_files = compute_uncovered_files(args.old_dir, args.new_dir)
-
-    use_json = args.json_output or args.format == "json"
-    if use_json:
-        output = {
-            "metric_diffs": diffs,
-            "profile_diffs": profile_diffs,
-            "custom_alert_diffs": custom_alert_diffs,
-            "setting_diffs": setting_diffs,
-            "uncovered_files": uncovered_files,
-        }
-        print(format_json_report(output, default=str))
+    if args.json_output or args.format == "json":
+        print(format_json_report(report_json(report, code), default=str))
     else:
-        print(render_markdown(
-            diffs, args.old_dir, args.new_dir,
-            profile_diffs=profile_diffs,
-            custom_alert_diffs=custom_alert_diffs,
-            setting_diffs=setting_diffs,
-            uncovered_files=uncovered_files,
-        ))
-
-    # Exit 1 if changes detected (CI signal), 0 if clean. A changed file
-    # this report does not compare is a change (#1420): exit 0 is read as
-    # "nothing to review", and a platform default edit is not that.
-    has_changes = (bool(diffs) or bool(profile_diffs)
-                   or bool(custom_alert_diffs) or bool(setting_diffs)
-                   or bool(uncovered_files))
-    sys.exit(EXIT_VIOLATION if has_changes else EXIT_OK)
+        print(render_markdown(report))
+    # Spelled out, not `sys.exit(code)`: the CLI-contract lint reads which
+    # codes this tool can exit with from the literal arguments.
+    if code == EXIT_CALLER_ERROR:
+        sys.exit(EXIT_CALLER_ERROR)
+    sys.exit(EXIT_VIOLATION if code == EXIT_VIOLATION else EXIT_OK)
 
 
 if __name__ == "__main__":

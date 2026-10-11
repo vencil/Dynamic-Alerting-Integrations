@@ -42,6 +42,7 @@ linters:
           list-mode: lax
           files:
             - "**/internal/parser/**"
+            - "**/internal/confdlayout/**"
             - "**/internal/guard/**"
             - "**/pkg/routingpolicy/**"
             - "**/pkg/receiverspec/**"

@@ -655,6 +655,8 @@ ${pinNote}jobs:
       - name: Config diff (blast radius)
         id: diff
         timeout-minutes: 5
+        env:
+          BASE_SHA: \${{ github.event.pull_request.base.sha }}
         run: |
           # config-diff signals findings through its exit code, so a bare
           # call cannot work: "changed" is exit 1, and this job runs on
@@ -667,19 +669,14 @@ ${pinNote}jobs:
           #       not touch tenant config at all, and skipping would leave
           #       the PREVIOUS run's report standing as though it were
           #       still current.
-          #       ⚠️ config-diff compares top-level TENANT files only. A
-          #       changed file it does not compare — any file whose name
-          #       starts with \`_\`, such as conf.d/_defaults.yaml, or a file
-          #       in a sub-directory — is not a 0: it exits 1 and the report
-          #       names the file under "Changed Files Not Compared". It does
-          #       NOT list the tenants such a change reaches, and a PLATFORM
-          #       DEFAULT is inherited by every tenant that does not
-          #       override it. Review those files by hand, or gate them
-          #       separately (the platform runs its own
-          #       guard-defaults-impact workflow for exactly this, which
-          #       \`da-tools init\` does not emit). Images up to v2.9.0
-          #       predate this and report such a change as "No changes
-          #       detected" with exit 0.
+          #       config-diff compares what each side RENDERS to — the
+          #       values the exporter serves and the Alertmanager
+          #       configuration — so a platform default (conf.d/_defaults.yaml)
+          #       is reported for every tenant it reaches. A changed file
+          #       whose name starts with \`_\` still exits 1 and is named
+          #       under "Changed Platform Files": a setting neither render
+          #       reads is not compared, so review those files too. Images
+          #       up to v2.9.0 compared top-level tenant files only.
           #   1 = changes detected  -> the report is the payload.
           #   2 and above           -> the run did not complete; fail, and
           #       the step below replaces the report with an explicit
@@ -689,10 +686,10 @@ ${pinNote}jobs:
           #       on the pull request looking current.
           #
           # The head-side directory is checked FIRST because a bind mount
-          # creates a missing host path instead of failing. config-diff
-          # does guard this (\`ERROR: new-dir not found\`), but that guard
-          # can never fire through a \`-v\` mount: the path always exists by
-          # the time the tool looks. Measured, with CONFIG_DIR pointing at
+          # creates a missing host path instead of failing, and the
+          # message below says why far better than config-diff's own
+          # (newer images exit 2, "not computed", on an empty PR side;
+          # images up to v2.9.0 did not). Measured, with CONFIG_DIR pointing at
           # a path that is not in the repo: both sides mount as empty
           # directories, the tool exits 0, and it prints a 322-byte
           # "no changes" report — non-empty, so the empty-report guard
@@ -703,6 +700,20 @@ ${pinNote}jobs:
             echo "::error::CONFIG_DIR is set to '\${{ env.CONFIG_DIR }}', which does not exist in this pull request's head commit. Either the workflow's CONFIG_DIR does not match where this repository actually keeps its tenant config, or this pull request removed that directory. Refusing to compare, because mounting a path that is not there yields an empty directory and a report that says 'no changes' on every future run."
             exit 1
           fi
+          # Schedules, silences and maintenance windows are read at ONE
+          # instant on both sides: the base commit's time, so a re-run of
+          # this job gives the same answer. (Without --at the tool reads
+          # them at the time of the run.) Passed only to an image whose
+          # config-diff lists --at: images up to v2.9.0 reject it, and
+          # DA_TOOLS_IMAGE may name one of those.
+          at="$(git show -s --format=%cI "$BASE_SHA")" || {
+            echo "::error::cannot read the time of base commit $BASE_SHA from this clone"
+            exit 1
+          }
+          at_args=""
+          if docker run --rm \${{ env.DA_TOOLS_IMAGE }} config-diff --help 2>/dev/null | grep -q -- '--at'; then
+            at_args="--at $at"
+          fi
           set +e
           # Two read-only mounts only: config-diff writes to stdout and the
           # HOST redirect below lands it in .output/. A writable output
@@ -712,7 +723,7 @@ ${pinNote}jobs:
             -v "\${{ github.workspace }}/\${{ env.CONFIG_DIR }}:/data/conf.d:ro" \\
             \${{ env.DA_TOOLS_IMAGE }} \\
             config-diff --old-dir /data/conf.d.base --new-dir /data/conf.d \\
-              --format markdown > .output/blast-radius.md
+              $at_args --format markdown > .output/blast-radius.md
           rc=$?
           set -e
           if [ "$rc" -gt 1 ]; then

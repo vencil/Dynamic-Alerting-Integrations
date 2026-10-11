@@ -354,9 +354,11 @@ da-tools batch-diagnose --tenants db-a,db-b,db-c --output report.json
 
 | Code | Description |
 |------|-------------|
-| `0` | The run finished. ⚠️ A failed tenant check **also gives 0 today**; read each tenant's `status` in the output (returning 1 is tracked in [#2493](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/2493)) |
-| `1` | Only an uncaught exception (traceback) returns 1, e.g. `--workers 0` | <!-- datools-cmd-ignore: only a traceback gives 1, no exit to trace -->
-| `2` | Caller error: bad arguments, or the output path given to `-o/--output` cannot be written (#1641) |
+| `0` | Every tenant is `healthy` or `unchecked` (including `--dry-run`) |
+| `1` | One or more tenant checks failed (see each tenant's `status` and `issues` in the output) |
+| `2` | Caller error: bad arguments (including `--workers` below 1), a failed Prometheus query or a missing `kubectl` for any tenant (takes precedence over `1`, as `diagnose` alone does), or the output path given to `-o/--output` cannot be written (#1641) |
+
+⚠️ The v2.9.0 image does not have these exit codes yet: a failed tenant check and a failed Prometheus query both return `0`. On v2.9.0, read each tenant's `status` in the output. <!-- image-caveat: v2.9.0 -->
 
 ---
 
@@ -460,7 +462,7 @@ Choose one mode:
 | `--watch` | Continuous monitoring mode (compare every N seconds) | false |
 | `--interval <SEC>` | Monitoring interval in seconds | `60` |
 | `--rounds <N>` | Number of monitoring rounds. ⚠️ `0` is not infinite — it runs **no rounds at all** (`for i in range(rounds)`) | `10` |
-| `--tolerance <RATIO>` | Allowed deviation as a **ratio**, not a percentage: `0.01` = 1% | `0.001` |
+| `--tolerance <RATIO>` | Allowed deviation as a **ratio**, not a percentage: `0.01` = 1%. Must be a finite number ≥ 0; `inf`, `nan` or a negative value exits 2 | `0.001` |
 | `--auto-detect-convergence` | Auto-detect convergence and output readiness JSON | false |
 | `-o, --output-dir <DIR>` | Output directory; `validation-report.csv` (and, in watch mode, `cutover-readiness.json`) are written there | `validation_output` |
 
@@ -2364,9 +2366,9 @@ da-tools analyze-gaps --tenant-config ./conf.d/db-a.yaml
 
 #### config-diff
 
-Compare two config directories (conf.d), output blast radius report.
+Compare what two config directories (conf.d) each render to, and output a blast radius report: which tenants each change reaches.
 
-**Purpose**: GitOps PR review; quickly assess config change impact scope.
+**Purpose**: GitOps PR review; a change to a platform file (`_defaults.yaml`, `_profiles.yaml`, a root `_platform.yaml`, routing defaults) is reported for the tenants it reaches too.
 
 **Syntax**
 
@@ -2378,19 +2380,27 @@ da-tools config-diff --old-dir <path> --new-dir <path> [options]
 
 | Parameter | Description |
 |-----------|-------------|
-| `--old-dir <PATH>` | Old config directory |
-| `--new-dir <PATH>` | New config directory |
+| `--old-dir <PATH>` | Old config directory (the base). Missing, or holding no config file: a first import, every tenant counts as added |
+| `--new-dir <PATH>` | New config directory (the PR) |
 
 **Options**
 
 | Option | Description | Default |
 |--------|-------------|---------|
+| `--at <RFC3339>` | Instant at which schedules, silences and maintenance windows are read, the same on both sides and printed on the report; in CI pass the base commit's time (`git show -s --format=%cI <base>`) | now |
 | `--format {markdown,json}` | Output format | `markdown` |
 | `--json-output` | Same as `--format json` | false |
 
-An option to print only the summary is not implemented yet; the report's last line is the summary (`Summary: N tenant(s) changed, N metric change(s)`).
+**What it compares** ([ADR-037](adr/037-config-diff-compares-rendered-output.en.md)): config-diff does not read the YAML itself. It runs, on each side, the two programs that turn conf.d into what runs, and compares their output:
 
-**Change Classifications**
+- `da-guard served-values --at <time> --schedules`: what the exporter serves for each tenant (thresholds, severities, settings, state filters, custom alerts).
+- The route generator `generate_alertmanager_routes.py --output-configmap`: the whole Alertmanager configuration. A route node is identified by its path of matchers, and its receiver, `group_by`, `group_wait`, `group_interval`, `repeat_interval` and `continue` are compared; so are receiver definitions and inhibit rules.
+
+Both need da-guard (bundled in the image; in a checkout run `make da-guard-build` first, or set `DA_GUARD_BINARY`).
+
+**Report sections**: Not Computed / Not Compared (when a view has no result), Changed Platform Files, Tenants Added / Removed, Routing Changes, Custom Alert Changes, Tenant Setting Changes, Keys the Exporter Drops, Other Served Changes, and a threshold table per tenant. Values come from the PR's files: outside the threshold table they are printed inside code spans, and in its cells `|` and line breaks are escaped; a receiver's credential fields are reported as changed with both values masked as `<redacted>`.
+
+**Change Classifications** (threshold table)
 
 | Classification | Meaning | Impact |
 |---|---|---|
@@ -2401,20 +2411,19 @@ An option to print only the summary is not implemented yet; the report's last li
 | `toggled` | enable ↔ disable | Enable or disable alert |
 | `modified` | Complex value change | Manual review needed |
 
-**Output**
+**Changed `_`-prefixed files**: a `_`-prefixed file (at any depth) that differs between the two sides byte for byte, or exists on one side only, is named under "Changed Platform Files", and the exit code is at least 1, a comment-only edit included. A setting neither render reads (for example a platform `_custom_alerts` recipe or `instance_tenant_mapping`) shows in no other section, so review these files directly.
 
-Markdown format report with per-tenant change tables and summary statistics.
+**The Custom Alert section is not a silencing verdict**: it reads the rows the exporter serves. `threshold` is `<value>:<severity>`, and an `op` / `window` / `for` change shows as a `recipe_id` change; a recipe no longer served is listed as removed, with a note that a deleted, a disabled and a rejected recipe are not told apart.
 
-**Comparison scope**: only the values each top-level tenant file writes itself are compared; `_defaults.yaml` inheritance is not resolved. `_`-prefixed files (`_defaults.yaml`, `_platform.yaml`, ...) and files in subdirectories are outside the comparison, and of `_profiles.yaml` only `profiles:` is compared. When such a file differs between the two sides (byte for byte) or exists on one side only, a "Changed Files Not Compared" section at the top of the report names it, the exit code is 1, and `No changes detected.` is not printed; `uncovered_files` in the JSON output is the same list. A comment-only edit is listed too. ⚠️ The v2.9.0 image has no such section: a change confined to these files prints `No changes detected.` and exits 0. <!-- image-caveat: v2.9.0 -->
+**JSON output**: `schema` is `da-tools.config-diff/v1`, beside `at`, `exit_code`, `views` (for `served` and `routes`, a `status` of `computed` / `not_computed` / `not_compared` and a `reason`), `tenants_added`, `tenants_removed` and `uncovered_files`. Every kind of change is one entry per distinct change with the tenants it reaches (`tenants`): `threshold_changes`, `setting_changes`, `custom_alert_changes`, `dropped_key_changes`, `other_served_changes`, `route_changes` (with `paths`), `receiver_changes` (with `receivers`) and `inhibit_changes`. A platform change that reaches many tenants is one entry.
 
-**The Custom Alert section is not a silencing verdict**: only an in-place flip of `threshold` to a disabled value or of `mode` to `silent` is flagged; a removed recipe is listed as removed, inherited recipes are outside the comparison, and a line at the top of the section says so. ⚠️ The v2.9.0 image does not print that line. <!-- image-caveat: v2.9.0 -->
-
-**Profile blast radius**: when a profile in `_profiles.yaml` changes, `affected_tenants` lists the `--new-dir` tenants whose `_profile` names it. The name is read through `da-guard effective`, as the exporter reads it: `_profile: {default: std}` names `std`, a `_profile` in a root platform file's `tenants:` entry counts, and one inherited from a subdirectory `_defaults.yaml` does not. So a run with a profile change needs da-guard (bundled in the image; `make da-guard-build` in a checkout); if da-guard is missing or fails, or a `--new-dir` file cannot be decoded by the exporter, the exit code is 2: stderr has `ERROR:` lines saying why; when da-guard ran, its stderr follows, each non-blank line prefixed with `da-guard|` (indented two spaces); when da-guard is missing or cannot be run there are no such lines. ⚠️ The v2.9.0 image still reads `_profile` only in its string form. <!-- image-caveat: v2.9.0 -->
+⚠️ The v2.9.0 image still behaves the old way: it compares the values each top-level tenant file writes itself, names platform files without comparing them, has no `--at`, and prints the old JSON without `schema` (`metric_diffs`, `profile_diffs`, ...). <!-- image-caveat: v2.9.0 -->
 
 **Examples**
 
 ```bash
 da-tools config-diff --old-dir ./conf.d-old --new-dir ./conf.d-new
+da-tools config-diff --old-dir ./conf.d-old --new-dir ./conf.d-new --at 2026-10-10T03:00:00Z
 da-tools config-diff --old-dir ./conf.d-old --new-dir ./conf.d-new --json-output
 ```
 
@@ -2423,8 +2432,8 @@ da-tools config-diff --old-dir ./conf.d-old --new-dir ./conf.d-new --json-output
 | Code | Description |
 |------|-------------|
 | `0` | No configuration changes |
-| `1` | Changes detected, or a file the report does not compare changed (see "Comparison scope" above) |
-| `2` | Caller error: directory missing, input unreadable, or the run did not complete; with a profile change, also da-guard missing or failing |
+| `1` | Changes detected; or a changed `_`-prefixed file; or the base side's configuration is broken and does not render (that view is Not Compared, so the PR that fixes it is not blocked) |
+| `2` | No result: a PR-side file cannot be read (stderr names the file and the exporter's or generator's own reason), the PR side has no config file, da-guard is missing or a tool failed, or bad arguments (for example `--at` that is not RFC3339, a file given as a directory). Except for bad arguments, the report is still printed and says which view was not computed; a changed `_`-prefixed file that cannot be read, or an unexpected error in the tool, prints one `ERROR:` line on stderr and no report |
 
 > ⚠️ **`1` means "there are changes", not "it failed".** A CI step that calls
 > this command bare will fail whenever the command is working correctly.

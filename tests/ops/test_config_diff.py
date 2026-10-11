@@ -1,45 +1,101 @@
 #!/usr/bin/env python3
-"""test_config_diff.py — Directory-level Config Diff 測試套件 (Wave 12 pytest 遷移)。"""
+"""test_config_diff.py — config-diff：比較兩側的渲染結果（ADR-037）。
+
+分三層：
+* 純函式（分類、差異、custom alert 欄位、遮罩、JSON 分組）不需要 da-guard。
+* 報告排版用合成的 report（`_report`）餵 `render_markdown`。
+* 行為一律經真的入口、真的 da-guard 與路由產生器跑（`_run_cli`）：結束碼、
+  #1405 的形狀錯誤、#2120 的平台 `_profile`、只改註解、ADR 的兩個範例。
+  每個「會響」的情境都配一個不該響的對照組。
+
+served-values 的讀法本身（閾值怎麼讀成 tighter／looser、設定與 custom alert
+怎麼重建）在 test_config_diff_served.py；渲染與比對在 test_render_diff.py。
+"""
 
 import json
-import os
 import re
+import shutil
 import subprocess
 import sys
-import tempfile
 from pathlib import Path
 
 import pytest
 import yaml
 
-
 import config_diff as cd  # noqa: E402
-import _lib_redact  # noqa: E402
+import _render_diff as rd  # noqa: E402
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
+SAMPLE = REPO_ROOT / "components" / "threshold-exporter" / "config" / "conf.d"
+AT = "2026-10-10T00:00:00Z"
+
+# Every run renders through da-guard (ADR-037); the CLI finds it via $DA_GUARD_BINARY.
+pytestmark = pytest.mark.usefixtures("da_guard_env")
 
 
-# ── 1. Flatten Tenant Config ────────────────────────────────────────
-
-class TestFlattenTenantConfig:
-
-    def test_basic_flatten(self):
-        raw = {"mysql_connections": 50, "redis_memory": 1024}
-        result = cd.flatten_tenant_config(raw)
-        assert result == {"mysql_connections": 50, "redis_memory": 1024}
-
-    def test_skips_reserved_keys(self):
-        raw = {"_routing": {"receiver": "slack"}, "_severity_dedup": "enable",
-               "mysql_connections": 50}
-        result = cd.flatten_tenant_config(raw)
-        assert result == {"mysql_connections": 50}
-
-    def test_empty_input(self):
-        assert cd.flatten_tenant_config(None) == {}
-        assert cd.flatten_tenant_config({}) == {}
+def _run_cli(old_dir, new_dir, *extra, at=AT):
+    """Invoke the tool the way a pipeline does — as a process — and read its rc."""
+    at_args = ("--at", at) if at else ()
+    return subprocess.run(
+        [sys.executable, "-X", "utf8", cd.__file__,
+         "--old-dir", str(old_dir), "--new-dir", str(new_dir), *at_args, *extra],
+        capture_output=True, encoding="utf-8", errors="replace", timeout=300,
+    )
 
 
-# ── 2. Classify Change ──────────────────────────────────────────────
+def _json(p):
+    doc = json.loads(p.stdout)
+    assert doc["schema"] == cd.JSON_SCHEMA
+    return doc
+
+
+def _write_tenant(directory, tenant_cfg, name="db-a"):
+    directory = Path(directory)
+    directory.mkdir(parents=True, exist_ok=True)
+    (directory / f"{name}.yaml").write_text(
+        yaml.safe_dump({"tenants": {name: tenant_cfg}}), encoding="utf-8", newline="\n")
+
+
+def _pair(tmp_path, files_old, files_new):
+    old, new = tmp_path / "old", tmp_path / "new"
+    for root, files in ((old, files_old), (new, files_new)):
+        root.mkdir()
+        for rel, text in files.items():
+            (root / rel).parent.mkdir(parents=True, exist_ok=True)
+            (root / rel).write_text(text, encoding="utf-8", newline="\n")
+    return old, new
+
+
+def _sample_pair(tmp_path):
+    old, new = tmp_path / "old", tmp_path / "new"
+    shutil.copytree(SAMPLE, old)
+    shutil.copytree(SAMPLE, new)
+    return old, new
+
+
+def _edit(conf_d, old, new, rel="_defaults.yaml"):
+    p = Path(conf_d) / rel
+    text = p.read_text(encoding="utf-8")
+    assert text.count(old) == 1, f"{old!r} occurs {text.count(old)} times in {rel}"
+    p.write_text(text.replace(old, new), encoding="utf-8")
+
+
+_OK = rd.ViewResult("computed", "")
+
+
+def _report(**kw):
+    """A report as `build_report` returns it, every section empty unless given."""
+    r = {"old_dir": "old", "new_dir": "new", "at": AT,
+         "views": {rd.VIEW_SERVED: _OK, rd.VIEW_ROUTES: _OK},
+         "metric": {}, "setting": {}, "custom_alert": {}, "tenants_added": [],
+         "tenants_removed": [], "dropped": {}, "other_served": {}, "routes": [],
+         "receivers": [], "inhibits": [], "uncovered_files": []}
+    r.update(kw)
+    return r
+
+
+# ── 1. 分類與差異（純函式） ──────────────────────────────────────────
+
 
 class TestClassifyChange:
 
@@ -52,115 +108,32 @@ class TestClassifyChange:
             (50, 80, "looser"),
             (50, "disable", "toggled"),
             ("disable", 50, "toggled"),
-            # dict vs dict → no numeric compare possible → modified
             ({"default": 50, "schedule": []}, {"default": 70, "schedule": []}, "modified"),
             (50, 50, "unchanged"),
         ],
-        ids=[
-            "added", "removed", "tighter", "looser",
-            "toggled_disable", "toggled_enable", "modified_dict",
-            "same_value_unchanged",
-        ],
+        ids=["added", "removed", "tighter", "looser", "toggled_disable", "toggled_enable",
+             "modified_dict", "same_value_unchanged"],
     )
     def test_classify_change(self, old, new, expected):
         assert cd.classify_change(old, new) == expected
 
 
-# ── 3. Compute Diff ──────────────────────────────────────────────────
-
 class TestComputeDiff:
 
     def test_basic_diff(self):
-        old = {"db-a": {"mysql_connections": 80, "redis_memory": 1024}}
-        new = {"db-a": {"mysql_connections": 50, "redis_memory": 1024}}
-        diffs = cd.compute_diff(old, new)
-        assert "db-a" in diffs
-        assert len(diffs["db-a"]) == 1
-        assert diffs["db-a"][0]["change"] == "tighter"
+        diffs = cd.compute_diff({"db-a": {"mysql_connections": 80, "redis_memory": 1024}},
+                                {"db-a": {"mysql_connections": 50, "redis_memory": 1024}})
+        assert [c["change"] for c in diffs["db-a"]] == ["tighter"]
 
-    def test_new_tenant(self):
-        old = {}
-        new = {"db-c": {"pg_cache": 0.9}}
-        diffs = cd.compute_diff(old, new)
-        assert "db-c" in diffs
-        assert diffs["db-c"][0]["change"] == "added"
+    def test_new_and_removed_tenant(self):
+        assert cd.compute_diff({}, {"db-c": {"pg_cache": 0.9}})["db-c"][0]["change"] == "added"
+        assert cd.compute_diff({"db-x": {"m": 50}}, {})["db-x"][0]["change"] == "removed"
 
-    def test_removed_tenant(self):
-        old = {"db-x": {"mysql_connections": 50}}
-        new = {}
-        diffs = cd.compute_diff(old, new)
-        assert "db-x" in diffs
-        assert diffs["db-x"][0]["change"] == "removed"
+    def test_no_changes_and_untouched_tenant(self):
+        assert cd.compute_diff({"db-a": {"m": 50}}, {"db-a": {"m": 50}}) == {}
+        diffs = cd.compute_diff({"a": {"m": 50}, "b": {"r": 1}}, {"a": {"m": 70}, "b": {"r": 1}})
+        assert set(diffs) == {"a"}
 
-    def test_no_changes(self):
-        old = {"db-a": {"mysql_connections": 50}}
-        new = {"db-a": {"mysql_connections": 50}}
-        diffs = cd.compute_diff(old, new)
-        assert diffs == {}
-
-    def test_multiple_tenants(self):
-        old = {"db-a": {"mysql_connections": 50}, "db-b": {"redis_memory": 100}}
-        new = {"db-a": {"mysql_connections": 70}, "db-b": {"redis_memory": 100}}
-        diffs = cd.compute_diff(old, new)
-        assert "db-a" in diffs
-        assert "db-b" not in diffs
-
-
-# ── 4. Load Configs From Dir ────────────────────────────────────────
-
-class TestLoadConfigsFromDir:
-
-    def test_basic_loading_flat(self):
-        """Flat format (legacy): {metric: value} without tenants: wrapper."""
-        with tempfile.TemporaryDirectory() as d:
-            with open(os.path.join(d, "db-a.yaml"), "w", encoding="utf-8") as f:
-                yaml.dump({"mysql_connections": 50, "_routing": {}}, f)
-            result = cd.load_configs_from_dir(d)
-            assert "db-a" in result
-            assert "mysql_connections" in result["db-a"]
-            assert "_routing" not in result["db-a"]
-
-    def test_basic_loading_wrapped(self):
-        """Wrapped format (actual conf.d/): {tenants: {name: {metric: value}}}."""
-        with tempfile.TemporaryDirectory() as d:
-            with open(os.path.join(d, "db-a.yaml"), "w", encoding="utf-8") as f:
-                yaml.dump({"tenants": {"db-a": {
-                    "mysql_connections": "70",
-                    "_routing": {"receiver": {"type": "webhook"}},
-                }}}, f)
-            result = cd.load_configs_from_dir(d)
-            assert "db-a" in result
-            assert "mysql_connections" in result["db-a"]
-            assert "_routing" not in result["db-a"]
-
-    def test_wrapped_multi_tenant_in_file(self):
-        """Multiple tenants in a single wrapped YAML file."""
-        with tempfile.TemporaryDirectory() as d:
-            with open(os.path.join(d, "teams.yaml"), "w", encoding="utf-8") as f:
-                yaml.dump({"tenants": {
-                    "db-a": {"mysql_connections": "70"},
-                    "db-b": {"redis_memory": "1024"},
-                }}, f)
-            result = cd.load_configs_from_dir(d)
-            assert "db-a" in result
-            assert "db-b" in result
-            assert result["db-a"] == {"mysql_connections": "70"}
-
-    def test_skips_defaults_and_hidden(self):
-        with tempfile.TemporaryDirectory() as d:
-            with open(os.path.join(d, "_defaults.yaml"), "w", encoding="utf-8") as f:
-                yaml.dump({"mysql_connections": 99}, f)
-            with open(os.path.join(d, ".hidden.yaml"), "w", encoding="utf-8") as f:
-                yaml.dump({"x": 1}, f)
-            result = cd.load_configs_from_dir(d)
-            assert result == {}
-
-    def test_missing_dir(self):
-        result = cd.load_configs_from_dir("/nonexistent")
-        assert result == {}
-
-
-# ── 5. Estimate Affected Alerts ─────────────────────────────────────
 
 class TestEstimateAffectedAlerts:
     """欄位內容取自 rule pack，不是 key 拼法的 CamelCase（舊版寫 *MysqlConnections*）。"""
@@ -177,518 +150,58 @@ class TestEstimateAffectedAlerts:
         assert cd.estimate_affected_alerts("mysql_connections") == "unknown"
 
 
-# ── 6. Render Markdown ──────────────────────────────────────────────
-
-class TestRenderMarkdown:
-
-    def test_no_changes(self):
-        md = cd.render_markdown({}, "old", "new")
-        assert "No changes detected" in md
-
-    def test_with_changes(self):
-        diffs = {
-            "db-a": [{"key": "mysql_connections", "old": 80, "new": 50, "change": "tighter"}]
-        }
-        md = cd.render_markdown(diffs, "old", "new")
-        assert "db-a" in md
-        assert "mysql_connections" in md
-        assert "tighter" in md
-        assert "Summary:" in md
-        assert "1 tenant(s) changed" in md
-
-    def test_format_value_disabled(self):
-        assert cd._format_value("disable") == "disabled"
-        assert cd._format_value(None) == "—"
-        assert cd._format_value(50) == "50"
-        assert cd._format_value({"schedule": []}) == "(scheduled)"
-
-    def test_with_profile_changes(self):
-        """The '## Profile Changes' section renders all three pd shapes:
-        a modified profile with a key-diff table and >10 affected tenants
-        (truncation), an added profile, and a profile with no key diffs.
-        """
-        profile_diffs = [
-            {
-                "profile": "mysql-prod",
-                "change": "modified",
-                "affected_count": 12,
-                "affected_tenants": [f"t{i}" for i in range(12)],
-                "key_diffs": [
-                    {"key": "mysql_connections", "old": 80, "new": 50,
-                     "change": "tighter"},
-                ],
-            },
-            {
-                "profile": "redis-new",
-                "change": "added",
-                "affected_count": 1,
-                "affected_tenants": ["t-redis"],
-                "key_diffs": [],
-            },
-            {
-                "profile": "empty-prof",
-                "change": "modified",
-                "affected_count": 0,
-                "affected_tenants": [],
-                "key_diffs": [],
-            },
-        ]
-        md = cd.render_markdown({}, "old", "new", profile_diffs=profile_diffs)
-
-        assert "## Profile Changes" in md
-        # modified profile: header + truncated tenant list + key-diff table
-        assert "Profile: mysql-prod (modified) — 12 tenant(s) affected" in md
-        assert "(+2 more)" in md          # 12 affected, first 10 shown
-        assert "Tenants:" in md
-        assert "| mysql_connections |" in md
-        assert "tighter" in md
-        # added profile with no key diffs → "New profile with N keys" line
-        assert "New profile with 0 keys" in md
-        # third profile (modified, no key diffs, no tenants) still renders
-        assert "empty-prof" in md
+def test_format_value():
+    assert cd._format_value("disable") == "disabled"
+    assert cd._format_value(None) == "—"
+    assert cd._format_value(50) == "50"
+    assert cd._format_value({"schedule": []}) == "(scheduled)"
 
 
-# ── 7. CLI ───────────────────────────────────────────────────────────
-
-class TestCLI:
-
-    def test_required_args(self):
-        parser = cd.build_parser()
-        args = parser.parse_args(["--old-dir", "/a", "--new-dir", "/b"])
-        assert args.old_dir == "/a"
-        assert args.new_dir == "/b"
-
-    def test_json_flag(self):
-        parser = cd.build_parser()
-        args = parser.parse_args(["--old-dir", "/a", "--new-dir", "/b", "--json-output"])
-        assert args.json_output
-
-    def test_missing_required(self):
-        parser = cd.build_parser()
-        with pytest.raises(SystemExit):
-            parser.parse_args([])
+# ── 2. custom alert 欄位與排版 ───────────────────────────────────────
 
 
-# ── 8. End-to-End ────────────────────────────────────────────────────
-
-class TestEndToEnd:
-
-    def test_directory_comparison_flat(self):
-        with tempfile.TemporaryDirectory() as old_dir, \
-             tempfile.TemporaryDirectory() as new_dir:
-            # Old config (flat)
-            with open(os.path.join(old_dir, "db-a.yaml"), "w", encoding="utf-8") as f:
-                yaml.dump({"mysql_connections": 80, "redis_memory": 1024}, f)
-            # New config — tighter mysql, same redis
-            with open(os.path.join(new_dir, "db-a.yaml"), "w", encoding="utf-8") as f:
-                yaml.dump({"mysql_connections": 50, "redis_memory": 1024}, f)
-
-            old = cd.load_configs_from_dir(old_dir)
-            new = cd.load_configs_from_dir(new_dir)
-            diffs = cd.compute_diff(old, new)
-
-            assert len(diffs) == 1
-            assert diffs["db-a"][0]["key"] == "mysql_connections"
-            assert diffs["db-a"][0]["change"] == "tighter"
-
-    def test_directory_comparison_wrapped(self):
-        """End-to-end test with actual conf.d/ format (tenants: wrapper)."""
-        with tempfile.TemporaryDirectory() as old_dir, \
-             tempfile.TemporaryDirectory() as new_dir:
-            # Old config (wrapped format)
-            with open(os.path.join(old_dir, "db-a.yaml"), "w", encoding="utf-8") as f:
-                yaml.dump({"tenants": {"db-a": {
-                    "mysql_connections": "80",
-                    "_routing": {"receiver": {"type": "webhook"}},
-                }}}, f)
-            # New config — tighter mysql
-            with open(os.path.join(new_dir, "db-a.yaml"), "w", encoding="utf-8") as f:
-                yaml.dump({"tenants": {"db-a": {
-                    "mysql_connections": "50",
-                    "_routing": {"receiver": {"type": "webhook"}},
-                }}}, f)
-
-            old = cd.load_configs_from_dir(old_dir)
-            new = cd.load_configs_from_dir(new_dir)
-            diffs = cd.compute_diff(old, new)
-
-            assert len(diffs) == 1
-            assert "db-a" in diffs
-            assert diffs["db-a"][0]["key"] == "mysql_connections"
-            assert diffs["db-a"][0]["change"] == "tighter"
+def _recipe(name, threshold="150:warning", mode="page", **extra):
+    r = {"recipe": "threshold", "name": name, "metric": "mysql_global_status_threads_connected",
+         "op": ">", "window": "5m", "threshold": threshold, "mode": mode}
+    r.update(extra)
+    return r
 
 
-
-# ── Exit Code Tests (v1.11.0 CI integration) ─────────────────────
-
-def _write_tenant(directory, value="80"):
-    path = os.path.join(directory, "db-a.yaml")
-    with open(path, "w", encoding="utf-8", newline="\n") as f:
-        yaml.dump({"tenants": {"db-a": {"mysql_connections": value}}}, f)
-    return path
-
-
-def _run_cli(old_dir, new_dir, *extra):
-    """Invoke the tool the way a pipeline does — as a process — and read its rc."""
-    return subprocess.run(
-        [sys.executable, "-X", "utf8", cd.__file__,
-         "--old-dir", str(old_dir), "--new-dir", str(new_dir), *extra],
-        capture_output=True, encoding="utf-8", errors="replace", timeout=120,
-    )
-
-
-class TestExitCode:
-    """Exit codes, exercised through the real entry point.
-
-    ⛔ These used to assert ``(1 if diffs else 0) == 0`` — a reimplementation
-    of the exit rule, checked against itself. Nothing ever started the
-    process, so exit 2 had no coverage at all, and neither did any path where
-    the tool dies before printing. That is how an uncaught exception exiting
-    **1** survived: 1 is this tool's "changes detected" code, so every
-    consumer following the documented contract reads a crash as a finding —
-    while the report it supposedly produced is zero bytes.
-
-    Contract (``scripts/tools/_lib_exitcodes.py``, restated for consumers in
-    ``docs/integration/gitops-deployment.md``): 0 no changes / 1 changes
-    detected / 2 caller error, which explicitly names malformed input and
-    unexpected crashes.
-    """
-
-    def test_exit_0_no_changes(self):
-        with tempfile.TemporaryDirectory() as d:
-            _write_tenant(d)
-            p = _run_cli(d, d)
-        assert p.returncode == 0, p.stderr
-        assert "No changes detected" in p.stdout
-
-    def test_exit_1_changes_detected(self):
-        with tempfile.TemporaryDirectory() as old_dir, \
-             tempfile.TemporaryDirectory() as new_dir:
-            _write_tenant(old_dir, "80")
-            _write_tenant(new_dir, "50")
-            p = _run_cli(old_dir, new_dir)
-        assert p.returncode == 1, p.stderr
-        assert "db-a" in p.stdout
-
-    def test_exit_2_missing_dir(self):
-        with tempfile.TemporaryDirectory() as new_dir:
-            _write_tenant(new_dir)
-            p = _run_cli(os.path.join(new_dir, "nope"), new_dir)
-        assert p.returncode == 2, p.stderr
-        assert p.stdout == ""
-
-    @pytest.mark.parametrize("label,writer,extra,names_file", [
-        # The yaml.YAMLError family.
-        ("malformed_yaml",
-         lambda p: Path(p).write_text("tenants:\n  db-a: [unclosed\n   x: :\n",
-                                      encoding="utf-8", newline="\n"),
-         (), True),
-        # Not UTF-8. Until #1654 open() raised UnicodeDecodeError before the
-        # parser was reached — NOT a YAMLError, and carrying no path, so this
-        # row recorded names_file=False as a known gap. The shared loader now
-        # hands PyYAML the bytes and wraps the ReaderError in YamlFileError
-        # with the path attached, so the file is named like the row above.
-        ("non_utf8",
-         lambda p: Path(p).write_bytes(b"tenants:\n  db-a:\n    note: caf\xe9\n"),
-         (), True),
-        # A self-referencing anchor: yaml.safe_load ACCEPTS it, and json.dumps
-        # is what raises — downstream of every loader, so no try/except placed
-        # around the loading step can reach it.
-        ("anchor_cycle_json",
-         lambda p: Path(p).write_text("tenants: &a\n  db-a:\n    self: *a\n",
-                                      encoding="utf-8", newline="\n"),
-         ("--format", "json"), False),
-    ])
-    def test_exit_2_when_the_run_cannot_complete(self, label, writer, extra,
-                                                 names_file):
-        """Every way the run fails to finish lands on 2, never on 1.
-
-        The three cases sit in three different layers (decode / parse /
-        serialize) on purpose: that spread is the argument for catching
-        broadly rather than naming exception types, and the third case is the
-        one that makes a loader-level handler structurally insufficient.
-        """
-        with tempfile.TemporaryDirectory() as old_dir, \
-             tempfile.TemporaryDirectory() as new_dir:
-            _write_tenant(old_dir)
-            writer(os.path.join(new_dir, "db-a.yaml"))
-            p = _run_cli(old_dir, new_dir, *extra)
-
-        assert p.returncode == 2, (
-            f"{label}: expected 2 (caller error), got {p.returncode}; "
-            "1 is indistinguishable from 'changes detected'.\n"
-            f"stdout={p.stdout[:200]!r}\nstderr={p.stderr[-400:]!r}"
-        )
-        assert p.stdout == "", (
-            f"{label}: a run that did not complete must not leave a partial "
-            f"report for a consumer to post; got {p.stdout[:200]!r}"
-        )
-        # ⛔ This used to be `assert "ERROR" in p.stderr`, which matched the
-        # handler's own literal prefix and so was true whenever the handler
-        # existed at all — it constrained nothing about the message. What a
-        # reader of a CI log actually has to decide is between "the image did
-        # not pull", "the mount is wrong" and "one of my config files is
-        # broken", so the message has to carry enough to separate those.
-        assert str(old_dir) in p.stderr and str(new_dir) in p.stderr, (
-            f"{label}: the message must name both directories — the exception "
-            f"does not say which side it was reading; got {p.stderr[-300:]!r}"
-        )
-        # All three of these exception classes are named ``*Error``; str() of
-        # some of them is terse enough that the class name is the only clue
-        # to what kind of failure it was.
-        assert "Error" in p.stderr, (
-            f"{label}: the exception type name is missing from the message; "
-            f"got {p.stderr[-300:]!r}"
-        )
-        if names_file:
-            # The decisive one: repr() of a YAMLError replaces its Mark
-            # objects with memory addresses, str() carries file/line/column.
-            # Naming the file is what makes the message actionable, and it is
-            # exactly what a regression back to `!r` would take away.
-            assert "db-a.yaml" in p.stderr, (
-                f"{label}: the message must name the file that failed to "
-                f"parse; got {p.stderr[-300:]!r}"
-            )
-        else:
-            # ⚠️ NOT an endorsement — a recorded gap. This exception does not
-            # carry a path (a bare "Circular reference detected" raised by
-            # json.dumps, downstream of every loader), so an operator is told
-            # a config file is broken without being told which one. (The
-            # non-UTF-8 row used to sit here too; #1654 closed that one in the
-            # shared loader.) Asserting the absence keeps it from being
-            # quietly "fixed" by a message that only looks more specific.
-            assert "db-a.yaml" not in p.stderr, (
-                f"{label}: the message now names the file — good, but this "
-                "branch was recording that it could not. Move this case to "
-                "names_file=True and delete this note."
-            )
-
-
-# ── 9. Profile Key Diff (v1.12.0 fine-grained) ───────────────────
-
-class TestProfileKeyDiff:
-    """Fine-grained profile content diff."""
-
-    def test_added_profile(self):
-        """New profile should show all keys as added."""
-        diffs = cd.compute_profile_key_diff(None, {"mysql_connections": 80, "redis_memory": 1024})
-        assert len(diffs) == 2
-        assert all(d["change"] == "added" for d in diffs)
-
-    def test_removed_profile(self):
-        """Removed profile should show all keys as removed."""
-        diffs = cd.compute_profile_key_diff({"mysql_connections": 80}, None)
-        assert len(diffs) == 1
-        assert diffs[0]["change"] == "removed"
-
-    def test_modified_key(self):
-        """Changed key should show tighter/looser."""
-        diffs = cd.compute_profile_key_diff(
-            {"mysql_connections": 80},
-            {"mysql_connections": 50}
-        )
-        assert len(diffs) == 1
-        assert diffs[0]["change"] == "tighter"
-
-    def test_no_changes(self):
-        """Identical profiles should produce no diffs."""
-        diffs = cd.compute_profile_key_diff(
-            {"mysql_connections": 80}, {"mysql_connections": 80})
-        assert diffs == []
+def _ca_modified(field, old, new):
+    return {"t": [{"name": "x", "change": "modified", "old": {}, "new": {},
+                   "field_changes": [{"field": field, "old": old, "new": new}]}]}
 
 
 class TestCustomAlertDiff:
-    """Custom alert recipe diffing (ADR-024 Capability B, #741).
+    """Custom alert recipe diffing (ADR-024 Capability B, #741)."""
 
-    Regression for the ops-review blind spot: `_custom_alerts` is a reserved
-    ('_'-prefixed) key, so flatten_tenant_config drops it from the metric diff.
-    These tests pin the dedicated recipe-diff path that surfaces add/remove/
-    modify of recipes so config_diff never reports 'No changes detected' for a
-    real alerting change.
-    """
-
-    def _recipe(self, name, threshold="150:warning", mode="page", **extra):
-        r = {
-            "recipe": "threshold",
-            "name": name,
-            "metric": "mysql_global_status_threads_connected",
-            "op": ">",
-            "window": "5m",
-            "threshold": threshold,
-            "mode": mode,
-        }
-        r.update(extra)
-        return r
-
-    def _write(self, d, tenant, recipes):
-        with open(os.path.join(d, f"{tenant}.yaml"), "w", encoding="utf-8") as f:
-            yaml.dump({"tenants": {tenant: {
-                "mysql_connections": "100",
-                "_custom_alerts": recipes,
-            }}}, f)
-
-    def test_removed_page_recipe_states_this_is_not_a_silencing_verdict(self, tmp_path):
-        """#1517：刪掉會 page 的 recipe，blast_radius 標 SILENCED，這裡只列 removed。
-        報告要自己寫明視野限制（不判定消音、不含繼承），不得對同一件事沉默。"""
-        old, new = tmp_path / "old", tmp_path / "new"
-        old.mkdir(), new.mkdir()
-        self._write(str(old), "db-b", [self._recipe("pager", mode="page")])
-        self._write(str(new), "db-b", [])
-        p = _run_cli(old, new)
-        assert p.returncode == 1, p.stdout + p.stderr
-        lines = p.stdout.splitlines()
-        section = lines.index("## Custom Alert Changes")
-        removed = next(i for i, l in enumerate(lines) if l.startswith("- `pager` (removed)"))
-        note = next(i for i, l in enumerate(lines) if "Not a silencing verdict" in l)
-        assert section < note < removed, (section, note, removed)
-        # The claims themselves, not keywords: a reworded "resolves inheritance"
-        # or "every silencing change is flagged" must turn this red.
-        for claim in ("does not resolve `_defaults.yaml` inheritance",
-                      "Only an in-place flip to a disabled threshold or `mode: silent` is flagged",
-                      "whether a removed recipe stops a page"):
-            assert claim in lines[note], (claim, lines[note])
-        # One blockquote, two paragraphs: under the warning, not glued to it.
-        assert lines[note].startswith("> ") and lines[note - 1] == ">", lines[note - 1:note + 1]
-
-    def test_added_recipe(self):
-        with tempfile.TemporaryDirectory() as old_dir, \
-             tempfile.TemporaryDirectory() as new_dir:
-            self._write(old_dir, "db-b", [])
-            self._write(new_dir, "db-b", [self._recipe("mariadb_conns_high")])
-
-            old_ca = cd.load_custom_alerts_from_dir(old_dir)
-            new_ca = cd.load_custom_alerts_from_dir(new_dir)
-            diff = cd.compute_custom_alert_diff(old_ca, new_ca)
-
-            assert "db-b" in diff
-            assert len(diff["db-b"]) == 1
-            assert diff["db-b"][0]["name"] == "mariadb_conns_high"
-            assert diff["db-b"][0]["change"] == "added"
-
-    def test_removed_recipe(self):
-        with tempfile.TemporaryDirectory() as old_dir, \
-             tempfile.TemporaryDirectory() as new_dir:
-            self._write(old_dir, "db-b", [self._recipe("mariadb_conns_high")])
-            self._write(new_dir, "db-b", [])
-
-            diff = cd.compute_custom_alert_diff(
-                cd.load_custom_alerts_from_dir(old_dir),
-                cd.load_custom_alerts_from_dir(new_dir),
-            )
-            assert diff["db-b"][0]["change"] == "removed"
-
-    def test_modified_recipe_surfaces_field_changes(self):
-        with tempfile.TemporaryDirectory() as old_dir, \
-             tempfile.TemporaryDirectory() as new_dir:
-            self._write(old_dir, "db-b", [self._recipe("x", threshold="150:warning")])
-            self._write(new_dir, "db-b", [self._recipe("x", threshold="200:critical")])
-
-            diff = cd.compute_custom_alert_diff(
-                cd.load_custom_alerts_from_dir(old_dir),
-                cd.load_custom_alerts_from_dir(new_dir),
-            )
-            entry = diff["db-b"][0]
-            assert entry["change"] == "modified"
-            fields = {fc["field"]: fc for fc in entry["field_changes"]}
-            assert "threshold" in fields
-            assert fields["threshold"]["old"] == "150:warning"
-            assert fields["threshold"]["new"] == "200:critical"
-
-    def test_mode_toggle_is_surfaced(self):
-        """page → silent (or vice versa) is a routing-impacting change."""
-        with tempfile.TemporaryDirectory() as old_dir, \
-             tempfile.TemporaryDirectory() as new_dir:
-            self._write(old_dir, "db-b", [self._recipe("x", mode="page")])
-            self._write(new_dir, "db-b", [self._recipe("x", mode="silent")])
-
-            diff = cd.compute_custom_alert_diff(
-                cd.load_custom_alerts_from_dir(old_dir),
-                cd.load_custom_alerts_from_dir(new_dir),
-            )
-            fields = {fc["field"]: fc for fc in diff["db-b"][0]["field_changes"]}
-            assert fields["mode"]["old"] == "page"
-            assert fields["mode"]["new"] == "silent"
+    def test_added_removed_modified(self):
+        old = {"db-b": {"x": _recipe("x"), "gone": _recipe("gone")}}
+        new = {"db-b": {"x": _recipe("x", threshold="200:critical"), "new": _recipe("new")}}
+        by_name = {c["name"]: c for c in cd.compute_custom_alert_diff(old, new)["db-b"]}
+        assert {n: c["change"] for n, c in by_name.items()} == \
+            {"gone": "removed", "new": "added", "x": "modified"}
+        assert by_name["x"]["field_changes"] == [
+            {"field": "threshold", "old": "150:warning", "new": "200:critical"}]
 
     def test_no_change_when_identical(self):
-        with tempfile.TemporaryDirectory() as old_dir, \
-             tempfile.TemporaryDirectory() as new_dir:
-            for d in (old_dir, new_dir):
-                self._write(d, "db-b", [self._recipe("x")])
-            diff = cd.compute_custom_alert_diff(
-                cd.load_custom_alerts_from_dir(old_dir),
-                cd.load_custom_alerts_from_dir(new_dir),
-            )
-            assert diff == {}
-
-    def test_summary_counts_custom_alert_only_tenant(self):
-        """CodeRabbit #773: a custom-alert-only change must count toward
-        'N tenant(s) changed', not print '0 tenant(s) changed'."""
-        diff = {"db-b": [{
-            "name": "x", "change": "added", "old": None,
-            "new": self._recipe("x"), "field_changes": [],
-        }]}
-        md = cd.render_markdown({}, "o", "n", custom_alert_diffs=diff)
-        assert "0 tenant(s) changed" not in md
-        assert "1 tenant(s) changed" in md
-
-    def test_summary_unions_metric_and_custom_alert_tenants(self):
-        """Same tenant changed via both metric + custom alert counts once."""
-        metric = {"db-b": [{"key": "mysql_connections", "old": 80, "new": 50,
-                            "change": "tighter"}]}
-        ca = {"db-b": [{"name": "x", "change": "added", "old": None,
-                        "new": self._recipe("x"), "field_changes": []}],
-              "db-c": [{"name": "y", "change": "added", "old": None,
-                        "new": self._recipe("y"), "field_changes": []}]}
-        md = cd.render_markdown(metric, "o", "n", custom_alert_diffs=ca)
-        assert "2 tenant(s) changed" in md  # db-b (union, once) + db-c
-
-    def test_render_markdown_surfaces_custom_alerts(self):
-        """The PR #771 scenario must NOT render as 'No changes detected'."""
-        diff = {"db-b": [{
-            "name": "mariadb_conns_high", "change": "added",
-            "old": None,
-            "new": self._recipe("mariadb_conns_high"),
-            "field_changes": [],
-        }]}
-        md = cd.render_markdown({}, "old", "new", custom_alert_diffs=diff)
-        assert "No changes detected" not in md
-        assert "Custom Alert Changes" in md
-        assert "mariadb_conns_high" in md
-        assert "db-b" in md
-
-    def test_load_skips_recipes_without_name(self):
-        with tempfile.TemporaryDirectory() as d:
-            self._write(d, "db-b", [{"recipe": "threshold", "metric": "m"}])
-            assert cd.load_custom_alerts_from_dir(d) == {}
+        same = {"db-b": {"x": _recipe("x")}}
+        assert cd.compute_custom_alert_diff(same, same) == {}
 
     def test_disable_threshold_is_semantically_highlighted(self):
-        """Reef 1: threshold → 'disable' is a silencing, not a param tweak.
-        Must be flagged so a reviewer can't skim past it."""
-        diff = {"db-b": [{
-            "name": "x", "change": "modified",
-            "old": self._recipe("x", threshold="100:critical"),
-            "new": self._recipe("x", threshold="disable"),
-            "field_changes": [
-                {"field": "threshold", "old": "100:critical", "new": "disable"},
-            ],
-        }]}
-        md = cd.render_markdown({}, "o", "n", custom_alert_diffs=diff)
-        assert "DISABLED" in md
-        assert ":warning:" in md
+        """Reef 1: threshold → a disabled value is a silencing, not a param tweak."""
+        for disabled_val in ("disable", "off", "disabled", "false", "disable:warning"):
+            md = cd.render_markdown(_report(custom_alert=_ca_modified("threshold", "100:critical",
+                                                                        disabled_val)))
+            assert "DISABLED (alert silenced)" in md, disabled_val
 
-    def test_disable_highlight_covers_full_disabled_set(self):
-        """R2: parity with exporter — off/disabled/false + :severity suffix."""
-        for disabled_val in ("off", "disabled", "false", "disable:warning"):
-            diff = {"db-b": [{
-                "name": "x", "change": "modified",
-                "old": self._recipe("x", threshold="100:critical"),
-                "new": self._recipe("x", threshold=disabled_val),
-                "field_changes": [
-                    {"field": "threshold", "old": "100:critical", "new": disabled_val},
-                ],
-            }]}
-            md = cd.render_markdown({}, "o", "n", custom_alert_diffs=diff)
-            assert "DISABLED" in md, f"missed disabled form: {disabled_val!r}"
+    def test_disable_to_enable_not_flagged_as_silencing(self):
+        md = cd.render_markdown(_report(custom_alert=_ca_modified("threshold", "disable", "100:critical")))
+        assert "DISABLED (alert silenced)" not in md
+
+    def test_mode_page_to_silent_is_highlighted(self):
+        md = cd.render_markdown(_report(custom_alert=_ca_modified("mode", "page", "silent")))
+        assert "paging suppressed" in md
 
     def test_threshold_disabled_helper_parity(self):
         assert cd._threshold_disabled("disable")
@@ -696,313 +209,471 @@ class TestCustomAlertDiff:
         assert not cd._threshold_disabled("150:critical")
         assert not cd._threshold_disabled("150")
 
-    def test_mode_page_to_silent_is_highlighted(self):
-        diff = {"db-b": [{
-            "name": "x", "change": "modified",
-            "old": self._recipe("x", mode="page"), "new": self._recipe("x", mode="silent"),
-            "field_changes": [{"field": "mode", "old": "page", "new": "silent"}],
-        }]}
-        md = cd.render_markdown({}, "o", "n", custom_alert_diffs=diff)
-        assert "paging suppressed" in md
-
-    def test_disable_to_enable_not_flagged_as_silencing(self):
-        """Re-enabling (disable → value) must NOT carry the silencing warning."""
-        diff = {"db-b": [{
-            "name": "x", "change": "modified",
-            "old": self._recipe("x", threshold="disable"),
-            "new": self._recipe("x", threshold="100:critical"),
-            "field_changes": [{"field": "threshold", "old": "disable", "new": "100:critical"}],
-        }]}
-        md = cd.render_markdown({}, "o", "n", custom_alert_diffs=diff)
-        assert "DISABLED (alert silenced)" not in md
-
-    def test_format_recipe_value_neutralizes_backticks(self):
-        """F5: a backtick is the only code-span break-out; it must be stripped."""
+    def test_format_recipe_value_neutralizes_backticks_and_newlines(self):
+        """F5 / Reef 4: a backtick is the only code-span break-out; a newline shatters the list."""
         assert "`" not in cd._format_recipe_value("evil`backtick")
-        # _code_span wraps in exactly two backticks (open/close), none from value
-        span = cd._code_span("a`b`c")
-        assert span.count("`") == 2
-
-    def test_render_neutralizes_injection_in_recipe_value(self):
-        """F5: a crafted selectors value cannot break out of its code span.
-        Every code span is a backtick PAIR, so a leaked value-backtick would
-        make the total count odd. Balanced count == no break-out."""
-        evil = {"label": "v\"</details><script>alert(1)</script>`backtick`"}
-        diff = {"t": [{
-            "name": "evil_recipe", "change": "modified",
-            "old": self._recipe("evil_recipe"),
-            "new": self._recipe("evil_recipe", selectors=evil),
-            "field_changes": [{"field": "selectors", "old": None, "new": evil}],
-        }]}
-        md = cd.render_markdown({}, "o", "n", custom_alert_diffs=diff)
-        assert md.count("`") % 2 == 0, "unbalanced backticks → code-span break-out"
-        # The value's own backticks are neutralized to single-quotes
-        assert "`backtick`" not in md
-
-    def test_render_markdown_truncates_oversized_output(self):
-        """Reef 2: never exceed GitHub's comment limit — truncate instead of
-        letting the bot 422 and post nothing on a high-risk PR."""
-        # ~2000 tenants each with a recipe → far over the limit
-        big = {
-            f"tenant-{i:05d}": [{
-                "name": f"recipe_{i}", "change": "added",
-                "old": None, "new": self._recipe(f"recipe_{i}"), "field_changes": [],
-            }]
-            for i in range(2000)
-        }
-        md = cd.render_markdown({}, "o", "n", custom_alert_diffs=big)
-        assert len(md) <= cd.COMMENT_SAFETY_LIMIT
-        assert len(md) < cd.GITHUB_COMMENT_HARD_LIMIT
-        assert "truncated" in md
-
-    def test_newline_in_value_does_not_shatter_markdown(self):
-        """Reef 4: a raw newline in a value breaks the code span / list item."""
+        assert cd._code_span("a`b`c").count("`") == 2
         assert "\n" not in cd._format_recipe_value("line1\nline2")
         assert "\n" not in cd._format_recipe_value("a\r\nb")
-        diff = {"t": [{
-            "name": "x", "change": "modified",
-            "old": self._recipe("x"),
-            "new": self._recipe("x", selectors={"k": "a\nb\nc"}),
-            "field_changes": [{"field": "selectors", "old": None, "new": {"k": "a\nb\nc"}}],
-        }]}
-        md = cd.render_markdown({}, "o", "n", custom_alert_diffs=diff)
-        # No bullet line should be split by an injected newline from the value
+
+    def test_render_neutralizes_injection_in_recipe_value(self):
+        evil = {"label": "v\"</details><script>alert(1)</script>`backtick`"}
+        md = cd.render_markdown(_report(custom_alert=_ca_modified("selectors", None, evil)))
+        assert md.count("`") % 2 == 0, "unbalanced backticks → code-span break-out"
+        assert "`backtick`" not in md
         for line in md.splitlines():
-            assert line.count("`") % 2 == 0, f"unbalanced code span: {line!r}"
+            assert line.count("`") % 2 == 0, line
 
-    def test_string_typed_custom_alerts_does_not_crash(self):
-        """Reef 5: mistyped `_custom_alerts: 'oops'` must not iterate chars and
-        AttributeError → CI bot crash. Strict isinstance(list) guard skips it."""
-        with tempfile.TemporaryDirectory() as d:
-            with open(os.path.join(d, "t.yaml"), "w", encoding="utf-8") as f:
-                yaml.dump({"tenants": {"t": {"_custom_alerts": "to be added"}}}, f)
-            assert cd.load_custom_alerts_from_dir(d) == {}  # no crash, no recipes
+    def test_removed_recipe_carries_the_served_note(self):
+        """#1517：served row 消失時分不出刪除、disable、被拒收：報告要說出這點，而不是判定消音。"""
+        removed = {"t": [{"name": "pager", "change": "removed", "old": {"metric": "m", "threshold": "1:critical"},
+                          "new": None, "field_changes": [], "note": cd.SERVED_REMOVED_NOTE}]}
+        lines = cd.render_markdown(_report(custom_alert=removed)).splitlines()
+        section = lines.index("## Custom Alert Changes")
+        limits = next(i for i, ln in enumerate(lines) if "Read from the rows the exporter serves" in ln)
+        item = next(i for i, ln in enumerate(lines) if ln.startswith("- `pager` (removed)"))
+        assert section < limits < item
+        assert lines[item + 1] == f"  - {cd.SERVED_REMOVED_NOTE}"
+        for claim in ("an `op` / `window` / `for` change shows as a `recipe_id` change",
+                      "which of them is not told apart here"):
+            assert claim in lines[limits], (claim, lines[limits])
+        assert lines[limits].startswith("> ") and lines[limits - 1] == ">"
 
-    def test_dict_typed_custom_alerts_does_not_crash(self):
-        with tempfile.TemporaryDirectory() as d:
-            with open(os.path.join(d, "t.yaml"), "w", encoding="utf-8") as f:
-                yaml.dump({"tenants": {"t": {"_custom_alerts": {"recipe": "x"}}}}, f)
-            assert cd.load_custom_alerts_from_dir(d) == {}
-
-    def test_none_to_empty_list_is_equivalent_no_diff(self):
-        """Reef 6: missing key ≡ empty list → no phantom change."""
-        with tempfile.TemporaryDirectory() as od, tempfile.TemporaryDirectory() as nd:
-            with open(os.path.join(od, "t.yaml"), "w", encoding="utf-8") as f:
-                yaml.dump({"tenants": {"t": {"mysql_connections": "1"}}}, f)  # no key
-            with open(os.path.join(nd, "t.yaml"), "w", encoding="utf-8") as f:
-                yaml.dump({"tenants": {"t": {"mysql_connections": "1",
-                                             "_custom_alerts": []}}}, f)  # empty
-            diff = cd.compute_custom_alert_diff(
-                cd.load_custom_alerts_from_dir(od),
-                cd.load_custom_alerts_from_dir(nd),
-            )
-            assert diff == {}
-
-    def test_json_output_includes_custom_alert_diffs(self):
-        with tempfile.TemporaryDirectory() as old_dir, \
-             tempfile.TemporaryDirectory() as new_dir:
-            self._write(old_dir, "db-b", [])
-            self._write(new_dir, "db-b", [self._recipe("x")])
-            ca = cd.compute_custom_alert_diff(
-                cd.load_custom_alerts_from_dir(old_dir),
-                cd.load_custom_alerts_from_dir(new_dir),
-            )
-            output = {"metric_diffs": {}, "profile_diffs": [], "custom_alert_diffs": ca}
-            parsed = json.loads(json.dumps(output, default=str))
-            assert "custom_alert_diffs" in parsed
-            assert parsed["custom_alert_diffs"]["db-b"][0]["change"] == "added"
+    def test_render_markdown_truncates_oversized_output(self):
+        """Reef 2: never exceed GitHub's comment limit."""
+        big = {f"tenant-{i:05d}": [{"name": f"recipe_{i}", "change": "added", "old": None,
+                                     "new": {"metric": "m", "threshold": "1:warning", "mode": "page"},
+                                     "field_changes": []}] for i in range(2000)}
+        md = cd.render_markdown(_report(custom_alert=big))
+        assert len(md) <= cd.COMMENT_SAFETY_LIMIT < cd.GITHUB_COMMENT_HARD_LIMIT
+        assert "truncated" in md
 
 
-@pytest.mark.usefixtures("da_guard_env")
-class TestProfileDiffEndToEnd:
-    """End-to-end profile diff with directories. A changed profile asks
-    da-guard which tenants name it (#2115), so da-guard is required."""
-
-    def test_profile_modified_with_key_diffs(self):
-        """Modified profile should include key_diffs in result."""
-        with tempfile.TemporaryDirectory() as old_dir, \
-             tempfile.TemporaryDirectory() as new_dir:
-            # Old profile
-            with open(os.path.join(old_dir, "_profiles.yaml"), "w", encoding="utf-8") as f:
-                yaml.dump({"profiles": {"standard": {
-                    "mysql_connections": 80, "redis_memory": 1024
-                }}}, f)
-            # New profile — tighter mysql
-            with open(os.path.join(new_dir, "_profiles.yaml"), "w", encoding="utf-8") as f:
-                yaml.dump({"profiles": {"standard": {
-                    "mysql_connections": 50, "redis_memory": 1024
-                }}}, f)
-            # Tenant referencing profile
-            for d in (old_dir, new_dir):
-                with open(os.path.join(d, "db-a.yaml"), "w", encoding="utf-8") as f:
-                    yaml.dump({"tenants": {"db-a": {"_profile": "standard"}}}, f)
-
-            results = cd.compute_profile_diff(old_dir, new_dir)
-            assert len(results) == 1
-            assert results[0]["profile"] == "standard"
-            assert results[0]["change"] == "modified"
-            assert len(results[0]["key_diffs"]) == 1
-            assert results[0]["key_diffs"][0]["key"] == "mysql_connections"
-            assert results[0]["key_diffs"][0]["change"] == "tighter"
-
-    def test_profile_added_with_key_diffs(self):
-        """Added profile should list all keys as added."""
-        with tempfile.TemporaryDirectory() as old_dir, \
-             tempfile.TemporaryDirectory() as new_dir:
-            # No profile in old
-            with open(os.path.join(old_dir, "_profiles.yaml"), "w", encoding="utf-8") as f:
-                yaml.dump({"profiles": {}}, f)
-            # New profile
-            with open(os.path.join(new_dir, "_profiles.yaml"), "w", encoding="utf-8") as f:
-                yaml.dump({"profiles": {"new-profile": {
-                    "mysql_connections": 80
-                }}}, f)
-
-            results = cd.compute_profile_diff(old_dir, new_dir)
-            assert len(results) == 1
-            assert results[0]["change"] == "added"
-            assert len(results[0]["key_diffs"]) == 1
-            assert results[0]["key_diffs"][0]["change"] == "added"
-
-    def test_da_guard_failure_exits_2_with_its_reason(self, tmp_path):
-        """#2115 F1：讀 profile 綁定時 da-guard 失敗（這裡是 `--new-dir` 的根
-        `_defaults.yaml` 帶 `_profile: std`，exporter 整份丟掉、effective rc 3）——
-        rc 2，stderr 除了 ERROR 行，還要有 da-guard 自己的原因行（`print_load_error`
-        轉印）。只靠泛用 `except Exception` 時 rc 也是 2，但原因行會消失。"""
-        old_dir, new_dir = tmp_path / "old", tmp_path / "new"
-        for d, cpu in ((old_dir, 60), (new_dir, 50)):
-            d.mkdir()
-            (d / "_profiles.yaml").write_text(
-                f"profiles:\n  std:\n    mysql_connections: {cpu}\n", encoding="utf-8")
-            (d / "tx.yaml").write_text("tenants:\n  tx:\n    _profile: std\n",
-                                         encoding="utf-8")
-        (new_dir / "_defaults.yaml").write_text(
-            "defaults:\n  mysql_connections: 80\n  _profile: std\n", encoding="utf-8")
-        p = _run_cli(old_dir, new_dir)
-        assert p.returncode == 2, (p.returncode, p.stdout, p.stderr)
-        assert "reading the --new-dir profile bindings through da-guard failed" in p.stderr, p.stderr
-        reason = [l for l in p.stderr.splitlines()
-                  if l.lstrip().startswith("da-guard| ") and "skip unparseable" in l]
-        assert reason and "_defaults.yaml" in reason[0], p.stderr
-
-    def test_json_output_includes_key_diffs(self):
-        """JSON output should include key_diffs in profile_diffs."""
-        with tempfile.TemporaryDirectory() as old_dir, \
-             tempfile.TemporaryDirectory() as new_dir:
-            with open(os.path.join(old_dir, "_profiles.yaml"), "w", encoding="utf-8") as f:
-                yaml.dump({"profiles": {"s": {"x": 80}}}, f)
-            with open(os.path.join(new_dir, "_profiles.yaml"), "w", encoding="utf-8") as f:
-                yaml.dump({"profiles": {"s": {"x": 50}}}, f)
-
-            profile_diffs = cd.compute_profile_diff(old_dir, new_dir)
-            output = {"metric_diffs": {}, "profile_diffs": profile_diffs}
-            j = json.dumps(output, default=str)
-            parsed = json.loads(j)
-            assert "key_diffs" in parsed["profile_diffs"][0]
+# ── 3. 報告排版（合成 report） ───────────────────────────────────────
 
 
-# ── Tenant `_` settings (decision H1b) ──────────────────────────────
+class TestRenderMarkdown:
 
-def _write_settings(directory, tenant_cfg):
-    path = Path(directory) / "db-a.yaml"
-    path.write_text(yaml.safe_dump({"tenants": {"db-a": tenant_cfg}}),
-                    encoding="utf-8", newline="\n")
+    def test_no_changes(self):
+        md = cd.render_markdown(_report())
+        assert md.splitlines()[-1] == "No changes detected."
+        assert f"Rendered at: `{AT}`" in md
+
+    def test_threshold_table_and_summary(self):
+        md = cd.render_markdown(_report(metric={
+            "db-a": [{"key": "mysql_connections", "old": 80, "new": 50, "change": "tighter"}]}))
+        assert "## db-a — 1 change(s) (1 tighter)" in md
+        assert "| mysql_connections | 80 | 50 | tighter |" in md
+        assert md.splitlines()[-1].startswith("Summary: 1 tenant(s) changed, 1 metric change(s)")
+
+    def test_summary_counts_each_tenant_once_across_sections(self):
+        """CodeRabbit #773：只有 custom alert 或路由變更的租戶也要算進 tenant(s) changed，且同一租戶只算一次。"""
+        added = [{"name": "x", "change": "added", "old": None, "new": {}, "field_changes": []}]
+        route = rd.RouteChange("db-c", ('tenant="db-c"',), "changed", {"group_wait": ("30s", "1m")})
+        platform = rd.RouteChange(rd.PLATFORM, ('severity="critical"',), "added", {"receiver": (None, "noc")})
+        md = cd.render_markdown(_report(
+            metric={"db-b": [{"key": "m", "old": 80, "new": 50, "change": "tighter"}]},
+            custom_alert={"db-b": added}, routes=[route, platform]))
+        summary = md.splitlines()[-1]
+        assert summary.startswith("Summary: 2 tenant(s) changed"), summary
+        assert "2 routing change(s) (some platform-wide)" in summary
+
+    def test_routing_section(self):
+        routes = [rd.RouteChange("db-a", ('tenant="db-a"',), "changed", {"group_wait": ("30s", "99s")}),
+                  rd.RouteChange(rd.PLATFORM, ('severity="critical"',), "added", {"receiver": (None, "noc")})]
+        recv = [rd.ReceiverChange("tenant-db-a", ("db-a",), "changed",
+                                  {"webhook_configs.0.url": (rd.MASKED, rd.MASKED)})]
+        inhibit = [rd.InhibitChange("db-a", "added", {"source_matchers": ['tenant="db-a"']})]
+        md = cd.render_markdown(_report(routes=routes, receivers=recv, inhibits=inhibit))
+        assert "- tenant `db-a` — route `tenant=\"db-a\"` (changed)\n  - `group_wait`: `30s` → `99s`" in md
+        assert "- platform — route `severity=\"critical\"` (added)" in md
+        assert (f"- `tenant-db-a` (changed) — tenant `db-a`\n"
+                f"  - `webhook_configs.0.url`: `{rd.MASKED}` → `{rd.MASKED}`") in md
+        assert "### Inhibit Rules\n\n- tenant `db-a` (added): " in md
+
+    @pytest.mark.parametrize("status, mark", [("not_computed", ":x:"), ("not_compared", ":warning:")])
+    def test_a_view_without_a_result_is_never_no_changes(self, status, mark):
+        """沒有結果不是沒有變更（ADR-037 決定 4）：報告要寫出原因，最後一行不得是 No changes detected。"""
+        views = {rd.VIEW_SERVED: rd.ViewResult(status, "PR side: x.yaml does not decode"),
+                 rd.VIEW_ROUTES: _OK}
+        md = cd.render_markdown(_report(views=views))
+        assert f"- {mark} **{cd.VIEW_TITLES[rd.VIEW_SERVED]}: {status.replace('_', ' ')}.**" in md
+        assert "`PR side: x.yaml does not decode`" in md
+        assert "No changes detected." not in md
+
+    def test_uncovered_file_name_cannot_break_out_of_its_code_span(self):
+        """檔名來自 PR 的樹：反引號不得關掉 code span，控制字元不得原樣印出。"""
+        md = cd.render_markdown(_report(uncovered_files=["_x`y\x1b[2J.yaml"]))
+        assert "\x1b" not in md
+        assert "- `_x'y\\x1b[2J.yaml`" in md
+
+    def test_long_uncovered_list_is_capped_in_markdown(self):
+        n = cd.UNCOVERED_LIST_LIMIT + 3
+        files = [f"_f{i:03d}.yaml" for i in range(n)]
+        md = cd.render_markdown(_report(uncovered_files=files))
+        assert "- ... (+3 more)" in md
+        assert sum(line.startswith("- `_f") for line in md.splitlines()) == cd.UNCOVERED_LIST_LIMIT
+        assert f"**{n} `_`-prefixed file(s) changed.**" in md
+
+    def test_uncovered_only_report_is_capped_for_a_comment(self):
+        names = [f"{i:02d}/_" + "c" * 2000 + ".yaml" for i in range(cd.UNCOVERED_LIST_LIMIT)]
+        md = cd.render_markdown(_report(uncovered_files=names))
+        assert len(md) <= cd.COMMENT_SAFETY_LIMIT
+        assert "truncated to fit GitHub's comment limit" in md
+
+
+class TestBuildReport:
+    """build_report 把 RenderDiff 拆成區段；served 的每一筆變更都要落在某個區段裡。"""
+
+    def _diff(self, *changes, report=None):
+        served = rd.ViewResult("computed", "", tuple(changes), report or {})
+        return rd.RenderDiff(AT, served, _OK)
+
+    def test_tenants_added_removed_and_dropped_keys(self, tmp_path):
+        diff = self._diff(rd.ValueChange("n", "tenant", "n", None, True),
+                          rd.ValueChange("g", "tenant", "g", True, None),
+                          rd.ValueChange("t", "dropped", "bad_key", None, ["not a number"]))
+        r = cd.build_report(diff, tmp_path, tmp_path)
+        assert (r["tenants_added"], r["tenants_removed"]) == (["n"], ["g"])
+        assert r["dropped"] == {"t": [{"key": "bad_key", "old": None, "new": ["not a number"],
+                                       "change": "added"}]}
+        assert r["other_served"] == {}
+
+    def test_a_served_change_no_section_shows_is_still_printed(self, tmp_path):
+        """served-values 日後多一個欄位、或某個區段漏讀：exit code 會是 1，報告卻說沒有變更。
+        這種變更一律列在 Other Served Changes，不得無聲。"""
+        diff = self._diff(rd.ValueChange("t", "some_new_field", "k", 1, 2))
+        r = cd.build_report(diff, tmp_path, tmp_path)
+        assert r["other_served"] == {"t": [{"field": "some_new_field", "key": "k", "old": 1, "new": 2}]}
+        assert cd.report_exit_code(diff, r) == 1
+        md = cd.render_markdown(r)
+        assert "## Other Served Changes" in md and "No changes detected." not in md
+        # 租戶已在別的區段出現，也不能把它在新欄位的變更藏起來（CodeRabbit 指出的情況）
+        mixed = self._diff(rd.ValueChange("t", "values", "m", 1, 2),
+                           rd.ValueChange("t", "some_new_field", "k", 1, 2),
+                           report={"metric": {"t": [{"key": "m", "old": 1, "new": 2, "change": "looser"}]}})
+        assert cd.build_report(mixed, tmp_path, tmp_path)["other_served"] == {
+            "t": [{"field": "some_new_field", "key": "k", "old": 1, "new": 2}]}
+        # 對照：同一筆變更若有區段報了它的租戶，就不重複列
+        shown = self._diff(rd.ValueChange("t", "values", "m", 1, 2),
+                           report={"metric": {"t": [{"key": "m", "old": 1, "new": 2, "change": "looser"}]}})
+        assert cd.build_report(shown, tmp_path, tmp_path)["other_served"] == {}
+
+    def test_a_reason_cannot_write_terminal_escapes(self, tmp_path, capsys, monkeypatch):
+        """原因裡的檔名來自 PR 的樹：報告與 stderr 都不得原樣印出控制字元。"""
+        bad = rd.ViewResult("not_computed", "PR side: x\x1b[2J.yaml does not decode")
+        md = cd.render_markdown(_report(views={rd.VIEW_SERVED: bad, rd.VIEW_ROUTES: _OK}))
+        assert "\x1b" not in md and "x\\x1b[2J.yaml" in md
+        monkeypatch.setattr(cd.rd, "compare", lambda *a, **k: rd.RenderDiff(AT, bad, _OK))
+        monkeypatch.setattr(sys, "argv", ["config_diff.py", "--old-dir", str(tmp_path),
+                                          "--new-dir", str(tmp_path), "--at", AT])
+        with pytest.raises(SystemExit) as exc:
+            cd.main()
+        assert exc.value.code == 2
+        err = capsys.readouterr().err
+        assert "\x1b" not in err and "cannot compare configs" in err
+
+
+# ── 4. JSON：一筆變更一個項目，帶它影響的租戶 ─────────────────────────
+
+
+class TestJsonReport:
+
+    def test_one_entry_per_distinct_change_with_its_tenants(self):
+        """同一個平台變更影響多個租戶時是一筆，不是每個租戶一筆（#1516 拍板）。"""
+        same = {"key": "container_memory", "old": 85, "new": 999, "change": "looser"}
+        other = {"key": "container_memory", "old": 90, "new": 999, "change": "looser"}
+        routes = [rd.RouteChange(t, (f'tenant="{t}"',), "changed", {"group_wait": ("30s", "99s")})
+                  for t in ("es-prod", "db-a")]
+        recv = [rd.ReceiverChange(f"tenant-{t}", (t,), "changed", {"x.url": (rd.MASKED, rd.MASKED)})
+                for t in ("db-a", "es-prod")]
+        doc = cd.report_json(_report(metric={"db-a": [same], "es-prod": [same], "db-b": [other]},
+                                     routes=routes, receivers=recv), 1)
+        assert doc["threshold_changes"] == [dict(same, tenants=["db-a", "es-prod"]),
+                                            dict(other, tenants=["db-b"])]
+        assert doc["route_changes"] == [{
+            "change": "changed", "fields": {"group_wait": {"old": "30s", "new": "99s"}},
+            "tenants": ["db-a", "es-prod"], "paths": [['tenant="es-prod"'], ['tenant="db-a"']]}]
+        assert doc["receiver_changes"] == [{
+            "change": "changed", "fields": {"x.url": {"old": rd.MASKED, "new": rd.MASKED}},
+            "receivers": ["tenant-db-a", "tenant-es-prod"], "tenants": ["db-a", "es-prod"]}]
+
+    def test_top_level_carries_schema_at_views_and_exit_code(self):
+        views = {rd.VIEW_SERVED: _OK, rd.VIEW_ROUTES: rd.ViewResult("not_compared", "base side: r")}
+        doc = cd.report_json(_report(views=views), 1)
+        assert doc["schema"] == "da-tools.config-diff/v1"
+        assert (doc["at"], doc["exit_code"]) == (AT, 1)
+        assert doc["views"] == {"served": {"status": "computed", "reason": ""},
+                                "routes": {"status": "not_compared", "reason": "base side: r"}}
+
+
+# ── 5. CLI：結束碼、渲染失敗、ADR 驗收 ──────────────────────────────
+
+
+class TestCLI:
+
+    def test_flags(self):
+        args = cd.build_parser().parse_args(["--old-dir", "/a", "--new-dir", "/b", "--json-output"])
+        assert (args.old_dir, args.new_dir, args.json_output, args.at) == ("/a", "/b", True, None)
+        with pytest.raises(SystemExit):
+            cd.build_parser().parse_args([])
+
+    @pytest.mark.parametrize("at", ["2026-10-10", "2026-10-10 00:00:00Z", "2026-10-10T00:00:00", "now",
+                                    "2026-13-45T25:00:00Z"])
+    def test_at_that_is_not_rfc3339_is_a_caller_error(self, tmp_path, at):
+        _write_tenant(tmp_path, {"mysql_connections": "80"})
+        p = _run_cli(tmp_path, tmp_path, at=at)
+        assert p.returncode == 2 and "--at" in p.stderr, (p.returncode, p.stderr)
+        # Refused as an argument, before anything renders: no report at all.
+        assert p.stdout == "" and "is not RFC3339" in p.stderr, (p.stdout, p.stderr)
+
+    def test_at_is_printed_and_defaults_to_now(self, tmp_path):
+        _write_tenant(tmp_path, {"mysql_connections": "80"})
+        assert _json(_run_cli(tmp_path, tmp_path, "--format", "json"))["at"] == AT
+        p = _run_cli(tmp_path, tmp_path, "--format", "json", at=None)
+        assert p.returncode == 0, p.stderr
+        assert re.fullmatch(r"\d{4}-\d\d-\d\dT\d\d:\d\d:\d\dZ", _json(p)["at"])
+        assert cd._RFC3339.match(cd.now_at())
+
+    def test_at_is_one_instant_for_both_sides(self, tmp_path):
+        """--at 是兩側共用的時間點：同一份設定在靜音到期前後讀出不同的值，但兩側讀同一刻，
+        所以都沒有差異；對照組是真的改了到期時間。"""
+        silence = {"mysql_connections": "80",
+                   "_silent_mode": {"target": "all", "expires": "2026-10-10T12:00:00Z"}}
+        _write_tenant(tmp_path / "a", silence)
+        for at in ("2026-10-10T00:00:00Z", "2026-10-11T00:00:00Z"):
+            assert _run_cli(tmp_path / "a", tmp_path / "a", at=at).returncode == 0, at
+        _write_tenant(tmp_path / "b", {**silence, "_silent_mode": {"target": "all",
+                                                                   "expires": "2026-10-10T13:00:00Z"}})
+        assert _run_cli(tmp_path / "a", tmp_path / "b").returncode == 1
+
+    def test_exit_0_no_changes(self, tmp_path):
+        _write_tenant(tmp_path, {"mysql_connections": "80"})
+        p = _run_cli(tmp_path, tmp_path)
+        assert p.returncode == 0, p.stderr
+        assert p.stdout.rstrip().endswith("No changes detected.")
+
+    def test_exit_1_changes_detected(self, tmp_path):
+        _write_tenant(tmp_path / "old", {"mysql_connections": "80"})
+        _write_tenant(tmp_path / "new", {"mysql_connections": "50"})
+        p = _run_cli(tmp_path / "old", tmp_path / "new")
+        assert p.returncode == 1, p.stderr
+        assert "| mysql_connections | 80 | 50 | tighter |" in p.stdout
+
+    def test_old_dir_missing_is_a_first_import(self, tmp_path):
+        """base 側沒有 conf.d（第一次匯入）：所有租戶算新增，rc 1，不是呼叫錯誤（ADR-037 決定 4）。"""
+        _write_tenant(tmp_path / "new", {"mysql_connections": "80"})
+        p = _run_cli(tmp_path / "nope", tmp_path / "new", "--format", "json")
+        assert p.returncode == 1, p.stderr
+        assert _json(p)["tenants_added"] == ["db-a"]
+
+    @pytest.mark.parametrize("side", ["old", "new"])
+    def test_a_file_given_as_a_directory_is_a_caller_error(self, tmp_path, side):
+        _write_tenant(tmp_path / "d", {"mysql_connections": "80"})
+        f = tmp_path / "file.yaml"
+        f.write_text("a: 1\n", encoding="utf-8")
+        dirs = {"old": tmp_path / "d", "new": tmp_path / "d", side: f}
+        p = _run_cli(dirs["old"], dirs["new"])
+        assert p.returncode == 2 and f"--{side}-dir is not a directory" in p.stderr, p.stderr
+
+    def test_new_dir_missing_is_not_computed(self, tmp_path):
+        _write_tenant(tmp_path / "old", {"mysql_connections": "80"})
+        p = _run_cli(tmp_path / "old", tmp_path / "nope")
+        assert p.returncode == 2
+        assert "not computed" in p.stdout and "has no config file" in p.stderr
+
+    @pytest.mark.parametrize("label, write", [
+        ("malformed_yaml", lambda f: f.write_text("tenants:\n  db-a: [unclosed\n   x: :\n", encoding="utf-8")),
+        ("non_utf8", lambda f: f.write_bytes(b"tenants:\n  db-a:\n    note: caf\xe9\n")),
+        ("scalar", lambda f: f.write_text("just a string\n", encoding="utf-8")),
+        ("tenants_list", lambda f: f.write_text("tenants:\n  - db-a\n", encoding="utf-8")),
+        ("directory", lambda f: f.mkdir()),
+    ])
+    def test_pr_side_file_that_does_not_read_is_rc_2_and_named(self, tmp_path, label, write):
+        """#1405：PR 側的檔讀不出租戶，不得讀成「閾值被移除」（rc 1）：rc 2，並具名列出那個檔。"""
+        for side in ("old", "new"):
+            _write_tenant(tmp_path / side, {"mysql_connections": "80"}, name="db-b")
+        _write_tenant(tmp_path / "old", {"mysql_connections": "80"})
+        new = tmp_path / "new"
+        write(new / "db-a.yaml")
+        p = _run_cli(tmp_path / "old", new)
+        assert p.returncode == 2, (label, p.returncode, p.stdout[-300:], p.stderr[-300:])
+        assert "db-a.yaml" in p.stderr, (label, p.stderr)
+        assert "not computed" in p.stdout, (label, p.stdout)
+        # The exporter skips a directory without a word, so its view of the
+        # tree computes (db-a is gone from it); every other shape stops both
+        # renderers, and nothing may then read as "removed" (ADR-037 decision 4:
+        # the view that fails says so, the others compare as usual).
+        if label != "directory":
+            assert "removed" not in p.stdout, (label, p.stdout)
+
+    @pytest.mark.parametrize("text", ["", "# nothing here\n"], ids=["empty", "comment-only"])
+    def test_an_empty_tenant_file_is_legal_and_reads_as_removed(self, tmp_path, text):
+        """#1405 的對照組：空檔與只有註解的檔是合法的，租戶的閾值確實沒了。"""
+        _write_tenant(tmp_path / "old", {"mysql_connections": "80"})
+        (tmp_path / "new").mkdir()
+        (tmp_path / "new" / "db-a.yaml").write_text(text, encoding="utf-8")
+        p = _run_cli(tmp_path / "old", tmp_path / "new", "--format", "json")
+        assert p.returncode == 1, p.stderr
+        assert _json(p)["tenants_removed"] == ["db-a"]
+
+    @pytest.mark.parametrize("side", ["old", "new"])
+    def test_threshold_table_cell_cannot_break_out(self, tmp_path, side):
+        """表格欄位的值來自 PR 的檔案：`|` 會結束欄位、換行會結束表格，後面的字就成了
+        PR 留言裡自己的 Markdown（標題、連結）。exporter 不送出、照原文列出的值也一樣。"""
+        evil = "70\n\n## Approved | [x](https://e.example)\n"
+        _write_tenant(tmp_path / "old", {"mysql_connections": evil if side == "old" else "70"})
+        _write_tenant(tmp_path / "new", {"mysql_connections": evil if side == "new" else "70"})
+        p = _run_cli(tmp_path / "old", tmp_path / "new")
+        assert p.returncode == 1, p.stderr
+        assert not any(ln.startswith("## Approved") for ln in p.stdout.splitlines()), p.stdout
+        row = next(ln for ln in p.stdout.splitlines() if ln.startswith("| mysql_connections |"))
+        assert "\\|" in row and row.count(" | ") == 4, row
+
+    def test_da_guards_own_reason_reaches_the_report(self, tmp_path):
+        """da-guard 回 2（同一租戶宣告兩次）時，報告要帶它自己說的原因，不是只有「exited 2」。"""
+        _write_tenant(tmp_path / "old", {"mysql_connections": "80"})
+        _write_tenant(tmp_path / "new", {"mysql_connections": "80"})
+        (tmp_path / "new" / "db-a-copy.yaml").write_text(
+            "tenants:\n  db-a:\n    mysql_connections: '90'\n", encoding="utf-8")
+        p = _run_cli(tmp_path / "old", tmp_path / "new")
+        assert p.returncode == 2, p.stderr
+        line = next(ln for ln in p.stderr.splitlines() if "Exporter values" in ln)
+        assert "duplicate" in line and "db-a" in line, line
+
+    def test_base_side_that_does_not_read_is_not_compared_and_does_not_block(self, tmp_path):
+        """main 上已經壞了、這個 PR 修好它：rc 1，報告寫出原因，不擋 PR。"""
+        old, new = tmp_path / "old", tmp_path / "new"
+        _write_tenant(old, {"mysql_connections": "80"})
+        (old / "zz.yaml").write_text("tenants:\n  - x\n", encoding="utf-8")
+        _write_tenant(new, {"mysql_connections": "80"})
+        p = _run_cli(old, new)
+        assert p.returncode == 1, (p.stdout, p.stderr)
+        assert "not compared" in p.stdout and "zz.yaml" in p.stderr
+        for text in (p.stdout, p.stderr):
+            assert text.count("does not render") <= 2 and "does not render: base side does not render" \
+                not in text and "base side does not render: `base side" not in text, text
+
+    def test_an_unexpected_crash_is_rc_2_not_1(self, tmp_path, monkeypatch, capsys):
+        """未預期的例外 exit 1 會被讀成「有變更」：一律 rc 2，並寫出兩側目錄與例外型別。"""
+        def boom(*a, **k):
+            raise RuntimeError("boom")
+        monkeypatch.setattr(cd.rd, "compare", boom)
+        monkeypatch.setattr(sys, "argv", ["config_diff.py", "--old-dir", str(tmp_path / "o"),
+                                          "--new-dir", str(tmp_path / "n")])
+        with pytest.raises(SystemExit) as exc:
+            cd.main()
+        assert exc.value.code == cd.EXIT_CALLER_ERROR
+        err = capsys.readouterr().err
+        assert "RuntimeError: boom" in err and str(tmp_path / "o") in err and str(tmp_path / "n") in err
+
+
+class TestAcceptance:
+    """ADR-037 與 #1516 P2c 的驗收，在出貨的範例 conf.d 上跑。"""
+
+    def test_comment_only_change_is_rc_0(self, tmp_path):
+        old, new = _sample_pair(tmp_path)
+        _edit(new, '    mysql_connections: "70"', '    mysql_connections: "70"  # reviewed', rel="db-a.yaml")
+        p = _run_cli(old, new)
+        assert p.returncode == 0, (p.stdout, p.stderr)
+        # 對照：同一個檔真的改值時要響
+        _edit(new, '"70"  # reviewed', '"71"', rel="db-a.yaml")
+        assert _run_cli(old, new).returncode == 1
+
+    def test_adr_example_group_wait(self, tmp_path):
+        old, new = _sample_pair(tmp_path)
+        _edit(new, 'group_wait: "30s"', 'group_wait: "99s"')
+        doc = _json(_run_cli(old, new, "--format", "json"))
+        assert doc["exit_code"] == 1
+        assert doc["route_changes"] == [{
+            "change": "changed", "fields": {"group_wait": {"old": "30s", "new": "99s"}},
+            "tenants": ["db-a", "es-prod"], "paths": [['tenant="db-a"'], ['tenant="es-prod"']]}]
+        assert doc["threshold_changes"] == [] and doc["uncovered_files"] == ["_defaults.yaml"]
+
+    def test_adr_example_container_memory(self, tmp_path):
+        old, new = _sample_pair(tmp_path)
+        _edit(new, "container_memory: 85", "container_memory: 999")
+        doc = _json(_run_cli(old, new, "--format", "json"))
+        assert doc["threshold_changes"] == [{
+            "key": "container_memory", "old": 85, "new": 999, "change": "looser",
+            "tenants": ["db-a", "es-prod", "mongo-prod", "redis-prod"]}]
+        assert doc["route_changes"] == []
+
+    def test_platform_receiver_change_reaches_the_inheriting_tenants(self, tmp_path):
+        """#1516 的原始症狀：平台預設的 receiver 改了，沒有自己 `_routing` 的租戶要出現在報告裡。"""
+        old, new = _sample_pair(tmp_path)
+        _edit(new, 'to: ["dba-oncall@example.com"]', 'to: ["noc@example.com"]')
+        doc = _json(_run_cli(old, new, "--format", "json"))
+        assert doc["exit_code"] == 1
+        tenants = {t for c in doc["receiver_changes"] for t in c["tenants"]}
+        assert tenants == {"db-a", "es-prod"}, doc["receiver_changes"]
+
+    def test_platform_file_profile_binding_is_reported_for_its_tenant(self, tmp_path):
+        """#2120：根目錄 `_platform.yaml` 裡改了租戶的 `_profile`，生效門檻變了的租戶要報出來。"""
+        profiles = "profiles:\n  std:\n    mysql_connections: 70\n  strict:\n    mysql_connections: 40\n"
+        tenants = {"tx.yaml": "tenants:\n  tx:\n    container_cpu: '80'\n",
+                   "ty.yaml": "tenants:\n  ty:\n    container_cpu: '80'\n",
+                   "_defaults.yaml": "defaults:\n  mysql_connections: 80\n  container_cpu: 80\n"}
+        old, new = _pair(tmp_path,
+                         {**tenants, "_profiles.yaml": profiles,
+                          "_platform.yaml": "tenants:\n  tx:\n    _profile: std\n"},
+                         {**tenants, "_profiles.yaml": profiles,
+                          "_platform.yaml": "tenants:\n  tx:\n    _profile: strict\n"})
+        p = _run_cli(old, new, "--format", "json")
+        assert p.returncode == 1, p.stderr
+        doc = _json(p)
+        assert doc["threshold_changes"] == [{"key": "mysql_connections", "old": 70, "new": 40,
+                                             "change": "tighter", "tenants": ["tx"]}]
+        assert doc["uncovered_files"] == ["_platform.yaml"]
+
+
+# ── 6. 設定與憑證（經 CLI） ──────────────────────────────────────────
 
 
 class TestTenantSettingChanges:
-    """`_` 開頭的租戶設定改了，要報出來、rc=1。
-
-    ⛔ 過去 flatten_tenant_config 丟掉所有 `_` key，而沒有別處報它們：拿掉
-    `_state_maintenance`（該租戶告警全部恢復）得到 "No changes detected"、rc=0。
-    """
+    """`_` 開頭的租戶設定改了，要報出來、rc=1（以 exporter 讀到的值比）。"""
 
     BASE = {
         "mysql_connections": "80",
         "_silent_mode": "warning",
         "_state_container_crashloop": "disable",
-        "_severity_dedup": "enable",
-        "_routing": {"receiver": {"type": "webhook", "url": "https://a.example"},
-                     "group_wait": "30s"},
-        "_profile": "standard-db",
-        "_metadata": {"db_type": "mariadb"},
+        "_severity_dedup": "disable",
+        "_metadata": {"db_type": "mariadb", "owner": "team-a"},
         "_namespaces": ["ns1"],
-        "_state_maintenance": {"target": "all", "expires": "2099-01-01T00:00:00Z"},
+        # A route of its own: with `_severity_dedup: disable` and no route the
+        # generator renders nothing and refuses the tree (exit 1).
+        "_routing": {"receiver": {"type": "webhook", "url": "https://hooks.example/a"}},
     }
 
-    @pytest.mark.parametrize("key", [
-        "_silent_mode", "_state_container_crashloop", "_severity_dedup",
-        "_routing", "_profile", "_metadata", "_namespaces", "_state_maintenance",
-    ])
-    def test_removing_any_setting_is_reported(self, tmp_path, key):
-        old, new = tmp_path / "old", tmp_path / "new"
-        old.mkdir(), new.mkdir()
-        _write_settings(old, self.BASE)
-        _write_settings(new, {k: v for k, v in self.BASE.items() if k != key})
-        p = _run_cli(old, new)
+    @pytest.mark.parametrize("key", [k for k in BASE if k.startswith("_") and k != "_routing"])
+    def test_removing_a_setting_is_reported(self, tmp_path, key):
+        _write_tenant(tmp_path / "old", self.BASE)
+        _write_tenant(tmp_path / "new", {k: v for k, v in self.BASE.items() if k != key})
+        p = _run_cli(tmp_path / "old", tmp_path / "new")
         assert p.returncode == 1, p.stdout + p.stderr
-        assert "No changes detected" not in p.stdout
-        assert f"- `{key}` (removed)" in p.stdout
-
-    def test_a_key_not_known_today_is_reported_too(self, tmp_path):
-        """讀的是所有 `_` key，不是一份已知清單：日後新增的保留 key 也看得到。"""
-        old, new = tmp_path / "old", tmp_path / "new"
-        old.mkdir(), new.mkdir()
-        _write_settings(old, self.BASE)
-        _write_settings(new, {**self.BASE, "_future_key": "on"})
-        p = _run_cli(old, new)
-        assert p.returncode == 1
-        assert "- `_future_key` (added) — `on`" in p.stdout
-
-    def test_nested_change_names_the_leaf(self, tmp_path):
-        old, new = tmp_path / "old", tmp_path / "new"
-        old.mkdir(), new.mkdir()
-        _write_settings(old, self.BASE)
-        changed = {**self.BASE, "_routing": {
-            "receiver": {"type": "webhook", "url": "https://a.example"},
-            "group_wait": "1m"}}
-        _write_settings(new, changed)
-        p = _run_cli(old, new)
-        assert "- `_routing.group_wait`: `30s` → `1m`" in p.stdout
-        assert "receiver" not in p.stdout
-
-
-    def test_custom_alerts_stay_in_their_own_section(self):
-        diff = cd.compute_setting_diff(
-            {"t": {"_custom_alerts": []}},
-            {"t": {"_custom_alerts": [{"name": "x"}]}})
-        # load_settings_from_dir drops it; the diff itself is generic.
-        assert diff
-        with tempfile.TemporaryDirectory() as d:
-            _write_settings(d, {"_custom_alerts": [{"name": "x"}],
-                                "_silent_mode": "all"})
-            assert cd.load_settings_from_dir(d) == {"db-a": {"_silent_mode": "all"}}
+        assert "## Tenant Setting Changes" in p.stdout
+        assert re.search(rf"^- `{re.escape(key)}[.`]", p.stdout, re.M), p.stdout
 
     def test_unchanged_settings_are_not_reported(self, tmp_path):
-        _write_settings(tmp_path, self.BASE)
+        _write_tenant(tmp_path, self.BASE)
         p = _run_cli(tmp_path, tmp_path)
         assert p.returncode == 0
         assert "Tenant Setting Changes" not in p.stdout
 
-    def test_json_carries_setting_diffs(self, tmp_path):
-        old, new = tmp_path / "old", tmp_path / "new"
-        old.mkdir(), new.mkdir()
-        _write_settings(old, self.BASE)
-        _write_settings(new, {**self.BASE, "_silent_mode": "all"})
-        p = _run_cli(old, new, "--format", "json")
-        assert p.returncode == 1
-        doc = json.loads(p.stdout)
-        assert doc["setting_diffs"] == {"db-a": [{
-            "key": "_silent_mode", "old": "warning", "new": "all",
-            "change": "modified"}]}
+    def test_json_carries_setting_changes(self, tmp_path):
+        _write_tenant(tmp_path / "old", self.BASE)
+        _write_tenant(tmp_path / "new", {**self.BASE, "_metadata": {"db_type": "mariadb", "owner": "team-b"}})
+        doc = _json(_run_cli(tmp_path / "old", tmp_path / "new", "--format", "json"))
+        assert doc["setting_changes"] == [{"key": "_metadata.owner", "old": "team-a", "new": "team-b",
+                                           "change": "modified", "tenants": ["db-a"]}]
 
     def test_a_backtick_in_a_value_cannot_break_the_code_span(self, tmp_path):
         """值來自 PR 的檔案，屬不可信輸入（F5）。"""
-        old, new = tmp_path / "old", tmp_path / "new"
-        old.mkdir(), new.mkdir()
-        _write_settings(old, self.BASE)
-        _write_settings(new, {**self.BASE, "_profile": "x` **bold** `y"})
-        p = _run_cli(old, new)
-        line = next(ln for ln in p.stdout.splitlines() if ln.startswith("- `_profile`"))
+        _write_tenant(tmp_path / "old", self.BASE)
+        _write_tenant(tmp_path / "new", {**self.BASE, "_metadata": {"db_type": "mariadb",
+                                                                    "owner": "x` **bold** `y"}})
+        p = _run_cli(tmp_path / "old", tmp_path / "new")
+        line = next(ln for ln in p.stdout.splitlines() if ln.startswith("- `_metadata.owner`"))
         assert line.count("`") == 6, line
 
 
@@ -1012,51 +683,52 @@ _SECRET_NEW = "https://hooks.slack.com/services/T0/B0/newSECRETvalue"
 
 
 class TestCredentialsAreNotPrinted:
-    """receiver 的憑證欄位改了要報「有變」，但新舊值都不印。
+    """receiver 的憑證欄位改了要報「有變」，但新舊值都不印——報告會貼成 PR comment。"""
 
-    報告會貼成 PR comment：本文會寄給每個 watcher，改寫 git 歷史清掉檔案後
-    也還在；輪替外洩憑證的 PR 還會把舊值再印一次。
-    """
-
-    BASE = {"_routing": {"receiver": {"type": "slack", "api_url": _SECRET_OLD},
-                         "group_wait": "30s"}}
+    BASE = {"mysql_connections": "80",
+            "_routing": {"receiver": {"type": "slack", "api_url": _SECRET_OLD}, "group_wait": "30s"}}
 
     def _run(self, tmp_path, old_cfg, new_cfg, *extra):
-        old, new = tmp_path / "old", tmp_path / "new"
-        old.mkdir(), new.mkdir()
-        _write_settings(old, old_cfg)
-        _write_settings(new, new_cfg)
-        return _run_cli(old, new, *extra)
+        _write_tenant(tmp_path / "old", old_cfg)
+        _write_tenant(tmp_path / "new", new_cfg)
+        return _run_cli(tmp_path / "old", tmp_path / "new", *extra)
+
+    def _rotated(self):
+        return {**self.BASE, "_routing": {"receiver": {"type": "slack", "api_url": _SECRET_NEW},
+                                          "group_wait": "30s"}}
 
     def test_a_rotated_credential_is_reported_without_its_values(self, tmp_path):
-        rotated = {"_routing": {"receiver": {"type": "slack", "api_url": _SECRET_NEW},
-                                "group_wait": "30s"}}
-        p = self._run(tmp_path, self.BASE, rotated)
+        p = self._run(tmp_path, self.BASE, self._rotated())
         assert p.returncode == 1, p.stdout + p.stderr
-        assert "- `_routing.receiver.api_url`: `<redacted>` → `<redacted>`" \
-            in p.stdout
-        assert "SECRET" not in p.stdout
+        assert "- `_routing.receiver.api_url`: `<redacted>` → `<redacted>`" in p.stdout
+        assert "### Receivers" in p.stdout
+        assert "SECRET" not in p.stdout + p.stderr
 
     def test_json_redacts_too(self, tmp_path):
-        rotated = {"_routing": {"receiver": {"type": "slack", "api_url": _SECRET_NEW},
-                                "group_wait": "30s"}}
-        p = self._run(tmp_path, self.BASE, rotated, "--format", "json")
+        p = self._run(tmp_path, self.BASE, self._rotated(), "--format", "json")
+        assert p.returncode == 1
         assert "SECRET" not in p.stdout
-        assert json.loads(p.stdout)["setting_diffs"]["db-a"] == [{
-            "key": "_routing.receiver.api_url", "old": "<redacted>",
-            "new": "<redacted>", "change": "modified"}]
+        doc = _json(p)
+        assert {"key": "_routing.receiver.api_url", "old": "<redacted>", "new": "<redacted>",
+                "change": "modified", "tenants": ["db-a"]} in doc["setting_changes"]
+        assert doc["receiver_changes"], doc
 
     @pytest.mark.parametrize("direction", ["added", "removed"])
     def test_a_whole_routing_block_is_redacted_inside(self, tmp_path, direction):
-        without = {"_silent_mode": "all"}
-        with_routing = {**without, **self.BASE}
-        old, new = ((without, with_routing) if direction == "added"
-                    else (with_routing, without))
+        without = {"mysql_connections": "80"}
+        old, new = (without, self.BASE) if direction == "added" else (self.BASE, without)
         p = self._run(tmp_path, old, new)
         assert p.returncode == 1
-        assert f"- `_routing` ({direction})" in p.stdout
         assert "SECRET" not in p.stdout
         assert "<redacted>" in p.stdout
+
+    def test_a_non_credential_change_still_prints_values(self, tmp_path):
+        changed = {**self.BASE, "_routing": {"receiver": {"type": "slack", "api_url": _SECRET_OLD},
+                                             "group_wait": "1m"}}
+        p = self._run(tmp_path, self.BASE, changed)
+        assert "- `_routing.group_wait`: `30s` → `1m`" in p.stdout
+        assert "  - `group_wait`: `30s` → `1m`" in p.stdout   # the route node too
+        assert "SECRET" not in p.stdout
 
     def test_credentials_inside_a_list_are_redacted(self):
         diff = cd.compute_setting_diff(
@@ -1067,18 +739,8 @@ class TestCredentialsAreNotPrinted:
         assert diff["t"][0]["new"] == [
             {"receiver": {"type": "pagerduty", "routing_key": "<redacted>"}}]
 
-    def test_a_non_credential_change_still_prints_values(self, tmp_path):
-        changed = {"_routing": {"receiver": {"type": "slack", "api_url": _SECRET_OLD},
-                                "group_wait": "1m"}}
-        p = self._run(tmp_path, self.BASE, changed)
-        assert "- `_routing.group_wait`: `30s` → `1m`" in p.stdout
-        assert "receiver" not in p.stdout
-
     def test_the_credential_list_covers_the_schema(self):
-        """schema 裡長得像憑證的欄位，每一個都得歸類：要嘛遮、要嘛明列不是。
-
-        日後 schema 新增 receiver 欄位而這裡沒跟上，這條就會紅，不會悄悄印出來。
-        """
+        """schema 裡長得像憑證的欄位，每一個都得歸類：要嘛遮、要嘛明列不是。"""
         schema = json.loads((REPO_ROOT / "docs" / "schemas"
                              / "tenant-config.schema.json").read_text(encoding="utf-8"))
         names = set()
@@ -1093,129 +755,69 @@ class TestCredentialsAreNotPrinted:
                 for x in node:
                     walk(x)
         walk(schema)
-        looks_secret = {n for n in names
-                        if re.search(r"pass|key|token|secret|url", n, re.I)}
+        looks_secret = {n for n in names if re.search(r"pass|key|token|secret|url", n, re.I)}
         not_credentials = {"runbook_url", "icon_url", "client_url"}
-        # schema 裡像憑證的欄位，每一個都在遮罩名單裡（名單與 tenant-api 的 credmask 同一份，
-        # 兩者一致由 tests/ops/test_lib_redact.py 守）
+        # 名單與 tenant-api 的 credmask 同一份，兩者一致由 tests/ops/test_lib_redact.py 守
         assert looks_secret - not_credentials <= set(cd._CREDENTIAL_KEYS), \
             looks_secret - not_credentials - set(cd._CREDENTIAL_KEYS)
 
 
-class TestUncoveredFiles:
-    """報告比對不到的檔案有變，要具名列出、rc=1，不得印 "No changes detected."（#1420）。
+# ── 7. 改過的 `_` 檔（#1420，P3 的載體表接手前保留） ─────────────────
 
-    ⛔ 修正前：只改 `_defaults.yaml`（每個沒覆寫的租戶都繼承）得到
-    "No changes detected."、rc=0；同一個 key 改在租戶檔則 rc=1。這是這份報告
-    會收到的爆炸半徑最大的一類改動，也是它唯一說「沒變」的一類。
-    """
+
+class TestChangedPlatformFiles:
+    """改過的 `_` 開頭檔一律具名列出、rc=1：渲染比較看不到的載體（平台 recipe、
+    instance_tenant_mapping…）在 P3 的載體表接手前，只能靠這份清單提醒 reviewer。"""
 
     TENANT = "tenants:\n  db-a:\n    mysql_connections: '70'\n"
 
-    def _pair(self, tmp_path, files_old, files_new):
-        old, new = tmp_path / "old", tmp_path / "new"
-        for root, files in ((old, files_old), (new, files_new)):
-            root.mkdir()
-            for rel, text in files.items():
-                (root / rel).parent.mkdir(parents=True, exist_ok=True)
-                (root / rel).write_text(text, encoding="utf-8", newline="\n")
-        return old, new
-
-    def test_defaults_only_change_is_named_and_exits_1(self, tmp_path):
-        old, new = self._pair(
-            tmp_path,
-            {"db-a.yaml": self.TENANT, "_defaults.yaml": "defaults:\n  mysql_connections: 80\n"},
-            {"db-a.yaml": self.TENANT, "_defaults.yaml": "defaults:\n  mysql_connections: 240\n"},
-        )
+    def test_a_platform_change_no_render_shows_still_exits_1(self, tmp_path):
+        """只改 `_defaults.yaml` 裡沒人讀的東西（這裡是註解）：渲染沒有差異，仍要 rc 1 並列出檔名。"""
+        old, new = _pair(tmp_path,
+                         {"db-a.yaml": self.TENANT, "_defaults.yaml": "defaults:\n  cpu: 80\n"},
+                         {"db-a.yaml": self.TENANT, "_defaults.yaml": "defaults:\n  cpu: 80\n# note\n"})
         p = _run_cli(old, new)
         assert p.returncode == 1, p.stdout + p.stderr
-        assert "No changes detected" not in p.stdout
-        assert "## Changed Files Not Compared" in p.stdout
-        assert "- `_defaults.yaml`" in p.stdout
+        assert "## Changed Platform Files" in p.stdout and "- `_defaults.yaml`" in p.stdout
+        assert p.stdout.rstrip().splitlines()[-1].startswith("No change in what the two renders show")
 
-    def test_identical_trees_still_exit_0(self, tmp_path):
-        files = {"db-a.yaml": self.TENANT,
-                 "_defaults.yaml": "defaults:\n  mysql_connections: 80\n",
+    def test_identical_trees_exit_0(self, tmp_path):
+        files = {"db-a.yaml": self.TENANT, "_defaults.yaml": "defaults:\n  cpu: 80\n",
                  "team/db-b.yaml": "tenants:\n  db-b:\n    cpu: '1'\n"}
-        old, new = self._pair(tmp_path, files, files)
+        old, new = _pair(tmp_path, files, files)
         p = _run_cli(old, new)
         assert p.returncode == 0, p.stdout + p.stderr
-        assert "No changes detected." in p.stdout
-        assert "Not Compared" not in p.stdout
+        assert "Changed Platform Files" not in p.stdout
 
-    @pytest.mark.parametrize("rel", [
-        "_platform.yaml", "team-x/db-z.yaml", "team-x/_defaults.yaml", "_profiles.yaml",
-    ])
-    def test_added_file_outside_the_comparison_is_named(self, tmp_path, rel):
-        old, new = self._pair(tmp_path, {"db-a.yaml": self.TENANT},
-                              {"db-a.yaml": self.TENANT, rel: "tenants: {}\n"})
+    @pytest.mark.parametrize("rel", ["_platform.yaml", "team-x/_defaults.yaml", "_profiles.yaml"])
+    def test_added_platform_file_is_named(self, tmp_path, rel):
+        old, new = _pair(tmp_path, {"db-a.yaml": self.TENANT},
+                         {"db-a.yaml": self.TENANT, rel: "tenants: {}\n"})
         p = _run_cli(old, new, "--format", "json")
         assert p.returncode == 1, p.stdout + p.stderr
-        assert json.loads(p.stdout)["uncovered_files"] == [rel]
+        assert _json(p)["uncovered_files"] == [rel]
 
-    def test_removed_file_is_named(self, tmp_path):
-        old, new = self._pair(
+    def test_tenant_files_are_compared_not_listed(self, tmp_path):
+        """租戶檔（子目錄裡的也是）由渲染比較報出，不列為改過的平台檔；`.` 開頭的檔 exporter 不讀。"""
+        old, new = _pair(
             tmp_path,
-            {"db-a.yaml": self.TENANT, "_defaults.yaml": "defaults: {}\n"},
-            {"db-a.yaml": self.TENANT})
-        assert cd.compute_uncovered_files(str(old), str(new)) == ["_defaults.yaml"]
-
-    def test_compared_and_hidden_files_are_not_listed(self, tmp_path):
-        """租戶檔的變更由比對本身報；`.` 開頭的檔 exporter 不讀，也不列。"""
-        old, new = self._pair(
-            tmp_path,
-            {"db-a.yaml": self.TENANT, ".scratch.yaml": "a: 1\n"},
-            {"db-a.yaml": self.TENANT.replace("70", "90"), ".scratch.yaml": "a: 2\n"})
-        p = _run_cli(old, new, "--format", "json")
-        assert p.returncode == 1, p.stdout + p.stderr
-        report = json.loads(p.stdout)
-        assert report["uncovered_files"] == []
-        assert report["metric_diffs"]
-
-    def test_listed_alongside_compared_changes(self, tmp_path):
-        old, new = self._pair(
-            tmp_path,
-            {"db-a.yaml": self.TENANT, "_defaults.yaml": "defaults: {}\n"},
+            {"db-a.yaml": self.TENANT, "team/db-b.yaml": "tenants:\n  db-b:\n    cpu: '1'\n",
+             ".scratch.yaml": "a: 1\n"},
             {"db-a.yaml": self.TENANT.replace("70", "90"),
-             "_defaults.yaml": "defaults:\n  cpu: 1\n"})
-        p = _run_cli(old, new)
-        assert p.returncode == 1, p.stdout + p.stderr
-        assert "- `_defaults.yaml`" in p.stdout
-        assert "1 changed file(s) not compared" in p.stdout.splitlines()[-1]
+             "team/db-b.yaml": "tenants:\n  db-b:\n    cpu: '2'\n", ".scratch.yaml": "a: 2\n"})
+        doc = _json(_run_cli(old, new, "--format", "json"))
+        assert doc["uncovered_files"] == []
+        assert {t for c in doc["threshold_changes"] for t in c["tenants"]} == {"db-a", "db-b"}
 
-    def test_file_name_cannot_break_out_of_its_code_span(self, tmp_path):
-        """檔名來自 PR 的樹：反引號不得關掉 code span，控制字元不得原樣印出。"""
-        rel = "_x`y\x1b[2J.yaml"
-        old, new = self._pair(tmp_path, {"db-a.yaml": self.TENANT},
-                              {"db-a.yaml": self.TENANT, rel: "a: 1\n"})
-        md = cd.render_markdown({}, str(old), str(new),
-                                uncovered_files=cd.compute_uncovered_files(str(old), str(new)))
-        assert "\x1b" not in md
-        assert "- `_x'y\\x1b[2J.yaml`" in md
+    def test_removed_file_and_sorted_listing(self, tmp_path):
+        rels = ["_z.yaml", "a/_defaults.yaml", "_a.yaml", "b/t.yaml"]
+        old, new = _pair(tmp_path, {r: "a: 1\n" for r in rels}, {})
+        assert cd.compute_uncovered_files(str(old), str(new)) == ["_a.yaml", "_z.yaml", "a/_defaults.yaml"]
 
-    def test_long_list_is_capped_in_markdown_not_in_json(self, tmp_path):
-        n = cd.UNCOVERED_LIST_LIMIT + 3
-        files = {f"_f{i:03d}.yaml": "a: 1\n" for i in range(n)}
-        old, new = self._pair(tmp_path, {}, files)
-        uncovered = cd.compute_uncovered_files(str(old), str(new))
-        assert len(uncovered) == n
-        md = cd.render_markdown({}, str(old), str(new), uncovered_files=uncovered)
-        assert "- ... (+3 more)" in md
-        assert sum(line.startswith("- `_f") for line in md.splitlines()) == cd.UNCOVERED_LIST_LIMIT
-        assert f"`{uncovered[-1]}`" not in md
-        assert f"does not compare {n} changed file(s)" in md
-
-    def test_not_compared_only_report_is_capped_for_a_comment(self):
-        """只有未比對檔時也要截斷：檔名由 PR 控制，50 個長路徑可超過 GitHub 留言上限。"""
-        names = [f"{i:02d}/" + "c" * 2000 + "/z.yaml" for i in range(cd.UNCOVERED_LIST_LIMIT)]
-        md = cd.render_markdown({}, "old", "new", uncovered_files=names)
-        assert len(md) <= cd.COMMENT_SAFETY_LIMIT
-        assert "truncated to fit GitHub's comment limit" in md
-
-    def test_unreadable_file_is_a_caller_error_not_a_change(self, tmp_path, monkeypatch, capsys):
-        """讀不到的檔是 IO failure（exit 2），不是「有變」（exit 1）：SSOT 把 IO failure 歸在 2。"""
+    def test_unreadable_platform_file_is_a_caller_error_not_a_change(self, tmp_path, monkeypatch, capsys):
+        """讀不到的檔是 IO failure（exit 2），不是「有變」（exit 1）。"""
         files = {"db-a.yaml": self.TENANT, "_defaults.yaml": "defaults: {}\n"}
-        old, new = self._pair(tmp_path, files, files)
+        old, new = _pair(tmp_path, files, files)
         real = Path.read_bytes
 
         def read_bytes(path):
@@ -1225,14 +827,9 @@ class TestUncoveredFiles:
 
         monkeypatch.setattr(Path, "read_bytes", read_bytes)
         monkeypatch.setattr(sys, "argv", ["config_diff.py", "--old-dir", str(old),
-                                          "--new-dir", str(new)])
+                                          "--new-dir", str(new), "--at", AT])
         with pytest.raises(SystemExit) as exc:
             cd.main()
         assert exc.value.code == cd.EXIT_CALLER_ERROR
         err = capsys.readouterr().err
         assert "ERROR:" in err and "_defaults.yaml" in err, err
-
-    def test_listing_is_sorted(self, tmp_path):
-        rels = ["_z.yaml", "a/_defaults.yaml", "_a.yaml", "b/t.yaml"]
-        old, new = self._pair(tmp_path, {}, {r: "a: 1\n" for r in rels})
-        assert cd.compute_uncovered_files(str(old), str(new)) == sorted(rels)

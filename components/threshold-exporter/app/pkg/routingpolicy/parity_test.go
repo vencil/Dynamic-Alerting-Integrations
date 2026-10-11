@@ -15,7 +15,9 @@ import (
 	"sort"
 	"testing"
 
+	"github.com/vencil/threshold-exporter/internal/confdlayout"
 	"github.com/vencil/threshold-exporter/pkg/config"
+	"github.com/vencil/threshold-exporter/pkg/tenantid"
 	"gopkg.in/yaml.v3"
 
 	"github.com/vencil/threshold-exporter/pkg/receiverspec"
@@ -83,7 +85,7 @@ type parityTree struct {
 type parityMatrix struct {
 	Comment       []string `json:"_comment"`
 	BlockingKinds []string `json:"blocking_kinds"`
-	// TenantIDs (#2341 R8, ADR-035): the ids IsValidTenantID accepts and
+	// TenantIDs (#2341 R8, ADR-035): the ids tenantid.Valid accepts and
 	// refuses. SchemaSearchAccepts: ids the schema's propertyNames check lets
 	// through (a JSON Schema pattern is a search) that every decoded-key
 	// reader, this one included, refuses.
@@ -216,7 +218,7 @@ func gotGroupBy(resolved map[string]any, ok bool) [][2]string {
 // gotRefused is the `refused` cell (#2341): why the tenant renders nothing —
 // its id first (R8), then its `_routing` (R5).
 func gotRefused(tenantID string, block map[string]any) *string {
-	if !IsValidTenantID(tenantID) {
+	if !tenantid.Valid(tenantID) {
 		kind := "invalid_tenant_id"
 		return &kind
 	}
@@ -289,7 +291,7 @@ func jsonEq(t *testing.T, what string, got, want any) {
 	}
 }
 
-// TestTenantIDTable (#2341 R8): IsValidTenantID against the shared table.
+// TestTenantIDTable (#2341 R8): tenantid.Valid against the shared table.
 func TestTenantIDTable(t *testing.T) {
 	t.Parallel()
 	m := loadParityMatrix(t)
@@ -298,14 +300,14 @@ func TestTenantIDTable(t *testing.T) {
 		t.Fatal("tenant_ids table is empty")
 	}
 	for _, id := range m.TenantIDs.Valid {
-		if !IsValidTenantID(id) {
-			t.Errorf("IsValidTenantID(%q) = false, table says valid", id)
+		if !tenantid.Valid(id) {
+			t.Errorf("tenantid.Valid(%q) = false, table says valid", id)
 		}
 	}
 	for _, id := range append(append([]string{}, m.TenantIDs.Invalid...),
 		m.TenantIDs.SchemaSearchAccepts...) {
-		if IsValidTenantID(id) {
-			t.Errorf("IsValidTenantID(%q) = true, table says invalid", id)
+		if tenantid.Valid(id) {
+			t.Errorf("tenantid.Valid(%q) = true, table says invalid", id)
 		}
 	}
 }
@@ -355,7 +357,7 @@ func TestRoutingPolicyParityMatrix(t *testing.T) {
 			// it), in EnforcedGroupByInvalid's order.
 			var tenants []string
 			for tenantID := range tree.Expect {
-				if IsValidTenantID(tenantID) {
+				if tenantid.Valid(tenantID) {
 					tenants = append(tenants, tenantID)
 				}
 			}
@@ -370,12 +372,12 @@ func TestRoutingPolicyParityMatrix(t *testing.T) {
 					// the root platform overlay (#2291) — tenant-api's model
 					// below lays the PUT body over it too (#2486).
 					block, file := tenantBlock(t, tree.Files, tenantID)
-					if got := ltree.TenantLevel(tenantID); got != LevelOf(file) {
-						t.Errorf("tenant level = %q, want %q (%s)", got, LevelOf(file), file)
+					if got := ltree.TenantLevel(tenantID); got != confdlayout.LevelOf(file) {
+						t.Errorf("tenant level = %q, want %q (%s)", got, confdlayout.LevelOf(file), file)
 					}
-					layers := ltree.LayersFor(LevelOf(file))
+					layers := ltree.LayersFor(confdlayout.LevelOf(file))
 					resolved, ok, _, unknown := Resolve(tenantID, layers.TenantBlock(tenantID, block), layers)
-					if !IsValidTenantID(tenantID) { // #2341 R8: nothing is rendered for it
+					if !tenantid.Valid(tenantID) { // #2341 R8: nothing is rendered for it
 						resolved, ok = nil, false
 					}
 					jsonEq(t, "targets", gotTargets(resolved, ok), want.Targets)

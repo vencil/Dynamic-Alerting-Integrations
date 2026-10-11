@@ -21,6 +21,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/vencil/threshold-exporter/internal/confdlayout"
 	"github.com/vencil/threshold-exporter/internal/testutil"
 	"github.com/vencil/threshold-exporter/pkg/config"
 	"github.com/vencil/threshold-exporter/pkg/pyyamlcompat"
@@ -174,7 +175,7 @@ func generatorRefused(tree map[string]string, scopeRel string) []string {
 		case path.Dir(rel) == ".":
 			read = !routingpolicy.ReportsUnusable(base)
 		default:
-			read = !routingpolicy.IsDomainPolicyFile(base)
+			read = !confdlayout.IsDomainPolicyFile(base)
 		}
 		if read && pyyamlcompat.FindDuplicateKeyIn([]byte(body)) != nil {
 			out = append(out, rel)

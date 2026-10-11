@@ -1,8 +1,7 @@
 """Smoke tests for check_devrules_size.py — dev-rules.md line-count gate.
 
 Covers:
-  - `find_repo_root` walks parents until a `.git` is found
-  - `find_repo_root` falls back to script-relative path when cwd has no .git
+  - `find_repo_root` is this tool's own tree, whatever the cwd (#2852)
   - `main` passes when dev-rules.md is at/under MAX_LINES
   - `main` fails with exit 1 when dev-rules.md exceeds MAX_LINES
   - `main` returns caller-error (exit 2) when dev-rules.md is missing
@@ -11,6 +10,7 @@ from __future__ import annotations
 
 import os
 import sys
+from pathlib import Path
 
 import pytest
 
@@ -25,25 +25,15 @@ from _lib_exitcodes import EXIT_CALLER_ERROR  # noqa: E402
 # find_repo_root
 # ---------------------------------------------------------------------------
 class TestFindRepoRoot:
-    def test_finds_cwd_ancestor_with_dot_git(self, tmp_path, monkeypatch):
-        # Build: tmp/repo/.git  and  tmp/repo/sub/nested
+    """#2852: the root is this tool's own tree, never the cwd's `.git`."""
+
+    def test_a_cwd_inside_another_repo_does_not_move_it(self, tmp_path, monkeypatch):
         repo = tmp_path / "repo"
         (repo / ".git").mkdir(parents=True)
         nested = repo / "sub" / "nested"
         nested.mkdir(parents=True)
         monkeypatch.chdir(nested)
-        assert cds.find_repo_root() == repo
-
-    def test_fallback_when_no_dot_git(self, tmp_path, monkeypatch):
-        """With no ancestor carrying .git, we fall back to script-parent path.
-        We don't assert the exact fallback path (it depends on where the test
-        runs from) — just that the function returns *something* without crashing.
-        """
-        monkeypatch.chdir(tmp_path)  # tmp_path has no .git anywhere above in test env
-        got = cds.find_repo_root()
-        # Should be a Path, not a crash; on actual repo test env it will hit
-        # the real vibe-k8s-lab .git and return that root, which is also fine.
-        assert got is not None
+        assert cds.find_repo_root() == Path(cds.__file__).resolve().parents[3]
 
 
 # ---------------------------------------------------------------------------
@@ -63,21 +53,21 @@ class TestMain:
     def test_under_limit_passes(self, tmp_path, monkeypatch):
         content = "\n".join(f"line {i}" for i in range(100))  # 100 lines
         repo = self._setup_fake_repo(tmp_path, content)
-        monkeypatch.chdir(repo)
+        monkeypatch.setattr(cds, "find_repo_root", lambda: repo)
         monkeypatch.setattr("sys.argv", ["check_devrules_size.py"])
         assert cds.main() == 0
 
     def test_exactly_at_limit_passes(self, tmp_path, monkeypatch):
         content = "\n".join(f"line {i}" for i in range(cds.MAX_LINES))
         repo = self._setup_fake_repo(tmp_path, content)
-        monkeypatch.chdir(repo)
+        monkeypatch.setattr(cds, "find_repo_root", lambda: repo)
         monkeypatch.setattr("sys.argv", ["check_devrules_size.py"])
         assert cds.main() == 0
 
     def test_over_limit_fails(self, tmp_path, monkeypatch, capsys):
         content = "\n".join(f"line {i}" for i in range(cds.MAX_LINES + 50))
         repo = self._setup_fake_repo(tmp_path, content)
-        monkeypatch.chdir(repo)
+        monkeypatch.setattr(cds, "find_repo_root", lambda: repo)
         monkeypatch.setattr("sys.argv", ["check_devrules_size.py"])
         assert cds.main() == 1
         err = capsys.readouterr().err
@@ -86,7 +76,7 @@ class TestMain:
 
     def test_missing_file_is_caller_error(self, tmp_path, monkeypatch, capsys):
         repo = self._setup_fake_repo(tmp_path, dev_rules_content=None)
-        monkeypatch.chdir(repo)
+        monkeypatch.setattr(cds, "find_repo_root", lambda: repo)
         monkeypatch.setattr("sys.argv", ["check_devrules_size.py"])
         # Missing target file is a caller/environment error (#452).
         assert cds.main() == EXIT_CALLER_ERROR

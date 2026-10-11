@@ -91,7 +91,7 @@ def is_valid_tenant_id(tenant: Any) -> bool:
 
     The rule is ``tenant_id_rule()`` — tenant-config.schema.json
     ``definitions.tenantId``, a DNS-1123 label — matched with ``fullmatch``.
-    Go twin: routingpolicy.IsValidTenantID (pkg/tenantid). Pinned by the
+    Go twin: pkg/tenantid.Valid. Pinned by the
     ``tenant_ids`` table of tests/shared/routing_policy_parity_matrix.json.
     Raises RuntimeError when the schema cannot be read (fail-closed).
     """
