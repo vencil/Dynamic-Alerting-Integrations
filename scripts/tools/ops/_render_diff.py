@@ -67,7 +67,7 @@ import yaml  # noqa: E402
 
 import _lib_confd  # noqa: E402
 import _lib_tenant_values as tv  # noqa: E402
-from _lib_redact import REDACTED, credential_values, is_secret_field  # noqa: E402
+from _lib_redact import REDACTED, Secrets, credential_values, is_secret_field  # noqa: E402
 
 PLATFORM = "(platform)"
 MASKED = REDACTED
@@ -81,6 +81,9 @@ DEFAULT_TIMEOUT = 600
 # file at all, so there is no route, receiver or inhibit rule.
 EMPTY_ROUTES: dict[str, Any] = {"route": {}, "receivers": [], "inhibit_rules": []}
 
+# The reserved keys whose value is (or carries) a receiver: written as text
+# the exporter does not serve, the whole text is taken as a credential.
+ROUTING_TEXT_KEYS = frozenset({"_routing", "_routing_defaults", "_routing_enforced"})
 ROUTE_ATTRS = ("receiver", "group_by", "group_wait", "group_interval", "repeat_interval", "continue")
 SERVED_FIELDS = ("values", "severities", "state_filters", "time_boxes", "unserved", "dropped", "schedules")
 _TENANT_MATCHER = re.compile(r'^\s*tenant\s*=\s*"?(.*?)"?\s*$')
@@ -142,9 +145,9 @@ class RenderDiff(NamedTuple):
     at: str
     served: ViewResult
     routes: ViewResult
-    # The strings the renders' credential fields hold: never printed, only
-    # for masking them where else they occur (`_lib_redact.mask_values`).
-    secrets: frozenset[str] = frozenset()
+    # The values the renders' credential fields hold, for masking them where
+    # else they occur (`_lib_redact.mask_values`); its repr hides them.
+    secrets: Secrets = Secrets()
 
     @property
     def exit_code(self) -> int:
@@ -302,15 +305,16 @@ def compare(base_dir: str | os.PathLike[str], pr_dir: str | os.PathLike[str], at
                   dict, diff_served, served_report)
     routes = view(lambda d: render_routes(d, timeout=timeout),
                   lambda: dict(EMPTY_ROUTES), diff_routes)
-    return RenderDiff(at, served, routes, frozenset(secrets))
+    return RenderDiff(at, served, routes, Secrets(secrets))
 
 
 def credentials(render: Any) -> set[str]:
     """What the credential fields of one render (served tenants, or an
     Alertmanager configuration) hold; a routing key's text as written
-    whole, as `diff_served` masks it whole. A `TenantValues` is a tuple,
-    walked into like a list: its own field names name no credential."""
-    return credential_values(render, text_key=lambda k: k.startswith("_routing"))
+    whole when it is one of ROUTING_TEXT_KEYS (`_routing_profile` names a
+    profile, it holds no receiver). A `TenantValues` is a tuple, walked into
+    like a list: its own field names name no credential."""
+    return credential_values(render, text_key=ROUTING_TEXT_KEYS.__contains__)
 
 
 def diff_served(base: dict[str, tv.TenantValues], pr: dict[str, tv.TenantValues]) -> list[ValueChange]:

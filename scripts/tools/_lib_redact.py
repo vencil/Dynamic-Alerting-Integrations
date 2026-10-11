@@ -68,16 +68,38 @@ def redact_pair(key: object, old: Any, new: Any) -> tuple[Any, Any]:
     return redact(old), redact(new)
 
 
-def credential_values(value: Any, *, text_key: Callable[[str], bool] = lambda _k: False) -> set[str]:
-    """Every non-blank string inside a credential field of `value`, a
-    container field taken whole as `redact` takes it; numbers and booleans
-    are not collected. A key `text_key` accepts whose value is a string
-    (a receiver written as text, which no key name can see into) is
-    collected whole too."""
+
+# A credential value shorter than this is masked only where it is a whole
+# value: as a substring, a short value ("0", "80") would mask the digits of
+# every timestamp, path and threshold in the report.
+MIN_SUBSTRING_SECRET = 8
+
+
+class Secrets(frozenset):
+    """The credential values `credential_values` collected: a frozenset
+    whose repr and str never show them, so a log line or a traceback that
+    prints the object holding it does not leak them."""
+
+    def __repr__(self) -> str:
+        return f"Secrets(<{len(self)} value(s)>)"
+
+    __str__ = __repr__
+
+
+def credential_values(value: Any, *, text_key: Callable[[str], bool] = lambda _k: False) -> Secrets:
+    """Every non-blank string, and every number (as its text), inside a
+    credential field of `value`, a container field taken whole as `redact`
+    takes it; booleans are not collected. A key `text_key` accepts whose
+    value is a string (a receiver written as text, which no key name can see
+    into) is collected whole too."""
     out: set[str] = set()
 
     def strings(v: Any) -> None:
-        if isinstance(v, str):
+        if isinstance(v, bool):
+            return
+        if isinstance(v, (int, float)):
+            out.add(str(v))
+        elif isinstance(v, str):
             if v.strip():
                 out.add(v)
         elif isinstance(v, dict):
@@ -101,35 +123,63 @@ def credential_values(value: Any, *, text_key: Callable[[str], bool] = lambda _k
                 walk(x)
 
     walk(value)
-    return out
+    return Secrets(out)
 
 
 def mask_values(value: Any, secrets: set[str] | frozenset[str]) -> tuple[Any, int]:
-    """`value` with every occurrence of a string in `secrets`, inside any
-    string or mapping key in it, replaced by REDACTED; and how many were.
+    """`value` with every credential value in `secrets` replaced by REDACTED
+    wherever it occurs — a whole string, a number whose text it is, a
+    mapping key, or, for a value at least MIN_SUBSTRING_SECRET long, a part
+    of a longer string — and how many were.
 
-    One pass of one pattern, longest first: a secret that contains another
-    is masked whole, and REDACTED put in is never matched again. Named
-    tuples keep their type; any other object is printed by `str` (as the
-    JSON report's `default=str` would) and masked."""
+    Substrings: one pass of one pattern, longest first, so a secret that
+    contains another is masked whole and REDACTED put in is never matched
+    again. Two mapping keys masked alike are told apart (`<redacted> #2`),
+    never merged. Named tuples keep their type; any other object is printed
+    by `str` (as the JSON report's `default=str` would) and masked."""
     if not secrets:
         return value, 0
-    pattern = re.compile("|".join(re.escape(s) for s in sorted(secrets, key=len, reverse=True)))
+    whole = frozenset(secrets)
+    long_ = sorted((s for s in secrets if len(s) >= MIN_SUBSTRING_SECRET), key=len, reverse=True)
+    pattern = re.compile("|".join(re.escape(s) for s in long_)) if long_ else None
     count = 0
 
     def text(s: str) -> str:
         nonlocal count
+        if s in whole:
+            count += 1
+            return REDACTED
+        if pattern is None:
+            return s
         new, n = pattern.subn(REDACTED, s)
         count += n
         return new
 
+    def key(k: Any, taken: dict) -> Any:
+        new = text(k) if isinstance(k, str) else walk(k)
+        if new != k and new in taken:
+            n = 2
+            while f"{new} #{n}" in taken:
+                n += 1
+            new = f"{new} #{n}"
+        return new
+
     def walk(v: Any) -> Any:
+        nonlocal count
         if isinstance(v, str):
             return text(v)
-        if v is None or isinstance(v, (bool, int, float)):
+        if v is None or isinstance(v, bool):
+            return v
+        if isinstance(v, (int, float)):
+            if str(v) in whole:
+                count += 1
+                return REDACTED
             return v
         if isinstance(v, dict):
-            return {(text(k) if isinstance(k, str) else walk(k)): walk(x) for k, x in v.items()}
+            out: dict = {}
+            for k, x in v.items():
+                out[key(k, out)] = walk(x)
+            return out
         if isinstance(v, tuple) and hasattr(v, "_fields"):
             return type(v)._make(walk(x) for x in v)
         if isinstance(v, (list, tuple, set, frozenset)):

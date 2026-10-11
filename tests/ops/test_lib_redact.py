@@ -119,12 +119,13 @@ def test_credential_values_takes_what_credential_fields_hold():
     doc = {"receiver": {"type": "webhook", "url": "https://h/S1", "send_resolved": True,
                         "http_config": {"authorization": {"credentials": "S2"}, "follow_redirects": True},
                         "headers": {"X-Token": ["S3", " "]}},
-           "owner": "https://h/S1", "group_wait": "30s", "token": 42,
+           "owner": "https://h/S1", "group_wait": "30s", "token": 42, "limit": 7,
            "list": [{"api_key": "S4"}], "_routing_text": "type: webhook\nurl: https://h/S5\n"}
-    assert r.credential_values(doc) == {"https://h/S1", "S2", "S3", "S4"}
-    # 路由鍵寫成文字時整段收（diff_served 也整段遮）；不是字串的不收
+    # 數字以文字收（`service_key: 1234…` 也是憑證）；布林、非憑證欄位的數字不收
+    assert r.credential_values(doc) == {"https://h/S1", "S2", "S3", "S4", "42"}
+    # 路由鍵寫成文字時整段收（diff_served 也整段遮）
     got = r.credential_values(doc, text_key=lambda k: k.startswith("_routing"))
-    assert got == {"https://h/S1", "S2", "S3", "S4", "type: webhook\nurl: https://h/S5\n"}
+    assert got == {"https://h/S1", "S2", "S3", "S4", "42", "type: webhook\nurl: https://h/S5\n"}
     # 路由鍵是 mapping 時只收其中憑證欄位的值，`type` 這類不收
     assert r.credential_values({"_routing": {"type": "webhook"}},
                                text_key=lambda k: k.startswith("_routing")) == set()
@@ -156,8 +157,11 @@ def test_render_diff_credentials_reads_both_renders():
     assert rd.credentials(cfg) == {"https://h/S1"}
     tvs = {"tx": r_tenant(values={"_routing": {"receiver": {"type": "webhook", "url": "https://h/S2"}},
                                   "_metadata": {"owner": "https://h/S2"}},
-                          unserved={"_routing_bad": "url: https://h/S3"})}
+                          unserved={"_routing": "url: https://h/S3"})}
     assert rd.credentials(tvs) == {"https://h/S2", "url: https://h/S3"}
+    # `_routing_profile` 是 profile 名稱，不是 receiver：不收，否則名稱出現處全被遮
+    named = {"tx": r_tenant(values={"_routing_profile": "cpu"}, unserved={"_routing_profile": "cpu"})}
+    assert rd.credentials(named) == set()
 
 
 def r_tenant(**fields):
@@ -246,3 +250,54 @@ def test_compare_collects_credentials_from_both_sides_and_both_views(monkeypatch
     got = rd.compare("base", "pr", "2026-10-10T00:00:00Z")
     assert got.routes.status == "not_compared"
     assert got.secrets == {"SB", "SP", "RP"}
+
+
+
+def test_secrets_never_print():
+    """收集到的值放在 RenderDiff 上：repr／str 不得帶出原文（log、traceback）。"""
+    got = rd.RenderDiff("t", rd.ViewResult("computed", ""), rd.ViewResult("computed", ""),
+                        r.Secrets({"https://h/S1"}))
+    assert "S1" not in repr(got) and "S1" not in str(got.secrets)
+    assert got.secrets == {"https://h/S1"}
+
+
+def test_a_short_value_is_masked_only_whole():
+    """太短的值當子字串遮會把時間戳、路徑、閾值的數字全遮掉；整值相同才遮。"""
+    masked, n = r.mask_values(["0", "2026-10-10T00:00:00Z", 0, "80", 80.5],
+                              {"0", "80"})
+    assert masked == [r.REDACTED, "2026-10-10T00:00:00Z", r.REDACTED, r.REDACTED, 80.5]
+    assert n == 3
+    long_ = "x" * r.MIN_SUBSTRING_SECRET
+    # 門檻上：夠長的才在較長字串裡遮；短一個字元的只整值遮
+    short = long_[1:]
+    assert r.mask_values([f"a{long_}b", f"y{short}z", short], {long_, short})[0] == [
+        f"a{r.REDACTED}b", f"y{short}z", r.REDACTED]
+
+
+def test_keys_masked_alike_are_not_merged():
+    """兩個鍵遮成同一個 REDACTED 時不得合併，否則一筆變更靜默消失。"""
+    masked, n = r.mask_values({"team-SECRET-AAAA": [1], "team-SECRET-BBBB": [2], "x": [3]},
+                              {"team-SECRET-AAAA", "team-SECRET-BBBB"})
+    assert sorted(masked.values()) == [[1], [2], [3]]
+    assert set(masked) == {r.REDACTED, f"{r.REDACTED} #2", "x"} and n == 2
+
+
+def test_a_numeric_credential_in_a_non_credential_field_is_masked(tmp_path, da_guard_env):
+    """數字型憑證（PagerDuty `service_key`）經 alias 放到 `_metadata.owner`：同樣依值遮。"""
+    import json
+
+    def tree(d, key, cpu):
+        d.mkdir()
+        (d / "tx.yaml").write_text(
+            "tenants:\n  tx:\n"
+            f"    container_cpu: {cpu}\n"
+            f"    _routing:\n      receiver: {{type: pagerduty, service_key: &k {key}}}\n"
+            "    _metadata:\n      owner: *k\n", encoding="utf-8")
+        return d
+    old, new = tree(tmp_path / "old", 98765432109876, 80), tree(tmp_path / "new", 98765432101111, 90)
+    js = _run(old, new, "--format", "json")
+    assert js.returncode == 1, js.stderr
+    assert "9876543210" not in js.stdout + js.stderr, js.stdout
+    doc = json.loads(js.stdout)
+    assert doc["masked_by_value"] == 2
+    assert [(c["key"], c["old"], c["new"]) for c in doc["threshold_changes"]] == [("container_cpu", "80", "90")]
