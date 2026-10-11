@@ -140,3 +140,34 @@ def test_metadata_custom_groups_from_state(tmp_path, capsys):
     assert groups["g-fin"]["members"] == ["db-a", "db-b"]
     assert "is no longer read" in capsys.readouterr().err
     assert gtm._load_custom_groups(None, conf) == {}
+
+
+def _main(monkeypatch, argv):
+    monkeypatch.setattr(sys, "argv", ["offboard_tenant.py", *argv])
+    ot.main()
+
+
+def test_offboard_main_with_state_executes(tmp_path, monkeypatch, capsys):
+    conf = _confd(tmp_path)
+    _main(monkeypatch, ["db-a", "--config-dir", str(conf), "--state", str(_cm_yaml(tmp_path)), "--execute"])
+    out = capsys.readouterr().out
+    assert "群組 g-fin 的成員" in out and "已刪除" in out
+    assert not (conf / "db-a.yaml").exists()
+
+
+def test_offboard_main_refuses_execute_without_state(tmp_path, monkeypatch):
+    conf = _confd(tmp_path)
+    with pytest.raises(SystemExit) as e:
+        _main(monkeypatch, ["db-a", "--config-dir", str(conf), "--execute"])
+    assert e.value.code == 2
+    assert (conf / "db-a.yaml").exists()
+
+
+def test_offboard_main_bad_state_is_a_caller_error(tmp_path, monkeypatch, capsys):
+    conf = _confd(tmp_path)
+    bad = tmp_path / "list.yaml"
+    bad.write_text("kind: List\nitems: []\n", encoding="utf-8")
+    with pytest.raises(SystemExit) as e:
+        _main(monkeypatch, ["db-a", "--config-dir", str(conf), "--state", str(bad)])
+    assert e.value.code == 2
+    assert "not a ConfigMap document" in capsys.readouterr().err
