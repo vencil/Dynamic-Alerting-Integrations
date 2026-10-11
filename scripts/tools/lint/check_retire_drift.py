@@ -95,6 +95,7 @@ except Exception:  # pragma: no cover - compat shim optional
     def try_utf8_stdout() -> None:  # type: ignore
         pass
 from _lib_exitcodes import EXIT_OK, EXIT_VIOLATION, EXIT_CALLER_ERROR  # noqa: E402
+from _lib_io import exit_on_yaml_file_error  # noqa: E402
 from _lib_confd import has_yaml_extension, is_hidden_name  # noqa: E402
 from _lib_yaml_keys import load_all_exporter_keys, load_exporter_keys  # noqa: E402  (#2216 tenant id as text)
 from _lib_tenant_values import (  # noqa: E402
@@ -253,6 +254,7 @@ def evaluate(config_dir: Path, helm_dir: Path, namespaces_file: Path,
     }
 
 
+@exit_on_yaml_file_error  # #1654: a file that does not decode → rc 2, named
 @exit_on_served_values_error  # da-guard missing or failing → rc 2, named
 def main() -> int:
     """CLI entry point: RETIRE-ordering conf.d↔K8s drift gate (#869)."""
