@@ -7,6 +7,7 @@ import (
 
 	"github.com/go-chi/chi/v5"
 	"github.com/vencil/tenant-api/internal/rbac"
+	"github.com/vencil/tenant-api/internal/statestore"
 	"github.com/vencil/tenant-api/internal/views"
 )
 
@@ -105,6 +106,7 @@ type PutViewRequest struct {
 // @Failure     413  {object} ErrorResponse
 // @Failure     500  {object} ErrorResponse
 // @Failure     503  {object} ErrorResponse
+// @Failure     507  {object} ErrorResponse
 // @Router      /api/v1/views/{id} [put]
 func PutView(d *Deps) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
@@ -139,12 +141,12 @@ func PutView(d *Deps) http.HandlerFunc {
 			return
 		}
 
-		// Rebuild from the copy ON DISK, under the writer lock — see the
+		// Rebuild from the STORED copy, inside the state store's read-modify-write (#2856) — see the
 		// comment in PutGroup for why the in-memory snapshot cannot be the
 		// base of a whole-file rewrite. _views.yaml has exactly the same
 		// shape: one shared object, one snapshot that only refreshes on the
 		// Reload a failed write never reaches.
-		if err := d.Writer.MutateConfigFile(r.Context(), "_views.yaml", "views", email,
+		if err := d.mutateState(r.Context(), statestore.KeyViews, "views", email,
 			func(current []byte) ([]byte, error) {
 				cfg, perr := parseViewsFile(current)
 				if perr != nil {
@@ -183,6 +185,7 @@ func PutView(d *Deps) http.HandlerFunc {
 // @Failure     409 {object} ErrorResponse
 // @Failure     500 {object} ErrorResponse
 // @Failure     503 {object} ErrorResponse
+// @Failure     507 {object} ErrorResponse
 // @Router      /api/v1/views/{id} [delete]
 func DeleteView(d *Deps) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
@@ -202,7 +205,7 @@ func DeleteView(d *Deps) http.HandlerFunc {
 
 		// In-lock rebuild, and an already-absent target is a no-op success —
 		// same reasoning as DeleteGroup.
-		if err := d.Writer.MutateConfigFile(r.Context(), "_views.yaml", "views", email,
+		if err := d.mutateState(r.Context(), statestore.KeyViews, "views", email,
 			func(current []byte) ([]byte, error) {
 				vcfg, perr := parseViewsFile(current)
 				if perr != nil {
@@ -232,7 +235,7 @@ var ViewIDFromPath = func(r *http.Request) string {
 	return chi.URLParam(r, "id")
 }
 
-// parseViewsFile decodes _views.yaml bytes as read under the writer lock.
+// parseViewsFile decodes _views.yaml bytes as read inside the state store's read-modify-write.
 // Missing file → empty start; unparseable existing file → error, never an
 // empty start (see parseGroupsFile for why that distinction matters).
 func parseViewsFile(current []byte) (*views.ViewsConfig, error) {

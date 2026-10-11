@@ -50,13 +50,13 @@ spec:
         {{- end }}
     spec:
       serviceAccountName: {{ include "tenant-api.name" . }}
-      {{- if or .Values.federation.enabled .Values.machineIdentity.enabled }}
-      # Federation needs the in-cluster API client (ConfigMap token store) and
-      # machineIdentity (ADR-027) needs it for the TokenReview call; the
-      # ServiceAccount disables automount by default, so opt back in when either
-      # feature is on.
+      # Always on since #2856: the state store (groups, views, federation
+      # settings, AccountID registry) is a ConfigMap read through the
+      # in-cluster API client. Federation's token store and machineIdentity's
+      # TokenReview use the same client. The ServiceAccount disables automount
+      # by default; the Role in rbac-state.yaml grants get+update on the state
+      # ConfigMap only.
       automountServiceAccountToken: true
-      {{- end }}
       securityContext:
         {{- toYaml .Values.podSecurityContext | nindent 8 }}
 
@@ -108,6 +108,8 @@ spec:
             - --addr={{ .Values.tenantApi.listenAddr }}
             - --config-dir=/conf.d
             - --git-dir=/conf.d
+            - --state-store=configmap
+            - --state-configmap={{ .Values.state.configMapName }}
             - --rbac=/etc/rbac/_rbac.yaml
             - --reload-interval={{ .Values.tenantApi.reloadInterval }}
             # #2855: always explicit — the chart used to pass none, so every

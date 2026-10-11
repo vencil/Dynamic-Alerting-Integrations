@@ -28,10 +28,10 @@ package views
 import (
 	"fmt"
 	"log/slog"
-	"path/filepath"
 	"sort"
 
 	"github.com/vencil/tenant-api/internal/configwatcher"
+	"github.com/vencil/tenant-api/internal/statestore"
 	"gopkg.in/yaml.v3"
 )
 
@@ -56,14 +56,26 @@ type Manager struct {
 	*configwatcher.Watcher[ViewsConfig]
 }
 
-// NewManager creates a Manager that reads _views.yaml from configDir.
-func NewManager(configDir string) *Manager {
-	path := filepath.Join(configDir, "_views.yaml")
-	w, err := configwatcher.New(path, "views", ParseConfig, emptyConfig)
+// NewManager creates a Manager that reads the views record from the state
+// store (#2856: no longer conf.d/_views.yaml).
+func NewManager(s statestore.Store) *Manager {
+	desc := s.Describe() + " " + statestore.KeyViews
+	w, err := configwatcher.NewWithReader(desc, "views", statestore.ReadFunc(s, statestore.KeyViews), ParseConfig, emptyConfig)
 	if err != nil {
 		slog.Warn("views: initial load failed", "error", err)
 	}
 	return &Manager{Watcher: w}
+}
+
+// NewDirManager is NewManager over a directory store at dir — tests and
+// tools that hold the record as dir/_views.yaml.
+func NewDirManager(dir string) *Manager {
+	s, err := statestore.NewDir(dir, nil)
+	if err != nil {
+		slog.Warn("views: state directory", "error", err)
+		return &Manager{Watcher: configwatcher.NewForTest("views", emptyConfig())}
+	}
+	return NewManager(s)
 }
 
 // emptyConfig returns the empty fallback config used when the file

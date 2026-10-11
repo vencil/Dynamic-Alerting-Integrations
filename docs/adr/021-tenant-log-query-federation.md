@@ -9,7 +9,7 @@ tracking_kind: adr
 status: accepted
 domain: tenant-api
 created_at: 2026-05-24
-updated_at: 2026-05-24
+updated_at: 2026-10-11
 ---
 
 # ADR-021: Tenant Log Query — Authorization-Plane-Only, Ingestion-Decoupled
@@ -23,6 +23,8 @@ updated_at: 2026-05-24
 ## 狀態
 
 ✅ **Accepted**（v2.9.0 起草）。
+
+**2026-10-11 修訂**：AccountID 帳本與 federation 白名單、子集移出 conf.d git 樹，改存 tenant-api 的 state store（Kubernetes 上是 `tenant-api-state` ConfigMap，單機是一個目錄），寫入改為 compare-and-swap，不再 commit（[#2856](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/2856)）。原因：這些 commit 從不 push，chart 預設的 emptyDir 下重啟即失，帳本遺失正是本 ADR 要防的 AccountID 重發。下文的配發紀律、稽核與實作計畫已照此更新。
 
 實作分層、版本定位：
 
@@ -128,9 +130,11 @@ ingestion plane（無論 (a) 租戶推送或 (b) 平台元件 stdout）**必須*
 | 規則 | 理由 |
 |---|---|
 | **單調配發、永不回收** | 退租後若把同一 uint32 配給新租戶、舊 log 仍在 retention 窗內 → 新租戶讀得到前租戶殘留 log = 跨租戶洩漏。registry 必須 monotonic，或保證 retention 清空後才重用 |
-| **配發紀錄入 Git tenant registry** | GitOps 不可繞軌跡；對映 `tenant_id`(str) ↔ `account_id`(uint32) |
+| **配發紀錄入 tenant-api state store 的帳本** | 對映 `tenant_id`(str) ↔ `account_id`(uint32)，存在 `tenant-api-state` ConfigMap 的 `_account_registry.yaml`。每次配發在 compare-and-swap 內對最新帳本計算，並行配發不重號也不掉號；每筆寫入記一筆 `state_write` 稽核 log。帳本沒有 git 歷史 |
 | **JWT embed 數值 claim** | Envoy `claim_to_headers` 只支援 string/int/bool；AccountID 為數值 claim 才能 O(1) 注入 |
-| **禁用 hash 映射** | FNV-1a 等 hash 把 `tenant_id`(str)→uint32 有生日悖論碰撞 → 兩租戶撞同 AccountID = 跨租戶洩漏。一律 **Git tenant registry 單調發號**（發號狀態在 Git、commit-on-write，同 conf.d / tenant-api SSOT；**不引入外部 stateful DB**——違背 config-driven 架構，且 uint32 空間 ~40 億充足） |
+| **禁用 hash 映射** | FNV-1a 等 hash 把 `tenant_id`(str)→uint32 有生日悖論碰撞 → 兩租戶撞同 AccountID = 跨租戶洩漏。一律 **帳本單調發號**（發號狀態在 tenant-api state store；**不引入外部 stateful DB**——ConfigMap 是叢集原生物件，且 uint32 空間 ~40 億充足） |
+
+**單調性靠什麼守**：配發只會讓計數器往上；讀帳本時，任何已配發的 id ≥ 計數器就拒絕。帳本空白或遺失、而 conf.d 已有租戶時，tenant-api 拒絕配發；啟用 federation 時也拒絕啟動。⚠️ 已知限制：有人直接編輯 ConfigMap，把計數器連同已退租租戶的配發一起改小時，上面兩道都擋不住，已退租的 id 可能被重發。chart 的 Role 只給 tenant-api 的 ServiceAccount 對 `tenant-api-state` 的 get/update；其他能改 ConfigMap 的人由叢集 RBAC 管。
 
 #### Admission validator（結構性探測 + 告警，不熔斷）
 
@@ -206,7 +210,7 @@ VictoriaLogs 原生 `(AccountID, ProjectID)` 即隔離核心。
 ### Audit log + anomaly metric
 
 - **Data-plane**（誰查了哪些 log）：gateway access log JSON（`account_id` / `token_id` / LogsQL / status / duration），與 ADR-020 同形物理分離（stdout collector-ready）。聚合層 `tenant_log_query_requests_total` 進 Prometheus。
-- **Control-plane**（誰授權/改了可見度）：token 生命週期 → ConfigMap-backed store；whitelist/subset 變更 → GitOps commit 歷史。
+- **Control-plane**（誰授權/改了可見度）：token 生命週期 → ConfigMap-backed store；whitelist/subset 與 AccountID 配發 → tenant-api 的 `state_write` 稽核 log（不再有 git commit 歷史）。
 
 ## 實作計畫
 
@@ -220,7 +224,7 @@ VictoriaLogs 原生 `(AccountID, ProjectID)` 即隔離核心。
 | 4 | (b) ingest-time 敏感欄位 drop（VRL `drop_fields`）|
 | 5 | 結構性 admission validator → Alertmanager alert（不熔斷）|
 | 6 | 2-tier log visibility policy schema + 可見度 catalogue |
-| 7 | tenant-api：AccountID 配發 + 數值 claim + Git registry |
+| 7 | tenant-api：AccountID 配發 + 數值 claim + 帳本（state store） |
 | 8 | `tenant_log_query_requests_total` metric + Grafana dashboard |
 | 9 | 端對端整合測試（簽 token A → 查 `/select/logsql/query` 驗只見 A、metadata endpoint 不洩 B）+ user-facing guide |
 | AC | **Vector route 行為測試入 CI**：`vector validate`（語法，codify runbook §4.4 手動步驟）+ **`vector test`** 餵空值/惡意 `tenant_id` 的 mock log，斷言 fail-closed 落 `0:0`（驗極端 payload 的確定行為，非僅語法；對齊 lint-everything + 75% coverage gate）；**(b) 淨化 negative assertion**：餵帶**全部**敏感欄位（node_name / pod_ip…）的 mock payload，斷言租戶副本中這些欄位**確實不存在**（測「移除了」而非只測「有產出」）|
@@ -231,14 +235,14 @@ VictoriaLogs 原生 `(AccountID, ProjectID)` 即隔離核心。
 
 - **平台完整副本**：`federation_audit` + `gateway_operational` 全欄位**續留 `0:0`**（即 #539 現狀，平台 ops 的 cross-tenant 查詢面，**不變**）。
 - **租戶淨化投影（net-new）**：Vector `route` 對帶有效 `tenant_id` 的 audit 列，`drop_fields` 淨化 + 注入 `log_event_id`，寫入對應 `AccountID:X`（`ProjectID=0`）。**租戶只有 Day 0 起的歷史**——新 feature 完全可接受，故**無需歷史 backfill / re-index**。
-- **`tenant_id`(str) → `AccountID`(uint32) 映射**：route **不能**直接拿字串 `tenant_id` 當 AccountID。Vector 以 **Git tenant registry 衍生的 enrichment table**（與 gateway 同一 SSOT）查表；查不到 → **fail-closed 落 `0:0`**（絕不誤落他租戶）。
+- **`tenant_id`(str) → `AccountID`(uint32) 映射**：route **不能**直接拿字串 `tenant_id` 當 AccountID。Vector 以 **AccountID 帳本衍生的 enrichment table**（與 gateway 同一 SSOT；Vector 的 projection gate 讀同一份 `_account_registry.yaml`）查表；查不到 → **fail-closed 落 `0:0`**（絕不誤落他租戶）。
 - **為何靜態 N-sink 而非單一動態 sink**：Vector `http` sink 的 per-event header 模板在**混租戶 batch** 內會 header 污染（header 是 per-request 屬性，一 batch 一 request；官方 issue [vectordotdev/vector#21402](https://github.com/vectordotdev/vector/issues/21402) 證實同構失敗——壞憑證污染整批；http sink 無 key-partition batching）。故 (b) 用 `route` → 靜態 N-sink（各帶固定 AccountID header）；(a) Phase 2 從 tenant registry **產生** route/sink（config-from-SSOT）。
 - **Rollback**：投影是疊加層，revert PR 即停止寫租戶分區、平台 `0:0` 不受影響；零星 orphaned 資料等 retention 回收（VictoriaLogs 不支援單筆刪）。
 
 ### Phase 2 — (a) 租戶應用 log（defer-with-trigger）
 
 - 前置：「另外的設計」ingestion epic + namespace 蓋章（零信任 payload）。
-- 復用：**同一 gateway mode** + route/sink 從 tenant registry（conf.d / tenant-api SSOT）**產生**（config-from-SSOT，解決靜態 N-sink 在海量租戶不 scale）。`ProjectID=1`。
+- 復用：**同一 gateway mode** + route/sink 從 AccountID 帳本（tenant-api state store）**產生**（config-from-SSOT，解決靜態 N-sink 在海量租戶不 scale）。`ProjectID=1`。
 - Trigger：見 Future Work item 1。
 
 ## 為什麼不用其他方案

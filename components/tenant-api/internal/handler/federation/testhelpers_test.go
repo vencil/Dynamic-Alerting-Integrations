@@ -13,12 +13,13 @@ import (
 	"net/http/httptest"
 	"os/exec"
 	"path/filepath"
+	"sync"
 	"testing"
 
 	"github.com/go-chi/chi/v5"
-	"github.com/vencil/tenant-api/internal/confd"
 	"github.com/vencil/tenant-api/internal/gitops"
 	"github.com/vencil/tenant-api/internal/rbac"
+	"github.com/vencil/tenant-api/internal/statestore"
 	"github.com/vencil/tenant-api/internal/testutil"
 )
 
@@ -59,6 +60,17 @@ func setupConfigDir(t *testing.T, files map[string]string) string {
 		testutil.WriteYAML(t, dir, name, content)
 	}
 	return dir
+}
+
+// newDirState is a directory state store over dir: tests that wrote the old
+// conf.d state files there find the records where they always were.
+func newDirState(t *testing.T, dir string) statestore.Store {
+	t.Helper()
+	s, err := statestore.NewDir(dir, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return s
 }
 
 func newTestWriter(configDir string) *gitops.Writer {
@@ -113,6 +125,30 @@ func executeWithRBAC(t *testing.T, handler http.HandlerFunc, req *http.Request) 
 // planted here is exactly what the reader picks for an addressable id.
 // For an unaddressable id it is simply the join a predicate-less reader
 // would have opened, which is what the sink-guard tests need.
-func federationSubsetPath(configDir, tenantID string) string {
-	return filepath.Join(confd.FederationSubsetDir(configDir), confd.DefaultTenantFileName(tenantID))
+// federationSubsetPath is where a directory state store over stateDir keeps
+// tenantID's subset record (#2856: a record, no longer conf.d/_federation/).
+func federationSubsetPath(stateDir, tenantID string) string {
+	return filepath.Join(stateDir, statestore.SubsetKey(tenantID))
+}
+
+// recordingState wraps a Store and records every write's audit notes, so a
+// test can see what a write recorded (the --force bypass reason rides there,
+// #2856; it used to be a commit trailer).
+type recordingState struct {
+	statestore.Store
+	mu  sync.Mutex
+	log []string
+}
+
+func (r *recordingState) Mutate(ctx context.Context, key string, m statestore.Meta, t statestore.Transform) (bool, error) {
+	r.mu.Lock()
+	r.log = append(r.log, m.Notes...)
+	r.mu.Unlock()
+	return r.Store.Mutate(ctx, key, m, t)
+}
+
+func (r *recordingState) notes() []string {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	return append([]string(nil), r.log...)
 }

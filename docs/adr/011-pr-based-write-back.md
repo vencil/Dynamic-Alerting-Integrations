@@ -9,7 +9,7 @@ tracking_kind: adr
 status: accepted
 domain: tenant-api
 created_at: 2026-04-07
-updated_at: 2026-10-10
+updated_at: 2026-10-11
 ---
 # ADR-011: PR-based Write-back 模式
 
@@ -22,6 +22,8 @@ updated_at: 2026-10-10
 ✅ **Accepted**（v2.6.0）— 新增 PR 寫回模式（`--write-mode pr`），租戶設定的寫入產生 GitHub PR 而非直接 commit
 
 2026-10-10：更正寫回模式的設定方式：是 `--write-mode`／`TA_WRITE_MODE`，不是 conf.d 裡的 `_write_mode` 設定。
+
+2026-10-11：群組（`_groups.yaml`）、saved views（`_views.yaml`）、federation 白名單與子集、AccountID 帳本移出 conf.d/，改存 tenant-api 的 state store（Kubernetes 上是 `tenant-api-state` ConfigMap），寫入不產生 commit 也不開 PR（[#2856](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/2856)）。下文「已知限制」與「為何不把 `_groups.yaml` 拆成多個檔案」已照此更新。
 
 ## 名詞
 
@@ -216,7 +218,7 @@ GitHub 的 PR 機制原生整合了 code review、核准與 CI 檢查。自建�
 
 ### 為何不把 `_groups.yaml` 拆成多個檔案？
 
-群組定義在 PR 模式下仍直接 commit（見「已知限制」），衝突由直接寫回的 HEAD 衝突偵測處理。評估後認為拆分的成本大於效益：
+群組定義不走 PR（見「已知限制」），並行寫入的衝突由 state store 的 compare-and-swap 處理。評估後認為拆分的成本大於效益：
 
 - 群組操作的頻率遠低於租戶操作，衝突機率低。
 - 拆分需要全面修改載入程式、API 與 schema。
@@ -239,7 +241,7 @@ GitHub 的 PR 機制原生整合了 code review、核准與 CI 檢查。自建�
 
 **已知限制**
 
-- **群組與 saved views 不走 PR**：PR 模式下，群組定義（`_groups.yaml`）與 saved views（`_views.yaml`）的寫入仍直接 commit，四眼原則不涵蓋它們。
+- **群組、saved views 與 federation 設定不走 PR**：群組定義（`_groups.yaml`）、saved views（`_views.yaml`）、federation 白名單與子集、AccountID 帳本是 tenant-api 自己的紀錄，存在 state store、不在 conf.d/ git 樹，任何寫回模式下都直接寫入，四眼原則不涵蓋它們；稽核靠每次寫入的結構化 `state_write` 日誌。
 - **批量寫入不檢查待審核 PR**：「同一租戶只能有一個待審核 PR」只在單筆寫入檢查；批量寫入（`POST /api/v1/tenants/batch`、`POST /api/v1/groups/{id}/batch`）的 PR 路徑不做這個檢查，開出的分支名稱是 `tenant-api/batch/<UTC 時間>`。單筆寫入的檢查也看不到批量寫入開出的 PR：批量 PR 尚未合併時，單筆寫入仍可能替同一個租戶再開一個 PR。
 - **只能跑一個副本**：「同一租戶只能有一個待審核 PR」的檢查存在單一 process 的記憶體裡，不跨 Pod 協調，多個副本可能替同一個租戶開出重複的 PR。Helm chart 在 `replicaCount` 大於 1 時拒絕渲染。
 

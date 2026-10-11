@@ -175,13 +175,15 @@ Platform whitelist（平台 maintainer 策展）
 Tenant subset（你自選的子集，經 API 自助管理）
 ```
 
-- **Platform whitelist**（`_federation_policy.yaml`）：平台決定「哪些 metric 開放給 federation」的目錄。
-- **Tenant subset**（`conf.d/_federation/<你>.yaml`）：你從 whitelist 中挑自己要的子集，經 `PUT /api/v1/tenants/{id}/federation` 自助管理（需該租戶 admin；租戶 id 不是 DNS-1123 label 時回 `400`、不寫入，見 [ADR-035](../adr/035-tenant-id-single-source.md)，`GET` 不受影響）。既有檔若是 `<你>.yml`（或大寫副檔名），API 照樣讀它、寫回它；同一租戶有兩種拼法並存時，`GET`／`PUT` 回 `409`，須先在 git 刪掉其中一個。
+- **Platform whitelist**（tenant-api state store 的 `_federation_policy.yaml` 紀錄）：平台決定「哪些 metric 開放給 federation」的目錄。
+- **Tenant subset**（state store 的 `_federation.<你>.yaml` 紀錄）：你從 whitelist 中挑自己要的子集，經 `PUT /api/v1/tenants/{id}/federation` 自助管理（需該租戶 admin；租戶 id 不是 DNS-1123 label 時回 `400`、不寫入，見 [ADR-035](../adr/035-tenant-id-single-source.md)，`GET` 不受影響）。沒有紀錄時 `GET` 回空子集。
+
+兩者都是 tenant-api 自己的紀錄，存在 state store（Kubernetes 上是 `tenant-api-state` ConfigMap），不在 conf.d git 樹，也不走 PR review（[#2856](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/2856)）。
 
 範例 subset：
 
 ```yaml
-# conf.d/_federation/<你的 tenant>.yaml
+# state store 的 _federation.<你的 tenant>.yaml 紀錄內容
 metrics:
   - http_requests_total
   - node_cpu_seconds_total

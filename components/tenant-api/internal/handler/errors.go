@@ -74,7 +74,10 @@ const (
 	// and whether it was pushed, so it is not INTERNAL_ERROR (#1700).
 	CodeBaseRestoreFailed = "BASE_RESTORE_FAILED"
 	CodePayloadTooLarge   = "PAYLOAD_TOO_LARGE"
-	CodeUpstream          = "UPSTREAM_ERROR"
+	// CodeStateFull marks an HTTP 507: the write would push tenant-api's
+	// state store past its size budget (#2856). Retrying does not help.
+	CodeStateFull = "STATE_FULL"
+	CodeUpstream  = "UPSTREAM_ERROR"
 	// CodeUnauthorized marks a 401 (missing/invalid caller identity). The RBAC
 	// middleware's 401 mirrors this value in its own package-local const
 	// (internal/rbac/middleware.go) — the depguard domain-no-handler ratchet
@@ -490,6 +493,8 @@ func codeFromStatus(status int) string {
 		return CodePayloadTooLarge
 	case http.StatusNotImplemented:
 		return CodeNotImplemented
+	case http.StatusInsufficientStorage:
+		return CodeStateFull
 	case http.StatusBadGateway:
 		// 502 = a proxied upstream (e.g. federation Prometheus) answered
 		// badly; same client-facing class as the 503 mapping below.
@@ -729,9 +734,9 @@ func writeWriteFlowError(w http.ResponseWriter, r *http.Request, err error) bool
 	return true
 }
 
-// writeConfigFileError maps the sentinel errors returned by the config-file
-// writers (Writer.WriteViewsFile / WriteGroupsFile) to their canonical HTTP
-// responses, unifying the ladder the view and group PUT/DELETE handlers
+// writeConfigFileError maps the errors the views/groups writes return
+// (state-store errors, #2856, and the record failing to decode) to their
+// canonical HTTP responses, unifying the ladder the view and group PUT/DELETE handlers
 // duplicated verbatim across four sites. Unlike writeWriteFlowError (which
 // reports handled/unhandled and leaves the generic case to the caller), this
 // covers the config-file ladder's exact branches and ALWAYS writes a
@@ -748,6 +753,9 @@ func writeWriteFlowError(w http.ResponseWriter, r *http.Request, err error) bool
 // is ONLY for the views/groups config-file writers; do not route the tenant
 // write paths through it.
 func writeConfigFileError(w http.ResponseWriter, r *http.Request, err error) {
+	if WriteStateError(w, r, err) {
+		return
+	}
 	if errors.Is(err, gitops.ErrWriteOverloaded) {
 		WriteOverloaded(w, r)
 		return

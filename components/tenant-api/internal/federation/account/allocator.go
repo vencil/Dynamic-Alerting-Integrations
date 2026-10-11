@@ -1,104 +1,87 @@
 package account
 
-// Allocator is the commit-on-write face of the pure Registry core. It
-// turns "give tenant X an AccountID" into a serialised, Git-tracked
-// read-modify-write on conf.d/_account_registry.yaml.
-//
-// Persistence lives on the existing gitops single-writer trail (ADR-009 /
-// ADR-021): no external stateful DB. The registry file is `_`-prefixed so
-// the threshold-exporter config loader skips it (it is not a tenant), yet
-// it is committed and versioned like every other conf.d state file, giving
-// the AccountID ledger a full audit history for free.
+// Allocator turns "give tenant X an AccountID" into a compare-and-swap
+// read-modify-write of the AccountID registry record in tenant-api's state
+// store (#2856; it used to be conf.d/_account_registry.yaml committed on the
+// pod's local branch and never pushed, so an emptyDir restart lost it).
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"sort"
+
+	"github.com/vencil/tenant-api/internal/statestore"
 )
 
-// RegistryFileName is the conf.d file holding the AccountID ledger. The
-// leading underscore makes the threshold-exporter loader skip it (it is
-// platform state, not a tenant), exactly like _groups.yaml / _views.yaml.
-const RegistryFileName = "_account_registry.yaml"
+// RegistryFileName is the registry's record key. It keeps the old file name:
+// the Vector projection gate mounts the registry under this key.
+const RegistryFileName = statestore.KeyAccountRegistry
 
-// commitEntity labels the registry commit + onWrite event.
+// commitEntity labels the registry write's audit event and change notice.
 const commitEntity = "account-registry"
 
-// RegistryWriter is the slice of gitops.Writer the allocator needs: a
-// serialised read-modify-write-commit of a single conf.d file. Defined
-// here (consumer side) so the account package does not import gitops and
-// stays unit-testable with a fake — *gitops.Writer satisfies it via its
-// MutateConfigFile method.
-type RegistryWriter interface {
-	MutateConfigFile(ctx context.Context, filename, entityType, authorEmail string, transform func(current []byte) (next []byte, err error)) error
-	// HistoricalMaxUint returns the largest value the uint YAML field has EVER
-	// held across the git history of conf.d/<filename> (0 if the file has no
-	// history). This is the revert-proof high-water mark the allocator floors to
-	// — see EnsureAccountID.
-	HistoricalMaxUint(ctx context.Context, filename, field string) (uint32, error)
+// RegistryStore is the slice of statestore.Store the allocator needs.
+type RegistryStore interface {
+	Mutate(ctx context.Context, key string, m statestore.Meta, t statestore.Transform) (bool, error)
 }
 
-// counterField is the registry's monotonic counter key. Its git-history
-// high-water mark floors every allocation so a reverted/hand-lowered counter
-// can never re-issue an id (ADR-021 §AccountID #1/#3).
-const counterField = "next_account_id"
+// FleetSize reports how many tenants conf.d holds.
+type FleetSize func() (int, error)
 
-// Allocator hands out monotonic AccountIDs, persisting each new allocation
-// through the GitOps writer. It holds no mutable state of its own — the
-// registry file under the writer's mutex is the single source of truth, so
-// the Allocator is safe for concurrent use WITHIN a process. The deployment
-// is pinned single-writer (helm tenant-api: replicaCount=1 + Recreate); were
-// two writer processes ever to race, the writer's HEAD-conflict detection
-// aborts the loser with ErrConflict rather than double-allocating — it does
-// not silently corrupt. Multi-writer coordination (an ADR-023 Lease) is not
-// yet built.
+// ErrRegistryReset refuses an allocation against a blank or missing registry
+// while tenants exist: their ids were allocated from a ledger that is now
+// gone, and allocating from the floor would re-issue them (ADR-021
+// cross-tenant log leak). The startup check (VerifyRegistryNotResetWithFleet)
+// catches this at boot; this catches the record vanishing while running.
+var ErrRegistryReset = errors.New("account: AccountID registry is blank or missing while tenants exist — refusing to allocate (restore the registry)")
+
+// Allocator hands out monotonic AccountIDs. It holds no state of its own:
+// the registry record is the single source of truth, and every allocation is
+// computed inside the store's compare-and-swap against the freshly-read
+// record, so concurrent allocations — in one process or several — neither
+// duplicate an id nor lose one (the loser of a race re-runs on fresh data).
 type Allocator struct {
-	w RegistryWriter
+	s     RegistryStore
+	fleet FleetSize
 }
 
-// NewAllocator builds an Allocator over the given GitOps writer.
-func NewAllocator(w RegistryWriter) *Allocator {
-	return &Allocator{w: w}
+// NewAllocator builds an Allocator over the state store. fleet may be nil
+// (no runtime reset check — tests of the pure allocation logic).
+func NewAllocator(s RegistryStore, fleet FleetSize) *Allocator {
+	return &Allocator{s: s, fleet: fleet}
+}
+
+// parseGuarded parses the current record, refusing a blank one while the
+// fleet is non-empty.
+func (a *Allocator) parseGuarded(current []byte) (*Registry, error) {
+	if isBlank(current) && a.fleet != nil {
+		n, err := a.fleet()
+		if err != nil {
+			return nil, fmt.Errorf("account: cannot count tenants for the registry reset check: %w", err)
+		}
+		if n > 0 {
+			return nil, ErrRegistryReset
+		}
+	}
+	return Parse(current)
 }
 
 // EnsureAccountID returns tenantID's AccountID, allocating one if the
-// tenant has none yet (idempotent allocate-if-missing).
+// tenant has none yet (idempotent allocate-if-missing). An already-allocated
+// tenant returns its id and writes nothing.
 //
-// The allocation is computed INSIDE the writer mutex against the
-// freshly-read registry (the transform closure below), so two concurrent
-// onboardings of different tenants serialise and can never read the same
-// high-water mark — neither a duplicate id nor a lost allocation is
-// possible. An already-allocated tenant returns its id and commits
-// nothing (the transform reports no change).
-//
-// authorEmail is the operator identity recorded as the git commit author.
+// authorEmail is recorded in the write's audit event.
 func (a *Allocator) EnsureAccountID(ctx context.Context, tenantID, authorEmail string) (uint32, error) {
 	if tenantID == "" {
 		return 0, fmt.Errorf("account: empty tenant id")
 	}
-
-	// Revert-proof floor: the highest next_account_id the registry has EVER
-	// committed (across git history). A `git revert` or hand-edit on the conf.d
-	// plane can lower the on-disk counter — but not erase the higher value from
-	// history — so WITHOUT this floor a reverted counter would re-issue ids that
-	// retired tenants' logs still occupy inside the VictoriaLogs retention window
-	// (ADR-021 §AccountID #1/#3 cross-tenant leak). Read OUTSIDE the writer mutex
-	// (it only ever rises; a concurrent advance is reflected by the in-lock disk
-	// read below) and applied in-lock. FAIL-CLOSED: an unreadable history refuses
-	// the allocation rather than trust an unverifiable counter.
-	histMax, err := a.w.HistoricalMaxUint(ctx, RegistryFileName, counterField)
-	if err != nil {
-		return 0, fmt.Errorf("account: read registry high-water mark: %w", err)
-	}
-
 	var allocated uint32
 	transform := func(current []byte) ([]byte, error) {
-		reg, err := Parse(current)
+		allocated = 0 // re-derived on every attempt
+		reg, err := a.parseGuarded(current)
 		if err != nil {
 			return nil, err
-		}
-		if histMax > reg.NextAccountID {
-			reg.NextAccountID = histMax // never re-issue a reverted-away id
 		}
 		id, changed, err := reg.ensure(tenantID)
 		if err != nil {
@@ -106,12 +89,11 @@ func (a *Allocator) EnsureAccountID(ctx context.Context, tenantID, authorEmail s
 		}
 		allocated = id
 		if !changed {
-			return nil, nil // idempotent: already allocated → no commit
+			return nil, nil // idempotent: already allocated → no write
 		}
 		return reg.Marshal()
 	}
-
-	if err := a.w.MutateConfigFile(ctx, RegistryFileName, commitEntity, authorEmail, transform); err != nil {
+	if _, err := a.s.Mutate(ctx, RegistryFileName, statestore.Meta{Entity: commitEntity, Author: authorEmail}, transform); err != nil {
 		return 0, err
 	}
 	return allocated, nil
@@ -127,39 +109,30 @@ type BackfillResult struct {
 }
 
 // Backfill assigns an AccountID to every tenant in tenantIDs that does not
-// already have one, in a SINGLE committed registry write. It is the
+// already have one, in a SINGLE registry write. It is the
 // one-shot companion to lazy per-issuance allocation: run it once to give
 // the whole existing fleet ids without waiting for each tenant to mint its
 // first logs token.
 //
 // Idempotent: tenants that already hold an id are left untouched, and a
-// pass in which nobody needs an id commits nothing (returns an empty
+// pass in which nobody needs an id writes nothing (returns an empty
 // Allocated set). Allocation order is the sorted tenant-id order, so a
 // re-run on a superset of tenants is deterministic and monotonic.
 //
-// authorEmail is recorded as the git commit author.
+// authorEmail is recorded in the write's audit event.
 func (a *Allocator) Backfill(ctx context.Context, tenantIDs []string, authorEmail string) (BackfillResult, error) {
 	// Sort so allocation order — and therefore the id each backfilled
 	// tenant receives — is deterministic regardless of caller ordering.
 	ids := append([]string(nil), tenantIDs...)
 	sort.Strings(ids)
 
-	// Revert-proof floor — same high-water mark as EnsureAccountID (ADR-021 #1/#3).
-	histMax, err := a.w.HistoricalMaxUint(ctx, RegistryFileName, counterField)
-	if err != nil {
-		return BackfillResult{}, fmt.Errorf("account: read registry high-water mark: %w", err)
-	}
-
 	var res BackfillResult
 	transform := func(current []byte) ([]byte, error) {
-		reg, err := Parse(current)
+		res = BackfillResult{} // re-derived on every attempt: the store re-runs this on a lost race
+		reg, err := a.parseGuarded(current)
 		if err != nil {
 			return nil, err
 		}
-		if histMax > reg.NextAccountID {
-			reg.NextAccountID = histMax // never re-issue a reverted-away id
-		}
-		res = BackfillResult{} // derive res solely from this single transform run (MutateConfigFile invokes the transform exactly once; this also keeps it correct if a retry-on-conflict is ever added)
 		anyChange := false
 		for _, t := range ids {
 			if t == "" {
@@ -176,12 +149,12 @@ func (a *Allocator) Backfill(ctx context.Context, tenantIDs []string, authorEmai
 			anyChange = true
 		}
 		if !anyChange {
-			return nil, nil // nobody needed an id → no commit
+			return nil, nil // nobody needed an id → no write
 		}
 		return reg.Marshal()
 	}
 
-	if err := a.w.MutateConfigFile(ctx, RegistryFileName, commitEntity, authorEmail, transform); err != nil {
+	if _, err := a.s.Mutate(ctx, RegistryFileName, statestore.Meta{Entity: commitEntity, Author: authorEmail}, transform); err != nil {
 		return BackfillResult{}, err
 	}
 	return res, nil

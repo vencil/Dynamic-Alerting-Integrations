@@ -48,9 +48,6 @@ func TestWriterRejectsInvalidTenantID(t *testing.T) {
 			}}}, "op@example.com")
 			return err
 		}},
-		{"WriteFederationSubsetFile", func(w *Writer, id string) error {
-			return w.WriteFederationSubsetFile(ctx, id, "op@example.com", "metrics: []\n")
-		}},
 		{"DryRunValidate", func(w *Writer, id string) error {
 			_, _, err := w.DryRunValidate(ctx, id, body(id))
 			return err

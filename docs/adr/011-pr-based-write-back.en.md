@@ -17,6 +17,8 @@ lang: en
 
 2026-10-10: corrected how the write-back mode is configured: it is `--write-mode` / `TA_WRITE_MODE`, not a `_write_mode` setting in conf.d.
 
+2026-10-11: groups (`_groups.yaml`), saved views (`_views.yaml`), the federation whitelist and subsets, and the AccountID registry moved out of conf.d/ into tenant-api's state store (the `tenant-api-state` ConfigMap on Kubernetes); their writes produce no commit and open no PR ([#2856](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/2856)). "Known limitations" and "Why not split `_groups.yaml` into several files?" below are updated to match.
+
 ## Terms
 
 - **Direct write-back (direct)**: the commit-on-write of [ADR-009](009-tenant-manager-crud-api.md): the API modifies YAML in conf.d/ and commits immediately.
@@ -210,7 +212,7 @@ GitHub's PR mechanism natively integrates code review, approval, and CI checks. 
 
 ### Why not split `_groups.yaml` into several files?
 
-In PR mode, group definitions are still committed directly (see "Known limitations"), and their conflicts are handled by direct write-back's HEAD conflict detection. The evaluation found the cost of splitting outweighs the benefit:
+Group definitions do not go through a PR (see "Known limitations"), and concurrent writes are resolved by the state store's compare-and-swap. The evaluation found the cost of splitting outweighs the benefit:
 
 - Group operations are far less frequent than tenant operations, so conflicts are unlikely.
 - Splitting would require changing the loader, the API, and the schema throughout.
@@ -233,7 +235,7 @@ In PR mode, group definitions are still committed directly (see "Known limitatio
 
 **Known limitations**
 
-- **Groups and saved views bypass PRs**: in PR mode, writes to group definitions (`_groups.yaml`) and saved views (`_views.yaml`) are still committed directly, so the four-eyes principle does not cover them.
+- **Groups, saved views and federation settings bypass PRs**: group definitions (`_groups.yaml`), saved views (`_views.yaml`), the federation whitelist and subsets, and the AccountID registry are tenant-api's own records, kept in the state store rather than the conf.d/ git tree. They are written directly in every write-back mode, so the four-eyes principle does not cover them; each write is audited by a structured `state_write` log event.
 - **Batch writes do not check for pending PRs**: the "one pending PR per tenant" check runs only for single writes; the PR path of batch writes (`POST /api/v1/tenants/batch`, `POST /api/v1/groups/{id}/batch`) does not perform it, and the branch it creates is named `tenant-api/batch/<UTC time>`. The single-write check does not see PRs opened by batch writes either: while a batch PR is unmerged, a single write can still open another PR for the same tenant.
 - **Single replica only**: the "one pending PR per tenant" check lives in the memory of a single process and is not coordinated across Pods, so more replicas can open duplicate PRs for the same tenant. The Helm chart refuses to render when `replicaCount` is greater than 1.
 

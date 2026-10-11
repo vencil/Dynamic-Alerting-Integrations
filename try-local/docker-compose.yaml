@@ -59,6 +59,11 @@ services:
       TA_RBAC_PATH: /conf.d/_rbac.yaml
       TA_WRITE_MODE: direct
       TA_ADDR: ":8080"
+      # tenant-api's own records (groups, saved views, federation settings,
+      # AccountID registry) live outside the conf.d git tree (#2856). A named
+      # volume keeps them across `docker compose down` / `up`.
+      TA_STATE_STORE: dir
+      TA_STATE_DIR: /state
       # LOCAL-DEV-ONLY auth bypass (ADR-022). Injects a dev identity when no
       # oauth2-proxy header is present, so the browser (and Mode 0) work without
       # an auth proxy. Panics if ever run inside Kubernetes; SAST forbids this
@@ -74,6 +79,7 @@ services:
       GIT_CONFIG_VALUE_0: "*"
     volumes:
       - ./seed/conf.d:/conf.d:rw
+      - tenant-api-state:/state
     ports:
       # Loopback-only: dev-bypass injects an ADMIN identity for header-less
       # requests, so exposing this on 0.0.0.0 would hand anyone on the LAN
@@ -320,3 +326,7 @@ services:
       pushgateway:
         condition: service_started
     restart: unless-stopped
+
+volumes:
+  # tenant-api state store (#2856); see the tenant-api service above.
+  tenant-api-state:

@@ -77,7 +77,7 @@ func TestPutCustomAlerts_RefusesFileExporterRejects(t *testing.T) {
 		t.Run(c.name, func(t *testing.T) {
 			t.Parallel()
 			dir := rejDir(t, c.body)
-			deps := &Deps{ConfigDir: dir, Writer: newTestWriter(dir), RBAC: newRBACManager(t, caWriteRBAC)}
+			deps := &Deps{ConfigDir: dir, State: mustDirState(dir), Writer: newTestWriter(dir), RBAC: newRBACManager(t, caWriteRBAC)}
 
 			// GET as the caller who then PUTs: since #1560 a caller who may
 			// not write the tenant (an anonymous request included) is shown
@@ -179,8 +179,8 @@ func TestGroupBatch_RefusesFileExporterRejects(t *testing.T) {
 			before := mustRead(t, path)
 
 			rbacMgr := permissiveRBACManager(t)
-			h := GroupBatch(&Deps{Writer: newTestWriter(dir), ConfigDir: dir,
-				Groups: groups.NewManager(dir), RBAC: rbacMgr, WriteMode: WriteModeDirect})
+			h := GroupBatch(&Deps{State: mustDirState(dir), Writer: newTestWriter(dir), ConfigDir: dir,
+				Groups: groups.NewDirManager(dir), RBAC: rbacMgr, WriteMode: WriteModeDirect})
 			req := newRequestWithChiParam("POST", "/api/v1/groups/g1/batch", "id", "g1",
 				bytes.NewBufferString(`{"patch":{"_silent_mode":"warning"}}`))
 			req = setRequestIdentity(req, "a@a.com")
@@ -384,7 +384,7 @@ func TestPutTenant_RepairsFileExporterRejects(t *testing.T) {
 				t.Parallel()
 				dir := setupConfigDir(t, map[string]string{id + ".yaml": c.body, "_defaults.yaml": caDefaults})
 				initGitRepo(t, dir)
-				deps := &Deps{ConfigDir: dir, Writer: newTestWriter(dir), RBAC: newRBACManager(t, repairRBACYAML), WriteMode: WriteModeDirect}
+				deps := &Deps{ConfigDir: dir, State: mustDirState(dir), Writer: newTestWriter(dir), RBAC: newRBACManager(t, repairRBACYAML), WriteMode: WriteModeDirect}
 				getConfigError := func() string {
 					gw := httptest.NewRecorder()
 					GetTenant(deps)(gw, newRequestWithChiParam("GET", "/api/v1/tenants/"+id, "id", id, nil))
@@ -445,7 +445,7 @@ func TestValidateTenant_UnparseableBaseFollowsCaller(t *testing.T) {
 			t.Parallel()
 			dir := setupConfigDir(t, map[string]string{id + ".yaml": "{{not yaml\n", "_defaults.yaml": caDefaults})
 			initGitRepo(t, dir)
-			deps := &Deps{ConfigDir: dir, Writer: newTestWriter(dir), RBAC: newRBACManager(t, repairRBACYAML), WriteMode: WriteModeDirect}
+			deps := &Deps{ConfigDir: dir, State: mustDirState(dir), Writer: newTestWriter(dir), RBAC: newRBACManager(t, repairRBACYAML), WriteMode: WriteModeDirect}
 			req := newRequestWithChiParam("POST", "/api/v1/tenants/"+id+"/validate", "id", id, bytes.NewBufferString(repaired))
 			w := servePopulatingRBAC(t, ValidateTenant(deps), req, "alice@example.com", caller.groups)
 			var got ValidateResponse
@@ -482,7 +482,7 @@ func TestPutTenant_PRMode_UnparseableBaseFollowsCaller(t *testing.T) {
 				created = true
 				return &platform.PRInfo{Number: 7, WebURL: "https://example.invalid/pr/7", State: "open"}, nil
 			}}
-			deps := &Deps{ConfigDir: dir, Writer: newTestWriter(dir), RBAC: newRBACManager(t, repairRBACYAML),
+			deps := &Deps{ConfigDir: dir, State: mustDirState(dir), Writer: newTestWriter(dir), RBAC: newRBACManager(t, repairRBACYAML),
 				WriteMode: WriteModePR, PRClient: mc, PRTracker: &mockPlatformTracker{}}
 			req := newRequestWithChiParam("PUT", "/api/v1/tenants/"+id, "id", id, bytes.NewBufferString(repaired))
 			w := servePopulatingRBAC(t, PutTenant(deps), req, "alice@example.com", caller.groups)
@@ -544,7 +544,7 @@ func TestPutTenant_BrokenSharedFileCoResident(t *testing.T) {
 			broken := c.base
 			dir := setupConfigDir(t, map[string]string{id + ".yaml": broken, "_defaults.yaml": caDefaults})
 			initGitRepo(t, dir)
-			deps := &Deps{ConfigDir: dir, Writer: newTestWriter(dir), RBAC: newRBACManager(t, repairRBACYAML), WriteMode: WriteModeDirect}
+			deps := &Deps{ConfigDir: dir, State: mustDirState(dir), Writer: newTestWriter(dir), RBAC: newRBACManager(t, repairRBACYAML), WriteMode: WriteModeDirect}
 			// The base really is one GET flags (and with the reason this case
 			// is about), so a 200 below is a repair, not a healthy write.
 			gw := httptest.NewRecorder()

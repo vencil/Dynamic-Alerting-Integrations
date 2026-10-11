@@ -49,8 +49,8 @@ func newGroupBatchFixtureOver(t *testing.T, mode WriteMode, files map[string]str
 	t.Helper()
 	configDir := seedGitTree(t, files)
 	f := &groupBatchFixture{configDir: configDir}
-	f.deps = &Deps{Writer: newTestWriter(configDir), ConfigDir: configDir, RBAC: adminRBAC(t),
-		Groups: groups.NewManager(configDir), Policy: policy.NewManager(configDir), WriteMode: mode}
+	f.deps = &Deps{State: mustDirState(configDir), Writer: newTestWriter(configDir), ConfigDir: configDir, RBAC: adminRBAC(t),
+		Groups: groups.NewDirManager(configDir), Policy: policy.NewManager(configDir), WriteMode: mode}
 	if mode == WriteModePR {
 		f.deps.PRClient = &mockPlatformClient{
 			providerName: "github",

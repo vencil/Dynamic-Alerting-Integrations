@@ -43,9 +43,6 @@ func TestWriterRejectsReservedTenantID(t *testing.T) {
 			}}}, "op@example.com")
 			return err
 		}},
-		{"WriteFederationSubsetFile", func(w *Writer) error {
-			return w.WriteFederationSubsetFile(ctx, reserved, "op@example.com", "metrics: []\n")
-		}},
 	}
 
 	for _, tc := range cases {

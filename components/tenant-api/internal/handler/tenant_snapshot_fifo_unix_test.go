@@ -6,7 +6,6 @@ package handler
 // unix, as in confd/enumerate_fifo_test.go.
 
 import (
-	"context"
 	"os"
 	"path/filepath"
 	"syscall"
@@ -68,16 +67,9 @@ func TestTenantSnapshots_BlockedLoadReleasesTheTreeLock(t *testing.T) {
 	// FIFO — it fails closed (ErrTenantTreeScan, bounded; pinned in gitops'
 	// TestTenantWrite_BlockedTreeScanFailsClosedAndRecovers), which says
 	// nothing about the lock this test is about.
-	writeDone := make(chan error, 1)
-	go func() {
-		writeDone <- w.WriteViewsFile(context.Background(), "alice@example.com", "views: {}\n")
-	}()
-	select {
-	case err := <-writeDone:
-		if err != nil {
-			t.Errorf("Write: %v", err)
-		}
-	case <-time.After(10 * time.Second):
-		t.Fatal("Write blocked behind a stuck reader load")
+	// TryWithTreeLock is that probe (#2856 removed the special-file writes
+	// that used to serve): it reports false when anything holds the lock.
+	if !w.TryWithTreeLock(func() {}) {
+		t.Fatal("the writer lock is held behind a stuck reader load")
 	}
 }

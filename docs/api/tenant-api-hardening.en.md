@@ -111,7 +111,7 @@ Two errors keep their text on purpose, so they carry their own code:
 
 | code | status | content |
 |---|---|---|
-| `CONFIG_DECODE_ERROR` | 500 | conf.d config content failed to decode: `/effective`'s `parse defaults[i]: …`, a tenant file the custom-alerts write cannot merge or parse, an unparseable `_groups.yaml` / `_views.yaml`; the text says which entry is wrong, with no path |
+| `CONFIG_DECODE_ERROR` | 500 | conf.d config content failed to decode: `/effective`'s `parse defaults[i]: …`, a tenant file the custom-alerts write cannot merge or parse, an unparseable `_groups.yaml` / `_views.yaml` record in the state store; the text says which entry is wrong, with no path |
 | `BASE_RESTORE_FAILED` | 500 | after a PR-mode write the worktree could not return to base: names the branch and whether it reached origin (do not retry — a retry pushes a second branch); without the underlying git error |
 
 ---
@@ -265,7 +265,7 @@ Without the fix, PUT/DELETE Groups will hit the new tenant-scoped check and retu
 | `PutGroupRequest.label` / `PutViewRequest.label` | required, 1-256 chars |
 | `PutGroupRequest.description` / `PutViewRequest.description` | ≤ 4096 chars |
 | `PutGroupRequest.members` | 0-1000 entries, each 1-256 chars |
-| `PutGroupRequest.filters` / `PutViewRequest.filters` entry count | ≤ 20 entries (a view additionally requires at least 1). The transform runs inside the write lock and its result lands in `_groups.yaml` / `_views.yaml`, so the slowdown is permanent |
+| `PutGroupRequest.filters` / `PutViewRequest.filters` entry count | ≤ 20 entries (a view additionally requires at least 1). The transform runs inside the state store's read-modify-write (re-run when it loses to a concurrent write) and its result lands in the state store's `_groups.yaml` / `_views.yaml` record, so the slowdown is permanent |
 | `Filters` map values | ≤ 1024 chars per value |
 | Receivers a `PUT /tenants/{id}` body writes itself (`_routing.receiver`, `overrides[].receiver`, `routes[].receiver`) | The receiver contract (`threshold-exporter/app/pkg/receiverspec`, shared with da-guard; [#2295](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/2295)): a known type, required fields and their formats, exactly one PagerDuty key, YAML-boolean `send_resolved` / `require_tls`, at most one auth method in `http_config` and a `proxy_url` Go's `net/url` parses. `POST /tenants/{id}/validate` runs the same pre-flight. `field` reads like `tenants.<id>._routing.receiver.url`. Judged after the domain policy (a policy violation is still a 403); inherited receivers are not judged |
 

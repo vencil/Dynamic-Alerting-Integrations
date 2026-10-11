@@ -24,7 +24,7 @@
 
 - 租戶 / 群組 / saved view 的 CRUD、批次操作、effective config 解析(含繼承來源鏈)
 - 租戶**自助宣告式告警**(Custom Alerts):租戶從平台提供的參數化 recipe 產生合法告警,**不需寫 PromQL**(人類走 portal,自動化走 API)
-- 寫入時做 schema 驗證、domain policy 檢查,再以 git commit-on-write 或開 PR/MR 寫回
+- 租戶設定寫入時做 schema 驗證、domain policy 檢查,再以 git commit-on-write 或開 PR/MR 寫回(群組、saved view 等 tenant-api 自己的紀錄寫進 state store,見[聯邦](#聯邦federation)一節表格下方的說明)
 - 以 RBAC 對租戶列表 / 群組成員 / pending PR / async task 結果做**逐呼叫者**過濾
 - 租戶聯邦:簽發短效 token 供租戶拉取自己的 metrics 子集、管理聯邦白名單與每租戶子集
 - 維運硬化面:逐呼叫者限流、`X-Request-ID` 回拋、request body 大小與內容範圍驗證
@@ -33,7 +33,7 @@
 
 - **不做認證**——身分來自 oauth2-proxy 注入的 `X-Forwarded-Email` / `X-Forwarded-Groups`
 - **不做 schema 演化**——YAML schema 由 threshold-exporter 的 config 套件擁有
-- **不做持久化 task store**——async task 存在記憶體,pod 重啟後消失(polling 收到 404 視為 task 遺失)。唯一的跨 replica 持久狀態是聯邦 token 記錄(存於共用 ConfigMap,非資料庫)
+- **不做持久化 task store**——async task 存在記憶體,pod 重啟後消失(polling 收到 404 視為 task 遺失)。持久狀態只有聯邦 token 記錄與 tenant-api 自己的紀錄(群組、saved view、聯邦白名單與子集、AccountID 帳本),各存於一個 ConfigMap(單機為一個目錄),非資料庫
 - **不做 PR / MR 合併**——建立後等人工 review,只追蹤狀態
 
 ## 架構速覽
@@ -144,13 +144,15 @@
 | Method | Path | 權限 | 說明 |
 |--------|------|------|------|
 | `GET` | `/api/v1/federation/policy` | admin | 取得平台聯邦白名單 |
-| `PUT` | `/api/v1/federation/policy` | admin | 更新白名單(新增 metric 會跑資料層 admission 檢查;軟性警告需 `force=true` + 理由才放行,並記入 commit) |
+| `PUT` | `/api/v1/federation/policy` | admin | 更新白名單(新增 metric 會跑資料層 admission 檢查;軟性警告需 `force=true` + 理由才放行,理由記入該次寫入的 `state_write` 稽核事件 `notes`) |
 | `POST` | `/api/v1/federation/tokens` | admin(對 body 的租戶) | 簽發短效 token(預設 4h);token 本體只在回應出現一次 |
 | `GET` | `/api/v1/federation/tokens?tenant_id=<id>` | admin(對該租戶) | 列出該租戶未過期的 token 記錄(不含 token 本體) |
 | `DELETE` | `/api/v1/federation/tokens/{id}` | admin(對該 token 的租戶) | 撤銷 token;最終一致,約 1–2 分鐘內隨設定同步生效 |
-| `POST` | `/api/v1/federation/accounts/backfill` | admin(平台層級) | 替 conf.d 裡還沒有 `account_id` 的租戶一次配發(單一 commit);冪等,重跑不會配新號。回應列出這次配到號的租戶與已有號的租戶數。用途見 [tenant-log-query §2.1](../../docs/integration/tenant-log-query.md) |
-| `GET` | `/api/v1/tenants/{id}/federation` | read | 取得該租戶的聯邦 metric 子集;`_federation/<id>.yaml` / `.yml` 兩種拼法皆可解析,無檔回空子集,同一 id 兩種拼法並存回 409 |
-| `PUT` | `/api/v1/tenants/{id}/federation` | admin | 更新該租戶的聯邦 metric 子集(需該租戶 admin;子集不得超出平台白名單);寫回既有檔,全新子集才用 `.yaml`,同一 id 兩種拼法並存回 409 |
+| `POST` | `/api/v1/federation/accounts/backfill` | admin(平台層級) | 替 conf.d 裡還沒有 `account_id` 的租戶一次配發(單一寫入);冪等,重跑不會配新號。回應列出這次配到號的租戶與已有號的租戶數。用途見 [tenant-log-query §2.1](../../docs/integration/tenant-log-query.md) |
+| `GET` | `/api/v1/tenants/{id}/federation` | read | 取得該租戶的聯邦 metric 子集(讀 state store 的 `_federation.<id>.yaml`);無紀錄回空子集 |
+| `PUT` | `/api/v1/tenants/{id}/federation` | admin | 更新該租戶的聯邦 metric 子集(需該租戶 admin;子集不得超出平台白名單);寫入 state store 的 `_federation.<id>.yaml` |
+
+> 群組、saved view、聯邦白名單與子集、AccountID 帳本是 tenant-api 自己的紀錄,存在 state store(`--state-store`,見下方環境變數),**不在 conf.d、不產生 git commit 或 PR**([#2856](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/2856))。每次寫入記一筆結構化 `state_write` 事件(key、entity、author、notes)。寫入錯誤:持續撞上並行寫入回 409、store 連不上回 503(帶 `Retry-After`)、ConfigMap 將超過約 900 KiB 回 507。
 
 > token 記錄存於跨 replica 共用的 Kubernetes ConfigMap(由 Helm chart 預建),服務維持 stateless、可多 replica。濫用防線:每租戶同時最多 16 個有效 token + 每分鐘簽發上限,超出分別回 409 / 429。未設定簽章金鑰時,`/federation/tokens` 與 `/federation/accounts/backfill` 都不註冊。
 
@@ -181,6 +183,8 @@
 
 寫入時記錄 git HEAD;若 commit 的 parent 與寫入前 HEAD 不符(期間有外部 commit 落地)→ 回 409,呼叫者應 refresh 後重試。
 
+state store 的寫入(群組、saved view、聯邦白名單與子集、AccountID 帳本)以 ConfigMap 的 `resourceVersion` 做 compare-and-swap:輸掉競爭會以最新內容重算後重試,重試用盡才回 409。
+
 ### Open-read 模式
 
 未配置 `_rbac.yaml` 時所有讀寫端點放行(僅守 path traversal)。**僅供單人 dev,切勿上 production。**
@@ -201,7 +205,7 @@ Prometheus 文字格式(`text/plain; version=0.0.4`)。「何時出現」寫「�
 | `tenant_api_rate_limit_rejections_total` | Counter | 恆有 | 被逐呼叫者限流擋下的請求數;限流關閉時恆 0 |
 | `tenant_api_rate_limit_active_callers` | Gauge | 恆有 | 滾動視窗內仍有請求的呼叫者數(背景 sweeper 控管記憶體) |
 | `tenant_api_federation_orphaned_tokens` | Gauge | 恆有 | 租戶已不在 conf.d、卻仍有效的聯邦 token 記錄數;非 0 照 [租戶下架 runbook](../../docs/internal/tenant-offboarding-runbook.md) 處理 |
-| `tenant_api_federation_orphaned_subset_files` | Gauge | 恆有 | 已不在 conf.d、仍留有 `conf.d/_federation/` subset 檔的租戶數(名稱寫 files,實際按租戶計) |
+| `tenant_api_federation_orphaned_subset_files` | Gauge | 恆有 | 已不在 conf.d、仍在 state store 留有 federation subset 紀錄的租戶數(名稱寫 files,實際按租戶計) |
 | `tenant_api_identity_audit_total{result}` | Counter | 恆有 | 機器身分(KSA／TokenReview)稽核結果,只記錄、不參與授權;未開 `--machine-identity-audit` 時全為 0。值:`mismatch` / `no_token` / `unknown_issuer` / `unknown_workload` / `verified` / `verify_failed` |
 | `tenant_api_scope_would_deny_total{axis}` | Counter | 恆有 | shadow 模式放行、但切 enforce 後會被拒的次數;`increase()` 在觀察期內維持 0 才切對應的 `--rbac-*-scope-enforce`。值:`metadata` / `metadata_write` / `org` / `org_write` |
 | `tenant_api_config_reload_failures_total{component}` | Counter | 恆有 | 該設定重載解析失敗次數(失敗時沿用上一份正確設定)。值:`RBAC` / `federation-policy` / `groups` / `policy` / `tenantorg` / `views` |
@@ -237,6 +241,10 @@ data: {"type":"config_change","tenant_id":"db-a-prod","timestamp":"2026-05-03T10
 |------|------|------|
 | `TA_CONFIG_DIR` | `/conf.d` | 租戶 YAML 目錄 |
 | `TA_GIT_DIR` | (空) | Git repository 根目錄;空 = 同 `TA_CONFIG_DIR` |
+| `TA_STATE_STORE` | (空) | **必填**。tenant-api 自己的紀錄（群組、saved views、federation 白名單與子集、AccountID 帳本）存放處：`configmap`（Kubernetes）或 `dir`（單機）。不再放在 conf.d（[#2856](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/2856)） |
+| `TA_STATE_CONFIGMAP` | `tenant-api-state` | `configmap` 模式的 ConfigMap 名稱（Helm chart 預建） |
+| `TA_STATE_NAMESPACE` | (空) | 上述 ConfigMap 所在 namespace;空 = pod 自身 namespace |
+| `TA_STATE_DIR` | (空) | `dir` 模式的目錄，必須在 `TA_CONFIG_DIR` 之外 |
 | `TA_RBAC_PATH` | (空) | `_rbac.yaml` 路徑;空 = open-read |
 | `TA_ADDR` | `:8080` | HTTP listen address |
 | `TA_HUMAN_SOCKET` | (空) | 給 human plane(同 pod 的 oauth2-proxy)用的 Unix socket 路徑;設了就在這個 socket 上**另外**提供同一套路由。空 = 只有 TCP |
@@ -437,9 +445,12 @@ Chart 會建立:Deployment + oauth2-proxy sidecar、Service、RBAC ConfigMap、N
 
 ```bash
 docker build -t tenant-api -f components/tenant-api/Dockerfile .
-docker run -p 8080:8080 -v "$(pwd)/conf.d:/conf.d" tenant-api
+# TA_STATE_*：群組、views、federation 設定與 AccountID 帳本存在 conf.d 之外（必填，#2856）
+docker run -p 8080:8080 -v "$(pwd)/conf.d:/conf.d" \
+  -e TA_STATE_STORE=dir -e TA_STATE_DIR=/state -v tenant-api-state:/state tenant-api
 # 或直接拉 published image（<version> 見 Releases / CHANGELOG）：
-#   docker run -p 8080:8080 -v "$(pwd)/conf.d:/conf.d" ghcr.io/vencil/tenant-api:<version>
+#   docker run -p 8080:8080 -v "$(pwd)/conf.d:/conf.d" \
+#     -e TA_STATE_STORE=dir -e TA_STATE_DIR=/state -v tenant-api-state:/state ghcr.io/vencil/tenant-api:<version>
 ```
 
 Smoke test:

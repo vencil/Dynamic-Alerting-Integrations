@@ -638,7 +638,7 @@ The platform provides a Web UI (tenant-manager) for Domain Experts to self-manag
 
 - **tenant-api**: Go HTTP server with oauth2-proxy authentication, commit-on-write preserving full Git audit trail
 - **RBAC**: `_rbac.yaml` controls which teams can manage which tenants
-- **Group Management**: `_groups.yaml` supports custom groups + batch operations
+- **Group Management**: custom groups (kept in tenant-api's state store, not in conf.d) + batch operations
 - **PR Mode**: High-security environments can enable `_write_mode: pr` — UI operations create GitHub PR / GitLab MR, requiring reviewer approval before taking effect
 
 See [ADR-009](../adr/009-tenant-manager-crud-api.en.md) (API architecture) and [ADR-011](../adr/011-pr-based-write-back.md) (PR write-back mode).

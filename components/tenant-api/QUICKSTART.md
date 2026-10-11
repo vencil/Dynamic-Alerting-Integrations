@@ -42,9 +42,11 @@ EOF
 # 從 repo root build 一個本機 image（go.mod 需 threshold-exporter 模組）
 docker build -t tenant-api -f components/tenant-api/Dockerfile .
 
+# TA_STATE_*：tenant-api 自己的紀錄（群組、views…）存在 conf.d 之外，必填
 docker run --rm -d --name tenant-api -p 8080:8080 \
   -e TA_RBAC_PATH=/conf.d/_rbac.yaml \
-  -v "$(pwd)/conf.d:/conf.d" tenant-api
+  -e TA_STATE_STORE=dir -e TA_STATE_DIR=/state \
+  -v "$(pwd)/conf.d:/conf.d" -v tenant-api-state:/state tenant-api
 ```
 
 ### 3) 我是誰、能管哪些租戶(零 DB 直接回)

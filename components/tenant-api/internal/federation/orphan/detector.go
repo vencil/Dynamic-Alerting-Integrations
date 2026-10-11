@@ -1,21 +1,16 @@
 package orphan
 
 import (
+	"context"
 	"log/slog"
-	"os"
 	"sort"
 	"sync/atomic"
 	"time"
 
 	"github.com/vencil/tenant-api/internal/confd"
 	"github.com/vencil/tenant-api/internal/federation/token"
+	"github.com/vencil/tenant-api/internal/statestore"
 )
-
-// federationSubsetDir is the conf.d subdirectory holding per-tenant
-// federation metric-subset files (ADR-020 IV-2e): the subset for tenant
-// X lives at conf.d/_federation/X.yaml (or X.yml — any spelling
-// confd.TenantIDFromFile accepts, #1698).
-const federationSubsetDir = confd.FederationSubsetDirName
 
 // orphanedTokens / orphanedSubsets hold the most recent Detector
 // scan result, exposed to the /metrics handler via OrphanCounts. They
@@ -37,7 +32,7 @@ func OrphanCounts() (tokens, subsetFiles int64) {
 // OrphanReport is the result of one orphan scan.
 type OrphanReport struct {
 	Tokens  []string // token_id of each live token whose tenant left conf.d
-	Subsets []string // tenant id of each stale conf.d/_federation/<id>.{yaml,yml} (any extension case)
+	Subsets []string // tenant id of each stale federation subset record (state store, #2856)
 }
 
 // empty reports whether the scan found nothing.
@@ -89,49 +84,30 @@ func scanKnownTenants(configDir string) (map[string]struct{}, error) {
 	return known, nil
 }
 
-// scanSubsetTenants returns the tenant ids that have a federation subset
-// file under conf.d/_federation/. A missing _federation directory is
-// not an error — it just means no tenant has configured a subset yet.
-//
-// Each id appears ONCE however many spellings claim it (#1698): the
-// orphan gauge counts tenants, and `<id>.yaml` beside `<id>.yml` is one
-// tenant, not two orphans. Such an id is also logged — the read and
-// write handlers refuse it with 409 (confd.ErrAmbiguousTenantFile), and
-// this periodic scan is the only place an operator hears about it
-// without first tripping over the 409. Observe-only, like the rest of
-// the detector: nothing is renamed or deleted.
-func scanSubsetTenants(configDir string) ([]string, error) {
-	// Same single enumeration loop as conf.d itself (confd.ListTenantFiles,
-	// #1680), and content-blind for the same reason as scanKnownTenants.
-	entries, err := confd.ListTenantFiles(confd.FederationSubsetDir(configDir))
-	if os.IsNotExist(err) {
-		return nil, nil
-	}
-	if err != nil {
-		return nil, err
-	}
-	var out []string
-	files := make(map[string][]string)
-	for _, f := range entries {
-		if len(files[f.ID]) == 0 {
-			out = append(out, f.ID)
+// SubsetTenants lists the tenants that have a federation subset record in
+// the state store (#2856; they used to be conf.d/_federation/<id>.yaml).
+func SubsetTenants(s statestore.Store) func() ([]string, error) {
+	return func() ([]string, error) {
+		ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+		defer cancel()
+		keys, err := s.Keys(ctx, statestore.SubsetPrefix)
+		if err != nil {
+			return nil, err
 		}
-		files[f.ID] = append(files[f.ID], f.Name)
-	}
-	for _, id := range out {
-		if len(files[id]) > 1 {
-			slog.Warn("federation subset: more than one file claims one tenant; GET/PUT on its subset return 409 until one is removed",
-				"tenant", id, "files", files[id])
+		out := make([]string, 0, len(keys))
+		for _, k := range keys {
+			if id, ok := statestore.SubsetTenant(k); ok {
+				out = append(out, id)
+			}
 		}
+		return out, nil
 	}
-	return out, nil
 }
 
 // Detector periodically reports federation artifacts left behind
 // by an incomplete tenant offboarding — live token Records and
-// conf.d/_federation/<tenant>.{yaml,yml} subset files (any extension
-// case) whose owning tenant is
-// no longer in conf.d (ADR-020 #521).
+// federation subset records whose owning tenant is no longer in conf.d
+// (ADR-020 #521).
 //
 // It only OBSERVES: it emits a WARN log and updates the orphan gauges
 // (OrphanCounts). It never revokes a token or deletes a file — cleanup
@@ -141,13 +117,15 @@ func scanSubsetTenants(configDir string) ([]string, error) {
 // zero misfire risk. See docs/internal/tenant-offboarding-runbook.md.
 type Detector struct {
 	configDir string
+	subsets   func() ([]string, error)
 	records   func() ([]token.Record, error)
 }
 
-// NewDetector builds a detector. records lists every live token
+// NewDetector builds a detector. subsets lists the tenants that have a
+// federation subset (SubsetTenants); records lists every live token
 // Record across all tenants (Manager.ListAllRecords).
-func NewDetector(configDir string, records func() ([]token.Record, error)) *Detector {
-	return &Detector{configDir: configDir, records: records}
+func NewDetector(configDir string, subsets func() ([]string, error), records func() ([]token.Record, error)) *Detector {
+	return &Detector{configDir: configDir, subsets: subsets, records: records}
 }
 
 // scanOnce runs one detection pass: it updates the orphan gauges and
@@ -160,9 +138,9 @@ func (d *Detector) scanOnce() {
 		slog.Warn("federation orphan detector: cannot scan conf.d, skipping pass", "error", err)
 		return
 	}
-	subsets, err := scanSubsetTenants(d.configDir)
+	subsets, err := d.subsets()
 	if err != nil {
-		slog.Warn("federation orphan detector: cannot scan _federation/, skipping pass", "error", err)
+		slog.Warn("federation orphan detector: cannot list federation subsets, skipping pass", "error", err)
 		return
 	}
 	records, err := d.records()
@@ -176,7 +154,7 @@ func (d *Detector) scanOnce() {
 	if !rep.empty() {
 		slog.Warn("federation offboarding incomplete: orphaned artifacts found — see docs/internal/tenant-offboarding-runbook.md",
 			"orphaned_tokens", rep.Tokens,
-			"orphaned_subset_files", rep.Subsets)
+			"orphaned_subset_files", rep.Subsets) // key kept: log queries read it
 	}
 }
 

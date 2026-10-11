@@ -48,6 +48,9 @@ spec:
         checksum/rbac: "placeholder-updated-by-helm"
     spec:
       serviceAccountName: tenant-api
+      # #2856: the state store is a ConfigMap read through the in-cluster API
+      # client (rbac-state.yaml grants get+update on it only).
+      automountServiceAccountToken: true
       securityContext:
         runAsNonRoot: true
         runAsUser: 65534
@@ -115,6 +118,8 @@ spec:
             - --addr=:8080
             - --config-dir=/conf.d
             - --git-dir=/conf.d
+            - --state-store=configmap
+            - --state-configmap=tenant-api-state
             - --rbac=/etc/rbac/_rbac.yaml
             - --reload-interval=30s
             # ADR-027 D2-B (GHSA-3g2h-rf85-5rrv L7 root-cause series): human-plane

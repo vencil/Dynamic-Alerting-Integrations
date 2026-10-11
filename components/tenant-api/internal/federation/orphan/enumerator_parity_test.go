@@ -21,7 +21,6 @@ import (
 	"errors"
 	"net/http"
 	"net/http/httptest"
-	"os"
 	"reflect"
 	"sort"
 	"testing"
@@ -102,11 +101,6 @@ func TestConfdEnumeratorsAgreeOnTenantIDSet(t *testing.T) {
 			if !testutil.BuildConfdEntry(t, configDir, parityTenant, state) {
 				t.Skipf("state %q cannot be built in this process (euid 0 ignores permission bits)", state)
 			}
-			subsetDir := confd.FederationSubsetDir(configDir)
-			if err := os.Mkdir(subsetDir, 0o755); err != nil {
-				t.Fatalf("mkdir: %v", err)
-			}
-			testutil.BuildConfdEntry(t, subsetDir, parityTenant, state)
 
 			want := []string{parityTenant}
 			if state == testutil.ConfdRealDir {
@@ -121,18 +115,12 @@ func TestConfdEnumeratorsAgreeOnTenantIDSet(t *testing.T) {
 			if err != nil {
 				t.Fatalf("scanKnownTenants: %v", err)
 			}
-			subsets, err := orphan.ScanSubsetTenants(configDir)
-			if err != nil {
-				t.Fatalf("scanSubsetTenants: %v", err)
-			}
 
 			got := map[string][]string{
-				"handler GET /api/v1/tenants":           listViaHTTP(t, configDir),
-				"account.ListTenantIDs":                 uniqSorted(accountIDs),
-				"orphan.scanKnownTenants":               sortedKeys(known),
-				"orphan.scanSubsetTenants":              uniqSorted(subsets),
-				"confd.ResolveTenantFile (conf.d)":      resolvedSet(t, configDir),
-				"confd.ResolveTenantFile (_federation)": resolvedSet(t, subsetDir),
+				"handler GET /api/v1/tenants":      listViaHTTP(t, configDir),
+				"account.ListTenantIDs":            uniqSorted(accountIDs),
+				"orphan.scanKnownTenants":          sortedKeys(known),
+				"confd.ResolveTenantFile (conf.d)": resolvedSet(t, configDir),
 			}
 			for caller, ids := range got {
 				if !reflect.DeepEqual(ids, want) {

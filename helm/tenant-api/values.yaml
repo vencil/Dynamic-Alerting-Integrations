@@ -313,6 +313,16 @@ rbac:
 #      --federation-* flags. tenant-api owns store.json at runtime; the chart
 #      never templates THAT key (it templates only its own mount sentinel, see
 #      store.sentinelKey), so `helm upgrade` cannot wipe live tokens.
+# tenant-api's own records — groups, saved views, the federation whitelist
+# and subsets, the AccountID registry — live in this ConfigMap, not in conf.d
+# (#2856). The chart pre-creates it (kept on uninstall); tenant-api writes its
+# keys. On the first start after upgrading, tenant-api copies any of these
+# records still in conf.d into it; the conf.d copies are not read afterwards.
+state:
+  configMapName: tenant-api-state
+  # The one key this chart templates into it (see configmap-state.yaml).
+  sentinelKey: .chart-managed
+
 federation:
   enabled: false
 

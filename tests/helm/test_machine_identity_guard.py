@@ -158,10 +158,17 @@ def test_render_default_omits_everything(repo_root: Path):
     assert "--machine-identity-audit" not in out, (
         "default render must NOT pass --machine-identity-audit"
     )
-    # federation is also false by default, so automount must not appear at all.
-    assert "automountServiceAccountToken: true" not in out, (
-        "default render must NOT enable token automount"
+    # #2856: the token is always mounted now (the state store is a ConfigMap
+    # read through the API client), so what bounds a default install is the
+    # grant: exactly one Role, get+update on the state ConfigMap only.
+    roles = [d for d in yaml.safe_load_all(out) if d and d.get("kind") == "Role"]
+    assert [r["metadata"]["name"] for r in roles] == ["tenant-api-state"], (
+        "default render must grant only the state-store Role"
     )
+    assert roles[0]["rules"] == [{
+        "apiGroups": [""], "resources": ["configmaps"],
+        "resourceNames": ["tenant-api-state"], "verbs": ["get", "update"],
+    }], roles[0]["rules"]
 
 
 @_needs_helm
